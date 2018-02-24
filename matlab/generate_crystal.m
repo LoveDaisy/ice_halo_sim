@@ -16,7 +16,7 @@ crst.axis_ori = axis_ori;
 crst.roll = roll;
 crst.ratio = ratio;
 
-local_axis = zeros(3, 3, ori_num);
+crst.local_axis = zeros(3, 3, ori_num);
 
 for i = 1:ori_num
     z = [cosd(axis_ori(i,2)) * cosd(axis_ori(i,1)), ...
