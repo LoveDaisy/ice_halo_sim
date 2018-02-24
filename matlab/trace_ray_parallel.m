@@ -33,8 +33,8 @@ k = 0; ref_num = 0;
 while true
     [ray_reflect_vec, reflect_w] = geometry.reflect(face_id, ray_vec);
     [ray_refract_vec, refract_w] = geometry.refract(face_id, ray_vec);
-    [reflect_pts, reflect_face_id] = geometry.propagate(pts, ray_reflect_vec);
-    [refract_pts, refract_face_id] = geometry.propagate(pts, ray_refract_vec);
+    [reflect_pts, reflect_face_id] = geometry.propagate(pts, face_id, ray_reflect_vec);
+    [refract_pts, refract_face_id] = geometry.propagate(pts, face_id, ray_refract_vec);
     reflect_w = reflect_w .* ray_w;
     refract_w = refract_w .* ray_w;
 

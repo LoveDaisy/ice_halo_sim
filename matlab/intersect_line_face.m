@@ -2,7 +2,6 @@ function [p, t, alpha, beta] = intersect_line_face(pts0, d0, face_base, face_poi
 % This function calculates the intersect point of a line and a plane face
 %   p = pts0 + t * d0 in span(face_base(1,:), face_base(2,:)) + face_point
 
-% a = det([face_base; face_point]);
 a = face_base(1,1)*face_base(2,2)*face_point(3) + face_base(1,2)*face_base(2,3)*face_point(1) + ...
     face_base(1,3)*face_base(2,1)*face_point(2) - face_base(1,3)*face_base(2,2)*face_point(1) - ...
     face_base(1,2)*face_base(2,1)*face_point(3) - face_base(1,1)*face_base(2,3)*face_point(2);
@@ -30,5 +29,5 @@ b = d0(:,1)*face_base(1,2)*face_point(3) + d0(:,2)*face_base(1,3)*face_point(1) 
     d0(:,2)*face_base(1,1)*face_point(3) - d0(:,3)*face_base(1,2)*face_point(1);
 beta = -(a + b) ./ c;
 
-p = pts0 + bsxfun(@times, t, d0);
+p = [pts0(:,1) + t.*d0(:,1), pts0(:,2) + t.*d0(:,2), pts0(:,3) + t.*d0(:,3)];
 end

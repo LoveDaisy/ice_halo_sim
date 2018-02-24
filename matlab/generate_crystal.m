@@ -43,7 +43,7 @@ crst.face_base_point = [1, 0, ratio/2;
 crst.areas = [ratio*ones(6, 1); 3*sqrt(3); 3*sqrt(3)];
 
 crst.init_pts = @(ray_vec, num)init_pts(crst, ray_vec, num);
-crst.propagate = @(pts, ray_vec)propagate(crst, pts, ray_vec);
+crst.propagate = @(pts, face_id, ray_vec)propagate(crst, pts, face_id, ray_vec);
 crst.reflect = @(face_id, ray_vec)reflect(crst, face_id, ray_vec);
 crst.refract = @(face_id, ray_vec)refract(crst, face_id, ray_vec);
 end
@@ -99,7 +99,7 @@ face_id = face_id(idx);
 end
 
 
-function [pts, face_id] = propagate(crst, pts0, ray_vec)
+function [pts, face_id] = propagate(crst, pts0, face_id0, ray_vec)
 % This function propagate a ray to next face or exit this crystal.
 pts_num = size(pts0, 1);
 
@@ -107,19 +107,34 @@ pts = nan(pts_num, 3);
 t = inf(pts_num, 1);
 face_id = nan(pts_num, 1);
 
+normals = crst.normals(face_id0, :);
+cos_theta = sum(ray_vec .* normals, 2);
+valid_idx = find(cos_theta < 0);
+
+if isempty(valid_idx)
+    return
+end
+
 for i = 1:8
     face_base = reshape(crst.face_base_vec(i, :), [], 2)';
     face_point = crst.face_base_point(i, :);
-    [tmp_p, tmp_t, tmp_alpha, tmp_beta] = intersect_line_face(pts0, ray_vec, face_base, face_point);
-    idx = tmp_t < t & tmp_t > 1e-6;
+    [tmp_p, tmp_t, tmp_alpha, tmp_beta] = intersect_line_face(pts0(valid_idx, :), ...
+        ray_vec(valid_idx, :), face_base, face_point);
+    idx = tmp_t < t(valid_idx) & tmp_t > 1e-6;
+    if sum(idx) < 1
+        continue;
+    end
     if i > 6
         idx = idx & inpolygon(tmp_p(:,1), tmp_p(:,2), cosd(0:60:360)', sind(0:60:360)');
     else
         idx = idx & (0 <= tmp_alpha & tmp_alpha <= 1) & (0 <= tmp_beta & tmp_beta <= 1);
     end
-    face_id(idx) = i;
-    pts(idx, :) = tmp_p(idx, :);
-    t(idx) = tmp_t(idx);
+    if sum(idx) < 1 || isempty(idx)
+        continue;
+    end
+    face_id(valid_idx(idx)) = i;
+    pts(valid_idx(idx), :) = tmp_p(idx, :);
+    t(valid_idx(idx)) = tmp_t(idx);
 end
 end
 
