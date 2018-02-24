@@ -22,7 +22,8 @@ ray_vec = [cosd(ray_in(:,2)).*cosd(ray_in(:,1)), ...
     cosd(ray_in(:,2)).*sind(ray_in(:,1)), sind(ray_in(:,2))];
 ray_vec = ray_vec * matR';
 
-[pts, face_id] = geometry.init_pts(ray_vec, num);
+[pts, face_id, lbl] = geometry.init_pts(ray_vec, num);
+ray_vec = ray_vec(lbl, :);
 
 w_th = 0.01;
 

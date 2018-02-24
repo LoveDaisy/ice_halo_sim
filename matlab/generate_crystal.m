@@ -49,13 +49,14 @@ crst.refract = @(face_id, ray_vec)refract(crst, face_id, ray_vec);
 end
 
 
-function [pts, face_id] = init_pts(crst, ray_vec, num)
+function [pts, face_id, lbl] = init_pts(crst, ray_vec0, num)
 % This function init first points
-inc_ray_num = size(ray_vec, 1);
+inc_ray_num = size(ray_vec0, 1);
 pts = nan(inc_ray_num*num, 3);
 face_id = nan(inc_ray_num*num, 1);
+lbl = kron((1:length(ray_vec0))', ones(num, 1));
 
-theta = -ray_vec * crst.normals';
+theta = -ray_vec0 * crst.normals';
 for i = 1:inc_ray_num
     areas = crst.areas' .* theta(i, :);
     face_ids = find(areas > 0);
@@ -89,13 +90,14 @@ for i = 1:inc_ray_num
             end
         end
 
-        face_id(current_idx) = current_face_id;
-        pts(current_idx, :) = current_pts;
+        face_id((i-1)*num + current_idx) = current_face_id;
+        pts((i-1)*num + current_idx, :) = current_pts;
     end
 end
 idx = ~isnan(face_id);
 pts = pts(idx, :);
 face_id = face_id(idx);
+lbl = lbl(idx, :);
 end
 
 
