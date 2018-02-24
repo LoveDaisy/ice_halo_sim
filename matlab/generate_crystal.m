@@ -7,21 +7,31 @@ function crst = generate_crystal(axis_ori, roll, ratio)
 % OUTPUT
 %   crst:
 
+assert(size(axis_ori,1) == size(roll,1));
+assert(length(ratio) == 1);
+
+ori_num = size(axis_ori, 1);
+
 crst.axis_ori = axis_ori;
 crst.roll = roll;
 crst.ratio = ratio;
 
-z = [cosd(axis_ori(2)) * cosd(axis_ori(1)), ...
-    cosd(axis_ori(2)) * sind(axis_ori(1)), ...
-    sind(axis_ori(2))];
-zz = sqrt(1 - z(3)^2);
-x = [-z(2), z(1), 0] / zz;
-y = [-z(1) * z(3), -z(2) * z(3), 1 - z(3)^2] / zz;
-local_axis = [x; y; z];
+local_axis = zeros(3, 3, ori_num);
 
-matR = axis_angle_to_matrix(z, roll);
+for i = 1:ori_num
+    z = [cosd(axis_ori(i,2)) * cosd(axis_ori(i,1)), ...
+        cosd(axis_ori(i,2)) * sind(axis_ori(i,1)), ...
+        sind(axis_ori(i,2))];
+    zz = sqrt(1 - z(3)^2);
+    x = [-z(2), z(1), 0] / zz;
+    y = [-z(1) * z(3), -z(2) * z(3), 1 - z(3)^2] / zz;
+    tmp_axis = [x; y; z];
 
-crst.local_axis = local_axis * matR';
+    matR = axis_angle_to_matrix(z, roll(i));
+
+    crst.local_axis(:,:,i) = tmp_axis * matR';
+end
+
 crst.normals = [sqrt(3)/2, 0.5, 0; 0, 1, 0; -sqrt(3)/2, 0.5, 0;
     -sqrt(3)/2, -0.5, 0; 0, -1, 0; sqrt(3)/2, -0.5, 0; 0, 0, 1; 0, 0, -1;];
 crst.face_base_vec = [-.5, sqrt(3)/2, 0, 0, 0, -ratio;
