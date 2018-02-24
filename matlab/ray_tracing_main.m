@@ -4,7 +4,7 @@ rng(2000);
 
 num = 50;
 rand_num = 10;
-sim_n = 30000;
+sim_n = 20000;
 
 heatmap_hw = 500;
 heatmap = zeros(heatmap_hw*2+1);
