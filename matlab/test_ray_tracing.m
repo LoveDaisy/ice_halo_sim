@@ -10,7 +10,7 @@ ratio = 5;
 rng(5000);
 
 crst = generate_crystal(axis_ori, roll, ratio);
-[ray_out, w] = trace_ray_parallel(crst, ray_in, num);
+[ray_out, w] = trace_ray(crst, ray_in, num);
 
 figure(1); clf;
 scatter(ray_out(:,1), ray_out(:,2), w*50);

@@ -3,8 +3,8 @@ clear; close all; clc;
 % rng(2000);
 
 num = 50;
-rand_num = 50;
-repeat_num = 2000;
+rand_num = 100;
+repeat_num = 1000;
 
 ray_in = [-90, -27];
 ray_out_store = cell(repeat_num, 1);
@@ -18,8 +18,8 @@ parfor (i = 1:repeat_num, 3)
     roll = rand(rand_num,1) * 360;
 %     roll = zeros(rand_num,1);
     ratio = 5;
-    crst = generate_crystal(axis_ori, roll, ratio);
-    [ray_out, w, lbl] = trace_ray_parallel(crst, repmat(ray_in, rand_num, 1), num);
+    crst = generate_hexagonal_crystal(axis_ori, roll, ratio);
+    [ray_out, w, lbl] = trace_ray(crst, repmat(ray_in, rand_num, 1), num);
     ray_out_store{i} = ray_out;
     w_store{i} = w;
 end

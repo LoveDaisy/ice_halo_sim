@@ -1,4 +1,4 @@
-function [ray_out, w, lbl] = trace_ray_parallel(geometry, ray_in, num)
+function [ray_out, w, lbl] = trace_ray(geometry, ray_in, num)
 % This function traces parallel incident rays, and return exit rays
 % INPUT
 %   geometry:
