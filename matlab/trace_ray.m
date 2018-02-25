@@ -54,7 +54,7 @@ while true
     reflect_face_id = reflect_face_id(idx);
     reflect_w = reflect_w(idx);
     ray_reflect_vec = ray_reflect_vec(idx, :);
-    reflect_lbl = lbl(idx);
+    reflect_lbl = lbl0(idx);
 
     idx = isnan(refract_face_id) & refract_w > 0;
     nn = sum(idx);
@@ -67,7 +67,7 @@ while true
     refract_face_id = refract_face_id(idx);
     refract_w = refract_w(idx);
     ray_refract_vec = ray_refract_vec(idx, :);
-    refract_lbl = lbl(idx);
+    refract_lbl = lbl0(idx);
 
     pts = [reflect_pts; refract_pts];
     ray_w = [reflect_w; refract_w];
