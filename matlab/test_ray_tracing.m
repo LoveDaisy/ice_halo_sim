@@ -5,12 +5,13 @@ ray_in = [90, -27];
 
 axis_ori = [0, 0];
 roll = 20;
-ratio = 5;
+ratio = [.8,.6,.8];
 
 rng(5000);
 
+crst = generate_hex_pry_crystal(axis_ori, roll, ratio);
 % crst = generate_hexagonal_crystal(axis_ori, roll, ratio);
-crst = generate_hex_cyl_crystal(axis_ori, roll, ratio);
+% crst = generate_hex_cyl_crystal(axis_ori, roll, ratio);
 [ray_out, w] = trace_ray(crst, ray_in, num);
 
 figure(1); clf;

@@ -1,4 +1,4 @@
-function crst = generate_crystal(vtx, faces, axis_ori, roll, ratio)
+function crst = generate_crystal(vtx, faces, axis_ori, roll)
 % This function generates a crystal given input parameters
 % INPUT
 %   axis_ori:   [lon,lat], in degree
