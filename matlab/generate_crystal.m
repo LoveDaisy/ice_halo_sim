@@ -79,10 +79,10 @@ for i = 1:inc_ray_num
 
         r = rand(current_ray_num, 2);
         idx = sum(r, 2) > 1;
-        r(idx,:) = bsxfun(@times, r(idx,:), 2 ./ sum(r(idx,:), 2) - 1);
-        current_pts = bsxfun(@times, r(:,1), crst.face_base_vec(current_face_id,1:3)) + ...
-            bsxfun(@times, r(:,2), crst.face_base_vec(current_face_id,4:6));
-        current_pts = bsxfun(@plus, current_pts, crst.face_base_point(current_face_id, :));
+        r(idx,:) = 1 - r(idx,:);
+        current_pts = r(:,1) * crst.face_base_vec(current_face_id,1:3) + ...
+            r(:,2) * crst.face_base_vec(current_face_id,4:6) + ...
+            ones(current_ray_num,1) * crst.face_base_point(current_face_id, :);
 
         face_id((i-1)*num + current_idx) = current_face_id;
         pts((i-1)*num + current_idx, :) = current_pts;
