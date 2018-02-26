@@ -12,6 +12,7 @@ ori_num = size(axis_ori, 1);
 
 crst.axis_ori = axis_ori;
 crst.roll = roll;
+crst.n = 1.33;
 
 crst.local_axis = zeros(3, 3, ori_num);
 
@@ -123,8 +124,8 @@ cos_theta = sum(bsxfun(@times, normals, ray_vec), 2);
 inc_angle = acosd(abs(cos_theta));
 
 in_crst = cos_theta > 0;
-n1 = in_crst * 1.33 + (~in_crst) * 1;
-n2 = in_crst * 1 + (~in_crst) * 1.33;
+n1 = in_crst * crst.n + (~in_crst) * 1;
+n2 = in_crst * 1 + (~in_crst) * crst.n;
 normals(in_crst, :) = -normals(in_crst, :);
 
 [Rs, Rp] = calculate_reflect_ratio(inc_angle, n1, n2);
@@ -143,8 +144,8 @@ cos_theta = sum(bsxfun(@times, normals, ray_vec), 2);
 inc_angle = acosd(abs(cos_theta));
 
 in_crst = cos_theta > 0;
-n1 = in_crst * 1.33 + (~in_crst) * 1;
-n2 = in_crst * 1 + (~in_crst) * 1.33;
+n1 = in_crst * crst.n + (~in_crst) * 1;
+n2 = in_crst * 1 + (~in_crst) * crst.n;
 rr = n1 ./ n2;
 normals(in_crst, :) = -normals(in_crst, :);
 
