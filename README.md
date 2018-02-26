@@ -30,3 +30,5 @@ You can start by running `ray_tracing_main.m`.
 * Add custom crystal shapes. Maybe compact with `.obj` file format.
 * Add multi-wave support. Then colors and dispersion can be simulated.
 * Add support for raypath visualization.
+* Re-write with C++ and use OpenCL to accelerate.
+* Write a GUI for these code.
