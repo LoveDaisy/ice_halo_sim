@@ -29,14 +29,6 @@ for i = 1:ori_num
     crst.local_axis(:,:,i) = tmp_axis * matR';
 end
 
-% Vertex index:
-%             3   2
-% upper:   4         1
-%             5   6
-% 
-%            9   8
-% lower:  10        7
-%           11   12
 crst.vtx = vtx;
 crst.faces = faces;
 
