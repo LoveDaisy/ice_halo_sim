@@ -1,8 +1,10 @@
 function crst = generate_crystal(vtx, faces, axis_ori, roll)
 % This function generates a crystal given input parameters
 % INPUT
-%   axis_ori:   [lon,lat], in degree
-%   roll:       roll angle, in degree
+%   vtx:        vertex coordinates. n * 3 array.
+%   faces:      vertex indices of triangulas. n * 3 array.
+%   axis_ori:   [lon,lat], in degree. m * 2 array.
+%   roll:       roll angle, in degree. m * 1 array.
 % OUTPUT
 %   crst:
 
@@ -12,7 +14,7 @@ ori_num = size(axis_ori, 1);
 
 crst.axis_ori = axis_ori;
 crst.roll = roll;
-crst.n = 1.33;
+crst.n = 1.31;
 
 crst.local_axis = zeros(3, 3, ori_num);
 

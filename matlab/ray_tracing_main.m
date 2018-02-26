@@ -7,7 +7,7 @@ heatmap = zeros(heatmap_hw*2+1, heatmap_hw*2+1);
 
 num = 50;
 rand_num = 100;
-repeat_num = 200;
+repeat_num = 1000;
 
 ray_in = [-90, -27];
 
@@ -59,7 +59,8 @@ end
 figure(1); clf;
 tmp_img = (heatmap+fliplr(heatmap)).^.7;
 tmp_img = tmp_img / prctile(tmp_img(:), 99.95) * .95;
-imshow(imfilter(tmp_img,fspecial('gaussian',40,1.5)));
+% imshow(imfilter(tmp_img,fspecial('gaussian',40,1.5)));
+imagesc(imfilter(tmp_img,fspecial('gaussian',40,1.5)));
 hold on;
 xy = sph_to_xy_equiarea(-ray_in, str_prj_hov, heatmap_hw);
 plot(xy(1), xy(2), 'yo', xy(1), xy(2), 'w+');
