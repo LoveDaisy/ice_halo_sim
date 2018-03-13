@@ -194,13 +194,10 @@ void Geometry::initialize()
     initDone = true;
     
     size_t vtxNum = vertexes.size();
-    for (const auto &f : faces)
-    {
+    for (const auto &f : faces) {
         const int * idx = f.idx();
-        for (int i = 0; i < 3; ++i)
-        {
-            if (idx[i] < 0 || idx[i] > vtxNum-1)
-            {
+        for (int i = 0; i < 3; ++i) {
+            if (idx[i] < 0 || idx[i] > vtxNum-1) {
                 initDone = false;
                 return;
             }
@@ -209,8 +206,7 @@ void Geometry::initialize()
         Vec3f v2 = Vec3f::fromVec(vertexes[idx[0]], vertexes[idx[2]]);
         norms.push_back(Vec3f::cross(v1, v2));
     }
-    for (auto &v : norms) 
-    {
+    for (auto &v : norms) {
         v.normalize();
     }
 }
@@ -250,18 +246,21 @@ float Geometry::refractiveIndex() const
     return n;
 }
 
+void Geometry::setRefractiveIndex(float n)
+{
+    this->n = n;
+}
+
 void Geometry::copyVertexData(float *data) const
 {
-    for (auto i = 0; i < vertexes.size(); ++i)
-    {
+    for (auto i = 0; i < vertexes.size(); ++i) {
         memcpy(data + i*3, vertexes[i].val(), 3*sizeof(float));
     }
 }
 
 void Geometry::copyFaceData(float *data) const
 {
-    for (auto i = 0; i < faces.size(); i++)
-    {
+    for (auto i = 0; i < faces.size(); i++) {
         const int *idx = faces[i].idx();
         memcpy(data + i*9+0, vertexes[idx[0]].val(), 3*sizeof(float));
         memcpy(data + i*9+3, vertexes[idx[1]].val(), 3*sizeof(float));
@@ -271,18 +270,15 @@ void Geometry::copyFaceData(float *data) const
 
 void Geometry::copyFaceIdxData(int *data) const
 {
-    for (auto i = 0; i < faces.size(); i++)
-    {
+    for (auto i = 0; i < faces.size(); i++) {
         memcpy(data + i*3, faces[i].idx(), 3*sizeof(int));
     }
 }
 
 void Geometry::copyNormalData(int num, const int *idx, float *data) const
 {
-    for (auto i = 0; i < num; ++i)
-    {
-        if (idx[i] >= faces.size() || idx[i] < 0)
-        {
+    for (auto i = 0; i < num; ++i) {
+        if (idx[i] >= faces.size() || idx[i] < 0) {
             break;
         }
         memcpy(data + i*3, norms[idx[i]].val(), 3*sizeof(float));
@@ -299,12 +295,10 @@ Geometry* Geometry::createHexCylindar(float hRatio, float n)
     std::vector<Vec3f> vertexes;
     std::vector<TriangleIdx> faces;
 
-    for (int i = 0; i < 6; ++i)
-    {
+    for (int i = 0; i < 6; ++i) {
         vertexes.emplace_back(Vec3f(std::cos(2*PI*i/6), std::sin(2*PI*i/6), hRatio/2));
     }
-    for (int i = 0; i < 6; ++i)
-    {
+    for (int i = 0; i < 6; ++i) {
         vertexes.emplace_back(Vec3f(std::cos(2*PI*i/6), std::sin(2*PI*i/6), -hRatio/2));
     }
 
@@ -312,8 +306,7 @@ Geometry* Geometry::createHexCylindar(float hRatio, float n)
     faces.emplace_back(TriangleIdx(0, 2, 3));
     faces.emplace_back(TriangleIdx(3, 4, 5));
     faces.emplace_back(TriangleIdx(3, 5, 0));
-    for (int i = 0; i < 6; ++i)
-    {
+    for (int i = 0; i < 6; ++i) {
         faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6));
         faces.emplace_back(TriangleIdx(i+6, (i+1)%6+6, (i+1)%6));
     }

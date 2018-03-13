@@ -77,7 +77,7 @@ while true
 
     ref_num = ref_num + 1;
 
-    if isempty(ray_w) || ref_num > 4
+    if isempty(ray_w) || ref_num > 8
         break;
     end
 end

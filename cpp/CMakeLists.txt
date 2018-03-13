@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.9)
-project(cpp)
+project(IceHaloSim)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -O2")
 
@@ -14,4 +14,4 @@ set(SOURCE_FILES
         testhelper.cpp
         testhelper.h)
 
-add_executable(cpp ${SOURCE_FILES})
+add_executable(IceHaloSim ${SOURCE_FILES})

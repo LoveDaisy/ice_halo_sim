@@ -72,6 +72,7 @@ public:
     int faceNum() const;
 
     float refractiveIndex() const;
+    void setRefractiveIndex(float n);
 
     const std::vector<Vec3f>& getVertexes();
     const std::vector<Vec3f>& getNorms();

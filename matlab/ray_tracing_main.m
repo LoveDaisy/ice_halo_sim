@@ -7,7 +7,7 @@ heatmap = zeros(heatmap_hw*2+1, heatmap_hw*2+1);
 
 num = 50;
 rand_num = 100;
-repeat_num = 1000;
+repeat_num = 300;
 
 ray_in = [-90, -27];
 
@@ -17,8 +17,8 @@ w_store = cell(repeat_num, 1);
 parfor (i = 1:repeat_num, 3)
 % for i = 1:repeat_num
 %     axis_ori = [rand(rand_num,1)*360, zeros(rand_num,1)];
-    axis_ori = [rand(rand_num,1)*360, acosd(1-2*rand(rand_num,1))-90];
-%     axis_ori = [rand(rand_num,1)*360, randn(rand_num,1)*10+90];
+%     axis_ori = [rand(rand_num,1)*360, acosd(1-2*rand(rand_num,1))-90];
+    axis_ori = [rand(rand_num,1)*360, randn(rand_num,1)*2];
 %     idx = axis_ori(:,2) > 90;
 %     axis_ori(idx,1) = axis_ori(idx,1) + 180;
 %     axis_ori(idx,2) = 180 - axis_ori(idx,2);
