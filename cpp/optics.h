@@ -79,6 +79,9 @@ public:
     static float n(float waveLength);
 
 private:
+    /* 
+     * data from https://refractiveindex.info/?shelf=3d&book=crystals&page=ice
+     */
     static constexpr float _wl[] = {350.0f, 400.0f, 410.0f, 420.0f, 430.0f, 440.0f, 450.0f, 460.0f, 470.0f,
         480.0f, 490.0f, 500.0f, 510.0f, 520.0f, 530.0f, 540.0f, 550.0f, 560.0f, 570.0f, 580.0f, 590.0f, 
         600.0f, 610.0f, 620.0f, 630.0f, 640.0f, 650.0f, 660.0f, 670.0f, 680.0f, 690.0f, 700.0f, 710.0f, 
