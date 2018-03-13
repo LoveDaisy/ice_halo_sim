@@ -1,0 +1,1 @@
+g++ test_main.cpp optics.cpp geometry.cpp testhelper.cpp linearalgebra.cpp -O2 -g -std=c++11 -fno-rtti -o process

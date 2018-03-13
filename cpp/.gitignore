@@ -1,0 +1,7 @@
+.idea
+cmake-build-debug*
+
+*.dSYM
+process
+
+*.bin

@@ -24,7 +24,7 @@ parfor (i = 1:repeat_num, 3)
 %     axis_ori(idx,2) = 180 - axis_ori(idx,2);
     roll = rand(rand_num,1) * 360;
 %     roll = zeros(rand_num,1);
-    ratio = 5;
+    ratio = 5.0;
 %     crst = generate_hex_pry_crystal(axis_ori, roll, ratio);
     crst = generate_hex_cyl_crystal(axis_ori, roll, ratio);
 %     crst = generate_hexagonal_crystal(axis_ori, roll, ratio);
@@ -63,7 +63,7 @@ tmp_img = tmp_img / prctile(tmp_img(:), 99.95) * .95;
 imagesc(imfilter(tmp_img,fspecial('gaussian',40,1.5)));
 hold on;
 xy = sph_to_xy_equiarea(-ray_in, str_prj_hov, heatmap_hw);
-plot(xy(1), xy(2), 'yo', xy(1), xy(2), 'w+');
+% plot(xy(1), xy(2), 'yo', xy(1), xy(2), 'w+');
 xy = sph_to_xy_equiarea([(0:360)', zeros(361,1)], ...
     str_prj_hov, heatmap_hw);
 plot(xy(:,1), xy(:,2), 'w:');
