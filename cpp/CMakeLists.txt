@@ -1,15 +1,17 @@
 cmake_minimum_required(VERSION 3.9)
-project(IceHaloSim)
+project(cpp)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -O2")
 
-add_executable(IceHaloSim
+set(SOURCE_FILES
         geometry.cpp
         geometry.h
         linearalgebra.cpp
         linearalgebra.h
+        main.cpp
         optics.cpp
         optics.h
-        main.cpp
         testhelper.cpp
         testhelper.h)
+
+add_executable(cpp ${SOURCE_FILES})

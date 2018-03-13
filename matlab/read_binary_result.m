@@ -1,6 +1,6 @@
 clear; clc; close all;
 
-bin_file_path = '/Users/zhangjiajie/Documents/Ice Halo/codes/cpp-qt/IceHaloSim/';
+bin_file_path = '/Users/zhangjiajie/Documents/Ice Halo/codes/cpp/cmake-build-debug/';
 dir_fname = 'directions.bin';
 geo_fname = 'geometry.bin';
 ray_fname = 'rays.bin';
