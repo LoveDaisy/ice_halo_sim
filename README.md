@@ -16,7 +16,7 @@ You can start from `matlab/ray_tracing_main.m`.
 * It can do ray tracing with several specific ice crystal shape (see next section) and display the result.
 * Arbitrary orientation of crystals, including uniform distributed in an angle range, uniform distributed on a sphere,
   Gaussian distributed with given mean and standard deviation.
-* Multi-wave result visualization.
+* Multi-wave result visualization. It depends on my another project [Spectral Renderer](https://github.com/LoveDaisy/spec_render).
 ![Multi-wave result visualization](figs/sim_screenshot.png)
 
 ### Supported ice crystal shape.
