@@ -17,7 +17,7 @@ You can start from `matlab/ray_tracing_main.m`.
 * Arbitrary orientation of crystals, including uniform distributed in an angle range, uniform distributed on a sphere,
   Gaussian distributed with given mean and standard deviation.
 * Multi-wave result visualization. It depends on my another project [Spectral Renderer](https://github.com/LoveDaisy/spec_render).
-![Multi-wave result visualization](figs/sim_screenshot.png)
+![Multi-wave result visualization](figs/sim_screenshot.png | width=400)
 
 ### Supported ice crystal shape.
 
