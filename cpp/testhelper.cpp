@@ -5,7 +5,7 @@ TestContext::TestContext() :
     oriGen(Geometry::PI*2, Geometry::PI*2),
     incDirNum(100000), wl(0)
 {
-    this->g = Geometry::createHexCylindar(.5f);
+    this->g = Geometry::createHexCylindar(5.0f);
 
     float sunLon = -90.0f * Geometry::PI / 180.0f;
     float sunLat = 27.0f * Geometry::PI / 180.0f;

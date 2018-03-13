@@ -9,7 +9,6 @@ str_prj_hov = 100;
 heatmap_hw = 500;
 heatmap_size = [1,1] * (2*heatmap_hw + 1);
 heatmap_spec = zeros(heatmap_size(1), heatmap_size(2), length(dir_fnames));
-heatmap_rgb = zeros(heatmap_size(1), heatmap_size(2), 3);
 
 spec_pts = length(dir_fnames);
 
