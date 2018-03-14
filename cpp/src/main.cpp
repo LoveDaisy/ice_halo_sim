@@ -10,7 +10,8 @@ int main(int argc, char *argv[])
     TestContext context;
     context.setIncDirNum(300000);
     context.param.raysPerDirection = 20;
-    context.setSunPosition(-90.0f*Geometry::PI/180.0f, 47.0f*Geometry::PI/180.0f);
+    context.setSunPosition(90.0f*Geometry::PI/180.0f, 42.0f*Geometry::PI/180.0f);
+    context.setGeometry(Geometry::createHexCylindar(5.0f));
 
     context.oriGen.setAxisOrientation(OrientationGenerator::AxisDistribution::AX_HOR_GAUSS, 0.0f);
     context.oriGen.setAxisRoll(OrientationGenerator::RollDistribution::ROLL_UNIFORM, 0.0f);
@@ -19,7 +20,7 @@ int main(int argc, char *argv[])
 
     std::vector<Ray*> rays;
 
-    for (float wl = 400.0f; ;) {
+    for (float wl = 440.0f; ;) {
         if (wl > 655) {
             break;
         }
@@ -40,7 +41,7 @@ int main(int argc, char *argv[])
 
         context.writeFinalDirections(rays);
 
-        wl += 25.0f;
+        wl += 30.0f;
     }
 
     return 0;

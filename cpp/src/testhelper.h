@@ -62,6 +62,7 @@ public:
     void setWavelength(float wl);
     void setIncDirNum(int incDirNum);
     void setSunPosition(float lon, float lat);
+    void setGeometry(Geometry *g);
     
     bool isSettingsApplied();
     void applySettings();

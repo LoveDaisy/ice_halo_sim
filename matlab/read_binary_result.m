@@ -5,10 +5,12 @@ dir_fnames = dir([bin_file_path, 'directions_*.bin']);
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Heatmap
-str_prj_hov = 100;
 heatmap_hw = 500;
-heatmap_size = [1,1] * (2*heatmap_hw + 1);
+heatmap_size = floor([2/3,1] * (2*heatmap_hw + 1));
 heatmap_spec_raw = zeros(heatmap_size(1), heatmap_size(2), length(dir_fnames));
+
+cam_proj = @(sph)camera_project(sph, [58, 31, 90], 48, ...
+    heatmap_size, 'linear');
 
 spec_pts = length(dir_fnames);
 
@@ -31,10 +33,13 @@ for i = 1:spec_pts
         
         lon = atan2d(-data(:,2), -data(:,1));
         lat = asind(-data(:,3) ./ sqrt(sum(data(:,1:3).^2, 2)));
-        xy = sph_to_xy_equiarea([lon, lat], str_prj_hov, heatmap_hw);
+        xy = cam_proj([lon, lat]);
         
-        idx = 0 < xy(:,1) & xy(:,1) <= heatmap_hw*2+1 & ...
-            0 < xy(:,2) & xy(:,2) <= heatmap_hw*2+1;
+        idx = 0 < xy(:,1) & xy(:,1) <= heatmap_size(2) & ...
+            0 < xy(:,2) & xy(:,2) <= heatmap_size(1);
+        if sum(idx) <= 0
+            continue;
+        end
         xy = xy(idx,:); tmp_w = data(idx, 4);
         
         tmp_heatmap = accumarray(sub2ind(heatmap_size, xy(:,2), xy(:,1)), tmp_w, ...
@@ -46,7 +51,8 @@ for i = 1:spec_pts
 end
 
 %%
-heatmap_spec = heatmap_spec_raw + fliplr(heatmap_spec_raw);
+heatmap_spec = heatmap_spec_raw;
+% heatmap_spec = heatmap_spec + fliplr(heatmap_spec);
 heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 1.2));
 heatmap_spec = heatmap_spec / max(heatmap_spec(:)) * .6;
 spec = [wl_store, reshape(heatmap_spec, [], spec_pts)'];
@@ -58,10 +64,14 @@ heatmap_rgb = reshape(heatmap_rgb, [heatmap_size, 3]);
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Visualize
 figure(1); clf;
-hold on;
 tmp_img = heatmap_rgb;
 image(tmp_img);
-xy = sph_to_xy_equiarea([(0:360)', zeros(361,1)], ...
-    str_prj_hov, heatmap_hw);
-plot(xy(:,1), xy(:,2), 'w:');
+hold on;
+
+xy = cam_proj([(0:360)', zeros(361,1)]);
+idx = 0 < xy(:,1) & xy(:,1) <= heatmap_size(2) & ...
+    0 < xy(:,2) & xy(:,2) <= heatmap_size(1);
+xy = xy(idx,:);
+plot(xy(:,1), xy(:,2), '.w');
+axis ij;
 axis equal; axis tight; axis off;

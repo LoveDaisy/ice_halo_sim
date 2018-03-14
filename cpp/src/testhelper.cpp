@@ -62,6 +62,14 @@ void TestContext::setSunPosition(float lon, float lat)
     sunDir[0] = -std::cos(lat) * std::cos(lon);
     sunDir[1] = -std::cos(lat) * std::sin(lon);
     sunDir[2] = -std::sin(lat);
+    this->initialized = false;
+}
+
+void TestContext::setGeometry(Geometry *g)
+{
+    delete this->g;
+    this->g = g;
+    this->initialized = false;
 }
 
 bool TestContext::isSettingsApplied()
