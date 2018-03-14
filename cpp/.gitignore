@@ -1,9 +1,5 @@
+# JetBrain IDE
 .idea
-cmake-build-debug*
 
-*.dSYM
-process
-
-*.bin
-
-build.sh
+# CMake build directory
+cmake-build-debug

@@ -1,6 +1,6 @@
 clear; clc; close all;
 
-bin_file_path = '/Users/zhangjiajie/Documents/Ice Halo/codes/cpp/cmake-build-debug/';
+bin_file_path = '/Users/zhangjiajie/Documents/Ice Halo/codes/cpp/cmake-build-debug/bin/';
 dir_fnames = dir([bin_file_path, 'directions_*.bin']);
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -8,7 +8,7 @@ dir_fnames = dir([bin_file_path, 'directions_*.bin']);
 str_prj_hov = 100;
 heatmap_hw = 500;
 heatmap_size = [1,1] * (2*heatmap_hw + 1);
-heatmap_spec = zeros(heatmap_size(1), heatmap_size(2), length(dir_fnames));
+heatmap_spec_raw = zeros(heatmap_size(1), heatmap_size(2), length(dir_fnames));
 
 spec_pts = length(dir_fnames);
 
@@ -40,42 +40,26 @@ for i = 1:spec_pts
         tmp_heatmap = accumarray(sub2ind(heatmap_size, xy(:,2), xy(:,1)), tmp_w, ...
             [prod(heatmap_size), 1]);
         
-        heatmap_spec(:,:,i) = heatmap_spec(:,:,i) + reshape(tmp_heatmap, heatmap_size);
+        heatmap_spec_raw(:,:,i) = heatmap_spec_raw(:,:,i) + reshape(tmp_heatmap, heatmap_size);
     end
     fclose(fid);
 end
 
-heatmap_spec = heatmap_spec + fliplr(heatmap_spec);
-heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 1.5));
-heatmap_spec = heatmap_spec / max(heatmap_spec(:)) * 0.8;
+%%
+heatmap_spec = heatmap_spec_raw + fliplr(heatmap_spec_raw);
+heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 1.2));
+heatmap_spec = heatmap_spec / max(heatmap_spec(:)) * .6;
 spec = [wl_store, reshape(heatmap_spec, [], spec_pts)'];
 
 heatmap_rgb = spec_to_rgb(spec, 'Space', 'srgb', ...
     'Method', 'shrinktogray', 'MaxY', .1, 'Mix', true);
 heatmap_rgb = reshape(heatmap_rgb, [heatmap_size, 3]);
 
-% h = waitbar(0);
-% for x = 1:heatmap_size(2)
-%     waitbar(x/heatmap_size(2), h);
-%     for y = 1:heatmap_size(1)
-%         spec = [wl_store, reshape(heatmap_spec(y,x,:), [], 1)];
-%         rgb = spec_to_rgb(spec, 'Space', 'srgb', ...
-%             'Method', 'shrinktogray', ...
-%             'MaxY', mean(spec(:,2)), 'Mix', true);
-%         heatmap_rgb(y,x,:) = reshape(rgb, 1,1,3);
-%     end
-% end
-% close(h);
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Visualize
+% Visualize
 figure(1); clf;
 hold on;
 tmp_img = heatmap_rgb;
-% tmp_img = tmp_img+fliplr(tmp_img);
-% tmp_img = (tmp_img).^.7;
-% tmp_img = tmp_img / prctile(tmp_img(:), 99.95) * .95;
-% tmp_img = (imfilter(tmp_img, fspecial('gaussian', 20, 1.5)));
 image(tmp_img);
 xy = sph_to_xy_equiarea([(0:360)', zeros(361,1)], ...
     str_prj_hov, heatmap_hw);
