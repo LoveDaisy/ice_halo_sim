@@ -40,8 +40,23 @@ pieces of toy codes and can only run from command.
 
 With integration of [Halide](http://halide-lang.org/) I can accelarate these codes by parallelism.
 
+### Build
+
+It is built with CMake. Before start you should install a Halide distribution up to your
+OS platform (see their offical site: [Halide](http://halide-lang.org/)). Then modifies corresponding
+CMake variables (see comments in CMakeLists.txt). Now you can just start as follows:
+
+```shell
+$ cd cpp/
+$ mkdir build
+$ cd build/
+$ cmake .. && make
+```
+
+You probably will meet a link error when you try to link Halide library, and [this issue](https://github.com/halide/Halide/issues/2821) may help.
+
 ### TODO list
 
 * Use OpenCL / OpenGL / CUDA to accelerate. Since I've seen good enough performance with integration of
   Halide, I doubt the margin to more acceleration.
-* Write a GUI for these code.
+* Write a GUI for these code (maybe Qt is a good choice).
