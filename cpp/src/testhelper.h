@@ -21,7 +21,7 @@ public:
     enum class RollDistribution
     {
         ROLL_UNIFORM,
-        ROLL_HOR
+        ROLL_HOR_GAUSS
     };
 
 public:

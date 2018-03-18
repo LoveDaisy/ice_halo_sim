@@ -21,6 +21,13 @@ float LinearAlgebra::norm3(const float *vec)
     return std::sqrt(dot3(vec, vec));
 }
 
+float LinearAlgebra::diffNorm3(const float *vec1, const float *vec2)
+{
+    float v[3];
+    vec3FromTo(vec1, vec2, v);
+    return norm3(v);
+}
+
 void LinearAlgebra::normalize3(float *vec)
 {
     float len = norm3(vec);

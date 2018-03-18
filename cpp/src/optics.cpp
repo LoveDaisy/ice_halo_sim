@@ -1,6 +1,10 @@
 #include "optics.h"
 #include "linearalgebra.h"
 
+#include "ray_hit.h"
+#include "ray_prop.h"
+#include "HalideBuffer.h"
+
 RaySegment::RaySegment(Vec3f &pt, Vec3f &dir, float w, int faceId) :
     nextReflect(nullptr),
     nextRefract(nullptr),
@@ -132,31 +136,54 @@ void Optics::initRays(int num, const float *dir, int face_num, const float *face
 void Optics::hitSurface(float n, int num, const float *dir, const float *norm,
         float *reflect_dir, float *refract_dir, float *reflect_w)
 {
-    for (int i = 0; i < num; ++i) {
-        const float *tmp_dir = dir + i*3;
-        const float *tmp_norm = norm + i*3;
+     for (int i = 0; i < num; ++i) {
+         const float *tmp_dir = dir + i*3;
+         const float *tmp_norm = norm + i*3;
         
-        float cos_theta = LinearAlgebra::dot3(tmp_dir, tmp_norm);
-        float inc_angle = std::acos(std::abs(cos_theta));
-        float nf = cos_theta > 0 ? 1.0f : -1.0f;
+         float cos_theta = LinearAlgebra::dot3(tmp_dir, tmp_norm);
+         float inc_angle = std::acos(std::abs(cos_theta));
 
-        bool is_inner = cos_theta > 0;
-        float tmp_n1 = is_inner ? n : 1;
-        float tmp_n2 = is_inner ? 1 : n;
+         bool is_inner = cos_theta > 0;
+         float tmp_n1 = is_inner ? n : 1;
+         float tmp_n2 = is_inner ? 1 : n;
 
-        reflect_w[i] = getReflectRatio(inc_angle, tmp_n1, tmp_n2);
+         reflect_w[i] = getReflectRatio(inc_angle, tmp_n1, tmp_n2);
 
-        for (int j = 0; j < 3; ++j) {
-            reflect_dir[i*3+j] = tmp_dir[j] - 2 * std::abs(cos_theta) * nf * tmp_norm[j];
-        }
+         for (int j = 0; j < 3; ++j) {
+             reflect_dir[i*3+j] = tmp_dir[j] - 2 * cos_theta * tmp_norm[j];
+         }
 
-        float rr = tmp_n1 / tmp_n2;
-        float d = 1.0f - rr * rr * (1.0f - cos_theta * cos_theta);
-        for (int j = 0; j < 3; j++) {
-            refract_dir[i*3+j] = d <= 0.0f ? reflect_dir[i*3+j] :
-                rr * tmp_dir[j] - (rr * std::abs(cos_theta) - std::sqrt(d)) * (nf * tmp_norm[j]);
-        }
-    }
+         float rr = tmp_n1 / tmp_n2;
+         float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
+         for (int j = 0; j < 3; j++) {
+             refract_dir[i*3+j] = d <= 0.0f ? reflect_dir[i*3+j] :
+                 rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];
+         }
+     }
+}
+
+
+void Optics::hitSurfaceHalide(float n, int num, const float *dir, const float *norm,
+                              float *reflect_dir, float *refract_dir, float *reflect_w)
+{
+    using namespace Halide::Runtime;
+
+    auto *dir_cpy = new float[num*3];
+    auto *norm_cpy = new float[num*3];
+    memcpy(dir_cpy, dir, num*3*sizeof(float));
+    memcpy(norm_cpy, norm, num*3*sizeof(float));
+
+    Buffer<float> dir_buffer(dir_cpy, 3, num);
+    Buffer<float> norm_buffer(norm_cpy, 3, num);
+    Buffer<float> reflect_dir_buffer(reflect_dir, 3, num);
+    Buffer<float> refract_dir_buffer(refract_dir, 3, num);
+    Buffer<float> reflect_w_buffer(reflect_w, num);
+
+    ray_hit(dir_buffer, norm_buffer, n, reflect_dir_buffer, refract_dir_buffer, reflect_w_buffer);
+
+    delete[] dir_cpy;
+    delete[] norm_cpy;
+
 }
 
 void Optics::propagate(int num, const float *pt, const float *dir, int face_num, const float *faces,
@@ -187,6 +214,36 @@ void Optics::propagate(int num, const float *pt, const float *dir, int face_num,
         }
     }
 }
+
+
+void Optics::propagateHalide(int num, const float *pt, const float *dir, int face_num, const float *faces,
+        float *new_pt, int *new_face_id)
+{
+    using namespace Halide::Runtime;
+
+    auto *pt_cpy = new float[num*3];
+    auto *dir_cpy = new float[num*3];
+    auto *face_cpy = new float[face_num*9];
+    memcpy(pt_cpy, pt, num*3*sizeof(float));
+    memcpy(dir_cpy, dir, num*3*sizeof(float));
+    memcpy(face_cpy, faces, face_num*9*sizeof(float));
+
+    auto *new_pt_cpy = new float[num*3];
+    auto *new_face_id_cpy = new int[num];
+
+    Buffer<float> pt_buffer(pt_cpy, 3, num);
+    Buffer<float> dir_buffer(dir_cpy, 3, num);
+    Buffer<float> face_buffer(face_cpy, 9, face_num);
+    Buffer<float> new_pt_buffer(new_pt, 3, num);
+    Buffer<int> new_face_id_buffer(new_face_id, num);
+
+    ray_prop(dir_buffer, pt_buffer, face_buffer, new_pt_buffer, new_face_id_buffer);
+
+    delete[] pt_cpy;
+    delete[] dir_cpy;
+    delete[] face_cpy;
+}
+
 
 void Optics::traceRays(int dir_num, const float *dir, const RayTracingParam& param, const Geometry *g,
         std::vector<Ray*>& rays)
@@ -232,8 +289,8 @@ void Optics::traceRays(int dir_num, const float *dir, const RayTracingParam& par
     // Start loop
     int recursion = 0;
     while (!activeRaySegments.empty() && recursion < param.maxRecursion) {
-        hitSurface(g->refractiveIndex(), currentRayNumbers, ray_dir_buffer, face_norm_buffer,
-            reflect_dir_buffer, refract_dir_buffer, reflect_w_buffer);
+        hitSurfaceHalide(g->refractiveIndex(), currentRayNumbers, ray_dir_buffer, face_norm_buffer,
+                         reflect_dir_buffer, refract_dir_buffer, reflect_w_buffer);
         for (auto i = 0; i < currentRayNumbers; i++) {
             Vec3f p(ray_pt_buffer + i * 3);
             Vec3f d(reflect_dir_buffer + i * 3);
@@ -268,7 +325,7 @@ void Optics::traceRays(int dir_num, const float *dir, const RayTracingParam& par
         memcpy(ray_dir_buffer, reflect_dir_buffer, currentRayNumbers*3*sizeof(float));
         memcpy(ray_dir_buffer + currentRayNumbers*3, refract_dir_buffer, currentRayNumbers*3*sizeof(float));
 
-        propagate(currentRayNumbers * 2, ray_pt_buffer, ray_dir_buffer, g->faceNum(), face_data,
+        propagateHalide(currentRayNumbers * 2, ray_pt_buffer, ray_dir_buffer, g->faceNum(), face_data,
             ray_pt_buffer2, face_id_buffer);
         int k = 0;
         for (auto i = 0; i < currentRayNumbers * 2; i++) {

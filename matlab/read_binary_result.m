@@ -5,7 +5,7 @@ dir_fnames = dir([bin_file_path, 'directions_*.bin']);
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Heatmap
-heatmap_hw = 500;
+heatmap_hw = 900;
 heatmap_size = floor([2/3,1] * (2*heatmap_hw + 1));
 heatmap_spec_raw = zeros(heatmap_size(1), heatmap_size(2), length(dir_fnames));
 
@@ -54,18 +54,18 @@ end
 heatmap_spec = heatmap_spec_raw;
 % heatmap_spec = heatmap_spec + fliplr(heatmap_spec);
 heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 1.2));
-heatmap_spec = heatmap_spec / max(heatmap_spec(:)) * .6;
+heatmap_spec = heatmap_spec / max(heatmap_spec(:)) * .5;
 spec = [wl_store, reshape(heatmap_spec, [], spec_pts)'];
 
 heatmap_rgb = spec_to_rgb(spec, 'Space', 'srgb', ...
     'Method', 'shrinktogray', 'MaxY', .1, 'Mix', true);
 heatmap_rgb = reshape(heatmap_rgb, [heatmap_size, 3]);
+% heatmap_rgb = heatmap_rgb.^.8;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Visualize
 figure(1); clf;
-tmp_img = heatmap_rgb;
-image(tmp_img);
+image(heatmap_rgb);
 hold on;
 
 xy = cam_proj([(0:360)', zeros(361,1)]);

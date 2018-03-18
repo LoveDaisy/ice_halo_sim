@@ -255,8 +255,8 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
         }
 
         switch (rollDist) {
-            case RollDistribution::ROLL_HOR :
-                roll = 0;
+            case RollDistribution::ROLL_HOR_GAUSS :
+                roll = gaussDistribution(generator) * rollStd;
                 break;
             case RollDistribution::ROLL_UNIFORM :
                 roll = uniformDistribution(generator) * 2 * Geometry::PI;

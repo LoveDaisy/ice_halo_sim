@@ -13,8 +13,8 @@ int main(int argc, char *argv[])
     context.setSunPosition(90.0f*Geometry::PI/180.0f, 42.0f*Geometry::PI/180.0f);
     context.setGeometry(Geometry::createHexCylindar(5.0f));
 
-    context.oriGen.setAxisOrientation(OrientationGenerator::AxisDistribution::AX_HOR_GAUSS, 0.0f);
-    context.oriGen.setAxisRoll(OrientationGenerator::RollDistribution::ROLL_UNIFORM, 0.0f);
+    context.oriGen.setAxisOrientation(OrientationGenerator::AxisDistribution::AX_HOR_GAUSS, 0.01f);
+    context.oriGen.setAxisRoll(OrientationGenerator::RollDistribution::ROLL_HOR_GAUSS, 0.03f);
 
     context.applySettings();
 

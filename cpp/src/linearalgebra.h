@@ -9,6 +9,7 @@ public:
     static float dot3(const float *vec1, const float *vec2);
     static void cross3(const float *vec1, const float *vec2, float* vec);
     static float norm3(const float *vec);
+    static float diffNorm3(const float *vec1, const float *vec2);
     static void normalize3(float *vec);
     static void normalized3(const float *vec, float *vec_n);
     static void vec3FromTo(const float *vec1, const float *vec2, float *vec);
