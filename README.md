@@ -16,7 +16,8 @@ You can start from `matlab/ray_tracing_main.m`.
 * It can do ray tracing with several specific ice crystal shape (see next section) and display the result.
 * Arbitrary orientation of crystals, including uniform distributed in an angle range, uniform distributed on a sphere,
   Gaussian distributed with given mean and standard deviation.
-* Multi-wave result visualization. It depends on my another project [Spectral Renderer](https://github.com/LoveDaisy/spec_render).
+* Multi-wave result visualization. It reads the binary file produced by C++ version and visulize the result. 
+  It depends on my another project [Spectral Renderer](https://github.com/LoveDaisy/spec_render).
 <img src="figs/sim_screenshot.png" width="400">
 
 ### Supported ice crystal shape.
@@ -37,7 +38,10 @@ You can start from `matlab/ray_tracing_main.m`.
 Also I start a C++ project for higher performance. Currently the C++ version is just 
 pieces of toy codes and can only run from command.
 
+With integration of [Halide](http://halide-lang.org/) I can accelarate these codes by parallelism.
+
 ### TODO list
 
-* Use OpenCL / OpenGL / CUDA to accelerate.
+* Use OpenCL / OpenGL / CUDA to accelerate. Since I've seen good enough performance with integration of
+  Halide, I doubt the margin to more acceleration.
 * Write a GUI for these code.
