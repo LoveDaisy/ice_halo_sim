@@ -14,7 +14,7 @@ int main(int argc, char *argv[])
     context.setGeometry(Geometry::createHexCylindar(5.0f));
 
     context.oriGen.setAxisOrientation(OrientationGenerator::AxisDistribution::AX_HOR_GAUSS, 0.01f);
-    context.oriGen.setAxisRoll(OrientationGenerator::RollDistribution::ROLL_HOR_GAUSS, 0.03f);
+    context.oriGen.setAxisRoll(OrientationGenerator::RollDistribution::ROLL_UNIFORM, 0.0f);
 
     context.applySettings();
 

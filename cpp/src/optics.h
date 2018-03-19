@@ -20,6 +20,7 @@ class RaySegment
 {
 public:
     RaySegment(Vec3f &pt, Vec3f &dir, float w, int faceId = -1);
+    RaySegment(float *pt, float *dir, float w, int faceId = -1);
     ~RaySegment() = default;
 
     bool isValidEnd();

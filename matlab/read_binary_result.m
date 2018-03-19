@@ -11,6 +11,8 @@ heatmap_spec_raw = zeros(heatmap_size(1), heatmap_size(2), length(dir_fnames));
 
 cam_proj = @(sph)camera_project(sph, [58, 31, 90], 48, ...
     heatmap_size, 'linear');
+% cam_proj = @(sph)camera_project(sph, [238, 31, 90], 48, ...
+%     heatmap_size, 'linear');
 
 spec_pts = length(dir_fnames);
 
@@ -54,7 +56,7 @@ end
 heatmap_spec = heatmap_spec_raw;
 % heatmap_spec = heatmap_spec + fliplr(heatmap_spec);
 heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 1.2));
-heatmap_spec = heatmap_spec / max(heatmap_spec(:)) * .5;
+heatmap_spec = heatmap_spec / max(heatmap_spec(:)) * .7;
 spec = [wl_store, reshape(heatmap_spec, [], spec_pts)'];
 
 heatmap_rgb = spec_to_rgb(spec, 'Space', 'srgb', ...

@@ -106,9 +106,10 @@ void TestContext::writeFinalDirections(const std::vector<Ray*> &rays)
 
     auto *finalDir = new float[totalDir * 4];
     int k = 0;
+    std::vector<RaySegment *> v;
     for (int i = 0; i < rays.size(); i++) {
         auto r = rays[i];
-        std::vector<RaySegment *> v;
+        v.clear();
         v.push_back(r->firstRaySeg);
         while (!v.empty()) {
             RaySegment *p = v.back();
@@ -119,11 +120,10 @@ void TestContext::writeFinalDirections(const std::vector<Ray*> &rays)
             if (p->nextRefract) {
                 v.push_back(p->nextRefract);
             }
-            if (p->isValidEnd()
-                && LinearAlgebra::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0f - 1e-5 ) {
+            if (p->isValidEnd() &&
+                    LinearAlgebra::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0f - 1e-5 ) {
                 memcpy(finalDir + k*4, p->dir.val(), 3*sizeof(float));
-                LinearAlgebra::rotateZBack(mainAxRot[i/param.raysPerDirection*3], 
-                    mainAxRot[i/param.raysPerDirection*3+1], mainAxRot[i/param.raysPerDirection*3+2], 1, finalDir + k*4);
+                LinearAlgebra::rotateZBack(mainAxRot+i/param.raysPerDirection*3, 1, finalDir+k*4);
                 finalDir[k*4+3] = p->w;
                 k++;
             }
@@ -268,7 +268,8 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
         mainAxRot[i*3+2] = roll;
 
         memcpy(rayDir+i*3, sunDir, 3*sizeof(float));
-        LinearAlgebra::rotateZ(lon, lat, roll, 1, rayDir+i*3);
+//        LinearAlgebra::rotateZ(lon, lat, roll, 1, rayDir+i*3);
+        LinearAlgebra::rotateZ(mainAxRot+i*3, rayDir+i*3);
     }
 }
 
