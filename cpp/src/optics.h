@@ -5,25 +5,18 @@
 
 #include <random>
 
-
-class RayTracingParam
-{
-public:
-
-    int raysPerDirection;
-    int maxRecursion;
-    
-};
+class RayTracingContext;
 
 
 class RaySegment
 {
 public:
-    RaySegment(Vec3f &pt, Vec3f &dir, float w, int faceId = -1);
+    RaySegment();
     RaySegment(float *pt, float *dir, float w, int faceId = -1);
     ~RaySegment() = default;
 
     bool isValidEnd();
+    void reset();
 
     RaySegment * nextReflect;
     RaySegment * nextRefract;
@@ -41,7 +34,7 @@ public:
 class Ray
 {
 public:
-    Ray(Vec3f &pt, Vec3f &d, float w, int faceId = -1);
+    Ray(float *pt, float *dir, float w, int faceId = -1);
     ~Ray();
 
     size_t totalNum();
@@ -54,8 +47,7 @@ public:
 class Optics
 {
 public:
-    static void traceRays(int dir_num, const float *dir, const RayTracingParam& param, const Geometry *g,
-        std::vector<Ray*>& rays);
+    static void traceRays(RayTracingContext &context);
 
 private:
     static void initRays(int num, const float *dir, int face_num, const float *faces,

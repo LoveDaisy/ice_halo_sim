@@ -1,7 +1,7 @@
 #include "testhelper.h"
 #include "linearalgebra.h"
 
-TestContext::TestContext() :
+RayTracingContext::RayTracingContext() :
     oriGen(Geometry::PI*2, Geometry::PI*2),
     incDirNum(100000), wl(0)
 {
@@ -14,50 +14,65 @@ TestContext::TestContext() :
     rayDir = new float[incDirNum * 3];
     mainAxRot = new float[incDirNum * 3];
 
-    param.maxRecursion = 9;
-    param.raysPerDirection = 20;
+    maxRecursion = 9;
+    raysPerDirection = 20;
 }
 
-TestContext::~TestContext()
+RayTracingContext::~RayTracingContext()
 {
     delete[] rayDir;
     delete[] mainAxRot;
 }
 
-const Geometry * TestContext::getGeometry() const
+const Geometry * RayTracingContext::getGeometry() const
 {
     return this->g;
 }
 
-const float * TestContext::getRayDirections() const
+const float * RayTracingContext::getRayDirections() const
 {
     return this->rayDir;
 }
 
-const float * TestContext::getMainAxisRotations() const
+const float * RayTracingContext::getMainAxisRotations() const
 {
     return this->mainAxRot;
 }
 
-void TestContext::setWavelength(float wl)
+void RayTracingContext::setWavelength(float wl)
 {
     float n = IceRefractiveIndex::n(wl);
     g->setRefractiveIndex(n);
     this->wl = wl;
 }
 
-int TestContext::getIncDirNum() const
+int RayTracingContext::getIncDirNum() const
 {
     return incDirNum;
 }
 
-void TestContext::setIncDirNum(int incDirNum)
+int RayTracingContext::getRaysPerDirection() const
+{
+    return raysPerDirection;
+}
+
+int RayTracingContext::getMaxRecursion() const
+{
+    return maxRecursion;
+}
+
+void RayTracingContext::setRaysPerDirection(int raysPerDirection)
+{
+    this->raysPerDirection = raysPerDirection;
+}
+
+void RayTracingContext::setIncDirNum(int incDirNum)
 {
     this->incDirNum = incDirNum;
     this->initialized = false;
 }
 
-void TestContext::setSunPosition(float lon, float lat)
+void RayTracingContext::setSunPosition(float lon, float lat)
 {
     sunDir[0] = -std::cos(lat) * std::cos(lon);
     sunDir[1] = -std::cos(lat) * std::sin(lon);
@@ -65,19 +80,19 @@ void TestContext::setSunPosition(float lon, float lat)
     this->initialized = false;
 }
 
-void TestContext::setGeometry(Geometry *g)
+void RayTracingContext::setGeometry(Geometry *g)
 {
     delete this->g;
     this->g = g;
     this->initialized = false;
 }
 
-bool TestContext::isSettingsApplied()
+bool RayTracingContext::isSettingsApplied()
 {
     return initialized;
 }
 
-void TestContext::applySettings()
+void RayTracingContext::applySettings()
 {
     if (rayDir) {
         delete[] rayDir;
@@ -88,21 +103,21 @@ void TestContext::applySettings()
         mainAxRot = new float[3 * incDirNum];
     }
 
-    memset(rayDir, 0.0f, incDirNum*3*sizeof(float));
-    memset(mainAxRot, 0.0f, incDirNum*3*sizeof(float));
+    memset(rayDir, 0, incDirNum*3*sizeof(float));
+    memset(mainAxRot, 0, incDirNum*3*sizeof(float));
     oriGen.fillData(sunDir, incDirNum, rayDir, mainAxRot);
 
     this->initialized = true;
 }
 
-void TestContext::writeFinalDirections(const std::vector<Ray*> &rays)
+void RayTracingContext::writeFinalDirections()
 {
-    int totalDir = 0;
+    size_t totalDir = 0;
     for (auto r : rays) {
         totalDir += r->totalNum();
     }
 
-    printf("rays.size(): %lu, incDirNum: %d, totalDir: %d\n", rays.size(), incDirNum, totalDir);
+    printf("rays.size(): %lu, incDirNum: %d, totalDir: %ld\n", rays.size(), incDirNum, totalDir);
 
     auto *finalDir = new float[totalDir * 4];
     int k = 0;
@@ -123,7 +138,7 @@ void TestContext::writeFinalDirections(const std::vector<Ray*> &rays)
             if (p->isValidEnd() &&
                     LinearAlgebra::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0f - 1e-5 ) {
                 memcpy(finalDir + k*4, p->dir.val(), 3*sizeof(float));
-                LinearAlgebra::rotateZBack(mainAxRot+i/param.raysPerDirection*3, 1, finalDir+k*4);
+                LinearAlgebra::rotateZBack(mainAxRot+i/raysPerDirection*3, 1, finalDir+k*4);
                 finalDir[k*4+3] = p->w;
                 k++;
             }
@@ -141,80 +156,86 @@ void TestContext::writeFinalDirections(const std::vector<Ray*> &rays)
     delete[] finalDir;
 }
 
-
-void TestContext::writeGeometryInfo()
+void RayTracingContext::clearRays()
 {
-    int vtxNum = g->vtxNum();
-    int faceNum = g->faceNum();
-
-    auto *vtx_buffer = new float[vtxNum * 3];
-    g->copyVertexData(vtx_buffer);
-
-    auto *face_buffer = new int[faceNum * 3];
-    g->copyFaceIdxData(face_buffer);
-
-    FILE * pFile;
-    pFile = fopen("geometry.bin", "wb");
-    fwrite(&vtxNum, sizeof(int), 1, pFile);
-    fwrite(vtx_buffer, sizeof(float), vtxNum * 3, pFile);
-    fwrite(&faceNum, sizeof(int), 1, pFile);
-    fwrite(face_buffer, sizeof(int), faceNum * 3, pFile);
-    fclose(pFile);
+    RaySegmentFactory::getInstance()->clear();
+    rays.clear();
 }
 
 
-void TestContext::writeRayPaths(const std::vector<Ray*> &rays)
-{
-    FILE * pFile;
-    pFile = fopen("rays.bin", "wb");
+// void RayTracingContext::writeGeometryInfo()
+// {
+//     int vtxNum = g->vtxNum();
+//     int faceNum = g->faceNum();
 
-    int totalRays = 0;
-    for (auto r : rays) {
-        totalRays += r->totalNum();
-    }
-    fwrite(&totalRays, sizeof(int), 1, pFile);
+//     auto *vtx_buffer = new float[vtxNum * 3];
+//     g->copyVertexData(vtx_buffer);
 
-    for (auto r : rays) {
-        std::vector<RaySegment *> v;
-        v.push_back(r->firstRaySeg);
-        while (!v.empty()) {
-            RaySegment *p = v.back();
-            v.pop_back();
-            if (p->nextReflect) {
-                v.push_back(p->nextReflect);
-            }
-            if (p->nextRefract) {
-                v.push_back(p->nextRefract);
-            }
-            if (p->isValidEnd()
-                && LinearAlgebra::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0f - 1e-5 ) {
-                std::vector<RaySegment *> tmpV;
-                RaySegment *q = p;
-                while (q->prev) {
-                    tmpV.push_back(q);
-                    q = q->prev;
-                }
-                tmpV.push_back(q);
+//     auto *face_buffer = new int[faceNum * 3];
+//     g->copyFaceIdxData(face_buffer);
 
-                int tmpNum = tmpV.size();
-                fwrite(&tmpNum, sizeof(int), 1, pFile);
+//     FILE * pFile;
+//     pFile = fopen("geometry.bin", "wb");
+//     fwrite(&vtxNum, sizeof(int), 1, pFile);
+//     fwrite(vtx_buffer, sizeof(float), vtxNum * 3, pFile);
+//     fwrite(&faceNum, sizeof(int), 1, pFile);
+//     fwrite(face_buffer, sizeof(int), faceNum * 3, pFile);
+//     fclose(pFile);
+// }
 
-                std::reverse(tmpV.begin(), tmpV.end());
-                for (auto tmp_r : tmpV) {
-                    float tmpRayData[7] = {tmp_r->pt.x(), tmp_r->pt.y(), tmp_r->pt.z(),
-                        tmp_r->dir.x(), tmp_r->dir.y(), tmp_r->dir.z(),
-                        tmp_r->w};
-                    auto faceId = static_cast<float>(tmp_r->faceId);
 
-                    fwrite(tmpRayData, sizeof(float), 7, pFile);
-                    fwrite(&faceId, sizeof(float), 1, pFile);
+// void RayTracingContext::writeRayPaths(const std::vector<Ray*> &rays)
+// {
+//     FILE * pFile;
+//     pFile = fopen("rays.bin", "wb");
 
-                }
-            }
-        }
-    }
-    fclose(pFile);
-}
+//     int totalRays = 0;
+//     for (auto r : rays) {
+//         totalRays += r->totalNum();
+//     }
+//     fwrite(&totalRays, sizeof(int), 1, pFile);
+
+//     for (auto r : rays) {
+//         std::vector<RaySegment *> v;
+//         v.push_back(r->firstRaySeg);
+//         while (!v.empty()) {
+//             RaySegment *p = v.back();
+//             v.pop_back();
+//             if (p->nextReflect) {
+//                 v.push_back(p->nextReflect);
+//             }
+//             if (p->nextRefract) {
+//                 v.push_back(p->nextRefract);
+//             }
+//             if (p->isValidEnd()
+//                 && LinearAlgebra::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0f - 1e-5 ) {
+//                 std::vector<RaySegment *> tmpV;
+//                 RaySegment *q = p;
+//                 while (q->prev) {
+//                     tmpV.push_back(q);
+//                     q = q->prev;
+//                 }
+//                 tmpV.push_back(q);
+
+//                 int tmpNum = tmpV.size();
+//                 fwrite(&tmpNum, sizeof(int), 1, pFile);
+
+//                 std::reverse(tmpV.begin(), tmpV.end());
+//                 for (auto tmp_r : tmpV) {
+//                     float tmpRayData[7] = {tmp_r->pt.x(), tmp_r->pt.y(), tmp_r->pt.z(),
+//                         tmp_r->dir.x(), tmp_r->dir.y(), tmp_r->dir.z(),
+//                         tmp_r->w};
+//                     auto faceId = static_cast<float>(tmp_r->faceId);
+
+//                     fwrite(tmpRayData, sizeof(float), 7, pFile);
+//                     fwrite(&faceId, sizeof(float), 1, pFile);
+
+//                 }
+//             }
+//         }
+//     }
+//     fclose(pFile);
+// }
 
 
 OrientationGenerator::OrientationGenerator(float axStd, float rollStd,
@@ -268,7 +289,6 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
         mainAxRot[i*3+2] = roll;
 
         memcpy(rayDir+i*3, sunDir, 3*sizeof(float));
-//        LinearAlgebra::rotateZ(lon, lat, roll, 1, rayDir+i*3);
         LinearAlgebra::rotateZ(mainAxRot+i*3, rayDir+i*3);
     }
 }
@@ -285,6 +305,67 @@ void OrientationGenerator::setAxisRoll(RollDistribution roll, float rollStd)
 {
     this->rollDist = roll;
     this->rollStd = rollStd;
+}
+
+
+RaySegmentFactory * RaySegmentFactory::instance = nullptr;
+
+RaySegmentFactory::RaySegmentFactory()
+{
+    auto *raySegPool = new RaySegment[chunkSize];
+    segments.push_back(raySegPool);
+    nextUnusedId = 0;
+    currentChunkId = 0;
+}
+
+RaySegmentFactory::~RaySegmentFactory()
+{
+    for (auto seg : segments) {
+        delete[] seg;
+    }
+    segments.clear();
+}
+
+RaySegmentFactory * RaySegmentFactory::getInstance()
+{
+    if (instance == nullptr) {
+        instance = new RaySegmentFactory();
+    }
+    return instance;
+}
+
+RaySegment * RaySegmentFactory::getRaySegment(float *pt, float *dir, float w, int faceId)
+{
+    RaySegment *seg;
+    RaySegment *currentChunk;
+
+    if (nextUnusedId < chunkSize) {
+        currentChunk = segments[currentChunkId];
+    } else {
+        currentChunkId++;
+        if (currentChunkId >= segments.size()) {
+            auto *raySegPool = new RaySegment[chunkSize];
+            segments.push_back(raySegPool);
+        }
+        nextUnusedId = 0;
+        currentChunk = segments[currentChunkId];
+    }
+    
+    seg = &currentChunk[nextUnusedId++];
+    seg->reset();
+
+    seg->pt.val(pt);
+    seg->dir.val(dir);
+    seg->w = w;
+    seg->faceId = faceId;
+
+    return seg;
+}
+
+void RaySegmentFactory::clear()
+{
+    nextUnusedId = 0;
+    currentChunkId = 0;
 }
 
 

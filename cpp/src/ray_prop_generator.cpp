@@ -70,10 +70,10 @@ public:
             pt.dim(0).set_bounds_estimate(0, 3);
 
             face.dim(1).set_bounds_estimate(0, 128);
-            face.dim(0).set_bounds_estimate(0, 3);
+            face.dim(0).set_bounds_estimate(0, 9);
 
             // Provide estimates on the pipeline output
-            newFaceId.estimate(y, 0, 128);
+            newFaceId.estimate(y, 0, DEFAULT_NUM);
             newPt.estimate(x, 0, 3).estimate(y, 0, DEFAULT_NUM);
 
         } else {

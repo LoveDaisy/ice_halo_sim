@@ -6,7 +6,7 @@ set(SOURCE_FILE
         testhelper.cpp
         )
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -O2")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -O3")
 # set(CMAKE_CXX_STANDARD 11)
 set(executable_output_path ${PROJECT_BINARY_DIR}/bin)
 

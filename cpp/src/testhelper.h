@@ -5,6 +5,7 @@
 #include "optics.h"
 
 #include <vector>
+#include <set>
 #include <random>
 
 
@@ -47,18 +48,42 @@ private:
 };
 
 
-
-class TestContext
+class RaySegmentFactory
 {
 public:
-    TestContext();
-    ~TestContext();
+    ~RaySegmentFactory();
+
+    static RaySegmentFactory * getInstance();
+    
+    RaySegment * getRaySegment(float *pt, float *dir, float w, int faceId);
+    void clear();
+
+private:
+    RaySegmentFactory();
+
+    static RaySegmentFactory *instance;
+    static const uint32_t chunkSize = 1024*64;
+    
+    std::vector<RaySegment*> segments;
+    uint32_t nextUnusedId;
+    uint32_t currentChunkId;
+};
+
+
+class RayTracingContext
+{
+public:
+    RayTracingContext();
+    ~RayTracingContext();
 
     const Geometry * getGeometry() const;
     const float * getRayDirections() const;
     const float * getMainAxisRotations() const;
     int getIncDirNum() const;
+    int getRaysPerDirection() const;
+    int getMaxRecursion() const;
 
+    void setRaysPerDirection(int raysPerDirection);
     void setWavelength(float wl);
     void setIncDirNum(int incDirNum);
     void setSunPosition(float lon, float lat);
@@ -67,19 +92,24 @@ public:
     bool isSettingsApplied();
     void applySettings();
 
-    void writeFinalDirections(const std::vector<Ray*> &rays);
-    void writeGeometryInfo();
-    void writeRayPaths(const std::vector<Ray*> &rays);
+    void clearRays();
+
+    void writeFinalDirections();
+    // void writeGeometryInfo();
+    // void writeRayPaths(const std::vector<Ray*> &rays);
     
-    RayTracingParam param;
     OrientationGenerator oriGen;
     Geometry *g;
+    std::vector<Ray*> rays;
 
 private:
     int incDirNum;
     float *rayDir;
     float *mainAxRot;
     float sunDir[3];
+
+    int raysPerDirection;
+    int maxRecursion;
 
     float wl;
 

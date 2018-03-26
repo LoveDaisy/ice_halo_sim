@@ -45,7 +45,7 @@ else
         error('Method not recognized!');
     end
     u = r .* cosd(lon) + img_size(2)/2;
-    v = r .* sind(lon) + img_size(2)/2;
+    v = r .* sind(lon) + img_size(1)/2;
     uv = floor([u, v]);
 end
 end
