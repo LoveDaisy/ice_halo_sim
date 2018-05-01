@@ -3,20 +3,32 @@ set(SOURCE_FILE
         geometry.cpp
         linearalgebra.cpp
         optics.cpp
-        testhelper.cpp
-        )
+        processhelper.cpp)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -O3")
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_FLAGS "-Wall -Wextra -msse4 -pthread -std=c++11")
+set(CMAKE_CXX_FLAGS_DEBUG "-g")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+
 # set(CMAKE_CXX_STANDARD 11)
 set(executable_output_path ${PROJECT_BINARY_DIR}/bin)
 
 # path to distribution of halide
 set(HALIDE_DISTRIB_DIR "/Users/zhangjiajie/Codes/Halide/halide")
+if(NOT DEFINED HALIDE_DISTRIB_DIR)
+    message(FATAL_ERROR "Variable HALIDE_DISTRIB_DIR is not defined.")
+elseif(NOT IS_DIRECTORY ${HALIDE_DISTRIB_DIR})
+    message(FATAL_ERROR "HALIDE_DISTRIB_DIR is not valid directory.")
+endif()
 # set(HALIDE_DISTRIB_USE_STATIC_LIBRARY TRUE)
-include_directories("${HALIDE_DISTRIB_DIR}/tools" "${HALIDE_DISTRIB_DIR}/include")
-
-include("${HALIDE_DISTRIB_DIR}/halide_config.cmake")
 include("${HALIDE_DISTRIB_DIR}/halide.cmake")
+
+if(NOT DEFINED HALIDE_MACHINE_PARAMS)
+    set(HALIDE_MACHINE_PARAMS "8,8192,40")
+endif()
+
+# find_package(OpenCV REQUIRED core imgproc imgcodecs highgui)
+# find_package(Threads)
 
 halide_library(ray_hit
     SRCS ray_hit_generator.cpp

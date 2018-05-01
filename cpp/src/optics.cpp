@@ -1,6 +1,6 @@
 #include "optics.h"
 #include "linearalgebra.h"
-#include "testhelper.h"
+#include "processhelper.h"
 
 #include "ray_hit.h"
 #include "ray_prop.h"
@@ -311,6 +311,8 @@ void Optics::traceRays(RayTracingContext &context)
     while (!activeRaySegments.empty() && recursion < maxRecursion) {
         hitSurfaceHalide(g->refractiveIndex(), currentRayNumbers, ray_dir_buffer, face_norm_buffer,
                          reflect_dir_buffer, refract_dir_buffer, reflect_w_buffer);
+        // hitSurface(g->refractiveIndex(), currentRayNumbers, ray_dir_buffer, face_norm_buffer,
+        //            reflect_dir_buffer, refract_dir_buffer, reflect_w_buffer);
         for (auto i = 0; i < currentRayNumbers; i++) {
             RaySegment *lastSeg = activeRaySegments[i];
             RaySegment *seg = raySegPool->getRaySegment(ray_pt_buffer + i*3, reflect_dir_buffer + i*3, 
@@ -345,6 +347,8 @@ void Optics::traceRays(RayTracingContext &context)
 
         propagateHalide(currentRayNumbers * 2, ray_pt_buffer, ray_dir_buffer, g->faceNum(), face_data,
             ray_pt_buffer2, face_id_buffer);
+        // propagate(currentRayNumbers * 2, ray_pt_buffer, ray_dir_buffer, g->faceNum(), face_data,
+        //     ray_pt_buffer2, face_id_buffer);
         int k = 0;
         for (auto i = 0; i < currentRayNumbers * 2; i++) {
             if (face_id_buffer[i] >= 0 && activeRaySegments[i]->w > 0.001) {

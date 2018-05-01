@@ -1,14 +1,14 @@
-#include "testhelper.h"
+#include "processhelper.h"
 #include "linearalgebra.h"
 
 RayTracingContext::RayTracingContext() :
     oriGen(Geometry::PI*2, Geometry::PI*2),
-    incDirNum(100000), wl(0)
+    incDirNum(100), wl(0)
 {
     this->g = Geometry::createHexCylindar(5.0f);
 
-    float sunLon = -90.0f * Geometry::PI / 180.0f;
-    float sunLat = 27.0f * Geometry::PI / 180.0f;
+    float sunLon = 90.0f * Geometry::PI / 180.0f;
+    float sunLat = 0.0f * Geometry::PI / 180.0f;
     setSunPosition(sunLon, sunLat);
 
     rayDir = new float[incDirNum * 3];
@@ -110,7 +110,7 @@ void RayTracingContext::applySettings()
     this->initialized = true;
 }
 
-void RayTracingContext::writeFinalDirections()
+void RayTracingContext::writeFinalDirections(const char* filename)
 {
     size_t totalDir = 0;
     for (auto r : rays) {
@@ -145,8 +145,8 @@ void RayTracingContext::writeFinalDirections()
         }
     }
 
-    char filename[128];
-    std::sprintf(filename, "directions_%.1f.bin", wl);
+    // char filename[128];
+    // std::sprintf(filename, "directions_%.1f.bin", wl);
     FILE * pFile;
     pFile = fopen(filename, "wb");
     fwrite(&totalDir, sizeof(int), 1, pFile);

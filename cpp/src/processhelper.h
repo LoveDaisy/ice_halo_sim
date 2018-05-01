@@ -94,7 +94,7 @@ public:
 
     void clearRays();
 
-    void writeFinalDirections();
+    void writeFinalDirections(const char * filename);
     // void writeGeometryInfo();
     // void writeRayPaths(const std::vector<Ray*> &rays);
     
