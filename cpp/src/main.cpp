@@ -7,34 +7,6 @@
 #include "processhelper.h"
 
 constexpr auto CRYSTAL_NUM = 2;
-constexpr int THREAD_NUM = 4;
-
-void simSingleWave(float wl, int n, RayTracingContext* contexts) {
-    for (int i = 0; i < n; i++) {
-        RayTracingContext *ctx = contexts + i;
-        ctx->setWavelength(wl);
-
-        auto t0 = std::chrono::system_clock::now();
-        ctx->clearRays();
-        auto t1 = std::chrono::system_clock::now();
-        std::chrono::duration<double> diff = t1 - t0;
-        printf("Clearing: %.2fms\n", diff.count() * 1.0e3);
-
-        t0 = std::chrono::system_clock::now();
-        Optics::traceRays(*ctx);
-        t1 = std::chrono::system_clock::now();
-        diff = t1 - t0;
-        printf("Ray tracing: %.2fms\n", diff.count() * 1.0e3);
-
-        char filename[128];
-        t0 = std::chrono::system_clock::now();
-        std::sprintf(filename, "directions_%.1f_%lli.bin", wl, t0.time_since_epoch().count());
-        ctx->writeFinalDirections(filename);
-        t1 = std::chrono::system_clock::now();
-        diff = t1 - t0;
-        printf("Writing: %.2fms\n", diff.count() * 1.0e3);
-    }
-}
 
 
 int main(int argc, char *argv[])
@@ -78,9 +50,6 @@ int main(int argc, char *argv[])
     std::chrono::duration<double> diff = t - start;
     printf("Initialization: %.2fms\n", diff.count() * 1.0e3);
 
-    // std::thread threadPool[THREAD_NUM];
-    // int runningThreads = 0;
-
     for (float wl = 440.0f; ;) {
         if (wl > 655) {
             break;
@@ -110,8 +79,6 @@ int main(int argc, char *argv[])
             diff = t1 - t0;
             printf("Writing: %.2fms\n", diff.count() * 1.0e3);
         }
-
-        // simSingleWave(wl, CRYSTAL_NUM, contexts);
 
         wl += 30.0f;
     }

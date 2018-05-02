@@ -65,9 +65,9 @@ private:
     static void intersectLineFace(const float *pt, const float *dir, const float *face,
                                   float *p, float *t, float *alpha, float *beta);
 
-    static std::default_random_engine generator;
-    static std::uniform_real_distribution<float> distribution;
-    
+    static std::default_random_engine & getGenerator();
+    static std::uniform_real_distribution<float> & getDistribution();
+
 };
 
 

@@ -1,7 +1,6 @@
 #include "geometry.h"
 #include "linearalgebra.h"
 
-#include <cstring>
 
 template <typename T>
 Vec3<T>::Vec3(T x, T y, T z)

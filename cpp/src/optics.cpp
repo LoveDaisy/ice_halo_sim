@@ -97,8 +97,19 @@ size_t Ray::totalNum()
 }
 
 
-std::default_random_engine Optics::generator(std::chrono::system_clock::now().time_since_epoch().count());
-std::uniform_real_distribution<float> Optics::distribution(0.0f, 1.0f);
+std::default_random_engine & Optics::getGenerator()
+{
+    unsigned int t = static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count());
+    static std::default_random_engine gen(t);
+    return gen;
+}
+
+
+std::uniform_real_distribution<float> & Optics::getDistribution()
+{
+    static std::uniform_real_distribution<float> d(0.0f, 1.0f);
+    return d;
+}
 
 
 void Optics::initRays(int num, const float *dir, int face_num, const float *faces,
@@ -123,9 +134,11 @@ void Optics::initRays(int num, const float *dir, int face_num, const float *face
     }
     frac[face_num-1] = 1.0f;    // Force to 1.0f
 
+    std::uniform_real_distribution<float> distribution = getDistribution();
+
     for (int i = 0; i < num; i++) {
         int idx = face_num-1;
-        float p = distribution(generator);
+        float p = distribution(getGenerator());
         float *tmp_pt = ray_pt + i*3;
         for (int j = 0; j < face_num; j++) {
             if (p <= frac[j]) {
@@ -135,8 +148,8 @@ void Optics::initRays(int num, const float *dir, int face_num, const float *face
         }
 
         face_id[i] = idx;
-        float a = distribution(generator);
-        float b = distribution(generator);
+        float a = distribution(getGenerator());
+        float b = distribution(getGenerator());
         if (a + b > 1.0f) {
             a = 1.0f - a;
             b = 1.0f - b;

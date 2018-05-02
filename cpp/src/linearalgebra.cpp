@@ -99,7 +99,7 @@ void LinearAlgebra::rotateZ(float lon, float lat, float roll, int num, float *ve
     matR.transpose();
 
     DummyMatrix inputVec(vec, num, 3);
-    float *res = new float[num * 3];
+    auto *res = new float[num * 3];
     DummyMatrix resVec(res, num, 3);
 
     DummyMatrix::multiply(inputVec, matR, resVec);
