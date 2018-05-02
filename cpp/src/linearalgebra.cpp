@@ -51,7 +51,25 @@ void LinearAlgebra::vec3FromTo(const float *vec1, const float *vec2, float *vec)
     vec[2] = vec2[2] - vec1[2];
 }
 
-void LinearAlgebra::rotateByAxisAngle(const float *ax, float angle, float *vec)
+// void LinearAlgebra::rotateByAxisAngle(const float *ax, float angle, float *vec)
+// {
+//     float c = std::cos(angle);
+//     float s = std::sin(angle);
+
+//     float matR[9] = {c + ax[0] * ax[0] * (1-c), ax[1] * ax[0] * (1-c) + ax[2] * s, ax[2] * ax[0] * (1-c) - ax[1] * s,
+//         ax[0] * ax[1] * (1-c) - ax[2] * s, c + ax[1] * ax[1] * (1-c), ax[2] * ax[1] * (1-c) + ax[0] * s,
+//         ax[0] * ax[2] * (1-c) + ax[1] * s, ax[1] * ax[2] * (1-c) - ax[0] * s, c + ax[2] * ax[2] * (1-c)};
+//     float res[3] = {0.0f};
+
+//     DummyMatrix v(vec, 1, 3);
+//     DummyMatrix R(matR, 3, 3);
+//     DummyMatrix vn(res, 1, 3);
+//     DummyMatrix::multiply(v, R, vn);
+
+//     memcpy(vec, res, 3*sizeof(float));
+// }
+
+void LinearAlgebra::rotateBase(const float *ax, float angle, float *vec)
 {
     float c = std::cos(angle);
     float s = std::sin(angle);
@@ -59,34 +77,14 @@ void LinearAlgebra::rotateByAxisAngle(const float *ax, float angle, float *vec)
     float matR[9] = {c + ax[0] * ax[0] * (1-c), ax[1] * ax[0] * (1-c) + ax[2] * s, ax[2] * ax[0] * (1-c) - ax[1] * s,
         ax[0] * ax[1] * (1-c) - ax[2] * s, c + ax[1] * ax[1] * (1-c), ax[2] * ax[1] * (1-c) + ax[0] * s,
         ax[0] * ax[2] * (1-c) + ax[1] * s, ax[1] * ax[2] * (1-c) - ax[0] * s, c + ax[2] * ax[2] * (1-c)};
-    float res[3] = {0.0f};
+    float res[9];
 
-    DummyMatrix v(vec, 1, 3);
+    DummyMatrix v(vec, 3, 3);
     DummyMatrix R(matR, 3, 3);
-    DummyMatrix vn(res, 1, 3);
+    DummyMatrix vn(res, 3, 3);
     DummyMatrix::multiply(v, R, vn);
 
-    memcpy(vec, res, 3*sizeof(float));
-}
-
-void LinearAlgebra::rotateByAxisAngle(const float *ax, float angle, int num, float *vec)
-{
-    float c = std::cos(angle);
-    float s = std::sin(angle);
-
-    float matR[9] = {c + ax[0] * ax[0] * (1-c), ax[1] * ax[0] * (1-c) + ax[2] * s, ax[2] * ax[0] * (1-c) - ax[1] * s,
-        ax[0] * ax[1] * (1-c) - ax[2] * s, c + ax[1] * ax[1] * (1-c), ax[2] * ax[1] * (1-c) + ax[0] * s,
-        ax[0] * ax[2] * (1-c) + ax[1] * s, ax[1] * ax[2] * (1-c) - ax[0] * s, c + ax[2] * ax[2] * (1-c)};
-    float *res = new float[num * 3];
-
-    DummyMatrix v(vec, num, 3);
-    DummyMatrix R(matR, 3, 3);
-    DummyMatrix vn(res, num, 3);
-    DummyMatrix::multiply(v, R, vn);
-
-    memcpy(vec, res, 3*num*sizeof(float));
-
-    delete[] res;
+    memcpy(vec, res, 9*sizeof(float));
 }
 
 void LinearAlgebra::rotateZ(float lon, float lat, float roll, int num, float *vec)
@@ -95,13 +93,13 @@ void LinearAlgebra::rotateZ(float lon, float lat, float roll, int num, float *ve
         -std::cos(lon) * std::sin(lat), -std::sin(lon) * std::sin(lat), std::cos(lat),
         std::cos(lat) * std::cos(lon), std::cos(lat) * std::sin(lon), std::sin(lat)};
     float d[3] = {std::cos(lat) * std::cos(lon), std::cos(lat) * std::sin(lon), std::sin(lat)};
-    rotateByAxisAngle(d, roll, 3, ax);
+    rotateBase(d, roll, ax);
 
     DummyMatrix matR(ax, 3, 3);
     matR.transpose();
 
     DummyMatrix inputVec(vec, num, 3);
-    float *res = new float[num * 3];
+    auto *res = new float[num * 3];
     DummyMatrix resVec(res, num, 3);
 
     DummyMatrix::multiply(inputVec, matR, resVec);
@@ -110,25 +108,69 @@ void LinearAlgebra::rotateZ(float lon, float lat, float roll, int num, float *ve
     delete[] res;
 }
 
-void LinearAlgebra::rotateZBack(float lon, float lat, float roll, int num, float *vec)
+
+void LinearAlgebra::rotateZ(float *lon_lat_roll, float *vec)
 {
-    float ax[9] = {-std::sin(lon), std::cos(lon), 0.0f, 
-        -std::cos(lon) * std::sin(lat), -std::sin(lon) * std::sin(lat), std::cos(lat),
-        std::cos(lat) * std::cos(lon), std::cos(lat) * std::sin(lon), std::sin(lat)};
-    float d[3] = {std::cos(lat) * std::cos(lon), std::cos(lat) * std::sin(lon), std::sin(lat)};
-    rotateByAxisAngle(d, roll, 3, ax);
+    using namespace std;
+    float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
+                   -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]),
+                   cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
+    float d[3] = {cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
+    rotateBase(d, lon_lat_roll[2], ax);
+
+    DummyMatrix matR(ax, 3, 3);
+    matR.transpose();
+
+    DummyMatrix inputVec(vec, 1, 3);
+    float res[3];
+    DummyMatrix resVec(res, 1, 3);
+
+    DummyMatrix::multiply(inputVec, matR, resVec);
+    memcpy(vec, res, 3*sizeof(float));
+}
+
+// void LinearAlgebra::rotateZBack(float lon, float lat, float roll, float *vec)
+// {
+//     float ax[9] = {-std::sin(lon), std::cos(lon), 0.0f, 
+//         -std::cos(lon) * std::sin(lat), -std::sin(lon) * std::sin(lat), std::cos(lat),
+//         std::cos(lat) * std::cos(lon), std::cos(lat) * std::sin(lon), std::sin(lat)};
+//     float d[3] = {std::cos(lat) * std::cos(lon), std::cos(lat) * std::sin(lon), std::sin(lat)};
+//     rotateBase(d, roll, ax);
+
+//     DummyMatrix matR(ax, 3, 3);
+
+//     DummyMatrix inputVec(vec, 1, 3);
+//     auto *res = new float[3];
+//     DummyMatrix resVec(res, 1, 3);
+
+//     DummyMatrix::multiply(inputVec, matR, resVec);
+//     memcpy(vec, res, 3*sizeof(float));
+
+//     delete[] res;
+// }
+
+
+void LinearAlgebra::rotateZBack(float *lon_lat_roll, int num, float *vec)
+{
+    using namespace std;
+    float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
+                   -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]),
+                   cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
+    float d[3] = {cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
+    rotateBase(d, lon_lat_roll[2], ax);
 
     DummyMatrix matR(ax, 3, 3);
 
-    DummyMatrix inputVec(vec, num, 3);
-    float *res = new float[num * 3];
-    DummyMatrix resVec(res, num, 3);
+    float res[3];
+    for (int i = 0; i < num; ++i) {
+        DummyMatrix inputVec(vec+i*3, 1, 3);
+        DummyMatrix resVec(res, 1, 3);
 
-    DummyMatrix::multiply(inputVec, matR, resVec);
-    memcpy(vec, res, 3*num*sizeof(float));
-
-    delete[] res;
+        DummyMatrix::multiply(inputVec, matR, resVec);
+        memcpy(vec, res, 3*sizeof(float));
+    }
 }
+
 
 
 DummyMatrix::DummyMatrix(float *data, int row, int col) :

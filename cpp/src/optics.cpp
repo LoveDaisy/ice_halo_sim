@@ -1,11 +1,19 @@
 #include "optics.h"
 #include "linearalgebra.h"
+#include "processhelper.h"
 
 #include "ray_hit.h"
 #include "ray_prop.h"
 #include "HalideBuffer.h"
 
-RaySegment::RaySegment(Vec3f &pt, Vec3f &dir, float w, int faceId) :
+RaySegment::RaySegment() :
+    nextReflect(nullptr),
+    nextRefract(nullptr),
+    prev(nullptr),
+    pt(0, 0, 0), dir(0, 0, 0), w(0), faceId(-1), isFinished(false)
+{ }
+
+RaySegment::RaySegment(float *pt, float *dir, float w, int faceId) :
     nextReflect(nullptr),
     nextRefract(nullptr),
     prev(nullptr),
@@ -18,10 +26,21 @@ bool RaySegment::isValidEnd()
             && w > 0 && faceId >= 0 && isFinished;
 }
 
-
-Ray::Ray(Vec3f &pt, Vec3f &d, float w, int faceId)
+void RaySegment::reset()
 {
-    firstRaySeg = new RaySegment(pt, d, w, faceId);
+    nextReflect = nullptr;
+    nextRefract = nullptr;
+    prev = nullptr;
+    pt.val(0, 0, 0);
+    dir.val(0, 0, 0);
+    faceId = -1;
+    isFinished = false;
+}
+
+
+Ray::Ray(float *pt, float *dir, float w, int faceId)
+{
+    firstRaySeg = RaySegmentFactory::getInstance()->getRaySegment(pt, dir, w, faceId);
 }
 
 Ray::~Ray()
@@ -78,8 +97,19 @@ size_t Ray::totalNum()
 }
 
 
-std::default_random_engine Optics::generator(std::chrono::system_clock::now().time_since_epoch().count());
-std::uniform_real_distribution<float> Optics::distribution(0.0f, 1.0f);
+std::default_random_engine & Optics::getGenerator()
+{
+    unsigned int t = static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count());
+    static std::default_random_engine gen(t);
+    return gen;
+}
+
+
+std::uniform_real_distribution<float> & Optics::getDistribution()
+{
+    static std::uniform_real_distribution<float> d(0.0f, 1.0f);
+    return d;
+}
 
 
 void Optics::initRays(int num, const float *dir, int face_num, const float *faces,
@@ -104,9 +134,11 @@ void Optics::initRays(int num, const float *dir, int face_num, const float *face
     }
     frac[face_num-1] = 1.0f;    // Force to 1.0f
 
+    std::uniform_real_distribution<float> distribution = getDistribution();
+
     for (int i = 0; i < num; i++) {
         int idx = face_num-1;
-        float p = distribution(generator);
+        float p = distribution(getGenerator());
         float *tmp_pt = ray_pt + i*3;
         for (int j = 0; j < face_num; j++) {
             if (p <= frac[j]) {
@@ -116,8 +148,8 @@ void Optics::initRays(int num, const float *dir, int face_num, const float *face
         }
 
         face_id[i] = idx;
-        float a = distribution(generator);
-        float b = distribution(generator);
+        float a = distribution(getGenerator());
+        float b = distribution(getGenerator());
         if (a + b > 1.0f) {
             a = 1.0f - a;
             b = 1.0f - b;
@@ -228,9 +260,6 @@ void Optics::propagateHalide(int num, const float *pt, const float *dir, int fac
     memcpy(dir_cpy, dir, num*3*sizeof(float));
     memcpy(face_cpy, faces, face_num*9*sizeof(float));
 
-    auto *new_pt_cpy = new float[num*3];
-    auto *new_face_id_cpy = new int[num];
-
     Buffer<float> pt_buffer(pt_cpy, 3, num);
     Buffer<float> dir_buffer(dir_cpy, 3, num);
     Buffer<float> face_buffer(face_cpy, 9, face_num);
@@ -245,10 +274,15 @@ void Optics::propagateHalide(int num, const float *pt, const float *dir, int fac
 }
 
 
-void Optics::traceRays(int dir_num, const float *dir, const RayTracingParam& param, const Geometry *g,
-        std::vector<Ray*>& rays)
+void Optics::traceRays(RayTracingContext &context)
 {
-    int max_ray_num = dir_num * param.maxRecursion * param.raysPerDirection * 3;
+    int dir_num = context.getIncDirNum();
+    const float *dir = context.getRayDirections();
+    const Geometry *g = context.getGeometry();
+    int raysPerDirection = context.getRaysPerDirection();
+    int maxRecursion = context.getMaxRecursion();
+
+    int max_ray_num = dir_num * maxRecursion * raysPerDirection * 3;
     auto *ray_pt_buffer = new float[max_ray_num * 3];
     auto *ray_pt_buffer2 = new float[max_ray_num * 3];
     auto *ray_dir_buffer = new float[max_ray_num * 3];
@@ -262,47 +296,46 @@ void Optics::traceRays(int dir_num, const float *dir, const RayTracingParam& par
     auto *face_data = new float[g->faceNum() * 9];
     g->copyFaceData(face_data);
     for (auto i = 0; i < dir_num; i++) {
-        float *tmp_pt = ray_pt_buffer + i * param.raysPerDirection * 3;
-        float *tmp_norm = face_norm_buffer + i * param.raysPerDirection * 3;
-        float *tmp_dir = ray_dir_buffer + i * param.raysPerDirection * 3;
-        int *tmp_id = face_id_buffer + i * param.raysPerDirection;
+        float *tmp_pt = ray_pt_buffer + i * raysPerDirection * 3;
+        float *tmp_norm = face_norm_buffer + i * raysPerDirection * 3;
+        float *tmp_dir = ray_dir_buffer + i * raysPerDirection * 3;
+        int *tmp_id = face_id_buffer + i * raysPerDirection;
 
-        initRays(param.raysPerDirection, dir + i*3, g->faceNum(), face_data,
+        initRays(raysPerDirection, dir + i*3, g->faceNum(), face_data,
             tmp_pt, tmp_id);
-        for (auto j = 0; j < param.raysPerDirection; j++) {
+        for (auto j = 0; j < raysPerDirection; j++) {
             memcpy(tmp_dir + j*3, dir + i*3, 3*sizeof(float));
         }
-        g->copyNormalData(param.raysPerDirection, tmp_id, tmp_norm);
+        g->copyNormalData(raysPerDirection, tmp_id, tmp_norm);
     }
 
-    int currentRayNumbers = dir_num * param.raysPerDirection;
+    int currentRayNumbers = dir_num * raysPerDirection;
     std::vector<RaySegment*> activeRaySegments;
     std::vector<RaySegment*> tmpRaySegs;
     for (auto i = 0; i < currentRayNumbers; i++) {
-        Vec3f p(ray_pt_buffer + i * 3);
-        Vec3f d(ray_dir_buffer + i * 3);
-        Ray *r = new Ray(p, d, 1.0f, face_id_buffer[i]);
-        rays.push_back(r);
+        auto *r = new Ray(ray_pt_buffer + i * 3, ray_dir_buffer + i * 3, 1.0f, face_id_buffer[i]);
+        context.rays.push_back(r);
         activeRaySegments.push_back(r->firstRaySeg);
     }
 
     // Start loop
+    RaySegmentFactory *raySegPool = RaySegmentFactory::getInstance();
     int recursion = 0;
-    while (!activeRaySegments.empty() && recursion < param.maxRecursion) {
+    while (!activeRaySegments.empty() && recursion < maxRecursion) {
         hitSurfaceHalide(g->refractiveIndex(), currentRayNumbers, ray_dir_buffer, face_norm_buffer,
                          reflect_dir_buffer, refract_dir_buffer, reflect_w_buffer);
+        // hitSurface(g->refractiveIndex(), currentRayNumbers, ray_dir_buffer, face_norm_buffer,
+        //            reflect_dir_buffer, refract_dir_buffer, reflect_w_buffer);
         for (auto i = 0; i < currentRayNumbers; i++) {
-            Vec3f p(ray_pt_buffer + i * 3);
-            Vec3f d(reflect_dir_buffer + i * 3);
             RaySegment *lastSeg = activeRaySegments[i];
-            RaySegment *seg = new RaySegment(p, d, lastSeg->w * reflect_w_buffer[i], face_id_buffer[i]);
+            RaySegment *seg = raySegPool->getRaySegment(ray_pt_buffer + i*3, reflect_dir_buffer + i*3, 
+                lastSeg->w * reflect_w_buffer[i], face_id_buffer[i]);
             lastSeg->nextReflect = seg;
             seg->prev = lastSeg;
             tmpRaySegs.push_back(seg);
 
-            p.val(ray_pt_buffer + i * 3);
-            d.val(refract_dir_buffer + i * 3);
-            seg = new RaySegment(p, d, lastSeg->w * (1.0f - reflect_w_buffer[i]), face_id_buffer[i]);
+            seg = raySegPool->getRaySegment(ray_pt_buffer + i*3, refract_dir_buffer + i*3, 
+                lastSeg->w * (1.0f - reflect_w_buffer[i]), face_id_buffer[i]);
             lastSeg->nextRefract = seg;
             seg->prev = lastSeg;
             tmpRaySegs.push_back(seg);
@@ -327,15 +360,17 @@ void Optics::traceRays(int dir_num, const float *dir, const RayTracingParam& par
 
         propagateHalide(currentRayNumbers * 2, ray_pt_buffer, ray_dir_buffer, g->faceNum(), face_data,
             ray_pt_buffer2, face_id_buffer);
+        // propagate(currentRayNumbers * 2, ray_pt_buffer, ray_dir_buffer, g->faceNum(), face_data,
+        //     ray_pt_buffer2, face_id_buffer);
         int k = 0;
         for (auto i = 0; i < currentRayNumbers * 2; i++) {
             if (face_id_buffer[i] >= 0 && activeRaySegments[i]->w > 0.001) {
                 tmpRaySegs.push_back(activeRaySegments[i]);
-                memcpy(ray_pt_buffer + k*3, ray_pt_buffer2 + i*3, 3*sizeof(float));
                 if (i != k) {
+                    memcpy(ray_pt_buffer + k*3, ray_pt_buffer2 + i*3, 3*sizeof(float));
                     memcpy(ray_dir_buffer + k*3, ray_dir_buffer + i*3, 3*sizeof(float));
+                    face_id_buffer[k] = face_id_buffer[i];
                 }
-                face_id_buffer[k] = face_id_buffer[i];
                 g->copyNormalData(1, face_id_buffer + i, face_norm_buffer + k*3);
                 k++;
             } else {

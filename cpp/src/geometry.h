@@ -9,7 +9,8 @@ class Vec3
 {
 public:
     Vec3(T x, T y, T z);
-    Vec3(T *data);
+
+    explicit Vec3(T *data);
     Vec3(const Vec3<T> &v);
 
     T x() const;
@@ -85,6 +86,8 @@ public:
 
     static Geometry* createHexCylindar(float hRatio);
     static Geometry* createHexCylindar(float hRatio, float n);
+    static Geometry* createPyramid(float ratio1, float ratio2, float ratio3);
+    static Geometry* createPyramid(float ratio1, float ratio2, float ratio3, float n);
 
     static constexpr float PI = 3.14159265f;
 

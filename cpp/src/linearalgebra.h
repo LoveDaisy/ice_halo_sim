@@ -14,11 +14,11 @@ public:
     static void normalized3(const float *vec, float *vec_n);
     static void vec3FromTo(const float *vec1, const float *vec2, float *vec);
 
-    static void rotateByAxisAngle(const float *ax, float angle, float *vec);
-    static void rotateByAxisAngle(const float *ax, float angle, int num, float *vec);
+    static void rotateBase(const float *ax, float angle, float *vec);
 
     static void rotateZ(float lon, float lat, float roll, int num, float *vec);
-    static void rotateZBack(float lon, float lat, float roll, int num, float *vec);
+    static void rotateZ(float *lon_lat_roll, float *vec);
+    static void rotateZBack(float *lon_lat_roll, int num, float *vec);
 };
 
 class DummyMatrix
