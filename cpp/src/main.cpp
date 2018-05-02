@@ -1,11 +1,41 @@
 #include <vector>
 #include <chrono>
+#include <thread>
 
 #include "geometry.h"
 #include "optics.h"
 #include "processhelper.h"
 
-constexpr int CRYSTAL_NUM = 2;
+constexpr auto CRYSTAL_NUM = 2;
+constexpr int THREAD_NUM = 4;
+
+void simSingleWave(float wl, int n, RayTracingContext* contexts) {
+    for (int i = 0; i < n; i++) {
+        RayTracingContext *ctx = contexts + i;
+        ctx->setWavelength(wl);
+
+        auto t0 = std::chrono::system_clock::now();
+        ctx->clearRays();
+        auto t1 = std::chrono::system_clock::now();
+        std::chrono::duration<double> diff = t1 - t0;
+        printf("Clearing: %.2fms\n", diff.count() * 1.0e3);
+
+        t0 = std::chrono::system_clock::now();
+        Optics::traceRays(*ctx);
+        t1 = std::chrono::system_clock::now();
+        diff = t1 - t0;
+        printf("Ray tracing: %.2fms\n", diff.count() * 1.0e3);
+
+        char filename[128];
+        t0 = std::chrono::system_clock::now();
+        std::sprintf(filename, "directions_%.1f_%lli.bin", wl, t0.time_since_epoch().count());
+        ctx->writeFinalDirections(filename);
+        t1 = std::chrono::system_clock::now();
+        diff = t1 - t0;
+        printf("Writing: %.2fms\n", diff.count() * 1.0e3);
+    }
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -39,7 +69,7 @@ int main(int argc, char *argv[])
     contexts[1].setSunPosition(90.0f*Geometry::PI/180.0f, 43.5f*Geometry::PI/180.0f);
     contexts[1].setGeometry(Geometry::createPyramid(0.0f, 0.0f, 1.3f));
 
-    contexts[1].oriGen.setAxisOrientation(OrientationGenerator::AxisDistribution::AX_ZENITHAL_GAUSS, 0.227f);
+    contexts[1].oriGen.setAxisOrientation(OrientationGenerator::AxisDistribution::AX_ZENITHAL_GAUSS, 0.3f);
     contexts[1].oriGen.setAxisRoll(OrientationGenerator::RollDistribution::ROLL_UNIFORM, 0.0f);
 
     contexts[1].applySettings();
@@ -48,14 +78,16 @@ int main(int argc, char *argv[])
     std::chrono::duration<double> diff = t - start;
     printf("Initialization: %.2fms\n", diff.count() * 1.0e3);
 
+    // std::thread threadPool[THREAD_NUM];
+    // int runningThreads = 0;
+
     for (float wl = 440.0f; ;) {
         if (wl > 655) {
             break;
         }
         printf("starting at wavelength: %.1f\n", wl);
 
-        for (int i = 0; i < CRYSTAL_NUM; i++) {
-            auto &ctx = contexts[i];
+        for (auto &ctx : contexts) {
             ctx.setWavelength(wl);
 
             auto t0 = std::chrono::system_clock::now();
@@ -71,16 +103,19 @@ int main(int argc, char *argv[])
             printf("Ray tracing: %.2fms\n", diff.count() * 1.0e3);
 
             char filename[128];
-            std::sprintf(filename, "directions_%.1f_%d.bin", wl, i);
             t0 = std::chrono::system_clock::now();
+            std::sprintf(filename, "directions_%.1f_%lli.bin", wl, t0.time_since_epoch().count());
             ctx.writeFinalDirections(filename);
             t1 = std::chrono::system_clock::now();
             diff = t1 - t0;
             printf("Writing: %.2fms\n", diff.count() * 1.0e3);
         }
 
+        // simSingleWave(wl, CRYSTAL_NUM, contexts);
+
         wl += 30.0f;
     }
+
     auto end = std::chrono::system_clock::now();
     diff = end - start;
     printf("Total: %.3fs\n", diff.count());

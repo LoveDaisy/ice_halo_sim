@@ -28,7 +28,7 @@ if(NOT DEFINED HALIDE_MACHINE_PARAMS)
 endif()
 
 # find_package(OpenCV REQUIRED core imgproc imgcodecs highgui)
-# find_package(Threads)
+find_package(Threads)
 
 halide_library(ray_hit
     SRCS ray_hit_generator.cpp
@@ -38,7 +38,7 @@ halide_library(ray_prop
     GENERATOR_ARGS auto_schedule=true)
 
 add_executable(IceHaloSim ${SOURCE_FILE})
-target_link_libraries(IceHaloSim PUBLIC ray_hit ray_prop)
+target_link_libraries(IceHaloSim PUBLIC ${CMAKE_THREAD_LIBS_INIT} ray_hit ray_prop)
 
 
 
