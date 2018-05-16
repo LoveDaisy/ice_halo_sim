@@ -14,7 +14,7 @@ int main(int argc, char *argv[])
     auto start = std::chrono::system_clock::now();
 
     RayTracingContext contexts[CRYSTAL_NUM];
-    float crystalNumRatio[CRYSTAL_NUM] = { 0.9, 0.1 };
+    float crystalNumRatio[CRYSTAL_NUM] = { 2.0f, 1.0f };
     float total = 0.0f;
     for (float r : crystalNumRatio) {
         total += r;
@@ -27,10 +27,10 @@ int main(int argc, char *argv[])
     /* Crystal 1 */
     contexts[0].setIncDirNum(static_cast<int>(totalIncDirNum * crystalNumRatio[0]));
     contexts[0].setRaysPerDirection(10);
-    contexts[0].setSunPosition(90.0f*Geometry::PI/180.0f, 43.5f*Geometry::PI/180.0f);
-    contexts[0].setGeometry(Geometry::createPyramid(1.4f, 0.4f, 1.4f));
+    contexts[0].setSunPosition(90.0f*Geometry::PI/180.0f, 42.0f*Geometry::PI/180.0f);
+    contexts[0].setGeometry(Geometry::createHexCylindar(3.0f));
 
-    contexts[0].oriGen.setAxisOrientation(OrientationGenerator::AxisDistribution::AX_HOR_GAUSS, 0.227f);
+    contexts[0].oriGen.setAxisOrientation(OrientationGenerator::AxisDistribution::AX_HOR_GAUSS, 0.2f*3.1416f/180.f);
     contexts[0].oriGen.setAxisRoll(OrientationGenerator::RollDistribution::ROLL_UNIFORM, 0.0f);
 
     contexts[0].applySettings();
@@ -38,10 +38,10 @@ int main(int argc, char *argv[])
     /* Crystal 2 */
     contexts[1].setIncDirNum(static_cast<int>(totalIncDirNum * crystalNumRatio[1]));
     contexts[1].setRaysPerDirection(10);
-    contexts[1].setSunPosition(90.0f*Geometry::PI/180.0f, 43.5f*Geometry::PI/180.0f);
-    contexts[1].setGeometry(Geometry::createPyramid(0.0f, 0.0f, 1.3f));
+    contexts[1].setSunPosition(90.0f*Geometry::PI/180.0f, 42.0f*Geometry::PI/180.0f);
+    contexts[1].setGeometry(Geometry::createHexCylindar(3.0f));
 
-    contexts[1].oriGen.setAxisOrientation(OrientationGenerator::AxisDistribution::AX_ZENITHAL_GAUSS, 0.3f);
+    contexts[1].oriGen.setAxisOrientation(OrientationGenerator::AxisDistribution::AX_SPH_UNIFORM, 0.2f*3.1416f/180.f);
     contexts[1].oriGen.setAxisRoll(OrientationGenerator::RollDistribution::ROLL_UNIFORM, 0.0f);
 
     contexts[1].applySettings();

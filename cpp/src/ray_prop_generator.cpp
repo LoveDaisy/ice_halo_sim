@@ -33,6 +33,7 @@ public:
             dir(2, y)*face_base(0, yf, 0)*face_base(1, yf, 1) - dir(0, y)*face_base(2, yf, 0)*face_base(1, yf, 1) -
             dir(1, y)*face_base(0, yf, 0)*face_base(2, yf, 1) - dir(2, y)*face_base(1, yf, 0)*face_base(0, yf, 1);
         Expr t = select(abs(c1) > 1e-6f, (a1 - b1) / c1, -1);
+        // Expr t = (a1 - b1) / c1;
 
         Expr a2 = dir(0, y)*pt(1, y)*face_base(2, yf, 1) + dir(1, y)*pt(2, y)*face_base(0, yf, 1) +
             dir(2, y)*pt(0, y)*face_base(1, yf, 1) - dir(0, y)*pt(2, y)*face_base(1, yf, 1) -
@@ -41,6 +42,7 @@ public:
             dir(2, y)*face_base(0, yf, 1)*face(1, yf) - dir(0, y)*face_base(2, yf, 1)*face(1, yf) -
             dir(1, y)*face_base(0, yf, 1)*face(2, yf) - dir(2, y)*face_base(1, yf, 1)*face(0, yf);
         Expr alpha = select(abs(c1) > 1e-6f, (a2 + b2) / c1, -1);
+        // Expr alpha = (a2 + b2) / c1;
 
         Expr a3 = dir(0, y)*pt(1, y)*face_base(2, yf, 0) + dir(1, y)*pt(2, y)*face_base(0, yf, 0) +
             dir(2, y)*pt(0, y)*face_base(1, yf, 0) - dir(0, y)*pt(2, y)*face_base(1, yf, 0) -
@@ -49,6 +51,7 @@ public:
             dir(2, y)*face_base(0, yf, 0)*face(1, yf) - dir(0, y)*face_base(2, yf, 0)*face(1, yf) -
             dir(1, y)*face_base(0, yf, 0)*face(2, yf) - dir(2, y)*face_base(1, yf, 0)*face(0, yf);
         Expr beta = select(abs(c1) > 1e-6f, -(a3 + b3) / c1, -1);
+        // Expr beta =  -(a3 + b3) / c1;
 
         Func t_all{"t_all"};
         t_all(y, yf) = select(alpha >= 0 && beta >= 0 && alpha + beta <= 1 && t > 3e-6f, t, MAX_FLOAT);

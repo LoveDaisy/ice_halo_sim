@@ -1,6 +1,6 @@
 clear; clc; close all;
 
-bin_file_path = '/Users/zhangjiajie/Documents/Ice Halo/codes/cpp/cmake-build-debug/bin/';
+bin_file_path = '/Volumes/ZJJ-4TB/Ice Halo Data/';
 dir_fnames = dir([bin_file_path, 'directions_*.bin']);
 
 wl_store = zeros(length(dir_fnames), 1);
@@ -19,10 +19,10 @@ heatmap_size = floor([1,1] * (2*heatmap_hw + 1));
 heatmap_spec_raw = zeros(heatmap_size(1), heatmap_size(2), spec_pts);
 
 cam_uv_offset = [0, 0];
-% cam_proj = @(sph)camera_project(sph, [90, 89.9, 0], 120, ...
-%     heatmap_size, 'Equiarea');
-cam_proj = @(sph)camera_project(sph, [90, 43.5, 0], 40, ...
-    heatmap_size, 'linear');
+cam_proj = @(sph)camera_project(sph, [90, 89.9, 0], 120, ...
+    heatmap_size, 'Equiarea');
+% cam_proj = @(sph)camera_project(sph, [70, 30, 0], 40, ...
+%     heatmap_size, 'linear');
 
 total_w = 0;
 for i = 1:length(dir_fnames)
@@ -70,8 +70,8 @@ total_w = total_w / spec_pts;
 
 %%
 heatmap_spec = heatmap_spec_raw;
-heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 1.2));
-heatmap_spec = heatmap_spec / total_w * 4e3 * 3.0;
+% heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 0.8));
+heatmap_spec = heatmap_spec / total_w * 4e3 * 20.0;
 spec = [wl_store, reshape(heatmap_spec, [], spec_pts)'];
 
 heatmap_rgb = spec_to_rgb(spec, 'Space', 'srgb', ...
@@ -168,10 +168,10 @@ axis ij;
 axis equal; axis tight; axis off;
 
 
-%%
-% Write
-img_file_path = '/Users/zhangjiajie/Documents/Ice Halo/';
-imwrite(uint16(heatmap_rgb_bar*65535), [img_file_path, 'test_bar.tiff']);
-imwrite(uint16(heatmap_rgb*65535), [img_file_path, 'test.tiff']);
-imwrite(uint8(heatmap_rgb_bar*255), [img_file_path, 'test_bar.jpg']);
-imwrite(uint8(heatmap_rgb*255), [img_file_path, 'test.jpg']);
+% %%
+% % Write
+% img_file_path = '/Users/zhangjiajie/Documents/Ice Halo/';
+% imwrite(uint16(heatmap_rgb_bar*65535), [img_file_path, 'test_bar.tiff']);
+% imwrite(uint16(heatmap_rgb*65535), [img_file_path, 'test.tiff']);
+% imwrite(uint8(heatmap_rgb_bar*255), [img_file_path, 'test_bar.jpg']);
+% imwrite(uint8(heatmap_rgb*255), [img_file_path, 'test.jpg']);
