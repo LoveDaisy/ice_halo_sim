@@ -1,242 +1,6 @@
 #include "processhelper.h"
 #include "linearalgebra.h"
 
-RayTracingContext::RayTracingContext() :
-    oriGen(Geometry::PI*2, Geometry::PI*2),
-    incDirNum(100), wl(0)
-{
-    this->g = Geometry::createHexCylindar(5.0f);
-
-    float sunLon = 90.0f * Geometry::PI / 180.0f;
-    float sunLat = 0.0f * Geometry::PI / 180.0f;
-    setSunPosition(sunLon, sunLat);
-
-    rayDir = new float[incDirNum * 3];
-    mainAxRot = new float[incDirNum * 3];
-
-    maxRecursion = 9;
-    raysPerDirection = 20;
-}
-
-RayTracingContext::~RayTracingContext()
-{
-    delete[] rayDir;
-    delete[] mainAxRot;
-}
-
-const Geometry * RayTracingContext::getGeometry() const
-{
-    return this->g;
-}
-
-const float * RayTracingContext::getRayDirections() const
-{
-    return this->rayDir;
-}
-
-const float * RayTracingContext::getMainAxisRotations() const
-{
-    return this->mainAxRot;
-}
-
-void RayTracingContext::setWavelength(float wl)
-{
-    float n = IceRefractiveIndex::n(wl);
-    g->setRefractiveIndex(n);
-    this->wl = wl;
-}
-
-int RayTracingContext::getIncDirNum() const
-{
-    return incDirNum;
-}
-
-int RayTracingContext::getRaysPerDirection() const
-{
-    return raysPerDirection;
-}
-
-int RayTracingContext::getMaxRecursion() const
-{
-    return maxRecursion;
-}
-
-void RayTracingContext::setRaysPerDirection(int raysPerDirection)
-{
-    this->raysPerDirection = raysPerDirection;
-}
-
-void RayTracingContext::setIncDirNum(int incDirNum)
-{
-    this->incDirNum = incDirNum;
-    this->initialized = false;
-}
-
-void RayTracingContext::setSunPosition(float lon, float lat)
-{
-    sunDir[0] = -std::cos(lat) * std::cos(lon);
-    sunDir[1] = -std::cos(lat) * std::sin(lon);
-    sunDir[2] = -std::sin(lat);
-    this->initialized = false;
-}
-
-void RayTracingContext::setGeometry(Geometry *g)
-{
-    delete this->g;
-    this->g = g;
-    this->initialized = false;
-}
-
-bool RayTracingContext::isSettingsApplied()
-{
-    return initialized;
-}
-
-void RayTracingContext::applySettings()
-{
-    if (rayDir) {
-        delete[] rayDir;
-        rayDir = new float[3 * incDirNum];
-    }
-    if (mainAxRot) {
-        delete[] mainAxRot;
-        mainAxRot = new float[3 * incDirNum];
-    }
-
-    memset(rayDir, 0, incDirNum*3*sizeof(float));
-    memset(mainAxRot, 0, incDirNum*3*sizeof(float));
-    oriGen.fillData(sunDir, incDirNum, rayDir, mainAxRot);
-
-    this->initialized = true;
-}
-
-void RayTracingContext::writeFinalDirections(const char* filename)
-{
-    size_t totalDir = 0;
-    for (auto r : rays) {
-        totalDir += r->totalNum();
-    }
-
-    printf("rays.size(): %lu, incDirNum: %d, totalDir: %ld\n", rays.size(), incDirNum, totalDir);
-
-    auto *finalDir = new float[totalDir * 4];
-    int k = 0;
-    std::vector<RaySegment *> v;
-    for (int i = 0; i < rays.size(); i++) {
-        auto r = rays[i];
-        v.clear();
-        v.push_back(r->firstRaySeg);
-        while (!v.empty()) {
-            RaySegment *p = v.back();
-            v.pop_back();
-            if (p->nextReflect) {
-                v.push_back(p->nextReflect);
-            }
-            if (p->nextRefract) {
-                v.push_back(p->nextRefract);
-            }
-            if (p->isValidEnd() &&
-                    LinearAlgebra::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0f - 1e-5 ) {
-                memcpy(finalDir + k*4, p->dir.val(), 3*sizeof(float));
-                LinearAlgebra::rotateZBack(mainAxRot+i/raysPerDirection*3, 1, finalDir+k*4);
-                finalDir[k*4+3] = p->w;
-                k++;
-            }
-        }
-    }
-
-    // char filename[128];
-    // std::sprintf(filename, "directions_%.1f.bin", wl);
-    FILE * pFile;
-    pFile = fopen(filename, "wb");
-    fwrite(&totalDir, sizeof(int), 1, pFile);
-    fwrite(finalDir, sizeof(float), totalDir * 4, pFile);
-    fclose(pFile);
-
-    delete[] finalDir;
-}
-
-void RayTracingContext::clearRays()
-{
-    RaySegmentFactory::getInstance()->clear();
-    rays.clear();
-}
-
-
-// void RayTracingContext::writeGeometryInfo()
-// {
-//     int vtxNum = g->vtxNum();
-//     int faceNum = g->faceNum();
-
-//     auto *vtx_buffer = new float[vtxNum * 3];
-//     g->copyVertexData(vtx_buffer);
-
-//     auto *face_buffer = new int[faceNum * 3];
-//     g->copyFaceIdxData(face_buffer);
-
-//     FILE * pFile;
-//     pFile = fopen("geometry.bin", "wb");
-//     fwrite(&vtxNum, sizeof(int), 1, pFile);
-//     fwrite(vtx_buffer, sizeof(float), vtxNum * 3, pFile);
-//     fwrite(&faceNum, sizeof(int), 1, pFile);
-//     fwrite(face_buffer, sizeof(int), faceNum * 3, pFile);
-//     fclose(pFile);
-// }
-
-
-// void RayTracingContext::writeRayPaths(const std::vector<Ray*> &rays)
-// {
-//     FILE * pFile;
-//     pFile = fopen("rays.bin", "wb");
-
-//     int totalRays = 0;
-//     for (auto r : rays) {
-//         totalRays += r->totalNum();
-//     }
-//     fwrite(&totalRays, sizeof(int), 1, pFile);
-
-//     for (auto r : rays) {
-//         std::vector<RaySegment *> v;
-//         v.push_back(r->firstRaySeg);
-//         while (!v.empty()) {
-//             RaySegment *p = v.back();
-//             v.pop_back();
-//             if (p->nextReflect) {
-//                 v.push_back(p->nextReflect);
-//             }
-//             if (p->nextRefract) {
-//                 v.push_back(p->nextRefract);
-//             }
-//             if (p->isValidEnd()
-//                 && LinearAlgebra::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0f - 1e-5 ) {
-//                 std::vector<RaySegment *> tmpV;
-//                 RaySegment *q = p;
-//                 while (q->prev) {
-//                     tmpV.push_back(q);
-//                     q = q->prev;
-//                 }
-//                 tmpV.push_back(q);
-
-//                 int tmpNum = tmpV.size();
-//                 fwrite(&tmpNum, sizeof(int), 1, pFile);
-
-//                 std::reverse(tmpV.begin(), tmpV.end());
-//                 for (auto tmp_r : tmpV) {
-//                     float tmpRayData[7] = {tmp_r->pt.x(), tmp_r->pt.y(), tmp_r->pt.z(),
-//                         tmp_r->dir.x(), tmp_r->dir.y(), tmp_r->dir.z(),
-//                         tmp_r->w};
-//                     auto faceId = static_cast<float>(tmp_r->faceId);
-
-//                     fwrite(tmpRayData, sizeof(float), 7, pFile);
-//                     fwrite(&faceId, sizeof(float), 1, pFile);
-
-//                 }
-//             }
-//         }
-//     }
-//     fclose(pFile);
-// }
-
 
 OrientationGenerator::OrientationGenerator(float axStd, float rollStd,
         AxisDistribution ax, RollDistribution roll) :
@@ -247,6 +11,25 @@ OrientationGenerator::OrientationGenerator(float axStd, float rollStd,
     // unsigned int seed = 2345;
     generator.seed(seed);
 }
+
+
+OrientationGenerator::OrientationGenerator() :
+    OrientationGenerator(0.0f, 0.0f)
+{ }
+
+
+// void OrientationGenerator::setAxisDistribution(AxisDistribution axisDist, float std)
+// {
+//     this->axDist = axisDist;
+//     this->axStd = std;
+// }
+
+
+// void OrientationGenerator::setRollDistribution(RollDistribution rollDist, float std)
+// {
+//     this->rollDist = rollDist;
+//     this->rollStd = rollStd;
+// }
 
 
 void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot)
@@ -294,18 +77,18 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
 }
 
 
-void OrientationGenerator::setAxisOrientation(AxisDistribution ax, float axStd)
-{
-    this->axDist = ax;
-    this->axStd = axStd;
-}
+// void OrientationGenerator::setAxisOrientation(AxisDistribution ax, float axStd)
+// {
+//     this->axDist = ax;
+//     this->axStd = axStd;
+// }
 
 
-void OrientationGenerator::setAxisRoll(RollDistribution roll, float rollStd)
-{
-    this->rollDist = roll;
-    this->rollStd = rollStd;
-}
+// void OrientationGenerator::setAxisRoll(RollDistribution roll, float rollStd)
+// {
+//     this->rollDist = roll;
+//     this->rollStd = rollStd;
+// }
 
 
 RaySegmentFactory * RaySegmentFactory::instance = nullptr;
@@ -366,6 +149,268 @@ void RaySegmentFactory::clear()
 {
     nextUnusedId = 0;
     currentChunkId = 0;
+}
+
+
+void EnvironmentContext::setWavelength(float wavelength)
+{
+    this->wavelength = wavelength;
+}
+
+
+float EnvironmentContext::getWavelength()
+{
+    return wavelength;
+}
+
+
+void EnvironmentContext::setSunPosition(float lon, float lat)
+{
+    float x = -std::cos(lat) * std::cos(lon);
+    float y = -std::cos(lat) * std::sin(lon);
+    float z = -std::sin(lat);
+
+    this->sunDir[0] = x;
+    this->sunDir[1] = y;
+    this->sunDir[2] = z;
+}
+
+
+void RayTracingContext::clearRays()
+{
+    rays.clear();
+}
+
+
+void RayTracingContext::pushBackRay(Ray *ray)
+{
+    rays.push_back(ray);
+}
+
+
+CrystalContext::~CrystalContext()
+{
+    for (auto &p : rayTracingCtxs) {
+        delete p;
+    }
+}
+
+
+void CrystalContext::addGeometry(
+    Geometry *g, float populationWeight,
+    OrientationGenerator::AxisDistribution axisDist, float axisStd,
+    OrientationGenerator::RollDistribution rollDist, float rollStd)
+{
+    crystals.push_back(g);
+    populationWeights.push_back(populationWeight);
+    oriGens.emplace_back(axisStd, rollStd, axisDist, rollDist);
+    rayNums.push_back(0);
+    rayTracingCtxs.push_back(new RayTracingContext());
+}
+
+
+Geometry * CrystalContext::getCrystal(int i)
+{
+    return crystals[i];
+}
+
+
+int CrystalContext::getRayNum(int i)
+{
+    return rayNums[i];
+}
+
+
+RayTracingContext * CrystalContext::getRayTracingCtx(int i)
+{
+    return rayTracingCtxs[i];
+}
+
+
+size_t CrystalContext::popSize()
+{
+    return crystals.size();
+}
+
+
+SimulationContext::SimulationContext() :
+    totalRayNum(0), maxRecursionNum(9),
+    rayDir(nullptr), mainAxRot(nullptr), crystalId(nullptr)
+{
+    crystalCtx = new CrystalContext();
+    envCtx = new EnvironmentContext();
+}
+
+
+SimulationContext::~SimulationContext()
+{
+    delete envCtx;
+    delete crystalCtx;
+
+    if (rayDir)
+        delete[] rayDir;
+    if (mainAxRot)
+        delete[] mainAxRot;
+    if (crystalId)
+        delete[] crystalId;
+}
+
+
+void SimulationContext::setTotalRayNum(uint64_t num)
+{
+    this->totalRayNum = num;
+    
+    if (rayDir)
+        delete[] rayDir;
+    rayDir = new float[num * 3];
+
+    if (mainAxRot)
+        delete[] mainAxRot;
+    mainAxRot = new float[num * 3];
+
+    if (crystalId)
+        delete[] crystalId;
+    crystalId = new int[num];
+
+    for (int i = 0; i < num; i++) {
+        rayDir[i] = 0.0f;
+        mainAxRot[i] = 0.0f;
+        crystalId[i] = 0;
+    }
+}
+
+
+void SimulationContext::setMaxRecursionNum(int num)
+{
+    maxRecursionNum = num;
+}
+
+
+int SimulationContext::getMaxRecursionNum()
+{
+    return maxRecursionNum;
+}
+
+
+const float* SimulationContext::getRayDirections(int i)
+{
+    float *p = rayDir;
+    for (int x = 0; x < i; x++) {
+        p += crystalCtx->rayNums[x] * 3;
+    }
+    return p;
+}
+
+
+// void SimulationContext::reset()
+// {
+//     if (rayDir) delete[] rayDir;
+//     if (mainAxRot) delete[] mainAxRot;
+//     if (crystalId) delete[] crystalId;
+
+//     rayDir = nullptr;
+//     mainAxRot = nullptr;
+//     crystalId = nullptr;
+
+//     totalRayNum = 0;
+//     maxRecursionNum = 9;
+// }
+
+
+void SimulationContext::applySettings()
+{
+    if (totalRayNum <= 0) return;
+
+    size_t popSize = crystalCtx->popSize();
+    float popWeightSum = 0.0f;
+    for (float pw : crystalCtx->populationWeights) {
+        popWeightSum += pw;
+    }
+    for (float &pw : crystalCtx->populationWeights) {
+        pw /= popWeightSum;
+    }
+    
+    size_t currentIdx = 0;
+    const float * sunDir = envCtx->sunDir;
+    for (int i = 0; i < popSize-1; i++) {
+        auto tmpPopSize = static_cast<int>(crystalCtx->populationWeights[i] * totalRayNum);
+        crystalCtx->oriGens[i].fillData(sunDir, tmpPopSize, rayDir + currentIdx*3, mainAxRot + currentIdx*3);
+        crystalCtx->rayNums[i] = tmpPopSize;
+        for (int j = 0; j < tmpPopSize; j++) {
+            crystalId[currentIdx + j] = i;
+        }
+
+        // for (int k = 0; k < tmpPopSize; k++) {
+        //     printf("DIR%d:%+.4f,%+.4f,%+.4f\n", i, rayDir[currentIdx*3+k+0], rayDir[currentIdx*3+k+1], rayDir[currentIdx*3+k+2]);
+        //     printf("MA%d:%+.4f,%+.4f,%+.4f\n", i, mainAxRot[currentIdx*3+k+0], mainAxRot[currentIdx*3+k+1], mainAxRot[currentIdx*3+k+2]);
+        // }
+        currentIdx += tmpPopSize;
+    }
+    auto tmpPopSize = static_cast<int>(totalRayNum - currentIdx);
+    crystalCtx->oriGens[popSize-1].fillData(sunDir, tmpPopSize, rayDir + currentIdx*3, mainAxRot + currentIdx*3);
+    crystalCtx->rayNums[popSize-1] = tmpPopSize;
+    for (int j = 0; j < tmpPopSize; j++) {
+        crystalId[currentIdx + j] = static_cast<int>(popSize - 1);
+    }
+
+    // for (int k = 0; k < tmpPopSize; k++) {
+    //     printf("DIR%d:%+.4f,%+.4f,%+.4f\n", popSize-1, rayDir[currentIdx*3+k+0], rayDir[currentIdx*3+k+1], rayDir[currentIdx*3+k+2]);
+    //     printf("MA%d:%+.4f,%+.4f,%+.4f\n", popSize-1, mainAxRot[currentIdx*3+k+0], mainAxRot[currentIdx*3+k+1], mainAxRot[currentIdx*3+k+2]);
+    // }
+}
+
+
+void SimulationContext::writeFinalDirections(const char *filename)
+{
+    std::FILE* file = std::fopen(filename, "wb");
+    if (!file) return;
+
+    uint64_t totalRaySegNum = 0;
+    for (auto &rc : crystalCtx->rayTracingCtxs) {
+        for (auto &r : rc->rays) {
+            totalRaySegNum += r->totalNum();
+        }
+    }
+    fwrite(&totalRaySegNum, sizeof(uint64_t), 1, file);
+    
+    size_t currentIdx = 0;
+    std::vector<RaySegment*> v;
+    int k = 0;
+    for (auto &rc : crystalCtx->rayTracingCtxs) {
+        for (auto &r : rc->rays) {
+            v.clear();
+            v.push_back(r->firstRaySeg);
+
+            while (!v.empty()) {
+                RaySegment *p = v.back();
+                v.pop_back();
+                if (p->nextReflect) {
+                    v.push_back(p->nextReflect);
+                }
+                if (p->nextRefract) {
+                    v.push_back(p->nextRefract);
+                }
+                if (p->isValidEnd() && LinearAlgebra::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
+                    float finalDir[3];
+                    memcpy(finalDir, p->dir.val(), sizeof(float)*3);
+                    LinearAlgebra::rotateZBack(mainAxRot+currentIdx*3, 1, finalDir);
+                    fwrite(finalDir, sizeof(float), 3, file);
+                    fwrite(&p->w, sizeof(float), 1, file);
+
+                    // printf("LAST_MA%d:%+.4f,%+.4f,%+.4f\n", k,
+                    //     mainAxRot[currentIdx*3+0], mainAxRot[currentIdx*3+1], mainAxRot[currentIdx*3+2]);
+                    // printf("OUT%d:%+.4f,%+.4f,%+.4f\n", k,
+                    //     p->dir.x(), p->dir.y(), p->dir.z());
+                    // printf("FINAL%d:%+.4f,%+.4f,%+.4f\n", k,
+                    //     finalDir[0], finalDir[1], finalDir[2]);
+                }
+            }
+            currentIdx++;
+        }
+        k++;
+    }
+
+    std::fclose(file);
 }
 
 

@@ -1,6 +1,7 @@
 clear; clc; close all;
 
-bin_file_path = '/Volumes/ZJJ-4TB/Ice Halo Data/';
+% bin_file_path = '/Volumes/ZJJ-4TB/Ice Halo Data/';
+bin_file_path = '/Users/zhangjiajie/Codes/Ice Halo/cpp/cmake-build-debug/';
 dir_fnames = dir([bin_file_path, 'directions_*.bin']);
 
 wl_store = zeros(length(dir_fnames), 1);
@@ -17,6 +18,7 @@ spec_pts = length(wl_store);
 heatmap_hw = 900;
 heatmap_size = floor([1,1] * (2*heatmap_hw + 1));
 heatmap_spec_raw = zeros(heatmap_size(1), heatmap_size(2), spec_pts);
+heatmap_spec_cnt = zeros(size(heatmap_spec_raw));
 
 cam_uv_offset = [0, 0];
 cam_proj = @(sph)camera_project(sph, [90, 89.9, 0], 120, ...
@@ -34,13 +36,16 @@ for i = 1:length(dir_fnames)
     wl_idx = find(abs(wl - wl_store) < 0.01);
 
     fid = fopen([bin_file_path, dir_fname], 'rb');
-    num = fread(fid, 1, 'int');
+    num = fread(fid, 1, 'uint64');
     read_num = 0;
     while read_num < num
         k = min(1000000, num - read_num);
         data = fread(fid, [4, k], 'float')';
         read_num = read_num + k;
         fprintf('Read %d/%d lines...\n', read_num, num);
+        if isempty(data)
+            break;
+        end
         
         data_norm = sqrt(sum(data(:,1:3).^2, 2));
         data = data(abs(data_norm - 1) < 1e-6, :);
@@ -60,9 +65,13 @@ for i = 1:length(dir_fnames)
         
         tmp_heatmap = accumarray(sub2ind(heatmap_size, xy1(:,2), xy1(:,1)), tmp_w, ...
             [prod(heatmap_size), 1]);
+        tmp_cnt = accumarray(sub2ind(heatmap_size, xy1(:,2), xy1(:,1)), ones(size(tmp_w)), ...
+            [prod(heatmap_size), 1]);
         
         heatmap_spec_raw(:,:,wl_idx) = heatmap_spec_raw(:,:,wl_idx) + ...
             reshape(tmp_heatmap, heatmap_size);
+        heatmap_spec_cnt(:,:,wl_idx) = heatmap_spec_cnt(:,:,wl_idx) + ...
+            reshape(tmp_cnt, heatmap_size);
     end
     fclose(fid);
 end
@@ -70,8 +79,9 @@ total_w = total_w / spec_pts;
 
 %%
 heatmap_spec = heatmap_spec_raw;
+% heatmap_spec = heatmap_spec_raw ./ max(heatmap_spec_cnt, 1e-5);
 % heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 0.8));
-heatmap_spec = heatmap_spec / total_w * 4e3 * 20.0;
+heatmap_spec = heatmap_spec / total_w * 4e3 * 3.0;
 spec = [wl_store, reshape(heatmap_spec, [], spec_pts)'];
 
 heatmap_rgb = spec_to_rgb(spec, 'Space', 'srgb', ...
@@ -161,11 +171,11 @@ for i = 1:5:size(xy4,1)
     heatmap_rgb_bar(xy4(i,2), xy4(i,1)+(-10:10), :) = 0.4;
 end
 
-figure(2); clf;
-image(heatmap_rgb_bar);
-
-axis ij;
-axis equal; axis tight; axis off;
+% figure(2); clf;
+% image(heatmap_rgb_bar);
+% 
+% axis ij;
+% axis equal; axis tight; axis off;
 
 
 % %%

@@ -9,6 +9,8 @@
 #include <random>
 
 
+class SimulationContext;
+
 class OrientationGenerator
 {
 public:
@@ -26,14 +28,19 @@ public:
     };
 
 public:
+    OrientationGenerator();
     OrientationGenerator(float axStd, float rollStd,
         AxisDistribution ax = AxisDistribution::AX_SPH_UNIFORM,
         RollDistribution roll = RollDistribution::ROLL_UNIFORM);
     ~OrientationGenerator() = default;
 
     void fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot);
-    void setAxisOrientation(AxisDistribution ax, float axStd);
-    void setAxisRoll(RollDistribution roll, float rollStd);
+
+    // void setAxisDistribution(AxisDistribution axisDist, float std);
+    // void setRollDistribution(RollDistribution rollDist, float std);
+
+    // void setAxisOrientation(AxisDistribution ax, float axStd);
+    // void setAxisRoll(RollDistribution roll, float rollStd);
 
 private:
     std::mt19937 generator;
@@ -62,7 +69,7 @@ private:
     RaySegmentFactory();
 
     static RaySegmentFactory *instance;
-    static const uint32_t chunkSize = 1024*64;
+    static const uint32_t chunkSize = 1024 * 64;
     
     std::vector<RaySegment*> segments;
     uint32_t nextUnusedId;
@@ -70,50 +77,92 @@ private:
 };
 
 
-class RayTracingContext
+class EnvironmentContext
 {
+friend SimulationContext;
 public:
-    RayTracingContext();
-    ~RayTracingContext();
+    EnvironmentContext() = default;
+    ~EnvironmentContext() = default;
 
-    const Geometry * getGeometry() const;
-    const float * getRayDirections() const;
-    const float * getMainAxisRotations() const;
-    int getIncDirNum() const;
-    int getRaysPerDirection() const;
-    int getMaxRecursion() const;
+    void setWavelength(float wavelength);
+    float getWavelength();
 
-    void setRaysPerDirection(int raysPerDirection);
-    void setWavelength(float wl);
-    void setIncDirNum(int incDirNum);
     void setSunPosition(float lon, float lat);
-    void setGeometry(Geometry *g);
-    
-    bool isSettingsApplied();
-    void applySettings();
-
-    void clearRays();
-
-    void writeFinalDirections(const char * filename);
-    // void writeGeometryInfo();
-    // void writeRayPaths(const std::vector<Ray*> &rays);
-    
-    OrientationGenerator oriGen;
-    Geometry *g;
-    std::vector<Ray*> rays;
 
 private:
-    int incDirNum;
+    float wavelength;
+    float sunDir[3];
+};
+
+
+class RayTracingContext
+{
+friend SimulationContext;
+public:
+    RayTracingContext() = default;
+    ~RayTracingContext() = default;
+
+    void clearRays();
+    void pushBackRay(Ray *ray);
+    
+private:
+    std::vector<Ray*> rays;
+};
+
+
+class CrystalContext
+{
+friend SimulationContext;
+public:
+    CrystalContext() = default;
+    ~CrystalContext();
+
+    void addGeometry(Geometry *g, float populationWeight,
+                     OrientationGenerator::AxisDistribution axisDist, float axisStd,
+                     OrientationGenerator::RollDistribution rollDist, float rollStd);
+
+    Geometry * getCrystal(int i);
+    int getRayNum(int i);
+    RayTracingContext *getRayTracingCtx(int i);
+
+    size_t popSize();
+
+private:
+    std::vector<Geometry *> crystals;
+    std::vector<float> populationWeights;
+    std::vector<OrientationGenerator> oriGens;
+    std::vector<int> rayNums;
+    std::vector<RayTracingContext *> rayTracingCtxs;
+};
+
+
+class SimulationContext
+{
+public:
+    SimulationContext();
+    ~SimulationContext();
+
+    void setTotalRayNum(uint64_t num);
+    void setMaxRecursionNum(int num);
+    int getMaxRecursionNum();
+
+    const float* getRayDirections(int i);
+
+    void applySettings();
+
+    void writeFinalDirections(const char *filename);
+
+    CrystalContext *crystalCtx;
+    EnvironmentContext *envCtx;
+    
+private:
+    uint64_t totalRayNum;
+    int maxRecursionNum;
+
     float *rayDir;
     float *mainAxRot;
-    float sunDir[3];
-
-    int raysPerDirection;
-    int maxRecursion;
-
-    float wl;
-
-    bool initialized;
+    int *crystalId;
 };
+
 
 #endif // TESTHELPER_H

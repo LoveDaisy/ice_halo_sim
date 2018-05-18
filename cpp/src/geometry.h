@@ -61,7 +61,6 @@ private:
 class Geometry
 {
 public:
-    Geometry(std::vector<Vec3f> &vertexes, std::vector<TriangleIdx> &faces, float n);
     Geometry(std::vector<Vec3f> &vertexes, std::vector<TriangleIdx> &faces);
 
     void setVertexes(std::vector<Vec3f> &vertexes);
@@ -72,8 +71,8 @@ public:
     int vtxNum() const;
     int faceNum() const;
 
-    float refractiveIndex() const;
-    void setRefractiveIndex(float n);
+    // float refractiveIndex() const;
+    // void setRefractiveIndex(float n);
 
     const std::vector<Vec3f>& getVertexes();
     const std::vector<Vec3f>& getNorms();
@@ -85,9 +84,7 @@ public:
     void copyNormalData(int num, const int *idx, float *data) const;
 
     static Geometry* createHexCylindar(float hRatio);
-    static Geometry* createHexCylindar(float hRatio, float n);
     static Geometry* createPyramid(float ratio1, float ratio2, float ratio3);
-    static Geometry* createPyramid(float ratio1, float ratio2, float ratio3, float n);
 
     static constexpr float PI = 3.14159265f;
 
@@ -98,7 +95,7 @@ private:
 
     bool initDone;
 
-    float n;
+    // float n;
 };
 
 #endif // GEOMETRY_H
