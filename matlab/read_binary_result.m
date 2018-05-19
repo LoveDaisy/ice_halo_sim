@@ -26,6 +26,7 @@ cam_proj = @(sph)camera_project(sph, [90, 89.9, 0], 120, ...
 % cam_proj = @(sph)camera_project(sph, [70, 30, 0], 40, ...
 %     heatmap_size, 'linear');
 
+block_read_lines = 1000000;
 total_w = 0;
 for i = 1:length(dir_fnames)
     fprintf('Reading #%d/%d...\n', i, length(dir_fnames));
@@ -37,11 +38,11 @@ for i = 1:length(dir_fnames)
 
     fid = fopen([bin_file_path, dir_fname], 'rb');
     num = fread(fid, 1, 'uint64');
-    read_num = 0;
-    while read_num < num
-        k = min(1000000, num - read_num);
-        data = fread(fid, [4, k], 'float')';
-        read_num = read_num + k;
+    read_num = block_read_lines;
+    while read_num >= block_read_lines
+%         k = min(block_read_lines, num - read_num);
+        data = fread(fid, [4, block_read_lines], 'float')';
+        read_num = size(data, 1);
         fprintf('Read %d/%d lines...\n', read_num, num);
         if isempty(data)
             break;
@@ -57,7 +58,7 @@ for i = 1:length(dir_fnames)
         xy1 = bsxfun(@plus, xy1, cam_uv_offset);
         
         idx = 0 < xy1(:,1) & xy1(:,1) <= heatmap_size(2) & ...
-            0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1);
+            0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1) & lat > 0;
         if sum(idx) <= 0
             continue;
         end
@@ -81,7 +82,7 @@ total_w = total_w / spec_pts;
 heatmap_spec = heatmap_spec_raw;
 % heatmap_spec = heatmap_spec_raw ./ max(heatmap_spec_cnt, 1e-5);
 % heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 0.8));
-heatmap_spec = heatmap_spec / total_w * 4e3 * 3.0;
+heatmap_spec = heatmap_spec / total_w * 4e3 * 8.0;
 spec = [wl_store, reshape(heatmap_spec, [], spec_pts)'];
 
 heatmap_rgb = spec_to_rgb(spec, 'Space', 'srgb', ...
@@ -178,10 +179,10 @@ end
 % axis equal; axis tight; axis off;
 
 
-% %%
-% % Write
-% img_file_path = '/Users/zhangjiajie/Documents/Ice Halo/';
+%%
+% Write
+img_file_path = '/Users/zhangjiajie/Documents/Ice Halo/';
 % imwrite(uint16(heatmap_rgb_bar*65535), [img_file_path, 'test_bar.tiff']);
-% imwrite(uint16(heatmap_rgb*65535), [img_file_path, 'test.tiff']);
+imwrite(uint16(heatmap_rgb*65535), [img_file_path, 'test.tiff']);
 % imwrite(uint8(heatmap_rgb_bar*255), [img_file_path, 'test_bar.jpg']);
-% imwrite(uint8(heatmap_rgb*255), [img_file_path, 'test.jpg']);
+imwrite(uint8(heatmap_rgb*255), [img_file_path, 'test.jpg']);

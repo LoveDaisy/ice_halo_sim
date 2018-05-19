@@ -71,9 +71,6 @@ public:
     int vtxNum() const;
     int faceNum() const;
 
-    // float refractiveIndex() const;
-    // void setRefractiveIndex(float n);
-
     const std::vector<Vec3f>& getVertexes();
     const std::vector<Vec3f>& getNorms();
     const std::vector<TriangleIdx>& getFaces();
@@ -94,8 +91,6 @@ private:
     std::vector<TriangleIdx> faces;
 
     bool initDone;
-
-    // float n;
 };
 
 #endif // GEOMETRY_H

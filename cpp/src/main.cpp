@@ -12,7 +12,7 @@ int main(int argc, char *argv[])
     auto start = std::chrono::system_clock::now();
 
     SimulationContext context;
-    context.setTotalRayNum(10000);
+    context.setTotalRayNum(1000000);
     context.setMaxRecursionNum(9);
     context.envCtx->setSunPosition(90.0f*Geometry::PI/180.0f, 42.0f*Geometry::PI/180.0f);
     context.crystalCtx->addGeometry(Geometry::createHexCylindar(3.0f), 2.0f,
@@ -45,6 +45,9 @@ int main(int argc, char *argv[])
         t0 = std::chrono::system_clock::now();
         std::sprintf(filename, "directions_%.1f_%lli.bin", wl, t0.time_since_epoch().count());
         context.writeFinalDirections(filename);
+
+        // std::sprintf(filename, "paths_%.1f_%lli.bin", wl, t0.time_since_epoch().count());
+        // context.writeRayInfo(filename, -106.4f*Geometry::PI/180.0f, -16.5f*Geometry::PI/180.0f, 0.5f/57.0f);
         t1 = std::chrono::system_clock::now();
         diff = t1 - t0;
         printf("Writing: %.2fms\n", diff.count() * 1.0e3);

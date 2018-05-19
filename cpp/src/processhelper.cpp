@@ -1,6 +1,8 @@
 #include "processhelper.h"
 #include "linearalgebra.h"
 
+#include <unordered_set>
+
 
 OrientationGenerator::OrientationGenerator(float axStd, float rollStd,
         AxisDistribution ax, RollDistribution roll) :
@@ -34,6 +36,16 @@ OrientationGenerator::OrientationGenerator() :
 
 void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot)
 {
+    float tmpSunDir[3] = { 0.0f };
+    float sunRotation[3] = {
+        std::atan2(-sunDir[1], -sunDir[0]),
+        std::asin(-sunDir[2]),
+        0.0f
+    };
+    float h = 1.0f - std::cos(0.25f * Geometry::PI / 180.0f);
+
+    // printf("SUN_ROT:%+.4f,%+.4f,%+.4f\n", sunRotation[0], sunRotation[1], sunRotation[2]);
+
     for (int i = 0; i < num; i++) {
         float lon, lat, roll;
 
@@ -70,6 +82,17 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
         mainAxRot[i*3+0] = lon;
         mainAxRot[i*3+1] = lat;
         mainAxRot[i*3+2] = roll;
+
+        float z = 1.0f - uniformDistribution(generator) * h;
+        float q = uniformDistribution(generator) * 2 * Geometry::PI;
+        tmpSunDir[0] = std::sqrt(1.0f - z * z) * std::cos(q);
+        tmpSunDir[1] = std::sqrt(1.0f - z * z) * std::sin(q);
+        tmpSunDir[2] = z;
+        LinearAlgebra::rotateZBack(sunRotation, tmpSunDir);
+
+        // printf("SUN_DIR:%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n", 
+        //     -sunDir[0], -sunDir[1], -sunDir[2],
+        //     tmpSunDir[0], tmpSunDir[1], tmpSunDir[2]);
 
         memcpy(rayDir+i*3, sunDir, 3*sizeof(float));
         LinearAlgebra::rotateZ(mainAxRot+i*3, rayDir+i*3);
@@ -377,7 +400,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
     std::vector<RaySegment*> v;
     int k = 0;
     for (auto &rc : crystalCtx->rayTracingCtxs) {
-        for (auto &r : rc->rays) {
+        for (auto r : rc->rays) {
             v.clear();
             v.push_back(r->firstRaySeg);
 
@@ -393,7 +416,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
                 if (p->isValidEnd() && LinearAlgebra::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
                     float finalDir[3];
                     memcpy(finalDir, p->dir.val(), sizeof(float)*3);
-                    LinearAlgebra::rotateZBack(mainAxRot+currentIdx*3, 1, finalDir);
+                    LinearAlgebra::rotateZBack(mainAxRot+currentIdx*3, finalDir);
                     fwrite(finalDir, sizeof(float), 3, file);
                     fwrite(&p->w, sizeof(float), 1, file);
 
@@ -412,5 +435,100 @@ void SimulationContext::writeFinalDirections(const char *filename)
 
     std::fclose(file);
 }
+
+
+void SimulationContext::writeRayInfo(const char *filename, float lon, float lat, float delta)
+{
+    std::FILE* file = std::fopen(filename, "wb");
+    if (!file) return;
+
+    float targetDir[3] = {
+        std::cos(lat) * std::cos(lon),
+        std::cos(lat) * std::sin(lon),
+        std::sin(lat)
+    };
+    float cosDelta = std::cos(delta);
+
+    size_t currentIdx = 0;
+    std::vector<RaySegment*> v;
+    for (auto &rc : crystalCtx->rayTracingCtxs) {
+        for (auto r : rc->rays) {
+            v.clear();
+            v.push_back(r->firstRaySeg);
+            bool targetOn = false;
+
+            while (!v.empty()) {
+                RaySegment *p = v.back();
+                v.pop_back();
+                if (p->nextReflect) {
+                    v.push_back(p->nextReflect);
+                }
+                if (p->nextRefract) {
+                    v.push_back(p->nextRefract);
+                }
+                if (p->isValidEnd()) {
+                    float finalDir[3];
+                    memcpy(finalDir, p->dir.val(), sizeof(float)*3);
+                    LinearAlgebra::rotateZBack(mainAxRot+currentIdx*3, finalDir);
+                    if (LinearAlgebra::dot3(targetDir, finalDir) > cosDelta) {
+                        targetOn = true;
+                        break;
+                    }
+                }
+            }
+            currentIdx++;
+
+            if (targetOn) {
+                writeRayInfo(file, r);
+            }
+        }
+    }
+
+    fclose(file);
+}
+
+
+void SimulationContext::writeRayInfo(std::FILE *file, Ray *sr)
+{
+    std::vector<RaySegment*> v;
+    v.push_back(sr->firstRaySeg);
+
+    std::unordered_set<RaySegment*> checked;
+    float tmp[7];
+    while (!v.empty()) {
+        RaySegment *p = v.back();
+        if (checked.find(p) != checked.end()) {
+            v.pop_back();
+            continue;
+        }
+
+        if (p->nextReflect && checked.find(p->nextReflect) == checked.end()) {
+            v.push_back(p->nextReflect);
+            continue;
+        }
+        if (p->nextRefract && checked.find(p->nextRefract) == checked.end()) {
+            v.push_back(p->nextRefract);
+            continue;
+        }
+        if (p->nextReflect == nullptr && p->nextRefract == nullptr && p->isValidEnd()) {
+            // checked.insert(p);
+            tmp[6] = -1; tmp[0] = v.size();
+            fwrite(tmp, sizeof(float), 7, file);
+            // printf("%lu,0,0,0,0,0,-1;\n", v.size());
+            for (auto r : v) {
+                memcpy(tmp, r->pt.val(), 3*sizeof(float));
+                memcpy(tmp+3, r->dir.val(), 3*sizeof(float));
+                tmp[6] = r->w;
+                fwrite(tmp, sizeof(float), 7, file);
+
+                // printf("%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f;\n",
+                //     tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
+            }
+        }
+        checked.insert(p);
+    }
+}
+
+
 
 

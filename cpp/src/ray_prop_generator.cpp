@@ -32,7 +32,7 @@ public:
         Expr c1 = dir(0, y)*face_base(1, yf, 0)*face_base(2, yf, 1) + dir(1, y)*face_base(2, yf, 0)*face_base(0, yf, 1) +
             dir(2, y)*face_base(0, yf, 0)*face_base(1, yf, 1) - dir(0, y)*face_base(2, yf, 0)*face_base(1, yf, 1) -
             dir(1, y)*face_base(0, yf, 0)*face_base(2, yf, 1) - dir(2, y)*face_base(1, yf, 0)*face_base(0, yf, 1);
-        Expr t = select(abs(c1) > 1e-6f, (a1 - b1) / c1, -1);
+        Expr t = select(abs(c1) > 1e-3f, (a1 - b1) / c1, -1);
         // Expr t = (a1 - b1) / c1;
 
         Expr a2 = dir(0, y)*pt(1, y)*face_base(2, yf, 1) + dir(1, y)*pt(2, y)*face_base(0, yf, 1) +
@@ -54,7 +54,7 @@ public:
         // Expr beta =  -(a3 + b3) / c1;
 
         Func t_all{"t_all"};
-        t_all(y, yf) = select(alpha >= 0 && beta >= 0 && alpha + beta <= 1 && t > 3e-6f, t, MAX_FLOAT);
+        t_all(y, yf) = select(alpha >= 0 && beta >= 0 && alpha + beta <= 1 && t > 1e-3f, t, MAX_FLOAT);
 
         RDom r(0, face.dim(1).extent());
         Tuple argmin_t = argmin(t_all(y, r));

@@ -6,7 +6,7 @@ set(SOURCE_FILE
         processhelper.cpp)
 
 set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_FLAGS "-Wall -Wextra -msse4 -pthread -lprofiler -std=c++11")
+set(CMAKE_CXX_FLAGS "-Wall -Wextra -msse4 -pthread -std=c++11")
 set(CMAKE_CXX_FLAGS_DEBUG "-g")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 

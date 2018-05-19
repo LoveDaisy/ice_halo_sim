@@ -375,7 +375,7 @@ void Optics::traceRays(SimulationContext &context)
             //     ray_pt_buffer2, face_id_buffer);
             int k = 0;
             for (auto i = 0; i < currentRayNumbers * 2; i++) {
-                if (face_id_buffer[i] >= 0 && activeRaySegments[i]->w > 0.001) {
+                if (face_id_buffer[i] >= 0 && activeRaySegments[i]->w > 1e-3) {
                     tmpRaySegs.push_back(activeRaySegments[i]);
                     if (i != k) {
                         memcpy(ray_pt_buffer + k * 3, ray_pt_buffer2 + i * 3, 3 * sizeof(float));
@@ -384,7 +384,7 @@ void Optics::traceRays(SimulationContext &context)
                     }
                     g->copyNormalData(1, face_id_buffer + i, face_norm_buffer + k * 3);
                     k++;
-                } else {
+                } else if (face_id_buffer[i] < 0) {
                     activeRaySegments[i]->isFinished = true;
                 }
             }
