@@ -270,12 +270,9 @@ SimulationContext::~SimulationContext()
     delete envCtx;
     delete crystalCtx;
 
-    if (rayDir)
-        delete[] rayDir;
-    if (mainAxRot)
-        delete[] mainAxRot;
-    if (crystalId)
-        delete[] crystalId;
+    delete[] rayDir;
+    delete[] mainAxRot;
+    delete[] crystalId;
 }
 
 
@@ -283,16 +280,13 @@ void SimulationContext::setTotalRayNum(uint64_t num)
 {
     this->totalRayNum = num;
     
-    if (rayDir)
-        delete[] rayDir;
+    delete[] rayDir;
     rayDir = new float[num * 3];
 
-    if (mainAxRot)
-        delete[] mainAxRot;
+    delete[] mainAxRot;
     mainAxRot = new float[num * 3];
 
-    if (crystalId)
-        delete[] crystalId;
+    delete[] crystalId;
     crystalId = new int[num];
 
     for (int i = 0; i < num; i++) {
