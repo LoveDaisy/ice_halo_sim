@@ -57,7 +57,8 @@ private:
                                  float *reflect_dir, float *refract_dir, float *reflect_w);
     static void propagate(int num, const float *pt, const float *dir, int face_num, const float *faces,
                           float *new_pt, int *new_face_id);
-    static void propagateHalide(int num, const float *pt, const float *dir, int face_num, const float *faces,
+    static void propagateHalide(int num, const float *pt, const float *dir,
+                                int face_num, const float *faces, const int *face_id,
                                 float *new_pt, int *new_face_id);
 
     static float getReflectRatio(float inc_angle, float n1, float n2);

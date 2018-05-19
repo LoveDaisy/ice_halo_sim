@@ -256,29 +256,34 @@ void Optics::propagate(int num, const float *pt, const float *dir, int face_num,
 }
 
 
-void Optics::propagateHalide(int num, const float *pt, const float *dir, int face_num, const float *faces,
-        float *new_pt, int *new_face_id)
+void Optics::propagateHalide(int num, const float *pt, const float *dir,
+    int face_num, const float *faces, const int *face_id,
+    float *new_pt, int *new_face_id)
 {
     using namespace Halide::Runtime;
 
     auto *pt_cpy = new float[num*3];
     auto *dir_cpy = new float[num*3];
     auto *face_cpy = new float[face_num*9];
+    auto *face_id_cpy = new int[num];
     memcpy(pt_cpy, pt, num*3*sizeof(float));
     memcpy(dir_cpy, dir, num*3*sizeof(float));
     memcpy(face_cpy, faces, face_num*9*sizeof(float));
+    memcpy(face_id_cpy, face_id, num*sizeof(int));
 
     Buffer<float> pt_buffer(pt_cpy, 3, num);
     Buffer<float> dir_buffer(dir_cpy, 3, num);
     Buffer<float> face_buffer(face_cpy, 9, face_num);
+    Buffer<int> face_id_buffer(face_id_cpy, num);
     Buffer<float> new_pt_buffer(new_pt, 3, num);
     Buffer<int> new_face_id_buffer(new_face_id, num);
 
-    ray_prop(dir_buffer, pt_buffer, face_buffer, new_pt_buffer, new_face_id_buffer);
+    ray_prop(dir_buffer, pt_buffer, face_buffer, face_id_buffer, new_pt_buffer, new_face_id_buffer);
 
     delete[] pt_cpy;
     delete[] dir_cpy;
     delete[] face_cpy;
+    delete[] face_id_cpy;
 }
 
 
@@ -300,6 +305,7 @@ void Optics::traceRays(SimulationContext &context)
         auto *ray_dir_buffer = new float[max_ray_num * 3];
         auto *face_norm_buffer = new float[max_ray_num * 3];
         auto *face_id_buffer = new int[max_ray_num];
+        auto *face_id_buffer2 = new int[max_ray_num];
 
         auto *reflect_dir_buffer = new float[max_ray_num * 3];
         auto *refract_dir_buffer = new float[max_ray_num * 3];
@@ -368,23 +374,23 @@ void Optics::traceRays(SimulationContext &context)
             memcpy(ray_pt_buffer + currentRayNumbers * 3, ray_pt_buffer, currentRayNumbers * 3 * sizeof(float));
             memcpy(ray_dir_buffer, reflect_dir_buffer, currentRayNumbers * 3 * sizeof(float));
             memcpy(ray_dir_buffer + currentRayNumbers * 3, refract_dir_buffer, currentRayNumbers * 3 * sizeof(float));
+            memcpy(face_id_buffer + currentRayNumbers, face_id_buffer, currentRayNumbers * sizeof(int));
 
-            propagateHalide(currentRayNumbers * 2, ray_pt_buffer, ray_dir_buffer, g->faceNum(), face_data,
-                            ray_pt_buffer2, face_id_buffer);
+            propagateHalide(currentRayNumbers * 2, ray_pt_buffer, ray_dir_buffer,
+                            g->faceNum(), face_data, face_id_buffer,
+                            ray_pt_buffer2, face_id_buffer2);
             // propagate(currentRayNumbers * 2, ray_pt_buffer, ray_dir_buffer, g->faceNum(), face_data,
             //     ray_pt_buffer2, face_id_buffer);
             int k = 0;
             for (auto i = 0; i < currentRayNumbers * 2; i++) {
-                if (face_id_buffer[i] >= 0 && activeRaySegments[i]->w > 1e-3) {
+                if (face_id_buffer2[i] >= 0 && activeRaySegments[i]->w > 1e-3) {
                     tmpRaySegs.push_back(activeRaySegments[i]);
-                    if (i != k) {
-                        memcpy(ray_pt_buffer + k * 3, ray_pt_buffer2 + i * 3, 3 * sizeof(float));
-                        memcpy(ray_dir_buffer + k * 3, ray_dir_buffer + i * 3, 3 * sizeof(float));
-                        face_id_buffer[k] = face_id_buffer[i];
-                    }
-                    g->copyNormalData(1, face_id_buffer + i, face_norm_buffer + k * 3);
+                    memcpy(ray_pt_buffer + k * 3, ray_pt_buffer2 + i * 3, 3 * sizeof(float));
+                    memcpy(ray_dir_buffer + k * 3, ray_dir_buffer + i * 3, 3 * sizeof(float));
+                    face_id_buffer[k] = face_id_buffer2[i];
+                    g->copyNormalData(1, face_id_buffer2 + i, face_norm_buffer + k * 3);
                     k++;
-                } else if (face_id_buffer[i] < 0) {
+                } else if (face_id_buffer2[i] < 0) {
                     activeRaySegments[i]->isFinished = true;
                 }
             }
@@ -400,6 +406,7 @@ void Optics::traceRays(SimulationContext &context)
         delete[] refract_dir_buffer;
         delete[] reflect_dir_buffer;
         delete[] face_id_buffer;
+        delete[] face_id_buffer2;
         delete[] face_norm_buffer;
         delete[] ray_dir_buffer;
         delete[] ray_pt_buffer2;

@@ -58,7 +58,7 @@ for i = 1:length(dir_fnames)
         xy1 = bsxfun(@plus, xy1, cam_uv_offset);
         
         idx = 0 < xy1(:,1) & xy1(:,1) <= heatmap_size(2) & ...
-            0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1) & lat > 0;
+            0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1);
         if sum(idx) <= 0
             continue;
         end
@@ -80,8 +80,7 @@ total_w = total_w / spec_pts;
 
 %%
 heatmap_spec = heatmap_spec_raw;
-% heatmap_spec = heatmap_spec_raw ./ max(heatmap_spec_cnt, 1e-5);
-% heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 0.8));
+heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 1.1));
 heatmap_spec = heatmap_spec / total_w * 4e3 * 8.0;
 spec = [wl_store, reshape(heatmap_spec, [], spec_pts)'];
 
