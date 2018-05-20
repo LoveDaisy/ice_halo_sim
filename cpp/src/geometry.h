@@ -81,7 +81,8 @@ public:
     void copyNormalData(int num, const int *idx, float *data) const;
 
     static Geometry* createHexCylindar(float hRatio);
-    static Geometry* createPyramid(float ratio1, float ratio2, float ratio3);
+    static Geometry* createHexPyramid(float ratio1, float ratio2, float ratio3);
+    static Geometry* createCubicPyramid(float ratio1, float ratio2);
 
     static constexpr float PI = 3.14159265f;
 

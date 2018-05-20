@@ -21,10 +21,10 @@ heatmap_spec_raw = zeros(heatmap_size(1), heatmap_size(2), spec_pts);
 heatmap_spec_cnt = zeros(size(heatmap_spec_raw));
 
 cam_uv_offset = [0, 0];
-cam_proj = @(sph)camera_project(sph, [90, 89.9, 0], 120, ...
-    heatmap_size, 'Equiarea');
-% cam_proj = @(sph)camera_project(sph, [70, 30, 0], 40, ...
-%     heatmap_size, 'linear');
+% cam_proj = @(sph)camera_project(sph, [90, 89.9, 0], 120, ...
+%     heatmap_size, 'Equiarea');
+cam_proj = @(sph)camera_project(sph, [90, 8.5, 0], 53.5, ...
+    heatmap_size, 'linear');
 
 block_read_lines = 1000000;
 total_w = 0;
@@ -81,7 +81,7 @@ total_w = total_w / spec_pts;
 %%
 heatmap_spec = heatmap_spec_raw;
 heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 1.1));
-heatmap_spec = heatmap_spec / total_w * 4e3 * 8.0;
+heatmap_spec = heatmap_spec / total_w * 4e3 * 3.0;
 spec = [wl_store, reshape(heatmap_spec, [], spec_pts)'];
 
 heatmap_rgb = spec_to_rgb(spec, 'Space', 'srgb', ...
@@ -107,18 +107,19 @@ axis equal; axis tight; axis off;
 
 %%
 bar_theta = (0:40)';
-xyz = [-sind(bar_theta) * sind(90), ...
-    cosd(bar_theta) * cosd(43.5) * sind(90), ...
-    cosd(bar_theta) * sind(43.5)];
+bar_center = [90, 1];
+xyz = [-sind(bar_theta) * sind(bar_center(1)), ...
+    cosd(bar_theta) * cosd(bar_center(2)) * sind(bar_center(1)), ...
+    cosd(bar_theta) * sind(bar_center(2))];
 xy1 = cam_proj([atan2d(xyz(:,2), xyz(:,1)), asind(xyz(:,3) ./ sqrt(sum(xyz.^2, 2)))]);
 idx = 0 < xy1(:,1) & xy1(:,1) <= heatmap_size(2) & ...
     0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1);
 xy1 = xy1(idx,:);
 
 bar_theta = -(0:40)';
-xyz = [-sind(bar_theta) * sind(90), ...
-    cosd(bar_theta) * cosd(43.5) * sind(90), ...
-    cosd(bar_theta) * sind(43.5)];
+xyz = [-sind(bar_theta) * sind(bar_center(1)), ...
+    cosd(bar_theta) * cosd(bar_center(2)) * sind(bar_center(1)), ...
+    cosd(bar_theta) * sind(bar_center(2))];
 xy2 = cam_proj([atan2d(xyz(:,2), xyz(:,1)), asind(xyz(:,3) ./ sqrt(sum(xyz.^2, 2)))]);
 idx = 0 < xy2(:,1) & xy2(:,1) <= heatmap_size(2) & ...
     0 < xy2(:,2) & xy2(:,2) <= heatmap_size(1);
@@ -126,8 +127,8 @@ xy2 = xy2(idx,:);
 
 bar_theta = (0:40)';
 xyz = [zeros(size(bar_theta)), ...
-    cosd(bar_theta + 43.5) * sind(90), ...
-    cosd(bar_theta) * sind(43.5) + sind(bar_theta) * sind(43.5)];
+    cosd(bar_theta + bar_center(2)) * sind(bar_center(1)), ...
+    cosd(bar_theta) * sind(bar_center(2)) + sind(bar_theta) * sind(bar_center(2))];
 xy3 = cam_proj([atan2d(xyz(:,2), xyz(:,1)), asind(xyz(:,3) ./ sqrt(sum(xyz.^2, 2)))]);
 idx = 0 < xy3(:,1) & xy3(:,1) <= heatmap_size(2) & ...
     0 < xy3(:,2) & xy3(:,2) <= heatmap_size(1);
@@ -135,8 +136,8 @@ xy3 = xy3(idx,:);
 
 bar_theta = -(0:40)';
 xyz = [zeros(size(bar_theta)), ...
-    cosd(bar_theta + 43.5) * sind(90), ...
-    cosd(bar_theta) * sind(43.5) + sind(bar_theta) * sind(43.5)];
+    cosd(bar_theta + bar_center(2)) * sind(bar_center(1)), ...
+    cosd(bar_theta) * sind(bar_center(2)) + sind(bar_theta) * sind(bar_center(2))];
 xy4 = cam_proj([atan2d(xyz(:,2), xyz(:,1)), asind(xyz(:,3) ./ sqrt(sum(xyz.^2, 2)))]);
 idx = 0 < xy4(:,1) & xy4(:,1) <= heatmap_size(2) & ...
     0 < xy4(:,2) & xy4(:,2) <= heatmap_size(1);
@@ -179,9 +180,9 @@ end
 
 
 %%
-% Write
-img_file_path = '/Users/zhangjiajie/Documents/Ice Halo/';
-% imwrite(uint16(heatmap_rgb_bar*65535), [img_file_path, 'test_bar.tiff']);
-imwrite(uint16(heatmap_rgb*65535), [img_file_path, 'test.tiff']);
-% imwrite(uint8(heatmap_rgb_bar*255), [img_file_path, 'test_bar.jpg']);
-imwrite(uint8(heatmap_rgb*255), [img_file_path, 'test.jpg']);
+% % Write
+% img_file_path = '/Users/zhangjiajie/Documents/Ice Halo/';
+% % imwrite(uint16(heatmap_rgb_bar*65535), [img_file_path, 'test_bar.tiff']);
+% imwrite(uint16(heatmap_rgb*65535), [img_file_path, 'test.tiff']);
+% % imwrite(uint8(heatmap_rgb_bar*255), [img_file_path, 'test_bar.jpg']);
+% imwrite(uint8(heatmap_rgb*255), [img_file_path, 'test.jpg']);
