@@ -29,9 +29,7 @@ public:
 
 public:
     OrientationGenerator();
-    OrientationGenerator(float axStd, float rollStd,
-        AxisDistribution ax = AxisDistribution::AX_SPH_UNIFORM,
-        RollDistribution roll = RollDistribution::ROLL_UNIFORM);
+    OrientationGenerator(AxisDistribution ax, float axStd, RollDistribution roll, float rollStd);
     ~OrientationGenerator() = default;
 
     void fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot);

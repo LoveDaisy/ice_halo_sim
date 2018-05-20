@@ -4,8 +4,7 @@
 #include <unordered_set>
 
 
-OrientationGenerator::OrientationGenerator(float axStd, float rollStd,
-        AxisDistribution ax, RollDistribution roll) :
+OrientationGenerator::OrientationGenerator(AxisDistribution ax, float axStd, RollDistribution roll, float rollStd) :
     axDist(ax), rollDist(roll),
     axStd(axStd), rollStd(rollStd)
 {
@@ -16,7 +15,7 @@ OrientationGenerator::OrientationGenerator(float axStd, float rollStd,
 
 
 OrientationGenerator::OrientationGenerator() :
-    OrientationGenerator(0.0f, 0.0f)
+        OrientationGenerator(AxisDistribution::AX_HOR_GAUSS, 0.0f, RollDistribution::ROLL_HOR_GAUSS, 0.0f)
 { }
 
 
@@ -226,7 +225,7 @@ void CrystalContext::addGeometry(
 {
     crystals.push_back(g);
     populationWeights.push_back(populationWeight);
-    oriGens.emplace_back(axisStd, rollStd, axisDist, rollDist);
+    oriGens.emplace_back(axisDist, axisStd, rollDist, rollStd);
     rayNums.push_back(0);
     rayTracingCtxs.push_back(new RayTracingContext());
 }
