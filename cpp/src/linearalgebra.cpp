@@ -150,7 +150,7 @@ void LinearAlgebra::rotateZ(float *lon_lat_roll, float *vec)
 // }
 
 
-void LinearAlgebra::rotateZBack(float *lon_lat_roll, int num, float *vec)
+void LinearAlgebra::rotateZBack(const float *lon_lat_roll, float *vec)
 {
     using namespace std;
     float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
@@ -161,14 +161,13 @@ void LinearAlgebra::rotateZBack(float *lon_lat_roll, int num, float *vec)
 
     DummyMatrix matR(ax, 3, 3);
 
-    float res[3];
-    for (int i = 0; i < num; ++i) {
-        DummyMatrix inputVec(vec+i*3, 1, 3);
-        DummyMatrix resVec(res, 1, 3);
+    float res[3] = { 0.0f };
+    
+    DummyMatrix inputVec(vec, 1, 3);
+    DummyMatrix resVec(res, 1, 3);
 
-        DummyMatrix::multiply(inputVec, matR, resVec);
-        memcpy(vec, res, 3*sizeof(float));
-    }
+    DummyMatrix::multiply(inputVec, matR, resVec);
+    memcpy(vec, res, 3*sizeof(float));
 }
 
 

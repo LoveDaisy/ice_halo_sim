@@ -10,7 +10,6 @@ set(CMAKE_CXX_FLAGS "-Wall -Wextra -msse4 -pthread -std=c++11")
 set(CMAKE_CXX_FLAGS_DEBUG "-g")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 
-# set(CMAKE_CXX_STANDARD 11)
 set(executable_output_path ${PROJECT_BINARY_DIR}/bin)
 
 # path to distribution of halide
@@ -23,12 +22,12 @@ endif()
 # set(HALIDE_DISTRIB_USE_STATIC_LIBRARY TRUE)
 include("${HALIDE_DISTRIB_DIR}/halide.cmake")
 
-if(NOT DEFINED HALIDE_MACHINE_PARAMS)
-    set(HALIDE_MACHINE_PARAMS "8,8192,40")
-endif()
+# if(NOT DEFINED HALIDE_MACHINE_PARAMS)
+#     set(HALIDE_MACHINE_PARAMS "8,8192,40")
+# endif()
 
-# find_package(OpenCV REQUIRED core imgproc imgcodecs highgui)
 find_package(Threads)
+# find_package(Gperftools)
 
 halide_library(ray_hit
     SRCS ray_hit_generator.cpp
@@ -38,7 +37,8 @@ halide_library(ray_prop
     GENERATOR_ARGS auto_schedule=true)
 
 add_executable(IceHaloSim ${SOURCE_FILE})
-target_link_libraries(IceHaloSim PUBLIC ${CMAKE_THREAD_LIBS_INIT} ray_hit ray_prop)
+target_link_libraries(IceHaloSim 
+    PUBLIC ${CMAKE_THREAD_LIBS_INIT} ray_hit ray_prop)
 
 
 

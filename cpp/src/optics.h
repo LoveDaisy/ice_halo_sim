@@ -2,10 +2,9 @@
 #define OPTICS_H
 
 #include "geometry.h"
-
 #include <random>
 
-class RayTracingContext;
+class SimulationContext;
 
 
 class RaySegment
@@ -47,7 +46,7 @@ public:
 class Optics
 {
 public:
-    static void traceRays(RayTracingContext &context);
+    static void traceRays(SimulationContext &context);
 
 private:
     static void initRays(int num, const float *dir, int face_num, const float *faces,
@@ -58,16 +57,19 @@ private:
                                  float *reflect_dir, float *refract_dir, float *reflect_w);
     static void propagate(int num, const float *pt, const float *dir, int face_num, const float *faces,
                           float *new_pt, int *new_face_id);
-    static void propagateHalide(int num, const float *pt, const float *dir, int face_num, const float *faces,
+    static void propagateHalide(int num, const float *pt, const float *dir,
+                                int face_num, const float *faces, const int *face_id,
                                 float *new_pt, int *new_face_id);
 
     static float getReflectRatio(float inc_angle, float n1, float n2);
     static void intersectLineFace(const float *pt, const float *dir, const float *face,
                                   float *p, float *t, float *alpha, float *beta);
 
-    static std::default_random_engine & getGenerator();
-    static std::uniform_real_distribution<float> & getDistribution();
+    static std::default_random_engine& getGenerator();
+    static std::uniform_real_distribution<float>& getDistribution();
 
+    static std::default_random_engine* gen;
+    static std::uniform_real_distribution<float>* dist;
 };
 
 
