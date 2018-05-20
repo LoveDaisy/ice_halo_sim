@@ -47,6 +47,9 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
                 if (lat > Geometry::PI/2) {
                     lat = 2.0f*Geometry::PI - lat;
                 }
+                if (lat < -Geometry::PI/2) {
+                    lat = -2.0f*Geometry::PI - lat;
+                }
                 break;
         }
 

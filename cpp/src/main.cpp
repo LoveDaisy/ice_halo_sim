@@ -15,7 +15,7 @@ int main(int argc, char *argv[])
     context.setTotalRayNum(1000000);
     context.setMaxRecursionNum(9);
     context.envCtx->setSunPosition(90.0f, 1.0f);
-    context.crystalCtx->addGeometry(Geometry::createTriPyramid(3, 2, .7f, 0.0f, .7f), 2.0f,
+    context.crystalCtx->addGeometry(Geometry::createHexPyramidStackHalf(1, 1, 3, 2, 1.2f, 0.6f, 0.f), 2.0f,
                                     OrientationGenerator::Distribution::GAUSS, 90.f, 14.0f,
                                     OrientationGenerator::Distribution::UNIFORM, 0.0f, 360.f);
     // context.crystalCtx->addGeometry(Geometry::createHexPyramid(0.31f, 0.f, 1.30), 3.0f,

@@ -83,6 +83,8 @@ public:
     static Geometry* createHexCylindar(float hRatio);
     static Geometry* createHexPyramid(float ratio1, float ratio2, float ratio3);
     static Geometry* createHexPyramid(int i1, int i4, float h1, float h2, float h3);
+    static Geometry* createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
+    static Geometry* createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
     static Geometry* createTriPyramid(int i1, int i4, float h1, float h2, float h3);
     static Geometry* createCubicPyramid(float ratio1, float ratio2);
 
