@@ -446,3 +446,156 @@ Geometry *Geometry::createCubicPyramid(float ratio1, float ratio2) {
     return new Geometry(vertexes, faces);
 }
 
+
+/*
+    top vertex:
+        2   1
+    3           0
+        4   5
+
+    upper vertex:
+        8   7
+    9           6
+        10  11
+
+    lower vertex:
+        14  13
+    15          12
+        16  17
+
+    bottom vertex:
+        20  19
+    21          18
+        22  23
+*/
+Geometry* Geometry::createHexPyramid(int i1, int i4, float h1, float h2, float h3)
+{
+    float H = 1.0f * i1 / i4 * 1.6288f;
+    h1 = std::min(H, h1);
+    h3 = std::min(H, h3);
+    
+    std::vector<Vec3f> vertexes;
+    std::vector<TriangleIdx> faces;
+    vertexes.reserve(24);
+    for (int i = 0; i < 6; i++) {
+        vertexes.emplace_back(Vec3f(
+            std::cos(2*PI*i/6) * (1 - h1 / H), 
+            std::sin(2*PI*i/6) * (1 - h1 / H), 
+            h2/2 + h1));
+    }
+    for (int i = 0; i < 6; i++) {
+        vertexes.emplace_back(Vec3f(
+            std::cos(2*PI*i/6), 
+            std::sin(2*PI*i/6), 
+            h2/2));
+    }
+    for (int i = 0; i < 6; i++) {
+        vertexes.emplace_back(Vec3f(
+            std::cos(2*PI*i/6), 
+            std::sin(2*PI*i/6), 
+            -h2/2));
+    }
+    for (int i = 0; i < 6; i++) {
+        vertexes.emplace_back(Vec3f(
+            std::cos(2*PI*i/6) * (1 - h3 / H), 
+            std::sin(2*PI*i/6) * (1 - h3 / H), 
+            -h2/2 - h3));
+    }
+
+    faces.emplace_back(TriangleIdx(0, 1, 2));
+    faces.emplace_back(TriangleIdx(0, 2, 3));
+    faces.emplace_back(TriangleIdx(3, 4, 5));
+    faces.emplace_back(TriangleIdx(3, 5, 0));
+    for (int i = 0; i < 6; ++i) {
+        faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6));
+        faces.emplace_back(TriangleIdx(i+6, (i+1)%6+6, (i+1)%6));
+    }
+    for (int i = 6; i < 12; ++i) {
+        faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6+6));
+        faces.emplace_back(TriangleIdx(i+6, (i+1)%6+12, (i+1)%6+6));
+    }
+    for (int i = 12; i < 18; ++i) {
+        faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6+12));
+        faces.emplace_back(TriangleIdx(i+6, (i+1)%6+18, (i+1)%6+12));
+    }
+    faces.emplace_back(TriangleIdx(18, 20, 19));
+    faces.emplace_back(TriangleIdx(18, 21, 20));
+    faces.emplace_back(TriangleIdx(21, 23, 22));
+    faces.emplace_back(TriangleIdx(21, 18, 23));
+
+    return new Geometry(vertexes, faces);
+}
+
+
+/*
+    top vertex:
+    1
+           0
+    2
+
+    upper vertex:
+    4
+           3
+    5
+
+    lower vertex:
+    7
+            6
+    8
+
+    bottom vertex:
+    10
+            9
+    11
+*/
+Geometry *Geometry::createTriPyramid(int i1, int i4, float h1, float h2, float h3) {
+    float H = 1.0f / 1.732051f * i1 / i4 * 1.6288f;
+    h1 = std::min(H, h1);
+    h3 = std::min(H, h3);
+    
+    std::vector<Vec3f> vertexes;
+    std::vector<TriangleIdx> faces;
+    vertexes.reserve(12);
+    for (int i = 0; i < 3; i++) {
+        vertexes.emplace_back(Vec3f(
+            std::cos(2*PI*i/3) * (1 - h1 / H), 
+            std::sin(2*PI*i/3) * (1 - h1 / H), 
+            h2/2 + h1));
+    }
+    for (int i = 0; i < 3; i++) {
+        vertexes.emplace_back(Vec3f(
+            std::cos(2*PI*i/3), 
+            std::sin(2*PI*i/3), 
+            h2/2));
+    }
+    for (int i = 0; i < 3; i++) {
+        vertexes.emplace_back(Vec3f(
+            std::cos(2*PI*i/3), 
+            std::sin(2*PI*i/3), 
+            -h2/2));
+    }
+    for (int i = 0; i < 3; i++) {
+        vertexes.emplace_back(Vec3f(
+            std::cos(2*PI*i/3) * (1 - h3 / H), 
+            std::sin(2*PI*i/3) * (1 - h3 / H), 
+            -h2/2 - h3));
+    }
+
+    faces.emplace_back(TriangleIdx(0, 1, 2));
+    for (int i = 0; i < 3; ++i) {
+        faces.emplace_back(TriangleIdx(i, i+3, (i+1)%3));
+        faces.emplace_back(TriangleIdx(i+3, (i+1)%3+3, (i+1)%3));
+    }
+    for (int i = 3; i < 6; ++i) {
+        faces.emplace_back(TriangleIdx(i, i+3, (i+1)%3+3));
+        faces.emplace_back(TriangleIdx(i+3, (i+1)%3+6, (i+1)%3+3));
+    }
+    for (int i = 6; i < 9; ++i) {
+        faces.emplace_back(TriangleIdx(i, i+3, (i+1)%3+6));
+        faces.emplace_back(TriangleIdx(i+3, (i+1)%3+9, (i+1)%3+6));
+    }
+    faces.emplace_back(TriangleIdx(10, 9, 11));
+
+    return new Geometry(vertexes, faces);
+}
+
