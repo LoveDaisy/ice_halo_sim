@@ -14,41 +14,31 @@ class SimulationContext;
 class OrientationGenerator
 {
 public:
-    enum class AxisDistribution
+    enum class Distribution
     {
-        AX_SPH_UNIFORM,
-        AX_ZENITHAL_GAUSS,
-        AX_HOR_GAUSS
-    };
-
-    enum class RollDistribution
-    {
-        ROLL_UNIFORM,
-        ROLL_HOR_GAUSS
+        UNIFORM,
+        GAUSS
     };
 
 public:
-    OrientationGenerator();
-    OrientationGenerator(AxisDistribution ax, float axStd, RollDistribution roll, float rollStd);
+    // OrientationGenerator();
+    OrientationGenerator(Distribution axDist, float axMean, float axStd, 
+        Distribution rollDist, float rollMean, float rollStd);
     ~OrientationGenerator() = default;
 
     void fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot);
-
-    // void setAxisDistribution(AxisDistribution axisDist, float std);
-    // void setRollDistribution(RollDistribution rollDist, float std);
-
-    // void setAxisOrientation(AxisDistribution ax, float axStd);
-    // void setAxisRoll(RollDistribution roll, float rollStd);
 
 private:
     std::mt19937 generator;
     std::normal_distribution<float> gaussDistribution;
     std::uniform_real_distribution<float> uniformDistribution;
 
-    AxisDistribution axDist;
-    RollDistribution rollDist;
-
+    Distribution axDist;
+    float axMean;
     float axStd;
+
+    Distribution rollDist;
+    float rollMean;
     float rollStd;
 };
 
@@ -116,8 +106,8 @@ public:
     ~CrystalContext();
 
     void addGeometry(Geometry *g, float populationWeight,
-                     OrientationGenerator::AxisDistribution axisDist, float axisStd,
-                     OrientationGenerator::RollDistribution rollDist, float rollStd);
+                     OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
+                     OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
 
     Geometry * getCrystal(int i);
     int getRayNum(int i);

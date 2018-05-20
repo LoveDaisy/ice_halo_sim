@@ -4,33 +4,15 @@
 #include <unordered_set>
 
 
-OrientationGenerator::OrientationGenerator(AxisDistribution ax, float axStd, RollDistribution roll, float rollStd) :
-    axDist(ax), rollDist(roll),
-    axStd(axStd), rollStd(rollStd)
+OrientationGenerator::OrientationGenerator(Distribution axDist, float axMean, float axStd, 
+        Distribution rollDist, float rollMean, float rollStd) :
+    axDist(axDist), axMean(axMean), axStd(axStd), 
+    rollDist(rollDist), rollMean(rollMean), rollStd(rollStd)
 {
     unsigned int seed = static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count());
     // unsigned int seed = 2345;
     generator.seed(seed);
 }
-
-
-OrientationGenerator::OrientationGenerator() :
-        OrientationGenerator(AxisDistribution::AX_HOR_GAUSS, 0.0f, RollDistribution::ROLL_HOR_GAUSS, 0.0f)
-{ }
-
-
-// void OrientationGenerator::setAxisDistribution(AxisDistribution axisDist, float std)
-// {
-//     this->axDist = axisDist;
-//     this->axStd = std;
-// }
-
-
-// void OrientationGenerator::setRollDistribution(RollDistribution rollDist, float std)
-// {
-//     this->rollDist = rollDist;
-//     this->rollStd = rollStd;
-// }
 
 
 void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot)
@@ -49,7 +31,7 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
         float lon, lat, roll;
 
         switch (axDist) {
-            case AxisDistribution::AX_SPH_UNIFORM : {
+            case Distribution::UNIFORM : {
                 float v[3] = {gaussDistribution(generator),
                               gaussDistribution(generator),
                               gaussDistribution(generator)};
@@ -58,23 +40,22 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
                 lat = std::asin(v[2] / LinearAlgebra::norm3(v));
             }
                 break;
-            case AxisDistribution::AX_HOR_GAUSS :
+            case Distribution::GAUSS :
                 lon = uniformDistribution(generator) * 2 * Geometry::PI;
                 lat = gaussDistribution(generator) * axStd;
-                break;
-            case AxisDistribution::AX_ZENITHAL_GAUSS :
-                // TODO this implementation may be NOT right
-                lon = uniformDistribution(generator) * 2 * Geometry::PI;
-                lat = Geometry::PI / 2 - std::abs(gaussDistribution(generator) * axStd);
+                lat += axMean;
+                if (lat > Geometry::PI/2) {
+                    lat = 2.0f*Geometry::PI - lat;
+                }
                 break;
         }
 
         switch (rollDist) {
-            case RollDistribution::ROLL_HOR_GAUSS :
-                roll = gaussDistribution(generator) * rollStd;
+            case Distribution::GAUSS :
+                roll = gaussDistribution(generator) * rollStd + rollMean;
                 break;
-            case RollDistribution::ROLL_UNIFORM :
-                roll = uniformDistribution(generator) * 2 * Geometry::PI;
+            case Distribution::UNIFORM :
+                roll = (uniformDistribution(generator) - 0.5f) * rollStd + rollMean;
                 break;
         }
 
@@ -98,19 +79,6 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
     }
 }
 
-
-// void OrientationGenerator::setAxisOrientation(AxisDistribution ax, float axStd)
-// {
-//     this->axDist = ax;
-//     this->axStd = axStd;
-// }
-
-
-// void OrientationGenerator::setAxisRoll(RollDistribution roll, float rollStd)
-// {
-//     this->rollDist = roll;
-//     this->rollStd = rollStd;
-// }
 
 
 RaySegmentFactory * RaySegmentFactory::instance = nullptr;
@@ -188,9 +156,9 @@ float EnvironmentContext::getWavelength()
 
 void EnvironmentContext::setSunPosition(float lon, float lat)
 {
-    float x = -std::cos(lat) * std::cos(lon);
-    float y = -std::cos(lat) * std::sin(lon);
-    float z = -std::sin(lat);
+    float x = -std::cos(lat * Geometry::PI / 180.0f) * std::cos(lon * Geometry::PI / 180.0f);
+    float y = -std::cos(lat * Geometry::PI / 180.0f) * std::sin(lon * Geometry::PI / 180.0f);
+    float z = -std::sin(lat * Geometry::PI / 180.0f);
 
     this->sunDir[0] = x;
     this->sunDir[1] = y;
@@ -220,12 +188,13 @@ CrystalContext::~CrystalContext()
 
 void CrystalContext::addGeometry(
     Geometry *g, float populationWeight,
-    OrientationGenerator::AxisDistribution axisDist, float axisStd,
-    OrientationGenerator::RollDistribution rollDist, float rollStd)
+    OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
+    OrientationGenerator::Distribution rollDist, float rollMean, float rollStd)
 {
     crystals.push_back(g);
     populationWeights.push_back(populationWeight);
-    oriGens.emplace_back(axisDist, axisStd, rollDist, rollStd);
+    oriGens.emplace_back(axisDist, axisMean * Geometry::PI / 180.0f, axisStd * Geometry::PI / 180.0f,
+                         rollDist, rollMean * Geometry::PI / 180.0f, rollStd * Geometry::PI / 180.0f);
     rayNums.push_back(0);
     rayTracingCtxs.push_back(new RayTracingContext());
 }
