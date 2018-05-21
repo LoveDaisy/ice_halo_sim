@@ -1,0 +1,24 @@
+{
+    "sun": {
+        "altitude": 1
+    },
+    "ray_number": 100000,
+    "max_recursion": 9,
+    "crystal": [
+        {
+            "type": "CubicPyramid",
+            "parameter": [0.8, 1.2],
+            "axis": {
+                "mean": 35.25,
+                "std": 14,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 2.6,
+                "type": "Uniform"
+            },
+            "population": 2000
+        }
+    ]
+}
