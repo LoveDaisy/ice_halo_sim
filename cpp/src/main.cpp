@@ -15,8 +15,8 @@ int main(int argc, char *argv[])
     context.setTotalRayNum(1000000);
     context.setMaxRecursionNum(9);
     context.envCtx->setSunPosition(90.0f, 1.0f);
-    context.crystalCtx->addGeometry(Geometry::createHexPyramidStackHalf(1, 1, 3, 2, 1.2f, 0.6f, 0.f), 2.0f,
-                                    OrientationGenerator::Distribution::GAUSS, -90.f, 14.0f,
+    context.crystalCtx->addGeometry(Geometry::createHexPyramidStackHalf(1, 1, 3, 2, 1.5f, 0.12f, 0.3f), 2.0f,
+                                    OrientationGenerator::Distribution::GAUSS, 90.f, 15.0f,
                                     OrientationGenerator::Distribution::UNIFORM, 0.0f, 360.f);
     // context.crystalCtx->addGeometry(Geometry::createHexPyramid(0.31f, 0.f, 1.30), 3.0f,
     //                                 OrientationGenerator::Distribution::GAUSS, 0.0f, 3.4f,
@@ -54,6 +54,7 @@ int main(int argc, char *argv[])
 
         wl += 30.0f;
     }
+    context.printCrystalInfo();
 
     auto end = std::chrono::system_clock::now();
     diff = end - start;

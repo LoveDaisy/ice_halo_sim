@@ -141,7 +141,7 @@ public:
     void writeFinalDirections(const char *filename);
     void writeRayInfo(const char *filename, float lon, float lat, float delta);
     void writeRayInfo(std::FILE *file, Ray *r);
-    void writeCrystalInfo(const char* filename);
+    void printCrystalInfo();
 
     CrystalContext *crystalCtx;
     EnvironmentContext *envCtx;

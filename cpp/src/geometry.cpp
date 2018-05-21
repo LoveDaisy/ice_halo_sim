@@ -593,12 +593,12 @@ Geometry* Geometry::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int 
     float H1 = 1.0f * upperIdx1 / upperIdx4 * 1.6288f;
     float H2 = 1.0f * lowerIdx1 / lowerIdx4 * 1.6288f;
     h2 = std::min(H2, h2);
-    h1 = std::min((1 - h2 / H2) * H1, h1);
+    h1 = std::min((1.0f - h2 / H2) * H1, h1);
     
     std::vector<Vec3f> vertexes;
     std::vector<TriangleIdx> faces;
     vertexes.reserve(24);
-    float r = 1.0f - h2 / H2 - (1.0f - h2 / H2) * h1 / H1;
+    float r = 1.0f - h2 / H2 - h1 / H1;
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
             std::cos(2*PI*i/6) * r, 
@@ -610,13 +610,13 @@ Geometry* Geometry::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int 
         vertexes.emplace_back(Vec3f(
             std::cos(2*PI*i/6) * r, 
             std::sin(2*PI*i/6) * r, 
-            h1 + h2));
+            h3 + h2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
             std::cos(2*PI*i/6), 
             std::sin(2*PI*i/6), 
-            h1));
+            h3));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
