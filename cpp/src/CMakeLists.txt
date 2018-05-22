@@ -10,7 +10,7 @@ set(CMAKE_CXX_FLAGS "-Wall -Wextra -msse4 -pthread -std=c++11")
 set(CMAKE_CXX_FLAGS_DEBUG "-g")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 
-set(executable_output_path ${PROJECT_BINARY_DIR}/bin)
+# set(executable_output_path ${PROJECT_BINARY_DIR}/bin)
 
 # path to distribution of halide
 set(HALIDE_DISTRIB_DIR "/Users/zhangjiajie/Codes/Halide/halide")
@@ -19,15 +19,11 @@ if(NOT DEFINED HALIDE_DISTRIB_DIR)
 elseif(NOT IS_DIRECTORY ${HALIDE_DISTRIB_DIR})
     message(FATAL_ERROR "HALIDE_DISTRIB_DIR is not valid directory.")
 endif()
-# set(HALIDE_DISTRIB_USE_STATIC_LIBRARY TRUE)
 include("${HALIDE_DISTRIB_DIR}/halide.cmake")
 
-# if(NOT DEFINED HALIDE_MACHINE_PARAMS)
-#     set(HALIDE_MACHINE_PARAMS "8,8192,40")
-# endif()
+include_directories(${INCLUDE_DIRECTORIES} "${PROJECT_SOURCE_DIR}/rapidjson/include")
 
 find_package(Threads)
-# find_package(Gperftools)
 
 halide_library(ray_hit
     SRCS ray_hit_generator.cpp

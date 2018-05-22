@@ -5,58 +5,37 @@ This is a personal project for ice halo simulation. It is inspired by
 the author seems have stopped developing.
 
 For a start this program is written in matlab though matlab is often poured scorn on for its
-slow performance. It is a prototype, on which I test my algorithms.
+slow performance. It is a prototype, on which I test my algorithms. Later developing and
+latest updates will be on C++ codes.
 
-You can start from `matlab/ray_tracing_main.m`.
+* [Matlab version](matlab)
 
-## Matlab version
+* [C++ version](cpp)
 
-### What can these codes do?
+## Acknowledgement
 
-* It can do ray tracing with several specific ice crystal shape (see next section) and display the result.
-* Arbitrary orientation of crystals, including uniform distributed in an angle range, uniform distributed on a sphere,
-  Gaussian distributed with given mean and standard deviation.
-* Multi-wave result visualization. It reads the binary file produced by C++ version and visulize the result. 
-  It depends on my another project [Spectral Renderer](https://github.com/LoveDaisy/spec_render).
-<img src="figs/sim_screenshot.png" width="400">
+1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/)
+2. [Halide](http://halide-lang.org/)
+3. [Rapidjson](http://rapidjson.org/index.html)
 
-### Supported ice crystal shape.
 
-* [Hexagonal cylinder/plate](https://www.atoptics.co.uk/halo/platcol.htm). 
-  Shape parameters are: `ratio = height / radii`.
-* [Pyramidal cylinder](https://www.atoptics.co.uk/halo/crystpyr.htm). 
-  Shape parameters are: `ratios = [height1, height2, height3] / radii`, 
-  where heights are measured along c-axis, from top to bottom.
+# 冰晕模拟程序
 
-### TODO list
+本项目是一个个人项目, 受到 [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) 的启发.
+但不幸的是 HaloPoint 原作者似乎停止更新了.
 
-* Add more crystal shapes.
-* Add custom crystal shapes. Maybe compact with `.obj` file format.
+最开始我是从 matlab 代码开始的, 虽然 matlab 经常被人吐槽很慢, 但其实用于开发原型和验证算法来说足够了.
+这个项目设计大量的矩阵和向量计算, 恰恰是 matlab 擅长的.
 
-## C++ version
+在 matlab 代码上验证了算法后, 后续开发都将在 C++ 代码上进行.
 
-Also I start a C++ project for higher performance. Currently the C++ version is just 
-pieces of toy codes and can only run from command.
+* [Matlab 代码](matlab)
 
-With integration of [Halide](http://halide-lang.org/) I can accelarate these codes by parallelism.
+* [C++ 代码](cpp/README_zh.md)
 
-### Build
+## 致谢
 
-It is built with CMake. Before start you should install a Halide distribution up to your
-OS platform (see their offical site: [Halide](http://halide-lang.org/)). Then modifies corresponding
-CMake variables (see comments in CMakeLists.txt). Now you can just start as follows:
+1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/)
+2. [Halide](http://halide-lang.org/)
+3. [Rapidjson](http://rapidjson.org/index.html)
 
-```shell
-$ cd cpp/
-$ mkdir build
-$ cd build/
-$ cmake .. && make
-```
-
-You probably will meet a link error when you try to link Halide library, and [this issue](https://github.com/halide/Halide/issues/2821) may help.
-
-### TODO list
-
-* Use OpenCL / OpenGL / CUDA to accelerate. Since I've seen good enough performance with integration of
-  Halide, I doubt the margin to more acceleration.
-* Write a GUI for these code (maybe Qt is a good choice).
