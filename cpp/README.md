@@ -23,25 +23,21 @@ It is file containing all configurations. It uses JSON format. It must containts
 
 ### Basic infomation for simulation
 
-* `sun`
-
+* `sun`:
 It only contains one attribute, `altitude`, defining the altitude of the sun.
 
-* `ray_number`
-
+* `ray_number`:
 The total ray number for simulation. Note that even with a single ray input, it may result in multiple
 rays output, due to reflections and refractions in crystal. This `ray_number` defines the input ray number,
 but not output ray number.
 
-* `max_recursion`
-
+* `max_recursion`:
 It defines the max number that a ray hits a surface during a simulation. If a ray hits more than this number
 and still doesn't leave the crystal, it will be dropped.
 
 ### Crystal settings
 
-* `type` and `parameter`
-
+* `type` and `parameter`:
 Currently I create 5 shapes, `HexCylinder`, `HexPyramid`, `HexPyramidStackHalf`, `TriPyramid`, `CubicPyramid`.
 Each shape has its own shape parameters.
 
@@ -66,8 +62,7 @@ May have 3, 5, or 7 parameters.
 
 2 parameters.
 
-* `axis` and `roll`
-
+* `axis` and `roll`:
 These two fields defines the orientation of crystals. `axis` defines the c-axis orientation, and `roll`
 defines the rotation around c-axis.
 
@@ -79,8 +74,7 @@ it is the standard deviation, and for uniform distribution, it defines the value
 
 All angles are in degrees.
 
-* `population`
-
+* `population`:
 It defines how many crystals used in a simulation. Note that it is not the actual number, just for a
 ratio. So if one crystal set to 2.0 and the other set to 3.0, it is equivalent to set one to 20 and
 the other to 30.
