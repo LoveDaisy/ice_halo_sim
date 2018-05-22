@@ -12,7 +12,7 @@ latest updates will be on C++ codes.
 
 * [C++ version](cpp)
 
-## Acknowledgement
+## Acknowledgements
 
 1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/)
 2. [Halide](http://halide-lang.org/)
