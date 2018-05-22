@@ -87,13 +87,14 @@ public:
 
     void writeFinalDirections(const char *filename);
     void writeRayInfo(const char *filename, float lon, float lat, float delta);
-    void writeRayInfo(std::FILE *file, Ray *r);
     void printCrystalInfo();
 
     CrystalContext *crystalCtx;
     EnvironmentContext *envCtx;
     
 private:
+    void writeRayInfo(std::FILE *file, Ray *r);
+
     uint64_t totalRayNum;
     int maxRecursionNum;
 
@@ -108,12 +109,21 @@ class ContextParser
 public:
     ~ContextParser() = default;
 
-    int parseSettings(SimulationContext &ctx);
+    void parseSettings(SimulationContext &ctx);
 
     static ContextParser * getFileParser(const char* filename);
 
 private:
-    ContextParser(rapidjson::Document &d);
+    explicit ContextParser(rapidjson::Document &d);
+
+    void parseRayNumber(SimulationContext &ctx);
+    void parseMaxRecursion(SimulationContext &ctx);
+    void parseSunSetting(SimulationContext &ctx);
+    void parseCrystalSetting(SimulationContext &ctx, const rapidjson::Value &c, int ci);
+    void parseCrystalType(SimulationContext &ctx, const rapidjson::Value &c, int ci,
+        float population,
+        OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
+        OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
 
     rapidjson::Document d;
 };

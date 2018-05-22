@@ -403,7 +403,7 @@ ContextParser * ContextParser::getFileParser(const char* filename)
 }
 
 
-int ContextParser::parseSettings(SimulationContext &ctx)
+void ContextParser::parseRayNumber(SimulationContext &ctx)
 {
     using namespace rapidjson;
 
@@ -418,22 +418,16 @@ int ContextParser::parseSettings(SimulationContext &ctx)
         rayNumber = p->GetUint();
     }
     ctx.setTotalRayNum(rayNumber);
+}
 
-    // Parsing max recursion number
-    int maxRecursionNum = 9;
-    p = Pointer("/max_recursion").Get(d);
-    if (p == nullptr) {
-        fprintf(stderr, "\nWARNING! Config missing <max_recursion>, using default 9!\n");
-    } else if (!p->IsUint()) {
-        fprintf(stderr, "\nWARNING! config <max_recursion> is not unsigned int, using default 10000!\n");
-    } else {
-        maxRecursionNum = p->GetInt();
-    }
-    ctx.setMaxRecursionNum(maxRecursionNum);
+
+void ContextParser::parseMaxRecursion(SimulationContext &ctx)
+{
+    using namespace rapidjson;
 
     // Parsing sun altitude
     float sunAltitude = 0.0f;
-    p = Pointer("/sun/altitude").Get(d);
+    auto *p = Pointer("/sun/altitude").Get(d);
     if (p == nullptr) {
         fprintf(stderr, "\nWARNING! Config missing <sun.altitude>, using default 0.0!\n");
     } else if (!p->IsNumber()) {
@@ -442,100 +436,244 @@ int ContextParser::parseSettings(SimulationContext &ctx)
         sunAltitude = static_cast<float>(p->GetDouble());
     }
     ctx.envCtx->setSunPosition(90.0f, sunAltitude);
+}
 
-    int ci = 0;
-    for (Value &c : Pointer("/crystal").Get(d)->GetArray()) {
-        OrientationGenerator::Distribution axisDist, rollDist;
-        float axisMean, rollMean;
-        float axisStd, rollStd;
 
-        if (*(Pointer("/axis/type").Get(c)) == "Gauss") {
-            axisDist = OrientationGenerator::Distribution::GAUSS;
-        } else if (*(Pointer("/axis/type").Get(c)) == "Uniform") {
-            axisDist = OrientationGenerator::Distribution::UNIFORM;
-        } else {
-            fprintf(stderr, "\nError! <crystal[%d].axis.type> cannot recgonize! Exit.\n", ci);
-            return -1;
-        }
+void ContextParser::parseSunSetting(SimulationContext &ctx)
+{
+    using namespace rapidjson;
 
-        if (*(Pointer("/roll/type").Get(c)) == "Gauss") {
-            rollDist = OrientationGenerator::Distribution::GAUSS;
-        } else if (*(Pointer("/roll/type").Get(c)) == "Uniform") {
-            rollDist = OrientationGenerator::Distribution::UNIFORM;
-        } else {
-            fprintf(stderr, "\nError! <crystal[%d].roll.type> cannot recgonize! Exit.\n", ci);
-            return -1;
-        }
+    // Parsing sun altitude
+    float sunAltitude = 0.0f;
+    auto *p = Pointer("/sun/altitude").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <sun.altitude>, using default 0.0!\n");
+    } else if (!p->IsNumber()) {
+        fprintf(stderr, "\nWARNING! config <sun.altitude> is not a number, using default 0.0!\n");
+    } else {
+        sunAltitude = static_cast<float>(p->GetDouble());
+    }
+    ctx.envCtx->setSunPosition(90.0f, sunAltitude);
+}
 
-        axisMean = static_cast<float>(90 - Pointer("/axis/mean").Get(c)->GetDouble());
-        axisStd = static_cast<float>(Pointer("/axis/std").Get(c)->GetDouble());
-        rollMean = static_cast<float>(Pointer("/roll/mean").Get(c)->GetDouble());
-        rollStd = static_cast<float>(Pointer("/roll/std").Get(c)->GetDouble());
 
-        float population = static_cast<float>(Pointer("/population").Get(c)->GetDouble());
+void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson::Value &c, int ci)
+{
+    using namespace rapidjson;
 
-        if (c["type"] == "HexCylindar") {
-            /* HexCylindar */
+    OrientationGenerator::Distribution axisDist, rollDist;
+    float axisMean, rollMean;
+    float axisStd, rollStd;
 
-            float h = static_cast<float>(Pointer("/parameter").Get(c)->GetDouble());
-            ctx.crystalCtx->addGeometry(Geometry::createHexCylinder(h), population,
-                axisDist, axisMean, axisStd,
-                rollDist, rollMean, rollStd);
+    char msgBuffer[512];
 
-        } else if (c["type"] == "HexPyramid") {
-            /* HexPyramid */
-
-            const Value *p = Pointer("/parameter").Get(c);
-            if (p->Size() == 3) {
-                float h1 = static_cast<float>((*p)[0].GetDouble());
-                float h2 = static_cast<float>((*p)[1].GetDouble());
-                float h3 = static_cast<float>((*p)[2].GetDouble());
-                ctx.crystalCtx->addGeometry(Geometry::createHexPyramid(h1, h2, h3), population,
-                    axisDist, axisMean, axisStd,
-                    rollDist, rollMean, rollStd);
-            } else if (p->Size() == 5) {
-                int i1 = (*p)[0].GetInt();
-                int i2 = (*p)[1].GetInt();
-                float h1 = static_cast<float>((*p)[2].GetDouble());
-                float h2 = static_cast<float>((*p)[3].GetDouble());
-                float h3 = static_cast<float>((*p)[4].GetDouble());
-                ctx.crystalCtx->addGeometry(Geometry::createHexPyramid(i1, i2, h1, h2, h3), population,
-                    axisDist, axisMean, axisStd,
-                    rollDist, rollMean, rollStd);
-            } else if (p->Size() == 7) {
-                int upperIdx1 = (*p)[0].GetInt();
-                int upperIdx2 = (*p)[1].GetInt();
-                int lowerIdx1 = (*p)[2].GetInt();
-                int lowerIdx2 = (*p)[3].GetInt();
-                float h1 = static_cast<float>((*p)[4].GetDouble());
-                float h2 = static_cast<float>((*p)[5].GetDouble());
-                float h3 = static_cast<float>((*p)[6].GetDouble());
-                ctx.crystalCtx->addGeometry(Geometry::createHexPyramid(upperIdx1, upperIdx2, lowerIdx1, 
-                    lowerIdx2, h1, h2, h3), population,
-                    axisDist, axisMean, axisStd,
-                    rollDist, rollMean, rollStd);
-            } else {
-                fprintf(stderr, "\nERROR! <crystal[%d].parameter> number not match! Exit!\n", ci);
-                return -1;
-            }
-        } else if (c["type"] == "CubicPyramid") {
-            /* CubicPyramid */
-
-            const Value *p = Pointer("/parameter").Get(c);
-            if (p->Size() == 2) {
-                float h1 = static_cast<float>((*p)[0].GetDouble());
-                float h2 = static_cast<float>((*p)[1].GetDouble());
-                ctx.crystalCtx->addGeometry(Geometry::createCubicPyramid(h1, h2), population,
-                    axisDist, axisMean, axisStd,
-                    rollDist, rollMean, rollStd);
-            } else {
-                fprintf(stderr, "\nERROR! <crystal[%d].parameter> number not match! Exit!\n", ci);
-                return -1;
-            }
-        }
-
-        ci++;
+    auto *p = Pointer("/axis/type").Get(c);
+    if (p == nullptr || !p->IsString()) {
+        sprintf(msgBuffer, "<crystal[%d].axis.type> cannot recgonize!", ci);
+        throw std::invalid_argument(msgBuffer);
+    } else if (*p == "Gauss") {
+        axisDist = OrientationGenerator::Distribution::GAUSS;
+    } else if (*p == "Uniform") {
+        axisDist = OrientationGenerator::Distribution::UNIFORM;
+    } else {
+        sprintf(msgBuffer, "<crystal[%d].axis.type> cannot recgonize!", ci);
+        throw std::invalid_argument(msgBuffer);
     }
 
-    return 0;
+    p = Pointer("/roll/type").Get(c);
+    if (p == nullptr || !p->IsString()) {
+        sprintf(msgBuffer, "<crystal[%d].roll.type> cannot recgonize!", ci);
+        throw std::invalid_argument(msgBuffer);
+    } else if (*p == "Gauss") {
+        rollDist = OrientationGenerator::Distribution::GAUSS;
+    } else if (*p == "Uniform") {
+        rollDist = OrientationGenerator::Distribution::UNIFORM;
+    } else {
+        sprintf(msgBuffer, "<crystal[%d].roll.type> cannot recgonize!", ci);
+        throw std::invalid_argument(msgBuffer);
+    }
+
+    p = Pointer("/axis/mean").Get(c);
+    if (p == nullptr || !p->IsNumber()) {
+        sprintf(msgBuffer, "<crystal[%d].axis.mean> cannot recgonize!", ci);
+        throw std::invalid_argument(msgBuffer);
+    } else {
+        axisMean = static_cast<float>(90 - p->GetDouble());
+    }
+
+    p = Pointer("/axis/std").Get(c);
+    if (p == nullptr || !p->IsNumber()) {
+        sprintf(msgBuffer, "<crystal[%d].axis.std> cannot recgonize!", ci);
+        throw std::invalid_argument(msgBuffer);
+    } else {
+        axisStd = static_cast<float>(p->GetDouble());
+    }
+
+    p = Pointer("/roll/mean").Get(c);
+    if (p == nullptr || !p->IsNumber()) {
+        sprintf(msgBuffer, "<crystal[%d].roll.mean> cannot recgonize!", ci);
+        throw std::invalid_argument(msgBuffer);
+    } else {
+        rollMean = static_cast<float>(p->GetDouble());
+    }
+
+    p = Pointer("/roll/std").Get(c);
+    if (p == nullptr || !p->IsNumber()) {
+        sprintf(msgBuffer, "<crystal[%d].roll.std> cannot recgonize!", ci);
+        throw std::invalid_argument(msgBuffer);
+    } else {
+        rollStd = static_cast<float>(p->GetDouble());
+    }
+
+    float population = 1.0;
+    p = Pointer("/population").Get(c);
+    if (p == nullptr || !p->IsNumber()) {
+        fprintf(stderr, "\nWARNING! <crystal[%d].population> cannot recgonize, using default 1.0!\n", ci);
+    } else {
+        population = static_cast<float>(p->GetDouble());
+    }
+
+    p = Pointer("/type").Get(c);
+    if (p == nullptr || !p->IsString()) {
+        sprintf(msgBuffer, "<crystal[%d].type> cannot recgonize!", ci);
+        throw std::invalid_argument(msgBuffer);
+    } else {
+        parseCrystalType(ctx, c, ci, population, axisDist, axisMean, axisStd, rollDist, rollMean, rollStd);
+    }
+}
+
+void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Value &c, int ci,
+    float population,
+    OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
+    OrientationGenerator::Distribution rollDist, float rollMean, float rollStd)
+{
+    using namespace rapidjson;
+
+    char msgBuffer[512];
+
+    const auto *p = Pointer("/parameter").Get(c);
+    if (c["type"] == "HexCylinder") {
+        if (p == nullptr || !p->IsNumber()) {
+            sprintf(msgBuffer, "<crystal[%d].parameter> cannot recgonize!", ci);
+            throw std::invalid_argument(msgBuffer);
+        }
+        float h = static_cast<float>(p->GetDouble());
+        ctx.crystalCtx->addGeometry(Geometry::createHexCylinder(h), population,
+            axisDist, axisMean, axisStd,
+            rollDist, rollMean, rollStd);
+    } else if (c["type"] == "HexPyramid") {
+        if (p == nullptr || !p->IsArray()) {
+            sprintf(msgBuffer, "<crystal[%d].parameter> cannot recgonize!", ci);
+            throw std::invalid_argument(msgBuffer);
+        } else if (p->Size() == 3) {
+            float h1 = static_cast<float>((*p)[0].GetDouble());
+            float h2 = static_cast<float>((*p)[1].GetDouble());
+            float h3 = static_cast<float>((*p)[2].GetDouble());
+            ctx.crystalCtx->addGeometry(Geometry::createHexPyramid(h1, h2, h3), population,
+                axisDist, axisMean, axisStd,
+                rollDist, rollMean, rollStd);
+        } else if (p->Size() == 5) {
+            int i1 = (*p)[0].GetInt();
+            int i2 = (*p)[1].GetInt();
+            float h1 = static_cast<float>((*p)[2].GetDouble());
+            float h2 = static_cast<float>((*p)[3].GetDouble());
+            float h3 = static_cast<float>((*p)[4].GetDouble());
+            ctx.crystalCtx->addGeometry(Geometry::createHexPyramid(i1, i2, h1, h2, h3), population,
+                axisDist, axisMean, axisStd,
+                rollDist, rollMean, rollStd);
+        } else if (p->Size() == 7) {
+            int upperIdx1 = (*p)[0].GetInt();
+            int upperIdx2 = (*p)[1].GetInt();
+            int lowerIdx1 = (*p)[2].GetInt();
+            int lowerIdx2 = (*p)[3].GetInt();
+            float h1 = static_cast<float>((*p)[4].GetDouble());
+            float h2 = static_cast<float>((*p)[5].GetDouble());
+            float h3 = static_cast<float>((*p)[6].GetDouble());
+            ctx.crystalCtx->addGeometry(Geometry::createHexPyramid(upperIdx1, upperIdx2, lowerIdx1, 
+                lowerIdx2, h1, h2, h3), population,
+                axisDist, axisMean, axisStd,
+                rollDist, rollMean, rollStd);
+        } else {
+            sprintf(msgBuffer, "<crystal[%d].parameter> number doesn't match!", ci);
+            throw std::invalid_argument(msgBuffer);
+        }
+    } else if (c["type"] == "HexPyramidStackHalf") {
+        if (p == nullptr || !p->IsArray()) {
+            sprintf(msgBuffer, "<crystal[%d].parameter> cannot recgonize!", ci);
+            throw std::invalid_argument(msgBuffer);
+        } else if (p->Size() == 7) {
+            int upperIdx1 = (*p)[0].GetInt();
+            int upperIdx2 = (*p)[1].GetInt();
+            int lowerIdx1 = (*p)[2].GetInt();
+            int lowerIdx2 = (*p)[3].GetInt();
+            float h1 = static_cast<float>((*p)[4].GetDouble());
+            float h2 = static_cast<float>((*p)[5].GetDouble());
+            float h3 = static_cast<float>((*p)[6].GetDouble());
+            ctx.crystalCtx->addGeometry(Geometry::createHexPyramidStackHalf(upperIdx1, upperIdx2, lowerIdx1, 
+                lowerIdx2, h1, h2, h3), population,
+                axisDist, axisMean, axisStd,
+                rollDist, rollMean, rollStd);
+        } else {
+            sprintf(msgBuffer, "<crystal[%d].parameter> number doesn't match!", ci);
+            throw std::invalid_argument(msgBuffer);
+        }
+    } else if (c["type"] == "TriPyramid") {
+        if (p == nullptr || !p->IsArray()) {
+            sprintf(msgBuffer, "<crystal[%d].parameter> cannot recgonize!", ci);
+            throw std::invalid_argument(msgBuffer);
+        } else if (p->Size() == 5) {
+            int i1 = (*p)[0].GetInt();
+            int i2 = (*p)[1].GetInt();
+            float h1 = static_cast<float>((*p)[2].GetDouble());
+            float h2 = static_cast<float>((*p)[3].GetDouble());
+            float h3 = static_cast<float>((*p)[4].GetDouble());
+            ctx.crystalCtx->addGeometry(Geometry::createTriPyramid(i1, i2, h1, h2, h3), population,
+                axisDist, axisMean, axisStd,
+                rollDist, rollMean, rollStd);
+        } else {
+            sprintf(msgBuffer, "<crystal[%d].parameter> number doesn't match!", ci);
+            throw std::invalid_argument(msgBuffer);
+        }
+    } else if (c["type"] == "CubicPyramid") {
+        if (p == nullptr || !p->IsArray()) {
+            sprintf(msgBuffer, "<crystal[%d].parameter> cannot recgonize!", ci);
+            throw std::invalid_argument(msgBuffer);
+        } else if (p->Size() == 2) {
+            float h1 = static_cast<float>((*p)[0].GetDouble());
+            float h2 = static_cast<float>((*p)[1].GetDouble());
+            ctx.crystalCtx->addGeometry(Geometry::createCubicPyramid(h1, h2), population,
+                axisDist, axisMean, axisStd,
+                rollDist, rollMean, rollStd);
+        } else {
+            sprintf(msgBuffer, "<crystal[%d].parameter> number doesn't match!", ci);
+            throw std::invalid_argument(msgBuffer);
+        }
+    } else {
+        sprintf(msgBuffer, "<crystal[%d].type> cannot recgonize!", ci);
+        throw std::invalid_argument(msgBuffer);
+    }
+}
+
+
+void ContextParser::parseSettings(SimulationContext &ctx)
+{
+    using namespace rapidjson;
+
+    char msgBuffer[512];
+
+    parseRayNumber(ctx);
+    parseMaxRecursion(ctx);
+    parseSunSetting(ctx);
+
+    const auto *p = Pointer("/crystal").Get(d);
+    if (p == nullptr || !p->IsArray()) {
+        sprintf(msgBuffer, "Missing <crystal>. Parsing fail!");
+        throw std::invalid_argument(msgBuffer);
+    }
+
+    int ci = 0;
+    for (const Value &c : p->GetArray()) {
+        parseCrystalSetting(ctx, c, ci);
+        ci++;
+    }
 }

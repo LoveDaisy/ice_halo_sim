@@ -1,21 +1,11 @@
-#include <vector>
 #include <chrono>
-#include <thread>
 
-#include "geometry.h"
 #include "optics.h"
 #include "context.h"
-
-#include "rapidjson/document.h"
-#include "rapidjson/filereadstream.h"
-#include "rapidjson/error/en.h"
-#include "rapidjson/pointer.h"
 
 
 int main(int argc, char *argv[])
 {
-    using namespace rapidjson;
-
     if (argc != 2) {
         printf("USAGE: %s <config-file>\n", argv[0]);
         return -1;
@@ -25,10 +15,14 @@ int main(int argc, char *argv[])
 
     ContextParser *parser = ContextParser::getFileParser(argv[1]);
     SimulationContext context;
-    if (parser->parseSettings(context) != 0) {
+    try {
+        parser->parseSettings(context);
+    } catch (std::invalid_argument e) {
+        fprintf(stderr, "Parsing error! Exit!\n Message: %s\n", e.what());
         return -1;
     }
     context.applySettings();
+    delete parser;
 
     auto t = std::chrono::system_clock::now();
     std::chrono::duration<double> diff = t - start;

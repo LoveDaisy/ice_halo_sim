@@ -15,17 +15,17 @@
             },
             "roll": {
                 "mean": 0,
-                "std": 2.6,
+                "std": 8,
                 "type": "Gauss"
             },
             "population": 2000
         },
         {
             "type": "HexPyramid",
-            "parameter": [3, 2, 1, 1, 0.3, 0.0, 0.9],
+            "parameter": [3, 2, 1, 1, 0.3, 0, 0.9],
             "axis": {
                 "mean": 0,
-                "std": 10,
+                "std": 5,
                 "type": "Gauss"
             },
             "roll": {
@@ -34,6 +34,21 @@
                 "type": "Uniform"
             },
             "population": 5000
+        },
+        {
+            "type": "HexCylinder",
+            "parameter": 1.2,
+            "axis": {
+                "mean": 90,
+                "std": 0.5,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 500
         }
     ]
 }
