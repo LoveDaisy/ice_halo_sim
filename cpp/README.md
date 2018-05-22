@@ -42,20 +42,16 @@ Currently I create 5 shapes, `HexCylinder`, `HexPyramid`, `HexPyramidStackHalf`,
 Each shape has its own shape parameters.
 
   * `HexCylinder`:
-Only 1 parameter, `h`, defines `h / a` where `h` is the cylinder height, `a` is the diameter along
+  Only 1 parameter, `h`, defines `h / a` where `h` is the cylinder height, `a` is the diameter along
 a-axis.
-
   * `HexPyramid`:
-May have 3, 5, or 7 parameters.
-
+  May have 3, 5, or 7 parameters.
   * `HexPyramidStackHalf`:
-7 parameters.
-
+  7 parameters.
   * `TriPyramid`:
-5 parameters.
-
+  5 parameters.
   * `CubicPyramid`:
-2 parameters.
+  2 parameters.
 
 * `axis` and `roll`:
 These two fields defines the orientation of crystals. `axis` defines the c-axis orientation, and `roll`
