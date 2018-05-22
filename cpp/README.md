@@ -16,7 +16,7 @@ This C++ project is built with [CMake](https://cmake.org/). A simple way to buil
 3. `cmake .. && make -j4`, or you can set `CMAKE_BUILD_TYPE` to `release` to get highest performance.
 
 Then the executable binary will be at `build/bin`. And you can start by 
-`./bin/IceHaloSim <path-to-your-config-file>`. The file `cpp/config.json` is an example configuration file.
+`./bin/IceHaloSim <path-to-your-config-file>`. The file [`cpp/config.json`](config.json) is an example configuration file.
 
 ## Configuration file
 
