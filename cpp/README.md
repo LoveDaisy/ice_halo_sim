@@ -41,38 +41,33 @@ and still doesn't leave the crystal, it will be dropped.
 Currently I create 5 shapes, `HexCylinder`, `HexPyramid`, `HexPyramidStackHalf`, `TriPyramid`, `CubicPyramid`.
 Each shape has its own shape parameters.
 
-1. `HexCylinder`
-
+  * `HexCylinder`:
 Only 1 parameter, `h`, defines `h / a` where `h` is the cylinder height, `a` is the diameter along
 a-axis.
 
-2. `HexPyramid`
-
+  * `HexPyramid`:
 May have 3, 5, or 7 parameters.
 
-3. `HexPyramidStackHalf`
-
+  * `HexPyramidStackHalf`:
 7 parameters.
 
-4. `TriPyramid`
-
+  * `TriPyramid`:
 5 parameters.
 
-5. `CubicPyramid`
-
+  * `CubicPyramid`:
 2 parameters.
 
 * `axis` and `roll`:
 These two fields defines the orientation of crystals. `axis` defines the c-axis orientation, and `roll`
 defines the rotation around c-axis.
 
-These fields all has three attributes, `mean`, `std`, `type`. `type` defines the random distribution
+  These fields all has three attributes, `mean`, `std`, `type`. `type` defines the random distribution
 type, either `Gauss`, for Gaussian distribution, or `Uniform`, for uniform distribution. `mean` defines
 the mean of the random distribution. For `axis`, it means the altitude angle. 
 `std` defines the deviation of the distribution. For Gaussian distribution,
 it is the standard deviation, and for uniform distribution, it defines the value range.
 
-All angles are in degrees.
+  All angles are in degrees.
 
 * `population`:
 It defines how many crystals used in a simulation. Note that it is not the actual number, just for a
