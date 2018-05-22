@@ -12,6 +12,12 @@ latest updates will be on C++ codes.
 
 * [C++ version](cpp)
 
+## Acknowledgement
+
+1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/)
+2. [Halide](http://halide-lang.org/)
+3. [Rapidjson](http://rapidjson.org/index.html)
+
 
 # 冰晕模拟程序
 
@@ -26,3 +32,9 @@ latest updates will be on C++ codes.
 * [Matlab 代码](matlab)
 
 * [C++ 代码](cpp/README_zh.md)
+
+## 致谢
+
+1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/)
+2. [Halide](http://halide-lang.org/)
+3. [Rapidjson](http://rapidjson.org/index.html)
