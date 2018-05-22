@@ -95,7 +95,7 @@ int main(int argc, char *argv[])
             /* HexCylindar */
 
             float h = static_cast<float>(Pointer("/parameter").Get(c)->GetDouble());
-            context.crystalCtx->addGeometry(Geometry::createHexCylindar(h), population,
+            context.crystalCtx->addGeometry(Geometry::createHexCylinder(h), population,
                 axisDist, axisMean, axisStd,
                 rollDist, rollMean, rollStd);
 
@@ -111,8 +111,8 @@ int main(int argc, char *argv[])
                     axisDist, axisMean, axisStd,
                     rollDist, rollMean, rollStd);
             } else if (p->Size() == 5) {
-                int i1 = p[0].GetInt();
-                int i2 = p[1].GetInt();
+                int i1 = (*p)[0].GetInt();
+                int i2 = (*p)[1].GetInt();
                 float h1 = static_cast<float>((*p)[2].GetDouble());
                 float h2 = static_cast<float>((*p)[3].GetDouble());
                 float h3 = static_cast<float>((*p)[4].GetDouble());
@@ -120,13 +120,13 @@ int main(int argc, char *argv[])
                     axisDist, axisMean, axisStd,
                     rollDist, rollMean, rollStd);
             } else if (p->Size() == 7) {
-                int upperIdx1 = p[0].GetInt();
-                int upperIdx2 = p[1].GetInt();
-                int lowerIdx1 = p[2].GetInt();
-                int lowerIdx2 = p[3].GetInt();
-                float h1 = static_cast<float>((*p)[2].GetDouble());
-                float h2 = static_cast<float>((*p)[3].GetDouble());
-                float h3 = static_cast<float>((*p)[4].GetDouble());
+                int upperIdx1 = (*p)[0].GetInt();
+                int upperIdx2 = (*p)[1].GetInt();
+                int lowerIdx1 = (*p)[2].GetInt();
+                int lowerIdx2 = (*p)[3].GetInt();
+                float h1 = static_cast<float>((*p)[4].GetDouble());
+                float h2 = static_cast<float>((*p)[5].GetDouble());
+                float h3 = static_cast<float>((*p)[6].GetDouble());
                 context.crystalCtx->addGeometry(Geometry::createHexPyramid(upperIdx1, upperIdx2, lowerIdx1, 
                     lowerIdx2, h1, h2, h3), population,
                     axisDist, axisMean, axisStd,

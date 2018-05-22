@@ -7,7 +7,7 @@
     "crystal": [
         {
             "type": "CubicPyramid",
-            "parameter": [0.8, 1.2],
+            "parameter": [0.8, 1.0],
             "axis": {
                 "mean": 35.25,
                 "std": 14,
@@ -16,9 +16,24 @@
             "roll": {
                 "mean": 0,
                 "std": 2.6,
-                "type": "Uniform"
+                "type": "Gauss"
             },
             "population": 2000
+        },
+        {
+            "type": "HexPyramid",
+            "parameter": [3, 2, 1, 1, 0.3, 0.0, 0.9],
+            "axis": {
+                "mean": 90,
+                "std": 10,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 5000
         }
     ]
 }
