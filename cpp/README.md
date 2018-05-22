@@ -59,7 +59,7 @@ defines the rotation around c-axis.
 
   These fields all has three attributes, `mean`, `std`, `type`. `type` defines the random distribution
 type, either `Gauss`, for Gaussian distribution, or `Uniform`, for uniform distribution. `mean` defines
-the mean of the random distribution. For `axis`, it means the altitude angle. 
+the mean of the random distribution. For `axis`, it means the zenith angle. 
 `std` defines the deviation of the distribution. For Gaussian distribution,
 it is the standard deviation, and for uniform distribution, it defines the value range.
 

@@ -84,7 +84,7 @@ int main(int argc, char *argv[])
             return -1;
         }
 
-        axisMean = static_cast<float>(Pointer("/axis/mean").Get(c)->GetDouble());
+        axisMean = static_cast<float>(90 - Pointer("/axis/mean").Get(c)->GetDouble());
         axisStd = static_cast<float>(Pointer("/axis/std").Get(c)->GetDouble());
         rollMean = static_cast<float>(Pointer("/roll/mean").Get(c)->GetDouble());
         rollStd = static_cast<float>(Pointer("/roll/std").Get(c)->GetDouble());
