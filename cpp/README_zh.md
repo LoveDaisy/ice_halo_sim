@@ -16,7 +16,7 @@ matlab 代码只是一个原型, 并没有充分考虑性能, 因此我专门写
 3. `cmake .. && make -j4`, 或者设置 `CMAKE_BUILD_TYPE` 为 `release` 以获得高性能可执行程序.
 
 生成的可执行程序位于 `build/bin`. 在命令行输入 
-`./bin/IceHaloSim <path-to-your-config-file>`. 这里有一个 [`cpp/config.json`](config.json) 文件作为输入配置的样本, 可供参考.
+`./bin/IceHaloSim <path-to-your-config-file>`. 这里有一个 [`cpp/config.json`](./config.json) 文件作为输入配置的样本, 可供参考.
 
 ## 配置文件
 
