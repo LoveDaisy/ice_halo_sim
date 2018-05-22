@@ -2,7 +2,6 @@
 #define OPTICS_H
 
 #include "geometry.h"
-#include <random>
 
 class SimulationContext;
 
@@ -94,5 +93,26 @@ private:
         1.3049f, 1.3047f, 1.3045f, 1.3044f, 1.3042f, 1.3040f, 1.3038f, 1.3037f, 1.3035f, 1.3033f, 1.3032f}; 
 };
 
+
+class RaySegmentFactory
+{
+public:
+    ~RaySegmentFactory();
+
+    static RaySegmentFactory * getInstance();
+
+    RaySegment * getRaySegment(float *pt, float *dir, float w, int faceId);
+    void clear();
+
+private:
+    RaySegmentFactory();
+
+    static RaySegmentFactory *instance;
+    static const uint32_t chunkSize = 1024 * 64;
+
+    std::vector<RaySegment*> segments;
+    uint32_t nextUnusedId;
+    uint32_t currentChunkId;
+};
 
 #endif // OPTICS_H

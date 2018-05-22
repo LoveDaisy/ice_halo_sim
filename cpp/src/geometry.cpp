@@ -1,3 +1,4 @@
+#include "context.h"
 #include "geometry.h"
 #include "linearalgebra.h"
 
@@ -736,3 +737,79 @@ Geometry *Geometry::createTriPyramid(int i1, int i4, float h1, float h2, float h
     return new Geometry(vertexes, faces);
 }
 
+OrientationGenerator::OrientationGenerator(Distribution axDist, float axMean, float axStd,
+        Distribution rollDist, float rollMean, float rollStd) :
+    axDist(axDist), axMean(axMean), axStd(axStd),
+    rollDist(rollDist), rollMean(rollMean), rollStd(rollStd)
+{
+    unsigned int seed = static_cast<unsigned int>(std::__1::chrono::system_clock::now().time_since_epoch().count());
+    // unsigned int seed = 2345;
+    generator.seed(seed);
+}
+
+void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot)
+{
+    float tmpSunDir[3] = { 0.0f };
+    float sunRotation[3] = {
+        atan2(-sunDir[1], -sunDir[0]),
+        asin(-sunDir[2]),
+        0.0f
+    };
+    float h = 1.0f - cos(0.25f * Geometry::PI / 180.0f);
+
+    // printf("SUN_ROT:%+.4f,%+.4f,%+.4f\n", sunRotation[0], sunRotation[1], sunRotation[2]);
+
+    for (int i = 0; i < num; i++) {
+        float lon, lat, roll;
+
+        switch (axDist) {
+            case Distribution::UNIFORM : {
+                float v[3] = {gaussDistribution(generator),
+                              gaussDistribution(generator),
+                              gaussDistribution(generator)};
+                LinearAlgebra::normalize3(v);
+                lon = atan2(v[1], v[0]);
+                lat = asin(v[2] / LinearAlgebra::norm3(v));
+            }
+                break;
+            case Distribution::GAUSS :
+                lon = uniformDistribution(generator) * 2 * Geometry::PI;
+                lat = gaussDistribution(generator) * axStd;
+                lat += axMean;
+                if (lat > Geometry::PI / 2) {
+                    lat = 2.0f * Geometry::PI - lat;
+                }
+                if (lat < -Geometry::PI / 2) {
+                    lat = -2.0f * Geometry::PI - lat;
+                }
+                break;
+        }
+
+        switch (rollDist) {
+            case Distribution::GAUSS :
+                roll = gaussDistribution(generator) * rollStd + rollMean;
+                break;
+            case Distribution::UNIFORM :
+                roll = (uniformDistribution(generator) - 0.5f) * rollStd + rollMean;
+                break;
+        }
+
+        mainAxRot[i*3+0] = lon;
+        mainAxRot[i*3+1] = lat;
+        mainAxRot[i*3+2] = roll;
+
+        float z = 1.0f - uniformDistribution(generator) * h;
+        float q = uniformDistribution(generator) * 2 * Geometry::PI;
+        tmpSunDir[0] = sqrt(1.0f - z * z) * cos(q);
+        tmpSunDir[1] = sqrt(1.0f - z * z) * sin(q);
+        tmpSunDir[2] = z;
+        LinearAlgebra::rotateZBack(sunRotation, tmpSunDir);
+
+        // printf("SUN_DIR:%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n",
+        //     -sunDir[0], -sunDir[1], -sunDir[2],
+        //     tmpSunDir[0], tmpSunDir[1], tmpSunDir[2]);
+
+        memcpy(rayDir+i*3, sunDir, 3*sizeof(float));
+        LinearAlgebra::rotateZ(mainAxRot + i * 3, rayDir + i * 3);
+    }
+}

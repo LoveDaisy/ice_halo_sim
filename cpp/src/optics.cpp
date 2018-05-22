@@ -1,6 +1,6 @@
 #include "optics.h"
 #include "linearalgebra.h"
-#include "processhelper.h"
+#include "context.h"
 
 #include "ray_hit.h"
 #include "ray_prop.h"
@@ -100,6 +100,8 @@ size_t Ray::totalNum()
 std::default_random_engine* Optics::gen = nullptr;
 std::uniform_real_distribution<float>* Optics::dist = nullptr;
 
+
+RaySegmentFactory * RaySegmentFactory::instance = nullptr;
 
 std::default_random_engine& Optics::getGenerator()
 {
@@ -499,3 +501,60 @@ float IceRefractiveIndex::n(float waveLength)
     return nn;
 }
 
+RaySegmentFactory::RaySegmentFactory()
+{
+    auto *raySegPool = new RaySegment[chunkSize];
+    segments.push_back(raySegPool);
+    nextUnusedId = 0;
+    currentChunkId = 0;
+}
+
+RaySegmentFactory::~RaySegmentFactory()
+{
+    for (auto seg : segments) {
+        delete[] seg;
+    }
+    segments.clear();
+}
+
+RaySegmentFactory * RaySegmentFactory::getInstance()
+{
+    if (instance == nullptr) {
+        instance = new RaySegmentFactory();
+    }
+    return instance;
+}
+
+RaySegment * RaySegmentFactory::getRaySegment(float *pt, float *dir, float w, int faceId)
+{
+    RaySegment *seg;
+    RaySegment *currentChunk;
+
+    if (nextUnusedId < chunkSize) {
+        currentChunk = segments[currentChunkId];
+    } else {
+        currentChunkId++;
+        if (currentChunkId >= segments.size()) {
+            auto *raySegPool = new RaySegment[chunkSize];
+            segments.push_back(raySegPool);
+        }
+        nextUnusedId = 0;
+        currentChunk = segments[currentChunkId];
+    }
+
+    seg = &currentChunk[nextUnusedId++];
+    seg->reset();
+
+    seg->pt.val(pt);
+    seg->dir.val(dir);
+    seg->w = w;
+    seg->faceId = faceId;
+
+    return seg;
+}
+
+void RaySegmentFactory::clear()
+{
+    nextUnusedId = 0;
+    currentChunkId = 0;
+}

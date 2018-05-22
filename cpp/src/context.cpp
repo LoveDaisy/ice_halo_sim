@@ -1,148 +1,11 @@
-#include "processhelper.h"
+#include "context.h"
 #include "linearalgebra.h"
 
+#include "rapidjson/pointer.h"
+#include "rapidjson/error/en.h"
+#include "rapidjson/filereadstream.h"
+
 #include <unordered_set>
-
-
-OrientationGenerator::OrientationGenerator(Distribution axDist, float axMean, float axStd, 
-        Distribution rollDist, float rollMean, float rollStd) :
-    axDist(axDist), axMean(axMean), axStd(axStd), 
-    rollDist(rollDist), rollMean(rollMean), rollStd(rollStd)
-{
-    unsigned int seed = static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count());
-    // unsigned int seed = 2345;
-    generator.seed(seed);
-}
-
-
-void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot)
-{
-    float tmpSunDir[3] = { 0.0f };
-    float sunRotation[3] = {
-        std::atan2(-sunDir[1], -sunDir[0]),
-        std::asin(-sunDir[2]),
-        0.0f
-    };
-    float h = 1.0f - std::cos(0.25f * Geometry::PI / 180.0f);
-
-    // printf("SUN_ROT:%+.4f,%+.4f,%+.4f\n", sunRotation[0], sunRotation[1], sunRotation[2]);
-
-    for (int i = 0; i < num; i++) {
-        float lon, lat, roll;
-
-        switch (axDist) {
-            case Distribution::UNIFORM : {
-                float v[3] = {gaussDistribution(generator),
-                              gaussDistribution(generator),
-                              gaussDistribution(generator)};
-                LinearAlgebra::normalize3(v);
-                lon = std::atan2(v[1], v[0]);
-                lat = std::asin(v[2] / LinearAlgebra::norm3(v));
-            }
-                break;
-            case Distribution::GAUSS :
-                lon = uniformDistribution(generator) * 2 * Geometry::PI;
-                lat = gaussDistribution(generator) * axStd;
-                lat += axMean;
-                if (lat > Geometry::PI/2) {
-                    lat = 2.0f*Geometry::PI - lat;
-                }
-                if (lat < -Geometry::PI/2) {
-                    lat = -2.0f*Geometry::PI - lat;
-                }
-                break;
-        }
-
-        switch (rollDist) {
-            case Distribution::GAUSS :
-                roll = gaussDistribution(generator) * rollStd + rollMean;
-                break;
-            case Distribution::UNIFORM :
-                roll = (uniformDistribution(generator) - 0.5f) * rollStd + rollMean;
-                break;
-        }
-
-        mainAxRot[i*3+0] = lon;
-        mainAxRot[i*3+1] = lat;
-        mainAxRot[i*3+2] = roll;
-
-        float z = 1.0f - uniformDistribution(generator) * h;
-        float q = uniformDistribution(generator) * 2 * Geometry::PI;
-        tmpSunDir[0] = std::sqrt(1.0f - z * z) * std::cos(q);
-        tmpSunDir[1] = std::sqrt(1.0f - z * z) * std::sin(q);
-        tmpSunDir[2] = z;
-        LinearAlgebra::rotateZBack(sunRotation, tmpSunDir);
-
-        // printf("SUN_DIR:%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n", 
-        //     -sunDir[0], -sunDir[1], -sunDir[2],
-        //     tmpSunDir[0], tmpSunDir[1], tmpSunDir[2]);
-
-        memcpy(rayDir+i*3, sunDir, 3*sizeof(float));
-        LinearAlgebra::rotateZ(mainAxRot+i*3, rayDir+i*3);
-    }
-}
-
-
-
-RaySegmentFactory * RaySegmentFactory::instance = nullptr;
-
-RaySegmentFactory::RaySegmentFactory()
-{
-    auto *raySegPool = new RaySegment[chunkSize];
-    segments.push_back(raySegPool);
-    nextUnusedId = 0;
-    currentChunkId = 0;
-}
-
-RaySegmentFactory::~RaySegmentFactory()
-{
-    for (auto seg : segments) {
-        delete[] seg;
-    }
-    segments.clear();
-}
-
-RaySegmentFactory * RaySegmentFactory::getInstance()
-{
-    if (instance == nullptr) {
-        instance = new RaySegmentFactory();
-    }
-    return instance;
-}
-
-RaySegment * RaySegmentFactory::getRaySegment(float *pt, float *dir, float w, int faceId)
-{
-    RaySegment *seg;
-    RaySegment *currentChunk;
-
-    if (nextUnusedId < chunkSize) {
-        currentChunk = segments[currentChunkId];
-    } else {
-        currentChunkId++;
-        if (currentChunkId >= segments.size()) {
-            auto *raySegPool = new RaySegment[chunkSize];
-            segments.push_back(raySegPool);
-        }
-        nextUnusedId = 0;
-        currentChunk = segments[currentChunkId];
-    }
-    
-    seg = &currentChunk[nextUnusedId++];
-    seg->reset();
-
-    seg->pt.val(pt);
-    seg->dir.val(dir);
-    seg->w = w;
-    seg->faceId = faceId;
-
-    return seg;
-}
-
-void RaySegmentFactory::clear()
-{
-    nextUnusedId = 0;
-    currentChunkId = 0;
-}
 
 
 void EnvironmentContext::setWavelength(float wavelength)
@@ -260,7 +123,7 @@ void SimulationContext::setTotalRayNum(uint64_t num)
     delete[] crystalId;
     crystalId = new int[num];
 
-    for (int i = 0; i < num; i++) {
+    for (auto i = 0; i < num; i++) {
         rayDir[i] = 0.0f;
         mainAxRot[i] = 0.0f;
         crystalId[i] = 0;
@@ -508,6 +371,171 @@ void SimulationContext::printCrystalInfo()
     }
 }
 
+ContextParser::ContextParser(rapidjson::Document &d) : d(std::move(d))
+{ }
 
 
+ContextParser * ContextParser::getFileParser(const char* filename)
+{
+    using namespace rapidjson;
 
+    FILE* fp = fopen(filename, "rb");
+    if (!fp) {
+        printf("ERROR: file %s cannot be open!\n", filename);
+        return nullptr;
+    }
+
+    char readBuffer[65536];
+    FileReadStream is(fp, readBuffer, sizeof(readBuffer));
+
+    Document d;
+    if (d.ParseStream(is).HasParseError()) {
+        fprintf(stderr, "\nError(offset %u): %s\n", 
+            (unsigned)d.GetErrorOffset(),
+        GetParseError_En(d.GetParseError()));
+        fclose(fp);
+        return nullptr;
+    }
+
+    fclose(fp);
+
+    return new ContextParser(d);
+}
+
+
+int ContextParser::parseSettings(SimulationContext &ctx)
+{
+    using namespace rapidjson;
+
+    // Parsing ray number
+    uint64_t rayNumber = 10000;
+    auto *p = Pointer("/ray_number").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <ray_number>, using default 10000!\n");
+    } else if (!p->IsUint()) {
+        fprintf(stderr, "\nWARNING! config <ray_number> is not unsigned int, using default 10000!\n");
+    } else {
+        rayNumber = p->GetUint();
+    }
+    ctx.setTotalRayNum(rayNumber);
+
+    // Parsing max recursion number
+    int maxRecursionNum = 9;
+    p = Pointer("/max_recursion").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <max_recursion>, using default 9!\n");
+    } else if (!p->IsUint()) {
+        fprintf(stderr, "\nWARNING! config <max_recursion> is not unsigned int, using default 10000!\n");
+    } else {
+        maxRecursionNum = p->GetInt();
+    }
+    ctx.setMaxRecursionNum(maxRecursionNum);
+
+    // Parsing sun altitude
+    float sunAltitude = 0.0f;
+    p = Pointer("/sun/altitude").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <sun.altitude>, using default 0.0!\n");
+    } else if (!p->IsNumber()) {
+        fprintf(stderr, "\nWARNING! config <sun.altitude> is not a number, using default 0.0!\n");
+    } else {
+        sunAltitude = static_cast<float>(p->GetDouble());
+    }
+    ctx.envCtx->setSunPosition(90.0f, sunAltitude);
+
+    int ci = 0;
+    for (Value &c : Pointer("/crystal").Get(d)->GetArray()) {
+        OrientationGenerator::Distribution axisDist, rollDist;
+        float axisMean, rollMean;
+        float axisStd, rollStd;
+
+        if (*(Pointer("/axis/type").Get(c)) == "Gauss") {
+            axisDist = OrientationGenerator::Distribution::GAUSS;
+        } else if (*(Pointer("/axis/type").Get(c)) == "Uniform") {
+            axisDist = OrientationGenerator::Distribution::UNIFORM;
+        } else {
+            fprintf(stderr, "\nError! <crystal[%d].axis.type> cannot recgonize! Exit.\n", ci);
+            return -1;
+        }
+
+        if (*(Pointer("/roll/type").Get(c)) == "Gauss") {
+            rollDist = OrientationGenerator::Distribution::GAUSS;
+        } else if (*(Pointer("/roll/type").Get(c)) == "Uniform") {
+            rollDist = OrientationGenerator::Distribution::UNIFORM;
+        } else {
+            fprintf(stderr, "\nError! <crystal[%d].roll.type> cannot recgonize! Exit.\n", ci);
+            return -1;
+        }
+
+        axisMean = static_cast<float>(90 - Pointer("/axis/mean").Get(c)->GetDouble());
+        axisStd = static_cast<float>(Pointer("/axis/std").Get(c)->GetDouble());
+        rollMean = static_cast<float>(Pointer("/roll/mean").Get(c)->GetDouble());
+        rollStd = static_cast<float>(Pointer("/roll/std").Get(c)->GetDouble());
+
+        float population = static_cast<float>(Pointer("/population").Get(c)->GetDouble());
+
+        if (c["type"] == "HexCylindar") {
+            /* HexCylindar */
+
+            float h = static_cast<float>(Pointer("/parameter").Get(c)->GetDouble());
+            ctx.crystalCtx->addGeometry(Geometry::createHexCylinder(h), population,
+                axisDist, axisMean, axisStd,
+                rollDist, rollMean, rollStd);
+
+        } else if (c["type"] == "HexPyramid") {
+            /* HexPyramid */
+
+            const Value *p = Pointer("/parameter").Get(c);
+            if (p->Size() == 3) {
+                float h1 = static_cast<float>((*p)[0].GetDouble());
+                float h2 = static_cast<float>((*p)[1].GetDouble());
+                float h3 = static_cast<float>((*p)[2].GetDouble());
+                ctx.crystalCtx->addGeometry(Geometry::createHexPyramid(h1, h2, h3), population,
+                    axisDist, axisMean, axisStd,
+                    rollDist, rollMean, rollStd);
+            } else if (p->Size() == 5) {
+                int i1 = (*p)[0].GetInt();
+                int i2 = (*p)[1].GetInt();
+                float h1 = static_cast<float>((*p)[2].GetDouble());
+                float h2 = static_cast<float>((*p)[3].GetDouble());
+                float h3 = static_cast<float>((*p)[4].GetDouble());
+                ctx.crystalCtx->addGeometry(Geometry::createHexPyramid(i1, i2, h1, h2, h3), population,
+                    axisDist, axisMean, axisStd,
+                    rollDist, rollMean, rollStd);
+            } else if (p->Size() == 7) {
+                int upperIdx1 = (*p)[0].GetInt();
+                int upperIdx2 = (*p)[1].GetInt();
+                int lowerIdx1 = (*p)[2].GetInt();
+                int lowerIdx2 = (*p)[3].GetInt();
+                float h1 = static_cast<float>((*p)[4].GetDouble());
+                float h2 = static_cast<float>((*p)[5].GetDouble());
+                float h3 = static_cast<float>((*p)[6].GetDouble());
+                ctx.crystalCtx->addGeometry(Geometry::createHexPyramid(upperIdx1, upperIdx2, lowerIdx1, 
+                    lowerIdx2, h1, h2, h3), population,
+                    axisDist, axisMean, axisStd,
+                    rollDist, rollMean, rollStd);
+            } else {
+                fprintf(stderr, "\nERROR! <crystal[%d].parameter> number not match! Exit!\n", ci);
+                return -1;
+            }
+        } else if (c["type"] == "CubicPyramid") {
+            /* CubicPyramid */
+
+            const Value *p = Pointer("/parameter").Get(c);
+            if (p->Size() == 2) {
+                float h1 = static_cast<float>((*p)[0].GetDouble());
+                float h2 = static_cast<float>((*p)[1].GetDouble());
+                ctx.crystalCtx->addGeometry(Geometry::createCubicPyramid(h1, h2), population,
+                    axisDist, axisMean, axisStd,
+                    rollDist, rollMean, rollStd);
+            } else {
+                fprintf(stderr, "\nERROR! <crystal[%d].parameter> number not match! Exit!\n", ci);
+                return -1;
+            }
+        }
+
+        ci++;
+    }
+
+    return 0;
+}

@@ -3,6 +3,8 @@
 
 #include <vector>
 #include <cmath>
+#include <set>
+#include <random>
 
 template <typename T>
 class Vec3
@@ -96,6 +98,36 @@ private:
     std::vector<TriangleIdx> faces;
 
     bool initDone;
+};
+
+class OrientationGenerator
+{
+public:
+    enum class Distribution
+    {
+        UNIFORM,
+        GAUSS
+    };
+
+public:
+    OrientationGenerator(Distribution axDist, float axMean, float axStd,
+        Distribution rollDist, float rollMean, float rollStd);
+    ~OrientationGenerator() = default;
+
+    void fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot);
+
+private:
+    std::mt19937 generator;
+    std::normal_distribution<float> gaussDistribution;
+    std::uniform_real_distribution<float> uniformDistribution;
+
+    Distribution axDist;
+    float axMean;
+    float axStd;
+
+    Distribution rollDist;
+    float rollMean;
+    float rollStd;
 };
 
 #endif // GEOMETRY_H

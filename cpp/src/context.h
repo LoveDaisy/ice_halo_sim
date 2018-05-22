@@ -3,66 +3,13 @@
 
 #include "geometry.h"
 #include "optics.h"
+#include "rapidjson/document.h"
 
 #include <vector>
-#include <set>
 #include <random>
 
 
 class SimulationContext;
-
-class OrientationGenerator
-{
-public:
-    enum class Distribution
-    {
-        UNIFORM,
-        GAUSS
-    };
-
-public:
-    // OrientationGenerator();
-    OrientationGenerator(Distribution axDist, float axMean, float axStd, 
-        Distribution rollDist, float rollMean, float rollStd);
-    ~OrientationGenerator() = default;
-
-    void fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot);
-
-private:
-    std::mt19937 generator;
-    std::normal_distribution<float> gaussDistribution;
-    std::uniform_real_distribution<float> uniformDistribution;
-
-    Distribution axDist;
-    float axMean;
-    float axStd;
-
-    Distribution rollDist;
-    float rollMean;
-    float rollStd;
-};
-
-
-class RaySegmentFactory
-{
-public:
-    ~RaySegmentFactory();
-
-    static RaySegmentFactory * getInstance();
-    
-    RaySegment * getRaySegment(float *pt, float *dir, float w, int faceId);
-    void clear();
-
-private:
-    RaySegmentFactory();
-
-    static RaySegmentFactory *instance;
-    static const uint32_t chunkSize = 1024 * 64;
-    
-    std::vector<RaySegment*> segments;
-    uint32_t nextUnusedId;
-    uint32_t currentChunkId;
-};
 
 
 class EnvironmentContext
@@ -153,6 +100,22 @@ private:
     float *rayDir;
     float *mainAxRot;
     int *crystalId;
+};
+
+
+class ContextParser
+{
+public:
+    ~ContextParser() = default;
+
+    int parseSettings(SimulationContext &ctx);
+
+    static ContextParser * getFileParser(const char* filename);
+
+private:
+    ContextParser(rapidjson::Document &d);
+
+    rapidjson::Document d;
 };
 
 
