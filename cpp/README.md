@@ -1,5 +1,7 @@
 # C++ version
 
+[中文版](README_zh.md)
+
 Besides matlab codes, I start a C++ project for higher performance. Currently the C++ version is just 
 pieces of toy codes and can only run from command, no GUI.
 
