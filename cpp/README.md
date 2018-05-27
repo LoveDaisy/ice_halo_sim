@@ -82,7 +82,7 @@ Each shape has its own shape parameters.
 
 * `axis` and `roll`:
 These two fields defines the orientation of crystals. `axis` defines the c-axis orientation, and `roll`
-defines the rotation around c-axis.
+defines the rotation around c-axis (also regarded as z-axis in above figures and my program).
 
   These fields all has three attributes, `mean`, `std`, `type`.  
   `type` defines the random distribution
