@@ -45,7 +45,7 @@ Each shape has its own shape parameters.
 
   * `HexCylinder`:
   Only 1 parameter, defines `h / a` where `h` is the cylinder height, `a` is the diameter along
-  a-axis.  
+  a-axis (also x-axis in my program).  
   <img src="figs/hex_cylinder_01.png" width="400">
   
   * `HexPyramid`:
