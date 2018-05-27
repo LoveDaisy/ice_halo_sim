@@ -46,17 +46,23 @@ Each shape has its own shape parameters.
   * `HexCylinder`:
   Only 1 parameter, defines `h / a` where `h` is the cylinder height, `a` is the diameter along
   a-axis (also x-axis in my program).  
-  <img src="figs/hex_cylinder_01.png" width="400">
+  <img src="figs/hex_cylinder_01.png" width="400">.
   
   * `HexPyramid`:
-  May have 3, 5, or 7 parameters. For 3 parameters case, they are `h1 / H1`, `h2 / a`, `h3 / H3` respectly,
+  May have 3, 5, or 7 parameters.  
+  For 3 parameters case, they are `h1 / H1`, `h2 / a`, `h3 / H3` respectly,
   where `H1` means the max possible height for pyramid segment, and `H3` the same.  
-  <img src="figs/hex_pyramid_01.png" width="400">
-
+  <img src="figs/hex_pyramid_01.png" width="400">.  
   For 5 parameters case, the first 2 parameters indicate the face direction. Thet must be integers. The
   face direction is described with [Miller index](https://en.wikipedia.org/wiki/Miller_index). For a
   typical ice crystal face (face number 3 as shown in the figure), its Miller index is (1, 0, -1, 1).
-  The first 2 parameters, for example, `a`, `b`, represents a face with Miller index of (`a`, 0, `-a`, 1).
+  The first 2 parameters, for example, `a`, `b`, represents a face with Miller index of (`a`, 0, `-a`, `b`).
+  And the last 3 parameters are same as the first case.  
+  For 7 parameters case, the first 4 parameters are interges and describe the upper and lower pyramid segment
+  face directions. For example `a`, `b`, `c`, `d` describe upper pyramid segment with Miller index of
+  (`a`, 0, `-a`, `b`) and lower pyramid segment of (`c`, 0, `-c`, `d`).  
+  With these description, you will have the maximized freedom to design your crystal shape.
+  
   * `HexPyramidStackHalf`:
   7 parameters.
   * `TriPyramid`:
