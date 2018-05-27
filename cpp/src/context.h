@@ -52,18 +52,18 @@ public:
     CrystalContext() = default;
     ~CrystalContext();
 
-    void addGeometry(Geometry *g, float populationWeight,
+    void addGeometry(Crystal *g, float populationWeight,
                      OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
                      OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
 
-    Geometry * getCrystal(int i);
+    Crystal * getCrystal(int i);
     int getRayNum(int i);
     RayTracingContext *getRayTracingCtx(int i);
 
     size_t popSize();
 
 private:
-    std::vector<Geometry *> crystals;
+    std::vector<Crystal *> crystals;
     std::vector<float> populationWeights;
     std::vector<OrientationGenerator> oriGens;
     std::vector<int> rayNums;

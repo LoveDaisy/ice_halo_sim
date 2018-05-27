@@ -22,9 +22,9 @@ float EnvironmentContext::getWavelength()
 
 void EnvironmentContext::setSunPosition(float lon, float lat)
 {
-    float x = -std::cos(lat * Geometry::PI / 180.0f) * std::cos(lon * Geometry::PI / 180.0f);
-    float y = -std::cos(lat * Geometry::PI / 180.0f) * std::sin(lon * Geometry::PI / 180.0f);
-    float z = -std::sin(lat * Geometry::PI / 180.0f);
+    float x = -std::cos(lat * Crystal::PI / 180.0f) * std::cos(lon * Crystal::PI / 180.0f);
+    float y = -std::cos(lat * Crystal::PI / 180.0f) * std::sin(lon * Crystal::PI / 180.0f);
+    float z = -std::sin(lat * Crystal::PI / 180.0f);
 
     this->sunDir[0] = x;
     this->sunDir[1] = y;
@@ -53,20 +53,20 @@ CrystalContext::~CrystalContext()
 
 
 void CrystalContext::addGeometry(
-    Geometry *g, float populationWeight,
+    Crystal *g, float populationWeight,
     OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
     OrientationGenerator::Distribution rollDist, float rollMean, float rollStd)
 {
     crystals.push_back(g);
     populationWeights.push_back(populationWeight);
-    oriGens.emplace_back(axisDist, axisMean * Geometry::PI / 180.0f, axisStd * Geometry::PI / 180.0f,
-                         rollDist, rollMean * Geometry::PI / 180.0f, rollStd * Geometry::PI / 180.0f);
+    oriGens.emplace_back(axisDist, axisMean * Crystal::PI / 180.0f, axisStd * Crystal::PI / 180.0f,
+                         rollDist, rollMean * Crystal::PI / 180.0f, rollStd * Crystal::PI / 180.0f);
     rayNums.push_back(0);
     rayTracingCtxs.push_back(new RayTracingContext());
 }
 
 
-Geometry * CrystalContext::getCrystal(int i)
+Crystal * CrystalContext::getCrystal(int i)
 {
     return crystals[i];
 }
@@ -558,7 +558,7 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
             throw std::invalid_argument(msgBuffer);
         }
         float h = static_cast<float>(p->GetDouble());
-        ctx.crystalCtx->addGeometry(Geometry::createHexCylinder(h), population,
+        ctx.crystalCtx->addGeometry(Crystal::createHexCylinder(h), population,
             axisDist, axisMean, axisStd,
             rollDist, rollMean, rollStd);
     } else if (c["type"] == "HexPyramid") {
@@ -569,7 +569,7 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
             float h1 = static_cast<float>((*p)[0].GetDouble());
             float h2 = static_cast<float>((*p)[1].GetDouble());
             float h3 = static_cast<float>((*p)[2].GetDouble());
-            ctx.crystalCtx->addGeometry(Geometry::createHexPyramid(h1, h2, h3), population,
+            ctx.crystalCtx->addGeometry(Crystal::createHexPyramid(h1, h2, h3), population,
                 axisDist, axisMean, axisStd,
                 rollDist, rollMean, rollStd);
         } else if (p->Size() == 5) {
@@ -578,7 +578,7 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
             float h1 = static_cast<float>((*p)[2].GetDouble());
             float h2 = static_cast<float>((*p)[3].GetDouble());
             float h3 = static_cast<float>((*p)[4].GetDouble());
-            ctx.crystalCtx->addGeometry(Geometry::createHexPyramid(i1, i2, h1, h2, h3), population,
+            ctx.crystalCtx->addGeometry(Crystal::createHexPyramid(i1, i2, h1, h2, h3), population,
                 axisDist, axisMean, axisStd,
                 rollDist, rollMean, rollStd);
         } else if (p->Size() == 7) {
@@ -589,7 +589,7 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
             float h1 = static_cast<float>((*p)[4].GetDouble());
             float h2 = static_cast<float>((*p)[5].GetDouble());
             float h3 = static_cast<float>((*p)[6].GetDouble());
-            ctx.crystalCtx->addGeometry(Geometry::createHexPyramid(upperIdx1, upperIdx2, lowerIdx1, 
+            ctx.crystalCtx->addGeometry(Crystal::createHexPyramid(upperIdx1, upperIdx2, lowerIdx1,
                 lowerIdx2, h1, h2, h3), population,
                 axisDist, axisMean, axisStd,
                 rollDist, rollMean, rollStd);
@@ -609,7 +609,7 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
             float h1 = static_cast<float>((*p)[4].GetDouble());
             float h2 = static_cast<float>((*p)[5].GetDouble());
             float h3 = static_cast<float>((*p)[6].GetDouble());
-            ctx.crystalCtx->addGeometry(Geometry::createHexPyramidStackHalf(upperIdx1, upperIdx2, lowerIdx1, 
+            ctx.crystalCtx->addGeometry(Crystal::createHexPyramidStackHalf(upperIdx1, upperIdx2, lowerIdx1,
                 lowerIdx2, h1, h2, h3), population,
                 axisDist, axisMean, axisStd,
                 rollDist, rollMean, rollStd);
@@ -627,7 +627,7 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
             float h1 = static_cast<float>((*p)[2].GetDouble());
             float h2 = static_cast<float>((*p)[3].GetDouble());
             float h3 = static_cast<float>((*p)[4].GetDouble());
-            ctx.crystalCtx->addGeometry(Geometry::createTriPyramid(i1, i2, h1, h2, h3), population,
+            ctx.crystalCtx->addGeometry(Crystal::createTriPyramid(i1, i2, h1, h2, h3), population,
                 axisDist, axisMean, axisStd,
                 rollDist, rollMean, rollStd);
         } else {
@@ -641,7 +641,7 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
         } else if (p->Size() == 2) {
             float h1 = static_cast<float>((*p)[0].GetDouble());
             float h2 = static_cast<float>((*p)[1].GetDouble());
-            ctx.crystalCtx->addGeometry(Geometry::createCubicPyramid(h1, h2), population,
+            ctx.crystalCtx->addGeometry(Crystal::createCubicPyramid(h1, h2), population,
                 axisDist, axisMean, axisStd,
                 rollDist, rollMean, rollStd);
         } else {

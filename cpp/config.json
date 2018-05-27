@@ -2,7 +2,7 @@
     "sun": {
         "altitude": 1
     },
-    "ray_number": 100000,
+    "ray_number": 1000000,
     "max_recursion": 9,
     "crystal": [
         {

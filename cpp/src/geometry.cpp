@@ -165,26 +165,26 @@ const int * TriangleIdx::idx() const
 }
 
 
-Geometry::Geometry(std::vector<Vec3f> &vertexes, std::vector<TriangleIdx> &faces) :
+Crystal::Crystal(std::vector<Vec3f> &vertexes, std::vector<TriangleIdx> &faces) :
     vertexes(vertexes), faces(faces), initDone(false)
 {
     initialize();
 }
 
 
-void Geometry::setVertexes(std::vector<Vec3f> &vertexes)
+void Crystal::setVertexes(std::vector<Vec3f> &vertexes)
 {
     initDone = false;
     this->vertexes = vertexes;
 }
 
-void Geometry::setFaces(std::vector<TriangleIdx> &faces)
+void Crystal::setFaces(std::vector<TriangleIdx> &faces)
 {
     initDone = false;
     this->faces = faces;
 }
 
-void Geometry::initialize()
+void Crystal::initialize()
 {
     norms.clear();
     initDone = true;
@@ -207,54 +207,54 @@ void Geometry::initialize()
     }
 }
 
-const std::vector<Vec3f>& Geometry::getVertexes()
+const std::vector<Vec3f>& Crystal::getVertexes()
 {
     return vertexes;
 }
 
-const std::vector<Vec3f>& Geometry::getNorms()
+const std::vector<Vec3f>& Crystal::getNorms()
 {
     return norms;
 }
 
-const std::vector<TriangleIdx>& Geometry::getFaces()
+const std::vector<TriangleIdx>& Crystal::getFaces()
 {
     return faces;
 }
 
-bool Geometry::isInitialized()
+bool Crystal::isInitialized()
 {
     return initDone;
 }
 
-int Geometry::vtxNum() const
+int Crystal::vtxNum() const
 {
     return static_cast<int>(vertexes.size());
 }
 
-int Geometry::faceNum() const
+int Crystal::faceNum() const
 {
     return static_cast<int>(faces.size());
 }
 
-// float Geometry::refractiveIndex() const
+// float Crystal::refractiveIndex() const
 // {
 //     return n;
 // }
 
-// void Geometry::setRefractiveIndex(float n)
+// void Crystal::setRefractiveIndex(float n)
 // {
 //     this->n = n;
 // }
 
-void Geometry::copyVertexData(float *data) const
+void Crystal::copyVertexData(float *data) const
 {
     for (auto i = 0; i < vertexes.size(); ++i) {
         memcpy(data + i*3, vertexes[i].val(), 3*sizeof(float));
     }
 }
 
-void Geometry::copyFaceData(float *data) const
+void Crystal::copyFaceData(float *data) const
 {
     for (auto i = 0; i < faces.size(); i++) {
         const int *idx = faces[i].idx();
@@ -264,14 +264,14 @@ void Geometry::copyFaceData(float *data) const
     }
 }
 
-void Geometry::copyFaceIdxData(int *data) const
+void Crystal::copyFaceIdxData(int *data) const
 {
     for (auto i = 0; i < faces.size(); i++) {
         memcpy(data + i*3, faces[i].idx(), 3*sizeof(int));
     }
 }
 
-void Geometry::copyNormalData(int num, const int *idx, float *data) const
+void Crystal::copyNormalData(int num, const int *idx, float *data) const
 {
     for (auto i = 0; i < num; ++i) {
         if (idx[i] >= faces.size() || idx[i] < 0) {
@@ -284,7 +284,7 @@ void Geometry::copyNormalData(int num, const int *idx, float *data) const
 /*
  * parameter: h, defined as c / a, i.e. height / diameter
  */
-Geometry* Geometry::createHexCylinder(float h)
+Crystal* Crystal::createHexCylinder(float h)
 {
     std::vector<Vec3f> vertexes;
     std::vector<TriangleIdx> faces;
@@ -310,7 +310,7 @@ Geometry* Geometry::createHexCylinder(float h)
     faces.emplace_back(TriangleIdx(9, 11, 10));
     faces.emplace_back(TriangleIdx(9, 6, 11));
 
-    return new Geometry(vertexes, faces);
+    return new Crystal(vertexes, faces);
 }
 
 /*
@@ -341,7 +341,7 @@ Geometry* Geometry::createHexCylinder(float h)
  *            diameter of base plate.
  * parameter: h3, defined as h / H, similar to h3.
  */
-Geometry* Geometry::createHexPyramid(float h1, float h2, float h3)
+Crystal* Crystal::createHexPyramid(float h1, float h2, float h3)
 {
     const float H = 1.629f;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
@@ -396,7 +396,7 @@ Geometry* Geometry::createHexPyramid(float h1, float h2, float h3)
     faces.emplace_back(TriangleIdx(21, 23, 22));
     faces.emplace_back(TriangleIdx(21, 18, 23));
 
-    return new Geometry(vertexes, faces);
+    return new Crystal(vertexes, faces);
 }
 
 
@@ -411,7 +411,7 @@ Geometry* Geometry::createHexPyramid(float h1, float h2, float h3)
         9       8
         10      11
 */
-Geometry *Geometry::createCubicPyramid(float ratio1, float ratio2) {
+Crystal *Crystal::createCubicPyramid(float ratio1, float ratio2) {
     ratio1 = std::min(ratio1, 1.f);
     ratio2 = std::min(ratio2, 1.f);
 
@@ -452,7 +452,7 @@ Geometry *Geometry::createCubicPyramid(float ratio1, float ratio2) {
     faces.emplace_back(TriangleIdx(9, 8, 10));
     faces.emplace_back(TriangleIdx(10, 8, 11));
 
-    return new Geometry(vertexes, faces);
+    return new Crystal(vertexes, faces);
 }
 
 
@@ -483,7 +483,7 @@ Geometry *Geometry::createCubicPyramid(float ratio1, float ratio2) {
  * parameter: h2, defined as h / a
  * parameter: h3, similar to h1
  */
-Geometry* Geometry::createHexPyramid(int i1, int i4, float h1, float h2, float h3)
+Crystal* Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h3)
 {
     float H = 1.629f * i1 / i4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
@@ -538,11 +538,11 @@ Geometry* Geometry::createHexPyramid(int i1, int i4, float h1, float h2, float h
     faces.emplace_back(TriangleIdx(21, 23, 22));
     faces.emplace_back(TriangleIdx(21, 18, 23));
 
-    return new Geometry(vertexes, faces);
+    return new Crystal(vertexes, faces);
 }
 
 
-Geometry* Geometry::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3)
+Crystal* Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3)
 {
     float H1 = 1.629f * upperIdx1 / upperIdx4;
     float H3 = 1.629f * lowerIdx1 / lowerIdx4;
@@ -598,11 +598,11 @@ Geometry* Geometry::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1
     faces.emplace_back(TriangleIdx(21, 23, 22));
     faces.emplace_back(TriangleIdx(21, 18, 23));
 
-    return new Geometry(vertexes, faces);
+    return new Crystal(vertexes, faces);
 }
 
 
-Geometry* Geometry::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, 
+Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
     float h1, float h2, float h3)
 {
     float H1 = 1.629f * upperIdx1 / upperIdx4;
@@ -661,7 +661,7 @@ Geometry* Geometry::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int 
     faces.emplace_back(TriangleIdx(21, 23, 22));
     faces.emplace_back(TriangleIdx(21, 18, 23));
 
-    return new Geometry(vertexes, faces);
+    return new Crystal(vertexes, faces);
 }
 
 
@@ -686,7 +686,7 @@ Geometry* Geometry::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int 
             9
     11
 */
-Geometry *Geometry::createTriPyramid(int i1, int i4, float h1, float h2, float h3) {
+Crystal *Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3) {
     float H = 1.629f / 1.732051f * i1 / i4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
@@ -734,7 +734,7 @@ Geometry *Geometry::createTriPyramid(int i1, int i4, float h1, float h2, float h
     }
     faces.emplace_back(TriangleIdx(10, 9, 11));
 
-    return new Geometry(vertexes, faces);
+    return new Crystal(vertexes, faces);
 }
 
 OrientationGenerator::OrientationGenerator(Distribution axDist, float axMean, float axStd,
@@ -755,7 +755,7 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
         asin(-sunDir[2]),
         0.0f
     };
-    float h = 1.0f - cos(0.25f * Geometry::PI / 180.0f);
+    float h = 1.0f - cos(0.25f * Crystal::PI / 180.0f);
 
     // printf("SUN_ROT:%+.4f,%+.4f,%+.4f\n", sunRotation[0], sunRotation[1], sunRotation[2]);
 
@@ -773,14 +773,14 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
             }
                 break;
             case Distribution::GAUSS :
-                lon = uniformDistribution(generator) * 2 * Geometry::PI;
+                lon = uniformDistribution(generator) * 2 * Crystal::PI;
                 lat = gaussDistribution(generator) * axStd;
                 lat += axMean;
-                if (lat > Geometry::PI / 2) {
-                    lat = 2.0f * Geometry::PI - lat;
+                if (lat > Crystal::PI / 2) {
+                    lat = 2.0f * Crystal::PI - lat;
                 }
-                if (lat < -Geometry::PI / 2) {
-                    lat = -2.0f * Geometry::PI - lat;
+                if (lat < -Crystal::PI / 2) {
+                    lat = -2.0f * Crystal::PI - lat;
                 }
                 break;
         }
@@ -799,7 +799,7 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
         mainAxRot[i*3+2] = roll;
 
         float z = 1.0f - uniformDistribution(generator) * h;
-        float q = uniformDistribution(generator) * 2 * Geometry::PI;
+        float q = uniformDistribution(generator) * 2 * Crystal::PI;
         tmpSunDir[0] = sqrt(1.0f - z * z) * cos(q);
         tmpSunDir[1] = sqrt(1.0f - z * z) * sin(q);
         tmpSunDir[2] = z;

@@ -45,7 +45,7 @@ int main(int argc, char *argv[])
         context.writeFinalDirections(filename);
 
         // std::sprintf(filename, "paths_%.1f_%lli.bin", wl, t0.time_since_epoch().count());
-        // context.writeRayInfo(filename, -104.5f*Geometry::PI/180.0f, -30.7f*Geometry::PI/180.0f, 0.5f/57.0f);
+        // context.writeRayInfo(filename, -104.5f*Crystal::PI/180.0f, -30.7f*Crystal::PI/180.0f, 0.5f/57.0f);
         t1 = std::chrono::system_clock::now();
         diff = t1 - t0;
         printf("Writing: %.2fms\n", diff.count() * 1.0e3);
