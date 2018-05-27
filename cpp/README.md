@@ -63,7 +63,8 @@ Each shape has its own shape parameters.
   So it can be described using parameters 1, 1.  
   For 7 parameters case, the first 4 parameters are interges and describe the upper and lower pyramid segment
   face directions. For example `a`, `b`, `c`, `d` describe upper pyramid segment with Miller index of
-  (`a`, 0, `-a`, `b`) and lower pyramid segment of (`c`, 0, `-c`, `d`).  
+  (`a`, 0, `-a`, `b`) and lower pyramid segment of (`c`, 0, `-c`, `d`). NOTE: for faces with different
+  Miller index, their maximumn height `H` are also different.  
   With these description, you will have the maximized freedom to design your crystal shape.
   
   * `HexPyramidStackHalf`:
