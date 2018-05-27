@@ -70,7 +70,9 @@ Each shape has its own shape parameters.
   <img src="figs/hex_pyramid_stack_half_01.png" width="400">. 
   
   * `TriPyramid`:
-  5 parameters.
+  5 parameters. Similar to 5 parameter case of `HexPyramid`. (TODO: 3 and 7 parameters cases to be added.)  
+  <img src="figs/hex_pyramid_stack_half_01.png" width="400">. 
+
   * `CubicPyramid`:
   2 parameters.
 
