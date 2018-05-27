@@ -65,7 +65,8 @@ Each shape has its own shape parameters.
   With these description, you will have the maximized freedom to design your crystal shape.
   
   * `HexPyramidStackHalf`:
-  7 parameters. Similar to 7 parameters `HexPyramid` case.  
+  7 parameters. Similar to 7 parameters `HexPyramid` case. `h / H` for pyramid segment, and `h / a`
+  for cylinder segment.  
   <img src="figs/hex_pyramid_stack_half_01.png" width="400">. 
   
   * `TriPyramid`:
