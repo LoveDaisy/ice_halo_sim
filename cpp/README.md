@@ -49,7 +49,9 @@ Each shape has its own shape parameters.
   <img src="figs/hex_cylinder_01.png" width="400">
   
   * `HexPyramid`:
-  May have 3, 5, or 7 parameters.
+  May have 3, 5, or 7 parameters. For 3 Parameter case, they are `h1 / H1`, `h2 / a`, `h3 / H3` respectly,
+  where `H1` means the max possible height for pyramid segment, and `H3` the same.  
+  <img src="figs/hex_pyramid_01.png" width="400">
   * `HexPyramidStackHalf`:
   7 parameters.
   * `TriPyramid`:
