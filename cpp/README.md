@@ -70,7 +70,7 @@ Each shape has its own shape parameters.
   and the first 2 parameters indicate the face direction. They must be integers. The
   face direction is described with [Miller index](https://en.wikipedia.org/wiki/Miller_index).
   For example, `a`, `b`, represents a face with Miller index of (`a`, 0, `-a`, `b`). For a
-  typical ice crystal face (face number 3 as shown in the figure), its Miller index is (1, 0, -1, 1).
+  typical ice crystal face (face number 13), its Miller index is (1, 0, -1, 1).
   So it can be described using parameters 1, 1.  
   For 7 parameters case, the first 4 parameters are interges and describe the upper and lower pyramid segment
   face directions. For example `a`, `b`, `c`, `d` describe upper pyramid segment with Miller index of
