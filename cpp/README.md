@@ -49,9 +49,14 @@ Each shape has its own shape parameters.
   <img src="figs/hex_cylinder_01.png" width="400">
   
   * `HexPyramid`:
-  May have 3, 5, or 7 parameters. For 3 Parameter case, they are `h1 / H1`, `h2 / a`, `h3 / H3` respectly,
+  May have 3, 5, or 7 parameters. For 3 parameters case, they are `h1 / H1`, `h2 / a`, `h3 / H3` respectly,
   where `H1` means the max possible height for pyramid segment, and `H3` the same.  
   <img src="figs/hex_pyramid_01.png" width="400">
+
+  For 5 parameters case, the first 2 parameters indicate the face direction. Thet must be integers. The
+  face direction is described with [Miller index](https://en.wikipedia.org/wiki/Miller_index). For a
+  typical ice crystal face (face number 3 as shown in the figure), its Miller index is (1, 0, -1, 1).
+  The first 2 parameters, for example, `a`, `b`, represents a face with Miller index of (`a`, 0, `-a`, 1).
   * `HexPyramidStackHalf`:
   7 parameters.
   * `TriPyramid`:
