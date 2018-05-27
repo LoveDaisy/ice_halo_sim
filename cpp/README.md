@@ -44,7 +44,7 @@ Currently I create 5 shapes, `HexCylinder`, `HexPyramid`, `HexPyramidStackHalf`,
 Each shape has its own shape parameters.
 
   * `HexCylinder`:
-  Only 1 parameter, `h`, defines `h / a` where `h` is the cylinder height, `a` is the diameter along
+  Only 1 parameter, defines `h / a` where `h` is the cylinder height, `a` is the diameter along
   a-axis.  
   <img src="figs/hex_cylinder_01.png" width="400">
   
