@@ -76,7 +76,9 @@ Each shape has its own shape parameters.
   <img src="figs/tri_pyramid_01.png" width="400">. 
 
   * `CubicPyramid`:
-  2 parameters.
+  2 parameters. Similar to cases above, the 2 parameters defines `h1 / H1` and `h2 / H2`. 
+  NOTE: this kind crystal has cubic system.  
+  <img src="figs/cubic_pyramid_01.png" width="400">
 
 * `axis` and `roll`:
 These two fields defines the orientation of crystals. `axis` defines the c-axis orientation, and `roll`
