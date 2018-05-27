@@ -60,10 +60,10 @@ private:
 };
 
 
-class Geometry
+class Crystal
 {
 public:
-    Geometry(std::vector<Vec3f> &vertexes, std::vector<TriangleIdx> &faces);
+    Crystal(std::vector<Vec3f> &vertexes, std::vector<TriangleIdx> &faces);
 
     void setVertexes(std::vector<Vec3f> &vertexes);
     void setFaces(std::vector<TriangleIdx> &faces);
@@ -82,13 +82,13 @@ public:
     void copyFaceIdxData(int *data) const;
     void copyNormalData(int num, const int *idx, float *data) const;
 
-    static Geometry* createHexCylinder(float h);
-    static Geometry* createHexPyramid(float h1, float h2, float h3);
-    static Geometry* createHexPyramid(int i1, int i4, float h1, float h2, float h3);
-    static Geometry* createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
-    static Geometry* createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
-    static Geometry* createTriPyramid(int i1, int i4, float h1, float h2, float h3);
-    static Geometry* createCubicPyramid(float ratio1, float ratio2);
+    static Crystal* createHexCylinder(float h);
+    static Crystal* createHexPyramid(float h1, float h2, float h3);
+    static Crystal* createHexPyramid(int i1, int i4, float h1, float h2, float h3);
+    static Crystal* createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
+    static Crystal* createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
+    static Crystal* createTriPyramid(int i1, int i4, float h1, float h2, float h3);
+    static Crystal* createCubicPyramid(float ratio1, float ratio2);
 
     static constexpr float PI = 3.14159265f;
 

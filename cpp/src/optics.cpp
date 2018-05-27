@@ -299,7 +299,7 @@ void Optics::traceRays(SimulationContext &context)
 
         int dir_num = context.crystalCtx->getRayNum(x);
         const float *dir = context.getRayDirections(x);
-        const Geometry *g = context.crystalCtx->getCrystal(x);
+        const Crystal *g = context.crystalCtx->getCrystal(x);
 
         int max_ray_num = dir_num * maxRecursion * 3;
         auto *ray_pt_buffer = new float[max_ray_num * 3];
