@@ -1,28 +1,13 @@
 {
     "sun": {
-        "altitude": 1
+        "altitude": 37
     },
     "ray_number": 1000000,
     "max_recursion": 9,
     "crystal": [
         {
-            "type": "CubicPyramid",
-            "parameter": [0.8, 1.0],
-            "axis": {
-                "mean": 54.75,
-                "std": 14,
-                "type": "Gauss"
-            },
-            "roll": {
-                "mean": 0,
-                "std": 8,
-                "type": "Gauss"
-            },
-            "population": 2000
-        },
-        {
-            "type": "HexPyramid",
-            "parameter": [3, 2, 1, 1, 0.3, 0, 0.9],
+            "type": "HexCylinder",
+            "parameter": 0.2,
             "axis": {
                 "mean": 0,
                 "std": 5,
@@ -37,7 +22,7 @@
         },
         {
             "type": "HexCylinder",
-            "parameter": 1.2,
+            "parameter": 1.5,
             "axis": {
                 "mean": 90,
                 "std": 0.5,
@@ -48,7 +33,22 @@
                 "std": 360,
                 "type": "Uniform"
             },
-            "population": 500
+            "population": 8000
+        },
+        {
+            "type": "HexCylinder",
+            "parameter": 1.5,
+            "axis": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 3000
         }
     ]
 }

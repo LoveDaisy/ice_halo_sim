@@ -21,10 +21,10 @@ heatmap_spec_raw = zeros(heatmap_size(1), heatmap_size(2), spec_pts);
 heatmap_spec_cnt = zeros(size(heatmap_spec_raw));
 
 cam_uv_offset = [0, 0];
-% cam_proj = @(sph)camera_project(sph, [90, 89.9, 0], 120, ...
-%     heatmap_size, 'Equiarea');
-cam_proj = @(sph)camera_project(sph, [90, 8.5, 0], 53.5, ...
-    heatmap_size, 'linear');
+cam_proj = @(sph)camera_project(sph, [90, 89.99, 0], 120, ...
+    heatmap_size, 'Equiarea');
+% cam_proj = @(sph)camera_project(sph, [90, 8.5, 0], 53.5, ...
+%     heatmap_size, 'linear');
 
 block_read_lines = 1000000;
 total_w = 0;
