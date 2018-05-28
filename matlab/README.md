@@ -11,8 +11,8 @@ other codes for visualization data produced by c++ program.
 * Arbitrary orientation of crystals, including uniform distributed in an angle range, uniform distributed on a sphere,
   Gaussian distributed with given mean and standard deviation.
 * Multi-wave result visualization. It reads the binary file produced by C++ version and visulize the result. 
-  It depends on my another project [Spectral Renderer](https://github.com/LoveDaisy/spec_render).
-<img src="figs/sim_screenshot.png" width="400">
+  It depends on my another project [Spectral Renderer](https://github.com/LoveDaisy/spec_render).  
+  <img src="figs/sim_screenshot.png" width="400">
 * Crystal shape visualization.
 
 ## Supported ice crystal shape.
