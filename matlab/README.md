@@ -12,7 +12,7 @@ other codes for visualization data produced by c++ program.
   Gaussian distributed with given mean and standard deviation.
 * Multi-wave result visualization. It reads the binary file produced by C++ version and visulize the result. 
   It depends on my another project [Spectral Renderer](https://github.com/LoveDaisy/spec_render).  
-  <img src="figs/sim_screenshot.png" width="400">
+  <img src="figs/sim03E_36M.jpg" width="400">
 * Crystal shape visualization.
 
 ## Supported ice crystal shape.
