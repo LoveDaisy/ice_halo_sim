@@ -98,7 +98,9 @@ defines the rotation around c-axis (also regarded as z-axis in above figures and
 
   These fields all has three attributes, `mean`, `std`, `type`.  
   `type` defines the random distribution
-type, either `Gauss`, for Gaussian distribution, or `Uniform`, for uniform distribution.  
+type, either `Gauss`, for Gaussian distribution, or `Uniform`, for uniform distribution. *NOTE:*
+if `type` of `axis` is set to `Uniform`, then `mean` and `std` will be ignored and
+the axis will uniformly distributed on sphere. (This could be changed in the future)  
   `mean` defines
 the mean of the random distribution. For `axis`, it means the zenith angle.  
   `std` defines the deviation of the distribution. For Gaussian distribution,
