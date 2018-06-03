@@ -2,9 +2,24 @@
     "sun": {
         "altitude": 42
     },
-    "ray_number": 100000,
+    "ray_number": 1000000,
     "max_recursion": 9,
     "crystal": [
+        {
+            "type": "HexCylinder",
+            "parameter": 0.3,
+            "axis": {
+                "mean": 0,
+                "std": 2,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 2000
+        },
         {
             "type": "HexCylinder",
             "parameter": 3.0,
@@ -19,21 +34,6 @@
                 "type": "Uniform"
             },
             "population": 2000
-        },
-        {
-            "type": "HexCylinder",
-            "parameter": 0.3,
-            "axis": {
-                "mean": 0,
-                "std": 2,
-                "type": "Gauss"
-            },
-            "roll": {
-                "mean": 0,
-                "std": 360,
-                "type": "Uniform"
-            },
-            "population": 4000
         }
     ]
 }

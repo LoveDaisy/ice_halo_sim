@@ -124,7 +124,7 @@ void RayTracingContext::initRays(CrystalContext *ctx)
     activeRaySeg.clear();
     for (int i = 0; i < initRayNum; i++) {
         fillDir(sunDir, rayDir+i*3, mainAxRot+i*3, ctx);
-        
+
         int idx = chooseFace(faces, faceNum, rayDir+i*3);
         faceId[i] = idx;
 
@@ -419,10 +419,10 @@ void SimulationContext::writeFinalDirections(const char *filename)
     }
     fwrite(&totalRaySegNum, sizeof(uint64_t), 1, file);
     
-    size_t currentIdx = 0;
     std::vector<RaySegment*> v;
     int k = 0;
-    for (auto &rc : rayTracingCtxs) {
+    for (auto rc : rayTracingCtxs) {
+        size_t currentIdx = 0;
         for (auto r : rc->rays) {
             v.clear();
             v.push_back(r->firstRaySeg);
@@ -444,7 +444,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
                     fwrite(&p->w, sizeof(float), 1, file);
 
                     // printf("LAST_MA%d:%+.4f,%+.4f,%+.4f\n", k,
-                    //     mainAxRot[currentIdx*3+0], mainAxRot[currentIdx*3+1], mainAxRot[currentIdx*3+2]);
+                    //     rc->mainAxRot[currentIdx*3+0], rc->mainAxRot[currentIdx*3+1], rc->mainAxRot[currentIdx*3+2]);
                     // printf("OUT%d:%+.4f,%+.4f,%+.4f\n", k,
                     //     p->dir.x(), p->dir.y(), p->dir.z());
                     // printf("FINAL%d:%+.4f,%+.4f,%+.4f\n", k,

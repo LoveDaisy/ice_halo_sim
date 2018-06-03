@@ -276,7 +276,6 @@ void Optics::propagateHalide(RayTracingContext *rayCtx, CrystalContext *cryCtx)
 void Optics::traceRays(SimulationContext &context)
 {
     RaySegmentFactory::getInstance()->clear();
-
     /* 
      * For each crystal, run the ray tracing procedure. 
      */
@@ -289,9 +288,9 @@ void Optics::traceRays(SimulationContext &context)
         rayTracingCtx->initRays(crystalCtx);
 
         // Start loop
+        float index = IceRefractiveIndex::n(context.getWavelength());
         int recursion = 0;
         while (!rayTracingCtx->isFinished() && recursion < context.getMaxRecursionNum()) {
-            float index = IceRefractiveIndex::n(context.getWavelength());
             hitSurfaceHalide(index, rayTracingCtx, crystalCtx);
             rayTracingCtx->commitHitResult();
             propagateHalide(rayTracingCtx, crystalCtx);
