@@ -97,83 +97,8 @@ size_t Ray::totalNum()
 }
 
 
-// std::default_random_engine* Optics::gen = nullptr;
-// std::uniform_real_distribution<float>* Optics::dist = nullptr;
-
-
 RaySegmentFactory * RaySegmentFactory::instance = nullptr;
 
-// std::default_random_engine& Optics::getGenerator()
-// {
-//     if (!gen) {
-//         unsigned int t = static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count());
-//         gen = new std::default_random_engine(t);
-//     }
-//     return *gen;
-// }
-
-
-// std::uniform_real_distribution<float>& Optics::getDistribution()
-// {
-//     if (!dist) {
-//         dist = new std::uniform_real_distribution<float>(0.0f, 1.0f);
-//     }
-//     return *dist;
-// }
-
-
-// void Optics::initRays(int num, const float *dir, int face_num, const float *faces,
-//        float *ray_pt, int *face_id)
-// {
-
-//     auto *frac = new float[face_num];
-//     for (int i = 0; i < face_num; i++) {
-//         float v1[3], v2[3];
-//         LinearAlgebra::vec3FromTo(faces + i*9, faces + i*9 + 3, v1);
-//         LinearAlgebra::vec3FromTo(faces + i*9, faces + i*9 + 6, v2);
-//         float norm[3];
-//         LinearAlgebra::cross3(v1, v2, norm);
-//         float c = LinearAlgebra::dot3(dir, norm);
-//         frac[i] = c < 0 ? LinearAlgebra::norm3(norm) / 2 * (-c) : 0;
-//     }
-//     for (int i = 1; i < face_num; i++) {
-//         frac[i] += frac[i-1];
-//     }
-//     for (int i = 0; i < face_num; i++) {
-//         frac[i] /= frac[face_num-1];
-//     }
-//     frac[face_num-1] = 1.0f;    // Force to 1.0f
-
-//     std::uniform_real_distribution<float> distribution = getDistribution();
-
-//     for (int i = 0; i < num; i++) {
-//         int idx = face_num-1;
-//         float p = distribution(getGenerator());
-//         float *tmp_pt = ray_pt + i*3;
-//         for (int j = 0; j < face_num; j++) {
-//             if (p <= frac[j]) {
-//                 idx = j;
-//                 break;
-//             }
-//         }
-
-//         face_id[i] = idx;
-//         float a = distribution(getGenerator());
-//         float b = distribution(getGenerator());
-//         if (a + b > 1.0f) {
-//             a = 1.0f - a;
-//             b = 1.0f - b;
-//         }
-//         tmp_pt[0] = faces[idx*9+0] + a * (faces[idx*9+3] - faces[idx*9+0]) + 
-//             b * (faces[idx*9+6] - faces[idx*9+0]);
-//         tmp_pt[1] = faces[idx*9+1] + a * (faces[idx*9+4] - faces[idx*9+1]) + 
-//             b * (faces[idx*9+7] - faces[idx*9+1]);
-//         tmp_pt[2] = faces[idx*9+2] + a * (faces[idx*9+5] - faces[idx*9+2]) + 
-//             b * (faces[idx*9+8] - faces[idx*9+2]);
-//     }
-
-//     delete[] frac;
-// }
 
 // void Optics::hitSurface(float n, int num, const float *dir, const float *norm,
 //         float *reflect_dir, float *refract_dir, float *reflect_w)
@@ -205,9 +130,7 @@ RaySegmentFactory * RaySegmentFactory::instance = nullptr;
 // }
 
 
-// void Optics::hitSurfaceHalide(float n, int num, const float *dir, const float *norm,
-//                               float *reflect_dir, float *refract_dir, float *reflect_w)
-void Optics::hitSurfaceHalide(float n, RayTracingContext *rayCtx, CrystalContext *cryCtx)
+void Optics::hitSurfaceHalide(float n, RayTracingContext *rayCtx)
 {
     using namespace Halide::Runtime;
 
@@ -250,9 +173,6 @@ void Optics::hitSurfaceHalide(float n, RayTracingContext *rayCtx, CrystalContext
 // }
 
 
-// void Optics::propagateHalide(int num, const float *pt, const float *dir,
-//     int face_num, const float *faces, const int *face_id,
-//     float *new_pt, int *new_face_id)
 void Optics::propagateHalide(RayTracingContext *rayCtx, CrystalContext *cryCtx)
 {
     using namespace Halide::Runtime;
@@ -291,7 +211,7 @@ void Optics::traceRays(SimulationContext &context)
         float index = IceRefractiveIndex::n(context.getWavelength());
         int recursion = 0;
         while (!rayTracingCtx->isFinished() && recursion < context.getMaxRecursionNum()) {
-            hitSurfaceHalide(index, rayTracingCtx, crystalCtx);
+            hitSurfaceHalide(index, rayTracingCtx);
             rayTracingCtx->commitHitResult();
             propagateHalide(rayTracingCtx, crystalCtx);
             rayTracingCtx->commitPropagateResult(crystalCtx);

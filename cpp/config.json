@@ -1,6 +1,6 @@
 {
     "sun": {
-        "altitude": 42
+        "altitude": 5
     },
     "ray_number": 1000000,
     "max_recursion": 9,
@@ -18,22 +18,22 @@
                 "std": 360,
                 "type": "Uniform"
             },
-            "population": 2000
+            "population": 4000
         },
         {
             "type": "HexCylinder",
             "parameter": 3.0,
             "axis": {
-                "mean": 0,
-                "std": 360,
-                "type": "Uniform"
+                "mean": 90,
+                "std": 5,
+                "type": "Gauss"
             },
             "roll": {
                 "mean": 0,
                 "std": 360,
                 "type": "Uniform"
             },
-            "population": 2000
+            "population": 1000
         }
     ]
 }

@@ -144,7 +144,7 @@ void RayTracingContext::initRays(CrystalContext *ctx)
 }
 
 
-void RayTracingContext::initRays(int rayNum, const float *dir, CrystalContext *ctx)
+void RayTracingContext::initRays(int rayNum, const float *dir, const float *w, CrystalContext *ctx)
 {
     setRayNum(rayNum);
 
@@ -164,7 +164,7 @@ void RayTracingContext::initRays(int rayNum, const float *dir, CrystalContext *c
         fillPts(faces, idx, rayPts+i*3);
         crystal->copyNormalData(idx, faceNorm+i*3);
 
-        auto *r = new Ray(rayPts+i*3, rayDir+i*3, 1.0f, faceId[i]);
+        auto *r = new Ray(rayPts+i*3, rayDir+i*3, w[i], faceId[i]);
         rays.push_back(r);
         activeRaySeg.push_back(r->firstRaySeg);
 

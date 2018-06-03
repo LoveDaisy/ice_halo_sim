@@ -69,7 +69,7 @@ public:
     void setRayNum(int rayNum);
 
     void initRays(CrystalContext *ctx);
-    void initRays(int rayNum, const float *dir, CrystalContext *ctx);
+    void initRays(int rayNum, const float *dir, const float *w, CrystalContext *ctx);
     void clearRays();
     void commitHitResult();
     void commitPropagateResult(CrystalContext *ctx);
