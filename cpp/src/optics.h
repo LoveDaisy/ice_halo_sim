@@ -50,27 +50,8 @@ public:
     static void traceRays(SimulationContext &context);
 
 private:
-    // static void initRays(int num, const float *dir, int face_num, const float *faces,
-    //                      float *ray_pt, int *face_id);
-    static void hitSurfaceHalide(float n, RayTracingContext *rayCtx, CrystalContext *cryCtx);
-    // static void hitSurfaceHalide(float n, int num, const float *dir, const float *norm,
-    //                              float *reflect_dir, float *refract_dir, float *reflect_w);
-    // static void propagate(int num, const float *pt, const float *dir, int face_num, const float *faces,
-    //                       float *new_pt, int *new_face_id);
+    static void hitSurfaceHalide(float n, RayTracingContext *rayCtx);
     static void propagateHalide(RayTracingContext *rayCtx, CrystalContext *cryCtx);
-    // static void propagateHalide(int num, const float *pt, const float *dir,
-    //                             int face_num, const float *faces, const int *face_id,
-    //                             float *new_pt, int *new_face_id);
-
-    // static float getReflectRatio(float inc_angle, float n1, float n2);
-    // static void intersectLineFace(const float *pt, const float *dir, const float *face,
-    //                               float *p, float *t, float *alpha, float *beta);
-
-    // static std::default_random_engine& getGenerator();
-    // static std::uniform_real_distribution<float>& getDistribution();
-
-    // static std::default_random_engine* gen;
-    // static std::uniform_real_distribution<float>* dist;
 };
 
 

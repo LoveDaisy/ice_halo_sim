@@ -18,7 +18,7 @@ latest updates will be on C++ codes.
 2. [Halide](http://halide-lang.org/)
 3. [Rapidjson](http://rapidjson.org/index.html)
 
-<img src="matlab/figs/sim03E_36M.jpg" width="600">
+<img src="matlab/figs/sim04E_52M.jpg" width="600">
 
 
 # 冰晕模拟程序

@@ -742,6 +742,11 @@ Crystal *Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
     return new Crystal(vertexes, faces);
 }
 
+OrientationGenerator::OrientationGenerator() :
+    axDist(Distribution::UNIFORM), axMean(0), axStd(0),
+    rollDist(Distribution::UNIFORM), rollMean(0), rollStd(0)
+{ }
+
 OrientationGenerator::OrientationGenerator(Distribution axDist, float axMean, float axStd,
         Distribution rollDist, float rollMean, float rollStd) :
     axDist(axDist), axMean(axMean), axStd(axStd),
@@ -754,13 +759,13 @@ OrientationGenerator::OrientationGenerator(Distribution axDist, float axMean, fl
 
 void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot)
 {
-    float tmpSunDir[3] = { 0.0f };
-    float sunRotation[3] = {
-        atan2(-sunDir[1], -sunDir[0]),
-        asin(-sunDir[2]),
-        0.0f
-    };
-    float h = 1.0f - cos(0.25f * Crystal::PI / 180.0f);
+    // float tmpSunDir[3] = { 0.0f };
+    // float sunRotation[3] = {
+    //     atan2(-sunDir[1], -sunDir[0]),
+    //     asin(-sunDir[2]),
+    //     0.0f
+    // };
+    // float h = 1.0f - cos(0.25f * Crystal::PI / 180.0f);
 
     // printf("SUN_ROT:%+.4f,%+.4f,%+.4f\n", sunRotation[0], sunRotation[1], sunRotation[2]);
 
@@ -803,12 +808,12 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
         mainAxRot[i*3+1] = lat;
         mainAxRot[i*3+2] = roll;
 
-        float z = 1.0f - uniformDistribution(generator) * h;
-        float q = uniformDistribution(generator) * 2 * Crystal::PI;
-        tmpSunDir[0] = sqrt(1.0f - z * z) * cos(q);
-        tmpSunDir[1] = sqrt(1.0f - z * z) * sin(q);
-        tmpSunDir[2] = z;
-        LinearAlgebra::rotateZBack(sunRotation, tmpSunDir);
+        // float z = 1.0f - uniformDistribution(generator) * h;
+        // float q = uniformDistribution(generator) * 2 * Crystal::PI;
+        // tmpSunDir[0] = sqrt(1.0f - z * z) * cos(q);
+        // tmpSunDir[1] = sqrt(1.0f - z * z) * sin(q);
+        // tmpSunDir[2] = z;
+        // LinearAlgebra::rotateZBack(sunRotation, tmpSunDir);
 
         // printf("SUN_DIR:%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n",
         //     -sunDir[0], -sunDir[1], -sunDir[2],

@@ -58,7 +58,7 @@ for i = 1:length(dir_fnames)
         xy1 = bsxfun(@plus, xy1, cam_uv_offset);
         
         idx = 0 < xy1(:,1) & xy1(:,1) <= heatmap_size(2) & ...
-            0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1);
+            0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1) & lat > 0;
         if sum(idx) <= 0
             continue;
         end
@@ -80,7 +80,7 @@ total_w = total_w / spec_pts;
 
 %%
 heatmap_spec = heatmap_spec_raw;
-heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 1.1));
+% heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 1.1));
 heatmap_spec = heatmap_spec / total_w * 4e3 * 3.0;
 spec = [wl_store, reshape(heatmap_spec, [], spec_pts)'];
 
@@ -180,9 +180,9 @@ end
 
 
 %%
-% % Write
-% img_file_path = '/Users/zhangjiajie/Documents/Ice Halo/';
-% % imwrite(uint16(heatmap_rgb_bar*65535), [img_file_path, 'test_bar.tiff']);
-% imwrite(uint16(heatmap_rgb*65535), [img_file_path, 'test.tiff']);
-% % imwrite(uint8(heatmap_rgb_bar*255), [img_file_path, 'test_bar.jpg']);
-% imwrite(uint8(heatmap_rgb*255), [img_file_path, 'test.jpg']);
+% Write
+img_file_path = '/Users/zhangjiajie/Documents/Ice Halo/';
+% imwrite(uint16(heatmap_rgb_bar*65535), [img_file_path, 'test_bar.tiff']);
+imwrite(uint16(heatmap_rgb*65535), [img_file_path, 'test.tiff']);
+% imwrite(uint8(heatmap_rgb_bar*255), [img_file_path, 'test_bar.jpg']);
+imwrite(uint8(heatmap_rgb*255), [img_file_path, 'test.jpg']);

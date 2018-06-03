@@ -111,7 +111,7 @@ public:
     };
 
 public:
-    OrientationGenerator() = default;
+    OrientationGenerator();
     OrientationGenerator(Distribution axDist, float axMean, float axStd,
         Distribution rollDist, float rollMean, float rollStd);
     ~OrientationGenerator() = default;
@@ -124,12 +124,12 @@ private:
     std::uniform_real_distribution<float> uniformDistribution;
 
     Distribution axDist;
-    float axMean;
-    float axStd;
+    float axMean{};
+    float axStd{};
 
     Distribution rollDist;
-    float rollMean;
-    float rollStd;
+    float rollMean{};
+    float rollStd{};
 };
 
 #endif // GEOMETRY_H
