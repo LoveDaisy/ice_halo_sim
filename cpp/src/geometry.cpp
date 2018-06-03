@@ -12,7 +12,7 @@ Vec3<T>::Vec3(T x, T y, T z)
 }
 
 template <typename T>
-Vec3<T>::Vec3(T *data)
+Vec3<T>::Vec3(const T *data)
 {
     _val[0] = data[0];
     _val[1] = data[1];
@@ -43,7 +43,7 @@ void Vec3<T>::val(T x, T y, T z)
 }
 
 template <typename T>
-void Vec3<T>::val(T *data)
+void Vec3<T>::val(const T *data)
 {
     _val[0] = data[0];
     _val[1] = data[1];
@@ -271,13 +271,18 @@ void Crystal::copyFaceIdxData(int *data) const
     }
 }
 
-void Crystal::copyNormalData(int num, const int *idx, float *data) const
+void Crystal::copyNormalData(int idx, float *data) const
 {
-    for (auto i = 0; i < num; ++i) {
-        if (idx[i] >= faces.size() || idx[i] < 0) {
-            break;
-        }
-        memcpy(data + i*3, norms[idx[i]].val(), 3*sizeof(float));
+    if (idx >= faces.size() || idx < 0) {
+        return;
+    }
+    memcpy(data, norms[idx].val(), 3*sizeof(float));
+}
+
+void Crystal::copyNormalData(float *data) const
+{
+    for (int i = 0; i < norms.size(); i++) {
+        memcpy(data + i*3, norms[i].val(), 3*sizeof(float));
     }
 }
 
@@ -777,10 +782,10 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
                 lat = gaussDistribution(generator) * axStd;
                 lat += axMean;
                 if (lat > Crystal::PI / 2) {
-                    lat = 2.0f * Crystal::PI - lat;
+                    lat = Crystal::PI - lat;
                 }
                 if (lat < -Crystal::PI / 2) {
-                    lat = -2.0f * Crystal::PI - lat;
+                    lat = -Crystal::PI - lat;
                 }
                 break;
         }

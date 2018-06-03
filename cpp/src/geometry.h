@@ -12,7 +12,7 @@ class Vec3
 public:
     Vec3(T x, T y, T z);
 
-    explicit Vec3(T *data);
+    explicit Vec3(const T *data);
     Vec3(const Vec3<T> &v);
 
     T x() const;
@@ -24,7 +24,7 @@ public:
 
     const T* val() const;
     void val(T x, T y, T z);
-    void val(T *data);
+    void val(const T *data);
 
     Vec3<T> normalized();
     void normalize();
@@ -80,7 +80,8 @@ public:
     void copyVertexData(float *data) const;
     void copyFaceData(float *data) const;
     void copyFaceIdxData(int *data) const;
-    void copyNormalData(int num, const int *idx, float *data) const;
+    void copyNormalData(int idx, float *data) const;
+    void copyNormalData(float *data) const;
 
     static Crystal* createHexCylinder(float h);
     static Crystal* createHexPyramid(float h1, float h2, float h3);
@@ -110,6 +111,7 @@ public:
     };
 
 public:
+    OrientationGenerator() = default;
     OrientationGenerator(Distribution axDist, float axMean, float axStd,
         Distribution rollDist, float rollMean, float rollStd);
     ~OrientationGenerator() = default;
