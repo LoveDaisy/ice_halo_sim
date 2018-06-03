@@ -13,11 +13,11 @@ int main(int argc, char *argv[])
 
     auto start = std::chrono::system_clock::now();
 
-    ContextParser *parser = ContextParser::getFileParser(argv[1]);
+    ContextParser *parser = ContextParser::createFileParser(argv[1]);
     SimulationContext context;
     try {
         parser->parseSettings(context);
-    } catch (std::invalid_argument e) {
+    } catch (std::invalid_argument &e) {
         fprintf(stderr, "Parsing error! Exit!\n Message: %s\n", e.what());
         return -1;
     }
@@ -32,7 +32,7 @@ int main(int argc, char *argv[])
     for (float wl = 440.0f; wl < 655.0f;) {
         printf("starting at wavelength: %.1f\n", wl);
 
-        context.envCtx->setWavelength(wl);
+        context.setWavelength(wl);
 
         auto t0 = std::chrono::system_clock::now();
         Optics::traceRays(context);

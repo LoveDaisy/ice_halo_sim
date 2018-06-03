@@ -10,97 +10,136 @@
 
 
 class SimulationContext;
+class ContextParser;
 
 
 class EnvironmentContext
 {
 friend SimulationContext;
 public:
-    EnvironmentContext() = default;
+    explicit EnvironmentContext(SimulationContext *ctx);
     ~EnvironmentContext() = default;
 
     void setWavelength(float wavelength);
-    float getWavelength();
+    float getWavelength() const;
 
     void setSunPosition(float lon, float lat);
+    const float * getSunDirection() const;
 
 private:
+    SimulationContext *simCtx;
+
     float wavelength;
     float sunDir[3];
-};
-
-
-class RayTracingContext
-{
-friend SimulationContext;
-public:
-    RayTracingContext() = default;
-    ~RayTracingContext() = default;
-
-    void clearRays();
-    void pushBackRay(Ray *ray);
-    
-private:
-    std::vector<Ray*> rays;
 };
 
 
 class CrystalContext
 {
 friend SimulationContext;
+friend Optics;
 public:
-    CrystalContext() = default;
-    ~CrystalContext();
+    explicit CrystalContext(SimulationContext *ctx);
+    ~CrystalContext() = default;
 
-    void addGeometry(Crystal *g, float populationWeight,
-                     OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-                     OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
+    void setCrystal(Crystal *g, float populationRatio,
+                    OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
+                    OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
+    Crystal * getCrystal();
 
-    Crystal * getCrystal(int i);
-    int getRayNum(int i);
-    RayTracingContext *getRayTracingCtx(int i);
-
-    size_t popSize();
+    void fillDir(const float *incDir, float *rayDir, float *mainAxRot, int num = 1);
 
 private:
-    std::vector<Crystal *> crystals;
-    std::vector<float> populationWeights;
-    std::vector<OrientationGenerator> oriGens;
-    std::vector<int> rayNums;
-    std::vector<RayTracingContext *> rayTracingCtxs;
+    SimulationContext *simCtx;
+
+    float populationRatio;
+    Crystal *crystal;
+    OrientationGenerator oriGen;
+};
+
+
+class RayTracingContext
+{
+friend SimulationContext;
+friend Optics;
+public:
+    explicit RayTracingContext(SimulationContext *ctx);
+    ~RayTracingContext();
+
+    void setRayNum(int rayNum);
+
+    void initRays(CrystalContext *ctx);
+    void initRays(int rayNum, const float *dir, CrystalContext *ctx);
+    void clearRays();
+    void commitHitResult();
+    void commitPropagateResult(CrystalContext *ctx);
+    bool isFinished();
+    
+private:
+    void deleteArrays();
+    int chooseFace(const float *faces, int faceNum, const float *rayDir);
+    void fillDir(const float *incDir, float *rayDir, float *axRot, CrystalContext *ctx);
+    void fillPts(const float *faces, int idx, float *rayPts);
+
+    SimulationContext *simCtx;
+
+    int initRayNum;
+    int currentRayNum;
+    std::vector<Ray *> rays;
+    std::vector<RaySegment *> activeRaySeg;
+
+    std::default_random_engine gen;
+    std::uniform_real_distribution<float> dis;
+
+// public:
+    float *mainAxRot;
+
+    float *rayDir;
+    float *rayPts;
+    float *faceNorm;
+    int *faceId;
+
+    float *rayDir2;
+    float *rayDir3;
+    float *rayPts2;
+    float *rayW2;
+    int *faceId2;
 };
 
 
 class SimulationContext
 {
+friend ContextParser;
 public:
     SimulationContext();
     ~SimulationContext();
 
-    void setTotalRayNum(uint64_t num);
-    void setMaxRecursionNum(int num);
-    int getMaxRecursionNum();
-
-    const float* getRayDirections(int i);
+    int getMaxRecursionNum() const;
+    int getCrystalNum() const;
+    void setWavelength(float wavelength);
+    float getWavelength();
+    const float * getSunDir() const;
 
     void applySettings();
 
+    CrystalContext * getCrystalContext(int i);
+    RayTracingContext * getRayTracingContext(int i);
+
+    /* For output */
     void writeFinalDirections(const char *filename);
     void writeRayInfo(const char *filename, float lon, float lat, float delta);
     void printCrystalInfo();
-
-    CrystalContext *crystalCtx;
-    EnvironmentContext *envCtx;
     
 private:
+    // Helper function
     void writeRayInfo(std::FILE *file, Ray *r);
+    
+    EnvironmentContext *envCtx;
+    std::vector<CrystalContext *> crystalCtxs;
+    std::vector<RayTracingContext *> rayTracingCtxs;
 
     uint64_t totalRayNum;
     int maxRecursionNum;
-
-    float *rayDir;
-    float *mainAxRot;
-    int *crystalId;
 };
 
 
@@ -111,7 +150,7 @@ public:
 
     void parseSettings(SimulationContext &ctx);
 
-    static ContextParser * getFileParser(const char* filename);
+    static ContextParser * createFileParser(const char *filename);
 
 private:
     explicit ContextParser(rapidjson::Document &d);
