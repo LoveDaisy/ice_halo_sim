@@ -123,16 +123,21 @@ void RayTracingContext::initRays(CrystalContext *ctx)
     rays.clear();
     activeRaySeg.clear();
     for (int i = 0; i < initRayNum; i++) {
-        fillDir(sunDir, rayDir + i*3, mainAxRot + i*3, ctx);
+        fillDir(sunDir, rayDir+i*3, mainAxRot+i*3, ctx);
         
-        int idx = chooseFace(faces, faceNum, rayDir + i*3);
+        int idx = chooseFace(faces, faceNum, rayDir+i*3);
         faceId[i] = idx;
 
-        fillPts(faces, idx, rayPts + i*3);
+        fillPts(faces, idx, rayPts+i*3);
+        crystal->copyNormalData(idx, faceNorm+i*3);
 
-        auto *r = new Ray(rayPts + i*3, rayDir + i*3, 1.0f, faceId[i]);
+        auto *r = new Ray(rayPts+i*3, rayDir+i*3, 1.0f, faceId[i]);
         rays.push_back(r);
         activeRaySeg.push_back(r->firstRaySeg);
+
+        // printf("PTS:%+.4f,%+.4f,%+.4f\n", rayPts[i*3+0], rayPts[i*3+1], rayPts[i*3+2]);
+        // printf("DIR:%+.4f,%+.4f,%+.4f\n", rayDir[i*3+0], rayDir[i*3+1], rayDir[i*3+2]);
+        // printf("AX:%+.4f,%+.4f,%+.4f\n", mainAxRot[i*3+0], mainAxRot[i*3+1], mainAxRot[i*3+2]);
     }
 
     delete[] faces;
@@ -151,16 +156,19 @@ void RayTracingContext::initRays(int rayNum, const float *dir, CrystalContext *c
     rays.clear();
     activeRaySeg.clear();
     for (int i = 0; i < initRayNum; i++) {
-        fillDir(dir + i*3, rayDir + i*3, mainAxRot + i*3, ctx);
+        fillDir(dir+i*3, rayDir+i*3, mainAxRot+i*3, ctx);
         
-        int idx = chooseFace(faces, faceNum, rayDir + i*3);
+        int idx = chooseFace(faces, faceNum, rayDir+i*3);
         faceId[i] = idx;
 
-        fillPts(faces, idx, rayPts + i*3);
+        fillPts(faces, idx, rayPts+i*3);
+        crystal->copyNormalData(idx, faceNorm+i*3);
 
-        auto *r = new Ray(rayPts + i*3, rayDir + i*3, 1.0f, faceId[i]);
+        auto *r = new Ray(rayPts+i*3, rayDir+i*3, 1.0f, faceId[i]);
         rays.push_back(r);
         activeRaySeg.push_back(r->firstRaySeg);
+
+        printf("DIR:%+.4f,%+.4f,%+.4f\n", rayPts[i*3+0], rayPts[i*3+1], rayPts[i*3+2]);
     }
 
     delete[] faces;
@@ -218,7 +226,7 @@ void RayTracingContext::commitPropagateResult(CrystalContext *ctx)
         if (faceId2[i] >= 0 && activeRaySeg[i]->w > 1e-3) {
             tmpRaySegs.push_back(activeRaySeg[i]);
             memcpy(rayPts + k*3, rayPts2 + i*3, 3 * sizeof(float));
-            memcpy(rayDir + k*3, rayDir2 + i*3, 3 * sizeof(float));
+            memcpy(rayDir + k*3, rayDir + i*3, 3 * sizeof(float));
             faceId[k] = faceId2[i];
             ctx->getCrystal()->copyNormalData(faceId2[i], faceNorm + k*3);
             k++;

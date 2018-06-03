@@ -285,6 +285,7 @@ void Optics::traceRays(SimulationContext &context)
         auto rayTracingCtx = context.getRayTracingContext(x);
 
         rayTracingCtx->clearRays();
+        rayTracingCtx->currentRayNum = rayTracingCtx->initRayNum;
         rayTracingCtx->initRays(crystalCtx);
 
         // Start loop

@@ -782,10 +782,10 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
                 lat = gaussDistribution(generator) * axStd;
                 lat += axMean;
                 if (lat > Crystal::PI / 2) {
-                    lat = 2.0f * Crystal::PI - lat;
+                    lat = Crystal::PI - lat;
                 }
                 if (lat < -Crystal::PI / 2) {
-                    lat = -2.0f * Crystal::PI - lat;
+                    lat = -Crystal::PI - lat;
                 }
                 break;
         }
