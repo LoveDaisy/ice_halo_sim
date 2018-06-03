@@ -9,16 +9,31 @@
             "type": "HexCylinder",
             "parameter": 3.0,
             "axis": {
-                "mean": 90,
-                "std": 1.2,
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 2000
+        },
+        {
+            "type": "HexCylinder",
+            "parameter": 0.3,
+            "axis": {
+                "mean": 0,
+                "std": 2,
                 "type": "Gauss"
             },
             "roll": {
                 "mean": 0,
-                "std": 1.2,
+                "std": 360,
                 "type": "Uniform"
             },
-            "population": 8000
+            "population": 4000
         }
     ]
 }
