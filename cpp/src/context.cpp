@@ -657,13 +657,21 @@ void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson:
 {
     using namespace rapidjson;
 
+    char msgBuffer[512];
+
+    auto *p = Pointer("/enable").Get(c);
+    if (p == nullptr || !p->IsBool()) {
+        sprintf(msgBuffer, "<crystal[%d].enable> cannot recgonize!", ci);
+        throw std::invalid_argument(msgBuffer);
+    } else if (!p->GetBool()) {
+        return;
+    }
+
     OrientationGenerator::Distribution axisDist, rollDist;
     float axisMean, rollMean;
     float axisStd, rollStd;
 
-    char msgBuffer[512];
-
-    auto *p = Pointer("/axis/type").Get(c);
+    p = Pointer("/axis/type").Get(c);
     if (p == nullptr || !p->IsString()) {
         sprintf(msgBuffer, "<crystal[%d].axis.type> cannot recgonize!", ci);
         throw std::invalid_argument(msgBuffer);
