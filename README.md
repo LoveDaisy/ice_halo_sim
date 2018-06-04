@@ -1,8 +1,9 @@
 # Ice halo simulation program
 
 This is a personal project for ice halo simulation. It is inspired by
-[HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/). Unfortunately
-the author seems have stopped developing.
+[HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) and
+[HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm). Unfortunately
+the author of HaloPoint seems have stopped developing.
 
 For a start this program is written in matlab though matlab is often poured scorn on for its
 slow performance. It is a prototype, on which I test my algorithms. Later developing and
@@ -15,6 +16,7 @@ latest updates will be on C++ codes.
 ## Acknowledgements
 
 1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/)
+2. [HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)
 2. [Halide](http://halide-lang.org/)
 3. [Rapidjson](http://rapidjson.org/index.html)
 
@@ -23,7 +25,8 @@ latest updates will be on C++ codes.
 
 # 冰晕模拟程序
 
-本项目是一个个人项目, 受到 [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) 的启发.
+本项目是一个个人项目, 受到 [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) 和
+[HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm) 的启发.
 但不幸的是 HaloPoint 原作者似乎停止更新了.
 
 最开始我是从 matlab 代码开始的, 虽然 matlab 经常被人吐槽很慢, 但其实用于开发原型和验证算法来说足够了.
@@ -38,6 +41,7 @@ latest updates will be on C++ codes.
 ## 致谢
 
 1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/)
+2. [HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)
 2. [Halide](http://halide-lang.org/)
 3. [Rapidjson](http://rapidjson.org/index.html)
 
