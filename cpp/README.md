@@ -94,11 +94,13 @@ Each shape has its own shape parameters.
   <img src="figs/cubic_pyramid_01.png" width="400"> 
 
   * `Custom`:
-  1 parameters that indicates the model file name. Customized crystal type supports
+  1 parameters that indicates the model file name.  
+  Customized crystal type supports
   [Wavefront obj file](https://www.wikiwand.com/en/Wavefront_.obj_file) format. It is an ASCII based
   3D model file format, which means it is human read-frendly and you can open and edit the model file
-  with any text editor.
-  *NOTE:* Though the obj file can contain polygons more than 3 vertexes, my program
+  with any text editor. Of course it is a better and elegent way to create your crystal in
+  a 3D modeling software, such as Maya, 3DMax, Blender, etc.  
+  *NOTE:* Though the obj file can contain polygons having more than 3 vertexes, my program
   can only handle triangles. A face is only represented with its first 3 vertexes (if you set more than 3).
   Currently my program cannot handle vertex texture nor vertex normal information. Please make sure your
   obj file does not contain any of them (the face line does not contain any slashes).  
