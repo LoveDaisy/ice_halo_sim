@@ -74,9 +74,9 @@
             "type": "Custom",
             "parameter": "hollow_hex_cylinder_01.obj",
             "axis": {
-                "mean": 0,
-                "std": 360,
-                "type": "Uniform"
+                "mean": 90,
+                "std": 0.5,
+                "type": "Gauss"
             },
             "roll": {
                 "mean": 0,
