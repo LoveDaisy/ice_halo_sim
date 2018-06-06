@@ -2,7 +2,7 @@
 
 [中文版](README_zh.md)
 
-After testing my algorithms on matlab codes, I start a C++ project for higher performance. Currently the C++ version is just 
+After testing my algorithms on matlab codes, I start a C++ project for higher performance. Currently the C++ version is just
 pieces of toy codes and can only run from command, no GUI.
 
 With integration of [Halide](http://halide-lang.org/) I can accelarate these codes by parallelism.
@@ -17,7 +17,7 @@ A simple way to build form start is as follows:
 2. `mkdir build && cd build`
 3. `cmake .. && make -j4`, or you can set `CMAKE_BUILD_TYPE` to `release` to get highest performance. NOTE: there are some hard coded paths for Halide libraries, you should change to your own path.
 
-Then the executable binary will be at `build/bin`. And you can start by 
+Then the executable binary will be at `build/bin`. And you can start by
 `./bin/IceHaloSim <path-to-your-config-file>`. The file [`cpp/config.json`](./config.json) is an example configuration file.
 
 ## Visualization
@@ -53,20 +53,21 @@ and still doesn't leave the crystal, it will be dropped.
 ### Crystal settings
 
 * `type` and `parameter`:
-Currently I create 5 shapes, `HexCylinder`, `HexPyramid`, `HexPyramidStackHalf`, `TriPyramid`, `CubicPyramid`.
+Currently I create 5 shapes, `HexCylinder`, `HexPyramid`, `HexPyramidStackHalf`, `TriPyramid`, `CubicPyramid`,
+`Custom`.
 Each shape has its own shape parameters.
 
   * `HexCylinder`:
   Only 1 parameter, defines `h / a` where `h` is the cylinder height, `a` is the diameter along
   a-axis (also x-axis in my program).  
   <img src="figs/hex_cylinder_01.png" width="400">.
-  
+
   * `HexPyramid`:
   May have 3, 5, or 7 parameters.  
   For 3 parameters case, they are `h1 / H1`, `h2 / a`, `h3 / H3` respectly,
   where `H1` means the max possible height for pyramid segment, and `H3` the same.  
   <img src="figs/hex_pyramid_01.png" width="400">.  
-  For 5 parameters case, the last 3 parameters are same as the first case, 
+  For 5 parameters case, the last 3 parameters are same as the first case,
   and the first 2 parameters indicate the face direction. They must be integers. The
   face direction is described with [Miller index](https://en.wikipedia.org/wiki/Miller_index).
   For example, `a`, `b`, represents a face with Miller index of (`a`, 0, `-a`, `b`). For a
@@ -77,20 +78,34 @@ Each shape has its own shape parameters.
   (`a`, 0, `-a`, `b`) and lower pyramid segment of (`c`, 0, `-c`, `d`). NOTE: for faces with different
   Miller index, their maximumn height `H` are also different.  
   With these description, you will have the maximized freedom to design your crystal shape.
-  
+
   * `HexPyramidStackHalf`:
   7 parameters. Similar to 7 parameters `HexPyramid` case. `h / H` for pyramid segment, and `h / a`
   for cylinder segment.  
   <img src="figs/hex_pyramid_stack_half_01.png" width="400">. 
-  
+
   * `TriPyramid`:
   5 parameters. Similar to 5 parameter case of `HexPyramid`. (TODO: 3 and 7 parameters cases to be added.)  
   <img src="figs/tri_pyramid_01.png" width="400">. 
 
   * `CubicPyramid`:
-  2 parameters. Similar to cases above, the 2 parameters defines `h1 / H1` and `h2 / H2`. 
+  2 parameters. Similar to cases above, the 2 parameters defines `h1 / H1` and `h2 / H2`.  
   NOTE: this kind crystal has cubic system.  
-  <img src="figs/cubic_pyramid_01.png" width="400">
+  <img src="figs/cubic_pyramid_01.png" width="400"> 
+
+  * `Custom`:
+  1 parameters that indicates the model file name.  
+  Customized crystal type supports
+  [Wavefront obj file](https://www.wikiwand.com/en/Wavefront_.obj_file) format. It is an ASCII based
+  3D model file format, which means it is human read-frendly and you can open and edit the model file
+  with any text editor. Of course it is a better and elegent way to create your crystal in
+  a 3D modeling software, such as Maya, 3DMax, Blender, etc.  
+  *NOTE:* Though the obj file can contain polygons having more than 3 vertexes, my program
+  can only handle triangles. A face is only represented with its first 3 vertexes (if you set more than 3).
+  Currently my program cannot handle vertex texture nor vertex normal information. Please make sure your
+  obj file does not contain any of them (the face line does not contain any slashes).  
+  All your models should be put in a folder named `models` and this folder must put at the same place
+  where configuration file locates. Otherwise my program cannot find them.
 
 * `axis` and `roll`:
 These two fields defines the orientation of crystals. `axis` defines the c-axis orientation, and `roll`

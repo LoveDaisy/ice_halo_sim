@@ -43,31 +43,14 @@ Ray::Ray(const float *pt, const float *dir, float w, int faceId)
     firstRaySeg = RaySegmentFactory::getInstance()->getRaySegment(pt, dir, w, faceId);
 }
 
+
+Ray::Ray(RaySegment *seg) : firstRaySeg(seg)
+{ }
+
+
 Ray::~Ray()
 {
-    std::vector<RaySegment *> v;
-    v.push_back(firstRaySeg);
-    while (!v.empty()) {
-        RaySegment *p = v.back();
-        if (p->nextReflect) {
-            v.push_back(p->nextReflect);
-        }
-        if (p->nextRefract) {
-            v.push_back(p->nextRefract);
-        }
-        if (p->nextReflect == nullptr && p->nextRefract == nullptr) {
-            v.pop_back();
-            if (p->prev) {
-                if (p->prev->nextReflect == p) {
-                    p->prev->nextReflect = nullptr;
-                }
-                if (p->prev->nextRefract == p) {
-                    p->prev->nextRefract = nullptr;
-                }
-            }
-            delete p;
-        }
-    }
+    firstRaySeg = nullptr;
 }
 
 size_t Ray::totalNum()
@@ -196,12 +179,10 @@ void Optics::propagateHalide(RayTracingContext *rayCtx, CrystalContext *cryCtx)
 void Optics::traceRays(SimulationContext &context)
 {
     RaySegmentFactory::getInstance()->clear();
-    /* 
-     * For each crystal, run the ray tracing procedure. 
-     */
-    for (int x = 0; x < context.getCrystalNum(); x++) {
-        auto crystalCtx = context.getCrystalContext(x);
-        auto rayTracingCtx = context.getRayTracingContext(x);
+
+    for (int i = 0; i < context.getCrystalNum(); i++) {
+        auto crystalCtx = context.getCrystalContext(i);
+        auto rayTracingCtx = context.getRayTracingContext(i);
 
         rayTracingCtx->clearRays();
         rayTracingCtx->currentRayNum = rayTracingCtx->initRayNum;

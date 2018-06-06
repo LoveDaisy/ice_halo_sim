@@ -6,12 +6,12 @@
     "max_recursion": 9,
     "crystal": [
         {
-            "enable": true,
+            "enable": false,
             "type": "HexCylinder",
             "parameter": 0.3,
             "axis": {
                 "mean": 0,
-                "std": 0.5,
+                "std": 1.5,
                 "type": "Gauss"
             },
             "roll": {
@@ -19,10 +19,10 @@
                 "std": 360,
                 "type": "Uniform"
             },
-            "population": 2000
+            "population": 80
         },
         {
-            "enable": true,
+            "enable": false,
             "type": "HexCylinder",
             "parameter": 4.0,
             "axis": {
@@ -35,42 +35,26 @@
                 "std": 360,
                 "type": "Uniform"
             },
-            "population": 10000
+            "population": 100
         },
         {
-            "enable": true,
-            "type": "HexCylinder",
-            "parameter": 4.0,
+            "enable": false,
+            "type": "HexPyramid",
+            "parameter": [0.3, 0.4, 0.85],
             "axis": {
-                "mean": 90,
-                "std": 0.1,
+                "mean": 0,
+                "std": 1.2,
                 "type": "Gauss"
             },
             "roll": {
                 "mean": 0,
-                "std": 0.3,
-                "type": "Gauss"
+                "std": 360,
+                "type": "Uniform"
             },
             "population": 200
         },
         {
-            "enable": true,
-            "type": "HexCylinder",
-            "parameter": 4.0,
-            "axis": {
-                "mean": 90,
-                "std": 0.1,
-                "type": "Gauss"
-            },
-            "roll": {
-                "mean": 0,
-                "std": 3.2,
-                "type": "Gauss"
-            },
-            "population": 5000
-        },
-        {
-            "enable": true,
+            "enable": false,
             "type": "HexCylinder",
             "parameter": 2.2,
             "axis": {
@@ -83,7 +67,23 @@
                 "std": 360,
                 "type": "Uniform"
             },
-            "population": 8000
+            "population": 80
+        },
+        {
+            "enable": true,
+            "type": "Custom",
+            "parameter": "hollow_hex_cylinder_01.obj",
+            "axis": {
+                "mean": 90,
+                "std": 0.5,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 80
         }
     ]
 }

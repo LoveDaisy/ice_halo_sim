@@ -7,6 +7,8 @@
 
 #include <vector>
 #include <random>
+#include <string>
+#include <cstdio>
 
 
 class SimulationContext;
@@ -40,7 +42,7 @@ friend SimulationContext;
 friend Optics;
 public:
     explicit CrystalContext(SimulationContext *ctx);
-    ~CrystalContext() = default;
+    ~CrystalContext();
 
     void setCrystal(Crystal *g, float populationRatio,
                     OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
@@ -74,7 +76,7 @@ public:
     void commitHitResult();
     void commitPropagateResult(CrystalContext *ctx);
     bool isFinished();
-    
+
 private:
     void deleteArrays();
     int chooseFace(const float *faces, int faceNum, const float *rayDir);
@@ -91,7 +93,6 @@ private:
     std::default_random_engine gen;
     std::uniform_real_distribution<float> dis;
 
-// public:
     float *mainAxRot;
 
     float *rayDir;
@@ -129,11 +130,11 @@ public:
     void writeFinalDirections(const char *filename);
     void writeRayInfo(const char *filename, float lon, float lat, float delta);
     void printCrystalInfo();
-    
+
 private:
     // Helper function
     void writeRayInfo(std::FILE *file, Ray *r);
-    
+
     EnvironmentContext *envCtx;
     std::vector<CrystalContext *> crystalCtxs;
     std::vector<RayTracingContext *> rayTracingCtxs;
@@ -153,7 +154,7 @@ public:
     static ContextParser * createFileParser(const char *filename);
 
 private:
-    explicit ContextParser(rapidjson::Document &d);
+    explicit ContextParser(rapidjson::Document &d, const char *filename);
 
     void parseRayNumber(SimulationContext &ctx);
     void parseMaxRecursion(SimulationContext &ctx);
@@ -163,8 +164,11 @@ private:
         float population,
         OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
         OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
+    Crystal * parseCustomCrystal(std::FILE *file);
 
     rapidjson::Document d;
+
+    std::string filename;
 };
 
 
