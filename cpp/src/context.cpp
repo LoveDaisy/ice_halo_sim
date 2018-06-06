@@ -48,6 +48,12 @@ CrystalContext::CrystalContext(SimulationContext *ctx) :
 { }
 
 
+CrystalContext::~CrystalContext()
+{
+    delete crystal;
+}
+
+
 void CrystalContext::setCrystal(
     Crystal *g, float populationWeight,
     OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
@@ -94,7 +100,7 @@ void RayTracingContext::setRayNum(int num)
     initRayNum = num;
     currentRayNum = num;
     int maxRayNum = initRayNum * simCtx->getMaxRecursionNum();
-    
+
     deleteArrays();
 
     mainAxRot = new float[initRayNum * 3];
@@ -157,7 +163,7 @@ void RayTracingContext::initRays(int rayNum, const float *dir, const float *w, C
     activeRaySeg.clear();
     for (int i = 0; i < initRayNum; i++) {
         fillDir(dir+i*3, rayDir+i*3, mainAxRot+i*3, ctx);
-        
+
         int idx = chooseFace(faces, faceNum, rayDir+i*3);
         faceId[i] = idx;
 
@@ -168,7 +174,7 @@ void RayTracingContext::initRays(int rayNum, const float *dir, const float *w, C
         rays.push_back(r);
         activeRaySeg.push_back(r->firstRaySeg);
 
-        printf("DIR:%+.4f,%+.4f,%+.4f\n", rayPts[i*3+0], rayPts[i*3+1], rayPts[i*3+2]);
+        // printf("DIR:%+.4f,%+.4f,%+.4f\n", rayPts[i*3+0], rayPts[i*3+1], rayPts[i*3+2]);
     }
 
     delete[] faces;
@@ -312,11 +318,11 @@ void RayTracingContext::fillPts(const float *faces, int idx, float *rayPts)
         a = 1.0f - a;
         b = 1.0f - b;
     }
-    rayPts[0] = faces[idx*9+0] + a * (faces[idx*9+3] - faces[idx*9+0]) + 
+    rayPts[0] = faces[idx*9+0] + a * (faces[idx*9+3] - faces[idx*9+0]) +
         b * (faces[idx*9+6] - faces[idx*9+0]);
-    rayPts[1] = faces[idx*9+1] + a * (faces[idx*9+4] - faces[idx*9+1]) + 
+    rayPts[1] = faces[idx*9+1] + a * (faces[idx*9+4] - faces[idx*9+1]) +
         b * (faces[idx*9+7] - faces[idx*9+1]);
-    rayPts[2] = faces[idx*9+2] + a * (faces[idx*9+5] - faces[idx*9+2]) + 
+    rayPts[2] = faces[idx*9+2] + a * (faces[idx*9+5] - faces[idx*9+2]) +
         b * (faces[idx*9+8] - faces[idx*9+2]);
 }
 
@@ -382,7 +388,7 @@ void SimulationContext::applySettings()
     for (auto c : crystalCtxs) {
         c->populationRatio /= popWeightSum;
     }
-    
+
     size_t currentIdx = 0;
     for (int i = 0; i < popSize-1; i++) {
         auto tmpPopSize = static_cast<int>(crystalCtxs[i]->populationRatio * totalRayNum);
@@ -418,7 +424,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
         }
     }
     fwrite(&totalRaySegNum, sizeof(uint64_t), 1, file);
-    
+
     std::vector<RaySegment*> v;
     int k = 0;
     for (auto rc : rayTracingCtxs) {
@@ -567,13 +573,16 @@ void SimulationContext::printCrystalInfo()
     }
 }
 
-ContextParser::ContextParser(rapidjson::Document &d) : d(std::move(d))
+ContextParser::ContextParser(rapidjson::Document &d, const char *filename) :
+    d(std::move(d)), filename(filename)
 { }
 
 
 ContextParser * ContextParser::createFileParser(const char *filename)
 {
     using namespace rapidjson;
+
+    printf("Reading config from: %s\n", filename);
 
     FILE* fp = fopen(filename, "rb");
     if (!fp) {
@@ -586,7 +595,7 @@ ContextParser * ContextParser::createFileParser(const char *filename)
 
     Document d;
     if (d.ParseStream(is).HasParseError()) {
-        fprintf(stderr, "\nError(offset %u): %s\n", 
+        fprintf(stderr, "\nError(offset %u): %s\n",
             (unsigned)d.GetErrorOffset(),
         GetParseError_En(d.GetParseError()));
         fclose(fp);
@@ -595,7 +604,7 @@ ContextParser * ContextParser::createFileParser(const char *filename)
 
     fclose(fp);
 
-    return new ContextParser(d);
+    return new ContextParser(d, filename);
 }
 
 
@@ -868,10 +877,62 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
             sprintf(msgBuffer, "<crystal[%d].parameter> number doesn't match!", ci);
             throw std::invalid_argument(msgBuffer);
         }
+    } else if (c["type"] == "Custom") {
+        if (p == nullptr || !p->IsString()) {
+            sprintf(msgBuffer, "<crystal[%d].parameter> cannot recgonize!", ci);
+            throw std::invalid_argument(msgBuffer);
+        } else {
+            char modelFileNameBuffer[512] = { 0 };
+            auto n = filename.rfind('/');
+            if (n == std::string::npos) {
+                sprintf(modelFileNameBuffer, "models/%s", p->GetString());
+            } else {
+                sprintf(modelFileNameBuffer, "%s/models/%s", filename.substr(0, n).c_str(), p->GetString());
+            }
+            std::FILE *file = fopen(modelFileNameBuffer, "r");
+            if (!file) {
+                sprintf(msgBuffer, "<crystal[%d].parameter> cannot open model file!", ci);
+                throw std::invalid_argument(msgBuffer);
+            }
+            Crystal *crystal = parseCustomCrystal(file);
+            auto *cryCtx = new CrystalContext(&ctx);
+            cryCtx->setCrystal(crystal, population,
+                axisDist, axisMean, axisStd,
+                rollDist, rollMean, rollStd);
+            ctx.crystalCtxs.push_back(cryCtx);
+            fclose(file);
+        }
     } else {
         sprintf(msgBuffer, "<crystal[%d].type> cannot recgonize!", ci);
         throw std::invalid_argument(msgBuffer);
     }
+}
+
+
+Crystal * ContextParser::parseCustomCrystal(std::FILE *file)
+{
+    std::vector<Vec3f> vertexes;
+    std::vector<TriangleIdx> faces;
+    float vbuf[3];
+    int fbuf[3];
+    int c;
+    while ((c = std::fgetc(file)) != EOF) {
+        switch (c) {
+            case 'v':
+            case 'V':
+                std::fscanf(file, "%f %f %f", vbuf+0, vbuf+1, vbuf+2);
+                vertexes.emplace_back(Vec3f(vbuf));
+                break;
+            case 'f':
+            case 'F':
+                std::fscanf(file, "%d %d %d", fbuf+0, fbuf+1, fbuf+2);
+                faces.emplace_back(TriangleIdx(fbuf[0]-1, fbuf[1]-1, fbuf[2]-1));
+                break;
+            default:
+                break;
+        }
+    }
+    return new Crystal(vertexes, faces);
 }
 
 

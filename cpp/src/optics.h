@@ -35,6 +35,7 @@ class Ray
 {
 public:
     Ray(const float *pt, const float *dir, float w, int faceId = -1);
+    Ray(RaySegment *seg);
     ~Ray();
 
     size_t totalNum();
