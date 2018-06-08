@@ -37,13 +37,12 @@ for i = 1:length(dir_fnames)
     wl_idx = find(abs(wl - wl_store) < 0.01);
 
     fid = fopen([bin_file_path, dir_fname], 'rb');
-    num = fread(fid, 1, 'uint64');
     read_num = block_read_lines;
     while read_num >= block_read_lines
 %         k = min(block_read_lines, num - read_num);
         data = fread(fid, [4, block_read_lines], 'float')';
         read_num = size(data, 1);
-        fprintf('Read %d/%d lines...\n', read_num, num);
+        fprintf('Read %d lines...\n', read_num);
         if isempty(data)
             break;
         end
@@ -59,6 +58,8 @@ for i = 1:length(dir_fnames)
         
         idx = 0 < xy1(:,1) & xy1(:,1) <= heatmap_size(2) & ...
             0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1) & lat > 0;
+%         idx = 0 < xy1(:,1) & xy1(:,1) <= heatmap_size(2) & ...
+%             0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1);
         if sum(idx) <= 0
             continue;
         end

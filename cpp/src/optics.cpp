@@ -22,8 +22,9 @@ RaySegment::RaySegment(const float *pt, const float *dir, float w, int faceId) :
 
 bool RaySegment::isValidEnd()
 {
-    return nextReflect == nullptr && nextRefract == nullptr 
-            && w > 0 && faceId >= 0 && isFinished;
+    // return nextReflect == nullptr && nextRefract == nullptr 
+    //         && w > 0 && faceId >= 0 && isFinished;
+    return w > 0 && faceId >= 0 && isFinished;
 }
 
 void RaySegment::reset()
@@ -180,25 +181,69 @@ void Optics::traceRays(SimulationContext &context)
 {
     RaySegmentFactory::getInstance()->clear();
 
-    for (int i = 0; i < context.getCrystalNum(); i++) {
-        auto crystalCtx = context.getCrystalContext(i);
-        auto rayTracingCtx = context.getRayTracingContext(i);
+    auto totalRays = context.getTotalInitRays();
+    auto maxRecursion = context.getMaxRecursionNum();
+    auto multiScatterNum = context.getMultiScatterNum();
+    auto maxNum = totalRays * maxRecursion * multiScatterNum * 3;
 
-        rayTracingCtx->clearRays();
-        rayTracingCtx->currentRayNum = rayTracingCtx->initRayNum;
-        rayTracingCtx->initRays(crystalCtx);
+    auto *dirStore = new float[maxNum * 3];
+    auto *wStore = new float[maxNum];
+    auto **raySegStore = new RaySegment *[maxNum];
 
-        // Start loop
-        float index = IceRefractiveIndex::n(context.getWavelength());
-        int recursion = 0;
-        while (!rayTracingCtx->isFinished() && recursion < context.getMaxRecursionNum()) {
-            hitSurfaceHalide(index, rayTracingCtx);
-            rayTracingCtx->commitHitResult();
-            propagateHalide(rayTracingCtx, crystalCtx);
-            rayTracingCtx->commitPropagateResult(crystalCtx);
-            recursion++;
-        }
+    for (int i = 0; i < maxNum; i++) {
+        memcpy(dirStore + i*3, context.getSunDir(), 3*sizeof(float));
+        wStore[i] = 1.0f;
+        raySegStore[i] = nullptr;
     }
+
+    std::default_random_engine randomEngine;
+    std::uniform_real_distribution<double> uniformDist(0.0, 1.0);
+    std::vector<RaySegment *> v;
+    for (int scatterIdx = 0; scatterIdx < multiScatterNum; scatterIdx++) {
+        size_t inputOffset = 0, outputOffset = 0;
+        for (int crystalIdx = 0; crystalIdx < context.getCrystalNum(); crystalIdx++) {
+            auto crystalCtx = context.getCrystalContext(crystalIdx);
+            auto rayTracingCtx = context.getRayTracingContext(scatterIdx, crystalIdx);
+
+            rayTracingCtx->clearRays();
+            rayTracingCtx->initRays(crystalCtx, rayTracingCtx->initRayNum, 
+                dirStore + inputOffset * 3, wStore + inputOffset, raySegStore + inputOffset);
+
+            // Start loop
+            float index = IceRefractiveIndex::n(context.getWavelength());
+            int recursion = 0;
+            while (!rayTracingCtx->isFinished() && recursion < maxRecursion) {
+                hitSurfaceHalide(index, rayTracingCtx);
+                rayTracingCtx->commitHitResult();
+                propagateHalide(rayTracingCtx, crystalCtx);
+                rayTracingCtx->commitPropagateResult(crystalCtx);
+                recursion++;
+            }
+
+            inputOffset += rayTracingCtx->initRayNum;
+
+            v.clear();
+            auto tmpRaySegs = rayTracingCtx->copyFinishedRaySegments(raySegStore + outputOffset, 
+                dirStore + outputOffset * 3, context.getMultiScatterProb());
+            outputOffset += tmpRaySegs;
+        }
+
+        for (int i = outputOffset - 1; i >= 0; i--) {
+            auto j = static_cast<size_t>(uniformDist(randomEngine) * i);
+            auto tmpR = raySegStore[i];
+            raySegStore[i] = raySegStore[j];
+            raySegStore[j] = tmpR;
+            float tmpD[3];
+            memcpy(tmpD, dirStore + i*3, sizeof(float)*3);
+            memcpy(dirStore + i*3, dirStore + j*3, sizeof(float)*3);
+            memcpy(dirStore + j*3, tmpD, sizeof(float)*3);
+            wStore[i] = raySegStore[i]->w;
+        }
+        context.allocateCrystalRayNum(scatterIdx + 1, outputOffset);
+    }
+
+    delete[] dirStore;
+    delete[] wStore;
     
 }
 

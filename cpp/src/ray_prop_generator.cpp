@@ -6,7 +6,7 @@ namespace {
 
 const int DEFAULT_NUM = 1024*1024;
 const float MAX_FLOAT = std::numeric_limits<float>::max();
-const float EPS = 1e-4f;
+const float EPS = 1e-5f;
 
 class RayPropagate : public Halide::Generator<RayPropagate> {
 public:
