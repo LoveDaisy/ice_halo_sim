@@ -484,7 +484,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
     std::FILE* file = std::fopen(filename, "wb");
     if (!file) return;
 
-    uint64_t totalRaySegNum = 0;
+    // uint64_t totalRaySegNum = 0;
     // for (auto &rc : rayTracingCtxs) {
     //     for (auto &r : rc->rays) {
     //         totalRaySegNum += r->totalNum();

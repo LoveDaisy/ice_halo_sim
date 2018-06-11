@@ -1,3 +1,5 @@
+#include <limits>
+
 #include "optics.h"
 #include "linearalgebra.h"
 #include "context.h"
@@ -186,14 +188,15 @@ void Optics::traceRays(SimulationContext &context)
     auto multiScatterNum = context.getMultiScatterNum();
     auto maxNum = totalRays * maxRecursion * multiScatterNum * 3;
 
-    auto *dirStore = new float[maxNum * 3];
+    auto *dirStore = new float[maxNum * 3], *dirStore2 = new float[maxNum *3];
     auto *wStore = new float[maxNum];
-    auto **raySegStore = new RaySegment *[maxNum];
+    auto **raySegStore = new RaySegment *[maxNum], **raySegStore2 = new RaySegment *[maxNum];
 
     for (int i = 0; i < maxNum; i++) {
         memcpy(dirStore + i*3, context.getSunDir(), 3*sizeof(float));
         wStore[i] = 1.0f;
         raySegStore[i] = nullptr;
+        raySegStore2[i] = nullptr;
     }
 
     std::default_random_engine randomEngine;
@@ -223,23 +226,22 @@ void Optics::traceRays(SimulationContext &context)
             inputOffset += rayTracingCtx->initRayNum;
 
             v.clear();
-            auto tmpRaySegs = rayTracingCtx->copyFinishedRaySegments(raySegStore + outputOffset, 
-                dirStore + outputOffset * 3, context.getMultiScatterProb());
+            auto tmpRaySegs = rayTracingCtx->copyFinishedRaySegments(raySegStore2 + outputOffset,
+                dirStore2 + outputOffset * 3, context.getMultiScatterProb());
             outputOffset += tmpRaySegs;
         }
 
-        for (int i = outputOffset - 1; i >= 0; i--) {
-            auto j = static_cast<size_t>(uniformDist(randomEngine) * i);
-            auto tmpR = raySegStore[i];
-            raySegStore[i] = raySegStore[j];
-            raySegStore[j] = tmpR;
-            float tmpD[3];
-            memcpy(tmpD, dirStore + i*3, sizeof(float)*3);
-            memcpy(dirStore + i*3, dirStore + j*3, sizeof(float)*3);
-            memcpy(dirStore + j*3, tmpD, sizeof(float)*3);
-            wStore[i] = raySegStore[i]->w;
+        if (scatterIdx < multiScatterNum - 1) {
+            for (int i = outputOffset - 1; i >= 0; i--) {
+                auto j = static_cast<size_t>(uniformDist(randomEngine) * i);
+                raySegStore[i] = raySegStore2[j];
+                raySegStore[j] = raySegStore2[i];
+                memcpy(dirStore + j*3, dirStore2 + i*3, sizeof(float)*3);
+                memcpy(dirStore + i*3, dirStore2 + j*3, sizeof(float)*3);
+                wStore[i] = raySegStore[i]->w;
+            }
+            context.allocateCrystalRayNum(scatterIdx + 1, outputOffset);
         }
-        context.allocateCrystalRayNum(scatterIdx + 1, outputOffset);
     }
 
     delete[] dirStore;
@@ -316,7 +318,7 @@ float IceRefractiveIndex::n(float waveLength)
     }
 
     float nn = 1.0f;
-    for (int i = 0; i < sizeof(_wl)/sizeof(float); i++) {
+    for (auto i = 0; i < sizeof(_wl)/sizeof(float); i++) {
         if (waveLength < _wl[i]) {
             float w1 = _wl[i-1];
             float w2 = _wl[i];
@@ -388,3 +390,87 @@ void RaySegmentFactory::clear()
     nextUnusedId = 0;
     currentChunkId = 0;
 }
+
+
+void SpectrumRenderer::rgb(int waveLengthNumber, float *waveLengths, 
+        int dataNumber, float *specData, uint8_t *rgbData)
+{
+    for (int i = 0; i < dataNumber; i++) {
+        /* Step 1. Spectrum to XYZ */
+        float xyz[3] = { 0 };
+        for (int j = 0; j < waveLengthNumber; j++) {
+            // int startWl = std::max(static_cast<int>(waveLengths[j]), _cmf_min_wl);
+            // int endWl = std::min(static_cast<int>(waveLengths[j+1]), _cmf_max_wl);
+            // float startSpec = specData[j*dataNumber + i];
+            // float endSpec = specData[(j+1)*dataNumber + i];
+
+            // for (int k = startWl; k < endWl; k++) {
+            //     float v = (k - startWl) * 1.0f / (endWl - startWl) * (endSpec - startSpec) + startSpec;
+            //     xyz[0] += _cmf_x[k] * v;
+            //     xyz[1] += _cmf_y[k] * v;
+            //     xyz[2] += _cmf_z[k] * v;
+            // }
+
+            auto wl = static_cast<int>(waveLengths[j]);
+            float v = wl >= _cmf_min_wl && wl <= _cmf_max_wl ? specData[j*dataNumber + i] : 0.0f;
+            xyz[0] += _cmf_x[wl - _cmf_min_wl] * v;
+            xyz[1] += _cmf_y[wl - _cmf_min_wl] * v;
+            xyz[2] += _cmf_z[wl - _cmf_min_wl] * v;
+        }
+        // for (int j = 0; j < 3; j++) {
+        //     xyz[j] /= _cmf_xyz_sum[j];
+        // }
+
+        /* Step 2. XYZ to linear RGB */
+        float gray[3];
+        for (int j = 0; j < 3; j++) {
+            gray[j] = _W[j] * xyz[1];
+        }
+        
+        float r = 1.0f;
+        for (int j = 0; j < 3; j++) {
+            float a = 0, b = 0;
+            for (int k = 0; k < 3; k++) {
+                a += -gray[k] * _mt[j*3 + k];
+                b += (xyz[k] - gray[k]) * _mt[j*3 + k];
+            }
+            if (a * b > 0 && a / b < r) {
+                r = a / b;
+            }
+        }
+
+        float rgb[3] = { 0 };
+        for (int j = 0; j < 3; j++) {
+            xyz[j] = (xyz[j] - gray[j]) * r + gray[j];
+        }
+        for (int j = 0; j < 3; j++) {
+            for (int k = 0; k < 3; k++) {
+                rgb[j] += xyz[k] * _mt[j*3 + k];
+            }
+            rgb[j] = fmin(fmax(rgb[j], 0.0f), 1.0f);
+        }
+
+        /* Step 3. Convert linear sRGB to sRGB */
+        for (int j = 0; j < 3; j++) {
+            if (rgb[j] < 0.0031308) {
+                rgb[j] *= 12.92f;
+            } else {
+                rgb[j] = static_cast<float>(1.055 * std::pow(rgb[j], 1.0/2.4) - 0.055);
+            }
+            rgbData[i * 3 + j] = static_cast<uint8_t>(rgb[j] * 255);
+        }
+    }
+}
+
+
+constexpr int SpectrumRenderer::_cmf_min_wl;
+constexpr int SpectrumRenderer::_cmf_max_wl;
+
+constexpr float SpectrumRenderer::_cmf_xyz_sum[];
+constexpr float SpectrumRenderer::_W[];
+constexpr float SpectrumRenderer::_mt[];
+constexpr float SpectrumRenderer::_cmf_x[];
+constexpr float SpectrumRenderer::_cmf_y[];
+constexpr float SpectrumRenderer::_cmf_z[];
+
+

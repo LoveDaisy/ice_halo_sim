@@ -10,9 +10,8 @@ template <typename T>
 class Vec3
 {
 public:
-    Vec3(T x, T y, T z);
-
     explicit Vec3(const T *data);
+    Vec3(T x, T y, T z);
     Vec3(const Vec3<T> &v);
 
     T x() const;

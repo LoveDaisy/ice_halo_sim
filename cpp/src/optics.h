@@ -103,15 +103,20 @@ private:
 class SpectrumRenderer
 {
 public:
-    SpectrumRenderer();
+    SpectrumRenderer() = default;
     ~SpectrumRenderer() = default;
 
-    void rgb(int waveLengthNumber, int pointNumber, float *waveLengths, float *pointData, uint8_t *rgbData);
+    void rgb(int waveLengthNumber, float *waveLengths,  // wave lengths
+             int dataNumber, float *specData,           // spectrum data, waveLengthNumber x dataNumber
+             uint8_t *rgbData);                         // rgb data, dataNumber x 3
 
 private:
     static constexpr int _cmf_min_wl = 360;
     static constexpr int _cmf_max_wl = 830;
+    static constexpr float _cmf_xyz_sum[] = { 106.8655f, 106.8569f, 106.8923 };
 
+    static constexpr float _W[] = { 0.95047f, 1.00000f, 1.08883f };  // D65 for sRGB
+    static constexpr float _mt[] = { 3.2405f, -1.5371f, -0.4985f, -0.9693f, 1.8760f, 0.0416f, 0.0556f, -0.2040f, 1.0572f };
     static constexpr float _cmf_x[] = {
         0.000129900000f, 0.000145847000f, 0.000163802100f, 0.000184003700f, 0.000206690200f, 0.000232100000f, 0.000260728000f,
         0.000293075000f, 0.000329388000f, 0.000369914000f, 0.000414900000f, 0.000464158700f, 0.000518986000f, 0.000581854000f,
