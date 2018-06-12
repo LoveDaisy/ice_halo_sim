@@ -103,13 +103,18 @@ void LinearAlgebra::rotateZ(float *lon_lat_roll, float *vec, int dataNum)
     DummyMatrix matR(ax, 3, 3);
     matR.transpose();
 
-    float res[3];
-    DummyMatrix resVec(res, 1, 3);
-    for (int i = 0; i < dataNum; i++) {
-        DummyMatrix inputVec(vec + i * 3, 1, 3);
-        DummyMatrix::multiply(inputVec, matR, resVec);
-        memcpy(vec + i * 3, res, 3 * sizeof(float));
-    }
+    // float res[3];
+    // DummyMatrix resVec(res, 1, 3);
+    // for (int i = 0; i < dataNum; i++) {
+    //     DummyMatrix inputVec(vec + i * 3, 1, 3);
+    //     DummyMatrix::multiply(inputVec, matR, resVec);
+    //     memcpy(vec + i * 3, res, 3 * sizeof(float));
+    // }
+    auto *res = new float[dataNum * 3];
+    DummyMatrix resVec(res, dataNum, 3);
+    DummyMatrix inputVec(vec, dataNum, 3);
+    DummyMatrix::multiply(inputVec, matR, resVec);
+    memcpy(vec, res, 3 * dataNum * sizeof(float));
 }
 
 // void LinearAlgebra::rotateZBack(float lon, float lat, float roll, float *vec)

@@ -82,7 +82,7 @@ total_w = total_w / spec_pts;
 %%
 heatmap_spec = heatmap_spec_raw;
 % heatmap_spec = imfilter(heatmap_spec, fspecial('gaussian', 20, 1.1));
-heatmap_spec = heatmap_spec / total_w * 4e3 * .3;
+heatmap_spec = heatmap_spec / total_w * 4e3 * 3.0;
 spec = [wl_store, reshape(heatmap_spec, [], spec_pts)'];
 
 heatmap_rgb = spec_to_rgb(spec, 'Space', 'srgb', ...

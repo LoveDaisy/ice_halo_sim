@@ -82,7 +82,7 @@ public:
             newPt.estimate(x, 0, 3).estimate(y, 0, DEFAULT_NUM);
 
         } else {
-            // TODO
+            // Dont go this way
         }
     }
 };
