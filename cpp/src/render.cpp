@@ -1,5 +1,42 @@
 #include "optics.h"
 #include "render.h"
+#include "geometry.h"
+#include "linearalgebra.h"
+
+
+void EquiAreaCameraProjection::project(
+        float *camRot,          // Camera rotation. [lon, lat, roll]
+        float hov,              // Half field of view. For diagonal.
+        int dataNumber,         // Data number
+        float *dir,             // Ray directions, [x, y, z]
+        int imgWid, int imgHei, // Image size
+        int *imgXY              // Image coordinates
+    )
+{
+    float imgR = std::sqrt(imgWid * imgWid * 1.0f + imgHei * imgHei * 1.0f) / 2.0f;
+    auto *dirCopy = new float[dataNumber * 3];
+    float camRotCopy[3];
+    memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
+    memcpy(camRotCopy, camRot, sizeof(float) * 3);
+    camRotCopy[2] += 180;
+    for (float &i : camRotCopy) {
+        i *= Crystal::PI / 180.0f;
+    }
+
+    LinearAlgebra::rotateZ(camRotCopy, dirCopy, dataNumber);
+    for (int i = 0; i < dataNumber; i++) {
+        float lon = std::atan2(dirCopy[i * 3 + 1], dirCopy[i * 3 + 0]);
+        float lat = std::asin(dirCopy[i * 3 + 2] / LinearAlgebra::norm3(dirCopy + i * 3));
+        float projR = imgR / 2.0f / std::sin(hov / 360.0f * Crystal::PI);
+        float r = 2.0f * projR * std::sin((Crystal::PI / 2.0f - lat) / 2.0f);
+
+        imgXY[i * 2 + 0] = static_cast<int>(r * std::cos(lon) + imgWid / 2.0f);
+        imgXY[i * 2 + 1] = static_cast<int>(r * std::sin(lon) + imgHei / 2.0f);
+    }
+
+    delete[] dirCopy;
+}
+
 
 constexpr int SpectrumRenderer::_cmf_min_wl;
 constexpr int SpectrumRenderer::_cmf_max_wl;

@@ -122,11 +122,15 @@ public:
 
     uint64_t getTotalInitRays() const;
     int getMaxRecursionNum() const;
+    
     int getMultiScatterNum() const;
     float getMultiScatterProb() const;
+    
     int getCrystalNum() const;
+    
     void setWavelength(float wavelength);
     float getWavelength();
+    
     const float * getSunDir() const;
 
     void applySettings();
@@ -141,8 +145,7 @@ public:
     void printCrystalInfo();
 
 private:
-    // Helper function
-    void writeRayInfo(std::FILE *file, Ray *r);
+    void writeRayInfo(std::FILE *file, Ray *r);     // Helper function
 
     EnvironmentContext *envCtx;
     std::vector<CrystalContext *> crystalCtxs;
@@ -153,6 +156,9 @@ private:
     
     int multiScatterNum;
     float multiScatterProb;
+
+    std::mt19937 generator;
+    std::uniform_real_distribution<float> uniformDistribution;
 };
 
 

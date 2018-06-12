@@ -1,6 +1,41 @@
 #ifndef ICEHALOSIM_RENDER_H
 #define ICEHALOSIM_RENDER_H
 
+
+class CameraProjection
+{
+public:
+    CameraProjection() = default;
+    virtual ~CameraProjection() = default;
+    
+    virtual void project(
+        float *camRot,          // Camera rotation. [lon, lat, roll]
+        float hov,              // Half field of view. For diagonal.
+        int dataNumber,         // Data number
+        float *dir,             // Ray directions, [x, y, z]
+        int imgWid, int imgHei, // Image size
+        int *imgXY              // Image coordinates
+    ) = 0;
+};
+
+
+class EquiAreaCameraProjection : public CameraProjection
+{
+public:
+    EquiAreaCameraProjection() = default;
+    ~EquiAreaCameraProjection() = default;
+    
+    virtual void project(
+        float *camRot,          // Camera rotation. [lon, lat, roll]
+        float hov,              // Half field of view. For diagonal.
+        int dataNumber,         // Data number
+        float *dir,             // Ray directions, [x, y, z]
+        int imgWid, int imgHei, // Image size
+        int *imgXY              // Image coordinates
+    ) override;
+};
+
+
 class SpectrumRenderer
 {
 public:
@@ -9,7 +44,7 @@ public:
 
     void rgb(int waveLengthNumber, float *waveLengths,  // wave lengths
              int dataNumber, float *specData,           // spectrum data, waveLengthNumber x dataNumber
-             unsigned char *rgbData);                         // rgb data, dataNumber x 3
+             uint8_t *rgbData);                         // rgb data, dataNumber x 3
 
 private:
     static constexpr int _cmf_min_wl = 360;

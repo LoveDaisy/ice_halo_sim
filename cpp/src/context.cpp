@@ -422,6 +422,7 @@ void SimulationContext::setWavelength(float wavelength)
 
 float SimulationContext::getWavelength()
 {
+    // TODO: sun diameter
     return envCtx->getWavelength();
 }
 

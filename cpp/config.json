@@ -1,11 +1,12 @@
 {
     "sun": {
-        "altitude": 0
+        "altitude": 36,
+        "diameter": 0.5
     },
     "ray_number": 100000,
     "max_recursion": 9,
     "multi_scatter": {
-        "repeat": 2,
+        "repeat": 1,
         "probability": 1.0
     },
     "crystal": [
@@ -26,7 +27,7 @@
             "population": 200
         },
         {
-            "enable": false,
+            "enable": true,
             "type": "HexCylinder",
             "parameter": 4.0,
             "axis": {
@@ -58,7 +59,7 @@
             "population": 200
         },
         {
-            "enable": true,
+            "enable": false,
             "type": "HexPyramid",
             "parameter": [0.3, 0.4, 0.3],
             "axis": {
