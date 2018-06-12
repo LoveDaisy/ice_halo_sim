@@ -8,41 +8,6 @@
 #include <unordered_set>
 
 
-EnvironmentContext::EnvironmentContext(SimulationContext *ctx) :
-    simCtx(ctx)
-{ }
-
-
-void EnvironmentContext::setWavelength(float wavelength)
-{
-    this->wavelength = wavelength;
-}
-
-
-float EnvironmentContext::getWavelength() const
-{
-    return wavelength;
-}
-
-
-void EnvironmentContext::setSunPosition(float lon, float lat)
-{
-    float x = -std::cos(lat * Crystal::PI / 180.0f) * std::cos(lon * Crystal::PI / 180.0f);
-    float y = -std::cos(lat * Crystal::PI / 180.0f) * std::sin(lon * Crystal::PI / 180.0f);
-    float z = -std::sin(lat * Crystal::PI / 180.0f);
-
-    this->sunDir[0] = x;
-    this->sunDir[1] = y;
-    this->sunDir[2] = z;
-}
-
-
-const float * EnvironmentContext::getSunDirection() const
-{
-    return this->sunDir;
-}
-
-
 CrystalContext::CrystalContext(SimulationContext *ctx) :
     simCtx(ctx)
 { }
@@ -115,39 +80,6 @@ void RayTracingContext::setRayNum(int num)
     rayW2 = new float[maxRayNum];
     faceId2 = new int[maxRayNum];
 }
-
-
-// void RayTracingContext::initRays(CrystalContext *ctx)
-// {
-//     Crystal * crystal = ctx->getCrystal();
-//     int faceNum = crystal->faceNum();
-//     auto *faces = new float[faceNum * 9];
-//     crystal->copyFaceData(faces);
-
-//     const float *sunDir = simCtx->getSunDir();
-
-//     rays.clear();
-//     activeRaySeg.clear();
-//     for (int i = 0; i < initRayNum; i++) {
-//         fillDir(sunDir, rayDir+i*3, mainAxRot+i*3, ctx);
-
-//         int idx = chooseFace(faces, faceNum, rayDir+i*3);
-//         faceId[i] = idx;
-
-//         fillPts(faces, idx, rayPts+i*3);
-//         crystal->copyNormalData(idx, faceNorm+i*3);
-
-//         auto *r = new Ray(rayPts+i*3, rayDir+i*3, 1.0f, faceId[i]);
-//         rays.push_back(r);
-//         activeRaySeg.push_back(r->firstRaySeg);
-
-//         // printf("PTS:%+.4f,%+.4f,%+.4f\n", rayPts[i*3+0], rayPts[i*3+1], rayPts[i*3+2]);
-//         // printf("DIR:%+.4f,%+.4f,%+.4f\n", rayDir[i*3+0], rayDir[i*3+1], rayDir[i*3+2]);
-//         // printf("AX:%+.4f,%+.4f,%+.4f\n", mainAxRot[i*3+0], mainAxRot[i*3+1], mainAxRot[i*3+2]);
-//     }
-
-//     delete[] faces;
-// }
 
 
 void RayTracingContext::initRays(CrystalContext *ctx, int rayNum, const float *dir, const float *w, RaySegment **prevRaySeg)
@@ -367,13 +299,13 @@ void RayTracingContext::fillPts(const float *faces, int idx, float *rayPts)
 SimulationContext::SimulationContext() :
     totalRayNum(0), maxRecursionNum(9), multiScatterNum(1), multiScatterProb(1.0f)
 {
-    envCtx = new EnvironmentContext(this);
+    // envCtx = new EnvironmentContext(this);
 }
 
 
 SimulationContext::~SimulationContext()
 {
-    delete envCtx;
+    // delete envCtx;
     for (auto p : crystalCtxs) {
         delete p;
     }
@@ -416,20 +348,32 @@ float SimulationContext::getMultiScatterProb() const
 
 void SimulationContext::setWavelength(float wavelength)
 {
-    envCtx->setWavelength(wavelength);
+    this->wavelength = wavelength;
 }
 
 
 float SimulationContext::getWavelength()
 {
-    // TODO: sun diameter
-    return envCtx->getWavelength();
+    return wavelength;
 }
 
 
 const float * SimulationContext::getSunDir() const
 {
-    return envCtx->sunDir;
+    // TODO: sun diameter
+    return sunDir;
+}
+
+
+void SimulationContext::setSunPosition(float lon, float lat)
+{
+    float x = -std::cos(lat * Crystal::PI / 180.0f) * std::cos(lon * Crystal::PI / 180.0f);
+    float y = -std::cos(lat * Crystal::PI / 180.0f) * std::sin(lon * Crystal::PI / 180.0f);
+    float z = -std::sin(lat * Crystal::PI / 180.0f);
+
+    this->sunDir[0] = x;
+    this->sunDir[1] = y;
+    this->sunDir[2] = z;
 }
 
 
@@ -754,7 +698,7 @@ void ContextParser::parseSunSetting(SimulationContext &ctx)
     } else {
         sunAltitude = static_cast<float>(p->GetDouble());
     }
-    ctx.envCtx->setSunPosition(90.0f, sunAltitude);
+    ctx.setSunPosition(90.0f, sunAltitude);
 }
 
 

@@ -15,27 +15,6 @@ class SimulationContext;
 class ContextParser;
 
 
-class EnvironmentContext
-{
-friend SimulationContext;
-public:
-    explicit EnvironmentContext(SimulationContext *ctx);
-    ~EnvironmentContext() = default;
-
-    void setWavelength(float wavelength);
-    float getWavelength() const;
-
-    void setSunPosition(float lon, float lat);
-    const float * getSunDirection() const;
-
-private:
-    SimulationContext *simCtx;
-
-    float wavelength;
-    float sunDir[3];
-};
-
-
 class CrystalContext
 {
 friend SimulationContext;
@@ -70,7 +49,6 @@ public:
 
     void setRayNum(int rayNum);
 
-    // void initRays(CrystalContext *ctx);
     void initRays(CrystalContext *ctx, int rayNum, const float *dir, const float *w, RaySegment **prevRaySeg = nullptr);
     void clearRays();
     void commitHitResult();
@@ -132,6 +110,7 @@ public:
     float getWavelength();
     
     const float * getSunDir() const;
+    void setSunPosition(float lon, float lat);
 
     void applySettings();
     void allocateCrystalRayNum(int scatterIdx, uint64_t totalRayNum);
@@ -147,7 +126,6 @@ public:
 private:
     void writeRayInfo(std::FILE *file, Ray *r);     // Helper function
 
-    EnvironmentContext *envCtx;
     std::vector<CrystalContext *> crystalCtxs;
     std::vector<std::vector<RayTracingContext *> > rayTracingCtxs;
 
@@ -156,6 +134,9 @@ private:
     
     int multiScatterNum;
     float multiScatterProb;
+
+    float wavelength;
+    float sunDir[3];
 
     std::mt19937 generator;
     std::uniform_real_distribution<float> uniformDistribution;
