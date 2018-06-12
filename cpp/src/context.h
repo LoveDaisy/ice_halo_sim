@@ -110,6 +110,7 @@ public:
     float getWavelength();
     
     const float * getSunDir() const;
+    void fillSunDir(float *dir, int num = 1);
     void setSunPosition(float lon, float lat);
 
     void applySettings();
@@ -136,7 +137,9 @@ private:
     float multiScatterProb;
 
     float wavelength;
+    
     float sunDir[3];
+    float sunDiameter;
 
     std::mt19937 generator;
     std::uniform_real_distribution<float> uniformDistribution;

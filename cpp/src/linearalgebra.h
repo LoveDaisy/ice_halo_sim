@@ -16,8 +16,8 @@ public:
 
     static void rotateBase(const float *ax, float angle, float *vec);
 
-    static void rotateZ(float *lon_lat_roll, float *vec, int dataNum = 1);
-    static void rotateZBack(const float *lon_lat_roll, float *vec);
+    static void rotateZ(const float *lon_lat_roll, float *vec, int dataNum = 1);
+    static void rotateZBack(const float *lon_lat_roll, float *vec, int dataNum = 1);
 };
 
 class DummyMatrix

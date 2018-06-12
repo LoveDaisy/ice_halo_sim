@@ -297,7 +297,9 @@ void RayTracingContext::fillPts(const float *faces, int idx, float *rayPts)
 
 
 SimulationContext::SimulationContext() :
-    totalRayNum(0), maxRecursionNum(9), multiScatterNum(1), multiScatterProb(1.0f)
+    totalRayNum(0), maxRecursionNum(9), 
+    multiScatterNum(1), multiScatterProb(1.0f),
+    wavelength(550.0f), sunDiameter(0.5f)
 {
     // envCtx = new EnvironmentContext(this);
 }
@@ -362,6 +364,28 @@ const float * SimulationContext::getSunDir() const
 {
     // TODO: sun diameter
     return sunDir;
+}
+
+
+void SimulationContext::fillSunDir(float *dir, int num)
+{
+    float sunLon = std::atan2(sunDir[1], sunDir[0]);
+    float sunLat = std::asin(sunDir[2] / LinearAlgebra::norm3(sunDir));
+    float sunRot[3] = { sunLon, sunLat, 0 };
+
+    float dz = 1.0f - std::cos(sunDiameter / 360 * Crystal::PI);
+    for (int i = 0; i < num; i++) {
+        float z = 1.0f - uniformDistribution(generator) * dz;
+        float r = std::sqrt(1.0f - z * z);
+        float q = uniformDistribution(generator) * 2 * Crystal::PI;
+        float x = std::cos(q) * r;
+        float y = std::sin(q) * r;
+
+        dir[i*3 + 0] = x;
+        dir[i*3 + 1] = y;
+        dir[i*3 + 2] = z;
+    }
+    LinearAlgebra::rotateZBack(sunRot, dir, num);
 }
 
 
@@ -699,6 +723,18 @@ void ContextParser::parseSunSetting(SimulationContext &ctx)
         sunAltitude = static_cast<float>(p->GetDouble());
     }
     ctx.setSunPosition(90.0f, sunAltitude);
+
+    // Parsing sun diameter
+    float sunDiameter = 0.5f;
+    p = Pointer("/sun/diameter").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <sun.diameter>, using default 0.5!\n");
+    } else if (!p->IsNumber()) {
+        fprintf(stderr, "\nWARNING! Config <sun.diameter> is not a number, using default 0.5!\n");
+    } else {
+        sunDiameter = static_cast<float>(p->GetDouble());
+    }
+    ctx.sunDiameter = sunDiameter;
 }
 
 

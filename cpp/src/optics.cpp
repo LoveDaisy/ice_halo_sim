@@ -193,7 +193,7 @@ void Optics::traceRays(SimulationContext &context)
     auto **raySegStore = new RaySegment *[maxNum], **raySegStore2 = new RaySegment *[maxNum];
 
     for (int i = 0; i < maxNum; i++) {
-        memcpy(dirStore + i*3, context.getSunDir(), 3*sizeof(float));
+        context.fillSunDir(dirStore + i*3);
         wStore[i] = 1.0f;
         raySegStore[i] = nullptr;
         raySegStore2[i] = nullptr;
