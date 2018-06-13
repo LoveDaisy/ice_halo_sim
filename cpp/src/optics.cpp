@@ -192,7 +192,7 @@ void Optics::traceRays(SimulationContext &context)
     auto *wStore = new float[maxNum];
     auto **raySegStore = new RaySegment *[maxNum], **raySegStore2 = new RaySegment *[maxNum];
 
-    for (int i = 0; i < maxNum; i++) {
+    for (decltype(maxNum) i = 0; i < maxNum; i++) {
         context.fillSunDir(dirStore + i*3);
         wStore[i] = 1.0f;
         raySegStore[i] = nullptr;
@@ -318,7 +318,7 @@ float IceRefractiveIndex::n(float waveLength)
     }
 
     float nn = 1.0f;
-    for (auto i = 0; i < sizeof(_wl)/sizeof(float); i++) {
+    for (decltype(sizeof(_wl)) i = 0; i < sizeof(_wl) / sizeof(float); i++) {
         if (waveLength < _wl[i]) {
             float w1 = _wl[i-1];
             float w2 = _wl[i];

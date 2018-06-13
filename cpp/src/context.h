@@ -109,7 +109,6 @@ public:
     void setWavelength(float wavelength);
     float getWavelength();
     
-    const float * getSunDir() const;
     void fillSunDir(float *dir, int num = 1);
     void setSunPosition(float lon, float lat);
 

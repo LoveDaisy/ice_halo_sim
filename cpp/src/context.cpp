@@ -141,10 +141,10 @@ void RayTracingContext::commitHitResult()
         tmpRaySegs.push_back(seg);
     }
     activeRaySeg.clear();
-    for (int i = 0; i < tmpRaySegs.size(); i += 2) {
+    for (decltype(tmpRaySegs.size()) i = 0; i < tmpRaySegs.size(); i += 2) {
         activeRaySeg.push_back(tmpRaySegs[i]);
     }
-    for (int i = 1; i < tmpRaySegs.size(); i += 2) {
+    for (decltype(tmpRaySegs.size()) i = 1; i < tmpRaySegs.size(); i += 2) {
         activeRaySeg.push_back(tmpRaySegs[i]);
     }
     tmpRaySegs.clear();
@@ -194,7 +194,7 @@ size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float *dir,
 
     std::vector<RaySegment *> v;
     size_t k = 0;
-    for (auto rayIdx = 0; rayIdx < rays.size(); rayIdx++) {
+    for (decltype(rays.size()) rayIdx = 0; rayIdx < rays.size(); rayIdx++) {
         v.clear();
         v.push_back(rays[rayIdx]->firstRaySeg);
 
@@ -360,13 +360,6 @@ float SimulationContext::getWavelength()
 }
 
 
-const float * SimulationContext::getSunDir() const
-{
-    // TODO: sun diameter
-    return sunDir;
-}
-
-
 void SimulationContext::fillSunDir(float *dir, int num)
 {
     float sunLon = std::atan2(sunDir[1], sunDir[0]);
@@ -405,7 +398,6 @@ void SimulationContext::applySettings()
 {
     if (totalRayNum <= 0) return;
 
-    size_t popSize = crystalCtxs.size();
     float popWeightSum = 0.0f;
     for (auto c : crystalCtxs) {
         popWeightSum += c->populationRatio;
@@ -420,13 +412,13 @@ void SimulationContext::applySettings()
 
 void SimulationContext::allocateCrystalRayNum(int scatterIdx, uint64_t totalRayNum)
 {
-    if (scatterIdx >= rayTracingCtxs.size()) {
+    if (scatterIdx >= static_cast<int>(rayTracingCtxs.size())) {
         return;
     }
 
     size_t popSize = crystalCtxs.size();
     size_t currentIdx = 0;
-    for (int i = 0; i < popSize-1; i++) {
+    for (decltype(popSize) i = 0; i < popSize-1; i++) {
         auto tmpPopSize = static_cast<int>(crystalCtxs[i]->populationRatio * totalRayNum);
         rayTracingCtxs[scatterIdx][i]->setRayNum(tmpPopSize);
         currentIdx += tmpPopSize;
