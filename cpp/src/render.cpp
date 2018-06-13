@@ -4,6 +4,8 @@
 #include "linearalgebra.h"
 
 
+namespace IceHalo {
+
 void EquiAreaCameraProjection::project(
         float *camRot,          // Camera rotation. [lon, lat, roll]
         float hov,              // Half field of view. For diagonal.
@@ -116,3 +118,5 @@ void SpectrumRenderer::rgb(int waveLengthNumber, float *waveLengths,
         }
     }
 }
+
+}   // namespace IceHalo

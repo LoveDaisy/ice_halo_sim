@@ -8,6 +8,8 @@
 #include <unordered_set>
 
 
+namespace IceHalo {
+
 CrystalContext::CrystalContext(SimulationContext *ctx) :
     simCtx(ctx)
 { }
@@ -1015,3 +1017,5 @@ void ContextParser::parseSettings(SimulationContext &ctx)
         ci++;
     }
 }
+
+}   // namespace IceHalo

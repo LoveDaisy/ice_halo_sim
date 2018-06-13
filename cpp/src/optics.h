@@ -3,6 +3,9 @@
 
 #include "geometry.h"
 
+
+namespace IceHalo {
+
 class SimulationContext;
 class RayTracingContext;
 class CrystalContext;
@@ -98,6 +101,8 @@ private:
     uint32_t nextUnusedId;
     uint32_t currentChunkId;
 };
+
+}   // namespace IceHalo
 
 
 #endif // OPTICS_H

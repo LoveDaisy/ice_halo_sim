@@ -2,6 +2,8 @@
 #define LINEARALGEBRA_H
 
 
+namespace IceHalo {
+
 class LinearAlgebra
 {
 public:
@@ -36,5 +38,7 @@ public:
 private:
     float *data;
 };
+
+}   // namespace IceHalo
 
 #endif // LINEARALGEBRA_H

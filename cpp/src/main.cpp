@@ -4,6 +4,7 @@
 #include "context.h"
 #include "render.h"
 
+using namespace IceHalo;
 
 int main(int argc, char *argv[])
 {

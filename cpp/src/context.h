@@ -11,6 +11,8 @@
 #include <cstdio>
 
 
+namespace IceHalo {
+
 class SimulationContext;
 class ContextParser;
 
@@ -172,6 +174,8 @@ private:
 
     std::string filename;
 };
+
+}   // namespace IceHalo
 
 
 #endif // TESTHELPER_H

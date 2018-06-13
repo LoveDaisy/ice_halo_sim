@@ -4,6 +4,9 @@
 #include <cstring>
 #include <cstdio>
 
+
+namespace IceHalo {
+
 float LinearAlgebra::dot3(const float *vec1, const float *vec2)
 {
     return vec1[0]*vec2[0] + vec1[1]*vec2[1] + vec1[2]*vec2[2];
@@ -177,3 +180,5 @@ void DummyMatrix::transpose()
         }
     }
 }
+
+}   // namespace IceHalo

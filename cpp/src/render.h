@@ -2,6 +2,9 @@
 #define ICEHALOSIM_RENDER_H
 
 
+namespace IceHalo {
+
+
 class CameraProjection
 {
 public:
@@ -268,6 +271,7 @@ private:
 
 };
 
-#include "geometry.h"
+}   // namespace IceHalo
+
 
 #endif //ICEHALOSIM_RENDER_H

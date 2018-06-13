@@ -3,6 +3,8 @@
 #include "linearalgebra.h"
 
 
+namespace IceHalo {
+
 template <typename T>
 Vec3<T>::Vec3(T x, T y, T z)
 {
@@ -813,3 +815,5 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
         LinearAlgebra::rotateZ(mainAxRot + i * 3, rayDir + i * 3);
     }
 }
+
+}   // namespace IceHalo

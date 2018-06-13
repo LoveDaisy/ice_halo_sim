@@ -8,6 +8,9 @@
 #include "ray_prop.h"
 #include "HalideBuffer.h"
 
+
+namespace IceHalo {
+
 RaySegment::RaySegment() :
     nextReflect(nullptr),
     nextRefract(nullptr),
@@ -392,3 +395,4 @@ void RaySegmentFactory::clear()
 }
 
 
+}   // namespace IceHalo

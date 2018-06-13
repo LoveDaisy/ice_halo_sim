@@ -6,6 +6,9 @@
 #include <set>
 #include <random>
 
+
+namespace IceHalo {
+
 template <typename T>
 class Vec3
 {
@@ -130,5 +133,7 @@ private:
     float rollMean{};
     float rollStd{};
 };
+
+}   // namespace IceHalo
 
 #endif // GEOMETRY_H
