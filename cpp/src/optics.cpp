@@ -243,7 +243,7 @@ void Optics::traceRays(SimulationContext &context)
                 memcpy(dirStore + i*3, dirStore2 + j*3, sizeof(float)*3);
                 wStore[i] = raySegStore[i]->w;
             }
-            context.allocateCrystalRayNum(scatterIdx + 1, outputOffset);
+            context.setCrystalRayNum(scatterIdx + 1, outputOffset);
         }
     }
 

@@ -408,11 +408,11 @@ void SimulationContext::applySettings()
         c->populationRatio /= popWeightSum;
     }
 
-    allocateCrystalRayNum(0, totalRayNum);
+    setCrystalRayNum(0, totalRayNum);
 }
 
 
-void SimulationContext::allocateCrystalRayNum(int scatterIdx, uint64_t totalRayNum)
+void SimulationContext::setCrystalRayNum(int scatterIdx, uint64_t totalRayNum)
 {
     if (scatterIdx >= static_cast<int>(rayTracingCtxs.size())) {
         return;

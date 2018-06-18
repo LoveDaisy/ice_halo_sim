@@ -115,7 +115,7 @@ public:
     void setSunPosition(float lon, float lat);
 
     void applySettings();
-    void allocateCrystalRayNum(int scatterIdx, uint64_t totalRayNum);
+    void setCrystalRayNum(int scatterIdx, uint64_t totalRayNum);
 
     CrystalContext * getCrystalContext(int i);
     RayTracingContext * getRayTracingContext(int scatterIndx, int crystalIdx);
