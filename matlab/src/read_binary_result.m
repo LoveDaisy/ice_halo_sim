@@ -21,10 +21,10 @@ heatmap_spec_raw = zeros(heatmap_size(1), heatmap_size(2), spec_pts);
 heatmap_spec_cnt = zeros(size(heatmap_spec_raw));
 
 cam_uv_offset = [0, 0];
-% cam_proj = @(sph)camera_project(sph, [90, 89.99, 0], 120, ...
-%     heatmap_size, 'Equiarea');
-cam_proj = @(sph)camera_project(sph, [90, 10, 0], 40, ...
-    heatmap_size, 'linear');
+cam_proj = @(sph)camera_project(sph, [90, 89.99, 0], 120, ...
+    heatmap_size, 'Equiarea');
+% cam_proj = @(sph)camera_project(sph, [72, 25, 0], 52, ...
+%     heatmap_size, 'linear');
 
 w11 = 0; w21 = 0;
 block_read_lines = 1000000;
@@ -51,10 +51,10 @@ for i = 1:length(dir_fnames)
         data_norm = sqrt(sum(data(:,1:3).^2, 2));
         data = data(abs(data_norm - 1) < 1e-6, :);
         
-        % Add atmosphere scattering
-        data(:,1:3) = data(:,1:3) + randn(size(data(:,1:3))) * 0.015;
-        data_norm = sqrt(sum(data(:,1:3).^2, 2));
-        data(:,1:3) = bsxfun(@times, data(:,1:3), 1./data_norm);
+%         % Add atmosphere scattering
+%         data(:,1:3) = data(:,1:3) + randn(size(data(:,1:3))) * 0.015;
+%         data_norm = sqrt(sum(data(:,1:3).^2, 2));
+%         data(:,1:3) = bsxfun(@times, data(:,1:3), 1./data_norm);
         
         total_w = total_w + sum(data(:,4));
         
@@ -74,12 +74,12 @@ for i = 1:length(dir_fnames)
 %         w21 = w21 + sum(data(tmp_idx, 4));
 %         fprintf('w1(%d):%f, w2(%d):%f\n', w11_cnt, w11, w21_cnt, w21);
         
-        idx = 0 < xy1(:,1) & xy1(:,1) <= heatmap_size(2) & ...
-            0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1) & lat > 0 & ...
-            ~any(isnan(xy1), 2);
 %         idx = 0 < xy1(:,1) & xy1(:,1) <= heatmap_size(2) & ...
-%             0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1) & ...
+%             0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1) & lat > 0 & ...
 %             ~any(isnan(xy1), 2);
+        idx = 0 < xy1(:,1) & xy1(:,1) <= heatmap_size(2) & ...
+            0 < xy1(:,2) & xy1(:,2) <= heatmap_size(1) & ...
+            ~any(isnan(xy1), 2);
         if sum(idx) <= 0
             continue;
         end

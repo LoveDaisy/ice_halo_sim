@@ -111,7 +111,7 @@ void RayTracingContext::initRays(CrystalContext *ctx, int rayNum, const float *d
         rays.push_back(r);
         activeRaySeg.push_back(r->firstRaySeg);
 
-        // printf("DIR:%+.4f,%+.4f,%+.4f\n", rayPts[i*3+0], rayPts[i*3+1], rayPts[i*3+2]);
+        // printf("PTS:%+.4f,%+.4f,%+.4f\n", rayPts[i*3+0], rayPts[i*3+1], rayPts[i*3+2]);
     }
 
     delete[] faces;
@@ -250,7 +250,7 @@ int RayTracingContext::chooseFace(const float *faces, int faceNum, const float *
         float norm[3];
         LinearAlgebra::cross3(v1, v2, norm);
         float c = LinearAlgebra::dot3(rayDir, norm);
-        frac[i] = c < 0 ? LinearAlgebra::norm3(norm) / 2 * (-c) : 0;
+        frac[i] = c < 0 ? (-c) : 0;
     }
     for (int i = 1; i < faceNum; i++) {
         frac[i] += frac[i-1];
