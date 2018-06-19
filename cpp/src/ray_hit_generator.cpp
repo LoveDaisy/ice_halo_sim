@@ -54,7 +54,7 @@ public:
             reflect_w.estimate(y, 0, 1024*1024);
 
         } else {
-            // TODO
+            // Dont go this way
         }
     }
 };

@@ -4,6 +4,9 @@
 #include <cstring>
 #include <cstdio>
 
+
+namespace IceHalo {
+
 float LinearAlgebra::dot3(const float *vec1, const float *vec2)
 {
     return vec1[0]*vec2[0] + vec1[1]*vec2[1] + vec1[2]*vec2[2];
@@ -87,70 +90,34 @@ void LinearAlgebra::rotateBase(const float *ax, float angle, float *vec)
     memcpy(vec, res, 9*sizeof(float));
 }
 
-void LinearAlgebra::rotateZ(float lon, float lat, float roll, int num, float *vec)
+
+void LinearAlgebra::rotateZ(const float *lon_lat_roll, float *vec, int dataNum)
 {
-    float ax[9] = {-std::sin(lon), std::cos(lon), 0.0f, 
-        -std::cos(lon) * std::sin(lat), -std::sin(lon) * std::sin(lat), std::cos(lat),
-        std::cos(lat) * std::cos(lon), std::cos(lat) * std::sin(lon), std::sin(lat)};
-    float d[3] = {std::cos(lat) * std::cos(lon), std::cos(lat) * std::sin(lon), std::sin(lat)};
-    rotateBase(d, roll, ax);
+    using namespace std;
+    float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
+                   -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]),
+                   cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
+    // float ax[9] = {sin(lon_lat_roll[0]), -cos(lon_lat_roll[0]), 0.0f,
+    //                cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -cos(lon_lat_roll[1]),
+    //                cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
+    float d[3] = {cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
+    rotateBase(d, lon_lat_roll[2], ax);
 
     DummyMatrix matR(ax, 3, 3);
     matR.transpose();
 
-    DummyMatrix inputVec(vec, num, 3);
-    auto *res = new float[num * 3];
-    DummyMatrix resVec(res, num, 3);
-
+    auto *res = new float[dataNum * 3];
+    
+    DummyMatrix resVec(res, dataNum, 3);
+    DummyMatrix inputVec(vec, dataNum, 3);
     DummyMatrix::multiply(inputVec, matR, resVec);
-    memcpy(vec, res, 3*num*sizeof(float));
+    memcpy(vec, res, 3 * dataNum * sizeof(float));
 
     delete[] res;
 }
 
 
-void LinearAlgebra::rotateZ(float *lon_lat_roll, float *vec)
-{
-    using namespace std;
-    float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
-                   -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]),
-                   cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
-    float d[3] = {cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
-    rotateBase(d, lon_lat_roll[2], ax);
-
-    DummyMatrix matR(ax, 3, 3);
-    matR.transpose();
-
-    DummyMatrix inputVec(vec, 1, 3);
-    float res[3];
-    DummyMatrix resVec(res, 1, 3);
-
-    DummyMatrix::multiply(inputVec, matR, resVec);
-    memcpy(vec, res, 3*sizeof(float));
-}
-
-// void LinearAlgebra::rotateZBack(float lon, float lat, float roll, float *vec)
-// {
-//     float ax[9] = {-std::sin(lon), std::cos(lon), 0.0f, 
-//         -std::cos(lon) * std::sin(lat), -std::sin(lon) * std::sin(lat), std::cos(lat),
-//         std::cos(lat) * std::cos(lon), std::cos(lat) * std::sin(lon), std::sin(lat)};
-//     float d[3] = {std::cos(lat) * std::cos(lon), std::cos(lat) * std::sin(lon), std::sin(lat)};
-//     rotateBase(d, roll, ax);
-
-//     DummyMatrix matR(ax, 3, 3);
-
-//     DummyMatrix inputVec(vec, 1, 3);
-//     auto *res = new float[3];
-//     DummyMatrix resVec(res, 1, 3);
-
-//     DummyMatrix::multiply(inputVec, matR, resVec);
-//     memcpy(vec, res, 3*sizeof(float));
-
-//     delete[] res;
-// }
-
-
-void LinearAlgebra::rotateZBack(const float *lon_lat_roll, float *vec)
+void LinearAlgebra::rotateZBack(const float *lon_lat_roll, float *vec, int dataNum)
 {
     using namespace std;
     float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
@@ -161,13 +128,15 @@ void LinearAlgebra::rotateZBack(const float *lon_lat_roll, float *vec)
 
     DummyMatrix matR(ax, 3, 3);
 
-    float res[3] = { 0.0f };
+    // float res[3] = { 0.0f };
+    auto *res = new float[dataNum * 3];
     
-    DummyMatrix inputVec(vec, 1, 3);
-    DummyMatrix resVec(res, 1, 3);
-
+    DummyMatrix resVec(res, dataNum, 3);
+    DummyMatrix inputVec(vec, dataNum, 3);
     DummyMatrix::multiply(inputVec, matR, resVec);
-    memcpy(vec, res, 3*sizeof(float));
+    memcpy(vec, res, 3 * dataNum * sizeof(float));
+
+    delete[] res;
 }
 
 
@@ -211,3 +180,5 @@ void DummyMatrix::transpose()
         }
     }
 }
+
+}   // namespace IceHalo

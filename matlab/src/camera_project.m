@@ -31,6 +31,7 @@ if strcmpi(method, 'linear')
     uv = uv * img_size(2) / 2 / tand(hov);
     uv = bsxfun(@plus, uv, wrev(img_size / 2));
     uv = floor(uv);
+    uv(xyz(:,3) < 0, :) = nan;
 else
     lon = atan2d(xyz(:,2), xyz(:,1));
     lat = asind(xyz(:,3) ./ sqrt(sum(xyz.^2, 2)));

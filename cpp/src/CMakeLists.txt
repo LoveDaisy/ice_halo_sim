@@ -3,7 +3,8 @@ set(SOURCE_FILE
         geometry.cpp
         linearalgebra.cpp
         optics.cpp
-        context.cpp)
+        context.cpp
+        render.cpp)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_FLAGS "-Wall -Wextra -msse4 -pthread -std=c++11")

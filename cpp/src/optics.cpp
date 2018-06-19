@@ -1,3 +1,5 @@
+#include <limits>
+
 #include "optics.h"
 #include "linearalgebra.h"
 #include "context.h"
@@ -5,6 +7,9 @@
 #include "ray_hit.h"
 #include "ray_prop.h"
 #include "HalideBuffer.h"
+
+
+namespace IceHalo {
 
 RaySegment::RaySegment() :
     nextReflect(nullptr),
@@ -22,8 +27,9 @@ RaySegment::RaySegment(const float *pt, const float *dir, float w, int faceId) :
 
 bool RaySegment::isValidEnd()
 {
-    return nextReflect == nullptr && nextRefract == nullptr 
-            && w > 0 && faceId >= 0 && isFinished;
+    // return nextReflect == nullptr && nextRefract == nullptr 
+    //         && w > 0 && faceId >= 0 && isFinished;
+    return w > 0 && faceId >= 0 && isFinished;
 }
 
 void RaySegment::reset()
@@ -180,25 +186,69 @@ void Optics::traceRays(SimulationContext &context)
 {
     RaySegmentFactory::getInstance()->clear();
 
-    for (int i = 0; i < context.getCrystalNum(); i++) {
-        auto crystalCtx = context.getCrystalContext(i);
-        auto rayTracingCtx = context.getRayTracingContext(i);
+    auto totalRays = context.getTotalInitRays();
+    auto maxRecursion = context.getMaxRecursionNum();
+    auto multiScatterNum = context.getMultiScatterNum();
+    auto maxNum = totalRays * maxRecursion * multiScatterNum * 3;
 
-        rayTracingCtx->clearRays();
-        rayTracingCtx->currentRayNum = rayTracingCtx->initRayNum;
-        rayTracingCtx->initRays(crystalCtx);
+    auto *dirStore = new float[maxNum * 3], *dirStore2 = new float[maxNum *3];
+    auto *wStore = new float[maxNum];
+    auto **raySegStore = new RaySegment *[maxNum], **raySegStore2 = new RaySegment *[maxNum];
 
-        // Start loop
-        float index = IceRefractiveIndex::n(context.getWavelength());
-        int recursion = 0;
-        while (!rayTracingCtx->isFinished() && recursion < context.getMaxRecursionNum()) {
-            hitSurfaceHalide(index, rayTracingCtx);
-            rayTracingCtx->commitHitResult();
-            propagateHalide(rayTracingCtx, crystalCtx);
-            rayTracingCtx->commitPropagateResult(crystalCtx);
-            recursion++;
+    for (decltype(maxNum) i = 0; i < maxNum; i++) {
+        context.fillSunDir(dirStore + i*3);
+        wStore[i] = 1.0f;
+        raySegStore[i] = nullptr;
+        raySegStore2[i] = nullptr;
+    }
+
+    std::default_random_engine randomEngine;
+    std::uniform_real_distribution<double> uniformDist(0.0, 1.0);
+    std::vector<RaySegment *> v;
+    for (int scatterIdx = 0; scatterIdx < multiScatterNum; scatterIdx++) {
+        size_t inputOffset = 0, outputOffset = 0;
+        for (int crystalIdx = 0; crystalIdx < context.getCrystalNum(); crystalIdx++) {
+            auto crystalCtx = context.getCrystalContext(crystalIdx);
+            auto rayTracingCtx = context.getRayTracingContext(scatterIdx, crystalIdx);
+
+            rayTracingCtx->clearRays();
+            rayTracingCtx->initRays(crystalCtx, rayTracingCtx->initRayNum, 
+                dirStore + inputOffset * 3, wStore + inputOffset, raySegStore + inputOffset);
+
+            // Start loop
+            float index = IceRefractiveIndex::n(context.getWavelength());
+            int recursion = 0;
+            while (!rayTracingCtx->isFinished() && recursion < maxRecursion) {
+                hitSurfaceHalide(index, rayTracingCtx);
+                rayTracingCtx->commitHitResult();
+                propagateHalide(rayTracingCtx, crystalCtx);
+                rayTracingCtx->commitPropagateResult(crystalCtx);
+                recursion++;
+            }
+
+            inputOffset += rayTracingCtx->initRayNum;
+
+            v.clear();
+            auto tmpRaySegs = rayTracingCtx->copyFinishedRaySegments(raySegStore2 + outputOffset,
+                dirStore2 + outputOffset * 3, context.getMultiScatterProb());
+            outputOffset += tmpRaySegs;
+        }
+
+        if (scatterIdx < multiScatterNum - 1) {
+            for (int i = outputOffset - 1; i >= 0; i--) {
+                auto j = static_cast<size_t>(uniformDist(randomEngine) * i);
+                raySegStore[i] = raySegStore2[j];
+                raySegStore[j] = raySegStore2[i];
+                memcpy(dirStore + j*3, dirStore2 + i*3, sizeof(float)*3);
+                memcpy(dirStore + i*3, dirStore2 + j*3, sizeof(float)*3);
+                wStore[i] = raySegStore[i]->w;
+            }
+            context.setCrystalRayNum(scatterIdx + 1, outputOffset);
         }
     }
+
+    delete[] dirStore;
+    delete[] wStore;
     
 }
 
@@ -271,7 +321,7 @@ float IceRefractiveIndex::n(float waveLength)
     }
 
     float nn = 1.0f;
-    for (int i = 0; i < sizeof(_wl)/sizeof(float); i++) {
+    for (decltype(sizeof(_wl)) i = 0; i < sizeof(_wl) / sizeof(float); i++) {
         if (waveLength < _wl[i]) {
             float w1 = _wl[i-1];
             float w2 = _wl[i];
@@ -343,3 +393,6 @@ void RaySegmentFactory::clear()
     nextUnusedId = 0;
     currentChunkId = 0;
 }
+
+
+}   // namespace IceHalo

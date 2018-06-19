@@ -11,29 +11,10 @@
 #include <cstdio>
 
 
+namespace IceHalo {
+
 class SimulationContext;
 class ContextParser;
-
-
-class EnvironmentContext
-{
-friend SimulationContext;
-public:
-    explicit EnvironmentContext(SimulationContext *ctx);
-    ~EnvironmentContext() = default;
-
-    void setWavelength(float wavelength);
-    float getWavelength() const;
-
-    void setSunPosition(float lon, float lat);
-    const float * getSunDirection() const;
-
-private:
-    SimulationContext *simCtx;
-
-    float wavelength;
-    float sunDir[3];
-};
 
 
 class CrystalContext
@@ -70,14 +51,18 @@ public:
 
     void setRayNum(int rayNum);
 
-    void initRays(CrystalContext *ctx);
-    void initRays(int rayNum, const float *dir, const float *w, CrystalContext *ctx);
+    void initRays(CrystalContext *ctx, int rayNum, const float *dir, const float *w, RaySegment **prevRaySeg = nullptr);
     void clearRays();
     void commitHitResult();
     void commitPropagateResult(CrystalContext *ctx);
     bool isFinished();
 
+    size_t copyFinishedRaySegments(RaySegment **segs, float *dir, float prob = 1.0f);
+
 private:
+    static constexpr float PROP_MIN_W = 1e-6;
+    static constexpr float SCAT_MIN_W = 1e-3;
+    
     void deleteArrays();
     int chooseFace(const float *faces, int faceNum, const float *rayDir);
     void fillDir(const float *incDir, float *rayDir, float *axRot, CrystalContext *ctx);
@@ -115,16 +100,25 @@ public:
     SimulationContext();
     ~SimulationContext();
 
+    uint64_t getTotalInitRays() const;
     int getMaxRecursionNum() const;
+    
+    int getMultiScatterNum() const;
+    float getMultiScatterProb() const;
+    
     int getCrystalNum() const;
+    
     void setWavelength(float wavelength);
     float getWavelength();
-    const float * getSunDir() const;
+    
+    void fillSunDir(float *dir, int num = 1);
+    void setSunPosition(float lon, float lat);
 
     void applySettings();
+    void setCrystalRayNum(int scatterIdx, uint64_t totalRayNum);
 
     CrystalContext * getCrystalContext(int i);
-    RayTracingContext * getRayTracingContext(int i);
+    RayTracingContext * getRayTracingContext(int scatterIndx, int crystalIdx);
 
     /* For output */
     void writeFinalDirections(const char *filename);
@@ -132,15 +126,24 @@ public:
     void printCrystalInfo();
 
 private:
-    // Helper function
-    void writeRayInfo(std::FILE *file, Ray *r);
+    void writeRayInfo(std::FILE *file, Ray *r);     // Helper function
 
-    EnvironmentContext *envCtx;
     std::vector<CrystalContext *> crystalCtxs;
-    std::vector<RayTracingContext *> rayTracingCtxs;
+    std::vector<std::vector<RayTracingContext *> > rayTracingCtxs;
 
     uint64_t totalRayNum;
     int maxRecursionNum;
+    
+    int multiScatterNum;
+    float multiScatterProb;
+
+    float wavelength;
+    
+    float sunDir[3];
+    float sunDiameter;
+
+    std::mt19937 generator;
+    std::uniform_real_distribution<float> uniformDistribution;
 };
 
 
@@ -159,6 +162,7 @@ private:
     void parseRayNumber(SimulationContext &ctx);
     void parseMaxRecursion(SimulationContext &ctx);
     void parseSunSetting(SimulationContext &ctx);
+    void parseMultiScatterSetting(SimulationContext &ctx);
     void parseCrystalSetting(SimulationContext &ctx, const rapidjson::Value &c, int ci);
     void parseCrystalType(SimulationContext &ctx, const rapidjson::Value &c, int ci,
         float population,
@@ -170,6 +174,8 @@ private:
 
     std::string filename;
 };
+
+}   // namespace IceHalo
 
 
 #endif // TESTHELPER_H

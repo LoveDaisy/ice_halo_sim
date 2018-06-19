@@ -1,9 +1,14 @@
 {
     "sun": {
-        "altitude": 27
+        "altitude": 36,
+        "diameter": 0.5
     },
-    "ray_number": 1000000,
+    "ray_number": 100000,
     "max_recursion": 9,
+    "multi_scatter": {
+        "repeat": 2,
+        "probability": 1.0
+    },
     "crystal": [
         {
             "enable": false,
@@ -19,6 +24,22 @@
                 "std": 360,
                 "type": "Uniform"
             },
+            "population": 200
+        },
+        {
+            "enable": true,
+            "type": "HexCylinder",
+            "parameter": 4.0,
+            "axis": {
+                "mean": 90,
+                "std": 0.2,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 1.5,
+                "type": "Gauss"
+            },
             "population": 80
         },
         {
@@ -27,7 +48,7 @@
             "parameter": 4.0,
             "axis": {
                 "mean": 90,
-                "std": 0.35,
+                "std": 0.2,
                 "type": "Gauss"
             },
             "roll": {
@@ -35,12 +56,12 @@
                 "std": 360,
                 "type": "Uniform"
             },
-            "population": 100
+            "population": 200
         },
         {
             "enable": false,
             "type": "HexPyramid",
-            "parameter": [0.3, 0.4, 0.85],
+            "parameter": [0.3, 0.4, 0.3],
             "axis": {
                 "mean": 0,
                 "std": 1.2,
@@ -70,9 +91,9 @@
             "population": 80
         },
         {
-            "enable": true,
+            "enable": false,
             "type": "Custom",
-            "parameter": "hollow_hex_cylinder_01.obj",
+            "parameter": "hex_cylinder_01.obj",
             "axis": {
                 "mean": 90,
                 "std": 0.5,
