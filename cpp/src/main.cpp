@@ -31,7 +31,7 @@ int main(int argc, char *argv[])
     printf("Initialization: %.2fms\n", diff.count() * 1.0e3);
 
     char filename[256];
-    for (float wl = 560.0f; wl < 655.0f;) {
+    for (float wl = 440.0f; wl < 655.0f;) {
         printf("starting at wavelength: %.1f\n", wl);
 
         context.setWavelength(wl);
