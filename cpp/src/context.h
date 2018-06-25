@@ -68,7 +68,7 @@ private:
     void fillDir(const float *incDir, float *rayDir, float *axRot, CrystalContext *ctx);
     void fillPts(const float *faces, int idx, float *rayPts);
 
-    void initRaysRange(CrystalContext *ctx, const float *dir, const float *w, RaySegment **prevRaySeg, 
+    void initRaysRange(CrystalContext *ctx, const float *dir,
         const float *faces, int startIdx, int endIdx);
 
     SimulationContext *simCtx;

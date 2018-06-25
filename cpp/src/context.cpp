@@ -99,14 +99,30 @@ void RayTracingContext::initRays(CrystalContext *ctx, int rayNum, const float *d
     crystal->copyFaceData(faces);
 
     activeRaySegNum = 0;
-    initRaysRange(ctx, dir, w, prevRaySeg, faces, 0, initRayNum);
+    Pool *pool = Pool::getInstance();
+    int step = initRayNum / 80;
+    for (int startIdx = 0; startIdx < initRayNum; startIdx += step) {
+        int endIdx = std::min(startIdx + step, initRayNum);
+        pool->addJob(std::bind(&RayTracingContext::initRaysRange, this,
+            ctx, dir, faces, startIdx, endIdx));
+    }
+    pool->waitFinish();
+
+    for (int i = 0; i < initRayNum; i++) {
+        auto *r = new Ray(rayPts+i*3, rayDir+i*3, w[i], faceId[i]);
+        if (prevRaySeg && prevRaySeg[i]) {
+            prevRaySeg[i]->nextRefract = r->firstRaySeg;
+        }
+        rays[i] = r;
+        activeRaySeg[i] = r->firstRaySeg;
+    }
     activeRaySegNum = initRayNum;
 
     delete[] faces;
 }
 
 
-void RayTracingContext::initRaysRange(CrystalContext *ctx, const float *dir, const float *w, RaySegment **prevRaySeg, 
+void RayTracingContext::initRaysRange(CrystalContext *ctx, const float *dir, 
     const float *faces,
     int startIdx, int endIdx)
 {
@@ -120,12 +136,12 @@ void RayTracingContext::initRaysRange(CrystalContext *ctx, const float *dir, con
         fillPts(faces, idx, rayPts+i*3);
         ctx->getCrystal()->copyNormalData(idx, faceNorm+i*3);
 
-        auto *r = new Ray(rayPts+i*3, rayDir+i*3, w[i], faceId[i]);
-        if (prevRaySeg && prevRaySeg[i]) {
-            prevRaySeg[i]->nextRefract = r->firstRaySeg;
-        }
-        rays[i] = r;
-        activeRaySeg[i] = r->firstRaySeg;
+        // auto *r = new Ray(rayPts+i*3, rayDir+i*3, w[i], faceId[i]);
+        // if (prevRaySeg && prevRaySeg[i]) {
+        //     prevRaySeg[i]->nextRefract = r->firstRaySeg;
+        // }
+        // rays[i] = r;
+        // activeRaySeg[i] = r->firstRaySeg;
     }
 }
 
