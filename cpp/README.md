@@ -16,7 +16,8 @@ A simple way to build form start is as follows:
 3. `cmake .. && make -j4`, or you can set `CMAKE_BUILD_TYPE` to `release` to get highest performance. 
 
 Then the executable binary will be at `build/bin`. And you can start by
-`./bin/IceHaloSim <path-to-your-config-file>`. The file [`cpp/config.json`](./config.json) is an example configuration file.
+`./bin/IceHaloSim <path-to-your-config-file>`. The file [`cpp/config-example.json`](./config-example.json) 
+is an example configuration file.
 
 ## Visualization
 
@@ -24,9 +25,9 @@ After building and running, you will get several `.bin` files that contain resul
 as well as several lines printed on the screen that describe crystal shapes.
 I have prepared pieces of Matlab codes for visualization those results.
 
-`matlab/src/read_binary_result.m` reads the `.bin` files and plot the ray points.
+`matlab/src/read_binary_result-example.m` reads the `.bin` files and plot the ray points.
 
-`matlab/src/plot_crystal_main.m` plots the shape of crystals. You can copy data from program output on
+`matlab/src/plot_crystal-example.m` plots the shape of crystals. You can copy data from program output on
 screen. The lines start with `V:` indicate vertex data, and those start with `F:` indicate face data.
 
 ## Configuration file
