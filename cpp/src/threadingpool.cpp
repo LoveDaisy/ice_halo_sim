@@ -39,7 +39,7 @@ void Pool::start()
     pool.clear();
     alive = true;
     printf("Threading pool size: %u\n", threadNum);
-    for (int ii = 0; ii < threadNum; ii++) {
+    for (decltype(threadNum) ii = 0; ii < threadNum; ii++) {
         pool.emplace_back(std::thread(&Pool::workingFunction, this));
         aliveThreads += 1;
     }

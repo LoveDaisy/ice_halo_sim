@@ -3,10 +3,7 @@
 #include "optics.h"
 #include "linearalgebra.h"
 #include "context.h"
-
-#include "ray_hit.h"
-#include "ray_prop.h"
-#include "HalideBuffer.h"
+#include "threadingpool.h"
 
 
 namespace IceHalo {
@@ -27,8 +24,6 @@ RaySegment::RaySegment(const float *pt, const float *dir, float w, int faceId) :
 
 bool RaySegment::isValidEnd()
 {
-    // return nextReflect == nullptr && nextRefract == nullptr 
-    //         && w > 0 && faceId >= 0 && isFinished;
     return w > 0 && faceId >= 0 && isFinished;
 }
 
@@ -91,77 +86,53 @@ RaySegmentFactory * RaySegmentFactory::instance = nullptr;
 
 void Optics::hitSurface(float n, RayTracingContext *rayCtx)
 {
-     for (int i = 0; i < rayCtx->currentRayNum; i++) {
-         const float *tmp_dir = rayCtx->rayDir + i*3;
-         const float *tmp_norm = rayCtx->faceNorm + i*3;
-        
-         float cos_theta = LinearAlgebra::dot3(tmp_dir, tmp_norm);
-
-         float rr = cos_theta > 0 ? n : 1.0f / n;
-
-         rayCtx->rayW2[i] = getReflectRatio(cos_theta, rr);
-
-         for (int j = 0; j < 3; ++j) {
-             rayCtx->rayDir2[i*3+j] = tmp_dir[j] - 2 * cos_theta * tmp_norm[j];
-         }
-
-         float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
-         for (int j = 0; j < 3; j++) {
-             rayCtx->rayDir3[i*3+j] = d <= 0.0f ? rayCtx->rayDir2[i*3+j] :
-                 rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];
-         }
-     }
+    Pool *pool = Pool::getInstance();
+    int step = rayCtx->currentRayNum / 200;
+    for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
+        int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
+        pool->addJob(std::bind(&Optics::hitSurfaceRange, n, rayCtx, startIdx, endIdx));
+    }
+    pool->waitFinish();
 }
 
 
-void Optics::hitSurfaceHalide(float n, RayTracingContext *rayCtx)
+void Optics::hitSurfaceRange(float n, RayTracingContext *rayCtx, int startIdx, int endIdx)
 {
-    using namespace Halide::Runtime;
+    for (int i = startIdx; i < endIdx; i++) {
+        const float *tmp_dir = rayCtx->rayDir + i*3;
+        const float *tmp_norm = rayCtx->faceNorm + i*3;
 
-    Buffer<float> dir_buffer(rayCtx->rayDir, 3, rayCtx->currentRayNum);
-    Buffer<float> norm_buffer(rayCtx->faceNorm, 3, rayCtx->currentRayNum);
-    Buffer<float> reflect_dir_buffer(rayCtx->rayDir2, 3, rayCtx->currentRayNum);
-    Buffer<float> refract_dir_buffer(rayCtx->rayDir3, 3, rayCtx->currentRayNum);
-    Buffer<float> reflect_w_buffer(rayCtx->rayW2, rayCtx->currentRayNum);
+        float cos_theta = LinearAlgebra::dot3(tmp_dir, tmp_norm);
 
-    ray_hit(dir_buffer, norm_buffer, n, reflect_dir_buffer, refract_dir_buffer, reflect_w_buffer);
+        float rr = cos_theta > 0 ? n : 1.0f / n;
+
+        rayCtx->rayW2[i] = getReflectRatio(cos_theta, rr);
+
+        for (int j = 0; j < 3; ++j) {
+            rayCtx->rayDir2[i*3+j] = tmp_dir[j] - 2 * cos_theta * tmp_norm[j];
+        }
+
+        float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
+        for (int j = 0; j < 3; j++) {
+            rayCtx->rayDir3[i*3+j] = d <= 0.0f ? rayCtx->rayDir2[i*3+j] :
+            rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];
+        }
+    }
 }
 
 void Optics::propagate(RayTracingContext *rayCtx, CrystalContext *cryCtx)
 {
-    auto *faces = new float[cryCtx->crystal->faceNum() * 9];
+    auto faceNum = cryCtx->crystal->faceNum();
+    auto *faces = new float[faceNum * 9];
     cryCtx->crystal->copyFaceData(faces);
 
-    // for (int i = 0; i < rayCtx->currentRayNum; ++i) {
-    //     const float *tmp_pt = rayCtx->rayPts + i*3;
-    //     const float *tmp_dir = rayCtx->rayDir + i*3;
-
-    //     float min_t = std::numeric_limits<float>::max();
-
-    //     int currFaceId = rayCtx->faceId[i];
-    //     rayCtx->faceId2[i] = -1;
-    //     for (int j = 0; j < cryCtx->crystal->faceNum(); j++) {
-    //         if (j == currFaceId) {
-    //             continue;
-    //         }
-    //         const float *tmp_face = faces + j*9;
-            
-    //         float p[3];
-    //         float t, alpha, beta;
-
-    //         intersectLineFace(tmp_pt, tmp_dir, tmp_face, &p[0], &t, &alpha, &beta);
-    //         if (t > 1e-6 && t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
-    //             min_t = t;
-
-    //             rayCtx->rayPts2[i*3+0] = p[0];
-    //             rayCtx->rayPts2[i*3+1] = p[1];
-    //             rayCtx->rayPts2[i*3+2] = p[2];
-
-    //             rayCtx->faceId2[i] = j;
-    //         }
-    //     }
-    // }
-    propagateRange(rayCtx, cryCtx->crystal->faceNum(), faces, 0, rayCtx->currentRayNum);
+    Pool *pool = Pool::getInstance();
+    int step = rayCtx->currentRayNum / 200;
+    for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
+        int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
+        pool->addJob(std::bind(&Optics::propagateRange, rayCtx, faceNum, faces, startIdx, endIdx));
+    }
+    pool->waitFinish();
 }
 
 
@@ -196,26 +167,6 @@ void Optics::propagateRange(RayTracingContext *rayCtx, int faceNum, float *faces
             }
         }
     }
-}
-
-
-void Optics::propagateHalide(RayTracingContext *rayCtx, CrystalContext *cryCtx)
-{
-    using namespace Halide::Runtime;
-
-    auto *faces = new float[cryCtx->crystal->faceNum() * 9];
-    cryCtx->crystal->copyFaceData(faces);
-
-    Buffer<float> pt_buffer(rayCtx->rayPts, 3, rayCtx->currentRayNum);
-    Buffer<float> dir_buffer(rayCtx->rayDir, 3, rayCtx->currentRayNum);
-    Buffer<float> face_buffer(faces, 9, cryCtx->crystal->faceNum());
-    Buffer<int> face_id_buffer(rayCtx->faceId, rayCtx->currentRayNum);
-    Buffer<float> new_pt_buffer(rayCtx->rayPts2, 3, rayCtx->currentRayNum);
-    Buffer<int> new_face_id_buffer(rayCtx->faceId2, rayCtx->currentRayNum);
-
-    ray_prop(dir_buffer, pt_buffer, face_buffer, face_id_buffer, new_pt_buffer, new_face_id_buffer);
-
-    delete[] faces;
 }
 
 
