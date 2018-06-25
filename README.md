@@ -9,8 +9,7 @@ For a start this program is written in matlab though matlab is often poured scor
 slow performance. It is a prototype, on which I test my algorithms. Later developing and
 latest updates will be on C++ codes.
 
-* [Matlab version](matlab)
-
+* [Matlab version](matlab)  
 * [C++ version](cpp)
 
 ## Acknowledgements
@@ -33,8 +32,7 @@ latest updates will be on C++ codes.
 
 在 matlab 代码上验证了算法后, 后续开发都将在 C++ 代码上进行.
 
-* [Matlab 代码](matlab)
-
+* [Matlab 代码](matlab)  
 * [C++ 代码](cpp/README_zh.md)
 
 ## 致谢
