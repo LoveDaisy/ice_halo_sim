@@ -110,8 +110,6 @@ void RayTracingContext::initRays(CrystalContext *ctx, int rayNum, const float *d
         }
         rays.push_back(r);
         activeRaySeg.push_back(r->firstRaySeg);
-
-        // printf("PTS:%+.4f,%+.4f,%+.4f\n", rayPts[i*3+0], rayPts[i*3+1], rayPts[i*3+2]);
     }
 
     delete[] faces;
