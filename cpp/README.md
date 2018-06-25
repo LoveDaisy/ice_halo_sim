@@ -39,8 +39,7 @@ This file containing all configurations. It uses JSON format. It must contain `s
 
 * `sun`:
 It has two attributes, 
-  * `altitude`, defining the altitude of the sun.
-
+  * `altitude`, defining the altitude of the sun.  
   * `diameter`, defining the actual diameter used in the simulation, in degree. Please set to 0.5 for ture sun.
 
 * `ray_number`:
@@ -51,6 +50,17 @@ but not output ray number.
 * `max_recursion`:
 It defines the max number that a ray hits a surface during a simulation. If a ray hits more than this number
 and still doesn't leave the crystal, it will be dropped.
+
+* `multi_scatter`:
+It defines how to simulate multi-scattering halos. It has two attributes,
+  * `repeat`, defining how many times ray pass through crystals. If it is set to 1, then the simulation
+    goes without any multi-scattering effects. In most cases, it is enough to set to 2. *NOTE:* simulation
+    speed drammatically slow down when `repeat` increases.  
+  * `probability`, defining how many rays can pass through next crystal. If it is set to 1.0, then
+    *ALL* rays will be used as input for next crystal.
+    
+  Multi-scattering is a highlight feature of this project. As far as I know, HaloSim cannot do this kind simulation,
+while HaloPoint handles it by a tricky workaround, and implements for only limited scenarios.
 
 ### Crystal settings
 
@@ -135,4 +145,5 @@ the other to 30.
 * Use OpenCL / OpenGL / CUDA to accelerate. Since I've seen good enough performance with a simple
   threading pool implemented by myself, I doubt the margin to more improvements.
 * Improve performance of threading pool. Use some lock-free ways.
+* Add more convenient crystal models, e.g. exotic hex-cylinder/pyramid crystals.
 * Write a GUI for these code.
