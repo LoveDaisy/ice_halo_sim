@@ -89,34 +89,29 @@ size_t Ray::totalNum()
 RaySegmentFactory * RaySegmentFactory::instance = nullptr;
 
 
-// void Optics::hitSurface(float n, int num, const float *dir, const float *norm,
-//         float *reflect_dir, float *refract_dir, float *reflect_w)
-// {
-//      for (int i = 0; i < num; ++i) {
-//          const float *tmp_dir = dir + i*3;
-//          const float *tmp_norm = norm + i*3;
+void Optics::hitSurface(float n, RayTracingContext *rayCtx)
+{
+     for (int i = 0; i < rayCtx->currentRayNum; i++) {
+         const float *tmp_dir = rayCtx->rayDir + i*3;
+         const float *tmp_norm = rayCtx->faceNorm + i*3;
         
-//          float cos_theta = LinearAlgebra::dot3(tmp_dir, tmp_norm);
-//          float inc_angle = std::acos(std::abs(cos_theta));
+         float cos_theta = LinearAlgebra::dot3(tmp_dir, tmp_norm);
 
-//          bool is_inner = cos_theta > 0;
-//          float tmp_n1 = is_inner ? n : 1;
-//          float tmp_n2 = is_inner ? 1 : n;
+         float rr = cos_theta > 0 ? n : 1.0f / n;
 
-//          reflect_w[i] = getReflectRatio(inc_angle, tmp_n1, tmp_n2);
+         rayCtx->rayW2[i] = getReflectRatio(cos_theta, rr);
 
-//          for (int j = 0; j < 3; ++j) {
-//              reflect_dir[i*3+j] = tmp_dir[j] - 2 * cos_theta * tmp_norm[j];
-//          }
+         for (int j = 0; j < 3; ++j) {
+             rayCtx->rayDir2[i*3+j] = tmp_dir[j] - 2 * cos_theta * tmp_norm[j];
+         }
 
-//          float rr = tmp_n1 / tmp_n2;
-//          float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
-//          for (int j = 0; j < 3; j++) {
-//              refract_dir[i*3+j] = d <= 0.0f ? reflect_dir[i*3+j] :
-//                  rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];
-//          }
-//      }
-// }
+         float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
+         for (int j = 0; j < 3; j++) {
+             rayCtx->rayDir3[i*3+j] = d <= 0.0f ? rayCtx->rayDir2[i*3+j] :
+                 rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];
+         }
+     }
+}
 
 
 void Optics::hitSurfaceHalide(float n, RayTracingContext *rayCtx)
@@ -132,34 +127,76 @@ void Optics::hitSurfaceHalide(float n, RayTracingContext *rayCtx)
     ray_hit(dir_buffer, norm_buffer, n, reflect_dir_buffer, refract_dir_buffer, reflect_w_buffer);
 }
 
-// void Optics::propagate(int num, const float *pt, const float *dir, int face_num, const float *faces,
-//         float *new_pt, int *new_face_id)
-// {
-//     for (int i = 0; i < num; ++i) {
-//         const float *tmp_pt = pt + i*3;
-//         const float *tmp_dir = dir + i*3;
+void Optics::propagate(RayTracingContext *rayCtx, CrystalContext *cryCtx)
+{
+    auto *faces = new float[cryCtx->crystal->faceNum() * 9];
+    cryCtx->crystal->copyFaceData(faces);
 
-//         float min_t = std::numeric_limits<float>::max();
-//         new_face_id[i] = -1;
-//         for (int j = 0; j < face_num; j++) {
-//             const float *tmp_face = faces + j*9;
+    // for (int i = 0; i < rayCtx->currentRayNum; ++i) {
+    //     const float *tmp_pt = rayCtx->rayPts + i*3;
+    //     const float *tmp_dir = rayCtx->rayDir + i*3;
+
+    //     float min_t = std::numeric_limits<float>::max();
+
+    //     int currFaceId = rayCtx->faceId[i];
+    //     rayCtx->faceId2[i] = -1;
+    //     for (int j = 0; j < cryCtx->crystal->faceNum(); j++) {
+    //         if (j == currFaceId) {
+    //             continue;
+    //         }
+    //         const float *tmp_face = faces + j*9;
             
-//             float p[3];
-//             float t, alpha, beta;
+    //         float p[3];
+    //         float t, alpha, beta;
 
-//             intersectLineFace(tmp_pt, tmp_dir, tmp_face, &p[0], &t, &alpha, &beta);
-//             if (t > 1e-6 && t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
-//                 min_t = t;
+    //         intersectLineFace(tmp_pt, tmp_dir, tmp_face, &p[0], &t, &alpha, &beta);
+    //         if (t > 1e-6 && t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
+    //             min_t = t;
 
-//                 new_pt[i*3+0] = p[0];
-//                 new_pt[i*3+1] = p[1];
-//                 new_pt[i*3+2] = p[2];
+    //             rayCtx->rayPts2[i*3+0] = p[0];
+    //             rayCtx->rayPts2[i*3+1] = p[1];
+    //             rayCtx->rayPts2[i*3+2] = p[2];
 
-//                 new_face_id[i] = j;
-//             }
-//         }
-//     }
-// }
+    //             rayCtx->faceId2[i] = j;
+    //         }
+    //     }
+    // }
+    propagateRange(rayCtx, cryCtx->crystal->faceNum(), faces, 0, rayCtx->currentRayNum);
+}
+
+
+void Optics::propagateRange(RayTracingContext *rayCtx, int faceNum, float *faces, int startIdx, int endIdx)
+{
+    for (int i = startIdx; i < endIdx; i++) {
+        const float *tmp_pt = rayCtx->rayPts + i*3;
+        const float *tmp_dir = rayCtx->rayDir + i*3;
+
+        float min_t = std::numeric_limits<float>::max();
+
+        int currFaceId = rayCtx->faceId[i];
+        rayCtx->faceId2[i] = -1;
+        for (int j = 0; j < faceNum; j++) {
+            if (j == currFaceId) {
+                continue;
+            }
+            const float *tmp_face = faces + j*9;
+            
+            float p[3];
+            float t, alpha, beta;
+
+            intersectLineFace(tmp_pt, tmp_dir, tmp_face, &p[0], &t, &alpha, &beta);
+            if (t > 1e-6 && t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
+                min_t = t;
+
+                rayCtx->rayPts2[i*3+0] = p[0];
+                rayCtx->rayPts2[i*3+1] = p[1];
+                rayCtx->rayPts2[i*3+2] = p[2];
+
+                rayCtx->faceId2[i] = j;
+            }
+        }
+    }
+}
 
 
 void Optics::propagateHalide(RayTracingContext *rayCtx, CrystalContext *cryCtx)
@@ -219,9 +256,11 @@ void Optics::traceRays(SimulationContext &context)
             float index = IceRefractiveIndex::n(context.getWavelength());
             int recursion = 0;
             while (!rayTracingCtx->isFinished() && recursion < maxRecursion) {
-                hitSurfaceHalide(index, rayTracingCtx);
+                // hitSurfaceHalide(index, rayTracingCtx);
+                hitSurface(index, rayTracingCtx);
                 rayTracingCtx->commitHitResult();
-                propagateHalide(rayTracingCtx, crystalCtx);
+                // propagateHalide(rayTracingCtx, crystalCtx);
+                propagate(rayTracingCtx, crystalCtx);
                 rayTracingCtx->commitPropagateResult(crystalCtx);
                 recursion++;
             }
@@ -253,61 +292,61 @@ void Optics::traceRays(SimulationContext &context)
 }
 
 
-// float Optics::getReflectRatio(float inc_angle, float n1, float n2)
-// {
-//     float c = std::cos(inc_angle);
-//     float s = std::sin(inc_angle);
-//     float d = 1.0f - (n1 / n2 * s) * (n1 / n2 * s);
-//     d = d <= 0.0f ? 0.0f : d;
-//     float d_sqrt = std::sqrt(d);
+float Optics::getReflectRatio(float cos_angle, float rr)
+{
+    float s = std::sqrt(1.0f - cos_angle * cos_angle);
+    float c = std::abs(cos_angle);
+    float d = std::fmax(1.0f - (rr * s) * (rr * s), 0.0f);
+    float d_sqrt = std::sqrt(d);
 
-//     float Rs = (n1 * c - n2 * d_sqrt) / (n1 * c + n2 * d_sqrt);
-//     Rs *= Rs;
-//     float Rp = (n1 * d_sqrt - n2 * c) / (n1 * d_sqrt + n2 * c);
-//     Rp *= Rp;
+    float Rs = (rr * c - d_sqrt) / (rr * c + d_sqrt);
+    Rs *= Rs;
+    float Rp = (rr * d_sqrt - c) / (rr * d_sqrt + c);
+    Rp *= Rp;
 
-//     return (Rs + Rp) / 2;
-// }
+    return (Rs + Rp) / 2;
+}
 
-// void Optics::intersectLineFace(const float *pt, const float *dir, const float *face,
-//     float *p, float *t, float *alpha, float *beta)
-// {
-//     const float *face_point = face;
-//     float face_base[6];
-//     LinearAlgebra::vec3FromTo(&face[0], &face[3], &face_base[0]);
-//     LinearAlgebra::vec3FromTo(&face[0], &face[6], &face_base[3]);
+void Optics::intersectLineFace(const float *pt, const float *dir, const float *face,
+    float *p, float *t, float *alpha, float *beta)
+{
+    const float *face_point = face;
+    float face_base[6];
+    LinearAlgebra::vec3FromTo(&face[0], &face[3], &face_base[0]);
+    LinearAlgebra::vec3FromTo(&face[0], &face[6], &face_base[3]);
 
-//     float a = face_base[0]*face_base[4]*face_point[2] + face_base[1]*face_base[5]*face_point[0] +
-//         face_base[2]*face_base[3]*face_point[1] - face_base[2]*face_base[4]*face_point[0] -
-//         face_base[1]*face_base[3]*face_point[2] - face_base[0]*face_base[5]*face_point[1];
-//     float b = pt[0]*face_base[1]*face_base[5] + pt[1]*face_base[2]*face_base[3] +
-//         pt[2]*face_base[0]*face_base[4] - pt[0]*face_base[2]*face_base[4] -
-//         pt[1]*face_base[0]*face_base[5] - pt[2]*face_base[1]*face_base[3];
-//     float c = dir[0]*face_base[1]*face_base[5] + dir[1]*face_base[2]*face_base[3] +
-//         dir[2]*face_base[0]*face_base[4] - dir[0]*face_base[2]*face_base[4] -
-//         dir[1]*face_base[0]*face_base[5] - dir[2]*face_base[1]*face_base[3];
-//     *t = (a - b) / c;
+    float a = face_base[0]*face_base[4]*face_point[2] + face_base[1]*face_base[5]*face_point[0] +
+        face_base[2]*face_base[3]*face_point[1] - face_base[2]*face_base[4]*face_point[0] -
+        face_base[1]*face_base[3]*face_point[2] - face_base[0]*face_base[5]*face_point[1];
+    float b = pt[0]*face_base[1]*face_base[5] + pt[1]*face_base[2]*face_base[3] +
+        pt[2]*face_base[0]*face_base[4] - pt[0]*face_base[2]*face_base[4] -
+        pt[1]*face_base[0]*face_base[5] - pt[2]*face_base[1]*face_base[3];
+    float c = dir[0]*face_base[1]*face_base[5] + dir[1]*face_base[2]*face_base[3] +
+        dir[2]*face_base[0]*face_base[4] - dir[0]*face_base[2]*face_base[4] -
+        dir[1]*face_base[0]*face_base[5] - dir[2]*face_base[1]*face_base[3];
+    bool flag = std::abs(c) > 1e-6;
+    *t = flag ? (a - b) / c : -1;
 
-//     a = dir[0]*pt[1]*face_base[5] + dir[1]*pt[2]*face_base[3] +
-//         dir[2]*pt[0]*face_base[4] - dir[0]*pt[2]*face_base[4] -
-//         dir[1]*pt[0]*face_base[5] - dir[2]*pt[1]*face_base[3];
-//     b = dir[0]*face_base[4]*face_point[2] + dir[1]*face_base[5]*face_point[0] +
-//         dir[2]*face_base[3]*face_point[1] - dir[0]*face_base[5]*face_point[1] -
-//         dir[1]*face_base[3]*face_point[2] - dir[2]*face_base[4]*face_point[0];
-//     *alpha = (a + b) / c;
+    a = dir[0]*pt[1]*face_base[5] + dir[1]*pt[2]*face_base[3] +
+        dir[2]*pt[0]*face_base[4] - dir[0]*pt[2]*face_base[4] -
+        dir[1]*pt[0]*face_base[5] - dir[2]*pt[1]*face_base[3];
+    b = dir[0]*face_base[4]*face_point[2] + dir[1]*face_base[5]*face_point[0] +
+        dir[2]*face_base[3]*face_point[1] - dir[0]*face_base[5]*face_point[1] -
+        dir[1]*face_base[3]*face_point[2] - dir[2]*face_base[4]*face_point[0];
+    *alpha = flag ? (a + b) / c : -1;
 
-//     a = dir[0]*pt[1]*face_base[2] + dir[1]*pt[2]*face_base[0] +
-//         dir[2]*pt[0]*face_base[1] - dir[0]*pt[2]*face_base[1] -
-//         dir[1]*pt[0]*face_base[2] - dir[2]*pt[1]*face_base[0];
-//     b = dir[0]*face_base[1]*face_point[2] + dir[1]*face_base[2]*face_point[0] +
-//         dir[2]*face_base[0]*face_point[1] - dir[0]*face_base[2]*face_point[1] -
-//         dir[1]*face_base[0]*face_point[2] - dir[2]*face_base[1]*face_point[0];
-//     *beta = -(a + b) / c;
+    a = dir[0]*pt[1]*face_base[2] + dir[1]*pt[2]*face_base[0] +
+        dir[2]*pt[0]*face_base[1] - dir[0]*pt[2]*face_base[1] -
+        dir[1]*pt[0]*face_base[2] - dir[2]*pt[1]*face_base[0];
+    b = dir[0]*face_base[1]*face_point[2] + dir[1]*face_base[2]*face_point[0] +
+        dir[2]*face_base[0]*face_point[1] - dir[0]*face_base[2]*face_point[1] -
+        dir[1]*face_base[0]*face_point[2] - dir[2]*face_base[1]*face_point[0];
+    *beta = flag ? -(a + b) / c : -1;
 
-//     p[0] = pt[0] + *t * dir[0];
-//     p[1] = pt[1] + *t * dir[1];
-//     p[2] = pt[2] + *t * dir[2];
-// }
+    p[0] = pt[0] + *t * dir[0];
+    p[1] = pt[1] + *t * dir[1];
+    p[2] = pt[2] + *t * dir[2];
+}
 
 
 
