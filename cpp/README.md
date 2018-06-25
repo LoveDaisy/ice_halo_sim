@@ -132,5 +132,6 @@ the other to 30.
 ## TODO list
 
 * Use OpenCL / OpenGL / CUDA to accelerate. Since I've seen good enough performance with a simple
-  threading pool implemented by myself, I doubt the margin to more improvement.
+  threading pool implemented by myself, I doubt the margin to more improvements.
+* Improve performance of threading pool. Use some lock-free ways.
 * Write a GUI for these code.
