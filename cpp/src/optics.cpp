@@ -87,7 +87,7 @@ RaySegmentFactory * RaySegmentFactory::instance = nullptr;
 void Optics::hitSurface(float n, RayTracingContext *rayCtx)
 {
     Pool *pool = Pool::getInstance();
-    int step = rayCtx->currentRayNum / 200;
+    int step = rayCtx->currentRayNum / 100;
     for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
         int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
         pool->addJob(std::bind(&Optics::hitSurfaceRange, n, rayCtx, startIdx, endIdx));
@@ -127,12 +127,14 @@ void Optics::propagate(RayTracingContext *rayCtx, CrystalContext *cryCtx)
     cryCtx->crystal->copyFaceData(faces);
 
     Pool *pool = Pool::getInstance();
-    int step = rayCtx->currentRayNum / 200;
+    int step = rayCtx->currentRayNum / 100;
     for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
         int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
         pool->addJob(std::bind(&Optics::propagateRange, rayCtx, faceNum, faces, startIdx, endIdx));
     }
     pool->waitFinish();
+
+    delete[] faces;
 }
 
 
@@ -238,7 +240,10 @@ void Optics::traceRays(SimulationContext &context)
     }
 
     delete[] dirStore;
+    delete[] dirStore2;
     delete[] wStore;
+    delete[] raySegStore;
+    delete[] raySegStore2;
     
 }
 

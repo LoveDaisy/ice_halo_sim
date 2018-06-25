@@ -1,5 +1,7 @@
 #include "threadingpool.h"
 
+#include <chrono>
+
 
 namespace IceHalo {
 
@@ -75,7 +77,7 @@ void Pool::addJob(std::function<void()> job)
 
     {
         std::unique_lock<std::mutex> lock(queueMutex);
-        queue.push(job);
+        queue.emplace(job);
     }
     queueCondition.notify_one();
 }
@@ -84,6 +86,7 @@ void Pool::addJob(std::function<void()> job)
 void Pool::waitFinish()
 {
     std::unique_lock<std::mutex> lock(taskMutex);
+    // taskCondition.wait_for(lock, std::chrono::milliseconds(10), [this]{ return !taskRunning(); });
     taskCondition.wait(lock, [this]{ return !taskRunning(); });
 }
 
@@ -103,9 +106,15 @@ void Pool::workingFunction()
             std::function<void()> job = queue.front();
             queue.pop();
             lock.unlock();
-            runningJobs += 1;
+            {
+                std::unique_lock<std::mutex> lock(taskMutex);
+                runningJobs += 1;
+            }
             job();
-            runningJobs -= 1;
+            {
+                std::unique_lock<std::mutex> lock(taskMutex);
+                runningJobs -= 1;
+            }
             lock.lock();
             taskCondition.notify_one();
         } else if (!alive) {
