@@ -181,8 +181,19 @@ void Optics::traceRays(SimulationContext &context)
     auto *wStore = new float[maxNum];
     auto **raySegStore = new RaySegment *[maxNum], **raySegStore2 = new RaySegment *[maxNum];
 
+    Pool *pool = Pool::getInstance();
+    int step = maxNum / 80;
+    for (int startIdx = 0; startIdx < static_cast<int>(maxNum); startIdx += step) {
+        int endIdx = std::min(startIdx + step, static_cast<int>(maxNum));
+        pool->addJob([startIdx, endIdx, &context, dirStore](){
+            for (int i = startIdx; i < endIdx; i++)
+            context.fillSunDir(dirStore + i*3);
+        });
+    }
+    pool->waitFinish();
+
     for (decltype(maxNum) i = 0; i < maxNum; i++) {
-        context.fillSunDir(dirStore + i*3);
+        // context.fillSunDir(dirStore + i*3);
         wStore[i] = 1.0f;
         raySegStore[i] = nullptr;
         raySegStore2[i] = nullptr;
@@ -197,7 +208,7 @@ void Optics::traceRays(SimulationContext &context)
             auto crystalCtx = context.getCrystalContext(crystalIdx);
             auto rayTracingCtx = context.getRayTracingContext(scatterIdx, crystalIdx);
 
-            rayTracingCtx->clearRays();
+            // rayTracingCtx->clearRays();
             rayTracingCtx->initRays(crystalCtx, rayTracingCtx->initRayNum, 
                 dirStore + inputOffset * 3, wStore + inputOffset, raySegStore + inputOffset);
 

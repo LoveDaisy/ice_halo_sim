@@ -52,7 +52,7 @@ public:
     void setRayNum(int rayNum);
 
     void initRays(CrystalContext *ctx, int rayNum, const float *dir, const float *w, RaySegment **prevRaySeg = nullptr);
-    void clearRays();
+    // void clearRays();
     void commitHitResult();
     void commitPropagateResult(CrystalContext *ctx);
     bool isFinished();
@@ -68,12 +68,16 @@ private:
     void fillDir(const float *incDir, float *rayDir, float *axRot, CrystalContext *ctx);
     void fillPts(const float *faces, int idx, float *rayPts);
 
+    void initRaysRange(CrystalContext *ctx, const float *dir, const float *w, RaySegment **prevRaySeg, 
+        const float *faces, int startIdx, int endIdx);
+
     SimulationContext *simCtx;
 
     int initRayNum;
     int currentRayNum;
-    std::vector<Ray *> rays;
-    std::vector<RaySegment *> activeRaySeg;
+    int activeRaySegNum;
+    Ray ** rays;
+    RaySegment **activeRaySeg;
 
     std::default_random_engine gen;
     std::uniform_real_distribution<float> dis;

@@ -106,6 +106,7 @@ private:
     std::vector<RaySegment*> segments;
     uint32_t nextUnusedId;
     uint32_t currentChunkId;
+
 };
 
 }   // namespace IceHalo

@@ -18,7 +18,7 @@ public:
     ~Pool() = default;
 
     void start();
-    void stop();
+    // void stop();
     void addJob(std::function<void()> job);
     void waitFinish();
     bool taskRunning();
