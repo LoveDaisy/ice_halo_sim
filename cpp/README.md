@@ -5,17 +5,15 @@
 After testing my algorithms on matlab codes, I start a C++ project for higher performance. Currently the C++ version is just
 pieces of toy codes and can only run from command, no GUI.
 
-With integration of [Halide](http://halide-lang.org/) I can accelarate these codes by parallelism.
 
 ## Build and run
 
 This C++ project is built with [CMake](https://cmake.org/).
-Before you start to build this project, please refer to [Halide](http://halide-lang.org/) and install it following its instructions.
 A simple way to build form start is as follows:
 
 1. `cd cpp`
 2. `mkdir build && cd build`
-3. `cmake .. && make -j4`, or you can set `CMAKE_BUILD_TYPE` to `release` to get highest performance. NOTE: there are some hard coded paths for Halide libraries, you should change to your own path.
+3. `cmake .. && make -j4`, or you can set `CMAKE_BUILD_TYPE` to `release` to get highest performance. 
 
 Then the executable binary will be at `build/bin`. And you can start by
 `./bin/IceHaloSim <path-to-your-config-file>`. The file [`cpp/config.json`](./config.json) is an example configuration file.
@@ -39,7 +37,10 @@ This file containing all configurations. It uses JSON format. It must contain `s
 ### Basic infomation for simulation
 
 * `sun`:
-It only contains one attribute, `altitude`, defining the altitude of the sun.
+It has two attributes, 
+  * `altitude`, defining the altitude of the sun.
+
+  * `diameter`, defining the actual diameter used in the simulation, in degree. Please set to 0.5 for ture sun.
 
 * `ray_number`:
 The total ray number for simulation. Note that even with a single incident ray, it may result in multiple
@@ -130,6 +131,6 @@ the other to 30.
 
 ## TODO list
 
-* Use OpenCL / OpenGL / CUDA to accelerate. Since I've seen good enough performance with integration of
-  Halide, I doubt the margin to more acceleration.
+* Use OpenCL / OpenGL / CUDA to accelerate. Since I've seen good enough performance with a simple
+  threading pool implemented by myself, I doubt the margin to more improvement.
 * Write a GUI for these code.

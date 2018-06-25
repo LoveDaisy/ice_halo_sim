@@ -1,5 +1,6 @@
 #include "context.h"
 #include "linearalgebra.h"
+#include "threadingpool.h"
 
 #include "rapidjson/pointer.h"
 #include "rapidjson/error/en.h"
@@ -48,7 +49,8 @@ void CrystalContext::fillDir(const float *incDir, float *rayDir, float *mainAxRo
 
 
 RayTracingContext::RayTracingContext(SimulationContext *ctx) :
-    simCtx(ctx), initRayNum(0), currentRayNum(0),
+    simCtx(ctx), initRayNum(0), currentRayNum(0), activeRaySegNum(0),
+    rays(nullptr), activeRaySeg(nullptr),
     gen(), dis(0.0f, 1.0f),
     mainAxRot(nullptr),
     rayDir(nullptr), rayPts(nullptr), faceNorm(nullptr), faceId(nullptr),
@@ -81,6 +83,9 @@ void RayTracingContext::setRayNum(int num)
     rayPts2 = new float[maxRayNum * 3];
     rayW2 = new float[maxRayNum];
     faceId2 = new int[maxRayNum];
+
+    activeRaySeg = new RaySegment*[maxRayNum * 3];
+    rays = new Ray*[initRayNum];
 }
 
 
@@ -93,63 +98,71 @@ void RayTracingContext::initRays(CrystalContext *ctx, int rayNum, const float *d
     auto *faces = new float[faceNum * 9];
     crystal->copyFaceData(faces);
 
-    rays.clear();
-    activeRaySeg.clear();
+    activeRaySegNum = 0;
+    Pool *pool = Pool::getInstance();
+    int step = initRayNum / 80;
+    for (int startIdx = 0; startIdx < initRayNum; startIdx += step) {
+        int endIdx = std::min(startIdx + step, initRayNum);
+        pool->addJob(std::bind(&RayTracingContext::initRaysRange, this,
+            ctx, dir, faces, startIdx, endIdx));
+    }
+    pool->waitFinish();
+
     for (int i = 0; i < initRayNum; i++) {
+        auto *r = new Ray(rayPts+i*3, rayDir+i*3, w[i], faceId[i]);
+        if (prevRaySeg && prevRaySeg[i]) {
+            prevRaySeg[i]->nextRefract = r->firstRaySeg;
+        }
+        rays[i] = r;
+        activeRaySeg[i] = r->firstRaySeg;
+    }
+    activeRaySegNum = initRayNum;
+
+    delete[] faces;
+}
+
+
+void RayTracingContext::initRaysRange(CrystalContext *ctx, const float *dir, 
+    const float *faces,
+    int startIdx, int endIdx)
+{
+    int faceNum = ctx->getCrystal()->faceNum();
+    for (int i = startIdx; i < endIdx; i++) {
         fillDir(dir+i*3, rayDir+i*3, mainAxRot+i*3, ctx);
 
         int idx = chooseFace(faces, faceNum, rayDir+i*3);
         faceId[i] = idx;
 
         fillPts(faces, idx, rayPts+i*3);
-        crystal->copyNormalData(idx, faceNorm+i*3);
+        ctx->getCrystal()->copyNormalData(idx, faceNorm+i*3);
 
-        auto *r = new Ray(rayPts+i*3, rayDir+i*3, w[i], faceId[i]);
-        if (prevRaySeg && prevRaySeg[i]) {
-            prevRaySeg[i]->nextRefract = r->firstRaySeg;
-        }
-        rays.push_back(r);
-        activeRaySeg.push_back(r->firstRaySeg);
-
-        // printf("PTS:%+.4f,%+.4f,%+.4f\n", rayPts[i*3+0], rayPts[i*3+1], rayPts[i*3+2]);
+        // auto *r = new Ray(rayPts+i*3, rayDir+i*3, w[i], faceId[i]);
+        // if (prevRaySeg && prevRaySeg[i]) {
+        //     prevRaySeg[i]->nextRefract = r->firstRaySeg;
+        // }
+        // rays[i] = r;
+        // activeRaySeg[i] = r->firstRaySeg;
     }
-
-    delete[] faces;
-}
-
-
-void RayTracingContext::clearRays()
-{
-    rays.clear();
 }
 
 
 void RayTracingContext::commitHitResult()
 {
     RaySegmentFactory *raySegPool = RaySegmentFactory::getInstance();
-    std::vector<RaySegment *> tmpRaySegs;
     for (int i = 0; i < currentRayNum; i++) {
         RaySegment *lastSeg = activeRaySeg[i];
         RaySegment *seg = raySegPool->getRaySegment(rayPts + i*3, rayDir2 + i*3,
             lastSeg->w * rayW2[i], faceId[i]);
         lastSeg->nextReflect = seg;
         seg->prev = lastSeg;
-        tmpRaySegs.push_back(seg);
+        activeRaySeg[i] = seg;
 
         seg = raySegPool->getRaySegment(rayPts + i*3, rayDir3 + i*3,
             lastSeg->w * (1.0f - rayW2[i]), faceId[i]);
         lastSeg->nextRefract = seg;
         seg->prev = lastSeg;
-        tmpRaySegs.push_back(seg);
+        activeRaySeg[currentRayNum + i] = seg;
     }
-    activeRaySeg.clear();
-    for (decltype(tmpRaySegs.size()) i = 0; i < tmpRaySegs.size(); i += 2) {
-        activeRaySeg.push_back(tmpRaySegs[i]);
-    }
-    for (decltype(tmpRaySegs.size()) i = 1; i < tmpRaySegs.size(); i += 2) {
-        activeRaySeg.push_back(tmpRaySegs[i]);
-    }
-    tmpRaySegs.clear();
 
     memcpy(rayDir, rayDir2, currentRayNum * 3 * sizeof(float));
     memcpy(rayDir + currentRayNum*3, rayDir3, currentRayNum * 3 * sizeof(float));
@@ -157,17 +170,17 @@ void RayTracingContext::commitHitResult()
     memcpy(faceId + currentRayNum, faceId, currentRayNum * sizeof(int));
 
     currentRayNum *= 2;
+    activeRaySegNum = currentRayNum;
 }
 
 
 void RayTracingContext::commitPropagateResult(CrystalContext *ctx)
 {
-    std::vector<RaySegment *> tmpRaySegs;
-
     int k = 0;
+    activeRaySegNum = 0;
     for (int i = 0; i < currentRayNum; i++) {
         if (faceId2[i] >= 0 && activeRaySeg[i]->w > PROP_MIN_W) {
-            tmpRaySegs.push_back(activeRaySeg[i]);
+            activeRaySeg[activeRaySegNum++] = activeRaySeg[i];
             memcpy(rayPts + k*3, rayPts2 + i*3, 3 * sizeof(float));
             memcpy(rayDir + k*3, rayDir + i*3, 3 * sizeof(float));
             faceId[k] = faceId2[i];
@@ -178,14 +191,12 @@ void RayTracingContext::commitPropagateResult(CrystalContext *ctx)
         }
     }
     currentRayNum = k;
-    activeRaySeg.swap(tmpRaySegs);
-    tmpRaySegs.clear();
 }
 
 
 bool RayTracingContext::isFinished()
 {
-    return activeRaySeg.empty();
+    return activeRaySegNum <= 0;
 }
 
 
@@ -196,7 +207,7 @@ size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float *dir,
 
     std::vector<RaySegment *> v;
     size_t k = 0;
-    for (decltype(rays.size()) rayIdx = 0; rayIdx < rays.size(); rayIdx++) {
+    for (int rayIdx = 0; rayIdx < initRayNum; rayIdx++) {
         v.clear();
         v.push_back(rays[rayIdx]->firstRaySeg);
 
@@ -236,6 +247,9 @@ void RayTracingContext::deleteArrays()
     delete[] rayPts2;
     delete[] rayW2;
     delete[] faceId2;
+
+    delete[] activeRaySeg;
+    delete[] rays;
 }
 
 
@@ -459,7 +473,8 @@ void SimulationContext::writeFinalDirections(const char *filename)
     for (auto &rcs : rayTracingCtxs) {
         for (auto rc : rcs) {
             size_t currentIdx = 0;
-            for (auto r : rc->rays) {
+            for (int i = 0; i < rc->initRayNum; i++) {
+                auto r = rc->rays[i];
                 v.clear();
                 v.push_back(r->firstRaySeg);
 
@@ -472,7 +487,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
                     if (p->nextRefract && !p->isFinished) {
                         v.push_back(p->nextRefract);
                     }
-                    if (!p->nextRefract && !p->nextRefract &&
+                    if (!p->nextReflect && !p->nextRefract &&
                             p->isValidEnd() && LinearAlgebra::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
                         float finalDir[3];
                         memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
@@ -506,7 +521,8 @@ void SimulationContext::writeRayInfo(const char *filename, float lon, float lat,
     for (auto &rcs : rayTracingCtxs) {
         size_t currentIdx = 0;
         for (auto rc : rcs) {
-            for (auto r : rc->rays) {
+            for (int i = 0; i < rc->initRayNum; i++) {
+                auto r = rc->rays[i];
                 v.clear();
                 v.push_back(r->firstRaySeg);
                 bool targetOn = false;

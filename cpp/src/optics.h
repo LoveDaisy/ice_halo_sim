@@ -54,8 +54,14 @@ public:
     static void traceRays(SimulationContext &context);
 
 private:
-    static void hitSurfaceHalide(float n, RayTracingContext *rayCtx);
-    static void propagateHalide(RayTracingContext *rayCtx, CrystalContext *cryCtx);
+    static void hitSurface(float n, RayTracingContext *rayCtx);
+    static void propagate(RayTracingContext *rayCtx, CrystalContext *cryCtx);
+    
+    static void hitSurfaceRange(float n, RayTracingContext *rayCtx, int startIdx, int endIdx);
+    static void propagateRange(RayTracingContext *rayCtx, int faceNum, float *faces, int startIdx, int endIdx);
+    static float getReflectRatio(float cos_angle, float rr);
+    static void intersectLineFace(const float *pt, const float *dir, const float *face,
+        float *p, float *t, float *alpha, float *beta);
 };
 
 
@@ -100,6 +106,7 @@ private:
     std::vector<RaySegment*> segments;
     uint32_t nextUnusedId;
     uint32_t currentChunkId;
+
 };
 
 }   // namespace IceHalo

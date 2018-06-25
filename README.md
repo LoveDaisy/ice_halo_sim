@@ -17,10 +17,9 @@ latest updates will be on C++ codes.
 
 1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/)
 2. [HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)
-2. [Halide](http://halide-lang.org/)
 3. [Rapidjson](http://rapidjson.org/index.html)
 
-<img src="matlab/figs/sim04E_52M.jpg" width="600">
+<img src="matlab/figs/sim05E_50M.jpg" width="600">
 
 
 # 冰晕模拟程序
@@ -42,6 +41,5 @@ latest updates will be on C++ codes.
 
 1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/)
 2. [HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)
-2. [Halide](http://halide-lang.org/)
 3. [Rapidjson](http://rapidjson.org/index.html)
 

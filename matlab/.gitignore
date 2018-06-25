@@ -1,2 +1,3 @@
 src/visual_plot.m
 src/read_binary_result.m
+src/plot_crystal_main.m
