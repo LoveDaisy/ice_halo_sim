@@ -24,7 +24,7 @@ Pool * Pool::getInstance()
 
 Pool::Pool() : 
     threadNum(std::thread::hardware_concurrency()), alive(false), 
-    runningTasks(0), aliveThreads(0)
+    runningJobs(0), aliveThreads(0)
 {
     start();
 }
@@ -32,12 +32,13 @@ Pool::Pool() :
 
 void Pool::start()
 {
-    if (alive || runningTasks > 0 || aliveThreads > 0) {
+    if (alive || runningJobs > 0 || aliveThreads > 0) {
         return;
     }
 
     pool.clear();
     alive = true;
+    aliveThreads = 0;
     printf("Threading pool size: %u\n", threadNum);
     for (decltype(threadNum) ii = 0; ii < threadNum; ii++) {
         pool.emplace_back(std::thread(&Pool::workingFunction, this));
@@ -52,9 +53,8 @@ void Pool::stop()
         return;
     }
 
-    printf("stop()\n");
-    queueCondition.notify_one();
     alive = false;
+    queueCondition.notify_one();
     {
         std::unique_lock<std::mutex> lock(taskMutex);
         taskCondition.wait(lock, [this]{ return this->aliveThreads <= 0; });
@@ -83,41 +83,41 @@ void Pool::addJob(std::function<void()> job)
 
 void Pool::waitFinish()
 {
-    {
-        std::unique_lock<std::mutex> lock(taskMutex);
-        taskCondition.wait(lock, [this]{ return !this->taskRunning(); });
-    }
+    std::unique_lock<std::mutex> lock(taskMutex);
+    taskCondition.wait(lock, [this]{ return !taskRunning(); });
 }
 
 
 bool Pool::taskRunning()
 {
-    return runningTasks > 0 || !queue.empty();
+    return runningJobs > 0 || !queue.empty();
 }
 
 
 void Pool::workingFunction()
 {
+    std::unique_lock<std::mutex> lock(queueMutex);
     while(true)
     {
-        std::function<void()> job;
-        {
-            std::unique_lock<std::mutex> lock(queueMutex);
-            queueCondition.wait(lock, [this]{ return !this->queue.empty() || !this->alive; });
-            if (!alive) {
-                printf("stopped, break.\n");
-                aliveThreads -= 1;
-                taskCondition.notify_one();
-                queueCondition.notify_one();
-                break;
-            }
-            job = queue.front();
+        if (!queue.empty()) {
+            std::function<void()> job = queue.front();
             queue.pop();
-            runningTasks += 1;
+            lock.unlock();
+            runningJobs += 1;
+            job();
+            runningJobs -= 1;
+            lock.lock();
+            taskCondition.notify_one();
+        } else if (!alive) {
+            aliveThreads -= 1;
+            taskCondition.notify_one();
+            queueCondition.notify_one();
+            break;
+        } else {
+            taskCondition.notify_one();
+            queueCondition.wait(lock, [this]{ return !this->queue.empty() || !this->alive; });
         }
-        job();
-        runningTasks -= 1;
-        taskCondition.notify_one();
+            
     }
 }
 

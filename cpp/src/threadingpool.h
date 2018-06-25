@@ -36,7 +36,7 @@ private:
     std::mutex queueMutex;
     std::condition_variable queueCondition;
     
-    std::atomic_int runningTasks;
+    std::atomic_int runningJobs;
     std::atomic_int aliveThreads;
     std::mutex taskMutex;
     std::condition_variable taskCondition;
