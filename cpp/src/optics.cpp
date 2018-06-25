@@ -87,7 +87,7 @@ RaySegmentFactory * RaySegmentFactory::instance = nullptr;
 void Optics::hitSurface(float n, RayTracingContext *rayCtx)
 {
     Pool *pool = Pool::getInstance();
-    int step = rayCtx->currentRayNum / 100;
+    int step = rayCtx->currentRayNum / 80;
     for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
         int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
         pool->addJob(std::bind(&Optics::hitSurfaceRange, n, rayCtx, startIdx, endIdx));
@@ -127,7 +127,7 @@ void Optics::propagate(RayTracingContext *rayCtx, CrystalContext *cryCtx)
     cryCtx->crystal->copyFaceData(faces);
 
     Pool *pool = Pool::getInstance();
-    int step = rayCtx->currentRayNum / 100;
+    int step = rayCtx->currentRayNum / 80;
     for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
         int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
         pool->addJob(std::bind(&Optics::propagateRange, rayCtx, faceNum, faces, startIdx, endIdx));
@@ -160,11 +160,7 @@ void Optics::propagateRange(RayTracingContext *rayCtx, int faceNum, float *faces
             intersectLineFace(tmp_pt, tmp_dir, tmp_face, &p[0], &t, &alpha, &beta);
             if (t > 1e-6 && t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
                 min_t = t;
-
-                rayCtx->rayPts2[i*3+0] = p[0];
-                rayCtx->rayPts2[i*3+1] = p[1];
-                rayCtx->rayPts2[i*3+2] = p[2];
-
+                memcpy(rayCtx->rayPts2 + i*3, p, sizeof(float) * 3);
                 rayCtx->faceId2[i] = j;
             }
         }
@@ -209,10 +205,8 @@ void Optics::traceRays(SimulationContext &context)
             float index = IceRefractiveIndex::n(context.getWavelength());
             int recursion = 0;
             while (!rayTracingCtx->isFinished() && recursion < maxRecursion) {
-                // hitSurfaceHalide(index, rayTracingCtx);
                 hitSurface(index, rayTracingCtx);
                 rayTracingCtx->commitHitResult();
-                // propagateHalide(rayTracingCtx, crystalCtx);
                 propagate(rayTracingCtx, crystalCtx);
                 rayTracingCtx->commitPropagateResult(crystalCtx);
                 recursion++;
@@ -271,17 +265,25 @@ void Optics::intersectLineFace(const float *pt, const float *dir, const float *f
     LinearAlgebra::vec3FromTo(&face[0], &face[3], &face_base[0]);
     LinearAlgebra::vec3FromTo(&face[0], &face[6], &face_base[3]);
 
+    float c = dir[0]*face_base[1]*face_base[5] + dir[1]*face_base[2]*face_base[3] +
+        dir[2]*face_base[0]*face_base[4] - dir[0]*face_base[2]*face_base[4] -
+        dir[1]*face_base[0]*face_base[5] - dir[2]*face_base[1]*face_base[3];
+    bool flag = std::abs(c) > 1e-6;
+    if (!flag) {
+        *t = -1;
+        return;
+    }
+
     float a = face_base[0]*face_base[4]*face_point[2] + face_base[1]*face_base[5]*face_point[0] +
         face_base[2]*face_base[3]*face_point[1] - face_base[2]*face_base[4]*face_point[0] -
         face_base[1]*face_base[3]*face_point[2] - face_base[0]*face_base[5]*face_point[1];
     float b = pt[0]*face_base[1]*face_base[5] + pt[1]*face_base[2]*face_base[3] +
         pt[2]*face_base[0]*face_base[4] - pt[0]*face_base[2]*face_base[4] -
         pt[1]*face_base[0]*face_base[5] - pt[2]*face_base[1]*face_base[3];
-    float c = dir[0]*face_base[1]*face_base[5] + dir[1]*face_base[2]*face_base[3] +
-        dir[2]*face_base[0]*face_base[4] - dir[0]*face_base[2]*face_base[4] -
-        dir[1]*face_base[0]*face_base[5] - dir[2]*face_base[1]*face_base[3];
-    bool flag = std::abs(c) > 1e-6;
     *t = flag ? (a - b) / c : -1;
+    if (*t < 0) {
+        return;
+    }
 
     a = dir[0]*pt[1]*face_base[5] + dir[1]*pt[2]*face_base[3] +
         dir[2]*pt[0]*face_base[4] - dir[0]*pt[2]*face_base[4] -

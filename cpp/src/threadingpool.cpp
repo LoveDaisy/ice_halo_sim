@@ -86,7 +86,6 @@ void Pool::addJob(std::function<void()> job)
 void Pool::waitFinish()
 {
     std::unique_lock<std::mutex> lock(taskMutex);
-    // taskCondition.wait_for(lock, std::chrono::milliseconds(10), [this]{ return !taskRunning(); });
     taskCondition.wait(lock, [this]{ return !taskRunning(); });
 }
 
