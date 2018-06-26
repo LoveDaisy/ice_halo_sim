@@ -9,10 +9,10 @@ the author of HaloPoint seems have stopped developing.
 
 For a start this program is written in matlab though matlab is often poured scorn on for its
 slow performance. It is a prototype, on which I test my algorithms. Later developing and
-latest updates will be on C++ codes.
+latest updates will be on C++ codes. Also, matlab codes contain some small tools for visualization.
 
-* [C++ version](cpp)  
-* [Matlab version](matlab)  
+* [C++ codes](cpp)  
+* [Matlab codes](matlab)  
 
 ## Features
 
@@ -29,8 +29,8 @@ latest updates will be on C++ codes.
 * Full multi-scattering support.  
   This program is designed to handle multi-scattering cases. As a reference, HaloPoint handles
   multi-scattering via a very tricky workaround, thus it is hard to simulate 
-  [44-degree parhelia](https://www.atoptics.co.uk/halo/44pars.htm). And this program allows you
-  to simulate any multi-scattering case freely.  
+  [44-degree parhelia](https://www.atoptics.co.uk/halo/44pars.htm). And my program allows you
+  to simulate any multi-scattering scenario freely.  
   <img src="matlab/figs/sim06E_2M.jpg" width="400">
   
 * Customized crystal model.
@@ -56,7 +56,7 @@ latest updates will be on C++ codes.
 最开始我是从 matlab 代码开始的, 虽然 matlab 经常被人吐槽很慢, 但其实用于开发原型和验证算法来说足够了.
 这个项目涉及大量的矩阵和向量计算, 恰恰是 matlab 擅长的.
 
-在 matlab 代码上验证了算法后, 后续开发都将在 C++ 代码上进行.
+在 matlab 代码上验证了算法后, 后续开发都将在 C++ 代码上进行. 此外 matlab 代码还包括了几个小工具, 用于一些可视化的任务.
 
 * [C++ 代码](cpp/README_zh.md)  
 * [Matlab 代码](matlab)  
