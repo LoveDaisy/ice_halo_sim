@@ -23,13 +23,15 @@ latest updates will be on C++ codes.
 * Natural and vivid color.  
   Based on my another project [Spectrum Renderer](https://github.com/LoveDaisy/spec_render),
   a matlab tool to render colors with given spectrum, this simulation program can render
-  very natural and vivid color.
+  very natural and vivid color.  
+  <img src="matlab/figs/sim05E_50M.jpg" width="400">
   
 * Full multi-scattering support.  
   This program is designed to handle multi-scattering cases. As a reference, HaloPoint handles
   multi-scattering via a very tricky workaround, thus it is hard to simulate 
   [44-degree parhelia](https://www.atoptics.co.uk/halo/44pars.htm). And this program allows you
-  to simulate any multi-scattering case freely.
+  to simulate any multi-scattering case freely.  
+  <img src="matlab/figs/sim06E_2M.jpg" width="400">
   
 * Customized crystal model.
   This program has a simple built-in parser for [.obj file](https://en.wikipedia.org/wiki/Wavefront_.obj_file)
@@ -41,8 +43,6 @@ latest updates will be on C++ codes.
 1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/)
 2. [HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)
 3. [Rapidjson](http://rapidjson.org/index.html)
-
-<img src="matlab/figs/sim05E_50M.jpg" width="600">
 
 
 # 冰晕模拟程序
@@ -68,12 +68,14 @@ latest updates will be on C++ codes.
   
 * 自然而鲜艳的色彩表现  
   本模拟程序的色彩模拟是基于我的另一个个人项目 [Spectrum Renderer](https://github.com/LoveDaisy/spec_render),
-  那是一个 matlab 小工具, 可以对任意光谱所表现出来的颜色进行模拟. 
+  那是一个 matlab 小工具, 可以对任意光谱所表现出来的颜色进行模拟.  
+  <img src="matlab/figs/sim05E_50M.jpg" width="400">
   
 * 对多晶模拟的完整支持  
   本模拟程序可以完整地模拟多晶场景, 与普通单晶场景的操作没有区别, 不需特殊对待. 作为对比, HaloPoint 
   采用了一种非常绕的方式来勉强模拟多晶场景, 并且难以模拟 [44 度幻日](https://www.atoptics.co.uk/halo/44pars.htm).
-  而本模拟程序可以让用户自由模拟任意的多晶场景.
+  而本模拟程序可以让用户自由模拟任意的多晶场景.  
+  <img src="matlab/figs/sim06E_2M.jpg" width="400">
   
 * 用户自定义的冰晶形状  
   本模拟程序实现了一个简单的 [.obj 文件](https://en.wikipedia.org/wiki/Wavefront_.obj_file) 解析器,
