@@ -26,11 +26,11 @@ as well as several lines printed on the screen that describe crystal shapes.
 I have prepared pieces of Matlab codes for visualization those results.
 
 `matlab/src/read_binary_result-example.m` reads the `.bin` files and plot the ray points.
-See `matlab/` folder for details.
+See [matlab](matlab) folder for details.
 
 `matlab/src/plot_crystal-example.m` plots the shape of crystals. You can copy data from program output on
 screen. The lines start with `V:` indicate vertex data, and those start with `F:` indicate face data.
-See `matlab/` folder for details.
+See [matlab](matlab) folder for details.
 
 ## Configuration file
 
@@ -61,8 +61,8 @@ It defines how to simulate multi-scattering halos. It has two attributes,
   * `probability`, defining how many rays can pass through next crystal. If it is set to 1.0, then
     *ALL* rays will be used as input for next crystal.
     
-  Multi-scattering is a highlight feature of this project. As far as I know, HaloSim cannot do this kind simulation,
-while HaloPoint handles it by a tricky workaround, and implements for only limited scenarios.
+  Multi-scattering is a highlight feature of this project. As far as I know, HaloSim cannot do this kind simulation.
+While HaloPoint handles it by a tricky workaround, and implements for only limited scenarios.
 
 ### Crystal settings
 
@@ -148,4 +148,4 @@ the other to 30.
   threading pool implemented by myself, I doubt the margin to more improvements.
 * Improve performance of threading pool. Use some lock-free ways.
 * Add more convenient crystal models, e.g. exotic hex-cylinder/pyramid crystals.
-* Write a GUI for these code.
+* Write a (web) GUI for these code.
