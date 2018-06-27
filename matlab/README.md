@@ -1,4 +1,4 @@
-# Matlab version
+# Matlab codes
 
 For simulation, you can start from `ray_tracing_main.m`. And there also
 other codes for visualization data produced by c++ program.
@@ -11,7 +11,7 @@ other codes for visualization data produced by c++ program.
 * Arbitrary orientation of crystals, including uniform distributed in an angle range, uniform distributed on a sphere,
   Gaussian distributed with given mean and standard deviation.
 * Multi-wave result visualization. It reads the binary file produced by C++ version and visulize the result. 
-  It depends on my another project [Spectral Renderer](https://github.com/LoveDaisy/spec_render).  
+  It depends on my another project [Spectrum Renderer](https://github.com/LoveDaisy/spec_render).  
   <img src="figs/sim04E_52M.jpg" width="400">
 * Crystal shape visualization.
 
