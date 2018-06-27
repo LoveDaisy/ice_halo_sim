@@ -2,8 +2,8 @@
 
 [中文版](README_zh.md)
 
-After testing my algorithms on matlab codes, I start a C++ project for higher performance. Currently the C++ version is just
-pieces of toy codes and can only run from command, no GUI.
+After testing my algorithms on matlab codes, I start a C++ project for higher performance. Currently the C++ version 
+can only run from command, no GUI.
 
 
 ## Build and run
@@ -26,9 +26,11 @@ as well as several lines printed on the screen that describe crystal shapes.
 I have prepared pieces of Matlab codes for visualization those results.
 
 `matlab/src/read_binary_result-example.m` reads the `.bin` files and plot the ray points.
+See `matlab/` folder for details.
 
 `matlab/src/plot_crystal-example.m` plots the shape of crystals. You can copy data from program output on
 screen. The lines start with `V:` indicate vertex data, and those start with `F:` indicate face data.
+See `matlab/` folder for details.
 
 ## Configuration file
 
