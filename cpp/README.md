@@ -26,11 +26,11 @@ as well as several lines printed on the screen that describe crystal shapes.
 I have prepared pieces of Matlab codes for visualization those results.
 
 `matlab/src/read_binary_result-example.m` reads the `.bin` files and plot the ray points.
-See [matlab](matlab) folder for details.
+See [matlab](matlab/) folder for details.
 
 `matlab/src/plot_crystal-example.m` plots the shape of crystals. You can copy data from program output on
 screen. The lines start with `V:` indicate vertex data, and those start with `F:` indicate face data.
-See [matlab](matlab) folder for details.
+See [matlab](matlab/) folder for details.
 
 ## Configuration file
 
