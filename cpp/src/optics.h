@@ -3,6 +3,9 @@
 
 #include "geometry.h"
 
+#include <atomic>
+#include <mutex>
+
 
 namespace IceHalo {
 
@@ -101,11 +104,12 @@ private:
     RaySegmentFactory();
 
     static RaySegmentFactory *instance;
-    static const uint32_t chunkSize = 1024 * 64;
+    static const uint32_t chunkSize = 1024 * 128;
 
+    std::mutex idMutex;
     std::vector<RaySegment*> segments;
-    uint32_t nextUnusedId;
-    uint32_t currentChunkId;
+    std::atomic_uint64_t nextUnusedId;
+    std::atomic_uint64_t currentChunkId;
 
 };
 

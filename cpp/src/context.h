@@ -71,6 +71,9 @@ private:
     void initRaysRange(CrystalContext *ctx, const float *dir,
         const float *faces, int startIdx, int endIdx);
 
+    void copyFinishedRaySegmentsRange(RaySegment **segs, float *dir, float prob,
+        std::atomic_uint64_t &k, int startIdx, int endIdx);
+
     SimulationContext *simCtx;
 
     int initRayNum;

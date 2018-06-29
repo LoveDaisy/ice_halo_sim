@@ -202,12 +202,30 @@ bool RayTracingContext::isFinished()
 
 size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float *dir, float prob)
 {
+    std::atomic_uint64_t k(0);
+    
+    Pool *pool = Pool::getInstance();
+    int step = initRayNum / 80;
+    for (int startIdx = 0; startIdx < initRayNum; startIdx += step) {
+        int endIdx = std::min(startIdx + step, initRayNum);
+        pool->addJob([segs, dir, prob, &k, startIdx, endIdx, this](){ 
+            copyFinishedRaySegmentsRange(segs, dir, prob, k, startIdx, endIdx);
+        });
+    }
+    pool->waitFinish();
+
+    return k.load();
+}
+
+
+void RayTracingContext::copyFinishedRaySegmentsRange(RaySegment **segs, float *dir, float prob,
+    std::atomic_uint64_t &k, int startIdx, int endIdx)
+{
     std::default_random_engine randomEngine;
     std::uniform_real_distribution<double> uniformDist(0.0, 1.0);
 
     std::vector<RaySegment *> v;
-    size_t k = 0;
-    for (int rayIdx = 0; rayIdx < initRayNum; rayIdx++) {
+    for (int rayIdx = startIdx; rayIdx < endIdx; rayIdx++) {
         v.clear();
         v.push_back(rays[rayIdx]->firstRaySeg);
 
@@ -222,15 +240,14 @@ size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float *dir,
             }
             if (p->w > SCAT_MIN_W && p->faceId >= 0 && p->isFinished 
                     && uniformDist(randomEngine) < prob) {
-                float *finalDir = dir + k * 3;
+                auto tmpk = k++;
+                float *finalDir = dir + tmpk * 3;
                 memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
                 LinearAlgebra::rotateZBack(mainAxRot + rayIdx * 3, finalDir);
-                segs[k] = p;
-                k++;
+                segs[tmpk] = p;
             }
         }
     }
-    return k;
 }
 
 
