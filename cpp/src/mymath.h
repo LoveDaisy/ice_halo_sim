@@ -129,7 +129,7 @@ private:
     float rollStd;
 };
 
-};  // namespace Math
+}   // namespace Math
 
 
 
