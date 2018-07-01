@@ -1,7 +1,10 @@
 #ifndef OPTICS_H
 #define OPTICS_H
 
-#include "geometry.h"
+#include "mymath.h"
+
+#include <atomic>
+#include <mutex>
 
 
 namespace IceHalo {
@@ -25,8 +28,8 @@ public:
     RaySegment * nextRefract;
     RaySegment * prev;
 
-    Vec3f pt;
-    Vec3f dir;
+    Math::Vec3f pt;
+    Math::Vec3f dir;
     float w;
     int faceId;
 
@@ -87,25 +90,28 @@ private:
 };
 
 
-class RaySegmentFactory
+class RaySegmentPool
 {
 public:
-    ~RaySegmentFactory();
+    ~RaySegmentPool();
+    RaySegmentPool(RaySegmentPool const&) = delete;
 
-    static RaySegmentFactory * getInstance();
+    void operator=(RaySegmentPool const&) = delete;
+
+    static RaySegmentPool& getInstance();
 
     RaySegment * getRaySegment(const float *pt, const float *dir, float w, int faceId);
     void clear();
 
 private:
-    RaySegmentFactory();
+    RaySegmentPool();
+    
+    static const uint32_t chunkSize = 1024 * 128;
 
-    static RaySegmentFactory *instance;
-    static const uint32_t chunkSize = 1024 * 64;
-
+    std::mutex idMutex;
     std::vector<RaySegment*> segments;
-    uint32_t nextUnusedId;
-    uint32_t currentChunkId;
+    std::atomic_uint64_t nextUnusedId;
+    std::atomic_uint64_t currentChunkId;
 
 };
 

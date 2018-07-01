@@ -1,7 +1,6 @@
 #include <limits>
 
 #include "optics.h"
-#include "linearalgebra.h"
 #include "context.h"
 #include "threadingpool.h"
 
@@ -41,7 +40,7 @@ void RaySegment::reset()
 
 Ray::Ray(const float *pt, const float *dir, float w, int faceId)
 {
-    firstRaySeg = RaySegmentFactory::getInstance()->getRaySegment(pt, dir, w, faceId);
+    firstRaySeg = RaySegmentPool::getInstance().getRaySegment(pt, dir, w, faceId);
 }
 
 
@@ -81,8 +80,6 @@ size_t Ray::totalNum()
 }
 
 
-RaySegmentFactory * RaySegmentFactory::instance = nullptr;
-
 
 void Optics::hitSurface(float n, RayTracingContext *rayCtx)
 {
@@ -102,7 +99,7 @@ void Optics::hitSurfaceRange(float n, RayTracingContext *rayCtx, int startIdx, i
         const float *tmp_dir = rayCtx->rayDir + i*3;
         const float *tmp_norm = rayCtx->faceNorm + i*3;
 
-        float cos_theta = LinearAlgebra::dot3(tmp_dir, tmp_norm);
+        float cos_theta = Math::dot3(tmp_dir, tmp_norm);
 
         float rr = cos_theta > 0 ? n : 1.0f / n;
 
@@ -170,7 +167,7 @@ void Optics::propagateRange(RayTracingContext *rayCtx, int faceNum, float *faces
 
 void Optics::traceRays(SimulationContext &context)
 {
-    RaySegmentFactory::getInstance()->clear();
+    RaySegmentPool::getInstance().clear();
 
     auto totalRays = context.getTotalInitRays();
     auto maxRecursion = context.getMaxRecursionNum();
@@ -181,19 +178,9 @@ void Optics::traceRays(SimulationContext &context)
     auto *wStore = new float[maxNum];
     auto **raySegStore = new RaySegment *[maxNum], **raySegStore2 = new RaySegment *[maxNum];
 
-    Pool *pool = Pool::getInstance();
-    int step = maxNum / 80;
-    for (int startIdx = 0; startIdx < static_cast<int>(maxNum); startIdx += step) {
-        int endIdx = std::min(startIdx + step, static_cast<int>(maxNum));
-        pool->addJob([startIdx, endIdx, &context, dirStore](){
-            for (int i = startIdx; i < endIdx; i++)
-            context.fillSunDir(dirStore + i*3);
-        });
-    }
-    pool->waitFinish();
+    context.fillSunDir(dirStore, totalRays);
 
     for (decltype(maxNum) i = 0; i < maxNum; i++) {
-        // context.fillSunDir(dirStore + i*3);
         wStore[i] = 1.0f;
         raySegStore[i] = nullptr;
         raySegStore2[i] = nullptr;
@@ -208,7 +195,6 @@ void Optics::traceRays(SimulationContext &context)
             auto crystalCtx = context.getCrystalContext(crystalIdx);
             auto rayTracingCtx = context.getRayTracingContext(scatterIdx, crystalIdx);
 
-            // rayTracingCtx->clearRays();
             rayTracingCtx->initRays(crystalCtx, rayTracingCtx->initRayNum, 
                 dirStore + inputOffset * 3, wStore + inputOffset, raySegStore + inputOffset);
 
@@ -232,7 +218,7 @@ void Optics::traceRays(SimulationContext &context)
         }
 
         if (scatterIdx < multiScatterNum - 1) {
-            for (int i = outputOffset - 1; i >= 0; i--) {
+            for (auto i = static_cast<int>(outputOffset - 1); i >= 0; i--) {
                 auto j = static_cast<size_t>(uniformDist(randomEngine) * i);
                 raySegStore[i] = raySegStore2[j];
                 raySegStore[j] = raySegStore2[i];
@@ -273,14 +259,13 @@ void Optics::intersectLineFace(const float *pt, const float *dir, const float *f
 {
     const float *face_point = face;
     float face_base[6];
-    LinearAlgebra::vec3FromTo(&face[0], &face[3], &face_base[0]);
-    LinearAlgebra::vec3FromTo(&face[0], &face[6], &face_base[3]);
+    Math::vec3FromTo(&face[0], &face[3], &face_base[0]);
+    Math::vec3FromTo(&face[0], &face[6], &face_base[3]);
 
     float c = dir[0]*face_base[1]*face_base[5] + dir[1]*face_base[2]*face_base[3] +
         dir[2]*face_base[0]*face_base[4] - dir[0]*face_base[2]*face_base[4] -
         dir[1]*face_base[0]*face_base[5] - dir[2]*face_base[1]*face_base[3];
-    bool flag = std::abs(c) > 1e-6;
-    if (!flag) {
+    if (std::abs(c) < 1e-6) {
         *t = -1;
         return;
     }
@@ -291,7 +276,7 @@ void Optics::intersectLineFace(const float *pt, const float *dir, const float *f
     float b = pt[0]*face_base[1]*face_base[5] + pt[1]*face_base[2]*face_base[3] +
         pt[2]*face_base[0]*face_base[4] - pt[0]*face_base[2]*face_base[4] -
         pt[1]*face_base[0]*face_base[5] - pt[2]*face_base[1]*face_base[3];
-    *t = flag ? (a - b) / c : -1;
+    *t = (a - b) / c;
     if (*t < 0) {
         return;
     }
@@ -302,7 +287,7 @@ void Optics::intersectLineFace(const float *pt, const float *dir, const float *f
     b = dir[0]*face_base[4]*face_point[2] + dir[1]*face_base[5]*face_point[0] +
         dir[2]*face_base[3]*face_point[1] - dir[0]*face_base[5]*face_point[1] -
         dir[1]*face_base[3]*face_point[2] - dir[2]*face_base[4]*face_point[0];
-    *alpha = flag ? (a + b) / c : -1;
+    *alpha = (a + b) / c;
 
     a = dir[0]*pt[1]*face_base[2] + dir[1]*pt[2]*face_base[0] +
         dir[2]*pt[0]*face_base[1] - dir[0]*pt[2]*face_base[1] -
@@ -310,7 +295,7 @@ void Optics::intersectLineFace(const float *pt, const float *dir, const float *f
     b = dir[0]*face_base[1]*face_point[2] + dir[1]*face_base[2]*face_point[0] +
         dir[2]*face_base[0]*face_point[1] - dir[0]*face_base[2]*face_point[1] -
         dir[1]*face_base[0]*face_point[2] - dir[2]*face_base[1]*face_point[0];
-    *beta = flag ? -(a + b) / c : -1;
+    *beta = -(a + b) / c;
 
     p[0] = pt[0] + *t * dir[0];
     p[1] = pt[1] + *t * dir[1];
@@ -344,7 +329,7 @@ float IceRefractiveIndex::n(float waveLength)
     return nn;
 }
 
-RaySegmentFactory::RaySegmentFactory()
+RaySegmentPool::RaySegmentPool()
 {
     auto *raySegPool = new RaySegment[chunkSize];
     segments.push_back(raySegPool);
@@ -352,7 +337,7 @@ RaySegmentFactory::RaySegmentFactory()
     currentChunkId = 0;
 }
 
-RaySegmentFactory::~RaySegmentFactory()
+RaySegmentPool::~RaySegmentPool()
 {
     for (auto seg : segments) {
         delete[] seg;
@@ -360,32 +345,32 @@ RaySegmentFactory::~RaySegmentFactory()
     segments.clear();
 }
 
-RaySegmentFactory * RaySegmentFactory::getInstance()
+RaySegmentPool & RaySegmentPool::getInstance()
 {
-    if (instance == nullptr) {
-        instance = new RaySegmentFactory();
-    }
+    static RaySegmentPool instance;
     return instance;
 }
 
-RaySegment * RaySegmentFactory::getRaySegment(const float *pt, const float *dir, float w, int faceId)
+RaySegment * RaySegmentPool::getRaySegment(const float *pt, const float *dir, float w, int faceId)
 {
     RaySegment *seg;
     RaySegment *currentChunk;
 
-    if (nextUnusedId < chunkSize) {
-        currentChunk = segments[currentChunkId];
-    } else {
-        currentChunkId++;
-        if (currentChunkId >= segments.size()) {
+    if (nextUnusedId >= chunkSize) {
+        auto segSize = segments.size();
+        if (currentChunkId >= segSize - 1) {
             auto *raySegPool = new RaySegment[chunkSize];
             segments.push_back(raySegPool);
+            currentChunkId.store(segSize);
+        } else {
+            currentChunkId++;
         }
         nextUnusedId = 0;
-        currentChunk = segments[currentChunkId];
     }
+    currentChunk = segments[currentChunkId];
 
-    seg = &currentChunk[nextUnusedId++];
+    seg = currentChunk + nextUnusedId;
+    nextUnusedId++;
     seg->reset();
 
     seg->pt.val(pt);
@@ -396,7 +381,7 @@ RaySegment * RaySegmentFactory::getRaySegment(const float *pt, const float *dir,
     return seg;
 }
 
-void RaySegmentFactory::clear()
+void RaySegmentPool::clear()
 {
     nextUnusedId = 0;
     currentChunkId = 0;

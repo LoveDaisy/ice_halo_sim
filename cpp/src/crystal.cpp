@@ -1,186 +1,20 @@
-#include "context.h"
-#include "geometry.h"
-#include "linearalgebra.h"
-
+#include "crystal.h"
 
 namespace IceHalo {
 
-template <typename T>
-Vec3<T>::Vec3(T x, T y, T z)
-{
-    _val[0] = x;
-    _val[1] = y;
-    _val[2] = z;
-}
-
-template <typename T>
-Vec3<T>::Vec3(const T *data)
-{
-    _val[0] = data[0];
-    _val[1] = data[1];
-    _val[2] = data[2];
-}
-
-template <typename T>
-Vec3<T>::Vec3(const Vec3<T> &v)
-{
-    _val[0] = v._val[0];
-    _val[1] = v._val[1];
-    _val[2] = v._val[2];
-}
-
-
-template <typename T>
-const T* Vec3<T>::val() const
-{
-    return _val;
-}
-
-template <typename T>
-void Vec3<T>::val(T x, T y, T z)
-{
-    _val[0] = x;
-    _val[1] = y;
-    _val[2] = z;
-}
-
-template <typename T>
-void Vec3<T>::val(const T *data)
-{
-    _val[0] = data[0];
-    _val[1] = data[1];
-    _val[2] = data[2];
-}
-
-template <typename T>
-T Vec3<T>::x() const
-{
-    return _val[0];
-}
-
-template <typename T>
-T Vec3<T>::y() const
-{
-    return _val[1];
-}
-
-template <typename T>
-T Vec3<T>::z() const
-{
-    return _val[2];
-}
-
-template <typename T>
-void Vec3<T>::x(T x)
-{
-    _val[0] = x;
-}
-
-template <typename T>
-void Vec3<T>::y(T y)
-{
-    _val[1] = y;
-}
-
-template <typename T>
-void Vec3<T>::z(T z)
-{
-    _val[2] = z;
-}
-
-template <typename T>
-Vec3<T> Vec3<T>::normalized()
-{
-    return Vec3<T>::normalized(*this);
-}
-
-template <typename T>
-void Vec3<T>::normalize()
-{
-    LinearAlgebra::normalize3(_val);
-}
-
-template <typename T>
-Vec3<T> Vec3<T>::normalized(const Vec3<T> &v)
-{
-    T data[3];
-    LinearAlgebra::normalized3(v._val, data);
-    return Vec3<T>(data);
-}
-
-template <typename T>
-T Vec3<T>::dot(const Vec3<T> &v1, const Vec3<T> &v2)
-{
-    return LinearAlgebra::dot3(v1._val, v2._val);
-}
-
-template <typename T>
-T Vec3<T>::norm(const Vec3<T> &v)
-{
-    return LinearAlgebra::norm3(v._val);
-}
-
-template <typename T>
-Vec3<T> Vec3<T>::cross(const Vec3<T> &v1, const Vec3<T> &v2)
-{
-    T data[3];
-    LinearAlgebra::cross3(v1._val, v2._val, data);
-    return Vec3<T>(data);
-}
-
-template <typename T>
-Vec3<T> Vec3<T>::fromVec(const Vec3<T> &v1, const Vec3<T> &v2)
-{
-    T data[3];
-    LinearAlgebra::vec3FromTo(v1._val, v2._val, data);
-    return Vec3<T>(data);
-}
-
-template class Vec3<float>;
-
-
-TriangleIdx::TriangleIdx(int id1, int id2, int id3)
-{
-    _idx[0] = id1;
-    _idx[1] = id2;
-    _idx[2] = id3;
-}
-
-int TriangleIdx::id1() const
-{
-    return _idx[0];
-}
-
-int TriangleIdx::id2() const
-{
-    return _idx[1];
-}
-
-int TriangleIdx::id3() const
-{
-    return _idx[2];
-}
-
-const int * TriangleIdx::idx() const
-{
-    return &_idx[0];
-}
-
-
-Crystal::Crystal(std::vector<Vec3f> &vertexes, std::vector<TriangleIdx> &faces) :
+Crystal::Crystal(std::vector<Math::Vec3f> &vertexes, std::vector<Math::TriangleIdx> &faces) :
     vertexes(vertexes), faces(faces), initDone(false)
 {
     initialize();
 }
 
-
-void Crystal::setVertexes(std::vector<Vec3f> &vertexes)
+void Crystal::setVertexes(std::vector<Math::Vec3f> &vertexes)
 {
     initDone = false;
     this->vertexes = vertexes;
 }
 
-void Crystal::setFaces(std::vector<TriangleIdx> &faces)
+void Crystal::setFaces(std::vector<Math::TriangleIdx> &faces)
 {
     initDone = false;
     this->faces = faces;
@@ -188,6 +22,8 @@ void Crystal::setFaces(std::vector<TriangleIdx> &faces)
 
 void Crystal::initialize()
 {
+    using namespace Math;
+
     norms.clear();
     initDone = true;
     
@@ -209,17 +45,17 @@ void Crystal::initialize()
     }
 }
 
-const std::vector<Vec3f>& Crystal::getVertexes()
+const std::vector<Math::Vec3f>& Crystal::getVertexes()
 {
     return vertexes;
 }
 
-const std::vector<Vec3f>& Crystal::getNorms()
+const std::vector<Math::Vec3f>& Crystal::getNorms()
 {
     return norms;
 }
 
-const std::vector<TriangleIdx>& Crystal::getFaces()
+const std::vector<Math::TriangleIdx>& Crystal::getFaces()
 {
     return faces;
 }
@@ -283,15 +119,17 @@ void Crystal::copyNormalData(float *data) const
  */
 Crystal* Crystal::createHexCylinder(float h)
 {
+    using namespace Math;
+
     std::vector<Vec3f> vertexes;
     std::vector<TriangleIdx> faces;
 
     vertexes.reserve(6);
     for (int i = 0; i < 6; ++i) {
-        vertexes.emplace_back(Vec3f(std::cos(2*PI*i/6), std::sin(2*PI*i/6), h));
+        vertexes.emplace_back(Vec3f(cos(2 * PI * i / 6), sin(2 * PI * i / 6), h));
     }
     for (int i = 0; i < 6; ++i) {
-        vertexes.emplace_back(Vec3f(std::cos(2*PI*i/6), std::sin(2*PI*i/6), -h));
+        vertexes.emplace_back(Vec3f(cos(2 * PI * i / 6), sin(2 * PI * i / 6), -h));
     }
 
     faces.emplace_back(TriangleIdx(0, 1, 2));
@@ -311,27 +149,6 @@ Crystal* Crystal::createHexCylinder(float h)
 }
 
 /*
-    top vertex:
-        2   1
-    3           0
-        4   5
-
-    upper vertex:
-        8   7
-    9           6
-        10  11
-
-    lower vertex:
-        14  13
-    15          12
-        16  17
-
-    bottom vertex:
-        20  19
-    21          18
-        22  23
-*/
-/*
  * parameter: h1, defined as h / H, where h is the actual height of first pyramid, H is the
  *            full height of first pyramid. It will be clamped to between 0.0 and 1.0.
  * parameter: h2, defined as h / a, where h is the actual height of middle cylinder, a is the
@@ -340,6 +157,8 @@ Crystal* Crystal::createHexCylinder(float h)
  */
 Crystal* Crystal::createHexPyramid(float h1, float h2, float h3)
 {
+    using namespace Math;
+
     const float H = 1.629f;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
@@ -349,26 +168,26 @@ Crystal* Crystal::createHexPyramid(float h1, float h2, float h3)
     vertexes.reserve(24);
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6) * (1 - h1),
-            std::sin(2*PI*i/6) * (1 - h1),
+            cos(2*PI*i/6) * (1 - h1),
+            sin(2*PI*i/6) * (1 - h1),
             h2 + h1 * H));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6), 
-            std::sin(2*PI*i/6), 
+            cos(2*PI*i/6), 
+            sin(2*PI*i/6), 
             h2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6), 
-            std::sin(2*PI*i/6), 
+            cos(2*PI*i/6), 
+            sin(2*PI*i/6), 
             -h2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6) * (1 - h3),
-            std::sin(2*PI*i/6) * (1 - h3),
+            cos(2*PI*i/6) * (1 - h3),
+            sin(2*PI*i/6) * (1 - h3),
             -h2 - h3 * H));
     }
 
@@ -396,7 +215,6 @@ Crystal* Crystal::createHexPyramid(float h1, float h2, float h3)
     return new Crystal(vertexes, faces);
 }
 
-
 /*
     top vertex:
         1       0
@@ -408,7 +226,10 @@ Crystal* Crystal::createHexPyramid(float h1, float h2, float h3)
         9       8
         10      11
 */
-Crystal *Crystal::createCubicPyramid(float ratio1, float ratio2) {
+Crystal *Crystal::createCubicPyramid(float ratio1, float ratio2)
+{
+    using namespace Math;
+
     ratio1 = std::min(ratio1, 1.f);
     ratio2 = std::min(ratio2, 1.f);
 
@@ -419,20 +240,20 @@ Crystal *Crystal::createCubicPyramid(float ratio1, float ratio2) {
 
     for (int i = 0; i < 4; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(PI/4 + PI/2*i) * (1 - ratio1), 
-            std::sin(PI/4 + PI/2*i) * (1 - ratio1), 
+            cos(PI/4 + PI/2*i) * (1 - ratio1), 
+            sin(PI/4 + PI/2*i) * (1 - ratio1), 
             ratio1));
     }
     for (int i = 0; i < 4; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(PI/4 + PI/2*i), 
-            std::sin(PI/4 + PI/2*i), 
+            cos(PI/4 + PI/2*i), 
+            sin(PI/4 + PI/2*i), 
             0));
     }
     for (int i = 0; i < 4; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(PI/4 + PI/2*i) * (1 - ratio2), 
-            std::sin(PI/4 + PI/2*i) * (1 - ratio2), 
+            cos(PI/4 + PI/2*i) * (1 - ratio2), 
+            sin(PI/4 + PI/2*i) * (1 - ratio2), 
             -ratio2));
     }
 
@@ -452,28 +273,6 @@ Crystal *Crystal::createCubicPyramid(float ratio1, float ratio2) {
     return new Crystal(vertexes, faces);
 }
 
-
-/*
-    top vertex:
-        2   1
-    3           0
-        4   5
-
-    upper vertex:
-        8   7
-    9           6
-        10  11
-
-    lower vertex:
-        14  13
-    15          12
-        16  17
-
-    bottom vertex:
-        20  19
-    21          18
-        22  23
-*/
 /*
  * parameter: i1, i4, the miller index to describe face 13. Index form is (i1, 0, -i1, i4)
  * parameter: h1, defined as h / H
@@ -482,6 +281,8 @@ Crystal *Crystal::createCubicPyramid(float ratio1, float ratio2) {
  */
 Crystal* Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h3)
 {
+    using namespace Math;
+
     float H = 1.629f * i1 / i4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
@@ -491,26 +292,26 @@ Crystal* Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h3)
     vertexes.reserve(24);
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6) * (1 - h1),
-            std::sin(2*PI*i/6) * (1 - h1),
+            cos(2*PI*i/6) * (1 - h1),
+            sin(2*PI*i/6) * (1 - h1),
             h2 + h1 * H));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6), 
-            std::sin(2*PI*i/6), 
+            cos(2*PI*i/6), 
+            sin(2*PI*i/6), 
             h2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6), 
-            std::sin(2*PI*i/6), 
+            cos(2*PI*i/6), 
+            sin(2*PI*i/6), 
             -h2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6) * (1 - h3),
-            std::sin(2*PI*i/6) * (1 - h3),
+            cos(2*PI*i/6) * (1 - h3),
+            sin(2*PI*i/6) * (1 - h3),
             -h2 - h3 * H));
     }
 
@@ -538,9 +339,10 @@ Crystal* Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h3)
     return new Crystal(vertexes, faces);
 }
 
-
 Crystal* Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3)
 {
+    using namespace Math;
+
     float H1 = 1.629f * upperIdx1 / upperIdx4;
     float H3 = 1.629f * lowerIdx1 / lowerIdx4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
@@ -551,26 +353,26 @@ Crystal* Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, 
     vertexes.reserve(24);
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6) * (1 - h1),
-            std::sin(2*PI*i/6) * (1 - h1),
+            cos(2*PI*i/6) * (1 - h1),
+            sin(2*PI*i/6) * (1 - h1),
             h2 + h1 * H1));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6), 
-            std::sin(2*PI*i/6), 
+            cos(2*PI*i/6), 
+            sin(2*PI*i/6), 
             h2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6), 
-            std::sin(2*PI*i/6), 
+            cos(2*PI*i/6), 
+            sin(2*PI*i/6), 
             -h2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6) * (1 - h3),
-            std::sin(2*PI*i/6) * (1 - h3),
+            cos(2*PI*i/6) * (1 - h3),
+            sin(2*PI*i/6) * (1 - h3),
             -h2 - h3 * H3));
     }
 
@@ -598,10 +400,11 @@ Crystal* Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, 
     return new Crystal(vertexes, faces);
 }
 
-
 Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
-    float h1, float h2, float h3)
+                                            float h1, float h2, float h3)
 {
+    using namespace Math;
+
     float H1 = 1.629f * upperIdx1 / upperIdx4;
     float H2 = 1.629f * lowerIdx1 / lowerIdx4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
@@ -613,27 +416,27 @@ Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lo
     float r = (1.0f - h2) * (1.0f - h1);
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6) * r, 
-            std::sin(2*PI*i/6) * r, 
+            cos(2*PI*i/6) * r, 
+            sin(2*PI*i/6) * r, 
             h1 * H1 * (1.0f - h1) + h2 * H2 + h3 * 2));
     }
     r = 1.0f - h2;
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6) * r, 
-            std::sin(2*PI*i/6) * r, 
+            cos(2*PI*i/6) * r, 
+            sin(2*PI*i/6) * r, 
             h2 + h3 * 2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6), 
-            std::sin(2*PI*i/6), 
+            cos(2*PI*i/6), 
+            sin(2*PI*i/6), 
             h3 * 2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/6), 
-            std::sin(2*PI*i/6), 
+            cos(2*PI*i/6), 
+            sin(2*PI*i/6), 
             0));
     }
 
@@ -661,7 +464,6 @@ Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lo
     return new Crystal(vertexes, faces);
 }
 
-
 /*
     top vertex:
     1
@@ -683,7 +485,10 @@ Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lo
             9
     11
 */
-Crystal *Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3) {
+Crystal *Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3) 
+{
+    using namespace Math;
+
     float H = 1.629f / 1.732051f * i1 / i4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
@@ -693,26 +498,26 @@ Crystal *Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
     vertexes.reserve(12);
     for (int i = 0; i < 3; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/3) * (1 - h1),
-            std::sin(2*PI*i/3) * (1 - h1),
+            cos(2*PI*i/3) * (1 - h1),
+            sin(2*PI*i/3) * (1 - h1),
             h2 + h1 * H));
     }
     for (int i = 0; i < 3; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/3), 
-            std::sin(2*PI*i/3), 
+            cos(2*PI*i/3), 
+            sin(2*PI*i/3), 
             h2));
     }
     for (int i = 0; i < 3; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/3), 
-            std::sin(2*PI*i/3), 
+            cos(2*PI*i/3), 
+            sin(2*PI*i/3), 
             -h2));
     }
     for (int i = 0; i < 3; i++) {
         vertexes.emplace_back(Vec3f(
-            std::cos(2*PI*i/3) * (1 - h3),
-            std::sin(2*PI*i/3) * (1 - h3),
+            cos(2*PI*i/3) * (1 - h3),
+            sin(2*PI*i/3) * (1 - h3),
             -h2 - h3 * H));
     }
 
@@ -734,86 +539,4 @@ Crystal *Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
     return new Crystal(vertexes, faces);
 }
 
-OrientationGenerator::OrientationGenerator() :
-    axDist(Distribution::UNIFORM), axMean(0), axStd(0),
-    rollDist(Distribution::UNIFORM), rollMean(0), rollStd(0)
-{ }
-
-OrientationGenerator::OrientationGenerator(Distribution axDist, float axMean, float axStd,
-        Distribution rollDist, float rollMean, float rollStd) :
-    axDist(axDist), axMean(axMean), axStd(axStd),
-    rollDist(rollDist), rollMean(rollMean), rollStd(rollStd)
-{
-    unsigned int seed = static_cast<unsigned int>(std::__1::chrono::system_clock::now().time_since_epoch().count());
-    // unsigned int seed = 2345;
-    generator.seed(seed);
-}
-
-void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot)
-{
-    // float tmpSunDir[3] = { 0.0f };
-    // float sunRotation[3] = {
-    //     atan2(-sunDir[1], -sunDir[0]),
-    //     asin(-sunDir[2]),
-    //     0.0f
-    // };
-    // float h = 1.0f - cos(0.25f * Crystal::PI / 180.0f);
-
-    // printf("SUN_ROT:%+.4f,%+.4f,%+.4f\n", sunRotation[0], sunRotation[1], sunRotation[2]);
-
-    for (int i = 0; i < num; i++) {
-        float lon, lat, roll;
-
-        switch (axDist) {
-            case Distribution::UNIFORM : {
-                float v[3] = {gaussDistribution(generator),
-                              gaussDistribution(generator),
-                              gaussDistribution(generator)};
-                LinearAlgebra::normalize3(v);
-                lon = atan2(v[1], v[0]);
-                lat = asin(v[2] / LinearAlgebra::norm3(v));
-            }
-                break;
-            case Distribution::GAUSS :
-                lon = uniformDistribution(generator) * 2 * Crystal::PI;
-                lat = gaussDistribution(generator) * axStd;
-                lat += axMean;
-                if (lat > Crystal::PI / 2) {
-                    lat = Crystal::PI - lat;
-                }
-                if (lat < -Crystal::PI / 2) {
-                    lat = -Crystal::PI - lat;
-                }
-                break;
-        }
-
-        switch (rollDist) {
-            case Distribution::GAUSS :
-                roll = gaussDistribution(generator) * rollStd + rollMean;
-                break;
-            case Distribution::UNIFORM :
-                roll = (uniformDistribution(generator) - 0.5f) * rollStd + rollMean;
-                break;
-        }
-
-        mainAxRot[i*3+0] = lon;
-        mainAxRot[i*3+1] = lat;
-        mainAxRot[i*3+2] = roll;
-
-        // float z = 1.0f - uniformDistribution(generator) * h;
-        // float q = uniformDistribution(generator) * 2 * Crystal::PI;
-        // tmpSunDir[0] = sqrt(1.0f - z * z) * cos(q);
-        // tmpSunDir[1] = sqrt(1.0f - z * z) * sin(q);
-        // tmpSunDir[2] = z;
-        // LinearAlgebra::rotateZBack(sunRotation, tmpSunDir);
-
-        // printf("SUN_DIR:%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n",
-        //     -sunDir[0], -sunDir[1], -sunDir[2],
-        //     tmpSunDir[0], tmpSunDir[1], tmpSunDir[2]);
-
-        memcpy(rayDir+i*3, sunDir, 3*sizeof(float));
-        LinearAlgebra::rotateZ(mainAxRot + i * 3, rayDir + i * 3);
-    }
-}
-
-}   // namespace IceHalo
+};

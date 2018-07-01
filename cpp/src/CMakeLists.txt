@@ -1,7 +1,7 @@
 set(SOURCE_FILE
         main.cpp
-        geometry.cpp
-        linearalgebra.cpp
+        mymath.cpp
+        crystal.cpp
         optics.cpp
         context.cpp
         render.cpp

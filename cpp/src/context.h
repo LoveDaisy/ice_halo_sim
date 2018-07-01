@@ -1,14 +1,14 @@
 #ifndef TESTHELPER_H
 #define TESTHELPER_H
 
-#include "geometry.h"
+#include "mymath.h"
 #include "optics.h"
 #include "rapidjson/document.h"
+#include "crystal.h"
 
 #include <vector>
 #include <random>
 #include <string>
-#include <cstdio>
 
 
 namespace IceHalo {
@@ -26,8 +26,8 @@ public:
     ~CrystalContext();
 
     void setCrystal(Crystal *g, float populationRatio,
-                    OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-                    OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
+                    Math::Distribution axisDist, float axisMean, float axisStd,
+                    Math::Distribution rollDist, float rollMean, float rollStd);
     Crystal * getCrystal();
 
     void fillDir(const float *incDir, float *rayDir, float *mainAxRot, int num = 1);
@@ -37,7 +37,7 @@ private:
 
     float populationRatio;
     Crystal *crystal;
-    OrientationGenerator oriGen;
+    Math::OrientationGenerator oriGen;
 };
 
 
@@ -68,8 +68,8 @@ private:
     void fillDir(const float *incDir, float *rayDir, float *axRot, CrystalContext *ctx);
     void fillPts(const float *faces, int idx, float *rayPts);
 
-    void initRaysRange(CrystalContext *ctx, const float *dir,
-        const float *faces, int startIdx, int endIdx);
+    void copyFinishedRaySegmentsRange(RaySegment **segs, float *dir, float prob,
+        std::atomic_uint64_t &k, int startIdx, int endIdx);
 
     SimulationContext *simCtx;
 
@@ -115,7 +115,7 @@ public:
     void setWavelength(float wavelength);
     float getWavelength();
     
-    void fillSunDir(float *dir, int num = 1);
+    void fillSunDir(float *dir, uint64_t num = 1);
     void setSunPosition(float lon, float lat);
 
     void applySettings();
@@ -170,8 +170,8 @@ private:
     void parseCrystalSetting(SimulationContext &ctx, const rapidjson::Value &c, int ci);
     void parseCrystalType(SimulationContext &ctx, const rapidjson::Value &c, int ci,
         float population,
-        OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-        OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
+        Math::Distribution axisDist, float axisMean, float axisStd,
+        Math::Distribution rollDist, float rollMean, float rollStd);
     Crystal * parseCustomCrystal(std::FILE *file);
 
     rapidjson::Document d;

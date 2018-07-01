@@ -1,5 +1,4 @@
 #include "context.h"
-#include "linearalgebra.h"
 #include "threadingpool.h"
 
 #include "rapidjson/pointer.h"
@@ -24,14 +23,14 @@ CrystalContext::~CrystalContext()
 
 void CrystalContext::setCrystal(
     Crystal *g, float populationWeight,
-    OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-    OrientationGenerator::Distribution rollDist, float rollMean, float rollStd )
+    Math::Distribution axisDist, float axisMean, float axisStd,
+    Math::Distribution rollDist, float rollMean, float rollStd )
 {
     this->crystal = g;
     this->populationRatio = populationWeight;
-    this->oriGen = OrientationGenerator(
-        axisDist, axisMean * Crystal::PI / 180.0f, axisStd * Crystal::PI / 180.0f,
-        rollDist, rollMean * Crystal::PI / 180.0f, rollStd * Crystal::PI / 180.0f
+    this->oriGen = Math::OrientationGenerator(
+        axisDist, axisMean * Math::PI / 180.0f, axisStd * Math::PI / 180.0f,
+        rollDist, rollMean * Math::PI / 180.0f, rollStd * Math::PI / 180.0f
     );
 }
 
@@ -103,8 +102,18 @@ void RayTracingContext::initRays(CrystalContext *ctx, int rayNum, const float *d
     int step = initRayNum / 80;
     for (int startIdx = 0; startIdx < initRayNum; startIdx += step) {
         int endIdx = std::min(startIdx + step, initRayNum);
-        pool->addJob(std::bind(&RayTracingContext::initRaysRange, this,
-            ctx, dir, faces, startIdx, endIdx));
+        pool->addJob([ctx, dir, faces, startIdx, endIdx, this](){
+            int faceNum = ctx->getCrystal()->faceNum();
+            for (int i = startIdx; i < endIdx; i++) {
+                fillDir(dir+i*3, rayDir+i*3, mainAxRot+i*3, ctx);
+
+                int idx = chooseFace(faces, faceNum, rayDir+i*3);
+                faceId[i] = idx;
+
+                fillPts(faces, idx, rayPts+i*3);
+                ctx->getCrystal()->copyNormalData(idx, faceNorm+i*3);
+            }
+        });
     }
     pool->waitFinish();
 
@@ -122,42 +131,18 @@ void RayTracingContext::initRays(CrystalContext *ctx, int rayNum, const float *d
 }
 
 
-void RayTracingContext::initRaysRange(CrystalContext *ctx, const float *dir, 
-    const float *faces,
-    int startIdx, int endIdx)
-{
-    int faceNum = ctx->getCrystal()->faceNum();
-    for (int i = startIdx; i < endIdx; i++) {
-        fillDir(dir+i*3, rayDir+i*3, mainAxRot+i*3, ctx);
-
-        int idx = chooseFace(faces, faceNum, rayDir+i*3);
-        faceId[i] = idx;
-
-        fillPts(faces, idx, rayPts+i*3);
-        ctx->getCrystal()->copyNormalData(idx, faceNorm+i*3);
-
-        // auto *r = new Ray(rayPts+i*3, rayDir+i*3, w[i], faceId[i]);
-        // if (prevRaySeg && prevRaySeg[i]) {
-        //     prevRaySeg[i]->nextRefract = r->firstRaySeg;
-        // }
-        // rays[i] = r;
-        // activeRaySeg[i] = r->firstRaySeg;
-    }
-}
-
-
 void RayTracingContext::commitHitResult()
 {
-    RaySegmentFactory *raySegPool = RaySegmentFactory::getInstance();
+    RaySegmentPool& raySegPool = RaySegmentPool::getInstance();
     for (int i = 0; i < currentRayNum; i++) {
         RaySegment *lastSeg = activeRaySeg[i];
-        RaySegment *seg = raySegPool->getRaySegment(rayPts + i*3, rayDir2 + i*3,
+        RaySegment *seg = raySegPool.getRaySegment(rayPts + i*3, rayDir2 + i*3,
             lastSeg->w * rayW2[i], faceId[i]);
         lastSeg->nextReflect = seg;
         seg->prev = lastSeg;
         activeRaySeg[i] = seg;
 
-        seg = raySegPool->getRaySegment(rayPts + i*3, rayDir3 + i*3,
+        seg = raySegPool.getRaySegment(rayPts + i*3, rayDir3 + i*3,
             lastSeg->w * (1.0f - rayW2[i]), faceId[i]);
         lastSeg->nextRefract = seg;
         seg->prev = lastSeg;
@@ -202,12 +187,30 @@ bool RayTracingContext::isFinished()
 
 size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float *dir, float prob)
 {
+    std::atomic_uint64_t k(0);
+    
+    Pool *pool = Pool::getInstance();
+    int step = initRayNum / 80;
+    for (int startIdx = 0; startIdx < initRayNum; startIdx += step) {
+        int endIdx = std::min(startIdx + step, initRayNum);
+        pool->addJob([segs, dir, prob, &k, startIdx, endIdx, this](){ 
+            copyFinishedRaySegmentsRange(segs, dir, prob, k, startIdx, endIdx);
+        });
+    }
+    pool->waitFinish();
+
+    return k.load();
+}
+
+
+void RayTracingContext::copyFinishedRaySegmentsRange(RaySegment **segs, float *dir, float prob,
+    std::atomic_uint64_t &k, int startIdx, int endIdx)
+{
     std::default_random_engine randomEngine;
     std::uniform_real_distribution<double> uniformDist(0.0, 1.0);
 
     std::vector<RaySegment *> v;
-    size_t k = 0;
-    for (int rayIdx = 0; rayIdx < initRayNum; rayIdx++) {
+    for (int rayIdx = startIdx; rayIdx < endIdx; rayIdx++) {
         v.clear();
         v.push_back(rays[rayIdx]->firstRaySeg);
 
@@ -222,15 +225,14 @@ size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float *dir,
             }
             if (p->w > SCAT_MIN_W && p->faceId >= 0 && p->isFinished 
                     && uniformDist(randomEngine) < prob) {
-                float *finalDir = dir + k * 3;
+                auto tmpk = k++;
+                float *finalDir = dir + tmpk * 3;
                 memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
-                LinearAlgebra::rotateZBack(mainAxRot + rayIdx * 3, finalDir);
-                segs[k] = p;
-                k++;
+                Math::rotateZBack(mainAxRot + rayIdx * 3, finalDir);
+                segs[tmpk] = p;
             }
         }
     }
-    return k;
 }
 
 
@@ -259,11 +261,11 @@ int RayTracingContext::chooseFace(const float *faces, int faceNum, const float *
 
     for (int i = 0; i < faceNum; i++) {
         float v1[3], v2[3];
-        LinearAlgebra::vec3FromTo(faces + i*9, faces + i*9 + 3, v1);
-        LinearAlgebra::vec3FromTo(faces + i*9, faces + i*9 + 6, v2);
+        Math::vec3FromTo(faces + i*9, faces + i*9 + 3, v1);
+        Math::vec3FromTo(faces + i*9, faces + i*9 + 6, v2);
         float norm[3];
-        LinearAlgebra::cross3(v1, v2, norm);
-        float c = LinearAlgebra::dot3(rayDir, norm);
+        Math::cross3(v1, v2, norm);
+        float c = Math::dot3(rayDir, norm);
         frac[i] = c < 0 ? (-c) : 0;
     }
     for (int i = 1; i < faceNum; i++) {
@@ -376,17 +378,17 @@ float SimulationContext::getWavelength()
 }
 
 
-void SimulationContext::fillSunDir(float *dir, int num)
+void SimulationContext::fillSunDir(float *dir, uint64_t num)
 {
     float sunLon = std::atan2(sunDir[1], sunDir[0]);
-    float sunLat = std::asin(sunDir[2] / LinearAlgebra::norm3(sunDir));
+    float sunLat = std::asin(sunDir[2] / Math::norm3(sunDir));
     float sunRot[3] = { sunLon, sunLat, 0 };
 
-    float dz = 1.0f - std::cos(sunDiameter / 360 * Crystal::PI);
-    for (int i = 0; i < num; i++) {
+    float dz = 1.0f - std::cos(sunDiameter / 360 * Math::PI);
+    for (decltype(num) i = 0; i < num; i++) {
         float z = 1.0f - uniformDistribution(generator) * dz;
         float r = std::sqrt(1.0f - z * z);
-        float q = uniformDistribution(generator) * 2 * Crystal::PI;
+        float q = uniformDistribution(generator) * 2 * Math::PI;
         float x = std::cos(q) * r;
         float y = std::sin(q) * r;
 
@@ -394,15 +396,15 @@ void SimulationContext::fillSunDir(float *dir, int num)
         dir[i*3 + 1] = y;
         dir[i*3 + 2] = z;
     }
-    LinearAlgebra::rotateZBack(sunRot, dir, num);
+    Math::rotateZBack(sunRot, dir, num);
 }
 
 
 void SimulationContext::setSunPosition(float lon, float lat)
 {
-    float x = -std::cos(lat * Crystal::PI / 180.0f) * std::cos(lon * Crystal::PI / 180.0f);
-    float y = -std::cos(lat * Crystal::PI / 180.0f) * std::sin(lon * Crystal::PI / 180.0f);
-    float z = -std::sin(lat * Crystal::PI / 180.0f);
+    float x = -std::cos(lat * Math::PI / 180.0f) * std::cos(lon * Math::PI / 180.0f);
+    float y = -std::cos(lat * Math::PI / 180.0f) * std::sin(lon * Math::PI / 180.0f);
+    float z = -std::sin(lat * Math::PI / 180.0f);
 
     this->sunDir[0] = x;
     this->sunDir[1] = y;
@@ -488,10 +490,10 @@ void SimulationContext::writeFinalDirections(const char *filename)
                         v.push_back(p->nextRefract);
                     }
                     if (!p->nextReflect && !p->nextRefract &&
-                            p->isValidEnd() && LinearAlgebra::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
+                            p->isValidEnd() && Math::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
                         float finalDir[3];
                         memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
-                        LinearAlgebra::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
+                        Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
                         fwrite(finalDir, sizeof(float), 3, file);
                         fwrite(&p->w, sizeof(float), 1, file);
                     }
@@ -539,8 +541,8 @@ void SimulationContext::writeRayInfo(const char *filename, float lon, float lat,
                     if (p->isValidEnd()) {
                         float finalDir[3];
                         memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
-                        LinearAlgebra::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
-                        if (LinearAlgebra::dot3(targetDir, finalDir) > cosDelta) {
+                        Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
+                        if (Math::dot3(targetDir, finalDir) > cosDelta) {
                             targetOn = true;
                             break;
                         }
@@ -751,6 +753,7 @@ void ContextParser::parseSunSetting(SimulationContext &ctx)
 void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson::Value &c, int ci)
 {
     using namespace rapidjson;
+    using namespace Math;
 
     char msgBuffer[512];
 
@@ -762,7 +765,7 @@ void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson:
         return;
     }
 
-    OrientationGenerator::Distribution axisDist, rollDist;
+    Distribution axisDist, rollDist;
     float axisMean, rollMean;
     float axisStd, rollStd;
 
@@ -771,9 +774,9 @@ void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson:
         sprintf(msgBuffer, "<crystal[%d].axis.type> cannot recgonize!", ci);
         throw std::invalid_argument(msgBuffer);
     } else if (*p == "Gauss") {
-        axisDist = OrientationGenerator::Distribution::GAUSS;
+        axisDist = Distribution::GAUSS;
     } else if (*p == "Uniform") {
-        axisDist = OrientationGenerator::Distribution::UNIFORM;
+        axisDist = Distribution::UNIFORM;
     } else {
         sprintf(msgBuffer, "<crystal[%d].axis.type> cannot recgonize!", ci);
         throw std::invalid_argument(msgBuffer);
@@ -784,9 +787,9 @@ void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson:
         sprintf(msgBuffer, "<crystal[%d].roll.type> cannot recgonize!", ci);
         throw std::invalid_argument(msgBuffer);
     } else if (*p == "Gauss") {
-        rollDist = OrientationGenerator::Distribution::GAUSS;
+        rollDist = Distribution::GAUSS;
     } else if (*p == "Uniform") {
-        rollDist = OrientationGenerator::Distribution::UNIFORM;
+        rollDist = Distribution::UNIFORM;
     } else {
         sprintf(msgBuffer, "<crystal[%d].roll.type> cannot recgonize!", ci);
         throw std::invalid_argument(msgBuffer);
@@ -847,8 +850,8 @@ void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson:
 
 void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Value &c, int ci,
     float population,
-    OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-    OrientationGenerator::Distribution rollDist, float rollMean, float rollStd)
+    Math::Distribution axisDist, float axisMean, float axisStd,
+    Math::Distribution rollDist, float rollMean, float rollStd)
 {
     using namespace rapidjson;
 
@@ -985,8 +988,8 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
 
 Crystal * ContextParser::parseCustomCrystal(std::FILE *file)
 {
-    std::vector<Vec3f> vertexes;
-    std::vector<TriangleIdx> faces;
+    std::vector<Math::Vec3f> vertexes;
+    std::vector<Math::TriangleIdx> faces;
     float vbuf[3];
     int fbuf[3];
     int c;
@@ -995,12 +998,12 @@ Crystal * ContextParser::parseCustomCrystal(std::FILE *file)
             case 'v':
             case 'V':
                 std::fscanf(file, "%f %f %f", vbuf+0, vbuf+1, vbuf+2);
-                vertexes.emplace_back(Vec3f(vbuf));
+                vertexes.emplace_back(Math::Vec3f(vbuf));
                 break;
             case 'f':
             case 'F':
                 std::fscanf(file, "%d %d %d", fbuf+0, fbuf+1, fbuf+2);
-                faces.emplace_back(TriangleIdx(fbuf[0]-1, fbuf[1]-1, fbuf[2]-1));
+                faces.emplace_back(Math::TriangleIdx(fbuf[0]-1, fbuf[1]-1, fbuf[2]-1));
                 break;
             default:
                 break;
