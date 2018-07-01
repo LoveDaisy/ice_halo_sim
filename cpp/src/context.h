@@ -1,14 +1,14 @@
 #ifndef TESTHELPER_H
 #define TESTHELPER_H
 
-#include "math.h"
+#include "mymath.h"
 #include "optics.h"
 #include "rapidjson/document.h"
+#include "crystal.h"
 
 #include <vector>
 #include <random>
 #include <string>
-#include <cstdio>
 
 
 namespace IceHalo {
@@ -26,8 +26,8 @@ public:
     ~CrystalContext();
 
     void setCrystal(Crystal *g, float populationRatio,
-                    Math::OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-                    Math::OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
+                    Math::Distribution axisDist, float axisMean, float axisStd,
+                    Math::Distribution rollDist, float rollMean, float rollStd);
     Crystal * getCrystal();
 
     void fillDir(const float *incDir, float *rayDir, float *mainAxRot, int num = 1);
@@ -173,8 +173,8 @@ private:
     void parseCrystalSetting(SimulationContext &ctx, const rapidjson::Value &c, int ci);
     void parseCrystalType(SimulationContext &ctx, const rapidjson::Value &c, int ci,
         float population,
-        Math::OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-        Math::OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
+        Math::Distribution axisDist, float axisMean, float axisStd,
+        Math::Distribution rollDist, float rollMean, float rollStd);
     Crystal * parseCustomCrystal(std::FILE *file);
 
     rapidjson::Document d;

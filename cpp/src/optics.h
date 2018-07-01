@@ -1,7 +1,7 @@
 #ifndef OPTICS_H
 #define OPTICS_H
 
-#include "math.h"
+#include "mymath.h"
 
 #include <atomic>
 #include <mutex>

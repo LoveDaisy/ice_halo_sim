@@ -23,14 +23,14 @@ CrystalContext::~CrystalContext()
 
 void CrystalContext::setCrystal(
     Crystal *g, float populationWeight,
-    Math::OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-    Math::OrientationGenerator::Distribution rollDist, float rollMean, float rollStd )
+    Math::Distribution axisDist, float axisMean, float axisStd,
+    Math::Distribution rollDist, float rollMean, float rollStd )
 {
     this->crystal = g;
     this->populationRatio = populationWeight;
     this->oriGen = Math::OrientationGenerator(
-        axisDist, axisMean * Crystal::PI / 180.0f, axisStd * Crystal::PI / 180.0f,
-        rollDist, rollMean * Crystal::PI / 180.0f, rollStd * Crystal::PI / 180.0f
+        axisDist, axisMean * Math::PI / 180.0f, axisStd * Math::PI / 180.0f,
+        rollDist, rollMean * Math::PI / 180.0f, rollStd * Math::PI / 180.0f
     );
 }
 
@@ -398,11 +398,11 @@ void SimulationContext::fillSunDir(float *dir, int num)
     float sunLat = std::asin(sunDir[2] / Math::norm3(sunDir));
     float sunRot[3] = { sunLon, sunLat, 0 };
 
-    float dz = 1.0f - std::cos(sunDiameter / 360 * Crystal::PI);
+    float dz = 1.0f - std::cos(sunDiameter / 360 * Math::PI);
     for (int i = 0; i < num; i++) {
         float z = 1.0f - uniformDistribution(generator) * dz;
         float r = std::sqrt(1.0f - z * z);
-        float q = uniformDistribution(generator) * 2 * Crystal::PI;
+        float q = uniformDistribution(generator) * 2 * Math::PI;
         float x = std::cos(q) * r;
         float y = std::sin(q) * r;
 
@@ -416,9 +416,9 @@ void SimulationContext::fillSunDir(float *dir, int num)
 
 void SimulationContext::setSunPosition(float lon, float lat)
 {
-    float x = -std::cos(lat * Crystal::PI / 180.0f) * std::cos(lon * Crystal::PI / 180.0f);
-    float y = -std::cos(lat * Crystal::PI / 180.0f) * std::sin(lon * Crystal::PI / 180.0f);
-    float z = -std::sin(lat * Crystal::PI / 180.0f);
+    float x = -std::cos(lat * Math::PI / 180.0f) * std::cos(lon * Math::PI / 180.0f);
+    float y = -std::cos(lat * Math::PI / 180.0f) * std::sin(lon * Math::PI / 180.0f);
+    float z = -std::sin(lat * Math::PI / 180.0f);
 
     this->sunDir[0] = x;
     this->sunDir[1] = y;
@@ -779,7 +779,7 @@ void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson:
         return;
     }
 
-    OrientationGenerator::Distribution axisDist, rollDist;
+    Distribution axisDist, rollDist;
     float axisMean, rollMean;
     float axisStd, rollStd;
 
@@ -788,9 +788,9 @@ void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson:
         sprintf(msgBuffer, "<crystal[%d].axis.type> cannot recgonize!", ci);
         throw std::invalid_argument(msgBuffer);
     } else if (*p == "Gauss") {
-        axisDist = OrientationGenerator::Distribution::GAUSS;
+        axisDist = Distribution::GAUSS;
     } else if (*p == "Uniform") {
-        axisDist = OrientationGenerator::Distribution::UNIFORM;
+        axisDist = Distribution::UNIFORM;
     } else {
         sprintf(msgBuffer, "<crystal[%d].axis.type> cannot recgonize!", ci);
         throw std::invalid_argument(msgBuffer);
@@ -801,9 +801,9 @@ void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson:
         sprintf(msgBuffer, "<crystal[%d].roll.type> cannot recgonize!", ci);
         throw std::invalid_argument(msgBuffer);
     } else if (*p == "Gauss") {
-        rollDist = OrientationGenerator::Distribution::GAUSS;
+        rollDist = Distribution::GAUSS;
     } else if (*p == "Uniform") {
-        rollDist = OrientationGenerator::Distribution::UNIFORM;
+        rollDist = Distribution::UNIFORM;
     } else {
         sprintf(msgBuffer, "<crystal[%d].roll.type> cannot recgonize!", ci);
         throw std::invalid_argument(msgBuffer);
@@ -864,8 +864,8 @@ void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson:
 
 void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Value &c, int ci,
     float population,
-    Math::OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-    Math::OrientationGenerator::Distribution rollDist, float rollMean, float rollStd)
+    Math::Distribution axisDist, float axisMean, float axisStd,
+    Math::Distribution rollDist, float rollMean, float rollStd)
 {
     using namespace rapidjson;
 

@@ -11,6 +11,8 @@ namespace IceHalo {
 
 namespace Math {
 
+constexpr float PI = 3.14159265f;
+
 float dot3(const float *vec1, const float *vec2);
 void cross3(const float *vec1, const float *vec2, float* vec);
 float norm3(const float *vec);
@@ -96,15 +98,15 @@ private:
 };
 
 
+enum class Distribution
+{
+    UNIFORM,
+    GAUSS
+};
+
+
 class OrientationGenerator
 {
-public:
-    enum class Distribution
-    {
-        UNIFORM,
-        GAUSS
-    };
-
 public:
     OrientationGenerator();
     OrientationGenerator(Distribution axDist, float axMean, float axStd,
@@ -119,58 +121,16 @@ private:
     std::uniform_real_distribution<float> uniformDistribution;
 
     Distribution axDist;
-    float axMean{};
-    float axStd{};
+    float axMean;
+    float axStd;
 
     Distribution rollDist;
-    float rollMean{};
-    float rollStd{};
+    float rollMean;
+    float rollStd;
 };
 
 };  // namespace Math
 
-
-
-class Crystal
-{
-public:
-    Crystal(std::vector<Math::Vec3f> &vertexes, std::vector<Math::TriangleIdx> &faces);
-
-    void setVertexes(std::vector<Math::Vec3f> &vertexes);
-    void setFaces(std::vector<Math::TriangleIdx> &faces);
-    void initialize();
-    bool isInitialized();
-
-    int vtxNum() const;
-    int faceNum() const;
-
-    const std::vector<Math::Vec3f>& getVertexes();
-    const std::vector<Math::Vec3f>& getNorms();
-    const std::vector<Math::TriangleIdx>& getFaces();
-
-    void copyVertexData(float *data) const;
-    void copyFaceData(float *data) const;
-    void copyFaceIdxData(int *data) const;
-    void copyNormalData(int idx, float *data) const;
-    void copyNormalData(float *data) const;
-
-    static Crystal* createHexCylinder(float h);
-    static Crystal* createHexPyramid(float h1, float h2, float h3);
-    static Crystal* createHexPyramid(int i1, int i4, float h1, float h2, float h3);
-    static Crystal* createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
-    static Crystal* createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
-    static Crystal* createTriPyramid(int i1, int i4, float h1, float h2, float h3);
-    static Crystal* createCubicPyramid(float ratio1, float ratio2);
-
-    static constexpr float PI = 3.14159265f;
-
-private:
-    std::vector<Math::Vec3f> vertexes;
-    std::vector<Math::Vec3f> norms;
-    std::vector<Math::TriangleIdx> faces;
-
-    bool initDone;
-};
 
 
 }   // namespace IceHalo

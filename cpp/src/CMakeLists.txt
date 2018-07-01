@@ -1,6 +1,7 @@
 set(SOURCE_FILE
         main.cpp
-        math.cpp
+        mymath.cpp
+        crystal.cpp
         optics.cpp
         context.cpp
         render.cpp
