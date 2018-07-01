@@ -1,6 +1,6 @@
-# C++ version
+# C++ codes
 
-[中文版](README_zh.md)
+[中文版说明](README_zh.md)
 
 After testing my algorithms on matlab codes, I start a C++ project for higher performance. Currently the C++ version 
 can only run from command, no GUI.
