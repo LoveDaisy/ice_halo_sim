@@ -1,5 +1,4 @@
 set(SOURCE_FILE
-        main.cpp
         mymath.cpp
         crystal.cpp
         optics.cpp
@@ -34,9 +33,11 @@ find_package(Threads)
 #     SRCS ray_prop_generator.cpp
 #     GENERATOR_ARGS auto_schedule=true)
 
-add_executable(IceHaloSim ${SOURCE_FILE})
+add_executable(IceHaloSim trace_main.cpp ${SOURCE_FILE})
 target_link_libraries(IceHaloSim 
     PUBLIC ${CMAKE_THREAD_LIBS_INIT})
+
+add_executable(IceHaloRender render_main.cpp ${SOURCE_FILE})
 
 
 
