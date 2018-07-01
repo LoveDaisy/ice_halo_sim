@@ -39,8 +39,8 @@ void EquiAreaCameraProjection::project(
 }
 
 
-constexpr int SpectrumRenderer::_cmf_min_wl;
-constexpr int SpectrumRenderer::_cmf_max_wl;
+constexpr int SpectrumRenderer::MIN_WL;
+constexpr int SpectrumRenderer::MAX_WL;
 constexpr float SpectrumRenderer::_cmf_xyz_sum[];
 constexpr float SpectrumRenderer::_W[];
 constexpr float SpectrumRenderer::_mt[];
@@ -55,8 +55,8 @@ void SpectrumRenderer::rgb(int waveLengthNumber, float *waveLengths,
         /* Step 1. Spectrum to XYZ */
         float xyz[3] = { 0 };
         for (int j = 0; j < waveLengthNumber; j++) {
-            // int startWl = std::max(static_cast<int>(waveLengths[j]), _cmf_min_wl);
-            // int endWl = std::min(static_cast<int>(waveLengths[j+1]), _cmf_max_wl);
+            // int startWl = std::max(static_cast<int>(waveLengths[j]), MIN_WL);
+            // int endWl = std::min(static_cast<int>(waveLengths[j+1]), MAX_WL);
             // float startSpec = specData[j*dataNumber + i];
             // float endSpec = specData[(j+1)*dataNumber + i];
 
@@ -68,10 +68,10 @@ void SpectrumRenderer::rgb(int waveLengthNumber, float *waveLengths,
             // }
 
             auto wl = static_cast<int>(waveLengths[j]);
-            float v = wl >= _cmf_min_wl && wl <= _cmf_max_wl ? specData[j*dataNumber + i] : 0.0f;
-            xyz[0] += _cmf_x[wl - _cmf_min_wl] * v;
-            xyz[1] += _cmf_y[wl - _cmf_min_wl] * v;
-            xyz[2] += _cmf_z[wl - _cmf_min_wl] * v;
+            float v = wl >= MIN_WL && wl <= MAX_WL ? specData[j*dataNumber + i] : 0.0f;
+            xyz[0] += _cmf_x[wl - MIN_WL] * v;
+            xyz[1] += _cmf_y[wl - MIN_WL] * v;
+            xyz[2] += _cmf_z[wl - MIN_WL] * v;
         }
         // for (int j = 0; j < 3; j++) {
         //     xyz[j] /= _cmf_xyz_sum[j];

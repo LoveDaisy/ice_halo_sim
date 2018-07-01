@@ -49,9 +49,10 @@ public:
              int dataNumber, float *specData,           // spectrum data, waveLengthNumber x dataNumber
              uint8_t *rgbData);                         // rgb data, dataNumber x 3
 
+    static constexpr int MIN_WL = 360;
+    static constexpr int MAX_WL = 830;
+    
 private:
-    static constexpr int _cmf_min_wl = 360;
-    static constexpr int _cmf_max_wl = 830;
     static constexpr float _cmf_xyz_sum[] = { 106.8655f, 106.8569f, 106.8923 };
 
     static constexpr float _W[] = { 0.95047f, 1.00000f, 1.08883f };  // D65 for sRGB
