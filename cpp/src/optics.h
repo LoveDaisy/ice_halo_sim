@@ -90,20 +90,22 @@ private:
 };
 
 
-class RaySegmentFactory
+class RaySegmentPool
 {
 public:
-    ~RaySegmentFactory();
+    ~RaySegmentPool();
+    RaySegmentPool(RaySegmentPool const&) = delete;
 
-    static RaySegmentFactory * getInstance();
+    void operator=(RaySegmentPool const&) = delete;
+
+    static RaySegmentPool& getInstance();
 
     RaySegment * getRaySegment(const float *pt, const float *dir, float w, int faceId);
     void clear();
 
 private:
-    RaySegmentFactory();
-
-    static RaySegmentFactory *instance;
+    RaySegmentPool();
+    
     static const uint32_t chunkSize = 1024 * 128;
 
     std::mutex idMutex;

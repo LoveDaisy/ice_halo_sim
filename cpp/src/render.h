@@ -14,7 +14,7 @@ public:
     virtual void project(
         float *camRot,          // Camera rotation. [lon, lat, roll]
         float hov,              // Half field of view. For diagonal.
-        int dataNumber,         // Data number
+        uint64_t dataNumber,    // Data number
         float *dir,             // Ray directions, [x, y, z]
         int imgWid, int imgHei, // Image size
         int *imgXY              // Image coordinates
@@ -26,12 +26,12 @@ class EquiAreaCameraProjection : public CameraProjection
 {
 public:
     EquiAreaCameraProjection() = default;
-    ~EquiAreaCameraProjection() = default;
+    ~EquiAreaCameraProjection() override = default;
     
-    virtual void project(
+    void project(
         float *camRot,          // Camera rotation. [lon, lat, roll]
         float hov,              // Half field of view. For diagonal.
-        int dataNumber,         // Data number
+        uint64_t dataNumber,    // Data number
         float *dir,             // Ray directions, [x, y, z]
         int imgWid, int imgHei, // Image size
         int *imgXY              // Image coordinates

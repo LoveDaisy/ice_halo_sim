@@ -8,7 +8,7 @@ namespace IceHalo {
 void EquiAreaCameraProjection::project(
         float *camRot,          // Camera rotation. [lon, lat, roll]
         float hov,              // Half field of view. For diagonal.
-        int dataNumber,         // Data number
+        uint64_t dataNumber,    // Data number
         float *dir,             // Ray directions, [x, y, z]
         int imgWid, int imgHei, // Image size
         int *imgXY              // Image coordinates
@@ -25,7 +25,7 @@ void EquiAreaCameraProjection::project(
     }
 
     Math::rotateZ(camRotCopy, dirCopy, dataNumber);
-    for (int i = 0; i < dataNumber; i++) {
+    for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
         float lon = std::atan2(dirCopy[i * 3 + 1], dirCopy[i * 3 + 0]);
         float lat = std::asin(dirCopy[i * 3 + 2] / Math::norm3(dirCopy + i * 3));
         float projR = imgR / 2.0f / std::sin(hov / 360.0f * Math::PI);

@@ -49,25 +49,6 @@ void Pool::start()
 }
 
 
-// void Pool::stop()
-// {
-//     if (!alive) {
-//         return;
-//     }
-
-//     alive = false;
-//     queueCondition.notify_one();
-//     {
-//         std::unique_lock<std::mutex> lock(taskMutex);
-//         taskCondition.wait(lock, [this]{ return this->aliveThreads <= 0; });
-//     }
-//     for (auto &t : pool) {
-//         if (t.joinable()) {
-//             t.join();
-//         }
-//     }
-// }
-
 
 void Pool::addJob(std::function<void()> job)
 {

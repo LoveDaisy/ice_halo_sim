@@ -23,18 +23,18 @@ void vec3FromTo(const float *vec1, const float *vec2, float *vec);
 
 void rotateBase(const float *ax, float angle, float *vec);
 
-void rotateZ(const float *lon_lat_roll, float *vec, int dataNum = 1);
-void rotateZBack(const float *lon_lat_roll, float *vec, int dataNum = 1);
+void rotateZ(const float *lon_lat_roll, float *vec, uint64_t dataNum = 1);
+void rotateZBack(const float *lon_lat_roll, float *vec, uint64_t dataNum = 1);
 
 
 class DummyMatrix
 {
 public:
-    DummyMatrix(float *data, int row, int col);
+    DummyMatrix(float *data, uint64_t row, uint64_t col);
     ~DummyMatrix() = default;
 
-    const int rowNum;
-    const int colNum;
+    const uint64_t rowNum;
+    const uint64_t colNum;
 
     void transpose();
 

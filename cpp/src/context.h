@@ -68,9 +68,6 @@ private:
     void fillDir(const float *incDir, float *rayDir, float *axRot, CrystalContext *ctx);
     void fillPts(const float *faces, int idx, float *rayPts);
 
-    void initRaysRange(CrystalContext *ctx, const float *dir,
-        const float *faces, int startIdx, int endIdx);
-
     void copyFinishedRaySegmentsRange(RaySegment **segs, float *dir, float prob,
         std::atomic_uint64_t &k, int startIdx, int endIdx);
 
@@ -118,7 +115,7 @@ public:
     void setWavelength(float wavelength);
     float getWavelength();
     
-    void fillSunDir(float *dir, int num = 1);
+    void fillSunDir(float *dir, uint64_t num = 1);
     void setSunPosition(float lon, float lat);
 
     void applySettings();

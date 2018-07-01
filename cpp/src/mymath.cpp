@@ -74,7 +74,7 @@ void rotateBase(const float *ax, float angle, float *vec)
 }
 
 
-void rotateZ(const float *lon_lat_roll, float *vec, int dataNum)
+void rotateZ(const float *lon_lat_roll, float *vec, uint64_t dataNum)
 {
     using namespace std;
     float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
@@ -100,7 +100,7 @@ void rotateZ(const float *lon_lat_roll, float *vec, int dataNum)
 }
 
 
-void rotateZBack(const float *lon_lat_roll, float *vec, int dataNum)
+void rotateZBack(const float *lon_lat_roll, float *vec, uint64_t dataNum)
 {
     using namespace std;
     float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
@@ -123,24 +123,20 @@ void rotateZBack(const float *lon_lat_roll, float *vec, int dataNum)
 }
 
 
-DummyMatrix::DummyMatrix(float *data, int row, int col) :
+DummyMatrix::DummyMatrix(float *data, uint64_t row, uint64_t col) :
     rowNum(row), colNum(col), data(data)
 { }
 
 int DummyMatrix::multiply(const DummyMatrix &a, const DummyMatrix &b, DummyMatrix &res)
 {
-    if (a.colNum != b.rowNum)
-    {
+    if (a.colNum != b.rowNum) {
         return -1;
     }
 
-    for (int r = 0; r < a.rowNum; r++)
-    {
-        for (int c = 0; c < b.colNum; c++)
-        {
+    for (uint64_t r = 0; r < a.rowNum; r++) {
+        for (uint64_t c = 0; c < b.colNum; c++) {
             float sum = 0.0f;
-            for (int k = 0; k < a.colNum; k++)
-            {
+            for (uint64_t k = 0; k < a.colNum; k++) {
                 sum += a.data[r*a.colNum + k] * b.data[k*b.colNum + c];
             }
             res.data[r*res.colNum + c] = sum;
@@ -151,10 +147,8 @@ int DummyMatrix::multiply(const DummyMatrix &a, const DummyMatrix &b, DummyMatri
 
 void DummyMatrix::transpose()
 {
-    for (int r = 0; r < rowNum; r++)
-    {
-        for (int c = r+1; c < colNum; c++)
-        {
+    for (uint64_t r = 0; r < rowNum; r++) {
+        for (uint64_t c = r+1; c < colNum; c++) {
             float tmp;
             tmp = data[r*colNum + c];
             data[r*colNum + c] = data[c*colNum +r];

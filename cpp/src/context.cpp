@@ -102,8 +102,18 @@ void RayTracingContext::initRays(CrystalContext *ctx, int rayNum, const float *d
     int step = initRayNum / 80;
     for (int startIdx = 0; startIdx < initRayNum; startIdx += step) {
         int endIdx = std::min(startIdx + step, initRayNum);
-        pool->addJob(std::bind(&RayTracingContext::initRaysRange, this,
-            ctx, dir, faces, startIdx, endIdx));
+        pool->addJob([ctx, dir, faces, startIdx, endIdx, this](){
+            int faceNum = ctx->getCrystal()->faceNum();
+            for (int i = startIdx; i < endIdx; i++) {
+                fillDir(dir+i*3, rayDir+i*3, mainAxRot+i*3, ctx);
+
+                int idx = chooseFace(faces, faceNum, rayDir+i*3);
+                faceId[i] = idx;
+
+                fillPts(faces, idx, rayPts+i*3);
+                ctx->getCrystal()->copyNormalData(idx, faceNorm+i*3);
+            }
+        });
     }
     pool->waitFinish();
 
@@ -121,42 +131,18 @@ void RayTracingContext::initRays(CrystalContext *ctx, int rayNum, const float *d
 }
 
 
-void RayTracingContext::initRaysRange(CrystalContext *ctx, const float *dir, 
-    const float *faces,
-    int startIdx, int endIdx)
-{
-    int faceNum = ctx->getCrystal()->faceNum();
-    for (int i = startIdx; i < endIdx; i++) {
-        fillDir(dir+i*3, rayDir+i*3, mainAxRot+i*3, ctx);
-
-        int idx = chooseFace(faces, faceNum, rayDir+i*3);
-        faceId[i] = idx;
-
-        fillPts(faces, idx, rayPts+i*3);
-        ctx->getCrystal()->copyNormalData(idx, faceNorm+i*3);
-
-        // auto *r = new Ray(rayPts+i*3, rayDir+i*3, w[i], faceId[i]);
-        // if (prevRaySeg && prevRaySeg[i]) {
-        //     prevRaySeg[i]->nextRefract = r->firstRaySeg;
-        // }
-        // rays[i] = r;
-        // activeRaySeg[i] = r->firstRaySeg;
-    }
-}
-
-
 void RayTracingContext::commitHitResult()
 {
-    RaySegmentFactory *raySegPool = RaySegmentFactory::getInstance();
+    RaySegmentPool& raySegPool = RaySegmentPool::getInstance();
     for (int i = 0; i < currentRayNum; i++) {
         RaySegment *lastSeg = activeRaySeg[i];
-        RaySegment *seg = raySegPool->getRaySegment(rayPts + i*3, rayDir2 + i*3,
+        RaySegment *seg = raySegPool.getRaySegment(rayPts + i*3, rayDir2 + i*3,
             lastSeg->w * rayW2[i], faceId[i]);
         lastSeg->nextReflect = seg;
         seg->prev = lastSeg;
         activeRaySeg[i] = seg;
 
-        seg = raySegPool->getRaySegment(rayPts + i*3, rayDir3 + i*3,
+        seg = raySegPool.getRaySegment(rayPts + i*3, rayDir3 + i*3,
             lastSeg->w * (1.0f - rayW2[i]), faceId[i]);
         lastSeg->nextRefract = seg;
         seg->prev = lastSeg;
@@ -392,14 +378,14 @@ float SimulationContext::getWavelength()
 }
 
 
-void SimulationContext::fillSunDir(float *dir, int num)
+void SimulationContext::fillSunDir(float *dir, uint64_t num)
 {
     float sunLon = std::atan2(sunDir[1], sunDir[0]);
     float sunLat = std::asin(sunDir[2] / Math::norm3(sunDir));
     float sunRot[3] = { sunLon, sunLat, 0 };
 
     float dz = 1.0f - std::cos(sunDiameter / 360 * Math::PI);
-    for (int i = 0; i < num; i++) {
+    for (decltype(num) i = 0; i < num; i++) {
         float z = 1.0f - uniformDistribution(generator) * dz;
         float r = std::sqrt(1.0f - z * z);
         float q = uniformDistribution(generator) * 2 * Math::PI;
