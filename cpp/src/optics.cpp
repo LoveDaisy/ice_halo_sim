@@ -1,7 +1,6 @@
 #include <limits>
 
 #include "optics.h"
-#include "linearalgebra.h"
 #include "context.h"
 #include "threadingpool.h"
 
@@ -102,7 +101,7 @@ void Optics::hitSurfaceRange(float n, RayTracingContext *rayCtx, int startIdx, i
         const float *tmp_dir = rayCtx->rayDir + i*3;
         const float *tmp_norm = rayCtx->faceNorm + i*3;
 
-        float cos_theta = LinearAlgebra::dot3(tmp_dir, tmp_norm);
+        float cos_theta = Math::dot3(tmp_dir, tmp_norm);
 
         float rr = cos_theta > 0 ? n : 1.0f / n;
 
@@ -262,8 +261,8 @@ void Optics::intersectLineFace(const float *pt, const float *dir, const float *f
 {
     const float *face_point = face;
     float face_base[6];
-    LinearAlgebra::vec3FromTo(&face[0], &face[3], &face_base[0]);
-    LinearAlgebra::vec3FromTo(&face[0], &face[6], &face_base[3]);
+    Math::vec3FromTo(&face[0], &face[3], &face_base[0]);
+    Math::vec3FromTo(&face[0], &face[6], &face_base[3]);
 
     float c = dir[0]*face_base[1]*face_base[5] + dir[1]*face_base[2]*face_base[3] +
         dir[2]*face_base[0]*face_base[4] - dir[0]*face_base[2]*face_base[4] -

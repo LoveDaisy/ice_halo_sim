@@ -1,7 +1,7 @@
 #ifndef TESTHELPER_H
 #define TESTHELPER_H
 
-#include "geometry.h"
+#include "math.h"
 #include "optics.h"
 #include "rapidjson/document.h"
 
@@ -26,8 +26,8 @@ public:
     ~CrystalContext();
 
     void setCrystal(Crystal *g, float populationRatio,
-                    OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-                    OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
+                    Math::OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
+                    Math::OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
     Crystal * getCrystal();
 
     void fillDir(const float *incDir, float *rayDir, float *mainAxRot, int num = 1);
@@ -37,7 +37,7 @@ private:
 
     float populationRatio;
     Crystal *crystal;
-    OrientationGenerator oriGen;
+    Math::OrientationGenerator oriGen;
 };
 
 
@@ -173,8 +173,8 @@ private:
     void parseCrystalSetting(SimulationContext &ctx, const rapidjson::Value &c, int ci);
     void parseCrystalType(SimulationContext &ctx, const rapidjson::Value &c, int ci,
         float population,
-        OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-        OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
+        Math::OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
+        Math::OrientationGenerator::Distribution rollDist, float rollMean, float rollStd);
     Crystal * parseCustomCrystal(std::FILE *file);
 
     rapidjson::Document d;

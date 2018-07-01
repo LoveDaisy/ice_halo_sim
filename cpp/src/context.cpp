@@ -1,5 +1,4 @@
 #include "context.h"
-#include "linearalgebra.h"
 #include "threadingpool.h"
 
 #include "rapidjson/pointer.h"
@@ -24,12 +23,12 @@ CrystalContext::~CrystalContext()
 
 void CrystalContext::setCrystal(
     Crystal *g, float populationWeight,
-    OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-    OrientationGenerator::Distribution rollDist, float rollMean, float rollStd )
+    Math::OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
+    Math::OrientationGenerator::Distribution rollDist, float rollMean, float rollStd )
 {
     this->crystal = g;
     this->populationRatio = populationWeight;
-    this->oriGen = OrientationGenerator(
+    this->oriGen = Math::OrientationGenerator(
         axisDist, axisMean * Crystal::PI / 180.0f, axisStd * Crystal::PI / 180.0f,
         rollDist, rollMean * Crystal::PI / 180.0f, rollStd * Crystal::PI / 180.0f
     );
@@ -243,7 +242,7 @@ void RayTracingContext::copyFinishedRaySegmentsRange(RaySegment **segs, float *d
                 auto tmpk = k++;
                 float *finalDir = dir + tmpk * 3;
                 memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
-                LinearAlgebra::rotateZBack(mainAxRot + rayIdx * 3, finalDir);
+                Math::rotateZBack(mainAxRot + rayIdx * 3, finalDir);
                 segs[tmpk] = p;
             }
         }
@@ -276,11 +275,11 @@ int RayTracingContext::chooseFace(const float *faces, int faceNum, const float *
 
     for (int i = 0; i < faceNum; i++) {
         float v1[3], v2[3];
-        LinearAlgebra::vec3FromTo(faces + i*9, faces + i*9 + 3, v1);
-        LinearAlgebra::vec3FromTo(faces + i*9, faces + i*9 + 6, v2);
+        Math::vec3FromTo(faces + i*9, faces + i*9 + 3, v1);
+        Math::vec3FromTo(faces + i*9, faces + i*9 + 6, v2);
         float norm[3];
-        LinearAlgebra::cross3(v1, v2, norm);
-        float c = LinearAlgebra::dot3(rayDir, norm);
+        Math::cross3(v1, v2, norm);
+        float c = Math::dot3(rayDir, norm);
         frac[i] = c < 0 ? (-c) : 0;
     }
     for (int i = 1; i < faceNum; i++) {
@@ -396,7 +395,7 @@ float SimulationContext::getWavelength()
 void SimulationContext::fillSunDir(float *dir, int num)
 {
     float sunLon = std::atan2(sunDir[1], sunDir[0]);
-    float sunLat = std::asin(sunDir[2] / LinearAlgebra::norm3(sunDir));
+    float sunLat = std::asin(sunDir[2] / Math::norm3(sunDir));
     float sunRot[3] = { sunLon, sunLat, 0 };
 
     float dz = 1.0f - std::cos(sunDiameter / 360 * Crystal::PI);
@@ -411,7 +410,7 @@ void SimulationContext::fillSunDir(float *dir, int num)
         dir[i*3 + 1] = y;
         dir[i*3 + 2] = z;
     }
-    LinearAlgebra::rotateZBack(sunRot, dir, num);
+    Math::rotateZBack(sunRot, dir, num);
 }
 
 
@@ -505,10 +504,10 @@ void SimulationContext::writeFinalDirections(const char *filename)
                         v.push_back(p->nextRefract);
                     }
                     if (!p->nextReflect && !p->nextRefract &&
-                            p->isValidEnd() && LinearAlgebra::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
+                            p->isValidEnd() && Math::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
                         float finalDir[3];
                         memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
-                        LinearAlgebra::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
+                        Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
                         fwrite(finalDir, sizeof(float), 3, file);
                         fwrite(&p->w, sizeof(float), 1, file);
                     }
@@ -556,8 +555,8 @@ void SimulationContext::writeRayInfo(const char *filename, float lon, float lat,
                     if (p->isValidEnd()) {
                         float finalDir[3];
                         memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
-                        LinearAlgebra::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
-                        if (LinearAlgebra::dot3(targetDir, finalDir) > cosDelta) {
+                        Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
+                        if (Math::dot3(targetDir, finalDir) > cosDelta) {
                             targetOn = true;
                             break;
                         }
@@ -768,6 +767,7 @@ void ContextParser::parseSunSetting(SimulationContext &ctx)
 void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson::Value &c, int ci)
 {
     using namespace rapidjson;
+    using namespace Math;
 
     char msgBuffer[512];
 
@@ -864,8 +864,8 @@ void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson:
 
 void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Value &c, int ci,
     float population,
-    OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
-    OrientationGenerator::Distribution rollDist, float rollMean, float rollStd)
+    Math::OrientationGenerator::Distribution axisDist, float axisMean, float axisStd,
+    Math::OrientationGenerator::Distribution rollDist, float rollMean, float rollStd)
 {
     using namespace rapidjson;
 
@@ -1002,8 +1002,8 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
 
 Crystal * ContextParser::parseCustomCrystal(std::FILE *file)
 {
-    std::vector<Vec3f> vertexes;
-    std::vector<TriangleIdx> faces;
+    std::vector<Math::Vec3f> vertexes;
+    std::vector<Math::TriangleIdx> faces;
     float vbuf[3];
     int fbuf[3];
     int c;
@@ -1012,12 +1012,12 @@ Crystal * ContextParser::parseCustomCrystal(std::FILE *file)
             case 'v':
             case 'V':
                 std::fscanf(file, "%f %f %f", vbuf+0, vbuf+1, vbuf+2);
-                vertexes.emplace_back(Vec3f(vbuf));
+                vertexes.emplace_back(Math::Vec3f(vbuf));
                 break;
             case 'f':
             case 'F':
                 std::fscanf(file, "%d %d %d", fbuf+0, fbuf+1, fbuf+2);
-                faces.emplace_back(TriangleIdx(fbuf[0]-1, fbuf[1]-1, fbuf[2]-1));
+                faces.emplace_back(Math::TriangleIdx(fbuf[0]-1, fbuf[1]-1, fbuf[2]-1));
                 break;
             default:
                 break;

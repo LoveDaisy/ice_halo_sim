@@ -1,7 +1,7 @@
 #ifndef OPTICS_H
 #define OPTICS_H
 
-#include "geometry.h"
+#include "math.h"
 
 #include <atomic>
 #include <mutex>
@@ -28,8 +28,8 @@ public:
     RaySegment * nextRefract;
     RaySegment * prev;
 
-    Vec3f pt;
-    Vec3f dir;
+    Math::Vec3f pt;
+    Math::Vec3f dir;
     float w;
     int faceId;
 

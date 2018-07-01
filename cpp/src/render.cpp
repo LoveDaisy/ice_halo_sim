@@ -1,7 +1,6 @@
 #include "optics.h"
 #include "render.h"
-#include "geometry.h"
-#include "linearalgebra.h"
+#include "math.h"
 
 
 namespace IceHalo {
@@ -25,10 +24,10 @@ void EquiAreaCameraProjection::project(
         i *= Crystal::PI / 180.0f;
     }
 
-    LinearAlgebra::rotateZ(camRotCopy, dirCopy, dataNumber);
+    Math::rotateZ(camRotCopy, dirCopy, dataNumber);
     for (int i = 0; i < dataNumber; i++) {
         float lon = std::atan2(dirCopy[i * 3 + 1], dirCopy[i * 3 + 0]);
-        float lat = std::asin(dirCopy[i * 3 + 2] / LinearAlgebra::norm3(dirCopy + i * 3));
+        float lat = std::asin(dirCopy[i * 3 + 2] / Math::norm3(dirCopy + i * 3));
         float projR = imgR / 2.0f / std::sin(hov / 360.0f * Crystal::PI);
         float r = 2.0f * projR * std::sin((Crystal::PI / 2.0f - lat) / 2.0f);
 
