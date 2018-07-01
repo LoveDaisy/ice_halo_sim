@@ -2,7 +2,6 @@
 
 #include "optics.h"
 #include "context.h"
-#include "render.h"
 
 using namespace IceHalo;
 
