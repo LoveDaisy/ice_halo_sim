@@ -43,8 +43,8 @@ latest updates will be on C++ codes. Also, matlab codes contain some small tools
 
 ## Acknowledgements
 
-1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/)
-2. [HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)
+1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) & 
+[HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)
 3. [Rapidjson](http://rapidjson.org/index.html)
 
 
@@ -88,7 +88,7 @@ latest updates will be on C++ codes. Also, matlab codes contain some small tools
 
 ## 致谢
 
-1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/)
-2. [HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)
+1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) & 
+[HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)
 3. [Rapidjson](http://rapidjson.org/index.html)
 
