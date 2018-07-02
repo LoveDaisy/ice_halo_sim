@@ -17,8 +17,10 @@ latest updates will be on C++ codes. Also, matlab codes contain some small tools
 ## Features
 
 * High speed.  
-  The simulation program is 50~100 times faster than HaloPoint. It is
-  even more faster when running multi-scattering cases.
+  The simulation program is 50~100 times faster than HaloPoint. On general cases
+  this program runs at a speed of 140k~200k rays per second. On multi-scattering cases
+  it runs as faster as 50k~80k rays per second. On the contrary, HaloPoint may cost minutes to
+  render several hundreds rays, and even hours on multi-scattering cases.
   
 * Natural and vivid color.  
   Based on my another project [Spectrum Renderer](https://github.com/LoveDaisy/spec_render),
@@ -30,7 +32,8 @@ latest updates will be on C++ codes. Also, matlab codes contain some small tools
   This program is designed to handle multi-scattering cases. As a reference, HaloPoint handles
   multi-scattering via a very tricky workaround, thus it is hard to simulate 
   [44-degree parhelia](https://www.atoptics.co.uk/halo/44pars.htm). And my program allows you
-  to simulate any multi-scattering scenario freely.  
+  to simulate any multi-scattering scenario freely. Following figure is generated in 23 minutes
+  on my Macbook pro.
   <img src="matlab/figs/sim06E_2M.jpg" width="400">
   
 * Customized crystal model.
@@ -64,7 +67,9 @@ latest updates will be on C++ codes. Also, matlab codes contain some small tools
 ## 功能特点
 
 * 速度快  
-  本模拟程序追踪光线效率非常优秀, 比 HaloPoint 快 50~100 倍. 在多晶模拟的情况下, 比 HaloPoint 快得更多.
+  本模拟程序追踪光线效率非常优秀, 比 HaloPoint 快 50~100 倍. 在多晶模拟的情况下, 比 HaloPoint 优势更大.
+  对于一般情况, 本模拟程序模拟的速度约为每秒 14~20 万光线, 在多晶的情况下约为 5~8 万每秒. 相对的, 
+  HaloPoint 模拟 10 万光线常常需要分钟级别的时间, 而多晶情况下更是需要好几个小时.
   
 * 自然而鲜艳的色彩表现  
   本模拟程序的色彩模拟是基于我的另一个个人项目 [Spectrum Renderer](https://github.com/LoveDaisy/spec_render),
@@ -74,7 +79,7 @@ latest updates will be on C++ codes. Also, matlab codes contain some small tools
 * 对多晶模拟的完整支持  
   本模拟程序可以完整地模拟多晶场景, 与普通单晶场景的操作没有区别, 不需特殊对待. 作为对比, HaloPoint 
   采用了一种非常绕的方式来勉强模拟多晶场景, 并且难以模拟 [44 度幻日](https://www.atoptics.co.uk/halo/44pars.htm).
-  而本模拟程序可以让用户自由模拟任意的多晶场景.  
+  而本模拟程序可以让用户自由模拟任意的多晶场景. 下图所示场景只需要不到 23 分钟即可模拟渲染完.  
   <img src="matlab/figs/sim06E_2M.jpg" width="400">
   
 * 用户自定义的冰晶形状  
