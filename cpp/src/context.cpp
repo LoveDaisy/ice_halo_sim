@@ -1195,7 +1195,7 @@ void ContextParser::parseCameraSetting(RenderContext &ctx)
     } else {
         float az = p->GetDouble();
         az = std::fmax(std::fmin(az, 360.0f), 0.0f);
-        ctx.camRot[0] = az;
+        ctx.camRot[0] = 90.0f - az;
     }
 
     p = Pointer("/camera/elevation").Get(d);
