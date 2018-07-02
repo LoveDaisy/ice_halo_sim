@@ -11,6 +11,8 @@ For a start this program is written in matlab though matlab is often poured scor
 slow performance. It is a prototype, on which I test my algorithms. Later developing and
 latest updates will be on C++ codes. Also, matlab codes contain some small tools for visualization.
 
+Details including how to build and run can be found on following pages.
+
 * [C++ codes](cpp)  
 * [Matlab codes](matlab)  
 
@@ -60,6 +62,8 @@ latest updates will be on C++ codes. Also, matlab codes contain some small tools
 这个项目涉及大量的矩阵和向量计算, 恰恰是 matlab 擅长的.
 
 在 matlab 代码上验证了算法后, 后续开发都将在 C++ 代码上进行. 此外 matlab 代码还包括了几个小工具, 用于一些可视化的任务.
+
+关于构建和运行的细节, 请参见下面的页面.
 
 * [C++ 代码](cpp/README_zh.md)  
 * [Matlab 代码](matlab)  
