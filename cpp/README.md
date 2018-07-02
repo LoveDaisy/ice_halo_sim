@@ -72,6 +72,23 @@ It defines how to simulate multi-scattering halos. It has two attributes,
   Multi-scattering is a highlight feature of this project. As far as I know, HaloSim cannot do this kind simulation.
 While HaloPoint handles it by a tricky workaround, and implements for only limited scenarios.
 
+### Rendering settings
+
+* `camera`:
+It defines properties related to camera, including:  
+  * `azimuth`, `elevation`, `rotation`: the direction where camera pointing at. In degree.
+  * `fov`: (half) field of view, the angle from center to edge. In degree.
+  * `width`, `height`: the size of output image. In pixel.
+  * `lens`: lens type, can be one of `fisheye` or `linear`.
+  
+* `render`:
+It defines some useful attributes used when rendering:
+  * `upper_semi_sphere`, whether to render the upper semi sphere only. If it is set to false, then
+    halos that occure under horizontal, say, [subparhilia](https://www.atoptics.co.uk/halo/subpars.htm), 
+    will be rendered as well.
+  * `intensity_factor`, controls the intensity.
+  * `offset`, defines the rendering offset. In pixel.
+
 ### Crystal settings
 
 * `axis` and `roll`:
