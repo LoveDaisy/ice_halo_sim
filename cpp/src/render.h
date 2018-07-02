@@ -4,39 +4,29 @@
 
 namespace IceHalo {
 
+namespace Projection {
 
-class CameraProjection
-{
-public:
-    CameraProjection() = default;
-    virtual ~CameraProjection() = default;
-    
-    virtual void project(
-        float *camRot,          // Camera rotation. [lon, lat, roll]
-        float hov,              // Half field of view. For diagonal.
-        uint64_t dataNumber,    // Data number
-        float *dir,             // Ray directions, [x, y, z]
-        int imgWid, int imgHei, // Image size
-        int *imgXY              // Image coordinates
-    ) = 0;
-};
+void equiAreaFishEye(
+    float *camRot,          // Camera rotation. [lon, lat, roll]
+    float hov,              // Half field of view.
+    uint64_t dataNumber,    // Data number
+    float *dir,             // Ray directions, [x, y, z]
+    int imgWid, int imgHei, // Image size
+    int *imgXY              // Image coordinates
+);
 
 
-class EquiAreaCameraProjection : public CameraProjection
-{
-public:
-    EquiAreaCameraProjection() = default;
-    ~EquiAreaCameraProjection() override = default;
-    
-    void project(
-        float *camRot,          // Camera rotation. [lon, lat, roll]
-        float hov,              // Half field of view. For diagonal.
-        uint64_t dataNumber,    // Data number
-        float *dir,             // Ray directions, [x, y, z]
-        int imgWid, int imgHei, // Image size
-        int *imgXY              // Image coordinates
-    ) override;
-};
+void rectLinear(
+    float *camRot,          // Camera rotation. [lon, lat, roll]
+    float hov,              // Half field of view.
+    uint64_t dataNumber,    // Data number
+    float *dir,             // Ray directions, [x, y, z]
+    int imgWid, int imgHei, // Image size
+    int *imgXY              // Image coordinates
+);
+
+
+}
 
 
 class SpectrumRenderer

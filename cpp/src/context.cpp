@@ -706,9 +706,10 @@ int RenderContext::loadDataFromFile(const char* filename)
         totalW += tmpW[i];
     }
 
-    EquiAreaCameraProjection proj;
     auto *tmpXY = new int[totalPts * 2];
-    proj.project(camRot, fov, totalPts, tmpDir, imgWid, imgHei, tmpXY);
+    // Projection::equiAreaFishEye(camRot, fov, totalPts, tmpDir, imgWid, imgHei, tmpXY);
+    // Projection::rectLinear(camRot, fov, totalPts, tmpDir, imgWid, imgHei, tmpXY);
+    proj(camRot, fov, totalPts, tmpDir, imgWid, imgHei, tmpXY);
     delete[] tmpDir;
 
     float *currentData = nullptr;
@@ -1179,6 +1180,7 @@ void ContextParser::parseCameraSetting(RenderContext &ctx)
     ctx.fov = 120.0f;
     ctx.imgWid = 800;
     ctx.imgHei = 800;
+    ctx.proj = &Projection::equiAreaFishEye;
 
     auto *p = Pointer("/camera/azimuth").Get(d);
     if (p == nullptr) {
@@ -1244,6 +1246,21 @@ void ContextParser::parseCameraSetting(RenderContext &ctx)
         int height = p->GetInt();
         height = std::max(height, 0);
         ctx.imgHei = height;
+    }
+
+    p = Pointer("/camera/lens").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <camera.lens>, using default equal-area fisheye!\n");
+    } else if (!p->IsString()) {
+        fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equal-area fisheye!\n");
+    } else {
+        if (*p == "linear") {
+            ctx.proj = &Projection::rectLinear;
+        } else if (*p == "fisheye") {
+            ctx.proj = &Projection::equiAreaFishEye;
+        } else {
+            fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recgonized, using default equal-area fisheye!\n");
+        }
     }
 }
 

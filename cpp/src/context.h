@@ -180,6 +180,15 @@ private:
     std::unordered_map<int, float*> spectrumData;
     double totalW;
     double intensityFactor;
+
+    std::function<void(
+        float *camRot,          // Camera rotation. [lon, lat, roll]
+        float hov,              // Half field of view.
+        uint64_t dataNumber,    // Data number
+        float *dir,             // Ray directions, [x, y, z]
+        int imgWid, int imgHei, // Image size
+        int *imgXY              // Image coordinates
+        )> proj;
 };
 
 

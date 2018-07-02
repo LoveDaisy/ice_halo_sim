@@ -5,8 +5,9 @@
 
 namespace IceHalo {
 
+namespace Projection {
 
-void EquiAreaCameraProjection::project(
+void equiAreaFishEye(
         float *camRot,          // Camera rotation. [lon, lat, roll]
         float hov,              // Half field of view.
         uint64_t dataNumber,    // Data number
@@ -38,6 +39,47 @@ void EquiAreaCameraProjection::project(
     }
 
     delete[] dirCopy;
+}
+
+
+void rectLinear(
+        float *camRot,          // Camera rotation. [lon, lat, roll]
+        float hov,              // Half field of view.
+        uint64_t dataNumber,    // Data number
+        float *dir,             // Ray directions, [x, y, z]
+        int imgWid, int imgHei, // Image size
+        int *imgXY              // Image coordinates
+    )
+{
+    auto *dirCopy = new float[dataNumber * 3];
+    float camRotCopy[3];
+    memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
+    memcpy(camRotCopy, camRot, sizeof(float) * 3);
+    camRotCopy[0] *= -1;
+    camRotCopy[1] *= -1;
+    for (float &i : camRotCopy) {
+        i *= Math::PI / 180.0f;
+    }
+
+    Math::rotateZ(camRotCopy, dirCopy, dataNumber);
+    for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
+        if (dirCopy[i * 3 + 2] < 0) {
+            imgXY[i * 2 + 0] = -1;
+            imgXY[i * 2 + 1] = -1;
+        } else {
+            double x = dirCopy[i * 3 + 0] / dirCopy[i * 3 + 2];
+            double y = dirCopy[i * 3 + 1] / dirCopy[i * 3 + 2];
+            x = x * imgWid / 2 / std::tan(hov * Math::PI / 180.0f) + imgWid / 2.0f;
+            y = y * imgWid / 2 / std::tan(hov * Math::PI / 180.0f) + imgHei / 2.0f;
+
+            imgXY[i * 2 + 0] = static_cast<int>(x);
+            imgXY[i * 2 + 1] = static_cast<int>(y);
+        }
+    }
+
+    delete[] dirCopy;
+}
+
 }
 
 
