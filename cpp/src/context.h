@@ -7,8 +7,10 @@
 #include "crystal.h"
 
 #include <vector>
+#include <unordered_map>
 #include <random>
 #include <string>
+#include <functional>
 
 
 namespace IceHalo {
@@ -151,12 +153,52 @@ private:
 };
 
 
+class RenderContext
+{
+friend ContextParser;
+public:
+    RenderContext();
+    ~RenderContext();
+
+    int loadDataFromFile(const char* filename);
+    size_t getWavelengthNum() const;
+    void copySpectrumData(float *wavelengthData, float *spectrumData) const;
+
+    uint32_t getImageWidth() const;
+    uint32_t getImageHeight() const;
+    
+private:
+    float camRot[3];
+    float fov;
+
+    uint32_t imgHei;
+    uint32_t imgWid;
+    int offsetY;
+    int offsetX;
+    bool upperSemiSphere;
+
+    std::unordered_map<int, float*> spectrumData;
+    double totalW;
+    double intensityFactor;
+
+    std::function<void(
+        float *camRot,          // Camera rotation. [lon, lat, roll]
+        float hov,              // Half field of view.
+        uint64_t dataNumber,    // Data number
+        float *dir,             // Ray directions, [x, y, z]
+        int imgWid, int imgHei, // Image size
+        int *imgXY              // Image coordinates
+        )> proj;
+};
+
+
 class ContextParser
 {
 public:
     ~ContextParser() = default;
 
-    void parseSettings(SimulationContext &ctx);
+    void parseSimulationSettings(SimulationContext &ctx);
+    void parseRenderingSettings(RenderContext &ctx);
 
     static ContextParser * createFileParser(const char *filename);
 
@@ -173,6 +215,9 @@ private:
         Math::Distribution axisDist, float axisMean, float axisStd,
         Math::Distribution rollDist, float rollMean, float rollStd);
     Crystal * parseCustomCrystal(std::FILE *file);
+
+    void parseCameraSetting(RenderContext &ctx);
+    void parseRenderSetting(RenderContext &ctx);
 
     rapidjson::Document d;
 

@@ -1,5 +1,6 @@
 #include "context.h"
 #include "threadingpool.h"
+#include "render.h"
 
 #include "rapidjson/pointer.h"
 #include "rapidjson/error/en.h"
@@ -611,6 +612,134 @@ void SimulationContext::printCrystalInfo()
     }
 }
 
+
+
+RenderContext::RenderContext() :
+    imgHei(0), imgWid(0), offsetY(0), offsetX(0),
+    upperSemiSphere(false), 
+    totalW(0), intensityFactor(1.0)
+{ }
+
+
+RenderContext::~RenderContext()
+{
+    for (const auto &kv : spectrumData) {
+        delete[] kv.second;
+    }
+}
+
+
+size_t RenderContext::getWavelengthNum() const
+{
+    return spectrumData.size();
+}
+
+
+uint32_t RenderContext::getImageWidth() const
+{
+    return imgWid;
+}
+
+
+uint32_t RenderContext::getImageHeight() const
+{
+    return imgHei;
+}
+
+
+void RenderContext::copySpectrumData(float *wavelengthData, float *spectrumData) const
+{
+    int k = 0;
+    for (const auto &kv : this->spectrumData) {
+        wavelengthData[k] = kv.first;
+        memcpy(spectrumData + k * imgWid * imgHei, kv.second, imgWid * imgHei * sizeof(float));
+        k++;
+    }
+    for (uint64_t i = 0; i < imgWid * imgHei * this->spectrumData.size(); i++) {
+        spectrumData[i] *= 8 * 4e3 / totalW * intensityFactor;
+    }
+}
+
+
+int RenderContext::loadDataFromFile(const char* filename)
+{
+    const uint32_t BUFFER_SIZE = 1024 * 4;
+    float* readBuffer = new float[BUFFER_SIZE];
+
+    std::FILE* fd = fopen(filename, "rb");
+    auto readCount = fread(readBuffer, sizeof(float), 1, fd);
+    int totalCount = 0;
+    if (readCount <= 0) {
+        return -1;
+    }
+
+    auto wavelength = static_cast<int>(readBuffer[0]);
+    if (wavelength < SpectrumRenderer::MIN_WL || wavelength > SpectrumRenderer::MAX_WL) {
+        return -1;
+    }
+
+    std::vector<float> tmpData;
+    while (true) {
+        readCount = fread(readBuffer, sizeof(float), BUFFER_SIZE, fd);
+        for (decltype(readCount) i = 0; i < readCount; i += 4) {
+            if (upperSemiSphere && readBuffer[i+2] >= 0) {
+                continue;
+            }
+            tmpData.push_back(readBuffer[i+0]);
+            tmpData.push_back(readBuffer[i+1]);
+            tmpData.push_back(readBuffer[i+2]);
+            tmpData.push_back(readBuffer[i+3]);
+            totalCount += 1;
+        }
+        if (readCount < BUFFER_SIZE) {
+            break;
+        }
+    }
+    std::fclose(fd);
+
+    auto totalPts = tmpData.size() / 4;
+    auto *tmpDir = new float[totalPts * 3];
+    auto *tmpW = new float[totalPts];
+    for (decltype(totalPts) i = 0; i < totalPts; i++) {
+        memcpy(tmpDir + i*3, tmpData.data() + i*4, 3 * sizeof(float));
+        tmpW[i] = tmpData[i*4+3];
+        totalW += tmpW[i];
+    }
+
+    auto *tmpXY = new int[totalPts * 2];
+    // Projection::equiAreaFishEye(camRot, fov, totalPts, tmpDir, imgWid, imgHei, tmpXY);
+    // Projection::rectLinear(camRot, fov, totalPts, tmpDir, imgWid, imgHei, tmpXY);
+    proj(camRot, fov, totalPts, tmpDir, imgWid, imgHei, tmpXY);
+    delete[] tmpDir;
+
+    float *currentData = nullptr;
+    auto it = spectrumData.find(wavelength);
+    if (it != spectrumData.end()) {
+        currentData = it->second;
+    } else {
+        currentData = new float[imgHei * imgWid];
+        for (decltype(totalPts) i = 0; i < imgHei * imgWid; i++) {
+            currentData[i] = 0;
+        }
+        spectrumData[wavelength] = currentData;
+    }
+
+    for (decltype(totalPts) i = 0; i < totalPts; i++) {
+        int x = tmpXY[i * 2 + 0] + offsetX;
+        int y = tmpXY[i * 2 + 1] + offsetY;
+        if (x < 0 || x >= imgWid || y < 0 || y >= imgHei) {
+            continue;
+        }
+        currentData[y * imgWid + x] += tmpW[i];
+    }
+    delete[] tmpXY;
+    delete[] tmpW;
+
+    return totalCount;
+}
+
+
+
 ContextParser::ContextParser(rapidjson::Document &d, const char *filename) :
     d(std::move(d)), filename(filename)
 { }
@@ -1007,7 +1136,7 @@ Crystal * ContextParser::parseCustomCrystal(std::FILE *file)
 }
 
 
-void ContextParser::parseSettings(SimulationContext &ctx)
+void ContextParser::parseSimulationSettings(SimulationContext &ctx)
 {
     using namespace rapidjson;
 
@@ -1031,4 +1160,158 @@ void ContextParser::parseSettings(SimulationContext &ctx)
     }
 }
 
+
+void ContextParser::parseRenderingSettings(RenderContext &ctx)
+{
+    using namespace rapidjson;
+
+    parseCameraSetting(ctx);
+    parseRenderSetting(ctx);
+}
+
+
+void ContextParser::parseCameraSetting(RenderContext &ctx)
+{
+    using namespace rapidjson;
+
+    ctx.camRot[0] = 90.0f;
+    ctx.camRot[1] = 89.9f;
+    ctx.camRot[2] = 0.0f;
+    ctx.fov = 120.0f;
+    ctx.imgWid = 800;
+    ctx.imgHei = 800;
+    ctx.proj = &Projection::equiAreaFishEye;
+
+    auto *p = Pointer("/camera/azimuth").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <camera.azimuth>, using default 90.0!\n");
+    } else if (!p->IsNumber()) {
+        fprintf(stderr, "\nWARNING! config <camera.azimuth> is not a number, using default 90.0!\n");
+    } else {
+        float az = p->GetDouble();
+        az = std::fmax(std::fmin(az, 360.0f), 0.0f);
+        ctx.camRot[0] = az;
+    }
+
+    p = Pointer("/camera/elevation").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <camera.elevation>, using default 90.0!\n");
+    } else if (!p->IsNumber()) {
+        fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default 90.0!\n");
+    } else {
+        float el = p->GetDouble();
+        el = std::fmax(std::fmin(el, 89.9f), 0.0f);
+        ctx.camRot[1] = el;
+    }
+
+    p = Pointer("/camera/rotation").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <camera.rotation>, using default 0.0!\n");
+    } else if (!p->IsNumber()) {
+        fprintf(stderr, "\nWARNING! config <camera.rotation> is not a number, using default 0.0!\n");
+    } else {
+        float rot = p->GetDouble();
+        rot = std::fmax(std::fmin(rot, 180.0f), -180.0f);
+        ctx.camRot[2] = rot;
+    }
+
+    p = Pointer("/camera/fov").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <camera.fov>, using default 120.0!\n");
+    } else if (!p->IsNumber()) {
+        fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default 120.0!\n");
+    } else {
+        float fov = p->GetDouble();
+        fov = std::fmax(std::fmin(fov, 140.0f), 0.0f);
+        ctx.fov = fov;
+    }
+
+    p = Pointer("/camera/width").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <camera.width>, using default 800!\n");
+    } else if (!p->IsInt()) {
+        fprintf(stderr, "\nWARNING! config <camera.width> is not an integer, using default 800!\n");
+    } else {
+        int width = p->GetInt();
+        width = std::max(width, 0);
+        ctx.imgWid = width;
+    }
+
+    p = Pointer("/camera/height").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <camera.height>, using default 800!\n");
+    } else if (!p->IsInt()) {
+        fprintf(stderr, "\nWARNING! config <camera.height> is not an integer, using default 800!\n");
+    } else {
+        int height = p->GetInt();
+        height = std::max(height, 0);
+        ctx.imgHei = height;
+    }
+
+    p = Pointer("/camera/lens").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <camera.lens>, using default equal-area fisheye!\n");
+    } else if (!p->IsString()) {
+        fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equal-area fisheye!\n");
+    } else {
+        if (*p == "linear") {
+            ctx.proj = &Projection::rectLinear;
+        } else if (*p == "fisheye") {
+            ctx.proj = &Projection::equiAreaFishEye;
+        } else {
+            fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recgonized, using default equal-area fisheye!\n");
+        }
+    }
+}
+
+
+void ContextParser::parseRenderSetting(RenderContext &ctx)
+{
+    using namespace rapidjson;
+
+    ctx.upperSemiSphere = false;
+    ctx.intensityFactor = 1.0;
+    ctx.offsetY = 0;
+    ctx.offsetX = 0;
+
+    auto *p = Pointer("/render/upper_semi_sphere").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <render.upper_semi_sphere>, using default FALSE!\n");
+    } else if (!p->IsBool()) {
+        fprintf(stderr, "\nWARNING! Config <render.upper_semi_sphere> is not a bool, using default FALSE!\n");
+    } else {
+        ctx.upperSemiSphere = p->GetBool();
+    }
+
+    p = Pointer("/render/intensity_factor").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <render.intensity_factor>, using default 1.0!\n");
+    } else if (!p->IsNumber()) {
+        fprintf(stderr, "\nWARNING! Config <render.intensity_factor> is not a number, using default 1.0!\n");
+    } else {
+        double f = p->GetDouble();
+        f = std::max(std::min(f, 10.0), 0.1);
+        ctx.intensityFactor = f;
+    }
+
+    p = Pointer("/render/offset").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <render.offset>, using default [0, 0]!\n");
+    } else if (!p->IsArray()) {
+        fprintf(stderr, "\nWARNING! Config <render.offset> is not an array, using default [0, 0]!\n");
+    } else if (p->Size() != 2 || !(*p)[0].IsInt() || !(*p)[1].IsInt()) {
+        fprintf(stderr, "\nWARNING! Config <render.offset> cannot be recgonized, using default [0, 0]!\n");
+    } else {
+        int offsetX = (*p)[0].GetInt();
+        int offsetY = (*p)[1].GetInt();
+        offsetX = std::max(std::min(offsetX, static_cast<int>(ctx.imgWid / 2)), 
+            -static_cast<int>(ctx.imgWid / 2));
+        offsetY = std::max(std::min(offsetY, static_cast<int>(ctx.imgHei / 2)), 
+            -static_cast<int>(ctx.imgHei / 2));
+        ctx.offsetX = offsetX;
+        ctx.offsetY = offsetY;
+    }
+}
+
 }   // namespace IceHalo
+
