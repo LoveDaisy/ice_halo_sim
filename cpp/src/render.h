@@ -1,32 +1,8 @@
 #ifndef ICEHALOSIM_RENDER_H
 #define ICEHALOSIM_RENDER_H
 
-#include <unordered_map>
-#include <functional>
-
 
 namespace IceHalo {
-
-
-class RenderContext
-{
-public:
-    RenderContext(uint32_t imgHei, uint32_t imgWid, std::function<void(uint64_t, float*, int, int, int*)> proj);
-    ~RenderContext();
-
-    int loadDataFromFile(const char* filename);
-    size_t getWavelengthNum() const;
-    void copySpectrumData(float *wavelengthData, float *spectrumData) const;
-
-    const uint32_t imgHei;
-    const uint32_t imgWid;
-    
-private:
-    std::unordered_map<int, float*> spectrumData;
-    double totalW;
-
-    std::function<void(uint64_t, float*, int, int, int*)> proj;
-};
 
 
 class CameraProjection

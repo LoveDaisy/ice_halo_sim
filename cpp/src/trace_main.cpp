@@ -17,7 +17,7 @@ int main(int argc, char *argv[])
     ContextParser *parser = ContextParser::createFileParser(argv[1]);
     SimulationContext context;
     try {
-        parser->parseSettings(context);
+        parser->parseSimulationSettings(context);
     } catch (std::invalid_argument &e) {
         fprintf(stderr, "Parsing error! Exit!\n Message: %s\n", e.what());
         return -1;
