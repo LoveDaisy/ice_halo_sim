@@ -23,19 +23,27 @@ is an example configuration file.
 
 After building and running, you will get several `.bin` files that contain results of ray tracing,
 as well as several lines printed on the screen that describe crystal shapes.
-I have prepared pieces of Matlab codes for visualization those results.
+I have prepared several tools for visualization those results. Some are matlab codes.
 
-`matlab/src/read_binary_result-example.m` reads the `.bin` files and plot the ray points.
-See [matlab](../matlab/) folder for details.
+* Halo picture.  
+There is a matlab tool for generating halo picture.
+Script `matlab/src/read_binary_result-example.m` reads the `.bin` files and plot the ray tracing result.
+See [matlab](../matlab/) folder for details. 
 
-`matlab/src/plot_crystal-example.m` plots the shape of crystals. You can copy data from program output on
+  And there is also a C++ tool does the same thing. Please run 
+`./bin/IceHaloRender <config-file> file1.bin [file2.bin ...]` for visualization. 
+Just use the same configuration file as you run the simulation. I'd prefer this C++ tool
+than the matlab tool because it is much faster.
+
+* Crystals  
+Script `matlab/src/plot_crystal-example.m` plots the shape of crystals. You can copy data from program output on
 screen. The lines start with `V:` indicate vertex data, and those start with `F:` indicate face data.
 See [matlab](../matlab/) folder for details.
 
 ## Configuration file
 
-This file containing all configurations. It uses JSON format. It must contain `sun`, `ray_number`,
-`max_recursion`, `crystal` fields. I choose [Rapidjson](http://rapidjson.org/index.html) to parse JSON file.
+This file containing all configurations. It uses JSON format. 
+I choose [Rapidjson](http://rapidjson.org/index.html) to parse JSON file.
 
 ### Basic infomation for simulation
 
@@ -66,6 +74,27 @@ While HaloPoint handles it by a tricky workaround, and implements for only limit
 
 ### Crystal settings
 
+* `axis` and `roll`:
+These two fields defines the orientation of crystals. `axis` defines the c-axis orientation, and `roll`
+defines the rotation around c-axis (also regarded as z-axis in above figures and my program).
+
+  These fields all has three attributes, `mean`, `std`, `type`.  
+  `type` defines the random distribution
+type, either `Gauss`, for Gaussian distribution, or `Uniform`, for uniform distribution. *NOTE:*
+if `type` of `axis` is set to `Uniform`, then `mean` and `std` will be ignored and
+the axis will uniformly distributed on sphere. (This could be changed in the future)  
+  `mean` defines
+the mean of the random distribution. For `axis`, it means the zenith angle.  
+  `std` defines the deviation of the distribution. For Gaussian distribution,
+it is the standard deviation, and for uniform distribution, it defines the value range.
+
+  All angles are in degrees.
+
+* `population`:
+It defines how many crystals used in a simulation. Note that it is not the actual number, just for a
+ratio. So if one crystal set to 2.0 and the other set to 3.0, it is equivalent to set one to 20 and
+the other to 30.
+
 * `type` and `parameter`:
 Currently I create 5 shapes, `HexCylinder`, `HexPyramid`, `HexPyramidStackHalf`, `TriPyramid`, `CubicPyramid`,
 `Custom`.
@@ -78,19 +107,19 @@ Each shape has its own shape parameters.
 
   * `HexPyramid`:
   May have 3, 5, or 7 parameters.  
-  For 3 parameters case, they are `h1 / H1`, `h2 / a`, `h3 / H3` respectly,
-  where `H1` means the max possible height for pyramid segment, and `H3` the same.  
-  <img src="figs/hex_pyramid_01.png" width="400">.  
-  For 5 parameters case, the last 3 parameters are same as the first case,
-  and the first 2 parameters indicate the face direction. They must be integers. The
-  face direction is described with [Miller index](https://en.wikipedia.org/wiki/Miller_index).
-  For example, `a`, `b`, represents a face with Miller index of (`a`, 0, `-a`, `b`). For a
-  typical ice crystal face (face number 13), its Miller index is (1, 0, -1, 1).
-  So it can be described using parameters 1, 1.  
-  For 7 parameters case, the first 4 parameters are interges and describe the upper and lower pyramid segment
-  face directions. For example `a`, `b`, `c`, `d` describe upper pyramid segment with Miller index of
-  (`a`, 0, `-a`, `b`) and lower pyramid segment of (`c`, 0, `-c`, `d`). NOTE: for faces with different
-  Miller index, their maximumn height `H` are also different.  
+    * For 3 parameters case, they are `h1 / H1`, `h2 / a`, `h3 / H3` respectly,
+      where `H1` means the max possible height for pyramid segment, and `H3` the same.  
+      <img src="figs/hex_pyramid_01.png" width="400">.  
+    * For 5 parameters case, the last 3 parameters are same as the first case,
+      and the first 2 parameters indicate the face direction. They must be integers. The
+      face direction is described with [Miller index](https://en.wikipedia.org/wiki/Miller_index).
+      For example, `a`, `b`, represents a face with Miller index of (`a`, 0, `-a`, `b`). For a
+      typical ice crystal face (face number 13), its Miller index is (1, 0, -1, 1).
+      So it can be described using parameters 1, 1.  
+    * For 7 parameters case, the first 4 parameters are interges and describe the upper and lower pyramid segment
+      face directions. For example `a`, `b`, `c`, `d` describe upper pyramid segment with Miller index of
+      (`a`, 0, `-a`, `b`) and lower pyramid segment of (`c`, 0, `-c`, `d`). NOTE: for faces with different
+      Miller index, their maximumn height `H` are also different. 
   With these description, you will have the maximized freedom to design your crystal shape.
 
   * `HexPyramidStackHalf`:
@@ -121,26 +150,6 @@ Each shape has its own shape parameters.
   All your models should be put in a folder named `models` and this folder must put at the same place
   where configuration file locates. Otherwise my program cannot find them.
 
-* `axis` and `roll`:
-These two fields defines the orientation of crystals. `axis` defines the c-axis orientation, and `roll`
-defines the rotation around c-axis (also regarded as z-axis in above figures and my program).
-
-  These fields all has three attributes, `mean`, `std`, `type`.  
-  `type` defines the random distribution
-type, either `Gauss`, for Gaussian distribution, or `Uniform`, for uniform distribution. *NOTE:*
-if `type` of `axis` is set to `Uniform`, then `mean` and `std` will be ignored and
-the axis will uniformly distributed on sphere. (This could be changed in the future)  
-  `mean` defines
-the mean of the random distribution. For `axis`, it means the zenith angle.  
-  `std` defines the deviation of the distribution. For Gaussian distribution,
-it is the standard deviation, and for uniform distribution, it defines the value range.
-
-  All angles are in degrees.
-
-* `population`:
-It defines how many crystals used in a simulation. Note that it is not the actual number, just for a
-ratio. So if one crystal set to 2.0 and the other set to 3.0, it is equivalent to set one to 20 and
-the other to 30.
 
 ## TODO list
 
