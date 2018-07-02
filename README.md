@@ -17,9 +17,9 @@ latest updates will be on C++ codes. Also, matlab codes contain some small tools
 ## Features
 
 * High speed.  
-  The simulation program is 50~100 times faster than HaloPoint. On general cases
-  this program runs at a speed of 140k~200k rays per second. On multi-scattering cases
-  it runs as faster as 50k~80k rays per second. On the contrary, HaloPoint may cost minutes to
+  The simulation program is 50\~100 times faster than HaloPoint. On general cases
+  this program runs at a speed of 140k\~200k rays per second. On multi-scattering cases
+  it runs as faster as 50k\~80k rays per second. On the contrary, HaloPoint may cost minutes to
   render several hundreds rays, and even hours on multi-scattering cases.
   
 * Natural and vivid color.  
@@ -67,8 +67,8 @@ latest updates will be on C++ codes. Also, matlab codes contain some small tools
 ## 功能特点
 
 * 速度快  
-  本模拟程序追踪光线效率非常优秀, 比 HaloPoint 快 50~100 倍. 在多晶模拟的情况下, 比 HaloPoint 优势更大.
-  对于一般情况, 本模拟程序模拟的速度约为每秒 14~20 万光线, 在多晶的情况下约为 5~8 万每秒. 相对的, 
+  本模拟程序追踪光线效率非常优秀, 比 HaloPoint 快 50\~100 倍. 在多晶模拟的情况下, 比 HaloPoint 优势更大.
+  对于一般情况, 本模拟程序模拟的速度约为每秒 14\~20 万光线, 在多晶的情况下约为 5\~8 万每秒. 相对的, 
   HaloPoint 模拟 10 万光线常常需要分钟级别的时间, 而多晶情况下更是需要好几个小时.
   
 * 自然而鲜艳的色彩表现  
