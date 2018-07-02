@@ -7,6 +7,7 @@
 #include "rapidjson/filereadstream.h"
 
 #include <unordered_set>
+#include <limits>
 
 
 namespace IceHalo {
@@ -617,7 +618,8 @@ void SimulationContext::printCrystalInfo()
 RenderContext::RenderContext() :
     imgHei(0), imgWid(0), offsetY(0), offsetX(0),
     upperSemiSphere(false), 
-    totalW(0), intensityFactor(1.0)
+    totalW(0), intensityFactor(1.0),
+    proj(&Projection::equiAreaFishEye)
 { }
 
 
@@ -707,8 +709,6 @@ int RenderContext::loadDataFromFile(const char* filename)
     }
 
     auto *tmpXY = new int[totalPts * 2];
-    // Projection::equiAreaFishEye(camRot, fov, totalPts, tmpDir, imgWid, imgHei, tmpXY);
-    // Projection::rectLinear(camRot, fov, totalPts, tmpDir, imgWid, imgHei, tmpXY);
     proj(camRot, fov, totalPts, tmpDir, imgWid, imgHei, tmpXY);
     delete[] tmpDir;
 
@@ -725,9 +725,14 @@ int RenderContext::loadDataFromFile(const char* filename)
     }
 
     for (decltype(totalPts) i = 0; i < totalPts; i++) {
-        int x = tmpXY[i * 2 + 0] + offsetX;
-        int y = tmpXY[i * 2 + 1] + offsetY;
-        if (x < 0 || x >= imgWid || y < 0 || y >= imgHei) {
+        int x = tmpXY[i * 2 + 0];
+        int y = tmpXY[i * 2 + 1];
+        if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
+            continue;
+        }
+        x += offsetX;
+        y += offsetY;
+        if (x < 0 || x >= static_cast<int>(imgWid) || y < 0 || y >= static_cast<int>(imgHei)) {
             continue;
         }
         currentData[y * imgWid + x] += tmpW[i];
