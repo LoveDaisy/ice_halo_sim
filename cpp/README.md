@@ -16,7 +16,7 @@ A simple way to build form start is as follows:
 3. `cmake .. && make -j4`, or you can set `CMAKE_BUILD_TYPE` to `release` to get highest performance. 
 
 Then the executable binary will be at `build/bin`. And you can start by
-`./bin/IceHaloSim <path-to-your-config-file>`. The file [`cpp/config-example.json`](./config-example.json) 
+`./bin/IceHaloSim <path-to-your-config-file>`. The file [`config-example.json`](./config-example.json) 
 is an example configuration file.
 
 ## Visualization
@@ -31,7 +31,8 @@ Script `matlab/src/read_binary_result-example.m` reads the `.bin` files and plot
 See [matlab](../matlab/) folder for details. 
 
   And there is also a C++ tool does the same thing. Please run 
-`./bin/IceHaloRender <config-file> file1.bin [file2.bin ...]` for visualization. 
+`./bin/IceHaloRender <config-file> file1.bin [file2.bin ...]` or
+`./bin/IceHaloRender <config-file> $( ls *.bin )` for visualization. 
 Just use the same configuration file as you run the simulation. I'd prefer this C++ tool
 than the matlab tool because it is much faster.
 
