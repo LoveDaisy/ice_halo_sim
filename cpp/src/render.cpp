@@ -2,6 +2,8 @@
 #include "render.h"
 #include "mymath.h"
 
+#include <limits>
+
 
 namespace IceHalo {
 
@@ -29,13 +31,18 @@ void equiAreaFishEye(
 
     Math::rotateZ(camRotCopy, dirCopy, dataNumber);
     for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
-        float lon = std::atan2(dirCopy[i * 3 + 1], dirCopy[i * 3 + 0]);
-        float lat = std::asin(dirCopy[i * 3 + 2] / Math::norm3(dirCopy + i * 3));
-        float projR = imgR / 2.0f / std::sin(hov / 2.0f / 180.0f * Math::PI);
-        float r = 2.0f * projR * std::sin((Math::PI / 2.0f - lat) / 2.0f);
+        if (std::abs(Math::norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
+            imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
+            imgXY[i * 2 + 1] = std::numeric_limits<int>::min();
+        } else {
+            float lon = std::atan2(dirCopy[i * 3 + 1], dirCopy[i * 3 + 0]);
+            float lat = std::asin(dirCopy[i * 3 + 2] / Math::norm3(dirCopy + i * 3));
+            float projR = imgR / 2.0f / std::sin(hov / 2.0f / 180.0f * Math::PI);
+            float r = 2.0f * projR * std::sin((Math::PI / 2.0f - lat) / 2.0f);
 
-        imgXY[i * 2 + 0] = static_cast<int>(r * std::cos(lon) + imgWid / 2.0f);
-        imgXY[i * 2 + 1] = static_cast<int>(r * std::sin(lon) + imgHei / 2.0f);
+            imgXY[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + imgWid / 2.0f));
+            imgXY[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + imgHei / 2.0f));
+        }
     }
 
     delete[] dirCopy;
@@ -63,17 +70,17 @@ void rectLinear(
 
     Math::rotateZ(camRotCopy, dirCopy, dataNumber);
     for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
-        if (dirCopy[i * 3 + 2] < 0) {
-            imgXY[i * 2 + 0] = -1;
-            imgXY[i * 2 + 1] = -1;
+        if (dirCopy[i * 3 + 2] < 0 || std::abs(Math::norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
+            imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
+            imgXY[i * 2 + 1] = std::numeric_limits<int>::min();
         } else {
             double x = dirCopy[i * 3 + 0] / dirCopy[i * 3 + 2];
             double y = dirCopy[i * 3 + 1] / dirCopy[i * 3 + 2];
             x = x * imgWid / 2 / std::tan(hov * Math::PI / 180.0f) + imgWid / 2.0f;
             y = y * imgWid / 2 / std::tan(hov * Math::PI / 180.0f) + imgHei / 2.0f;
 
-            imgXY[i * 2 + 0] = static_cast<int>(x);
-            imgXY[i * 2 + 1] = static_cast<int>(y);
+            imgXY[i * 2 + 0] = static_cast<int>(std::round(x));
+            imgXY[i * 2 + 1] = static_cast<int>(std::round(y));
         }
     }
 
