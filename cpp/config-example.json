@@ -6,12 +6,13 @@
     "ray_number": 100000,
     "max_recursion": 9,
     "camera": {
-        "azimuth": 90,
-        "elevation": 0,
+        "azimuth": 10,
+        "elevation": 20,
         "rotation": 0,
         "fov": 57,
         "width": 1800,
-        "height": 1000
+        "height": 1000,
+        "lens": "fisheye"
     },
     "render": {
         "upper_semi_sphere": true,

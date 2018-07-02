@@ -106,27 +106,12 @@ void SpectrumRenderer::rgb(int waveLengthNumber, float *waveLengths,
         /* Step 1. Spectrum to XYZ */
         float xyz[3] = { 0 };
         for (int j = 0; j < waveLengthNumber; j++) {
-            // int startWl = std::max(static_cast<int>(waveLengths[j]), MIN_WL);
-            // int endWl = std::min(static_cast<int>(waveLengths[j+1]), MAX_WL);
-            // float startSpec = specData[j*dataNumber + i];
-            // float endSpec = specData[(j+1)*dataNumber + i];
-
-            // for (int k = startWl; k < endWl; k++) {
-            //     float v = (k - startWl) * 1.0f / (endWl - startWl) * (endSpec - startSpec) + startSpec;
-            //     xyz[0] += _cmf_x[k] * v;
-            //     xyz[1] += _cmf_y[k] * v;
-            //     xyz[2] += _cmf_z[k] * v;
-            // }
-
             auto wl = static_cast<int>(waveLengths[j]);
             float v = wl >= MIN_WL && wl <= MAX_WL ? specData[j*dataNumber + i] : 0.0f;
             xyz[0] += _cmf_x[wl - MIN_WL] * v;
             xyz[1] += _cmf_y[wl - MIN_WL] * v;
             xyz[2] += _cmf_z[wl - MIN_WL] * v;
         }
-        // for (int j = 0; j < 3; j++) {
-        //     xyz[j] /= _cmf_xyz_sum[j];
-        // }
 
         /* Step 2. XYZ to linear RGB */
         float gray[3];
