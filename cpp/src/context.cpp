@@ -617,7 +617,7 @@ void SimulationContext::printCrystalInfo()
 
 RenderContext::RenderContext() :
     imgHei(0), imgWid(0), offsetY(0), offsetX(0),
-    upperSemiSphere(false), 
+    visibleSemiSphere(Projection::VisibleSemiSphere::UPPER), 
     totalW(0), intensityFactor(1.0),
     proj(&Projection::equiAreaFishEye)
 { }
@@ -665,6 +665,8 @@ void RenderContext::copySpectrumData(float *wavelengthData, float *spectrumData)
 
 int RenderContext::loadDataFromFile(const char* filename)
 {
+    using namespace Projection;
+
     const uint32_t BUFFER_SIZE = 1024 * 4;
     float* readBuffer = new float[BUFFER_SIZE];
 
@@ -684,7 +686,10 @@ int RenderContext::loadDataFromFile(const char* filename)
     while (true) {
         readCount = fread(readBuffer, sizeof(float), BUFFER_SIZE, fd);
         for (decltype(readCount) i = 0; i < readCount; i += 4) {
-            if (upperSemiSphere && readBuffer[i+2] >= 0) {
+            if (visibleSemiSphere == VisibleSemiSphere::UPPER && readBuffer[i+2] >= 0) {
+                continue;
+            }
+            if (visibleSemiSphere == VisibleSemiSphere::LOWER && readBuffer[i+2] <= 0) {
                 continue;
             }
             tmpData.push_back(readBuffer[i+0]);
@@ -699,17 +704,16 @@ int RenderContext::loadDataFromFile(const char* filename)
     }
     std::fclose(fd);
 
-    auto totalPts = tmpData.size() / 4;
-    auto *tmpDir = new float[totalPts * 3];
-    auto *tmpW = new float[totalPts];
-    for (decltype(totalPts) i = 0; i < totalPts; i++) {
+    auto *tmpDir = new float[totalCount * 3];
+    auto *tmpW = new float[totalCount];
+    for (decltype(totalCount) i = 0; i < totalCount; i++) {
         memcpy(tmpDir + i*3, tmpData.data() + i*4, 3 * sizeof(float));
         tmpW[i] = tmpData[i*4+3];
         totalW += tmpW[i];
     }
 
-    auto *tmpXY = new int[totalPts * 2];
-    proj(camRot, fov, totalPts, tmpDir, imgWid, imgHei, tmpXY);
+    auto *tmpXY = new int[totalCount * 2];
+    proj(camRot, fov, totalCount, tmpDir, imgWid, imgHei, tmpXY, visibleSemiSphere);
     delete[] tmpDir;
 
     float *currentData = nullptr;
@@ -718,13 +722,13 @@ int RenderContext::loadDataFromFile(const char* filename)
         currentData = it->second;
     } else {
         currentData = new float[imgHei * imgWid];
-        for (decltype(totalPts) i = 0; i < imgHei * imgWid; i++) {
+        for (decltype(imgHei) i = 0; i < imgHei * imgWid; i++) {
             currentData[i] = 0;
         }
         spectrumData[wavelength] = currentData;
     }
 
-    for (decltype(totalPts) i = 0; i < totalPts; i++) {
+    for (decltype(totalCount) i = 0; i < totalCount; i++) {
         int x = tmpXY[i * 2 + 0];
         int y = tmpXY[i * 2 + 1];
         if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
@@ -1205,7 +1209,7 @@ void ContextParser::parseCameraSetting(RenderContext &ctx)
         fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default 90.0!\n");
     } else {
         float el = p->GetDouble();
-        el = std::fmax(std::fmin(el, 89.9f), 0.0f);
+        el = std::fmax(std::fmin(el, 89.9f), -89.9f);
         ctx.camRot[1] = el;
     }
 
@@ -1273,19 +1277,28 @@ void ContextParser::parseCameraSetting(RenderContext &ctx)
 void ContextParser::parseRenderSetting(RenderContext &ctx)
 {
     using namespace rapidjson;
+    using namespace Projection;
 
-    ctx.upperSemiSphere = false;
+    ctx.visibleSemiSphere = VisibleSemiSphere::UPPER;
     ctx.intensityFactor = 1.0;
     ctx.offsetY = 0;
     ctx.offsetX = 0;
 
-    auto *p = Pointer("/render/upper_semi_sphere").Get(d);
+    auto *p = Pointer("/render/visible_semi_sphere").Get(d);
     if (p == nullptr) {
-        fprintf(stderr, "\nWARNING! Config missing <render.upper_semi_sphere>, using default FALSE!\n");
-    } else if (!p->IsBool()) {
-        fprintf(stderr, "\nWARNING! Config <render.upper_semi_sphere> is not a bool, using default FALSE!\n");
+        fprintf(stderr, "\nWARNING! Config missing <render.visible_semi_sphere>, using default UPPER!\n");
+    } else if (!p->IsString()) {
+        fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> is not a string, using default UPPER!\n");
+    } else if (*p == "upper") {
+        ctx.visibleSemiSphere = VisibleSemiSphere::UPPER;
+    } else if (*p == "lower") {
+        ctx.visibleSemiSphere = VisibleSemiSphere::LOWER;
+    } else if (*p == "camera") {
+        ctx.visibleSemiSphere = VisibleSemiSphere::CAMERA;
+    } else if (*p == "full") {
+        ctx.visibleSemiSphere = VisibleSemiSphere::FULL;
     } else {
-        ctx.upperSemiSphere = p->GetBool();
+        fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> cannot be recgonized, using default UPPER!\n");
     }
 
     p = Pointer("/render/intensity_factor").Get(d);

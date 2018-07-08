@@ -6,13 +6,22 @@ namespace IceHalo {
 
 namespace Projection {
 
+enum class VisibleSemiSphere
+{
+    UPPER,
+    LOWER,
+    CAMERA,
+    FULL
+};
+
 void equiAreaFishEye(
     float *camRot,          // Camera rotation. [lon, lat, roll]
     float hov,              // Half field of view.
     uint64_t dataNumber,    // Data number
     float *dir,             // Ray directions, [x, y, z]
     int imgWid, int imgHei, // Image size
-    int *imgXY              // Image coordinates
+    int *imgXY,             // Image coordinates
+    VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER      // Which semi-sphere can be visible
 );
 
 
@@ -22,7 +31,8 @@ void rectLinear(
     uint64_t dataNumber,    // Data number
     float *dir,             // Ray directions, [x, y, z]
     int imgWid, int imgHei, // Image size
-    int *imgXY              // Image coordinates
+    int *imgXY,             // Image coordinates
+    VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER      // Which semi-sphere can be visible
 );
 
 

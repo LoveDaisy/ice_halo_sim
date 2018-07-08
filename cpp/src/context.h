@@ -3,8 +3,10 @@
 
 #include "mymath.h"
 #include "optics.h"
-#include "rapidjson/document.h"
 #include "crystal.h"
+#include "render.h"
+
+#include "rapidjson/document.h"
 
 #include <vector>
 #include <unordered_map>
@@ -175,7 +177,7 @@ private:
     uint32_t imgWid;
     int offsetY;
     int offsetX;
-    bool upperSemiSphere;
+    Projection::VisibleSemiSphere visibleSemiSphere;
 
     std::unordered_map<int, float*> spectrumData;
     double totalW;
@@ -187,7 +189,8 @@ private:
         uint64_t dataNumber,    // Data number
         float *dir,             // Ray directions, [x, y, z]
         int imgWid, int imgHei, // Image size
-        int *imgXY              // Image coordinates
+        int *imgXY,             // Image coordinates
+        Projection::VisibleSemiSphere visibleSemiSphere
         )> proj;
 };
 

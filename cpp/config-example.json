@@ -15,7 +15,7 @@
         "lens": "fisheye"
     },
     "render": {
-        "upper_semi_sphere": true,
+        "visible_semi_sphere": "upper",
         "intensity_factor": 5.0,
         "offset": [0, 200]
     },
