@@ -15,7 +15,8 @@ void equiAreaFishEye(
         uint64_t dataNumber,    // Data number
         float *dir,             // Ray directions, [x, y, z]
         int imgWid, int imgHei, // Image size
-        int *imgXY              // Image coordinates
+        int *imgXY,             // Image coordinates
+        VisibleSemiSphere visibleSemiSphere
     )
 {
     float imgR = std::fmax(imgWid, imgHei) / 2.0f;
@@ -32,6 +33,9 @@ void equiAreaFishEye(
     Math::rotateZ(camRotCopy, dirCopy, dataNumber);
     for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
         if (std::abs(Math::norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
+            imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
+            imgXY[i * 2 + 1] = std::numeric_limits<int>::min();
+        } else if (visibleSemiSphere == VisibleSemiSphere::CAMERA && dirCopy[i * 3 + 2] < 0) {
             imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
             imgXY[i * 2 + 1] = std::numeric_limits<int>::min();
         } else {
@@ -55,7 +59,8 @@ void rectLinear(
         uint64_t dataNumber,    // Data number
         float *dir,             // Ray directions, [x, y, z]
         int imgWid, int imgHei, // Image size
-        int *imgXY              // Image coordinates
+        int *imgXY,             // Image coordinates
+        VisibleSemiSphere visibleSemiSphere
     )
 {
     auto *dirCopy = new float[dataNumber * 3];

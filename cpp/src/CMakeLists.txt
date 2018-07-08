@@ -14,7 +14,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 include_directories(${INCLUDE_DIRECTORIES} "${PROJECT_SOURCE_DIR}/rapidjson/include")
 
 find_package(Threads)
-find_package(OpenCV REQUIRED core imgproc imgcodecs highgui)
+find_package(OpenCV REQUIRED core imgproc imgcodecs)
 
 add_executable(IceHaloSim trace_main.cpp ${SOURCE_FILE})
 target_link_libraries(IceHaloSim 
