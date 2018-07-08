@@ -66,7 +66,7 @@ and still doesn't leave the crystal, it will be dropped.
 It defines how to simulate multi-scattering halos. It has two attributes,
   * `repeat`, defining how many times ray pass through crystals. If it is set to 1, then the simulation
     goes without any multi-scattering effects. In most cases, it is enough to set to 2. *NOTE:* simulation
-    speed drammatically slow down when `repeat` increases.  
+    speed drammatically slow down when `repeat` increases.   
   * `probability`, defining how many rays can pass through next crystal. If it is set to 1.0, then
     *ALL* rays will be used as input for next crystal.
     
@@ -84,10 +84,11 @@ It defines properties related to camera, including:
   
 * `render`:
 It defines some useful attributes used when rendering:
-  * `upper_semi_sphere`, whether to render the upper semi sphere only. If it is set to false, then
+  * `visible_semi_sphere`, which semi-sphere should be rendered. Its default value is `uppper`,
+    indicating the upper semi sphere should be rendered, which is the common scene. If it is set to `lower`, then
     halos that occure under horizontal, say, [subparhilia](https://www.atoptics.co.uk/halo/subpars.htm), 
-    will be rendered as well.
-  * `intensity_factor`, controls the intensity.
+    will be rendered as well. The values could be one of these: `upper`, `lower`, `camera`, `full`.
+  * `intensity_factor`, controls the intensity. The value locates between 0.1 and 10.0.
   * `offset`, defines the rendering offset. In pixel.
 
 ### Crystal settings
