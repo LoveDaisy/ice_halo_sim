@@ -813,7 +813,7 @@ void ContextParser::parseMaxRecursion(SimulationContext &ctx)
     } else if (!p->IsInt()) {
         fprintf(stderr, "\nWARNING! config <max_recursion> is not a integer, using default 9!\n");
     } else {
-        maxRecursion = p->GetInt();
+        maxRecursion = std::min(std::max(p->GetInt(), 1), 10);
     }
     ctx.maxRecursionNum = maxRecursion;
 }
@@ -830,7 +830,7 @@ void ContextParser::parseMultiScatterSetting(SimulationContext &ctx)
     } else if (!p->IsInt()) {
         fprintf(stderr, "\nWARNING! Config <multi_scatter.repeat> is not a integer, using default 1!\n");
     } else {
-        multiScattering = p->GetInt();
+        multiScattering = std::min(std::max(p->GetInt(), 1), 4);
     }
     ctx.multiScatterNum = multiScattering;
 
