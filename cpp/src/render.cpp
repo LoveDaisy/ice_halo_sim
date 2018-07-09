@@ -3,6 +3,7 @@
 #include "mymath.h"
 
 #include <limits>
+#include <cstring>
 
 
 namespace IceHalo {

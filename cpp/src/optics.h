@@ -110,8 +110,8 @@ private:
 
     std::mutex idMutex;
     std::vector<RaySegment*> segments;
-    std::atomic_uint64_t nextUnusedId;
-    std::atomic_uint64_t currentChunkId;
+    std::atomic<uint64_t> nextUnusedId;
+    std::atomic<uint64_t> currentChunkId;
 
 };
 

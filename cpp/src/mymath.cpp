@@ -382,7 +382,7 @@ OrientationGenerator::OrientationGenerator(Distribution axDist, float axMean, fl
     axDist(axDist), axMean(axMean), axStd(axStd),
     rollDist(rollDist), rollMean(rollMean), rollStd(rollStd)
 {
-    unsigned int seed = static_cast<unsigned int>(std::__1::chrono::system_clock::now().time_since_epoch().count());
+    unsigned int seed = static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count());
     // unsigned int seed = 2345;
     generator.seed(seed);
 }

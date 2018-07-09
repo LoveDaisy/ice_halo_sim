@@ -20,7 +20,7 @@
         "offset": [0, 200]
     },
     "multi_scatter": {
-        "repeat": 2,
+        "repeat": 1,
         "probability": 1.0
     },
     "crystal": [

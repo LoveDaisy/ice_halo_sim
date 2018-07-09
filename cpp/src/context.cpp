@@ -189,7 +189,7 @@ bool RayTracingContext::isFinished()
 
 size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float *dir, float prob)
 {
-    std::atomic_uint64_t k(0);
+    std::atomic<uint64_t> k(0);
     
     Pool *pool = Pool::getInstance();
     int step = initRayNum / 80;
@@ -206,7 +206,7 @@ size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float *dir,
 
 
 void RayTracingContext::copyFinishedRaySegmentsRange(RaySegment **segs, float *dir, float prob,
-    std::atomic_uint64_t &k, int startIdx, int endIdx)
+    std::atomic<uint64_t> &k, int startIdx, int endIdx)
 {
     std::default_random_engine randomEngine;
     std::uniform_real_distribution<double> uniformDist(0.0, 1.0);
