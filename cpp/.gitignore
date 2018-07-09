@@ -3,6 +3,7 @@
 
 # CMake build directory
 cmake-build-debug
+build
 
 figs/plot.nb
 figs/*.pdf
