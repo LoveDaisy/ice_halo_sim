@@ -1,6 +1,6 @@
 [submodule "cpp/rapidjson"]
 	path = cpp/rapidjson
 	url = git@github.com:Tencent/rapidjson.git
-[submodule "cpp/src/dirent"]
-	path = cpp/src/dirent
+[submodule "cpp/dirent"]
+	path = cpp/dirent
 	url = git@github.com:tronkko/dirent.git
