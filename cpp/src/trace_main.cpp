@@ -55,14 +55,6 @@ int main(int argc, char *argv[])
     }
     context.printCrystalInfo();
 
-    // float camRot[] = { 90.0f, 0.0f, 0.0f };
-    // float dir[] = { 0.0f, 0.9455f, 0.3256f };
-    // int imgXY[2];
-    // EquiAreaCameraProjection proj;
-    // proj.project(camRot, 120, 1, dir, 1801, 1801, imgXY);
-
-    // printf("%d, %d\n", imgXY[0], imgXY[1]); 
-
     auto end = std::chrono::system_clock::now();
     diff = end - start;
     printf("Total: %.3fs\n", diff.count());
