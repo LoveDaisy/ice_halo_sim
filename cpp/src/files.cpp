@@ -79,11 +79,7 @@ bool File::open(uint8_t mode)
     sprintf(modeBuffer, "%s%s", m1, m2);
 
     file = std::fopen(p.c_str(), modeBuffer);
-    if (file) {
-        fileOpened = true;
-    } else {
-        fileOpened = false;
-    }
+    fileOpened = file != nullptr;
     return fileOpened;
 }
 

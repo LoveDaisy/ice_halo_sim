@@ -199,7 +199,7 @@ void Optics::traceRays(SimulationContext &context)
                 dirStore + inputOffset * 3, wStore + inputOffset, raySegStore + inputOffset);
 
             // Start loop
-            float index = IceRefractiveIndex::n(context.getWavelength());
+            float index = IceRefractiveIndex::n(context.getCurrentWavelength());
             int recursion = 0;
             while (!rayTracingCtx->isFinished() && recursion < maxRecursion) {
                 hitSurface(index, rayTracingCtx);

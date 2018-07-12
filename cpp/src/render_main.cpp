@@ -33,16 +33,8 @@ int main(int argc, char *argv[])
 
     ctx.loadData();
 
-    auto wlNum = ctx.getWavelengthNum();
-    float *wlData = new float[wlNum];
-    float *flatSpecData = new float[wlNum * ctx.getImageWidth() * ctx.getImageHeight()];
-    ctx.copySpectrumData(wlData, flatSpecData);
-
-    SpectrumRenderer render;
     uint8_t *flatRgbData = new uint8_t[3 * ctx.getImageWidth() * ctx.getImageHeight()];
-    render.rgb(wlNum, wlData, ctx.getImageWidth() * ctx.getImageHeight(), flatSpecData, flatRgbData);
-    delete[] wlData;
-    delete[] flatSpecData;
+    ctx.renderToRgb(flatRgbData);
 
     Mat img(ctx.getImageHeight(), ctx.getImageWidth(), CV_8UC3, flatRgbData);
     cvtColor(img, img, COLOR_RGB2BGR);

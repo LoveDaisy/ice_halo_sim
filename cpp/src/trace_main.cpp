@@ -30,10 +30,10 @@ int main(int argc, char *argv[])
     printf("Initialization: %.2fms\n", diff.count() * 1.0e3);
 
     char filename[256];
-    for (float wl = 440.0f; wl < 655.0f;) {
+    for (auto wl : context.getWavelengths()) {
         printf("starting at wavelength: %.1f\n", wl);
 
-        context.setWavelength(wl);
+        context.setCurrentWavelength(wl);
 
         auto t0 = std::chrono::system_clock::now();
         Optics::traceRays(context);
@@ -50,8 +50,6 @@ int main(int argc, char *argv[])
         t1 = std::chrono::system_clock::now();
         diff = t1 - t0;
         printf("Writing: %.2fms\n", diff.count() * 1.0e3);
-
-        wl += 30.0f;
     }
     context.printCrystalInfo();
 

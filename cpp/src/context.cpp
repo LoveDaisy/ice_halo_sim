@@ -96,8 +96,7 @@ void RayTracingContext::initRays(CrystalContext *ctx, int rayNum, const float *d
     setRayNum(rayNum);
 
     Crystal * crystal = ctx->getCrystal();
-    int faceNum = crystal->faceNum();
-    auto *faces = new float[faceNum * 9];
+    auto *faces = new float[crystal->faceNum() * 9];
     crystal->copyFaceData(faces);
 
     activeRaySegNum = 0;
@@ -320,7 +319,7 @@ void RayTracingContext::fillPts(const float *faces, int idx, float *rayPts)
 SimulationContext::SimulationContext() :
     totalRayNum(0), maxRecursionNum(9), 
     multiScatterNum(1), multiScatterProb(1.0f),
-    wavelength(550.0f), sunDiameter(0.5f),
+    currentWavelength(550.0f), sunDiameter(0.5f),
     dataDirectory("./")
 {
     // envCtx = new EnvironmentContext(this);
@@ -370,15 +369,21 @@ float SimulationContext::getMultiScatterProb() const
 }
 
 
-void SimulationContext::setWavelength(float wavelength)
+void SimulationContext::setCurrentWavelength(float wavelength)
 {
-    this->wavelength = wavelength;
+    this->currentWavelength = wavelength;
 }
 
 
-float SimulationContext::getWavelength()
+float SimulationContext::getCurrentWavelength() const
 {
-    return wavelength;
+    return currentWavelength;
+}
+
+
+std::vector<float> SimulationContext::getWavelengths() const
+{
+    return wavelengths;
 }
 
 
@@ -469,7 +474,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
     File file(dataDirectory.c_str(), filename);
     if (!file.open(OpenMode::WRITE | OpenMode::BINARY)) return;
 
-    file.write(wavelength);
+    file.write(currentWavelength);
 
     std::vector<RaySegment *> v;
     for (auto &rcs : rayTracingCtxs) {
@@ -633,12 +638,6 @@ RenderContext::~RenderContext()
 }
 
 
-size_t RenderContext::getWavelengthNum() const
-{
-    return spectrumData.size();
-}
-
-
 uint32_t RenderContext::getImageWidth() const
 {
     return imgWid;
@@ -654,6 +653,36 @@ uint32_t RenderContext::getImageHeight() const
 std::string RenderContext::getImagePath() const
 {
     return Files::pathJoin(dataDirectory, "img.png");
+}
+
+
+void RenderContext::renderToRgb(uint8_t *rgbData)
+{
+    auto wlNum = spectrumData.size();
+    auto *wlData = new float[wlNum];
+    auto *flatSpecData = new float[wlNum * imgWid * imgHei];
+    
+    copySpectrumData(wlData, flatSpecData);
+    if (rayColor[0] < 0) {
+        render.rgb(wlNum, wlData, imgWid * imgHei, flatSpecData, rgbData);
+    } else {
+        render.gray(wlNum, wlData, imgWid * imgHei, flatSpecData, rgbData);
+    }
+    for (size_t i = 0; i < imgWid * imgHei; i++) {
+        for (int c = 0; c <= 2; c++) {
+            int v = static_cast<int>(backgroundColor[c] * 255);
+            if (rayColor[0] < 0) {
+                v += rgbData[i * 3 + c];
+            } else {
+                v += static_cast<int>(rgbData[i * 3 + c] * rayColor[c]);
+            }
+            v = std::max(std::min(v, 255), 0);
+            rgbData[i * 3 + c] = static_cast<uint8_t>(v);
+        }
+    }
+
+    delete[] wlData;
+    delete[] flatSpecData;
 }
 
 
@@ -694,7 +723,7 @@ int RenderContext::loadDataFromFile(Files::File &file)
 
     // File file(dataDirectory.c_str(), filename);
     auto fileSize = file.getSize();
-    float* readBuffer = new float[fileSize / sizeof(float)];
+    auto* readBuffer = new float[fileSize / sizeof(float)];
 
     file.open(OpenMode::READ | OpenMode::BINARY);
     auto readCount = file.read(readBuffer, 1);
@@ -752,7 +781,7 @@ int RenderContext::loadDataFromFile(Files::File &file)
     delete[] tmpXY;
     delete[] tmpW;
 
-    return totalCount;
+    return static_cast<int>(totalCount);
 }
 
 
@@ -792,25 +821,41 @@ ContextParser * ContextParser::createFileParser(const char *filename)
 }
 
 
-void ContextParser::parseRayNumber(SimulationContext &ctx)
+void ContextParser::parseRaySettings(SimulationContext &ctx)
 {
     using namespace rapidjson;
 
-    // Parsing ray number
-    uint64_t rayNumber = 10000;
-    auto *p = Pointer("/ray_number").Get(d);
+    /* Parsing ray number */
+    ctx.totalRayNum = 10000;
+    auto *p = Pointer("/ray/number").Get(d);
     if (p == nullptr) {
-        fprintf(stderr, "\nWARNING! Config missing <ray_number>, using default 10000!\n");
+        fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default 10000!\n");
     } else if (!p->IsUint()) {
-        fprintf(stderr, "\nWARNING! config <ray_number> is not unsigned int, using default 10000!\n");
+        fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default 10000!\n");
     } else {
-        rayNumber = p->GetUint();
+        ctx.totalRayNum = p->GetUint();
     }
-    ctx.totalRayNum = rayNumber;
+
+    /* Parsing wavelengths */
+    ctx.wavelengths.clear();
+    ctx.wavelengths.push_back(550);
+    p = Pointer("/ray/wavelength").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <ray.wavelength>, using default 550!\n");
+    } else if (!p->IsArray()) {
+        fprintf(stderr, "\nWARNING! Config <ray.wavelength> is not an array, using default 550!\n");
+    } else if (!(*p)[0].IsNumber()) {
+        fprintf(stderr, "\nWARNING! Config <ray.wavelength> connot be recgonized, using default 550!\n");
+    } else {
+        ctx.wavelengths.clear();
+        for (const auto &pi : p->GetArray()) {
+            ctx.wavelengths.push_back(pi.GetDouble());
+        }
+    }
 }
 
 
-void ContextParser::parseMaxRecursion(SimulationContext &ctx)
+void ContextParser::parseBasicSettings(SimulationContext &ctx)
 {
     using namespace rapidjson;
 
@@ -827,7 +872,7 @@ void ContextParser::parseMaxRecursion(SimulationContext &ctx)
 }
 
 
-void ContextParser::parseMultiScatterSetting(SimulationContext &ctx)
+void ContextParser::parseMultiScatterSettings(SimulationContext &ctx)
 {
     using namespace rapidjson;
 
@@ -860,7 +905,7 @@ void ContextParser::parseMultiScatterSetting(SimulationContext &ctx)
 }
 
 
-void ContextParser::parseSunSetting(SimulationContext &ctx)
+void ContextParser::parseSunSettings(SimulationContext &ctx)
 {
     using namespace rapidjson;
 
@@ -890,7 +935,7 @@ void ContextParser::parseSunSetting(SimulationContext &ctx)
 }
 
 
-void ContextParser::parseDataSetting(SimulationContext &ctx)
+void ContextParser::parseDataSettings(SimulationContext &ctx)
 {
     using namespace rapidjson;
 
@@ -908,7 +953,7 @@ void ContextParser::parseDataSetting(SimulationContext &ctx)
 }
 
 
-void ContextParser::parseCrystalSetting(SimulationContext &ctx, const rapidjson::Value &c, int ci)
+void ContextParser::parseCrystalSettings(SimulationContext &ctx, const rapidjson::Value &c, int ci)
 {
     using namespace rapidjson;
     using namespace Math;
@@ -1177,11 +1222,11 @@ void ContextParser::parseSimulationSettings(SimulationContext &ctx)
 
     char msgBuffer[512];
 
-    parseRayNumber(ctx);
-    parseMaxRecursion(ctx);
-    parseSunSetting(ctx);
-    parseDataSetting(ctx);
-    parseMultiScatterSetting(ctx);
+    parseRaySettings(ctx);
+    parseBasicSettings(ctx);
+    parseSunSettings(ctx);
+    parseDataSettings(ctx);
+    parseMultiScatterSettings(ctx);
 
     const auto *p = Pointer("/crystal").Get(d);
     if (p == nullptr || !p->IsArray()) {
@@ -1191,7 +1236,7 @@ void ContextParser::parseSimulationSettings(SimulationContext &ctx)
 
     int ci = 0;
     for (const Value &c : p->GetArray()) {
-        parseCrystalSetting(ctx, c, ci);
+        parseCrystalSettings(ctx, c, ci);
         ci++;
     }
 }
@@ -1201,13 +1246,13 @@ void ContextParser::parseRenderingSettings(RenderContext &ctx)
 {
     using namespace rapidjson;
 
-    parseCameraSetting(ctx);
-    parseRenderSetting(ctx);
-    parseDataSetting(ctx);
+    parseCameraSettings(ctx);
+    parseRenderSettings(ctx);
+    parseDataSettings(ctx);
 }
 
 
-void ContextParser::parseCameraSetting(RenderContext &ctx)
+void ContextParser::parseCameraSettings(RenderContext &ctx)
 {
     using namespace rapidjson;
 
@@ -1225,7 +1270,7 @@ void ContextParser::parseCameraSetting(RenderContext &ctx)
     } else if (!p->IsNumber()) {
         fprintf(stderr, "\nWARNING! config <camera.azimuth> is not a number, using default 90.0!\n");
     } else {
-        float az = p->GetDouble();
+        auto az = static_cast<float>(p->GetDouble());
         az = std::fmax(std::fmin(az, 360.0f), 0.0f);
         ctx.camRot[0] = 90.0f - az;
     }
@@ -1236,7 +1281,7 @@ void ContextParser::parseCameraSetting(RenderContext &ctx)
     } else if (!p->IsNumber()) {
         fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default 90.0!\n");
     } else {
-        float el = p->GetDouble();
+        auto el = static_cast<float>(p->GetDouble());
         el = std::fmax(std::fmin(el, 89.9f), -89.9f);
         ctx.camRot[1] = el;
     }
@@ -1247,7 +1292,7 @@ void ContextParser::parseCameraSetting(RenderContext &ctx)
     } else if (!p->IsNumber()) {
         fprintf(stderr, "\nWARNING! config <camera.rotation> is not a number, using default 0.0!\n");
     } else {
-        float rot = p->GetDouble();
+        auto rot = static_cast<float>(p->GetDouble());
         rot = std::fmax(std::fmin(rot, 180.0f), -180.0f);
         ctx.camRot[2] = rot;
     }
@@ -1258,7 +1303,7 @@ void ContextParser::parseCameraSetting(RenderContext &ctx)
     } else if (!p->IsNumber()) {
         fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default 120.0!\n");
     } else {
-        float fov = p->GetDouble();
+        auto fov = static_cast<float>(p->GetDouble());
         fov = std::fmax(std::fmin(fov, 140.0f), 0.0f);
         ctx.fov = fov;
     }
@@ -1271,7 +1316,7 @@ void ContextParser::parseCameraSetting(RenderContext &ctx)
     } else {
         int width = p->GetInt();
         width = std::max(width, 0);
-        ctx.imgWid = width;
+        ctx.imgWid = static_cast<uint32_t>(width);
     }
 
     p = Pointer("/camera/height").Get(d);
@@ -1282,7 +1327,7 @@ void ContextParser::parseCameraSetting(RenderContext &ctx)
     } else {
         int height = p->GetInt();
         height = std::max(height, 0);
-        ctx.imgHei = height;
+        ctx.imgHei = static_cast<uint32_t>(height);
     }
 
     p = Pointer("/camera/lens").Get(d);
@@ -1302,7 +1347,7 @@ void ContextParser::parseCameraSetting(RenderContext &ctx)
 }
 
 
-void ContextParser::parseRenderSetting(RenderContext &ctx)
+void ContextParser::parseRenderSettings(RenderContext &ctx)
 {
     using namespace rapidjson;
     using namespace Projection;
@@ -1311,6 +1356,12 @@ void ContextParser::parseRenderSetting(RenderContext &ctx)
     ctx.intensityFactor = 1.0;
     ctx.offsetY = 0;
     ctx.offsetX = 0;
+    ctx.backgroundColor[0] = 0;
+    ctx.backgroundColor[1] = 0;
+    ctx.backgroundColor[2] = 0;
+    ctx.rayColor[0] = -1;
+    ctx.rayColor[1] = -1;
+    ctx.rayColor[2] = -1;
 
     auto *p = Pointer("/render/visible_semi_sphere").Get(d);
     if (p == nullptr) {
@@ -1357,10 +1408,40 @@ void ContextParser::parseRenderSetting(RenderContext &ctx)
         ctx.offsetX = offsetX;
         ctx.offsetY = offsetY;
     }
+
+    p = Pointer("/render/background_color").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default [0,0,0]!\n");
+    } else if (!p->IsArray()) {
+        fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array, using default [0,0,0]!\n");
+    } else if (p->Size() != 3 || !(*p)[0].IsNumber()) {
+        fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recgonized, using default [0,0,0]!\n");
+    } else {
+        auto pa = p->GetArray();
+        for (int i = 0; i < 3; i++) {
+            ctx.backgroundColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
+        }
+    }
+
+    p = Pointer("/render/ray_color").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default real color!\n");
+    } else if (!p->IsArray() && !p->IsString()) {
+        fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array nor a string, using default real color!\n");
+    } else if (p->IsArray() && (p->Size() != 3 || !(*p)[0].IsNumber())) {
+        fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recgonized, using default real color!\n");
+    } else if (p->IsString() && (*p) != "real") {
+        fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recgonized, using default real color!\n");
+    } else if (p->IsArray()) {
+        auto pa = p->GetArray();
+        for (int i = 0; i < 3; i++) {
+            ctx.rayColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
+        }
+    }
 }
 
 
-void ContextParser::parseDataSetting(RenderContext &ctx)
+void ContextParser::parseDataSettings(RenderContext &ctx)
 {
     using namespace rapidjson;
 
