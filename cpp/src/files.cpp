@@ -13,10 +13,41 @@ bool exists(const char* filename)
 }
 
 
+void listDataFiles(const char* dir, std::vector<File>& files)
+{
+    using namespace boost::filesystem;
+
+    path p(dir);
+    for (directory_entry& x : directory_iterator(p)) {
+        if (x.path().extension() == ".bin") {
+            files.emplace_back(x.path().c_str());
+        }
+    }
+}
+
+
+std::string pathJoin(const std::string& p1, const std::string& p2)
+{
+    using namespace boost::filesystem;
+
+    path p(p1);
+    p /= (p2);
+    return p.string();
+}
+
+
 File::File(const char* filename) : 
-    filename(filename), file(nullptr), fileOpened(false),
+    file(nullptr), fileOpened(false),
     p(filename)
 { }
+
+
+File::File(const char* path, const char* filename) :
+    file(nullptr), fileOpened(false),
+    p(path)
+{
+    p /= filename;
+}
 
 
 File::~File()
@@ -47,7 +78,7 @@ bool File::open(uint8_t mode)
     const char *m2 = (mode & OpenMode::BINARY) ? "b" : "";
     sprintf(modeBuffer, "%s%s", m1, m2);
 
-    file = std::fopen(filename.c_str(), modeBuffer);
+    file = std::fopen(p.c_str(), modeBuffer);
     if (file) {
         fileOpened = true;
     } else {

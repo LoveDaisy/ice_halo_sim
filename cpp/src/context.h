@@ -166,14 +166,18 @@ public:
     RenderContext();
     ~RenderContext();
 
-    int loadDataFromFile(const char* filename);
+    void loadData();
     size_t getWavelengthNum() const;
     void copySpectrumData(float *wavelengthData, float *spectrumData) const;
 
     uint32_t getImageWidth() const;
     uint32_t getImageHeight() const;
+
+    std::string getImagePath() const;
     
 private:
+    int loadDataFromFile(Files::File &file);
+
     float camRot[3];
     float fov;
 
@@ -186,6 +190,8 @@ private:
     std::unordered_map<int, float*> spectrumData;
     double totalW;
     double intensityFactor;
+
+    std::string dataDirectory;
 
     std::function<void(
         float *camRot,          // Camera rotation. [lon, lat, roll]
@@ -215,6 +221,7 @@ private:
     void parseRayNumber(SimulationContext &ctx);
     void parseMaxRecursion(SimulationContext &ctx);
     void parseSunSetting(SimulationContext &ctx);
+    void parseDataSetting(SimulationContext &ctx);
     void parseMultiScatterSetting(SimulationContext &ctx);
     void parseCrystalSetting(SimulationContext &ctx, const rapidjson::Value &c, int ci);
     void parseCrystalType(SimulationContext &ctx, const rapidjson::Value &c, int ci,
@@ -225,6 +232,7 @@ private:
 
     void parseCameraSetting(RenderContext &ctx);
     void parseRenderSetting(RenderContext &ctx);
+    void parseDataSetting(RenderContext &ctx);
 
     rapidjson::Document d;
 

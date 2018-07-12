@@ -1,6 +1,8 @@
 #ifndef ICEHALOSIM_FILES_H
 #define ICEHALOSIM_FILES_H
 
+#include <vector>
+
 #define BOOST_FILESYSTEM_NO_DEPRECATED
 #include <boost/filesystem.hpp>
 
@@ -8,7 +10,13 @@
 namespace IceHalo {
 namespace Files {
 
+class File;
+
 bool exists(const char* filename);
+
+void listDataFiles(const char* dir, std::vector<File>& files);
+
+std::string pathJoin(const std::string& p1, const std::string& p2);
 
 namespace OpenMode
 {
@@ -23,6 +31,7 @@ class File
 {
 public:
     File(const char* filename);
+    File(const char* path, const char* filename);
     ~File();
 
     bool open(uint8_t mode = OpenMode::READ);
@@ -40,7 +49,6 @@ public:
     size_t write(const T* data, size_t n);
 
 private:
-    std::string filename;
     std::FILE *file;
     bool fileOpened;
 

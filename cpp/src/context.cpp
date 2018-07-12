@@ -8,6 +8,7 @@
 
 #include <unordered_set>
 #include <limits>
+#include <chrono>
 
 
 namespace IceHalo {
@@ -319,7 +320,8 @@ void RayTracingContext::fillPts(const float *faces, int idx, float *rayPts)
 SimulationContext::SimulationContext() :
     totalRayNum(0), maxRecursionNum(9), 
     multiScatterNum(1), multiScatterProb(1.0f),
-    wavelength(550.0f), sunDiameter(0.5f)
+    wavelength(550.0f), sunDiameter(0.5f),
+    dataDirectory("./")
 {
     // envCtx = new EnvironmentContext(this);
 }
@@ -463,17 +465,11 @@ RayTracingContext * SimulationContext::getRayTracingContext(int scatterIdx, int 
 void SimulationContext::writeFinalDirections(const char *filename)
 {
     using namespace Files;
-    if (!Files::exists(dataDirectory.c_str())) {
-        throw std::invalid_argument("Data directory doesn't exist!");
-    }
     
-    File file(filename);
+    File file(dataDirectory.c_str(), filename);
     if (!file.open(OpenMode::WRITE | OpenMode::BINARY)) return;
-    // std::FILE* file = std::fopen(filename, "wb");
-    // if (!file) return;
 
     file.write(wavelength);
-    // fwrite(&wavelength, sizeof(float), 1, file);
 
     std::vector<RaySegment *> v;
     for (auto &rcs : rayTracingCtxs) {
@@ -500,8 +496,6 @@ void SimulationContext::writeFinalDirections(const char *filename)
                         Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
                         file.write(finalDir, 3);
                         file.write(p->w);
-                        // fwrite(finalDir, sizeof(float), 3, file);
-                        // fwrite(&p->w, sizeof(float), 1, file);
                     }
                 }
                 currentIdx++;
@@ -509,7 +503,6 @@ void SimulationContext::writeFinalDirections(const char *filename)
         }
     }
 
-    // std::fclose(file);
     file.close();
 }
 
@@ -518,10 +511,8 @@ void SimulationContext::writeRayInfo(const char *filename, float lon, float lat,
 {
     using namespace Files;
 
-    File file(filename);
+    File file(dataDirectory.c_str(), filename);
     if (!file.open(OpenMode::WRITE | OpenMode::BINARY)) return;
-    // std::FILE* file = std::fopen(filename, "wb");
-    // if (!file) return;
 
     float targetDir[3] = {
         std::cos(lat) * std::cos(lon),
@@ -569,7 +560,6 @@ void SimulationContext::writeRayInfo(const char *filename, float lon, float lat,
     }
 
     file.close();
-    // fclose(file);
 }
 
 
@@ -596,16 +586,13 @@ void SimulationContext::writeRayInfo(Files::File &file, Ray *sr)
             continue;
         }
         if (p->nextReflect == nullptr && p->nextRefract == nullptr && p->isValidEnd()) {
-            // checked.insert(p);
             tmp[6] = -1; tmp[0] = v.size();
             file.write(tmp, 7);
-            // fwrite(tmp, sizeof(float), 7, file);
             for (auto r : v) {
                 memcpy(tmp, r->pt.val(), 3*sizeof(float));
                 memcpy(tmp+3, r->dir.val(), 3*sizeof(float));
                 tmp[6] = r->w;
                 file.write(tmp, 7);
-                // fwrite(tmp, sizeof(float), 7, file);
             }
         }
         checked.insert(p);
@@ -633,6 +620,7 @@ RenderContext::RenderContext() :
     imgHei(0), imgWid(0), offsetY(0), offsetX(0),
     visibleSemiSphere(Projection::VisibleSemiSphere::UPPER), 
     totalW(0), intensityFactor(1.0),
+    dataDirectory("./"),
     proj(&Projection::equiAreaFishEye)
 { }
 
@@ -663,6 +651,12 @@ uint32_t RenderContext::getImageHeight() const
 }
 
 
+std::string RenderContext::getImagePath() const
+{
+    return Files::pathJoin(dataDirectory, "img.png");
+}
+
+
 void RenderContext::copySpectrumData(float *wavelengthData, float *spectrumData) const
 {
     int k = 0;
@@ -677,24 +671,33 @@ void RenderContext::copySpectrumData(float *wavelengthData, float *spectrumData)
 }
 
 
-int RenderContext::loadDataFromFile(const char* filename)
+void RenderContext::loadData()
+{
+    std::vector<Files::File> files;
+    listDataFiles(dataDirectory.c_str(), files);
+    int i = 0;
+    for (auto &f : files) {
+        auto t0 = std::chrono::system_clock::now();
+        auto num = loadDataFromFile(f);
+        auto t1 = std::chrono::system_clock::now();
+        std::chrono::duration<double> diff = t1 - t0;
+        printf(" Loading data (%d/%lu): %.2fms; total %d pts\n", i + 1, files.size(), diff.count() * 1.0e3, num);
+        i++;
+    }
+}
+
+
+int RenderContext::loadDataFromFile(Files::File &file)
 {
     using namespace Projection;
     using namespace Files;
 
-    // const uint32_t BUFFER_SIZE = 1024 * 4;
-    // float* readBuffer = new float[BUFFER_SIZE];
-
-    File file(filename);
+    // File file(dataDirectory.c_str(), filename);
     auto fileSize = file.getSize();
     float* readBuffer = new float[fileSize / sizeof(float)];
 
     file.open(OpenMode::READ | OpenMode::BINARY);
     auto readCount = file.read(readBuffer, 1);
-
-    // std::FILE* fd = fopen(filename, "rb");
-    // auto readCount = fread(readBuffer, sizeof(float), 1, fd);
-    // int totalCount = 0;
     if (readCount <= 0) {
         return -1;
     }
@@ -704,37 +707,13 @@ int RenderContext::loadDataFromFile(const char* filename)
         return -1;
     }
 
-    // std::vector<float> tmpData;
-    // while (true) {
-    //     readCount = fread(readBuffer, sizeof(float), BUFFER_SIZE, fd);
-    //     for (decltype(readCount) i = 0; i < readCount; i += 4) {
-    //         if (visibleSemiSphere == VisibleSemiSphere::UPPER && readBuffer[i+2] >= 0) {
-    //             continue;
-    //         }
-    //         if (visibleSemiSphere == VisibleSemiSphere::LOWER && readBuffer[i+2] <= 0) {
-    //             continue;
-    //         }
-    //         tmpData.push_back(readBuffer[i+0]);
-    //         tmpData.push_back(readBuffer[i+1]);
-    //         tmpData.push_back(readBuffer[i+2]);
-    //         tmpData.push_back(readBuffer[i+3]);
-    //         totalCount += 1;
-    //     }
-    //     if (readCount < BUFFER_SIZE) {
-    //         break;
-    //     }
-    // }
-    // std::fclose(fd);
     readCount = file.read(readBuffer, fileSize / sizeof(float));
-    auto totalCount = readCount / sizeof(float);
+    auto totalCount = readCount / 4;
     file.close();
 
     auto *tmpDir = new float[totalCount * 3];
     auto *tmpW = new float[totalCount];
-    for (decltype(readCount) i = 0; i < readCount; i++) {
-        // memcpy(tmpDir + i*3, tmpData.data() + i*4, 3 * sizeof(float));
-        // tmpW[i] = tmpData[i*4+3];
-        // totalW += tmpW[i];
+    for (decltype(readCount) i = 0; i < totalCount; i++) {
         memcpy(tmpDir + i * 3, readBuffer + i * 4, 3 * sizeof(float));
         tmpW[i] = readBuffer[i * 4 + 3];
         totalW += tmpW[i];
@@ -908,6 +887,24 @@ void ContextParser::parseSunSetting(SimulationContext &ctx)
         sunDiameter = static_cast<float>(p->GetDouble());
     }
     ctx.sunDiameter = sunDiameter;
+}
+
+
+void ContextParser::parseDataSetting(SimulationContext &ctx)
+{
+    using namespace rapidjson;
+
+    /* Parsing output data directory */
+    std::string dir = "./";
+    auto *p = Pointer("/data_folder").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
+    } else if (!p->IsString()) {
+        fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
+    } else {
+        dir = p->GetString();
+    }
+    ctx.dataDirectory = dir;
 }
 
 
@@ -1183,6 +1180,7 @@ void ContextParser::parseSimulationSettings(SimulationContext &ctx)
     parseRayNumber(ctx);
     parseMaxRecursion(ctx);
     parseSunSetting(ctx);
+    parseDataSetting(ctx);
     parseMultiScatterSetting(ctx);
 
     const auto *p = Pointer("/crystal").Get(d);
@@ -1205,6 +1203,7 @@ void ContextParser::parseRenderingSettings(RenderContext &ctx)
 
     parseCameraSetting(ctx);
     parseRenderSetting(ctx);
+    parseDataSetting(ctx);
 }
 
 
@@ -1357,6 +1356,22 @@ void ContextParser::parseRenderSetting(RenderContext &ctx)
             -static_cast<int>(ctx.imgHei / 2));
         ctx.offsetX = offsetX;
         ctx.offsetY = offsetY;
+    }
+}
+
+
+void ContextParser::parseDataSetting(RenderContext &ctx)
+{
+    using namespace rapidjson;
+
+    ctx.dataDirectory = "./";
+    auto *p = Pointer("/data_folder").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
+    } else if (!p->IsString()) {
+        fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
+    } else {
+        ctx.dataDirectory = p->GetString();
     }
 }
 
