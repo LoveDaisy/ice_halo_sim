@@ -5,6 +5,7 @@
 #include "optics.h"
 #include "crystal.h"
 #include "render.h"
+#include "files.h"
 
 #include "rapidjson/document.h"
 
@@ -134,7 +135,8 @@ public:
     void printCrystalInfo();
 
 private:
-    void writeRayInfo(std::FILE *file, Ray *r);     // Helper function
+    // void writeRayInfo(std::FILE *file, Ray *r);     // Helper function
+    void writeRayInfo(Files::File &file, Ray *r);     // Helper function
 
     std::vector<CrystalContext *> crystalCtxs;
     std::vector<std::vector<RayTracingContext *> > rayTracingCtxs;
@@ -152,6 +154,8 @@ private:
 
     std::mt19937 generator;
     std::uniform_real_distribution<float> uniformDistribution;
+
+    std::string dataDirectory;
 };
 
 

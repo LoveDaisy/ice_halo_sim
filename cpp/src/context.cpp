@@ -462,10 +462,18 @@ RayTracingContext * SimulationContext::getRayTracingContext(int scatterIdx, int 
 
 void SimulationContext::writeFinalDirections(const char *filename)
 {
-    std::FILE* file = std::fopen(filename, "wb");
-    if (!file) return;
+    using namespace Files;
+    if (!Files::exists(dataDirectory.c_str())) {
+        throw std::invalid_argument("Data directory doesn't exist!");
+    }
+    
+    File file(filename);
+    if (!file.open(OpenMode::WRITE | OpenMode::BINARY)) return;
+    // std::FILE* file = std::fopen(filename, "wb");
+    // if (!file) return;
 
-    fwrite(&wavelength, sizeof(float), 1, file);
+    file.write(wavelength);
+    // fwrite(&wavelength, sizeof(float), 1, file);
 
     std::vector<RaySegment *> v;
     for (auto &rcs : rayTracingCtxs) {
@@ -490,8 +498,10 @@ void SimulationContext::writeFinalDirections(const char *filename)
                         float finalDir[3];
                         memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
                         Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
-                        fwrite(finalDir, sizeof(float), 3, file);
-                        fwrite(&p->w, sizeof(float), 1, file);
+                        file.write(finalDir, 3);
+                        file.write(p->w);
+                        // fwrite(finalDir, sizeof(float), 3, file);
+                        // fwrite(&p->w, sizeof(float), 1, file);
                     }
                 }
                 currentIdx++;
@@ -499,14 +509,19 @@ void SimulationContext::writeFinalDirections(const char *filename)
         }
     }
 
-    std::fclose(file);
+    // std::fclose(file);
+    file.close();
 }
 
 
 void SimulationContext::writeRayInfo(const char *filename, float lon, float lat, float delta)
 {
-    std::FILE* file = std::fopen(filename, "wb");
-    if (!file) return;
+    using namespace Files;
+
+    File file(filename);
+    if (!file.open(OpenMode::WRITE | OpenMode::BINARY)) return;
+    // std::FILE* file = std::fopen(filename, "wb");
+    // if (!file) return;
 
     float targetDir[3] = {
         std::cos(lat) * std::cos(lon),
@@ -553,11 +568,12 @@ void SimulationContext::writeRayInfo(const char *filename, float lon, float lat,
         }
     }
 
-    fclose(file);
+    file.close();
+    // fclose(file);
 }
 
 
-void SimulationContext::writeRayInfo(std::FILE *file, Ray *sr)
+void SimulationContext::writeRayInfo(Files::File &file, Ray *sr)
 {
     std::vector<RaySegment*> v;
     v.push_back(sr->firstRaySeg);
@@ -582,16 +598,14 @@ void SimulationContext::writeRayInfo(std::FILE *file, Ray *sr)
         if (p->nextReflect == nullptr && p->nextRefract == nullptr && p->isValidEnd()) {
             // checked.insert(p);
             tmp[6] = -1; tmp[0] = v.size();
-            fwrite(tmp, sizeof(float), 7, file);
-            // printf("%lu,0,0,0,0,0,-1;\n", v.size());
+            file.write(tmp, 7);
+            // fwrite(tmp, sizeof(float), 7, file);
             for (auto r : v) {
                 memcpy(tmp, r->pt.val(), 3*sizeof(float));
                 memcpy(tmp+3, r->dir.val(), 3*sizeof(float));
                 tmp[6] = r->w;
-                fwrite(tmp, sizeof(float), 7, file);
-
-                // printf("%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f;\n",
-                //     tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
+                file.write(tmp, 7);
+                // fwrite(tmp, sizeof(float), 7, file);
             }
         }
         checked.insert(p);
@@ -666,13 +680,21 @@ void RenderContext::copySpectrumData(float *wavelengthData, float *spectrumData)
 int RenderContext::loadDataFromFile(const char* filename)
 {
     using namespace Projection;
+    using namespace Files;
 
-    const uint32_t BUFFER_SIZE = 1024 * 4;
-    float* readBuffer = new float[BUFFER_SIZE];
+    // const uint32_t BUFFER_SIZE = 1024 * 4;
+    // float* readBuffer = new float[BUFFER_SIZE];
 
-    std::FILE* fd = fopen(filename, "rb");
-    auto readCount = fread(readBuffer, sizeof(float), 1, fd);
-    int totalCount = 0;
+    File file(filename);
+    auto fileSize = file.getSize();
+    float* readBuffer = new float[fileSize / sizeof(float)];
+
+    file.open(OpenMode::READ | OpenMode::BINARY);
+    auto readCount = file.read(readBuffer, 1);
+
+    // std::FILE* fd = fopen(filename, "rb");
+    // auto readCount = fread(readBuffer, sizeof(float), 1, fd);
+    // int totalCount = 0;
     if (readCount <= 0) {
         return -1;
     }
@@ -682,35 +704,42 @@ int RenderContext::loadDataFromFile(const char* filename)
         return -1;
     }
 
-    std::vector<float> tmpData;
-    while (true) {
-        readCount = fread(readBuffer, sizeof(float), BUFFER_SIZE, fd);
-        for (decltype(readCount) i = 0; i < readCount; i += 4) {
-            if (visibleSemiSphere == VisibleSemiSphere::UPPER && readBuffer[i+2] >= 0) {
-                continue;
-            }
-            if (visibleSemiSphere == VisibleSemiSphere::LOWER && readBuffer[i+2] <= 0) {
-                continue;
-            }
-            tmpData.push_back(readBuffer[i+0]);
-            tmpData.push_back(readBuffer[i+1]);
-            tmpData.push_back(readBuffer[i+2]);
-            tmpData.push_back(readBuffer[i+3]);
-            totalCount += 1;
-        }
-        if (readCount < BUFFER_SIZE) {
-            break;
-        }
-    }
-    std::fclose(fd);
+    // std::vector<float> tmpData;
+    // while (true) {
+    //     readCount = fread(readBuffer, sizeof(float), BUFFER_SIZE, fd);
+    //     for (decltype(readCount) i = 0; i < readCount; i += 4) {
+    //         if (visibleSemiSphere == VisibleSemiSphere::UPPER && readBuffer[i+2] >= 0) {
+    //             continue;
+    //         }
+    //         if (visibleSemiSphere == VisibleSemiSphere::LOWER && readBuffer[i+2] <= 0) {
+    //             continue;
+    //         }
+    //         tmpData.push_back(readBuffer[i+0]);
+    //         tmpData.push_back(readBuffer[i+1]);
+    //         tmpData.push_back(readBuffer[i+2]);
+    //         tmpData.push_back(readBuffer[i+3]);
+    //         totalCount += 1;
+    //     }
+    //     if (readCount < BUFFER_SIZE) {
+    //         break;
+    //     }
+    // }
+    // std::fclose(fd);
+    readCount = file.read(readBuffer, fileSize / sizeof(float));
+    auto totalCount = readCount / sizeof(float);
+    file.close();
 
     auto *tmpDir = new float[totalCount * 3];
     auto *tmpW = new float[totalCount];
-    for (decltype(totalCount) i = 0; i < totalCount; i++) {
-        memcpy(tmpDir + i*3, tmpData.data() + i*4, 3 * sizeof(float));
-        tmpW[i] = tmpData[i*4+3];
+    for (decltype(readCount) i = 0; i < readCount; i++) {
+        // memcpy(tmpDir + i*3, tmpData.data() + i*4, 3 * sizeof(float));
+        // tmpW[i] = tmpData[i*4+3];
+        // totalW += tmpW[i];
+        memcpy(tmpDir + i * 3, readBuffer + i * 4, 3 * sizeof(float));
+        tmpW[i] = readBuffer[i * 4 + 3];
         totalW += tmpW[i];
     }
+    delete[] readBuffer;
 
     auto *tmpXY = new int[totalCount * 2];
     proj(camRot, fov, totalCount, tmpDir, imgWid, imgHei, tmpXY, visibleSemiSphere);
