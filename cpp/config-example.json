@@ -3,24 +3,30 @@
         "altitude": 6,
         "diameter": 0.5
     },
-    "ray_number": 100000,
+    "ray": {
+        "number": 100000,
+        "wavelength": [440, 470, 500, 530, 560, 590, 620, 650]
+    },
     "max_recursion": 9,
+    "data_folder": "/path/to/your/data/folder",
     "camera": {
         "azimuth": 10,
         "elevation": 20,
         "rotation": 0,
         "fov": 57,
         "width": 1800,
-        "height": 1000,
+        "height": 1800,
         "lens": "fisheye"
     },
     "render": {
         "visible_semi_sphere": "upper",
+        "ray_color": "real",
+        "background_color": [0, 0, 0],
         "intensity_factor": 5.0,
-        "offset": [0, 200]
+        "offset": [0, 0]
     },
     "multi_scatter": {
-        "repeat": 2,
+        "repeat": 1,
         "probability": 1.0
     },
     "crystal": [

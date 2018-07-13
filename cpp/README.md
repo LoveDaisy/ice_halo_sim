@@ -16,7 +16,7 @@ A simple way to build form start is as follows:
 3. `cmake .. && make -j4`, or you can set `CMAKE_BUILD_TYPE` to `release` to get highest performance. 
 
 Then the executable binary will be at `build/bin`. And you can start by
-`./bin/IceHaloSim <path-to-your-config-file>`. The file [`config-example.json`](./config-example.json) 
+`./bin/IceHaloSim <config-file>`. The file [`config-example.json`](./config-example.json) 
 is an example configuration file.
 
 ## Visualization
@@ -31,8 +31,7 @@ Script `matlab/src/read_binary_result-example.m` reads the `.bin` files and plot
 See [matlab](../matlab/) folder for details. 
 
   And there is also a C++ tool does the same thing. Please run 
-`./bin/IceHaloRender <config-file> file1.bin [file2.bin ...]` or
-`./bin/IceHaloRender <config-file> $( ls *.bin )` for visualization. 
+`./bin/IceHaloRender <config-file>` for visualization. 
 Just use the same configuration file as you run the simulation. I'd prefer this C++ tool
 than the matlab tool because it is much faster.
 
@@ -53,10 +52,15 @@ It has two attributes,
   * `altitude`, defining the altitude of the sun.  
   * `diameter`, defining the actual diameter used in the simulation, in degree. Please set to 0.5 for ture sun.
 
-* `ray_number`:
-The total ray number for simulation. Note that even with a single incident ray, it may result in multiple
-rays output, due to reflections and refractions in crystal. This `ray_number` defines the input ray number,
-but not output ray number.
+* `ray`:
+It defines some properties of rays used in simulation,
+  * `number`, the total ray number for simulation. 
+    Note that even with a single incident ray, it may result in multiple
+    rays output, due to reflections and refractions in crystal. This `number` defines the input ray number,
+    but not output ray number.
+  * `wavelength`, the wavelengths used during simulation.
+    It is an array contains all wavelengths you want to use. The refractive index data is from
+    [Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice).
 
 * `max_recursion`:
 It defines the max number that a ray hits a surface during a simulation. If a ray hits more than this number
@@ -72,6 +76,11 @@ It defines how to simulate multi-scattering halos. It has two attributes,
     
   Multi-scattering is a highlight feature of this project. As far as I know, HaloSim cannot do this kind simulation.
 While HaloPoint handles it by a tricky workaround, and implements for only limited scenarios.
+
+* `data_folder`:
+It defines where output data files should be located. The simulation program will put data into this
+folder and the rendering program will read data from this folder. Also the rendered image will be put
+in this folder.
 
 ### Rendering settings
 
@@ -90,6 +99,11 @@ It defines some useful attributes used when rendering:
     will be rendered as well. The values could be one of these: `upper`, `lower`, `camera`, `full`.
   * `intensity_factor`, controls the intensity. The value locates between 0.1 and 10.0.
   * `offset`, defines the rendering offset. In pixel.
+  * `ray_color`, defines the color used to plot the ray scatter points. It
+    can be a 3-element array defining the RGB color, or can be a string `real` indicating
+    to use real colors. NOTE: RGB value must between 0.0 and 1.0.  
+    Real-color is also a highlighted feature of this project.
+  * `background_color`, defines the RGB color used for background. Each element must be between 0.0 and 1.0.
 
 ### Crystal settings
 
