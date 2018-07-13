@@ -5,6 +5,7 @@
 #include "optics.h"
 #include "crystal.h"
 #include "render.h"
+#include "files.h"
 
 #include "rapidjson/document.h"
 
@@ -116,8 +117,9 @@ public:
     
     int getCrystalNum() const;
     
-    void setWavelength(float wavelength);
-    float getWavelength();
+    void setCurrentWavelength(float wavelength);
+    float getCurrentWavelength() const;
+    std::vector<float> getWavelengths() const;
     
     void fillSunDir(float *dir, uint64_t num = 1);
     void setSunPosition(float lon, float lat);
@@ -134,7 +136,7 @@ public:
     void printCrystalInfo();
 
 private:
-    void writeRayInfo(std::FILE *file, Ray *r);     // Helper function
+    void writeRayInfo(Files::File &file, Ray *r);     // Helper function
 
     std::vector<CrystalContext *> crystalCtxs;
     std::vector<std::vector<RayTracingContext *> > rayTracingCtxs;
@@ -145,13 +147,16 @@ private:
     int multiScatterNum;
     float multiScatterProb;
 
-    float wavelength;
+    float currentWavelength;
+    std::vector<float> wavelengths;
     
     float sunDir[3];
     float sunDiameter;
 
     std::mt19937 generator;
     std::uniform_real_distribution<float> uniformDistribution;
+
+    std::string dataDirectory;
 };
 
 
@@ -162,16 +167,25 @@ public:
     RenderContext();
     ~RenderContext();
 
-    int loadDataFromFile(const char* filename);
-    size_t getWavelengthNum() const;
+    void loadData();
+    // size_t getWavelengthNum() const;
     void copySpectrumData(float *wavelengthData, float *spectrumData) const;
 
     uint32_t getImageWidth() const;
     uint32_t getImageHeight() const;
+    std::string getImagePath() const;
+
+    void renderToRgb(uint8_t *rgbData);
     
 private:
+    int loadDataFromFile(Files::File &file);
+
     float camRot[3];
     float fov;
+
+    float rayColor[3];
+    float backgroundColor[3];
+    SpectrumRenderer render;
 
     uint32_t imgHei;
     uint32_t imgWid;
@@ -182,6 +196,8 @@ private:
     std::unordered_map<int, float*> spectrumData;
     double totalW;
     double intensityFactor;
+
+    std::string dataDirectory;
 
     std::function<void(
         float *camRot,          // Camera rotation. [lon, lat, roll]
@@ -208,19 +224,23 @@ public:
 private:
     explicit ContextParser(rapidjson::Document &d, const char *filename);
 
-    void parseRayNumber(SimulationContext &ctx);
-    void parseMaxRecursion(SimulationContext &ctx);
-    void parseSunSetting(SimulationContext &ctx);
-    void parseMultiScatterSetting(SimulationContext &ctx);
-    void parseCrystalSetting(SimulationContext &ctx, const rapidjson::Value &c, int ci);
+    /* Parse simulation settings */
+    void parseBasicSettings(SimulationContext &ctx);
+    void parseRaySettings(SimulationContext &ctx);
+    void parseSunSettings(SimulationContext &ctx);
+    void parseDataSettings(SimulationContext &ctx);
+    void parseMultiScatterSettings(SimulationContext &ctx);
+    void parseCrystalSettings(SimulationContext &ctx, const rapidjson::Value &c, int ci);
     void parseCrystalType(SimulationContext &ctx, const rapidjson::Value &c, int ci,
         float population,
         Math::Distribution axisDist, float axisMean, float axisStd,
         Math::Distribution rollDist, float rollMean, float rollStd);
     Crystal * parseCustomCrystal(std::FILE *file);
 
-    void parseCameraSetting(RenderContext &ctx);
-    void parseRenderSetting(RenderContext &ctx);
+    /* Parse rendering settings */
+    void parseCameraSettings(RenderContext &ctx);
+    void parseRenderSettings(RenderContext &ctx);
+    void parseDataSettings(RenderContext &ctx);
 
     rapidjson::Document d;
 

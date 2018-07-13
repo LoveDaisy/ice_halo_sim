@@ -30,10 +30,10 @@ int main(int argc, char *argv[])
     printf("Initialization: %.2fms\n", diff.count() * 1.0e3);
 
     char filename[256];
-    for (float wl = 440.0f; wl < 655.0f;) {
+    for (auto wl : context.getWavelengths()) {
         printf("starting at wavelength: %.1f\n", wl);
 
-        context.setWavelength(wl);
+        context.setCurrentWavelength(wl);
 
         auto t0 = std::chrono::system_clock::now();
         Optics::traceRays(context);
@@ -50,18 +50,8 @@ int main(int argc, char *argv[])
         t1 = std::chrono::system_clock::now();
         diff = t1 - t0;
         printf("Writing: %.2fms\n", diff.count() * 1.0e3);
-
-        wl += 30.0f;
     }
     context.printCrystalInfo();
-
-    // float camRot[] = { 90.0f, 0.0f, 0.0f };
-    // float dir[] = { 0.0f, 0.9455f, 0.3256f };
-    // int imgXY[2];
-    // EquiAreaCameraProjection proj;
-    // proj.project(camRot, 120, 1, dir, 1801, 1801, imgXY);
-
-    // printf("%d, %d\n", imgXY[0], imgXY[1]); 
 
     auto end = std::chrono::system_clock::now();
     diff = end - start;

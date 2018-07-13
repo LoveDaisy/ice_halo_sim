@@ -48,6 +48,9 @@ public:
     void rgb(int waveLengthNumber, float *waveLengths,  // wave lengths
              int dataNumber, float *specData,           // spectrum data, waveLengthNumber x dataNumber
              uint8_t *rgbData);                         // rgb data, dataNumber x 3
+    void gray(int waveLengthNumber, float *waveLengths,
+              int dataNumber, float *specData,
+              uint8_t *rgbData);
 
     static constexpr int MIN_WL = 360;
     static constexpr int MAX_WL = 830;
