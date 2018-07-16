@@ -56,6 +56,7 @@ File::~File()
 {
     if (fileOpened) {
         fclose(file);
+        fileOpened = false;
     }
 }
 
@@ -91,6 +92,7 @@ bool File::close()
     if (fileOpened) {
         std::fclose(file);
         file = nullptr;
+        fileOpened = false;
     }
     return true;
 }
