@@ -517,7 +517,7 @@ void SimulationContext::writeRayInfo(const char *filename, float lon, float lat,
     using namespace Files;
 
     File file(dataDirectory.c_str(), filename);
-    if (!file.open(OpenMode::WRITE | OpenMode::BINARY)) return;
+    // if (!file.open(OpenMode::WRITE | OpenMode::BINARY)) return;
 
     float targetDir[3] = {
         std::cos(lat) * std::cos(lon),
@@ -592,12 +592,17 @@ void SimulationContext::writeRayInfo(Files::File &file, Ray *sr)
         }
         if (p->nextReflect == nullptr && p->nextRefract == nullptr && p->isValidEnd()) {
             tmp[6] = -1; tmp[0] = v.size();
-            file.write(tmp, 7);
+            // file.write(tmp, 7);
+            printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n",
+                   tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
             for (auto r : v) {
                 memcpy(tmp, r->pt.val(), 3*sizeof(float));
                 memcpy(tmp+3, r->dir.val(), 3*sizeof(float));
                 tmp[6] = r->w;
-                file.write(tmp, 7);
+                // file.write(tmp, 7);
+
+                printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n", 
+                    tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
             }
         }
         checked.insert(p);
@@ -652,7 +657,7 @@ uint32_t RenderContext::getImageHeight() const
 
 std::string RenderContext::getImagePath() const
 {
-    return Files::pathJoin(dataDirectory, "img.png");
+    return Files::pathJoin(dataDirectory, "img.jpg");
 }
 
 
@@ -664,13 +669,13 @@ void RenderContext::renderToRgb(uint8_t *rgbData)
     
     copySpectrumData(wlData, flatSpecData);
     if (rayColor[0] < 0) {
-        render.rgb(wlNum, wlData, imgWid * imgHei, flatSpecData, rgbData);
+        render.rgb(static_cast<int>(wlNum), wlData, imgWid * imgHei, flatSpecData, rgbData);
     } else {
-        render.gray(wlNum, wlData, imgWid * imgHei, flatSpecData, rgbData);
+        render.gray(static_cast<int>(wlNum), wlData, imgWid * imgHei, flatSpecData, rgbData);
     }
     for (size_t i = 0; i < imgWid * imgHei; i++) {
         for (int c = 0; c <= 2; c++) {
-            int v = static_cast<int>(backgroundColor[c] * 255);
+            auto v = static_cast<int>(backgroundColor[c] * 255);
             if (rayColor[0] < 0) {
                 v += rgbData[i * 3 + c];
             } else {
@@ -849,7 +854,7 @@ void ContextParser::parseRaySettings(SimulationContext &ctx)
     } else {
         ctx.wavelengths.clear();
         for (const auto &pi : p->GetArray()) {
-            ctx.wavelengths.push_back(pi.GetDouble());
+            ctx.wavelengths.push_back(static_cast<float &&>(pi.GetDouble()));
         }
     }
 }
@@ -1282,7 +1287,7 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
         fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default 90.0!\n");
     } else {
         auto el = static_cast<float>(p->GetDouble());
-        el = std::fmax(std::fmin(el, 89.9f), -89.9f);
+        el = std::fmax(std::fmin(el, 89.999f), -89.999f);
         ctx.camRot[1] = el;
     }
 
@@ -1340,6 +1345,8 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
             ctx.proj = &Projection::rectLinear;
         } else if (*p == "fisheye") {
             ctx.proj = &Projection::equiAreaFishEye;
+        } else if (*p == "dual_fisheye") {
+            ctx.proj = &Projection::dualEquiDistantFishEye;
         } else {
             fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recgonized, using default equal-area fisheye!\n");
         }

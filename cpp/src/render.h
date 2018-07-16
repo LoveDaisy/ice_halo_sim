@@ -25,6 +25,17 @@ void equiAreaFishEye(
 );
 
 
+void dualEquiDistantFishEye(
+    float *camRot,          // Not used
+    float hov,              // Not used
+    uint64_t dataNumber,    // Data number
+    float *dir,             // Ray directions, [x, y, z]
+    int imgWid, int imgHei, // Image size
+    int *imgXY,             // Image coordinates
+    VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER      // Not used
+);
+
+
 void rectLinear(
     float *camRot,          // Camera rotation. [lon, lat, roll]
     float hov,              // Half field of view.

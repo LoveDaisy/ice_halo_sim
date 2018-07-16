@@ -80,9 +80,6 @@ void rotateZ(const float *lon_lat_roll, float *vec, uint64_t dataNum)
     float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
                    -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]),
                    cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
-    // float ax[9] = {sin(lon_lat_roll[0]), -cos(lon_lat_roll[0]), 0.0f,
-    //                cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -cos(lon_lat_roll[1]),
-    //                cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
     float d[3] = {cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
     rotateBase(d, lon_lat_roll[2], ax);
 
