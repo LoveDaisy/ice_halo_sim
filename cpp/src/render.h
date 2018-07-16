@@ -1,6 +1,9 @@
 #ifndef ICEHALOSIM_RENDER_H
 #define ICEHALOSIM_RENDER_H
 
+#include <unordered_map>
+#include <functional>
+
 
 namespace IceHalo {
 
@@ -14,6 +17,16 @@ enum class VisibleSemiSphere
     FULL
 };
 
+
+enum class Type
+{
+    LINEAR,
+    EQUI_AREA,
+    DUAL_EQUI_AREA,
+    DUAL_EQUI_DISTANT,
+};
+
+
 void equiAreaFishEye(
     float *camRot,          // Camera rotation. [lon, lat, roll]
     float hov,              // Half field of view.
@@ -22,6 +35,17 @@ void equiAreaFishEye(
     int imgWid, int imgHei, // Image size
     int *imgXY,             // Image coordinates
     VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER      // Which semi-sphere can be visible
+);
+
+
+void dualEquiAreaFishEye(
+    float *camRot,          // Not used
+    float hov,              // Not used
+    uint64_t dataNumber,    // Data number
+    float *dir,             // Ray directions, [x, y, z]
+    int imgWid, int imgHei, // Image size
+    int *imgXY,             // Image coordinates
+    VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER      // Not used
 );
 
 
@@ -45,6 +69,40 @@ void rectLinear(
     int *imgXY,             // Image coordinates
     VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER      // Which semi-sphere can be visible
 );
+
+
+/* A workaround for disgusting C++11 standard that enum class cannot be a key */
+struct EnumClassHash
+{
+    template <typename T>
+    std::size_t operator()(T t) const
+    {
+        return static_cast<std::size_t>(t);
+    }
+};
+
+template <typename Key>
+using HashType = typename std::conditional<std::is_enum<Key>::value, EnumClassHash, std::hash<Key>>::type;
+
+template <typename Key, typename T>
+using MyUnorderedMap = std::unordered_map<Key, T, HashType<Key>>;
+/* Workaround end */
+
+
+static MyUnorderedMap<Type, std::function<void(
+    float *camRot,          // Camera rotation. [lon, lat, roll]
+    float hov,              // Half field of view.
+    uint64_t dataNumber,    // Data number
+    float *dir,             // Ray directions, [x, y, z]
+    int imgWid, int imgHei, // Image size
+    int *imgXY,             // Image coordinates
+    Projection::VisibleSemiSphere visibleSemiSphere)>
+> projectionFunctions = {
+    {Type::LINEAR, &rectLinear},
+    {Type::EQUI_AREA, &equiAreaFishEye},
+    {Type::DUAL_EQUI_DISTANT, &dualEquiDistantFishEye},
+    {Type::DUAL_EQUI_AREA, &dualEquiAreaFishEye},
+};
 
 
 }

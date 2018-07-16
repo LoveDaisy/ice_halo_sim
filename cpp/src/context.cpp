@@ -631,7 +631,7 @@ RenderContext::RenderContext() :
     visibleSemiSphere(Projection::VisibleSemiSphere::UPPER), 
     totalW(0), intensityFactor(1.0),
     dataDirectory("./"),
-    proj(&Projection::equiAreaFishEye)
+    projectionType(Projection::Type::EQUI_AREA)
 { }
 
 
@@ -755,7 +755,7 @@ int RenderContext::loadDataFromFile(Files::File &file)
     delete[] readBuffer;
 
     auto *tmpXY = new int[totalCount * 2];
-    proj(camRot, fov, totalCount, tmpDir, imgWid, imgHei, tmpXY, visibleSemiSphere);
+    projectionFunctions[projectionType](camRot, fov, totalCount, tmpDir, imgWid, imgHei, tmpXY, visibleSemiSphere);
     delete[] tmpDir;
 
     float *currentData = nullptr;
@@ -1267,7 +1267,7 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
     ctx.fov = 120.0f;
     ctx.imgWid = 800;
     ctx.imgHei = 800;
-    ctx.proj = &Projection::equiAreaFishEye;
+    ctx.projectionType = Projection::Type::EQUI_AREA;
 
     auto *p = Pointer("/camera/azimuth").Get(d);
     if (p == nullptr) {
@@ -1342,11 +1342,11 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
         fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equal-area fisheye!\n");
     } else {
         if (*p == "linear") {
-            ctx.proj = &Projection::rectLinear;
+            ctx.projectionType = Projection::Type::LINEAR;
         } else if (*p == "fisheye") {
-            ctx.proj = &Projection::equiAreaFishEye;
+            ctx.projectionType = Projection::Type::EQUI_AREA;
         } else if (*p == "dual_fisheye") {
-            ctx.proj = &Projection::dualEquiDistantFishEye;
+            ctx.projectionType = Projection::Type::DUAL_EQUI_DISTANT;
         } else {
             fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recgonized, using default equal-area fisheye!\n");
         }

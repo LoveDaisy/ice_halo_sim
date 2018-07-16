@@ -199,15 +199,7 @@ private:
 
     std::string dataDirectory;
 
-    std::function<void(
-        float *camRot,          // Camera rotation. [lon, lat, roll]
-        float hov,              // Half field of view.
-        uint64_t dataNumber,    // Data number
-        float *dir,             // Ray directions, [x, y, z]
-        int imgWid, int imgHei, // Image size
-        int *imgXY,             // Image coordinates
-        Projection::VisibleSemiSphere visibleSemiSphere
-        )> proj;
+    Projection::Type projectionType;
 };
 
 
