@@ -18,9 +18,11 @@ void listDataFiles(const char* dir, std::vector<File>& files)
     using namespace boost::filesystem;
 
     path p(dir);
-    for (directory_entry& x : directory_iterator(p)) {
-        if (x.path().extension() == ".bin") {
-            files.emplace_back(x.path().c_str());
+    std::vector<path> paths;
+    copy(directory_iterator(p), directory_iterator(), back_inserter(paths));
+    for (auto& x : paths) {
+        if (x.extension() == ".bin") {
+            files.emplace_back(x.c_str());
         }
     }
 }
