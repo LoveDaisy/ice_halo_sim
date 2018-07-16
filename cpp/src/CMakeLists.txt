@@ -20,7 +20,7 @@ include_directories(${INCLUDE_DIRECTORIES} "${PROJECT_SOURCE_DIR}/rapidjson/incl
 
 find_package(Threads)
 find_package(OpenCV REQUIRED core imgproc imgcodecs)
-find_package(Boost 1.54.0 COMPONENTS filesystem)
+find_package(Boost 1.54.0 COMPONENTS filesystem system REQUIRED)
 
 if(Boost_FOUND)
     include_directories(${INCLUDE_DIRECTORIES} ${Boost_INCLUDE_DIRS}) 
