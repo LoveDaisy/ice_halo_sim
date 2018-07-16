@@ -22,7 +22,7 @@ Details including how to build and run can be found on following pages.
   The simulation program is 50\~100 times faster than HaloPoint. On general cases
   this program runs at a speed of 140k\~200k rays per second. On multi-scattering cases
   it runs as faster as 50k\~80k rays per second. On the contrary, HaloPoint may cost minutes to
-  render several hundreds rays, and even hours on multi-scattering cases.
+  render 100k rays, and even hours on multi-scattering cases.
   
 * Natural and vivid color.  
   Based on my another project [Spectrum Renderer](https://github.com/LoveDaisy/spec_render),

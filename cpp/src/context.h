@@ -74,7 +74,7 @@ private:
     void fillPts(const float *faces, int idx, float *rayPts);
 
     void copyFinishedRaySegmentsRange(RaySegment **segs, float *dir, float prob,
-        std::atomic_uint64_t &k, int startIdx, int endIdx);
+        std::atomic<std::uint64_t> &k, int startIdx, int endIdx);
 
     SimulationContext *simCtx;
 

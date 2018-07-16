@@ -1,5 +1,7 @@
 #include "crystal.h"
 
+#include <cstring>
+
 namespace IceHalo {
 
 Crystal::Crystal(std::vector<Math::Vec3f> &vertexes, std::vector<Math::TriangleIdx> &faces) :

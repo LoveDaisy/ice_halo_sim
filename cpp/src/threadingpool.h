@@ -29,14 +29,14 @@ private:
 
     unsigned int threadNum;
     std::vector<std::thread> pool;
-    std::atomic_bool alive;
+    std::atomic<bool> alive;
     
     std::queue<std::function<void()> > queue;
     std::mutex queueMutex;
     std::condition_variable queueCondition;
     
-    std::atomic_int runningJobs;
-    std::atomic_int aliveThreads;
+    std::atomic<int> runningJobs;
+    std::atomic<int> aliveThreads;
     std::mutex taskMutex;
     std::condition_variable taskCondition;
 
