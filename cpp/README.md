@@ -8,10 +8,13 @@ can only run from command, no GUI.
 
 ## Build and run
 
+Requires: Boost (>= 1.54), OpenCV (>= 3.3). Has been tested on Mac OSX 10.13 and Ubuntu 14.04.
+
 This C++ project is built with [CMake](https://cmake.org/).
 A simple way to build form start is as follows:
 
-1. `cd cpp`
+0. `git clone --recursive https://github.com/LoveDaisy/ice_halo_sim.git`
+1. `cd ice_halo_sim/cpp`
 2. `mkdir build && cd build`
 3. `cmake .. && make -j4`, or you can set `CMAKE_BUILD_TYPE` to `release` to get highest performance. 
 
