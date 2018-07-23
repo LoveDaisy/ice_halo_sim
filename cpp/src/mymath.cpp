@@ -387,7 +387,7 @@ OrientationGenerator::OrientationGenerator(Distribution axDist, float axMean, fl
 void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir, float *mainAxRot)
 {
     for (int i = 0; i < num; i++) {
-        float lon, lat, roll;
+        float lon = 0, lat = 0, roll = 0;
 
         switch (axDist) {
             case Distribution::UNIFORM : {
