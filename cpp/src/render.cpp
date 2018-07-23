@@ -85,7 +85,7 @@ void dualEquiAreaFishEye(
             if (lat < 0) {
                 lon = Math::PI - lon;
             }
-            float r = 2.0f * projR * std::sin((Math::PI / 2.0f - lat) / 2.0f);
+            float r = 2.0f * projR * std::sin((Math::PI / 2.0f - std::abs(lat)) / 2.0f);
 
             imgXY[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + imgR + (lat > 0 ? 0 : 2 * imgR)));
             imgXY[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + imgR));

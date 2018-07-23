@@ -168,8 +168,6 @@ public:
     ~RenderContext();
 
     void loadData();
-    // size_t getWavelengthNum() const;
-    void copySpectrumData(float *wavelengthData, float *spectrumData) const;
 
     uint32_t getImageWidth() const;
     uint32_t getImageHeight() const;
@@ -179,6 +177,7 @@ public:
     
 private:
     int loadDataFromFile(Files::File &file);
+    void copySpectrumData(float *wavelengthData, float *spectrumData) const;
 
     float camRot[3];
     float fov;
@@ -196,6 +195,8 @@ private:
     std::unordered_map<int, float*> spectrumData;
     double totalW;
     double intensityFactor;
+
+    bool showHorizontal;
 
     std::string dataDirectory;
 

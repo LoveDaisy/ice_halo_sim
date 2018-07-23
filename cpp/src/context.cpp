@@ -629,7 +629,7 @@ void SimulationContext::printCrystalInfo()
 RenderContext::RenderContext() :
     imgHei(0), imgWid(0), offsetY(0), offsetX(0),
     visibleSemiSphere(Projection::VisibleSemiSphere::UPPER), 
-    totalW(0), intensityFactor(1.0),
+    totalW(0), intensityFactor(1.0), showHorizontal(true),
     dataDirectory("./"),
     projectionType(Projection::Type::EQUI_AREA)
 { }
@@ -686,6 +686,10 @@ void RenderContext::renderToRgb(uint8_t *rgbData)
         }
     }
 
+    /* Draw horizontal */
+    float imgR = std::min(imgWid / 2, imgHei) / 2.0f;
+    // TODO
+
     delete[] wlData;
     delete[] flatSpecData;
 }
@@ -726,7 +730,6 @@ int RenderContext::loadDataFromFile(Files::File &file)
     using namespace Projection;
     using namespace Files;
 
-    // File file(dataDirectory.c_str(), filename);
     auto fileSize = file.getSize();
     auto* readBuffer = new float[fileSize / sizeof(float)];
 
@@ -1337,18 +1340,20 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
 
     p = Pointer("/camera/lens").Get(d);
     if (p == nullptr) {
-        fprintf(stderr, "\nWARNING! Config missing <camera.lens>, using default equal-area fisheye!\n");
+        fprintf(stderr, "\nWARNING! Config missing <camera.lens>, using default equi-area fisheye!\n");
     } else if (!p->IsString()) {
-        fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equal-area fisheye!\n");
+        fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equi-area fisheye!\n");
     } else {
         if (*p == "linear") {
             ctx.projectionType = Projection::Type::LINEAR;
         } else if (*p == "fisheye") {
             ctx.projectionType = Projection::Type::EQUI_AREA;
-        } else if (*p == "dual_fisheye") {
+        } else if (*p == "dual_fisheye_equidistant") {
             ctx.projectionType = Projection::Type::DUAL_EQUI_DISTANT;
+        } else if (*p == "dual_fisheye_equiarea") {
+            ctx.projectionType = Projection::Type::DUAL_EQUI_AREA;
         } else {
-            fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recgonized, using default equal-area fisheye!\n");
+            fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recgonized, using default equi-area fisheye!\n");
         }
     }
 }
@@ -1369,6 +1374,7 @@ void ContextParser::parseRenderSettings(RenderContext &ctx)
     ctx.rayColor[0] = -1;
     ctx.rayColor[1] = -1;
     ctx.rayColor[2] = -1;
+    ctx.showHorizontal = true;
 
     auto *p = Pointer("/render/visible_semi_sphere").Get(d);
     if (p == nullptr) {
@@ -1444,6 +1450,15 @@ void ContextParser::parseRenderSettings(RenderContext &ctx)
         for (int i = 0; i < 3; i++) {
             ctx.rayColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
         }
+    }
+
+    p = Pointer("/render/show_horizontal").Get(d);
+    if (p == nullptr) {
+        fprintf(stderr, "\nWARNING! Config missing <render.show_horizontal>, using default true!\n");
+    } else if (!p->IsBool()) {
+        fprintf(stderr, "\nWARNING! Config <render.show_horizontal> is not a boolean, using default true!\n");
+    } else {
+        ctx.showHorizontal = p->GetBool();
     }
 }
 
