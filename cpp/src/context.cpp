@@ -1394,7 +1394,7 @@ void ContextParser::parseRenderSettings(RenderContext &ctx)
         fprintf(stderr, "\nWARNING! Config <render.intensity_factor> is not a number, using default 1.0!\n");
     } else {
         double f = p->GetDouble();
-        f = std::max(std::min(f, 10.0), 0.1);
+        f = std::max(std::min(f, 1000.0), 0.1);
         ctx.intensityFactor = f;
     }
 
