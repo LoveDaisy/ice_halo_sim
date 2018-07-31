@@ -779,7 +779,7 @@ int RenderContext::loadDataFromFile(Files::File &file)
         if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
             continue;
         }
-        if (projectionType != DUAL_EQUI_AREA && projectionType != DUAL_EQUI_DISTANT) {
+        if (projectionType != Type::DUAL_EQUI_AREA && projectionType != Type::DUAL_EQUI_DISTANT) {
             x += offsetX;
             y += offsetY;
         }
