@@ -18,9 +18,13 @@ A simple way to build form start is as follows:
 2. `mkdir build && cd build`
 3. `cmake .. && make -j4`, or you can set `CMAKE_BUILD_TYPE` to `release` to get highest performance. 
 
-Then the executable binary will be at `build/bin`. And you can start by
-`./bin/IceHaloSim <config-file>`. The file [`config-example.json`](./config-example.json) 
-is an example configuration file.
+Then the executable binary will be at `build/bin`. 
+
+* You can start ray-tracing by `./bin/IceHaloSim <config-file>`;
+* After ray-tracing finished you can start rendering by `./bin/IceHaloRender <config-file>`;  
+
+The file [`config-example.json`](./config-example.json) 
+is an example configuration file. Detailed descriptions are shown in follwoing sections.
 
 ## Visualization
 
