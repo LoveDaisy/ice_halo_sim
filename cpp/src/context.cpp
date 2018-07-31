@@ -779,8 +779,10 @@ int RenderContext::loadDataFromFile(Files::File &file)
         if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
             continue;
         }
-        x += offsetX;
-        y += offsetY;
+        if (projectionType != DUAL_EQUI_AREA && projectionType != DUAL_EQUI_DISTANT) {
+            x += offsetX;
+            y += offsetY;
+        }
         if (x < 0 || x >= static_cast<int>(imgWid) || y < 0 || y >= static_cast<int>(imgHei)) {
             continue;
         }
