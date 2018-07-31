@@ -25,7 +25,7 @@ Then the executable binary will be at `build/bin`.
 * After ray-tracing finished you can start rendering by `./bin/IceHaloRender <config-file>`;  
 
 The file [`config-example.json`](./config-example.json) 
-is an example configuration file. *Note:* you should change path to your own config file.
+is an example configuration file. *Note:* you should change `data_folder` in config file to your own data folder.
 Detailed descriptions are shown in follwoing sections.
 
 ## Visualization
