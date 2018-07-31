@@ -20,11 +20,13 @@ A simple way to build form start is as follows:
 
 Then the executable binary will be at `build/bin`. 
 
-* You can start ray-tracing by `./bin/IceHaloSim <config-file>`;
+* You can start ray-tracing by `./bin/IceHaloSim <config-file>`. 
+  You can run this line multiple times to cumulate many data and then render them at last;
 * After ray-tracing finished you can start rendering by `./bin/IceHaloRender <config-file>`;  
 
 The file [`config-example.json`](./config-example.json) 
-is an example configuration file. Detailed descriptions are shown in follwoing sections.
+is an example configuration file. *Note:* you should change path to your own config file.
+Detailed descriptions are shown in follwoing sections.
 
 ## Visualization
 
