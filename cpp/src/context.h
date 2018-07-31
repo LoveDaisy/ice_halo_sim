@@ -168,8 +168,6 @@ public:
     ~RenderContext();
 
     void loadData();
-    // size_t getWavelengthNum() const;
-    void copySpectrumData(float *wavelengthData, float *spectrumData) const;
 
     uint32_t getImageWidth() const;
     uint32_t getImageHeight() const;
@@ -179,6 +177,7 @@ public:
     
 private:
     int loadDataFromFile(Files::File &file);
+    void copySpectrumData(float *wavelengthData, float *spectrumData) const;
 
     float camRot[3];
     float fov;
@@ -197,17 +196,11 @@ private:
     double totalW;
     double intensityFactor;
 
+    bool showHorizontal;
+
     std::string dataDirectory;
 
-    std::function<void(
-        float *camRot,          // Camera rotation. [lon, lat, roll]
-        float hov,              // Half field of view.
-        uint64_t dataNumber,    // Data number
-        float *dir,             // Ray directions, [x, y, z]
-        int imgWid, int imgHei, // Image size
-        int *imgXY,             // Image coordinates
-        Projection::VisibleSemiSphere visibleSemiSphere
-        )> proj;
+    Projection::Type projectionType;
 };
 
 

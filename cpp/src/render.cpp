@@ -53,6 +53,49 @@ void equiAreaFishEye(
 }
 
 
+void dualEquiAreaFishEye(
+    float *camRot,          // Not used
+    float hov,              // Not used
+    uint64_t dataNumber,    // Data number
+    float *dir,             // Ray directions, [x, y, z]
+    int imgWid, int imgHei, // Image size
+    int *imgXY,             // Image coordinates
+    VisibleSemiSphere visibleSemiSphere )
+{
+    float imgR = std::min(imgWid / 2, imgHei) / 2.0f;
+    float projR = imgR / 2.0f / std::sin(45.0f / 180.0f * Math::PI);
+
+    auto *dirCopy = new float[dataNumber * 3];
+    float camRotCopy[3] = {90.0f, 89.999f, 0.0f};
+    memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
+    camRotCopy[0] *= -1;
+    camRotCopy[1] *= -1;
+    for (float &i : camRotCopy) {
+        i *= Math::PI / 180.0f;
+    }
+
+    Math::rotateZ(camRotCopy, dirCopy, dataNumber);
+    for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
+        if (std::abs(Math::norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
+            imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
+            imgXY[i * 2 + 1] = std::numeric_limits<int>::min();
+        } else {
+            float lon = std::atan2(dirCopy[i * 3 + 1], dirCopy[i * 3 + 0]);
+            float lat = std::asin(dirCopy[i * 3 + 2] / Math::norm3(dirCopy + i * 3));
+            if (lat < 0) {
+                lon = Math::PI - lon;
+            }
+            float r = 2.0f * projR * std::sin((Math::PI / 2.0f - std::abs(lat)) / 2.0f);
+
+            imgXY[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + imgR + (lat > 0 ? 0 : 2 * imgR)));
+            imgXY[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + imgR));
+        }
+    }
+
+    delete[] dirCopy;
+}
+
+
 void dualEquiDistantFishEye(
     float *camRot,          // Not used
     float hov,              // Not used
@@ -63,7 +106,6 @@ void dualEquiDistantFishEye(
     VisibleSemiSphere visibleSemiSphere )
 {
     float imgR = std::min(imgWid / 2, imgHei) / 2.0f;
-    // float projR = imgR / 2.0f / std::sin(45.0f / 180.0f * Math::PI);
 
     auto *dirCopy = new float[dataNumber * 3];
     float camRotCopy[3] = {90.0f, 89.999f, 0.0f};

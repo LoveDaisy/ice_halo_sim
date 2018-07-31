@@ -18,7 +18,6 @@ int main(int argc, char *argv[])
     }
 
     auto start = std::chrono::system_clock::now();
-    auto t0 = start;
     auto t1 = start;
     std::chrono::duration<double> diff;
 

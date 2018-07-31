@@ -8,7 +8,7 @@ set(SOURCE_FILE
         threadingpool.cpp)
 
 set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_FLAGS "-Wall -Wextra -msse4 -pthread -std=c++11")
+set(CMAKE_CXX_FLAGS "-Wall -Wextra -msse4 -std=c++11")
 set(CMAKE_CXX_FLAGS_DEBUG "-g")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 
@@ -31,7 +31,7 @@ if(Boost_FOUND)
 
     add_executable(IceHaloRender render_main.cpp ${SOURCE_FILE})
     target_link_libraries(IceHaloRender 
-        PUBLIC ${CMAKE_THREAD_LIBS_INIT} ${OpenCV_LIBS} ${Boost_LIBRARIES})
+        PUBLIC ${OpenCV_LIBS} ${Boost_LIBRARIES})
 endif()
 
 

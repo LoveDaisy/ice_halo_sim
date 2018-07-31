@@ -152,7 +152,7 @@ void Optics::propagateRange(RayTracingContext *rayCtx, int faceNum, float *faces
             const float *tmp_face = faces + j*9;
             
             float p[3];
-            float t, alpha, beta;
+            float t = -1, alpha = -1, beta = -1;
 
             intersectLineFace(tmp_pt, tmp_dir, tmp_face, &p[0], &t, &alpha, &beta);
             if (t > 1e-6 && t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
