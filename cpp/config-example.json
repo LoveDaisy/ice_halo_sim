@@ -1,42 +1,43 @@
 {
     "sun": {
-        "altitude": 6,
+        "altitude": 42,
         "diameter": 0.5
     },
     "ray": {
-        "number": 100000,
+        "number": 200000,
         "wavelength": [440, 470, 500, 530, 560, 590, 620, 650]
     },
     "max_recursion": 9,
     "data_folder": "/path/to/your/data/folder",
     "camera": {
-        "azimuth": 10,
-        "elevation": 20,
+        "azimuth": 20,
+        "elevation": 30,
         "rotation": 0,
-        "fov": 57,
+        "fov": 52,
         "width": 1800,
         "height": 1800,
-        "lens": "fisheye"
+        "lens": "linear"
     },
     "render": {
-        "visible_semi_sphere": "upper",
+        "visible_semi_sphere": "full",
         "ray_color": "real",
         "background_color": [0, 0, 0],
-        "intensity_factor": 5.0,
-        "offset": [0, 0]
+        "intensity_factor": 10.0,
+        "offset": [0, 0],
+        "show_horizontal": false
     },
     "multi_scatter": {
-        "repeat": 1,
+        "repeat": 2,
         "probability": 1.0
     },
     "crystal": [
         {
-            "enable": true,
+            "enable": false,
             "type": "HexCylinder",
-            "parameter": 0.6,
+            "parameter": 0.3,
             "axis": {
                 "mean": 0,
-                "std": 2.0,
+                "std": 1.5,
                 "type": "Gauss"
             },
             "roll": {
@@ -44,12 +45,60 @@
                 "std": 360,
                 "type": "Uniform"
             },
-            "population": 50
+            "population": 200
         },
         {
             "enable": true,
             "type": "HexCylinder",
-            "parameter": 1.1,
+            "parameter": 1.2,
+            "axis": {
+                "mean": 90,
+                "std": 0.3,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 0.7,
+                "type": "Gauss"
+            },
+            "population": 10
+        },
+        {
+            "enable": true,
+            "type": "HexCylinder",
+            "parameter": 1.2,
+            "axis": {
+                "mean": 90,
+                "std": 0.2,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 200
+        },
+        {
+            "enable": false,
+            "type": "HexPyramid",
+            "parameter": [0.2, 0.2, 0.5],
+            "axis": {
+                "mean": 0,
+                "std": 23,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 40
+        },
+        {
+            "enable": true,
+            "type": "HexCylinder",
+            "parameter": 1.2,
             "axis": {
                 "mean": 0,
                 "std": 360,
@@ -60,7 +109,23 @@
                 "std": 360,
                 "type": "Uniform"
             },
-            "population": 150
+            "population": 180
+        },
+        {
+            "enable": false,
+            "type": "Custom",
+            "parameter": "hex_cylinder_01.obj",
+            "axis": {
+                "mean": 90,
+                "std": 0.5,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 80
         }
     ]
 }
