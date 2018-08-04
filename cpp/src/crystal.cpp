@@ -420,7 +420,7 @@ Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lo
         vertexes.emplace_back(Vec3f(
             cos(2*PI*i/6) * r, 
             sin(2*PI*i/6) * r, 
-            h1 * H1 * (1.0f - h1) + h2 * H2 + h3 * 2));
+            h1 * H1 * (1.0f - h2) + h2 * H2 + h3 * 2));
     }
     r = 1.0f - h2;
     for (int i = 0; i < 6; i++) {
