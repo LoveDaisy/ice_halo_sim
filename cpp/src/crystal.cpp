@@ -541,4 +541,189 @@ Crystal *Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
     return new Crystal(vertexes, faces);
 }
 
+
+/*
+ * parameter: dist, defines the distance from origin of each face. Must contains 6 numbers.
+ *            Starts from face 3.
+ * parameter: h, cylinder height, height / a
+ */
+Crystal* createIrregularHexCylinder(float *dist, float h)
+{
+    /* Use a naive algorithm to determine the profile of prism face 
+     * 1. For each line pair L1 and L2, get their intersection point p12;
+     * 2. For all half planes, check if p12 is in the plane;
+     *    2.1 If p12 is in all half planes, put it into a set P;
+     *    2.2 Else drop this point;
+     * 3. Construct a convex hull from point set P.
+     */
+
+    for (int i = 0; i < 6; i++) {
+        dist[i] *= sqrt(3) / 2;
+    }
+
+    /* Half plane is expressed as: a*x + b*y + c <= 0 */
+    float a[6] = { sqrt(3), 0, -sqrt(3), -sqrt(3), 0, sqrt(3) };
+    float b[6] = { 1, 1, 1, -1, -1, -1 };
+    float c[6] = { -2*dist[0], -dist[1], -2*dist[2], -2*dist[3], -dist[4], -2*dist[5] };
+
+    float pts[30] = { 0.0f };
+    int ptsNum = findInnerPoints(a, b, c, pts);
+    ptsNum = removeDuplicatedPts(pts, ptsNum);
+    ptsNum = buildConvexHull(pts, ptsNum);
+
+    std::vector<Vec3f> vertexes;
+    std::vector<TriangleIdx> faces;
+    for (int i = 0; i < ptsNum; i++) {
+        vertexes.emplace_back(Vec3f(pts[i * 2 + 0], pts[i * 2 + 1], h));
+    }
+    for (int i = 0; i < ptsNum; i++) {
+        vertexes.emplace_back(Vec3f(pts[i * 2 + 0], pts[i * 2 + 1], -h));
+    }
+
+    for (int i = 2; i < ptsNum; i++) {
+        faces.emplace_back(TriangleIdx(i, i-1, 0));
+    }
+    for (int i = 0; i < ptsNum; i++) {
+        faces.emplace_back(TriangleIdx(i, i + ptsNum, (i + 1) % ptsNum + ptsNum));
+        faces.emplace_back(TriangleIdx((i + 1) % ptsNum, i, (i + 1) % ptsNum + ptsNum));
+    }
+    for (int i = 2; i < ptsNum; i++) {
+        faces.emplace_back(TriangleIdx(i + ptsNum, (i - 1 + ptsNum) % ptsNum + ptsNum, ptsNum));
+    }
+
+    return new Crystal(vertexes, faces);
+}
+
+
+/* Find the inner intersection points */
+int findInnerPoints(float *a, float *b, float *c, float *pts)
+{
+    int ptsNum = 0;
+    for (int i = 0; i < 6; i++) {
+        for (int j = i+1; j < 6; j++) {
+            if ((j - i) % 6 == 3) {
+                continue;
+            }
+            float x = -((b[i]*c[j] - b[j]*c[i]) / (a[j]*b[i] - a[i]*b[j]));
+            float y = -((a[j]*c[i] - a[i]*c[j]) / (a[j]*b[i] - a[i]*b[j]));
+
+            bool in = true;
+            for (int k = 0; k < 6; k++) {
+                in = in && (a[k]*x + b[k]*y + c[k] <= 0)
+                if (!in) {
+                    break;
+                }
+            }
+            if (in) {
+                pts[ptsNum * 2 + 0] = x;
+                pts[ptsNum * 2 + 1] = y;
+                ptsNum++;
+            }
+        }
+    }
+
+    return ptsNum;
+}
+
+
+void removePoint(float *pts, int n, int idx)
+{
+    for (int i = idx; i < n-1; i++) {
+        pts[i * 2 + 0] = pts[i * 2 + 2];
+        pts[i * 2 + 1] = pts[i * 2 + 3];
+    }
+}
+
+
+/* Sort (ascend by y/x) and remove duplicated points */
+int removeDuplicatedPts(float *pts, int n)
+{
+    float EPS = 1e-6;
+    /* Move the point with largest x to head */
+    for (int i = 1; i < n; i++) {
+        if (pts[i * 2 + 0] > pts[0]) {
+            float tmp = pts[i * 2 + 0];
+            pts[i * 2 + 0] = pts[0];
+            pts[0] = tmp;
+            float tmp = pts[i * 2 + 1];
+            pts[i * 2 + 1] = pts[1];
+            pts[1] = tmp;
+        }
+    }
+
+    /* Remove duplicated head */
+    for (int i = 1; i < n; ) {
+        float dx = pts[i * 2 + 0] - pts[0];
+        float dy = pts[i * 2 + 1] - pts[1];
+        if (abs(dx) + abs(dy) < EPS) {
+            removePoint(pts, n, i);
+            n--;
+            continue;
+        }
+        i++;
+    }
+
+    /* Sort ascend by y/x */
+    for (int i = 1; i < n; i++) {
+        for (int j = i; j < n-1; j++) {
+            float dx0 = pts[j * 2 + 0] - pts[0];
+            float dy0 = pts[j * 2 + 1] - pts[1];
+            float dx1 = pts[j * 2 + 2] - pts[0];
+            float dy1 = pts[j * 2 + 3] - pts[1];
+
+            if ((dy0 * dx0 >= 0 && abs(dx0) < EPS) ||
+                    (abs(dx0) > EPS && abs(dx1) > EPS && dy0 / dx0 > dy1 / dx1)) {
+                float tmp = pts[j * 2 + 0];
+                pts[j * 2 + 0] = pts[j * 2 + 2];
+                pts[j * 2 + 2] = tmp;
+                float tmp = pts[j * 2 + 1];
+                pts[j * 2 + 1] = pts[j * 2 + 3];
+                pts[j * 2 + 3] = tmp;
+            }
+        }
+    }
+
+    /* Remove duplicated points */
+    for (int i = 0; i < n-1; ) {
+        if (abs(pts[i * 2 + 0] - pts[i * 2 + 2]) + abs(pts[i * 2 + 1] - pts[i * 2 + 3]) < EPS) {
+            removePoint(pts, n, i);
+            n--;
+            continue;
+        }
+        i++;
+    }
+
+    return n;
+}
+
+
+/* Given a sorted point set, remove all inner points and those convex hull points are remained */
+int buildConvexHull(float *pts, int n)
+{
+    if (n <= 3) {
+        return;
+    }
+
+    for (int i = 3; i < n; i++) {
+        for (int j = 0; j < i - 1; j++) {
+            float v1[3] = { pts[j * 2 + 0] - pts[j * 2 + 2],
+                            pts[j * 2 + 1] - pts[j * 2 + 3],
+                            0.0f };
+            float v2[3] = { pts[j * 2 + 2] - pts[j * 2 + 4],
+                            pts[j * 2 + 3] - pts[j * 2 + 5],
+                            0.0f };
+            float c[3] = { 0.0f };
+            cross3(v1, v2, c);
+
+            if (c[2] <= 0) {
+                removePoint(pts, n, j+1);
+                n--;
+                i--;
+            }
+        }
+    }
+
+    return n;
+}
+
 };

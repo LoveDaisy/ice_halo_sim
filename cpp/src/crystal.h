@@ -30,13 +30,28 @@ public:
     void copyNormalData(int idx, float *data) const;
     void copyNormalData(float *data) const;
 
+    /* Regular hexagon cylinder */
     static Crystal* createHexCylinder(float h);
+
+    /* Regular hexagon pyramid */
     static Crystal* createHexPyramid(float h1, float h2, float h3);
     static Crystal* createHexPyramid(int i1, int i4, float h1, float h2, float h3);
     static Crystal* createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
+    
+    /* Hexagon stacked pyramid */
     static Crystal* createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
+    
+    /* Triangle pyramid */
     static Crystal* createTriPyramid(int i1, int i4, float h1, float h2, float h3);
+
+    /* Cubic pyramid (crystal type of Ic) */
     static Crystal* createCubicPyramid(float ratio1, float ratio2);
+
+    /* Irregular hexagon cylinder */
+    static Crystal* createIrregularHexCylinder(float *dist, float h);
+
+    /* Irregular hexagon pyramid */
+    static Crystal* createIrregularHexPyramid(float *dist, int *idx, float *h);
 
 private:
     std::vector<Math::Vec3f> vertexes;
@@ -44,6 +59,11 @@ private:
     std::vector<Math::TriangleIdx> faces;
 
     bool initDone;
+
+    static int findInnerPoints(float *a, float *b, float *c, float *pts);
+    static int removeDuplicatedPts(float *pts, int n);
+    static void removePoint(float *pts, int n, int idx);
+    static int buildConvexHull(float *pts, int n);
 };
 
 };
