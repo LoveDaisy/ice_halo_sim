@@ -9,3 +9,6 @@ figs/plot.nb
 figs/*.pdf
 
 config.json
+
+# GTest
+test
