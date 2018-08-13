@@ -1,14 +1,11 @@
-# set(SOURCE_FILE
-#         mymath.cpp
-#         crystal.cpp
-#         optics.cpp
-#         context.cpp
-#         render.cpp
-#         files.cpp
-#         threadingpool.cpp)
-file(GLOB SOURCE_FILE
-    "*.h"
-    "*.cpp")
+set(SOURCE_FILE
+        mymath.cpp
+        crystal.cpp
+        optics.cpp
+        context.cpp
+        render.cpp
+        files.cpp
+        threadingpool.cpp)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_FLAGS "-Wall -Wextra -msse4 -std=c++11")

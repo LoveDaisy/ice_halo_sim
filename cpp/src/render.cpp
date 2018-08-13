@@ -54,13 +54,13 @@ void equiAreaFishEye(
 
 
 void dualEquiAreaFishEye(
-    float *camRot,          // Not used
-    float hov,              // Not used
-    uint64_t dataNumber,    // Data number
-    float *dir,             // Ray directions, [x, y, z]
-    int imgWid, int imgHei, // Image size
-    int *imgXY,             // Image coordinates
-    VisibleSemiSphere visibleSemiSphere )
+    [[gnu::unused]] float *camRot,          // Not used
+    [[gnu::unused]] float hov,              // Not used
+                    uint64_t dataNumber,    // Data number
+                    float *dir,             // Ray directions, [x, y, z]
+                    int imgWid, int imgHei, // Image size
+                    int *imgXY,             // Image coordinates
+    [[gnu::unused]] VisibleSemiSphere visibleSemiSphere )
 {
     float imgR = std::min(imgWid / 2, imgHei) / 2.0f;
     float projR = imgR / 2.0f / std::sin(45.0f / 180.0f * Math::PI);
@@ -97,13 +97,13 @@ void dualEquiAreaFishEye(
 
 
 void dualEquiDistantFishEye(
-    float *camRot,          // Not used
-    float hov,              // Not used
-    uint64_t dataNumber,    // Data number
-    float *dir,             // Ray directions, [x, y, z]
-    int imgWid, int imgHei, // Image size
-    int *imgXY,             // Image coordinates
-    VisibleSemiSphere visibleSemiSphere )
+    [[gnu::unused]] float *camRot,          // Not used
+    [[gnu::unused]] float hov,              // Not used
+                    uint64_t dataNumber,    // Data number
+                    float *dir,             // Ray directions, [x, y, z]
+                    int imgWid, int imgHei, // Image size
+                    int *imgXY,             // Image coordinates
+    [[gnu::unused]] VisibleSemiSphere visibleSemiSphere )
 {
     float imgR = std::min(imgWid / 2, imgHei) / 2.0f;
 
@@ -145,7 +145,7 @@ void rectLinear(
     float *dir,             // Ray directions, [x, y, z]
     int imgWid, int imgHei, // Image size
     int *imgXY,             // Image coordinates
-    VisibleSemiSphere visibleSemiSphere )
+    [[gnu::unused]] VisibleSemiSphere visibleSemiSphere )
 {
     auto *dirCopy = new float[dataNumber * 3];
     float camRotCopy[3];

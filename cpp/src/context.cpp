@@ -512,102 +512,102 @@ void SimulationContext::writeFinalDirections(const char *filename)
 }
 
 
-void SimulationContext::writeRayInfo(const char *filename, float lon, float lat, float delta)
-{
-    using namespace Files;
+// void SimulationContext::writeRayInfo(const char *filename, float lon, float lat, float delta)
+// {
+//     using namespace Files;
 
-    File file(dataDirectory.c_str(), filename);
-    // if (!file.open(OpenMode::WRITE | OpenMode::BINARY)) return;
+//     File file(dataDirectory.c_str(), filename);
+//     // if (!file.open(OpenMode::WRITE | OpenMode::BINARY)) return;
 
-    float targetDir[3] = {
-        std::cos(lat) * std::cos(lon),
-        std::cos(lat) * std::sin(lon),
-        std::sin(lat)
-    };
-    float cosDelta = std::cos(delta);
+//     float targetDir[3] = {
+//         std::cos(lat) * std::cos(lon),
+//         std::cos(lat) * std::sin(lon),
+//         std::sin(lat)
+//     };
+//     float cosDelta = std::cos(delta);
 
-    std::vector<RaySegment*> v;
-    for (auto &rcs : rayTracingCtxs) {
-        size_t currentIdx = 0;
-        for (auto rc : rcs) {
-            for (int i = 0; i < rc->initRayNum; i++) {
-                auto r = rc->rays[i];
-                v.clear();
-                v.push_back(r->firstRaySeg);
-                bool targetOn = false;
+//     std::vector<RaySegment*> v;
+//     for (auto &rcs : rayTracingCtxs) {
+//         size_t currentIdx = 0;
+//         for (auto rc : rcs) {
+//             for (int i = 0; i < rc->initRayNum; i++) {
+//                 auto r = rc->rays[i];
+//                 v.clear();
+//                 v.push_back(r->firstRaySeg);
+//                 bool targetOn = false;
 
-                while (!v.empty()) {
-                    RaySegment *p = v.back();
-                    v.pop_back();
-                    if (p->nextReflect) {
-                        v.push_back(p->nextReflect);
-                    }
-                    if (p->nextRefract) {
-                        v.push_back(p->nextRefract);
-                    }
-                    if (p->isValidEnd()) {
-                        float finalDir[3];
-                        memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
-                        Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
-                        if (Math::dot3(targetDir, finalDir) > cosDelta) {
-                            targetOn = true;
-                            break;
-                        }
-                    }
-                }
-                currentIdx++;
+//                 while (!v.empty()) {
+//                     RaySegment *p = v.back();
+//                     v.pop_back();
+//                     if (p->nextReflect) {
+//                         v.push_back(p->nextReflect);
+//                     }
+//                     if (p->nextRefract) {
+//                         v.push_back(p->nextRefract);
+//                     }
+//                     if (p->isValidEnd()) {
+//                         float finalDir[3];
+//                         memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
+//                         Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
+//                         if (Math::dot3(targetDir, finalDir) > cosDelta) {
+//                             targetOn = true;
+//                             break;
+//                         }
+//                     }
+//                 }
+//                 currentIdx++;
 
-                if (targetOn) {
-                    writeRayInfo(file, r);
-                }
-            }
-        }
-    }
+//                 if (targetOn) {
+//                     writeRayInfo(file, r);
+//                 }
+//             }
+//         }
+//     }
 
-    file.close();
-}
+//     file.close();
+// }
 
 
-void SimulationContext::writeRayInfo(Files::File &file, Ray *sr)
-{
-    std::vector<RaySegment*> v;
-    v.push_back(sr->firstRaySeg);
+// void SimulationContext::writeRayInfo(Files::File &file, Ray *sr)
+// {
+//     std::vector<RaySegment*> v;
+//     v.push_back(sr->firstRaySeg);
 
-    std::unordered_set<RaySegment*> checked;
-    float tmp[7];
-    while (!v.empty()) {
-        RaySegment *p = v.back();
-        if (checked.find(p) != checked.end()) {
-            v.pop_back();
-            continue;
-        }
+//     std::unordered_set<RaySegment*> checked;
+//     float tmp[7];
+//     while (!v.empty()) {
+//         RaySegment *p = v.back();
+//         if (checked.find(p) != checked.end()) {
+//             v.pop_back();
+//             continue;
+//         }
 
-        if (p->nextReflect && checked.find(p->nextReflect) == checked.end()) {
-            v.push_back(p->nextReflect);
-            continue;
-        }
-        if (p->nextRefract && checked.find(p->nextRefract) == checked.end()) {
-            v.push_back(p->nextRefract);
-            continue;
-        }
-        if (p->nextReflect == nullptr && p->nextRefract == nullptr && p->isValidEnd()) {
-            tmp[6] = -1; tmp[0] = v.size();
-            // file.write(tmp, 7);
-            printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n",
-                   tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
-            for (auto r : v) {
-                memcpy(tmp, r->pt.val(), 3*sizeof(float));
-                memcpy(tmp+3, r->dir.val(), 3*sizeof(float));
-                tmp[6] = r->w;
-                // file.write(tmp, 7);
+//         if (p->nextReflect && checked.find(p->nextReflect) == checked.end()) {
+//             v.push_back(p->nextReflect);
+//             continue;
+//         }
+//         if (p->nextRefract && checked.find(p->nextRefract) == checked.end()) {
+//             v.push_back(p->nextRefract);
+//             continue;
+//         }
+//         if (p->nextReflect == nullptr && p->nextRefract == nullptr && p->isValidEnd()) {
+//             tmp[6] = -1; tmp[0] = v.size();
+//             // file.write(tmp, 7);
+//             printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n",
+//                    tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
+//             for (auto r : v) {
+//                 memcpy(tmp, r->pt.val(), 3*sizeof(float));
+//                 memcpy(tmp+3, r->dir.val(), 3*sizeof(float));
+//                 tmp[6] = r->w;
+//                 // file.write(tmp, 7);
 
-                printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n", 
-                    tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
-            }
-        }
-        checked.insert(p);
-    }
-}
+//                 printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n", 
+//                     tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
+//             }
+//         }
+//         checked.insert(p);
+//     }
+// }
 
 
 void SimulationContext::printCrystalInfo()
@@ -687,7 +687,7 @@ void RenderContext::renderToRgb(uint8_t *rgbData)
     }
 
     /* Draw horizontal */
-    float imgR = std::min(imgWid / 2, imgHei) / 2.0f;
+    // float imgR = std::min(imgWid / 2, imgHei) / 2.0f;
     // TODO
 
     delete[] wlData;

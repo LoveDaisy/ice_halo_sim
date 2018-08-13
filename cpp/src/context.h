@@ -132,11 +132,11 @@ public:
 
     /* For output */
     void writeFinalDirections(const char *filename);
-    void writeRayInfo(const char *filename, float lon, float lat, float delta);
+    // void writeRayInfo(const char *filename, float lon, float lat, float delta);
     void printCrystalInfo();
 
 private:
-    void writeRayInfo(Files::File &file, Ray *r);     // Helper function
+    // void writeRayInfo(Files::File &file, Ray *r);     // Helper function
 
     std::vector<CrystalContext *> crystalCtxs;
     std::vector<std::vector<RayTracingContext *> > rayTracingCtxs;

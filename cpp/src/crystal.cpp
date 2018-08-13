@@ -487,7 +487,7 @@ Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lo
             9
     11
 */
-Crystal *Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3) 
+Crystal* Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3) 
 {
     using namespace Math;
 
@@ -547,7 +547,7 @@ Crystal *Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
  *            Starts from face 3.
  * parameter: h, cylinder height, height / a
  */
-Crystal* createIrregularHexCylinder(float *dist, float h)
+Crystal* Crystal::createIrregularHexCylinder(float *dist, float h)
 {
     /* Use a naive algorithm to determine the profile of prism face 
      * 1. For each line pair L1 and L2, get their intersection point p12;
@@ -556,13 +556,15 @@ Crystal* createIrregularHexCylinder(float *dist, float h)
      *    2.2 Else drop this point;
      * 3. Construct a convex hull from point set P.
      */
+    using namespace Math;
 
     for (int i = 0; i < 6; i++) {
-        dist[i] *= sqrt(3) / 2;
+        dist[i] *= static_cast<float>(sqrt(3)) / 2;
     }
 
     /* Half plane is expressed as: a*x + b*y + c <= 0 */
-    float a[6] = { sqrt(3), 0, -sqrt(3), -sqrt(3), 0, sqrt(3) };
+    float a[6] = { static_cast<float>(sqrt(3)), 0, -static_cast<float>(sqrt(3)), 
+                   -static_cast<float>(sqrt(3)), 0, static_cast<float>(sqrt(3)) };
     float b[6] = { 1, 1, 1, -1, -1, -1 };
     float c[6] = { -2*dist[0], -dist[1], -2*dist[2], -2*dist[3], -dist[4], -2*dist[5] };
 
@@ -596,7 +598,7 @@ Crystal* createIrregularHexCylinder(float *dist, float h)
 
 
 /* Find the inner intersection points */
-int findInnerPoints(float *a, float *b, float *c, float *pts)
+int Crystal::findInnerPoints(float *a, float *b, float *c, float *pts)
 {
     int ptsNum = 0;
     for (int i = 0; i < 6; i++) {
@@ -609,7 +611,7 @@ int findInnerPoints(float *a, float *b, float *c, float *pts)
 
             bool in = true;
             for (int k = 0; k < 6; k++) {
-                in = in && (a[k]*x + b[k]*y + c[k] <= 0)
+                in = in && (a[k]*x + b[k]*y + c[k] <= 0);
                 if (!in) {
                     break;
                 }
@@ -626,7 +628,7 @@ int findInnerPoints(float *a, float *b, float *c, float *pts)
 }
 
 
-void removePoint(float *pts, int n, int idx)
+void Crystal::removePoint(float *pts, int n, int idx)
 {
     for (int i = idx; i < n-1; i++) {
         pts[i * 2 + 0] = pts[i * 2 + 2];
@@ -636,7 +638,7 @@ void removePoint(float *pts, int n, int idx)
 
 
 /* Sort (ascend by y/x) and remove duplicated points */
-int removeDuplicatedPts(float *pts, int n)
+int Crystal::removeDuplicatedPts(float *pts, int n)
 {
     float EPS = 1e-6;
     /* Move the point with largest x to head */
@@ -645,7 +647,7 @@ int removeDuplicatedPts(float *pts, int n)
             float tmp = pts[i * 2 + 0];
             pts[i * 2 + 0] = pts[0];
             pts[0] = tmp;
-            float tmp = pts[i * 2 + 1];
+            tmp = pts[i * 2 + 1];
             pts[i * 2 + 1] = pts[1];
             pts[1] = tmp;
         }
@@ -676,7 +678,7 @@ int removeDuplicatedPts(float *pts, int n)
                 float tmp = pts[j * 2 + 0];
                 pts[j * 2 + 0] = pts[j * 2 + 2];
                 pts[j * 2 + 2] = tmp;
-                float tmp = pts[j * 2 + 1];
+                tmp = pts[j * 2 + 1];
                 pts[j * 2 + 1] = pts[j * 2 + 3];
                 pts[j * 2 + 3] = tmp;
             }
@@ -698,11 +700,13 @@ int removeDuplicatedPts(float *pts, int n)
 
 
 /* Given a sorted point set, remove all inner points and those convex hull points are remained */
-int buildConvexHull(float *pts, int n)
+int Crystal::buildConvexHull(float *pts, int n)
 {
     if (n <= 3) {
-        return;
+        return n;
     }
+
+    using namespace Math;
 
     for (int i = 3; i < n; i++) {
         for (int j = 0; j < i - 1; j++) {

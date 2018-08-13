@@ -42,7 +42,7 @@ int main(int argc, char *argv[])
         printf("Ray tracing: %.2fms\n", diff.count() * 1.0e3);
 
         t0 = std::chrono::system_clock::now();
-        std::sprintf(filename, "directions_%.1f_%li.bin", wl, t0.time_since_epoch().count());
+        std::sprintf(filename, "directions_%.1f_%lli.bin", wl, t0.time_since_epoch().count());
         context.writeFinalDirections(filename);
 
         // std::sprintf(filename, "paths_%.1f_%lli.bin", wl, t0.time_since_epoch().count());
