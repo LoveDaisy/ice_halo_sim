@@ -10,5 +10,3 @@ figs/*.pdf
 
 config.json
 
-# GTest
-test
