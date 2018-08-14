@@ -12,6 +12,7 @@ namespace IceHalo {
 namespace Math {
 
 constexpr float PI = 3.14159265f;
+constexpr float FLOAT_EPS = 1e-6;
 
 float dot3(const float *vec1, const float *vec2);
 void cross3(const float *vec1, const float *vec2, float* vec);

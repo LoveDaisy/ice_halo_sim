@@ -1,7 +1,9 @@
 #include "gtest/gtest.h"
-// #include "mockbar.h"
+#include "mymath.h"
 
-// The fixture for testing class Foo.
+#include <vector>
+
+
 class CrystalTest : public ::testing::Test {
 
 protected:
@@ -22,5 +24,7 @@ protected:
     // Code here will be called immediately after each test (right
     // before the destructor).
     void TearDown() override;
+
+    void checkVertex(const std::vector<IceHalo::Math::Vec3f> &vtx1, const std::vector<IceHalo::Math::Vec3f> &vtx2);
 
 };

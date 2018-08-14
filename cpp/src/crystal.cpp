@@ -575,6 +575,7 @@ Crystal* Crystal::createIrregularHexCylinder(float *dist, float h)
 
     std::vector<Vec3f> vertexes;
     std::vector<TriangleIdx> faces;
+    vertexes.reserve(static_cast<size_t>(ptsNum * 2));
     for (int i = 0; i < ptsNum; i++) {
         vertexes.emplace_back(Vec3f(pts[i * 2 + 0], pts[i * 2 + 1], h));
     }
@@ -611,7 +612,7 @@ int Crystal::findInnerPoints(float *a, float *b, float *c, float *pts)
 
             bool in = true;
             for (int k = 0; k < 6; k++) {
-                in = in && (a[k]*x + b[k]*y + c[k] <= 0);
+                in = in && (a[k]*x + b[k]*y + c[k] <= Math::FLOAT_EPS);
                 if (!in) {
                     break;
                 }
