@@ -15,20 +15,22 @@ A simple way to build form start is as follows:
 2. `mkdir build && cd build`
 3. `cmake .. && make -j4`, or you can set `CMAKE_BUILD_TYPE` to `release` to get highest performance. 
 
-Then the executable binary will be at `build/bin`. And you can start simulatino by
-`./bin/IceHaloSim <config-file>`. The file [`config-example.json`](./config-example.json) 
-is an example configuration file. After the simulation is done you will get several `.bin` files
-in your data path set in configuration file. Then you can start rendering by
-`./bin/IceHaloRender <config-file>` and a rendered picture will be placed in data path.
-
+Then the executable binary will be at `build/bin`. 
 Note, I introduce the [GooglTest](https://github.com/google/googletest) framework to help do my unit tests.
 The googletest codes will be downloaded automatically during cmake configuration. Generally you should not
-care about these codes nor the test cases in `test` folder. If you are interest in my unit tests, please
+care about these codes nor the test cases in `test` folder. If you are interested in my unit tests, please
 refer to `test` folder and check all codes there.
 
-## Visualization
+### Simulation
 
-After building and running, you will get several `.bin` files that contain results of ray tracing,
+You can start simulatino by
+`./bin/IceHaloSim <config-file>`. The file [`config-example.json`](./config-example.json) 
+is an example configuration file. After the simulation is done you will get several `.bin` files
+in your data path set in configuration file.
+
+### Visualization
+
+After simulation, you will get several `.bin` files that contain results of ray tracing,
 as well as several lines printed on the screen that describe crystal shapes.
 I have prepared several tools for visualization those results. Some are matlab codes.
 
@@ -39,7 +41,8 @@ See [matlab](../matlab/) folder for details.
 
   And there is also a C++ tool does the same thing. Please run 
 `./bin/IceHaloRender <config-file>` for visualization. 
-Just use the same configuration file as you run the simulation. I'd prefer this C++ tool
+Just use the same configuration file as you run the simulation. The rendered picture
+will be placed at the data path set in configuration file. I'd prefer this C++ tool
 than the matlab tool because it is much faster.
 
 * Crystals  
