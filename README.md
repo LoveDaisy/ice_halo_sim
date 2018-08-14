@@ -11,7 +11,8 @@ For a start this program is written in matlab though matlab is often poured scor
 slow performance. It is a prototype, on which I test my algorithms. Later developing and
 latest updates will be on C++ codes. Also, matlab codes contain some small tools for visualization.
 
-Details including how to build and run can be found on following pages.
+Details including how to build and run can be found on following pages. *NOTE:* I've stopped developing
+on matlab codes. These are just legacy codes remained here for reference.
 
 * [C++ codes](cpp)  
 * [Matlab codes](matlab)  
