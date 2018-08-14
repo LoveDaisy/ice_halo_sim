@@ -10,5 +10,3 @@ add_executable(test_crystal ${TEST_SOURCE_FILE} ${SOURCE_FILE})
 target_link_libraries(test_crystal
     gtest
 )
-
-# install(TARGETS test_crystal DESTINATION bin)

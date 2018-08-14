@@ -10,9 +10,10 @@ void CrystalTest::SetUp()
 void CrystalTest::TearDown()
 { }
 
-TEST_F(CrystalTest, HexCylinderNotNull) {
+TEST_F(CrystalTest, CreateHexCylinderNotNull) {
     Crystal *c = Crystal::createHexCylinder(1.2f);
     EXPECT_NE(c, nullptr);
+    delete c;
 }
 
 // TEST_F(CrystalTest, ByDefaultBazFalseIsFalse) {
