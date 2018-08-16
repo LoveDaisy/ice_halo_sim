@@ -17,12 +17,10 @@ void CrystalTest::checkVertex(const std::vector<Math::Vec3f> &vtx1, const std::v
 {
     ASSERT_EQ(vtx1.size(), vtx2.size());
     for (decltype(vtx1.size()) i = 0; i < vtx1.size(); i++) {
-        const auto *p0 = vtx1[i].val();
-        const auto *p = vtx2[i].val();
+        const auto &p0 = vtx1[i];
+        const auto &p = vtx2[i];
 
-        for (int j = 0; j < 3; j++) {
-            EXPECT_NEAR(p0[j], p[j], Math::FLOAT_EPS);
-        }
+        EXPECT_TRUE(p0 == p);
     }
 }
 

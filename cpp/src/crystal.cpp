@@ -1,6 +1,7 @@
 #include "crystal.h"
 
 #include <cstring>
+#include <algorithm>
 
 namespace IceHalo {
 
@@ -161,7 +162,7 @@ Crystal* Crystal::createHexPyramid(float h1, float h2, float h3)
 {
     using namespace Math;
 
-    const float H = 1.629f;
+    float H = C_CONSTANT;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
 
@@ -285,7 +286,7 @@ Crystal* Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h3)
 {
     using namespace Math;
 
-    float H = 1.629f * i1 / i4;
+    float H = C_CONSTANT * i1 / i4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
     
@@ -345,8 +346,8 @@ Crystal* Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, 
 {
     using namespace Math;
 
-    float H1 = 1.629f * upperIdx1 / upperIdx4;
-    float H3 = 1.629f * lowerIdx1 / lowerIdx4;
+    float H1 = C_CONSTANT * upperIdx1 / upperIdx4;
+    float H3 = C_CONSTANT * lowerIdx1 / lowerIdx4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
     
@@ -407,8 +408,8 @@ Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lo
 {
     using namespace Math;
 
-    float H1 = 1.629f * upperIdx1 / upperIdx4;
-    float H2 = 1.629f * lowerIdx1 / lowerIdx4;
+    float H1 = C_CONSTANT * upperIdx1 / upperIdx4;
+    float H2 = C_CONSTANT * lowerIdx1 / lowerIdx4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h2 = std::max(std::min(h2, 1.0f), 0.0f);
 
@@ -491,7 +492,7 @@ Crystal* Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
 {
     using namespace Math;
 
-    float H = 1.629f / 1.732051f * i1 / i4;
+    float H = C_CONSTANT / 1.732051f * i1 / i4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
 
@@ -568,19 +569,20 @@ Crystal* Crystal::createIrregularHexCylinder(float *dist, float h)
     float b[6] = { 1, 1, 1, -1, -1, -1 };
     float c[6] = { -2*dist[0], -dist[1], -2*dist[2], -2*dist[3], -dist[4], -2*dist[5] };
 
-    float pts[30] = { 0.0f };
-    int ptsNum = findInnerPoints(a, b, c, pts);
-    ptsNum = removeDuplicatedPts(pts, ptsNum);
-    ptsNum = buildConvexHull(pts, ptsNum);
+    std::vector<Vec3f> pts;
+    findInnerPoints(6, a, b, c, pts);
+    sortAndRemoveDuplicatedPts(pts);
+    buildConvexHull(pts);
 
+    size_t ptsNum = pts.size();
     std::vector<Vec3f> vertexes;
     std::vector<TriangleIdx> faces;
-    vertexes.reserve(static_cast<size_t>(ptsNum * 2));
+    vertexes.reserve(ptsNum * 2);
     for (int i = 0; i < ptsNum; i++) {
-        vertexes.emplace_back(Vec3f(pts[i * 2 + 0], pts[i * 2 + 1], h));
+        vertexes.emplace_back(Vec3f(pts[i].x(), pts[i].y(), h));
     }
     for (int i = 0; i < ptsNum; i++) {
-        vertexes.emplace_back(Vec3f(pts[i * 2 + 0], pts[i * 2 + 1], -h));
+        vertexes.emplace_back(Vec3f(pts[i].x(), pts[i].y(), -h));
     }
 
     for (int i = 2; i < ptsNum; i++) {
@@ -598,137 +600,80 @@ Crystal* Crystal::createIrregularHexCylinder(float *dist, float h)
 }
 
 
-/* Find the inner intersection points */
-int Crystal::findInnerPoints(float *a, float *b, float *c, float *pts)
-{
-    int ptsNum = 0;
-    for (int i = 0; i < 6; i++) {
-        for (int j = i+1; j < 6; j++) {
-            if ((j - i) % 6 == 3) {
-                continue;
-            }
-            float x = -((b[i]*c[j] - b[j]*c[i]) / (a[j]*b[i] - a[i]*b[j]));
-            float y = -((a[j]*c[i] - a[i]*c[j]) / (a[j]*b[i] - a[i]*b[j]));
-
-            bool in = true;
-            for (int k = 0; k < 6; k++) {
-                in = in && (a[k]*x + b[k]*y + c[k] <= Math::FLOAT_EPS);
-                if (!in) {
-                    break;
-                }
-            }
-            if (in) {
-                pts[ptsNum * 2 + 0] = x;
-                pts[ptsNum * 2 + 1] = y;
-                ptsNum++;
-            }
-        }
-    }
-
-    return ptsNum;
-}
-
-
-void Crystal::removePoint(float *pts, int n, int idx)
-{
-    for (int i = idx; i < n-1; i++) {
-        pts[i * 2 + 0] = pts[i * 2 + 2];
-        pts[i * 2 + 1] = pts[i * 2 + 3];
-    }
-}
-
-
 /* Sort (ascend by y/x) and remove duplicated points */
-int Crystal::removeDuplicatedPts(float *pts, int n)
+void Crystal::sortAndRemoveDuplicatedPts(std::vector<Math::Vec3f> &pts)
 {
-    float EPS = 1e-6;
+    using namespace Math;
+
     /* Move the point with largest x to head */
-    for (int i = 1; i < n; i++) {
-        if (pts[i * 2 + 0] > pts[0]) {
-            float tmp = pts[i * 2 + 0];
-            pts[i * 2 + 0] = pts[0];
-            pts[0] = tmp;
-            tmp = pts[i * 2 + 1];
-            pts[i * 2 + 1] = pts[1];
-            pts[1] = tmp;
+    for (auto iter = pts.begin(), headIter = pts.begin(); iter != pts.end(); iter++) {
+        if (iter->x() > headIter->x()) {
+            std::iter_swap(iter, headIter);
         }
     }
 
     /* Remove duplicated head */
-    for (int i = 1; i < n; ) {
-        float dx = pts[i * 2 + 0] - pts[0];
-        float dy = pts[i * 2 + 1] - pts[1];
-        if (abs(dx) + abs(dy) < EPS) {
-            removePoint(pts, n, i);
-            n--;
-            continue;
-        }
-        i++;
-    }
-
-    /* Sort ascend by y/x */
-    for (int i = 1; i < n; i++) {
-        for (int j = i; j < n-1; j++) {
-            float dx0 = pts[j * 2 + 0] - pts[0];
-            float dy0 = pts[j * 2 + 1] - pts[1];
-            float dx1 = pts[j * 2 + 2] - pts[0];
-            float dy1 = pts[j * 2 + 3] - pts[1];
-
-            if ((dy0 * dx0 >= 0 && abs(dx0) < EPS) ||
-                    (abs(dx0) > EPS && abs(dx1) > EPS && dy0 / dx0 > dy1 / dx1)) {
-                float tmp = pts[j * 2 + 0];
-                pts[j * 2 + 0] = pts[j * 2 + 2];
-                pts[j * 2 + 2] = tmp;
-                tmp = pts[j * 2 + 1];
-                pts[j * 2 + 1] = pts[j * 2 + 3];
-                pts[j * 2 + 3] = tmp;
-            }
+    for (auto iter = pts.begin(), headIter = pts.begin(); iter != pts.end(); ) {
+        if (iter != headIter && (*iter) == (*headIter)) {
+            iter = pts.erase(iter);
+        } else {
+            iter++;
         }
     }
+    
+    /* Sort by dy/dx */
+    std::sort(pts.begin() + 1, pts.end(), [&pts](const Vec3f &p1, const Vec3f &p2){
+        float dx1 = pts.begin()->x() - p1.x();
+        float dx2 = pts.begin()->x() - p2.x();
+        float dy1 = pts.begin()->y() - p1.y();
+        float dy2 = pts.begin()->y() - p2.y();
+
+        if (abs(dx1) > FLOAT_EPS && abs(dx2) > FLOAT_EPS && dy1 / dx1 < dy2 / dx2) {
+            return true;
+        }
+        if (abs(dx1) < FLOAT_EPS) {
+            return dy1 < 0;
+        }
+        if (abs(dx2) < FLOAT_EPS) {
+            return dy2 >= 0;
+        }
+        return false;
+    });
 
     /* Remove duplicated points */
-    for (int i = 0; i < n-1; ) {
-        if (abs(pts[i * 2 + 0] - pts[i * 2 + 2]) + abs(pts[i * 2 + 1] - pts[i * 2 + 3]) < EPS) {
-            removePoint(pts, n, i);
-            n--;
-            continue;
+    for (auto iter = pts.begin(), lastIter = pts.begin(); iter != pts.end(); ) {
+        if (iter != lastIter && (*iter) == (*lastIter)) {
+            iter = pts.erase(iter);
+        } else {
+            lastIter = iter;
+            iter++;
         }
-        i++;
     }
-
-    return n;
 }
 
 
 /* Given a sorted point set, remove all inner points and those convex hull points are remained */
-int Crystal::buildConvexHull(float *pts, int n)
+void Crystal::buildConvexHull(std::vector<Math::Vec3f> &pts)
 {
-    if (n <= 3) {
-        return n;
+    if (pts.size() <= 3) {
+        return;
     }
 
     using namespace Math;
 
-    for (int i = 3; i < n; i++) {
-        for (int j = 0; j < i - 1; j++) {
-            float v1[3] = { pts[j * 2 + 0] - pts[j * 2 + 2],
-                            pts[j * 2 + 1] - pts[j * 2 + 3],
-                            0.0f };
-            float v2[3] = { pts[j * 2 + 2] - pts[j * 2 + 4],
-                            pts[j * 2 + 3] - pts[j * 2 + 5],
-                            0.0f };
-            float c[3] = { 0.0f };
-            cross3(v1, v2, c);
+    for (auto iter1 = pts.begin() + 2; iter1 != pts.end(); iter1++) {
+        for (auto iter2 = pts.begin() + 1; iter2 != iter1 - 1; ) {
+            auto v1 = Vec3f::fromVec(*(iter2-1), *iter2);
+            auto v2 = Vec3f::fromVec(*iter2, *(iter2+1));
+            auto c = Vec3f::cross(v1, v2);
 
-            if (c[2] <= 0) {
-                removePoint(pts, n, j+1);
-                n--;
-                i--;
+            if (c.z() <= FLOAT_EPS) {
+                iter2 = pts.erase(iter2);
+            } else {
+                iter2++;
             }
         }
     }
-
-    return n;
 }
 
 
@@ -738,8 +683,8 @@ int Crystal::buildConvexHull(float *pts, int n)
  * parameter: idx, defines the Miller index of upper and lower pyramidal segments. Must contains 4 numbers.
  * parameter: h, defines the height of each segment.
  *            h[0] and h[2] are the heights of upper and lower pyramidal segments, defined as height / H, where
- *            H is the maximumn possible height.
- *            h[1] are the heights of middle cylinderal segment, defined as height / a, where a is the
+ *            H is the maximum possible height.
+ *            h[1] are the heights of middle cylindrical segment, defined as height / a, where a is the
  *            diameter of original circumcircle.
  */
 Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
@@ -747,8 +692,16 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
     /* There are 18 faces. The crystal is constructed of the intersection of all these 18 half-spaces.
      * 1. Find all inner point as vertexes.
      * 2. Find all co-planner points. 
-     * 3. For points in each face, construct a triagular devision.
+     * 3. For points in each face, construct a triangular division.
      */
+    using namespace Math;
+
+    constexpr int CONSTRAINT_NUM = 18;
+    constexpr float SQRT3 = 1.73205080757f;
+    float a[CONSTRAINT_NUM] = { SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3 };
+
+    std::vector<Vec3f> pts;
+    return nullptr;
 }
 
 };

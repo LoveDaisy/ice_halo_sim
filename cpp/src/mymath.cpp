@@ -6,6 +6,11 @@ namespace IceHalo {
 namespace Math {
 
 
+bool floatEqual(float a, float b, float threshold)
+{
+    return abs(a - b) < threshold;
+}
+
 float dot3(const float *vec1, const float *vec2)
 {
     return vec1[0]*vec2[0] + vec1[1]*vec2[1] + vec1[2]*vec2[2];
@@ -116,6 +121,61 @@ void rotateZBack(const float *lon_lat_roll, float *vec, uint64_t dataNum)
     memcpy(vec, res, 3 * dataNum * sizeof(float));
 
     delete[] res;
+}
+
+
+void findInnerPoints(int n, float *a, float *b, float *c, std::vector<Vec3f> &pts)
+{
+    for (int i = 0; i < n; i++) {
+        for (int j = i+1; j < n; j++) {
+            float det = a[j]*b[i] - a[i]*b[j];
+            if (abs(det) <= FLOAT_EPS) {
+                continue;
+            }
+            float x = -((b[i]*c[j] - b[j]*c[i]) / det);
+            float y = -((a[j]*c[i] - a[i]*c[j]) / det);
+
+            bool in = true;
+            for (int k = 0; k < 6; k++) {
+                in = in && (a[k]*x + b[k]*y + c[k] <= FLOAT_EPS);
+                if (!in) {
+                    break;
+                }
+            }
+            if (in) {
+                pts.emplace_back(Vec3f(x, y, 0.0f));
+            }
+        }
+    }
+}
+
+
+void findInnerPoints(int n, float *a, float *b, float *c, float *d, std::vector<Vec3f> &pts)
+{
+    for (int i = 0; i < n; i++) {
+        for (int j = i+1; j < n; j++) {
+            for (int k = j+1; k < n; k++) {
+                float det = a[k]*b[j]*c[i] - a[j]*b[k]*c[i] - a[k]*b[i]*c[j] + a[i]*b[k]*c[j] + a[j]*b[i]*c[k] - a[i]*b[j]*c[k];
+                if (abs(det) <= FLOAT_EPS) {
+                    continue;
+                }
+                float x = -(b[k]*c[j]*d[i] - b[j]*c[k]*d[i] - b[k]*c[i]*d[j] + b[i]*c[k]*d[j] + b[j]*c[i]*d[k] - b[i]*c[j]*d[k]) / det;
+                float y = -(-(a[k]*c[j]*d[i]) + a[j]*c[k]*d[i] + a[k]*c[i]*d[j] - a[i]*c[k]*d[j] - a[j]*c[i]*d[k] + a[i]*c[j]*d[k]) / det;
+                float z = -(a[k]*b[j]*d[i] - a[j]*b[k]*d[i] - a[k]*b[i]*d[j] + a[i]*b[k]*d[j] + a[j]*b[i]*d[k] - a[i]*b[j]*d[k]) / det;
+
+                bool in = true;
+                for (int ii = 0; ii < n; ii++) {
+                    in = in && (a[ii]*x + b[ii]*y + c[ii]*z + d[ii] <= FLOAT_EPS);
+                    if (!in) {
+                        break;
+                    }
+                }
+                if (in) {
+                    pts.emplace_back(Vec3f(x, y, z));
+                }
+            }
+        }
+    }
 }
 
 
@@ -249,6 +309,16 @@ template <typename T>
 void Vec3<T>::normalize()
 {
     Math::normalize3(_val);
+}
+
+bool operator==(const Vec3f &lhs, const Vec3f &rhs)
+{
+    for (int i = 0; i < 3; i++) {
+        if (!floatEqual(lhs.val()[i], rhs.val()[i])) {
+            return false;
+        }
+    }
+    return true;
 }
 
 template <typename T>

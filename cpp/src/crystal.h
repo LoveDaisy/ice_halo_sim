@@ -30,6 +30,8 @@ public:
     void copyNormalData(int idx, float *data) const;
     void copyNormalData(float *data) const;
 
+    static float C_CONSTANT = 1.629f;
+
     /* Regular hexagon cylinder */
     static Crystal* createHexCylinder(float h);
 
@@ -39,7 +41,8 @@ public:
     static Crystal* createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
     
     /* Hexagon stacked pyramid */
-    static Crystal* createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
+    static Crystal* createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, 
+                                              float h1, float h2, float h3);
     
     /* Triangle pyramid */
     static Crystal* createTriPyramid(int i1, int i4, float h1, float h2, float h3);
@@ -60,10 +63,8 @@ private:
 
     bool initDone;
 
-    static int findInnerPoints(float *a, float *b, float *c, float *pts);
-    static int removeDuplicatedPts(float *pts, int n);
-    static void removePoint(float *pts, int n, int idx);
-    static int buildConvexHull(float *pts, int n);
+    static void sortAndRemoveDuplicatedPts(std::vector<Math::Vec3f> &pts);
+    static void buildConvexHull(std::vector<Math::Vec3f> &pts);
 };
 
 };

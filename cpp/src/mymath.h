@@ -14,19 +14,6 @@ namespace Math {
 constexpr float PI = 3.14159265f;
 constexpr float FLOAT_EPS = 1e-6;
 
-float dot3(const float *vec1, const float *vec2);
-void cross3(const float *vec1, const float *vec2, float* vec);
-float norm3(const float *vec);
-float diffNorm3(const float *vec1, const float *vec2);
-void normalize3(float *vec);
-void normalized3(const float *vec, float *vec_n);
-void vec3FromTo(const float *vec1, const float *vec2, float *vec);
-
-void rotateBase(const float *ax, float angle, float *vec);
-
-void rotateZ(const float *lon_lat_roll, float *vec, uint64_t dataNum = 1);
-void rotateZBack(const float *lon_lat_roll, float *vec, uint64_t dataNum = 1);
-
 
 class DummyMatrix
 {
@@ -68,6 +55,7 @@ public:
     Vec3<T> normalized();
     void normalize();
 
+
     static Vec3<T> normalized(const Vec3<T> &v);
 
     static T dot(const Vec3<T> &v1, const Vec3<T> &v2);
@@ -79,6 +67,8 @@ public:
 private:
     T _val[3];
 };
+
+bool operator==(const Vec3<float> &lhs, const Vec3<float> &rhs);
 
 using Vec3f = Vec3<float>;
 
@@ -129,6 +119,25 @@ private:
     float rollMean;
     float rollStd;
 };
+
+
+bool floatEqual(float a, float b, float threshold = FLOAT_EPS);
+
+float dot3(const float *vec1, const float *vec2);
+void cross3(const float *vec1, const float *vec2, float* vec);
+float norm3(const float *vec);
+float diffNorm3(const float *vec1, const float *vec2);
+void normalize3(float *vec);
+void normalized3(const float *vec, float *vec_n);
+void vec3FromTo(const float *vec1, const float *vec2, float *vec);
+
+void rotateBase(const float *ax, float angle, float *vec);
+
+void rotateZ(const float *lon_lat_roll, float *vec, uint64_t dataNum = 1);
+void rotateZBack(const float *lon_lat_roll, float *vec, uint64_t dataNum = 1);
+
+void findInnerPoints(int n, float *a, float *b, float *c, std::vector<Vec3f> &pts);
+void findInnerPoints(int n, float *a, float *b, float *c, float *d, std::vector<Vec3f> &pts);
 
 }   // namespace Math
 
