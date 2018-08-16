@@ -545,7 +545,7 @@ Crystal* Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
 /*
  * parameter: dist, defines the distance from origin of each face. Must contains 6 numbers.
  *            Starts from face 3.
- * parameter: h, cylinder height, height / a
+ * parameter: h, cylinder height, h = height / a
  */
 Crystal* Crystal::createIrregularHexCylinder(float *dist, float h)
 {
@@ -729,6 +729,26 @@ int Crystal::buildConvexHull(float *pts, int n)
     }
 
     return n;
+}
+
+
+/* Irregular hexagon pyramid 
+ * parameter: dist, defines the distance from origin of each face. Must contains 6 numbers. The distance of a
+ *            normal hexagon is defined as 1.
+ * parameter: idx, defines the Miller index of upper and lower pyramidal segments. Must contains 4 numbers.
+ * parameter: h, defines the height of each segment.
+ *            h[0] and h[2] are the heights of upper and lower pyramidal segments, defined as height / H, where
+ *            H is the maximumn possible height.
+ *            h[1] are the heights of middle cylinderal segment, defined as height / a, where a is the
+ *            diameter of original circumcircle.
+ */
+Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
+{
+    /* There are 18 faces. The crystal is constructed of the intersection of all these 18 half-spaces.
+     * 1. Find all inner point as vertexes.
+     * 2. Find all co-planner points. 
+     * 3. For points in each face, construct a triagular devision.
+     */
 }
 
 };
