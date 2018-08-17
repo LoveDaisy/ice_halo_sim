@@ -53,7 +53,7 @@ TEST_F(CrystalTest, CreateNotNull) {
 
     /* IrregularHexCylinder */
     int idx[4] = { 1, 1, 1, 1 };
-    float h[3] = { 0.3f, 1.2f, 0.9f };
+    float h[3] = { 0.3f, 1.2f, 1.3f };
     c = Crystal::createIrregularHexPyramid(dist, idx, h);
     EXPECT_NE(c, nullptr);
     delete c;

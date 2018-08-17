@@ -703,44 +703,68 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
      */
     using namespace Math;
 
-    constexpr int CONSTRAINT_NUM = 18;
+    constexpr int CONSTRAINT_NUM = 20;
     constexpr int DIST_NUM = 6;
+    constexpr int H_NUM = 3;
     constexpr float SQRT3 = 1.73205080757f;
-    float alpha0 = idx[1] / C_CONSTANT / idx[0];
-    float alpha1 = idx[3] / C_CONSTANT / idx[2];
-    float beta0 = SQRT3 * (1.0f + alpha0 * h[1]);
-    float beta1 = SQRT3 * (1.0f + alpha1 * h[1]);
+
+    float alpha0 = idx[1] / C_CONSTANT / idx[0] * SQRT3;
+    float alpha1 = idx[3] / C_CONSTANT / idx[2] * SQRT3;
+    float beta0 = 1.35f * alpha0 * h[1];
+    float beta1 = 1.35f * alpha1 * h[1];
 
     for (int i = 0; i < DIST_NUM; i++) {
         dist[i] *= SQRT3 / 2;
     }
+    for (int i = 0; i < H_NUM; i++) {
+        h[i] = fmax(h[i], 0.0f);
+    }
 
     float a[CONSTRAINT_NUM] = {
-        SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,
-        SQRT3, 0.0f, -SQRT3, SQRT3, 0.0f, -SQRT3,
-        SQRT3, 0.0f, -SQRT3, SQRT3, 0.0f, -SQRT3,
+        SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,   // Prism faces
+        SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,   // Upper pyramid faces
+        SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,   // Lower pyramid faces
+        0.0f, 0.0f,
     };
     float b[CONSTRAINT_NUM] = {
         1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
-        1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
-        1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+        1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+        0.0f, 0.0f,
     };
     float c[CONSTRAINT_NUM] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-        SQRT3 * alpha0, SQRT3 / 2 * alpha0, SQRT3 * alpha0, SQRT3 * alpha0, SQRT3 / 2 * alpha0, SQRT3 * alpha0,
-        -SQRT3 * alpha1, -SQRT3 / 2 * alpha1, -SQRT3 * alpha1, -SQRT3 * alpha1, -SQRT3 / 2 * alpha1, -SQRT3 * alpha1,
+        alpha0, alpha0 / 2, alpha0, alpha0, alpha0 / 2, alpha0,
+        -alpha1, -alpha1 / 2, -alpha1, -alpha1, -alpha1 / 2, -alpha1,
+        1.0f, -1.0f,
     };
     float d[CONSTRAINT_NUM] = {
-        -2*dist[0], -dist[1], -2*dist[2], -2*dist[3], -dist[4], -2*dist[5],
-        -beta0, -beta0 / 2, -beta0, -beta0, -beta0 / 2, -beta0,
-        -beta1, -beta1 / 2, -beta1, -beta1, -beta1 / 2, -beta1,
+        -2 * dist[0], -dist[1], -2 * dist[2], -2 * dist[3], -dist[4], -2 * dist[5],
+        -2 * dist[0] - beta0, -dist[1] - beta0 / 2, -2 * dist[2] - beta0, -2 * dist[3] - beta0, -dist[4] - beta0 / 2, -2 * dist[5] - beta0,
+        -2 * dist[0] - beta1, -dist[1] - beta1 / 2, -2 * dist[2] - beta1, -2 * dist[3] - beta1, -dist[4] - beta1 / 2, -2 * dist[5] - beta1,
+        0.0f, 0.0f,
     };
 
     /* Step 1. Find all inner points */
     std::vector<Vec3f> pts;
-    findInnerPoints(CONSTRAINT_NUM, a, b, c, d, pts);
+    findInnerPoints(CONSTRAINT_NUM - 2, a, b, c, d, pts);
+    sortAndRemoveDuplicate(pts);
 
-    /* Remove duplicated */
+    float maxZ = pts[0].z();
+    float minZ = pts[0].z();
+    for (const auto &p : pts) {
+        if (p.z() > maxZ) {
+            maxZ = p.z();
+        }
+        if (p.z() < minZ) {
+            minZ = p.z();
+        }
+    }
+    d[CONSTRAINT_NUM - 2] = -(maxZ - h[1]) * h[0] - h[1];
+    d[CONSTRAINT_NUM - 1] = (minZ + h[1]) * h[2] - h[1];
+
+    pts.clear();
+    findInnerPoints(CONSTRAINT_NUM, a, b, c, d, pts);
     sortAndRemoveDuplicate(pts);
 
     /* Step 2. For all constrained faces, find co-planer points, and construct a triangular division */
