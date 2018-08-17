@@ -697,11 +697,138 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
     using namespace Math;
 
     constexpr int CONSTRAINT_NUM = 18;
+    constexpr int DIST_NUM = 6;
     constexpr float SQRT3 = 1.73205080757f;
-    float a[CONSTRAINT_NUM] = { SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3 };
+    float alpha0 = idx[1] / C_CONSTANT / idx[0];
+    float alpha1 = idx[3] / C_CONSTANT / idx[2];
+    float beta0 = SQRT3 * (1.0f + alpha0 * h[1]);
+    float beta1 = SQRT3 * (1.0f + alpha1 * h[1]);
 
+    for (int i = 0; i < DIST_NUM; i++) {
+        dist[i] *= SQRT3 / 2;
+    }
+
+    float a[CONSTRAINT_NUM] = {
+        SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,
+        SQRT3, 0.0f, -SQRT3, SQRT3, 0.0f, -SQRT3,
+        SQRT3, 0.0f, -SQRT3, SQRT3, 0.0f, -SQRT3,
+    };
+    float b[CONSTRAINT_NUM] = {
+        1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+        1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+    };
+    float c[CONSTRAINT_NUM] = {
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+        SQRT3 * alpha0, SQRT3 / 2 * alpha0, SQRT3 * alpha0, SQRT3 * alpha0, SQRT3 / 2 * alpha0, SQRT3 * alpha0,
+        -SQRT3 * alpha1, -SQRT3 / 2 * alpha1, -SQRT3 * alpha1, -SQRT3 * alpha1, -SQRT3 / 2 * alpha1, -SQRT3 * alpha1,
+    };
+    float d[CONSTRAINT_NUM] = {
+        -2*dist[0], -dist[1], -2*dist[2], -2*dist[3], -dist[4], -2*dist[5],
+        -beta0, -beta0 / 2, -beta0, -beta0, -beta0 / 2, -beta0,
+        -beta1, -beta1 / 2, -beta1, -beta1, -beta1 / 2, -beta1,
+    };
+
+    /* Step 1. Find all inner points */
     std::vector<Vec3f> pts;
-    return nullptr;
+    findInnerPoints(CONSTRAINT_NUM, a, b, c, d, pts);
+
+    /* Remove duplicated */
+    removeDuplicatedPts(pts);
+
+    /* Step 2. For all constrained faces, find co-planer points, and construct a triangular division */
+    std::vector<TriangleIdx> faces;
+    for (int i = 0; i < CONSTRAINT_NUM; i++) {
+        std::vector<int> coPlanerPts;
+        for (int j = 0; j < pts.size(); j++) {
+            const auto &p = pts[j];
+            if (abs(a[i] * p.x() + b[i] * p.y() + c[i] * p.z() + d[i]) < FLOAT_EPS) {
+                coPlanerPts.push_back(j);
+            }
+        }
+        if (coPlanerPts.empty()) {
+            continue;
+        }
+
+        /* Find the center of co-planer points */
+        Vec3f center(0.0f, 0.0f, 0.0f);
+        for (auto ii : coPlanerPts) {
+            center.x(center.x() + pts[ii].x());
+            center.y(center.y() + pts[ii].y());
+            center.z(center.z() + pts[ii].z());
+        }
+        center.x(center.x() / coPlanerPts.size());
+        center.y(center.y() / coPlanerPts.size());
+        center.z(center.z() / coPlanerPts.size());
+
+        /* Sort by angle */
+        int idx0 = coPlanerPts[0];
+        std::sort(coPlanerPts.begin() + 1, coPlanerPts.end(), 
+            [i, a, b, c, &pts, &center, idx0](const int idx1, const int idx2){
+                Vec3f p0 = Vec3f::fromVec(center, pts[idx0]).normalized();
+                Vec3f p1 = Vec3f::fromVec(center, pts[idx1]).normalized();
+                Vec3f p2 = Vec3f::fromVec(center, pts[idx2]).normalized();
+
+                Vec3f n1 = Vec3f::cross(p0, p1);
+                float dir = Vec3f::dot(n1, Vec3f(a[i], b[i], c[i]));
+                float c1 = Vec3f::dot(p0, p1);
+                float s1 = Vec3f::norm(n1) * (dir / abs(dir));
+                float angle1 = atan2(s1, c1);
+                angle1 += (angle1 < 0 ? 2 * PI : 0);
+
+                Vec3f n2 = Vec3f::cross(p0, p2);
+                dir = Vec3f::dot(n2, Vec3f(a[i], b[i], c[i]));
+                float c2 = Vec3f::dot(p0, p2);
+                float s2 = Vec3f::norm(n2) * (dir / abs(dir));
+                float angle2 = atan2(s2, c2);
+                angle2 += (angle2 < 0 ? 2 * PI : 0);
+
+                return angle1 < angle2;
+            }
+        );
+
+        /* Construct a triangular division */
+        for (int j = 1; j < coPlanerPts.size() - 1; j++) {
+            faces.emplace_back(TriangleIdx(coPlanerPts[0], coPlanerPts[j], coPlanerPts[j+1]));
+        }
+    }
+
+    for (const auto &p : pts) {
+        printf("%.4f,%.4f,%.4f;\n", p.x(), p.y(), p.z());
+    }
+    printf("\n");
+    for (const auto &idx : faces) {
+        printf("%d,%d,%d;\n", idx.id1(), idx.id2(), idx.id3());
+    }
+
+    return new Crystal(pts, faces);
+}
+
+void Crystal::removeDuplicatedPts(std::vector<Math::Vec3f> &pts)
+{
+    using namespace Math;
+
+    std::sort(pts.begin(), pts.end(),
+        [](const Vec3f &p1, const Vec3f &p2){
+            if (p1.x() < p2.x() - FLOAT_EPS) {
+                return true;
+            }
+            if (abs(p1.x() - p2.x()) < FLOAT_EPS && p1.y() < p2.y() - FLOAT_EPS) {
+                return true;
+            }
+            return abs(p1.x() - p2.x()) < FLOAT_EPS && abs(p1.y() - p2.y()) < FLOAT_EPS && p1.z() < p2.z() - FLOAT_EPS;
+        }
+    );
+
+    /* Remove duplicated points */
+    for (auto iter = pts.begin(), lastIter = pts.begin(); iter != pts.end(); ) {
+        if (iter != lastIter && (*iter) == (*lastIter)) {
+            iter = pts.erase(iter);
+        } else {
+            lastIter = iter;
+            iter++;
+        }
+    }
 }
 
 };

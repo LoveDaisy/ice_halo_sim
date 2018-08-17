@@ -30,7 +30,7 @@ public:
     void copyNormalData(int idx, float *data) const;
     void copyNormalData(float *data) const;
 
-    static float C_CONSTANT = 1.629f;
+    static constexpr float C_CONSTANT = 1.629f;
 
     /* Regular hexagon cylinder */
     static Crystal* createHexCylinder(float h);
@@ -64,6 +64,7 @@ private:
     bool initDone;
 
     static void sortAndRemoveDuplicatedPts(std::vector<Math::Vec3f> &pts);
+    static void removeDuplicatedPts(std::vector<Math::Vec3f> &pts);
     static void buildConvexHull(std::vector<Math::Vec3f> &pts);
 };
 
