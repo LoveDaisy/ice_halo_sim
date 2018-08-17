@@ -245,14 +245,14 @@ void buildTriangularDivision(
             Vec3f n1 = Vec3f::cross(p0, p1);
             float dir = Vec3f::dot(n1, n);
             float c1 = Vec3f::dot(p0, p1);
-            float s1 = Vec3f::norm(n1) * (dir / abs(dir));
+            float s1 = abs(dir) > FLOAT_EPS ? Vec3f::norm(n1) * (dir / abs(dir)) : 0;
             float angle1 = atan2(s1, c1);
             angle1 += (angle1 < 0 ? 2 * PI : 0);
 
             Vec3f n2 = Vec3f::cross(p0, p2);
             dir = Vec3f::dot(n2, n);
             float c2 = Vec3f::dot(p0, p2);
-            float s2 = Vec3f::norm(n2) * (dir / abs(dir));
+            float s2 = abs(dir) > FLOAT_EPS ? Vec3f::norm(n2) * (dir / abs(dir)) : 0;
             float angle2 = atan2(s2, c2);
             angle2 += (angle2 < 0 ? 2 * PI : 0);
 

@@ -710,8 +710,8 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
 
     float alpha0 = idx[1] / C_CONSTANT / idx[0] * SQRT3;
     float alpha1 = idx[3] / C_CONSTANT / idx[2] * SQRT3;
-    float beta0 = 1.35f * alpha0 * h[1];
-    float beta1 = 1.35f * alpha1 * h[1];
+    float beta0 = alpha0 * h[1];
+    float beta1 = alpha1 * h[1];
 
     for (int i = 0; i < DIST_NUM; i++) {
         dist[i] *= SQRT3 / 2;

@@ -1168,6 +1168,54 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
             sprintf(msgBuffer, "<crystal[%d].parameter> number doesn't match!", ci);
             throw std::invalid_argument(msgBuffer);
         }
+    } else if (c["type"] == "IrregularHexCylinder") {
+        if (p == nullptr || !p->IsArray()) {
+            sprintf(msgBuffer, "<crystal[%d].parameter> cannot recgonize!", ci);
+            throw std::invalid_argument(msgBuffer);
+        } else if (p->Size() == 7) {
+            auto d1 = static_cast<float>((*p)[0].GetDouble());
+            auto d2 = static_cast<float>((*p)[1].GetDouble());
+            auto d3 = static_cast<float>((*p)[2].GetDouble());
+            auto d4 = static_cast<float>((*p)[3].GetDouble());
+            auto d5 = static_cast<float>((*p)[4].GetDouble());
+            auto d6 = static_cast<float>((*p)[5].GetDouble());
+            auto h = static_cast<float>((*p)[6].GetDouble());
+
+            float dist[6] = { d1, d2, d3, d4, d5, d6 };
+            cryCtx->setCrystal(Crystal::createIrregularHexCylinder(dist, h), population,
+                axisDist, axisMean, axisStd,
+                rollDist, rollMean, rollStd);
+        }
+    } else if (c["type"] == "IrregularHexPyramid") {
+        if (p == nullptr || !p->IsArray()) {
+            sprintf(msgBuffer, "<crystal[%d].parameter> cannot recgonize!", ci);
+            throw std::invalid_argument(msgBuffer);
+        } else if (p->Size() == 13) {
+            auto d1 = static_cast<float>((*p)[0].GetDouble());
+            auto d2 = static_cast<float>((*p)[1].GetDouble());
+            auto d3 = static_cast<float>((*p)[2].GetDouble());
+            auto d4 = static_cast<float>((*p)[3].GetDouble());
+            auto d5 = static_cast<float>((*p)[4].GetDouble());
+            auto d6 = static_cast<float>((*p)[5].GetDouble());
+            int i1 = (*p)[6].GetInt();
+            int i2 = (*p)[7].GetInt();
+            int i3 = (*p)[8].GetInt();
+            int i4 = (*p)[9].GetInt();
+            auto h1 = static_cast<float>((*p)[10].GetDouble());
+            auto h2 = static_cast<float>((*p)[11].GetDouble());
+            auto h3 = static_cast<float>((*p)[12].GetDouble());
+
+            float dist[6] = { d1, d2, d3, d4, d5, d6 };
+            int idx[4] = { i1, i2, i3, i4 };
+            float height[3] = { h1, h2, h3 };
+
+            cryCtx->setCrystal(Crystal::createIrregularHexPyramid(dist, idx, height), population,
+                axisDist, axisMean, axisStd,
+                rollDist, rollMean, rollStd);
+        } else {
+            sprintf(msgBuffer, "<crystal[%d].parameter> number doesn't match!", ci);
+            throw std::invalid_argument(msgBuffer);
+        }
     } else if (c["type"] == "Custom") {
         if (p == nullptr || !p->IsString()) {
             sprintf(msgBuffer, "<crystal[%d].parameter> cannot recgonize!", ci);
