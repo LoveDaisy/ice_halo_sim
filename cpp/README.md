@@ -19,7 +19,7 @@ Then the executable binary will be at `build/bin`.
 Note, I introduce the [GooglTest](https://github.com/google/googletest) framework to help do my unit tests.
 The googletest codes will be downloaded automatically during cmake configuration. Generally you should not
 care about these codes nor the test cases in `test` folder. If you are interested in my unit tests, please
-refer to `test` folder and check all codes there.
+set `-DNEED_TEST=on` when configure cmake and run the unit tests.
 
 ### Simulation
 
