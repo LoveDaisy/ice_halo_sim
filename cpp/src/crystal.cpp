@@ -696,7 +696,7 @@ void Crystal::buildConvexHull(std::vector<Math::Vec3f> &pts)
  */
 Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
 {
-    /* There are 18 faces. The crystal is constructed of the intersection of all these 18 half-spaces.
+    /* There are 20 faces. The crystal is the intersection of all these half-spaces.
      * 1. Find all inner point as vertexes.
      * 2. Find all co-planner points. 
      * 3. For points in each face, construct a triangular division.
@@ -724,7 +724,7 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
         SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,   // Prism faces
         SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,   // Upper pyramid faces
         SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,   // Lower pyramid faces
-        0.0f, 0.0f,
+        0.0f, 0.0f,                                 // Top and bottom faces
     };
     float b[CONSTRAINT_NUM] = {
         1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
@@ -750,6 +750,7 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
     findInnerPoints(CONSTRAINT_NUM - 2, a, b, c, d, pts);
     sortAndRemoveDuplicate(pts);
 
+    /* Find max and min height, then determine the height of pyramid segment */
     float maxZ = pts[0].z();
     float minZ = pts[0].z();
     for (const auto &p : pts) {
@@ -780,14 +781,6 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
         
         /* Build triangular division */
         buildTriangularDivision(pts, n0, facePtsIdx, faces);
-    }
-
-    for (const auto &p : pts) {
-        printf("%.4f,%.4f,%.4f;\n", p.x(), p.y(), p.z());
-    }
-    printf("\n");
-    for (const auto &ii : faces) {
-        printf("%d,%d,%d;\n", ii.id1(), ii.id2(), ii.id3());
     }
 
     return new Crystal(pts, faces);
