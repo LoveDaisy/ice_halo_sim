@@ -179,6 +179,94 @@ void findInnerPoints(int n, float *a, float *b, float *c, float *d, std::vector<
 }
 
 
+void sortAndRemoveDuplicate(std::vector<Vec3f> &pts)
+{
+    /* Sort by coordinates */
+    std::sort(pts.begin(), pts.end(),
+        [](const Vec3f &p1, const Vec3f &p2){
+            if (p1.x() < p2.x() - FLOAT_EPS) {
+                return true;
+            }
+            if (abs(p1.x() - p2.x()) < FLOAT_EPS && p1.y() < p2.y() - FLOAT_EPS) {
+                return true;
+            }
+            return abs(p1.x() - p2.x()) < FLOAT_EPS && abs(p1.y() - p2.y()) < FLOAT_EPS && p1.z() < p2.z() - FLOAT_EPS;
+        }
+    );
+
+    /* Remove duplicated points */
+    for (auto iter = pts.begin(), lastIter = pts.begin(); iter != pts.end(); ) {
+        if (iter != lastIter && (*iter) == (*lastIter)) {
+            iter = pts.erase(iter);
+        } else {
+            lastIter = iter;
+            iter++;
+        }
+    }
+}
+
+
+void findCoplanarPoints(const std::vector<Vec3f> &pts, const Vec3f n0, float d0, std::vector<int> &ptsIdx)
+{
+    for (decltype(pts.size()) j = 0; j < pts.size(); j++) {
+        const auto &p = pts[j];
+        if (abs(Vec3f::dot(n0, p) + d0) < FLOAT_EPS) {
+            ptsIdx.push_back(static_cast<int>(j));
+        }
+    }
+}
+
+
+void buildTriangularDivision(
+    const std::vector<Vec3f> &vertex, 
+    const Vec3f &n, 
+    std::vector<int> &ptsIdx, 
+    std::vector<TriangleIdx> &faces)
+{
+    /* Find the center of co-planer points */
+    Vec3f center(0.0f, 0.0f, 0.0f);
+    for (auto ii : ptsIdx) {
+        center.x(center.x() + vertex[ii].x());
+        center.y(center.y() + vertex[ii].y());
+        center.z(center.z() + vertex[ii].z());
+    }
+    center.x(center.x() / ptsIdx.size());
+    center.y(center.y() / ptsIdx.size());
+    center.z(center.z() / ptsIdx.size());
+
+    /* Sort by angle */
+    int idx0 = ptsIdx[0];
+    std::sort(ptsIdx.begin() + 1, ptsIdx.end(),
+        [&n, &vertex, &center, idx0](const int idx1, const int idx2){
+            Vec3f p0 = Vec3f::fromVec(center, vertex[idx0]).normalized();
+            Vec3f p1 = Vec3f::fromVec(center, vertex[idx1]).normalized();
+            Vec3f p2 = Vec3f::fromVec(center, vertex[idx2]).normalized();
+
+            Vec3f n1 = Vec3f::cross(p0, p1);
+            float dir = Vec3f::dot(n1, n);
+            float c1 = Vec3f::dot(p0, p1);
+            float s1 = Vec3f::norm(n1) * (dir / abs(dir));
+            float angle1 = atan2(s1, c1);
+            angle1 += (angle1 < 0 ? 2 * PI : 0);
+
+            Vec3f n2 = Vec3f::cross(p0, p2);
+            dir = Vec3f::dot(n2, n);
+            float c2 = Vec3f::dot(p0, p2);
+            float s2 = Vec3f::norm(n2) * (dir / abs(dir));
+            float angle2 = atan2(s2, c2);
+            angle2 += (angle2 < 0 ? 2 * PI : 0);
+
+            return angle1 < angle2;
+        }
+    );
+
+    /* Construct a triangular division */
+    for (decltype(ptsIdx.size()) j = 1; j < ptsIdx.size() - 1; j++) {
+        faces.emplace_back(TriangleIdx(ptsIdx[0], ptsIdx[j], ptsIdx[j+1]));
+    }
+}
+
+
 DummyMatrix::DummyMatrix(float *data, uint64_t row, uint64_t col) :
     rowNum(row), colNum(col), data(data)
 { }

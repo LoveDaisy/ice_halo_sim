@@ -64,7 +64,6 @@ private:
     bool initDone;
 
     static void sortAndRemoveDuplicatedPts(std::vector<Math::Vec3f> &pts);
-    static void removeDuplicatedPts(std::vector<Math::Vec3f> &pts);
     static void buildConvexHull(std::vector<Math::Vec3f> &pts);
 };
 

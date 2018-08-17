@@ -578,22 +578,29 @@ Crystal* Crystal::createIrregularHexCylinder(float *dist, float h)
     std::vector<Vec3f> vertexes;
     std::vector<TriangleIdx> faces;
     vertexes.reserve(ptsNum * 2);
-    for (int i = 0; i < ptsNum; i++) {
+    for (decltype(ptsNum) i = 0; i < ptsNum; i++) {
         vertexes.emplace_back(Vec3f(pts[i].x(), pts[i].y(), h));
     }
-    for (int i = 0; i < ptsNum; i++) {
+    for (decltype(ptsNum) i = 0; i < ptsNum; i++) {
         vertexes.emplace_back(Vec3f(pts[i].x(), pts[i].y(), -h));
     }
 
-    for (int i = 2; i < ptsNum; i++) {
-        faces.emplace_back(TriangleIdx(i, i-1, 0));
+    for (decltype(ptsNum) i = 2; i < ptsNum; i++) {
+        faces.emplace_back(TriangleIdx(static_cast<int>(i), static_cast<int>(i - 1), 0));
     }
-    for (int i = 0; i < ptsNum; i++) {
-        faces.emplace_back(TriangleIdx(i, i + ptsNum, (i + 1) % ptsNum + ptsNum));
-        faces.emplace_back(TriangleIdx((i + 1) % ptsNum, i, (i + 1) % ptsNum + ptsNum));
+    for (decltype(ptsNum) i = 0; i < ptsNum; i++) {
+        int idx1 = static_cast<int>(i);
+        int idx2 = static_cast<int>(i + ptsNum);
+        int idx3 = static_cast<int>((i + 1) % ptsNum + ptsNum);
+        int idx4 = static_cast<int>((i + 1) % ptsNum);
+        faces.emplace_back(TriangleIdx(idx1, idx2, idx3));
+        faces.emplace_back(TriangleIdx(idx4, idx1, idx3));
     }
-    for (int i = 2; i < ptsNum; i++) {
-        faces.emplace_back(TriangleIdx(i + ptsNum, (i - 1 + ptsNum) % ptsNum + ptsNum, ptsNum));
+    for (decltype(ptsNum) i = 2; i < ptsNum; i++) {
+        int idx1 = static_cast<int>(i + ptsNum);
+        int idx2 = static_cast<int>((i - 1 + ptsNum) % ptsNum + ptsNum);
+        int idx3 = static_cast<int>(ptsNum);
+        faces.emplace_back(TriangleIdx(idx1, idx2, idx3));
     }
 
     return new Crystal(vertexes, faces);
@@ -734,101 +741,32 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
     findInnerPoints(CONSTRAINT_NUM, a, b, c, d, pts);
 
     /* Remove duplicated */
-    removeDuplicatedPts(pts);
+    sortAndRemoveDuplicate(pts);
 
     /* Step 2. For all constrained faces, find co-planer points, and construct a triangular division */
     std::vector<TriangleIdx> faces;
     for (int i = 0; i < CONSTRAINT_NUM; i++) {
-        std::vector<int> coPlanerPts;
-        for (int j = 0; j < pts.size(); j++) {
-            const auto &p = pts[j];
-            if (abs(a[i] * p.x() + b[i] * p.y() + c[i] * p.z() + d[i]) < FLOAT_EPS) {
-                coPlanerPts.push_back(j);
-            }
-        }
-        if (coPlanerPts.empty()) {
+        /* Find co-planer points */
+        std::vector<int> facePtsIdx;
+        Vec3f n0(a[i], b[i], c[i]);
+        findCoplanarPoints(pts, n0, d[i], facePtsIdx);
+        if (facePtsIdx.empty()) {
             continue;
         }
-
-        /* Find the center of co-planer points */
-        Vec3f center(0.0f, 0.0f, 0.0f);
-        for (auto ii : coPlanerPts) {
-            center.x(center.x() + pts[ii].x());
-            center.y(center.y() + pts[ii].y());
-            center.z(center.z() + pts[ii].z());
-        }
-        center.x(center.x() / coPlanerPts.size());
-        center.y(center.y() / coPlanerPts.size());
-        center.z(center.z() / coPlanerPts.size());
-
-        /* Sort by angle */
-        int idx0 = coPlanerPts[0];
-        std::sort(coPlanerPts.begin() + 1, coPlanerPts.end(), 
-            [i, a, b, c, &pts, &center, idx0](const int idx1, const int idx2){
-                Vec3f p0 = Vec3f::fromVec(center, pts[idx0]).normalized();
-                Vec3f p1 = Vec3f::fromVec(center, pts[idx1]).normalized();
-                Vec3f p2 = Vec3f::fromVec(center, pts[idx2]).normalized();
-
-                Vec3f n1 = Vec3f::cross(p0, p1);
-                float dir = Vec3f::dot(n1, Vec3f(a[i], b[i], c[i]));
-                float c1 = Vec3f::dot(p0, p1);
-                float s1 = Vec3f::norm(n1) * (dir / abs(dir));
-                float angle1 = atan2(s1, c1);
-                angle1 += (angle1 < 0 ? 2 * PI : 0);
-
-                Vec3f n2 = Vec3f::cross(p0, p2);
-                dir = Vec3f::dot(n2, Vec3f(a[i], b[i], c[i]));
-                float c2 = Vec3f::dot(p0, p2);
-                float s2 = Vec3f::norm(n2) * (dir / abs(dir));
-                float angle2 = atan2(s2, c2);
-                angle2 += (angle2 < 0 ? 2 * PI : 0);
-
-                return angle1 < angle2;
-            }
-        );
-
-        /* Construct a triangular division */
-        for (int j = 1; j < coPlanerPts.size() - 1; j++) {
-            faces.emplace_back(TriangleIdx(coPlanerPts[0], coPlanerPts[j], coPlanerPts[j+1]));
-        }
+        
+        /* Build triangular division */
+        buildTriangularDivision(pts, n0, facePtsIdx, faces);
     }
 
     for (const auto &p : pts) {
         printf("%.4f,%.4f,%.4f;\n", p.x(), p.y(), p.z());
     }
     printf("\n");
-    for (const auto &idx : faces) {
-        printf("%d,%d,%d;\n", idx.id1(), idx.id2(), idx.id3());
+    for (const auto &ii : faces) {
+        printf("%d,%d,%d;\n", ii.id1(), ii.id2(), ii.id3());
     }
 
     return new Crystal(pts, faces);
-}
-
-void Crystal::removeDuplicatedPts(std::vector<Math::Vec3f> &pts)
-{
-    using namespace Math;
-
-    std::sort(pts.begin(), pts.end(),
-        [](const Vec3f &p1, const Vec3f &p2){
-            if (p1.x() < p2.x() - FLOAT_EPS) {
-                return true;
-            }
-            if (abs(p1.x() - p2.x()) < FLOAT_EPS && p1.y() < p2.y() - FLOAT_EPS) {
-                return true;
-            }
-            return abs(p1.x() - p2.x()) < FLOAT_EPS && abs(p1.y() - p2.y()) < FLOAT_EPS && p1.z() < p2.z() - FLOAT_EPS;
-        }
-    );
-
-    /* Remove duplicated points */
-    for (auto iter = pts.begin(), lastIter = pts.begin(); iter != pts.end(); ) {
-        if (iter != lastIter && (*iter) == (*lastIter)) {
-            iter = pts.erase(iter);
-        } else {
-            lastIter = iter;
-            iter++;
-        }
-    }
 }
 
 };
