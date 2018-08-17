@@ -5,5 +5,7 @@ project(IceHalo)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 add_subdirectory(src bin)
-add_subdirectory(test)
+if(NEED_TEST)
+    add_subdirectory(test)
+endif()
 
