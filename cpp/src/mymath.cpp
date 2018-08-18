@@ -128,32 +128,6 @@ void rotateZBack(const float *lon_lat_roll, float *vec, uint64_t dataNum)
 }
 
 
-void findInnerPoints(int n, float *a, float *b, float *c, std::vector<Vec3f> &pts)
-{
-    for (int i = 0; i < n; i++) {
-        for (int j = i+1; j < n; j++) {
-            float det = a[j]*b[i] - a[i]*b[j];
-            if (abs(det) <= FLOAT_EPS) {
-                continue;
-            }
-            float x = -((b[i]*c[j] - b[j]*c[i]) / det);
-            float y = -((a[j]*c[i] - a[i]*c[j]) / det);
-
-            bool in = true;
-            for (int k = 0; k < 6; k++) {
-                in = in && (a[k]*x + b[k]*y + c[k] <= FLOAT_EPS);
-                if (!in) {
-                    break;
-                }
-            }
-            if (in) {
-                pts.emplace_back(Vec3f(x, y, 0.0f));
-            }
-        }
-    }
-}
-
-
 void findInnerPoints(int n, float *a, float *b, float *c, float *d, std::vector<Vec3f> &pts)
 {
     for (int i = 0; i < n; i++) {

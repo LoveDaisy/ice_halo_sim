@@ -136,9 +136,7 @@ void rotateBase(const float *ax, float angle, float *vec);
 void rotateZ(const float *lon_lat_roll, float *vec, uint64_t dataNum = 1);
 void rotateZBack(const float *lon_lat_roll, float *vec, uint64_t dataNum = 1);
 
-void findInnerPoints(int n, float *a, float *b, float *c, std::vector<Vec3f> &pts);
 void findInnerPoints(int n, float *a, float *b, float *c, float *d, std::vector<Vec3f> &pts);
-
 void sortAndRemoveDuplicate(std::vector<Vec3f> &pts);
 void findCoplanarPoints(const std::vector<Vec3f> &pts, const Vec3f n0, float d0, std::vector<int> &ptsIdx);
 void buildConvexHull(int num, float *a, float *b, float *c, float *d, const std::vector<Math::Vec3f> &pts, 
