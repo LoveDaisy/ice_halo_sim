@@ -162,13 +162,19 @@ void sortAndRemoveDuplicate(std::vector<Vec3f> &pts)
     /* Sort by coordinates */
     std::sort(pts.begin(), pts.end(),
         [](const Vec3f &p1, const Vec3f &p2){
+            if (p1 == p2) {
+                return false;
+            }
             if (p1.x() < p2.x() - FLOAT_EPS) {
                 return true;
             }
             if (abs(p1.x() - p2.x()) < FLOAT_EPS && p1.y() < p2.y() - FLOAT_EPS) {
                 return true;
             }
-            return abs(p1.x() - p2.x()) < FLOAT_EPS && abs(p1.y() - p2.y()) < FLOAT_EPS && p1.z() < p2.z() - FLOAT_EPS;
+            if (abs(p1.x() - p2.x()) < FLOAT_EPS && abs(p1.y() - p2.y()) < FLOAT_EPS && p1.z() < p2.z() - FLOAT_EPS) {
+                return true;
+            }
+            return false;
         }
     );
 
