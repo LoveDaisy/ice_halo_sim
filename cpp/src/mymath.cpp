@@ -221,6 +221,24 @@ void findCoplanarPoints(const std::vector<Vec3f> &pts, const Vec3f n0, float d0,
 }
 
 
+void buildConvexHull(int num, float *a, float *b, float *c, float *d, const std::vector<Math::Vec3f> &pts, 
+                     std::vector<Math::TriangleIdx> &faces)
+{
+    for (int i = 0; i < num; i++) {
+        /* Find co-planer points */
+        std::vector<int> facePtsIdx;
+        Vec3f n0(a[i], b[i], c[i]);
+        findCoplanarPoints(pts, n0, d[i], facePtsIdx);
+        if (facePtsIdx.empty()) {
+            continue;
+        }
+        
+        /* Build triangular division */
+        buildTriangularDivision(pts, n0, facePtsIdx, faces);
+    }
+}
+
+
 void buildTriangularDivision(
     const std::vector<Vec3f> &vertex, 
     const Vec3f &n, 

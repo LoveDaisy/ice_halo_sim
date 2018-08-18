@@ -11,7 +11,8 @@ namespace IceHalo {
 
 namespace Math {
 
-constexpr float PI = 3.14159265f;
+constexpr float PI = 3.14159265359f;
+constexpr float SQRT3 = 1.73205080757f;
 constexpr float FLOAT_EPS = 1e-6;
 
 
@@ -140,6 +141,8 @@ void findInnerPoints(int n, float *a, float *b, float *c, float *d, std::vector<
 
 void sortAndRemoveDuplicate(std::vector<Vec3f> &pts);
 void findCoplanarPoints(const std::vector<Vec3f> &pts, const Vec3f n0, float d0, std::vector<int> &ptsIdx);
+void buildConvexHull(int num, float *a, float *b, float *c, float *d, const std::vector<Math::Vec3f> &pts, 
+                     std::vector<Math::TriangleIdx> &faces);
 void buildTriangularDivision(const std::vector<Vec3f> &vertex, const Vec3f &n, 
     std::vector<int> &ptsIdx, std::vector<TriangleIdx> &faces);
 

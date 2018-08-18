@@ -62,9 +62,6 @@ private:
     std::vector<Math::TriangleIdx> faces;
 
     bool initDone;
-
-    static void sortAndRemoveDuplicatedPts(std::vector<Math::Vec3f> &pts);
-    static void buildConvexHull(std::vector<Math::Vec3f> &pts);
 };
 
 };

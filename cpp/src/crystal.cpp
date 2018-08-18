@@ -559,128 +559,38 @@ Crystal* Crystal::createIrregularHexCylinder(float *dist, float h)
      */
     using namespace Math;
 
+    constexpr int CONSTRAINT_NUM = 8;
+
     for (int i = 0; i < 6; i++) {
-        dist[i] *= static_cast<float>(sqrt(3)) / 2;
+        dist[i] *= SQRT3 / 2;
     }
 
     /* Half plane is expressed as: a*x + b*y + c <= 0 */
-    float a[6] = { static_cast<float>(sqrt(3)), 0, -static_cast<float>(sqrt(3)), 
-                   -static_cast<float>(sqrt(3)), 0, static_cast<float>(sqrt(3)) };
-    float b[6] = { 1, 1, 1, -1, -1, -1 };
-    float c[6] = { -2*dist[0], -dist[1], -2*dist[2], -2*dist[3], -dist[4], -2*dist[5] };
+    float a[CONSTRAINT_NUM] = {
+        SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,   // Prism faces
+        0.0f, 0.0f,                                 // Top and bottom faces
+    };
+    float b[CONSTRAINT_NUM] = {
+        1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+        0.0f, 0.0f,
+    };
+    float c[CONSTRAINT_NUM] = {
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+        1.0f, -1.0f,
+    };
+    float d[CONSTRAINT_NUM] = {
+        -2 * dist[0], -dist[1], -2 * dist[2], -2 * dist[3], -dist[4], -2 * dist[5],
+        -h, -h,
+    };
 
     std::vector<Vec3f> pts;
-    findInnerPoints(6, a, b, c, pts);
-    sortAndRemoveDuplicatedPts(pts);
-    buildConvexHull(pts);
+    findInnerPoints(CONSTRAINT_NUM, a, b, c, d, pts);
+    sortAndRemoveDuplicate(pts);
 
-    size_t ptsNum = pts.size();
-    std::vector<Vec3f> vertexes;
     std::vector<TriangleIdx> faces;
-    vertexes.reserve(ptsNum * 2);
-    for (decltype(ptsNum) i = 0; i < ptsNum; i++) {
-        vertexes.emplace_back(Vec3f(pts[i].x(), pts[i].y(), h));
-    }
-    for (decltype(ptsNum) i = 0; i < ptsNum; i++) {
-        vertexes.emplace_back(Vec3f(pts[i].x(), pts[i].y(), -h));
-    }
+    buildConvexHull(CONSTRAINT_NUM, a, b, c, d, pts, faces);
 
-    for (decltype(ptsNum) i = 2; i < ptsNum; i++) {
-        faces.emplace_back(TriangleIdx(static_cast<int>(i), static_cast<int>(i - 1), 0));
-    }
-    for (decltype(ptsNum) i = 0; i < ptsNum; i++) {
-        int idx1 = static_cast<int>(i);
-        int idx2 = static_cast<int>(i + ptsNum);
-        int idx3 = static_cast<int>((i + 1) % ptsNum + ptsNum);
-        int idx4 = static_cast<int>((i + 1) % ptsNum);
-        faces.emplace_back(TriangleIdx(idx1, idx2, idx3));
-        faces.emplace_back(TriangleIdx(idx4, idx1, idx3));
-    }
-    for (decltype(ptsNum) i = 2; i < ptsNum; i++) {
-        int idx1 = static_cast<int>(i + ptsNum);
-        int idx2 = static_cast<int>((i - 1 + ptsNum) % ptsNum + ptsNum);
-        int idx3 = static_cast<int>(ptsNum);
-        faces.emplace_back(TriangleIdx(idx1, idx2, idx3));
-    }
-
-    return new Crystal(vertexes, faces);
-}
-
-
-/* Sort (ascend by y/x) and remove duplicated points */
-void Crystal::sortAndRemoveDuplicatedPts(std::vector<Math::Vec3f> &pts)
-{
-    using namespace Math;
-
-    /* Move the point with largest x to head */
-    for (auto iter = pts.begin(), headIter = pts.begin(); iter != pts.end(); iter++) {
-        if (iter->x() > headIter->x()) {
-            std::iter_swap(iter, headIter);
-        }
-    }
-
-    /* Remove duplicated head */
-    for (auto iter = pts.begin(), headIter = pts.begin(); iter != pts.end(); ) {
-        if (iter != headIter && (*iter) == (*headIter)) {
-            iter = pts.erase(iter);
-        } else {
-            iter++;
-        }
-    }
-    
-    /* Sort by dy/dx */
-    std::sort(pts.begin() + 1, pts.end(), [&pts](const Vec3f &p1, const Vec3f &p2){
-        float dx1 = pts.begin()->x() - p1.x();
-        float dx2 = pts.begin()->x() - p2.x();
-        float dy1 = pts.begin()->y() - p1.y();
-        float dy2 = pts.begin()->y() - p2.y();
-
-        if (abs(dx1) > FLOAT_EPS && abs(dx2) > FLOAT_EPS && dy1 / dx1 < dy2 / dx2) {
-            return true;
-        }
-        if (abs(dx1) < FLOAT_EPS) {
-            return dy1 < 0;
-        }
-        if (abs(dx2) < FLOAT_EPS) {
-            return dy2 >= 0;
-        }
-        return false;
-    });
-
-    /* Remove duplicated points */
-    for (auto iter = pts.begin(), lastIter = pts.begin(); iter != pts.end(); ) {
-        if (iter != lastIter && (*iter) == (*lastIter)) {
-            iter = pts.erase(iter);
-        } else {
-            lastIter = iter;
-            iter++;
-        }
-    }
-}
-
-
-/* Given a sorted point set, remove all inner points and those convex hull points are remained */
-void Crystal::buildConvexHull(std::vector<Math::Vec3f> &pts)
-{
-    if (pts.size() <= 3) {
-        return;
-    }
-
-    using namespace Math;
-
-    for (auto iter1 = pts.begin() + 2; iter1 != pts.end(); iter1++) {
-        for (auto iter2 = pts.begin() + 1; iter2 != iter1 - 1; ) {
-            auto v1 = Vec3f::fromVec(*(iter2-1), *iter2);
-            auto v2 = Vec3f::fromVec(*iter2, *(iter2+1));
-            auto c = Vec3f::cross(v1, v2);
-
-            if (c.z() <= FLOAT_EPS) {
-                iter2 = pts.erase(iter2);
-            } else {
-                iter2++;
-            }
-        }
-    }
+    return new Crystal(pts, faces);
 }
 
 
@@ -706,7 +616,6 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
     constexpr int CONSTRAINT_NUM = 20;
     constexpr int DIST_NUM = 6;
     constexpr int H_NUM = 3;
-    constexpr float SQRT3 = 1.73205080757f;
 
     float alpha0 = idx[1] / C_CONSTANT / idx[0] * SQRT3;
     float alpha1 = idx[3] / C_CONSTANT / idx[2] * SQRT3;
@@ -768,20 +677,9 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
     findInnerPoints(CONSTRAINT_NUM, a, b, c, d, pts);
     sortAndRemoveDuplicate(pts);
 
-    /* Step 2. For all constrained faces, find co-planer points, and construct a triangular division */
+    /* Step 2. Build convex hull with verteces */
     std::vector<TriangleIdx> faces;
-    for (int i = 0; i < CONSTRAINT_NUM; i++) {
-        /* Find co-planer points */
-        std::vector<int> facePtsIdx;
-        Vec3f n0(a[i], b[i], c[i]);
-        findCoplanarPoints(pts, n0, d[i], facePtsIdx);
-        if (facePtsIdx.empty()) {
-            continue;
-        }
-        
-        /* Build triangular division */
-        buildTriangularDivision(pts, n0, facePtsIdx, faces);
-    }
+    buildConvexHull(CONSTRAINT_NUM, a, b, c, d, pts, faces);
 
     return new Crystal(pts, faces);
 }

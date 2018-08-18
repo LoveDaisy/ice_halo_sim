@@ -64,23 +64,22 @@ TEST_F(CrystalTest, HexCylinderVertex) {
     using namespace Math;
 
     float h = 1.2f;
-    float SQRT3_2 = 0.866025403784439f;
 
     std::vector<Math::Vec3f> pts0;
     pts0.reserve(12);
     pts0.emplace_back(Vec3f(1.0f, 0.0f, h));
-    pts0.emplace_back(Vec3f(0.5f, SQRT3_2, h));
-    pts0.emplace_back(Vec3f(-0.5f, SQRT3_2, h));
+    pts0.emplace_back(Vec3f(0.5f, SQRT3 / 2, h));
+    pts0.emplace_back(Vec3f(-0.5f, SQRT3 / 2, h));
     pts0.emplace_back(Vec3f(-1.0f, 0.0f, h));
-    pts0.emplace_back(Vec3f(-0.5f, -SQRT3_2, h));
-    pts0.emplace_back(Vec3f(0.5f, -SQRT3_2, h));
+    pts0.emplace_back(Vec3f(-0.5f, -SQRT3 / 2, h));
+    pts0.emplace_back(Vec3f(0.5f, -SQRT3 / 2, h));
 
     pts0.emplace_back(Vec3f(1.0f, 0.0f, -h));
-    pts0.emplace_back(Vec3f(0.5f, SQRT3_2, -h));
-    pts0.emplace_back(Vec3f(-0.5f, SQRT3_2, -h));
+    pts0.emplace_back(Vec3f(0.5f, SQRT3 / 2, -h));
+    pts0.emplace_back(Vec3f(-0.5f, SQRT3 / 2, -h));
     pts0.emplace_back(Vec3f(-1.0f, 0.0f, -h));
-    pts0.emplace_back(Vec3f(-0.5f, -SQRT3_2, -h));
-    pts0.emplace_back(Vec3f(0.5f, -SQRT3_2, -h));
+    pts0.emplace_back(Vec3f(-0.5f, -SQRT3 / 2, -h));
+    pts0.emplace_back(Vec3f(0.5f, -SQRT3 / 2, -h));
 
     Crystal *c = Crystal::createHexCylinder(h);
     const auto pts = c->getVertexes();
@@ -96,21 +95,19 @@ TEST_F(CrystalTest, IrregularHexCylinderVertex) {
     using namespace Math;
 
     float h = 1.2f;
-    float SQRT3_2 = 0.866025403784439f;
     float dist[6] = { 1.0f, 1.0f, 1.5f, 1.0f, 2.5f, 1.0f };
 
     std::vector<Math::Vec3f> pts0;
-    pts0.emplace_back(Vec3f(1.0f, 0.0f, h));
-    pts0.emplace_back(Vec3f(0.5f, SQRT3_2, h));
-    pts0.emplace_back(Vec3f(-1.0f, SQRT3_2, h));
-    pts0.emplace_back(Vec3f(-1.25f, SQRT3_2/2, h));
-    pts0.emplace_back(Vec3f(0.0f, -SQRT3_2*2, h));
-
+    pts0.emplace_back(Vec3f(-1.25f, SQRT3 / 2/2, -h));
+    pts0.emplace_back(Vec3f(-1.25f, SQRT3 / 2/2, h));
+    pts0.emplace_back(Vec3f(-1.0f, SQRT3 / 2, -h));
+    pts0.emplace_back(Vec3f(-1.0f, SQRT3 / 2, h));
+    pts0.emplace_back(Vec3f(0.0f, -SQRT3 / 2*2, -h));
+    pts0.emplace_back(Vec3f(0.0f, -SQRT3 / 2*2, h));
+    pts0.emplace_back(Vec3f(0.5f, SQRT3 / 2, -h));
+    pts0.emplace_back(Vec3f(0.5f, SQRT3 / 2, h));
     pts0.emplace_back(Vec3f(1.0f, 0.0f, -h));
-    pts0.emplace_back(Vec3f(0.5f, SQRT3_2, -h));
-    pts0.emplace_back(Vec3f(-1.0f, SQRT3_2, -h));
-    pts0.emplace_back(Vec3f(-1.25f, SQRT3_2/2, -h));
-    pts0.emplace_back(Vec3f(0.0f, -SQRT3_2*2, -h));
+    pts0.emplace_back(Vec3f(1.0f, 0.0f, h));
 
     Crystal *c = Crystal::createIrregularHexCylinder(dist, h);
     const auto pts = c->getVertexes();
