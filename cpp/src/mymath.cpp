@@ -171,10 +171,10 @@ void sortAndRemoveDuplicate(std::vector<Vec3f> &pts)
             if (p1.x() < p2.x() - FLOAT_EPS) {
                 return true;
             }
-            if (std::abs(p1.x() - p2.x()) < FLOAT_EPS && p1.y() < p2.y() - FLOAT_EPS) {
+            if (floatEqual(p1.x(), p2.x()) && p1.y() < p2.y() - FLOAT_EPS) {
                 return true;
             }
-            if (std::abs(p1.x() - p2.x()) < FLOAT_EPS && std::abs(p1.y() - p2.y()) < FLOAT_EPS && p1.z() < p2.z() - FLOAT_EPS) {
+            if (floatEqual(p1.x(), p2.x()) && floatEqual(p1.y(), p2.y()) && p1.z() < p2.z() - FLOAT_EPS) {
                 return true;
             }
             return false;
@@ -197,7 +197,7 @@ void findCoplanarPoints(const std::vector<Vec3f> &pts, const Vec3f n0, float d0,
 {
     for (decltype(pts.size()) j = 0; j < pts.size(); j++) {
         const auto &p = pts[j];
-        if (std::abs(Vec3f::dot(n0, p) + d0) < FLOAT_EPS) {
+        if (floatEqual(Vec3f::dot(n0, p) + d0, 0)) {
             ptsIdx.push_back(static_cast<int>(j));
         }
     }
@@ -233,14 +233,10 @@ void buildTriangularDivision(
 {
     /* Find the center of co-planer points */
     Vec3f center(0.0f, 0.0f, 0.0f);
-    for (auto ii : ptsIdx) {
-        center.x(center.x() + vertex[ii].x());
-        center.y(center.y() + vertex[ii].y());
-        center.z(center.z() + vertex[ii].z());
+    for (const auto &p : ptsIdx) {
+        center += p;
     }
-    center.x(center.x() / ptsIdx.size());
-    center.y(center.y() / ptsIdx.size());
-    center.z(center.z() / ptsIdx.size());
+    center /= ptsIdx.size();
 
     /* Sort by angle */
     int idx0 = ptsIdx[0];
@@ -427,6 +423,60 @@ Vec3<T> Vec3<T>::normalized(const Vec3<T> &v)
     T data[3];
     Math::normalized3(v._val, data);
     return Vec3<T>(data);
+}
+
+template <typename T>
+Vec3<T>& Vec3<T>::operator+= (const Vec3<T> v)
+{
+    for (int i = 0; i < 3; i++) {
+        _val[i] += v._val[i];
+    }
+    return *this;
+}
+
+template <typename T>
+Vec3<T>& Vec3<T>::operator+= (T a)
+{
+    for (int i = 0; i < 3; i++) {
+        _val[i] += a;
+    }
+    return *this;
+}
+
+template <typename T>
+Vec3<T>& Vec3<T>::operator-= (const Vec3<T> v)
+{
+    for (int i = 0; i < 3; i++) {
+        _val[i] -= v._val[i];
+    }
+    return *this;
+}
+
+template <typename T>
+Vec3<T>& Vec3<T>::operator-= (T a)
+{
+    for (int i = 0; i < 3; i++) {
+        _val[i] -= a;
+    }
+    return *this;
+}
+
+template <typename T>
+Vec3<T>& Vec3<T>::operator/= (T a)
+{
+    for (int i = 0; i < 3; i++) {
+        _val[i] /= a;
+    }
+    return *this;
+}
+
+template <typename T>
+Vec3<T>& Vec3<T>::operator*= (T a)
+{
+    for (int i = 0; i < 3; i++) {
+        _val[i] *= a;
+    }
+    return *this;
 }
 
 template <typename T>

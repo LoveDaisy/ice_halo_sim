@@ -56,6 +56,13 @@ public:
     Vec3<T> normalized();
     void normalize();
 
+    Vec3<T>& operator+= (const Vec3<T> v);
+    Vec3<T>& operator+= (T a);
+    Vec3<T>& operator-= (const Vec3<T> v);
+    Vec3<T>& operator-= (T a);
+    Vec3<T>& operator/= (T a);
+    Vec3<T>& operator*= (T a);
+
 
     static Vec3<T> normalized(const Vec3<T> &v);
 
