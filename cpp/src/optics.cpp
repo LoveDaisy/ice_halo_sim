@@ -1,4 +1,5 @@
 #include <limits>
+#include <cmath>
 
 #include "optics.h"
 #include "context.h"
@@ -243,7 +244,7 @@ float Optics::getReflectRatio(float cos_angle, float rr)
 {
     float s = std::sqrt(1.0f - cos_angle * cos_angle);
     float c = std::abs(cos_angle);
-    float d = std::fmax(1.0f - (rr * s) * (rr * s), 0.0f);
+    float d = std::max(1.0f - (rr * s) * (rr * s), 0.0f);
     float d_sqrt = std::sqrt(d);
 
     float Rs = (rr * c - d_sqrt) / (rr * c + d_sqrt);

@@ -627,7 +627,7 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
         dist[i] *= SQRT3 / 2;
     }
     for (int i = 0; i < H_NUM; i++) {
-        h[i] = fmax(h[i], 0.0f);
+        h[i] = std::max(h[i], 0.0f);
     }
 
     float a[CONSTRAINT_NUM] = {

@@ -12,7 +12,7 @@ namespace Math {
 
 bool floatEqual(float a, float b, float threshold)
 {
-    return fabs(a - b) < threshold;
+    return std::abs(a - b) < threshold;
 }
 
 float dot3(const float *vec1, const float *vec2)
@@ -137,7 +137,7 @@ void findInnerPoints(HalfSpaceSet &hss, std::vector<Vec3f> &pts)
         for (int j = i+1; j < n; j++) {
             for (int k = j+1; k < n; k++) {
                 float det = a[k]*b[j]*c[i] - a[j]*b[k]*c[i] - a[k]*b[i]*c[j] + a[i]*b[k]*c[j] + a[j]*b[i]*c[k] - a[i]*b[j]*c[k];
-                if (fabs(det) <= FLOAT_EPS) {
+                if (std::abs(det) <= FLOAT_EPS) {
                     continue;
                 }
                 float x = -(b[k]*c[j]*d[i] - b[j]*c[k]*d[i] - b[k]*c[i]*d[j] + b[i]*c[k]*d[j] + b[j]*c[i]*d[k] - b[i]*c[j]*d[k]) / det;
@@ -171,10 +171,10 @@ void sortAndRemoveDuplicate(std::vector<Vec3f> &pts)
             if (p1.x() < p2.x() - FLOAT_EPS) {
                 return true;
             }
-            if (fabs(p1.x() - p2.x()) < FLOAT_EPS && p1.y() < p2.y() - FLOAT_EPS) {
+            if (std::abs(p1.x() - p2.x()) < FLOAT_EPS && p1.y() < p2.y() - FLOAT_EPS) {
                 return true;
             }
-            if (fabs(p1.x() - p2.x()) < FLOAT_EPS && fabs(p1.y() - p2.y()) < FLOAT_EPS && p1.z() < p2.z() - FLOAT_EPS) {
+            if (std::abs(p1.x() - p2.x()) < FLOAT_EPS && std::abs(p1.y() - p2.y()) < FLOAT_EPS && p1.z() < p2.z() - FLOAT_EPS) {
                 return true;
             }
             return false;
@@ -197,7 +197,7 @@ void findCoplanarPoints(const std::vector<Vec3f> &pts, const Vec3f n0, float d0,
 {
     for (decltype(pts.size()) j = 0; j < pts.size(); j++) {
         const auto &p = pts[j];
-        if (fabs(Vec3f::dot(n0, p) + d0) < FLOAT_EPS) {
+        if (std::abs(Vec3f::dot(n0, p) + d0) < FLOAT_EPS) {
             ptsIdx.push_back(static_cast<int>(j));
         }
     }
@@ -250,14 +250,14 @@ void buildTriangularDivision(
             Vec3f n1 = Vec3f::cross(p0, p1);
             float dir = Vec3f::dot(n1, n);
             float c1 = Vec3f::dot(p0, p1);
-            float s1 = fabs(dir) > FLOAT_EPS ? Vec3f::norm(n1) * (dir / fabs(dir)) : 0;
+            float s1 = std::abs(dir) > FLOAT_EPS ? Vec3f::norm(n1) * (dir / std::abs(dir)) : 0;
             float angle1 = atan2(s1, c1);
             angle1 += (angle1 < 0 ? 2 * PI : 0);
 
             Vec3f n2 = Vec3f::cross(p0, p2);
             dir = Vec3f::dot(n2, n);
             float c2 = Vec3f::dot(p0, p2);
-            float s2 = fabs(dir) > FLOAT_EPS ? Vec3f::norm(n2) * (dir / fabs(dir)) : 0;
+            float s2 = std::abs(dir) > FLOAT_EPS ? Vec3f::norm(n2) * (dir / std::abs(dir)) : 0;
             float angle2 = atan2(s2, c2);
             angle2 += (angle2 < 0 ? 2 * PI : 0);
 

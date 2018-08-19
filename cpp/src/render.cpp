@@ -4,6 +4,7 @@
 
 #include <limits>
 #include <cstring>
+#include <cmath>
 
 
 namespace IceHalo {
