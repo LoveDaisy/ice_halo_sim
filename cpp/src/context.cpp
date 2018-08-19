@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include <limits>
 #include <chrono>
+#include <cmath>
 
 
 namespace IceHalo {
@@ -905,7 +906,7 @@ void ContextParser::parseMultiScatterSettings(SimulationContext &ctx)
         fprintf(stderr, "\nWARNING! Config <multi_scatter.probability> is not a number, using default 1.0!\n");
     } else {
         prob = static_cast<float>(p->GetDouble());
-        prob = std::fmax(std::fmin(prob, 1.0f), 0.0f);
+        prob = std::max(std::min(prob, 1.0f), 0.0f);
     }
     ctx.multiScatterProb = prob;
 
@@ -1329,7 +1330,7 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
         fprintf(stderr, "\nWARNING! config <camera.azimuth> is not a number, using default 90.0!\n");
     } else {
         auto az = static_cast<float>(p->GetDouble());
-        az = std::fmax(std::fmin(az, 360.0f), 0.0f);
+        az = std::max(std::min(az, 360.0f), 0.0f);
         ctx.camRot[0] = 90.0f - az;
     }
 
@@ -1340,7 +1341,7 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
         fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default 90.0!\n");
     } else {
         auto el = static_cast<float>(p->GetDouble());
-        el = std::fmax(std::fmin(el, 89.999f), -89.999f);
+        el = std::max(std::min(el, 89.999f), -89.999f);
         ctx.camRot[1] = el;
     }
 
@@ -1351,7 +1352,7 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
         fprintf(stderr, "\nWARNING! config <camera.rotation> is not a number, using default 0.0!\n");
     } else {
         auto rot = static_cast<float>(p->GetDouble());
-        rot = std::fmax(std::fmin(rot, 180.0f), -180.0f);
+        rot = std::max(std::min(rot, 180.0f), -180.0f);
         ctx.camRot[2] = rot;
     }
 
@@ -1362,7 +1363,7 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
         fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default 120.0!\n");
     } else {
         auto fov = static_cast<float>(p->GetDouble());
-        fov = std::fmax(std::fmin(fov, 140.0f), 0.0f);
+        fov = std::max(std::min(fov, 140.0f), 0.0f);
         ctx.fov = fov;
     }
 
