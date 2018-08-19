@@ -589,7 +589,7 @@ Crystal* Crystal::createIrregularHexCylinder(float *dist, float h)
     sortAndRemoveDuplicate(pts);
 
     std::vector<TriangleIdx> faces;
-    buildConvexHull(CONSTRAINT_NUM, a, b, c, d, pts, faces);
+    buildPolyhadronFaces(hss, pts, faces);
 
     return new Crystal(pts, faces);
 }
@@ -682,7 +682,7 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
 
     /* Step 2. Build convex hull with verteces */
     std::vector<TriangleIdx> faces;
-    buildConvexHull(CONSTRAINT_NUM, a, b, c, d, pts, faces);
+    buildPolyhadronFaces(hss, pts, faces);
 
     return new Crystal(pts, faces);
 }

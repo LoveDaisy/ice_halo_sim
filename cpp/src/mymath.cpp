@@ -204,9 +204,12 @@ void findCoplanarPoints(const std::vector<Vec3f> &pts, const Vec3f n0, float d0,
 }
 
 
-void buildConvexHull(int num, float *a, float *b, float *c, float *d, const std::vector<Math::Vec3f> &pts, 
-                     std::vector<Math::TriangleIdx> &faces)
+void buildPolyhadronFaces(HalfSpaceSet &hss, const std::vector<Math::Vec3f> &pts, 
+                          std::vector<Math::TriangleIdx> &faces)
 {
+    int num = hss.n;
+    float *a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
+
     for (int i = 0; i < num; i++) {
         /* Find co-planer points */
         std::vector<int> facePtsIdx;
@@ -261,7 +264,11 @@ void buildTriangularDivision(
             float angle2 = atan2(s2, c2);
             angle2 += (angle2 < 0 ? 2 * PI : 0);
 
-            return angle1 < angle2;
+            if (floatEqual(angle1, angle2)) {
+                return false;
+            } else {
+                return angle1 < angle2;
+            }
         }
     );
 
