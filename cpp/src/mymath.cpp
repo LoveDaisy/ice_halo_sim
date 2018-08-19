@@ -128,8 +128,11 @@ void rotateZBack(const float *lon_lat_roll, float *vec, uint64_t dataNum)
 }
 
 
-void findInnerPoints(int n, float *a, float *b, float *c, float *d, std::vector<Vec3f> &pts)
+void findInnerPoints(HalfSpaceSet &hss, std::vector<Vec3f> &pts)
 {
+    float *a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
+    int n = hss.n;
+
     for (int i = 0; i < n; i++) {
         for (int j = i+1; j < n; j++) {
             for (int k = j+1; k < n; k++) {
@@ -180,12 +183,9 @@ void sortAndRemoveDuplicate(std::vector<Vec3f> &pts)
 
     /* Remove duplicated points */
     for (auto iter = pts.begin(), lastIter = pts.begin(); iter != pts.end(); ) {
-printf("iter: (%+.4f,%+.4f,%+.4f), last: (%+.4f,%+.4f,%+.4f) ", iter->x(), iter->y(), iter->z(), lastIter->x(), lastIter->y(), lastIter->z());
         if (iter != lastIter && (*iter) == (*lastIter)) {
-printf(" remove iter!\n");
             iter = pts.erase(iter);
         } else {
-printf("\n");
             lastIter = iter;
             iter++;
         }
@@ -479,6 +479,11 @@ const int * TriangleIdx::idx() const
 {
     return &_idx[0];
 }
+
+
+HalfSpaceSet::HalfSpaceSet(int n, float *a, float *b, float *c, float *d) :
+    n(n), a(a), b(b), c(c), d(d)
+{ }
 
 }  // namespace Math
 

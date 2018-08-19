@@ -582,9 +582,10 @@ Crystal* Crystal::createIrregularHexCylinder(float *dist, float h)
         -2 * dist[0], -dist[1], -2 * dist[2], -2 * dist[3], -dist[4], -2 * dist[5],
         -h, -h,
     };
+    HalfSpaceSet hss(CONSTRAINT_NUM, a, b, c, d);
 
     std::vector<Vec3f> pts;
-    findInnerPoints(CONSTRAINT_NUM, a, b, c, d, pts);
+    findInnerPoints(hss, pts);
     sortAndRemoveDuplicate(pts);
 
     std::vector<TriangleIdx> faces;
@@ -653,10 +654,11 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
         -2 * dist[0] - beta1, -dist[1] - beta1 / 2, -2 * dist[2] - beta1, -2 * dist[3] - beta1, -dist[4] - beta1 / 2, -2 * dist[5] - beta1,
         0.0f, 0.0f,
     };
+    HalfSpaceSet hss(CONSTRAINT_NUM - 2, a, b, c, d);
 
     /* Step 1. Find all inner points */
     std::vector<Vec3f> pts;
-    findInnerPoints(CONSTRAINT_NUM - 2, a, b, c, d, pts);
+    findInnerPoints(hss, pts);
     sortAndRemoveDuplicate(pts);
 
     /* Find max and min height, then determine the height of pyramid segment */
@@ -674,7 +676,8 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
     d[CONSTRAINT_NUM - 1] = (minZ + h[1]) * h[2] - h[1];
 
     pts.clear();
-    findInnerPoints(CONSTRAINT_NUM, a, b, c, d, pts);
+    hss.n = CONSTRAINT_NUM;
+    findInnerPoints(hss, pts);
     sortAndRemoveDuplicate(pts);
 
     /* Step 2. Build convex hull with verteces */
