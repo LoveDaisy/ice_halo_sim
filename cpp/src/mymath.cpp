@@ -204,7 +204,7 @@ void findCoplanarPoints(const std::vector<Vec3f> &pts, const Vec3f n0, float d0,
 }
 
 
-void buildPolyhadronFaces(HalfSpaceSet &hss, const std::vector<Math::Vec3f> &pts, 
+void buildPolyhedronFaces(HalfSpaceSet &hss, const std::vector<Math::Vec3f> &pts, 
                           std::vector<Math::TriangleIdx> &faces)
 {
     int num = hss.n;

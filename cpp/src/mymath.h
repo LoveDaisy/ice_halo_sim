@@ -157,7 +157,7 @@ void rotateZBack(const float *lon_lat_roll, float *vec, uint64_t dataNum = 1);
 void findInnerPoints(HalfSpaceSet &hss, std::vector<Vec3f> &pts);
 void sortAndRemoveDuplicate(std::vector<Vec3f> &pts);
 void findCoplanarPoints(const std::vector<Vec3f> &pts, const Vec3f n0, float d0, std::vector<int> &ptsIdx);
-void buildPolyhadronFaces(HalfSpaceSet &hss, const std::vector<Math::Vec3f> &pts, 
+void buildPolyhedronFaces(HalfSpaceSet &hss, const std::vector<Math::Vec3f> &pts, 
                           std::vector<Math::TriangleIdx> &faces);
 void buildTriangularDivision(const std::vector<Vec3f> &vertex, const Vec3f &n, 
     std::vector<int> &ptsIdx, std::vector<TriangleIdx> &faces);
