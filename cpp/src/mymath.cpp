@@ -437,8 +437,8 @@ Vec3<T>& Vec3<T>::operator+= (const Vec3<T> v)
 template <typename T>
 Vec3<T>& Vec3<T>::operator+= (T a)
 {
-    for (int i = 0; i < 3; i++) {
-        _val[i] += a;
+    for (auto &i : _val) {
+        i += a;
     }
     return *this;
 }
@@ -455,8 +455,8 @@ Vec3<T>& Vec3<T>::operator-= (const Vec3<T> v)
 template <typename T>
 Vec3<T>& Vec3<T>::operator-= (T a)
 {
-    for (int i = 0; i < 3; i++) {
-        _val[i] -= a;
+    for (auto &i : _val) {
+        i -= a;
     }
     return *this;
 }
@@ -464,8 +464,8 @@ Vec3<T>& Vec3<T>::operator-= (T a)
 template <typename T>
 Vec3<T>& Vec3<T>::operator/= (T a)
 {
-    for (int i = 0; i < 3; i++) {
-        _val[i] /= a;
+    for (auto &i : _val) {
+        i /= a;
     }
     return *this;
 }
@@ -473,8 +473,8 @@ Vec3<T>& Vec3<T>::operator/= (T a)
 template <typename T>
 Vec3<T>& Vec3<T>::operator*= (T a)
 {
-    for (int i = 0; i < 3; i++) {
-        _val[i] *= a;
+    for (auto &i : _val) {
+        i *= a;
     }
     return *this;
 }

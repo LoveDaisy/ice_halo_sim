@@ -1,8 +1,5 @@
 #include "threadingpool.h"
 
-#include <chrono>
-
-
 namespace IceHalo {
 
 

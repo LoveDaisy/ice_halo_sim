@@ -77,6 +77,8 @@ bool File::open(uint8_t mode)
         m1 = "w";
     } else if (mode & OpenMode::APPEND) {
         m1 = "a";
+    } else {
+        m1 = "r";
     }
     const char *m2 = (mode & OpenMode::BINARY) ? "b" : "";
     sprintf(modeBuffer, "%s%s", m1, m2);

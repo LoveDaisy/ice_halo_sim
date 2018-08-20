@@ -41,7 +41,7 @@ class Ray
 {
 public:
     Ray(const float *pt, const float *dir, float w, int faceId = -1);
-    Ray(RaySegment *seg);
+    explicit Ray(RaySegment *seg);
     ~Ray();
 
     size_t totalNum();
@@ -108,7 +108,7 @@ private:
     
     static const uint32_t chunkSize = 1024 * 128;
 
-    std::mutex idMutex;
+    // std::mutex idMutex;
     std::vector<RaySegment*> segments;
     std::atomic<uint64_t> nextUnusedId;
     std::atomic<uint64_t> currentChunkId;
