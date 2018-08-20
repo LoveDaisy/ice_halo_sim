@@ -212,5 +212,4 @@ Each shape has its own shape parameters.
 
 * Use OpenCL / OpenGL / CUDA to accelerate. Since I've seen good enough performance with a simple
   threading pool implemented by myself, I doubt the margin to more improvements.
-* Add more convenient crystal models, e.g. exotic hex-cylinder/pyramid crystals.
 * Write a (web) GUI for these code.
