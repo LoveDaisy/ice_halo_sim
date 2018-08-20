@@ -152,10 +152,10 @@ void RayTracingContext::commitHitResult()
         activeRaySeg[currentRayNum + i] = seg;
     }
 
-    memcpy(rayDir, rayDir2, currentRayNum * 3 * sizeof(float));
-    memcpy(rayDir + currentRayNum*3, rayDir3, currentRayNum * 3 * sizeof(float));
-    memcpy(rayPts + currentRayNum*3, rayPts, currentRayNum * 3 * sizeof(float));
-    memcpy(faceId + currentRayNum, faceId, currentRayNum * sizeof(int));
+    std::memcpy(rayDir, rayDir2, currentRayNum * 3 * sizeof(float));
+    std::memcpy(rayDir + currentRayNum*3, rayDir3, currentRayNum * 3 * sizeof(float));
+    std::memcpy(rayPts + currentRayNum*3, rayPts, currentRayNum * 3 * sizeof(float));
+    std::memcpy(faceId + currentRayNum, faceId, currentRayNum * sizeof(int));
 
     currentRayNum *= 2;
     activeRaySegNum = currentRayNum;
@@ -169,8 +169,8 @@ void RayTracingContext::commitPropagateResult(CrystalContext *ctx)
     for (int i = 0; i < currentRayNum; i++) {
         if (faceId2[i] >= 0 && activeRaySeg[i]->w > PROP_MIN_W) {
             activeRaySeg[activeRaySegNum++] = activeRaySeg[i];
-            memcpy(rayPts + k*3, rayPts2 + i*3, 3 * sizeof(float));
-            memcpy(rayDir + k*3, rayDir + i*3, 3 * sizeof(float));
+            std::memcpy(rayPts + k*3, rayPts2 + i*3, 3 * sizeof(float));
+            std::memcpy(rayDir + k*3, rayDir + i*3, 3 * sizeof(float));
             faceId[k] = faceId2[i];
             ctx->getCrystal()->copyNormalData(faceId2[i], faceNorm + k*3);
             k++;
@@ -230,7 +230,7 @@ void RayTracingContext::copyFinishedRaySegmentsRange(RaySegment **segs, float *d
                     && uniformDist(randomEngine) < prob) {
                 auto tmpk = k++;
                 float *finalDir = dir + tmpk * 3;
-                memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
+                std::memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
                 Math::rotateZBack(mainAxRot + rayIdx * 3, finalDir);
                 segs[tmpk] = p;
             }
@@ -498,7 +498,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
                     if (!p->nextReflect && !p->nextRefract &&
                             p->isValidEnd() && Math::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
                         float finalDir[3];
-                        memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
+                        std::memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
                         Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
                         file.write(finalDir, 3);
                         file.write(p->w);
@@ -548,7 +548,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
 //                     }
 //                     if (p->isValidEnd()) {
 //                         float finalDir[3];
-//                         memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
+//                         std::memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
 //                         Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
 //                         if (Math::dot3(targetDir, finalDir) > cosDelta) {
 //                             targetOn = true;
@@ -597,8 +597,8 @@ void SimulationContext::writeFinalDirections(const char *filename)
 //             printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n",
 //                    tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
 //             for (auto r : v) {
-//                 memcpy(tmp, r->pt.val(), 3*sizeof(float));
-//                 memcpy(tmp+3, r->dir.val(), 3*sizeof(float));
+//                 std::memcpy(tmp, r->pt.val(), 3*sizeof(float));
+//                 std::memcpy(tmp+3, r->dir.val(), 3*sizeof(float));
 //                 tmp[6] = r->w;
 //                 // file.write(tmp, 7);
 
@@ -701,7 +701,7 @@ void RenderContext::copySpectrumData(float *wavelengthData, float *spectrumData)
     int k = 0;
     for (const auto &kv : this->spectrumData) {
         wavelengthData[k] = kv.first;
-        memcpy(spectrumData + k * imgWid * imgHei, kv.second, imgWid * imgHei * sizeof(float));
+        std::memcpy(spectrumData + k * imgWid * imgHei, kv.second, imgWid * imgHei * sizeof(float));
         k++;
     }
     for (uint64_t i = 0; i < imgWid * imgHei * this->spectrumData.size(); i++) {
@@ -752,7 +752,7 @@ int RenderContext::loadDataFromFile(Files::File &file)
     auto *tmpDir = new float[totalCount * 3];
     auto *tmpW = new float[totalCount];
     for (decltype(readCount) i = 0; i < totalCount; i++) {
-        memcpy(tmpDir + i * 3, readBuffer + i * 4, 3 * sizeof(float));
+        std::memcpy(tmpDir + i * 3, readBuffer + i * 4, 3 * sizeof(float));
         tmpW[i] = readBuffer[i * 4 + 3];
         totalW += tmpW[i];
     }

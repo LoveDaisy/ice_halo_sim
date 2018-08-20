@@ -159,7 +159,7 @@ void Optics::propagateRange(RayTracingContext *rayCtx, int faceNum, float *faces
             intersectLineFace(tmp_pt, tmp_dir, tmp_face, &p[0], &t, &alpha, &beta);
             if (t > 1e-6 && t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
                 min_t = t;
-                memcpy(rayCtx->rayPts2 + i*3, p, sizeof(float) * 3);
+                std::memcpy(rayCtx->rayPts2 + i*3, p, sizeof(float) * 3);
                 rayCtx->faceId2[i] = j;
             }
         }
@@ -224,8 +224,8 @@ void Optics::traceRays(SimulationContext &context)
                 auto j = static_cast<size_t>(uniformDist(randomEngine) * i);
                 raySegStore[i] = raySegStore2[j];
                 raySegStore[j] = raySegStore2[i];
-                memcpy(dirStore + j*3, dirStore2 + i*3, sizeof(float)*3);
-                memcpy(dirStore + i*3, dirStore2 + j*3, sizeof(float)*3);
+                std::memcpy(dirStore + j*3, dirStore2 + i*3, sizeof(float)*3);
+                std::memcpy(dirStore + i*3, dirStore2 + j*3, sizeof(float)*3);
                 wStore[i] = raySegStore[i]->w;
             }
             context.setCrystalRayNum(scatterIdx + 1, outputOffset);

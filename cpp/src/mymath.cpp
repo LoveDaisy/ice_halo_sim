@@ -78,7 +78,7 @@ void rotateBase(const float *ax, float angle, float *vec)
     DummyMatrix vn(res, 3, 3);
     DummyMatrix::multiply(v, R, vn);
 
-    memcpy(vec, res, 9*sizeof(float));
+    std::memcpy(vec, res, 9*sizeof(float));
 }
 
 
@@ -99,7 +99,7 @@ void rotateZ(const float *lon_lat_roll, float *vec, uint64_t dataNum)
     DummyMatrix resVec(res, dataNum, 3);
     DummyMatrix inputVec(vec, dataNum, 3);
     DummyMatrix::multiply(inputVec, matR, resVec);
-    memcpy(vec, res, 3 * dataNum * sizeof(float));
+    std::memcpy(vec, res, 3 * dataNum * sizeof(float));
 
     delete[] res;
 }
@@ -122,7 +122,7 @@ void rotateZBack(const float *lon_lat_roll, float *vec, uint64_t dataNum)
     DummyMatrix resVec(res, dataNum, 3);
     DummyMatrix inputVec(vec, dataNum, 3);
     DummyMatrix::multiply(inputVec, matR, resVec);
-    memcpy(vec, res, 3 * dataNum * sizeof(float));
+    std::memcpy(vec, res, 3 * dataNum * sizeof(float));
 
     delete[] res;
 }
@@ -649,7 +649,7 @@ void OrientationGenerator::fillData(const float *sunDir, int num, float *rayDir,
         mainAxRot[i*3+1] = lat;
         mainAxRot[i*3+2] = roll;
 
-        memcpy(rayDir+i*3, sunDir, 3*sizeof(float));
+        std::memcpy(rayDir+i*3, sunDir, 3*sizeof(float));
         Math::rotateZ(mainAxRot + i * 3, rayDir + i * 3);
     }
 }
