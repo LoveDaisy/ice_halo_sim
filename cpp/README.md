@@ -191,7 +191,7 @@ Each shape has its own shape parameters.
   * `CubicPyramid`:
   2 parameters. Similar to cases above, the 2 parameters defines `h1 / H1` and `h2 / H2`.  
   NOTE: this kind crystal has cubic system.  
-  <img src="figs/cubic_pyramid_01.png" width="400"> 
+  <img src="figs/cubic_pyramid_01.png" width="400">.
 
   * `Custom`:
   1 parameters that indicates the model file name.  
