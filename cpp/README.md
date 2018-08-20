@@ -6,7 +6,7 @@ After testing my algorithms on matlab codes, I start a C++ project for higher pe
 can only run from command, no GUI.
 
 
-## Build and run
+## Build, run and test
 
 Requires: Boost (>= 1.54), OpenCV (>= 3.3). Has been tested on Mac OSX 10.13 and Ubuntu 14.04.
 
@@ -24,13 +24,23 @@ Then the executable binary will be at `build/bin`.
   You can run this line multiple times to cumulate many data and then render them at last;
 * After ray-tracing finished you can start rendering by `./bin/IceHaloRender <config-file>`;  
 
-The file [`config-example.json`](./config-example.json) 
-is an example configuration file. *Note:* you should change `data_folder` in config file to your own data folder.
-Detailed descriptions are shown in follwoing sections.
+Detailes are shown in following paragraph.
 
-## Visualization
+Note, I introduce the [GooglTest](https://github.com/google/googletest) framework to help do my unit tests.
+The googletest codes will be downloaded automatically during cmake configuration. Generally you should not
+care about these codes nor the test cases in `test` folder. If you are interested in my unit tests, please
+set `-DNEED_TEST=on` when configure cmake and run the unit tests.
 
-After building and running, you will get several `.bin` files that contain results of ray tracing,
+### Simulation
+
+You can start simulatino by
+`./bin/IceHaloSim <config-file>`. The file [`config-example.json`](./config-example.json) 
+is an example configuration file. After the simulation is done you will get several `.bin` files
+in your data path set in configuration file.
+
+### Visualization
+
+After simulation, you will get several `.bin` files that contain results of ray tracing,
 as well as several lines printed on the screen that describe crystal shapes.
 I have prepared several tools for visualization those results. Some are matlab codes.
 
@@ -41,7 +51,8 @@ See [matlab](../matlab/) folder for details.
 
   And there is also a C++ tool does the same thing. Please run 
 `./bin/IceHaloRender <config-file>` for visualization. 
-Just use the same configuration file as you run the simulation. I'd prefer this C++ tool
+Just use the same configuration file as you run the simulation. The rendered picture
+will be placed at the data path set in configuration file. I'd prefer this C++ tool
 than the matlab tool because it is much faster.
 
 * Crystals  
@@ -174,10 +185,23 @@ Each shape has its own shape parameters.
   5 parameters. Similar to 5 parameter case of `HexPyramid`. (TODO: 3 and 7 parameters cases to be added.)  
   <img src="figs/tri_pyramid_01.png" width="400">. 
 
+  * `IrregularHexCylinder`:
+  7 parameters. First 6 parameters define the prism face distance factor from the origin. 
+  Last parameter is height of the crystal. The distance factor here means the ratio of actual distance
+  w.r.t regular haxegon distance. Thus, a regular haxegon has distance of `[1, 1, 1, 1, 1, 1]`.
+  The figure shows an irregular hexegon with distance of `[1.1, 0.9, 1.5, 0.9, 1.7, 1.2]`  
+  <img src="figs/irr_hex_01.png" width="400">.
+
+  * `IrregularHexPyramid`:
+  13 parameters. First 6 parameters define the prism face distance from the origin. Next 4 parameters
+  are Miller index describing upper and lower pyramid segment. Last 3 parameters are heights of each segment, from
+  upper to lower.  
+  <img src="figs/irr_hex_pyramid_01.png" width="400">.
+
   * `CubicPyramid`:
   2 parameters. Similar to cases above, the 2 parameters defines `h1 / H1` and `h2 / H2`.  
   NOTE: this kind crystal has cubic system.  
-  <img src="figs/cubic_pyramid_01.png" width="400"> 
+  <img src="figs/cubic_pyramid_01.png" width="400">.
 
   * `Custom`:
   1 parameters that indicates the model file name.  
@@ -198,5 +222,4 @@ Each shape has its own shape parameters.
 
 * Use OpenCL / OpenGL / CUDA to accelerate. Since I've seen good enough performance with a simple
   threading pool implemented by myself, I doubt the margin to more improvements.
-* Add more convenient crystal models, e.g. exotic hex-cylinder/pyramid crystals.
 * Write a (web) GUI for these code.

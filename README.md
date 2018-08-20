@@ -11,7 +11,8 @@ For a start this program is written in matlab though matlab is often poured scor
 slow performance. It is a prototype, on which I test my algorithms. Later developing and
 latest updates will be on C++ codes. Also, matlab codes contain some small tools for visualization.
 
-Details including how to build and run can be found on following pages.
+Details including how to build and run can be found on following pages. *NOTE:* I've stopped developing
+on matlab codes. These are just legacy codes remained here for reference.
 
 * [C++ codes](cpp)  
 * [Matlab codes](matlab)  
@@ -22,7 +23,7 @@ Details including how to build and run can be found on following pages.
   The simulation program is 50\~100 times faster than HaloPoint. On general cases
   this program runs at a speed of 140k\~200k rays per second. On multi-scattering cases
   it runs as faster as 50k\~80k rays per second. On the contrary, HaloPoint may cost minutes to
-  render 100k rays, and even hours on multi-scattering cases.
+  render 100k rays, and even hours on multi-scattering cases. 
   
 * Natural and vivid color.  
   Based on my another project [Spectrum Renderer](https://github.com/LoveDaisy/spec_render),
@@ -63,7 +64,7 @@ Details including how to build and run can be found on following pages.
 
 在 matlab 代码上验证了算法后, 后续开发都将在 C++ 代码上进行. 此外 matlab 代码还包括了几个小工具, 用于一些可视化的任务.
 
-关于构建和运行的细节, 请参见下面的页面.
+关于构建和运行的细节, 请参见下面的页面. *注意:* matlab 代码我已不再开发, 这里保留仅作为参考.
 
 * [C++ 代码](cpp/README_zh.md)  
 * [Matlab 代码](matlab)  

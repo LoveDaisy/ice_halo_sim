@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include <limits>
 #include <chrono>
+#include <cmath>
 
 
 namespace IceHalo {
@@ -512,102 +513,102 @@ void SimulationContext::writeFinalDirections(const char *filename)
 }
 
 
-void SimulationContext::writeRayInfo(const char *filename, float lon, float lat, float delta)
-{
-    using namespace Files;
+// void SimulationContext::writeRayInfo(const char *filename, float lon, float lat, float delta)
+// {
+//     using namespace Files;
 
-    File file(dataDirectory.c_str(), filename);
-    // if (!file.open(OpenMode::WRITE | OpenMode::BINARY)) return;
+//     File file(dataDirectory.c_str(), filename);
+//     // if (!file.open(OpenMode::WRITE | OpenMode::BINARY)) return;
 
-    float targetDir[3] = {
-        std::cos(lat) * std::cos(lon),
-        std::cos(lat) * std::sin(lon),
-        std::sin(lat)
-    };
-    float cosDelta = std::cos(delta);
+//     float targetDir[3] = {
+//         std::cos(lat) * std::cos(lon),
+//         std::cos(lat) * std::sin(lon),
+//         std::sin(lat)
+//     };
+//     float cosDelta = std::cos(delta);
 
-    std::vector<RaySegment*> v;
-    for (auto &rcs : rayTracingCtxs) {
-        size_t currentIdx = 0;
-        for (auto rc : rcs) {
-            for (int i = 0; i < rc->initRayNum; i++) {
-                auto r = rc->rays[i];
-                v.clear();
-                v.push_back(r->firstRaySeg);
-                bool targetOn = false;
+//     std::vector<RaySegment*> v;
+//     for (auto &rcs : rayTracingCtxs) {
+//         size_t currentIdx = 0;
+//         for (auto rc : rcs) {
+//             for (int i = 0; i < rc->initRayNum; i++) {
+//                 auto r = rc->rays[i];
+//                 v.clear();
+//                 v.push_back(r->firstRaySeg);
+//                 bool targetOn = false;
 
-                while (!v.empty()) {
-                    RaySegment *p = v.back();
-                    v.pop_back();
-                    if (p->nextReflect) {
-                        v.push_back(p->nextReflect);
-                    }
-                    if (p->nextRefract) {
-                        v.push_back(p->nextRefract);
-                    }
-                    if (p->isValidEnd()) {
-                        float finalDir[3];
-                        memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
-                        Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
-                        if (Math::dot3(targetDir, finalDir) > cosDelta) {
-                            targetOn = true;
-                            break;
-                        }
-                    }
-                }
-                currentIdx++;
+//                 while (!v.empty()) {
+//                     RaySegment *p = v.back();
+//                     v.pop_back();
+//                     if (p->nextReflect) {
+//                         v.push_back(p->nextReflect);
+//                     }
+//                     if (p->nextRefract) {
+//                         v.push_back(p->nextRefract);
+//                     }
+//                     if (p->isValidEnd()) {
+//                         float finalDir[3];
+//                         memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
+//                         Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
+//                         if (Math::dot3(targetDir, finalDir) > cosDelta) {
+//                             targetOn = true;
+//                             break;
+//                         }
+//                     }
+//                 }
+//                 currentIdx++;
 
-                if (targetOn) {
-                    writeRayInfo(file, r);
-                }
-            }
-        }
-    }
+//                 if (targetOn) {
+//                     writeRayInfo(file, r);
+//                 }
+//             }
+//         }
+//     }
 
-    file.close();
-}
+//     file.close();
+// }
 
 
-void SimulationContext::writeRayInfo(Files::File &file, Ray *sr)
-{
-    std::vector<RaySegment*> v;
-    v.push_back(sr->firstRaySeg);
+// void SimulationContext::writeRayInfo(Files::File &file, Ray *sr)
+// {
+//     std::vector<RaySegment*> v;
+//     v.push_back(sr->firstRaySeg);
 
-    std::unordered_set<RaySegment*> checked;
-    float tmp[7];
-    while (!v.empty()) {
-        RaySegment *p = v.back();
-        if (checked.find(p) != checked.end()) {
-            v.pop_back();
-            continue;
-        }
+//     std::unordered_set<RaySegment*> checked;
+//     float tmp[7];
+//     while (!v.empty()) {
+//         RaySegment *p = v.back();
+//         if (checked.find(p) != checked.end()) {
+//             v.pop_back();
+//             continue;
+//         }
 
-        if (p->nextReflect && checked.find(p->nextReflect) == checked.end()) {
-            v.push_back(p->nextReflect);
-            continue;
-        }
-        if (p->nextRefract && checked.find(p->nextRefract) == checked.end()) {
-            v.push_back(p->nextRefract);
-            continue;
-        }
-        if (p->nextReflect == nullptr && p->nextRefract == nullptr && p->isValidEnd()) {
-            tmp[6] = -1; tmp[0] = v.size();
-            // file.write(tmp, 7);
-            printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n",
-                   tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
-            for (auto r : v) {
-                memcpy(tmp, r->pt.val(), 3*sizeof(float));
-                memcpy(tmp+3, r->dir.val(), 3*sizeof(float));
-                tmp[6] = r->w;
-                // file.write(tmp, 7);
+//         if (p->nextReflect && checked.find(p->nextReflect) == checked.end()) {
+//             v.push_back(p->nextReflect);
+//             continue;
+//         }
+//         if (p->nextRefract && checked.find(p->nextRefract) == checked.end()) {
+//             v.push_back(p->nextRefract);
+//             continue;
+//         }
+//         if (p->nextReflect == nullptr && p->nextRefract == nullptr && p->isValidEnd()) {
+//             tmp[6] = -1; tmp[0] = v.size();
+//             // file.write(tmp, 7);
+//             printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n",
+//                    tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
+//             for (auto r : v) {
+//                 memcpy(tmp, r->pt.val(), 3*sizeof(float));
+//                 memcpy(tmp+3, r->dir.val(), 3*sizeof(float));
+//                 tmp[6] = r->w;
+//                 // file.write(tmp, 7);
 
-                printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n", 
-                    tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
-            }
-        }
-        checked.insert(p);
-    }
-}
+//                 printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n", 
+//                     tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
+//             }
+//         }
+//         checked.insert(p);
+//     }
+// }
 
 
 void SimulationContext::printCrystalInfo()
@@ -687,7 +688,7 @@ void RenderContext::renderToRgb(uint8_t *rgbData)
     }
 
     /* Draw horizontal */
-    float imgR = std::min(imgWid / 2, imgHei) / 2.0f;
+    // float imgR = std::min(imgWid / 2, imgHei) / 2.0f;
     // TODO
 
     delete[] wlData;
@@ -905,7 +906,7 @@ void ContextParser::parseMultiScatterSettings(SimulationContext &ctx)
         fprintf(stderr, "\nWARNING! Config <multi_scatter.probability> is not a number, using default 1.0!\n");
     } else {
         prob = static_cast<float>(p->GetDouble());
-        prob = std::fmax(std::fmin(prob, 1.0f), 0.0f);
+        prob = std::max(std::min(prob, 1.0f), 0.0f);
     }
     ctx.multiScatterProb = prob;
 
@@ -1168,6 +1169,54 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
             sprintf(msgBuffer, "<crystal[%d].parameter> number doesn't match!", ci);
             throw std::invalid_argument(msgBuffer);
         }
+    } else if (c["type"] == "IrregularHexCylinder") {
+        if (p == nullptr || !p->IsArray()) {
+            sprintf(msgBuffer, "<crystal[%d].parameter> cannot recgonize!", ci);
+            throw std::invalid_argument(msgBuffer);
+        } else if (p->Size() == 7) {
+            auto d1 = static_cast<float>((*p)[0].GetDouble());
+            auto d2 = static_cast<float>((*p)[1].GetDouble());
+            auto d3 = static_cast<float>((*p)[2].GetDouble());
+            auto d4 = static_cast<float>((*p)[3].GetDouble());
+            auto d5 = static_cast<float>((*p)[4].GetDouble());
+            auto d6 = static_cast<float>((*p)[5].GetDouble());
+            auto h = static_cast<float>((*p)[6].GetDouble());
+
+            float dist[6] = { d1, d2, d3, d4, d5, d6 };
+            cryCtx->setCrystal(Crystal::createIrregularHexCylinder(dist, h), population,
+                axisDist, axisMean, axisStd,
+                rollDist, rollMean, rollStd);
+        }
+    } else if (c["type"] == "IrregularHexPyramid") {
+        if (p == nullptr || !p->IsArray()) {
+            sprintf(msgBuffer, "<crystal[%d].parameter> cannot recgonize!", ci);
+            throw std::invalid_argument(msgBuffer);
+        } else if (p->Size() == 13) {
+            auto d1 = static_cast<float>((*p)[0].GetDouble());
+            auto d2 = static_cast<float>((*p)[1].GetDouble());
+            auto d3 = static_cast<float>((*p)[2].GetDouble());
+            auto d4 = static_cast<float>((*p)[3].GetDouble());
+            auto d5 = static_cast<float>((*p)[4].GetDouble());
+            auto d6 = static_cast<float>((*p)[5].GetDouble());
+            int i1 = (*p)[6].GetInt();
+            int i2 = (*p)[7].GetInt();
+            int i3 = (*p)[8].GetInt();
+            int i4 = (*p)[9].GetInt();
+            auto h1 = static_cast<float>((*p)[10].GetDouble());
+            auto h2 = static_cast<float>((*p)[11].GetDouble());
+            auto h3 = static_cast<float>((*p)[12].GetDouble());
+
+            float dist[6] = { d1, d2, d3, d4, d5, d6 };
+            int idx[4] = { i1, i2, i3, i4 };
+            float height[3] = { h1, h2, h3 };
+
+            cryCtx->setCrystal(Crystal::createIrregularHexPyramid(dist, idx, height), population,
+                axisDist, axisMean, axisStd,
+                rollDist, rollMean, rollStd);
+        } else {
+            sprintf(msgBuffer, "<crystal[%d].parameter> number doesn't match!", ci);
+            throw std::invalid_argument(msgBuffer);
+        }
     } else if (c["type"] == "Custom") {
         if (p == nullptr || !p->IsString()) {
             sprintf(msgBuffer, "<crystal[%d].parameter> cannot recgonize!", ci);
@@ -1281,7 +1330,7 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
         fprintf(stderr, "\nWARNING! config <camera.azimuth> is not a number, using default 90.0!\n");
     } else {
         auto az = static_cast<float>(p->GetDouble());
-        az = std::fmax(std::fmin(az, 360.0f), 0.0f);
+        az = std::max(std::min(az, 360.0f), 0.0f);
         ctx.camRot[0] = 90.0f - az;
     }
 
@@ -1292,7 +1341,7 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
         fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default 90.0!\n");
     } else {
         auto el = static_cast<float>(p->GetDouble());
-        el = std::fmax(std::fmin(el, 89.999f), -89.999f);
+        el = std::max(std::min(el, 89.999f), -89.999f);
         ctx.camRot[1] = el;
     }
 
@@ -1303,7 +1352,7 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
         fprintf(stderr, "\nWARNING! config <camera.rotation> is not a number, using default 0.0!\n");
     } else {
         auto rot = static_cast<float>(p->GetDouble());
-        rot = std::fmax(std::fmin(rot, 180.0f), -180.0f);
+        rot = std::max(std::min(rot, 180.0f), -180.0f);
         ctx.camRot[2] = rot;
     }
 
@@ -1314,7 +1363,7 @@ void ContextParser::parseCameraSettings(RenderContext &ctx)
         fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default 120.0!\n");
     } else {
         auto fov = static_cast<float>(p->GetDouble());
-        fov = std::fmax(std::fmin(fov, 140.0f), 0.0f);
+        fov = std::max(std::min(fov, 140.0f), 0.0f);
         ctx.fov = fov;
     }
 

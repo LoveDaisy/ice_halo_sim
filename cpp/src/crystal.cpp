@@ -1,6 +1,7 @@
 #include "crystal.h"
 
 #include <cstring>
+#include <algorithm>
 
 namespace IceHalo {
 
@@ -161,7 +162,7 @@ Crystal* Crystal::createHexPyramid(float h1, float h2, float h3)
 {
     using namespace Math;
 
-    const float H = 1.629f;
+    float H = C_CONSTANT;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
 
@@ -285,7 +286,7 @@ Crystal* Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h3)
 {
     using namespace Math;
 
-    float H = 1.629f * i1 / i4;
+    float H = C_CONSTANT * i1 / i4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
     
@@ -345,8 +346,8 @@ Crystal* Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, 
 {
     using namespace Math;
 
-    float H1 = 1.629f * upperIdx1 / upperIdx4;
-    float H3 = 1.629f * lowerIdx1 / lowerIdx4;
+    float H1 = C_CONSTANT * upperIdx1 / upperIdx4;
+    float H3 = C_CONSTANT * lowerIdx1 / lowerIdx4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
     
@@ -407,8 +408,8 @@ Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lo
 {
     using namespace Math;
 
-    float H1 = 1.629f * upperIdx1 / upperIdx4;
-    float H2 = 1.629f * lowerIdx1 / lowerIdx4;
+    float H1 = C_CONSTANT * upperIdx1 / upperIdx4;
+    float H2 = C_CONSTANT * lowerIdx1 / lowerIdx4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h2 = std::max(std::min(h2, 1.0f), 0.0f);
 
@@ -487,11 +488,11 @@ Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lo
             9
     11
 */
-Crystal *Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3) 
+Crystal* Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3) 
 {
     using namespace Math;
 
-    float H = 1.629f / 1.732051f * i1 / i4;
+    float H = C_CONSTANT / 1.732051f * i1 / i4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
 
@@ -539,6 +540,151 @@ Crystal *Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
     faces.emplace_back(TriangleIdx(10, 9, 11));
 
     return new Crystal(vertexes, faces);
+}
+
+
+/*
+ * parameter: dist, defines the distance from origin of each face. Must contains 6 numbers.
+ *            Starts from face 3.
+ * parameter: h, cylinder height, h = height / a
+ */
+Crystal* Crystal::createIrregularHexCylinder(float *dist, float h)
+{
+    /* Use a naive algorithm to determine the profile of prism face 
+     * 1. For each line pair L1 and L2, get their intersection point p12;
+     * 2. For all half planes, check if p12 is in the plane;
+     *    2.1 If p12 is in all half planes, put it into a set P;
+     *    2.2 Else drop this point;
+     * 3. Construct a convex hull from point set P.
+     */
+    using namespace Math;
+
+    constexpr int CONSTRAINT_NUM = 8;
+
+    for (int i = 0; i < 6; i++) {
+        dist[i] *= SQRT3 / 2;
+    }
+
+    /* Half plane is expressed as: a*x + b*y + c <= 0 */
+    float a[CONSTRAINT_NUM] = {
+        SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,   // Prism faces
+        0.0f, 0.0f,                                 // Top and bottom faces
+    };
+    float b[CONSTRAINT_NUM] = {
+        1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+        0.0f, 0.0f,
+    };
+    float c[CONSTRAINT_NUM] = {
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+        1.0f, -1.0f,
+    };
+    float d[CONSTRAINT_NUM] = {
+        -2 * dist[0], -dist[1], -2 * dist[2], -2 * dist[3], -dist[4], -2 * dist[5],
+        -h, -h,
+    };
+    HalfSpaceSet hss(CONSTRAINT_NUM, a, b, c, d);
+
+    std::vector<Vec3f> pts;
+    findInnerPoints(hss, pts);
+    sortAndRemoveDuplicate(pts);
+
+    std::vector<TriangleIdx> faces;
+    buildPolyhedronFaces(hss, pts, faces);
+
+    return new Crystal(pts, faces);
+}
+
+
+/* Irregular hexagon pyramid 
+ * parameter: dist, defines the distance from origin of each face. Must contains 6 numbers. The distance of a
+ *            normal hexagon is defined as 1.
+ * parameter: idx, defines the Miller index of upper and lower pyramidal segments. Must contains 4 numbers.
+ * parameter: h, defines the height of each segment.
+ *            h[0] and h[2] are the heights of upper and lower pyramidal segments, defined as height / H, where
+ *            H is the maximum possible height.
+ *            h[1] are the heights of middle cylindrical segment, defined as height / a, where a is the
+ *            diameter of original circumcircle.
+ */
+Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
+{
+    /* There are 20 faces. The crystal is the intersection of all these half-spaces.
+     * 1. Find all inner point as vertexes.
+     * 2. Find all co-planner points. 
+     * 3. For points in each face, construct a triangular division.
+     */
+    using namespace Math;
+
+    constexpr int CONSTRAINT_NUM = 20;
+    constexpr int DIST_NUM = 6;
+    constexpr int H_NUM = 3;
+
+    float alpha0 = idx[1] / C_CONSTANT / idx[0] * SQRT3;
+    float alpha1 = idx[3] / C_CONSTANT / idx[2] * SQRT3;
+    float beta0 = alpha0 * h[1];
+    float beta1 = alpha1 * h[1];
+
+    for (int i = 0; i < DIST_NUM; i++) {
+        dist[i] *= SQRT3 / 2;
+    }
+    for (int i = 0; i < H_NUM; i++) {
+        h[i] = std::max(h[i], 0.0f);
+    }
+
+    float a[CONSTRAINT_NUM] = {
+        SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,   // Prism faces
+        SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,   // Upper pyramid faces
+        SQRT3, 0.0f, -SQRT3, -SQRT3, 0.0f, SQRT3,   // Lower pyramid faces
+        0.0f, 0.0f,                                 // Top and bottom faces
+    };
+    float b[CONSTRAINT_NUM] = {
+        1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+        1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+        1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+        0.0f, 0.0f,
+    };
+    float c[CONSTRAINT_NUM] = {
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+        alpha0, alpha0 / 2, alpha0, alpha0, alpha0 / 2, alpha0,
+        -alpha1, -alpha1 / 2, -alpha1, -alpha1, -alpha1 / 2, -alpha1,
+        1.0f, -1.0f,
+    };
+    float d[CONSTRAINT_NUM] = {
+        -2 * dist[0], -dist[1], -2 * dist[2], -2 * dist[3], -dist[4], -2 * dist[5],
+        -2 * dist[0] - beta0, -dist[1] - beta0 / 2, -2 * dist[2] - beta0, -2 * dist[3] - beta0, -dist[4] - beta0 / 2, -2 * dist[5] - beta0,
+        -2 * dist[0] - beta1, -dist[1] - beta1 / 2, -2 * dist[2] - beta1, -2 * dist[3] - beta1, -dist[4] - beta1 / 2, -2 * dist[5] - beta1,
+        0.0f, 0.0f,
+    };
+    HalfSpaceSet hss(CONSTRAINT_NUM - 2, a, b, c, d);
+
+    /* Step 1. Find all inner points */
+    std::vector<Vec3f> pts;
+    findInnerPoints(hss, pts);
+    sortAndRemoveDuplicate(pts);
+
+    /* Find max and min height, then determine the height of pyramid segment */
+    float maxZ = pts[0].z();
+    float minZ = pts[0].z();
+    for (const auto &p : pts) {
+        if (p.z() > maxZ) {
+            maxZ = p.z();
+        }
+        if (p.z() < minZ) {
+            minZ = p.z();
+        }
+    }
+    d[CONSTRAINT_NUM - 2] = -(maxZ - h[1]) * h[0] - h[1];
+    d[CONSTRAINT_NUM - 1] = (minZ + h[1]) * h[2] - h[1];
+
+    pts.clear();
+    hss.n = CONSTRAINT_NUM;
+    findInnerPoints(hss, pts);
+    sortAndRemoveDuplicate(pts);
+
+    /* Step 2. Build convex hull with verteces */
+    std::vector<TriangleIdx> faces;
+    buildPolyhedronFaces(hss, pts, faces);
+
+    return new Crystal(pts, faces);
 }
 
 };

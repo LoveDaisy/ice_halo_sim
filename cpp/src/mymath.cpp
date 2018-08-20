@@ -1,11 +1,19 @@
-#include "context.h"
 #include "mymath.h"
+
+#include <cstring>
+#include <algorithm>
+#include <chrono>
 
 
 namespace IceHalo {
 
 namespace Math {
 
+
+bool floatEqual(float a, float b, float threshold)
+{
+    return std::abs(a - b) < threshold;
+}
 
 float dot3(const float *vec1, const float *vec2)
 {
@@ -117,6 +125,153 @@ void rotateZBack(const float *lon_lat_roll, float *vec, uint64_t dataNum)
     memcpy(vec, res, 3 * dataNum * sizeof(float));
 
     delete[] res;
+}
+
+
+void findInnerPoints(HalfSpaceSet &hss, std::vector<Vec3f> &pts)
+{
+    float *a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
+    int n = hss.n;
+
+    for (int i = 0; i < n; i++) {
+        for (int j = i+1; j < n; j++) {
+            for (int k = j+1; k < n; k++) {
+                float det = a[k]*b[j]*c[i] - a[j]*b[k]*c[i] - a[k]*b[i]*c[j] + a[i]*b[k]*c[j] + a[j]*b[i]*c[k] - a[i]*b[j]*c[k];
+                if (std::abs(det) <= FLOAT_EPS) {
+                    continue;
+                }
+                float x = -(b[k]*c[j]*d[i] - b[j]*c[k]*d[i] - b[k]*c[i]*d[j] + b[i]*c[k]*d[j] + b[j]*c[i]*d[k] - b[i]*c[j]*d[k]) / det;
+                float y = -(-(a[k]*c[j]*d[i]) + a[j]*c[k]*d[i] + a[k]*c[i]*d[j] - a[i]*c[k]*d[j] - a[j]*c[i]*d[k] + a[i]*c[j]*d[k]) / det;
+                float z = -(a[k]*b[j]*d[i] - a[j]*b[k]*d[i] - a[k]*b[i]*d[j] + a[i]*b[k]*d[j] + a[j]*b[i]*d[k] - a[i]*b[j]*d[k]) / det;
+
+                bool in = true;
+                for (int ii = 0; ii < n; ii++) {
+                    in = in && (a[ii]*x + b[ii]*y + c[ii]*z + d[ii] <= FLOAT_EPS);
+                    if (!in) {
+                        break;
+                    }
+                }
+                if (in) {
+                    pts.emplace_back(Vec3f(x, y, z));
+                }
+            }
+        }
+    }
+}
+
+
+void sortAndRemoveDuplicate(std::vector<Vec3f> &pts)
+{
+    /* Sort by coordinates */
+    std::sort(pts.begin(), pts.end(),
+        [](const Vec3f &p1, const Vec3f &p2){
+            if (p1 == p2) {
+                return false;
+            }
+            if (p1.x() < p2.x() - FLOAT_EPS) {
+                return true;
+            }
+            if (floatEqual(p1.x(), p2.x()) && p1.y() < p2.y() - FLOAT_EPS) {
+                return true;
+            }
+            if (floatEqual(p1.x(), p2.x()) && floatEqual(p1.y(), p2.y()) && p1.z() < p2.z() - FLOAT_EPS) {
+                return true;
+            }
+            return false;
+        }
+    );
+
+    /* Remove duplicated points */
+    for (auto iter = pts.begin(), lastIter = pts.begin(); iter != pts.end(); ) {
+        if (iter != lastIter && (*iter) == (*lastIter)) {
+            iter = pts.erase(iter);
+        } else {
+            lastIter = iter;
+            iter++;
+        }
+    }
+}
+
+
+void findCoplanarPoints(const std::vector<Vec3f> &pts, const Vec3f n0, float d0, std::vector<int> &ptsIdx)
+{
+    for (decltype(pts.size()) j = 0; j < pts.size(); j++) {
+        const auto &p = pts[j];
+        if (floatEqual(Vec3f::dot(n0, p) + d0, 0)) {
+            ptsIdx.push_back(static_cast<int>(j));
+        }
+    }
+}
+
+
+void buildPolyhedronFaces(HalfSpaceSet &hss, const std::vector<Math::Vec3f> &pts, 
+                          std::vector<Math::TriangleIdx> &faces)
+{
+    int num = hss.n;
+    float *a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
+
+    for (int i = 0; i < num; i++) {
+        /* Find co-planer points */
+        std::vector<int> facePtsIdx;
+        Vec3f n0(a[i], b[i], c[i]);
+        findCoplanarPoints(pts, n0, d[i], facePtsIdx);
+        if (facePtsIdx.empty()) {
+            continue;
+        }
+        
+        /* Build triangular division */
+        buildTriangularDivision(pts, n0, facePtsIdx, faces);
+    }
+}
+
+
+void buildTriangularDivision(
+    const std::vector<Vec3f> &vertex, 
+    const Vec3f &n, 
+    std::vector<int> &ptsIdx, 
+    std::vector<TriangleIdx> &faces)
+{
+    /* Find the center of co-planer points */
+    Vec3f center(0.0f, 0.0f, 0.0f);
+    for (const auto &p : ptsIdx) {
+        center += p;
+    }
+    center /= ptsIdx.size();
+
+    /* Sort by angle */
+    int idx0 = ptsIdx[0];
+    std::sort(ptsIdx.begin() + 1, ptsIdx.end(),
+        [&n, &vertex, &center, idx0](const int idx1, const int idx2){
+            Vec3f p0 = Vec3f::fromVec(center, vertex[idx0]).normalized();
+            Vec3f p1 = Vec3f::fromVec(center, vertex[idx1]).normalized();
+            Vec3f p2 = Vec3f::fromVec(center, vertex[idx2]).normalized();
+
+            Vec3f n1 = Vec3f::cross(p0, p1);
+            float dir = Vec3f::dot(n1, n);
+            float c1 = Vec3f::dot(p0, p1);
+            float s1 = std::abs(dir) > FLOAT_EPS ? Vec3f::norm(n1) * (dir / std::abs(dir)) : 0;
+            float angle1 = atan2(s1, c1);
+            angle1 += (angle1 < 0 ? 2 * PI : 0);
+
+            Vec3f n2 = Vec3f::cross(p0, p2);
+            dir = Vec3f::dot(n2, n);
+            float c2 = Vec3f::dot(p0, p2);
+            float s2 = std::abs(dir) > FLOAT_EPS ? Vec3f::norm(n2) * (dir / std::abs(dir)) : 0;
+            float angle2 = atan2(s2, c2);
+            angle2 += (angle2 < 0 ? 2 * PI : 0);
+
+            if (floatEqual(angle1, angle2)) {
+                return false;
+            } else {
+                return angle1 < angle2;
+            }
+        }
+    );
+
+    /* Construct a triangular division */
+    for (decltype(ptsIdx.size()) j = 1; j < ptsIdx.size() - 1; j++) {
+        faces.emplace_back(TriangleIdx(ptsIdx[0], ptsIdx[j], ptsIdx[j+1]));
+    }
 }
 
 
@@ -252,12 +407,76 @@ void Vec3<T>::normalize()
     Math::normalize3(_val);
 }
 
+bool operator==(const Vec3f &lhs, const Vec3f &rhs)
+{
+    for (int i = 0; i < 3; i++) {
+        if (!floatEqual(lhs.val()[i], rhs.val()[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 template <typename T>
 Vec3<T> Vec3<T>::normalized(const Vec3<T> &v)
 {
     T data[3];
     Math::normalized3(v._val, data);
     return Vec3<T>(data);
+}
+
+template <typename T>
+Vec3<T>& Vec3<T>::operator+= (const Vec3<T> v)
+{
+    for (int i = 0; i < 3; i++) {
+        _val[i] += v._val[i];
+    }
+    return *this;
+}
+
+template <typename T>
+Vec3<T>& Vec3<T>::operator+= (T a)
+{
+    for (int i = 0; i < 3; i++) {
+        _val[i] += a;
+    }
+    return *this;
+}
+
+template <typename T>
+Vec3<T>& Vec3<T>::operator-= (const Vec3<T> v)
+{
+    for (int i = 0; i < 3; i++) {
+        _val[i] -= v._val[i];
+    }
+    return *this;
+}
+
+template <typename T>
+Vec3<T>& Vec3<T>::operator-= (T a)
+{
+    for (int i = 0; i < 3; i++) {
+        _val[i] -= a;
+    }
+    return *this;
+}
+
+template <typename T>
+Vec3<T>& Vec3<T>::operator/= (T a)
+{
+    for (int i = 0; i < 3; i++) {
+        _val[i] /= a;
+    }
+    return *this;
+}
+
+template <typename T>
+Vec3<T>& Vec3<T>::operator*= (T a)
+{
+    for (int i = 0; i < 3; i++) {
+        _val[i] *= a;
+    }
+    return *this;
 }
 
 template <typename T>
@@ -317,6 +536,11 @@ const int * TriangleIdx::idx() const
 {
     return &_idx[0];
 }
+
+
+HalfSpaceSet::HalfSpaceSet(int n, float *a, float *b, float *c, float *d) :
+    n(n), a(a), b(b), c(c), d(d)
+{ }
 
 }  // namespace Math
 

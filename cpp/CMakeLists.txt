@@ -1,8 +1,11 @@
-cmake_minimum_required(VERSION 2.8)
-project(IceHaloSim)
+cmake_minimum_required(VERSION 2.8.2)
 
-set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+project(IceHalo)
+
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 add_subdirectory(src bin)
-
+if(NEED_TEST)
+    add_subdirectory(test)
+endif()
 

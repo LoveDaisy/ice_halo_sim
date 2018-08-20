@@ -1,6 +1,8 @@
 #include <limits>
+#include <cmath>
 
 #include "optics.h"
+#include "mymath.h"
 #include "context.h"
 #include "threadingpool.h"
 
@@ -243,7 +245,7 @@ float Optics::getReflectRatio(float cos_angle, float rr)
 {
     float s = std::sqrt(1.0f - cos_angle * cos_angle);
     float c = std::abs(cos_angle);
-    float d = std::fmax(1.0f - (rr * s) * (rr * s), 0.0f);
+    float d = std::max(1.0f - (rr * s) * (rr * s), 0.0f);
     float d_sqrt = std::sqrt(d);
 
     float Rs = (rr * c - d_sqrt) / (rr * c + d_sqrt);
@@ -265,7 +267,7 @@ void Optics::intersectLineFace(const float *pt, const float *dir, const float *f
     float c = dir[0]*face_base[1]*face_base[5] + dir[1]*face_base[2]*face_base[3] +
         dir[2]*face_base[0]*face_base[4] - dir[0]*face_base[2]*face_base[4] -
         dir[1]*face_base[0]*face_base[5] - dir[2]*face_base[1]*face_base[3];
-    if (std::abs(c) < 1e-6) {
+    if (Math::floatEqual(c, 0)) {
         *t = -1;
         return;
     }
