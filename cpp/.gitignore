@@ -5,7 +5,7 @@
 cmake-build-debug
 build
 
-figs/plot.nb
+figs/*.nb
 figs/*.pdf
 
 config.json
