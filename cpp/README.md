@@ -176,9 +176,9 @@ Each shape has its own shape parameters.
   <img src="figs/tri_pyramid_01.png" width="400">. 
 
   * `IrregularHexCylinder`:
-  7 parameters. First 6 parameters define the prism face distance from the origin. 
-  Last parameter is height of the crystal. The distance here means the ratio of actual distance
-  and regular haxegon distance. Thus, a regular haxegon has distance of `[1, 1, 1, 1, 1, 1]`.
+  7 parameters. First 6 parameters define the prism face distance factor from the origin. 
+  Last parameter is height of the crystal. The distance factor here means the ratio of actual distance
+  w.r.t regular haxegon distance. Thus, a regular haxegon has distance of `[1, 1, 1, 1, 1, 1]`.
   The figure shows an irregular hexegon with distance of `[1.1, 0.9, 1.5, 0.9, 1.7, 1.2]`  
   <img src="figs/irr_hex_01.png" width="400">.
 
