@@ -14,8 +14,7 @@
 
 namespace IceHalo {
 
-CrystalContext::CrystalContext(SimulationContext *ctx) :
-    simCtx(ctx)
+CrystalContext::CrystalContext()
 { }
 
 
@@ -49,6 +48,43 @@ void CrystalContext::fillDir(const float *incDir, float *rayDir, float *mainAxRo
 {
     oriGen.fillData(incDir, num, rayDir, mainAxRot);
 }
+
+
+// int CrystalContext::chooseFace(const float *rayDir)
+// {
+//     int faceNum = crystal->faceNum();
+//     auto *frac = new float[faceNum];
+
+//     for (int i = 0; i < faceNum; i++) {
+//         float v1[3], v2[3];
+//         Math::vec3FromTo(faces + i*9, faces + i*9 + 3, v1);
+//         Math::vec3FromTo(faces + i*9, faces + i*9 + 6, v2);
+//         float norm[3];
+//         Math::cross3(v1, v2, norm);
+//         float c = Math::dot3(rayDir, norm);
+//         frac[i] = c < 0 ? (-c) : 0;
+//     }
+//     for (int i = 1; i < faceNum; i++) {
+//         frac[i] += frac[i-1];
+//     }
+//     for (int i = 0; i < faceNum; i++) {
+//         frac[i] /= frac[faceNum-1];
+//     }
+//     frac[faceNum-1] = 1.0f;    // Force to 1.0f
+
+//     int idx = -1;
+//     float p = dis(gen);
+//     for (int j = 0; j < faceNum; j++) {
+//         if (p <= frac[j]) {
+//             idx = j;
+//             break;
+//         }
+//     }
+
+//     delete[] frac;
+
+//     return idx;
+// }
 
 
 RayTracingContext::RayTracingContext(SimulationContext *ctx) :
@@ -108,7 +144,7 @@ void RayTracingContext::initRays(CrystalContext *ctx, int rayNum, const float *d
         pool->addJob([ctx, dir, faces, startIdx, endIdx, this](){
             int faceNum = ctx->getCrystal()->faceNum();
             for (int i = startIdx; i < endIdx; i++) {
-                fillDir(dir+i*3, rayDir+i*3, mainAxRot+i*3, ctx);
+                ctx->fillDir(dir+i*3, rayDir+i*3, mainAxRot+i*3);
 
                 int idx = chooseFace(faces, faceNum, rayDir+i*3);
                 faceId[i] = idx;
@@ -196,7 +232,7 @@ size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float *dir,
     int step = initRayNum / 80;
     for (int startIdx = 0; startIdx < initRayNum; startIdx += step) {
         int endIdx = std::min(startIdx + step, initRayNum);
-        pool->addJob([segs, dir, prob, &k, startIdx, endIdx, this](){ 
+        pool->addJob([segs, dir, prob, &k, startIdx, endIdx, this](){
             copyFinishedRaySegmentsRange(segs, dir, prob, k, startIdx, endIdx);
         });
     }
@@ -294,13 +330,7 @@ int RayTracingContext::chooseFace(const float *faces, int faceNum, const float *
 }
 
 
-void RayTracingContext::fillDir(const float *incDir, float *rayDir, float *axRot, CrystalContext *ctx)
-{
-    ctx->fillDir(incDir, rayDir, axRot);
-}
-
-
-void RayTracingContext::fillPts(const float *faces, int idx, float *rayPts)
+    void RayTracingContext::fillPts(const float *faces, int idx, float *rayPts)
 {
     float a = dis(gen);
     float b = dis(gen);
@@ -614,7 +644,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
 void SimulationContext::printCrystalInfo()
 {
     for (auto c : crystalCtxs) {
-        auto g = c->crystal;
+        auto g = c->getCrystal();
         printf("--\n");
         for (auto &v : g->getVertexes()) {
             printf("V:%+.4f,%+.4f,%+.4f;\n", v.x(), v.y(), v.z());
@@ -1071,7 +1101,7 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
 
     char msgBuffer[512];
 
-    auto *cryCtx = new CrystalContext(&ctx);
+    auto *cryCtx = new CrystalContext();
     const auto *p = Pointer("/parameter").Get(c);
     if (c["type"] == "HexCylinder") {
         if (p == nullptr || !p->IsNumber()) {

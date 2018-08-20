@@ -63,8 +63,8 @@ private:
     static void hitSurfaceRange(float n, RayTracingContext *rayCtx, int startIdx, int endIdx);
     static void propagateRange(RayTracingContext *rayCtx, int faceNum, float *faces, int startIdx, int endIdx);
     static float getReflectRatio(float cos_angle, float rr);
-    static void intersectLineFace(const float *pt, const float *dir, const float *face,
-        float *p, float *t, float *alpha, float *beta);
+    static void intersectLineTriangle(const float *pt, const float *dir, const float *face,
+                                      float *p, float *t, float *alpha, float *beta);
 };
 
 
