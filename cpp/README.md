@@ -175,6 +175,17 @@ Each shape has its own shape parameters.
   5 parameters. Similar to 5 parameter case of `HexPyramid`. (TODO: 3 and 7 parameters cases to be added.)  
   <img src="figs/tri_pyramid_01.png" width="400">. 
 
+  * `IrregularHexCylinder`:
+  7 parameters. First 6 parameters define the prism face distance from the origin. 
+  Last parameter is height of the crystal.  
+  <img src="figs/irr_hex_01.png" width="400">.
+
+  * `IrregularHexPyramid`:
+  13 parameters. First 6 parameters define the prism face distance from the origin. Next 4 parameters
+  are Miller index describing upper and lower pyramid segment. Last 3 parameters are heights of each segment, from
+  upper to lower.  
+  <img src="figs/irr_hex_pyramid_01.png" width="400">.
+
   * `CubicPyramid`:
   2 parameters. Similar to cases above, the 2 parameters defines `h1 / H1` and `h2 / H2`.  
   NOTE: this kind crystal has cubic system.  
