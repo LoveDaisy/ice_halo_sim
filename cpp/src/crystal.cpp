@@ -1,7 +1,6 @@
 #include "crystal.h"
 
 #include <cstring>
-#include <algorithm>
 
 namespace IceHalo {
 
@@ -29,8 +28,8 @@ void Crystal::initialize()
 
     norms.clear();
     initDone = true;
-    
-    int vtxNum = static_cast<int>(vertexes.size());
+
+    auto vtxNum = static_cast<int>(vertexes.size());
     for (const auto &f : faces) {
         const int * idx = f.idx();
         for (int i = 0; i < 3; ++i) {
@@ -81,7 +80,7 @@ int Crystal::faceNum() const
 void Crystal::copyVertexData(float *data) const
 {
     for (decltype(vertexes.size()) i = 0; i < vertexes.size(); ++i) {
-        memcpy(data + i*3, vertexes[i].val(), 3*sizeof(float));
+        std::memcpy(data + i*3, vertexes[i].val(), 3*sizeof(float));
     }
 }
 
@@ -89,16 +88,16 @@ void Crystal::copyFaceData(float *data) const
 {
     for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
         const int *idx = faces[i].idx();
-        memcpy(data + i*9+0, vertexes[idx[0]].val(), 3*sizeof(float));
-        memcpy(data + i*9+3, vertexes[idx[1]].val(), 3*sizeof(float));
-        memcpy(data + i*9+6, vertexes[idx[2]].val(), 3*sizeof(float));
+        std::memcpy(data + i*9+0, vertexes[idx[0]].val(), 3*sizeof(float));
+        std::memcpy(data + i*9+3, vertexes[idx[1]].val(), 3*sizeof(float));
+        std::memcpy(data + i*9+6, vertexes[idx[2]].val(), 3*sizeof(float));
     }
 }
 
 void Crystal::copyFaceIdxData(int *data) const
 {
     for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
-        memcpy(data + i*3, faces[i].idx(), 3*sizeof(int));
+        std::memcpy(data + i*3, faces[i].idx(), 3*sizeof(int));
     }
 }
 
@@ -107,13 +106,13 @@ void Crystal::copyNormalData(int idx, float *data) const
     if (idx >= static_cast<int>(faces.size()) || idx < 0) {
         return;
     }
-    memcpy(data, norms[idx].val(), 3*sizeof(float));
+    std::memcpy(data, norms[idx].val(), 3*sizeof(float));
 }
 
 void Crystal::copyNormalData(float *data) const
 {
     for (decltype(norms.size()) i = 0; i < norms.size(); i++) {
-        memcpy(data + i*3, norms[i].val(), 3*sizeof(float));
+        std::memcpy(data + i*3, norms[i].val(), 3*sizeof(float));
     }
 }
 

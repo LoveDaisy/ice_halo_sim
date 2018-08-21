@@ -23,8 +23,8 @@ void equiAreaFishEye(
     float imgR = std::max(imgWid, imgHei) / 2.0f;
     auto *dirCopy = new float[dataNumber * 3];
     float camRotCopy[3];
-    memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
-    memcpy(camRotCopy, camRot, sizeof(float) * 3);
+    std::memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
+    std::memcpy(camRotCopy, camRot, sizeof(float) * 3);
     camRotCopy[0] *= -1;
     camRotCopy[1] *= -1;
     for (float &i : camRotCopy) {
@@ -68,7 +68,7 @@ void dualEquiAreaFishEye(
 
     auto *dirCopy = new float[dataNumber * 3];
     float camRotCopy[3] = {90.0f, 89.999f, 0.0f};
-    memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
+    std::memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
     camRotCopy[0] *= -1;
     camRotCopy[1] *= -1;
     for (float &i : camRotCopy) {
@@ -110,7 +110,7 @@ void dualEquiDistantFishEye(
 
     auto *dirCopy = new float[dataNumber * 3];
     float camRotCopy[3] = {90.0f, 89.999f, 0.0f};
-    memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
+    std::memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
     camRotCopy[0] *= -1;
     camRotCopy[1] *= -1;
     for (float &i : camRotCopy) {
@@ -150,8 +150,8 @@ void rectLinear(
 {
     auto *dirCopy = new float[dataNumber * 3];
     float camRotCopy[3];
-    memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
-    memcpy(camRotCopy, camRot, sizeof(float) * 3);
+    std::memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
+    std::memcpy(camRotCopy, camRot, sizeof(float) * 3);
     camRotCopy[0] *= -1;
     camRotCopy[1] *= -1;
     for (float &i : camRotCopy) {
@@ -182,7 +182,6 @@ void rectLinear(
 
 constexpr int SpectrumRenderer::MIN_WL;
 constexpr int SpectrumRenderer::MAX_WL;
-constexpr float SpectrumRenderer::_cmf_xyz_sum[];
 constexpr float SpectrumRenderer::_W[];
 constexpr float SpectrumRenderer::_mt[];
 constexpr float SpectrumRenderer::_cmf_x[];

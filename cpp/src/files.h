@@ -30,7 +30,7 @@ namespace OpenMode
 class File
 {
 public:
-    File(const char* filename);
+    explicit File(const char* filename);
     File(const char* path, const char* filename);
     ~File();
 

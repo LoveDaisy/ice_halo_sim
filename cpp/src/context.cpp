@@ -14,8 +14,7 @@
 
 namespace IceHalo {
 
-CrystalContext::CrystalContext(SimulationContext *ctx) :
-    simCtx(ctx)
+CrystalContext::CrystalContext()
 { }
 
 
@@ -49,6 +48,43 @@ void CrystalContext::fillDir(const float *incDir, float *rayDir, float *mainAxRo
 {
     oriGen.fillData(incDir, num, rayDir, mainAxRot);
 }
+
+
+// int CrystalContext::chooseFace(const float *rayDir)
+// {
+//     int faceNum = crystal->faceNum();
+//     auto *frac = new float[faceNum];
+
+//     for (int i = 0; i < faceNum; i++) {
+//         float v1[3], v2[3];
+//         Math::vec3FromTo(faces + i*9, faces + i*9 + 3, v1);
+//         Math::vec3FromTo(faces + i*9, faces + i*9 + 6, v2);
+//         float norm[3];
+//         Math::cross3(v1, v2, norm);
+//         float c = Math::dot3(rayDir, norm);
+//         frac[i] = c < 0 ? (-c) : 0;
+//     }
+//     for (int i = 1; i < faceNum; i++) {
+//         frac[i] += frac[i-1];
+//     }
+//     for (int i = 0; i < faceNum; i++) {
+//         frac[i] /= frac[faceNum-1];
+//     }
+//     frac[faceNum-1] = 1.0f;    // Force to 1.0f
+
+//     int idx = -1;
+//     float p = dis(gen);
+//     for (int j = 0; j < faceNum; j++) {
+//         if (p <= frac[j]) {
+//             idx = j;
+//             break;
+//         }
+//     }
+
+//     delete[] frac;
+
+//     return idx;
+// }
 
 
 RayTracingContext::RayTracingContext(SimulationContext *ctx) :
@@ -108,7 +144,7 @@ void RayTracingContext::initRays(CrystalContext *ctx, int rayNum, const float *d
         pool->addJob([ctx, dir, faces, startIdx, endIdx, this](){
             int faceNum = ctx->getCrystal()->faceNum();
             for (int i = startIdx; i < endIdx; i++) {
-                fillDir(dir+i*3, rayDir+i*3, mainAxRot+i*3, ctx);
+                ctx->fillDir(dir+i*3, rayDir+i*3, mainAxRot+i*3);
 
                 int idx = chooseFace(faces, faceNum, rayDir+i*3);
                 faceId[i] = idx;
@@ -152,10 +188,10 @@ void RayTracingContext::commitHitResult()
         activeRaySeg[currentRayNum + i] = seg;
     }
 
-    memcpy(rayDir, rayDir2, currentRayNum * 3 * sizeof(float));
-    memcpy(rayDir + currentRayNum*3, rayDir3, currentRayNum * 3 * sizeof(float));
-    memcpy(rayPts + currentRayNum*3, rayPts, currentRayNum * 3 * sizeof(float));
-    memcpy(faceId + currentRayNum, faceId, currentRayNum * sizeof(int));
+    std::memcpy(rayDir, rayDir2, currentRayNum * 3 * sizeof(float));
+    std::memcpy(rayDir + currentRayNum*3, rayDir3, currentRayNum * 3 * sizeof(float));
+    std::memcpy(rayPts + currentRayNum*3, rayPts, currentRayNum * 3 * sizeof(float));
+    std::memcpy(faceId + currentRayNum, faceId, currentRayNum * sizeof(int));
 
     currentRayNum *= 2;
     activeRaySegNum = currentRayNum;
@@ -169,8 +205,8 @@ void RayTracingContext::commitPropagateResult(CrystalContext *ctx)
     for (int i = 0; i < currentRayNum; i++) {
         if (faceId2[i] >= 0 && activeRaySeg[i]->w > PROP_MIN_W) {
             activeRaySeg[activeRaySegNum++] = activeRaySeg[i];
-            memcpy(rayPts + k*3, rayPts2 + i*3, 3 * sizeof(float));
-            memcpy(rayDir + k*3, rayDir + i*3, 3 * sizeof(float));
+            std::memcpy(rayPts + k*3, rayPts2 + i*3, 3 * sizeof(float));
+            std::memcpy(rayDir + k*3, rayDir + i*3, 3 * sizeof(float));
             faceId[k] = faceId2[i];
             ctx->getCrystal()->copyNormalData(faceId2[i], faceNorm + k*3);
             k++;
@@ -196,7 +232,7 @@ size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float *dir,
     int step = initRayNum / 80;
     for (int startIdx = 0; startIdx < initRayNum; startIdx += step) {
         int endIdx = std::min(startIdx + step, initRayNum);
-        pool->addJob([segs, dir, prob, &k, startIdx, endIdx, this](){ 
+        pool->addJob([segs, dir, prob, &k, startIdx, endIdx, this](){
             copyFinishedRaySegmentsRange(segs, dir, prob, k, startIdx, endIdx);
         });
     }
@@ -230,7 +266,7 @@ void RayTracingContext::copyFinishedRaySegmentsRange(RaySegment **segs, float *d
                     && uniformDist(randomEngine) < prob) {
                 auto tmpk = k++;
                 float *finalDir = dir + tmpk * 3;
-                memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
+                std::memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
                 Math::rotateZBack(mainAxRot + rayIdx * 3, finalDir);
                 segs[tmpk] = p;
             }
@@ -294,13 +330,7 @@ int RayTracingContext::chooseFace(const float *faces, int faceNum, const float *
 }
 
 
-void RayTracingContext::fillDir(const float *incDir, float *rayDir, float *axRot, CrystalContext *ctx)
-{
-    ctx->fillDir(incDir, rayDir, axRot);
-}
-
-
-void RayTracingContext::fillPts(const float *faces, int idx, float *rayPts)
+    void RayTracingContext::fillPts(const float *faces, int idx, float *rayPts)
 {
     float a = dis(gen);
     float b = dis(gen);
@@ -498,7 +528,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
                     if (!p->nextReflect && !p->nextRefract &&
                             p->isValidEnd() && Math::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
                         float finalDir[3];
-                        memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
+                        std::memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
                         Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
                         file.write(finalDir, 3);
                         file.write(p->w);
@@ -548,7 +578,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
 //                     }
 //                     if (p->isValidEnd()) {
 //                         float finalDir[3];
-//                         memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
+//                         std::memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
 //                         Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
 //                         if (Math::dot3(targetDir, finalDir) > cosDelta) {
 //                             targetOn = true;
@@ -597,8 +627,8 @@ void SimulationContext::writeFinalDirections(const char *filename)
 //             printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n",
 //                    tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
 //             for (auto r : v) {
-//                 memcpy(tmp, r->pt.val(), 3*sizeof(float));
-//                 memcpy(tmp+3, r->dir.val(), 3*sizeof(float));
+//                 std::memcpy(tmp, r->pt.val(), 3*sizeof(float));
+//                 std::memcpy(tmp+3, r->dir.val(), 3*sizeof(float));
 //                 tmp[6] = r->w;
 //                 // file.write(tmp, 7);
 
@@ -614,13 +644,13 @@ void SimulationContext::writeFinalDirections(const char *filename)
 void SimulationContext::printCrystalInfo()
 {
     for (auto c : crystalCtxs) {
-        auto g = c->crystal;
+        auto g = c->getCrystal();
         printf("--\n");
         for (auto &v : g->getVertexes()) {
-            printf("V:%+.4f,%+.4f,%+.4f;\n", v.x(), v.y(), v.z());
+            printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
         }
         for (auto &f : g->getFaces()) {
-            printf("F:%d,%d,%d;\n", f.id1(), f.id2(), f.id3());
+            printf("f %d %d %d\n", f.id1()+1, f.id2()+1, f.id3()+1);
         }
     }
 }
@@ -701,7 +731,7 @@ void RenderContext::copySpectrumData(float *wavelengthData, float *spectrumData)
     int k = 0;
     for (const auto &kv : this->spectrumData) {
         wavelengthData[k] = kv.first;
-        memcpy(spectrumData + k * imgWid * imgHei, kv.second, imgWid * imgHei * sizeof(float));
+        std::memcpy(spectrumData + k * imgWid * imgHei, kv.second, imgWid * imgHei * sizeof(float));
         k++;
     }
     for (uint64_t i = 0; i < imgWid * imgHei * this->spectrumData.size(); i++) {
@@ -752,7 +782,7 @@ int RenderContext::loadDataFromFile(Files::File &file)
     auto *tmpDir = new float[totalCount * 3];
     auto *tmpW = new float[totalCount];
     for (decltype(readCount) i = 0; i < totalCount; i++) {
-        memcpy(tmpDir + i * 3, readBuffer + i * 4, 3 * sizeof(float));
+        std::memcpy(tmpDir + i * 3, readBuffer + i * 4, 3 * sizeof(float));
         tmpW[i] = readBuffer[i * 4 + 3];
         totalW += tmpW[i];
     }
@@ -1071,7 +1101,7 @@ void ContextParser::parseCrystalType(SimulationContext &ctx, const rapidjson::Va
 
     char msgBuffer[512];
 
-    auto *cryCtx = new CrystalContext(&ctx);
+    auto *cryCtx = new CrystalContext();
     const auto *p = Pointer("/parameter").Get(c);
     if (c["type"] == "HexCylinder") {
         if (p == nullptr || !p->IsNumber()) {

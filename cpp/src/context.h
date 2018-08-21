@@ -25,9 +25,8 @@ class ContextParser;
 class CrystalContext
 {
 friend SimulationContext;
-friend Optics;
 public:
-    explicit CrystalContext(SimulationContext *ctx);
+    CrystalContext();
     ~CrystalContext();
 
     void setCrystal(Crystal *g, float populationRatio,
@@ -36,9 +35,9 @@ public:
     Crystal * getCrystal();
 
     void fillDir(const float *incDir, float *rayDir, float *mainAxRot, int num = 1);
+    // int chooseFace(const float *rayDir);
 
 private:
-    SimulationContext *simCtx;
 
     float populationRatio;
     Crystal *crystal;
@@ -70,7 +69,7 @@ private:
     
     void deleteArrays();
     int chooseFace(const float *faces, int faceNum, const float *rayDir);
-    void fillDir(const float *incDir, float *rayDir, float *axRot, CrystalContext *ctx);
+
     void fillPts(const float *faces, int idx, float *rayPts);
 
     void copyFinishedRaySegmentsRange(RaySegment **segs, float *dir, float prob,

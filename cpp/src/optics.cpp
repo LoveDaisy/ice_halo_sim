@@ -121,9 +121,9 @@ void Optics::hitSurfaceRange(float n, RayTracingContext *rayCtx, int startIdx, i
 
 void Optics::propagate(RayTracingContext *rayCtx, CrystalContext *cryCtx)
 {
-    auto faceNum = cryCtx->crystal->faceNum();
+    auto faceNum = cryCtx->getCrystal()->faceNum();
     auto *faces = new float[faceNum * 9];
-    cryCtx->crystal->copyFaceData(faces);
+    cryCtx->getCrystal()->copyFaceData(faces);
 
     Pool *pool = Pool::getInstance();
     int step = rayCtx->currentRayNum / 80;
@@ -156,10 +156,10 @@ void Optics::propagateRange(RayTracingContext *rayCtx, int faceNum, float *faces
             float p[3];
             float t = -1, alpha = -1, beta = -1;
 
-            intersectLineFace(tmp_pt, tmp_dir, tmp_face, &p[0], &t, &alpha, &beta);
-            if (t > 1e-6 && t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
+            intersectLineTriangle(tmp_pt, tmp_dir, tmp_face, &p[0], &t, &alpha, &beta);
+            if (t > Math::FLOAT_EPS && t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
                 min_t = t;
-                memcpy(rayCtx->rayPts2 + i*3, p, sizeof(float) * 3);
+                std::memcpy(rayCtx->rayPts2 + i*3, p, sizeof(float) * 3);
                 rayCtx->faceId2[i] = j;
             }
         }
@@ -190,7 +190,6 @@ void Optics::traceRays(SimulationContext &context)
 
     std::default_random_engine randomEngine;
     std::uniform_real_distribution<double> uniformDist(0.0, 1.0);
-    std::vector<RaySegment *> v;
     for (int scatterIdx = 0; scatterIdx < multiScatterNum; scatterIdx++) {
         size_t inputOffset = 0, outputOffset = 0;
         for (int crystalIdx = 0; crystalIdx < context.getCrystalNum(); crystalIdx++) {
@@ -202,18 +201,15 @@ void Optics::traceRays(SimulationContext &context)
 
             // Start loop
             float index = IceRefractiveIndex::n(context.getCurrentWavelength());
-            int recursion = 0;
-            while (!rayTracingCtx->isFinished() && recursion < maxRecursion) {
+            for (int recursion = 0; !rayTracingCtx->isFinished() && recursion < maxRecursion; recursion++) {
                 hitSurface(index, rayTracingCtx);
                 rayTracingCtx->commitHitResult();
                 propagate(rayTracingCtx, crystalCtx);
                 rayTracingCtx->commitPropagateResult(crystalCtx);
-                recursion++;
             }
 
             inputOffset += rayTracingCtx->initRayNum;
 
-            v.clear();
             auto tmpRaySegs = rayTracingCtx->copyFinishedRaySegments(raySegStore2 + outputOffset,
                 dirStore2 + outputOffset * 3, context.getMultiScatterProb());
             outputOffset += tmpRaySegs;
@@ -224,8 +220,8 @@ void Optics::traceRays(SimulationContext &context)
                 auto j = static_cast<size_t>(uniformDist(randomEngine) * i);
                 raySegStore[i] = raySegStore2[j];
                 raySegStore[j] = raySegStore2[i];
-                memcpy(dirStore + j*3, dirStore2 + i*3, sizeof(float)*3);
-                memcpy(dirStore + i*3, dirStore2 + j*3, sizeof(float)*3);
+                std::memcpy(dirStore + j*3, dirStore2 + i*3, sizeof(float)*3);
+                std::memcpy(dirStore + i*3, dirStore2 + j*3, sizeof(float)*3);
                 wStore[i] = raySegStore[i]->w;
             }
             context.setCrystalRayNum(scatterIdx + 1, outputOffset);
@@ -256,8 +252,8 @@ float Optics::getReflectRatio(float cos_angle, float rr)
     return (Rs + Rp) / 2;
 }
 
-void Optics::intersectLineFace(const float *pt, const float *dir, const float *face,
-    float *p, float *t, float *alpha, float *beta)
+void Optics::intersectLineTriangle(const float *pt, const float *dir, const float *face,
+                                   float *p, float *t, float *alpha, float *beta)
 {
     const float *face_point = face;
     float face_base[6];
