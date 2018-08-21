@@ -647,10 +647,10 @@ void SimulationContext::printCrystalInfo()
         auto g = c->getCrystal();
         printf("--\n");
         for (auto &v : g->getVertexes()) {
-            printf("V:%+.4f,%+.4f,%+.4f;\n", v.x(), v.y(), v.z());
+            printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
         }
         for (auto &f : g->getFaces()) {
-            printf("F:%d,%d,%d;\n", f.id1(), f.id2(), f.id3());
+            printf("f %d %d %d\n", f.id1()+1, f.id2()+1, f.id3()+1);
         }
     }
 }

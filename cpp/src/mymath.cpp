@@ -233,8 +233,8 @@ void buildTriangularDivision(
 {
     /* Find the center of co-planer points */
     Vec3f center(0.0f, 0.0f, 0.0f);
-    for (const auto &p : ptsIdx) {
-        center += p;
+    for (auto p : ptsIdx) {
+        center += vertex[p];
     }
     center /= ptsIdx.size();
 
