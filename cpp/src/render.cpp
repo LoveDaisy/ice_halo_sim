@@ -88,8 +88,8 @@ void dualEquiAreaFishEye(
             }
             float r = 2.0f * projR * std::sin((Math::PI / 2.0f - std::abs(lat)) / 2.0f);
 
-            imgXY[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + imgR + (lat > 0 ? 0 : 2 * imgR)));
-            imgXY[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + imgR));
+            imgXY[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + imgR + (lat > 0 ? -0.5 : 2 * imgR + 0.5)));
+            imgXY[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + imgR - 0.5));
         }
     }
 
@@ -130,8 +130,8 @@ void dualEquiDistantFishEye(
             }
             float r = (1.0f - std::abs(lat) * 2.0f / Math::PI) * imgR;
 
-            imgXY[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + imgR + (lat > 0 ? 0 : 2 * imgR)));
-            imgXY[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + imgR));
+            imgXY[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + imgR + (lat > 0 ? -0.5 : 2 * imgR + 0.5)));
+            imgXY[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + imgR - 0.5));
         }
     }
 
