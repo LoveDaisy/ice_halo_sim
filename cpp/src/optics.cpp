@@ -152,7 +152,7 @@ void Optics::propagateRange(RayTracingContext *rayCtx, int faceNum, float *faces
                 continue;
             }
             const float *tmp_face = faces + j*9;
-            
+
             float p[3];
             float t = -1, alpha = -1, beta = -1;
 
@@ -196,7 +196,7 @@ void Optics::traceRays(SimulationContext &context)
             auto crystalCtx = context.getCrystalContext(crystalIdx);
             auto rayTracingCtx = context.getRayTracingContext(scatterIdx, crystalIdx);
 
-            rayTracingCtx->initRays(crystalCtx, rayTracingCtx->initRayNum, 
+            rayTracingCtx->initRays(crystalCtx, rayTracingCtx->initRayNum,
                 dirStore + inputOffset * 3, wStore + inputOffset, raySegStore + inputOffset);
 
             // Start loop
@@ -233,7 +233,7 @@ void Optics::traceRays(SimulationContext &context)
     delete[] wStore;
     delete[] raySegStore;
     delete[] raySegStore2;
-    
+
 }
 
 

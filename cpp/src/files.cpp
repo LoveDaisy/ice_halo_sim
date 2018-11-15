@@ -38,7 +38,7 @@ std::string pathJoin(const std::string& p1, const std::string& p2)
 }
 
 
-File::File(const char* filename) : 
+File::File(const char* filename) :
     file(nullptr), fileOpened(false),
     p(filename)
 { }
@@ -103,7 +103,7 @@ bool File::close()
 size_t File::getSize()
 {
     using namespace boost::filesystem;
-    
+
     auto size = file_size(p);
     if (size == static_cast<uintmax_t>(-1)) {
         return 0;

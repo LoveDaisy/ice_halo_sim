@@ -39,11 +39,11 @@ public:
     static Crystal* createHexPyramid(float h1, float h2, float h3);
     static Crystal* createHexPyramid(int i1, int i4, float h1, float h2, float h3);
     static Crystal* createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
-    
+
     /* Hexagon stacked pyramid */
-    static Crystal* createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, 
+    static Crystal* createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
                                               float h1, float h2, float h3);
-    
+
     /* Triangle pyramid */
     static Crystal* createTriPyramid(int i1, int i4, float h1, float h2, float h3);
 

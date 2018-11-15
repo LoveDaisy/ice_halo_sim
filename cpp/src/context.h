@@ -66,7 +66,7 @@ public:
 private:
     static constexpr float PROP_MIN_W = 1e-6;
     static constexpr float SCAT_MIN_W = 1e-3;
-    
+
     void deleteArrays();
     int chooseFace(const float *faces, int faceNum, const float *rayDir);
 
@@ -110,16 +110,16 @@ public:
 
     uint64_t getTotalInitRays() const;
     int getMaxRecursionNum() const;
-    
+
     int getMultiScatterNum() const;
     float getMultiScatterProb() const;
-    
+
     int getCrystalNum() const;
-    
+
     void setCurrentWavelength(float wavelength);
     float getCurrentWavelength() const;
     std::vector<float> getWavelengths() const;
-    
+
     void fillSunDir(float *dir, uint64_t num = 1);
     void setSunPosition(float lon, float lat);
 
@@ -142,13 +142,13 @@ private:
 
     uint64_t totalRayNum;
     int maxRecursionNum;
-    
+
     int multiScatterNum;
     float multiScatterProb;
 
     float currentWavelength;
     std::vector<float> wavelengths;
-    
+
     float sunDir[3];
     float sunDiameter;
 
@@ -173,7 +173,7 @@ public:
     std::string getImagePath() const;
 
     void renderToRgb(uint8_t *rgbData);
-    
+
 private:
     int loadDataFromFile(Files::File &file);
     void copySpectrumData(float *wavelengthData, float *spectrumData) const;

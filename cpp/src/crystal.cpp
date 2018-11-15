@@ -176,14 +176,14 @@ Crystal* Crystal::createHexPyramid(float h1, float h2, float h3)
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(2*PI*i/6), 
-            sin(2*PI*i/6), 
+            cos(2*PI*i/6),
+            sin(2*PI*i/6),
             h2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(2*PI*i/6), 
-            sin(2*PI*i/6), 
+            cos(2*PI*i/6),
+            sin(2*PI*i/6),
             -h2));
     }
     for (int i = 0; i < 6; i++) {
@@ -242,20 +242,20 @@ Crystal *Crystal::createCubicPyramid(float ratio1, float ratio2)
 
     for (int i = 0; i < 4; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(PI/4 + PI/2*i) * (1 - ratio1), 
-            sin(PI/4 + PI/2*i) * (1 - ratio1), 
+            cos(PI/4 + PI/2*i) * (1 - ratio1),
+            sin(PI/4 + PI/2*i) * (1 - ratio1),
             ratio1));
     }
     for (int i = 0; i < 4; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(PI/4 + PI/2*i), 
-            sin(PI/4 + PI/2*i), 
+            cos(PI/4 + PI/2*i),
+            sin(PI/4 + PI/2*i),
             0));
     }
     for (int i = 0; i < 4; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(PI/4 + PI/2*i) * (1 - ratio2), 
-            sin(PI/4 + PI/2*i) * (1 - ratio2), 
+            cos(PI/4 + PI/2*i) * (1 - ratio2),
+            sin(PI/4 + PI/2*i) * (1 - ratio2),
             -ratio2));
     }
 
@@ -288,7 +288,7 @@ Crystal* Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h3)
     float H = C_CONSTANT * i1 / i4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
-    
+
     std::vector<Vec3f> vertexes;
     std::vector<TriangleIdx> faces;
     vertexes.reserve(24);
@@ -300,14 +300,14 @@ Crystal* Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h3)
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(2*PI*i/6), 
-            sin(2*PI*i/6), 
+            cos(2*PI*i/6),
+            sin(2*PI*i/6),
             h2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(2*PI*i/6), 
-            sin(2*PI*i/6), 
+            cos(2*PI*i/6),
+            sin(2*PI*i/6),
             -h2));
     }
     for (int i = 0; i < 6; i++) {
@@ -349,7 +349,7 @@ Crystal* Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, 
     float H3 = C_CONSTANT * lowerIdx1 / lowerIdx4;
     h1 = std::max(std::min(h1, 1.0f), 0.0f);
     h3 = std::max(std::min(h3, 1.0f), 0.0f);
-    
+
     std::vector<Vec3f> vertexes;
     std::vector<TriangleIdx> faces;
     vertexes.reserve(24);
@@ -361,14 +361,14 @@ Crystal* Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, 
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(2*PI*i/6), 
-            sin(2*PI*i/6), 
+            cos(2*PI*i/6),
+            sin(2*PI*i/6),
             h2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(2*PI*i/6), 
-            sin(2*PI*i/6), 
+            cos(2*PI*i/6),
+            sin(2*PI*i/6),
             -h2));
     }
     for (int i = 0; i < 6; i++) {
@@ -418,27 +418,27 @@ Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lo
     float r = (1.0f - h2) * (1.0f - h1);
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(2*PI*i/6) * r, 
-            sin(2*PI*i/6) * r, 
+            cos(2*PI*i/6) * r,
+            sin(2*PI*i/6) * r,
             h1 * H1 * (1.0f - h2) + h2 * H2 + h3 * 2));
     }
     r = 1.0f - h2;
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(2*PI*i/6) * r, 
-            sin(2*PI*i/6) * r, 
+            cos(2*PI*i/6) * r,
+            sin(2*PI*i/6) * r,
             h2 * H2 + h3 * 2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(2*PI*i/6), 
-            sin(2*PI*i/6), 
+            cos(2*PI*i/6),
+            sin(2*PI*i/6),
             h3 * 2));
     }
     for (int i = 0; i < 6; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(2*PI*i/6), 
-            sin(2*PI*i/6), 
+            cos(2*PI*i/6),
+            sin(2*PI*i/6),
             0));
     }
 
@@ -487,7 +487,7 @@ Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lo
             9
     11
 */
-Crystal* Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3) 
+Crystal* Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
 {
     using namespace Math;
 
@@ -506,14 +506,14 @@ Crystal* Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
     }
     for (int i = 0; i < 3; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(2*PI*i/3), 
-            sin(2*PI*i/3), 
+            cos(2*PI*i/3),
+            sin(2*PI*i/3),
             h2));
     }
     for (int i = 0; i < 3; i++) {
         vertexes.emplace_back(Vec3f(
-            cos(2*PI*i/3), 
-            sin(2*PI*i/3), 
+            cos(2*PI*i/3),
+            sin(2*PI*i/3),
             -h2));
     }
     for (int i = 0; i < 3; i++) {
@@ -549,7 +549,7 @@ Crystal* Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
  */
 Crystal* Crystal::createIrregularHexCylinder(float *dist, float h)
 {
-    /* Use a naive algorithm to determine the profile of prism face 
+    /* Use a naive algorithm to determine the profile of prism face
      * 1. For each line pair L1 and L2, get their intersection point p12;
      * 2. For all half planes, check if p12 is in the plane;
      *    2.1 If p12 is in all half planes, put it into a set P;
@@ -594,7 +594,7 @@ Crystal* Crystal::createIrregularHexCylinder(float *dist, float h)
 }
 
 
-/* Irregular hexagon pyramid 
+/* Irregular hexagon pyramid
  * parameter: dist, defines the distance from origin of each face. Must contains 6 numbers. The distance of a
  *            normal hexagon is defined as 1.
  * parameter: idx, defines the Miller index of upper and lower pyramidal segments. Must contains 4 numbers.
@@ -608,7 +608,7 @@ Crystal* Crystal::createIrregularHexPyramid(float *dist, int *idx, float *h)
 {
     /* There are 20 faces. The crystal is the intersection of all these half-spaces.
      * 1. Find all inner point as vertexes.
-     * 2. Find all co-planner points. 
+     * 2. Find all co-planner points.
      * 3. For points in each face, construct a triangular division.
      */
     using namespace Math;

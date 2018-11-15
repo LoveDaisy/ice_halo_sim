@@ -123,7 +123,7 @@ public:
 
     static constexpr int MIN_WL = 360;
     static constexpr int MAX_WL = 830;
-    
+
 private:
     static constexpr float _cmf_xyz_sum[] = { 106.8655f, 106.8569f, 106.8923 };
 

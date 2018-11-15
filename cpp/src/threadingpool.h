@@ -30,11 +30,11 @@ private:
     unsigned int threadNum;
     std::vector<std::thread> pool;
     std::atomic<bool> alive;
-    
+
     std::queue<std::function<void()> > queue;
     std::mutex queueMutex;
     std::condition_variable queueCondition;
-    
+
     std::atomic<int> runningJobs;
     std::atomic<int> aliveThreads;
     std::mutex taskMutex;
@@ -44,7 +44,7 @@ private:
 
     static Pool * instance;
     static std::mutex instanceMutex;
-    
+
 };
 
 

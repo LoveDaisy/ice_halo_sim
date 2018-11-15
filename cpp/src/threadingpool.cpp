@@ -21,8 +21,8 @@ Pool * Pool::getInstance()
 }
 
 
-Pool::Pool() : 
-    threadNum(std::thread::hardware_concurrency()), alive(false), 
+Pool::Pool() :
+    threadNum(std::thread::hardware_concurrency()), alive(false),
     runningJobs(0), aliveThreads(0)
 {
     start();
@@ -103,7 +103,7 @@ void Pool::workingFunction()
             taskCondition.notify_one();
             queueCondition.wait(lock, [this]{ return !this->queue.empty() || !this->alive; });
         }
-            
+
     }
 }
 

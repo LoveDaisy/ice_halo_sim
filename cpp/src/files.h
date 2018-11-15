@@ -53,7 +53,7 @@ private:
     bool fileOpened;
 
     boost::filesystem::path p;
-    
+
 };
 
 

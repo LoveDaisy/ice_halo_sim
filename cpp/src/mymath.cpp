@@ -95,7 +95,7 @@ void rotateZ(const float *lon_lat_roll, float *vec, uint64_t dataNum)
     matR.transpose();
 
     auto *res = new float[dataNum * 3];
-    
+
     DummyMatrix resVec(res, dataNum, 3);
     DummyMatrix inputVec(vec, dataNum, 3);
     DummyMatrix::multiply(inputVec, matR, resVec);
@@ -118,7 +118,7 @@ void rotateZBack(const float *lon_lat_roll, float *vec, uint64_t dataNum)
 
     // float res[3] = { 0.0f };
     auto *res = new float[dataNum * 3];
-    
+
     DummyMatrix resVec(res, dataNum, 3);
     DummyMatrix inputVec(vec, dataNum, 3);
     DummyMatrix::multiply(inputVec, matR, resVec);
@@ -204,7 +204,7 @@ void findCoplanarPoints(const std::vector<Vec3f> &pts, const Vec3f n0, float d0,
 }
 
 
-void buildPolyhedronFaces(HalfSpaceSet &hss, const std::vector<Math::Vec3f> &pts, 
+void buildPolyhedronFaces(HalfSpaceSet &hss, const std::vector<Math::Vec3f> &pts,
                           std::vector<Math::TriangleIdx> &faces)
 {
     int num = hss.n;
@@ -218,7 +218,7 @@ void buildPolyhedronFaces(HalfSpaceSet &hss, const std::vector<Math::Vec3f> &pts
         if (facePtsIdx.empty()) {
             continue;
         }
-        
+
         /* Build triangular division */
         buildTriangularDivision(pts, n0, facePtsIdx, faces);
     }
@@ -226,9 +226,9 @@ void buildPolyhedronFaces(HalfSpaceSet &hss, const std::vector<Math::Vec3f> &pts
 
 
 void buildTriangularDivision(
-    const std::vector<Vec3f> &vertex, 
-    const Vec3f &n, 
-    std::vector<int> &ptsIdx, 
+    const std::vector<Vec3f> &vertex,
+    const Vec3f &n,
+    std::vector<int> &ptsIdx,
     std::vector<TriangleIdx> &faces)
 {
     /* Find the center of co-planer points */

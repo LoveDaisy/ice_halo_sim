@@ -227,7 +227,7 @@ bool RayTracingContext::isFinished()
 size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float *dir, float prob)
 {
     std::atomic<uint64_t> k(0);
-    
+
     Pool *pool = Pool::getInstance();
     int step = initRayNum / 80;
     for (int startIdx = 0; startIdx < initRayNum; startIdx += step) {
@@ -262,7 +262,7 @@ void RayTracingContext::copyFinishedRaySegmentsRange(RaySegment **segs, float *d
             if (p->nextRefract && !p->isFinished) {
                 v.push_back(p->nextRefract);
             }
-            if (p->w > SCAT_MIN_W && p->faceId >= 0 && p->isFinished 
+            if (p->w > SCAT_MIN_W && p->faceId >= 0 && p->isFinished
                     && uniformDist(randomEngine) < prob) {
                 auto tmpk = k++;
                 float *finalDir = dir + tmpk * 3;
@@ -348,7 +348,7 @@ int RayTracingContext::chooseFace(const float *faces, int faceNum, const float *
 
 
 SimulationContext::SimulationContext() :
-    totalRayNum(0), maxRecursionNum(9), 
+    totalRayNum(0), maxRecursionNum(9),
     multiScatterNum(1), multiScatterProb(1.0f),
     currentWavelength(550.0f), sunDiameter(0.5f),
     dataDirectory("./")
@@ -501,7 +501,7 @@ RayTracingContext * SimulationContext::getRayTracingContext(int scatterIdx, int 
 void SimulationContext::writeFinalDirections(const char *filename)
 {
     using namespace Files;
-    
+
     File file(dataDirectory.c_str(), filename);
     if (!file.open(OpenMode::WRITE | OpenMode::BINARY)) return;
 
@@ -632,7 +632,7 @@ void SimulationContext::writeFinalDirections(const char *filename)
 //                 tmp[6] = r->w;
 //                 // file.write(tmp, 7);
 
-//                 printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n", 
+//                 printf("%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n",
 //                     tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
 //             }
 //         }
@@ -659,7 +659,7 @@ void SimulationContext::printCrystalInfo()
 
 RenderContext::RenderContext() :
     imgHei(0), imgWid(0), offsetY(0), offsetX(0),
-    visibleSemiSphere(Projection::VisibleSemiSphere::UPPER), 
+    visibleSemiSphere(Projection::VisibleSemiSphere::UPPER),
     totalW(0), intensityFactor(1.0), showHorizontal(true),
     dataDirectory("./"),
     projectionType(Projection::Type::EQUI_AREA)
@@ -697,7 +697,7 @@ void RenderContext::renderToRgb(uint8_t *rgbData)
     auto wlNum = spectrumData.size();
     auto *wlData = new float[wlNum];
     auto *flatSpecData = new float[wlNum * imgWid * imgHei];
-    
+
     copySpectrumData(wlData, flatSpecData);
     if (rayColor[0] < 0) {
         render.rgb(static_cast<int>(wlNum), wlData, imgWid * imgHei, flatSpecData, rgbData);
@@ -1495,9 +1495,9 @@ void ContextParser::parseRenderSettings(RenderContext &ctx)
     } else {
         int offsetX = (*p)[0].GetInt();
         int offsetY = (*p)[1].GetInt();
-        offsetX = std::max(std::min(offsetX, static_cast<int>(ctx.imgWid / 2)), 
+        offsetX = std::max(std::min(offsetX, static_cast<int>(ctx.imgWid / 2)),
             -static_cast<int>(ctx.imgWid / 2));
-        offsetY = std::max(std::min(offsetY, static_cast<int>(ctx.imgHei / 2)), 
+        offsetY = std::max(std::min(offsetY, static_cast<int>(ctx.imgHei / 2)),
             -static_cast<int>(ctx.imgHei / 2));
         ctx.offsetX = offsetX;
         ctx.offsetY = offsetY;
