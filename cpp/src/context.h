@@ -1,5 +1,5 @@
-#ifndef TESTHELPER_H
-#define TESTHELPER_H
+#ifndef SRC_CONTEXT_H_
+#define SRC_CONTEXT_H_
 
 #include "mymath.h"
 #include "optics.h"
@@ -18,228 +18,221 @@
 
 namespace IceHalo {
 
-class SimulationContext;
-class ContextParser;
+class RenderContext;
 
-
-class CrystalContext
-{
-friend SimulationContext;
+class ContextParser {
 public:
-    CrystalContext();
-    ~CrystalContext();
+  ~ContextParser() = default;
 
-    void setCrystal(Crystal *g, float populationRatio,
-                    Math::Distribution axisDist, float axisMean, float axisStd,
-                    Math::Distribution rollDist, float rollMean, float rollStd);
-    Crystal * getCrystal();
+  void parseSimulationSettings(SimulationContext& ctx);
+  void parseRenderingSettings(RenderContext& ctx);
 
-    void fillDir(const float *incDir, float *rayDir, float *mainAxRot, int num = 1);
-    // int chooseFace(const float *rayDir);
+  static ContextParser* createFileParser(const char* filename);
 
 private:
+  explicit ContextParser(rapidjson::Document& d, const char* filename);
 
-    float populationRatio;
-    Crystal *crystal;
-    Math::OrientationGenerator oriGen;
+  /* Parse simulation settings */
+  void parseBasicSettings(SimulationContext& ctx);
+  void parseRaySettings(SimulationContext& ctx);
+  void parseSunSettings(SimulationContext& ctx);
+  void parseDataSettings(SimulationContext& ctx);
+  void parseMultiScatterSettings(SimulationContext& ctx);
+  void parseCrystalSettings(SimulationContext& ctx, const rapidjson::Value& c, int ci);
+  void parseCrystalType(SimulationContext& ctx, const rapidjson::Value& c, int ci,
+                        float population,
+                        Math::Distribution axisDist, float axisMean, float axisStd,
+                        Math::Distribution rollDist, float rollMean, float rollStd);
+  Crystal* parseCustomCrystal(std::FILE* file);
+
+  /* Parse rendering settings */
+  void parseCameraSettings(RenderContext& ctx);
+  void parseRenderSettings(RenderContext& ctx);
+  void parseDataSettings(RenderContext& ctx);
+
+  rapidjson::Document d;
+  std::string filename;
+
+  static constexpr int kMsgBufferSize = 512;
 };
 
 
-class RayTracingContext
-{
-friend SimulationContext;
-friend Optics;
+class SimulationContext {
+friend class ContextParser;
 public:
-    explicit RayTracingContext(SimulationContext *ctx);
-    ~RayTracingContext();
+  SimulationContext();
+  ~SimulationContext();
 
-    void setRayNum(int rayNum);
+  uint64_t getTotalInitRays() const;
+  int getMaxRecursionNum() const;
 
-    void initRays(CrystalContext *ctx, int rayNum, const float *dir, const float *w, RaySegment **prevRaySeg = nullptr);
-    // void clearRays();
-    void commitHitResult();
-    void commitPropagateResult(CrystalContext *ctx);
-    bool isFinished();
+  int getMultiScatterNum() const;
+  float getMultiScatterProb() const;
 
-    size_t copyFinishedRaySegments(RaySegment **segs, float *dir, float prob = 1.0f);
+  int getCrystalNum() const;
+
+  void setCurrentWavelength(float wavelength);
+  float getCurrentWavelength() const;
+  std::vector<float> getWavelengths() const;
+
+  void fillSunDir(float* dir, uint64_t num = 1);
+  void setSunPosition(float lon, float lat);
+
+  void applySettings();
+  void setCrystalRayNum(int scatterIdx, uint64_t totalRayNum);
+
+  CrystalContext* getCrystalContext(int i);
+  RayTracingContext* getRayTracingContext(int scatterIndx, int crystalIdx);
+
+  /* For output */
+  void writeFinalDirections(const char* filename);
+  // void writeRayInfo(const char* filename, float lon, float lat, float delta);
+  void printCrystalInfo();
 
 private:
-    static constexpr float PROP_MIN_W = 1e-6;
-    static constexpr float SCAT_MIN_W = 1e-3;
+  // void writeRayInfo(Files::File& file, Ray* r);     // Helper function
 
-    void deleteArrays();
-    int chooseFace(const float *faces, int faceNum, const float *rayDir);
+  std::vector<CrystalContext *> crystalCtxs;
+  std::vector<std::vector<RayTracingContext *> > rayTracingCtxs;
 
-    void fillPts(const float *faces, int idx, float *rayPts);
+  uint64_t totalRayNum;
+  int maxRecursionNum;
 
-    void copyFinishedRaySegmentsRange(RaySegment **segs, float *dir, float prob,
-        std::atomic<std::uint64_t> &k, int startIdx, int endIdx);
+  int multiScatterNum;
+  float multiScatterProb;
 
-    SimulationContext *simCtx;
+  float currentWavelength;
+  std::vector<float> wavelengths;
 
-    int initRayNum;
-    int currentRayNum;
-    int activeRaySegNum;
-    Ray ** rays;
-    RaySegment **activeRaySeg;
+  float sunDir[3];
+  float sunDiameter;
 
-    std::default_random_engine gen;
-    std::uniform_real_distribution<float> dis;
+  std::mt19937 generator;
+  std::uniform_real_distribution<float> uniformDistribution;
 
-    float *mainAxRot;
-
-    float *rayDir;
-    float *rayPts;
-    float *faceNorm;
-    int *faceId;
-
-    float *rayDir2;
-    float *rayDir3;
-    float *rayPts2;
-    float *rayW2;
-    int *faceId2;
+  std::string dataDirectory;
 };
 
 
-class SimulationContext
-{
-friend ContextParser;
+class CrystalContext {
+friend class SimulationContext;
 public:
-    SimulationContext();
-    ~SimulationContext();
+  CrystalContext() = default;
+  ~CrystalContext();
 
-    uint64_t getTotalInitRays() const;
-    int getMaxRecursionNum() const;
+  void setCrystal(Crystal* g, float populationRatio,
+                  Math::Distribution axisDist, float axisMean, float axisStd,
+                  Math::Distribution rollDist, float rollMean, float rollStd);
+  Crystal* getCrystal();
 
-    int getMultiScatterNum() const;
-    float getMultiScatterProb() const;
-
-    int getCrystalNum() const;
-
-    void setCurrentWavelength(float wavelength);
-    float getCurrentWavelength() const;
-    std::vector<float> getWavelengths() const;
-
-    void fillSunDir(float *dir, uint64_t num = 1);
-    void setSunPosition(float lon, float lat);
-
-    void applySettings();
-    void setCrystalRayNum(int scatterIdx, uint64_t totalRayNum);
-
-    CrystalContext * getCrystalContext(int i);
-    RayTracingContext * getRayTracingContext(int scatterIndx, int crystalIdx);
-
-    /* For output */
-    void writeFinalDirections(const char *filename);
-    // void writeRayInfo(const char *filename, float lon, float lat, float delta);
-    void printCrystalInfo();
+  void fillDir(const float* incDir, float* rayDir, float* mainAxRot, int num = 1);
+  // int chooseFace(const float* rayDir);
 
 private:
-    // void writeRayInfo(Files::File &file, Ray *r);     // Helper function
-
-    std::vector<CrystalContext *> crystalCtxs;
-    std::vector<std::vector<RayTracingContext *> > rayTracingCtxs;
-
-    uint64_t totalRayNum;
-    int maxRecursionNum;
-
-    int multiScatterNum;
-    float multiScatterProb;
-
-    float currentWavelength;
-    std::vector<float> wavelengths;
-
-    float sunDir[3];
-    float sunDiameter;
-
-    std::mt19937 generator;
-    std::uniform_real_distribution<float> uniformDistribution;
-
-    std::string dataDirectory;
+  float populationRatio;
+  Crystal* crystal;
+  Math::OrientationGenerator oriGen;
 };
 
 
-class RenderContext
-{
-friend ContextParser;
+class RayTracingContext {
+friend class SimulationContext;
+friend class Optics;
 public:
-    RenderContext();
-    ~RenderContext();
+  explicit RayTracingContext(SimulationContext* ctx);
+  ~RayTracingContext();
 
-    void loadData();
+  void setRayNum(int rayNum);
 
-    uint32_t getImageWidth() const;
-    uint32_t getImageHeight() const;
-    std::string getImagePath() const;
+  void initRays(CrystalContext* ctx, int rayNum, const float* dir, const float* w, RaySegment** prevRaySeg = nullptr);
+  // void clearRays();
+  void commitHitResult();
+  void commitPropagateResult(CrystalContext* ctx);
+  bool isFinished();
 
-    void renderToRgb(uint8_t *rgbData);
+  size_t copyFinishedRaySegments(RaySegment** segs, float* dir, float prob = 1.0f);
 
 private:
-    int loadDataFromFile(Files::File &file);
-    void copySpectrumData(float *wavelengthData, float *spectrumData) const;
+  static constexpr float PROP_MIN_W = 1e-6;
+  static constexpr float SCAT_MIN_W = 1e-3;
 
-    float camRot[3];
-    float fov;
+  void deleteArrays();
+  int chooseFace(const float* faces, int faceNum, const float* rayDir);
 
-    float rayColor[3];
-    float backgroundColor[3];
-    SpectrumRenderer render;
+  void fillPts(const float* faces, int idx, float* rayPts);
 
-    uint32_t imgHei;
-    uint32_t imgWid;
-    int offsetY;
-    int offsetX;
-    Projection::VisibleSemiSphere visibleSemiSphere;
+  void copyFinishedRaySegmentsRange(RaySegment** segs, float* dir, float prob,
+                                    std::atomic<std::uint64_t>& k, int startIdx, int endIdx);
 
-    std::unordered_map<int, float*> spectrumData;
-    double totalW;
-    double intensityFactor;
+  SimulationContext* simCtx;
 
-    bool showHorizontal;
+  int initRayNum;
+  int currentRayNum;
+  int activeRaySegNum;
+  Ray** rays;
+  RaySegment** activeRaySeg;
 
-    std::string dataDirectory;
+  std::default_random_engine gen;
+  std::uniform_real_distribution<float> dis;
 
-    Projection::Type projectionType;
+  float* mainAxRot;
+
+  float* rayDir;
+  float* rayPts;
+  float* faceNorm;
+  int* faceId;
+
+  float* rayDir2;
+  float* rayDir3;
+  float* rayPts2;
+  float* rayW2;
+  int* faceId2;
 };
 
 
-class ContextParser
-{
+class RenderContext {
+friend class ContextParser;
 public:
-    ~ContextParser() = default;
+  RenderContext();
+  ~RenderContext();
 
-    void parseSimulationSettings(SimulationContext &ctx);
-    void parseRenderingSettings(RenderContext &ctx);
+  void loadData();
 
-    static ContextParser * createFileParser(const char *filename);
+  uint32_t getImageWidth() const;
+  uint32_t getImageHeight() const;
+  std::string getImagePath() const;
+
+  void renderToRgb(uint8_t* rgbData);
 
 private:
-    explicit ContextParser(rapidjson::Document &d, const char *filename);
+  int loadDataFromFile(File& file);
+  void copySpectrumData(float* wavelengthData, float* spectrumData) const;
 
-    /* Parse simulation settings */
-    void parseBasicSettings(SimulationContext &ctx);
-    void parseRaySettings(SimulationContext &ctx);
-    void parseSunSettings(SimulationContext &ctx);
-    void parseDataSettings(SimulationContext &ctx);
-    void parseMultiScatterSettings(SimulationContext &ctx);
-    void parseCrystalSettings(SimulationContext &ctx, const rapidjson::Value &c, int ci);
-    void parseCrystalType(SimulationContext &ctx, const rapidjson::Value &c, int ci,
-        float population,
-        Math::Distribution axisDist, float axisMean, float axisStd,
-        Math::Distribution rollDist, float rollMean, float rollStd);
-    Crystal * parseCustomCrystal(std::FILE *file);
+  float camRot[3];
+  float fov;
 
-    /* Parse rendering settings */
-    void parseCameraSettings(RenderContext &ctx);
-    void parseRenderSettings(RenderContext &ctx);
-    void parseDataSettings(RenderContext &ctx);
+  float rayColor[3];
+  float backgroundColor[3];
+  SpectrumRenderer render;
 
-    rapidjson::Document d;
+  uint32_t imgHei;
+  uint32_t imgWid;
+  int offsetY;
+  int offsetX;
+  VisibleSemiSphere visibleSemiSphere;
 
-    std::string filename;
+  std::unordered_map<int, float*> spectrumData;
+  double totalW;
+  double intensityFactor;
+
+  bool showHorizontal;
+
+  std::string dataDirectory;
+
+  ProjectionType projectionType;
 };
 
 }   // namespace IceHalo
 
 
-#endif // TESTHELPER_H
+#endif  // SRC_CONTEXT_H_

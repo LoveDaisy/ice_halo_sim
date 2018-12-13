@@ -12,38 +12,37 @@
 
 namespace IceHalo {
 
-class Pool
-{
+class Pool {
 public:
-    ~Pool() = default;
+  ~Pool() = default;
 
-    void start();
-    void addJob(std::function<void()> job);
-    void waitFinish();
-    bool taskRunning();
+  void start();
+  void addJob(std::function<void()> job);
+  void waitFinish();
+  bool taskRunning();
 
-    static Pool * getInstance();
+  static Pool* getInstance();
 
 private:
-    Pool();
+  Pool();
 
-    unsigned int threadNum;
-    std::vector<std::thread> pool;
-    std::atomic<bool> alive;
+  unsigned int threadNum;
+  std::vector<std::thread> pool;
+  std::atomic<bool> alive;
 
-    std::queue<std::function<void()> > queue;
-    std::mutex queueMutex;
-    std::condition_variable queueCondition;
+  std::queue<std::function<void()> > queue;
+  std::mutex queueMutex;
+  std::condition_variable queueCondition;
 
-    std::atomic<int> runningJobs;
-    std::atomic<int> aliveThreads;
-    std::mutex taskMutex;
-    std::condition_variable taskCondition;
+  std::atomic<int> runningJobs;
+  std::atomic<int> aliveThreads;
+  std::mutex taskMutex;
+  std::condition_variable taskCondition;
 
-    void workingFunction();
+  void workingFunction();
 
-    static Pool * instance;
-    static std::mutex instanceMutex;
+  static Pool* instance;
+  static std::mutex instanceMutex;
 
 };
 

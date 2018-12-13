@@ -1,5 +1,5 @@
-#ifndef ICEHALOSIM_CRYSTAL_H
-#define ICEHALOSIM_CRYSTAL_H
+#ifndef SRC_CRYSTAL_H_
+#define SRC_CRYSTAL_H_
 
 #include "mymath.h"
 
@@ -7,64 +7,64 @@
 
 namespace IceHalo {
 
-class Crystal
-{
+class Crystal {
 public:
-    Crystal(std::vector<Math::Vec3f> &vertexes, std::vector<Math::TriangleIdx> &faces);
+  Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces);
 
-    void setVertexes(std::vector<Math::Vec3f> &vertexes);
-    void setFaces(std::vector<Math::TriangleIdx> &faces);
-    void initialize();
-    bool isInitialized();
+  void setVertexes(const std::vector<Math::Vec3f>& vertexes);
+  void setFaces(const std::vector<Math::TriangleIdx>& faces);
+  void initialize();
+  bool isInitialized();
 
-    int vtxNum() const;
-    int faceNum() const;
+  int vtxNum() const;
+  int faceNum() const;
 
-    const std::vector<Math::Vec3f>& getVertexes();
-    const std::vector<Math::Vec3f>& getNorms();
-    const std::vector<Math::TriangleIdx>& getFaces();
+  const std::vector<Math::Vec3f>& getVertexes();
+  const std::vector<Math::Vec3f>& getNorms();
+  const std::vector<Math::TriangleIdx>& getFaces();
 
-    void copyVertexData(float *data) const;
-    void copyFaceData(float *data) const;
-    void copyFaceIdxData(int *data) const;
-    void copyNormalData(int idx, float *data) const;
-    void copyNormalData(float *data) const;
+  void copyVertexData(float* data) const;
+  void copyFaceData(float* data) const;
+  void copyFaceIdxData(int* data) const;
+  void copyNormalData(int idx, float* data) const;
+  void copyNormalData(float* data) const;
 
-    static constexpr float C_CONSTANT = 1.629f;
+  static constexpr float C_CONSTANT = 1.629f;
 
-    /* Regular hexagon cylinder */
-    static Crystal* createHexCylinder(float h);
+  /* Regular hexagon cylinder */
+  static Crystal* createHexCylinder(float h);
 
-    /* Regular hexagon pyramid */
-    static Crystal* createHexPyramid(float h1, float h2, float h3);
-    static Crystal* createHexPyramid(int i1, int i4, float h1, float h2, float h3);
-    static Crystal* createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
+  /* Regular hexagon pyramid */
+  static Crystal* createHexPyramid(float h1, float h2, float h3);
+  static Crystal* createHexPyramid(int i1, int i4, float h1, float h2, float h3);
+  static Crystal* createHexPyramid(int upperIdx1, int upperIdx4,
+                                   int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
 
-    /* Hexagon stacked pyramid */
-    static Crystal* createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
-                                              float h1, float h2, float h3);
+  /* Hexagon stacked pyramid */
+  static Crystal* createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
+                                            float h1, float h2, float h3);
 
-    /* Triangle pyramid */
-    static Crystal* createTriPyramid(int i1, int i4, float h1, float h2, float h3);
+  /* Triangle pyramid */
+  static Crystal* createTriPyramid(int i1, int i4, float h1, float h2, float h3);
 
-    /* Cubic pyramid (crystal type of Ic) */
-    static Crystal* createCubicPyramid(float ratio1, float ratio2);
+  /* Cubic pyramid (crystal type of Ic) */
+  static Crystal* createCubicPyramid(float ratio1, float ratio2);
 
-    /* Irregular hexagon cylinder */
-    static Crystal* createIrregularHexCylinder(float *dist, float h);
+  /* Irregular hexagon cylinder */
+  static Crystal* createIrregularHexCylinder(float* dist, float h);
 
-    /* Irregular hexagon pyramid */
-    static Crystal* createIrregularHexPyramid(float *dist, int *idx, float *h);
+  /* Irregular hexagon pyramid */
+  static Crystal* createIrregularHexPyramid(float* dist, int* idx, float* h);
 
 private:
-    std::vector<Math::Vec3f> vertexes;
-    std::vector<Math::Vec3f> norms;
-    std::vector<Math::TriangleIdx> faces;
+  std::vector<Math::Vec3f> vertexes;
+  std::vector<Math::Vec3f> norms;
+  std::vector<Math::TriangleIdx> faces;
 
-    bool initDone;
+  bool initDone;
 };
 
-};
+};  // namespace IceHalo
 
 
-#endif //ICEHALOSIM_CRYSTAL_H
+#endif  // SRC_CRYSTAL_H
