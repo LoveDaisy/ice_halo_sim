@@ -1,4 +1,5 @@
 #include "context.h"
+#include "optics.h"
 #include "threadingpool.h"
 
 #include "rapidjson/pointer.h"
@@ -15,7 +16,7 @@ namespace IceHalo {
 using rapidjson::Pointer;
 
 
-void CrystalContext::setCrystal(CrystalPtr g, float populationWeight,
+void CrystalContext::setCrystal(const CrystalPtr& g, float populationWeight,
                                 Math::Distribution axisDist, float axisMean, float axisStd,
                                 Math::Distribution rollDist, float rollMean, float rollStd) {
   this->crystal = g;

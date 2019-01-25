@@ -2,7 +2,6 @@
 #define SRC_CONTEXT_H_
 
 #include "mymath.h"
-#include "optics.h"
 #include "crystal.h"
 #include "render.h"
 #include "files.h"
@@ -18,12 +17,17 @@
 
 namespace IceHalo {
 
+class RaySegment;
+class Ray;
+
 class RenderContext;
 class RayTracingContext;
 class CrystalContext;
+class SimulationContext;
 
 using RayTracingContextPtr = std::shared_ptr<RayTracingContext>;
 using CrystalContextPtr = std::shared_ptr<CrystalContext>;
+using SimulationContextPtr = std::shared_ptr<SimulationContext>;
 
 class ContextParser {
 public:
@@ -38,13 +42,13 @@ private:
   explicit ContextParser(rapidjson::Document& d, const char* filename);
 
   /* Parse simulation settings */
-  void parseBasicSettings(std::shared_ptr<SimulationContext> ctx);
-  void parseRaySettings(std::shared_ptr<SimulationContext> ctx);
-  void parseSunSettings(std::shared_ptr<SimulationContext> ctx);
-  void parseDataSettings(std::shared_ptr<SimulationContext> ctx);
-  void parseMultiScatterSettings(std::shared_ptr<SimulationContext> ctx);
-  void parseCrystalSettings(std::shared_ptr<SimulationContext> ctx, const rapidjson::Value& c, int ci);
-  void parseCrystalType(std::shared_ptr<SimulationContext> ctx, const rapidjson::Value& c, int ci,
+  void parseBasicSettings(SimulationContextPtr ctx);
+  void parseRaySettings(SimulationContextPtr ctx);
+  void parseSunSettings(SimulationContextPtr ctx);
+  void parseDataSettings(SimulationContextPtr ctx);
+  void parseMultiScatterSettings(SimulationContextPtr ctx);
+  void parseCrystalSettings(SimulationContextPtr ctx, const rapidjson::Value& c, int ci);
+  void parseCrystalType(SimulationContextPtr ctx, const rapidjson::Value& c, int ci,
                         float population,
                         Math::Distribution axisDist, float axisMean, float axisStd,
                         Math::Distribution rollDist, float rollMean, float rollStd);
@@ -125,13 +129,12 @@ public:
   CrystalContext() = default;
   ~CrystalContext() = default;
 
-  void setCrystal(CrystalPtr g, float populationRatio,
+  void setCrystal(const CrystalPtr& g, float populationRatio,
                   Math::Distribution axisDist, float axisMean, float axisStd,
                   Math::Distribution rollDist, float rollMean, float rollStd);
   CrystalPtr getCrystal();
 
   void fillDir(const float* incDir, float* rayDir, float* mainAxRot, int num = 1);
-  // int chooseFace(const float* rayDir);
 
 private:
   float populationRatio;
@@ -150,7 +153,6 @@ public:
   void setRayNum(int rayNum);
 
   void initRays(CrystalContextPtr ctx, int rayNum, const float* dir, const float* w, RaySegment** prevRaySeg = nullptr);
-  // void clearRays();
   void commitHitResult();
   void commitPropagateResult(CrystalContextPtr ctx);
   bool isFinished();

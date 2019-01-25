@@ -2,17 +2,13 @@
 #define OPTICS_H
 
 #include "mymath.h"
+#include "context.h"
 
 #include <atomic>
 #include <mutex>
 
 
 namespace IceHalo {
-
-class SimulationContext;
-class RayTracingContext;
-class CrystalContext;
-
 
 class RaySegment {
 public:
