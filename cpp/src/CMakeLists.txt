@@ -1,16 +1,10 @@
-set(SOURCE_FILE
-        mymath.cpp
-        crystal.cpp
-        optics.cpp
-        context.cpp
-        render.cpp
-        files.cpp
-        threadingpool.cpp)
-
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_FLAGS "-Wall -Wextra -msse4 -std=c++11")
-set(CMAKE_CXX_FLAGS_DEBUG "-g")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+set(SOURCE_FILE mymath.cpp
+                crystal.cpp
+                optics.cpp
+                context.cpp
+                render.cpp
+                files.cpp
+                threadingpool.cpp)
 
 set(Boost_USE_STATIC_LIBS OFF)
 set(Boost_USE_MULTITHREADED ON)
@@ -28,10 +22,14 @@ if(Boost_FOUND)
     add_executable(IceHaloSim trace_main.cpp ${SOURCE_FILE})
     target_link_libraries(IceHaloSim
         PUBLIC ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
+    install(TARGETS IceHaloSim
+        DESTINATION "${CMAKE_INSTALL_PREFIX}")
 
     add_executable(IceHaloRender render_main.cpp ${SOURCE_FILE})
     target_link_libraries(IceHaloRender
         PUBLIC ${OpenCV_LIBS} ${Boost_LIBRARIES})
+    install(TARGETS IceHaloRender
+        DESTINATION "${CMAKE_INSTALL_PREFIX}")
 endif()
 
 
