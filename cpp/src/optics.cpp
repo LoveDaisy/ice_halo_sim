@@ -72,7 +72,7 @@ size_t Ray::totalNum() {
 
 
 
-void Optics::hitSurface(float n, RayTracingContext* rayCtx) {
+void Optics::hitSurface(float n, std::shared_ptr<RayTracingContext> rayCtx) {
   Pool* pool = Pool::getInstance();
   int step = rayCtx->currentRayNum / 80;
   for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
@@ -83,7 +83,7 @@ void Optics::hitSurface(float n, RayTracingContext* rayCtx) {
 }
 
 
-void Optics::hitSurfaceRange(float n, RayTracingContext* rayCtx, int startIdx, int endIdx) {
+void Optics::hitSurfaceRange(float n, std::shared_ptr<RayTracingContext> rayCtx, int startIdx, int endIdx) {
   for (int i = startIdx; i < endIdx; i++) {
     const float* tmp_dir = rayCtx->rayDir + i * 3;
     const float* tmp_norm = rayCtx->faceNorm + i * 3;
@@ -106,7 +106,7 @@ void Optics::hitSurfaceRange(float n, RayTracingContext* rayCtx, int startIdx, i
   }
 }
 
-void Optics::propagate(RayTracingContext* rayCtx, CrystalContext* cryCtx) {
+void Optics::propagate(std::shared_ptr<RayTracingContext> rayCtx, std::shared_ptr<CrystalContext> cryCtx) {
   auto faceNum = cryCtx->getCrystal()->faceNum();
   auto* faces = new float[faceNum * 9];
   cryCtx->getCrystal()->copyFaceData(faces);
@@ -123,7 +123,7 @@ void Optics::propagate(RayTracingContext* rayCtx, CrystalContext* cryCtx) {
 }
 
 
-void Optics::propagateRange(RayTracingContext* rayCtx, int faceNum, float* faces, int startIdx, int endIdx) {
+void Optics::propagateRange(std::shared_ptr<RayTracingContext> rayCtx, int faceNum, float* faces, int startIdx, int endIdx) {
   for (int i = startIdx; i < endIdx; i++) {
     const float* tmp_pt = rayCtx->rayPts + i*3;
     const float* tmp_dir = rayCtx->rayDir + i*3;
@@ -152,12 +152,12 @@ void Optics::propagateRange(RayTracingContext* rayCtx, int faceNum, float* faces
 }
 
 
-void Optics::traceRays(SimulationContext& context) {
+void Optics::traceRays(std::shared_ptr<SimulationContext> context) {
   RaySegmentPool::getInstance().clear();
 
-  auto totalRays = context.getTotalInitRays();
-  auto maxRecursion = context.getMaxRecursionNum();
-  auto multiScatterNum = context.getMultiScatterNum();
+  auto totalRays = context->getTotalInitRays();
+  auto maxRecursion = context->getMaxRecursionNum();
+  auto multiScatterNum = context->getMultiScatterNum();
   auto maxNum = totalRays * maxRecursion * multiScatterNum * 3;
 
   auto* dirStore = new float[maxNum * 3];
@@ -166,7 +166,7 @@ void Optics::traceRays(SimulationContext& context) {
   auto** raySegStore = new RaySegment*[maxNum];
   auto** raySegStore2 = new RaySegment*[maxNum];
 
-  context.fillSunDir(dirStore, totalRays);
+  context->fillSunDir(dirStore, totalRays);
 
   for (decltype(maxNum) i = 0; i < maxNum; i++) {
     wStore[i] = 1.0f;
@@ -178,15 +178,15 @@ void Optics::traceRays(SimulationContext& context) {
   std::uniform_real_distribution<double> uniformDist(0.0, 1.0);
   for (int scatterIdx = 0; scatterIdx < multiScatterNum; scatterIdx++) {
     size_t inputOffset = 0, outputOffset = 0;
-    for (int crystalIdx = 0; crystalIdx < context.getCrystalNum(); crystalIdx++) {
-      auto crystalCtx = context.getCrystalContext(crystalIdx);
-      auto rayTracingCtx = context.getRayTracingContext(scatterIdx, crystalIdx);
+    for (int crystalIdx = 0; crystalIdx < context->getCrystalNum(); crystalIdx++) {
+      auto crystalCtx = context->getCrystalContext(crystalIdx);
+      auto rayTracingCtx = context->getRayTracingContext(scatterIdx, crystalIdx);
 
       rayTracingCtx->initRays(crystalCtx, rayTracingCtx->initRayNum,
         dirStore + inputOffset * 3, wStore + inputOffset, raySegStore + inputOffset);
 
       // Start loop
-      float index = IceRefractiveIndex::n(context.getCurrentWavelength());
+      float index = IceRefractiveIndex::n(context->getCurrentWavelength());
       for (int recursion = 0; !rayTracingCtx->isFinished() && recursion < maxRecursion; recursion++) {
         hitSurface(index, rayTracingCtx);
         rayTracingCtx->commitHitResult();
@@ -197,7 +197,7 @@ void Optics::traceRays(SimulationContext& context) {
       inputOffset += rayTracingCtx->initRayNum;
 
       auto tmpRaySegs = rayTracingCtx->copyFinishedRaySegments(raySegStore2 + outputOffset,
-        dirStore2 + outputOffset * 3, context.getMultiScatterProb());
+        dirStore2 + outputOffset * 3, context->getMultiScatterProb());
       outputOffset += tmpRaySegs;
     }
 
@@ -210,7 +210,7 @@ void Optics::traceRays(SimulationContext& context) {
         std::memcpy(dirStore + i*3, dirStore2 + j*3, sizeof(float)*3);
         wStore[i] = raySegStore[i]->w;
       }
-      context.setCrystalRayNum(scatterIdx + 1, outputOffset);
+      context->setCrystalRayNum(scatterIdx + 1, outputOffset);
     }
   }
 

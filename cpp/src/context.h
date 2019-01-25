@@ -19,31 +19,36 @@
 namespace IceHalo {
 
 class RenderContext;
+class RayTracingContext;
+class CrystalContext;
+
+using RayTracingContextPtr = std::shared_ptr<RayTracingContext>;
+using CrystalContextPtr = std::shared_ptr<CrystalContext>;
 
 class ContextParser {
 public:
   ~ContextParser() = default;
 
-  void parseSimulationSettings(SimulationContext& ctx);
-  void parseRenderingSettings(RenderContext& ctx);
+  std::shared_ptr<SimulationContext> parseSimulationSettings();
+  RenderContext parseRenderingSettings();
 
-  static ContextParser* createFileParser(const char* filename);
+  static std::shared_ptr<ContextParser> createFileParser(const char* filename);
 
 private:
   explicit ContextParser(rapidjson::Document& d, const char* filename);
 
   /* Parse simulation settings */
-  void parseBasicSettings(SimulationContext& ctx);
-  void parseRaySettings(SimulationContext& ctx);
-  void parseSunSettings(SimulationContext& ctx);
-  void parseDataSettings(SimulationContext& ctx);
-  void parseMultiScatterSettings(SimulationContext& ctx);
-  void parseCrystalSettings(SimulationContext& ctx, const rapidjson::Value& c, int ci);
-  void parseCrystalType(SimulationContext& ctx, const rapidjson::Value& c, int ci,
+  void parseBasicSettings(std::shared_ptr<SimulationContext> ctx);
+  void parseRaySettings(std::shared_ptr<SimulationContext> ctx);
+  void parseSunSettings(std::shared_ptr<SimulationContext> ctx);
+  void parseDataSettings(std::shared_ptr<SimulationContext> ctx);
+  void parseMultiScatterSettings(std::shared_ptr<SimulationContext> ctx);
+  void parseCrystalSettings(std::shared_ptr<SimulationContext> ctx, const rapidjson::Value& c, int ci);
+  void parseCrystalType(std::shared_ptr<SimulationContext> ctx, const rapidjson::Value& c, int ci,
                         float population,
                         Math::Distribution axisDist, float axisMean, float axisStd,
                         Math::Distribution rollDist, float rollMean, float rollStd);
-  Crystal* parseCustomCrystal(std::FILE* file);
+  CrystalPtr parseCustomCrystal(std::FILE* file);
 
   /* Parse rendering settings */
   void parseCameraSettings(RenderContext& ctx);
@@ -61,7 +66,7 @@ class SimulationContext {
 friend class ContextParser;
 public:
   SimulationContext();
-  ~SimulationContext();
+  ~SimulationContext() = default;
 
   uint64_t getTotalInitRays() const;
   int getMaxRecursionNum() const;
@@ -81,8 +86,8 @@ public:
   void applySettings();
   void setCrystalRayNum(int scatterIdx, uint64_t totalRayNum);
 
-  CrystalContext* getCrystalContext(int i);
-  RayTracingContext* getRayTracingContext(int scatterIndx, int crystalIdx);
+  CrystalContextPtr getCrystalContext(int i);
+  RayTracingContextPtr getRayTracingContext(int scatterIndx, int crystalIdx);
 
   /* For output */
   void writeFinalDirections(const char* filename);
@@ -92,8 +97,8 @@ public:
 private:
   // void writeRayInfo(Files::File& file, Ray* r);     // Helper function
 
-  std::vector<CrystalContext *> crystalCtxs;
-  std::vector<std::vector<RayTracingContext *> > rayTracingCtxs;
+  std::vector<CrystalContextPtr> crystalCtxs;
+  std::vector<std::vector<RayTracingContextPtr> > rayTracingCtxs;
 
   uint64_t totalRayNum;
   int maxRecursionNum;
@@ -118,19 +123,19 @@ class CrystalContext {
 friend class SimulationContext;
 public:
   CrystalContext() = default;
-  ~CrystalContext();
+  ~CrystalContext() = default;
 
-  void setCrystal(Crystal* g, float populationRatio,
+  void setCrystal(CrystalPtr g, float populationRatio,
                   Math::Distribution axisDist, float axisMean, float axisStd,
                   Math::Distribution rollDist, float rollMean, float rollStd);
-  Crystal* getCrystal();
+  CrystalPtr getCrystal();
 
   void fillDir(const float* incDir, float* rayDir, float* mainAxRot, int num = 1);
   // int chooseFace(const float* rayDir);
 
 private:
   float populationRatio;
-  Crystal* crystal;
+  CrystalPtr crystal;
   Math::OrientationGenerator oriGen;
 };
 
@@ -139,15 +144,15 @@ class RayTracingContext {
 friend class SimulationContext;
 friend class Optics;
 public:
-  explicit RayTracingContext(SimulationContext* ctx);
+  explicit RayTracingContext(std::shared_ptr<SimulationContext>& ctx);
   ~RayTracingContext();
 
   void setRayNum(int rayNum);
 
-  void initRays(CrystalContext* ctx, int rayNum, const float* dir, const float* w, RaySegment** prevRaySeg = nullptr);
+  void initRays(CrystalContextPtr ctx, int rayNum, const float* dir, const float* w, RaySegment** prevRaySeg = nullptr);
   // void clearRays();
   void commitHitResult();
-  void commitPropagateResult(CrystalContext* ctx);
+  void commitPropagateResult(CrystalContextPtr ctx);
   bool isFinished();
 
   size_t copyFinishedRaySegments(RaySegment** segs, float* dir, float prob = 1.0f);
@@ -164,7 +169,7 @@ private:
   void copyFinishedRaySegmentsRange(RaySegment** segs, float* dir, float prob,
                                     std::atomic<std::uint64_t>& k, int startIdx, int endIdx);
 
-  SimulationContext* simCtx;
+  std::shared_ptr<SimulationContext> simCtx;
 
   int initRayNum;
   int currentRayNum;

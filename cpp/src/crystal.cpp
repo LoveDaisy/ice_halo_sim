@@ -103,7 +103,7 @@ void Crystal::copyNormalData(float* data) const {
 /*
  * parameter: h, defined as c / a, i.e. height / diameter
  */
-Crystal* Crystal::createHexCylinder(float h) {
+CrystalPtr Crystal::createHexCylinder(float h) {
   using Math::Vec3f;
   using Math::TriangleIdx;
   using Math::kPi;
@@ -132,7 +132,7 @@ Crystal* Crystal::createHexCylinder(float h) {
   faces.emplace_back(TriangleIdx(9, 11, 10));
   faces.emplace_back(TriangleIdx(9, 6, 11));
 
-  return new Crystal(vertexes, faces);
+  return std::make_shared<Crystal>(vertexes, faces);
 }
 
 /*
@@ -142,7 +142,7 @@ Crystal* Crystal::createHexCylinder(float h) {
  *      diameter of base plate.
  * parameter: h3, defined as h / H, similar to h3.
  */
-Crystal* Crystal::createHexPyramid(float h1, float h2, float h3) {
+CrystalPtr Crystal::createHexPyramid(float h1, float h2, float h3) {
   using Math::Vec3f;
   using Math::TriangleIdx;
   using Math::kPi;
@@ -200,7 +200,7 @@ Crystal* Crystal::createHexPyramid(float h1, float h2, float h3) {
   faces.emplace_back(TriangleIdx(21, 23, 22));
   faces.emplace_back(TriangleIdx(21, 18, 23));
 
-  return new Crystal(vertexes, faces);
+  return std::make_shared<Crystal>(vertexes, faces);
 }
 
 /*
@@ -214,7 +214,7 @@ Crystal* Crystal::createHexPyramid(float h1, float h2, float h3) {
     9     8
     10    11
 */
-Crystal* Crystal::createCubicPyramid(float ratio1, float ratio2) {
+CrystalPtr Crystal::createCubicPyramid(float ratio1, float ratio2) {
   using Math::Vec3f;
   using Math::TriangleIdx;
   using Math::kPi;
@@ -259,7 +259,7 @@ Crystal* Crystal::createCubicPyramid(float ratio1, float ratio2) {
   faces.emplace_back(TriangleIdx(9, 8, 10));
   faces.emplace_back(TriangleIdx(10, 8, 11));
 
-  return new Crystal(vertexes, faces);
+  return std::make_shared<Crystal>(vertexes, faces);
 }
 
 /*
@@ -268,7 +268,7 @@ Crystal* Crystal::createCubicPyramid(float ratio1, float ratio2) {
  * parameter: h2, defined as h / a
  * parameter: h3, similar to h1
  */
-Crystal* Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h3) {
+CrystalPtr Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h3) {
   using Math::Vec3f;
   using Math::TriangleIdx;
   using Math::kPi;
@@ -326,10 +326,10 @@ Crystal* Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h3)
   faces.emplace_back(TriangleIdx(21, 23, 22));
   faces.emplace_back(TriangleIdx(21, 18, 23));
 
-  return new Crystal(vertexes, faces);
+  return std::make_shared<Crystal>(vertexes, faces);
 }
 
-Crystal* Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
+CrystalPtr Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
                                    float h1, float h2, float h3) {
   using Math::Vec3f;
   using Math::TriangleIdx;
@@ -389,10 +389,10 @@ Crystal* Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, 
   faces.emplace_back(TriangleIdx(21, 23, 22));
   faces.emplace_back(TriangleIdx(21, 18, 23));
 
-  return new Crystal(vertexes, faces);
+  return std::make_shared<Crystal>(vertexes, faces);
 }
 
-Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
+CrystalPtr Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
                                             float h1, float h2, float h3) {
   using Math::Vec3f;
   using Math::TriangleIdx;
@@ -454,7 +454,7 @@ Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lo
   faces.emplace_back(TriangleIdx(21, 23, 22));
   faces.emplace_back(TriangleIdx(21, 18, 23));
 
-  return new Crystal(vertexes, faces);
+  return std::make_shared<Crystal>(vertexes, faces);
 }
 
 /*
@@ -478,7 +478,7 @@ Crystal* Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lo
       9
   11
 */
-Crystal* Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3) {
+CrystalPtr Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3) {
   using Math::Vec3f;
   using Math::TriangleIdx;
   using Math::kPi;
@@ -530,7 +530,7 @@ Crystal* Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
   }
   faces.emplace_back(TriangleIdx(10, 9, 11));
 
-  return new Crystal(vertexes, faces);
+  return std::make_shared<Crystal>(vertexes, faces);
 }
 
 
@@ -539,7 +539,7 @@ Crystal* Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3)
  *      Starts from face 3.
  * parameter: h, cylinder height, h = height / a
  */
-Crystal* Crystal::createIrregularHexCylinder(float* dist, float h) {
+CrystalPtr Crystal::createIrregularHexCylinder(float* dist, float h) {
   /* Use a naive algorithm to determine the profile of prism face
    * 1. For each line pair L1 and L2, get their intersection point p12;
    * 2. For all half planes, check if p12 is in the plane;
@@ -584,7 +584,7 @@ Crystal* Crystal::createIrregularHexCylinder(float* dist, float h) {
   std::vector<TriangleIdx> faces;
   buildPolyhedronFaces(hss, pts, faces);
 
-  return new Crystal(pts, faces);
+  return std::make_shared<Crystal>(pts, faces);
 }
 
 
@@ -598,7 +598,7 @@ Crystal* Crystal::createIrregularHexCylinder(float* dist, float h) {
  *      h[1] are the heights of middle cylindrical segment, defined as height / a, where a is the
  *      diameter of original circumcircle.
  */
-Crystal* Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) {
+CrystalPtr Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) {
   /* There are 20 faces. The crystal is the intersection of all these half-spaces.
    * 1. Find all inner point as vertexes.
    * 2. Find all co-planner points.
@@ -679,7 +679,7 @@ Crystal* Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) {
   std::vector<TriangleIdx> faces;
   buildPolyhedronFaces(hss, pts, faces);
 
-  return new Crystal(pts, faces);
+  return std::make_shared<Crystal>(pts, faces);
 }
 
 };  // namespace IceHalo

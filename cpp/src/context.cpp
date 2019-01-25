@@ -15,12 +15,7 @@ namespace IceHalo {
 using rapidjson::Pointer;
 
 
-CrystalContext::~CrystalContext() {
-  delete crystal;
-}
-
-
-void CrystalContext::setCrystal(Crystal* g, float populationWeight,
+void CrystalContext::setCrystal(CrystalPtr g, float populationWeight,
                                 Math::Distribution axisDist, float axisMean, float axisStd,
                                 Math::Distribution rollDist, float rollMean, float rollStd) {
   this->crystal = g;
@@ -30,7 +25,7 @@ void CrystalContext::setCrystal(Crystal* g, float populationWeight,
 }
 
 
-Crystal * CrystalContext::getCrystal() {
+CrystalPtr CrystalContext::getCrystal() {
   return this->crystal;
 }
 
@@ -40,7 +35,7 @@ void CrystalContext::fillDir(const float* incDir, float* rayDir, float* mainAxRo
 }
 
 
-RayTracingContext::RayTracingContext(SimulationContext* ctx)
+RayTracingContext::RayTracingContext(std::shared_ptr<SimulationContext>& ctx)
     : simCtx(ctx), initRayNum(0), currentRayNum(0), activeRaySegNum(0),
       rays(nullptr), activeRaySeg(nullptr),
       gen(), dis(0.0f, 1.0f),
@@ -78,11 +73,11 @@ void RayTracingContext::setRayNum(int num) {
 }
 
 
-void RayTracingContext::initRays(CrystalContext* ctx,
+void RayTracingContext::initRays(CrystalContextPtr ctx,
                                  int rayNum, const float* dir, const float* w, RaySegment** prevRaySeg) {
   setRayNum(rayNum);
 
-  Crystal* crystal = ctx->getCrystal();
+  auto crystal = ctx->getCrystal();
   auto* faces = new float[crystal->faceNum() * 9];
   crystal->copyFaceData(faces);
 
@@ -147,7 +142,7 @@ void RayTracingContext::commitHitResult() {
 }
 
 
-void RayTracingContext::commitPropagateResult(CrystalContext* ctx) {
+void RayTracingContext::commitPropagateResult(CrystalContextPtr ctx) {
   int k = 0;
   activeRaySegNum = 0;
   for (int i = 0; i < currentRayNum; i++) {
@@ -295,18 +290,6 @@ SimulationContext::SimulationContext()
       dataDirectory("./") {}
 
 
-SimulationContext::~SimulationContext() {
-  for (auto p : crystalCtxs) {
-    delete p;
-  }
-  for (auto& rcs : rayTracingCtxs) {
-    for (auto rc : rcs) {
-      delete rc;
-    }
-  }
-}
-
-
 uint64_t SimulationContext::getTotalInitRays() const {
   return totalRayNum;
 }
@@ -410,12 +393,12 @@ void SimulationContext::setCrystalRayNum(int scatterIdx, uint64_t totalRayNum) {
 }
 
 
-CrystalContext * SimulationContext::getCrystalContext(int i) {
+CrystalContextPtr SimulationContext::getCrystalContext(int i) {
   return crystalCtxs[i];
 }
 
 
-RayTracingContext * SimulationContext::getRayTracingContext(int scatterIdx, int crystalIdx) {
+RayTracingContextPtr SimulationContext::getRayTracingContext(int scatterIdx, int crystalIdx) {
   return rayTracingCtxs[scatterIdx][crystalIdx];
 }
 
@@ -426,9 +409,9 @@ void SimulationContext::writeFinalDirections(const char* filename) {
 
   file.write(currentWavelength);
 
-  std::vector<RaySegment *> v;
+  std::vector<RaySegment*> v;
   for (auto& rcs : rayTracingCtxs) {
-    for (auto rc : rcs) {
+    for (const auto& rc : rcs) {
       size_t currentIdx = 0;
       for (int i = 0; i < rc->initRayNum; i++) {
         auto r = rc->rays[i];
@@ -737,7 +720,7 @@ ContextParser::ContextParser(rapidjson::Document& d, const char* filename) :
     d(std::move(d)), filename(filename) {}
 
 
-ContextParser* ContextParser::createFileParser(const char* filename) {
+std::shared_ptr<ContextParser> ContextParser::createFileParser(const char* filename) {
   printf("Reading config from: %s\n", filename);
 
   FILE* fp = fopen(filename, "rb");
@@ -759,25 +742,25 @@ ContextParser* ContextParser::createFileParser(const char* filename) {
 
   fclose(fp);
 
-  return new ContextParser(d, filename);
+  return std::shared_ptr<ContextParser>(new ContextParser(d, filename));
 }
 
 
-void ContextParser::parseRaySettings(SimulationContext& ctx) {
+void ContextParser::parseRaySettings(std::shared_ptr<SimulationContext> ctx) {
   /* Parsing ray number */
-  ctx.totalRayNum = 10000;
+  ctx->totalRayNum = 10000;
   auto* p = Pointer("/ray/number").Get(d);
   if (p == nullptr) {
     fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default 10000!\n");
   } else if (!p->IsUint()) {
     fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default 10000!\n");
   } else {
-    ctx.totalRayNum = p->GetUint();
+    ctx->totalRayNum = p->GetUint();
   }
 
   /* Parsing wavelengths */
-  ctx.wavelengths.clear();
-  ctx.wavelengths.push_back(550);
+  ctx->wavelengths.clear();
+  ctx->wavelengths.push_back(550);
   p = Pointer("/ray/wavelength").Get(d);
   if (p == nullptr) {
     fprintf(stderr, "\nWARNING! Config missing <ray.wavelength>, using default 550!\n");
@@ -786,15 +769,15 @@ void ContextParser::parseRaySettings(SimulationContext& ctx) {
   } else if (!(*p)[0].IsNumber()) {
     fprintf(stderr, "\nWARNING! Config <ray.wavelength> connot be recgonized, using default 550!\n");
   } else {
-    ctx.wavelengths.clear();
+    ctx->wavelengths.clear();
     for (const auto& pi : p->GetArray()) {
-      ctx.wavelengths.push_back(static_cast<float &&>(pi.GetDouble()));
+      ctx->wavelengths.push_back(static_cast<float &&>(pi.GetDouble()));
     }
   }
 }
 
 
-void ContextParser::parseBasicSettings(SimulationContext& ctx) {
+void ContextParser::parseBasicSettings(std::shared_ptr<SimulationContext> ctx) {
   int maxRecursion = 9;
   auto* p = Pointer("/max_recursion").Get(d);
   if (p == nullptr) {
@@ -804,11 +787,11 @@ void ContextParser::parseBasicSettings(SimulationContext& ctx) {
   } else {
     maxRecursion = std::min(std::max(p->GetInt(), 1), 10);
   }
-  ctx.maxRecursionNum = maxRecursion;
+  ctx->maxRecursionNum = maxRecursion;
 }
 
 
-void ContextParser::parseMultiScatterSettings(SimulationContext& ctx) {
+void ContextParser::parseMultiScatterSettings(std::shared_ptr<SimulationContext> ctx) {
   int multiScattering = 1;
   auto* p = Pointer("/multi_scatter/repeat").Get(d);
   if (p == nullptr) {
@@ -818,7 +801,7 @@ void ContextParser::parseMultiScatterSettings(SimulationContext& ctx) {
   } else {
     multiScattering = std::min(std::max(p->GetInt(), 1), 4);
   }
-  ctx.multiScatterNum = multiScattering;
+  ctx->multiScatterNum = multiScattering;
 
   float prob = 1.0f;
   p = Pointer("/multi_scatter/probability").Get(d);
@@ -830,15 +813,15 @@ void ContextParser::parseMultiScatterSettings(SimulationContext& ctx) {
     prob = static_cast<float>(p->GetDouble());
     prob = std::max(std::min(prob, 1.0f), 0.0f);
   }
-  ctx.multiScatterProb = prob;
+  ctx->multiScatterProb = prob;
 
   for (int i = 0; i < multiScattering; i++) {
-    ctx.rayTracingCtxs.emplace_back(std::vector<RayTracingContext *>());
+    ctx->rayTracingCtxs.emplace_back(std::vector<RayTracingContextPtr>());
   }
 }
 
 
-void ContextParser::parseSunSettings(SimulationContext& ctx) {
+void ContextParser::parseSunSettings(std::shared_ptr<SimulationContext> ctx) {
   // Parsing sun altitude
   float sunAltitude = 0.0f;
   auto* p = Pointer("/sun/altitude").Get(d);
@@ -849,7 +832,7 @@ void ContextParser::parseSunSettings(SimulationContext& ctx) {
   } else {
     sunAltitude = static_cast<float>(p->GetDouble());
   }
-  ctx.setSunPosition(90.0f, sunAltitude);
+  ctx->setSunPosition(90.0f, sunAltitude);
 
   // Parsing sun diameter
   float sunDiameter = 0.5f;
@@ -861,11 +844,11 @@ void ContextParser::parseSunSettings(SimulationContext& ctx) {
   } else {
     sunDiameter = static_cast<float>(p->GetDouble());
   }
-  ctx.sunDiameter = sunDiameter;
+  ctx->sunDiameter = sunDiameter;
 }
 
 
-void ContextParser::parseDataSettings(SimulationContext& ctx) {
+void ContextParser::parseDataSettings(std::shared_ptr<SimulationContext> ctx) {
   /* Parsing output data directory */
   std::string dir = "./";
   auto* p = Pointer("/data_folder").Get(d);
@@ -876,11 +859,11 @@ void ContextParser::parseDataSettings(SimulationContext& ctx) {
   } else {
     dir = p->GetString();
   }
-  ctx.dataDirectory = dir;
+  ctx->dataDirectory = dir;
 }
 
 
-void ContextParser::parseCrystalSettings(SimulationContext& ctx, const rapidjson::Value& c, int ci) {
+void ContextParser::parseCrystalSettings(std::shared_ptr<SimulationContext> ctx, const rapidjson::Value& c, int ci) {
   using Math::Distribution;
 
   char msgBuffer[kMsgBufferSize];
@@ -971,18 +954,18 @@ void ContextParser::parseCrystalSettings(SimulationContext& ctx, const rapidjson
     parseCrystalType(ctx, c, ci, population, axisDist, axisMean, axisStd, rollDist, rollMean, rollStd);
   }
 
-  for (auto& rtc : ctx.rayTracingCtxs) {
-    rtc.push_back(new RayTracingContext(&ctx));
+  for (auto& rtc : ctx->rayTracingCtxs) {
+    rtc.push_back(std::make_shared<RayTracingContext>(ctx));
   }
 }
 
-void ContextParser::parseCrystalType(SimulationContext& ctx, const rapidjson::Value& c, int ci,
+void ContextParser::parseCrystalType(std::shared_ptr<SimulationContext> ctx, const rapidjson::Value& c, int ci,
                                      float population,
                                      Math::Distribution axisDist, float axisMean, float axisStd,
                                      Math::Distribution rollDist, float rollMean, float rollStd) {
   char msgBuffer[kMsgBufferSize];
 
-  auto* cryCtx = new CrystalContext();
+  auto cryCtx = std::make_shared<CrystalContext>();
   const auto* p = Pointer("/parameter").Get(c);
   if (c["type"] == "HexCylinder") {
     if (p == nullptr || !p->IsNumber()) {
@@ -1145,7 +1128,7 @@ void ContextParser::parseCrystalType(SimulationContext& ctx, const rapidjson::Va
         snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot open model file!", ci);
         throw std::invalid_argument(msgBuffer);
       }
-      Crystal* crystal = parseCustomCrystal(file);
+      auto crystal = parseCustomCrystal(file);
       cryCtx->setCrystal(crystal, population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd);
@@ -1155,11 +1138,11 @@ void ContextParser::parseCrystalType(SimulationContext& ctx, const rapidjson::Va
     snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recgonize!", ci);
     throw std::invalid_argument(msgBuffer);
   }
-  ctx.crystalCtxs.push_back(cryCtx);
+  ctx->crystalCtxs.push_back(cryCtx);
 }
 
 
-Crystal * ContextParser::parseCustomCrystal(std::FILE* file) {
+CrystalPtr ContextParser::parseCustomCrystal(std::FILE* file) {
   std::vector<Math::Vec3f> vertexes;
   std::vector<Math::TriangleIdx> faces;
   float vbuf[3];
@@ -1181,13 +1164,14 @@ Crystal * ContextParser::parseCustomCrystal(std::FILE* file) {
         break;
     }
   }
-  return new Crystal(vertexes, faces);
+  return std::make_shared<Crystal>(vertexes, faces);
 }
 
 
-void ContextParser::parseSimulationSettings(SimulationContext& ctx) {
+std::shared_ptr<SimulationContext> ContextParser::parseSimulationSettings() {
   char msgBuffer[kMsgBufferSize];
 
+  auto ctx = std::make_shared<SimulationContext>();
   parseRaySettings(ctx);
   parseBasicSettings(ctx);
   parseSunSettings(ctx);
@@ -1205,13 +1189,17 @@ void ContextParser::parseSimulationSettings(SimulationContext& ctx) {
     parseCrystalSettings(ctx, c, ci);
     ci++;
   }
+
+  return ctx;
 }
 
 
-void ContextParser::parseRenderingSettings(RenderContext& ctx) {
+RenderContext ContextParser::parseRenderingSettings() {
+  RenderContext ctx;
   parseCameraSettings(ctx);
   parseRenderSettings(ctx);
   parseDataSettings(ctx);
+  return ctx;
 }
 
 
