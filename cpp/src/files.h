@@ -1,7 +1,8 @@
-#ifndef ICEHALOSIM_FILES_H
-#define ICEHALOSIM_FILES_H
+#ifndef SRC_FILES_H_
+#define SRC_FILES_H_
 
 #include <vector>
+#include <string>
 
 #define BOOST_FILESYSTEM_NO_DEPRECATED
 #include <boost/filesystem.hpp>
@@ -14,7 +15,7 @@ namespace OpenMode {
   constexpr uint8_t kWrite = 0b0010;
   constexpr uint8_t kAppend = 0b0100;
   constexpr uint8_t kBinary = 0b1000;
-};
+}  // namespace OpenMode
 
 
 class File {
@@ -79,10 +80,10 @@ size_t File::write(const T* data, size_t n) {
 
 bool exists(const char* filename);
 
-void listDataFiles(const char* dir, std::vector<File>& files);
+std::vector<File> listDataFiles(const char* dir);
 
 std::string pathJoin(const std::string& p1, const std::string& p2);
 
-}
+}  // namespace IceHalo
 
-#endif
+#endif  // SRC_FILES_H_

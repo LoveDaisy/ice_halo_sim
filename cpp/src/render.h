@@ -1,5 +1,5 @@
-#ifndef ICEHALOSIM_RENDER_H
-#define ICEHALOSIM_RENDER_H
+#ifndef SRC_RENDER_H_
+#define SRC_RENDER_H_
 
 #include <unordered_map>
 #include <functional>
@@ -41,21 +41,21 @@ void dualEquiAreaFishEye(float* camRot,           // Not used
                          VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER);   // Not used
 
 
-void dualEquiDistantFishEye(float* camRot,          // Not used
-                            float hov,              // Not used
-                            uint64_t dataNumber,    // Data number
-                            float* dir,             // Ray directions, [x, y, z]
-                            int imgWid, int imgHei, // Image size
-                            int* imgXY,             // Image coordinates
+void dualEquiDistantFishEye(float* camRot,           // Not used
+                            float hov,               // Not used
+                            uint64_t dataNumber,     // Data number
+                            float* dir,              // Ray directions, [x, y, z]
+                            int imgWid, int imgHei,  // Image size
+                            int* imgXY,              // Image coordinates
                             VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER);   // Not used
 
 
-void rectLinear(float* camRot,          // Camera rotation. [lon, lat, roll]
-                float hov,              // Half field of view.
-                uint64_t dataNumber,    // Data number
-                float* dir,             // Ray directions, [x, y, z]
-                int imgWid, int imgHei, // Image size
-                int* imgXY,             // Image coordinates
+void rectLinear(float* camRot,           // Camera rotation. [lon, lat, roll]
+                float hov,               // Half field of view.
+                uint64_t dataNumber,     // Data number
+                float* dir,              // Ray directions, [x, y, z]
+                int imgWid, int imgHei,  // Image size
+                int* imgXY,              // Image coordinates
                 VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER);   // Which semi-sphere can be visible
 
 
@@ -76,12 +76,12 @@ using MyUnorderedMap = std::unordered_map<Key, T, HashType<Key>>;
 
 
 static MyUnorderedMap<ProjectionType,
-    std::function<void(float* camRot,      // Camera rotation. [lon, lat, roll]
-                       float hov,        // Half field of view.
-                       uint64_t dataNumber,  // Data number
-                       float* dir,       // Ray directions, [x, y, z]
-                       int imgWid, int imgHei, // Image size
-                       int* imgXY,       // Image coordinates
+    std::function<void(float* camRot,           // Camera rotation. [lon, lat, roll]
+                       float hov,               // Half field of view.
+                       uint64_t dataNumber,     // Data number
+                       float* dir,              // Ray directions, [x, y, z]
+                       int imgWid, int imgHei,  // Image size
+                       int* imgXY,              // Image coordinates
                        VisibleSemiSphere visibleSemiSphere)>
 > projectionFunctions = {
   {ProjectionType::LINEAR,            &rectLinear},
@@ -323,10 +323,9 @@ private:
     0.000000000000f, 0.000000000000f, 0.000000000000f, 0.000000000000f, 0.000000000000f, 0.000000000000f, 0.000000000000f,
     0.000000000000f, 0.000000000000f
   };
-
 };
 
 }   // namespace IceHalo
 
 
-#endif //ICEHALOSIM_RENDER_H
+#endif  // SRC_RENDER_H_

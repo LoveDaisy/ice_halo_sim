@@ -36,7 +36,7 @@ void CrystalContext::fillDir(const float* incDir, float* rayDir, float* mainAxRo
 }
 
 
-RayTracingContext::RayTracingContext(std::shared_ptr<SimulationContext>& ctx)
+RayTracingContext::RayTracingContext(std::shared_ptr<SimulationContext> ctx)
     : simCtx(ctx), initRayNum(0), currentRayNum(0), activeRaySegNum(0),
       rays(nullptr), activeRaySeg(nullptr),
       gen(), dis(0.0f, 1.0f),
@@ -174,7 +174,7 @@ size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float* dir,
   int step = initRayNum / 80;
   for (int startIdx = 0; startIdx < initRayNum; startIdx += step) {
     int endIdx = std::min(startIdx + step, initRayNum);
-    pool->addJob([segs, dir, prob,& k, startIdx, endIdx, this](){
+    pool->addJob([segs, dir, prob, &k, startIdx, endIdx, this](){
       copyFinishedRaySegmentsRange(segs, dir, prob, k, startIdx, endIdx);
     });
   }
@@ -184,12 +184,12 @@ size_t RayTracingContext::copyFinishedRaySegments(RaySegment **segs, float* dir,
 }
 
 
-void RayTracingContext::copyFinishedRaySegmentsRange(RaySegment **segs, float* dir, float prob,
+void RayTracingContext::copyFinishedRaySegmentsRange(RaySegment** segs, float* dir, float prob,
                                                      std::atomic<uint64_t>& k, int startIdx, int endIdx) {
   std::default_random_engine randomEngine;
   std::uniform_real_distribution<double> uniformDist(0.0, 1.0);
 
-  std::vector<RaySegment *> v;
+  std::vector<RaySegment*> v;
   for (int rayIdx = startIdx; rayIdx < endIdx; rayIdx++) {
     v.clear();
     v.push_back(rays[rayIdx]->firstRaySeg);
@@ -636,15 +636,14 @@ void RenderContext::copySpectrumData(float* wavelengthData, float* spectrumData)
 
 
 void RenderContext::loadData() {
-  std::vector<File> files;
-  listDataFiles(dataDirectory.c_str(), files);
+  std::vector<File> files = listDataFiles(dataDirectory.c_str());
   int i = 0;
   for (auto& f : files) {
     auto t0 = std::chrono::system_clock::now();
     auto num = loadDataFromFile(f);
     auto t1 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff = t1 - t0;
-    printf(" Loading data (%d/%lu): %.2fms; total %d pts\n", i + 1, files.size(), diff.count() * 1.0e3, num);
+    std::chrono::duration<float, std::ratio<1, 1000> > diff = t1 - t0;
+    printf(" Loading data (%d/%lu): %.2fms; total %d pts\n", i + 1, files.size(), diff.count(), num);
     i++;
   }
 }
@@ -736,7 +735,7 @@ std::shared_ptr<ContextParser> ContextParser::createFileParser(const char* filen
   rapidjson::Document d;
   if (d.ParseStream(is).HasParseError()) {
     fprintf(stderr, "\nError(offset %u): %s\n", (unsigned)d.GetErrorOffset(),
-    GetParseError_En(d.GetParseError()));
+      GetParseError_En(d.GetParseError()));
     fclose(fp);
     return nullptr;
   }
@@ -1197,21 +1196,21 @@ std::shared_ptr<SimulationContext> ContextParser::parseSimulationSettings() {
 
 RenderContext ContextParser::parseRenderingSettings() {
   RenderContext ctx;
-  parseCameraSettings(ctx);
-  parseRenderSettings(ctx);
-  parseDataSettings(ctx);
+  parseCameraSettings(&ctx);
+  parseRenderSettings(&ctx);
+  parseDataSettings(&ctx);
   return ctx;
 }
 
 
-void ContextParser::parseCameraSettings(RenderContext& ctx) {
-  ctx.camRot[0] = 90.0f;
-  ctx.camRot[1] = 89.9f;
-  ctx.camRot[2] = 0.0f;
-  ctx.fov = 120.0f;
-  ctx.imgWid = 800;
-  ctx.imgHei = 800;
-  ctx.projectionType = ProjectionType::EQUI_AREA;
+void ContextParser::parseCameraSettings(RenderContext* ctx) {
+  ctx->camRot[0] = 90.0f;
+  ctx->camRot[1] = 89.9f;
+  ctx->camRot[2] = 0.0f;
+  ctx->fov = 120.0f;
+  ctx->imgWid = 800;
+  ctx->imgHei = 800;
+  ctx->projectionType = ProjectionType::EQUI_AREA;
 
   auto* p = Pointer("/camera/azimuth").Get(d);
   if (p == nullptr) {
@@ -1221,7 +1220,7 @@ void ContextParser::parseCameraSettings(RenderContext& ctx) {
   } else {
     auto az = static_cast<float>(p->GetDouble());
     az = std::max(std::min(az, 360.0f), 0.0f);
-    ctx.camRot[0] = 90.0f - az;
+    ctx->camRot[0] = 90.0f - az;
   }
 
   p = Pointer("/camera/elevation").Get(d);
@@ -1232,7 +1231,7 @@ void ContextParser::parseCameraSettings(RenderContext& ctx) {
   } else {
     auto el = static_cast<float>(p->GetDouble());
     el = std::max(std::min(el, 89.999f), -89.999f);
-    ctx.camRot[1] = el;
+    ctx->camRot[1] = el;
   }
 
   p = Pointer("/camera/rotation").Get(d);
@@ -1243,7 +1242,7 @@ void ContextParser::parseCameraSettings(RenderContext& ctx) {
   } else {
     auto rot = static_cast<float>(p->GetDouble());
     rot = std::max(std::min(rot, 180.0f), -180.0f);
-    ctx.camRot[2] = rot;
+    ctx->camRot[2] = rot;
   }
 
   p = Pointer("/camera/fov").Get(d);
@@ -1254,7 +1253,7 @@ void ContextParser::parseCameraSettings(RenderContext& ctx) {
   } else {
     auto fov = static_cast<float>(p->GetDouble());
     fov = std::max(std::min(fov, 140.0f), 0.0f);
-    ctx.fov = fov;
+    ctx->fov = fov;
   }
 
   p = Pointer("/camera/width").Get(d);
@@ -1265,7 +1264,7 @@ void ContextParser::parseCameraSettings(RenderContext& ctx) {
   } else {
     int width = p->GetInt();
     width = std::max(width, 0);
-    ctx.imgWid = static_cast<uint32_t>(width);
+    ctx->imgWid = static_cast<uint32_t>(width);
   }
 
   p = Pointer("/camera/height").Get(d);
@@ -1276,7 +1275,7 @@ void ContextParser::parseCameraSettings(RenderContext& ctx) {
   } else {
     int height = p->GetInt();
     height = std::max(height, 0);
-    ctx.imgHei = static_cast<uint32_t>(height);
+    ctx->imgHei = static_cast<uint32_t>(height);
   }
 
   p = Pointer("/camera/lens").Get(d);
@@ -1286,13 +1285,13 @@ void ContextParser::parseCameraSettings(RenderContext& ctx) {
     fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equi-area fisheye!\n");
   } else {
     if (*p == "linear") {
-      ctx.projectionType = ProjectionType::LINEAR;
+      ctx->projectionType = ProjectionType::LINEAR;
     } else if (*p == "fisheye") {
-      ctx.projectionType = ProjectionType::EQUI_AREA;
+      ctx->projectionType = ProjectionType::EQUI_AREA;
     } else if (*p == "dual_fisheye_equidistant") {
-      ctx.projectionType = ProjectionType::DUAL_EQUI_DISTANT;
+      ctx->projectionType = ProjectionType::DUAL_EQUI_DISTANT;
     } else if (*p == "dual_fisheye_equiarea") {
-      ctx.projectionType = ProjectionType::DUAL_EQUI_AREA;
+      ctx->projectionType = ProjectionType::DUAL_EQUI_AREA;
     } else {
       fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recgonized, using default equi-area fisheye!\n");
     }
@@ -1300,18 +1299,18 @@ void ContextParser::parseCameraSettings(RenderContext& ctx) {
 }
 
 
-void ContextParser::parseRenderSettings(RenderContext& ctx) {
-  ctx.visibleSemiSphere = VisibleSemiSphere::UPPER;
-  ctx.intensityFactor = 1.0;
-  ctx.offsetY = 0;
-  ctx.offsetX = 0;
-  ctx.backgroundColor[0] = 0;
-  ctx.backgroundColor[1] = 0;
-  ctx.backgroundColor[2] = 0;
-  ctx.rayColor[0] = -1;
-  ctx.rayColor[1] = -1;
-  ctx.rayColor[2] = -1;
-  ctx.showHorizontal = true;
+void ContextParser::parseRenderSettings(RenderContext* ctx) {
+  ctx->visibleSemiSphere = VisibleSemiSphere::UPPER;
+  ctx->intensityFactor = 1.0;
+  ctx->offsetY = 0;
+  ctx->offsetX = 0;
+  ctx->backgroundColor[0] = 0;
+  ctx->backgroundColor[1] = 0;
+  ctx->backgroundColor[2] = 0;
+  ctx->rayColor[0] = -1;
+  ctx->rayColor[1] = -1;
+  ctx->rayColor[2] = -1;
+  ctx->showHorizontal = true;
 
   auto* p = Pointer("/render/visible_semi_sphere").Get(d);
   if (p == nullptr) {
@@ -1319,13 +1318,13 @@ void ContextParser::parseRenderSettings(RenderContext& ctx) {
   } else if (!p->IsString()) {
     fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> is not a string, using default UPPER!\n");
   } else if (*p == "upper") {
-    ctx.visibleSemiSphere = VisibleSemiSphere::UPPER;
+    ctx->visibleSemiSphere = VisibleSemiSphere::UPPER;
   } else if (*p == "lower") {
-    ctx.visibleSemiSphere = VisibleSemiSphere::LOWER;
+    ctx->visibleSemiSphere = VisibleSemiSphere::LOWER;
   } else if (*p == "camera") {
-    ctx.visibleSemiSphere = VisibleSemiSphere::CAMERA;
+    ctx->visibleSemiSphere = VisibleSemiSphere::CAMERA;
   } else if (*p == "full") {
-    ctx.visibleSemiSphere = VisibleSemiSphere::FULL;
+    ctx->visibleSemiSphere = VisibleSemiSphere::FULL;
   } else {
     fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> cannot be recgonized, using default UPPER!\n");
   }
@@ -1338,7 +1337,7 @@ void ContextParser::parseRenderSettings(RenderContext& ctx) {
   } else {
     double f = p->GetDouble();
     f = std::max(std::min(f, 100.0), 0.01);
-    ctx.intensityFactor = f;
+    ctx->intensityFactor = f;
   }
 
   p = Pointer("/render/offset").Get(d);
@@ -1351,12 +1350,12 @@ void ContextParser::parseRenderSettings(RenderContext& ctx) {
   } else {
     int offsetX = (*p)[0].GetInt();
     int offsetY = (*p)[1].GetInt();
-    offsetX = std::max(std::min(offsetX, static_cast<int>(ctx.imgWid / 2)),
-      -static_cast<int>(ctx.imgWid / 2));
-    offsetY = std::max(std::min(offsetY, static_cast<int>(ctx.imgHei / 2)),
-      -static_cast<int>(ctx.imgHei / 2));
-    ctx.offsetX = offsetX;
-    ctx.offsetY = offsetY;
+    offsetX = std::max(std::min(offsetX, static_cast<int>(ctx->imgWid / 2)),
+      -static_cast<int>(ctx->imgWid / 2));
+    offsetY = std::max(std::min(offsetY, static_cast<int>(ctx->imgHei / 2)),
+      -static_cast<int>(ctx->imgHei / 2));
+    ctx->offsetX = offsetX;
+    ctx->offsetY = offsetY;
   }
 
   p = Pointer("/render/background_color").Get(d);
@@ -1369,7 +1368,7 @@ void ContextParser::parseRenderSettings(RenderContext& ctx) {
   } else {
     auto pa = p->GetArray();
     for (int i = 0; i < 3; i++) {
-      ctx.backgroundColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
+      ctx->backgroundColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
     }
   }
 
@@ -1385,7 +1384,7 @@ void ContextParser::parseRenderSettings(RenderContext& ctx) {
   } else if (p->IsArray()) {
     auto pa = p->GetArray();
     for (int i = 0; i < 3; i++) {
-      ctx.rayColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
+      ctx->rayColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
     }
   }
 
@@ -1395,20 +1394,20 @@ void ContextParser::parseRenderSettings(RenderContext& ctx) {
   } else if (!p->IsBool()) {
     fprintf(stderr, "\nWARNING! Config <render.show_horizontal> is not a boolean, using default true!\n");
   } else {
-    ctx.showHorizontal = p->GetBool();
+    ctx->showHorizontal = p->GetBool();
   }
 }
 
 
-void ContextParser::parseDataSettings(RenderContext& ctx) {
-  ctx.dataDirectory = "./";
+void ContextParser::parseDataSettings(RenderContext* ctx) {
+  ctx->dataDirectory = "./";
   auto* p = Pointer("/data_folder").Get(d);
   if (p == nullptr) {
     fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
   } else if (!p->IsString()) {
     fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
   } else {
-    ctx.dataDirectory = p->GetString();
+    ctx->dataDirectory = p->GetString();
   }
 }
 

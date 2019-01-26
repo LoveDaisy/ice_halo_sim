@@ -1,11 +1,13 @@
-#ifndef OPTICS_H
-#define OPTICS_H
+#ifndef SRC_OPTICS_H_
+#define SRC_OPTICS_H_
 
 #include "mymath.h"
 #include "context.h"
 
 #include <atomic>
 #include <mutex>
+#include <vector>
+#include <memory>
 
 
 namespace IceHalo {
@@ -41,7 +43,6 @@ public:
   size_t totalNum();
 
   RaySegment* firstRaySeg;
-
 };
 
 
@@ -54,7 +55,8 @@ private:
   static void propagate(std::shared_ptr<RayTracingContext> rayCtx, std::shared_ptr<CrystalContext> cryCtx);
 
   static void hitSurfaceRange(float n, std::shared_ptr<RayTracingContext> rayCtx, int startIdx, int endIdx);
-  static void propagateRange(std::shared_ptr<RayTracingContext> rayCtx, int faceNum, float* faces, int startIdx, int endIdx);
+  static void propagateRange(std::shared_ptr<RayTracingContext> rayCtx,
+                             int faceNum, float* faces, int startIdx, int endIdx);
   static float getReflectRatio(float cos_angle, float rr);
   static void intersectLineTriangle(const float* pt, const float* dir, const float* face,
                                     float* p, float* t, float* alpha, float* beta);
@@ -103,10 +105,9 @@ private:
   std::vector<RaySegment*> segments;
   std::atomic<uint64_t> nextUnusedId;
   std::atomic<uint64_t> currentChunkId;
-
 };
 
 }   // namespace IceHalo
 
 
-#endif // OPTICS_H
+#endif  // SRC_OPTICS_H_

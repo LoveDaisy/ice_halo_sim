@@ -1,5 +1,5 @@
-#ifndef ICEHALOSIM_THREADINGPOOL_H
-#define ICEHALOSIM_THREADINGPOOL_H
+#ifndef SRC_THREADINGPOOL_H_
+#define SRC_THREADINGPOOL_H_
 
 #include <vector>
 #include <queue>
@@ -43,11 +43,10 @@ private:
 
   static Pool* instance;
   static std::mutex instanceMutex;
-
 };
 
 
 }   // namespace IceHalo
 
 
-#endif
+#endif  // SRC_THREADINGPOOL_H_

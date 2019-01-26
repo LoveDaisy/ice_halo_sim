@@ -4,6 +4,7 @@
 #include "mymath.h"
 
 #include <vector>
+#include <memory>
 
 namespace IceHalo {
 
@@ -29,7 +30,7 @@ public:
   void copyNormalData(int idx, float* data) const;
   void copyNormalData(float* data) const;
 
-  static constexpr float C_CONSTANT = 1.629f;
+  static constexpr float kC = 1.629f;
 
   /* Regular hexagon cylinder */
   static std::shared_ptr<Crystal> createHexCylinder(float h);
@@ -69,4 +70,4 @@ using CrystalPtr = std::shared_ptr<Crystal>;
 };  // namespace IceHalo
 
 
-#endif  // SRC_CRYSTAL_H
+#endif  // SRC_CRYSTAL_H_

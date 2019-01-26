@@ -13,6 +13,7 @@
 #include <random>
 #include <string>
 #include <functional>
+#include <memory>
 
 
 namespace IceHalo {
@@ -55,9 +56,9 @@ private:
   CrystalPtr parseCustomCrystal(std::FILE* file);
 
   /* Parse rendering settings */
-  void parseCameraSettings(RenderContext& ctx);
-  void parseRenderSettings(RenderContext& ctx);
-  void parseDataSettings(RenderContext& ctx);
+  void parseCameraSettings(RenderContext* ctx);
+  void parseRenderSettings(RenderContext* ctx);
+  void parseDataSettings(RenderContext* ctx);
 
   rapidjson::Document d;
   std::string filename;
@@ -147,7 +148,7 @@ class RayTracingContext {
 friend class SimulationContext;
 friend class Optics;
 public:
-  explicit RayTracingContext(std::shared_ptr<SimulationContext>& ctx);
+  explicit RayTracingContext(std::shared_ptr<SimulationContext> ctx);
   ~RayTracingContext();
 
   void setRayNum(int rayNum);

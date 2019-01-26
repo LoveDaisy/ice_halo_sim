@@ -1,5 +1,5 @@
-#ifndef GEOMETRY_H
-#define GEOMETRY_H
+#ifndef SRC_MYMATH_H_
+#define SRC_MYMATH_H_
 
 #include <vector>
 #include <cmath>
@@ -25,7 +25,7 @@ public:
 
   void transpose();
 
-  static int multiply(const DummyMatrix& a, const DummyMatrix& b, DummyMatrix& c);
+  static int multiply(const DummyMatrix& a, const DummyMatrix& b, DummyMatrix* c);
 
 private:
   float* data;
@@ -154,10 +154,10 @@ void rotateBase(const float* ax, float angle, float* vec);
 void rotateZ(const float* lon_lat_roll, float* vec, uint64_t dataNum = 1);
 void rotateZBack(const float* lon_lat_roll, float* vec, uint64_t dataNum = 1);
 
-void findInnerPoints(HalfSpaceSet& hss, std::vector<Vec3f>& pts);
-void sortAndRemoveDuplicate(std::vector<Vec3f>& pts);
-void findCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f n0, float d0, std::vector<int>& ptsIdx);
-void buildPolyhedronFaces(HalfSpaceSet& hss, const std::vector<Math::Vec3f>& pts,
+std::vector<Vec3f> findInnerPoints(const HalfSpaceSet& hss);
+void sortAndRemoveDuplicate(std::vector<Vec3f>* pts);
+std::vector<int> findCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& n0, float d0);
+void buildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Math::Vec3f>& pts,
                           std::vector<Math::TriangleIdx>& faces);
 void buildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
                              std::vector<int>& ptsIdx, std::vector<TriangleIdx>& faces);
@@ -166,4 +166,4 @@ void buildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
 
 }   // namespace IceHalo
 
-#endif // GEOMETRY_H
+#endif  // SRC_MYMATH_H_

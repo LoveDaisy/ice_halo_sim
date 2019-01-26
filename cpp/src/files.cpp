@@ -1,6 +1,7 @@
 #include "files.h"
 
 #include <cstdio>
+#include <algorithm>
 
 
 namespace IceHalo {
@@ -11,9 +12,10 @@ bool exists(const char* filename) {
 }
 
 
-void listDataFiles(const char* dir, std::vector<File>& files) {
+std::vector<File> listDataFiles(const char* dir) {
   namespace f = boost::filesystem;
 
+  std::vector<File> files;
   f::path p(dir);
   std::vector<f::path> paths;
   copy(f::directory_iterator(p), f::directory_iterator(), back_inserter(paths));
@@ -22,6 +24,8 @@ void listDataFiles(const char* dir, std::vector<File>& files) {
       files.emplace_back(x.c_str());
     }
   }
+
+  return files;
 }
 
 

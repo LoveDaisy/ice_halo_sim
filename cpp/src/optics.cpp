@@ -1,10 +1,11 @@
-#include <limits>
-#include <cmath>
-
 #include "optics.h"
 #include "mymath.h"
 #include "context.h"
 #include "threadingpool.h"
+
+#include <limits>
+#include <cmath>
+#include <algorithm>
 
 
 namespace IceHalo {
@@ -219,7 +220,6 @@ void Optics::traceRays(std::shared_ptr<SimulationContext> context) {
   delete[] wStore;
   delete[] raySegStore;
   delete[] raySegStore2;
-
 }
 
 

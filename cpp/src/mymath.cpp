@@ -15,14 +15,14 @@ bool floatEqual(float a, float b, float threshold) {
 
 
 float dot3(const float* vec1, const float* vec2) {
-  return vec1[0]*vec2[0] + vec1[1]*vec2[1] + vec1[2]*vec2[2];
+  return vec1[0] * vec2[0] + vec1[1] * vec2[1] + vec1[2] * vec2[2];
 }
 
 
 void cross3(const float* vec1, const float* vec2, float* vec) {
-  vec[0] = -vec2[1]*vec1[2] + vec1[1]*vec2[2];
-  vec[1] = vec2[0]*vec1[2] - vec1[0]*vec2[2];
-  vec[2] = -vec2[0]*vec1[1] + vec1[0]*vec2[1];
+  vec[0] = -vec2[1] * vec1[2] + vec1[1] * vec2[2];
+  vec[1] = vec2[0] * vec1[2] - vec1[0] * vec2[2];
+  vec[2] = -vec2[0] * vec1[1] + vec1[0] * vec2[1];
 }
 
 
@@ -73,17 +73,18 @@ void rotateBase(const float* ax, float angle, float* vec) {
   DummyMatrix v(vec, 3, 3);
   DummyMatrix R(matR, 3, 3);
   DummyMatrix vn(res, 3, 3);
-  DummyMatrix::multiply(v, R, vn);
+  DummyMatrix::multiply(v, R, &vn);
 
   std::memcpy(vec, res, 9*sizeof(float));
 }
 
 
 void rotateZ(const float* lon_lat_roll, float* vec, uint64_t dataNum) {
-  using namespace std;
+  using std::cos;
+  using std::sin;
   float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
-           -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]),
-           cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
+     -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]),
+     cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
   float d[3] = {cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
   rotateBase(d, lon_lat_roll[2], ax);
 
@@ -94,7 +95,7 @@ void rotateZ(const float* lon_lat_roll, float* vec, uint64_t dataNum) {
 
   DummyMatrix resVec(res, dataNum, 3);
   DummyMatrix inputVec(vec, dataNum, 3);
-  DummyMatrix::multiply(inputVec, matR, resVec);
+  DummyMatrix::multiply(inputVec, matR, &resVec);
   std::memcpy(vec, res, 3 * dataNum * sizeof(float));
 
   delete[] res;
@@ -102,7 +103,8 @@ void rotateZ(const float* lon_lat_roll, float* vec, uint64_t dataNum) {
 
 
 void rotateZBack(const float* lon_lat_roll, float* vec, uint64_t dataNum) {
-  using namespace std;
+  using std::cos;
+  using std::sin;
   float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
            -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]),
            cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
@@ -116,31 +118,36 @@ void rotateZBack(const float* lon_lat_roll, float* vec, uint64_t dataNum) {
 
   DummyMatrix resVec(res, dataNum, 3);
   DummyMatrix inputVec(vec, dataNum, 3);
-  DummyMatrix::multiply(inputVec, matR, resVec);
+  DummyMatrix::multiply(inputVec, matR, &resVec);
   std::memcpy(vec, res, 3 * dataNum * sizeof(float));
 
   delete[] res;
 }
 
 
-void findInnerPoints(HalfSpaceSet& hss, std::vector<Vec3f>& pts) {
-  float* a = hss.a,* b = hss.b,* c = hss.c,* d = hss.d;
+std::vector<Vec3f> findInnerPoints(const HalfSpaceSet& hss) {
+  float* a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
   int n = hss.n;
 
+  std::vector<Vec3f> pts;
   for (int i = 0; i < n; i++) {
     for (int j = i+1; j < n; j++) {
       for (int k = j+1; k < n; k++) {
-        float det = a[k]*b[j]*c[i] - a[j]*b[k]*c[i] - a[k]*b[i]*c[j] + a[i]*b[k]*c[j] + a[j]*b[i]*c[k] - a[i]*b[j]*c[k];
+        float det = a[k] * b[j] * c[i] - a[j] * b[k] * c[i] - a[k] * b[i] * c[j] +
+                    a[i] * b[k] * c[j] + a[j] * b[i] * c[k] - a[i] * b[j] * c[k];
         if (std::abs(det) <= kFloatEps) {
           continue;
         }
-        float x = -(b[k]*c[j]*d[i] - b[j]*c[k]*d[i] - b[k]*c[i]*d[j] + b[i]*c[k]*d[j] + b[j]*c[i]*d[k] - b[i]*c[j]*d[k]) / det;
-        float y = -(-(a[k]*c[j]*d[i]) + a[j]*c[k]*d[i] + a[k]*c[i]*d[j] - a[i]*c[k]*d[j] - a[j]*c[i]*d[k] + a[i]*c[j]*d[k]) / det;
-        float z = -(a[k]*b[j]*d[i] - a[j]*b[k]*d[i] - a[k]*b[i]*d[j] + a[i]*b[k]*d[j] + a[j]*b[i]*d[k] - a[i]*b[j]*d[k]) / det;
+        float x = -(b[k] * c[j] * d[i] - b[j] * c[k] * d[i] - b[k] * c[i] * d[j] +
+                    b[i] * c[k] * d[j] + b[j] * c[i] * d[k] - b[i] * c[j] * d[k]) / det;
+        float y = -(-(a[k] * c[j] * d[i]) + a[j] * c[k] * d[i] + a[k] * c[i] * d[j] -
+                    a[i] * c[k] * d[j] - a[j] * c[i] * d[k] + a[i] * c[j] * d[k]) / det;
+        float z = -(a[k] * b[j] * d[i] - a[j] * b[k] * d[i] - a[k] * b[i] * d[j] +
+                    a[i] * b[k] * d[j] + a[j] * b[i] * d[k] - a[i] * b[j] * d[k]) / det;
 
         bool in = true;
         for (int ii = 0; ii < n; ii++) {
-          in = in && (a[ii]*x + b[ii]*y + c[ii]*z + d[ii] <= kFloatEps);
+          in = in && (a[ii] * x + b[ii] * y + c[ii] * z + d[ii] <= kFloatEps);
           if (!in) {
             break;
           }
@@ -151,12 +158,14 @@ void findInnerPoints(HalfSpaceSet& hss, std::vector<Vec3f>& pts) {
       }
     }
   }
+
+  return pts;
 }
 
 
-void sortAndRemoveDuplicate(std::vector<Vec3f>& pts) {
+void sortAndRemoveDuplicate(std::vector<Vec3f>* pts) {
   /* Sort by coordinates */
-  std::sort(pts.begin(), pts.end(),
+  std::sort(pts->begin(), pts->end(),
     [](const Vec3f& p1, const Vec3f& p2){
       if (p1 == p2) {
         return false;
@@ -171,13 +180,12 @@ void sortAndRemoveDuplicate(std::vector<Vec3f>& pts) {
         return true;
       }
       return false;
-    }
-  );
+    });
 
   /* Remove duplicated points */
-  for (auto iter = pts.begin(), lastIter = pts.begin(); iter != pts.end(); ) {
+  for (auto iter = pts->begin(), lastIter = pts->begin(); iter != pts->end(); ) {
     if (iter != lastIter && (*iter) == (*lastIter)) {
-      iter = pts.erase(iter);
+      iter = pts->erase(iter);
     } else {
       lastIter = iter;
       iter++;
@@ -186,26 +194,27 @@ void sortAndRemoveDuplicate(std::vector<Vec3f>& pts) {
 }
 
 
-void findCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f n0, float d0, std::vector<int>& ptsIdx) {
+std::vector<int> findCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& n0, float d0) {
+  std::vector<int> ptsIdx;
   for (decltype(pts.size()) j = 0; j < pts.size(); j++) {
     const auto& p = pts[j];
     if (floatEqual(Vec3f::dot(n0, p) + d0, 0)) {
       ptsIdx.push_back(static_cast<int>(j));
     }
   }
+  return ptsIdx;
 }
 
 
-void buildPolyhedronFaces(HalfSpaceSet& hss, const std::vector<Math::Vec3f>& pts,
+void buildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Math::Vec3f>& pts,
                           std::vector<Math::TriangleIdx>& faces) {
   int num = hss.n;
   float* a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
 
   for (int i = 0; i < num; i++) {
     /* Find co-planer points */
-    std::vector<int> facePtsIdx;
     Vec3f n0(a[i], b[i], c[i]);
-    findCoplanarPoints(pts, n0, d[i], facePtsIdx);
+    std::vector<int> facePtsIdx = findCoplanarPoints(pts, n0, d[i]);
     if (facePtsIdx.empty()) {
       continue;
     }
@@ -252,8 +261,7 @@ void buildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
       } else {
         return angle1 < angle2;
       }
-    }
-  );
+    });
 
   /* Construct a triangular division */
   for (decltype(ptsIdx.size()) j = 1; j < ptsIdx.size() - 1; j++) {
@@ -265,7 +273,7 @@ void buildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
 DummyMatrix::DummyMatrix(float* data, uint64_t row, uint64_t col)
     : rowNum(row), colNum(col), data(data) {}
 
-int DummyMatrix::multiply(const DummyMatrix& a, const DummyMatrix& b, DummyMatrix& res) {
+int DummyMatrix::multiply(const DummyMatrix& a, const DummyMatrix& b, DummyMatrix* res) {
   if (a.colNum != b.rowNum) {
     return -1;
   }
@@ -274,9 +282,9 @@ int DummyMatrix::multiply(const DummyMatrix& a, const DummyMatrix& b, DummyMatri
     for (uint64_t c = 0; c < b.colNum; c++) {
       float sum = 0.0f;
       for (uint64_t k = 0; k < a.colNum; k++) {
-        sum += a.data[r*a.colNum + k] * b.data[k*b.colNum + c];
+        sum += a.data[r * a.colNum + k] * b.data[k * b.colNum + c];
       }
-      res.data[r*res.colNum + c] = sum;
+      res->data[r * res->colNum + c] = sum;
     }
   }
   return 0;
@@ -286,9 +294,9 @@ void DummyMatrix::transpose() {
   for (uint64_t r = 0; r < rowNum; r++) {
     for (uint64_t c = r+1; c < colNum; c++) {
       float tmp;
-      tmp = data[r*colNum + c];
-      data[r*colNum + c] = data[c*colNum +r];
-      data[c*colNum +r] = tmp;
+      tmp = data[r * colNum + c];
+      data[r * colNum + c] = data[c * colNum +r];
+      data[c * colNum +r] = tmp;
     }
   }
 }
@@ -512,7 +520,7 @@ int TriangleIdx::id3() const {
 }
 
 
-const int * TriangleIdx::idx() const {
+const int* TriangleIdx::idx() const {
   return &_idx[0];
 }
 
@@ -620,11 +628,11 @@ void OrientationGenerator::fillData(const float* sunDir, int num, float* rayDir,
         break;
     }
 
-    mainAxRot[i*3+0] = lon;
-    mainAxRot[i*3+1] = lat;
-    mainAxRot[i*3+2] = roll;
+    mainAxRot[i * 3 + 0] = lon;
+    mainAxRot[i * 3 + 1] = lat;
+    mainAxRot[i * 3 + 2] = roll;
 
-    std::memcpy(rayDir+i*3, sunDir, 3*sizeof(float));
+    std::memcpy(rayDir + i * 3, sunDir, 3 * sizeof(float));
     Math::rotateZ(mainAxRot + i * 3, rayDir + i * 3);
   }
 }

@@ -27,7 +27,7 @@ void Crystal::initialize() {
 
   auto vtxNum = static_cast<int>(vertexes.size());
   for (const auto& f : faces) {
-    const int * idx = f.idx();
+    const int* idx = f.idx();
     for (int i = 0; i < 3; ++i) {
       if (idx[i] < 0 || idx[i] > vtxNum-1) {
         initDone = false;
@@ -69,22 +69,22 @@ int Crystal::faceNum() const {
 
 void Crystal::copyVertexData(float* data) const {
   for (decltype(vertexes.size()) i = 0; i < vertexes.size(); ++i) {
-    std::memcpy(data + i*3, vertexes[i].val(), 3*sizeof(float));
+    std::memcpy(data + i * 3, vertexes[i].val(), 3 * sizeof(float));
   }
 }
 
 void Crystal::copyFaceData(float* data) const {
   for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
     const int* idx = faces[i].idx();
-    std::memcpy(data + i*9+0, vertexes[idx[0]].val(), 3*sizeof(float));
-    std::memcpy(data + i*9+3, vertexes[idx[1]].val(), 3*sizeof(float));
-    std::memcpy(data + i*9+6, vertexes[idx[2]].val(), 3*sizeof(float));
+    std::memcpy(data + i * 9 + 0, vertexes[idx[0]].val(), 3 * sizeof(float));
+    std::memcpy(data + i * 9 + 3, vertexes[idx[1]].val(), 3 * sizeof(float));
+    std::memcpy(data + i * 9 + 6, vertexes[idx[2]].val(), 3 * sizeof(float));
   }
 }
 
 void Crystal::copyFaceIdxData(int* data) const {
   for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
-    std::memcpy(data + i*3, faces[i].idx(), 3*sizeof(int));
+    std::memcpy(data + i * 3, faces[i].idx(), 3 * sizeof(int));
   }
 }
 
@@ -92,11 +92,11 @@ void Crystal::copyNormalData(int idx, float* data) const {
   if (idx >= static_cast<int>(faces.size()) || idx < 0) {
     return;
   }
-  std::memcpy(data, norms[idx].val(), 3*sizeof(float)); }
+  std::memcpy(data, norms[idx].val(), 3 * sizeof(float)); }
 
 void Crystal::copyNormalData(float* data) const {
   for (decltype(norms.size()) i = 0; i < norms.size(); i++) {
-    std::memcpy(data + i*3, norms[i].val(), 3*sizeof(float));
+    std::memcpy(data + i * 3, norms[i].val(), 3 * sizeof(float));
   }
 }
 
@@ -147,7 +147,7 @@ CrystalPtr Crystal::createHexPyramid(float h1, float h2, float h3) {
   using Math::TriangleIdx;
   using Math::kPi;
 
-  float H = C_CONSTANT;
+  float H = kC;
   h1 = std::max(std::min(h1, 1.0f), 0.0f);
   h3 = std::max(std::min(h3, 1.0f), 0.0f);
 
@@ -273,7 +273,7 @@ CrystalPtr Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h
   using Math::TriangleIdx;
   using Math::kPi;
 
-  float H = C_CONSTANT * i1 / i4;
+  float H = kC * i1 / i4;
   h1 = std::max(std::min(h1, 1.0f), 0.0f);
   h3 = std::max(std::min(h3, 1.0f), 0.0f);
 
@@ -335,8 +335,8 @@ CrystalPtr Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1
   using Math::TriangleIdx;
   using Math::kPi;
 
-  float H1 = C_CONSTANT * upperIdx1 / upperIdx4;
-  float H3 = C_CONSTANT * lowerIdx1 / lowerIdx4;
+  float H1 = kC * upperIdx1 / upperIdx4;
+  float H3 = kC * lowerIdx1 / lowerIdx4;
   h1 = std::max(std::min(h1, 1.0f), 0.0f);
   h3 = std::max(std::min(h3, 1.0f), 0.0f);
 
@@ -398,8 +398,8 @@ CrystalPtr Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int 
   using Math::TriangleIdx;
   using Math::kPi;
 
-  float H1 = C_CONSTANT * upperIdx1 / upperIdx4;
-  float H2 = C_CONSTANT * lowerIdx1 / lowerIdx4;
+  float H1 = kC * upperIdx1 / upperIdx4;
+  float H2 = kC * lowerIdx1 / lowerIdx4;
   h1 = std::max(std::min(h1, 1.0f), 0.0f);
   h2 = std::max(std::min(h2, 1.0f), 0.0f);
 
@@ -479,11 +479,12 @@ CrystalPtr Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int 
   11
 */
 CrystalPtr Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h3) {
+  using Math::kSqrt3;
+  using Math::kPi;
   using Math::Vec3f;
   using Math::TriangleIdx;
-  using Math::kPi;
 
-  float H = C_CONSTANT / 1.732051f * i1 / i4;
+  float H = kC / kSqrt3 * i1 / i4;
   h1 = std::max(std::min(h1, 1.0f), 0.0f);
   h3 = std::max(std::min(h3, 1.0f), 0.0f);
 
@@ -577,9 +578,8 @@ CrystalPtr Crystal::createIrregularHexCylinder(float* dist, float h) {
   };
   HalfSpaceSet hss(CONSTRAINT_NUM, a, b, c, d);
 
-  std::vector<Vec3f> pts;
-  findInnerPoints(hss, pts);
-  sortAndRemoveDuplicate(pts);
+  std::vector<Vec3f> pts = findInnerPoints(hss);
+  sortAndRemoveDuplicate(&pts);
 
   std::vector<TriangleIdx> faces;
   buildPolyhedronFaces(hss, pts, faces);
@@ -613,8 +613,8 @@ CrystalPtr Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) {
   constexpr int DIST_NUM = 6;
   constexpr int H_NUM = 3;
 
-  float alpha0 = idx[1] / C_CONSTANT / idx[0] * kSqrt3;
-  float alpha1 = idx[3] / C_CONSTANT / idx[2] * kSqrt3;
+  float alpha0 = idx[1] / kC / idx[0] * kSqrt3;
+  float alpha1 = idx[3] / kC / idx[2] * kSqrt3;
   float beta0 = alpha0 * h[1];
   float beta1 = alpha1 * h[1];
 
@@ -652,9 +652,8 @@ CrystalPtr Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) {
   HalfSpaceSet hss(CONSTRAINT_NUM - 2, a, b, c, d);
 
   /* Step 1. Find all inner points */
-  std::vector<Vec3f> pts;
-  findInnerPoints(hss, pts);
-  sortAndRemoveDuplicate(pts);
+  std::vector<Vec3f> pts = findInnerPoints(hss);
+  sortAndRemoveDuplicate(&pts);
 
   /* Find max and min height, then determine the height of pyramid segment */
   float maxZ = pts[0].z();
@@ -670,10 +669,9 @@ CrystalPtr Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) {
   d[CONSTRAINT_NUM - 2] = -(maxZ - h[1]) * h[0] - h[1];
   d[CONSTRAINT_NUM - 1] = (minZ + h[1]) * h[2] - h[1];
 
-  pts.clear();
   hss.n = CONSTRAINT_NUM;
-  findInnerPoints(hss, pts);
-  sortAndRemoveDuplicate(pts);
+  pts = findInnerPoints(hss);
+  sortAndRemoveDuplicate(&pts);
 
   /* Step 2. Build convex hull with verteces */
   std::vector<TriangleIdx> faces;

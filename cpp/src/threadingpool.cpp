@@ -70,7 +70,7 @@ bool Pool::taskRunning() {
 
 void Pool::workingFunction() {
   std::unique_lock<std::mutex> lock(queueMutex);
-  while(true) {
+  while (true) {
     if (!queue.empty()) {
       std::function<void()> job = queue.front();
       queue.pop();
@@ -95,9 +95,8 @@ void Pool::workingFunction() {
       taskCondition.notify_one();
       queueCondition.wait(lock, [this]{ return !this->queue.empty() || !this->alive; });
     }
-
   }
 }
 
 
-}
+}  // namespace IceHalo
