@@ -11,25 +11,32 @@ can only run from command, no GUI.
 Requires: Boost (>= 1.54), OpenCV (>= 3.3). Has been tested on Mac OSX 10.13 and Ubuntu 14.04.
 
 This C++ project is built with [CMake](https://cmake.org/).
-A simple way to build form start is as follows:
+You can just run the build script to build the executable:
 
-0. `git clone --recursive https://github.com/LoveDaisy/ice_halo_sim.git`
-1. `cd ice_halo_sim/cpp`
-2. `mkdir build && cd build`
-3. `cmake .. && make -j4`, or you can set `CMAKE_BUILD_TYPE` to `release` to get highest performance. 
+~~~bash
+./build.sh release  # Release version. Max performance.
+~~~
 
-Then the executable binary will be at `build/bin`. 
+or
 
-* You can start ray-tracing by `./bin/IceHaloSim <config-file>`. 
+~~~bash
+./build.sh debug  # Debug version
+~~~
+
+For other useful options, see the help message from `build.sh`.
+
+Then the executable binary will be at `build/cmake_install`. 
+
+* You can start ray-tracing by `./IceHaloSim <config-file>`. 
   You can run this line multiple times to cumulate many data and then render them at last;
-* After ray-tracing finished you can start rendering by `./bin/IceHaloRender <config-file>`;  
+* After ray-tracing finished you can start rendering by `./IceHaloRender <config-file>`;  
 
 Detailes are shown in following paragraph.
 
 Note, I introduce the [GooglTest](https://github.com/google/googletest) framework to help do my unit tests.
 The googletest codes will be downloaded automatically during cmake configuration. Generally you should not
 care about these codes nor the test cases in `test` folder. If you are interested in my unit tests, please
-set `-DNEED_TEST=on` when configure cmake and run the unit tests.
+pass `test` option when run the build script.
 
 ### Simulation
 
