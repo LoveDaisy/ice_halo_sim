@@ -6,7 +6,7 @@ After testing my algorithms on matlab codes, I start a C++ project for higher pe
 can only run from command, no GUI.
 
 
-## Build, run and test
+## Installation
 
 Requires: Boost (>= 1.54), OpenCV (>= 3.3). Has been tested on Mac OSX 10.13 and Ubuntu 14.04.
 
@@ -25,45 +25,41 @@ or
 
 For other useful options, see the help message from `build.sh`.
 
-Then the executable binary will be at `build/cmake_install`. 
-
-* You can start ray-tracing by `./IceHaloSim <config-file>`. 
-  You can run this line multiple times to cumulate many data and then render them at last;
-* After ray-tracing finished you can start rendering by `./IceHaloRender <config-file>`;  
-
-Detailes are shown in following paragraph.
+Then the executable binaries will be at `build/cmake_install`. 
 
 Note, I introduce the [GooglTest](https://github.com/google/googletest) framework to help do my unit tests.
 The googletest codes will be downloaded automatically during cmake configuration. Generally you should not
 care about these codes nor the test cases in `test` folder. If you are interested in my unit tests, please
 pass `test` option when run the build script.
 
+## Getting started
+
 ### Simulation
 
 You can start simulatino by
-`./bin/IceHaloSim <config-file>`. The file [`config-example.json`](./config-example.json) 
+`./IceHaloSim <config-file>`. The file [`config-example.json`](./config-example.json) 
 is an example configuration file. After the simulation is done you will get several `.bin` files
 in your data path set in configuration file.
+You can run the simulation multiple times to cumulate many data and then render them at last.
 
 ### Visualization
 
-After simulation, you will get several `.bin` files that contain results of ray tracing,
-as well as several lines printed on the screen that describe crystal shapes.
+After all simulations are done, you will get several `.bin` files that contain results of ray tracing,
+as well as several lines printed on the screen that describe crystal geometry.
 I have prepared several tools for visualization those results. Some are matlab codes.
 
 * Halo picture.  
-There is a matlab tool for generating halo picture.
-Script `matlab/src/read_binary_result-example.m` reads the `.bin` files and plot the ray tracing result.
+  Please run 
+`./IceHaloRender <config-file>` for visualization. 
+Just use the same configuration file as you run the simulation. The rendered picture
+will be placed at the data path set in configuration file.  
+
+  There is also a matlab tool for generating halo picture.
+Script `matlab/src/read_binary_result-example.m` reads the `.bin` files and renders the ray tracing result.
 See [matlab](../matlab/) folder for details. 
 
-  And there is also a C++ tool does the same thing. Please run 
-`./bin/IceHaloRender <config-file>` for visualization. 
-Just use the same configuration file as you run the simulation. The rendered picture
-will be placed at the data path set in configuration file. I'd prefer this C++ tool
-than the matlab tool because it is much faster.
-
 * Crystals  
-Script `matlab/src/plot_crystal-example.m` plots the shape of crystals. You can copy data from program output on
+The matlab script `matlab/src/plot_crystal-example.m` plots the shape of crystals. You can copy data from program output on
 screen. The lines start with `V:` indicate vertex data, and those start with `F:` indicate face data.
 See [matlab](../matlab/) folder for details.
 
@@ -227,6 +223,7 @@ Each shape has its own shape parameters.
 
 ## TODO list
 
+* Add a feature: render halo with given optical path(s), rather than all possible paths.
 * Use OpenCL / OpenGL / CUDA to accelerate. Since I've seen good enough performance with a simple
   threading pool implemented by myself, I doubt the margin to more improvements.
 * Write a (web) GUI for these code.
