@@ -153,7 +153,7 @@ std::vector<Vec3f> findInnerPoints(const HalfSpaceSet& hss) {
           }
         }
         if (in) {
-          pts.emplace_back(Vec3f(x, y, z));
+          pts.emplace_back(x, y, z);
         }
       }
     }
@@ -265,7 +265,7 @@ void buildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
 
   /* Construct a triangular division */
   for (decltype(ptsIdx.size()) j = 1; j < ptsIdx.size() - 1; j++) {
-    faces.emplace_back(TriangleIdx(ptsIdx[0], ptsIdx[j], ptsIdx[j+1]));
+    faces.emplace_back(ptsIdx[0], ptsIdx[j], ptsIdx[j+1]);
   }
 }
 

@@ -1153,12 +1153,12 @@ CrystalPtr ContextParser::parseCustomCrystal(std::FILE* file) {
       case 'v':
       case 'V':
         std::fscanf(file, "%f %f %f", vbuf+0, vbuf+1, vbuf+2);
-        vertexes.emplace_back(Math::Vec3f(vbuf));
+        vertexes.emplace_back(vbuf);
         break;
       case 'f':
       case 'F':
         std::fscanf(file, "%d %d %d", fbuf+0, fbuf+1, fbuf+2);
-        faces.emplace_back(Math::TriangleIdx(fbuf[0]-1, fbuf[1]-1, fbuf[2]-1));
+        faces.emplace_back(fbuf[0]-1, fbuf[1]-1, fbuf[2]-1);
         break;
       default:
         break;

@@ -103,24 +103,24 @@ CrystalPtr Crystal::createHexCylinder(float h) {
 
   vertexes.reserve(6);
   for (int i = 0; i < 6; ++i) {
-    vertexes.emplace_back(Vec3f(cos(2 * kPi * i / 6), sin(2 * kPi * i / 6), h));
+    vertexes.emplace_back(cos(2 * kPi * i / 6), sin(2 * kPi * i / 6), h);
   }
   for (int i = 0; i < 6; ++i) {
-    vertexes.emplace_back(Vec3f(cos(2 * kPi * i / 6), sin(2 * kPi * i / 6), -h));
+    vertexes.emplace_back(cos(2 * kPi * i / 6), sin(2 * kPi * i / 6), -h);
   }
 
-  faces.emplace_back(TriangleIdx(0, 1, 2));
-  faces.emplace_back(TriangleIdx(0, 2, 3));
-  faces.emplace_back(TriangleIdx(3, 4, 5));
-  faces.emplace_back(TriangleIdx(3, 5, 0));
+  faces.emplace_back(0, 1, 2);
+  faces.emplace_back(0, 2, 3);
+  faces.emplace_back(3, 4, 5);
+  faces.emplace_back(3, 5, 0);
   for (int i = 0; i < 6; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+6, (i+1)%6));
+    faces.emplace_back(i, i+6, (i+1)%6);
+    faces.emplace_back(i+6, (i+1)%6+6, (i+1)%6);
   }
-  faces.emplace_back(TriangleIdx(6, 8, 7));
-  faces.emplace_back(TriangleIdx(6, 9, 8));
-  faces.emplace_back(TriangleIdx(9, 11, 10));
-  faces.emplace_back(TriangleIdx(9, 6, 11));
+  faces.emplace_back(6, 8, 7);
+  faces.emplace_back(6, 9, 8);
+  faces.emplace_back(9, 11, 10);
+  faces.emplace_back(9, 6, 11);
 
   return std::make_shared<Crystal>(vertexes, faces);
 }
@@ -145,50 +145,50 @@ CrystalPtr Crystal::createHexPyramid(float h1, float h2, float h3) {
   std::vector<TriangleIdx> faces;
   vertexes.reserve(24);
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
         cos(2 * kPi * i / 6) * (1 - h1),
         sin(2 * kPi * i / 6) * (1 - h1),
-      h2 + h1 * H));
+        h2 + h1 * H);
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
       cos(2 * kPi * i / 6),
       sin(2 * kPi * i / 6),
-      h2));
+      h2);
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
       cos(2 * kPi * i / 6),
       sin(2 * kPi * i / 6),
-      -h2));
+      -h2);
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
         cos(2 * kPi * i / 6) * (1 - h3),
         sin(2 * kPi * i / 6) * (1 - h3),
-      -h2 - h3 * H));
+        -h2 - h3 * H);
   }
 
-  faces.emplace_back(TriangleIdx(0, 1, 2));
-  faces.emplace_back(TriangleIdx(0, 2, 3));
-  faces.emplace_back(TriangleIdx(3, 4, 5));
-  faces.emplace_back(TriangleIdx(3, 5, 0));
+  faces.emplace_back(0, 1, 2);
+  faces.emplace_back(0, 2, 3);
+  faces.emplace_back(3, 4, 5);
+  faces.emplace_back(3, 5, 0);
   for (int i = 0; i < 6; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+6, (i+1)%6));
+    faces.emplace_back(i, i+6, (i+1)%6);
+    faces.emplace_back(i+6, (i+1)%6+6, (i+1)%6);
   }
   for (int i = 6; i < 12; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6+6));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+12, (i+1)%6+6));
+    faces.emplace_back(i, i+6, (i+1)%6+6);
+    faces.emplace_back(i+6, (i+1)%6+12, (i+1)%6+6);
   }
   for (int i = 12; i < 18; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6+12));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+18, (i+1)%6+12));
+    faces.emplace_back(i, i+6, (i+1)%6+12);
+    faces.emplace_back(i+6, (i+1)%6+18, (i+1)%6+12);
   }
-  faces.emplace_back(TriangleIdx(18, 20, 19));
-  faces.emplace_back(TriangleIdx(18, 21, 20));
-  faces.emplace_back(TriangleIdx(21, 23, 22));
-  faces.emplace_back(TriangleIdx(21, 18, 23));
+  faces.emplace_back(18, 20, 19);
+  faces.emplace_back(18, 21, 20);
+  faces.emplace_back(21, 23, 22);
+  faces.emplace_back(21, 18, 23);
 
   return std::make_shared<Crystal>(vertexes, faces);
 }
@@ -218,36 +218,36 @@ CrystalPtr Crystal::createCubicPyramid(float ratio1, float ratio2) {
   vertexes.reserve(12);
 
   for (int i = 0; i < 4; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
         cos(kPi / 4 + kPi / 2 * i) * (1 - ratio1),
         sin(kPi / 4 + kPi / 2 * i) * (1 - ratio1),
-      ratio1));
+        ratio1);
   }
   for (int i = 0; i < 4; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
       cos(kPi / 4 + kPi / 2 * i),
       sin(kPi / 4 + kPi / 2 * i),
-      0));
+      0);
   }
   for (int i = 0; i < 4; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
         cos(kPi / 4 + kPi / 2 * i) * (1 - ratio2),
         sin(kPi / 4 + kPi / 2 * i) * (1 - ratio2),
-      -ratio2));
+        -ratio2);
   }
 
-  faces.emplace_back(TriangleIdx(0, 1, 2));
-  faces.emplace_back(TriangleIdx(0, 2, 3));
+  faces.emplace_back(0, 1, 2);
+  faces.emplace_back(0, 2, 3);
   for (int i = 0; i < 4; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+4, (i+1)%4));
-    faces.emplace_back(TriangleIdx(i+4, (i+1)%4+4, (i+1)%4));
+    faces.emplace_back(i, i+4, (i+1)%4);
+    faces.emplace_back(i+4, (i+1)%4+4, (i+1)%4);
   }
   for (int i = 4; i < 8; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+4, (i+1)%4+4));
-    faces.emplace_back(TriangleIdx(i+4, (i+1)%4+8, (i+1)%4+4));
+    faces.emplace_back(i, i+4, (i+1)%4+4);
+    faces.emplace_back(i+4, (i+1)%4+8, (i+1)%4+4);
   }
-  faces.emplace_back(TriangleIdx(9, 8, 10));
-  faces.emplace_back(TriangleIdx(10, 8, 11));
+  faces.emplace_back(9, 8, 10);
+  faces.emplace_back(10, 8, 11);
 
   return std::make_shared<Crystal>(vertexes, faces);
 }
@@ -271,50 +271,50 @@ CrystalPtr Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h
   std::vector<TriangleIdx> faces;
   vertexes.reserve(24);
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
         cos(2 * kPi * i / 6) * (1 - h1),
         sin(2 * kPi * i / 6) * (1 - h1),
-      h2 + h1 * H));
+        h2 + h1 * H);
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
       cos(2 * kPi * i / 6),
       sin(2 * kPi * i / 6),
-      h2));
+      h2);
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
       cos(2 * kPi * i / 6),
       sin(2 * kPi * i / 6),
-      -h2));
+      -h2);
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
         cos(2 * kPi * i / 6) * (1 - h3),
         sin(2 * kPi * i / 6) * (1 - h3),
-      -h2 - h3 * H));
+        -h2 - h3 * H);
   }
 
-  faces.emplace_back(TriangleIdx(0, 1, 2));
-  faces.emplace_back(TriangleIdx(0, 2, 3));
-  faces.emplace_back(TriangleIdx(3, 4, 5));
-  faces.emplace_back(TriangleIdx(3, 5, 0));
+  faces.emplace_back(0, 1, 2);
+  faces.emplace_back(0, 2, 3);
+  faces.emplace_back(3, 4, 5);
+  faces.emplace_back(3, 5, 0);
   for (int i = 0; i < 6; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+6, (i+1)%6));
+    faces.emplace_back(i, i+6, (i+1)%6);
+    faces.emplace_back(i+6, (i+1)%6+6, (i+1)%6);
   }
   for (int i = 6; i < 12; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6+6));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+12, (i+1)%6+6));
+    faces.emplace_back(i, i+6, (i+1)%6+6);
+    faces.emplace_back(i+6, (i+1)%6+12, (i+1)%6+6);
   }
   for (int i = 12; i < 18; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6+12));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+18, (i+1)%6+12));
+    faces.emplace_back(i, i+6, (i+1)%6+12);
+    faces.emplace_back(i+6, (i+1)%6+18, (i+1)%6+12);
   }
-  faces.emplace_back(TriangleIdx(18, 20, 19));
-  faces.emplace_back(TriangleIdx(18, 21, 20));
-  faces.emplace_back(TriangleIdx(21, 23, 22));
-  faces.emplace_back(TriangleIdx(21, 18, 23));
+  faces.emplace_back(18, 20, 19);
+  faces.emplace_back(18, 21, 20);
+  faces.emplace_back(21, 23, 22);
+  faces.emplace_back(21, 18, 23);
 
   return std::make_shared<Crystal>(vertexes, faces);
 }
@@ -334,50 +334,50 @@ CrystalPtr Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1
   std::vector<TriangleIdx> faces;
   vertexes.reserve(24);
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
         cos(2 * kPi * i / 6) * (1 - h1),
         sin(2 * kPi * i / 6) * (1 - h1),
-      h2 + h1 * H1));
+        h2 + h1 * H1);
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
       cos(2 * kPi * i / 6),
       sin(2 * kPi * i / 6),
-      h2));
+      h2);
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
       cos(2 * kPi * i / 6),
       sin(2 * kPi * i / 6),
-      -h2));
+      -h2);
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
         cos(2 * kPi * i / 6) * (1 - h3),
         sin(2 * kPi * i / 6) * (1 - h3),
-      -h2 - h3 * H3));
+        -h2 - h3 * H3);
   }
 
-  faces.emplace_back(TriangleIdx(0, 1, 2));
-  faces.emplace_back(TriangleIdx(0, 2, 3));
-  faces.emplace_back(TriangleIdx(3, 4, 5));
-  faces.emplace_back(TriangleIdx(3, 5, 0));
+  faces.emplace_back(0, 1, 2);
+  faces.emplace_back(0, 2, 3);
+  faces.emplace_back(3, 4, 5);
+  faces.emplace_back(3, 5, 0);
   for (int i = 0; i < 6; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+6, (i+1)%6));
+    faces.emplace_back(i, i+6, (i+1)%6);
+    faces.emplace_back(i+6, (i+1)%6+6, (i+1)%6);
   }
   for (int i = 6; i < 12; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6+6));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+12, (i+1)%6+6));
+    faces.emplace_back(i, i+6, (i+1)%6+6);
+    faces.emplace_back(i+6, (i+1)%6+12, (i+1)%6+6);
   }
   for (int i = 12; i < 18; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6+12));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+18, (i+1)%6+12));
+    faces.emplace_back(i, i+6, (i+1)%6+12);
+    faces.emplace_back(i+6, (i+1)%6+18, (i+1)%6+12);
   }
-  faces.emplace_back(TriangleIdx(18, 20, 19));
-  faces.emplace_back(TriangleIdx(18, 21, 20));
-  faces.emplace_back(TriangleIdx(21, 23, 22));
-  faces.emplace_back(TriangleIdx(21, 18, 23));
+  faces.emplace_back(18, 20, 19);
+  faces.emplace_back(18, 21, 20);
+  faces.emplace_back(21, 23, 22);
+  faces.emplace_back(21, 18, 23);
 
   return std::make_shared<Crystal>(vertexes, faces);
 }
@@ -398,51 +398,51 @@ CrystalPtr Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int 
   vertexes.reserve(24);
   float r = (1.0f - h2) * (1.0f - h1);
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
         cos(2 * kPi * i / 6) * r,
         sin(2 * kPi * i / 6) * r,
-      h1 * H1 * (1.0f - h2) + h2 * H2 + h3 * 2));
+        h1 * H1 * (1.0f - h2) + h2 * H2 + h3 * 2);
   }
   r = 1.0f - h2;
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
         cos(2 * kPi * i / 6) * r,
         sin(2 * kPi * i / 6) * r,
-      h2 * H2 + h3 * 2));
+        h2 * H2 + h3 * 2);
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
       cos(2 * kPi * i / 6),
       sin(2 * kPi * i / 6),
-      h3 * 2));
+      h3 * 2);
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
       cos(2 * kPi * i / 6),
       sin(2 * kPi * i / 6),
-      0));
+      0);
   }
 
-  faces.emplace_back(TriangleIdx(0, 1, 2));
-  faces.emplace_back(TriangleIdx(0, 2, 3));
-  faces.emplace_back(TriangleIdx(3, 4, 5));
-  faces.emplace_back(TriangleIdx(3, 5, 0));
+  faces.emplace_back(0, 1, 2);
+  faces.emplace_back(0, 2, 3);
+  faces.emplace_back(3, 4, 5);
+  faces.emplace_back(3, 5, 0);
   for (int i = 0; i < 6; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+6, (i+1)%6));
+    faces.emplace_back(i, i+6, (i+1)%6);
+    faces.emplace_back(i+6, (i+1)%6+6, (i+1)%6);
   }
   for (int i = 6; i < 12; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6+6));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+12, (i+1)%6+6));
+    faces.emplace_back(i, i+6, (i+1)%6+6);
+    faces.emplace_back(i+6, (i+1)%6+12, (i+1)%6+6);
   }
   for (int i = 12; i < 18; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+6, (i+1)%6+12));
-    faces.emplace_back(TriangleIdx(i+6, (i+1)%6+18, (i+1)%6+12));
+    faces.emplace_back(i, i+6, (i+1)%6+12);
+    faces.emplace_back(i+6, (i+1)%6+18, (i+1)%6+12);
   }
-  faces.emplace_back(TriangleIdx(18, 20, 19));
-  faces.emplace_back(TriangleIdx(18, 21, 20));
-  faces.emplace_back(TriangleIdx(21, 23, 22));
-  faces.emplace_back(TriangleIdx(21, 18, 23));
+  faces.emplace_back(18, 20, 19);
+  faces.emplace_back(18, 21, 20);
+  faces.emplace_back(21, 23, 22);
+  faces.emplace_back(21, 18, 23);
 
   return std::make_shared<Crystal>(vertexes, faces);
 }
@@ -482,44 +482,44 @@ CrystalPtr Crystal::createTriPyramid(int i1, int i4, float h1, float h2, float h
   std::vector<TriangleIdx> faces;
   vertexes.reserve(12);
   for (int i = 0; i < 3; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
         cos(2 * kPi * i / 3) * (1 - h1),
         sin(2 * kPi * i / 3) * (1 - h1),
-      h2 + h1 * H));
+        h2 + h1 * H);
   }
   for (int i = 0; i < 3; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
       cos(2 * kPi * i / 3),
       sin(2 * kPi * i / 3),
-      h2));
+      h2);
   }
   for (int i = 0; i < 3; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
       cos(2 * kPi * i / 3),
       sin(2 * kPi * i / 3),
-      -h2));
+      -h2);
   }
   for (int i = 0; i < 3; i++) {
-    vertexes.emplace_back(Vec3f(
+    vertexes.emplace_back(
         cos(2 * kPi * i / 3) * (1 - h3),
         sin(2 * kPi * i / 3) * (1 - h3),
-      -h2 - h3 * H));
+        -h2 - h3 * H);
   }
 
-  faces.emplace_back(TriangleIdx(0, 1, 2));
+  faces.emplace_back(0, 1, 2);
   for (int i = 0; i < 3; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+3, (i+1)%3));
-    faces.emplace_back(TriangleIdx(i+3, (i+1)%3+3, (i+1)%3));
+    faces.emplace_back(i, i+3, (i+1)%3);
+    faces.emplace_back(i+3, (i+1)%3+3, (i+1)%3);
   }
   for (int i = 3; i < 6; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+3, (i+1)%3+3));
-    faces.emplace_back(TriangleIdx(i+3, (i+1)%3+6, (i+1)%3+3));
+    faces.emplace_back(i, i+3, (i+1)%3+3);
+    faces.emplace_back(i+3, (i+1)%3+6, (i+1)%3+3);
   }
   for (int i = 6; i < 9; ++i) {
-    faces.emplace_back(TriangleIdx(i, i+3, (i+1)%3+6));
-    faces.emplace_back(TriangleIdx(i+3, (i+1)%3+9, (i+1)%3+6));
+    faces.emplace_back(i, i+3, (i+1)%3+6);
+    faces.emplace_back(i+3, (i+1)%3+9, (i+1)%3+6);
   }
-  faces.emplace_back(TriangleIdx(10, 9, 11));
+  faces.emplace_back(10, 9, 11);
 
   return std::make_shared<Crystal>(vertexes, faces);
 }
