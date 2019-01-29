@@ -9,16 +9,6 @@ Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Mat
   initialize();
 }
 
-void Crystal::setVertexes(const std::vector<Math::Vec3f>& vertexes) {
-  initDone = false;
-  this->vertexes = vertexes;
-}
-
-void Crystal::setFaces(const std::vector<Math::TriangleIdx>& faces) {
-  initDone = false;
-  this->faces = faces;
-}
-
 void Crystal::initialize() {
   using Math::Vec3f;
 
