@@ -82,10 +82,6 @@ class TriangleIdx {
 public:
   TriangleIdx(int id1, int id2, int id3);
 
-  int id1() const;
-  int id2() const;
-  int id3() const;
-
   const int* idx() const;
 
 private:

@@ -505,21 +505,6 @@ TriangleIdx::TriangleIdx(int id1, int id2, int id3) {
 }
 
 
-int TriangleIdx::id1() const {
-  return _idx[0];
-}
-
-
-int TriangleIdx::id2() const {
-  return _idx[1];
-}
-
-
-int TriangleIdx::id3() const {
-  return _idx[2];
-}
-
-
 const int* TriangleIdx::idx() const {
   return &_idx[0];
 }

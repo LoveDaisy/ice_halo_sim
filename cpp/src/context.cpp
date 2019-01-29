@@ -551,8 +551,9 @@ void SimulationContext::printCrystalInfo() {
     for (auto& v : g->getVertexes()) {
       printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
     }
-    for (auto& f : g->getFaces()) {
-      printf("f %d %d %d\n", f.id1()+1, f.id2()+1, f.id3()+1);
+    for (const auto& f : g->getFaces()) {
+      auto idx = f.idx();
+      printf("f %d %d %d\n", idx[0] + 1, idx[1] + 1, idx[2] + 1);
     }
   }
 }

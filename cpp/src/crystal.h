@@ -12,9 +12,6 @@ class Crystal {
 public:
   Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces);
 
-  void initialize();
-  bool isInitialized();
-
   int vtxNum() const;
   int faceNum() const;
 

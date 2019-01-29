@@ -6,10 +6,6 @@ namespace IceHalo {
 
 Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces)
     : vertexes(vertexes), faces(faces), initDone(false) {
-  initialize();
-}
-
-void Crystal::initialize() {
   using Math::Vec3f;
 
   norms.clear();
@@ -17,7 +13,7 @@ void Crystal::initialize() {
 
   auto vtxNum = static_cast<int>(vertexes.size());
   for (const auto& f : faces) {
-    const int* idx = f.idx();
+    auto idx = f.idx();
     for (int i = 0; i < 3; ++i) {
       if (idx[i] < 0 || idx[i] > vtxNum-1) {
         initDone = false;
@@ -45,10 +41,6 @@ const std::vector<Math::TriangleIdx>& Crystal::getFaces() {
   return faces;
 }
 
-bool Crystal::isInitialized() {
-  return initDone;
-}
-
 int Crystal::vtxNum() const {
   return static_cast<int>(vertexes.size());
 }
@@ -65,7 +57,7 @@ void Crystal::copyVertexData(float* data) const {
 
 void Crystal::copyFaceData(float* data) const {
   for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
-    const int* idx = faces[i].idx();
+    auto idx = faces[i].idx();
     std::memcpy(data + i * 9 + 0, vertexes[idx[0]].val(), 3 * sizeof(float));
     std::memcpy(data + i * 9 + 3, vertexes[idx[1]].val(), 3 * sizeof(float));
     std::memcpy(data + i * 9 + 6, vertexes[idx[2]].val(), 3 * sizeof(float));
