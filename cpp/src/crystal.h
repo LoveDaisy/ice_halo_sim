@@ -11,9 +11,12 @@ namespace IceHalo {
 class Crystal {
 public:
   Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces);
+  Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces,
+          const std::vector<int>& faceId);
 
   int vtxNum() const;
   int faceNum() const;
+  int faceId(int idx) const;
 
   const std::vector<Math::Vec3f>& getVertexes();
   const std::vector<Math::Vec3f>& getNorms();
@@ -33,12 +36,12 @@ public:
   /* Regular hexagon pyramid */
   static std::shared_ptr<Crystal> createHexPyramid(float h1, float h2, float h3);
   static std::shared_ptr<Crystal> createHexPyramid(int i1, int i4, float h1, float h2, float h3);
-  static std::shared_ptr<Crystal> createHexPyramid(int upperIdx1, int upperIdx4,
-                                   int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
+  static std::shared_ptr<Crystal> createHexPyramid(
+    int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
 
   /* Hexagon stacked pyramid */
-  static std::shared_ptr<Crystal> createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
-                                            float h1, float h2, float h3);
+  static std::shared_ptr<Crystal> createHexPyramidStackHalf(
+    int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
 
   /* Triangle pyramid */
   static std::shared_ptr<Crystal> createTriPyramid(int i1, int i4, float h1, float h2, float h3);
@@ -52,12 +55,14 @@ public:
   /* Irregular hexagon pyramid */
   static std::shared_ptr<Crystal> createIrregularHexPyramid(float* dist, int* idx, float* h);
 
+protected:
+  void initNorms();
+
 private:
   std::vector<Math::Vec3f> vertexes;
   std::vector<Math::Vec3f> norms;
   std::vector<Math::TriangleIdx> faces;
-
-  bool initDone;
+  std::vector<int> faceIdMap;
 };
 
 using CrystalPtr = std::shared_ptr<Crystal>;

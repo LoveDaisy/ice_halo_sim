@@ -5,28 +5,15 @@
 namespace IceHalo {
 
 Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces)
-    : vertexes(vertexes), faces(faces), initDone(false) {
-  using Math::Vec3f;
+    : vertexes(vertexes), faces(faces) {
+  initNorms();
+}
 
-  norms.clear();
-  initDone = true;
-
-  auto vtxNum = static_cast<int>(vertexes.size());
-  for (const auto& f : faces) {
-    auto idx = f.idx();
-    for (int i = 0; i < 3; ++i) {
-      if (idx[i] < 0 || idx[i] > vtxNum-1) {
-        initDone = false;
-        return;
-      }
-    }
-    Vec3f v1 = Vec3f::fromVec(vertexes[idx[0]], vertexes[idx[1]]);
-    Vec3f v2 = Vec3f::fromVec(vertexes[idx[0]], vertexes[idx[2]]);
-    norms.push_back(Vec3f::cross(v1, v2));
-  }
-  for (auto& v : norms) {
-    v.normalize();
-  }
+Crystal::Crystal(const std::vector<IceHalo::Math::Vec3f>& vertexes,
+                 const std::vector<IceHalo::Math::TriangleIdx>& faces,
+                 const std::vector<int>& faceId)
+    : vertexes(vertexes), faces(faces), faceIdMap(faceId) {
+  initNorms();
 }
 
 const std::vector<Math::Vec3f>& Crystal::getVertexes() {
@@ -47,6 +34,16 @@ int Crystal::vtxNum() const {
 
 int Crystal::faceNum() const {
   return static_cast<int>(faces.size());
+}
+
+int Crystal::faceId(int idx) const {
+  if (faceIdMap.empty()) {
+    return -1;
+  } else if (idx < 0 || idx >= faceIdMap.size()) {
+    return -1;
+  } else {
+    return faceIdMap[idx];
+  }
 }
 
 void Crystal::copyVertexData(float* data) const {
@@ -82,6 +79,21 @@ void Crystal::copyNormalData(float* data) const {
   }
 }
 
+void Crystal::initNorms() {
+  using Math::Vec3f;
+  norms.clear();
+  auto vtxNum = static_cast<int>(vertexes.size());
+  for (const auto& f : faces) {
+    auto idx = f.idx();
+    Vec3f v1 = Vec3f::fromVec(vertexes[idx[0]], vertexes[idx[1]]);
+    Vec3f v2 = Vec3f::fromVec(vertexes[idx[0]], vertexes[idx[2]]);
+    norms.push_back(Vec3f::cross(v1, v2));
+  }
+  for (auto& v : norms) {
+    v.normalize();
+  }
+}
+
 /*
  * parameter: h, defined as c / a, i.e. height / diameter
  */
@@ -92,8 +104,11 @@ CrystalPtr Crystal::createHexCylinder(float h) {
 
   std::vector<Vec3f> vertexes;
   std::vector<TriangleIdx> faces;
+  std::vector<int> faceId;
+  vertexes.reserve(12);
+  faces.reserve(20);
+  faceId.reserve(20);
 
-  vertexes.reserve(6);
   for (int i = 0; i < 6; ++i) {
     vertexes.emplace_back(cos(2 * kPi * i / 6), sin(2 * kPi * i / 6), h);
   }
@@ -114,7 +129,18 @@ CrystalPtr Crystal::createHexCylinder(float h) {
   faces.emplace_back(9, 11, 10);
   faces.emplace_back(9, 6, 11);
 
-  return std::make_shared<Crystal>(vertexes, faces);
+  for (int i = 0; i < 4; i++) {
+    faceId.push_back(1);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceId.push_back(i + 3);
+    faceId.push_back(i + 3);
+  }
+  for (int i = 0; i < 4; i++) {
+    faceId.push_back(2);
+  }
+
+  return std::make_shared<Crystal>(vertexes, faces, faceId);
 }
 
 /*
@@ -135,7 +161,11 @@ CrystalPtr Crystal::createHexPyramid(float h1, float h2, float h3) {
 
   std::vector<Vec3f> vertexes;
   std::vector<TriangleIdx> faces;
+  std::vector<int> faceId;
   vertexes.reserve(24);
+  faces.reserve(44);
+  faceId.reserve(44);
+
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
         cos(2 * kPi * i / 6) * (1 - h1),
@@ -182,7 +212,26 @@ CrystalPtr Crystal::createHexPyramid(float h1, float h2, float h3) {
   faces.emplace_back(21, 23, 22);
   faces.emplace_back(21, 18, 23);
 
-  return std::make_shared<Crystal>(vertexes, faces);
+  for (int i = 0; i < 4; i++) {
+    faceId.push_back(1);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceId.push_back(13 + i);
+    faceId.push_back(13 + i);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceId.push_back(3 + i);
+    faceId.push_back(3 + i);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceId.push_back(23 + i);
+    faceId.push_back(23 + i);
+  }
+  for (int i = 0; i < 4; i++) {
+    faceId.push_back(2);
+  }
+
+  return std::make_shared<Crystal>(vertexes, faces, faceId);
 }
 
 /*
