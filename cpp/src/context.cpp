@@ -147,7 +147,7 @@ void RayTracingContext::commitPropagateResult(CrystalContextPtr ctx) {
   int k = 0;
   activeRaySegNum = 0;
   for (int i = 0; i < currentRayNum; i++) {
-    if (faceId2[i] >= 0 && activeRaySeg[i]->w > PROP_MIN_W) {
+    if (faceId2[i] >= 0 && activeRaySeg[i]->w > kPropMinW) {
       activeRaySeg[activeRaySegNum++] = activeRaySeg[i];
       std::memcpy(rayPts + k*3, rayPts2 + i*3, 3 * sizeof(float));
       std::memcpy(rayDir + k*3, rayDir + i*3, 3 * sizeof(float));
@@ -203,7 +203,7 @@ void RayTracingContext::copyFinishedRaySegmentsRange(RaySegment** segs, float* d
       if (p->nextRefract && !p->isFinished) {
         v.push_back(p->nextRefract);
       }
-      if (p->w > SCAT_MIN_W && p->faceId >= 0 && p->isFinished && uniformDist(randomEngine) < prob) {
+      if (p->w > kScatMinW && p->faceId >= 0 && p->isFinished && uniformDist(randomEngine) < prob) {
         auto tmpk = k++;
         float* finalDir = dir + tmpk * 3;
         std::memcpy(finalDir, p->dir.val(), sizeof(float) * 3);

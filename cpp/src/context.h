@@ -158,8 +158,8 @@ public:
   size_t copyFinishedRaySegments(RaySegment** segs, float* dir, float prob = 1.0f);
 
 private:
-  static constexpr float PROP_MIN_W = 1e-6;
-  static constexpr float SCAT_MIN_W = 1e-3;
+  static constexpr float kPropMinW = 1e-6;
+  static constexpr float kScatMinW = 1e-3;
 
   void deleteArrays();
   int chooseFace(const float* faces, int faceNum, const float* rayDir);
