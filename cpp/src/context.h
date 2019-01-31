@@ -29,13 +29,14 @@ class SimulationContext;
 using RayTracingContextPtr = std::shared_ptr<RayTracingContext>;
 using CrystalContextPtr = std::shared_ptr<CrystalContext>;
 using SimulationContextPtr = std::shared_ptr<SimulationContext>;
+using RenderContextPtr = std::shared_ptr<RenderContext>;
 
 class ContextParser {
 public:
   ~ContextParser() = default;
 
-  std::shared_ptr<SimulationContext> parseSimulationSettings();
-  RenderContext parseRenderingSettings();
+  SimulationContextPtr parseSimulationSettings();
+  RenderContextPtr parseRenderingSettings();
 
   static std::shared_ptr<ContextParser> createFileParser(const char* filename);
 
@@ -56,9 +57,9 @@ private:
   CrystalPtr parseCustomCrystal(std::FILE* file);
 
   /* Parse rendering settings */
-  void parseCameraSettings(RenderContext* ctx);
-  void parseRenderSettings(RenderContext* ctx);
-  void parseDataSettings(RenderContext* ctx);
+  void parseCameraSettings(RenderContextPtr ctx);
+  void parseRenderSettings(RenderContextPtr ctx);
+  void parseDataSettings(RenderContextPtr ctx);
 
   rapidjson::Document d;
   std::string filename;

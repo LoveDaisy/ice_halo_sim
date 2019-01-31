@@ -1101,16 +1101,16 @@ std::shared_ptr<SimulationContext> ContextParser::parseSimulationSettings() {
 }
 
 
-RenderContext ContextParser::parseRenderingSettings() {
-  RenderContext ctx;
-  parseCameraSettings(&ctx);
-  parseRenderSettings(&ctx);
-  parseDataSettings(&ctx);
+RenderContextPtr ContextParser::parseRenderingSettings() {
+  auto ctx = std::make_shared<RenderContext>();
+  parseCameraSettings(ctx);
+  parseRenderSettings(ctx);
+  parseDataSettings(ctx);
   return ctx;
 }
 
 
-void ContextParser::parseCameraSettings(RenderContext* ctx) {
+void ContextParser::parseCameraSettings(RenderContextPtr ctx) {
   ctx->camRot[0] = 90.0f;
   ctx->camRot[1] = 89.9f;
   ctx->camRot[2] = 0.0f;
@@ -1206,7 +1206,7 @@ void ContextParser::parseCameraSettings(RenderContext* ctx) {
 }
 
 
-void ContextParser::parseRenderSettings(RenderContext* ctx) {
+void ContextParser::parseRenderSettings(RenderContextPtr ctx) {
   ctx->visibleSemiSphere = VisibleSemiSphere::UPPER;
   ctx->intensityFactor = 1.0;
   ctx->offsetY = 0;
@@ -1306,7 +1306,7 @@ void ContextParser::parseRenderSettings(RenderContext* ctx) {
 }
 
 
-void ContextParser::parseDataSettings(RenderContext* ctx) {
+void ContextParser::parseDataSettings(RenderContextPtr ctx) {
   ctx->dataDirectory = "./";
   auto* p = Pointer("/data_folder").Get(d);
   if (p == nullptr) {

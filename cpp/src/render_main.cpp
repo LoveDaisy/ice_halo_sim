@@ -20,16 +20,16 @@ int main(int argc, char* argv[]) {
   auto t1 = start;
 
   auto parser = ContextParser::createFileParser(argv[1]);
-  RenderContext ctx = parser->parseRenderingSettings();
-  ctx.loadData();
+  auto ctx = parser->parseRenderingSettings();
+  ctx->loadData();
 
-  auto flatRgbData = new uint8_t[3 * ctx.getImageWidth() * ctx.getImageHeight()];
-  ctx.renderToRgb(flatRgbData);
+  auto flatRgbData = new uint8_t[3 * ctx->getImageWidth() * ctx->getImageHeight()];
+  ctx->renderToRgb(flatRgbData);
 
-  Mat img(ctx.getImageHeight(), ctx.getImageWidth(), CV_8UC3, flatRgbData);
+  Mat img(ctx->getImageHeight(), ctx->getImageWidth(), CV_8UC3, flatRgbData);
   cvtColor(img, img, COLOR_RGB2BGR);
   try {
-    imwrite(ctx.getImagePath(), img);
+    imwrite(ctx->getImagePath(), img);
   } catch (cv::Exception& ex) {
     fprintf(stderr, "Exception converting image to PNG format: %s\n", ex.what());
     return -1;
