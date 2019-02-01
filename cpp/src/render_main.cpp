@@ -17,10 +17,7 @@ int main(int argc, char* argv[]) {
   }
 
   auto start = std::chrono::system_clock::now();
-  auto t1 = start;
-
-  auto parser = ContextParser::createFileParser(argv[1]);
-  auto ctx = parser->parseRenderingSettings();
+  auto ctx = RenderContext::createFromFile(argv[1]);
   ctx->loadData();
 
   auto flatRgbData = new uint8_t[3 * ctx->getImageWidth() * ctx->getImageHeight()];
@@ -36,7 +33,7 @@ int main(int argc, char* argv[]) {
   }
   delete[] flatRgbData;
 
-  t1 = std::chrono::system_clock::now();
+  auto t1 = std::chrono::system_clock::now();
   std::chrono::duration<float, std::ratio<1, 1000> > diff = t1 - start;
   printf("Total: %.2fms\n", diff.count());
 }

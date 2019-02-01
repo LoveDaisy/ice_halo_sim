@@ -73,18 +73,20 @@ size_t Ray::totalNum() {
 
 
 
-void Optics::hitSurface(float n, std::shared_ptr<RayTracingContext> rayCtx) {
+void Optics::hitSurface(float n, const std::shared_ptr<RayTracingContext>& rayCtx) {
   Pool* pool = Pool::getInstance();
   int step = rayCtx->currentRayNum / 80;
   for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
     int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
-    pool->addJob(std::bind(&Optics::hitSurfaceRange, n, rayCtx, startIdx, endIdx));
+    pool->addJob([=, &rayCtx]{
+      hitSurfaceRange(n, rayCtx, startIdx, endIdx);
+    });
   }
   pool->waitFinish();
 }
 
 
-void Optics::hitSurfaceRange(float n, std::shared_ptr<RayTracingContext> rayCtx, int startIdx, int endIdx) {
+void Optics::hitSurfaceRange(float n, const RayTracingContextPtr& rayCtx, int startIdx, int endIdx) {
   for (int i = startIdx; i < endIdx; i++) {
     const float* tmp_dir = rayCtx->rayDir + i * 3;
     const float* tmp_norm = rayCtx->faceNorm + i * 3;
@@ -107,7 +109,8 @@ void Optics::hitSurfaceRange(float n, std::shared_ptr<RayTracingContext> rayCtx,
   }
 }
 
-void Optics::propagate(std::shared_ptr<RayTracingContext> rayCtx, std::shared_ptr<CrystalContext> cryCtx) {
+void Optics::propagate(const RayTracingContextPtr& rayCtx,
+                       const CrystalContextPtr& cryCtx) {
   auto faceNum = cryCtx->getCrystal()->faceNum();
   auto* faces = new float[faceNum * 9];
   cryCtx->getCrystal()->copyFaceData(faces);
@@ -116,7 +119,9 @@ void Optics::propagate(std::shared_ptr<RayTracingContext> rayCtx, std::shared_pt
   int step = rayCtx->currentRayNum / 80;
   for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
     int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
-    pool->addJob(std::bind(&Optics::propagateRange, rayCtx, faceNum, faces, startIdx, endIdx));
+    pool->addJob([=, &rayCtx]{
+      propagateRange(rayCtx, faceNum, faces, startIdx, endIdx);
+    });
   }
   pool->waitFinish();
 
@@ -124,7 +129,7 @@ void Optics::propagate(std::shared_ptr<RayTracingContext> rayCtx, std::shared_pt
 }
 
 
-void Optics::propagateRange(std::shared_ptr<RayTracingContext> rayCtx, int faceNum, float* faces, int startIdx, int endIdx) {
+void Optics::propagateRange(const RayTracingContextPtr& rayCtx, int faceNum, float* faces, int startIdx, int endIdx) {
   for (int i = startIdx; i < endIdx; i++) {
     const float* tmp_pt = rayCtx->rayPts + i*3;
     const float* tmp_dir = rayCtx->rayDir + i*3;
@@ -153,7 +158,7 @@ void Optics::propagateRange(std::shared_ptr<RayTracingContext> rayCtx, int faceN
 }
 
 
-void Optics::traceRays(std::shared_ptr<SimulationContext> context) {
+void Optics::traceRays(std::unique_ptr<SimulationContext>& context) {
   RaySegmentPool::getInstance().clear();
 
   auto totalRays = context->getTotalInitRays();

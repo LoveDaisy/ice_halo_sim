@@ -48,14 +48,15 @@ public:
 
 class Optics {
 public:
-  static void traceRays(std::shared_ptr<SimulationContext> context);
+  static void traceRays(std::unique_ptr<SimulationContext>& context);
 
 private:
-  static void hitSurface(float n, std::shared_ptr<RayTracingContext> rayCtx);
-  static void propagate(std::shared_ptr<RayTracingContext> rayCtx, std::shared_ptr<CrystalContext> cryCtx);
+  static void hitSurface(float n, const RayTracingContextPtr& rayCtx);
+  static void propagate(const RayTracingContextPtr& rayCtx,
+                        const CrystalContextPtr& cryCtx);
 
-  static void hitSurfaceRange(float n, std::shared_ptr<RayTracingContext> rayCtx, int startIdx, int endIdx);
-  static void propagateRange(std::shared_ptr<RayTracingContext> rayCtx,
+  static void hitSurfaceRange(float n, const RayTracingContextPtr& rayCtx, int startIdx, int endIdx);
+  static void propagateRange(const RayTracingContextPtr& rayCtx,
                              int faceNum, float* faces, int startIdx, int endIdx);
   static float getReflectRatio(float cos_angle, float rr);
   static void intersectLineTriangle(const float* pt, const float* dir, const float* face,

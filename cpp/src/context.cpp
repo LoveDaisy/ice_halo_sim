@@ -1,3 +1,5 @@
+#include <utility>
+
 #include "context.h"
 #include "optics.h"
 #include "threadingpool.h"
@@ -36,8 +38,8 @@ void CrystalContext::fillDir(const float* incDir, float* rayDir, float* mainAxRo
 }
 
 
-RayTracingContext::RayTracingContext(std::shared_ptr<SimulationContext> ctx)
-    : simCtx(ctx), initRayNum(0), currentRayNum(0), activeRaySegNum(0),
+RayTracingContext::RayTracingContext(int maxRecursion)
+    : maxRecursion(maxRecursion), initRayNum(0), currentRayNum(0), activeRaySegNum(0),
       rays(nullptr), activeRaySeg(nullptr),
       gen(), dis(0.0f, 1.0f),
       mainAxRot(nullptr),
@@ -53,7 +55,7 @@ RayTracingContext::~RayTracingContext() {
 void RayTracingContext::setRayNum(int num) {
   initRayNum = num;
   currentRayNum = num;
-  int maxRayNum = initRayNum * simCtx->getMaxRecursionNum() * 3;
+  int maxRayNum = initRayNum * maxRecursion * 3;
 
   deleteArrays();
 
@@ -74,7 +76,7 @@ void RayTracingContext::setRayNum(int num) {
 }
 
 
-void RayTracingContext::initRays(CrystalContextPtr ctx,
+void RayTracingContext::initRays(const CrystalContextPtr& ctx,
                                  int rayNum, const float* dir, const float* w, RaySegment** prevRaySeg) {
   setRayNum(rayNum);
 
@@ -143,7 +145,7 @@ void RayTracingContext::commitHitResult() {
 }
 
 
-void RayTracingContext::commitPropagateResult(CrystalContextPtr ctx) {
+void RayTracingContext::commitPropagateResult(const CrystalContextPtr& ctx) {
   int k = 0;
   activeRaySegNum = 0;
   for (int i = 0; i < currentRayNum; i++) {
@@ -284,11 +286,483 @@ void RayTracingContext::fillPts(const float* faces, int idx, float* rayPts) {
 }
 
 
-SimulationContext::SimulationContext()
+SimulationContext::SimulationContext(const char* filename, rapidjson::Document& d)
     : totalRayNum(0), maxRecursionNum(9),
       multiScatterNum(1), multiScatterProb(1.0f),
       currentWavelength(550.0f), sunDiameter(0.5f),
-      dataDirectory("./") {}
+      configFileName(filename), dataDirectory("./") {
+  constexpr size_t kTmpBufferSize = 65536;
+  char buffer[kTmpBufferSize];
+
+  parseRaySettings(d);
+  parseBasicSettings(d);
+  parseSunSettings(d);
+  parseDataSettings(d);
+  parseMultiScatterSettings(d);
+
+  const auto* p = Pointer("/crystal").Get(d);
+  if (p == nullptr || !p->IsArray()) {
+    snprintf(buffer, kTmpBufferSize, "Missing <crystal>. Parsing fail!");
+    throw std::invalid_argument(buffer);
+  }
+
+  int ci = 0;
+  for (const auto& c : p->GetArray()) {
+    parseCrystalSettings(c, ci);
+    ci++;
+  }
+}
+
+
+std::unique_ptr<SimulationContext> SimulationContext::createFromFile(const char *filename) {
+  printf("Reading config from: %s\n", filename);
+
+  FILE* fp = fopen(filename, "rb");
+  if (!fp) {
+    printf("ERROR: file %s cannot be open!\n", filename);
+    return nullptr;
+  }
+
+  constexpr size_t kTmpBufferSize = 65536;
+  char buffer[kTmpBufferSize];
+  rapidjson::FileReadStream is(fp, buffer, sizeof(buffer));
+
+  rapidjson::Document d;
+  if (d.ParseStream(is).HasParseError()) {
+    fprintf(stderr, "\nError(offset %u): %s\n", (unsigned)d.GetErrorOffset(),
+            GetParseError_En(d.GetParseError()));
+    fclose(fp);
+    return nullptr;
+  }
+
+  fclose(fp);
+
+  return std::unique_ptr<SimulationContext>(new SimulationContext(filename, d));
+}
+
+
+void SimulationContext::parseBasicSettings(rapidjson::Document& d) {
+  int maxRecursion = 9;
+  auto* p = Pointer("/max_recursion").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <max_recursion>, using default 9!\n");
+  } else if (!p->IsInt()) {
+    fprintf(stderr, "\nWARNING! config <max_recursion> is not a integer, using default 9!\n");
+  } else {
+    maxRecursion = std::min(std::max(p->GetInt(), 1), 10);
+  }
+  maxRecursionNum = maxRecursion;
+}
+
+
+void SimulationContext::parseRaySettings(rapidjson::Document& d) {
+  /* Parsing ray number */
+  totalRayNum = 10000;
+  auto* p = Pointer("/ray/number").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default 10000!\n");
+  } else if (!p->IsUint()) {
+    fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default 10000!\n");
+  } else {
+    totalRayNum = p->GetUint();
+  }
+
+  /* Parsing wavelengths */
+  wavelengths.clear();
+  wavelengths.push_back(550);
+  p = Pointer("/ray/wavelength").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <ray.wavelength>, using default 550!\n");
+  } else if (!p->IsArray()) {
+    fprintf(stderr, "\nWARNING! Config <ray.wavelength> is not an array, using default 550!\n");
+  } else if (!(*p)[0].IsNumber()) {
+    fprintf(stderr, "\nWARNING! Config <ray.wavelength> connot be recgonized, using default 550!\n");
+  } else {
+    wavelengths.clear();
+    for (const auto& pi : p->GetArray()) {
+      wavelengths.push_back(static_cast<float &&>(pi.GetDouble()));
+    }
+  }
+}
+
+
+void SimulationContext::parseSunSettings(rapidjson::Document& d) {
+  // Parsing sun altitude
+  float sunAltitude = 0.0f;
+  auto* p = Pointer("/sun/altitude").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <sun.altitude>, using default 0.0!\n");
+  } else if (!p->IsNumber()) {
+    fprintf(stderr, "\nWARNING! config <sun.altitude> is not a number, using default 0.0!\n");
+  } else {
+    sunAltitude = static_cast<float>(p->GetDouble());
+  }
+  setSunPosition(90.0f, sunAltitude);
+
+  // Parsing sun diameter
+  sunDiameter = 0.5f;
+  p = Pointer("/sun/diameter").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <sun.diameter>, using default 0.5!\n");
+  } else if (!p->IsNumber()) {
+    fprintf(stderr, "\nWARNING! Config <sun.diameter> is not a number, using default 0.5!\n");
+  } else {
+    sunDiameter = static_cast<float>(p->GetDouble());
+  }
+}
+
+
+void SimulationContext::parseDataSettings(rapidjson::Document& d) {
+  /* Parsing output data directory */
+  std::string dir = "./";
+  auto* p = Pointer("/data_folder").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
+  } else if (!p->IsString()) {
+    fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
+  } else {
+    dir = p->GetString();
+  }
+  dataDirectory = dir;
+}
+
+
+void SimulationContext::parseMultiScatterSettings(rapidjson::Document& d) {
+  int multiScattering = 1;
+  auto* p = Pointer("/multi_scatter/repeat").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <multi_scatter.repeat>, using default value 1!\n");
+  } else if (!p->IsInt()) {
+    fprintf(stderr, "\nWARNING! Config <multi_scatter.repeat> is not a integer, using default 1!\n");
+  } else {
+    multiScattering = std::min(std::max(p->GetInt(), 1), 4);
+  }
+  multiScatterNum = multiScattering;
+
+  float prob = 1.0f;
+  p = Pointer("/multi_scatter/probability").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <multi_scatter.probability>, using default value 1.0!\n");
+  } else if (!p->IsNumber()) {
+    fprintf(stderr, "\nWARNING! Config <multi_scatter.probability> is not a number, using default 1.0!\n");
+  } else {
+    prob = static_cast<float>(p->GetDouble());
+    prob = std::max(std::min(prob, 1.0f), 0.0f);
+  }
+  multiScatterProb = prob;
+
+  for (int i = 0; i < multiScattering; i++) {
+    rayTracingCtxs.emplace_back(std::vector<RayTracingContextPtr>());
+  }
+}
+
+
+void SimulationContext::parseCrystalSettings(const rapidjson::Value& c, int ci) {
+  using Math::Distribution;
+
+  constexpr size_t kMsgBufferSize = 256;
+  char msgBuffer[kMsgBufferSize];
+
+  auto* p = Pointer("/enable").Get(c);
+  if (p == nullptr || !p->IsBool()) {
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].enable> cannot recgonize!", ci);
+    throw std::invalid_argument(msgBuffer);
+  } else if (!p->GetBool()) {
+    return;
+  }
+
+  Distribution axisDist, rollDist;
+  float axisMean, rollMean;
+  float axisStd, rollStd;
+
+  p = Pointer("/axis/type").Get(c);
+  if (p == nullptr || !p->IsString()) {
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recgonize!", ci);
+    throw std::invalid_argument(msgBuffer);
+  } else if (*p == "Gauss") {
+    axisDist = Distribution::GAUSS;
+  } else if (*p == "Uniform") {
+    axisDist = Distribution::UNIFORM;
+  } else {
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recgonize!", ci);
+    throw std::invalid_argument(msgBuffer);
+  }
+
+  p = Pointer("/roll/type").Get(c);
+  if (p == nullptr || !p->IsString()) {
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recgonize!", ci);
+    throw std::invalid_argument(msgBuffer);
+  } else if (*p == "Gauss") {
+    rollDist = Distribution::GAUSS;
+  } else if (*p == "Uniform") {
+    rollDist = Distribution::UNIFORM;
+  } else {
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recgonize!", ci);
+    throw std::invalid_argument(msgBuffer);
+  }
+
+  p = Pointer("/axis/mean").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.mean> cannot recgonize!", ci);
+    throw std::invalid_argument(msgBuffer);
+  } else {
+    axisMean = static_cast<float>(90 - p->GetDouble());
+  }
+
+  p = Pointer("/axis/std").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.std> cannot recgonize!", ci);
+    throw std::invalid_argument(msgBuffer);
+  } else {
+    axisStd = static_cast<float>(p->GetDouble());
+  }
+
+  p = Pointer("/roll/mean").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.mean> cannot recgonize!", ci);
+    throw std::invalid_argument(msgBuffer);
+  } else {
+    rollMean = static_cast<float>(p->GetDouble());
+  }
+
+  p = Pointer("/roll/std").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.std> cannot recgonize!", ci);
+    throw std::invalid_argument(msgBuffer);
+  } else {
+    rollStd = static_cast<float>(p->GetDouble());
+  }
+
+  float population = 1.0;
+  p = Pointer("/population").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    fprintf(stderr, "\nWARNING! <crystal[%d].population> cannot recgonize, using default 1.0!\n", ci);
+  } else {
+    population = static_cast<float>(p->GetDouble());
+  }
+
+  p = Pointer("/type").Get(c);
+  if (p == nullptr || !p->IsString()) {
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recgonize!", ci);
+    throw std::invalid_argument(msgBuffer);
+  } else {
+    parseCrystalType(c, ci, population, axisDist, axisMean, axisStd, rollDist, rollMean, rollStd);
+  }
+
+  for (auto& rtc : rayTracingCtxs) {
+    rtc.push_back(std::make_shared<RayTracingContext>(maxRecursionNum));
+  }
+}
+
+
+void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
+                                         float population,
+                                         Math::Distribution axisDist, float axisMean, float axisStd,
+                                         Math::Distribution rollDist, float rollMean, float rollStd) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msgBuffer[kMsgBufferSize];
+
+  auto cryCtx = std::make_shared<CrystalContext>();
+  const auto* p = Pointer("/parameter").Get(c);
+  if (c["type"] == "HexCylinder") {
+    if (p == nullptr || !p->IsNumber()) {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      throw std::invalid_argument(msgBuffer);
+    }
+    auto h = static_cast<float>(p->GetDouble());
+    cryCtx->setCrystal(Crystal::createHexCylinder(h), population,
+                       axisDist, axisMean, axisStd,
+                       rollDist, rollMean, rollStd);
+  } else if (c["type"] == "HexPyramid") {
+    if (p == nullptr || !p->IsArray()) {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      throw std::invalid_argument(msgBuffer);
+    } else if (p->Size() == 3) {
+      auto h1 = static_cast<float>((*p)[0].GetDouble());
+      auto h2 = static_cast<float>((*p)[1].GetDouble());
+      auto h3 = static_cast<float>((*p)[2].GetDouble());
+      cryCtx->setCrystal(Crystal::createHexPyramid(h1, h2, h3), population,
+                         axisDist, axisMean, axisStd,
+                         rollDist, rollMean, rollStd);
+    } else if (p->Size() == 5) {
+      int i1 = (*p)[0].GetInt();
+      int i2 = (*p)[1].GetInt();
+      auto h1 = static_cast<float>((*p)[2].GetDouble());
+      auto h2 = static_cast<float>((*p)[3].GetDouble());
+      auto h3 = static_cast<float>((*p)[4].GetDouble());
+      cryCtx->setCrystal(Crystal::createHexPyramid(i1, i2, h1, h2, h3), population,
+                         axisDist, axisMean, axisStd,
+                         rollDist, rollMean, rollStd);
+    } else if (p->Size() == 7) {
+      int upperIdx1 = (*p)[0].GetInt();
+      int upperIdx2 = (*p)[1].GetInt();
+      int lowerIdx1 = (*p)[2].GetInt();
+      int lowerIdx2 = (*p)[3].GetInt();
+      auto h1 = static_cast<float>((*p)[4].GetDouble());
+      auto h2 = static_cast<float>((*p)[5].GetDouble());
+      auto h3 = static_cast<float>((*p)[6].GetDouble());
+      cryCtx->setCrystal(Crystal::createHexPyramid(upperIdx1, upperIdx2, lowerIdx1,
+                                                   lowerIdx2, h1, h2, h3), population,
+                         axisDist, axisMean, axisStd,
+                         rollDist, rollMean, rollStd);
+    } else {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+      throw std::invalid_argument(msgBuffer);
+    }
+  } else if (c["type"] == "HexPyramidStackHalf") {
+    if (p == nullptr || !p->IsArray()) {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      throw std::invalid_argument(msgBuffer);
+    } else if (p->Size() == 7) {
+      int upperIdx1 = (*p)[0].GetInt();
+      int upperIdx2 = (*p)[1].GetInt();
+      int lowerIdx1 = (*p)[2].GetInt();
+      int lowerIdx2 = (*p)[3].GetInt();
+      auto h1 = static_cast<float>((*p)[4].GetDouble());
+      auto h2 = static_cast<float>((*p)[5].GetDouble());
+      auto h3 = static_cast<float>((*p)[6].GetDouble());
+      cryCtx->setCrystal(Crystal::createHexPyramidStackHalf(upperIdx1, upperIdx2, lowerIdx1,
+                                                            lowerIdx2, h1, h2, h3), population,
+                         axisDist, axisMean, axisStd,
+                         rollDist, rollMean, rollStd);
+    } else {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+      throw std::invalid_argument(msgBuffer);
+    }
+  } else if (c["type"] == "TriPyramid") {
+    if (p == nullptr || !p->IsArray()) {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      throw std::invalid_argument(msgBuffer);
+    } else if (p->Size() == 5) {
+      int i1 = (*p)[0].GetInt();
+      int i2 = (*p)[1].GetInt();
+      auto h1 = static_cast<float>((*p)[2].GetDouble());
+      auto h2 = static_cast<float>((*p)[3].GetDouble());
+      auto h3 = static_cast<float>((*p)[4].GetDouble());
+      cryCtx->setCrystal(Crystal::createTriPyramid(i1, i2, h1, h2, h3), population,
+                         axisDist, axisMean, axisStd,
+                         rollDist, rollMean, rollStd);
+    } else {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+      throw std::invalid_argument(msgBuffer);
+    }
+  } else if (c["type"] == "CubicPyramid") {
+    if (p == nullptr || !p->IsArray()) {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      throw std::invalid_argument(msgBuffer);
+    } else if (p->Size() == 2) {
+      auto h1 = static_cast<float>((*p)[0].GetDouble());
+      auto h2 = static_cast<float>((*p)[1].GetDouble());
+      cryCtx->setCrystal(Crystal::createCubicPyramid(h1, h2), population,
+                         axisDist, axisMean, axisStd,
+                         rollDist, rollMean, rollStd);
+    } else {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+      throw std::invalid_argument(msgBuffer);
+    }
+  } else if (c["type"] == "IrregularHexCylinder") {
+    if (p == nullptr || !p->IsArray()) {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      throw std::invalid_argument(msgBuffer);
+    } else if (p->Size() == 7) {
+      auto d1 = static_cast<float>((*p)[0].GetDouble());
+      auto d2 = static_cast<float>((*p)[1].GetDouble());
+      auto d3 = static_cast<float>((*p)[2].GetDouble());
+      auto d4 = static_cast<float>((*p)[3].GetDouble());
+      auto d5 = static_cast<float>((*p)[4].GetDouble());
+      auto d6 = static_cast<float>((*p)[5].GetDouble());
+      auto h = static_cast<float>((*p)[6].GetDouble());
+
+      float dist[6] = { d1, d2, d3, d4, d5, d6 };
+      cryCtx->setCrystal(Crystal::createIrregularHexCylinder(dist, h), population,
+                         axisDist, axisMean, axisStd,
+                         rollDist, rollMean, rollStd);
+    }
+  } else if (c["type"] == "IrregularHexPyramid") {
+    if (p == nullptr || !p->IsArray()) {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      throw std::invalid_argument(msgBuffer);
+    } else if (p->Size() == 13) {
+      auto d1 = static_cast<float>((*p)[0].GetDouble());
+      auto d2 = static_cast<float>((*p)[1].GetDouble());
+      auto d3 = static_cast<float>((*p)[2].GetDouble());
+      auto d4 = static_cast<float>((*p)[3].GetDouble());
+      auto d5 = static_cast<float>((*p)[4].GetDouble());
+      auto d6 = static_cast<float>((*p)[5].GetDouble());
+      int i1 = (*p)[6].GetInt();
+      int i2 = (*p)[7].GetInt();
+      int i3 = (*p)[8].GetInt();
+      int i4 = (*p)[9].GetInt();
+      auto h1 = static_cast<float>((*p)[10].GetDouble());
+      auto h2 = static_cast<float>((*p)[11].GetDouble());
+      auto h3 = static_cast<float>((*p)[12].GetDouble());
+
+      float dist[6] = { d1, d2, d3, d4, d5, d6 };
+      int idx[4] = { i1, i2, i3, i4 };
+      float height[3] = { h1, h2, h3 };
+
+      cryCtx->setCrystal(Crystal::createIrregularHexPyramid(dist, idx, height), population,
+                         axisDist, axisMean, axisStd,
+                         rollDist, rollMean, rollStd);
+    } else {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+      throw std::invalid_argument(msgBuffer);
+    }
+  } else if (c["type"] == "Custom") {
+    if (p == nullptr || !p->IsString()) {
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      throw std::invalid_argument(msgBuffer);
+    } else {
+      char modelFileNameBuffer[512] = { 0 };
+      auto n = configFileName.rfind('/');
+      if (n == std::string::npos) {
+        snprintf(modelFileNameBuffer, kMsgBufferSize, "models/%s", p->GetString());
+      } else {
+        snprintf(modelFileNameBuffer, kMsgBufferSize, "%s/models/%s", configFileName.substr(0, n).c_str(), p->GetString());
+      }
+      std::FILE* file = fopen(modelFileNameBuffer, "r");
+      if (!file) {
+        snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot open model file!", ci);
+        throw std::invalid_argument(msgBuffer);
+      }
+      auto crystal = parseCustomCrystal(file);
+      cryCtx->setCrystal(crystal, population,
+                         axisDist, axisMean, axisStd,
+                         rollDist, rollMean, rollStd);
+      fclose(file);
+    }
+  } else {
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recgonize!", ci);
+    throw std::invalid_argument(msgBuffer);
+  }
+  crystalCtxs.push_back(cryCtx);
+}
+
+
+CrystalPtr SimulationContext::parseCustomCrystal(std::FILE* file) {
+  std::vector<Math::Vec3f> vertexes;
+  std::vector<Math::TriangleIdx> faces;
+  float vbuf[3];
+  int fbuf[3];
+  int c;
+  while ((c = std::fgetc(file)) != EOF) {
+    switch (c) {
+      case 'v':
+      case 'V':
+        std::fscanf(file, "%f %f %f", vbuf+0, vbuf+1, vbuf+2);
+        vertexes.emplace_back(vbuf);
+        break;
+      case 'f':
+      case 'F':
+        std::fscanf(file, "%d %d %d", fbuf+0, fbuf+1, fbuf+2);
+        faces.emplace_back(fbuf[0]-1, fbuf[1]-1, fbuf[2]-1);
+        break;
+      default:
+        break;
+    }
+  }
+  return std::make_shared<Crystal>(vertexes, faces);
+}
 
 
 uint64_t SimulationContext::getTotalInitRays() const {
@@ -462,17 +936,254 @@ void SimulationContext::printCrystalInfo() {
 
 
 
-RenderContext::RenderContext() :
+RenderContext::RenderContext(rapidjson::Document& d) :
     imgHei(0), imgWid(0), offsetY(0), offsetX(0),
     visibleSemiSphere(VisibleSemiSphere::UPPER),
     totalW(0), intensityFactor(1.0), showHorizontal(true),
     dataDirectory("./"),
-    projectionType(ProjectionType::EQUI_AREA) {}
+    projectionType(ProjectionType::EQUI_AREA) {
+  parseCameraSettings(d);
+  parseRenderSettings(d);
+  parseDataSettings(d);
+}
 
 
 RenderContext::~RenderContext() {
   for (const auto& kv : spectrumData) {
     delete[] kv.second;
+  }
+}
+
+
+std::unique_ptr<RenderContext> RenderContext::createFromFile(const char *filename) {
+  printf("Reading config from: %s\n", filename);
+
+  FILE* fp = fopen(filename, "rb");
+  if (!fp) {
+    printf("ERROR: file %s cannot be open!\n", filename);
+    return nullptr;
+  }
+
+  constexpr size_t kTmpBufferSize = 65536;
+  char buffer[kTmpBufferSize];
+  rapidjson::FileReadStream is(fp, buffer, sizeof(buffer));
+
+  rapidjson::Document d;
+  if (d.ParseStream(is).HasParseError()) {
+    fprintf(stderr, "\nError(offset %u): %s\n", (unsigned)d.GetErrorOffset(),
+            GetParseError_En(d.GetParseError()));
+    fclose(fp);
+    return nullptr;
+  }
+
+  fclose(fp);
+
+  return std::unique_ptr<RenderContext>(new RenderContext(d));
+}
+
+
+void RenderContext::parseCameraSettings(rapidjson::Document& d) {
+  camRot[0] = 90.0f;
+  camRot[1] = 89.9f;
+  camRot[2] = 0.0f;
+  fov = 120.0f;
+  imgWid = 800;
+  imgHei = 800;
+  projectionType = ProjectionType::EQUI_AREA;
+
+  auto* p = Pointer("/camera/azimuth").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <camera.azimuth>, using default 90.0!\n");
+  } else if (!p->IsNumber()) {
+    fprintf(stderr, "\nWARNING! config <camera.azimuth> is not a number, using default 90.0!\n");
+  } else {
+    auto az = static_cast<float>(p->GetDouble());
+    az = std::max(std::min(az, 360.0f), 0.0f);
+    camRot[0] = 90.0f - az;
+  }
+
+  p = Pointer("/camera/elevation").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <camera.elevation>, using default 90.0!\n");
+  } else if (!p->IsNumber()) {
+    fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default 90.0!\n");
+  } else {
+    auto el = static_cast<float>(p->GetDouble());
+    el = std::max(std::min(el, 89.999f), -89.999f);
+    camRot[1] = el;
+  }
+
+  p = Pointer("/camera/rotation").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <camera.rotation>, using default 0.0!\n");
+  } else if (!p->IsNumber()) {
+    fprintf(stderr, "\nWARNING! config <camera.rotation> is not a number, using default 0.0!\n");
+  } else {
+    auto rot = static_cast<float>(p->GetDouble());
+    rot = std::max(std::min(rot, 180.0f), -180.0f);
+    camRot[2] = rot;
+  }
+
+  p = Pointer("/camera/fov").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <camera.fov>, using default 120.0!\n");
+  } else if (!p->IsNumber()) {
+    fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default 120.0!\n");
+  } else {
+    fov = static_cast<float>(p->GetDouble());
+    fov = std::max(std::min(fov, 140.0f), 0.0f);
+  }
+
+  p = Pointer("/camera/width").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <camera.width>, using default 800!\n");
+  } else if (!p->IsInt()) {
+    fprintf(stderr, "\nWARNING! config <camera.width> is not an integer, using default 800!\n");
+  } else {
+    int width = p->GetInt();
+    width = std::max(width, 0);
+    imgWid = static_cast<uint32_t>(width);
+  }
+
+  p = Pointer("/camera/height").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <camera.height>, using default 800!\n");
+  } else if (!p->IsInt()) {
+    fprintf(stderr, "\nWARNING! config <camera.height> is not an integer, using default 800!\n");
+  } else {
+    int height = p->GetInt();
+    height = std::max(height, 0);
+    imgHei = static_cast<uint32_t>(height);
+  }
+
+  p = Pointer("/camera/lens").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <camera.lens>, using default equi-area fisheye!\n");
+  } else if (!p->IsString()) {
+    fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equi-area fisheye!\n");
+  } else {
+    if (*p == "linear") {
+      projectionType = ProjectionType::LINEAR;
+    } else if (*p == "fisheye") {
+      projectionType = ProjectionType::EQUI_AREA;
+    } else if (*p == "dual_fisheye_equidistant") {
+      projectionType = ProjectionType::DUAL_EQUI_DISTANT;
+    } else if (*p == "dual_fisheye_equiarea") {
+      projectionType = ProjectionType::DUAL_EQUI_AREA;
+    } else {
+      fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recgonized, using default equi-area fisheye!\n");
+    }
+  }
+}
+
+
+void RenderContext::parseRenderSettings(rapidjson::Document& d) {
+  visibleSemiSphere = VisibleSemiSphere::UPPER;
+  intensityFactor = 1.0;
+  offsetY = 0;
+  offsetX = 0;
+  backgroundColor[0] = 0;
+  backgroundColor[1] = 0;
+  backgroundColor[2] = 0;
+  rayColor[0] = -1;
+  rayColor[1] = -1;
+  rayColor[2] = -1;
+  showHorizontal = true;
+
+  auto* p = Pointer("/render/visible_semi_sphere").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <render.visible_semi_sphere>, using default UPPER!\n");
+  } else if (!p->IsString()) {
+    fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> is not a string, using default UPPER!\n");
+  } else if (*p == "upper") {
+    visibleSemiSphere = VisibleSemiSphere::UPPER;
+  } else if (*p == "lower") {
+    visibleSemiSphere = VisibleSemiSphere::LOWER;
+  } else if (*p == "camera") {
+    visibleSemiSphere = VisibleSemiSphere::CAMERA;
+  } else if (*p == "full") {
+    visibleSemiSphere = VisibleSemiSphere::FULL;
+  } else {
+    fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> cannot be recgonized, using default UPPER!\n");
+  }
+
+  p = Pointer("/render/intensity_factor").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <render.intensity_factor>, using default 1.0!\n");
+  } else if (!p->IsNumber()) {
+    fprintf(stderr, "\nWARNING! Config <render.intensity_factor> is not a number, using default 1.0!\n");
+  } else {
+    double f = p->GetDouble();
+    f = std::max(std::min(f, 100.0), 0.01);
+    intensityFactor = f;
+  }
+
+  p = Pointer("/render/offset").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <render.offset>, using default [0, 0]!\n");
+  } else if (!p->IsArray()) {
+    fprintf(stderr, "\nWARNING! Config <render.offset> is not an array, using default [0, 0]!\n");
+  } else if (p->Size() != 2 || !(*p)[0].IsInt() || !(*p)[1].IsInt()) {
+    fprintf(stderr, "\nWARNING! Config <render.offset> cannot be recgonized, using default [0, 0]!\n");
+  } else {
+    offsetX = (*p)[0].GetInt();
+    offsetY = (*p)[1].GetInt();
+    offsetX = std::max(std::min(offsetX, static_cast<int>(imgWid / 2)),
+                       -static_cast<int>(imgWid / 2));
+    offsetY = std::max(std::min(offsetY, static_cast<int>(imgHei / 2)),
+                       -static_cast<int>(imgHei / 2));
+  }
+
+  p = Pointer("/render/background_color").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default [0,0,0]!\n");
+  } else if (!p->IsArray()) {
+    fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array, using default [0,0,0]!\n");
+  } else if (p->Size() != 3 || !(*p)[0].IsNumber()) {
+    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recgonized, using default [0,0,0]!\n");
+  } else {
+    auto pa = p->GetArray();
+    for (int i = 0; i < 3; i++) {
+      backgroundColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
+    }
+  }
+
+  p = Pointer("/render/ray_color").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default real color!\n");
+  } else if (!p->IsArray() && !p->IsString()) {
+    fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array nor a string, using default real color!\n");
+  } else if (p->IsArray() && (p->Size() != 3 || !(*p)[0].IsNumber())) {
+    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recgonized, using default real color!\n");
+  } else if (p->IsString() && (*p) != "real") {
+    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recgonized, using default real color!\n");
+  } else if (p->IsArray()) {
+    auto pa = p->GetArray();
+    for (int i = 0; i < 3; i++) {
+      rayColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
+    }
+  }
+
+  p = Pointer("/render/show_horizontal").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <render.show_horizontal>, using default true!\n");
+  } else if (!p->IsBool()) {
+    fprintf(stderr, "\nWARNING! Config <render.show_horizontal> is not a boolean, using default true!\n");
+  } else {
+    showHorizontal = p->GetBool();
+  }
+}
+
+
+void RenderContext::parseDataSettings(rapidjson::Document& d) {
+  dataDirectory = "./";
+  auto* p = Pointer("/data_folder").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
+  } else if (!p->IsString()) {
+    fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
+  } else {
+    dataDirectory = p->GetString();
   }
 }
 
@@ -619,703 +1330,6 @@ int RenderContext::loadDataFromFile(File& file) {
   delete[] tmpW;
 
   return static_cast<int>(totalCount);
-}
-
-
-
-ContextParser::ContextParser(rapidjson::Document& d, const char* filename) :
-    d(std::move(d)), filename(filename) {}
-
-
-std::shared_ptr<ContextParser> ContextParser::createFileParser(const char* filename) {
-  printf("Reading config from: %s\n", filename);
-
-  FILE* fp = fopen(filename, "rb");
-  if (!fp) {
-    printf("ERROR: file %s cannot be open!\n", filename);
-    return nullptr;
-  }
-
-  char readBuffer[65536];
-  rapidjson::FileReadStream is(fp, readBuffer, sizeof(readBuffer));
-
-  rapidjson::Document d;
-  if (d.ParseStream(is).HasParseError()) {
-    fprintf(stderr, "\nError(offset %u): %s\n", (unsigned)d.GetErrorOffset(),
-      GetParseError_En(d.GetParseError()));
-    fclose(fp);
-    return nullptr;
-  }
-
-  fclose(fp);
-
-  return std::shared_ptr<ContextParser>(new ContextParser(d, filename));
-}
-
-
-void ContextParser::parseRaySettings(std::shared_ptr<SimulationContext> ctx) {
-  /* Parsing ray number */
-  ctx->totalRayNum = 10000;
-  auto* p = Pointer("/ray/number").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default 10000!\n");
-  } else if (!p->IsUint()) {
-    fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default 10000!\n");
-  } else {
-    ctx->totalRayNum = p->GetUint();
-  }
-
-  /* Parsing wavelengths */
-  ctx->wavelengths.clear();
-  ctx->wavelengths.push_back(550);
-  p = Pointer("/ray/wavelength").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <ray.wavelength>, using default 550!\n");
-  } else if (!p->IsArray()) {
-    fprintf(stderr, "\nWARNING! Config <ray.wavelength> is not an array, using default 550!\n");
-  } else if (!(*p)[0].IsNumber()) {
-    fprintf(stderr, "\nWARNING! Config <ray.wavelength> connot be recgonized, using default 550!\n");
-  } else {
-    ctx->wavelengths.clear();
-    for (const auto& pi : p->GetArray()) {
-      ctx->wavelengths.push_back(static_cast<float &&>(pi.GetDouble()));
-    }
-  }
-}
-
-
-void ContextParser::parseBasicSettings(std::shared_ptr<SimulationContext> ctx) {
-  int maxRecursion = 9;
-  auto* p = Pointer("/max_recursion").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <max_recursion>, using default 9!\n");
-  } else if (!p->IsInt()) {
-    fprintf(stderr, "\nWARNING! config <max_recursion> is not a integer, using default 9!\n");
-  } else {
-    maxRecursion = std::min(std::max(p->GetInt(), 1), 10);
-  }
-  ctx->maxRecursionNum = maxRecursion;
-}
-
-
-void ContextParser::parseMultiScatterSettings(std::shared_ptr<SimulationContext> ctx) {
-  int multiScattering = 1;
-  auto* p = Pointer("/multi_scatter/repeat").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <multi_scatter.repeat>, using default value 1!\n");
-  } else if (!p->IsInt()) {
-    fprintf(stderr, "\nWARNING! Config <multi_scatter.repeat> is not a integer, using default 1!\n");
-  } else {
-    multiScattering = std::min(std::max(p->GetInt(), 1), 4);
-  }
-  ctx->multiScatterNum = multiScattering;
-
-  float prob = 1.0f;
-  p = Pointer("/multi_scatter/probability").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <multi_scatter.probability>, using default value 1.0!\n");
-  } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! Config <multi_scatter.probability> is not a number, using default 1.0!\n");
-  } else {
-    prob = static_cast<float>(p->GetDouble());
-    prob = std::max(std::min(prob, 1.0f), 0.0f);
-  }
-  ctx->multiScatterProb = prob;
-
-  for (int i = 0; i < multiScattering; i++) {
-    ctx->rayTracingCtxs.emplace_back(std::vector<RayTracingContextPtr>());
-  }
-}
-
-
-void ContextParser::parseSunSettings(std::shared_ptr<SimulationContext> ctx) {
-  // Parsing sun altitude
-  float sunAltitude = 0.0f;
-  auto* p = Pointer("/sun/altitude").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <sun.altitude>, using default 0.0!\n");
-  } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! config <sun.altitude> is not a number, using default 0.0!\n");
-  } else {
-    sunAltitude = static_cast<float>(p->GetDouble());
-  }
-  ctx->setSunPosition(90.0f, sunAltitude);
-
-  // Parsing sun diameter
-  float sunDiameter = 0.5f;
-  p = Pointer("/sun/diameter").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <sun.diameter>, using default 0.5!\n");
-  } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! Config <sun.diameter> is not a number, using default 0.5!\n");
-  } else {
-    sunDiameter = static_cast<float>(p->GetDouble());
-  }
-  ctx->sunDiameter = sunDiameter;
-}
-
-
-void ContextParser::parseDataSettings(std::shared_ptr<SimulationContext> ctx) {
-  /* Parsing output data directory */
-  std::string dir = "./";
-  auto* p = Pointer("/data_folder").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
-  } else if (!p->IsString()) {
-    fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
-  } else {
-    dir = p->GetString();
-  }
-  ctx->dataDirectory = dir;
-}
-
-
-void ContextParser::parseCrystalSettings(std::shared_ptr<SimulationContext> ctx, const rapidjson::Value& c, int ci) {
-  using Math::Distribution;
-
-  char msgBuffer[kMsgBufferSize];
-
-  auto* p = Pointer("/enable").Get(c);
-  if (p == nullptr || !p->IsBool()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].enable> cannot recgonize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else if (!p->GetBool()) {
-    return;
-  }
-
-  Distribution axisDist, rollDist;
-  float axisMean, rollMean;
-  float axisStd, rollStd;
-
-  p = Pointer("/axis/type").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recgonize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else if (*p == "Gauss") {
-    axisDist = Distribution::GAUSS;
-  } else if (*p == "Uniform") {
-    axisDist = Distribution::UNIFORM;
-  } else {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recgonize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  }
-
-  p = Pointer("/roll/type").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recgonize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else if (*p == "Gauss") {
-    rollDist = Distribution::GAUSS;
-  } else if (*p == "Uniform") {
-    rollDist = Distribution::UNIFORM;
-  } else {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recgonize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  }
-
-  p = Pointer("/axis/mean").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.mean> cannot recgonize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else {
-    axisMean = static_cast<float>(90 - p->GetDouble());
-  }
-
-  p = Pointer("/axis/std").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.std> cannot recgonize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else {
-    axisStd = static_cast<float>(p->GetDouble());
-  }
-
-  p = Pointer("/roll/mean").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.mean> cannot recgonize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else {
-    rollMean = static_cast<float>(p->GetDouble());
-  }
-
-  p = Pointer("/roll/std").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.std> cannot recgonize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else {
-    rollStd = static_cast<float>(p->GetDouble());
-  }
-
-  float population = 1.0;
-  p = Pointer("/population").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! <crystal[%d].population> cannot recgonize, using default 1.0!\n", ci);
-  } else {
-    population = static_cast<float>(p->GetDouble());
-  }
-
-  p = Pointer("/type").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recgonize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else {
-    parseCrystalType(ctx, c, ci, population, axisDist, axisMean, axisStd, rollDist, rollMean, rollStd);
-  }
-
-  for (auto& rtc : ctx->rayTracingCtxs) {
-    rtc.push_back(std::make_shared<RayTracingContext>(ctx));
-  }
-}
-
-void ContextParser::parseCrystalType(std::shared_ptr<SimulationContext> ctx, const rapidjson::Value& c, int ci,
-                                     float population,
-                                     Math::Distribution axisDist, float axisMean, float axisStd,
-                                     Math::Distribution rollDist, float rollMean, float rollStd) {
-  char msgBuffer[kMsgBufferSize];
-
-  auto cryCtx = std::make_shared<CrystalContext>();
-  const auto* p = Pointer("/parameter").Get(c);
-  if (c["type"] == "HexCylinder") {
-    if (p == nullptr || !p->IsNumber()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    }
-    auto h = static_cast<float>(p->GetDouble());
-    cryCtx->setCrystal(Crystal::createHexCylinder(h), population,
-      axisDist, axisMean, axisStd,
-      rollDist, rollMean, rollStd);
-  } else if (c["type"] == "HexPyramid") {
-    if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else if (p->Size() == 3) {
-      auto h1 = static_cast<float>((*p)[0].GetDouble());
-      auto h2 = static_cast<float>((*p)[1].GetDouble());
-      auto h3 = static_cast<float>((*p)[2].GetDouble());
-      cryCtx->setCrystal(Crystal::createHexPyramid(h1, h2, h3), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd);
-    } else if (p->Size() == 5) {
-      int i1 = (*p)[0].GetInt();
-      int i2 = (*p)[1].GetInt();
-      auto h1 = static_cast<float>((*p)[2].GetDouble());
-      auto h2 = static_cast<float>((*p)[3].GetDouble());
-      auto h3 = static_cast<float>((*p)[4].GetDouble());
-      cryCtx->setCrystal(Crystal::createHexPyramid(i1, i2, h1, h2, h3), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd);
-    } else if (p->Size() == 7) {
-      int upperIdx1 = (*p)[0].GetInt();
-      int upperIdx2 = (*p)[1].GetInt();
-      int lowerIdx1 = (*p)[2].GetInt();
-      int lowerIdx2 = (*p)[3].GetInt();
-      auto h1 = static_cast<float>((*p)[4].GetDouble());
-      auto h2 = static_cast<float>((*p)[5].GetDouble());
-      auto h3 = static_cast<float>((*p)[6].GetDouble());
-      cryCtx->setCrystal(Crystal::createHexPyramid(upperIdx1, upperIdx2, lowerIdx1,
-        lowerIdx2, h1, h2, h3), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd);
-    } else {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-      throw std::invalid_argument(msgBuffer);
-    }
-  } else if (c["type"] == "HexPyramidStackHalf") {
-    if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else if (p->Size() == 7) {
-      int upperIdx1 = (*p)[0].GetInt();
-      int upperIdx2 = (*p)[1].GetInt();
-      int lowerIdx1 = (*p)[2].GetInt();
-      int lowerIdx2 = (*p)[3].GetInt();
-      auto h1 = static_cast<float>((*p)[4].GetDouble());
-      auto h2 = static_cast<float>((*p)[5].GetDouble());
-      auto h3 = static_cast<float>((*p)[6].GetDouble());
-      cryCtx->setCrystal(Crystal::createHexPyramidStackHalf(upperIdx1, upperIdx2, lowerIdx1,
-        lowerIdx2, h1, h2, h3), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd);
-    } else {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-      throw std::invalid_argument(msgBuffer);
-    }
-  } else if (c["type"] == "TriPyramid") {
-    if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else if (p->Size() == 5) {
-      int i1 = (*p)[0].GetInt();
-      int i2 = (*p)[1].GetInt();
-      auto h1 = static_cast<float>((*p)[2].GetDouble());
-      auto h2 = static_cast<float>((*p)[3].GetDouble());
-      auto h3 = static_cast<float>((*p)[4].GetDouble());
-      cryCtx->setCrystal(Crystal::createTriPyramid(i1, i2, h1, h2, h3), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd);
-    } else {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-      throw std::invalid_argument(msgBuffer);
-    }
-  } else if (c["type"] == "CubicPyramid") {
-    if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else if (p->Size() == 2) {
-      auto h1 = static_cast<float>((*p)[0].GetDouble());
-      auto h2 = static_cast<float>((*p)[1].GetDouble());
-      cryCtx->setCrystal(Crystal::createCubicPyramid(h1, h2), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd);
-    } else {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-      throw std::invalid_argument(msgBuffer);
-    }
-  } else if (c["type"] == "IrregularHexCylinder") {
-    if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else if (p->Size() == 7) {
-      auto d1 = static_cast<float>((*p)[0].GetDouble());
-      auto d2 = static_cast<float>((*p)[1].GetDouble());
-      auto d3 = static_cast<float>((*p)[2].GetDouble());
-      auto d4 = static_cast<float>((*p)[3].GetDouble());
-      auto d5 = static_cast<float>((*p)[4].GetDouble());
-      auto d6 = static_cast<float>((*p)[5].GetDouble());
-      auto h = static_cast<float>((*p)[6].GetDouble());
-
-      float dist[6] = { d1, d2, d3, d4, d5, d6 };
-      cryCtx->setCrystal(Crystal::createIrregularHexCylinder(dist, h), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd);
-    }
-  } else if (c["type"] == "IrregularHexPyramid") {
-    if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else if (p->Size() == 13) {
-      auto d1 = static_cast<float>((*p)[0].GetDouble());
-      auto d2 = static_cast<float>((*p)[1].GetDouble());
-      auto d3 = static_cast<float>((*p)[2].GetDouble());
-      auto d4 = static_cast<float>((*p)[3].GetDouble());
-      auto d5 = static_cast<float>((*p)[4].GetDouble());
-      auto d6 = static_cast<float>((*p)[5].GetDouble());
-      int i1 = (*p)[6].GetInt();
-      int i2 = (*p)[7].GetInt();
-      int i3 = (*p)[8].GetInt();
-      int i4 = (*p)[9].GetInt();
-      auto h1 = static_cast<float>((*p)[10].GetDouble());
-      auto h2 = static_cast<float>((*p)[11].GetDouble());
-      auto h3 = static_cast<float>((*p)[12].GetDouble());
-
-      float dist[6] = { d1, d2, d3, d4, d5, d6 };
-      int idx[4] = { i1, i2, i3, i4 };
-      float height[3] = { h1, h2, h3 };
-
-      cryCtx->setCrystal(Crystal::createIrregularHexPyramid(dist, idx, height), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd);
-    } else {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-      throw std::invalid_argument(msgBuffer);
-    }
-  } else if (c["type"] == "Custom") {
-    if (p == nullptr || !p->IsString()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else {
-      char modelFileNameBuffer[512] = { 0 };
-      auto n = filename.rfind('/');
-      if (n == std::string::npos) {
-        snprintf(modelFileNameBuffer, kMsgBufferSize, "models/%s", p->GetString());
-      } else {
-        snprintf(modelFileNameBuffer, kMsgBufferSize, "%s/models/%s", filename.substr(0, n).c_str(), p->GetString());
-      }
-      std::FILE* file = fopen(modelFileNameBuffer, "r");
-      if (!file) {
-        snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot open model file!", ci);
-        throw std::invalid_argument(msgBuffer);
-      }
-      auto crystal = parseCustomCrystal(file);
-      cryCtx->setCrystal(crystal, population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd);
-      fclose(file);
-    }
-  } else {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recgonize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  }
-  ctx->crystalCtxs.push_back(cryCtx);
-}
-
-
-CrystalPtr ContextParser::parseCustomCrystal(std::FILE* file) {
-  std::vector<Math::Vec3f> vertexes;
-  std::vector<Math::TriangleIdx> faces;
-  float vbuf[3];
-  int fbuf[3];
-  int c;
-  while ((c = std::fgetc(file)) != EOF) {
-    switch (c) {
-      case 'v':
-      case 'V':
-        std::fscanf(file, "%f %f %f", vbuf+0, vbuf+1, vbuf+2);
-        vertexes.emplace_back(vbuf);
-        break;
-      case 'f':
-      case 'F':
-        std::fscanf(file, "%d %d %d", fbuf+0, fbuf+1, fbuf+2);
-        faces.emplace_back(fbuf[0]-1, fbuf[1]-1, fbuf[2]-1);
-        break;
-      default:
-        break;
-    }
-  }
-  return std::make_shared<Crystal>(vertexes, faces);
-}
-
-
-std::shared_ptr<SimulationContext> ContextParser::parseSimulationSettings() {
-  char msgBuffer[kMsgBufferSize];
-
-  auto ctx = std::make_shared<SimulationContext>();
-  parseRaySettings(ctx);
-  parseBasicSettings(ctx);
-  parseSunSettings(ctx);
-  parseDataSettings(ctx);
-  parseMultiScatterSettings(ctx);
-
-  const auto* p = Pointer("/crystal").Get(d);
-  if (p == nullptr || !p->IsArray()) {
-    snprintf(msgBuffer, kMsgBufferSize, "Missing <crystal>. Parsing fail!");
-    throw std::invalid_argument(msgBuffer);
-  }
-
-  int ci = 0;
-  for (const auto& c : p->GetArray()) {
-    parseCrystalSettings(ctx, c, ci);
-    ci++;
-  }
-
-  return ctx;
-}
-
-
-RenderContextPtr ContextParser::parseRenderingSettings() {
-  auto ctx = std::make_shared<RenderContext>();
-  parseCameraSettings(ctx);
-  parseRenderSettings(ctx);
-  parseDataSettings(ctx);
-  return ctx;
-}
-
-
-void ContextParser::parseCameraSettings(RenderContextPtr ctx) {
-  ctx->camRot[0] = 90.0f;
-  ctx->camRot[1] = 89.9f;
-  ctx->camRot[2] = 0.0f;
-  ctx->fov = 120.0f;
-  ctx->imgWid = 800;
-  ctx->imgHei = 800;
-  ctx->projectionType = ProjectionType::EQUI_AREA;
-
-  auto* p = Pointer("/camera/azimuth").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.azimuth>, using default 90.0!\n");
-  } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! config <camera.azimuth> is not a number, using default 90.0!\n");
-  } else {
-    auto az = static_cast<float>(p->GetDouble());
-    az = std::max(std::min(az, 360.0f), 0.0f);
-    ctx->camRot[0] = 90.0f - az;
-  }
-
-  p = Pointer("/camera/elevation").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.elevation>, using default 90.0!\n");
-  } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default 90.0!\n");
-  } else {
-    auto el = static_cast<float>(p->GetDouble());
-    el = std::max(std::min(el, 89.999f), -89.999f);
-    ctx->camRot[1] = el;
-  }
-
-  p = Pointer("/camera/rotation").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.rotation>, using default 0.0!\n");
-  } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! config <camera.rotation> is not a number, using default 0.0!\n");
-  } else {
-    auto rot = static_cast<float>(p->GetDouble());
-    rot = std::max(std::min(rot, 180.0f), -180.0f);
-    ctx->camRot[2] = rot;
-  }
-
-  p = Pointer("/camera/fov").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.fov>, using default 120.0!\n");
-  } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default 120.0!\n");
-  } else {
-    auto fov = static_cast<float>(p->GetDouble());
-    fov = std::max(std::min(fov, 140.0f), 0.0f);
-    ctx->fov = fov;
-  }
-
-  p = Pointer("/camera/width").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.width>, using default 800!\n");
-  } else if (!p->IsInt()) {
-    fprintf(stderr, "\nWARNING! config <camera.width> is not an integer, using default 800!\n");
-  } else {
-    int width = p->GetInt();
-    width = std::max(width, 0);
-    ctx->imgWid = static_cast<uint32_t>(width);
-  }
-
-  p = Pointer("/camera/height").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.height>, using default 800!\n");
-  } else if (!p->IsInt()) {
-    fprintf(stderr, "\nWARNING! config <camera.height> is not an integer, using default 800!\n");
-  } else {
-    int height = p->GetInt();
-    height = std::max(height, 0);
-    ctx->imgHei = static_cast<uint32_t>(height);
-  }
-
-  p = Pointer("/camera/lens").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.lens>, using default equi-area fisheye!\n");
-  } else if (!p->IsString()) {
-    fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equi-area fisheye!\n");
-  } else {
-    if (*p == "linear") {
-      ctx->projectionType = ProjectionType::LINEAR;
-    } else if (*p == "fisheye") {
-      ctx->projectionType = ProjectionType::EQUI_AREA;
-    } else if (*p == "dual_fisheye_equidistant") {
-      ctx->projectionType = ProjectionType::DUAL_EQUI_DISTANT;
-    } else if (*p == "dual_fisheye_equiarea") {
-      ctx->projectionType = ProjectionType::DUAL_EQUI_AREA;
-    } else {
-      fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recgonized, using default equi-area fisheye!\n");
-    }
-  }
-}
-
-
-void ContextParser::parseRenderSettings(RenderContextPtr ctx) {
-  ctx->visibleSemiSphere = VisibleSemiSphere::UPPER;
-  ctx->intensityFactor = 1.0;
-  ctx->offsetY = 0;
-  ctx->offsetX = 0;
-  ctx->backgroundColor[0] = 0;
-  ctx->backgroundColor[1] = 0;
-  ctx->backgroundColor[2] = 0;
-  ctx->rayColor[0] = -1;
-  ctx->rayColor[1] = -1;
-  ctx->rayColor[2] = -1;
-  ctx->showHorizontal = true;
-
-  auto* p = Pointer("/render/visible_semi_sphere").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.visible_semi_sphere>, using default UPPER!\n");
-  } else if (!p->IsString()) {
-    fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> is not a string, using default UPPER!\n");
-  } else if (*p == "upper") {
-    ctx->visibleSemiSphere = VisibleSemiSphere::UPPER;
-  } else if (*p == "lower") {
-    ctx->visibleSemiSphere = VisibleSemiSphere::LOWER;
-  } else if (*p == "camera") {
-    ctx->visibleSemiSphere = VisibleSemiSphere::CAMERA;
-  } else if (*p == "full") {
-    ctx->visibleSemiSphere = VisibleSemiSphere::FULL;
-  } else {
-    fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> cannot be recgonized, using default UPPER!\n");
-  }
-
-  p = Pointer("/render/intensity_factor").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.intensity_factor>, using default 1.0!\n");
-  } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! Config <render.intensity_factor> is not a number, using default 1.0!\n");
-  } else {
-    double f = p->GetDouble();
-    f = std::max(std::min(f, 100.0), 0.01);
-    ctx->intensityFactor = f;
-  }
-
-  p = Pointer("/render/offset").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.offset>, using default [0, 0]!\n");
-  } else if (!p->IsArray()) {
-    fprintf(stderr, "\nWARNING! Config <render.offset> is not an array, using default [0, 0]!\n");
-  } else if (p->Size() != 2 || !(*p)[0].IsInt() || !(*p)[1].IsInt()) {
-    fprintf(stderr, "\nWARNING! Config <render.offset> cannot be recgonized, using default [0, 0]!\n");
-  } else {
-    int offsetX = (*p)[0].GetInt();
-    int offsetY = (*p)[1].GetInt();
-    offsetX = std::max(std::min(offsetX, static_cast<int>(ctx->imgWid / 2)),
-      -static_cast<int>(ctx->imgWid / 2));
-    offsetY = std::max(std::min(offsetY, static_cast<int>(ctx->imgHei / 2)),
-      -static_cast<int>(ctx->imgHei / 2));
-    ctx->offsetX = offsetX;
-    ctx->offsetY = offsetY;
-  }
-
-  p = Pointer("/render/background_color").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default [0,0,0]!\n");
-  } else if (!p->IsArray()) {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array, using default [0,0,0]!\n");
-  } else if (p->Size() != 3 || !(*p)[0].IsNumber()) {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recgonized, using default [0,0,0]!\n");
-  } else {
-    auto pa = p->GetArray();
-    for (int i = 0; i < 3; i++) {
-      ctx->backgroundColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
-    }
-  }
-
-  p = Pointer("/render/ray_color").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default real color!\n");
-  } else if (!p->IsArray() && !p->IsString()) {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array nor a string, using default real color!\n");
-  } else if (p->IsArray() && (p->Size() != 3 || !(*p)[0].IsNumber())) {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recgonized, using default real color!\n");
-  } else if (p->IsString() && (*p) != "real") {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recgonized, using default real color!\n");
-  } else if (p->IsArray()) {
-    auto pa = p->GetArray();
-    for (int i = 0; i < 3; i++) {
-      ctx->rayColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
-    }
-  }
-
-  p = Pointer("/render/show_horizontal").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.show_horizontal>, using default true!\n");
-  } else if (!p->IsBool()) {
-    fprintf(stderr, "\nWARNING! Config <render.show_horizontal> is not a boolean, using default true!\n");
-  } else {
-    ctx->showHorizontal = p->GetBool();
-  }
-}
-
-
-void ContextParser::parseDataSettings(RenderContextPtr ctx) {
-  ctx->dataDirectory = "./";
-  auto* p = Pointer("/data_folder").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
-  } else if (!p->IsString()) {
-    fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
-  } else {
-    ctx->dataDirectory = p->GetString();
-  }
 }
 
 }   // namespace IceHalo

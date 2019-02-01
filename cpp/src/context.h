@@ -31,64 +31,20 @@ using CrystalContextPtr = std::shared_ptr<CrystalContext>;
 using SimulationContextPtr = std::shared_ptr<SimulationContext>;
 using RenderContextPtr = std::shared_ptr<RenderContext>;
 
-class ContextParser {
-public:
-  ~ContextParser() = default;
-
-  SimulationContextPtr parseSimulationSettings();
-  RenderContextPtr parseRenderingSettings();
-
-  static std::shared_ptr<ContextParser> createFileParser(const char* filename);
-
-private:
-  explicit ContextParser(rapidjson::Document& d, const char* filename);
-
-  /* Parse simulation settings */
-  void parseBasicSettings(SimulationContextPtr ctx);
-  void parseRaySettings(SimulationContextPtr ctx);
-  void parseSunSettings(SimulationContextPtr ctx);
-  void parseDataSettings(SimulationContextPtr ctx);
-  void parseMultiScatterSettings(SimulationContextPtr ctx);
-  void parseCrystalSettings(SimulationContextPtr ctx, const rapidjson::Value& c, int ci);
-  void parseCrystalType(SimulationContextPtr ctx, const rapidjson::Value& c, int ci,
-                        float population,
-                        Math::Distribution axisDist, float axisMean, float axisStd,
-                        Math::Distribution rollDist, float rollMean, float rollStd);
-  CrystalPtr parseCustomCrystal(std::FILE* file);
-
-  /* Parse rendering settings */
-  void parseCameraSettings(RenderContextPtr ctx);
-  void parseRenderSettings(RenderContextPtr ctx);
-  void parseDataSettings(RenderContextPtr ctx);
-
-  rapidjson::Document d;
-  std::string filename;
-
-  static constexpr int kMsgBufferSize = 512;
-};
-
 
 class SimulationContext {
-friend class ContextParser;
 public:
-  SimulationContext();
-  ~SimulationContext() = default;
-
   uint64_t getTotalInitRays() const;
   int getMaxRecursionNum() const;
-
   int getMultiScatterNum() const;
   float getMultiScatterProb() const;
-
   int getCrystalNum() const;
-
   void setCurrentWavelength(float wavelength);
   float getCurrentWavelength() const;
   std::vector<float> getWavelengths() const;
 
   void fillSunDir(float* dir, uint64_t num = 1);
   void setSunPosition(float lon, float lat);
-
   void applySettings();
   void setCrystalRayNum(int scatterIdx, uint64_t totalRayNum);
 
@@ -99,16 +55,31 @@ public:
   void writeFinalDirections(const char* filename);
   void printCrystalInfo();
 
+  static std::unique_ptr<SimulationContext> createFromFile(const char* filename);
+
 private:
+  SimulationContext(const char* filename, rapidjson::Document& d);
+
+  /* Parse simulation settings */
+  void parseBasicSettings(rapidjson::Document& d);
+  void parseRaySettings(rapidjson::Document& d);
+  void parseSunSettings(rapidjson::Document& d);
+  void parseDataSettings(rapidjson::Document& d);
+  void parseMultiScatterSettings(rapidjson::Document& d);
+  void parseCrystalSettings(const rapidjson::Value& c, int ci);
+  void parseCrystalType(const rapidjson::Value& c, int ci,
+                        float population,
+                        Math::Distribution axisDist, float axisMean, float axisStd,
+                        Math::Distribution rollDist, float rollMean, float rollStd);
+  CrystalPtr parseCustomCrystal(std::FILE* file);
+
   std::vector<CrystalContextPtr> crystalCtxs;
   std::vector<std::vector<RayTracingContextPtr> > rayTracingCtxs;
 
   uint64_t totalRayNum;
   int maxRecursionNum;
-
   int multiScatterNum;
   float multiScatterProb;
-
   float currentWavelength;
   std::vector<float> wavelengths;
 
@@ -118,6 +89,7 @@ private:
   std::mt19937 generator;
   std::uniform_real_distribution<float> uniformDistribution;
 
+  std::string configFileName;
   std::string dataDirectory;
 };
 
@@ -126,7 +98,6 @@ class CrystalContext {
 friend class SimulationContext;
 public:
   CrystalContext() = default;
-  ~CrystalContext() = default;
 
   void setCrystal(const CrystalPtr& g, float populationRatio,
                   Math::Distribution axisDist, float axisMean, float axisStd,
@@ -146,14 +117,15 @@ class RayTracingContext {
 friend class SimulationContext;
 friend class Optics;
 public:
-  explicit RayTracingContext(std::shared_ptr<SimulationContext> ctx);
+  explicit RayTracingContext(int maxRecursion);
   ~RayTracingContext();
 
   void setRayNum(int rayNum);
 
-  void initRays(CrystalContextPtr ctx, int rayNum, const float* dir, const float* w, RaySegment** prevRaySeg = nullptr);
+  void initRays(const CrystalContextPtr& ctx, int rayNum, const float* dir, const float* w,
+                RaySegment** prevRaySeg = nullptr);
   void commitHitResult();
-  void commitPropagateResult(CrystalContextPtr ctx);
+  void commitPropagateResult(const CrystalContextPtr& ctx);
   bool isFinished();
 
   size_t copyFinishedRaySegments(RaySegment** segs, float* dir, float prob = 1.0f);
@@ -170,8 +142,7 @@ private:
   void copyFinishedRaySegmentsRange(RaySegment** segs, float* dir, float prob,
                                     std::atomic<std::uint64_t>& k, int startIdx, int endIdx);
 
-  std::shared_ptr<SimulationContext> simCtx;
-
+  int maxRecursion;
   int initRayNum;
   int currentRayNum;
   int activeRaySegNum;
@@ -197,9 +168,7 @@ private:
 
 
 class RenderContext {
-friend class ContextParser;
 public:
-  RenderContext();
   ~RenderContext();
 
   void loadData();
@@ -210,7 +179,16 @@ public:
 
   void renderToRgb(uint8_t* rgbData);
 
+  static std::unique_ptr<RenderContext> createFromFile(const char* filename);
+
 private:
+  explicit RenderContext(rapidjson::Document& d);
+
+  /* Parse rendering settings */
+  void parseCameraSettings(rapidjson::Document& d);
+  void parseRenderSettings(rapidjson::Document& d);
+  void parseDataSettings(rapidjson::Document& d);
+
   int loadDataFromFile(File& file);
   void copySpectrumData(float* wavelengthData, float* spectrumData) const;
 
@@ -238,7 +216,7 @@ private:
   ProjectionType projectionType;
 };
 
-}   // namespace IceHalo
+}  // namespace IceHalo
 
 
 #endif  // SRC_CONTEXT_H_

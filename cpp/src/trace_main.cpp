@@ -12,9 +12,7 @@ int main(int argc, char* argv[]) {
   }
 
   auto start = std::chrono::system_clock::now();
-
-  auto parser = ContextParser::createFileParser(argv[1]);
-  auto context = parser->parseSimulationSettings();
+  auto context = SimulationContext::createFromFile(argv[1]);
   context->applySettings();
 
   auto t = std::chrono::system_clock::now();
