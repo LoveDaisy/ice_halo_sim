@@ -113,7 +113,6 @@ void rotateZBack(const float* lon_lat_roll, float* vec, uint64_t dataNum) {
 
   DummyMatrix matR(ax, 3, 3);
 
-  // float res[3] = { 0.0f };
   auto* res = new float[dataNum * 3];
 
   DummyMatrix resVec(res, dataNum, 3);

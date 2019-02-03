@@ -56,11 +56,22 @@ private:
                         const CrystalContextPtr& cryCtx);
 
   static void hitSurfaceRange(float n, const RayTracingContextPtr& rayCtx, int startIdx, int endIdx);
-  static void propagateRange(const RayTracingContextPtr& rayCtx,
-                             int faceNum, float* faces, int startIdx, int endIdx);
+
   static float getReflectRatio(float cos_angle, float rr);
-  static void intersectLineTriangle(const float* pt, const float* dir, const float* face,
-                                    float* p, float* t, float* alpha, float* beta);
+
+  /*! \brief Intersect a line with many faces and find the nearest intersection point.
+   *
+   * \param pt a point on the line, 3 floats
+   * \param dir the direction of the line, 3 floats
+   * \param faceBases the face data, 6 floats for one face, represents for 2 base vector
+   * \param facePoints the face data, 9 floats for one face, represents for 3 vertexes
+   * \param faceNum the face number
+   * \param p output argument, the intersection point
+   * \param idx output argument, the face index of the intersection point
+   */
+  static void intersectLineWithTriangles(const float* pt, const float* dir,
+                                         const float* faceBases, const float* facePoints, int faceNum,
+                                         float* p, int* idx);
 };
 
 

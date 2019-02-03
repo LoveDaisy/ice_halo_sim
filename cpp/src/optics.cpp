@@ -113,48 +113,32 @@ void Optics::propagate(const RayTracingContextPtr& rayCtx,
                        const CrystalContextPtr& cryCtx) {
   auto faceNum = cryCtx->getCrystal()->faceNum();
   auto* faces = new float[faceNum * 9];
+  auto* faceBases = new float[faceNum * 6];
   cryCtx->getCrystal()->copyFaceData(faces);
+  for (int i = 0; i < faceNum; i++) {
+    Math::vec3FromTo(faces + i * 9 + 0, faces + i * 9 + 3, faceBases + i * 6 + 0);
+    Math::vec3FromTo(faces + i * 9 + 0, faces + i * 9 + 6, faceBases + i * 6 + 3);
+  }
+  for (decltype(rayCtx->currentRayNum) i = 0; i < rayCtx->currentRayNum; i++) {
+    rayCtx->faceId2[i] = -1;
+  }
 
   Pool* pool = Pool::getInstance();
   int step = rayCtx->currentRayNum / 80;
   for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
     int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
     pool->addJob([=, &rayCtx]{
-      propagateRange(rayCtx, faceNum, faces, startIdx, endIdx);
+      for (int i = startIdx; i < endIdx; i++) {
+        intersectLineWithTriangles(rayCtx->rayPts + i * 3, rayCtx->rayDir + i * 3,
+                                   faceBases, faces, faceNum,
+                                   rayCtx->rayPts2 + i * 3, rayCtx->faceId2 + i);
+      }
     });
   }
   pool->waitFinish();
 
   delete[] faces;
-}
-
-
-void Optics::propagateRange(const RayTracingContextPtr& rayCtx, int faceNum, float* faces, int startIdx, int endIdx) {
-  for (int i = startIdx; i < endIdx; i++) {
-    const float* tmp_pt = rayCtx->rayPts + i*3;
-    const float* tmp_dir = rayCtx->rayDir + i*3;
-
-    float min_t = std::numeric_limits<float>::max();
-
-    int currFaceId = rayCtx->faceId[i];
-    rayCtx->faceId2[i] = -1;
-    for (int j = 0; j < faceNum; j++) {
-      if (j == currFaceId) {
-        continue;
-      }
-      const float* tmp_face = faces + j*9;
-
-      float p[3];
-      float t = -1, alpha = -1, beta = -1;
-
-      intersectLineTriangle(tmp_pt, tmp_dir, tmp_face, &p[0], &t, &alpha, &beta);
-      if (t > Math::kFloatEps && t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
-        min_t = t;
-        std::memcpy(rayCtx->rayPts2 + i*3, p, sizeof(float) * 3);
-        rayCtx->faceId2[i] = j;
-      }
-    }
-  }
+  delete[] faceBases;
 }
 
 
@@ -242,51 +226,63 @@ float Optics::getReflectRatio(float cos_angle, float rr) {
   return (Rs + Rp) / 2;
 }
 
-void Optics::intersectLineTriangle(const float* pt, const float* dir, const float* face,
-                                   float* p, float* t, float* alpha, float* beta) {
-  const float* face_point = face;
-  float face_base[6];
-  Math::vec3FromTo(&face[0], &face[3], &face_base[0]);
-  Math::vec3FromTo(&face[0], &face[6], &face_base[3]);
 
-  float c = dir[0]*face_base[1]*face_base[5] + dir[1]*face_base[2]*face_base[3] +
-    dir[2]*face_base[0]*face_base[4] - dir[0]*face_base[2]*face_base[4] -
-    dir[1]*face_base[0]*face_base[5] - dir[2]*face_base[1]*face_base[3];
-  if (Math::floatEqual(c, 0)) {
-    *t = -1;
-    return;
+void Optics::intersectLineWithTriangles(const float* pt, const float* dir,
+                                        const float* faceBases, const float* facePoints, int faceNum,
+                                        float* p, int* idx) {
+  float min_t = std::numeric_limits<float>::max();
+
+  for (int i = 0; i < faceNum; i++) {
+    const float* face_point = facePoints + i * 9;
+    const float* face_base = faceBases + i * 6;
+
+    float c = dir[0]*face_base[1]*face_base[5] + dir[1]*face_base[2]*face_base[3] +
+              dir[2]*face_base[0]*face_base[4] - dir[0]*face_base[2]*face_base[4] -
+              dir[1]*face_base[0]*face_base[5] - dir[2]*face_base[1]*face_base[3];
+    if (Math::floatEqual(c, 0)) {
+      continue;
+    }
+
+
+    float a = face_base[0]*face_base[4]*face_point[2] + face_base[1]*face_base[5]*face_point[0] +
+              face_base[2]*face_base[3]*face_point[1] - face_base[2]*face_base[4]*face_point[0] -
+              face_base[1]*face_base[3]*face_point[2] - face_base[0]*face_base[5]*face_point[1];
+    float b = pt[0]*face_base[1]*face_base[5] + pt[1]*face_base[2]*face_base[3] +
+              pt[2]*face_base[0]*face_base[4] - pt[0]*face_base[2]*face_base[4] -
+              pt[1]*face_base[0]*face_base[5] - pt[2]*face_base[1]*face_base[3];
+    float t = (a - b) / c;
+    if (t <= Math::kFloatEps) {
+      continue;
+    }
+
+    a = dir[0]*pt[1]*face_base[5] + dir[1]*pt[2]*face_base[3] +
+        dir[2]*pt[0]*face_base[4] - dir[0]*pt[2]*face_base[4] -
+        dir[1]*pt[0]*face_base[5] - dir[2]*pt[1]*face_base[3];
+    b = dir[0]*face_base[4]*face_point[2] + dir[1]*face_base[5]*face_point[0] +
+        dir[2]*face_base[3]*face_point[1] - dir[0]*face_base[5]*face_point[1] -
+        dir[1]*face_base[3]*face_point[2] - dir[2]*face_base[4]*face_point[0];
+    float alpha = (a + b) / c;
+    if (alpha < 0 || alpha > 1) {
+      continue;
+    }
+
+    a = dir[0]*pt[1]*face_base[2] + dir[1]*pt[2]*face_base[0] +
+        dir[2]*pt[0]*face_base[1] - dir[0]*pt[2]*face_base[1] -
+        dir[1]*pt[0]*face_base[2] - dir[2]*pt[1]*face_base[0];
+    b = dir[0]*face_base[1]*face_point[2] + dir[1]*face_base[2]*face_point[0] +
+        dir[2]*face_base[0]*face_point[1] - dir[0]*face_base[2]*face_point[1] -
+        dir[1]*face_base[0]*face_point[2] - dir[2]*face_base[1]*face_point[0];
+    float beta = -(a + b) / c;
+
+    if (t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
+      min_t = t;
+      p[0] = pt[0] + t * dir[0];
+      p[1] = pt[1] + t * dir[1];
+      p[2] = pt[2] + t * dir[2];
+      *idx = i;
+    }
   }
 
-  float a = face_base[0]*face_base[4]*face_point[2] + face_base[1]*face_base[5]*face_point[0] +
-    face_base[2]*face_base[3]*face_point[1] - face_base[2]*face_base[4]*face_point[0] -
-    face_base[1]*face_base[3]*face_point[2] - face_base[0]*face_base[5]*face_point[1];
-  float b = pt[0]*face_base[1]*face_base[5] + pt[1]*face_base[2]*face_base[3] +
-    pt[2]*face_base[0]*face_base[4] - pt[0]*face_base[2]*face_base[4] -
-    pt[1]*face_base[0]*face_base[5] - pt[2]*face_base[1]*face_base[3];
-  *t = (a - b) / c;
-  if (*t < 0) {
-    return;
-  }
-
-  a = dir[0]*pt[1]*face_base[5] + dir[1]*pt[2]*face_base[3] +
-    dir[2]*pt[0]*face_base[4] - dir[0]*pt[2]*face_base[4] -
-    dir[1]*pt[0]*face_base[5] - dir[2]*pt[1]*face_base[3];
-  b = dir[0]*face_base[4]*face_point[2] + dir[1]*face_base[5]*face_point[0] +
-    dir[2]*face_base[3]*face_point[1] - dir[0]*face_base[5]*face_point[1] -
-    dir[1]*face_base[3]*face_point[2] - dir[2]*face_base[4]*face_point[0];
-  *alpha = (a + b) / c;
-
-  a = dir[0]*pt[1]*face_base[2] + dir[1]*pt[2]*face_base[0] +
-    dir[2]*pt[0]*face_base[1] - dir[0]*pt[2]*face_base[1] -
-    dir[1]*pt[0]*face_base[2] - dir[2]*pt[1]*face_base[0];
-  b = dir[0]*face_base[1]*face_point[2] + dir[1]*face_base[2]*face_point[0] +
-    dir[2]*face_base[0]*face_point[1] - dir[0]*face_base[2]*face_point[1] -
-    dir[1]*face_base[0]*face_point[2] - dir[2]*face_base[1]*face_point[0];
-  *beta = -(a + b) / c;
-
-  p[0] = pt[0] + *t * dir[0];
-  p[1] = pt[1] + *t * dir[1];
-  p[2] = pt[2] + *t * dir[2];
 }
 
 
