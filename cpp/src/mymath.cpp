@@ -70,10 +70,10 @@ void rotateBase(const float* ax, float angle, float* vec) {
     ax[0] * ax[2] * (1-c) + ax[1] * s, ax[1] * ax[2] * (1-c) - ax[0] * s, c + ax[2] * ax[2] * (1-c)};
   float res[9];
 
-  DummyMatrix v(vec, 3, 3);
-  DummyMatrix R(matR, 3, 3);
+  ConstDummyMatrix v(vec, 3, 3);
+  ConstDummyMatrix R(matR, 3, 3);
   DummyMatrix vn(res, 3, 3);
-  DummyMatrix::multiply(v, R, &vn);
+  matMultiply(v, R, &vn);
 
   std::memcpy(vec, res, 9*sizeof(float));
 }
@@ -82,45 +82,56 @@ void rotateBase(const float* ax, float angle, float* vec) {
 void rotateZ(const float* lon_lat_roll, float* vec, uint64_t dataNum) {
   using std::cos;
   using std::sin;
-  float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
-     -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]),
-     cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
-  float d[3] = {cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
-  rotateBase(d, lon_lat_roll[2], ax);
+//  float ax[9] = {-sin(lon_lat_roll[0]), -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]),
+//                 cos(lon_lat_roll[0]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
+//                 0.0f, cos(lon_lat_roll[1]), sin(lon_lat_roll[1])};
+//  float d[3] = {cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
+//  rotateBase(d, lon_lat_roll[2], ax);
+  float ax[9] = {-cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+                 -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
+                 cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
+                 cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+                 -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
+                 cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
+                 cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+                 cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
+                 sin(lon_lat_roll[1])};
 
-  DummyMatrix matR(ax, 3, 3);
-  matR.transpose();
+  ConstDummyMatrix matRt(ax, 3, 3);
 
   auto* res = new float[dataNum * 3];
 
   DummyMatrix resVec(res, dataNum, 3);
-  DummyMatrix inputVec(vec, dataNum, 3);
-  DummyMatrix::multiply(inputVec, matR, &resVec);
+  ConstDummyMatrix inputVec(vec, dataNum, 3);
+  matMultiply(inputVec, matRt, &resVec);
   std::memcpy(vec, res, 3 * dataNum * sizeof(float));
 
   delete[] res;
 }
 
 
-void rotateZBack(const float* lon_lat_roll, float* vec, uint64_t dataNum) {
+void rotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t dataNum) {
   using std::cos;
   using std::sin;
-  float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
-           -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]),
-           cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
-  float d[3] = {cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
-  rotateBase(d, lon_lat_roll[2], ax);
+//  float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
+//                 -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]),
+//                 cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
+//  float d[3] = {cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
+//  rotateBase(d, lon_lat_roll[2], ax);
+  float ax[9] = {-cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+                  cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+                  cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+                  -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
+                  -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
+                  cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
+                  cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
+                  cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
+                  sin(lon_lat_roll[1])};
 
-  DummyMatrix matR(ax, 3, 3);
-
-  auto* res = new float[dataNum * 3];
-
-  DummyMatrix resVec(res, dataNum, 3);
-  DummyMatrix inputVec(vec, dataNum, 3);
-  DummyMatrix::multiply(inputVec, matR, &resVec);
-  std::memcpy(vec, res, 3 * dataNum * sizeof(float));
-
-  delete[] res;
+  ConstDummyMatrix matR(ax, 3, 3);
+  ConstDummyMatrix inputVec(input_vec, dataNum, 3);
+  DummyMatrix resVec(output_vec, dataNum, 3);
+  matMultiply(inputVec, matR, &resVec);
 }
 
 
@@ -272,7 +283,23 @@ void buildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
 DummyMatrix::DummyMatrix(float* data, uint64_t row, uint64_t col)
     : rowNum(row), colNum(col), data(data) {}
 
-int DummyMatrix::multiply(const DummyMatrix& a, const DummyMatrix& b, DummyMatrix* res) {
+void DummyMatrix::transpose() {
+  for (uint64_t r = 0; r < rowNum; r++) {
+    for (uint64_t c = r+1; c < colNum; c++) {
+      float tmp;
+      tmp = data[r * colNum + c];
+      data[r * colNum + c] = data[c * colNum +r];
+      data[c * colNum +r] = tmp;
+    }
+  }
+}
+
+
+ConstDummyMatrix::ConstDummyMatrix(const float *data, uint64_t row, uint64_t col)
+    : DummyMatrix(nullptr, row, col), data(data) {}
+
+
+int matMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* res) {
   if (a.colNum != b.rowNum) {
     return -1;
   }
@@ -287,17 +314,6 @@ int DummyMatrix::multiply(const DummyMatrix& a, const DummyMatrix& b, DummyMatri
     }
   }
   return 0;
-}
-
-void DummyMatrix::transpose() {
-  for (uint64_t r = 0; r < rowNum; r++) {
-    for (uint64_t c = r+1; c < colNum; c++) {
-      float tmp;
-      tmp = data[r * colNum + c];
-      data[r * colNum + c] = data[c * colNum +r];
-      data[c * colNum +r] = tmp;
-    }
-  }
 }
 
 

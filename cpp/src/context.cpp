@@ -208,8 +208,8 @@ void RayTracingContext::copyFinishedRaySegmentsRange(RaySegment** segs, float* d
       if (p->w > kScatMinW && p->faceId >= 0 && p->isFinished && uniformDist(randomEngine) < prob) {
         auto tmpk = k++;
         float* finalDir = dir + tmpk * 3;
-        std::memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
-        Math::rotateZBack(mainAxRot + rayIdx * 3, finalDir);
+//        std::memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
+        Math::rotateZBack(mainAxRot + rayIdx * 3, p->dir.val(), finalDir);
         segs[tmpk] = p;
       }
     }
@@ -809,6 +809,8 @@ void SimulationContext::fillSunDir(float* dir, uint64_t num) {
   float sunLat = std::asin(sunDir[2] / Math::norm3(sunDir));
   float sunRot[3] = { sunLon, sunLat, 0 };
 
+  auto* tmp_dir = new float[num * 3];
+
   float dz = 1.0f - std::cos(sunDiameter / 360 * Math::kPi);
   for (decltype(num) i = 0; i < num; i++) {
     float z = 1.0f - uniformDistribution(generator) * dz;
@@ -817,11 +819,11 @@ void SimulationContext::fillSunDir(float* dir, uint64_t num) {
     float x = std::cos(q) * r;
     float y = std::sin(q) * r;
 
-    dir[i*3 + 0] = x;
-    dir[i*3 + 1] = y;
-    dir[i*3 + 2] = z;
+    tmp_dir[i * 3 + 0] = x;
+    tmp_dir[i * 3 + 1] = y;
+    tmp_dir[i * 3 + 2] = z;
   }
-  Math::rotateZBack(sunRot, dir, num);
+  Math::rotateZBack(sunRot, tmp_dir, dir, num);
 }
 
 
@@ -884,6 +886,7 @@ void SimulationContext::writeFinalDirections(const char* filename) {
 
   file.write(currentWavelength);
 
+  float finalDir[3];
   std::vector<RaySegment*> v;
   for (const auto& rcs : rayTracingCtxs) {
     for (const auto& rc : rcs) {
@@ -904,9 +907,7 @@ void SimulationContext::writeFinalDirections(const char* filename) {
           }
           if (!p->nextReflect && !p->nextRefract &&
                 p->isValidEnd() && Math::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
-            float finalDir[3];
-            std::memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
-            Math::rotateZBack(rc->mainAxRot + currentIdx * 3, finalDir);
+            Math::rotateZBack(rc->mainAxRot + currentIdx * 3, p->dir.val(), finalDir);
             file.write(finalDir, 3);
             file.write(p->w);
           }

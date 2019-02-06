@@ -10,12 +10,19 @@ namespace IceHalo {
 
 namespace Math {
 
+class DummyMatrix;
+class ConstDummyMatrix;
+
 constexpr float kPi = 3.14159265359f;
 constexpr float kSqrt3 = 1.73205080757f;
 constexpr float kFloatEps = 1e-6;
 
 
+int matMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
+
 class DummyMatrix {
+public:
+friend int matMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
 public:
   DummyMatrix(float* data, uint64_t row, uint64_t col);
   ~DummyMatrix() = default;
@@ -25,10 +32,20 @@ public:
 
   void transpose();
 
-  static int multiply(const DummyMatrix& a, const DummyMatrix& b, DummyMatrix* c);
-
 private:
   float* data;
+};
+
+
+class ConstDummyMatrix : public DummyMatrix {
+public:
+friend int matMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
+public:
+  ConstDummyMatrix(const float* data, uint64_t row, uint64_t col);
+  ~ConstDummyMatrix() = default;
+
+private:
+  const float* data;
 };
 
 
@@ -148,7 +165,7 @@ void vec3FromTo(const float* vec1, const float* vec2, float* vec);
 
 void rotateBase(const float* ax, float angle, float* vec);
 void rotateZ(const float* lon_lat_roll, float* vec, uint64_t dataNum = 1);
-void rotateZBack(const float* lon_lat_roll, float* vec, uint64_t dataNum = 1);
+void rotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t dataNum = 1);
 
 std::vector<Vec3f> findInnerPoints(const HalfSpaceSet& hss);
 void sortAndRemoveDuplicate(std::vector<Vec3f>* pts);
