@@ -163,7 +163,6 @@ void normalize3(float* vec);
 void normalized3(const float* vec, float* vec_n);
 void vec3FromTo(const float* vec1, const float* vec2, float* vec);
 
-void rotateBase(const float* ax, float angle, float* vec);
 void rotateZ(const float* lon_lat_roll, float* vec, uint64_t dataNum = 1);
 void rotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t dataNum = 1);
 

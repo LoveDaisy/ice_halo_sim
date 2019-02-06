@@ -61,32 +61,9 @@ void vec3FromTo(const float* vec1, const float* vec2, float* vec) {
 }
 
 
-void rotateBase(const float* ax, float angle, float* vec) {
-  float c = std::cos(angle);
-  float s = std::sin(angle);
-
-  float matR[9] = {c + ax[0] * ax[0] * (1-c), ax[1] * ax[0] * (1-c) + ax[2] * s, ax[2] * ax[0] * (1-c) - ax[1] * s,
-    ax[0] * ax[1] * (1-c) - ax[2] * s, c + ax[1] * ax[1] * (1-c), ax[2] * ax[1] * (1-c) + ax[0] * s,
-    ax[0] * ax[2] * (1-c) + ax[1] * s, ax[1] * ax[2] * (1-c) - ax[0] * s, c + ax[2] * ax[2] * (1-c)};
-  float res[9];
-
-  ConstDummyMatrix v(vec, 3, 3);
-  ConstDummyMatrix R(matR, 3, 3);
-  DummyMatrix vn(res, 3, 3);
-  matMultiply(v, R, &vn);
-
-  std::memcpy(vec, res, 9*sizeof(float));
-}
-
-
 void rotateZ(const float* lon_lat_roll, float* vec, uint64_t dataNum) {
   using std::cos;
   using std::sin;
-//  float ax[9] = {-sin(lon_lat_roll[0]), -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]),
-//                 cos(lon_lat_roll[0]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
-//                 0.0f, cos(lon_lat_roll[1]), sin(lon_lat_roll[1])};
-//  float d[3] = {cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
-//  rotateBase(d, lon_lat_roll[2], ax);
   float ax[9] = {-cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
                  -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
                  cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
@@ -113,11 +90,6 @@ void rotateZ(const float* lon_lat_roll, float* vec, uint64_t dataNum) {
 void rotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t dataNum) {
   using std::cos;
   using std::sin;
-//  float ax[9] = {-sin(lon_lat_roll[0]), cos(lon_lat_roll[0]), 0.0f,
-//                 -cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]), -sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]), cos(lon_lat_roll[1]),
-//                 cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
-//  float d[3] = {cos(lon_lat_roll[1]) * cos(lon_lat_roll[0]), cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]), sin(lon_lat_roll[1])};
-//  rotateBase(d, lon_lat_roll[2], ax);
   float ax[9] = {-cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
                   cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
                   cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
