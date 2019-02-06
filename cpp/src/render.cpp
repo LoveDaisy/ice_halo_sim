@@ -19,7 +19,6 @@ void equiAreaFishEye(float* camRot,           // Camera rotation. [lon, lat, rol
   float imgR = std::max(imgWid, imgHei) / 2.0f;
   auto* dirCopy = new float[dataNumber * 3];
   float camRotCopy[3];
-  std::memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
   std::memcpy(camRotCopy, camRot, sizeof(float) * 3);
   camRotCopy[0] *= -1;
   camRotCopy[1] *= -1;
@@ -27,7 +26,7 @@ void equiAreaFishEye(float* camRot,           // Camera rotation. [lon, lat, rol
     i *= Math::kPi / 180.0f;
   }
 
-  Math::rotateZ(camRotCopy, dirCopy, dataNumber);
+  Math::rotateZ(camRotCopy, dir, dirCopy, dataNumber);
   for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
     if (std::abs(Math::norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
       imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -63,14 +62,13 @@ void dualEquiAreaFishEye(
 
   auto* dirCopy = new float[dataNumber * 3];
   float camRotCopy[3] = {90.0f, 89.999f, 0.0f};
-  std::memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
   camRotCopy[0] *= -1;
   camRotCopy[1] *= -1;
   for (float &i : camRotCopy) {
     i *= Math::kPi / 180.0f;
   }
 
-  Math::rotateZ(camRotCopy, dirCopy, dataNumber);
+  Math::rotateZ(camRotCopy, dir, dirCopy, dataNumber);
   for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
     if (std::abs(Math::norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
       imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -104,14 +102,13 @@ void dualEquiDistantFishEye(
 
   auto* dirCopy = new float[dataNumber * 3];
   float camRotCopy[3] = {90.0f, 89.999f, 0.0f};
-  std::memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
   camRotCopy[0] *= -1;
   camRotCopy[1] *= -1;
   for (float &i : camRotCopy) {
     i *= Math::kPi / 180.0f;
   }
 
-  Math::rotateZ(camRotCopy, dirCopy, dataNumber);
+  Math::rotateZ(camRotCopy, dir, dirCopy, dataNumber);
   for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
     if (std::abs(Math::norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
       imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -142,7 +139,6 @@ void rectLinear(float* camRot,           // Camera rotation. [lon, lat, roll]
 [[gnu::unused]] VisibleSemiSphere visibleSemiSphere) {
   auto* dirCopy = new float[dataNumber * 3];
   float camRotCopy[3];
-  std::memcpy(dirCopy, dir, sizeof(float) * 3 * dataNumber);
   std::memcpy(camRotCopy, camRot, sizeof(float) * 3);
   camRotCopy[0] *= -1;
   camRotCopy[1] *= -1;
@@ -150,7 +146,7 @@ void rectLinear(float* camRot,           // Camera rotation. [lon, lat, roll]
     i *= Math::kPi / 180.0f;
   }
 
-  Math::rotateZ(camRotCopy, dirCopy, dataNumber);
+  Math::rotateZ(camRotCopy, dir, dirCopy, dataNumber);
   for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
     if (dirCopy[i * 3 + 2] < 0 || std::abs(Math::norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
       imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
