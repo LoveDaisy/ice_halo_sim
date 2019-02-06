@@ -236,42 +236,51 @@ void Optics::intersectLineWithTriangles(const float* pt, const float* dir,
     const float* face_point = facePoints + i * 9;
     const float* face_base = faceBases + i * 6;
 
-    float c = dir[0]*face_base[1]*face_base[5] + dir[1]*face_base[2]*face_base[3] +
-              dir[2]*face_base[0]*face_base[4] - dir[0]*face_base[2]*face_base[4] -
-              dir[1]*face_base[0]*face_base[5] - dir[2]*face_base[1]*face_base[3];
+    float ff04 = face_base[0] * face_base[4];
+    float ff05 = face_base[0] * face_base[5];
+    float ff13 = face_base[1] * face_base[3];
+    float ff15 = face_base[1] * face_base[5];
+    float ff23 = face_base[2] * face_base[3];
+    float ff24 = face_base[2] * face_base[4];
+
+    float c = dir[0] * ff15 + dir[1] * ff23 + dir[2] * ff04 -
+              dir[0] * ff24 - dir[1] * ff05 - dir[2] * ff13;
     if (Math::floatEqual(c, 0)) {
       continue;
     }
 
 
-    float a = face_base[0]*face_base[4]*face_point[2] + face_base[1]*face_base[5]*face_point[0] +
-              face_base[2]*face_base[3]*face_point[1] - face_base[2]*face_base[4]*face_point[0] -
-              face_base[1]*face_base[3]*face_point[2] - face_base[0]*face_base[5]*face_point[1];
-    float b = pt[0]*face_base[1]*face_base[5] + pt[1]*face_base[2]*face_base[3] +
-              pt[2]*face_base[0]*face_base[4] - pt[0]*face_base[2]*face_base[4] -
-              pt[1]*face_base[0]*face_base[5] - pt[2]*face_base[1]*face_base[3];
+    float a = ff15 * face_point[0] + ff23 * face_point[1] + ff04 * face_point[2] -
+              ff24 * face_point[0] - ff05 * face_point[1] - ff13 * face_point[2];
+    float b = pt[0] * ff15 + pt[1] * ff23 + pt[2] * ff04 -
+              pt[0] * ff24 - pt[1] * ff05 - pt[2] * ff13;
     float t = (a - b) / c;
     if (t <= Math::kFloatEps) {
       continue;
     }
 
-    a = dir[0]*pt[1]*face_base[5] + dir[1]*pt[2]*face_base[3] +
-        dir[2]*pt[0]*face_base[4] - dir[0]*pt[2]*face_base[4] -
-        dir[1]*pt[0]*face_base[5] - dir[2]*pt[1]*face_base[3];
-    b = dir[0]*face_base[4]*face_point[2] + dir[1]*face_base[5]*face_point[0] +
-        dir[2]*face_base[3]*face_point[1] - dir[0]*face_base[5]*face_point[1] -
-        dir[1]*face_base[3]*face_point[2] - dir[2]*face_base[4]*face_point[0];
+    float dp01 = dir[0] * pt[1];
+    float dp02 = dir[0] * pt[2];
+    float dp10 = dir[1] * pt[0];
+    float dp12 = dir[1] * pt[2];
+    float dp20 = dir[2] * pt[0];
+    float dp21 = dir[2] * pt[1];
+
+    a = dp12 * face_base[3] + dp20 * face_base[4] + dp01 * face_base[5] -
+        dp21 * face_base[3] - dp02 * face_base[4] - dp10 * face_base[5];
+    b = dir[0] * face_base[4] * face_point[2] + dir[1] * face_base[5] * face_point[0] +
+        dir[2] * face_base[3] * face_point[1] - dir[0] * face_base[5] * face_point[1] -
+        dir[1] * face_base[3] * face_point[2] - dir[2] * face_base[4] * face_point[0];
     float alpha = (a + b) / c;
     if (alpha < 0 || alpha > 1) {
       continue;
     }
 
-    a = dir[0]*pt[1]*face_base[2] + dir[1]*pt[2]*face_base[0] +
-        dir[2]*pt[0]*face_base[1] - dir[0]*pt[2]*face_base[1] -
-        dir[1]*pt[0]*face_base[2] - dir[2]*pt[1]*face_base[0];
-    b = dir[0]*face_base[1]*face_point[2] + dir[1]*face_base[2]*face_point[0] +
-        dir[2]*face_base[0]*face_point[1] - dir[0]*face_base[2]*face_point[1] -
-        dir[1]*face_base[0]*face_point[2] - dir[2]*face_base[1]*face_point[0];
+    a = dp12 * face_base[0] + dp20 * face_base[1] + dp01 * face_base[2] -
+        dp21 * face_base[0] - dp02 * face_base[1] - dp10 * face_base[2];
+    b = dir[0] * face_base[1] * face_point[2] + dir[1] * face_base[2] * face_point[0] +
+        dir[2] * face_base[0] * face_point[1] - dir[0] * face_base[2] * face_point[1] -
+        dir[1] * face_base[0] * face_point[2] - dir[2] * face_base[1] * face_point[0];
     float beta = -(a + b) / c;
 
     if (t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
