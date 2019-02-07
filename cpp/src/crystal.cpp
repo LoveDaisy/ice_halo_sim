@@ -1,6 +1,7 @@
 #include "crystal.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace IceHalo {
 

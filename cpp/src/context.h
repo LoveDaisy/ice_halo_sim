@@ -14,6 +14,7 @@
 #include <string>
 #include <functional>
 #include <memory>
+#include <atomic>
 
 
 namespace IceHalo {

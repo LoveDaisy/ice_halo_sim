@@ -10,7 +10,7 @@ build() {
   rm -rf CMakeCache.txt
   rm -rf Makefile cmake_install.cmake
   cmake "${PROJ_DIR}" -DDEBUG=$DEBUG_FLAG -DBUILD_TEST=$BUILD_TEST -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR"
-  make -j8
+  make -j1
   make install
 }
 
@@ -44,13 +44,11 @@ while [ ! $# -eq 0 ]; do
   case $1 in
     debug)
       DEBUG_FLAG=ON
-      show_config
       build
       shift
     ;;
     release)
       DEBUG_FLAG=OFF
-      show_config
       build
       shift
     ;;
