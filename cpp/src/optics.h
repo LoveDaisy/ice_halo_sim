@@ -15,7 +15,6 @@ namespace IceHalo {
 class RaySegment {
 public:
   RaySegment();
-  RaySegment(const float* pt, const float* dir, float w, int faceId = -1);
   ~RaySegment() = default;
 
   bool isValidEnd();
@@ -36,8 +35,8 @@ public:
 
 class Ray {
 public:
-  Ray(const float* pt, const float* dir, float w, int faceId = -1);
   explicit Ray(RaySegment* seg);
+  Ray(const float* pt, const float* dir, float w, int faceId = -1);
   ~Ray();
 
   size_t totalNum();
@@ -111,9 +110,8 @@ public:
 private:
   RaySegmentPool();
 
-  static const uint32_t chunkSize = 1024 * 128;
+  static constexpr uint32_t kChunkSize = 1024 * 128;
 
-  // std::mutex idMutex;
   std::vector<RaySegment*> segments;
   std::atomic<uint64_t> nextUnusedId;
   std::atomic<uint64_t> currentChunkId;

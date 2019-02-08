@@ -15,13 +15,11 @@ RaySegment::RaySegment()
       pt(0, 0, 0), dir(0, 0, 0), w(0),
       faceId(-1), isFinished(false) {}
 
-RaySegment::RaySegment(const float* pt, const float* dir, float w, int faceId)
-    : nextReflect(nullptr), nextRefract(nullptr),
-      prev(nullptr), pt(pt), dir(dir), w(w), faceId(faceId), isFinished(false) {}
 
 bool RaySegment::isValidEnd() {
   return w > 0 && faceId >= 0 && isFinished;
 }
+
 
 void RaySegment::reset() {
   nextReflect = nullptr;
@@ -321,7 +319,7 @@ float IceRefractiveIndex::n(float waveLength) {
 }
 
 RaySegmentPool::RaySegmentPool() {
-  auto* raySegPool = new RaySegment[chunkSize];
+  auto* raySegPool = new RaySegment[kChunkSize];
   segments.push_back(raySegPool);
   nextUnusedId = 0;
   currentChunkId = 0;
@@ -343,10 +341,10 @@ RaySegment* RaySegmentPool::getRaySegment(const float* pt, const float* dir, flo
   RaySegment* seg;
   RaySegment* currentChunk;
 
-  if (nextUnusedId >= chunkSize) {
+  if (nextUnusedId >= kChunkSize) {
     auto segSize = segments.size();
     if (currentChunkId >= segSize - 1) {
-      auto* raySegPool = new RaySegment[chunkSize];
+      auto* raySegPool = new RaySegment[kChunkSize];
       segments.push_back(raySegPool);
       currentChunkId.store(segSize);
     } else {

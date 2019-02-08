@@ -89,23 +89,23 @@ void RayTracingContext::initRays(const CrystalContextPtr& ctx,
   int step = initRayNum / 80;
   for (int startIdx = 0; startIdx < initRayNum; startIdx += step) {
     int endIdx = std::min(startIdx + step, initRayNum);
-    pool->addJob([ctx, dir, faces, startIdx, endIdx, this](){
+    pool->addJob([=]{
       int faceNum = ctx->getCrystal()->faceNum();
       for (int i = startIdx; i < endIdx; i++) {
-        ctx->fillDir(dir+i*3, rayDir+i*3, mainAxRot+i*3);
+        ctx->fillDir(dir + i * 3, rayDir + i * 3, mainAxRot + i * 3);
 
-        int idx = chooseFace(faces, faceNum, rayDir+i*3);
+        int idx = chooseFace(faces, faceNum, rayDir + i * 3);
         faceId[i] = idx;
 
-        fillPts(faces, idx, rayPts+i*3);
-        ctx->getCrystal()->copyNormalData(idx, faceNorm+i*3);
+        fillPts(faces, idx, rayPts + i * 3);
+        ctx->getCrystal()->copyNormalData(idx, faceNorm + i * 3);
       }
     });
   }
   pool->waitFinish();
 
   for (int i = 0; i < initRayNum; i++) {
-    auto* r = new Ray(rayPts+i*3, rayDir+i*3, w[i], faceId[i]);
+    auto* r = new Ray(rayPts + i * 3, rayDir + i * 3, w[i], faceId[i]);
     if (prevRaySeg && prevRaySeg[i]) {
       prevRaySeg[i]->nextRefract = r->firstRaySeg;
     }
@@ -122,13 +122,13 @@ void RayTracingContext::commitHitResult() {
   RaySegmentPool& raySegPool = RaySegmentPool::getInstance();
   for (int i = 0; i < currentRayNum; i++) {
     RaySegment* lastSeg = activeRaySeg[i];
-    RaySegment* seg = raySegPool.getRaySegment(rayPts + i*3, rayDir2 + i*3,
+    RaySegment* seg = raySegPool.getRaySegment(rayPts + i * 3, rayDir2 + i * 3,
                                                lastSeg->w * rayW2[i], faceId[i]);
     lastSeg->nextReflect = seg;
     seg->prev = lastSeg;
     activeRaySeg[i] = seg;
 
-    seg = raySegPool.getRaySegment(rayPts + i*3, rayDir3 + i*3,
+    seg = raySegPool.getRaySegment(rayPts + i * 3, rayDir3 + i * 3,
                                    lastSeg->w * (1.0f - rayW2[i]), faceId[i]);
     lastSeg->nextRefract = seg;
     seg->prev = lastSeg;
@@ -136,8 +136,8 @@ void RayTracingContext::commitHitResult() {
   }
 
   std::memcpy(rayDir, rayDir2, currentRayNum * 3 * sizeof(float));
-  std::memcpy(rayDir + currentRayNum*3, rayDir3, currentRayNum * 3 * sizeof(float));
-  std::memcpy(rayPts + currentRayNum*3, rayPts, currentRayNum * 3 * sizeof(float));
+  std::memcpy(rayDir + currentRayNum * 3, rayDir3, currentRayNum * 3 * sizeof(float));
+  std::memcpy(rayPts + currentRayNum * 3, rayPts, currentRayNum * 3 * sizeof(float));
   std::memcpy(faceId + currentRayNum, faceId, currentRayNum * sizeof(int));
 
   currentRayNum *= 2;
