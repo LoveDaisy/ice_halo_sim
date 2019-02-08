@@ -169,9 +169,9 @@ CrystalPtr Crystal::createHexPyramid(float h1, float h2, float h3) {
 
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
-        cos(2 * kPi * i / 6) * (1 - h1),
-        sin(2 * kPi * i / 6) * (1 - h1),
-        h2 + h1 * H);
+      cos(2 * kPi * i / 6) * (1 - h1),
+      sin(2 * kPi * i / 6) * (1 - h1),
+      h2 + h1 * H);
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
@@ -187,9 +187,9 @@ CrystalPtr Crystal::createHexPyramid(float h1, float h2, float h3) {
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
-        cos(2 * kPi * i / 6) * (1 - h3),
-        sin(2 * kPi * i / 6) * (1 - h3),
-        -h2 - h3 * H);
+      cos(2 * kPi * i / 6) * (1 - h3),
+      sin(2 * kPi * i / 6) * (1 - h3),
+      -h2 - h3 * H);
   }
 
   faces.emplace_back(0, 1, 2);
@@ -261,9 +261,9 @@ CrystalPtr Crystal::createCubicPyramid(float ratio1, float ratio2) {
 
   for (int i = 0; i < 4; i++) {
     vertexes.emplace_back(
-        cos(kPi / 4 + kPi / 2 * i) * (1 - ratio1),
-        sin(kPi / 4 + kPi / 2 * i) * (1 - ratio1),
-        ratio1);
+      cos(kPi / 4 + kPi / 2 * i) * (1 - ratio1),
+      sin(kPi / 4 + kPi / 2 * i) * (1 - ratio1),
+      ratio1);
   }
   for (int i = 0; i < 4; i++) {
     vertexes.emplace_back(
@@ -273,9 +273,9 @@ CrystalPtr Crystal::createCubicPyramid(float ratio1, float ratio2) {
   }
   for (int i = 0; i < 4; i++) {
     vertexes.emplace_back(
-        cos(kPi / 4 + kPi / 2 * i) * (1 - ratio2),
-        sin(kPi / 4 + kPi / 2 * i) * (1 - ratio2),
-        -ratio2);
+      cos(kPi / 4 + kPi / 2 * i) * (1 - ratio2),
+      sin(kPi / 4 + kPi / 2 * i) * (1 - ratio2),
+      -ratio2);
   }
 
   faces.emplace_back(0, 1, 2);
@@ -311,12 +311,15 @@ CrystalPtr Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h
 
   std::vector<Vec3f> vertexes;
   std::vector<TriangleIdx> faces;
+  std::vector<int> faceId;
   vertexes.reserve(24);
+  faces.reserve(44);
+  faceId.reserve(44);
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
-        cos(2 * kPi * i / 6) * (1 - h1),
-        sin(2 * kPi * i / 6) * (1 - h1),
-        h2 + h1 * H);
+      cos(2 * kPi * i / 6) * (1 - h1),
+      sin(2 * kPi * i / 6) * (1 - h1),
+      h2 + h1 * H);
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
@@ -332,9 +335,9 @@ CrystalPtr Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
-        cos(2 * kPi * i / 6) * (1 - h3),
-        sin(2 * kPi * i / 6) * (1 - h3),
-        -h2 - h3 * H);
+      cos(2 * kPi * i / 6) * (1 - h3),
+      sin(2 * kPi * i / 6) * (1 - h3),
+      -h2 - h3 * H);
   }
 
   faces.emplace_back(0, 1, 2);
@@ -358,11 +361,31 @@ CrystalPtr Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h
   faces.emplace_back(21, 23, 22);
   faces.emplace_back(21, 18, 23);
 
-  return std::make_shared<Crystal>(vertexes, faces);
+  for (int i = 0; i < 4; i++) {
+    faceId.push_back(1);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceId.push_back(13 + i);
+    faceId.push_back(13 + i);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceId.push_back(3 + i);
+    faceId.push_back(3 + i);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceId.push_back(23 + i);
+    faceId.push_back(23 + i);
+  }
+  for (int i = 0; i < 4; i++) {
+    faceId.push_back(2);
+  }
+
+  return std::make_shared<Crystal>(vertexes, faces, faceId);
 }
 
+
 CrystalPtr Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
-                                   float h1, float h2, float h3) {
+                                     float h1, float h2, float h3) {
   using Math::Vec3f;
   using Math::TriangleIdx;
   using Math::kPi;
@@ -374,12 +397,16 @@ CrystalPtr Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1
 
   std::vector<Vec3f> vertexes;
   std::vector<TriangleIdx> faces;
+  std::vector<int> faceId;
   vertexes.reserve(24);
+  faces.reserve(44);
+  faceId.reserve(44);
+
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
-        cos(2 * kPi * i / 6) * (1 - h1),
-        sin(2 * kPi * i / 6) * (1 - h1),
-        h2 + h1 * H1);
+      cos(2 * kPi * i / 6) * (1 - h1),
+      sin(2 * kPi * i / 6) * (1 - h1),
+      h2 + h1 * H1);
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
@@ -421,11 +448,30 @@ CrystalPtr Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1
   faces.emplace_back(21, 23, 22);
   faces.emplace_back(21, 18, 23);
 
-  return std::make_shared<Crystal>(vertexes, faces);
+  for (int i = 0; i < 4; i++) {
+    faceId.push_back(1);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceId.push_back(13 + i);
+    faceId.push_back(13 + i);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceId.push_back(3 + i);
+    faceId.push_back(3 + i);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceId.push_back(23 + i);
+    faceId.push_back(23 + i);
+  }
+  for (int i = 0; i < 4; i++) {
+    faceId.push_back(2);
+  }
+
+  return std::make_shared<Crystal>(vertexes, faces, faceId);
 }
 
 CrystalPtr Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
-                                            float h1, float h2, float h3) {
+                                              float h1, float h2, float h3) {
   using Math::Vec3f;
   using Math::TriangleIdx;
   using Math::kPi;

@@ -10,7 +10,20 @@ namespace IceHalo {
 
 class Crystal {
 public:
+  /*! @brief Constructor, given vertexes and faces
+   *
+   * @param vertexes
+   * @param faces
+   */
   Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces);
+
+  /*! @brief Constructor, given vertexes, faces and faceId
+   *
+   * @param vertexes
+   * @param faces
+   * @param faceId the normalized face ID, or face number. see [Face numbers](https://www.atoptics.co.uk/halo/fnum.htm)
+   *        and [Pyramidal Crystal Face Numbers](https://www.atoptics.co.uk/halo/fnumpyr.htm)
+   */
   Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces,
           const std::vector<int>& faceId);
 
