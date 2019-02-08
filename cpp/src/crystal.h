@@ -30,12 +30,44 @@ public:
 
   static constexpr float kC = 1.629f;
 
-  /* Regular hexagon cylinder */
+  /*! @brief Create a regular hexagon cylinder crystal
+   *
+   * @param h the height of cylinder. The diameter of basal face is 1
+   * @return a pointer to the crystal
+   */
   static std::shared_ptr<Crystal> createHexCylinder(float h);
 
-  /* Regular hexagon pyramid */
+  /*! @brief create a hexagon pyramid crystal
+   *
+   * @param h1 height of top segment. The diameter of middle segment is 1
+   * @param h2 height of middle segment.
+   * @param h3 height of bottom segment.
+   * @return a pointer to the crystal.
+   */
   static std::shared_ptr<Crystal> createHexPyramid(float h1, float h2, float h3);
+
+  /*! @brief create a hexagon pyramid crystal
+   *
+   * @param i1 Miller index 1. The shape of the pyramid segment is defined by Miller index (a,0,-a,b)
+   * @param i4 Miller index 4
+   * @param h1 height of top segment.
+   * @param h2 height of middle segment.
+   * @param h3 height of bottom segment.
+   * @return a pointer to the crystal.
+   */
   static std::shared_ptr<Crystal> createHexPyramid(int i1, int i4, float h1, float h2, float h3);
+
+  /*! @brief create a hexagon pyramid crystal
+   *
+   * @param upperIdx1 Miller index 1 for top segment.
+   * @param upperIdx4 Miller index 4 for top segment.
+   * @param lowerIdx1 Miller index 1 for bottom segment.
+   * @param lowerIdx4 Miller index 4 for bottom segment.
+   * @param h1 height of top segment.
+   * @param h2 height of middle segment.
+   * @param h3 height of bottom segment.
+   * @return a pointer to the crystal.
+   */
   static std::shared_ptr<Crystal> createHexPyramid(
     int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
 

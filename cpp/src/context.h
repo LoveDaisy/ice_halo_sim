@@ -50,12 +50,20 @@ public:
   void setCrystalRayNum(int scatterIdx, uint64_t totalRayNum);
 
   CrystalContextPtr getCrystalContext(int i);
-  RayTracingContextPtr getRayTracingContext(int scatterIndx, int crystalIdx);
+  RayTracingContextPtr getRayTracingContext(int scatterIdx, int crystalIdx);
 
-  /* For output */
+  /*! @brief write the final direction (in world coordinate frame) of all rays into file.
+   *
+   * @param filename the data file
+   */
   void writeFinalDirections(const char* filename);
   void printCrystalInfo();
 
+  /*! @brief Read a config file and create a SimulationContext
+   *
+   * @param filename the config file
+   * @return a pointer to SimulationContext
+   */
   static std::unique_ptr<SimulationContext> createFromFile(const char* filename);
 
 private:
