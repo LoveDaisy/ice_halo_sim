@@ -43,9 +43,9 @@ public:
 
   static constexpr float kC = 1.629f;
 
-  /*! @brief Create a regular hexagon cylinder crystal
+  /*! @brief Create a regular hexagon prism crystal
    *
-   * @param h the height of cylinder. The diameter of basal face is 1
+   * @param h the height of prism. The diameter of basal face is 1
    * @return a pointer to the crystal
    */
   static std::shared_ptr<Crystal> createHexCylinder(float h);
@@ -85,6 +85,17 @@ public:
     int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
 
   /* Hexagon stacked pyramid */
+  /*! @brief Create a hexagon half-stacked pyramid crystal
+   *
+   * @param upperIdx1 Miller index 1 for upper segment.
+   * @param upperIdx4 Miller index 4 for upper segment.
+   * @param lowerIdx1 Miller index 1 for lower segment.
+   * @param lowerIdx4 Miller index 4 for lower segment.
+   * @param h1 height for upper segment. The diameter of basal is 1.
+   * @param h2 height for lower segment.
+   * @param h3 height for prism segment.
+   * @return a pointer to the crystal.
+   */
   static std::shared_ptr<Crystal> createHexPyramidStackHalf(
     int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
 
@@ -98,6 +109,19 @@ public:
   static std::shared_ptr<Crystal> createIrregularHexCylinder(float* dist, float h);
 
   /* Irregular hexagon pyramid */
+  /*! @brief Create a irregular hexagon pyramid crystal
+   *
+   * @param dist defines the distance from origin of each face. Must contains 6 numbers. The distance of a
+   *             normal hexagon is defined as 1.
+   * @param idx defines the Miller index of upper and lower pyramidal segments. Must contains 4 numbers.
+   *            idx[0] and idx[1] are for upper segment. idx[2] and idx[3] are for lower segment.
+   * @param h defines the height of each segment.
+   *          h[0] and h[2] are the heights of upper and lower pyramidal segments, defined as height / H, where
+   *          H is the maximum possible height.
+   *          h[1] are the heights of middle cylindrical segment, defined as height / a, where a is the
+   *          diameter of original basal face.
+   * @return
+   */
   static std::shared_ptr<Crystal> createIrregularHexPyramid(float* dist, int* idx, float* h);
 
 protected:

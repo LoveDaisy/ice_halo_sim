@@ -483,20 +483,24 @@ CrystalPtr Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int 
 
   std::vector<Vec3f> vertexes;
   std::vector<TriangleIdx> faces;
+  std::vector<int> faceIds;
   vertexes.reserve(24);
+  faces.reserve(44);
+  faceIds.reserve(44);
+
   float r = (1.0f - h2) * (1.0f - h1);
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
-        cos(2 * kPi * i / 6) * r,
-        sin(2 * kPi * i / 6) * r,
-        h1 * H1 * (1.0f - h2) + h2 * H2 + h3 * 2);
+      cos(2 * kPi * i / 6) * r,
+      sin(2 * kPi * i / 6) * r,
+      h1 * H1 * (1.0f - h2) + h2 * H2 + h3 * 2);
   }
   r = 1.0f - h2;
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
-        cos(2 * kPi * i / 6) * r,
-        sin(2 * kPi * i / 6) * r,
-        h2 * H2 + h3 * 2);
+      cos(2 * kPi * i / 6) * r,
+      sin(2 * kPi * i / 6) * r,
+      h2 * H2 + h3 * 2);
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
@@ -532,7 +536,26 @@ CrystalPtr Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int 
   faces.emplace_back(21, 23, 22);
   faces.emplace_back(21, 18, 23);
 
-  return std::make_shared<Crystal>(vertexes, faces);
+  for (int i = 0; i < 4; i++) {
+    faceIds.push_back(1);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceIds.push_back(13 + i);
+    faceIds.push_back(13 + i);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceIds.push_back(23 + i);
+    faceIds.push_back(23 + i);
+  }
+  for (int i = 0; i < 6; i++) {
+    faceIds.push_back(3 + i);
+    faceIds.push_back(3 + i);
+  }
+  for (int i = 0; i < 4; i++) {
+    faceIds.push_back(2);
+  }
+
+  return std::make_shared<Crystal>(vertexes, faces, faceIds);
 }
 
 /*
@@ -674,7 +697,7 @@ CrystalPtr Crystal::createIrregularHexCylinder(float* dist, float h) {
  *      h[0] and h[2] are the heights of upper and lower pyramidal segments, defined as height / H, where
  *      H is the maximum possible height.
  *      h[1] are the heights of middle cylindrical segment, defined as height / a, where a is the
- *      diameter of original circumcircle.
+ *      diameter of original basal face.
  */
 CrystalPtr Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) {
   /* There are 20 faces. The crystal is the intersection of all these half-spaces.
@@ -687,47 +710,47 @@ CrystalPtr Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) {
   using Math::TriangleIdx;
   using Math::HalfSpaceSet;
 
-  constexpr int CONSTRAINT_NUM = 20;
-  constexpr int DIST_NUM = 6;
-  constexpr int H_NUM = 3;
+  constexpr int kConstraintNum = 20;
+  constexpr int kDistNum = 6;
+  constexpr int kHNum = 3;
 
   float alpha0 = idx[1] / kC / idx[0] * kSqrt3;
   float alpha1 = idx[3] / kC / idx[2] * kSqrt3;
   float beta0 = alpha0 * h[1];
   float beta1 = alpha1 * h[1];
 
-  for (int i = 0; i < DIST_NUM; i++) {
+  for (int i = 0; i < kDistNum; i++) {
     dist[i] *= kSqrt3 / 2;
   }
-  for (int i = 0; i < H_NUM; i++) {
+  for (int i = 0; i < kHNum; i++) {
     h[i] = std::max(h[i], 0.0f);
   }
 
-  float a[CONSTRAINT_NUM] = {
-      kSqrt3, 0.0f, -kSqrt3, -kSqrt3, 0.0f, kSqrt3,   // Prism faces
-      kSqrt3, 0.0f, -kSqrt3, -kSqrt3, 0.0f, kSqrt3,   // Upper pyramid faces
-      kSqrt3, 0.0f, -kSqrt3, -kSqrt3, 0.0f, kSqrt3,   // Lower pyramid faces
-    0.0f, 0.0f,                 // Top and bottom faces
+  float a[kConstraintNum] = {
+    kSqrt3, 0.0f, -kSqrt3, -kSqrt3, 0.0f, kSqrt3,   // Prism faces
+    kSqrt3, 0.0f, -kSqrt3, -kSqrt3, 0.0f, kSqrt3,   // Upper pyramid faces
+    kSqrt3, 0.0f, -kSqrt3, -kSqrt3, 0.0f, kSqrt3,   // Lower pyramid faces
+    0.0f, 0.0f,                                     // Top and bottom faces
   };
-  float b[CONSTRAINT_NUM] = {
+  float b[kConstraintNum] = {
     1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
     1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
     1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
     0.0f, 0.0f,
   };
-  float c[CONSTRAINT_NUM] = {
+  float c[kConstraintNum] = {
     0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
     alpha0, alpha0 / 2, alpha0, alpha0, alpha0 / 2, alpha0,
     -alpha1, -alpha1 / 2, -alpha1, -alpha1, -alpha1 / 2, -alpha1,
     1.0f, -1.0f,
   };
-  float d[CONSTRAINT_NUM] = {
+  float d[kConstraintNum] = {
     -2 * dist[0], -dist[1], -2 * dist[2], -2 * dist[3], -dist[4], -2 * dist[5],
     -2 * dist[0] - beta0, -dist[1] - beta0 / 2, -2 * dist[2] - beta0, -2 * dist[3] - beta0, -dist[4] - beta0 / 2, -2 * dist[5] - beta0,
     -2 * dist[0] - beta1, -dist[1] - beta1 / 2, -2 * dist[2] - beta1, -2 * dist[3] - beta1, -dist[4] - beta1 / 2, -2 * dist[5] - beta1,
     0.0f, 0.0f,
   };
-  HalfSpaceSet hss(CONSTRAINT_NUM - 2, a, b, c, d);
+  HalfSpaceSet hss(kConstraintNum - 2, a, b, c, d);
 
   /* Step 1. Find all inner points */
   std::vector<Vec3f> pts = findInnerPoints(hss);
@@ -744,10 +767,10 @@ CrystalPtr Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) {
       minZ = p.z();
     }
   }
-  d[CONSTRAINT_NUM - 2] = -(maxZ - h[1]) * h[0] - h[1];
-  d[CONSTRAINT_NUM - 1] = (minZ + h[1]) * h[2] - h[1];
+  d[kConstraintNum - 2] = -(maxZ - h[1]) * h[0] - h[1];
+  d[kConstraintNum - 1] = (minZ + h[1]) * h[2] - h[1];
 
-  hss.n = CONSTRAINT_NUM;
+  hss.n = kConstraintNum;
   pts = findInnerPoints(hss);
   sortAndRemoveDuplicate(&pts);
 
