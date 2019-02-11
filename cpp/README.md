@@ -10,6 +10,13 @@ can only run from command, no GUI.
 
 Requires: Boost (>= 1.54), OpenCV (>= 3.3). Has been tested on Mac OSX 10.13 and Ubuntu 14.04.
 
+First download the entire project,
+
+~~~bash
+git clone --recursive git@github.com:LoveDaisy/ice_halo_sim.git
+cd ice_halo_sim/cpp
+~~~
+
 This C++ project is built with [CMake](https://cmake.org/).
 You can just run the build script to build the executable:
 
@@ -25,10 +32,11 @@ or
 
 For other useful options, see the help message from `build.sh`.
 
-Then the executable binaries will be at `build/cmake_install`. 
+Then the release version executable binaries will be at `build/cmake_install`, and the debug version will be at
+`build/cmake_build` 
 
-Note, I introduce the [GooglTest](https://github.com/google/googletest) framework to help do my unit tests.
-The googletest codes will be downloaded automatically during cmake configuration. Generally you should not
+Note, I introduce the [GoogleTest](https://github.com/google/googletest) framework to help do my unit tests.
+GoogleTest is a submodule of this project. Generally you should not
 care about these codes nor the test cases in `test` folder. If you are interested in my unit tests, please
 pass `test` option when run the build script.
 
