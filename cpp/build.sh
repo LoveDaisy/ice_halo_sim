@@ -11,14 +11,25 @@ build() {
   rm -rf Makefile cmake_install.cmake
   cmake "${PROJ_DIR}" -DDEBUG=$DEBUG_FLAG -DBUILD_TEST=$BUILD_TEST -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR"
   make -j1
-  make install
+  ret=$?
+  if [[ $ret == 0 && $BUILD_TEST == ON ]]; then
+    echo "Testing..."
+    make test
+    ret=$?
+  fi
+  if [[ $ret == 0 && $INSTALL_FLAG == ON ]]; then
+    echo "Installing..."
+    make install
+  fi
 }
 
 
 help() {
   echo "Usage:"
   echo "  ./build.sh [option1 option2 ...] debug"
+  echo "    Build executables for debug. All executables will be at build/cmake_build"
   echo "  ./build.sh [option1 option2 ...] release"
+  echo "    Build executables for release, and install them to build/cmake_install"
   echo "OPTIONS:"
   echo "  test:          Build unit test cases."
   echo "  clean:         Clean temporary building files."
@@ -34,6 +45,7 @@ clean_all() {
 
 DEBUG_FLAG=OFF
 BUILD_TEST=OFF
+INSTALL_FLAG=OFF
 
 if [ $# -eq 0 ]; then
     help
@@ -44,11 +56,13 @@ while [ ! $# -eq 0 ]; do
   case $1 in
     debug)
       DEBUG_FLAG=ON
+      INSTALL_FLAG=OFF
       build
       shift
     ;;
     release)
       DEBUG_FLAG=OFF
+      INSTALL_FLAG=ON
       build
       shift
     ;;
