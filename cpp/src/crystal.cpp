@@ -29,15 +29,19 @@ const std::vector<Math::TriangleIdx>& Crystal::getFaces() {
   return faces;
 }
 
+const std::vector<int>& Crystal::getFaceNumber() {
+  return faceIdMap;
+}
+
 int Crystal::vtxNum() const {
   return static_cast<int>(vertexes.size());
 }
 
-int Crystal::faceNum() const {
+int Crystal::totalFaces() const {
   return static_cast<int>(faces.size());
 }
 
-int Crystal::faceId(int idx) const {
+int Crystal::faceNumber(int idx) const {
   if (faceIdMap.empty()) {
     return -1;
   } else if (idx < 0 || idx >= faceIdMap.size()) {
@@ -83,7 +87,6 @@ void Crystal::copyNormalData(float* data) const {
 void Crystal::initNorms() {
   using Math::Vec3f;
   norms.clear();
-  auto vtxNum = static_cast<int>(vertexes.size());
   for (const auto& f : faces) {
     auto idx = f.idx();
     Vec3f v1 = Vec3f::fromVec(vertexes[idx[0]], vertexes[idx[1]]);
@@ -96,7 +99,7 @@ void Crystal::initNorms() {
 }
 
 /*
- * parameter: h, defined as c / a, i.e. height / diameter
+ * parameter: h, defined as height / diameter
  */
 CrystalPtr Crystal::createHexCylinder(float h) {
   using Math::Vec3f;

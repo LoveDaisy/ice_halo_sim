@@ -109,7 +109,7 @@ void Optics::hitSurfaceRange(float n, const RayTracingContextPtr& rayCtx, int st
 
 void Optics::propagate(const RayTracingContextPtr& rayCtx,
                        const CrystalContextPtr& cryCtx) {
-  auto faceNum = cryCtx->getCrystal()->faceNum();
+  auto faceNum = cryCtx->getCrystal()->totalFaces();
   auto* faces = new float[faceNum * 9];
   auto* faceBases = new float[faceNum * 6];
   cryCtx->getCrystal()->copyFaceData(faces);

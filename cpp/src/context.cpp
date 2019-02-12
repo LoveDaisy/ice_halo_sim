@@ -81,7 +81,7 @@ void RayTracingContext::initRays(const CrystalContextPtr& ctx,
   setRayNum(rayNum);
 
   auto crystal = ctx->getCrystal();
-  auto* faces = new float[crystal->faceNum() * 9];
+  auto* faces = new float[crystal->totalFaces() * 9];
   crystal->copyFaceData(faces);
 
   activeRaySegNum = 0;
@@ -90,7 +90,7 @@ void RayTracingContext::initRays(const CrystalContextPtr& ctx,
   for (int startIdx = 0; startIdx < initRayNum; startIdx += step) {
     int endIdx = std::min(startIdx + step, initRayNum);
     pool->addJob([=]{
-      int faceNum = ctx->getCrystal()->faceNum();
+      int faceNum = ctx->getCrystal()->totalFaces();
       for (int i = startIdx; i < endIdx; i++) {
         ctx->fillDir(dir + i * 3, rayDir + i * 3, mainAxRot + i * 3);
 

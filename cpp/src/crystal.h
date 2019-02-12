@@ -28,12 +28,13 @@ public:
           const std::vector<int>& faceId);
 
   int vtxNum() const;
-  int faceNum() const;
-  int faceId(int idx) const;
+  int totalFaces() const;
+  int faceNumber(int idx) const;
 
   const std::vector<Math::Vec3f>& getVertexes();
   const std::vector<Math::Vec3f>& getNorms();
   const std::vector<Math::TriangleIdx>& getFaces();
+  const std::vector<int>& getFaceNumber();
 
   void copyVertexData(float* data) const;
   void copyFaceData(float* data) const;
@@ -84,7 +85,6 @@ public:
   static std::shared_ptr<Crystal> createHexPyramid(
     int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
 
-  /* Hexagon stacked pyramid */
   /*! @brief Create a hexagon half-stacked pyramid crystal
    *
    * @param upperIdx1 Miller index 1 for upper segment.
