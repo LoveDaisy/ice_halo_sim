@@ -376,7 +376,7 @@ void SimulationContext::parseRaySettings(rapidjson::Document& d) {
   } else if (!p->IsArray()) {
     fprintf(stderr, "\nWARNING! Config <ray.wavelength> is not an array, using default 550!\n");
   } else if (!(*p)[0].IsNumber()) {
-    fprintf(stderr, "\nWARNING! Config <ray.wavelength> connot be recgonized, using default 550!\n");
+    fprintf(stderr, "\nWARNING! Config <ray.wavelength> connot be recognized, using default 550!\n");
   } else {
     wavelengths.clear();
     for (const auto& pi : p->GetArray()) {
@@ -465,7 +465,7 @@ void SimulationContext::parseCrystalSettings(const rapidjson::Value& c, int ci) 
 
   auto* p = Pointer("/enable").Get(c);
   if (p == nullptr || !p->IsBool()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].enable> cannot recgonize!", ci);
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].enable> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   } else if (!p->GetBool()) {
     return;
@@ -477,33 +477,33 @@ void SimulationContext::parseCrystalSettings(const rapidjson::Value& c, int ci) 
 
   p = Pointer("/axis/type").Get(c);
   if (p == nullptr || !p->IsString()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recgonize!", ci);
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   } else if (*p == "Gauss") {
     axisDist = Distribution::GAUSS;
   } else if (*p == "Uniform") {
     axisDist = Distribution::UNIFORM;
   } else {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recgonize!", ci);
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   }
 
   p = Pointer("/roll/type").Get(c);
   if (p == nullptr || !p->IsString()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recgonize!", ci);
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   } else if (*p == "Gauss") {
     rollDist = Distribution::GAUSS;
   } else if (*p == "Uniform") {
     rollDist = Distribution::UNIFORM;
   } else {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recgonize!", ci);
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   }
 
   p = Pointer("/axis/mean").Get(c);
   if (p == nullptr || !p->IsNumber()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.mean> cannot recgonize!", ci);
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.mean> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   } else {
     axisMean = static_cast<float>(90 - p->GetDouble());
@@ -511,7 +511,7 @@ void SimulationContext::parseCrystalSettings(const rapidjson::Value& c, int ci) 
 
   p = Pointer("/axis/std").Get(c);
   if (p == nullptr || !p->IsNumber()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.std> cannot recgonize!", ci);
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.std> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   } else {
     axisStd = static_cast<float>(p->GetDouble());
@@ -519,7 +519,7 @@ void SimulationContext::parseCrystalSettings(const rapidjson::Value& c, int ci) 
 
   p = Pointer("/roll/mean").Get(c);
   if (p == nullptr || !p->IsNumber()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.mean> cannot recgonize!", ci);
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.mean> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   } else {
     rollMean = static_cast<float>(p->GetDouble());
@@ -527,7 +527,7 @@ void SimulationContext::parseCrystalSettings(const rapidjson::Value& c, int ci) 
 
   p = Pointer("/roll/std").Get(c);
   if (p == nullptr || !p->IsNumber()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.std> cannot recgonize!", ci);
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.std> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   } else {
     rollStd = static_cast<float>(p->GetDouble());
@@ -536,14 +536,14 @@ void SimulationContext::parseCrystalSettings(const rapidjson::Value& c, int ci) 
   float population = 1.0;
   p = Pointer("/population").Get(c);
   if (p == nullptr || !p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! <crystal[%d].population> cannot recgonize, using default 1.0!\n", ci);
+    fprintf(stderr, "\nWARNING! <crystal[%d].population> cannot recognize, using default 1.0!\n", ci);
   } else {
     population = static_cast<float>(p->GetDouble());
   }
 
   p = Pointer("/type").Get(c);
   if (p == nullptr || !p->IsString()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recgonize!", ci);
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   } else {
     parseCrystalType(c, ci, population, axisDist, axisMean, axisStd, rollDist, rollMean, rollStd);
@@ -566,7 +566,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
   const auto* p = Pointer("/parameter").Get(c);
   if (c["type"] == "HexCylinder") {
     if (p == nullptr || !p->IsNumber()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
       throw std::invalid_argument(msgBuffer);
     }
     auto h = static_cast<float>(p->GetDouble());
@@ -575,7 +575,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
                        rollDist, rollMean, rollStd);
   } else if (c["type"] == "HexPyramid") {
     if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
       throw std::invalid_argument(msgBuffer);
     } else if (p->Size() == 3) {
       auto h1 = static_cast<float>((*p)[0].GetDouble());
@@ -611,7 +611,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
     }
   } else if (c["type"] == "HexPyramidStackHalf") {
     if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
       throw std::invalid_argument(msgBuffer);
     } else if (p->Size() == 7) {
       int upperIdx1 = (*p)[0].GetInt();
@@ -631,7 +631,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
     }
   } else if (c["type"] == "TriPyramid") {
     if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
       throw std::invalid_argument(msgBuffer);
     } else if (p->Size() == 5) {
       int i1 = (*p)[0].GetInt();
@@ -648,7 +648,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
     }
   } else if (c["type"] == "CubicPyramid") {
     if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
       throw std::invalid_argument(msgBuffer);
     } else if (p->Size() == 2) {
       auto h1 = static_cast<float>((*p)[0].GetDouble());
@@ -662,7 +662,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
     }
   } else if (c["type"] == "IrregularHexCylinder") {
     if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
       throw std::invalid_argument(msgBuffer);
     } else if (p->Size() == 7) {
       auto d1 = static_cast<float>((*p)[0].GetDouble());
@@ -680,7 +680,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
     }
   } else if (c["type"] == "IrregularHexPyramid") {
     if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
       throw std::invalid_argument(msgBuffer);
     } else if (p->Size() == 13) {
       auto d1 = static_cast<float>((*p)[0].GetDouble());
@@ -710,7 +710,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
     }
   } else if (c["type"] == "Custom") {
     if (p == nullptr || !p->IsString()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recgonize!", ci);
+      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
       throw std::invalid_argument(msgBuffer);
     } else {
       char modelFileNameBuffer[512] = { 0 };
@@ -732,7 +732,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
       fclose(file);
     }
   } else {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recgonize!", ci);
+    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   }
   crystalCtxs.push_back(cryCtx);
@@ -1072,7 +1072,7 @@ void RenderContext::parseCameraSettings(rapidjson::Document& d) {
     } else if (*p == "dual_fisheye_equiarea") {
       projectionType = ProjectionType::DUAL_EQUI_AREA;
     } else {
-      fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recgonized, using default equi-area fisheye!\n");
+      fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equi-area fisheye!\n");
     }
   }
 }
@@ -1105,7 +1105,7 @@ void RenderContext::parseRenderSettings(rapidjson::Document& d) {
   } else if (*p == "full") {
     visibleSemiSphere = VisibleSemiSphere::FULL;
   } else {
-    fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> cannot be recgonized, using default UPPER!\n");
+    fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> cannot be recognized, using default UPPER!\n");
   }
 
   p = Pointer("/render/intensity_factor").Get(d);
@@ -1125,7 +1125,7 @@ void RenderContext::parseRenderSettings(rapidjson::Document& d) {
   } else if (!p->IsArray()) {
     fprintf(stderr, "\nWARNING! Config <render.offset> is not an array, using default [0, 0]!\n");
   } else if (p->Size() != 2 || !(*p)[0].IsInt() || !(*p)[1].IsInt()) {
-    fprintf(stderr, "\nWARNING! Config <render.offset> cannot be recgonized, using default [0, 0]!\n");
+    fprintf(stderr, "\nWARNING! Config <render.offset> cannot be recognized, using default [0, 0]!\n");
   } else {
     offsetX = (*p)[0].GetInt();
     offsetY = (*p)[1].GetInt();
@@ -1141,7 +1141,7 @@ void RenderContext::parseRenderSettings(rapidjson::Document& d) {
   } else if (!p->IsArray()) {
     fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array, using default [0,0,0]!\n");
   } else if (p->Size() != 3 || !(*p)[0].IsNumber()) {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recgonized, using default [0,0,0]!\n");
+    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default [0,0,0]!\n");
   } else {
     auto pa = p->GetArray();
     for (int i = 0; i < 3; i++) {
@@ -1155,9 +1155,9 @@ void RenderContext::parseRenderSettings(rapidjson::Document& d) {
   } else if (!p->IsArray() && !p->IsString()) {
     fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array nor a string, using default real color!\n");
   } else if (p->IsArray() && (p->Size() != 3 || !(*p)[0].IsNumber())) {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recgonized, using default real color!\n");
+    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default real color!\n");
   } else if (p->IsString() && (*p) != "real") {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recgonized, using default real color!\n");
+    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default real color!\n");
   } else if (p->IsArray()) {
     auto pa = p->GetArray();
     for (int i = 0; i < 3; i++) {
