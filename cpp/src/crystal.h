@@ -42,7 +42,7 @@ public:
    * @param h the height of prism. The diameter of basal face is 1
    * @return a pointer to the crystal
    */
-  static std::shared_ptr<Crystal> createHexCylinder(float h);
+  static std::unique_ptr<Crystal> createHexCylinder(float h);
 
   /*! @brief create a hexagon pyramid crystal
    *
@@ -51,7 +51,7 @@ public:
    * @param h3 height of bottom segment.
    * @return a pointer to the crystal.
    */
-  static std::shared_ptr<Crystal> createHexPyramid(float h1, float h2, float h3);
+  static std::unique_ptr<Crystal> createHexPyramid(float h1, float h2, float h3);
 
   /*! @brief create a hexagon pyramid crystal
    *
@@ -62,7 +62,7 @@ public:
    * @param h3 height of bottom segment.
    * @return a pointer to the crystal.
    */
-  static std::shared_ptr<Crystal> createHexPyramid(int i1, int i4, float h1, float h2, float h3);
+  static std::unique_ptr<Crystal> createHexPyramid(int i1, int i4, float h1, float h2, float h3);
 
   /*! @brief create a hexagon pyramid crystal
    *
@@ -75,7 +75,7 @@ public:
    * @param h3 height of bottom segment.
    * @return a pointer to the crystal.
    */
-  static std::shared_ptr<Crystal> createHexPyramid(
+  static std::unique_ptr<Crystal> createHexPyramid(
     int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
 
   /*! @brief Create a hexagon half-stacked pyramid crystal
@@ -89,19 +89,24 @@ public:
    * @param h3 height for prism segment.
    * @return a pointer to the crystal.
    */
-  static std::shared_ptr<Crystal> createHexPyramidStackHalf(
+  static std::unique_ptr<Crystal> createHexPyramidStackHalf(
     int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
 
   /* Cubic pyramid (crystal type of Ic) */
-  static std::shared_ptr<Crystal> createCubicPyramid(float ratio1, float ratio2);
+  static std::unique_ptr<Crystal> createCubicPyramid(float ratio1, float ratio2);
 
-  /* Irregular hexagon cylinder */
-  static std::shared_ptr<Crystal> createIrregularHexCylinder(float* dist, float h);
+  /*! @brief Create an irregular hexagon prism crystal
+   *
+   * @param dist defines the distances from origin to each face
+   * @param h defines the height / diameter
+   * @return
+   */
+  static std::unique_ptr<Crystal> createIrregularHexCylinder(float* dist, float h);
 
   /*! @brief Create a irregular hexagon pyramid crystal
    *
-   * @param dist defines the distance from origin of each face. Must contains 6 numbers. The distance of a
-   *             normal hexagon is defined as 1.
+   * @param dist defines the distance from origin to each face. Must contains 6 numbers. The distance of a
+   *             regular hexagon is defined as 1.
    * @param idx defines the Miller index of upper and lower pyramidal segments. Must contains 4 numbers.
    *            idx[0] and idx[1] are for upper segment. idx[2] and idx[3] are for lower segment.
    * @param h defines the height of each segment.
@@ -111,7 +116,7 @@ public:
    *          diameter of original basal face.
    * @return
    */
-  static std::shared_ptr<Crystal> createIrregularHexPyramid(float* dist, int* idx, float* h);
+  static std::unique_ptr<Crystal> createIrregularHexPyramid(float* dist, int* idx, float* h);
 
   /*! @brief Create a customized crystal
    *
@@ -119,10 +124,17 @@ public:
    * @param faces the faces of the crystal
    * @return
    */
-  static std::shared_ptr<Crystal> createCustomCrystal(const std::vector<Math::Vec3f>& pts,
+  static std::unique_ptr<Crystal> createCustomCrystal(const std::vector<Math::Vec3f>& pts,
                                                       const std::vector<Math::TriangleIdx>& faces);
 
-  static std::shared_ptr<Crystal> createCustomCrystal(const std::vector<Math::Vec3f>& pts,
+  /*! @brief Create a customized crystal
+   *
+   * @param pts the vertexes
+   * @param faces the faces
+   * @param faceIdMap the face number map
+   * @return
+   */
+  static std::unique_ptr<Crystal> createCustomCrystal(const std::vector<Math::Vec3f>& pts,
                                                       const std::vector<Math::TriangleIdx>& faces,
                                                       const std::vector<int>& faceIdMap);
 
@@ -162,7 +174,8 @@ private:
 
 };
 
-using CrystalPtr = std::shared_ptr<Crystal>;
+using CrystalPtrS = std::shared_ptr<Crystal>;
+using CrystalPtrU = std::unique_ptr<Crystal>;
 
 };  // namespace IceHalo
 

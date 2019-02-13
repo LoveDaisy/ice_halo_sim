@@ -27,7 +27,7 @@ protected:
     }
   }
 
-  void checkCrystal(const IceHalo::CrystalPtr & c1, const IceHalo::CrystalPtr& c2) {
+  void checkCrystal(const IceHalo::CrystalPtrU& c1, const IceHalo::CrystalPtrU& c2) {
     auto n1 = c1->getNorms();
     auto n2 = c2->getNorms();
     auto fn1 = c1->getFaceNumber();

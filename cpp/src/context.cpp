@@ -18,7 +18,7 @@ namespace IceHalo {
 using rapidjson::Pointer;
 
 
-void CrystalContext::setCrystal(const CrystalPtr& g, float populationWeight,
+void CrystalContext::setCrystal(const CrystalPtrS& g, float populationWeight,
                                 Math::Distribution axisDist, float axisMean, float axisStd,
                                 Math::Distribution rollDist, float rollMean, float rollStd) {
   this->crystal = g;
@@ -28,7 +28,7 @@ void CrystalContext::setCrystal(const CrystalPtr& g, float populationWeight,
 }
 
 
-CrystalPtr CrystalContext::getCrystal() {
+CrystalPtrS CrystalContext::getCrystal() {
   return this->crystal;
 }
 
@@ -721,7 +721,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
 }
 
 
-CrystalPtr SimulationContext::parseCustomCrystal(std::FILE* file) {
+CrystalPtrS SimulationContext::parseCustomCrystal(std::FILE* file) {
   std::vector<Math::Vec3f> vertexes;
   std::vector<Math::TriangleIdx> faces;
   float vbuf[3];

@@ -80,7 +80,7 @@ private:
                         float population,
                         Math::Distribution axisDist, float axisMean, float axisStd,
                         Math::Distribution rollDist, float rollMean, float rollStd);
-  CrystalPtr parseCustomCrystal(std::FILE* file);
+  CrystalPtrS parseCustomCrystal(std::FILE* file);
 
   std::vector<CrystalContextPtr> crystalCtxs;
   std::vector<std::vector<RayTracingContextPtr> > rayTracingCtxs;
@@ -108,16 +108,16 @@ friend class SimulationContext;
 public:
   CrystalContext() = default;
 
-  void setCrystal(const CrystalPtr& g, float populationRatio,
+  void setCrystal(const CrystalPtrS& g, float populationRatio,
                   Math::Distribution axisDist, float axisMean, float axisStd,
                   Math::Distribution rollDist, float rollMean, float rollStd);
-  CrystalPtr getCrystal();
+  CrystalPtrS getCrystal();
 
   void fillDir(const float* incDir, float* rayDir, float* mainAxRot, int num = 1);
 
 private:
   float populationRatio;
-  CrystalPtr crystal;
+  CrystalPtrS crystal;
   Math::OrientationGenerator oriGen;
 };
 
