@@ -9,12 +9,6 @@ namespace {
 
 class CrystalTest : public ::testing::Test {
 protected:
-  // You can do set-up work for each test here.
-  CrystalTest() = default;
-
-  // You can do clean-up work that doesn't throw exceptions here.
-  virtual ~CrystalTest() = default;
-
   void checkVertex(const std::vector<IceHalo::Math::Vec3f>& vtx1, const std::vector<IceHalo::Math::Vec3f>& vtx2) {
     ASSERT_EQ(vtx1.size(), vtx2.size());
     for (decltype(vtx1.size()) i = 0; i < vtx1.size(); i++) {
@@ -28,7 +22,48 @@ protected:
   void checkFaceId(const std::vector<int>& ids1, const std::vector<int>& ids2) {
     ASSERT_EQ(ids1.size(), ids2.size());
     for (decltype(ids1.size()) i = 0; i < ids1.size(); i++) {
-      ASSERT_EQ(ids1[i], ids2[i]);
+      EXPECT_EQ(ids1[i], ids2[i]);
+    }
+  }
+
+  void checkCrystal(const IceHalo::CrystalPtr & c1, const IceHalo::CrystalPtr& c2) {
+    auto n1 = c1->getNorms();
+    auto n2 = c2->getNorms();
+    auto fn1 = c1->getFaceNumber();
+    auto fn2 = c2->getFaceNumber();
+
+    ASSERT_EQ(n1.size(), n2.size());
+    ASSERT_EQ(fn1.size(), fn2.size());
+    for (decltype(n1.size()) i = 0; i < n1.size(); i++) {
+      const auto& n = n1[i];
+      int fn = fn1[i];
+
+      bool findSameNorm = false;
+      for (decltype(n2.size()) j = 0; j < n2.size(); j++) {
+        const auto& tmpN = n2[j];
+        int tmpFn = fn2[j];
+        if (n == tmpN) {
+          findSameNorm = true;
+          EXPECT_EQ(tmpFn, fn);
+        }
+      }
+      EXPECT_TRUE(findSameNorm);
+    }
+
+    for (decltype(n2.size()) i = 0; i < n2.size(); i++) {
+      const auto& n = n2[i];
+      int fn = fn2[i];
+
+      bool findSameNorm = false;
+      for (decltype(n1.size()) j = 0; j < n1.size(); j++) {
+        const auto& tmpN = n1[j];
+        int tmpFn = fn1[j];
+        if (n == tmpN) {
+          findSameNorm = true;
+          EXPECT_EQ(tmpFn, fn);
+        }
+      }
+      EXPECT_TRUE(findSameNorm);
     }
   }
 
@@ -157,29 +192,80 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
 }
 
 
+TEST_F(CrystalTest, IrregularHexPyramid) {
+  float h1 = 0.3;
+  float h2 = 0.5;
+  float h3 = 0.85;
+
+  float dist[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  int idx[4] = { 1, 1, 1, 1 };
+  float hs[3] = { h1, h2, h3 };
+
+  auto c1 = IceHalo::Crystal::createHexPyramid(h1, h2, h3);
+  auto c2 = IceHalo::Crystal::createIrregularHexPyramid(dist, idx, hs);
+  EXPECT_EQ(c1->totalFaces(), c2->totalFaces());
+  EXPECT_EQ(c1->vtxNum(), c2->vtxNum());
+  checkCrystal(c1, c2);
+}
+
+
+TEST_F(CrystalTest, IrregularHexCylinderVertex0) {
+  using IceHalo::Math::kSqrt3;
+
+  float h = 1.2f;
+  float dist[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+
+  auto c1 = IceHalo::Crystal::createHexCylinder(h);
+  auto c2 = IceHalo::Crystal::createIrregularHexCylinder(dist, h);
+
+  EXPECT_EQ(c1->totalFaces(), c2->totalFaces());
+  EXPECT_EQ(c1->vtxNum(), c2->vtxNum());
+  checkCrystal(c1, c2);
+}
+
+
 TEST_F(CrystalTest, IrregularHexCylinderVertex1) {
   using IceHalo::Math::kSqrt3;
 
   float h = 1.2f;
   float dist[6] = { 1.0f, 1.0f, 1.5f, 1.0f, 2.5f, 1.0f };
 
-  std::vector<IceHalo::Math::Vec3f> pts0;
-  pts0.emplace_back(-1.25f, kSqrt3 / 2/2, -h);
-  pts0.emplace_back(-1.25f, kSqrt3 / 2/2, h);
-  pts0.emplace_back(-1.0f, kSqrt3 / 2, -h);
-  pts0.emplace_back(-1.0f, kSqrt3 / 2, h);
-  pts0.emplace_back(0.0f, -kSqrt3 / 2*2, -h);
-  pts0.emplace_back(0.0f, -kSqrt3 / 2*2, h);
-  pts0.emplace_back(0.5f, kSqrt3 / 2, -h);
-  pts0.emplace_back(0.5f, kSqrt3 / 2, h);
-  pts0.emplace_back(1.0f, 0.0f, -h);
-  pts0.emplace_back(1.0f, 0.0f, h);
+  std::vector<IceHalo::Math::Vec3f> pts0 {
+    {  kSqrt3 / 2, -0.5f,  h / 2 },
+    {  kSqrt3 / 2,  0.5f,  h / 2 },
+    { -kSqrt3 / 4, 1.25f,  h / 2 },
+    { -kSqrt3 / 2,  1.0f,  h / 2 },
+    { -kSqrt3 / 2, -1.5f,  h / 2 },
+    {  kSqrt3 / 2, -0.5f, -h / 2 },
+    {  kSqrt3 / 2,  0.5f, -h / 2 },
+    { -kSqrt3 / 4, 1.25f, -h / 2 },
+    { -kSqrt3 / 2,  1.0f, -h / 2 },
+    { -kSqrt3 / 2, -1.5f, -h / 2 },
+  };
+  std::vector<IceHalo::Math::TriangleIdx> faces0 {
+    { 0, 1, 2 }, { 0, 2, 3 }, { 0, 3, 4 },
+    { 0, 6, 1 }, { 0, 5, 6 },
+    { 1, 7, 2 }, { 1, 6, 7 },
+    { 2, 8, 3 }, { 2, 7, 8 },
+    { 3, 9, 4 }, { 3, 8, 9 },
+    { 4, 5, 0 }, { 4, 9, 5 },
+    { 5, 7, 6 }, { 5, 8, 7 }, { 5, 9, 8 },
+  };
+  std::vector<int> faceIdMap0 {
+    1, 1, 1,
+    3, 3,
+    4, 4,
+    5, 5,
+    6, 6,
+    8, 8,
+    2, 2, 2,
+  };
 
-  auto c = IceHalo::Crystal::createIrregularHexCylinder(dist, h);
-  const auto pts = c->getVertexes();
-
-  EXPECT_EQ(pts.size(), 10ul);
-  checkVertex(pts0, pts);
+  auto c1 = IceHalo::Crystal::createCustomCrystal(pts0, faces0, faceIdMap0);
+  auto c2 = IceHalo::Crystal::createIrregularHexCylinder(dist, h);
+  EXPECT_EQ(c1->vtxNum(), c2->vtxNum());
+  EXPECT_EQ(c1->totalFaces(), c2->totalFaces());
+  checkCrystal(c1, c2);
 }
 
 }  // namespace
