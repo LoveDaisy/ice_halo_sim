@@ -99,9 +99,6 @@ public:
   static std::shared_ptr<Crystal> createHexPyramidStackHalf(
     int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4, float h1, float h2, float h3);
 
-  /* Triangle pyramid */
-  static std::shared_ptr<Crystal> createTriPyramid(int i1, int i4, float h1, float h2, float h3);
-
   /* Cubic pyramid (crystal type of Ic) */
   static std::shared_ptr<Crystal> createCubicPyramid(float ratio1, float ratio2);
 

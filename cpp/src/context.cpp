@@ -208,7 +208,6 @@ void RayTracingContext::copyFinishedRaySegmentsRange(RaySegment** segs, float* d
       if (p->w > kScatMinW && p->faceId >= 0 && p->isFinished && uniformDist(randomEngine) < prob) {
         auto tmpk = k++;
         float* finalDir = dir + tmpk * 3;
-//        std::memcpy(finalDir, p->dir.val(), sizeof(float) * 3);
         Math::rotateZBack(mainAxRot + rayIdx * 3, p->dir.val(), finalDir);
         segs[tmpk] = p;
       }
@@ -623,23 +622,6 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
       auto h3 = static_cast<float>((*p)[6].GetDouble());
       cryCtx->setCrystal(Crystal::createHexPyramidStackHalf(upperIdx1, upperIdx2, lowerIdx1,
                                                             lowerIdx2, h1, h2, h3), population,
-                         axisDist, axisMean, axisStd,
-                         rollDist, rollMean, rollStd);
-    } else {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-      throw std::invalid_argument(msgBuffer);
-    }
-  } else if (c["type"] == "TriPyramid") {
-    if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else if (p->Size() == 5) {
-      int i1 = (*p)[0].GetInt();
-      int i2 = (*p)[1].GetInt();
-      auto h1 = static_cast<float>((*p)[2].GetDouble());
-      auto h2 = static_cast<float>((*p)[3].GetDouble());
-      auto h3 = static_cast<float>((*p)[4].GetDouble());
-      cryCtx->setCrystal(Crystal::createTriPyramid(i1, i2, h1, h2, h3), population,
                          axisDist, axisMean, axisStd,
                          rollDist, rollMean, rollStd);
     } else {

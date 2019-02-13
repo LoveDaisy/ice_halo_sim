@@ -70,18 +70,18 @@ TEST_F(CrystalTest, HexCylinderVertex) {
   float k = kSqrt3 / 2;
 
   std::vector<IceHalo::Math::Vec3f> pts0 = {
+    {  k,    -0.5f,  h / 2 },
     {  k,     0.5f,  h / 2 },
     {  0.0f,  1.0f,  h / 2 },
     { -k,     0.5f,  h / 2 },
     { -k,    -0.5f,  h / 2 },
     {  0.0f, -1.0f,  h / 2 },
-    {  k,    -0.5f,  h / 2 },
+    {  k,    -0.5f, -h / 2 },
     {  k,     0.5f, -h / 2 },
     {  0.0f,  1.0f, -h / 2 },
     { -k,     0.5f, -h / 2 },
     { -k,    -0.5f, -h / 2 },
     {  0.0f, -1.0f, -h / 2 },
-    {  k,    -0.5f, -h / 2 },
   };
   std::vector<int> faceId0 = {
     1, 1, 1, 1, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 2, 2, 2, 2,
@@ -107,30 +107,30 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
   float k = kSqrt3 / 2;
 
   std::vector<IceHalo::Math::Vec3f> pts0 = {
+    {     k * r1, -0.5f * r1,  h2 / 2 + h1 * H },
     {     k * r1,  0.5f * r1,  h2 / 2 + h1 * H },
     {  0.0f * r1,  1.0f * r1,  h2 / 2 + h1 * H },
     {    -k * r1,  0.5f * r1,  h2 / 2 + h1 * H },
     {    -k * r1, -0.5f * r1,  h2 / 2 + h1 * H },
     {  0.0f * r1, -1.0f * r1,  h2 / 2 + h1 * H },
-    {     k * r1, -0.5f * r1,  h2 / 2 + h1 * H },
+    {     k, -0.5f,  h2 / 2 },
     {     k,  0.5f,  h2 / 2 },
     {  0.0f,  1.0f,  h2 / 2 },
     {    -k,  0.5f,  h2 / 2 },
     {    -k, -0.5f,  h2 / 2 },
     {  0.0f, -1.0f,  h2 / 2 },
-    {     k, -0.5f,  h2 / 2 },
+    {     k, -0.5f, -h2 / 2 },
     {     k,  0.5f, -h2 / 2 },
     {  0.0f,  1.0f, -h2 / 2 },
     {    -k,  0.5f, -h2 / 2 },
     {    -k, -0.5f, -h2 / 2 },
     {  0.0f, -1.0f, -h2 / 2 },
-    {     k, -0.5f, -h2 / 2 },
+    {     k * r3, -0.5f * r3, -h2 / 2 - h3 * H },
     {     k * r3,  0.5f * r3, -h2 / 2 - h3 * H },
     {  0.0f * r3,  1.0f * r3, -h2 / 2 - h3 * H },
     {    -k * r3,  0.5f * r3, -h2 / 2 - h3 * H },
     {    -k * r3, -0.5f * r3, -h2 / 2 - h3 * H },
     {  0.0f * r3, -1.0f * r3, -h2 / 2 - h3 * H },
-    {     k * r3, -0.5f * r3, -h2 / 2 - h3 * H },
   };
   std::vector<int> faceId0 = {
     1, 1, 1, 1,
@@ -157,7 +157,7 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
 }
 
 
-TEST_F(CrystalTest, IrregularHexCylinderVertex0) {
+TEST_F(CrystalTest, IrregularHexCylinderVertex1) {
   using IceHalo::Math::kSqrt3;
 
   float h = 1.2f;
