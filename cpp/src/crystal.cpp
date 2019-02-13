@@ -264,10 +264,10 @@ CrystalPtr Crystal::createHexCylinder(float h) {
   faces.reserve(20);
 
   for (int i = 0; i < 6; ++i) {
-    vertexes.emplace_back(cos((2 * i - 1) * kPi / 6), sin((2 * i - 1) * kPi / 6), h / 2);
+    vertexes.emplace_back(cos((2 * i - 1) * kPi / 6), sin((2 * i - 1) * kPi / 6), h);
   }
   for (int i = 0; i < 6; ++i) {
-    vertexes.emplace_back(cos((2 * i - 1) * kPi / 6), sin((2 * i - 1) * kPi / 6), -h / 2);
+    vertexes.emplace_back(cos((2 * i - 1) * kPi / 6), sin((2 * i - 1) * kPi / 6), -h);
   }
 
   faces.emplace_back(0, 1, 2);
@@ -386,25 +386,25 @@ CrystalPtr Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1
     vertexes.emplace_back(
       cos((2 * i - 1) * kPi / 6) * (1 - h1),
       sin((2 * i - 1) * kPi / 6) * (1 - h1),
-      h2 / 2 + h1 * H1);
+      h2 + h1 * H1);
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
       cos((2 * i - 1) * kPi / 6),
       sin((2 * i - 1) * kPi / 6),
-      h2 / 2);
+      h2);
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
       cos((2 * i - 1) * kPi / 6),
       sin((2 * i - 1) * kPi / 6),
-      -h2 / 2);
+      -h2);
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(
       cos((2 * i - 1) * kPi / 6) * (1 - h3),
       sin((2 * i - 1) * kPi / 6) * (1 - h3),
-      -h2 / 2 - h3 * H3);
+      -h2 - h3 * H3);
   }
 
   faces.emplace_back(0, 1, 2);
@@ -538,7 +538,7 @@ CrystalPtr Crystal::createIrregularHexCylinder(float* dist, float h) {
   };
   float d[kConstraintNum] = {
     -dist[0], -2 * dist[1], -2 * dist[2], -dist[3], -2 * dist[4], -2 * dist[5],
-    -h / 2, -h / 2,
+    -h, -h,
   };
   HalfSpaceSet hss(kConstraintNum, a, b, c, d);
 
@@ -579,8 +579,8 @@ CrystalPtr Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) {
 
   float alpha0 = idx[1] / kC / idx[0] * kSqrt3;
   float alpha1 = idx[3] / kC / idx[2] * kSqrt3;
-  float beta0 = alpha0 * h[1] / 2;
-  float beta1 = alpha1 * h[1] / 2;
+  float beta0 = alpha0 * h[1];
+  float beta1 = alpha1 * h[1];
 
   for (int i = 0; i < kDistNum; i++) {
     dist[i] *= kSqrt3 / 2;
@@ -604,13 +604,13 @@ CrystalPtr Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) {
   float c[kConstraintNum] = {
     0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
     alpha0, alpha0, alpha0, alpha0, alpha0, alpha0,
-    -alpha0, -alpha0, -alpha0, -alpha0, -alpha0, -alpha0,
+    -alpha1, -alpha1, -alpha1, -alpha1, -alpha1, -alpha1,
     1.0f, -1.0f,
   };
   float d[kConstraintNum] = {
     -dist[0], -2 * dist[1], -2 * dist[2], -dist[3], -2 * dist[4], -2 * dist[5],
     -2 * dist[0] - beta0, -2 * dist[1] - beta0, -2 * dist[2] - beta0, -2 * dist[3] - beta0, -2 * dist[4] - beta0, -2 * dist[5] - beta0,
-    -2 * dist[0] - beta0, -2 * dist[1] - beta0, -2 * dist[2] - beta0, -2 * dist[3] - beta0, -2 * dist[4] - beta0, -2 * dist[5] - beta0,
+    -2 * dist[0] - beta1, -2 * dist[1] - beta1, -2 * dist[2] - beta1, -2 * dist[3] - beta1, -2 * dist[4] - beta1, -2 * dist[5] - beta1,
     0.0f, 0.0f,
   };
   HalfSpaceSet hss(kConstraintNum - 2, a, b, c, d);

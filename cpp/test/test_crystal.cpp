@@ -4,6 +4,7 @@
 #include "gtest/gtest.h"
 
 #include <vector>
+#include <algorithm>
 
 namespace {
 
@@ -65,6 +66,17 @@ protected:
       }
       EXPECT_TRUE(findSameNorm);
     }
+
+    auto v1 = c1->getVertexes();
+    auto v2 = c2->getVertexes();
+    for (const auto& v : v1) {
+      auto findIter = std::find(v2.begin(), v2.end(), v);
+      EXPECT_NE(findIter, v2.end());
+    }
+    for (const auto& v : v2) {
+      auto findIter = std::find(v1.begin(), v1.end(), v);
+      EXPECT_NE(findIter, v1.end());
+    }
   }
 
 };
@@ -105,18 +117,18 @@ TEST_F(CrystalTest, HexCylinderVertex) {
   float k = kSqrt3 / 2;
 
   std::vector<IceHalo::Math::Vec3f> pts0 = {
-    {  k,    -0.5f,  h / 2 },
-    {  k,     0.5f,  h / 2 },
-    {  0.0f,  1.0f,  h / 2 },
-    { -k,     0.5f,  h / 2 },
-    { -k,    -0.5f,  h / 2 },
-    {  0.0f, -1.0f,  h / 2 },
-    {  k,    -0.5f, -h / 2 },
-    {  k,     0.5f, -h / 2 },
-    {  0.0f,  1.0f, -h / 2 },
-    { -k,     0.5f, -h / 2 },
-    { -k,    -0.5f, -h / 2 },
-    {  0.0f, -1.0f, -h / 2 },
+    {  k,    -0.5f,  h },
+    {  k,     0.5f,  h },
+    {  0.0f,  1.0f,  h },
+    { -k,     0.5f,  h },
+    { -k,    -0.5f,  h },
+    {  0.0f, -1.0f,  h },
+    {  k,    -0.5f, -h },
+    {  k,     0.5f, -h },
+    {  0.0f,  1.0f, -h },
+    { -k,     0.5f, -h },
+    { -k,    -0.5f, -h },
+    {  0.0f, -1.0f, -h },
   };
   std::vector<int> faceId0 = {
     1, 1, 1, 1, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 2, 2, 2, 2,
@@ -142,30 +154,30 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
   float k = kSqrt3 / 2;
 
   std::vector<IceHalo::Math::Vec3f> pts0 = {
-    {     k * r1, -0.5f * r1,  h2 / 2 + h1 * H },
-    {     k * r1,  0.5f * r1,  h2 / 2 + h1 * H },
-    {  0.0f * r1,  1.0f * r1,  h2 / 2 + h1 * H },
-    {    -k * r1,  0.5f * r1,  h2 / 2 + h1 * H },
-    {    -k * r1, -0.5f * r1,  h2 / 2 + h1 * H },
-    {  0.0f * r1, -1.0f * r1,  h2 / 2 + h1 * H },
-    {     k, -0.5f,  h2 / 2 },
-    {     k,  0.5f,  h2 / 2 },
-    {  0.0f,  1.0f,  h2 / 2 },
-    {    -k,  0.5f,  h2 / 2 },
-    {    -k, -0.5f,  h2 / 2 },
-    {  0.0f, -1.0f,  h2 / 2 },
-    {     k, -0.5f, -h2 / 2 },
-    {     k,  0.5f, -h2 / 2 },
-    {  0.0f,  1.0f, -h2 / 2 },
-    {    -k,  0.5f, -h2 / 2 },
-    {    -k, -0.5f, -h2 / 2 },
-    {  0.0f, -1.0f, -h2 / 2 },
-    {     k * r3, -0.5f * r3, -h2 / 2 - h3 * H },
-    {     k * r3,  0.5f * r3, -h2 / 2 - h3 * H },
-    {  0.0f * r3,  1.0f * r3, -h2 / 2 - h3 * H },
-    {    -k * r3,  0.5f * r3, -h2 / 2 - h3 * H },
-    {    -k * r3, -0.5f * r3, -h2 / 2 - h3 * H },
-    {  0.0f * r3, -1.0f * r3, -h2 / 2 - h3 * H },
+    {     k * r1, -0.5f * r1,  h2 + h1 * H },
+    {     k * r1,  0.5f * r1,  h2 + h1 * H },
+    {  0.0f * r1,  1.0f * r1,  h2 + h1 * H },
+    {    -k * r1,  0.5f * r1,  h2 + h1 * H },
+    {    -k * r1, -0.5f * r1,  h2 + h1 * H },
+    {  0.0f * r1, -1.0f * r1,  h2 + h1 * H },
+    {     k, -0.5f,  h2 },
+    {     k,  0.5f,  h2 },
+    {  0.0f,  1.0f,  h2 },
+    {    -k,  0.5f,  h2 },
+    {    -k, -0.5f,  h2 },
+    {  0.0f, -1.0f,  h2 },
+    {     k, -0.5f, -h2 },
+    {     k,  0.5f, -h2 },
+    {  0.0f,  1.0f, -h2 },
+    {    -k,  0.5f, -h2 },
+    {    -k, -0.5f, -h2 },
+    {  0.0f, -1.0f, -h2 },
+    {     k * r3, -0.5f * r3, -h2 - h3 * H },
+    {     k * r3,  0.5f * r3, -h2 - h3 * H },
+    {  0.0f * r3,  1.0f * r3, -h2 - h3 * H },
+    {    -k * r3,  0.5f * r3, -h2 - h3 * H },
+    {    -k * r3, -0.5f * r3, -h2 - h3 * H },
+    {  0.0f * r3, -1.0f * r3, -h2 - h3 * H },
   };
   std::vector<int> faceId0 = {
     1, 1, 1, 1,
@@ -231,16 +243,16 @@ TEST_F(CrystalTest, IrregularHexCylinderVertex1) {
   float dist[6] = { 1.0f, 1.0f, 1.5f, 1.0f, 2.5f, 1.0f };
 
   std::vector<IceHalo::Math::Vec3f> pts0 {
-    {  kSqrt3 / 2, -0.5f,  h / 2 },
-    {  kSqrt3 / 2,  0.5f,  h / 2 },
-    { -kSqrt3 / 4, 1.25f,  h / 2 },
-    { -kSqrt3 / 2,  1.0f,  h / 2 },
-    { -kSqrt3 / 2, -1.5f,  h / 2 },
-    {  kSqrt3 / 2, -0.5f, -h / 2 },
-    {  kSqrt3 / 2,  0.5f, -h / 2 },
-    { -kSqrt3 / 4, 1.25f, -h / 2 },
-    { -kSqrt3 / 2,  1.0f, -h / 2 },
-    { -kSqrt3 / 2, -1.5f, -h / 2 },
+    {  kSqrt3 / 2, -0.5f,  h },
+    {  kSqrt3 / 2,  0.5f,  h },
+    { -kSqrt3 / 4, 1.25f,  h },
+    { -kSqrt3 / 2,  1.0f,  h },
+    { -kSqrt3 / 2, -1.5f,  h },
+    {  kSqrt3 / 2, -0.5f, -h },
+    {  kSqrt3 / 2,  0.5f, -h },
+    { -kSqrt3 / 4, 1.25f, -h },
+    { -kSqrt3 / 2,  1.0f, -h },
+    { -kSqrt3 / 2, -1.5f, -h },
   };
   std::vector<IceHalo::Math::TriangleIdx> faces0 {
     { 0, 1, 2 }, { 0, 2, 3 }, { 0, 3, 4 },
