@@ -4,29 +4,22 @@
 #include "mymath.h"
 
 #include <vector>
+#include <utility>
 #include <memory>
 
 namespace IceHalo {
 
+enum class CrystalType {
+  UNKNOWN,
+  PRISM,
+  PYRAMID,
+  STACK_PYRAMID,
+  CUBIC_PYRAMID,
+  CUSTOM,
+};
+
 class Crystal {
 public:
-  /*! @brief Constructor, given vertexes and faces
-   *
-   * @param vertexes
-   * @param faces
-   */
-  Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces);
-
-  /*! @brief Constructor, given vertexes, faces and faceId
-   *
-   * @param vertexes
-   * @param faces
-   * @param faceId the normalized face ID, or face number. see [Face numbers](https://www.atoptics.co.uk/halo/fnum.htm)
-   *        and [Pyramidal Crystal Face Numbers](https://www.atoptics.co.uk/halo/fnumpyr.htm)
-   */
-  Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces,
-          const std::vector<int>& faceId);
-
   int vtxNum() const;
   int totalFaces() const;
   int faceNumber(int idx) const;
@@ -121,14 +114,42 @@ public:
    */
   static std::shared_ptr<Crystal> createIrregularHexPyramid(float* dist, int* idx, float* h);
 
+  static std::shared_ptr<Crystal> createCustomCrystal(const std::vector<Math::Vec3f>& pts, const std::vector<Math::TriangleIdx>& faces);
+
 protected:
   void initNorms();
+  void initFaceNumbers();
+  void initFaceNumbersHex();
+  void initFaceNumberCubic();
+  void initFaceNumberStack();
 
-private:
+  static const std::vector<std::pair<Math::Vec3f, int> > hexFaceNormToNumberList;
+  static const std::vector<std::pair<Math::Vec3f, int> > cubicFaceNormToNumberList;
+
   std::vector<Math::Vec3f> vertexes;
   std::vector<Math::Vec3f> norms;
   std::vector<Math::TriangleIdx> faces;
   std::vector<int> faceIdMap;
+  CrystalType type;
+
+private:
+  /*! @brief Constructor, given vertexes and faces
+   *
+   * @param vertexes
+   * @param faces
+   */
+  Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces, CrystalType type);
+
+  /*! @brief Constructor, given vertexes, faces and faceId
+   *
+   * @param vertexes
+   * @param faces
+   * @param faceId the normalized face ID, or face number. see [Face numbers](https://www.atoptics.co.uk/halo/fnum.htm)
+   *        and [Pyramidal Crystal Face Numbers](https://www.atoptics.co.uk/halo/fnumpyr.htm)
+   */
+  Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces,
+          const std::vector<int>& faceId, CrystalType type);
+
 };
 
 using CrystalPtr = std::shared_ptr<Crystal>;

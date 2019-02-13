@@ -743,7 +743,7 @@ CrystalPtr SimulationContext::parseCustomCrystal(std::FILE* file) {
         break;
     }
   }
-  return std::make_shared<Crystal>(vertexes, faces);
+  return Crystal::createCustomCrystal(vertexes, faces);
 }
 
 
