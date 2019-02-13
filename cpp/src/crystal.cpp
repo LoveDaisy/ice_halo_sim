@@ -649,4 +649,11 @@ CrystalPtr Crystal::createCustomCrystal(const std::vector<IceHalo::Math::Vec3f>&
   return std::shared_ptr<Crystal>(new Crystal(pts, faces, CrystalType::CUSTOM));
 }
 
+
+CrystalPtr Crystal::createCustomCrystal(const std::vector<IceHalo::Math::Vec3f>& pts,
+                                        const std::vector<IceHalo::Math::TriangleIdx>& faces,
+                                        const std::vector<int>& faceIdMap) {
+  return std::shared_ptr<Crystal>(new Crystal(pts, faces, faceIdMap, CrystalType::CUSTOM));
+}
+
 };  // namespace IceHalo

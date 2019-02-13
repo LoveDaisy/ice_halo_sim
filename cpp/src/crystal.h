@@ -98,7 +98,6 @@ public:
   /* Irregular hexagon cylinder */
   static std::shared_ptr<Crystal> createIrregularHexCylinder(float* dist, float h);
 
-  /* Irregular hexagon pyramid */
   /*! @brief Create a irregular hexagon pyramid crystal
    *
    * @param dist defines the distance from origin of each face. Must contains 6 numbers. The distance of a
@@ -114,7 +113,18 @@ public:
    */
   static std::shared_ptr<Crystal> createIrregularHexPyramid(float* dist, int* idx, float* h);
 
-  static std::shared_ptr<Crystal> createCustomCrystal(const std::vector<Math::Vec3f>& pts, const std::vector<Math::TriangleIdx>& faces);
+  /*! @brief Create a customized crystal
+   *
+   * @param pts the vertexes of the crystal
+   * @param faces the faces of the crystal
+   * @return
+   */
+  static std::shared_ptr<Crystal> createCustomCrystal(const std::vector<Math::Vec3f>& pts,
+                                                      const std::vector<Math::TriangleIdx>& faces);
+
+  static std::shared_ptr<Crystal> createCustomCrystal(const std::vector<Math::Vec3f>& pts,
+                                                      const std::vector<Math::TriangleIdx>& faces,
+                                                      const std::vector<int>& faceIdMap);
 
 protected:
   void initNorms();
