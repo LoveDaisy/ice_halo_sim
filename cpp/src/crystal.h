@@ -42,7 +42,7 @@ public:
    * @param h the height of prism. The diameter of basal face is 1
    * @return a pointer to the crystal
    */
-  static std::unique_ptr<Crystal> createHexCylinder(float h);
+  static std::unique_ptr<Crystal> createHexPrism(float h);
 
   /*! @brief create a hexagon pyramid crystal
    *
@@ -101,7 +101,7 @@ public:
    * @param h defines the height / diameter
    * @return
    */
-  static std::unique_ptr<Crystal> createIrregularHexCylinder(float* dist, float h);
+  static std::unique_ptr<Crystal> createIrregularHexPrism(float *dist, float h);
 
   /*! @brief Create a irregular hexagon pyramid crystal
    *

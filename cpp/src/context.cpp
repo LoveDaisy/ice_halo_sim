@@ -569,7 +569,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
       throw std::invalid_argument(msgBuffer);
     }
     auto h = static_cast<float>(p->GetDouble());
-    cryCtx->setCrystal(Crystal::createHexCylinder(h), population,
+    cryCtx->setCrystal(Crystal::createHexPrism(h), population,
                        axisDist, axisMean, axisStd,
                        rollDist, rollMean, rollStd);
   } else if (c["type"] == "HexPyramid") {
@@ -656,7 +656,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
       auto h = static_cast<float>((*p)[6].GetDouble());
 
       float dist[6] = { d1, d2, d3, d4, d5, d6 };
-      cryCtx->setCrystal(Crystal::createIrregularHexCylinder(dist, h), population,
+      cryCtx->setCrystal(Crystal::createIrregularHexPrism(dist, h), population,
                          axisDist, axisMean, axisStd,
                          rollDist, rollMean, rollStd);
     }

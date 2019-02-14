@@ -250,7 +250,7 @@ const std::vector<std::pair<Math::Vec3f, int> > Crystal::cubicFaceNormToNumberLi
 };
 
 
-CrystalPtrU Crystal::createHexCylinder(float h) {
+CrystalPtrU Crystal::createHexPrism(float h) {
   using Math::Vec3f;
   using Math::TriangleIdx;
   using Math::kPi;
@@ -476,7 +476,7 @@ CrystalPtrU Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int
 }
 
 
-CrystalPtrU Crystal::createIrregularHexCylinder(float* dist, float h) {
+CrystalPtrU Crystal::createIrregularHexPrism(float *dist, float h) {
   /* Use a naive algorithm to determine the profile of basal face
    * 1. For each line pair L1 and L2, get their intersection point p12;
    * 2. For all half planes, check if p12 is in the plane;
