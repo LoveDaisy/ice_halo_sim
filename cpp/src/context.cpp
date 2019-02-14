@@ -806,6 +806,8 @@ void SimulationContext::fillSunDir(float* dir, uint64_t num) {
     tmp_dir[i * 3 + 2] = z;
   }
   Math::rotateZBack(sunRot, tmp_dir, dir, num);
+
+  delete[] tmp_dir;
 }
 
 
