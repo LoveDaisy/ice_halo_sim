@@ -25,7 +25,7 @@ TEST_F(ContextTest, CreateNotNull) {
 
 
 TEST_F(ContextTest, CheckSunDir) {
-  auto sunDir = context->getSunDir();
+  auto sunDir = context->getSunRayDir();
   EXPECT_NEAR(sunDir[0], 0.0f, IceHalo::Math::kFloatEps);
   EXPECT_NEAR(sunDir[1], -0.906308f, IceHalo::Math::kFloatEps);
   EXPECT_NEAR(sunDir[2], -0.422618f, IceHalo::Math::kFloatEps);
@@ -33,12 +33,13 @@ TEST_F(ContextTest, CheckSunDir) {
 
 
 TEST_F(ContextTest, FillSunDir) {
-  auto sunDir = context->getSunDir();
+  auto sunDir = context->getSunRayDir();
   auto sunD = context->getSunDiameter();
 
   constexpr int kRayNum = 100;
   float dir[3 * kRayNum];
-  context->fillSunDir(dir, kRayNum);
+  auto& sampler = IceHalo::Math::RandomSampler::GetInstance();
+  sampler.SampleSphericalPointsCart(sunDir, sunD / 2, dir, kRayNum);
 
   for (int i = 0; i < kRayNum; i++) {
     float a = std::acos(IceHalo::Math::dot3(sunDir, dir + i * 3));    // In rad

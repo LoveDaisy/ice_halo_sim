@@ -494,114 +494,215 @@ const int* TriangleIdx::idx() const {
 HalfSpaceSet::HalfSpaceSet(int n, float* a, float* b, float* c, float* d)
     : n(n), a(a), b(b), c(c), d(d) {}
 
-}  // namespace Math
+
+RandomNumberGenerator::RandomNumberGenerator() : generator{random_number_seed_} {}
 
 
-/*
-  top vertex:
-    2   1
-  3       0
-    4   5
-
-  upper vertex:
-    8   7
-  9       6
-    10  11
-
-  lower vertex:
-    14  13
-  15      12
-    16  17
-
-  bottom vertex:
-    20  19
-  21      18
-    22  23
-*/
-
-
-/*
-  top vertex:
-    2   1
-  3       0
-    4   5
-
-  upper vertex:
-    8   7
-  9       6
-    10  11
-
-  lower vertex:
-    14  13
-  15      12
-    16  17
-
-  bottom vertex:
-    20  19
-  21      18
-    22  23
-*/
-
-
-namespace Math {
-
-OrientationGenerator::OrientationGenerator()
-    : axDist(Distribution::UNIFORM), axMean(0), axStd(0),
-      rollDist(Distribution::UNIFORM), rollMean(0), rollStd(0) {}
-
-OrientationGenerator::OrientationGenerator(Distribution axDist, float axMean, float axStd,
-                                           Distribution rollDist, float rollMean, float rollStd)
-    : axDist(axDist), axMean(axMean), axStd(axStd),
-      rollDist(rollDist), rollMean(rollMean), rollStd(rollStd) {
-  unsigned int seed = static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count());
-  // unsigned int seed = 2345;
-  generator.seed(seed);
+RandomNumberGenerator& RandomNumberGenerator::GetInstance() {
+  static RandomNumberGenerator rng;
+  return rng;
 }
 
-void OrientationGenerator::fillData(const float* sunDir, int num, float* rayDir, float* mainAxRot) {
-  for (int i = 0; i < num; i++) {
-    float lon = 0, lat = 0, roll = 0;
 
-    switch (axDist) {
-      case Distribution::UNIFORM : {
-        float v[3] = {gaussDistribution(generator),
-                gaussDistribution(generator),
-                gaussDistribution(generator)};
-        Math::normalize3(v);
-        lon = atan2(v[1], v[0]);
-        lat = asin(v[2] / Math::norm3(v));
-      }
-        break;
-      case Distribution::GAUSS :
-        lon = uniformDistribution(generator) * 2 * Math::kPi;
-        lat = gaussDistribution(generator) * axStd;
-        lat += axMean;
-        if (lat > Math::kPi / 2) {
-          lat = Math::kPi - lat;
-        }
-        if (lat < -Math::kPi / 2) {
-          lat = -Math::kPi - lat;
-        }
-        break;
-    }
+float RandomNumberGenerator::getGaussian() {
+  return gauss_dist_(generator);
+}
 
-    switch (rollDist) {
-      case Distribution::GAUSS :
-        roll = gaussDistribution(generator) * rollStd + rollMean;
-        break;
-      case Distribution::UNIFORM :
-        roll = (uniformDistribution(generator) - 0.5f) * rollStd + rollMean;
-        break;
-    }
 
-    mainAxRot[i * 3 + 0] = lon;
-    mainAxRot[i * 3 + 1] = lat;
-    mainAxRot[i * 3 + 2] = roll;
+float RandomNumberGenerator::getUniform() {
+  return uniform_dist_(generator);
+}
 
-    Math::rotateZ(mainAxRot + i * 3, sunDir, rayDir + i * 3);
+
+float RandomNumberGenerator::get(Distribution dist, float mean, float std) {
+  switch (dist) {
+    case Distribution::UNIFORM :
+      return (getUniform() - 0.5f) * 2 * std + mean;
+    case Distribution::GAUSS :
+      return getGaussian() * std + mean;
   }
 }
 
-}   // namespace Math
+
+RandomSampler& RandomSampler::GetInstance() {
+  static RandomSampler r;
+  return r;
+}
+
+
+void RandomSampler::SampleSphericalPointsCart(float* data, size_t num) {
+  auto& rng = RandomNumberGenerator::GetInstance();
+  for (decltype(num) i = 0; i < num; i++) {
+    float u = rng.getUniform();
+    float q = rng.getUniform() * 2 * Math::kPi;
+
+    float r = std::sqrt(1.0f - u * u);
+
+    data[i * 3 + 0] = r * std::cos(q);
+    data[i * 3 + 1] = r * std::sin(q);
+    data[i * 3 + 2] = u;
+  }
+}
+
+
+void RandomSampler::SampleSphericalPointsCart(Distribution dist, float lat, float std,
+                                              float* data, size_t num) {
+  auto& rng = RandomNumberGenerator::GetInstance();
+  for (decltype(num) i = 0; i < num; i++) {
+    float u = rng.get(dist, lat, std);
+    float q = rng.getUniform() * 2 * Math::kPi;
+
+    float r = std::cos(u);
+    data[i * 3 + 0] = r * std::cos(q);
+    data[i * 3 + 1] = r * std::sin(q);
+    data[i * 3 + 2] = std::sin(u);
+  }
+}
+
+
+void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float* data, size_t num) {
+  auto& rng = RandomNumberGenerator::GetInstance();
+
+  float lon = std::atan2(dir[1], dir[0]);
+  float lat = std::asin(dir[2] / Math::norm3(dir));
+  float rot[3] = { lon, lat, 0 };
+
+  auto* tmp_dir = new float[num * 3];
+
+  float dz = 1.0f - std::cos(std / 180.0f * Math::kPi);
+  for (decltype(num) i = 0; i < num; i++) {
+    float z = 1.0f - rng.getUniform() * dz;
+    float r = std::sqrt(1.0f - z * z);
+    float q = rng.getUniform() * 2 * Math::kPi;
+    float x = std::cos(q) * r;
+    float y = std::sin(q) * r;
+
+    tmp_dir[i * 3 + 0] = x;
+    tmp_dir[i * 3 + 1] = y;
+    tmp_dir[i * 3 + 2] = z;
+  }
+  Math::rotateZBack(rot, tmp_dir, data, num);
+
+  delete[] tmp_dir;
+}
+
+
+void RandomSampler::SampleSphericalPointsSph(Distribution dist, float lat, float std,
+                                             float* data, size_t num) {
+  auto& rng = RandomNumberGenerator::GetInstance();
+  for (decltype(num) i = 0; i < num; i++) {
+    float u = rng.get(dist, lat, std);
+    float q = rng.getUniform() * 2 * Math::kPi;
+
+    data[i * 2 + 0] = q;
+    data[i * 2 + 1] = u;
+  }
+}
+
+
+void RandomSampler::SampleTriangularPoints(const float* vertexes, float* data, size_t num) {
+  auto& rng = RandomNumberGenerator::GetInstance();
+  for (decltype(num) i = 0; i < num; i++) {
+    float a = rng.getUniform();
+    float b = rng.getUniform();
+
+    if (a + b > 1.0f) {
+      a = 1.0f - a;
+      b = 1.0f - b;
+    }
+
+    for (int j = 0; j < 3; j++) {
+      data[i * 3 + j] = (vertexes[j + 3] - vertexes[j]) * a + vertexes[j] +
+                        (vertexes[j + 6] - vertexes[j]) * b + vertexes[j];
+    }
+  }
+}
+
+
+int RandomSampler::SampleInt(const float* p, int max) {
+  auto& rng = RandomNumberGenerator::GetInstance();
+
+  float current_cum_p = 0;
+  float current_p = rng.getUniform();
+
+  for (decltype(max) i = 0; i < max; i++) {
+    current_cum_p += p[i];
+    if (current_p < current_cum_p) {
+      return i;
+    }
+  }
+
+  return max - 1;
+}
+
+
+int RandomSampler::SampleInt(int max) {
+  auto& rng = RandomNumberGenerator::GetInstance();
+  return std::min(static_cast<int>(rng.getUniform() * max), max - 1);
+}
+
+}  // namespace Math
+
+
+// namespace Math {
+
+// OrientationGenerator::OrientationGenerator()
+//     : axDist(Distribution::UNIFORM), axMean(0), axStd(0),
+//       rollDist(Distribution::UNIFORM), rollMean(0), rollStd(0) {}
+//
+// OrientationGenerator::OrientationGenerator(Distribution axDist, float axMean, float axStd,
+//                                            Distribution rollDist, float rollMean, float rollStd)
+//     : axDist(axDist), axMean(axMean), axStd(axStd),
+//       rollDist(rollDist), rollMean(rollMean), rollStd(rollStd) {
+//   unsigned int seed = static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count());
+//   // unsigned int seed = 2345;
+//   generator.seed(seed);
+// }
+
+// void OrientationGenerator::fillData(const float* sunDir, int num, float* rayDir, float* mainAxRot) {
+//   for (int i = 0; i < num; i++) {
+//     float lon = 0, lat = 0, roll = 0;
+//
+//     switch (axDist) {
+//       case Distribution::UNIFORM : {
+//         float v[3] = {gaussDistribution(generator),
+//                 gaussDistribution(generator),
+//                 gaussDistribution(generator)};
+//         Math::normalize3(v);
+//         lon = atan2(v[1], v[0]);
+//         lat = asin(v[2] / Math::norm3(v));
+//       }
+//         break;
+//       case Distribution::GAUSS :
+//         lon = uniformDistribution(generator) * 2 * Math::kPi;
+//         lat = gaussDistribution(generator) * axStd;
+//         lat += axMean;
+//         if (lat > Math::kPi / 2) {
+//           lat = Math::kPi - lat;
+//         }
+//         if (lat < -Math::kPi / 2) {
+//           lat = -Math::kPi - lat;
+//         }
+//         break;
+//     }
+//
+//     switch (rollDist) {
+//       case Distribution::GAUSS :
+//         roll = gaussDistribution(generator) * rollStd + rollMean;
+//         break;
+//       case Distribution::UNIFORM :
+//         roll = (uniformDistribution(generator) - 0.5f) * rollStd + rollMean;
+//         break;
+//     }
+//
+//     mainAxRot[i * 3 + 0] = lon;
+//     mainAxRot[i * 3 + 1] = lat;
+//     mainAxRot[i * 3 + 2] = roll;
+//
+//     Math::rotateZ(mainAxRot + i * 3, sunDir, rayDir + i * 3);
+//   }
+// }
+
+// }   // namespace Math
 
 }   // namespace IceHalo

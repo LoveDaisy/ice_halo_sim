@@ -32,17 +32,21 @@ void RaySegment::reset() {
 }
 
 
-Ray::Ray(const float* pt, const float* dir, float w, int faceId) {
-  firstRaySeg = RaySegmentPool::getInstance().getRaySegment(pt, dir, w, faceId);
-}
+// Ray::Ray(const float* pt, const float* dir, float w, int faceId) {
+//   firstRaySeg = RaySegmentPool::getInstance().getRaySegment(pt, dir, w, faceId);
+// }
+//
+//
+// Ray::Ray(RaySegment* seg) : firstRaySeg(seg) {}
 
 
-Ray::Ray(RaySegment* seg) : firstRaySeg(seg) {}
+// Ray::~Ray() {
+//   firstRaySeg = nullptr;
+// }
 
+Ray::Ray(const IceHalo::CrystalContextPtr& ctx, IceHalo::RaySegment *seg)
+    : firstRaySeg(seg), ctx(ctx) {}
 
-Ray::~Ray() {
-  firstRaySeg = nullptr;
-}
 
 size_t Ray::totalNum() {
   if (firstRaySeg == nullptr) {
@@ -71,143 +75,200 @@ size_t Ray::totalNum() {
 
 
 
-void Optics::hitSurface(float n, const std::shared_ptr<RayTracingContext>& rayCtx) {
-  Pool* pool = Pool::getInstance();
-  int step = rayCtx->currentRayNum / 80;
-  for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
-    int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
-    pool->addJob([=, &rayCtx]{
-      hitSurfaceRange(n, rayCtx, startIdx, endIdx);
-    });
-  }
-  pool->waitFinish();
-}
+// void Optics::hitSurface(float n, const std::shared_ptr<RayTracingContext>& rayCtx) {
+//   Pool* pool = Pool::getInstance();
+//   int step = rayCtx->currentRayNum / 80;
+//   for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
+//     int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
+//     pool->addJob([=, &rayCtx]{
+//       hitSurfaceRange(n, rayCtx, startIdx, endIdx);
+//     });
+//   }
+//   pool->waitFinish();
+// }
+//
+//
+// void Optics::hitSurfaceRange(float n, const RayTracingContextPtr& rayCtx, int startIdx, int endIdx) {
+//   for (int i = startIdx; i < endIdx; i++) {
+//     const float* tmp_dir = rayCtx->rayDir + i * 3;
+//     const float* tmp_norm = rayCtx->faceNorm + i * 3;
+//
+//     float cos_theta = Math::dot3(tmp_dir, tmp_norm);
+//
+//     float rr = cos_theta > 0 ? n : 1.0f / n;
+//
+//     rayCtx->rayW2[i] = getReflectRatio(cos_theta, rr);
+//
+//     for (int j = 0; j < 3; ++j) {
+//       rayCtx->rayDir2[i*3+j] = tmp_dir[j] - 2 * cos_theta * tmp_norm[j];
+//     }
+//
+//     float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
+//     for (int j = 0; j < 3; j++) {
+//       rayCtx->rayDir3[i*3+j] = d <= 0.0f ? rayCtx->rayDir2[i*3+j] :
+//       rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];
+//     }
+//   }
+// }
 
 
-void Optics::hitSurfaceRange(float n, const RayTracingContextPtr& rayCtx, int startIdx, int endIdx) {
-  for (int i = startIdx; i < endIdx; i++) {
-    const float* tmp_dir = rayCtx->rayDir + i * 3;
-    const float* tmp_norm = rayCtx->faceNorm + i * 3;
+void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
+                        const float *dir_in, const int *face_id_in, const float *w_in,
+                        float *dir_out, float *w_out) {
+  auto face_num = crystal->totalFaces();
+  auto face_norm = new float[face_num * 3];
+  crystal->copyNormData(face_norm);
+
+  for (decltype(num) i = 0; i < num; i++) {
+    const float* tmp_dir = dir_in + i * 3;
+    const float* tmp_norm = face_norm + face_id_in[i] * 3;
 
     float cos_theta = Math::dot3(tmp_dir, tmp_norm);
-
     float rr = cos_theta > 0 ? n : 1.0f / n;
-
-    rayCtx->rayW2[i] = getReflectRatio(cos_theta, rr);
-
-    for (int j = 0; j < 3; ++j) {
-      rayCtx->rayDir2[i*3+j] = tmp_dir[j] - 2 * cos_theta * tmp_norm[j];
-    }
-
     float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
+
+    w_out[i] = getReflectRatio(cos_theta, rr) * w_in[i];
+
+    float* tmp_dir_reflection = dir_out + (i * 2 + 0) * 3;
+    float* tmp_dir_refraction = dir_out + (i * 2 + 1) * 3;
     for (int j = 0; j < 3; j++) {
-      rayCtx->rayDir3[i*3+j] = d <= 0.0f ? rayCtx->rayDir2[i*3+j] :
-      rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];
+      tmp_dir_reflection[j] = tmp_dir[j] - 2 * cos_theta * tmp_norm[j];  // Reflection
+      tmp_dir_refraction[j] = d <= 0.0f ? tmp_dir_reflection[j] :
+                              rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];  // Refraction
     }
   }
+
+  delete[] face_norm;
 }
 
-void Optics::propagate(const RayTracingContextPtr& rayCtx,
-                       const CrystalContextPtr& cryCtx) {
-  auto faceNum = cryCtx->getCrystal()->totalFaces();
-  auto* faces = new float[faceNum * 9];
-  auto* faceBases = new float[faceNum * 6];
-  cryCtx->getCrystal()->copyFaceData(faces);
-  for (int i = 0; i < faceNum; i++) {
-    Math::vec3FromTo(faces + i * 9 + 0, faces + i * 9 + 3, faceBases + i * 6 + 0);
-    Math::vec3FromTo(faces + i * 9 + 0, faces + i * 9 + 6, faceBases + i * 6 + 3);
-  }
-  for (decltype(rayCtx->currentRayNum) i = 0; i < rayCtx->currentRayNum; i++) {
-    rayCtx->faceId2[i] = -1;
+// void Optics::propagate(const RayTracingContextPtr& rayCtx,
+//                        const CrystalContextPtr& cryCtx) {
+//   auto faceNum = cryCtx->getCrystal()->totalFaces();
+//   auto* faces = new float[faceNum * 9];
+//   auto* faceBases = new float[faceNum * 6];
+//   cryCtx->getCrystal()->copyFaceData(faces);
+//   for (int i = 0; i < faceNum; i++) {
+//     Math::vec3FromTo(faces + i * 9 + 0, faces + i * 9 + 3, faceBases + i * 6 + 0);
+//     Math::vec3FromTo(faces + i * 9 + 0, faces + i * 9 + 6, faceBases + i * 6 + 3);
+//   }
+//   for (decltype(rayCtx->currentRayNum) i = 0; i < rayCtx->currentRayNum; i++) {
+//     rayCtx->faceId2[i] = -1;
+//   }
+//
+//   Pool* pool = Pool::getInstance();
+//   int step = rayCtx->currentRayNum / 80;
+//   for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
+//     int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
+//     pool->addJob([=, &rayCtx]{
+//       for (int i = startIdx; i < endIdx; i++) {
+//         intersectLineWithTriangles(rayCtx->rayPts + i * 3, rayCtx->rayDir + i * 3,
+//                                    faceBases, faces, faceNum,
+//                                    rayCtx->rayPts2 + i * 3, rayCtx->faceId2 + i);
+//       }
+//     });
+//   }
+//   pool->waitFinish();
+//
+//   delete[] faces;
+//   delete[] faceBases;
+// }
+
+void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,
+                       const float *pt_in, const float *dir_in, float *pt_out,
+                       int *face_id_out) {
+  auto face_num = crystal->totalFaces();
+  auto faces = new float[face_num * 9];
+  auto face_bases = new float[face_num * 6];
+
+  crystal->copyFaceData(faces);
+  for (int i = 0; i < face_num; i++) {
+    Math::vec3FromTo(faces + i * 9 + 0, faces + i * 9 + 3, face_bases + i * 6 + 0);
+    Math::vec3FromTo(faces + i * 9 + 0, faces + i * 9 + 6, face_bases + i * 6 + 3);
   }
 
-  Pool* pool = Pool::getInstance();
-  int step = rayCtx->currentRayNum / 80;
-  for (int startIdx = 0; startIdx < rayCtx->currentRayNum; startIdx += step) {
-    int endIdx = std::min(startIdx + step, rayCtx->currentRayNum);
-    pool->addJob([=, &rayCtx]{
-      for (int i = startIdx; i < endIdx; i++) {
-        intersectLineWithTriangles(rayCtx->rayPts + i * 3, rayCtx->rayDir + i * 3,
-                                   faceBases, faces, faceNum,
-                                   rayCtx->rayPts2 + i * 3, rayCtx->faceId2 + i);
-      }
-    });
+  for (decltype(num) i = 0; i < num; i++) {
+    face_id_out[i] = -1;
   }
-  pool->waitFinish();
+
+  for (decltype(num) i = 0; i < num; i++) {
+    intersectLineWithTriangles(pt_in + i * 3, dir_in + i * 3,
+                               face_bases, faces, face_num,
+                               pt_out + i * 3, face_id_out + i);
+  }
 
   delete[] faces;
-  delete[] faceBases;
+  delete[] face_bases;
 }
 
 
-void Optics::traceRays(std::unique_ptr<SimulationContext>& context) {
-  RaySegmentPool::getInstance().clear();
-
-  auto totalRays = context->getTotalInitRays();
-  auto maxRecursion = context->getMaxRecursionNum();
-  auto multiScatterNum = context->getMultiScatterNum();
-  auto maxNum = totalRays * maxRecursion * multiScatterNum * 3;
-
-  auto* dirStore = new float[maxNum * 3];
-  auto* dirStore2 = new float[maxNum * 3];
-  auto* wStore = new float[maxNum];
-  auto** raySegStore = new RaySegment*[maxNum];
-  auto** raySegStore2 = new RaySegment*[maxNum];
-
-  context->fillSunDir(dirStore, totalRays);
-
-  for (decltype(maxNum) i = 0; i < maxNum; i++) {
-    wStore[i] = 1.0f;
-    raySegStore[i] = nullptr;
-    raySegStore2[i] = nullptr;
-  }
-
-  std::default_random_engine randomEngine;
-  std::uniform_real_distribution<double> uniformDist(0.0, 1.0);
-  for (int scatterIdx = 0; scatterIdx < multiScatterNum; scatterIdx++) {
-    size_t inputOffset = 0, outputOffset = 0;
-    for (int crystalIdx = 0; crystalIdx < context->getCrystalNum(); crystalIdx++) {
-      auto crystalCtx = context->getCrystalContext(crystalIdx);
-      auto rayTracingCtx = context->getRayTracingContext(scatterIdx, crystalIdx);
-
-      rayTracingCtx->initRays(crystalCtx, rayTracingCtx->initRayNum,
-        dirStore + inputOffset * 3, wStore + inputOffset, raySegStore + inputOffset);
-
-      // Start loop
-      float index = IceRefractiveIndex::n(context->getCurrentWavelength());
-      for (int recursion = 0; !rayTracingCtx->isFinished() && recursion < maxRecursion; recursion++) {
-        hitSurface(index, rayTracingCtx);
-        rayTracingCtx->commitHitResult();
-        propagate(rayTracingCtx, crystalCtx);
-        rayTracingCtx->commitPropagateResult(crystalCtx);
-      }
-
-      inputOffset += rayTracingCtx->initRayNum;
-
-      auto tmpRaySegs = rayTracingCtx->copyFinishedRaySegments(raySegStore2 + outputOffset,
-        dirStore2 + outputOffset * 3, context->getMultiScatterProb());
-      outputOffset += tmpRaySegs;
-    }
-
-    if (scatterIdx < multiScatterNum - 1) {
-      for (auto i = static_cast<int>(outputOffset - 1); i >= 0; i--) {
-        auto j = static_cast<size_t>(uniformDist(randomEngine) * i);
-        raySegStore[i] = raySegStore2[j];
-        raySegStore[j] = raySegStore2[i];
-        std::memcpy(dirStore + j*3, dirStore2 + i*3, sizeof(float)*3);
-        std::memcpy(dirStore + i*3, dirStore2 + j*3, sizeof(float)*3);
-        wStore[i] = raySegStore[i]->w;
-      }
-      context->setCrystalRayNum(scatterIdx + 1, outputOffset);
-    }
-  }
-
-  delete[] dirStore;
-  delete[] dirStore2;
-  delete[] wStore;
-  delete[] raySegStore;
-  delete[] raySegStore2;
-}
+// void Optics::traceRays(std::unique_ptr<SimulationContext>& context) {
+//   RaySegmentPool::getInstance().clear();
+//
+//   auto totalRays = context->getTotalInitRays();
+//   auto maxRecursion = context->getMaxRecursionNum();
+//   auto multiScatterNum = context->getMultiScatterNum();
+//   auto maxNum = totalRays * maxRecursion * multiScatterNum * 3;
+//
+//   auto* dirStore = new float[maxNum * 3];
+//   auto* dirStore2 = new float[maxNum * 3];
+//   auto* wStore = new float[maxNum];
+//   auto** raySegStore = new RaySegment*[maxNum];
+//   auto** raySegStore2 = new RaySegment*[maxNum];
+//
+//   context->fillSunDir(dirStore, totalRays);
+//
+//   for (decltype(maxNum) i = 0; i < maxNum; i++) {
+//     wStore[i] = 1.0f;
+//     raySegStore[i] = nullptr;
+//     raySegStore2[i] = nullptr;
+//   }
+//
+//   std::default_random_engine randomEngine;
+//   std::uniform_real_distribution<double> uniformDist(0.0, 1.0);
+//   for (int scatterIdx = 0; scatterIdx < multiScatterNum; scatterIdx++) {
+//     size_t inputOffset = 0, outputOffset = 0;
+//     for (int crystalIdx = 0; crystalIdx < context->getCrystalNum(); crystalIdx++) {
+//       auto crystalCtx = context->getCrystalContext(crystalIdx);
+//       auto rayTracingCtx = context->getRayTracingContext(scatterIdx, crystalIdx);
+//
+//       rayTracingCtx->initRays(crystalCtx, rayTracingCtx->initRayNum,
+//         dirStore + inputOffset * 3, wStore + inputOffset, raySegStore + inputOffset);
+//
+//       // Start loop
+//       float index = IceRefractiveIndex::n(context->getCurrentWavelength());
+//       for (int recursion = 0; !rayTracingCtx->isFinished() && recursion < maxRecursion; recursion++) {
+//         hitSurface(index, rayTracingCtx);
+//         rayTracingCtx->commitHitResult();
+//         propagate(rayTracingCtx, crystalCtx);
+//         rayTracingCtx->commitPropagateResult(crystalCtx);
+//       }
+//
+//       inputOffset += rayTracingCtx->initRayNum;
+//
+//       auto tmpRaySegs = rayTracingCtx->copyFinishedRaySegments(raySegStore2 + outputOffset,
+//         dirStore2 + outputOffset * 3, context->getMultiScatterProb());
+//       outputOffset += tmpRaySegs;
+//     }
+//
+//     if (scatterIdx < multiScatterNum - 1) {
+//       for (auto i = static_cast<int>(outputOffset - 1); i >= 0; i--) {
+//         auto j = static_cast<size_t>(uniformDist(randomEngine) * i);
+//         raySegStore[i] = raySegStore2[j];
+//         raySegStore[j] = raySegStore2[i];
+//         std::memcpy(dirStore + j*3, dirStore2 + i*3, sizeof(float)*3);
+//         std::memcpy(dirStore + i*3, dirStore2 + j*3, sizeof(float)*3);
+//         wStore[i] = raySegStore[i]->w;
+//       }
+//       context->setCrystalRayNum(scatterIdx + 1, outputOffset);
+//     }
+//   }
+//
+//   delete[] dirStore;
+//   delete[] dirStore2;
+//   delete[] wStore;
+//   delete[] raySegStore;
+//   delete[] raySegStore2;
+// }
 
 
 float Optics::getReflectRatio(float cos_angle, float rr) {

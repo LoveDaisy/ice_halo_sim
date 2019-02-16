@@ -12,11 +12,11 @@
 
 namespace IceHalo {
 
-class RaySegment {
-public:
-  RaySegment();
-  ~RaySegment() = default;
+class RaySegmentPool;
 
+class RaySegment {
+friend class RaySegmentPool;
+public:
   bool isValidEnd();
   void reset();
 
@@ -30,31 +30,63 @@ public:
   int faceId;
 
   bool isFinished;
+
+private:
+  RaySegment();
 };
 
 
 class Ray {
 public:
-  explicit Ray(RaySegment* seg);
-  Ray(const float* pt, const float* dir, float w, int faceId = -1);
-  ~Ray();
+  Ray(const CrystalContextPtr& ctx, RaySegment* seg);
 
   size_t totalNum();
 
   RaySegment* firstRaySeg;
+  CrystalContextPtr ctx;
+};
+
+using RayPtr = std::shared_ptr<Ray>;
+
+
+class RaySegmentPool {
+public:
+  ~RaySegmentPool();
+  RaySegmentPool(RaySegmentPool const&) = delete;
+  void operator=(RaySegmentPool const&) = delete;
+
+  static RaySegmentPool& getInstance();
+
+  RaySegment* getRaySegment(const float* pt, const float* dir, float w, int faceId);
+  void clear();
+
+private:
+  RaySegmentPool();
+
+  static constexpr uint32_t kChunkSize = 1024 * 128;
+
+  std::vector<RaySegment*> segments;
+  std::atomic<uint64_t> nextUnusedId;
+  std::atomic<uint64_t> currentChunkId;
 };
 
 
 class Optics {
 public:
-  static void traceRays(std::unique_ptr<SimulationContext>& context);
+//  static void traceRays(std::unique_ptr<SimulationContext>& context);
+  static void HitSurface(const CrystalPtr& crystal, float n, size_t num,
+                         const float* dir_in, const int* face_id_in, const float* w_in,
+                         float* dir_out, float* w_out);
+  static void Propagate(const CrystalPtr& crystal, size_t num,
+                        const float* pt_in, const float* dir_in,
+                        float* pt_out, int* face_id_out);
 
 private:
-  static void hitSurface(float n, const RayTracingContextPtr& rayCtx);
-  static void propagate(const RayTracingContextPtr& rayCtx,
-                        const CrystalContextPtr& cryCtx);
+  // static void hitSurface(float n, const RayTracingContextPtr& rayCtx);
+  // static void propagate(const RayTracingContextPtr& rayCtx,
+  //                       const CrystalContextPtr& cryCtx);
 
-  static void hitSurfaceRange(float n, const RayTracingContextPtr& rayCtx, int startIdx, int endIdx);
+  // static void hitSurfaceRange(float n, const RayTracingContextPtr& rayCtx, int startIdx, int endIdx);
 
   static float getReflectRatio(float cos_angle, float rr);
 
@@ -92,29 +124,6 @@ private:
     1.3100f, 1.3097f, 1.3094f, 1.3091f, 1.3088f, 1.3085f, 1.3083f, 1.3080f, 1.3078f, 1.3076f, 1.3073f,
     1.3071f, 1.3069f, 1.3067f, 1.3065f, 1.3062f, 1.3060f, 1.3058f, 1.3057f, 1.3055f, 1.3053f, 1.3051f,
     1.3049f, 1.3047f, 1.3045f, 1.3044f, 1.3042f, 1.3040f, 1.3038f, 1.3037f, 1.3035f, 1.3033f, 1.3032f};
-};
-
-
-class RaySegmentPool {
-public:
-  ~RaySegmentPool();
-  RaySegmentPool(RaySegmentPool const&) = delete;
-
-  void operator=(RaySegmentPool const&) = delete;
-
-  static RaySegmentPool& getInstance();
-
-  RaySegment* getRaySegment(const float* pt, const float* dir, float w, int faceId);
-  void clear();
-
-private:
-  RaySegmentPool();
-
-  static constexpr uint32_t kChunkSize = 1024 * 128;
-
-  std::vector<RaySegment*> segments;
-  std::atomic<uint64_t> nextUnusedId;
-  std::atomic<uint64_t> currentChunkId;
 };
 
 }   // namespace IceHalo

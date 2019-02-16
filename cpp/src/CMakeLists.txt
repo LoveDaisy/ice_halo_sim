@@ -3,6 +3,7 @@ set(SOURCE_FILE
     crystal.cpp
     optics.cpp
     context.cpp
+    simulation.cpp
     render.cpp
     files.cpp
     threadingpool.cpp)

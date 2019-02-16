@@ -20,7 +20,7 @@ enum class CrystalType {
 
 class Crystal {
 public:
-  int vtxNum() const;
+  int totalVertexes() const;
   int totalFaces() const;
   int faceNumber(int idx) const;
 
@@ -31,9 +31,9 @@ public:
 
   void copyVertexData(float* data) const;
   void copyFaceData(float* data) const;
-  void copyFaceIdxData(int* data) const;
-  void copyNormalData(int idx, float* data) const;
-  void copyNormalData(float* data) const;
+  void copyFaceAreaData(float* data) const;
+  void copyNormData(int idx, float *data) const;
+  void copyNormData(float *data) const;
 
   static constexpr float kC = 1.629f;
 
@@ -174,8 +174,8 @@ private:
 
 };
 
-using CrystalPtrS = std::shared_ptr<Crystal>;
 using CrystalPtrU = std::unique_ptr<Crystal>;
+using CrystalPtr = std::shared_ptr<Crystal>;
 
 };  // namespace IceHalo
 

@@ -129,28 +129,115 @@ enum class Distribution {
 };
 
 
-class OrientationGenerator {
+class RandomNumberGenerator {
 public:
-  OrientationGenerator();
-  OrientationGenerator(Distribution axDist, float axMean, float axStd,
-                       Distribution rollDist, float rollMean, float rollStd);
-  ~OrientationGenerator() = default;
+  float getGaussian();
+  float getUniform();
+  float get(Distribution dist, float mean, float std);
 
-  void fillData(const float* sunDir, int num, float* rayDir, float* mainAxRot);
+  static RandomNumberGenerator& GetInstance();
 
 private:
+  RandomNumberGenerator();
+
   std::mt19937 generator;
-  std::normal_distribution<float> gaussDistribution;
-  std::uniform_real_distribution<float> uniformDistribution;
+  std::normal_distribution<float> gauss_dist_;
+  std::uniform_real_distribution<float> uniform_dist_;
 
-  Distribution axDist;
-  float axMean;
-  float axStd;
-
-  Distribution rollDist;
-  float rollMean;
-  float rollStd;
+  static constexpr int random_number_seed_ = 1;
 };
+
+
+class RandomSampler {
+public:
+  /*! @brief Generate points uniformly distributed on sphere surface, in Cartesian form.
+   *
+   * @param data xyz data.
+   * @param num number of points.
+   */
+  void SampleSphericalPointsCart(float* data, size_t num = 1);
+
+  /*! @brief Generate points distributed on sphere surface up to latitude, in Cartesian form.
+   *
+   * @param dist distribution type, uniform or Gaussian.
+   * @param lat latitude.
+   * @param std standard deviation (for Gaussian) or half range (for uniform)
+   * @param data output data, xyz.
+   * @param num number of points.
+   */
+  void SampleSphericalPointsCart(Distribution dist, float lat, float std, float* data, size_t num = 1);
+
+  /*! @brief Generate points distributed uniformly on sphere around a give point, in Cartesian form.
+   *
+   * @param dir the given point, xyz.
+   * @param std half range (like radii).
+   * @param data output data, xyz.
+   * @param num number of points.
+   */
+  void SampleSphericalPointsCart(const float* dir, float std, float* data, size_t num = 1);
+
+  /*! @brief Generate points distributed on sphere surface up to latitude, in spherical form, (lon, lat).
+   *
+   * @param dist distribution type, uniform or Gaussian.
+   * @param lat latitude.
+   * @param std standard deviation (for Gaussian) or half range (for uniform).
+   * @param data output data, (lon, lat)
+   * @param num number of points.
+   */
+  void SampleSphericalPointsSph(Distribution dist, float lat, float std, float* data, size_t num = 1);
+
+  /*! @brief Generate points evenly distributed on a triangle, in Cartesian form, xyz.
+   *
+   * @param vertexes vertexes of the triangle.
+   * @param data output data, xyz.
+   * @param num number of points.
+   */
+  void SampleTriangularPoints(const float* vertexes, float* data, size_t num = 1);
+
+  /*! @brief Random choose an integer index from [0, max), proportional to probabilities in p.
+   *
+   * @param p probabilities, must have max values, sum of all p should be 1.0f.
+   * @param max range bound.
+   * @return chosen index.
+   */
+  int SampleInt(const float* p, int max);
+
+  /*! @brief Random choose an integer from [0, max)
+   *
+   * @param max range bound.
+   * @return chosen integer.
+   */
+  int SampleInt(int max);
+
+  static RandomSampler& GetInstance();
+
+private:
+  RandomSampler() = default;
+};
+
+
+// class OrientationGenerator {
+// public:
+//   OrientationGenerator();
+//   OrientationGenerator(Distribution axDist, float axMean, float axStd,
+//                        Distribution rollDist, float rollMean, float rollStd);
+//   ~OrientationGenerator() = default;
+//
+//   void fillData(const float* sunDir, int num, float* rayDir, float* mainAxRot);
+//
+// private:
+//   std::mt19937 generator;
+//   std::normal_distribution<float> gaussDistribution;
+//   std::uniform_real_distribution<float> uniformDistribution;
+//
+//   Distribution axDist;
+//   float axMean;
+//   float axStd;
+//
+//   Distribution rollDist;
+//   float rollMean;
+//   float rollStd;
+// };
 
 
 bool floatEqual(float a, float b, float threshold = kFloatEps);
