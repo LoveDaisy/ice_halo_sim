@@ -103,7 +103,6 @@ void Simulator::start() {
 // In world frame.
 void Simulator::initSunRays() {
   float sunR = context->getSunDiameter() / 2;   // In degree
-  sunR *= (Math::kPi / 180);    // To rad
   const float* sunRayDir = context->getSunRayDir();
   auto& sampler = Math::RandomSampler::GetInstance();
   sampler.SampleSphericalPointsCart(sunRayDir, sunR, buffer.dir[1], activeRayNum);

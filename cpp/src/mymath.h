@@ -161,7 +161,7 @@ public:
    *
    * @param dist distribution type, uniform or Gaussian.
    * @param lat latitude.
-   * @param std standard deviation (for Gaussian) or half range (for uniform)
+   * @param std standard deviation (for Gaussian) or half range (for uniform), in degree
    * @param data output data, xyz.
    * @param num number of points.
    */
@@ -170,7 +170,7 @@ public:
   /*! @brief Generate points distributed uniformly on sphere around a give point, in Cartesian form.
    *
    * @param dir the given point, xyz.
-   * @param std half range (like radii).
+   * @param std half range (like radii), in degree.
    * @param data output data, xyz.
    * @param num number of points.
    */
@@ -180,7 +180,7 @@ public:
    *
    * @param dist distribution type, uniform or Gaussian.
    * @param lat latitude.
-   * @param std standard deviation (for Gaussian) or half range (for uniform).
+   * @param std standard deviation (for Gaussian) or half range (for uniform), in degree.
    * @param data output data, (lon, lat)
    * @param num number of points.
    */
