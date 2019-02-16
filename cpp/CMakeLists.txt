@@ -79,6 +79,18 @@ if (CMAKE_VERSION VERSION_LESS 2.8.11)
   include_directories("${gtest_SOURCE_DIR}/include")
 endif()
 
+# ==================================================================================================
+# Find modules
+set(Boost_USE_STATIC_LIBS OFF)
+set(Boost_USE_MULTITHREADED ON)
+set(Boost_USE_STATIC_RUNTIME OFF)
+
+find_package(Threads REQUIRED)  # GoogleTest needs it
+find_package(OpenCV REQUIRED core imgproc imgcodecs)
+find_package(Boost 1.54.0 COMPONENTS filesystem system REQUIRED)
+
+# ==================================================================================================
+# Add subdirectory
 add_subdirectory(src)
 if(BUILD_TEST)
     add_subdirectory(test)
