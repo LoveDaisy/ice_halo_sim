@@ -1,0 +1,163 @@
+{
+    "sun": {
+        "altitude": 25,
+        "diameter": 0.5
+    },
+    "ray": {
+        "number": 500000,
+        "wavelength": [420, 460, 500, 540, 580, 620]
+    },
+    "max_recursion": 9,
+    "data_folder": "/Users/zhangjiajie/Codes/Ice Halo/cpp/cmake-build-debug/data",
+    "camera": {
+        "azimuth": 0,
+        "elevation": 25,
+        "rotation": 0,
+        "fov": 60,
+        "width": 2048,
+        "height": 2048,
+        "lens": "fisheye"
+    },
+    "render": {
+        "visible_semi_sphere": "camera",
+        "ray_color": "real",
+        "background_color": [0, 0, 0],
+        "intensity_factor": 5.0,
+        "offset": [0, 0],
+        "show_horizontal": false
+    },
+    "multi_scatter": {
+        "repeat": 1,
+        "probability": 1.0
+    },
+    "crystal": [
+        {
+            "enable": false,
+            "type": "IrregularHexPyramid",
+            "parameter": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1.2, 0],
+            "axis": {
+                "mean": 90,
+                "std": 2.0,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 1.2,
+                "type": "Uniform"
+            },
+            "population": 200
+        },
+        {
+            "enable": false,
+            "type": "HexPyramid",
+            "parameter": [1, 1, 1, 1, 0.3, 1.2, 0.9],
+            "axis": {
+                "mean": 0,
+                "std": 2.5,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 200
+        },
+        {
+            "enable": false,
+            "type": "IrregularHexCylinder",
+            "parameter": [1.0, 1.0, 1.5, 1.0, 2.5, 1.0, 1.2],
+            "axis": {
+                "mean": 0,
+                "std": 2.5,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 10
+        },
+        {
+            "enable": false,
+            "type": "HexCylinder",
+            "parameter": 0.1,
+            "axis": {
+                "mean": 0,
+                "std": 6.0,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 200
+        },
+        {
+            "enable": false,
+            "type": "HexPyramid",
+            "parameter": [0.2, 0.2, 0.5],
+            "axis": {
+                "mean": 0,
+                "std": 23,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 40
+        },
+        {
+            "enable": true,
+            "type": "HexCylinder",
+            "parameter": 1.6,
+            "axis": {
+                "mean": 90,
+                "std": 0.1,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 180
+        },
+        {
+            "enable": true,
+            "type": "HexCylinder",
+            "parameter": 1.6,
+            "axis": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 180
+        },
+        {
+            "enable": false,
+            "type": "Custom",
+            "parameter": "hex_cylinder_01.obj",
+            "axis": {
+                "mean": 90,
+                "std": 0.5,
+                "type": "Gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 360,
+                "type": "Uniform"
+            },
+            "population": 80
+        }
+    ]
+}

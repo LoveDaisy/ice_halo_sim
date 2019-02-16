@@ -10,9 +10,11 @@ set(SOURCE_FILE
 add_executable(test
   ${SOURCE_FILE}
   test_crystal.cpp
+  test_context.cpp
+  test_main.cpp)
 target_include_directories(test
   PUBLIC ${PROJ_SRC_DIR} ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
 target_link_libraries(test
-  gtest_main)
+  PUBLIC ${Boost_LIBRARIES} gtest)
 
-add_test(NAME "IceHaloTest" COMMAND test)
+add_test(NAME "IceHaloTest" COMMAND test "${PROJ_ROOT}/test/config_01.json")
