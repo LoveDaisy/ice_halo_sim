@@ -39,10 +39,16 @@ public:
   int getMaxRecursionNum() const;
   int getMultiScatterNum() const;
   float getMultiScatterProb() const;
+
   int getCrystalNum() const;
+
   void setCurrentWavelength(float wavelength);
+
   float getCurrentWavelength() const;
   std::vector<float> getWavelengths() const;
+
+  const float* getSunDir() const;
+  float getSunDiameter() const;
 
   void fillSunDir(float* dir, uint64_t num = 1);
   void setSunPosition(float lon, float lat);

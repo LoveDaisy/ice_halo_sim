@@ -786,6 +786,16 @@ std::vector<float> SimulationContext::getWavelengths() const {
 }
 
 
+const float* SimulationContext::getSunDir() const {
+  return sunDir;
+}
+
+
+float SimulationContext::getSunDiameter() const {
+  return sunDiameter;
+}
+
+
 void SimulationContext::fillSunDir(float* dir, uint64_t num) {
   float sunLon = std::atan2(sunDir[1], sunDir[0]);
   float sunLat = std::asin(sunDir[2] / Math::norm3(sunDir));

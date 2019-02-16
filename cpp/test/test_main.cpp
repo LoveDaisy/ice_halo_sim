@@ -2,7 +2,7 @@
 
 #include <string>
 
-extern std::string config_file_name;
+std::string config_file_name;
 
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
