@@ -102,8 +102,10 @@ void Simulator::start() {
 
     for (const auto& ctx : activeCrystalCtxs) {
       activeRayNum = static_cast<size_t>(ctx->getPopulation() * totalRayNum);
-      bufferSize = activeRayNum * kBufferSizeFactor;
-      buffer.allocate(bufferSize);
+      if (bufferSize < activeRayNum * kBufferSizeFactor) {
+        bufferSize = activeRayNum * kBufferSizeFactor;
+        buffer.allocate(bufferSize);
+      }
       if (i == 0) {
         initSunRays();
       }
@@ -200,7 +202,7 @@ void Simulator::restoreResultRays(int multiScatterIdx) {
       auto tmp_r = s.top();
       s.pop();
 
-      if (tmp_r->isFinished && tmp_r->w > kScatMinW &&
+      if (tmp_r->isFinished && tmp_r->w > SimulationContext::kScatMinW &&
           rng.getUniform() < context->getMultiScatterProb()) {
         Math::rotateZBack(a.val(), tmp_r->dir.val(), buffer.dir[0] + idx * 3);
         idx++;
@@ -243,10 +245,10 @@ void Simulator::traceRays(const CrystalPtr& crystal) {
     Optics::HitSurface(crystal, n, activeRayNum,
                        buffer.dir[0], buffer.faceId[0], buffer.w[0],
                        buffer.dir[1], buffer.w[1]);
-    Optics::Propagate(crystal, activeRayNum,
-                      buffer.pt[0], buffer.dir[1],
     // std::printf("Before prop:\n");
     // buffer.print();
+    Optics::Propagate(crystal, activeRayNum * 2,
+                      buffer.pt[0], buffer.dir[1], buffer.w[1],
                       buffer.pt[1], buffer.faceId[1]);
     // std::printf("After prop:\n");
     // buffer.print();
@@ -290,9 +292,9 @@ void Simulator::saveRaySegments() {
 void Simulator::refreshBuffer() {
   size_t idx = 0;
   for (size_t i = 0; i < activeRayNum * 2; i++) {
-    if (buffer.raySeg[1][i] && buffer.faceId[1][i] >= 0 && buffer.w[1][i] > kPropMinW) {
-      buffer.pt[0][idx] = buffer.pt[1][i];
-      buffer.dir[0][idx] = buffer.dir[1][i];
+    if (buffer.raySeg[1][i] && buffer.faceId[1][i] >= 0 && buffer.w[1][i] > SimulationContext::kPropMinW) {
+      std::memcpy(buffer.pt[0] + idx * 3, buffer.pt[1] + i * 3, sizeof(float) * 3);
+      std::memcpy(buffer.dir[0] + idx * 3, buffer.dir[1] + i * 3, sizeof(float) * 3);
       buffer.w[0][idx] = buffer.w[1][i];
       buffer.faceId[0][idx] = buffer.faceId[1][i];
       buffer.raySeg[0][idx] = buffer.raySeg[1][i];

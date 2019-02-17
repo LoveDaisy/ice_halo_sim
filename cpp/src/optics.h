@@ -78,7 +78,7 @@ public:
                          const float* dir_in, const int* face_id_in, const float* w_in,
                          float* dir_out, float* w_out);
   static void Propagate(const CrystalPtr& crystal, size_t num,
-                        const float* pt_in, const float* dir_in,
+                        const float* pt_in, const float* dir_in, const float* w_in,
                         float* pt_out, int* face_id_out);
 
 private:

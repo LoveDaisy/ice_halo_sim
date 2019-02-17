@@ -612,7 +612,7 @@ void RandomSampler::SampleTriangularPoints(const float* vertexes, float* data, s
     }
 
     for (int j = 0; j < 3; j++) {
-      data[i * 3 + j] = (vertexes[j + 3] - vertexes[j]) * a + vertexes[j] +
+      data[i * 3 + j] = (vertexes[j + 3] - vertexes[j]) * a +
                         (vertexes[j + 6] - vertexes[j]) * b + vertexes[j];
     }
   }
