@@ -73,7 +73,6 @@ private:
 
 class Optics {
 public:
-//  static void traceRays(std::unique_ptr<SimulationContext>& context);
   static void HitSurface(const CrystalPtr& crystal, float n, size_t num,
                          const float* dir_in, const int* face_id_in, const float* w_in,
                          float* dir_out, float* w_out);
@@ -82,12 +81,6 @@ public:
                         float* pt_out, int* face_id_out);
 
 private:
-  // static void hitSurface(float n, const RayTracingContextPtr& rayCtx);
-  // static void propagate(const RayTracingContextPtr& rayCtx,
-  //                       const CrystalContextPtr& cryCtx);
-
-  // static void hitSurfaceRange(float n, const RayTracingContextPtr& rayCtx, int startIdx, int endIdx);
-
   static float getReflectRatio(float cos_angle, float rr);
 
   /*! \brief Intersect a line with many faces and find the nearest intersection point.

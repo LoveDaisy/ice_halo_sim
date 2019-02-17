@@ -41,7 +41,6 @@ public:
   int getMultiScatterNum() const;
   float getMultiScatterProb() const;
 
-//  int getCrystalNum() const;
   void fillActiveCrystal(std::vector<CrystalContextPtr>* crystal_ctxs) const;
   void printCrystalInfo();
 
@@ -55,18 +54,7 @@ public:
 
   std::string getDataDirectory() const;
 
-//  void fillSunDir(float* dir, uint64_t num = 1);
   void applySettings();
-//  void setCrystalRayNum(int scatterIdx, uint64_t totalRayNum);
-
-//  CrystalContextPtr getCrystalContext(int i);
-//  RayTracingContextPtr getRayTracingContext(int scatterIdx, int crystalIdx);
-
-//  /*! @brief write the final direction (in world coordinate frame) of all rays into file.
-//   *
-//   * @param filename the data file
-//   */
-//  void writeFinalDirections(const char* filename);
 
   /*! @brief Read a config file and create a SimulationContext
    *
@@ -97,7 +85,6 @@ private:
   void setSunPosition(float lon, float lat);
 
   std::vector<CrystalContextPtr> crystalCtxs;
-  // std::vector<std::vector<RayTracingContextPtr> > rayTracingCtxs;
 
   uint64_t totalRayNum;
   int maxRecursionNum;
@@ -108,9 +95,6 @@ private:
 
   float sunDir[3];
   float sunDiameter;
-
-  // std::mt19937 generator;
-  // std::uniform_real_distribution<float> uniformDistribution;
 
   std::string configFileName;
   std::string dataDirectory;
@@ -143,60 +127,6 @@ private:
   float roll_std_;
   float population_;
 };
-
-
-// class RayTracingContext {
-// friend class SimulationContext;
-// friend class Optics;
-// public:
-//   explicit RayTracingContext(int maxRecursion);
-//   ~RayTracingContext();
-
-//   void setRayNum(int rayNum);
-
-//   void initRays(const CrystalContextPtr& ctx, int rayNum, const float* dir, const float* w,
-//                 RaySegment** prevRaySeg = nullptr);
-//   void commitHitResult();
-//   void commitPropagateResult(const CrystalContextPtr& ctx);
-//   bool isFinished();
-
-//   size_t copyFinishedRaySegments(RaySegment** segs, float* dir, float prob = 1.0f);
-
-// private:
-//   static constexpr float kPropMinW = 1e-6;
-//   static constexpr float kScatMinW = 1e-3;
-
-//   void deleteArrays();
-//   int chooseFace(const float* faces, int faceNum, const float* rayDir);
-
-//   void fillPts(const float* faces, int idx, float* rayPts);
-
-//   void copyFinishedRaySegmentsRange(RaySegment** segs, float* dir, float prob,
-//                                     std::atomic<std::uint64_t>& k, int startIdx, int endIdx);
-
-//   int maxRecursion;
-//   int initRayNum;
-//   int currentRayNum;
-//   int activeRaySegNum;
-//   Ray** rays;
-//   RaySegment** activeRaySeg;
-
-//   std::default_random_engine gen;
-//   std::uniform_real_distribution<float> dis;
-
-//   float* mainAxRot;
-
-//   float* rayDir;
-//   float* rayPts;
-//   float* faceNorm;
-//   int* faceId;
-
-//   float* rayDir2;
-//   float* rayDir3;
-//   float* rayPts2;
-//   float* rayW2;
-//   int* faceId2;
-// };
 
 
 class RenderContext {

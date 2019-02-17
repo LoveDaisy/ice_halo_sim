@@ -2,7 +2,6 @@
 
 #include <cstring>
 #include <algorithm>
-#include <chrono>
 
 
 namespace IceHalo {
@@ -642,67 +641,5 @@ int RandomSampler::SampleInt(int max) {
 }
 
 }  // namespace Math
-
-
-// namespace Math {
-
-// OrientationGenerator::OrientationGenerator()
-//     : axDist(Distribution::UNIFORM), axMean(0), axStd(0),
-//       rollDist(Distribution::UNIFORM), rollMean(0), rollStd(0) {}
-//
-// OrientationGenerator::OrientationGenerator(Distribution axDist, float axMean, float axStd,
-//                                            Distribution rollDist, float rollMean, float rollStd)
-//     : axDist(axDist), axMean(axMean), axStd(axStd),
-//       rollDist(rollDist), rollMean(rollMean), rollStd(rollStd) {
-//   unsigned int seed = static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count());
-//   // unsigned int seed = 2345;
-//   generator.seed(seed);
-// }
-
-// void OrientationGenerator::fillData(const float* sunDir, int num, float* rayDir, float* mainAxRot) {
-//   for (int i = 0; i < num; i++) {
-//     float lon = 0, lat = 0, roll = 0;
-//
-//     switch (axDist) {
-//       case Distribution::UNIFORM : {
-//         float v[3] = {gaussDistribution(generator),
-//                 gaussDistribution(generator),
-//                 gaussDistribution(generator)};
-//         Math::normalize3(v);
-//         lon = atan2(v[1], v[0]);
-//         lat = asin(v[2] / Math::norm3(v));
-//       }
-//         break;
-//       case Distribution::GAUSS :
-//         lon = uniformDistribution(generator) * 2 * Math::kPi;
-//         lat = gaussDistribution(generator) * axStd;
-//         lat += axMean;
-//         if (lat > Math::kPi / 2) {
-//           lat = Math::kPi - lat;
-//         }
-//         if (lat < -Math::kPi / 2) {
-//           lat = -Math::kPi - lat;
-//         }
-//         break;
-//     }
-//
-//     switch (rollDist) {
-//       case Distribution::GAUSS :
-//         roll = gaussDistribution(generator) * rollStd + rollMean;
-//         break;
-//       case Distribution::UNIFORM :
-//         roll = (uniformDistribution(generator) - 0.5f) * rollStd + rollMean;
-//         break;
-//     }
-//
-//     mainAxRot[i * 3 + 0] = lon;
-//     mainAxRot[i * 3 + 1] = lat;
-//     mainAxRot[i * 3 + 2] = roll;
-//
-//     Math::rotateZ(mainAxRot + i * 3, sunDir, rayDir + i * 3);
-//   }
-// }
-
-// }   // namespace Math
 
 }   // namespace IceHalo

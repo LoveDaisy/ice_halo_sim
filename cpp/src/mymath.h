@@ -218,30 +218,6 @@ private:
 };
 
 
-// class OrientationGenerator {
-// public:
-//   OrientationGenerator();
-//   OrientationGenerator(Distribution axDist, float axMean, float axStd,
-//                        Distribution rollDist, float rollMean, float rollStd);
-//   ~OrientationGenerator() = default;
-//
-//   void fillData(const float* sunDir, int num, float* rayDir, float* mainAxRot);
-//
-// private:
-//   std::mt19937 generator;
-//   std::normal_distribution<float> gaussDistribution;
-//   std::uniform_real_distribution<float> uniformDistribution;
-//
-//   Distribution axDist;
-//   float axMean;
-//   float axStd;
-//
-//   Distribution rollDist;
-//   float rollMean;
-//   float rollStd;
-// };
-
-
 bool floatEqual(float a, float b, float threshold = kFloatEps);
 
 float dot3(const float* vec1, const float* vec2);

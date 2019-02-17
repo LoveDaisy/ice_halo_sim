@@ -55,12 +55,6 @@ int Crystal::faceNumber(int idx) const {
   }
 }
 
-void Crystal::copyVertexData(float* data) const {
-  for (decltype(vertexes.size()) i = 0; i < vertexes.size(); ++i) {
-    std::memcpy(data + i * 3, vertexes[i].val(), 3 * sizeof(float));
-  }
-}
-
 void Crystal::copyFaceData(float* data) const {
   for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
     auto idx = faces[i].idx();
@@ -84,17 +78,6 @@ void Crystal::copyFaceAreaData(float* data) const {
   }
 }
 
-// void Crystal::copyFaceIdxData(int* data) const {
-//   for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
-//     std::memcpy(data + i * 3, faces[i].idx(), 3 * sizeof(int));
-//   }
-// }
-
-void Crystal::copyNormData(int idx, float *data) const {
-  if (idx >= static_cast<int>(faces.size()) || idx < 0) {
-    return;
-  }
-  std::memcpy(data, norms[idx].val(), 3 * sizeof(float)); }
 
 void Crystal::copyNormData(float *data) const {
   for (decltype(norms.size()) i = 0; i < norms.size(); i++) {

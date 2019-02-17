@@ -29,10 +29,9 @@ public:
   const std::vector<Math::TriangleIdx>& getFaces();
   const std::vector<int>& getFaceNumber();
 
-  void copyVertexData(float* data) const;
   void copyFaceData(float* data) const;
   void copyFaceAreaData(float* data) const;
-  void copyNormData(int idx, float *data) const;
+
   void copyNormData(float *data) const;
 
   static constexpr float kC = 1.629f;
