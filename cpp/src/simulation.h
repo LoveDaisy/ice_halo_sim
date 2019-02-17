@@ -39,9 +39,6 @@ public:
   void saveFinalDirections(const char* filename);
   void saveAllRays(const char* filename);
 
-  static constexpr float kPropMinW = 1e-6;
-  static constexpr float kScatMinW = 1e-3;
-
 private:
   void initSunRays();
   void initEntryRays(const CrystalContextPtr& ctx, int multiScatteringIdx);

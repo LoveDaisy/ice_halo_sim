@@ -75,6 +75,9 @@ public:
    */
   static std::unique_ptr<SimulationContext> createFromFile(const char* filename);
 
+  static constexpr float kPropMinW = 1e-6;
+  static constexpr float kScatMinW = 1e-3;
+
 private:
   SimulationContext(const char* filename, rapidjson::Document& d);
 
