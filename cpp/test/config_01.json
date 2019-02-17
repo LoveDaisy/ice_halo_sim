@@ -4,7 +4,7 @@
         "diameter": 0.5
     },
     "ray": {
-        "number": 500000,
+        "number": 2,
         "wavelength": [420, 460, 500, 540, 580, 620]
     },
     "max_recursion": 9,
@@ -117,18 +117,18 @@
             "parameter": 1.6,
             "axis": {
                 "mean": 90,
-                "std": 0.1,
+                "std": 0.0,
                 "type": "Gauss"
             },
             "roll": {
                 "mean": 0,
-                "std": 360,
+                "std": 0,
                 "type": "Uniform"
             },
             "population": 180
         },
         {
-            "enable": true,
+            "enable": false,
             "type": "HexCylinder",
             "parameter": 1.6,
             "axis": {

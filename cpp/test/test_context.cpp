@@ -13,6 +13,7 @@ class ContextTest : public ::testing::Test {
 protected:
   void SetUp() override {
     context = IceHalo::SimulationContext::createFromFile(config_file_name.c_str());
+    context->applySettings();
   }
 
   IceHalo::SimulationContextPtr context;

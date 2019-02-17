@@ -1,8 +1,10 @@
 #include "optics.h"
 #include "crystal.h"
+#include "simulation.h"
 
 #include "gtest/gtest.h"
 
+extern std::string config_file_name;
 
 namespace {
 
@@ -10,9 +12,12 @@ class OpticsTest : public ::testing::Test {
 protected:
   void SetUp() override {
     crystal = IceHalo::Crystal::createHexPrism(1.2f);
+    context = IceHalo::SimulationContext::createFromFile(config_file_name.c_str());
+    context->applySettings();
   }
 
   IceHalo::CrystalPtr crystal;
+  IceHalo::SimulationContextPtr context;
 };
 
 
@@ -79,9 +84,9 @@ TEST_F(OpticsTest, HitSurface1) {
     0.792624f,  0.0f,  0.609711f,      // Case 3: incident at 45 degree, from inside out, total reflection
   };
   float w_in[kNum] = {
-    0.5f,                     // Case 1: full intensity
-    0.5f,                     // Case 2: full intensity
-    0.5f,                     // Case 3: full intensity
+    0.5f,                     // Case 1: half intensity
+    0.5f,                     // Case 2: half intensity
+    0.5f,                     // Case 3: half intensity
   };
   int face_id_in[kNum] = {
     0,                        // Case 1: top face. (face number 2)
@@ -119,6 +124,16 @@ TEST_F(OpticsTest, HitSurface1) {
       EXPECT_NEAR(dir_out[i * 3 + j], dir_out_e[i * 3 + j], IceHalo::Math::kFloatEps);
     }
   }
+}
+
+
+TEST_F(OpticsTest, RayTracing) {
+  context->printCrystalInfo();
+  auto wls = context->getWavelengths();
+  context->setCurrentWavelength(wls[0]);
+  auto simulator = IceHalo::Simulator(context);
+  simulator.start();
+  simulator.printRayInfo();
 }
 
 }  // namespace
