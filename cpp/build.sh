@@ -10,7 +10,7 @@ build() {
   rm -rf CMakeCache.txt
   rm -rf Makefile cmake_install.cmake
   cmake "${PROJ_DIR}" -DDEBUG=$DEBUG_FLAG -DBUILD_TEST=$BUILD_TEST -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR"
-  make -j1
+  make -j$MAKE_J_N
   ret=$?
   if [[ $ret == 0 && $BUILD_TEST == ON ]]; then
     echo "Testing..."
@@ -32,6 +32,7 @@ help() {
   echo "    Build executables for release, and install them to build/cmake_install"
   echo "OPTIONS:"
   echo "  test:          Build unit test cases."
+  echo "  j:             Make in parallel, i.e. use make -j"
   echo "  clean:         Clean temporary building files."
   echo "  help:          Show this message."
 }
@@ -46,6 +47,7 @@ clean_all() {
 DEBUG_FLAG=OFF
 BUILD_TEST=OFF
 INSTALL_FLAG=OFF
+MAKE_J_N=1
 
 if [ $# -eq 0 ]; then
     help
@@ -68,6 +70,10 @@ while [ ! $# -eq 0 ]; do
     ;;
     test)
       BUILD_TEST=ON
+      shift
+    ;;
+    j)
+      MAKE_J_N=""
       shift
     ;;
     clean)
