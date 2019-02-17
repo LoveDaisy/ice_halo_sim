@@ -11,7 +11,7 @@
 namespace IceHalo {
 
 RaySegment::RaySegment()
-    : nextReflect(nullptr), nextRefract(nullptr), prev(nullptr),
+    : nextReflect(nullptr), nextRefract(nullptr), prev(nullptr), root(nullptr),
       pt(0, 0, 0), dir(0, 0, 0), w(0),
       faceId(-1), isFinished(false) {}
 
@@ -32,8 +32,8 @@ void RaySegment::reset() {
 }
 
 
-Ray::Ray(const IceHalo::CrystalContextPtr& ctx, IceHalo::RaySegment *seg)
-    : firstRaySeg(seg), ctx(ctx) {}
+Ray::Ray(RaySegment *seg, const float main_axis_rot[3])
+    : firstRaySeg(seg), main_axis_rot(main_axis_rot) {}
 
 
 size_t Ray::totalNum() {

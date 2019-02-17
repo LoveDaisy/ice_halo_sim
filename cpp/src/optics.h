@@ -13,6 +13,7 @@
 namespace IceHalo {
 
 class RaySegmentPool;
+class Ray;
 
 class RaySegment {
 friend class RaySegmentPool;
@@ -23,6 +24,7 @@ public:
   RaySegment* nextReflect;
   RaySegment* nextRefract;
   RaySegment* prev;
+  Ray* root;
 
   Math::Vec3f pt;
   Math::Vec3f dir;
@@ -38,12 +40,12 @@ private:
 
 class Ray {
 public:
-  Ray(const CrystalContextPtr& ctx, RaySegment* seg);
+  Ray(RaySegment* seg, const float main_axis_rot[3]);
 
   size_t totalNum();
 
   RaySegment* firstRaySeg;
-  CrystalContextPtr ctx;
+  Math::Vec3f main_axis_rot;
 };
 
 using RayPtr = std::shared_ptr<Ray>;

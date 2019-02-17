@@ -95,12 +95,11 @@ void Simulator::start() {
   auto msNum = context->getMultiScatterNum();
 
   rays.clear();
-  mainAxisRotation.clear();
+  final_ray_segments_.clear();
   RaySegmentPool::getInstance().clear();
 
   for (int i = 0; i < msNum; i++) {
     rays.emplace_back();
-    mainAxisRotation.emplace_back();
 
     for (const auto& ctx : activeCrystalCtxs) {
       activeRayNum = static_cast<size_t>(ctx->getPopulation() * totalRayNum);
@@ -148,7 +147,6 @@ void Simulator::initEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
   crystal->copyFaceData(facePoint);
 
   rays[multiScatterIdx].reserve(activeRayNum);
-  mainAxisRotation[multiScatterIdx].reserve(activeRayNum);
 
   auto& pool = RaySegmentPool::getInstance();
   auto& rng = Math::RandomNumberGenerator::GetInstance();
@@ -175,8 +173,8 @@ void Simulator::initEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
 
     auto r = pool.getRaySegment(buffer.pt[0] + i * 3, buffer.dir[0] + i * 3, buffer.w[0][i], buffer.faceId[0][i]);
     buffer.raySeg[0][i] = r;
-    rays[multiScatterIdx].emplace_back(std::make_shared<Ray>(ctx, r));
-    mainAxisRotation[multiScatterIdx].emplace_back(axis_rot);
+    rays[multiScatterIdx].emplace_back(std::make_shared<Ray>(r, axis_rot));
+    r->root = rays[multiScatterIdx].back().get();
   }
 
   delete[] faceArea;
@@ -188,13 +186,12 @@ void Simulator::initEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
 
 // Restore and shuffle resulted rays, and fill into dir[0].
 void Simulator::restoreResultRays(int multiScatterIdx) {
+  final_ray_segments_.clear();
+
   auto& rng = Math::RandomNumberGenerator::GetInstance();
   std::stack<RaySegment*> s;
   size_t idx = 0;
-  for (decltype(rays[multiScatterIdx].size()) i = 0; i < rays[multiScatterIdx].size(); i++) {
-    auto& r = rays[multiScatterIdx][i];
-    auto& a = mainAxisRotation[multiScatterIdx][i];
-
+  for (auto& r : rays[multiScatterIdx]) {
     s.push(r->firstRaySeg);
     while (!s.empty()) {
       auto tmp_r = s.top();
@@ -202,7 +199,9 @@ void Simulator::restoreResultRays(int multiScatterIdx) {
 
       if (tmp_r->isFinished && tmp_r->w > SimulationContext::kScatMinW &&
           rng.getUniform() < context->getMultiScatterProb()) {
-        Math::rotateZBack(a.val(), tmp_r->dir.val(), buffer.dir[0] + idx * 3);
+        assert(tmp_r->root);
+        const auto axis_rot = tmp_r->root->main_axis_rot.val();
+        Math::rotateZBack(axis_rot, tmp_r->dir.val(), buffer.dir[0] + idx * 3);
         idx++;
       } else {
         if (tmp_r->nextReflect) {
@@ -275,14 +274,18 @@ void Simulator::saveRaySegments() {
     if (buffer.faceId[1][i] < 0) {
       r->isFinished = true;
     }
+    if (r->isFinished || r->w < SimulationContext::kPropMinW) {
+      final_ray_segments_.emplace_back(r);
+    }
 
     auto prevRaySeg = buffer.raySeg[0][i / 2];
     if (i % 2 == 0) {
-      prevRaySeg->nextRefract = r;
-    } else {
       prevRaySeg->nextReflect = r;
+    } else {
+      prevRaySeg->nextRefract = r;
     }
     r->prev = prevRaySeg;
+    r->root = prevRaySeg->root;
     buffer.raySeg[1][i] = r;
   }
 }
@@ -313,33 +316,12 @@ void Simulator::saveFinalDirections(const char* filename) {
   file.write(context->getCurrentWavelength());
 
   float finalDir[3];
-  std::stack<RaySegment*> s;
-
-  const auto& rs = rays.back();
-  const auto& as = mainAxisRotation.back();
-  assert(rs.size() == as.size());
-
-  for (decltype(rs.size()) j = 0; j < rs.size(); j++) {
-    const auto& r = rs[j];
-    const auto& a = as[j];
-
-    s.push(r->firstRaySeg);
-    while (!s.empty()) {
-      auto p = s.top();
-      s.pop();
-      if (p->nextReflect && !p->isFinished) {
-        s.push(p->nextReflect);
-      }
-      if (p->nextRefract && !p->isFinished) {
-        s.push(p->nextRefract);
-      }
-      if (!p->nextReflect && !p->nextRefract &&
-          p->isValidEnd() && Math::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
-        Math::rotateZBack(a.val(), p->dir.val(), finalDir);
-        file.write(finalDir, 3);
-        file.write(p->w);
-      }
-    }
+  for (const auto& r : final_ray_segments_) {
+    assert(r->root);
+    const auto axis_rot = r->root->main_axis_rot.val();
+    Math::rotateZBack(axis_rot, r->dir.val(), finalDir);
+    file.write(finalDir, 3);
+    file.write(r->w);
   }
 
   file.close();

@@ -55,7 +55,7 @@ private:
   std::vector<CrystalContextPtr> activeCrystalCtxs;
 
   std::vector<std::vector<RayPtr> > rays;
-  std::vector<std::vector<Math::Vec3f> > mainAxisRotation;
+  std::vector<RaySegment*> final_ray_segments_;
 
   size_t totalRayNum;
   size_t activeRayNum;
