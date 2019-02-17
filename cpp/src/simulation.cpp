@@ -2,6 +2,7 @@
 #include "mymath.h"
 
 #include <stack>
+#include <cstdio>
 
 namespace IceHalo {
 
@@ -65,6 +66,23 @@ void SimulationBufferData::allocate(size_t rayNum) {
 }
 
 
+void SimulationBufferData::print() {
+  std::printf("pt[0]                    dir[0]                   w[0]\n");
+  for (decltype(rayNum) i = 0; i < rayNum; i++) {
+    std::printf("%+.4f,%+.4f,%+.4f  ", pt[0][i * 3 + 0], pt[0][i * 3 + 1], pt[0][i * 3 + 2]);
+    std::printf("%+.4f,%+.4f,%+.4f  ", dir[0][i * 3 + 0], dir[0][i * 3 + 1], dir[0][i * 3 + 2]);
+    std::printf("%+.4f\n", w[0][i]);
+  }
+
+  std::printf("pt[1]                    dir[1]                   w[1]\n");
+  for (decltype(rayNum) i = 0; i < rayNum; i++) {
+    std::printf("%+.4f,%+.4f,%+.4f  ", pt[1][i * 3 + 0], pt[1][i * 3 + 1], pt[1][i * 3 + 2]);
+    std::printf("%+.4f,%+.4f,%+.4f  ", dir[1][i * 3 + 0], dir[1][i * 3 + 1], dir[1][i * 3 + 2]);
+    std::printf("%+.4f\n", w[1][i]);
+  }
+}
+
+
 Simulator::Simulator(const SimulationContextPtr& context)
     : context(context), totalRayNum(0), activeRayNum(0), bufferSize(0) {}
 
@@ -89,7 +107,11 @@ void Simulator::start() {
       if (i == 0) {
         initSunRays();
       }
+      // std::printf("After initSunRays():\n");
+      // buffer.print();
       initEntryRays(ctx, i);   // totalRayNum may be updated
+      // std::printf("After initEntryRays():\n");
+      // buffer.print();
       traceRays(ctx->getCrystal());
     }
     if (i < msNum - 1) {
@@ -216,12 +238,18 @@ void Simulator::traceRays(const CrystalPtr& crystal) {
       bufferSize = activeRayNum * kBufferSizeFactor;
       buffer.allocate(bufferSize);
     }
+    // std::printf("Before hit:\n");
+    // buffer.print();
     Optics::HitSurface(crystal, n, activeRayNum,
                        buffer.dir[0], buffer.faceId[0], buffer.w[0],
                        buffer.dir[1], buffer.w[1]);
     Optics::Propagate(crystal, activeRayNum,
                       buffer.pt[0], buffer.dir[1],
+    // std::printf("Before prop:\n");
+    // buffer.print();
                       buffer.pt[1], buffer.faceId[1]);
+    // std::printf("After prop:\n");
+    // buffer.print();
     saveRaySegments();
     refreshBuffer();    // activeRayNum is updated.
   }
@@ -313,6 +341,45 @@ void Simulator::saveFinalDirections(const char* filename) {
   }
 
   file.close();
+}
+
+
+void Simulator::printRayInfo() {
+  std::stack<RaySegment*> s;
+  for (const auto& rs : rays) {
+    for (const auto& r : rs) {
+      s.push(r->firstRaySeg);
+
+      while (!s.empty()) {
+        auto p = s.top();
+        s.pop();
+        if (p->nextRefract && !p->isFinished) {
+          s.push(p->nextRefract);
+        }
+        if (p->nextReflect && !p->isFinished) {
+          s.push(p->nextReflect);
+        }
+        if (!p->nextReflect && !p->nextRefract && p->isValidEnd()) {
+          std::stack<RaySegment*> tmp_stack;
+          tmp_stack.push(p);
+          while (p->prev) {
+            tmp_stack.push(p->prev);
+            p = p->prev;
+          }
+
+          std::printf("%li,0,0,0,0,0,-1\n", tmp_stack.size());
+          while (!tmp_stack.empty()) {
+            p = tmp_stack.top();
+            tmp_stack.pop();
+            std::printf("%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n",
+              p->pt.x(), p->pt.y(), p->pt.z(),
+              p->dir.x(), p->dir.y(), p->dir.z(),
+              p->w);
+          }
+        }
+      }
+    }
+  }
 }
 
 }  // namespace IceHalo

@@ -16,6 +16,7 @@ public:
 
   void clean();
   void allocate(size_t rayNum);
+  void print();
 
   float* pt[2];
   float* dir[2];
@@ -38,6 +39,7 @@ public:
   void start();
   void saveFinalDirections(const char* filename);
   void saveAllRays(const char* filename);
+  void printRayInfo();    // For debug
 
 private:
   void initSunRays();
