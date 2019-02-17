@@ -11,6 +11,7 @@ add_executable(test
   ${SOURCE_FILE}
   test_crystal.cpp
   test_context.cpp
+  test_optics.cpp
   test_main.cpp)
 target_include_directories(test
   PUBLIC ${PROJ_SRC_DIR} ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
