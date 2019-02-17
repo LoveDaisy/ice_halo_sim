@@ -77,7 +77,8 @@ void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
     float rr = cos_theta > 0 ? n : 1.0f / n;
     float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
 
-    w_out[i] = getReflectRatio(cos_theta, rr) * w_in[i];
+    w_out[2 * i + 0] = getReflectRatio(cos_theta, rr) * w_in[i];
+    w_out[2 * i + 1] = w_in[i] - w_out[2 * i + 0];
 
     float* tmp_dir_reflection = dir_out + (i * 2 + 0) * 3;
     float* tmp_dir_refraction = dir_out + (i * 2 + 1) * 3;
