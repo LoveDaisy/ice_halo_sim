@@ -1,5 +1,6 @@
 #include "simulation.h"
 #include "mymath.h"
+#include "threadingpool.h"
 
 #include <stack>
 #include <cstdio>
@@ -230,6 +231,8 @@ void Simulator::restoreResultRays(int multiScatterIdx) {
 // Trace rays.
 // Start from dir[0] and pt[0].
 void Simulator::traceRays(const CrystalPtr& crystal) {
+  auto pool = Pool::getInstance();
+
   int maxRecursionNum = context->getMaxRecursionNum();
   float n = IceRefractiveIndex::n(context->getCurrentWavelength());
   for (int i = 0; i < maxRecursionNum; i++) {
@@ -237,12 +240,19 @@ void Simulator::traceRays(const CrystalPtr& crystal) {
       bufferSize = activeRayNum * kBufferSizeFactor;
       buffer.allocate(bufferSize);
     }
-    Optics::HitSurface(crystal, n, activeRayNum,
-                       buffer.dir[0], buffer.faceId[0], buffer.w[0],
-                       buffer.dir[1], buffer.w[1]);
-    Optics::Propagate(crystal, activeRayNum * 2,
-                      buffer.pt[0], buffer.dir[1], buffer.w[1],
-                      buffer.pt[1], buffer.faceId[1]);
+    auto step = activeRayNum / 80;
+    for (decltype(activeRayNum) j = 0; j < activeRayNum; j += step) {
+      decltype(activeRayNum) current_num = std::min(activeRayNum - j, step);
+      pool->addJob([=]{
+        Optics::HitSurface(crystal, n, current_num,
+          buffer.dir[0] + j * 3, buffer.faceId[0] + j, buffer.w[0] + j,
+          buffer.dir[1] + j * 6, buffer.w[1] + j * 2);
+        Optics::Propagate(crystal, current_num * 2,
+          buffer.pt[0] + j * 3, buffer.dir[1] + j * 6, buffer.w[1] + j * 2,
+          buffer.pt[1] + j * 6, buffer.faceId[1] + j * 2);
+      });
+    }
+    pool->waitFinish();
     saveRaySegments();
     refreshBuffer();    // activeRayNum is updated.
   }
