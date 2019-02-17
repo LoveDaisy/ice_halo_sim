@@ -49,7 +49,7 @@ private:
   void saveRaySegments();
   void refreshBuffer();
 
-  static constexpr int kBufferSizeFactor = 8;
+  static constexpr int kBufferSizeFactor = 4;
 
   SimulationContextPtr context;
   std::vector<CrystalContextPtr> activeCrystalCtxs;

@@ -95,6 +95,7 @@ void Simulator::start() {
 
   rays.clear();
   mainAxisRotation.clear();
+  RaySegmentPool::getInstance().clear();
 
   for (int i = 0; i < msNum; i++) {
     rays.emplace_back();
@@ -109,11 +110,7 @@ void Simulator::start() {
       if (i == 0) {
         initSunRays();
       }
-      // std::printf("After initSunRays():\n");
-      // buffer.print();
       initEntryRays(ctx, i);   // totalRayNum may be updated
-      // std::printf("After initEntryRays():\n");
-      // buffer.print();
       traceRays(ctx->getCrystal());
     }
     if (i < msNum - 1) {
@@ -240,18 +237,12 @@ void Simulator::traceRays(const CrystalPtr& crystal) {
       bufferSize = activeRayNum * kBufferSizeFactor;
       buffer.allocate(bufferSize);
     }
-    // std::printf("Before hit:\n");
-    // buffer.print();
     Optics::HitSurface(crystal, n, activeRayNum,
                        buffer.dir[0], buffer.faceId[0], buffer.w[0],
                        buffer.dir[1], buffer.w[1]);
-    // std::printf("Before prop:\n");
-    // buffer.print();
     Optics::Propagate(crystal, activeRayNum * 2,
                       buffer.pt[0], buffer.dir[1], buffer.w[1],
                       buffer.pt[1], buffer.faceId[1]);
-    // std::printf("After prop:\n");
-    // buffer.print();
     saveRaySegments();
     refreshBuffer();    // activeRayNum is updated.
   }
