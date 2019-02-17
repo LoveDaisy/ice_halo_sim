@@ -43,9 +43,9 @@ public:
 
 private:
   void initSunRays();
-  void initEntryRays(const CrystalContextPtr& ctx, int multiScatteringIdx);
+  void initEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx);
   void traceRays(const CrystalPtr& crystal);
-  void restoreResultRays(int multiScatteringIdx);
+  void restoreResultRays(int multiScatterIdx);
   void saveRaySegments();
   void refreshBuffer();
 
@@ -54,7 +54,7 @@ private:
   SimulationContextPtr context;
   std::vector<CrystalContextPtr> activeCrystalCtxs;
 
-  std::vector<std::vector<RayPtr> > rays;
+  std::vector<std::vector<RayPtr> > rays_;
   std::vector<RaySegment*> final_ray_segments_;
 
   size_t totalRayNum;

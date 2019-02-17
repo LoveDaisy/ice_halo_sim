@@ -94,12 +94,12 @@ void Simulator::start() {
   totalRayNum = context->getTotalInitRays();
   auto msNum = context->getMultiScatterNum();
 
-  rays.clear();
+  rays_.clear();
   final_ray_segments_.clear();
   RaySegmentPool::getInstance().clear();
 
   for (int i = 0; i < msNum; i++) {
-    rays.emplace_back();
+    rays_.emplace_back();
 
     for (const auto& ctx : activeCrystalCtxs) {
       activeRayNum = static_cast<size_t>(ctx->getPopulation() * totalRayNum);
@@ -146,7 +146,7 @@ void Simulator::initEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
   crystal->copyNormData(faceNorm);
   crystal->copyFaceData(facePoint);
 
-  rays[multiScatterIdx].reserve(activeRayNum);
+  rays_[multiScatterIdx].reserve(activeRayNum);
 
   auto& pool = RaySegmentPool::getInstance();
   auto& rng = Math::RandomNumberGenerator::GetInstance();
@@ -173,8 +173,8 @@ void Simulator::initEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
 
     auto r = pool.getRaySegment(buffer.pt[0] + i * 3, buffer.dir[0] + i * 3, buffer.w[0][i], buffer.faceId[0][i]);
     buffer.raySeg[0][i] = r;
-    rays[multiScatterIdx].emplace_back(std::make_shared<Ray>(r, axis_rot));
-    r->root = rays[multiScatterIdx].back().get();
+    rays_[multiScatterIdx].emplace_back(std::make_shared<Ray>(r, axis_rot));
+    r->root = rays_[multiScatterIdx].back().get();
   }
 
   delete[] faceArea;
@@ -191,7 +191,7 @@ void Simulator::restoreResultRays(int multiScatterIdx) {
   auto& rng = Math::RandomNumberGenerator::GetInstance();
   std::stack<RaySegment*> s;
   size_t idx = 0;
-  for (auto& r : rays[multiScatterIdx]) {
+  for (auto& r : rays_[multiScatterIdx]) {
     s.push(r->firstRaySeg);
     while (!s.empty()) {
       auto tmp_r = s.top();
@@ -330,7 +330,7 @@ void Simulator::saveFinalDirections(const char* filename) {
 
 void Simulator::printRayInfo() {
   std::stack<RaySegment*> s;
-  for (const auto& rs : rays) {
+  for (const auto& rs : rays_) {
     for (const auto& r : rs) {
       s.push(r->firstRaySeg);
 
