@@ -304,31 +304,30 @@ void Simulator::saveFinalDirections(const char* filename) {
 
   float finalDir[3];
   std::stack<RaySegment*> s;
-  for (decltype(rays.size()) i = 0; i < rays.size(); i++) {
-    const auto& rs = rays[i];
-    const auto& as = mainAxisRotation[i];
-    assert(rs.size() == as.size());
 
-    for (decltype(rs.size()) j = 0; j < rs.size(); j++) {
-      const auto& r = rs[j];
-      const auto& a = as[j];
+  const auto& rs = rays.back();
+  const auto& as = mainAxisRotation.back();
+  assert(rs.size() == as.size());
 
-      s.push(r->firstRaySeg);
-      while (!s.empty()) {
-        auto p = s.top();
-        s.pop();
-        if (p->nextReflect && !p->isFinished) {
-          s.push(p->nextReflect);
-        }
-        if (p->nextRefract && !p->isFinished) {
-          s.push(p->nextRefract);
-        }
-        if (!p->nextReflect && !p->nextRefract &&
-            p->isValidEnd() && Math::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
-          Math::rotateZBack(a.val(), p->dir.val(), finalDir);
-          file.write(finalDir, 3);
-          file.write(p->w);
-        }
+  for (decltype(rs.size()) j = 0; j < rs.size(); j++) {
+    const auto& r = rs[j];
+    const auto& a = as[j];
+
+    s.push(r->firstRaySeg);
+    while (!s.empty()) {
+      auto p = s.top();
+      s.pop();
+      if (p->nextReflect && !p->isFinished) {
+        s.push(p->nextReflect);
+      }
+      if (p->nextRefract && !p->isFinished) {
+        s.push(p->nextRefract);
+      }
+      if (!p->nextReflect && !p->nextRefract &&
+          p->isValidEnd() && Math::dot3(p->dir.val(), r->firstRaySeg->dir.val()) < 1.0 - 1e-5) {
+        Math::rotateZBack(a.val(), p->dir.val(), finalDir);
+        file.write(finalDir, 3);
+        file.write(p->w);
       }
     }
   }
