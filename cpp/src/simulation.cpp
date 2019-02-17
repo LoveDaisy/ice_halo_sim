@@ -239,7 +239,7 @@ void Simulator::traceRays(const CrystalPtr& crystal) {
       bufferSize = activeRayNum * kBufferSizeFactor;
       buffer.allocate(bufferSize);
     }
-    auto step = activeRayNum / 80;
+    auto step = std::max(activeRayNum / 100, static_cast<size_t>(10));
     for (decltype(activeRayNum) j = 0; j < activeRayNum; j += step) {
       decltype(activeRayNum) current_num = std::min(activeRayNum - j, step);
       pool->addJob([=]{

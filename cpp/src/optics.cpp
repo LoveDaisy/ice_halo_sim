@@ -145,15 +145,15 @@ void Optics::intersectLineWithTriangles(const float* pt, const float* dir,
   float min_t = std::numeric_limits<float>::max();
 
   for (int i = 0; i < faceNum; i++) {
-    const float* face_point = facePoints + i * 9;
-    const float* face_base = faceBases + i * 6;
+    const float* curr_face_point = facePoints + i * 9;
+    const float* curr_face_base = faceBases + i * 6;
 
-    float ff04 = face_base[0] * face_base[4];
-    float ff05 = face_base[0] * face_base[5];
-    float ff13 = face_base[1] * face_base[3];
-    float ff15 = face_base[1] * face_base[5];
-    float ff23 = face_base[2] * face_base[3];
-    float ff24 = face_base[2] * face_base[4];
+    float ff04 = curr_face_base[0] * curr_face_base[4];
+    float ff05 = curr_face_base[0] * curr_face_base[5];
+    float ff13 = curr_face_base[1] * curr_face_base[3];
+    float ff15 = curr_face_base[1] * curr_face_base[5];
+    float ff23 = curr_face_base[2] * curr_face_base[3];
+    float ff24 = curr_face_base[2] * curr_face_base[4];
 
     float c = dir[0] * ff15 + dir[1] * ff23 + dir[2] * ff04 -
               dir[0] * ff24 - dir[1] * ff05 - dir[2] * ff13;
@@ -162,8 +162,8 @@ void Optics::intersectLineWithTriangles(const float* pt, const float* dir,
     }
 
 
-    float a = ff15 * face_point[0] + ff23 * face_point[1] + ff04 * face_point[2] -
-              ff24 * face_point[0] - ff05 * face_point[1] - ff13 * face_point[2];
+    float a = ff15 * curr_face_point[0] + ff23 * curr_face_point[1] + ff04 * curr_face_point[2] -
+              ff24 * curr_face_point[0] - ff05 * curr_face_point[1] - ff13 * curr_face_point[2];
     float b = pt[0] * ff15 + pt[1] * ff23 + pt[2] * ff04 -
               pt[0] * ff24 - pt[1] * ff05 - pt[2] * ff13;
     float t = (a - b) / c;
@@ -178,21 +178,21 @@ void Optics::intersectLineWithTriangles(const float* pt, const float* dir,
     float dp20 = dir[2] * pt[0];
     float dp21 = dir[2] * pt[1];
 
-    a = dp12 * face_base[3] + dp20 * face_base[4] + dp01 * face_base[5] -
-        dp21 * face_base[3] - dp02 * face_base[4] - dp10 * face_base[5];
-    b = dir[0] * face_base[4] * face_point[2] + dir[1] * face_base[5] * face_point[0] +
-        dir[2] * face_base[3] * face_point[1] - dir[0] * face_base[5] * face_point[1] -
-        dir[1] * face_base[3] * face_point[2] - dir[2] * face_base[4] * face_point[0];
+    a = dp12 * curr_face_base[3] + dp20 * curr_face_base[4] + dp01 * curr_face_base[5] -
+        dp21 * curr_face_base[3] - dp02 * curr_face_base[4] - dp10 * curr_face_base[5];
+    b = dir[0] * curr_face_base[4] * curr_face_point[2] + dir[1] * curr_face_base[5] * curr_face_point[0] +
+        dir[2] * curr_face_base[3] * curr_face_point[1] - dir[0] * curr_face_base[5] * curr_face_point[1] -
+        dir[1] * curr_face_base[3] * curr_face_point[2] - dir[2] * curr_face_base[4] * curr_face_point[0];
     float alpha = (a + b) / c;
     if (alpha < 0 || alpha > 1) {
       continue;
     }
 
-    a = dp12 * face_base[0] + dp20 * face_base[1] + dp01 * face_base[2] -
-        dp21 * face_base[0] - dp02 * face_base[1] - dp10 * face_base[2];
-    b = dir[0] * face_base[1] * face_point[2] + dir[1] * face_base[2] * face_point[0] +
-        dir[2] * face_base[0] * face_point[1] - dir[0] * face_base[2] * face_point[1] -
-        dir[1] * face_base[0] * face_point[2] - dir[2] * face_base[1] * face_point[0];
+    a = dp12 * curr_face_base[0] + dp20 * curr_face_base[1] + dp01 * curr_face_base[2] -
+        dp21 * curr_face_base[0] - dp02 * curr_face_base[1] - dp10 * curr_face_base[2];
+    b = dir[0] * curr_face_base[1] * curr_face_point[2] + dir[1] * curr_face_base[2] * curr_face_point[0] +
+        dir[2] * curr_face_base[0] * curr_face_point[1] - dir[0] * curr_face_base[2] * curr_face_point[1] -
+        dir[1] * curr_face_base[0] * curr_face_point[2] - dir[2] * curr_face_base[1] * curr_face_point[0];
     float beta = -(a + b) / c;
 
     if (t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
