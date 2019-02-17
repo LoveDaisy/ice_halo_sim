@@ -16,6 +16,8 @@ class ConstDummyMatrix;
 constexpr float kPi = 3.14159265359f;
 constexpr float kSqrt3 = 1.73205080757f;
 constexpr float kFloatEps = 1e-6;
+constexpr float kDegreeToRad = kPi / 180.0f;
+constexpr float kRadToDegree = 180.0f / kPi;
 
 
 int matMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);

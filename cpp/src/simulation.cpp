@@ -158,7 +158,7 @@ void Simulator::initEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
   float axis_rot[3];
   for (decltype(activeRayNum) i = 0; i < activeRayNum; i++) {
     sampler.SampleSphericalPointsSph(ctx->getAxisDist(), ctx->getAxisMean(), ctx->getAxisStd(), axis_rot);
-    axis_rot[2] = rng.get(ctx->getRollDist(), ctx->getRollMean(), ctx->getRollStd());
+    axis_rot[2] = rng.get(ctx->getRollDist(), ctx->getRollMean(), ctx->getRollStd()) * Math::kDegreeToRad;
     Math::rotateZ(axis_rot, buffer.dir[1] + i * 3, buffer.dir[0] + i * 3);
 
     float sum = 0;

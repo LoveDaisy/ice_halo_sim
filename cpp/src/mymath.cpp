@@ -591,7 +591,7 @@ void RandomSampler::SampleSphericalPointsSph(Distribution dist, float lat, float
                                              float* data, size_t num) {
   auto& rng = RandomNumberGenerator::GetInstance();
   for (decltype(num) i = 0; i < num; i++) {
-    float u = rng.get(dist, lat, std);
+    float u = rng.get(dist, lat * kDegreeToRad, std * kDegreeToRad);
     float q = rng.getUniform() * 2 * Math::kPi;
 
     data[i * 2 + 0] = q;
