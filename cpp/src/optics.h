@@ -42,8 +42,6 @@ class Ray {
 public:
   Ray(RaySegment* seg, const float main_axis_rot[3]);
 
-  size_t TotalRaySegmentNum();
-
   RaySegment* first_ray_segment_;
   Math::Vec3f main_axis_rot_;
 };
@@ -93,14 +91,14 @@ private:
    *
    * \param pt a point on the line, 3 floats
    * \param dir the direction of the line, 3 floats
-   * \param faceBases the face data, 6 floats for one face, represents for 2 base vector
-   * \param facePoints the face data, 9 floats for one face, represents for 3 vertexes
-   * \param faceNum the face number
+   * \param face_bases the face data, 6 floats for one face, represents for 2 base vector
+   * \param face_points the face data, 9 floats for one face, represents for 3 vertexes
+   * \param face_num the face number
    * \param p output argument, the intersection point
    * \param idx output argument, the face index of the intersection point
    */
   static void IntersectLineWithTriangles(const float* pt, const float* dir,
-                                         const float* faceBases, const float* facePoints, int faceNum,
+                                         const float* face_bases, const float* face_points, int face_num,
                                          float* p, int* idx);
 };
 

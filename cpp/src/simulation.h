@@ -15,7 +15,7 @@ public:
   ~SimulationBufferData();
 
   void Clean();
-  void Allocate(size_t rayNum);
+  void Allocate(size_t ray_num);
   void Print();
 
   float* pt[2];
@@ -43,9 +43,9 @@ public:
 
 private:
   void InitSunRays();
-  void InitEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx);
+  void InitEntryRays(const CrystalContextPtr& ctx, int multi_scatter_idx);
   void TraceRays(const CrystalPtr& crystal);
-  void RestoreResultRays(int multiScatterIdx);
+  void RestoreResultRays(int multi_scatter_idx);
   void StoreRaySegments();
   void RefreshBuffer();
 

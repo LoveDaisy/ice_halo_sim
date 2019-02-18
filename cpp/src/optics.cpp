@@ -40,32 +40,6 @@ Ray::Ray(RaySegment* seg, const float main_axis_rot[3])
     : first_ray_segment_(seg), main_axis_rot_(main_axis_rot) {}
 
 
-size_t Ray::TotalRaySegmentNum() {
-  if (first_ray_segment_ == nullptr) {
-    return 0;
-  }
-
-  std::vector<RaySegment*> v;
-  v.push_back(first_ray_segment_);
-
-  size_t n = 0;
-  while (!v.empty()) {
-    RaySegment* p = v.back();
-    v.pop_back();
-    if (p->next_reflect_) {
-      v.push_back(p->next_reflect_);
-    }
-    if (p->next_refract_) {
-      v.push_back(p->next_refract_);
-    }
-    if (p->IsValidEnd()) {
-      n++;
-    }
-  }
-  return n;
-}
-
-
 void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
                         const float* dir_in, const int* face_id_in, const float* w_in,
                         float* dir_out, float* w_out) {
@@ -109,8 +83,7 @@ void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,
       continue;
     }
     IntersectLineWithTriangles(pt_in + i / 2 * 3, dir_in + i * 3,
-                               crystal->GetFaceBaseVector(), crystal->GetFaceVertex(),
-                               crystal->TotalFaces(),
+                               crystal->GetFaceBaseVector(), crystal->GetFaceVertex(), crystal->TotalFaces(),
                                pt_out + i * 3, face_id_out + i);
   }
 }
@@ -132,14 +105,13 @@ float Optics::GetReflectRatio(float cos_angle, float rr) {
 
 
 void Optics::IntersectLineWithTriangles(const float* pt, const float* dir,
-                                        const float* faceBases, const float* facePoints,
-                                        int faceNum,
+                                        const float* face_bases, const float* face_points, int face_num,
                                         float* p, int* idx) {
   float min_t = std::numeric_limits<float>::max();
 
-  for (int i = 0; i < faceNum; i++) {
-    const float* curr_face_point = facePoints + i * 9;
-    const float* curr_face_base = faceBases + i * 6;
+  for (int i = 0; i < face_num; i++) {
+    const float* curr_face_point = face_points + i * 9;
+    const float* curr_face_base = face_bases + i * 6;
 
     float ff04 = curr_face_base[0] * curr_face_base[4];
     float ff05 = curr_face_base[0] * curr_face_base[5];
