@@ -21,18 +21,20 @@ bool RaySegment::isValidEnd() {
 }
 
 
-void RaySegment::reset() {
+void RaySegment::ResetWith(const float* pt, const float* dir, float w, int face_id) {
   nextReflect = nullptr;
   nextRefract = nullptr;
   prev = nullptr;
-  pt.val(0, 0, 0);
-  dir.val(0, 0, 0);
-  faceId = -1;
+  root = nullptr;
+  this->pt.val(pt);
+  this->dir.val(dir);
+  this->w = w;
+  this->faceId = face_id;
   isFinished = false;
 }
 
 
-Ray::Ray(RaySegment *seg, const float main_axis_rot[3])
+Ray::Ray(RaySegment* seg, const float main_axis_rot[3])
     : firstRaySeg(seg), main_axis_rot(main_axis_rot) {}
 
 
@@ -257,12 +259,7 @@ RaySegment* RaySegmentPool::getRaySegment(const float* pt, const float* dir, flo
 
   seg = currentChunk + nextUnusedId;
   nextUnusedId++;
-  seg->reset();
-
-  seg->pt.val(pt);
-  seg->dir.val(dir);
-  seg->w = w;
-  seg->faceId = faceId;
+  seg->ResetWith(pt, dir, w, faceId);
 
   return seg;
 }

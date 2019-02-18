@@ -19,7 +19,7 @@ class RaySegment {
 friend class RaySegmentPool;
 public:
   bool isValidEnd();
-  void reset();
+  void ResetWith(const float* pt, const float* dir, float w, int face_id);
 
   RaySegment* nextReflect;
   RaySegment* nextRefract;
@@ -65,7 +65,7 @@ public:
 private:
   RaySegmentPool();
 
-  static constexpr uint32_t kChunkSize = 1024 * 128;
+  static constexpr uint32_t kChunkSize = 1024 * 512;
 
   std::vector<RaySegment*> segments;
   std::atomic<uint64_t> nextUnusedId;
