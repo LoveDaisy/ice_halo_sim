@@ -16,33 +16,33 @@ class Pool {
 public:
   ~Pool() = default;
 
-  void start();
-  void addJob(std::function<void()> job);
-  void waitFinish();
-  bool taskRunning();
+  void Start();
+  void AddJob(std::function<void()> job);
+  void WaitFinish();
+  bool TaskRunning();
 
-  static Pool* getInstance();
+  static Pool* GetInstance();
 
 private:
   Pool();
 
-  unsigned int threadNum;
-  std::vector<std::thread> pool;
-  std::atomic<bool> alive;
+  size_t thread_num_;
+  std::vector<std::thread> pool_;
+  std::atomic<bool> alive_;
 
-  std::queue<std::function<void()> > queue;
-  std::mutex queueMutex;
-  std::condition_variable queueCondition;
+  std::queue<std::function<void()> > queue_;
+  std::mutex queue_mutex_;
+  std::condition_variable queue_condition_;
 
-  std::atomic<int> runningJobs;
-  std::atomic<int> aliveThreads;
-  std::mutex taskMutex;
-  std::condition_variable taskCondition;
+  std::atomic<int> running_jobs_;
+  std::atomic<int> alive_threads_;
+  std::mutex task_mutex_;
+  std::condition_variable task_condition_;
 
-  void workingFunction();
+  void WorkingFunction();
 
-  static Pool* instance;
-  static std::mutex instanceMutex;
+  static Pool* instance_;
+  static std::mutex instance_mutex_;
 };
 
 

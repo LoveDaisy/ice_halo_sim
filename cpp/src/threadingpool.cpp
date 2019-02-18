@@ -3,97 +3,97 @@
 namespace IceHalo {
 
 
-Pool * Pool::instance = nullptr;
-std::mutex Pool::instanceMutex;
+Pool * Pool::instance_ = nullptr;
+std::mutex Pool::instance_mutex_;
 
 
-Pool * Pool::getInstance() {
-  if (instance == nullptr) {
+Pool * Pool::GetInstance() {
+  if (instance_ == nullptr) {
     {
-      std::unique_lock<std::mutex> lock(instanceMutex);
-      if (instance == nullptr) {
-        instance = new Pool();
+      std::unique_lock<std::mutex> lock(instance_mutex_);
+      if (instance_ == nullptr) {
+        instance_ = new Pool();
       }
     }
   }
-  return instance;
+  return instance_;
 }
 
 
 Pool::Pool()
-    : threadNum(std::thread::hardware_concurrency()), alive(false),
-      runningJobs(0), aliveThreads(0) {
-  start();
+    : thread_num_(std::thread::hardware_concurrency()), alive_(false),
+      running_jobs_(0), alive_threads_(0) {
+  Start();
 }
 
 
-void Pool::start() {
-  if (alive || runningJobs > 0 || aliveThreads > 0) {
+void Pool::Start() {
+  if (alive_ || running_jobs_ > 0 || alive_threads_ > 0) {
     return;
   }
 
-  pool.clear();
-  alive = true;
-  aliveThreads = 0;
-  printf("Threading pool size: %u\n", threadNum);
-  for (decltype(threadNum) ii = 0; ii < threadNum; ii++) {
-    pool.emplace_back(&Pool::workingFunction, this);
-    aliveThreads += 1;
+  pool_.clear();
+  alive_ = true;
+  alive_threads_ = 0;
+  printf("Threading pool size: %u\n", thread_num_);
+  for (decltype(thread_num_) ii = 0; ii < thread_num_; ii++) {
+    pool_.emplace_back(&Pool::WorkingFunction, this);
+    alive_threads_ += 1;
   }
 }
 
 
 
-void Pool::addJob(std::function<void()> job) {
-  if (!alive) {
+void Pool::AddJob(std::function<void()> job) {
+  if (!alive_) {
     return;
   }
 
   {
-    std::unique_lock<std::mutex> lock(queueMutex);
-    queue.emplace(job);
+    std::unique_lock<std::mutex> lock(queue_mutex_);
+    queue_.emplace(job);
   }
-  queueCondition.notify_one();
+  queue_condition_.notify_one();
 }
 
 
-void Pool::waitFinish() {
-  std::unique_lock<std::mutex> lock(taskMutex);
-  taskCondition.wait(lock, [this]{ return !taskRunning(); });
+void Pool::WaitFinish() {
+  std::unique_lock<std::mutex> lock(task_mutex_);
+  task_condition_.wait(lock, [this]{ return !TaskRunning(); });
 }
 
 
-bool Pool::taskRunning() {
-  return runningJobs > 0 || !queue.empty();
+bool Pool::TaskRunning() {
+  return running_jobs_ > 0 || !queue_.empty();
 }
 
 
-void Pool::workingFunction() {
-  std::unique_lock<std::mutex> lock(queueMutex);
+void Pool::WorkingFunction() {
+  std::unique_lock<std::mutex> lock(queue_mutex_);
   while (true) {
-    if (!queue.empty()) {
-      std::function<void()> job = queue.front();
-      queue.pop();
+    if (!queue_.empty()) {
+      std::function<void()> job = queue_.front();
+      queue_.pop();
       lock.unlock();
       {
-        std::unique_lock<std::mutex> lk(taskMutex);
-        runningJobs += 1;
+        std::unique_lock<std::mutex> lk(task_mutex_);
+        running_jobs_ += 1;
       }
       job();
       {
-        std::unique_lock<std::mutex> lk(taskMutex);
-        runningJobs -= 1;
+        std::unique_lock<std::mutex> lk(task_mutex_);
+        running_jobs_ -= 1;
       }
       lock.lock();
-      taskCondition.notify_one();
-    } else if (!alive) {
-      aliveThreads -= 1;
-      taskCondition.notify_one();
-      queueCondition.notify_one();
+      task_condition_.notify_one();
+    } else if (!alive_) {
+      alive_threads_ -= 1;
+      task_condition_.notify_one();
+      queue_condition_.notify_one();
       break;
     } else {
-      taskCondition.notify_one();
-      queueCondition.wait(lock, [this]{ return !this->queue.empty() || !this->alive; });
+      task_condition_.notify_one();
+      queue_condition_.wait(lock, [this]{ return !this->queue_.empty() || !this->alive_; });
     }
   }
 }

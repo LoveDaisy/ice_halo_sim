@@ -12,7 +12,7 @@ bool exists(const char* filename) {
 }
 
 
-std::vector<File> listDataFiles(const char* dir) {
+std::vector<File> ListDataFiles(const char* dir) {
   namespace f = boost::filesystem;
 
   std::vector<File> files;
@@ -29,7 +29,7 @@ std::vector<File> listDataFiles(const char* dir) {
 }
 
 
-std::string pathJoin(const std::string& p1, const std::string& p2) {
+std::string PathJoin(const std::string& p1, const std::string& p2) {
   boost::filesystem::path p(p1);
   p /= (p2);
   return p.string();
@@ -37,28 +37,28 @@ std::string pathJoin(const std::string& p1, const std::string& p2) {
 
 
 File::File(const char* filename)
-    : file(nullptr), fileOpened(false),
-      p(filename) {}
+    : file_(nullptr), file_opened_(false),
+      path_(filename) {}
 
 
 File::File(const char* path, const char* filename)
-    : file(nullptr), fileOpened(false),
-      p(path) {
-  p /= filename;
+    : file_(nullptr), file_opened_(false),
+      path_(path) {
+  path_ /= filename;
 }
 
 
 File::~File() {
-  if (fileOpened) {
-    fclose(file);
-    fileOpened = false;
+  if (file_opened_) {
+    fclose(file_);
+    file_opened_ = false;
   }
 }
 
 
-bool File::open(uint8_t mode) {
-  if (!exists(p.parent_path())) {
-    create_directories(p.parent_path());
+bool File::Open(uint8_t mode) {
+  if (!exists(path_.parent_path())) {
+    create_directories(path_.parent_path());
   }
 
   char modeBuffer[32];
@@ -75,24 +75,24 @@ bool File::open(uint8_t mode) {
   const char* m2 = (mode & OpenMode::kBinary) ? "b" : "";
   std::sprintf(modeBuffer, "%s%s", m1, m2);
 
-  file = std::fopen(p.c_str(), modeBuffer);
-  fileOpened = file != nullptr;
-  return fileOpened;
+  file_ = std::fopen(path_.c_str(), modeBuffer);
+  file_opened_ = file_ != nullptr;
+  return file_opened_;
 }
 
 
-bool File::close() {
-  if (fileOpened) {
-    std::fclose(file);
-    file = nullptr;
-    fileOpened = false;
+bool File::Close() {
+  if (file_opened_) {
+    std::fclose(file_);
+    file_ = nullptr;
+    file_opened_ = false;
   }
   return true;
 }
 
 
-size_t File::getSize() {
-  auto size = file_size(p);
+size_t File::GetSize() {
+  auto size = file_size(path_);
   if (size == static_cast<uintmax_t>(-1)) {
     return 0;
   } else {

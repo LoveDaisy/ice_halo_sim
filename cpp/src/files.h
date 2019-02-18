@@ -24,65 +24,65 @@ public:
   File(const char* path, const char* filename);
   ~File();
 
-  bool open(uint8_t mode = OpenMode::kRead);
-  bool close();
+  bool Open(uint8_t mode = OpenMode::kRead);
+  bool Close();
 
-  size_t getSize();
-
-  template<class T>
-  size_t read(T* buffer, size_t n = 1);
+  size_t GetSize();
 
   template<class T>
-  size_t write(T data);
+  size_t Read(T* buffer, size_t n = 1);
 
   template<class T>
-  size_t write(const T* data, size_t n);
+  size_t Write(T data);
+
+  template<class T>
+  size_t Write(const T* data, size_t n);
 
 private:
-  std::FILE* file;
-  bool fileOpened;
+  std::FILE* file_;
+  bool file_opened_;
 
-  boost::filesystem::path p;
+  boost::filesystem::path path_;
 };
 
 
 template<class T>
-size_t File::read(T* buffer, size_t n) {
-  if (!fileOpened) {
+size_t File::Read(T* buffer, size_t n) {
+  if (!file_opened_) {
     return 0;
   }
 
-  auto count = std::fread(buffer, sizeof(T), n, file);
+  auto count = std::fread(buffer, sizeof(T), n, file_);
   return count;
 }
 
 
 template<class T>
-size_t File::write(T data) {
-  if (!fileOpened) {
+size_t File::Write(T data) {
+  if (!file_opened_) {
     return 0;
   }
 
-  auto count = std::fwrite(&data, sizeof(T), 1, file);
+  auto count = std::fwrite(&data, sizeof(T), 1, file_);
   return count;
 }
 
 
 template<class T>
-size_t File::write(const T* data, size_t n) {
-  if (!fileOpened) {
+size_t File::Write(const T* data, size_t n) {
+  if (!file_opened_) {
     return 0;
   }
 
-  auto count = std::fwrite(data, sizeof(T), n, file);
+  auto count = std::fwrite(data, sizeof(T), n, file_);
   return count;
 }
 
 bool exists(const char* filename);
 
-std::vector<File> listDataFiles(const char* dir);
+std::vector<File> ListDataFiles(const char* dir);
 
-std::string pathJoin(const std::string& p1, const std::string& p2);
+std::string PathJoin(const std::string& p1, const std::string& p2);
 
 }  // namespace IceHalo
 

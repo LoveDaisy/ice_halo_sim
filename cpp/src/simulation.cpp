@@ -230,7 +230,7 @@ void Simulator::RestoreResultRays(int multiScatterIdx) {
 // Trace rays.
 // Start from dir[0] and pt[0].
 void Simulator::TraceRays(const CrystalPtr& crystal) {
-  auto pool = Pool::getInstance();
+  auto pool = Pool::GetInstance();
 
   int maxRecursionNum = context_->GetMaxRecursionNum();
   float n = IceRefractiveIndex::n(context_->GetCurrentWavelength());
@@ -242,16 +242,16 @@ void Simulator::TraceRays(const CrystalPtr& crystal) {
     auto step = std::max(active_ray_num_ / 100, static_cast<size_t>(10));
     for (decltype(active_ray_num_) j = 0; j < active_ray_num_; j += step) {
       decltype(active_ray_num_) current_num = std::min(active_ray_num_ - j, step);
-      pool->addJob([=]{
+      pool->AddJob([=] {
         Optics::HitSurface(crystal, n, current_num,
-          buffer_.dir[0] + j * 3, buffer_.face_id[0] + j, buffer_.w[0] + j,
-          buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2);
+                           buffer_.dir[0] + j * 3, buffer_.face_id[0] + j, buffer_.w[0] + j,
+                           buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2);
         Optics::Propagate(crystal, current_num * 2,
-          buffer_.pt[0] + j * 3, buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2,
-          buffer_.pt[1] + j * 6, buffer_.face_id[1] + j * 2);
+                          buffer_.pt[0] + j * 3, buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2,
+                          buffer_.pt[1] + j * 6, buffer_.face_id[1] + j * 2);
       });
     }
-    pool->waitFinish();
+    pool->WaitFinish();
     StoreRaySegments();
     RefreshBuffer();    // active_ray_num_ is updated.
   }
@@ -307,9 +307,9 @@ void Simulator::RefreshBuffer() {
 
 void Simulator::SaveFinalDirections(const char* filename) {
   File file(context_->GetDataDirectory().c_str(), filename);
-  if (!file.open(OpenMode::kWrite | OpenMode::kBinary)) return;
+  if (!file.Open(OpenMode::kWrite | OpenMode::kBinary)) return;
 
-  file.write(context_->GetCurrentWavelength());
+  file.Write(context_->GetCurrentWavelength());
 
   auto ray_num = final_ray_segments_.size();
   auto* data = new float[ray_num * 4];       // dx, dy, dz, w
@@ -322,8 +322,8 @@ void Simulator::SaveFinalDirections(const char* filename) {
     curr_data[3] = r->w_;
     curr_data += 4;
   }
-  file.write(data, ray_num * 4);
-  file.close();
+  file.Write(data, ray_num * 4);
+  file.Close();
 
   delete[] data;
 }

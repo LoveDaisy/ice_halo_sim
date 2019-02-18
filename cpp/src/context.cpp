@@ -887,7 +887,7 @@ uint32_t RenderContext::GetImageHeight() const {
 
 
 std::string RenderContext::GetImagePath() const {
-  return pathJoin(data_directory_, "img.jpg");
+  return PathJoin(data_directory_, "img.jpg");
 }
 
 
@@ -938,7 +938,7 @@ void RenderContext::CopySpectrumData(float* wavelengthData, float* spectrumData)
 
 
 void RenderContext::LoadData() {
-  std::vector<File> files = listDataFiles(data_directory_.c_str());
+  std::vector<File> files = ListDataFiles(data_directory_.c_str());
   int i = 0;
   for (auto& f : files) {
     auto t0 = std::chrono::system_clock::now();
@@ -952,11 +952,11 @@ void RenderContext::LoadData() {
 
 
 int RenderContext::LoadDataFromFile(File& file) {
-  auto fileSize = file.getSize();
+  auto fileSize = file.GetSize();
   auto* readBuffer = new float[fileSize / sizeof(float)];
 
-  file.open(OpenMode::kRead | OpenMode::kBinary);
-  auto readCount = file.read(readBuffer, 1);
+  file.Open(OpenMode::kRead | OpenMode::kBinary);
+  auto readCount = file.Read(readBuffer, 1);
   if (readCount <= 0) {
     return -1;
   }
@@ -966,9 +966,9 @@ int RenderContext::LoadDataFromFile(File& file) {
     return -1;
   }
 
-  readCount = file.read(readBuffer, fileSize / sizeof(float));
+  readCount = file.Read(readBuffer, fileSize / sizeof(float));
   auto totalCount = readCount / 4;
-  file.close();
+  file.Close();
 
   if (totalCount == 0) {
     return static_cast<int>(totalCount);
