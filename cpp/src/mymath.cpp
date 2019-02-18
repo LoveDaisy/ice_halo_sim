@@ -549,10 +549,17 @@ void RandomSampler::SampleSphericalPointsCart(Distribution dist, float lat, floa
   auto rng = RandomNumberGenerator::GetInstance();
   for (decltype(num) i = 0; i < num; i++) {
     float phi = rng->Get(dist, lat * kDegreeToRad, std * kDegreeToRad);
+    if (phi > kPi / 2) {
+      phi = kPi - phi;
+    }
+    if (phi < -kPi / 2) {
+      phi = -kPi - phi;
+    }
     float lambda = rng->GetUniform() * 2 * Math::kPi;
 
-    data[i * 3 + 0] = std::cos(phi) * std::cos(lambda);
-    data[i * 3 + 1] = std::cos(phi) * std::sin(lambda);
+    float r = std::cos(phi);
+    data[i * 3 + 0] = r * std::cos(lambda);
+    data[i * 3 + 1] = r * std::sin(lambda);
     data[i * 3 + 2] = std::sin(phi);
   }
 }
@@ -592,6 +599,12 @@ void RandomSampler::SampleSphericalPointsSph(Distribution dist, float lat, float
   auto rng = RandomNumberGenerator::GetInstance();
   for (decltype(num) i = 0; i < num; i++) {
     float phi = rng->Get(dist, lat * kDegreeToRad, std * kDegreeToRad);
+    if (phi > kPi / 2) {
+      phi = kPi - phi;
+    }
+    if (phi < -kPi / 2) {
+      phi = -kPi - phi;
+    }
     float lambda = rng->GetUniform() * 2 * Math::kPi;
 
     data[i * 2 + 0] = lambda;
