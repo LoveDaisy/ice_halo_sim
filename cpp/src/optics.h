@@ -69,8 +69,9 @@ private:
   static RaySegmentPool* instance_;
 
   std::vector<RaySegment*> segments_;
-  std::atomic<uint64_t> next_unused_id_;
-  std::atomic<uint64_t> current_chunk_id_;
+  size_t current_chunk_id_;
+  std::atomic<uint32_t> next_unused_id_;
+  std::mutex id_mutex_;
 };
 
 using RaySegmentPoolPtr = std::shared_ptr<RaySegmentPool>;

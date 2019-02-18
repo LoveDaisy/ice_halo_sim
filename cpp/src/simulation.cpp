@@ -140,7 +140,7 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
   auto* faceArea = new float[total_faces];
   auto* faceNorm = new float[total_faces * 3];
   auto* prob = new float[total_faces * active_ray_num_];
-  auto* rays = new RayPtr[active_ray_num_];
+  auto* rays = new Ray*[active_ray_num_];
   auto* facePoint = crystal->GetFaceVertex();
 
   crystal->CopyFaceAreaData(faceArea);
@@ -181,8 +181,8 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
         auto r = ray_pool->GetRaySegment(buffer_.pt[0] + j * 3, buffer_.dir[0] + j * 3, buffer_.w[0][j],
                                          buffer_.face_id[0][j]);
         buffer_.ray_seg[0][j] = r;
-        rays[j] = std::make_shared<Ray>(r, axis_rot);
-        r->root_ = rays[j].get();
+        rays[j] = new Ray(r, axis_rot);
+        r->root_ = rays[j];
       }
     });
   }
@@ -274,13 +274,13 @@ void Simulator::TraceRays(const CrystalPtr& crystal) {
 
 // Save rays
 void Simulator::StoreRaySegments() {
-  auto pool = RaySegmentPool::GetInstance();
+  auto ray_pool = RaySegmentPool::GetInstance();
   for (size_t i = 0; i < active_ray_num_ * 2; i++) {
-    if (buffer_.w[1][i] <= 0) {   // For refractive rays in total reflection case
+    if (buffer_.w[1][i] <= 0) {   // Refractive rays in total reflection case
       continue;
     }
 
-    auto r = pool->GetRaySegment(
+    auto r = ray_pool->GetRaySegment(
       buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3, buffer_.w[1][i], buffer_.face_id[0][i / 2]);
     if (buffer_.face_id[1][i] < 0) {
       r->is_finished_ = true;

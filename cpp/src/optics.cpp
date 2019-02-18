@@ -251,23 +251,26 @@ RaySegmentPool* RaySegmentPool::GetInstance() {
 
 RaySegment* RaySegmentPool::GetRaySegment(const float* pt, const float* dir, float w, int faceId) {
   RaySegment* seg;
-  RaySegment* currentChunk;
 
-  if (next_unused_id_ >= kChunkSize) {
-    auto segSize = segments_.size();
-    if (current_chunk_id_ >= segSize - 1) {
-      auto* raySegPool = new RaySegment[kChunkSize];
-      segments_.push_back(raySegPool);
-      current_chunk_id_.store(segSize);
-    } else {
-      current_chunk_id_++;
+  auto id = next_unused_id_.fetch_add(1);
+  if (id >= kChunkSize) {
+    std::unique_lock<std::mutex> lock(id_mutex_);
+    id = next_unused_id_;
+    if (id > kChunkSize) {
+      auto segSize = segments_.size();
+      if (current_chunk_id_ >= segSize - 1) {
+        auto* raySegPool = new RaySegment[kChunkSize];
+        segments_.push_back(raySegPool);
+        current_chunk_id_ = segSize;
+      } else {
+        current_chunk_id_++;
+      }
+      id = 0;
+      next_unused_id_ = 0;
     }
-    next_unused_id_ = 0;
   }
-  currentChunk = segments_[current_chunk_id_];
 
-  seg = currentChunk + next_unused_id_;
-  next_unused_id_++;
+  seg = segments_[current_chunk_id_] + id;
   seg->ResetWith(pt, dir, w, faceId);
 
   return seg;
