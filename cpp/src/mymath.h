@@ -4,7 +4,7 @@
 #include <vector>
 #include <cmath>
 #include <random>
-
+#include <memory>
 
 namespace IceHalo {
 
