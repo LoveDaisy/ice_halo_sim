@@ -77,7 +77,7 @@ void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
     const float* tmp_dir = dir_in + i * 3;
     const float* tmp_norm = face_norm + face_id_in[i] * 3;
 
-    float cos_theta = Math::dot3(tmp_dir, tmp_norm);
+    float cos_theta = Math::Dot3(tmp_dir, tmp_norm);
     float rr = cos_theta > 0 ? n : 1.0f / n;
     float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
 
@@ -150,7 +150,7 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir,
 
     float c = dir[0] * ff15 + dir[1] * ff23 + dir[2] * ff04 -
               dir[0] * ff24 - dir[1] * ff05 - dir[2] * ff13;
-    if (Math::floatEqual(c, 0)) {
+    if (Math::FloatEqual(c, 0)) {
       continue;
     }
 

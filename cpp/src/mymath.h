@@ -20,28 +20,26 @@ constexpr float kDegreeToRad = kPi / 180.0f;
 constexpr float kRadToDegree = 180.0f / kPi;
 
 
-int matMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
+int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
 
 class DummyMatrix {
 public:
-friend int matMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
+friend int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
 public:
   DummyMatrix(float* data, uint64_t row, uint64_t col);
   ~DummyMatrix() = default;
 
-  const uint64_t rowNum;
-  const uint64_t colNum;
-
-  void transpose();
+  const uint64_t rows_;
+  const uint64_t cols_;
 
 private:
-  float* data;
+  float* data_;
 };
 
 
 class ConstDummyMatrix : public DummyMatrix {
 public:
-friend int matMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
+friend int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
 public:
   ConstDummyMatrix(const float* data, uint64_t row, uint64_t col);
   ~ConstDummyMatrix() = default;
@@ -69,8 +67,8 @@ public:
   void val(T x, T y, T z);
   void val(const T* data);
 
-  Vec3<T> normalized();
-  void normalize();
+  Vec3<T> Normalized();
+  void Normalize();
 
   Vec3<T>& operator+=(const Vec3<T>& v);
   Vec3<T>& operator+= (T a);
@@ -80,16 +78,16 @@ public:
   Vec3<T>& operator*= (T a);
 
 
-  static Vec3<T> normalized(const Vec3<T>& v);
+  static Vec3<T> Normalized(const Vec3<T>& v);
 
-  static T dot(const Vec3<T>& v1, const Vec3<T>& v2);
-  static T norm(const Vec3<T>& v);
-  static Vec3<T> cross(const Vec3<T>& v1, const Vec3<T>& v2);
+  static T Dot(const Vec3<T>& v1, const Vec3<T>& v2);
+  static T Norm(const Vec3<T>& v);
+  static Vec3<T> Cross(const Vec3<T>& v1, const Vec3<T>& v2);
 
-  static Vec3<T> fromVec(const Vec3<T>& v1, const Vec3<T>& v2);
+  static Vec3<T> FromTo(const Vec3<T>& v1, const Vec3<T>& v2);
 
 private:
-  T _val[3];
+  T val_[3];
 };
 
 bool operator==(const Vec3<float>& lhs, const Vec3<float>& rhs);
@@ -104,7 +102,7 @@ public:
   const int* idx() const;
 
 private:
-  int _idx[3];
+  int idx_[3];
 };
 
 
@@ -115,7 +113,6 @@ private:
 class HalfSpaceSet {
 public:
   HalfSpaceSet(int n, float* a, float* b, float* c, float* d);
-  ~HalfSpaceSet() = default;
 
   int n;
   float* a;
@@ -133,21 +130,24 @@ enum class Distribution {
 
 class RandomNumberGenerator {
 public:
-  float getGaussian();
-  float getUniform();
-  float get(Distribution dist, float mean, float std);
+  float GetGaussian();
+  float GetUniform();
+  float Get(Distribution dist, float mean, float std);
 
-  static RandomNumberGenerator& GetInstance();
+  static std::shared_ptr<RandomNumberGenerator> GetInstance();
 
 private:
-  RandomNumberGenerator();
+  explicit RandomNumberGenerator(uint32_t seed);
 
-  std::mt19937 generator;
+  std::mt19937 generator_;
   std::normal_distribution<float> gauss_dist_;
   std::uniform_real_distribution<float> uniform_dist_;
 
-  static constexpr int random_number_seed_ = 1;
+  static constexpr uint32_t kRandomSeed = 1;
+  static std::shared_ptr<RandomNumberGenerator> instance_;
 };
+
+using RandomNumberGeneratorPtr = std::shared_ptr<RandomNumberGenerator>;
 
 
 class RandomSampler {
@@ -211,32 +211,36 @@ public:
    */
   int SampleInt(int max);
 
-  static RandomSampler& GetInstance();
+  static std::shared_ptr<RandomSampler> GetInstance();
 
 private:
   RandomSampler() = default;
+
+  static std::shared_ptr<RandomSampler> instance_;
 };
 
+using RandomSamplerPtr = std::shared_ptr<RandomSampler>;
 
-bool floatEqual(float a, float b, float threshold = kFloatEps);
 
-float dot3(const float* vec1, const float* vec2);
-void cross3(const float* vec1, const float* vec2, float* vec);
-float norm3(const float* vec);
-float diffNorm3(const float* vec1, const float* vec2);
-void normalize3(float* vec);
-void normalized3(const float* vec, float* vec_n);
-void vec3FromTo(const float* vec1, const float* vec2, float* vec);
+bool FloatEqual(float a, float b, float threshold = kFloatEps);
 
-void rotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t dataNum = 1);
-void rotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t dataNum = 1);
+float Dot3(const float* vec1, const float* vec2);
+void Cross3(const float* vec1, const float* vec2, float* vec);
+float Norm3(const float* vec);
+float DiffNorm3(const float* vec1, const float* vec2);
+void Normalize3(float* vec);
+void Normalized3(const float* vec, float* vec_out);
+void Vec3FromTo(const float* vec1, const float* vec2, float* vec);
 
-std::vector<Vec3f> findInnerPoints(const HalfSpaceSet& hss);
-void sortAndRemoveDuplicate(std::vector<Vec3f>* pts);
-std::vector<int> findCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& n0, float d0);
-void buildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Math::Vec3f>& pts,
+void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t dataNum = 1);
+void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t dataNum = 1);
+
+std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss);
+void SortAndRemoveDuplicate(std::vector<Vec3f>* pts);
+std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& n0, float d0);
+void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Math::Vec3f>& pts,
                           std::vector<Math::TriangleIdx>& faces);
-void buildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
+void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
                              std::vector<int>& ptsIdx, std::vector<TriangleIdx>& faces);
 
 }   // namespace Math

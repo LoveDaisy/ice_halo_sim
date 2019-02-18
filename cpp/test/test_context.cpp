@@ -39,11 +39,11 @@ TEST_F(ContextTest, FillSunDir) {
 
   constexpr int kRayNum = 100;
   float dir[3 * kRayNum];
-  auto& sampler = IceHalo::Math::RandomSampler::GetInstance();
-  sampler.SampleSphericalPointsCart(sunDir, sunD / 2, dir, kRayNum);
+  auto sampler = IceHalo::Math::RandomSampler::GetInstance();
+  sampler->SampleSphericalPointsCart(sunDir, sunD / 2, dir, kRayNum);
 
   for (int i = 0; i < kRayNum; i++) {
-    float a = std::acos(IceHalo::Math::dot3(sunDir, dir + i * 3));    // In rad
+    float a = std::acos(IceHalo::Math::Dot3(sunDir, dir + i * 3));    // In rad
     a *= 180.0f / IceHalo::Math::kPi;    // To degree
     EXPECT_TRUE(a < sunD / 2);
   }

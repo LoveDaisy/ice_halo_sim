@@ -125,8 +125,8 @@ void Simulator::start() {
 void Simulator::initSunRays() {
   float sunR = context->getSunDiameter() / 2;   // In degree
   const float* sunRayDir = context->getSunRayDir();
-  auto& sampler = Math::RandomSampler::GetInstance();
-  sampler.SampleSphericalPointsCart(sunRayDir, sunR, buffer.dir[1], activeRayNum);
+  auto sampler = Math::RandomSampler::GetInstance();
+  sampler->SampleSphericalPointsCart(sunRayDir, sunR, buffer.dir[1], activeRayNum);
 }
 
 
@@ -149,25 +149,26 @@ void Simulator::initEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
   rays_[multiScatterIdx].reserve(activeRayNum);
 
   auto& pool = RaySegmentPool::GetInstance();
-  auto& rng = Math::RandomNumberGenerator::GetInstance();
-  auto& sampler = Math::RandomSampler::GetInstance();
+  auto rng = Math::RandomNumberGenerator::GetInstance();
+  auto sampler = Math::RandomSampler::GetInstance();
   float axis_rot[3];
   for (decltype(activeRayNum) i = 0; i < activeRayNum; i++) {
-    sampler.SampleSphericalPointsSph(ctx->getAxisDist(), ctx->getAxisMean(), ctx->getAxisStd(), axis_rot);
-    axis_rot[2] = rng.get(ctx->getRollDist(), ctx->getRollMean(), ctx->getRollStd()) * Math::kDegreeToRad;
-    Math::rotateZ(axis_rot, buffer.dir[1] + i * 3, buffer.dir[0] + i * 3);
+    sampler->SampleSphericalPointsSph(ctx->getAxisDist(), ctx->getAxisMean(), ctx->getAxisStd(), axis_rot);
+    axis_rot[2] =
+      rng->Get(ctx->getRollDist(), ctx->getRollMean(), ctx->getRollStd()) * Math::kDegreeToRad;
+    Math::RotateZ(axis_rot, buffer.dir[1] + i * 3, buffer.dir[0] + i * 3);
 
     float sum = 0;
     for (int j = 0; j < totalFaces; j++) {
-      prob[j] = std::max(-Math::dot3(faceNorm + j * 3, buffer.dir[0] + i * 3) * faceArea[j], 0.0f);
+      prob[j] = std::max(-Math::Dot3(faceNorm + j * 3, buffer.dir[0] + i * 3) * faceArea[j], 0.0f);
       sum += prob[j];
     }
     for (int j = 0; j < totalFaces; j++) {
       prob[j] /= sum;
     }
 
-    buffer.faceId[0][i] = sampler.SampleInt(prob, totalFaces);
-    sampler.SampleTriangularPoints(facePoint + buffer.faceId[0][i] * 9, buffer.pt[0] + i * 3);
+    buffer.faceId[0][i] = sampler->SampleInt(prob, totalFaces);
+    sampler->SampleTriangularPoints(facePoint + buffer.faceId[0][i] * 9, buffer.pt[0] + i * 3);
 
     buffer.w[0][i] = 1.0f;
 
@@ -189,7 +190,7 @@ void Simulator::initEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
 void Simulator::restoreResultRays(int multiScatterIdx) {
   final_ray_segments_.clear();
 
-  auto& rng = Math::RandomNumberGenerator::GetInstance();
+  auto rng = Math::RandomNumberGenerator::GetInstance();
   std::stack<RaySegment*> s;
   size_t idx = 0;
   for (auto& r : rays_[multiScatterIdx]) {
@@ -199,10 +200,10 @@ void Simulator::restoreResultRays(int multiScatterIdx) {
       s.pop();
 
       if (tmp_r->is_finished_ && tmp_r->w_ > SimulationContext::kScatMinW &&
-          rng.getUniform() < context->getMultiScatterProb()) {
+        rng->GetUniform() < context->getMultiScatterProb()) {
         assert(tmp_r->root_);
         const auto axis_rot = tmp_r->root_->main_axis_rot_.val();
-        Math::rotateZBack(axis_rot, tmp_r->dir_.val(), buffer.dir[0] + idx * 3);
+        Math::RotateZBack(axis_rot, tmp_r->dir_.val(), buffer.dir[0] + idx * 3);
         idx++;
       } else {
         if (tmp_r->next_reflect_) {
@@ -217,10 +218,10 @@ void Simulator::restoreResultRays(int multiScatterIdx) {
   totalRayNum = idx;
 
   // Shuffle
-  auto& sampler = Math::RandomSampler::GetInstance();
+  auto sampler = Math::RandomSampler::GetInstance();
   float tmp_dir[3];
   for (decltype(totalRayNum) i = 0; i < totalRayNum; i++) {
-    int tmp_idx = sampler.SampleInt(static_cast<int>(totalRayNum - i));
+    int tmp_idx = sampler->SampleInt(static_cast<int>(totalRayNum - i));
     std::memcpy(tmp_dir, buffer.dir[0] + (i + tmp_idx) * 3, sizeof(float) * 3);
     std::memcpy(buffer.dir[0] + i * 3, tmp_dir, sizeof(float) * 3);
     std::memcpy(buffer.dir[0] + (i + tmp_idx) * 3, buffer.dir[0] + i * 3, sizeof(float) * 3);
@@ -319,7 +320,7 @@ void Simulator::saveFinalDirections(const char* filename) {
   for (const auto& r : final_ray_segments_) {
     assert(r->root_);
     const auto axis_rot = r->root_->main_axis_rot_.val();
-    Math::rotateZBack(axis_rot, r->dir_.val(), curr_data);
+    Math::RotateZBack(axis_rot, r->dir_.val(), curr_data);
     curr_data[3] = r->w_;
     curr_data += 4;
   }

@@ -26,9 +26,9 @@ void equiAreaFishEye(float* camRot,           // Camera rotation. [lon, lat, rol
     i *= Math::kPi / 180.0f;
   }
 
-  Math::rotateZ(camRotCopy, dir, dirCopy, dataNumber);
+  Math::RotateZ(camRotCopy, dir, dirCopy, dataNumber);
   for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
-    if (std::abs(Math::norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
+    if (std::abs(Math::Norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
       imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
       imgXY[i * 2 + 1] = std::numeric_limits<int>::min();
     } else if (visibleSemiSphere == VisibleSemiSphere::CAMERA && dirCopy[i * 3 + 2] < 0) {
@@ -36,7 +36,7 @@ void equiAreaFishEye(float* camRot,           // Camera rotation. [lon, lat, rol
       imgXY[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
       float lon = std::atan2(dirCopy[i * 3 + 1], dirCopy[i * 3 + 0]);
-      float lat = std::asin(dirCopy[i * 3 + 2] / Math::norm3(dirCopy + i * 3));
+      float lat = std::asin(dirCopy[i * 3 + 2] / Math::Norm3(dirCopy + i * 3));
       float projR = imgR / 2.0f / std::sin(hov / 2.0f / 180.0f * Math::kPi);
       float r = 2.0f * projR * std::sin((Math::kPi / 2.0f - lat) / 2.0f);
 
@@ -68,14 +68,14 @@ void dualEquiAreaFishEye(
     i *= Math::kPi / 180.0f;
   }
 
-  Math::rotateZ(camRotCopy, dir, dirCopy, dataNumber);
+  Math::RotateZ(camRotCopy, dir, dirCopy, dataNumber);
   for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
-    if (std::abs(Math::norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
+    if (std::abs(Math::Norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
       imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
       imgXY[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
       float lon = std::atan2(dirCopy[i * 3 + 1], dirCopy[i * 3 + 0]);
-      float lat = std::asin(dirCopy[i * 3 + 2] / Math::norm3(dirCopy + i * 3));
+      float lat = std::asin(dirCopy[i * 3 + 2] / Math::Norm3(dirCopy + i * 3));
       if (lat < 0) {
         lon = Math::kPi - lon;
       }
@@ -108,14 +108,14 @@ void dualEquiDistantFishEye(
     i *= Math::kPi / 180.0f;
   }
 
-  Math::rotateZ(camRotCopy, dir, dirCopy, dataNumber);
+  Math::RotateZ(camRotCopy, dir, dirCopy, dataNumber);
   for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
-    if (std::abs(Math::norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
+    if (std::abs(Math::Norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
       imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
       imgXY[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
       float lon = std::atan2(dirCopy[i * 3 + 1], dirCopy[i * 3 + 0]);
-      float lat = std::asin(dirCopy[i * 3 + 2] / Math::norm3(dirCopy + i * 3));
+      float lat = std::asin(dirCopy[i * 3 + 2] / Math::Norm3(dirCopy + i * 3));
       if (lat < 0) {
         lon = Math::kPi - lon;
       }
@@ -146,9 +146,9 @@ void rectLinear(float* camRot,           // Camera rotation. [lon, lat, roll]
     i *= Math::kPi / 180.0f;
   }
 
-  Math::rotateZ(camRotCopy, dir, dirCopy, dataNumber);
+  Math::RotateZ(camRotCopy, dir, dirCopy, dataNumber);
   for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
-    if (dirCopy[i * 3 + 2] < 0 || std::abs(Math::norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
+    if (dirCopy[i * 3 + 2] < 0 || std::abs(Math::Norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
       imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
       imgXY[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {

@@ -93,10 +93,10 @@ void Crystal::copyFaceAreaData(float* data) const {
   float c[3];
   for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
     auto idx = faces[i].idx();
-    Math::vec3FromTo(vertexes[idx[0]].val(), vertexes[idx[1]].val(), va);
-    Math::vec3FromTo(vertexes[idx[0]].val(), vertexes[idx[2]].val(), vb);
-    Math::cross3(va, vb, c);
-    data[i] = Math::norm3(c);
+    Math::Vec3FromTo(vertexes[idx[0]].val(), vertexes[idx[1]].val(), va);
+    Math::Vec3FromTo(vertexes[idx[0]].val(), vertexes[idx[2]].val(), vb);
+    Math::Cross3(va, vb, c);
+    data[i] = Math::Norm3(c);
   }
 }
 
@@ -118,9 +118,9 @@ void Crystal::initNorms() {
   for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
     const auto& f = faces[i];
     auto idx = f.idx();
-    Vec3f v1 = Vec3f::fromVec(vertexes[idx[0]], vertexes[idx[1]]);
-    Vec3f v2 = Vec3f::fromVec(vertexes[idx[0]], vertexes[idx[2]]);
-    norms.push_back(Vec3f::cross(v1, v2));
+    Vec3f v1 = Vec3f::FromTo(vertexes[idx[0]], vertexes[idx[1]]);
+    Vec3f v2 = Vec3f::FromTo(vertexes[idx[0]], vertexes[idx[2]]);
+    norms.push_back(Vec3f::Cross(v1, v2));
 
     std::memcpy(face_bases_ + i * 6 + 0, v1.val(), 3 * sizeof(float));
     std::memcpy(face_bases_ + i * 6 + 3, v2.val(), 3 * sizeof(float));
@@ -130,7 +130,7 @@ void Crystal::initNorms() {
     std::memcpy(face_vertexes_ + i * 9 + 6, vertexes[idx[2]].val(), 3 * sizeof(float));
   }
   for (auto& v : norms) {
-    v.normalize();
+    v.Normalize();
   }
 }
 
@@ -158,7 +158,7 @@ void Crystal::initFaceNumbersHex() {
     float maxVal = -1;
     int maxFaceNumber = -1;
     for (const auto& d : hexFaceNormToNumberList) {
-      float tmpVal = Math::Vec3f::dot(norms[i], d.first);
+      float tmpVal = Math::Vec3f::Dot(norms[i], d.first);
       if (tmpVal > maxVal) {
         maxVal = tmpVal;
         maxFaceNumber = d.second;
@@ -182,7 +182,7 @@ void Crystal::initFaceNumberCubic() {
     float maxVal = -1;
     int maxFaceNumber = -1;
     for (const auto& d : cubicFaceNormToNumberList) {
-      float tmpVal = Math::Vec3f::dot(norms[i], d.first);
+      float tmpVal = Math::Vec3f::Dot(norms[i], d.first);
       if (tmpVal > maxVal) {
         maxVal = tmpVal;
         maxFaceNumber = d.second;
@@ -208,7 +208,7 @@ void Crystal::initFaceNumberStack() {
     float maxVal = -1;
     int maxFaceNumber = -1;
     for (const auto& d : hexFaceNormToNumberList) {
-      float tmpVal = Math::Vec3f::dot(norms[i], d.first);
+      float tmpVal = Math::Vec3f::Dot(norms[i], d.first);
       if (tmpVal > maxVal) {
         maxVal = tmpVal;
         maxFaceNumber = d.second;
@@ -546,11 +546,11 @@ CrystalPtrU Crystal::createIrregularHexPrism(float *dist, float h) {
   };
   HalfSpaceSet hss(kConstraintNum, a, b, c, d);
 
-  std::vector<Vec3f> pts = findInnerPoints(hss);
-  sortAndRemoveDuplicate(&pts);
+  std::vector<Vec3f> pts = FindInnerPoints(hss);
+  SortAndRemoveDuplicate(&pts);
 
   std::vector<TriangleIdx> faces;
-  buildPolyhedronFaces(hss, pts, faces);
+  BuildPolyhedronFaces(hss, pts, faces);
 
   return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::PRISM));
 }
@@ -620,8 +620,8 @@ CrystalPtrU Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) 
   HalfSpaceSet hss(kConstraintNum - 2, a, b, c, d);
 
   /* Step 1. Find all inner points */
-  std::vector<Vec3f> pts = findInnerPoints(hss);
-  sortAndRemoveDuplicate(&pts);
+  std::vector<Vec3f> pts = FindInnerPoints(hss);
+  SortAndRemoveDuplicate(&pts);
 
   /* Find max and min height, then determine the height of pyramid segment */
   float maxZ = pts[0].z();
@@ -638,12 +638,12 @@ CrystalPtrU Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) 
   d[kConstraintNum - 1] = (minZ + h[1]) * h[2] - h[1];
 
   hss.n = kConstraintNum;
-  pts = findInnerPoints(hss);
-  sortAndRemoveDuplicate(&pts);
+  pts = FindInnerPoints(hss);
+  SortAndRemoveDuplicate(&pts);
 
   /* Step 2. Build convex hull with verteces */
   std::vector<TriangleIdx> faces;
-  buildPolyhedronFaces(hss, pts, faces);
+  BuildPolyhedronFaces(hss, pts, faces);
 
   return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::PYRAMID));
 }
