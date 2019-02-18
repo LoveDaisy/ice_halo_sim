@@ -12,8 +12,8 @@ namespace {
 class ContextTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    context = IceHalo::SimulationContext::createFromFile(config_file_name.c_str());
-    context->applySettings();
+    context = IceHalo::SimulationContext::CreateFromFile(config_file_name.c_str());
+    context->ApplySettings();
   }
 
   IceHalo::SimulationContextPtr context;
@@ -26,7 +26,7 @@ TEST_F(ContextTest, CreateNotNull) {
 
 
 TEST_F(ContextTest, CheckSunDir) {
-  auto sunDir = context->getSunRayDir();
+  auto sunDir = context->GetSunRayDir();
   EXPECT_NEAR(sunDir[0], 0.0f, IceHalo::Math::kFloatEps);
   EXPECT_NEAR(sunDir[1], -0.906308f, IceHalo::Math::kFloatEps);
   EXPECT_NEAR(sunDir[2], -0.422618f, IceHalo::Math::kFloatEps);
@@ -34,8 +34,8 @@ TEST_F(ContextTest, CheckSunDir) {
 
 
 TEST_F(ContextTest, FillSunDir) {
-  auto sunDir = context->getSunRayDir();
-  auto sunD = context->getSunDiameter();
+  auto sunDir = context->GetSunRayDir();
+  auto sunD = context->GetSunDiameter();
 
   constexpr int kRayNum = 100;
   float dir[3 * kRayNum];

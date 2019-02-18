@@ -12,8 +12,8 @@ class OpticsTest : public ::testing::Test {
 protected:
   void SetUp() override {
     crystal = IceHalo::Crystal::createHexPrism(1.2f);
-    context = IceHalo::SimulationContext::createFromFile(config_file_name.c_str());
-    context->applySettings();
+    context = IceHalo::SimulationContext::CreateFromFile(config_file_name.c_str());
+    context->ApplySettings();
   }
 
   IceHalo::CrystalPtr crystal;
@@ -128,12 +128,12 @@ TEST_F(OpticsTest, HitSurface1) {
 
 
 TEST_F(OpticsTest, RayTracing) {
-  context->printCrystalInfo();
-  auto wls = context->getWavelengths();
-  context->setCurrentWavelength(wls[0]);
+  context->PrintCrystalInfo();
+  auto wls = context->GetWavelengths();
+  context->SetCurrentWavelength(wls[0]);
   auto simulator = IceHalo::Simulator(context);
-  simulator.start();
-  simulator.printRayInfo();
+  simulator.Start();
+  simulator.PrintRayInfo();
 }
 
 }  // namespace

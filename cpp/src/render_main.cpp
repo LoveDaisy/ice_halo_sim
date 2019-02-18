@@ -17,16 +17,16 @@ int main(int argc, char* argv[]) {
   }
 
   auto start = std::chrono::system_clock::now();
-  auto ctx = RenderContext::createFromFile(argv[1]);
-  ctx->loadData();
+  auto ctx = RenderContext::CreateFromFile(argv[1]);
+  ctx->LoadData();
 
-  auto flatRgbData = new uint8_t[3 * ctx->getImageWidth() * ctx->getImageHeight()];
-  ctx->renderToRgb(flatRgbData);
+  auto flatRgbData = new uint8_t[3 * ctx->GetImageWidth() * ctx->GetImageHeight()];
+  ctx->RenderToRgb(flatRgbData);
 
-  Mat img(ctx->getImageHeight(), ctx->getImageWidth(), CV_8UC3, flatRgbData);
+  Mat img(ctx->GetImageHeight(), ctx->GetImageWidth(), CV_8UC3, flatRgbData);
   cvtColor(img, img, COLOR_RGB2BGR);
   try {
-    imwrite(ctx->getImagePath(), img);
+    imwrite(ctx->GetImagePath(), img);
   } catch (cv::Exception& ex) {
     fprintf(stderr, "Exception converting image to PNG format: %s\n", ex.what());
     return -1;

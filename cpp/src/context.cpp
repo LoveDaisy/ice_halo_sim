@@ -20,66 +20,66 @@ using rapidjson::Pointer;
 CrystalContext::CrystalContext(CrystalPtrU&& g, float population,
                                Math::Distribution axisDist, float axisMean, float axisStd,
                                Math::Distribution rollDist, float rollMean, float rollStd)
-    : crystal(std::move(g)),
+    : crystal_(std::move(g)),
       axis_dist_(axisDist), roll_dist_(rollDist),
       axis_mean_(axisMean), roll_mean_(rollMean),
       axis_std_(axisStd), roll_std_(rollStd),
       population_(population) {}
 
 
-CrystalPtr CrystalContext::getCrystal() {
-  return this->crystal;
+CrystalPtr CrystalContext::GetCrystal() {
+  return this->crystal_;
 }
 
 
-Math::Distribution CrystalContext::getAxisDist() {
+Math::Distribution CrystalContext::GetAxisDist() {
   return axis_dist_;
 }
 
 
-Math::Distribution CrystalContext::getRollDist() {
+Math::Distribution CrystalContext::GetRollDist() {
   return roll_dist_;
 }
 
 
-float CrystalContext::getAxisMean() {
+float CrystalContext::GetAxisMean() {
   return axis_mean_;
 }
 
 
-float CrystalContext::getRollMean() {
+float CrystalContext::GetRollMean() {
   return roll_mean_;
 }
 
 
-float CrystalContext::getAxisStd() {
+float CrystalContext::GetAxisStd() {
   return axis_std_;
 }
 
 
-float CrystalContext::getRollStd() {
+float CrystalContext::GetRollStd() {
   return roll_std_;
 }
 
 
-float CrystalContext::getPopulation() {
+float CrystalContext::GetPopulation() {
   return population_;
 }
 
 
 SimulationContext::SimulationContext(const char* filename, rapidjson::Document& d)
-    : totalRayNum(0), maxRecursionNum(9),
-      multiScatterNum(1), multiScatterProb(1.0f),
-      currentWavelength(550.0f), sunDiameter(0.5f),
-      configFileName(filename), dataDirectory("./") {
+    : total_ray_num_(0), max_recursion_num_(9),
+      multi_scatter_times_(1), multi_scatter_prob_(1.0f),
+      current_wavelength_(550.0f), sun_diameter_(0.5f),
+      config_file_name_(filename), data_directory_("./") {
   constexpr size_t kTmpBufferSize = 65536;
   char buffer[kTmpBufferSize];
 
-  parseRaySettings(d);
-  parseBasicSettings(d);
-  parseSunSettings(d);
-  parseDataSettings(d);
-  parseMultiScatterSettings(d);
+  ParseRaySettings(d);
+  ParseBasicSettings(d);
+  ParseSunSettings(d);
+  ParseDataSettings(d);
+  ParseMultiScatterSettings(d);
 
   const auto* p = Pointer("/crystal").Get(d);
   if (p == nullptr || !p->IsArray()) {
@@ -89,13 +89,13 @@ SimulationContext::SimulationContext(const char* filename, rapidjson::Document& 
 
   int ci = 0;
   for (const auto& c : p->GetArray()) {
-    parseCrystalSettings(c, ci);
+    ParseCrystalSettings(c, ci);
     ci++;
   }
 }
 
 
-std::unique_ptr<SimulationContext> SimulationContext::createFromFile(const char *filename) {
+std::unique_ptr<SimulationContext> SimulationContext::CreateFromFile(const char* filename) {
   printf("Reading config from: %s\n", filename);
 
   FILE* fp = fopen(filename, "rb");
@@ -122,7 +122,7 @@ std::unique_ptr<SimulationContext> SimulationContext::createFromFile(const char 
 }
 
 
-void SimulationContext::parseBasicSettings(rapidjson::Document& d) {
+void SimulationContext::ParseBasicSettings(rapidjson::Document& d) {
   int maxRecursion = 9;
   auto* p = Pointer("/max_recursion").Get(d);
   if (p == nullptr) {
@@ -132,25 +132,25 @@ void SimulationContext::parseBasicSettings(rapidjson::Document& d) {
   } else {
     maxRecursion = std::min(std::max(p->GetInt(), 1), 10);
   }
-  maxRecursionNum = maxRecursion;
+  max_recursion_num_ = maxRecursion;
 }
 
 
-void SimulationContext::parseRaySettings(rapidjson::Document& d) {
+void SimulationContext::ParseRaySettings(rapidjson::Document& d) {
   /* Parsing ray number */
-  totalRayNum = 10000;
+  total_ray_num_ = 10000;
   auto* p = Pointer("/ray/number").Get(d);
   if (p == nullptr) {
     fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default 10000!\n");
   } else if (!p->IsUint()) {
     fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default 10000!\n");
   } else {
-    totalRayNum = p->GetUint();
+    total_ray_num_ = p->GetUint();
   }
 
   /* Parsing wavelengths */
-  wavelengths.clear();
-  wavelengths.push_back(550);
+  wavelengths_.clear();
+  wavelengths_.push_back(550);
   p = Pointer("/ray/wavelength").Get(d);
   if (p == nullptr) {
     fprintf(stderr, "\nWARNING! Config missing <ray.wavelength>, using default 550!\n");
@@ -159,15 +159,15 @@ void SimulationContext::parseRaySettings(rapidjson::Document& d) {
   } else if (!(*p)[0].IsNumber()) {
     fprintf(stderr, "\nWARNING! Config <ray.wavelength> connot be recognized, using default 550!\n");
   } else {
-    wavelengths.clear();
+    wavelengths_.clear();
     for (const auto& pi : p->GetArray()) {
-      wavelengths.push_back(static_cast<float &&>(pi.GetDouble()));
+      wavelengths_.push_back(static_cast<float &&>(pi.GetDouble()));
     }
   }
 }
 
 
-void SimulationContext::parseSunSettings(rapidjson::Document& d) {
+void SimulationContext::ParseSunSettings(rapidjson::Document& d) {
   // Parsing sun altitude
   float sunAltitude = 0.0f;
   auto* p = Pointer("/sun/altitude").Get(d);
@@ -178,22 +178,22 @@ void SimulationContext::parseSunSettings(rapidjson::Document& d) {
   } else {
     sunAltitude = static_cast<float>(p->GetDouble());
   }
-  setSunPosition(90.0f, sunAltitude);
+  SetSunPosition(90.0f, sunAltitude);
 
   // Parsing sun diameter
-  sunDiameter = 0.5f;
+  sun_diameter_ = 0.5f;
   p = Pointer("/sun/diameter").Get(d);
   if (p == nullptr) {
     fprintf(stderr, "\nWARNING! Config missing <sun.diameter>, using default 0.5!\n");
   } else if (!p->IsNumber()) {
     fprintf(stderr, "\nWARNING! Config <sun.diameter> is not a number, using default 0.5!\n");
   } else {
-    sunDiameter = static_cast<float>(p->GetDouble());
+    sun_diameter_ = static_cast<float>(p->GetDouble());
   }
 }
 
 
-void SimulationContext::parseDataSettings(rapidjson::Document& d) {
+void SimulationContext::ParseDataSettings(rapidjson::Document& d) {
   /* Parsing output data directory */
   std::string dir = "./";
   auto* p = Pointer("/data_folder").Get(d);
@@ -204,11 +204,11 @@ void SimulationContext::parseDataSettings(rapidjson::Document& d) {
   } else {
     dir = p->GetString();
   }
-  dataDirectory = dir;
+  data_directory_ = dir;
 }
 
 
-void SimulationContext::parseMultiScatterSettings(rapidjson::Document& d) {
+void SimulationContext::ParseMultiScatterSettings(rapidjson::Document& d) {
   int multiScattering = 1;
   auto* p = Pointer("/multi_scatter/repeat").Get(d);
   if (p == nullptr) {
@@ -218,7 +218,7 @@ void SimulationContext::parseMultiScatterSettings(rapidjson::Document& d) {
   } else {
     multiScattering = std::min(std::max(p->GetInt(), 1), 4);
   }
-  multiScatterNum = multiScattering;
+  multi_scatter_times_ = multiScattering;
 
   float prob = 1.0f;
   p = Pointer("/multi_scatter/probability").Get(d);
@@ -230,11 +230,11 @@ void SimulationContext::parseMultiScatterSettings(rapidjson::Document& d) {
     prob = static_cast<float>(p->GetDouble());
     prob = std::max(std::min(prob, 1.0f), 0.0f);
   }
-  multiScatterProb = prob;
+  multi_scatter_prob_ = prob;
 }
 
 
-void SimulationContext::parseCrystalSettings(const rapidjson::Value& c, int ci) {
+void SimulationContext::ParseCrystalSettings(const rapidjson::Value& c, int ci) {
   using Math::Distribution;
 
   constexpr size_t kMsgBufferSize = 256;
@@ -323,12 +323,12 @@ void SimulationContext::parseCrystalSettings(const rapidjson::Value& c, int ci) 
     snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   } else {
-    parseCrystalType(c, ci, population, axisDist, axisMean, axisStd, rollDist, rollMean, rollStd);
+    ParseCrystalType(c, ci, population, axisDist, axisMean, axisStd, rollDist, rollMean, rollStd);
   }
 }
 
 
-void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
+void SimulationContext::ParseCrystalType(const rapidjson::Value& c, int ci,
                                          float population,
                                          Math::Distribution axisDist, float axisMean, float axisStd,
                                          Math::Distribution rollDist, float rollMean, float rollStd) {
@@ -342,7 +342,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
       throw std::invalid_argument(msgBuffer);
     }
     auto h = static_cast<float>(p->GetDouble());
-    crystalCtxs.emplace_back(std::make_shared<CrystalContext>(
+    crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
       Crystal::createHexPrism(h), population,
       axisDist, axisMean, axisStd,
       rollDist, rollMean, rollStd));
@@ -354,7 +354,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
       auto h1 = static_cast<float>((*p)[0].GetDouble());
       auto h2 = static_cast<float>((*p)[1].GetDouble());
       auto h3 = static_cast<float>((*p)[2].GetDouble());
-      crystalCtxs.emplace_back(std::make_shared<CrystalContext>(
+      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
         Crystal::createHexPyramid(h1, h2, h3), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
@@ -364,7 +364,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
       auto h1 = static_cast<float>((*p)[2].GetDouble());
       auto h2 = static_cast<float>((*p)[3].GetDouble());
       auto h3 = static_cast<float>((*p)[4].GetDouble());
-      crystalCtxs.emplace_back(std::make_shared<CrystalContext>(
+      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
         Crystal::createHexPyramid(i1, i2, h1, h2, h3), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
@@ -376,7 +376,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
       auto h1 = static_cast<float>((*p)[4].GetDouble());
       auto h2 = static_cast<float>((*p)[5].GetDouble());
       auto h3 = static_cast<float>((*p)[6].GetDouble());
-      crystalCtxs.emplace_back(std::make_shared<CrystalContext>(
+      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
         Crystal::createHexPyramid(upperIdx1, upperIdx2, lowerIdx1,
                                   lowerIdx2, h1, h2, h3), population,
         axisDist, axisMean, axisStd,
@@ -397,7 +397,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
       auto h1 = static_cast<float>((*p)[4].GetDouble());
       auto h2 = static_cast<float>((*p)[5].GetDouble());
       auto h3 = static_cast<float>((*p)[6].GetDouble());
-      crystalCtxs.emplace_back(std::make_shared<CrystalContext>(
+      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
         Crystal::createHexPyramidStackHalf(upperIdx1, upperIdx2, lowerIdx1,
                                            lowerIdx2, h1, h2, h3), population,
         axisDist, axisMean, axisStd,
@@ -413,7 +413,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
     } else if (p->Size() == 2) {
       auto h1 = static_cast<float>((*p)[0].GetDouble());
       auto h2 = static_cast<float>((*p)[1].GetDouble());
-      crystalCtxs.emplace_back(std::make_shared<CrystalContext>(
+      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
         Crystal::createCubicPyramid(h1, h2), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
@@ -435,7 +435,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
       auto h = static_cast<float>((*p)[6].GetDouble());
 
       float dist[6] = { d1, d2, d3, d4, d5, d6 };
-      crystalCtxs.emplace_back(std::make_shared<CrystalContext>(
+      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
         Crystal::createIrregularHexPrism(dist, h), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
@@ -463,7 +463,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
       int idx[4] = { i1, i2, i3, i4 };
       float height[3] = { h1, h2, h3 };
 
-      crystalCtxs.emplace_back(std::make_shared<CrystalContext>(
+      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
         Crystal::createIrregularHexPyramid(dist, idx, height), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
@@ -477,19 +477,19 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
       throw std::invalid_argument(msgBuffer);
     } else {
       char modelFileNameBuffer[512] = { 0 };
-      auto n = configFileName.rfind('/');
+      auto n = config_file_name_.rfind('/');
       if (n == std::string::npos) {
         snprintf(modelFileNameBuffer, kMsgBufferSize, "models/%s", p->GetString());
       } else {
-        snprintf(modelFileNameBuffer, kMsgBufferSize, "%s/models/%s", configFileName.substr(0, n).c_str(), p->GetString());
+        snprintf(modelFileNameBuffer, kMsgBufferSize, "%s/models/%s", config_file_name_.substr(0, n).c_str(), p->GetString());
       }
       std::FILE* file = fopen(modelFileNameBuffer, "r");
       if (!file) {
         snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot open model file!", ci);
         throw std::invalid_argument(msgBuffer);
       }
-      crystalCtxs.emplace_back(std::make_shared<CrystalContext>(
-        parseCustomCrystal(file), population,
+      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
+        ParseCustomCrystal(file), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
       fclose(file);
@@ -501,7 +501,7 @@ void SimulationContext::parseCrystalType(const rapidjson::Value& c, int ci,
 }
 
 
-CrystalPtrU SimulationContext::parseCustomCrystal(std::FILE* file) {
+CrystalPtrU SimulationContext::ParseCustomCrystal(std::FILE* file) {
   std::vector<Math::Vec3f> vertexes;
   std::vector<Math::TriangleIdx> faces;
   float vbuf[3];
@@ -527,90 +527,90 @@ CrystalPtrU SimulationContext::parseCustomCrystal(std::FILE* file) {
 }
 
 
-uint64_t SimulationContext::getTotalInitRays() const {
-  return totalRayNum;
+uint64_t SimulationContext::GetTotalInitRays() const {
+  return total_ray_num_;
 }
 
 
-int SimulationContext::getMaxRecursionNum() const {
-  return maxRecursionNum;
+int SimulationContext::GetMaxRecursionNum() const {
+  return max_recursion_num_;
 }
 
 
-void SimulationContext::fillActiveCrystal(std::vector<CrystalContextPtr>* crystal_ctxs) const {
+void SimulationContext::FillActiveCrystal(std::vector<CrystalContextPtr>* crystal_ctxs) const {
   crystal_ctxs->clear();
-  for (const auto& ctx : crystalCtxs) {
+  for (const auto& ctx : crystal_ctxs_) {
     crystal_ctxs->emplace_back(ctx);
   }
 }
 
 
-int SimulationContext::getMultiScatterNum() const {
-  return multiScatterNum;
+int SimulationContext::GetMultiScatterTimes() const {
+  return multi_scatter_times_;
 }
 
-float SimulationContext::getMultiScatterProb() const {
-  return multiScatterProb;
-}
-
-
-void SimulationContext::setCurrentWavelength(float wavelength) {
-  this->currentWavelength = wavelength;
+float SimulationContext::GetMultiScatterProb() const {
+  return multi_scatter_prob_;
 }
 
 
-float SimulationContext::getCurrentWavelength() const {
-  return currentWavelength;
+void SimulationContext::SetCurrentWavelength(float wavelength) {
+  this->current_wavelength_ = wavelength;
 }
 
 
-std::vector<float> SimulationContext::getWavelengths() const {
-  return wavelengths;
+float SimulationContext::GetCurrentWavelength() const {
+  return current_wavelength_;
 }
 
 
-const float* SimulationContext::getSunRayDir() const {
-  return sunDir;
+std::vector<float> SimulationContext::GetWavelengths() const {
+  return wavelengths_;
 }
 
 
-float SimulationContext::getSunDiameter() const {
-  return sunDiameter;
+const float* SimulationContext::GetSunRayDir() const {
+  return sun_ray_dir_;
 }
 
 
-std::string SimulationContext::getDataDirectory() const {
-  return dataDirectory;
+float SimulationContext::GetSunDiameter() const {
+  return sun_diameter_;
 }
 
 
-void SimulationContext::setSunPosition(float lon, float lat) {
+std::string SimulationContext::GetDataDirectory() const {
+  return data_directory_;
+}
+
+
+void SimulationContext::SetSunPosition(float lon, float lat) {
   float x = -std::cos(lat * Math::kPi / 180.0f) * std::cos(lon * Math::kPi / 180.0f);
   float y = -std::cos(lat * Math::kPi / 180.0f) * std::sin(lon * Math::kPi / 180.0f);
   float z = -std::sin(lat * Math::kPi / 180.0f);
 
-  this->sunDir[0] = x;
-  this->sunDir[1] = y;
-  this->sunDir[2] = z;
+  this->sun_ray_dir_[0] = x;
+  this->sun_ray_dir_[1] = y;
+  this->sun_ray_dir_[2] = z;
 }
 
 
-void SimulationContext::applySettings() {
-  if (totalRayNum <= 0) return;
+void SimulationContext::ApplySettings() {
+  if (total_ray_num_ <= 0) return;
 
   float popWeightSum = 0.0f;
-  for (const auto& c : crystalCtxs) {
+  for (const auto& c : crystal_ctxs_) {
     popWeightSum += c->population_;
   }
-  for (auto& c : crystalCtxs) {
+  for (auto& c : crystal_ctxs_) {
     c->population_ /= popWeightSum;
   }
 }
 
 
-void SimulationContext::printCrystalInfo() {
-  for (const auto& c : crystalCtxs) {
-    auto g = c->getCrystal();
+void SimulationContext::PrintCrystalInfo() {
+  for (const auto& c : crystal_ctxs_) {
+    auto g = c->GetCrystal();
     printf("--\n");
     for (auto& v : g->getVertexes()) {
       printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
@@ -625,25 +625,25 @@ void SimulationContext::printCrystalInfo() {
 
 
 RenderContext::RenderContext(rapidjson::Document& d) :
-    imgHei(0), imgWid(0), offsetY(0), offsetX(0),
-    visibleSemiSphere(VisibleSemiSphere::UPPER),
-    totalW(0), intensityFactor(1.0), showHorizontal(true),
-    dataDirectory("./"),
-    projectionType(ProjectionType::EQUI_AREA) {
-  parseCameraSettings(d);
-  parseRenderSettings(d);
-  parseDataSettings(d);
+    img_hei_(0), img_wid_(0), offset_y_(0), offset_x_(0),
+    visible_semi_sphere_(VisibleSemiSphere::UPPER),
+    total_w_(0), intensity_factor_(1.0), show_horizontal_(true),
+    data_directory_("./"),
+    projection_type_(ProjectionType::EQUI_AREA) {
+  ParseCameraSettings(d);
+  ParseRenderSettings(d);
+  ParseDataSettings(d);
 }
 
 
 RenderContext::~RenderContext() {
-  for (const auto& kv : spectrumData) {
+  for (const auto& kv : spectrum_data_) {
     delete[] kv.second;
   }
 }
 
 
-std::unique_ptr<RenderContext> RenderContext::createFromFile(const char *filename) {
+std::unique_ptr<RenderContext> RenderContext::CreateFromFile(const char* filename) {
   printf("Reading config from: %s\n", filename);
 
   FILE* fp = fopen(filename, "rb");
@@ -670,14 +670,14 @@ std::unique_ptr<RenderContext> RenderContext::createFromFile(const char *filenam
 }
 
 
-void RenderContext::parseCameraSettings(rapidjson::Document& d) {
-  camRot[0] = 90.0f;
-  camRot[1] = 89.9f;
-  camRot[2] = 0.0f;
-  fov = 120.0f;
-  imgWid = 800;
-  imgHei = 800;
-  projectionType = ProjectionType::EQUI_AREA;
+void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
+  cam_rot_[0] = 90.0f;
+  cam_rot_[1] = 89.9f;
+  cam_rot_[2] = 0.0f;
+  fov_ = 120.0f;
+  img_wid_ = 800;
+  img_hei_ = 800;
+  projection_type_ = ProjectionType::EQUI_AREA;
 
   auto* p = Pointer("/camera/azimuth").Get(d);
   if (p == nullptr) {
@@ -687,7 +687,7 @@ void RenderContext::parseCameraSettings(rapidjson::Document& d) {
   } else {
     auto az = static_cast<float>(p->GetDouble());
     az = std::max(std::min(az, 360.0f), 0.0f);
-    camRot[0] = 90.0f - az;
+    cam_rot_[0] = 90.0f - az;
   }
 
   p = Pointer("/camera/elevation").Get(d);
@@ -698,7 +698,7 @@ void RenderContext::parseCameraSettings(rapidjson::Document& d) {
   } else {
     auto el = static_cast<float>(p->GetDouble());
     el = std::max(std::min(el, 89.999f), -89.999f);
-    camRot[1] = el;
+    cam_rot_[1] = el;
   }
 
   p = Pointer("/camera/rotation").Get(d);
@@ -709,7 +709,7 @@ void RenderContext::parseCameraSettings(rapidjson::Document& d) {
   } else {
     auto rot = static_cast<float>(p->GetDouble());
     rot = std::max(std::min(rot, 180.0f), -180.0f);
-    camRot[2] = rot;
+    cam_rot_[2] = rot;
   }
 
   p = Pointer("/camera/fov").Get(d);
@@ -718,8 +718,8 @@ void RenderContext::parseCameraSettings(rapidjson::Document& d) {
   } else if (!p->IsNumber()) {
     fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default 120.0!\n");
   } else {
-    fov = static_cast<float>(p->GetDouble());
-    fov = std::max(std::min(fov, 140.0f), 0.0f);
+    fov_ = static_cast<float>(p->GetDouble());
+    fov_ = std::max(std::min(fov_, 140.0f), 0.0f);
   }
 
   p = Pointer("/camera/width").Get(d);
@@ -730,7 +730,7 @@ void RenderContext::parseCameraSettings(rapidjson::Document& d) {
   } else {
     int width = p->GetInt();
     width = std::max(width, 0);
-    imgWid = static_cast<uint32_t>(width);
+    img_wid_ = static_cast<uint32_t>(width);
   }
 
   p = Pointer("/camera/height").Get(d);
@@ -741,7 +741,7 @@ void RenderContext::parseCameraSettings(rapidjson::Document& d) {
   } else {
     int height = p->GetInt();
     height = std::max(height, 0);
-    imgHei = static_cast<uint32_t>(height);
+    img_hei_ = static_cast<uint32_t>(height);
   }
 
   p = Pointer("/camera/lens").Get(d);
@@ -751,13 +751,13 @@ void RenderContext::parseCameraSettings(rapidjson::Document& d) {
     fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equi-area fisheye!\n");
   } else {
     if (*p == "linear") {
-      projectionType = ProjectionType::LINEAR;
+      projection_type_ = ProjectionType::LINEAR;
     } else if (*p == "fisheye") {
-      projectionType = ProjectionType::EQUI_AREA;
+      projection_type_ = ProjectionType::EQUI_AREA;
     } else if (*p == "dual_fisheye_equidistant") {
-      projectionType = ProjectionType::DUAL_EQUI_DISTANT;
+      projection_type_ = ProjectionType::DUAL_EQUI_DISTANT;
     } else if (*p == "dual_fisheye_equiarea") {
-      projectionType = ProjectionType::DUAL_EQUI_AREA;
+      projection_type_ = ProjectionType::DUAL_EQUI_AREA;
     } else {
       fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equi-area fisheye!\n");
     }
@@ -765,18 +765,18 @@ void RenderContext::parseCameraSettings(rapidjson::Document& d) {
 }
 
 
-void RenderContext::parseRenderSettings(rapidjson::Document& d) {
-  visibleSemiSphere = VisibleSemiSphere::UPPER;
-  intensityFactor = 1.0;
-  offsetY = 0;
-  offsetX = 0;
-  backgroundColor[0] = 0;
-  backgroundColor[1] = 0;
-  backgroundColor[2] = 0;
-  rayColor[0] = -1;
-  rayColor[1] = -1;
-  rayColor[2] = -1;
-  showHorizontal = true;
+void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
+  visible_semi_sphere_ = VisibleSemiSphere::UPPER;
+  intensity_factor_ = 1.0;
+  offset_y_ = 0;
+  offset_x_ = 0;
+  background_color_[0] = 0;
+  background_color_[1] = 0;
+  background_color_[2] = 0;
+  ray_color_[0] = -1;
+  ray_color_[1] = -1;
+  ray_color_[2] = -1;
+  show_horizontal_ = true;
 
   auto* p = Pointer("/render/visible_semi_sphere").Get(d);
   if (p == nullptr) {
@@ -784,13 +784,13 @@ void RenderContext::parseRenderSettings(rapidjson::Document& d) {
   } else if (!p->IsString()) {
     fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> is not a string, using default UPPER!\n");
   } else if (*p == "upper") {
-    visibleSemiSphere = VisibleSemiSphere::UPPER;
+    visible_semi_sphere_ = VisibleSemiSphere::UPPER;
   } else if (*p == "lower") {
-    visibleSemiSphere = VisibleSemiSphere::LOWER;
+    visible_semi_sphere_ = VisibleSemiSphere::LOWER;
   } else if (*p == "camera") {
-    visibleSemiSphere = VisibleSemiSphere::CAMERA;
+    visible_semi_sphere_ = VisibleSemiSphere::CAMERA;
   } else if (*p == "full") {
-    visibleSemiSphere = VisibleSemiSphere::FULL;
+    visible_semi_sphere_ = VisibleSemiSphere::FULL;
   } else {
     fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> cannot be recognized, using default UPPER!\n");
   }
@@ -803,7 +803,7 @@ void RenderContext::parseRenderSettings(rapidjson::Document& d) {
   } else {
     double f = p->GetDouble();
     f = std::max(std::min(f, 100.0), 0.01);
-    intensityFactor = f;
+    intensity_factor_ = f;
   }
 
   p = Pointer("/render/offset").Get(d);
@@ -814,12 +814,12 @@ void RenderContext::parseRenderSettings(rapidjson::Document& d) {
   } else if (p->Size() != 2 || !(*p)[0].IsInt() || !(*p)[1].IsInt()) {
     fprintf(stderr, "\nWARNING! Config <render.offset> cannot be recognized, using default [0, 0]!\n");
   } else {
-    offsetX = (*p)[0].GetInt();
-    offsetY = (*p)[1].GetInt();
-    offsetX = std::max(std::min(offsetX, static_cast<int>(imgWid / 2)),
-                       -static_cast<int>(imgWid / 2));
-    offsetY = std::max(std::min(offsetY, static_cast<int>(imgHei / 2)),
-                       -static_cast<int>(imgHei / 2));
+    offset_x_ = (*p)[0].GetInt();
+    offset_y_ = (*p)[1].GetInt();
+    offset_x_ = std::max(std::min(offset_x_, static_cast<int>(img_wid_ / 2)),
+                       -static_cast<int>(img_wid_ / 2));
+    offset_y_ = std::max(std::min(offset_y_, static_cast<int>(img_hei_ / 2)),
+                       -static_cast<int>(img_hei_ / 2));
   }
 
   p = Pointer("/render/background_color").Get(d);
@@ -832,7 +832,7 @@ void RenderContext::parseRenderSettings(rapidjson::Document& d) {
   } else {
     auto pa = p->GetArray();
     for (int i = 0; i < 3; i++) {
-      backgroundColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
+      background_color_[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
     }
   }
 
@@ -848,7 +848,7 @@ void RenderContext::parseRenderSettings(rapidjson::Document& d) {
   } else if (p->IsArray()) {
     auto pa = p->GetArray();
     for (int i = 0; i < 3; i++) {
-      rayColor[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
+      ray_color_[i] = static_cast<float>(std::min(std::max(pa[i].GetDouble(), 0.0), 1.0));
     }
   }
 
@@ -858,57 +858,57 @@ void RenderContext::parseRenderSettings(rapidjson::Document& d) {
   } else if (!p->IsBool()) {
     fprintf(stderr, "\nWARNING! Config <render.show_horizontal> is not a boolean, using default true!\n");
   } else {
-    showHorizontal = p->GetBool();
+    show_horizontal_ = p->GetBool();
   }
 }
 
 
-void RenderContext::parseDataSettings(rapidjson::Document& d) {
-  dataDirectory = "./";
+void RenderContext::ParseDataSettings(rapidjson::Document& d) {
+  data_directory_ = "./";
   auto* p = Pointer("/data_folder").Get(d);
   if (p == nullptr) {
     fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
   } else if (!p->IsString()) {
     fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
   } else {
-    dataDirectory = p->GetString();
+    data_directory_ = p->GetString();
   }
 }
 
 
-uint32_t RenderContext::getImageWidth() const {
-  return imgWid;
+uint32_t RenderContext::GetImageWidth() const {
+  return img_wid_;
 }
 
 
-uint32_t RenderContext::getImageHeight() const {
-  return imgHei;
+uint32_t RenderContext::GetImageHeight() const {
+  return img_hei_;
 }
 
 
-std::string RenderContext::getImagePath() const {
-  return pathJoin(dataDirectory, "img.jpg");
+std::string RenderContext::GetImagePath() const {
+  return pathJoin(data_directory_, "img.jpg");
 }
 
 
-void RenderContext::renderToRgb(uint8_t* rgbData) {
-  auto wlNum = spectrumData.size();
+void RenderContext::RenderToRgb(uint8_t* rgbData) {
+  auto wlNum = spectrum_data_.size();
   auto* wlData = new float[wlNum];
-  auto* flatSpecData = new float[wlNum * imgWid * imgHei];
+  auto* flatSpecData = new float[wlNum * img_wid_ * img_hei_];
 
-  copySpectrumData(wlData, flatSpecData);
-  if (rayColor[0] < 0) {
-    render.rgb(static_cast<int>(wlNum), wlData, imgWid * imgHei, flatSpecData, rgbData);
+  CopySpectrumData(wlData, flatSpecData);
+  if (ray_color_[0] < 0) {
+    render.rgb(static_cast<int>(wlNum), wlData, img_wid_ * img_hei_, flatSpecData, rgbData);
   } else {
-    render.gray(static_cast<int>(wlNum), wlData, imgWid * imgHei, flatSpecData, rgbData);
+    render.gray(static_cast<int>(wlNum), wlData, img_wid_ * img_hei_, flatSpecData, rgbData);
   }
-  for (size_t i = 0; i < imgWid * imgHei; i++) {
+  for (size_t i = 0; i < img_wid_ * img_hei_; i++) {
     for (int c = 0; c <= 2; c++) {
-      auto v = static_cast<int>(backgroundColor[c] * 255);
-      if (rayColor[0] < 0) {
+      auto v = static_cast<int>(background_color_[c] * 255);
+      if (ray_color_[0] < 0) {
         v += rgbData[i * 3 + c];
       } else {
-        v += static_cast<int>(rgbData[i * 3 + c] * rayColor[c]);
+        v += static_cast<int>(rgbData[i * 3 + c] * ray_color_[c]);
       }
       v = std::max(std::min(v, 255), 0);
       rgbData[i * 3 + c] = static_cast<uint8_t>(v);
@@ -916,7 +916,7 @@ void RenderContext::renderToRgb(uint8_t* rgbData) {
   }
 
   /* Draw horizontal */
-  // float imgR = std::min(imgWid / 2, imgHei) / 2.0f;
+  // float imgR = std::min(img_wid_ / 2, img_hei_) / 2.0f;
   // TODO
 
   delete[] wlData;
@@ -924,25 +924,25 @@ void RenderContext::renderToRgb(uint8_t* rgbData) {
 }
 
 
-void RenderContext::copySpectrumData(float* wavelengthData, float* spectrumData) const {
+void RenderContext::CopySpectrumData(float* wavelengthData, float* spectrumData) const {
   int k = 0;
-  for (const auto& kv : this->spectrumData) {
+  for (const auto& kv : this->spectrum_data_) {
     wavelengthData[k] = kv.first;
-    std::memcpy(spectrumData + k * imgWid * imgHei, kv.second, imgWid * imgHei * sizeof(float));
+    std::memcpy(spectrumData + k * img_wid_ * img_hei_, kv.second, img_wid_ * img_hei_ * sizeof(float));
     k++;
   }
-  for (uint64_t i = 0; i < imgWid * imgHei * this->spectrumData.size(); i++) {
-    spectrumData[i] *= 8 * 4e3 / totalW * intensityFactor;
+  for (uint64_t i = 0; i < img_wid_ * img_hei_ * this->spectrum_data_.size(); i++) {
+    spectrumData[i] *= 8 * 4e3 / total_w_ * intensity_factor_;
   }
 }
 
 
-void RenderContext::loadData() {
-  std::vector<File> files = listDataFiles(dataDirectory.c_str());
+void RenderContext::LoadData() {
+  std::vector<File> files = listDataFiles(data_directory_.c_str());
   int i = 0;
   for (auto& f : files) {
     auto t0 = std::chrono::system_clock::now();
-    auto num = loadDataFromFile(f);
+    auto num = LoadDataFromFile(f);
     auto t1 = std::chrono::system_clock::now();
     std::chrono::duration<float, std::ratio<1, 1000> > diff = t1 - t0;
     printf(" Loading data (%d/%lu): %.2fms; total %d pts\n", i + 1, files.size(), diff.count(), num);
@@ -951,7 +951,7 @@ void RenderContext::loadData() {
 }
 
 
-int RenderContext::loadDataFromFile(File& file) {
+int RenderContext::LoadDataFromFile(File& file) {
   auto fileSize = file.getSize();
   auto* readBuffer = new float[fileSize / sizeof(float)];
 
@@ -979,24 +979,24 @@ int RenderContext::loadDataFromFile(File& file) {
   for (decltype(readCount) i = 0; i < totalCount; i++) {
     std::memcpy(tmpDir + i * 3, readBuffer + i * 4, 3 * sizeof(float));
     tmpW[i] = readBuffer[i * 4 + 3];
-    totalW += tmpW[i];
+    total_w_ += tmpW[i];
   }
   delete[] readBuffer;
 
   auto* tmpXY = new int[totalCount * 2];
-  projectionFunctions[projectionType](camRot, fov, totalCount, tmpDir, imgWid, imgHei, tmpXY, visibleSemiSphere);
+  projectionFunctions[projection_type_](cam_rot_, fov_, totalCount, tmpDir, img_wid_, img_hei_, tmpXY, visible_semi_sphere_);
   delete[] tmpDir;
 
   float* currentData = nullptr;
-  auto it = spectrumData.find(wavelength);
-  if (it != spectrumData.end()) {
+  auto it = spectrum_data_.find(wavelength);
+  if (it != spectrum_data_.end()) {
     currentData = it->second;
   } else {
-    currentData = new float[imgHei * imgWid];
-    for (decltype(imgHei) i = 0; i < imgHei * imgWid; i++) {
+    currentData = new float[img_hei_ * img_wid_];
+    for (decltype(img_hei_) i = 0; i < img_hei_ * img_wid_; i++) {
       currentData[i] = 0;
     }
-    spectrumData[wavelength] = currentData;
+    spectrum_data_[wavelength] = currentData;
   }
 
   for (decltype(totalCount) i = 0; i < totalCount; i++) {
@@ -1005,14 +1005,14 @@ int RenderContext::loadDataFromFile(File& file) {
     if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
       continue;
     }
-    if (projectionType != ProjectionType::DUAL_EQUI_AREA && projectionType != ProjectionType::DUAL_EQUI_DISTANT) {
-      x += offsetX;
-      y += offsetY;
+    if (projection_type_ != ProjectionType::DUAL_EQUI_AREA && projection_type_ != ProjectionType::DUAL_EQUI_DISTANT) {
+      x += offset_x_;
+      y += offset_y_;
     }
-    if (x < 0 || x >= static_cast<int>(imgWid) || y < 0 || y >= static_cast<int>(imgHei)) {
+    if (x < 0 || x >= static_cast<int>(img_wid_) || y < 0 || y >= static_cast<int>(img_hei_)) {
       continue;
     }
-    currentData[y * imgWid + x] += tmpW[i];
+    currentData[y * img_wid_ + x] += tmpW[i];
   }
   delete[] tmpXY;
   delete[] tmpW;

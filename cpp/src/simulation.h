@@ -9,25 +9,25 @@
 
 namespace IceHalo {
 
-class SimulationBufferData {
+struct SimulationBufferData {
 public:
   SimulationBufferData();
   ~SimulationBufferData();
 
-  void clean();
-  void allocate(size_t rayNum);
-  void print();
+  void Clean();
+  void Allocate(size_t rayNum);
+  void Print();
 
   float* pt[2];
   float* dir[2];
   float* w[2];
-  int* faceId[2];
-  RaySegment** raySeg[2];
+  int* face_id[2];
+  RaySegment** ray_seg[2];
 
-  size_t rayNum;
+  size_t ray_num;
 
 private:
-  void deleteBuffer(int idx);
+  void DeleteBuffer(int idx);
 };
 
 
@@ -36,32 +36,32 @@ public:
   explicit Simulator(const SimulationContextPtr& context);
   ~Simulator() = default;
 
-  void start();
-  void saveFinalDirections(const char* filename);
-  void saveAllRays(const char* filename);
-  void printRayInfo();    // For debug
+  void Start();
+  void SaveFinalDirections(const char* filename);
+  void SaveAllRays(const char* filename);
+  void PrintRayInfo();    // For debug
 
 private:
-  void initSunRays();
-  void initEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx);
-  void traceRays(const CrystalPtr& crystal);
-  void restoreResultRays(int multiScatterIdx);
-  void saveRaySegments();
-  void refreshBuffer();
+  void InitSunRays();
+  void InitEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx);
+  void TraceRays(const CrystalPtr& crystal);
+  void RestoreResultRays(int multiScatterIdx);
+  void StoreRaySegments();
+  void RefreshBuffer();
 
   static constexpr int kBufferSizeFactor = 4;
 
-  SimulationContextPtr context;
-  std::vector<CrystalContextPtr> activeCrystalCtxs;
+  SimulationContextPtr context_;
+  std::vector<CrystalContextPtr> active_crystal_ctxs_;
 
   std::vector<std::vector<RayPtr> > rays_;
   std::vector<RaySegment*> final_ray_segments_;
 
-  size_t totalRayNum;
-  size_t activeRayNum;
-  size_t bufferSize;
+  size_t total_ray_num_;
+  size_t active_ray_num_;
+  size_t buffer_size_;
 
-  SimulationBufferData buffer;
+  SimulationBufferData buffer_;
 };
 
 }  // namespace IceHalo

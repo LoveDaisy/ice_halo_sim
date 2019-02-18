@@ -12,8 +12,8 @@ int main(int argc, char* argv[]) {
   }
 
   auto start = std::chrono::system_clock::now();
-  SimulationContextPtr context = SimulationContext::createFromFile(argv[1]);
-  context->applySettings();
+  SimulationContextPtr context = SimulationContext::CreateFromFile(argv[1]);
+  context->ApplySettings();
   auto simulator = Simulator(context);
 
   auto t = std::chrono::system_clock::now();
@@ -21,26 +21,26 @@ int main(int argc, char* argv[]) {
   printf("Initialization: %.2fms\n", diff.count());
 
   char filename[256];
-  for (auto wl : context->getWavelengths()) {
+  for (auto wl : context->GetWavelengths()) {
     printf("starting at wavelength: %.1f\n", wl);
 
-    context->setCurrentWavelength(wl);
+    context->SetCurrentWavelength(wl);
 
     auto t0 = std::chrono::system_clock::now();
-    simulator.start();
+    simulator.Start();
     auto t1 = std::chrono::system_clock::now();
     diff = t1 - t0;
     printf("Ray tracing: %.2fms\n", diff.count());
 
     t0 = std::chrono::system_clock::now();
     std::sprintf(filename, "directions_%.1f_%lli.bin", wl, t0.time_since_epoch().count());
-    simulator.saveFinalDirections(filename);
+    simulator.SaveFinalDirections(filename);
 
     t1 = std::chrono::system_clock::now();
     diff = t1 - t0;
     printf("Saving: %.2fms\n", diff.count());
   }
-  context->printCrystalInfo();
+  context->PrintCrystalInfo();
 
   auto end = std::chrono::system_clock::now();
   diff = end - start;
