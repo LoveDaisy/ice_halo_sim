@@ -30,8 +30,8 @@ protected:
   void checkCrystal(const IceHalo::CrystalPtrU& c1, const IceHalo::CrystalPtrU& c2) {
     auto n1 = c1->getNorms();
     auto n2 = c2->getNorms();
-    auto fn1 = c1->getFaceNumber();
-    auto fn2 = c2->getFaceNumber();
+    auto fn1 = c1->GetFaceNumberMap();
+    auto fn2 = c2->GetFaceNumberMap();
 
     ASSERT_EQ(n1.size(), n2.size());
     ASSERT_EQ(fn1.size(), fn2.size());
@@ -84,28 +84,28 @@ protected:
 
 TEST_F(CrystalTest, CreateNotNull) {
   /* Prism */
-  auto c = IceHalo::Crystal::createHexPrism(1.2f);
+  auto c = IceHalo::Crystal::CreateHexPrism(1.2f);
   EXPECT_NE(c, nullptr);
 
   /* Pyramid */
-  c = IceHalo::Crystal::createHexPyramid(1.2f, 1.2f, 1.2f);
+  c = IceHalo::Crystal::CreateHexPyramid(1.2f, 1.2f, 1.2f);
   EXPECT_NE(c, nullptr);
 
-  c = IceHalo::Crystal::createHexPyramid(1, 1, 1.2f, 1.2f, 1.2f);
+  c = IceHalo::Crystal::CreateHexPyramid(1, 1, 1.2f, 1.2f, 1.2f);
   EXPECT_NE(c, nullptr);
 
-  c = IceHalo::Crystal::createHexPyramid(1, 1, 2, 3, 1.2f, 1.2f, 1.2f);
+  c = IceHalo::Crystal::CreateHexPyramid(1, 1, 2, 3, 1.2f, 1.2f, 1.2f);
   EXPECT_NE(c, nullptr);
 
   /* IrregularHexPrism */
   float dist[6] = { 1.0f, 1.0f, 1.5f, 1.0f, 2.5f, 1.0f };
-  c = IceHalo::Crystal::createIrregularHexPrism(dist, 1.2f);
+  c = IceHalo::Crystal::CreateIrregularHexPrism(dist, 1.2f);
   EXPECT_NE(c, nullptr);
 
   /* IrregularHexPyramid */
   int idx[4] = { 1, 1, 1, 1 };
   float h[3] = { 0.3f, 1.2f, 0.9f };
-  c = IceHalo::Crystal::createIrregularHexPyramid(dist, idx, h);
+  c = IceHalo::Crystal::CreateIrregularHexPyramid(dist, idx, h);
   EXPECT_NE(c, nullptr);
 }
 
@@ -134,10 +134,10 @@ TEST_F(CrystalTest, HexPrismVertex) {
     1, 1, 1, 1, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 2, 2, 2, 2,
   };
 
-  auto c = IceHalo::Crystal::createHexPrism(h);
+  auto c = IceHalo::Crystal::CreateHexPrism(h);
   EXPECT_EQ(c->getVertexes().size(), 12ul);
   checkVertex(pts0, c->getVertexes());
-  checkFaceId(faceId0, c->getFaceNumber());
+  checkFaceId(faceId0, c->GetFaceNumberMap());
 }
 
 
@@ -187,20 +187,20 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
     2, 2, 2, 2,
   };
 
-  auto c = IceHalo::Crystal::createHexPyramid(h1, h2, h3);
+  auto c = IceHalo::Crystal::CreateHexPyramid(h1, h2, h3);
   EXPECT_EQ(c->getVertexes().size(), 24ul);
   checkVertex(pts0, c->getVertexes());
-  checkFaceId(faceId0, c->getFaceNumber());
+  checkFaceId(faceId0, c->GetFaceNumberMap());
 
-  c = IceHalo::Crystal::createHexPyramid(1, 1, h1, h2, h3);
+  c = IceHalo::Crystal::CreateHexPyramid(1, 1, h1, h2, h3);
   EXPECT_EQ(c->getVertexes().size(), 24ul);
   checkVertex(pts0, c->getVertexes());
-  checkFaceId(faceId0, c->getFaceNumber());
+  checkFaceId(faceId0, c->GetFaceNumberMap());
 
-  c = IceHalo::Crystal::createHexPyramid(1, 1, 1, 1, h1, h2, h3);
+  c = IceHalo::Crystal::CreateHexPyramid(1, 1, 1, 1, h1, h2, h3);
   EXPECT_EQ(c->getVertexes().size(), 24ul);
   checkVertex(pts0, c->getVertexes());
-  checkFaceId(faceId0, c->getFaceNumber());
+  checkFaceId(faceId0, c->GetFaceNumberMap());
 }
 
 
@@ -213,10 +213,10 @@ TEST_F(CrystalTest, IrregularHexPyramid) {
   int idx[4] = { 1, 1, 1, 1 };
   float hs[3] = { h1, h2, h3 };
 
-  auto c1 = IceHalo::Crystal::createHexPyramid(h1, h2, h3);
-  auto c2 = IceHalo::Crystal::createIrregularHexPyramid(dist, idx, hs);
-  EXPECT_EQ(c1->totalFaces(), c2->totalFaces());
-  EXPECT_EQ(c1->totalVertexes(), c2->totalVertexes());
+  auto c1 = IceHalo::Crystal::CreateHexPyramid(h1, h2, h3);
+  auto c2 = IceHalo::Crystal::CreateIrregularHexPyramid(dist, idx, hs);
+  EXPECT_EQ(c1->TotalFaces(), c2->TotalFaces());
+  EXPECT_EQ(c1->TotalVertexes(), c2->TotalVertexes());
   checkCrystal(c1, c2);
 }
 
@@ -227,11 +227,11 @@ TEST_F(CrystalTest, IrregularHexPrismVertex0) {
   float h = 1.2f;
   float dist[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
 
-  auto c1 = IceHalo::Crystal::createHexPrism(h);
-  auto c2 = IceHalo::Crystal::createIrregularHexPrism(dist, h);
+  auto c1 = IceHalo::Crystal::CreateHexPrism(h);
+  auto c2 = IceHalo::Crystal::CreateIrregularHexPrism(dist, h);
 
-  EXPECT_EQ(c1->totalFaces(), c2->totalFaces());
-  EXPECT_EQ(c1->totalVertexes(), c2->totalVertexes());
+  EXPECT_EQ(c1->TotalFaces(), c2->TotalFaces());
+  EXPECT_EQ(c1->TotalVertexes(), c2->TotalVertexes());
   checkCrystal(c1, c2);
 }
 
@@ -273,10 +273,10 @@ TEST_F(CrystalTest, IrregularHexPrismVertex1) {
     2, 2, 2,
   };
 
-  auto c1 = IceHalo::Crystal::createCustomCrystal(pts0, faces0, faceIdMap0);
-  auto c2 = IceHalo::Crystal::createIrregularHexPrism(dist, h);
-  EXPECT_EQ(c1->totalVertexes(), c2->totalVertexes());
-  EXPECT_EQ(c1->totalFaces(), c2->totalFaces());
+  auto c1 = IceHalo::Crystal::CreateCustomCrystal(pts0, faces0, faceIdMap0);
+  auto c2 = IceHalo::Crystal::CreateIrregularHexPrism(dist, h);
+  EXPECT_EQ(c1->TotalVertexes(), c2->TotalVertexes());
+  EXPECT_EQ(c1->TotalFaces(), c2->TotalFaces());
   checkCrystal(c1, c2);
 }
 

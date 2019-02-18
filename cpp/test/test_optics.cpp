@@ -11,7 +11,7 @@ namespace {
 class OpticsTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    crystal = IceHalo::Crystal::createHexPrism(1.2f);
+    crystal = IceHalo::Crystal::CreateHexPrism(1.2f);
     context = IceHalo::SimulationContext::CreateFromFile(config_file_name.c_str());
     context->ApplySettings();
   }

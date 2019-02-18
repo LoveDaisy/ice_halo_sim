@@ -9,10 +9,10 @@ namespace IceHalo {
 Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes,
                  const std::vector<Math::TriangleIdx>& faces,
                  CrystalType type)
-    : vertexes(vertexes), faces(faces), type(type),
+    : vertexes_(vertexes), faces_(faces), type_(type),
       face_bases_(nullptr), face_vertexes_(nullptr) {
-  initNorms();
-  initFaceNumbers();
+  InitNorms();
+  InitFaceNumber();
 }
 
 
@@ -20,9 +20,9 @@ Crystal::Crystal(const std::vector<IceHalo::Math::Vec3f>& vertexes,
                  const std::vector<IceHalo::Math::TriangleIdx>& faces,
                  const std::vector<int>& faceId,
                  CrystalType type)
-    : vertexes(vertexes), faces(faces), faceIdMap(faceId), type(type),
+    : vertexes_(vertexes), faces_(faces), face_number_map_(faceId), type_(type),
       face_bases_(nullptr), face_vertexes_(nullptr) {
-  initNorms();
+  InitNorms();
 }
 
 
@@ -33,19 +33,19 @@ Crystal::~Crystal() {
 
 
 const std::vector<Math::Vec3f>& Crystal::getVertexes() {
-  return vertexes;
+  return vertexes_;
 }
 
 const std::vector<Math::Vec3f>& Crystal::getNorms() {
-  return norms;
+  return norms_;
 }
 
 const std::vector<Math::TriangleIdx>& Crystal::getFaces() {
-  return faces;
+  return faces_;
 }
 
-const std::vector<int>& Crystal::getFaceNumber() {
-  return faceIdMap;
+const std::vector<int>& Crystal::GetFaceNumberMap() {
+  return face_number_map_;
 }
 
 
@@ -59,92 +59,83 @@ const float* Crystal::GetFaceBaseVector() const {
 }
 
 
-int Crystal::totalVertexes() const {
-  return static_cast<int>(vertexes.size());
+int Crystal::TotalVertexes() const {
+  return static_cast<int>(vertexes_.size());
 }
 
-int Crystal::totalFaces() const {
-  return static_cast<int>(faces.size());
+int Crystal::TotalFaces() const {
+  return static_cast<int>(faces_.size());
 }
 
-int Crystal::faceNumber(int idx) const {
-  if (faceIdMap.empty()) {
+int Crystal::FaceNumber(int idx) const {
+  if (face_number_map_.empty()) {
     return -1;
-  } else if (idx < 0 || static_cast<size_t>(idx) >= faceIdMap.size()) {
+  } else if (idx < 0 || static_cast<size_t>(idx) >= face_number_map_.size()) {
     return -1;
   } else {
-    return faceIdMap[idx];
-  }
-}
-
-void Crystal::copyFaceData(float* data) const {
-  for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
-    auto idx = faces[i].idx();
-    std::memcpy(data + i * 9 + 0, vertexes[idx[0]].val(), 3 * sizeof(float));
-    std::memcpy(data + i * 9 + 3, vertexes[idx[1]].val(), 3 * sizeof(float));
-    std::memcpy(data + i * 9 + 6, vertexes[idx[2]].val(), 3 * sizeof(float));
+    return face_number_map_[idx];
   }
 }
 
 
-void Crystal::copyFaceAreaData(float* data) const {
+void Crystal::CopyFaceAreaData(float* data) const {
   float va[3];
   float vb[3];
   float c[3];
-  for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
-    auto idx = faces[i].idx();
-    Math::Vec3FromTo(vertexes[idx[0]].val(), vertexes[idx[1]].val(), va);
-    Math::Vec3FromTo(vertexes[idx[0]].val(), vertexes[idx[2]].val(), vb);
+  for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
+    auto idx = faces_[i].idx();
+    Math::Vec3FromTo(vertexes_[idx[0]].val(), vertexes_[idx[1]].val(), va);
+    Math::Vec3FromTo(vertexes_[idx[0]].val(), vertexes_[idx[2]].val(), vb);
     Math::Cross3(va, vb, c);
     data[i] = Math::Norm3(c);
   }
 }
 
 
-void Crystal::copyNormData(float *data) const {
-  for (decltype(norms.size()) i = 0; i < norms.size(); i++) {
-    std::memcpy(data + i * 3, norms[i].val(), 3 * sizeof(float));
+void Crystal::CopyNormData(float* data) const {
+  for (decltype(norms_.size()) i = 0; i < norms_.size(); i++) {
+    std::memcpy(data + i * 3, norms_[i].val(), 3 * sizeof(float));
   }
 }
 
-void Crystal::initNorms() {
+void Crystal::InitNorms() {
   using Math::Vec3f;
 
-  auto face_num = faces.size();
+  auto face_num = faces_.size();
   face_bases_ = new float[face_num * 6];
   face_vertexes_ = new float[face_num * 9];
 
-  norms.clear();
-  for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
-    const auto& f = faces[i];
+  norms_.clear();
+  for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
+    const auto& f = faces_[i];
     auto idx = f.idx();
-    Vec3f v1 = Vec3f::FromTo(vertexes[idx[0]], vertexes[idx[1]]);
-    Vec3f v2 = Vec3f::FromTo(vertexes[idx[0]], vertexes[idx[2]]);
-    norms.push_back(Vec3f::Cross(v1, v2));
+    Vec3f v1 = Vec3f::FromTo(vertexes_[idx[0]], vertexes_[idx[1]]);
+    Vec3f v2 = Vec3f::FromTo(vertexes_[idx[0]], vertexes_[idx[2]]);
+    norms_.push_back(Vec3f::Cross(v1, v2));
 
     std::memcpy(face_bases_ + i * 6 + 0, v1.val(), 3 * sizeof(float));
     std::memcpy(face_bases_ + i * 6 + 3, v2.val(), 3 * sizeof(float));
 
-    std::memcpy(face_vertexes_ + i * 9 + 0, vertexes[idx[0]].val(), 3 * sizeof(float));
-    std::memcpy(face_vertexes_ + i * 9 + 3, vertexes[idx[1]].val(), 3 * sizeof(float));
-    std::memcpy(face_vertexes_ + i * 9 + 6, vertexes[idx[2]].val(), 3 * sizeof(float));
+    std::memcpy(face_vertexes_ + i * 9 + 0, vertexes_[idx[0]].val(), 3 * sizeof(float));
+    std::memcpy(face_vertexes_ + i * 9 + 3, vertexes_[idx[1]].val(), 3 * sizeof(float));
+    std::memcpy(face_vertexes_ + i * 9 + 6, vertexes_[idx[2]].val(), 3 * sizeof(float));
   }
-  for (auto& v : norms) {
+  for (auto& v : norms_) {
     v.Normalize();
   }
 }
 
-void Crystal::initFaceNumbers() {
-  switch (type) {
+void Crystal::InitFaceNumber() {
+  switch (type_) {
     case CrystalType::PRISM:
     case CrystalType::PYRAMID:
-      initFaceNumbersHex();
+      InitFaceNumberHex();
       break;
     case CrystalType::CUBIC_PYRAMID:
-      initFaceNumberCubic();
+      InitFaceNumberCubic();
       break;
     case CrystalType::STACK_PYRAMID:
-      initFaceNumberStack();
+      InitFaceNumberStack();
       break;
     case CrystalType::CUSTOM:
     case CrystalType::UNKNOWN:
@@ -152,13 +143,13 @@ void Crystal::initFaceNumbers() {
   }
 }
 
-void Crystal::initFaceNumbersHex() {
-  assert(faces.size() == norms.size());
-  for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
+void Crystal::InitFaceNumberHex() {
+  assert(faces_.size() == norms_.size());
+  for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
     float maxVal = -1;
     int maxFaceNumber = -1;
-    for (const auto& d : hexFaceNormToNumberList) {
-      float tmpVal = Math::Vec3f::Dot(norms[i], d.first);
+    for (const auto& d : hex_face_norm_to_number_list_) {
+      float tmpVal = Math::Vec3f::Dot(norms_[i], d.first);
       if (tmpVal > maxVal) {
         maxVal = tmpVal;
         maxFaceNumber = d.second;
@@ -166,23 +157,23 @@ void Crystal::initFaceNumbersHex() {
     }
 
     if (maxVal > 0) {
-      if (std::abs(maxVal - 1) > Math::kFloatEps && norms[i].z() > Math::kFloatEps) {
+      if (std::abs(maxVal - 1) > Math::kFloatEps && norms_[i].z() > Math::kFloatEps) {
         maxFaceNumber += 10;
-      } else if (std::abs(maxVal - 1) > Math::kFloatEps && norms[i].z() < -Math::kFloatEps) {
+      } else if (std::abs(maxVal - 1) > Math::kFloatEps && norms_[i].z() < -Math::kFloatEps) {
         maxFaceNumber += 20;
       }
     }
-    faceIdMap.push_back(maxFaceNumber);
+    face_number_map_.push_back(maxFaceNumber);
   }
 }
 
-void Crystal::initFaceNumberCubic() {
-  assert(faces.size() == norms.size());
-  for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
+void Crystal::InitFaceNumberCubic() {
+  assert(faces_.size() == norms_.size());
+  for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
     float maxVal = -1;
     int maxFaceNumber = -1;
-    for (const auto& d : cubicFaceNormToNumberList) {
-      float tmpVal = Math::Vec3f::Dot(norms[i], d.first);
+    for (const auto& d : cubic_face_norm_to_number_list_) {
+      float tmpVal = Math::Vec3f::Dot(norms_[i], d.first);
       if (tmpVal > maxVal) {
         maxVal = tmpVal;
         maxFaceNumber = d.second;
@@ -190,35 +181,35 @@ void Crystal::initFaceNumberCubic() {
     }
 
     if (maxVal > 0) {
-      if (std::abs(maxVal - 1) > Math::kFloatEps && norms[i].z() > Math::kFloatEps) {
+      if (std::abs(maxVal - 1) > Math::kFloatEps && norms_[i].z() > Math::kFloatEps) {
         maxFaceNumber += 10;
-      } else if (std::abs(maxVal - 1) > Math::kFloatEps && norms[i].z() < -Math::kFloatEps) {
+      } else if (std::abs(maxVal - 1) > Math::kFloatEps && norms_[i].z() < -Math::kFloatEps) {
         maxFaceNumber += 20;
       }
     }
-    faceIdMap.push_back(maxFaceNumber);
+    face_number_map_.push_back(maxFaceNumber);
   }
 }
 
-void Crystal::initFaceNumberStack() {
-  assert(faces.size() == norms.size());
+void Crystal::InitFaceNumberStack() {
+  assert(faces_.size() == norms_.size());
   float maxHeight = std::numeric_limits<float>::lowest();
   float minHeight = std::numeric_limits<float>::max();
-  for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
+  for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
     float maxVal = -1;
     int maxFaceNumber = -1;
-    for (const auto& d : hexFaceNormToNumberList) {
-      float tmpVal = Math::Vec3f::Dot(norms[i], d.first);
+    for (const auto& d : hex_face_norm_to_number_list_) {
+      float tmpVal = Math::Vec3f::Dot(norms_[i], d.first);
       if (tmpVal > maxVal) {
         maxVal = tmpVal;
         maxFaceNumber = d.second;
       }
     }
-    faceIdMap.push_back(maxFaceNumber);
+    face_number_map_.push_back(maxFaceNumber);
 
-    const auto* idx = faces[i].idx();
+    const auto* idx = faces_[i].idx();
     for (int j = 0; j < 3; j++) {
-      float h = vertexes[idx[j]].z();
+      float h = vertexes_[idx[j]].z();
       if (h > maxHeight) {
         maxHeight = h;
       }
@@ -228,39 +219,39 @@ void Crystal::initFaceNumberStack() {
     }
   }
 
-  for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
-    if (faceIdMap[i] < 3) {
+  for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
+    if (face_number_map_[i] < 3) {
       continue;
     }
-    const auto* idx = faces[i].idx();
+    const auto* idx = faces_[i].idx();
 
     bool isTop = false;
     bool isBottom = false;
     bool isUpper = true;
     bool isLower = true;
     for (int j = 0; j < 3; j++) {
-      isTop = isTop || std::abs(vertexes[idx[j]].z() - maxHeight) < Math::kFloatEps;
-      isBottom = isBottom || std::abs(vertexes[idx[j]].z() - minHeight) < Math::kFloatEps;
-      isUpper = isUpper && vertexes[idx[j]].z() > Math::kFloatEps;
-      isLower = isLower && vertexes[idx[j]].z() < -Math::kFloatEps;
+      isTop = isTop || std::abs(vertexes_[idx[j]].z() - maxHeight) < Math::kFloatEps;
+      isBottom = isBottom || std::abs(vertexes_[idx[j]].z() - minHeight) < Math::kFloatEps;
+      isUpper = isUpper && vertexes_[idx[j]].z() > Math::kFloatEps;
+      isLower = isLower && vertexes_[idx[j]].z() < -Math::kFloatEps;
     }
 
-    bool isPrism = std::abs(norms[i].z()) < Math::kFloatEps;
+    bool isPrism = std::abs(norms_[i].z()) < Math::kFloatEps;
 
     if (isTop && !isPrism) {
-      faceIdMap[i] += 10;
+      face_number_map_[i] += 10;
     } else if (isBottom && !isPrism) {
-      faceIdMap[i] += 20;
+      face_number_map_[i] += 20;
     } else if (isUpper && !isPrism) {
-      faceIdMap[i] += 30;
+      face_number_map_[i] += 30;
     } else if (isLower && !isPrism) {
-      faceIdMap[i] += 40;
+      face_number_map_[i] += 40;
     }
   }
 }
 
 
-const std::vector<std::pair<Math::Vec3f, int> > Crystal::hexFaceNormToNumberList {
+const std::vector<std::pair<Math::Vec3f, int> > Crystal::hex_face_norm_to_number_list_ {
   { {                 0,     0,  1 }, 1 },
   { {                 0,     0, -1 }, 2 },
   { {                 1,     0,  0 }, 3 },
@@ -272,7 +263,7 @@ const std::vector<std::pair<Math::Vec3f, int> > Crystal::hexFaceNormToNumberList
 };
 
 
-const std::vector<std::pair<Math::Vec3f, int> > Crystal::cubicFaceNormToNumberList {
+const std::vector<std::pair<Math::Vec3f, int> > Crystal::cubic_face_norm_to_number_list_ {
   { {  0,  0,  1 }, 1 },
   { {  0,  0, -1 }, 2 },
   { {  1,  0,  0 }, 3 },
@@ -282,7 +273,7 @@ const std::vector<std::pair<Math::Vec3f, int> > Crystal::cubicFaceNormToNumberLi
 };
 
 
-CrystalPtrU Crystal::createHexPrism(float h) {
+CrystalPtrU Crystal::CreateHexPrism(float h) {
   using Math::Vec3f;
   using Math::TriangleIdx;
   using Math::kPi;
@@ -316,18 +307,18 @@ CrystalPtrU Crystal::createHexPrism(float h) {
 }
 
 
-CrystalPtrU Crystal::createHexPyramid(float h1, float h2, float h3) {
-  return createHexPyramid(1, 1, 1, 1, h1, h2, h3);
+CrystalPtrU Crystal::CreateHexPyramid(float h1, float h2, float h3) {
+  return CreateHexPyramid(1, 1, 1, 1, h1, h2, h3);
 }
 
 
-CrystalPtrU Crystal::createCubicPyramid(float ratio1, float ratio2) {
+CrystalPtrU Crystal::CreateCubicPyramid(float h1, float h2) {
   using Math::Vec3f;
   using Math::TriangleIdx;
   using Math::kPi;
 
-  ratio1 = std::min(ratio1, 1.f);
-  ratio2 = std::min(ratio2, 1.f);
+  h1 = std::min(h1, 1.f);
+  h2 = std::min(h2, 1.f);
 
   std::vector<Vec3f> vertexes;
   std::vector<TriangleIdx> faces;
@@ -335,9 +326,9 @@ CrystalPtrU Crystal::createCubicPyramid(float ratio1, float ratio2) {
 
   for (int i = 0; i < 4; i++) {
     vertexes.emplace_back(
-      cos(kPi / 4 + kPi / 2 * i) * (1 - ratio1),
-      sin(kPi / 4 + kPi / 2 * i) * (1 - ratio1),
-      ratio1);
+      cos(kPi / 4 + kPi / 2 * i) * (1 - h1),
+      sin(kPi / 4 + kPi / 2 * i) * (1 - h1),
+      h1);
   }
   for (int i = 0; i < 4; i++) {
     vertexes.emplace_back(
@@ -347,9 +338,9 @@ CrystalPtrU Crystal::createCubicPyramid(float ratio1, float ratio2) {
   }
   for (int i = 0; i < 4; i++) {
     vertexes.emplace_back(
-      cos(kPi / 4 + kPi / 2 * i) * (1 - ratio2),
-      sin(kPi / 4 + kPi / 2 * i) * (1 - ratio2),
-      -ratio2);
+      cos(kPi / 4 + kPi / 2 * i) * (1 - h2),
+      sin(kPi / 4 + kPi / 2 * i) * (1 - h2),
+      -h2);
   }
 
   faces.emplace_back(0, 1, 2);
@@ -369,19 +360,19 @@ CrystalPtrU Crystal::createCubicPyramid(float ratio1, float ratio2) {
 }
 
 
-CrystalPtrU Crystal::createHexPyramid(int i1, int i4, float h1, float h2, float h3) {
-  return createHexPyramid(i1, i4, i1, i4, h1, h2, h3);
+CrystalPtrU Crystal::CreateHexPyramid(int i1, int i4, float h1, float h2, float h3) {
+  return CreateHexPyramid(i1, i4, i1, i4, h1, h2, h3);
 }
 
 
-CrystalPtrU Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
+CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,
                                       float h1, float h2, float h3) {
   using Math::Vec3f;
   using Math::TriangleIdx;
   using Math::kPi;
 
-  float H1 = kC * upperIdx1 / upperIdx4;
-  float H3 = kC * lowerIdx1 / lowerIdx4;
+  float H1 = kC * upper_idx1 / upper_idx4;
+  float H3 = kC * lower_idx1 / lower_idx4;
   h1 = std::max(std::min(h1, 1.0f), 0.0f);
   h3 = std::max(std::min(h3, 1.0f), 0.0f);
 
@@ -440,14 +431,14 @@ CrystalPtrU Crystal::createHexPyramid(int upperIdx1, int upperIdx4, int lowerIdx
 }
 
 
-CrystalPtrU Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int lowerIdx1, int lowerIdx4,
+CrystalPtrU Crystal::CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,
                                                float h1, float h2, float h3) {
   using Math::Vec3f;
   using Math::TriangleIdx;
   using Math::kPi;
 
-  float H1 = kC * upperIdx1 / upperIdx4;
-  float H2 = kC * lowerIdx1 / lowerIdx4;
+  float H1 = kC * upper_idx1 / upper_idx4;
+  float H2 = kC * lower_idx1 / lower_idx4;
   h1 = std::max(std::min(h1, 1.0f), 0.0f);
   h2 = std::max(std::min(h2, 1.0f), 0.0f);
 
@@ -508,7 +499,7 @@ CrystalPtrU Crystal::createHexPyramidStackHalf(int upperIdx1, int upperIdx4, int
 }
 
 
-CrystalPtrU Crystal::createIrregularHexPrism(float *dist, float h) {
+CrystalPtrU Crystal::CreateIrregularHexPrism(float* dist, float h) {
   /* Use a naive algorithm to determine the profile of basal face
    * 1. For each line pair L1 and L2, get their intersection point p12;
    * 2. For all half planes, check if p12 is in the plane;
@@ -566,7 +557,7 @@ CrystalPtrU Crystal::createIrregularHexPrism(float *dist, float h) {
  *      h[1] are the heights of middle cylindrical segment, defined as height / a, where a is the
  *      diameter of original basal face.
  */
-CrystalPtrU Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) {
+CrystalPtrU Crystal::CreateIrregularHexPyramid(float* dist, int* idx, float* h) {
   /* There are 20 faces. The crystal is the intersection of all these half-spaces.
    * 1. Find all inner point as vertexes.
    * 2. Find all co-planner points.
@@ -649,16 +640,16 @@ CrystalPtrU Crystal::createIrregularHexPyramid(float* dist, int* idx, float* h) 
 }
 
 
-CrystalPtrU Crystal::createCustomCrystal(const std::vector<IceHalo::Math::Vec3f>& pts,
+CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<IceHalo::Math::Vec3f>& pts,
                                          const std::vector<IceHalo::Math::TriangleIdx>& faces) {
   return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::CUSTOM));
 }
 
 
-CrystalPtrU Crystal::createCustomCrystal(const std::vector<IceHalo::Math::Vec3f>& pts,
+CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<IceHalo::Math::Vec3f>& pts,
                                          const std::vector<IceHalo::Math::TriangleIdx>& faces,
-                                         const std::vector<int>& faceIdMap) {
-  return std::unique_ptr<Crystal>(new Crystal(pts, faces, faceIdMap, CrystalType::CUSTOM));
+                                         const std::vector<int>& face_number_map) {
+  return std::unique_ptr<Crystal>(new Crystal(pts, faces, face_number_map, CrystalType::CUSTOM));
 }
 
 };  // namespace IceHalo

@@ -69,9 +69,9 @@ size_t Ray::TotalRaySegmentNum() {
 void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
                         const float* dir_in, const int* face_id_in, const float* w_in,
                         float* dir_out, float* w_out) {
-  auto face_num = crystal->totalFaces();
+  auto face_num = crystal->TotalFaces();
   auto face_norm = new float[face_num * 3];
-  crystal->copyNormData(face_norm);
+  crystal->CopyNormData(face_norm);
 
   for (decltype(num) i = 0; i < num; i++) {
     const float* tmp_dir = dir_in + i * 3;
@@ -110,7 +110,7 @@ void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,
     }
     IntersectLineWithTriangles(pt_in + i / 2 * 3, dir_in + i * 3,
                                crystal->GetFaceBaseVector(), crystal->GetFaceVertex(),
-                               crystal->totalFaces(),
+                               crystal->TotalFaces(),
                                pt_out + i * 3, face_id_out + i);
   }
 }

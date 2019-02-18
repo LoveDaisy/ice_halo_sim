@@ -135,16 +135,15 @@ void Simulator::InitSunRays() {
 // Add RayPtr and main axis rotation
 void Simulator::InitEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx) {
   auto crystal = ctx->GetCrystal();
-  auto totalFaces = crystal->totalFaces();
+  auto totalFaces = crystal->TotalFaces();
 
   auto* faceArea = new float[totalFaces];
   auto* faceNorm = new float[totalFaces * 3];
-  auto* facePoint = new float[totalFaces * 9];
   auto* prob = new float[totalFaces];
+  auto* facePoint = crystal->GetFaceVertex();
 
-  crystal->copyFaceAreaData(faceArea);
-  crystal->copyNormData(faceNorm);
-  crystal->copyFaceData(facePoint);
+  crystal->CopyFaceAreaData(faceArea);
+  crystal->CopyNormData(faceNorm);
 
   rays_[multiScatterIdx].reserve(active_ray_num_);
 
@@ -181,7 +180,6 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
 
   delete[] faceArea;
   delete[] faceNorm;
-  delete[] facePoint;
   delete[] prob;
 }
 

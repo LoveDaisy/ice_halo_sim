@@ -343,7 +343,7 @@ void SimulationContext::ParseCrystalType(const rapidjson::Value& c, int ci,
     }
     auto h = static_cast<float>(p->GetDouble());
     crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-      Crystal::createHexPrism(h), population,
+      Crystal::CreateHexPrism(h), population,
       axisDist, axisMean, axisStd,
       rollDist, rollMean, rollStd));
   } else if (c["type"] == "HexPyramid") {
@@ -355,7 +355,7 @@ void SimulationContext::ParseCrystalType(const rapidjson::Value& c, int ci,
       auto h2 = static_cast<float>((*p)[1].GetDouble());
       auto h3 = static_cast<float>((*p)[2].GetDouble());
       crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::createHexPyramid(h1, h2, h3), population,
+        Crystal::CreateHexPyramid(h1, h2, h3), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
     } else if (p->Size() == 5) {
@@ -365,7 +365,7 @@ void SimulationContext::ParseCrystalType(const rapidjson::Value& c, int ci,
       auto h2 = static_cast<float>((*p)[3].GetDouble());
       auto h3 = static_cast<float>((*p)[4].GetDouble());
       crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::createHexPyramid(i1, i2, h1, h2, h3), population,
+        Crystal::CreateHexPyramid(i1, i2, h1, h2, h3), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
     } else if (p->Size() == 7) {
@@ -377,7 +377,7 @@ void SimulationContext::ParseCrystalType(const rapidjson::Value& c, int ci,
       auto h2 = static_cast<float>((*p)[5].GetDouble());
       auto h3 = static_cast<float>((*p)[6].GetDouble());
       crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::createHexPyramid(upperIdx1, upperIdx2, lowerIdx1,
+        Crystal::CreateHexPyramid(upperIdx1, upperIdx2, lowerIdx1,
                                   lowerIdx2, h1, h2, h3), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
@@ -398,7 +398,7 @@ void SimulationContext::ParseCrystalType(const rapidjson::Value& c, int ci,
       auto h2 = static_cast<float>((*p)[5].GetDouble());
       auto h3 = static_cast<float>((*p)[6].GetDouble());
       crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::createHexPyramidStackHalf(upperIdx1, upperIdx2, lowerIdx1,
+        Crystal::CreateHexPyramidStackHalf(upperIdx1, upperIdx2, lowerIdx1,
                                            lowerIdx2, h1, h2, h3), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
@@ -414,7 +414,7 @@ void SimulationContext::ParseCrystalType(const rapidjson::Value& c, int ci,
       auto h1 = static_cast<float>((*p)[0].GetDouble());
       auto h2 = static_cast<float>((*p)[1].GetDouble());
       crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::createCubicPyramid(h1, h2), population,
+        Crystal::CreateCubicPyramid(h1, h2), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
     } else {
@@ -436,7 +436,7 @@ void SimulationContext::ParseCrystalType(const rapidjson::Value& c, int ci,
 
       float dist[6] = { d1, d2, d3, d4, d5, d6 };
       crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::createIrregularHexPrism(dist, h), population,
+        Crystal::CreateIrregularHexPrism(dist, h), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
     }
@@ -464,7 +464,7 @@ void SimulationContext::ParseCrystalType(const rapidjson::Value& c, int ci,
       float height[3] = { h1, h2, h3 };
 
       crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::createIrregularHexPyramid(dist, idx, height), population,
+        Crystal::CreateIrregularHexPyramid(dist, idx, height), population,
         axisDist, axisMean, axisStd,
         rollDist, rollMean, rollStd));
     } else {
@@ -523,7 +523,7 @@ CrystalPtrU SimulationContext::ParseCustomCrystal(std::FILE* file) {
         break;
     }
   }
-  return Crystal::createCustomCrystal(vertexes, faces);
+  return Crystal::CreateCustomCrystal(vertexes, faces);
 }
 
 
@@ -612,7 +612,7 @@ void SimulationContext::PrintCrystalInfo() {
   for (const auto& c : crystal_ctxs_) {
     auto g = c->GetCrystal();
     printf("--\n");
-    for (auto& v : g->getVertexes()) {
+    for (const auto& v : g->getVertexes()) {
       printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
     }
     for (const auto& f : g->getFaces()) {
