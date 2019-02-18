@@ -57,7 +57,7 @@ public:
   RaySegmentPool(RaySegmentPool const&) = delete;
   void operator=(RaySegmentPool const&) = delete;
 
-  static RaySegmentPool& GetInstance();
+  static RaySegmentPool* GetInstance();
 
   RaySegment* GetRaySegment(const float* pt, const float* dir, float w, int faceId);
   void Clear();
@@ -66,11 +66,14 @@ private:
   RaySegmentPool();
 
   static constexpr uint32_t kChunkSize = 1024 * 512;
+  static RaySegmentPool* instance_;
 
   std::vector<RaySegment*> segments_;
   std::atomic<uint64_t> next_unused_id_;
   std::atomic<uint64_t> current_chunk_id_;
 };
+
+using RaySegmentPoolPtr = std::shared_ptr<RaySegmentPool>;
 
 
 class Optics {

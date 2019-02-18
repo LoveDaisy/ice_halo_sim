@@ -96,7 +96,7 @@ void Simulator::Start() {
 
   rays_.clear();
   final_ray_segments_.clear();
-  RaySegmentPool::GetInstance().Clear();
+  RaySegmentPool::GetInstance()->Clear();
 
   for (int i = 0; i < msNum; i++) {
     rays_.emplace_back();
@@ -147,7 +147,7 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
 
   rays_[multiScatterIdx].reserve(active_ray_num_);
 
-  auto& pool = RaySegmentPool::GetInstance();
+  auto ray_pool = RaySegmentPool::GetInstance();
   auto rng = Math::RandomNumberGenerator::GetInstance();
   auto sampler = Math::RandomSampler::GetInstance();
   float axis_rot[3];
@@ -260,12 +260,13 @@ void Simulator::TraceRays(const CrystalPtr& crystal) {
 
 // Save rays
 void Simulator::StoreRaySegments() {
+  auto pool = RaySegmentPool::GetInstance();
   for (size_t i = 0; i < active_ray_num_ * 2; i++) {
     if (buffer_.w[1][i] <= 0) {   // For refractive rays in total reflection case
       continue;
     }
 
-    auto r = RaySegmentPool::GetInstance().GetRaySegment(
+    auto r = pool->GetRaySegment(
       buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3, buffer_.w[1][i], buffer_.face_id[0][i / 2]);
     if (buffer_.face_id[1][i] < 0) {
       r->is_finished_ = true;

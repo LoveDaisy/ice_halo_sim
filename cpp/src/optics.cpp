@@ -225,6 +225,9 @@ float IceRefractiveIndex::n(float wave_length) {
   return nn;
 }
 
+
+RaySegmentPool* RaySegmentPool::instance_ = nullptr;
+
 RaySegmentPool::RaySegmentPool() {
   auto* raySegPool = new RaySegment[kChunkSize];
   segments_.push_back(raySegPool);
@@ -239,9 +242,11 @@ RaySegmentPool::~RaySegmentPool() {
   segments_.clear();
 }
 
-RaySegmentPool& RaySegmentPool::GetInstance() {
-  static RaySegmentPool instance;
-  return instance;
+RaySegmentPool* RaySegmentPool::GetInstance() {
+  if (!instance_) {
+    instance_ = new RaySegmentPool();
+  }
+  return instance_;
 }
 
 RaySegment* RaySegmentPool::GetRaySegment(const float* pt, const float* dir, float w, int faceId) {
