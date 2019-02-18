@@ -311,16 +311,21 @@ void Simulator::saveFinalDirections(const char* filename) {
 
   file.write(context->getCurrentWavelength());
 
-  float finalDir[3];
+  auto ray_num = final_ray_segments_.size();
+  auto* data = new float[ray_num * 4];       // dx, dy, dz, w
+
+  float* curr_data = data;
   for (const auto& r : final_ray_segments_) {
     assert(r->root);
     const auto axis_rot = r->root->main_axis_rot.val();
-    Math::rotateZBack(axis_rot, r->dir.val(), finalDir);
-    file.write(finalDir, 3);
-    file.write(r->w);
+    Math::rotateZBack(axis_rot, r->dir.val(), curr_data);
+    curr_data[3] = r->w;
+    curr_data += 4;
   }
-
+  file.write(data, ray_num * 4);
   file.close();
+
+  delete[] data;
 }
 
 
