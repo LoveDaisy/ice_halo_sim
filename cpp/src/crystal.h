@@ -33,6 +33,7 @@ public:
 
   const float* GetFaceVertex() const;
   const float* GetFaceBaseVector() const;
+  const float* GetFaceNorm() const;
 
   void CopyFaceAreaData(float* data) const;
   void CopyNormData(float* data) const;
@@ -158,6 +159,7 @@ protected:
 
   float* face_bases_;
   float* face_vertexes_;
+  float* face_norm_;
 
 private:
   /*! @brief Constructor, given vertexes and faces

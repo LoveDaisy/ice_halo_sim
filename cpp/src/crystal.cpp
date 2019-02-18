@@ -10,7 +10,7 @@ Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes,
                  const std::vector<Math::TriangleIdx>& faces,
                  CrystalType type)
     : vertexes_(vertexes), faces_(faces), type_(type),
-      face_bases_(nullptr), face_vertexes_(nullptr) {
+      face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr) {
   InitNorms();
   InitFaceNumber();
 }
@@ -21,7 +21,7 @@ Crystal::Crystal(const std::vector<IceHalo::Math::Vec3f>& vertexes,
                  const std::vector<int>& faceId,
                  CrystalType type)
     : vertexes_(vertexes), faces_(faces), face_number_map_(faceId), type_(type),
-      face_bases_(nullptr), face_vertexes_(nullptr) {
+      face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr) {
   InitNorms();
 }
 
@@ -29,6 +29,7 @@ Crystal::Crystal(const std::vector<IceHalo::Math::Vec3f>& vertexes,
 Crystal::~Crystal() {
   delete[] face_bases_;
   delete[] face_vertexes_;
+  delete[] face_norm_;
 }
 
 
@@ -56,6 +57,11 @@ const float* Crystal::GetFaceVertex() const {
 
 const float* Crystal::GetFaceBaseVector() const {
   return face_bases_;
+}
+
+
+const float* Crystal::GetFaceNorm() const {
+  return face_norm_;
 }
 
 
@@ -104,6 +110,7 @@ void Crystal::InitNorms() {
   auto face_num = faces_.size();
   face_bases_ = new float[face_num * 6];
   face_vertexes_ = new float[face_num * 9];
+  face_norm_ = new float[face_num * 3];
 
   norms_.clear();
   for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
@@ -122,6 +129,10 @@ void Crystal::InitNorms() {
   }
   for (auto& v : norms_) {
     v.Normalize();
+  }
+
+  for (decltype(norms_.size()) i = 0; i < norms_.size(); i++) {
+    std::memcpy(face_norm_ + i * 3, norms_[i].val(), 3 * sizeof(float));
   }
 }
 

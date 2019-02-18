@@ -81,7 +81,7 @@ public:
                          const float* dir_in, const int* face_id_in, const float* w_in,
                          float* dir_out, float* w_out);
   static void Propagate(const CrystalPtr& crystal, size_t num,
-                        const float* pt_in, const float* dir_in, const float* w_in,
+                        const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,
                         float* pt_out, int* face_id_out);
 
 private:
@@ -97,8 +97,8 @@ private:
    * \param p output argument, the intersection point
    * \param idx output argument, the face index of the intersection point
    */
-  static void IntersectLineWithTriangles(const float* pt, const float* dir,
-                                         const float* face_bases, const float* face_points, int face_num,
+  static void IntersectLineWithTriangles(const float* pt, const float* dir, int face_id, int face_num,
+                                         const float* face_bases, const float* face_points, const float* face_norm,
                                          float* p, int* idx);
 };
 

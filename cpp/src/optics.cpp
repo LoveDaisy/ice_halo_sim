@@ -72,7 +72,7 @@ void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
 
 
 void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,
-                       const float* pt_in, const float* dir_in, const float* w_in,
+                       const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,
                        float* pt_out, int* face_id_out) {
   for (decltype(num) i = 0; i < num; i++) {
     face_id_out[i] = -1;
@@ -82,8 +82,8 @@ void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,
     if (w_in[i] < SimulationContext::kPropMinW) {
       continue;
     }
-    IntersectLineWithTriangles(pt_in + i / 2 * 3, dir_in + i * 3,
-                               crystal->GetFaceBaseVector(), crystal->GetFaceVertex(), crystal->TotalFaces(),
+    IntersectLineWithTriangles(pt_in + i / 2 * 3, dir_in + i * 3, face_id_in[i / 2], crystal->TotalFaces(),
+                               crystal->GetFaceBaseVector(), crystal->GetFaceVertex(), crystal->GetFaceNorm(),
                                pt_out + i * 3, face_id_out + i);
   }
 }
@@ -104,14 +104,21 @@ float Optics::GetReflectRatio(float cos_angle, float rr) {
 }
 
 
-void Optics::IntersectLineWithTriangles(const float* pt, const float* dir,
-                                        const float* face_bases, const float* face_points, int face_num,
+void Optics::IntersectLineWithTriangles(const float* pt, const float* dir, int face_id, int face_num,
+                                        const float* face_bases, const float* face_points, const float* face_norm,
                                         float* p, int* idx) {
   float min_t = std::numeric_limits<float>::max();
+  const float* norm_in = face_norm + face_id * 3;
+  float flag_in = Math::Dot3(dir, norm_in);
 
   for (int i = 0; i < face_num; i++) {
     const float* curr_face_point = face_points + i * 9;
     const float* curr_face_base = face_bases + i * 6;
+    const float* curr_face_norm = face_norm + i * 3;
+
+    if (Math::Dot3(dir, curr_face_norm) * flag_in > 0) {
+      continue;
+    }
 
     float ff04 = curr_face_base[0] * curr_face_base[4];
     float ff05 = curr_face_base[0] * curr_face_base[5];
