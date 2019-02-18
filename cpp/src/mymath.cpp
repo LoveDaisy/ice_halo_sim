@@ -548,13 +548,12 @@ void RandomSampler::SampleSphericalPointsCart(Distribution dist, float lat, floa
                                               float* data, size_t num) {
   auto rng = RandomNumberGenerator::GetInstance();
   for (decltype(num) i = 0; i < num; i++) {
-    float u = rng->Get(dist, lat, std);
-    float q = rng->GetUniform() * 2 * Math::kPi;
+    float phi = rng->Get(dist, lat * kDegreeToRad, std * kDegreeToRad);
+    float lambda = rng->GetUniform() * 2 * Math::kPi;
 
-    float r = std::cos(u);
-    data[i * 3 + 0] = r * std::cos(q);
-    data[i * 3 + 1] = r * std::sin(q);
-    data[i * 3 + 2] = std::sin(u);
+    data[i * 3 + 0] = std::cos(phi) * std::cos(lambda);
+    data[i * 3 + 1] = std::cos(phi) * std::sin(lambda);
+    data[i * 3 + 2] = std::sin(phi);
   }
 }
 
@@ -568,13 +567,15 @@ void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float
 
   auto* tmp_dir = new float[num * 3];
 
-  float dz = 1.0f - std::cos(std / 180.0f * Math::kPi);
+  float dz = 1.0f - std::cos(std * kDegreeToRad);
   for (decltype(num) i = 0; i < num; i++) {
-    float z = 1.0f - rng->GetUniform() * dz;
-    float r = std::sqrt(1.0f - z * z);
+    float udz = rng->GetUniform() * dz;
     float q = rng->GetUniform() * 2 * Math::kPi;
+
+    float r = std::sqrt((2.0f + udz) * udz);
     float x = std::cos(q) * r;
     float y = std::sin(q) * r;
+    float z = 1.0f - udz;
 
     tmp_dir[i * 3 + 0] = x;
     tmp_dir[i * 3 + 1] = y;
@@ -590,11 +591,11 @@ void RandomSampler::SampleSphericalPointsSph(Distribution dist, float lat, float
                                              float* data, size_t num) {
   auto rng = RandomNumberGenerator::GetInstance();
   for (decltype(num) i = 0; i < num; i++) {
-    float u = rng->Get(dist, lat * kDegreeToRad, std * kDegreeToRad);
-    float q = rng->GetUniform() * 2 * Math::kPi;
+    float phi = rng->Get(dist, lat * kDegreeToRad, std * kDegreeToRad);
+    float lambda = rng->GetUniform() * 2 * Math::kPi;
 
-    data[i * 2 + 0] = q;
-    data[i * 2 + 1] = u;
+    data[i * 2 + 0] = lambda;
+    data[i * 2 + 1] = phi;
   }
 }
 
