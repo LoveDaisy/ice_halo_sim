@@ -6,20 +6,31 @@
 
 namespace IceHalo {
 
-Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes, const std::vector<Math::TriangleIdx>& faces,
+Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes,
+                 const std::vector<Math::TriangleIdx>& faces,
                  CrystalType type)
-    : vertexes(vertexes), faces(faces), type(type) {
+    : vertexes(vertexes), faces(faces), type(type),
+      face_bases_(nullptr), face_vertexes_(nullptr) {
   initNorms();
   initFaceNumbers();
 }
+
 
 Crystal::Crystal(const std::vector<IceHalo::Math::Vec3f>& vertexes,
                  const std::vector<IceHalo::Math::TriangleIdx>& faces,
                  const std::vector<int>& faceId,
                  CrystalType type)
-    : vertexes(vertexes), faces(faces), faceIdMap(faceId), type(type) {
+    : vertexes(vertexes), faces(faces), faceIdMap(faceId), type(type),
+      face_bases_(nullptr), face_vertexes_(nullptr) {
   initNorms();
 }
+
+
+Crystal::~Crystal() {
+  delete[] face_bases_;
+  delete[] face_vertexes_;
+}
+
 
 const std::vector<Math::Vec3f>& Crystal::getVertexes() {
   return vertexes;
@@ -36,6 +47,17 @@ const std::vector<Math::TriangleIdx>& Crystal::getFaces() {
 const std::vector<int>& Crystal::getFaceNumber() {
   return faceIdMap;
 }
+
+
+const float* Crystal::GetFaceVertex() const {
+  return face_vertexes_;
+}
+
+
+const float* Crystal::GetFaceBaseVector() const {
+  return face_bases_;
+}
+
 
 int Crystal::totalVertexes() const {
   return static_cast<int>(vertexes.size());
@@ -87,12 +109,25 @@ void Crystal::copyNormData(float *data) const {
 
 void Crystal::initNorms() {
   using Math::Vec3f;
+
+  auto face_num = faces.size();
+  face_bases_ = new float[face_num * 6];
+  face_vertexes_ = new float[face_num * 9];
+
   norms.clear();
-  for (const auto& f : faces) {
+  for (decltype(faces.size()) i = 0; i < faces.size(); i++) {
+    const auto& f = faces[i];
     auto idx = f.idx();
     Vec3f v1 = Vec3f::fromVec(vertexes[idx[0]], vertexes[idx[1]]);
     Vec3f v2 = Vec3f::fromVec(vertexes[idx[0]], vertexes[idx[2]]);
     norms.push_back(Vec3f::cross(v1, v2));
+
+    std::memcpy(face_bases_ + i * 6 + 0, v1.val(), 3 * sizeof(float));
+    std::memcpy(face_bases_ + i * 6 + 3, v2.val(), 3 * sizeof(float));
+
+    std::memcpy(face_vertexes_ + i * 9 + 0, vertexes[idx[0]].val(), 3 * sizeof(float));
+    std::memcpy(face_vertexes_ + i * 9 + 3, vertexes[idx[1]].val(), 3 * sizeof(float));
+    std::memcpy(face_vertexes_ + i * 9 + 6, vertexes[idx[2]].val(), 3 * sizeof(float));
   }
   for (auto& v : norms) {
     v.normalize();

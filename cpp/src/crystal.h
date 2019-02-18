@@ -20,6 +20,8 @@ enum class CrystalType {
 
 class Crystal {
 public:
+  ~Crystal();
+
   int totalVertexes() const;
   int totalFaces() const;
   int faceNumber(int idx) const;
@@ -29,9 +31,11 @@ public:
   const std::vector<Math::TriangleIdx>& getFaces();
   const std::vector<int>& getFaceNumber();
 
+  const float* GetFaceVertex() const;
+  const float* GetFaceBaseVector() const;
+
   void copyFaceData(float* data) const;
   void copyFaceAreaData(float* data) const;
-
   void copyNormData(float *data) const;
 
   static constexpr float kC = 1.629f;
@@ -152,6 +156,9 @@ protected:
   std::vector<Math::TriangleIdx> faces;
   std::vector<int> faceIdMap;
   CrystalType type;
+
+  float* face_bases_;
+  float* face_vertexes_;
 
 private:
   /*! @brief Constructor, given vertexes and faces

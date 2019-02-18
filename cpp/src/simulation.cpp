@@ -261,16 +261,12 @@ void Simulator::traceRays(const CrystalPtr& crystal) {
 // Save rays
 void Simulator::saveRaySegments() {
   for (size_t i = 0; i < activeRayNum * 2; i++) {
-    buffer.raySeg[1][i] = nullptr;
-  }
-
-  auto& pool = RaySegmentPool::getInstance();
-  for (size_t i = 0; i < activeRayNum * 2; i++) {
     if (buffer.w[1][i] <= 0) {   // For refractive rays in total reflection case
       continue;
     }
 
-    auto r = pool.getRaySegment(buffer.pt[0] + i / 2 * 3, buffer.dir[1] + i * 3, buffer.w[1][i], buffer.faceId[0][i / 2]);
+    auto r = RaySegmentPool::getInstance().getRaySegment(
+      buffer.pt[0] + i / 2 * 3, buffer.dir[1] + i * 3, buffer.w[1][i], buffer.faceId[0][i / 2]);
     if (buffer.faceId[1][i] < 0) {
       r->isFinished = true;
     }
@@ -296,7 +292,7 @@ void Simulator::saveRaySegments() {
 void Simulator::refreshBuffer() {
   size_t idx = 0;
   for (size_t i = 0; i < activeRayNum * 2; i++) {
-    if (buffer.raySeg[1][i] && buffer.faceId[1][i] >= 0 && buffer.w[1][i] > SimulationContext::kPropMinW) {
+    if (buffer.faceId[1][i] >= 0 && buffer.w[1][i] > SimulationContext::kPropMinW) {
       std::memcpy(buffer.pt[0] + idx * 3, buffer.pt[1] + i * 3, sizeof(float) * 3);
       std::memcpy(buffer.dir[0] + idx * 3, buffer.dir[1] + i * 3, sizeof(float) * 3);
       buffer.w[0][idx] = buffer.w[1][i];

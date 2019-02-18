@@ -96,16 +96,6 @@ void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
 void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,
                        const float* pt_in, const float* dir_in, const float* w_in,
                        float* pt_out, int* face_id_out) {
-  auto face_num = crystal->totalFaces();
-  auto faces = new float[face_num * 9];
-  auto face_bases = new float[face_num * 6];
-
-  crystal->copyFaceData(faces);
-  for (int i = 0; i < face_num; i++) {
-    Math::vec3FromTo(faces + i * 9 + 0, faces + i * 9 + 3, face_bases + i * 6 + 0);
-    Math::vec3FromTo(faces + i * 9 + 0, faces + i * 9 + 6, face_bases + i * 6 + 3);
-  }
-
   for (decltype(num) i = 0; i < num; i++) {
     face_id_out[i] = -1;
   }
@@ -115,12 +105,9 @@ void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,
       continue;
     }
     intersectLineWithTriangles(pt_in + i / 2 * 3, dir_in + i * 3,
-                               face_bases, faces, face_num,
+                               crystal->GetFaceBaseVector(), crystal->GetFaceVertex(), crystal->totalFaces(),
                                pt_out + i * 3, face_id_out + i);
   }
-
-  delete[] faces;
-  delete[] face_bases;
 }
 
 
