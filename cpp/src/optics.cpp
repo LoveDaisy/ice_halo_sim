@@ -11,52 +11,54 @@
 namespace IceHalo {
 
 RaySegment::RaySegment()
-    : nextReflect(nullptr), nextRefract(nullptr), prev(nullptr), root(nullptr),
-      pt(0, 0, 0), dir(0, 0, 0), w(0),
-      faceId(-1), isFinished(false) {}
+    : next_reflect_(nullptr), next_refract_(nullptr), prev_(nullptr), root_(nullptr),
+      pt_(0, 0, 0), dir_(0, 0, 0), w_(0), face_id_(-1),
+      is_finished_(false) {}
 
 
-bool RaySegment::isValidEnd() {
-  return w > 0 && faceId >= 0 && isFinished;
+bool RaySegment::IsValidEnd() {
+  return w_ > 0 && face_id_ >= 0 && is_finished_;
 }
 
 
 void RaySegment::ResetWith(const float* pt, const float* dir, float w, int face_id) {
-  nextReflect = nullptr;
-  nextRefract = nullptr;
-  prev = nullptr;
-  root = nullptr;
-  this->pt.val(pt);
-  this->dir.val(dir);
-  this->w = w;
-  this->faceId = face_id;
-  isFinished = false;
+  next_reflect_ = nullptr;
+  next_refract_ = nullptr;
+  prev_ = nullptr;
+  root_ = nullptr;
+
+  pt_.val(pt);
+  dir_.val(dir);
+  w_ = w;
+  face_id_ = face_id;
+
+  is_finished_ = false;
 }
 
 
 Ray::Ray(RaySegment* seg, const float main_axis_rot[3])
-    : firstRaySeg(seg), main_axis_rot(main_axis_rot) {}
+    : first_ray_segment_(seg), main_axis_rot_(main_axis_rot) {}
 
 
-size_t Ray::totalNum() {
-  if (firstRaySeg == nullptr) {
+size_t Ray::TotalRaySegmentNum() {
+  if (first_ray_segment_ == nullptr) {
     return 0;
   }
 
   std::vector<RaySegment*> v;
-  v.push_back(firstRaySeg);
+  v.push_back(first_ray_segment_);
 
   size_t n = 0;
   while (!v.empty()) {
     RaySegment* p = v.back();
     v.pop_back();
-    if (p->nextReflect) {
-      v.push_back(p->nextReflect);
+    if (p->next_reflect_) {
+      v.push_back(p->next_reflect_);
     }
-    if (p->nextRefract) {
-      v.push_back(p->nextRefract);
+    if (p->next_refract_) {
+      v.push_back(p->next_refract_);
     }
-    if (p->isValidEnd()) {
+    if (p->IsValidEnd()) {
       n++;
     }
   }
@@ -79,7 +81,7 @@ void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
     float rr = cos_theta > 0 ? n : 1.0f / n;
     float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
 
-    w_out[2 * i + 0] = getReflectRatio(cos_theta, rr) * w_in[i];
+    w_out[2 * i + 0] = GetReflectRatio(cos_theta, rr) * w_in[i];
     w_out[2 * i + 1] = w_in[i] - w_out[2 * i + 0];
 
     float* tmp_dir_reflection = dir_out + (i * 2 + 0) * 3;
@@ -106,14 +108,15 @@ void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,
     if (w_in[i] < SimulationContext::kPropMinW) {
       continue;
     }
-    intersectLineWithTriangles(pt_in + i / 2 * 3, dir_in + i * 3,
-                               crystal->GetFaceBaseVector(), crystal->GetFaceVertex(), crystal->totalFaces(),
+    IntersectLineWithTriangles(pt_in + i / 2 * 3, dir_in + i * 3,
+                               crystal->GetFaceBaseVector(), crystal->GetFaceVertex(),
+                               crystal->totalFaces(),
                                pt_out + i * 3, face_id_out + i);
   }
 }
 
 
-float Optics::getReflectRatio(float cos_angle, float rr) {
+float Optics::GetReflectRatio(float cos_angle, float rr) {
   float s = std::sqrt(1.0f - cos_angle * cos_angle);
   float c = std::abs(cos_angle);
   float d = std::max(1.0f - (rr * s) * (rr * s), 0.0f);
@@ -128,8 +131,9 @@ float Optics::getReflectRatio(float cos_angle, float rr) {
 }
 
 
-void Optics::intersectLineWithTriangles(const float* pt, const float* dir,
-                                        const float* faceBases, const float* facePoints, int faceNum,
+void Optics::IntersectLineWithTriangles(const float* pt, const float* dir,
+                                        const float* faceBases, const float* facePoints,
+                                        int faceNum,
                                         float* p, int* idx) {
   float min_t = std::numeric_limits<float>::max();
 
@@ -197,23 +201,23 @@ void Optics::intersectLineWithTriangles(const float* pt, const float* dir,
 
 
 
-constexpr float IceRefractiveIndex::_wl[];
-constexpr float IceRefractiveIndex::_n[];
+constexpr float IceRefractiveIndex::kWaveLengths[];
+constexpr float IceRefractiveIndex::kIndexOfRefract[];
 
-float IceRefractiveIndex::n(float waveLength) {
-  if (waveLength < _wl[0]) {
+float IceRefractiveIndex::n(float wave_length) {
+  if (wave_length < kWaveLengths[0]) {
     return 1.0f;
   }
 
   float nn = 1.0f;
-  for (decltype(sizeof(_wl)) i = 0; i < sizeof(_wl) / sizeof(float); i++) {
-    if (waveLength < _wl[i]) {
-      float w1 = _wl[i-1];
-      float w2 = _wl[i];
-      float n1 = _n[i-1];
-      float n2 = _n[i];
+  for (decltype(sizeof(kWaveLengths)) i = 0; i < sizeof(kWaveLengths) / sizeof(float); i++) {
+    if (wave_length < kWaveLengths[i]) {
+      float w1 = kWaveLengths[i-1];
+      float w2 = kWaveLengths[i];
+      float n1 = kIndexOfRefract[i-1];
+      float n2 = kIndexOfRefract[i];
 
-      nn = n1 + (n2 - n1) / (w2 - w1) * (waveLength - w1);
+      nn = n1 + (n2 - n1) / (w2 - w1) * (wave_length - w1);
       break;
     }
   }
@@ -223,50 +227,50 @@ float IceRefractiveIndex::n(float waveLength) {
 
 RaySegmentPool::RaySegmentPool() {
   auto* raySegPool = new RaySegment[kChunkSize];
-  segments.push_back(raySegPool);
-  nextUnusedId = 0;
-  currentChunkId = 0;
+  segments_.push_back(raySegPool);
+  next_unused_id_ = 0;
+  current_chunk_id_ = 0;
 }
 
 RaySegmentPool::~RaySegmentPool() {
-  for (auto seg : segments) {
+  for (auto seg : segments_) {
     delete[] seg;
   }
-  segments.clear();
+  segments_.clear();
 }
 
-RaySegmentPool& RaySegmentPool::getInstance() {
+RaySegmentPool& RaySegmentPool::GetInstance() {
   static RaySegmentPool instance;
   return instance;
 }
 
-RaySegment* RaySegmentPool::getRaySegment(const float* pt, const float* dir, float w, int faceId) {
+RaySegment* RaySegmentPool::GetRaySegment(const float* pt, const float* dir, float w, int faceId) {
   RaySegment* seg;
   RaySegment* currentChunk;
 
-  if (nextUnusedId >= kChunkSize) {
-    auto segSize = segments.size();
-    if (currentChunkId >= segSize - 1) {
+  if (next_unused_id_ >= kChunkSize) {
+    auto segSize = segments_.size();
+    if (current_chunk_id_ >= segSize - 1) {
       auto* raySegPool = new RaySegment[kChunkSize];
-      segments.push_back(raySegPool);
-      currentChunkId.store(segSize);
+      segments_.push_back(raySegPool);
+      current_chunk_id_.store(segSize);
     } else {
-      currentChunkId++;
+      current_chunk_id_++;
     }
-    nextUnusedId = 0;
+    next_unused_id_ = 0;
   }
-  currentChunk = segments[currentChunkId];
+  currentChunk = segments_[current_chunk_id_];
 
-  seg = currentChunk + nextUnusedId;
-  nextUnusedId++;
+  seg = currentChunk + next_unused_id_;
+  next_unused_id_++;
   seg->ResetWith(pt, dir, w, faceId);
 
   return seg;
 }
 
-void RaySegmentPool::clear() {
-  nextUnusedId = 0;
-  currentChunkId = 0;
+void RaySegmentPool::Clear() {
+  next_unused_id_ = 0;
+  current_chunk_id_ = 0;
 }
 
 

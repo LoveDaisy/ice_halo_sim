@@ -96,7 +96,7 @@ void Simulator::start() {
 
   rays_.clear();
   final_ray_segments_.clear();
-  RaySegmentPool::getInstance().clear();
+  RaySegmentPool::GetInstance().Clear();
 
   for (int i = 0; i < msNum; i++) {
     rays_.emplace_back();
@@ -148,7 +148,7 @@ void Simulator::initEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
 
   rays_[multiScatterIdx].reserve(activeRayNum);
 
-  auto& pool = RaySegmentPool::getInstance();
+  auto& pool = RaySegmentPool::GetInstance();
   auto& rng = Math::RandomNumberGenerator::GetInstance();
   auto& sampler = Math::RandomSampler::GetInstance();
   float axis_rot[3];
@@ -171,10 +171,11 @@ void Simulator::initEntryRays(const CrystalContextPtr& ctx, int multiScatterIdx)
 
     buffer.w[0][i] = 1.0f;
 
-    auto r = pool.getRaySegment(buffer.pt[0] + i * 3, buffer.dir[0] + i * 3, buffer.w[0][i], buffer.faceId[0][i]);
+    auto r = pool.GetRaySegment(buffer.pt[0] + i * 3, buffer.dir[0] + i * 3, buffer.w[0][i],
+                                buffer.faceId[0][i]);
     buffer.raySeg[0][i] = r;
     rays_[multiScatterIdx].emplace_back(std::make_shared<Ray>(r, axis_rot));
-    r->root = rays_[multiScatterIdx].back().get();
+    r->root_ = rays_[multiScatterIdx].back().get();
   }
 
   delete[] faceArea;
@@ -192,23 +193,23 @@ void Simulator::restoreResultRays(int multiScatterIdx) {
   std::stack<RaySegment*> s;
   size_t idx = 0;
   for (auto& r : rays_[multiScatterIdx]) {
-    s.push(r->firstRaySeg);
+    s.push(r->first_ray_segment_);
     while (!s.empty()) {
       auto tmp_r = s.top();
       s.pop();
 
-      if (tmp_r->isFinished && tmp_r->w > SimulationContext::kScatMinW &&
+      if (tmp_r->is_finished_ && tmp_r->w_ > SimulationContext::kScatMinW &&
           rng.getUniform() < context->getMultiScatterProb()) {
-        assert(tmp_r->root);
-        const auto axis_rot = tmp_r->root->main_axis_rot.val();
-        Math::rotateZBack(axis_rot, tmp_r->dir.val(), buffer.dir[0] + idx * 3);
+        assert(tmp_r->root_);
+        const auto axis_rot = tmp_r->root_->main_axis_rot_.val();
+        Math::rotateZBack(axis_rot, tmp_r->dir_.val(), buffer.dir[0] + idx * 3);
         idx++;
       } else {
-        if (tmp_r->nextReflect) {
-          s.push(tmp_r->nextReflect);
+        if (tmp_r->next_reflect_) {
+          s.push(tmp_r->next_reflect_);
         }
-        if (tmp_r->nextRefract) {
-          s.push(tmp_r->nextRefract);
+        if (tmp_r->next_refract_) {
+          s.push(tmp_r->next_refract_);
         }
       }
     }
@@ -265,23 +266,23 @@ void Simulator::saveRaySegments() {
       continue;
     }
 
-    auto r = RaySegmentPool::getInstance().getRaySegment(
+    auto r = RaySegmentPool::GetInstance().GetRaySegment(
       buffer.pt[0] + i / 2 * 3, buffer.dir[1] + i * 3, buffer.w[1][i], buffer.faceId[0][i / 2]);
     if (buffer.faceId[1][i] < 0) {
-      r->isFinished = true;
+      r->is_finished_ = true;
     }
-    if (r->isFinished || r->w < SimulationContext::kPropMinW) {
+    if (r->is_finished_ || r->w_ < SimulationContext::kPropMinW) {
       final_ray_segments_.emplace_back(r);
     }
 
     auto prevRaySeg = buffer.raySeg[0][i / 2];
     if (i % 2 == 0) {
-      prevRaySeg->nextReflect = r;
+      prevRaySeg->next_reflect_ = r;
     } else {
-      prevRaySeg->nextRefract = r;
+      prevRaySeg->next_refract_ = r;
     }
-    r->prev = prevRaySeg;
-    r->root = prevRaySeg->root;
+    r->prev_ = prevRaySeg;
+    r->root_ = prevRaySeg->root_;
     buffer.raySeg[1][i] = r;
   }
 }
@@ -316,10 +317,10 @@ void Simulator::saveFinalDirections(const char* filename) {
 
   float* curr_data = data;
   for (const auto& r : final_ray_segments_) {
-    assert(r->root);
-    const auto axis_rot = r->root->main_axis_rot.val();
-    Math::rotateZBack(axis_rot, r->dir.val(), curr_data);
-    curr_data[3] = r->w;
+    assert(r->root_);
+    const auto axis_rot = r->root_->main_axis_rot_.val();
+    Math::rotateZBack(axis_rot, r->dir_.val(), curr_data);
+    curr_data[3] = r->w_;
     curr_data += 4;
   }
   file.write(data, ray_num * 4);
@@ -333,23 +334,23 @@ void Simulator::printRayInfo() {
   std::stack<RaySegment*> s;
   for (const auto& rs : rays_) {
     for (const auto& r : rs) {
-      s.push(r->firstRaySeg);
+      s.push(r->first_ray_segment_);
 
       while (!s.empty()) {
         auto p = s.top();
         s.pop();
-        if (p->nextRefract && !p->isFinished) {
-          s.push(p->nextRefract);
+        if (p->next_refract_ && !p->is_finished_) {
+          s.push(p->next_refract_);
         }
-        if (p->nextReflect && !p->isFinished) {
-          s.push(p->nextReflect);
+        if (p->next_reflect_ && !p->is_finished_) {
+          s.push(p->next_reflect_);
         }
-        if (!p->nextReflect && !p->nextRefract && p->isValidEnd()) {
+        if (!p->next_reflect_ && !p->next_refract_ && p->IsValidEnd()) {
           std::stack<RaySegment*> tmp_stack;
           tmp_stack.push(p);
-          while (p->prev) {
-            tmp_stack.push(p->prev);
-            p = p->prev;
+          while (p->prev_) {
+            tmp_stack.push(p->prev_);
+            p = p->prev_;
           }
 
           std::printf("%li,0,0,0,0,0,-1\n", tmp_stack.size());
@@ -357,9 +358,9 @@ void Simulator::printRayInfo() {
             p = tmp_stack.top();
             tmp_stack.pop();
             std::printf("%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n",
-              p->pt.x(), p->pt.y(), p->pt.z(),
-              p->dir.x(), p->dir.y(), p->dir.z(),
-              p->w);
+              p->pt_.x(), p->pt_.y(), p->pt_.z(),
+              p->dir_.x(), p->dir_.y(), p->dir_.z(),
+              p->w_);
           }
         }
       }
