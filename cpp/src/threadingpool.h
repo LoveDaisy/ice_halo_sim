@@ -12,19 +12,19 @@
 
 namespace IceHalo {
 
-class Pool {
+class ThreadingPool {
 public:
-  ~Pool() = default;
+  ~ThreadingPool() = default;
 
   void Start();
   void AddJob(std::function<void()> job);
   void WaitFinish();
   bool TaskRunning();
 
-  static Pool* GetInstance();
+  static ThreadingPool* GetInstance();
 
 private:
-  Pool();
+  ThreadingPool();
 
   size_t thread_num_;
   std::vector<std::thread> pool_;
@@ -41,10 +41,9 @@ private:
 
   void WorkingFunction();
 
-  static Pool* instance_;
+  static ThreadingPool* instance_;
   static std::mutex instance_mutex_;
 };
-
 
 }   // namespace IceHalo
 

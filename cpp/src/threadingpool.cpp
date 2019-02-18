@@ -3,16 +3,16 @@
 namespace IceHalo {
 
 
-Pool * Pool::instance_ = nullptr;
-std::mutex Pool::instance_mutex_;
+ThreadingPool* ThreadingPool::instance_ = nullptr;
+std::mutex ThreadingPool::instance_mutex_;
 
 
-Pool * Pool::GetInstance() {
+ThreadingPool* ThreadingPool::GetInstance() {
   if (instance_ == nullptr) {
     {
       std::unique_lock<std::mutex> lock(instance_mutex_);
       if (instance_ == nullptr) {
-        instance_ = new Pool();
+        instance_ = new ThreadingPool();
       }
     }
   }
@@ -20,14 +20,14 @@ Pool * Pool::GetInstance() {
 }
 
 
-Pool::Pool()
+ThreadingPool::ThreadingPool()
     : thread_num_(std::thread::hardware_concurrency()), alive_(false),
       running_jobs_(0), alive_threads_(0) {
   Start();
 }
 
 
-void Pool::Start() {
+void ThreadingPool::Start() {
   if (alive_ || running_jobs_ > 0 || alive_threads_ > 0) {
     return;
   }
@@ -35,16 +35,16 @@ void Pool::Start() {
   pool_.clear();
   alive_ = true;
   alive_threads_ = 0;
-  printf("Threading pool size: %u\n", thread_num_);
+  printf("Threading pool size: %zu\n", thread_num_);
   for (decltype(thread_num_) ii = 0; ii < thread_num_; ii++) {
-    pool_.emplace_back(&Pool::WorkingFunction, this);
+    pool_.emplace_back(&ThreadingPool::WorkingFunction, this);
     alive_threads_ += 1;
   }
 }
 
 
 
-void Pool::AddJob(std::function<void()> job) {
+void ThreadingPool::AddJob(std::function<void()> job) {
   if (!alive_) {
     return;
   }
@@ -57,18 +57,18 @@ void Pool::AddJob(std::function<void()> job) {
 }
 
 
-void Pool::WaitFinish() {
+void ThreadingPool::WaitFinish() {
   std::unique_lock<std::mutex> lock(task_mutex_);
-  task_condition_.wait(lock, [this]{ return !TaskRunning(); });
+  task_condition_.wait(lock, [=]{ return !TaskRunning(); });
 }
 
 
-bool Pool::TaskRunning() {
+bool ThreadingPool::TaskRunning() {
   return running_jobs_ > 0 || !queue_.empty();
 }
 
 
-void Pool::WorkingFunction() {
+void ThreadingPool::WorkingFunction() {
   std::unique_lock<std::mutex> lock(queue_mutex_);
   while (true) {
     if (!queue_.empty()) {
@@ -93,7 +93,7 @@ void Pool::WorkingFunction() {
       break;
     } else {
       task_condition_.notify_one();
-      queue_condition_.wait(lock, [this]{ return !this->queue_.empty() || !this->alive_; });
+      queue_condition_.wait(lock, [=]{ return !this->queue_.empty() || !this->alive_; });
     }
   }
 }

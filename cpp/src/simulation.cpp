@@ -230,7 +230,7 @@ void Simulator::RestoreResultRays(int multiScatterIdx) {
 // Trace rays.
 // Start from dir[0] and pt[0].
 void Simulator::TraceRays(const CrystalPtr& crystal) {
-  auto pool = Pool::GetInstance();
+  auto pool = ThreadingPool::GetInstance();
 
   int maxRecursionNum = context_->GetMaxRecursionNum();
   float n = IceRefractiveIndex::n(context_->GetCurrentWavelength());
