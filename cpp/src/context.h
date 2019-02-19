@@ -19,9 +19,6 @@
 
 namespace IceHalo {
 
-class RaySegment;
-class Ray;
-
 class RenderContext;
 class RayTracingContext;
 class CrystalContext;
@@ -53,8 +50,6 @@ public:
 
   std::string GetDataDirectory() const;
 
-  void ApplySettings();
-
   /*! @brief Read a config file and create a SimulationContext
    *
    * @param filename the config file
@@ -68,22 +63,31 @@ public:
 private:
   SimulationContext(const char* filename, rapidjson::Document& d);
 
-  /* Parse simulation settings */
+  void ApplySettings();
+  void SetSunRayDirection(float lon, float lat);
+
   void ParseBasicSettings(rapidjson::Document& d);
   void ParseRaySettings(rapidjson::Document& d);
   void ParseSunSettings(rapidjson::Document& d);
   void ParseDataSettings(rapidjson::Document& d);
   void ParseMultiScatterSettings(rapidjson::Document& d);
+
   void ParseCrystalSettings(const rapidjson::Value& c, int ci);
-  void ParseCrystalType(const rapidjson::Value& c, int ci,
-                        float population,
-                        Math::Distribution axis_dist, float axis_mean, float axis_std,
-                        Math::Distribution roll_dist, float roll_mean, float roll_std);
-  CrystalPtrU ParseCustomCrystal(std::FILE* file);
+  void ParseCrystalAxis(const rapidjson::Value& c, int ci,
+                        Math::Distribution* axis_dist, float* axis_mean, float* axis_std,
+                        Math::Distribution* roll_dist, float* roll_mean, float* roll_std);
+  CrystalPtrU ParseCrystalHexPrism(const rapidjson::Value& c, int ci);
+  CrystalPtrU ParseCrystalHexPyramid(const rapidjson::Value& c, int ci);
+  CrystalPtrU ParseCrystalHexPyramidStackHalf(const rapidjson::Value& c, int ci);
+  CrystalPtrU ParseCrystalCubicPyramid(const rapidjson::Value& c, int ci);
+  CrystalPtrU ParseCrystalIrregularHexPrism(const rapidjson::Value& c, int ci);
+  CrystalPtrU ParseCrystalIrregularHexPyramid(const rapidjson::Value& c, int ci);
+  CrystalPtrU ParseCrystalCustom(const rapidjson::Value& c, int ci);
 
-  void SetSunPosition(float lon, float lat);
+  using CrystalParser = std::function<CrystalPtrU(SimulationContext*, const rapidjson::Value& c, int ci)>;
+  static std::unordered_map<std::string, CrystalParser> crystal_parser_;
 
-  std::vector<CrystalContextPtr> crystal_ctxs_;
+  std::vector<CrystalContextPtr> crystal_ctx_;
 
   uint64_t total_ray_num_;
   int max_recursion_num_;
@@ -103,20 +107,21 @@ private:
 
 
 class CrystalContext {
-friend class SimulationContext;
 public:
   CrystalContext(CrystalPtrU&& g, float population,
                  Math::Distribution axisDist, float axisMean, float axisStd,
                  Math::Distribution rollDist, float rollMean, float rollStd);
 
   CrystalPtr GetCrystal();
-  Math::Distribution GetAxisDist();
-  Math::Distribution GetRollDist();
-  float GetAxisMean();
-  float GetRollMean();
-  float GetAxisStd();
-  float GetRollStd();
-  float GetPopulation();
+  Math::Distribution GetAxisDist() const;
+  Math::Distribution GetRollDist() const;
+  float GetAxisMean() const;
+  float GetRollMean() const;
+  float GetAxisStd() const;
+  float GetRollStd() const;
+
+  float GetPopulation() const;
+  void SetPopulation(float population);
 
 private:
   CrystalPtr crystal_;

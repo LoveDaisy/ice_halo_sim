@@ -32,38 +32,43 @@ CrystalPtr CrystalContext::GetCrystal() {
 }
 
 
-Math::Distribution CrystalContext::GetAxisDist() {
+Math::Distribution CrystalContext::GetAxisDist() const {
   return axis_dist_;
 }
 
 
-Math::Distribution CrystalContext::GetRollDist() {
+Math::Distribution CrystalContext::GetRollDist() const {
   return roll_dist_;
 }
 
 
-float CrystalContext::GetAxisMean() {
+float CrystalContext::GetAxisMean() const {
   return axis_mean_;
 }
 
 
-float CrystalContext::GetRollMean() {
+float CrystalContext::GetRollMean() const {
   return roll_mean_;
 }
 
 
-float CrystalContext::GetAxisStd() {
+float CrystalContext::GetAxisStd() const {
   return axis_std_;
 }
 
 
-float CrystalContext::GetRollStd() {
+float CrystalContext::GetRollStd() const {
   return roll_std_;
 }
 
 
-float CrystalContext::GetPopulation() {
+float CrystalContext::GetPopulation() const {
   return population_;
+}
+
+
+void CrystalContext::SetPopulation(float population) {
+  population_ = population;
 }
 
 
@@ -92,6 +97,8 @@ SimulationContext::SimulationContext(const char* filename, rapidjson::Document& 
     ParseCrystalSettings(c, ci);
     ci++;
   }
+
+  ApplySettings();
 }
 
 
@@ -178,7 +185,7 @@ void SimulationContext::ParseSunSettings(rapidjson::Document& d) {
   } else {
     sunAltitude = static_cast<float>(p->GetDouble());
   }
-  SetSunPosition(90.0f, sunAltitude);
+  SetSunRayDirection(90.0f, sunAltitude);
 
   // Parsing sun diameter
   sun_diameter_ = 0.5f;
@@ -234,6 +241,18 @@ void SimulationContext::ParseMultiScatterSettings(rapidjson::Document& d) {
 }
 
 
+std::unordered_map<std::string, SimulationContext::CrystalParser>
+  SimulationContext::crystal_parser_ = {
+  { "HexCylinder", &SimulationContext::ParseCrystalHexPrism },
+  { "HexPyramid", &SimulationContext::ParseCrystalHexPyramid },
+  { "HexPyramidStackHalf", &SimulationContext::ParseCrystalHexPyramidStackHalf },
+  { "CubicPyramid", &SimulationContext::ParseCrystalCubicPyramid },
+  { "IrregularHexCylinder", &SimulationContext::ParseCrystalIrregularHexPrism },
+  { "IrregularHexPyramid", &SimulationContext::ParseCrystalIrregularHexPyramid },
+  { "Custom", &SimulationContext::ParseCrystalCustom },
+};
+
+
 void SimulationContext::ParseCrystalSettings(const rapidjson::Value& c, int ci) {
   using Math::Distribution;
 
@@ -248,67 +267,10 @@ void SimulationContext::ParseCrystalSettings(const rapidjson::Value& c, int ci) 
     return;
   }
 
-  Distribution axisDist, rollDist;
-  float axisMean, rollMean;
-  float axisStd, rollStd;
-
-  p = Pointer("/axis/type").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recognize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else if (*p == "Gauss") {
-    axisDist = Distribution::GAUSS;
-  } else if (*p == "Uniform") {
-    axisDist = Distribution::UNIFORM;
-  } else {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recognize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  }
-
-  p = Pointer("/roll/type").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else if (*p == "Gauss") {
-    rollDist = Distribution::GAUSS;
-  } else if (*p == "Uniform") {
-    rollDist = Distribution::UNIFORM;
-  } else {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  }
-
-  p = Pointer("/axis/mean").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.mean> cannot recognize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else {
-    axisMean = static_cast<float>(90 - p->GetDouble());
-  }
-
-  p = Pointer("/axis/std").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].axis.std> cannot recognize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else {
-    axisStd = static_cast<float>(p->GetDouble());
-  }
-
-  p = Pointer("/roll/mean").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.mean> cannot recognize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else {
-    rollMean = static_cast<float>(p->GetDouble());
-  }
-
-  p = Pointer("/roll/std").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].roll.std> cannot recognize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else {
-    rollStd = static_cast<float>(p->GetDouble());
-  }
+  Math::Distribution axis_dist, roll_dist;
+  float axis_mean, roll_mean;
+  float axis_std, roll_std;
+  ParseCrystalAxis(c, ci, &axis_dist, &axis_mean, &axis_std, &roll_dist, &roll_mean, &roll_std);
 
   float population = 1.0;
   p = Pointer("/population").Get(c);
@@ -319,211 +281,279 @@ void SimulationContext::ParseCrystalSettings(const rapidjson::Value& c, int ci) 
   }
 
   p = Pointer("/type").Get(c);
+  std::string type(c["type"].GetString());
   if (p == nullptr || !p->IsString()) {
     snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
-  } else {
-    ParseCrystalType(c, ci, population, axisDist, axisMean, axisStd, rollDist, rollMean, rollStd);
   }
-}
-
-
-void SimulationContext::ParseCrystalType(const rapidjson::Value& c, int ci,
-                                         float population,
-                                         Math::Distribution axisDist, float axisMean, float axisStd,
-                                         Math::Distribution rollDist, float rollMean, float rollStd) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msgBuffer[kMsgBufferSize];
-
-  const auto* p = Pointer("/parameter").Get(c);
-  if (c["type"] == "HexCylinder") {
-    if (p == nullptr || !p->IsNumber()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    }
-    auto h = static_cast<float>(p->GetDouble());
-    crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-      Crystal::CreateHexPrism(h), population,
-      axisDist, axisMean, axisStd,
-      rollDist, rollMean, rollStd));
-  } else if (c["type"] == "HexPyramid") {
-    if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else if (p->Size() == 3) {
-      auto h1 = static_cast<float>((*p)[0].GetDouble());
-      auto h2 = static_cast<float>((*p)[1].GetDouble());
-      auto h3 = static_cast<float>((*p)[2].GetDouble());
-      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::CreateHexPyramid(h1, h2, h3), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd));
-    } else if (p->Size() == 5) {
-      int i1 = (*p)[0].GetInt();
-      int i2 = (*p)[1].GetInt();
-      auto h1 = static_cast<float>((*p)[2].GetDouble());
-      auto h2 = static_cast<float>((*p)[3].GetDouble());
-      auto h3 = static_cast<float>((*p)[4].GetDouble());
-      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::CreateHexPyramid(i1, i2, h1, h2, h3), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd));
-    } else if (p->Size() == 7) {
-      int upperIdx1 = (*p)[0].GetInt();
-      int upperIdx2 = (*p)[1].GetInt();
-      int lowerIdx1 = (*p)[2].GetInt();
-      int lowerIdx2 = (*p)[3].GetInt();
-      auto h1 = static_cast<float>((*p)[4].GetDouble());
-      auto h2 = static_cast<float>((*p)[5].GetDouble());
-      auto h3 = static_cast<float>((*p)[6].GetDouble());
-      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::CreateHexPyramid(upperIdx1, upperIdx2, lowerIdx1,
-                                  lowerIdx2, h1, h2, h3), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd));
-    } else {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-      throw std::invalid_argument(msgBuffer);
-    }
-  } else if (c["type"] == "HexPyramidStackHalf") {
-    if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else if (p->Size() == 7) {
-      int upperIdx1 = (*p)[0].GetInt();
-      int upperIdx2 = (*p)[1].GetInt();
-      int lowerIdx1 = (*p)[2].GetInt();
-      int lowerIdx2 = (*p)[3].GetInt();
-      auto h1 = static_cast<float>((*p)[4].GetDouble());
-      auto h2 = static_cast<float>((*p)[5].GetDouble());
-      auto h3 = static_cast<float>((*p)[6].GetDouble());
-      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::CreateHexPyramidStackHalf(upperIdx1, upperIdx2, lowerIdx1,
-                                           lowerIdx2, h1, h2, h3), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd));
-    } else {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-      throw std::invalid_argument(msgBuffer);
-    }
-  } else if (c["type"] == "CubicPyramid") {
-    if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else if (p->Size() == 2) {
-      auto h1 = static_cast<float>((*p)[0].GetDouble());
-      auto h2 = static_cast<float>((*p)[1].GetDouble());
-      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::CreateCubicPyramid(h1, h2), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd));
-    } else {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-      throw std::invalid_argument(msgBuffer);
-    }
-  } else if (c["type"] == "IrregularHexCylinder") {
-    if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else if (p->Size() == 7) {
-      auto d1 = static_cast<float>((*p)[0].GetDouble());
-      auto d2 = static_cast<float>((*p)[1].GetDouble());
-      auto d3 = static_cast<float>((*p)[2].GetDouble());
-      auto d4 = static_cast<float>((*p)[3].GetDouble());
-      auto d5 = static_cast<float>((*p)[4].GetDouble());
-      auto d6 = static_cast<float>((*p)[5].GetDouble());
-      auto h = static_cast<float>((*p)[6].GetDouble());
-
-      float dist[6] = { d1, d2, d3, d4, d5, d6 };
-      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::CreateIrregularHexPrism(dist, h), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd));
-    }
-  } else if (c["type"] == "IrregularHexPyramid") {
-    if (p == nullptr || !p->IsArray()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else if (p->Size() == 13) {
-      auto d1 = static_cast<float>((*p)[0].GetDouble());
-      auto d2 = static_cast<float>((*p)[1].GetDouble());
-      auto d3 = static_cast<float>((*p)[2].GetDouble());
-      auto d4 = static_cast<float>((*p)[3].GetDouble());
-      auto d5 = static_cast<float>((*p)[4].GetDouble());
-      auto d6 = static_cast<float>((*p)[5].GetDouble());
-      int i1 = (*p)[6].GetInt();
-      int i2 = (*p)[7].GetInt();
-      int i3 = (*p)[8].GetInt();
-      int i4 = (*p)[9].GetInt();
-      auto h1 = static_cast<float>((*p)[10].GetDouble());
-      auto h2 = static_cast<float>((*p)[11].GetDouble());
-      auto h3 = static_cast<float>((*p)[12].GetDouble());
-
-      float dist[6] = { d1, d2, d3, d4, d5, d6 };
-      int idx[4] = { i1, i2, i3, i4 };
-      float height[3] = { h1, h2, h3 };
-
-      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        Crystal::CreateIrregularHexPyramid(dist, idx, height), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd));
-    } else {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-      throw std::invalid_argument(msgBuffer);
-    }
-  } else if (c["type"] == "Custom") {
-    if (p == nullptr || !p->IsString()) {
-      snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-      throw std::invalid_argument(msgBuffer);
-    } else {
-      char modelFileNameBuffer[512] = { 0 };
-      auto n = config_file_name_.rfind('/');
-      if (n == std::string::npos) {
-        snprintf(modelFileNameBuffer, kMsgBufferSize, "models/%s", p->GetString());
-      } else {
-        snprintf(modelFileNameBuffer, kMsgBufferSize, "%s/models/%s", config_file_name_.substr(0, n).c_str(), p->GetString());
-      }
-      std::FILE* file = fopen(modelFileNameBuffer, "r");
-      if (!file) {
-        snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].parameter> cannot open model file!", ci);
-        throw std::invalid_argument(msgBuffer);
-      }
-      crystal_ctxs_.emplace_back(std::make_shared<CrystalContext>(
-        ParseCustomCrystal(file), population,
-        axisDist, axisMean, axisStd,
-        rollDist, rollMean, rollStd));
-      fclose(file);
-    }
-  } else {
+  if (crystal_parser_.find(type) == crystal_parser_.end()) {
     snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recognize!", ci);
     throw std::invalid_argument(msgBuffer);
   }
+  crystal_ctx_.emplace_back(std::make_shared<CrystalContext>(
+    crystal_parser_[type](this, c, ci), population,
+    axis_dist, axis_mean, axis_std,
+    roll_dist, roll_mean, roll_std));
 }
 
 
-CrystalPtrU SimulationContext::ParseCustomCrystal(std::FILE* file) {
-  std::vector<Math::Vec3f> vertexes;
-  std::vector<Math::TriangleIdx> faces;
-  float vbuf[3];
-  int fbuf[3];
-  int c;
-  while ((c = std::fgetc(file)) != EOF) {
-    switch (c) {
-      case 'v':
-      case 'V':
-        std::fscanf(file, "%f %f %f", vbuf+0, vbuf+1, vbuf+2);
-        vertexes.emplace_back(vbuf);
-        break;
-      case 'f':
-      case 'F':
-        std::fscanf(file, "%d %d %d", fbuf+0, fbuf+1, fbuf+2);
-        faces.emplace_back(fbuf[0]-1, fbuf[1]-1, fbuf[2]-1);
-        break;
-      default:
-        break;
-    }
+void SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, int ci, IceHalo::Math::Distribution* axis_dist,
+                                         float* axis_mean, float* axis_std, IceHalo::Math::Distribution* roll_dist,
+                                         float* roll_mean, float* roll_std) {
+  using Math::Distribution;
+
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+  const auto* p = Pointer("/axis/type").Get(c);
+  if (p == nullptr || !p->IsString()) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else if (*p == "Gauss") {
+    *axis_dist = Distribution::GAUSS;
+  } else if (*p == "Uniform") {
+    *axis_dist = Distribution::UNIFORM;
+  } else {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
   }
-  return Crystal::CreateCustomCrystal(vertexes, faces);
+
+  p = Pointer("/roll/type").Get(c);
+  if (p == nullptr || !p->IsString()) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else if (*p == "Gauss") {
+    *roll_dist = Distribution::GAUSS;
+  } else if (*p == "Uniform") {
+    *roll_dist = Distribution::UNIFORM;
+  } else {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+
+  p = Pointer("/axis/mean").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.mean> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else {
+    *axis_mean = static_cast<float>(90 - p->GetDouble());
+  }
+
+  p = Pointer("/axis/std").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.std> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else {
+    *axis_std = static_cast<float>(p->GetDouble());
+  }
+
+  p = Pointer("/roll/mean").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.mean> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else {
+    *roll_mean = static_cast<float>(p->GetDouble());
+  }
+
+  p = Pointer("/roll/std").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.std> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else {
+    *roll_std = static_cast<float>(p->GetDouble());
+  }
+}
+
+
+CrystalPtrU SimulationContext::ParseCrystalHexPrism(const rapidjson::Value& c, int ci) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+  const auto* p = Pointer("/parameter").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  auto h = static_cast<float>(p->GetDouble());
+  return Crystal::CreateHexPrism(h);
+}
+
+
+CrystalPtrU SimulationContext::ParseCrystalHexPyramid(const rapidjson::Value& c, int ci) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+  const auto* p = Pointer("/parameter").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else if (p->Size() == 3) {
+    auto h1 = static_cast<float>((*p)[0].GetDouble());
+    auto h2 = static_cast<float>((*p)[1].GetDouble());
+    auto h3 = static_cast<float>((*p)[2].GetDouble());
+    return Crystal::CreateHexPyramid(h1, h2, h3);
+  } else if (p->Size() == 5) {
+    int i1 = (*p)[0].GetInt();
+    int i2 = (*p)[1].GetInt();
+    auto h1 = static_cast<float>((*p)[2].GetDouble());
+    auto h2 = static_cast<float>((*p)[3].GetDouble());
+    auto h3 = static_cast<float>((*p)[4].GetDouble());
+    return Crystal::CreateHexPyramid(i1, i2, h1, h2, h3);
+  } else if (p->Size() == 7) {
+    int upper_idx1 = (*p)[0].GetInt();
+    int upper_idx2 = (*p)[1].GetInt();
+    int lower_idx1 = (*p)[2].GetInt();
+    int lower_idx2 = (*p)[3].GetInt();
+    auto h1 = static_cast<float>((*p)[4].GetDouble());
+    auto h2 = static_cast<float>((*p)[5].GetDouble());
+    auto h3 = static_cast<float>((*p)[6].GetDouble());
+    return Crystal::CreateHexPyramid(upper_idx1, upper_idx2, lower_idx1, lower_idx2, h1, h2, h3);
+  } else {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+}
+
+
+CrystalPtrU SimulationContext::ParseCrystalHexPyramidStackHalf(const rapidjson::Value& c, int ci) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+  const auto* p = Pointer("/parameter").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else if (p->Size() == 7) {
+    int upper_idx1 = (*p)[0].GetInt();
+    int upper_idx2 = (*p)[1].GetInt();
+    int lower_idx1 = (*p)[2].GetInt();
+    int lower_idx2 = (*p)[3].GetInt();
+    auto h1 = static_cast<float>((*p)[4].GetDouble());
+    auto h2 = static_cast<float>((*p)[5].GetDouble());
+    auto h3 = static_cast<float>((*p)[6].GetDouble());
+    return Crystal::CreateHexPyramidStackHalf(upper_idx1, upper_idx2, lower_idx1, lower_idx2, h1, h2, h3);
+  } else {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+}
+
+
+CrystalPtrU SimulationContext::ParseCrystalCubicPyramid(const rapidjson::Value& c, int ci) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+  const auto* p = Pointer("/parameter").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else if (p->Size() == 2) {
+    auto h1 = static_cast<float>((*p)[0].GetDouble());
+    auto h2 = static_cast<float>((*p)[1].GetDouble());
+    return Crystal::CreateCubicPyramid(h1, h2);
+  } else {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+}
+
+
+CrystalPtrU SimulationContext::ParseCrystalIrregularHexPrism(const rapidjson::Value& c, int ci) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+  const auto* p = Pointer("/parameter").Get(c);
+  if (p == nullptr || !p->IsArray() || p->Size() != 7) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else {
+    auto d1 = static_cast<float>((*p)[0].GetDouble());
+    auto d2 = static_cast<float>((*p)[1].GetDouble());
+    auto d3 = static_cast<float>((*p)[2].GetDouble());
+    auto d4 = static_cast<float>((*p)[3].GetDouble());
+    auto d5 = static_cast<float>((*p)[4].GetDouble());
+    auto d6 = static_cast<float>((*p)[5].GetDouble());
+    auto h = static_cast<float>((*p)[6].GetDouble());
+
+    float dist[6] = { d1, d2, d3, d4, d5, d6 };
+    return Crystal::CreateIrregularHexPrism(dist, h);
+  }
+}
+
+
+CrystalPtrU SimulationContext::ParseCrystalIrregularHexPyramid(const rapidjson::Value& c, int ci) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+  const auto* p = Pointer("/parameter").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else if (p->Size() == 13) {
+    auto d1 = static_cast<float>((*p)[0].GetDouble());
+    auto d2 = static_cast<float>((*p)[1].GetDouble());
+    auto d3 = static_cast<float>((*p)[2].GetDouble());
+    auto d4 = static_cast<float>((*p)[3].GetDouble());
+    auto d5 = static_cast<float>((*p)[4].GetDouble());
+    auto d6 = static_cast<float>((*p)[5].GetDouble());
+    int i1 = (*p)[6].GetInt();
+    int i2 = (*p)[7].GetInt();
+    int i3 = (*p)[8].GetInt();
+    int i4 = (*p)[9].GetInt();
+    auto h1 = static_cast<float>((*p)[10].GetDouble());
+    auto h2 = static_cast<float>((*p)[11].GetDouble());
+    auto h3 = static_cast<float>((*p)[12].GetDouble());
+
+    float dist[6] = { d1, d2, d3, d4, d5, d6 };
+    int idx[4] = { i1, i2, i3, i4 };
+    float height[3] = { h1, h2, h3 };
+
+    return Crystal::CreateIrregularHexPyramid(dist, idx, height);
+  } else {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+}
+
+
+CrystalPtrU SimulationContext::ParseCrystalCustom(const rapidjson::Value& c, int ci) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+  const auto* p = Pointer("/parameter").Get(c);
+  if (p == nullptr || !p->IsString()) {
+    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else {
+    auto n = config_file_name_.rfind('/');
+    if (n == std::string::npos) {
+      snprintf(msg_buffer, kMsgBufferSize, "models/%s", p->GetString());
+    } else {
+      snprintf(msg_buffer, kMsgBufferSize, "%s/models/%s", config_file_name_.substr(0, n).c_str(), p->GetString());
+    }
+    std::FILE* file = fopen(msg_buffer, "r");
+    if (!file) {
+      snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot open model file!", ci);
+      throw std::invalid_argument(msg_buffer);
+    }
+
+    std::vector<Math::Vec3f> vertexes;
+    std::vector<Math::TriangleIdx> faces;
+    float v_buf[3];
+    int f_buf[3];
+    int curr_char;
+    while ((curr_char = std::fgetc(file)) != EOF) {
+      switch (curr_char) {
+        case 'v':
+        case 'V':
+          std::fscanf(file, "%f %f %f", v_buf+0, v_buf+1, v_buf+2);
+          vertexes.emplace_back(v_buf);
+          break;
+        case 'f':
+        case 'F':
+          std::fscanf(file, "%d %d %d", f_buf+0, f_buf+1, f_buf+2);
+          faces.emplace_back(f_buf[0]-1, f_buf[1]-1, f_buf[2]-1);
+          break;
+        default:
+          break;
+      }
+    }
+    fclose(file);
+
+    return Crystal::CreateCustomCrystal(vertexes, faces);
+  }
 }
 
 
@@ -539,7 +569,7 @@ int SimulationContext::GetMaxRecursionNum() const {
 
 void SimulationContext::FillActiveCrystal(std::vector<CrystalContextPtr>* crystal_ctxs) const {
   crystal_ctxs->clear();
-  for (const auto& ctx : crystal_ctxs_) {
+  for (const auto& ctx : crystal_ctx_) {
     crystal_ctxs->emplace_back(ctx);
   }
 }
@@ -584,7 +614,7 @@ std::string SimulationContext::GetDataDirectory() const {
 }
 
 
-void SimulationContext::SetSunPosition(float lon, float lat) {
+void SimulationContext::SetSunRayDirection(float lon, float lat) {
   float x = -std::cos(lat * Math::kPi / 180.0f) * std::cos(lon * Math::kPi / 180.0f);
   float y = -std::cos(lat * Math::kPi / 180.0f) * std::sin(lon * Math::kPi / 180.0f);
   float z = -std::sin(lat * Math::kPi / 180.0f);
@@ -598,18 +628,18 @@ void SimulationContext::SetSunPosition(float lon, float lat) {
 void SimulationContext::ApplySettings() {
   if (total_ray_num_ <= 0) return;
 
-  float popWeightSum = 0.0f;
-  for (const auto& c : crystal_ctxs_) {
-    popWeightSum += c->population_;
+  float pop_weight_sum = 0.0f;
+  for (const auto& c : crystal_ctx_) {
+    pop_weight_sum += c->GetPopulation();
   }
-  for (auto& c : crystal_ctxs_) {
-    c->population_ /= popWeightSum;
+  for (auto& c : crystal_ctx_) {
+    c->SetPopulation(c->GetPopulation() / pop_weight_sum);
   }
 }
 
 
 void SimulationContext::PrintCrystalInfo() {
-  for (const auto& c : crystal_ctxs_) {
+  for (const auto& c : crystal_ctx_) {
     auto g = c->GetCrystal();
     printf("--\n");
     for (const auto& v : g->getVertexes()) {

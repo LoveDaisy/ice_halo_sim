@@ -13,7 +13,6 @@ protected:
   void SetUp() override {
     crystal = IceHalo::Crystal::CreateHexPrism(1.2f);
     context = IceHalo::SimulationContext::CreateFromFile(config_file_name.c_str());
-    context->ApplySettings();
   }
 
   IceHalo::CrystalPtr crystal;

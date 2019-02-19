@@ -13,7 +13,6 @@ int main(int argc, char* argv[]) {
 
   auto start = std::chrono::system_clock::now();
   SimulationContextPtr context = SimulationContext::CreateFromFile(argv[1]);
-  context->ApplySettings();
   auto simulator = Simulator(context);
 
   auto t = std::chrono::system_clock::now();
