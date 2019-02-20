@@ -17,14 +17,12 @@ namespace IceHalo {
 
 using rapidjson::Pointer;
 
-CrystalContext::CrystalContext(CrystalPtrU&& g, float population,
-                               Math::Distribution axisDist, float axisMean, float axisStd,
-                               Math::Distribution rollDist, float rollMean, float rollStd)
-    : crystal_(std::move(g)),
-      axis_dist_(axisDist), roll_dist_(rollDist),
-      axis_mean_(axisMean), roll_mean_(rollMean),
-      axis_std_(axisStd), roll_std_(rollStd),
-      population_(population) {}
+RayPathFilter::RayPathFilter() : symmetry_(RayPathFilter::kSymmetryNone), type_(RayPathFilter::kTypeNone) {}
+
+
+CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis,
+                               const RayPathFilter& filter, float population)
+    : crystal_(std::move(g)), axis_(axis), ray_path_filter_(filter), population_(population) {}
 
 
 CrystalPtr CrystalContext::GetCrystal() {
@@ -33,32 +31,32 @@ CrystalPtr CrystalContext::GetCrystal() {
 
 
 Math::Distribution CrystalContext::GetAxisDist() const {
-  return axis_dist_;
+  return axis_.axis_dist;
 }
 
 
 Math::Distribution CrystalContext::GetRollDist() const {
-  return roll_dist_;
+  return axis_.roll_dist;
 }
 
 
 float CrystalContext::GetAxisMean() const {
-  return axis_mean_;
+  return axis_.axis_mean;
 }
 
 
 float CrystalContext::GetRollMean() const {
-  return roll_mean_;
+  return axis_.roll_mean;
 }
 
 
 float CrystalContext::GetAxisStd() const {
-  return axis_std_;
+  return axis_.axis_std;
 }
 
 
 float CrystalContext::GetRollStd() const {
-  return roll_std_;
+  return axis_.roll_std;
 }
 
 
@@ -267,11 +265,6 @@ void SimulationContext::ParseCrystalSettings(const rapidjson::Value& c, int ci) 
     return;
   }
 
-  Math::Distribution axis_dist, roll_dist;
-  float axis_mean, roll_mean;
-  float axis_std, roll_std;
-  ParseCrystalAxis(c, ci, &axis_dist, &axis_mean, &axis_std, &roll_dist, &roll_mean, &roll_std);
-
   float population = 1.0;
   p = Pointer("/population").Get(c);
   if (p == nullptr || !p->IsNumber()) {
@@ -291,27 +284,25 @@ void SimulationContext::ParseCrystalSettings(const rapidjson::Value& c, int ci) 
     throw std::invalid_argument(msgBuffer);
   }
   crystal_ctx_.emplace_back(std::make_shared<CrystalContext>(
-    crystal_parser_[type](this, c, ci), population,
-    axis_dist, axis_mean, axis_std,
-    roll_dist, roll_mean, roll_std));
+    crystal_parser_[type](this, c, ci), ParseCrystalAxis(c, ci), ParseCrystalRayPathFilter(c, ci), population));
 }
 
 
-void SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, int ci, IceHalo::Math::Distribution* axis_dist,
-                                         float* axis_mean, float* axis_std, IceHalo::Math::Distribution* roll_dist,
-                                         float* roll_mean, float* roll_std) {
+AxisDistribution SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, int ci) {
   using Math::Distribution;
 
+  AxisDistribution axis{};
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
+
   const auto* p = Pointer("/axis/type").Get(c);
   if (p == nullptr || !p->IsString()) {
     snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else if (*p == "Gauss") {
-    *axis_dist = Distribution::GAUSS;
+    axis.axis_dist = Distribution::GAUSS;
   } else if (*p == "Uniform") {
-    *axis_dist = Distribution::UNIFORM;
+    axis.axis_dist = Distribution::UNIFORM;
   } else {
     snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
@@ -322,9 +313,9 @@ void SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, int ci, IceH
     snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else if (*p == "Gauss") {
-    *roll_dist = Distribution::GAUSS;
+    axis.roll_dist = Distribution::GAUSS;
   } else if (*p == "Uniform") {
-    *roll_dist = Distribution::UNIFORM;
+    axis.roll_dist = Distribution::UNIFORM;
   } else {
     snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
@@ -335,7 +326,7 @@ void SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, int ci, IceH
     snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.mean> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else {
-    *axis_mean = static_cast<float>(90 - p->GetDouble());
+    axis.axis_mean = static_cast<float>(90 - p->GetDouble());
   }
 
   p = Pointer("/axis/std").Get(c);
@@ -343,7 +334,7 @@ void SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, int ci, IceH
     snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.std> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else {
-    *axis_std = static_cast<float>(p->GetDouble());
+    axis.axis_std = static_cast<float>(p->GetDouble());
   }
 
   p = Pointer("/roll/mean").Get(c);
@@ -351,7 +342,7 @@ void SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, int ci, IceH
     snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.mean> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else {
-    *roll_mean = static_cast<float>(p->GetDouble());
+    axis.roll_mean = static_cast<float>(p->GetDouble());
   }
 
   p = Pointer("/roll/std").Get(c);
@@ -359,8 +350,91 @@ void SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, int ci, IceH
     snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.std> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else {
-    *roll_std = static_cast<float>(p->GetDouble());
+    axis.roll_std = static_cast<float>(p->GetDouble());
   }
+
+  return axis;
+}
+
+
+RayPathFilter SimulationContext::ParseCrystalRayPathFilter(const rapidjson::Value& c, int ci) {
+  RayPathFilter filter{};
+
+  const auto* p = Pointer("/ray_path_filter").Get(c);
+  if (p == nullptr || !p->IsObject()) {
+    fprintf(stderr, "<crystal[%d].ray_path_filter> is not specified. Use default none.\n", ci);
+    return filter;
+  }
+
+  p = Pointer("/ray_path_filter/symmetry").Get(c);
+  if (p == nullptr || !p->IsString()) {
+    fprintf(stderr, "<crystal[%d].ray_path_filter.symmetry> cannot recognize! Use default none.\n", ci);
+  } else {
+    const auto str = p->GetString();
+    for (decltype(p->GetStringLength()) i = 0; i < p->GetStringLength(); i++) {
+      switch (str[i]) {
+        case 'P':
+        case 'p':
+          filter.symmetry_ |= RayPathFilter::kSymmetryPrism;
+          break;
+        case 'B':
+        case 'b':
+          filter.symmetry_ |= RayPathFilter::kSymmetryBasal;
+          break;
+        case 'D':
+        case 'd':
+          filter.symmetry_ |= RayPathFilter::kSymmetryDirection;
+          break;
+        default:
+          fprintf(stderr, "<crystal[%d].ray_path_filter.symmetry> some item cannot be recognized! ignored.\n", ci);
+          break;
+      }
+    }
+  }
+
+  p = Pointer("/ray_path_filter/type").Get(c);
+  if (p == nullptr || !p->IsString()) {
+    fprintf(stderr, "<crystal[%d].ray_path_filter.type> cannot recognize! Use default none.\n", ci);
+  } else {
+    if (*p == "Specific") {
+      filter.type_ = RayPathFilter::kTypeSpecific;
+    } else if (*p == "General") {
+      filter.type_ = RayPathFilter::kTypeGeneral;
+    } else if (*p == "None") {
+      filter.type_ = RayPathFilter::kTypeNone;
+    } else {
+      fprintf(stderr, "<crystal[%d].ray_path_filter.type> cannot recognize! Use default none.\n", ci);
+    }
+  }
+
+  p = Pointer("/ray_path_filter/path").Get(c);
+  if (p == nullptr || !p->IsArray() || !((*p)[0].IsInt())) {
+    fprintf(stderr, "<crystal[%d].ray_path_filter.path> cannot recognize! Use default [].\n", ci);
+  } else {
+    for (const auto& fn : p->GetArray()) {
+      filter.ray_path_.emplace_back(fn.GetInt());
+    }
+  }
+
+  p = Pointer("/ray_path_filter/entry").Get(c);
+  if (p == nullptr || !p->IsArray() || !((*p)[0].IsInt())) {
+    fprintf(stderr, "<crystal[%d].ray_path_filter.entry> cannot recognize! Use default [].\n", ci);
+  } else {
+    for (const auto& fn : p->GetArray()) {
+      filter.entry_.emplace_back(fn.GetInt());
+    }
+  }
+
+  p = Pointer("/ray_path_filter/exit").Get(c);
+  if (p == nullptr || !p->IsArray() || !((*p)[0].IsInt())) {
+    fprintf(stderr, "<crystal[%d].ray_path_filter.exit> cannot recognize! Use default [].\n", ci);
+  } else {
+    for (const auto& fn : p->GetArray()) {
+      filter.exit_.emplace_back(fn.GetInt());
+    }
+  }
+
+  return filter;
 }
 
 

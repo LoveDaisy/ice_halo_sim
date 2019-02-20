@@ -5,6 +5,7 @@
 #include "crystal.h"
 #include "render.h"
 #include "files.h"
+#include "optics.h"
 
 #include "rapidjson/document.h"
 
@@ -19,15 +20,41 @@
 
 namespace IceHalo {
 
-class RenderContext;
-class RayTracingContext;
+class RaySegment;
 class CrystalContext;
-class SimulationContext;
 
-using RayTracingContextPtr = std::shared_ptr<RayTracingContext>;
-using CrystalContextPtr = std::shared_ptr<CrystalContext>;
-using SimulationContextPtr = std::shared_ptr<SimulationContext>;
-using RenderContextPtr = std::shared_ptr<RenderContext>;
+struct AxisDistribution {
+  Math::Distribution axis_dist;
+  Math::Distribution roll_dist;
+  float axis_mean;
+  float roll_mean;
+  float axis_std;
+  float roll_std;
+};
+
+
+struct RayPathFilter {
+  enum Symmetry : uint8_t {
+    kSymmetryNone = 0u,
+    kSymmetryPrism = 1u,
+    kSymmetryBasal = 2u,
+    kSymmetryDirection = 4u,
+  };
+
+  enum Type : uint8_t {
+    kTypeNone,
+    kTypeSpecific,
+    kTypeGeneral,
+  };
+
+  RayPathFilter();
+
+  uint8_t symmetry_;
+  std::vector<int> ray_path_;
+  std::vector<int> entry_;
+  std::vector<int> exit_;
+  Type type_;
+};
 
 
 class SimulationContext {
@@ -38,7 +65,7 @@ public:
   int GetMultiScatterTimes() const;
   float GetMultiScatterProb() const;
 
-  void FillActiveCrystal(std::vector<CrystalContextPtr>* crystal_ctxs) const;
+  void FillActiveCrystal(std::vector<std::shared_ptr<CrystalContext> >* crystal_ctxs) const;
   void PrintCrystalInfo();
 
   void SetCurrentWavelength(float wavelength);
@@ -73,9 +100,8 @@ private:
   void ParseMultiScatterSettings(rapidjson::Document& d);
 
   void ParseCrystalSettings(const rapidjson::Value& c, int ci);
-  void ParseCrystalAxis(const rapidjson::Value& c, int ci,
-                        Math::Distribution* axis_dist, float* axis_mean, float* axis_std,
-                        Math::Distribution* roll_dist, float* roll_mean, float* roll_std);
+  AxisDistribution ParseCrystalAxis(const rapidjson::Value& c, int ci);
+  RayPathFilter ParseCrystalRayPathFilter(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPrism(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPyramid(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPyramidStackHalf(const rapidjson::Value& c, int ci);
@@ -87,7 +113,7 @@ private:
   using CrystalParser = std::function<CrystalPtrU(SimulationContext*, const rapidjson::Value& c, int ci)>;
   static std::unordered_map<std::string, CrystalParser> crystal_parser_;
 
-  std::vector<CrystalContextPtr> crystal_ctx_;
+  std::vector<std::shared_ptr<CrystalContext> > crystal_ctx_;
 
   uint64_t total_ray_num_;
   int max_recursion_num_;
@@ -108,9 +134,7 @@ private:
 
 class CrystalContext {
 public:
-  CrystalContext(CrystalPtrU&& g, float population,
-                 Math::Distribution axisDist, float axisMean, float axisStd,
-                 Math::Distribution rollDist, float rollMean, float rollStd);
+  CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis, const RayPathFilter& filter, float population);
 
   CrystalPtr GetCrystal();
   Math::Distribution GetAxisDist() const;
@@ -125,12 +149,8 @@ public:
 
 private:
   CrystalPtr crystal_;
-  Math::Distribution axis_dist_;
-  Math::Distribution roll_dist_;
-  float axis_mean_;
-  float roll_mean_;
-  float axis_std_;
-  float roll_std_;
+  const AxisDistribution axis_;
+  const RayPathFilter ray_path_filter_;
   float population_;
 };
 
@@ -183,6 +203,10 @@ private:
 
   ProjectionType projection_type_;
 };
+
+using CrystalContextPtr = std::shared_ptr<CrystalContext>;
+using SimulationContextPtr = std::shared_ptr<SimulationContext>;
+using RenderContextPtr = std::shared_ptr<RenderContext>;
 
 }  // namespace IceHalo
 
