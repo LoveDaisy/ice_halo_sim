@@ -1047,6 +1047,15 @@ void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
     intensity_factor_ = f;
   }
 
+  p = Pointer("/ray/number").Get(d);
+  if (p == nullptr) {
+    fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default 10000!\n");
+  } else if (!p->IsUint()) {
+    fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default 10000!\n");
+  } else {
+    total_w_ = p->GetUint();
+  }
+
   p = Pointer("/render/offset").Get(d);
   if (p == nullptr) {
     fprintf(stderr, "\nWARNING! Config missing <render.offset>, using default [0, 0]!\n");
@@ -1173,7 +1182,7 @@ void RenderContext::CopySpectrumData(float* wavelengthData, float* spectrumData)
     k++;
   }
   for (uint64_t i = 0; i < img_wid_ * img_hei_ * this->spectrum_data_.size(); i++) {
-    spectrumData[i] *= 8 * 4e3 / total_w_ * intensity_factor_;
+    spectrumData[i] *= 5e3 / total_w_ * intensity_factor_;
   }
 }
 
@@ -1220,7 +1229,6 @@ int RenderContext::LoadDataFromFile(File& file) {
   for (decltype(readCount) i = 0; i < totalCount; i++) {
     std::memcpy(tmpDir + i * 3, readBuffer + i * 4, 3 * sizeof(float));
     tmpW[i] = readBuffer[i * 4 + 3];
-    total_w_ += tmpW[i];
   }
   delete[] readBuffer;
 
