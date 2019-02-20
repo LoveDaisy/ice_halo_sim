@@ -139,8 +139,7 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx, int multi_scatter_id
 
   auto* face_area = new float[total_faces];
   auto* face_norm = new float[total_faces * 3];
-  auto* prob = new float[total_faces * active_ray_num_];
-  auto* rays = new Ray*[active_ray_num_];
+  auto* prob = new float[total_faces];
   auto* face_point = crystal->GetFaceVertex();
 
   crystal->CopyFaceAreaData(face_area);
@@ -151,50 +150,36 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx, int multi_scatter_id
   auto ray_pool = RaySegmentPool::GetInstance();
   auto rng = Math::RandomNumberGenerator::GetInstance();
   auto sampler = Math::RandomSampler::GetInstance();
-  auto threading_pool = ThreadingPool::GetInstance();
 
-  decltype(active_ray_num_) step = std::max(active_ray_num_ / 100, static_cast<decltype(active_ray_num_)>(10));
-  for (decltype(active_ray_num_) i = 0; i < active_ray_num_; i += step) {
-    threading_pool->AddJob([=]{
-      float axis_rot[3];
-      decltype(i) num = std::min(step, active_ray_num_ - i);
-
-      for (decltype(i) j = i; j < i + num; j++) {
-        sampler->SampleSphericalPointsSph(ctx->GetAxisDist(), ctx->GetAxisMean(), ctx->GetAxisStd(), axis_rot);
-        axis_rot[2] = rng->Get(ctx->GetRollDist(), ctx->GetRollMean(), ctx->GetRollStd()) * Math::kDegreeToRad;
-        Math::RotateZ(axis_rot, buffer_.dir[1] + j * 3, buffer_.dir[0] + j * 3);
-
-        float sum = 0;
-        for (int k = 0; k < total_faces; k++) {
-          prob[j * total_faces + k] = std::max(-Math::Dot3(face_norm + k * 3, buffer_.dir[0] + j * 3) * face_area[k], 0.0f);
-          sum += prob[j * total_faces + k];
-        }
-        for (int k = 0; k < total_faces; k++) {
-          prob[j * total_faces + k] /= sum;
-        }
-
-        buffer_.face_id[0][j] = sampler->SampleInt(prob + j * total_faces, total_faces);
-        sampler->SampleTriangularPoints(face_point + buffer_.face_id[0][j] * 9, buffer_.pt[0] + j * 3);
-
-        buffer_.w[0][j] = 1.0f;
-
-        auto r = ray_pool->GetRaySegment(buffer_.pt[0] + j * 3, buffer_.dir[0] + j * 3, buffer_.w[0][j],
-                                         buffer_.face_id[0][j]);
-        buffer_.ray_seg[0][j] = r;
-        rays[j] = new Ray(r, ctx, axis_rot);
-        r->root_ = rays[j];
-      }
-    });
-  }
-  threading_pool->WaitFinish();
+  float axis_rot[3];
   for (decltype(active_ray_num_) i = 0; i < active_ray_num_; i++) {
-    rays_[multi_scatter_idx].emplace_back(rays[i]);
+    InitMainAxis(ctx, axis_rot);
+    Math::RotateZ(axis_rot, buffer_.dir[1] + i * 3, buffer_.dir[0] + i * 3);
+
+    float sum = 0;
+    for (int k = 0; k < total_faces; k++) {
+      prob[k] = std::max(-Math::Dot3(face_norm + k * 3, buffer_.dir[0] + i * 3) * face_area[k], 0.0f);
+      sum += prob[k];
+    }
+    for (int k = 0; k < total_faces; k++) {
+      prob[k] /= sum;
+    }
+
+    buffer_.face_id[0][i] = sampler->SampleInt(prob, total_faces);
+    sampler->SampleTriangularPoints(face_point + buffer_.face_id[0][i] * 9, buffer_.pt[0] + i * 3);
+
+    buffer_.w[0][i] = 1.0f;
+
+    auto r = ray_pool->GetRaySegment(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i],
+                                     buffer_.face_id[0][i]);
+    buffer_.ray_seg[0][i] = r;
+    r->root_ = new Ray(r, ctx, axis_rot);
+    rays_[multi_scatter_idx].emplace_back(r->root_);
   }
 
   delete[] face_area;
   delete[] face_norm;
   delete[] prob;
-  delete[] rays;
 }
 
 

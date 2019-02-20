@@ -44,6 +44,7 @@ public:
 private:
   void InitSunRays();
   void InitEntryRays(const CrystalContextPtr& ctx, int multi_scatter_idx);
+  void InitMainAxis(const CrystalContextPtr& ctx, float* axis);
   void TraceRays(const CrystalPtr& crystal);
   void RestoreResultRays(int multi_scatter_idx);
   void StoreRaySegments();
