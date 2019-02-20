@@ -36,8 +36,8 @@ void RaySegment::ResetWith(const float* pt, const float* dir, float w, int face_
 }
 
 
-Ray::Ray(RaySegment* seg, const float main_axis_rot[3])
-    : first_ray_segment_(seg), main_axis_rot_(main_axis_rot) {}
+Ray::Ray(RaySegment* seg, const CrystalContextPtr& crystal_ctx, const float main_axis_rot[3])
+    : first_ray_segment_(seg), crystal_ctx_(crystal_ctx), main_axis_rot_(main_axis_rot) {}
 
 
 void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,

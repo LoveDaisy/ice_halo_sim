@@ -181,7 +181,7 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx, int multi_scatter_id
         auto r = ray_pool->GetRaySegment(buffer_.pt[0] + j * 3, buffer_.dir[0] + j * 3, buffer_.w[0][j],
                                          buffer_.face_id[0][j]);
         buffer_.ray_seg[0][j] = r;
-        rays[j] = new Ray(r, axis_rot);
+        rays[j] = new Ray(r, ctx, axis_rot);
         r->root_ = rays[j];
       }
     });
