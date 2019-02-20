@@ -34,6 +34,7 @@ public:
   const float* GetFaceVertex() const;
   const float* GetFaceBaseVector() const;
   const float* GetFaceNorm() const;
+  int GetFaceNumberPeriod() const;
 
   void CopyFaceAreaData(float* data) const;
   void CopyNormData(float* data) const;
@@ -142,7 +143,7 @@ public:
                                                       const std::vector<int>& face_number_map);
 
 protected:
-  void InitNorms();
+  void InitNorm();
   void InitFaceNumber();
   void InitFaceNumberHex();
   void InitFaceNumberCubic();
@@ -156,6 +157,7 @@ protected:
   std::vector<Math::TriangleIdx> faces_;
   std::vector<int> face_number_map_;
   CrystalType type_;
+  int face_number_period_;
 
   float* face_bases_;
   float* face_vertexes_;

@@ -9,10 +9,24 @@ namespace IceHalo {
 Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes,
                  const std::vector<Math::TriangleIdx>& faces,
                  CrystalType type)
-    : vertexes_(vertexes), faces_(faces), type_(type),
+    : vertexes_(vertexes), faces_(faces), type_(type), face_number_period_(-1),
       face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr) {
-  InitNorms();
+  InitNorm();
   InitFaceNumber();
+  switch (type_) {
+    case CrystalType::PRISM:
+    case CrystalType::PYRAMID:
+    case CrystalType::STACK_PYRAMID:
+      face_number_period_ = 6;
+      break;
+    case CrystalType::CUBIC_PYRAMID:
+      face_number_period_ = 4;
+      break;
+    case CrystalType::CUSTOM:
+    case CrystalType::UNKNOWN:
+    default:
+      break;
+  }
 }
 
 
@@ -20,9 +34,9 @@ Crystal::Crystal(const std::vector<IceHalo::Math::Vec3f>& vertexes,
                  const std::vector<IceHalo::Math::TriangleIdx>& faces,
                  const std::vector<int>& faceId,
                  CrystalType type)
-    : vertexes_(vertexes), faces_(faces), face_number_map_(faceId), type_(type),
+    : vertexes_(vertexes), faces_(faces), face_number_map_(faceId), type_(type), face_number_period_(-1),
       face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr) {
-  InitNorms();
+  InitNorm();
 }
 
 
@@ -65,6 +79,11 @@ const float* Crystal::GetFaceNorm() const {
 }
 
 
+int Crystal::GetFaceNumberPeriod() const {
+  return face_number_period_;
+}
+
+
 int Crystal::TotalVertexes() const {
   return static_cast<int>(vertexes_.size());
 }
@@ -104,7 +123,7 @@ void Crystal::CopyNormData(float* data) const {
   }
 }
 
-void Crystal::InitNorms() {
+void Crystal::InitNorm() {
   using Math::Vec3f;
 
   auto face_num = faces_.size();
