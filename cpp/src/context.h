@@ -147,7 +147,13 @@ public:
   float GetPopulation() const;
   void SetPopulation(float population);
 
+  bool FilterRay(RaySegment* last_r);
+
 private:
+  bool FilterRayGeneral(RaySegment* last_r);
+  bool FilterRaySpecific(RaySegment* last_r);
+  bool FilterRayDirectionalSymm(RaySegment* last_r, bool original);
+
   CrystalPtr crystal_;
   const AxisDistribution axis_;
   const RayPathFilter ray_path_filter_;

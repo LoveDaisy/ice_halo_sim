@@ -70,6 +70,143 @@ void CrystalContext::SetPopulation(float population) {
 }
 
 
+bool CrystalContext::FilterRay(RaySegment* last_r) {
+  switch (ray_path_filter_.type_) {
+    case RayPathFilter::kTypeNone:
+      return true;
+    case RayPathFilter::kTypeGeneral:
+      return FilterRayGeneral(last_r);
+    case RayPathFilter::kTypeSpecific:
+      return FilterRaySpecific(last_r);
+    default:
+      return false;
+  }
+}
+
+
+bool CrystalContext::FilterRaySpecific(IceHalo::RaySegment* last_r) {
+  if (ray_path_filter_.ray_path_.empty()) {
+    return true;
+  }
+
+  int curr_fn0 = crystal_->FaceNumber(last_r->root_->first_ray_segment_->face_id_);
+  if (curr_fn0 < 0) {
+    // Do not have a face number mapping.
+    return true;
+  }
+
+  return FilterRayDirectionalSymm(last_r, true) || FilterRayDirectionalSymm(last_r, false);
+}
+
+
+bool CrystalContext::FilterRayDirectionalSymm(RaySegment* last_r, bool original) {
+  int period = crystal_->GetFaceNumberPeriod();
+  if (period <= 0) {
+    return true;
+  }
+
+  int prism_diff = -1;
+  int basal_diff = -1;
+  auto p = last_r;
+  for (auto rit = ray_path_filter_.ray_path_.rbegin();
+       rit != ray_path_filter_.ray_path_.rend();
+       p = p->prev_, ++rit) {
+    if (!p) {
+      // Ray path shorter than filter path
+      return false;
+    }
+    int filter_fn = *rit;
+    int curr_fn = crystal_->FaceNumber(p->face_id_);
+    if (!original && curr_fn != 1 && curr_fn != 2) {
+      curr_fn = 5 + period - curr_fn;
+    }
+    bool filter_basal = filter_fn == 1 || filter_fn == 2;
+    bool curr_basal = curr_fn == 1 || curr_fn == 2;
+    if (filter_basal != curr_basal) {
+      return false;
+    }
+    if (!filter_basal) {
+      prism_diff = (curr_fn - filter_fn + period) % period;
+    } else {
+      basal_diff = std::abs(curr_fn - filter_fn);
+    }
+  }
+  if (!p || p->prev_) {
+    // Ray path shorter or longer than filter path.
+    return false;
+  }
+
+  p = last_r;
+  for (auto rit = ray_path_filter_.ray_path_.rbegin();
+       rit != ray_path_filter_.ray_path_.rend();
+       p = p->prev_, ++rit) {
+    int filter_fn = *rit;
+    int curr_fn = crystal_->FaceNumber(p->face_id_);
+    if (!original && curr_fn != 1 && curr_fn != 2) {
+      curr_fn = 5 + period - curr_fn;
+    }
+
+    bool filter_basal = filter_fn == 1 || filter_fn == 2;
+    int curr_fn_p = curr_fn % 10;
+    int curr_fn_s = curr_fn / 10;
+    bool curr_basal = curr_fn == 1 || curr_fn == 2;
+
+    if (prism_diff > 0 && ray_path_filter_.symmetry_ & RayPathFilter::kSymmetryPrism && !curr_basal && !filter_basal) {
+      curr_fn_p = (curr_fn_p - prism_diff + period) % period;
+      curr_fn = curr_fn_p + curr_fn_s * 10;
+    }
+    if (curr_fn == filter_fn) {
+      // Exactly match. Continue to check next.
+      continue;
+    }
+
+    if (ray_path_filter_.symmetry_ & RayPathFilter::kSymmetryBasal) {
+      // B symmetry is checked;
+      if (basal_diff > 0 && filter_basal && curr_basal) {
+        continue;
+      }
+    }
+    return false;
+  }
+
+  return p && p == p->root_->first_ray_segment_;
+}
+
+
+bool CrystalContext::FilterRayGeneral(RaySegment* last_r) {
+  if (ray_path_filter_.entry_.empty() && ray_path_filter_.exit_.empty()) {
+    return true;
+  }
+
+  int fn0 = crystal_->FaceNumber(last_r->root_->first_ray_segment_->face_id_);
+  if (fn0 < 0 || crystal_->GetFaceNumberPeriod() < 0) {
+    // Do not have a face number mapping.
+    return true;
+  }
+
+  bool matched = false;
+  for (const auto& fn : ray_path_filter_.entry_) {
+    if (fn0 == fn) {
+      matched = true;
+      break;
+    }
+  }
+  if (!matched) {
+    return false;
+  }
+
+  fn0 = crystal_->FaceNumber(last_r->face_id_);
+  matched = false;
+  for (const auto& fn : ray_path_filter_.exit_) {
+    if (fn0 == fn) {
+      matched = true;
+      break;
+    }
+  }
+  return matched;
+}
+
+
 SimulationContext::SimulationContext(const char* filename, rapidjson::Document& d)
     : total_ray_num_(0), max_recursion_num_(9),
       multi_scatter_times_(1), multi_scatter_prob_(1.0f),

@@ -344,6 +344,36 @@ void Simulator::SaveFinalDirections(const char* filename) {
 }
 
 
+void Simulator::SaveFinalDirectionsWithFilter(const char* filename) {
+  File file(context_->GetDataDirectory().c_str(), filename);
+  if (!file.Open(OpenMode::kWrite | OpenMode::kBinary)) return;
+
+  file.Write(context_->GetCurrentWavelength());
+
+  auto ray_num = final_ray_segments_.size();
+  size_t idx = 0;
+  auto* data = new float[ray_num * 4];       // dx, dy, dz, w
+
+  float* curr_data = data;
+  for (const auto& r : final_ray_segments_) {
+    assert(r->root_);
+    if (!r->root_->crystal_ctx_->FilterRay(r)) {
+      continue;
+    }
+
+    const auto axis_rot = r->root_->main_axis_rot_.val();
+    Math::RotateZBack(axis_rot, r->dir_.val(), curr_data);
+    curr_data[3] = r->w_;
+    curr_data += 4;
+    idx++;
+  }
+  file.Write(data, idx * 4);
+  file.Close();
+
+  delete[] data;
+}
+
+
 void Simulator::PrintRayInfo() {
   std::stack<RaySegment*> s;
   for (const auto& rs : rays_) {
