@@ -198,6 +198,27 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx, int multi_scatter_id
 }
 
 
+// Init crystal main axis.
+// Random sample points on a sphere with given parameters.
+void Simulator::InitMainAxis(const CrystalContextPtr& ctx, float* axis) {
+  auto rng = Math::RandomNumberGenerator::GetInstance();
+  auto sampler = Math::RandomSampler::GetInstance();
+
+  if (ctx->GetAxisDist() == Math::Distribution::UNIFORM) {
+    // Random sample on full sphere, ignore other parameters.
+    sampler->SampleSphericalPointsSph(axis);
+  } else {
+    sampler->SampleSphericalPointsSph(ctx->GetAxisDist(), ctx->GetAxisMean(), ctx->GetAxisStd(), axis);
+  }
+  if (ctx->GetRollDist() == Math::Distribution::UNIFORM) {
+    // Random roll, ignore other parameters.
+    axis[2] = rng->GetUniform() * 2 * Math::kPi;
+  } else {
+    axis[2] = rng->Get(ctx->GetRollDist(), ctx->GetRollMean(), ctx->GetRollStd()) * Math::kDegreeToRad;
+  }
+}
+
+
 // Restore and shuffle resulted rays, and fill into dir[0].
 void Simulator::RestoreResultRays(int multi_scatter_idx) {
   final_ray_segments_.clear();
@@ -321,30 +342,6 @@ void Simulator::RefreshBuffer() {
 
 
 void Simulator::SaveFinalDirections(const char* filename) {
-  File file(context_->GetDataDirectory().c_str(), filename);
-  if (!file.Open(OpenMode::kWrite | OpenMode::kBinary)) return;
-
-  file.Write(context_->GetCurrentWavelength());
-
-  auto ray_num = final_ray_segments_.size();
-  auto* data = new float[ray_num * 4];       // dx, dy, dz, w
-
-  float* curr_data = data;
-  for (const auto& r : final_ray_segments_) {
-    assert(r->root_);
-    const auto axis_rot = r->root_->main_axis_rot_.val();
-    Math::RotateZBack(axis_rot, r->dir_.val(), curr_data);
-    curr_data[3] = r->w_;
-    curr_data += 4;
-  }
-  file.Write(data, ray_num * 4);
-  file.Close();
-
-  delete[] data;
-}
-
-
-void Simulator::SaveFinalDirectionsWithFilter(const char* filename) {
   File file(context_->GetDataDirectory().c_str(), filename);
   if (!file.Open(OpenMode::kWrite | OpenMode::kBinary)) return;
 

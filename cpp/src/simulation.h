@@ -38,7 +38,6 @@ public:
 
   void Start();
   void SaveFinalDirections(const char* filename);
-  void SaveFinalDirectionsWithFilter(const char* filename);
   void SaveAllRays(const char* filename);
   void PrintRayInfo();    // For debug
 

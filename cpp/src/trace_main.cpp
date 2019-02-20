@@ -33,8 +33,7 @@ int main(int argc, char* argv[]) {
 
     t0 = std::chrono::system_clock::now();
     std::sprintf(filename, "directions_%.1f_%lli.bin", wl, t0.time_since_epoch().count());
-    // simulator.SaveFinalDirections(filename);
-    simulator.SaveFinalDirectionsWithFilter(filename);
+    simulator.SaveFinalDirections(filename);
 
     t1 = std::chrono::system_clock::now();
     diff = t1 - t0;
