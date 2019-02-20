@@ -532,7 +532,7 @@ RandomSamplerPtr RandomSampler::instance_ = nullptr;
 void RandomSampler::SampleSphericalPointsCart(float* data, size_t num) {
   auto rng = RandomNumberGenerator::GetInstance();
   for (decltype(num) i = 0; i < num; i++) {
-    float u = rng->GetUniform();
+    float u = rng->GetUniform() * 2 - 1;
     float q = rng->GetUniform() * 2 * Math::kPi;
 
     float r = std::sqrt(1.0f - u * u);
@@ -591,6 +591,18 @@ void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float
   Math::RotateZBack(rot, tmp_dir, data, num);
 
   delete[] tmp_dir;
+}
+
+
+void RandomSampler::SampleSphericalPointsSph(float* data, size_t num) {
+  auto rng = RandomNumberGenerator::GetInstance();
+  for (decltype(num) i = 0; i < num; i++) {
+    float u = rng->GetUniform() * 2 - 1;
+    float lambda = rng->GetUniform() * 2 * Math::kPi;
+
+    data[i * 3 + 0] = std::asin(u);
+    data[i * 3 + 1] = lambda;
+  }
 }
 
 

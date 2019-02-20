@@ -178,12 +178,19 @@ public:
    */
   void SampleSphericalPointsCart(const float* dir, float std, float* data, size_t num = 1);
 
+  /*! @brief Generate points distributed uniformly on sphere, in spherical form, (lon, lat).
+   *
+   * @param data output data, (lon, lat), in rad
+   * @param num
+   */
+  void SampleSphericalPointsSph(float* data, size_t num = 1);
+
   /*! @brief Generate points distributed on sphere surface up to latitude, in spherical form, (lon, lat).
    *
    * @param dist distribution type, uniform or Gaussian.
    * @param lat latitude.
    * @param std standard deviation (for Gaussian) or half range (for uniform), in degree.
-   * @param data output data, (lon, lat)
+   * @param data output data, (lon, lat), in rad
    * @param num number of points.
    */
   void SampleSphericalPointsSph(Distribution dist, float lat, float std, float* data, size_t num = 1);
