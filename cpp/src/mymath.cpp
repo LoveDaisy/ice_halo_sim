@@ -600,8 +600,8 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num) {
     float u = rng->GetUniform() * 2 - 1;
     float lambda = rng->GetUniform() * 2 * Math::kPi;
 
-    data[i * 3 + 0] = std::asin(u);
-    data[i * 3 + 1] = lambda;
+    data[i * 3 + 0] = lambda;
+    data[i * 3 + 1] = std::asin(u);
   }
 }
 
