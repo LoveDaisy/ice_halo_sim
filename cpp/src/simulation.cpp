@@ -100,7 +100,9 @@ void Simulator::Start() {
 
   for (int i = 0; i < multi_scatter_times; i++) {
     rays_.emplace_back();
-
+    rays_.back().reserve(total_ray_num_);
+    final_ray_segments_.emplace_back();
+    final_ray_segments_.reserve(total_ray_num_ * 2);
     for (const auto& ctx : active_crystal_ctxs_) {
       active_ray_num_ = static_cast<size_t>(ctx->GetPopulation() * total_ray_num_);
       if (buffer_size_ < active_ray_num_ * kBufferSizeFactor) {
@@ -110,11 +112,11 @@ void Simulator::Start() {
       if (i == 0) {
         InitSunRays();
       }
-      InitEntryRays(ctx, i);   // total_ray_num_ may be updated
+      InitEntryRays(ctx);
       TraceRays(ctx->GetCrystal());
     }
     if (i < multi_scatter_times - 1) {
-      RestoreResultRays(i);    // total_ray_num_ is updated.
+      RestoreResultRays();    // total_ray_num_ is updated.
     }
   }
 }
@@ -127,13 +129,16 @@ void Simulator::InitSunRays() {
   const float* sun_ray_dir = context_->GetSunRayDir();
   auto sampler = Math::RandomSampler::GetInstance();
   sampler->SampleSphericalPointsCart(sun_ray_dir, sun_r, buffer_.dir[1], active_ray_num_);
+  for (decltype(active_ray_num_) i = 0; i < active_ray_num_; i++) {
+    buffer_.w[1][i] = 1.0f;
+  }
 }
 
 
 // Init entry rays into a crystal. Fill pt[0], face_id[0], w[0] and ray_seg[0].
 // Rotate entry rays into crystal frame
 // Add RayPtr and main axis rotation
-void Simulator::InitEntryRays(const CrystalContextPtr& ctx, int multi_scatter_idx) {
+void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
   auto crystal = ctx->GetCrystal();
   auto total_faces = crystal->TotalFaces();
 
@@ -144,8 +149,6 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx, int multi_scatter_id
 
   crystal->CopyFaceAreaData(face_area);
   crystal->CopyNormData(face_norm);
-
-  rays_[multi_scatter_idx].reserve(active_ray_num_);
 
   auto ray_pool = RaySegmentPool::GetInstance();
   auto rng = Math::RandomNumberGenerator::GetInstance();
@@ -168,13 +171,13 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx, int multi_scatter_id
     buffer_.face_id[0][i] = sampler->SampleInt(prob, total_faces);
     sampler->SampleTriangularPoints(face_point + buffer_.face_id[0][i] * 9, buffer_.pt[0] + i * 3);
 
-    buffer_.w[0][i] = 1.0f;
+    buffer_.w[0][i] = buffer_.w[1][i];
 
     auto r = ray_pool->GetRaySegment(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i],
                                      buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
     r->root_ = new Ray(r, ctx, axis_rot);
-    rays_[multi_scatter_idx].emplace_back(r->root_);
+    rays_.back().emplace_back(r->root_);
   }
 
   delete[] face_area;
@@ -205,33 +208,14 @@ void Simulator::InitMainAxis(const CrystalContextPtr& ctx, float* axis) {
 
 
 // Restore and shuffle resulted rays, and fill into dir[0].
-void Simulator::RestoreResultRays(int multi_scatter_idx) {
-  final_ray_segments_.clear();
-
+void Simulator::RestoreResultRays() {
   auto rng = Math::RandomNumberGenerator::GetInstance();
-  std::stack<RaySegment*> s;
   size_t idx = 0;
-  for (auto& r : rays_[multi_scatter_idx]) {
-    s.push(r->first_ray_segment_);
-    while (!s.empty()) {
-      auto tmp_r = s.top();
-      s.pop();
-
-      if (tmp_r->is_finished_ && tmp_r->w_ > SimulationContext::kScatMinW &&
-          rng->GetUniform() < context_->GetMultiScatterProb()) {
-        assert(tmp_r->root_);
-        const auto axis_rot = tmp_r->root_->main_axis_rot_.val();
-        Math::RotateZBack(axis_rot, tmp_r->dir_.val(), buffer_.dir[0] + idx * 3);
-        idx++;
-      } else {
-        if (tmp_r->next_reflect_) {
-          s.push(tmp_r->next_reflect_);
-        }
-        if (tmp_r->next_refract_) {
-          s.push(tmp_r->next_refract_);
-        }
-      }
-    }
+  for (const auto& r : final_ray_segments_.back()) {
+    const auto axis_rot = r->root_->main_axis_rot_.val();
+    Math::RotateZBack(axis_rot, r->dir_.val(), buffer_.dir[1] + idx * 3);
+    buffer_.w[1][idx] = r->w_;
+    idx++;
   }
   total_ray_num_ = idx;
 
@@ -240,9 +224,9 @@ void Simulator::RestoreResultRays(int multi_scatter_idx) {
   float tmp_dir[3];
   for (decltype(total_ray_num_) i = 0; i < total_ray_num_; i++) {
     int tmp_idx = sampler->SampleInt(static_cast<int>(total_ray_num_ - i));
-    std::memcpy(tmp_dir, buffer_.dir[0] + (i + tmp_idx) * 3, sizeof(float) * 3);
-    std::memcpy(buffer_.dir[0] + i * 3, tmp_dir, sizeof(float) * 3);
-    std::memcpy(buffer_.dir[0] + (i + tmp_idx) * 3, buffer_.dir[0] + i * 3, sizeof(float) * 3);
+    std::memcpy(tmp_dir, buffer_.dir[1] + (i + tmp_idx) * 3, sizeof(float) * 3);
+    std::memcpy(buffer_.dir[1] + i * 3, tmp_dir, sizeof(float) * 3);
+    std::memcpy(buffer_.dir[1] + (i + tmp_idx) * 3, buffer_.dir[1] + i * 3, sizeof(float) * 3);
   }
 }
 
@@ -292,7 +276,7 @@ void Simulator::StoreRaySegments() {
       r->is_finished_ = true;
     }
     if (r->is_finished_ || r->w_ < SimulationContext::kPropMinW) {
-      final_ray_segments_.emplace_back(r);
+      final_ray_segments_.back().emplace_back(r);
     }
 
     auto prev_ray_seg = buffer_.ray_seg[0][i / 2];
@@ -332,12 +316,12 @@ void Simulator::SaveFinalDirections(const char* filename) {
 
   file.Write(context_->GetCurrentWavelength());
 
-  auto ray_num = final_ray_segments_.size();
+  auto ray_num = final_ray_segments_.back().size();
   size_t idx = 0;
   auto* data = new float[ray_num * 4];       // dx, dy, dz, w
 
   float* curr_data = data;
-  for (const auto& r : final_ray_segments_) {
+  for (const auto& r : final_ray_segments_.back()) {
     assert(r->root_);
     if (!r->root_->crystal_ctx_->FilterRay(r)) {
       continue;

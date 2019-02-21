@@ -43,10 +43,10 @@ public:
 
 private:
   void InitSunRays();
-  void InitEntryRays(const CrystalContextPtr& ctx, int multi_scatter_idx);
+  void InitEntryRays(const CrystalContextPtr& ctx);
   void InitMainAxis(const CrystalContextPtr& ctx, float* axis);
   void TraceRays(const CrystalPtr& crystal);
-  void RestoreResultRays(int multi_scatter_idx);
+  void RestoreResultRays();
   void StoreRaySegments();
   void RefreshBuffer();
 
@@ -56,7 +56,7 @@ private:
   std::vector<CrystalContextPtr> active_crystal_ctxs_;
 
   std::vector<std::vector<RayPtr> > rays_;
-  std::vector<RaySegment*> final_ray_segments_;
+  std::vector<std::vector<RaySegment*> > final_ray_segments_;
 
   size_t total_ray_num_;
   size_t active_ray_num_;
