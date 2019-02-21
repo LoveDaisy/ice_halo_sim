@@ -8,7 +8,7 @@ can only run from command, no GUI.
 
 ## Installation
 
-Requires: Boost (>= 1.54), OpenCV (>= 3.3), CMake (>= 3.10). Has been tested on Mac OSX 10.13 and Ubuntu 14.04.
+Requires: Boost (>= 1.54), OpenCV (>= 3.3), CMake (>= 3.10). Has been tested on Mac OSX 10.14 and Ubuntu 14.04.
 
 First download the entire project,
 
@@ -33,7 +33,7 @@ or
 For other useful options, see the help message via `./build.sh help` or just `./build.sh`
 
 Then the release version executable binaries will be at `build/cmake_install`, and the debug version will be at
-`build/cmake_build` 
+`build/cmake_build`.
 
 Note, I introduce the [GoogleTest](https://github.com/google/googletest) framework to help do my unit tests.
 GoogleTest is a submodule of this project. Generally you should not
@@ -58,35 +58,34 @@ as well as several lines printed on the screen that describe crystal geometry.
 I have prepared several tools for visualization those results. Some are matlab codes.
 
 * Halo picture.  
-  Please run 
-`./IceHaloRender <config-file>` for visualization. 
+  Please run `./IceHaloRender <config-file>` for visualization.
 Just use the same configuration file as you run the simulation. The rendered picture
 will be placed at the data path set in configuration file.  
 
   There is also a matlab tool for generating halo picture.
 Script `matlab/src/read_binary_result-example.m` reads the `.bin` files and renders the ray tracing result.
-See [matlab](../matlab/) folder for details. 
+See [matlab](../matlab/) folder for details.
 
 * Crystals  
 The matlab script `matlab/src/plot_crystal-example.m` plots the shape of crystals. You can copy data from program output on
-screen. The lines start with `V:` indicate vertex data, and those start with `F:` indicate face data.
+screen. The lines start with `v` indicate vertex data, and those start with `f` indicate face data.
 See [matlab](../matlab/) folder for details.
 
 ## Configuration file
 
-This file containing all configurations. It uses JSON format. 
+This file containing all configurations. It uses JSON format.
 I use [Rapidjson](http://rapidjson.org/index.html) to parse JSON file.
 
 ### Basic infomation for simulation
 
 * `sun`:
-It has two attributes, 
+It has two attributes,
   * `altitude`, defining the altitude of the sun.  
   * `diameter`, defining the actual diameter used in the simulation, in degree. Please set to 0.5 for ture sun.
 
 * `ray`:
 It defines some properties of rays used in simulation,
-  * `number`, the total ray number for simulation. 
+  * `number`, the total ray number for simulation.
     Note that even with a single incident ray, it may result in multiple
     rays output, due to reflections and refractions in crystal. This `number` defines the input ray number,
     but not output ray number.
@@ -105,7 +104,7 @@ It defines how to simulate multi-scattering halos. It has two attributes,
     speed drammatically slow down when `repeat` increases.   
   * `probability`, defining how many rays can pass through next crystal. If it is set to 1.0, then
     *ALL* rays will be used as input for next crystal.
-    
+
   Multi-scattering is a highlight feature of this project. As far as I know, HaloSim cannot do this kind simulation.
 While HaloPoint handles it by a tricky workaround, and implements for only limited scenarios.
 
@@ -122,12 +121,12 @@ It defines properties related to camera, including:
   * `fov`: (half) field of view, the angle from center to edge. In degree.
   * `width`, `height`: the size of output image. In pixel.
   * `lens`: lens type, can be one of `fisheye` or `linear`.
-  
+
 * `render`:
 It defines some useful attributes used when rendering:
   * `visible_semi_sphere`, which semi-sphere should be rendered. Its default value is `uppper`,
     indicating the upper semi sphere should be rendered, which is the common scene. If it is set to `lower`, then
-    halos that occure under horizontal, say, [subparhilia](https://www.atoptics.co.uk/halo/subpars.htm), 
+    halos that occure under horizontal, say, [subparhilia](https://www.atoptics.co.uk/halo/subpars.htm),
     will be rendered as well. The values could be one of these: `upper`, `lower`, `camera`, `full`.
   * `intensity_factor`, controls the intensity. The value locates between 0.1 and 10.0.
   * `offset`, defines the rendering offset. In pixel.
@@ -161,11 +160,11 @@ ratio. So if one crystal set to 2.0 and the other set to 3.0, it is equivalent t
 the other to 30.
 
 * `type` and `parameter`:
-Currently I create 5 shapes, `HexCylinder`, `HexPyramid`, `HexPyramidStackHalf`, `TriPyramid`, `CubicPyramid`,
+Currently I create 5 shapes, `HexPrism`, `HexPyramid`, `HexPyramidStackHalf`, `CubicPyramid`,
 `Custom`.
 Each shape has its own shape parameters.
 
-  * `HexCylinder`:
+  * `HexPrism`:
   Only 1 parameter, defines `h / a` where `h` is the cylinder height, `a` is the diameter along
   a-axis (also x-axis in my program).  
   <img src="figs/hex_cylinder_01.png" width="400">.
@@ -184,21 +183,21 @@ Each shape has its own shape parameters.
     * For 7 parameters case, the first 4 parameters are interges and describe the upper and lower pyramid segment
       face directions. For example `a`, `b`, `c`, `d` describe upper pyramid segment with Miller index of
       (`a`, 0, `-a`, `b`) and lower pyramid segment of (`c`, 0, `-c`, `d`). NOTE: for faces with different
-      Miller index, their maximumn height `H` are also different. 
-      
+      Miller index, their maximumn height `H` are also different.
+
     With these description, you will have the maximized freedom to design your crystal shape.
 
   * `HexPyramidStackHalf`:
   7 parameters. Similar to 7 parameters `HexPyramid` case. `h / H` for pyramid segment, and `h / a`
   for cylinder segment.  
-  <img src="figs/hex_pyramid_stack_half_01.png" width="400">. 
+  <img src="figs/hex_pyramid_stack_half_01.png" width="400">.
 
   * `TriPyramid`:
   5 parameters. Similar to 5 parameter case of `HexPyramid`.
-  <img src="figs/tri_pyramid_01.png" width="400">. 
+  <img src="figs/tri_pyramid_01.png" width="400">.
 
-  * `IrregularHexCylinder`:
-  7 parameters. First 6 parameters define the prism face distance factor from the origin. 
+  7 parameters. First 6 parameters define the prism face distance factor from the origin.
+  * `IrregularHexPrism`:
   Last parameter is height of the crystal. The distance factor here means the ratio of actual distance
   w.r.t regular haxegon distance. Thus, a regular haxegon has distance of `[1, 1, 1, 1, 1, 1]`.
   The figure shows an irregular hexegon with distance of `[1.1, 0.9, 1.5, 0.9, 1.7, 1.2]`  
