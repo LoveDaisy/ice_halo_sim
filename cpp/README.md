@@ -8,7 +8,7 @@ can only run from command, no GUI.
 
 ## Installation
 
-Requires: Boost (>= 1.54), OpenCV (>= 3.3). Has been tested on Mac OSX 10.13 and Ubuntu 14.04.
+Requires: Boost (>= 1.54), OpenCV (>= 3.3), CMake (>= 3.10). Has been tested on Mac OSX 10.13 and Ubuntu 14.04.
 
 First download the entire project,
 
@@ -30,7 +30,7 @@ or
 ./build.sh debug  # Debug version
 ~~~
 
-For other useful options, see the help message from `build.sh`.
+For other useful options, see the help message via `./build.sh help` or just `./build.sh`
 
 Then the release version executable binaries will be at `build/cmake_install`, and the debug version will be at
 `build/cmake_build` 
@@ -38,7 +38,8 @@ Then the release version executable binaries will be at `build/cmake_install`, a
 Note, I introduce the [GoogleTest](https://github.com/google/googletest) framework to help do my unit tests.
 GoogleTest is a submodule of this project. Generally you should not
 care about these codes nor the test cases in `test` folder. If you are interested in my unit tests, please
-pass `test` option when run the build script.
+pass `test` option when run the build script. If `test` option is set, then the final executable will not be
+installed when test cases failed.
 
 ## Getting started
 
@@ -74,7 +75,7 @@ See [matlab](../matlab/) folder for details.
 ## Configuration file
 
 This file containing all configurations. It uses JSON format. 
-I choose [Rapidjson](http://rapidjson.org/index.html) to parse JSON file.
+I use [Rapidjson](http://rapidjson.org/index.html) to parse JSON file.
 
 ### Basic infomation for simulation
 
