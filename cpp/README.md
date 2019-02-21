@@ -166,9 +166,9 @@ Currently I create 5 shapes, `HexPrism`, `HexPyramid`, `HexPyramidStackHalf`, `C
 Each shape has its own shape parameters.
 
   * `HexPrism`:
-  Only 1 parameter, defines `h / a` where `h` is the cylinder height, `a` is the diameter along
+  Only 1 parameter, defines `h / a` where `h` is the prism height, `a` is the diameter along
   a-axis (also x-axis in my program).  
-  <img src="figs/hex_cylinder_01.png" width="400">.
+  <img src="figs/hex_prism_01.png" width="400">.
 
   * `HexPyramid`:
   May have 3, 5, or 7 parameters.  
@@ -190,7 +190,7 @@ Each shape has its own shape parameters.
 
   * `HexPyramidStackHalf`:
   7 parameters. Similar to 7 parameters `HexPyramid` case. `h / H` for pyramid segment, and `h / a`
-  for cylinder segment.  
+  for prism segment.  
   <img src="figs/hex_pyramid_stack_half_01.png" width="400">.
 
   * `TriPyramid`:
