@@ -378,11 +378,11 @@ void SimulationContext::ParseMultiScatterSettings(rapidjson::Document& d) {
 
 std::unordered_map<std::string, SimulationContext::CrystalParser>
   SimulationContext::crystal_parser_ = {
-  { "HexCylinder", &SimulationContext::ParseCrystalHexPrism },
+  { "HexPrism", &SimulationContext::ParseCrystalHexPrism },
   { "HexPyramid", &SimulationContext::ParseCrystalHexPyramid },
   { "HexPyramidStackHalf", &SimulationContext::ParseCrystalHexPyramidStackHalf },
   { "CubicPyramid", &SimulationContext::ParseCrystalCubicPyramid },
-  { "IrregularHexCylinder", &SimulationContext::ParseCrystalIrregularHexPrism },
+  { "IrregularHexPrism", &SimulationContext::ParseCrystalIrregularHexPrism },
   { "IrregularHexPyramid", &SimulationContext::ParseCrystalIrregularHexPyramid },
   { "Custom", &SimulationContext::ParseCrystalCustom },
 };

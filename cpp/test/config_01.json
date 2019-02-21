@@ -65,7 +65,7 @@
         },
         {
             "enable": false,
-            "type": "IrregularHexCylinder",
+            "type": "IrregularHexPrism",
             "parameter": [1.0, 1.0, 1.5, 1.0, 2.5, 1.0, 1.2],
             "axis": {
                 "mean": 0,
@@ -81,7 +81,7 @@
         },
         {
             "enable": false,
-            "type": "HexCylinder",
+            "type": "HexPrism",
             "parameter": 0.1,
             "axis": {
                 "mean": 0,
@@ -113,7 +113,7 @@
         },
         {
             "enable": true,
-            "type": "HexCylinder",
+            "type": "HexPrism",
             "parameter": 1.6,
             "axis": {
                 "mean": 90,
@@ -129,7 +129,7 @@
         },
         {
             "enable": false,
-            "type": "HexCylinder",
+            "type": "HexPrism",
             "parameter": 1.6,
             "axis": {
                 "mean": 0,
