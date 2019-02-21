@@ -143,13 +143,14 @@ These two fields defines the orientation of crystals. `axis` defines the c-axis 
 defines the rotation around c-axis (also regarded as z-axis in above figures and my program).
 
   These fields all has three attributes, `mean`, `std`, `type`.  
-  `type` defines the random distribution
+  * `type` defines the random distribution
 type, either `Gauss`, for Gaussian distribution, or `Uniform`, for uniform distribution. *NOTE:*
-if `type` of `axis` is set to `Uniform`, then `mean` and `std` will be ignored and
-the axis will uniformly distributed on sphere. (This could be changed in the future)  
-  `mean` defines
+if `type` of `axis` is `Uniform`, then `mean` and `std` will be ignored and
+the axis will uniformly distributed on sphere. Similarly, if `type` of `roll` is `Uniform`
+then it will uniformly distributed between 0 and 360 degree.
+  * `mean` defines
 the mean of the random distribution. For `axis`, it means the zenith angle.  
-  `std` defines the deviation of the distribution. For Gaussian distribution,
+  * `std` defines the deviation of the distribution. For Gaussian distribution,
 it is the standard deviation, and for uniform distribution, it defines the value range.
 
   All angles are in degrees.
