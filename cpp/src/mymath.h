@@ -230,6 +230,7 @@ using RandomSamplerPtr = std::shared_ptr<RandomSampler>;
 
 
 bool FloatEqual(float a, float b, float threshold = kFloatEps);
+bool FloatEqualZero(float a, float threshold = kFloatEps);
 
 float Dot3(const float* vec1, const float* vec2);
 void Cross3(const float* vec1, const float* vec2, float* vec);

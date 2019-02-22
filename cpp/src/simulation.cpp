@@ -225,7 +225,7 @@ void Simulator::RestoreResultRays() {
     if (!r->is_finished_) {
       continue;
     }
-    if (rng->GetUniform() >= prob) {
+    if (rng->GetUniform() > prob) {
       continue;
     }
     const auto axis_rot = r->root_->main_axis_rot_.val();
@@ -237,12 +237,17 @@ void Simulator::RestoreResultRays() {
 
   // Shuffle
   auto sampler = Math::RandomSampler::GetInstance();
-  float tmp_dir[3];
   for (decltype(total_ray_num_) i = 0; i < total_ray_num_; i++) {
     int tmp_idx = sampler->SampleInt(static_cast<int>(total_ray_num_ - i));
+
+    float tmp_dir[3];
     std::memcpy(tmp_dir, buffer_.dir[1] + (i + tmp_idx) * 3, sizeof(float) * 3);
-    std::memcpy(buffer_.dir[1] + i * 3, tmp_dir, sizeof(float) * 3);
     std::memcpy(buffer_.dir[1] + (i + tmp_idx) * 3, buffer_.dir[1] + i * 3, sizeof(float) * 3);
+    std::memcpy(buffer_.dir[1] + i * 3, tmp_dir, sizeof(float) * 3);
+
+    float tmp_w = buffer_.w[1][i + tmp_idx];
+    buffer_.w[1][i + tmp_idx] = buffer_.w[1][i];
+    buffer_.w[1][i] = tmp_w;
   }
 }
 
@@ -332,18 +337,19 @@ void Simulator::SaveFinalDirections(const char* filename) {
 
   file.Write(context_->GetCurrentWavelength());
 
-  auto ray_num = final_ray_segments_.back().size();
+  auto& current_rays = final_ray_segments_.back();
+  auto ray_num = current_rays.size();
   size_t idx = 0;
   auto* data = new float[ray_num * 4];       // dx, dy, dz, w
 
   float* curr_data = data;
-  for (const auto& r : final_ray_segments_.back()) {
+  for (const auto& r : current_rays) {
+    const auto axis_rot = r->root_->main_axis_rot_.val();
     assert(r->root_);
     if (!r->root_->crystal_ctx_->FilterRay(r)) {
       continue;
     }
 
-    const auto axis_rot = r->root_->main_axis_rot_.val();
     Math::RotateZBack(axis_rot, r->dir_.val(), curr_data);
     curr_data[3] = r->w_;
     curr_data += 4;

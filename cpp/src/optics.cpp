@@ -131,7 +131,7 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir, int f
 
     float c = dir[0] * ff15 + dir[1] * ff23 + dir[2] * ff04 -
               dir[0] * ff24 - dir[1] * ff05 - dir[2] * ff13;
-    if (Math::FloatEqual(c, 0)) {
+    if (Math::FloatEqualZero(c)) {
       continue;
     }
 
