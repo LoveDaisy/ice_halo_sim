@@ -342,37 +342,21 @@ void Simulator::SaveFinalDirections(const char* filename) {
 
 void Simulator::PrintRayInfo() {
   std::stack<RaySegment*> s;
-  for (const auto& rs : rays_) {
+  for (const auto& rs : final_ray_segments_) {
     for (const auto& r : rs) {
-      s.push(r->first_ray_segment_);
-
+      auto p = r;
+      while (p) {
+        s.push(p);
+        p = p->prev_;
+      }
+      std::printf("%zu,0,0,0,0,0,-1\n", s.size());
       while (!s.empty()) {
-        auto p = s.top();
+        p = s.top();
         s.pop();
-        if (p->next_refract_ && !p->is_finished_) {
-          s.push(p->next_refract_);
-        }
-        if (p->next_reflect_ && !p->is_finished_) {
-          s.push(p->next_reflect_);
-        }
-        if (!p->next_reflect_ && !p->next_refract_ && p->IsValidEnd()) {
-          std::stack<RaySegment*> tmp_stack;
-          tmp_stack.push(p);
-          while (p->prev_) {
-            tmp_stack.push(p->prev_);
-            p = p->prev_;
-          }
-
-          std::printf("%li,0,0,0,0,0,-1\n", tmp_stack.size());
-          while (!tmp_stack.empty()) {
-            p = tmp_stack.top();
-            tmp_stack.pop();
-            std::printf("%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n",
-              p->pt_.x(), p->pt_.y(), p->pt_.z(),
-              p->dir_.x(), p->dir_.y(), p->dir_.z(),
-              p->w_);
-          }
-        }
+        std::printf("%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n",
+                    p->pt_.x(), p->pt_.y(), p->pt_.z(),
+                    p->dir_.x(), p->dir_.y(), p->dir_.z(),
+                    p->w_);
       }
     }
   }
