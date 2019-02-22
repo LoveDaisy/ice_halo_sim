@@ -9,7 +9,11 @@ build() {
   rm -rf CMakeFiles
   rm -rf CMakeCache.txt
   rm -rf Makefile cmake_install.cmake
-  cmake "${PROJ_DIR}" -DDEBUG=$DEBUG_FLAG -DBUILD_TEST=$BUILD_TEST -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR"
+  cmake "${PROJ_DIR}" \
+        -DDEBUG=$DEBUG_FLAG \
+        -DBUILD_TEST=$BUILD_TEST \
+        -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
+        -DMULTI_THREAD=$MULTI_THREAD
   make -j$MAKE_J_N
   ret=$?
   if [[ $ret == 0 && $BUILD_TEST == ON ]]; then
@@ -26,15 +30,16 @@ build() {
 
 help() {
   echo "Usage:"
-  echo "  ./build.sh [option1 option2 ...] debug"
-  echo "    Build executables for debug. All executables will be at build/cmake_build"
-  echo "  ./build.sh [option1 option2 ...] release"
-  echo "    Build executables for release, and install them to build/cmake_install"
+  echo "  ./build.sh [-tjkh1] <debug|release>"
+  echo "    Build executables for debug | release"
+  echo "    Debug executables will be at build/cmake_build."
+  echo "    Release executables will be installed at build/cmake_install"
   echo "OPTIONS:"
-  echo "  test:          Build unit test cases."
-  echo "  j:             Make in parallel, i.e. use make -j"
-  echo "  clean:         Clean temporary building files."
-  echo "  help:          Show this message."
+  echo "  -t:          Build unit test cases."
+  echo "  -j:          Make in parallel, i.e. use make -j"
+  echo "  -k:          Clean temporary building files."
+  echo "  -1:          Using single thread."
+  echo "  -h:          Show this message."
 }
 
 
@@ -48,11 +53,45 @@ DEBUG_FLAG=OFF
 BUILD_TEST=OFF
 INSTALL_FLAG=OFF
 MAKE_J_N=1
+MULTI_THREAD=ON
 
 if [ $# -eq 0 ]; then
+  help
+  exit 0
+fi
+
+# Use getopts to parse arguments
+# A POSIX variable
+OPTIND=1         # Reset in case getopts has been used previously in the shell.
+
+while getopts "htjk1" opt; do
+  case "$opt" in
+  h)
     help
     exit 0
-fi
+    ;;
+  t)
+    BUILD_TEST=ON
+    ;;
+  j)
+    MAKE_J_N=""
+    ;;
+  k)
+    clean_all
+    ;;
+  1)
+    MULTI_THREAD=OFF
+    ;;
+  *)
+    help
+    exit 0
+    ;;
+  esac
+done
+
+shift $((OPTIND-1))
+
+[ "${1:-}" = "--" ] && shift
 
 while [ ! $# -eq 0 ]; do
   case $1 in
@@ -60,28 +99,12 @@ while [ ! $# -eq 0 ]; do
       DEBUG_FLAG=ON
       INSTALL_FLAG=OFF
       build
-      shift
+      exit 0
     ;;
     release)
       DEBUG_FLAG=OFF
       INSTALL_FLAG=ON
       build
-      shift
-    ;;
-    test)
-      BUILD_TEST=ON
-      shift
-    ;;
-    j)
-      MAKE_J_N=""
-      shift
-    ;;
-    clean)
-      clean_all
-      shift
-    ;;
-    help)
-      help
       exit 0
     ;;
     *)
