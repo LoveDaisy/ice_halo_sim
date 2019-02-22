@@ -27,7 +27,7 @@
         "show_horizontal": false
     },
     "multi_scatter": {
-        "repeat": 1,
+        "repeat": 2,
         "probability": 1.0
     },
     "crystal": [
