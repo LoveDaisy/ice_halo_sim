@@ -54,7 +54,7 @@ TEST_F(OpticsTest, HitSurface0) {
     0.025038f,                 // Case 2: reflective
     0.974962f,                 // Case 2: refractive
          1.0f,                 // Case 3: reflective, total reflection
-         0.0f,                 // Case 3: refractive, total reflection
+        -1.0f,                 // Case 3: refractive, total reflection
   };
 
   float dir_out[2 * kNum * 3];
@@ -107,7 +107,7 @@ TEST_F(OpticsTest, HitSurface1) {
     0.012519f,                 // Case 2: reflective
     0.487481f,                 // Case 2: refractive
          0.5f,                 // Case 3: reflective, total reflection
-         0.0f,                 // Case 3: refractive, total reflection
+        -1.0f,                 // Case 3: refractive, total reflection
   };
 
   float dir_out[2 * kNum * 3];
