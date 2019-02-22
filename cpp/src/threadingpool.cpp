@@ -3,6 +3,7 @@
 namespace IceHalo {
 
 
+const int ThreadingPool::kHardwareConcurrency = std::thread::hardware_concurrency();
 ThreadingPool* ThreadingPool::instance_ = nullptr;
 std::mutex ThreadingPool::instance_mutex_;
 
@@ -12,7 +13,11 @@ ThreadingPool* ThreadingPool::GetInstance() {
     {
       std::unique_lock<std::mutex> lock(instance_mutex_);
       if (instance_ == nullptr) {
-        instance_ = new ThreadingPool();
+#ifdef MULTI_THREAD
+        instance_ = new ThreadingPool(kHardwareConcurrency);
+#else
+        instance_ = new ThreadingPool();    // Default use single thread.
+#endif
       }
     }
   }
@@ -20,8 +25,8 @@ ThreadingPool* ThreadingPool::GetInstance() {
 }
 
 
-ThreadingPool::ThreadingPool()
-    : thread_num_(std::thread::hardware_concurrency()), alive_(false),
+ThreadingPool::ThreadingPool(size_t num)
+    : thread_num_(num), alive_(false),
       running_jobs_(0), alive_threads_(0) {
   Start();
 }

@@ -24,7 +24,7 @@ public:
   static ThreadingPool* GetInstance();
 
 private:
-  ThreadingPool();
+  ThreadingPool(size_t num = 1);
 
   size_t thread_num_;
   std::vector<std::thread> pool_;
@@ -41,6 +41,7 @@ private:
 
   void WorkingFunction();
 
+  static const int kHardwareConcurrency;
   static ThreadingPool* instance_;
   static std::mutex instance_mutex_;
 };
