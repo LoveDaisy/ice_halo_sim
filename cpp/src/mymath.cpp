@@ -598,7 +598,7 @@ void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float
     float udz = rng->GetUniform() * dz;
     float q = rng->GetUniform() * 2 * Math::kPi;
 
-    float r = std::sqrt((2.0f + udz) * udz);
+    float r = std::sqrt((2.0f - udz) * udz);
     float x = std::cos(q) * r;
     float y = std::sin(q) * r;
     float z = 1.0f - udz;
