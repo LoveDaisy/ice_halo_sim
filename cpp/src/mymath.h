@@ -5,6 +5,7 @@
 #include <cmath>
 #include <random>
 #include <memory>
+#include <mutex>
 
 namespace IceHalo {
 
@@ -145,6 +146,7 @@ private:
 
   static constexpr uint32_t kRandomSeed = 1;
   static std::shared_ptr<RandomNumberGenerator> instance_;
+  static std::mutex instance_mutex_;
 };
 
 using RandomNumberGeneratorPtr = std::shared_ptr<RandomNumberGenerator>;
@@ -224,6 +226,7 @@ private:
   RandomSampler() = default;
 
   static std::shared_ptr<RandomSampler> instance_;
+  static std::mutex instance_mutex_;
 };
 
 using RandomSamplerPtr = std::shared_ptr<RandomSampler>;

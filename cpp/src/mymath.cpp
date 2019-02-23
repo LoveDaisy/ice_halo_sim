@@ -494,11 +494,15 @@ RandomNumberGenerator::RandomNumberGenerator(uint32_t seed)
 
 
 RandomNumberGeneratorPtr RandomNumberGenerator::instance_ = nullptr;
+std::mutex RandomNumberGenerator::instance_mutex_{};
 
 
 RandomNumberGeneratorPtr RandomNumberGenerator::GetInstance() {
   if (!instance_) {
-    instance_ = std::shared_ptr<RandomNumberGenerator>(new RandomNumberGenerator(kRandomSeed));
+    std::unique_lock<std::mutex> lock(instance_mutex_);
+    if (!instance_) {
+      instance_ = std::shared_ptr<RandomNumberGenerator>(new RandomNumberGenerator(kRandomSeed));
+    }
   }
   return instance_;
 }
@@ -526,12 +530,16 @@ float RandomNumberGenerator::Get(Distribution dist, float mean, float std) {
 
 RandomSamplerPtr RandomSampler::GetInstance() {
   if (!instance_) {
-    instance_ = std::shared_ptr<RandomSampler>(new RandomSampler());
+    std::unique_lock<std::mutex> lock(instance_mutex_);
+    if (!instance_) {
+      instance_ = std::shared_ptr<RandomSampler>(new RandomSampler());
+    }
   }
   return instance_;
 }
 
 RandomSamplerPtr RandomSampler::instance_ = nullptr;
+std::mutex RandomSampler::instance_mutex_{};
 
 
 void RandomSampler::SampleSphericalPointsCart(float* data, size_t num) {
