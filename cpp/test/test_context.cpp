@@ -25,26 +25,26 @@ TEST_F(ContextTest, CreateNotNull) {
 
 
 TEST_F(ContextTest, CheckSunDir) {
-  auto sunDir = context->GetSunRayDir();
-  EXPECT_NEAR(sunDir[0], 0.0f, IceHalo::Math::kFloatEps);
-  EXPECT_NEAR(sunDir[1], -0.906308f, IceHalo::Math::kFloatEps);
-  EXPECT_NEAR(sunDir[2], -0.422618f, IceHalo::Math::kFloatEps);
+  auto sun_dir = context->GetSunRayDir();
+  EXPECT_NEAR(sun_dir[0], 0.0f, IceHalo::Math::kFloatEps);
+  EXPECT_NEAR(sun_dir[1], -0.906308f, IceHalo::Math::kFloatEps);
+  EXPECT_NEAR(sun_dir[2], -0.422618f, IceHalo::Math::kFloatEps);
 }
 
 
 TEST_F(ContextTest, FillSunDir) {
-  auto sunDir = context->GetSunRayDir();
-  auto sunD = context->GetSunDiameter();
+  auto sun_dir = context->GetSunRayDir();
+  auto sun_d = context->GetSunDiameter();
 
   constexpr int kRayNum = 100;
   float dir[3 * kRayNum];
   auto sampler = IceHalo::Math::RandomSampler::GetInstance();
-  sampler->SampleSphericalPointsCart(sunDir, sunD / 2, dir, kRayNum);
+  sampler->SampleSphericalPointsCart(sun_dir, sun_d / 2, dir, kRayNum);
 
   for (int i = 0; i < kRayNum; i++) {
-    float a = std::acos(IceHalo::Math::Dot3(sunDir, dir + i * 3));    // In rad
-    a *= 180.0f / IceHalo::Math::kPi;    // To degree
-    EXPECT_TRUE(a < sunD / 2);
+    float a = std::acos(IceHalo::Math::Dot3(sun_dir, dir + i * 3));    // In rad
+    a *= IceHalo::Math::kRadToDegree;    // To degree
+    EXPECT_TRUE(a < sun_d / 2);
   }
 }
 
