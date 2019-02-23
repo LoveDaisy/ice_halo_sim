@@ -868,7 +868,7 @@ void SimulationContext::PrintCrystalInfo() {
 RenderContext::RenderContext(rapidjson::Document& d) :
     img_hei_(0), img_wid_(0), offset_y_(0), offset_x_(0),
     visible_semi_sphere_(VisibleSemiSphere::UPPER),
-    total_w_(0), intensity_factor_(1.0), show_horizontal_(true),
+    total_ray_num_(0), total_w_(0), intensity_factor_(1.0), show_horizontal_(true),
     data_directory_("./"),
     projection_type_(ProjectionType::EQUI_AREA) {
   ParseCameraSettings(d);
@@ -1053,7 +1053,7 @@ void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
   } else if (!p->IsUint()) {
     fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default 10000!\n");
   } else {
-    total_w_ = p->GetUint();
+    total_ray_num_ = p->GetUint();
   }
 
   p = Pointer("/render/offset").Get(d);
@@ -1182,7 +1182,7 @@ void RenderContext::CopySpectrumData(float* wavelengthData, float* spectrumData)
     k++;
   }
   for (uint64_t i = 0; i < img_wid_ * img_hei_ * this->spectrum_data_.size(); i++) {
-    spectrumData[i] *= 5e3 / total_w_ * intensity_factor_;
+    spectrumData[i] *= 2e4 / total_w_ * intensity_factor_;
   }
 }
 
@@ -1266,6 +1266,7 @@ int RenderContext::LoadDataFromFile(File& file) {
   delete[] tmpXY;
   delete[] tmpW;
 
+  total_w_ += total_ray_num_;
   return static_cast<int>(totalCount);
 }
 

@@ -200,6 +200,7 @@ private:
   VisibleSemiSphere visible_semi_sphere_;
 
   std::unordered_map<int, float*> spectrum_data_;
+  uint32_t total_ray_num_;
   double total_w_;
   double intensity_factor_;
 
