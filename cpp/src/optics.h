@@ -44,6 +44,7 @@ public:
   Ray(RaySegment* seg, const std::shared_ptr<CrystalContext>& crystal_ctx, const float main_axis_rot[3]);
 
   RaySegment* first_ray_segment_;
+  RaySegment* prev_ray_segment_;
   std::shared_ptr<CrystalContext> crystal_ctx_;
   Math::Vec3f main_axis_rot_;
 };

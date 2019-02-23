@@ -56,7 +56,8 @@ private:
   std::vector<CrystalContextPtr> active_crystal_ctxs_;
 
   std::vector<std::vector<RayPtr> > rays_;
-  std::vector<std::vector<RaySegment*> > final_ray_segments_;
+  std::vector<std::vector<RaySegment*> > exit_ray_segments_;
+  std::vector<RaySegment*> final_ray_segments_;
 
   size_t total_ray_num_;
   size_t active_ray_num_;

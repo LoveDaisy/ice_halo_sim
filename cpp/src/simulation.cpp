@@ -92,11 +92,10 @@ Simulator::Simulator(const SimulationContextPtr& context)
 // Start simulation
 void Simulator::Start() {
   rays_.clear();
+  exit_ray_segments_.clear();
   final_ray_segments_.clear();
   active_crystal_ctxs_.clear();
   RaySegmentPool::GetInstance()->Clear();
-  buffer_.Clean();
-  buffer_size_ = 0;
 
   context_->FillActiveCrystal(&active_crystal_ctxs_);
   total_ray_num_ = context_->GetTotalInitRays();
@@ -104,8 +103,8 @@ void Simulator::Start() {
   for (int i = 0; i < multi_scatter_times; i++) {
     rays_.emplace_back();
     rays_.back().reserve(total_ray_num_);
-    final_ray_segments_.emplace_back();
-    final_ray_segments_.back().reserve(total_ray_num_ * 2);
+    exit_ray_segments_.emplace_back();
+    exit_ray_segments_.back().reserve(total_ray_num_ * 2);
 
     for (const auto& ctx : active_crystal_ctxs_) {
       active_ray_num_ = static_cast<size_t>(ctx->GetPopulation() * total_ray_num_);
@@ -119,9 +118,13 @@ void Simulator::Start() {
       InitEntryRays(ctx);
       TraceRays(ctx->GetCrystal());
     }
+
     if (i < multi_scatter_times - 1) {
       RestoreResultRays();    // total_ray_num_ is updated.
     }
+  }
+  for (const auto& r : exit_ray_segments_.back()) {
+    final_ray_segments_.emplace_back(r);
   }
 }
 
@@ -135,6 +138,7 @@ void Simulator::InitSunRays() {
   sampler->SampleSphericalPointsCart(sun_ray_dir, sun_r, buffer_.dir[1], active_ray_num_);
   for (decltype(active_ray_num_) i = 0; i < active_ray_num_; i++) {
     buffer_.w[1][i] = 1.0f;
+    buffer_.ray_seg[1][i] = nullptr;
   }
 }
 
@@ -181,6 +185,9 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
                                      buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
     r->root_ = new Ray(r, ctx, axis_rot);
+    if (buffer_.ray_seg[1][i]) {
+      r->root_->prev_ray_segment_ = buffer_.ray_seg[1][i];
+    }
     rays_.back().emplace_back(r->root_);
   }
 
@@ -213,24 +220,26 @@ void Simulator::InitMainAxis(const CrystalContextPtr& ctx, float* axis) {
 
 // Restore and shuffle resulted rays, and fill into dir[0].
 void Simulator::RestoreResultRays() {
-  if (buffer_size_ < final_ray_segments_.back().size() * 2) {
-    buffer_size_ = final_ray_segments_.back().size() * 2;
+  if (buffer_size_ < exit_ray_segments_.back().size() * 2) {
+    buffer_size_ = exit_ray_segments_.back().size() * 2;
     buffer_.Allocate(buffer_size_);
   }
 
   float prob = context_->GetMultiScatterProb();
   auto rng = Math::RandomNumberGenerator::GetInstance();
   size_t idx = 0;
-  for (const auto& r : final_ray_segments_.back()) {
+  for (const auto& r : exit_ray_segments_.back()) {
     if (!r->is_finished_) {
       continue;
     }
     if (rng->GetUniform() > prob) {
+      final_ray_segments_.emplace_back(r);
       continue;
     }
     const auto axis_rot = r->root_->main_axis_rot_.val();
     Math::RotateZBack(axis_rot, r->dir_.val(), buffer_.dir[1] + idx * 3);
     buffer_.w[1][idx] = r->w_;
+    buffer_.ray_seg[1][idx] = r;
     idx++;
   }
   total_ray_num_ = idx;
@@ -297,7 +306,7 @@ void Simulator::StoreRaySegments() {
       r->is_finished_ = true;
     }
     if (r->is_finished_ || r->w_ < SimulationContext::kPropMinW) {
-      final_ray_segments_.back().emplace_back(r);
+      exit_ray_segments_.back().emplace_back(r);
     }
 
     auto prev_ray_seg = buffer_.ray_seg[0][i / 2];
@@ -337,13 +346,12 @@ void Simulator::SaveFinalDirections(const char* filename) {
 
   file.Write(context_->GetCurrentWavelength());
 
-  auto& current_rays = final_ray_segments_.back();
-  auto ray_num = current_rays.size();
+  auto ray_num = final_ray_segments_.size();
   size_t idx = 0;
   auto* data = new float[ray_num * 4];       // dx, dy, dz, w
 
   float* curr_data = data;
-  for (const auto& r : current_rays) {
+  for (const auto& r : final_ray_segments_) {
     const auto axis_rot = r->root_->main_axis_rot_.val();
     assert(r->root_);
     if (!r->root_->crystal_ctx_->FilterRay(r)) {
@@ -364,7 +372,7 @@ void Simulator::SaveFinalDirections(const char* filename) {
 
 void Simulator::PrintRayInfo() {
   std::stack<RaySegment*> s;
-  for (const auto& rs : final_ray_segments_) {
+  for (const auto& rs : exit_ray_segments_) {
     for (const auto& r : rs) {
       auto p = r;
       while (p) {
