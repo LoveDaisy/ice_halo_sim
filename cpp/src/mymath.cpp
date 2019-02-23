@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <algorithm>
+#include <chrono>
 
 
 namespace IceHalo {
@@ -501,7 +502,12 @@ RandomNumberGeneratorPtr RandomNumberGenerator::GetInstance() {
   if (!instance_) {
     std::unique_lock<std::mutex> lock(instance_mutex_);
     if (!instance_) {
-      instance_ = std::shared_ptr<RandomNumberGenerator>(new RandomNumberGenerator(kRandomSeed));
+#ifdef RANDOM_SEED
+      auto seed = std::chrono::system_clock::now().time_since_epoch().count();
+      instance_ = std::shared_ptr<RandomNumberGenerator>(new RandomNumberGenerator(static_cast<uint32_t>(seed)));
+#else
+      instance_ = std::shared_ptr<RandomNumberGenerator>(new RandomNumberGenerator(kDefaultRandomSeed));
+#endif
     }
   }
   return instance_;

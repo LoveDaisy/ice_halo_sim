@@ -38,6 +38,10 @@ if(MULTI_THREAD)
   add_compile_definitions(MULTI_THREAD)
 endif()
 
+if(MULTI_THREAD)
+  add_compile_definitions(RANDOM_SEED)
+endif()
+
 set(BUILD_DIR "${CMAKE_SOURCE_DIR}/build")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${BUILD_DIR}/${BUILDCFG}/lib/${ARCH}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${BUILD_DIR}/${BUILDCFG}/lib/${ARCH}")

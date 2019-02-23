@@ -13,7 +13,8 @@ build() {
         -DDEBUG=$DEBUG_FLAG \
         -DBUILD_TEST=$BUILD_TEST \
         -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
-        -DMULTI_THREAD=$MULTI_THREAD
+        -DMULTI_THREAD=$MULTI_THREAD \
+        -DRANDOM_SEED=$RANDOM_SEED
   make -j$MAKE_J_N
   ret=$?
   if [[ $ret == 0 && $BUILD_TEST == ON ]]; then
@@ -30,7 +31,7 @@ build() {
 
 help() {
   echo "Usage:"
-  echo "  ./build.sh [-tjkh1] <debug|release>"
+  echo "  ./build.sh [-tjkrh1] <debug|release>"
   echo "    Build executables for debug | release"
   echo "    Debug executables will be at build/cmake_build."
   echo "    Release executables will be installed at build/cmake_install"
@@ -38,6 +39,8 @@ help() {
   echo "  -t:          Build unit test cases."
   echo "  -j:          Make in parallel, i.e. use make -j"
   echo "  -k:          Clean temporary building files."
+  echo "  -r:          Use system time as seed for random number generator. Without this option,"
+  echo "               the program will use default value. Thus generate a repeatable result (together with -1)."
   echo "  -1:          Using single thread."
   echo "  -h:          Show this message."
 }
@@ -54,6 +57,7 @@ BUILD_TEST=OFF
 INSTALL_FLAG=OFF
 MAKE_J_N=1
 MULTI_THREAD=ON
+RANDOM_SEED=OFF
 
 if [ $# -eq 0 ]; then
   help
@@ -64,7 +68,7 @@ fi
 # A POSIX variable
 OPTIND=1         # Reset in case getopts has been used previously in the shell.
 
-while getopts "htjk1" opt; do
+while getopts "htrjk1" opt; do
   case "$opt" in
   h)
     help
@@ -75,6 +79,9 @@ while getopts "htjk1" opt; do
     ;;
   j)
     MAKE_J_N=""
+    ;;
+  r)
+    RANDOM_SEED=ON
     ;;
   k)
     clean_all

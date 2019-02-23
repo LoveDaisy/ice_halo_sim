@@ -144,7 +144,7 @@ private:
   std::normal_distribution<float> gauss_dist_;
   std::uniform_real_distribution<float> uniform_dist_;
 
-  static constexpr uint32_t kRandomSeed = 1;
+  static constexpr uint32_t kDefaultRandomSeed = 1;
   static std::shared_ptr<RandomNumberGenerator> instance_;
   static std::mutex instance_mutex_;
 };
