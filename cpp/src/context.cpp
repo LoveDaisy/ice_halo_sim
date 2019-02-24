@@ -437,9 +437,9 @@ AxisDistribution SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, 
   if (p == nullptr || !p->IsString()) {
     snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
-  } else if (*p == "Gauss") {
+  } else if (*p == "gauss") {
     axis.axis_dist = Distribution::GAUSS;
-  } else if (*p == "Uniform") {
+  } else if (*p == "uniform") {
     axis.axis_dist = Distribution::UNIFORM;
   } else {
     snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recognize!", ci);
@@ -450,9 +450,9 @@ AxisDistribution SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, 
   if (p == nullptr || !p->IsString()) {
     snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
-  } else if (*p == "Gauss") {
+  } else if (*p == "gauss") {
     axis.roll_dist = Distribution::GAUSS;
-  } else if (*p == "Uniform") {
+  } else if (*p == "uniform") {
     axis.roll_dist = Distribution::UNIFORM;
   } else {
     snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
@@ -534,11 +534,11 @@ RayPathFilter SimulationContext::ParseCrystalRayPathFilter(const rapidjson::Valu
   if (p == nullptr || !p->IsString()) {
     fprintf(stderr, "<crystal[%d].ray_path_filter.type> cannot recognize! Use default none.\n", ci);
   } else {
-    if (*p == "Specific") {
+    if (*p == "specific") {
       filter.type_ = RayPathFilter::kTypeSpecific;
-    } else if (*p == "General") {
+    } else if (*p == "general") {
       filter.type_ = RayPathFilter::kTypeGeneral;
-    } else if (*p == "None") {
+    } else if (*p == "none") {
       filter.type_ = RayPathFilter::kTypeNone;
     } else {
       fprintf(stderr, "<crystal[%d].ray_path_filter.type> cannot recognize! Use default none.\n", ci);

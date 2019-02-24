@@ -38,12 +38,12 @@
             "axis": {
                 "mean": 90,
                 "std": 2.0,
-                "type": "Gauss"
+                "type": "gauss"
             },
             "roll": {
                 "mean": 0,
                 "std": 1.2,
-                "type": "Uniform"
+                "type": "uniform"
             },
             "population": 200
         },
@@ -54,12 +54,12 @@
             "axis": {
                 "mean": 0,
                 "std": 2.5,
-                "type": "Gauss"
+                "type": "gauss"
             },
             "roll": {
                 "mean": 0,
                 "std": 360,
-                "type": "Uniform"
+                "type": "uniform"
             },
             "population": 200
         },
@@ -70,12 +70,12 @@
             "axis": {
                 "mean": 0,
                 "std": 2.5,
-                "type": "Gauss"
+                "type": "gauss"
             },
             "roll": {
                 "mean": 0,
                 "std": 360,
-                "type": "Uniform"
+                "type": "uniform"
             },
             "population": 10
         },
@@ -86,12 +86,12 @@
             "axis": {
                 "mean": 0,
                 "std": 6.0,
-                "type": "Gauss"
+                "type": "gauss"
             },
             "roll": {
                 "mean": 0,
                 "std": 360,
-                "type": "Uniform"
+                "type": "uniform"
             },
             "population": 200
         },
@@ -102,12 +102,12 @@
             "axis": {
                 "mean": 0,
                 "std": 23,
-                "type": "Gauss"
+                "type": "gauss"
             },
             "roll": {
                 "mean": 0,
                 "std": 360,
-                "type": "Uniform"
+                "type": "uniform"
             },
             "population": 40
         },
@@ -118,12 +118,12 @@
             "axis": {
                 "mean": 90,
                 "std": 0.0,
-                "type": "Gauss"
+                "type": "gauss"
             },
             "roll": {
                 "mean": 0,
                 "std": 0,
-                "type": "Uniform"
+                "type": "uniform"
             },
             "population": 180
         },
@@ -134,12 +134,12 @@
             "axis": {
                 "mean": 0,
                 "std": 360,
-                "type": "Uniform"
+                "type": "uniform"
             },
             "roll": {
                 "mean": 0,
                 "std": 360,
-                "type": "Uniform"
+                "type": "uniform"
             },
             "population": 180
         },
@@ -150,12 +150,12 @@
             "axis": {
                 "mean": 90,
                 "std": 0.5,
-                "type": "Gauss"
+                "type": "gauss"
             },
             "roll": {
                 "mean": 0,
                 "std": 360,
-                "type": "Uniform"
+                "type": "uniform"
             },
             "population": 80
         }
