@@ -193,6 +193,7 @@ void SrgbGamma(float* linear_rgb) {
 
 constexpr int SpectrumRenderer::kMinWavelength;
 constexpr int SpectrumRenderer::kMaxWaveLength;
+constexpr uint8_t SpectrumRenderer::kColorMaxVal;
 constexpr float SpectrumRenderer::kWhitePointD65[];
 constexpr float SpectrumRenderer::kXyzToRgb[];
 constexpr float SpectrumRenderer::kCmfX[];
@@ -239,23 +240,25 @@ void SpectrumRenderer::RenderToRgb(uint8_t* rgb_data) {
   auto* wl_data = new float[wl_num];
   auto* flat_spec_data = new float[wl_num * img_wid * img_hei];
 
-  CopySpectrumData(wl_data, flat_spec_data);
+  GatherSpectrumData(wl_data, flat_spec_data);
   auto ray_color = context_->GetRayColor();
   auto background_color = context_->GetBackgroundColor();
-  if (ray_color[0] < 0) {
-    Rgb(static_cast<int>(wl_num), img_wid * img_hei, wl_data, flat_spec_data, rgb_data);
+  bool use_rgb = ray_color[0] < 0;
+
+  if (use_rgb) {
+    Rgb(wl_num, img_wid * img_hei, wl_data, flat_spec_data, rgb_data);
   } else {
-    Gray(static_cast<int>(wl_num), img_wid * img_hei, wl_data, flat_spec_data, rgb_data);
+    Gray(wl_num, img_wid * img_hei, wl_data, flat_spec_data, rgb_data);
   }
-  for (size_t i = 0; i < img_wid * img_hei; i++) {
-    for (int c = 0; c <= 2; c++) {
-      auto v = static_cast<int>(background_color[c] * 255);
-      if (ray_color[0] < 0) {
+  for (decltype(img_wid) i = 0; i < img_wid * img_hei; i++) {
+    for (int c = 0; c < 3; c++) {
+      auto v = static_cast<int>(background_color[c] * kColorMaxVal);
+      if (use_rgb) {
         v += rgb_data[i * 3 + c];
       } else {
         v += static_cast<int>(rgb_data[i * 3 + c] * ray_color[c]);
       }
-      v = std::max(std::min(v, 255), 0);
+      v = std::max(std::min(v, static_cast<int>(kColorMaxVal)), 0);
       rgb_data[i * 3 + c] = static_cast<uint8_t>(v);
     }
   }
@@ -272,6 +275,7 @@ void SpectrumRenderer::RenderToRgb(uint8_t* rgb_data) {
 int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
   auto projection_type = context_->GetProjectionType();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
+    std::fprintf(stderr, "Unknown projection type!\n");
     return -1;
   }
 
@@ -281,6 +285,7 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
   file.Open(OpenMode::kRead | OpenMode::kBinary);
   auto read_count = file.Read(read_buffer, 1);
   if (read_count <= 0) {
+    std::fprintf(stderr, "Failed to read wavelength data!\n");
     file.Close();
     delete[] read_buffer;
     return -1;
@@ -288,21 +293,25 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
 
   auto wavelength = static_cast<int>(read_buffer[0]);
   if (wavelength < SpectrumRenderer::kMinWavelength || wavelength > SpectrumRenderer::kMaxWaveLength) {
+    std::fprintf(stderr, "Wavelength out of range!\n");
+    file.Close();
     delete[] read_buffer;
     return -1;
   }
 
   read_count = file.Read(read_buffer, file_size / sizeof(float));
-  auto total_count = read_count / 4;
+  auto total_ray_count = read_count / 4;
   file.Close();
 
-  if (total_count == 0) {
-    return static_cast<int>(total_count);
+  if (total_ray_count == 0) {
+    delete[] read_buffer;
+    return 0;
   }
 
-  auto* tmp_dir = new float[total_count * 3];
-  auto* tmp_w = new float[total_count];
-  for (decltype(read_count) i = 0; i < total_count; i++) {
+  auto* tmp_dir = new float[total_ray_count * 3];
+  auto* tmp_w = new float[total_ray_count];
+  auto* tmp_xy = new int[total_ray_count * 2];
+  for (decltype(read_count) i = 0; i < total_ray_count; i++) {
     std::memcpy(tmp_dir + i * 3, read_buffer + i * 4, 3 * sizeof(float));
     tmp_w[i] = read_buffer[i * 4 + 3];
   }
@@ -310,9 +319,8 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
 
   auto img_hei = context_->GetImageHeight();
   auto img_wid = context_->GetImageWidth();
-  auto* tmp_xy = new int[total_count * 2];
   projection_functions[projection_type](
-    context_->GetCamRot(), context_->GetFov(), total_count, tmp_dir,
+    context_->GetCamRot(), context_->GetFov(), total_ray_count, tmp_dir,
     img_wid, img_hei, tmp_xy, context_->GetVisibleSemiSphere());
   delete[] tmp_dir;
 
@@ -328,7 +336,7 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
     spectrum_data_[wavelength] = current_data;
   }
 
-  for (decltype(total_count) i = 0; i < total_count; i++) {
+  for (decltype(total_ray_count) i = 0; i < total_ray_count; i++) {
     int x = tmp_xy[i * 2 + 0];
     int y = tmp_xy[i * 2 + 1];
     if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
@@ -347,11 +355,11 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
   delete[] tmp_w;
 
   total_w_ += context_->GetTotalRayNum();
-  return static_cast<int>(total_count);
+  return static_cast<int>(total_ray_count);
 }
 
 
-void SpectrumRenderer::CopySpectrumData(float* wl_data_out, float* sp_data_out) {
+void SpectrumRenderer::GatherSpectrumData(float* wl_data_out, float* sp_data_out) {
   auto img_hei = context_->GetImageHeight();
   auto img_wid = context_->GetImageWidth();
   auto intensity_factor = context_->GetIntensityFactor();
@@ -368,13 +376,13 @@ void SpectrumRenderer::CopySpectrumData(float* wl_data_out, float* sp_data_out) 
 }
 
 
-void SpectrumRenderer::Rgb(int wavelength_number, int data_number,
+void SpectrumRenderer::Rgb(size_t wavelength_number, size_t data_number,
                            const float* wavelengths, const float* spec_data,
                            uint8_t* rgb_data) {
-  for (int i = 0; i < data_number; i++) {
+  for (decltype(data_number) i = 0; i < data_number; i++) {
     /* Step 1. Spectrum to XYZ */
     float xyz[3] = { 0 };
-    for (int j = 0; j < wavelength_number; j++) {
+    for (decltype(wavelength_number) j = 0; j < wavelength_number; j++) {
       auto wl = static_cast<int>(wavelengths[j]);
       float v = wl >= kMinWavelength && wl <= kMaxWaveLength ? spec_data[j*data_number + i] : 0.0f;
       xyz[0] += kCmfX[wl - kMinWavelength] * v;
@@ -420,13 +428,13 @@ void SpectrumRenderer::Rgb(int wavelength_number, int data_number,
 }
 
 
-void SpectrumRenderer::Gray(int wavelength_number, int data_number,
+void SpectrumRenderer::Gray(size_t wavelength_number, size_t data_number,
                             const float* wavelengths, const float* spec_data,
                             uint8_t* rgb_data) {
-  for (int i = 0; i < data_number; i++) {
+  for (decltype(data_number) i = 0; i < data_number; i++) {
     /* Step 1. Spectrum to XYZ */
     float xyz[3] = { 0 };
-    for (int j = 0; j < wavelength_number; j++) {
+    for (decltype(wavelength_number) j = 0; j < wavelength_number; j++) {
       auto wl = static_cast<int>(wavelengths[j]);
       float v = wl >= kMinWavelength && wl <= kMaxWaveLength ? spec_data[j*data_number + i] : 0.0f;
       xyz[0] += kCmfX[wl - kMinWavelength] * v;

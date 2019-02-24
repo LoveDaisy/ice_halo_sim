@@ -109,14 +109,15 @@ public:
 
   static constexpr int kMinWavelength = 360;
   static constexpr int kMaxWaveLength = 830;
+  static constexpr uint8_t kColorMaxVal = 255;
 
 private:
   int LoadDataFromFile(File& file);
-  void CopySpectrumData(float* wl_data_out, float* sp_data_out);
-  void Rgb(int wavelength_number, int data_number,
+  void GatherSpectrumData(float* wl_data_out, float* sp_data_out);
+  void Rgb(size_t wavelength_number, size_t data_number,
            const float* wavelengths, const float* spec_data, // spec_data: wavelength_number x data_number
            uint8_t* rgb_data);                               // rgb data, data_number x 3
-  void Gray(int wavelength_number, int data_number,
+  void Gray(size_t wavelength_number, size_t data_number,
             const float* wavelengths, const float* spec_data,
             uint8_t* rgb_data);
 
