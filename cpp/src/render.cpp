@@ -336,8 +336,8 @@ void SpectrumRenderer::CopySpectrumData(float* wl_data_out, float* sp_data_out) 
     std::memcpy(sp_data_out + k * img_wid * img_hei, kv.second, img_wid * img_hei * sizeof(float));
     k++;
   }
-  for (uint64_t i = 0; i < img_wid * img_hei * this->spectrum_data_.size(); i++) {
-    sp_data_out[i] *= 2e4 / total_w_ * intensity_factor;
+  for (decltype(spectrum_data_.size()) i = 0; i < img_wid * img_hei * spectrum_data_.size(); i++) {
+    sp_data_out[i] *= 1e5 / total_w_ * intensity_factor;
   }
 }
 
