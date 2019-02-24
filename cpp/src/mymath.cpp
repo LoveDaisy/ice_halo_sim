@@ -593,19 +593,15 @@ void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float
 
   auto* tmp_dir = new float[num * 3];
 
-  float dz = 1.0f - std::cos(std * kDegreeToRad);
+  double dz = 2 * std::sin(std / 2.0 * kDegreeToRad) * std::sin(std / 2.0 * kDegreeToRad);
   for (decltype(num) i = 0; i < num; i++) {
-    float udz = rng->GetUniform() * dz;
+    double udz = rng->GetUniform() * dz;
     float q = rng->GetUniform() * 2 * Math::kPi;
 
-    float r = std::sqrt((2.0f - udz) * udz);
-    float x = std::cos(q) * r;
-    float y = std::sin(q) * r;
-    float z = 1.0f - udz;
-
-    tmp_dir[i * 3 + 0] = x;
-    tmp_dir[i * 3 + 1] = y;
-    tmp_dir[i * 3 + 2] = z;
+    double r = std::sqrt((2.0f - udz) * udz);
+    tmp_dir[i * 3 + 0] = static_cast<float>(std::cos(q) * r);
+    tmp_dir[i * 3 + 1] = static_cast<float>(std::sin(q) * r);
+    tmp_dir[i * 3 + 2] = static_cast<float>(1.0f - udz);
   }
   Math::RotateZBack(rot, tmp_dir, data, num);
 
