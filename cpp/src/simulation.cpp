@@ -227,7 +227,7 @@ void Simulator::RestoreResultRays() {
   auto rng = Math::RandomNumberGenerator::GetInstance();
   size_t idx = 0;
   for (const auto& r : exit_ray_segments_.back()) {
-    if (!r->is_finished_) {
+    if (!r->is_finished_ || r->w_ < context_->kScatMinW) {
       continue;
     }
     if (rng->GetUniform() > prob) {
