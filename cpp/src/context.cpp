@@ -853,10 +853,10 @@ void SimulationContext::PrintCrystalInfo() {
   for (const auto& c : crystal_ctx_) {
     auto g = c->GetCrystal();
     printf("--\n");
-    for (const auto& v : g->getVertexes()) {
+    for (const auto& v : g->GetVertexes()) {
       printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
     }
-    for (const auto& f : g->getFaces()) {
+    for (const auto& f : g->GetFaces()) {
       auto idx = f.idx();
       printf("f %d %d %d\n", idx[0] + 1, idx[1] + 1, idx[2] + 1);
     }

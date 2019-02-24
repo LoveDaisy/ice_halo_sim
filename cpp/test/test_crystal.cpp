@@ -28,47 +28,47 @@ protected:
   }
 
   void checkCrystal(const IceHalo::CrystalPtrU& c1, const IceHalo::CrystalPtrU& c2) {
-    auto n1 = c1->getNorms();
-    auto n2 = c2->getNorms();
+    auto n1 = c1->GetFaceNorm();
+    auto n2 = c2->GetFaceNorm();
     auto fn1 = c1->GetFaceNumberMap();
     auto fn2 = c2->GetFaceNumberMap();
 
-    ASSERT_EQ(n1.size(), n2.size());
+    ASSERT_EQ(c1->TotalFaces(), c2->TotalFaces());
     ASSERT_EQ(fn1.size(), fn2.size());
-    for (decltype(n1.size()) i = 0; i < n1.size(); i++) {
-      const auto& n = n1[i];
+    for (decltype(c1->TotalFaces()) i = 0; i < c1->TotalFaces(); i++) {
+      const auto n = n1 + i * 3;
       int fn = fn1[i];
 
-      bool findSameNorm = false;
-      for (decltype(n2.size()) j = 0; j < n2.size(); j++) {
-        const auto& tmpN = n2[j];
-        int tmpFn = fn2[j];
-        if (n == tmpN) {
-          findSameNorm = true;
-          EXPECT_EQ(tmpFn, fn);
+      bool find_same_norm = false;
+      for (decltype(c2->TotalFaces()) j = 0; j < c2->TotalFaces(); j++) {
+        const auto tmp_n = n2 + j * 3;
+        int tmp_fn = fn2[j];
+        if (IceHalo::Math::DiffNorm3(n, tmp_n) < IceHalo::Math::kFloatEps) {
+          find_same_norm = true;
+          EXPECT_EQ(tmp_fn, fn);
         }
       }
-      EXPECT_TRUE(findSameNorm);
+      EXPECT_TRUE(find_same_norm);
     }
 
-    for (decltype(n2.size()) i = 0; i < n2.size(); i++) {
-      const auto& n = n2[i];
+    for (decltype(c2->TotalFaces()) i = 0; i < c2->TotalFaces(); i++) {
+      const auto n = n2 + i * 3;
       int fn = fn2[i];
 
-      bool findSameNorm = false;
-      for (decltype(n1.size()) j = 0; j < n1.size(); j++) {
-        const auto& tmpN = n1[j];
-        int tmpFn = fn1[j];
-        if (n == tmpN) {
-          findSameNorm = true;
-          EXPECT_EQ(tmpFn, fn);
+      bool find_same_norm = false;
+      for (decltype(c1->TotalFaces()) j = 0; j < c1->TotalFaces(); j++) {
+        const auto tmp_n = n1 + j * 3;
+        int tmp_fn = fn1[j];
+        if (IceHalo::Math::DiffNorm3(n, tmp_n) < IceHalo::Math::kFloatEps) {
+          find_same_norm = true;
+          EXPECT_EQ(tmp_fn, fn);
         }
       }
-      EXPECT_TRUE(findSameNorm);
+      EXPECT_TRUE(find_same_norm);
     }
 
-    auto v1 = c1->getVertexes();
-    auto v2 = c2->getVertexes();
+    auto v1 = c1->GetVertexes();
+    auto v2 = c2->GetVertexes();
     for (const auto& v : v1) {
       auto findIter = std::find(v2.begin(), v2.end(), v);
       EXPECT_NE(findIter, v2.end());
@@ -135,8 +135,8 @@ TEST_F(CrystalTest, HexPrismVertex) {
   };
 
   auto c = IceHalo::Crystal::CreateHexPrism(h);
-  EXPECT_EQ(c->getVertexes().size(), 12ul);
-  checkVertex(pts0, c->getVertexes());
+  EXPECT_EQ(c->GetVertexes().size(), 12ul);
+  checkVertex(pts0, c->GetVertexes());
   checkFaceId(faceId0, c->GetFaceNumberMap());
 }
 
@@ -188,18 +188,18 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
   };
 
   auto c = IceHalo::Crystal::CreateHexPyramid(h1, h2, h3);
-  EXPECT_EQ(c->getVertexes().size(), 24ul);
-  checkVertex(pts0, c->getVertexes());
+  EXPECT_EQ(c->GetVertexes().size(), 24ul);
+  checkVertex(pts0, c->GetVertexes());
   checkFaceId(faceId0, c->GetFaceNumberMap());
 
   c = IceHalo::Crystal::CreateHexPyramid(1, 1, h1, h2, h3);
-  EXPECT_EQ(c->getVertexes().size(), 24ul);
-  checkVertex(pts0, c->getVertexes());
+  EXPECT_EQ(c->GetVertexes().size(), 24ul);
+  checkVertex(pts0, c->GetVertexes());
   checkFaceId(faceId0, c->GetFaceNumberMap());
 
   c = IceHalo::Crystal::CreateHexPyramid(1, 1, 1, 1, h1, h2, h3);
-  EXPECT_EQ(c->getVertexes().size(), 24ul);
-  checkVertex(pts0, c->getVertexes());
+  EXPECT_EQ(c->GetVertexes().size(), 24ul);
+  checkVertex(pts0, c->GetVertexes());
   checkFaceId(faceId0, c->GetFaceNumberMap());
 }
 

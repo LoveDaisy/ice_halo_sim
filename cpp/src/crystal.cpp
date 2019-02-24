@@ -10,7 +10,7 @@ Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes,
                  const std::vector<Math::TriangleIdx>& faces,
                  CrystalType type)
     : vertexes_(vertexes), faces_(faces), type_(type), face_number_period_(-1),
-      face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr) {
+      face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitNorm();
   InitFaceNumber();
   switch (type_) {
@@ -35,7 +35,7 @@ Crystal::Crystal(const std::vector<IceHalo::Math::Vec3f>& vertexes,
                  const std::vector<int>& faceId,
                  CrystalType type)
     : vertexes_(vertexes), faces_(faces), face_number_map_(faceId), type_(type), face_number_period_(-1),
-      face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr) {
+      face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitNorm();
 }
 
@@ -44,20 +44,19 @@ Crystal::~Crystal() {
   delete[] face_bases_;
   delete[] face_vertexes_;
   delete[] face_norm_;
+  delete[] face_area_;
 }
 
 
-const std::vector<Math::Vec3f>& Crystal::getVertexes() {
+const std::vector<Math::Vec3f>& Crystal::GetVertexes() {
   return vertexes_;
 }
 
-const std::vector<Math::Vec3f>& Crystal::getNorms() {
-  return norms_;
-}
 
-const std::vector<Math::TriangleIdx>& Crystal::getFaces() {
+const std::vector<Math::TriangleIdx>& Crystal::GetFaces() {
   return faces_;
 }
+
 
 const std::vector<int>& Crystal::GetFaceNumberMap() {
   return face_number_map_;
@@ -117,12 +116,6 @@ void Crystal::CopyFaceAreaData(float* data) const {
 }
 
 
-void Crystal::CopyNormData(float* data) const {
-  for (decltype(norms_.size()) i = 0; i < norms_.size(); i++) {
-    std::memcpy(data + i * 3, norms_[i].val(), 3 * sizeof(float));
-  }
-}
-
 void Crystal::InitNorm() {
   using Math::Vec3f;
 
@@ -130,28 +123,21 @@ void Crystal::InitNorm() {
   face_bases_ = new float[face_num * 6];
   face_vertexes_ = new float[face_num * 9];
   face_norm_ = new float[face_num * 3];
+  face_area_ = new float[face_num];
 
-  norms_.clear();
   for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
     const auto& f = faces_[i];
     auto idx = f.idx();
-    Vec3f v1 = Vec3f::FromTo(vertexes_[idx[0]], vertexes_[idx[1]]);
-    Vec3f v2 = Vec3f::FromTo(vertexes_[idx[0]], vertexes_[idx[2]]);
-    norms_.push_back(Vec3f::Cross(v1, v2));
+    Math::Vec3FromTo(vertexes_[idx[0]].val(), vertexes_[idx[1]].val(), face_bases_ + i * 6 + 0);
+    Math::Vec3FromTo(vertexes_[idx[0]].val(), vertexes_[idx[2]].val(), face_bases_ + i * 6 + 3);
+    Math::Cross3(face_bases_ + i * 6 + 0, face_bases_ + i * 6 + 3, face_norm_ + i * 3);
 
-    std::memcpy(face_bases_ + i * 6 + 0, v1.val(), 3 * sizeof(float));
-    std::memcpy(face_bases_ + i * 6 + 3, v2.val(), 3 * sizeof(float));
+    face_area_[i] = Math::Norm3(face_norm_ + i * 3) / 2;
+    Math::Normalize3(face_norm_ + i * 3);
 
     std::memcpy(face_vertexes_ + i * 9 + 0, vertexes_[idx[0]].val(), 3 * sizeof(float));
     std::memcpy(face_vertexes_ + i * 9 + 3, vertexes_[idx[1]].val(), 3 * sizeof(float));
     std::memcpy(face_vertexes_ + i * 9 + 6, vertexes_[idx[2]].val(), 3 * sizeof(float));
-  }
-  for (auto& v : norms_) {
-    v.Normalize();
-  }
-
-  for (decltype(norms_.size()) i = 0; i < norms_.size(); i++) {
-    std::memcpy(face_norm_ + i * 3, norms_[i].val(), 3 * sizeof(float));
   }
 }
 
@@ -174,12 +160,12 @@ void Crystal::InitFaceNumber() {
 }
 
 void Crystal::InitFaceNumberHex() {
-  assert(faces_.size() == norms_.size());
   for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
+    const auto curr_face_norm = face_norm_ + i * 3;
     float maxVal = -1;
     int maxFaceNumber = -1;
     for (const auto& d : hex_face_norm_to_number_list_) {
-      float tmpVal = Math::Vec3f::Dot(norms_[i], d.first);
+      float tmpVal = Math::Dot3(curr_face_norm, d.first.val());
       if (tmpVal > maxVal) {
         maxVal = tmpVal;
         maxFaceNumber = d.second;
@@ -187,9 +173,9 @@ void Crystal::InitFaceNumberHex() {
     }
 
     if (maxVal > 0) {
-      if (std::abs(maxVal - 1) > Math::kFloatEps && norms_[i].z() > Math::kFloatEps) {
+      if (std::abs(maxVal - 1) > Math::kFloatEps && curr_face_norm[2] > Math::kFloatEps) {
         maxFaceNumber += 10;
-      } else if (std::abs(maxVal - 1) > Math::kFloatEps && norms_[i].z() < -Math::kFloatEps) {
+      } else if (std::abs(maxVal - 1) > Math::kFloatEps && curr_face_norm[2] < -Math::kFloatEps) {
         maxFaceNumber += 20;
       }
     }
@@ -198,12 +184,12 @@ void Crystal::InitFaceNumberHex() {
 }
 
 void Crystal::InitFaceNumberCubic() {
-  assert(faces_.size() == norms_.size());
   for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
+    const auto curr_face_norm = face_norm_ + i * 3;
     float maxVal = -1;
     int maxFaceNumber = -1;
     for (const auto& d : cubic_face_norm_to_number_list_) {
-      float tmpVal = Math::Vec3f::Dot(norms_[i], d.first);
+      float tmpVal = Math::Dot3(curr_face_norm, d.first.val());
       if (tmpVal > maxVal) {
         maxVal = tmpVal;
         maxFaceNumber = d.second;
@@ -211,9 +197,9 @@ void Crystal::InitFaceNumberCubic() {
     }
 
     if (maxVal > 0) {
-      if (std::abs(maxVal - 1) > Math::kFloatEps && norms_[i].z() > Math::kFloatEps) {
+      if (std::abs(maxVal - 1) > Math::kFloatEps && curr_face_norm[2] > Math::kFloatEps) {
         maxFaceNumber += 10;
-      } else if (std::abs(maxVal - 1) > Math::kFloatEps && norms_[i].z() < -Math::kFloatEps) {
+      } else if (std::abs(maxVal - 1) > Math::kFloatEps && curr_face_norm[2] < -Math::kFloatEps) {
         maxFaceNumber += 20;
       }
     }
@@ -222,14 +208,14 @@ void Crystal::InitFaceNumberCubic() {
 }
 
 void Crystal::InitFaceNumberStack() {
-  assert(faces_.size() == norms_.size());
   float maxHeight = std::numeric_limits<float>::lowest();
   float minHeight = std::numeric_limits<float>::max();
   for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
+    const auto curr_face_norm = face_norm_ + i * 3;
     float maxVal = -1;
     int maxFaceNumber = -1;
     for (const auto& d : hex_face_norm_to_number_list_) {
-      float tmpVal = Math::Vec3f::Dot(norms_[i], d.first);
+      float tmpVal = Math::Dot3(curr_face_norm, d.first.val());
       if (tmpVal > maxVal) {
         maxVal = tmpVal;
         maxFaceNumber = d.second;
@@ -254,6 +240,7 @@ void Crystal::InitFaceNumberStack() {
       continue;
     }
     const auto* idx = faces_[i].idx();
+    const auto curr_face_norm = face_norm_ + i * 3;
 
     bool isTop = false;
     bool isBottom = false;
@@ -266,7 +253,7 @@ void Crystal::InitFaceNumberStack() {
       isLower = isLower && vertexes_[idx[j]].z() < -Math::kFloatEps;
     }
 
-    bool isPrism = std::abs(norms_[i].z()) < Math::kFloatEps;
+    bool isPrism = std::abs(curr_face_norm[2]) < Math::kFloatEps;
 
     if (isTop && !isPrism) {
       face_number_map_[i] += 10;

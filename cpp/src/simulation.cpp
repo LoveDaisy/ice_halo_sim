@@ -151,12 +151,11 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
   auto total_faces = crystal->TotalFaces();
 
   auto* face_area = new float[total_faces];
-  auto* face_norm = new float[total_faces * 3];
   auto* prob = new float[total_faces];
+  auto* face_norm = crystal->GetFaceNorm();
   auto* face_point = crystal->GetFaceVertex();
 
   crystal->CopyFaceAreaData(face_area);
-  crystal->CopyNormData(face_norm);
 
   auto ray_pool = RaySegmentPool::GetInstance();
   auto rng = Math::RandomNumberGenerator::GetInstance();
@@ -192,7 +191,6 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
   }
 
   delete[] face_area;
-  delete[] face_norm;
   delete[] prob;
 }
 
@@ -300,8 +298,8 @@ void Simulator::StoreRaySegments() {
       continue;
     }
 
-    auto r = ray_pool->GetRaySegment(
-      buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3, buffer_.w[1][i], buffer_.face_id[0][i / 2]);
+    auto r = ray_pool->GetRaySegment(buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3,
+                                     buffer_.w[1][i], buffer_.face_id[0][i / 2]);
     if (buffer_.face_id[1][i] < 0) {
       r->is_finished_ = true;
     }

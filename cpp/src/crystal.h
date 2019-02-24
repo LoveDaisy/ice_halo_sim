@@ -26,9 +26,8 @@ public:
   int TotalFaces() const;
   int FaceNumber(int idx) const;
 
-  const std::vector<Math::Vec3f>& getVertexes();
-  const std::vector<Math::Vec3f>& getNorms();
-  const std::vector<Math::TriangleIdx>& getFaces();
+  const std::vector<Math::Vec3f>& GetVertexes();
+  const std::vector<Math::TriangleIdx>& GetFaces();
   const std::vector<int>& GetFaceNumberMap();
 
   const float* GetFaceVertex() const;
@@ -37,7 +36,6 @@ public:
   int GetFaceNumberPeriod() const;
 
   void CopyFaceAreaData(float* data) const;
-  void CopyNormData(float* data) const;
 
   static constexpr float kC = 1.629f;
 
@@ -153,7 +151,6 @@ protected:
   static const std::vector<std::pair<Math::Vec3f, int> > cubic_face_norm_to_number_list_;
 
   std::vector<Math::Vec3f> vertexes_;
-  std::vector<Math::Vec3f> norms_;
   std::vector<Math::TriangleIdx> faces_;
   std::vector<int> face_number_map_;
   CrystalType type_;
@@ -162,6 +159,7 @@ protected:
   float* face_bases_;
   float* face_vertexes_;
   float* face_norm_;
+  float* face_area_;
 
 private:
   /*! @brief Constructor, given vertexes and faces

@@ -44,9 +44,7 @@ Ray::Ray(RaySegment* seg, const CrystalContextPtr& crystal_ctx, const float main
 void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
                         const float* dir_in, const int* face_id_in, const float* w_in,
                         float* dir_out, float* w_out) {
-  auto face_num = crystal->TotalFaces();
-  auto face_norm = new float[face_num * 3];
-  crystal->CopyNormData(face_norm);
+  auto face_norm = crystal->GetFaceNorm();
 
   for (decltype(num) i = 0; i < num; i++) {
     const float* tmp_dir = dir_in + i * 3;
@@ -69,8 +67,6 @@ void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
                               rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];  // Refraction
     }
   }
-
-  delete[] face_norm;
 }
 
 
