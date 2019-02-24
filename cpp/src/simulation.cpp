@@ -108,8 +108,8 @@ void Simulator::Start() {
 
     for (const auto& ctx : active_crystal_ctxs_) {
       active_ray_num_ = static_cast<size_t>(ctx->GetPopulation() * total_ray_num_);
-      if (buffer_size_ < active_ray_num_ * kBufferSizeFactor) {
-        buffer_size_ = active_ray_num_ * kBufferSizeFactor;
+      if (buffer_size_ < total_ray_num_ * kBufferSizeFactor) {
+        buffer_size_ = total_ray_num_ * kBufferSizeFactor;
         buffer_.Allocate(buffer_size_);
       }
       if (i == 0) {
