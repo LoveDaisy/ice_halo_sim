@@ -8,55 +8,55 @@
 namespace IceHalo {
 
 enum class VisibleSemiSphere {
-  UPPER,
-  LOWER,
-  CAMERA,
-  FULL
+  kUpper,
+  kLower,
+  kCamera,
+  kFull
 };
 
 
 enum class ProjectionType {
-  LINEAR,
-  EQUI_AREA,
-  DUAL_EQUI_AREA,
-  DUAL_EQUI_DISTANT,
+  kLinear,
+  kEqualArea,
+  kDualEqualArea,
+  kDualEquidistant,
 };
 
 
-void equiAreaFishEye(float* camRot,           // Camera rotation. [lon, lat, roll]
-                     float hov,               // Half field of view.
-                     uint64_t dataNumber,     // Data number
-                     float* dir,              // Ray directions, [x, y, z]
-                     int imgWid, int imgHei,  // Image size
-                     int* imgXY,              // Image coordinates
-                     VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER);  // Which semi-sphere can be visible
+void EqualAreaFishEye(float* cam_rot,            // Camera rotation. [lon, lat, roll]
+                      float hov,                 // Half field of view.
+                      uint64_t data_number,      // Data number
+                      float* dir,                // Ray directions, [x, y, z]
+                      int img_wid, int img_hei,  // Image size
+                      int* img_xy,               // Image coordinates
+                      VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);  // Which semi-sphere can be visible
 
 
-void dualEquiAreaFishEye(float* camRot,           // Not used
-                         float hov,               // Not used
-                         uint64_t dataNumber,     // Data number
-                         float* dir,              // Ray directions, [x, y, z]
-                         int imgWid, int imgHei,  // Image size
-                         int* imgXY,              // Image coordinates
-                         VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER);   // Not used
+void DualEqualAreaFishEye(float* cam_rot,            // Not used
+                          float hov,                 // Not used
+                          uint64_t data_number,      // Data number
+                          float* dir,                // Ray directions, [x, y, z]
+                          int img_wid, int img_hei,  // Image size
+                          int* img_xy,               // Image coordinates
+                          VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);   // Not used
 
 
-void dualEquiDistantFishEye(float* camRot,           // Not used
-                            float hov,               // Not used
-                            uint64_t dataNumber,     // Data number
-                            float* dir,              // Ray directions, [x, y, z]
-                            int imgWid, int imgHei,  // Image size
-                            int* imgXY,              // Image coordinates
-                            VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER);   // Not used
+void DualEquidistantFishEye(float* cam_rot,            // Not used
+                            float hov,                 // Not used
+                            uint64_t data_number,      // Data number
+                            float* dir,                // Ray directions, [x, y, z]
+                            int img_wid, int img_hei,  // Image size
+                            int* img_xy,               // Image coordinates
+                            VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);   // Not used
 
 
-void rectLinear(float* camRot,           // Camera rotation. [lon, lat, roll]
-                float hov,               // Half field of view.
-                uint64_t dataNumber,     // Data number
-                float* dir,              // Ray directions, [x, y, z]
-                int imgWid, int imgHei,  // Image size
-                int* imgXY,              // Image coordinates
-                VisibleSemiSphere visibleSemiSphere = VisibleSemiSphere::UPPER);   // Which semi-sphere can be visible
+void RectLinear(float* cam_rot,            // Camera rotation. [lon, lat, roll]
+                float hov,                 // Half field of view.
+                uint64_t data_number,      // Data number
+                float* dir,                // Ray directions, [x, y, z]
+                int img_wid, int img_hei,  // Image size
+                int* img_xy,               // Image coordinates
+                VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);   // Which semi-sphere can be visible
 
 
 /* A workaround for disgusting C++11 standard that enum class cannot be a key */
@@ -75,19 +75,20 @@ using MyUnorderedMap = std::unordered_map<Key, T, HashType<Key>>;
 /* Workaround end */
 
 
-static MyUnorderedMap<ProjectionType,
-    std::function<void(float* camRot,           // Camera rotation. [lon, lat, roll]
-                       float hov,               // Half field of view.
-                       uint64_t dataNumber,     // Data number
-                       float* dir,              // Ray directions, [x, y, z]
-                       int imgWid, int imgHei,  // Image size
-                       int* imgXY,              // Image coordinates
-                       VisibleSemiSphere visibleSemiSphere)>
-> projectionFunctions = {
-  {ProjectionType::LINEAR,            &rectLinear},
-  {ProjectionType::EQUI_AREA,         &equiAreaFishEye},
-  {ProjectionType::DUAL_EQUI_DISTANT, &dualEquiDistantFishEye},
-  {ProjectionType::DUAL_EQUI_AREA,    &dualEquiAreaFishEye},
+using ProjectionFunction = std::function<void(float* cam_rot,            // Camera rotation. [lon, lat, roll]
+                                              float hov,                 // Half field of view.
+                                              uint64_t data_number,      // Data number
+                                              float* dir,                // Ray directions, [x, y, z]
+                                              int img_wid, int img_hei,  // Image size
+                                              int* img_xy,               // Image coordinates
+                                              VisibleSemiSphere visible_semi_sphere)>;
+
+
+static MyUnorderedMap<ProjectionType, ProjectionFunction> projectionFunctions = {
+  { ProjectionType::kLinear, &RectLinear },
+  { ProjectionType::kEqualArea, &EqualAreaFishEye },
+  { ProjectionType::kDualEquidistant, &DualEquidistantFishEye },
+  { ProjectionType::kDualEqualArea, &DualEqualAreaFishEye },
 };
 
 
@@ -96,22 +97,20 @@ public:
   SpectrumRenderer() = default;
   ~SpectrumRenderer() = default;
 
-  void rgb(int waveLengthNumber, float* waveLengths,  // wave lengths
-       int dataNumber, float* specData,       // spectrum data, waveLengthNumber x dataNumber
-       uint8_t* rgbData);             // rgb data, dataNumber x 3
-  void gray(int waveLengthNumber, float* waveLengths,
-        int dataNumber, float* specData,
-        uint8_t* rgbData);
+  void Rgb(int wavelength_number, float* wavelengths,  // wave lengths
+           int data_number, float* spec_data,       // spectrum data, wavelength_number x data_number
+           uint8_t* rgb_data);             // rgb data, dataNumber x 3
+  void Gray(int wavelength_number, float* wavelengths,
+            int data_number, float* spec_data,
+            uint8_t* rgb_data);
 
-  static constexpr int MIN_WL = 360;
-  static constexpr int MAX_WL = 830;
+  static constexpr int kMinWavelength = 360;
+  static constexpr int kMaxWaveLength = 830;
 
 private:
-  static constexpr float _cmf_xyz_sum[] = { 106.8655f, 106.8569f, 106.8923 };
-
-  static constexpr float _W[] = { 0.95047f, 1.00000f, 1.08883f };  // D65 for sRGB
-  static constexpr float _mt[] = { 3.2405f, -1.5371f, -0.4985f, -0.9693f, 1.8760f, 0.0416f, 0.0556f, -0.2040f, 1.0572f };
-  static constexpr float _cmf_x[] = {
+  static constexpr float kWhitePointD65[] = { 0.95047f, 1.00000f, 1.08883f };  // D65 for sRGB
+  static constexpr float kXyzToRgb[] = { 3.2405f, -1.5371f, -0.4985f, -0.9693f, 1.8760f, 0.0416f, 0.0556f, -0.2040f, 1.0572f };
+  static constexpr float kCmfX[] = {
     0.000129900000f, 0.000145847000f, 0.000163802100f, 0.000184003700f, 0.000206690200f, 0.000232100000f, 0.000260728000f,
     0.000293075000f, 0.000329388000f, 0.000369914000f, 0.000414900000f, 0.000464158700f, 0.000518986000f, 0.000581854000f,
     0.000655234700f, 0.000741600000f, 0.000845029600f, 0.000964526800f, 0.001094949000f, 0.001231154000f, 0.001368000000f,
@@ -182,7 +181,7 @@ private:
     0.000001341977f, 0.000001251141f
   };
 
-  static constexpr float _cmf_y[] = {
+  static constexpr float kCmfY[] = {
     0.000003917000f, 0.000004393581f, 0.000004929604f, 0.000005532136f, 0.000006208245f, 0.000006965000f, 0.000007813219f,
     0.000008767336f, 0.000009839844f, 0.000011043230f, 0.000012390000f, 0.000013886410f, 0.000015557280f, 0.000017442960f,
     0.000019583750f, 0.000022020000f, 0.000024839650f, 0.000028041260f, 0.000031531040f, 0.000035215210f, 0.000039000000f,
@@ -253,7 +252,7 @@ private:
     0.000000484612f, 0.000000451810f
   };
 
-  static constexpr float _cmf_z[] = {
+  static constexpr float kCmfZ[] = {
     0.000606100000f, 0.000680879200f, 0.000765145600f, 0.000860012400f, 0.000966592800f, 0.001086000000f, 0.001220586000f,
     0.001372729000f, 0.001543579000f, 0.001734286000f, 0.001946000000f, 0.002177777000f, 0.002435809000f, 0.002731953000f,
     0.003078064000f, 0.003486000000f, 0.003975227000f, 0.004540880000f, 0.005158320000f, 0.005802907000f, 0.006450001000f,

@@ -867,10 +867,10 @@ void SimulationContext::PrintCrystalInfo() {
 
 RenderContext::RenderContext(rapidjson::Document& d) :
     img_hei_(0), img_wid_(0), offset_y_(0), offset_x_(0),
-    visible_semi_sphere_(VisibleSemiSphere::UPPER),
+    visible_semi_sphere_(VisibleSemiSphere::kUpper),
     total_ray_num_(0), total_w_(0), intensity_factor_(1.0), show_horizontal_(true),
     data_directory_("./"),
-    projection_type_(ProjectionType::EQUI_AREA) {
+    projection_type_(ProjectionType::kEqualArea) {
   ParseCameraSettings(d);
   ParseRenderSettings(d);
   ParseDataSettings(d);
@@ -918,7 +918,7 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
   fov_ = 120.0f;
   img_wid_ = 800;
   img_hei_ = 800;
-  projection_type_ = ProjectionType::EQUI_AREA;
+  projection_type_ = ProjectionType::kEqualArea;
 
   auto* p = Pointer("/camera/azimuth").Get(d);
   if (p == nullptr) {
@@ -992,13 +992,13 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
     fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equi-area fisheye!\n");
   } else {
     if (*p == "linear") {
-      projection_type_ = ProjectionType::LINEAR;
+      projection_type_ = ProjectionType::kLinear;
     } else if (*p == "fisheye") {
-      projection_type_ = ProjectionType::EQUI_AREA;
+      projection_type_ = ProjectionType::kEqualArea;
     } else if (*p == "dual_fisheye_equidistant") {
-      projection_type_ = ProjectionType::DUAL_EQUI_DISTANT;
+      projection_type_ = ProjectionType::kDualEquidistant;
     } else if (*p == "dual_fisheye_equiarea") {
-      projection_type_ = ProjectionType::DUAL_EQUI_AREA;
+      projection_type_ = ProjectionType::kDualEqualArea;
     } else {
       fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equi-area fisheye!\n");
     }
@@ -1007,7 +1007,7 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
 
 
 void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
-  visible_semi_sphere_ = VisibleSemiSphere::UPPER;
+  visible_semi_sphere_ = VisibleSemiSphere::kUpper;
   intensity_factor_ = 1.0;
   offset_y_ = 0;
   offset_x_ = 0;
@@ -1021,19 +1021,19 @@ void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
 
   auto* p = Pointer("/render/visible_semi_sphere").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.visible_semi_sphere>, using default UPPER!\n");
+    fprintf(stderr, "\nWARNING! Config missing <render.visible_semi_sphere>, using default kUpper!\n");
   } else if (!p->IsString()) {
-    fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> is not a string, using default UPPER!\n");
+    fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> is not a string, using default kUpper!\n");
   } else if (*p == "upper") {
-    visible_semi_sphere_ = VisibleSemiSphere::UPPER;
+    visible_semi_sphere_ = VisibleSemiSphere::kUpper;
   } else if (*p == "lower") {
-    visible_semi_sphere_ = VisibleSemiSphere::LOWER;
+    visible_semi_sphere_ = VisibleSemiSphere::kLower;
   } else if (*p == "camera") {
-    visible_semi_sphere_ = VisibleSemiSphere::CAMERA;
+    visible_semi_sphere_ = VisibleSemiSphere::kCamera;
   } else if (*p == "full") {
-    visible_semi_sphere_ = VisibleSemiSphere::FULL;
+    visible_semi_sphere_ = VisibleSemiSphere::kFull;
   } else {
-    fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> cannot be recognized, using default UPPER!\n");
+    fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> cannot be recognized, using default kUpper!\n");
   }
 
   p = Pointer("/render/intensity_factor").Get(d);
@@ -1148,9 +1148,9 @@ void RenderContext::RenderToRgb(uint8_t* rgbData) {
 
   CopySpectrumData(wlData, flatSpecData);
   if (ray_color_[0] < 0) {
-    render.rgb(static_cast<int>(wlNum), wlData, img_wid_ * img_hei_, flatSpecData, rgbData);
+    render.Rgb(static_cast<int>(wlNum), wlData, img_wid_ * img_hei_, flatSpecData, rgbData);
   } else {
-    render.gray(static_cast<int>(wlNum), wlData, img_wid_ * img_hei_, flatSpecData, rgbData);
+    render.Gray(static_cast<int>(wlNum), wlData, img_wid_ * img_hei_, flatSpecData, rgbData);
   }
   for (size_t i = 0; i < img_wid_ * img_hei_; i++) {
     for (int c = 0; c <= 2; c++) {
@@ -1212,7 +1212,7 @@ int RenderContext::LoadDataFromFile(File& file) {
   }
 
   auto wavelength = static_cast<int>(readBuffer[0]);
-  if (wavelength < SpectrumRenderer::MIN_WL || wavelength > SpectrumRenderer::MAX_WL) {
+  if (wavelength < SpectrumRenderer::kMinWavelength || wavelength > SpectrumRenderer::kMaxWaveLength) {
     return -1;
   }
 
@@ -1254,7 +1254,7 @@ int RenderContext::LoadDataFromFile(File& file) {
     if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
       continue;
     }
-    if (projection_type_ != ProjectionType::DUAL_EQUI_AREA && projection_type_ != ProjectionType::DUAL_EQUI_DISTANT) {
+    if (projection_type_ != ProjectionType::kDualEqualArea && projection_type_ != ProjectionType::kDualEquidistant) {
       x += offset_x_;
       y += offset_y_;
     }
