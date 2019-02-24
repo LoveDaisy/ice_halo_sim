@@ -3,7 +3,6 @@
 
 #include "mymath.h"
 #include "crystal.h"
-#include "render.h"
 #include "files.h"
 #include "optics.h"
 
@@ -22,6 +21,9 @@ namespace IceHalo {
 
 class RaySegment;
 class CrystalContext;
+
+enum class ProjectionType;
+enum class VisibleSemiSphere;
 
 struct AxisDistribution {
   Math::Distribution axis_dist;
@@ -163,15 +165,27 @@ private:
 
 class RenderContext {
 public:
-  ~RenderContext();
-
-  void LoadData();
+  ~RenderContext() = default;
 
   uint32_t GetImageWidth() const;
   uint32_t GetImageHeight() const;
   std::string GetImagePath() const;
 
-  void RenderToRgb(uint8_t* rgbData);
+  std::string GetDataDirectory() const;
+
+  const float* GetCamRot() const;
+  float GetFov() const;
+  ProjectionType GetProjectionType() const;
+  VisibleSemiSphere GetVisibleSemiSphere() const;
+
+  int GetOffsetX() const;
+  int GetOffsetY() const;
+
+  uint32_t GetTotalRayNum() const;
+
+  const float* GetRayColor() const;
+  const float* GetBackgroundColor() const;
+  double GetIntensityFactor() const;
 
   static std::unique_ptr<RenderContext> CreateFromFile(const char* filename);
 
@@ -183,32 +197,25 @@ private:
   void ParseRenderSettings(rapidjson::Document& d);
   void ParseDataSettings(rapidjson::Document& d);
 
-  int LoadDataFromFile(File& file);
-  void CopySpectrumData(float* wavelengthData, float* spectrumData) const;
-
   float cam_rot_[3];
   float fov_;
 
   float ray_color_[3];
   float background_color_[3];
-  SpectrumRenderer render;
 
   uint32_t img_hei_;
   uint32_t img_wid_;
   int offset_y_;
   int offset_x_;
   VisibleSemiSphere visible_semi_sphere_;
+  ProjectionType projection_type_;
 
-  std::unordered_map<int, float*> spectrum_data_;
   uint32_t total_ray_num_;
-  double total_w_;
   double intensity_factor_;
 
   bool show_horizontal_;
 
   std::string data_directory_;
-
-  ProjectionType projection_type_;
 };
 
 using CrystalContextPtr = std::shared_ptr<CrystalContext>;

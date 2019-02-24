@@ -3,6 +3,7 @@
 #include "context.h"
 #include "optics.h"
 #include "threadingpool.h"
+#include "render.h"
 
 #include "rapidjson/pointer.h"
 #include "rapidjson/error/en.h"
@@ -868,19 +869,12 @@ void SimulationContext::PrintCrystalInfo() {
 RenderContext::RenderContext(rapidjson::Document& d) :
     img_hei_(0), img_wid_(0), offset_y_(0), offset_x_(0),
     visible_semi_sphere_(VisibleSemiSphere::kUpper),
-    total_ray_num_(0), total_w_(0), intensity_factor_(1.0), show_horizontal_(true),
-    data_directory_("./"),
-    projection_type_(ProjectionType::kEqualArea) {
+    projection_type_(ProjectionType::kEqualArea),
+    total_ray_num_(0), intensity_factor_(1.0), show_horizontal_(true),
+    data_directory_("./") {
   ParseCameraSettings(d);
   ParseRenderSettings(d);
   ParseDataSettings(d);
-}
-
-
-RenderContext::~RenderContext() {
-  for (const auto& kv : spectrum_data_) {
-    delete[] kv.second;
-  }
 }
 
 
@@ -1141,133 +1135,58 @@ std::string RenderContext::GetImagePath() const {
 }
 
 
-void RenderContext::RenderToRgb(uint8_t* rgbData) {
-  auto wlNum = spectrum_data_.size();
-  auto* wlData = new float[wlNum];
-  auto* flatSpecData = new float[wlNum * img_wid_ * img_hei_];
-
-  CopySpectrumData(wlData, flatSpecData);
-  if (ray_color_[0] < 0) {
-    render.Rgb(static_cast<int>(wlNum), wlData, img_wid_ * img_hei_, flatSpecData, rgbData);
-  } else {
-    render.Gray(static_cast<int>(wlNum), wlData, img_wid_ * img_hei_, flatSpecData, rgbData);
-  }
-  for (size_t i = 0; i < img_wid_ * img_hei_; i++) {
-    for (int c = 0; c <= 2; c++) {
-      auto v = static_cast<int>(background_color_[c] * 255);
-      if (ray_color_[0] < 0) {
-        v += rgbData[i * 3 + c];
-      } else {
-        v += static_cast<int>(rgbData[i * 3 + c] * ray_color_[c]);
-      }
-      v = std::max(std::min(v, 255), 0);
-      rgbData[i * 3 + c] = static_cast<uint8_t>(v);
-    }
-  }
-
-  /* Draw horizontal */
-  // float imgR = std::min(img_wid_ / 2, img_hei_) / 2.0f;
-  // TODO
-
-  delete[] wlData;
-  delete[] flatSpecData;
+std::string RenderContext::GetDataDirectory() const {
+  return data_directory_;
 }
 
 
-void RenderContext::CopySpectrumData(float* wavelengthData, float* spectrumData) const {
-  int k = 0;
-  for (const auto& kv : this->spectrum_data_) {
-    wavelengthData[k] = kv.first;
-    std::memcpy(spectrumData + k * img_wid_ * img_hei_, kv.second, img_wid_ * img_hei_ * sizeof(float));
-    k++;
-  }
-  for (uint64_t i = 0; i < img_wid_ * img_hei_ * this->spectrum_data_.size(); i++) {
-    spectrumData[i] *= 2e4 / total_w_ * intensity_factor_;
-  }
+const float* RenderContext::GetCamRot() const {
+  return cam_rot_;
 }
 
 
-void RenderContext::LoadData() {
-  std::vector<File> files = ListDataFiles(data_directory_.c_str());
-  int i = 0;
-  for (auto& f : files) {
-    auto t0 = std::chrono::system_clock::now();
-    auto num = LoadDataFromFile(f);
-    auto t1 = std::chrono::system_clock::now();
-    std::chrono::duration<float, std::ratio<1, 1000> > diff = t1 - t0;
-    printf(" Loading data (%d/%lu): %.2fms; total %d pts\n", i + 1, files.size(), diff.count(), num);
-    i++;
-  }
+float RenderContext::GetFov() const {
+  return fov_;
 }
 
 
-int RenderContext::LoadDataFromFile(File& file) {
-  auto fileSize = file.GetSize();
-  auto* readBuffer = new float[fileSize / sizeof(float)];
+ProjectionType RenderContext::GetProjectionType() const {
+  return projection_type_;
+}
 
-  file.Open(OpenMode::kRead | OpenMode::kBinary);
-  auto readCount = file.Read(readBuffer, 1);
-  if (readCount <= 0) {
-    return -1;
-  }
 
-  auto wavelength = static_cast<int>(readBuffer[0]);
-  if (wavelength < SpectrumRenderer::kMinWavelength || wavelength > SpectrumRenderer::kMaxWaveLength) {
-    return -1;
-  }
+VisibleSemiSphere RenderContext::GetVisibleSemiSphere() const {
+  return visible_semi_sphere_;
+}
 
-  readCount = file.Read(readBuffer, fileSize / sizeof(float));
-  auto totalCount = readCount / 4;
-  file.Close();
 
-  if (totalCount == 0) {
-    return static_cast<int>(totalCount);
-  }
+int RenderContext::GetOffsetX() const {
+  return offset_x_;
+}
 
-  auto* tmpDir = new float[totalCount * 3];
-  auto* tmpW = new float[totalCount];
-  for (decltype(readCount) i = 0; i < totalCount; i++) {
-    std::memcpy(tmpDir + i * 3, readBuffer + i * 4, 3 * sizeof(float));
-    tmpW[i] = readBuffer[i * 4 + 3];
-  }
-  delete[] readBuffer;
 
-  auto* tmpXY = new int[totalCount * 2];
-  projectionFunctions[projection_type_](cam_rot_, fov_, totalCount, tmpDir, img_wid_, img_hei_, tmpXY, visible_semi_sphere_);
-  delete[] tmpDir;
+int RenderContext::GetOffsetY() const {
+  return offset_y_;
+}
 
-  float* currentData = nullptr;
-  auto it = spectrum_data_.find(wavelength);
-  if (it != spectrum_data_.end()) {
-    currentData = it->second;
-  } else {
-    currentData = new float[img_hei_ * img_wid_];
-    for (decltype(img_hei_) i = 0; i < img_hei_ * img_wid_; i++) {
-      currentData[i] = 0;
-    }
-    spectrum_data_[wavelength] = currentData;
-  }
 
-  for (decltype(totalCount) i = 0; i < totalCount; i++) {
-    int x = tmpXY[i * 2 + 0];
-    int y = tmpXY[i * 2 + 1];
-    if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
-      continue;
-    }
-    if (projection_type_ != ProjectionType::kDualEqualArea && projection_type_ != ProjectionType::kDualEquidistant) {
-      x += offset_x_;
-      y += offset_y_;
-    }
-    if (x < 0 || x >= static_cast<int>(img_wid_) || y < 0 || y >= static_cast<int>(img_hei_)) {
-      continue;
-    }
-    currentData[y * img_wid_ + x] += tmpW[i];
-  }
-  delete[] tmpXY;
-  delete[] tmpW;
+uint32_t RenderContext::GetTotalRayNum() const {
+  return total_ray_num_;
+}
 
-  total_w_ += total_ray_num_;
-  return static_cast<int>(totalCount);
+
+const float* RenderContext::GetRayColor() const {
+  return ray_color_;
+}
+
+
+const float* RenderContext::GetBackgroundColor() const {
+  return background_color_;
+}
+
+
+double RenderContext::GetIntensityFactor() const {
+  return intensity_factor_;
 }
 
 }   // namespace IceHalo

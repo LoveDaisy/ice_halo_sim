@@ -1,6 +1,9 @@
 #ifndef SRC_RENDER_H_
 #define SRC_RENDER_H_
 
+#include "context.h"
+#include "files.h"
+
 #include <unordered_map>
 #include <functional>
 
@@ -23,37 +26,37 @@ enum class ProjectionType {
 };
 
 
-void EqualAreaFishEye(float* cam_rot,            // Camera rotation. [lon, lat, roll]
+void EqualAreaFishEye(const float* cam_rot,            // Camera rotation. [lon, lat, roll]
                       float hov,                 // Half field of view.
                       uint64_t data_number,      // Data number
-                      float* dir,                // Ray directions, [x, y, z]
+                      const float* dir,                // Ray directions, [x, y, z]
                       int img_wid, int img_hei,  // Image size
                       int* img_xy,               // Image coordinates
                       VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);  // Which semi-sphere can be visible
 
 
-void DualEqualAreaFishEye(float* cam_rot,            // Not used
+void DualEqualAreaFishEye(const float* cam_rot,            // Not used
                           float hov,                 // Not used
                           uint64_t data_number,      // Data number
-                          float* dir,                // Ray directions, [x, y, z]
+                          const float* dir,                // Ray directions, [x, y, z]
                           int img_wid, int img_hei,  // Image size
                           int* img_xy,               // Image coordinates
                           VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);   // Not used
 
 
-void DualEquidistantFishEye(float* cam_rot,            // Not used
+void DualEquidistantFishEye(const float* cam_rot,            // Not used
                             float hov,                 // Not used
                             uint64_t data_number,      // Data number
-                            float* dir,                // Ray directions, [x, y, z]
+                            const float* dir,                // Ray directions, [x, y, z]
                             int img_wid, int img_hei,  // Image size
                             int* img_xy,               // Image coordinates
                             VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);   // Not used
 
 
-void RectLinear(float* cam_rot,            // Camera rotation. [lon, lat, roll]
+void RectLinear(const float* cam_rot,            // Camera rotation. [lon, lat, roll]
                 float hov,                 // Half field of view.
                 uint64_t data_number,      // Data number
-                float* dir,                // Ray directions, [x, y, z]
+                const float* dir,                // Ray directions, [x, y, z]
                 int img_wid, int img_hei,  // Image size
                 int* img_xy,               // Image coordinates
                 VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);   // Which semi-sphere can be visible
@@ -75,16 +78,16 @@ using MyUnorderedMap = std::unordered_map<Key, T, HashType<Key>>;
 /* Workaround end */
 
 
-using ProjectionFunction = std::function<void(float* cam_rot,            // Camera rotation. [lon, lat, roll]
+using ProjectionFunction = std::function<void(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
                                               float hov,                 // Half field of view.
                                               uint64_t data_number,      // Data number
-                                              float* dir,                // Ray directions, [x, y, z]
+                                              const float* dir,          // Ray directions, [x, y, z]
                                               int img_wid, int img_hei,  // Image size
                                               int* img_xy,               // Image coordinates
                                               VisibleSemiSphere visible_semi_sphere)>;
 
 
-static MyUnorderedMap<ProjectionType, ProjectionFunction> projectionFunctions = {
+static MyUnorderedMap<ProjectionType, ProjectionFunction> projection_functions = {
   { ProjectionType::kLinear, &RectLinear },
   { ProjectionType::kEqualArea, &EqualAreaFishEye },
   { ProjectionType::kDualEquidistant, &DualEquidistantFishEye },
@@ -94,20 +97,30 @@ static MyUnorderedMap<ProjectionType, ProjectionFunction> projectionFunctions = 
 
 class SpectrumRenderer {
 public:
-  SpectrumRenderer() = default;
-  ~SpectrumRenderer() = default;
+  explicit SpectrumRenderer(const RenderContextPtr& context);
+  ~SpectrumRenderer();
 
-  void Rgb(int wavelength_number, float* wavelengths,  // wave lengths
-           int data_number, float* spec_data,       // spectrum data, wavelength_number x data_number
-           uint8_t* rgb_data);             // rgb data, dataNumber x 3
-  void Gray(int wavelength_number, float* wavelengths,
-            int data_number, float* spec_data,
-            uint8_t* rgb_data);
+  void LoadData();
+  void ResetData();
+  void RenderToRgb(uint8_t* rgb_data);
 
   static constexpr int kMinWavelength = 360;
   static constexpr int kMaxWaveLength = 830;
 
 private:
+  int LoadDataFromFile(File& file);
+  void CopySpectrumData(float* wl_data_out, float* sp_data_out);
+  void Rgb(int wavelength_number, int data_number,
+           const float* wavelengths, const float* spec_data, // spec_data: wavelength_number x data_number
+           uint8_t* rgb_data);                               // rgb data, data_number x 3
+  void Gray(int wavelength_number, int data_number,
+            const float* wavelengths, const float* spec_data,
+            uint8_t* rgb_data);
+
+  RenderContextPtr context_;
+  std::unordered_map<int, float*> spectrum_data_;
+  float total_w_;
+
   static constexpr float kWhitePointD65[] = { 0.95047f, 1.00000f, 1.08883f };  // D65 for sRGB
   static constexpr float kXyzToRgb[] = { 3.2405f, -1.5371f, -0.4985f, -0.9693f, 1.8760f, 0.0416f, 0.0556f, -0.2040f, 1.0572f };
   static constexpr float kCmfX[] = {

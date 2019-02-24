@@ -7,33 +7,32 @@
 #include "render.h"
 #include "context.h"
 
-using namespace IceHalo;
-using namespace cv;
-
 int main(int argc, char* argv[]) {
   if (argc != 2) {
-    printf("USAGE: %s config.json\n", argv[0]);
+    std::printf("USAGE: %s config.json\n", argv[0]);
     return -1;
   }
 
   auto start = std::chrono::system_clock::now();
-  auto ctx = RenderContext::CreateFromFile(argv[1]);
-  ctx->LoadData();
+  IceHalo::RenderContextPtr ctx = IceHalo::RenderContext::CreateFromFile(argv[1]);
+  IceHalo::SpectrumRenderer renderer(ctx);
+  renderer.LoadData();
 
-  auto flatRgbData = new uint8_t[3 * ctx->GetImageWidth() * ctx->GetImageHeight()];
-  ctx->RenderToRgb(flatRgbData);
+  auto flat_rgb_data = new uint8_t[3 * ctx->GetImageWidth() * ctx->GetImageHeight()];
+  renderer.RenderToRgb(flat_rgb_data);
 
-  Mat img(ctx->GetImageHeight(), ctx->GetImageWidth(), CV_8UC3, flatRgbData);
-  cvtColor(img, img, COLOR_RGB2BGR);
+  cv::Mat img(ctx->GetImageHeight(), ctx->GetImageWidth(), CV_8UC3, flat_rgb_data);
+  cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
   try {
-    imwrite(ctx->GetImagePath(), img);
+    cv::imwrite(ctx->GetImagePath(), img);
   } catch (cv::Exception& ex) {
     fprintf(stderr, "Exception converting image to PNG format: %s\n", ex.what());
+    delete[] flat_rgb_data;
     return -1;
   }
-  delete[] flatRgbData;
+  delete[] flat_rgb_data;
 
   auto t1 = std::chrono::system_clock::now();
   std::chrono::duration<float, std::ratio<1, 1000> > diff = t1 - start;
-  printf("Total: %.2fms\n", diff.count());
+  std::printf("Total: %.2fms\n", diff.count());
 }

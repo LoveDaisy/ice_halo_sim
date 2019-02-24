@@ -36,7 +36,7 @@ TEST_F(ContextTest, FillSunDir) {
   auto sun_dir = context->GetSunRayDir();
   auto sun_d = context->GetSunDiameter();
 
-  constexpr int kRayNum = 100;
+  constexpr int kRayNum = 200;
   float dir[3 * kRayNum];
   auto sampler = IceHalo::Math::RandomSampler::GetInstance();
   sampler->SampleSphericalPointsCart(sun_dir, sun_d / 2, dir, kRayNum);
