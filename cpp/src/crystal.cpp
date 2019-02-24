@@ -162,75 +162,75 @@ void Crystal::InitFaceNumber() {
 void Crystal::InitFaceNumberHex() {
   for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
     const auto curr_face_norm = face_norm_ + i * 3;
-    float maxVal = -1;
-    int maxFaceNumber = -1;
+    float max_val = -1;
+    int max_face_number = -1;
     for (const auto& d : hex_face_norm_to_number_list_) {
       float tmpVal = Math::Dot3(curr_face_norm, d.first.val());
-      if (tmpVal > maxVal) {
-        maxVal = tmpVal;
-        maxFaceNumber = d.second;
+      if (tmpVal > max_val) {
+        max_val = tmpVal;
+        max_face_number = d.second;
       }
     }
 
-    if (maxVal > 0) {
-      if (std::abs(maxVal - 1) > Math::kFloatEps && curr_face_norm[2] > Math::kFloatEps) {
-        maxFaceNumber += 10;
-      } else if (std::abs(maxVal - 1) > Math::kFloatEps && curr_face_norm[2] < -Math::kFloatEps) {
-        maxFaceNumber += 20;
+    if (max_val > 0) {
+      if (std::abs(max_val - 1) > Math::kFloatEps && curr_face_norm[2] > Math::kFloatEps) {
+        max_face_number += 10;
+      } else if (std::abs(max_val - 1) > Math::kFloatEps && curr_face_norm[2] < -Math::kFloatEps) {
+        max_face_number += 20;
       }
     }
-    face_number_map_.push_back(maxFaceNumber);
+    face_number_map_.push_back(max_face_number);
   }
 }
 
 void Crystal::InitFaceNumberCubic() {
   for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
     const auto curr_face_norm = face_norm_ + i * 3;
-    float maxVal = -1;
-    int maxFaceNumber = -1;
+    float max_val = -1;
+    int max_face_number = -1;
     for (const auto& d : cubic_face_norm_to_number_list_) {
       float tmpVal = Math::Dot3(curr_face_norm, d.first.val());
-      if (tmpVal > maxVal) {
-        maxVal = tmpVal;
-        maxFaceNumber = d.second;
+      if (tmpVal > max_val) {
+        max_val = tmpVal;
+        max_face_number = d.second;
       }
     }
 
-    if (maxVal > 0) {
-      if (std::abs(maxVal - 1) > Math::kFloatEps && curr_face_norm[2] > Math::kFloatEps) {
-        maxFaceNumber += 10;
-      } else if (std::abs(maxVal - 1) > Math::kFloatEps && curr_face_norm[2] < -Math::kFloatEps) {
-        maxFaceNumber += 20;
+    if (max_val > 0) {
+      if (std::abs(max_val - 1) > Math::kFloatEps && curr_face_norm[2] > Math::kFloatEps) {
+        max_face_number += 10;
+      } else if (std::abs(max_val - 1) > Math::kFloatEps && curr_face_norm[2] < -Math::kFloatEps) {
+        max_face_number += 20;
       }
     }
-    face_number_map_.push_back(maxFaceNumber);
+    face_number_map_.push_back(max_face_number);
   }
 }
 
 void Crystal::InitFaceNumberStack() {
-  float maxHeight = std::numeric_limits<float>::lowest();
-  float minHeight = std::numeric_limits<float>::max();
+  float max_height = std::numeric_limits<float>::lowest();
+  float min_height = std::numeric_limits<float>::max();
   for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
     const auto curr_face_norm = face_norm_ + i * 3;
-    float maxVal = -1;
-    int maxFaceNumber = -1;
+    float max_val = -1;
+    int max_face_number = -1;
     for (const auto& d : hex_face_norm_to_number_list_) {
-      float tmpVal = Math::Dot3(curr_face_norm, d.first.val());
-      if (tmpVal > maxVal) {
-        maxVal = tmpVal;
-        maxFaceNumber = d.second;
+      float tmp_val = Math::Dot3(curr_face_norm, d.first.val());
+      if (tmp_val > max_val) {
+        max_val = tmp_val;
+        max_face_number = d.second;
       }
     }
-    face_number_map_.push_back(maxFaceNumber);
+    face_number_map_.push_back(max_face_number);
 
-    const auto* idx = faces_[i].idx();
+    const auto idx = faces_[i].idx();
     for (int j = 0; j < 3; j++) {
       float h = vertexes_[idx[j]].z();
-      if (h > maxHeight) {
-        maxHeight = h;
+      if (h > max_height) {
+        max_height = h;
       }
-      if (h < minHeight) {
-        minHeight = h;
+      if (h < min_height) {
+        min_height = h;
       }
     }
   }
@@ -242,26 +242,26 @@ void Crystal::InitFaceNumberStack() {
     const auto* idx = faces_[i].idx();
     const auto curr_face_norm = face_norm_ + i * 3;
 
-    bool isTop = false;
-    bool isBottom = false;
-    bool isUpper = true;
-    bool isLower = true;
+    bool is_top = false;
+    bool is_bottom = false;
+    bool is_upper = true;
+    bool is_lower = true;
     for (int j = 0; j < 3; j++) {
-      isTop = isTop || std::abs(vertexes_[idx[j]].z() - maxHeight) < Math::kFloatEps;
-      isBottom = isBottom || std::abs(vertexes_[idx[j]].z() - minHeight) < Math::kFloatEps;
-      isUpper = isUpper && vertexes_[idx[j]].z() > Math::kFloatEps;
-      isLower = isLower && vertexes_[idx[j]].z() < -Math::kFloatEps;
+      is_top = is_top || std::abs(vertexes_[idx[j]].z() - max_height) < Math::kFloatEps;
+      is_bottom = is_bottom || std::abs(vertexes_[idx[j]].z() - min_height) < Math::kFloatEps;
+      is_upper = is_upper && vertexes_[idx[j]].z() > Math::kFloatEps;
+      is_lower = is_lower && vertexes_[idx[j]].z() < -Math::kFloatEps;
     }
 
-    bool isPrism = std::abs(curr_face_norm[2]) < Math::kFloatEps;
+    bool is_prism = std::abs(curr_face_norm[2]) < Math::kFloatEps;
 
-    if (isTop && !isPrism) {
+    if (is_top && !is_prism) {
       face_number_map_[i] += 10;
-    } else if (isBottom && !isPrism) {
+    } else if (is_bottom && !is_prism) {
       face_number_map_[i] += 20;
-    } else if (isUpper && !isPrism) {
+    } else if (is_upper && !is_prism) {
       face_number_map_[i] += 30;
-    } else if (isLower && !isPrism) {
+    } else if (is_lower && !is_prism) {
       face_number_map_[i] += 40;
     }
   }
