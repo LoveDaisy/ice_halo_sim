@@ -44,7 +44,7 @@ TEST_F(ContextTest, FillSunDir) {
   for (int i = 0; i < kRayNum; i++) {
     float a = std::acos(IceHalo::Math::Dot3(sun_dir, dir + i * 3));    // In rad
     a *= IceHalo::Math::kRadToDegree;    // To degree
-    EXPECT_TRUE(a < sun_d / 2);
+    EXPECT_TRUE(a < sun_d / 2 + 5e-4);
   }
 }
 

@@ -19,7 +19,6 @@ class Ray;
 class RaySegment {
 friend class RaySegmentPool;
 public:
-  bool IsValidEnd();
   void ResetWith(const float* pt, const float* dir, float w, int face_id);
 
   RaySegment* next_reflect_;
@@ -58,10 +57,10 @@ public:
   RaySegmentPool(RaySegmentPool const&) = delete;
   void operator=(RaySegmentPool const&) = delete;
 
-  static RaySegmentPool* GetInstance();
-
   RaySegment* GetRaySegment(const float* pt, const float* dir, float w, int faceId);
   void Clear();
+
+  static RaySegmentPool* GetInstance();
 
 private:
   RaySegmentPool();

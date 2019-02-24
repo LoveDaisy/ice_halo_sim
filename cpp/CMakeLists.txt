@@ -38,7 +38,7 @@ if(MULTI_THREAD)
   add_compile_definitions(MULTI_THREAD)
 endif()
 
-if(MULTI_THREAD)
+if(RANDOM_SEED)
   add_compile_definitions(RANDOM_SEED)
 endif()
 

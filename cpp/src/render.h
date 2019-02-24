@@ -95,6 +95,9 @@ static MyUnorderedMap<ProjectionType, ProjectionFunction> projection_functions =
 };
 
 
+void SrgbGamma(float* linear_rgb);
+
+
 class SpectrumRenderer {
 public:
   explicit SpectrumRenderer(const RenderContextPtr& context);

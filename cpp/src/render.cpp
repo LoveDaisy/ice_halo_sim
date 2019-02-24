@@ -10,43 +10,43 @@
 
 namespace IceHalo {
 
-void EqualAreaFishEye(const float* camRot,     // Camera rotation. [lon, lat, roll]
-                      float hov,               // Half field of view.
-                      uint64_t dataNumber,     // Data number
-                      const float* dir,        // Ray directions, [x, y, z]
-                      int imgWid, int imgHei,  // Image size
-                      int* imgXY,              // Image coordinates
+void EqualAreaFishEye(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
+                      float hov,                 // Half field of view.
+                      uint64_t data_number,      // Data number
+                      const float* dir,          // Ray directions, [x, y, z]
+                      int img_wid, int img_hei,  // Image size
+                      int* img_xy,               // Image coordinates
                       VisibleSemiSphere visible_semi_sphere) {
-  float imgR = std::max(imgWid, imgHei) / 2.0f;
-  auto* dirCopy = new float[dataNumber * 3];
-  float camRotCopy[3];
-  std::memcpy(camRotCopy, camRot, sizeof(float) * 3);
-  camRotCopy[0] *= -1;
-  camRotCopy[1] *= -1;
-  for (float &i : camRotCopy) {
+  float img_r = std::max(img_wid, img_hei) / 2.0f;
+  auto* dir_copy = new float[data_number * 3];
+  float cam_rot_copy[3];
+  std::memcpy(cam_rot_copy, cam_rot, sizeof(float) * 3);
+  cam_rot_copy[0] *= -1;
+  cam_rot_copy[1] *= -1;
+  for (float &i : cam_rot_copy) {
     i *= Math::kPi / 180.0f;
   }
 
-  Math::RotateZ(camRotCopy, dir, dirCopy, dataNumber);
-  for (decltype(dataNumber) i = 0; i < dataNumber; i++) {
-    if (std::abs(Math::Norm3(dirCopy + i * 3) - 1.0) > 1e-4) {
-      imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
-      imgXY[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleSemiSphere::kCamera && dirCopy[i * 3 + 2] < 0) {
-      imgXY[i * 2 + 0] = std::numeric_limits<int>::min();
-      imgXY[i * 2 + 1] = std::numeric_limits<int>::min();
+  Math::RotateZ(cam_rot_copy, dir, dir_copy, data_number);
+  for (decltype(data_number) i = 0; i < data_number; i++) {
+    if (std::abs(Math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
+      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+    } else if (visible_semi_sphere == VisibleSemiSphere::kCamera && dir_copy[i * 3 + 2] < 0) {
+      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
-      float lon = std::atan2(dirCopy[i * 3 + 1], dirCopy[i * 3 + 0]);
-      float lat = std::asin(dirCopy[i * 3 + 2] / Math::Norm3(dirCopy + i * 3));
-      float projR = imgR / 2.0f / std::sin(hov / 2.0f / 180.0f * Math::kPi);
-      float r = 2.0f * projR * std::sin((Math::kPi / 2.0f - lat) / 2.0f);
+      float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
+      float lat = std::asin(dir_copy[i * 3 + 2] / Math::Norm3(dir_copy + i * 3));
+      float proj_r = img_r / 2.0f / std::sin(hov / 2.0f / 180.0f * Math::kPi);
+      float r = 2.0f * proj_r * std::sin((Math::kPi / 2.0f - lat) / 2.0f);
 
-      imgXY[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + imgWid / 2.0f));
-      imgXY[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + imgHei / 2.0f));
+      img_xy[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + img_wid / 2.0f));
+      img_xy[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + img_hei / 2.0f));
     }
   }
 
-  delete[] dirCopy;
+  delete[] dir_copy;
 }
 
 
@@ -162,6 +162,17 @@ void RectLinear(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
   }
 
   delete[] dir_copy;
+}
+
+
+void SrgbGamma(float* linear_rgb) {
+  for (int i = 0; i < 3; i++) {
+    if (linear_rgb[i] < 0.0031308) {
+      linear_rgb[i] *= 12.92f;
+    } else {
+      linear_rgb[i] = static_cast<float>(1.055 * std::pow(linear_rgb[i], 1.0 / 2.4) - 0.055);
+    }
+  }
 }
 
 
@@ -331,7 +342,7 @@ void SpectrumRenderer::CopySpectrumData(float* wl_data_out, float* sp_data_out) 
   auto intensity_factor = context_->GetIntensityFactor();
 
   int k = 0;
-  for (const auto& kv : this->spectrum_data_) {
+  for (const auto& kv : spectrum_data_) {
     wl_data_out[k] = kv.first;
     std::memcpy(sp_data_out + k * img_wid * img_hei, kv.second, img_wid * img_hei * sizeof(float));
     k++;
@@ -382,16 +393,12 @@ void SpectrumRenderer::Rgb(int wavelength_number, int data_number,
       for (int k = 0; k < 3; k++) {
         rgb[j] += xyz[k] * kXyzToRgb[j*3 + k];
       }
-      rgb[j] = fmin(fmax(rgb[j], 0.0f), 1.0f);
+      rgb[j] = std::min(std::max(rgb[j], 0.0f), 1.0f);
     }
 
     /* Step 3. Convert linear sRGB to sRGB */
+    SrgbGamma(rgb);
     for (int j = 0; j < 3; j++) {
-      if (rgb[j] < 0.0031308) {
-        rgb[j] *= 12.92f;
-      } else {
-        rgb[j] = static_cast<float>(1.055 * pow(rgb[j], 1.0/2.4) - 0.055);
-      }
       rgb_data[i * 3 + j] = static_cast<uint8_t>(rgb[j] * 255);
     }
   }
@@ -423,16 +430,12 @@ void SpectrumRenderer::Gray(int wavelength_number, int data_number,
       for (int k = 0; k < 3; k++) {
         rgb[j] += gray[k] * kXyzToRgb[j*3 + k];
       }
-      rgb[j] = fmin(fmax(rgb[j], 0.0f), 1.0f);
+      rgb[j] = std::min(std::max(rgb[j], 0.0f), 1.0f);
     }
 
     /* Step 3. Convert linear sRGB to sRGB */
+    SrgbGamma(rgb);
     for (int j = 0; j < 3; j++) {
-      if (rgb[j] < 0.0031308) {
-        rgb[j] *= 12.92f;
-      } else {
-        rgb[j] = static_cast<float>(1.055 * pow(rgb[j], 1.0/2.4) - 0.055);
-      }
       rgb_data[i * 3 + j] = static_cast<uint8_t>(rgb[j] * 255);
     }
   }

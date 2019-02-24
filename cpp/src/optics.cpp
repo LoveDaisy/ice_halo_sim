@@ -16,11 +16,6 @@ RaySegment::RaySegment()
       is_finished_(false) {}
 
 
-bool RaySegment::IsValidEnd() {
-  return w_ > 0 && face_id_ >= 0 && is_finished_;
-}
-
-
 void RaySegment::ResetWith(const float* pt, const float* dir, float w, int face_id) {
   next_reflect_ = nullptr;
   next_refract_ = nullptr;
