@@ -35,7 +35,7 @@ struct AxisDistribution {
 };
 
 
-struct RayPathFilter {
+struct RayPathFilterContext {
   enum Symmetry : uint8_t {
     kSymmetryNone = 0u,
     kSymmetryPrism = 1u,
@@ -47,15 +47,17 @@ struct RayPathFilter {
     kTypeNone,
     kTypeSpecific,
     kTypeGeneral,
+    kTypeHit,
   };
 
-  RayPathFilter();
+  RayPathFilterContext();
 
-  uint8_t symmetry_;
-  std::vector<int> ray_path_;
-  std::vector<int> entry_;
-  std::vector<int> exit_;
-  Type type_;
+  Type type;
+  uint8_t symmetry;
+  int hit_num;
+  std::vector<int> ray_path;
+  std::vector<int> entry_faces;
+  std::vector<int> exit_faces;
 };
 
 
@@ -103,7 +105,7 @@ private:
 
   void ParseCrystalSettings(const rapidjson::Value& c, int ci);
   AxisDistribution ParseCrystalAxis(const rapidjson::Value& c, int ci);
-  RayPathFilter ParseCrystalRayPathFilter(const rapidjson::Value& c, int ci);
+  RayPathFilterContext ParseCrystalRayPathFilter(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPrism(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPyramid(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPyramidStackHalf(const rapidjson::Value& c, int ci);
@@ -136,7 +138,7 @@ private:
 
 class CrystalContext {
 public:
-  CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis, const RayPathFilter& filter, float population);
+  CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis, const RayPathFilterContext& filter, float population);
 
   CrystalPtr GetCrystal();
   Math::Distribution GetAxisDist() const;
@@ -155,10 +157,11 @@ private:
   bool FilterRayGeneral(RaySegment* last_r);
   bool FilterRaySpecific(RaySegment* last_r);
   bool FilterRayDirectionalSymm(RaySegment* last_r, bool original);
+  bool FilterRayHit(RaySegment* last_r);
 
   CrystalPtr crystal_;
   const AxisDistribution axis_;
-  const RayPathFilter ray_path_filter_;
+  const RayPathFilterContext ray_path_filter_;
   float population_;
 };
 

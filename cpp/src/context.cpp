@@ -18,11 +18,12 @@ namespace IceHalo {
 
 using rapidjson::Pointer;
 
-RayPathFilter::RayPathFilter() : symmetry_(RayPathFilter::kSymmetryNone), type_(RayPathFilter::kTypeNone) {}
+RayPathFilterContext::RayPathFilterContext()
+    : type(RayPathFilterContext::kTypeNone), symmetry(RayPathFilterContext::kSymmetryNone), hit_num(-1) {}
 
 
 CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis,
-                               const RayPathFilter& filter, float population)
+                               const RayPathFilterContext& filter, float population)
     : crystal_(std::move(g)), axis_(axis), ray_path_filter_(filter), population_(population) {}
 
 
@@ -72,13 +73,15 @@ void CrystalContext::SetPopulation(float population) {
 
 
 bool CrystalContext::FilterRay(RaySegment* last_r) {
-  switch (ray_path_filter_.type_) {
-    case RayPathFilter::kTypeNone:
+  switch (ray_path_filter_.type) {
+    case RayPathFilterContext::kTypeNone:
       return true;
-    case RayPathFilter::kTypeGeneral:
+    case RayPathFilterContext::kTypeGeneral:
       return FilterRayGeneral(last_r);
-    case RayPathFilter::kTypeSpecific:
+    case RayPathFilterContext::kTypeSpecific:
       return FilterRaySpecific(last_r);
+    case RayPathFilterContext::kTypeHit:
+      return FilterRayHit(last_r);
     default:
       return false;
   }
@@ -86,7 +89,7 @@ bool CrystalContext::FilterRay(RaySegment* last_r) {
 
 
 bool CrystalContext::FilterRaySpecific(IceHalo::RaySegment* last_r) {
-  if (ray_path_filter_.ray_path_.empty()) {
+  if (ray_path_filter_.ray_path.empty()) {
     return true;
   }
 
@@ -109,8 +112,8 @@ bool CrystalContext::FilterRayDirectionalSymm(RaySegment* last_r, bool original)
   int prism_diff = -1;
   int basal_diff = -1;
   auto p = last_r;
-  for (auto rit = ray_path_filter_.ray_path_.rbegin();
-       rit != ray_path_filter_.ray_path_.rend();
+  for (auto rit = ray_path_filter_.ray_path.rbegin();
+       rit != ray_path_filter_.ray_path.rend();
        p = p->prev_, ++rit) {
     if (!p) {
       // Ray path shorter than filter path
@@ -138,8 +141,8 @@ bool CrystalContext::FilterRayDirectionalSymm(RaySegment* last_r, bool original)
   }
 
   p = last_r;
-  for (auto rit = ray_path_filter_.ray_path_.rbegin();
-       rit != ray_path_filter_.ray_path_.rend();
+  for (auto rit = ray_path_filter_.ray_path.rbegin();
+       rit != ray_path_filter_.ray_path.rend();
        p = p->prev_, ++rit) {
     int filter_fn = *rit;
     int curr_fn = crystal_->FaceNumber(p->face_id_);
@@ -152,7 +155,8 @@ bool CrystalContext::FilterRayDirectionalSymm(RaySegment* last_r, bool original)
     int curr_fn_s = curr_fn / 10;
     bool curr_basal = curr_fn == 1 || curr_fn == 2;
 
-    if (prism_diff > 0 && ray_path_filter_.symmetry_ & RayPathFilter::kSymmetryPrism && !curr_basal && !filter_basal) {
+    if (prism_diff > 0 && (ray_path_filter_.symmetry & RayPathFilterContext::kSymmetryPrism) &&
+        !curr_basal && !filter_basal) {
       curr_fn_p = (curr_fn_p - prism_diff + period) % period;
       curr_fn = curr_fn_p + curr_fn_s * 10;
     }
@@ -161,7 +165,7 @@ bool CrystalContext::FilterRayDirectionalSymm(RaySegment* last_r, bool original)
       continue;
     }
 
-    if (ray_path_filter_.symmetry_ & RayPathFilter::kSymmetryBasal) {
+    if (ray_path_filter_.symmetry & RayPathFilterContext::kSymmetryBasal) {
       // B symmetry is checked;
       if (basal_diff > 0 && filter_basal && curr_basal) {
         continue;
@@ -175,7 +179,7 @@ bool CrystalContext::FilterRayDirectionalSymm(RaySegment* last_r, bool original)
 
 
 bool CrystalContext::FilterRayGeneral(RaySegment* last_r) {
-  if (ray_path_filter_.entry_.empty() && ray_path_filter_.exit_.empty()) {
+  if (ray_path_filter_.entry_faces.empty() && ray_path_filter_.exit_faces.empty()) {
     return true;
   }
 
@@ -186,7 +190,7 @@ bool CrystalContext::FilterRayGeneral(RaySegment* last_r) {
   }
 
   bool matched = false;
-  for (const auto& fn : ray_path_filter_.entry_) {
+  for (const auto& fn : ray_path_filter_.entry_faces) {
     if (fn0 == fn) {
       matched = true;
       break;
@@ -198,13 +202,29 @@ bool CrystalContext::FilterRayGeneral(RaySegment* last_r) {
 
   fn0 = crystal_->FaceNumber(last_r->face_id_);
   matched = false;
-  for (const auto& fn : ray_path_filter_.exit_) {
+  for (const auto& fn : ray_path_filter_.exit_faces) {
     if (fn0 == fn) {
       matched = true;
       break;
     }
   }
   return matched;
+}
+
+
+bool CrystalContext::FilterRayHit(IceHalo::RaySegment* last_r) {
+  if (ray_path_filter_.hit_num <= 0) {
+    return true;
+  }
+
+  auto p = last_r->prev_;
+  int hits = 0;
+  while (p) {
+    hits++;
+    p = p->prev_;
+  }
+
+  return hits == ray_path_filter_.hit_num;
 }
 
 
@@ -377,8 +397,7 @@ void SimulationContext::ParseMultiScatterSettings(rapidjson::Document& d) {
 }
 
 
-std::unordered_map<std::string, SimulationContext::CrystalParser>
-  SimulationContext::crystal_parser_ = {
+std::unordered_map<std::string, SimulationContext::CrystalParser> SimulationContext::crystal_parser_ = {
   { "HexPrism", &SimulationContext::ParseCrystalHexPrism },
   { "HexPyramid", &SimulationContext::ParseCrystalHexPyramid },
   { "HexPyramidStackHalf", &SimulationContext::ParseCrystalHexPyramidStackHalf },
@@ -495,8 +514,8 @@ AxisDistribution SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, 
 }
 
 
-RayPathFilter SimulationContext::ParseCrystalRayPathFilter(const rapidjson::Value& c, int ci) {
-  RayPathFilter filter{};
+RayPathFilterContext SimulationContext::ParseCrystalRayPathFilter(const rapidjson::Value& c, int ci) {
+  RayPathFilterContext filter{};
 
   const auto* p = Pointer("/ray_path_filter").Get(c);
   if (p == nullptr || !p->IsObject()) {
@@ -513,15 +532,15 @@ RayPathFilter SimulationContext::ParseCrystalRayPathFilter(const rapidjson::Valu
       switch (str[i]) {
         case 'P':
         case 'p':
-          filter.symmetry_ |= RayPathFilter::kSymmetryPrism;
+          filter.symmetry |= RayPathFilterContext::kSymmetryPrism;
           break;
         case 'B':
         case 'b':
-          filter.symmetry_ |= RayPathFilter::kSymmetryBasal;
+          filter.symmetry |= RayPathFilterContext::kSymmetryBasal;
           break;
         case 'D':
         case 'd':
-          filter.symmetry_ |= RayPathFilter::kSymmetryDirection;
+          filter.symmetry |= RayPathFilterContext::kSymmetryDirection;
           break;
         default:
           fprintf(stderr, "<crystal[%d].ray_path_filter.symmetry> some item cannot be recognized! ignored.\n", ci);
@@ -535,11 +554,13 @@ RayPathFilter SimulationContext::ParseCrystalRayPathFilter(const rapidjson::Valu
     fprintf(stderr, "<crystal[%d].ray_path_filter.type> cannot recognize! Use default none.\n", ci);
   } else {
     if (*p == "specific") {
-      filter.type_ = RayPathFilter::kTypeSpecific;
+      filter.type = RayPathFilterContext::kTypeSpecific;
     } else if (*p == "general") {
-      filter.type_ = RayPathFilter::kTypeGeneral;
+      filter.type = RayPathFilterContext::kTypeGeneral;
+    } else if (*p == "hit") {
+      filter.type = RayPathFilterContext::kTypeHit;
     } else if (*p == "none") {
-      filter.type_ = RayPathFilter::kTypeNone;
+      filter.type = RayPathFilterContext::kTypeNone;
     } else {
       fprintf(stderr, "<crystal[%d].ray_path_filter.type> cannot recognize! Use default none.\n", ci);
     }
@@ -550,7 +571,7 @@ RayPathFilter SimulationContext::ParseCrystalRayPathFilter(const rapidjson::Valu
     fprintf(stderr, "<crystal[%d].ray_path_filter.path> cannot recognize! Use default [].\n", ci);
   } else {
     for (const auto& fn : p->GetArray()) {
-      filter.ray_path_.emplace_back(fn.GetInt());
+      filter.ray_path.emplace_back(fn.GetInt());
     }
   }
 
@@ -559,7 +580,7 @@ RayPathFilter SimulationContext::ParseCrystalRayPathFilter(const rapidjson::Valu
     fprintf(stderr, "<crystal[%d].ray_path_filter.entry> cannot recognize! Use default [].\n", ci);
   } else {
     for (const auto& fn : p->GetArray()) {
-      filter.entry_.emplace_back(fn.GetInt());
+      filter.entry_faces.emplace_back(fn.GetInt());
     }
   }
 
@@ -568,8 +589,16 @@ RayPathFilter SimulationContext::ParseCrystalRayPathFilter(const rapidjson::Valu
     fprintf(stderr, "<crystal[%d].ray_path_filter.exit> cannot recognize! Use default [].\n", ci);
   } else {
     for (const auto& fn : p->GetArray()) {
-      filter.exit_.emplace_back(fn.GetInt());
+      filter.exit_faces.emplace_back(fn.GetInt());
     }
+  }
+
+  p = Pointer("/ray_path_filter/hit").Get(c);
+  if (p == nullptr || !p->IsInt()) {
+    fprintf(stderr, "<crystal[%d].ray_path_filter.hit> cannot recognize! Use default -1.\n", ci);
+    filter.hit_num = -1;
+  } else {
+    filter.hit_num = p->GetInt();
   }
 
   return filter;

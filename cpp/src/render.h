@@ -78,8 +78,8 @@ using MyUnorderedMap = std::unordered_map<Key, T, HashType<Key>>;
 /* Workaround end */
 
 
-using ProjectionFunction = std::function<void(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
-                                              float hov,                 // Half field of view.
+using ProjectionFunction = std::function<void(const float* cam_rot,      // Camera rotation (lon, lat, roll), in degree.
+                                              float hov,                 // Half field of view, in degree
                                               uint64_t data_number,      // Data number
                                               const float* dir,          // Ray directions, [x, y, z]
                                               int img_wid, int img_hei,  // Image size
