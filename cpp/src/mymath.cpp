@@ -596,7 +596,7 @@ void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float
   double dz = 2 * std::sin(std / 2.0 * kDegreeToRad) * std::sin(std / 2.0 * kDegreeToRad);
   for (decltype(num) i = 0; i < num; i++) {
     double udz = rng->GetUniform() * dz;
-    float q = rng->GetUniform() * 2 * Math::kPi;
+    double q = rng->GetUniform() * 2 * Math::kPi;
 
     double r = std::sqrt((2.0f - udz) * udz);
     tmp_dir[i * 3 + 0] = static_cast<float>(std::cos(q) * r);
