@@ -123,6 +123,7 @@ private:
 
   RenderContextPtr context_;
   std::unordered_map<int, float*> spectrum_data_;
+  std::unordered_map<int, float*> spectrum_data_compensation_;
   float total_w_;
 
   static constexpr float kWhitePointD65[] = { 0.95047f, 1.00000f, 1.08883f };  // D65 for sRGB

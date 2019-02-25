@@ -229,7 +229,11 @@ void SpectrumRenderer::ResetData() {
   for (const auto& kv : spectrum_data_) {
     delete[] kv.second;
   }
+  for (const auto& kv : spectrum_data_compensation_) {
+    delete[] kv.second;
+  }
   spectrum_data_.clear();
+  spectrum_data_compensation_.clear();
 }
 
 
@@ -325,15 +329,20 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
   delete[] tmp_dir;
 
   float* current_data = nullptr;
+  float* current_data_compensation = nullptr;
   auto it = spectrum_data_.find(wavelength);
   if (it != spectrum_data_.end()) {
     current_data = it->second;
+    current_data_compensation = spectrum_data_compensation_[wavelength];
   } else {
     current_data = new float[img_hei * img_wid];
+    current_data_compensation = new float[img_hei * img_wid];
     for (decltype(img_hei) i = 0; i < img_hei * img_wid; i++) {
       current_data[i] = 0;
+      current_data_compensation[i] = 0;
     }
     spectrum_data_[wavelength] = current_data;
+    spectrum_data_compensation_[wavelength] = current_data_compensation;
   }
 
   for (decltype(total_ray_count) i = 0; i < total_ray_count; i++) {
@@ -349,7 +358,10 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
     if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
       continue;
     }
-    current_data[y * img_wid + x] += tmp_w[i];
+    auto tmp_val = tmp_w[i] - current_data_compensation[y * img_wid + x];
+    auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
+    current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
+    current_data[y * img_wid + x] = tmp_sum;
   }
   delete[] tmp_xy;
   delete[] tmp_w;
