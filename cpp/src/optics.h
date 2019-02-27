@@ -86,7 +86,6 @@ public:
                         const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,
                         float* pt_out, int* face_id_out);
 
-private:
   static float GetReflectRatio(float cos_angle, float rr);
 
   /*! \brief Intersect a line with many faces and find the nearest intersection point.
@@ -102,6 +101,9 @@ private:
   static void IntersectLineWithTriangles(const float* pt, const float* dir, int face_id, int face_num,
                                          const float* face_bases, const float* face_points, const float* face_norm,
                                          float* p, int* idx);
+  static void IntersectLineWithTrianglesSimd(const float* pt, const float* dir, int face_id, int face_num,
+                                             const float* face_bases, const float* face_points, const float* face_norm,
+                                             float* p, int* idx);
 };
 
 
