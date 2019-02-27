@@ -255,6 +255,10 @@ void Simulator::RestoreResultRays() {
     float tmp_w = buffer_.w[1][i + tmp_idx];
     buffer_.w[1][i + tmp_idx] = buffer_.w[1][i];
     buffer_.w[1][i] = tmp_w;
+
+    RaySegment* tmp_r = buffer_.ray_seg[1][i + tmp_idx];
+    buffer_.ray_seg[1][i + tmp_idx] = buffer_.ray_seg[1][i];
+    buffer_.ray_seg[1][i] = tmp_r;
   }
 }
 
