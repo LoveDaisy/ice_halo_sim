@@ -31,6 +31,24 @@ private:
 };
 
 
+struct EnterRayData {
+public:
+  EnterRayData();
+  ~EnterRayData();
+
+  void Clean();
+  void Allocate(size_t ray_num);
+
+  float* ray_dir;
+  RaySegment** ray_seg;
+
+  size_t ray_num;
+
+private:
+  void DeleteBuffer();
+};
+
+
 class Simulator {
 public:
   explicit Simulator(const SimulationContextPtr& context);
@@ -64,6 +82,8 @@ private:
   size_t buffer_size_;
 
   SimulationBufferData buffer_;
+  EnterRayData enter_ray_data_;
+  size_t enter_ray_offset_;
 };
 
 }  // namespace IceHalo
