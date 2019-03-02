@@ -105,17 +105,22 @@ void EnterRayData::Allocate(size_t ray_num) {
   ray_dir = new float[ray_num * 3];
   ray_seg = new RaySegment*[ray_num];
 
+  for (decltype(ray_num) i = 0; i < ray_num; i++) {
+    ray_dir[i * 3 + 0] = 0;
+    ray_dir[i * 3 + 1] = 0;
+    ray_dir[i * 3 + 2] = 0;
+    ray_seg[i] = nullptr;
+  }
+
   this->ray_num = ray_num;
 }
 
 
 void EnterRayData::DeleteBuffer() {
   delete[] ray_dir;
-  // delete[] ray_w;
   delete[] ray_seg;
 
   ray_dir = nullptr;
-  // ray_w = nullptr;
   ray_seg = nullptr;
 }
 
@@ -178,7 +183,7 @@ void Simulator::InitSunRays() {
     enter_ray_data_.Allocate(total_ray_num_);
   }
   sampler->SampleSphericalPointsCart(sun_ray_dir, sun_r, enter_ray_data_.ray_dir, total_ray_num_);
-  for (decltype(total_ray_num_) i = 0; i < total_ray_num_; i++) {
+  for (decltype(enter_ray_data_.ray_num) i = 0; i < enter_ray_data_.ray_num; i++) {
     enter_ray_data_.ray_seg[i] = nullptr;
   }
 }
@@ -279,7 +284,6 @@ void Simulator::RestoreResultRays() {
     }
     const auto axis_rot = r->root_->main_axis_rot_.val();
     Math::RotateZBack(axis_rot, r->dir_.val(), enter_ray_data_.ray_dir + idx * 3);
-    // enter_ray_data_.ray_w[idx] = r->w_;
     enter_ray_data_.ray_seg[idx] = r;
     idx++;
   }
