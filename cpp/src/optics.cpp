@@ -84,9 +84,15 @@ void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,
     if (w_in[i] < SimulationContext::kPropMinW) {
       continue;
     }
+#if defined(__SSE4_1__) && defined(__AVX__)
     IntersectLineWithTrianglesSimd(pt_in + i / 2 * 3, dir_in + i * 3, face_id_in[i / 2], total_faces,
                                    face_bases, face_vertexes, face_norms,
                                    pt_out + i * 3, face_id_out + i);
+#else
+    IntersectLineWithTriangles(pt_in + i / 2 * 3, dir_in + i * 3, face_id_in[i / 2], total_faces,
+                               face_bases, face_vertexes, face_norms,
+                               pt_out + i * 3, face_id_out + i);
+#endif
   }
 }
 
