@@ -208,7 +208,7 @@ TEST_F(OpticsTest, RayFaceIntersection1) {
 TEST_F(OpticsTest, RayTracing) {
   context->PrintCrystalInfo();
   auto wls = context->GetWavelengths();
-  context->SetCurrentWavelength(wls[0]);
+  context->SetCurrentWavelength(wls[0].first);
   auto simulator = IceHalo::Simulator(context);
   simulator.Start();
   simulator.PrintRayInfo();
