@@ -4,12 +4,12 @@
 #include "mymath.h"
 #include "crystal.h"
 #include "files.h"
-#include "optics.h"
 
 #include "rapidjson/document.h"
 
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <random>
 #include <string>
 #include <functional>
@@ -20,22 +20,27 @@
 namespace IceHalo {
 
 class RaySegment;
-class CrystalContext;
-
+struct CrystalContext;
 enum class ProjectionType;
 enum class VisibleSemiSphere;
 
+
 struct AxisDistribution {
-  Math::Distribution axis_dist;
+  AxisDistribution();
+
+  Math::Distribution zenith_dist;
+  Math::Distribution azimuth_dist;
   Math::Distribution roll_dist;
-  float axis_mean;
+  float zenith_mean;
+  float azimuth_mean;
   float roll_mean;
-  float axis_std;
+  float zenith_std;
+  float azimuth_std;
   float roll_std;
 };
 
 
-struct RayPathFilterContext {
+struct RayPathFilter {
   enum Symmetry : uint8_t {
     kSymmetryNone = 0u,
     kSymmetryPrism = 1u,
@@ -47,17 +52,33 @@ struct RayPathFilterContext {
     kTypeNone,
     kTypeSpecific,
     kTypeGeneral,
-    kTypeHit,
   };
 
-  RayPathFilterContext();
+  RayPathFilter();
+
+  bool Filter(RaySegment* r, const CrystalPtr& crystal) const;
+  size_t RayPathHash(const std::vector<uint16_t>& ray_path) const;
+  void ApplyHash(const CrystalPtr& crystal);
 
   Type type;
   uint8_t symmetry;
-  int hit_num;
-  std::vector<int> ray_path;
-  std::vector<int> entry_faces;
-  std::vector<int> exit_faces;
+  std::vector<std::vector<uint16_t> > ray_paths;
+  std::unordered_set<size_t> ray_path_hashes;
+  std::unordered_set<uint16_t> entry_faces;
+  std::unordered_set<uint16_t> exit_faces;
+  std::unordered_set<int> hit_nums;
+
+private:
+  bool FilterRayGeneral(RaySegment* r, const CrystalPtr& crystal) const;
+  bool FilterRaySpecific(RaySegment* r, const CrystalPtr& crystal) const;
+};
+
+
+struct MultiScatterContext {
+  std::vector<CrystalContext> crystals;
+  std::vector<float> populations;
+  std::vector<RayPathFilter> ray_path_filters;
+  float prob;
 };
 
 
@@ -66,15 +87,12 @@ public:
   uint64_t GetTotalInitRays() const;
   int GetMaxRecursionNum() const;
 
-  int GetMultiScatterTimes() const;
-  float GetMultiScatterProb() const;
-
-  void FillActiveCrystal(std::vector<std::shared_ptr<CrystalContext> >* crystal_ctxs) const;
+  const std::vector<MultiScatterContext> GetMultiScatterContext() const ;
   void PrintCrystalInfo();
 
   void SetCurrentWavelength(float wavelength);
   float GetCurrentWavelength() const;
-  std::vector<float> GetWavelengths() const;
+  std::vector<std::pair<float, float> > GetWavelengths() const;
 
   const float* GetSunRayDir() const;
   float GetSunDiameter() const;
@@ -100,12 +118,13 @@ private:
   void ParseBasicSettings(rapidjson::Document& d);
   void ParseRaySettings(rapidjson::Document& d);
   void ParseSunSettings(rapidjson::Document& d);
-  void ParseDataSettings(rapidjson::Document& d);
   void ParseMultiScatterSettings(rapidjson::Document& d);
+  void ParseCrystalSettings(rapidjson::Document& d);
+  void ParseRayPathFilterSettings(rapidjson::Document& d);
 
-  void ParseCrystalSettings(const rapidjson::Value& c, int ci);
+  void ParseOneCrystalSetting(const rapidjson::Value& c, int ci);
   AxisDistribution ParseCrystalAxis(const rapidjson::Value& c, int ci);
-  RayPathFilterContext ParseCrystalRayPathFilter(const rapidjson::Value& c, int ci);
+  // RayPathFilter ParseCrystalRayPathFilter(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPrism(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPyramid(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPyramidStackHalf(const rapidjson::Value& c, int ci);
@@ -114,55 +133,41 @@ private:
   CrystalPtrU ParseCrystalIrregularHexPyramid(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalCustom(const rapidjson::Value& c, int ci);
 
+  void ParseOneScatterSetting(const rapidjson::Value& c, int ci);
+
+  void ParseOneFilterSetting(const rapidjson::Value& c, int ci);
+  void ParseFilterSymmetry(const rapidjson::Value& c, int ci, RayPathFilter* filter);
+  void ParseFilterType(const rapidjson::Value& c, int ci, RayPathFilter* filter);
+  void ParseFilterSpecificSettings(const rapidjson::Value& c, int ci, RayPathFilter* filter);
+  void ParseFilterGeneralSettings(const rapidjson::Value& c, int ci, RayPathFilter* filter);
+
   using CrystalParser = std::function<CrystalPtrU(SimulationContext*, const rapidjson::Value& c, int ci)>;
   static std::unordered_map<std::string, CrystalParser> crystal_parser_;
 
-  std::vector<std::shared_ptr<CrystalContext> > crystal_ctx_;
-
-  uint64_t total_ray_num_;
-  int max_recursion_num_;
-
-  int multi_scatter_times_;
-  float multi_scatter_prob_;
-
-  float current_wavelength_;
-  std::vector<float> wavelengths_;
-
   float sun_ray_dir_[3];
   float sun_diameter_;
+
+  uint64_t total_ray_num_;
+  std::vector<std::pair<float, float> > wavelengths_;
+  float current_wavelength_;
+
+  int max_recursion_num_;
+
+  std::vector<MultiScatterContext> multi_scatter_ctx_;
+  std::unordered_map<int, CrystalContext> crystal_ctx_;
+  std::unordered_map<int, RayPathFilter> ray_path_filters_;
 
   std::string config_file_name_;
   std::string data_directory_;
 };
 
 
-class CrystalContext {
-public:
-  CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis, const RayPathFilterContext& filter, float population);
+struct CrystalContext {
+  CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis);
+  CrystalContext(const CrystalContext& other);
 
-  CrystalPtr GetCrystal();
-  Math::Distribution GetAxisDist() const;
-  Math::Distribution GetRollDist() const;
-  float GetAxisMean() const;
-  float GetRollMean() const;
-  float GetAxisStd() const;
-  float GetRollStd() const;
-
-  float GetPopulation() const;
-  void SetPopulation(float population);
-
-  bool FilterRay(RaySegment* last_r);
-
-private:
-  bool FilterRayGeneral(RaySegment* last_r);
-  bool FilterRaySpecific(RaySegment* last_r);
-  bool FilterRayDirectionalSymm(RaySegment* last_r, bool original);
-  bool FilterRayHit(RaySegment* last_r);
-
-  CrystalPtr crystal_;
-  const AxisDistribution axis_;
-  const RayPathFilterContext ray_path_filter_;
-  float population_;
+  const CrystalPtr crystal;
+  const AxisDistribution axis;
 };
 
 
@@ -221,7 +226,6 @@ private:
   std::string data_directory_;
 };
 
-using CrystalContextPtr = std::shared_ptr<CrystalContext>;
 using SimulationContextPtr = std::shared_ptr<SimulationContext>;
 using RenderContextPtr = std::shared_ptr<RenderContext>;
 

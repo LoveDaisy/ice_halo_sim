@@ -526,9 +526,9 @@ float RandomNumberGenerator::GetUniform() {
 
 float RandomNumberGenerator::Get(Distribution dist, float mean, float std) {
   switch (dist) {
-    case Distribution::UNIFORM :
+    case Distribution::kUniform :
       return (GetUniform() - 0.5f) * 2 * std + mean;
-    case Distribution::GAUSS :
+    case Distribution::kGaussian :
       return GetGaussian() * std + mean;
   }
 }

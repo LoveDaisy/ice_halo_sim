@@ -124,8 +124,8 @@ public:
 
 
 enum class Distribution {
-  UNIFORM,
-  GAUSS
+  kUniform,
+  kGaussian,
 };
 
 

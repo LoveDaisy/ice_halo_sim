@@ -61,17 +61,17 @@ public:
 
 private:
   void InitSunRays();
-  void InitEntryRays(const CrystalContextPtr& ctx);
-  void InitMainAxis(const CrystalContextPtr& ctx, float* axis);
-  void TraceRays(const CrystalPtr& crystal);
-  void RestoreResultRays();
-  void StoreRaySegments();
+  void InitEntryRays(const CrystalContext& ctx);
+  void InitMainAxis(const CrystalContext& ctx, float* axis);
+  void TraceRays(const CrystalPtr& crystal, const RayPathFilter& filter);
+  void RestoreResultRays(float prob);
+  void StoreRaySegments(const CrystalPtr& crystal, const RayPathFilter& filter);
   void RefreshBuffer();
 
   static constexpr int kBufferSizeFactor = 4;
 
   SimulationContextPtr context_;
-  std::vector<CrystalContextPtr> active_crystal_ctxs_;
+  std::vector<CrystalContext> active_crystal_ctxs_;
 
   std::vector<std::vector<RayPtr> > rays_;
   std::vector<std::vector<RaySegment*> > exit_ray_segments_;

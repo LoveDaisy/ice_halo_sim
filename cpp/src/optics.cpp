@@ -35,7 +35,7 @@ void RaySegment::ResetWith(const float* pt, const float* dir, float w, int face_
 }
 
 
-Ray::Ray(RaySegment* seg, const CrystalContextPtr& crystal_ctx, const float main_axis_rot[3])
+Ray::Ray(RaySegment* seg, const CrystalContext& crystal_ctx, const float main_axis_rot[3])
     : first_ray_segment_(seg), prev_ray_segment_(nullptr),
       crystal_ctx_(crystal_ctx), main_axis_rot_(main_axis_rot) {}
 

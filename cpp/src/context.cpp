@@ -18,242 +18,201 @@ namespace IceHalo {
 
 using rapidjson::Pointer;
 
-RayPathFilterContext::RayPathFilterContext()
-    : type(RayPathFilterContext::kTypeNone), symmetry(RayPathFilterContext::kSymmetryNone), hit_num(-1) {}
+AxisDistribution::AxisDistribution()
+    : zenith_dist(Math::Distribution::kUniform),
+      azimuth_dist(Math::Distribution::kUniform),
+      roll_dist(Math::Distribution::kUniform),
+      zenith_mean(0), azimuth_mean(0), roll_mean(0),
+      zenith_std(0), azimuth_std(0), roll_std(0) {}
 
 
-CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis,
-                               const RayPathFilterContext& filter, float population)
-    : crystal_(std::move(g)), axis_(axis), ray_path_filter_(filter), population_(population) {}
+RayPathFilter::RayPathFilter()
+    : type(RayPathFilter::kTypeNone), symmetry(RayPathFilter::kSymmetryNone) {}
 
 
-CrystalPtr CrystalContext::GetCrystal() {
-  return this->crystal_;
-}
-
-
-Math::Distribution CrystalContext::GetAxisDist() const {
-  return axis_.axis_dist;
-}
-
-
-Math::Distribution CrystalContext::GetRollDist() const {
-  return axis_.roll_dist;
-}
-
-
-float CrystalContext::GetAxisMean() const {
-  return axis_.axis_mean;
-}
-
-
-float CrystalContext::GetRollMean() const {
-  return axis_.roll_mean;
-}
-
-
-float CrystalContext::GetAxisStd() const {
-  return axis_.axis_std;
-}
-
-
-float CrystalContext::GetRollStd() const {
-  return axis_.roll_std;
-}
-
-
-float CrystalContext::GetPopulation() const {
-  return population_;
-}
-
-
-void CrystalContext::SetPopulation(float population) {
-  population_ = population;
-}
-
-
-bool CrystalContext::FilterRay(RaySegment* last_r) {
-  switch (ray_path_filter_.type) {
-    case RayPathFilterContext::kTypeNone:
+bool RayPathFilter::Filter(IceHalo::RaySegment* r, const CrystalPtr& crystal) const {
+  switch (type) {
+    case RayPathFilter::kTypeNone:
       return true;
-    case RayPathFilterContext::kTypeGeneral:
-      return FilterRayGeneral(last_r);
-    case RayPathFilterContext::kTypeSpecific:
-      return FilterRaySpecific(last_r);
-    case RayPathFilterContext::kTypeHit:
-      return FilterRayHit(last_r);
+    case RayPathFilter::kTypeGeneral:
+      return FilterRayGeneral(r, crystal);
+    case RayPathFilter::kTypeSpecific:
+      return FilterRaySpecific(r, crystal);
     default:
       return false;
   }
 }
 
 
-bool CrystalContext::FilterRaySpecific(IceHalo::RaySegment* last_r) {
-  if (ray_path_filter_.ray_path.empty()) {
+bool RayPathFilter::FilterRaySpecific(IceHalo::RaySegment* last_r, const CrystalPtr& crystal) const {
+  if (ray_path_hashes.empty()) {
     return true;
   }
 
-  int curr_fn0 = crystal_->FaceNumber(last_r->root_->first_ray_segment_->face_id_);
-  if (curr_fn0 < 0) {
-    // Do not have a face number mapping.
+  int curr_fn0 = crystal->FaceNumber(last_r->root_->first_ray_segment_->face_id_);
+  if (curr_fn0 < 0 || crystal->GetFaceNumberPeriod() < 0) {   // If do not have face number mapping.
     return true;
   }
 
-  return FilterRayDirectionalSymm(last_r, true) || FilterRayDirectionalSymm(last_r, false);
-}
-
-
-bool CrystalContext::FilterRayDirectionalSymm(RaySegment* last_r, bool original) {
-  int period = crystal_->GetFaceNumberPeriod();
-  if (period <= 0) {
-    return true;
-  }
-
-  int prism_diff = -1;
-  int basal_diff = -1;
+  // First, check ray path length.
+  // And store current ray path for later computing.
+  decltype(ray_paths.size()) curr_ray_path_len = 0;
+  std::vector<uint16_t> curr_ray_path;
   auto p = last_r;
-  for (auto rit = ray_path_filter_.ray_path.rbegin();
-       rit != ray_path_filter_.ray_path.rend();
-       p = p->prev_, ++rit) {
-    if (!p) {
-      // Ray path shorter than filter path
+  while (p->prev_) {
+    int curr_fn = crystal->FaceNumber(p->face_id_);
+    if (curr_fn < 0) {
       return false;
     }
-    int filter_fn = *rit;
-    int curr_fn = crystal_->FaceNumber(p->face_id_);
-    if (!original && curr_fn != 1 && curr_fn != 2) {
-      curr_fn = 5 + period - curr_fn;
-    }
-    bool filter_basal = filter_fn == 1 || filter_fn == 2;
-    bool curr_basal = curr_fn == 1 || curr_fn == 2;
-    if (filter_basal != curr_basal) {
-      return false;
-    }
-    if (!filter_basal) {
-      prism_diff = (curr_fn - filter_fn + period) % period;
-    } else {
-      basal_diff = std::abs(curr_fn - filter_fn);
-    }
+    curr_ray_path.emplace_back(static_cast<uint16_t>(curr_fn));
+    p = p->prev_;
+    curr_ray_path_len++;
   }
-  if (!p || p->prev_) {
-    // Ray path shorter or longer than filter path.
+
+  bool length_matched = false;
+  for (const auto& rp : ray_paths) {
+    length_matched = length_matched || (curr_ray_path_len == rp.size());
+  }
+  if (!length_matched) {
     return false;
   }
 
-  p = last_r;
-  for (auto rit = ray_path_filter_.ray_path.rbegin();
-       rit != ray_path_filter_.ray_path.rend();
-       p = p->prev_, ++rit) {
-    int filter_fn = *rit;
-    int curr_fn = crystal_->FaceNumber(p->face_id_);
-    if (!original && curr_fn != 1 && curr_fn != 2) {
-      curr_fn = 5 + period - curr_fn;
-    }
+  std::reverse(curr_ray_path.begin(), curr_ray_path.end());
 
-    bool filter_basal = filter_fn == 1 || filter_fn == 2;
-    int curr_fn_p = curr_fn % 10;
-    int curr_fn_s = curr_fn / 10;
-    bool curr_basal = curr_fn == 1 || curr_fn == 2;
+  // Second, for each filter path, normalize current ray path, and find it in ray_path_hashes.
+  auto current_ray_path_hash = RayPathHash(curr_ray_path);
+  return ray_path_hashes.find(current_ray_path_hash) != ray_path_hashes.end();
+}
 
-    if (prism_diff > 0 && (ray_path_filter_.symmetry & RayPathFilterContext::kSymmetryPrism) &&
-        !curr_basal && !filter_basal) {
-      curr_fn_p = (curr_fn_p - prism_diff + period) % period;
-      curr_fn = curr_fn_p + curr_fn_s * 10;
-    }
-    if (curr_fn == filter_fn) {
-      // Exactly match. Continue to check next.
-      continue;
-    }
 
-    if (ray_path_filter_.symmetry & RayPathFilterContext::kSymmetryBasal) {
-      // B symmetry is checked;
-      if (basal_diff > 0 && filter_basal && curr_basal) {
-        continue;
+bool RayPathFilter::FilterRayGeneral(RaySegment* last_r, const CrystalPtr& crystal) const {
+  if (entry_faces.empty() && exit_faces.empty()) {
+    return true;
+  }
+
+  if (!hit_nums.empty()) {    // Check hit number.
+    auto p = last_r;
+    int n = 0;
+    while (p) {
+      p = p->prev_;
+      n++;
+    }
+    if (hit_nums.find(n) == hit_nums.end()) {
+      return false;
+    }
+  }
+
+  int curr_entry_fn = crystal->FaceNumber(last_r->root_->first_ray_segment_->face_id_);
+  int curr_exit_fn = crystal->FaceNumber(last_r->face_id_);
+  if (curr_entry_fn < 0 || curr_exit_fn < 0 ||
+      crystal->GetFaceNumberPeriod() < 0) {    // If do not have a face number mapping
+    return true;
+  }
+
+  return entry_faces.find(static_cast<uint16_t>(curr_entry_fn)) != entry_faces.end() &&
+         exit_faces.find(static_cast<uint16_t>(curr_exit_fn)) != exit_faces.end();
+}
+
+
+size_t RayPathFilter::RayPathHash(const std::vector<uint16_t>& ray_path) const {
+  constexpr size_t kStep = 7;
+  constexpr size_t kByteBits = 8;
+  constexpr size_t kTotalBits = sizeof(size_t) * kByteBits;
+
+  size_t result = 0;
+  size_t curr_offset = 0;
+  for (auto fn : ray_path) {
+    size_t tmp_hash = (fn << curr_offset) | (fn >> (kTotalBits - curr_offset));
+    result ^= tmp_hash;
+    curr_offset += kStep;
+    curr_offset %= kTotalBits;
+  }
+  return result;
+}
+
+
+void RayPathFilter::ApplyHash(const CrystalPtr& crystal) {
+  std::vector<std::vector<uint16_t> > augmented_ray_paths;
+
+  // Add the original path.
+  for (const auto& rp : ray_paths) {
+    augmented_ray_paths.emplace_back(rp);
+  }
+
+  // Add symmetry P.
+  auto period = crystal->GetFaceNumberPeriod();
+  std::vector<uint16_t> tmp_ray_path;
+  if (period > 0 && (symmetry & kSymmetryPrism)) {
+    std::vector<std::vector<uint16_t> > ray_paths_copy(augmented_ray_paths);
+    for (const auto& rp : ray_paths_copy) {
+      for (int i = 0; i < period; i++) {
+        tmp_ray_path.clear();
+        for (auto fn : rp) {
+          if (fn != 1 && fn != 2) {
+            fn = static_cast<uint16_t>((fn + period + i - 3) % period + 3);
+          }
+          tmp_ray_path.emplace_back(fn);
+        }
+        augmented_ray_paths.emplace_back(tmp_ray_path);
       }
     }
-    return false;
   }
 
-  return p && p == p->root_->first_ray_segment_;
-}
-
-
-bool CrystalContext::FilterRayGeneral(RaySegment* last_r) {
-  if (ray_path_filter_.entry_faces.empty() && ray_path_filter_.exit_faces.empty()) {
-    return true;
-  }
-
-  int fn0 = crystal_->FaceNumber(last_r->root_->first_ray_segment_->face_id_);
-  if (fn0 < 0 || crystal_->GetFaceNumberPeriod() < 0) {
-    // Do not have a face number mapping.
-    return true;
-  }
-
-  bool matched = false;
-  for (const auto& fn : ray_path_filter_.entry_faces) {
-    if (fn0 == fn) {
-      matched = true;
-      break;
+  // Add symmetry B.
+  if (symmetry & kSymmetryBasal) {
+    std::vector<std::vector<uint16_t> > ray_paths_copy(augmented_ray_paths);
+    for (const auto& rp : ray_paths_copy) {
+      tmp_ray_path.clear();
+      for (auto fn : rp) {
+        if (fn == 1 || fn == 2) {
+          fn = static_cast<uint16_t>(fn % 2 + 1);
+        }
+        tmp_ray_path.emplace_back(fn);
+      }
+      augmented_ray_paths.emplace_back(tmp_ray_path);
     }
   }
-  if (!matched) {
-    return false;
-  }
 
-  fn0 = crystal_->FaceNumber(last_r->face_id_);
-  matched = false;
-  for (const auto& fn : ray_path_filter_.exit_faces) {
-    if (fn0 == fn) {
-      matched = true;
-      break;
+  // Add symmetry D.
+  if (period > 0 && (symmetry & kSymmetryDirection)) {
+    std::vector<std::vector<uint16_t> > ray_paths_copy(augmented_ray_paths);
+    for (const auto& rp : ray_paths_copy) {
+      tmp_ray_path.clear();
+      for (auto fn : rp) {
+        if (fn != 1 && fn != 2) {
+          fn = static_cast<uint16_t>(5 + period - fn);
+        }
+        tmp_ray_path.emplace_back(fn);
+      }
+      augmented_ray_paths.emplace_back(tmp_ray_path);
     }
   }
-  return matched;
+
+  // Add them all.
+  ray_path_hashes.clear();
+  for (const auto& rp : augmented_ray_paths) {
+    ray_path_hashes.emplace(RayPathHash(rp));
+  }
 }
 
 
-bool CrystalContext::FilterRayHit(IceHalo::RaySegment* last_r) {
-  if (ray_path_filter_.hit_num <= 0) {
-    return true;
-  }
+CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis)
+    : crystal(std::move(g)), axis(axis) {}
 
-  auto p = last_r->prev_;
-  int hits = 0;
-  while (p) {
-    hits++;
-    p = p->prev_;
-  }
 
-  return hits == ray_path_filter_.hit_num;
-}
+CrystalContext::CrystalContext(const IceHalo::CrystalContext& other)
+    : crystal(other.crystal), axis(other.axis) {}
 
 
 SimulationContext::SimulationContext(const char* filename, rapidjson::Document& d)
-    : total_ray_num_(0), max_recursion_num_(9),
-      multi_scatter_times_(1), multi_scatter_prob_(1.0f),
-      current_wavelength_(550.0f), sun_diameter_(0.5f),
+    : sun_diameter_(0.5f), total_ray_num_(0), current_wavelength_(550.0f), max_recursion_num_(9),
       config_file_name_(filename), data_directory_("./") {
-  constexpr size_t kTmpBufferSize = 65536;
-  char buffer[kTmpBufferSize];
-
+  ParseSunSettings(d);
   ParseRaySettings(d);
   ParseBasicSettings(d);
-  ParseSunSettings(d);
-  ParseDataSettings(d);
+  ParseCrystalSettings(d);
+  ParseRayPathFilterSettings(d);
   ParseMultiScatterSettings(d);
-
-  const auto* p = Pointer("/crystal").Get(d);
-  if (p == nullptr || !p->IsArray()) {
-    snprintf(buffer, kTmpBufferSize, "Missing <crystal>. Parsing fail!");
-    throw std::invalid_argument(buffer);
-  }
-
-  int ci = 0;
-  for (const auto& c : p->GetArray()) {
-    ParseCrystalSettings(c, ci);
-    ci++;
-  }
-
   ApplySettings();
 }
 
@@ -263,7 +222,8 @@ std::unique_ptr<SimulationContext> SimulationContext::CreateFromFile(const char*
 
   FILE* fp = fopen(filename, "rb");
   if (!fp) {
-    printf("ERROR: file %s cannot be open!\n", filename);
+    std::fprintf(stderr, "ERROR: file %s cannot be open!\n", filename);
+    fclose(fp);
     return nullptr;
   }
 
@@ -273,97 +233,35 @@ std::unique_ptr<SimulationContext> SimulationContext::CreateFromFile(const char*
 
   rapidjson::Document d;
   if (d.ParseStream(is).HasParseError()) {
-    fprintf(stderr, "\nError(offset %u): %s\n", (unsigned)d.GetErrorOffset(),
-            GetParseError_En(d.GetParseError()));
+    std::fprintf(stderr, "\nError(offset %zu): %s\n", d.GetErrorOffset(),
+                 GetParseError_En(d.GetParseError()));
     fclose(fp);
     return nullptr;
   }
 
   fclose(fp);
-
   return std::unique_ptr<SimulationContext>(new SimulationContext(filename, d));
 }
 
 
 void SimulationContext::ParseBasicSettings(rapidjson::Document& d) {
   int maxRecursion = 9;
-  auto* p = Pointer("/max_recursion").Get(d);
+  auto p = Pointer("/max_recursion").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <max_recursion>, using default 9!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <max_recursion>, using default 9!\n");
   } else if (!p->IsInt()) {
-    fprintf(stderr, "\nWARNING! config <max_recursion> is not a integer, using default 9!\n");
+    std::fprintf(stderr, "\nWARNING! config <max_recursion> is not a integer, using default 9!\n");
   } else {
     maxRecursion = std::min(std::max(p->GetInt(), 1), 10);
   }
   max_recursion_num_ = maxRecursion;
-}
 
-
-void SimulationContext::ParseRaySettings(rapidjson::Document& d) {
-  /* Parsing ray number */
-  total_ray_num_ = 10000;
-  auto* p = Pointer("/ray/number").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default 10000!\n");
-  } else if (!p->IsUint()) {
-    fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default 10000!\n");
-  } else {
-    total_ray_num_ = p->GetUint();
-  }
-
-  /* Parsing wavelengths */
-  wavelengths_.clear();
-  wavelengths_.push_back(550);
-  p = Pointer("/ray/wavelength").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <ray.wavelength>, using default 550!\n");
-  } else if (!p->IsArray()) {
-    fprintf(stderr, "\nWARNING! Config <ray.wavelength> is not an array, using default 550!\n");
-  } else if (!(*p)[0].IsNumber()) {
-    fprintf(stderr, "\nWARNING! Config <ray.wavelength> connot be recognized, using default 550!\n");
-  } else {
-    wavelengths_.clear();
-    for (const auto& pi : p->GetArray()) {
-      wavelengths_.push_back(static_cast<float &&>(pi.GetDouble()));
-    }
-  }
-}
-
-
-void SimulationContext::ParseSunSettings(rapidjson::Document& d) {
-  // Parsing sun altitude
-  float sunAltitude = 0.0f;
-  auto* p = Pointer("/sun/altitude").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <sun.altitude>, using default 0.0!\n");
-  } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! config <sun.altitude> is not a number, using default 0.0!\n");
-  } else {
-    sunAltitude = static_cast<float>(p->GetDouble());
-  }
-  SetSunRayDirection(90.0f, sunAltitude);
-
-  // Parsing sun diameter
-  sun_diameter_ = 0.5f;
-  p = Pointer("/sun/diameter").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <sun.diameter>, using default 0.5!\n");
-  } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! Config <sun.diameter> is not a number, using default 0.5!\n");
-  } else {
-    sun_diameter_ = static_cast<float>(p->GetDouble());
-  }
-}
-
-
-void SimulationContext::ParseDataSettings(rapidjson::Document& d) {
-  /* Parsing output data directory */
   std::string dir = "./";
-  auto* p = Pointer("/data_folder").Get(d);
+  p = Pointer("/data_folder").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
   } else if (!p->IsString()) {
-    fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
+    std::fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
   } else {
     dir = p->GetString();
   }
@@ -371,29 +269,133 @@ void SimulationContext::ParseDataSettings(rapidjson::Document& d) {
 }
 
 
-void SimulationContext::ParseMultiScatterSettings(rapidjson::Document& d) {
-  int multiScattering = 1;
-  auto* p = Pointer("/multi_scatter/repeat").Get(d);
+void SimulationContext::ParseRaySettings(rapidjson::Document& d) {
+  total_ray_num_ = 10000;
+  auto p = Pointer("/ray/number").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <multi_scatter.repeat>, using default value 1!\n");
-  } else if (!p->IsInt()) {
-    fprintf(stderr, "\nWARNING! Config <multi_scatter.repeat> is not a integer, using default 1!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default 10000!\n");
+  } else if (!p->IsUint()) {
+    std::fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default 10000!\n");
   } else {
-    multiScattering = std::min(std::max(p->GetInt(), 1), 4);
+    total_ray_num_ = p->GetUint();
   }
-  multi_scatter_times_ = multiScattering;
 
-  float prob = 1.0f;
-  p = Pointer("/multi_scatter/probability").Get(d);
-  if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <multi_scatter.probability>, using default value 1.0!\n");
-  } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! Config <multi_scatter.probability> is not a number, using default 1.0!\n");
+  std::vector<float> tmp_wavelengths{ 550.0f };
+  auto wl_p = Pointer("/ray/wavelength").Get(d);
+  if (wl_p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <ray.wavelength>, using default 550!\n");
+  } else if (!wl_p->IsArray()) {
+    std::fprintf(stderr, "\nWARNING! Config <ray.wavelength> is not an array, using default 550!\n");
+  } else if (!(*wl_p)[0].IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! Config <ray.wavelength> cannot be recognized, using default 550!\n");
   } else {
-    prob = static_cast<float>(p->GetDouble());
-    prob = std::max(std::min(prob, 1.0f), 0.0f);
+    tmp_wavelengths.clear();
+    for (const auto& pi : wl_p->GetArray()) {
+      tmp_wavelengths.push_back(static_cast<float &&>(pi.GetDouble()));
+    }
   }
-  multi_scatter_prob_ = prob;
+
+  std::vector<float> tmp_weights{ 1.0f };
+  auto wt_p = Pointer("/ray/weight").Get(d);
+  if (wt_p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <ray.weight>, using default 1.0!\n");
+  } else if (!wt_p->IsArray()) {
+    std::fprintf(stderr, "\nWARNING! Config <ray.wavelength> is not an array, using default 1.0!\n");
+  } else if (!(*wt_p)[0].IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! Config <ray.wavelength> cannot be recognized, using default 1.0!\n");
+  } else {
+    tmp_weights.clear();
+    for (const auto& pi : wt_p->GetArray()) {
+      tmp_weights.push_back(static_cast<float &&>(pi.GetDouble()));
+    }
+  }
+
+  if (tmp_wavelengths.size() != tmp_weights.size()) {
+    throw std::invalid_argument("size of ray.wavelength and ray.weight doesn't match!");
+  }
+
+  wavelengths_.clear();
+  for (decltype(tmp_wavelengths.size()) i = 0; i < tmp_wavelengths.size(); i++) {
+    wavelengths_.emplace_back(tmp_wavelengths[i], tmp_weights[i]);
+  }
+}
+
+
+void SimulationContext::ParseSunSettings(rapidjson::Document& d) {
+  float sunAltitude = 0.0f;
+  auto* p = Pointer("/sun/altitude").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <sun.altitude>, using default 0.0!\n");
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! config <sun.altitude> is not a number, using default 0.0!\n");
+  } else {
+    sunAltitude = static_cast<float>(p->GetDouble());
+  }
+  SetSunRayDirection(90.0f, sunAltitude);
+
+  sun_diameter_ = 0.5f;
+  p = Pointer("/sun/diameter").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <sun.diameter>, using default 0.5!\n");
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! Config <sun.diameter> is not a number, using default 0.5!\n");
+  } else {
+    sun_diameter_ = static_cast<float>(p->GetDouble());
+  }
+}
+
+
+void SimulationContext::ParseMultiScatterSettings(rapidjson::Document& d) {
+  constexpr size_t kTmpBufferSize = 512;
+  char buffer[kTmpBufferSize];
+
+  auto p = Pointer("/multi_scatter").Get(d);
+  if (p == nullptr || !p->IsArray() || !p->GetArray()[0].IsObject()) {
+    std::snprintf(buffer, kTmpBufferSize, "Config <multi_scatter> cannot be recognized!");
+    throw std::invalid_argument(buffer);
+  }
+
+  int ci = 0;
+  for (const auto& c : p->GetArray()) {
+    ParseOneScatterSetting(c, ci);
+    ci++;
+  }
+}
+
+
+void SimulationContext::ParseCrystalSettings(rapidjson::Document& d) {
+  constexpr size_t kTmpBufferSize = 512;
+  char buffer[kTmpBufferSize];
+
+  const auto* p = Pointer("/crystal").Get(d);
+  if (p == nullptr || !p->IsArray()) {
+    std::snprintf(buffer, kTmpBufferSize, "Missing <crystal>. Parsing fail!");
+    throw std::invalid_argument(buffer);
+  }
+
+  int ci = 0;
+  for (const auto& c : p->GetArray()) {
+    ParseOneCrystalSetting(c, ci);
+    ci++;
+  }
+}
+
+
+void SimulationContext::ParseRayPathFilterSettings(rapidjson::Document& d) {
+  constexpr size_t kTmpBufferSize = 512;
+  char buffer[kTmpBufferSize];
+
+  const auto* p = Pointer("/ray_path_filter").Get(d);
+  if (p == nullptr || !p->IsArray()) {
+    std::snprintf(buffer, kTmpBufferSize, "Missing <ray_path_filter>. Parsing fail!");
+    throw std::invalid_argument(buffer);
+  }
+
+  int ci = 0;
+  for (const auto& c : p->GetArray()) {
+    ParseOneFilterSetting(c, ci);
+    ci++;
+  }
 }
 
 
@@ -408,40 +410,31 @@ std::unordered_map<std::string, SimulationContext::CrystalParser> SimulationCont
 };
 
 
-void SimulationContext::ParseCrystalSettings(const rapidjson::Value& c, int ci) {
+void SimulationContext::ParseOneCrystalSetting(const rapidjson::Value& c, int ci) {
   using Math::Distribution;
 
   constexpr size_t kMsgBufferSize = 256;
-  char msgBuffer[kMsgBufferSize];
+  char msg_buffer[kMsgBufferSize];
 
-  auto* p = Pointer("/enable").Get(c);
-  if (p == nullptr || !p->IsBool()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].enable> cannot recognize!", ci);
-    throw std::invalid_argument(msgBuffer);
-  } else if (!p->GetBool()) {
-    return;
-  }
-
-  float population = 1.0;
-  p = Pointer("/population").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! <crystal[%d].population> cannot recognize, using default 1.0!\n", ci);
-  } else {
-    population = static_cast<float>(p->GetDouble());
-  }
-
-  p = Pointer("/type").Get(c);
-  std::string type(c["type"].GetString());
+  auto p = Pointer("/type").Get(c);
   if (p == nullptr || !p->IsString()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recognize!", ci);
-    throw std::invalid_argument(msgBuffer);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].type> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
   }
+
+  std::string type(c["type"].GetString());
   if (crystal_parser_.find(type) == crystal_parser_.end()) {
-    snprintf(msgBuffer, kMsgBufferSize, "<crystal[%d].type> cannot recognize!", ci);
-    throw std::invalid_argument(msgBuffer);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].type> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
   }
-  crystal_ctx_.emplace_back(std::make_shared<CrystalContext>(
-    crystal_parser_[type](this, c, ci), ParseCrystalAxis(c, ci), ParseCrystalRayPathFilter(c, ci), population));
+
+  p = Pointer("/id").Get(c);
+  if (p == nullptr || !p->IsInt()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].id> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+
+  crystal_ctx_.emplace(p->GetInt(), CrystalContext(crystal_parser_[type](this, c, ci), ParseCrystalAxis(c, ci)));
 }
 
 
@@ -452,51 +445,91 @@ AxisDistribution SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, 
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
 
-  const auto* p = Pointer("/axis/type").Get(c);
+  // Start parsing zenith settings.
+  const auto* p = Pointer("/zenith/type").Get(c);
   if (p == nullptr || !p->IsString()) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].zenith.type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else if (*p == "gauss") {
-    axis.axis_dist = Distribution::GAUSS;
+    axis.zenith_dist = Distribution::kGaussian;
   } else if (*p == "uniform") {
-    axis.axis_dist = Distribution::UNIFORM;
+    axis.zenith_dist = Distribution::kUniform;
   } else {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.type> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].zenith.type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   }
 
+  p = Pointer("/zenith/mean").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].zenith.mean> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else {
+    axis.zenith_mean = static_cast<float>(90 - p->GetDouble());
+  }
+
+  p = Pointer("/zenith/std").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].zenith.std> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else {
+    axis.zenith_std = static_cast<float>(p->GetDouble());
+  }
+
+  // Start parsing azimuth settings.
+  axis.azimuth_dist = Math::Distribution::kUniform;
+  axis.azimuth_mean = 0;
+  axis.azimuth_std = 360;
+  p = Pointer("/azimuth").Get(c);
+  if (p == nullptr || !p->IsObject()) {
+    std::fprintf(stderr, "<crystal[%d].azimuth> cannot recognize! Use default.\n", ci);
+  } else {
+    p = Pointer("/azimuth/type").Get(c);
+    if (p == nullptr || !p->IsString()) {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].azimuth.type> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    } else if (*p == "gauss") {
+      axis.azimuth_dist = Distribution::kGaussian;
+    } else if (*p == "uniform") {
+      axis.azimuth_dist = Distribution::kUniform;
+    } else {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].azimuth.type> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    }
+
+    p = Pointer("/azimuth/mean").Get(c);
+    if (p == nullptr || !p->IsNumber()) {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].azimuth.mean> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    } else {
+      axis.azimuth_mean = static_cast<float>(p->GetDouble());
+    }
+
+    p = Pointer("/azimuth/std").Get(c);
+    if (p == nullptr || !p->IsNumber()) {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].azimuth.std> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    } else {
+      axis.azimuth_std = static_cast<float>(p->GetDouble());
+    }
+  }
+
+  // Start parsing roll settings.
   p = Pointer("/roll/type").Get(c);
   if (p == nullptr || !p->IsString()) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else if (*p == "gauss") {
-    axis.roll_dist = Distribution::GAUSS;
+    axis.roll_dist = Distribution::kGaussian;
   } else if (*p == "uniform") {
-    axis.roll_dist = Distribution::UNIFORM;
+    axis.roll_dist = Distribution::kUniform;
   } else {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
-  }
-
-  p = Pointer("/axis/mean").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.mean> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else {
-    axis.axis_mean = static_cast<float>(90 - p->GetDouble());
-  }
-
-  p = Pointer("/axis/std").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].axis.std> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else {
-    axis.axis_std = static_cast<float>(p->GetDouble());
   }
 
   p = Pointer("/roll/mean").Get(c);
   if (p == nullptr || !p->IsNumber()) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.mean> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.mean> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else {
     axis.roll_mean = static_cast<float>(p->GetDouble());
@@ -504,7 +537,7 @@ AxisDistribution SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, 
 
   p = Pointer("/roll/std").Get(c);
   if (p == nullptr || !p->IsNumber()) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.std> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.std> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else {
     axis.roll_std = static_cast<float>(p->GetDouble());
@@ -514,103 +547,12 @@ AxisDistribution SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, 
 }
 
 
-RayPathFilterContext SimulationContext::ParseCrystalRayPathFilter(const rapidjson::Value& c, int ci) {
-  RayPathFilterContext filter{};
-
-  const auto* p = Pointer("/ray_path_filter").Get(c);
-  if (p == nullptr || !p->IsObject()) {
-    fprintf(stderr, "<crystal[%d].ray_path_filter> is not specified. Use default none.\n", ci);
-    return filter;
-  }
-
-  p = Pointer("/ray_path_filter/symmetry").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    fprintf(stderr, "<crystal[%d].ray_path_filter.symmetry> cannot recognize! Use default none.\n", ci);
-  } else {
-    const auto str = p->GetString();
-    for (decltype(p->GetStringLength()) i = 0; i < p->GetStringLength(); i++) {
-      switch (str[i]) {
-        case 'P':
-        case 'p':
-          filter.symmetry |= RayPathFilterContext::kSymmetryPrism;
-          break;
-        case 'B':
-        case 'b':
-          filter.symmetry |= RayPathFilterContext::kSymmetryBasal;
-          break;
-        case 'D':
-        case 'd':
-          filter.symmetry |= RayPathFilterContext::kSymmetryDirection;
-          break;
-        default:
-          fprintf(stderr, "<crystal[%d].ray_path_filter.symmetry> some item cannot be recognized! ignored.\n", ci);
-          break;
-      }
-    }
-  }
-
-  p = Pointer("/ray_path_filter/type").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    fprintf(stderr, "<crystal[%d].ray_path_filter.type> cannot recognize! Use default none.\n", ci);
-  } else {
-    if (*p == "specific") {
-      filter.type = RayPathFilterContext::kTypeSpecific;
-    } else if (*p == "general") {
-      filter.type = RayPathFilterContext::kTypeGeneral;
-    } else if (*p == "hit") {
-      filter.type = RayPathFilterContext::kTypeHit;
-    } else if (*p == "none") {
-      filter.type = RayPathFilterContext::kTypeNone;
-    } else {
-      fprintf(stderr, "<crystal[%d].ray_path_filter.type> cannot recognize! Use default none.\n", ci);
-    }
-  }
-
-  p = Pointer("/ray_path_filter/path").Get(c);
-  if (p == nullptr || !p->IsArray() || !((*p)[0].IsInt())) {
-    fprintf(stderr, "<crystal[%d].ray_path_filter.path> cannot recognize! Use default [].\n", ci);
-  } else {
-    for (const auto& fn : p->GetArray()) {
-      filter.ray_path.emplace_back(fn.GetInt());
-    }
-  }
-
-  p = Pointer("/ray_path_filter/entry").Get(c);
-  if (p == nullptr || !p->IsArray() || !((*p)[0].IsInt())) {
-    fprintf(stderr, "<crystal[%d].ray_path_filter.entry> cannot recognize! Use default [].\n", ci);
-  } else {
-    for (const auto& fn : p->GetArray()) {
-      filter.entry_faces.emplace_back(fn.GetInt());
-    }
-  }
-
-  p = Pointer("/ray_path_filter/exit").Get(c);
-  if (p == nullptr || !p->IsArray() || !((*p)[0].IsInt())) {
-    fprintf(stderr, "<crystal[%d].ray_path_filter.exit> cannot recognize! Use default [].\n", ci);
-  } else {
-    for (const auto& fn : p->GetArray()) {
-      filter.exit_faces.emplace_back(fn.GetInt());
-    }
-  }
-
-  p = Pointer("/ray_path_filter/hit").Get(c);
-  if (p == nullptr || !p->IsInt()) {
-    fprintf(stderr, "<crystal[%d].ray_path_filter.hit> cannot recognize! Use default -1.\n", ci);
-    filter.hit_num = -1;
-  } else {
-    filter.hit_num = p->GetInt();
-  }
-
-  return filter;
-}
-
-
 CrystalPtrU SimulationContext::ParseCrystalHexPrism(const rapidjson::Value& c, int ci) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
   const auto* p = Pointer("/parameter").Get(c);
   if (p == nullptr || !p->IsNumber()) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   }
   auto h = static_cast<float>(p->GetDouble());
@@ -623,7 +565,7 @@ CrystalPtrU SimulationContext::ParseCrystalHexPyramid(const rapidjson::Value& c,
   char msg_buffer[kMsgBufferSize];
   const auto* p = Pointer("/parameter").Get(c);
   if (p == nullptr || !p->IsArray()) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else if (p->Size() == 3) {
     auto h1 = static_cast<float>((*p)[0].GetDouble());
@@ -647,7 +589,7 @@ CrystalPtrU SimulationContext::ParseCrystalHexPyramid(const rapidjson::Value& c,
     auto h3 = static_cast<float>((*p)[6].GetDouble());
     return Crystal::CreateHexPyramid(upper_idx1, upper_idx2, lower_idx1, lower_idx2, h1, h2, h3);
   } else {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
     throw std::invalid_argument(msg_buffer);
   }
 }
@@ -658,7 +600,7 @@ CrystalPtrU SimulationContext::ParseCrystalHexPyramidStackHalf(const rapidjson::
   char msg_buffer[kMsgBufferSize];
   const auto* p = Pointer("/parameter").Get(c);
   if (p == nullptr || !p->IsArray()) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else if (p->Size() == 7) {
     int upper_idx1 = (*p)[0].GetInt();
@@ -670,7 +612,7 @@ CrystalPtrU SimulationContext::ParseCrystalHexPyramidStackHalf(const rapidjson::
     auto h3 = static_cast<float>((*p)[6].GetDouble());
     return Crystal::CreateHexPyramidStackHalf(upper_idx1, upper_idx2, lower_idx1, lower_idx2, h1, h2, h3);
   } else {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
     throw std::invalid_argument(msg_buffer);
   }
 }
@@ -681,14 +623,14 @@ CrystalPtrU SimulationContext::ParseCrystalCubicPyramid(const rapidjson::Value& 
   char msg_buffer[kMsgBufferSize];
   const auto* p = Pointer("/parameter").Get(c);
   if (p == nullptr || !p->IsArray()) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else if (p->Size() == 2) {
     auto h1 = static_cast<float>((*p)[0].GetDouble());
     auto h2 = static_cast<float>((*p)[1].GetDouble());
     return Crystal::CreateCubicPyramid(h1, h2);
   } else {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
     throw std::invalid_argument(msg_buffer);
   }
 }
@@ -699,7 +641,7 @@ CrystalPtrU SimulationContext::ParseCrystalIrregularHexPrism(const rapidjson::Va
   char msg_buffer[kMsgBufferSize];
   const auto* p = Pointer("/parameter").Get(c);
   if (p == nullptr || !p->IsArray() || p->Size() != 7) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else {
     auto d1 = static_cast<float>((*p)[0].GetDouble());
@@ -721,7 +663,7 @@ CrystalPtrU SimulationContext::ParseCrystalIrregularHexPyramid(const rapidjson::
   char msg_buffer[kMsgBufferSize];
   const auto* p = Pointer("/parameter").Get(c);
   if (p == nullptr || !p->IsArray()) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else if (p->Size() == 13) {
     auto d1 = static_cast<float>((*p)[0].GetDouble());
@@ -744,7 +686,7 @@ CrystalPtrU SimulationContext::ParseCrystalIrregularHexPyramid(const rapidjson::
 
     return Crystal::CreateIrregularHexPyramid(dist, idx, height);
   } else {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
     throw std::invalid_argument(msg_buffer);
   }
 }
@@ -755,18 +697,18 @@ CrystalPtrU SimulationContext::ParseCrystalCustom(const rapidjson::Value& c, int
   char msg_buffer[kMsgBufferSize];
   const auto* p = Pointer("/parameter").Get(c);
   if (p == nullptr || !p->IsString()) {
-    snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else {
     auto n = config_file_name_.rfind('/');
     if (n == std::string::npos) {
-      snprintf(msg_buffer, kMsgBufferSize, "models/%s", p->GetString());
+      std::snprintf(msg_buffer, kMsgBufferSize, "models/%s", p->GetString());
     } else {
-      snprintf(msg_buffer, kMsgBufferSize, "%s/models/%s", config_file_name_.substr(0, n).c_str(), p->GetString());
+      std::snprintf(msg_buffer, kMsgBufferSize, "%s/models/%s", config_file_name_.substr(0, n).c_str(), p->GetString());
     }
     std::FILE* file = fopen(msg_buffer, "r");
     if (!file) {
-      snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot open model file!", ci);
+      std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot open model file!", ci);
       throw std::invalid_argument(msg_buffer);
     }
 
@@ -798,6 +740,255 @@ CrystalPtrU SimulationContext::ParseCrystalCustom(const rapidjson::Value& c, int
 }
 
 
+void SimulationContext::ParseOneScatterSetting(const rapidjson::Value& c, int ci) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+
+  MultiScatterContext scatter{};
+  auto p = Pointer("/crystal").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  for (auto& pc : p->GetArray()) {
+    if (!pc.IsUint()) {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    } else {
+      int id = pc.GetInt();
+      if (crystal_ctx_.find(id) == crystal_ctx_.end()) {
+        std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> contains invalid ID!", ci);
+        throw std::invalid_argument(msg_buffer);
+      }
+      scatter.crystals.emplace_back(crystal_ctx_.at(id));
+    }
+  }
+
+  p = Pointer("/population").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].population> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  for (auto& pp : p->GetArray()) {
+    if (!pp.IsNumber()) {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].population> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    } else {
+      scatter.populations.emplace_back(static_cast<float>(pp.GetDouble()));
+    }
+  }
+
+  p = Pointer("/probability").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].probability> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  auto prob = static_cast<float>(p->GetDouble());
+  if (prob < 0) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].probability> is invalid!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  scatter.prob = prob;
+
+  p = Pointer("/ray_path_filter").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  for (auto& pf : p->GetArray()) {
+    if (!pf.IsUint()) {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    } else {
+      int id = pf.GetInt();
+      if (ray_path_filters_.find(id) == ray_path_filters_.end()) {
+        std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> contains invalid ID!", ci);
+        throw std::invalid_argument(msg_buffer);
+      }
+      scatter.ray_path_filters.emplace_back(ray_path_filters_[id]);
+    }
+  }
+
+  if (scatter.crystals.size() != scatter.populations.size()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d]> crystal and population size does not match!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  if (scatter.crystals.size() != scatter.ray_path_filters.size()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d]> crystal and ray_path_filters size does not match!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+
+  for (decltype(scatter.crystals.size()) i = 0; i < scatter.crystals.size(); i++) {
+    scatter.ray_path_filters[i].ApplyHash(scatter.crystals[i].crystal);
+  }
+
+  multi_scatter_ctx_.emplace_back(scatter);
+}
+
+
+void SimulationContext::ParseOneFilterSetting(const rapidjson::Value& c, int ci) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+
+  RayPathFilter filter{};
+  ParseFilterType(c, ci, &filter);
+  ParseFilterSymmetry(c, ci, &filter);
+  ParseFilterSpecificSettings(c, ci, &filter);
+  ParseFilterGeneralSettings(c, ci, &filter);
+
+  auto p = Pointer("/id").Get(c);
+  if (p == nullptr || !p->IsInt()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].id> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  int id = p->GetInt();
+
+  ray_path_filters_.emplace(id, filter);
+}
+
+
+void SimulationContext::ParseFilterSymmetry(const rapidjson::Value& c, int ci, RayPathFilter* filter) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+
+  auto p = Pointer("/symmetry").Get(c);
+  if (p == nullptr || !p->IsString()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].symmetry> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+
+  filter->symmetry = RayPathFilter::kSymmetryNone;
+  auto symm = p->GetString();
+  for (decltype(p->GetStringLength()) i = 0; i < p->GetStringLength(); i++) {
+    switch (symm[i]) {
+      case 'P':
+        filter->symmetry |= RayPathFilter::kSymmetryPrism;
+        break;
+      case 'B':
+        filter->symmetry |= RayPathFilter::kSymmetryBasal;
+        break;
+      case 'D':
+        filter->symmetry |= RayPathFilter::kSymmetryDirection;
+        break;
+      default:
+        std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].symmetry> cannot recognize!", ci);
+        throw std::invalid_argument(msg_buffer);
+    }
+  }
+}
+
+
+void SimulationContext::ParseFilterType(const rapidjson::Value& c, int ci, RayPathFilter* filter) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+
+  auto p = Pointer("/type").Get(c);
+  if (p == nullptr || !p->IsString()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].type> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+
+  if (*p == "none") {
+    filter->type = RayPathFilter::kTypeNone;
+  } else if (*p == "specific") {
+    filter->type = RayPathFilter::kTypeSpecific;
+  } else if (*p == "general") {
+    filter->type = RayPathFilter::kTypeGeneral;
+  } else {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].type> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+}
+
+
+void SimulationContext::ParseFilterSpecificSettings(const rapidjson::Value& c, int ci, RayPathFilter* filter) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+
+  auto p = Pointer("/path").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  if (!p->GetArray().Empty() && !p->GetArray()[0].IsInt() && !p->GetArray()[0].IsArray()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  if (p->GetArray().Empty()) {
+    std::fprintf(stderr, "<ray_path_filter[%d].path> is empty. Ignore this setting.\n", ci);
+  } else if (p->GetArray()[0].IsInt()) {
+    filter->ray_paths.emplace_back();
+    for (auto const& pi : p->GetArray()) {
+      if (!pi.IsInt()) {
+        std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
+        throw std::invalid_argument(msg_buffer);
+      }
+      filter->ray_paths.back().emplace_back(pi.GetInt());
+    }
+  } else {    // p[0].IsArray()
+    for (const auto& pi : p->GetArray()) {
+      if (pi.GetArray().Empty()) {
+        std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
+        throw std::invalid_argument(msg_buffer);
+      }
+      filter->ray_paths.emplace_back();
+      for (const auto& pii : pi.GetArray()) {
+        if (!pii.IsInt()) {
+          std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
+          throw std::invalid_argument(msg_buffer);
+        }
+        filter->ray_paths.back().emplace_back(pii.GetInt());
+      }
+    }
+  }
+}
+
+
+void SimulationContext::ParseFilterGeneralSettings(const rapidjson::Value& c, int ci, IceHalo::RayPathFilter* filter) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+
+  auto p = Pointer("/entry").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].entry> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  for (const auto& pi : p->GetArray()) {
+    if (!pi.IsInt()) {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].entry> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    }
+    filter->entry_faces.emplace(pi.GetInt());
+  }
+
+  p = Pointer("/exit").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].exit> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  for (const auto& pi : p->GetArray()) {
+    if (!pi.IsInt()) {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].exit> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    }
+    filter->exit_faces.emplace(pi.GetInt());
+  }
+
+  p = Pointer("/hit").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].hit> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  for (const auto& pi : p->GetArray()) {
+    if (!pi.IsInt()) {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].hit> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    }
+    filter->hit_nums.emplace(pi.GetInt());
+  }
+}
+
+
 uint64_t SimulationContext::GetTotalInitRays() const {
   return total_ray_num_;
 }
@@ -808,21 +999,21 @@ int SimulationContext::GetMaxRecursionNum() const {
 }
 
 
-void SimulationContext::FillActiveCrystal(std::vector<CrystalContextPtr>* crystal_ctxs) const {
-  crystal_ctxs->clear();
-  for (const auto& ctx : crystal_ctx_) {
-    crystal_ctxs->emplace_back(ctx);
-  }
-}
-
-
-int SimulationContext::GetMultiScatterTimes() const {
-  return multi_scatter_times_;
-}
-
-float SimulationContext::GetMultiScatterProb() const {
-  return multi_scatter_prob_;
-}
+// void SimulationContext::FillActiveCrystal(std::vector<CrystalContextPtr>* crystal_ctxs) const {
+//   crystal_ctxs->clear();
+//   for (const auto& ctx : crystal_ctx_) {
+//     crystal_ctxs->emplace_back(ctx);
+//   }
+// }
+//
+//
+// int SimulationContext::GetMultiScatterTimes() const {
+//   return multi_scatter_times_;
+// }
+//
+// float SimulationContext::GetMultiScatterProb() const {
+//   return multi_scatter_prob_;
+// }
 
 
 void SimulationContext::SetCurrentWavelength(float wavelength) {
@@ -835,7 +1026,7 @@ float SimulationContext::GetCurrentWavelength() const {
 }
 
 
-std::vector<float> SimulationContext::GetWavelengths() const {
+std::vector<std::pair<float, float>> SimulationContext::GetWavelengths() const {
   return wavelengths_;
 }
 
@@ -869,19 +1060,37 @@ void SimulationContext::SetSunRayDirection(float lon, float lat) {
 void SimulationContext::ApplySettings() {
   if (total_ray_num_ <= 0) return;
 
-  float pop_weight_sum = 0.0f;
-  for (const auto& c : crystal_ctx_) {
-    pop_weight_sum += c->GetPopulation();
+  float weight_sum = 0;
+
+  // Normalize wavelength weights.
+  for (const auto& wl : wavelengths_) {
+    weight_sum += wl.second;
   }
-  for (auto& c : crystal_ctx_) {
-    c->SetPopulation(c->GetPopulation() / pop_weight_sum);
+  for (auto& wl : wavelengths_) {
+    wl.second /= weight_sum;
   }
+
+  // Normalize crystal weights.
+  for (auto& ms : multi_scatter_ctx_) {
+    weight_sum = 0;
+    for (auto& w : ms.populations) {
+      weight_sum += w;
+    }
+    for (auto& w : ms.populations) {
+      w /= weight_sum;
+    }
+  }
+}
+
+
+const std::vector<MultiScatterContext> SimulationContext::GetMultiScatterContext() const {
+  return multi_scatter_ctx_;
 }
 
 
 void SimulationContext::PrintCrystalInfo() {
   for (const auto& c : crystal_ctx_) {
-    auto g = c->GetCrystal();
+    auto g = c.second.crystal;
     printf("--\n");
     for (const auto& v : g->GetVertexes()) {
       printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
@@ -922,7 +1131,7 @@ std::unique_ptr<RenderContext> RenderContext::CreateFromFile(const char* filenam
 
   rapidjson::Document d;
   if (d.ParseStream(is).HasParseError()) {
-    fprintf(stderr, "\nError(offset %u): %s\n", (unsigned)d.GetErrorOffset(),
+    std::fprintf(stderr, "\nError(offset %u): %s\n", (unsigned)d.GetErrorOffset(),
             GetParseError_En(d.GetParseError()));
     fclose(fp);
     return nullptr;
@@ -945,9 +1154,9 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
 
   auto* p = Pointer("/camera/azimuth").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.azimuth>, using default 90.0!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.azimuth>, using default 90.0!\n");
   } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! config <camera.azimuth> is not a number, using default 90.0!\n");
+    std::fprintf(stderr, "\nWARNING! config <camera.azimuth> is not a number, using default 90.0!\n");
   } else {
     auto az = static_cast<float>(p->GetDouble());
     az = std::max(std::min(az, 360.0f), 0.0f);
@@ -956,9 +1165,9 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
 
   p = Pointer("/camera/elevation").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.elevation>, using default 90.0!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.elevation>, using default 90.0!\n");
   } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default 90.0!\n");
+    std::fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default 90.0!\n");
   } else {
     auto el = static_cast<float>(p->GetDouble());
     el = std::max(std::min(el, 89.999f), -89.999f);
@@ -967,9 +1176,9 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
 
   p = Pointer("/camera/rotation").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.rotation>, using default 0.0!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.rotation>, using default 0.0!\n");
   } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! config <camera.rotation> is not a number, using default 0.0!\n");
+    std::fprintf(stderr, "\nWARNING! config <camera.rotation> is not a number, using default 0.0!\n");
   } else {
     auto rot = static_cast<float>(p->GetDouble());
     rot = std::max(std::min(rot, 180.0f), -180.0f);
@@ -978,9 +1187,9 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
 
   p = Pointer("/camera/fov").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.fov>, using default 120.0!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.fov>, using default 120.0!\n");
   } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default 120.0!\n");
+    std::fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default 120.0!\n");
   } else {
     fov_ = static_cast<float>(p->GetDouble());
     fov_ = std::max(std::min(fov_, 140.0f), 0.0f);
@@ -988,9 +1197,9 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
 
   p = Pointer("/camera/width").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.width>, using default 800!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.width>, using default 800!\n");
   } else if (!p->IsInt()) {
-    fprintf(stderr, "\nWARNING! config <camera.width> is not an integer, using default 800!\n");
+    std::fprintf(stderr, "\nWARNING! config <camera.width> is not an integer, using default 800!\n");
   } else {
     int width = p->GetInt();
     width = std::max(width, 0);
@@ -999,9 +1208,9 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
 
   p = Pointer("/camera/height").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.height>, using default 800!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.height>, using default 800!\n");
   } else if (!p->IsInt()) {
-    fprintf(stderr, "\nWARNING! config <camera.height> is not an integer, using default 800!\n");
+    std::fprintf(stderr, "\nWARNING! config <camera.height> is not an integer, using default 800!\n");
   } else {
     int height = p->GetInt();
     height = std::max(height, 0);
@@ -1010,9 +1219,9 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
 
   p = Pointer("/camera/lens").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <camera.lens>, using default equi-area fisheye!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.lens>, using default equi-area fisheye!\n");
   } else if (!p->IsString()) {
-    fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equi-area fisheye!\n");
+    std::fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equi-area fisheye!\n");
   } else {
     if (*p == "linear") {
       projection_type_ = ProjectionType::kLinear;
@@ -1023,7 +1232,7 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
     } else if (*p == "dual_fisheye_equiarea") {
       projection_type_ = ProjectionType::kDualEqualArea;
     } else {
-      fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equi-area fisheye!\n");
+      std::fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equi-area fisheye!\n");
     }
   }
 }
@@ -1044,9 +1253,9 @@ void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
 
   auto* p = Pointer("/render/visible_semi_sphere").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.visible_semi_sphere>, using default kUpper!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <render.visible_semi_sphere>, using default kUpper!\n");
   } else if (!p->IsString()) {
-    fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> is not a string, using default kUpper!\n");
+    std::fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> is not a string, using default kUpper!\n");
   } else if (*p == "upper") {
     visible_semi_sphere_ = VisibleSemiSphere::kUpper;
   } else if (*p == "lower") {
@@ -1056,14 +1265,14 @@ void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
   } else if (*p == "full") {
     visible_semi_sphere_ = VisibleSemiSphere::kFull;
   } else {
-    fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> cannot be recognized, using default kUpper!\n");
+    std::fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> cannot be recognized, using default kUpper!\n");
   }
 
   p = Pointer("/render/intensity_factor").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.intensity_factor>, using default 1.0!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <render.intensity_factor>, using default 1.0!\n");
   } else if (!p->IsNumber()) {
-    fprintf(stderr, "\nWARNING! Config <render.intensity_factor> is not a number, using default 1.0!\n");
+    std::fprintf(stderr, "\nWARNING! Config <render.intensity_factor> is not a number, using default 1.0!\n");
   } else {
     double f = p->GetDouble();
     f = std::max(std::min(f, 100.0), 0.01);
@@ -1072,20 +1281,20 @@ void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
 
   p = Pointer("/ray/number").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default 10000!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default 10000!\n");
   } else if (!p->IsUint()) {
-    fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default 10000!\n");
+    std::fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default 10000!\n");
   } else {
     total_ray_num_ = p->GetUint();
   }
 
   p = Pointer("/render/offset").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.offset>, using default [0, 0]!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <render.offset>, using default [0, 0]!\n");
   } else if (!p->IsArray()) {
-    fprintf(stderr, "\nWARNING! Config <render.offset> is not an array, using default [0, 0]!\n");
+    std::fprintf(stderr, "\nWARNING! Config <render.offset> is not an array, using default [0, 0]!\n");
   } else if (p->Size() != 2 || !(*p)[0].IsInt() || !(*p)[1].IsInt()) {
-    fprintf(stderr, "\nWARNING! Config <render.offset> cannot be recognized, using default [0, 0]!\n");
+    std::fprintf(stderr, "\nWARNING! Config <render.offset> cannot be recognized, using default [0, 0]!\n");
   } else {
     offset_x_ = (*p)[0].GetInt();
     offset_y_ = (*p)[1].GetInt();
@@ -1097,11 +1306,11 @@ void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
 
   p = Pointer("/render/background_color").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default [0,0,0]!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default [0,0,0]!\n");
   } else if (!p->IsArray()) {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array, using default [0,0,0]!\n");
+    std::fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array, using default [0,0,0]!\n");
   } else if (p->Size() != 3 || !(*p)[0].IsNumber()) {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default [0,0,0]!\n");
+    std::fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default [0,0,0]!\n");
   } else {
     auto pa = p->GetArray();
     for (int i = 0; i < 3; i++) {
@@ -1111,13 +1320,13 @@ void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
 
   p = Pointer("/render/ray_color").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default real color!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default real color!\n");
   } else if (!p->IsArray() && !p->IsString()) {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array nor a string, using default real color!\n");
+    std::fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array nor a string, using default real color!\n");
   } else if (p->IsArray() && (p->Size() != 3 || !(*p)[0].IsNumber())) {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default real color!\n");
+    std::fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default real color!\n");
   } else if (p->IsString() && (*p) != "real") {
-    fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default real color!\n");
+    std::fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default real color!\n");
   } else if (p->IsArray()) {
     auto pa = p->GetArray();
     for (int i = 0; i < 3; i++) {
@@ -1127,9 +1336,9 @@ void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
 
   p = Pointer("/render/show_horizontal").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <render.show_horizontal>, using default true!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <render.show_horizontal>, using default true!\n");
   } else if (!p->IsBool()) {
-    fprintf(stderr, "\nWARNING! Config <render.show_horizontal> is not a boolean, using default true!\n");
+    std::fprintf(stderr, "\nWARNING! Config <render.show_horizontal> is not a boolean, using default true!\n");
   } else {
     show_horizontal_ = p->GetBool();
   }
@@ -1140,9 +1349,9 @@ void RenderContext::ParseDataSettings(rapidjson::Document& d) {
   data_directory_ = "./";
   auto* p = Pointer("/data_folder").Get(d);
   if (p == nullptr) {
-    fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
   } else if (!p->IsString()) {
-    fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
+    std::fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
   } else {
     data_directory_ = p->GetString();
   }

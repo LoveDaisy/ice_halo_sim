@@ -141,32 +141,36 @@ void Simulator::Start() {
   enter_ray_data_.Clean();
   enter_ray_offset_ = 0;
 
-  context_->FillActiveCrystal(&active_crystal_ctxs_);
   total_ray_num_ = context_->GetTotalInitRays();
-
   InitSunRays();
-  auto multi_scatter_times = context_->GetMultiScatterTimes();
-  for (int i = 0; i < multi_scatter_times; i++) {
+
+  const auto multi_scatter_ctx = context_->GetMultiScatterContext();
+  for (auto it = multi_scatter_ctx.begin(); it != multi_scatter_ctx.end(); ++it) {
     rays_.emplace_back();
     rays_.back().reserve(total_ray_num_);
     exit_ray_segments_.emplace_back();
     exit_ray_segments_.back().reserve(total_ray_num_ * 2);
 
-    for (const auto& ctx : active_crystal_ctxs_) {
-      active_ray_num_ = static_cast<size_t>(ctx->GetPopulation() * total_ray_num_);
+    const auto& ms_ctx = *it;
+    for (decltype(ms_ctx.crystals.size()) i = 0; i < ms_ctx.crystals.size(); i++) {
+      const auto& crystal_ctx = ms_ctx.crystals[i];
+      const auto& filter = ms_ctx.ray_path_filters[i];
+      active_ray_num_ = static_cast<size_t>(ms_ctx.populations[i] * total_ray_num_);
       if (buffer_size_ < total_ray_num_ * kBufferSizeFactor) {
         buffer_size_ = total_ray_num_ * kBufferSizeFactor;
         buffer_.Allocate(buffer_size_);
       }
-      InitEntryRays(ctx);
-      TraceRays(ctx->GetCrystal());
+      InitEntryRays(crystal_ctx);
       enter_ray_offset_ += active_ray_num_;
+      TraceRays(crystal_ctx.crystal, filter);
     }
 
-    if (i < multi_scatter_times - 1) {
-      RestoreResultRays();    // total_ray_num_ is updated.
+    if (it != multi_scatter_ctx.end() - 1) {
+      RestoreResultRays(ms_ctx.prob);    // total_ray_num_ is updated.
     }
+    enter_ray_offset_ = 0;
   }
+
   for (const auto& r : exit_ray_segments_.back()) {
     final_ray_segments_.emplace_back(r);
   }
@@ -192,8 +196,8 @@ void Simulator::InitSunRays() {
 // Init entry rays into a crystal. Fill pt[0], face_id[0], w[0] and ray_seg[0].
 // Rotate entry rays into crystal frame
 // Add RayPtr and main axis rotation
-void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
-  auto crystal = ctx->GetCrystal();
+void Simulator::InitEntryRays(const CrystalContext& ctx) {
+  auto& crystal = ctx.crystal;
   auto total_faces = crystal->TotalFaces();
 
   auto* face_area = new float[total_faces];
@@ -242,27 +246,27 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
 
 // Init crystal main axis.
 // Random sample points on a sphere with given parameters.
-void Simulator::InitMainAxis(const CrystalContextPtr& ctx, float* axis) {
+void Simulator::InitMainAxis(const CrystalContext& ctx, float* axis) {
   auto rng = Math::RandomNumberGenerator::GetInstance();
   auto sampler = Math::RandomSampler::GetInstance();
 
-  if (ctx->GetAxisDist() == Math::Distribution::UNIFORM) {
+  if (ctx.axis.zenith_dist == Math::Distribution::kUniform) {
     // Random sample on full sphere, ignore other parameters.
     sampler->SampleSphericalPointsSph(axis);
   } else {
-    sampler->SampleSphericalPointsSph(ctx->GetAxisDist(), ctx->GetAxisMean(), ctx->GetAxisStd(), axis);
+    sampler->SampleSphericalPointsSph(ctx.axis.zenith_dist, ctx.axis.zenith_mean, ctx.axis.zenith_std, axis);
   }
-  if (ctx->GetRollDist() == Math::Distribution::UNIFORM) {
+  if (ctx.axis.roll_dist == Math::Distribution::kUniform) {
     // Random roll, ignore other parameters.
     axis[2] = rng->GetUniform() * 2 * Math::kPi;
   } else {
-    axis[2] = rng->Get(ctx->GetRollDist(), ctx->GetRollMean(), ctx->GetRollStd()) * Math::kDegreeToRad;
+    axis[2] = rng->Get(ctx.axis.roll_dist, ctx.axis.roll_mean, ctx.axis.roll_std) * Math::kDegreeToRad;
   }
 }
 
 
 // Restore and shuffle resulted rays, and fill into dir[0].
-void Simulator::RestoreResultRays() {
+void Simulator::RestoreResultRays(float prob) {
   if (buffer_size_ < exit_ray_segments_.back().size() * 2) {
     buffer_size_ = exit_ray_segments_.back().size() * 2;
     buffer_.Allocate(buffer_size_);
@@ -271,7 +275,6 @@ void Simulator::RestoreResultRays() {
     enter_ray_data_.Allocate(exit_ray_segments_.back().size());
   }
 
-  float prob = context_->GetMultiScatterProb();
   auto rng = Math::RandomNumberGenerator::GetInstance();
   size_t idx = 0;
   for (const auto& r : exit_ray_segments_.back()) {
@@ -308,7 +311,7 @@ void Simulator::RestoreResultRays() {
 
 // Trace rays.
 // Start from dir[0] and pt[0].
-void Simulator::TraceRays(const CrystalPtr& crystal) {
+void Simulator::TraceRays(const CrystalPtr& crystal, const RayPathFilter& filter) {
   auto pool = ThreadingPool::GetInstance();
 
   int max_recursion_num = context_->GetMaxRecursionNum();
@@ -331,14 +334,14 @@ void Simulator::TraceRays(const CrystalPtr& crystal) {
       });
     }
     pool->WaitFinish();
-    StoreRaySegments();
+    StoreRaySegments(crystal, filter);
     RefreshBuffer();    // active_ray_num_ is updated.
   }
 }
 
 
 // Save rays
-void Simulator::StoreRaySegments() {
+void Simulator::StoreRaySegments(const CrystalPtr& crystal, const RayPathFilter& filter) {
   auto ray_pool = RaySegmentPool::GetInstance();
   for (size_t i = 0; i < active_ray_num_ * 2; i++) {
     if (buffer_.w[1][i] <= 0) {   // Refractive rays in total reflection case
@@ -350,9 +353,6 @@ void Simulator::StoreRaySegments() {
     if (buffer_.face_id[1][i] < 0) {
       r->is_finished_ = true;
     }
-    if (r->is_finished_ || r->w_ < SimulationContext::kPropMinW) {
-      exit_ray_segments_.back().emplace_back(r);
-    }
 
     auto prev_ray_seg = buffer_.ray_seg[0][i / 2];
     if (i % 2 == 0) {
@@ -363,6 +363,13 @@ void Simulator::StoreRaySegments() {
     r->prev_ = prev_ray_seg;
     r->root_ = prev_ray_seg->root_;
     buffer_.ray_seg[1][i] = r;
+
+    if (!filter.Filter(r, crystal)) {
+      continue;
+    }
+    if (r->is_finished_ || r->w_ < SimulationContext::kPropMinW) {
+      exit_ray_segments_.back().emplace_back(r);
+    }
   }
 }
 
@@ -399,9 +406,6 @@ void Simulator::SaveFinalDirections(const char* filename) {
   for (const auto& r : final_ray_segments_) {
     const auto axis_rot = r->root_->main_axis_rot_.val();
     assert(r->root_);
-    if (!r->root_->crystal_ctx_->FilterRay(r)) {
-      continue;
-    }
 
     Math::RotateZBack(axis_rot, r->dir_.val(), curr_data);
     curr_data[3] = r->w_;

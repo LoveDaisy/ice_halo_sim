@@ -21,9 +21,9 @@ int main(int argc, char* argv[]) {
 
   char filename[256];
   for (auto wl : context->GetWavelengths()) {
-    printf("starting at wavelength: %.1f\n", wl);
+    printf("starting at wavelength: %.1f\n", wl.first);
 
-    context->SetCurrentWavelength(wl);
+    context->SetCurrentWavelength(wl.first);
 
     auto t0 = std::chrono::system_clock::now();
     simulator.Start();
@@ -32,7 +32,7 @@ int main(int argc, char* argv[]) {
     printf("Ray tracing: %.2fms\n", diff.count());
 
     t0 = std::chrono::system_clock::now();
-    std::sprintf(filename, "directions_%.1f_%lli.bin", wl, t0.time_since_epoch().count());
+    std::sprintf(filename, "directions_%.1f_%lli.bin", wl.first, t0.time_since_epoch().count());
     simulator.SaveFinalDirections(filename);
 
     t1 = std::chrono::system_clock::now();
