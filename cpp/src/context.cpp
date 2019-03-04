@@ -999,30 +999,19 @@ int SimulationContext::GetMaxRecursionNum() const {
 }
 
 
-// void SimulationContext::FillActiveCrystal(std::vector<CrystalContextPtr>* crystal_ctxs) const {
-//   crystal_ctxs->clear();
-//   for (const auto& ctx : crystal_ctx_) {
-//     crystal_ctxs->emplace_back(ctx);
-//   }
-// }
-//
-//
-// int SimulationContext::GetMultiScatterTimes() const {
-//   return multi_scatter_times_;
-// }
-//
-// float SimulationContext::GetMultiScatterProb() const {
-//   return multi_scatter_prob_;
-// }
-
-
-void SimulationContext::SetCurrentWavelength(float wavelength) {
+void SimulationContext::SetCurrentWavelength(float wavelength, float weight) {
   this->current_wavelength_ = wavelength;
+  this->current_wavelength_weight_ = weight;
 }
 
 
 float SimulationContext::GetCurrentWavelength() const {
   return current_wavelength_;
+}
+
+
+float SimulationContext::GetCurrentWavelengthWeight() const {
+  return current_wavelength_weight_;
 }
 
 

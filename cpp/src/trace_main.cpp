@@ -23,7 +23,7 @@ int main(int argc, char* argv[]) {
   for (auto wl : context->GetWavelengths()) {
     printf("starting at wavelength: %.1f\n", wl.first);
 
-    context->SetCurrentWavelength(wl.first);
+    context->SetCurrentWavelength(wl.first, wl.second);
 
     auto t0 = std::chrono::system_clock::now();
     simulator.Start();

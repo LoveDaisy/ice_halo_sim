@@ -397,6 +397,7 @@ void Simulator::SaveFinalDirections(const char* filename) {
   if (!file.Open(OpenMode::kWrite | OpenMode::kBinary)) return;
 
   file.Write(context_->GetCurrentWavelength());
+  file.Write(context_->GetCurrentWavelengthWeight());
 
   auto ray_num = final_ray_segments_.size();
   size_t idx = 0;

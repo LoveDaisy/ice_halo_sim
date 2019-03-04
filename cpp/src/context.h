@@ -90,8 +90,9 @@ public:
   const std::vector<MultiScatterContext> GetMultiScatterContext() const ;
   void PrintCrystalInfo();
 
-  void SetCurrentWavelength(float wavelength);
+  void SetCurrentWavelength(float wavelength, float weight);
   float GetCurrentWavelength() const;
+  float GetCurrentWavelengthWeight() const;
   std::vector<std::pair<float, float> > GetWavelengths() const;
 
   const float* GetSunRayDir() const;
@@ -150,6 +151,7 @@ private:
   uint64_t total_ray_num_;
   std::vector<std::pair<float, float> > wavelengths_;
   float current_wavelength_;
+  float current_wavelength_weight_;
 
   int max_recursion_num_;
 

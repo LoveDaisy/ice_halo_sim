@@ -287,7 +287,7 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
   auto* read_buffer = new float[file_size / sizeof(float)];
 
   file.Open(OpenMode::kRead | OpenMode::kBinary);
-  auto read_count = file.Read(read_buffer, 1);
+  auto read_count = file.Read(read_buffer, 2);
   if (read_count <= 0) {
     std::fprintf(stderr, "Failed to read wavelength data!\n");
     file.Close();
@@ -296,7 +296,10 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
   }
 
   auto wavelength = static_cast<int>(read_buffer[0]);
-  if (wavelength < SpectrumRenderer::kMinWavelength || wavelength > SpectrumRenderer::kMaxWaveLength) {
+  auto wavelength_weight = read_buffer[1];
+  if (wavelength < SpectrumRenderer::kMinWavelength ||
+      wavelength > SpectrumRenderer::kMaxWaveLength ||
+      wavelength_weight < 0) {
     std::fprintf(stderr, "Wavelength out of range!\n");
     file.Close();
     delete[] read_buffer;
@@ -317,7 +320,7 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
   auto* tmp_xy = new int[total_ray_count * 2];
   for (decltype(read_count) i = 0; i < total_ray_count; i++) {
     std::memcpy(tmp_dir + i * 3, read_buffer + i * 4, 3 * sizeof(float));
-    tmp_w[i] = read_buffer[i * 4 + 3];
+    tmp_w[i] = read_buffer[i * 4 + 3] * wavelength_weight;
   }
   delete[] read_buffer;
 
@@ -366,7 +369,7 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
   delete[] tmp_xy;
   delete[] tmp_w;
 
-  total_w_ += context_->GetTotalRayNum();
+  total_w_ += context_->GetTotalRayNum() * wavelength_weight;
   return static_cast<int>(total_ray_count);
 }
 
