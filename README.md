@@ -35,9 +35,9 @@ on matlab codes. These are just legacy codes remained here for reference.
   This program is designed to handle multi-scattering cases. As a reference, HaloPoint handles
   multi-scattering via a very tricky workaround, thus it is hard to simulate 
   [44-degree parhelia](https://www.atoptics.co.uk/halo/44pars.htm). And my program allows you
-  to simulate any multi-scattering scenario freely. Following figure is generated in 23 minutes
-  on my Macbook pro.
-  <img src="matlab/figs/sim06E_2M.jpg" width="400">
+  to simulate any multi-scattering scenario freely. Following multi-scattering display is generated in 14 minutes
+  on my Macbook pro, with totally *72 million* starting rays traced.  
+  <img src="matlab/figs/44-degree parhelia.jpg" width="400">
   
 * Customized crystal model.
   This program has a simple built-in parser for [.obj file](https://en.wikipedia.org/wiki/Wavefront_.obj_file)
@@ -84,8 +84,8 @@ on matlab codes. These are just legacy codes remained here for reference.
 * 对多晶模拟的完整支持  
   本模拟程序可以完整地模拟多晶场景, 与普通单晶场景的操作没有区别, 不需特殊对待. 作为对比, HaloPoint 
   采用了一种非常绕的方式来勉强模拟多晶场景, 并且难以模拟 [44 度幻日](https://www.atoptics.co.uk/halo/44pars.htm).
-  而本模拟程序可以让用户自由模拟任意的多晶场景. 下图所示场景只需要不到 23 分钟即可模拟渲染完.  
-  <img src="matlab/figs/sim06E_2M.jpg" width="400">
+  而本模拟程序可以让用户自由模拟任意的多晶场景. 下图所示场景只需要不到 14 分钟即可模拟渲染完. 总计追踪约 7200 万条初始光线.  
+  <img src="matlab/figs/44-degree parhelia.jpg" width="400">
   
 * 用户自定义的冰晶形状  
   本模拟程序实现了一个简单的 [.obj 文件](https://en.wikipedia.org/wiki/Wavefront_.obj_file) 解析器,
