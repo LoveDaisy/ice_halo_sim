@@ -18,14 +18,6 @@ namespace IceHalo {
 
 using rapidjson::Pointer;
 
-AxisDistribution::AxisDistribution()
-    : zenith_dist(Math::Distribution::kUniform),
-      azimuth_dist(Math::Distribution::kUniform),
-      roll_dist(Math::Distribution::kUniform),
-      zenith_mean(0), azimuth_mean(0), roll_mean(0),
-      zenith_std(0), azimuth_std(0), roll_std(0) {}
-
-
 RayPathFilter::RayPathFilter()
     : type(RayPathFilter::kTypeNone), symmetry(RayPathFilter::kSymmetryNone) {}
 
@@ -451,9 +443,9 @@ AxisDistribution SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, 
     std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].zenith.type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else if (*p == "gauss") {
-    axis.zenith_dist = Distribution::kGaussian;
+    axis.latitude_dist = Distribution::kGaussian;
   } else if (*p == "uniform") {
-    axis.zenith_dist = Distribution::kUniform;
+    axis.latitude_dist = Distribution::kUniform;
   } else {
     std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].zenith.type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
@@ -464,7 +456,7 @@ AxisDistribution SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, 
     std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].zenith.mean> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else {
-    axis.zenith_mean = static_cast<float>(90 - p->GetDouble());
+    axis.latitude_mean = static_cast<float>(90 - p->GetDouble());
   }
 
   p = Pointer("/zenith/std").Get(c);
@@ -472,7 +464,7 @@ AxisDistribution SimulationContext::ParseCrystalAxis(const rapidjson::Value& c, 
     std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].zenith.std> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else {
-    axis.zenith_std = static_cast<float>(p->GetDouble());
+    axis.latitude_std = static_cast<float>(p->GetDouble());
   }
 
   // Start parsing azimuth settings.

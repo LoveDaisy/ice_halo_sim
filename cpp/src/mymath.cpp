@@ -1,4 +1,5 @@
 #include "mymath.h"
+#include "context.h"
 
 #include <cstring>
 #include <algorithm>
@@ -548,42 +549,6 @@ RandomSamplerPtr RandomSampler::instance_ = nullptr;
 std::mutex RandomSampler::instance_mutex_{};
 
 
-void RandomSampler::SampleSphericalPointsCart(float* data, size_t num) {
-  auto rng = RandomNumberGenerator::GetInstance();
-  for (decltype(num) i = 0; i < num; i++) {
-    float u = rng->GetUniform() * 2 - 1;
-    float q = rng->GetUniform() * 2 * Math::kPi;
-
-    float r = std::sqrt(1.0f - u * u);
-
-    data[i * 3 + 0] = r * std::cos(q);
-    data[i * 3 + 1] = r * std::sin(q);
-    data[i * 3 + 2] = u;
-  }
-}
-
-
-void RandomSampler::SampleSphericalPointsCart(Distribution dist, float lat, float std,
-                                              float* data, size_t num) {
-  auto rng = RandomNumberGenerator::GetInstance();
-  for (decltype(num) i = 0; i < num; i++) {
-    float phi = rng->Get(dist, lat * kDegreeToRad, std * kDegreeToRad);
-    if (phi > kPi / 2) {
-      phi = kPi - phi;
-    }
-    if (phi < -kPi / 2) {
-      phi = -kPi - phi;
-    }
-    float lambda = rng->GetUniform() * 2 * Math::kPi;
-
-    float r = std::cos(phi);
-    data[i * 3 + 0] = r * std::cos(lambda);
-    data[i * 3 + 1] = r * std::sin(lambda);
-    data[i * 3 + 2] = std::sin(phi);
-  }
-}
-
-
 void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float* data, size_t num) {
   auto rng = RandomNumberGenerator::GetInstance();
 
@@ -621,18 +586,26 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num) {
 }
 
 
-void RandomSampler::SampleSphericalPointsSph(Distribution dist, float lat, float std,
-                                             float* data, size_t num) {
+void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num) {
   auto rng = RandomNumberGenerator::GetInstance();
   for (decltype(num) i = 0; i < num; i++) {
-    float phi = rng->Get(dist, lat * kDegreeToRad, std * kDegreeToRad);
+    float phi = rng->Get(axis_dist.latitude_dist,
+                         axis_dist.latitude_mean * kDegreeToRad,
+                         axis_dist.latitude_std * kDegreeToRad);
     if (phi > kPi / 2) {
       phi = kPi - phi;
     }
     if (phi < -kPi / 2) {
       phi = -kPi - phi;
     }
-    float lambda = rng->GetUniform() * 2 * Math::kPi;
+    float lambda = 0;
+    if (axis_dist.azimuth_dist == Distribution::kUniform) {
+      lambda = rng->GetUniform() * 2 * Math::kPi;
+    } else {
+      lambda = rng->Get(axis_dist.azimuth_dist,
+                        axis_dist.azimuth_mean * kDegreeToRad,
+                        axis_dist.azimuth_std * kDegreeToRad);
+    }
 
     data[i * 2 + 0] = lambda;
     data[i * 2 + 1] = phi;
@@ -682,5 +655,13 @@ int RandomSampler::SampleInt(int max) {
 }
 
 }  // namespace Math
+
+
+AxisDistribution::AxisDistribution()
+  : latitude_dist(Math::Distribution::kUniform),
+    azimuth_dist(Math::Distribution::kUniform),
+    roll_dist(Math::Distribution::kUniform),
+    latitude_mean(0), azimuth_mean(0), roll_mean(0),
+    latitude_std(0), azimuth_std(0), roll_std(0) {}
 
 }   // namespace IceHalo

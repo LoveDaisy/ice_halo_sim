@@ -9,6 +9,8 @@
 
 namespace IceHalo {
 
+struct AxisDistribution;
+
 namespace Math {
 
 class DummyMatrix;
@@ -154,23 +156,6 @@ using RandomNumberGeneratorPtr = std::shared_ptr<RandomNumberGenerator>;
 
 class RandomSampler {
 public:
-  /*! @brief Generate points uniformly distributed on sphere surface, in Cartesian form.
-   *
-   * @param data xyz data.
-   * @param num number of points.
-   */
-  void SampleSphericalPointsCart(float* data, size_t num = 1);
-
-  /*! @brief Generate points distributed on sphere surface up to latitude, in Cartesian form.
-   *
-   * @param dist distribution type, uniform or Gaussian.
-   * @param lat latitude.
-   * @param std standard deviation (for Gaussian) or half range (for uniform), in degree
-   * @param data output data, xyz.
-   * @param num number of points.
-   */
-  void SampleSphericalPointsCart(Distribution dist, float lat, float std, float* data, size_t num = 1);
-
   /*! @brief Generate points distributed uniformly on sphere around a give point, in Cartesian form.
    *
    * @param dir the given point, xyz.
@@ -189,13 +174,11 @@ public:
 
   /*! @brief Generate points distributed on sphere surface up to latitude, in spherical form, (lon, lat).
    *
-   * @param dist distribution type, uniform or Gaussian.
-   * @param lat latitude.
-   * @param std standard deviation (for Gaussian) or half range (for uniform), in degree.
+   * @param axis_dist axis distribution, including information of zenith / azimuth / roll.
    * @param data output data, (lon, lat), in rad
    * @param num number of points.
    */
-  void SampleSphericalPointsSph(Distribution dist, float lat, float std, float* data, size_t num = 1);
+  void SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num = 1);
 
   /*! @brief Generate points evenly distributed on a triangle, in Cartesian form, xyz.
    *
@@ -255,6 +238,21 @@ void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
                              std::vector<int>& ptsIdx, std::vector<TriangleIdx>& faces);
 
 }   // namespace Math
+
+
+struct AxisDistribution {
+  AxisDistribution();
+
+  Math::Distribution latitude_dist;
+  Math::Distribution azimuth_dist;
+  Math::Distribution roll_dist;
+  float latitude_mean;
+  float azimuth_mean;
+  float roll_mean;
+  float latitude_std;
+  float azimuth_std;
+  float roll_std;
+};
 
 }   // namespace IceHalo
 

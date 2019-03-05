@@ -250,11 +250,11 @@ void Simulator::InitMainAxis(const CrystalContext& ctx, float* axis) {
   auto rng = Math::RandomNumberGenerator::GetInstance();
   auto sampler = Math::RandomSampler::GetInstance();
 
-  if (ctx.axis.zenith_dist == Math::Distribution::kUniform) {
+  if (ctx.axis.latitude_dist == Math::Distribution::kUniform) {
     // Random sample on full sphere, ignore other parameters.
     sampler->SampleSphericalPointsSph(axis);
   } else {
-    sampler->SampleSphericalPointsSph(ctx.axis.zenith_dist, ctx.axis.zenith_mean, ctx.axis.zenith_std, axis);
+    sampler->SampleSphericalPointsSph(ctx.axis, axis);
   }
   if (ctx.axis.roll_dist == Math::Distribution::kUniform) {
     // Random roll, ignore other parameters.

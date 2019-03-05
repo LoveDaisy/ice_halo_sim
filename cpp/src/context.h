@@ -25,21 +25,6 @@ enum class ProjectionType;
 enum class VisibleSemiSphere;
 
 
-struct AxisDistribution {
-  AxisDistribution();
-
-  Math::Distribution zenith_dist;
-  Math::Distribution azimuth_dist;
-  Math::Distribution roll_dist;
-  float zenith_mean;
-  float azimuth_mean;
-  float roll_mean;
-  float zenith_std;
-  float azimuth_std;
-  float roll_std;
-};
-
-
 struct RayPathFilter {
   enum Symmetry : uint8_t {
     kSymmetryNone = 0u,
