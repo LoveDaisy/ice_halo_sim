@@ -226,8 +226,8 @@ void Normalize3(float* vec);
 void Normalized3(const float* vec, float* vec_out);
 void Vec3FromTo(const float* vec1, const float* vec2, float* vec);
 
-void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t dataNum = 1);
-void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t dataNum = 1);
+void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t data_num = 1);
+void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t data_num = 1);
 
 std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss);
 void SortAndRemoveDuplicate(std::vector<Vec3f>* pts);
@@ -235,7 +235,7 @@ std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& 
 void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Math::Vec3f>& pts,
                           std::vector<Math::TriangleIdx>& faces);
 void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
-                             std::vector<int>& ptsIdx, std::vector<TriangleIdx>& faces);
+                             std::vector<int>& pts_idx, std::vector<TriangleIdx>& faces);
 
 }   // namespace Math
 

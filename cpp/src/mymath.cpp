@@ -67,7 +67,7 @@ void Vec3FromTo(const float* vec1, const float* vec2, float* vec) {
 }
 
 
-void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t dataNum) {
+void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t data_num) {
   using std::cos;
   using std::sin;
   float ax[9] = {-cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
@@ -80,15 +80,15 @@ void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_ve
                  cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
                  sin(lon_lat_roll[1])};
 
-  ConstDummyMatrix matRt(ax, 3, 3);
-  ConstDummyMatrix inputVec(input_vec, dataNum, 3);
-  DummyMatrix resVec(output_vec, dataNum, 3);
-  MatrixMultiply(inputVec, matRt, &resVec);
+  ConstDummyMatrix mat_rot_trans(ax, 3, 3);
+  ConstDummyMatrix mat_input_vec(input_vec, data_num, 3);
+  DummyMatrix mat_res_vec(output_vec, data_num, 3);
+  MatrixMultiply(mat_input_vec, mat_rot_trans, &mat_res_vec);
 }
 
 
 void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec,
-                 uint64_t dataNum) {
+                 uint64_t data_num) {
   using std::cos;
   using std::sin;
   float ax[9] = {-cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
@@ -101,10 +101,10 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
                   cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
                   sin(lon_lat_roll[1])};
 
-  ConstDummyMatrix matR(ax, 3, 3);
-  ConstDummyMatrix inputVec(input_vec, dataNum, 3);
-  DummyMatrix resVec(output_vec, dataNum, 3);
-  MatrixMultiply(inputVec, matR, &resVec);
+  ConstDummyMatrix mat_rot(ax, 3, 3);
+  ConstDummyMatrix mat_input_vec(input_vec, data_num, 3);
+  DummyMatrix mat_output_vec(output_vec, data_num, 3);
+  MatrixMultiply(mat_input_vec, mat_rot, &mat_output_vec);
 }
 
 
@@ -166,26 +166,26 @@ void SortAndRemoveDuplicate(std::vector<Vec3f>* pts) {
     });
 
   /* Remove duplicated points */
-  for (auto iter = pts->begin(), lastIter = pts->begin(); iter != pts->end(); ) {
-    if (iter != lastIter && (*iter) == (*lastIter)) {
+  for (auto iter = pts->begin(), last_iter = pts->begin(); iter != pts->end(); ) {
+    if (iter != last_iter && (*iter) == (*last_iter)) {
       iter = pts->erase(iter);
     } else {
-      lastIter = iter;
-      iter++;
+      last_iter = iter;
+      ++iter;
     }
   }
 }
 
 
 std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& n0, float d0) {
-  std::vector<int> ptsIdx;
+  std::vector<int> pts_idx;
   for (decltype(pts.size()) j = 0; j < pts.size(); j++) {
     const auto& p = pts[j];
     if (FloatEqual(Vec3f::Dot(n0, p) + d0, 0)) {
-      ptsIdx.push_back(static_cast<int>(j));
+      pts_idx.push_back(static_cast<int>(j));
     }
   }
-  return ptsIdx;
+  return pts_idx;
 }
 
 
@@ -197,29 +197,29 @@ void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Math::Vec3f
   for (int i = 0; i < num; i++) {
     /* Find co-planer points */
     Vec3f n0(a[i], b[i], c[i]);
-    std::vector<int> facePtsIdx = FindCoplanarPoints(pts, n0, d[i]);
-    if (facePtsIdx.empty()) {
+    std::vector<int> face_pts_idx = FindCoplanarPoints(pts, n0, d[i]);
+    if (face_pts_idx.empty()) {
       continue;
     }
 
     /* Build triangular division */
-    BuildTriangularDivision(pts, n0, facePtsIdx, faces);
+    BuildTriangularDivision(pts, n0, face_pts_idx, faces);
   }
 }
 
 
 void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
-                             std::vector<int>& ptsIdx, std::vector<TriangleIdx>& faces) {
+                             std::vector<int>& pts_idx, std::vector<TriangleIdx>& faces) {
   /* Find the center of co-planer points */
   Vec3f center(0.0f, 0.0f, 0.0f);
-  for (auto p : ptsIdx) {
+  for (auto p : pts_idx) {
     center += vertex[p];
   }
-  center /= ptsIdx.size();
+  center /= pts_idx.size();
 
   /* Sort by angle */
-  int idx0 = ptsIdx[0];
-  std::sort(ptsIdx.begin() + 1, ptsIdx.end(),
+  int idx0 = pts_idx[0];
+  std::sort(pts_idx.begin() + 1, pts_idx.end(),
     [&n, &vertex, &center, idx0](const int idx1, const int idx2){
       Vec3f p0 = Vec3f::FromTo(center, vertex[idx0]).Normalized();
       Vec3f p1 = Vec3f::FromTo(center, vertex[idx1]).Normalized();
@@ -247,8 +247,8 @@ void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
     });
 
   /* Construct a triangular division */
-  for (decltype(ptsIdx.size()) j = 1; j < ptsIdx.size() - 1; j++) {
-    faces.emplace_back(ptsIdx[0], ptsIdx[j], ptsIdx[j+1]);
+  for (decltype(pts_idx.size()) j = 1; j < pts_idx.size() - 1; j++) {
+    faces.emplace_back(pts_idx[0], pts_idx[j], pts_idx[j+1]);
   }
 }
 
