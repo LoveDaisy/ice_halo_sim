@@ -203,9 +203,6 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir, i
     const float* curr_face_norm = face_norm + i * 3;
 
     __m128 CURR_FACE_NORM = _mm_loadu_ps(curr_face_norm);
-    __m128 CURR_FACE_POINT = _mm_loadu_ps(curr_face_point);
-    __m128 CURR_FB0 = _mm_loadu_ps(curr_face_base + 0);
-    __m128 CURR_FB1 = _mm_loadu_ps(curr_face_base + 3);
 
     __m128 DN_CURR = _mm_dp_ps(DIR, CURR_FACE_NORM, 0x71);
     __m128 FLAG = _mm_mul_ps(DN_IN, DN_CURR);
@@ -228,6 +225,8 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir, i
      * index: 5   4   3   2   1   0
      * index: 1   0   2   4   3   5
      */
+    __m128 CURR_FB0 = _mm_loadu_ps(curr_face_base + 0);
+    __m128 CURR_FB1 = _mm_loadu_ps(curr_face_base + 3);
     __m128 FF0 = _mm_mul_ps(CURR_FB0, _mm_permute_ps(CURR_FB1, 0xD2));
     __m128 FF1 = _mm_mul_ps(CURR_FB1, _mm_permute_ps(CURR_FB0, 0xD2));
 
@@ -259,6 +258,7 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir, i
      * fp/pt: 2   1   0   -   2   1   0
      * ff1  : 1   0   2  ff0: 1   0   2
      */
+    __m128 CURR_FACE_POINT = _mm_loadu_ps(curr_face_point);
     __m128 A = _mm_dp_ps(SUB_PERM_FF, CURR_FACE_POINT, 0x71);
     __m128 B = _mm_dp_ps(SUB_PERM_FF, PT, 0x71);
     float t = (A[0] - B[0]) / C[0];
