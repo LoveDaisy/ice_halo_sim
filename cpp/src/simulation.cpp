@@ -200,12 +200,10 @@ void Simulator::InitEntryRays(const CrystalContext& ctx) {
   auto& crystal = ctx.crystal;
   auto total_faces = crystal->TotalFaces();
 
-  auto* face_area = new float[total_faces];
   auto* prob = new float[total_faces];
   auto* face_norm = crystal->GetFaceNorm();
   auto* face_point = crystal->GetFaceVertex();
-
-  crystal->CopyFaceAreaData(face_area);
+  auto* face_area = crystal->GetFaceArea();
 
   auto ray_pool = RaySegmentPool::GetInstance();
   auto rng = Math::RandomNumberGenerator::GetInstance();
@@ -239,7 +237,6 @@ void Simulator::InitEntryRays(const CrystalContext& ctx) {
     rays_.back().emplace_back(r->root);
   }
 
-  delete[] face_area;
   delete[] prob;
 }
 

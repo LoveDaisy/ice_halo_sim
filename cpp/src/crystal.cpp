@@ -78,6 +78,11 @@ const float* Crystal::GetFaceNorm() const {
 }
 
 
+const float* Crystal::GetFaceArea() const {
+  return face_area_;
+}
+
+
 int Crystal::GetFaceNumberPeriod() const {
   return face_number_period_;
 }

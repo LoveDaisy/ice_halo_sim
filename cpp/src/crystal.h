@@ -33,6 +33,7 @@ public:
   const float* GetFaceVertex() const;
   const float* GetFaceBaseVector() const;
   const float* GetFaceNorm() const;
+  const float* GetFaceArea() const;
   int GetFaceNumberPeriod() const;
 
   void CopyFaceAreaData(float* data) const;
