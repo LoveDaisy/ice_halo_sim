@@ -192,8 +192,7 @@ CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis)
     : crystal(std::move(g)), axis(axis) {}
 
 
-CrystalContext::CrystalContext(const IceHalo::CrystalContext& other)
-    : crystal(other.crystal), axis(other.axis) {}
+CrystalContext::CrystalContext(const IceHalo::CrystalContext& other) = default;
 
 
 SimulationContext::SimulationContext(const char* filename, rapidjson::Document& d)
@@ -737,69 +736,10 @@ void SimulationContext::ParseOneScatterSetting(const rapidjson::Value& c, int ci
   char msg_buffer[kMsgBufferSize];
 
   MultiScatterContext scatter{};
-  auto p = Pointer("/crystal").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-  for (auto& pc : p->GetArray()) {
-    if (!pc.IsUint()) {
-      std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> cannot recognize!", ci);
-      throw std::invalid_argument(msg_buffer);
-    } else {
-      int id = pc.GetInt();
-      if (crystal_ctx_.find(id) == crystal_ctx_.end()) {
-        std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> contains invalid ID!", ci);
-        throw std::invalid_argument(msg_buffer);
-      }
-      scatter.crystals.emplace_back(crystal_ctx_.at(id));
-    }
-  }
-
-  p = Pointer("/population").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].population> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-  for (auto& pp : p->GetArray()) {
-    if (!pp.IsNumber()) {
-      std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].population> cannot recognize!", ci);
-      throw std::invalid_argument(msg_buffer);
-    } else {
-      scatter.populations.emplace_back(static_cast<float>(pp.GetDouble()));
-    }
-  }
-
-  p = Pointer("/probability").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].probability> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-  auto prob = static_cast<float>(p->GetDouble());
-  if (prob < 0) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].probability> is invalid!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-  scatter.prob = prob;
-
-  p = Pointer("/ray_path_filter").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-  for (auto& pf : p->GetArray()) {
-    if (!pf.IsUint()) {
-      std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> cannot recognize!", ci);
-      throw std::invalid_argument(msg_buffer);
-    } else {
-      int id = pf.GetInt();
-      if (ray_path_filters_.find(id) == ray_path_filters_.end()) {
-        std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> contains invalid ID!", ci);
-        throw std::invalid_argument(msg_buffer);
-      }
-      scatter.ray_path_filters.emplace_back(ray_path_filters_[id]);
-    }
-  }
+  ParseScatterCrystal(c, ci, &scatter);
+  ParseScatterPopulation(c, ci, &scatter);
+  ParseScatterProbability(c, ci, &scatter);
+  ParseScatterFilter(c, ci, &scatter);
 
   if (scatter.crystals.size() != scatter.populations.size()) {
     std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d]> crystal and population size does not match!", ci);
@@ -815,6 +755,94 @@ void SimulationContext::ParseOneScatterSetting(const rapidjson::Value& c, int ci
   }
 
   multi_scatter_ctx_.emplace_back(scatter);
+}
+
+
+void SimulationContext::ParseScatterCrystal(const rapidjson::Value& c, int ci, MultiScatterContext* scatter) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+
+  auto p = Pointer("/crystal").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  for (auto& pc : p->GetArray()) {
+    if (!pc.IsUint()) {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    } else {
+      int id = pc.GetInt();
+      if (crystal_ctx_.find(id) == crystal_ctx_.end()) {
+        std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> contains invalid ID!", ci);
+        throw std::invalid_argument(msg_buffer);
+      }
+      scatter->crystals.emplace_back(crystal_ctx_.at(id));
+    }
+  }
+}
+
+
+void SimulationContext::ParseScatterPopulation(const rapidjson::Value& c, int ci, MultiScatterContext* scatter) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+
+  auto p = Pointer("/population").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].population> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  for (auto& pp : p->GetArray()) {
+    if (!pp.IsNumber()) {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].population> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    } else {
+      scatter->populations.emplace_back(static_cast<float>(pp.GetDouble()));
+    }
+  }
+}
+
+
+void SimulationContext::ParseScatterProbability(const rapidjson::Value& c, int ci, MultiScatterContext* scatter) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+
+  auto p = Pointer("/probability").Get(c);
+  if (p == nullptr || !p->IsNumber()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].probability> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  auto prob = static_cast<float>(p->GetDouble());
+  if (prob < 0) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].probability> is invalid!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  scatter->prob = prob;
+}
+
+
+void SimulationContext::ParseScatterFilter(const rapidjson::Value& c, int ci, MultiScatterContext* scatter) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+
+  auto p = Pointer("/ray_path_filter").Get(c);
+  if (p == nullptr || !p->IsArray()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+  for (auto& pf : p->GetArray()) {
+    if (!pf.IsUint()) {
+      std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> cannot recognize!", ci);
+      throw std::invalid_argument(msg_buffer);
+    } else {
+      int id = pf.GetInt();
+      if (ray_path_filters_.find(id) == ray_path_filters_.end()) {
+        std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> contains invalid ID!", ci);
+        throw std::invalid_argument(msg_buffer);
+      }
+      scatter->ray_path_filters.emplace_back(ray_path_filters_[id]);
+    }
+  }
 }
 
 

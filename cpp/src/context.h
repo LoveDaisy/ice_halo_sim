@@ -111,7 +111,6 @@ private:
 
   void ParseOneCrystalSetting(const rapidjson::Value& c, int ci);
   AxisDistribution ParseCrystalAxis(const rapidjson::Value& c, int ci);
-  // RayPathFilter ParseCrystalRayPathFilter(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPrism(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPyramid(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPyramidStackHalf(const rapidjson::Value& c, int ci);
@@ -121,6 +120,10 @@ private:
   CrystalPtrU ParseCrystalCustom(const rapidjson::Value& c, int ci);
 
   void ParseOneScatterSetting(const rapidjson::Value& c, int ci);
+  void ParseScatterCrystal(const rapidjson::Value& c, int ci, MultiScatterContext* scatter);
+  void ParseScatterPopulation(const rapidjson::Value& c, int ci, MultiScatterContext* scatter);
+  void ParseScatterProbability(const rapidjson::Value& c, int ci, MultiScatterContext* scatter);
+  void ParseScatterFilter(const rapidjson::Value& c, int ci, MultiScatterContext* scatter);
 
   void ParseOneFilterSetting(const rapidjson::Value& c, int ci);
   void ParseFilterSymmetry(const rapidjson::Value& c, int ci, RayPathFilter* filter);
