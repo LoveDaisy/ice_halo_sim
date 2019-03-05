@@ -73,7 +73,7 @@ private:
   SimulationContextPtr context_;
   std::vector<CrystalContext> active_crystal_ctxs_;
 
-  std::vector<std::vector<RayPtr> > rays_;
+  std::vector<std::vector<RayContextPtr> > rays_;
   std::vector<std::vector<RaySegment*> > exit_ray_segments_;
   std::vector<RaySegment*> final_ray_segments_;
 

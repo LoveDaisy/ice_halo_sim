@@ -4,6 +4,7 @@
 #include "mymath.h"
 #include "crystal.h"
 #include "files.h"
+#include "optics.h"
 
 #include "rapidjson/document.h"
 
@@ -19,7 +20,7 @@
 
 namespace IceHalo {
 
-class RaySegment;
+struct RaySegment;
 struct CrystalContext;
 enum class ProjectionType;
 enum class VisibleSemiSphere;
@@ -156,6 +157,18 @@ struct CrystalContext {
   const CrystalPtr crystal;
   const AxisDistribution axis;
 };
+
+
+struct RayContext {
+  RayContext(RaySegment* seg, const CrystalContext& crystal_ctx, const float main_axis_rot[3]);
+
+  RaySegment* first_ray_segment;
+  RaySegment* prev_ray_segment;
+  CrystalContext crystal_ctx;
+  Math::Vec3f main_axis_rot;
+};
+
+using RayContextPtr = std::shared_ptr<RayContext>;
 
 
 class RenderContext {

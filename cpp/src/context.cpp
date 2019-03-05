@@ -41,7 +41,7 @@ bool RayPathFilter::FilterRaySpecific(IceHalo::RaySegment* last_r, const Crystal
     return true;
   }
 
-  int curr_fn0 = crystal->FaceNumber(last_r->root_->first_ray_segment_->face_id_);
+  int curr_fn0 = crystal->FaceNumber(last_r->root->first_ray_segment->face_id);
   if (curr_fn0 < 0 || crystal->GetFaceNumberPeriod() < 0) {   // If do not have face number mapping.
     return true;
   }
@@ -51,13 +51,13 @@ bool RayPathFilter::FilterRaySpecific(IceHalo::RaySegment* last_r, const Crystal
   decltype(ray_paths.size()) curr_ray_path_len = 0;
   std::vector<uint16_t> curr_ray_path;
   auto p = last_r;
-  while (p->prev_) {
-    int curr_fn = crystal->FaceNumber(p->face_id_);
+  while (p->prev) {
+    int curr_fn = crystal->FaceNumber(p->face_id);
     if (curr_fn < 0) {
       return false;
     }
     curr_ray_path.emplace_back(static_cast<uint16_t>(curr_fn));
-    p = p->prev_;
+    p = p->prev;
     curr_ray_path_len++;
   }
 
@@ -86,7 +86,7 @@ bool RayPathFilter::FilterRayGeneral(RaySegment* last_r, const CrystalPtr& cryst
     auto p = last_r;
     int n = 0;
     while (p) {
-      p = p->prev_;
+      p = p->prev;
       n++;
     }
     if (hit_nums.find(n) == hit_nums.end()) {
@@ -94,8 +94,8 @@ bool RayPathFilter::FilterRayGeneral(RaySegment* last_r, const CrystalPtr& cryst
     }
   }
 
-  int curr_entry_fn = crystal->FaceNumber(last_r->root_->first_ray_segment_->face_id_);
-  int curr_exit_fn = crystal->FaceNumber(last_r->face_id_);
+  int curr_entry_fn = crystal->FaceNumber(last_r->root->first_ray_segment->face_id);
+  int curr_exit_fn = crystal->FaceNumber(last_r->face_id);
   if (curr_entry_fn < 0 || curr_exit_fn < 0 ||
       crystal->GetFaceNumberPeriod() < 0) {    // If do not have a face number mapping
     return true;

@@ -195,7 +195,7 @@ void Simulator::InitSunRays() {
 
 // Init entry rays into a crystal. Fill pt[0], face_id[0], w[0] and ray_seg[0].
 // Rotate entry rays into crystal frame
-// Add RayPtr and main axis rotation
+// Add RayContextPtr and main axis rotation
 void Simulator::InitEntryRays(const CrystalContext& ctx) {
   auto& crystal = ctx.crystal;
   auto total_faces = crystal->TotalFaces();
@@ -229,14 +229,14 @@ void Simulator::InitEntryRays(const CrystalContext& ctx) {
     sampler->SampleTriangularPoints(face_point + buffer_.face_id[0][i] * 9, buffer_.pt[0] + i * 3);
 
     auto prev_r = enter_ray_data_.ray_seg[enter_ray_offset_ + i];
-    buffer_.w[0][i] = prev_r ? prev_r->w_ : 1.0f;
+    buffer_.w[0][i] = prev_r ? prev_r->w : 1.0f;
 
     auto r = ray_pool->GetRaySegment(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i],
                                      buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
-    r->root_ = new Ray(r, ctx, axis_rot);
-    r->root_->prev_ray_segment_ = prev_r;
-    rays_.back().emplace_back(r->root_);
+    r->root = new RayContext(r, ctx, axis_rot);
+    r->root->prev_ray_segment = prev_r;
+    rays_.back().emplace_back(r->root);
   }
 
   delete[] face_area;
@@ -278,15 +278,15 @@ void Simulator::RestoreResultRays(float prob) {
   auto rng = Math::RandomNumberGenerator::GetInstance();
   size_t idx = 0;
   for (const auto& r : exit_ray_segments_.back()) {
-    if (!r->is_finished_ || r->w_ < context_->kScatMinW) {
+    if (!r->is_finished || r->w < context_->kScatMinW) {
       continue;
     }
     if (rng->GetUniform() > prob) {
       final_ray_segments_.emplace_back(r);
       continue;
     }
-    const auto axis_rot = r->root_->main_axis_rot_.val();
-    Math::RotateZBack(axis_rot, r->dir_.val(), enter_ray_data_.ray_dir + idx * 3);
+    const auto axis_rot = r->root->main_axis_rot.val();
+    Math::RotateZBack(axis_rot, r->dir.val(), enter_ray_data_.ray_dir + idx * 3);
     enter_ray_data_.ray_seg[idx] = r;
     idx++;
   }
@@ -351,23 +351,23 @@ void Simulator::StoreRaySegments(const CrystalPtr& crystal, const RayPathFilter&
     auto r = ray_pool->GetRaySegment(buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3,
                                      buffer_.w[1][i], buffer_.face_id[0][i / 2]);
     if (buffer_.face_id[1][i] < 0) {
-      r->is_finished_ = true;
+      r->is_finished = true;
     }
 
     auto prev_ray_seg = buffer_.ray_seg[0][i / 2];
     if (i % 2 == 0) {
-      prev_ray_seg->next_reflect_ = r;
+      prev_ray_seg->next_reflect = r;
     } else {
-      prev_ray_seg->next_refract_ = r;
+      prev_ray_seg->next_refract = r;
     }
-    r->prev_ = prev_ray_seg;
-    r->root_ = prev_ray_seg->root_;
+    r->prev = prev_ray_seg;
+    r->root = prev_ray_seg->root;
     buffer_.ray_seg[1][i] = r;
 
     if (!filter.Filter(r, crystal)) {
       continue;
     }
-    if (r->is_finished_ || r->w_ < SimulationContext::kPropMinW) {
+    if (r->is_finished || r->w < SimulationContext::kPropMinW) {
       exit_ray_segments_.back().emplace_back(r);
     }
   }
@@ -405,11 +405,11 @@ void Simulator::SaveFinalDirections(const char* filename) {
 
   float* curr_data = data;
   for (const auto& r : final_ray_segments_) {
-    const auto axis_rot = r->root_->main_axis_rot_.val();
-    assert(r->root_);
+    const auto axis_rot = r->root->main_axis_rot.val();
+    assert(r->root);
 
-    Math::RotateZBack(axis_rot, r->dir_.val(), curr_data);
-    curr_data[3] = r->w_;
+    Math::RotateZBack(axis_rot, r->dir.val(), curr_data);
+    curr_data[3] = r->w;
     curr_data += 4;
     idx++;
   }
@@ -427,16 +427,16 @@ void Simulator::PrintRayInfo() {
       auto p = r;
       while (p) {
         s.push(p);
-        p = p->prev_;
+        p = p->prev;
       }
       std::printf("%zu,0,0,0,0,0,-1\n", s.size());
       while (!s.empty()) {
         p = s.top();
         s.pop();
         std::printf("%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n",
-                    p->pt_.x(), p->pt_.y(), p->pt_.z(),
-                    p->dir_.x(), p->dir_.y(), p->dir_.z(),
-                    p->w_);
+                    p->pt.x(), p->pt.y(), p->pt.z(),
+                    p->dir.x(), p->dir.y(), p->dir.z(),
+                    p->w);
       }
     }
   }

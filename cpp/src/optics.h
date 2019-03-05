@@ -2,7 +2,7 @@
 #define SRC_OPTICS_H_
 
 #include "mymath.h"
-#include "context.h"
+#include "crystal.h"
 
 #include <atomic>
 #include <mutex>
@@ -13,41 +13,28 @@
 namespace IceHalo {
 
 class RaySegmentPool;
-class Ray;
+struct RayContext;
 
-class RaySegment {
+struct RaySegment {
 friend class RaySegmentPool;
 public:
   void ResetWith(const float* pt, const float* dir, float w, int face_id);
 
-  RaySegment* next_reflect_;
-  RaySegment* next_refract_;
-  RaySegment* prev_;
-  Ray* root_;
+  RaySegment* next_reflect;
+  RaySegment* next_refract;
+  RaySegment* prev;
+  RayContext* root;
 
-  Math::Vec3f pt_;
-  Math::Vec3f dir_;
-  float w_;
-  int face_id_;
+  Math::Vec3f pt;
+  Math::Vec3f dir;
+  float w;
+  int face_id;
 
-  bool is_finished_;
+  bool is_finished;
 
 private:
   RaySegment();
 };
-
-
-class Ray {
-public:
-  Ray(RaySegment* seg, const CrystalContext& crystal_ctx, const float main_axis_rot[3]);
-
-  RaySegment* first_ray_segment_;
-  RaySegment* prev_ray_segment_;
-  CrystalContext crystal_ctx_;
-  Math::Vec3f main_axis_rot_;
-};
-
-using RayPtr = std::shared_ptr<Ray>;
 
 
 class RaySegmentPool {

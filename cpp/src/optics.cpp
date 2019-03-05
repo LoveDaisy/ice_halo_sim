@@ -15,29 +15,29 @@
 namespace IceHalo {
 
 RaySegment::RaySegment()
-    : next_reflect_(nullptr), next_refract_(nullptr), prev_(nullptr), root_(nullptr),
-      pt_(0, 0, 0), dir_(0, 0, 0), w_(0), face_id_(-1),
-      is_finished_(false) {}
+    : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root(nullptr),
+      pt(0, 0, 0), dir(0, 0, 0), w(0), face_id(-1),
+      is_finished(false) {}
 
 
 void RaySegment::ResetWith(const float* pt, const float* dir, float w, int face_id) {
-  next_reflect_ = nullptr;
-  next_refract_ = nullptr;
-  prev_ = nullptr;
-  root_ = nullptr;
+  next_reflect = nullptr;
+  next_refract = nullptr;
+  prev = nullptr;
+  root = nullptr;
 
-  pt_.val(pt);
-  dir_.val(dir);
-  w_ = w;
-  face_id_ = face_id;
+  this->pt.val(pt);
+  this->dir.val(dir);
+  this->w = w;
+  this->face_id = face_id;
 
-  is_finished_ = false;
+  is_finished = false;
 }
 
 
-Ray::Ray(RaySegment* seg, const CrystalContext& crystal_ctx, const float main_axis_rot[3])
-    : first_ray_segment_(seg), prev_ray_segment_(nullptr),
-      crystal_ctx_(crystal_ctx), main_axis_rot_(main_axis_rot) {}
+RayContext::RayContext(RaySegment* seg, const CrystalContext& crystal_ctx, const float main_axis_rot[3])
+    : first_ray_segment(seg), prev_ray_segment(nullptr),
+      crystal_ctx(crystal_ctx), main_axis_rot(main_axis_rot) {}
 
 
 void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
