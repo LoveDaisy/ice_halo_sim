@@ -91,20 +91,50 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
                  uint64_t data_num) {
   using std::cos;
   using std::sin;
-  float ax[9] = {-cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-                  cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-                  cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-                  -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-                  -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-                  cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
-                  cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
-                  cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
-                  sin(lon_lat_roll[1])};
 
-  ConstDummyMatrix mat_rot(ax, 3, 3);
-  ConstDummyMatrix mat_input_vec(input_vec, data_num, 3);
-  DummyMatrix mat_output_vec(output_vec, data_num, 3);
-  MatrixMultiply(mat_input_vec, mat_rot, &mat_output_vec);
+  /* The original codes are as follows:
+   *
+   *   float ax[9] = {
+   *     -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+   *     cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+   *     cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+   *     -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
+   *     -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
+   *     cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
+   *     cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
+   *     cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
+   *     sin(lon_lat_roll[1])
+   *   };
+   *
+   *   ConstDummyMatrix mat_rot(ax, 3, 3);
+   *   ConstDummyMatrix mat_input_vec(input_vec, data_num, 3);
+   *   DummyMatrix mat_output_vec(output_vec, data_num, 3);
+   *   MatrixMultiply(mat_input_vec, mat_rot, &mat_output_vec);
+   *
+   * Since this method is called frequently, we use a little different way to do the multiplication.
+   */
+
+  // Here the ax is transposed, for better memory locality.
+  const float ax[] = {
+    -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+    -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
+    cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
+    cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+    -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
+    cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
+    cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+    cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
+    sin(lon_lat_roll[1])
+  };
+
+  // Then do the matrix multiplication (using Dot3 actually)
+  for (decltype(data_num) i = 0; i < data_num; i++) {
+    const float* tmp_v = input_vec + i * 3;
+    float* tmp_out = output_vec + i * 3;
+    for (int j = 0; j < 3; j++) {
+      tmp_out[j] = Dot3(tmp_v, ax + j * 3);
+    }
+  }
 }
 
 
