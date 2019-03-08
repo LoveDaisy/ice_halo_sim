@@ -104,6 +104,7 @@ public:
   ~SpectrumRenderer();
 
   void LoadData();
+  void LoadData(float wavelength, float weight, const float* ray_data, size_t num = 1);
   void ResetData();
   void RenderToRgb(uint8_t* rgb_data);
 

@@ -389,6 +389,11 @@ void Simulator::RefreshBuffer() {
 }
 
 
+const std::vector<RaySegment*>& Simulator::GetFinalRaySegments() const {
+  return final_ray_segments_;
+}
+
+
 void Simulator::SaveFinalDirections(const char* filename) {
   File file(context_->GetDataDirectory().c_str(), filename);
   if (!file.Open(OpenMode::kWrite | OpenMode::kBinary)) return;

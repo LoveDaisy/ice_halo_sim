@@ -211,6 +211,12 @@ SpectrumRenderer::~SpectrumRenderer() {
 
 
 void SpectrumRenderer::LoadData() {
+  auto projection_type = context_->GetProjectionType();
+  if (projection_functions.find(projection_type) == projection_functions.end()) {
+    std::fprintf(stderr, "Unknown projection type!\n");
+    return;
+  }
+
   std::vector<File> files = ListDataFiles(context_->GetDataDirectory().c_str());
   int i = 0;
   for (auto& f : files) {
@@ -221,6 +227,78 @@ void SpectrumRenderer::LoadData() {
     std::printf(" Loading data (%d/%zu): %.2fms; total %d pts\n", i + 1, files.size(), diff.count(), num);
     i++;
   }
+}
+
+
+void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, size_t num) {
+  auto projection_type = context_->GetProjectionType();
+  if (projection_functions.find(projection_type) == projection_functions.end()) {
+    std::fprintf(stderr, "Unknown projection type!\n");
+    return;
+  }
+
+  auto wavelength = static_cast<int>(wl);
+  if (wavelength < SpectrumRenderer::kMinWavelength ||
+      wavelength > SpectrumRenderer::kMaxWaveLength ||
+      weight < 0) {
+    std::fprintf(stderr, "Wavelength out of range!\n");
+    return;
+  }
+
+  auto* tmp_dir = new float[num * 3];
+  auto* tmp_w = new float[num];
+  auto* tmp_xy = new int[num * 2];
+  for (decltype(num) i = 0; i < num; i++) {
+    std::memcpy(tmp_dir + i * 3, ray_data + i * 4, 3 * sizeof(float));
+    tmp_w[i] = ray_data[i * 4 + 3] * weight;
+  }
+
+  auto img_hei = context_->GetImageHeight();
+  auto img_wid = context_->GetImageWidth();
+  projection_functions[projection_type](
+    context_->GetCamRot(), context_->GetFov(), num, tmp_dir,
+    img_wid, img_hei, tmp_xy, context_->GetVisibleSemiSphere());
+  delete[] tmp_dir;
+
+  float* current_data = nullptr;
+  float* current_data_compensation = nullptr;
+  auto it = spectrum_data_.find(wavelength);
+  if (it != spectrum_data_.end()) {
+    current_data = it->second;
+    current_data_compensation = spectrum_data_compensation_[wavelength];
+  } else {
+    current_data = new float[img_hei * img_wid];
+    current_data_compensation = new float[img_hei * img_wid];
+    for (decltype(img_hei) i = 0; i < img_hei * img_wid; i++) {
+      current_data[i] = 0;
+      current_data_compensation[i] = 0;
+    }
+    spectrum_data_[wavelength] = current_data;
+    spectrum_data_compensation_[wavelength] = current_data_compensation;
+  }
+
+  for (decltype(num) i = 0; i < num; i++) {
+    int x = tmp_xy[i * 2 + 0];
+    int y = tmp_xy[i * 2 + 1];
+    if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
+      continue;
+    }
+    if (projection_type != ProjectionType::kDualEqualArea && projection_type != ProjectionType::kDualEquidistant) {
+      x += context_->GetOffsetX();
+      y += context_->GetOffsetY();
+    }
+    if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
+      continue;
+    }
+    auto tmp_val = tmp_w[i] - current_data_compensation[y * img_wid + x];
+    auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
+    current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
+    current_data[y * img_wid + x] = tmp_sum;
+  }
+  delete[] tmp_xy;
+  delete[] tmp_w;
+
+  total_w_ += context_->GetTotalRayNum() * weight;
 }
 
 
@@ -277,12 +355,6 @@ void SpectrumRenderer::RenderToRgb(uint8_t* rgb_data) {
 
 
 int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
-  auto projection_type = context_->GetProjectionType();
-  if (projection_functions.find(projection_type) == projection_functions.end()) {
-    std::fprintf(stderr, "Unknown projection type!\n");
-    return -1;
-  }
-
   auto file_size = file.GetSize();
   auto* read_buffer = new float[file_size / sizeof(float)];
 
@@ -315,61 +387,9 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
     return 0;
   }
 
-  auto* tmp_dir = new float[total_ray_count * 3];
-  auto* tmp_w = new float[total_ray_count];
-  auto* tmp_xy = new int[total_ray_count * 2];
-  for (decltype(read_count) i = 0; i < total_ray_count; i++) {
-    std::memcpy(tmp_dir + i * 3, read_buffer + i * 4, 3 * sizeof(float));
-    tmp_w[i] = read_buffer[i * 4 + 3] * wavelength_weight;
-  }
+  LoadData(wavelength, wavelength_weight, read_buffer, total_ray_count);
   delete[] read_buffer;
 
-  auto img_hei = context_->GetImageHeight();
-  auto img_wid = context_->GetImageWidth();
-  projection_functions[projection_type](
-    context_->GetCamRot(), context_->GetFov(), total_ray_count, tmp_dir,
-    img_wid, img_hei, tmp_xy, context_->GetVisibleSemiSphere());
-  delete[] tmp_dir;
-
-  float* current_data = nullptr;
-  float* current_data_compensation = nullptr;
-  auto it = spectrum_data_.find(wavelength);
-  if (it != spectrum_data_.end()) {
-    current_data = it->second;
-    current_data_compensation = spectrum_data_compensation_[wavelength];
-  } else {
-    current_data = new float[img_hei * img_wid];
-    current_data_compensation = new float[img_hei * img_wid];
-    for (decltype(img_hei) i = 0; i < img_hei * img_wid; i++) {
-      current_data[i] = 0;
-      current_data_compensation[i] = 0;
-    }
-    spectrum_data_[wavelength] = current_data;
-    spectrum_data_compensation_[wavelength] = current_data_compensation;
-  }
-
-  for (decltype(total_ray_count) i = 0; i < total_ray_count; i++) {
-    int x = tmp_xy[i * 2 + 0];
-    int y = tmp_xy[i * 2 + 1];
-    if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
-      continue;
-    }
-    if (projection_type != ProjectionType::kDualEqualArea && projection_type != ProjectionType::kDualEquidistant) {
-      x += context_->GetOffsetX();
-      y += context_->GetOffsetY();
-    }
-    if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
-      continue;
-    }
-    auto tmp_val = tmp_w[i] - current_data_compensation[y * img_wid + x];
-    auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
-    current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
-    current_data[y * img_wid + x] = tmp_sum;
-  }
-  delete[] tmp_xy;
-  delete[] tmp_w;
-
-  total_w_ += context_->GetTotalRayNum() * wavelength_weight;
   return static_cast<int>(total_ray_count);
 }
 

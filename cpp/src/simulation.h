@@ -55,6 +55,7 @@ public:
   ~Simulator() = default;
 
   void Start();
+  const std::vector<RaySegment*>& GetFinalRaySegments() const;
   void SaveFinalDirections(const char* filename);
   void SaveAllRays(const char* filename);
   void PrintRayInfo();    // For debug

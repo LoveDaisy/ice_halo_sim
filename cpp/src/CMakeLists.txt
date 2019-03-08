@@ -23,3 +23,11 @@ target_link_libraries(IceHaloRender
     PUBLIC ${OpenCV_LIBS} ${Boost_LIBRARIES})
 install(TARGETS IceHaloRender
     DESTINATION "${CMAKE_INSTALL_PREFIX}")
+
+add_executable(IceHaloEndless endless_main.cpp ${SOURCE_FILE})
+target_include_directories(IceHaloEndless
+    PUBLIC ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
+target_link_libraries(IceHaloEndless
+    PUBLIC ${OpenCV_LIBS} ${Boost_LIBRARIES})
+install(TARGETS IceHaloEndless
+    DESTINATION "${CMAKE_INSTALL_PREFIX}")
