@@ -67,7 +67,7 @@ void DualEqualAreaFishEye(const float* /* cam_rot */,     // Not used
   float proj_r = img_r / 2.0f / std::sin(45.0f / 180.0f * Math::kPi);
 
   auto* dir_copy = new float[data_number * 3];
-  float cam_rot_copy[3] = {90.0f, 89.999f, 0.0f};
+  float cam_rot_copy[3] = { 90.0f, 89.999f, 0.0f };
   cam_rot_copy[0] *= -1;
   cam_rot_copy[1] *= -1;
   for (float &i : cam_rot_copy) {

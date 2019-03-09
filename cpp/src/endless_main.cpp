@@ -49,8 +49,8 @@ int main(int argc, char* argv[]) {
       auto* curr_data = new float[num * 4];
       auto* p = curr_data;
       for (const auto& r : simulator.GetFinalRaySegments()) {
-        const auto axis_rot = r->root->main_axis_rot.val();
-        assert(r->root);
+        const auto axis_rot = r->root_ctx->main_axis_rot.val();
+        assert(r->root_ctx);
         IceHalo::Math::RotateZBack(axis_rot, r->dir.val(), p);
         p[3] = r->w;
         p += 4;

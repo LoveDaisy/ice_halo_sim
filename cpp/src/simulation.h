@@ -62,8 +62,8 @@ public:
 
 private:
   void InitSunRays();
-  void InitEntryRays(const CrystalContext& ctx);
-  void InitMainAxis(const CrystalContext& ctx, float* axis);
+  void InitEntryRays(const CrystalContextPtr& ctx);
+  void InitMainAxis(const CrystalContextPtr& ctx, float* axis);
   void TraceRays(const CrystalPtr& crystal, const RayPathFilter& filter);
   void RestoreResultRays(float prob);
   void StoreRaySegments(const CrystalPtr& crystal, const RayPathFilter& filter);

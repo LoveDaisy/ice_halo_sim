@@ -162,7 +162,7 @@ void Simulator::Start() {
       }
       InitEntryRays(crystal_ctx);
       enter_ray_offset_ += active_ray_num_;
-      TraceRays(crystal_ctx.crystal, filter);
+      TraceRays(crystal_ctx->crystal, filter);
     }
 
     if (it != multi_scatter_ctx.end() - 1) {
@@ -196,8 +196,8 @@ void Simulator::InitSunRays() {
 // Init entry rays into a crystal. Fill pt[0], face_id[0], w[0] and ray_seg[0].
 // Rotate entry rays into crystal frame
 // Add RayContextPtr and main axis rotation
-void Simulator::InitEntryRays(const CrystalContext& ctx) {
-  auto& crystal = ctx.crystal;
+void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
+  auto& crystal = ctx->crystal;
   auto total_faces = crystal->TotalFaces();
 
   auto* prob = new float[total_faces];
@@ -232,9 +232,9 @@ void Simulator::InitEntryRays(const CrystalContext& ctx) {
     auto r = ray_pool->GetRaySegment(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i],
                                      buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
-    r->root = new RayContext(r, ctx, axis_rot);
-    r->root->prev_ray_segment = prev_r;
-    rays_.back().emplace_back(r->root);
+    r->root_ctx = new RayContext(r, ctx, axis_rot);
+    r->root_ctx->prev_ray_segment = prev_r;
+    rays_.back().emplace_back(r->root_ctx);
   }
 
   delete[] prob;
@@ -243,21 +243,21 @@ void Simulator::InitEntryRays(const CrystalContext& ctx) {
 
 // Init crystal main axis.
 // Random sample points on a sphere with given parameters.
-void Simulator::InitMainAxis(const CrystalContext& ctx, float* axis) {
+void Simulator::InitMainAxis(const CrystalContextPtr& ctx, float* axis) {
   auto rng = Math::RandomNumberGenerator::GetInstance();
   auto sampler = Math::RandomSampler::GetInstance();
 
-  if (ctx.axis.latitude_dist == Math::Distribution::kUniform) {
+  if (ctx->axis.latitude_dist == Math::Distribution::kUniform) {
     // Random sample on full sphere, ignore other parameters.
     sampler->SampleSphericalPointsSph(axis);
   } else {
-    sampler->SampleSphericalPointsSph(ctx.axis, axis);
+    sampler->SampleSphericalPointsSph(ctx->axis, axis);
   }
-  if (ctx.axis.roll_dist == Math::Distribution::kUniform) {
+  if (ctx->axis.roll_dist == Math::Distribution::kUniform) {
     // Random roll, ignore other parameters.
     axis[2] = rng->GetUniform() * 2 * Math::kPi;
   } else {
-    axis[2] = rng->Get(ctx.axis.roll_dist, ctx.axis.roll_mean, ctx.axis.roll_std) * Math::kDegreeToRad;
+    axis[2] = rng->Get(ctx->axis.roll_dist, ctx->axis.roll_mean, ctx->axis.roll_std) * Math::kDegreeToRad;
   }
 }
 
@@ -282,7 +282,7 @@ void Simulator::RestoreResultRays(float prob) {
       final_ray_segments_.emplace_back(r);
       continue;
     }
-    const auto axis_rot = r->root->main_axis_rot.val();
+    const auto axis_rot = r->root_ctx->main_axis_rot.val();
     Math::RotateZBack(axis_rot, r->dir.val(), enter_ray_data_.ray_dir + idx * 3);
     enter_ray_data_.ray_seg[idx] = r;
     idx++;
@@ -358,7 +358,7 @@ void Simulator::StoreRaySegments(const CrystalPtr& crystal, const RayPathFilter&
       prev_ray_seg->next_refract = r;
     }
     r->prev = prev_ray_seg;
-    r->root = prev_ray_seg->root;
+    r->root_ctx = prev_ray_seg->root_ctx;
     buffer_.ray_seg[1][i] = r;
 
     if (!filter.Filter(r, crystal)) {
@@ -407,8 +407,8 @@ void Simulator::SaveFinalDirections(const char* filename) {
 
   float* curr_data = data;
   for (const auto& r : final_ray_segments_) {
-    const auto axis_rot = r->root->main_axis_rot.val();
-    assert(r->root);
+    const auto axis_rot = r->root_ctx->main_axis_rot.val();
+    assert(r->root_ctx);
 
     Math::RotateZBack(axis_rot, r->dir.val(), curr_data);
     curr_data[3] = r->w;

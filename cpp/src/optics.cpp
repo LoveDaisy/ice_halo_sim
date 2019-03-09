@@ -15,7 +15,7 @@
 namespace IceHalo {
 
 RaySegment::RaySegment()
-    : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root(nullptr),
+    : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root_ctx(nullptr),
       pt(0, 0, 0), dir(0, 0, 0), w(0), face_id(-1),
       is_finished(false) {}
 
@@ -24,7 +24,7 @@ void RaySegment::ResetWith(const float* pt, const float* dir, float w, int face_
   next_reflect = nullptr;
   next_refract = nullptr;
   prev = nullptr;
-  root = nullptr;
+  root_ctx = nullptr;
 
   this->pt.val(pt);
   this->dir.val(dir);
@@ -33,11 +33,6 @@ void RaySegment::ResetWith(const float* pt, const float* dir, float w, int face_
 
   is_finished = false;
 }
-
-
-RayContext::RayContext(RaySegment* seg, const CrystalContext& crystal_ctx, const float main_axis_rot[3])
-    : first_ray_segment(seg), prev_ray_segment(nullptr),
-      crystal_ctx(crystal_ctx), main_axis_rot(main_axis_rot) {}
 
 
 void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
@@ -401,11 +396,11 @@ RaySegment* RaySegmentPool::GetRaySegment(const float* pt, const float* dir, flo
     std::unique_lock<std::mutex> lock(id_mutex_);
     id = next_unused_id_;
     if (id > kChunkSize) {
-      auto segSize = segments_.size();
-      if (current_chunk_id_ >= segSize - 1) {
-        auto* raySegPool = new RaySegment[kChunkSize];
-        segments_.push_back(raySegPool);
-        current_chunk_id_ = segSize;
+      auto seg_size = segments_.size();
+      if (current_chunk_id_ >= seg_size - 1) {
+        auto* ray_seg_pool = new RaySegment[kChunkSize];
+        segments_.push_back(ray_seg_pool);
+        current_chunk_id_ = seg_size;
       } else {
         current_chunk_id_++;
       }

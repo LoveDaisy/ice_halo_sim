@@ -5,6 +5,10 @@
 #include <algorithm>
 #include <chrono>
 
+#include <xmmintrin.h>
+#include <smmintrin.h>
+#include <immintrin.h>
+
 
 namespace IceHalo {
 
@@ -70,20 +74,67 @@ void Vec3FromTo(const float* vec1, const float* vec2, float* vec) {
 void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t data_num) {
   using std::cos;
   using std::sin;
-  float ax[9] = {-cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-                 -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-                 cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
-                 cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-                 -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-                 cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
-                 cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-                 cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
-                 sin(lon_lat_roll[1])};
 
-  ConstDummyMatrix mat_rot_trans(ax, 3, 3);
-  ConstDummyMatrix mat_input_vec(input_vec, data_num, 3);
-  DummyMatrix mat_res_vec(output_vec, data_num, 3);
-  MatrixMultiply(mat_input_vec, mat_rot_trans, &mat_res_vec);
+  /* The original cods are as follows:
+   *
+   *   float ax[9] = {
+   *     -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+   *     -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
+   *     cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
+   *     cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+   *     -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
+   *     cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
+   *     cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+   *     cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
+   *     sin(lon_lat_roll[1])
+   *   };
+   *
+   *   ConstDummyMatrix mat_rot_trans(ax, 3, 3);
+   *   ConstDummyMatrix mat_input_vec(input_vec, data_num, 3);
+   *   DummyMatrix mat_res_vec(output_vec, data_num, 3);
+   *   MatrixMultiply(mat_input_vec, mat_rot_trans, &mat_res_vec);
+   *
+   * Since this method is called frequently, we use a little different way to do the multiplication.
+   */
+
+  const float ax[] = {
+    -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+    cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+    cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
+    -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
+    -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
+    cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
+    cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
+    cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
+    sin(lon_lat_roll[1]), 0
+  };
+
+#if defined(__AVX__) && defined(__SSE4_1__)
+  __m128 AX0 = _mm_loadu_ps(ax + 0);
+  __m128 AX1 = _mm_loadu_ps(ax + 3);
+  __m128 AX2 = _mm_loadu_ps(ax + 6);
+
+  for (decltype(data_num) i = 0; i < data_num; i++) {
+    float* tmp_out = output_vec + i * 3;
+
+    __m128 INPUT_V = _mm_loadu_ps(input_vec + i * 3);
+    __m128 DP = _mm_dp_ps(INPUT_V, AX0, 0x71);
+    tmp_out[0] = DP[0];
+    DP = _mm_dp_ps(INPUT_V, AX1, 0x71);
+    tmp_out[1] = DP[0];
+    DP = _mm_dp_ps(INPUT_V, AX2, 0x71);
+    tmp_out[2] = DP[0];
+  }
+#else
+  // Then do the matrix multiplication (using Dot3 actually)
+  for (decltype(data_num) i = 0; i < data_num; i++) {
+    const float* tmp_v = input_vec + i * 3;
+    float* tmp_out = output_vec + i * 3;
+    for (int j = 0; j < 3; j++) {
+      tmp_out[j] = Dot3(tmp_v, ax + j * 3);
+    }
+  }
+#endif
 }
 
 
@@ -124,9 +175,26 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
     cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
     cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
     cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
-    sin(lon_lat_roll[1])
+    sin(lon_lat_roll[1]), 0
   };
 
+#if defined(__AVX__) && defined(__SSE4_1__)
+  __m128 AX0 = _mm_loadu_ps(ax + 0);
+  __m128 AX1 = _mm_loadu_ps(ax + 3);
+  __m128 AX2 = _mm_loadu_ps(ax + 6);
+
+  for (decltype(data_num) i = 0; i < data_num; i++) {
+    float* tmp_out = output_vec + i * 3;
+
+    __m128 INPUT_V = _mm_loadu_ps(input_vec + i * 3);
+    __m128 DP = _mm_dp_ps(INPUT_V, AX0, 0x71);
+    tmp_out[0] = DP[0];
+    DP = _mm_dp_ps(INPUT_V, AX1, 0x71);
+    tmp_out[1] = DP[0];
+    DP = _mm_dp_ps(INPUT_V, AX2, 0x71);
+    tmp_out[2] = DP[0];
+  }
+#else
   // Then do the matrix multiplication (using Dot3 actually)
   for (decltype(data_num) i = 0; i < data_num; i++) {
     const float* tmp_v = input_vec + i * 3;
@@ -135,6 +203,7 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
       tmp_out[j] = Dot3(tmp_v, ax + j * 3);
     }
   }
+#endif
 }
 
 

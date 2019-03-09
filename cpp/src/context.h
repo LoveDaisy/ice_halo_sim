@@ -25,6 +25,8 @@ struct CrystalContext;
 enum class ProjectionType;
 enum class VisibleSemiSphere;
 
+using CrystalContextPtr = std::shared_ptr<CrystalContext>;
+
 
 struct RayPathFilter {
   enum Symmetry : uint8_t {
@@ -61,7 +63,7 @@ private:
 
 
 struct MultiScatterContext {
-  std::vector<CrystalContext> crystals;
+  std::vector<CrystalContextPtr> crystals;
   std::vector<float> populations;
   std::vector<RayPathFilter> ray_path_filters;
   float prob;
@@ -145,7 +147,7 @@ private:
   int max_recursion_num_;
 
   std::vector<MultiScatterContext> multi_scatter_ctx_;
-  std::unordered_map<int, CrystalContext> crystal_ctx_;
+  std::unordered_map<int, CrystalContextPtr> crystal_ctx_;
   std::unordered_map<int, RayPathFilter> ray_path_filters_;
 
   std::string config_file_name_;
@@ -163,11 +165,11 @@ struct CrystalContext {
 
 
 struct RayContext {
-  RayContext(RaySegment* seg, const CrystalContext& crystal_ctx, const float main_axis_rot[3]);
+  RayContext(RaySegment* seg, const CrystalContextPtr& crystal_ctx, const float* main_axis_rot);
 
   RaySegment* first_ray_segment;
   RaySegment* prev_ray_segment;
-  CrystalContext crystal_ctx;
+  CrystalContextPtr crystal_ctx;
   Math::Vec3f main_axis_rot;
 };
 

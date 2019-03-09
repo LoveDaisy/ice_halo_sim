@@ -41,7 +41,7 @@ bool RayPathFilter::FilterRaySpecific(IceHalo::RaySegment* last_r, const Crystal
     return true;
   }
 
-  int curr_fn0 = crystal->FaceNumber(last_r->root->first_ray_segment->face_id);
+  int curr_fn0 = crystal->FaceNumber(last_r->root_ctx->first_ray_segment->face_id);
   if (curr_fn0 < 0 || crystal->GetFaceNumberPeriod() < 0) {   // If do not have face number mapping.
     return true;
   }
@@ -94,7 +94,7 @@ bool RayPathFilter::FilterRayGeneral(RaySegment* last_r, const CrystalPtr& cryst
     }
   }
 
-  int curr_entry_fn = crystal->FaceNumber(last_r->root->first_ray_segment->face_id);
+  int curr_entry_fn = crystal->FaceNumber(last_r->root_ctx->first_ray_segment->face_id);
   int curr_exit_fn = crystal->FaceNumber(last_r->face_id);
   if (curr_entry_fn < 0 || curr_exit_fn < 0 ||
       crystal->GetFaceNumberPeriod() < 0) {    // If do not have a face number mapping
@@ -425,7 +425,8 @@ void SimulationContext::ParseOneCrystalSetting(const rapidjson::Value& c, int ci
     throw std::invalid_argument(msg_buffer);
   }
 
-  crystal_ctx_.emplace(p->GetInt(), CrystalContext(crystal_parser_[type](this, c, ci), ParseCrystalAxis(c, ci)));
+  crystal_ctx_.emplace(p->GetInt(),
+                       std::make_shared<CrystalContext>(crystal_parser_[type](this, c, ci), ParseCrystalAxis(c, ci)));
 }
 
 
@@ -751,7 +752,7 @@ void SimulationContext::ParseOneScatterSetting(const rapidjson::Value& c, int ci
   }
 
   for (decltype(scatter.crystals.size()) i = 0; i < scatter.crystals.size(); i++) {
-    scatter.ray_path_filters[i].ApplyHash(scatter.crystals[i].crystal);
+    scatter.ray_path_filters[i].ApplyHash(scatter.crystals[i]->crystal);
   }
 
   multi_scatter_ctx_.emplace_back(scatter);
@@ -1099,7 +1100,7 @@ const std::vector<MultiScatterContext> SimulationContext::GetMultiScatterContext
 
 void SimulationContext::PrintCrystalInfo() {
   for (const auto& c : crystal_ctx_) {
-    auto g = c.second.crystal;
+    auto g = c.second->crystal;
     printf("--\n");
     for (const auto& v : g->GetVertexes()) {
       printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
@@ -1110,6 +1111,11 @@ void SimulationContext::PrintCrystalInfo() {
     }
   }
 }
+
+
+RayContext::RayContext(RaySegment* seg, const CrystalContextPtr& crystal_ctx, const float* main_axis_rot)
+  : first_ray_segment(seg), prev_ray_segment(nullptr),
+    crystal_ctx(crystal_ctx), main_axis_rot(main_axis_rot) {}
 
 
 

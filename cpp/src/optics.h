@@ -23,7 +23,7 @@ public:
   RaySegment* next_reflect;
   RaySegment* next_refract;
   RaySegment* prev;
-  RayContext* root;
+  RayContext* root_ctx;
 
   Math::Vec3f pt;
   Math::Vec3f dir;
