@@ -19,20 +19,25 @@ namespace IceHalo {
 using rapidjson::Pointer;
 
 RayPathFilter::RayPathFilter()
-    : type(RayPathFilter::kTypeNone), symmetry(RayPathFilter::kSymmetryNone) {}
+    : type(RayPathFilter::kTypeNone), symmetry(RayPathFilter::kSymmetryNone), complementary(false) {}
 
 
 bool RayPathFilter::Filter(IceHalo::RaySegment* r, const CrystalPtr& crystal) const {
+  bool result = true;
   switch (type) {
     case RayPathFilter::kTypeNone:
-      return true;
+      result = true;
+      break;
     case RayPathFilter::kTypeGeneral:
-      return FilterRayGeneral(r, crystal);
+      result = FilterRayGeneral(r, crystal);
+      break;
     case RayPathFilter::kTypeSpecific:
-      return FilterRaySpecific(r, crystal);
+      result = FilterRaySpecific(r, crystal);
+      break;
     default:
       return false;
   }
+  return result ^ complementary;
 }
 
 
@@ -918,6 +923,17 @@ void SimulationContext::ParseFilterType(const rapidjson::Value& c, int ci, RayPa
   } else {
     std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
+  }
+
+  p = Pointer("/complementary").Get(c);
+  if (p != nullptr && !p->IsBool()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].complementary> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  } else if (p == nullptr) {
+    std::fprintf(stderr, "<ray_path_filter[%d].complementary> is empty. Use default false.\n", ci);
+    filter->complementary = false;
+  } else {
+    filter->complementary = p->GetBool();
   }
 }
 

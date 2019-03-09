@@ -50,6 +50,7 @@ struct RayPathFilter {
 
   Type type;
   uint8_t symmetry;
+  bool complementary;
   std::vector<std::vector<uint16_t> > ray_paths;
   std::unordered_set<size_t> ray_path_hashes;
   std::unordered_set<uint16_t> entry_faces;

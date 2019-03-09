@@ -53,7 +53,7 @@ set(PROJ_ROOT "${CMAKE_SOURCE_DIR}")
 set(MODULE_ROOT "${CMAKE_SOURCE_DIR}/thirdparty")
 
 # ==================================================================================================
-enable_testing()
+# enable_testing()
 # Google Test
 set(GoogleTest_DIR "${MODULE_ROOT}/googletest")
 
