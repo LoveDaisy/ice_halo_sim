@@ -19,10 +19,16 @@ namespace IceHalo {
 using rapidjson::Pointer;
 
 RayPathFilter::RayPathFilter()
-    : type(RayPathFilter::kTypeNone), symmetry(RayPathFilter::kSymmetryNone), complementary(false) {}
+  : type(RayPathFilter::kTypeNone), symmetry(RayPathFilter::kSymmetryNone),
+    complementary(false), remove_homodromous(false) {}
 
 
 bool RayPathFilter::Filter(IceHalo::RaySegment* r, const CrystalPtr& crystal) const {
+  if (remove_homodromous &&
+      Math::Dot3(r->dir.val(), r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * Math::kFloatEps) {
+    return false;
+  }
+
   bool result = true;
   switch (type) {
     case RayPathFilter::kTypeNone:
@@ -852,95 +858,57 @@ void SimulationContext::ParseScatterFilter(const rapidjson::Value& c, int ci, Mu
 }
 
 
+std::unordered_map<std::string, SimulationContext::FilterParser> SimulationContext::filter_parser_ = {
+  { "none", &SimulationContext::ParseFilterNone },
+  { "specific", &SimulationContext::ParseFilterSpecific },
+  { "general", &SimulationContext::ParseFilterGeneral },
+};
+
+
 void SimulationContext::ParseOneFilterSetting(const rapidjson::Value& c, int ci) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-
-  RayPathFilter filter{};
-  ParseFilterType(c, ci, &filter);
-  ParseFilterSymmetry(c, ci, &filter);
-  ParseFilterSpecificSettings(c, ci, &filter);
-  ParseFilterGeneralSettings(c, ci, &filter);
-
-  auto p = Pointer("/id").Get(c);
-  if (p == nullptr || !p->IsInt()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].id> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-  int id = p->GetInt();
-
-  ray_path_filters_.emplace(id, filter);
-}
-
-
-void SimulationContext::ParseFilterSymmetry(const rapidjson::Value& c, int ci, RayPathFilter* filter) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-
-  auto p = Pointer("/symmetry").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].symmetry> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-
-  filter->symmetry = RayPathFilter::kSymmetryNone;
-  auto symm = p->GetString();
-  for (decltype(p->GetStringLength()) i = 0; i < p->GetStringLength(); i++) {
-    switch (symm[i]) {
-      case 'P':
-        filter->symmetry |= RayPathFilter::kSymmetryPrism;
-        break;
-      case 'B':
-        filter->symmetry |= RayPathFilter::kSymmetryBasal;
-        break;
-      case 'D':
-        filter->symmetry |= RayPathFilter::kSymmetryDirection;
-        break;
-      default:
-        std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].symmetry> cannot recognize!", ci);
-        throw std::invalid_argument(msg_buffer);
-    }
-  }
-}
-
-
-void SimulationContext::ParseFilterType(const rapidjson::Value& c, int ci, RayPathFilter* filter) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
 
   auto p = Pointer("/type").Get(c);
   if (p == nullptr || !p->IsString()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].type> cannot recognize!", ci);
+    std::snprintf(msg_buffer, kMsgBufferSize, "<filter[%d].type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   }
 
-  if (*p == "none") {
-    filter->type = RayPathFilter::kTypeNone;
-  } else if (*p == "specific") {
-    filter->type = RayPathFilter::kTypeSpecific;
-  } else if (*p == "general") {
-    filter->type = RayPathFilter::kTypeGeneral;
-  } else {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].type> cannot recognize!", ci);
+  std::string type(c["type"].GetString());
+  if (filter_parser_.find(type) == filter_parser_.end()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<filter[%d].type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   }
 
-  p = Pointer("/complementary").Get(c);
-  if (p != nullptr && !p->IsBool()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].complementary> cannot recognize!", ci);
+  p = Pointer("/id").Get(c);
+  if (p == nullptr || !p->IsInt()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<filter[%d].id> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
-  } else if (p == nullptr) {
-    std::fprintf(stderr, "<ray_path_filter[%d].complementary> is empty. Use default false.\n", ci);
-    filter->complementary = false;
-  } else {
-    filter->complementary = p->GetBool();
   }
+  int id = p->GetInt();
+
+  ray_path_filters_.emplace(id, filter_parser_[type](this, c, ci));
 }
 
 
-void SimulationContext::ParseFilterSpecificSettings(const rapidjson::Value& c, int ci, RayPathFilter* filter) {
+RayPathFilter SimulationContext::ParseFilterNone(const rapidjson::Value& c, int ci) {
+  RayPathFilter filter{};
+  filter.type = RayPathFilter::kTypeNone;
+  ParseFilterBasic(c, ci, &filter);
+
+  return filter;
+}
+
+
+RayPathFilter SimulationContext::ParseFilterSpecific(const rapidjson::Value& c, int ci) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
+
+  RayPathFilter filter{};
+  filter.type = RayPathFilter::kTypeSpecific;
+  ParseFilterSymmetry(c, ci, &filter);
+  ParseFilterBasic(c, ci, &filter);
 
   auto p = Pointer("/path").Get(c);
   if (p == nullptr || !p->IsArray()) {
@@ -954,13 +922,13 @@ void SimulationContext::ParseFilterSpecificSettings(const rapidjson::Value& c, i
   if (p->GetArray().Empty()) {
     std::fprintf(stderr, "<ray_path_filter[%d].path> is empty. Ignore this setting.\n", ci);
   } else if (p->GetArray()[0].IsInt()) {
-    filter->ray_paths.emplace_back();
+    filter.ray_paths.emplace_back();
     for (auto const& pi : p->GetArray()) {
       if (!pi.IsInt()) {
         std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
         throw std::invalid_argument(msg_buffer);
       }
-      filter->ray_paths.back().emplace_back(pi.GetInt());
+      filter.ray_paths.back().emplace_back(pi.GetInt());
     }
   } else {    // p[0].IsArray()
     for (const auto& pi : p->GetArray()) {
@@ -968,22 +936,29 @@ void SimulationContext::ParseFilterSpecificSettings(const rapidjson::Value& c, i
         std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
         throw std::invalid_argument(msg_buffer);
       }
-      filter->ray_paths.emplace_back();
+      filter.ray_paths.emplace_back();
       for (const auto& pii : pi.GetArray()) {
         if (!pii.IsInt()) {
           std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
           throw std::invalid_argument(msg_buffer);
         }
-        filter->ray_paths.back().emplace_back(pii.GetInt());
+        filter.ray_paths.back().emplace_back(pii.GetInt());
       }
     }
   }
+
+  return filter;
 }
 
 
-void SimulationContext::ParseFilterGeneralSettings(const rapidjson::Value& c, int ci, IceHalo::RayPathFilter* filter) {
+RayPathFilter SimulationContext::ParseFilterGeneral(const rapidjson::Value& c, int ci) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
+
+  RayPathFilter filter{};
+  filter.type = RayPathFilter::kTypeGeneral;
+  ParseFilterSymmetry(c, ci, &filter);
+  ParseFilterBasic(c, ci, &filter);
 
   auto p = Pointer("/entry").Get(c);
   if (p == nullptr || !p->IsArray()) {
@@ -995,7 +970,7 @@ void SimulationContext::ParseFilterGeneralSettings(const rapidjson::Value& c, in
       std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].entry> cannot recognize!", ci);
       throw std::invalid_argument(msg_buffer);
     }
-    filter->entry_faces.emplace(pi.GetInt());
+    filter.entry_faces.emplace(pi.GetInt());
   }
 
   p = Pointer("/exit").Get(c);
@@ -1008,20 +983,88 @@ void SimulationContext::ParseFilterGeneralSettings(const rapidjson::Value& c, in
       std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].exit> cannot recognize!", ci);
       throw std::invalid_argument(msg_buffer);
     }
-    filter->exit_faces.emplace(pi.GetInt());
+    filter.exit_faces.emplace(pi.GetInt());
   }
 
   p = Pointer("/hit").Get(c);
-  if (p == nullptr || !p->IsArray()) {
+  if (p == nullptr) {
+    std::fprintf(stderr, "<ray_path_filter[%d].hit> is empty. Ignore this setting.\n", ci);
+  } else if (!p->IsArray()) {
     std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].hit> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
-  }
-  for (const auto& pi : p->GetArray()) {
-    if (!pi.IsInt()) {
-      std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].hit> cannot recognize!", ci);
-      throw std::invalid_argument(msg_buffer);
+  } else {
+    for (const auto& pi : p->GetArray()) {
+      if (!pi.IsInt()) {
+        std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].hit> cannot recognize!", ci);
+        throw std::invalid_argument(msg_buffer);
+      }
+      filter.hit_nums.emplace(pi.GetInt());
     }
-    filter->hit_nums.emplace(pi.GetInt());
+  }
+
+  return filter;
+}
+
+
+void SimulationContext::ParseFilterSymmetry(const rapidjson::Value& c, int ci, RayPathFilter* filter) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+
+  filter->symmetry = RayPathFilter::kSymmetryNone;
+
+  auto p = Pointer("/symmetry").Get(c);
+  if (p == nullptr) {
+    return;
+  } else if (!p->IsString()) {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].symmetry> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+
+  auto symm = p->GetString();
+  for (decltype(p->GetStringLength()) i = 0; i < p->GetStringLength(); i++) {
+    switch (symm[i]) {
+      case 'P':
+      case 'p':
+        filter->symmetry |= RayPathFilter::kSymmetryPrism;
+        break;
+      case 'B':
+      case 'b':
+        filter->symmetry |= RayPathFilter::kSymmetryBasal;
+        break;
+      case 'D':
+      case 'd':
+        filter->symmetry |= RayPathFilter::kSymmetryDirection;
+        break;
+      default:
+        std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].symmetry> cannot recognize!", ci);
+        throw std::invalid_argument(msg_buffer);
+    }
+  }
+}
+
+
+void SimulationContext::ParseFilterBasic(const rapidjson::Value& c, int ci, RayPathFilter* filter) {
+  constexpr size_t kMsgBufferSize = 256;
+  char msg_buffer[kMsgBufferSize];
+
+  auto p = Pointer("/complementary").Get(c);
+  if (p == nullptr) {
+    filter->complementary = false;
+  } else if (p->IsBool()) {
+    filter->complementary = p->GetBool();
+  } else {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<filter[%d].complementary> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
+  }
+
+  p = Pointer("/remove_homodromous").Get(c);
+  if (p == nullptr) {
+    filter->remove_homodromous = false;
+  } else if (p->IsBool()) {
+    filter->remove_homodromous = p->GetBool();
+  } else {
+    std::snprintf(msg_buffer, kMsgBufferSize, "<filter[%d].remove_homodromous> cannot recognize!", ci);
+    throw std::invalid_argument(msg_buffer);
   }
 }
 
@@ -1353,7 +1396,8 @@ void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
   if (p == nullptr) {
     std::fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default real color!\n");
   } else if (!p->IsArray() && !p->IsString()) {
-    std::fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array nor a string, using default real color!\n");
+    std::fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array nor a string, ");
+    std::fprintf(stderr, "using default real color!\n");
   } else if (p->IsArray() && (p->Size() != 3 || !(*p)[0].IsNumber())) {
     std::fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default real color!\n");
   } else if (p->IsString() && (*p) != "real") {

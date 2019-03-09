@@ -22,13 +22,16 @@ namespace IceHalo {
 
 struct RaySegment;
 struct CrystalContext;
+class SimulationContext;
 enum class ProjectionType;
 enum class VisibleSemiSphere;
 
 using CrystalContextPtr = std::shared_ptr<CrystalContext>;
 
 
-struct RayPathFilter {
+class RayPathFilter {
+friend class SimulationContext;
+public:
   enum Symmetry : uint8_t {
     kSymmetryNone = 0u,
     kSymmetryPrism = 1u,
@@ -48,18 +51,19 @@ struct RayPathFilter {
   size_t RayPathHash(const std::vector<uint16_t>& ray_path) const;
   void ApplyHash(const CrystalPtr& crystal);
 
+private:
+  bool FilterRayGeneral(RaySegment* r, const CrystalPtr& crystal) const;
+  bool FilterRaySpecific(RaySegment* r, const CrystalPtr& crystal) const;
+
   Type type;
   uint8_t symmetry;
   bool complementary;
+  bool remove_homodromous;
   std::vector<std::vector<uint16_t> > ray_paths;
   std::unordered_set<size_t> ray_path_hashes;
   std::unordered_set<uint16_t> entry_faces;
   std::unordered_set<uint16_t> exit_faces;
   std::unordered_set<int> hit_nums;
-
-private:
-  bool FilterRayGeneral(RaySegment* r, const CrystalPtr& crystal) const;
-  bool FilterRaySpecific(RaySegment* r, const CrystalPtr& crystal) const;
 };
 
 
@@ -129,13 +133,17 @@ private:
   void ParseScatterFilter(const rapidjson::Value& c, int ci, MultiScatterContext* scatter);
 
   void ParseOneFilterSetting(const rapidjson::Value& c, int ci);
+  RayPathFilter ParseFilterNone(const rapidjson::Value& c, int ci);
+  RayPathFilter ParseFilterSpecific(const rapidjson::Value& c, int ci);
+  RayPathFilter ParseFilterGeneral(const rapidjson::Value& c, int ci);
+  void ParseFilterBasic(const rapidjson::Value& c, int ci, RayPathFilter* filter);
   void ParseFilterSymmetry(const rapidjson::Value& c, int ci, RayPathFilter* filter);
-  void ParseFilterType(const rapidjson::Value& c, int ci, RayPathFilter* filter);
-  void ParseFilterSpecificSettings(const rapidjson::Value& c, int ci, RayPathFilter* filter);
-  void ParseFilterGeneralSettings(const rapidjson::Value& c, int ci, RayPathFilter* filter);
 
   using CrystalParser = std::function<CrystalPtrU(SimulationContext*, const rapidjson::Value& c, int ci)>;
   static std::unordered_map<std::string, CrystalParser> crystal_parser_;
+
+  using FilterParser = std::function<RayPathFilter(SimulationContext*, const rapidjson::Value& c, int ci)>;
+  static std::unordered_map<std::string, FilterParser> filter_parser_;
 
   float sun_ray_dir_[3];
   float sun_diameter_;
