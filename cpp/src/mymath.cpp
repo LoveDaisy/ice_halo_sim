@@ -72,6 +72,12 @@ void Vec3FromTo(const float* vec1, const float* vec2, float* vec) {
 
 
 void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num) {
+  return RotateZWithDataStep(lon_lat_roll, input_vec, output_vec, 3, 3, data_num);
+}
+
+
+void RotateZWithDataStep(const float* lon_lat_roll, const float* input_vec, float* output_vec,
+                         size_t input_step, size_t output_step, size_t data_num) {
   using std::cos;
   using std::sin;
 
@@ -115,9 +121,9 @@ void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_ve
   __m128 AX2 = _mm_loadu_ps(ax + 6);
 
   for (decltype(data_num) i = 0; i < data_num; i++) {
-    float* tmp_out = output_vec + i * 3;
+    float* tmp_out = output_vec + i * output_step;
 
-    __m128 INPUT_V = _mm_loadu_ps(input_vec + i * 3);
+    __m128 INPUT_V = _mm_loadu_ps(input_vec + i * input_step);
     __m128 DP = _mm_dp_ps(INPUT_V, AX0, 0x71);
     tmp_out[0] = DP[0];
     DP = _mm_dp_ps(INPUT_V, AX1, 0x71);
@@ -128,8 +134,8 @@ void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_ve
 #else
   // Then do the matrix multiplication (using Dot3 actually)
   for (decltype(data_num) i = 0; i < data_num; i++) {
-    const float* tmp_v = input_vec + i * 3;
-    float* tmp_out = output_vec + i * 3;
+    const float* tmp_v = input_vec + i * intpu_step;
+    float* tmp_out = output_vec + i * output_step;
     for (int j = 0; j < 3; j++) {
       tmp_out[j] = Dot3(tmp_v, ax + j * 3);
     }
@@ -672,14 +678,14 @@ void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float
 }
 
 
-void RandomSampler::SampleSphericalPointsSph(float* data, size_t num) {
+void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t step) {
   auto rng = RandomNumberGenerator::GetInstance();
   for (decltype(num) i = 0; i < num; i++) {
     float u = rng->GetUniform() * 2 - 1;
     float lambda = rng->GetUniform() * 2 * Math::kPi;
 
-    data[i * 3 + 0] = lambda;
-    data[i * 3 + 1] = std::asin(u);
+    data[i * step + 0] = lambda;
+    data[i * step + 1] = std::asin(u);
   }
 }
 

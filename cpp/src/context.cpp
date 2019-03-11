@@ -61,6 +61,7 @@ bool RayPathFilter::FilterRaySpecific(IceHalo::RaySegment* last_r, const Crystal
   // And store current ray path for later computing.
   decltype(ray_paths.size()) curr_ray_path_len = 0;
   std::vector<uint16_t> curr_ray_path;
+  curr_ray_path.reserve(32);
   auto p = last_r;
   while (p->prev) {
     int curr_fn = crystal->FaceNumber(p->face_id);
@@ -80,10 +81,8 @@ bool RayPathFilter::FilterRaySpecific(IceHalo::RaySegment* last_r, const Crystal
     return false;
   }
 
-  std::reverse(curr_ray_path.begin(), curr_ray_path.end());
-
   // Second, for each filter path, normalize current ray path, and find it in ray_path_hashes.
-  auto current_ray_path_hash = RayPathHash(curr_ray_path);
+  auto current_ray_path_hash = RayPathHash(curr_ray_path, true);
   return ray_path_hashes.find(current_ray_path_hash) != ray_path_hashes.end();
 }
 
@@ -117,18 +116,28 @@ bool RayPathFilter::FilterRayGeneral(RaySegment* last_r, const CrystalPtr& cryst
 }
 
 
-size_t RayPathFilter::RayPathHash(const std::vector<uint16_t>& ray_path) const {
+size_t RayPathFilter::RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse) const {
   constexpr size_t kStep = 7;
   constexpr size_t kByteBits = 8;
   constexpr size_t kTotalBits = sizeof(size_t) * kByteBits;
 
   size_t result = 0;
   size_t curr_offset = 0;
-  for (auto fn : ray_path) {
-    size_t tmp_hash = (fn << curr_offset) | (fn >> (kTotalBits - curr_offset));
-    result ^= tmp_hash;
-    curr_offset += kStep;
-    curr_offset %= kTotalBits;
+  if (reverse) {
+    for (auto rit = ray_path.rbegin(); rit != ray_path.rend(); ++rit) {
+      auto fn = *rit;
+      size_t tmp_hash = (fn << curr_offset) | (fn >> (kTotalBits - curr_offset));
+      result ^= tmp_hash;
+      curr_offset += kStep;
+      curr_offset %= kTotalBits;
+    }
+  } else {
+    for (auto fn : ray_path) {
+      size_t tmp_hash = (fn << curr_offset) | (fn >> (kTotalBits - curr_offset));
+      result ^= tmp_hash;
+      curr_offset += kStep;
+      curr_offset %= kTotalBits;
+    }
   }
   return result;
 }

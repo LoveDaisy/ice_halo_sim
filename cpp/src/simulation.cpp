@@ -253,6 +253,7 @@ void Simulator::InitMainAxis(const CrystalContextPtr& ctx, float* axis) {
   } else {
     sampler->SampleSphericalPointsSph(ctx->axis, axis);
   }
+
   if (ctx->axis.roll_dist == Math::Distribution::kUniform) {
     // Random roll, ignore other parameters.
     axis[2] = rng->GetUniform() * 2 * Math::kPi;

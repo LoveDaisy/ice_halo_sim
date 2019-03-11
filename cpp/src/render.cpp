@@ -27,7 +27,7 @@ void EqualAreaFishEye(const float* cam_rot,      // Camera rotation. [lon, lat, 
     i *= Math::kDegreeToRad;
   }
 
-  Math::RotateZ(cam_rot_copy, dir, dir_copy, data_number);
+  Math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy, 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (std::abs(Math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -74,7 +74,7 @@ void DualEqualAreaFishEye(const float* /* cam_rot */,     // Not used
     i *= Math::kDegreeToRad;
   }
 
-  Math::RotateZ(cam_rot_copy, dir, dir_copy, data_number);
+  Math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy, 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (std::abs(Math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -113,7 +113,7 @@ void DualEquidistantFishEye(const float* /* cam_rot */,     // Not used
     i *= Math::kDegreeToRad;
   }
 
-  Math::RotateZ(cam_rot_copy, dir, dir_copy, data_number);
+  Math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy, 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (std::abs(Math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -151,7 +151,7 @@ void RectLinear(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
     i *= Math::kDegreeToRad;
   }
 
-  Math::RotateZ(cam_rot_copy, dir, dir_copy, data_number);
+  Math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy, 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (dir_copy[i * 3 + 2] < 0 || std::abs(Math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -168,8 +168,8 @@ void RectLinear(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
     } else {
       double x = dir_copy[i * 3 + 0] / dir_copy[i * 3 + 2];
       double y = dir_copy[i * 3 + 1] / dir_copy[i * 3 + 2];
-      x = x * img_wid / 2 / std::tan(hov * Math::kPi / 180.0f) + img_wid / 2.0f;
-      y = y * img_wid / 2 / std::tan(hov * Math::kPi / 180.0f) + img_hei / 2.0f;
+      x = x * img_wid / 2 / std::tan(hov * Math::kDegreeToRad) + img_wid / 2.0f;
+      y = y * img_wid / 2 / std::tan(hov * Math::kDegreeToRad) + img_hei / 2.0f;
 
       img_xy[i * 2 + 0] = static_cast<int>(std::round(x));
       img_xy[i * 2 + 1] = static_cast<int>(std::round(y));
@@ -245,20 +245,13 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
     return;
   }
 
-  auto* tmp_dir = new float[num * 3];
-  auto* tmp_w = new float[num];
   auto* tmp_xy = new int[num * 2];
-  for (decltype(num) i = 0; i < num; i++) {
-    std::memcpy(tmp_dir + i * 3, ray_data + i * 4, 3 * sizeof(float));
-    tmp_w[i] = ray_data[i * 4 + 3] * weight;
-  }
 
   auto img_hei = context_->GetImageHeight();
   auto img_wid = context_->GetImageWidth();
   projection_functions[projection_type](
-    context_->GetCamRot(), context_->GetFov(), num, tmp_dir,
+    context_->GetCamRot(), context_->GetFov(), num, ray_data,
     img_wid, img_hei, tmp_xy, context_->GetVisibleSemiSphere());
-  delete[] tmp_dir;
 
   float* current_data = nullptr;
   float* current_data_compensation = nullptr;
@@ -290,13 +283,12 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
     if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
       continue;
     }
-    auto tmp_val = tmp_w[i] - current_data_compensation[y * img_wid + x];
+    auto tmp_val = ray_data[i * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
     auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
     current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
     current_data[y * img_wid + x] = tmp_sum;
   }
   delete[] tmp_xy;
-  delete[] tmp_w;
 
   total_w_ += context_->GetTotalRayNum() * weight;
 }

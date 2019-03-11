@@ -170,7 +170,7 @@ public:
    * @param data output data, (lon, lat), in rad
    * @param num
    */
-  void SampleSphericalPointsSph(float* data, size_t num = 1);
+  void SampleSphericalPointsSph(float* data, size_t num = 1, size_t step = 3);
 
   /*! @brief Generate points distributed on sphere surface up to latitude, in spherical form, (lon, lat).
    *
@@ -227,6 +227,8 @@ void Normalized3(const float* vec, float* vec_out);
 void Vec3FromTo(const float* vec1, const float* vec2, float* vec);
 
 void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num = 1);
+void RotateZWithDataStep(const float* lon_lat_roll, const float* input_vec, float* output_vec,
+                         size_t input_step, size_t output_step, size_t data_num = 1);
 void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num = 1);
 
 std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss);
