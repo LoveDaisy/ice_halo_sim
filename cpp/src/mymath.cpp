@@ -71,7 +71,7 @@ void Vec3FromTo(const float* vec1, const float* vec2, float* vec) {
 }
 
 
-void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, uint64_t data_num) {
+void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num) {
   using std::cos;
   using std::sin;
 
@@ -138,8 +138,7 @@ void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_ve
 }
 
 
-void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec,
-                 uint64_t data_num) {
+void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num) {
   using std::cos;
   using std::sin;
 

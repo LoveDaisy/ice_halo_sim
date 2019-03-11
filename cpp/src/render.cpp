@@ -12,7 +12,7 @@ namespace IceHalo {
 
 void EqualAreaFishEye(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
                       float hov,                 // Half field of view.
-                      uint64_t data_number,      // Data number
+                      size_t data_number,        // Data number
                       const float* dir,          // Ray directions, [x, y, z]
                       int img_wid, int img_hei,  // Image size
                       int* img_xy,               // Image coordinates
@@ -24,7 +24,7 @@ void EqualAreaFishEye(const float* cam_rot,      // Camera rotation. [lon, lat, 
   cam_rot_copy[0] *= -1;
   cam_rot_copy[1] *= -1;
   for (float &i : cam_rot_copy) {
-    i *= Math::kPi / 180.0f;
+    i *= Math::kDegreeToRad;
   }
 
   Math::RotateZ(cam_rot_copy, dir, dir_copy, data_number);
@@ -58,7 +58,7 @@ void EqualAreaFishEye(const float* cam_rot,      // Camera rotation. [lon, lat, 
 
 void DualEqualAreaFishEye(const float* /* cam_rot */,     // Not used
                           float  /* hov */,               // Not used
-                          uint64_t data_number,           // Data number
+                          size_t data_number,             // Data number
                           const float* dir,               // Ray directions, [x, y, z]
                           int img_wid, int img_hei,       // Image size
                           int* img_xy,                    // Image coordinates
@@ -98,7 +98,7 @@ void DualEqualAreaFishEye(const float* /* cam_rot */,     // Not used
 
 void DualEquidistantFishEye(const float* /* cam_rot */,     // Not used
                             float  /* hov */,               // Not used
-                            uint64_t data_number,           // Data number
+                            size_t data_number,             // Data number
                             const float* dir,               // Ray directions, [x, y, z]
                             int img_wid, int img_hei,       // Image size
                             int* img_xy,                    // Image coordinates
@@ -137,7 +137,7 @@ void DualEquidistantFishEye(const float* /* cam_rot */,     // Not used
 
 void RectLinear(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
                 float hov,                 // Half field of view.
-                uint64_t data_number,      // Data number
+                size_t data_number,        // Data number
                 const float* dir,          // Ray directions, [x, y, z]
                 int img_wid, int img_hei,  // Image size
                 int* img_xy,               // Image coordinates

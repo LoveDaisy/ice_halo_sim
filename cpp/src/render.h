@@ -27,38 +27,38 @@ enum class ProjectionType {
 
 
 void EqualAreaFishEye(const float* cam_rot,            // Camera rotation. [lon, lat, roll]
-                      float hov,                 // Half field of view.
-                      uint64_t data_number,      // Data number
+                      float hov,                       // Half field of view.
+                      size_t data_number,              // Data number
                       const float* dir,                // Ray directions, [x, y, z]
-                      int img_wid, int img_hei,  // Image size
-                      int* img_xy,               // Image coordinates
+                      int img_wid, int img_hei,        // Image size
+                      int* img_xy,                     // Image coordinates
                       VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);  // Which semi-sphere can be visible
 
 
 void DualEqualAreaFishEye(const float* cam_rot,            // Not used
-                          float hov,                 // Not used
-                          uint64_t data_number,      // Data number
+                          float hov,                       // Not used
+                          size_t data_number,              // Data number
                           const float* dir,                // Ray directions, [x, y, z]
-                          int img_wid, int img_hei,  // Image size
-                          int* img_xy,               // Image coordinates
+                          int img_wid, int img_hei,        // Image size
+                          int* img_xy,                     // Image coordinates
                           VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);   // Not used
 
 
 void DualEquidistantFishEye(const float* cam_rot,            // Not used
-                            float hov,                 // Not used
-                            uint64_t data_number,      // Data number
+                            float hov,                       // Not used
+                            size_t data_number,              // Data number
                             const float* dir,                // Ray directions, [x, y, z]
-                            int img_wid, int img_hei,  // Image size
-                            int* img_xy,               // Image coordinates
+                            int img_wid, int img_hei,        // Image size
+                            int* img_xy,                     // Image coordinates
                             VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);   // Not used
 
 
 void RectLinear(const float* cam_rot,            // Camera rotation. [lon, lat, roll]
-                float hov,                 // Half field of view.
-                uint64_t data_number,      // Data number
+                float hov,                       // Half field of view.
+                size_t data_number,              // Data number
                 const float* dir,                // Ray directions, [x, y, z]
-                int img_wid, int img_hei,  // Image size
-                int* img_xy,               // Image coordinates
+                int img_wid, int img_hei,        // Image size
+                int* img_xy,                     // I mage coordinates
                 VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);   // Which semi-sphere can be visible
 
 
@@ -80,7 +80,7 @@ using MyUnorderedMap = std::unordered_map<Key, T, HashType<Key>>;
 
 using ProjectionFunction = std::function<void(const float* cam_rot,      // Camera rotation (lon, lat, roll), in degree.
                                               float hov,                 // Half field of view, in degree
-                                              uint64_t data_number,      // Data number
+                                              size_t data_number,        // Data number
                                               const float* dir,          // Ray directions, [x, y, z]
                                               int img_wid, int img_hei,  // Image size
                                               int* img_xy,               // Image coordinates
