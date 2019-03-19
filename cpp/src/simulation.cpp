@@ -216,8 +216,11 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
 
     float sum = 0;
     for (int k = 0; k < total_faces; k++) {
-      prob[k] = std::max(-Math::Dot3(face_norm + k * 3, buffer_.dir[0] + i * 3) * face_area[k], 0.0f);
-      sum += prob[k];
+      prob[k] = 0;
+      if (!std::isnan(face_norm[k * 3 + 0]) && face_area[k] > 0) {
+        prob[k] = std::max(-Math::Dot3(face_norm + k * 3, buffer_.dir[0] + i * 3) * face_area[k], 0.0f);
+        sum += prob[k];
+      }
     }
     for (int k = 0; k < total_faces; k++) {
       prob[k] /= sum;
