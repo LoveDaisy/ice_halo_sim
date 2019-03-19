@@ -1169,13 +1169,13 @@ const std::vector<MultiScatterContext> SimulationContext::GetMultiScatterContext
 void SimulationContext::PrintCrystalInfo() {
   for (const auto& c : crystal_ctx_) {
     auto g = c.second->crystal;
-    printf("--\n");
+    std::printf("-- ID: %d --\n", c.first);
     for (const auto& v : g->GetVertexes()) {
-      printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
+      std::printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
     }
     for (const auto& f : g->GetFaces()) {
       auto idx = f.idx();
-      printf("f %d %d %d\n", idx[0] + 1, idx[1] + 1, idx[2] + 1);
+      std::printf("f %d %d %d\n", idx[0] + 1, idx[1] + 1, idx[2] + 1);
     }
   }
 }

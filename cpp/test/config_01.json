@@ -29,10 +29,10 @@
     },
     "multi_scatter": [
         {
-            "crystal": [4, 7],
-            "population": [200, 100],
+            "crystal": [5],
+            "population": [200],
             "probability": 1.0,
-            "ray_path_filter": [2, 0]
+            "ray_path_filter": [0]
         }
     ],
     "ray_path_filter": [
@@ -137,7 +137,7 @@
         {
             "id": 5,
             "type": "HexPyramid",
-            "parameter": [0.2, 0.2, 0.5],
+            "parameter": [0.2, 0.0, 0.5],
             "zenith": {
                 "mean": 0,
                 "std": 23,
