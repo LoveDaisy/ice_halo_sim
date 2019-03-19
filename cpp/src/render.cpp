@@ -421,7 +421,10 @@ void SpectrumRenderer::Rgb(size_t wavelength_number, size_t data_number,
     float xyz[3] = { 0 };
     for (decltype(wavelength_number) j = 0; j < wavelength_number; j++) {
       auto wl = static_cast<int>(wavelengths[j]);
-      float v = wl >= kMinWavelength && wl <= kMaxWaveLength ? spec_data[j*data_number + i] : 0.0f;
+      if (wl < kMinWavelength || wl > kMaxWaveLength) {
+        continue;
+      }
+      float v = spec_data[j*data_number + i];
       xyz[0] += kCmfX[wl - kMinWavelength] * v;
       xyz[1] += kCmfY[wl - kMinWavelength] * v;
       xyz[2] += kCmfZ[wl - kMinWavelength] * v;
@@ -473,7 +476,10 @@ void SpectrumRenderer::Gray(size_t wavelength_number, size_t data_number,
     float xyz[3] = { 0 };
     for (decltype(wavelength_number) j = 0; j < wavelength_number; j++) {
       auto wl = static_cast<int>(wavelengths[j]);
-      float v = wl >= kMinWavelength && wl <= kMaxWaveLength ? spec_data[j*data_number + i] : 0.0f;
+      if (wl < kMinWavelength || wl > kMaxWaveLength) {
+        continue;
+      }
+      float v = spec_data[j*data_number + i];
       xyz[0] += kCmfX[wl - kMinWavelength] * v;
       xyz[1] += kCmfY[wl - kMinWavelength] * v;
       xyz[2] += kCmfZ[wl - kMinWavelength] * v;
