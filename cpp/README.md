@@ -8,7 +8,7 @@ can only run from command, no GUI.
 
 ## Installation
 
-Requires: Boost (>= 1.54), OpenCV (>= 3.3), CMake (>= 3.10). Has been tested on Mac OSX 10.14 and Ubuntu 14.04.
+Requires: Boost (>= 1.54), OpenCV (>= 3.3), CMake (>= 3.12). Has been tested on Mac OSX 10.14 and Ubuntu 14.04.
 
 First download the entire project,
 
@@ -80,7 +80,7 @@ I use [Rapidjson](http://rapidjson.org/index.html) to parse JSON file.
 
 * `sun`:
 It has two attributes,
-  * `altitude`, defining the altitude of the sun.  
+  * `altitude`, defining the altitude of the sun. In degree.  
   * `diameter`, defining the actual diameter used in the simulation, in degree. Please set to 0.5 for ture sun.
 
 * `ray`:
@@ -92,26 +92,32 @@ It defines some properties of rays used in simulation,
   * `wavelength`, the wavelengths used during simulation.
     It is an array contains all wavelengths you want to use. The refractive index data is from
     [Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice).
+  * `weight`, the weights for wavelengths. It must have the same length with `wavelength`.
 
 * `max_recursion`:
 It defines the max number that a ray hits a surface during a simulation. If a ray hits more than this number
 and still doesn't leave the crystal, it will be dropped.
 
-* `multi_scatter`:
-It defines how to simulate multi-scattering halos. It has two attributes,
-  * `repeat`, defining how many times ray pass through crystals. If it is set to 1, then the simulation
-    goes without any multi-scattering effects. In most cases, it is enough to set to 2. *NOTE:* simulation
-    speed drammatically slow down when `repeat` increases.   
-  * `probability`, defining how many rays can pass through next crystal. If it is set to 1.0, then
-    *ALL* rays will be used as input for next crystal.
-
-  Multi-scattering is a highlight feature of this project. As far as I know, HaloSim cannot do this kind simulation.
-While HaloPoint handles it by a tricky workaround, and implements for only limited scenarios.
-
 * `data_folder`:
 It defines where output data files should be located. The simulation program will put data into this
 folder and the rendering program will read data from this folder. Also the rendered image will be put
 in this folder.
+
+### Simulation settings
+
+* `multi_scatter`:
+It is an array defining how to perform multi/single scattering.
+Each element in this array defines a single scattering process, and contains 4 properties:
+  * `crystal`: what crystal(s) are used in this scattering process. It is an array, filled with crystal IDs
+    (See the section Crystal Settings).
+  * `population`: the crystal population. It is an array and its length must be the same with of `crystal`.
+  * `ray_path_filter`: what filter(s) are used to filter out rays. It is an array and its length must
+    be the same with of `crystal`. The rays filtered out are not used in the next scattering process.
+    See the section Filter Settings for detail.
+  * `probability`: how many output rays are used for next scattering process. If it is set to 0.5, then
+    50% output rays are used for next scattering process.
+
+  Multi-scattering is a highlight feature of this project.
 
 ### Rendering settings
 
@@ -120,7 +126,7 @@ It defines properties related to camera, including:
   * `azimuth`, `elevation`, `rotation`: the direction where camera pointing at. In degree.
   * `fov`: (half) field of view, the angle from center to edge. In degree.
   * `width`, `height`: the size of output image. In pixel.
-  * `lens`: lens type, can be one of `fisheye` or `linear`.
+  * `lens`: lens type, can be one of these values: `fisheye`, `linear`, `dual_fisheye_equidistant`, `dual_fisheye_equiarea`.
 
 * `render`:
 It defines some useful attributes used when rendering:
@@ -128,10 +134,10 @@ It defines some useful attributes used when rendering:
     indicating the upper semi sphere should be rendered, which is the common scene. If it is set to `lower`, then
     halos that occure under horizontal, say, [subparhilia](https://www.atoptics.co.uk/halo/subpars.htm),
     will be rendered as well. The values could be one of these: `upper`, `lower`, `camera`, `full`.
-  * `intensity_factor`, controls the intensity. The value locates between 0.1 and 10.0.
+  * `intensity_factor`, controls the intensity. The value locates between 0.01 and 100.0.
   * `offset`, defines the rendering offset. In pixel.
   * `ray_color`, defines the color used to plot the ray scatter points. It
-    can be a 3-element array defining the RGB color, or can be a string `real` indicating
+    can be a 3-element array defining the RGB color, or can be a string `'real'` indicating
     to use real colors. NOTE: RGB value must between 0.0 and 1.0.  
     Real-color is also a highlighted feature of this project.
   * `background_color`, defines the RGB color used for background. Each element must be between 0.0 and 1.0.
