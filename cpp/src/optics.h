@@ -95,22 +95,21 @@ public:
 
 class IceRefractiveIndex {
 public:
-  static float n(float wave_length);
+  static constexpr float kMinWaveLength = 350;
+  static constexpr float kMaxWaveLength = 900;
+
+  static float Get(float wave_length);
 
 private:
-  /*
-   * data from https://refractiveindex.info/?shelf=3d&book=crystals&page=ice
+  /* Shellmeier's equation:
+   *
+   *   n^2 = 1 + B1 * lambda^2 / (lambda^2 - C1^2)
+   *           + B2 * lambda^2 / (lambda^2 - C2^2)
+   *   lambda in micrometer, C1 * 1e-2, C2 * 1e2
    */
-  static constexpr float kWaveLengths[] = {350.0f, 400.0f, 410.0f, 420.0f, 430.0f, 440.0f, 450.0f, 460.0f, 470.0f,
-    480.0f, 490.0f, 500.0f, 510.0f, 520.0f, 530.0f, 540.0f, 550.0f, 560.0f, 570.0f, 580.0f, 590.0f,
-    600.0f, 610.0f, 620.0f, 630.0f, 640.0f, 650.0f, 660.0f, 670.0f, 680.0f, 690.0f, 700.0f, 710.0f,
-    720.0f, 730.0f, 740.0f, 750.0f, 760.0f, 770.0f, 780.0f, 790.0f, 800.0f, 810.0f, 820.0f, 830.0f,
-    840.0f, 850.0f, 860.0f, 870.0f, 880.0f, 890.0f, 900.0f};
-  static constexpr float kIndexOfRefract[] = {1.3249f, 1.3194f, 1.3185f, 1.3177f, 1.3170f, 1.3163f, 1.3157f, 1.3151f,
-    1.3145f, 1.3140f, 1.3135f, 1.3130f, 1.3126f, 1.3122f, 1.3118f, 1.3114f, 1.3110f, 1.3106f, 1.3103f,
-    1.3100f, 1.3097f, 1.3094f, 1.3091f, 1.3088f, 1.3085f, 1.3083f, 1.3080f, 1.3078f, 1.3076f, 1.3073f,
-    1.3071f, 1.3069f, 1.3067f, 1.3065f, 1.3062f, 1.3060f, 1.3058f, 1.3057f, 1.3055f, 1.3053f, 1.3051f,
-    1.3049f, 1.3047f, 1.3045f, 1.3044f, 1.3042f, 1.3040f, 1.3038f, 1.3037f, 1.3035f, 1.3033f, 1.3032f};
+  static constexpr float kCoefAvr[] = { 0.701777f, 1.091144f, 0.884400f, 0.796950f };    // B1, B2, C1, C2
+  static constexpr float kCoefO[] = { 0.696364f, 0.719271f, 0.957220f, 1.096889f };
+  static constexpr float kCoefE[] = { 0.699934f, 0.640071f, 0.960906f, 0.964654f };
 };
 
 }   // namespace IceHalo

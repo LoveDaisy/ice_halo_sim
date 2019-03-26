@@ -340,28 +340,28 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir, i
 
 
 
-constexpr float IceRefractiveIndex::kWaveLengths[];
-constexpr float IceRefractiveIndex::kIndexOfRefract[];
+constexpr float IceRefractiveIndex::kCoefAvr[];
+constexpr float IceRefractiveIndex::kCoefO[];
+constexpr float IceRefractiveIndex::kCoefE[];
 
-float IceRefractiveIndex::n(float wave_length) {
-  if (wave_length < kWaveLengths[0]) {
+float IceRefractiveIndex::Get(float wave_length) {
+  /* Shellmeier's equation:
+   *
+   *   n^2 = 1 + B1 * lambda^2 / (lambda^2 - C1)
+   *           + B2 * lambda^2 / (lambda^2 - C2)
+   *   lambda in micrometer, B * 1e-2, C * 1e2
+   */
+  if (wave_length < kMinWaveLength || wave_length > kMaxWaveLength) {
     return 1.0f;
   }
 
-  float nn = 1.0f;
-  for (decltype(sizeof(kWaveLengths)) i = 0; i < sizeof(kWaveLengths) / sizeof(float); i++) {
-    if (wave_length < kWaveLengths[i]) {
-      float w1 = kWaveLengths[i-1];
-      float w2 = kWaveLengths[i];
-      float n1 = kIndexOfRefract[i-1];
-      float n2 = kIndexOfRefract[i];
+  wave_length /= 1e3;
 
-      nn = n1 + (n2 - n1) / (w2 - w1) * (wave_length - w1);
-      break;
-    }
-  }
+  float n  = 1.0f;
+  n += kCoefAvr[0] / (1 - kCoefAvr[2] * 1e-2f / wave_length / wave_length);
+  n += kCoefAvr[1] / (1 - kCoefAvr[3] * 1e2f / wave_length / wave_length);
 
-  return nn;
+  return std::sqrt(n);
 }
 
 
