@@ -20,6 +20,16 @@ protected:
 };
 
 
+TEST_F(OpticsTest, RefractIndex) {
+  float wl[] = { 400, 500, 600, };
+  float n[] = { 1.3194f, 1.3130f, 1.3094f, };
+  int idx = 0;
+  for (const auto& curr_wl : wl) {
+    EXPECT_NEAR(IceHalo::IceRefractiveIndex::Get(curr_wl), n[idx++], 1e-4);
+  }
+}
+
+
 TEST_F(OpticsTest, HitSurface0) {
   constexpr float kN = 1.31;
   constexpr int kNum = 3;
