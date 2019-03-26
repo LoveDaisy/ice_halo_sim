@@ -36,10 +36,10 @@ void EqualAreaFishEye(const float* cam_rot,      // Camera rotation. [lon, lat, 
     } else if (visible_semi_sphere == VisibleSemiSphere::kCamera && dir_copy[i * 3 + 2] < 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleSemiSphere::kUpper && dir[i * 3 + 2] > 0) {
+    } else if (visible_semi_sphere == VisibleSemiSphere::kUpper && dir[i * 4 + 2] > 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleSemiSphere::kLower && dir[i * 3 + 2] < 0) {
+    } else if (visible_semi_sphere == VisibleSemiSphere::kLower && dir[i * 4 + 2] < 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
@@ -160,10 +160,10 @@ void RectLinear(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
     } else if (visible_semi_sphere == VisibleSemiSphere::kCamera && dir_copy[i * 3 + 2] < 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleSemiSphere::kUpper && dir[i * 3 + 2] > 0) {
+    } else if (visible_semi_sphere == VisibleSemiSphere::kUpper && dir[i * 4 + 2] > 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleSemiSphere::kLower && dir[i * 3 + 2] < 0) {
+    } else if (visible_semi_sphere == VisibleSemiSphere::kLower && dir[i * 4 + 2] < 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
