@@ -24,7 +24,7 @@ void EqualAreaFishEye(const float* cam_rot,      // Camera rotation. [lon, lat, 
   std::memcpy(cam_rot_copy, cam_rot, sizeof(float) * 3);
   cam_rot_copy[0] *= -1;
   cam_rot_copy[1] *= -1;
-  for (float &i : cam_rot_copy) {
+  for (auto& i : cam_rot_copy) {
     i *= Math::kDegreeToRad;
   }
 
@@ -71,7 +71,7 @@ void DualEqualAreaFishEye(const float* /* cam_rot */,     // Not used
   float cam_rot_copy[3] = { 90.0f, 89.999f, 0.0f };
   cam_rot_copy[0] *= -1;
   cam_rot_copy[1] *= -1;
-  for (float &i : cam_rot_copy) {
+  for (auto& i : cam_rot_copy) {
     i *= Math::kDegreeToRad;
   }
 
@@ -110,7 +110,7 @@ void DualEquidistantFishEye(const float* /* cam_rot */,     // Not used
   float cam_rot_copy[3] = {90.0f, 89.999f, 0.0f};
   cam_rot_copy[0] *= -1;
   cam_rot_copy[1] *= -1;
-  for (float &i : cam_rot_copy) {
+  for (auto& i : cam_rot_copy) {
     i *= Math::kDegreeToRad;
   }
 
@@ -148,7 +148,7 @@ void RectLinear(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
   std::memcpy(cam_rot_copy, cam_rot, sizeof(float) * 3);
   cam_rot_copy[0] *= -1;
   cam_rot_copy[1] *= -1;
-  for (float &i : cam_rot_copy) {
+  for (auto& i : cam_rot_copy) {
     i *= Math::kDegreeToRad;
   }
 
@@ -167,8 +167,8 @@ void RectLinear(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
-      double x = dir_copy[i * 3 + 0] / dir_copy[i * 3 + 2];
-      double y = dir_copy[i * 3 + 1] / dir_copy[i * 3 + 2];
+      float x = dir_copy[i * 3 + 0] / dir_copy[i * 3 + 2];
+      float y = dir_copy[i * 3 + 1] / dir_copy[i * 3 + 2];
       x = x * img_wid / 2 / std::tan(hov * Math::kDegreeToRad) + img_wid / 2.0f;
       y = y * img_wid / 2 / std::tan(hov * Math::kDegreeToRad) + img_hei / 2.0f;
 
