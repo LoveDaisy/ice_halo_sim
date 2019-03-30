@@ -87,12 +87,7 @@ using ProjectionFunction = std::function<void(const float* cam_rot,      // Came
                                               VisibleSemiSphere visible_semi_sphere)>;
 
 
-static MyUnorderedMap<ProjectionType, ProjectionFunction> projection_functions = {
-  { ProjectionType::kLinear, &RectLinear },
-  { ProjectionType::kEqualArea, &EqualAreaFishEye },
-  { ProjectionType::kDualEquidistant, &DualEquidistantFishEye },
-  { ProjectionType::kDualEqualArea, &DualEqualAreaFishEye },
-};
+MyUnorderedMap<ProjectionType, ProjectionFunction>& GetProjectionFunctions();
 
 
 void SrgbGamma(float* linear_rgb);

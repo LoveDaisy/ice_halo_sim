@@ -181,6 +181,18 @@ void RectLinear(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
 }
 
 
+MyUnorderedMap<ProjectionType, ProjectionFunction>& GetProjectionFunctions() {
+  static MyUnorderedMap<ProjectionType, ProjectionFunction> projection_functions = {
+    { ProjectionType::kLinear, &RectLinear },
+    { ProjectionType::kEqualArea, &EqualAreaFishEye },
+    { ProjectionType::kDualEquidistant, &DualEquidistantFishEye },
+    { ProjectionType::kDualEqualArea, &DualEqualAreaFishEye },
+  };
+
+  return projection_functions;
+}
+
+
 void SrgbGamma(float* linear_rgb) {
   for (int i = 0; i < 3; i++) {
     if (linear_rgb[i] < 0.0031308) {
@@ -213,6 +225,7 @@ SpectrumRenderer::~SpectrumRenderer() {
 
 void SpectrumRenderer::LoadData() {
   auto projection_type = context_->GetProjectionType();
+  const auto& projection_functions = GetProjectionFunctions();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
     std::fprintf(stderr, "Unknown projection type!\n");
     return;
@@ -233,10 +246,12 @@ void SpectrumRenderer::LoadData() {
 
 void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, size_t num) {
   auto projection_type = context_->GetProjectionType();
+  auto& projection_functions = GetProjectionFunctions();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
     std::fprintf(stderr, "Unknown projection type!\n");
     return;
   }
+  auto& pf = projection_functions[projection_type];
 
   auto wavelength = static_cast<int>(wl);
   if (wavelength < SpectrumRenderer::kMinWavelength ||
@@ -256,8 +271,7 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
   for (decltype(num) i = 0; i < num; i += step) {
     decltype(num) current_num = std::min(num - i, step);
     threading_pool->AddJob([=] {
-      projection_functions[projection_type](
-        context_->GetCamRot(), context_->GetFov(), current_num, ray_data + i * 4,
+      pf(context_->GetCamRot(), context_->GetFov(), current_num, ray_data + i * 4,
         img_wid, img_hei, tmp_xy + i * 2, context_->GetVisibleSemiSphere());
     });
   }
