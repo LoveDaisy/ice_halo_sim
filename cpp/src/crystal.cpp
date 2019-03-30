@@ -107,20 +107,6 @@ int Crystal::FaceNumber(int idx) const {
 }
 
 
-void Crystal::CopyFaceAreaData(float* data) const {
-  float va[3];
-  float vb[3];
-  float c[3];
-  for (decltype(faces_.size()) i = 0; i < faces_.size(); i++) {
-    auto idx = faces_[i].idx();
-    Math::Vec3FromTo(vertexes_[idx[0]].val(), vertexes_[idx[1]].val(), va);
-    Math::Vec3FromTo(vertexes_[idx[0]].val(), vertexes_[idx[2]].val(), vb);
-    Math::Cross3(va, vb, c);
-    data[i] = Math::Norm3(c);
-  }
-}
-
-
 void Crystal::InitNorm() {
   using Math::Vec3f;
 

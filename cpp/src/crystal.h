@@ -36,8 +36,6 @@ public:
   const float* GetFaceArea() const;
   int GetFaceNumberPeriod() const;
 
-  void CopyFaceAreaData(float* data) const;
-
   static constexpr float kC = 1.629f;
 
   /*! @brief Create a regular hexagon prism crystal
