@@ -24,7 +24,7 @@ class ThreadingPool {
   static ThreadingPool* GetInstance();
 
  private:
-  ThreadingPool(size_t num = 1);
+  explicit ThreadingPool(size_t num = 1);
 
   size_t thread_num_;
   std::vector<std::thread> pool_;
