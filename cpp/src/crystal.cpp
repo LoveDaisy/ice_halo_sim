@@ -1,16 +1,16 @@
 #include "crystal.h"
 
 #include <algorithm>
-#include <cstring>
 #include <cassert>
+#include <cstring>
 
 namespace IceHalo {
 
-Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes,
-                 const std::vector<Math::TriangleIdx>& faces,
-                 CrystalType type)
-    : vertexes_(vertexes), faces_(faces), type_(type), face_number_period_(-1),
-      face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
+Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes,     // vertex
+                 const std::vector<Math::TriangleIdx>& faces,  // face indices
+                 CrystalType type)                             // crystal type
+    : vertexes_(vertexes), faces_(faces), type_(type), face_number_period_(-1), face_bases_(nullptr),
+      face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitNorm();
   InitFaceNumber();
   switch (type_) {
@@ -30,11 +30,11 @@ Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes,
 }
 
 
-Crystal::Crystal(const std::vector<IceHalo::Math::Vec3f>& vertexes,
-                 const std::vector<IceHalo::Math::TriangleIdx>& faces,
-                 const std::vector<int>& faceId,
-                 CrystalType type)
-    : vertexes_(vertexes), faces_(faces), face_number_map_(faceId), type_(type), face_number_period_(-1),
+Crystal::Crystal(const std::vector<IceHalo::Math::Vec3f>& vertexes,     // vertex
+                 const std::vector<IceHalo::Math::TriangleIdx>& faces,  // face indices
+                 const std::vector<int>& face_number_map,               // face to face number
+                 CrystalType type)                                      // crystal type
+    : vertexes_(vertexes), faces_(faces), face_number_map_(face_number_map), type_(type), face_number_period_(-1),
       face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitNorm();
 }
@@ -259,32 +259,32 @@ void Crystal::InitFaceNumberStack() {
 }
 
 
-const std::vector<std::pair<Math::Vec3f, int> > Crystal::hex_face_norm_to_number_list_ {
-  { {                 0,     0,  1 }, 1 },
-  { {                 0,     0, -1 }, 2 },
-  { {                 1,     0,  0 }, 3 },
-  { {  Math::kSqrt3 / 2,  0.5f,  0 }, 4 },
-  { { -Math::kSqrt3 / 2,  0.5f,  0 }, 5 },
-  { {                -1,     0,  0 }, 6 },
-  { { -Math::kSqrt3 / 2, -0.5f,  0 }, 7 },
-  { {  Math::kSqrt3 / 2, -0.5f,  0 }, 8 },
+const std::vector<std::pair<Math::Vec3f, int>> Crystal::hex_face_norm_to_number_list_{
+  { { 0, 0, 1 }, 1 },                      // top face
+  { { 0, 0, -1 }, 2 },                     // bottom face
+  { { 1, 0, 0 }, 3 },                      // prism face
+  { { Math::kSqrt3 / 2, 0.5f, 0 }, 4 },    // prism face
+  { { -Math::kSqrt3 / 2, 0.5f, 0 }, 5 },   // prism face
+  { { -1, 0, 0 }, 6 },                     // prism face
+  { { -Math::kSqrt3 / 2, -0.5f, 0 }, 7 },  // prism face
+  { { Math::kSqrt3 / 2, -0.5f, 0 }, 8 },   // prism face
 };
 
 
-const std::vector<std::pair<Math::Vec3f, int> > Crystal::cubic_face_norm_to_number_list_ {
-  { {  0,  0,  1 }, 1 },
-  { {  0,  0, -1 }, 2 },
-  { {  1,  0,  0 }, 3 },
-  { {  0,  1,  0 }, 4 },
-  { { -1,  0,  0 }, 5 },
-  { {  0, -1,  0 }, 6 },
+const std::vector<std::pair<Math::Vec3f, int>> Crystal::cubic_face_norm_to_number_list_{
+  { { 0, 0, 1 }, 1 },   // top face
+  { { 0, 0, -1 }, 2 },  // bottom face
+  { { 1, 0, 0 }, 3 },   // pyramidal face
+  { { 0, 1, 0 }, 4 },   // pyramidal face
+  { { -1, 0, 0 }, 5 },  // pyramidal face
+  { { 0, -1, 0 }, 6 },  // pyramidal face
 };
 
 
 CrystalPtrU Crystal::CreateHexPrism(float h) {
-  using Math::Vec3f;
-  using Math::TriangleIdx;
   using Math::kPi;
+  using Math::TriangleIdx;
+  using Math::Vec3f;
 
   std::vector<Vec3f> vertexes;
   std::vector<TriangleIdx> faces;
@@ -292,10 +292,14 @@ CrystalPtrU Crystal::CreateHexPrism(float h) {
   faces.reserve(20);
 
   for (int i = 0; i < 6; ++i) {
-    vertexes.emplace_back(cos((2 * i - 1) * kPi / 6), sin((2 * i - 1) * kPi / 6), h);
+    vertexes.emplace_back(cos((2 * i - 1) * kPi / 6),  // x
+                          sin((2 * i - 1) * kPi / 6),  // y
+                          h);                          // z
   }
   for (int i = 0; i < 6; ++i) {
-    vertexes.emplace_back(cos((2 * i - 1) * kPi / 6), sin((2 * i - 1) * kPi / 6), -h);
+    vertexes.emplace_back(cos((2 * i - 1) * kPi / 6),  // x
+                          sin((2 * i - 1) * kPi / 6),  // y
+                          -h);                         // z
   }
 
   faces.emplace_back(0, 1, 2);
@@ -303,8 +307,8 @@ CrystalPtrU Crystal::CreateHexPrism(float h) {
   faces.emplace_back(3, 4, 5);
   faces.emplace_back(3, 5, 0);
   for (int i = 0; i < 6; ++i) {
-    faces.emplace_back(i, i+6, (i+1)%6);
-    faces.emplace_back(i+6, (i+1)%6+6, (i+1)%6);
+    faces.emplace_back(i, i + 6, (i + 1) % 6);
+    faces.emplace_back(i + 6, (i + 1) % 6 + 6, (i + 1) % 6);
   }
   faces.emplace_back(6, 8, 7);
   faces.emplace_back(6, 9, 8);
@@ -321,9 +325,9 @@ CrystalPtrU Crystal::CreateHexPyramid(float h1, float h2, float h3) {
 
 
 CrystalPtrU Crystal::CreateCubicPyramid(float h1, float h2) {
-  using Math::Vec3f;
-  using Math::TriangleIdx;
   using Math::kPi;
+  using Math::TriangleIdx;
+  using Math::Vec3f;
 
   h1 = std::min(h1, 1.f);
   h2 = std::min(h2, 1.f);
@@ -333,33 +337,30 @@ CrystalPtrU Crystal::CreateCubicPyramid(float h1, float h2) {
   vertexes.reserve(12);
 
   for (int i = 0; i < 4; i++) {
-    vertexes.emplace_back(
-      cos(kPi / 4 + kPi / 2 * i) * (1 - h1),
-      sin(kPi / 4 + kPi / 2 * i) * (1 - h1),
-      h1);
+    vertexes.emplace_back(cos(kPi / 4 + kPi / 2 * i) * (1 - h1),  // x
+                          sin(kPi / 4 + kPi / 2 * i) * (1 - h1),  // y
+                          h1);                                    // z
   }
   for (int i = 0; i < 4; i++) {
-    vertexes.emplace_back(
-      cos(kPi / 4 + kPi / 2 * i),
-      sin(kPi / 4 + kPi / 2 * i),
-      0);
+    vertexes.emplace_back(cos(kPi / 4 + kPi / 2 * i),  // x
+                          sin(kPi / 4 + kPi / 2 * i),  // y
+                          0);                          // z
   }
   for (int i = 0; i < 4; i++) {
-    vertexes.emplace_back(
-      cos(kPi / 4 + kPi / 2 * i) * (1 - h2),
-      sin(kPi / 4 + kPi / 2 * i) * (1 - h2),
-      -h2);
+    vertexes.emplace_back(cos(kPi / 4 + kPi / 2 * i) * (1 - h2),  // x
+                          sin(kPi / 4 + kPi / 2 * i) * (1 - h2),  // y
+                          -h2);                                   // z
   }
 
   faces.emplace_back(0, 1, 2);
   faces.emplace_back(0, 2, 3);
   for (int i = 0; i < 4; ++i) {
-    faces.emplace_back(i, i+4, (i+1)%4);
-    faces.emplace_back(i+4, (i+1)%4+4, (i+1)%4);
+    faces.emplace_back(i, i + 4, (i + 1) % 4);
+    faces.emplace_back(i + 4, (i + 1) % 4 + 4, (i + 1) % 4);
   }
   for (int i = 4; i < 8; ++i) {
-    faces.emplace_back(i, i+4, (i+1)%4+4);
-    faces.emplace_back(i+4, (i+1)%4+8, (i+1)%4+4);
+    faces.emplace_back(i, i + 4, (i + 1) % 4 + 4);
+    faces.emplace_back(i + 4, (i + 1) % 4 + 8, (i + 1) % 4 + 4);
   }
   faces.emplace_back(9, 8, 10);
   faces.emplace_back(10, 8, 11);
@@ -368,16 +369,18 @@ CrystalPtrU Crystal::CreateCubicPyramid(float h1, float h2) {
 }
 
 
-CrystalPtrU Crystal::CreateHexPyramid(int i1, int i4, float h1, float h2, float h3) {
+CrystalPtrU Crystal::CreateHexPyramid(int i1, int i4,                  // Miller index
+                                      float h1, float h2, float h3) {  // heights
   return CreateHexPyramid(i1, i4, i1, i4, h1, h2, h3);
 }
 
 
-CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,
-                                      float h1, float h2, float h3) {
-  using Math::Vec3f;
-  using Math::TriangleIdx;
+CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4,  // upper Miller index
+                                      int lower_idx1, int lower_idx4,  // lower Miller index
+                                      float h1, float h2, float h3) {  // heights
   using Math::kPi;
+  using Math::TriangleIdx;
+  using Math::Vec3f;
 
   float H1 = kC * upper_idx1 / upper_idx4;
   float H3 = kC * lower_idx1 / lower_idx4;
@@ -390,28 +393,24 @@ CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4, int lower_
   faces.reserve(44);
 
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(
-      cos((2 * i - 1) * kPi / 6) * (1 - h1),
-      sin((2 * i - 1) * kPi / 6) * (1 - h1),
-      h2 + h1 * H1);
+    vertexes.emplace_back(cos((2 * i - 1) * kPi / 6) * (1 - h1),  // x
+                          sin((2 * i - 1) * kPi / 6) * (1 - h1),  // y
+                          h2 + h1 * H1);                          // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(
-      cos((2 * i - 1) * kPi / 6),
-      sin((2 * i - 1) * kPi / 6),
-      h2);
+    vertexes.emplace_back(cos((2 * i - 1) * kPi / 6),  // x
+                          sin((2 * i - 1) * kPi / 6),  // y
+                          h2);                         // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(
-      cos((2 * i - 1) * kPi / 6),
-      sin((2 * i - 1) * kPi / 6),
-      -h2);
+    vertexes.emplace_back(cos((2 * i - 1) * kPi / 6),  // x
+                          sin((2 * i - 1) * kPi / 6),  // y
+                          -h2);                        // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(
-      cos((2 * i - 1) * kPi / 6) * (1 - h3),
-      sin((2 * i - 1) * kPi / 6) * (1 - h3),
-      -h2 - h3 * H3);
+    vertexes.emplace_back(cos((2 * i - 1) * kPi / 6) * (1 - h3),  // x
+                          sin((2 * i - 1) * kPi / 6) * (1 - h3),  // y
+                          -h2 - h3 * H3);                         // z
   }
 
   faces.emplace_back(0, 1, 2);
@@ -419,16 +418,16 @@ CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4, int lower_
   faces.emplace_back(3, 4, 5);
   faces.emplace_back(3, 5, 0);
   for (int i = 0; i < 6; ++i) {
-    faces.emplace_back(i, i+6, (i+1)%6);
-    faces.emplace_back(i+6, (i+1)%6+6, (i+1)%6);
+    faces.emplace_back(i, i + 6, (i + 1) % 6);
+    faces.emplace_back(i + 6, (i + 1) % 6 + 6, (i + 1) % 6);
   }
   for (int i = 6; i < 12; ++i) {
-    faces.emplace_back(i, i+6, (i+1)%6+6);
-    faces.emplace_back(i+6, (i+1)%6+12, (i+1)%6+6);
+    faces.emplace_back(i, i + 6, (i + 1) % 6 + 6);
+    faces.emplace_back(i + 6, (i + 1) % 6 + 12, (i + 1) % 6 + 6);
   }
   for (int i = 12; i < 18; ++i) {
-    faces.emplace_back(i, i+6, (i+1)%6+12);
-    faces.emplace_back(i+6, (i+1)%6+18, (i+1)%6+12);
+    faces.emplace_back(i, i + 6, (i + 1) % 6 + 12);
+    faces.emplace_back(i + 6, (i + 1) % 6 + 18, (i + 1) % 6 + 12);
   }
   faces.emplace_back(18, 20, 19);
   faces.emplace_back(18, 21, 20);
@@ -439,11 +438,12 @@ CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4, int lower_
 }
 
 
-CrystalPtrU Crystal::CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,
-                                               float h1, float h2, float h3) {
-  using Math::Vec3f;
-  using Math::TriangleIdx;
+CrystalPtrU Crystal::CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4,  // upper Miller index
+                                               int lower_idx1, int lower_idx4,  // lower Miller index
+                                               float h1, float h2, float h3) {  // heights
   using Math::kPi;
+  using Math::TriangleIdx;
+  using Math::Vec3f;
 
   float H1 = kC * upper_idx1 / upper_idx4;
   float H2 = kC * lower_idx1 / lower_idx4;
@@ -457,29 +457,25 @@ CrystalPtrU Crystal::CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4, i
 
   float r = (1.0f - h2) * (1.0f - h1);
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(
-      cos(2 * kPi * i / 6) * r,
-      sin(2 * kPi * i / 6) * r,
-      h1 * H1 * (1.0f - h2) + h2 * H2 + h3 * 2);
+    vertexes.emplace_back(cos(2 * kPi * i / 6) * r,                   // x
+                          sin(2 * kPi * i / 6) * r,                   // y
+                          h1 * H1 * (1.0f - h2) + h2 * H2 + h3 * 2);  // z
   }
   r = 1.0f - h2;
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(
-      cos(2 * kPi * i / 6) * r,
-      sin(2 * kPi * i / 6) * r,
-      h2 * H2 + h3 * 2);
+    vertexes.emplace_back(cos(2 * kPi * i / 6) * r,  // x
+                          sin(2 * kPi * i / 6) * r,  // y
+                          h2 * H2 + h3 * 2);         // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(
-      cos(2 * kPi * i / 6),
-      sin(2 * kPi * i / 6),
-      h3 * 2);
+    vertexes.emplace_back(cos(2 * kPi * i / 6),  // x
+                          sin(2 * kPi * i / 6),  // y
+                          h3 * 2);               // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(
-      cos(2 * kPi * i / 6),
-      sin(2 * kPi * i / 6),
-      0);
+    vertexes.emplace_back(cos(2 * kPi * i / 6),  // x
+                          sin(2 * kPi * i / 6),  // y
+                          0);                    // z
   }
 
   faces.emplace_back(0, 1, 2);
@@ -487,16 +483,16 @@ CrystalPtrU Crystal::CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4, i
   faces.emplace_back(3, 4, 5);
   faces.emplace_back(3, 5, 0);
   for (int i = 0; i < 6; ++i) {
-    faces.emplace_back(i, i+6, (i+1)%6);
-    faces.emplace_back(i+6, (i+1)%6+6, (i+1)%6);
+    faces.emplace_back(i, i + 6, (i + 1) % 6);
+    faces.emplace_back(i + 6, (i + 1) % 6 + 6, (i + 1) % 6);
   }
   for (int i = 6; i < 12; ++i) {
-    faces.emplace_back(i, i+6, (i+1)%6+6);
-    faces.emplace_back(i+6, (i+1)%6+12, (i+1)%6+6);
+    faces.emplace_back(i, i + 6, (i + 1) % 6 + 6);
+    faces.emplace_back(i + 6, (i + 1) % 6 + 12, (i + 1) % 6 + 6);
   }
   for (int i = 12; i < 18; ++i) {
-    faces.emplace_back(i, i+6, (i+1)%6+12);
-    faces.emplace_back(i+6, (i+1)%6+18, (i+1)%6+12);
+    faces.emplace_back(i, i + 6, (i + 1) % 6 + 12);
+    faces.emplace_back(i + 6, (i + 1) % 6 + 18, (i + 1) % 6 + 12);
   }
   faces.emplace_back(18, 20, 19);
   faces.emplace_back(18, 21, 20);
@@ -515,10 +511,10 @@ CrystalPtrU Crystal::CreateIrregularHexPrism(float* dist, float h) {
    *  2.2 Else drop this point;
    * 3. Construct a convex hull from point set P.
    */
-  using Math::kSqrt3;
-  using Math::Vec3f;
-  using Math::TriangleIdx;
   using Math::HalfSpaceSet;
+  using Math::kSqrt3;
+  using Math::TriangleIdx;
+  using Math::Vec3f;
 
   constexpr int kConstraintNum = 8;
 
@@ -528,20 +524,20 @@ CrystalPtrU Crystal::CreateIrregularHexPrism(float* dist, float h) {
 
   /* Half plane is expressed as: a*x + b*y + c*z + d <= 0 */
   float a[kConstraintNum] = {
-    1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f,   // Prism faces
-    0.0f, 0.0f,                              // Top and bottom faces
+    1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  // prism faces
+    0.0f, 0.0f,                             // top and bottom faces
   };
   float b[kConstraintNum] = {
-    0.0f, kSqrt3, kSqrt3, 0.0f, -kSqrt3, -kSqrt3,
-    0.0f, 0.0f,
+    0.0f, kSqrt3, kSqrt3, 0.0f, -kSqrt3, -kSqrt3,  // prism
+    0.0f, 0.0f,                                    // top and bottom
   };
   float c[kConstraintNum] = {
-    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-    1.0f, -1.0f,
+    0.0f, 0.0f,  0.0f, 0.0f, 0.0f, 0.0f,  // prism
+    1.0f, -1.0f,                          // top and bottom
   };
   float d[kConstraintNum] = {
-    -dist[0], -2 * dist[1], -2 * dist[2], -dist[3], -2 * dist[4], -2 * dist[5],
-    -h, -h,
+    -dist[0], -2 * dist[1], -2 * dist[2], -dist[3], -2 * dist[4], -2 * dist[5],  // prism
+    -h,       -h,                                                                // top and bottom
   };
   HalfSpaceSet hss(kConstraintNum, a, b, c, d);
 
@@ -571,10 +567,10 @@ CrystalPtrU Crystal::CreateIrregularHexPyramid(float* dist, int* idx, float* h) 
    * 2. Find all co-planner points.
    * 3. For points in each face, construct a triangular division.
    */
-  using Math::kSqrt3;
-  using Math::Vec3f;
-  using Math::TriangleIdx;
   using Math::HalfSpaceSet;
+  using Math::kSqrt3;
+  using Math::TriangleIdx;
+  using Math::Vec3f;
 
   constexpr int kConstraintNum = 20;
   constexpr int kDistNum = 6;
@@ -593,28 +589,44 @@ CrystalPtrU Crystal::CreateIrregularHexPyramid(float* dist, int* idx, float* h) 
   }
 
   float a[kConstraintNum] = {
-    1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f,   // Prism faces
-    2.0f, 1.0f, -1.0f, -2.0f, -1.0f, 1.0f,   // Upper pyramid faces
-    2.0f, 1.0f, -1.0f, -2.0f, -1.0f, 1.0f,   // Lower pyramid faces
-    0.0f, 0.0f,                              // Top and bottom faces
+    1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  // prism faces
+    2.0f, 1.0f, -1.0f, -2.0f, -1.0f, 1.0f,  // upper pyramid faces
+    2.0f, 1.0f, -1.0f, -2.0f, -1.0f, 1.0f,  // lower pyramid faces
+    0.0f, 0.0f,                             // top and bottom faces
   };
   float b[kConstraintNum] = {
-    0.0f, kSqrt3, kSqrt3, 0.0f, -kSqrt3, -kSqrt3,
-    0.0f, kSqrt3, kSqrt3, 0.0f, -kSqrt3, -kSqrt3,
-    0.0f, kSqrt3, kSqrt3, 0.0f, -kSqrt3, -kSqrt3,
-    0.0f, 0.0f,
+    0.0f, kSqrt3, kSqrt3, 0.0f, -kSqrt3, -kSqrt3,  // prism faces
+    0.0f, kSqrt3, kSqrt3, 0.0f, -kSqrt3, -kSqrt3,  // upper pyramid faces
+    0.0f, kSqrt3, kSqrt3, 0.0f, -kSqrt3, -kSqrt3,  // lower pyramid faces
+    0.0f, 0.0f,                                    // top and bottom faces
   };
   float c[kConstraintNum] = {
-    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-    alpha0, alpha0, alpha0, alpha0, alpha0, alpha0,
-    -alpha1, -alpha1, -alpha1, -alpha1, -alpha1, -alpha1,
-    1.0f, -1.0f,
+    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,     // prism faces
+    alpha0,  alpha0,  alpha0,  alpha0,  alpha0,  alpha0,   // upper pyramid faces
+    -alpha1, -alpha1, -alpha1, -alpha1, -alpha1, -alpha1,  // lower pyramid faces
+    1.0f,    -1.0f,                                        // top and bottom faces
   };
   float d[kConstraintNum] = {
-    -dist[0], -2 * dist[1], -2 * dist[2], -dist[3], -2 * dist[4], -2 * dist[5],
-    -2 * dist[0] - beta0, -2 * dist[1] - beta0, -2 * dist[2] - beta0, -2 * dist[3] - beta0, -2 * dist[4] - beta0, -2 * dist[5] - beta0,
-    -2 * dist[0] - beta1, -2 * dist[1] - beta1, -2 * dist[2] - beta1, -2 * dist[3] - beta1, -2 * dist[4] - beta1, -2 * dist[5] - beta1,
-    0.0f, 0.0f,
+    -dist[0],
+    -2 * dist[1],
+    -2 * dist[2],
+    -dist[3],
+    -2 * dist[4],
+    -2 * dist[5],
+    -2 * dist[0] - beta0,
+    -2 * dist[1] - beta0,
+    -2 * dist[2] - beta0,
+    -2 * dist[3] - beta0,
+    -2 * dist[4] - beta0,
+    -2 * dist[5] - beta0,
+    -2 * dist[0] - beta1,
+    -2 * dist[1] - beta1,
+    -2 * dist[2] - beta1,
+    -2 * dist[3] - beta1,
+    -2 * dist[4] - beta1,
+    -2 * dist[5] - beta1,
+    0.0f,
+    0.0f,
   };
   HalfSpaceSet hss(kConstraintNum - 2, a, b, c, d);
 
@@ -648,15 +660,15 @@ CrystalPtrU Crystal::CreateIrregularHexPyramid(float* dist, int* idx, float* h) 
 }
 
 
-CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<IceHalo::Math::Vec3f>& pts,
-                                         const std::vector<IceHalo::Math::TriangleIdx>& faces) {
+CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<IceHalo::Math::Vec3f>& pts,            // vertex points
+                                         const std::vector<IceHalo::Math::TriangleIdx>& faces) {  // face indices
   return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::CUSTOM));
 }
 
 
-CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<IceHalo::Math::Vec3f>& pts,
-                                         const std::vector<IceHalo::Math::TriangleIdx>& faces,
-                                         const std::vector<int>& face_number_map) {
+CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<IceHalo::Math::Vec3f>& pts,          // vertex points
+                                         const std::vector<IceHalo::Math::TriangleIdx>& faces,  // face indices
+                                         const std::vector<int>& face_number_map) {             // face to face number
   return std::unique_ptr<Crystal>(new Crystal(pts, faces, face_number_map, CrystalType::CUSTOM));
 }
 

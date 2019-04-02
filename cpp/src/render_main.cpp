@@ -1,11 +1,10 @@
 #include <chrono>
 #include <cstdio>
+#include <opencv2/opencv.hpp>
 #include <unordered_map>
 
-#include <opencv2/opencv.hpp>
-
-#include "render.h"
 #include "context.h"
+#include "render.h"
 
 int main(int argc, char* argv[]) {
   if (argc != 2) {
@@ -33,6 +32,6 @@ int main(int argc, char* argv[]) {
   delete[] flat_rgb_data;
 
   auto t1 = std::chrono::system_clock::now();
-  std::chrono::duration<float, std::ratio<1, 1000> > diff = t1 - start;
+  std::chrono::duration<float, std::ratio<1, 1000>> diff = t1 - start;
   std::printf("Total: %.2fms\n", diff.count());
 }

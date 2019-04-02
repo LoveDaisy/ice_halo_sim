@@ -1,19 +1,19 @@
 #ifndef SRC_THREADINGPOOL_H_
 #define SRC_THREADINGPOOL_H_
 
-#include <vector>
+#include <atomic>
+#include <condition_variable>
+#include <functional>
+#include <mutex>
 #include <queue>
 #include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <atomic>
-#include <functional>
+#include <vector>
 
 
 namespace IceHalo {
 
 class ThreadingPool {
-public:
+ public:
   ~ThreadingPool() = default;
 
   void Start();
@@ -23,14 +23,14 @@ public:
 
   static ThreadingPool* GetInstance();
 
-private:
+ private:
   ThreadingPool(size_t num = 1);
 
   size_t thread_num_;
   std::vector<std::thread> pool_;
   std::atomic<bool> alive_;
 
-  std::queue<std::function<void()> > queue_;
+  std::queue<std::function<void()>> queue_;
   std::mutex queue_mutex_;
   std::condition_variable queue_condition_;
 
@@ -46,7 +46,7 @@ private:
   static std::mutex instance_mutex_;
 };
 
-}   // namespace IceHalo
+}  // namespace IceHalo
 
 
 #endif  // SRC_THREADINGPOOL_H_

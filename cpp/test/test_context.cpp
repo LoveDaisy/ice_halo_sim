@@ -1,18 +1,17 @@
-#include "context.h"
-#include "mymath.h"
-
-#include "gtest/gtest.h"
-
 #include <string>
+
+#include "context.h"
+#include "gtest/gtest.h"
+#include "mymath.h"
 
 extern std::string config_file_name;
 
 namespace {
 
 class ContextTest : public ::testing::Test {
-protected:
+ protected:
   void SetUp() override {
-    context = IceHalo::SimulationContext::CreateFromFile(config_file_name.c_str());
+    context = IceHalo::SimulationContext::CreateFromFile(config_file_name.c_str());  // read from file
   }
 
   IceHalo::SimulationContextPtr context;
@@ -42,8 +41,8 @@ TEST_F(ContextTest, FillSunDir) {
   sampler->SampleSphericalPointsCart(sun_dir, sun_d / 2, dir, kRayNum);
 
   for (int i = 0; i < kRayNum; i++) {
-    float a = std::acos(IceHalo::Math::Dot3(sun_dir, dir + i * 3));    // In rad
-    a *= IceHalo::Math::kRadToDegree;    // To degree
+    float a = std::acos(IceHalo::Math::Dot3(sun_dir, dir + i * 3));  // In rad
+    a *= IceHalo::Math::kRadToDegree;                                // To degree
     EXPECT_TRUE(a < sun_d / 2 + 1e-3);
   }
 }

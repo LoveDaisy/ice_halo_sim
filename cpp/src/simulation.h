@@ -1,16 +1,16 @@
 #ifndef SRC_SIMULATION_H_
 #define SRC_SIMULATION_H_
 
+#include <vector>
+
 #include "context.h"
 #include "crystal.h"
 #include "optics.h"
 
-#include <vector>
-
 namespace IceHalo {
 
 struct SimulationBufferData {
-public:
+ public:
   SimulationBufferData();
   ~SimulationBufferData();
 
@@ -26,13 +26,13 @@ public:
 
   size_t ray_num;
 
-private:
+ private:
   void DeleteBuffer(int idx);
 };
 
 
 struct EnterRayData {
-public:
+ public:
   EnterRayData();
   ~EnterRayData();
 
@@ -44,13 +44,13 @@ public:
 
   size_t ray_num;
 
-private:
+ private:
   void DeleteBuffer();
 };
 
 
 class Simulator {
-public:
+ public:
   explicit Simulator(const SimulationContextPtr& context);
   ~Simulator() = default;
 
@@ -58,9 +58,9 @@ public:
   const std::vector<RaySegment*>& GetFinalRaySegments() const;
   void SaveFinalDirections(const char* filename);
   void SaveAllRays(const char* filename);
-  void PrintRayInfo();    // For debug
+  void PrintRayInfo();  // For debug
 
-private:
+ private:
   void InitSunRays();
   void InitEntryRays(const CrystalContextPtr& ctx);
   void InitMainAxis(const CrystalContextPtr& ctx, float* axis);
@@ -74,8 +74,8 @@ private:
   SimulationContextPtr context_;
   std::vector<CrystalContext> active_crystal_ctxs_;
 
-  std::vector<std::vector<RayContextPtr> > rays_;
-  std::vector<std::vector<RaySegment*> > exit_ray_segments_;
+  std::vector<std::vector<RayContextPtr>> rays_;
+  std::vector<std::vector<RaySegment*>> exit_ray_segments_;
   std::vector<RaySegment*> final_ray_segments_;
 
   size_t total_ray_num_;

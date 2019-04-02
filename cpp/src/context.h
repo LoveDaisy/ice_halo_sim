@@ -1,21 +1,20 @@
 #ifndef SRC_CONTEXT_H_
 #define SRC_CONTEXT_H_
 
-#include "mymath.h"
-#include "crystal.h"
-#include "files.h"
-#include "optics.h"
-
-#include "rapidjson/document.h"
-
-#include <vector>
-#include <unordered_map>
-#include <unordered_set>
-#include <random>
-#include <string>
+#include <atomic>
 #include <functional>
 #include <memory>
-#include <atomic>
+#include <random>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+#include "crystal.h"
+#include "files.h"
+#include "mymath.h"
+#include "optics.h"
+#include "rapidjson/document.h"
 
 
 namespace IceHalo {
@@ -30,8 +29,9 @@ using CrystalContextPtr = std::shared_ptr<CrystalContext>;
 
 
 class RayPathFilter {
-friend class SimulationContext;
-public:
+  friend class SimulationContext;
+
+ public:
   enum Symmetry : uint8_t {
     kSymmetryNone = 0u,
     kSymmetryPrism = 1u,
@@ -51,7 +51,7 @@ public:
   size_t RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse = false) const;
   void ApplyHash(const CrystalPtr& crystal);
 
-private:
+ private:
   bool FilterRayGeneral(RaySegment* r, const CrystalPtr& crystal) const;
   bool FilterRaySpecific(RaySegment* r, const CrystalPtr& crystal) const;
 
@@ -59,7 +59,7 @@ private:
   uint8_t symmetry;
   bool complementary;
   bool remove_homodromous;
-  std::vector<std::vector<uint16_t> > ray_paths;
+  std::vector<std::vector<uint16_t>> ray_paths;
   std::unordered_set<size_t> ray_path_hashes;
   std::unordered_set<uint16_t> entry_faces;
   std::unordered_set<uint16_t> exit_faces;
@@ -76,17 +76,17 @@ struct MultiScatterContext {
 
 
 class SimulationContext {
-public:
+ public:
   uint64_t GetTotalInitRays() const;
   int GetMaxRecursionNum() const;
 
-  const std::vector<MultiScatterContext> GetMultiScatterContext() const ;
+  const std::vector<MultiScatterContext> GetMultiScatterContext() const;
   void PrintCrystalInfo();
 
   void SetCurrentWavelength(float wavelength, float weight);
   float GetCurrentWavelength() const;
   float GetCurrentWavelengthWeight() const;
-  std::vector<std::pair<float, float> > GetWavelengths() const;
+  std::vector<std::pair<float, float>> GetWavelengths() const;
 
   const float* GetSunRayDir() const;
   float GetSunDiameter() const;
@@ -103,7 +103,7 @@ public:
   static constexpr float kPropMinW = 1e-6;
   static constexpr float kScatMinW = 1e-3;
 
-private:
+ private:
   SimulationContext(const char* filename, rapidjson::Document& d);
 
   void ApplySettings();
@@ -149,7 +149,7 @@ private:
   float sun_diameter_;
 
   uint64_t total_ray_num_;
-  std::vector<std::pair<float, float> > wavelengths_;
+  std::vector<std::pair<float, float>> wavelengths_;
   float current_wavelength_;
   float current_wavelength_weight_;
 
@@ -186,7 +186,7 @@ using RayContextPtr = std::shared_ptr<RayContext>;
 
 
 class RenderContext {
-public:
+ public:
   ~RenderContext() = default;
 
   uint32_t GetImageWidth() const;
@@ -211,7 +211,7 @@ public:
 
   static std::unique_ptr<RenderContext> CreateFromFile(const char* filename);
 
-private:
+ private:
   explicit RenderContext(rapidjson::Document& d);
 
   /* Parse rendering settings */

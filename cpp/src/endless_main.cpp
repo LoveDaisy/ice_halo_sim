@@ -3,9 +3,9 @@
 #include <opencv2/opencv.hpp>
 
 #include "context.h"
-#include "simulation.h"
-#include "render.h"
 #include "mymath.h"
+#include "render.h"
+#include "simulation.h"
 
 int main(int argc, char* argv[]) {
   if (argc != 2) {
@@ -21,7 +21,7 @@ int main(int argc, char* argv[]) {
   IceHalo::SpectrumRenderer renderer(render_ctx);
 
   auto t = std::chrono::system_clock::now();
-  std::chrono::duration<float, std::ratio<1, 1000> > diff = t - start;
+  std::chrono::duration<float, std::ratio<1, 1000>> diff = t - start;
   std::printf("Initialization: %.2fms\n", diff.count());
 
   IceHalo::File file(render_ctx->GetImagePath().c_str());

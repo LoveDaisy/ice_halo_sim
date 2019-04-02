@@ -1,13 +1,14 @@
 #include "mymath.h"
-#include "context.h"
 
-#include <cstring>
+#include <immintrin.h>
+#include <smmintrin.h>
+#include <xmmintrin.h>
+
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 
-#include <xmmintrin.h>
-#include <smmintrin.h>
-#include <immintrin.h>
+#include "context.h"
 
 
 namespace IceHalo {
@@ -76,11 +77,14 @@ void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_ve
 }
 
 
-void RotateZWithDataStep(const float* lon_lat_roll, const float* input_vec, float* output_vec,
+void RotateZWithDataStep(const float* lon_lat_roll,  // longitude, latitude, roll
+                         const float* input_vec,     // input data
+                         float* output_vec,          // output data
                          size_t input_step, size_t output_step, size_t data_num) {
   using std::cos;
   using std::sin;
 
+  // clang-format off
   /* The original cods are as follows:
    *
    *   float ax[9] = {
@@ -102,6 +106,7 @@ void RotateZWithDataStep(const float* lon_lat_roll, const float* input_vec, floa
    *
    * Since this method is called frequently, we use a little different way to do the multiplication.
    */
+  // clang-format on
 
   const float ax[] = {
     -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
@@ -112,7 +117,8 @@ void RotateZWithDataStep(const float* lon_lat_roll, const float* input_vec, floa
     cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
     cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
     cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
-    sin(lon_lat_roll[1]), 0
+    sin(lon_lat_roll[1]),
+    0
   };
 
 #if defined(__AVX__) && defined(__SSE4_1__)
@@ -148,6 +154,7 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
   using std::cos;
   using std::sin;
 
+  // clang-format off
   /* The original codes are as follows:
    *
    *   float ax[9] = {
@@ -169,6 +176,7 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
    *
    * Since this method is called frequently, we use a little different way to do the multiplication.
    */
+  // clang-format on
 
   // Here the ax is transposed, for better memory locality.
   const float ax[] = {
@@ -180,7 +188,8 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
     cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
     cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
     cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
-    sin(lon_lat_roll[1]), 0
+    sin(lon_lat_roll[1]),
+    0
   };
 
 #if defined(__AVX__) && defined(__SSE4_1__)
@@ -213,24 +222,27 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
 
 
 std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss) {
-  float* a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
+  float *a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
   int n = hss.n;
 
   std::vector<Vec3f> pts;
   for (int i = 0; i < n; i++) {
-    for (int j = i+1; j < n; j++) {
-      for (int k = j+1; k < n; k++) {
-        float det = a[k] * b[j] * c[i] - a[j] * b[k] * c[i] - a[k] * b[i] * c[j] +
-                    a[i] * b[k] * c[j] + a[j] * b[i] * c[k] - a[i] * b[j] * c[k];
+    for (int j = i + 1; j < n; j++) {
+      for (int k = j + 1; k < n; k++) {
+        float det = a[k] * b[j] * c[i] - a[j] * b[k] * c[i] - a[k] * b[i] * c[j] + a[i] * b[k] * c[j] +
+                    a[j] * b[i] * c[k] - a[i] * b[j] * c[k];
         if (std::abs(det) <= kFloatEps) {
           continue;
         }
-        float x = -(b[k] * c[j] * d[i] - b[j] * c[k] * d[i] - b[k] * c[i] * d[j] +
-                    b[i] * c[k] * d[j] + b[j] * c[i] * d[k] - b[i] * c[j] * d[k]) / det;
-        float y = -(-(a[k] * c[j] * d[i]) + a[j] * c[k] * d[i] + a[k] * c[i] * d[j] -
-                    a[i] * c[k] * d[j] - a[j] * c[i] * d[k] + a[i] * c[j] * d[k]) / det;
-        float z = -(a[k] * b[j] * d[i] - a[j] * b[k] * d[i] - a[k] * b[i] * d[j] +
-                    a[i] * b[k] * d[j] + a[j] * b[i] * d[k] - a[i] * b[j] * d[k]) / det;
+        float x = -(b[k] * c[j] * d[i] - b[j] * c[k] * d[i] - b[k] * c[i] * d[j] + b[i] * c[k] * d[j] +
+                    b[j] * c[i] * d[k] - b[i] * c[j] * d[k]) /
+                  det;
+        float y = -(-(a[k] * c[j] * d[i]) + a[j] * c[k] * d[i] + a[k] * c[i] * d[j] - a[i] * c[k] * d[j] -
+                    a[j] * c[i] * d[k] + a[i] * c[j] * d[k]) /
+                  det;
+        float z = -(a[k] * b[j] * d[i] - a[j] * b[k] * d[i] - a[k] * b[i] * d[j] + a[i] * b[k] * d[j] +
+                    a[j] * b[i] * d[k] - a[i] * b[j] * d[k]) /
+                  det;
 
         bool in = true;
         for (int ii = 0; ii < n; ii++) {
@@ -252,25 +264,24 @@ std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss) {
 
 void SortAndRemoveDuplicate(std::vector<Vec3f>* pts) {
   /* Sort by coordinates */
-  std::sort(pts->begin(), pts->end(),
-    [](const Vec3f& p1, const Vec3f& p2){
-      if (p1 == p2) {
-        return false;
-      }
-      if (p1.x() < p2.x() - kFloatEps) {
-        return true;
-      }
-      if (FloatEqual(p1.x(), p2.x()) && p1.y() < p2.y() - kFloatEps) {
-        return true;
-      }
-      if (FloatEqual(p1.x(), p2.x()) && FloatEqual(p1.y(), p2.y()) && p1.z() < p2.z() - kFloatEps) {
-        return true;
-      }
+  std::sort(pts->begin(), pts->end(), [](const Vec3f& p1, const Vec3f& p2) {
+    if (p1 == p2) {
       return false;
-    });
+    }
+    if (p1.x() < p2.x() - kFloatEps) {
+      return true;
+    }
+    if (FloatEqual(p1.x(), p2.x()) && p1.y() < p2.y() - kFloatEps) {
+      return true;
+    }
+    if (FloatEqual(p1.x(), p2.x()) && FloatEqual(p1.y(), p2.y()) && p1.z() < p2.z() - kFloatEps) {
+      return true;
+    }
+    return false;
+  });
 
   /* Remove duplicated points */
-  for (auto iter = pts->begin(), last_iter = pts->begin(); iter != pts->end(); ) {
+  for (auto iter = pts->begin(), last_iter = pts->begin(); iter != pts->end();) {
     if (iter != last_iter && (*iter) == (*last_iter)) {
       iter = pts->erase(iter);
     } else {
@@ -293,10 +304,10 @@ std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& 
 }
 
 
-void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Math::Vec3f>& pts,
-                          std::vector<Math::TriangleIdx>& faces) {
+void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Math::Vec3f>& pts,  // input
+                          std::vector<Math::TriangleIdx>& faces) {                       // output
   int num = hss.n;
-  float* a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
+  float *a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
 
   for (int i = 0; i < num; i++) {
     /* Find co-planer points */
@@ -312,8 +323,8 @@ void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Math::Vec3f
 }
 
 
-void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
-                             std::vector<int>& pts_idx, std::vector<TriangleIdx>& faces) {
+void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,              // input
+                             std::vector<int>& pts_idx, std::vector<TriangleIdx>& faces) {  // output
   /* Find the center of co-planer points */
   Vec3f center(0.0f, 0.0f, 0.0f);
   for (auto p : pts_idx) {
@@ -323,45 +334,43 @@ void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
 
   /* Sort by angle */
   int idx0 = pts_idx[0];
-  std::sort(pts_idx.begin() + 1, pts_idx.end(),
-    [&n, &vertex, &center, idx0](const int idx1, const int idx2){
-      Vec3f p0 = Vec3f::FromTo(center, vertex[idx0]).Normalized();
-      Vec3f p1 = Vec3f::FromTo(center, vertex[idx1]).Normalized();
-      Vec3f p2 = Vec3f::FromTo(center, vertex[idx2]).Normalized();
+  std::sort(pts_idx.begin() + 1, pts_idx.end(), [&n, &vertex, &center, idx0](const int idx1, const int idx2) {
+    Vec3f p0 = Vec3f::FromTo(center, vertex[idx0]).Normalized();
+    Vec3f p1 = Vec3f::FromTo(center, vertex[idx1]).Normalized();
+    Vec3f p2 = Vec3f::FromTo(center, vertex[idx2]).Normalized();
 
-      Vec3f n1 = Vec3f::Cross(p0, p1);
-      float dir = Vec3f::Dot(n1, n);
-      float c1 = Vec3f::Dot(p0, p1);
-      float s1 = std::abs(dir) > kFloatEps ? Vec3f::Norm(n1) * (dir / std::abs(dir)) : 0;
-      float angle1 = atan2(s1, c1);
-      angle1 += (angle1 < 0 ? 2 * kPi : 0);
+    Vec3f n1 = Vec3f::Cross(p0, p1);
+    float dir = Vec3f::Dot(n1, n);
+    float c1 = Vec3f::Dot(p0, p1);
+    float s1 = std::abs(dir) > kFloatEps ? Vec3f::Norm(n1) * (dir / std::abs(dir)) : 0;
+    float angle1 = atan2(s1, c1);
+    angle1 += (angle1 < 0 ? 2 * kPi : 0);
 
-      Vec3f n2 = Vec3f::Cross(p0, p2);
-      dir = Vec3f::Dot(n2, n);
-      float c2 = Vec3f::Dot(p0, p2);
-      float s2 = std::abs(dir) > kFloatEps ? Vec3f::Norm(n2) * (dir / std::abs(dir)) : 0;
-      float angle2 = atan2(s2, c2);
-      angle2 += (angle2 < 0 ? 2 * kPi : 0);
+    Vec3f n2 = Vec3f::Cross(p0, p2);
+    dir = Vec3f::Dot(n2, n);
+    float c2 = Vec3f::Dot(p0, p2);
+    float s2 = std::abs(dir) > kFloatEps ? Vec3f::Norm(n2) * (dir / std::abs(dir)) : 0;
+    float angle2 = atan2(s2, c2);
+    angle2 += (angle2 < 0 ? 2 * kPi : 0);
 
-      if (FloatEqual(angle1, angle2)) {
-        return false;
-      } else {
-        return angle1 < angle2;
-      }
-    });
+    if (FloatEqual(angle1, angle2)) {
+      return false;
+    } else {
+      return angle1 < angle2;
+    }
+  });
 
   /* Construct a triangular division */
   for (decltype(pts_idx.size()) j = 1; j < pts_idx.size() - 1; j++) {
-    faces.emplace_back(pts_idx[0], pts_idx[j], pts_idx[j+1]);
+    faces.emplace_back(pts_idx[0], pts_idx[j], pts_idx[j + 1]);
   }
 }
 
 
-DummyMatrix::DummyMatrix(float* data, uint64_t row, uint64_t col)
-    : rows_(row), cols_(col), data_(data) {}
+DummyMatrix::DummyMatrix(float* data, uint64_t row, uint64_t col) : rows_(row), cols_(col), data_(data) {}
 
 
-ConstDummyMatrix::ConstDummyMatrix(const float *data, uint64_t row, uint64_t col)
+ConstDummyMatrix::ConstDummyMatrix(const float* data, uint64_t row, uint64_t col)
     : DummyMatrix(nullptr, row, col), data(data) {}
 
 
@@ -505,7 +514,7 @@ Vec3<T>& Vec3<T>::operator+=(const Vec3<T>& v) {
 
 
 template <typename T>
-Vec3<T>& Vec3<T>::operator+= (T a) {
+Vec3<T>& Vec3<T>::operator+=(T a) {
   for (auto& i : val_) {
     i += a;
   }
@@ -523,7 +532,7 @@ Vec3<T>& Vec3<T>::operator-=(const Vec3<T>& v) {
 
 
 template <typename T>
-Vec3<T>& Vec3<T>::operator-= (T a) {
+Vec3<T>& Vec3<T>::operator-=(T a) {
   for (auto& i : val_) {
     i -= a;
   }
@@ -532,7 +541,7 @@ Vec3<T>& Vec3<T>::operator-= (T a) {
 
 
 template <typename T>
-Vec3<T>& Vec3<T>::operator/= (T a) {
+Vec3<T>& Vec3<T>::operator/=(T a) {
   for (auto& i : val_) {
     i /= a;
   }
@@ -541,7 +550,7 @@ Vec3<T>& Vec3<T>::operator/= (T a) {
 
 
 template <typename T>
-Vec3<T>& Vec3<T>::operator*= (T a) {
+Vec3<T>& Vec3<T>::operator*=(T a) {
   for (auto& i : val_) {
     i *= a;
   }
@@ -591,12 +600,11 @@ const int* TriangleIdx::idx() const {
 }
 
 
-HalfSpaceSet::HalfSpaceSet(int n, float* a, float* b, float* c, float* d)
-    : n(n), a(a), b(b), c(c), d(d) {}
+HalfSpaceSet::HalfSpaceSet(int n, float* a, float* b, float* c, float* d) : n(n), a(a), b(b), c(c), d(d) {}
 
 
 RandomNumberGenerator::RandomNumberGenerator(uint32_t seed)
-    : generator_{static_cast<std::mt19937::result_type>(seed)} {}
+    : generator_{ static_cast<std::mt19937::result_type>(seed) } {}
 
 
 RandomNumberGeneratorPtr RandomNumberGenerator::instance_ = nullptr;
@@ -631,9 +639,9 @@ float RandomNumberGenerator::GetUniform() {
 
 float RandomNumberGenerator::Get(Distribution dist, float mean, float std) {
   switch (dist) {
-    case Distribution::kUniform :
+    case Distribution::kUniform:
       return (GetUniform() - 0.5f) * 2 * std + mean;
-    case Distribution::kGaussian :
+    case Distribution::kGaussian:
       return GetGaussian() * std + mean;
   }
 }
@@ -693,9 +701,9 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t ste
 void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num) {
   auto rng = RandomNumberGenerator::GetInstance();
   for (decltype(num) i = 0; i < num; i++) {
-    float phi = rng->Get(axis_dist.latitude_dist,
-                         axis_dist.latitude_mean * kDegreeToRad,
-                         axis_dist.latitude_std * kDegreeToRad);
+    float phi = rng->Get(axis_dist.latitude_dist,                 // distribute
+                         axis_dist.latitude_mean * kDegreeToRad,  // mean
+                         axis_dist.latitude_std * kDegreeToRad);  // standard deviation
     if (phi > kPi / 2) {
       phi = kPi - phi;
     }
@@ -706,9 +714,9 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     if (axis_dist.azimuth_dist == Distribution::kUniform) {
       lambda = rng->GetUniform() * 2 * Math::kPi;
     } else {
-      lambda = rng->Get(axis_dist.azimuth_dist,
-                        axis_dist.azimuth_mean * kDegreeToRad,
-                        axis_dist.azimuth_std * kDegreeToRad);
+      lambda = rng->Get(axis_dist.azimuth_dist,                 // distribution
+                        axis_dist.azimuth_mean * kDegreeToRad,  // mean
+                        axis_dist.azimuth_std * kDegreeToRad);  // standard deviation
     }
 
     data[i * 2 + 0] = lambda;
@@ -729,8 +737,7 @@ void RandomSampler::SampleTriangularPoints(const float* vertexes, float* data, s
     }
 
     for (int j = 0; j < 3; j++) {
-      data[i * 3 + j] = (vertexes[j + 3] - vertexes[j]) * a +
-                        (vertexes[j + 6] - vertexes[j]) * b + vertexes[j];
+      data[i * 3 + j] = (vertexes[j + 3] - vertexes[j]) * a + (vertexes[j + 6] - vertexes[j]) * b + vertexes[j];
     }
   }
 }
@@ -762,10 +769,8 @@ int RandomSampler::SampleInt(int max) {
 
 
 AxisDistribution::AxisDistribution()
-  : latitude_dist(Math::Distribution::kUniform),
-    azimuth_dist(Math::Distribution::kUniform),
-    roll_dist(Math::Distribution::kUniform),
-    latitude_mean(0), azimuth_mean(0), roll_mean(0),
-    latitude_std(0), azimuth_std(0), roll_std(0) {}
+    : latitude_dist(Math::Distribution::kUniform), azimuth_dist(Math::Distribution::kUniform),
+      roll_dist(Math::Distribution::kUniform), latitude_mean(0), azimuth_mean(0), roll_mean(0), latitude_std(0),
+      azimuth_std(0), roll_std(0) {}
 
-}   // namespace IceHalo
+}  // namespace IceHalo

@@ -1,7 +1,7 @@
 #include "files.h"
 
-#include <cstdio>
 #include <algorithm>
+#include <cstdio>
 
 
 namespace IceHalo {
@@ -36,14 +36,10 @@ std::string PathJoin(const std::string& p1, const std::string& p2) {
 }
 
 
-File::File(const char* filename)
-    : file_(nullptr), file_opened_(false),
-      path_(filename) {}
+File::File(const char* filename) : file_(nullptr), file_opened_(false), path_(filename) {}
 
 
-File::File(const char* path, const char* filename)
-    : file_(nullptr), file_opened_(false),
-      path_(path) {
+File::File(const char* path, const char* filename) : file_(nullptr), file_opened_(false), path_(path) {
   path_ /= filename;
 }
 

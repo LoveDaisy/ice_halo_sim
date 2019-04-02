@@ -1,23 +1,23 @@
 #include "optics.h"
-#include "mymath.h"
-#include "context.h"
-#include "threadingpool.h"
 
-#include <limits>
-#include <cmath>
-#include <algorithm>
-
-#include <xmmintrin.h>
-#include <smmintrin.h>
 #include <immintrin.h>
+#include <smmintrin.h>
+#include <xmmintrin.h>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+#include "context.h"
+#include "mymath.h"
+#include "threadingpool.h"
 
 
 namespace IceHalo {
 
 RaySegment::RaySegment()
-    : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root_ctx(nullptr),
-      pt(0, 0, 0), dir(0, 0, 0), w(0), face_id(-1),
-      is_finished(false) {}
+    : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root_ctx(nullptr), pt(0, 0, 0), dir(0, 0, 0), w(0),
+      face_id(-1), is_finished(false) {}
 
 
 void RaySegment::ResetWith(const float* pt, const float* dir, float w, int face_id) {
@@ -35,9 +35,9 @@ void RaySegment::ResetWith(const float* pt, const float* dir, float w, int face_
 }
 
 
-void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
-                        const float* dir_in, const int* face_id_in, const float* w_in,
-                        float* dir_out, float* w_out) {
+void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,        // input
+                        const float* dir_in, const int* face_id_in, const float* w_in,  // input
+                        float* dir_out, float* w_out) {                                 // output
   auto face_norm = crystal->GetFaceNorm();
 
   for (decltype(num) i = 0; i < num; i++) {
@@ -57,16 +57,17 @@ void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
     float* tmp_dir_refraction = dir_out + (i * 2 + 1) * 3;
     for (int j = 0; j < 3; j++) {
       tmp_dir_reflection[j] = tmp_dir[j] - 2 * cos_theta * tmp_norm[j];  // Reflection
-      tmp_dir_refraction[j] = is_total_reflected ? tmp_dir_reflection[j] :
-                              rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];  // Refraction
+      tmp_dir_refraction[j] = is_total_reflected ?
+                                  tmp_dir_reflection[j] :
+                                  rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];  // Refraction
     }
   }
 }
 
 
-void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,
-                       const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,
-                       float* pt_out, int* face_id_out) {
+void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,                                     // input
+                       const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
+                       float* pt_out, int* face_id_out) {                                                  // output
   for (decltype(num) i = 0; i < num; i++) {
     face_id_out[i] = -1;
   }
@@ -80,13 +81,13 @@ void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,
       continue;
     }
 #if defined(__SSE4_1__) && defined(__AVX__)
-    IntersectLineWithTrianglesSimd(pt_in + i / 2 * 3, dir_in + i * 3, face_id_in[i / 2], total_faces,
-                                   face_bases, face_vertexes, face_norms,
-                                   pt_out + i * 3, face_id_out + i);
+    IntersectLineWithTrianglesSimd(pt_in + i / 2 * 3, dir_in + i * 3, face_id_in[i / 2], total_faces,  //
+                                   face_bases, face_vertexes, face_norms,                              //
+                                   pt_out + i * 3, face_id_out + i);                                   // output
 #else
-    IntersectLineWithTriangles(pt_in + i / 2 * 3, dir_in + i * 3, face_id_in[i / 2], total_faces,
-                               face_bases, face_vertexes, face_norms,
-                               pt_out + i * 3, face_id_out + i);
+    IntersectLineWithTriangles(pt_in + i / 2 * 3, dir_in + i * 3, face_id_in[i / 2], total_faces,  //
+                               face_bases, face_vertexes, face_norms,                              //
+                               pt_out + i * 3, face_id_out + i);                                   // output
 #endif
   }
 }
@@ -107,9 +108,12 @@ float Optics::GetReflectRatio(float cos_angle, float rr) {
 }
 
 
-void Optics::IntersectLineWithTriangles(const float* pt, const float* dir, int face_id, int face_num,
-                                        const float* face_bases, const float* face_points, const float* face_norm,
-                                        float* p, int* idx) {
+void Optics::IntersectLineWithTriangles(const float* pt, const float* dir,  // input
+                                        int face_id, int face_num,          // input
+                                        const float* face_bases,            // input (pt1 - pt2, pt1 - pt3)
+                                        const float* face_points,           // input (pt1, pt2, pt3)
+                                        const float* face_norm,             // input
+                                        float* p, int* idx) {               // output
   float min_t = std::numeric_limits<float>::max();
   const float* norm_in = face_norm + face_id * 3;
   float flag_in = Math::Dot3(dir, norm_in);
@@ -130,8 +134,7 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir, int f
     float ff23 = curr_face_base[2] * curr_face_base[3];
     float ff24 = curr_face_base[2] * curr_face_base[4];
 
-    float c = dir[0] * ff15 + dir[1] * ff23 + dir[2] * ff04 -
-              dir[0] * ff24 - dir[1] * ff05 - dir[2] * ff13;
+    float c = dir[0] * ff15 + dir[1] * ff23 + dir[2] * ff04 - dir[0] * ff24 - dir[1] * ff05 - dir[2] * ff13;
     if (Math::FloatEqualZero(c)) {
       continue;
     }
@@ -139,8 +142,7 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir, int f
 
     float a = ff15 * curr_face_point[0] + ff23 * curr_face_point[1] + ff04 * curr_face_point[2] -
               ff24 * curr_face_point[0] - ff05 * curr_face_point[1] - ff13 * curr_face_point[2];
-    float b = pt[0] * ff15 + pt[1] * ff23 + pt[2] * ff04 -
-              pt[0] * ff24 - pt[1] * ff05 - pt[2] * ff13;
+    float b = pt[0] * ff15 + pt[1] * ff23 + pt[2] * ff04 - pt[0] * ff24 - pt[1] * ff05 - pt[2] * ff13;
     float t = (a - b) / c;
     if (t <= Math::kFloatEps) {
       continue;
@@ -153,8 +155,8 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir, int f
     float dp20 = dir[2] * pt[0];
     float dp21 = dir[2] * pt[1];
 
-    a = dp12 * curr_face_base[3] + dp20 * curr_face_base[4] + dp01 * curr_face_base[5] -
-        dp21 * curr_face_base[3] - dp02 * curr_face_base[4] - dp10 * curr_face_base[5];
+    a = dp12 * curr_face_base[3] + dp20 * curr_face_base[4] + dp01 * curr_face_base[5] - dp21 * curr_face_base[3] -
+        dp02 * curr_face_base[4] - dp10 * curr_face_base[5];
     b = dir[0] * curr_face_base[4] * curr_face_point[2] + dir[1] * curr_face_base[5] * curr_face_point[0] +
         dir[2] * curr_face_base[3] * curr_face_point[1] - dir[0] * curr_face_base[5] * curr_face_point[1] -
         dir[1] * curr_face_base[3] * curr_face_point[2] - dir[2] * curr_face_base[4] * curr_face_point[0];
@@ -163,8 +165,8 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir, int f
       continue;
     }
 
-    a = dp12 * curr_face_base[0] + dp20 * curr_face_base[1] + dp01 * curr_face_base[2] -
-        dp21 * curr_face_base[0] - dp02 * curr_face_base[1] - dp10 * curr_face_base[2];
+    a = dp12 * curr_face_base[0] + dp20 * curr_face_base[1] + dp01 * curr_face_base[2] - dp21 * curr_face_base[0] -
+        dp02 * curr_face_base[1] - dp10 * curr_face_base[2];
     b = dir[0] * curr_face_base[1] * curr_face_point[2] + dir[1] * curr_face_base[2] * curr_face_point[0] +
         dir[2] * curr_face_base[0] * curr_face_point[1] - dir[0] * curr_face_base[2] * curr_face_point[1] -
         dir[1] * curr_face_base[0] * curr_face_point[2] - dir[2] * curr_face_base[1] * curr_face_point[0];
@@ -181,9 +183,12 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir, int f
 }
 
 
-void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir, int face_id, int face_num,
-                                            const float* face_bases, const float* face_points, const float* face_norm,
-                                            float* p, int* idx) {
+void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir,  // input
+                                            int face_id, int face_num,          // input
+                                            const float* face_bases,            // input
+                                            const float* face_points,           // input
+                                            const float* face_norm,             // input
+                                            float* p, int* idx) {               // output
   float min_t = std::numeric_limits<float>::max();
   const float* norm_in = face_norm + face_id * 3;
 
@@ -296,9 +301,10 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir, i
      * fp : 1   0   2   |   0   2   1
      */
     A = _mm_dp_ps(CURR_FB1, SUB_PERM_DP, 0x71);
-    B = _mm_dp_ps(DIR, _mm_sub_ps(
-      _mm_mul_ps(_mm_permute_ps(CURR_FB1, 0xC9), _mm_permute_ps(CURR_FACE_POINT, 0xD2)),
-      _mm_mul_ps(_mm_permute_ps(CURR_FB1, 0xD2), _mm_permute_ps(CURR_FACE_POINT, 0xC9))), 0x71);
+    B = _mm_dp_ps(DIR,
+                  _mm_sub_ps(_mm_mul_ps(_mm_permute_ps(CURR_FB1, 0xC9), _mm_permute_ps(CURR_FACE_POINT, 0xD2)),
+                             _mm_mul_ps(_mm_permute_ps(CURR_FB1, 0xD2), _mm_permute_ps(CURR_FACE_POINT, 0xC9))),
+                  0x71);
     float alpha = (A[0] + B[0]) / C[0];
     if (alpha < 0 || alpha > 1) {
       continue;
@@ -323,9 +329,10 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir, i
      * fp : 1   0   2   |   0   2   1
      */
     A = _mm_dp_ps(CURR_FB0, SUB_PERM_DP, 0x71);
-    B = _mm_dp_ps(DIR, _mm_sub_ps(
-      _mm_mul_ps(_mm_permute_ps(CURR_FB0, 0xC9), _mm_permute_ps(CURR_FACE_POINT, 0xD2)),
-      _mm_mul_ps(_mm_permute_ps(CURR_FB0, 0xD2), _mm_permute_ps(CURR_FACE_POINT, 0xC9))), 0x71);
+    B = _mm_dp_ps(DIR,
+                  _mm_sub_ps(_mm_mul_ps(_mm_permute_ps(CURR_FB0, 0xC9), _mm_permute_ps(CURR_FACE_POINT, 0xD2)),
+                             _mm_mul_ps(_mm_permute_ps(CURR_FB0, 0xD2), _mm_permute_ps(CURR_FACE_POINT, 0xC9))),
+                  0x71);
     float beta = -(A[0] + B[0]) / C[0];
 
     if (t < min_t && alpha >= 0 && beta >= 0 && alpha + beta <= 1) {
@@ -337,7 +344,6 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir, i
     }
   }
 }
-
 
 
 constexpr float IceRefractiveIndex::kCoefAvr[];
@@ -357,7 +363,7 @@ float IceRefractiveIndex::Get(float wave_length) {
 
   wave_length /= 1e3;
 
-  float n  = 1.0f;
+  float n = 1.0f;
   n += kCoefAvr[0] / (1 - kCoefAvr[2] * 1e-2f / wave_length / wave_length);
   n += kCoefAvr[1] / (1 - kCoefAvr[3] * 1e2f / wave_length / wave_length);
 
@@ -421,4 +427,4 @@ void RaySegmentPool::Clear() {
 }
 
 
-}   // namespace IceHalo
+}  // namespace IceHalo

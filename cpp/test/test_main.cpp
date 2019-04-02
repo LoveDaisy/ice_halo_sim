@@ -1,10 +1,10 @@
-#include "gtest/gtest.h"
-
 #include <string>
+
+#include "gtest/gtest.h"
 
 std::string config_file_name;
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
 
   if (argc > 1) {

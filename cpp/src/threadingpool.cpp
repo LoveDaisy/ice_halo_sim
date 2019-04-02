@@ -16,7 +16,7 @@ ThreadingPool* ThreadingPool::GetInstance() {
 #ifdef MULTI_THREAD
         instance_ = new ThreadingPool(kHardwareConcurrency);
 #else
-        instance_ = new ThreadingPool();    // Default use single thread.
+        instance_ = new ThreadingPool();  // Default use single thread.
 #endif
       }
     }
@@ -25,9 +25,7 @@ ThreadingPool* ThreadingPool::GetInstance() {
 }
 
 
-ThreadingPool::ThreadingPool(size_t num)
-    : thread_num_(num), alive_(false),
-      running_jobs_(0), alive_threads_(0) {
+ThreadingPool::ThreadingPool(size_t num) : thread_num_(num), alive_(false), running_jobs_(0), alive_threads_(0) {
   Start();
 }
 
@@ -48,7 +46,6 @@ void ThreadingPool::Start() {
 }
 
 
-
 void ThreadingPool::AddJob(std::function<void()> job) {
   if (!alive_) {
     return;
@@ -64,7 +61,7 @@ void ThreadingPool::AddJob(std::function<void()> job) {
 
 void ThreadingPool::WaitFinish() {
   std::unique_lock<std::mutex> lock(task_mutex_);
-  task_condition_.wait(lock, [=]{ return !TaskRunning(); });
+  task_condition_.wait(lock, [=] { return !TaskRunning(); });
 }
 
 
@@ -98,7 +95,7 @@ void ThreadingPool::WorkingFunction() {
       break;
     } else {
       task_condition_.notify_one();
-      queue_condition_.wait(lock, [=]{ return !this->queue_.empty() || !this->alive_; });
+      queue_condition_.wait(lock, [=] { return !this->queue_.empty() || !this->alive_; });
     }
   }
 }

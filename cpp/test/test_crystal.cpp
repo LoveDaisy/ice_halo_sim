@@ -1,15 +1,14 @@
-#include "crystal.h"
-#include "mymath.h"
-
-#include "gtest/gtest.h"
-
-#include <vector>
 #include <algorithm>
+#include <vector>
+
+#include "crystal.h"
+#include "gtest/gtest.h"
+#include "mymath.h"
 
 namespace {
 
 class CrystalTest : public ::testing::Test {
-protected:
+ protected:
   void checkVertex(const std::vector<IceHalo::Math::Vec3f>& vtx1, const std::vector<IceHalo::Math::Vec3f>& vtx2) {
     ASSERT_EQ(vtx1.size(), vtx2.size());
     for (decltype(vtx1.size()) i = 0; i < vtx1.size(); i++) {
@@ -78,7 +77,6 @@ protected:
       EXPECT_NE(findIter, v1.end());
     }
   }
-
 };
 
 
@@ -116,6 +114,7 @@ TEST_F(CrystalTest, HexPrismVertex) {
   float h = 1.2f;
   float k = kSqrt3 / 2;
 
+  // clang-format off
   std::vector<IceHalo::Math::Vec3f> pts0 = {
     {  k,    -0.5f,  h },
     {  k,     0.5f,  h },
@@ -130,14 +129,16 @@ TEST_F(CrystalTest, HexPrismVertex) {
     { -k,    -0.5f, -h },
     {  0.0f, -1.0f, -h },
   };
-  std::vector<int> faceId0 = {
+  // clang-format on
+
+  std::vector<int> face_number_map0 = {
     1, 1, 1, 1, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 2, 2, 2, 2,
   };
 
   auto c = IceHalo::Crystal::CreateHexPrism(h);
   EXPECT_EQ(c->GetVertexes().size(), 12ul);
   checkVertex(pts0, c->GetVertexes());
-  checkFaceId(faceId0, c->GetFaceNumberMap());
+  checkFaceId(face_number_map0, c->GetFaceNumberMap());
 }
 
 
@@ -153,6 +154,7 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
   float r3 = 1.0f - h3;
   float k = kSqrt3 / 2;
 
+  // clang-format off
   std::vector<IceHalo::Math::Vec3f> pts0 = {
     {     k * r1, -0.5f * r1,  h2 + h1 * H },
     {     k * r1,  0.5f * r1,  h2 + h1 * H },
@@ -179,28 +181,30 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
     {    -k * r3, -0.5f * r3, -h2 - h3 * H },
     {  0.0f * r3, -1.0f * r3, -h2 - h3 * H },
   };
-  std::vector<int> faceId0 = {
-    1, 1, 1, 1,
-    13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18,
-    3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8,
-    23, 23, 24, 24, 25, 25, 26, 26, 27, 27, 28, 28,
-    2, 2, 2, 2,
+  // clang-format on
+
+  std::vector<int> face_number_map0 = {
+    1,  1,  1,  1,                                   // top
+    13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18,  // upper pyramidal
+    3,  3,  4,  4,  5,  5,  6,  6,  7,  7,  8,  8,   // prism
+    23, 23, 24, 24, 25, 25, 26, 26, 27, 27, 28, 28,  // lower pyramidal
+    2,  2,  2,  2,                                   // bottom
   };
 
   auto c = IceHalo::Crystal::CreateHexPyramid(h1, h2, h3);
   EXPECT_EQ(c->GetVertexes().size(), 24ul);
   checkVertex(pts0, c->GetVertexes());
-  checkFaceId(faceId0, c->GetFaceNumberMap());
+  checkFaceId(face_number_map0, c->GetFaceNumberMap());
 
   c = IceHalo::Crystal::CreateHexPyramid(1, 1, h1, h2, h3);
   EXPECT_EQ(c->GetVertexes().size(), 24ul);
   checkVertex(pts0, c->GetVertexes());
-  checkFaceId(faceId0, c->GetFaceNumberMap());
+  checkFaceId(face_number_map0, c->GetFaceNumberMap());
 
   c = IceHalo::Crystal::CreateHexPyramid(1, 1, 1, 1, h1, h2, h3);
   EXPECT_EQ(c->GetVertexes().size(), 24ul);
   checkVertex(pts0, c->GetVertexes());
-  checkFaceId(faceId0, c->GetFaceNumberMap());
+  checkFaceId(face_number_map0, c->GetFaceNumberMap());
 }
 
 
@@ -242,6 +246,7 @@ TEST_F(CrystalTest, IrregularHexPrismVertex1) {
   float h = 1.2f;
   float dist[6] = { 1.0f, 1.0f, 1.5f, 1.0f, 2.5f, 1.0f };
 
+  // clang-format off
   std::vector<IceHalo::Math::Vec3f> pts0 {
     {  kSqrt3 / 2, -0.5f,  h },
     {  kSqrt3 / 2,  0.5f,  h },
@@ -263,7 +268,7 @@ TEST_F(CrystalTest, IrregularHexPrismVertex1) {
     { 4, 5, 0 }, { 4, 9, 5 },
     { 5, 7, 6 }, { 5, 8, 7 }, { 5, 9, 8 },
   };
-  std::vector<int> faceIdMap0 {
+  std::vector<int> face_number_map0 {
     1, 1, 1,
     3, 3,
     4, 4,
@@ -272,8 +277,9 @@ TEST_F(CrystalTest, IrregularHexPrismVertex1) {
     8, 8,
     2, 2, 2,
   };
+  // clang-format on
 
-  auto c1 = IceHalo::Crystal::CreateCustomCrystal(pts0, faces0, faceIdMap0);
+  auto c1 = IceHalo::Crystal::CreateCustomCrystal(pts0, faces0, face_number_map0);
   auto c2 = IceHalo::Crystal::CreateIrregularHexPrism(dist, h);
   EXPECT_EQ(c1->TotalVertexes(), c2->TotalVertexes());
   EXPECT_EQ(c1->TotalFaces(), c2->TotalFaces());

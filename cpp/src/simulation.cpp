@@ -1,14 +1,15 @@
 #include "simulation.h"
+
+#include <cstdio>
+#include <stack>
+
 #include "mymath.h"
 #include "threadingpool.h"
-
-#include <stack>
-#include <cstdio>
 
 namespace IceHalo {
 
 SimulationBufferData::SimulationBufferData()
-    : pt{nullptr}, dir{nullptr}, w{nullptr}, face_id{nullptr}, ray_seg{nullptr}, ray_num(0) {}
+    : pt{ nullptr }, dir{ nullptr }, w{ nullptr }, face_id{ nullptr }, ray_seg{ nullptr }, ray_num(0) {}
 
 
 SimulationBufferData::~SimulationBufferData() {
@@ -126,9 +127,7 @@ void EnterRayData::DeleteBuffer() {
 
 
 Simulator::Simulator(const SimulationContextPtr& context)
-    : context_(context),
-      total_ray_num_(0), active_ray_num_(0), buffer_size_(0),
-      enter_ray_offset_(0) {}
+    : context_(context), total_ray_num_(0), active_ray_num_(0), buffer_size_(0), enter_ray_offset_(0) {}
 
 
 // Start simulation
@@ -166,7 +165,7 @@ void Simulator::Start() {
     }
 
     if (it != multi_scatter_ctx.end() - 1) {
-      RestoreResultRays(ms_ctx.prob);    // total_ray_num_ is updated.
+      RestoreResultRays(ms_ctx.prob);  // total_ray_num_ is updated.
     }
     enter_ray_offset_ = 0;
   }
@@ -180,7 +179,7 @@ void Simulator::Start() {
 // Init sun rays, and fill into dir[1]. They will be rotated and fill into dir[0] in InitEntryRays().
 // In world frame.
 void Simulator::InitSunRays() {
-  float sun_r = context_->GetSunDiameter() / 2;   // In degree
+  float sun_r = context_->GetSunDiameter() / 2;  // In degree
   const float* sun_ray_dir = context_->GetSunRayDir();
   auto sampler = Math::RandomSampler::GetInstance();
   if (enter_ray_data_.ray_num < total_ray_num_) {
@@ -232,8 +231,8 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
     auto prev_r = enter_ray_data_.ray_seg[enter_ray_offset_ + i];
     buffer_.w[0][i] = prev_r ? prev_r->w : 1.0f;
 
-    auto r = ray_pool->GetRaySegment(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i],
-                                     buffer_.face_id[0][i]);
+    auto r =
+        ray_pool->GetRaySegment(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i], buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
     r->root_ctx = new RayContext(r, ctx, axis_rot);
     r->root_ctx->prev_ray_segment = prev_r;
@@ -326,17 +325,17 @@ void Simulator::TraceRays(const CrystalPtr& crystal, const RayPathFilter& filter
     for (decltype(active_ray_num_) j = 0; j < active_ray_num_; j += step) {
       decltype(active_ray_num_) current_num = std::min(active_ray_num_ - j, step);
       pool->AddJob([=] {
-        Optics::HitSurface(crystal, n, current_num,
-                           buffer_.dir[0] + j * 3, buffer_.face_id[0] + j, buffer_.w[0] + j,
-                           buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2);
-        Optics::Propagate(crystal, current_num * 2,
-                          buffer_.pt[0] + j * 3, buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2, buffer_.face_id[0] + j,
+        Optics::HitSurface(crystal, n, current_num,                                              //
+                           buffer_.dir[0] + j * 3, buffer_.face_id[0] + j, buffer_.w[0] + j,     //
+                           buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2);                        // output
+        Optics::Propagate(crystal, current_num * 2, buffer_.pt[0] + j * 3,                       //
+                          buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2, buffer_.face_id[0] + j,  //
                           buffer_.pt[1] + j * 6, buffer_.face_id[1] + j * 2);
       });
     }
     pool->WaitFinish();
     StoreRaySegments(crystal, filter);
-    RefreshBuffer();    // active_ray_num_ is updated.
+    RefreshBuffer();  // active_ray_num_ is updated.
   }
 }
 
@@ -345,12 +344,12 @@ void Simulator::TraceRays(const CrystalPtr& crystal, const RayPathFilter& filter
 void Simulator::StoreRaySegments(const CrystalPtr& crystal, const RayPathFilter& filter) {
   auto ray_pool = RaySegmentPool::GetInstance();
   for (size_t i = 0; i < active_ray_num_ * 2; i++) {
-    if (buffer_.w[1][i] <= 0) {   // Refractive rays in total reflection case
+    if (buffer_.w[1][i] <= 0) {  // Refractive rays in total reflection case
       continue;
     }
 
-    auto r = ray_pool->GetRaySegment(buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3,
-                                     buffer_.w[1][i], buffer_.face_id[0][i / 2]);
+    auto r = ray_pool->GetRaySegment(buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3, buffer_.w[1][i],
+                                     buffer_.face_id[0][i / 2]);
     if (buffer_.face_id[1][i] < 0) {
       r->is_finished = true;
     }
@@ -400,14 +399,15 @@ const std::vector<RaySegment*>& Simulator::GetFinalRaySegments() const {
 
 void Simulator::SaveFinalDirections(const char* filename) {
   File file(context_->GetDataDirectory().c_str(), filename);
-  if (!file.Open(OpenMode::kWrite | OpenMode::kBinary)) return;
+  if (!file.Open(OpenMode::kWrite | OpenMode::kBinary))
+    return;
 
   file.Write(context_->GetCurrentWavelength());
   file.Write(context_->GetCurrentWavelengthWeight());
 
   auto ray_num = final_ray_segments_.size();
   size_t idx = 0;
-  auto* data = new float[ray_num * 4];       // dx, dy, dz, w
+  auto* data = new float[ray_num * 4];  // dx, dy, dz, w
 
   float* curr_data = data;
   for (const auto& r : final_ray_segments_) {
@@ -439,10 +439,10 @@ void Simulator::PrintRayInfo() {
       while (!s.empty()) {
         p = s.top();
         s.pop();
-        std::printf("%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n",
-                    p->pt.x(), p->pt.y(), p->pt.z(),
-                    p->dir.x(), p->dir.y(), p->dir.z(),
-                    p->w);
+        std::printf("%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n",  //
+                    p->pt.x(), p->pt.y(), p->pt.z(),                // point
+                    p->dir.x(), p->dir.y(), p->dir.z(),             // direction
+                    p->w);                                          // weight
       }
     }
   }

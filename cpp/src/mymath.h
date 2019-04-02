@@ -1,11 +1,11 @@
 #ifndef SRC_MYMATH_H_
 #define SRC_MYMATH_H_
 
-#include <vector>
 #include <cmath>
-#include <random>
 #include <memory>
 #include <mutex>
+#include <random>
+#include <vector>
 
 namespace IceHalo {
 
@@ -26,35 +26,37 @@ constexpr float kRadToDegree = 180.0f / kPi;
 int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
 
 class DummyMatrix {
-public:
-friend int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
-public:
+ public:
+  friend int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
+
+ public:
   DummyMatrix(float* data, uint64_t row, uint64_t col);
   ~DummyMatrix() = default;
 
   const uint64_t rows_;
   const uint64_t cols_;
 
-private:
+ private:
   float* data_;
 };
 
 
 class ConstDummyMatrix : public DummyMatrix {
-public:
-friend int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
-public:
+ public:
+  friend int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
+
+ public:
   ConstDummyMatrix(const float* data, uint64_t row, uint64_t col);
   ~ConstDummyMatrix() = default;
 
-private:
+ private:
   const float* data;
 };
 
 
 template <typename T>
 class Vec3 {
-public:
+ public:
   explicit Vec3(const T* data);
   Vec3(T x, T y, T z);
   Vec3(const Vec3<T>& v);
@@ -74,11 +76,11 @@ public:
   void Normalize();
 
   Vec3<T>& operator+=(const Vec3<T>& v);
-  Vec3<T>& operator+= (T a);
+  Vec3<T>& operator+=(T a);
   Vec3<T>& operator-=(const Vec3<T>& v);
-  Vec3<T>& operator-= (T a);
-  Vec3<T>& operator/= (T a);
-  Vec3<T>& operator*= (T a);
+  Vec3<T>& operator-=(T a);
+  Vec3<T>& operator/=(T a);
+  Vec3<T>& operator*=(T a);
 
 
   static Vec3<T> Normalized(const Vec3<T>& v);
@@ -89,7 +91,7 @@ public:
 
   static Vec3<T> FromTo(const Vec3<T>& v1, const Vec3<T>& v2);
 
-private:
+ private:
   T val_[3];
 };
 
@@ -99,12 +101,12 @@ using Vec3f = Vec3<float>;
 
 
 class TriangleIdx {
-public:
+ public:
   TriangleIdx(int id1, int id2, int id3);
 
   const int* idx() const;
 
-private:
+ private:
   int idx_[3];
 };
 
@@ -114,7 +116,7 @@ private:
  *    a * x + b * y + c * z + d <= 0
  */
 class HalfSpaceSet {
-public:
+ public:
   HalfSpaceSet(int n, float* a, float* b, float* c, float* d);
 
   int n;
@@ -132,14 +134,14 @@ enum class Distribution {
 
 
 class RandomNumberGenerator {
-public:
+ public:
   float GetGaussian();
   float GetUniform();
   float Get(Distribution dist, float mean, float std);
 
   static std::shared_ptr<RandomNumberGenerator> GetInstance();
 
-private:
+ private:
   explicit RandomNumberGenerator(uint32_t seed);
 
   std::mt19937 generator_;
@@ -155,7 +157,7 @@ using RandomNumberGeneratorPtr = std::shared_ptr<RandomNumberGenerator>;
 
 
 class RandomSampler {
-public:
+ public:
   /*! @brief Generate points distributed uniformly on sphere around a give point, in Cartesian form.
    *
    * @param dir the given point, xyz.
@@ -205,7 +207,7 @@ public:
 
   static std::shared_ptr<RandomSampler> GetInstance();
 
-private:
+ private:
   RandomSampler() = default;
 
   static std::shared_ptr<RandomSampler> instance_;
@@ -227,8 +229,8 @@ void Normalized3(const float* vec, float* vec_out);
 void Vec3FromTo(const float* vec1, const float* vec2, float* vec);
 
 void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num = 1);
-void RotateZWithDataStep(const float* lon_lat_roll, const float* input_vec, float* output_vec,
-                         size_t input_step, size_t output_step, size_t data_num = 1);
+void RotateZWithDataStep(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t input_step,
+                         size_t output_step, size_t data_num = 1);
 void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num = 1);
 
 std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss);
@@ -236,10 +238,10 @@ void SortAndRemoveDuplicate(std::vector<Vec3f>* pts);
 std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& n0, float d0);
 void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Math::Vec3f>& pts,
                           std::vector<Math::TriangleIdx>& faces);
-void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,
-                             std::vector<int>& pts_idx, std::vector<TriangleIdx>& faces);
+void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n, std::vector<int>& pts_idx,
+                             std::vector<TriangleIdx>& faces);
 
-}   // namespace Math
+}  // namespace Math
 
 
 struct AxisDistribution {
@@ -256,6 +258,6 @@ struct AxisDistribution {
   float roll_std;
 };
 
-}   // namespace IceHalo
+}  // namespace IceHalo
 
 #endif  // SRC_MYMATH_H_

@@ -1,23 +1,24 @@
-#include "optics.h"
 #include "render.h"
-#include "mymath.h"
-#include "context.h"
-#include "threadingpool.h"
 
-#include <limits>
-#include <cstring>
 #include <cmath>
+#include <cstring>
+#include <limits>
+
+#include "context.h"
+#include "mymath.h"
+#include "optics.h"
+#include "threadingpool.h"
 
 
 namespace IceHalo {
 
-void EqualAreaFishEye(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
-                      float hov,                 // Half field of view.
-                      size_t data_number,        // Data number
-                      const float* dir,          // Ray directions, [x, y, z]
-                      int img_wid, int img_hei,  // Image size
-                      int* img_xy,               // Image coordinates
-                      VisibleSemiSphere visible_semi_sphere) {
+void EqualAreaFishEye(const float* cam_rot,                     // Camera rotation. [lon, lat, roll]
+                      float hov,                                // Half field of view.
+                      size_t data_number,                       // Data number
+                      const float* dir,                         // Ray directions, [x, y, z]
+                      int img_wid, int img_hei,                 // Image size
+                      int* img_xy,                              // Image coordinates
+                      VisibleSemiSphere visible_semi_sphere) {  // Which semi-sphere can be visible
   float img_r = std::max(img_wid, img_hei) / 2.0f;
   auto* dir_copy = new float[data_number * 3];
   float cam_rot_copy[3];
@@ -57,13 +58,13 @@ void EqualAreaFishEye(const float* cam_rot,      // Camera rotation. [lon, lat, 
 }
 
 
-void DualEqualAreaFishEye(const float* /* cam_rot */,     // Not used
-                          float  /* hov */,               // Not used
-                          size_t data_number,             // Data number
-                          const float* dir,               // Ray directions, [x, y, z]
-                          int img_wid, int img_hei,       // Image size
-                          int* img_xy,                    // Image coordinates
-                          VisibleSemiSphere /* visible_semi_sphere */) {
+void DualEqualAreaFishEye(const float* /* cam_rot */,                     // Not used
+                          float /* hov */,                                // Not used
+                          size_t data_number,                             // Data number
+                          const float* dir,                               // Ray directions, [x, y, z]
+                          int img_wid, int img_hei,                       // Image size
+                          int* img_xy,                                    // Image coordinates
+                          VisibleSemiSphere /* visible_semi_sphere */) {  // Not used
   float img_r = std::min(img_wid / 2, img_hei) / 2.0f;
   float proj_r = img_r / 2.0f / std::sin(45.0f * Math::kDegreeToRad);
 
@@ -97,17 +98,17 @@ void DualEqualAreaFishEye(const float* /* cam_rot */,     // Not used
 }
 
 
-void DualEquidistantFishEye(const float* /* cam_rot */,     // Not used
-                            float  /* hov */,               // Not used
-                            size_t data_number,             // Data number
-                            const float* dir,               // Ray directions, [x, y, z]
-                            int img_wid, int img_hei,       // Image size
-                            int* img_xy,                    // Image coordinates
-                            VisibleSemiSphere /* visible_semi_sphere */) {
+void DualEquidistantFishEye(const float* /* cam_rot */,                     // Not used
+                            float /* hov */,                                // Not used
+                            size_t data_number,                             // Data number
+                            const float* dir,                               // Ray directions, [x, y, z]
+                            int img_wid, int img_hei,                       // Image size
+                            int* img_xy,                                    // Image coordinates
+                            VisibleSemiSphere /* visible_semi_sphere */) {  // Not used
   float img_r = std::min(img_wid / 2, img_hei) / 2.0f;
 
   auto* dir_copy = new float[data_number * 3];
-  float cam_rot_copy[3] = {90.0f, 89.999f, 0.0f};
+  float cam_rot_copy[3] = { 90.0f, 89.999f, 0.0f };
   cam_rot_copy[0] *= -1;
   cam_rot_copy[1] *= -1;
   for (auto& i : cam_rot_copy) {
@@ -136,13 +137,13 @@ void DualEquidistantFishEye(const float* /* cam_rot */,     // Not used
 }
 
 
-void RectLinear(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
-                float hov,                 // Half field of view.
-                size_t data_number,        // Data number
-                const float* dir,          // Ray directions, [x, y, z]
-                int img_wid, int img_hei,  // Image size
-                int* img_xy,               // Image coordinates
-                VisibleSemiSphere visible_semi_sphere) {
+void RectLinear(const float* cam_rot,                     // Camera rotation. [lon, lat, roll]
+                float hov,                                // Half field of view.
+                size_t data_number,                       // Data number
+                const float* dir,                         // Ray directions, [x, y, z]
+                int img_wid, int img_hei,                 // Image size
+                int* img_xy,                              // Image coordinates
+                VisibleSemiSphere visible_semi_sphere) {  // Which semi-sphere can be visible
   auto* dir_copy = new float[data_number * 3];
   float cam_rot_copy[3];
   std::memcpy(cam_rot_copy, cam_rot, sizeof(float) * 3);
@@ -214,8 +215,7 @@ constexpr float SpectrumRenderer::kCmfY[];
 constexpr float SpectrumRenderer::kCmfZ[];
 
 
-SpectrumRenderer::SpectrumRenderer(const IceHalo::RenderContextPtr& context)
-  : context_(context), total_w_(0) {}
+SpectrumRenderer::SpectrumRenderer(const IceHalo::RenderContextPtr& context) : context_(context), total_w_(0) {}
 
 
 SpectrumRenderer::~SpectrumRenderer() {
@@ -237,7 +237,7 @@ void SpectrumRenderer::LoadData() {
     auto t0 = std::chrono::system_clock::now();
     auto num = LoadDataFromFile(f);
     auto t1 = std::chrono::system_clock::now();
-    std::chrono::duration<float, std::ratio<1, 1000> > diff = t1 - t0;
+    std::chrono::duration<float, std::ratio<1, 1000>> diff = t1 - t0;
     std::printf(" Loading data (%d/%zu): %.2fms; total %d pts\n", i + 1, files.size(), diff.count(), num);
     i++;
   }
@@ -254,9 +254,7 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
   auto& pf = projection_functions[projection_type];
 
   auto wavelength = static_cast<int>(wl);
-  if (wavelength < SpectrumRenderer::kMinWavelength ||
-      wavelength > SpectrumRenderer::kMaxWaveLength ||
-      weight < 0) {
+  if (wavelength < SpectrumRenderer::kMinWavelength || wavelength > SpectrumRenderer::kMaxWaveLength || weight < 0) {
     std::fprintf(stderr, "Wavelength out of range!\n");
     return;
   }
@@ -271,8 +269,8 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
   for (decltype(num) i = 0; i < num; i += step) {
     decltype(num) current_num = std::min(num - i, step);
     threading_pool->AddJob([=] {
-      pf(context_->GetCamRot(), context_->GetFov(), current_num, ray_data + i * 4,
-        img_wid, img_hei, tmp_xy + i * 2, context_->GetVisibleSemiSphere());
+      pf(context_->GetCamRot(), context_->GetFov(), current_num, ray_data + i * 4, img_wid, img_hei, tmp_xy + i * 2,
+         context_->GetVisibleSemiSphere());
     });
   }
   threading_pool->WaitFinish();
@@ -385,8 +383,7 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
 
   auto wavelength = static_cast<int>(read_buffer[0]);
   auto wavelength_weight = read_buffer[1];
-  if (wavelength < SpectrumRenderer::kMinWavelength ||
-      wavelength > SpectrumRenderer::kMaxWaveLength ||
+  if (wavelength < SpectrumRenderer::kMinWavelength || wavelength > SpectrumRenderer::kMaxWaveLength ||
       wavelength_weight < 0) {
     std::fprintf(stderr, "Wavelength out of range!\n");
     file.Close();
@@ -427,9 +424,10 @@ void SpectrumRenderer::GatherSpectrumData(float* wl_data_out, float* sp_data_out
 }
 
 
-void SpectrumRenderer::Rgb(size_t wavelength_number, size_t data_number,
-                           const float* wavelengths, const float* spec_data,
-                           uint8_t* rgb_data) {
+void SpectrumRenderer::Rgb(size_t wavelength_number, size_t data_number,  //
+                           const float* wavelengths,
+                           const float* spec_data,  // spec_data: wavelength_number x data_number
+                           uint8_t* rgb_data) {     // rgb data, data_number x 3
   for (decltype(data_number) i = 0; i < data_number; i++) {
     /* Step 1. Spectrum to XYZ */
     float xyz[3] = { 0 };
@@ -438,7 +436,7 @@ void SpectrumRenderer::Rgb(size_t wavelength_number, size_t data_number,
       if (wl < kMinWavelength || wl > kMaxWaveLength) {
         continue;
       }
-      float v = spec_data[j*data_number + i];
+      float v = spec_data[j * data_number + i];
       xyz[0] += kCmfX[wl - kMinWavelength] * v;
       xyz[1] += kCmfY[wl - kMinWavelength] * v;
       xyz[2] += kCmfZ[wl - kMinWavelength] * v;
@@ -454,8 +452,8 @@ void SpectrumRenderer::Rgb(size_t wavelength_number, size_t data_number,
     for (int j = 0; j < 3; j++) {
       float a = 0, b = 0;
       for (int k = 0; k < 3; k++) {
-        a += -gray[k] * kXyzToRgb[j*3 + k];
-        b += (xyz[k] - gray[k]) * kXyzToRgb[j*3 + k];
+        a += -gray[k] * kXyzToRgb[j * 3 + k];
+        b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
       }
       if (a * b > 0 && a / b < r) {
         r = a / b;
@@ -468,7 +466,7 @@ void SpectrumRenderer::Rgb(size_t wavelength_number, size_t data_number,
     }
     for (int j = 0; j < 3; j++) {
       for (int k = 0; k < 3; k++) {
-        rgb[j] += xyz[k] * kXyzToRgb[j*3 + k];
+        rgb[j] += xyz[k] * kXyzToRgb[j * 3 + k];
       }
       rgb[j] = std::min(std::max(rgb[j], 0.0f), 1.0f);
     }
@@ -482,9 +480,10 @@ void SpectrumRenderer::Rgb(size_t wavelength_number, size_t data_number,
 }
 
 
-void SpectrumRenderer::Gray(size_t wavelength_number, size_t data_number,
-                            const float* wavelengths, const float* spec_data,
-                            uint8_t* rgb_data) {
+void SpectrumRenderer::Gray(size_t wavelength_number, size_t data_number,  //
+                            const float* wavelengths,
+                            const float* spec_data,  // spec_data: wavelength_number x data_number
+                            uint8_t* rgb_data) {     // rgb data, data_number x 3
   for (decltype(data_number) i = 0; i < data_number; i++) {
     /* Step 1. Spectrum to XYZ */
     float xyz[3] = { 0 };
@@ -493,7 +492,7 @@ void SpectrumRenderer::Gray(size_t wavelength_number, size_t data_number,
       if (wl < kMinWavelength || wl > kMaxWaveLength) {
         continue;
       }
-      float v = spec_data[j*data_number + i];
+      float v = spec_data[j * data_number + i];
       xyz[0] += kCmfX[wl - kMinWavelength] * v;
       xyz[1] += kCmfY[wl - kMinWavelength] * v;
       xyz[2] += kCmfZ[wl - kMinWavelength] * v;
@@ -508,7 +507,7 @@ void SpectrumRenderer::Gray(size_t wavelength_number, size_t data_number,
     float rgb[3] = { 0 };
     for (int j = 0; j < 3; j++) {
       for (int k = 0; k < 3; k++) {
-        rgb[j] += gray[k] * kXyzToRgb[j*3 + k];
+        rgb[j] += gray[k] * kXyzToRgb[j * 3 + k];
       }
       rgb[j] = std::min(std::max(rgb[j], 0.0f), 1.0f);
     }
@@ -521,4 +520,4 @@ void SpectrumRenderer::Gray(size_t wavelength_number, size_t data_number,
   }
 }
 
-}   // namespace IceHalo
+}  // namespace IceHalo
