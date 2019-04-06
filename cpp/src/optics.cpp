@@ -373,11 +373,9 @@ float IceRefractiveIndex::Get(float wave_length) {
 
 RaySegmentPool* RaySegmentPool::instance_ = nullptr;
 
-RaySegmentPool::RaySegmentPool() {
+RaySegmentPool::RaySegmentPool() : current_chunk_id_(0), next_unused_id_(0) {
   auto* raySegPool = new RaySegment[kChunkSize];
   segments_.push_back(raySegPool);
-  next_unused_id_ = 0;
-  current_chunk_id_ = 0;
 }
 
 RaySegmentPool::~RaySegmentPool() {

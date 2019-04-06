@@ -175,7 +175,7 @@ struct CrystalContext {
 
 
 struct RayContext {
-  RayContext(RaySegment* seg, const CrystalContextPtr& crystal_ctx, const float* main_axis_rot);
+  RayContext(RaySegment* seg, CrystalContextPtr  crystal_ctx, const float* main_axis_rot);
 
   RaySegment* first_ray_segment;
   RaySegment* prev_ray_segment;

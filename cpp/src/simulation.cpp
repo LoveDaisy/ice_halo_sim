@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <stack>
+#include <utility>
 
 #include "mymath.h"
 #include "threadingpool.h"
@@ -40,16 +41,16 @@ void SimulationBufferData::DeleteBuffer(int idx) {
 }
 
 
-void SimulationBufferData::Allocate(size_t ray_num) {
+void SimulationBufferData::Allocate(size_t ray_number) {
   for (int i = 0; i < 2; i++) {
-    auto tmp_pt = new float[ray_num * 3];
-    auto tmp_dir = new float[ray_num * 3];
-    auto tmp_w = new float[ray_num];
-    auto tmp_face_id = new int[ray_num];
-    auto tmp_ray_seg = new RaySegment*[ray_num];
+    auto tmp_pt = new float[ray_number * 3];
+    auto tmp_dir = new float[ray_number * 3];
+    auto tmp_w = new float[ray_number];
+    auto tmp_face_id = new int[ray_number];
+    auto tmp_ray_seg = new RaySegment*[ray_number];
 
     if (pt[i]) {
-      size_t n = std::min(this->ray_num, ray_num);
+      size_t n = std::min(this->ray_num, ray_number);
       std::memcpy(tmp_pt, pt[i], sizeof(float) * 3 * n);
       std::memcpy(tmp_dir, dir[i], sizeof(float) * 3 * n);
       std::memcpy(tmp_w, w[i], sizeof(float) * n);
@@ -65,7 +66,7 @@ void SimulationBufferData::Allocate(size_t ray_num) {
     face_id[i] = tmp_face_id;
     ray_seg[i] = tmp_ray_seg;
   }
-  this->ray_num = ray_num;
+  this->ray_num = ray_number;
 }
 
 
@@ -100,20 +101,20 @@ void EnterRayData::Clean() {
 }
 
 
-void EnterRayData::Allocate(size_t ray_num) {
+void EnterRayData::Allocate(size_t ray_number) {
   DeleteBuffer();
 
-  ray_dir = new float[ray_num * 3];
-  ray_seg = new RaySegment*[ray_num];
+  ray_dir = new float[ray_number * 3];
+  ray_seg = new RaySegment*[ray_number];
 
-  for (decltype(ray_num) i = 0; i < ray_num; i++) {
+  for (decltype(ray_number) i = 0; i < ray_number; i++) {
     ray_dir[i * 3 + 0] = 0;
     ray_dir[i * 3 + 1] = 0;
     ray_dir[i * 3 + 2] = 0;
     ray_seg[i] = nullptr;
   }
 
-  this->ray_num = ray_num;
+  this->ray_num = ray_number;
 }
 
 
@@ -126,8 +127,8 @@ void EnterRayData::DeleteBuffer() {
 }
 
 
-Simulator::Simulator(const SimulationContextPtr& context)
-    : context_(context), total_ray_num_(0), active_ray_num_(0), buffer_size_(0), enter_ray_offset_(0) {}
+Simulator::Simulator(SimulationContextPtr context)
+    : context_(std::move(context)), total_ray_num_(0), active_ray_num_(0), buffer_size_(0), enter_ray_offset_(0) {}
 
 
 // Start simulation

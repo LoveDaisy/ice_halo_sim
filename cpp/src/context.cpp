@@ -21,13 +21,13 @@ RayPathFilter::RayPathFilter()
       remove_homodromous(false) {}
 
 
-bool RayPathFilter::Filter(IceHalo::RaySegment* r, const CrystalPtr& crystal) const {
+bool RayPathFilter::Filter(RaySegment* r, const CrystalPtr& crystal) const {
   if (remove_homodromous &&
       Math::Dot3(r->dir.val(), r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * Math::kFloatEps) {
     return false;
   }
 
-  bool result = true;
+  bool result;
   switch (type) {
     case RayPathFilter::kTypeNone:
       result = true;
@@ -45,7 +45,7 @@ bool RayPathFilter::Filter(IceHalo::RaySegment* r, const CrystalPtr& crystal) co
 }
 
 
-bool RayPathFilter::FilterRaySpecific(IceHalo::RaySegment* last_r, const CrystalPtr& crystal) const {
+bool RayPathFilter::FilterRaySpecific(RaySegment* last_r, const CrystalPtr& crystal) const {
   if (ray_path_hashes.empty()) {
     return true;
   }
@@ -235,12 +235,12 @@ void RayPathFilter::ApplyHash(const CrystalPtr& crystal) {
 CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis) : crystal(std::move(g)), axis(axis) {}
 
 
-CrystalContext::CrystalContext(const IceHalo::CrystalContext& other) = default;
+CrystalContext::CrystalContext(const CrystalContext& other) = default;
 
 
 SimulationContext::SimulationContext(const char* filename, rapidjson::Document& d)
-    : sun_diameter_(0.5f), total_ray_num_(0), current_wavelength_(550.0f), max_recursion_num_(9),
-      config_file_name_(filename), data_directory_("./") {
+    : sun_ray_dir_{}, sun_diameter_(0.5f), total_ray_num_(0), current_wavelength_(550.0f),
+      current_wavelength_weight_(1.0f), max_recursion_num_(9), config_file_name_(filename), data_directory_("./") {
   ParseSunSettings(d);
   ParseRaySettings(d);
   ParseBasicSettings(d);
@@ -1205,14 +1205,15 @@ void SimulationContext::PrintCrystalInfo() {
 }
 
 
-RayContext::RayContext(RaySegment* seg, const CrystalContextPtr& crystal_ctx, const float* main_axis_rot)
-    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_ctx(crystal_ctx), main_axis_rot(main_axis_rot) {}
+RayContext::RayContext(RaySegment* seg, CrystalContextPtr crystal_ctx, const float* main_axis_rot)
+    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_ctx(std::move(crystal_ctx)),
+      main_axis_rot(main_axis_rot) {}
 
 
 RenderContext::RenderContext(rapidjson::Document& d)
-    : img_hei_(0), img_wid_(0), offset_y_(0), offset_x_(0), visible_semi_sphere_(VisibleSemiSphere::kUpper),
-      projection_type_(ProjectionType::kEqualArea), total_ray_num_(0), intensity_factor_(1.0), show_horizontal_(true),
-      data_directory_("./") {
+    : cam_rot_{}, fov_(0), ray_color_{}, background_color_{}, img_hei_(0), img_wid_(0), offset_y_(0), offset_x_(0),
+      visible_semi_sphere_(VisibleSemiSphere::kUpper), projection_type_(ProjectionType::kEqualArea), total_ray_num_(0),
+      intensity_factor_(1.0), show_horizontal_(true), data_directory_("./") {
   ParseCameraSettings(d);
   ParseRenderSettings(d);
   ParseDataSettings(d);

@@ -15,7 +15,7 @@ struct SimulationBufferData {
   ~SimulationBufferData();
 
   void Clean();
-  void Allocate(size_t ray_num);
+  void Allocate(size_t ray_number);
   void Print();
 
   float* pt[2];
@@ -37,7 +37,7 @@ struct EnterRayData {
   ~EnterRayData();
 
   void Clean();
-  void Allocate(size_t ray_num);
+  void Allocate(size_t ray_number);
 
   float* ray_dir;
   RaySegment** ray_seg;
@@ -51,7 +51,7 @@ struct EnterRayData {
 
 class Simulator {
  public:
-  explicit Simulator(const SimulationContextPtr& context);
+  explicit Simulator(SimulationContextPtr  context);
   ~Simulator() = default;
 
   void Start();
