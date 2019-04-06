@@ -14,7 +14,13 @@ public:
   explicit MainWindow(QWidget* parent = nullptr);
   ~MainWindow();
 
+private slots:
+  void enableFilterSettings(bool enable);
+  void updateScatterProb(int v);
+
 private:
+  void initUi();
+
   Ui::MainWindow* ui;
 };
 
