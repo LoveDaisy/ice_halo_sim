@@ -58,17 +58,17 @@ bool RayPathFilter::FilterRaySpecific(IceHalo::RaySegment* last_r, const Crystal
   // First, check ray path length.
   // And store current ray path for later computing.
   decltype(ray_paths.size()) curr_ray_path_len = 0;
-  std::vector<uint16_t> curr_ray_path;
-  curr_ray_path.reserve(32);
   auto p = last_r;
   while (p->prev) {
     int curr_fn = crystal->FaceNumber(p->face_id);
     if (curr_fn < 0) {
       return false;
     }
-    curr_ray_path.emplace_back(static_cast<uint16_t>(curr_fn));
     p = p->prev;
     curr_ray_path_len++;
+  }
+  if (curr_ray_path_len == 0) {
+    return false;
   }
 
   bool length_matched = false;
@@ -80,7 +80,7 @@ bool RayPathFilter::FilterRaySpecific(IceHalo::RaySegment* last_r, const Crystal
   }
 
   // Second, for each filter path, normalize current ray path, and find it in ray_path_hashes.
-  auto current_ray_path_hash = RayPathHash(curr_ray_path, true);
+  auto current_ray_path_hash = RayPathHash(crystal, last_r, curr_ray_path_len, true);
   return ray_path_hashes.find(current_ray_path_hash) != ray_path_hashes.end();
 }
 
@@ -116,8 +116,7 @@ bool RayPathFilter::FilterRayGeneral(RaySegment* last_r, const CrystalPtr& cryst
 
 size_t RayPathFilter::RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse) const {
   constexpr size_t kStep = 7;
-  constexpr size_t kByteBits = 8;
-  constexpr size_t kTotalBits = sizeof(size_t) * kByteBits;
+  constexpr size_t kTotalBits = sizeof(size_t) * CHAR_BIT;
 
   size_t result = 0;
   size_t curr_offset = 0;
@@ -137,6 +136,33 @@ size_t RayPathFilter::RayPathHash(const std::vector<uint16_t>& ray_path, bool re
       curr_offset %= kTotalBits;
     }
   }
+  return result;
+}
+
+
+size_t RayPathFilter::RayPathHash(const CrystalPtr& crystal,               // used for get face number
+                                  const RaySegment* last_ray, int length,  // ray path and length
+                                  bool reverse) const {
+  constexpr size_t kStep = 7;
+  constexpr size_t kTotalBits = sizeof(size_t) * CHAR_BIT;
+
+  size_t result = 0;
+  size_t curr_offset = reverse ? kStep * (length - 1) % kTotalBits : 0;
+  auto p = last_ray;
+  while (p->prev) {
+    auto fn = static_cast<uint16_t>(crystal->FaceNumber(p->face_id));
+    size_t tmp_hash = (fn << curr_offset) | (fn >> (kTotalBits - curr_offset));
+    result ^= tmp_hash;
+
+    if (reverse) {
+      curr_offset -= kStep;
+    } else {
+      curr_offset += kStep;
+    }
+    curr_offset %= kTotalBits;
+    p = p->prev;
+  }
+
   return result;
 }
 

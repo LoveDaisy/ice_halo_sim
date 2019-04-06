@@ -49,6 +49,7 @@ class RayPathFilter {
 
   bool Filter(RaySegment* r, const CrystalPtr& crystal) const;
   size_t RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse = false) const;
+  size_t RayPathHash(const CrystalPtr& crystal, const RaySegment* last_ray, int length, bool reverse = false) const;
   void ApplyHash(const CrystalPtr& crystal);
 
  private:
