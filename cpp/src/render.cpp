@@ -410,7 +410,7 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
 void SpectrumRenderer::GatherSpectrumData(float* wl_data_out, float* sp_data_out) {
   auto img_hei = context_->GetImageHeight();
   auto img_wid = context_->GetImageWidth();
-  auto intensity_factor = context_->GetIntensityFactor();
+  auto intensity_factor = static_cast<float>(context_->GetIntensityFactor());
 
   int k = 0;
   for (const auto& kv : spectrum_data_) {
@@ -418,8 +418,10 @@ void SpectrumRenderer::GatherSpectrumData(float* wl_data_out, float* sp_data_out
     std::memcpy(sp_data_out + k * img_wid * img_hei, kv.second, img_wid * img_hei * sizeof(float));
     k++;
   }
+
+  auto factor = 1e5f / total_w_ * intensity_factor;
   for (decltype(spectrum_data_.size()) i = 0; i < img_wid * img_hei * spectrum_data_.size(); i++) {
-    sp_data_out[i] *= 1e5 / total_w_ * intensity_factor;
+    sp_data_out[i] *= factor;
   }
 }
 
