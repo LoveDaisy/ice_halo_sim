@@ -315,7 +315,7 @@ void Simulator::RestoreResultRays(float prob) {
 void Simulator::TraceRays(const CrystalPtr& crystal, const RayPathFilter& filter) {
   auto pool = ThreadingPool::GetInstance();
 
-  int max_recursion_num = context_->GetMaxRecursionNum();
+  int max_recursion_num = context_->GetRayHitsNum();
   float n = IceRefractiveIndex::Get(context_->GetCurrentWavelength());
   for (int i = 0; i < max_recursion_num; i++) {
     if (buffer_size_ < active_ray_num_ * 2) {

@@ -78,19 +78,31 @@ struct MultiScatterContext {
 
 class SimulationContext {
  public:
-  uint64_t GetTotalInitRays() const;
-  int GetMaxRecursionNum() const;
+  size_t GetTotalInitRays() const;
+  bool SetTotalInitRays(size_t rays);
+
+  int GetRayHitsNum() const;
+  bool SetRayHitsNum(int n);
 
   const std::vector<MultiScatterContext> GetMultiScatterContext() const;
+  void AddMultiScatterContext(MultiScatterContext& c);
+  void ClearMultiScatterContext();
+
   void PrintCrystalInfo();
 
-  void SetCurrentWavelength(float wavelength, float weight);
   float GetCurrentWavelength() const;
   float GetCurrentWavelengthWeight() const;
+  void SetCurrentWavelength(float wavelength, float weight);
+
   std::vector<std::pair<float, float>> GetWavelengths() const;
+  bool AddWavelength(float wavelength, float weight);
+  void ClearWavelength();
 
   const float* GetSunRayDir() const;
+  bool SetSunRayDir(float longitude, float altitude);
+
   float GetSunDiameter() const;
+  bool SetSunDiameter(float d);
 
   std::string GetDataDirectory() const;
 
@@ -100,11 +112,16 @@ class SimulationContext {
    * @return a pointer to SimulationContext
    */
   static std::unique_ptr<SimulationContext> CreateFromFile(const char* filename);
+  static std::unique_ptr<SimulationContext> CreateDefault();
 
   static constexpr float kPropMinW = 1e-6;
   static constexpr float kScatMinW = 1e-3;
+  static constexpr size_t kMinTotalRayNumber = 10000;
+  static constexpr int kMinRayHitsNumber = 1;
+  static constexpr int kMaxRayHitsNumber = 12;
 
  private:
+  SimulationContext();
   SimulationContext(const char* filename, rapidjson::Document& d);
 
   void ApplySettings();
@@ -149,12 +166,12 @@ class SimulationContext {
   float sun_ray_dir_[3];
   float sun_diameter_;
 
-  uint64_t total_ray_num_;
+  size_t total_ray_num_;
   std::vector<std::pair<float, float>> wavelengths_;
   float current_wavelength_;
   float current_wavelength_weight_;
 
-  int max_recursion_num_;
+  int ray_hits_num_;
 
   std::vector<MultiScatterContext> multi_scatter_ctx_;
   std::unordered_map<int, CrystalContextPtr> crystal_ctx_;
