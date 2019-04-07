@@ -10,7 +10,7 @@
 
 namespace IceHalo {
 
-enum class VisibleSemiSphere { kUpper, kLower, kCamera, kFull };
+enum class VisibleRange { kUpper, kLower, kCamera, kFull };
 
 
 enum class ProjectionType {
@@ -28,7 +28,7 @@ void EqualAreaFishEye(
     const float* dir,                                                    // Ray directions, [x, y, z]
     int img_wid, int img_hei,                                            // Image size
     int* img_xy,                                                         // Image coordinates
-    VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);  // Which semi-sphere can be visible
+    VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Which semi-sphere can be visible
 
 
 void DualEqualAreaFishEye(const float* cam_rot,      // Not used
@@ -37,7 +37,7 @@ void DualEqualAreaFishEye(const float* cam_rot,      // Not used
                           const float* dir,          // Ray directions, [x, y, z]
                           int img_wid, int img_hei,  // Image size
                           int* img_xy,               // Image coordinates
-                          VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);  // Not used
+                          VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Not used
 
 
 void DualEquidistantFishEye(const float* cam_rot,      // Not used
@@ -46,7 +46,7 @@ void DualEquidistantFishEye(const float* cam_rot,      // Not used
                             const float* dir,          // Ray directions, [x, y, z]
                             int img_wid, int img_hei,  // Image size
                             int* img_xy,               // Image coordinates
-                            VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);  // Not used
+                            VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Not used
 
 
 void RectLinear(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
@@ -55,7 +55,7 @@ void RectLinear(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
                 const float* dir,          // Ray directions, [x, y, z]
                 int img_wid, int img_hei,  // Image size
                 int* img_xy,               // I mage coordinates
-                VisibleSemiSphere visible_semi_sphere = VisibleSemiSphere::kUpper);  // Which semi-sphere can be visible
+                VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Which semi-sphere can be visible
 
 
 /* A workaround for disgusting C++11 standard that enum class cannot be a key */
@@ -81,7 +81,7 @@ using ProjectionFunction =
                        const float* dir,                         // Ray directions, [x, y, z]
                        int img_wid, int img_hei,                 // Image size
                        int* img_xy,                              // Image coordinates
-                       VisibleSemiSphere visible_semi_sphere)>;  // Which semi-sphere can be visible
+                       VisibleRange visible_semi_sphere)>;  // Which semi-sphere can be visible
 
 
 MyUnorderedMap<ProjectionType, ProjectionFunction>& GetProjectionFunctions();

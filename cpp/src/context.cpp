@@ -1286,9 +1286,15 @@ RayContext::RayContext(RaySegment* seg, CrystalContextPtr crystal_ctx, const flo
       main_axis_rot(main_axis_rot) {}
 
 
+RenderContext::RenderContext()
+    : cam_rot_{}, fov_(0), ray_color_{ 1, 1, 1 }, background_color_{ 0, 0, 0 }, img_hei_(0), img_wid_(0), offset_y_(0),
+      offset_x_(0), visible_semi_sphere_(VisibleRange::kUpper), projection_type_(ProjectionType::kLinear),
+      total_ray_num_(100000), intensity_factor_(1.0), show_horizontal_(true), data_directory_("./") {}
+
+
 RenderContext::RenderContext(rapidjson::Document& d)
     : cam_rot_{}, fov_(0), ray_color_{}, background_color_{}, img_hei_(0), img_wid_(0), offset_y_(0), offset_x_(0),
-      visible_semi_sphere_(VisibleSemiSphere::kUpper), projection_type_(ProjectionType::kEqualArea), total_ray_num_(0),
+      visible_semi_sphere_(VisibleRange::kUpper), projection_type_(ProjectionType::kEqualArea), total_ray_num_(0),
       intensity_factor_(1.0), show_horizontal_(true), data_directory_("./") {
   ParseCameraSettings(d);
   ParseRenderSettings(d);
@@ -1319,6 +1325,11 @@ std::unique_ptr<RenderContext> RenderContext::CreateFromFile(const char* filenam
   fclose(fp);
 
   return std::unique_ptr<RenderContext>(new RenderContext(d));
+}
+
+
+std::unique_ptr<RenderContext> RenderContext::CreateDefault() {
+  return std::unique_ptr<RenderContext>(new RenderContext());
 }
 
 
@@ -1418,7 +1429,7 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
 
 
 void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
-  visible_semi_sphere_ = VisibleSemiSphere::kUpper;
+  visible_semi_sphere_ = VisibleRange::kUpper;
   intensity_factor_ = 1.0;
   offset_y_ = 0;
   offset_x_ = 0;
@@ -1436,13 +1447,13 @@ void RenderContext::ParseRenderSettings(rapidjson::Document& d) {
   } else if (!p->IsString()) {
     std::fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> is not a string, using default kUpper!\n");
   } else if (*p == "upper") {
-    visible_semi_sphere_ = VisibleSemiSphere::kUpper;
+    visible_semi_sphere_ = VisibleRange::kUpper;
   } else if (*p == "lower") {
-    visible_semi_sphere_ = VisibleSemiSphere::kLower;
+    visible_semi_sphere_ = VisibleRange::kLower;
   } else if (*p == "camera") {
-    visible_semi_sphere_ = VisibleSemiSphere::kCamera;
+    visible_semi_sphere_ = VisibleRange::kCamera;
   } else if (*p == "full") {
-    visible_semi_sphere_ = VisibleSemiSphere::kFull;
+    visible_semi_sphere_ = VisibleRange::kFull;
   } else {
     std::fprintf(stderr,
                  "\nWARNING! Config <render.visible_semi_sphere> cannot be recognized, using default kUpper!\n");
@@ -1559,8 +1570,26 @@ std::string RenderContext::GetDataDirectory() const {
 }
 
 
-const float* RenderContext::GetCamRot() const {
+const float* RenderContext::GetCamTarget() const {
   return cam_rot_;
+}
+
+
+bool RenderContext::SetCamTarget(float azimuth, float altitude, float rotation) {
+  if (azimuth < 0 || azimuth > 360) {
+    return false;
+  }
+  if (altitude < -90 || altitude > 90) {
+    return false;
+  }
+  if (rotation < 0 || rotation > 360) {
+    return false;
+  }
+
+  cam_rot_[0] = azimuth;
+  cam_rot_[1] = altitude;
+  cam_rot_[2] = rotation;
+  return true;
 }
 
 
@@ -1569,12 +1598,27 @@ float RenderContext::GetFov() const {
 }
 
 
+bool RenderContext::SetFov(float fov) {
+  if (fov < 0) {
+    return false;
+  }
+  if (projection_type_ == ProjectionType::kLinear && fov > 65) {
+    return false;
+  }
+  if (projection_type_ == ProjectionType::kEqualArea && fov > 120) {
+    return false;
+  }
+  fov_ = fov;
+  return true;
+}
+
+
 ProjectionType RenderContext::GetProjectionType() const {
   return projection_type_;
 }
 
 
-VisibleSemiSphere RenderContext::GetVisibleSemiSphere() const {
+VisibleRange RenderContext::GetVisibleRange() const {
   return visible_semi_sphere_;
 }
 
