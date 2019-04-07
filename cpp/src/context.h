@@ -23,7 +23,7 @@ struct RaySegment;
 struct CrystalContext;
 class SimulationContext;
 enum class ProjectionType;
-enum class VisibleSemiSphere;
+enum class VisibleRange;
 
 using CrystalContextPtr = std::shared_ptr<CrystalContext>;
 
@@ -209,14 +209,23 @@ class RenderContext {
 
   uint32_t GetImageWidth() const;
   uint32_t GetImageHeight() const;
-  std::string GetImagePath() const;
+  bool SetImageWidth(uint32_t w);
+  bool SetImageHeight(uint32_t h);
 
+  std::string GetImagePath() const;
   std::string GetDataDirectory() const;
 
-  const float* GetCamRot() const;
+  const float* GetCamTarget() const;
+  bool SetCamTarget(float azimuth, float altitude, float rotation);
+
   float GetFov() const;
+  bool SetFov(float fov);
+
   ProjectionType GetProjectionType() const;
-  VisibleSemiSphere GetVisibleSemiSphere() const;
+  void SetProjectionType(ProjectionType type);
+
+  VisibleRange GetVisibleRange() const;
+  void SetVisibleRange(VisibleRange v);
 
   int GetOffsetX() const;
   int GetOffsetY() const;
@@ -228,8 +237,10 @@ class RenderContext {
   double GetIntensityFactor() const;
 
   static std::unique_ptr<RenderContext> CreateFromFile(const char* filename);
+  static std::unique_ptr<RenderContext> CreateDefault();
 
  private:
+  RenderContext();
   explicit RenderContext(rapidjson::Document& d);
 
   /* Parse rendering settings */
@@ -247,7 +258,7 @@ class RenderContext {
   uint32_t img_wid_;
   int offset_y_;
   int offset_x_;
-  VisibleSemiSphere visible_semi_sphere_;
+  VisibleRange visible_semi_sphere_;
   ProjectionType projection_type_;
 
   uint32_t total_ray_num_;

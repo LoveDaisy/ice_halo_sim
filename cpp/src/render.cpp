@@ -18,7 +18,7 @@ void EqualAreaFishEye(const float* cam_rot,                     // Camera rotati
                       const float* dir,                         // Ray directions, [x, y, z]
                       int img_wid, int img_hei,                 // Image size
                       int* img_xy,                              // Image coordinates
-                      VisibleSemiSphere visible_semi_sphere) {  // Which semi-sphere can be visible
+                      VisibleRange visible_semi_sphere) {  // Which semi-sphere can be visible
   float img_r = std::max(img_wid, img_hei) / 2.0f;
   auto* dir_copy = new float[data_number * 3];
   float cam_rot_copy[3];
@@ -34,13 +34,13 @@ void EqualAreaFishEye(const float* cam_rot,                     // Camera rotati
     if (std::abs(Math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleSemiSphere::kCamera && dir_copy[i * 3 + 2] < 0) {
+    } else if (visible_semi_sphere == VisibleRange::kCamera && dir_copy[i * 3 + 2] < 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleSemiSphere::kUpper && dir[i * 4 + 2] > 0) {
+    } else if (visible_semi_sphere == VisibleRange::kUpper && dir[i * 4 + 2] > 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleSemiSphere::kLower && dir[i * 4 + 2] < 0) {
+    } else if (visible_semi_sphere == VisibleRange::kLower && dir[i * 4 + 2] < 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
@@ -64,7 +64,7 @@ void DualEqualAreaFishEye(const float* /* cam_rot */,                     // Not
                           const float* dir,                               // Ray directions, [x, y, z]
                           int img_wid, int img_hei,                       // Image size
                           int* img_xy,                                    // Image coordinates
-                          VisibleSemiSphere /* visible_semi_sphere */) {  // Not used
+                          VisibleRange /* visible_semi_sphere */) {  // Not used
   float img_r = std::min(img_wid / 2, img_hei) / 2.0f;
   float proj_r = img_r / 2.0f / std::sin(45.0f * Math::kDegreeToRad);
 
@@ -104,7 +104,7 @@ void DualEquidistantFishEye(const float* /* cam_rot */,                     // N
                             const float* dir,                               // Ray directions, [x, y, z]
                             int img_wid, int img_hei,                       // Image size
                             int* img_xy,                                    // Image coordinates
-                            VisibleSemiSphere /* visible_semi_sphere */) {  // Not used
+                            VisibleRange /* visible_semi_sphere */) {  // Not used
   float img_r = std::min(img_wid / 2, img_hei) / 2.0f;
 
   auto* dir_copy = new float[data_number * 3];
@@ -143,7 +143,7 @@ void RectLinear(const float* cam_rot,                     // Camera rotation. [l
                 const float* dir,                         // Ray directions, [x, y, z]
                 int img_wid, int img_hei,                 // Image size
                 int* img_xy,                              // Image coordinates
-                VisibleSemiSphere visible_semi_sphere) {  // Which semi-sphere can be visible
+                VisibleRange visible_semi_sphere) {  // Which semi-sphere can be visible
   auto* dir_copy = new float[data_number * 3];
   float cam_rot_copy[3];
   std::memcpy(cam_rot_copy, cam_rot, sizeof(float) * 3);
@@ -158,13 +158,13 @@ void RectLinear(const float* cam_rot,                     // Camera rotation. [l
     if (dir_copy[i * 3 + 2] < 0 || std::abs(Math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleSemiSphere::kCamera && dir_copy[i * 3 + 2] < 0) {
+    } else if (visible_semi_sphere == VisibleRange::kCamera && dir_copy[i * 3 + 2] < 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleSemiSphere::kUpper && dir[i * 4 + 2] > 0) {
+    } else if (visible_semi_sphere == VisibleRange::kUpper && dir[i * 4 + 2] > 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleSemiSphere::kLower && dir[i * 4 + 2] < 0) {
+    } else if (visible_semi_sphere == VisibleRange::kLower && dir[i * 4 + 2] < 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
@@ -269,8 +269,8 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
   for (decltype(num) i = 0; i < num; i += step) {
     decltype(num) current_num = std::min(num - i, step);
     threading_pool->AddJob([=] {
-      pf(context_->GetCamRot(), context_->GetFov(), current_num, ray_data + i * 4, img_wid, img_hei, tmp_xy + i * 2,
-         context_->GetVisibleSemiSphere());
+      pf(context_->GetCamTarget(), context_->GetFov(), current_num, ray_data + i * 4, img_wid, img_hei, tmp_xy + i * 2,
+         context_->GetVisibleRange());
     });
   }
   threading_pool->WaitFinish();
