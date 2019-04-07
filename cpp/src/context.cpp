@@ -1288,13 +1288,13 @@ RayContext::RayContext(RaySegment* seg, CrystalContextPtr crystal_ctx, const flo
 
 RenderContext::RenderContext()
     : cam_rot_{}, fov_(0), ray_color_{ 1, 1, 1 }, background_color_{ 0, 0, 0 }, img_hei_(0), img_wid_(0), offset_y_(0),
-      offset_x_(0), visible_semi_sphere_(VisibleRange::kUpper), projection_type_(ProjectionType::kLinear),
+      offset_x_(0), visible_semi_sphere_(VisibleRange::kUpper), projection_type_(LensType::kLinear),
       total_ray_num_(100000), intensity_factor_(1.0), show_horizontal_(true), data_directory_("./") {}
 
 
 RenderContext::RenderContext(rapidjson::Document& d)
     : cam_rot_{}, fov_(0), ray_color_{}, background_color_{}, img_hei_(0), img_wid_(0), offset_y_(0), offset_x_(0),
-      visible_semi_sphere_(VisibleRange::kUpper), projection_type_(ProjectionType::kEqualArea), total_ray_num_(0),
+      visible_semi_sphere_(VisibleRange::kUpper), projection_type_(LensType::kEqualArea), total_ray_num_(0),
       intensity_factor_(1.0), show_horizontal_(true), data_directory_("./") {
   ParseCameraSettings(d);
   ParseRenderSettings(d);
@@ -1340,7 +1340,7 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
   fov_ = 120.0f;
   img_wid_ = 800;
   img_hei_ = 800;
-  projection_type_ = ProjectionType::kEqualArea;
+  projection_type_ = LensType::kEqualArea;
 
   auto* p = Pointer("/camera/azimuth").Get(d);
   if (p == nullptr) {
@@ -1414,13 +1414,13 @@ void RenderContext::ParseCameraSettings(rapidjson::Document& d) {
     std::fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equi-area fisheye!\n");
   } else {
     if (*p == "linear") {
-      projection_type_ = ProjectionType::kLinear;
+      projection_type_ = LensType::kLinear;
     } else if (*p == "fisheye") {
-      projection_type_ = ProjectionType::kEqualArea;
+      projection_type_ = LensType::kEqualArea;
     } else if (*p == "dual_fisheye_equidistant") {
-      projection_type_ = ProjectionType::kDualEquidistant;
+      projection_type_ = LensType::kDualEquidistant;
     } else if (*p == "dual_fisheye_equiarea") {
-      projection_type_ = ProjectionType::kDualEqualArea;
+      projection_type_ = LensType::kDualEqualArea;
     } else {
       std::fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equi-area fisheye!\n");
     }
@@ -1602,10 +1602,10 @@ bool RenderContext::SetFov(float fov) {
   if (fov < 0) {
     return false;
   }
-  if (projection_type_ == ProjectionType::kLinear && fov > 65) {
+  if (projection_type_ == LensType::kLinear && fov > 65) {
     return false;
   }
-  if (projection_type_ == ProjectionType::kEqualArea && fov > 120) {
+  if (projection_type_ == LensType::kEqualArea && fov > 120) {
     return false;
   }
   fov_ = fov;
@@ -1613,7 +1613,7 @@ bool RenderContext::SetFov(float fov) {
 }
 
 
-ProjectionType RenderContext::GetProjectionType() const {
+LensType RenderContext::GetProjectionType() const {
   return projection_type_;
 }
 

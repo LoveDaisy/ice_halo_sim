@@ -13,7 +13,7 @@ namespace IceHalo {
 enum class VisibleRange { kUpper, kLower, kCamera, kFull };
 
 
-enum class ProjectionType {
+enum class LensType {
   kLinear,
   kEqualArea,
   kDualEqualArea,
@@ -84,7 +84,7 @@ using ProjectionFunction =
                        VisibleRange visible_semi_sphere)>;  // Which semi-sphere can be visible
 
 
-MyUnorderedMap<ProjectionType, ProjectionFunction>& GetProjectionFunctions();
+MyUnorderedMap<LensType, ProjectionFunction>& GetProjectionFunctions();
 
 
 void SrgbGamma(float* linear_rgb);
