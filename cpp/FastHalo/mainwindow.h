@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include "context.h"
 
 namespace Ui {
 class MainWindow;
@@ -22,6 +23,8 @@ private:
   void initUi();
 
   Ui::MainWindow* ui;
+
+  IceHalo::SimulationContextPtr simulation_context;
 };
 
 #endif // MAINWINDOW_H
