@@ -182,12 +182,12 @@ void RectLinear(const float* cam_rot,                     // Camera rotation. [l
 }
 
 
-MyUnorderedMap<ProjectionType, ProjectionFunction>& GetProjectionFunctions() {
-  static MyUnorderedMap<ProjectionType, ProjectionFunction> projection_functions = {
-    { ProjectionType::kLinear, &RectLinear },
-    { ProjectionType::kEqualArea, &EqualAreaFishEye },
-    { ProjectionType::kDualEquidistant, &DualEquidistantFishEye },
-    { ProjectionType::kDualEqualArea, &DualEqualAreaFishEye },
+MyUnorderedMap<LensType, ProjectionFunction>& GetProjectionFunctions() {
+  static MyUnorderedMap<LensType, ProjectionFunction> projection_functions = {
+    { LensType::kLinear, &RectLinear },
+    { LensType::kEqualArea, &EqualAreaFishEye },
+    { LensType::kDualEquidistant, &DualEquidistantFishEye },
+    { LensType::kDualEqualArea, &DualEqualAreaFishEye },
   };
 
   return projection_functions;
@@ -298,7 +298,7 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
     if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
       continue;
     }
-    if (projection_type != ProjectionType::kDualEqualArea && projection_type != ProjectionType::kDualEquidistant) {
+    if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
       x += context_->GetOffsetX();
       y += context_->GetOffsetY();
     }

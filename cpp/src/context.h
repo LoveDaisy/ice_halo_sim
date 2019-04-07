@@ -22,7 +22,7 @@ namespace IceHalo {
 struct RaySegment;
 struct CrystalContext;
 class SimulationContext;
-enum class ProjectionType;
+enum class LensType;
 enum class VisibleRange;
 
 using CrystalContextPtr = std::shared_ptr<CrystalContext>;
