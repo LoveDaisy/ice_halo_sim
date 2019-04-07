@@ -112,16 +112,6 @@ QMainWindow QGroupBox {
            <height>0</height>
           </size>
          </property>
-         <item>
-          <property name="text">
-           <string>true diameter</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>point source (0°)</string>
-          </property>
-         </item>
         </widget>
        </item>
        <item row="2" column="0">
@@ -242,14 +232,14 @@ QMainWindow QGroupBox {
         </widget>
        </item>
        <item row="3" column="0">
-        <widget class="QLabel" name="azimuthLabel">
+        <widget class="QLabel" name="camAzimuthLabel">
          <property name="text">
           <string>Azimuth [°]:</string>
          </property>
         </widget>
        </item>
        <item row="3" column="1">
-        <widget class="QLineEdit" name="azimuthEdith">
+        <widget class="QLineEdit" name="camAzimuthEdit">
          <property name="sizePolicy">
           <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
            <horstretch>0</horstretch>
@@ -259,14 +249,14 @@ QMainWindow QGroupBox {
         </widget>
        </item>
        <item row="4" column="0">
-        <widget class="QLabel" name="altitudeLabel">
+        <widget class="QLabel" name="camAltitudeLabel">
          <property name="text">
           <string>Altitude [°]:</string>
          </property>
         </widget>
        </item>
        <item row="4" column="1">
-        <widget class="QLineEdit" name="altitudeEdit">
+        <widget class="QLineEdit" name="camAltitudeEdit">
          <property name="sizePolicy">
           <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
            <horstretch>0</horstretch>
@@ -276,14 +266,14 @@ QMainWindow QGroupBox {
         </widget>
        </item>
        <item row="5" column="0">
-        <widget class="QLabel" name="rotationLabel">
+        <widget class="QLabel" name="camRotationLabel">
          <property name="text">
           <string>Rotation [°]:</string>
          </property>
         </widget>
        </item>
        <item row="5" column="1">
-        <widget class="QLineEdit" name="rotationEdit">
+        <widget class="QLineEdit" name="camRotationEdit">
          <property name="sizePolicy">
           <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
            <horstretch>0</horstretch>
