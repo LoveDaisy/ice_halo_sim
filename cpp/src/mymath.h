@@ -30,11 +30,11 @@ class DummyMatrix {
   friend int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
 
  public:
-  DummyMatrix(float* data, uint64_t row, uint64_t col);
+  DummyMatrix(float* data, size_t row, size_t col);
   ~DummyMatrix() = default;
 
-  const uint64_t rows_;
-  const uint64_t cols_;
+  const size_t rows_;
+  const size_t cols_;
 
  private:
   float* data_;
@@ -46,7 +46,7 @@ class ConstDummyMatrix : public DummyMatrix {
   friend int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
 
  public:
-  ConstDummyMatrix(const float* data, uint64_t row, uint64_t col);
+  ConstDummyMatrix(const float* data, size_t row, size_t col);
   ~ConstDummyMatrix() = default;
 
  private:

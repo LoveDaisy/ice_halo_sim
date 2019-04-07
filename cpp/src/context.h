@@ -78,7 +78,7 @@ struct MultiScatterContext {
 
 class SimulationContext {
  public:
-  uint64_t GetTotalInitRays() const;
+  size_t GetTotalInitRays() const;
   int GetMaxRecursionNum() const;
 
   const std::vector<MultiScatterContext> GetMultiScatterContext() const;
@@ -149,7 +149,7 @@ class SimulationContext {
   float sun_ray_dir_[3];
   float sun_diameter_;
 
-  uint64_t total_ray_num_;
+  size_t total_ray_num_;
   std::vector<std::pair<float, float>> wavelengths_;
   float current_wavelength_;
   float current_wavelength_weight_;

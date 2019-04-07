@@ -1101,7 +1101,7 @@ void SimulationContext::ParseFilterBasic(const rapidjson::Value& c, int ci, RayP
 }
 
 
-uint64_t SimulationContext::GetTotalInitRays() const {
+size_t SimulationContext::GetTotalInitRays() const {
   return total_ray_num_;
 }
 

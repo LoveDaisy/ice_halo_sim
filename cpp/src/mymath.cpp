@@ -367,10 +367,10 @@ void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,  
 }
 
 
-DummyMatrix::DummyMatrix(float* data, uint64_t row, uint64_t col) : rows_(row), cols_(col), data_(data) {}
+DummyMatrix::DummyMatrix(float* data, size_t row, size_t col) : rows_(row), cols_(col), data_(data) {}
 
 
-ConstDummyMatrix::ConstDummyMatrix(const float* data, uint64_t row, uint64_t col)
+ConstDummyMatrix::ConstDummyMatrix(const float* data, size_t row, size_t col)
     : DummyMatrix(nullptr, row, col), data(data) {}
 
 
@@ -379,10 +379,10 @@ int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* res) {
     return -1;
   }
 
-  for (uint64_t r = 0; r < a.rows_; r++) {
-    for (uint64_t c = 0; c < b.cols_; c++) {
+  for (size_t r = 0; r < a.rows_; r++) {
+    for (size_t c = 0; c < b.cols_; c++) {
       float sum = 0.0f;
-      for (uint64_t k = 0; k < a.cols_; k++) {
+      for (size_t k = 0; k < a.cols_; k++) {
         sum += a.data[r * a.cols_ + k] * b.data[k * b.cols_ + c];
       }
       res->data_[r * res->cols_ + c] = sum;
