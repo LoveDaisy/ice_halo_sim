@@ -240,7 +240,7 @@ CrystalContext::CrystalContext(const CrystalContext& other) = default;
 
 SimulationContext::SimulationContext(const char* filename, rapidjson::Document& d)
     : sun_ray_dir_{}, sun_diameter_(0.5f), total_ray_num_(0), current_wavelength_(550.0f),
-      current_wavelength_weight_(1.0f), max_recursion_num_(9), config_file_name_(filename), data_directory_("./") {
+      current_wavelength_weight_(1.0f), ray_hits_num_(9), config_file_name_(filename), data_directory_("./") {
   ParseSunSettings(d);
   ParseRaySettings(d);
   ParseBasicSettings(d);
@@ -249,6 +249,11 @@ SimulationContext::SimulationContext(const char* filename, rapidjson::Document& 
   ParseMultiScatterSettings(d);
   ApplySettings();
 }
+
+
+SimulationContext::SimulationContext()
+    : sun_ray_dir_{}, sun_diameter_(0.0f), total_ray_num_(0), current_wavelength_(550.0f),
+      current_wavelength_weight_(1.0f), ray_hits_num_(0), config_file_name_(""), data_directory_("") {}
 
 
 std::unique_ptr<SimulationContext> SimulationContext::CreateFromFile(const char* filename) {
@@ -277,6 +282,11 @@ std::unique_ptr<SimulationContext> SimulationContext::CreateFromFile(const char*
 }
 
 
+std::unique_ptr<SimulationContext> SimulationContext::CreateDefault() {
+  return std::unique_ptr<SimulationContext>(new SimulationContext());
+}
+
+
 void SimulationContext::ParseBasicSettings(rapidjson::Document& d) {
   int maxRecursion = 9;
   auto p = Pointer("/max_recursion").Get(d);
@@ -287,7 +297,7 @@ void SimulationContext::ParseBasicSettings(rapidjson::Document& d) {
   } else {
     maxRecursion = std::min(std::max(p->GetInt(), 1), 10);
   }
-  max_recursion_num_ = maxRecursion;
+  ray_hits_num_ = maxRecursion;
 
   std::string dir = "./";
   p = Pointer("/data_folder").Get(d);
@@ -1106,8 +1116,28 @@ size_t SimulationContext::GetTotalInitRays() const {
 }
 
 
-int SimulationContext::GetMaxRecursionNum() const {
-  return max_recursion_num_;
+bool SimulationContext::SetTotalInitRays(size_t rays) {
+  if (rays < kMinTotalRayNumber) {
+    return false;
+  } else {
+    total_ray_num_ = rays;
+    return true;
+  }
+}
+
+
+int SimulationContext::GetRayHitsNum() const {
+  return ray_hits_num_;
+}
+
+
+bool SimulationContext::SetRayHitsNum(int n) {
+  if (n < kMinRayHitsNumber || n > kMaxRayHitsNumber) {
+    return false;
+  } else {
+    ray_hits_num_ = n;
+    return true;
+  }
 }
 
 
@@ -1132,13 +1162,49 @@ std::vector<std::pair<float, float>> SimulationContext::GetWavelengths() const {
 }
 
 
+bool SimulationContext::AddWavelength(float wavelength, float weight) {
+  if (wavelength < IceRefractiveIndex::kMinWaveLength || wavelength > IceRefractiveIndex::kMaxWaveLength ||
+      weight < 0) {
+    return false;
+  } else {
+    wavelengths_.emplace_back(wavelength, weight);
+    return true;
+  }
+}
+
+
+void SimulationContext::ClearWavelength() {
+  wavelengths_.clear();
+}
+
+
 const float* SimulationContext::GetSunRayDir() const {
   return sun_ray_dir_;
 }
 
 
+bool SimulationContext::SetSunRayDir(float longitude, float altitude) {
+  if (longitude < 0 || longitude > 360 || altitude > 90 || altitude < -90) {
+    return false;
+  } else {
+    SetSunRayDirection(longitude, altitude);
+    return true;
+  }
+}
+
+
 float SimulationContext::GetSunDiameter() const {
   return sun_diameter_;
+}
+
+
+bool SimulationContext::SetSunDiameter(float d) {
+  if (d < 0) {
+    return false;
+  } else {
+    sun_diameter_ = d;
+    return true;
+  }
 }
 
 
@@ -1187,6 +1253,16 @@ void SimulationContext::ApplySettings() {
 
 const std::vector<MultiScatterContext> SimulationContext::GetMultiScatterContext() const {
   return multi_scatter_ctx_;
+}
+
+
+void SimulationContext::AddMultiScatterContext(MultiScatterContext& c) {
+  multi_scatter_ctx_.emplace_back(c);
+}
+
+
+void SimulationContext::ClearMultiScatterContext() {
+  multi_scatter_ctx_.clear();
 }
 
 
