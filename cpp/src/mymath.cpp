@@ -140,7 +140,7 @@ void RotateZWithDataStep(const float* lon_lat_roll,  // longitude, latitude, rol
 #else
   // Then do the matrix multiplication (using Dot3 actually)
   for (decltype(data_num) i = 0; i < data_num; i++) {
-    const float* tmp_v = input_vec + i * intpu_step;
+    const float* tmp_v = input_vec + i * input_step;
     float* tmp_out = output_vec + i * output_step;
     for (int j = 0; j < 3; j++) {
       tmp_out[j] = Dot3(tmp_v, ax + j * 3);
