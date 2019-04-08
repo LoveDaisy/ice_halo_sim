@@ -12,7 +12,7 @@ int main(int argc, char* argv[]) {
   }
 
   auto start = std::chrono::system_clock::now();
-  SimulationContextPtr context = SimulationContext::CreateFromFile(argv[1]);
+  ProjectContextPtr context = ProjectContext::CreateFromFile(argv[1]);
   auto simulator = Simulator(context);
 
   auto t = std::chrono::system_clock::now();
@@ -20,10 +20,11 @@ int main(int argc, char* argv[]) {
   printf("Initialization: %.2fms\n", diff.count());
 
   char filename[256];
-  for (auto wl : context->GetWavelengths()) {
-    printf("starting at wavelength: %.1f\n", wl.first);
-
-    context->SetCurrentWavelength(wl.first, wl.second);
+  const auto& wavelengths = context->GetWavelengthInfos();
+  for (decltype(wavelengths.size()) i = 0; i < wavelengths.size(); i++) {
+    const auto& wl = wavelengths[i];
+    printf("starting at wavelength: %d\n", wl.wavelength);
+    simulator.SetWavelengthIndex(i);
 
     auto t0 = std::chrono::system_clock::now();
     simulator.Start();
@@ -32,7 +33,7 @@ int main(int argc, char* argv[]) {
     printf("Ray tracing: %.2fms\n", diff.count());
 
     t0 = std::chrono::system_clock::now();
-    std::sprintf(filename, "directions_%.1f_%lli.bin", wl.first, t0.time_since_epoch().count());
+    std::sprintf(filename, "directions_%d_%lli.bin", wl.wavelength, t0.time_since_epoch().count());
     simulator.SaveFinalDirections(filename);
 
     t1 = std::chrono::system_clock::now();

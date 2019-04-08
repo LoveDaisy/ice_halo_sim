@@ -127,8 +127,19 @@ void EnterRayData::DeleteBuffer() {
 }
 
 
-Simulator::Simulator(SimulationContextPtr context)
-    : context_(std::move(context)), total_ray_num_(0), active_ray_num_(0), buffer_size_(0), enter_ray_offset_(0) {}
+Simulator::Simulator(ProjectContextPtr context)
+    : context_(std::move(context)), current_wavelength_index_(-1), total_ray_num_(0), active_ray_num_(0),
+      buffer_size_(0), enter_ray_offset_(0) {}
+
+
+void Simulator::SetWavelengthIndex(int index) {
+  if (index < 0 || static_cast<size_t>(index) >= context_->GetWavelengthInfos().size()) {
+    current_wavelength_index_ = -1;
+    return;
+  }
+
+  current_wavelength_index_ = index;
+}
 
 
 // Start simulation
@@ -141,7 +152,7 @@ void Simulator::Start() {
   enter_ray_data_.Clean();
   enter_ray_offset_ = 0;
 
-  total_ray_num_ = context_->GetTotalInitRays();
+  total_ray_num_ = context_->GetInitRayNum();
   InitSunRays();
 
   const auto multi_scatter_ctx = context_->GetMultiScatterContext();
@@ -151,22 +162,19 @@ void Simulator::Start() {
     exit_ray_segments_.emplace_back();
     exit_ray_segments_.back().reserve(total_ray_num_ * 2);
 
-    const auto& ms_ctx = *it;
-    for (decltype(ms_ctx.crystals.size()) i = 0; i < ms_ctx.crystals.size(); i++) {
-      const auto& crystal_ctx = ms_ctx.crystals[i];
-      const auto& filter = ms_ctx.ray_path_filters[i];
-      active_ray_num_ = static_cast<size_t>(ms_ctx.populations[i] * total_ray_num_);
+    for (const auto& c : it->GetCrystalInfo()) {
+      active_ray_num_ = static_cast<size_t>(c.population * total_ray_num_);
       if (buffer_size_ < total_ray_num_ * kBufferSizeFactor) {
         buffer_size_ = total_ray_num_ * kBufferSizeFactor;
         buffer_.Allocate(buffer_size_);
       }
-      InitEntryRays(crystal_ctx);
+      InitEntryRays(c.crystal);
       enter_ray_offset_ += active_ray_num_;
-      TraceRays(crystal_ctx->crystal, filter);
+      TraceRays(c.crystal->crystal, c.filter);
     }
 
     if (it != multi_scatter_ctx.end() - 1) {
-      RestoreResultRays(ms_ctx.prob);  // total_ray_num_ is updated.
+      RestoreResultRays(it->GetProbability());  // total_ray_num_ is updated.
     }
     enter_ray_offset_ = 0;
   }
@@ -180,8 +188,8 @@ void Simulator::Start() {
 // Init sun rays, and fill into dir[1]. They will be rotated and fill into dir[0] in InitEntryRays().
 // In world frame.
 void Simulator::InitSunRays() {
-  float sun_r = context_->GetSunDiameter() / 2;  // In degree
-  const float* sun_ray_dir = context_->GetSunRayDir();
+  float sun_r = context_->sun_ctx_.GetSunDiameter() / 2;  // In degree
+  const float* sun_ray_dir = context_->sun_ctx_.GetSunPosition();
   auto sampler = Math::RandomSampler::GetInstance();
   if (enter_ray_data_.ray_num < total_ray_num_) {
     enter_ray_data_.Allocate(total_ray_num_);
@@ -235,7 +243,7 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
     auto r =
         ray_pool->GetRaySegment(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i], buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
-    r->root_ctx = new RayContext(r, ctx, axis_rot);
+    r->root_ctx = new RayInfo(r, ctx, axis_rot);
     r->root_ctx->prev_ray_segment = prev_r;
     rays_.back().emplace_back(r->root_ctx);
   }
@@ -315,8 +323,8 @@ void Simulator::RestoreResultRays(float prob) {
 void Simulator::TraceRays(const CrystalPtr& crystal, const RayPathFilter& filter) {
   auto pool = ThreadingPool::GetInstance();
 
-  int max_recursion_num = context_->GetRayHitsNum();
-  float n = IceRefractiveIndex::Get(context_->GetCurrentWavelength());
+  int max_recursion_num = context_->GetRayHitNum();
+  float n = IceRefractiveIndex::Get(context_->GetWaveLengthInfo(current_wavelength_index_).wavelength);
   for (int i = 0; i < max_recursion_num; i++) {
     if (buffer_size_ < active_ray_num_ * 2) {
       buffer_size_ = active_ray_num_ * kBufferSizeFactor;
@@ -368,7 +376,7 @@ void Simulator::StoreRaySegments(const CrystalPtr& crystal, const RayPathFilter&
     if (!filter.Filter(r, crystal)) {
       continue;
     }
-    if (r->is_finished || r->w < SimulationContext::kPropMinW) {
+    if (r->is_finished || r->w < ProjectContext::kPropMinW) {
       exit_ray_segments_.back().emplace_back(r);
     }
   }
@@ -380,7 +388,7 @@ void Simulator::StoreRaySegments(const CrystalPtr& crystal, const RayPathFilter&
 void Simulator::RefreshBuffer() {
   size_t idx = 0;
   for (size_t i = 0; i < active_ray_num_ * 2; i++) {
-    if (buffer_.face_id[1][i] >= 0 && buffer_.w[1][i] > SimulationContext::kPropMinW) {
+    if (buffer_.face_id[1][i] >= 0 && buffer_.w[1][i] > ProjectContext::kPropMinW) {
       std::memcpy(buffer_.pt[0] + idx * 3, buffer_.pt[1] + i * 3, sizeof(float) * 3);
       std::memcpy(buffer_.dir[0] + idx * 3, buffer_.dir[1] + i * 3, sizeof(float) * 3);
       buffer_.w[0][idx] = buffer_.w[1][i];
@@ -403,8 +411,12 @@ void Simulator::SaveFinalDirections(const char* filename) {
   if (!file.Open(OpenMode::kWrite | OpenMode::kBinary))
     return;
 
-  file.Write(context_->GetCurrentWavelength());
-  file.Write(context_->GetCurrentWavelengthWeight());
+  if (current_wavelength_index_ < 0) {
+    return;
+  }
+
+  file.Write(static_cast<float>(context_->GetWaveLengthInfo(current_wavelength_index_).wavelength));
+  file.Write(context_->GetWaveLengthInfo(current_wavelength_index_).weight);
 
   auto ray_num = final_ray_segments_.size();
   size_t idx = 0;

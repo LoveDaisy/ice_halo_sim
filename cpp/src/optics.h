@@ -13,7 +13,7 @@
 namespace IceHalo {
 
 class RaySegmentPool;
-struct RayContext;
+struct RayInfo;
 
 struct RaySegment {
   friend class RaySegmentPool;
@@ -24,7 +24,7 @@ struct RaySegment {
   RaySegment* next_reflect;
   RaySegment* next_refract;
   RaySegment* prev;
-  RayContext* root_ctx;
+  RayInfo* root_ctx;
 
   Math::Vec3f pt;
   Math::Vec3f dir;

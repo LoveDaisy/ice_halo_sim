@@ -13,17 +13,17 @@ int main(int argc, char* argv[]) {
   }
 
   auto start = std::chrono::system_clock::now();
-  IceHalo::RenderContextPtr ctx = IceHalo::RenderContext::CreateFromFile(argv[1]);
+  IceHalo::ProjectContextPtr ctx = IceHalo::ProjectContext::CreateFromFile(argv[1]);
   IceHalo::SpectrumRenderer renderer(ctx);
   renderer.LoadData();
 
-  auto flat_rgb_data = new uint8_t[3 * ctx->GetImageWidth() * ctx->GetImageHeight()];
+  auto flat_rgb_data = new uint8_t[3 * ctx->render_ctx_.GetImageWidth() * ctx->render_ctx_.GetImageHeight()];
   renderer.RenderToRgb(flat_rgb_data);
 
-  cv::Mat img(ctx->GetImageHeight(), ctx->GetImageWidth(), CV_8UC3, flat_rgb_data);
+  cv::Mat img(ctx->render_ctx_.GetImageHeight(), ctx->render_ctx_.GetImageWidth(), CV_8UC3, flat_rgb_data);
   cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
   try {
-    cv::imwrite(ctx->GetImagePath(), img);
+    cv::imwrite(ctx->GetDefaultImagePath(), img);
   } catch (cv::Exception& ex) {
     fprintf(stderr, "Exception converting image to PNG format: %s\n", ex.what());
     delete[] flat_rgb_data;

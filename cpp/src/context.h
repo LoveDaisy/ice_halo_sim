@@ -6,6 +6,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -21,7 +22,7 @@ namespace IceHalo {
 
 struct RaySegment;
 struct CrystalContext;
-class SimulationContext;
+class ProjectContext;
 enum class LensType;
 enum class VisibleRange;
 
@@ -29,7 +30,7 @@ using CrystalContextPtr = std::shared_ptr<CrystalContext>;
 
 
 class RayPathFilter {
-  friend class SimulationContext;
+  friend class ProjectContext;
 
  public:
   enum Symmetry : uint8_t {
@@ -68,73 +69,190 @@ class RayPathFilter {
 };
 
 
-struct MultiScatterContext {
-  std::vector<CrystalContextPtr> crystals;
-  std::vector<float> populations;
-  std::vector<RayPathFilter> ray_path_filters;
-  float prob;
+class MultiScatterContext {
+ public:
+  struct CrystalInfo {
+    CrystalContextPtr crystal;
+    float population;
+    RayPathFilter filter;
+  };
+
+  explicit MultiScatterContext(float prob = 1.0f);
+
+  float GetProbability() const;
+  bool SetProbability(float p);
+
+  const std::vector<CrystalInfo>& GetCrystalInfo() const;
+  void ClearCrystalInfo();
+  void AddCrystalInfo(const CrystalContextPtr& crystal, float population, const RayPathFilter& filter);
+  void NormalizeCrystalPopulation();
+
+ private:
+  std::vector<CrystalInfo> crystal_infos_;  // crystal, population, filter
+  float prob_;
+  bool population_normalized_;
 };
 
 
-class SimulationContext {
+class SunContext {
  public:
-  size_t GetTotalInitRays() const;
-  bool SetTotalInitRays(size_t rays);
+  explicit SunContext(float altitude, float diameter = 0.0f);
 
-  int GetRayHitsNum() const;
-  bool SetRayHitsNum(int n);
+  const float* GetSunPosition() const;
 
-  const std::vector<MultiScatterContext> GetMultiScatterContext() const;
-  void AddMultiScatterContext(MultiScatterContext& c);
-  void ClearMultiScatterContext();
-
-  void PrintCrystalInfo();
-
-  float GetCurrentWavelength() const;
-  float GetCurrentWavelengthWeight() const;
-  void SetCurrentWavelength(float wavelength, float weight);
-
-  std::vector<std::pair<float, float>> GetWavelengths() const;
-  bool AddWavelength(float wavelength, float weight);
-  void ClearWavelength();
-
-  const float* GetSunRayDir() const;
-  bool SetSunRayDir(float longitude, float altitude);
+  float GetSunAltitude() const;
+  bool SetSunAltitude(float altitude);
 
   float GetSunDiameter() const;
   bool SetSunDiameter(float d);
 
-  std::string GetDataDirectory() const;
+  static constexpr float kMaxDiameter = 90.0f;
 
-  /*! @brief Read a config file and create a SimulationContext
-   *
-   * @param filename the config file
-   * @return a pointer to SimulationContext
-   */
-  static std::unique_ptr<SimulationContext> CreateFromFile(const char* filename);
-  static std::unique_ptr<SimulationContext> CreateDefault();
+ private:
+  float sun_diameter_;     // in degree
+  float sun_altitude_;     // in degree
+  float sun_position_[3];  // [x, y, z]
+};
+
+
+class CameraContext {
+ public:
+  CameraContext();
+
+  const float* GetCameraTargetDirection() const;
+  void SetCameraTargetDirection(float azimuth, float altitude, float roll);
+  void ResetCameraTargetDirection();
+
+  float GetFov() const;
+  void SetFov(float fov);
+
+  LensType GetLensType() const;
+  void SetLensType(LensType type);
+
+  static constexpr float kMinAngleRound = 0.0f;
+  static constexpr float kMaxAngleRound = 360.0f;
+  static constexpr float kMinAngleTilt = -90.0f;
+  static constexpr float kMaxAngleTilt = 90.0f;
+  static constexpr float kMinAngleHeading = -180.0f;
+  static constexpr float kMaxAngleHeading = 180.0f;
+
+  static constexpr float kMaxFovLinear = 65.0f;
+  static constexpr float kMaxFovFisheye = 120.0f;
+
+  static constexpr float kDefaultCamAzimuth = 90.0f;
+  static constexpr float kDefaultCamElevation = 89.9f;
+  static constexpr float kDefaultCamRoll = 0.0f;
+
+ private:
+  float target_dir_[3];  // azimuth, altitude, roll
+  float fov_;
+  LensType lens_type_;
+};
+
+
+class RenderContext {
+ public:
+  RenderContext();
+
+  const float* GetRayColor() const;
+  void SetRayColor(float r, float g, float b);
+  void ResetRayColor();
+  void UseRealRayColor();
+
+  const float* GetBackgroundColor() const;
+  void SetBackgroundColor(float r, float g, float b);
+  void ResetBackgroundColor();
+  void UseSkyBackground();
+
+  float GetIntensity() const;
+  void SetIntensity(float intensity);
+
+  int GetImageWidth() const;
+  int GetImageHeight() const;
+  void SetImageWidth(int w);
+  void SetImageHeight(int h);
+
+  int GetImageOffsetX() const;
+  int GetImageOffsetY() const;
+  void SetImageOffsetX(int offset_x);
+  void SetImageOffsetY(int offset_y);
+
+  VisibleRange GetVisibleRange() const;
+  void SetVisibleRange(VisibleRange r);
+
+  static constexpr float kMinIntensity = 0.01f;
+  static constexpr float kMaxIntensity = 100.0f;
+
+  static constexpr int kMaxImageSize = 4096;
+
+ private:
+  float ray_color_[3];
+  float background_color_[3];
+  float intensity_;
+  int image_width_;
+  int image_height_;
+  int offset_x_;
+  int offset_y_;
+  VisibleRange visible_range_;
+};
+
+
+class ProjectContext {
+ public:
+  struct WavelengthInfo {
+    int wavelength;
+    float weight;
+  };
+
+  static std::unique_ptr<ProjectContext> CreateFromFile(const char* filename);
+  static std::unique_ptr<ProjectContext> CreateDefault();
+
+  size_t GetInitRayNum() const;
+  void SetInitRayNum(size_t ray_num);
+
+  const std::vector<WavelengthInfo>& GetWavelengthInfos() const;
+  WavelengthInfo GetWaveLengthInfo(int index) const;
+  void ClearWavelengthInfo();
+  void AddWavelengthInfo(int wavelength, float weight);
+
+  const std::vector<MultiScatterContext>& GetMultiScatterContext() const;
+
+  int GetRayHitNum() const;
+  void SetRayHitNum(int hit_num);
+
+  std::string GetModelPath() const;
+  void SetModelPath(const std::string& path);
+
+  std::string GetDataDirectory() const;
+  std::string GetDefaultImagePath() const;
+
+  void PrintCrystalInfo() const;
 
   static constexpr float kPropMinW = 1e-6;
   static constexpr float kScatMinW = 1e-3;
-  static constexpr size_t kMinTotalRayNumber = 10000;
-  static constexpr int kMinRayHitsNumber = 1;
-  static constexpr int kMaxRayHitsNumber = 12;
+  static constexpr size_t kMinInitRayNumber = 10000;
+  static constexpr int kMinRayHitsNum = 1;
+  static constexpr int kMaxRayHitsNum = 12;
+
+  SunContext sun_ctx_;
+  CameraContext cam_ctx_;
+  RenderContext render_ctx_;
 
  private:
-  SimulationContext();
-  SimulationContext(const char* filename, rapidjson::Document& d);
+  ProjectContext();
 
-  void ApplySettings();
-  void SetSunRayDirection(float lon, float lat);
-
-  void ParseBasicSettings(rapidjson::Document& d);
-  void ParseRaySettings(rapidjson::Document& d);
   void ParseSunSettings(rapidjson::Document& d);
-  void ParseMultiScatterSettings(rapidjson::Document& d);
+  void ParseRaySettings(rapidjson::Document& d);
+  void ParseCameraSettings(rapidjson::Document& d);
+  void ParseRenderSettings(rapidjson::Document& d);
+  void ParseDataSettings(const char* config_file_path, rapidjson::Document& d);
   void ParseCrystalSettings(rapidjson::Document& d);
   void ParseRayPathFilterSettings(rapidjson::Document& d);
+  void ParseMultiScatterSettings(rapidjson::Document& d);
 
-  void ParseOneCrystalSetting(const rapidjson::Value& c, int ci);
+  using CrystalParser = std::function<CrystalPtrU(ProjectContext*, const rapidjson::Value&, int)>;
+  static std::unordered_map<std::string, CrystalParser>& GetCrystalParsers();
+  void ParseOneCrystal(const rapidjson::Value& c, int ci);
   AxisDistribution ParseCrystalAxis(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPrism(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalHexPyramid(const rapidjson::Value& c, int ci);
@@ -144,41 +262,28 @@ class SimulationContext {
   CrystalPtrU ParseCrystalIrregularHexPyramid(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalCustom(const rapidjson::Value& c, int ci);
 
-  void ParseOneScatterSetting(const rapidjson::Value& c, int ci);
-  void ParseScatterCrystal(const rapidjson::Value& c, int ci, MultiScatterContext* scatter);
-  void ParseScatterPopulation(const rapidjson::Value& c, int ci, MultiScatterContext* scatter);
-  void ParseScatterProbability(const rapidjson::Value& c, int ci, MultiScatterContext* scatter);
-  void ParseScatterFilter(const rapidjson::Value& c, int ci, MultiScatterContext* scatter);
-
-  void ParseOneFilterSetting(const rapidjson::Value& c, int ci);
+  using FilterParser = std::function<RayPathFilter(ProjectContext*, const rapidjson::Value&, int)>;
+  static std::unordered_map<std::string, FilterParser>& GetFilterParsers();
+  void ParseOneFilter(const rapidjson::Value& c, int ci);
+  void ParseFilterBasic(const rapidjson::Value& c, int ci, RayPathFilter* filter);
+  void ParseFilterSymmetry(const rapidjson::Value& c, int ci, RayPathFilter* filter);
   RayPathFilter ParseFilterNone(const rapidjson::Value& c, int ci);
   RayPathFilter ParseFilterSpecific(const rapidjson::Value& c, int ci);
   RayPathFilter ParseFilterGeneral(const rapidjson::Value& c, int ci);
-  void ParseFilterBasic(const rapidjson::Value& c, int ci, RayPathFilter* filter);
-  void ParseFilterSymmetry(const rapidjson::Value& c, int ci, RayPathFilter* filter);
 
-  using CrystalParser = std::function<CrystalPtrU(SimulationContext*, const rapidjson::Value& c, int ci)>;
-  static std::unordered_map<std::string, CrystalParser> crystal_parser_;
+  void ParseOneScatter(const rapidjson::Value& c, int ci);
 
-  using FilterParser = std::function<RayPathFilter(SimulationContext*, const rapidjson::Value& c, int ci)>;
-  static std::unordered_map<std::string, FilterParser> filter_parser_;
+  size_t init_ray_num_;
+  std::vector<WavelengthInfo> wavelengths_;  // (wavelength, weight)
+  int ray_hit_num_;
 
-  float sun_ray_dir_[3];
-  float sun_diameter_;
+  std::vector<MultiScatterContext> multiscatter_info_;
 
-  size_t total_ray_num_;
-  std::vector<std::pair<float, float>> wavelengths_;
-  float current_wavelength_;
-  float current_wavelength_weight_;
+  std::string model_path_;
+  std::string data_path_;
 
-  int ray_hits_num_;
-
-  std::vector<MultiScatterContext> multi_scatter_ctx_;
-  std::unordered_map<int, CrystalContextPtr> crystal_ctx_;
-  std::unordered_map<int, RayPathFilter> ray_path_filters_;
-
-  std::string config_file_name_;
-  std::string data_directory_;
+  std::unordered_map<int, CrystalContextPtr> crystal_store_;
+  std::unordered_map<int, RayPathFilter> filter_store_;
 };
 
 
@@ -191,8 +296,8 @@ struct CrystalContext {
 };
 
 
-struct RayContext {
-  RayContext(RaySegment* seg, CrystalContextPtr  crystal_ctx, const float* main_axis_rot);
+struct RayInfo {
+  RayInfo(RaySegment* seg, CrystalContextPtr crystal_ctx, const float* main_axis_rot);
 
   RaySegment* first_ray_segment;
   RaySegment* prev_ray_segment;
@@ -200,77 +305,8 @@ struct RayContext {
   Math::Vec3f main_axis_rot;
 };
 
-using RayContextPtr = std::shared_ptr<RayContext>;
-
-
-class RenderContext {
- public:
-  ~RenderContext() = default;
-
-  uint32_t GetImageWidth() const;
-  uint32_t GetImageHeight() const;
-  bool SetImageWidth(uint32_t w);
-  bool SetImageHeight(uint32_t h);
-
-  std::string GetImagePath() const;
-  std::string GetDataDirectory() const;
-
-  const float* GetCamTarget() const;
-  bool SetCamTarget(float azimuth, float altitude, float rotation);
-
-  float GetFov() const;
-  bool SetFov(float fov);
-
-  ProjectionType GetProjectionType() const;
-  void SetProjectionType(ProjectionType type);
-
-  VisibleRange GetVisibleRange() const;
-  void SetVisibleRange(VisibleRange v);
-
-  int GetOffsetX() const;
-  int GetOffsetY() const;
-
-  uint32_t GetTotalRayNum() const;
-
-  const float* GetRayColor() const;
-  const float* GetBackgroundColor() const;
-  double GetIntensityFactor() const;
-
-  static std::unique_ptr<RenderContext> CreateFromFile(const char* filename);
-  static std::unique_ptr<RenderContext> CreateDefault();
-
- private:
-  RenderContext();
-  explicit RenderContext(rapidjson::Document& d);
-
-  /* Parse rendering settings */
-  void ParseCameraSettings(rapidjson::Document& d);
-  void ParseRenderSettings(rapidjson::Document& d);
-  void ParseDataSettings(rapidjson::Document& d);
-
-  float cam_rot_[3];
-  float fov_;
-
-  float ray_color_[3];
-  float background_color_[3];
-
-  uint32_t img_hei_;
-  uint32_t img_wid_;
-  int offset_y_;
-  int offset_x_;
-  VisibleRange visible_semi_sphere_;
-  ProjectionType projection_type_;
-
-  uint32_t total_ray_num_;
-  double intensity_factor_;
-
-  bool show_horizontal_;
-
-  std::string data_directory_;
-};
-
-using SimulationContextPtr = std::shared_ptr<SimulationContext>;
-using RenderContextPtr = std::shared_ptr<RenderContext>;
+using RayContextPtr = std::shared_ptr<RayInfo>;
+using ProjectContextPtr = std::shared_ptr<ProjectContext>;
 
 }  // namespace IceHalo
 

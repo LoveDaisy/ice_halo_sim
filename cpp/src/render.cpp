@@ -12,12 +12,12 @@
 
 namespace IceHalo {
 
-void EqualAreaFishEye(const float* cam_rot,                     // Camera rotation. [lon, lat, roll]
-                      float hov,                                // Half field of view.
-                      size_t data_number,                       // Data number
-                      const float* dir,                         // Ray directions, [x, y, z]
-                      int img_wid, int img_hei,                 // Image size
-                      int* img_xy,                              // Image coordinates
+void EqualAreaFishEye(const float* cam_rot,                // Camera rotation. [lon, lat, roll]
+                      float hov,                           // Half field of view.
+                      size_t data_number,                  // Data number
+                      const float* dir,                    // Ray directions, [x, y, z]
+                      int img_wid, int img_hei,            // Image size
+                      int* img_xy,                         // Image coordinates
                       VisibleRange visible_semi_sphere) {  // Which semi-sphere can be visible
   float img_r = std::max(img_wid, img_hei) / 2.0f;
   auto* dir_copy = new float[data_number * 3];
@@ -34,7 +34,7 @@ void EqualAreaFishEye(const float* cam_rot,                     // Camera rotati
     if (std::abs(Math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleRange::kCamera && dir_copy[i * 3 + 2] < 0) {
+    } else if (visible_semi_sphere == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else if (visible_semi_sphere == VisibleRange::kUpper && dir[i * 4 + 2] > 0) {
@@ -58,12 +58,12 @@ void EqualAreaFishEye(const float* cam_rot,                     // Camera rotati
 }
 
 
-void DualEqualAreaFishEye(const float* /* cam_rot */,                     // Not used
-                          float /* hov */,                                // Not used
-                          size_t data_number,                             // Data number
-                          const float* dir,                               // Ray directions, [x, y, z]
-                          int img_wid, int img_hei,                       // Image size
-                          int* img_xy,                                    // Image coordinates
+void DualEqualAreaFishEye(const float* /* cam_rot */,                // Not used
+                          float /* hov */,                           // Not used
+                          size_t data_number,                        // Data number
+                          const float* dir,                          // Ray directions, [x, y, z]
+                          int img_wid, int img_hei,                  // Image size
+                          int* img_xy,                               // Image coordinates
                           VisibleRange /* visible_semi_sphere */) {  // Not used
   float img_r = std::min(img_wid / 2, img_hei) / 2.0f;
   float proj_r = img_r / 2.0f / std::sin(45.0f * Math::kDegreeToRad);
@@ -98,12 +98,12 @@ void DualEqualAreaFishEye(const float* /* cam_rot */,                     // Not
 }
 
 
-void DualEquidistantFishEye(const float* /* cam_rot */,                     // Not used
-                            float /* hov */,                                // Not used
-                            size_t data_number,                             // Data number
-                            const float* dir,                               // Ray directions, [x, y, z]
-                            int img_wid, int img_hei,                       // Image size
-                            int* img_xy,                                    // Image coordinates
+void DualEquidistantFishEye(const float* /* cam_rot */,                // Not used
+                            float /* hov */,                           // Not used
+                            size_t data_number,                        // Data number
+                            const float* dir,                          // Ray directions, [x, y, z]
+                            int img_wid, int img_hei,                  // Image size
+                            int* img_xy,                               // Image coordinates
                             VisibleRange /* visible_semi_sphere */) {  // Not used
   float img_r = std::min(img_wid / 2, img_hei) / 2.0f;
 
@@ -137,12 +137,12 @@ void DualEquidistantFishEye(const float* /* cam_rot */,                     // N
 }
 
 
-void RectLinear(const float* cam_rot,                     // Camera rotation. [lon, lat, roll]
-                float hov,                                // Half field of view.
-                size_t data_number,                       // Data number
-                const float* dir,                         // Ray directions, [x, y, z]
-                int img_wid, int img_hei,                 // Image size
-                int* img_xy,                              // Image coordinates
+void RectLinear(const float* cam_rot,                // Camera rotation. [lon, lat, roll]
+                float hov,                           // Half field of view.
+                size_t data_number,                  // Data number
+                const float* dir,                    // Ray directions, [x, y, z]
+                int img_wid, int img_hei,            // Image size
+                int* img_xy,                         // Image coordinates
                 VisibleRange visible_semi_sphere) {  // Which semi-sphere can be visible
   auto* dir_copy = new float[data_number * 3];
   float cam_rot_copy[3];
@@ -158,7 +158,7 @@ void RectLinear(const float* cam_rot,                     // Camera rotation. [l
     if (dir_copy[i * 3 + 2] < 0 || std::abs(Math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
-    } else if (visible_semi_sphere == VisibleRange::kCamera && dir_copy[i * 3 + 2] < 0) {
+    } else if (visible_semi_sphere == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else if (visible_semi_sphere == VisibleRange::kUpper && dir[i * 4 + 2] > 0) {
@@ -215,7 +215,7 @@ constexpr float SpectrumRenderer::kCmfY[];
 constexpr float SpectrumRenderer::kCmfZ[];
 
 
-SpectrumRenderer::SpectrumRenderer(const IceHalo::RenderContextPtr& context) : context_(context), total_w_(0) {}
+SpectrumRenderer::SpectrumRenderer(const ProjectContextPtr& context) : context_(context), total_w_(0) {}
 
 
 SpectrumRenderer::~SpectrumRenderer() {
@@ -224,7 +224,7 @@ SpectrumRenderer::~SpectrumRenderer() {
 
 
 void SpectrumRenderer::LoadData() {
-  auto projection_type = context_->GetProjectionType();
+  auto projection_type = context_->cam_ctx_.GetLensType();
   const auto& projection_functions = GetProjectionFunctions();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
     std::fprintf(stderr, "Unknown projection type!\n");
@@ -245,7 +245,7 @@ void SpectrumRenderer::LoadData() {
 
 
 void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, size_t num) {
-  auto projection_type = context_->GetProjectionType();
+  auto projection_type = context_->cam_ctx_.GetLensType();
   auto& projection_functions = GetProjectionFunctions();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
     std::fprintf(stderr, "Unknown projection type!\n");
@@ -261,16 +261,16 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
 
   auto* tmp_xy = new int[num * 2];
 
-  auto img_hei = context_->GetImageHeight();
-  auto img_wid = context_->GetImageWidth();
+  auto img_hei = context_->render_ctx_.GetImageHeight();
+  auto img_wid = context_->render_ctx_.GetImageWidth();
 
   auto threading_pool = ThreadingPool::GetInstance();
   auto step = std::max(num / 100, static_cast<size_t>(10));
   for (decltype(num) i = 0; i < num; i += step) {
     decltype(num) current_num = std::min(num - i, step);
     threading_pool->AddJob([=] {
-      pf(context_->GetCamTarget(), context_->GetFov(), current_num, ray_data + i * 4, img_wid, img_hei, tmp_xy + i * 2,
-         context_->GetVisibleRange());
+      pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num, ray_data + i * 4,
+         img_wid, img_hei, tmp_xy + i * 2, context_->render_ctx_.GetVisibleRange());
     });
   }
   threading_pool->WaitFinish();
@@ -299,8 +299,8 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
       continue;
     }
     if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
-      x += context_->GetOffsetX();
-      y += context_->GetOffsetY();
+      x += context_->render_ctx_.GetImageOffsetX();
+      y += context_->render_ctx_.GetImageOffsetY();
     }
     if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
       continue;
@@ -312,7 +312,7 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
   }
   delete[] tmp_xy;
 
-  total_w_ += context_->GetTotalRayNum() * weight;
+  total_w_ += context_->GetInitRayNum() * weight;
 }
 
 
@@ -330,15 +330,15 @@ void SpectrumRenderer::ResetData() {
 
 
 void SpectrumRenderer::RenderToRgb(uint8_t* rgb_data) {
-  auto img_hei = context_->GetImageHeight();
-  auto img_wid = context_->GetImageWidth();
+  auto img_hei = context_->render_ctx_.GetImageHeight();
+  auto img_wid = context_->render_ctx_.GetImageWidth();
   auto wl_num = spectrum_data_.size();
   auto* wl_data = new float[wl_num];
   auto* flat_spec_data = new float[wl_num * img_wid * img_hei];
 
   GatherSpectrumData(wl_data, flat_spec_data);
-  auto ray_color = context_->GetRayColor();
-  auto background_color = context_->GetBackgroundColor();
+  auto ray_color = context_->render_ctx_.GetRayColor();
+  auto background_color = context_->render_ctx_.GetBackgroundColor();
   bool use_rgb = ray_color[0] < 0;
 
   if (use_rgb) {
@@ -408,9 +408,9 @@ int SpectrumRenderer::LoadDataFromFile(IceHalo::File& file) {
 
 
 void SpectrumRenderer::GatherSpectrumData(float* wl_data_out, float* sp_data_out) {
-  auto img_hei = context_->GetImageHeight();
-  auto img_wid = context_->GetImageWidth();
-  auto intensity_factor = static_cast<float>(context_->GetIntensityFactor());
+  auto img_hei = context_->render_ctx_.GetImageHeight();
+  auto img_wid = context_->render_ctx_.GetImageWidth();
+  auto intensity_factor = static_cast<float>(context_->render_ctx_.GetIntensity());
 
   int k = 0;
   for (const auto& kv : spectrum_data_) {

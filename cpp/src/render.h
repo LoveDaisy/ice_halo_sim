@@ -10,7 +10,7 @@
 
 namespace IceHalo {
 
-enum class VisibleRange { kUpper, kLower, kCamera, kFull };
+enum class VisibleRange { kUpper, kLower, kFront, kFull };
 
 
 enum class LensType {
@@ -21,40 +21,39 @@ enum class LensType {
 };
 
 
-void EqualAreaFishEye(
-    const float* cam_rot,                                                // Camera rotation. [lon, lat, roll]
-    float hov,                                                           // Half field of view.
-    size_t data_number,                                                  // Data number
-    const float* dir,                                                    // Ray directions, [x, y, z]
-    int img_wid, int img_hei,                                            // Image size
-    int* img_xy,                                                         // Image coordinates
-    VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Which semi-sphere can be visible
+void EqualAreaFishEye(const float* cam_rot,                                      // Camera rotation. [lon, lat, roll]
+                      float hov,                                                 // Half field of view.
+                      size_t data_number,                                        // Data number
+                      const float* dir,                                          // Ray directions, [x, y, z]
+                      int img_wid, int img_hei,                                  // Image size
+                      int* img_xy,                                               // Image coordinates
+                      VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Which semi-sphere can be visible
 
 
-void DualEqualAreaFishEye(const float* cam_rot,      // Not used
-                          float hov,                 // Not used
-                          size_t data_number,        // Data number
-                          const float* dir,          // Ray directions, [x, y, z]
-                          int img_wid, int img_hei,  // Image size
-                          int* img_xy,               // Image coordinates
+void DualEqualAreaFishEye(const float* cam_rot,                                      // Not used
+                          float hov,                                                 // Not used
+                          size_t data_number,                                        // Data number
+                          const float* dir,                                          // Ray directions, [x, y, z]
+                          int img_wid, int img_hei,                                  // Image size
+                          int* img_xy,                                               // Image coordinates
                           VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Not used
 
 
-void DualEquidistantFishEye(const float* cam_rot,      // Not used
-                            float hov,                 // Not used
-                            size_t data_number,        // Data number
-                            const float* dir,          // Ray directions, [x, y, z]
-                            int img_wid, int img_hei,  // Image size
-                            int* img_xy,               // Image coordinates
+void DualEquidistantFishEye(const float* cam_rot,                                      // Not used
+                            float hov,                                                 // Not used
+                            size_t data_number,                                        // Data number
+                            const float* dir,                                          // Ray directions, [x, y, z]
+                            int img_wid, int img_hei,                                  // Image size
+                            int* img_xy,                                               // Image coordinates
                             VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Not used
 
 
-void RectLinear(const float* cam_rot,      // Camera rotation. [lon, lat, roll]
-                float hov,                 // Half field of view.
-                size_t data_number,        // Data number
-                const float* dir,          // Ray directions, [x, y, z]
-                int img_wid, int img_hei,  // Image size
-                int* img_xy,               // I mage coordinates
+void RectLinear(const float* cam_rot,                                      // Camera rotation. [lon, lat, roll]
+                float hov,                                                 // Half field of view.
+                size_t data_number,                                        // Data number
+                const float* dir,                                          // Ray directions, [x, y, z]
+                int img_wid, int img_hei,                                  // Image size
+                int* img_xy,                                               // I mage coordinates
                 VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Which semi-sphere can be visible
 
 
@@ -74,14 +73,13 @@ using MyUnorderedMap = std::unordered_map<Key, T, HashType<Key>>;
 /* Workaround end */
 
 
-using ProjectionFunction =
-    std::function<void(const float* cam_rot,                     // Camera rotation (lon, lat, roll), in degree.
-                       float hov,                                // Half field of view, in degree
-                       size_t data_number,                       // Data number
-                       const float* dir,                         // Ray directions, [x, y, z]
-                       int img_wid, int img_hei,                 // Image size
-                       int* img_xy,                              // Image coordinates
-                       VisibleRange visible_semi_sphere)>;  // Which semi-sphere can be visible
+using ProjectionFunction = std::function<void(const float* cam_rot,      // Camera rotation (lon, lat, roll), in degree.
+                                              float hov,                 // Half field of view, in degree
+                                              size_t data_number,        // Data number
+                                              const float* dir,          // Ray directions, [x, y, z]
+                                              int img_wid, int img_hei,  // Image size
+                                              int* img_xy,               // Image coordinates
+                                              VisibleRange visible_semi_sphere)>;  // Which semi-sphere can be visible
 
 
 MyUnorderedMap<LensType, ProjectionFunction>& GetProjectionFunctions();
@@ -92,7 +90,7 @@ void SrgbGamma(float* linear_rgb);
 
 class SpectrumRenderer {
  public:
-  explicit SpectrumRenderer(const RenderContextPtr& context);
+  explicit SpectrumRenderer(const ProjectContextPtr& context);
   ~SpectrumRenderer();
 
   void LoadData();
@@ -114,7 +112,7 @@ class SpectrumRenderer {
             const float* wavelengths, const float* spec_data,  // spec_data: wavelength_number x data_number
             uint8_t* rgb_data);                                // rgb data, data_number x 3
 
-  RenderContextPtr context_;
+  ProjectContextPtr context_;
   std::unordered_map<int, float*> spectrum_data_;
   std::unordered_map<int, float*> spectrum_data_compensation_;
   float total_w_;
