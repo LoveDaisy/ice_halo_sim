@@ -14,17 +14,15 @@ int main(int argc, char* argv[]) {
   }
 
   auto start = std::chrono::system_clock::now();
-  IceHalo::SimulationContextPtr sim_ctx = IceHalo::SimulationContext::CreateFromFile(argv[1]);
-  IceHalo::Simulator simulator(sim_ctx);
-
-  IceHalo::RenderContextPtr render_ctx = IceHalo::RenderContext::CreateFromFile(argv[1]);
-  IceHalo::SpectrumRenderer renderer(render_ctx);
+  IceHalo::ProjectContextPtr proj_ctx = IceHalo::ProjectContext::CreateFromFile(argv[1]);
+  IceHalo::Simulator simulator(proj_ctx);
+  IceHalo::SpectrumRenderer renderer(proj_ctx);
 
   auto t = std::chrono::system_clock::now();
   std::chrono::duration<float, std::ratio<1, 1000>> diff = t - start;
   std::printf("Initialization: %.2fms\n", diff.count());
 
-  IceHalo::File file(render_ctx->GetImagePath().c_str());
+  IceHalo::File file(proj_ctx->GetDefaultImagePath().c_str());
   if (!file.Open(IceHalo::OpenMode::kWrite | IceHalo::OpenMode::kBinary)) {
     std::fprintf(stderr, "Cannot create output image file!\n");
     return -1;
@@ -32,12 +30,12 @@ int main(int argc, char* argv[]) {
   file.Close();
 
   size_t total_ray_num = 0;
-  auto flat_rgb_data = new uint8_t[3 * render_ctx->GetImageWidth() * render_ctx->GetImageHeight()];
+  auto flat_rgb_data = new uint8_t[3 * proj_ctx->render_ctx_.GetImageWidth() * proj_ctx->render_ctx_.GetImageHeight()];
   while (true) {
-    for (auto wl : sim_ctx->GetWavelengths()) {
-      std::printf("starting at wavelength: %.1f\n", wl.first);
-
-      sim_ctx->SetCurrentWavelength(wl.first, wl.second);
+    const auto& wavelengths = proj_ctx->GetWavelengthInfos();
+    for (decltype(wavelengths.size()) i = 0; i < wavelengths.size(); i++) {
+      std::printf("starting at wavelength: %d\n", wavelengths[i].wavelength);
+      simulator.SetWavelengthIndex(i);
 
       auto t0 = std::chrono::system_clock::now();
       simulator.Start();
@@ -55,23 +53,23 @@ int main(int argc, char* argv[]) {
         p[3] = r->w;
         p += 4;
       }
-      renderer.LoadData(wl.first, wl.second, curr_data, num);
+      renderer.LoadData(wavelengths[i].wavelength, wavelengths[i].weight, curr_data, num);
       delete[] curr_data;
     }
 
     renderer.RenderToRgb(flat_rgb_data);
 
-    cv::Mat img(render_ctx->GetImageHeight(), render_ctx->GetImageWidth(), CV_8UC3, flat_rgb_data);
+    cv::Mat img(proj_ctx->render_ctx_.GetImageHeight(), proj_ctx->render_ctx_.GetImageWidth(), CV_8UC3, flat_rgb_data);
     cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
     try {
-      cv::imwrite(render_ctx->GetImagePath(), img);
+      cv::imwrite(proj_ctx->GetDefaultImagePath(), img);
     } catch (cv::Exception& ex) {
       std::fprintf(stderr, "Exception converting image to PNG format: %s\n", ex.what());
       break;
     }
 
     t = std::chrono::system_clock::now();
-    total_ray_num += sim_ctx->GetTotalInitRays() * sim_ctx->GetWavelengths().size();
+    total_ray_num += proj_ctx->GetInitRayNum() * wavelengths.size();
     diff = t - start;
     std::printf("=== Total %zu rays finished! ===\n", total_ray_num);
     std::printf("=== Spent %.3f sec!          ===\n", diff.count() / 1000);

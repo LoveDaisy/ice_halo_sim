@@ -77,7 +77,7 @@ void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,          
   auto face_vertexes = crystal->GetFaceVertex();
   auto face_norms = crystal->GetFaceNorm();
   for (decltype(num) i = 0; i < num; i++) {
-    if (w_in[i] < SimulationContext::kPropMinW) {
+    if (w_in[i] < ProjectContext::kPropMinW) {
       continue;
     }
 #if defined(__SSE4_1__) && defined(__AVX__)

@@ -51,9 +51,10 @@ struct EnterRayData {
 
 class Simulator {
  public:
-  explicit Simulator(SimulationContextPtr  context);
+  explicit Simulator(ProjectContextPtr  context);
   ~Simulator() = default;
 
+  void SetWavelengthIndex(int index);
   void Start();
   const std::vector<RaySegment*>& GetFinalRaySegments() const;
   void SaveFinalDirections(const char* filename);
@@ -71,12 +72,14 @@ class Simulator {
 
   static constexpr int kBufferSizeFactor = 4;
 
-  SimulationContextPtr context_;
+  ProjectContextPtr context_;
   std::vector<CrystalContext> active_crystal_ctxs_;
 
   std::vector<std::vector<RayContextPtr>> rays_;
   std::vector<std::vector<RaySegment*>> exit_ray_segments_;
   std::vector<RaySegment*> final_ray_segments_;
+
+  int current_wavelength_index_;
 
   size_t total_ray_num_;
   size_t active_ray_num_;

@@ -11,11 +11,11 @@ class OpticsTest : public ::testing::Test {
  protected:
   void SetUp() override {
     crystal = IceHalo::Crystal::CreateHexPrism(1.2f);
-    context = IceHalo::SimulationContext::CreateFromFile(config_file_name.c_str());
+    context = IceHalo::ProjectContext::CreateFromFile(config_file_name.c_str());
   }
 
   IceHalo::CrystalPtr crystal;
-  IceHalo::SimulationContextPtr context;
+  IceHalo::ProjectContextPtr context;
 };
 
 
@@ -235,9 +235,8 @@ TEST_F(OpticsTest, RayFaceIntersection1) {
 
 TEST_F(OpticsTest, RayTracing) {
   context->PrintCrystalInfo();
-  auto wls = context->GetWavelengths();
-  context->SetCurrentWavelength(wls[0].first, wls[0].second);
   auto simulator = IceHalo::Simulator(context);
+  simulator.SetWavelengthIndex(0);
   simulator.Start();
   simulator.PrintRayInfo();
 }
