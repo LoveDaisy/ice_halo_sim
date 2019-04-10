@@ -161,10 +161,88 @@ QMainWindow QGroupBox {
        <string>Render settings</string>
       </property>
       <layout class="QGridLayout" name="renderSettingLayout">
+       <item row="1" column="1">
+        <widget class="QLineEdit" name="fovEdit">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QLineEdit" name="camAzimuthEdit">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="1">
+        <widget class="QLineEdit" name="camRotationEdit">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="1">
+        <widget class="QLineEdit" name="camAltitudeEdit">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="0">
+        <widget class="QLabel" name="camAltitudeLabel">
+         <property name="text">
+          <string>Camera altitude [°]:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="7" column="0">
+        <widget class="QLabel" name="visibleRangeLabel">
+         <property name="text">
+          <string>Visible range:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="7" column="1">
+        <widget class="QComboBox" name="visibleRangeComboBox"/>
+       </item>
        <item row="0" column="0">
         <widget class="QLabel" name="lensLabel">
          <property name="text">
           <string>Lens:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="0">
+        <widget class="QLabel" name="camAzimuthLabel">
+         <property name="text">
+          <string>Camera azimuth [°]:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="0">
+        <widget class="QLabel" name="camRotationLabel">
+         <property name="text">
+          <string>Camera rotation [°]:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="fovLabel">
+         <property name="text">
+          <string>FoV [°]:</string>
          </property>
         </widget>
        </item>
@@ -176,43 +254,16 @@ QMainWindow QGroupBox {
            <verstretch>0</verstretch>
           </sizepolicy>
          </property>
-         <item>
-          <property name="text">
-           <string>linear (normal lens)</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>fisheye (equal area)</string>
-          </property>
-         </item>
         </widget>
        </item>
-       <item row="1" column="0">
-        <widget class="QLabel" name="fovLabel">
-         <property name="text">
-          <string>FoV [°]:</string>
-         </property>
-        </widget>
-       </item>
-       <item row="1" column="1">
-        <widget class="QLineEdit" name="fovEdit">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-        </widget>
-       </item>
-       <item row="2" column="0">
+       <item row="6" column="0">
         <widget class="QLabel" name="imageCenterLabel">
          <property name="text">
           <string>Image center:</string>
          </property>
         </widget>
        </item>
-       <item row="2" column="1">
+       <item row="6" column="1">
         <widget class="QComboBox" name="imageCenterComboBox">
          <item>
           <property name="text">
@@ -227,88 +278,6 @@ QMainWindow QGroupBox {
          <item>
           <property name="text">
            <string>customize</string>
-          </property>
-         </item>
-        </widget>
-       </item>
-       <item row="3" column="0">
-        <widget class="QLabel" name="camAzimuthLabel">
-         <property name="text">
-          <string>Azimuth [°]:</string>
-         </property>
-        </widget>
-       </item>
-       <item row="3" column="1">
-        <widget class="QLineEdit" name="camAzimuthEdit">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-        </widget>
-       </item>
-       <item row="4" column="0">
-        <widget class="QLabel" name="camAltitudeLabel">
-         <property name="text">
-          <string>Altitude [°]:</string>
-         </property>
-        </widget>
-       </item>
-       <item row="4" column="1">
-        <widget class="QLineEdit" name="camAltitudeEdit">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-        </widget>
-       </item>
-       <item row="5" column="0">
-        <widget class="QLabel" name="camRotationLabel">
-         <property name="text">
-          <string>Rotation [°]:</string>
-         </property>
-        </widget>
-       </item>
-       <item row="5" column="1">
-        <widget class="QLineEdit" name="camRotationEdit">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-        </widget>
-       </item>
-       <item row="6" column="0">
-        <widget class="QLabel" name="visibleRangeLabel">
-         <property name="text">
-          <string>Visible range:</string>
-         </property>
-        </widget>
-       </item>
-       <item row="6" column="1">
-        <widget class="QComboBox" name="visibleRangeComboBox">
-         <item>
-          <property name="text">
-           <string>full</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>upper</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>lower</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>front</string>
           </property>
          </item>
         </widget>
@@ -592,28 +561,7 @@ QMainWindow QGroupBox {
         </widget>
        </item>
        <item row="2" column="2">
-        <widget class="QComboBox" name="rayColorComboBox">
-         <item>
-          <property name="text">
-           <string>real</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>white</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>black</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>customize</string>
-          </property>
-         </item>
-        </widget>
+        <widget class="QComboBox" name="rayColorComboBox"/>
        </item>
        <item row="2" column="0">
         <widget class="QLabel" name="rayColorLabel">
@@ -649,28 +597,7 @@ QMainWindow QGroupBox {
         </widget>
        </item>
        <item row="3" column="2">
-        <widget class="QComboBox" name="backgroundColorComboBox">
-         <item>
-          <property name="text">
-           <string>black</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>white</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>sky</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>customize</string>
-          </property>
-         </item>
-        </widget>
+        <widget class="QComboBox" name="backgroundColorComboBox"/>
        </item>
        <item row="3" column="0">
         <widget class="QLabel" name="backgroundColorLabel">

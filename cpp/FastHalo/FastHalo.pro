@@ -23,8 +23,7 @@ HEADERS += \
     $$CPP_PROJ_ROOT/src/optics.h \
     $$CPP_PROJ_ROOT/src/render.h \
     $$CPP_PROJ_ROOT/src/simulation.h \
-    $$CPP_PROJ_ROOT/src/threadingpool.h \
-    datamodel.h
+    $$CPP_PROJ_ROOT/src/threadingpool.h
 
 SOURCES += \
     mainwindow.cpp \

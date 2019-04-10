@@ -18,11 +18,19 @@ class MainWindow : public QMainWindow {
   ~MainWindow();
 
  private slots:
-  void enableFilterSettings(bool enable);
-  void updateTotalRays(int ray_num);
+  // Basic settings group
   void updateRayHitsNum(int n);
   void updateSunPosition(const QString& altitude_txt);
   void updateSunDiameterType(int index);
+  // Ray settings group
+  void updateTotalRays(int ray_num);
+  void updateRayColor(int index);
+  void updateBackgroundColor(int index);
+  // Render settings group
+  void updateLensType(int index);
+  void updateVisibleRange(int index);
+  // Filter settings group
+  void enableFilterSettings(bool enable);
 
   void updateScatterProb(int v);
   void updateSimulationContext();
@@ -32,8 +40,10 @@ class MainWindow : public QMainWindow {
 
   Ui::MainWindow* ui;
 
-  IceHalo::SimulationContextPtr simulation_context;
-  IceHalo::RenderContextPtr render_context;
+  IceHalo::ProjectContextPtr project_context;
+
+  using LensType_t = std::underlying_type<IceHalo::LensType>::type;
+  using VisibleRange_t = std::underlying_type<IceHalo::VisibleRange>::type;
 };
 
 #endif  // MAINWINDOW_H
