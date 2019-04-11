@@ -78,7 +78,7 @@ size_t File::Write(const T* data, size_t n) {
   return count;
 }
 
-bool exists(const char* filename);
+bool FileExists(const char* filename);
 
 std::vector<File> ListDataFiles(const char* dir);
 

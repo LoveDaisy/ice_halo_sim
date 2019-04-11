@@ -21,40 +21,40 @@ enum class LensType {
 };
 
 
-void EqualAreaFishEye(const float* cam_rot,                                      // Camera rotation. [lon, lat, roll]
-                      float hov,                                                 // Half field of view.
-                      size_t data_number,                                        // Data number
-                      const float* dir,                                          // Ray directions, [x, y, z]
-                      int img_wid, int img_hei,                                  // Image size
-                      int* img_xy,                                               // Image coordinates
-                      VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Which semi-sphere can be visible
+void EqualAreaFishEye(const float* cam_rot,                                // Camera rotation. [lon, lat, roll]
+                      float hov,                                           // Half field of view.
+                      size_t data_number,                                  // Data number
+                      const float* dir,                                    // Ray directions, [x, y, z]
+                      int img_wid, int img_hei,                            // Image size
+                      int* img_xy,                                         // Image coordinates
+                      VisibleRange visible_range = VisibleRange::kUpper);  // Visible range
 
 
-void DualEqualAreaFishEye(const float* cam_rot,                                      // Not used
-                          float hov,                                                 // Not used
-                          size_t data_number,                                        // Data number
-                          const float* dir,                                          // Ray directions, [x, y, z]
-                          int img_wid, int img_hei,                                  // Image size
-                          int* img_xy,                                               // Image coordinates
-                          VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Not used
+void DualEqualAreaFishEye(const float* cam_rot,                                // Not used
+                          float hov,                                           // Not used
+                          size_t data_number,                                  // Data number
+                          const float* dir,                                    // Ray directions, [x, y, z]
+                          int img_wid, int img_hei,                            // Image size
+                          int* img_xy,                                         // Image coordinates
+                          VisibleRange visible_range = VisibleRange::kUpper);  // Not used
 
 
-void DualEquidistantFishEye(const float* cam_rot,                                      // Not used
-                            float hov,                                                 // Not used
-                            size_t data_number,                                        // Data number
-                            const float* dir,                                          // Ray directions, [x, y, z]
-                            int img_wid, int img_hei,                                  // Image size
-                            int* img_xy,                                               // Image coordinates
-                            VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Not used
+void DualEquidistantFishEye(const float* cam_rot,                                // Not used
+                            float hov,                                           // Not used
+                            size_t data_number,                                  // Data number
+                            const float* dir,                                    // Ray directions, [x, y, z]
+                            int img_wid, int img_hei,                            // Image size
+                            int* img_xy,                                         // Image coordinates
+                            VisibleRange visible_range = VisibleRange::kUpper);  // Not used
 
 
-void RectLinear(const float* cam_rot,                                      // Camera rotation. [lon, lat, roll]
-                float hov,                                                 // Half field of view.
-                size_t data_number,                                        // Data number
-                const float* dir,                                          // Ray directions, [x, y, z]
-                int img_wid, int img_hei,                                  // Image size
-                int* img_xy,                                               // I mage coordinates
-                VisibleRange visible_semi_sphere = VisibleRange::kUpper);  // Which semi-sphere can be visible
+void RectLinear(const float* cam_rot,                                // Camera rotation. [lon, lat, roll]
+                float hov,                                           // Half field of view.
+                size_t data_number,                                  // Data number
+                const float* dir,                                    // Ray directions, [x, y, z]
+                int img_wid, int img_hei,                            // Image size
+                int* img_xy,                                         // Image coordinates
+                VisibleRange visible_range = VisibleRange::kUpper);  // Visible range
 
 
 /* A workaround for disgusting C++11 standard that enum class cannot be a key */
@@ -90,7 +90,7 @@ void SrgbGamma(float* linear_rgb);
 
 class SpectrumRenderer {
  public:
-  explicit SpectrumRenderer(const ProjectContextPtr& context);
+  explicit SpectrumRenderer(ProjectContextPtr context);
   ~SpectrumRenderer();
 
   void LoadData();
@@ -105,12 +105,13 @@ class SpectrumRenderer {
  private:
   int LoadDataFromFile(File& file);
   void GatherSpectrumData(float* wl_data_out, float* sp_data_out);
-  void Rgb(size_t wavelength_number, size_t data_number,       //
-           const float* wavelengths, const float* spec_data,   // spec_data: wavelength_number x data_number
-           uint8_t* rgb_data);                                 // rgb data, data_number x 3
-  void Gray(size_t wavelength_number, size_t data_number,      //
-            const float* wavelengths, const float* spec_data,  // spec_data: wavelength_number x data_number
-            uint8_t* rgb_data);                                // rgb data, data_number x 3
+
+  static void Rgb(size_t wavelength_number, size_t data_number,       //
+                  const float* wavelengths, const float* spec_data,   // spec_data: wavelength_number x data_number
+                  uint8_t* rgb_data);                                 // rgb data, data_number x 3
+  static void Gray(size_t wavelength_number, size_t data_number,      //
+                   const float* wavelengths, const float* spec_data,  // spec_data: wavelength_number x data_number
+                   uint8_t* rgb_data);                                // rgb data, data_number x 3
 
   ProjectContextPtr context_;
   std::unordered_map<int, float*> spectrum_data_;
