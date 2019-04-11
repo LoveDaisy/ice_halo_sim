@@ -6,7 +6,7 @@
 
 namespace IceHalo {
 
-bool exists(const char* filename) {
+bool FileExists(const char* filename) {
   boost::filesystem::path p(filename);
   return exists(p);
 }
@@ -53,8 +53,8 @@ File::~File() {
 
 
 bool File::Open(uint8_t mode) {
-  if (!exists(path_.parent_path())) {
-    create_directories(path_.parent_path());
+  if (!boost::filesystem::exists(path_.parent_path())) {
+    boost::filesystem::create_directories(path_.parent_path());
   }
 
   char modeBuffer[32];

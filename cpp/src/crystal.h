@@ -149,8 +149,8 @@ class Crystal {
   void InitFaceNumberCubic();
   void InitFaceNumberStack();
 
-  static const std::vector<std::pair<Math::Vec3f, int>> hex_face_norm_to_number_list_;
-  static const std::vector<std::pair<Math::Vec3f, int>> cubic_face_norm_to_number_list_;
+  static const std::vector<std::pair<Math::Vec3f, int>>& GetHexFaceNormToNumberList();
+  static const std::vector<std::pair<Math::Vec3f, int>>& GetCubicFaceNormToNumberList();
 
   std::vector<Math::Vec3f> vertexes_;
   std::vector<Math::TriangleIdx> faces_;
@@ -170,8 +170,8 @@ class Crystal {
    * @param faces
    * @param type
    */
-  Crystal(const std::vector<Math::Vec3f>& vertexes,     // vertex points
-          const std::vector<Math::TriangleIdx>& faces,  // face indices
+  Crystal(std::vector<Math::Vec3f>  vertexes,     // vertex points
+          std::vector<Math::TriangleIdx>  faces,  // face indices
           CrystalType type);                            // crystal type
 
   /*! @brief Constructor, given vertexes, faces and face_number_map
@@ -183,16 +183,16 @@ class Crystal {
    *        and [Pyramidal Crystal Face Numbers](https://www.atoptics.co.uk/halo/fnumpyr.htm)
    * @param type
    */
-  Crystal(const std::vector<Math::Vec3f>& vertexes,     // vertex points
-          const std::vector<Math::TriangleIdx>& faces,  // face indices
-          const std::vector<int>& face_number_map,      // face to face number
+  Crystal(std::vector<Math::Vec3f>  vertexes,     // vertex points
+          std::vector<Math::TriangleIdx>  faces,  // face indices
+          std::vector<int>  face_number_map,      // face to face number
           CrystalType type);                            // crystal type
 };
 
 using CrystalPtrU = std::unique_ptr<Crystal>;
 using CrystalPtr = std::shared_ptr<Crystal>;
 
-};  // namespace IceHalo
+}  // namespace IceHalo
 
 
 #endif  // SRC_CRYSTAL_H_

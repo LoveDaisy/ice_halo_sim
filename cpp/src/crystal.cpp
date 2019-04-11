@@ -3,14 +3,15 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <utility>
 
 namespace IceHalo {
 
-Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes,     // vertex
-                 const std::vector<Math::TriangleIdx>& faces,  // face indices
-                 CrystalType type)                             // crystal type
-    : vertexes_(vertexes), faces_(faces), type_(type), face_number_period_(-1), face_bases_(nullptr),
-      face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
+Crystal::Crystal(std::vector<Math::Vec3f> vertexes,     // vertex
+                 std::vector<Math::TriangleIdx> faces,  // face indices
+                 CrystalType type)                      // crystal type
+    : vertexes_(std::move(vertexes)), faces_(std::move(faces)), type_(type), face_number_period_(-1),
+      face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitNorm();
   InitFaceNumber();
   switch (type_) {
@@ -30,12 +31,13 @@ Crystal::Crystal(const std::vector<Math::Vec3f>& vertexes,     // vertex
 }
 
 
-Crystal::Crystal(const std::vector<IceHalo::Math::Vec3f>& vertexes,     // vertex
-                 const std::vector<IceHalo::Math::TriangleIdx>& faces,  // face indices
-                 const std::vector<int>& face_number_map,               // face to face number
-                 CrystalType type)                                      // crystal type
-    : vertexes_(vertexes), faces_(faces), face_number_map_(face_number_map), type_(type), face_number_period_(-1),
-      face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
+Crystal::Crystal(std::vector<IceHalo::Math::Vec3f> vertexes,     // vertex
+                 std::vector<IceHalo::Math::TriangleIdx> faces,  // face indices
+                 std::vector<int> face_number_map,               // face to face number
+                 CrystalType type)                               // crystal type
+    : vertexes_(std::move(vertexes)), faces_(std::move(faces)), face_number_map_(std::move(face_number_map)),
+      type_(type), face_number_period_(-1), face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr),
+      face_area_(nullptr) {
   InitNorm();
 }
 
@@ -155,7 +157,7 @@ void Crystal::InitFaceNumberHex() {
     const auto curr_face_norm = face_norm_ + i * 3;
     float max_val = -1;
     int max_face_number = -1;
-    for (const auto& d : hex_face_norm_to_number_list_) {
+    for (const auto& d : GetHexFaceNormToNumberList()) {
       float tmpVal = Math::Dot3(curr_face_norm, d.first.val());
       if (tmpVal > max_val) {
         max_val = tmpVal;
@@ -179,7 +181,7 @@ void Crystal::InitFaceNumberCubic() {
     const auto curr_face_norm = face_norm_ + i * 3;
     float max_val = -1;
     int max_face_number = -1;
-    for (const auto& d : cubic_face_norm_to_number_list_) {
+    for (const auto& d : GetCubicFaceNormToNumberList()) {
       float tmpVal = Math::Dot3(curr_face_norm, d.first.val());
       if (tmpVal > max_val) {
         max_val = tmpVal;
@@ -205,7 +207,7 @@ void Crystal::InitFaceNumberStack() {
     const auto curr_face_norm = face_norm_ + i * 3;
     float max_val = -1;
     int max_face_number = -1;
-    for (const auto& d : hex_face_norm_to_number_list_) {
+    for (const auto& d : GetHexFaceNormToNumberList()) {
       float tmp_val = Math::Dot3(curr_face_norm, d.first.val());
       if (tmp_val > max_val) {
         max_val = tmp_val;
@@ -259,26 +261,32 @@ void Crystal::InitFaceNumberStack() {
 }
 
 
-const std::vector<std::pair<Math::Vec3f, int>> Crystal::hex_face_norm_to_number_list_{
-  { { 0, 0, 1 }, 1 },                      // top face
-  { { 0, 0, -1 }, 2 },                     // bottom face
-  { { 1, 0, 0 }, 3 },                      // prism face
-  { { Math::kSqrt3 / 2, 0.5f, 0 }, 4 },    // prism face
-  { { -Math::kSqrt3 / 2, 0.5f, 0 }, 5 },   // prism face
-  { { -1, 0, 0 }, 6 },                     // prism face
-  { { -Math::kSqrt3 / 2, -0.5f, 0 }, 7 },  // prism face
-  { { Math::kSqrt3 / 2, -0.5f, 0 }, 8 },   // prism face
-};
+const std::vector<std::pair<Math::Vec3f, int>>& Crystal::GetHexFaceNormToNumberList() {
+  static std::vector<std::pair<Math::Vec3f, int>> face_norm_to_number_list{
+    { { 0, 0, 1 }, 1 },                      // top face
+    { { 0, 0, -1 }, 2 },                     // bottom face
+    { { 1, 0, 0 }, 3 },                      // prism face
+    { { Math::kSqrt3 / 2, 0.5f, 0 }, 4 },    // prism face
+    { { -Math::kSqrt3 / 2, 0.5f, 0 }, 5 },   // prism face
+    { { -1, 0, 0 }, 6 },                     // prism face
+    { { -Math::kSqrt3 / 2, -0.5f, 0 }, 7 },  // prism face
+    { { Math::kSqrt3 / 2, -0.5f, 0 }, 8 },   // prism face
+  };
+  return face_norm_to_number_list;
+}
 
 
-const std::vector<std::pair<Math::Vec3f, int>> Crystal::cubic_face_norm_to_number_list_{
-  { { 0, 0, 1 }, 1 },   // top face
-  { { 0, 0, -1 }, 2 },  // bottom face
-  { { 1, 0, 0 }, 3 },   // pyramidal face
-  { { 0, 1, 0 }, 4 },   // pyramidal face
-  { { -1, 0, 0 }, 5 },  // pyramidal face
-  { { 0, -1, 0 }, 6 },  // pyramidal face
-};
+const std::vector<std::pair<Math::Vec3f, int>>& Crystal::GetCubicFaceNormToNumberList() {
+  static std::vector<std::pair<Math::Vec3f, int>> face_norm_to_number_list{
+    { { 0, 0, 1 }, 1 },   // top face
+    { { 0, 0, -1 }, 2 },  // bottom face
+    { { 1, 0, 0 }, 3 },   // pyramidal face
+    { { 0, 1, 0 }, 4 },   // pyramidal face
+    { { -1, 0, 0 }, 5 },  // pyramidal face
+    { { 0, -1, 0 }, 6 },  // pyramidal face
+  };
+  return face_norm_to_number_list;
+}
 
 
 CrystalPtrU Crystal::CreateHexPrism(float h) {
@@ -672,4 +680,4 @@ CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<IceHalo::Math::Vec3f>
   return std::unique_ptr<Crystal>(new Crystal(pts, faces, face_number_map, CrystalType::CUSTOM));
 }
 
-};  // namespace IceHalo
+}  // namespace IceHalo
