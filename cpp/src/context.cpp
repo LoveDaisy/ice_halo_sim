@@ -641,7 +641,7 @@ std::string ProjectContext::GetDataDirectory() const {
 
 
 std::string ProjectContext::GetDefaultImagePath() const {
-  return data_path_ + "/img.jpg";
+  return PathJoin(data_path_, "img.jpg");
 }
 
 
@@ -939,24 +939,19 @@ void ProjectContext::ParseRenderSettings(rapidjson::Document& d) {
 
 
 void ProjectContext::ParseDataSettings(const char* config_file_path, rapidjson::Document& d) {
-  std::string dir = "./";
+  std::string dir = boost::filesystem::current_path().string();
   auto p = Pointer("/data_folder").Get(d);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default './'!\n");
+    std::fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default current path!\n");
   } else if (!p->IsString()) {
-    std::fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default './'!\n");
+    std::fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default current path!\n");
   } else {
     dir = p->GetString();
   }
   data_path_ = dir;
 
   std::string config_file_path_str(config_file_path);
-  auto n = config_file_path_str.rfind('/');
-  if (n == std::string::npos) {
-    SetModelPath(data_path_ + "/models");
-  } else {
-    SetModelPath(config_file_path_str.substr(0, n) + "/models");
-  }
+  SetModelPath(PathJoin(config_file_path_str, "models"));
 }
 
 
