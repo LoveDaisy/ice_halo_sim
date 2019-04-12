@@ -2,6 +2,8 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QToolButton>
+#include <QButtonGroup>
 
 #include "context.h"
 
@@ -20,7 +22,7 @@ class MainWindow : public QMainWindow {
  private slots:
   // Basic settings group
   void updateRayHitsNum(int n);
-  void updateSunPosition(const QString& altitude_txt);
+  void updateSunAltitude(const QString& altitude_txt);
   void updateSunDiameterType(int index);
   // Ray settings group
   void updateTotalRays(int ray_num);
@@ -29,6 +31,8 @@ class MainWindow : public QMainWindow {
   // Render settings group
   void updateLensType(int index);
   void updateVisibleRange(int index);
+  // Scatter tab
+  void insertScatterTab();
   // Filter settings group
   void enableFilterSettings(bool enable);
 
@@ -37,10 +41,19 @@ class MainWindow : public QMainWindow {
 
  private:
   void initUi();
+  void initBasicSettings();
+  void initRaySettings();
+  void initRenderSettings();
+  void initScatterTab();
 
-  Ui::MainWindow* ui;
+  QToolButton* createScatterTab(const QString& text);
+  QToolButton* createScatterCloseButton();
 
-  IceHalo::ProjectContextPtr project_context;
+  Ui::MainWindow* ui_;
+  QButtonGroup* scatter_tab_group_;
+  QToolButton* scatter_tab_add_btn_;
+
+  IceHalo::ProjectContextPtr project_context_;
 
   using LensType_t = std::underlying_type<IceHalo::LensType>::type;
   using VisibleRange_t = std::underlying_type<IceHalo::VisibleRange>::type;
