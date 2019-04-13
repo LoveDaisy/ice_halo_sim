@@ -46,14 +46,17 @@ class MainWindow : public QMainWindow {
   void initRenderSettings();
   void initScatterTab();
 
-  QToolButton* createScatterTab(const QString& text);
-  QToolButton* createScatterCloseButton();
+  QToolButton* createScatterTab(int index);
+  QToolButton* createScatterAddButton();
 
   Ui::MainWindow* ui_;
   QButtonGroup* scatter_tab_group_;
   QToolButton* scatter_tab_add_btn_;
 
   IceHalo::ProjectContextPtr project_context_;
+
+  static constexpr int kMaxInitRayNumber = 1000000;
+  static constexpr int kTabIconSize = 10;
 
   using LensType_t = std::underlying_type<IceHalo::LensType>::type;
   using VisibleRange_t = std::underlying_type<IceHalo::VisibleRange>::type;

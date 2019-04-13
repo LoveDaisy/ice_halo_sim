@@ -26,7 +26,6 @@ HEADERS += \
     $$CPP_PROJ_ROOT/src/threadingpool.h
 
 SOURCES += \
-    mainwindow.cpp \
     main.cpp \
     $$CPP_PROJ_ROOT/src/context.cpp \
     $$CPP_PROJ_ROOT/src/crystal.cpp \
@@ -35,9 +34,13 @@ SOURCES += \
     $$CPP_PROJ_ROOT/src/optics.cpp \
     $$CPP_PROJ_ROOT/src/render.cpp \
     $$CPP_PROJ_ROOT/src/simulation.cpp \
-    $$CPP_PROJ_ROOT/src/threadingpool.cpp
+    $$CPP_PROJ_ROOT/src/threadingpool.cpp \
+    mainwindow.cpp
 
 INCLUDEPATH += $$CPP_PROJ_ROOT/src
+
+RESOURCES += \
+    ui.qrc
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

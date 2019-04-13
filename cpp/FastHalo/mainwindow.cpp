@@ -21,10 +21,8 @@ void MainWindow::initUi() {
   using namespace IceHalo;
 
   // Setup some UI properties
-  ui_->toolbarLayout->setAlignment(Qt::AlignLeft);
   ui_->renderSettingLayout->setAlignment(Qt::AlignTop);
   ui_->filterSettingLayout->setAlignment(Qt::AlignTop);
-  ui_->scatterTabLayout->setAlignment(Qt::AlignLeft);
 
   initBasicSettings();
   initRaySettings();
@@ -97,7 +95,7 @@ void MainWindow::initRenderSettings() {
 
 
 void MainWindow::initScatterTab() {
-  scatter_tab_add_btn_ = createScatterCloseButton();
+  scatter_tab_add_btn_ = createScatterAddButton();
   scatter_tab_group_ = new QButtonGroup(ui_->scatterTabFrame);
 
   insertScatterTab();
@@ -105,15 +103,20 @@ void MainWindow::initScatterTab() {
 }
 
 
-QToolButton* MainWindow::createScatterTab(const QString& text) {
+QToolButton* MainWindow::createScatterTab(int index) {
+  QString new_tab_text = tr("  Scatter %1").arg(index);
   QToolButton* btn = new QToolButton();
-  btn->setText(text);
+  btn->setText(new_tab_text);
   btn->setCheckable(true);
+  btn->setChecked(true);
+  btn->setIcon(QIcon(":/icons/icon_close_32.png"));
+  btn->setIconSize(QSize(kTabIconSize, kTabIconSize));
+  btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
   return btn;
 }
 
 
-QToolButton* MainWindow::createScatterCloseButton() {
+QToolButton* MainWindow::createScatterAddButton() {
   QToolButton* btn = new QToolButton();
   btn->setText(tr("+"));
   return btn;
@@ -178,8 +181,7 @@ void MainWindow::updateVisibleRange(int index) {
 
 void MainWindow::insertScatterTab() {
   int current_item_cnt = ui_->scatterTabLayout->count();
-  QString new_tab_text = tr("Scatter %1").arg(current_item_cnt);
-  QToolButton* btn = createScatterTab(new_tab_text);
+  QToolButton* btn = createScatterTab(current_item_cnt);
   ui_->scatterTabLayout->addWidget(btn);
   scatter_tab_group_->addButton(btn);
 }
