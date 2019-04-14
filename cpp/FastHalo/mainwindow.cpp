@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 
+#include <QColorDialog>
 #include <QPropertyAnimation>
 #include <QtDebug>
 
@@ -15,7 +16,7 @@ MainWindow::MainWindow(QWidget* parent)
 
 
 MainWindow::~MainWindow() {
-  //  delete ui_;
+  delete ui_;
 }
 
 
@@ -25,6 +26,8 @@ void MainWindow::initUi() {
   // Setup some UI properties
   ui_->renderSettingLayout->setAlignment(Qt::AlignTop);
   ui_->filterSettingLayout->setAlignment(Qt::AlignTop);
+  ui_->rayColorResultButton->setAutoFillBackground(true);
+  ui_->backgroundResultButton->setAutoFillBackground(true);
 
   initBasicSettings();
   initRaySettings();
@@ -53,21 +56,33 @@ void MainWindow::initBasicSettings() {
           &MainWindow::updateSunDiameterType);
   connect(ui_->sunAltitudeEdit, &QLineEdit::textChanged, this, &MainWindow::updateSunAltitude);
   connect(ui_->maxHitsSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::updateRayHitsNum);
+  connect(ui_->rayColorResultButton, &QPushButton::clicked, this, [=] {
+    int item_num = ui_->rayColorComboBox->count();
+    if (ui_->rayColorComboBox->currentIndex() != item_num - 1) {
+      ui_->rayColorComboBox->setCurrentIndex(item_num - 1);
+    } else {
+      updateRayColor();
+    }
+  });
+  connect(ui_->backgroundResultButton, &QPushButton::clicked, this, [=]{
+    int item_num = ui_->backgroundColorComboBox->count();
+    if (ui_->backgroundColorComboBox->currentIndex() != item_num - 1) {
+      ui_->backgroundColorComboBox->setCurrentIndex(item_num - 1);
+    } else {
+      updateBackgroundColor();
+    }
+  });
 }
 
 
 void MainWindow::initRaySettings() {
   // Ray color
-  ui_->rayColorComboBox->addItem(tr("real"), QVariant(QColor(0, 0, 0, 0)));
-  ui_->rayColorComboBox->addItem(tr("white"), QVariant(QColor(255, 255, 255, 255)));
-  ui_->rayColorComboBox->addItem(tr("black"), QVariant(QColor(0, 0, 0, 255)));
-  ui_->rayColorComboBox->addItem(tr("customize"), QVariant(QColor(255, 255, 255, 255)));
+  foreach (const auto& color, getRayColorData()) { ui_->rayColorComboBox->addItem(color.name_); }
+  updateRayColor();
 
   // Background color
-  ui_->backgroundColorComboBox->addItem(tr("black"), QVariant(QColor(0, 0, 0, 255)));
-  ui_->backgroundColorComboBox->addItem(tr("white"), QVariant(QColor(255, 255, 255, 255)));
-  ui_->backgroundColorComboBox->addItem(tr("sky"), QVariant(QColor(0, 0, 0, 0)));
-  ui_->backgroundColorComboBox->addItem(tr("customize"), QVariant(QColor(0, 0, 0, 255)));
+  foreach (const auto& color, getBackgroundColorData()) { ui_->backgroundColorComboBox->addItem(color.name_); }
+  updateBackgroundColor();
 
   connect(ui_->rayColorComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           &MainWindow::updateRayColor);
@@ -131,7 +146,6 @@ void MainWindow::insertScatterTab() {
 }
 
 
-
 ClosableTabWidget* MainWindow::createScatterTab() {
   auto btn = new ClosableTabWidget("");
   btn->setChecked(true);
@@ -163,29 +177,55 @@ void MainWindow::updateTotalRays(int ray_num) {
 }
 
 
-void MainWindow::updateRayColor(int index) {
-  QColor c = ui_->rayColorComboBox->itemData(index).value<QColor>();
-  if (c.alpha() == 255) {
-    project_context_->render_ctx_.SetRayColor(static_cast<float>(c.redF()),    // float r
-                                              static_cast<float>(c.greenF()),  // float g
-                                              static_cast<float>(c.blueF()));  // float b
+void MainWindow::updateRayColor() {
+  int curr_idx = ui_->rayColorComboBox->currentIndex();
+  ColorData& color_data = getRayColorData()[curr_idx];
+  if (color_data.customized_) {
+    color_data.color_ = QColorDialog::getColor(color_data.color_, this, tr("Ray color"));
+  }
+  if (color_data.color_.alpha() == 255) {
+    project_context_->render_ctx_.SetRayColor(static_cast<float>(color_data.color_.redF()),    // float r
+                                              static_cast<float>(color_data.color_.greenF()),  // float g
+                                              static_cast<float>(color_data.color_.blueF()));  // float b
   } else {
     project_context_->render_ctx_.UseRealRayColor();
   }
-  qDebug() << "Updating ray color: " << c;
+
+  // Then update the manipulate label
+  auto btn = ui_->rayColorResultButton;
+  auto p = ui_->rayColorResultButton->palette();
+  if (color_data.icon_) {
+    btn->setIcon(*color_data.icon_);
+    btn->setIconSize(QSize(btn->geometry().width(), btn->geometry().height()));
+    p.setColor(QPalette::Button, QColor(0, 0, 0));
+  } else {
+    btn->setIcon(QIcon());
+    p.setColor(QPalette::Button, color_data.color_);
+    qDebug() << "Updating ray color: " << color_data.color_;
+  }
+  btn->setPalette(p);
 }
 
 
-void MainWindow::updateBackgroundColor(int index) {
-  QColor c = ui_->backgroundColorComboBox->itemData(index).value<QColor>();
-  if (c.alpha() == 255) {
-    project_context_->render_ctx_.SetBackgroundColor(static_cast<float>(c.redF()),    // float r
-                                                     static_cast<float>(c.greenF()),  // float g
-                                                     static_cast<float>(c.blueF()));  // float b
+void MainWindow::updateBackgroundColor() {
+  int curr_idx = ui_->backgroundColorComboBox->currentIndex();
+  ColorData& color_data = getBackgroundColorData()[curr_idx];
+  if (color_data.customized_) {
+    color_data.color_ = QColorDialog::getColor(color_data.color_, this, tr("Background color"));
+  }
+  if (color_data.color_.alpha() == 255) {
+    project_context_->render_ctx_.SetBackgroundColor(static_cast<float>(color_data.color_.redF()),    // float r
+                                                     static_cast<float>(color_data.color_.greenF()),  // float g
+                                                     static_cast<float>(color_data.color_.blueF()));  // float b
   } else {
     project_context_->render_ctx_.UseSkyBackground();
   }
-  qDebug() << "Updating background color: " << c;
+
+  // Then update the manipulate label
+  auto p = ui_->backgroundResultButton->palette();
+  p.setColor(QPalette::Button, color_data.color_);
+  ui_->backgroundResultButton->setPalette(p);
+  qDebug() << "Updating background color: " << color_data.color_;
 }
 
 
@@ -201,7 +241,6 @@ void MainWindow::updateVisibleRange(int index) {
   project_context_->render_ctx_.SetVisibleRange(static_cast<IceHalo::VisibleRange>(t));
   qDebug() << "Updating visible range: " << t;
 }
-
 
 
 void MainWindow::updateRayHitsNum(int n) {
@@ -295,4 +334,37 @@ void MainWindow::updateSimulationContext() {
 
   updateSunAltitude(ui_->sunAltitudeEdit->text());
   updateSunDiameterType(ui_->sunDiameterComboBox->currentIndex());
+}
+
+
+QVector<ColorData>& MainWindow::getRayColorData() {
+  static QVector<ColorData> colors;
+  colors << ColorData(tr("real"), QColor(0, 0, 0, 0));
+  colors << ColorData(tr("white"), QColor(255, 255, 255, 255));
+  colors << ColorData(tr("black"), QColor(0, 0, 0, 255));
+  colors << ColorData(tr("customize"), QColor(255, 255, 255, 255), true);
+
+  auto icons = getColorIcons();
+  colors[0].icon_ = &icons[0];
+
+  return colors;
+}
+
+
+QVector<ColorData>& MainWindow::getBackgroundColorData() {
+  static QVector<ColorData> colors;
+  colors << ColorData(tr("black"), QColor(0, 0, 0, 255));
+  colors << ColorData(tr("white"), QColor(255, 255, 255, 255));
+  //  colors << ColorData(tr("sky"), QColor(0, 0, 0, 0));
+  colors << ColorData(tr("customize"), QColor(255, 255, 255, 255), true);
+
+  return colors;
+}
+
+
+QVector<QIcon>& MainWindow::getColorIcons() {
+  static QVector<QIcon> icons;
+  icons << QIcon(":/icons/icon_color_real.png");
+
+  return icons;
 }

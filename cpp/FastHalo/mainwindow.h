@@ -13,6 +13,19 @@ class MainWindow;
 }
 
 
+class ColorData {
+ public:
+  ColorData() : name_(""), customized_(false), color_(QColor(0, 0, 0, 0)), icon_(nullptr) {}
+  ColorData(const QString& name, const QColor& color, bool customized = false)
+      : name_(name), customized_(customized), color_(color), icon_(nullptr) {}
+
+  const QString name_;
+  const bool customized_;
+  QColor color_;
+  QIcon* icon_;
+};
+
+
 class MainWindow : public QMainWindow {
   Q_OBJECT
 
@@ -27,13 +40,14 @@ class MainWindow : public QMainWindow {
   void updateSunDiameterType(int index);
   // Ray settings group
   void updateTotalRays(int ray_num);
-  void updateRayColor(int index);
-  void updateBackgroundColor(int index);
+  void updateRayColor();
+  void updateBackgroundColor();
   // Render settings group
   void updateLensType(int index);
   void updateVisibleRange(int index);
   // Scatter tab
   void insertScatterTab();
+  void updateScatterTabs();
   // Filter settings group
   void enableFilterSettings(bool enable);
 
@@ -46,7 +60,6 @@ class MainWindow : public QMainWindow {
   void initRaySettings();
   void initRenderSettings();
   void initScatterTab();
-  void updateScatterTabs();
 
   ClosableTabWidget* createScatterTab();
   QToolButton* createScatterAddButton();
@@ -58,6 +71,9 @@ class MainWindow : public QMainWindow {
   IceHalo::ProjectContextPtr project_context_;
 
   static constexpr int kMaxInitRayNumber = 1000000;
+  static QVector<ColorData>& getRayColorData();
+  static QVector<ColorData>& getBackgroundColorData();
+  static QVector<QIcon>& getColorIcons();
 
   using LensType_t = std::underlying_type<IceHalo::LensType>::type;
   using VisibleRange_t = std::underlying_type<IceHalo::VisibleRange>::type;

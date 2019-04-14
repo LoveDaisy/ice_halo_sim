@@ -15,8 +15,7 @@ QIcon& ClosableTabWidget::getIconOn() {
 }
 
 
-ClosableTabWidget::ClosableTabWidget(const QString& text, QWidget* parent)
-    : QToolButton(parent), icon_enabled_(true) {
+ClosableTabWidget::ClosableTabWidget(const QString& text, QWidget* parent) : QToolButton(parent), icon_enabled_(true) {
   setMouseTracking(true);
   setText(text);
   setIcon(getIconNormal());
