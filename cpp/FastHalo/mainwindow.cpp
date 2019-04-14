@@ -26,8 +26,6 @@ void MainWindow::initUi() {
   // Setup some UI properties
   ui_->renderSettingLayout->setAlignment(Qt::AlignTop);
   ui_->filterSettingLayout->setAlignment(Qt::AlignTop);
-  ui_->rayColorResultButton->setAutoFillBackground(true);
-  ui_->backgroundResultButton->setAutoFillBackground(true);
 
   initBasicSettings();
   initRaySettings();
@@ -56,22 +54,6 @@ void MainWindow::initBasicSettings() {
           &MainWindow::updateSunDiameterType);
   connect(ui_->sunAltitudeEdit, &QLineEdit::textChanged, this, &MainWindow::updateSunAltitude);
   connect(ui_->maxHitsSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::updateRayHitsNum);
-  connect(ui_->rayColorResultButton, &QPushButton::clicked, this, [=] {
-    int item_num = ui_->rayColorComboBox->count();
-    if (ui_->rayColorComboBox->currentIndex() != item_num - 1) {
-      ui_->rayColorComboBox->setCurrentIndex(item_num - 1);
-    } else {
-      updateRayColor();
-    }
-  });
-  connect(ui_->backgroundResultButton, &QPushButton::clicked, this, [=]{
-    int item_num = ui_->backgroundColorComboBox->count();
-    if (ui_->backgroundColorComboBox->currentIndex() != item_num - 1) {
-      ui_->backgroundColorComboBox->setCurrentIndex(item_num - 1);
-    } else {
-      updateBackgroundColor();
-    }
-  });
 }
 
 
@@ -84,10 +66,43 @@ void MainWindow::initRaySettings() {
   foreach (const auto& color, getBackgroundColorData()) { ui_->backgroundColorComboBox->addItem(color.name_); }
   updateBackgroundColor();
 
+  foreach (const auto& wl, getWavelengthData()) { ui_->wavelengthComboBox->addItem(wl.name_); }
+  updateWavelength();
+
   connect(ui_->rayColorComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           &MainWindow::updateRayColor);
   connect(ui_->backgroundColorComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           &MainWindow::updateBackgroundColor);
+  connect(ui_->wavelengthComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          &MainWindow::updateWavelength);
+  connect(ui_->rayColorResultButton, &QPushButton::clicked, this, [=] {
+    int item_num = ui_->rayColorComboBox->count();
+    int curr_idx = ui_->rayColorComboBox->currentIndex();
+    auto& color_data = getRayColorData()[item_num - 1];
+    auto new_color = QColorDialog::getColor(color_data.color_, this, tr("Ray color"));
+    if (new_color.isValid()) {
+      color_data.color_ = new_color;
+      if (curr_idx != item_num - 1) {
+        ui_->rayColorComboBox->setCurrentIndex(item_num - 1);
+      } else {
+        updateRayColor();
+      }
+    }
+  });
+  connect(ui_->backgroundResultButton, &QPushButton::clicked, this, [=] {
+    int item_num = ui_->backgroundColorComboBox->count();
+    int curr_idx = ui_->backgroundColorComboBox->currentIndex();
+    auto& color_data = getBackgroundColorData()[item_num - 1];
+    auto new_color = QColorDialog::getColor(color_data.color_, this, tr("Background color"));
+    if (new_color.isValid()) {
+      color_data.color_ = new_color;
+      if (curr_idx != item_num - 1) {
+        ui_->backgroundColorComboBox->setCurrentIndex(item_num - 1);
+      } else {
+        updateBackgroundColor();
+      }
+    }
+  });
 }
 
 
@@ -179,10 +194,7 @@ void MainWindow::updateTotalRays(int ray_num) {
 
 void MainWindow::updateRayColor() {
   int curr_idx = ui_->rayColorComboBox->currentIndex();
-  ColorData& color_data = getRayColorData()[curr_idx];
-  if (color_data.customized_) {
-    color_data.color_ = QColorDialog::getColor(color_data.color_, this, tr("Ray color"));
-  }
+  auto& color_data = getRayColorData()[curr_idx];
   if (color_data.color_.alpha() == 255) {
     project_context_->render_ctx_.SetRayColor(static_cast<float>(color_data.color_.redF()),    // float r
                                               static_cast<float>(color_data.color_.greenF()),  // float g
@@ -193,13 +205,11 @@ void MainWindow::updateRayColor() {
 
   // Then update the manipulate label
   auto btn = ui_->rayColorResultButton;
-  auto p = ui_->rayColorResultButton->palette();
-  if (color_data.icon_) {
-    btn->setIcon(*color_data.icon_);
-    btn->setIconSize(QSize(btn->geometry().width(), btn->geometry().height()));
-    p.setColor(QPalette::Button, QColor(0, 0, 0));
+  auto p = ui_->centralwidget->palette();
+  btn->setIcon(color_data.icon_);
+  if (!color_data.icon_.isNull()) {
+    btn->setIconSize(btn->size());
   } else {
-    btn->setIcon(QIcon());
     p.setColor(QPalette::Button, color_data.color_);
     qDebug() << "Updating ray color: " << color_data.color_;
   }
@@ -209,10 +219,7 @@ void MainWindow::updateRayColor() {
 
 void MainWindow::updateBackgroundColor() {
   int curr_idx = ui_->backgroundColorComboBox->currentIndex();
-  ColorData& color_data = getBackgroundColorData()[curr_idx];
-  if (color_data.customized_) {
-    color_data.color_ = QColorDialog::getColor(color_data.color_, this, tr("Background color"));
-  }
+  auto& color_data = getBackgroundColorData()[curr_idx];
   if (color_data.color_.alpha() == 255) {
     project_context_->render_ctx_.SetBackgroundColor(static_cast<float>(color_data.color_.redF()),    // float r
                                                      static_cast<float>(color_data.color_.greenF()),  // float g
@@ -226,6 +233,21 @@ void MainWindow::updateBackgroundColor() {
   p.setColor(QPalette::Button, color_data.color_);
   ui_->backgroundResultButton->setPalette(p);
   qDebug() << "Updating background color: " << color_data.color_;
+}
+
+
+void MainWindow::updateWavelength() {
+  int curr_idx = ui_->wavelengthComboBox->currentIndex();
+  auto& wl_data = getWavelengthData()[curr_idx];
+  if (wl_data.customized_) {
+    // TODO
+  }
+  auto btn = ui_->wavelengthResultButton;
+  btn->setIcon(wl_data.icon_);
+  btn->setIconSize(btn->size());
+
+  project_context_->ClearWavelengthInfo();
+  foreach (const auto& wl, wl_data.info_) { project_context_->AddWavelengthInfo(wl.wavelength, wl.weight); }
 }
 
 
@@ -339,13 +361,14 @@ void MainWindow::updateSimulationContext() {
 
 QVector<ColorData>& MainWindow::getRayColorData() {
   static QVector<ColorData> colors;
-  colors << ColorData(tr("real"), QColor(0, 0, 0, 0));
-  colors << ColorData(tr("white"), QColor(255, 255, 255, 255));
-  colors << ColorData(tr("black"), QColor(0, 0, 0, 255));
-  colors << ColorData(tr("customize"), QColor(255, 255, 255, 255), true);
+  if (colors.empty()) {
+    colors << ColorData(tr("real"), QColor(0, 0, 0, 0));
+    colors << ColorData(tr("white"), QColor(255, 255, 255, 255));
+    colors << ColorData(tr("black"), QColor(0, 0, 0, 255));
+    colors << ColorData(tr("customize"), QColor(255, 255, 255, 255));
 
-  auto icons = getColorIcons();
-  colors[0].icon_ = &icons[0];
+    colors[0].icon_ = QIcon(":/icons/icon_color_real.png");
+  }
 
   return colors;
 }
@@ -353,18 +376,50 @@ QVector<ColorData>& MainWindow::getRayColorData() {
 
 QVector<ColorData>& MainWindow::getBackgroundColorData() {
   static QVector<ColorData> colors;
-  colors << ColorData(tr("black"), QColor(0, 0, 0, 255));
-  colors << ColorData(tr("white"), QColor(255, 255, 255, 255));
-  //  colors << ColorData(tr("sky"), QColor(0, 0, 0, 0));
-  colors << ColorData(tr("customize"), QColor(255, 255, 255, 255), true);
+  if (colors.empty()) {
+    colors << ColorData(tr("black"), QColor(0, 0, 0, 255));
+    colors << ColorData(tr("white"), QColor(255, 255, 255, 255));
+    //  colors << ColorData(tr("sky"), QColor(0, 0, 0, 0));
+    colors << ColorData(tr("customize"), QColor(255, 255, 255, 255));
+  }
 
   return colors;
 }
 
 
-QVector<QIcon>& MainWindow::getColorIcons() {
-  static QVector<QIcon> icons;
-  icons << QIcon(":/icons/icon_color_real.png");
+QVector<WavelengthData>& MainWindow::getWavelengthData() {
+  static QVector<WavelengthData> wl_data;
+  if (wl_data.empty()) {
+    WavelengthData wl_sun(tr("sun light"));
+    wl_sun.icon_ = QIcon(":/icons/icon_wl_sun_dark.png");
+    wl_sun.info_ << IceHalo::ProjectContext::WavelengthInfo{ 420, 0.9122f };
+    wl_sun.info_ << IceHalo::ProjectContext::WavelengthInfo{ 460, 0.9969f };
+    wl_sun.info_ << IceHalo::ProjectContext::WavelengthInfo{ 500, 1.0381f };
+    wl_sun.info_ << IceHalo::ProjectContext::WavelengthInfo{ 540, 1.0440f };
+    wl_sun.info_ << IceHalo::ProjectContext::WavelengthInfo{ 580, 1.0237f };
+    wl_sun.info_ << IceHalo::ProjectContext::WavelengthInfo{ 620, 0.9851f };
+    wl_data.append(std::move(wl_sun));
 
-  return icons;
+    WavelengthData wl_eq(tr("equal energy"));
+    wl_eq.icon_ = QIcon(":/icons/icon_wl_eq_dark.png");
+    wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 420, 1.0f };
+    wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 460, 1.0f };
+    wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 500, 1.0f };
+    wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 540, 1.0f };
+    wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 580, 1.0f };
+    wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 620, 1.0f };
+    wl_data.append(std::move(wl_eq));
+
+    //  WavelengthData wl_customize(tr("customize"), true);
+    //  wl_customize.icon_ = QIcon(":/icons/icon_wl_customize_dark.png");
+    //  wl_customize.info_ << IceHalo::ProjectContext::WavelengthInfo{ 420, 0.9122f };
+    //  wl_customize.info_ << IceHalo::ProjectContext::WavelengthInfo{ 460, 0.9969f };
+    //  wl_customize.info_ << IceHalo::ProjectContext::WavelengthInfo{ 500, 1.0381f };
+    //  wl_customize.info_ << IceHalo::ProjectContext::WavelengthInfo{ 540, 1.0440f };
+    //  wl_customize.info_ << IceHalo::ProjectContext::WavelengthInfo{ 580, 1.0237f };
+    //  wl_customize.info_ << IceHalo::ProjectContext::WavelengthInfo{ 620, 0.9851f };
+    //  wl_data.append(std::move(wl_customize));
+  }
+
+  return wl_data;
 }

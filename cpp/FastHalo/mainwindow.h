@@ -15,14 +15,25 @@ class MainWindow;
 
 class ColorData {
  public:
-  ColorData() : name_(""), customized_(false), color_(QColor(0, 0, 0, 0)), icon_(nullptr) {}
-  ColorData(const QString& name, const QColor& color, bool customized = false)
-      : name_(name), customized_(customized), color_(color), icon_(nullptr) {}
+  ColorData() : name_(""), color_(QColor(0, 0, 0, 0)), icon_(QIcon()) {}
+  ColorData(const QString& name, const QColor& color) : name_(name), color_(color), icon_(QIcon()) {}
+
+  const QString name_;
+  QColor color_;
+  QIcon icon_;
+};
+
+
+class WavelengthData {
+ public:
+  WavelengthData() : name_(""), customized_(false), icon_(QIcon()) {}
+  explicit WavelengthData(const QString& name, bool customized = false)
+      : name_(name), customized_(customized), icon_(QIcon()) {}
 
   const QString name_;
   const bool customized_;
-  QColor color_;
-  QIcon* icon_;
+  QVector<IceHalo::ProjectContext::WavelengthInfo> info_;
+  QIcon icon_;
 };
 
 
@@ -42,6 +53,7 @@ class MainWindow : public QMainWindow {
   void updateTotalRays(int ray_num);
   void updateRayColor();
   void updateBackgroundColor();
+  void updateWavelength();
   // Render settings group
   void updateLensType(int index);
   void updateVisibleRange(int index);
@@ -73,7 +85,7 @@ class MainWindow : public QMainWindow {
   static constexpr int kMaxInitRayNumber = 1000000;
   static QVector<ColorData>& getRayColorData();
   static QVector<ColorData>& getBackgroundColorData();
-  static QVector<QIcon>& getColorIcons();
+  static QVector<WavelengthData>& getWavelengthData();
 
   using LensType_t = std::underlying_type<IceHalo::LensType>::type;
   using VisibleRange_t = std::underlying_type<IceHalo::VisibleRange>::type;

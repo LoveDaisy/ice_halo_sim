@@ -452,6 +452,9 @@ QMainWindow QGroupBox {
            <height>18</height>
           </size>
          </property>
+         <property name="autoFillBackground">
+          <bool>true</bool>
+         </property>
          <property name="text">
           <string/>
          </property>
@@ -470,6 +473,9 @@ QMainWindow QGroupBox {
            <width>40</width>
            <height>18</height>
           </size>
+         </property>
+         <property name="autoFillBackground">
+          <bool>true</bool>
          </property>
          <property name="text">
           <string/>
@@ -501,6 +507,9 @@ QMainWindow QGroupBox {
            <height>18</height>
           </size>
          </property>
+         <property name="autoFillBackground">
+          <bool>true</bool>
+         </property>
          <property name="text">
           <string/>
          </property>
@@ -520,23 +529,7 @@ QMainWindow QGroupBox {
         </widget>
        </item>
        <item row="1" column="2">
-        <widget class="QComboBox" name="wavelengthComboBox">
-         <item>
-          <property name="text">
-           <string>sun light</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>equal energy</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>customize</string>
-          </property>
-         </item>
-        </widget>
+        <widget class="QComboBox" name="wavelengthComboBox"/>
        </item>
       </layout>
      </widget>
@@ -692,7 +685,7 @@ QMainWindow QGroupBox {
        </size>
       </property>
       <property name="title">
-       <string>Crystal filter</string>
+       <string>Ray path filter</string>
       </property>
       <layout class="QGridLayout" name="filterSettingLayout">
        <item row="0" column="0">

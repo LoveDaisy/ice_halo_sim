@@ -3,5 +3,8 @@
         <file>icons/icon_close_on_32.png</file>
         <file>icons/icon_close_checked_normal_32.png</file>
         <file>icons/icon_color_real.png</file>
+        <file>icons/icon_wl_customize_dark.png</file>
+        <file>icons/icon_wl_eq_dark.png</file>
+        <file>icons/icon_wl_sun_dark.png</file>
     </qresource>
 </RCC>
