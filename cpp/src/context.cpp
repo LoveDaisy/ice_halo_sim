@@ -661,7 +661,7 @@ void ProjectContext::PrintCrystalInfo() const {
 
 
 ProjectContext::ProjectContext()
-    : sun_ctx_(0.0f), cam_ctx_{}, render_ctx_{}, init_ray_num_(kMinInitRayNumber), ray_hit_num_(kMinRayHitsNum),
+    : sun_ctx_(0.0f), cam_ctx_{}, render_ctx_{}, init_ray_num_(kDefaultInitRayNumber), ray_hit_num_(kMinRayHitsNum),
       model_path_("") {}
 
 
