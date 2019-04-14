@@ -1,10 +1,11 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include <QButtonGroup>
 #include <QMainWindow>
 #include <QToolButton>
-#include <QButtonGroup>
 
+#include "closabletabwidget.h"
 #include "context.h"
 
 namespace Ui {
@@ -45,8 +46,9 @@ class MainWindow : public QMainWindow {
   void initRaySettings();
   void initRenderSettings();
   void initScatterTab();
+  void updateScatterTabs();
 
-  QToolButton* createScatterTab(int index);
+  ClosableTabWidget* createScatterTab();
   QToolButton* createScatterAddButton();
 
   Ui::MainWindow* ui_;
@@ -56,7 +58,6 @@ class MainWindow : public QMainWindow {
   IceHalo::ProjectContextPtr project_context_;
 
   static constexpr int kMaxInitRayNumber = 1000000;
-  static constexpr int kTabIconSize = 10;
 
   using LensType_t = std::underlying_type<IceHalo::LensType>::type;
   using VisibleRange_t = std::underlying_type<IceHalo::VisibleRange>::type;

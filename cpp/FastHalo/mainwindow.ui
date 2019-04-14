@@ -250,6 +250,12 @@ QMainWindow QGroupBox {
        </item>
        <item row="0" column="0" colspan="3" alignment="Qt::AlignLeft">
         <widget class="QFrame" name="scatterTabFrame">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Minimum" vsizetype="Preferred">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
          <property name="minimumSize">
           <size>
            <width>0</width>

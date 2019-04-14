@@ -1,7 +1,9 @@
 #include "mainwindow.h"
 
+#include <QPropertyAnimation>
 #include <QtDebug>
 
+#include "closabletabwidget.h"
 #include "render.h"
 #include "ui_mainwindow.h"
 
@@ -13,7 +15,7 @@ MainWindow::MainWindow(QWidget* parent)
 
 
 MainWindow::~MainWindow() {
-  delete ui_;
+  //  delete ui_;
 }
 
 
@@ -97,21 +99,43 @@ void MainWindow::initRenderSettings() {
 void MainWindow::initScatterTab() {
   scatter_tab_add_btn_ = createScatterAddButton();
   scatter_tab_group_ = new QButtonGroup(ui_->scatterTabFrame);
+  ui_->scatterTabLayout->addWidget(scatter_tab_add_btn_);
 
   insertScatterTab();
-  ui_->scatterTabLayout->addWidget(scatter_tab_add_btn_);
+  auto tab0 = static_cast<ClosableTabWidget*>(ui_->scatterTabLayout->itemAt(0)->widget());
+  tab0->enableIcon(false);
+
+  connect(scatter_tab_add_btn_, &QToolButton::clicked, this, &MainWindow::insertScatterTab);
 }
 
 
-QToolButton* MainWindow::createScatterTab(int index) {
-  QString new_tab_text = tr("  Scatter %1").arg(index);
-  QToolButton* btn = new QToolButton();
-  btn->setText(new_tab_text);
-  btn->setCheckable(true);
+void MainWindow::insertScatterTab() {
+  int current_item_cnt = ui_->scatterTabLayout->count();
+  auto btn = createScatterTab();
+  ui_->scatterTabLayout->insertWidget(current_item_cnt - 1, btn);
+  scatter_tab_group_->addButton(btn);
   btn->setChecked(true);
-  btn->setIcon(QIcon(":/icons/icon_close_32.png"));
-  btn->setIconSize(QSize(kTabIconSize, kTabIconSize));
-  btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+
+  updateScatterTabs();
+
+  connect(btn, &ClosableTabWidget::closeTab, this, [=] {
+    auto anim = new QPropertyAnimation(btn, "maximumWidth");
+    anim->setStartValue(btn->geometry().width());
+    anim->setEndValue(0);
+    anim->setDuration(200);
+    anim->setTargetObject(btn);
+    anim->start(QAbstractAnimation::DeleteWhenStopped);
+
+    connect(anim, &QPropertyAnimation::finished, this, &MainWindow::updateScatterTabs);
+  });
+}
+
+
+
+ClosableTabWidget* MainWindow::createScatterTab() {
+  auto btn = new ClosableTabWidget("");
+  btn->setChecked(true);
+  btn->setVisible(true);
   return btn;
 }
 
@@ -179,13 +203,6 @@ void MainWindow::updateVisibleRange(int index) {
 }
 
 
-void MainWindow::insertScatterTab() {
-  int current_item_cnt = ui_->scatterTabLayout->count();
-  QToolButton* btn = createScatterTab(current_item_cnt);
-  ui_->scatterTabLayout->addWidget(btn);
-  scatter_tab_group_->addButton(btn);
-}
-
 
 void MainWindow::updateRayHitsNum(int n) {
   project_context_->SetRayHitNum(n);
@@ -204,6 +221,56 @@ void MainWindow::updateSunDiameterType(int index) {
   float d = ui_->sunDiameterComboBox->itemData(index).toFloat();
   project_context_->sun_ctx_.SetSunDiameter(d);
   qDebug() << "Updating sun diameter: " << d;
+}
+
+
+void MainWindow::updateScatterTabs() {
+  int tab_cnt = ui_->scatterTabLayout->count() - 1;
+  if (tab_cnt <= 0) {
+    return;
+  }
+
+  // Remove invisible tabs
+  bool update_check = false;  // If a checked tab is removed, then the next tab will be checked.
+  for (int i = 0; i < tab_cnt; i++) {
+    auto tab = static_cast<ClosableTabWidget*>(ui_->scatterTabLayout->itemAt(i)->widget());
+    if (tab->geometry().width() > 0) {
+      if (update_check) {
+        tab->setChecked(true);
+        update_check = false;
+      }
+      continue;
+    }
+
+    if (scatter_tab_group_->checkedButton() == tab) {
+      update_check = true;
+    }
+    ui_->scatterTabLayout->removeWidget(tab);
+    tab->deleteLater();
+    scatter_tab_group_->removeButton(tab);
+    i--;  // Ugly... There is no iterator-like thing in QLayout
+  }
+
+  // Refresh tab text
+  tab_cnt = ui_->scatterTabLayout->count() - 1;
+  for (int i = 0; i < tab_cnt; i++) {
+    QString tab_txt = tr("  Scatter %1").arg(i + 1);
+    auto tab = static_cast<ClosableTabWidget*>(ui_->scatterTabLayout->itemAt(i)->widget());
+    tab->setText(tab_txt);
+    tab->enableIcon(true);
+  }
+
+  // If only one tab, disable close icon
+  if (tab_cnt <= 1 && ui_->scatterTabLayout->itemAt(0)) {
+    auto tab = static_cast<ClosableTabWidget*>(ui_->scatterTabLayout->itemAt(0)->widget());
+    tab->enableIcon(false);
+  }
+
+  // If no checked (the right most checked tab is removed), check the first one
+  if (!scatter_tab_group_->checkedButton()) {
+    auto tab = static_cast<ClosableTabWidget*>(ui_->scatterTabLayout->itemAt(0)->widget());
+    tab->setChecked(true);
+  }
 }
 
 

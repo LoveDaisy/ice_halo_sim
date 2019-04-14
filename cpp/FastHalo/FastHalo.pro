@@ -23,7 +23,8 @@ HEADERS += \
     $$CPP_PROJ_ROOT/src/optics.h \
     $$CPP_PROJ_ROOT/src/render.h \
     $$CPP_PROJ_ROOT/src/simulation.h \
-    $$CPP_PROJ_ROOT/src/threadingpool.h
+    $$CPP_PROJ_ROOT/src/threadingpool.h \
+    closabletabwidget.h
 
 SOURCES += \
     main.cpp \
@@ -35,7 +36,8 @@ SOURCES += \
     $$CPP_PROJ_ROOT/src/render.cpp \
     $$CPP_PROJ_ROOT/src/simulation.cpp \
     $$CPP_PROJ_ROOT/src/threadingpool.cpp \
-    mainwindow.cpp
+    mainwindow.cpp \
+    closabletabwidget.cpp
 
 INCLUDEPATH += $$CPP_PROJ_ROOT/src
 
