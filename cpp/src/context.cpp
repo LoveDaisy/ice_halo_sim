@@ -661,8 +661,8 @@ void ProjectContext::PrintCrystalInfo() const {
 
 
 ProjectContext::ProjectContext()
-    : sun_ctx_(0.0f), cam_ctx_{}, render_ctx_{}, init_ray_num_(kDefaultInitRayNum), ray_hit_num_(kDefaultRayHitNum),
-      model_path_("") {}
+    : sun_ctx_(SunContext::kDefaultAltitude), cam_ctx_{}, render_ctx_{}, init_ray_num_(kDefaultInitRayNum),
+      ray_hit_num_(kDefaultRayHitNum), model_path_("") {}
 
 
 void ProjectContext::ParseSunSettings(rapidjson::Document& d) {
