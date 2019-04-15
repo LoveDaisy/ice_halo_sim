@@ -49,17 +49,13 @@ class MainWindow : public QMainWindow {
   void updateRayHitsNum(int n);
   void updateSunAltitude(const QString& altitude_txt);
   void updateSunDiameterType(int index);
-  // Ray settings group
   void updateTotalRays(int ray_num);
-  void updateRayColor();
-  void updateBackgroundColor();
   void updateWavelength();
-  // Render settings group
-  void updateLensType(int index);
-  void updateVisibleRange(int index);
+
   // Scatter tab
   void insertScatterTab();
   void updateScatterTabs();
+
   // Filter settings group
   void enableFilterSettings(bool enable);
 
@@ -69,8 +65,6 @@ class MainWindow : public QMainWindow {
  private:
   void initUi();
   void initBasicSettings();
-  void initRaySettings();
-  void initRenderSettings();
   void initScatterTab();
 
   ClosableTabWidget* createScatterTab();

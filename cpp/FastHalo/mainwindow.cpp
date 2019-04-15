@@ -24,12 +24,11 @@ void MainWindow::initUi() {
   using namespace IceHalo;
 
   // Setup some UI properties
-  ui_->renderSettingLayout->setAlignment(Qt::AlignTop);
+  ui_->basicSettingLayout->setAlignment(Qt::AlignTop);
+  ui_->crystalAxisSettingLayout->setAlignment(Qt::AlignTop);
   ui_->filterSettingLayout->setAlignment(Qt::AlignTop);
 
   initBasicSettings();
-  initRaySettings();
-  initRenderSettings();
   initScatterTab();
 
   // Connect signals and slots
@@ -40,9 +39,9 @@ void MainWindow::initUi() {
 
 void MainWindow::initBasicSettings() {
   // Sun diameter
-  ui_->sunDiameterComboBox->addItem(tr("true diameter (0.5°)"), QVariant(0.5f));
-  ui_->sunDiameterComboBox->addItem(tr("point source (0°)"), QVariant(0.0f));
-  project_context_->sun_ctx_.SetSunDiameter(0.5f);  // Default value
+  ui_->sunDiameterComboBox->addItem(tr("true diameter"), QVariant(0.5f));
+  ui_->sunDiameterComboBox->addItem(tr("point source"), QVariant(0.0f));
+  updateSunDiameterType(0);
 
   // Sun altitude
   QString altitude_txt = QString::number(static_cast<int>(project_context_->sun_ctx_.GetSunAltitude()));
@@ -50,79 +49,21 @@ void MainWindow::initBasicSettings() {
   ui_->sunAltitudeEdit->setValidator(new QIntValidator(-90, 90));
   ui_->sunAltitudeEdit->setText(altitude_txt);
 
+  // Max hits
+
+  // Ray number
+
+  // Wavelength
+  foreach (const auto& wl, getWavelengthData()) { ui_->wavelengthComboBox->addItem(wl.name_); }
+  updateWavelength();
+
   connect(ui_->sunDiameterComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           &MainWindow::updateSunDiameterType);
   connect(ui_->sunAltitudeEdit, &QLineEdit::textChanged, this, &MainWindow::updateSunAltitude);
   connect(ui_->maxHitsSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::updateRayHitsNum);
-}
-
-
-void MainWindow::initRaySettings() {
-  // Ray color
-  foreach (const auto& color, getRayColorData()) { ui_->rayColorComboBox->addItem(color.name_); }
-  updateRayColor();
-
-  // Background color
-  foreach (const auto& color, getBackgroundColorData()) { ui_->backgroundColorComboBox->addItem(color.name_); }
-  updateBackgroundColor();
-
-  foreach (const auto& wl, getWavelengthData()) { ui_->wavelengthComboBox->addItem(wl.name_); }
-  updateWavelength();
-
-  connect(ui_->rayColorComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-          &MainWindow::updateRayColor);
-  connect(ui_->backgroundColorComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-          &MainWindow::updateBackgroundColor);
+  connect(ui_->rayNumberSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::updateTotalRays);
   connect(ui_->wavelengthComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           &MainWindow::updateWavelength);
-  connect(ui_->rayColorResultButton, &QPushButton::clicked, this, [=] {
-    int item_num = ui_->rayColorComboBox->count();
-    int curr_idx = ui_->rayColorComboBox->currentIndex();
-    auto& color_data = getRayColorData()[item_num - 1];
-    auto new_color = QColorDialog::getColor(color_data.color_, this, tr("Ray color"));
-    if (new_color.isValid()) {
-      color_data.color_ = new_color;
-      if (curr_idx != item_num - 1) {
-        ui_->rayColorComboBox->setCurrentIndex(item_num - 1);
-      } else {
-        updateRayColor();
-      }
-    }
-  });
-  connect(ui_->backgroundResultButton, &QPushButton::clicked, this, [=] {
-    int item_num = ui_->backgroundColorComboBox->count();
-    int curr_idx = ui_->backgroundColorComboBox->currentIndex();
-    auto& color_data = getBackgroundColorData()[item_num - 1];
-    auto new_color = QColorDialog::getColor(color_data.color_, this, tr("Background color"));
-    if (new_color.isValid()) {
-      color_data.color_ = new_color;
-      if (curr_idx != item_num - 1) {
-        ui_->backgroundColorComboBox->setCurrentIndex(item_num - 1);
-      } else {
-        updateBackgroundColor();
-      }
-    }
-  });
-}
-
-
-void MainWindow::initRenderSettings() {
-  using namespace IceHalo;
-
-  // Lens type
-  ui_->lensComboBox->addItem(tr("linear (normal lens)"), QVariant(static_cast<LensType_t>(LensType::kLinear)));
-  ui_->lensComboBox->addItem(tr("fisheye (equal area)"), QVariant(static_cast<LensType_t>(LensType::kEqualArea)));
-
-  // Visible range
-  ui_->visibleRangeComboBox->addItem(tr("upper"), QVariant(static_cast<VisibleRange_t>(VisibleRange::kUpper)));
-  ui_->visibleRangeComboBox->addItem(tr("lower"), QVariant(static_cast<VisibleRange_t>(VisibleRange::kLower)));
-  ui_->visibleRangeComboBox->addItem(tr("front"), QVariant(static_cast<VisibleRange_t>(VisibleRange::kFront)));
-  ui_->visibleRangeComboBox->addItem(tr("full"), QVariant(static_cast<VisibleRange_t>(VisibleRange::kFull)));
-
-  connect(ui_->rayNumberSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::updateTotalRays);
-  connect(ui_->lensComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::updateLensType);
-  connect(ui_->visibleRangeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-          &MainWindow::updateVisibleRange);
 }
 
 
@@ -192,76 +133,15 @@ void MainWindow::updateTotalRays(int ray_num) {
 }
 
 
-void MainWindow::updateRayColor() {
-  int curr_idx = ui_->rayColorComboBox->currentIndex();
-  auto& color_data = getRayColorData()[curr_idx];
-  if (color_data.color_.alpha() == 255) {
-    project_context_->render_ctx_.SetRayColor(static_cast<float>(color_data.color_.redF()),    // float r
-                                              static_cast<float>(color_data.color_.greenF()),  // float g
-                                              static_cast<float>(color_data.color_.blueF()));  // float b
-  } else {
-    project_context_->render_ctx_.UseRealRayColor();
-  }
-
-  // Then update the manipulate label
-  auto btn = ui_->rayColorResultButton;
-  auto p = ui_->centralwidget->palette();
-  btn->setIcon(color_data.icon_);
-  if (!color_data.icon_.isNull()) {
-    btn->setIconSize(btn->size());
-  } else {
-    p.setColor(QPalette::Button, color_data.color_);
-    qDebug() << "Updating ray color: " << color_data.color_;
-  }
-  btn->setPalette(p);
-}
-
-
-void MainWindow::updateBackgroundColor() {
-  int curr_idx = ui_->backgroundColorComboBox->currentIndex();
-  auto& color_data = getBackgroundColorData()[curr_idx];
-  if (color_data.color_.alpha() == 255) {
-    project_context_->render_ctx_.SetBackgroundColor(static_cast<float>(color_data.color_.redF()),    // float r
-                                                     static_cast<float>(color_data.color_.greenF()),  // float g
-                                                     static_cast<float>(color_data.color_.blueF()));  // float b
-  } else {
-    project_context_->render_ctx_.UseSkyBackground();
-  }
-
-  // Then update the manipulate label
-  auto p = ui_->backgroundResultButton->palette();
-  p.setColor(QPalette::Button, color_data.color_);
-  ui_->backgroundResultButton->setPalette(p);
-  qDebug() << "Updating background color: " << color_data.color_;
-}
-
-
 void MainWindow::updateWavelength() {
   int curr_idx = ui_->wavelengthComboBox->currentIndex();
   auto& wl_data = getWavelengthData()[curr_idx];
   if (wl_data.customized_) {
     // TODO
   }
-  auto btn = ui_->wavelengthResultButton;
-  btn->setIcon(wl_data.icon_);
-  btn->setIconSize(btn->size());
 
   project_context_->ClearWavelengthInfo();
   foreach (const auto& wl, wl_data.info_) { project_context_->AddWavelengthInfo(wl.wavelength, wl.weight); }
-}
-
-
-void MainWindow::updateLensType(int index) {
-  LensType_t t = ui_->lensComboBox->itemData(index).value<LensType_t>();
-  project_context_->cam_ctx_.SetLensType(static_cast<IceHalo::LensType>(t));
-  qDebug() << "Updating lens type: " << t;
-}
-
-
-void MainWindow::updateVisibleRange(int index) {
-  VisibleRange_t t = ui_->visibleRangeComboBox->itemData(index).value<VisibleRange_t>();
-  project_context_->render_ctx_.SetVisibleRange(static_cast<IceHalo::VisibleRange>(t));
-  qDebug() << "Updating visible range: " << t;
 }
 
 
@@ -279,9 +159,11 @@ void MainWindow::updateSunAltitude(const QString& altitude_txt) {
 
 
 void MainWindow::updateSunDiameterType(int index) {
-  float d = ui_->sunDiameterComboBox->itemData(index).toFloat();
-  project_context_->sun_ctx_.SetSunDiameter(d);
-  qDebug() << "Updating sun diameter: " << d;
+  double d = ui_->sunDiameterComboBox->itemData(index).toDouble();
+  project_context_->sun_ctx_.SetSunDiameter(static_cast<float>(d));
+  QString d_txt = QString::asprintf("Sun diameter: %.1f°", d);
+  ui_->sunDiameterLabel->setText(d_txt);
+  qDebug() << "Updating sun diameter: " << d_txt;
 }
 
 
