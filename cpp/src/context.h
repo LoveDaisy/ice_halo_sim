@@ -230,10 +230,11 @@ class ProjectContext {
 
   static constexpr float kPropMinW = 1e-6;
   static constexpr float kScatMinW = 1e-3;
-  static constexpr size_t kMinInitRayNumber = 10000;
-  static constexpr size_t kDefaultInitRayNumber = 500000;
-  static constexpr int kMinRayHitsNum = 1;
-  static constexpr int kMaxRayHitsNum = 12;
+  static constexpr size_t kMinInitRayNum = 10000;
+  static constexpr size_t kDefaultInitRayNum = 500000;
+  static constexpr int kMinRayHitNum = 1;
+  static constexpr int kMaxRayHitNum = 12;
+  static constexpr int kDefaultRayHitNum = 8;
 
   SunContext sun_ctx_;
   CameraContext cam_ctx_;
