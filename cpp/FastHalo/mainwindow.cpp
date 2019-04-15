@@ -48,13 +48,26 @@ void MainWindow::initBasicSettings() {
   project_context_->sun_ctx_.SetSunAltitude(altitude_txt.toFloat());
   ui_->sunAltitudeEdit->setValidator(new QIntValidator(-90, 90));
   ui_->sunAltitudeEdit->setText(altitude_txt);
+  updateSunAltitude(altitude_txt);
 
   // Max hits
+  auto max_hits_widget = ui_->maxHitsSpinBox;
+  max_hits_widget->setMaximum(project_context_->kMaxRayHitNum);
+  max_hits_widget->setMinimum(project_context_->kMinRayHitNum);
+  max_hits_widget->setValue(project_context_->GetRayHitNum());
+  updateRayHitsNum(max_hits_widget->value());
 
   // Ray number
+  auto ray_num_widget = ui_->rayNumberSpinBox;
+  ray_num_widget->setMaximum(kMaxInitRayNum);
+  ray_num_widget->setMinimum(project_context_->kMinRayHitNum);
+  ray_num_widget->setValue(static_cast<int>(project_context_->GetInitRayNum()));
+  updateTotalRays(ray_num_widget->value());
 
   // Wavelength
-  foreach (const auto& wl, getWavelengthData()) { ui_->wavelengthComboBox->addItem(wl.name_); }
+  foreach (const auto& wl, getWavelengthData()) {
+    ui_->wavelengthComboBox->addItem(wl.name_);  // Add wavelength item to widget
+  }
   updateWavelength();
 
   connect(ui_->sunDiameterComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -129,7 +142,7 @@ void MainWindow::enableFilterSettings(bool enable) {
 void MainWindow::updateTotalRays(int ray_num) {
   size_t init_ray_num = static_cast<size_t>(ray_num);
   project_context_->SetInitRayNum(init_ray_num);
-  qDebug() << "Updating total ray number: " << ray_num;
+  qDebug() << "Updating total ray number:" << ray_num;
 }
 
 
@@ -140,21 +153,25 @@ void MainWindow::updateWavelength() {
     // TODO
   }
 
+  qDebug() << "Updating wavelength:";
   project_context_->ClearWavelengthInfo();
-  foreach (const auto& wl, wl_data.info_) { project_context_->AddWavelengthInfo(wl.wavelength, wl.weight); }
+  foreach (const auto& wl, wl_data.info_) {
+    qDebug().nospace() << "  wavelength: " << wl.wavelength << ", weight: " << wl.weight;
+    project_context_->AddWavelengthInfo(wl.wavelength, wl.weight);  // Add wavelength data to context
+  }
 }
 
 
 void MainWindow::updateRayHitsNum(int n) {
   project_context_->SetRayHitNum(n);
-  qDebug() << "Updating ray hits number: " << n;
+  qDebug() << "Updating ray hits number:" << n;
 }
 
 
 void MainWindow::updateSunAltitude(const QString& altitude_txt) {
   float altitude = altitude_txt.toFloat();
   project_context_->sun_ctx_.SetSunAltitude(altitude);
-  qDebug() << "Updating sun altitude: " << altitude;
+  qDebug() << "Updating sun altitude:" << altitude;
 }
 
 
@@ -163,7 +180,7 @@ void MainWindow::updateSunDiameterType(int index) {
   project_context_->sun_ctx_.SetSunDiameter(static_cast<float>(d));
   QString d_txt = QString::asprintf("Sun diameter: %.1f°", d);
   ui_->sunDiameterLabel->setText(d_txt);
-  qDebug() << "Updating sun diameter: " << d_txt;
+  qDebug() << "Updating sun diameter:" << d_txt;
 }
 
 

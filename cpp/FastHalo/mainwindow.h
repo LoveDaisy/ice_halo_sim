@@ -76,7 +76,7 @@ class MainWindow : public QMainWindow {
 
   IceHalo::ProjectContextPtr project_context_;
 
-  static constexpr int kMaxInitRayNumber = 1000000;
+  static constexpr int kMaxInitRayNum = 1000000;
   static QVector<ColorData>& getRayColorData();
   static QVector<ColorData>& getBackgroundColorData();
   static QVector<WavelengthData>& getWavelengthData();
