@@ -107,6 +107,7 @@ class SunContext {
   bool SetSunDiameter(float d);
 
   static constexpr float kMaxDiameter = 90.0f;
+  static constexpr float kDefaultAltitude = 20.0f;
 
  private:
   float sun_diameter_;     // in degree
