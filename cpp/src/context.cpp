@@ -528,9 +528,9 @@ void RenderContext::SetVisibleRange(IceHalo::VisibleRange r) {
 
 constexpr float ProjectContext::kPropMinW;
 constexpr float ProjectContext::kScatMinW;
-constexpr size_t ProjectContext::kMinInitRayNumber;
-constexpr int ProjectContext::kMinRayHitsNum;
-constexpr int ProjectContext::kMaxRayHitsNum;
+constexpr size_t ProjectContext::kMinInitRayNum;
+constexpr int ProjectContext::kMinRayHitNum;
+constexpr int ProjectContext::kMaxRayHitNum;
 
 
 std::unique_ptr<ProjectContext> ProjectContext::CreateFromFile(const char* filename) {
@@ -581,7 +581,7 @@ size_t ProjectContext::GetInitRayNum() const {
 
 
 void ProjectContext::SetInitRayNum(size_t ray_num) {
-  init_ray_num_ = std::max(ray_num, kMinInitRayNumber);
+  init_ray_num_ = std::max(ray_num, kMinInitRayNum);
 }
 
 
@@ -621,7 +621,7 @@ int ProjectContext::GetRayHitNum() const {
 
 
 void ProjectContext::SetRayHitNum(int hit_num) {
-  ray_hit_num_ = std::min(std::max(hit_num, kMinRayHitsNum), kMaxRayHitsNum);
+  ray_hit_num_ = std::min(std::max(hit_num, kMinRayHitNum), kMaxRayHitNum);
 }
 
 
@@ -661,7 +661,7 @@ void ProjectContext::PrintCrystalInfo() const {
 
 
 ProjectContext::ProjectContext()
-    : sun_ctx_(0.0f), cam_ctx_{}, render_ctx_{}, init_ray_num_(kDefaultInitRayNumber), ray_hit_num_(kMinRayHitsNum),
+    : sun_ctx_(0.0f), cam_ctx_{}, render_ctx_{}, init_ray_num_(kDefaultInitRayNum), ray_hit_num_(kDefaultRayHitNum),
       model_path_("") {}
 
 
@@ -691,10 +691,10 @@ void ProjectContext::ParseSunSettings(rapidjson::Document& d) {
 void ProjectContext::ParseRaySettings(rapidjson::Document& d) {
   auto p = Pointer("/ray/number").Get(d);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default %d!\n", ProjectContext::kMinRayHitsNum);
+    std::fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default %d!\n", ProjectContext::kMinRayHitNum);
   } else if (!p->IsUint()) {
     std::fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default %d!\n",
-                 ProjectContext::kMinRayHitsNum);
+                 ProjectContext::kMinRayHitNum);
   } else {
     SetInitRayNum(p->GetUint());
   }
@@ -702,10 +702,10 @@ void ProjectContext::ParseRaySettings(rapidjson::Document& d) {
   p = Pointer("/max_recursion").Get(d);
   if (p == nullptr) {
     std::fprintf(stderr, "\nWARNING! Config missing <max_recursion>, using default %d!\n",
-                 ProjectContext::kMinRayHitsNum);
+                 ProjectContext::kMinRayHitNum);
   } else if (!p->IsInt()) {
     std::fprintf(stderr, "\nWARNING! config <max_recursion> is not a integer, using default %d!\n",
-                 ProjectContext::kMinRayHitsNum);
+                 ProjectContext::kMinRayHitNum);
   } else {
     SetRayHitNum(p->GetInt());
   }
