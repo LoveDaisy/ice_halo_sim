@@ -3,10 +3,12 @@
 
 #include <QButtonGroup>
 #include <QMainWindow>
+#include <QStandardItem>
+#include <QStandardItemModel>
 #include <QToolButton>
 
-#include "closabletabwidget.h"
 #include "context.h"
+#include "iconbutton.h"
 
 namespace Ui {
 class MainWindow;
@@ -56,6 +58,9 @@ class MainWindow : public QMainWindow {
   void insertScatterTab();
   void updateScatterTabs();
 
+  // Crystal table
+  void insertCrystalItem();
+
   // Filter settings group
   void enableFilterSettings(bool enable);
 
@@ -66,19 +71,23 @@ class MainWindow : public QMainWindow {
   void initUi();
   void initBasicSettings();
   void initScatterTab();
+  void initCrystalList();
 
-  ClosableTabWidget* createScatterTab();
+  IconButton* createScatterTab();
   QToolButton* createScatterAddButton();
 
+  //  QStandardItem* createCrystalItem();
+
   Ui::MainWindow* ui_;
+
   QButtonGroup* scatter_tab_group_;
   QToolButton* scatter_tab_add_btn_;
+
+  QStandardItemModel* crystal_list_model_;
 
   IceHalo::ProjectContextPtr project_context_;
 
   static constexpr int kMaxInitRayNum = 1000000;
-  static QVector<ColorData>& getRayColorData();
-  static QVector<ColorData>& getBackgroundColorData();
   static QVector<WavelengthData>& getWavelengthData();
 
   using LensType_t = std::underlying_type<IceHalo::LensType>::type;

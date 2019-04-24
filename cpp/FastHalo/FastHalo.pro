@@ -12,7 +12,8 @@ CONFIG += c++11
 CPP_PROJ_ROOT = ../
 
 FORMS += \
-    mainwindow.ui
+    mainwindow.ui \
+    previewwindow.ui
 
 HEADERS += \
     mainwindow.h \
@@ -24,7 +25,9 @@ HEADERS += \
     $$CPP_PROJ_ROOT/src/render.h \
     $$CPP_PROJ_ROOT/src/simulation.h \
     $$CPP_PROJ_ROOT/src/threadingpool.h \
-    closabletabwidget.h
+    icons.h \
+    iconbutton.h \
+    previewwindow.h
 
 SOURCES += \
     main.cpp \
@@ -37,12 +40,15 @@ SOURCES += \
     $$CPP_PROJ_ROOT/src/simulation.cpp \
     $$CPP_PROJ_ROOT/src/threadingpool.cpp \
     mainwindow.cpp \
-    closabletabwidget.cpp
+    icons.cpp \
+    iconbutton.cpp \
+    previewwindow.cpp
 
 INCLUDEPATH += $$CPP_PROJ_ROOT/src
 
 RESOURCES += \
-    ui.qrc
+    ui.qrc \
+    styles/breeze.qrc
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

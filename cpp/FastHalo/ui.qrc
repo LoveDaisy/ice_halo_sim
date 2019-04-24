@@ -2,5 +2,13 @@
     <qresource prefix="/">
         <file>icons/icon_close_on_32.png</file>
         <file>icons/icon_close_checked_normal_32.png</file>
+        <file>icons/hex_close_normal_64.png</file>
+        <file>icons/hex_close_on_64.png</file>
+        <file>icons/hex_crystal_normal_64.png</file>
+        <file>icons/hex_crystal_on_64.png</file>
+        <file>icons/hex_add_on.png</file>
+        <file>styles/my_style.qss</file>
+        <file>icons/link.png</file>
+        <file>icons/unlink.png</file>
     </qresource>
 </RCC>

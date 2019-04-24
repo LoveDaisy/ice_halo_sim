@@ -1,18 +1,22 @@
-#ifndef CLOSABLETABWIDGET_H
-#define CLOSABLETABWIDGET_H
+#ifndef ICONBUTTON_H
+#define ICONBUTTON_H
 
 #include <QDebug>
 #include <QMouseEvent>
 #include <QToolButton>
 
-class ClosableTabWidget : public QToolButton {
+class IconButton : public QToolButton {
   Q_OBJECT
  public:
-  explicit ClosableTabWidget(const QString& text, QWidget* parent = nullptr);
+  explicit IconButton(const QString& text, QWidget* parent = nullptr);
   void enableIcon(bool enabled = true);
   bool iconEnabled();
 
-  static constexpr int kIconSize = 10;
+  int iconSize() const;
+  void setIconSize(int size);
+  void setIcons(QIcon icon_normal, QIcon icon_on = QIcon());
+
+  static constexpr int kDefaultIconSize = 10;
 
  signals:
   void hoverOnIcon(bool on = false);
@@ -27,12 +31,12 @@ class ClosableTabWidget : public QToolButton {
   void leaveEvent(QEvent* event) override;
 
   bool icon_enabled_;
-
-  static QIcon& getIconNormal();
-  static QIcon& getIconOn();
+  int icon_size_;
+  QIcon icon_normal_;
+  QIcon icon_on_;
 
  private:
   bool isOnIcon(int x);
 };
 
-#endif  // CLOSABLETABWIDGET_H
+#endif  // ICONBUTTON_H

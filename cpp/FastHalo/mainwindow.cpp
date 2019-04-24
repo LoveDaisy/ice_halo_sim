@@ -4,7 +4,9 @@
 #include <QPropertyAnimation>
 #include <QtDebug>
 
-#include "closabletabwidget.h"
+#include "iconbutton.h"
+//#include "crystalitemwidget.h"
+#include "icons.h"
 #include "render.h"
 #include "ui_mainwindow.h"
 
@@ -24,12 +26,13 @@ void MainWindow::initUi() {
   using namespace IceHalo;
 
   // Setup some UI properties
-  ui_->basicSettingLayout->setAlignment(Qt::AlignTop);
-  ui_->crystalAxisSettingLayout->setAlignment(Qt::AlignTop);
   ui_->filterSettingLayout->setAlignment(Qt::AlignTop);
 
   initBasicSettings();
   initScatterTab();
+  initCrystalList();
+
+  ui_->crystalsTable->setFocus();
 
   // Connect signals and slots
   connect(ui_->filterEnableCheckBox, &QCheckBox::clicked, this, &MainWindow::enableFilterSettings);
@@ -45,8 +48,7 @@ void MainWindow::initBasicSettings() {
 
   // Sun altitude
   QString altitude_txt = QString::number(static_cast<int>(project_context_->sun_ctx_.GetSunAltitude()));
-  project_context_->sun_ctx_.SetSunAltitude(altitude_txt.toFloat());
-  ui_->sunAltitudeEdit->setValidator(new QIntValidator(-90, 90));
+  ui_->sunAltitudeEdit->setValidator(new QDoubleValidator(-90, 90, 1));
   ui_->sunAltitudeEdit->setText(altitude_txt);
   updateSunAltitude(altitude_txt);
 
@@ -65,8 +67,8 @@ void MainWindow::initBasicSettings() {
   updateTotalRays(ray_num_widget->value());
 
   // Wavelength
-  foreach (const auto& wl, getWavelengthData()) {
-    ui_->wavelengthComboBox->addItem(wl.name_);  // Add wavelength item to widget
+  for (const auto& wl : getWavelengthData()) {
+    ui_->wavelengthComboBox->addItem(wl.name_);
   }
   updateWavelength();
 
@@ -86,8 +88,8 @@ void MainWindow::initScatterTab() {
   ui_->scatterTabLayout->addWidget(scatter_tab_add_btn_);
 
   insertScatterTab();
-  auto tab0 = static_cast<ClosableTabWidget*>(ui_->scatterTabLayout->itemAt(0)->widget());
-  tab0->enableIcon(false);
+  //  auto tab0 = static_cast<IconButton*>(ui_->scatterTabLayout->itemAt(0)->widget());
+  //  tab0->enableIcon(false);
 
   connect(scatter_tab_add_btn_, &QToolButton::clicked, this, &MainWindow::insertScatterTab);
 }
@@ -102,7 +104,7 @@ void MainWindow::insertScatterTab() {
 
   updateScatterTabs();
 
-  connect(btn, &ClosableTabWidget::closeTab, this, [=] {
+  connect(btn, &IconButton::closeTab, this, [=] {
     auto anim = new QPropertyAnimation(btn, "maximumWidth");
     anim->setStartValue(btn->geometry().width());
     anim->setEndValue(0);
@@ -115,10 +117,72 @@ void MainWindow::insertScatterTab() {
 }
 
 
-ClosableTabWidget* MainWindow::createScatterTab() {
-  auto btn = new ClosableTabWidget("");
+void MainWindow::initCrystalList() {
+  auto table = ui_->crystalsTable;
+
+  crystal_list_model_ = new QStandardItemModel();
+  crystal_list_model_->setHorizontalHeaderLabels(QStringList{ "Enable", "Name", "", "Pop." });
+
+  table->setModel(crystal_list_model_);
+  table->setColumnWidth(0, 50);
+  table->setColumnWidth(2, 30);
+  table->setColumnWidth(3, 40);
+  table->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+  table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+  table->horizontalHeader()->setMinimumSectionSize(20);
+  table->verticalHeader()->hide();
+  table->setSelectionBehavior(QAbstractItemView::SelectRows);
+  table->setSelectionMode(QAbstractItemView::SingleSelection);
+  table->setShowGrid(false);
+
+  insertCrystalItem();  // TODO
+
+  connect(table, &QTableView::clicked, this, [=](const QModelIndex& index) {
+    if (index.column() != 2) {
+      return;
+    }
+    auto link = index.data(Qt::UserRole).toBool();
+    crystal_list_model_->setData(index, !link, Qt::UserRole);
+    if (link) {
+      crystal_list_model_->setData(index, Icons::getIcon(Icons::kUnlink), Qt::DecorationRole);
+    } else {
+      crystal_list_model_->setData(index, Icons::getIcon(Icons::kLink), Qt::DecorationRole);
+    }
+  });
+}
+
+
+void MainWindow::insertCrystalItem() {
+  auto item_check = new QStandardItem();
+  auto item_name = new QStandardItem("Hex-Prism");
+  auto item_link = new QStandardItem();
+  auto item_pop = new QStandardItem("100");
+
+  item_check->setCheckable(true);
+  item_check->setEditable(false);
+  item_check->setData(Qt::Unchecked, Qt::CheckStateRole);
+  item_check->setTextAlignment(Qt::AlignCenter);
+  item_link->setEditable(false);
+  item_link->setData(Icons::getIcon(Icons::kLink), Qt::DecorationRole);
+  item_link->setData(true, Qt::UserRole);
+  item_name->setEditable(true);
+  item_pop->setEditable(true);
+
+  auto row_count = crystal_list_model_->rowCount();
+  crystal_list_model_->setItem(row_count, 0, item_check);
+  crystal_list_model_->setItem(row_count, 1, item_name);
+  crystal_list_model_->setItem(row_count, 2, item_link);
+  crystal_list_model_->setItem(row_count, 3, item_pop);
+
+  auto table = ui_->crystalsTable;
+  table->selectRow(row_count);
+}
+
+
+IconButton* MainWindow::createScatterTab() {
+  auto btn = new IconButton("");
   btn->setChecked(true);
-  btn->setVisible(true);
+  btn->setIcons(Icons::getIcon(Icons::kCloseNormal), Icons::getIcon(Icons::kCloseOn));
   return btn;
 }
 
@@ -128,6 +192,16 @@ QToolButton* MainWindow::createScatterAddButton() {
   btn->setText(tr("+"));
   return btn;
 }
+
+
+// IconButton* MainWindow::createCrystalItem() {
+//  auto item = new IconButton("");
+//  item->setChecked(true);
+//  item->setIcons(Icons::getIcon(Icons::kHexCloseNormal), Icons::getIcon(Icons::kHexCloseOn));
+//  item->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+//  item->setIconSize(16);
+//  return item;
+//}
 
 
 void MainWindow::enableFilterSettings(bool enable) {
@@ -155,9 +229,9 @@ void MainWindow::updateWavelength() {
 
   qDebug() << "Updating wavelength:";
   project_context_->ClearWavelengthInfo();
-  foreach (const auto& wl, wl_data.info_) {
+  for (const auto& wl : wl_data.info_) {
     qDebug().nospace() << "  wavelength: " << wl.wavelength << ", weight: " << wl.weight;
-    project_context_->AddWavelengthInfo(wl.wavelength, wl.weight);  // Add wavelength data to context
+    project_context_->AddWavelengthInfo(wl.wavelength, wl.weight);
   }
 }
 
@@ -169,9 +243,17 @@ void MainWindow::updateRayHitsNum(int n) {
 
 
 void MainWindow::updateSunAltitude(const QString& altitude_txt) {
-  float altitude = altitude_txt.toFloat();
-  project_context_->sun_ctx_.SetSunAltitude(altitude);
-  qDebug() << "Updating sun altitude:" << altitude;
+  auto widget = ui_->sunAltitudeEdit;
+  auto& ctx = project_context_->sun_ctx_;
+  int pos;
+  QString txt_cpy = altitude_txt;
+  if (widget->validator()->validate(txt_cpy, pos) != QValidator::Acceptable) {
+    QString value = QString::asprintf("%.1f", static_cast<double>(ctx.GetSunAltitude()));
+    widget->setText(value);
+  } else {
+    ctx.SetSunAltitude(txt_cpy.toFloat());
+  }
+  qDebug() << "Updating sun altitude:" << altitude_txt;
 }
 
 
@@ -193,7 +275,7 @@ void MainWindow::updateScatterTabs() {
   // Remove invisible tabs
   bool update_check = false;  // If a checked tab is removed, then the next tab will be checked.
   for (int i = 0; i < tab_cnt; i++) {
-    auto tab = static_cast<ClosableTabWidget*>(ui_->scatterTabLayout->itemAt(i)->widget());
+    auto tab = static_cast<IconButton*>(ui_->scatterTabLayout->itemAt(i)->widget());
     if (tab->geometry().width() > 0) {
       if (update_check) {
         tab->setChecked(true);
@@ -215,20 +297,20 @@ void MainWindow::updateScatterTabs() {
   tab_cnt = ui_->scatterTabLayout->count() - 1;
   for (int i = 0; i < tab_cnt; i++) {
     QString tab_txt = tr("  Scatter %1").arg(i + 1);
-    auto tab = static_cast<ClosableTabWidget*>(ui_->scatterTabLayout->itemAt(i)->widget());
+    auto tab = static_cast<IconButton*>(ui_->scatterTabLayout->itemAt(i)->widget());
     tab->setText(tab_txt);
     tab->enableIcon(true);
   }
 
   // If only one tab, disable close icon
   if (tab_cnt <= 1 && ui_->scatterTabLayout->itemAt(0)) {
-    auto tab = static_cast<ClosableTabWidget*>(ui_->scatterTabLayout->itemAt(0)->widget());
+    auto tab = static_cast<IconButton*>(ui_->scatterTabLayout->itemAt(0)->widget());
     tab->enableIcon(false);
   }
 
   // If no checked (the right most checked tab is removed), check the first one
   if (!scatter_tab_group_->checkedButton()) {
-    auto tab = static_cast<ClosableTabWidget*>(ui_->scatterTabLayout->itemAt(0)->widget());
+    auto tab = static_cast<IconButton*>(ui_->scatterTabLayout->itemAt(0)->widget());
     tab->setChecked(true);
   }
 }
@@ -258,32 +340,32 @@ void MainWindow::updateSimulationContext() {
 }
 
 
-QVector<ColorData>& MainWindow::getRayColorData() {
-  static QVector<ColorData> colors;
-  if (colors.empty()) {
-    colors << ColorData(tr("real"), QColor(0, 0, 0, 0));
-    colors << ColorData(tr("white"), QColor(255, 255, 255, 255));
-    colors << ColorData(tr("black"), QColor(0, 0, 0, 255));
-    colors << ColorData(tr("customize"), QColor(255, 255, 255, 255));
+// QVector<ColorData>& MainWindow::getRayColorData() {
+//  static QVector<ColorData> colors;
+//  if (colors.empty()) {
+//    colors << ColorData(tr("real"), QColor(0, 0, 0, 0));
+//    colors << ColorData(tr("white"), QColor(255, 255, 255, 255));
+//    colors << ColorData(tr("black"), QColor(0, 0, 0, 255));
+//    colors << ColorData(tr("customize"), QColor(255, 255, 255, 255));
 
-    colors[0].icon_ = QIcon(":/icons/icon_color_real.png");
-  }
+//    colors[0].icon_ = QIcon(":/icons/icon_color_real.png");
+//  }
 
-  return colors;
-}
+//  return colors;
+//}
 
 
-QVector<ColorData>& MainWindow::getBackgroundColorData() {
-  static QVector<ColorData> colors;
-  if (colors.empty()) {
-    colors << ColorData(tr("black"), QColor(0, 0, 0, 255));
-    colors << ColorData(tr("white"), QColor(255, 255, 255, 255));
-    //  colors << ColorData(tr("sky"), QColor(0, 0, 0, 0));
-    colors << ColorData(tr("customize"), QColor(255, 255, 255, 255));
-  }
+// QVector<ColorData>& MainWindow::getBackgroundColorData() {
+//  static QVector<ColorData> colors;
+//  if (colors.empty()) {
+//    colors << ColorData(tr("black"), QColor(0, 0, 0, 255));
+//    colors << ColorData(tr("white"), QColor(255, 255, 255, 255));
+//    //  colors << ColorData(tr("sky"), QColor(0, 0, 0, 0));
+//    colors << ColorData(tr("customize"), QColor(255, 255, 255, 255));
+//  }
 
-  return colors;
-}
+//  return colors;
+//}
 
 
 QVector<WavelengthData>& MainWindow::getWavelengthData() {
