@@ -88,8 +88,6 @@ void MainWindow::initScatterTab() {
   ui_->scatterTabLayout->addWidget(scatter_tab_add_btn_);
 
   insertScatterTab();
-  //  auto tab0 = static_cast<IconButton*>(ui_->scatterTabLayout->itemAt(0)->widget());
-  //  tab0->enableIcon(false);
 
   connect(scatter_tab_add_btn_, &QToolButton::clicked, this, &MainWindow::insertScatterTab);
 }
@@ -137,6 +135,8 @@ void MainWindow::initCrystalList() {
 
   insertCrystalItem();  // TODO
 
+  connect(ui_->crystalsAddButton, &QToolButton::clicked, this, &MainWindow::insertCrystalItem);
+  connect(ui_->crystalsRemoveButton, &QToolButton::clicked, this, &MainWindow::removeCurrentCrystal);
   connect(table, &QTableView::clicked, this, [=](const QModelIndex& index) {
     if (index.column() != 2) {
       return;
@@ -179,6 +179,28 @@ void MainWindow::insertCrystalItem() {
 }
 
 
+void MainWindow::removeCurrentCrystal() {
+  auto table = ui_->crystalsTable;
+  auto index = table->currentIndex();
+  if (!index.isValid()) {
+    return;
+  }
+
+  auto row_count = crystal_list_model_->rowCount();
+  if (row_count <= 1) {
+    return;
+  }
+
+  auto curr_row = index.row();
+  crystal_list_model_->removeRow(curr_row);
+  if (curr_row == row_count - 1) {
+    table->selectRow(curr_row - 1);
+  } else {
+    table->selectRow(curr_row);
+  }
+}
+
+
 IconButton* MainWindow::createScatterTab() {
   auto btn = new IconButton("");
   btn->setChecked(true);
@@ -192,16 +214,6 @@ QToolButton* MainWindow::createScatterAddButton() {
   btn->setText(tr("+"));
   return btn;
 }
-
-
-// IconButton* MainWindow::createCrystalItem() {
-//  auto item = new IconButton("");
-//  item->setChecked(true);
-//  item->setIcons(Icons::getIcon(Icons::kHexCloseNormal), Icons::getIcon(Icons::kHexCloseOn));
-//  item->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-//  item->setIconSize(16);
-//  return item;
-//}
 
 
 void MainWindow::enableFilterSettings(bool enable) {
@@ -340,34 +352,6 @@ void MainWindow::updateSimulationContext() {
 }
 
 
-// QVector<ColorData>& MainWindow::getRayColorData() {
-//  static QVector<ColorData> colors;
-//  if (colors.empty()) {
-//    colors << ColorData(tr("real"), QColor(0, 0, 0, 0));
-//    colors << ColorData(tr("white"), QColor(255, 255, 255, 255));
-//    colors << ColorData(tr("black"), QColor(0, 0, 0, 255));
-//    colors << ColorData(tr("customize"), QColor(255, 255, 255, 255));
-
-//    colors[0].icon_ = QIcon(":/icons/icon_color_real.png");
-//  }
-
-//  return colors;
-//}
-
-
-// QVector<ColorData>& MainWindow::getBackgroundColorData() {
-//  static QVector<ColorData> colors;
-//  if (colors.empty()) {
-//    colors << ColorData(tr("black"), QColor(0, 0, 0, 255));
-//    colors << ColorData(tr("white"), QColor(255, 255, 255, 255));
-//    //  colors << ColorData(tr("sky"), QColor(0, 0, 0, 0));
-//    colors << ColorData(tr("customize"), QColor(255, 255, 255, 255));
-//  }
-
-//  return colors;
-//}
-
-
 QVector<WavelengthData>& MainWindow::getWavelengthData() {
   static QVector<WavelengthData> wl_data;
   if (wl_data.empty()) {
@@ -390,16 +374,6 @@ QVector<WavelengthData>& MainWindow::getWavelengthData() {
     wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 580, 1.0f };
     wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 620, 1.0f };
     wl_data.append(std::move(wl_eq));
-
-    //  WavelengthData wl_customize(tr("customize"), true);
-    //  wl_customize.icon_ = QIcon(":/icons/icon_wl_customize_dark.png");
-    //  wl_customize.info_ << IceHalo::ProjectContext::WavelengthInfo{ 420, 0.9122f };
-    //  wl_customize.info_ << IceHalo::ProjectContext::WavelengthInfo{ 460, 0.9969f };
-    //  wl_customize.info_ << IceHalo::ProjectContext::WavelengthInfo{ 500, 1.0381f };
-    //  wl_customize.info_ << IceHalo::ProjectContext::WavelengthInfo{ 540, 1.0440f };
-    //  wl_customize.info_ << IceHalo::ProjectContext::WavelengthInfo{ 580, 1.0237f };
-    //  wl_customize.info_ << IceHalo::ProjectContext::WavelengthInfo{ 620, 0.9851f };
-    //  wl_data.append(std::move(wl_customize));
   }
 
   return wl_data;

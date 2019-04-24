@@ -60,6 +60,7 @@ class MainWindow : public QMainWindow {
 
   // Crystal table
   void insertCrystalItem();
+  void removeCurrentCrystal();
 
   // Filter settings group
   void enableFilterSettings(bool enable);
