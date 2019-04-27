@@ -47,8 +47,7 @@ SOURCES += \
 INCLUDEPATH += $$CPP_PROJ_ROOT/src
 
 RESOURCES += \
-    ui.qrc \
-    styles/breeze.qrc
+    ui.qrc
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

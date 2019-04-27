@@ -5,7 +5,6 @@
 #include <QtDebug>
 
 #include "iconbutton.h"
-//#include "crystalitemwidget.h"
 #include "icons.h"
 #include "render.h"
 #include "ui_mainwindow.h"
@@ -121,6 +120,7 @@ void MainWindow::initCrystalList() {
   crystal_list_model_ = new QStandardItemModel();
   crystal_list_model_->setHorizontalHeaderLabels(QStringList{ "Enable", "Name", "", "Pop." });
 
+  table->setMouseTracking(true);
   table->setModel(crystal_list_model_);
   table->setColumnWidth(0, 50);
   table->setColumnWidth(2, 30);
@@ -147,6 +147,13 @@ void MainWindow::initCrystalList() {
       crystal_list_model_->setData(index, Icons::getIcon(Icons::kUnlink), Qt::DecorationRole);
     } else {
       crystal_list_model_->setData(index, Icons::getIcon(Icons::kLink), Qt::DecorationRole);
+    }
+  });
+  connect(table, &QTableView::entered, this, [=](const QModelIndex& index) {
+    if (index.column() == 0 || index.column() == 2) {
+      ui_->crystalsTable->setCursor(Qt::PointingHandCursor);
+    } else {
+      ui_->crystalsTable->unsetCursor();
     }
   });
 }

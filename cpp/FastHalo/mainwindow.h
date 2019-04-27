@@ -15,17 +15,6 @@ class MainWindow;
 }
 
 
-class ColorData {
- public:
-  ColorData() : name_(""), color_(QColor(0, 0, 0, 0)), icon_(QIcon()) {}
-  ColorData(const QString& name, const QColor& color) : name_(name), color_(color), icon_(QIcon()) {}
-
-  const QString name_;
-  QColor color_;
-  QIcon icon_;
-};
-
-
 class WavelengthData {
  public:
   WavelengthData() : name_(""), customized_(false), icon_(QIcon()) {}
@@ -76,8 +65,6 @@ class MainWindow : public QMainWindow {
 
   IconButton* createScatterTab();
   QToolButton* createScatterAddButton();
-
-  //  QStandardItem* createCrystalItem();
 
   Ui::MainWindow* ui_;
 
