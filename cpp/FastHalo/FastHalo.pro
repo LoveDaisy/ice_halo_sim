@@ -27,7 +27,8 @@ HEADERS += \
     $$CPP_PROJ_ROOT/src/threadingpool.h \
     icons.h \
     iconbutton.h \
-    previewwindow.h
+    previewwindow.h \
+    spinboxdelegate.h
 
 SOURCES += \
     main.cpp \
@@ -42,7 +43,8 @@ SOURCES += \
     mainwindow.cpp \
     icons.cpp \
     iconbutton.cpp \
-    previewwindow.cpp
+    previewwindow.cpp \
+    spinboxdelegate.cpp
 
 INCLUDEPATH += $$CPP_PROJ_ROOT/src
 

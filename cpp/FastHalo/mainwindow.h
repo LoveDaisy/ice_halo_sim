@@ -76,6 +76,7 @@ class MainWindow : public QMainWindow {
   IceHalo::ProjectContextPtr project_context_;
 
   static constexpr int kMaxInitRayNum = 1000000;
+  static int current_crystal_id_;
   static QVector<WavelengthData>& getWavelengthData();
 
   using LensType_t = std::underlying_type<IceHalo::LensType>::type;

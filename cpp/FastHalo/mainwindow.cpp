@@ -7,7 +7,12 @@
 #include "iconbutton.h"
 #include "icons.h"
 #include "render.h"
+#include "spinboxdelegate.h"
 #include "ui_mainwindow.h"
+
+
+int MainWindow::current_crystal_id_ = 1;
+
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent), ui_(new Ui::MainWindow), project_context_(IceHalo::ProjectContext::CreateDefault()) {
@@ -30,8 +35,6 @@ void MainWindow::initUi() {
   initBasicSettings();
   initScatterTab();
   initCrystalList();
-
-  ui_->crystalsTable->setFocus();
 
   // Connect signals and slots
   connect(ui_->filterEnableCheckBox, &QCheckBox::clicked, this, &MainWindow::enableFilterSettings);
@@ -132,11 +135,18 @@ void MainWindow::initCrystalList() {
   table->setSelectionBehavior(QAbstractItemView::SelectRows);
   table->setSelectionMode(QAbstractItemView::SingleSelection);
   table->setShowGrid(false);
+  table->setItemDelegateForColumn(3, new SpinBoxDelegate());
 
-  insertCrystalItem();  // TODO
+  connect(ui_->crystalsAddButton, &QToolButton::clicked, this, [=] {
+    ui_->crystalsTable->setFocus();
+    insertCrystalItem();
+  });
 
-  connect(ui_->crystalsAddButton, &QToolButton::clicked, this, &MainWindow::insertCrystalItem);
-  connect(ui_->crystalsRemoveButton, &QToolButton::clicked, this, &MainWindow::removeCurrentCrystal);
+  connect(ui_->crystalsRemoveButton, &QToolButton::clicked, this, [=] {
+    ui_->crystalsTable->setFocus();
+    removeCurrentCrystal();
+  });
+
   connect(table, &QTableView::clicked, this, [=](const QModelIndex& index) {
     if (index.column() != 2) {
       return;
@@ -149,6 +159,7 @@ void MainWindow::initCrystalList() {
       crystal_list_model_->setData(index, Icons::getIcon(Icons::kLink), Qt::DecorationRole);
     }
   });
+
   connect(table, &QTableView::entered, this, [=](const QModelIndex& index) {
     if (index.column() == 0 || index.column() == 2) {
       ui_->crystalsTable->setCursor(Qt::PointingHandCursor);
@@ -161,7 +172,7 @@ void MainWindow::initCrystalList() {
 
 void MainWindow::insertCrystalItem() {
   auto item_check = new QStandardItem();
-  auto item_name = new QStandardItem("Hex-Prism");
+  auto item_name = new QStandardItem(tr("Crystal %1").arg(current_crystal_id_++));
   auto item_link = new QStandardItem();
   auto item_pop = new QStandardItem("100");
 
@@ -194,10 +205,6 @@ void MainWindow::removeCurrentCrystal() {
   }
 
   auto row_count = crystal_list_model_->rowCount();
-  if (row_count <= 1) {
-    return;
-  }
-
   auto curr_row = index.row();
   crystal_list_model_->removeRow(curr_row);
   if (curr_row == row_count - 1) {
