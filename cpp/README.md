@@ -174,13 +174,13 @@ Each shape has its own shape parameters.
   * `HexPrism`:
   Only 1 parameter, defines `h / a` where `h` is the prism height, `a` is the diameter along
   a-axis (also x-axis in my program).  
-  <img src="figs/hex_prism_01.png" width="400">.
+  <img src="doc/figs/hex_prism_01.png" width="400">.
 
   * `HexPyramid`:
   May have 3, 5, or 7 parameters.  
     * For 3 parameters case, they are `h1 / H1`, `h2 / a`, `h3 / H3` respectly,
       where `H1` means the max possible height for pyramid segment, and `H3` the same.  
-      <img src="figs/hex_pyramid_01.png" width="400">.  
+      <img src="doc/figs/hex_pyramid_01.png" width="400">.  
     * For 5 parameters case, the last 3 parameters are same as the first case,
       and the first 2 parameters indicate the face direction. They must be integers. The
       face direction is described with [Miller index](https://en.wikipedia.org/wiki/Miller_index).
@@ -197,29 +197,29 @@ Each shape has its own shape parameters.
   * `HexPyramidStackHalf`:
   7 parameters. Similar to 7 parameters `HexPyramid` case. `h / H` for pyramid segment, and `h / a`
   for prism segment.  
-  <img src="figs/hex_pyramid_stack_half_01.png" width="400">.
+  <img src="doc/figs/hex_pyramid_stack_half_01.png" width="400">.
 
   * `TriPyramid`:
   5 parameters. Similar to 5 parameter case of `HexPyramid`.
-  <img src="figs/tri_pyramid_01.png" width="400">.
+  <img src="doc/figs/tri_pyramid_01.png" width="400">.
 
   7 parameters. First 6 parameters define the prism face distance factor from the origin.
   * `IrregularHexPrism`:
   Last parameter is height of the crystal. The distance factor here means the ratio of actual distance
   w.r.t regular haxegon distance. Thus, a regular haxegon has distance of `[1, 1, 1, 1, 1, 1]`.
   The figure shows an irregular hexegon with distance of `[1.1, 0.9, 1.5, 0.9, 1.7, 1.2]`  
-  <img src="figs/irr_hex_01.png" width="400">.
+  <img src="doc/figs/irr_hex_01.png" width="400">.
 
   * `IrregularHexPyramid`:
   13 parameters. First 6 parameters define the prism face distance from the origin. Next 4 parameters
   are Miller index describing upper and lower pyramid segment. Last 3 parameters are heights of each segment, from
   upper to lower.  
-  <img src="figs/irr_hex_pyramid_01.png" width="400">.
+  <img src="doc/figs/irr_hex_pyramid_01.png" width="400">.
 
   * `CubicPyramid`:
   2 parameters. Similar to cases above, the 2 parameters defines `h1 / H1` and `h2 / H2`.  
   NOTE: this kind crystal has cubic system.  
-  <img src="figs/cubic_pyramid_01.png" width="400">.
+  <img src="doc/figs/cubic_pyramid_01.png" width="400">.
 
   * `Custom`:
   1 parameters that indicates the model file name.  
