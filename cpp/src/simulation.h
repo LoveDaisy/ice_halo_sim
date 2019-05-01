@@ -65,9 +65,9 @@ class Simulator {
   void InitSunRays();
   void InitEntryRays(const CrystalContextPtr& ctx);
   void InitMainAxis(const CrystalContextPtr& ctx, float* axis);
-  void TraceRays(const CrystalPtr& crystal, const RayPathFilter& filter);
+  void TraceRays(const CrystalPtr& crystal, const RayPathFilterPtr& filter);
   void RestoreResultRays(float prob);
-  void StoreRaySegments(const CrystalPtr& crystal, const RayPathFilter& filter);
+  void StoreRaySegments(const CrystalPtr& crystal, const RayPathFilterPtr& filter);
   void RefreshBuffer();
 
   static constexpr int kBufferSizeFactor = 4;

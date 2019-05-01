@@ -16,105 +16,60 @@ namespace IceHalo {
 
 using rapidjson::Pointer;
 
-RayPathFilter::RayPathFilter()
-    : type(RayPathFilter::kTypeNone), symmetry(RayPathFilter::kSymmetryNone), complementary(false),
-      remove_homodromous(false) {}
+AbstractRayPathFilter::AbstractRayPathFilter()
+    : symmetry_flag_(kSymmetryNone), complementary_(false), remove_homodromous_(false) {}
 
 
-bool RayPathFilter::Filter(RaySegment* r, const CrystalPtr& crystal) const {
-  if (remove_homodromous &&
-      Math::Dot3(r->dir.val(), r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * Math::kFloatEps) {
+bool AbstractRayPathFilter::Filter(const CrystalPtr& crystal, RaySegment* last_r) const {
+  if (remove_homodromous_ &&
+      Math::Dot3(last_r->dir.val(), last_r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * Math::kFloatEps) {
     return false;
   }
 
-  bool result;
-  switch (type) {
-    case RayPathFilter::kTypeNone:
-      result = true;
-      break;
-    case RayPathFilter::kTypeGeneral:
-      result = FilterRayGeneral(r, crystal);
-      break;
-    case RayPathFilter::kTypeSpecific:
-      result = FilterRaySpecific(r, crystal);
-      break;
-    default:
-      return false;
-  }
-  return result ^ complementary;
+  bool result = FilterPath(crystal, last_r);
+  return result ^ complementary_;
 }
 
 
-bool RayPathFilter::FilterRaySpecific(RaySegment* last_r, const CrystalPtr& crystal) const {
-  if (ray_path_hashes.empty()) {
-    return true;
-  }
-
-  int curr_fn0 = crystal->FaceNumber(last_r->root_ctx->first_ray_segment->face_id);
-  if (curr_fn0 < 0 || crystal->GetFaceNumberPeriod() < 0) {  // If do not have face number mapping.
-    return true;
-  }
-
-  // First, check ray path length.
-  // And store current ray path for later computing.
-  decltype(ray_paths.size()) curr_ray_path_len = 0;
-  auto p = last_r;
-  while (p->prev) {
-    int curr_fn = crystal->FaceNumber(p->face_id);
-    if (curr_fn < 0) {
-      return false;
-    }
-    p = p->prev;
-    curr_ray_path_len++;
-  }
-  if (curr_ray_path_len == 0) {
-    return false;
-  }
-
-  bool length_matched = false;
-  for (const auto& rp : ray_paths) {
-    length_matched = length_matched || (curr_ray_path_len == rp.size());
-  }
-  if (!length_matched) {
-    return false;
-  }
-
-  // Second, for each filter path, normalize current ray path, and find it in ray_path_hashes.
-  auto current_ray_path_hash = RayPathHash(crystal, last_r, curr_ray_path_len, true);
-  return ray_path_hashes.find(current_ray_path_hash) != ray_path_hashes.end();
+void AbstractRayPathFilter::SetSymmetryFlag(uint8_t symmetry_flag) {
+  symmetry_flag_ = symmetry_flag;
 }
 
 
-bool RayPathFilter::FilterRayGeneral(RaySegment* last_r, const CrystalPtr& crystal) const {
-  if (entry_faces.empty() && exit_faces.empty()) {
-    return true;
-  }
-
-  if (!hit_nums.empty()) {  // Check hit number.
-    auto p = last_r;
-    int n = 0;
-    while (p) {
-      p = p->prev;
-      n++;
-    }
-    if (hit_nums.find(n) == hit_nums.end()) {
-      return false;
-    }
-  }
-
-  int curr_entry_fn = crystal->FaceNumber(last_r->root_ctx->first_ray_segment->face_id);
-  int curr_exit_fn = crystal->FaceNumber(last_r->face_id);
-  if (curr_entry_fn < 0 || curr_exit_fn < 0 ||
-      crystal->GetFaceNumberPeriod() < 0) {  // If do not have a face number mapping
-    return true;
-  }
-
-  return entry_faces.find(static_cast<uint16_t>(curr_entry_fn)) != entry_faces.end() &&
-         exit_faces.find(static_cast<uint16_t>(curr_exit_fn)) != exit_faces.end();
+void AbstractRayPathFilter::AddSymmetry(Symmetry symmetry) {
+  symmetry_flag_ |= symmetry;
 }
 
 
-size_t RayPathFilter::RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse) const {
+uint8_t AbstractRayPathFilter::GetSymmetryFlag() const {
+  return symmetry_flag_;
+}
+
+
+void AbstractRayPathFilter::ApplySymmetry(const CrystalPtr& /* crystal */) {}
+
+
+void AbstractRayPathFilter::EnableComplementary(bool enable) {
+  complementary_ = enable;
+}
+
+
+bool AbstractRayPathFilter::GetComplementary() const {
+  return complementary_;
+}
+
+
+void AbstractRayPathFilter::EnableRemoveHomodromous(bool enable) {
+  remove_homodromous_ = enable;
+}
+
+
+bool AbstractRayPathFilter::GetRemoveHomodromous() const {
+  return remove_homodromous_;
+}
+
+
+size_t AbstractRayPathFilter::RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse) const {
   constexpr size_t kStep = 7;
   constexpr size_t kTotalBits = sizeof(size_t) * CHAR_BIT;
 
@@ -140,9 +95,9 @@ size_t RayPathFilter::RayPathHash(const std::vector<uint16_t>& ray_path, bool re
 }
 
 
-size_t RayPathFilter::RayPathHash(const CrystalPtr& crystal,               // used for get face number
-                                  const RaySegment* last_ray, int length,  // ray path and length
-                                  bool reverse) const {
+size_t AbstractRayPathFilter::RayPathHash(const CrystalPtr& crystal,               // used for get face number
+                                          const RaySegment* last_ray, int length,  // ray path and length
+                                          bool reverse) const {
   constexpr size_t kStep = 7;
   constexpr size_t kTotalBits = sizeof(size_t) * CHAR_BIT;
 
@@ -167,18 +122,98 @@ size_t RayPathFilter::RayPathHash(const CrystalPtr& crystal,               // us
 }
 
 
-void RayPathFilter::ApplyHash(const CrystalPtr& crystal) {
+// void AbstractRayPathFilter::ApplyHash(const CrystalPtr& crystal) {
+//   std::vector<std::vector<uint16_t>> augmented_ray_paths;
+//
+//   // Add the original path.
+//   for (const auto& rp : ray_paths) {
+//     augmented_ray_paths.emplace_back(rp);
+//   }
+//
+//   // Add symmetry P.
+//   auto period = crystal->GetFaceNumberPeriod();
+//   std::vector<uint16_t> tmp_ray_path;
+//   if (period > 0 && (symmetry_ & kSymmetryPrism)) {
+//     std::vector<std::vector<uint16_t>> ray_paths_copy(augmented_ray_paths);
+//     for (const auto& rp : ray_paths_copy) {
+//       for (int i = 0; i < period; i++) {
+//         tmp_ray_path.clear();
+//         for (auto fn : rp) {
+//           if (fn != 1 && fn != 2) {
+//             fn = static_cast<uint16_t>((fn + period + i - 3) % period + 3);
+//           }
+//           tmp_ray_path.emplace_back(fn);
+//         }
+//         augmented_ray_paths.emplace_back(tmp_ray_path);
+//       }
+//     }
+//   }
+//
+//   // Add symmetry B.
+//   if (symmetry_ & kSymmetryBasal) {
+//     std::vector<std::vector<uint16_t>> ray_paths_copy(augmented_ray_paths);
+//     for (const auto& rp : ray_paths_copy) {
+//       tmp_ray_path.clear();
+//       for (auto fn : rp) {
+//         if (fn == 1 || fn == 2) {
+//           fn = static_cast<uint16_t>(fn % 2 + 1);
+//         }
+//         tmp_ray_path.emplace_back(fn);
+//       }
+//       augmented_ray_paths.emplace_back(tmp_ray_path);
+//     }
+//   }
+//
+//   // Add symmetry D.
+//   if (period > 0 && (symmetry_ & kSymmetryDirection)) {
+//     std::vector<std::vector<uint16_t>> ray_paths_copy(augmented_ray_paths);
+//     for (const auto& rp : ray_paths_copy) {
+//       tmp_ray_path.clear();
+//       for (auto fn : rp) {
+//         if (fn != 1 && fn != 2) {
+//           fn = static_cast<uint16_t>(5 + period - fn);
+//         }
+//         tmp_ray_path.emplace_back(fn);
+//       }
+//       augmented_ray_paths.emplace_back(tmp_ray_path);
+//     }
+//   }
+//
+//   // Add them all.
+//   ray_path_hashes_.clear();
+//   for (const auto& rp : augmented_ray_paths) {
+//     ray_path_hashes_.emplace(RayPathHash(rp));
+//   }
+// }
+
+
+bool NoneRayPathFilter::FilterPath(const CrystalPtr& /* crystal */, RaySegment* /* r */) const {
+  return true;
+}
+
+
+void SpecificRayPathFilter::AddPath(const std::vector<uint16_t>& path) {
+  ray_paths_.emplace_back(path);
+}
+
+
+void SpecificRayPathFilter::ClearPaths() {
+  ray_paths_.clear();
+}
+
+
+void SpecificRayPathFilter::ApplySymmetry(const IceHalo::CrystalPtr& crystal) {
   std::vector<std::vector<uint16_t>> augmented_ray_paths;
 
   // Add the original path.
-  for (const auto& rp : ray_paths) {
+  for (const auto& rp : ray_paths_) {
     augmented_ray_paths.emplace_back(rp);
   }
 
   // Add symmetry P.
   auto period = crystal->GetFaceNumberPeriod();
   std::vector<uint16_t> tmp_ray_path;
-  if (period > 0 && (symmetry & kSymmetryPrism)) {
+  if (period > 0 && (symmetry_flag_ & kSymmetryPrism)) {
     std::vector<std::vector<uint16_t>> ray_paths_copy(augmented_ray_paths);
     for (const auto& rp : ray_paths_copy) {
       for (int i = 0; i < period; i++) {
@@ -195,7 +230,7 @@ void RayPathFilter::ApplyHash(const CrystalPtr& crystal) {
   }
 
   // Add symmetry B.
-  if (symmetry & kSymmetryBasal) {
+  if (symmetry_flag_ & kSymmetryBasal) {
     std::vector<std::vector<uint16_t>> ray_paths_copy(augmented_ray_paths);
     for (const auto& rp : ray_paths_copy) {
       tmp_ray_path.clear();
@@ -210,7 +245,7 @@ void RayPathFilter::ApplyHash(const CrystalPtr& crystal) {
   }
 
   // Add symmetry D.
-  if (period > 0 && (symmetry & kSymmetryDirection)) {
+  if (period > 0 && (symmetry_flag_ & kSymmetryDirection)) {
     std::vector<std::vector<uint16_t>> ray_paths_copy(augmented_ray_paths);
     for (const auto& rp : ray_paths_copy) {
       tmp_ray_path.clear();
@@ -225,15 +260,109 @@ void RayPathFilter::ApplyHash(const CrystalPtr& crystal) {
   }
 
   // Add them all.
-  ray_path_hashes.clear();
+  ray_path_hashes_.clear();
   for (const auto& rp : augmented_ray_paths) {
-    ray_path_hashes.emplace(RayPathHash(rp));
+    ray_path_hashes_.emplace(RayPathHash(rp));
   }
 }
 
 
+bool SpecificRayPathFilter::FilterPath(const CrystalPtr& crystal, RaySegment* last_r) const {
+  if (ray_path_hashes_.empty()) {
+    return true;
+  }
+
+  int curr_fn0 = crystal->FaceNumber(last_r->root_ctx->first_ray_segment->face_id);
+  if (curr_fn0 < 0 || crystal->GetFaceNumberPeriod() < 0) {  // If do not have face number mapping.
+    return true;
+  }
+
+  // First, check ray path length.
+  size_t curr_ray_path_len = 0;
+  auto p = last_r;
+  while (p->prev) {
+    int curr_fn = crystal->FaceNumber(p->face_id);
+    if (curr_fn < 0) {
+      return false;
+    }
+    p = p->prev;
+    curr_ray_path_len++;
+  }
+  if (curr_ray_path_len == 0) {
+    return false;
+  }
+
+  bool length_matched = false;
+  for (const auto& rp : ray_paths_) {
+    length_matched = length_matched || (curr_ray_path_len == rp.size());
+  }
+  if (!length_matched) {
+    return false;
+  }
+
+  // Second, for each filter path, normalize current ray path, and find it in ray_path_hashes.
+  auto current_ray_path_hash = RayPathHash(crystal, last_r, curr_ray_path_len, true);
+  return ray_path_hashes_.count(current_ray_path_hash) != 0;
+}
+
+
+void GeneralRayPathFilter::AddEntryFace(uint16_t face_number) {
+  entry_faces_.emplace(face_number);
+}
+
+
+void GeneralRayPathFilter::AddExitFace(uint16_t face_number) {
+  exit_faces_.emplace(face_number);
+}
+
+
+void GeneralRayPathFilter::AddHitNumber(int hit_num) {
+  hit_nums_.emplace(hit_num);
+}
+
+
+void GeneralRayPathFilter::ClearFaces() {
+  entry_faces_.clear();
+  exit_faces_.clear();
+}
+
+
+void GeneralRayPathFilter::ClearHitNumbers() {
+  hit_nums_.clear();
+}
+
+
+bool GeneralRayPathFilter::FilterPath(const CrystalPtr& crystal, RaySegment* last_r) const {
+  if (entry_faces_.empty() && exit_faces_.empty()) {
+    return true;
+  }
+
+  if (!hit_nums_.empty()) {  // Check hit number.
+    auto p = last_r;
+    int n = 0;
+    while (p) {
+      p = p->prev;
+      n++;
+    }
+    if (hit_nums_.count(n) == 0) {
+      return false;
+    }
+  }
+
+  int curr_entry_fn = crystal->FaceNumber(last_r->root_ctx->first_ray_segment->face_id);
+  int curr_exit_fn = crystal->FaceNumber(last_r->face_id);
+  if (curr_entry_fn < 0 || curr_exit_fn < 0 ||
+      crystal->GetFaceNumberPeriod() < 0) {  // If do not have a face number mapping
+    return true;
+  }
+
+  return entry_faces_.count(static_cast<uint16_t>(curr_entry_fn)) != 0 &&
+         exit_faces_.count(static_cast<uint16_t>(curr_exit_fn)) != 0;
+}
+
+
 MultiScatterContext::MultiScatterContext(float prob)
-    : prob_(std::max(std::min(prob, 1.0f), 0.0f)), population_normalized_(false) {}
+    : prob_(std::max(std::min(prob, 1.0f), 0.0f)) {}
 
 
 float MultiScatterContext::GetProbability() const {
@@ -258,14 +387,13 @@ const std::vector<MultiScatterContext::CrystalInfo>& MultiScatterContext::GetCry
 
 void MultiScatterContext::ClearCrystalInfo() {
   crystal_infos_.clear();
-  population_normalized_ = false;
 }
 
 
-void MultiScatterContext::AddCrystalInfo(const CrystalContextPtr& crystal,  // crystal ptr
-                                         float population,                  // crystal population, not normalized
-                                         const RayPathFilter& filter) {     // ray path filter for this crystal
-  crystal_infos_.emplace_back(CrystalInfo{ crystal, population, filter });
+void MultiScatterContext::AddCrystalInfo(int crystal_id,    // crystal ptr
+                                         float population,  // crystal population, not normalized
+                                         int filter_id) {   // ray path filter for this crystal
+  crystal_infos_.emplace_back(CrystalInfo{ crystal_id, population, filter_id });
 }
 
 
@@ -277,7 +405,6 @@ void MultiScatterContext::NormalizeCrystalPopulation() {
   for (auto& c : crystal_infos_) {
     c.population /= sum;
   }
-  population_normalized_ = true;
 }
 
 
@@ -645,6 +772,24 @@ std::string ProjectContext::GetDefaultImagePath() const {
 }
 
 
+const CrystalContextPtr ProjectContext::GetCrystalContext(int id) const {
+  if (crystal_store_.count(id)) {
+    return crystal_store_.at(id);
+  } else {
+    return nullptr;
+  }
+}
+
+
+const CrystalPtr ProjectContext::GetCrystal(int id) const {
+  if (crystal_store_.count(id)) {
+    return crystal_store_.at(id)->crystal;
+  } else {
+    return nullptr;
+  }
+}
+
+
 void ProjectContext::PrintCrystalInfo() const {
   for (const auto& c : crystal_store_) {
     auto g = c.second->crystal;
@@ -656,6 +801,15 @@ void ProjectContext::PrintCrystalInfo() const {
       auto idx = f.idx();
       std::printf("f %d %d %d\n", idx[0] + 1, idx[1] + 1, idx[2] + 1);
     }
+  }
+}
+
+
+const RayPathFilterPtr ProjectContext::GetRayPathFilter(int id) const {
+  if (filter_store_.count(id)) {
+    return filter_store_.at(id);
+  } else {
+    return nullptr;
   }
 }
 
@@ -1376,7 +1530,7 @@ void ProjectContext::ParseOneFilter(const rapidjson::Value& c, int ci) {
 
   auto& filter_parsers = GetFilterParsers();
   std::string type(c["type"].GetString());
-  if (filter_parsers.find(type) == filter_parsers.end()) {
+  if (filter_parsers.count(type) == 0) {
     std::snprintf(msg_buffer, kMsgBufferSize, "<filter[%d].type> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   }
@@ -1392,15 +1546,15 @@ void ProjectContext::ParseOneFilter(const rapidjson::Value& c, int ci) {
 }
 
 
-void ProjectContext::ParseFilterBasic(const rapidjson::Value& c, int ci, RayPathFilter* filter) {
+void ProjectContext::ParseFilterBasic(const rapidjson::Value& c, int ci, RayPathFilterPtr filter) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
 
   auto p = Pointer("/complementary").Get(c);
   if (p == nullptr) {
-    filter->complementary = false;
+    filter->EnableComplementary(false);
   } else if (p->IsBool()) {
-    filter->complementary = p->GetBool();
+    filter->EnableComplementary(p->GetBool());
   } else {
     std::snprintf(msg_buffer, kMsgBufferSize, "<filter[%d].complementary> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
@@ -1408,23 +1562,17 @@ void ProjectContext::ParseFilterBasic(const rapidjson::Value& c, int ci, RayPath
 
   p = Pointer("/remove_homodromous").Get(c);
   if (p == nullptr) {
-    filter->remove_homodromous = false;
+    filter->EnableRemoveHomodromous(false);
   } else if (p->IsBool()) {
-    filter->remove_homodromous = p->GetBool();
+    filter->EnableRemoveHomodromous(p->GetBool());
   } else {
     std::snprintf(msg_buffer, kMsgBufferSize, "<filter[%d].remove_homodromous> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   }
-}
 
+  filter->SetSymmetryFlag(kSymmetryNone);
 
-void ProjectContext::ParseFilterSymmetry(const rapidjson::Value& c, int ci, RayPathFilter* filter) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-
-  filter->symmetry = RayPathFilter::kSymmetryNone;
-
-  auto p = Pointer("/symmetry").Get(c);
+  p = Pointer("/symmetry").Get(c);
   if (p == nullptr) {
     return;
   } else if (!p->IsString()) {
@@ -1437,15 +1585,15 @@ void ProjectContext::ParseFilterSymmetry(const rapidjson::Value& c, int ci, RayP
     switch (symm[i]) {
       case 'P':
       case 'p':
-        filter->symmetry |= RayPathFilter::kSymmetryPrism;
+        filter->AddSymmetry(kSymmetryPrism);
         break;
       case 'B':
       case 'b':
-        filter->symmetry |= RayPathFilter::kSymmetryBasal;
+        filter->AddSymmetry(kSymmetryBasal);
         break;
       case 'D':
       case 'd':
-        filter->symmetry |= RayPathFilter::kSymmetryDirection;
+        filter->AddSymmetry(kSymmetryDirection);
         break;
       default:
         std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].symmetry> cannot recognize!", ci);
@@ -1455,23 +1603,21 @@ void ProjectContext::ParseFilterSymmetry(const rapidjson::Value& c, int ci, RayP
 }
 
 
-RayPathFilter ProjectContext::ParseFilterNone(const rapidjson::Value& c, int ci) {
-  RayPathFilter filter;
-  filter.type = RayPathFilter::kTypeNone;
-  ParseFilterBasic(c, ci, &filter);
+RayPathFilterPtr ProjectContext::ParseFilterNone(const rapidjson::Value& c, int ci) {
+  auto filter = std::make_shared<NoneRayPathFilter>();
+  ParseFilterBasic(c, ci, filter);
   return filter;
 }
 
 
-RayPathFilter ProjectContext::ParseFilterSpecific(const rapidjson::Value& c, int ci) {
+RayPathFilterPtr ProjectContext::ParseFilterSpecific(const rapidjson::Value& c, int ci) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
 
-  RayPathFilter filter{};
-  filter.type = RayPathFilter::kTypeSpecific;
-  ParseFilterSymmetry(c, ci, &filter);
-  ParseFilterBasic(c, ci, &filter);
+  auto filter = std::make_shared<SpecificRayPathFilter>();
+  ParseFilterBasic(c, ci, filter);
 
+  filter->ClearPaths();
   auto p = Pointer("/path").Get(c);
   if (p == nullptr || !p->IsArray()) {
     std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
@@ -1484,27 +1630,29 @@ RayPathFilter ProjectContext::ParseFilterSpecific(const rapidjson::Value& c, int
   if (p->GetArray().Empty()) {
     std::fprintf(stderr, "<ray_path_filter[%d].path> is empty. Ignore this setting.\n", ci);
   } else if (p->GetArray()[0].IsInt()) {
-    filter.ray_paths.emplace_back();
+    std::vector<uint16_t> tmp_path;
     for (auto const& pi : p->GetArray()) {
       if (!pi.IsInt()) {
         std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
         throw std::invalid_argument(msg_buffer);
       }
-      filter.ray_paths.back().emplace_back(pi.GetInt());
+      tmp_path.emplace_back(pi.GetInt());
     }
+    filter->AddPath(tmp_path);
   } else {  // p[0].IsArray()
     for (const auto& pi : p->GetArray()) {
       if (pi.GetArray().Empty()) {
         std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
         throw std::invalid_argument(msg_buffer);
       }
-      filter.ray_paths.emplace_back();
+      std::vector<uint16_t> tmp_path;
       for (const auto& pii : pi.GetArray()) {
         if (!pii.IsInt()) {
           std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
           throw std::invalid_argument(msg_buffer);
         }
-        filter.ray_paths.back().emplace_back(pii.GetInt());
+        tmp_path.emplace_back(pii.GetInt());
+        filter->AddPath(tmp_path);
       }
     }
   }
@@ -1512,14 +1660,14 @@ RayPathFilter ProjectContext::ParseFilterSpecific(const rapidjson::Value& c, int
 }
 
 
-RayPathFilter ProjectContext::ParseFilterGeneral(const rapidjson::Value& c, int ci) {
+RayPathFilterPtr ProjectContext::ParseFilterGeneral(const rapidjson::Value& c, int ci) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
 
-  RayPathFilter filter{};
-  filter.type = RayPathFilter::kTypeGeneral;
-  ParseFilterSymmetry(c, ci, &filter);
-  ParseFilterBasic(c, ci, &filter);
+  auto filter = std::make_shared<GeneralRayPathFilter>();
+  ParseFilterBasic(c, ci, filter);
+  filter->ClearHitNumbers();
+  filter->ClearFaces();
 
   auto p = Pointer("/entry").Get(c);
   if (p == nullptr || !p->IsArray()) {
@@ -1531,7 +1679,7 @@ RayPathFilter ProjectContext::ParseFilterGeneral(const rapidjson::Value& c, int 
       std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].entry> cannot recognize!", ci);
       throw std::invalid_argument(msg_buffer);
     }
-    filter.entry_faces.emplace(pi.GetInt());
+    filter->AddEntryFace(pi.GetInt());
   }
 
   p = Pointer("/exit").Get(c);
@@ -1544,7 +1692,7 @@ RayPathFilter ProjectContext::ParseFilterGeneral(const rapidjson::Value& c, int 
       std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].exit> cannot recognize!", ci);
       throw std::invalid_argument(msg_buffer);
     }
-    filter.exit_faces.emplace(pi.GetInt());
+    filter->AddExitFace(pi.GetInt());
   }
 
   p = Pointer("/hit").Get(c);
@@ -1559,7 +1707,7 @@ RayPathFilter ProjectContext::ParseFilterGeneral(const rapidjson::Value& c, int 
         std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].hit> cannot recognize!", ci);
         throw std::invalid_argument(msg_buffer);
       }
-      filter.hit_nums.emplace(pi.GetInt());
+      filter->AddHitNumber(pi.GetInt());
     }
   }
 
@@ -1585,7 +1733,7 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
   MultiScatterContext scatter(prob);
   scatter.ClearCrystalInfo();
 
-  std::vector<CrystalContextPtr> tmp_crystals;
+  std::vector<int> tmp_crystals;
   p = Pointer("/crystal").Get(c);
   if (p == nullptr || !p->IsArray()) {
     std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> cannot recognize!", ci);
@@ -1601,7 +1749,7 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
         std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> contains invalid ID!", ci);
         throw std::invalid_argument(msg_buffer);
       }
-      tmp_crystals.emplace_back(crystal_store_.at(id));
+      tmp_crystals.emplace_back(id);
     }
   }
 
@@ -1620,7 +1768,7 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
     }
   }
 
-  std::vector<RayPathFilter> tmp_filter;
+  std::vector<int> tmp_filter;
   p = Pointer("/ray_path_filter").Get(c);
   if (p == nullptr || !p->IsArray()) {
     std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> cannot recognize!", ci);
@@ -1632,16 +1780,15 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
       throw std::invalid_argument(msg_buffer);
     } else {
       int id = pf.GetInt();
-      if (filter_store_.find(id) == filter_store_.end()) {
+      if (filter_store_.count(id) == 0) {
         std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> contains invalid ID!", ci);
         throw std::invalid_argument(msg_buffer);
       }
-      tmp_filter.emplace_back(filter_store_.at(id));
+      tmp_filter.emplace_back(id);
     }
   }
 
   for (decltype(tmp_crystals.size()) i = 0; i < tmp_crystals.size(); i++) {
-    tmp_filter[i].ApplyHash(tmp_crystals[i]->crystal);
     scatter.AddCrystalInfo(tmp_crystals[i], tmp_population[i], tmp_filter[i]);
   }
 
@@ -1660,6 +1807,5 @@ CrystalContext::CrystalContext(const CrystalContext& other) = default;
 RayInfo::RayInfo(RaySegment* seg, CrystalContextPtr crystal_ctx, const float* main_axis_rot)
     : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_ctx(std::move(crystal_ctx)),
       main_axis_rot(main_axis_rot) {}
-
 
 }  // namespace IceHalo

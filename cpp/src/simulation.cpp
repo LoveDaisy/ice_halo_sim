@@ -168,9 +168,9 @@ void Simulator::Start() {
         buffer_size_ = total_ray_num_ * kBufferSizeFactor;
         buffer_.Allocate(buffer_size_);
       }
-      InitEntryRays(c.crystal);
+      InitEntryRays(context_->GetCrystalContext(c.crystal_id));
       enter_ray_offset_ += active_ray_num_;
-      TraceRays(c.crystal->crystal, c.filter);
+      TraceRays(context_->GetCrystal(c.crystal_id), context_->GetRayPathFilter(c.filter_id));
     }
 
     if (it != multi_scatter_ctx.end() - 1) {
@@ -320,7 +320,7 @@ void Simulator::RestoreResultRays(float prob) {
 
 // Trace rays.
 // Start from dir[0] and pt[0].
-void Simulator::TraceRays(const CrystalPtr& crystal, const RayPathFilter& filter) {
+void Simulator::TraceRays(const CrystalPtr& crystal, const RayPathFilterPtr& filter) {
   auto pool = ThreadingPool::GetInstance();
 
   int max_recursion_num = context_->GetRayHitNum();
@@ -350,7 +350,8 @@ void Simulator::TraceRays(const CrystalPtr& crystal, const RayPathFilter& filter
 
 
 // Save rays
-void Simulator::StoreRaySegments(const CrystalPtr& crystal, const RayPathFilter& filter) {
+void Simulator::StoreRaySegments(const CrystalPtr& crystal, const RayPathFilterPtr& filter) {
+  filter->ApplySymmetry(crystal);
   auto ray_pool = RaySegmentPool::GetInstance();
   for (size_t i = 0; i < active_ray_num_ * 2; i++) {
     if (buffer_.w[1][i] <= 0) {  // Refractive rays in total reflection case
@@ -373,7 +374,7 @@ void Simulator::StoreRaySegments(const CrystalPtr& crystal, const RayPathFilter&
     r->root_ctx = prev_ray_seg->root_ctx;
     buffer_.ray_seg[1][i] = r;
 
-    if (!filter.Filter(r, crystal)) {
+    if (!filter->Filter(crystal, r)) {
       continue;
     }
     if (r->is_finished || r->w < ProjectContext::kPropMinW) {
