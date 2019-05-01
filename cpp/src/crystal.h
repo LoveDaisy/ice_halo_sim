@@ -10,12 +10,12 @@
 namespace IceHalo {
 
 enum class CrystalType {
-  UNKNOWN,
-  PRISM,
-  PYRAMID,
-  STACK_PYRAMID,
-  CUBIC_PYRAMID,
-  CUSTOM,
+  kUnknown,
+  kPrism,
+  kPyramid,
+  kStackPyramid,
+  kCubicPyramid,
+  kCustom,
 };
 
 class Crystal {
