@@ -254,13 +254,6 @@ class ProjectContext {
   size_t GetInitRayNum() const;
   void SetInitRayNum(size_t ray_num);
 
-  const std::vector<WavelengthInfo>& GetWavelengthInfos() const;
-  WavelengthInfo GetWaveLengthInfo(int index) const;
-  void ClearWavelengthInfo();
-  void AddWavelengthInfo(int wavelength, float weight);
-
-  const std::vector<MultiScatterContext>& GetMultiScatterContext() const;
-
   int GetRayHitNum() const;
   void SetRayHitNum(int hit_num);
 
@@ -270,10 +263,14 @@ class ProjectContext {
   std::string GetDataDirectory() const;
   std::string GetDefaultImagePath() const;
 
+  void ClearCrystals();
+  void SetCrystal(int id, const CrystalPtr& crystal, const AxisDistribution& axis);
   const CrystalContextPtr GetCrystalContext(int id) const;
   const CrystalPtr GetCrystal(int id) const;
   void PrintCrystalInfo() const;
 
+  void ClearRayPathFilter();
+  void SetRayPathFilter(int id, const RayPathFilterPtr& filter);
   const RayPathFilterPtr GetRayPathFilter(int id) const;
 
   static constexpr float kPropMinW = 1e-6;
@@ -287,6 +284,8 @@ class ProjectContext {
   SunContext sun_ctx_;
   CameraContext cam_ctx_;
   RenderContext render_ctx_;
+  std::vector<WavelengthInfo> wavelengths_;  // (wavelength, weight)
+  std::vector<MultiScatterContext> multi_scatter_info_;
 
  private:
   ProjectContext();
@@ -323,10 +322,7 @@ class ProjectContext {
   void ParseOneScatter(const rapidjson::Value& c, int ci);
 
   size_t init_ray_num_;
-  std::vector<WavelengthInfo> wavelengths_;  // (wavelength, weight)
   int ray_hit_num_;
-
-  std::vector<MultiScatterContext> multiscatter_info_;
 
   std::string model_path_;
   std::string data_path_;

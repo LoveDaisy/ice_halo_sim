@@ -32,7 +32,7 @@ int main(int argc, char* argv[]) {
   size_t total_ray_num = 0;
   auto flat_rgb_data = new uint8_t[3 * proj_ctx->render_ctx_.GetImageWidth() * proj_ctx->render_ctx_.GetImageHeight()];
   while (true) {
-    const auto& wavelengths = proj_ctx->GetWavelengthInfos();
+    const auto& wavelengths = proj_ctx->wavelengths_;
     for (decltype(wavelengths.size()) i = 0; i < wavelengths.size(); i++) {
       std::printf("starting at wavelength: %d\n", wavelengths[i].wavelength);
       simulator.SetWavelengthIndex(i);

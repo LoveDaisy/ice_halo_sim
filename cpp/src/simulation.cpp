@@ -132,14 +132,17 @@ Simulator::Simulator(ProjectContextPtr context)
       buffer_size_(0), enter_ray_offset_(0) {}
 
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wsign-compare"
 void Simulator::SetWavelengthIndex(int index) {
-  if (index < 0 || static_cast<size_t>(index) >= context_->GetWavelengthInfos().size()) {
+  if (index < 0 || index >= context_->wavelengths_.size()) {
     current_wavelength_index_ = -1;
     return;
   }
 
   current_wavelength_index_ = index;
 }
+#pragma clang diagnostic pop
 
 
 // Start simulation
@@ -155,8 +158,7 @@ void Simulator::Start() {
   total_ray_num_ = context_->GetInitRayNum();
   InitSunRays();
 
-  const auto multi_scatter_ctx = context_->GetMultiScatterContext();
-  for (auto it = multi_scatter_ctx.begin(); it != multi_scatter_ctx.end(); ++it) {
+  for (auto it = context_->multi_scatter_info_.begin(); it != context_->multi_scatter_info_.end(); ++it) {
     rays_.emplace_back();
     rays_.back().reserve(total_ray_num_);
     exit_ray_segments_.emplace_back();
@@ -173,7 +175,7 @@ void Simulator::Start() {
       TraceRays(context_->GetCrystal(c.crystal_id), context_->GetRayPathFilter(c.filter_id));
     }
 
-    if (it != multi_scatter_ctx.end() - 1) {
+    if (it != context_->multi_scatter_info_.end() - 1) {
       RestoreResultRays(it->GetProbability());  // total_ray_num_ is updated.
     }
     enter_ray_offset_ = 0;
@@ -324,7 +326,7 @@ void Simulator::TraceRays(const CrystalPtr& crystal, const RayPathFilterPtr& fil
   auto pool = ThreadingPool::GetInstance();
 
   int max_recursion_num = context_->GetRayHitNum();
-  float n = IceRefractiveIndex::Get(context_->GetWaveLengthInfo(current_wavelength_index_).wavelength);
+  float n = IceRefractiveIndex::Get(context_->wavelengths_[current_wavelength_index_].wavelength);
   for (int i = 0; i < max_recursion_num; i++) {
     if (buffer_size_ < active_ray_num_ * 2) {
       buffer_size_ = active_ray_num_ * kBufferSizeFactor;
@@ -407,17 +409,20 @@ const std::vector<RaySegment*>& Simulator::GetFinalRaySegments() const {
 }
 
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wsign-compare"
 void Simulator::SaveFinalDirections(const char* filename) {
   File file(context_->GetDataDirectory().c_str(), filename);
   if (!file.Open(OpenMode::kWrite | OpenMode::kBinary))
     return;
 
-  if (current_wavelength_index_ < 0) {
+  if (current_wavelength_index_ < 0 || current_wavelength_index_ >= context_->wavelengths_.size()) {
     return;
   }
 
-  file.Write(static_cast<float>(context_->GetWaveLengthInfo(current_wavelength_index_).wavelength));
-  file.Write(context_->GetWaveLengthInfo(current_wavelength_index_).weight);
+  auto& w = context_->wavelengths_[current_wavelength_index_];
+  file.Write(static_cast<float>(w.wavelength));
+  file.Write(w.weight);
 
   auto ray_num = final_ray_segments_.size();
   size_t idx = 0;
@@ -438,6 +443,7 @@ void Simulator::SaveFinalDirections(const char* filename) {
 
   delete[] data;
 }
+#pragma clang diagnostic pop
 
 
 void Simulator::PrintRayInfo() {

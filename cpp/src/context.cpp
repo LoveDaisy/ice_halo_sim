@@ -712,36 +712,6 @@ void ProjectContext::SetInitRayNum(size_t ray_num) {
 }
 
 
-const std::vector<ProjectContext::WavelengthInfo>& ProjectContext::GetWavelengthInfos() const {
-  return wavelengths_;
-}
-
-
-ProjectContext::WavelengthInfo ProjectContext::GetWaveLengthInfo(int index) const {
-  if (index >= 0 && static_cast<size_t>(index) < wavelengths_.size()) {
-    return wavelengths_[index];
-  } else {
-    WavelengthInfo w{ -1, -1 };
-    return w;
-  }
-}
-
-
-void ProjectContext::ClearWavelengthInfo() {
-  wavelengths_.clear();
-}
-
-
-void ProjectContext::AddWavelengthInfo(int wavelength, float weight) {
-  wavelengths_.emplace_back(WavelengthInfo{ wavelength, weight });
-}
-
-
-const std::vector<MultiScatterContext>& ProjectContext::GetMultiScatterContext() const {
-  return multiscatter_info_;
-}
-
-
 int ProjectContext::GetRayHitNum() const {
   return ray_hit_num_;
 }
@@ -898,9 +868,9 @@ void ProjectContext::ParseRaySettings(rapidjson::Document& d) {
     throw std::invalid_argument("size of ray.wavelength and ray.weight doesn't match!");
   }
 
-  ClearWavelengthInfo();
+  wavelengths_.clear();
   for (decltype(tmp_wavelengths.size()) i = 0; i < tmp_wavelengths.size(); i++) {
-    AddWavelengthInfo(static_cast<int>(tmp_wavelengths[i]), tmp_weights[i]);
+    wavelengths_.emplace_back(WavelengthInfo{ static_cast<int>(tmp_wavelengths[i]), tmp_weights[i] });
   }
 }
 
@@ -1794,7 +1764,7 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
 
   scatter.NormalizeCrystalPopulation();
 
-  multiscatter_info_.emplace_back(scatter);
+  multi_scatter_info_.emplace_back(scatter);
 }
 
 

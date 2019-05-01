@@ -20,7 +20,7 @@ int main(int argc, char* argv[]) {
   printf("Initialization: %.2fms\n", diff.count());
 
   char filename[256];
-  const auto& wavelengths = context->GetWavelengthInfos();
+  const auto& wavelengths = context->wavelengths_;
   for (decltype(wavelengths.size()) i = 0; i < wavelengths.size(); i++) {
     const auto& wl = wavelengths[i];
     printf("starting at wavelength: %d\n", wl.wavelength);
