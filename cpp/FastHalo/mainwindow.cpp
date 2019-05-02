@@ -2,6 +2,7 @@
 
 #include <QColorDialog>
 #include <QPropertyAnimation>
+#include <QStackedWidget>
 #include <QtDebug>
 
 #include "iconbutton.h"
@@ -35,6 +36,7 @@ void MainWindow::initUi() {
   initBasicSettings();
   initScatterTab();
   initCrystalList();
+  initCrystalInfoPanel();
 
   // Connect signals and slots
   connect(ui_->filterEnableCheckBox, &QCheckBox::clicked, this, &MainWindow::enableFilterSettings);
@@ -96,11 +98,16 @@ void MainWindow::initScatterTab() {
 
 
 void MainWindow::insertScatterTab() {
+  // Insert button
   int current_item_cnt = ui_->scatterTabLayout->count();
   auto btn = createScatterTab();
   ui_->scatterTabLayout->insertWidget(current_item_cnt - 1, btn);
   scatter_tab_group_->addButton(btn);
   btn->setChecked(true);
+
+  // Insert context
+  float prob = static_cast<float>(getScatterProb());
+  project_context_->multi_scatter_info_.emplace_back(prob);
 
   updateScatterTabs();
 
@@ -137,16 +144,19 @@ void MainWindow::initCrystalList() {
   table->setShowGrid(false);
   table->setItemDelegateForColumn(3, new SpinBoxDelegate());
 
+  // Add crystal
   connect(ui_->crystalsAddButton, &QToolButton::clicked, this, [=] {
     ui_->crystalsTable->setFocus();
     insertCrystalItem();
   });
 
+  // Remove crystal
   connect(ui_->crystalsRemoveButton, &QToolButton::clicked, this, [=] {
     ui_->crystalsTable->setFocus();
     removeCurrentCrystal();
   });
 
+  // Click link/unlink icon
   connect(table, &QTableView::clicked, this, [=](const QModelIndex& index) {
     if (index.column() != 2) {
       return;
@@ -160,6 +170,7 @@ void MainWindow::initCrystalList() {
     }
   });
 
+  // Cursor. Use hand cursor for link/unlink icon
   connect(table, &QTableView::entered, this, [=](const QModelIndex& index) {
     if (index.column() == 0 || index.column() == 2) {
       ui_->crystalsTable->setCursor(Qt::PointingHandCursor);
@@ -170,9 +181,42 @@ void MainWindow::initCrystalList() {
 }
 
 
+void MainWindow::initCrystalInfoPanel() {
+  view3d_ = new Qt3DExtras::Qt3DWindow();
+  crystal_preview_widget_ = QWidget::createWindowContainer(view3d_);
+  QSize screenSize = view3d_->screen()->size();
+  crystal_preview_widget_->setMinimumSize(QSize(200, 100));
+  crystal_preview_widget_->setMaximumSize(screenSize);
+
+  crystal_info_layout_ = new QGridLayout;
+  ui_->crystalSettingGroup->setLayout(crystal_info_layout_);
+
+  crystal_info_layout_->addWidget(ui_->crystalTypePanel, 0, 0);
+  crystal_info_layout_->addWidget(ui_->pyramidParameterPanel, 0, 1);
+  crystal_info_layout_->addWidget(ui_->crystalPrismDistancePanel, 1, 1);
+  crystal_info_layout_->addWidget(ui_->crystalAxisPanel, 1, 0, 2, 1);
+  crystal_info_layout_->addWidget(crystal_preview_widget_, 2, 1);
+
+  crystal_info_layout_->setRowStretch(2, 1);
+  crystal_info_layout_->setColumnStretch(1, 1);
+
+  ui_->crystalTypePanel->layout()->setAlignment(Qt::AlignTop);
+  ui_->pyramidParameterPanel->layout()->setAlignment(Qt::AlignTop);
+  ui_->crystalPrismDistancePanel->layout()->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+  ui_->crystalAxisPanel->layout()->setAlignment(Qt::AlignTop);
+
+  auto layout = static_cast<QGridLayout*>(ui_->crystalPrismDistancePanel->layout());
+  for (int i = 1; i <= 6; i++) {
+    layout->setColumnStretch(i, 1);
+  }
+  layout->setColumnMinimumWidth(0, 110);
+}
+
+
 void MainWindow::insertCrystalItem() {
+  // UI item
   auto item_check = new QStandardItem();
-  auto item_name = new QStandardItem(tr("Crystal %1").arg(current_crystal_id_++));
+  auto item_name = new QStandardItem(tr("Crystal %1").arg(current_crystal_id_));
   auto item_link = new QStandardItem();
   auto item_pop = new QStandardItem("100");
 
@@ -194,6 +238,11 @@ void MainWindow::insertCrystalItem() {
 
   auto table = ui_->crystalsTable;
   table->selectRow(row_count);
+
+  // Context data
+  // TODO
+
+  current_crystal_id_++;
 }
 
 
@@ -304,6 +353,7 @@ void MainWindow::updateScatterTabs() {
 
   // Remove invisible tabs
   bool update_check = false;  // If a checked tab is removed, then the next tab will be checked.
+  bool tab_removed = false;
   for (int i = 0; i < tab_cnt; i++) {
     auto tab = static_cast<IconButton*>(ui_->scatterTabLayout->itemAt(i)->widget());
     if (tab->geometry().width() > 0) {  // Normal tabs
@@ -315,6 +365,7 @@ void MainWindow::updateScatterTabs() {
     }
 
     // Tabs to be removed
+    tab_removed = true;
     tab_visible[static_cast<size_t>(i)] = false;
     if (scatter_tab_group_->checkedButton() == tab) {
       update_check = true;
@@ -335,12 +386,14 @@ void MainWindow::updateScatterTabs() {
   }
 
   // Refresh context
-  for (size_t i = 0; i < tab_visible.size(); i++) {
-    if (tab_visible[i]) {
-      new_multi_scatter_ctx.emplace_back(project_context_->multi_scatter_info_[i]);
+  if (tab_removed) {
+    for (size_t i = 0; i < tab_visible.size(); i++) {
+      if (tab_visible[i]) {
+        new_multi_scatter_ctx.emplace_back(project_context_->multi_scatter_info_[i]);
+      }
     }
+    project_context_->multi_scatter_info_.swap(new_multi_scatter_ctx);
   }
-  project_context_->multi_scatter_info_.swap(new_multi_scatter_ctx);
 
   // If only one tab, disable close icon
   if (tab_cnt <= 1 && ui_->scatterTabLayout->itemAt(0)) {
@@ -364,19 +417,30 @@ void MainWindow::updateScatterProb(int v) {
 }
 
 
-void MainWindow::updateSimulationContext() {
-  updateTotalRays(ui_->rayNumberSpinBox->value());
-  updateRayHitsNum(ui_->maxHitsSpinBox->value());
+void MainWindow::updateCurrentCrystalInfo() {
+  auto table = ui_->crystalsTable;
+  auto current_index = table->currentIndex();
 
-  // Multiscatter settings
-  // TODO
+  if (!current_index.isValid() && crystal_info_layout_) {   // There is no crystal at all
+    disableCrystalInfo();
+  } else {
+    enableCrystalInfo(current_index);
+  }
+}
 
-  // Wavelength settings
-  project_context_->wavelengths_.clear();
-  // TODO
 
-  updateSunAltitude(ui_->sunAltitudeEdit->text());
-  updateSunDiameterType(ui_->sunDiameterComboBox->currentIndex());
+void MainWindow::disableCrystalInfo() {
+  for (int i = 0; i < crystal_info_layout_->count(); i++) {
+    auto item = crystal_info_layout_->itemAt(i);
+    if (item && item->widget()) {
+      item->widget()->setEnabled(false);
+    }
+  }
+}
+
+
+void MainWindow::enableCrystalInfo(const QModelIndex &index) {
+  ;
 }
 
 
@@ -405,4 +469,9 @@ QVector<WavelengthData>& MainWindow::getWavelengthData() {
   }
 
   return wl_data;
+}
+
+
+double MainWindow::getScatterProb() {
+  return ui_->scatterProbSlider->value() / 100.0;
 }

@@ -1,6 +1,7 @@
 QT       += core gui
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
+greaterThan(QT_MAJOR_VERSION, 4): QT += 3dcore 3drender 3dinput 3dextras
 
 TARGET = FastHalo
 TEMPLATE = app

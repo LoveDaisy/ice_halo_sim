@@ -2,10 +2,13 @@
 #define MAINWINDOW_H
 
 #include <QButtonGroup>
+#include <QGridLayout>
 #include <QMainWindow>
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QToolButton>
+#include <Qt3DExtras/Qt3DWindow>
+#include <QtGui/QScreen>
 
 #include "context.h"
 #include "iconbutton.h"
@@ -43,33 +46,44 @@ class MainWindow : public QMainWindow {
   void updateTotalRays(int ray_num);
   void updateWavelength();
 
-  // Scatter tab
-  void insertScatterTab();
-  void updateScatterTabs();
+  // Scatter
+  void insertScatterTab();        // Scatter tab
+  void updateScatterTabs();       // Scatter tab
+  void updateScatterProb(int v);  // Scatter prob
 
-  // Crystal table
+  // Crystals
   void insertCrystalItem();
   void removeCurrentCrystal();
 
+  // Crystal info
+  void updateCurrentCrystalInfo();
+
   // Filter settings group
   void enableFilterSettings(bool enable);
-
-  void updateScatterProb(int v);
-  void updateSimulationContext();
 
  private:
   void initUi();
   void initBasicSettings();
   void initScatterTab();
   void initCrystalList();
+  void initCrystalInfoPanel();
+
+  void disableCrystalInfo();
+  void enableCrystalInfo(const QModelIndex& index);
 
   IconButton* createScatterTab();
   QToolButton* createScatterAddButton();
+
+  double getScatterProb();
 
   Ui::MainWindow* ui_;
 
   QButtonGroup* scatter_tab_group_;
   QToolButton* scatter_tab_add_btn_;
+
+  QGridLayout* crystal_info_layout_;
+  Qt3DExtras::Qt3DWindow* view3d_;
+  QWidget* crystal_preview_widget_;
 
   QStandardItemModel* crystal_list_model_;
 

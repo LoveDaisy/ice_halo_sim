@@ -6,6 +6,7 @@ QGroupBox::title
     padding-right: 0.2ex;
     margin-top: -0.5ex;
     margin-left: 0.2ex;
+    font-size: 11px;
 }
 
 QHeaderView::section
