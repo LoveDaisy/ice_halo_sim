@@ -757,6 +757,11 @@ void ProjectContext::SetCrystal(int id, CrystalPtrU&& crystal, const AxisDistrib
 }
 
 
+void ProjectContext::RemoveCrystal(int id) {
+  crystal_store_.erase(id);
+}
+
+
 const CrystalContextPtr ProjectContext::GetCrystalContext(int id) const {
   if (crystal_store_.count(id)) {
     return crystal_store_.at(id);
