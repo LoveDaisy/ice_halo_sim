@@ -7,8 +7,8 @@ cmake-build-release
 build
 build-FastHalo-*
 
-figs/*.nb
-figs/*.pdf
+doc/figs/*.nb
+doc/figs/*.pdf
 
 config.json
 

@@ -1,3 +1,5 @@
+#include <utility>
+
 #ifndef SRC_CONTEXT_H_
 #define SRC_CONTEXT_H_
 
@@ -29,52 +31,94 @@ enum class VisibleRange;
 using CrystalContextPtr = std::shared_ptr<CrystalContext>;
 
 
-class RayPathFilter {
-  friend class ProjectContext;
+enum Symmetry : uint8_t {
+  kSymmetryNone = 0u,
+  kSymmetryPrism = 1u,
+  kSymmetryBasal = 2u,
+  kSymmetryDirection = 4u,
+};
 
+
+class AbstractRayPathFilter {
  public:
-  enum Symmetry : uint8_t {
-    kSymmetryNone = 0u,
-    kSymmetryPrism = 1u,
-    kSymmetryBasal = 2u,
-    kSymmetryDirection = 4u,
-  };
+  AbstractRayPathFilter();
+  virtual ~AbstractRayPathFilter() = default;
 
-  enum Type : uint8_t {
-    kTypeNone,
-    kTypeSpecific,
-    kTypeGeneral,
-  };
+  bool Filter(const CrystalPtr& crystal, RaySegment* last_r) const;
 
-  RayPathFilter();
+  void SetSymmetryFlag(uint8_t symmetry_flag);
+  void AddSymmetry(Symmetry symmetry);
+  uint8_t GetSymmetryFlag() const;
+  virtual void ApplySymmetry(const CrystalPtr& crystal);
 
-  bool Filter(RaySegment* r, const CrystalPtr& crystal) const;
+  void EnableComplementary(bool enable);
+  bool GetComplementary() const;
+
+  void EnableRemoveHomodromous(bool enable);
+  bool GetRemoveHomodromous() const;
+
+ protected:
   size_t RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse = false) const;
   size_t RayPathHash(const CrystalPtr& crystal, const RaySegment* last_ray, int length, bool reverse = false) const;
-  void ApplyHash(const CrystalPtr& crystal);
+  virtual bool FilterPath(const CrystalPtr& crystal, RaySegment* last_r) const = 0;
+
+  uint8_t symmetry_flag_;
+  bool complementary_;
+  bool remove_homodromous_;
+};
+
+using RayPathFilterPtr = std::shared_ptr<AbstractRayPathFilter>;
+
+
+class NoneRayPathFilter : public AbstractRayPathFilter {
+ protected:
+  bool FilterPath(const CrystalPtr& crystal, RaySegment* last_r) const override;
+};
+
+
+class SpecificRayPathFilter : public AbstractRayPathFilter {
+ public:
+  void AddPath(const std::vector<uint16_t>& path);
+  void ClearPaths();
+
+  void ApplySymmetry(const CrystalPtr& crystal) override;
+
+ protected:
+  bool FilterPath(const CrystalPtr& crystal, RaySegment* last_r) const override;
 
  private:
-  bool FilterRayGeneral(RaySegment* r, const CrystalPtr& crystal) const;
-  bool FilterRaySpecific(RaySegment* r, const CrystalPtr& crystal) const;
+  std::unordered_set<size_t> ray_path_hashes_;
+  std::vector<std::vector<uint16_t>> ray_paths_;
+};
 
-  Type type;
-  uint8_t symmetry;
-  bool complementary;
-  bool remove_homodromous;
-  std::vector<std::vector<uint16_t>> ray_paths;
-  std::unordered_set<size_t> ray_path_hashes;
-  std::unordered_set<uint16_t> entry_faces;
-  std::unordered_set<uint16_t> exit_faces;
-  std::unordered_set<int> hit_nums;
+
+class GeneralRayPathFilter : public AbstractRayPathFilter {
+ public:
+  void AddEntryFace(uint16_t face_number);
+  void AddExitFace(uint16_t face_number);
+  void AddHitNumber(int hit_num);
+  void ClearFaces();
+  void ClearHitNumbers();
+
+ protected:
+  bool FilterPath(const CrystalPtr& crystal, RaySegment* last_r) const override;
+
+ private:
+  std::unordered_set<uint16_t> entry_faces_;
+  std::unordered_set<uint16_t> exit_faces_;
+  std::unordered_set<int> hit_nums_;
 };
 
 
 class MultiScatterContext {
  public:
   struct CrystalInfo {
-    CrystalContextPtr crystal;
+    int crystal_id;
     float population;
-    RayPathFilter filter;
+    int filter_id;
+
+    CrystalInfo(int crystal_id, float pop, int filter_id)
+        : crystal_id(crystal_id), population(pop), filter_id(filter_id){};
   };
 
   explicit MultiScatterContext(float prob = 1.0f);
@@ -84,13 +128,12 @@ class MultiScatterContext {
 
   const std::vector<CrystalInfo>& GetCrystalInfo() const;
   void ClearCrystalInfo();
-  void AddCrystalInfo(const CrystalContextPtr& crystal, float population, const RayPathFilter& filter);
+  void AddCrystalInfo(int crystal_id, float population, int filter_id);
   void NormalizeCrystalPopulation();
 
  private:
   std::vector<CrystalInfo> crystal_infos_;  // crystal, population, filter
   float prob_;
-  bool population_normalized_;
 };
 
 
@@ -211,13 +254,6 @@ class ProjectContext {
   size_t GetInitRayNum() const;
   void SetInitRayNum(size_t ray_num);
 
-  const std::vector<WavelengthInfo>& GetWavelengthInfos() const;
-  WavelengthInfo GetWaveLengthInfo(int index) const;
-  void ClearWavelengthInfo();
-  void AddWavelengthInfo(int wavelength, float weight);
-
-  const std::vector<MultiScatterContext>& GetMultiScatterContext() const;
-
   int GetRayHitNum() const;
   void SetRayHitNum(int hit_num);
 
@@ -227,7 +263,16 @@ class ProjectContext {
   std::string GetDataDirectory() const;
   std::string GetDefaultImagePath() const;
 
+  void ClearCrystals();
+  void SetCrystal(int id, CrystalPtrU&& crystal);
+  void SetCrystal(int id, CrystalPtrU&& crystal, const AxisDistribution& axis);
+  const CrystalContextPtr GetCrystalContext(int id) const;
+  const CrystalPtr GetCrystal(int id) const;
   void PrintCrystalInfo() const;
+
+  void ClearRayPathFilter();
+  void SetRayPathFilter(int id, const RayPathFilterPtr& filter);
+  const RayPathFilterPtr GetRayPathFilter(int id) const;
 
   static constexpr float kPropMinW = 1e-6;
   static constexpr float kScatMinW = 1e-3;
@@ -240,6 +285,8 @@ class ProjectContext {
   SunContext sun_ctx_;
   CameraContext cam_ctx_;
   RenderContext render_ctx_;
+  std::vector<WavelengthInfo> wavelengths_;  // (wavelength, weight)
+  std::vector<MultiScatterContext> multi_scatter_info_;
 
  private:
   ProjectContext();
@@ -265,28 +312,24 @@ class ProjectContext {
   CrystalPtrU ParseCrystalIrregularHexPyramid(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalCustom(const rapidjson::Value& c, int ci);
 
-  using FilterParser = std::function<RayPathFilter(ProjectContext*, const rapidjson::Value&, int)>;
+  using FilterParser = std::function<RayPathFilterPtr(ProjectContext*, const rapidjson::Value&, int)>;
   static std::unordered_map<std::string, FilterParser>& GetFilterParsers();
   void ParseOneFilter(const rapidjson::Value& c, int ci);
-  void ParseFilterBasic(const rapidjson::Value& c, int ci, RayPathFilter* filter);
-  void ParseFilterSymmetry(const rapidjson::Value& c, int ci, RayPathFilter* filter);
-  RayPathFilter ParseFilterNone(const rapidjson::Value& c, int ci);
-  RayPathFilter ParseFilterSpecific(const rapidjson::Value& c, int ci);
-  RayPathFilter ParseFilterGeneral(const rapidjson::Value& c, int ci);
+  void ParseFilterBasic(const rapidjson::Value& c, int ci, RayPathFilterPtr filter);
+  RayPathFilterPtr ParseFilterNone(const rapidjson::Value& c, int ci);
+  RayPathFilterPtr ParseFilterSpecific(const rapidjson::Value& c, int ci);
+  RayPathFilterPtr ParseFilterGeneral(const rapidjson::Value& c, int ci);
 
   void ParseOneScatter(const rapidjson::Value& c, int ci);
 
   size_t init_ray_num_;
-  std::vector<WavelengthInfo> wavelengths_;  // (wavelength, weight)
   int ray_hit_num_;
-
-  std::vector<MultiScatterContext> multiscatter_info_;
 
   std::string model_path_;
   std::string data_path_;
 
   std::unordered_map<int, CrystalContextPtr> crystal_store_;
-  std::unordered_map<int, RayPathFilter> filter_store_;
+  std::unordered_map<int, RayPathFilterPtr> filter_store_;
 };
 
 

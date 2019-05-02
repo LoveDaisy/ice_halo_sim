@@ -5,6 +5,8 @@
 #include <cstring>
 #include <utility>
 
+#include "context.h"
+
 namespace IceHalo {
 
 Crystal::Crystal(std::vector<Math::Vec3f> vertexes,     // vertex
@@ -15,16 +17,16 @@ Crystal::Crystal(std::vector<Math::Vec3f> vertexes,     // vertex
   InitNorm();
   InitFaceNumber();
   switch (type_) {
-    case CrystalType::PRISM:
-    case CrystalType::PYRAMID:
-    case CrystalType::STACK_PYRAMID:
+    case CrystalType::kPrism:
+    case CrystalType::kPyramid:
+    case CrystalType::kStackPyramid:
       face_number_period_ = 6;
       break;
-    case CrystalType::CUBIC_PYRAMID:
+    case CrystalType::kCubicPyramid:
       face_number_period_ = 4;
       break;
-    case CrystalType::CUSTOM:
-    case CrystalType::UNKNOWN:
+    case CrystalType::kCustom:
+    case CrystalType::kUnknown:
     default:
       break;
   }
@@ -136,18 +138,18 @@ void Crystal::InitNorm() {
 
 void Crystal::InitFaceNumber() {
   switch (type_) {
-    case CrystalType::PRISM:
-    case CrystalType::PYRAMID:
+    case CrystalType::kPrism:
+    case CrystalType::kPyramid:
       InitFaceNumberHex();
       break;
-    case CrystalType::CUBIC_PYRAMID:
+    case CrystalType::kCubicPyramid:
       InitFaceNumberCubic();
       break;
-    case CrystalType::STACK_PYRAMID:
+    case CrystalType::kStackPyramid:
       InitFaceNumberStack();
       break;
-    case CrystalType::CUSTOM:
-    case CrystalType::UNKNOWN:
+    case CrystalType::kCustom:
+    case CrystalType::kUnknown:
       break;
   }
 }
@@ -323,7 +325,7 @@ CrystalPtrU Crystal::CreateHexPrism(float h) {
   faces.emplace_back(9, 11, 10);
   faces.emplace_back(9, 6, 11);
 
-  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::PRISM));
+  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::kPrism));
 }
 
 
@@ -373,7 +375,7 @@ CrystalPtrU Crystal::CreateCubicPyramid(float h1, float h2) {
   faces.emplace_back(9, 8, 10);
   faces.emplace_back(10, 8, 11);
 
-  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::CUBIC_PYRAMID));
+  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::kCubicPyramid));
 }
 
 
@@ -442,7 +444,7 @@ CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4,  // upper 
   faces.emplace_back(21, 23, 22);
   faces.emplace_back(21, 18, 23);
 
-  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::PYRAMID));
+  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::kPyramid));
 }
 
 
@@ -507,7 +509,7 @@ CrystalPtrU Crystal::CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4,  
   faces.emplace_back(21, 23, 22);
   faces.emplace_back(21, 18, 23);
 
-  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::STACK_PYRAMID));
+  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::kStackPyramid));
 }
 
 
@@ -555,7 +557,7 @@ CrystalPtrU Crystal::CreateIrregularHexPrism(float* dist, float h) {
   std::vector<TriangleIdx> faces;
   BuildPolyhedronFaces(hss, pts, faces);
 
-  return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::PRISM));
+  return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::kPrism));
 }
 
 
@@ -664,20 +666,20 @@ CrystalPtrU Crystal::CreateIrregularHexPyramid(float* dist, int* idx, float* h) 
   std::vector<TriangleIdx> faces;
   BuildPolyhedronFaces(hss, pts, faces);
 
-  return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::PYRAMID));
+  return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::kPyramid));
 }
 
 
 CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<IceHalo::Math::Vec3f>& pts,            // vertex points
                                          const std::vector<IceHalo::Math::TriangleIdx>& faces) {  // face indices
-  return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::CUSTOM));
+  return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::kCustom));
 }
 
 
 CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<IceHalo::Math::Vec3f>& pts,          // vertex points
                                          const std::vector<IceHalo::Math::TriangleIdx>& faces,  // face indices
                                          const std::vector<int>& face_number_map) {             // face to face number
-  return std::unique_ptr<Crystal>(new Crystal(pts, faces, face_number_map, CrystalType::CUSTOM));
+  return std::unique_ptr<Crystal>(new Crystal(pts, faces, face_number_map, CrystalType::kCustom));
 }
 
 }  // namespace IceHalo

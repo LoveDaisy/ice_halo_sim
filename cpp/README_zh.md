@@ -143,12 +143,12 @@ cd ice_halo_sim/cpp
 
   * `HexPrism`: 六棱柱形冰晶.
   只有 1 个参数, `h`, 定义为 `h / a`, 其中 `h` 是柱体的高, `a` 是底面直径.
-  <img src="figs/hex_cylinder_01.png" width="400">.
+  <img src="doc/figs/hex_cylinder_01.png" width="400">.
 
   * `HexPyramid`: 六棱锥形冰晶.
   可能有 3, 5, 或者 7 个参数.
     * 3 个参数的情况, 分别表示 `h1 / H1`, `h2 / a`, `h3 / H3`, 其中 `H1` 代表第一段锥体最大可能高度, `H3` 类似.
-      <img src="figs/hex_pyramid_01.png" width="400">.
+      <img src="doc/figs/hex_pyramid_01.png" width="400">.
     * 5 个参数的情况. 最后 3 个参数含义同上, 开头 2 个参数用于定义晶体表面的方向, 这 2 个参数必须是整数.
       这里使用 [Miller index](https://en.wikipedia.org/wiki/Miller_index) 来表示晶体表面方向.
       举个例子, 2 个参数为 `a`, `b`, 那么表示 Miller index (`a`, 0, `-a`, `b`). 对于一个正常的冰晶,
@@ -160,16 +160,16 @@ cd ice_halo_sim/cpp
   * `HexPyramidStackHalf`:
   有 7 个参数. 与前面六棱锥形冰晶参数类似, 开头 4 个参数用于定义锥面的角度, 后面 3 个参数用于定义 3 段的长度,
   对锥体段表示 `h / H`, 对柱体段表示 `h / a`.
-  <img src="figs/hex_pyramid_stack_half_01.png" width="400">.
+  <img src="doc/figs/hex_pyramid_stack_half_01.png" width="400">.
 
   * `TriPyramid`:
   有 5 个参数. 与前面六棱锥形冰晶参数类似, 开头 2 个参数用于定义锥面的角度. 这里上下两个锥体段角度是一样的.
   (其他情况的我稍后有空再加进程序里).
-  <img src="figs/tri_pyramid_01.png" width="400">.
+  <img src="doc/figs/tri_pyramid_01.png" width="400">.
 
   * `CubicPyramid`:
   有 2 个参数. 与上面的情形类似, 2 个参数定义了上下两段锥体的长度. 请注意, 这里是立方晶系.
-  <img src="figs/cubic_pyramid_01.png" width="400">
+  <img src="doc/figs/cubic_pyramid_01.png" width="400">
 
   * `Custom`:
   有 1 个参数, 代表自定义模型的文件名.
