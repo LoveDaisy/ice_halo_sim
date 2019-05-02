@@ -182,15 +182,20 @@ void MainWindow::initCrystalList() {
 
 
 void MainWindow::initCrystalInfoPanel() {
+  using namespace IceHalo;
+
+  // 3D window and widget
   view3d_ = new Qt3DExtras::Qt3DWindow();
   crystal_preview_widget_ = QWidget::createWindowContainer(view3d_);
   QSize screenSize = view3d_->screen()->size();
   crystal_preview_widget_->setMinimumSize(QSize(200, 100));
   crystal_preview_widget_->setMaximumSize(screenSize);
 
+  // Set layout
   crystal_info_layout_ = new QGridLayout;
   ui_->crystalSettingGroup->setLayout(crystal_info_layout_);
 
+  // Add widgets
   crystal_info_layout_->addWidget(ui_->crystalTypePanel, 0, 0);
   crystal_info_layout_->addWidget(ui_->pyramidParameterPanel, 0, 1);
   crystal_info_layout_->addWidget(ui_->crystalPrismDistancePanel, 1, 1);
@@ -200,25 +205,44 @@ void MainWindow::initCrystalInfoPanel() {
   crystal_info_layout_->setRowStretch(2, 1);
   crystal_info_layout_->setColumnStretch(1, 1);
 
+  // Widget layout
   ui_->crystalTypePanel->layout()->setAlignment(Qt::AlignTop);
   ui_->pyramidParameterPanel->layout()->setAlignment(Qt::AlignTop);
   ui_->crystalPrismDistancePanel->layout()->setAlignment(Qt::AlignTop | Qt::AlignLeft);
   ui_->crystalAxisPanel->layout()->setAlignment(Qt::AlignTop);
 
+  // Settings for crystalPrismDistancePanel
   auto layout = static_cast<QGridLayout*>(ui_->crystalPrismDistancePanel->layout());
   for (int i = 1; i <= 6; i++) {
     layout->setColumnStretch(i, 1);
   }
   layout->setColumnMinimumWidth(0, 110);
+
+  // Add data to crystal type
+  ui_->crystalTypeComboBox->addItem(tr("Prism"), static_cast<int>(CrystalType::kPrism));
+  ui_->crystalTypeComboBox->addItem(tr("Pyramid"), static_cast<int>(CrystalType::kPyramid));
+
+  // Add data to axis type
+  ui_->axisZenithTypeComboBox->addItem(tr("Uniform"), static_cast<int>(Math::Distribution::kUniform));
+  ui_->axisZenithTypeComboBox->addItem(tr("Gaussian"), static_cast<int>(Math::Distribution::kGaussian));
+  ui_->axisRollTypeComboBox->addItem(tr("Uniform"), static_cast<int>(Math::Distribution::kUniform));
+  ui_->axisRollTypeComboBox->addItem(tr("Gaussian"), static_cast<int>(Math::Distribution::kGaussian));
+  ui_->axisAzimuthTypeComboBox->addItem(tr("Uniform"), static_cast<int>(Math::Distribution::kUniform));
+  ui_->axisAzimuthTypeComboBox->addItem(tr("Gaussian"), static_cast<int>(Math::Distribution::kGaussian));
+
+  updateCurrentCrystalInfo();
 }
 
 
 void MainWindow::insertCrystalItem() {
+  // Context data
+  project_context_->SetCrystal(current_crystal_id_, IceHalo::Crystal::CreateHexPrism(1.6f));
+
   // UI item
   auto item_check = new QStandardItem();
   auto item_name = new QStandardItem(tr("Crystal %1").arg(current_crystal_id_));
   auto item_link = new QStandardItem();
-  auto item_pop = new QStandardItem("100");
+  auto item_pop = new QStandardItem(tr("%1").arg(kDefaultPopulation));
 
   item_check->setCheckable(true);
   item_check->setEditable(false);
@@ -240,23 +264,27 @@ void MainWindow::insertCrystalItem() {
   auto table = ui_->crystalsTable;
   table->selectRow(row_count);
 
-  // Context data
-  project_context_->SetCrystal(current_crystal_id_, IceHalo::Crystal::CreateHexPrism(1.6f));
-
   current_crystal_id_++;
+
+  updateCurrentCrystalInfo();
 }
 
 
 void MainWindow::removeCurrentCrystal() {
-  // UI item
   auto table = ui_->crystalsTable;
   auto index = table->currentIndex();
+  auto curr_row = index.row();
+  auto crystal_id = crystal_list_model_->item(curr_row, 1)->data(Qt::UserRole).toInt();
+
+  // Context data
+  project_context_->RemoveCrystal(crystal_id);
+
+  // UI item
   if (!index.isValid()) {
     return;
   }
 
   auto row_count = crystal_list_model_->rowCount();
-  auto curr_row = index.row();
   crystal_list_model_->removeRow(curr_row);
   if (curr_row == row_count - 1) {
     table->selectRow(curr_row - 1);
@@ -264,8 +292,7 @@ void MainWindow::removeCurrentCrystal() {
     table->selectRow(curr_row);
   }
 
-  // Context data
-  // TODO
+  updateCurrentCrystalInfo();
 }
 
 
@@ -424,28 +451,33 @@ void MainWindow::updateScatterProb(int v) {
 
 void MainWindow::updateCurrentCrystalInfo() {
   auto table = ui_->crystalsTable;
-  auto current_index = table->currentIndex();
+  auto curr_index = table->currentIndex();
+  auto curr_row = curr_index.row();
 
-  if (!current_index.isValid() && crystal_info_layout_) {   // There is no crystal at all
-    disableCrystalInfo();
-  } else {
-    enableCrystalInfo(current_index);
+  if (!curr_index.isValid()) {
+    return;
   }
+
+  // Get data from context
+  auto crystal_id = crystal_list_model_->item(curr_row, 1)->data(Qt::UserRole).toInt();
+  auto crystal_ctx = project_context_->GetCrystalContext(crystal_id);
+
+  // Update crystal type
+  // TODO
 }
 
 
-void MainWindow::disableCrystalInfo() {
+void MainWindow::setCrystalPanelEnabled(bool enable) {
+  if (!crystal_info_layout_) {
+    return;
+  }
+
   for (int i = 0; i < crystal_info_layout_->count(); i++) {
     auto item = crystal_info_layout_->itemAt(i);
     if (item && item->widget()) {
-      item->widget()->setEnabled(false);
+      item->widget()->setEnabled(enable);
     }
   }
-}
-
-
-void MainWindow::enableCrystalInfo(const QModelIndex &index) {
-  ;
 }
 
 

@@ -68,8 +68,7 @@ class MainWindow : public QMainWindow {
   void initCrystalList();
   void initCrystalInfoPanel();
 
-  void disableCrystalInfo();
-  void enableCrystalInfo(const QModelIndex& index);
+  void setCrystalPanelEnabled(bool enable);
 
   IconButton* createScatterTab();
   QToolButton* createScatterAddButton();
@@ -90,6 +89,8 @@ class MainWindow : public QMainWindow {
   IceHalo::ProjectContextPtr project_context_;
 
   static constexpr int kMaxInitRayNum = 1000000;
+  static constexpr int kDefaultPopulation = 100;
+
   static int current_crystal_id_;
   static QVector<WavelengthData>& getWavelengthData();
 
