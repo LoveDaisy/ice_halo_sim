@@ -22,6 +22,8 @@ class Crystal {
  public:
   ~Crystal();
 
+  CrystalType GetType() const;
+
   int TotalVertexes() const;
   int TotalFaces() const;
   int FaceNumber(int idx) const;
