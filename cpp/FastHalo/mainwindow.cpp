@@ -228,6 +228,7 @@ void MainWindow::insertCrystalItem() {
   item_link->setData(Icons::getIcon(Icons::kLink), Qt::DecorationRole);
   item_link->setData(true, Qt::UserRole);
   item_name->setEditable(true);
+  item_name->setData(current_crystal_id_, Qt::UserRole);
   item_pop->setEditable(true);
 
   auto row_count = crystal_list_model_->rowCount();
@@ -240,13 +241,14 @@ void MainWindow::insertCrystalItem() {
   table->selectRow(row_count);
 
   // Context data
-  // TODO
+  project_context_->SetCrystal(current_crystal_id_, IceHalo::Crystal::CreateHexPrism(1.6f));
 
   current_crystal_id_++;
 }
 
 
 void MainWindow::removeCurrentCrystal() {
+  // UI item
   auto table = ui_->crystalsTable;
   auto index = table->currentIndex();
   if (!index.isValid()) {
@@ -261,6 +263,9 @@ void MainWindow::removeCurrentCrystal() {
   } else {
     table->selectRow(curr_row);
   }
+
+  // Context data
+  // TODO
 }
 
 
