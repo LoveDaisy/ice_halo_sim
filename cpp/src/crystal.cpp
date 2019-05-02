@@ -92,6 +92,11 @@ int Crystal::GetFaceNumberPeriod() const {
 }
 
 
+CrystalType Crystal::GetType() const {
+  return type_;
+}
+
+
 int Crystal::TotalVertexes() const {
   return static_cast<int>(vertexes_.size());
 }
