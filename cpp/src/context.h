@@ -264,7 +264,8 @@ class ProjectContext {
   std::string GetDefaultImagePath() const;
 
   void ClearCrystals();
-  void SetCrystal(int id, const CrystalPtr& crystal, const AxisDistribution& axis);
+  void SetCrystal(int id, CrystalPtrU&& crystal);
+  void SetCrystal(int id, CrystalPtrU&& crystal, const AxisDistribution& axis);
   const CrystalContextPtr GetCrystalContext(int id) const;
   const CrystalPtr GetCrystal(int id) const;
   void PrintCrystalInfo() const;

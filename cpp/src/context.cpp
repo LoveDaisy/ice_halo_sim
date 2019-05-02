@@ -742,6 +742,21 @@ std::string ProjectContext::GetDefaultImagePath() const {
 }
 
 
+void ProjectContext::ClearCrystals() {
+  crystal_store_.clear();
+}
+
+
+void ProjectContext::SetCrystal(int id, CrystalPtrU&& crystal) {
+  SetCrystal(id, std::move(crystal), AxisDistribution{});
+}
+
+
+void ProjectContext::SetCrystal(int id, CrystalPtrU&& crystal, const AxisDistribution& axis) {
+  crystal_store_.emplace(id, std::make_shared<CrystalContext>(std::move(crystal), axis));
+}
+
+
 const CrystalContextPtr ProjectContext::GetCrystalContext(int id) const {
   if (crystal_store_.count(id)) {
     return crystal_store_.at(id);
@@ -772,6 +787,16 @@ void ProjectContext::PrintCrystalInfo() const {
       std::printf("f %d %d %d\n", idx[0] + 1, idx[1] + 1, idx[2] + 1);
     }
   }
+}
+
+
+void ProjectContext::ClearRayPathFilter() {
+  filter_store_.clear();
+}
+
+
+void ProjectContext::SetRayPathFilter(int id, const RayPathFilterPtr& filter) {
+  filter_store_.emplace(id, filter);
 }
 
 
