@@ -266,6 +266,7 @@ class ProjectContext {
   void ClearCrystals();
   void SetCrystal(int id, CrystalPtrU&& crystal);
   void SetCrystal(int id, CrystalPtrU&& crystal, const AxisDistribution& axis);
+  void RemoveCrystal(int id);
   const CrystalContextPtr GetCrystalContext(int id) const;
   const CrystalPtr GetCrystal(int id) const;
   void PrintCrystalInfo() const;
