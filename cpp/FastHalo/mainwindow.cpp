@@ -247,6 +247,7 @@ void MainWindow::updateTotalRays(int ray_num) {
 
 
 void MainWindow::updateWavelength() {
+  using WaveLengthInfo = IceHalo::ProjectContext::WavelengthInfo;
   int curr_idx = ui_->wavelengthComboBox->currentIndex();
   auto& wl_data = getWavelengthData()[curr_idx];
   if (wl_data.customized_) {
@@ -254,10 +255,10 @@ void MainWindow::updateWavelength() {
   }
 
   qDebug() << "Updating wavelength:";
-  project_context_->ClearWavelengthInfo();
+  project_context_->wavelengths_.clear();
   for (const auto& wl : wl_data.info_) {
     qDebug().nospace() << "  wavelength: " << wl.wavelength << ", weight: " << wl.weight;
-    project_context_->AddWavelengthInfo(wl.wavelength, wl.weight);
+    project_context_->wavelengths_.emplace_back(WaveLengthInfo{ wl.wavelength, wl.weight });
   }
 }
 
@@ -298,11 +299,14 @@ void MainWindow::updateScatterTabs() {
     return;
   }
 
+  std::vector<IceHalo::MultiScatterContext> new_multi_scatter_ctx;
+  std::vector<bool> tab_visible(static_cast<size_t>(tab_cnt), true);
+
   // Remove invisible tabs
   bool update_check = false;  // If a checked tab is removed, then the next tab will be checked.
   for (int i = 0; i < tab_cnt; i++) {
     auto tab = static_cast<IconButton*>(ui_->scatterTabLayout->itemAt(i)->widget());
-    if (tab->geometry().width() > 0) {
+    if (tab->geometry().width() > 0) {  // Normal tabs
       if (update_check) {
         tab->setChecked(true);
         update_check = false;
@@ -310,6 +314,8 @@ void MainWindow::updateScatterTabs() {
       continue;
     }
 
+    // Tabs to be removed
+    tab_visible[static_cast<size_t>(i)] = false;
     if (scatter_tab_group_->checkedButton() == tab) {
       update_check = true;
     }
@@ -327,6 +333,14 @@ void MainWindow::updateScatterTabs() {
     tab->setText(tab_txt);
     tab->enableIcon(true);
   }
+
+  // Refresh context
+  for (size_t i = 0; i < tab_visible.size(); i++) {
+    if (tab_visible[i]) {
+      new_multi_scatter_ctx.emplace_back(project_context_->multi_scatter_info_[i]);
+    }
+  }
+  project_context_->multi_scatter_info_.swap(new_multi_scatter_ctx);
 
   // If only one tab, disable close icon
   if (tab_cnt <= 1 && ui_->scatterTabLayout->itemAt(0)) {
@@ -358,7 +372,7 @@ void MainWindow::updateSimulationContext() {
   // TODO
 
   // Wavelength settings
-  project_context_->ClearWavelengthInfo();
+  project_context_->wavelengths_.clear();
   // TODO
 
   updateSunAltitude(ui_->sunAltitudeEdit->text());
