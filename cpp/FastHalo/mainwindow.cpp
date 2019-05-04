@@ -4,6 +4,7 @@
 #include <QPropertyAnimation>
 #include <QStackedWidget>
 #include <QtDebug>
+#include <algorithm>
 
 #include "iconbutton.h"
 #include "icons.h"
@@ -27,6 +28,456 @@ MainWindow::~MainWindow() {
 }
 
 
+void MainWindow::updateRayHitsNum(int n) {
+  qDebug() << "updateRayHitsNum()";
+  gui_data_.max_hits_ = n;
+  qDebug() << "Updating ray hits number:" << n;
+}
+
+
+void MainWindow::updateSunAltitude(const QString& altitude_txt) {
+  qDebug() << "updateSunAltitude()";
+  auto widget = ui_->sunAltitudeEdit;
+  int pos;
+  QString txt_cpy = altitude_txt;
+  if (widget->validator()->validate(txt_cpy, pos) != QValidator::Acceptable) {
+    QString value = QString::asprintf("%.1f", static_cast<double>(gui_data_.sun_altitude_));
+    widget->setText(value);
+  } else {
+    gui_data_.sun_altitude_ = txt_cpy.toFloat();
+  }
+  qDebug() << "Updating sun altitude:" << altitude_txt;
+}
+
+
+void MainWindow::updateSunDiameter(int index) {
+  qDebug() << "updateSunDiameter()";
+  double d = ui_->sunDiameterComboBox->itemData(index).toDouble();
+
+  // Update data
+  gui_data_.sun_diameter_ = static_cast<float>(d);
+
+  // Update UI
+  QString d_txt = QString::asprintf("Sun diameter: %.1f°", d);
+  ui_->sunDiameterLabel->setText(d_txt);
+
+  qDebug() << "Updating sun diameter:" << d_txt;
+}
+
+
+void MainWindow::updateTotalRays(int ray_num) {
+  qDebug() << "updateTotalRays()";
+  gui_data_.ray_number_ = ray_num;
+  qDebug() << "Updating total ray number:" << ray_num;
+}
+
+
+void MainWindow::updateWavelength(int index) {
+  qDebug() << "updateWavelength()";
+  auto& wl_data = WavelengthData::getData()[static_cast<size_t>(index)];
+  if (wl_data.customized_) {
+    // TODO: open new window
+  }
+
+  qDebug() << "Wavelength data:" << index;
+  gui_data_.wavelength_data_idx_ = index;
+}
+
+
+void MainWindow::addScatter() {
+  qDebug() << "addScatter()";
+
+  // Update model
+  gui_data_.multi_scatter_data_.emplace_back(1.0f);
+  auto& curr_scatter = gui_data_.multi_scatter_data_.back();
+  auto& first_scatter = gui_data_.multi_scatter_data_.front();
+  auto& crystals = gui_data_.crystal_store_;
+  curr_scatter.crystals_.clear();
+  for (const auto& kv : crystals) {
+    curr_scatter.crystals_.emplace_back(kv.first);
+  }
+  std::sort(curr_scatter.crystals_.begin(), curr_scatter.crystals_.end(),
+            [=](const MultiScatterData::CrystalItemData& a, const MultiScatterData::CrystalItemData& b) {
+              return a.crystal_id < b.crystal_id;
+            });
+  for (size_t i = 0; i < curr_scatter.crystals_.size(); i++) {
+    auto& c0 = first_scatter.crystals_.at(i);
+    auto& c1 = curr_scatter.crystals_.at(i);
+    if (c0.linked) {
+      c1.population = c0.population;
+    } else {
+      c1.linked = false;
+    }
+  }
+
+  // Update scatter tabs
+  auto layout = ui_->scatterTabLayout;
+  int curr_item_cnt = layout->count();
+  auto btn = createScatterTab();
+  btn->setText(getScatterTabText(curr_item_cnt - 1));
+  btn->setChecked(true);
+  btn->enableIcon(true);
+  layout->insertWidget(curr_item_cnt - 1, btn);
+  scatter_tab_group_->addButton(btn);
+
+  if (curr_item_cnt == 1) {  // Disable close action when there is only one tab button.
+    btn->enableIcon(false);
+  } else {  // Enable close action when there are more than one tab buttons.
+    for (int i = 0; i < curr_item_cnt; i++) {
+      static_cast<IconButton*>(layout->itemAt(i)->widget())->enableIcon(true);
+    }
+  }
+
+  connect(btn, &IconButton::closeTab, this, &MainWindow::removeScatter);
+}
+
+
+void MainWindow::removeScatter(IconButton* sender) {
+  qDebug() << "removeScatter()";
+
+  auto layout = ui_->scatterTabLayout;
+  int index = layout->indexOf(sender);
+  if (!sender || index < 0 || static_cast<size_t>(index) >= gui_data_.multi_scatter_data_.size()) {
+    return;
+  }
+
+  // Update model
+  auto& data = gui_data_.multi_scatter_data_;
+  data.erase(data.begin() + index);
+
+  // Update view
+  auto anim = new QPropertyAnimation(sender, "maximumWidth");
+  anim->setStartValue(sender->geometry().width());
+  anim->setEndValue(0);
+  anim->setDuration(200);
+  anim->setTargetObject(sender);
+  anim->start(QAbstractAnimation::DeleteWhenStopped);
+
+  // Update check state
+  if (sender->isChecked()) {
+    auto next_idx = index + 1;
+    if (next_idx == layout->count() - 1) {  // The last tab
+      next_idx = index - 1;
+    }
+    static_cast<IconButton*>(layout->itemAt(next_idx)->widget())->setChecked(true);
+  }
+
+  // After animation finished, delete button and udpate tab text
+  connect(anim, &QPropertyAnimation::finished, this, [=] {
+    layout->removeWidget(sender);
+    scatter_tab_group_->removeButton(sender);
+    sender->deleteLater();
+
+    if (layout->count() == 2) {  // Disable close action when there is only one tab button
+      static_cast<IconButton*>(layout->itemAt(0)->widget())->enableIcon(false);
+    }
+
+    // Update tab text
+    auto tab_cnt = layout->count() - 1;
+    for (int i = 0; i < tab_cnt; i++) {
+      auto tab_txt = getScatterTabText(i);
+      auto curr_tab_btn = static_cast<IconButton*>(layout->itemAt(i)->widget());
+      curr_tab_btn->setText(tab_txt);
+    }
+  });
+}
+
+
+void MainWindow::updateScatterProb(int v) {
+  qDebug() << "updateScatterProb()";
+  double prob = getScatterProb(v);
+
+  // Update UI
+  QString prob_str = getScatterProbText(prob);
+  ui_->scatterProbLabel->setText(prob_str);
+
+  qDebug() << "Updating scatter prob:" << v << "," << prob_str;
+
+  // Update data
+  auto scatter_data = getCurrentScatterData();
+  if (scatter_data) {
+    scatter_data->prob_ = static_cast<float>(prob);
+  }
+}
+
+
+void MainWindow::refreshScatterProb() {
+  qDebug() << "refreshScatterProb()";
+
+  double prob = getScatterProb();
+  int v = std::min(std::max(static_cast<int>(prob * 100), 0), 100);
+
+  // Update UI
+  QString prob_str = getScatterProbText(prob);
+  ui_->scatterProbLabel->setText(prob_str);
+  ui_->scatterProbSlider->setValue(v);
+
+  qDebug() << "Refreshing scatter prob:" << v << "," << prob_str;
+}
+
+
+void MainWindow::addCrystal() {
+  qDebug() << "addCrystal()";
+
+  // Update data
+  auto crystal_data = CrystalData(current_crystal_id_);
+  crystal_data.name_ = tr("Crystal %1").arg(current_crystal_id_);
+  crystal_data.height_[0] = 1.6f;
+  gui_data_.crystal_store_.emplace(current_crystal_id_, crystal_data);
+
+  for (auto& m : gui_data_.multi_scatter_data_) {
+    m.crystals_.emplace_back(current_crystal_id_);
+  }
+
+  // Update crystal list
+  auto scatter_data = getCurrentScatterData();
+  if (!scatter_data) {
+    qWarning() << "Warning! scatter data is null!";
+    return;
+  }
+  auto item_check = new QStandardItem();
+  auto item_name = new QStandardItem(crystal_data.name_);
+  auto item_link = new QStandardItem();
+  auto item_pop = new QStandardItem(QString::number(scatter_data->crystals_.back().population));
+
+  item_check->setCheckable(true);
+  item_check->setEditable(false);
+  item_check->setData(Qt::Unchecked, Qt::CheckStateRole);
+  item_check->setTextAlignment(Qt::AlignCenter);
+  item_link->setEditable(false);
+  item_link->setData(Icons::getIcon(Icons::kLink), Qt::DecorationRole);
+  item_link->setData(true, Qt::UserRole);
+  item_name->setEditable(true);
+  item_name->setData(current_crystal_id_, Qt::UserRole);
+  item_pop->setEditable(true);
+  item_pop->setData(scatter_data->crystals_.back().population, Qt::EditRole);
+
+  auto row_count = crystal_list_model_->rowCount();
+  crystal_list_model_->setItem(row_count, 0, item_check);
+  crystal_list_model_->setItem(row_count, 1, item_name);
+  crystal_list_model_->setItem(row_count, 2, item_link);
+  crystal_list_model_->setItem(row_count, 3, item_pop);
+
+  auto table = ui_->crystalsTable;
+  table->selectRow(row_count);
+
+  current_crystal_id_++;
+
+  updateCurrentCrystalInfo();
+}
+
+
+void MainWindow::removeCurrentCrystal() {
+  qDebug() << "removeCurrentCrystal()";
+
+  auto table = ui_->crystalsTable;
+  auto index = table->currentIndex();
+  if (!index.isValid()) {
+    return;
+  }
+
+  auto curr_row = index.row();
+  auto crystal_id = crystal_list_model_->item(curr_row, 1)->data(Qt::UserRole).toInt();
+
+  // Remove data
+  gui_data_.crystal_store_.erase(crystal_id);
+  for (auto& m : gui_data_.multi_scatter_data_) {
+    decltype(m.crystals_) tmp_list;
+    for (auto& c : m.crystals_) {
+      if (c.crystal_id != crystal_id) {
+        tmp_list.emplace_back(c);
+      }
+    }
+    m.crystals_.swap(tmp_list);
+  }
+
+  // Remove UI widget
+  auto row_count = crystal_list_model_->rowCount();
+  crystal_list_model_->removeRow(curr_row);
+  if (curr_row == row_count - 1) {
+    table->selectRow(curr_row - 1);
+  } else {
+    table->selectRow(curr_row);
+  }
+
+  updateCurrentCrystalInfo();
+}
+
+
+void MainWindow::refreshCrystalList() {
+  qDebug() << "refreshCrystalList()";
+
+  auto scatter = getCurrentScatterData();
+  if (!scatter) {
+    qWarning() << "Warning! No scatter data!";
+    return;
+  }
+
+  auto& crystals = scatter->crystals_;
+  if (static_cast<int>(crystals.size()) != crystal_list_model_->rowCount()) {
+    qWarning() << "Warning! crystal count mismatch!";
+    return;
+  }
+
+  for (int i = 0; i < crystal_list_model_->rowCount(); i++) {
+    auto& crystal_item_data = crystals.at(static_cast<size_t>(i));
+
+    // refresh enable state
+    auto item = crystal_list_model_->item(i, 0);
+    auto check_state = crystal_item_data.enabled ? Qt::Checked : Qt::Unchecked;
+    item->setData(check_state, Qt::CheckStateRole);
+
+    // refresh name
+    item = crystal_list_model_->item(i, 1);
+    auto old_name = item->data(Qt::DisplayRole);
+    auto old_id = item->data(Qt::UserRole);
+    auto new_name = gui_data_.crystal_store_.at(crystal_item_data.crystal_id).name_;
+    auto new_id = crystal_item_data.crystal_id;
+    if (old_id != new_id || old_name != new_name) {
+      item->setData(new_name, Qt::DisplayRole);
+      item->setData(crystal_item_data.crystal_id, Qt::UserRole);
+    }
+
+    // refresh link state
+    item = crystal_list_model_->item(i, 2);
+    if (item->data(Qt::UserRole) != crystal_item_data.linked) {
+      item->setData(crystal_item_data.linked, Qt::UserRole);
+      item->setData(crystal_item_data.linked ? Icons::getIcon(Icons::kLink) : Icons::getIcon(Icons::kUnlink),
+                    Qt::DecorationRole);
+    }
+
+    // refresh population
+    item = crystal_list_model_->item(i, 3);
+    auto old_pop = item->data(Qt::EditRole);
+    auto new_pop = crystal_item_data.population;
+    if (old_pop != new_pop) {
+      item->setData(new_pop, Qt::EditRole);
+    }
+  }
+}
+
+
+void MainWindow::toggleCrystalLinkState(const QModelIndex& index) {
+  qDebug() << "toggleCrystalLinkState()";
+  auto link = index.data(Qt::UserRole).toBool();
+
+  // Update UI model
+  if (link) {
+    crystal_list_model_->setData(index, Icons::getIcon(Icons::kUnlink), Qt::DecorationRole);
+  } else {
+    crystal_list_model_->setData(index, Icons::getIcon(Icons::kLink), Qt::DecorationRole);
+  }
+  crystal_list_model_->setData(index, !link, Qt::UserRole);
+
+  // Update data
+  auto crystal_item_data = getCrystalItemData(index);
+  if (!crystal_item_data) {
+    return;
+  }
+
+  for (auto& m : gui_data_.multi_scatter_data_) {
+    for (auto& c : m.crystals_) {
+      if (c.crystal_id == crystal_item_data->crystal_id) {
+        c.linked = !link;
+        if (!link) {
+          c.population = crystal_item_data->population;
+        }
+      }
+    }
+  }
+}
+
+
+void MainWindow::updateCrystalData(const QModelIndex& index) {
+  qDebug() << "updateCrystalData()";
+
+  auto col = index.column();
+  auto crystal_item_data = getCrystalItemData(index);
+  auto crystal_data = getCrystalData(index);
+  if (!crystal_item_data || !crystal_data) {
+    return;
+  }
+
+  switch (col) {
+    case 0:  // Enabled
+      crystal_item_data->enabled = index.data(Qt::CheckStateRole) == Qt::Checked;
+      break;
+    case 1:  // Name
+      crystal_data->name_ = index.data(Qt::DisplayRole).toString();
+      break;
+    case 2:  // Linked
+      crystal_item_data->linked = index.data(Qt::UserRole).toBool();
+      break;
+    case 3: {  // Population
+      auto pop = index.data(Qt::EditRole).toInt();
+      if (crystal_item_data->linked) {
+        for (auto& m : gui_data_.multi_scatter_data_) {
+          for (auto& c : m.crystals_) {
+            if (c.crystal_id == crystal_item_data->crystal_id) {
+              c.population = pop;
+            }
+          }
+        }
+      } else {
+        crystal_item_data->population = pop;
+      }
+    } break;
+    default:
+      break;
+  }
+}
+
+
+void MainWindow::updateCurrentCrystalInfo() {
+  qDebug() << "updateCurrentCrystalInfo()";
+
+  auto table = ui_->crystalsTable;
+  auto curr_index = table->currentIndex();
+
+  if (!curr_index.isValid()) {
+    setCrystalPanelEnabled(false);
+    return;
+  }
+
+  // Get data from context
+  auto crystal_data = getCrystalData(curr_index);
+  auto crystal_item_data = getCrystalItemData(curr_index);
+  if (!crystal_data || !crystal_item_data) {
+    return;
+  }
+
+  // Update crystal type
+  auto crystal_type = crystal_data->type_;
+  auto combo_box = ui_->crystalTypeComboBox;
+  for (int i = 0; i < combo_box->count(); i++) {
+    if (combo_box->itemData(i, Qt::UserRole).toInt() == static_cast<int>(crystal_type)) {
+      combo_box->setCurrentIndex(i);
+      break;
+    }
+  }
+
+  // Update crystal height
+
+  // TODO
+
+  // Update enabled
+  if (crystal_item_data->enabled) {
+    setCrystalPanelEnabled(true);
+  } else {
+    setCrystalPanelEnabled(false);
+  }
+}
+
+
+void MainWindow::enableFilterSettings(bool enable) {
+  ui_->specificRadioButton->setEnabled(enable);
+  ui_->generalRadioButton->setEnabled(enable);
+  ui_->symBCheckBox->setEnabled(enable);
+  ui_->symDCheckBox->setEnabled(enable);
+  ui_->symPCheckBox->setEnabled(enable);
+}
+
+
 void MainWindow::initUi() {
   using namespace IceHalo;
 
@@ -46,38 +497,39 @@ void MainWindow::initUi() {
 
 void MainWindow::initBasicSettings() {
   // Sun diameter
-  ui_->sunDiameterComboBox->addItem(tr("true diameter"), QVariant(0.5f));
-  ui_->sunDiameterComboBox->addItem(tr("point source"), QVariant(0.0f));
-  updateSunDiameterType(0);
+  for (const auto& s : GuiData::getSunDiameterData()) {
+    ui_->sunDiameterComboBox->addItem(s.text, s.value);
+  }
+  updateSunDiameter(0);
 
   // Sun altitude
-  QString altitude_txt = QString::number(static_cast<int>(project_context_->sun_ctx_.GetSunAltitude()));
+  QString altitude_txt = QString::number(static_cast<int>(gui_data_.sun_altitude_));
   ui_->sunAltitudeEdit->setValidator(new QDoubleValidator(-90, 90, 1));
   ui_->sunAltitudeEdit->setText(altitude_txt);
   updateSunAltitude(altitude_txt);
 
   // Max hits
   auto max_hits_widget = ui_->maxHitsSpinBox;
-  max_hits_widget->setMaximum(project_context_->kMaxRayHitNum);
-  max_hits_widget->setMinimum(project_context_->kMinRayHitNum);
-  max_hits_widget->setValue(project_context_->GetRayHitNum());
+  max_hits_widget->setMaximum(GuiData::kMaxHitsNum);
+  max_hits_widget->setMinimum(GuiData::kMinHitsNum);
+  max_hits_widget->setValue(gui_data_.max_hits_);
   updateRayHitsNum(max_hits_widget->value());
 
   // Ray number
   auto ray_num_widget = ui_->rayNumberSpinBox;
-  ray_num_widget->setMaximum(kMaxInitRayNum);
-  ray_num_widget->setMinimum(project_context_->kMinRayHitNum);
-  ray_num_widget->setValue(static_cast<int>(project_context_->GetInitRayNum()));
+  ray_num_widget->setMaximum(GuiData::kMaxRayNum);
+  ray_num_widget->setMinimum(GuiData::kMinRayNum);
+  ray_num_widget->setValue(gui_data_.ray_number_);
   updateTotalRays(ray_num_widget->value());
 
   // Wavelength
-  for (const auto& wl : getWavelengthData()) {
+  for (const auto& wl : WavelengthData::getData()) {
     ui_->wavelengthComboBox->addItem(wl.name_);
   }
-  updateWavelength();
+  updateWavelength(0);
 
   connect(ui_->sunDiameterComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-          &MainWindow::updateSunDiameterType);
+          &MainWindow::updateSunDiameter);
   connect(ui_->sunAltitudeEdit, &QLineEdit::textChanged, this, &MainWindow::updateSunAltitude);
   connect(ui_->maxHitsSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::updateRayHitsNum);
   connect(ui_->rayNumberSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::updateTotalRays);
@@ -91,35 +543,12 @@ void MainWindow::initScatterTab() {
   scatter_tab_group_ = new QButtonGroup(ui_->scatterTabFrame);
   ui_->scatterTabLayout->addWidget(scatter_tab_add_btn_);
 
-  insertScatterTab();
+  addScatter();
 
-  connect(scatter_tab_add_btn_, &QToolButton::clicked, this, &MainWindow::insertScatterTab);
-}
-
-
-void MainWindow::insertScatterTab() {
-  // Insert button
-  int current_item_cnt = ui_->scatterTabLayout->count();
-  auto btn = createScatterTab();
-  ui_->scatterTabLayout->insertWidget(current_item_cnt - 1, btn);
-  scatter_tab_group_->addButton(btn);
-  btn->setChecked(true);
-
-  // Insert context
-  float prob = static_cast<float>(getScatterProb());
-  project_context_->multi_scatter_info_.emplace_back(prob);
-
-  updateScatterTabs();
-
-  connect(btn, &IconButton::closeTab, this, [=] {
-    auto anim = new QPropertyAnimation(btn, "maximumWidth");
-    anim->setStartValue(btn->geometry().width());
-    anim->setEndValue(0);
-    anim->setDuration(200);
-    anim->setTargetObject(btn);
-    anim->start(QAbstractAnimation::DeleteWhenStopped);
-
-    connect(anim, &QPropertyAnimation::finished, this, &MainWindow::updateScatterTabs);
+  connect(scatter_tab_add_btn_, &QToolButton::clicked, this, &MainWindow::addScatter);
+  connect(scatter_tab_group_, QOverload<int, bool>::of(&QButtonGroup::buttonToggled), this, [=] {
+    refreshCrystalList();
+    updateCurrentCrystalInfo();
   });
 }
 
@@ -147,7 +576,7 @@ void MainWindow::initCrystalList() {
   // Add crystal
   connect(ui_->crystalsAddButton, &QToolButton::clicked, this, [=] {
     ui_->crystalsTable->setFocus();
-    insertCrystalItem();
+    addCrystal();
   });
 
   // Remove crystal
@@ -161,13 +590,7 @@ void MainWindow::initCrystalList() {
     if (index.column() != 2) {
       return;
     }
-    auto link = index.data(Qt::UserRole).toBool();
-    crystal_list_model_->setData(index, !link, Qt::UserRole);
-    if (link) {
-      crystal_list_model_->setData(index, Icons::getIcon(Icons::kUnlink), Qt::DecorationRole);
-    } else {
-      crystal_list_model_->setData(index, Icons::getIcon(Icons::kLink), Qt::DecorationRole);
-    }
+    toggleCrystalLinkState(index);
   });
 
   // Cursor. Use hand cursor for link/unlink icon
@@ -178,6 +601,12 @@ void MainWindow::initCrystalList() {
       ui_->crystalsTable->unsetCursor();
     }
   });
+
+  // Choose item
+  connect(table, &QTableView::clicked, this, &MainWindow::updateCurrentCrystalInfo);
+
+  // Item data changed
+  connect(crystal_list_model_, &QStandardItemModel::dataChanged, this, &MainWindow::updateCrystalData);
 }
 
 
@@ -231,68 +660,44 @@ void MainWindow::initCrystalInfoPanel() {
   ui_->axisAzimuthTypeComboBox->addItem(tr("Gaussian"), static_cast<int>(Math::Distribution::kGaussian));
 
   updateCurrentCrystalInfo();
+
+  connect(ui_->crystalTypeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [=](int index) {
+    auto type = static_cast<CrystalType>(ui_->crystalTypeComboBox->itemData(index, Qt::UserRole).toInt());
+    switch (type) {
+      case CrystalType::kPrism:
+        // TODO
+        break;
+      case CrystalType::kPyramid:
+        // TODO
+        break;
+      default:
+        break;
+    }
+  });
 }
 
 
-void MainWindow::insertCrystalItem() {
-  // Context data
-  project_context_->SetCrystal(current_crystal_id_, IceHalo::Crystal::CreateHexPrism(1.6f));
-
-  // UI item
-  auto item_check = new QStandardItem();
-  auto item_name = new QStandardItem(tr("Crystal %1").arg(current_crystal_id_));
-  auto item_link = new QStandardItem();
-  auto item_pop = new QStandardItem(tr("%1").arg(kDefaultPopulation));
-
-  item_check->setCheckable(true);
-  item_check->setEditable(false);
-  item_check->setData(Qt::Unchecked, Qt::CheckStateRole);
-  item_check->setTextAlignment(Qt::AlignCenter);
-  item_link->setEditable(false);
-  item_link->setData(Icons::getIcon(Icons::kLink), Qt::DecorationRole);
-  item_link->setData(true, Qt::UserRole);
-  item_name->setEditable(true);
-  item_name->setData(current_crystal_id_, Qt::UserRole);
-  item_pop->setEditable(true);
-
-  auto row_count = crystal_list_model_->rowCount();
-  crystal_list_model_->setItem(row_count, 0, item_check);
-  crystal_list_model_->setItem(row_count, 1, item_name);
-  crystal_list_model_->setItem(row_count, 2, item_link);
-  crystal_list_model_->setItem(row_count, 3, item_pop);
-
-  auto table = ui_->crystalsTable;
-  table->selectRow(row_count);
-
-  current_crystal_id_++;
-
-  updateCurrentCrystalInfo();
-}
-
-
-void MainWindow::removeCurrentCrystal() {
-  auto table = ui_->crystalsTable;
-  auto index = table->currentIndex();
-  auto curr_row = index.row();
-  auto crystal_id = crystal_list_model_->item(curr_row, 1)->data(Qt::UserRole).toInt();
-
-  // Context data
-  project_context_->RemoveCrystal(crystal_id);
-
-  // UI item
-  if (!index.isValid()) {
+void MainWindow::setCrystalPanelEnabled(bool enable) {
+  if (!crystal_info_layout_) {
     return;
   }
 
-  auto row_count = crystal_list_model_->rowCount();
-  crystal_list_model_->removeRow(curr_row);
-  if (curr_row == row_count - 1) {
-    table->selectRow(curr_row - 1);
-  } else {
-    table->selectRow(curr_row);
+  for (int i = 0; i < crystal_info_layout_->count(); i++) {
+    auto item = crystal_info_layout_->itemAt(i);
+    if (item && item->widget()) {
+      item->widget()->setEnabled(enable);
+    }
   }
+}
 
-  updateCurrentCrystalInfo();
+
+QString MainWindow::getScatterTabText(int idx) {
+  return tr("  Scatter %1").arg(idx);
+}
+
+
+QString MainWindow::getScatterProbText(double prob) {
+  return tr("Probability: %1").arg(prob, 0, 'f', 2);
 }
 
 
@@ -311,204 +716,66 @@ QToolButton* MainWindow::createScatterAddButton() {
 }
 
 
-void MainWindow::enableFilterSettings(bool enable) {
-  ui_->specificRadioButton->setEnabled(enable);
-  ui_->generalRadioButton->setEnabled(enable);
-  ui_->symBCheckBox->setEnabled(enable);
-  ui_->symDCheckBox->setEnabled(enable);
-  ui_->symPCheckBox->setEnabled(enable);
-}
-
-
-void MainWindow::updateTotalRays(int ray_num) {
-  size_t init_ray_num = static_cast<size_t>(ray_num);
-  project_context_->SetInitRayNum(init_ray_num);
-  qDebug() << "Updating total ray number:" << ray_num;
-}
-
-
-void MainWindow::updateWavelength() {
-  using WaveLengthInfo = IceHalo::ProjectContext::WavelengthInfo;
-  int curr_idx = ui_->wavelengthComboBox->currentIndex();
-  auto& wl_data = getWavelengthData()[curr_idx];
-  if (wl_data.customized_) {
-    // TODO
-  }
-
-  qDebug() << "Updating wavelength:";
-  project_context_->wavelengths_.clear();
-  for (const auto& wl : wl_data.info_) {
-    qDebug().nospace() << "  wavelength: " << wl.wavelength << ", weight: " << wl.weight;
-    project_context_->wavelengths_.emplace_back(WaveLengthInfo{ wl.wavelength, wl.weight });
-  }
-}
-
-
-void MainWindow::updateRayHitsNum(int n) {
-  project_context_->SetRayHitNum(n);
-  qDebug() << "Updating ray hits number:" << n;
-}
-
-
-void MainWindow::updateSunAltitude(const QString& altitude_txt) {
-  auto widget = ui_->sunAltitudeEdit;
-  auto& ctx = project_context_->sun_ctx_;
-  int pos;
-  QString txt_cpy = altitude_txt;
-  if (widget->validator()->validate(txt_cpy, pos) != QValidator::Acceptable) {
-    QString value = QString::asprintf("%.1f", static_cast<double>(ctx.GetSunAltitude()));
-    widget->setText(value);
-  } else {
-    ctx.SetSunAltitude(txt_cpy.toFloat());
-  }
-  qDebug() << "Updating sun altitude:" << altitude_txt;
-}
-
-
-void MainWindow::updateSunDiameterType(int index) {
-  double d = ui_->sunDiameterComboBox->itemData(index).toDouble();
-  project_context_->sun_ctx_.SetSunDiameter(static_cast<float>(d));
-  QString d_txt = QString::asprintf("Sun diameter: %.1f°", d);
-  ui_->sunDiameterLabel->setText(d_txt);
-  qDebug() << "Updating sun diameter:" << d_txt;
-}
-
-
-void MainWindow::updateScatterTabs() {
-  int tab_cnt = ui_->scatterTabLayout->count() - 1;
-  if (tab_cnt <= 0) {
-    return;
-  }
-
-  std::vector<IceHalo::MultiScatterContext> new_multi_scatter_ctx;
-  std::vector<bool> tab_visible(static_cast<size_t>(tab_cnt), true);
-
-  // Remove invisible tabs
-  bool update_check = false;  // If a checked tab is removed, then the next tab will be checked.
-  bool tab_removed = false;
-  for (int i = 0; i < tab_cnt; i++) {
-    auto tab = static_cast<IconButton*>(ui_->scatterTabLayout->itemAt(i)->widget());
-    if (tab->geometry().width() > 0) {  // Normal tabs
-      if (update_check) {
-        tab->setChecked(true);
-        update_check = false;
-      }
-      continue;
-    }
-
-    // Tabs to be removed
-    tab_removed = true;
-    tab_visible[static_cast<size_t>(i)] = false;
-    if (scatter_tab_group_->checkedButton() == tab) {
-      update_check = true;
-    }
-    ui_->scatterTabLayout->removeWidget(tab);
-    tab->deleteLater();
-    scatter_tab_group_->removeButton(tab);
-    i--;  // Ugly... There is no iterator-like thing in QLayout
-  }
-
-  // Refresh tab text
-  tab_cnt = ui_->scatterTabLayout->count() - 1;
-  for (int i = 0; i < tab_cnt; i++) {
-    QString tab_txt = tr("  Scatter %1").arg(i + 1);
-    auto tab = static_cast<IconButton*>(ui_->scatterTabLayout->itemAt(i)->widget());
-    tab->setText(tab_txt);
-    tab->enableIcon(true);
-  }
-
-  // Refresh context
-  if (tab_removed) {
-    for (size_t i = 0; i < tab_visible.size(); i++) {
-      if (tab_visible[i]) {
-        new_multi_scatter_ctx.emplace_back(project_context_->multi_scatter_info_[i]);
-      }
-    }
-    project_context_->multi_scatter_info_.swap(new_multi_scatter_ctx);
-  }
-
-  // If only one tab, disable close icon
-  if (tab_cnt <= 1 && ui_->scatterTabLayout->itemAt(0)) {
-    auto tab = static_cast<IconButton*>(ui_->scatterTabLayout->itemAt(0)->widget());
-    tab->enableIcon(false);
-  }
-
-  // If no checked (the right most checked tab is removed), check the first one
-  if (!scatter_tab_group_->checkedButton()) {
-    auto tab = static_cast<IconButton*>(ui_->scatterTabLayout->itemAt(0)->widget());
-    tab->setChecked(true);
-  }
-}
-
-
-void MainWindow::updateScatterProb(int v) {
-  double prob = v / 100.0;
-  QString prob_str = tr("Probability: %1").arg(prob, 0, 'f', 2);
-  ui_->scatterProbLabel->setText(prob_str);
-  qDebug() << "Updating scatter prob: " << v << ", " << prob_str;
-}
-
-
-void MainWindow::updateCurrentCrystalInfo() {
-  auto table = ui_->crystalsTable;
-  auto curr_index = table->currentIndex();
-  auto curr_row = curr_index.row();
-
-  if (!curr_index.isValid()) {
-    return;
-  }
-
-  // Get data from context
-  auto crystal_id = crystal_list_model_->item(curr_row, 1)->data(Qt::UserRole).toInt();
-  auto crystal_ctx = project_context_->GetCrystalContext(crystal_id);
-
-  // Update crystal type
-  // TODO
-}
-
-
-void MainWindow::setCrystalPanelEnabled(bool enable) {
-  if (!crystal_info_layout_) {
-    return;
-  }
-
-  for (int i = 0; i < crystal_info_layout_->count(); i++) {
-    auto item = crystal_info_layout_->itemAt(i);
-    if (item && item->widget()) {
-      item->widget()->setEnabled(enable);
-    }
-  }
-}
-
-
-QVector<WavelengthData>& MainWindow::getWavelengthData() {
-  static QVector<WavelengthData> wl_data;
-  if (wl_data.empty()) {
-    WavelengthData wl_sun(tr("sun light"));
-    wl_sun.icon_ = QIcon(":/icons/icon_wl_sun_dark.png");
-    wl_sun.info_ << IceHalo::ProjectContext::WavelengthInfo{ 420, 0.9122f };
-    wl_sun.info_ << IceHalo::ProjectContext::WavelengthInfo{ 460, 0.9969f };
-    wl_sun.info_ << IceHalo::ProjectContext::WavelengthInfo{ 500, 1.0381f };
-    wl_sun.info_ << IceHalo::ProjectContext::WavelengthInfo{ 540, 1.0440f };
-    wl_sun.info_ << IceHalo::ProjectContext::WavelengthInfo{ 580, 1.0237f };
-    wl_sun.info_ << IceHalo::ProjectContext::WavelengthInfo{ 620, 0.9851f };
-    wl_data.append(std::move(wl_sun));
-
-    WavelengthData wl_eq(tr("equal energy"));
-    wl_eq.icon_ = QIcon(":/icons/icon_wl_eq_dark.png");
-    wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 420, 1.0f };
-    wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 460, 1.0f };
-    wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 500, 1.0f };
-    wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 540, 1.0f };
-    wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 580, 1.0f };
-    wl_eq.info_ << IceHalo::ProjectContext::WavelengthInfo{ 620, 1.0f };
-    wl_data.append(std::move(wl_eq));
-  }
-
-  return wl_data;
-}
-
-
 double MainWindow::getScatterProb() {
-  return ui_->scatterProbSlider->value() / 100.0;
+  return getScatterProb(ui_->scatterProbSlider->value());
+}
+
+
+double MainWindow::getScatterProb(int v) {
+  return std::max(std::min(v, ui_->scatterProbSlider->maximum()), ui_->scatterProbSlider->minimum()) / 100.0;
+}
+
+
+MultiScatterData* MainWindow::getCurrentScatterData() {
+  auto checked_btn = scatter_tab_group_->checkedButton();
+  auto btn_cnt = ui_->scatterTabLayout->count() - 1;
+  for (int i = 0; i < btn_cnt; i++) {
+    if (ui_->scatterTabLayout->itemAt(i)->widget() == checked_btn) {
+      return &gui_data_.multi_scatter_data_.at(static_cast<size_t>(i));
+    }
+  }
+
+  return nullptr;
+}
+
+
+MultiScatterData::CrystalItemData* MainWindow::getCurrentCrystalItemData() {
+  auto index = ui_->crystalsTable->currentIndex();
+  return getCrystalItemData(index);
+}
+
+
+MultiScatterData::CrystalItemData* MainWindow::getCrystalItemData(const QModelIndex& index) {
+  if (!index.isValid()) {
+    return nullptr;
+  }
+
+  auto row = static_cast<size_t>(index.row());
+  auto scatter_data = getCurrentScatterData();
+  if (!scatter_data || row >= scatter_data->crystals_.size()) {
+    return nullptr;
+  }
+  return &scatter_data->crystals_.at(row);
+}
+
+
+CrystalData* MainWindow::getCurrentCrystalData() {
+  auto index = ui_->crystalsTable->currentIndex();
+  return getCrystalData(index);
+}
+
+
+CrystalData* MainWindow::getCrystalData(const QModelIndex& index) {
+  if (!index.isValid()) {
+    return nullptr;
+  }
+
+  auto crystal_item_data = getCrystalItemData(index);
+  if (!crystal_item_data) {
+    return nullptr;
+  }
+  if (gui_data_.crystal_store_.count(crystal_item_data->crystal_id) == 0) {
+    return nullptr;
+  }
+  return &gui_data_.crystal_store_.at(crystal_item_data->crystal_id);
 }

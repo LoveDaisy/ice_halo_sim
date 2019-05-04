@@ -79,7 +79,7 @@ void IconButton::mouseMoveEvent(QMouseEvent* e) {
 
 void IconButton::mouseReleaseEvent(QMouseEvent* e) {
   if (icon_enabled_ && isOnIcon(e->x())) {
-    emit closeTab();
+    emit closeTab(this);
   } else {
     QToolButton::mouseReleaseEvent(e);
   }

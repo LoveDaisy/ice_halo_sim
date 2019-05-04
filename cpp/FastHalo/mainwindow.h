@@ -11,24 +11,12 @@
 #include <QtGui/QScreen>
 
 #include "context.h"
+#include "guidata.h"
 #include "iconbutton.h"
 
 namespace Ui {
 class MainWindow;
 }
-
-
-class WavelengthData {
- public:
-  WavelengthData() : name_(""), customized_(false), icon_(QIcon()) {}
-  explicit WavelengthData(const QString& name, bool customized = false)
-      : name_(name), customized_(customized), icon_(QIcon()) {}
-
-  const QString name_;
-  const bool customized_;
-  QVector<IceHalo::ProjectContext::WavelengthInfo> info_;
-  QIcon icon_;
-};
 
 
 class MainWindow : public QMainWindow {
@@ -40,20 +28,26 @@ class MainWindow : public QMainWindow {
 
  private slots:
   // Basic settings group
-  void updateRayHitsNum(int n);
-  void updateSunAltitude(const QString& altitude_txt);
-  void updateSunDiameterType(int index);
-  void updateTotalRays(int ray_num);
-  void updateWavelength();
+  void updateRayHitsNum(int n);                         // Update model
+  void updateSunAltitude(const QString& altitude_txt);  // Update model
+  void updateSunDiameter(int index);                    // Update model
+  void updateTotalRays(int ray_num);                    // Update model
+  void updateWavelength(int index);                     // Update model
 
-  // Scatter
-  void insertScatterTab();        // Scatter tab
-  void updateScatterTabs();       // Scatter tab
-  void updateScatterProb(int v);  // Scatter prob
+  // Scatter tabs
+  void addScatter();                       // Update model and view
+  void removeScatter(IconButton* sender);  // Update model and view
 
-  // Crystals
-  void insertCrystalItem();
-  void removeCurrentCrystal();
+  // Scatter probability
+  void updateScatterProb(int v);  // Update model
+  void refreshScatterProb();      // Update view
+
+  // Crystal list
+  void updateCrystalData(const QModelIndex& index);       // Update model
+  void addCrystal();                                      // Update model and view
+  void removeCurrentCrystal();                            // Update model and view
+  void toggleCrystalLinkState(const QModelIndex& index);  // Update model and view
+  void refreshCrystalList();                              // Update view
 
   // Crystal info
   void updateCurrentCrystalInfo();
@@ -70,10 +64,18 @@ class MainWindow : public QMainWindow {
 
   void setCrystalPanelEnabled(bool enable);
 
+  QString getScatterTabText(int idx);
+  QString getScatterProbText(double prob);
   IconButton* createScatterTab();
   QToolButton* createScatterAddButton();
 
   double getScatterProb();
+  double getScatterProb(int v);
+  MultiScatterData* getCurrentScatterData();
+  MultiScatterData::CrystalItemData* getCurrentCrystalItemData();
+  MultiScatterData::CrystalItemData* getCrystalItemData(const QModelIndex& index);
+  CrystalData* getCurrentCrystalData();
+  CrystalData* getCrystalData(const QModelIndex& index);
 
   Ui::MainWindow* ui_;
 
@@ -87,12 +89,9 @@ class MainWindow : public QMainWindow {
   QStandardItemModel* crystal_list_model_;
 
   IceHalo::ProjectContextPtr project_context_;
-
-  static constexpr int kMaxInitRayNum = 1000000;
-  static constexpr int kDefaultPopulation = 100;
+  GuiData gui_data_;
 
   static int current_crystal_id_;
-  static QVector<WavelengthData>& getWavelengthData();
 
   using LensType_t = std::underlying_type<IceHalo::LensType>::type;
   using VisibleRange_t = std::underlying_type<IceHalo::VisibleRange>::type;

@@ -20,7 +20,7 @@ class IconButton : public QToolButton {
 
  signals:
   void hoverOnIcon(bool on = false);
-  void closeTab();
+  void closeTab(IconButton* sender);
 
  public slots:
   void updateIcon(bool on_icon);

@@ -29,7 +29,8 @@ HEADERS += \
     icons.h \
     iconbutton.h \
     previewwindow.h \
-    spinboxdelegate.h
+    spinboxdelegate.h \
+    guidata.h
 
 SOURCES += \
     main.cpp \
@@ -45,7 +46,8 @@ SOURCES += \
     icons.cpp \
     iconbutton.cpp \
     previewwindow.cpp \
-    spinboxdelegate.cpp
+    spinboxdelegate.cpp \
+    guidata.cpp
 
 INCLUDEPATH += $$CPP_PROJ_ROOT/src
 
