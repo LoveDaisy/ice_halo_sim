@@ -36,21 +36,6 @@ void MainWindow::updateRayHitsNum(int n) {
 }
 
 
-void MainWindow::updateSunAltitude(const QString& altitude_txt) {
-  qDebug() << "updateSunAltitude()";
-  auto widget = ui_->sunAltitudeEdit;
-  int pos;
-  QString txt_cpy = altitude_txt;
-  if (widget->validator()->validate(txt_cpy, pos) != QValidator::Acceptable) {
-    QString value = QString::asprintf("%.1f", static_cast<double>(gui_data_.sun_altitude_));
-    widget->setText(value);
-  } else {
-    gui_data_.sun_altitude_ = txt_cpy.toFloat();
-  }
-  qDebug() << "Updating sun altitude:" << altitude_txt;
-}
-
-
 void MainWindow::updateSunDiameter(int index) {
   qDebug() << "updateSunDiameter()";
   double d = ui_->sunDiameterComboBox->itemData(index).toDouble();
@@ -465,7 +450,7 @@ void MainWindow::refreshCrystalInfo() {
     return;
   }
 
-  // Get data from context
+  // Get current data
   auto crystal_data = getCrystalData(curr_index);
   auto crystal_item_data = getCrystalItemData(curr_index);
   if (!crystal_data || !crystal_item_data) {
@@ -490,22 +475,24 @@ void MainWindow::refreshCrystalInfo() {
   }
 
   // Update crystal height
+  crystal_height_edit_->setDataSource(crystal_data->height_ + 0);
   auto height = crystal_data->height_[0];
-  auto height_edit = ui_->crystalHeightEdit;
-  height_edit->setText(QString::asprintf("%.1f", static_cast<double>(height)));
+  crystal_height_edit_->setText(crystal_height_edit_->formatValue(height));
 
   // Update pyramid height panel
+  pyramid_upper_height_edit_->setDataSource(crystal_data->height_ + 1);
+  pyramid_lower_height_edit_->setDataSource(crystal_data->height_ + 2);
   auto pyramid_height_panel = ui_->pyramidParameterPanel;
   if (crystal_data->type_ == IceHalo::CrystalType::kPrism) {
     pyramid_height_panel->setEnabled(false);
-    ui_->upperHeightEdit->setText("0.0");
-    ui_->lowerHeightEdit->setText("0.0");
+    pyramid_upper_height_edit_->setText("0.0");
+    pyramid_lower_height_edit_->setText("0.0");
   } else if (crystal_data->type_ == IceHalo::CrystalType::kPyramid) {
     pyramid_height_panel->setEnabled(crystal_item_data->enabled);
-    ui_->upperHeightEdit->setText(
-        QString::asprintf("%.1f", static_cast<double>(crystal_data->height_[1])));
-    ui_->lowerHeightEdit->setText(
-        QString::asprintf("%.1f", static_cast<double>(crystal_data->height_[2])));
+    pyramid_upper_height_edit_->setText(
+        pyramid_upper_height_edit_->formatValue(crystal_data->height_[1]));
+    pyramid_lower_height_edit_->setText(
+        pyramid_lower_height_edit_->formatValue(crystal_data->height_[2]));
   }
   QComboBox* combos[] = {
     ui_->upperMiller1ComboBox,  // upper 1
@@ -560,10 +547,10 @@ void MainWindow::initBasicSettings() {
   updateSunDiameter(0);
 
   // Sun altitude
-  QString altitude_txt = QString::number(static_cast<int>(gui_data_.sun_altitude_));
-  ui_->sunAltitudeEdit->setValidator(new QDoubleValidator(-90, 90, 1));
-  ui_->sunAltitudeEdit->setText(altitude_txt);
-  updateSunAltitude(altitude_txt);
+  sun_altitude_edit_ = new FloatLineEdit(-90, 90, 1);
+  ui_->basicSettingLayout->addWidget(sun_altitude_edit_, 0, 1);
+  sun_altitude_edit_->setText(sun_altitude_edit_->formatValue(gui_data_.sun_altitude_));
+  sun_altitude_edit_->setDataSource(&gui_data_.sun_altitude_);
 
   // Max hits
   auto max_hits_widget = ui_->maxHitsSpinBox;
@@ -587,7 +574,6 @@ void MainWindow::initBasicSettings() {
 
   connect(ui_->sunDiameterComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           &MainWindow::updateSunDiameter);
-  connect(ui_->sunAltitudeEdit, &QLineEdit::textChanged, this, &MainWindow::updateSunAltitude);
   connect(ui_->maxHitsSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this,
           &MainWindow::updateRayHitsNum);
   connect(ui_->rayNumberSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this,
@@ -673,6 +659,16 @@ void MainWindow::initCrystalList() {
 void MainWindow::initCrystalInfoPanel() {
   using namespace IceHalo;
   using Dist = Math::Distribution;
+
+  // Height edit
+  crystal_height_edit_ = new FloatLineEdit(0, 10, 1);
+  ui_->crystalBasicLayout->addWidget(crystal_height_edit_, 1, 1);
+
+  // Pyramid height edits
+  pyramid_lower_height_edit_ = new FloatLineEdit(0, 1, 1);
+  pyramid_upper_height_edit_ = new FloatLineEdit(0, 1, 1);
+  ui_->pyramidHeightLayout->addWidget(pyramid_upper_height_edit_, 0, 1);
+  ui_->pyramidHeightLayout->addWidget(pyramid_lower_height_edit_, 0, 4);
 
   // 3D window and widget
   view3d_ = new Qt3DExtras::Qt3DWindow();

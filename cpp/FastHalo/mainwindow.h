@@ -11,6 +11,7 @@
 #include <QtGui/QScreen>
 
 #include "context.h"
+#include "floatlineedit.h"
 #include "guidata.h"
 #include "iconbutton.h"
 
@@ -28,11 +29,10 @@ class MainWindow : public QMainWindow {
 
  private slots:
   // Basic settings group
-  void updateRayHitsNum(int n);                         // Update model
-  void updateSunAltitude(const QString& altitude_txt);  // Update model
-  void updateSunDiameter(int index);                    // Update model
-  void updateTotalRays(int ray_num);                    // Update model
-  void updateWavelength(int index);                     // Update model
+  void updateRayHitsNum(int n);       // Update model
+  void updateSunDiameter(int index);  // Update model
+  void updateTotalRays(int ray_num);  // Update model
+  void updateWavelength(int index);   // Update model
 
   // Scatter tabs
   void addScatter();                       // Update model and view
@@ -50,9 +50,8 @@ class MainWindow : public QMainWindow {
   void refreshCrystalList();                              // Update view
 
   // Crystal info
-  void updateCrystalType(int combo_idx);                // Update model
-  void updateCrystalHeight(const QString& height_txt);  // Update model
-  void refreshCrystalInfo();                            // Update view
+  void updateCrystalType(int combo_idx);  // Update model
+  void refreshCrystalInfo();              // Update view
 
   // Filter settings group
   void enableFilterSettings(bool enable);
@@ -81,12 +80,17 @@ class MainWindow : public QMainWindow {
 
   Ui::MainWindow* ui_;
 
+  FloatLineEdit* sun_altitude_edit_;
+
   QButtonGroup* scatter_tab_group_;
   QToolButton* scatter_tab_add_btn_;
 
   QGridLayout* crystal_info_layout_;
   Qt3DExtras::Qt3DWindow* view3d_;
   QWidget* crystal_preview_widget_;
+  FloatLineEdit* crystal_height_edit_;
+  FloatLineEdit* pyramid_upper_height_edit_;
+  FloatLineEdit* pyramid_lower_height_edit_;
 
   QStandardItemModel* crystal_list_model_;
 

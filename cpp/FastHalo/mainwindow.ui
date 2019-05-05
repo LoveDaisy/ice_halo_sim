@@ -306,19 +306,6 @@
        <bool>false</bool>
       </property>
       <layout class="QGridLayout" name="basicSettingLayout">
-       <item row="0" column="1">
-        <widget class="QLineEdit" name="sunAltitudeEdit">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-         <property name="text">
-          <string>20</string>
-         </property>
-        </widget>
-       </item>
        <item row="3" column="0">
         <widget class="QLabel" name="rayNumberLabel">
          <property name="text">
@@ -463,8 +450,8 @@
         <rect>
          <x>10</x>
          <y>30</y>
-         <width>150</width>
-         <height>111</height>
+         <width>162</width>
+         <height>76</height>
         </rect>
        </property>
        <property name="sizePolicy">
@@ -481,11 +468,11 @@
        </property>
        <property name="maximumSize">
         <size>
-         <width>180</width>
+         <width>200</width>
          <height>16777215</height>
         </size>
        </property>
-       <layout class="QGridLayout" name="gridLayout_4">
+       <layout class="QGridLayout" name="crystalBasicLayout">
         <property name="leftMargin">
          <number>6</number>
         </property>
@@ -498,13 +485,6 @@
         <property name="bottomMargin">
          <number>6</number>
         </property>
-        <item row="1" column="0">
-         <widget class="QLabel" name="crystalHeightLabel">
-          <property name="text">
-           <string>Height:</string>
-          </property>
-         </widget>
-        </item>
         <item row="0" column="0">
          <widget class="QLabel" name="crystalTypeLabel">
           <property name="text">
@@ -512,18 +492,15 @@
           </property>
          </widget>
         </item>
-        <item row="1" column="1" colspan="2">
-         <widget class="QLineEdit" name="crystalHeightEdit">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
+        <item row="0" column="1">
+         <widget class="QComboBox" name="crystalTypeComboBox"/>
+        </item>
+        <item row="1" column="0">
+         <widget class="QLabel" name="crystalHeightLabel">
+          <property name="text">
+           <string>Height:</string>
           </property>
          </widget>
-        </item>
-        <item row="0" column="1" colspan="2">
-         <widget class="QComboBox" name="crystalTypeComboBox"/>
         </item>
        </layout>
       </widget>
@@ -550,11 +527,11 @@
        </property>
        <property name="maximumSize">
         <size>
-         <width>180</width>
+         <width>200</width>
          <height>16777215</height>
         </size>
        </property>
-       <layout class="QGridLayout" name="gridLayout_5">
+       <layout class="QGridLayout" name="crystalAxisLayout">
         <property name="leftMargin">
          <number>6</number>
         </property>
@@ -1200,7 +1177,7 @@
          <height>0</height>
         </size>
        </property>
-       <layout class="QGridLayout" name="gridLayout">
+       <layout class="QGridLayout" name="pyramidHeightLayout">
         <property name="leftMargin">
          <number>6</number>
         </property>
@@ -1220,16 +1197,6 @@
           </property>
          </widget>
         </item>
-        <item row="0" column="1">
-         <widget class="QLineEdit" name="upperHeightEdit">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-         </widget>
-        </item>
         <item row="0" column="2" rowspan="3">
          <widget class="Line" name="line_3">
           <property name="orientation">
@@ -1241,16 +1208,6 @@
          <widget class="QLabel" name="lowerHeightLabel">
           <property name="text">
            <string>Lower h:</string>
-          </property>
-         </widget>
-        </item>
-        <item row="0" column="4">
-         <widget class="QLineEdit" name="lowerHeightEdit">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
           </property>
          </widget>
         </item>
