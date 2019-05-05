@@ -17,7 +17,8 @@ int MainWindow::current_crystal_id_ = 1;
 
 
 MainWindow::MainWindow(QWidget* parent)
-    : QMainWindow(parent), ui_(new Ui::MainWindow), project_context_(IceHalo::ProjectContext::CreateDefault()) {
+    : QMainWindow(parent), ui_(new Ui::MainWindow),
+      project_context_(IceHalo::ProjectContext::CreateDefault()) {
   ui_->setupUi(this);
   initUi();
 }
@@ -96,10 +97,11 @@ void MainWindow::addScatter() {
   for (const auto& kv : crystals) {
     curr_scatter.crystals_.emplace_back(kv.first);
   }
-  std::sort(curr_scatter.crystals_.begin(), curr_scatter.crystals_.end(),
-            [=](const MultiScatterData::CrystalItemData& a, const MultiScatterData::CrystalItemData& b) {
-              return a.crystal_id < b.crystal_id;
-            });
+  std::sort(
+      curr_scatter.crystals_.begin(), curr_scatter.crystals_.end(),
+      [=](const MultiScatterData::CrystalItemData& a, const MultiScatterData::CrystalItemData& b) {
+        return a.crystal_id < b.crystal_id;
+      });
   for (size_t i = 0; i < curr_scatter.crystals_.size(); i++) {
     auto& c0 = first_scatter.crystals_.at(i);
     auto& c1 = curr_scatter.crystals_.at(i);
@@ -263,7 +265,7 @@ void MainWindow::addCrystal() {
 
   current_crystal_id_++;
 
-  updateCurrentCrystalInfo();
+  refreshCrystalInfo();
 }
 
 
@@ -300,7 +302,7 @@ void MainWindow::removeCurrentCrystal() {
     table->selectRow(curr_row);
   }
 
-  updateCurrentCrystalInfo();
+  refreshCrystalInfo();
 }
 
 
@@ -342,8 +344,9 @@ void MainWindow::refreshCrystalList() {
     item = crystal_list_model_->item(i, 2);
     if (item->data(Qt::UserRole) != crystal_item_data.linked) {
       item->setData(crystal_item_data.linked, Qt::UserRole);
-      item->setData(crystal_item_data.linked ? Icons::getIcon(Icons::kLink) : Icons::getIcon(Icons::kUnlink),
-                    Qt::DecorationRole);
+      item->setData(
+          crystal_item_data.linked ? Icons::getIcon(Icons::kLink) : Icons::getIcon(Icons::kUnlink),
+          Qt::DecorationRole);
     }
 
     // refresh population
@@ -428,8 +431,31 @@ void MainWindow::updateCrystalData(const QModelIndex& index) {
 }
 
 
-void MainWindow::updateCurrentCrystalInfo() {
-  qDebug() << "updateCurrentCrystalInfo()";
+void MainWindow::updateCrystalType(int combo_idx) {
+  qDebug() << "updateCrystalType()";
+
+  // Update model data
+  auto type_combo_box = ui_->crystalTypeComboBox;
+  auto type =
+      static_cast<IceHalo::CrystalType>(type_combo_box->itemData(combo_idx, Qt::UserRole).toInt());
+  auto crystal_data = getCurrentCrystalData();
+  if (crystal_data) {
+    crystal_data->type_ = type;
+  }
+
+  // Update UI widget
+  if (type == IceHalo::CrystalType::kPyramid) {
+    ui_->pyramidParameterPanel->setEnabled(true);
+  } else if (type == IceHalo::CrystalType::kPrism) {
+    ui_->pyramidParameterPanel->setEnabled(false);
+  } else {
+    qWarning() << "Invalid crystal type!";
+  }
+}
+
+
+void MainWindow::refreshCrystalInfo() {
+  qDebug() << "refreshCrystalInfo()";
 
   auto table = ui_->crystalsTable;
   auto curr_index = table->currentIndex();
@@ -446,26 +472,57 @@ void MainWindow::updateCurrentCrystalInfo() {
     return;
   }
 
-  // Update crystal type
-  auto crystal_type = crystal_data->type_;
-  auto combo_box = ui_->crystalTypeComboBox;
-  for (int i = 0; i < combo_box->count(); i++) {
-    if (combo_box->itemData(i, Qt::UserRole).toInt() == static_cast<int>(crystal_type)) {
-      combo_box->setCurrentIndex(i);
-      break;
-    }
-  }
-
-  // Update crystal height
-
-  // TODO
-
   // Update enabled
   if (crystal_item_data->enabled) {
     setCrystalPanelEnabled(true);
   } else {
     setCrystalPanelEnabled(false);
   }
+
+  // Update crystal type
+  auto crystal_type = crystal_data->type_;
+  auto type_combo_box = ui_->crystalTypeComboBox;
+  for (int i = 0; i < type_combo_box->count(); i++) {
+    if (type_combo_box->itemData(i, Qt::UserRole) == static_cast<int>(crystal_type)) {
+      type_combo_box->setCurrentIndex(i);
+      break;
+    }
+  }
+
+  // Update crystal height
+  auto height = crystal_data->height_[0];
+  auto height_edit = ui_->crystalHeightEdit;
+  height_edit->setText(QString::asprintf("%.1f", static_cast<double>(height)));
+
+  // Update pyramid height panel
+  auto pyramid_height_panel = ui_->pyramidParameterPanel;
+  if (crystal_data->type_ == IceHalo::CrystalType::kPrism) {
+    pyramid_height_panel->setEnabled(false);
+    ui_->upperHeightEdit->setText("0.0");
+    ui_->lowerHeightEdit->setText("0.0");
+  } else if (crystal_data->type_ == IceHalo::CrystalType::kPyramid) {
+    pyramid_height_panel->setEnabled(crystal_item_data->enabled);
+    ui_->upperHeightEdit->setText(
+        QString::asprintf("%.1f", static_cast<double>(crystal_data->height_[1])));
+    ui_->lowerHeightEdit->setText(
+        QString::asprintf("%.1f", static_cast<double>(crystal_data->height_[2])));
+  }
+  QComboBox* combos[] = {
+    ui_->upperMiller1ComboBox,  // upper 1
+    ui_->upperMiller2ComboBox,  // upper 2
+    ui_->lowerMiller1ComboBox,  // lower 1
+    ui_->lowerMiller2ComboBox,  // lower 2
+  };
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < combos[i]->count(); j++) {
+      if (combos[i]->itemData(j, Qt::UserRole) == crystal_data->miller_idx_[i]) {
+        combos[i]->setCurrentIndex(j);
+        break;
+      }
+    }
+  }
+
+  // TODO
 }
 
 
@@ -531,8 +588,10 @@ void MainWindow::initBasicSettings() {
   connect(ui_->sunDiameterComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           &MainWindow::updateSunDiameter);
   connect(ui_->sunAltitudeEdit, &QLineEdit::textChanged, this, &MainWindow::updateSunAltitude);
-  connect(ui_->maxHitsSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::updateRayHitsNum);
-  connect(ui_->rayNumberSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::updateTotalRays);
+  connect(ui_->maxHitsSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this,
+          &MainWindow::updateRayHitsNum);
+  connect(ui_->rayNumberSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this,
+          &MainWindow::updateTotalRays);
   connect(ui_->wavelengthComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           &MainWindow::updateWavelength);
 }
@@ -548,7 +607,7 @@ void MainWindow::initScatterTab() {
   connect(scatter_tab_add_btn_, &QToolButton::clicked, this, &MainWindow::addScatter);
   connect(scatter_tab_group_, QOverload<int, bool>::of(&QButtonGroup::buttonToggled), this, [=] {
     refreshCrystalList();
-    updateCurrentCrystalInfo();
+    refreshCrystalInfo();
   });
 }
 
@@ -603,15 +662,17 @@ void MainWindow::initCrystalList() {
   });
 
   // Choose item
-  connect(table, &QTableView::clicked, this, &MainWindow::updateCurrentCrystalInfo);
+  connect(table, &QTableView::clicked, this, &MainWindow::refreshCrystalInfo);
 
   // Item data changed
-  connect(crystal_list_model_, &QStandardItemModel::dataChanged, this, &MainWindow::updateCrystalData);
+  connect(crystal_list_model_, &QStandardItemModel::dataChanged, this,
+          &MainWindow::updateCrystalData);
 }
 
 
 void MainWindow::initCrystalInfoPanel() {
   using namespace IceHalo;
+  using Dist = Math::Distribution;
 
   // 3D window and widget
   view3d_ = new Qt3DExtras::Qt3DWindow();
@@ -652,28 +713,25 @@ void MainWindow::initCrystalInfoPanel() {
   ui_->crystalTypeComboBox->addItem(tr("Pyramid"), static_cast<int>(CrystalType::kPyramid));
 
   // Add data to axis type
-  ui_->axisZenithTypeComboBox->addItem(tr("Uniform"), static_cast<int>(Math::Distribution::kUniform));
-  ui_->axisZenithTypeComboBox->addItem(tr("Gaussian"), static_cast<int>(Math::Distribution::kGaussian));
-  ui_->axisRollTypeComboBox->addItem(tr("Uniform"), static_cast<int>(Math::Distribution::kUniform));
-  ui_->axisRollTypeComboBox->addItem(tr("Gaussian"), static_cast<int>(Math::Distribution::kGaussian));
-  ui_->axisAzimuthTypeComboBox->addItem(tr("Uniform"), static_cast<int>(Math::Distribution::kUniform));
-  ui_->axisAzimuthTypeComboBox->addItem(tr("Gaussian"), static_cast<int>(Math::Distribution::kGaussian));
+  ui_->axisZenithTypeComboBox->addItem(tr("Uniform"), static_cast<int>(Dist::kUniform));
+  ui_->axisZenithTypeComboBox->addItem(tr("Gaussian"), static_cast<int>(Dist::kGaussian));
+  ui_->axisRollTypeComboBox->addItem(tr("Uniform"), static_cast<int>(Dist::kUniform));
+  ui_->axisRollTypeComboBox->addItem(tr("Gaussian"), static_cast<int>(Dist::kGaussian));
+  ui_->axisAzimuthTypeComboBox->addItem(tr("Uniform"), static_cast<int>(Dist::kUniform));
+  ui_->axisAzimuthTypeComboBox->addItem(tr("Gaussian"), static_cast<int>(Dist::kGaussian));
 
-  updateCurrentCrystalInfo();
+  // Settings for Miller index
+  for (int i = CrystalData::kMinMillerIndex; i <= CrystalData::kMaxMillerIndex; i++) {
+    ui_->upperMiller1ComboBox->addItem(QString::number(i), i);
+    ui_->upperMiller2ComboBox->addItem(QString::number(i), i);
+    ui_->lowerMiller1ComboBox->addItem(QString::number(i), i);
+    ui_->lowerMiller2ComboBox->addItem(QString::number(i), i);
+  }
 
-  connect(ui_->crystalTypeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [=](int index) {
-    auto type = static_cast<CrystalType>(ui_->crystalTypeComboBox->itemData(index, Qt::UserRole).toInt());
-    switch (type) {
-      case CrystalType::kPrism:
-        // TODO
-        break;
-      case CrystalType::kPyramid:
-        // TODO
-        break;
-      default:
-        break;
-    }
-  });
+  refreshCrystalInfo();
+
+  connect(ui_->crystalTypeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          &MainWindow::updateCrystalType);
 }
 
 
@@ -722,7 +780,8 @@ double MainWindow::getScatterProb() {
 
 
 double MainWindow::getScatterProb(int v) {
-  return std::max(std::min(v, ui_->scatterProbSlider->maximum()), ui_->scatterProbSlider->minimum()) / 100.0;
+  v = std::max(std::min(v, ui_->scatterProbSlider->maximum()), ui_->scatterProbSlider->minimum());
+  return v / 100.0;
 }
 
 

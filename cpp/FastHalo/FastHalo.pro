@@ -30,7 +30,8 @@ HEADERS += \
     iconbutton.h \
     previewwindow.h \
     spinboxdelegate.h \
-    guidata.h
+    guidata.h \
+    floatlineedit.h
 
 SOURCES += \
     main.cpp \
@@ -47,7 +48,8 @@ SOURCES += \
     iconbutton.cpp \
     previewwindow.cpp \
     spinboxdelegate.cpp \
-    guidata.cpp
+    guidata.cpp \
+    floatlineedit.cpp
 
 INCLUDEPATH += $$CPP_PROJ_ROOT/src
 

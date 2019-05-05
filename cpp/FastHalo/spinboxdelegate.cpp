@@ -24,7 +24,8 @@ void SpinBoxDelegate::setEditorData(QWidget* editor, const QModelIndex& index) c
 }
 
 
-void SpinBoxDelegate::setModelData(QWidget* editor, QAbstractItemModel* model, const QModelIndex& index) const {
+void SpinBoxDelegate::setModelData(QWidget* editor, QAbstractItemModel* model,
+                                   const QModelIndex& index) const {
   QSpinBox* spinBox = static_cast<QSpinBox*>(editor);
   spinBox->interpretText();
   int value = spinBox->value();

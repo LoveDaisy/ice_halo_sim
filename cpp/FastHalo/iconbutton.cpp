@@ -6,7 +6,8 @@
 #include "icons.h"
 
 
-IconButton::IconButton(const QString& text, QWidget* parent) : QToolButton(parent), icon_enabled_(true) {
+IconButton::IconButton(const QString& text, QWidget* parent)
+    : QToolButton(parent), icon_enabled_(true) {
   setMouseTracking(true);
   setText(text);
   //  setIcon(Icons::getIcon(Icons::kCloseNormal));

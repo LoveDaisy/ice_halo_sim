@@ -50,7 +50,9 @@ class MainWindow : public QMainWindow {
   void refreshCrystalList();                              // Update view
 
   // Crystal info
-  void updateCurrentCrystalInfo();
+  void updateCrystalType(int combo_idx);                // Update model
+  void updateCrystalHeight(const QString& height_txt);  // Update model
+  void refreshCrystalInfo();                            // Update view
 
   // Filter settings group
   void enableFilterSettings(bool enable);
