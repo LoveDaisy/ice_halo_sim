@@ -37,7 +37,9 @@ CrystalData::CrystalData(int id)
       height_{ 0.0f },                                   // prism height, upper height, lower height
       miller_idx_{ 1, 1, 1, 1 },                         // upper1, upper2, lower1, lower2
       prism_dist_{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f }  // prism distances
-{}
+{
+  axis_.latitude_mean = 90;
+}
 
 
 MultiScatterData::MultiScatterData(float prob) : prob_(prob) {}

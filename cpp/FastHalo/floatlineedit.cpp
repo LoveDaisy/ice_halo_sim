@@ -23,10 +23,14 @@ void FloatLineEdit::updateData(const QString& txt) {
     return;
   }
 
+  float value = 0;
+  if (model_to_view_ && view_to_model_) {
+    value = view_to_model_(value);
+  }
   if (txt.isEmpty() || txt == "-") {  // Special cases. Cen be seen as 0
-    if (min_value_ <= 0 && max_value_ >= 0) {
-      *data_source_ = 0;
-    } else if (std::abs(min_value_) < std::abs(max_value_)) {
+    if (min_value_ <= value && max_value_ >= value) {
+      *data_source_ = value;
+    } else if (std::abs(min_value_ - value) < std::abs(max_value_ - value)) {
       *data_source_ = min_value_;
     } else {
       *data_source_ = max_value_;
@@ -38,18 +42,42 @@ void FloatLineEdit::updateData(const QString& txt) {
   int pos;
   QString old_txt = txt;
   if (validator()->validate(old_txt, pos) != QValidator::Acceptable) {
-    setText(formatValue(*data_source_));
+    refreshText();
     // TODO: show a tooltip
   } else {
-    *data_source_ = txt.toFloat();
+    value = txt.toFloat();
+    if (model_to_view_ && view_to_model_) {
+      value = view_to_model_(value);
+    }
+    *data_source_ = value;
   }
   qDebug() << "New value:" << *data_source_;
 }
 
 
+void FloatLineEdit::refreshText() {
+  if (!data_source_) {
+    qDebug() << "No data source! No refresh!";
+    return;
+  }
+
+  float value = *data_source_;
+  if (model_to_view_ && view_to_model_) {
+    value = model_to_view_(value);
+  }
+  setText(formatValue(value));
+}
+
+
+void FloatLineEdit::setTransform(DataTransform view_to_model, DataTransform model_to_view) {
+  view_to_model_ = std::move(view_to_model);
+  model_to_view_ = std::move(model_to_view);
+}
+
+
 void FloatLineEdit::focusOutEvent(QFocusEvent* event) {
   if (data_source_) {
-    setText(formatValue(*data_source_));
+    refreshText();
   }
   QLineEdit::focusOutEvent(event);
 }
@@ -57,7 +85,7 @@ void FloatLineEdit::focusOutEvent(QFocusEvent* event) {
 
 void FloatLineEdit::keyPressEvent(QKeyEvent* event) {
   if (data_source_ && (event->key() == Qt::Key_Enter || event->key() == Qt::Key_Return)) {
-    setText(formatValue(*data_source_));
+    refreshText();
     clearFocus();
   }
   QLineEdit::keyPressEvent(event);

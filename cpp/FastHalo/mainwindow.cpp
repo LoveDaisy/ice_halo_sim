@@ -427,6 +427,10 @@ void MainWindow::updateCrystalType(int combo_idx) {
   if (crystal_data) {
     crystal_data->type_ = type;
   }
+  if (type == IceHalo::CrystalType::kPrism) {
+    crystal_data->height_[1] = 0;
+    crystal_data->height_[2] = 0;
+  }
 
   // Update UI widget
   if (type == IceHalo::CrystalType::kPyramid) {
@@ -479,31 +483,62 @@ void MainWindow::refreshCrystalInfo() {
   auto height = crystal_data->height_[0];
   crystal_height_edit_->setText(crystal_height_edit_->formatValue(height));
 
-  // Update pyramid height panel
+  // Update pyramid height edit
   pyramid_upper_height_edit_->setDataSource(crystal_data->height_ + 1);
   pyramid_lower_height_edit_->setDataSource(crystal_data->height_ + 2);
-  auto pyramid_height_panel = ui_->pyramidParameterPanel;
   if (crystal_data->type_ == IceHalo::CrystalType::kPrism) {
-    pyramid_height_panel->setEnabled(false);
-    pyramid_upper_height_edit_->setText("0.0");
-    pyramid_lower_height_edit_->setText("0.0");
+    ui_->pyramidParameterPanel->setEnabled(false);
   } else if (crystal_data->type_ == IceHalo::CrystalType::kPyramid) {
-    pyramid_height_panel->setEnabled(crystal_item_data->enabled);
-    pyramid_upper_height_edit_->setText(
-        pyramid_upper_height_edit_->formatValue(crystal_data->height_[1]));
-    pyramid_lower_height_edit_->setText(
-        pyramid_lower_height_edit_->formatValue(crystal_data->height_[2]));
+    ui_->pyramidParameterPanel->setEnabled(crystal_item_data->enabled);
   }
-  QComboBox* combos[] = {
+  pyramid_upper_height_edit_->refreshText();
+  pyramid_lower_height_edit_->refreshText();
+
+  // Update pyramid miller index
+  QComboBox* miller_combos[] = {
     ui_->upperMiller1ComboBox,  // upper 1
     ui_->upperMiller2ComboBox,  // upper 2
     ui_->lowerMiller1ComboBox,  // lower 1
     ui_->lowerMiller2ComboBox,  // lower 2
   };
   for (int i = 0; i < 4; i++) {
-    for (int j = 0; j < combos[i]->count(); j++) {
-      if (combos[i]->itemData(j, Qt::UserRole) == crystal_data->miller_idx_[i]) {
-        combos[i]->setCurrentIndex(j);
+    for (int j = 0; j < miller_combos[i]->count(); j++) {
+      if (miller_combos[i]->itemData(j, Qt::UserRole) == crystal_data->miller_idx_[i]) {
+        miller_combos[i]->setCurrentIndex(j);
+        break;
+      }
+    }
+  }
+
+  // Update axis means and stds
+  axis_zenith_mean_edit_->setDataSource(&crystal_data->axis_.latitude_mean);
+  axis_zenith_mean_edit_->refreshText();
+  axis_zenith_std_edit_->setDataSource(&crystal_data->axis_.latitude_std);
+  axis_zenith_std_edit_->refreshText();
+  axis_roll_mean_edit_->setDataSource(&crystal_data->axis_.roll_mean);
+  axis_roll_mean_edit_->refreshText();
+  axis_roll_std_edit_->setDataSource(&crystal_data->axis_.roll_std);
+  axis_roll_std_edit_->refreshText();
+  axis_azimuth_mean_edit_->setDataSource(&crystal_data->axis_.azimuth_mean);
+  axis_azimuth_mean_edit_->refreshText();
+  axis_azimuth_std_edit_->setDataSource(&crystal_data->axis_.azimuth_std);
+  axis_azimuth_std_edit_->refreshText();
+
+  // Update axis types
+  QComboBox* type_combos[] = {
+    ui_->axisZenithTypeComboBox,   // zenith type
+    ui_->axisRollTypeComboBox,     // roll type
+    ui_->axisAzimuthTypeComboBox,  // azimuth type
+  };
+  int crystal_axis_dists[] = {
+    static_cast<int>(crystal_data->axis_.latitude_dist),   // latitude, (= 90 - zenith)
+    static_cast<int>(crystal_data->axis_.roll_dist),     // roll
+    static_cast<int>(crystal_data->axis_.azimuth_dist),  // azimuth
+  };
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < type_combos[i]->count(); j++) {
+      if (type_combos[i]->itemData(j, Qt::UserRole) == crystal_axis_dists[i]) {
+        type_combos[i]->setCurrentIndex(j);
         break;
       }
     }
@@ -669,6 +704,21 @@ void MainWindow::initCrystalInfoPanel() {
   pyramid_upper_height_edit_ = new FloatLineEdit(0, 1, 1);
   ui_->pyramidHeightLayout->addWidget(pyramid_upper_height_edit_, 0, 1);
   ui_->pyramidHeightLayout->addWidget(pyramid_lower_height_edit_, 0, 4);
+
+  // Axis edits
+  axis_zenith_mean_edit_ = new FloatLineEdit(-90, 90, 1);
+  axis_zenith_mean_edit_->setTransform([](float v){return 90.0f - v;}, [](float v){return 90.0f - v;});
+  axis_zenith_std_edit_ = new FloatLineEdit(0, 180, 1);
+  axis_roll_mean_edit_ = new FloatLineEdit(0, 360, 1);
+  axis_roll_std_edit_ = new FloatLineEdit(0, 180, 1);
+  axis_azimuth_mean_edit_ = new FloatLineEdit(0, 360, 1);
+  axis_azimuth_std_edit_ = new FloatLineEdit(0, 180, 1);
+  ui_->crystalAxisLayout->addWidget(axis_zenith_mean_edit_, 2, 1);
+  ui_->crystalAxisLayout->addWidget(axis_zenith_std_edit_, 3, 1);
+  ui_->crystalAxisLayout->addWidget(axis_roll_mean_edit_, 7, 1);
+  ui_->crystalAxisLayout->addWidget(axis_roll_std_edit_, 8, 1);
+  ui_->crystalAxisLayout->addWidget(axis_azimuth_mean_edit_, 12, 1);
+  ui_->crystalAxisLayout->addWidget(axis_azimuth_std_edit_, 13, 1);
 
   // 3D window and widget
   view3d_ = new Qt3DExtras::Qt3DWindow();

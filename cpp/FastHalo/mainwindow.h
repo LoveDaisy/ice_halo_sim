@@ -80,20 +80,31 @@ class MainWindow : public QMainWindow {
 
   Ui::MainWindow* ui_;
 
+  // Basic settings
   FloatLineEdit* sun_altitude_edit_;
 
+  // Scatter tabs
   QButtonGroup* scatter_tab_group_;
   QToolButton* scatter_tab_add_btn_;
 
+  // Crystal info panel
   QGridLayout* crystal_info_layout_;
   Qt3DExtras::Qt3DWindow* view3d_;
   QWidget* crystal_preview_widget_;
   FloatLineEdit* crystal_height_edit_;
   FloatLineEdit* pyramid_upper_height_edit_;
   FloatLineEdit* pyramid_lower_height_edit_;
+  FloatLineEdit* axis_zenith_mean_edit_;
+  FloatLineEdit* axis_zenith_std_edit_;
+  FloatLineEdit* axis_roll_mean_edit_;
+  FloatLineEdit* axis_roll_std_edit_;
+  FloatLineEdit* axis_azimuth_mean_edit_;
+  FloatLineEdit* axis_azimuth_std_edit_;
 
+  // Crystal list
   QStandardItemModel* crystal_list_model_;
 
+  // Data model
   IceHalo::ProjectContextPtr project_context_;
   GuiData gui_data_;
 

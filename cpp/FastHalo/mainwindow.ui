@@ -593,16 +593,6 @@
           </property>
          </widget>
         </item>
-        <item row="2" column="1">
-         <widget class="QLineEdit" name="axisZenithMeanEdit">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-         </widget>
-        </item>
         <item row="3" column="0">
          <widget class="QLabel" name="axisZenithStdLabel">
           <property name="sizePolicy">
@@ -613,16 +603,6 @@
           </property>
           <property name="text">
            <string>Std [°]:</string>
-          </property>
-         </widget>
-        </item>
-        <item row="3" column="1">
-         <widget class="QLineEdit" name="axisZenithStdEdit">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
           </property>
          </widget>
         </item>
@@ -688,16 +668,6 @@
           </property>
          </widget>
         </item>
-        <item row="7" column="1">
-         <widget class="QLineEdit" name="axisRollMeanEdit">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-         </widget>
-        </item>
         <item row="8" column="0">
          <widget class="QLabel" name="axisRollStdLabel">
           <property name="sizePolicy">
@@ -708,16 +678,6 @@
           </property>
           <property name="text">
            <string>Std [°]:</string>
-          </property>
-         </widget>
-        </item>
-        <item row="8" column="1">
-         <widget class="QLineEdit" name="axisRollStdEdit">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
           </property>
          </widget>
         </item>
@@ -783,16 +743,6 @@
           </property>
          </widget>
         </item>
-        <item row="12" column="1">
-         <widget class="QLineEdit" name="axisAzimuthMeanEdit">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-         </widget>
-        </item>
         <item row="13" column="0">
          <widget class="QLabel" name="axisAzimuthStdLabel">
           <property name="sizePolicy">
@@ -803,16 +753,6 @@
           </property>
           <property name="text">
            <string>Std [°]:</string>
-          </property>
-         </widget>
-        </item>
-        <item row="13" column="1">
-         <widget class="QLineEdit" name="axisAzimuthStdEdit">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
           </property>
          </widget>
         </item>
@@ -1002,7 +942,7 @@
           <property name="maximumSize">
            <size>
             <width>16777215</width>
-            <height>55</height>
+            <height>70</height>
            </size>
           </property>
           <property name="maximum">
@@ -1027,7 +967,7 @@
           <property name="maximumSize">
            <size>
             <width>16777215</width>
-            <height>55</height>
+            <height>70</height>
            </size>
           </property>
           <property name="maximum">
@@ -1052,7 +992,7 @@
           <property name="maximumSize">
            <size>
             <width>16777215</width>
-            <height>55</height>
+            <height>70</height>
            </size>
           </property>
           <property name="maximum">
@@ -1077,7 +1017,7 @@
           <property name="maximumSize">
            <size>
             <width>16777215</width>
-            <height>55</height>
+            <height>70</height>
            </size>
           </property>
           <property name="maximum">
@@ -1102,7 +1042,7 @@
           <property name="maximumSize">
            <size>
             <width>16777215</width>
-            <height>55</height>
+            <height>70</height>
            </size>
           </property>
           <property name="maximum">
@@ -1127,7 +1067,7 @@
           <property name="maximumSize">
            <size>
             <width>16777215</width>
-            <height>55</height>
+            <height>70</height>
            </size>
           </property>
           <property name="maximum">
