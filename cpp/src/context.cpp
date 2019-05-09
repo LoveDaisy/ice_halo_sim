@@ -20,7 +20,7 @@ AbstractRayPathFilter::AbstractRayPathFilter()
     : symmetry_flag_(kSymmetryNone), complementary_(false), remove_homodromous_(false) {}
 
 
-bool AbstractRayPathFilter::Filter(const CrystalPtr& crystal, RaySegment* last_r) const {
+bool AbstractRayPathFilter::Filter(const Crystal* crystal, RaySegment* last_r) const {
   if (remove_homodromous_ &&
       Math::Dot3(last_r->dir.val(), last_r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * Math::kFloatEps) {
     return false;
@@ -46,7 +46,7 @@ uint8_t AbstractRayPathFilter::GetSymmetryFlag() const {
 }
 
 
-void AbstractRayPathFilter::ApplySymmetry(const CrystalPtr& /* crystal */) {}
+void AbstractRayPathFilter::ApplySymmetry(const Crystal* /* crystal */) {}
 
 
 void AbstractRayPathFilter::EnableComplementary(bool enable) {
@@ -95,7 +95,7 @@ size_t AbstractRayPathFilter::RayPathHash(const std::vector<uint16_t>& ray_path,
 }
 
 
-size_t AbstractRayPathFilter::RayPathHash(const CrystalPtr& crystal,               // used for get face number
+size_t AbstractRayPathFilter::RayPathHash(const Crystal* crystal,                  // used for get face number
                                           const RaySegment* last_ray, int length,  // ray path and length
                                           bool reverse) const {
   constexpr size_t kStep = 7;
@@ -122,72 +122,7 @@ size_t AbstractRayPathFilter::RayPathHash(const CrystalPtr& crystal,            
 }
 
 
-// void AbstractRayPathFilter::ApplyHash(const CrystalPtr& crystal) {
-//   std::vector<std::vector<uint16_t>> augmented_ray_paths;
-//
-//   // Add the original path.
-//   for (const auto& rp : ray_paths) {
-//     augmented_ray_paths.emplace_back(rp);
-//   }
-//
-//   // Add symmetry P.
-//   auto period = crystal->GetFaceNumberPeriod();
-//   std::vector<uint16_t> tmp_ray_path;
-//   if (period > 0 && (symmetry_ & kSymmetryPrism)) {
-//     std::vector<std::vector<uint16_t>> ray_paths_copy(augmented_ray_paths);
-//     for (const auto& rp : ray_paths_copy) {
-//       for (int i = 0; i < period; i++) {
-//         tmp_ray_path.clear();
-//         for (auto fn : rp) {
-//           if (fn != 1 && fn != 2) {
-//             fn = static_cast<uint16_t>((fn + period + i - 3) % period + 3);
-//           }
-//           tmp_ray_path.emplace_back(fn);
-//         }
-//         augmented_ray_paths.emplace_back(tmp_ray_path);
-//       }
-//     }
-//   }
-//
-//   // Add symmetry B.
-//   if (symmetry_ & kSymmetryBasal) {
-//     std::vector<std::vector<uint16_t>> ray_paths_copy(augmented_ray_paths);
-//     for (const auto& rp : ray_paths_copy) {
-//       tmp_ray_path.clear();
-//       for (auto fn : rp) {
-//         if (fn == 1 || fn == 2) {
-//           fn = static_cast<uint16_t>(fn % 2 + 1);
-//         }
-//         tmp_ray_path.emplace_back(fn);
-//       }
-//       augmented_ray_paths.emplace_back(tmp_ray_path);
-//     }
-//   }
-//
-//   // Add symmetry D.
-//   if (period > 0 && (symmetry_ & kSymmetryDirection)) {
-//     std::vector<std::vector<uint16_t>> ray_paths_copy(augmented_ray_paths);
-//     for (const auto& rp : ray_paths_copy) {
-//       tmp_ray_path.clear();
-//       for (auto fn : rp) {
-//         if (fn != 1 && fn != 2) {
-//           fn = static_cast<uint16_t>(5 + period - fn);
-//         }
-//         tmp_ray_path.emplace_back(fn);
-//       }
-//       augmented_ray_paths.emplace_back(tmp_ray_path);
-//     }
-//   }
-//
-//   // Add them all.
-//   ray_path_hashes_.clear();
-//   for (const auto& rp : augmented_ray_paths) {
-//     ray_path_hashes_.emplace(RayPathHash(rp));
-//   }
-// }
-
-
-bool NoneRayPathFilter::FilterPath(const CrystalPtr& /* crystal */, RaySegment* /* r */) const {
+bool NoneRayPathFilter::FilterPath(const Crystal* /* crystal */, RaySegment* /* r */) const {
   return true;
 }
 
@@ -202,7 +137,7 @@ void SpecificRayPathFilter::ClearPaths() {
 }
 
 
-void SpecificRayPathFilter::ApplySymmetry(const IceHalo::CrystalPtr& crystal) {
+void SpecificRayPathFilter::ApplySymmetry(const Crystal* crystal) {
   std::vector<std::vector<uint16_t>> augmented_ray_paths;
 
   // Add the original path.
@@ -267,7 +202,7 @@ void SpecificRayPathFilter::ApplySymmetry(const IceHalo::CrystalPtr& crystal) {
 }
 
 
-bool SpecificRayPathFilter::FilterPath(const CrystalPtr& crystal, RaySegment* last_r) const {
+bool SpecificRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_r) const {
   if (ray_path_hashes_.empty()) {
     return true;
   }
@@ -332,7 +267,7 @@ void GeneralRayPathFilter::ClearHitNumbers() {
 }
 
 
-bool GeneralRayPathFilter::FilterPath(const CrystalPtr& crystal, RaySegment* last_r) const {
+bool GeneralRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_r) const {
   if (entry_faces_.empty() && exit_faces_.empty()) {
     return true;
   }
@@ -753,7 +688,7 @@ void ProjectContext::SetCrystal(int id, CrystalPtrU&& crystal) {
 
 
 void ProjectContext::SetCrystal(int id, CrystalPtrU&& crystal, const AxisDistribution& axis) {
-  crystal_store_.emplace(id, std::make_shared<CrystalContext>(std::move(crystal), axis));
+  crystal_store_.emplace(id, new CrystalContext(std::move(crystal), axis));
 }
 
 
@@ -762,18 +697,18 @@ void ProjectContext::RemoveCrystal(int id) {
 }
 
 
-const CrystalContextPtr ProjectContext::GetCrystalContext(int id) const {
+CrystalContext* ProjectContext::GetCrystalContext(int id) const {
   if (crystal_store_.count(id)) {
-    return crystal_store_.at(id);
+    return crystal_store_.at(id).get();
   } else {
     return nullptr;
   }
 }
 
 
-const CrystalPtr ProjectContext::GetCrystal(int id) const {
+Crystal* ProjectContext::GetCrystal(int id) const {
   if (crystal_store_.count(id)) {
-    return crystal_store_.at(id)->crystal;
+    return crystal_store_.at(id)->crystal.get();
   } else {
     return nullptr;
   }
@@ -782,7 +717,7 @@ const CrystalPtr ProjectContext::GetCrystal(int id) const {
 
 void ProjectContext::PrintCrystalInfo() const {
   for (const auto& c : crystal_store_) {
-    auto g = c.second->crystal;
+    auto g = c.second->crystal.get();
     std::printf("-- ID: %d --\n", c.first);
     for (const auto& v : g->GetVertexes()) {
       std::printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
@@ -800,14 +735,14 @@ void ProjectContext::ClearRayPathFilter() {
 }
 
 
-void ProjectContext::SetRayPathFilter(int id, const RayPathFilterPtr& filter) {
-  filter_store_.emplace(id, filter);
+void ProjectContext::SetRayPathFilter(int id, RayPathFilterPtrU&& filter) {
+  filter_store_.emplace(id, std::move(filter));
 }
 
 
-const RayPathFilterPtr ProjectContext::GetRayPathFilter(int id) const {
+AbstractRayPathFilter* ProjectContext::GetRayPathFilter(int id) const {
   if (filter_store_.count(id)) {
-    return filter_store_.at(id);
+    return filter_store_.at(id).get();
   } else {
     return nullptr;
   }
@@ -1202,7 +1137,7 @@ void ProjectContext::ParseOneCrystal(const rapidjson::Value& c, int ci) {
 
   auto axis = ParseCrystalAxis(c, ci);
   auto id = p->GetInt();
-  crystal_store_.emplace(id, std::make_shared<CrystalContext>(crystal_parsers[type](this, c, ci), axis));
+  crystal_store_.emplace(id, new CrystalContext(crystal_parsers[type](this, c, ci), axis));
 }
 
 
@@ -1546,7 +1481,7 @@ void ProjectContext::ParseOneFilter(const rapidjson::Value& c, int ci) {
 }
 
 
-void ProjectContext::ParseFilterBasic(const rapidjson::Value& c, int ci, RayPathFilterPtr filter) {
+void ProjectContext::ParseFilterBasic(const rapidjson::Value& c, int ci, const RayPathFilterPtrU& filter) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
 
@@ -1603,21 +1538,22 @@ void ProjectContext::ParseFilterBasic(const rapidjson::Value& c, int ci, RayPath
 }
 
 
-RayPathFilterPtr ProjectContext::ParseFilterNone(const rapidjson::Value& c, int ci) {
-  auto filter = std::make_shared<NoneRayPathFilter>();
+RayPathFilterPtrU ProjectContext::ParseFilterNone(const rapidjson::Value& c, int ci) {
+  RayPathFilterPtrU filter = std::unique_ptr<NoneRayPathFilter>(new NoneRayPathFilter());
   ParseFilterBasic(c, ci, filter);
   return filter;
 }
 
 
-RayPathFilterPtr ProjectContext::ParseFilterSpecific(const rapidjson::Value& c, int ci) {
+RayPathFilterPtrU ProjectContext::ParseFilterSpecific(const rapidjson::Value& c, int ci) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
 
-  auto filter = std::make_shared<SpecificRayPathFilter>();
+  auto filter_raw_ptr = new SpecificRayPathFilter();
+  RayPathFilterPtrU filter = std::unique_ptr<SpecificRayPathFilter>(filter_raw_ptr);
   ParseFilterBasic(c, ci, filter);
 
-  filter->ClearPaths();
+  filter_raw_ptr->ClearPaths();
   auto p = Pointer("/path").Get(c);
   if (p == nullptr || !p->IsArray()) {
     std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].path> cannot recognize!", ci);
@@ -1638,7 +1574,7 @@ RayPathFilterPtr ProjectContext::ParseFilterSpecific(const rapidjson::Value& c, 
       }
       tmp_path.emplace_back(pi.GetInt());
     }
-    filter->AddPath(tmp_path);
+    filter_raw_ptr->AddPath(tmp_path);
   } else {  // p[0].IsArray()
     for (const auto& pi : p->GetArray()) {
       if (pi.GetArray().Empty()) {
@@ -1652,7 +1588,7 @@ RayPathFilterPtr ProjectContext::ParseFilterSpecific(const rapidjson::Value& c, 
           throw std::invalid_argument(msg_buffer);
         }
         tmp_path.emplace_back(pii.GetInt());
-        filter->AddPath(tmp_path);
+        filter_raw_ptr->AddPath(tmp_path);
       }
     }
   }
@@ -1660,14 +1596,15 @@ RayPathFilterPtr ProjectContext::ParseFilterSpecific(const rapidjson::Value& c, 
 }
 
 
-RayPathFilterPtr ProjectContext::ParseFilterGeneral(const rapidjson::Value& c, int ci) {
+RayPathFilterPtrU ProjectContext::ParseFilterGeneral(const rapidjson::Value& c, int ci) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
 
-  auto filter = std::make_shared<GeneralRayPathFilter>();
+  auto filter_raw_ptr = new GeneralRayPathFilter();
+  RayPathFilterPtrU filter = std::unique_ptr<GeneralRayPathFilter>(filter_raw_ptr);
   ParseFilterBasic(c, ci, filter);
-  filter->ClearHitNumbers();
-  filter->ClearFaces();
+  filter_raw_ptr->ClearHitNumbers();
+  filter_raw_ptr->ClearFaces();
 
   auto p = Pointer("/entry").Get(c);
   if (p == nullptr || !p->IsArray()) {
@@ -1679,7 +1616,7 @@ RayPathFilterPtr ProjectContext::ParseFilterGeneral(const rapidjson::Value& c, i
       std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].entry> cannot recognize!", ci);
       throw std::invalid_argument(msg_buffer);
     }
-    filter->AddEntryFace(pi.GetInt());
+    filter_raw_ptr->AddEntryFace(pi.GetInt());
   }
 
   p = Pointer("/exit").Get(c);
@@ -1692,7 +1629,7 @@ RayPathFilterPtr ProjectContext::ParseFilterGeneral(const rapidjson::Value& c, i
       std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].exit> cannot recognize!", ci);
       throw std::invalid_argument(msg_buffer);
     }
-    filter->AddExitFace(pi.GetInt());
+    filter_raw_ptr->AddExitFace(pi.GetInt());
   }
 
   p = Pointer("/hit").Get(c);
@@ -1707,7 +1644,7 @@ RayPathFilterPtr ProjectContext::ParseFilterGeneral(const rapidjson::Value& c, i
         std::snprintf(msg_buffer, kMsgBufferSize, "<ray_path_filter[%d].hit> cannot recognize!", ci);
         throw std::invalid_argument(msg_buffer);
       }
-      filter->AddHitNumber(pi.GetInt());
+      filter_raw_ptr->AddHitNumber(pi.GetInt());
     }
   }
 
@@ -1801,11 +1738,8 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
 CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis) : crystal(std::move(g)), axis(axis) {}
 
 
-CrystalContext::CrystalContext(const CrystalContext& other) = default;
-
-
-RayInfo::RayInfo(RaySegment* seg, CrystalContextPtr crystal_ctx, const float* main_axis_rot)
-    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_ctx(std::move(crystal_ctx)),
+RayInfo::RayInfo(RaySegment* seg, const CrystalContext* crystal_ctx, const float* main_axis_rot)
+    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_ctx(crystal_ctx),
       main_axis_rot(main_axis_rot) {}
 
 }  // namespace IceHalo

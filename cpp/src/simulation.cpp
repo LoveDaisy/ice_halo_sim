@@ -192,11 +192,10 @@ void Simulator::Start() {
 void Simulator::InitSunRays() {
   float sun_r = context_->sun_ctx_.GetSunDiameter() / 2;  // In degree
   const float* sun_ray_dir = context_->sun_ctx_.GetSunPosition();
-  auto sampler = Math::RandomSampler::GetInstance();
   if (enter_ray_data_.ray_num < total_ray_num_) {
     enter_ray_data_.Allocate(total_ray_num_);
   }
-  sampler->SampleSphericalPointsCart(sun_ray_dir, sun_r, enter_ray_data_.ray_dir, total_ray_num_);
+  Math::RandomSampler::SampleSphericalPointsCart(sun_ray_dir, sun_r, enter_ray_data_.ray_dir, total_ray_num_);
   for (decltype(enter_ray_data_.ray_num) i = 0; i < enter_ray_data_.ray_num; i++) {
     enter_ray_data_.ray_seg[i] = nullptr;
   }
@@ -205,8 +204,8 @@ void Simulator::InitSunRays() {
 
 // Init entry rays into a crystal. Fill pt[0], face_id[0], w[0] and ray_seg[0].
 // Rotate entry rays into crystal frame
-// Add RayContextPtr and main axis rotation
-void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
+// Add RayContext and main axis rotation
+void Simulator::InitEntryRays(const CrystalContext* ctx) {
   auto& crystal = ctx->crystal;
   auto total_faces = crystal->TotalFaces();
 
@@ -216,8 +215,6 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
   auto* face_area = crystal->GetFaceArea();
 
   auto ray_pool = RaySegmentPool::GetInstance();
-  auto rng = Math::RandomNumberGenerator::GetInstance();
-  auto sampler = Math::RandomSampler::GetInstance();
 
   float axis_rot[3];
   for (decltype(active_ray_num_) i = 0; i < active_ray_num_; i++) {
@@ -236,8 +233,8 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
       prob[k] /= sum;
     }
 
-    buffer_.face_id[0][i] = sampler->SampleInt(prob, total_faces);
-    sampler->SampleTriangularPoints(face_point + buffer_.face_id[0][i] * 9, buffer_.pt[0] + i * 3);
+    buffer_.face_id[0][i] = Math::RandomSampler::SampleInt(prob, total_faces);
+    Math::RandomSampler::SampleTriangularPoints(face_point + buffer_.face_id[0][i] * 9, buffer_.pt[0] + i * 3);
 
     auto prev_r = enter_ray_data_.ray_seg[enter_ray_offset_ + i];
     buffer_.w[0][i] = prev_r ? prev_r->w : 1.0f;
@@ -256,15 +253,14 @@ void Simulator::InitEntryRays(const CrystalContextPtr& ctx) {
 
 // Init crystal main axis.
 // Random sample points on a sphere with given parameters.
-void Simulator::InitMainAxis(const CrystalContextPtr& ctx, float* axis) {
+void Simulator::InitMainAxis(const CrystalContext* ctx, float* axis) {
   auto rng = Math::RandomNumberGenerator::GetInstance();
-  auto sampler = Math::RandomSampler::GetInstance();
 
   if (ctx->axis.latitude_dist == Math::Distribution::kUniform) {
     // Random sample on full sphere, ignore other parameters.
-    sampler->SampleSphericalPointsSph(axis);
+    Math::RandomSampler::SampleSphericalPointsSph(axis);
   } else {
-    sampler->SampleSphericalPointsSph(ctx->axis, axis);
+    Math::RandomSampler::SampleSphericalPointsSph(ctx->axis, axis);
   }
 
   if (ctx->axis.roll_dist == Math::Distribution::kUniform) {
@@ -304,9 +300,8 @@ void Simulator::RestoreResultRays(float prob) {
   total_ray_num_ = idx;
 
   // Shuffle
-  auto sampler = Math::RandomSampler::GetInstance();
   for (decltype(total_ray_num_) i = 0; i < total_ray_num_; i++) {
-    int tmp_idx = sampler->SampleInt(static_cast<int>(total_ray_num_ - i));
+    int tmp_idx = Math::RandomSampler::SampleInt(static_cast<int>(total_ray_num_ - i));
 
     float tmp_dir[3];
     std::memcpy(tmp_dir, enter_ray_data_.ray_dir + (i + tmp_idx) * 3, sizeof(float) * 3);
@@ -322,7 +317,7 @@ void Simulator::RestoreResultRays(float prob) {
 
 // Trace rays.
 // Start from dir[0] and pt[0].
-void Simulator::TraceRays(const CrystalPtr& crystal, const RayPathFilterPtr& filter) {
+void Simulator::TraceRays(const Crystal* crystal, AbstractRayPathFilter* filter) {
   auto pool = ThreadingPool::GetInstance();
 
   int max_recursion_num = context_->GetRayHitNum();
@@ -352,7 +347,7 @@ void Simulator::TraceRays(const CrystalPtr& crystal, const RayPathFilterPtr& fil
 
 
 // Save rays
-void Simulator::StoreRaySegments(const CrystalPtr& crystal, const RayPathFilterPtr& filter) {
+void Simulator::StoreRaySegments(const Crystal* crystal, AbstractRayPathFilter* filter) {
   filter->ApplySymmetry(crystal);
   auto ray_pool = RaySegmentPool::GetInstance();
   for (size_t i = 0; i < active_ray_num_ * 2; i++) {

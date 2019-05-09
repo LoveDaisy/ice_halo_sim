@@ -37,8 +37,7 @@ TEST_F(ContextTest, FillSunDir) {
 
   constexpr int kRayNum = 200;
   float dir[3 * kRayNum];
-  auto sampler = IceHalo::Math::RandomSampler::GetInstance();
-  sampler->SampleSphericalPointsCart(sun_dir, sun_d / 2, dir, kRayNum);
+  IceHalo::Math::RandomSampler::SampleSphericalPointsCart(sun_dir, sun_d / 2, dir, kRayNum);
 
   for (int i = 0; i < kRayNum; i++) {
     float a = std::acos(IceHalo::Math::Dot3(sun_dir, dir + i * 3));  // In rad

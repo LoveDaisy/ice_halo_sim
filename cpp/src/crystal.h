@@ -192,7 +192,6 @@ class Crystal {
 };
 
 using CrystalPtrU = std::unique_ptr<Crystal>;
-using CrystalPtr = std::shared_ptr<Crystal>;
 
 }  // namespace IceHalo
 

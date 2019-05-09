@@ -52,6 +52,7 @@ struct EnterRayData {
 class Simulator {
  public:
   explicit Simulator(ProjectContextPtr  context);
+  Simulator(const Simulator& other) = delete;
   ~Simulator() = default;
 
   void SetWavelengthIndex(int index);
@@ -62,20 +63,21 @@ class Simulator {
   void PrintRayInfo();  // For debug
 
  private:
+  static void InitMainAxis(const CrystalContext* ctx, float* axis);
+
   void InitSunRays();
-  void InitEntryRays(const CrystalContextPtr& ctx);
-  void InitMainAxis(const CrystalContextPtr& ctx, float* axis);
-  void TraceRays(const CrystalPtr& crystal, const RayPathFilterPtr& filter);
+  void InitEntryRays(const CrystalContext* ctx);
+  void TraceRays(const Crystal* crystal, AbstractRayPathFilter* filter);
   void RestoreResultRays(float prob);
-  void StoreRaySegments(const CrystalPtr& crystal, const RayPathFilterPtr& filter);
+  void StoreRaySegments(const Crystal* crystal, AbstractRayPathFilter* filter);
   void RefreshBuffer();
 
   static constexpr int kBufferSizeFactor = 4;
 
   ProjectContextPtr context_;
-  std::vector<CrystalContext> active_crystal_ctxs_;
+  std::vector<CrystalContextPtrU> active_crystal_ctxs_;
 
-  std::vector<std::vector<RayContextPtr>> rays_;
+  std::vector<std::vector<RayInfoPtrU>> rays_;
   std::vector<std::vector<RaySegment*>> exit_ray_segments_;
   std::vector<RaySegment*> final_ray_segments_;
 

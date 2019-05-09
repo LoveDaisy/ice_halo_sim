@@ -607,23 +607,23 @@ RandomNumberGenerator::RandomNumberGenerator(uint32_t seed)
     : generator_{ static_cast<std::mt19937::result_type>(seed) } {}
 
 
-RandomNumberGeneratorPtr RandomNumberGenerator::instance_ = nullptr;
+RandomNumberGeneratorPtrU RandomNumberGenerator::instance_ = nullptr;
 std::mutex RandomNumberGenerator::instance_mutex_{};
 
 
-RandomNumberGeneratorPtr RandomNumberGenerator::GetInstance() {
+RandomNumberGenerator* RandomNumberGenerator::GetInstance() {
   if (!instance_) {
     std::unique_lock<std::mutex> lock(instance_mutex_);
     if (!instance_) {
 #ifdef RANDOM_SEED
       auto seed = std::chrono::system_clock::now().time_since_epoch().count();
-      instance_ = std::shared_ptr<RandomNumberGenerator>(new RandomNumberGenerator(static_cast<uint32_t>(seed)));
+      instance_ = std::unique_ptr<RandomNumberGenerator>(new RandomNumberGenerator(static_cast<uint32_t>(seed)));
 #else
-      instance_ = std::shared_ptr<RandomNumberGenerator>(new RandomNumberGenerator(kDefaultRandomSeed));
+      instance_ = std::unique_ptr<RandomNumberGenerator>(new RandomNumberGenerator(kDefaultRandomSeed));
 #endif
     }
   }
-  return instance_;
+  return instance_.get();
 }
 
 
@@ -647,17 +647,6 @@ float RandomNumberGenerator::Get(Distribution dist, float mean, float std) {
 }
 
 
-RandomSamplerPtr RandomSampler::GetInstance() {
-  if (!instance_) {
-    std::unique_lock<std::mutex> lock(instance_mutex_);
-    if (!instance_) {
-      instance_ = std::shared_ptr<RandomSampler>(new RandomSampler());
-    }
-  }
-  return instance_;
-}
-
-RandomSamplerPtr RandomSampler::instance_ = nullptr;
 std::mutex RandomSampler::instance_mutex_{};
 
 

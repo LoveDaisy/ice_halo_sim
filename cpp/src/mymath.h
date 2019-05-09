@@ -139,7 +139,7 @@ class RandomNumberGenerator {
   float GetUniform();
   float Get(Distribution dist, float mean, float std);
 
-  static std::shared_ptr<RandomNumberGenerator> GetInstance();
+  static RandomNumberGenerator* GetInstance();
 
  private:
   explicit RandomNumberGenerator(uint32_t seed);
@@ -149,11 +149,11 @@ class RandomNumberGenerator {
   std::uniform_real_distribution<float> uniform_dist_;
 
   static constexpr uint32_t kDefaultRandomSeed = 1;
-  static std::shared_ptr<RandomNumberGenerator> instance_;
+  static std::unique_ptr<RandomNumberGenerator> instance_;
   static std::mutex instance_mutex_;
 };
 
-using RandomNumberGeneratorPtr = std::shared_ptr<RandomNumberGenerator>;
+using RandomNumberGeneratorPtrU = std::unique_ptr<RandomNumberGenerator>;
 
 
 class RandomSampler {
@@ -165,14 +165,14 @@ class RandomSampler {
    * @param data output data, xyz.
    * @param num number of points.
    */
-  void SampleSphericalPointsCart(const float* dir, float std, float* data, size_t num = 1);
+  static void SampleSphericalPointsCart(const float* dir, float std, float* data, size_t num = 1);
 
   /*! @brief Generate points distributed uniformly on sphere, in spherical form, (lon, lat).
    *
    * @param data output data, (lon, lat), in rad
    * @param num
    */
-  void SampleSphericalPointsSph(float* data, size_t num = 1, size_t step = 3);
+  static void SampleSphericalPointsSph(float* data, size_t num = 1, size_t step = 3);
 
   /*! @brief Generate points distributed on sphere surface up to latitude, in spherical form, (lon, lat).
    *
@@ -180,7 +180,7 @@ class RandomSampler {
    * @param data output data, (lon, lat), in rad
    * @param num number of points.
    */
-  void SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num = 1);
+  static void SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num = 1);
 
   /*! @brief Generate points evenly distributed on a triangle, in Cartesian form, xyz.
    *
@@ -188,7 +188,7 @@ class RandomSampler {
    * @param data output data, xyz.
    * @param num number of points.
    */
-  void SampleTriangularPoints(const float* vertexes, float* data, size_t num = 1);
+  static void SampleTriangularPoints(const float* vertexes, float* data, size_t num = 1);
 
   /*! @brief Random choose an integer index from [0, max), proportional to probabilities in p.
    *
@@ -196,25 +196,22 @@ class RandomSampler {
    * @param max range bound.
    * @return chosen index.
    */
-  int SampleInt(const float* p, int max);
+  static int SampleInt(const float* p, int max);
 
   /*! @brief Random choose an integer from [0, max)
    *
    * @param max range bound.
    * @return chosen integer.
    */
-  int SampleInt(int max);
+  static int SampleInt(int max);
 
-  static std::shared_ptr<RandomSampler> GetInstance();
+  RandomSampler() = delete;
 
  private:
-  RandomSampler() = default;
-
-  static std::shared_ptr<RandomSampler> instance_;
   static std::mutex instance_mutex_;
 };
 
-using RandomSamplerPtr = std::shared_ptr<RandomSampler>;
+using RandomSamplerPtrU = std::unique_ptr<RandomSampler>;
 
 
 bool FloatEqual(float a, float b, float threshold = kFloatEps);
