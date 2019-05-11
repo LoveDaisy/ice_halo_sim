@@ -518,7 +518,7 @@ CrystalPtrU Crystal::CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4,  
 }
 
 
-CrystalPtrU Crystal::CreateIrregularHexPrism(float* dist, float h) {
+CrystalPtrU Crystal::CreateIrregularHexPrism(const float* dist, float h) {
   /* Use a naive algorithm to determine the profile of basal face
    * 1. For each line pair L1 and L2, get their intersection point p12;
    * 2. For all half planes, check if p12 is in the plane;
@@ -532,9 +532,11 @@ CrystalPtrU Crystal::CreateIrregularHexPrism(float* dist, float h) {
   using Math::Vec3f;
 
   constexpr int kConstraintNum = 8;
+  constexpr int kFaceNum = 6;
 
-  for (int i = 0; i < 6; i++) {
-    dist[i] *= kSqrt3 / 2;
+  float prism_dist[kFaceNum];
+  for (int i = 0; i < kFaceNum; i++) {
+    prism_dist[i] = dist[i] * kSqrt3 / 2;
   }
 
   /* Half plane is expressed as: a*x + b*y + c*z + d <= 0 */
@@ -551,8 +553,9 @@ CrystalPtrU Crystal::CreateIrregularHexPrism(float* dist, float h) {
     1.0f, -1.0f,                          // top and bottom
   };
   float d[kConstraintNum] = {
-    -dist[0], -2 * dist[1], -2 * dist[2], -dist[3], -2 * dist[4], -2 * dist[5],  // prism
-    -h,       -h,                                                                // top and bottom
+    -prism_dist[0], -2 * prism_dist[1], -2 * prism_dist[2],  // prism
+    -prism_dist[3], -2 * prism_dist[4], -2 * prism_dist[5],  // prism
+    -h,       -h,                                            // top and bottom
   };
   HalfSpaceSet hss(kConstraintNum, a, b, c, d);
 
@@ -576,7 +579,7 @@ CrystalPtrU Crystal::CreateIrregularHexPrism(float* dist, float h) {
  *      h[1] are the heights of middle cylindrical segment, defined as height / a, where a is the
  *      diameter of original basal face.
  */
-CrystalPtrU Crystal::CreateIrregularHexPyramid(float* dist, int* idx, float* h) {
+CrystalPtrU Crystal::CreateIrregularHexPyramid(const float* dist, const int* idx, const float* h) {
   /* There are 20 faces. The crystal is the intersection of all these half-spaces.
    * 1. Find all inner point as vertexes.
    * 2. Find all co-planner points.
@@ -588,19 +591,21 @@ CrystalPtrU Crystal::CreateIrregularHexPyramid(float* dist, int* idx, float* h) 
   using Math::Vec3f;
 
   constexpr int kConstraintNum = 20;
-  constexpr int kDistNum = 6;
-  constexpr int kHNum = 3;
+  constexpr int kFaceNum = 6;
+  constexpr int kHeightNum = 3;
 
   float alpha0 = idx[1] / kC / idx[0] * kSqrt3;
   float alpha1 = idx[3] / kC / idx[2] * kSqrt3;
   float beta0 = alpha0 * h[1];
   float beta1 = alpha1 * h[1];
 
-  for (int i = 0; i < kDistNum; i++) {
-    dist[i] *= kSqrt3 / 2;
+  float prism_dist[kFaceNum];
+  float heights[kHeightNum];
+  for (int i = 0; i < kFaceNum; i++) {
+    prism_dist[i] = dist[i] * kSqrt3 / 2;
   }
-  for (int i = 0; i < kHNum; i++) {
-    h[i] = std::max(h[i], 0.0f);
+  for (int i = 0; i < kHeightNum; i++) {
+    heights[i] = std::max(h[i], 0.0f);
   }
 
   float a[kConstraintNum] = {
@@ -622,24 +627,24 @@ CrystalPtrU Crystal::CreateIrregularHexPyramid(float* dist, int* idx, float* h) 
     1.0f,    -1.0f,                                        // top and bottom faces
   };
   float d[kConstraintNum] = {
-    -dist[0],
-    -2 * dist[1],
-    -2 * dist[2],
-    -dist[3],
-    -2 * dist[4],
-    -2 * dist[5],
-    -2 * dist[0] - beta0,
-    -2 * dist[1] - beta0,
-    -2 * dist[2] - beta0,
-    -2 * dist[3] - beta0,
-    -2 * dist[4] - beta0,
-    -2 * dist[5] - beta0,
-    -2 * dist[0] - beta1,
-    -2 * dist[1] - beta1,
-    -2 * dist[2] - beta1,
-    -2 * dist[3] - beta1,
-    -2 * dist[4] - beta1,
-    -2 * dist[5] - beta1,
+    -prism_dist[0],
+    -2 * prism_dist[1],
+    -2 * prism_dist[2],
+    -prism_dist[3],
+    -2 * prism_dist[4],
+    -2 * prism_dist[5],
+    -2 * prism_dist[0] - beta0,
+    -2 * prism_dist[1] - beta0,
+    -2 * prism_dist[2] - beta0,
+    -2 * prism_dist[3] - beta0,
+    -2 * prism_dist[4] - beta0,
+    -2 * prism_dist[5] - beta0,
+    -2 * prism_dist[0] - beta1,
+    -2 * prism_dist[1] - beta1,
+    -2 * prism_dist[2] - beta1,
+    -2 * prism_dist[3] - beta1,
+    -2 * prism_dist[4] - beta1,
+    -2 * prism_dist[5] - beta1,
     0.0f,
     0.0f,
   };
@@ -660,8 +665,8 @@ CrystalPtrU Crystal::CreateIrregularHexPyramid(float* dist, int* idx, float* h) 
       minZ = p.z();
     }
   }
-  d[kConstraintNum - 2] = -(maxZ - h[1]) * h[0] - h[1];
-  d[kConstraintNum - 1] = (minZ + h[1]) * h[2] - h[1];
+  d[kConstraintNum - 2] = -(maxZ - heights[1]) * heights[0] - heights[1];
+  d[kConstraintNum - 1] = (minZ + heights[1]) * heights[2] - heights[1];
 
   hss.n = kConstraintNum;
   pts = FindInnerPoints(hss);
