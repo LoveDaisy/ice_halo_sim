@@ -443,6 +443,34 @@ void MainWindow::updateCrystalType(int combo_idx) {
 }
 
 
+void MainWindow::updatePrismDistance(int idx, int value) {
+  qDebug() << "updatePrismDistance()";
+
+  // Update model data
+  auto crystal_data = getCurrentCrystalData();
+  auto d = getPrismDistanceByValue(value);
+  crystal_data->prism_dist_[idx] = static_cast<float>(d);
+
+  // Update UI widget
+  auto txt = getPrismDistanceText(d);
+  prism_distance_labels_[idx]->setText(txt);
+
+  qDebug() << "  distance" << idx << "=" << txt;
+}
+
+
+void MainWindow::resetPrismDistance() {
+  qDebug() << "resetPrismDistance()";
+
+  auto crystal_data = getCurrentCrystalData();
+  for (int idx = 0; idx < 6; idx++) {
+    prism_distance_sliders_[idx]->setValue(10);
+    prism_distance_labels_[idx]->setText("1.0");
+    crystal_data->prism_dist_[idx] = 1.0f;
+  }
+}
+
+
 void MainWindow::refreshCrystalInfo() {
   qDebug() << "refreshCrystalInfo()";
 
@@ -531,9 +559,9 @@ void MainWindow::refreshCrystalInfo() {
     ui_->axisAzimuthTypeComboBox,  // azimuth type
   };
   int crystal_axis_dists[] = {
-    static_cast<int>(crystal_data->axis_.latitude_dist),   // latitude, (= 90 - zenith)
-    static_cast<int>(crystal_data->axis_.roll_dist),     // roll
-    static_cast<int>(crystal_data->axis_.azimuth_dist),  // azimuth
+    static_cast<int>(crystal_data->axis_.latitude_dist),  // latitude, (= 90 - zenith)
+    static_cast<int>(crystal_data->axis_.roll_dist),      // roll
+    static_cast<int>(crystal_data->axis_.azimuth_dist),   // azimuth
   };
   for (int i = 0; i < 3; i++) {
     for (int j = 0; j < type_combos[i]->count(); j++) {
@@ -542,6 +570,14 @@ void MainWindow::refreshCrystalInfo() {
         break;
       }
     }
+  }
+
+  // Update prism distances
+  for (int idx = 0; idx < 6; idx++) {
+    auto d = crystal_data->prism_dist_[idx];
+    prism_distance_sliders_[idx]->setValue(static_cast<int>(d * 10));
+    auto txt = getPrismDistanceText(static_cast<double>(d));
+    prism_distance_labels_[idx]->setText(txt);
   }
 
   // TODO
@@ -707,7 +743,8 @@ void MainWindow::initCrystalInfoPanel() {
 
   // Axis edits
   axis_zenith_mean_edit_ = new FloatLineEdit(-90, 90, 1);
-  axis_zenith_mean_edit_->setTransform([](float v){return 90.0f - v;}, [](float v){return 90.0f - v;});
+  axis_zenith_mean_edit_->setTransform([](float v) { return 90.0f - v; },
+                                       [](float v) { return 90.0f - v; });
   axis_zenith_std_edit_ = new FloatLineEdit(0, 180, 1);
   axis_roll_mean_edit_ = new FloatLineEdit(0, 360, 1);
   axis_roll_std_edit_ = new FloatLineEdit(0, 180, 1);
@@ -719,6 +756,25 @@ void MainWindow::initCrystalInfoPanel() {
   ui_->crystalAxisLayout->addWidget(axis_roll_std_edit_, 8, 1);
   ui_->crystalAxisLayout->addWidget(axis_azimuth_mean_edit_, 12, 1);
   ui_->crystalAxisLayout->addWidget(axis_azimuth_std_edit_, 13, 1);
+
+  // Prism distances
+  prism_distance_sliders_[0] = ui_->crystalPrismDistanceSlider1;
+  prism_distance_sliders_[1] = ui_->crystalPrismDistanceSlider2;
+  prism_distance_sliders_[2] = ui_->crystalPrismDistanceSlider3;
+  prism_distance_sliders_[3] = ui_->crystalPrismDistanceSlider4;
+  prism_distance_sliders_[4] = ui_->crystalPrismDistanceSlider5;
+  prism_distance_sliders_[5] = ui_->crystalPrismDistanceSlider6;
+  prism_distance_labels_[0] = ui_->crystalPrismDistanceLabel1;
+  prism_distance_labels_[1] = ui_->crystalPrismDistanceLabel2;
+  prism_distance_labels_[2] = ui_->crystalPrismDistanceLabel3;
+  prism_distance_labels_[3] = ui_->crystalPrismDistanceLabel4;
+  prism_distance_labels_[4] = ui_->crystalPrismDistanceLabel5;
+  prism_distance_labels_[5] = ui_->crystalPrismDistanceLabel6;
+  for (int idx = 0; idx < 6; idx++) {
+    prism_distance_sliders_[idx]->setMinimum(0);
+    prism_distance_sliders_[idx]->setMaximum(20);
+    prism_distance_sliders_[idx]->setValue(10);
+  }
 
   // 3D window and widget
   view3d_ = new Qt3DExtras::Qt3DWindow();
@@ -778,6 +834,12 @@ void MainWindow::initCrystalInfoPanel() {
 
   connect(ui_->crystalTypeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           &MainWindow::updateCrystalType);
+  connect(ui_->crystalPrismDistanceResetButton, &QPushButton::clicked, this,
+          &MainWindow::resetPrismDistance);
+  for (int idx = 0; idx < 6; idx++) {
+    connect(prism_distance_sliders_[idx], &QSlider::valueChanged, this,
+            [=](int v) { updatePrismDistance(idx, v); });
+  }
 }
 
 
@@ -828,6 +890,22 @@ double MainWindow::getScatterProb() {
 double MainWindow::getScatterProb(int v) {
   v = std::max(std::min(v, ui_->scatterProbSlider->maximum()), ui_->scatterProbSlider->minimum());
   return v / 100.0;
+}
+
+
+double MainWindow::getPrismDistance(int idx) {
+  int value = prism_distance_sliders_[idx]->value();
+  return getPrismDistanceByValue(value);
+}
+
+
+double MainWindow::getPrismDistanceByValue(int value) {
+  return value / 10.0;
+}
+
+
+QString MainWindow::getPrismDistanceText(double d) {
+  return QString::number(d, 'f', 1);
 }
 
 

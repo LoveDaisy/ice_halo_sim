@@ -3,7 +3,9 @@
 
 #include <QButtonGroup>
 #include <QGridLayout>
+#include <QLabel>
 #include <QMainWindow>
+#include <QSlider>
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QToolButton>
@@ -50,8 +52,10 @@ class MainWindow : public QMainWindow {
   void refreshCrystalList();                              // Update view
 
   // Crystal info
-  void updateCrystalType(int combo_idx);  // Update model
-  void refreshCrystalInfo();              // Update view
+  void updateCrystalType(int combo_idx);     // Update model
+  void updatePrismDistance(int idx, int v);  // Update model
+  void resetPrismDistance();                 // Update model and view
+  void refreshCrystalInfo();                 // Update view
 
   // Filter settings group
   void enableFilterSettings(bool enable);
@@ -65,13 +69,16 @@ class MainWindow : public QMainWindow {
 
   void setCrystalPanelEnabled(bool enable);
 
+  double getScatterProb();
+  double getScatterProb(int v);
   QString getScatterTabText(int idx);
   QString getScatterProbText(double prob);
   IconButton* createScatterTab();
   QToolButton* createScatterAddButton();
 
-  double getScatterProb();
-  double getScatterProb(int v);
+  double getPrismDistance(int idx);
+  double getPrismDistanceByValue(int value);
+  QString getPrismDistanceText(double d);
   MultiScatterData* getCurrentScatterData();
   MultiScatterData::CrystalItemData* getCurrentCrystalItemData();
   MultiScatterData::CrystalItemData* getCrystalItemData(const QModelIndex& index);
@@ -100,6 +107,8 @@ class MainWindow : public QMainWindow {
   FloatLineEdit* axis_roll_std_edit_;
   FloatLineEdit* axis_azimuth_mean_edit_;
   FloatLineEdit* axis_azimuth_std_edit_;
+  QSlider* prism_distance_sliders_[6];
+  QLabel* prism_distance_labels_[6];
 
   // Crystal list
   QStandardItemModel* crystal_list_model_;
