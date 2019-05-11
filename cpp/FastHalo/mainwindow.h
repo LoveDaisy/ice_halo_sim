@@ -71,6 +71,7 @@ class MainWindow : public QMainWindow {
   void initScatterTab();
   void initCrystalList();
   void initCrystalInfoPanel();
+  void initFilter();
 
   void setCrystalPanelEnabled(bool enable);
 
@@ -102,6 +103,10 @@ class MainWindow : public QMainWindow {
   // Scatter tabs
   QButtonGroup* scatter_tab_group_;
   QToolButton* scatter_tab_add_btn_;
+
+  // Specific filter path list
+  QStandardItemModel* specific_path_model_;
+  CursorTable* specific_path_table_;
 
   // Crystal info panel
   QGridLayout* crystal_info_layout_;

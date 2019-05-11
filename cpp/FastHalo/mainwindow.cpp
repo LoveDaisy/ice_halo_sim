@@ -634,6 +634,9 @@ void MainWindow::enableFilterSettings(bool enable) {
   ui_->symBCheckBox->setEnabled(enable);
   ui_->symDCheckBox->setEnabled(enable);
   ui_->symPCheckBox->setEnabled(enable);
+  for (int i = 0; i < ui_->filterPathPages->count(); i++) {
+    ui_->filterPathPages->widget(i)->setEnabled(enable);
+  }
 }
 
 
@@ -647,6 +650,7 @@ void MainWindow::initUi() {
   initScatterTab();
   initCrystalList();
   initCrystalInfoPanel();
+  initFilter();
 
   // Connect signals and slots
   connect(ui_->filterEnableCheckBox, &QCheckBox::clicked, this, &MainWindow::enableFilterSettings);
@@ -892,6 +896,41 @@ void MainWindow::initCrystalInfoPanel() {
     connect(prism_distance_sliders_[idx], &QSlider::valueChanged, this,
             [=](int v) { updatePrismDistance(idx, v); });
   }
+}
+
+
+void MainWindow::initFilter() {
+  specific_path_table_ = new CursorTable;
+  ui_->filterPathPages->insertWidget(0, specific_path_table_);
+  ui_->filterPathPages->setCurrentIndex(0);
+
+  specific_path_model_ = new QStandardItemModel();
+  specific_path_model_->setHorizontalHeaderLabels(QStringList{ "", tr("Path") });
+
+  specific_path_table_->setModel(specific_path_model_);
+  specific_path_table_->setColumnWidth(0, 25);
+  specific_path_table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+  specific_path_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+  specific_path_table_->horizontalHeader()->setMinimumSectionSize(20);
+  specific_path_table_->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft);
+  specific_path_table_->verticalHeader()->hide();
+  specific_path_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+  specific_path_table_->setSelectionMode(QAbstractItemView::SingleSelection);
+  specific_path_table_->setShowGrid(false);
+
+  specific_path_table_->setColumCursor(0, Qt::PointingHandCursor);
+
+  // TODO
+
+  enableFilterSettings(false);
+
+  connect(ui_->specificRadioButton, &QRadioButton::toggled, this, [=]{
+    ui_->filterPathPages->setCurrentIndex(0);
+  });
+
+  connect(ui_->generalRadioButton, &QRadioButton::toggled, this, [=]{
+    ui_->filterPathPages->setCurrentIndex(1);
+  });
 }
 
 
