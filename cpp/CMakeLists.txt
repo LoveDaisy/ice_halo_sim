@@ -11,6 +11,14 @@ set(CMAKE_DEBUG_TARGET_PROPERTIES
   LIB_VERSION)
 option(DEBUG "Default OFF" OFF)
 
+if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+  # using regular Clang or AppleClang
+  set(CXX_LINKER_FLAG_STRIP "-dead_strip")
+elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+  # using GCC
+  set(CXX_LINKER_FLAG_STRIP "--gc-sections")
+endif()
+
 if(MSVC)
   add_definitions(-DNOMINMAX)
   set(CMAKE_DEBUG_POSTFIX "d")
@@ -31,8 +39,9 @@ if(DEBUG)
   add_compile_definitions(DEBUG)
 else()
   set(BUILDCFG "Release")
-  set(CMAKE_BUILD_TYPE "MinSizeRel")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -s")
+  set(CMAKE_BUILD_TYPE "Release")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffunction-sections -fdata-sections")
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${CXX_LINKER_FLAG_STRIP}")
 endif()
 
 if(MULTI_THREAD)

@@ -35,7 +35,7 @@ void RaySegment::ResetWith(const float* pt, const float* dir, float w, int face_
 }
 
 
-void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,        // input
+void Optics::HitSurface(const Crystal* crystal, float n, size_t num,                    // input
                         const float* dir_in, const int* face_id_in, const float* w_in,  // input
                         float* dir_out, float* w_out) {                                 // output
   auto face_norm = crystal->GetFaceNorm();
@@ -65,7 +65,7 @@ void Optics::HitSurface(const IceHalo::CrystalPtr& crystal, float n, size_t num,
 }
 
 
-void Optics::Propagate(const IceHalo::CrystalPtr& crystal, size_t num,                                     // input
+void Optics::Propagate(const Crystal* crystal, size_t num,                                                 // input
                        const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
                        float* pt_out, int* face_id_out) {                                                  // output
   for (decltype(num) i = 0; i < num; i++) {

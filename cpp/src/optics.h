@@ -61,16 +61,14 @@ class RaySegmentPool {
   std::mutex id_mutex_;
 };
 
-using RaySegmentPoolPtr = std::shared_ptr<RaySegmentPool>;
-
 
 class Optics {
  public:
-  static void HitSurface(const CrystalPtr& crystal, float n, size_t num,                 // input
+  static void HitSurface(const Crystal* crystal, float n, size_t num,                    // input
                          const float* dir_in, const int* face_id_in, const float* w_in,  // input
                          float* dir_out, float* w_out);                                  // output
 
-  static void Propagate(const CrystalPtr& crystal, size_t num,                                              // input
+  static void Propagate(const Crystal* crystal, size_t num,                                                 // input
                         const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
                         float* pt_out, int* face_id_out);                                                   // output
 

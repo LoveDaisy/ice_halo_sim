@@ -367,31 +367,6 @@ void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,  
 }
 
 
-DummyMatrix::DummyMatrix(float* data, size_t row, size_t col) : rows_(row), cols_(col), data_(data) {}
-
-
-ConstDummyMatrix::ConstDummyMatrix(const float* data, size_t row, size_t col)
-    : DummyMatrix(nullptr, row, col), data(data) {}
-
-
-int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* res) {
-  if (a.cols_ != b.rows_) {
-    return -1;
-  }
-
-  for (size_t r = 0; r < a.rows_; r++) {
-    for (size_t c = 0; c < b.cols_; c++) {
-      float sum = 0.0f;
-      for (size_t k = 0; k < a.cols_; k++) {
-        sum += a.data[r * a.cols_ + k] * b.data[k * b.cols_ + c];
-      }
-      res->data_[r * res->cols_ + c] = sum;
-    }
-  }
-  return 0;
-}
-
-
 template <typename T>
 Vec3<T>::Vec3(T x, T y, T z) {
   val_[0] = x;
@@ -588,7 +563,7 @@ Vec3<T> Vec3<T>::FromTo(const Vec3<T>& v1, const Vec3<T>& v2) {
 template class Vec3<float>;
 
 
-TriangleIdx::TriangleIdx(int id1, int id2, int id3) {
+TriangleIdx::TriangleIdx(int id1, int id2, int id3) : idx_{} {
   idx_[0] = id1;
   idx_[1] = id2;
   idx_[2] = id3;
@@ -607,23 +582,23 @@ RandomNumberGenerator::RandomNumberGenerator(uint32_t seed)
     : generator_{ static_cast<std::mt19937::result_type>(seed) } {}
 
 
-RandomNumberGeneratorPtr RandomNumberGenerator::instance_ = nullptr;
+RngPtrU RandomNumberGenerator::instance_ = nullptr;
 std::mutex RandomNumberGenerator::instance_mutex_{};
 
 
-RandomNumberGeneratorPtr RandomNumberGenerator::GetInstance() {
+RandomNumberGenerator* RandomNumberGenerator::GetInstance() {
   if (!instance_) {
     std::unique_lock<std::mutex> lock(instance_mutex_);
     if (!instance_) {
 #ifdef RANDOM_SEED
       auto seed = std::chrono::system_clock::now().time_since_epoch().count();
-      instance_ = std::shared_ptr<RandomNumberGenerator>(new RandomNumberGenerator(static_cast<uint32_t>(seed)));
+      instance_ = std::unique_ptr<RandomNumberGenerator>(new RandomNumberGenerator(static_cast<uint32_t>(seed)));
 #else
-      instance_ = std::shared_ptr<RandomNumberGenerator>(new RandomNumberGenerator(kDefaultRandomSeed));
+      instance_ = std::unique_ptr<RandomNumberGenerator>(new RandomNumberGenerator(kDefaultRandomSeed));
 #endif
     }
   }
-  return instance_;
+  return instance_.get();
 }
 
 
@@ -645,20 +620,6 @@ float RandomNumberGenerator::Get(Distribution dist, float mean, float std) {
       return GetGaussian() * std + mean;
   }
 }
-
-
-RandomSamplerPtr RandomSampler::GetInstance() {
-  if (!instance_) {
-    std::unique_lock<std::mutex> lock(instance_mutex_);
-    if (!instance_) {
-      instance_ = std::shared_ptr<RandomSampler>(new RandomSampler());
-    }
-  }
-  return instance_;
-}
-
-RandomSamplerPtr RandomSampler::instance_ = nullptr;
-std::mutex RandomSampler::instance_mutex_{};
 
 
 void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float* data, size_t num) {

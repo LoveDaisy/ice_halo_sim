@@ -107,7 +107,7 @@ class Crystal {
    * @param h defines the height / diameter
    * @return
    */
-  static std::unique_ptr<Crystal> CreateIrregularHexPrism(float* dist, float h);
+  static std::unique_ptr<Crystal> CreateIrregularHexPrism(const float* dist, float h);
 
   /*! @brief Create a irregular hexagon pyramid crystal
    *
@@ -122,7 +122,7 @@ class Crystal {
    *          diameter of original basal face.
    * @return
    */
-  static std::unique_ptr<Crystal> CreateIrregularHexPyramid(float* dist, int* idx, float* h);
+  static std::unique_ptr<Crystal> CreateIrregularHexPyramid(const float *dist, const int *idx, const float *h);
 
   /*! @brief Create a customized crystal
    *
@@ -192,7 +192,6 @@ class Crystal {
 };
 
 using CrystalPtrU = std::unique_ptr<Crystal>;
-using CrystalPtr = std::shared_ptr<Crystal>;
 
 }  // namespace IceHalo
 

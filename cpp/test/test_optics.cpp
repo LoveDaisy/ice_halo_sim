@@ -14,7 +14,7 @@ class OpticsTest : public ::testing::Test {
     context = IceHalo::ProjectContext::CreateFromFile(config_file_name.c_str());
   }
 
-  IceHalo::CrystalPtr crystal;
+  IceHalo::CrystalPtrU crystal;
   IceHalo::ProjectContextPtr context;
 };
 
@@ -77,7 +77,7 @@ TEST_F(OpticsTest, HitSurface0) {
   float dir_out[2 * kNum * 3];
   float w_out[2 * kNum];
 
-  IceHalo::Optics::HitSurface(crystal, kN, kNum,         // input
+  IceHalo::Optics::HitSurface(crystal.get(), kN, kNum,   // input
                               dir_in, face_id_in, w_in,  // input
                               dir_out, w_out);           // output
 
@@ -130,7 +130,7 @@ TEST_F(OpticsTest, HitSurface1) {
   float dir_out[2 * kNum * 3];
   float w_out[2 * kNum];
 
-  IceHalo::Optics::HitSurface(crystal, kN, kNum,         // input
+  IceHalo::Optics::HitSurface(crystal.get(), kN, kNum,   // input
                               dir_in, face_id_in, w_in,  // input
                               dir_out, w_out);           // output
 
@@ -235,7 +235,7 @@ TEST_F(OpticsTest, RayFaceIntersection1) {
 
 TEST_F(OpticsTest, RayTracing) {
   context->PrintCrystalInfo();
-  auto simulator = IceHalo::Simulator(context);
+  IceHalo::Simulator simulator(context);
   simulator.SetWavelengthIndex(0);
   simulator.Start();
   simulator.PrintRayInfo();
