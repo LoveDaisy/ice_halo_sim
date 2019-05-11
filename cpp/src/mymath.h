@@ -13,45 +13,11 @@ struct AxisDistribution;
 
 namespace Math {
 
-class DummyMatrix;
-class ConstDummyMatrix;
-
 constexpr float kPi = 3.14159265359f;
 constexpr float kSqrt3 = 1.73205080757f;
 constexpr float kFloatEps = 1e-6;
 constexpr float kDegreeToRad = kPi / 180.0f;
 constexpr float kRadToDegree = 180.0f / kPi;
-
-
-int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
-
-class DummyMatrix {
- public:
-  friend int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
-
- public:
-  DummyMatrix(float* data, size_t row, size_t col);
-  ~DummyMatrix() = default;
-
-  const size_t rows_;
-  const size_t cols_;
-
- private:
-  float* data_;
-};
-
-
-class ConstDummyMatrix : public DummyMatrix {
- public:
-  friend int MatrixMultiply(ConstDummyMatrix& a, ConstDummyMatrix& b, DummyMatrix* c);
-
- public:
-  ConstDummyMatrix(const float* data, size_t row, size_t col);
-  ~ConstDummyMatrix() = default;
-
- private:
-  const float* data;
-};
 
 
 template <typename T>
@@ -153,7 +119,7 @@ class RandomNumberGenerator {
   static std::mutex instance_mutex_;
 };
 
-using RandomNumberGeneratorPtrU = std::unique_ptr<RandomNumberGenerator>;
+using RngPtrU = std::unique_ptr<RandomNumberGenerator>;
 
 
 class RandomSampler {
@@ -207,8 +173,6 @@ class RandomSampler {
 
   RandomSampler() = delete;
 
- private:
-  static std::mutex instance_mutex_;
 };
 
 using RandomSamplerPtrU = std::unique_ptr<RandomSampler>;
