@@ -1132,6 +1132,12 @@
         </property>
         <item row="0" column="0">
          <widget class="QLabel" name="upperHeightLabel">
+          <property name="minimumSize">
+           <size>
+            <width>87</width>
+            <height>0</height>
+           </size>
+          </property>
           <property name="text">
            <string>Upper h:</string>
           </property>
@@ -1146,6 +1152,12 @@
         </item>
         <item row="0" column="3">
          <widget class="QLabel" name="lowerHeightLabel">
+          <property name="minimumSize">
+           <size>
+            <width>87</width>
+            <height>0</height>
+           </size>
+          </property>
           <property name="text">
            <string>Lower h:</string>
           </property>
@@ -1190,6 +1202,26 @@
         </item>
         <item row="2" column="4">
          <widget class="QComboBox" name="lowerMiller2ComboBox"/>
+        </item>
+        <item row="0" column="1">
+         <widget class="QSlider" name="upperHeightSlider">
+          <property name="maximum">
+           <number>100</number>
+          </property>
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="4">
+         <widget class="QSlider" name="lowerHeightSlider">
+          <property name="maximum">
+           <number>100</number>
+          </property>
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+         </widget>
         </item>
        </layout>
       </widget>
@@ -1376,7 +1408,7 @@
       <property name="title">
        <string>Crystals</string>
       </property>
-      <layout class="QVBoxLayout" name="verticalLayout">
+      <layout class="QVBoxLayout" name="crystalsLayout">
        <property name="spacing">
         <number>2</number>
        </property>
@@ -1392,22 +1424,6 @@
        <property name="bottomMargin">
         <number>2</number>
        </property>
-       <item>
-        <widget class="QTableView" name="crystalsTable">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-         <property name="frameShape">
-          <enum>QFrame::NoFrame</enum>
-         </property>
-         <property name="frameShadow">
-          <enum>QFrame::Plain</enum>
-         </property>
-        </widget>
-       </item>
        <item alignment="Qt::AlignRight">
         <widget class="QFrame" name="crystalsButtonFrame">
          <property name="minimumSize">

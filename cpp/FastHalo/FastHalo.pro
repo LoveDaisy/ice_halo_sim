@@ -31,7 +31,8 @@ HEADERS += \
     previewwindow.h \
     spinboxdelegate.h \
     guidata.h \
-    floatlineedit.h
+    floatlineedit.h \
+    cursortable.h
 
 SOURCES += \
     main.cpp \
@@ -49,7 +50,8 @@ SOURCES += \
     previewwindow.cpp \
     spinboxdelegate.cpp \
     guidata.cpp \
-    floatlineedit.cpp
+    floatlineedit.cpp \
+    cursortable.cpp
 
 INCLUDEPATH += $$CPP_PROJ_ROOT/src
 

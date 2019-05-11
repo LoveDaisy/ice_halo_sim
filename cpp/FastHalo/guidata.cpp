@@ -45,6 +45,25 @@ CrystalData::CrystalData(int id)
 MultiScatterData::MultiScatterData(float prob) : prob_(prob) {}
 
 
+CameraData::CameraData()
+    : azimuth_(0), elevation_(0), rotation_(0), fov_(45), lens_type_(IceHalo::LensType::kLinear) {}
+
+
+const std::vector<CameraData::LensTypeData>& CameraData::getLensTypeData() {
+  static std::vector<CameraData::LensTypeData> lens_type_data = {
+    { IceHalo::LensType::kLinear, QObject::tr("Normal lens") },
+    { IceHalo::LensType::kEqualArea, QObject::tr("Fisheye") },
+    { IceHalo::LensType::kDualEqualArea, QObject::tr("Dual fisheye") },
+  };
+  return lens_type_data;
+}
+
+
+RenderData::RenderData()
+    : width_(0), height_(0), visible_range_(IceHalo::VisibleRange::kUpper),
+      ray_color_{ -1, -1, -1 }, background_color_{ -1, -1, -1 }, intensity_(5) {}
+
+
 GuiData::GuiData()
     : sun_diameter_(0.5f), sun_altitude_(20.0f), max_hits_(kDefaultHitsNum),
       ray_number_(kDefaultRayNum) {}

@@ -12,6 +12,7 @@
 #include "context.h"
 #include "crystal.h"
 #include "mymath.h"
+#include "render.h"
 
 
 class WavelengthData {
@@ -69,6 +70,44 @@ class MultiScatterData {
 };
 
 
+class CameraData {
+ public:
+  class LensTypeData {
+   public:
+    LensTypeData(IceHalo::LensType type, QString txt) : type_(type), text_(std::move(txt)) {}
+
+    IceHalo::LensType type_;
+    QString text_;
+  };
+
+  CameraData();
+
+  static const std::vector<LensTypeData>& getLensTypeData();
+
+  float azimuth_;
+  float elevation_;
+  float rotation_;
+  float fov_;
+  IceHalo::LensType lens_type_;
+};
+
+
+class RenderData {
+ public:
+  RenderData();
+
+  static constexpr int kDefaultWidth = 4096;
+  static constexpr int kDefaultHeight = 2048;
+
+  int width_;
+  int height_;
+  IceHalo::VisibleRange visible_range_;
+  float ray_color_[3];
+  float background_color_[3];
+  float intensity_;
+};
+
+
 class GuiData {
  public:
   struct SunDiameterData {
@@ -92,6 +131,8 @@ class GuiData {
 
   // Multi scatter data
   std::vector<MultiScatterData> multi_scatter_data_;
+
+  // Render data
 
   static constexpr int kMinHitsNum = 1;
   static constexpr int kMaxHitsNum = 12;

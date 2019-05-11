@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 
 #include <QColorDialog>
+#include <QHeaderView>
 #include <QPropertyAnimation>
 #include <QStackedWidget>
 #include <QtDebug>
@@ -115,6 +116,8 @@ void MainWindow::addScatter() {
     }
   }
 
+  refreshScatterProb();
+
   connect(btn, &IconButton::closeTab, this, &MainWindow::removeScatter);
 }
 
@@ -127,10 +130,6 @@ void MainWindow::removeScatter(IconButton* sender) {
   if (!sender || index < 0 || static_cast<size_t>(index) >= gui_data_.multi_scatter_data_.size()) {
     return;
   }
-
-  // Update model
-  auto& data = gui_data_.multi_scatter_data_;
-  data.erase(data.begin() + index);
 
   // Update view
   auto anim = new QPropertyAnimation(sender, "maximumWidth");
@@ -155,6 +154,10 @@ void MainWindow::removeScatter(IconButton* sender) {
     scatter_tab_group_->removeButton(sender);
     sender->deleteLater();
 
+    // Update model
+    auto& data = gui_data_.multi_scatter_data_;
+    data.erase(data.begin() + index);
+
     if (layout->count() == 2) {  // Disable close action when there is only one tab button
       static_cast<IconButton*>(layout->itemAt(0)->widget())->enableIcon(false);
     }
@@ -166,6 +169,8 @@ void MainWindow::removeScatter(IconButton* sender) {
       auto curr_tab_btn = static_cast<IconButton*>(layout->itemAt(i)->widget());
       curr_tab_btn->setText(tab_txt);
     }
+
+    refreshScatterProb();
   });
 }
 
@@ -191,11 +196,11 @@ void MainWindow::updateScatterProb(int v) {
 void MainWindow::refreshScatterProb() {
   qDebug() << "refreshScatterProb()";
 
-  double prob = getScatterProb();
+  auto prob = getCurrentScatterData()->prob_;
   int v = std::min(std::max(static_cast<int>(prob * 100), 0), 100);
 
   // Update UI
-  QString prob_str = getScatterProbText(prob);
+  QString prob_str = getScatterProbText(static_cast<double>(prob));
   ui_->scatterProbLabel->setText(prob_str);
   ui_->scatterProbSlider->setValue(v);
 
@@ -245,8 +250,7 @@ void MainWindow::addCrystal() {
   crystal_list_model_->setItem(row_count, 2, item_link);
   crystal_list_model_->setItem(row_count, 3, item_pop);
 
-  auto table = ui_->crystalsTable;
-  table->selectRow(row_count);
+  crystal_table_->selectRow(row_count);
 
   current_crystal_id_++;
 
@@ -257,8 +261,7 @@ void MainWindow::addCrystal() {
 void MainWindow::removeCurrentCrystal() {
   qDebug() << "removeCurrentCrystal()";
 
-  auto table = ui_->crystalsTable;
-  auto index = table->currentIndex();
+  auto index = crystal_table_->currentIndex();
   if (!index.isValid()) {
     return;
   }
@@ -282,9 +285,9 @@ void MainWindow::removeCurrentCrystal() {
   auto row_count = crystal_list_model_->rowCount();
   crystal_list_model_->removeRow(curr_row);
   if (curr_row == row_count - 1) {
-    table->selectRow(curr_row - 1);
+    crystal_table_->selectRow(curr_row - 1);
   } else {
-    table->selectRow(curr_row);
+    crystal_table_->selectRow(curr_row);
   }
 
   refreshCrystalInfo();
@@ -471,11 +474,48 @@ void MainWindow::resetPrismDistance() {
 }
 
 
+void MainWindow::updateUpperHeight(int v) {
+  qDebug() << "updateUpperHeight()";
+
+  auto crystal_data = getCurrentCrystalData();
+
+  // Update model
+  auto h = getPyramidHeight(v);
+  crystal_data->height_[1] = static_cast<float>(h);
+
+  // Update UI widget
+  ui_->upperHeightLabel->setText(tr("Upper h: ") + getPyramidHeightText(h));
+}
+
+
+void MainWindow::updateLowerHeight(int v) {
+  qDebug() << "UpdateLowerHeight()";
+
+  auto crystal_data = getCurrentCrystalData();
+
+  // Update model
+  auto h = getPyramidHeight(v);
+  crystal_data->height_[2] = static_cast<float>(h);
+
+  // Update UI widget
+  ui_->lowerHeightLabel->setText(tr("Lower h: ") + getPyramidHeightText(h));
+}
+
+
+void MainWindow::updatePyramidMillerIndex(int idx, int v) {
+  qDebug() << "updatePyramidMillerIndex()";
+
+  auto crystal_data = getCurrentCrystalData();
+
+  // Update model
+  crystal_data->miller_idx_[idx] = v;
+}
+
+
 void MainWindow::refreshCrystalInfo() {
   qDebug() << "refreshCrystalInfo()";
 
-  auto table = ui_->crystalsTable;
-  auto curr_index = table->currentIndex();
+  auto curr_index = crystal_table_->currentIndex();
 
   if (!curr_index.isValid()) {
     setCrystalPanelEnabled(false);
@@ -511,16 +551,20 @@ void MainWindow::refreshCrystalInfo() {
   auto height = crystal_data->height_[0];
   crystal_height_edit_->setText(crystal_height_edit_->formatValue(height));
 
-  // Update pyramid height edit
-  pyramid_upper_height_edit_->setDataSource(crystal_data->height_ + 1);
-  pyramid_lower_height_edit_->setDataSource(crystal_data->height_ + 2);
+  // Update pyramid height slider
   if (crystal_data->type_ == IceHalo::CrystalType::kPrism) {
     ui_->pyramidParameterPanel->setEnabled(false);
   } else if (crystal_data->type_ == IceHalo::CrystalType::kPyramid) {
     ui_->pyramidParameterPanel->setEnabled(crystal_item_data->enabled);
   }
-  pyramid_upper_height_edit_->refreshText();
-  pyramid_lower_height_edit_->refreshText();
+  float upper_h = crystal_data->height_[1];
+  float lower_h = crystal_data->height_[2];
+  ui_->upperHeightLabel->setText(tr("Upper h: ") +
+                                 getPyramidHeightText(static_cast<double>(upper_h)));
+  ui_->lowerHeightLabel->setText(tr("Lower h: ") +
+                                 getPyramidHeightText(static_cast<double>(lower_h)));
+  ui_->upperHeightSlider->setValue(static_cast<int>(upper_h * 100));
+  ui_->lowerHeightSlider->setValue(static_cast<int>(lower_h * 100));
 
   // Update pyramid miller index
   QComboBox* miller_combos[] = {
@@ -663,6 +707,7 @@ void MainWindow::initScatterTab() {
 
   connect(scatter_tab_add_btn_, &QToolButton::clicked, this, &MainWindow::addScatter);
   connect(scatter_tab_group_, QOverload<int, bool>::of(&QButtonGroup::buttonToggled), this, [=] {
+    refreshScatterProb();
     refreshCrystalList();
     refreshCrystalInfo();
   });
@@ -670,56 +715,51 @@ void MainWindow::initScatterTab() {
 
 
 void MainWindow::initCrystalList() {
-  auto table = ui_->crystalsTable;
+  crystal_table_ = new CursorTable;
+  ui_->crystalsLayout->insertWidget(0, crystal_table_, 1);
 
   crystal_list_model_ = new QStandardItemModel();
-  crystal_list_model_->setHorizontalHeaderLabels(QStringList{ "Enable", "Name", "", "Pop." });
+  crystal_list_model_->setHorizontalHeaderLabels(QStringList{ "", "Name", "", "Pop." });
 
-  table->setMouseTracking(true);
-  table->setModel(crystal_list_model_);
-  table->setColumnWidth(0, 50);
-  table->setColumnWidth(2, 30);
-  table->setColumnWidth(3, 40);
-  table->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
-  table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-  table->horizontalHeader()->setMinimumSectionSize(20);
-  table->verticalHeader()->hide();
-  table->setSelectionBehavior(QAbstractItemView::SelectRows);
-  table->setSelectionMode(QAbstractItemView::SingleSelection);
-  table->setShowGrid(false);
-  table->setItemDelegateForColumn(3, new SpinBoxDelegate());
+  crystal_table_->setModel(crystal_list_model_);
+  crystal_table_->setColumnWidth(0, 25);
+  crystal_table_->setColumnWidth(2, 30);
+  crystal_table_->setColumnWidth(3, 40);
+  crystal_table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+  crystal_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+  crystal_table_->horizontalHeader()->setMinimumSectionSize(20);
+  crystal_table_->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft);
+  crystal_table_->verticalHeader()->hide();
+  crystal_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+  crystal_table_->setSelectionMode(QAbstractItemView::SingleSelection);
+  crystal_table_->setShowGrid(false);
+  crystal_table_->setItemDelegateForColumn(3, new SpinBoxDelegate());
+
+  crystal_table_->setColumCursor(0, Qt::PointingHandCursor);
+  crystal_table_->setColumCursor(2, Qt::PointingHandCursor);
 
   // Add crystal
   connect(ui_->crystalsAddButton, &QToolButton::clicked, this, [=] {
-    ui_->crystalsTable->setFocus();
+    crystal_table_->setFocus();
     addCrystal();
   });
 
   // Remove crystal
   connect(ui_->crystalsRemoveButton, &QToolButton::clicked, this, [=] {
-    ui_->crystalsTable->setFocus();
+    crystal_table_->setFocus();
     removeCurrentCrystal();
   });
 
   // Click link/unlink icon
-  connect(table, &QTableView::clicked, this, [=](const QModelIndex& index) {
+  connect(crystal_table_, &QTableView::clicked, this, [=](const QModelIndex& index) {
     if (index.column() != 2) {
       return;
     }
     toggleCrystalLinkState(index);
   });
 
-  // Cursor. Use hand cursor for link/unlink icon
-  connect(table, &QTableView::entered, this, [=](const QModelIndex& index) {
-    if (index.column() == 0 || index.column() == 2) {
-      ui_->crystalsTable->setCursor(Qt::PointingHandCursor);
-    } else {
-      ui_->crystalsTable->unsetCursor();
-    }
-  });
-
   // Choose item
-  connect(table, &QTableView::clicked, this, &MainWindow::refreshCrystalInfo);
+  connect(crystal_table_, &CursorTable::clicked, this, &MainWindow::refreshCrystalInfo);
 
   // Item data changed
   connect(crystal_list_model_, &QStandardItemModel::dataChanged, this,
@@ -735,11 +775,11 @@ void MainWindow::initCrystalInfoPanel() {
   crystal_height_edit_ = new FloatLineEdit(0, 10, 1);
   ui_->crystalBasicLayout->addWidget(crystal_height_edit_, 1, 1);
 
-  // Pyramid height edits
-  pyramid_lower_height_edit_ = new FloatLineEdit(0, 1, 1);
-  pyramid_upper_height_edit_ = new FloatLineEdit(0, 1, 1);
-  ui_->pyramidHeightLayout->addWidget(pyramid_upper_height_edit_, 0, 1);
-  ui_->pyramidHeightLayout->addWidget(pyramid_lower_height_edit_, 0, 4);
+  // Miller index
+  miller_index_combos_[0] = ui_->upperMiller1ComboBox;
+  miller_index_combos_[1] = ui_->upperMiller2ComboBox;
+  miller_index_combos_[2] = ui_->lowerMiller1ComboBox;
+  miller_index_combos_[3] = ui_->lowerMiller2ComboBox;
 
   // Axis edits
   axis_zenith_mean_edit_ = new FloatLineEdit(-90, 90, 1);
@@ -834,6 +874,18 @@ void MainWindow::initCrystalInfoPanel() {
 
   connect(ui_->crystalTypeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           &MainWindow::updateCrystalType);
+
+  connect(ui_->upperHeightSlider, &QSlider::valueChanged, this, &MainWindow::updateUpperHeight);
+  connect(ui_->lowerHeightSlider, &QSlider::valueChanged, this, &MainWindow::updateLowerHeight);
+
+  for (int i = 0; i < 4; i++) {
+    connect(miller_index_combos_[i], QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [=](int cmb_idx) {
+              int v = miller_index_combos_[i]->itemData(cmb_idx, Qt::UserRole).toInt();
+              updatePyramidMillerIndex(i, v);
+            });
+  }
+
   connect(ui_->crystalPrismDistanceResetButton, &QPushButton::clicked, this,
           &MainWindow::resetPrismDistance);
   for (int idx = 0; idx < 6; idx++) {
@@ -909,7 +961,19 @@ QString MainWindow::getPrismDistanceText(double d) {
 }
 
 
+double MainWindow::getPyramidHeight(int value) {
+  return value / 100.0;
+}
+
+
+QString MainWindow::getPyramidHeightText(double h) {
+  return QString::number(h, 'f', 2);
+}
+
+
 MultiScatterData* MainWindow::getCurrentScatterData() {
+  qDebug() << "getCurrentScatterData()";
+
   auto checked_btn = scatter_tab_group_->checkedButton();
   auto btn_cnt = ui_->scatterTabLayout->count() - 1;
   for (int i = 0; i < btn_cnt; i++) {
@@ -923,7 +987,7 @@ MultiScatterData* MainWindow::getCurrentScatterData() {
 
 
 MultiScatterData::CrystalItemData* MainWindow::getCurrentCrystalItemData() {
-  auto index = ui_->crystalsTable->currentIndex();
+  auto index = crystal_table_->currentIndex();
   return getCrystalItemData(index);
 }
 
@@ -943,7 +1007,7 @@ MultiScatterData::CrystalItemData* MainWindow::getCrystalItemData(const QModelIn
 
 
 CrystalData* MainWindow::getCurrentCrystalData() {
-  auto index = ui_->crystalsTable->currentIndex();
+  auto index = crystal_table_->currentIndex();
   return getCrystalData(index);
 }
 

@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include <QButtonGroup>
+#include <QComboBox>
 #include <QGridLayout>
 #include <QLabel>
 #include <QMainWindow>
@@ -13,6 +14,7 @@
 #include <QtGui/QScreen>
 
 #include "context.h"
+#include "cursortable.h"
 #include "floatlineedit.h"
 #include "guidata.h"
 #include "iconbutton.h"
@@ -52,10 +54,13 @@ class MainWindow : public QMainWindow {
   void refreshCrystalList();                              // Update view
 
   // Crystal info
-  void updateCrystalType(int combo_idx);     // Update model
-  void updatePrismDistance(int idx, int v);  // Update model
-  void resetPrismDistance();                 // Update model and view
-  void refreshCrystalInfo();                 // Update view
+  void updateCrystalType(int combo_idx);          // Update model
+  void updatePrismDistance(int idx, int v);       // Update model
+  void resetPrismDistance();                      // Update model and view
+  void updateUpperHeight(int v);                  // Update model
+  void updateLowerHeight(int v);                  // Update model
+  void updatePyramidMillerIndex(int idx, int v);  // Update model
+  void refreshCrystalInfo();                      // Update view
 
   // Filter settings group
   void enableFilterSettings(bool enable);
@@ -79,6 +84,10 @@ class MainWindow : public QMainWindow {
   double getPrismDistance(int idx);
   double getPrismDistanceByValue(int value);
   QString getPrismDistanceText(double d);
+
+  double getPyramidHeight(int value);
+  QString getPyramidHeightText(double h);
+
   MultiScatterData* getCurrentScatterData();
   MultiScatterData::CrystalItemData* getCurrentCrystalItemData();
   MultiScatterData::CrystalItemData* getCrystalItemData(const QModelIndex& index);
@@ -99,8 +108,6 @@ class MainWindow : public QMainWindow {
   Qt3DExtras::Qt3DWindow* view3d_;
   QWidget* crystal_preview_widget_;
   FloatLineEdit* crystal_height_edit_;
-  FloatLineEdit* pyramid_upper_height_edit_;
-  FloatLineEdit* pyramid_lower_height_edit_;
   FloatLineEdit* axis_zenith_mean_edit_;
   FloatLineEdit* axis_zenith_std_edit_;
   FloatLineEdit* axis_roll_mean_edit_;
@@ -109,9 +116,11 @@ class MainWindow : public QMainWindow {
   FloatLineEdit* axis_azimuth_std_edit_;
   QSlider* prism_distance_sliders_[6];
   QLabel* prism_distance_labels_[6];
+  QComboBox* miller_index_combos_[4];
 
   // Crystal list
   QStandardItemModel* crystal_list_model_;
+  CursorTable* crystal_table_;
 
   // Data model
   IceHalo::ProjectContextPtr project_context_;
