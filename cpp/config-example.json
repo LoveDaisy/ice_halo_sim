@@ -15,12 +15,12 @@
         "elevation": 0,
         "rotation": 0,
         "fov": 90,
-        "width": 4096,
-        "height": 2048,
         "lens": "dual_fisheye_equiarea"
     },
     "render": {
-        "visible_semi_sphere": "full",
+        "width": 2048,
+        "height": 2048,
+        "visible_semi_sphere": "upper",
         "ray_color": "real",
         "background_color": [0, 0, 0],
         "intensity_factor": 5,
@@ -29,198 +29,134 @@
     },
     "multi_scatter": [
         {
-            "crystal": [4, 7],
-            "population": [200, 100],
+            "crystal": [11, 2],
+            "population": [100, 100],
             "probability": 1.0,
-            "ray_path_filter": [2, 0]
-        },
-        {
-            "crystal": [4, 7],
-            "population": [200, 100],
-            "probability": 1.0,
-            "ray_path_filter": [1, 0]
+            "ray_path_filter": [0, 0]
         }
     ],
     "ray_path_filter": [
         {
             "id": 0,
-            "symmetry": "",
-            "path": [],
-            "entry": [],
-            "exit": [],
-            "hit": [],
             "type": "none"
         },
         {
             "id": 1,
+            "type": "specific",
+            "path": [3, 5],
             "symmetry": "PBD",
-            "path": [1, 3],
-            "entry": [3],
-            "exit": [5],
-            "hit": [],
-            "type": "specific"
+            "complementary": true,
+            "remove_homodromous": true
         },
         {
             "id": 2,
-            "symmetry": "PBD",
-            "path": [],
+            "type": "general",
             "entry": [1, 2],
             "exit": [3, 4, 5, 6, 7, 8],
             "hit": [2, 3, 4],
-            "type": "general"
+            "symmetry": "PBD"
         },
         {
             "id": 3,
-            "symmetry": "P",
+            "type": "specific",
             "path": [[3, 6], [3, 5], [1, 3]],
-            "entry": [],
-            "exit": [],
-            "hit": [],
-            "type": "specific"
+            "symmetry": "P"
+        },
+        {
+            "id": 4,
+            "type": "specific",
+            "path": [1],
+            "symmetry": "PBD"
         }
     ],
     "crystal": [
         {
             "id": 1,
-            "type": "IrregularHexPyramid",
-            "parameter": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1.2, 0],
+            "type": "HexPrism",
+            "parameter": 1.4,
             "zenith": {
                 "mean": 90,
-                "std": 2.0,
-                "type": "gauss"
-            },
-            "azimuth": {
-                "mean": 0,
-                "std": 5,
+                "std": 0.3,
                 "type": "gauss"
             },
             "roll": {
                 "mean": 0,
-                "std": 1.2,
+                "std": 0,
                 "type": "uniform"
             }
         },
         {
             "id": 2,
-            "type": "HexPyramid",
-            "parameter": [1, 1, 1, 1, 0.3, 1.2, 0.9],
+            "type": "HexPrism",
+            "parameter": 5,
             "zenith": {
                 "mean": 0,
-                "std": 2.5,
-                "type": "gauss"
-            },
-            "azimuth": {
-                "mean": 0,
-                "std": 360,
+                "std": 0,
                 "type": "uniform"
             },
             "roll": {
                 "mean": 0,
-                "std": 360,
+                "std": 0,
                 "type": "uniform"
             }
         },
         {
             "id": 3,
-            "type": "IrregularHexPrism",
-            "parameter": [1.0, 1.0, 1.5, 1.0, 2.5, 1.0, 1.2],
+            "type": "IrregularHexPyramid",
+            "parameter": [1, 1.4, 1, 1.4, 1, 1.4, 1, 1, 1, 1, 0.2, 1.4, 0.2],
             "zenith": {
-                "mean": 0,
-                "std": 2.5,
+                "mean": 90,
+                "std": 0.8,
                 "type": "gauss"
             },
             "roll": {
                 "mean": 0,
-                "std": 360,
-                "type": "uniform"
-            }
-        },
-        {
-            "id": 4,
-            "type": "HexPrism",
-            "parameter": 0.2,
-            "zenith": {
-                "mean": 0,
-                "std": 1,
-                "type": "gauss"
-            },
-            "roll": {
-                "mean": 0,
-                "std": 360,
+                "std": 0,
                 "type": "uniform"
             }
         },
         {
             "id": 5,
-            "type": "HexPyramid",
-            "parameter": [0.2, 0.2, 0.5],
-            "zenith": {
-                "mean": 0,
-                "std": 23,
-                "type": "gauss"
-            },
-            "roll": {
-                "mean": 0,
-                "std": 360,
-                "type": "uniform"
-            }
-        },
-        {
-            "id": 6,
             "type": "HexPrism",
-            "parameter": 1.6,
-            "zenith": {
-                "mean": 90,
-                "std": 0.1,
-                "type": "gauss"
-            },
-            "roll": {
-                "mean": 90,
-                "std": 2.5,
-                "type": "gauss"
-            },
-            "ray_path_filter": {
-                "symmetry": "PBD",
-                "path": [3, 5],
-                "entry": [2],
-                "exit": [1],
-                "type": "none"
-            }
-        },
-        {
-            "id": 7,
-            "type": "HexPrism",
-            "parameter": 1.2,
-            "zenith": {
-                "mean": 0,
-                "std": 360,
-                "type": "uniform"
-            },
-            "roll": {
-                "mean": 0,
-                "std": 360,
-                "type": "uniform"
-            },
-            "ray_path_filter": {
-                "symmetry": "",
-                "path": [3, 5],
-                "entry": [3, 4],
-                "exit": [7],
-                "type": "none"
-            }
-        },
-        {
-            "id": 8,
-            "type": "Custom",
-            "parameter": "hex_cylinder_01.obj",
+            "parameter": 1.5,
             "zenith": {
                 "mean": 90,
                 "std": 0.5,
                 "type": "gauss"
             },
             "roll": {
+                "mean": 90,
+                "std": 0.5,
+                "type": "gauss"
+            }
+        },
+        {
+            "id": 10,
+            "type": "HexPyramid",
+            "parameter": [0.3, 0.0, 0.3],
+            "zenith": {
+                "mean": 90,
+                "std": 0.5,
+                "type": "gauss"
+            },
+            "roll": {
+                "mean": 90,
+                "std": 0.5,
+                "type": "uniform"
+            }
+        },
+        {
+            "id": 11,
+            "type": "HexPrism",
+            "parameter": 0.3,
+            "zenith": {
                 "mean": 0,
-                "std": 360,
+                "std": 0.5,
+                "type": "gauss"
+            },
+            "roll": {
+                "mean": 0,
+                "std": 0,
                 "type": "uniform"
             }
         }
