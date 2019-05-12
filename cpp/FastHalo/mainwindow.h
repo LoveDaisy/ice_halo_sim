@@ -63,7 +63,9 @@ class MainWindow : public QMainWindow {
   void refreshCrystalInfo();                      // Update view
 
   // Filter settings group
-  void enableFilterSettings(bool enable);
+  void enableFilterSettings(bool enable); // Helper function
+  void updateFilterInfo(); // Update model;
+  void refreshFilterInfo();  // Update view
 
  private:
   void initUi();
@@ -132,6 +134,7 @@ class MainWindow : public QMainWindow {
   GuiData gui_data_;
 
   static int current_crystal_id_;
+  static int current_filter_id_;
 
   using LensType_t = std::underlying_type<IceHalo::LensType>::type;
   using VisibleRange_t = std::underlying_type<IceHalo::VisibleRange>::type;

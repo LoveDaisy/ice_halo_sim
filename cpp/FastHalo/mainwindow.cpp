@@ -15,6 +15,7 @@
 
 
 int MainWindow::current_crystal_id_ = 1;
+int MainWindow::current_filter_id_ = 1;
 
 
 MainWindow::MainWindow(QWidget* parent)
@@ -115,8 +116,6 @@ void MainWindow::addScatter() {
       static_cast<IconButton*>(layout->itemAt(i)->widget())->enableIcon(true);
     }
   }
-
-  refreshScatterProb();
 
   connect(btn, &IconButton::closeTab, this, &MainWindow::removeScatter);
 }
@@ -255,6 +254,7 @@ void MainWindow::addCrystal() {
   current_crystal_id_++;
 
   refreshCrystalInfo();
+  refreshFilterInfo();
 }
 
 
@@ -291,6 +291,7 @@ void MainWindow::removeCurrentCrystal() {
   }
 
   refreshCrystalInfo();
+  refreshFilterInfo();
 }
 
 
@@ -629,6 +630,14 @@ void MainWindow::refreshCrystalInfo() {
 
 
 void MainWindow::enableFilterSettings(bool enable) {
+  qDebug() << "enableFilterSettings()";
+
+  if (enable) {
+    ui_->filterEnableCheckBox->setCheckState(Qt::Checked);
+  } else {
+    ui_->filterEnableCheckBox->setCheckState(Qt::Unchecked);
+  }
+
   ui_->specificRadioButton->setEnabled(enable);
   ui_->generalRadioButton->setEnabled(enable);
   ui_->symBCheckBox->setEnabled(enable);
@@ -636,6 +645,109 @@ void MainWindow::enableFilterSettings(bool enable) {
   ui_->symPCheckBox->setEnabled(enable);
   for (int i = 0; i < ui_->filterPathPages->count(); i++) {
     ui_->filterPathPages->widget(i)->setEnabled(enable);
+  }
+}
+
+
+void MainWindow::updateFilterInfo() {
+  qDebug() << "updateFilterInfo()";
+
+  auto crystal_item_data = getCurrentCrystalItemData();
+  auto filter_id = crystal_item_data->filter_id;
+
+  if (filter_id > 0 && gui_data_.filter_store_.count(filter_id)) {
+    gui_data_.filter_store_.erase(filter_id);
+  }
+
+  if (ui_->filterEnableCheckBox->checkState() == Qt::Unchecked) {
+    crystal_item_data->filter_id = 0;
+    return;
+  }
+
+  crystal_item_data->filter_id = current_filter_id_;
+  FilterData filter(FilterData::kSpecific);
+
+  if (ui_->specificRadioButton->isChecked()) {  // For specific path filter
+    auto count = specific_path_model_->rowCount();
+    for (int i = 0; i < count - 1; i++) {
+      auto index = specific_path_model_->index(i, 1);
+
+      // Parse path
+      // A path is like "3-5-1"
+      QString path_txt = specific_path_model_->data(index).toString();
+      auto path_list = path_txt.split("-", QString::SkipEmptyParts);
+
+      std::vector<int> tmp_path;
+      for (const auto& t : path_list) {
+        tmp_path.emplace_back(t.toInt());
+      }
+      filter.paths_.emplace_back(tmp_path);
+    }
+  } else if (ui_->generalRadioButton->isChecked()) {  // For general path filter
+    filter.type_ = FilterData::kGeneral;
+
+    // Set hits
+    filter.hits_ = ui_->generalFilterHitsSpinBox->value();
+
+    // Parse enter faces
+    // It is like "3,5,7"
+    QString enter_txt = ui_->generalFilterEnterEdit->text();
+    auto enter_txt_list = enter_txt.split(",", QString::SkipEmptyParts);
+    for (const auto& t : enter_txt_list) {
+      filter.enter_faces_.emplace_back(t.toInt());
+    }
+
+    // Parse exit faces
+    QString exit_txt = ui_->generalFilterExitEdit->text();
+    auto exit_txt_list = exit_txt.split(",", QString::SkipEmptyParts);
+    for (const auto& t : exit_txt_list) {
+      filter.exit_faces_.emplace_back(t.toInt());
+    }
+  }
+
+  gui_data_.filter_store_.emplace(current_filter_id_, filter);
+  current_filter_id_ += 1;
+}
+
+
+void MainWindow::refreshFilterInfo() {
+  qDebug() << "refreshFilterInfo";
+
+  auto crystal_item_data = getCurrentCrystalItemData();
+  if (!crystal_item_data) { // If no crystal, then disable the filter panel
+    ui_->filterEnableCheckBox->setCheckState(Qt::Unchecked);
+    ui_->filterEnableCheckBox->setEnabled(false);
+    enableFilterSettings(false);
+    return;
+  } else {
+    ui_->filterEnableCheckBox->setEnabled(true);
+  }
+
+  auto filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+
+  switch (filter_data.type_) {
+    case FilterData::kNone:
+      enableFilterSettings(false);
+      break;
+    case FilterData::kSpecific:
+      enableFilterSettings(true);
+      ui_->filterEnableCheckBox->setCheckState(Qt::Checked);
+      ui_->specificRadioButton->setChecked(true);
+      // TODO
+      break;
+    case FilterData::kGeneral: {
+      enableFilterSettings(true);
+      ui_->filterEnableCheckBox->setCheckState(Qt::Checked);
+      ui_->generalRadioButton->setChecked(true);
+      QStringList enter_faces;
+      for (auto f : filter_data.enter_faces_) {
+        enter_faces << QString::number(f);
+      }
+      ui_->generalFilterEnterEdit->setText(enter_faces.join(","));
+    } break;
+    default:
+      qCritical() << "Filter type not recgonized!";
+      break;
   }
 }
 
@@ -653,7 +765,6 @@ void MainWindow::initUi() {
   initFilter();
 
   // Connect signals and slots
-  connect(ui_->filterEnableCheckBox, &QCheckBox::clicked, this, &MainWindow::enableFilterSettings);
   connect(ui_->scatterProbSlider, &QSlider::valueChanged, this, &MainWindow::updateScatterProb);
 }
 
@@ -714,6 +825,7 @@ void MainWindow::initScatterTab() {
     refreshScatterProb();
     refreshCrystalList();
     refreshCrystalInfo();
+    refreshFilterInfo();
   });
 }
 
@@ -763,7 +875,10 @@ void MainWindow::initCrystalList() {
   });
 
   // Choose item
-  connect(crystal_table_, &CursorTable::clicked, this, &MainWindow::refreshCrystalInfo);
+  connect(crystal_table_, &CursorTable::clicked, this, [=]{
+    refreshCrystalInfo();
+    refreshFilterInfo();
+  });
 
   // Item data changed
   connect(crystal_list_model_, &QStandardItemModel::dataChanged, this,
@@ -922,14 +1037,23 @@ void MainWindow::initFilter() {
 
   // TODO
 
-  enableFilterSettings(false);
+  refreshFilterInfo();
+
+  connect(ui_->filterEnableCheckBox, &QCheckBox::clicked, this, [=](bool checked){
+    enableFilterSettings(checked);
+    if (checked) {
+      updateFilterInfo();
+    }
+  });
 
   connect(ui_->specificRadioButton, &QRadioButton::toggled, this, [=]{
     ui_->filterPathPages->setCurrentIndex(0);
+    updateFilterInfo();
   });
 
   connect(ui_->generalRadioButton, &QRadioButton::toggled, this, [=]{
     ui_->filterPathPages->setCurrentIndex(1);
+    updateFilterInfo();
   });
 }
 

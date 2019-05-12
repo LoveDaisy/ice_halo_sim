@@ -66,7 +66,9 @@ RenderData::RenderData()
 
 GuiData::GuiData()
     : sun_diameter_(0.5f), sun_altitude_(20.0f), max_hits_(kDefaultHitsNum),
-      ray_number_(kDefaultRayNum) {}
+      ray_number_(kDefaultRayNum) {
+  filter_store_.emplace(0, FilterData::kNone);
+}
 
 
 std::vector<GuiData::SunDiameterData>& GuiData::getSunDiameterData() {

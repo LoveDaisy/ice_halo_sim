@@ -6,7 +6,7 @@
 #include <QString>
 #include <QVector>
 #include <cstddef>
-#include <unordered_map>
+#include <map>
 #include <vector>
 
 #include "context.h"
@@ -44,6 +44,25 @@ class CrystalData {
   float height_[3];
   int miller_idx_[4];  // upper1, upper2, lower1, lower2
   float prism_dist_[6];
+};
+
+
+class FilterData {
+public:
+  enum Type {
+    kNone,
+    kSpecific,
+    kGeneral,
+    kUnkown,
+  };
+
+  explicit FilterData(Type type) : type_(type), hits_(0) {}
+
+  Type type_;
+  std::vector<std::vector<int>> paths_;
+  std::vector<int> enter_faces_;
+  std::vector<int> exit_faces_;
+  int hits_;
 };
 
 
@@ -127,7 +146,10 @@ class GuiData {
   int wavelength_data_idx_;
 
   // Crystals
-  std::unordered_map<int, CrystalData> crystal_store_;
+  std::map<int, CrystalData> crystal_store_;
+
+  // Filters
+  std::map<int, FilterData> filter_store_;
 
   // Multi scatter data
   std::vector<MultiScatterData> multi_scatter_data_;
