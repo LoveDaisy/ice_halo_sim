@@ -56,9 +56,10 @@ public:
     kUnkown,
   };
 
-  explicit FilterData(Type type) : type_(type), hits_(0) {}
+  explicit FilterData(Type type) : type_(type), symmetry_flag_(IceHalo::kSymmetryNone), hits_(0) {}
 
   Type type_;
+  uint8_t symmetry_flag_;
   std::vector<std::vector<int>> paths_;
   std::vector<int> enter_faces_;
   std::vector<int> exit_faces_;

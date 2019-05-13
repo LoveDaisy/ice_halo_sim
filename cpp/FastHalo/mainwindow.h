@@ -64,6 +64,7 @@ class MainWindow : public QMainWindow {
 
   // Filter settings group
   void enableFilterSettings(bool enable); // Helper function
+  void resetFilterInfo(); // Helper function
   void updateFilterInfo(); // Update model;
   void refreshFilterInfo();  // Update view
 
@@ -77,17 +78,22 @@ class MainWindow : public QMainWindow {
 
   void setCrystalPanelEnabled(bool enable);
 
+  // Scatter probability
   double getScatterProb();
   double getScatterProb(int v);
   QString getScatterTabText(int idx);
   QString getScatterProbText(double prob);
+
+  // Scatter tabs
   IconButton* createScatterTab();
   QToolButton* createScatterAddButton();
 
+  // Prism distances
   double getPrismDistance(int idx);
   double getPrismDistanceByValue(int value);
   QString getPrismDistanceText(double d);
 
+  // Pyramid heights
   double getPyramidHeight(int value);
   QString getPyramidHeightText(double h);
 

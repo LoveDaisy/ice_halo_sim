@@ -104,7 +104,7 @@ void MainWindow::addScatter() {
   int curr_item_cnt = layout->count();
   auto btn = createScatterTab();
   btn->setText(getScatterTabText(curr_item_cnt - 1));
-  btn->setChecked(true);
+  btn->setChecked(true);  // This will emit toggle signal, thus refresh relavent panels
   btn->enableIcon(true);
   layout->insertWidget(curr_item_cnt - 1, btn);
   scatter_tab_group_->addButton(btn);
@@ -144,7 +144,8 @@ void MainWindow::removeScatter(IconButton* sender) {
     if (next_idx == layout->count() - 1) {  // The last tab
       next_idx = index - 1;
     }
-    static_cast<IconButton*>(layout->itemAt(next_idx)->widget())->setChecked(true);
+    auto tab = static_cast<IconButton*>(layout->itemAt(next_idx)->widget());
+    tab->setChecked(true);  // And this will emit toggle signal, thus refresh relavent panels
   }
 
   // After animation finished, delete button and udpate tab text
@@ -157,7 +158,7 @@ void MainWindow::removeScatter(IconButton* sender) {
     auto& data = gui_data_.multi_scatter_data_;
     data.erase(data.begin() + index);
 
-    if (layout->count() == 2) {  // Disable close action when there is only one tab button
+    if (layout->count() == 2) {  // Disable close action when there is only one tab
       static_cast<IconButton*>(layout->itemAt(0)->widget())->enableIcon(false);
     }
 
@@ -168,8 +169,6 @@ void MainWindow::removeScatter(IconButton* sender) {
       auto curr_tab_btn = static_cast<IconButton*>(layout->itemAt(i)->widget());
       curr_tab_btn->setText(tab_txt);
     }
-
-    refreshScatterProb();
   });
 }
 
@@ -649,6 +648,15 @@ void MainWindow::enableFilterSettings(bool enable) {
 }
 
 
+void MainWindow::resetFilterInfo() {
+  ui_->filterEnableCheckBox->setCheckState(Qt::Unchecked);
+  ui_->specificRadioButton->setChecked(true);
+  ui_->symBCheckBox->setChecked(false);
+  ui_->symPCheckBox->setChecked(false);
+  ui_->symDCheckBox->setChecked(false);
+}
+
+
 void MainWindow::updateFilterInfo() {
   qDebug() << "updateFilterInfo()";
 
@@ -665,9 +673,22 @@ void MainWindow::updateFilterInfo() {
   }
 
   crystal_item_data->filter_id = current_filter_id_;
-  FilterData filter(FilterData::kSpecific);
+  FilterData filter(FilterData::kNone);
+
+  // Update symmetry
+  if (ui_->symBCheckBox->checkState() == Qt::Checked) {
+    filter.symmetry_flag_ |= IceHalo::kSymmetryBasal;
+  }
+  if (ui_->symPCheckBox->checkState() == Qt::Checked) {
+    filter.symmetry_flag_ |= IceHalo::kSymmetryPrism;
+  }
+  if (ui_->symDCheckBox->checkState() == Qt::Checked) {
+    filter.symmetry_flag_ |= IceHalo::kSymmetryDirection;
+  }
 
   if (ui_->specificRadioButton->isChecked()) {  // For specific path filter
+    filter.type_ = FilterData::kSpecific;
+
     auto count = specific_path_model_->rowCount();
     for (int i = 0; i < count - 1; i++) {
       auto index = specific_path_model_->index(i, 1);
@@ -714,9 +735,10 @@ void MainWindow::refreshFilterInfo() {
   qDebug() << "refreshFilterInfo";
 
   auto crystal_item_data = getCurrentCrystalItemData();
-  if (!crystal_item_data) { // If no crystal, then disable the filter panel
-    ui_->filterEnableCheckBox->setCheckState(Qt::Unchecked);
+  if (!crystal_item_data || !crystal_item_data->enabled) {
+    // If no crystal, or the crystl is not enabled, then disable the filter panel
     ui_->filterEnableCheckBox->setEnabled(false);
+    resetFilterInfo();
     enableFilterSettings(false);
     return;
   } else {
@@ -725,19 +747,19 @@ void MainWindow::refreshFilterInfo() {
 
   auto filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
 
+  // Update type (radio button) and path info (stacked widget)
   switch (filter_data.type_) {
     case FilterData::kNone:
+      resetFilterInfo();
       enableFilterSettings(false);
       break;
     case FilterData::kSpecific:
       enableFilterSettings(true);
-      ui_->filterEnableCheckBox->setCheckState(Qt::Checked);
       ui_->specificRadioButton->setChecked(true);
       // TODO
       break;
     case FilterData::kGeneral: {
       enableFilterSettings(true);
-      ui_->filterEnableCheckBox->setCheckState(Qt::Checked);
       ui_->generalRadioButton->setChecked(true);
       QStringList enter_faces;
       for (auto f : filter_data.enter_faces_) {
@@ -748,6 +770,25 @@ void MainWindow::refreshFilterInfo() {
     default:
       qCritical() << "Filter type not recgonized!";
       break;
+  }
+
+  // Update symmetry
+  if (filter_data.symmetry_flag_ & IceHalo::kSymmetryBasal) {
+    ui_->symBCheckBox->setCheckState(Qt::Checked);
+  } else {
+    ui_->symBCheckBox->setCheckState(Qt::Unchecked);
+  }
+
+  if (filter_data.symmetry_flag_ & IceHalo::kSymmetryPrism) {
+    ui_->symPCheckBox->setCheckState(Qt::Checked);
+  } else {
+    ui_->symPCheckBox->setCheckState(Qt::Unchecked);
+  }
+
+  if (filter_data.symmetry_flag_ & IceHalo::kSymmetryDirection) {
+    ui_->symDCheckBox->setCheckState(Qt::Checked);
+  } else {
+    ui_->symDCheckBox->setCheckState(Qt::Unchecked);
   }
 }
 
@@ -1039,7 +1080,8 @@ void MainWindow::initFilter() {
 
   refreshFilterInfo();
 
-  connect(ui_->filterEnableCheckBox, &QCheckBox::clicked, this, [=](bool checked){
+  connect(ui_->filterEnableCheckBox, &QCheckBox::stateChanged, this, [=](int state){
+    bool checked = state == Qt::Checked;
     enableFilterSettings(checked);
     if (checked) {
       updateFilterInfo();
@@ -1055,6 +1097,10 @@ void MainWindow::initFilter() {
     ui_->filterPathPages->setCurrentIndex(1);
     updateFilterInfo();
   });
+
+  connect(ui_->symBCheckBox, &QCheckBox::stateChanged, this, &MainWindow::updateFilterInfo);
+  connect(ui_->symPCheckBox, &QCheckBox::stateChanged, this, &MainWindow::updateFilterInfo);
+  connect(ui_->symDCheckBox, &QCheckBox::stateChanged, this, &MainWindow::updateFilterInfo);
 }
 
 
