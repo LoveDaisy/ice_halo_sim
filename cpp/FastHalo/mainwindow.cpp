@@ -243,11 +243,9 @@ void MainWindow::addCrystal() {
   item_pop->setData(scatter_data->crystals_.back().population, Qt::EditRole);
 
   auto row_count = crystal_list_model_->rowCount();
-  crystal_list_model_->setItem(row_count, 0, item_check);
-  crystal_list_model_->setItem(row_count, 1, item_name);
-  crystal_list_model_->setItem(row_count, 2, item_link);
-  crystal_list_model_->setItem(row_count, 3, item_pop);
-
+  QList<QStandardItem*> row_items;
+  row_items << item_check << item_name << item_link << item_pop;
+  crystal_list_model_->appendRow(row_items);
   crystal_table_->selectRow(row_count);
 
   current_crystal_id_++;
@@ -629,7 +627,7 @@ void MainWindow::refreshCrystalInfo() {
 
 
 void MainWindow::enableFilterSettings(bool enable) {
-  qDebug() << "enableFilterSettings()";
+  qDebug() << "enableFilterSettings():" << enable;
 
   if (enable) {
     ui_->filterEnableCheckBox->setCheckState(Qt::Checked);
@@ -649,8 +647,11 @@ void MainWindow::enableFilterSettings(bool enable) {
 
 
 void MainWindow::resetFilterInfo() {
+  qDebug() << "resetFilterInfo()";
+
   ui_->filterEnableCheckBox->setCheckState(Qt::Unchecked);
   ui_->specificRadioButton->setChecked(true);
+  ui_->filterPathPages->setCurrentIndex(0);
   ui_->symBCheckBox->setChecked(false);
   ui_->symPCheckBox->setChecked(false);
   ui_->symDCheckBox->setChecked(false);
@@ -661,21 +662,41 @@ void MainWindow::updateFilterInfo() {
   qDebug() << "updateFilterInfo()";
 
   auto crystal_item_data = getCurrentCrystalItemData();
-  auto filter_id = crystal_item_data->filter_id;
-
-  if (filter_id > 0 && gui_data_.filter_store_.count(filter_id)) {
-    gui_data_.filter_store_.erase(filter_id);
-  }
-
-  if (ui_->filterEnableCheckBox->checkState() == Qt::Unchecked) {
-    crystal_item_data->filter_id = 0;
+  if (!crystal_item_data) {
     return;
   }
 
-  crystal_item_data->filter_id = current_filter_id_;
-  FilterData filter(FilterData::kNone);
+  auto filter_id = crystal_item_data->filter_id;
+  if (filter_id == 0) {
+    filter_id = current_filter_id_;
+    crystal_item_data->filter_id = current_filter_id_;
+    gui_data_.filter_store_.emplace(current_filter_id_, FilterData::kNone);
+    current_filter_id_++;
+  }
 
-  // Update symmetry
+  FilterData& filter = gui_data_.filter_store_.at(filter_id);
+
+  if (ui_->filterEnableCheckBox->checkState() == Qt::Unchecked) {
+    filter.type_ = FilterData::kNone;
+    return;
+  }
+
+  updateFilterSymmetry(filter);
+
+  if (ui_->specificRadioButton->isChecked()) {
+    // For specific path filter
+    updateSpecificFilterInfo(filter);
+  } else if (ui_->generalRadioButton->isChecked()) {
+    // For general path filter
+    updateGeneralFilterInfo(filter);
+  }
+}
+
+
+void MainWindow::updateFilterSymmetry(FilterData& filter) {
+  qDebug() << "updateFilterSymmetry()";
+
+  filter.symmetry_flag_ = IceHalo::kSymmetryNone;
   if (ui_->symBCheckBox->checkState() == Qt::Checked) {
     filter.symmetry_flag_ |= IceHalo::kSymmetryBasal;
   }
@@ -685,55 +706,56 @@ void MainWindow::updateFilterInfo() {
   if (ui_->symDCheckBox->checkState() == Qt::Checked) {
     filter.symmetry_flag_ |= IceHalo::kSymmetryDirection;
   }
+}
 
-  if (ui_->specificRadioButton->isChecked()) {  // For specific path filter
-    filter.type_ = FilterData::kSpecific;
 
-    auto count = specific_path_model_->rowCount();
-    for (int i = 0; i < count - 1; i++) {
-      auto index = specific_path_model_->index(i, 1);
+void MainWindow::updateGeneralFilterInfo(FilterData& filter_data) {
+  qDebug() << "updateGeneralFaces()";
 
-      // Parse path
-      // A path is like "3-5-1"
-      QString path_txt = specific_path_model_->data(index).toString();
-      auto path_list = path_txt.split("-", QString::SkipEmptyParts);
+  filter_data.type_ = FilterData::kGeneral;
 
-      std::vector<int> tmp_path;
-      for (const auto& t : path_list) {
-        tmp_path.emplace_back(t.toInt());
-      }
-      filter.paths_.emplace_back(tmp_path);
-    }
-  } else if (ui_->generalRadioButton->isChecked()) {  // For general path filter
-    filter.type_ = FilterData::kGeneral;
-
-    // Set hits
-    filter.hits_ = ui_->generalFilterHitsSpinBox->value();
-
-    // Parse enter faces
-    // It is like "3,5,7"
-    QString enter_txt = ui_->generalFilterEnterEdit->text();
-    auto enter_txt_list = enter_txt.split(",", QString::SkipEmptyParts);
-    for (const auto& t : enter_txt_list) {
-      filter.enter_faces_.emplace_back(t.toInt());
-    }
-
-    // Parse exit faces
-    QString exit_txt = ui_->generalFilterExitEdit->text();
-    auto exit_txt_list = exit_txt.split(",", QString::SkipEmptyParts);
-    for (const auto& t : exit_txt_list) {
-      filter.exit_faces_.emplace_back(t.toInt());
-    }
+  auto enter_face_txt = ui_->generalFilterEnterEdit->text();
+  auto enter_faces = enter_face_txt.split(",", QString::SkipEmptyParts);
+  filter_data.enter_faces_.clear();
+  for (const auto& f : enter_faces) {
+    filter_data.enter_faces_.emplace_back(f.toInt());
   }
 
-  gui_data_.filter_store_.emplace(current_filter_id_, filter);
-  current_filter_id_ += 1;
+  auto exit_face_txt = ui_->generalFilterExitEdit->text();
+  auto exit_faces = exit_face_txt.split(",", QString::SkipEmptyParts);
+  filter_data.exit_faces_.clear();
+  for (const auto& f : exit_faces) {
+    filter_data.exit_faces_.emplace_back(f.toInt());
+  }
+
+  filter_data.hits_ = ui_->generalFilterHitsSpinBox->value();
+}
+
+
+void MainWindow::updateSpecificFilterInfo(FilterData& filter_data) {
+  qDebug() << "updateSpecificFilterInfo()";
+
+  filter_data.type_ = FilterData::kSpecific;
+
+  auto count = specific_path_model_->rowCount();
+  for (int i = 0; i < count - 1; i++) {
+    auto index = specific_path_model_->index(i, 1);
+
+    // Parse path
+    // A path is like "3-5-1"
+    QString path_txt = specific_path_model_->data(index).toString();
+    auto path_list = path_txt.split("-", QString::SkipEmptyParts);
+
+    std::vector<int> tmp_path;
+    for (const auto& t : path_list) {
+      tmp_path.emplace_back(t.toInt());
+    }
+    filter_data.paths_.emplace_back(tmp_path);
+  }
 }
 
 
 void MainWindow::refreshFilterInfo() {
-  qDebug() << "refreshFilterInfo";
-
   auto crystal_item_data = getCurrentCrystalItemData();
   if (!crystal_item_data || !crystal_item_data->enabled) {
     // If no crystal, or the crystl is not enabled, then disable the filter panel
@@ -745,7 +767,21 @@ void MainWindow::refreshFilterInfo() {
     ui_->filterEnableCheckBox->setEnabled(true);
   }
 
-  auto filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+  const auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+  refreshFilterInfo(filter_data);
+}
+
+
+void MainWindow::refreshFilterInfo(const FilterData& filter_data) {
+  qDebug() << "refreshFilterInfo()";
+
+  qDebug() << "  filter data: ";
+  qDebug() << "    type:" << filter_data.type_;
+  qDebug() << "    symm:" << filter_data.symmetry_flag_;
+  qDebug() << "    path:" << filter_data.paths_;
+  qDebug() << "    enter:" << filter_data.enter_faces_;
+  qDebug() << "    exit:" << filter_data.exit_faces_;
+  qDebug() << "    hits:" << filter_data.hits_;
 
   // Update type (radio button) and path info (stacked widget)
   switch (filter_data.type_) {
@@ -756,23 +792,28 @@ void MainWindow::refreshFilterInfo() {
     case FilterData::kSpecific:
       enableFilterSettings(true);
       ui_->specificRadioButton->setChecked(true);
+      ui_->filterPathPages->setCurrentIndex(0);
       // TODO
       break;
-    case FilterData::kGeneral: {
+    case FilterData::kGeneral:
       enableFilterSettings(true);
       ui_->generalRadioButton->setChecked(true);
-      QStringList enter_faces;
-      for (auto f : filter_data.enter_faces_) {
-        enter_faces << QString::number(f);
-      }
-      ui_->generalFilterEnterEdit->setText(enter_faces.join(","));
-    } break;
+      ui_->filterPathPages->setCurrentIndex(1);
+      refreshGeneralFilterPage(filter_data);
+      break;
     default:
       qCritical() << "Filter type not recgonized!";
       break;
   }
 
   // Update symmetry
+  refreshFilterSymmetry(filter_data);
+}
+
+
+void MainWindow::refreshFilterSymmetry(const FilterData& filter_data) {
+  qDebug() << "refreshFilterSymmetry()";
+
   if (filter_data.symmetry_flag_ & IceHalo::kSymmetryBasal) {
     ui_->symBCheckBox->setCheckState(Qt::Checked);
   } else {
@@ -790,6 +831,51 @@ void MainWindow::refreshFilterInfo() {
   } else {
     ui_->symDCheckBox->setCheckState(Qt::Unchecked);
   }
+}
+
+
+void MainWindow::refreshGeneralFilterPage(const FilterData& filter_data) {
+  qDebug() << "refreshGeneralFilterPage()";
+
+  QStringList enter_faces;
+  for (auto f : filter_data.enter_faces_) {
+    enter_faces << QString::number(f);
+  }
+  ui_->generalFilterEnterEdit->setText(enter_faces.join(","));
+
+  enter_faces.clear();
+  for (auto f : filter_data.exit_faces_) {
+    enter_faces << QString::number(f);
+  }
+  ui_->generalFilterExitEdit->setText(enter_faces.join(","));
+
+  ui_->generalFilterHitsSpinBox->setValue(filter_data.hits_);
+}
+
+
+void MainWindow::resetGeneralFilterPage() {
+  qDebug() << "resetGeneralFilterPage()";
+
+  ui_->generalFilterEnterEdit->setText("");
+  ui_->generalFilterExitEdit->setText("");
+  ui_->generalFilterHitsSpinBox->setValue(0);
+}
+
+
+void MainWindow::resetSpecificFilterPage() {
+  qDebug() << "resetSpecificFilterPage()";
+
+  specific_path_model_->clear();
+  // TODO: add a blank row
+}
+
+
+void MainWindow::resetFilterSymmetryPanel() {
+  qDebug() << "resetFilterSymmetryPanel()";
+
+  ui_->symBCheckBox->setCheckState(Qt::Unchecked);
+  ui_->symPCheckBox->setCheckState(Qt::Unchecked);
+  ui_->symDCheckBox->setCheckState(Qt::Unchecked);
 }
 
 
@@ -1076,31 +1162,135 @@ void MainWindow::initFilter() {
 
   specific_path_table_->setColumCursor(0, Qt::PointingHandCursor);
 
+  QRegExp rx("\\d{1,2}(,\\d{1,2})*");
+  auto face_edit_validator = new QRegExpValidator(rx);
+  ui_->generalFilterEnterEdit->setValidator(face_edit_validator);
+  ui_->generalFilterExitEdit->setValidator(face_edit_validator);
   // TODO
 
   refreshFilterInfo();
 
-  connect(ui_->filterEnableCheckBox, &QCheckBox::stateChanged, this, [=](int state){
-    bool checked = state == Qt::Checked;
+  connect(ui_->filterEnableCheckBox, &QCheckBox::clicked, this, [=](bool checked){
+    qDebug() << "filterEnableCheckBox::clicked:" << checked;
+
     enableFilterSettings(checked);
-    if (checked) {
-      updateFilterInfo();
+    if (!checked) {
+      resetGeneralFilterPage();
+      resetSpecificFilterPage();
+      resetFilterSymmetryPanel();
+    }
+    updateFilterInfo();
+    refreshFilterInfo();
+  });
+
+  connect(ui_->specificRadioButton, &QRadioButton::clicked, this, [=](bool checked){
+    qDebug() << "specificRadioButton::toggled:" << checked;
+
+    if (!checked) {
+      return;
+    }
+    ui_->filterPathPages->setCurrentIndex(0);
+    auto crystal_item_data = getCurrentCrystalItemData();
+    if (!crystal_item_data) {
+      return;
+    }
+    if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
+      return;
+    }
+    auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+    filter_data.type_ = FilterData::kSpecific;
+    refreshFilterInfo(filter_data);
+  });
+
+  connect(ui_->generalRadioButton, &QRadioButton::clicked, this, [=](bool checked){
+    qDebug() << "generalRadioButton::toggled:" << checked;
+
+    if (!checked) {
+      return;
+    }
+    ui_->filterPathPages->setCurrentIndex(1);
+    auto crystal_item_data = getCurrentCrystalItemData();
+    if (!crystal_item_data) {
+      return;
+    }
+    if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
+      return;
+    }
+    auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+    filter_data.type_ = FilterData::kGeneral;
+    refreshFilterInfo(filter_data);
+  });
+
+  connect(ui_->symBCheckBox, &QCheckBox::clicked, this, [=](bool checked){
+    qDebug() << "symBCheckBox::clicked:" << checked;
+
+    auto crystal_item_data = getCurrentCrystalItemData();
+    if (!crystal_item_data) {
+      return;
+    }
+    if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
+      return;
+    }
+    auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+
+    if (!checked) {
+      filter_data.symmetry_flag_ &= (~IceHalo::kSymmetryBasal);
+    } else {
+      filter_data.symmetry_flag_ |= IceHalo::kSymmetryBasal;
     }
   });
 
-  connect(ui_->specificRadioButton, &QRadioButton::toggled, this, [=]{
-    ui_->filterPathPages->setCurrentIndex(0);
-    updateFilterInfo();
+  connect(ui_->symPCheckBox, &QCheckBox::clicked, this, [=](bool checked){
+    qDebug() << "symPCheckBox::clicked:" << checked;
+
+    auto crystal_item_data = getCurrentCrystalItemData();
+    if (!crystal_item_data) {
+      return;
+    }
+    if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
+      return;
+    }
+    auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+
+    if (!checked) {
+      filter_data.symmetry_flag_ &= (~IceHalo::kSymmetryPrism);
+    } else {
+      filter_data.symmetry_flag_ |= IceHalo::kSymmetryPrism;
+    }
   });
 
-  connect(ui_->generalRadioButton, &QRadioButton::toggled, this, [=]{
-    ui_->filterPathPages->setCurrentIndex(1);
-    updateFilterInfo();
+  connect(ui_->symDCheckBox, &QCheckBox::clicked, this, [=](bool checked){
+    qDebug() << "symDCheckBox::clicked:" << checked;
+
+    auto crystal_item_data = getCurrentCrystalItemData();
+    if (!crystal_item_data) {
+      return;
+    }
+    if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
+      return;
+    }
+    auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+
+    if (!checked) {
+      filter_data.symmetry_flag_ &= (~IceHalo::kSymmetryDirection);
+    } else {
+      filter_data.symmetry_flag_ |= IceHalo::kSymmetryDirection;
+    }
   });
 
-  connect(ui_->symBCheckBox, &QCheckBox::stateChanged, this, &MainWindow::updateFilterInfo);
-  connect(ui_->symPCheckBox, &QCheckBox::stateChanged, this, &MainWindow::updateFilterInfo);
-  connect(ui_->symDCheckBox, &QCheckBox::stateChanged, this, &MainWindow::updateFilterInfo);
+  connect(ui_->generalFilterEnterEdit, &QLineEdit::textEdited, this, [=]{
+    qDebug() << "generalFilterEnterEdit::textEdited";
+
+    auto crystal_item_data = getCurrentCrystalItemData();
+    if (!crystal_item_data) {
+      return;
+    }
+    if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
+      return;
+    }
+    auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+    updateGeneralFilterInfo(filter_data);
+  });
 }
 
 
@@ -1181,7 +1371,7 @@ QString MainWindow::getPyramidHeightText(double h) {
 
 
 MultiScatterData* MainWindow::getCurrentScatterData() {
-  qDebug() << "getCurrentScatterData()";
+//  qDebug() << "getCurrentScatterData()";
 
   auto checked_btn = scatter_tab_group_->checkedButton();
   auto btn_cnt = ui_->scatterTabLayout->count() - 1;

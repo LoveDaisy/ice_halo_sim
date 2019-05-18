@@ -65,8 +65,18 @@ class MainWindow : public QMainWindow {
   // Filter settings group
   void enableFilterSettings(bool enable); // Helper function
   void resetFilterInfo(); // Helper function
-  void updateFilterInfo(); // Update model;
+  void updateFilterInfo(); // Update model
+  void updateFilterSymmetry(FilterData& filter_data); // Update model
+  void updateGeneralFilterInfo(FilterData& filter_data); // Update model
+  void updateSpecificFilterInfo(FilterData& filter_data); // Update model
   void refreshFilterInfo();  // Update view
+  void refreshFilterInfo(const FilterData& filter_data);  // Update view
+  void refreshFilterSymmetry(const FilterData& filter_data); // Update view
+  void refreshGeneralFilterPage(const FilterData& filter_data); // Update view
+//  void refreshSpecificFilterPage(); // Update view
+  void resetGeneralFilterPage(); // Update view
+  void resetSpecificFilterPage(); // Update view
+  void resetFilterSymmetryPanel(); // Update view
 
  private:
   void initUi();
