@@ -48,7 +48,7 @@ class CrystalData {
 
 
 class FilterData {
-public:
+ public:
   enum Type {
     kNone,
     kSpecific,

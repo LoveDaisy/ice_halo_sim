@@ -627,9 +627,9 @@ void MainWindow::refreshCrystalInfo() {
 FilterData& MainWindow::createNewFilter(MultiScatterData::CrystalItemData* crystal_item_data) {
   qDebug() << "createNewFilter()";
 
-    crystal_item_data->filter_id = current_filter_id_;
-    gui_data_.filter_store_.emplace(current_filter_id_, FilterData::kNone);
-    current_filter_id_++;
+  crystal_item_data->filter_id = current_filter_id_;
+  gui_data_.filter_store_.emplace(current_filter_id_, FilterData::kNone);
+  current_filter_id_++;
   return gui_data_.filter_store_.at(crystal_item_data->filter_id);
 }
 
@@ -831,12 +831,7 @@ void MainWindow::refreshFilterInfo(const FilterData& filter_data) {
       enableFilterSettings(true);
       ui_->specificRadioButton->setChecked(true);
       ui_->filterPathPages->setCurrentIndex(0);
-      resetSpecificFilterPage();
-      specific_path_model_->removeRow(0);
-      for (const auto& p : filter_data.paths_) {
-        addSpecificFilterRow(p);
-      }
-      addSpecificFilterRow();
+      refreshSpecificFilterPage(filter_data);
       break;
     case FilterData::kGeneral:
       enableFilterSettings(true);
@@ -893,6 +888,18 @@ void MainWindow::refreshGeneralFilterPage(const FilterData& filter_data) {
   ui_->generalFilterExitEdit->setText(enter_faces.join(","));
 
   ui_->generalFilterHitsSpinBox->setValue(filter_data.hits_);
+}
+
+
+void MainWindow::refreshSpecificFilterPage(const FilterData& filter_data) {
+  qDebug() << "refreshSpecificFilterPage()";
+
+  resetSpecificFilterPage();
+  specific_path_model_->removeRow(0);
+  for (const auto& p : filter_data.paths_) {
+    addSpecificFilterRow(p);
+  }
+  addSpecificFilterRow();
 }
 
 
@@ -1060,7 +1067,7 @@ void MainWindow::initCrystalList() {
   });
 
   // Choose item
-  connect(crystal_table_, &CursorTable::clicked, this, [=]{
+  connect(crystal_table_, &CursorTable::clicked, this, [=] {
     refreshCrystalInfo();
     refreshFilterInfo();
   });
@@ -1218,7 +1225,7 @@ void MainWindow::initFilter() {
 
   refreshFilterInfo();
 
-  connect(ui_->filterEnableCheckBox, &QCheckBox::clicked, this, [=](bool checked){
+  connect(ui_->filterEnableCheckBox, &QCheckBox::clicked, this, [=](bool checked) {
     qDebug() << "filterEnableCheckBox::clicked:" << checked;
 
     enableFilterSettings(checked);
@@ -1231,7 +1238,7 @@ void MainWindow::initFilter() {
     refreshFilterInfo();
   });
 
-  connect(ui_->specificRadioButton, &QRadioButton::clicked, this, [=](bool checked){
+  connect(ui_->specificRadioButton, &QRadioButton::clicked, this, [=](bool checked) {
     qDebug() << "specificRadioButton::toggled:" << checked;
 
     if (!checked) {
@@ -1254,7 +1261,7 @@ void MainWindow::initFilter() {
     refreshFilterInfo(filter_data);
   });
 
-  connect(ui_->generalRadioButton, &QRadioButton::clicked, this, [=](bool checked){
+  connect(ui_->generalRadioButton, &QRadioButton::clicked, this, [=](bool checked) {
     qDebug() << "generalRadioButton::toggled:" << checked;
 
     if (!checked) {
@@ -1277,7 +1284,7 @@ void MainWindow::initFilter() {
     refreshFilterInfo(filter_data);
   });
 
-  connect(ui_->symBCheckBox, &QCheckBox::clicked, this, [=](bool checked){
+  connect(ui_->symBCheckBox, &QCheckBox::clicked, this, [=](bool checked) {
     qDebug() << "symBCheckBox::clicked:" << checked;
 
     auto crystal_item_data = getCurrentCrystalItemData();
@@ -1299,7 +1306,7 @@ void MainWindow::initFilter() {
     }
   });
 
-  connect(ui_->symPCheckBox, &QCheckBox::clicked, this, [=](bool checked){
+  connect(ui_->symPCheckBox, &QCheckBox::clicked, this, [=](bool checked) {
     qDebug() << "symPCheckBox::clicked:" << checked;
 
     auto crystal_item_data = getCurrentCrystalItemData();
@@ -1321,7 +1328,7 @@ void MainWindow::initFilter() {
     }
   });
 
-  connect(ui_->symDCheckBox, &QCheckBox::clicked, this, [=](bool checked){
+  connect(ui_->symDCheckBox, &QCheckBox::clicked, this, [=](bool checked) {
     qDebug() << "symDCheckBox::clicked:" << checked;
 
     auto crystal_item_data = getCurrentCrystalItemData();
@@ -1343,7 +1350,7 @@ void MainWindow::initFilter() {
     }
   });
 
-  connect(ui_->generalFilterEnterEdit, &QLineEdit::textEdited, this, [=]{
+  connect(ui_->generalFilterEnterEdit, &QLineEdit::textEdited, this, [=] {
     qDebug() << "generalFilterEnterEdit::textEdited";
 
     auto crystal_item_data = getCurrentCrystalItemData();
@@ -1360,7 +1367,7 @@ void MainWindow::initFilter() {
     updateGeneralFilterInfo(filter_data);
   });
 
-  connect(ui_->generalFilterExitEdit, &QLineEdit::textEdited, this, [=]{
+  connect(ui_->generalFilterExitEdit, &QLineEdit::textEdited, this, [=] {
     qDebug() << "generalFilterExitEdit::textEdited";
 
     auto crystal_item_data = getCurrentCrystalItemData();
@@ -1377,7 +1384,7 @@ void MainWindow::initFilter() {
     updateGeneralFilterInfo(filter_data);
   });
 
-  connect(ui_->generalFilterHitsSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [=]{
+  connect(ui_->generalFilterHitsSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [=] {
     qDebug() << "generalFilterHitsSpinBox::valueChanged";
 
     auto crystal_item_data = getCurrentCrystalItemData();
@@ -1394,7 +1401,7 @@ void MainWindow::initFilter() {
     updateGeneralFilterInfo(filter_data);
   });
 
-  connect(specific_path_model_, &QStandardItemModel::itemChanged, this, [=](QStandardItem* item){
+  connect(specific_path_model_, &QStandardItemModel::itemChanged, this, [=](QStandardItem* item) {
     qDebug() << "specific_path_model_::itemChanged:" << item->index();
     if (item->column() != 1) {
       return;
@@ -1500,7 +1507,7 @@ QString MainWindow::getPyramidHeightText(double h) {
 
 
 MultiScatterData* MainWindow::getCurrentScatterData() {
-//  qDebug() << "getCurrentScatterData()";
+  //  qDebug() << "getCurrentScatterData()";
 
   auto checked_btn = scatter_tab_group_->checkedButton();
   auto btn_cnt = ui_->scatterTabLayout->count() - 1;

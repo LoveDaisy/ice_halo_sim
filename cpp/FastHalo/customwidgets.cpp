@@ -1,13 +1,12 @@
 #include "customwidgets.h"
 
-#include <QMouseEvent>
 #include <QDebug>
 #include <QDoubleValidator>
 #include <QKeyEvent>
-#include <QPalette>
 #include <QLineEdit>
+#include <QMouseEvent>
+#include <QPalette>
 #include <QSpinBox>
-
 #include <cmath>
 
 #include "icons.h"
@@ -292,19 +291,20 @@ QWidget* RayPathDelegate::createEditor(QWidget* parent, const QStyleOptionViewIt
 }
 
 
-void RayPathDelegate::setEditorData(QWidget *editor, const QModelIndex &index) const {
+void RayPathDelegate::setEditorData(QWidget* editor, const QModelIndex& index) const {
   RegExpLineEdit* line_editor = static_cast<RegExpLineEdit*>(editor);
   line_editor->setText(index.data(Qt::EditRole).toString());
 }
 
 
-void RayPathDelegate::setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const {
+void RayPathDelegate::setModelData(QWidget* editor, QAbstractItemModel* model,
+                                   const QModelIndex& index) const {
   RegExpLineEdit* line_editor = static_cast<RegExpLineEdit*>(editor);
   model->setData(index, line_editor->text(), Qt::EditRole);
 }
 
 
-void RayPathDelegate::updateEditorGeometry(QWidget *editor, const QStyleOptionViewItem &option,
-                                           const QModelIndex & /* index */) const {
+void RayPathDelegate::updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option,
+                                           const QModelIndex& /* index */) const {
   editor->setGeometry(option.rect);
 }

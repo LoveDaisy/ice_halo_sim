@@ -1,15 +1,14 @@
 #ifndef CURSORTABLE_H
 #define CURSORTABLE_H
 
-#include <QTableView>
 #include <QLineEdit>
 #include <QMouseEvent>
-#include <QToolButton>
-#include <QTextStream>
 #include <QStyledItemDelegate>
-
-#include <map>
+#include <QTableView>
+#include <QTextStream>
+#include <QToolButton>
 #include <functional>
+#include <map>
 
 /*****************************************************************************/
 class CursorTable : public QTableView {
@@ -68,7 +67,7 @@ class FloatLineEdit : public QLineEdit {
 /*****************************************************************************/
 class RegExpLineEdit : public QLineEdit {
   Q_OBJECT
-public:
+ public:
   explicit RegExpLineEdit(const QRegExp& regexp, QWidget* parent = nullptr);
 };
 
@@ -130,7 +129,7 @@ class SpinBoxDelegate : public QStyledItemDelegate {
 /*****************************************************************************/
 class RayPathDelegate : public QStyledItemDelegate {
   Q_OBJECT
-public:
+ public:
   explicit RayPathDelegate(QObject* parent = nullptr);
 
   QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem& option,
