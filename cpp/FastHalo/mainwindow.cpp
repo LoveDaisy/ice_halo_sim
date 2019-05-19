@@ -7,10 +7,8 @@
 #include <QtDebug>
 #include <algorithm>
 
-#include "iconbutton.h"
 #include "icons.h"
 #include "render.h"
-#include "spinboxdelegate.h"
 #include "ui_mainwindow.h"
 
 
@@ -658,6 +656,18 @@ void MainWindow::resetFilterInfo() {
 }
 
 
+void MainWindow::addSpecificFilterRow() {
+  qDebug() << "addSpecificFilterRow()";
+
+  auto remove_item = new QStandardItem;
+  auto path_item = new QStandardItem;
+
+  QList<QStandardItem*> item_list;
+  item_list << remove_item << path_item;
+  specific_path_model_->appendRow(item_list);
+}
+
+
 void MainWindow::updateFilterInfo() {
   qDebug() << "updateFilterInfo()";
 
@@ -866,7 +876,7 @@ void MainWindow::resetSpecificFilterPage() {
   qDebug() << "resetSpecificFilterPage()";
 
   specific_path_model_->clear();
-  // TODO: add a blank row
+  addSpecificFilterRow();
 }
 
 
@@ -1161,6 +1171,7 @@ void MainWindow::initFilter() {
   specific_path_table_->setShowGrid(false);
 
   specific_path_table_->setColumCursor(0, Qt::PointingHandCursor);
+  addSpecificFilterRow();
 
   QRegExp rx("\\d{1,2}(,\\d{1,2})*");
   auto face_edit_validator = new QRegExpValidator(rx);

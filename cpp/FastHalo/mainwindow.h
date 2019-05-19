@@ -14,10 +14,8 @@
 #include <QtGui/QScreen>
 
 #include "context.h"
-#include "cursortable.h"
-#include "floatlineedit.h"
+#include "customwidgets.h"
 #include "guidata.h"
-#include "iconbutton.h"
 
 namespace Ui {
 class MainWindow;
@@ -65,6 +63,7 @@ class MainWindow : public QMainWindow {
   // Filter settings group
   void enableFilterSettings(bool enable); // Helper function
   void resetFilterInfo(); // Helper function
+  void addSpecificFilterRow(); // Helper function
   void updateFilterInfo(); // Update model
   void updateFilterSymmetry(FilterData& filter_data); // Update model
   void updateGeneralFilterInfo(FilterData& filter_data); // Update model

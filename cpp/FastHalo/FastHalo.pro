@@ -27,12 +27,9 @@ HEADERS += \
     $$CPP_PROJ_ROOT/src/simulation.h \
     $$CPP_PROJ_ROOT/src/threadingpool.h \
     icons.h \
-    iconbutton.h \
     previewwindow.h \
-    spinboxdelegate.h \
     guidata.h \
-    floatlineedit.h \
-    cursortable.h
+    customwidgets.h
 
 SOURCES += \
     main.cpp \
@@ -46,12 +43,9 @@ SOURCES += \
     $$CPP_PROJ_ROOT/src/threadingpool.cpp \
     mainwindow.cpp \
     icons.cpp \
-    iconbutton.cpp \
     previewwindow.cpp \
-    spinboxdelegate.cpp \
     guidata.cpp \
-    floatlineedit.cpp \
-    cursortable.cpp
+    customwidgets.cpp
 
 INCLUDEPATH += $$CPP_PROJ_ROOT/src
 
