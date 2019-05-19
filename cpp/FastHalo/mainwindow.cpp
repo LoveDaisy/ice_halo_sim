@@ -624,6 +624,16 @@ void MainWindow::refreshCrystalInfo() {
 }
 
 
+FilterData& MainWindow::createNewFilter(MultiScatterData::CrystalItemData* crystal_item_data) {
+  qDebug() << "createNewFilter()";
+
+    crystal_item_data->filter_id = current_filter_id_;
+    gui_data_.filter_store_.emplace(current_filter_id_, FilterData::kNone);
+    current_filter_id_++;
+  return gui_data_.filter_store_.at(crystal_item_data->filter_id);
+}
+
+
 void MainWindow::enableFilterSettings(bool enable) {
   qDebug() << "enableFilterSettings():" << enable;
 
@@ -650,17 +660,30 @@ void MainWindow::resetFilterInfo() {
   ui_->filterEnableCheckBox->setCheckState(Qt::Unchecked);
   ui_->specificRadioButton->setChecked(true);
   ui_->filterPathPages->setCurrentIndex(0);
-  ui_->symBCheckBox->setChecked(false);
-  ui_->symPCheckBox->setChecked(false);
-  ui_->symDCheckBox->setChecked(false);
+
+  resetSpecificFilterPage();
+  resetGeneralFilterPage();
+  resetFilterSymmetryPanel();
 }
 
 
 void MainWindow::addSpecificFilterRow() {
+  std::vector<int> path;
+  addSpecificFilterRow(path);
+}
+
+
+void MainWindow::addSpecificFilterRow(const std::vector<int>& path) {
   qDebug() << "addSpecificFilterRow()";
 
   auto remove_item = new QStandardItem;
   auto path_item = new QStandardItem;
+
+  QStringList tmp_list;
+  for (auto f : path) {
+    tmp_list.append(QString::number(f));
+  }
+  path_item->setData(tmp_list.join("-"), Qt::EditRole);
 
   QList<QStandardItem*> item_list;
   item_list << remove_item << path_item;
@@ -675,16 +698,15 @@ void MainWindow::updateFilterInfo() {
   if (!crystal_item_data) {
     return;
   }
-
-  auto filter_id = crystal_item_data->filter_id;
-  if (filter_id == 0) {
-    filter_id = current_filter_id_;
-    crystal_item_data->filter_id = current_filter_id_;
-    gui_data_.filter_store_.emplace(current_filter_id_, FilterData::kNone);
-    current_filter_id_++;
+  if (!ui_->filterEnableCheckBox->isChecked()) {
+    return;
   }
 
-  FilterData& filter = gui_data_.filter_store_.at(filter_id);
+  if (crystal_item_data->filter_id == 0) {
+    createNewFilter(crystal_item_data);
+  }
+
+  FilterData& filter = gui_data_.filter_store_.at(crystal_item_data->filter_id);
 
   if (ui_->filterEnableCheckBox->checkState() == Qt::Unchecked) {
     filter.type_ = FilterData::kNone;
@@ -720,9 +742,11 @@ void MainWindow::updateFilterSymmetry(FilterData& filter) {
 
 
 void MainWindow::updateGeneralFilterInfo(FilterData& filter_data) {
-  qDebug() << "updateGeneralFaces()";
+  qDebug() << "updateGeneralFilterInfo()";
 
-  filter_data.type_ = FilterData::kGeneral;
+  if (ui_->filterEnableCheckBox->isChecked()) {
+    filter_data.type_ = FilterData::kGeneral;
+  }
 
   auto enter_face_txt = ui_->generalFilterEnterEdit->text();
   auto enter_faces = enter_face_txt.split(",", QString::SkipEmptyParts);
@@ -745,8 +769,11 @@ void MainWindow::updateGeneralFilterInfo(FilterData& filter_data) {
 void MainWindow::updateSpecificFilterInfo(FilterData& filter_data) {
   qDebug() << "updateSpecificFilterInfo()";
 
-  filter_data.type_ = FilterData::kSpecific;
+  if (ui_->filterEnableCheckBox->isChecked()) {
+    filter_data.type_ = FilterData::kSpecific;
+  }
 
+  filter_data.paths_.clear();
   auto count = specific_path_model_->rowCount();
   for (int i = 0; i < count - 1; i++) {
     auto index = specific_path_model_->index(i, 1);
@@ -778,6 +805,7 @@ void MainWindow::refreshFilterInfo() {
   }
 
   const auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+  qDebug() << " filter ID:" << crystal_item_data->filter_id;
   refreshFilterInfo(filter_data);
 }
 
@@ -785,7 +813,7 @@ void MainWindow::refreshFilterInfo() {
 void MainWindow::refreshFilterInfo(const FilterData& filter_data) {
   qDebug() << "refreshFilterInfo()";
 
-  qDebug() << "  filter data: ";
+  qDebug() << "  filter data:";
   qDebug() << "    type:" << filter_data.type_;
   qDebug() << "    symm:" << filter_data.symmetry_flag_;
   qDebug() << "    path:" << filter_data.paths_;
@@ -803,7 +831,12 @@ void MainWindow::refreshFilterInfo(const FilterData& filter_data) {
       enableFilterSettings(true);
       ui_->specificRadioButton->setChecked(true);
       ui_->filterPathPages->setCurrentIndex(0);
-      // TODO
+      resetSpecificFilterPage();
+      specific_path_model_->removeRow(0);
+      for (const auto& p : filter_data.paths_) {
+        addSpecificFilterRow(p);
+      }
+      addSpecificFilterRow();
       break;
     case FilterData::kGeneral:
       enableFilterSettings(true);
@@ -876,6 +909,21 @@ void MainWindow::resetSpecificFilterPage() {
   qDebug() << "resetSpecificFilterPage()";
 
   specific_path_model_->clear();
+  specific_path_model_->setHorizontalHeaderLabels(QStringList{ "", tr("Path") });
+
+  specific_path_table_->setColumnWidth(0, 25);
+  specific_path_table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+  specific_path_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+  specific_path_table_->horizontalHeader()->setMinimumSectionSize(20);
+  specific_path_table_->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft);
+  specific_path_table_->verticalHeader()->hide();
+  specific_path_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+  specific_path_table_->setSelectionMode(QAbstractItemView::SingleSelection);
+  specific_path_table_->setShowGrid(false);
+
+  specific_path_table_->setColumCursor(0, Qt::PointingHandCursor);
+  specific_path_table_->setItemDelegateForColumn(1, new RayPathDelegate);
+
   addSpecificFilterRow();
 }
 
@@ -986,7 +1034,7 @@ void MainWindow::initCrystalList() {
   crystal_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
   crystal_table_->setSelectionMode(QAbstractItemView::SingleSelection);
   crystal_table_->setShowGrid(false);
-  crystal_table_->setItemDelegateForColumn(3, new SpinBoxDelegate());
+  crystal_table_->setItemDelegateForColumn(3, new SpinBoxDelegate);
 
   crystal_table_->setColumCursor(0, Qt::PointingHandCursor);
   crystal_table_->setColumCursor(2, Qt::PointingHandCursor);
@@ -1156,28 +1204,17 @@ void MainWindow::initFilter() {
   ui_->filterPathPages->insertWidget(0, specific_path_table_);
   ui_->filterPathPages->setCurrentIndex(0);
 
-  specific_path_model_ = new QStandardItemModel();
-  specific_path_model_->setHorizontalHeaderLabels(QStringList{ "", tr("Path") });
-
+  specific_path_model_ = new QStandardItemModel;
   specific_path_table_->setModel(specific_path_model_);
-  specific_path_table_->setColumnWidth(0, 25);
-  specific_path_table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
-  specific_path_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-  specific_path_table_->horizontalHeader()->setMinimumSectionSize(20);
-  specific_path_table_->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft);
-  specific_path_table_->verticalHeader()->hide();
-  specific_path_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
-  specific_path_table_->setSelectionMode(QAbstractItemView::SingleSelection);
-  specific_path_table_->setShowGrid(false);
-
-  specific_path_table_->setColumCursor(0, Qt::PointingHandCursor);
-  addSpecificFilterRow();
+  resetSpecificFilterPage();
 
   QRegExp rx("\\d{1,2}(,\\d{1,2})*");
   auto face_edit_validator = new QRegExpValidator(rx);
   ui_->generalFilterEnterEdit->setValidator(face_edit_validator);
   ui_->generalFilterExitEdit->setValidator(face_edit_validator);
-  // TODO
+
+  gui_data_.filter_store_.clear();
+  gui_data_.filter_store_.emplace(0, FilterData::kNone);
 
   refreshFilterInfo();
 
@@ -1205,9 +1242,13 @@ void MainWindow::initFilter() {
     if (!crystal_item_data) {
       return;
     }
+    if (crystal_item_data->filter_id == 0) {
+      createNewFilter(crystal_item_data);
+    }
     if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
       return;
     }
+
     auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
     filter_data.type_ = FilterData::kSpecific;
     refreshFilterInfo(filter_data);
@@ -1224,9 +1265,13 @@ void MainWindow::initFilter() {
     if (!crystal_item_data) {
       return;
     }
+    if (crystal_item_data->filter_id == 0) {
+      createNewFilter(crystal_item_data);
+    }
     if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
       return;
     }
+
     auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
     filter_data.type_ = FilterData::kGeneral;
     refreshFilterInfo(filter_data);
@@ -1238,6 +1283,9 @@ void MainWindow::initFilter() {
     auto crystal_item_data = getCurrentCrystalItemData();
     if (!crystal_item_data) {
       return;
+    }
+    if (crystal_item_data->filter_id == 0) {
+      createNewFilter(crystal_item_data);
     }
     if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
       return;
@@ -1258,6 +1306,9 @@ void MainWindow::initFilter() {
     if (!crystal_item_data) {
       return;
     }
+    if (crystal_item_data->filter_id == 0) {
+      createNewFilter(crystal_item_data);
+    }
     if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
       return;
     }
@@ -1276,6 +1327,9 @@ void MainWindow::initFilter() {
     auto crystal_item_data = getCurrentCrystalItemData();
     if (!crystal_item_data) {
       return;
+    }
+    if (crystal_item_data->filter_id == 0) {
+      createNewFilter(crystal_item_data);
     }
     if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
       return;
@@ -1296,11 +1350,75 @@ void MainWindow::initFilter() {
     if (!crystal_item_data) {
       return;
     }
+    if (crystal_item_data->filter_id == 0) {
+      createNewFilter(crystal_item_data);
+    }
     if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
       return;
     }
     auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
     updateGeneralFilterInfo(filter_data);
+  });
+
+  connect(ui_->generalFilterExitEdit, &QLineEdit::textEdited, this, [=]{
+    qDebug() << "generalFilterExitEdit::textEdited";
+
+    auto crystal_item_data = getCurrentCrystalItemData();
+    if (!crystal_item_data) {
+      return;
+    }
+    if (crystal_item_data->filter_id == 0) {
+      createNewFilter(crystal_item_data);
+    }
+    if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
+      return;
+    }
+    auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+    updateGeneralFilterInfo(filter_data);
+  });
+
+  connect(ui_->generalFilterHitsSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [=]{
+    qDebug() << "generalFilterHitsSpinBox::valueChanged";
+
+    auto crystal_item_data = getCurrentCrystalItemData();
+    if (!crystal_item_data) {
+      return;
+    }
+    if (crystal_item_data->filter_id == 0) {
+      createNewFilter(crystal_item_data);
+    }
+    if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
+      return;
+    }
+    auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+    updateGeneralFilterInfo(filter_data);
+  });
+
+  connect(specific_path_model_, &QStandardItemModel::itemChanged, this, [=](QStandardItem* item){
+    qDebug() << "specific_path_model_::itemChanged:" << item->index();
+    if (item->column() != 1) {
+      return;
+    }
+
+    auto crystal_item_data = getCurrentCrystalItemData();
+    if (!crystal_item_data) {
+      return;
+    }
+    if (crystal_item_data->filter_id == 0) {
+      createNewFilter(crystal_item_data);
+    }
+    if (gui_data_.filter_store_.count(crystal_item_data->filter_id) == 0) {
+      return;
+    }
+
+    // Check whether to add new row
+    if (item->row() >= specific_path_model_->rowCount() - 1) {
+      addSpecificFilterRow();
+    }
+
+    // Update model
+    auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
+    updateSpecificFilterInfo(filter_data);
   });
 }
 

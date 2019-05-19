@@ -61,9 +61,11 @@ class MainWindow : public QMainWindow {
   void refreshCrystalInfo();                      // Update view
 
   // Filter settings group
+  FilterData& createNewFilter(MultiScatterData::CrystalItemData* crystal_item_data);  // Helper function
   void enableFilterSettings(bool enable); // Helper function
   void resetFilterInfo(); // Helper function
   void addSpecificFilterRow(); // Helper function
+  void addSpecificFilterRow(const std::vector<int>& path); // Helper function
   void updateFilterInfo(); // Update model
   void updateFilterSymmetry(FilterData& filter_data); // Update model
   void updateGeneralFilterInfo(FilterData& filter_data); // Update model

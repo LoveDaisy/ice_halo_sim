@@ -144,6 +144,13 @@ QString FloatLineEdit::formatValue(float value) {
 
 
 /*****************************************************************************/
+RegExpLineEdit::RegExpLineEdit(const QRegExp& regex, QWidget* parent) : QLineEdit(parent) {
+  auto validator = new QRegExpValidator(regex);
+  setValidator(validator);
+}
+
+
+/*****************************************************************************/
 IconButton::IconButton(const QString& text, QWidget* parent)
     : QToolButton(parent), icon_enabled_(true) {
   setMouseTracking(true);
@@ -250,7 +257,7 @@ QWidget* SpinBoxDelegate::createEditor(QWidget* parent, const QStyleOptionViewIt
 
 
 void SpinBoxDelegate::setEditorData(QWidget* editor, const QModelIndex& index) const {
-  int value = index.model()->data(index, Qt::EditRole).toInt();
+  int value = index.data(Qt::EditRole).toInt();
 
   QSpinBox* spinBox = static_cast<QSpinBox*>(editor);
   spinBox->setValue(value);
@@ -269,5 +276,35 @@ void SpinBoxDelegate::setModelData(QWidget* editor, QAbstractItemModel* model,
 
 void SpinBoxDelegate::updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option,
                                            const QModelIndex& /* index */) const {
+  editor->setGeometry(option.rect);
+}
+
+
+/*****************************************************************************/
+RayPathDelegate::RayPathDelegate(QObject* parent) : QStyledItemDelegate(parent) {}
+
+
+QWidget* RayPathDelegate::createEditor(QWidget* parent, const QStyleOptionViewItem& /* option */,
+                                       const QModelIndex& /* index */) const {
+  QRegExp regexp("\\d{1,2}(-\\d{1,2})*");
+  auto editor = new RegExpLineEdit(regexp, parent);
+  return editor;
+}
+
+
+void RayPathDelegate::setEditorData(QWidget *editor, const QModelIndex &index) const {
+  RegExpLineEdit* line_editor = static_cast<RegExpLineEdit*>(editor);
+  line_editor->setText(index.data(Qt::EditRole).toString());
+}
+
+
+void RayPathDelegate::setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const {
+  RegExpLineEdit* line_editor = static_cast<RegExpLineEdit*>(editor);
+  model->setData(index, line_editor->text(), Qt::EditRole);
+}
+
+
+void RayPathDelegate::updateEditorGeometry(QWidget *editor, const QStyleOptionViewItem &option,
+                                           const QModelIndex & /* index */) const {
   editor->setGeometry(option.rect);
 }

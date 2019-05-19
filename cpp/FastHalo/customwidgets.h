@@ -51,8 +51,8 @@ class FloatLineEdit : public QLineEdit {
   void refreshText();
 
  protected:
-  void focusOutEvent(QFocusEvent* event);
-  void keyPressEvent(QKeyEvent* event);
+  void focusOutEvent(QFocusEvent* event) override;
+  void keyPressEvent(QKeyEvent* event) override;
 
  private:
   float min_value_;
@@ -62,6 +62,14 @@ class FloatLineEdit : public QLineEdit {
 
   DataTransform view_to_model_;
   DataTransform model_to_view_;
+};
+
+
+/*****************************************************************************/
+class RegExpLineEdit : public QLineEdit {
+  Q_OBJECT
+public:
+  explicit RegExpLineEdit(const QRegExp& regexp, QWidget* parent = nullptr);
 };
 
 
@@ -118,5 +126,22 @@ class SpinBoxDelegate : public QStyledItemDelegate {
                             const QModelIndex& index) const override;
 };
 
+
+/*****************************************************************************/
+class RayPathDelegate : public QStyledItemDelegate {
+  Q_OBJECT
+public:
+  explicit RayPathDelegate(QObject* parent = nullptr);
+
+  QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem& option,
+                        const QModelIndex& index) const override;
+
+  void setEditorData(QWidget* editor, const QModelIndex& index) const override;
+  void setModelData(QWidget* editor, QAbstractItemModel* model,
+                    const QModelIndex& index) const override;
+
+  void updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option,
+                            const QModelIndex& index) const override;
+};
 
 #endif  // CURSORTABLE_H
