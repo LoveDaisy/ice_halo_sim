@@ -16,6 +16,7 @@ enum class VisibleRange { kUpper, kLower, kFront, kFull };
 enum class LensType {
   kLinear,
   kEqualArea,
+  kEquidistant,
   kDualEqualArea,
   kDualEquidistant,
 };
@@ -28,6 +29,15 @@ void EqualAreaFishEye(const float* cam_rot,                                // Ca
                       int img_wid, int img_hei,                            // Image size
                       int* img_xy,                                         // Image coordinates
                       VisibleRange visible_range = VisibleRange::kUpper);  // Visible range
+
+
+void EquidistantFishEye(const float* cam_rot,                                // Camera rotation. [lon, lat, roll]
+                        float hov,                                           // Half field of view.
+                        size_t data_number,                                  // Data number
+                        const float* dir,                                    // Ray directions, [x, y, z]
+                        int img_wid, int img_hei,                            // Image size
+                        int* img_xy,                                         // Image coordinates
+                        VisibleRange visible_range = VisibleRange::kUpper);  // Visible range
 
 
 void DualEqualAreaFishEye(const float* cam_rot,                                // Not used

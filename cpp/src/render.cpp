@@ -59,6 +59,51 @@ void EqualAreaFishEye(const float* cam_rot,          // Camera rotation. [lon, l
 }
 
 
+void EquidistantFishEye(const float* cam_rot,          // Camera rotation. [lon, lat, roll]
+                        float hov,                     // Half field of view.
+                        size_t data_number,            // Data number
+                        const float* dir,              // Ray directions, [x, y, z]
+                        int img_wid, int img_hei,      // Image size
+                        int* img_xy,                   // Image coordinates
+                        VisibleRange visible_range) {  // Visible range
+  float img_r = std::max(img_wid, img_hei) / 2.0f;
+  auto* dir_copy = new float[data_number * 3];
+  float cam_rot_copy[3];
+  std::memcpy(cam_rot_copy, cam_rot, sizeof(float) * 3);
+  cam_rot_copy[0] *= -1;
+  cam_rot_copy[1] *= -1;
+  for (auto& i : cam_rot_copy) {
+    i *= Math::kDegreeToRad;
+  }
+
+  Math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy, 4, 3, data_number);
+  for (decltype(data_number) i = 0; i < data_number; i++) {
+    if (std::abs(Math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
+      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+    } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
+      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+    } else if (visible_range == VisibleRange::kUpper && dir[i * 4 + 2] > 0) {
+      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+    } else if (visible_range == VisibleRange::kLower && dir[i * 4 + 2] < 0) {
+      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+    } else {
+      float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
+      float lat = std::asin(dir_copy[i * 3 + 2] / Math::Norm3(dir_copy + i * 3));
+      float r = (Math::kPi / 2.0f - lat) / hov * img_r;
+
+      img_xy[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + img_wid / 2.0f));
+      img_xy[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + img_hei / 2.0f));
+    }
+  }
+
+  delete[] dir_copy;
+}
+
+
 void DualEqualAreaFishEye(const float* /* cam_rot */,          // Not used
                           float /* hov */,                     // Not used
                           size_t data_number,                  // Data number
@@ -187,6 +232,7 @@ MyUnorderedMap<LensType, ProjectionFunction>& GetProjectionFunctions() {
   static MyUnorderedMap<LensType, ProjectionFunction> projection_functions = {
     { LensType::kLinear, &RectLinear },
     { LensType::kEqualArea, &EqualAreaFishEye },
+    { LensType::kEquidistant, &EquidistantFishEye },
     { LensType::kDualEquidistant, &DualEquidistantFishEye },
     { LensType::kDualEqualArea, &DualEqualAreaFishEye },
   };

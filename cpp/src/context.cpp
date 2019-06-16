@@ -296,8 +296,7 @@ bool GeneralRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_r
 }
 
 
-MultiScatterContext::MultiScatterContext(float prob)
-    : prob_(std::max(std::min(prob, 1.0f), 0.0f)) {}
+MultiScatterContext::MultiScatterContext(float prob) : prob_(std::max(std::min(prob, 1.0f), 0.0f)) {}
 
 
 float MultiScatterContext::GetProbability() const {
@@ -896,11 +895,13 @@ void ProjectContext::ParseCameraSettings(rapidjson::Document& d) {
   } else {
     if (*p == "linear") {
       cam_ctx_.SetLensType(LensType::kLinear);
-    } else if (*p == "fisheye") {
+    } else if (*p == "fisheye_equalarea" || *p == "fisheye") {
       cam_ctx_.SetLensType(LensType::kEqualArea);
+    } else if (*p == "fisheye_equidistant") {
+      cam_ctx_.SetLensType(LensType::kEquidistant);
     } else if (*p == "dual_fisheye_equidistant") {
       cam_ctx_.SetLensType(LensType::kDualEquidistant);
-    } else if (*p == "dual_fisheye_equiarea") {
+    } else if (*p == "dual_fisheye_equalarea") {
       cam_ctx_.SetLensType(LensType::kDualEqualArea);
     } else {
       std::fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equal-area fisheye!\n");
@@ -1739,7 +1740,6 @@ CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis) : 
 
 
 RayInfo::RayInfo(RaySegment* seg, const CrystalContext* crystal_ctx, const float* main_axis_rot)
-    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_ctx(crystal_ctx),
-      main_axis_rot(main_axis_rot) {}
+    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_ctx(crystal_ctx), main_axis_rot(main_axis_rot) {}
 
 }  // namespace IceHalo
