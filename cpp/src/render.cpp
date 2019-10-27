@@ -93,7 +93,7 @@ void EquidistantFishEye(const float* cam_rot,          // Camera rotation. [lon,
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
       float lat = std::asin(dir_copy[i * 3 + 2] / Math::Norm3(dir_copy + i * 3));
-      float r = (Math::kPi / 2.0f - lat) / hov * img_r;
+      float r = (Math::kPi / 2.0f - lat) / (hov * Math::kDegreeToRad) * img_r;
 
       img_xy[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + img_wid / 2.0f));
       img_xy[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + img_hei / 2.0f));

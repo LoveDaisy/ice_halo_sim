@@ -437,6 +437,7 @@ void CameraContext::SetFov(float fov) {
       fov = std::max(std::min(fov, kMaxFovLinear), 0.0f);
       break;
     case LensType::kEqualArea:
+    case LensType::kEquidistant:
       fov = std::max(std::min(fov, kMaxFovFisheye), 0.0f);
       break;
     default:
