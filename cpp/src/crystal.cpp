@@ -540,6 +540,7 @@ CrystalPtrU Crystal::CreateIrregularHexPrism(const float* dist, float h) {
   }
 
   /* Half plane is expressed as: a*x + b*y + c*z + d <= 0 */
+  /* clang-format off */
   float a[kConstraintNum] = {
     1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  // prism faces
     0.0f, 0.0f,                             // top and bottom faces
@@ -557,6 +558,7 @@ CrystalPtrU Crystal::CreateIrregularHexPrism(const float* dist, float h) {
     -prism_dist[3], -2 * prism_dist[4], -2 * prism_dist[5],  // prism
     -h,       -h,                                            // top and bottom
   };
+  /* clang-format on */
   HalfSpaceSet hss(kConstraintNum, a, b, c, d);
 
   std::vector<Vec3f> pts = FindInnerPoints(hss);

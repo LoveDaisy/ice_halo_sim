@@ -122,7 +122,7 @@ class Crystal {
    *          diameter of original basal face.
    * @return
    */
-  static std::unique_ptr<Crystal> CreateIrregularHexPyramid(const float *dist, const int *idx, const float *h);
+  static std::unique_ptr<Crystal> CreateIrregularHexPyramid(const float* dist, const int* idx, const float* h);
 
   /*! @brief Create a customized crystal
    *
@@ -172,9 +172,9 @@ class Crystal {
    * @param faces
    * @param type
    */
-  Crystal(std::vector<Math::Vec3f>  vertexes,     // vertex points
-          std::vector<Math::TriangleIdx>  faces,  // face indices
-          CrystalType type);                            // crystal type
+  Crystal(std::vector<Math::Vec3f> vertexes,     // vertex points
+          std::vector<Math::TriangleIdx> faces,  // face indices
+          CrystalType type);                     // crystal type
 
   /*! @brief Constructor, given vertexes, faces and face_number_map
    *
@@ -185,10 +185,10 @@ class Crystal {
    *        and [Pyramidal Crystal Face Numbers](https://www.atoptics.co.uk/halo/fnumpyr.htm)
    * @param type
    */
-  Crystal(std::vector<Math::Vec3f>  vertexes,     // vertex points
-          std::vector<Math::TriangleIdx>  faces,  // face indices
-          std::vector<int>  face_number_map,      // face to face number
-          CrystalType type);                            // crystal type
+  Crystal(std::vector<Math::Vec3f> vertexes,     // vertex points
+          std::vector<Math::TriangleIdx> faces,  // face indices
+          std::vector<int> face_number_map,      // face to face number
+          CrystalType type);                     // crystal type
 };
 
 using CrystalPtrU = std::unique_ptr<Crystal>;

@@ -51,7 +51,7 @@ struct EnterRayData {
 
 class Simulator {
  public:
-  explicit Simulator(ProjectContextPtr  context);
+  explicit Simulator(ProjectContextPtr context);
   Simulator(const Simulator& other) = delete;
   ~Simulator() = default;
 

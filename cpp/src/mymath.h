@@ -172,7 +172,6 @@ class RandomSampler {
   static int SampleInt(int max);
 
   RandomSampler() = delete;
-
 };
 
 using RandomSamplerPtrU = std::unique_ptr<RandomSampler>;
