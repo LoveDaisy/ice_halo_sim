@@ -52,6 +52,9 @@ INCLUDEPATH += $$CPP_PROJ_ROOT/src
 RESOURCES += \
     ui.qrc
 
+# CXX flags
+QMAKE_CXXFLAGS += -march=native
+
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
