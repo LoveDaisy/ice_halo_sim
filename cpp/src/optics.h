@@ -10,7 +10,7 @@
 #include "mymath.h"
 
 
-namespace IceHalo {
+namespace icehalo {
 
 class RaySegmentPool;
 struct RayInfo;
@@ -26,8 +26,8 @@ struct RaySegment {
   RaySegment* prev;
   RayInfo* root_ctx;
 
-  Math::Vec3f pt;
-  Math::Vec3f dir;
+  math::Vec3f pt;
+  math::Vec3f dir;
   float w;
   int face_id;
 
@@ -53,7 +53,6 @@ class RaySegmentPool {
   RaySegmentPool();
 
   static constexpr uint32_t kChunkSize = 1024 * 512;
-  static RaySegmentPool* instance_;
 
   std::vector<RaySegment*> segments_;
   size_t current_chunk_id_;
@@ -105,7 +104,7 @@ class IceRefractiveIndex {
   static constexpr float kMinWaveLength = 350;
   static constexpr float kMaxWaveLength = 900;
 
-  static float Get(float wave_length);
+  static double Get(double wave_length);
 
  private:
   /* Shellmeier's equation:
@@ -119,7 +118,7 @@ class IceRefractiveIndex {
   static constexpr float kCoefE[] = { 0.699934f, 0.640071f, 0.960906f, 0.964654f };
 };
 
-}  // namespace IceHalo
+}  // namespace icehalo
 
 
 #endif  // SRC_OPTICS_H_

@@ -1,6 +1,6 @@
 #include "threadingpool.h"
 
-namespace IceHalo {
+namespace icehalo {
 
 
 const int ThreadingPool::kHardwareConcurrency = std::thread::hardware_concurrency();
@@ -101,4 +101,4 @@ void ThreadingPool::WorkingFunction() {
 }
 
 
-}  // namespace IceHalo
+}  // namespace icehalo

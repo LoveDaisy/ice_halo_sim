@@ -7,7 +7,7 @@
 #include "mymath.h"
 #include "threadingpool.h"
 
-namespace IceHalo {
+namespace icehalo {
 
 SimulationBufferData::SimulationBufferData()
     : pt{ nullptr }, dir{ nullptr }, w{ nullptr }, face_id{ nullptr }, ray_seg{ nullptr }, ray_num(0) {}
@@ -87,27 +87,27 @@ void SimulationBufferData::Print() {
 }
 
 
-EnterRayData::EnterRayData() : ray_dir(nullptr), ray_seg(nullptr), ray_num(0) {}
+EntryRayData::EntryRayData() : ray_dir(nullptr), ray_seg(nullptr), ray_num(0) {}
 
 
-EnterRayData::~EnterRayData() {
+EntryRayData::~EntryRayData() {
   DeleteBuffer();
 }
 
 
-void EnterRayData::Clean() {
+void EntryRayData::Clean() {
   DeleteBuffer();
   ray_num = 0;
 }
 
 
-void EnterRayData::Allocate(size_t ray_number) {
+void EntryRayData::Allocate(size_t ray_number) {
   DeleteBuffer();
 
   ray_dir = new float[ray_number * 3];
   ray_seg = new RaySegment*[ray_number];
 
-  for (decltype(ray_number) i = 0; i < ray_number; i++) {
+  for (size_t i = 0; i < ray_number; i++) {
     ray_dir[i * 3 + 0] = 0;
     ray_dir[i * 3 + 1] = 0;
     ray_dir[i * 3 + 2] = 0;
@@ -118,7 +118,7 @@ void EnterRayData::Allocate(size_t ray_number) {
 }
 
 
-void EnterRayData::DeleteBuffer() {
+void EntryRayData::DeleteBuffer() {
   delete[] ray_dir;
   delete[] ray_seg;
 
@@ -129,12 +129,12 @@ void EnterRayData::DeleteBuffer() {
 
 Simulator::Simulator(ProjectContextPtr context)
     : context_(std::move(context)), current_wavelength_index_(-1), total_ray_num_(0), active_ray_num_(0),
-      buffer_size_(0), enter_ray_offset_(0) {}
+      buffer_size_(0), entry_ray_offset_(0) {}
 
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wsign-compare"
-void Simulator::SetWavelengthIndex(int index) {
+void Simulator::SetCurrentWavelengthIndex(int index) {
   if (index < 0 || index >= context_->wavelengths_.size()) {
     current_wavelength_index_ = -1;
     return;
@@ -146,16 +146,15 @@ void Simulator::SetWavelengthIndex(int index) {
 
 
 // Start simulation
-void Simulator::Start() {
+void Simulator::Run() {
   rays_.clear();
   exit_ray_segments_.clear();
   final_ray_segments_.clear();
   active_crystal_ctxs_.clear();
   RaySegmentPool::GetInstance()->Clear();
-  enter_ray_data_.Clean();
-  enter_ray_offset_ = 0;
+  entry_ray_data_.Clean();
+  entry_ray_offset_ = 0;
 
-  total_ray_num_ = context_->GetInitRayNum();
   InitSunRays();
 
   for (auto it = context_->multi_scatter_info_.begin(); it != context_->multi_scatter_info_.end(); ++it) {
@@ -171,14 +170,14 @@ void Simulator::Start() {
         buffer_.Allocate(buffer_size_);
       }
       InitEntryRays(context_->GetCrystalContext(c.crystal_id));
-      enter_ray_offset_ += active_ray_num_;
+      entry_ray_offset_ += active_ray_num_;
       TraceRays(context_->GetCrystal(c.crystal_id), context_->GetRayPathFilter(c.filter_id));
     }
 
     if (it != context_->multi_scatter_info_.end() - 1) {
       RestoreResultRays(it->GetProbability());  // total_ray_num_ is updated.
     }
-    enter_ray_offset_ = 0;
+    entry_ray_offset_ = 0;
   }
 
   for (const auto& r : exit_ray_segments_.back()) {
@@ -190,14 +189,18 @@ void Simulator::Start() {
 // Init sun rays, and fill into dir[1]. They will be rotated and fill into dir[0] in InitEntryRays().
 // In world frame.
 void Simulator::InitSunRays() {
+  using math::RandomSampler;
+
+  total_ray_num_ = context_->GetInitRayNum();
   float sun_r = context_->sun_ctx_.GetSunDiameter() / 2;  // In degree
   const float* sun_ray_dir = context_->sun_ctx_.GetSunPosition();
-  if (enter_ray_data_.ray_num < total_ray_num_) {
-    enter_ray_data_.Allocate(total_ray_num_);
+  if (entry_ray_data_.ray_num < total_ray_num_) {
+    entry_ray_data_.Allocate(total_ray_num_);
   }
-  Math::RandomSampler::SampleSphericalPointsCart(sun_ray_dir, sun_r, enter_ray_data_.ray_dir, total_ray_num_);
-  for (decltype(enter_ray_data_.ray_num) i = 0; i < enter_ray_data_.ray_num; i++) {
-    enter_ray_data_.ray_seg[i] = nullptr;
+
+  RandomSampler::SampleSphericalPointsCart(sun_ray_dir, sun_r, entry_ray_data_.ray_dir, entry_ray_data_.ray_num);
+  for (size_t i = 0; i < entry_ray_data_.ray_num; i++) {
+    entry_ray_data_.ray_seg[i] = nullptr;
   }
 }
 
@@ -209,23 +212,24 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
   auto& crystal = ctx->crystal;
   auto total_faces = crystal->TotalFaces();
 
-  auto* prob = new float[total_faces];
+  auto* prob = ctx->face_prob_buf.get();
   auto* face_norm = crystal->GetFaceNorm();
-  auto* face_point = crystal->GetFaceVertex();
+  auto* face_vertex = crystal->GetFaceVertex();
   auto* face_area = crystal->GetFaceArea();
 
   auto ray_pool = RaySegmentPool::GetInstance();
 
+  using math::RandomSampler;
   float axis_rot[3];
-  for (decltype(active_ray_num_) i = 0; i < active_ray_num_; i++) {
+  for (size_t i = 0; i < active_ray_num_; i++) {
     InitMainAxis(ctx, axis_rot);
-    Math::RotateZ(axis_rot, enter_ray_data_.ray_dir + (i + enter_ray_offset_) * 3, buffer_.dir[0] + i * 3);
+    math::RotateZ(axis_rot, entry_ray_data_.ray_dir + (i + entry_ray_offset_) * 3, buffer_.dir[0] + i * 3);
 
     float sum = 0;
     for (int k = 0; k < total_faces; k++) {
       prob[k] = 0;
       if (!std::isnan(face_norm[k * 3 + 0]) && face_area[k] > 0) {
-        prob[k] = std::max(-Math::Dot3(face_norm + k * 3, buffer_.dir[0] + i * 3) * face_area[k], 0.0f);
+        prob[k] = std::max(-math::Dot3(face_norm + k * 3, buffer_.dir[0] + i * 3) * face_area[k], 0.0f);
         sum += prob[k];
       }
     }
@@ -233,10 +237,10 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
       prob[k] /= sum;
     }
 
-    buffer_.face_id[0][i] = Math::RandomSampler::SampleInt(prob, total_faces);
-    Math::RandomSampler::SampleTriangularPoints(face_point + buffer_.face_id[0][i] * 9, buffer_.pt[0] + i * 3);
+    buffer_.face_id[0][i] = RandomSampler::SampleInt(prob, total_faces);
+    RandomSampler::SampleTriangularPoints(face_vertex + buffer_.face_id[0][i] * 9, buffer_.pt[0] + i * 3);
 
-    auto prev_r = enter_ray_data_.ray_seg[enter_ray_offset_ + i];
+    auto prev_r = entry_ray_data_.ray_seg[entry_ray_offset_ + i];
     buffer_.w[0][i] = prev_r ? prev_r->w : 1.0f;
 
     auto r =
@@ -246,28 +250,26 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
     r->root_ctx->prev_ray_segment = prev_r;
     rays_.back().emplace_back(r->root_ctx);
   }
-
-  delete[] prob;
 }
 
 
 // Init crystal main axis.
 // Random sample points on a sphere with given parameters.
 void Simulator::InitMainAxis(const CrystalContext* ctx, float* axis) {
-  auto rng = Math::RandomNumberGenerator::GetInstance();
+  auto rng = math::RandomNumberGenerator::GetInstance();
 
-  if (ctx->axis.latitude_dist == Math::Distribution::kUniform) {
+  if (ctx->axis.latitude_dist == math::Distribution::kUniform) {
     // Random sample on full sphere, ignore other parameters.
-    Math::RandomSampler::SampleSphericalPointsSph(axis);
+    math::RandomSampler::SampleSphericalPointsSph(axis);
   } else {
-    Math::RandomSampler::SampleSphericalPointsSph(ctx->axis, axis);
+    math::RandomSampler::SampleSphericalPointsSph(ctx->axis, axis);
   }
 
-  if (ctx->axis.roll_dist == Math::Distribution::kUniform) {
+  if (ctx->axis.roll_dist == math::Distribution::kUniform) {
     // Random roll, ignore other parameters.
-    axis[2] = rng->GetUniform() * 2 * Math::kPi;
+    axis[2] = rng->GetUniform() * 2 * math::kPi;
   } else {
-    axis[2] = rng->Get(ctx->axis.roll_dist, ctx->axis.roll_mean, ctx->axis.roll_std) * Math::kDegreeToRad;
+    axis[2] = rng->Get(ctx->axis.roll_dist, ctx->axis.roll_mean, ctx->axis.roll_std) * math::kDegreeToRad;
   }
 }
 
@@ -278,11 +280,11 @@ void Simulator::RestoreResultRays(float prob) {
     buffer_size_ = exit_ray_segments_.back().size() * 2;
     buffer_.Allocate(buffer_size_);
   }
-  if (enter_ray_data_.ray_num < exit_ray_segments_.back().size()) {
-    enter_ray_data_.Allocate(exit_ray_segments_.back().size());
+  if (entry_ray_data_.ray_num < exit_ray_segments_.back().size()) {
+    entry_ray_data_.Allocate(exit_ray_segments_.back().size());
   }
 
-  auto rng = Math::RandomNumberGenerator::GetInstance();
+  auto rng = math::RandomNumberGenerator::GetInstance();
   size_t idx = 0;
   for (const auto& r : exit_ray_segments_.back()) {
     if (!r->is_finished || r->w < context_->kScatMinW) {
@@ -293,24 +295,24 @@ void Simulator::RestoreResultRays(float prob) {
       continue;
     }
     const auto axis_rot = r->root_ctx->main_axis_rot.val();
-    Math::RotateZBack(axis_rot, r->dir.val(), enter_ray_data_.ray_dir + idx * 3);
-    enter_ray_data_.ray_seg[idx] = r;
+    math::RotateZBack(axis_rot, r->dir.val(), entry_ray_data_.ray_dir + idx * 3);
+    entry_ray_data_.ray_seg[idx] = r;
     idx++;
   }
   total_ray_num_ = idx;
 
   // Shuffle
-  for (decltype(total_ray_num_) i = 0; i < total_ray_num_; i++) {
-    int tmp_idx = Math::RandomSampler::SampleInt(static_cast<int>(total_ray_num_ - i));
+  for (size_t i = 0; i < total_ray_num_; i++) {
+    int tmp_idx = math::RandomSampler::SampleInt(static_cast<int>(total_ray_num_ - i));
 
     float tmp_dir[3];
-    std::memcpy(tmp_dir, enter_ray_data_.ray_dir + (i + tmp_idx) * 3, sizeof(float) * 3);
-    std::memcpy(enter_ray_data_.ray_dir + (i + tmp_idx) * 3, enter_ray_data_.ray_dir + i * 3, sizeof(float) * 3);
-    std::memcpy(enter_ray_data_.ray_dir + i * 3, tmp_dir, sizeof(float) * 3);
+    std::memcpy(tmp_dir, entry_ray_data_.ray_dir + (i + tmp_idx) * 3, sizeof(float) * 3);
+    std::memcpy(entry_ray_data_.ray_dir + (i + tmp_idx) * 3, entry_ray_data_.ray_dir + i * 3, sizeof(float) * 3);
+    std::memcpy(entry_ray_data_.ray_dir + i * 3, tmp_dir, sizeof(float) * 3);
 
-    RaySegment* tmp_r = enter_ray_data_.ray_seg[i + tmp_idx];
-    enter_ray_data_.ray_seg[i + tmp_idx] = enter_ray_data_.ray_seg[i];
-    enter_ray_data_.ray_seg[i] = tmp_r;
+    RaySegment* tmp_r = entry_ray_data_.ray_seg[i + tmp_idx];
+    entry_ray_data_.ray_seg[i + tmp_idx] = entry_ray_data_.ray_seg[i];
+    entry_ray_data_.ray_seg[i] = tmp_r;
   }
 }
 
@@ -321,15 +323,15 @@ void Simulator::TraceRays(const Crystal* crystal, AbstractRayPathFilter* filter)
   auto pool = ThreadingPool::GetInstance();
 
   int max_recursion_num = context_->GetRayHitNum();
-  float n = IceRefractiveIndex::Get(context_->wavelengths_[current_wavelength_index_].wavelength);
+  auto n = static_cast<float>(IceRefractiveIndex::Get(context_->wavelengths_[current_wavelength_index_].wavelength));
   for (int i = 0; i < max_recursion_num; i++) {
     if (buffer_size_ < active_ray_num_ * 2) {
       buffer_size_ = active_ray_num_ * kBufferSizeFactor;
       buffer_.Allocate(buffer_size_);
     }
     auto step = std::max(active_ray_num_ / 100, static_cast<size_t>(10));
-    for (decltype(active_ray_num_) j = 0; j < active_ray_num_; j += step) {
-      decltype(active_ray_num_) current_num = std::min(active_ray_num_ - j, step);
+    for (size_t j = 0; j < active_ray_num_; j += step) {
+      size_t current_num = std::min(active_ray_num_ - j, step);
       pool->AddJob([=] {
         Optics::HitSurface(crystal, n, current_num,                                              //
                            buffer_.dir[0] + j * 3, buffer_.face_id[0] + j, buffer_.w[0] + j,     //
@@ -428,7 +430,7 @@ void Simulator::SaveFinalDirections(const char* filename) {
     const auto axis_rot = r->root_ctx->main_axis_rot.val();
     assert(r->root_ctx);
 
-    Math::RotateZBack(axis_rot, r->dir.val(), curr_data);
+    math::RotateZBack(axis_rot, r->dir.val(), curr_data);
     curr_data[3] = r->w;
     curr_data += 4;
     idx++;
@@ -463,4 +465,4 @@ void Simulator::PrintRayInfo() {
   }
 }
 
-}  // namespace IceHalo
+}  // namespace icehalo

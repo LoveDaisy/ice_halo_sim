@@ -7,7 +7,7 @@
 #include "crystal.h"
 #include "optics.h"
 
-namespace IceHalo {
+namespace icehalo {
 
 struct SimulationBufferData {
  public:
@@ -31,17 +31,16 @@ struct SimulationBufferData {
 };
 
 
-struct EnterRayData {
+struct EntryRayData {
  public:
-  EnterRayData();
-  ~EnterRayData();
+  EntryRayData();
+  ~EntryRayData();
 
   void Clean();
   void Allocate(size_t ray_number);
 
   float* ray_dir;
   RaySegment** ray_seg;
-
   size_t ray_num;
 
  private:
@@ -55,8 +54,8 @@ class Simulator {
   Simulator(const Simulator& other) = delete;
   ~Simulator() = default;
 
-  void SetWavelengthIndex(int index);
-  void Start();
+  void SetCurrentWavelengthIndex(int index);
+  void Run();
   const std::vector<RaySegment*>& GetFinalRaySegments() const;
   void SaveFinalDirections(const char* filename);
   void SaveAllRays(const char* filename);
@@ -88,10 +87,10 @@ class Simulator {
   size_t buffer_size_;
 
   SimulationBufferData buffer_;
-  EnterRayData enter_ray_data_;
-  size_t enter_ray_offset_;
+  EntryRayData entry_ray_data_;
+  size_t entry_ray_offset_;
 };
 
-}  // namespace IceHalo
+}  // namespace icehalo
 
 #endif  // SRC_SIMULATION_H_

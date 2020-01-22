@@ -12,7 +12,7 @@
 #include "threadingpool.h"
 
 
-namespace IceHalo {
+namespace icehalo {
 
 using rapidjson::Pointer;
 
@@ -22,7 +22,7 @@ AbstractRayPathFilter::AbstractRayPathFilter()
 
 bool AbstractRayPathFilter::Filter(const Crystal* crystal, RaySegment* last_r) const {
   if (remove_homodromous_ &&
-      Math::Dot3(last_r->dir.val(), last_r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * Math::kFloatEps) {
+      math::Dot3(last_r->dir.val(), last_r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * math::kFloatEps) {
     return false;
   }
 
@@ -343,8 +343,8 @@ void MultiScatterContext::NormalizeCrystalPopulation() {
 
 
 SunContext::SunContext(float altitude, float diameter)
-    : sun_diameter_(diameter), sun_altitude_(altitude), sun_position_{ 0.0f, -std::cos(altitude * Math::kDegreeToRad),
-                                                                       -std::sin(altitude * Math::kDegreeToRad) } {}
+    : sun_diameter_(diameter), sun_altitude_(altitude), sun_position_{ 0.0f, -std::cos(altitude * math::kDegreeToRad),
+                                                                       -std::sin(altitude * math::kDegreeToRad) } {}
 
 
 const float* SunContext::GetSunPosition() const {
@@ -363,8 +363,8 @@ bool SunContext::SetSunAltitude(float altitude) {
   } else {
     sun_altitude_ = altitude;
     sun_position_[0] = 0.0f;
-    sun_position_[1] = -std::cos(altitude * Math::kDegreeToRad);
-    sun_position_[2] = -std::sin(altitude * Math::kDegreeToRad);
+    sun_position_[1] = -std::cos(altitude * math::kDegreeToRad);
+    sun_position_[2] = -std::sin(altitude * math::kDegreeToRad);
     return true;
   }
 }
@@ -453,7 +453,7 @@ LensType CameraContext::GetLensType() const {
 }
 
 
-void CameraContext::SetLensType(IceHalo::LensType type) {
+void CameraContext::SetLensType(LensType type) {
   lens_type_ = type;
   switch (lens_type_) {
     case LensType::kEqualArea:
@@ -583,7 +583,7 @@ VisibleRange RenderContext::GetVisibleRange() const {
 }
 
 
-void RenderContext::SetVisibleRange(IceHalo::VisibleRange r) {
+void RenderContext::SetVisibleRange(VisibleRange r) {
   visible_range_ = r;
 }
 
@@ -697,7 +697,7 @@ void ProjectContext::RemoveCrystal(int id) {
 }
 
 
-CrystalContext* ProjectContext::GetCrystalContext(int id) const {
+const CrystalContext* ProjectContext::GetCrystalContext(int id) const {
   if (crystal_store_.count(id)) {
     return crystal_store_.at(id).get();
   } else {
@@ -1144,7 +1144,7 @@ void ProjectContext::ParseOneCrystal(const rapidjson::Value& c, int ci) {
 
 
 AxisDistribution ProjectContext::ParseCrystalAxis(const rapidjson::Value& c, int ci) {
-  using Math::Distribution;
+  using math::Distribution;
 
   AxisDistribution axis{};
   constexpr size_t kMsgBufferSize = 256;
@@ -1181,7 +1181,7 @@ AxisDistribution ProjectContext::ParseCrystalAxis(const rapidjson::Value& c, int
   }
 
   // Start parsing azimuth settings.
-  axis.azimuth_dist = Math::Distribution::kUniform;
+  axis.azimuth_dist = math::Distribution::kUniform;
   axis.azimuth_mean = 0;
   axis.azimuth_std = 360;
   p = Pointer("/azimuth").Get(c);
@@ -1417,8 +1417,8 @@ CrystalPtrU ProjectContext::ParseCrystalCustom(const rapidjson::Value& c, int ci
       throw std::invalid_argument(msg_buffer);
     }
 
-    std::vector<Math::Vec3f> vertexes;
-    std::vector<Math::TriangleIdx> faces;
+    std::vector<math::Vec3f> vertexes;
+    std::vector<math::TriangleIdx> faces;
     float v_buf[3];
     int f_buf[3];
     int curr_char;
@@ -1737,10 +1737,11 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
 }
 
 
-CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis) : crystal(std::move(g)), axis(axis) {}
+CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis)
+    : crystal(std::move(g)), axis(axis), face_prob_buf(new float[crystal->TotalFaces()]) {}
 
 
 RayInfo::RayInfo(RaySegment* seg, const CrystalContext* crystal_ctx, const float* main_axis_rot)
     : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_ctx(crystal_ctx), main_axis_rot(main_axis_rot) {}
 
-}  // namespace IceHalo
+}  // namespace icehalo

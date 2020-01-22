@@ -14,52 +14,55 @@ int main(int argc, char* argv[]) {
   }
 
   auto start = std::chrono::system_clock::now();
-  IceHalo::ProjectContextPtr proj_ctx = IceHalo::ProjectContext::CreateFromFile(argv[1]);
-  IceHalo::Simulator simulator(proj_ctx);
-  IceHalo::SpectrumRenderer renderer(proj_ctx);
+  icehalo::ProjectContextPtr proj_ctx = icehalo::ProjectContext::CreateFromFile(argv[1]);
+  icehalo::Simulator simulator(proj_ctx);
+  icehalo::SpectrumRenderer renderer(proj_ctx);
 
   auto t = std::chrono::system_clock::now();
   std::chrono::duration<float, std::ratio<1, 1000>> diff = t - start;
   std::printf("Initialization: %.2fms\n", diff.count());
 
-  IceHalo::File file(proj_ctx->GetDefaultImagePath().c_str());
-  if (!file.Open(IceHalo::OpenMode::kWrite | IceHalo::OpenMode::kBinary)) {
+  icehalo::File file(proj_ctx->GetDefaultImagePath().c_str());
+  if (!file.Open(icehalo::OpenMode::kWrite | icehalo::OpenMode::kBinary)) {
     std::fprintf(stderr, "Cannot create output image file!\n");
     return -1;
   }
   file.Close();
 
   size_t total_ray_num = 0;
-  auto flat_rgb_data = new uint8_t[3 * proj_ctx->render_ctx_.GetImageWidth() * proj_ctx->render_ctx_.GetImageHeight()];
+  std::unique_ptr<uint8_t[]> flat_rgb_data{
+    new uint8_t[3 * proj_ctx->render_ctx_.GetImageWidth() * proj_ctx->render_ctx_.GetImageHeight()]
+  };
   while (true) {
     const auto& wavelengths = proj_ctx->wavelengths_;
-    for (decltype(wavelengths.size()) i = 0; i < wavelengths.size(); i++) {
+    for (size_t i = 0; i < wavelengths.size(); i++) {
       std::printf("starting at wavelength: %d\n", wavelengths[i].wavelength);
-      simulator.SetWavelengthIndex(i);
+      simulator.SetCurrentWavelengthIndex(i);
 
       auto t0 = std::chrono::system_clock::now();
-      simulator.Start();
+      simulator.Run();
       auto t1 = std::chrono::system_clock::now();
       diff = t1 - t0;
       std::printf("Ray tracing: %.2fms\n", diff.count());
 
-      auto num = simulator.GetFinalRaySegments().size();
-      auto* curr_data = new float[num * 4];
-      auto* p = curr_data;
-      for (const auto& r : simulator.GetFinalRaySegments()) {
-        const auto axis_rot = r->root_ctx->main_axis_rot.val();
+      const auto& ray_segs = simulator.GetFinalRaySegments();
+      auto num = ray_segs.size();
+      std::unique_ptr<float[]> curr_data{ new float[num * 4] };
+      auto* p = curr_data.get();
+      for (const auto& r : ray_segs) {
         assert(r->root_ctx);
-        IceHalo::Math::RotateZBack(axis_rot, r->dir.val(), p);
+        auto axis_rot = r->root_ctx->main_axis_rot.val();
+        icehalo::math::RotateZBack(axis_rot, r->dir.val(), p);
         p[3] = r->w;
         p += 4;
       }
-      renderer.LoadData(wavelengths[i].wavelength, wavelengths[i].weight, curr_data, num);
-      delete[] curr_data;
+      renderer.LoadData(static_cast<float>(wavelengths[i].wavelength), wavelengths[i].weight, curr_data.get(), num);
     }
 
-    renderer.RenderToRgb(flat_rgb_data);
+    renderer.RenderToRgb(flat_rgb_data.get());
 
-    cv::Mat img(proj_ctx->render_ctx_.GetImageHeight(), proj_ctx->render_ctx_.GetImageWidth(), CV_8UC3, flat_rgb_data);
+    cv::Mat img(proj_ctx->render_ctx_.GetImageHeight(), proj_ctx->render_ctx_.GetImageWidth(), CV_8UC3,
+                flat_rgb_data.get());
     cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
     try {
       cv::imwrite(proj_ctx->GetDefaultImagePath(), img);
@@ -79,6 +82,5 @@ int main(int argc, char* argv[]) {
   diff = end - start;
   std::printf("Total: %.3fs\n", diff.count() / 1e3);
 
-  delete[] flat_rgb_data;
   return 0;
 }

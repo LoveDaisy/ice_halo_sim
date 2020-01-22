@@ -13,7 +13,7 @@
 #include "threadingpool.h"
 
 
-namespace IceHalo {
+namespace icehalo {
 
 RaySegment::RaySegment()
     : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root_ctx(nullptr), pt(0, 0, 0), dir(0, 0, 0), w(0),
@@ -44,7 +44,7 @@ void Optics::HitSurface(const Crystal* crystal, float n, size_t num,            
     const float* tmp_dir = dir_in + i * 3;
     const float* tmp_norm = face_norm + face_id_in[i] * 3;
 
-    float cos_theta = Math::Dot3(tmp_dir, tmp_norm);
+    float cos_theta = math::Dot3(tmp_dir, tmp_norm);
     float rr = cos_theta > 0 ? n : 1.0f / n;
     float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
 
@@ -116,14 +116,14 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir,  // i
                                         float* p, int* idx) {               // output
   float min_t = std::numeric_limits<float>::max();
   const float* norm_in = face_norm + face_id * 3;
-  float flag_in = Math::Dot3(dir, norm_in);
+  float flag_in = math::Dot3(dir, norm_in);
 
   for (int i = 0; i < face_num; i++) {
     const float* curr_face_point = face_points + i * 9;
     const float* curr_face_base = face_bases + i * 6;
     const float* curr_face_norm = face_norm + i * 3;
 
-    if (Math::Dot3(dir, curr_face_norm) * flag_in >= 0) {
+    if (math::Dot3(dir, curr_face_norm) * flag_in >= 0) {
       continue;
     }
 
@@ -135,7 +135,7 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir,  // i
     float ff24 = curr_face_base[2] * curr_face_base[4];
 
     float c = dir[0] * ff15 + dir[1] * ff23 + dir[2] * ff04 - dir[0] * ff24 - dir[1] * ff05 - dir[2] * ff13;
-    if (Math::FloatEqualZero(c)) {
+    if (math::FloatEqualZero(c)) {
       continue;
     }
 
@@ -144,7 +144,7 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir,  // i
               ff24 * curr_face_point[0] - ff05 * curr_face_point[1] - ff13 * curr_face_point[2];
     float b = pt[0] * ff15 + pt[1] * ff23 + pt[2] * ff04 - pt[0] * ff24 - pt[1] * ff05 - pt[2] * ff13;
     float t = (a - b) / c;
-    if (t <= Math::kFloatEps) {
+    if (t <= math::kFloatEps) {
       continue;
     }
 
@@ -243,7 +243,7 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir,  
     __m128 SUB_PERM_FF = _mm_permute_ps(_mm_sub_ps(FF1, FF0), 0xD2);
     __m128 C = _mm_dp_ps(DIR, SUB_PERM_FF, 0x71);
 
-    if (Math::FloatEqualZero(C[0])) {
+    if (math::FloatEqualZero(C[0])) {
       continue;
     }
 
@@ -262,7 +262,7 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir,  
     __m128 A = _mm_dp_ps(SUB_PERM_FF, CURR_FACE_POINT, 0x71);
     __m128 B = _mm_dp_ps(SUB_PERM_FF, PT, 0x71);
     float t = (A[0] - B[0]) / C[0];
-    if (t <= Math::kFloatEps) {
+    if (t <= math::kFloatEps) {
       continue;
     }
 
@@ -350,7 +350,7 @@ constexpr float IceRefractiveIndex::kCoefAvr[];
 constexpr float IceRefractiveIndex::kCoefO[];
 constexpr float IceRefractiveIndex::kCoefE[];
 
-float IceRefractiveIndex::Get(float wave_length) {
+double IceRefractiveIndex::Get(double wave_length) {
   /* Shellmeier's equation:
    *
    *   n^2 = 1 + B1 * lambda^2 / (lambda^2 - C1)
@@ -363,15 +363,13 @@ float IceRefractiveIndex::Get(float wave_length) {
 
   wave_length /= 1e3;
 
-  float n = 1.0f;
+  double n = 1.0;
   n += kCoefAvr[0] / (1 - kCoefAvr[2] * 1e-2f / wave_length / wave_length);
   n += kCoefAvr[1] / (1 - kCoefAvr[3] * 1e2f / wave_length / wave_length);
 
   return std::sqrt(n);
 }
 
-
-RaySegmentPool* RaySegmentPool::instance_ = nullptr;
 
 RaySegmentPool::RaySegmentPool() : current_chunk_id_(0), next_unused_id_(0) {
   auto* raySegPool = new RaySegment[kChunkSize];
@@ -386,10 +384,8 @@ RaySegmentPool::~RaySegmentPool() {
 }
 
 RaySegmentPool* RaySegmentPool::GetInstance() {
-  if (!instance_) {
-    instance_ = new RaySegmentPool();
-  }
-  return instance_;
+  static auto instance = new RaySegmentPool();
+  return instance;
 }
 
 RaySegment* RaySegmentPool::GetRaySegment(const float* pt, const float* dir, float w, int faceId) {
@@ -425,4 +421,4 @@ void RaySegmentPool::Clear() {
 }
 
 
-}  // namespace IceHalo
+}  // namespace icehalo

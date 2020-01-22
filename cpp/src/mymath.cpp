@@ -11,9 +11,9 @@
 #include "context.h"
 
 
-namespace IceHalo {
+namespace icehalo {
 
-namespace Math {
+namespace math {
 
 bool FloatEqual(float a, float b, float threshold) {
   return std::abs(a - b) < threshold;
@@ -304,8 +304,8 @@ std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& 
 }
 
 
-void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Math::Vec3f>& pts,  // input
-                          std::vector<Math::TriangleIdx>& faces) {                       // output
+void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<math::Vec3f>& pts,  // input
+                          std::vector<math::TriangleIdx>& faces) {                       // output
   int num = hss.n;
   float *a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
 
@@ -457,7 +457,7 @@ Vec3<T> Vec3<T>::Normalized() {
 
 template <typename T>
 void Vec3<T>::Normalize() {
-  Math::Normalize3(val_);
+  math::Normalize3(val_);
 }
 
 
@@ -474,7 +474,7 @@ bool operator==(const Vec3f& lhs, const Vec3f& rhs) {
 template <typename T>
 Vec3<T> Vec3<T>::Normalized(const Vec3<T>& v) {
   T data[3];
-  Math::Normalized3(v.val_, data);
+  math::Normalized3(v.val_, data);
   return Vec3<T>(data);
 }
 
@@ -535,20 +535,20 @@ Vec3<T>& Vec3<T>::operator*=(T a) {
 
 template <typename T>
 T Vec3<T>::Dot(const Vec3<T>& v1, const Vec3<T>& v2) {
-  return Math::Dot3(v1.val_, v2.val_);
+  return math::Dot3(v1.val_, v2.val_);
 }
 
 
 template <typename T>
 T Vec3<T>::Norm(const Vec3<T>& v) {
-  return Math::Norm3(v.val_);
+  return math::Norm3(v.val_);
 }
 
 
 template <typename T>
 Vec3<T> Vec3<T>::Cross(const Vec3<T>& v1, const Vec3<T>& v2) {
   T data[3];
-  Math::Cross3(v1.val_, v2.val_, data);
+  math::Cross3(v1.val_, v2.val_, data);
   return Vec3<T>(data);
 }
 
@@ -556,7 +556,7 @@ Vec3<T> Vec3<T>::Cross(const Vec3<T>& v1, const Vec3<T>& v2) {
 template <typename T>
 Vec3<T> Vec3<T>::FromTo(const Vec3<T>& v1, const Vec3<T>& v2) {
   T data[3];
-  Math::Vec3FromTo(v1.val_, v2.val_, data);
+  math::Vec3FromTo(v1.val_, v2.val_, data);
   return Vec3<T>(data);
 }
 
@@ -626,24 +626,22 @@ void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float
   auto rng = RandomNumberGenerator::GetInstance();
 
   float lon = std::atan2(dir[1], dir[0]);
-  float lat = std::asin(dir[2] / Math::Norm3(dir));
+  float lat = std::asin(dir[2] / math::Norm3(dir));
   float rot[3] = { lon, lat, 0 };
 
-  auto* tmp_dir = new float[num * 3];
+  std::unique_ptr<float[]> tmp_dir{ new float[num * 3] };
 
   double dz = 2 * std::sin(std / 2.0 * kDegreeToRad) * std::sin(std / 2.0 * kDegreeToRad);
   for (decltype(num) i = 0; i < num; i++) {
     double udz = rng->GetUniform() * dz;
-    double q = rng->GetUniform() * 2 * Math::kPi;
+    double q = rng->GetUniform() * 2 * math::kPi;
 
     double r = std::sqrt((2.0f - udz) * udz);
     tmp_dir[i * 3 + 0] = static_cast<float>(std::cos(q) * r);
     tmp_dir[i * 3 + 1] = static_cast<float>(std::sin(q) * r);
     tmp_dir[i * 3 + 2] = static_cast<float>(1.0f - udz);
   }
-  Math::RotateZBack(rot, tmp_dir, data, num);
-
-  delete[] tmp_dir;
+  math::RotateZBack(rot, tmp_dir.get(), data, num);
 }
 
 
@@ -651,7 +649,7 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t ste
   auto rng = RandomNumberGenerator::GetInstance();
   for (decltype(num) i = 0; i < num; i++) {
     float u = rng->GetUniform() * 2 - 1;
-    float lambda = rng->GetUniform() * 2 * Math::kPi;
+    float lambda = rng->GetUniform() * 2 * math::kPi;
 
     data[i * step + 0] = lambda;
     data[i * step + 1] = std::asin(u);
@@ -673,7 +671,7 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     }
     float lambda = 0;
     if (axis_dist.azimuth_dist == Distribution::kUniform) {
-      lambda = rng->GetUniform() * 2 * Math::kPi;
+      lambda = rng->GetUniform() * 2 * math::kPi;
     } else {
       lambda = rng->Get(axis_dist.azimuth_dist,                 // distribution
                         axis_dist.azimuth_mean * kDegreeToRad,  // mean
@@ -726,12 +724,12 @@ int RandomSampler::SampleInt(int max) {
   return std::min(static_cast<int>(rng->GetUniform() * max), max - 1);
 }
 
-}  // namespace Math
+}  // namespace math
 
 
 AxisDistribution::AxisDistribution()
-    : latitude_dist(Math::Distribution::kUniform), azimuth_dist(Math::Distribution::kUniform),
-      roll_dist(Math::Distribution::kUniform), latitude_mean(0), azimuth_mean(0), roll_mean(0), latitude_std(0),
+    : latitude_dist(math::Distribution::kUniform), azimuth_dist(math::Distribution::kUniform),
+      roll_dist(math::Distribution::kUniform), latitude_mean(0), azimuth_mean(0), roll_mean(0), latitude_std(0),
       azimuth_std(0), roll_std(0) {}
 
-}  // namespace IceHalo
+}  // namespace icehalo

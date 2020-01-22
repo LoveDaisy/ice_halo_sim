@@ -7,17 +7,22 @@
 #include <random>
 #include <vector>
 
-namespace IceHalo {
+namespace icehalo {
 
 struct AxisDistribution;
 
-namespace Math {
+namespace math {
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-const-variable"
 
 constexpr float kPi = 3.14159265359f;
 constexpr float kSqrt3 = 1.73205080757f;
 constexpr float kFloatEps = 1e-6;
 constexpr float kDegreeToRad = kPi / 180.0f;
 constexpr float kRadToDegree = 180.0f / kPi;
+
+#pragma clang diagnostic pop
 
 
 template <typename T>
@@ -196,20 +201,20 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
 std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss);
 void SortAndRemoveDuplicate(std::vector<Vec3f>* pts);
 std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& n0, float d0);
-void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Math::Vec3f>& pts,
-                          std::vector<Math::TriangleIdx>& faces);
+void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<math::Vec3f>& pts,
+                          std::vector<math::TriangleIdx>& faces);
 void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n, std::vector<int>& pts_idx,
                              std::vector<TriangleIdx>& faces);
 
-}  // namespace Math
+}  // namespace math
 
 
 struct AxisDistribution {
   AxisDistribution();
 
-  Math::Distribution latitude_dist;
-  Math::Distribution azimuth_dist;
-  Math::Distribution roll_dist;
+  math::Distribution latitude_dist;
+  math::Distribution azimuth_dist;
+  math::Distribution roll_dist;
   float latitude_mean;
   float azimuth_mean;
   float roll_mean;
@@ -218,6 +223,6 @@ struct AxisDistribution {
   float roll_std;
 };
 
-}  // namespace IceHalo
+}  // namespace icehalo
 
 #endif  // SRC_MYMATH_H_

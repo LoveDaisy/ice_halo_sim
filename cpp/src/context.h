@@ -20,7 +20,7 @@
 #include "rapidjson/document.h"
 
 
-namespace IceHalo {
+namespace icehalo {
 
 struct RaySegment;
 struct CrystalContext;
@@ -267,7 +267,7 @@ class ProjectContext {
   void SetCrystal(int id, CrystalPtrU&& crystal);
   void SetCrystal(int id, CrystalPtrU&& crystal, const AxisDistribution& axis);
   void RemoveCrystal(int id);
-  CrystalContext* GetCrystalContext(int id) const;
+  const CrystalContext* GetCrystalContext(int id) const;
   Crystal* GetCrystal(int id) const;
   void PrintCrystalInfo() const;
 
@@ -340,6 +340,7 @@ struct CrystalContext {
 
   const CrystalPtrU crystal;
   const AxisDistribution axis;
+  const std::unique_ptr<float[]> face_prob_buf;
 };
 
 
@@ -349,13 +350,13 @@ struct RayInfo {
   RaySegment* first_ray_segment;
   RaySegment* prev_ray_segment;
   const CrystalContext* crystal_ctx;
-  Math::Vec3f main_axis_rot;
+  math::Vec3f main_axis_rot;
 };
 
 using RayInfoPtrU = std::unique_ptr<RayInfo>;
 using ProjectContextPtr = std::shared_ptr<ProjectContext>;
 
-}  // namespace IceHalo
+}  // namespace icehalo
 
 
 #endif  // SRC_CONTEXT_H_

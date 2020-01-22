@@ -8,7 +8,7 @@
 #include "files.h"
 
 
-namespace IceHalo {
+namespace icehalo {
 
 enum class VisibleRange { kUpper, kLower, kFront, kFull };
 
@@ -378,7 +378,7 @@ class SpectrumRenderer {
   };
 };
 
-}  // namespace IceHalo
+}  // namespace icehalo
 
 
 #endif  // SRC_RENDER_H_

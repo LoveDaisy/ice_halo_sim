@@ -3,7 +3,7 @@
 #include "context.h"
 #include "simulation.h"
 
-using namespace IceHalo;
+using namespace icehalo;
 
 int main(int argc, char* argv[]) {
   if (argc != 2) {
@@ -24,10 +24,10 @@ int main(int argc, char* argv[]) {
   for (decltype(wavelengths.size()) i = 0; i < wavelengths.size(); i++) {
     const auto& wl = wavelengths[i];
     printf("starting at wavelength: %d\n", wl.wavelength);
-    simulator.SetWavelengthIndex(i);
+    simulator.SetCurrentWavelengthIndex(i);
 
     auto t0 = std::chrono::system_clock::now();
-    simulator.Start();
+    simulator.Run();
     auto t1 = std::chrono::system_clock::now();
     diff = t1 - t0;
     printf("Ray tracing: %.2fms\n", diff.count());

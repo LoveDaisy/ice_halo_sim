@@ -8,7 +8,7 @@
 #include <boost/filesystem.hpp>
 
 
-namespace IceHalo {
+namespace icehalo {
 
 namespace OpenMode {
 constexpr uint8_t kRead = 0b0001;
@@ -84,6 +84,6 @@ std::vector<File> ListDataFiles(const char* dir);
 
 std::string PathJoin(const std::string& p1, const std::string& p2);
 
-}  // namespace IceHalo
+}  // namespace icehalo
 
 #endif  // SRC_FILES_H_
