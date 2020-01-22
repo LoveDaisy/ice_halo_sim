@@ -1,6 +1,9 @@
 # JetBrain IDE
 .idea
 
+# VSCode
+.vscode
+
 # CMake build directory
 cmake-build-debug
 cmake-build-release
