@@ -10,7 +10,7 @@
 #include <vector>
 
 
-namespace IceHalo {
+namespace icehalo {
 
 class ThreadingPool {
  public:
@@ -46,7 +46,7 @@ class ThreadingPool {
   static std::mutex instance_mutex_;
 };
 
-}  // namespace IceHalo
+}  // namespace icehalo
 
 
 #endif  // SRC_THREADINGPOOL_H_

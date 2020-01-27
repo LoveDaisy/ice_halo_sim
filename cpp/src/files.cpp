@@ -4,7 +4,7 @@
 #include <cstdio>
 
 
-namespace IceHalo {
+namespace icehalo {
 
 bool FileExists(const char* filename) {
   boost::filesystem::path p(filename);
@@ -96,4 +96,4 @@ size_t File::GetSize() {
   }
 }
 
-}  // namespace IceHalo
+}  // namespace icehalo

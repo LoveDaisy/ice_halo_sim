@@ -13,8 +13,8 @@ int main(int argc, char* argv[]) {
   }
 
   auto start = std::chrono::system_clock::now();
-  IceHalo::ProjectContextPtr ctx = IceHalo::ProjectContext::CreateFromFile(argv[1]);
-  IceHalo::SpectrumRenderer renderer(ctx);
+  icehalo::ProjectContextPtr ctx = icehalo::ProjectContext::CreateFromFile(argv[1]);
+  icehalo::SpectrumRenderer renderer(ctx);
   renderer.LoadData();
 
   auto flat_rgb_data = new uint8_t[3 * ctx->render_ctx_.GetImageWidth() * ctx->render_ctx_.GetImageHeight()];

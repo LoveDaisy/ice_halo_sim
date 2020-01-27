@@ -20,7 +20,7 @@
 #include "rapidjson/document.h"
 
 
-namespace IceHalo {
+namespace icehalo {
 
 struct RaySegment;
 struct CrystalContext;
@@ -113,12 +113,12 @@ class GeneralRayPathFilter : public AbstractRayPathFilter {
 class MultiScatterContext {
  public:
   struct CrystalInfo {
-    int crystal_id;
+    const CrystalContext* crystal_ctx;
+    AbstractRayPathFilter* filter;
     float population;
-    int filter_id;
 
-    CrystalInfo(int crystal_id, float pop, int filter_id)
-        : crystal_id(crystal_id), population(pop), filter_id(filter_id){};
+    CrystalInfo(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter, float pop)
+        : crystal_ctx(crystal_ctx), filter(filter), population(pop){};
   };
 
   explicit MultiScatterContext(float prob = 1.0f);
@@ -128,7 +128,7 @@ class MultiScatterContext {
 
   const std::vector<CrystalInfo>& GetCrystalInfo() const;
   void ClearCrystalInfo();
-  void AddCrystalInfo(int crystal_id, float population, int filter_id);
+  void AddCrystalInfo(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter, float population);
   void NormalizeCrystalPopulation();
 
  private:
@@ -263,17 +263,7 @@ class ProjectContext {
   std::string GetDataDirectory() const;
   std::string GetDefaultImagePath() const;
 
-  void ClearCrystals();
-  void SetCrystal(int id, CrystalPtrU&& crystal);
-  void SetCrystal(int id, CrystalPtrU&& crystal, const AxisDistribution& axis);
-  void RemoveCrystal(int id);
-  CrystalContext* GetCrystalContext(int id) const;
-  Crystal* GetCrystal(int id) const;
   void PrintCrystalInfo() const;
-
-  void ClearRayPathFilter();
-  void SetRayPathFilter(int id, RayPathFilterPtrU&& filter);
-  AbstractRayPathFilter* GetRayPathFilter(int id) const;
 
   static constexpr float kPropMinW = 1e-6;
   static constexpr float kScatMinW = 1e-3;
@@ -312,6 +302,7 @@ class ProjectContext {
   CrystalPtrU ParseCrystalIrregularHexPrism(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalIrregularHexPyramid(const rapidjson::Value& c, int ci);
   CrystalPtrU ParseCrystalCustom(const rapidjson::Value& c, int ci);
+  const CrystalContext* GetCrystalContext(int id) const;
 
   using FilterParser = std::function<RayPathFilterPtrU(ProjectContext*, const rapidjson::Value&, int)>;
   static std::unordered_map<std::string, FilterParser>& GetFilterParsers();
@@ -320,6 +311,7 @@ class ProjectContext {
   RayPathFilterPtrU ParseFilterNone(const rapidjson::Value& c, int ci);
   RayPathFilterPtrU ParseFilterSpecific(const rapidjson::Value& c, int ci);
   RayPathFilterPtrU ParseFilterGeneral(const rapidjson::Value& c, int ci);
+  AbstractRayPathFilter* GetRayPathFilter(int id) const;
 
   void ParseOneScatter(const rapidjson::Value& c, int ci);
 
@@ -340,6 +332,7 @@ struct CrystalContext {
 
   const CrystalPtrU crystal;
   const AxisDistribution axis;
+  const std::unique_ptr<float[]> face_prob_buf;
 };
 
 
@@ -349,13 +342,13 @@ struct RayInfo {
   RaySegment* first_ray_segment;
   RaySegment* prev_ray_segment;
   const CrystalContext* crystal_ctx;
-  Math::Vec3f main_axis_rot;
+  math::Vec3f main_axis_rot;
 };
 
 using RayInfoPtrU = std::unique_ptr<RayInfo>;
 using ProjectContextPtr = std::shared_ptr<ProjectContext>;
 
-}  // namespace IceHalo
+}  // namespace icehalo
 
 
 #endif  // SRC_CONTEXT_H_

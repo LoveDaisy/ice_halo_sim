@@ -12,7 +12,7 @@
 #include "threadingpool.h"
 
 
-namespace IceHalo {
+namespace icehalo {
 
 using rapidjson::Pointer;
 
@@ -22,7 +22,7 @@ AbstractRayPathFilter::AbstractRayPathFilter()
 
 bool AbstractRayPathFilter::Filter(const Crystal* crystal, RaySegment* last_r) const {
   if (remove_homodromous_ &&
-      Math::Dot3(last_r->dir.val(), last_r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * Math::kFloatEps) {
+      math::Dot3(last_r->dir.val(), last_r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * math::kFloatEps) {
     return false;
   }
 
@@ -296,8 +296,7 @@ bool GeneralRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_r
 }
 
 
-MultiScatterContext::MultiScatterContext(float prob)
-    : prob_(std::max(std::min(prob, 1.0f), 0.0f)) {}
+MultiScatterContext::MultiScatterContext(float prob) : prob_(std::max(std::min(prob, 1.0f), 0.0f)) {}
 
 
 float MultiScatterContext::GetProbability() const {
@@ -325,10 +324,10 @@ void MultiScatterContext::ClearCrystalInfo() {
 }
 
 
-void MultiScatterContext::AddCrystalInfo(int crystal_id,    // crystal ptr
-                                         float population,  // crystal population, not normalized
-                                         int filter_id) {   // ray path filter for this crystal
-  crystal_infos_.emplace_back(CrystalInfo{ crystal_id, population, filter_id });
+void MultiScatterContext::AddCrystalInfo(const CrystalContext* crystal_ctx,  // crystal context
+                                         AbstractRayPathFilter* filter,      // ray path filter for this crystal
+                                         float population) {                 // population of this crystal
+  crystal_infos_.emplace_back(CrystalInfo{ crystal_ctx, filter, population });
 }
 
 
@@ -344,8 +343,8 @@ void MultiScatterContext::NormalizeCrystalPopulation() {
 
 
 SunContext::SunContext(float altitude, float diameter)
-    : sun_diameter_(diameter), sun_altitude_(altitude), sun_position_{ 0.0f, -std::cos(altitude * Math::kDegreeToRad),
-                                                                       -std::sin(altitude * Math::kDegreeToRad) } {}
+    : sun_diameter_(diameter), sun_altitude_(altitude), sun_position_{ 0.0f, -std::cos(altitude * math::kDegreeToRad),
+                                                                       -std::sin(altitude * math::kDegreeToRad) } {}
 
 
 const float* SunContext::GetSunPosition() const {
@@ -364,8 +363,8 @@ bool SunContext::SetSunAltitude(float altitude) {
   } else {
     sun_altitude_ = altitude;
     sun_position_[0] = 0.0f;
-    sun_position_[1] = -std::cos(altitude * Math::kDegreeToRad);
-    sun_position_[2] = -std::sin(altitude * Math::kDegreeToRad);
+    sun_position_[1] = -std::cos(altitude * math::kDegreeToRad);
+    sun_position_[2] = -std::sin(altitude * math::kDegreeToRad);
     return true;
   }
 }
@@ -438,6 +437,7 @@ void CameraContext::SetFov(float fov) {
       fov = std::max(std::min(fov, kMaxFovLinear), 0.0f);
       break;
     case LensType::kEqualArea:
+    case LensType::kEquidistant:
       fov = std::max(std::min(fov, kMaxFovFisheye), 0.0f);
       break;
     default:
@@ -453,7 +453,7 @@ LensType CameraContext::GetLensType() const {
 }
 
 
-void CameraContext::SetLensType(IceHalo::LensType type) {
+void CameraContext::SetLensType(LensType type) {
   lens_type_ = type;
   switch (lens_type_) {
     case LensType::kEqualArea:
@@ -583,7 +583,7 @@ VisibleRange RenderContext::GetVisibleRange() const {
 }
 
 
-void RenderContext::SetVisibleRange(IceHalo::VisibleRange r) {
+void RenderContext::SetVisibleRange(VisibleRange r) {
   visible_range_ = r;
 }
 
@@ -677,38 +677,9 @@ std::string ProjectContext::GetDefaultImagePath() const {
 }
 
 
-void ProjectContext::ClearCrystals() {
-  crystal_store_.clear();
-}
-
-
-void ProjectContext::SetCrystal(int id, CrystalPtrU&& crystal) {
-  SetCrystal(id, std::move(crystal), AxisDistribution{});
-}
-
-
-void ProjectContext::SetCrystal(int id, CrystalPtrU&& crystal, const AxisDistribution& axis) {
-  crystal_store_.emplace(id, new CrystalContext(std::move(crystal), axis));
-}
-
-
-void ProjectContext::RemoveCrystal(int id) {
-  crystal_store_.erase(id);
-}
-
-
-CrystalContext* ProjectContext::GetCrystalContext(int id) const {
+const CrystalContext* ProjectContext::GetCrystalContext(int id) const {
   if (crystal_store_.count(id)) {
     return crystal_store_.at(id).get();
-  } else {
-    return nullptr;
-  }
-}
-
-
-Crystal* ProjectContext::GetCrystal(int id) const {
-  if (crystal_store_.count(id)) {
-    return crystal_store_.at(id)->crystal.get();
   } else {
     return nullptr;
   }
@@ -727,16 +698,6 @@ void ProjectContext::PrintCrystalInfo() const {
       std::printf("f %d %d %d\n", idx[0] + 1, idx[1] + 1, idx[2] + 1);
     }
   }
-}
-
-
-void ProjectContext::ClearRayPathFilter() {
-  filter_store_.clear();
-}
-
-
-void ProjectContext::SetRayPathFilter(int id, RayPathFilterPtrU&& filter) {
-  filter_store_.emplace(id, std::move(filter));
 }
 
 
@@ -896,11 +857,13 @@ void ProjectContext::ParseCameraSettings(rapidjson::Document& d) {
   } else {
     if (*p == "linear") {
       cam_ctx_.SetLensType(LensType::kLinear);
-    } else if (*p == "fisheye") {
+    } else if (*p == "fisheye_equalarea" || *p == "fisheye") {
       cam_ctx_.SetLensType(LensType::kEqualArea);
+    } else if (*p == "fisheye_equidistant") {
+      cam_ctx_.SetLensType(LensType::kEquidistant);
     } else if (*p == "dual_fisheye_equidistant") {
       cam_ctx_.SetLensType(LensType::kDualEquidistant);
-    } else if (*p == "dual_fisheye_equiarea") {
+    } else if (*p == "dual_fisheye_equalarea") {
       cam_ctx_.SetLensType(LensType::kDualEqualArea);
     } else {
       std::fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equal-area fisheye!\n");
@@ -1142,7 +1105,7 @@ void ProjectContext::ParseOneCrystal(const rapidjson::Value& c, int ci) {
 
 
 AxisDistribution ProjectContext::ParseCrystalAxis(const rapidjson::Value& c, int ci) {
-  using Math::Distribution;
+  using math::Distribution;
 
   AxisDistribution axis{};
   constexpr size_t kMsgBufferSize = 256;
@@ -1179,7 +1142,7 @@ AxisDistribution ProjectContext::ParseCrystalAxis(const rapidjson::Value& c, int
   }
 
   // Start parsing azimuth settings.
-  axis.azimuth_dist = Math::Distribution::kUniform;
+  axis.azimuth_dist = math::Distribution::kUniform;
   axis.azimuth_mean = 0;
   axis.azimuth_std = 360;
   p = Pointer("/azimuth").Get(c);
@@ -1415,8 +1378,8 @@ CrystalPtrU ProjectContext::ParseCrystalCustom(const rapidjson::Value& c, int ci
       throw std::invalid_argument(msg_buffer);
     }
 
-    std::vector<Math::Vec3f> vertexes;
-    std::vector<Math::TriangleIdx> faces;
+    std::vector<math::Vec3f> vertexes;
+    std::vector<math::TriangleIdx> faces;
     float v_buf[3];
     int f_buf[3];
     int curr_char;
@@ -1725,8 +1688,10 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
     }
   }
 
-  for (decltype(tmp_crystals.size()) i = 0; i < tmp_crystals.size(); i++) {
-    scatter.AddCrystalInfo(tmp_crystals[i], tmp_population[i], tmp_filter[i]);
+  for (size_t i = 0; i < tmp_crystals.size(); i++) {
+    auto crystal_ctx = GetCrystalContext(tmp_crystals[i]);
+    auto filter = GetRayPathFilter(tmp_filter[i]);
+    scatter.AddCrystalInfo(crystal_ctx, filter, tmp_population[i]);
   }
 
   scatter.NormalizeCrystalPopulation();
@@ -1735,11 +1700,11 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
 }
 
 
-CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis) : crystal(std::move(g)), axis(axis) {}
+CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis)
+    : crystal(std::move(g)), axis(axis), face_prob_buf(new float[crystal->TotalFaces()]) {}
 
 
 RayInfo::RayInfo(RaySegment* seg, const CrystalContext* crystal_ctx, const float* main_axis_rot)
-    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_ctx(crystal_ctx),
-      main_axis_rot(main_axis_rot) {}
+    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_ctx(crystal_ctx), main_axis_rot(main_axis_rot) {}
 
-}  // namespace IceHalo
+}  // namespace icehalo

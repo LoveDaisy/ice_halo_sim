@@ -10,12 +10,12 @@ namespace {
 class OpticsTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    crystal = IceHalo::Crystal::CreateHexPrism(1.2f);
-    context = IceHalo::ProjectContext::CreateFromFile(config_file_name.c_str());
+    crystal = icehalo::Crystal::CreateHexPrism(1.2f);
+    context = icehalo::ProjectContext::CreateFromFile(config_file_name.c_str());
   }
 
-  IceHalo::CrystalPtrU crystal;
-  IceHalo::ProjectContextPtr context;
+  icehalo::CrystalPtrU crystal;
+  icehalo::ProjectContextPtr context;
 };
 
 
@@ -32,7 +32,7 @@ TEST_F(OpticsTest, RefractIndex) {
   };
   int idx = 0;
   for (const auto& curr_wl : wl) {
-    EXPECT_NEAR(IceHalo::IceRefractiveIndex::Get(curr_wl), n[idx++], 1e-4);
+    EXPECT_NEAR(icehalo::IceRefractiveIndex::Get(curr_wl), n[idx++], 1e-4);
   }
 }
 
@@ -77,14 +77,14 @@ TEST_F(OpticsTest, HitSurface0) {
   float dir_out[2 * kNum * 3];
   float w_out[2 * kNum];
 
-  IceHalo::Optics::HitSurface(crystal.get(), kN, kNum,   // input
+  icehalo::Optics::HitSurface(crystal.get(), kN, kNum,   // input
                               dir_in, face_id_in, w_in,  // input
                               dir_out, w_out);           // output
 
   for (int i = 0; i < kNum * 2; i++) {
-    EXPECT_NEAR(w_out[i], w_out_e[i], IceHalo::Math::kFloatEps);
+    EXPECT_NEAR(w_out[i], w_out_e[i], icehalo::math::kFloatEps);
     for (int j = 0; j < 3; j++) {
-      EXPECT_NEAR(dir_out[i * 3 + j], dir_out_e[i * 3 + j], IceHalo::Math::kFloatEps);
+      EXPECT_NEAR(dir_out[i * 3 + j], dir_out_e[i * 3 + j], icehalo::math::kFloatEps);
     }
   }
 }
@@ -130,57 +130,57 @@ TEST_F(OpticsTest, HitSurface1) {
   float dir_out[2 * kNum * 3];
   float w_out[2 * kNum];
 
-  IceHalo::Optics::HitSurface(crystal.get(), kN, kNum,   // input
+  icehalo::Optics::HitSurface(crystal.get(), kN, kNum,   // input
                               dir_in, face_id_in, w_in,  // input
                               dir_out, w_out);           // output
 
   for (int i = 0; i < kNum * 2; i++) {
-    EXPECT_NEAR(w_out[i], w_out_e[i], IceHalo::Math::kFloatEps);
+    EXPECT_NEAR(w_out[i], w_out_e[i], icehalo::math::kFloatEps);
     for (int j = 0; j < 3; j++) {
-      EXPECT_NEAR(dir_out[i * 3 + j], dir_out_e[i * 3 + j], IceHalo::Math::kFloatEps);
+      EXPECT_NEAR(dir_out[i * 3 + j], dir_out_e[i * 3 + j], icehalo::math::kFloatEps);
     }
   }
 }
 
 
 TEST_F(OpticsTest, RayFaceIntersection0) {
-  auto c = IceHalo::Crystal::CreateHexPrism(1.0f);
+  auto c = icehalo::Crystal::CreateHexPrism(1.0f);
   auto face_num = c->TotalFaces();
   auto face_norm = c->GetFaceNorm();
   auto face_base = c->GetFaceBaseVector();
   auto face_point = c->GetFaceVertex();
 
-  float dir_in[3] = { IceHalo::Math::kSqrt3 / 2, 0.5f, 0.0f };
-  float p_in[3] = { -IceHalo::Math::kSqrt3 / 2, 0.0f, 0.0f };
-  float p_out[3] = { IceHalo::Math::kSqrt3 / 4, 0.75f, 0.0f };
+  float dir_in[3] = { icehalo::math::kSqrt3 / 2, 0.5f, 0.0f };
+  float p_in[3] = { -icehalo::math::kSqrt3 / 2, 0.0f, 0.0f };
+  float p_out[3] = { icehalo::math::kSqrt3 / 4, 0.75f, 0.0f };
   int id_in = 10;
   int id_out = 6;
 
   float p_result[3];
   int id_result = -1;
 
-  IceHalo::Optics::IntersectLineWithTriangles(p_in, dir_in, id_in, face_num,     // input
+  icehalo::Optics::IntersectLineWithTriangles(p_in, dir_in, id_in, face_num,     // input
                                               face_base, face_point, face_norm,  // input
                                               p_result, &id_result);             // output
 
   EXPECT_EQ(id_out, id_result);
   for (int i = 0; i < 3; i++) {
-    EXPECT_NEAR(p_out[i], p_result[i], IceHalo::Math::kFloatEps);
+    EXPECT_NEAR(p_out[i], p_result[i], icehalo::math::kFloatEps);
   }
 
-  IceHalo::Optics::IntersectLineWithTrianglesSimd(p_in, dir_in, id_in, face_num,     // input
+  icehalo::Optics::IntersectLineWithTrianglesSimd(p_in, dir_in, id_in, face_num,     // input
                                                   face_base, face_point, face_norm,  // input
                                                   p_result, &id_result);             // output
 
   EXPECT_EQ(id_out, id_result);
   for (int i = 0; i < 3; i++) {
-    EXPECT_NEAR(p_out[i], p_result[i], IceHalo::Math::kFloatEps);
+    EXPECT_NEAR(p_out[i], p_result[i], icehalo::math::kFloatEps);
   }
 }
 
 
 TEST_F(OpticsTest, RayFaceIntersection1) {
-  auto c = IceHalo::Crystal::CreateHexPrism(1.0f);
+  auto c = icehalo::Crystal::CreateHexPrism(1.0f);
   auto face_num = c->TotalFaces();
   auto face_norm = c->GetFaceNorm();
   auto face_base = c->GetFaceBaseVector();
@@ -189,17 +189,17 @@ TEST_F(OpticsTest, RayFaceIntersection1) {
   constexpr int num = 5;
   // clang-format off
   float dir_in[num * 3] = {
-    IceHalo::Math::kSqrt3 / 2, 0.5f, 0.0f,   // case 1
+    icehalo::math::kSqrt3 / 2, 0.5f, 0.0f,   // case 1
     1.0f, 0.0f, 0.0f,                        // case 2
-    0.5f, 0.0f, -IceHalo::Math::kSqrt3 / 2,  // case 3
-    0.5f, -IceHalo::Math::kSqrt3 / 2, 0.0f,  // case 4
+    0.5f, 0.0f, -icehalo::math::kSqrt3 / 2,  // case 3
+    0.5f, -icehalo::math::kSqrt3 / 2, 0.0f,  // case 4
     0.35693541f, -0.18690710f, -0.91523923f, // case 5
   };
   float p_in[num * 3] = {
-    -IceHalo::Math::kSqrt3 / 2, 0.0f, 0.0f,      // case 1
-    -0.5f, IceHalo::Math::kSqrt3 * 5 / 6, 0.8f,  // case 1
+    -icehalo::math::kSqrt3 / 2, 0.0f, 0.0f,      // case 1
+    -0.5f, icehalo::math::kSqrt3 * 5 / 6, 0.8f,  // case 1
     0.0f, 0.0f, 0.0f,                            // case 3
-    IceHalo::Math::kSqrt3 / 2, -0.2f, 0.5f,      // case 4
+    icehalo::math::kSqrt3 / 2, -0.2f, 0.5f,      // case 4
     -0.1f, 0.82679492f, 0.8f,                    // case 5
   };
   // clang-format on
@@ -218,16 +218,16 @@ TEST_F(OpticsTest, RayFaceIntersection1) {
     };
     int test_id = -1;
     int expect_id = -1;
-    IceHalo::Optics::IntersectLineWithTriangles(p_in + i * 3, dir_in + i * 3, id_in[i], face_num,  // input
+    icehalo::Optics::IntersectLineWithTriangles(p_in + i * 3, dir_in + i * 3, id_in[i], face_num,  // input
                                                 face_base, face_point, face_norm,                  // input
                                                 expect_pt, &expect_id);                            // output
 
-    IceHalo::Optics::IntersectLineWithTrianglesSimd(p_in + i * 3, dir_in + i * 3, id_in[i], face_num,  // input
+    icehalo::Optics::IntersectLineWithTrianglesSimd(p_in + i * 3, dir_in + i * 3, id_in[i], face_num,  // input
                                                     face_base, face_point, face_norm,                  // input
                                                     test_pt, &test_id);                                // output
     EXPECT_EQ(expect_id, test_id);
     for (int j = 0; j < 3; j++) {
-      EXPECT_NEAR(test_pt[j], expect_pt[j], IceHalo::Math::kFloatEps);
+      EXPECT_NEAR(test_pt[j], expect_pt[j], icehalo::math::kFloatEps);
     }
   }
 }
@@ -235,9 +235,9 @@ TEST_F(OpticsTest, RayFaceIntersection1) {
 
 TEST_F(OpticsTest, RayTracing) {
   context->PrintCrystalInfo();
-  IceHalo::Simulator simulator(context);
-  simulator.SetWavelengthIndex(0);
-  simulator.Start();
+  icehalo::Simulator simulator(context);
+  simulator.SetCurrentWavelengthIndex(0);
+  simulator.Run();
   simulator.PrintRayInfo();
 }
 
