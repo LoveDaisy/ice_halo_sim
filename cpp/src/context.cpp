@@ -324,10 +324,10 @@ void MultiScatterContext::ClearCrystalInfo() {
 }
 
 
-void MultiScatterContext::AddCrystalInfo(int crystal_id,    // crystal ptr
-                                         float population,  // crystal population, not normalized
-                                         int filter_id) {   // ray path filter for this crystal
-  crystal_infos_.emplace_back(CrystalInfo{ crystal_id, population, filter_id });
+void MultiScatterContext::AddCrystalInfo(const CrystalContext* crystal_ctx,  // crystal context
+                                         AbstractRayPathFilter* filter,      // ray path filter for this crystal
+                                         float population) {                 // population of this crystal
+  crystal_infos_.emplace_back(CrystalInfo{ crystal_ctx, filter, population });
 }
 
 
@@ -677,38 +677,9 @@ std::string ProjectContext::GetDefaultImagePath() const {
 }
 
 
-void ProjectContext::ClearCrystals() {
-  crystal_store_.clear();
-}
-
-
-void ProjectContext::SetCrystal(int id, CrystalPtrU&& crystal) {
-  SetCrystal(id, std::move(crystal), AxisDistribution{});
-}
-
-
-void ProjectContext::SetCrystal(int id, CrystalPtrU&& crystal, const AxisDistribution& axis) {
-  crystal_store_.emplace(id, new CrystalContext(std::move(crystal), axis));
-}
-
-
-void ProjectContext::RemoveCrystal(int id) {
-  crystal_store_.erase(id);
-}
-
-
 const CrystalContext* ProjectContext::GetCrystalContext(int id) const {
   if (crystal_store_.count(id)) {
     return crystal_store_.at(id).get();
-  } else {
-    return nullptr;
-  }
-}
-
-
-Crystal* ProjectContext::GetCrystal(int id) const {
-  if (crystal_store_.count(id)) {
-    return crystal_store_.at(id)->crystal.get();
   } else {
     return nullptr;
   }
@@ -727,16 +698,6 @@ void ProjectContext::PrintCrystalInfo() const {
       std::printf("f %d %d %d\n", idx[0] + 1, idx[1] + 1, idx[2] + 1);
     }
   }
-}
-
-
-void ProjectContext::ClearRayPathFilter() {
-  filter_store_.clear();
-}
-
-
-void ProjectContext::SetRayPathFilter(int id, RayPathFilterPtrU&& filter) {
-  filter_store_.emplace(id, std::move(filter));
 }
 
 
@@ -1727,8 +1688,10 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
     }
   }
 
-  for (decltype(tmp_crystals.size()) i = 0; i < tmp_crystals.size(); i++) {
-    scatter.AddCrystalInfo(tmp_crystals[i], tmp_population[i], tmp_filter[i]);
+  for (size_t i = 0; i < tmp_crystals.size(); i++) {
+    auto crystal_ctx = GetCrystalContext(tmp_crystals[i]);
+    auto filter = GetRayPathFilter(tmp_filter[i]);
+    scatter.AddCrystalInfo(crystal_ctx, filter, tmp_population[i]);
   }
 
   scatter.NormalizeCrystalPopulation();

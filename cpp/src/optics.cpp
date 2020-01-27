@@ -391,9 +391,22 @@ RaySegmentPool* RaySegmentPool::GetInstance() {
 RaySegment* RaySegmentPool::GetRaySegment(const float* pt, const float* dir, float w, int faceId) {
   RaySegment* seg;
 
+  auto id = RefreshChunkIndex();
+  seg = segments_[current_chunk_id_] + id;
+  seg->ResetWith(pt, dir, w, faceId);
+
+  return seg;
+}
+
+void RaySegmentPool::Clear() {
+  next_unused_id_ = 0;
+  current_chunk_id_ = 0;
+}
+
+uint32_t RaySegmentPool::RefreshChunkIndex() {
   auto id = next_unused_id_.fetch_add(1);
   if (id >= kChunkSize) {
-    std::unique_lock<std::mutex> lock(id_mutex_);
+    const std::lock_guard<std::mutex> lock(id_mutex_);
     id = next_unused_id_;
     if (id > kChunkSize) {
       auto seg_size = segments_.size();
@@ -408,16 +421,7 @@ RaySegment* RaySegmentPool::GetRaySegment(const float* pt, const float* dir, flo
       next_unused_id_ = 0;
     }
   }
-
-  seg = segments_[current_chunk_id_] + id;
-  seg->ResetWith(pt, dir, w, faceId);
-
-  return seg;
-}
-
-void RaySegmentPool::Clear() {
-  next_unused_id_ = 0;
-  current_chunk_id_ = 0;
+  return id;
 }
 
 

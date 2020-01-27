@@ -51,8 +51,9 @@ class RaySegmentPool {
 
  private:
   RaySegmentPool();
+  uint32_t RefreshChunkIndex();
 
-  static constexpr uint32_t kChunkSize = 1024 * 512;
+  static constexpr uint32_t kChunkSize = 1024 * 1024;
 
   std::vector<RaySegment*> segments_;
   size_t current_chunk_id_;

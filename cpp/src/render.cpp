@@ -378,18 +378,18 @@ void SpectrumRenderer::RenderToRgb(uint8_t* rgb_data) {
   auto img_hei = context_->render_ctx_.GetImageHeight();
   auto img_wid = context_->render_ctx_.GetImageWidth();
   auto wl_num = spectrum_data_.size();
-  auto* wl_data = new float[wl_num];
-  auto* flat_spec_data = new float[wl_num * img_wid * img_hei];
+  std::unique_ptr<float[]> wl_data{ new float[wl_num] };
+  std::unique_ptr<float[]> flat_spec_data{ new float[wl_num * img_wid * img_hei] };
 
-  GatherSpectrumData(wl_data, flat_spec_data);
+  GatherSpectrumData(wl_data.get(), flat_spec_data.get());
   auto ray_color = context_->render_ctx_.GetRayColor();
   auto background_color = context_->render_ctx_.GetBackgroundColor();
   bool use_rgb = ray_color[0] < 0;
 
   if (use_rgb) {
-    Rgb(wl_num, img_wid * img_hei, wl_data, flat_spec_data, rgb_data);
+    Rgb(wl_num, img_wid * img_hei, wl_data.get(), flat_spec_data.get(), rgb_data);
   } else {
-    Gray(wl_num, img_wid * img_hei, wl_data, flat_spec_data, rgb_data);
+    Gray(wl_num, img_wid * img_hei, wl_data.get(), flat_spec_data.get(), rgb_data);
   }
   for (decltype(img_wid) i = 0; i < img_wid * img_hei; i++) {
     for (int c = 0; c < 3; c++) {
@@ -407,9 +407,6 @@ void SpectrumRenderer::RenderToRgb(uint8_t* rgb_data) {
   /* Draw horizontal */
   // float imgR = std::min(img_wid_ / 2, img_hei_) / 2.0f;
   // TODO
-
-  delete[] wl_data;
-  delete[] flat_spec_data;
 }
 
 
