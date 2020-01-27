@@ -6,24 +6,24 @@ std::vector<WavelengthData>& WavelengthData::getData() {
     WavelengthData wl_sun(QObject::tr("sun light"));
     wl_sun.icon_ = QIcon(":/icons/icon_wl_sun_dark.png");
     wl_sun.info_ = {
-      IceHalo::ProjectContext::WavelengthInfo{ 420, 0.9122f },  //
-      IceHalo::ProjectContext::WavelengthInfo{ 460, 0.9969f },  //
-      IceHalo::ProjectContext::WavelengthInfo{ 500, 1.0381f },  //
-      IceHalo::ProjectContext::WavelengthInfo{ 540, 1.0440f },  //
-      IceHalo::ProjectContext::WavelengthInfo{ 580, 1.0237f },  //
-      IceHalo::ProjectContext::WavelengthInfo{ 620, 0.9851f },  //
+      icehalo::ProjectContext::WavelengthInfo{ 420, 0.9122f },  //
+      icehalo::ProjectContext::WavelengthInfo{ 460, 0.9969f },  //
+      icehalo::ProjectContext::WavelengthInfo{ 500, 1.0381f },  //
+      icehalo::ProjectContext::WavelengthInfo{ 540, 1.0440f },  //
+      icehalo::ProjectContext::WavelengthInfo{ 580, 1.0237f },  //
+      icehalo::ProjectContext::WavelengthInfo{ 620, 0.9851f },  //
     };
     wl_data.emplace_back(std::move(wl_sun));
 
     WavelengthData wl_eq(QObject::tr("equal energy"));
     wl_eq.icon_ = QIcon(":/icons/icon_wl_eq_dark.png");
     wl_eq.info_ = {
-      IceHalo::ProjectContext::WavelengthInfo{ 420, 1.0f },  //
-      IceHalo::ProjectContext::WavelengthInfo{ 460, 1.0f },  //
-      IceHalo::ProjectContext::WavelengthInfo{ 500, 1.0f },  //
-      IceHalo::ProjectContext::WavelengthInfo{ 540, 1.0f },  //
-      IceHalo::ProjectContext::WavelengthInfo{ 580, 1.0f },  //
-      IceHalo::ProjectContext::WavelengthInfo{ 620, 1.0f },  //
+      icehalo::ProjectContext::WavelengthInfo{ 420, 1.0f },  //
+      icehalo::ProjectContext::WavelengthInfo{ 460, 1.0f },  //
+      icehalo::ProjectContext::WavelengthInfo{ 500, 1.0f },  //
+      icehalo::ProjectContext::WavelengthInfo{ 540, 1.0f },  //
+      icehalo::ProjectContext::WavelengthInfo{ 580, 1.0f },  //
+      icehalo::ProjectContext::WavelengthInfo{ 620, 1.0f },  //
     };
     wl_data.emplace_back(std::move(wl_eq));
   }
@@ -33,7 +33,7 @@ std::vector<WavelengthData>& WavelengthData::getData() {
 
 
 CrystalData::CrystalData(int id)
-    : id_(id), name_(""), type_(IceHalo::CrystalType::kPrism), axis_(IceHalo::AxisDistribution{}),
+    : id_(id), name_(""), type_(icehalo::CrystalType::kPrism), axis_(icehalo::AxisDistribution{}),
       height_{ 0.0f },                                   // prism height, upper height, lower height
       miller_idx_{ 1, 1, 1, 1 },                         // upper1, upper2, lower1, lower2
       prism_dist_{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f }  // prism distances
@@ -46,21 +46,21 @@ MultiScatterData::MultiScatterData(float prob) : prob_(prob) {}
 
 
 CameraData::CameraData()
-    : azimuth_(0), elevation_(0), rotation_(0), fov_(45), lens_type_(IceHalo::LensType::kLinear) {}
+    : azimuth_(0), elevation_(0), rotation_(0), fov_(45), lens_type_(icehalo::LensType::kLinear) {}
 
 
 const std::vector<CameraData::LensTypeData>& CameraData::getLensTypeData() {
   static std::vector<CameraData::LensTypeData> lens_type_data = {
-    { IceHalo::LensType::kLinear, QObject::tr("Normal lens") },
-    { IceHalo::LensType::kEqualArea, QObject::tr("Fisheye") },
-    { IceHalo::LensType::kDualEqualArea, QObject::tr("Dual fisheye") },
+    { icehalo::LensType::kLinear, QObject::tr("Normal lens") },
+    { icehalo::LensType::kEqualArea, QObject::tr("Fisheye") },
+    { icehalo::LensType::kDualEqualArea, QObject::tr("Dual fisheye") },
   };
   return lens_type_data;
 }
 
 
 RenderData::RenderData()
-    : width_(0), height_(0), visible_range_(IceHalo::VisibleRange::kUpper),
+    : width_(0), height_(0), visible_range_(icehalo::VisibleRange::kUpper),
       ray_color_{ -1, -1, -1 }, background_color_{ -1, -1, -1 }, intensity_(5) {}
 
 

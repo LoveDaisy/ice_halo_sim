@@ -18,7 +18,7 @@ int MainWindow::current_filter_id_ = 1;
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent), ui_(new Ui::MainWindow),
-      project_context_(IceHalo::ProjectContext::CreateDefault()) {
+      project_context_(icehalo::ProjectContext::CreateDefault()) {
   ui_->setupUi(this);
   initUi();
 }
@@ -421,20 +421,20 @@ void MainWindow::updateCrystalType(int combo_idx) {
   // Update model data
   auto type_combo_box = ui_->crystalTypeComboBox;
   auto type =
-      static_cast<IceHalo::CrystalType>(type_combo_box->itemData(combo_idx, Qt::UserRole).toInt());
+      static_cast<icehalo::CrystalType>(type_combo_box->itemData(combo_idx, Qt::UserRole).toInt());
   auto crystal_data = getCurrentCrystalData();
   if (crystal_data) {
     crystal_data->type_ = type;
   }
-  if (type == IceHalo::CrystalType::kPrism) {
+  if (type == icehalo::CrystalType::kPrism) {
     crystal_data->height_[1] = 0;
     crystal_data->height_[2] = 0;
   }
 
   // Update UI widget
-  if (type == IceHalo::CrystalType::kPyramid) {
+  if (type == icehalo::CrystalType::kPyramid) {
     ui_->pyramidParameterPanel->setEnabled(true);
-  } else if (type == IceHalo::CrystalType::kPrism) {
+  } else if (type == icehalo::CrystalType::kPrism) {
     ui_->pyramidParameterPanel->setEnabled(false);
   } else {
     qWarning() << "Invalid crystal type!";
@@ -548,9 +548,9 @@ void MainWindow::refreshCrystalInfo() {
   crystal_height_edit_->setText(crystal_height_edit_->formatValue(height));
 
   // Update pyramid height slider
-  if (crystal_data->type_ == IceHalo::CrystalType::kPrism) {
+  if (crystal_data->type_ == icehalo::CrystalType::kPrism) {
     ui_->pyramidParameterPanel->setEnabled(false);
-  } else if (crystal_data->type_ == IceHalo::CrystalType::kPyramid) {
+  } else if (crystal_data->type_ == icehalo::CrystalType::kPyramid) {
     ui_->pyramidParameterPanel->setEnabled(crystal_item_data->enabled);
   }
   float upper_h = crystal_data->height_[1];
@@ -728,15 +728,15 @@ void MainWindow::updateFilterInfo() {
 void MainWindow::updateFilterSymmetry(FilterData& filter) {
   qDebug() << "updateFilterSymmetry()";
 
-  filter.symmetry_flag_ = IceHalo::kSymmetryNone;
+  filter.symmetry_flag_ = icehalo::kSymmetryNone;
   if (ui_->symBCheckBox->checkState() == Qt::Checked) {
-    filter.symmetry_flag_ |= IceHalo::kSymmetryBasal;
+    filter.symmetry_flag_ |= icehalo::kSymmetryBasal;
   }
   if (ui_->symPCheckBox->checkState() == Qt::Checked) {
-    filter.symmetry_flag_ |= IceHalo::kSymmetryPrism;
+    filter.symmetry_flag_ |= icehalo::kSymmetryPrism;
   }
   if (ui_->symDCheckBox->checkState() == Qt::Checked) {
-    filter.symmetry_flag_ |= IceHalo::kSymmetryDirection;
+    filter.symmetry_flag_ |= icehalo::kSymmetryDirection;
   }
 }
 
@@ -852,19 +852,19 @@ void MainWindow::refreshFilterInfo(const FilterData& filter_data) {
 void MainWindow::refreshFilterSymmetry(const FilterData& filter_data) {
   qDebug() << "refreshFilterSymmetry()";
 
-  if (filter_data.symmetry_flag_ & IceHalo::kSymmetryBasal) {
+  if (filter_data.symmetry_flag_ & icehalo::kSymmetryBasal) {
     ui_->symBCheckBox->setCheckState(Qt::Checked);
   } else {
     ui_->symBCheckBox->setCheckState(Qt::Unchecked);
   }
 
-  if (filter_data.symmetry_flag_ & IceHalo::kSymmetryPrism) {
+  if (filter_data.symmetry_flag_ & icehalo::kSymmetryPrism) {
     ui_->symPCheckBox->setCheckState(Qt::Checked);
   } else {
     ui_->symPCheckBox->setCheckState(Qt::Unchecked);
   }
 
-  if (filter_data.symmetry_flag_ & IceHalo::kSymmetryDirection) {
+  if (filter_data.symmetry_flag_ & icehalo::kSymmetryDirection) {
     ui_->symDCheckBox->setCheckState(Qt::Checked);
   } else {
     ui_->symDCheckBox->setCheckState(Qt::Unchecked);
@@ -945,7 +945,7 @@ void MainWindow::resetFilterSymmetryPanel() {
 
 
 void MainWindow::initUi() {
-  using namespace IceHalo;
+  using namespace icehalo;
 
   // Setup some UI properties
   ui_->filterSettingLayout->setAlignment(Qt::AlignTop);
@@ -1079,8 +1079,8 @@ void MainWindow::initCrystalList() {
 
 
 void MainWindow::initCrystalInfoPanel() {
-  using namespace IceHalo;
-  using Dist = Math::Distribution;
+  using namespace icehalo;
+  using Dist = math::Distribution;
 
   // Height edit
   crystal_height_edit_ = new FloatLineEdit(0, 10, 1);
@@ -1300,9 +1300,9 @@ void MainWindow::initFilter() {
     auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
 
     if (!checked) {
-      filter_data.symmetry_flag_ &= (~IceHalo::kSymmetryBasal);
+      filter_data.symmetry_flag_ &= (~icehalo::kSymmetryBasal);
     } else {
-      filter_data.symmetry_flag_ |= IceHalo::kSymmetryBasal;
+      filter_data.symmetry_flag_ |= icehalo::kSymmetryBasal;
     }
   });
 
@@ -1322,9 +1322,9 @@ void MainWindow::initFilter() {
     auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
 
     if (!checked) {
-      filter_data.symmetry_flag_ &= (~IceHalo::kSymmetryPrism);
+      filter_data.symmetry_flag_ &= (~icehalo::kSymmetryPrism);
     } else {
-      filter_data.symmetry_flag_ |= IceHalo::kSymmetryPrism;
+      filter_data.symmetry_flag_ |= icehalo::kSymmetryPrism;
     }
   });
 
@@ -1344,9 +1344,9 @@ void MainWindow::initFilter() {
     auto& filter_data = gui_data_.filter_store_.at(crystal_item_data->filter_id);
 
     if (!checked) {
-      filter_data.symmetry_flag_ &= (~IceHalo::kSymmetryDirection);
+      filter_data.symmetry_flag_ &= (~icehalo::kSymmetryDirection);
     } else {
-      filter_data.symmetry_flag_ |= IceHalo::kSymmetryDirection;
+      filter_data.symmetry_flag_ |= icehalo::kSymmetryDirection;
     }
   });
 

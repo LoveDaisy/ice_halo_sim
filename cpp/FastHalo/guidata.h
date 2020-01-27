@@ -25,7 +25,7 @@ class WavelengthData {
 
   const QString name_;
   const bool customized_;
-  std::vector<IceHalo::ProjectContext::WavelengthInfo> info_;
+  std::vector<icehalo::ProjectContext::WavelengthInfo> info_;
   QIcon icon_;
 };
 
@@ -39,8 +39,8 @@ class CrystalData {
 
   const int id_;
   QString name_;
-  IceHalo::CrystalType type_;
-  IceHalo::AxisDistribution axis_;
+  icehalo::CrystalType type_;
+  icehalo::AxisDistribution axis_;
   float height_[3];
   int miller_idx_[4];  // upper1, upper2, lower1, lower2
   float prism_dist_[6];
@@ -56,7 +56,7 @@ class FilterData {
     kUnkown,
   };
 
-  explicit FilterData(Type type) : type_(type), symmetry_flag_(IceHalo::kSymmetryNone), hits_(0) {}
+  explicit FilterData(Type type) : type_(type), symmetry_flag_(icehalo::kSymmetryNone), hits_(0) {}
 
   Type type_;
   uint8_t symmetry_flag_;
@@ -94,9 +94,9 @@ class CameraData {
  public:
   class LensTypeData {
    public:
-    LensTypeData(IceHalo::LensType type, QString txt) : type_(type), text_(std::move(txt)) {}
+    LensTypeData(icehalo::LensType type, QString txt) : type_(type), text_(std::move(txt)) {}
 
-    IceHalo::LensType type_;
+    icehalo::LensType type_;
     QString text_;
   };
 
@@ -108,7 +108,7 @@ class CameraData {
   float elevation_;
   float rotation_;
   float fov_;
-  IceHalo::LensType lens_type_;
+  icehalo::LensType lens_type_;
 };
 
 
@@ -121,7 +121,7 @@ class RenderData {
 
   int width_;
   int height_;
-  IceHalo::VisibleRange visible_range_;
+  icehalo::VisibleRange visible_range_;
   float ray_color_[3];
   float background_color_[3];
   float intensity_;

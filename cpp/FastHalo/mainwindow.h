@@ -148,14 +148,14 @@ class MainWindow : public QMainWindow {
   CursorTable* crystal_table_;
 
   // Data model
-  IceHalo::ProjectContextPtr project_context_;
+  icehalo::ProjectContextPtr project_context_;
   GuiData gui_data_;
 
   static int current_crystal_id_;
   static int current_filter_id_;
 
-  using LensType_t = std::underlying_type<IceHalo::LensType>::type;
-  using VisibleRange_t = std::underlying_type<IceHalo::VisibleRange>::type;
+  using LensType_t = std::underlying_type<icehalo::LensType>::type;
+  using VisibleRange_t = std::underlying_type<icehalo::VisibleRange>::type;
 };
 
 #endif  // MAINWINDOW_H
