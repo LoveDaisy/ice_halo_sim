@@ -150,7 +150,6 @@ void Simulator::Run() {
   rays_.clear();
   exit_ray_segments_.clear();
   final_ray_segments_.clear();
-  active_crystal_ctxs_.clear();
   RaySegmentPool::GetInstance()->Clear();
   entry_ray_data_.Clean();
   entry_ray_offset_ = 0;
@@ -406,14 +405,12 @@ const std::vector<RaySegment*>& Simulator::GetFinalRaySegments() const {
 }
 
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wsign-compare"
 void Simulator::SaveFinalDirections(const char* filename) {
   File file(context_->GetDataDirectory().c_str(), filename);
   if (!file.Open(openmode::kWrite | openmode::kBinary))
     return;
 
-  if (current_wavelength_index_ < 0 || current_wavelength_index_ >= context_->wavelengths_.size()) {
+  if (current_wavelength_index_ < 0 || current_wavelength_index_ >= static_cast<int>(context_->wavelengths_.size())) {
     return;
   }
 
@@ -423,9 +420,9 @@ void Simulator::SaveFinalDirections(const char* filename) {
 
   auto ray_num = final_ray_segments_.size();
   size_t idx = 0;
-  auto* data = new float[ray_num * 4];  // dx, dy, dz, w
+  std::unique_ptr<float[]> data{ new float[ray_num * 4] };  // dx, dy, dz, w
 
-  float* curr_data = data;
+  float* curr_data = data.get();
   for (const auto& r : final_ray_segments_) {
     const auto axis_rot = r->root_ctx->main_axis_rot.val();
     assert(r->root_ctx);
@@ -435,12 +432,9 @@ void Simulator::SaveFinalDirections(const char* filename) {
     curr_data += 4;
     idx++;
   }
-  file.Write(data, idx * 4);
+  file.Write(data.get(), idx * 4);
   file.Close();
-
-  delete[] data;
 }
-#pragma clang diagnostic pop
 
 
 void Simulator::PrintRayInfo() {

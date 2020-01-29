@@ -74,7 +74,6 @@ class Simulator {
   static constexpr int kBufferSizeFactor = 4;
 
   ProjectContextPtr context_;
-  std::vector<CrystalContextPtrU> active_crystal_ctxs_;
 
   std::vector<std::vector<RayInfoPtrU>> rays_;
   std::vector<std::vector<RaySegment*>> exit_ray_segments_;
