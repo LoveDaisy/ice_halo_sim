@@ -1,5 +1,3 @@
-#include <utility>
-
 #ifndef SRC_CONTEXT_H_
 #define SRC_CONTEXT_H_
 
@@ -11,6 +9,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "crystal.h"
@@ -291,26 +290,26 @@ class ProjectContext {
   void ParseRayPathFilterSettings(rapidjson::Document& d);
   void ParseMultiScatterSettings(rapidjson::Document& d);
 
-  using CrystalParser = std::function<CrystalPtrU(ProjectContext*, const rapidjson::Value&, int)>;
-  static std::unordered_map<std::string, CrystalParser>& GetCrystalParsers();
+  using CrystalParser = std::function<CrystalPtrU(const rapidjson::Value&, int)>;
+  static std::unordered_map<std::string, CrystalParser>& GetCrystalParsers(const std::string& model_path);
   void ParseOneCrystal(const rapidjson::Value& c, int ci);
-  AxisDistribution ParseCrystalAxis(const rapidjson::Value& c, int ci);
-  CrystalPtrU ParseCrystalHexPrism(const rapidjson::Value& c, int ci);
-  CrystalPtrU ParseCrystalHexPyramid(const rapidjson::Value& c, int ci);
-  CrystalPtrU ParseCrystalHexPyramidStackHalf(const rapidjson::Value& c, int ci);
-  CrystalPtrU ParseCrystalCubicPyramid(const rapidjson::Value& c, int ci);
-  CrystalPtrU ParseCrystalIrregularHexPrism(const rapidjson::Value& c, int ci);
-  CrystalPtrU ParseCrystalIrregularHexPyramid(const rapidjson::Value& c, int ci);
-  CrystalPtrU ParseCrystalCustom(const rapidjson::Value& c, int ci);
+  static AxisDistribution ParseCrystalAxis(const rapidjson::Value& c, int ci);
+  static CrystalPtrU ParseCrystalHexPrism(const rapidjson::Value& c, int ci);
+  static CrystalPtrU ParseCrystalHexPyramid(const rapidjson::Value& c, int ci);
+  static CrystalPtrU ParseCrystalHexPyramidStackHalf(const rapidjson::Value& c, int ci);
+  static CrystalPtrU ParseCrystalCubicPyramid(const rapidjson::Value& c, int ci);
+  static CrystalPtrU ParseCrystalIrregularHexPrism(const rapidjson::Value& c, int ci);
+  static CrystalPtrU ParseCrystalIrregularHexPyramid(const rapidjson::Value& c, int ci);
+  static CrystalPtrU ParseCrystalCustom(const rapidjson::Value& c, int ci, const std::string& model_path);
   const CrystalContext* GetCrystalContext(int id) const;
 
-  using FilterParser = std::function<RayPathFilterPtrU(ProjectContext*, const rapidjson::Value&, int)>;
+  using FilterParser = std::function<RayPathFilterPtrU(const rapidjson::Value&, int)>;
   static std::unordered_map<std::string, FilterParser>& GetFilterParsers();
   void ParseOneFilter(const rapidjson::Value& c, int ci);
-  void ParseFilterBasic(const rapidjson::Value& c, int ci, const RayPathFilterPtrU& filter);
-  RayPathFilterPtrU ParseFilterNone(const rapidjson::Value& c, int ci);
-  RayPathFilterPtrU ParseFilterSpecific(const rapidjson::Value& c, int ci);
-  RayPathFilterPtrU ParseFilterGeneral(const rapidjson::Value& c, int ci);
+  static void ParseFilterBasic(const rapidjson::Value& c, int ci, const RayPathFilterPtrU& filter);
+  static RayPathFilterPtrU ParseFilterNone(const rapidjson::Value& c, int ci);
+  static RayPathFilterPtrU ParseFilterSpecific(const rapidjson::Value& c, int ci);
+  static RayPathFilterPtrU ParseFilterGeneral(const rapidjson::Value& c, int ci);
   AbstractRayPathFilter* GetRayPathFilter(int id) const;
 
   void ParseOneScatter(const rapidjson::Value& c, int ci);
@@ -327,7 +326,7 @@ class ProjectContext {
 
 
 struct CrystalContext {
-  CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis);
+  CrystalContext(CrystalPtrU&& g, AxisDistribution axis);
   CrystalContext(const CrystalContext& other) = delete;
 
   const CrystalPtrU crystal;

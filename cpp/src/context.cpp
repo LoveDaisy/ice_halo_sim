@@ -77,14 +77,14 @@ size_t AbstractRayPathFilter::RayPathHash(const std::vector<uint16_t>& ray_path,
   size_t curr_offset = 0;
   if (reverse) {
     for (auto rit = ray_path.rbegin(); rit != ray_path.rend(); ++rit) {
-      auto fn = *rit;
+      unsigned int fn = *rit;
       size_t tmp_hash = (fn << curr_offset) | (fn >> (kTotalBits - curr_offset));
       result ^= tmp_hash;
       curr_offset += kStep;
       curr_offset %= kTotalBits;
     }
   } else {
-    for (auto fn : ray_path) {
+    for (unsigned int fn : ray_path) {
       size_t tmp_hash = (fn << curr_offset) | (fn >> (kTotalBits - curr_offset));
       result ^= tmp_hash;
       curr_offset += kStep;
@@ -771,7 +771,7 @@ void ProjectContext::ParseRaySettings(rapidjson::Document& d) {
   } else {
     tmp_wavelengths.clear();
     for (const auto& pi : wl_p->GetArray()) {
-      tmp_wavelengths.push_back(static_cast<float&&>(pi.GetDouble()));
+      tmp_wavelengths.emplace_back(static_cast<float>(pi.GetDouble()));
     }
   }
 
@@ -786,7 +786,7 @@ void ProjectContext::ParseRaySettings(rapidjson::Document& d) {
   } else {
     tmp_weights.clear();
     for (const auto& pi : wt_p->GetArray()) {
-      tmp_weights.push_back(static_cast<float&&>(pi.GetDouble()));
+      tmp_weights.emplace_back(static_cast<float>(pi.GetDouble()));
     }
   }
 
@@ -1061,7 +1061,8 @@ void ProjectContext::ParseMultiScatterSettings(rapidjson::Document& d) {
 }
 
 
-std::unordered_map<std::string, ProjectContext::CrystalParser>& ProjectContext::GetCrystalParsers() {
+std::unordered_map<std::string, ProjectContext::CrystalParser>& ProjectContext::GetCrystalParsers(
+    const std::string& model_path) {
   static std::unordered_map<std::string, CrystalParser> crystal_parsers = {
     { "HexPrism", &ProjectContext::ParseCrystalHexPrism },
     { "HexPyramid", &ProjectContext::ParseCrystalHexPyramid },
@@ -1069,7 +1070,8 @@ std::unordered_map<std::string, ProjectContext::CrystalParser>& ProjectContext::
     { "CubicPyramid", &ProjectContext::ParseCrystalCubicPyramid },
     { "IrregularHexPrism", &ProjectContext::ParseCrystalIrregularHexPrism },
     { "IrregularHexPyramid", &ProjectContext::ParseCrystalIrregularHexPyramid },
-    { "Custom", &ProjectContext::ParseCrystalCustom },
+    { "Custom", [=, &model_path](const rapidjson::Value& c,
+                                 int ci) { return ProjectContext::ParseCrystalCustom(c, ci, model_path); } },
   };
   return crystal_parsers;
 }
@@ -1085,7 +1087,7 @@ void ProjectContext::ParseOneCrystal(const rapidjson::Value& c, int ci) {
     throw std::invalid_argument(msg_buffer);
   }
 
-  auto& crystal_parsers = GetCrystalParsers();
+  auto& crystal_parsers = GetCrystalParsers(model_path_);
   std::string type(c["type"].GetString());
   if (crystal_parsers.find(type) == crystal_parsers.end()) {
     std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].type> cannot recognize!", ci);
@@ -1100,7 +1102,7 @@ void ProjectContext::ParseOneCrystal(const rapidjson::Value& c, int ci) {
 
   auto axis = ParseCrystalAxis(c, ci);
   auto id = p->GetInt();
-  crystal_store_.emplace(id, new CrystalContext(crystal_parsers[type](this, c, ci), axis));
+  crystal_store_.emplace(id, new CrystalContext(crystal_parsers[type](c, ci), axis));
 }
 
 
@@ -1358,7 +1360,7 @@ CrystalPtrU ProjectContext::ParseCrystalIrregularHexPyramid(const rapidjson::Val
 }
 
 
-CrystalPtrU ProjectContext::ParseCrystalCustom(const rapidjson::Value& c, int ci) {
+CrystalPtrU ProjectContext::ParseCrystalCustom(const rapidjson::Value& c, int ci, const std::string& model_path) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
   const auto* p = Pointer("/parameter").Get(c);
@@ -1366,11 +1368,11 @@ CrystalPtrU ProjectContext::ParseCrystalCustom(const rapidjson::Value& c, int ci
     std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
     throw std::invalid_argument(msg_buffer);
   } else {
-    auto n = model_path_.rfind('/');
+    auto n = model_path.rfind('/');
     if (n == std::string::npos) {
       std::snprintf(msg_buffer, kMsgBufferSize, "models/%s", p->GetString());
     } else {
-      std::snprintf(msg_buffer, kMsgBufferSize, "%s/models/%s", model_path_.substr(0, n).c_str(), p->GetString());
+      std::snprintf(msg_buffer, kMsgBufferSize, "%s/models/%s", model_path.substr(0, n).c_str(), p->GetString());
     }
     std::FILE* file = std::fopen(msg_buffer, "r");
     if (!file) {
@@ -1440,7 +1442,7 @@ void ProjectContext::ParseOneFilter(const rapidjson::Value& c, int ci) {
   }
   int id = p->GetInt();
 
-  filter_store_.emplace(id, filter_parsers[type](this, c, ci));
+  filter_store_.emplace(id, filter_parsers[type](c, ci));
 }
 
 
@@ -1513,7 +1515,7 @@ RayPathFilterPtrU ProjectContext::ParseFilterSpecific(const rapidjson::Value& c,
   char msg_buffer[kMsgBufferSize];
 
   auto filter_raw_ptr = new SpecificRayPathFilter();
-  RayPathFilterPtrU filter = std::unique_ptr<SpecificRayPathFilter>(filter_raw_ptr);
+  RayPathFilterPtrU filter{ filter_raw_ptr };
   ParseFilterBasic(c, ci, filter);
 
   filter_raw_ptr->ClearPaths();
@@ -1700,7 +1702,7 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
 }
 
 
-CrystalContext::CrystalContext(CrystalPtrU&& g, const AxisDistribution& axis)
+CrystalContext::CrystalContext(CrystalPtrU&& g, AxisDistribution axis)
     : crystal(std::move(g)), axis(axis), face_prob_buf(new float[crystal->TotalFaces()]) {}
 
 
