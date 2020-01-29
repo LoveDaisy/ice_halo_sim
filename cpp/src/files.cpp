@@ -59,16 +59,16 @@ bool File::Open(uint8_t mode) {
 
   char modeBuffer[32];
   const char* m1;
-  if (mode & OpenMode::kRead) {
+  if (mode & openmode::kRead) {
     m1 = "r";
-  } else if (mode & OpenMode::kWrite) {
+  } else if (mode & openmode::kWrite) {
     m1 = "w";
-  } else if (mode & OpenMode::kAppend) {
+  } else if (mode & openmode::kAppend) {
     m1 = "a";
   } else {
     m1 = "r";
   }
-  const char* m2 = (mode & OpenMode::kBinary) ? "b" : "";
+  const char* m2 = (mode & openmode::kBinary) ? "b" : "";
   std::sprintf(modeBuffer, "%s%s", m1, m2);
 
   file_ = std::fopen(path_.c_str(), modeBuffer);

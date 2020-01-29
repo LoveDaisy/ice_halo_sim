@@ -10,12 +10,12 @@
 
 namespace icehalo {
 
-namespace OpenMode {
+namespace openmode {
 constexpr uint8_t kRead = 0b0001;
 constexpr uint8_t kWrite = 0b0010;
 constexpr uint8_t kAppend = 0b0100;
 constexpr uint8_t kBinary = 0b1000;
-}  // namespace OpenMode
+}  // namespace openmode
 
 
 class File {
@@ -24,7 +24,7 @@ class File {
   File(const char* path, const char* filename);
   ~File();
 
-  bool Open(uint8_t mode = OpenMode::kRead);
+  bool Open(uint8_t mode = openmode::kRead);
   bool Close();
 
   size_t GetSize();

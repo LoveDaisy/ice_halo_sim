@@ -23,7 +23,7 @@ int main(int argc, char* argv[]) {
   std::printf("Initialization: %.2fms\n", diff.count());
 
   icehalo::File file(proj_ctx->GetDefaultImagePath().c_str());
-  if (!file.Open(icehalo::OpenMode::kWrite | icehalo::OpenMode::kBinary)) {
+  if (!file.Open(icehalo::openmode::kWrite | icehalo::openmode::kBinary)) {
     std::fprintf(stderr, "Cannot create output image file!\n");
     return -1;
   }

@@ -410,7 +410,7 @@ const std::vector<RaySegment*>& Simulator::GetFinalRaySegments() const {
 #pragma clang diagnostic ignored "-Wsign-compare"
 void Simulator::SaveFinalDirections(const char* filename) {
   File file(context_->GetDataDirectory().c_str(), filename);
-  if (!file.Open(OpenMode::kWrite | OpenMode::kBinary))
+  if (!file.Open(openmode::kWrite | openmode::kBinary))
     return;
 
   if (current_wavelength_index_ < 0 || current_wavelength_index_ >= context_->wavelengths_.size()) {
