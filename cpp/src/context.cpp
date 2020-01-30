@@ -1706,7 +1706,7 @@ CrystalContext::CrystalContext(CrystalPtrU&& g, AxisDistribution axis)
     : crystal(std::move(g)), axis(axis), face_prob_buf(new float[crystal->TotalFaces()]) {}
 
 
-RayInfo::RayInfo(RaySegment* seg, const CrystalContext* crystal_ctx, const float* main_axis_rot)
-    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_ctx(crystal_ctx), main_axis_rot(main_axis_rot) {}
+RayInfo::RayInfo(RaySegment* seg, const Crystal* crystal, const float* main_axis_rot)
+    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal(crystal), main_axis_rot(main_axis_rot) {}
 
 }  // namespace icehalo
