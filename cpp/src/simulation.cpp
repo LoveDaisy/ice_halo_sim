@@ -407,14 +407,15 @@ const std::vector<RaySegment*>& Simulator::GetFinalRaySegments() const {
 
 void Simulator::SaveFinalDirections(const char* filename) {
   File file(context_->GetDataDirectory().c_str(), filename);
-  if (!file.Open(openmode::kWrite | openmode::kBinary))
+  if (!file.Open(openmode::kWrite | openmode::kBinary)) {
     return;
+  }
 
   if (current_wavelength_index_ < 0 || current_wavelength_index_ >= static_cast<int>(context_->wavelengths_.size())) {
     return;
   }
 
-  auto& w = context_->wavelengths_[current_wavelength_index_];
+  const auto& w = context_->wavelengths_[current_wavelength_index_];
   file.Write(static_cast<float>(w.wavelength));
   file.Write(w.weight);
 

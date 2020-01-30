@@ -38,6 +38,10 @@ enum Symmetry : uint8_t {
 };
 
 
+size_t RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse = false);
+size_t RayPathHash(const Crystal* crystal, const RaySegment* last_ray, int length, bool reverse = false);
+
+
 class AbstractRayPathFilter {
  public:
   AbstractRayPathFilter();
@@ -57,8 +61,6 @@ class AbstractRayPathFilter {
   bool GetRemoveHomodromous() const;
 
  protected:
-  size_t RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse = false) const;
-  size_t RayPathHash(const Crystal* crystal, const RaySegment* last_ray, int length, bool reverse = false) const;
   virtual bool FilterPath(const Crystal* crystal, RaySegment* last_r) const = 0;
 
   uint8_t symmetry_flag_;

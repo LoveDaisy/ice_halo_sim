@@ -69,7 +69,7 @@ bool AbstractRayPathFilter::GetRemoveHomodromous() const {
 }
 
 
-size_t AbstractRayPathFilter::RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse) const {
+size_t RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse) {
   constexpr size_t kStep = 7;
   constexpr size_t kTotalBits = sizeof(size_t) * CHAR_BIT;
 
@@ -95,9 +95,9 @@ size_t AbstractRayPathFilter::RayPathHash(const std::vector<uint16_t>& ray_path,
 }
 
 
-size_t AbstractRayPathFilter::RayPathHash(const Crystal* crystal,                  // used for get face number
-                                          const RaySegment* last_ray, int length,  // ray path and length
-                                          bool reverse) const {
+size_t RayPathHash(const Crystal* crystal,                  // used for get face number
+                   const RaySegment* last_ray, int length,  // ray path and length
+                   bool reverse) {
   constexpr size_t kStep = 7;
   constexpr size_t kTotalBits = sizeof(size_t) * CHAR_BIT;
 
@@ -105,7 +105,7 @@ size_t AbstractRayPathFilter::RayPathHash(const Crystal* crystal,               
   size_t curr_offset = reverse ? kStep * (length - 1) % kTotalBits : 0;
   auto p = last_ray;
   while (p->prev) {
-    auto fn = static_cast<uint16_t>(crystal->FaceNumber(p->face_id));
+    unsigned int fn = crystal->FaceNumber(p->face_id);
     size_t tmp_hash = (fn << curr_offset) | (fn >> (kTotalBits - curr_offset));
     result ^= tmp_hash;
 
