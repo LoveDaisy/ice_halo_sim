@@ -120,8 +120,6 @@ class RandomNumberGenerator {
   std::uniform_real_distribution<float> uniform_dist_;
 
   static constexpr uint32_t kDefaultRandomSeed = 1;
-  static std::unique_ptr<RandomNumberGenerator> instance_;
-  static std::mutex instance_mutex_;
 };
 
 using RngPtrU = std::unique_ptr<RandomNumberGenerator>;

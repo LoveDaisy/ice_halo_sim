@@ -410,9 +410,9 @@ uint32_t RaySegmentPool::RefreshChunkIndex() {
     id = next_unused_id_;
     if (id > kChunkSize) {
       auto seg_size = segments_.size();
-      if (current_chunk_id_ >= seg_size - 1) {
-        auto* ray_seg_pool = new RaySegment[kChunkSize];
-        segments_.push_back(ray_seg_pool);
+      if (current_chunk_id_ + 1 >= seg_size) {
+        auto* ray_seg_buf = new RaySegment[kChunkSize];
+        segments_.emplace_back(ray_seg_buf);
         current_chunk_id_ = seg_size;
       } else {
         current_chunk_id_++;
