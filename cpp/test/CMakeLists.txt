@@ -1,10 +1,10 @@
 set(SOURCE_FILE
-  ${PROJ_SRC_DIR}/mymath.cpp
-  ${PROJ_SRC_DIR}/crystal.cpp
-  ${PROJ_SRC_DIR}/optics.cpp
   ${PROJ_SRC_DIR}/context.cpp
-  ${PROJ_SRC_DIR}/render.cpp
+  ${PROJ_SRC_DIR}/crystal.cpp
   ${PROJ_SRC_DIR}/files.cpp
+  ${PROJ_SRC_DIR}/mymath.cpp
+  ${PROJ_SRC_DIR}/optics.cpp
+  ${PROJ_SRC_DIR}/render.cpp
   ${PROJ_SRC_DIR}/simulation.cpp
   ${PROJ_SRC_DIR}/threadingpool.cpp)
 

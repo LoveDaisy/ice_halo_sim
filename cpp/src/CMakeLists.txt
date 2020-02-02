@@ -1,11 +1,20 @@
+if(MULTI_THREAD)
+  add_compile_definitions(MULTI_THREAD)
+endif()
+
+if(RANDOM_SEED)
+  add_compile_definitions(RANDOM_SEED)
+endif()
+
+
 set(SOURCE_FILE
-    mymath.cpp
-    crystal.cpp
-    optics.cpp
     context.cpp
-    simulation.cpp
-    render.cpp
+    crystal.cpp
     files.cpp
+    mymath.cpp
+    optics.cpp
+    render.cpp
+    simulation.cpp
     threadingpool.cpp)
 
 add_executable(IceHaloSim trace_main.cpp ${SOURCE_FILE})

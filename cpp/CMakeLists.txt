@@ -1,14 +1,9 @@
-cmake_minimum_required(VERSION 2.8.2)
+cmake_minimum_required(VERSION 3.12)
 
-project(IceHalo)
+project(IceHalo
+        VERSION 2.1.1)
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
-set(CMAKE_DEBUG_TARGET_PROPERTIES
-  INCLUDE_DIRECTORIES
-  COMPILE_DEFINITIONS
-  POSITION_INDEPENDENT_CODE
-  CONTAINER_SIZE_REQUIRED
-  LIB_VERSION)
 option(DEBUG "Default OFF" OFF)
 
 if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
@@ -42,14 +37,6 @@ else()
   set(CMAKE_BUILD_TYPE "Release")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffunction-sections -fdata-sections")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${CXX_LINKER_FLAG_STRIP}")
-endif()
-
-if(MULTI_THREAD)
-  add_compile_definitions(MULTI_THREAD)
-endif()
-
-if(RANDOM_SEED)
-  add_compile_definitions(RANDOM_SEED)
 endif()
 
 set(BUILD_DIR "${CMAKE_SOURCE_DIR}/build")
