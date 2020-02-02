@@ -40,9 +40,8 @@ TEST_F(ContextTest, FillSunDir) {
   icehalo::math::RandomSampler::SampleSphericalPointsCart(sun_dir, sun_d / 2, dir, kRayNum);
 
   for (int i = 0; i < kRayNum; i++) {
-    float a = std::acos(icehalo::math::Dot3(sun_dir, dir + i * 3));  // In rad
-    a *= icehalo::math::kRadToDegree;                                // To degree
-    EXPECT_TRUE(a < sun_d / 2 + 1e-3);
+    float a = icehalo::math::Dot3(sun_dir, dir + i * 3);  // In rad
+    EXPECT_TRUE(a > std::cos(sun_d / 2 * icehalo::math::kDegreeToRad) - 5e-7);
   }
 }
 

@@ -216,13 +216,4 @@ TEST_F(OpticsTest, RayFaceIntersection1) {
   }
 }
 
-
-TEST_F(OpticsTest, RayTracing) {
-  context_->PrintCrystalInfo();
-  icehalo::Simulator simulator(context_);
-  simulator.SetCurrentWavelengthIndex(0);
-  simulator.Run();
-  simulator.PrintRayInfo();
-}
-
 }  // namespace
