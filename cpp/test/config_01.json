@@ -4,12 +4,11 @@
         "diameter": 0.5
     },
     "ray": {
-        "number": 2,
+        "number": 10,
         "wavelength": [420, 460, 500, 540, 580, 620],
         "weight": [1.0, 1.0, 1.5, 2.0, 1.0, 0.5]
     },
     "max_recursion": 9,
-    "data_folder": "/Users/zhangjiajie/Codes/Ice Halo/cpp/cmake-build-debug/data",
     "camera": {
         "azimuth": 0,
         "elevation": 25,
