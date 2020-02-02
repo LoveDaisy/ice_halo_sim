@@ -30,7 +30,6 @@ class Vec3 {
  public:
   explicit Vec3(const T* data);
   Vec3(T x, T y, T z);
-  Vec3(const Vec3<T>& v);
 
   T x() const;
   T y() const;
@@ -55,11 +54,9 @@ class Vec3 {
 
 
   static Vec3<T> Normalized(const Vec3<T>& v);
-
   static T Dot(const Vec3<T>& v1, const Vec3<T>& v2);
   static T Norm(const Vec3<T>& v);
   static Vec3<T> Cross(const Vec3<T>& v1, const Vec3<T>& v2);
-
   static Vec3<T> FromTo(const Vec3<T>& v1, const Vec3<T>& v2);
 
  private:
@@ -86,8 +83,7 @@ class TriangleIdx {
  * Half space is defined as:
  *    a * x + b * y + c * z + d <= 0
  */
-class HalfSpaceSet {
- public:
+struct HalfSpaceSet {
   HalfSpaceSet(int n, float* a, float* b, float* c, float* d);
 
   int n;

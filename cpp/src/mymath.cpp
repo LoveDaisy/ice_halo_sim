@@ -1,14 +1,10 @@
 #include "mymath.h"
 
-#include <immintrin.h>
 #include <smmintrin.h>
 #include <xmmintrin.h>
 
 #include <algorithm>
 #include <chrono>
-#include <cstring>
-
-#include "context.h"
 
 
 namespace icehalo {
@@ -368,27 +364,11 @@ void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,  
 
 
 template <typename T>
-Vec3<T>::Vec3(T x, T y, T z) {
-  val_[0] = x;
-  val_[1] = y;
-  val_[2] = z;
-}
+Vec3<T>::Vec3(T x, T y, T z) : val_{ x, y, z } {}
 
 
 template <typename T>
-Vec3<T>::Vec3(const T* data) {
-  val_[0] = data[0];
-  val_[1] = data[1];
-  val_[2] = data[2];
-}
-
-
-template <typename T>
-Vec3<T>::Vec3(const Vec3<T>& v) {
-  val_[0] = v.val_[0];
-  val_[1] = v.val_[1];
-  val_[2] = v.val_[2];
-}
+Vec3<T>::Vec3(const T* data) : val_{ data[0], data[1], data[2] } {}
 
 
 template <typename T>
@@ -563,15 +543,11 @@ Vec3<T> Vec3<T>::FromTo(const Vec3<T>& v1, const Vec3<T>& v2) {
 template class Vec3<float>;
 
 
-TriangleIdx::TriangleIdx(int id1, int id2, int id3) : idx_{} {
-  idx_[0] = id1;
-  idx_[1] = id2;
-  idx_[2] = id3;
-}
+TriangleIdx::TriangleIdx(int id1, int id2, int id3) : idx_{ id1, id2, id3 } {}
 
 
 const int* TriangleIdx::idx() const {
-  return &idx_[0];
+  return idx_;
 }
 
 
