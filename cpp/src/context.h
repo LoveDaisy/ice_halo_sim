@@ -328,7 +328,7 @@ class ProjectContext {
 
 
 struct CrystalContext {
-  CrystalContext(CrystalPtrU&& g, AxisDistribution axis);
+  CrystalContext(CrystalPtrU g, AxisDistribution axis);
   CrystalContext(const CrystalContext& other) = delete;
 
   const CrystalPtrU crystal;

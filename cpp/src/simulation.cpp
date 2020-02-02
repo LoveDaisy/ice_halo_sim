@@ -91,18 +91,23 @@ EntryRayData::EntryRayData() : ray_dir(nullptr), ray_seg(nullptr), ray_num(0) {}
 
 
 EntryRayData::~EntryRayData() {
-  DeleteBuffer();
+  Clean();
 }
 
 
 void EntryRayData::Clean() {
-  DeleteBuffer();
+  delete[] ray_dir;
+  delete[] ray_seg;
+
+  ray_dir = nullptr;
+  ray_seg = nullptr;
+
   ray_num = 0;
 }
 
 
 void EntryRayData::Allocate(size_t ray_number) {
-  DeleteBuffer();
+  Clean();
 
   ray_dir = new float[ray_number * 3];
   ray_seg = new RaySegment*[ray_number];
@@ -115,15 +120,6 @@ void EntryRayData::Allocate(size_t ray_number) {
   }
 
   this->ray_num = ray_number;
-}
-
-
-void EntryRayData::DeleteBuffer() {
-  delete[] ray_dir;
-  delete[] ray_seg;
-
-  ray_dir = nullptr;
-  ray_seg = nullptr;
 }
 
 

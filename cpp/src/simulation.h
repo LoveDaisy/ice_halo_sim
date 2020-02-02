@@ -32,7 +32,6 @@ struct SimulationBufferData {
 
 
 struct EntryRayData {
- public:
   EntryRayData();
   ~EntryRayData();
 
@@ -42,9 +41,6 @@ struct EntryRayData {
   float* ray_dir;
   RaySegment** ray_seg;
   size_t ray_num;
-
- private:
-  void DeleteBuffer();
 };
 
 

@@ -20,8 +20,6 @@ enum class CrystalType {
 
 class Crystal {
  public:
-  ~Crystal();
-
   CrystalType GetType() const;
 
   int TotalVertexes() const;
@@ -145,7 +143,7 @@ class Crystal {
                                                       const std::vector<int>& face_number_map);  // face to face number
 
  protected:
-  void InitNorm();
+  void InitBasicData();
   void InitFaceNumber();
   void InitFaceNumberHex();
   void InitFaceNumberCubic();
@@ -160,10 +158,10 @@ class Crystal {
   CrystalType type_;
   int face_number_period_;
 
-  float* face_bases_;
-  float* face_vertexes_;
-  float* face_norm_;
-  float* face_area_;
+  std::unique_ptr<float[]> face_bases_;
+  std::unique_ptr<float[]> face_vertexes_;
+  std::unique_ptr<float[]> face_norm_;
+  std::unique_ptr<float[]> face_area_;
 
  private:
   /*! @brief Constructor, given vertexes and faces

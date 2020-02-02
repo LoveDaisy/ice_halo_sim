@@ -1702,7 +1702,7 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
 }
 
 
-CrystalContext::CrystalContext(CrystalPtrU&& g, AxisDistribution axis)
+CrystalContext::CrystalContext(CrystalPtrU g, AxisDistribution axis)
     : crystal(std::move(g)), axis(axis), face_prob_buf(new float[crystal->TotalFaces()]) {}
 
 

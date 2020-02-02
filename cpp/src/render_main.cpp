@@ -17,19 +17,19 @@ int main(int argc, char* argv[]) {
   icehalo::SpectrumRenderer renderer(ctx);
   renderer.LoadData();
 
-  auto flat_rgb_data = new uint8_t[3 * ctx->render_ctx_.GetImageWidth() * ctx->render_ctx_.GetImageHeight()];
-  renderer.RenderToRgb(flat_rgb_data);
+  std::unique_ptr<uint8_t[]> flat_rgb_data{
+    new uint8_t[3 * ctx->render_ctx_.GetImageWidth() * ctx->render_ctx_.GetImageHeight()]
+  };
+  renderer.RenderToRgb(flat_rgb_data.get());
 
-  cv::Mat img(ctx->render_ctx_.GetImageHeight(), ctx->render_ctx_.GetImageWidth(), CV_8UC3, flat_rgb_data);
+  cv::Mat img(ctx->render_ctx_.GetImageHeight(), ctx->render_ctx_.GetImageWidth(), CV_8UC3, flat_rgb_data.get());
   cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
   try {
     cv::imwrite(ctx->GetDefaultImagePath(), img);
   } catch (cv::Exception& ex) {
     fprintf(stderr, "Exception converting image to PNG format: %s\n", ex.what());
-    delete[] flat_rgb_data;
     return -1;
   }
-  delete[] flat_rgb_data;
 
   auto t1 = std::chrono::system_clock::now();
   std::chrono::duration<float, std::ratio<1, 1000>> diff = t1 - start;
