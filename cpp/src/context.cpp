@@ -690,6 +690,7 @@ const CrystalContext* ProjectContext::GetCrystalContext(int id) const {
 }
 
 
+#ifdef FOR_TEST
 void ProjectContext::PrintCrystalInfo() const {
   for (const auto& c : crystal_store_) {
     auto g = c.second->crystal.get();
@@ -703,6 +704,7 @@ void ProjectContext::PrintCrystalInfo() const {
     }
   }
 }
+#endif
 
 
 AbstractRayPathFilter* ProjectContext::GetRayPathFilter(int id) const {

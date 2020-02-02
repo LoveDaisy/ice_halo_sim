@@ -40,7 +40,6 @@ int main(int argc, char* argv[]) {
     diff = t1 - t0;
     printf("Saving: %.2fms\n", diff.count());
   }
-  context->PrintCrystalInfo();
 
   auto end = std::chrono::system_clock::now();
   diff = end - start;

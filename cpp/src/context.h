@@ -264,7 +264,9 @@ class ProjectContext {
   std::string GetDataDirectory() const;
   std::string GetDefaultImagePath() const;
 
+#ifdef FOR_TEST
   void PrintCrystalInfo() const;
+#endif
 
   static constexpr float kPropMinW = 1e-6;
   static constexpr float kScatMinW = 1e-3;

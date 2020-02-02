@@ -451,6 +451,7 @@ void Simulator::SaveFinalDirections(const char* filename) {
 }
 
 
+#ifdef FOR_TEST
 void Simulator::PrintRayInfo() {
   std::stack<RaySegment*> s;
   for (const auto& rs : simulation_data_.exit_ray_segments_) {
@@ -472,5 +473,6 @@ void Simulator::PrintRayInfo() {
     }
   }
 }
+#endif
 
 }  // namespace icehalo

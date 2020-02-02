@@ -32,7 +32,9 @@ class Simulator {
   const std::vector<RaySegment*>& GetFinalRaySegments() const;
   void SaveFinalDirections(const char* filename);
   void SaveAllRays(const char* filename);
+#ifdef FOR_TEST
   void PrintRayInfo();  // For debug
+#endif
 
  private:
   struct EntryRayData {
