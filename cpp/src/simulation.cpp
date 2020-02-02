@@ -330,7 +330,7 @@ void Simulator::TraceRays(const Crystal* crystal, AbstractRayPathFilter* filter)
       pool->AddJob([=] {
         Optics::HitSurface(crystal, n, current_num,                                              //
                            buffer_.dir[0] + j * 3, buffer_.face_id[0] + j, buffer_.w[0] + j,     //
-                           buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2);                        // output
+                           buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2);                        //
         Optics::Propagate(crystal, current_num * 2, buffer_.pt[0] + j * 3,                       //
                           buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2, buffer_.face_id[0] + j,  //
                           buffer_.pt[1] + j * 6, buffer_.face_id[1] + j * 2);

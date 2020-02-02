@@ -45,11 +45,11 @@ int main(int argc, char* argv[]) {
       diff = t1 - t0;
       std::printf("Ray tracing: %.2fms\n", diff.count());
 
-      const auto& ray_segs = simulator.GetFinalRaySegments();
-      auto num = ray_segs.size();
+      const auto& ray_seg_set = simulator.GetFinalRaySegments();
+      auto num = ray_seg_set.size();
       std::unique_ptr<float[]> curr_data{ new float[num * 4] };
       auto* p = curr_data.get();
-      for (const auto& r : ray_segs) {
+      for (const auto& r : ray_seg_set) {
         assert(r->root_ctx);
         auto axis_rot = r->root_ctx->main_axis_rot.val();
         icehalo::math::RotateZBack(axis_rot, r->dir.val(), p);

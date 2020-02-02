@@ -298,7 +298,7 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
 
   auto threading_pool = ThreadingPool::GetInstance();
   auto step = std::max(num / 100, static_cast<size_t>(10));
-  for (decltype(num) i = 0; i < num; i += step) {
+  for (size_t i = 0; i < num; i += step) {
     auto current_num = std::min(num - i, step);
     threading_pool->AddJob([=, &tmp_xy] {
       pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num, ray_data + i * 4,

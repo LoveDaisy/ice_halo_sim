@@ -193,7 +193,7 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
   __m128 AX1 = _mm_loadu_ps(ax + 3);
   __m128 AX2 = _mm_loadu_ps(ax + 6);
 
-  for (decltype(data_num) i = 0; i < data_num; i++) {
+  for (size_t i = 0; i < data_num; i++) {
     float* tmp_out = output_vec + i * 3;
 
     __m128 INPUT_V = _mm_loadu_ps(input_vec + i * 3);
