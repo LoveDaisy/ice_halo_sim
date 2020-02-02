@@ -606,7 +606,7 @@ void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float
     double r = std::sqrt((2.0f - udz) * udz);
     tmp_dir[i * 3 + 0] = static_cast<float>(std::cos(q) * r);
     tmp_dir[i * 3 + 1] = static_cast<float>(std::sin(q) * r);
-    tmp_dir[i * 3 + 2] = static_cast<float>(1.0f - udz);
+    tmp_dir[i * 3 + 2] = static_cast<float>(1.0 - udz);
   }
   math::RotateZBack(rot, tmp_dir.get(), data, num);
 }
