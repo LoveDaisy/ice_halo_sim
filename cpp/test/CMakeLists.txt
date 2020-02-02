@@ -19,4 +19,4 @@ target_include_directories(unit_test
 target_link_libraries(unit_test
   PUBLIC ${Boost_LIBRARIES} gtest)
 
-add_test(NAME "IceHaloTest" COMMAND test "${PROJ_ROOT}/test/config_01.json")
+add_test(NAME "IceHaloTest" COMMAND unit_test "${PROJ_ROOT}/test/config_01.json")
