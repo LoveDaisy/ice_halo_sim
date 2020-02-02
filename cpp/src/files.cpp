@@ -87,7 +87,7 @@ bool File::Close() {
 }
 
 
-size_t File::GetSize() {
+size_t File::GetBytes() {
   auto size = file_size(path_);
   if (size == static_cast<uintmax_t>(-1)) {
     return 0;

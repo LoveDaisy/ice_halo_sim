@@ -27,7 +27,7 @@ class File {
   bool Open(uint8_t mode = openmode::kRead);
   bool Close();
 
-  size_t GetSize();
+  size_t GetBytes();
 
   template <class T>
   size_t Read(T* buffer, size_t n = 1);

@@ -19,7 +19,7 @@ void EqualAreaFishEye(const float* cam_rot,          // Camera rotation. [lon, l
                       int* img_xy,                   // Image coordinates
                       VisibleRange visible_range) {  // Visible range
   float img_r = std::max(img_wid, img_hei) / 2.0f;
-  auto* dir_copy = new float[data_number * 3];
+  std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
   float cam_rot_copy[3];
   std::memcpy(cam_rot_copy, cam_rot, sizeof(float) * 3);
   cam_rot_copy[0] *= -1;
@@ -28,9 +28,9 @@ void EqualAreaFishEye(const float* cam_rot,          // Camera rotation. [lon, l
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy, 4, 3, data_number);
-  for (decltype(data_number) i = 0; i < data_number; i++) {
-    if (std::abs(math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
+  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  for (size_t i = 0; i < data_number; i++) {
+    if (std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
@@ -44,7 +44,7 @@ void EqualAreaFishEye(const float* cam_rot,          // Camera rotation. [lon, l
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / math::Norm3(dir_copy + i * 3));
+      float lat = std::asin(dir_copy[i * 3 + 2] / math::Norm3(dir_copy.get() + i * 3));
       float proj_r = img_r / 2.0f / std::sin(hov / 2.0f * math::kDegreeToRad);
       float r = 2.0f * proj_r * std::sin((math::kPi / 2.0f - lat) / 2.0f);
 
@@ -52,8 +52,6 @@ void EqualAreaFishEye(const float* cam_rot,          // Camera rotation. [lon, l
       img_xy[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + img_hei / 2.0));
     }
   }
-
-  delete[] dir_copy;
 }
 
 
@@ -65,7 +63,7 @@ void EquidistantFishEye(const float* cam_rot,          // Camera rotation. [lon,
                         int* img_xy,                   // Image coordinates
                         VisibleRange visible_range) {  // Visible range
   float img_r = std::max(img_wid, img_hei) / 2.0f;
-  auto* dir_copy = new float[data_number * 3];
+  std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
   float cam_rot_copy[3];
   std::memcpy(cam_rot_copy, cam_rot, sizeof(float) * 3);
   cam_rot_copy[0] *= -1;
@@ -74,9 +72,9 @@ void EquidistantFishEye(const float* cam_rot,          // Camera rotation. [lon,
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy, 4, 3, data_number);
+  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
-    if (std::abs(math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
+    if (std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
@@ -90,15 +88,13 @@ void EquidistantFishEye(const float* cam_rot,          // Camera rotation. [lon,
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / math::Norm3(dir_copy + i * 3));
+      float lat = std::asin(dir_copy[i * 3 + 2] / math::Norm3(dir_copy.get() + i * 3));
       float r = (math::kPi / 2.0f - lat) / (hov * math::kDegreeToRad) * img_r;
 
       img_xy[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + img_wid / 2.0));
       img_xy[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + img_hei / 2.0));
     }
   }
-
-  delete[] dir_copy;
 }
 
 
@@ -112,7 +108,7 @@ void DualEqualAreaFishEye(const float* /* cam_rot */,          // Not used
   float img_r = std::min(img_wid / 2, img_hei) / 2.0f;
   float proj_r = img_r / 2.0f / std::sin(45.0f * math::kDegreeToRad);
 
-  auto* dir_copy = new float[data_number * 3];
+  std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
   float cam_rot_copy[3] = { 90.0f, 89.999f, 0.0f };
   cam_rot_copy[0] *= -1;
   cam_rot_copy[1] *= -1;
@@ -120,14 +116,14 @@ void DualEqualAreaFishEye(const float* /* cam_rot */,          // Not used
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy, 4, 3, data_number);
+  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
-    if (std::abs(math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
+    if (std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / math::Norm3(dir_copy + i * 3));
+      float lat = std::asin(dir_copy[i * 3 + 2] / math::Norm3(dir_copy.get() + i * 3));
       if (lat < 0) {
         lon = math::kPi - lon;
       }
@@ -137,8 +133,6 @@ void DualEqualAreaFishEye(const float* /* cam_rot */,          // Not used
       img_xy[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + img_r - 0.5));
     }
   }
-
-  delete[] dir_copy;
 }
 
 
@@ -151,7 +145,7 @@ void DualEquidistantFishEye(const float* /* cam_rot */,          // Not used
                             VisibleRange /* visible_range */) {  // Not used
   float img_r = std::min(img_wid / 2, img_hei) / 2.0f;
 
-  auto* dir_copy = new float[data_number * 3];
+  std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
   float cam_rot_copy[3] = { 90.0f, 89.999f, 0.0f };
   cam_rot_copy[0] *= -1;
   cam_rot_copy[1] *= -1;
@@ -159,14 +153,14 @@ void DualEquidistantFishEye(const float* /* cam_rot */,          // Not used
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy, 4, 3, data_number);
+  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
-    if (std::abs(math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
+    if (std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / math::Norm3(dir_copy + i * 3));
+      float lat = std::asin(dir_copy[i * 3 + 2] / math::Norm3(dir_copy.get() + i * 3));
       if (lat < 0) {
         lon = math::kPi - lon;
       }
@@ -176,8 +170,6 @@ void DualEquidistantFishEye(const float* /* cam_rot */,          // Not used
       img_xy[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + img_r - 0.5));
     }
   }
-
-  delete[] dir_copy;
 }
 
 
@@ -188,7 +180,7 @@ void RectLinear(const float* cam_rot,          // Camera rotation. [lon, lat, ro
                 int img_wid, int img_hei,      // Image size
                 int* img_xy,                   // Image coordinates
                 VisibleRange visible_range) {  // Visible range
-  auto* dir_copy = new float[data_number * 3];
+  std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
   float cam_rot_copy[3];
   std::memcpy(cam_rot_copy, cam_rot, sizeof(float) * 3);
   cam_rot_copy[0] *= -1;
@@ -197,9 +189,9 @@ void RectLinear(const float* cam_rot,          // Camera rotation. [lon, lat, ro
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy, 4, 3, data_number);
-  for (decltype(data_number) i = 0; i < data_number; i++) {
-    if (dir_copy[i * 3 + 2] < 0 || std::abs(math::Norm3(dir_copy + i * 3) - 1.0) > 1e-4) {
+  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  for (size_t i = 0; i < data_number; i++) {
+    if (dir_copy[i * 3 + 2] < 0 || std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
@@ -221,8 +213,6 @@ void RectLinear(const float* cam_rot,          // Camera rotation. [lon, lat, ro
       img_xy[i * 2 + 1] = static_cast<int>(std::round(y));
     }
   }
-
-  delete[] dir_copy;
 }
 
 
@@ -250,9 +240,6 @@ void SrgbGamma(float* linear_rgb) {
 }
 
 
-constexpr int SpectrumRenderer::kMinWavelength;
-constexpr int SpectrumRenderer::kMaxWaveLength;
-constexpr uint8_t SpectrumRenderer::kColorMaxVal;
 constexpr float SpectrumRenderer::kWhitePointD65[];
 constexpr float SpectrumRenderer::kXyzToRgb[];
 constexpr float SpectrumRenderer::kCmfX[];
@@ -304,7 +291,7 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
     return;
   }
 
-  auto* tmp_xy = new int[num * 2];
+  std::unique_ptr<int[]> tmp_xy{ new int[num * 2]{} };
 
   auto img_hei = context_->render_ctx_.GetImageHeight();
   auto img_wid = context_->render_ctx_.GetImageWidth();
@@ -312,30 +299,20 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
   auto threading_pool = ThreadingPool::GetInstance();
   auto step = std::max(num / 100, static_cast<size_t>(10));
   for (decltype(num) i = 0; i < num; i += step) {
-    decltype(num) current_num = std::min(num - i, step);
-    threading_pool->AddJob([=] {
+    auto current_num = std::min(num - i, step);
+    threading_pool->AddJob([=, &tmp_xy] {
       pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num, ray_data + i * 4,
-         img_wid, img_hei, tmp_xy + i * 2, context_->render_ctx_.GetVisibleRange());
+         img_wid, img_hei, tmp_xy.get() + i * 2, context_->render_ctx_.GetVisibleRange());
     });
   }
   threading_pool->WaitFinish();
 
-  float* current_data = nullptr;
-  float* current_data_compensation = nullptr;
-  auto it = spectrum_data_.find(wavelength);
-  if (it != spectrum_data_.end()) {
-    current_data = it->second;
-    current_data_compensation = spectrum_data_compensation_[wavelength];
-  } else {
-    current_data = new float[img_hei * img_wid];
-    current_data_compensation = new float[img_hei * img_wid];
-    for (decltype(img_hei) i = 0; i < img_hei * img_wid; i++) {
-      current_data[i] = 0;
-      current_data_compensation[i] = 0;
-    }
-    spectrum_data_[wavelength] = current_data;
-    spectrum_data_compensation_[wavelength] = current_data_compensation;
+  if (!spectrum_data_.count(wavelength)) {
+    spectrum_data_[wavelength].reset(new float[img_hei * img_wid]{});
+    spectrum_data_compensation_[wavelength].reset(new float[img_hei * img_wid]{});
   }
+  auto& current_data = spectrum_data_[wavelength];
+  auto& current_data_compensation = spectrum_data_compensation_[wavelength];
 
   for (decltype(num) i = 0; i < num; i++) {
     int x = tmp_xy[i * 2 + 0];
@@ -355,7 +332,6 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
     current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
     current_data[y * img_wid + x] = tmp_sum;
   }
-  delete[] tmp_xy;
 
   total_w_ += context_->GetInitRayNum() * weight;
 }
@@ -363,12 +339,6 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
 
 void SpectrumRenderer::ResetData() {
   total_w_ = 0;
-  for (const auto& kv : spectrum_data_) {
-    delete[] kv.second;
-  }
-  for (const auto& kv : spectrum_data_compensation_) {
-    delete[] kv.second;
-  }
   spectrum_data_.clear();
   spectrum_data_compensation_.clear();
 }
@@ -411,15 +381,14 @@ void SpectrumRenderer::RenderToRgb(uint8_t* rgb_data) {
 
 
 int SpectrumRenderer::LoadDataFromFile(File& file) {
-  auto file_size = file.GetSize();
-  auto* read_buffer = new float[file_size / sizeof(float)];
+  auto file_size = file.GetBytes();
+  std::unique_ptr<float[]> read_buffer{ new float[file_size / sizeof(float)]{} };
 
   file.Open(openmode::kRead | openmode::kBinary);
-  auto read_count = file.Read(read_buffer, 2);
-  if (read_count <= 0) {
+  auto read_count = file.Read(read_buffer.get(), 2);
+  if (read_count == 0) {
     std::fprintf(stderr, "Failed to read wavelength data!\n");
     file.Close();
-    delete[] read_buffer;
     return -1;
   }
 
@@ -429,21 +398,18 @@ int SpectrumRenderer::LoadDataFromFile(File& file) {
       wavelength_weight < 0) {
     std::fprintf(stderr, "Wavelength out of range!\n");
     file.Close();
-    delete[] read_buffer;
     return -1;
   }
 
-  read_count = file.Read(read_buffer, file_size / sizeof(float));
+  read_count = file.Read(read_buffer.get(), file_size / sizeof(float));
   auto total_ray_count = read_count / 4;
   file.Close();
 
   if (total_ray_count == 0) {
-    delete[] read_buffer;
     return 0;
   }
 
-  LoadData(wavelength, wavelength_weight, read_buffer, total_ray_count);
-  delete[] read_buffer;
+  LoadData(wavelength, wavelength_weight, read_buffer.get(), total_ray_count);
 
   return static_cast<int>(total_ray_count);
 }
@@ -457,12 +423,12 @@ void SpectrumRenderer::GatherSpectrumData(float* wl_data_out, float* sp_data_out
   int k = 0;
   for (const auto& kv : spectrum_data_) {
     wl_data_out[k] = static_cast<float>(kv.first);
-    std::memcpy(sp_data_out + k * img_wid * img_hei, kv.second, img_wid * img_hei * sizeof(float));
+    std::memcpy(sp_data_out + k * img_wid * img_hei, kv.second.get(), img_wid * img_hei * sizeof(float));
     k++;
   }
 
   auto factor = 1e5f / total_w_ * intensity_factor;
-  for (decltype(spectrum_data_.size()) i = 0; i < img_wid * img_hei * spectrum_data_.size(); i++) {
+  for (size_t i = 0; i < img_wid * img_hei * spectrum_data_.size(); i++) {
     sp_data_out[i] *= factor;
   }
 }

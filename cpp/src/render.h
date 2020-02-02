@@ -108,10 +108,6 @@ class SpectrumRenderer {
   void ResetData();
   void RenderToRgb(uint8_t* rgb_data);
 
-  static constexpr int kMinWavelength = 360;
-  static constexpr int kMaxWaveLength = 830;
-  static constexpr uint8_t kColorMaxVal = 255;
-
  private:
   int LoadDataFromFile(File& file);
   void GatherSpectrumData(float* wl_data_out, float* sp_data_out);
@@ -124,9 +120,13 @@ class SpectrumRenderer {
                    uint8_t* rgb_data);                                // rgb data, data_number x 3
 
   ProjectContextPtr context_;
-  std::unordered_map<int, float*> spectrum_data_;
-  std::unordered_map<int, float*> spectrum_data_compensation_;
+  std::unordered_map<int, std::unique_ptr<float[]>> spectrum_data_;
+  std::unordered_map<int, std::unique_ptr<float[]>> spectrum_data_compensation_;
   float total_w_;
+
+  static constexpr uint8_t kColorMaxVal = 255;
+  static constexpr int kMinWavelength = 360;
+  static constexpr int kMaxWaveLength = 830;
 
   static constexpr float kWhitePointD65[] = { 0.95047f, 1.00000f, 1.08883f };  // D65 for sRGB
   static constexpr float kXyzToRgb[] = { 3.2405f, -1.5371f, -0.4985f, -0.9693f, 1.8760f,

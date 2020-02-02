@@ -260,7 +260,7 @@ std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss) {
 
 void SortAndRemoveDuplicate(std::vector<Vec3f>* pts) {
   /* Sort by coordinates */
-  std::sort(pts->begin(), pts->end(), [](const Vec3f& p1, const Vec3f& p2) {
+  std::sort(pts->begin(), pts->end(), [=](const Vec3f& p1, const Vec3f& p2) {
     if (p1 == p2) {
       return false;
     }
