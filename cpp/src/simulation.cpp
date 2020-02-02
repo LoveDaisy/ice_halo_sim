@@ -9,16 +9,41 @@
 
 namespace icehalo {
 
-SimulationBufferData::SimulationBufferData()
+void SimulationData::Clear() {
+  rays_.clear();
+  exit_ray_segments_.clear();
+  final_ray_segments_.clear();
+}
+
+
+void SimulationData::PrepareNewScatter(size_t ray_num) {
+  rays_.emplace_back();
+  rays_.back().reserve(ray_num);
+  exit_ray_segments_.emplace_back();
+  exit_ray_segments_.back().reserve(ray_num * 2);
+}
+
+
+void SimulationData::EmplaceRay(RayInfoPtrU ray) {
+  rays_.back().emplace_back(std::move(ray));
+}
+
+
+size_t SimulationData::GetLastExitRayNumber() const {
+  return exit_ray_segments_.back().size();
+}
+
+
+Simulator::BufferData::BufferData()
     : pt{ nullptr }, dir{ nullptr }, w{ nullptr }, face_id{ nullptr }, ray_seg{ nullptr }, ray_num(0) {}
 
 
-SimulationBufferData::~SimulationBufferData() {
+Simulator::BufferData::~BufferData() {
   Clean();
 }
 
 
-void SimulationBufferData::Clean() {
+void Simulator::BufferData::Clean() {
   for (int i = 0; i < 2; i++) {
     DeleteBuffer(i);
   }
@@ -26,7 +51,7 @@ void SimulationBufferData::Clean() {
 }
 
 
-void SimulationBufferData::DeleteBuffer(int idx) {
+void Simulator::BufferData::DeleteBuffer(int idx) {
   delete[] pt[idx];
   delete[] dir[idx];
   delete[] w[idx];
@@ -41,7 +66,7 @@ void SimulationBufferData::DeleteBuffer(int idx) {
 }
 
 
-void SimulationBufferData::Allocate(size_t ray_number) {
+void Simulator::BufferData::Allocate(size_t ray_number) {
   for (int i = 0; i < 2; i++) {
     auto tmp_pt = new float[ray_number * 3];
     auto tmp_dir = new float[ray_number * 3];
@@ -70,7 +95,7 @@ void SimulationBufferData::Allocate(size_t ray_number) {
 }
 
 
-void SimulationBufferData::Print() {
+void Simulator::BufferData::Print() {
   std::printf("pt[0]                    dir[0]                   w[0]\n");
   for (decltype(ray_num) i = 0; i < ray_num; i++) {
     std::printf("%+.4f,%+.4f,%+.4f  ", pt[0][i * 3 + 0], pt[0][i * 3 + 1], pt[0][i * 3 + 2]);
@@ -87,15 +112,15 @@ void SimulationBufferData::Print() {
 }
 
 
-EntryRayData::EntryRayData() : ray_dir(nullptr), ray_seg(nullptr), ray_num(0) {}
+Simulator::EntryRayData::EntryRayData() : ray_dir(nullptr), ray_seg(nullptr), ray_num(0) {}
 
 
-EntryRayData::~EntryRayData() {
+Simulator::EntryRayData::~EntryRayData() {
   Clean();
 }
 
 
-void EntryRayData::Clean() {
+void Simulator::EntryRayData::Clean() {
   delete[] ray_dir;
   delete[] ray_seg;
 
@@ -106,7 +131,7 @@ void EntryRayData::Clean() {
 }
 
 
-void EntryRayData::Allocate(size_t ray_number) {
+void Simulator::EntryRayData::Allocate(size_t ray_number) {
   Clean();
 
   ray_dir = new float[ray_number * 3];
@@ -124,28 +149,23 @@ void EntryRayData::Allocate(size_t ray_number) {
 
 
 Simulator::Simulator(ProjectContextPtr context)
-    : context_(std::move(context)), current_wavelength_index_(-1), total_ray_num_(0), active_ray_num_(0),
-      buffer_size_(0), entry_ray_offset_(0) {}
+    : context_(std::move(context)), simulation_data_{}, current_wavelength_index_(-1), total_ray_num_(0),
+      active_ray_num_(0), buffer_size_(0), buffer_{}, entry_ray_data_{}, entry_ray_offset_(0) {}
 
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wsign-compare"
 void Simulator::SetCurrentWavelengthIndex(int index) {
-  if (index < 0 || index >= context_->wavelengths_.size()) {
+  if (index < 0 || static_cast<size_t>(index) >= context_->wavelengths_.size()) {
     current_wavelength_index_ = -1;
     return;
   }
 
   current_wavelength_index_ = index;
 }
-#pragma clang diagnostic pop
 
 
 // Start simulation
 void Simulator::Run() {
-  rays_.clear();
-  exit_ray_segments_.clear();
-  final_ray_segments_.clear();
+  simulation_data_.Clear();
   RaySegmentPool::GetInstance()->Clear();
   entry_ray_data_.Clean();
   entry_ray_offset_ = 0;
@@ -153,10 +173,7 @@ void Simulator::Run() {
   InitSunRays();
 
   for (auto it = context_->multi_scatter_info_.begin(); it != context_->multi_scatter_info_.end(); ++it) {
-    rays_.emplace_back();
-    rays_.back().reserve(total_ray_num_);
-    exit_ray_segments_.emplace_back();
-    exit_ray_segments_.back().reserve(total_ray_num_ * 2);
+    simulation_data_.PrepareNewScatter(total_ray_num_);
 
     for (const auto& c : it->GetCrystalInfo()) {
       active_ray_num_ = static_cast<size_t>(c.population * total_ray_num_);
@@ -170,13 +187,13 @@ void Simulator::Run() {
     }
 
     if (it != context_->multi_scatter_info_.end() - 1) {
-      RestoreResultRays(it->GetProbability());  // total_ray_num_ is updated.
+      PrepareMultiScatterRays(it->GetProbability());  // total_ray_num_ is updated.
     }
     entry_ray_offset_ = 0;
   }
 
-  for (const auto& r : exit_ray_segments_.back()) {
-    final_ray_segments_.emplace_back(r);
+  for (const auto& r : simulation_data_.exit_ray_segments_.back()) {
+    simulation_data_.final_ray_segments_.emplace_back(r);
   }
 }
 
@@ -243,7 +260,7 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
     buffer_.ray_seg[0][i] = r;
     r->root_ctx = new RayInfo(r, ctx->crystal.get(), axis_rot);
     r->root_ctx->prev_ray_segment = prev_r;
-    rays_.back().emplace_back(r->root_ctx);
+    simulation_data_.EmplaceRay(RayInfoPtrU{ r->root_ctx });
   }
 }
 
@@ -270,23 +287,23 @@ void Simulator::InitMainAxis(const CrystalContext* ctx, float* axis) {
 
 
 // Restore and shuffle resulted rays, and fill into dir[0].
-void Simulator::RestoreResultRays(float prob) {
-  if (buffer_size_ < exit_ray_segments_.back().size() * 2) {
-    buffer_size_ = exit_ray_segments_.back().size() * 2;
+void Simulator::PrepareMultiScatterRays(float prob) {
+  if (buffer_size_ < simulation_data_.GetLastExitRayNumber() * 2) {
+    buffer_size_ = simulation_data_.GetLastExitRayNumber() * 2;
     buffer_.Allocate(buffer_size_);
   }
-  if (entry_ray_data_.ray_num < exit_ray_segments_.back().size()) {
-    entry_ray_data_.Allocate(exit_ray_segments_.back().size());
+  if (entry_ray_data_.ray_num < simulation_data_.GetLastExitRayNumber()) {
+    entry_ray_data_.Allocate(simulation_data_.GetLastExitRayNumber());
   }
 
   auto rng = math::RandomNumberGenerator::GetInstance();
   size_t idx = 0;
-  for (const auto& r : exit_ray_segments_.back()) {
+  for (const auto& r : simulation_data_.exit_ray_segments_.back()) {
     if (!r->is_finished || r->w < context_->kScatMinW) {
       continue;
     }
     if (rng->GetUniform() > prob) {
-      final_ray_segments_.emplace_back(r);
+      simulation_data_.final_ray_segments_.emplace_back(r);
       continue;
     }
     const auto axis_rot = r->root_ctx->main_axis_rot.val();
@@ -372,7 +389,7 @@ void Simulator::StoreRaySegments(const Crystal* crystal, AbstractRayPathFilter* 
       continue;
     }
     if (r->is_finished || r->w < ProjectContext::kPropMinW) {
-      exit_ray_segments_.back().emplace_back(r);
+      simulation_data_.exit_ray_segments_.back().emplace_back(r);
     }
   }
 }
@@ -397,7 +414,7 @@ void Simulator::RefreshBuffer() {
 
 
 const std::vector<RaySegment*>& Simulator::GetFinalRaySegments() const {
-  return final_ray_segments_;
+  return simulation_data_.final_ray_segments_;
 }
 
 
@@ -415,12 +432,12 @@ void Simulator::SaveFinalDirections(const char* filename) {
   file.Write(static_cast<float>(w.wavelength));
   file.Write(w.weight);
 
-  auto ray_num = final_ray_segments_.size();
+  auto ray_num = simulation_data_.final_ray_segments_.size();
   size_t idx = 0;
   std::unique_ptr<float[]> data{ new float[ray_num * 4] };  // dx, dy, dz, w
 
   float* curr_data = data.get();
-  for (const auto& r : final_ray_segments_) {
+  for (const auto& r : simulation_data_.final_ray_segments_) {
     const auto axis_rot = r->root_ctx->main_axis_rot.val();
     assert(r->root_ctx);
 
@@ -436,7 +453,7 @@ void Simulator::SaveFinalDirections(const char* filename) {
 
 void Simulator::PrintRayInfo() {
   std::stack<RaySegment*> s;
-  for (const auto& rs : exit_ray_segments_) {
+  for (const auto& rs : simulation_data_.exit_ray_segments_) {
     for (const auto& r : rs) {
       auto p = r;
       while (p) {
