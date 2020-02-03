@@ -32,6 +32,12 @@
             "population": [200],
             "probability": 1.0,
             "ray_path_filter": [0]
+        },
+        {
+            "crystal": [5],
+            "population": [200],
+            "probability": 1.0,
+            "ray_path_filter": [0]
         }
     ],
     "ray_path_filter": [

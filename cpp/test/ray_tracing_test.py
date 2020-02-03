@@ -23,9 +23,9 @@ def main(exe: str, config: str, ref: str):
             if line1.startswith('Total:'):
                 continue
             if line1.strip() != line2.strip():
-                logging.warn(f'Log file does not match at line {read_lines}!')
-                logging.warn(f'ref: {line1}')
-                logging.warn(f'cur: {line2}')
+                logging.warning(f'Log file does not match at line {read_lines}!')
+                logging.warning(f'ref: {line1}')
+                logging.warning(f'cur: {line2}')
                 exit(-1)
 
 if __name__ == '__main__':
