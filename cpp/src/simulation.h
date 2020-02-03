@@ -14,8 +14,17 @@ class SimulationData {
   void Clear();
   void PrepareNewScatter(size_t ray_num);
   void EmplaceRay(RayInfoPtrU ray);
-  size_t GetLastExitRayNumber() const;
+  void AddFinalRaySegment(RaySegment* r);
+  void AddExitRaySegmentsToFinal();
+  void EmplaceExitRaySegment(RaySegment* r);
 
+  size_t GetFinalRaySegmentNumber() const;
+  const std::vector<RaySegment*>& GetFinalRaySegments() const;
+
+  size_t GetLastExitRaySegmentNumber() const;
+  const std::vector<std::vector<RaySegment*>>& GetExitRaySegments() const;
+
+ private:
   std::vector<std::vector<RayInfoPtrU>> rays_;
   std::vector<std::vector<RaySegment*>> exit_ray_segments_;
   std::vector<RaySegment*> final_ray_segments_;
@@ -41,7 +50,7 @@ class Simulator {
     EntryRayData();
     ~EntryRayData();
 
-    void Clean();
+    void Clear();
     void Allocate(size_t ray_number);
 
     float* ray_dir;
@@ -55,7 +64,7 @@ class Simulator {
     BufferData();
     ~BufferData();
 
-    void Clean();
+    void Clear();
     void Allocate(size_t ray_number);
     void Print();
 

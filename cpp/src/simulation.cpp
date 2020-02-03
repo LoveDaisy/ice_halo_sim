@@ -29,8 +29,40 @@ void SimulationData::EmplaceRay(RayInfoPtrU ray) {
 }
 
 
-size_t SimulationData::GetLastExitRayNumber() const {
+void SimulationData::AddFinalRaySegment(RaySegment *r) {
+  final_ray_segments_.emplace_back(r);
+}
+
+
+void SimulationData::AddExitRaySegmentsToFinal() {
+  for (const auto& r : exit_ray_segments_.back()) {
+    final_ray_segments_.emplace_back(r);
+  }
+}
+
+
+void SimulationData::EmplaceExitRaySegment(RaySegment *r) {
+  exit_ray_segments_.back().emplace_back(r);
+}
+
+
+size_t SimulationData::GetLastExitRaySegmentNumber() const {
   return exit_ray_segments_.back().size();
+}
+
+
+size_t SimulationData::GetFinalRaySegmentNumber() const {
+  return final_ray_segments_.size();
+}
+
+
+const std::vector<RaySegment *> & SimulationData::GetFinalRaySegments() const {
+  return final_ray_segments_;
+}
+
+
+const std::vector<std::vector<RaySegment *> > & SimulationData::GetExitRaySegments() const {
+  return exit_ray_segments_;
 }
 
 
@@ -39,11 +71,11 @@ Simulator::BufferData::BufferData()
 
 
 Simulator::BufferData::~BufferData() {
-  Clean();
+  Clear();
 }
 
 
-void Simulator::BufferData::Clean() {
+void Simulator::BufferData::Clear() {
   for (int i = 0; i < 2; i++) {
     DeleteBuffer(i);
   }
@@ -116,11 +148,11 @@ Simulator::EntryRayData::EntryRayData() : ray_dir(nullptr), ray_seg(nullptr), ra
 
 
 Simulator::EntryRayData::~EntryRayData() {
-  Clean();
+  Clear();
 }
 
 
-void Simulator::EntryRayData::Clean() {
+void Simulator::EntryRayData::Clear() {
   delete[] ray_dir;
   delete[] ray_seg;
 
@@ -132,7 +164,7 @@ void Simulator::EntryRayData::Clean() {
 
 
 void Simulator::EntryRayData::Allocate(size_t ray_number) {
-  Clean();
+  Clear();
 
   ray_dir = new float[ray_number * 3];
   ray_seg = new RaySegment*[ray_number];
@@ -167,7 +199,7 @@ void Simulator::SetCurrentWavelengthIndex(int index) {
 void Simulator::Run() {
   simulation_data_.Clear();
   RaySegmentPool::GetInstance()->Clear();
-  entry_ray_data_.Clean();
+  entry_ray_data_.Clear();
   entry_ray_offset_ = 0;
 
   InitSunRays();
@@ -192,9 +224,7 @@ void Simulator::Run() {
     entry_ray_offset_ = 0;
   }
 
-  for (const auto& r : simulation_data_.exit_ray_segments_.back()) {
-    simulation_data_.final_ray_segments_.emplace_back(r);
-  }
+  simulation_data_.AddExitRaySegmentsToFinal();
 }
 
 
@@ -225,9 +255,9 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
   auto total_faces = crystal->TotalFaces();
 
   auto* prob = ctx->face_prob_buf.get();
-  auto* face_norm = crystal->GetFaceNorm();
-  auto* face_vertex = crystal->GetFaceVertex();
-  auto* face_area = crystal->GetFaceArea();
+  const auto* face_norm = crystal->GetFaceNorm();
+  const auto* face_vertex = crystal->GetFaceVertex();
+  const auto* face_area = crystal->GetFaceArea();
 
   auto ray_pool = RaySegmentPool::GetInstance();
 
@@ -288,22 +318,22 @@ void Simulator::InitMainAxis(const CrystalContext* ctx, float* axis) {
 
 // Restore and shuffle resulted rays, and fill into dir[0].
 void Simulator::PrepareMultiScatterRays(float prob) {
-  if (buffer_size_ < simulation_data_.GetLastExitRayNumber() * 2) {
-    buffer_size_ = simulation_data_.GetLastExitRayNumber() * 2;
+  if (buffer_size_ < simulation_data_.GetLastExitRaySegmentNumber() * 2) {
+    buffer_size_ = simulation_data_.GetLastExitRaySegmentNumber() * 2;
     buffer_.Allocate(buffer_size_);
   }
-  if (entry_ray_data_.ray_num < simulation_data_.GetLastExitRayNumber()) {
-    entry_ray_data_.Allocate(simulation_data_.GetLastExitRayNumber());
+  if (entry_ray_data_.ray_num < simulation_data_.GetLastExitRaySegmentNumber()) {
+    entry_ray_data_.Allocate(simulation_data_.GetLastExitRaySegmentNumber());
   }
 
   auto rng = math::RandomNumberGenerator::GetInstance();
   size_t idx = 0;
-  for (const auto& r : simulation_data_.exit_ray_segments_.back()) {
+  for (const auto& r : simulation_data_.GetExitRaySegments().back()) {
     if (!r->is_finished || r->w < context_->kScatMinW) {
       continue;
     }
     if (rng->GetUniform() > prob) {
-      simulation_data_.final_ray_segments_.emplace_back(r);
+      simulation_data_.AddFinalRaySegment(r);
       continue;
     }
     const auto axis_rot = r->root_ctx->main_axis_rot.val();
@@ -389,7 +419,7 @@ void Simulator::StoreRaySegments(const Crystal* crystal, AbstractRayPathFilter* 
       continue;
     }
     if (r->is_finished || r->w < ProjectContext::kPropMinW) {
-      simulation_data_.exit_ray_segments_.back().emplace_back(r);
+      simulation_data_.EmplaceExitRaySegment(r);
     }
   }
 }
@@ -414,7 +444,7 @@ void Simulator::RefreshBuffer() {
 
 
 const std::vector<RaySegment*>& Simulator::GetFinalRaySegments() const {
-  return simulation_data_.final_ray_segments_;
+  return simulation_data_.GetFinalRaySegments();
 }
 
 
@@ -432,12 +462,12 @@ void Simulator::SaveFinalDirections(const char* filename) {
   file.Write(static_cast<float>(w.wavelength));
   file.Write(w.weight);
 
-  auto ray_num = simulation_data_.final_ray_segments_.size();
+  auto ray_num = simulation_data_.GetFinalRaySegmentNumber();
   size_t idx = 0;
   std::unique_ptr<float[]> data{ new float[ray_num * 4] };  // dx, dy, dz, w
 
   float* curr_data = data.get();
-  for (const auto& r : simulation_data_.final_ray_segments_) {
+  for (const auto& r : simulation_data_.GetFinalRaySegments()) {
     const auto axis_rot = r->root_ctx->main_axis_rot.val();
     assert(r->root_ctx);
 
@@ -454,7 +484,7 @@ void Simulator::SaveFinalDirections(const char* filename) {
 #ifdef FOR_TEST
 void Simulator::PrintRayInfo() {
   std::stack<RaySegment*> s;
-  for (const auto& rs : simulation_data_.exit_ray_segments_) {
+  for (const auto& rs : simulation_data_.GetExitRaySegments()) {
     for (const auto& r : rs) {
       auto p = r;
       while (p) {
