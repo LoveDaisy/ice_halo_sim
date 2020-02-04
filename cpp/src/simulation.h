@@ -34,7 +34,6 @@ class Simulator {
  public:
   explicit Simulator(ProjectContextPtr context);
   Simulator(const Simulator& other) = delete;
-  ~Simulator() = default;
 
   void SetCurrentWavelengthIndex(int index);
   void Run();

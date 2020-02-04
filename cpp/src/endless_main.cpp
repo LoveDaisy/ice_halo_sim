@@ -30,9 +30,6 @@ int main(int argc, char* argv[]) {
   file.Close();
 
   size_t total_ray_num = 0;
-  std::unique_ptr<uint8_t[]> flat_rgb_data{
-    new uint8_t[3 * proj_ctx->render_ctx_.GetImageWidth() * proj_ctx->render_ctx_.GetImageHeight()]
-  };
   while (true) {
     const auto& wavelengths = proj_ctx->wavelengths_;
     for (size_t i = 0; i < wavelengths.size(); i++) {
@@ -49,10 +46,10 @@ int main(int argc, char* argv[]) {
                         simulator.GetSimulationRayData());
     }
 
-    renderer.RenderToRgb(flat_rgb_data.get());
+    renderer.RenderToImage();
 
     cv::Mat img(proj_ctx->render_ctx_.GetImageHeight(), proj_ctx->render_ctx_.GetImageWidth(), CV_8UC3,
-                flat_rgb_data.get());
+                renderer.GetImageBuffer());
     cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
     try {
       cv::imwrite(proj_ctx->GetDefaultImagePath(), img);

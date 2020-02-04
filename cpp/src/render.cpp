@@ -247,7 +247,12 @@ constexpr float SpectrumRenderer::kCmfY[];
 constexpr float SpectrumRenderer::kCmfZ[];
 
 
-SpectrumRenderer::SpectrumRenderer(ProjectContextPtr context) : context_(std::move(context)), total_w_(0) {}
+SpectrumRenderer::SpectrumRenderer(ProjectContextPtr context)
+    : context_(std::move(context)),
+      output_image_buffer_{
+        new uint8_t[3 * context_->render_ctx_.GetImageWidth() * context_->render_ctx_.GetImageHeight()]
+      },
+      total_w_(0) {}
 
 
 SpectrumRenderer::~SpectrumRenderer() {
@@ -255,7 +260,7 @@ SpectrumRenderer::~SpectrumRenderer() {
 }
 
 
-void SpectrumRenderer::LoadData() {
+void SpectrumRenderer::LoadDataFiles() {
   auto projection_type = context_->cam_ctx_.GetLensType();
   const auto& projection_functions = GetProjectionFunctions();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
@@ -289,6 +294,11 @@ void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData&
     p += 4;
   }
 
+  LoadData(wl, weight, curr_data.get(), num);
+}
+
+
+void SpectrumRenderer::LoadData(float wl, float weight, const float* curr_data, size_t num) {
   auto projection_type = context_->cam_ctx_.GetLensType();
   auto& projection_functions = GetProjectionFunctions();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
@@ -312,9 +322,9 @@ void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData&
   auto step = std::max(num / 100, static_cast<size_t>(10));
   for (size_t i = 0; i < num; i += step) {
     auto current_num = std::min(num - i, step);
-    threading_pool->AddJob([=, &tmp_xy, &curr_data] {
-      pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num,
-         curr_data.get() + i * 4, img_wid, img_hei, tmp_xy.get() + i * 2, context_->render_ctx_.GetVisibleRange());
+    threading_pool->AddJob([=, &tmp_xy] {
+      pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num, curr_data + i * 4,
+         img_wid, img_hei, tmp_xy.get() + i * 2, context_->render_ctx_.GetVisibleRange());
     });
   }
   threading_pool->WaitFinish();
@@ -356,7 +366,7 @@ void SpectrumRenderer::ResetData() {
 }
 
 
-void SpectrumRenderer::RenderToRgb(uint8_t* rgb_data) {
+void SpectrumRenderer::RenderToImage() {
   auto img_hei = context_->render_ctx_.GetImageHeight();
   auto img_wid = context_->render_ctx_.GetImageWidth();
   auto wl_num = spectrum_data_.size();
@@ -369,26 +379,31 @@ void SpectrumRenderer::RenderToRgb(uint8_t* rgb_data) {
   bool use_rgb = ray_color[0] < 0;
 
   if (use_rgb) {
-    Rgb(wl_num, img_wid * img_hei, wl_data.get(), flat_spec_data.get(), rgb_data);
+    Rgb(wl_num, img_wid * img_hei, wl_data.get(), flat_spec_data.get(), output_image_buffer_.get());
   } else {
-    Gray(wl_num, img_wid * img_hei, wl_data.get(), flat_spec_data.get(), rgb_data);
+    Gray(wl_num, img_wid * img_hei, wl_data.get(), flat_spec_data.get(), output_image_buffer_.get());
   }
   for (decltype(img_wid) i = 0; i < img_wid * img_hei; i++) {
     for (int c = 0; c < 3; c++) {
       auto v = static_cast<int>(background_color[c] * kColorMaxVal);
       if (use_rgb) {
-        v += rgb_data[i * 3 + c];
+        v += output_image_buffer_[i * 3 + c];
       } else {
-        v += static_cast<int>(rgb_data[i * 3 + c] * 1.0 * ray_color[c]);
+        v += static_cast<int>(output_image_buffer_[i * 3 + c] * 1.0 * ray_color[c]);
       }
       v = std::max(std::min(v, static_cast<int>(kColorMaxVal)), 0);
-      rgb_data[i * 3 + c] = static_cast<uint8_t>(v);
+      output_image_buffer_[i * 3 + c] = static_cast<uint8_t>(v);
     }
   }
 
   /* Draw horizontal */
   // float imgR = std::min(img_wid_ / 2, img_hei_) / 2.0f;
   // TODO
+}
+
+
+uint8_t* SpectrumRenderer::GetImageBuffer() const {
+  return output_image_buffer_.get();
 }
 
 
