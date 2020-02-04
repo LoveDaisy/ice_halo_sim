@@ -18,8 +18,9 @@ class ThreadingPool {
 
   void Start();
   void AddJob(std::function<void()> job);
+  void AddRangeBasedJobs(size_t size, const std::function<void(size_t start_idx, size_t end_idx)>& job);
   void WaitFinish();
-  bool TaskRunning();
+  bool IsTaskRunning();
 
   static ThreadingPool* GetInstance();
 
@@ -41,9 +42,7 @@ class ThreadingPool {
 
   void WorkingFunction();
 
-  static const int kHardwareConcurrency;
-  static ThreadingPool* instance_;
-  static std::mutex instance_mutex_;
+  static const unsigned int kHardwareConcurrency;
 };
 
 }  // namespace icehalo

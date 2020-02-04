@@ -377,18 +377,15 @@ void Simulator::TraceRays(const Crystal* crystal, AbstractRayPathFilter* filter)
       buffer_size_ = active_ray_num_ * kBufferSizeFactor;
       buffer_.Allocate(buffer_size_);
     }
-    auto step = std::max(active_ray_num_ / 100, static_cast<size_t>(10));
-    for (size_t j = 0; j < active_ray_num_; j += step) {
-      size_t current_num = std::min(active_ray_num_ - j, step);
-      pool->AddJob([=] {
-        Optics::HitSurface(crystal, n, current_num,                                              //
-                           buffer_.dir[0] + j * 3, buffer_.face_id[0] + j, buffer_.w[0] + j,     //
-                           buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2);                        //
-        Optics::Propagate(crystal, current_num * 2, buffer_.pt[0] + j * 3,                       //
-                          buffer_.dir[1] + j * 6, buffer_.w[1] + j * 2, buffer_.face_id[0] + j,  //
-                          buffer_.pt[1] + j * 6, buffer_.face_id[1] + j * 2);
-      });
-    }
+    pool->AddRangeBasedJobs(active_ray_num_, [=](size_t idx0, size_t idx1) {
+      size_t current_num = idx1 - idx0;
+      Optics::HitSurface(crystal, n, current_num,                                                       //
+                         buffer_.dir[0] + idx0 * 3, buffer_.face_id[0] + idx0, buffer_.w[0] + idx0,     //
+                         buffer_.dir[1] + idx0 * 6, buffer_.w[1] + idx0 * 2);                           //
+      Optics::Propagate(crystal, current_num * 2, buffer_.pt[0] + idx0 * 3,                             //
+                        buffer_.dir[1] + idx0 * 6, buffer_.w[1] + idx0 * 2, buffer_.face_id[0] + idx0,  //
+                        buffer_.pt[1] + idx0 * 6, buffer_.face_id[1] + idx0 * 2);                       //
+    });
     pool->WaitFinish();
     StoreRaySegments(crystal, filter);
     RefreshBuffer();  // active_ray_num_ is updated.

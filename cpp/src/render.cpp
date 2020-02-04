@@ -310,45 +310,42 @@ void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData&
   auto* current_data_compensation = spectrum_data_compensation_[wavelength].get();
 
   auto threading_pool = ThreadingPool::GetInstance();
-  auto step = std::max(num / 100, static_cast<size_t>(10));
-  for (size_t i = 0; i < num; i += step) {
-    auto current_num = std::min(num - i, step);
-    threading_pool->AddJob([=, &ray_seg_set] {
-      std::unique_ptr<float[]> curr_data{ new float[current_num * 4] };
-      auto* p = curr_data.get();
-      for (size_t j = 0; j < current_num; j++) {
-        const auto& r = ray_seg_set[i + j];
-        auto axis_rot = r->root_ctx->main_axis_rot.val();
-        icehalo::math::RotateZBack(axis_rot, r->dir.val(), p);
-        p[3] = r->w;
-        p += 4;
-      }
+  threading_pool->AddRangeBasedJobs(num, [=, &ray_seg_set](size_t start_idx, size_t end_idx) {
+    size_t current_num = end_idx - start_idx;
+    std::unique_ptr<float[]> curr_data{ new float[current_num * 4] };
+    auto* p = curr_data.get();
+    for (size_t j = start_idx; j < end_idx; j++) {
+      const auto& r = ray_seg_set[j];
+      auto axis_rot = r->root_ctx->main_axis_rot.val();
+      icehalo::math::RotateZBack(axis_rot, r->dir.val(), p);
+      p[3] = r->w;
+      p += 4;
+    }
 
-      std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
-      p = curr_data.get();
-      pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num, p,
-         img_wid, img_hei, tmp_xy.get(), context_->render_ctx_.GetVisibleRange());
+    std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
+    p = curr_data.get();
+    pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num, p, img_wid, img_hei,
+       tmp_xy.get(), context_->render_ctx_.GetVisibleRange());
 
-      for (size_t j = 0; j < current_num; j++) {
-        int x = tmp_xy[j * 2 + 0];
-        int y = tmp_xy[j * 2 + 1];
-        if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
-          continue;
-        }
-        if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
-          x += context_->render_ctx_.GetImageOffsetX();
-          y += context_->render_ctx_.GetImageOffsetY();
-        }
-        if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
-          continue;
-        }
-        auto tmp_val = curr_data[j * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
-        auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
-        current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
-        current_data[y * img_wid + x] = tmp_sum;
+    for (size_t j = 0; j < current_num; j++) {
+      int x = tmp_xy[j * 2 + 0];
+      int y = tmp_xy[j * 2 + 1];
+      if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
+        continue;
       }
-    });
-  }
+      if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
+        x += context_->render_ctx_.GetImageOffsetX();
+        y += context_->render_ctx_.GetImageOffsetY();
+      }
+      if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
+        continue;
+      }
+      auto tmp_val = curr_data[j * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
+      auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
+      current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
+      current_data[y * img_wid + x] = tmp_sum;
+    }
+  });
   threading_pool->WaitFinish();
 
   total_w_ += context_->GetInitRayNum() * weight;
@@ -381,34 +378,31 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* curr_data, 
   auto* current_data_compensation = spectrum_data_compensation_[wavelength].get();
 
   auto threading_pool = ThreadingPool::GetInstance();
-  auto step = std::max(num / 100, static_cast<size_t>(10));
-  for (size_t i = 0; i < num; i += step) {
-    auto current_num = std::min(num - i, step);
-    threading_pool->AddJob([=] {
-      std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
-      pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num, curr_data + i * 4,
-         img_wid, img_hei, tmp_xy.get(), context_->render_ctx_.GetVisibleRange());
+  threading_pool->AddRangeBasedJobs(num, [=](size_t start_idx, size_t end_idx) {
+    size_t current_num = end_idx - start_idx;
+    std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
+    pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num,
+       curr_data + start_idx * 4, img_wid, img_hei, tmp_xy.get(), context_->render_ctx_.GetVisibleRange());
 
-      for (size_t j = 0; j < current_num; j++) {
-        int x = tmp_xy[j * 2 + 0];
-        int y = tmp_xy[j * 2 + 1];
-        if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
-          continue;
-        }
-        if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
-          x += context_->render_ctx_.GetImageOffsetX();
-          y += context_->render_ctx_.GetImageOffsetY();
-        }
-        if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
-          continue;
-        }
-        auto tmp_val = curr_data[(i + j) * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
-        auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
-        current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
-        current_data[y * img_wid + x] = tmp_sum;
+    for (size_t j = 0; j < current_num; j++) {
+      int x = tmp_xy[j * 2 + 0];
+      int y = tmp_xy[j * 2 + 1];
+      if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
+        continue;
       }
-    });
-  }
+      if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
+        x += context_->render_ctx_.GetImageOffsetX();
+        y += context_->render_ctx_.GetImageOffsetY();
+      }
+      if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
+        continue;
+      }
+      auto tmp_val = curr_data[(start_idx + j) * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
+      auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
+      current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
+      current_data[y * img_wid + x] = tmp_sum;
+    }
+  });
   threading_pool->WaitFinish();
 
   total_w_ += context_->GetInitRayNum() * weight;

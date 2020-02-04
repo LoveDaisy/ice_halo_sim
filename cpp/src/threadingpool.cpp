@@ -3,25 +3,15 @@
 namespace icehalo {
 
 
-const int ThreadingPool::kHardwareConcurrency = std::thread::hardware_concurrency();
-ThreadingPool* ThreadingPool::instance_ = nullptr;
-std::mutex ThreadingPool::instance_mutex_;
-
+const unsigned int ThreadingPool::kHardwareConcurrency = std::thread::hardware_concurrency();
 
 ThreadingPool* ThreadingPool::GetInstance() {
-  if (instance_ == nullptr) {
-    {
-      std::unique_lock<std::mutex> lock(instance_mutex_);
-      if (instance_ == nullptr) {
 #ifdef MULTI_THREAD
-        instance_ = new ThreadingPool(kHardwareConcurrency);
+  static auto* instance = new ThreadingPool(kHardwareConcurrency);
 #else
-        instance_ = new ThreadingPool();  // Default use single thread.
+  static auto* instance = new ThreadingPool();  // Default use single thread.
 #endif
-      }
-    }
-  }
-  return instance_;
+  return instance;
 }
 
 
@@ -52,20 +42,31 @@ void ThreadingPool::AddJob(std::function<void()> job) {
   }
 
   {
-    std::unique_lock<std::mutex> lock(queue_mutex_);
-    queue_.emplace(job);
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    queue_.emplace(std::move(job));
   }
   queue_condition_.notify_one();
 }
 
 
-void ThreadingPool::WaitFinish() {
-  std::unique_lock<std::mutex> lock(task_mutex_);
-  task_condition_.wait(lock, [=] { return !TaskRunning(); });
+void ThreadingPool::AddRangeBasedJobs(size_t num, const std::function<void(size_t, size_t)>& job) {
+  auto step = std::max(num / 100, static_cast<size_t>(10));
+  for (size_t i = 0; i < num; i += step) {
+    auto current_num = std::min(num - i, step);
+    size_t start_idx = i;
+    size_t end_idx = i + current_num;
+    AddJob([=] { job(start_idx, end_idx); });
+  }
 }
 
 
-bool ThreadingPool::TaskRunning() {
+void ThreadingPool::WaitFinish() {
+  std::unique_lock<std::mutex> lock(task_mutex_);
+  task_condition_.wait(lock, [=] { return !IsTaskRunning(); });
+}
+
+
+bool ThreadingPool::IsTaskRunning() {
   return running_jobs_ > 0 || !queue_.empty();
 }
 
@@ -78,12 +79,12 @@ void ThreadingPool::WorkingFunction() {
       queue_.pop();
       lock.unlock();
       {
-        std::unique_lock<std::mutex> lk(task_mutex_);
+        std::lock_guard<std::mutex> lk(task_mutex_);
         running_jobs_ += 1;
       }
       job();
       {
-        std::unique_lock<std::mutex> lk(task_mutex_);
+        std::lock_guard<std::mutex> lk(task_mutex_);
         running_jobs_ -= 1;
       }
       lock.lock();
