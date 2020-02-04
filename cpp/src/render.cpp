@@ -276,7 +276,19 @@ void SpectrumRenderer::LoadData() {
 }
 
 
-void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, size_t num) {
+void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData& simulation_data) {
+  const auto& ray_seg_set = simulation_data.GetFinalRaySegments();
+  auto num = ray_seg_set.size();
+  std::unique_ptr<float[]> curr_data{ new float[num * 4] };
+  auto* p = curr_data.get();
+  for (const auto& r : ray_seg_set) {
+    assert(r->root_ctx);
+    auto axis_rot = r->root_ctx->main_axis_rot.val();
+    icehalo::math::RotateZBack(axis_rot, r->dir.val(), p);
+    p[3] = r->w;
+    p += 4;
+  }
+
   auto projection_type = context_->cam_ctx_.GetLensType();
   auto& projection_functions = GetProjectionFunctions();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
@@ -300,14 +312,14 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
   auto step = std::max(num / 100, static_cast<size_t>(10));
   for (size_t i = 0; i < num; i += step) {
     auto current_num = std::min(num - i, step);
-    threading_pool->AddJob([=, &tmp_xy] {
-      pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num, ray_data + i * 4,
-         img_wid, img_hei, tmp_xy.get() + i * 2, context_->render_ctx_.GetVisibleRange());
+    threading_pool->AddJob([=, &tmp_xy, &curr_data] {
+      pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num,
+         curr_data.get() + i * 4, img_wid, img_hei, tmp_xy.get() + i * 2, context_->render_ctx_.GetVisibleRange());
     });
   }
   threading_pool->WaitFinish();
 
-  if (!spectrum_data_.count(wavelength)) {
+  if (!spectrum_data_.count(wavelength) || !spectrum_data_[wavelength]) {
     spectrum_data_[wavelength].reset(new float[img_hei * img_wid]{});
     spectrum_data_compensation_[wavelength].reset(new float[img_hei * img_wid]{});
   }
@@ -327,7 +339,7 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* ray_data, s
     if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
       continue;
     }
-    auto tmp_val = ray_data[i * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
+    auto tmp_val = curr_data[i * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
     auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
     current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
     current_data[y * img_wid + x] = tmp_sum;

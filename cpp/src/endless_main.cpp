@@ -45,18 +45,8 @@ int main(int argc, char* argv[]) {
       diff = t1 - t0;
       std::printf("Ray tracing: %.2fms\n", diff.count());
 
-      const auto& ray_seg_set = simulator.GetFinalRaySegments();
-      auto num = ray_seg_set.size();
-      std::unique_ptr<float[]> curr_data{ new float[num * 4] };
-      auto* p = curr_data.get();
-      for (const auto& r : ray_seg_set) {
-        assert(r->root_ctx);
-        auto axis_rot = r->root_ctx->main_axis_rot.val();
-        icehalo::math::RotateZBack(axis_rot, r->dir.val(), p);
-        p[3] = r->w;
-        p += 4;
-      }
-      renderer.LoadData(static_cast<float>(wavelengths[i].wavelength), wavelengths[i].weight, curr_data.get(), num);
+      renderer.LoadData(static_cast<float>(wavelengths[i].wavelength), wavelengths[i].weight,
+                        simulator.GetSimulationRayData());
     }
 
     renderer.RenderToRgb(flat_rgb_data.get());

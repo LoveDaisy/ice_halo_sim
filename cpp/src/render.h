@@ -6,6 +6,7 @@
 
 #include "context.h"
 #include "files.h"
+#include "simulation.h"
 
 
 namespace icehalo {
@@ -105,6 +106,7 @@ class SpectrumRenderer {
 
   void LoadData();
   void LoadData(float wavelength, float weight, const float* ray_data, size_t num = 1);
+  void LoadData(float wavelength, float weight, const SimulationRayData& simulation_data);
   void ResetData();
   void RenderToRgb(uint8_t* rgb_data);
 

@@ -9,14 +9,14 @@
 
 namespace icehalo {
 
-void SimulationData::Clear() {
+void SimulationRayData::Clear() {
   rays_.clear();
   exit_ray_segments_.clear();
   final_ray_segments_.clear();
 }
 
 
-void SimulationData::PrepareNewScatter(size_t ray_num) {
+void SimulationRayData::PrepareNewScatter(size_t ray_num) {
   rays_.emplace_back();
   rays_.back().reserve(ray_num);
   exit_ray_segments_.emplace_back();
@@ -24,44 +24,44 @@ void SimulationData::PrepareNewScatter(size_t ray_num) {
 }
 
 
-void SimulationData::EmplaceRay(RayInfoPtrU ray) {
+void SimulationRayData::EmplaceRay(RayInfoPtrU ray) {
   rays_.back().emplace_back(std::move(ray));
 }
 
 
-void SimulationData::AddFinalRaySegment(RaySegment *r) {
+void SimulationRayData::AddFinalRaySegment(RaySegment* r) {
   final_ray_segments_.emplace_back(r);
 }
 
 
-void SimulationData::AddExitRaySegmentsToFinal() {
+void SimulationRayData::AddExitRaySegmentsToFinal() {
   for (const auto& r : exit_ray_segments_.back()) {
     final_ray_segments_.emplace_back(r);
   }
 }
 
 
-void SimulationData::EmplaceExitRaySegment(RaySegment *r) {
+void SimulationRayData::EmplaceExitRaySegment(RaySegment* r) {
   exit_ray_segments_.back().emplace_back(r);
 }
 
 
-size_t SimulationData::GetLastExitRaySegmentNumber() const {
+size_t SimulationRayData::GetLastExitRaySegmentNumber() const {
   return exit_ray_segments_.back().size();
 }
 
 
-size_t SimulationData::GetFinalRaySegmentNumber() const {
+size_t SimulationRayData::GetFinalRaySegmentNumber() const {
   return final_ray_segments_.size();
 }
 
 
-const std::vector<RaySegment *> & SimulationData::GetFinalRaySegments() const {
+const std::vector<RaySegment*>& SimulationRayData::GetFinalRaySegments() const {
   return final_ray_segments_;
 }
 
 
-const std::vector<std::vector<RaySegment *> > & SimulationData::GetExitRaySegments() const {
+const std::vector<std::vector<RaySegment*>>& SimulationRayData::GetExitRaySegments() const {
   return exit_ray_segments_;
 }
 
@@ -181,7 +181,7 @@ void Simulator::EntryRayData::Allocate(size_t ray_number) {
 
 
 Simulator::Simulator(ProjectContextPtr context)
-    : context_(std::move(context)), simulation_data_{}, current_wavelength_index_(-1), total_ray_num_(0),
+    : context_(std::move(context)), simulation_ray_data_{}, current_wavelength_index_(-1), total_ray_num_(0),
       active_ray_num_(0), buffer_size_(0), buffer_{}, entry_ray_data_{}, entry_ray_offset_(0) {}
 
 
@@ -197,7 +197,7 @@ void Simulator::SetCurrentWavelengthIndex(int index) {
 
 // Start simulation
 void Simulator::Run() {
-  simulation_data_.Clear();
+  simulation_ray_data_.Clear();
   RaySegmentPool::GetInstance()->Clear();
   entry_ray_data_.Clear();
   entry_ray_offset_ = 0;
@@ -205,7 +205,7 @@ void Simulator::Run() {
   InitSunRays();
 
   for (auto it = context_->multi_scatter_info_.begin(); it != context_->multi_scatter_info_.end(); ++it) {
-    simulation_data_.PrepareNewScatter(total_ray_num_);
+    simulation_ray_data_.PrepareNewScatter(total_ray_num_);
 
     for (const auto& c : it->GetCrystalInfo()) {
       active_ray_num_ = static_cast<size_t>(c.population * total_ray_num_);
@@ -224,7 +224,7 @@ void Simulator::Run() {
     entry_ray_offset_ = 0;
   }
 
-  simulation_data_.AddExitRaySegmentsToFinal();
+  simulation_ray_data_.AddExitRaySegmentsToFinal();
 }
 
 
@@ -290,7 +290,7 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
     buffer_.ray_seg[0][i] = r;
     r->root_ctx = new RayInfo(r, ctx->crystal.get(), axis_rot);
     r->root_ctx->prev_ray_segment = prev_r;
-    simulation_data_.EmplaceRay(RayInfoPtrU{ r->root_ctx });
+    simulation_ray_data_.EmplaceRay(RayInfoPtrU{ r->root_ctx });
   }
 }
 
@@ -318,22 +318,22 @@ void Simulator::InitMainAxis(const CrystalContext* ctx, float* axis) {
 
 // Restore and shuffle resulted rays, and fill into dir[0].
 void Simulator::PrepareMultiScatterRays(float prob) {
-  if (buffer_size_ < simulation_data_.GetLastExitRaySegmentNumber() * 2) {
-    buffer_size_ = simulation_data_.GetLastExitRaySegmentNumber() * 2;
+  if (buffer_size_ < simulation_ray_data_.GetLastExitRaySegmentNumber() * 2) {
+    buffer_size_ = simulation_ray_data_.GetLastExitRaySegmentNumber() * 2;
     buffer_.Allocate(buffer_size_);
   }
-  if (entry_ray_data_.ray_num < simulation_data_.GetLastExitRaySegmentNumber()) {
-    entry_ray_data_.Allocate(simulation_data_.GetLastExitRaySegmentNumber());
+  if (entry_ray_data_.ray_num < simulation_ray_data_.GetLastExitRaySegmentNumber()) {
+    entry_ray_data_.Allocate(simulation_ray_data_.GetLastExitRaySegmentNumber());
   }
 
   auto rng = math::RandomNumberGenerator::GetInstance();
   size_t idx = 0;
-  for (const auto& r : simulation_data_.GetExitRaySegments().back()) {
+  for (const auto& r : simulation_ray_data_.GetExitRaySegments().back()) {
     if (!r->is_finished || r->w < context_->kScatMinW) {
       continue;
     }
     if (rng->GetUniform() > prob) {
-      simulation_data_.AddFinalRaySegment(r);
+      simulation_ray_data_.AddFinalRaySegment(r);
       continue;
     }
     const auto axis_rot = r->root_ctx->main_axis_rot.val();
@@ -419,7 +419,7 @@ void Simulator::StoreRaySegments(const Crystal* crystal, AbstractRayPathFilter* 
       continue;
     }
     if (r->is_finished || r->w < ProjectContext::kPropMinW) {
-      simulation_data_.EmplaceExitRaySegment(r);
+      simulation_ray_data_.EmplaceExitRaySegment(r);
     }
   }
 }
@@ -443,8 +443,8 @@ void Simulator::RefreshBuffer() {
 }
 
 
-const std::vector<RaySegment*>& Simulator::GetFinalRaySegments() const {
-  return simulation_data_.GetFinalRaySegments();
+const SimulationRayData& Simulator::GetSimulationRayData() {
+  return simulation_ray_data_;
 }
 
 
@@ -462,12 +462,12 @@ void Simulator::SaveFinalDirections(const char* filename) {
   file.Write(static_cast<float>(w.wavelength));
   file.Write(w.weight);
 
-  auto ray_num = simulation_data_.GetFinalRaySegmentNumber();
+  auto ray_num = simulation_ray_data_.GetFinalRaySegmentNumber();
   size_t idx = 0;
   std::unique_ptr<float[]> data{ new float[ray_num * 4] };  // dx, dy, dz, w
 
   float* curr_data = data.get();
-  for (const auto& r : simulation_data_.GetFinalRaySegments()) {
+  for (const auto& r : simulation_ray_data_.GetFinalRaySegments()) {
     const auto axis_rot = r->root_ctx->main_axis_rot.val();
     assert(r->root_ctx);
 
@@ -484,7 +484,7 @@ void Simulator::SaveFinalDirections(const char* filename) {
 #ifdef FOR_TEST
 void Simulator::PrintRayInfo() {
   std::stack<RaySegment*> s;
-  for (const auto& rs : simulation_data_.GetExitRaySegments()) {
+  for (const auto& rs : simulation_ray_data_.GetExitRaySegments()) {
     for (const auto& r : rs) {
       auto p = r;
       while (p) {

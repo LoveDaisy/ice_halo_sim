@@ -9,7 +9,7 @@
 
 namespace icehalo {
 
-class SimulationData {
+class SimulationRayData {
  public:
   void Clear();
   void PrepareNewScatter(size_t ray_num);
@@ -38,9 +38,9 @@ class Simulator {
 
   void SetCurrentWavelengthIndex(int index);
   void Run();
-  const std::vector<RaySegment*>& GetFinalRaySegments() const;
+  const SimulationRayData& GetSimulationRayData();
+
   void SaveFinalDirections(const char* filename);
-  void SaveAllRays(const char* filename);
 #ifdef FOR_TEST
   void PrintRayInfo();  // For debug
 #endif
@@ -94,7 +94,7 @@ class Simulator {
 
   ProjectContextPtr context_;
 
-  SimulationData simulation_data_;
+  SimulationRayData simulation_ray_data_;
 
   int current_wavelength_index_;
 
