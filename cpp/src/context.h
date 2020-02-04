@@ -242,13 +242,14 @@ class RenderContext {
 };
 
 
+struct WavelengthInfo {
+  int wavelength;
+  float weight;
+};
+
+
 class ProjectContext {
  public:
-  struct WavelengthInfo {
-    int wavelength;
-    float weight;
-  };
-
   static std::unique_ptr<ProjectContext> CreateFromFile(const char* filename);
   static std::unique_ptr<ProjectContext> CreateDefault();
 

@@ -11,6 +11,8 @@ namespace icehalo {
 
 class SimulationRayData {
  public:
+  WavelengthInfo wavelength_info_{};
+
   void Clear();
   void PrepareNewScatter(size_t ray_num);
   void EmplaceRay(RayInfoPtrU ray);

@@ -202,6 +202,12 @@ void Simulator::Run() {
   entry_ray_data_.Clear();
   entry_ray_offset_ = 0;
 
+  if (current_wavelength_index_ < 0) {
+    std::fprintf(stderr, "Warning! wavelength is not set!");
+    return;
+  }
+  simulation_ray_data_.wavelength_info_ = context_->wavelengths_[current_wavelength_index_];
+
   InitSunRays();
 
   for (auto it = context_->multi_scatter_info_.begin(); it != context_->multi_scatter_info_.end(); ++it) {
@@ -365,7 +371,7 @@ void Simulator::TraceRays(const Crystal* crystal, AbstractRayPathFilter* filter)
   auto pool = ThreadingPool::GetInstance();
 
   int max_recursion_num = context_->GetRayHitNum();
-  auto n = static_cast<float>(IceRefractiveIndex::Get(context_->wavelengths_[current_wavelength_index_].wavelength));
+  auto n = static_cast<float>(IceRefractiveIndex::Get(simulation_ray_data_.wavelength_info_.wavelength));
   for (int i = 0; i < max_recursion_num; i++) {
     if (buffer_size_ < active_ray_num_ * 2) {
       buffer_size_ = active_ray_num_ * kBufferSizeFactor;
@@ -458,9 +464,8 @@ void Simulator::SaveFinalDirections(const char* filename) {
     return;
   }
 
-  const auto& w = context_->wavelengths_[current_wavelength_index_];
-  file.Write(static_cast<float>(w.wavelength));
-  file.Write(w.weight);
+  file.Write(static_cast<float>(simulation_ray_data_.wavelength_info_.wavelength));
+  file.Write(simulation_ray_data_.wavelength_info_.weight);
 
   auto ray_num = simulation_ray_data_.GetFinalRaySegmentNumber();
   size_t idx = 0;
@@ -477,7 +482,6 @@ void Simulator::SaveFinalDirections(const char* filename) {
     idx++;
   }
   file.Write(data.get(), idx * 4);
-  file.Close();
 }
 
 
