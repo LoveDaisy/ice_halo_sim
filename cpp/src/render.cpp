@@ -284,17 +284,74 @@ void SpectrumRenderer::LoadDataFiles() {
 void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData& simulation_data) {
   const auto& ray_seg_set = simulation_data.GetFinalRaySegments();
   auto num = ray_seg_set.size();
-  std::unique_ptr<float[]> curr_data{ new float[num * 4] };
-  auto* p = curr_data.get();
-  for (const auto& r : ray_seg_set) {
-    assert(r->root_ctx);
-    auto axis_rot = r->root_ctx->main_axis_rot.val();
-    icehalo::math::RotateZBack(axis_rot, r->dir.val(), p);
-    p[3] = r->w;
-    p += 4;
+
+  auto projection_type = context_->cam_ctx_.GetLensType();
+  auto& projection_functions = GetProjectionFunctions();
+  if (projection_functions.find(projection_type) == projection_functions.end()) {
+    std::fprintf(stderr, "Unknown projection type!\n");
+    return;
+  }
+  auto& pf = projection_functions[projection_type];
+
+  auto wavelength = static_cast<int>(wl);
+  if (wavelength < SpectrumRenderer::kMinWavelength || wavelength > SpectrumRenderer::kMaxWaveLength || weight < 0) {
+    std::fprintf(stderr, "Wavelength out of range!\n");
+    return;
   }
 
-  LoadData(wl, weight, curr_data.get(), num);
+  auto img_hei = context_->render_ctx_.GetImageHeight();
+  auto img_wid = context_->render_ctx_.GetImageWidth();
+
+  if (!spectrum_data_.count(wavelength) || !spectrum_data_[wavelength]) {
+    spectrum_data_[wavelength].reset(new float[img_hei * img_wid]{});
+    spectrum_data_compensation_[wavelength].reset(new float[img_hei * img_wid]{});
+  }
+  auto* current_data = spectrum_data_[wavelength].get();
+  auto* current_data_compensation = spectrum_data_compensation_[wavelength].get();
+
+  auto threading_pool = ThreadingPool::GetInstance();
+  auto step = std::max(num / 100, static_cast<size_t>(10));
+  for (size_t i = 0; i < num; i += step) {
+    auto current_num = std::min(num - i, step);
+    threading_pool->AddJob([=, &ray_seg_set] {
+      std::unique_ptr<float[]> curr_data{ new float[current_num * 4] };
+      auto* p = curr_data.get();
+      for (size_t j = 0; j < current_num; j++) {
+        const auto& r = ray_seg_set[i + j];
+        auto axis_rot = r->root_ctx->main_axis_rot.val();
+        icehalo::math::RotateZBack(axis_rot, r->dir.val(), p);
+        p[3] = r->w;
+        p += 4;
+      }
+
+      std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
+      p = curr_data.get();
+      pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num, p,
+         img_wid, img_hei, tmp_xy.get(), context_->render_ctx_.GetVisibleRange());
+
+      for (size_t j = 0; j < current_num; j++) {
+        int x = tmp_xy[j * 2 + 0];
+        int y = tmp_xy[j * 2 + 1];
+        if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
+          continue;
+        }
+        if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
+          x += context_->render_ctx_.GetImageOffsetX();
+          y += context_->render_ctx_.GetImageOffsetY();
+        }
+        if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
+          continue;
+        }
+        auto tmp_val = curr_data[j * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
+        auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
+        current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
+        current_data[y * img_wid + x] = tmp_sum;
+      }
+    });
+  }
+  threading_pool->WaitFinish();
+
+  total_w_ += context_->GetInitRayNum() * weight;
 }
 
 
@@ -313,47 +370,46 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* curr_data, 
     return;
   }
 
-  std::unique_ptr<int[]> tmp_xy{ new int[num * 2]{} };
-
   auto img_hei = context_->render_ctx_.GetImageHeight();
   auto img_wid = context_->render_ctx_.GetImageWidth();
-
-  auto threading_pool = ThreadingPool::GetInstance();
-  auto step = std::max(num / 100, static_cast<size_t>(10));
-  for (size_t i = 0; i < num; i += step) {
-    auto current_num = std::min(num - i, step);
-    threading_pool->AddJob([=, &tmp_xy] {
-      pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num, curr_data + i * 4,
-         img_wid, img_hei, tmp_xy.get() + i * 2, context_->render_ctx_.GetVisibleRange());
-    });
-  }
-  threading_pool->WaitFinish();
 
   if (!spectrum_data_.count(wavelength) || !spectrum_data_[wavelength]) {
     spectrum_data_[wavelength].reset(new float[img_hei * img_wid]{});
     spectrum_data_compensation_[wavelength].reset(new float[img_hei * img_wid]{});
   }
-  auto& current_data = spectrum_data_[wavelength];
-  auto& current_data_compensation = spectrum_data_compensation_[wavelength];
+  auto* current_data = spectrum_data_[wavelength].get();
+  auto* current_data_compensation = spectrum_data_compensation_[wavelength].get();
 
-  for (decltype(num) i = 0; i < num; i++) {
-    int x = tmp_xy[i * 2 + 0];
-    int y = tmp_xy[i * 2 + 1];
-    if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
-      continue;
-    }
-    if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
-      x += context_->render_ctx_.GetImageOffsetX();
-      y += context_->render_ctx_.GetImageOffsetY();
-    }
-    if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
-      continue;
-    }
-    auto tmp_val = curr_data[i * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
-    auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
-    current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
-    current_data[y * img_wid + x] = tmp_sum;
+  auto threading_pool = ThreadingPool::GetInstance();
+  auto step = std::max(num / 100, static_cast<size_t>(10));
+  for (size_t i = 0; i < num; i += step) {
+    auto current_num = std::min(num - i, step);
+    threading_pool->AddJob([=] {
+      std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
+      pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num, curr_data + i * 4,
+         img_wid, img_hei, tmp_xy.get(), context_->render_ctx_.GetVisibleRange());
+
+      for (size_t j = 0; j < current_num; j++) {
+        int x = tmp_xy[j * 2 + 0];
+        int y = tmp_xy[j * 2 + 1];
+        if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
+          continue;
+        }
+        if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
+          x += context_->render_ctx_.GetImageOffsetX();
+          y += context_->render_ctx_.GetImageOffsetY();
+        }
+        if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
+          continue;
+        }
+        auto tmp_val = curr_data[(i + j) * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
+        auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
+        current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
+        current_data[y * img_wid + x] = tmp_sum;
+      }
+    });
   }
+  threading_pool->WaitFinish();
 
   total_w_ += context_->GetInitRayNum() * weight;
 }
