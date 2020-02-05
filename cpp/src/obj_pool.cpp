@@ -57,5 +57,6 @@ uint32_t ObjectPool<T>::RefreshChunkIndex() {
 }
 
 template class ObjectPool<RaySegment>;
+template class ObjectPool<RayInfo>;
 
 }  // namespace icehalo

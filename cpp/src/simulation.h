@@ -15,7 +15,7 @@ class SimulationRayData {
 
   void Clear();
   void PrepareNewScatter(size_t ray_num);
-  void EmplaceRay(RayInfoPtrU ray);
+  void EmplaceRay(RayInfo* ray);
   void AddFinalRaySegment(RaySegment* r);
   void AddExitRaySegmentsToFinal();
   void EmplaceExitRaySegment(RaySegment* r);
@@ -27,7 +27,7 @@ class SimulationRayData {
   const std::vector<std::vector<RaySegment*>>& GetExitRaySegments() const;
 
  private:
-  std::vector<std::vector<RayInfoPtrU>> rays_;
+  std::vector<std::vector<RayInfo*>> rays_;
   std::vector<std::vector<RaySegment*>> exit_ray_segments_;
   std::vector<RaySegment*> final_ray_segments_;
 };

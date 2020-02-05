@@ -14,6 +14,7 @@ void SimulationRayData::Clear() {
   rays_.clear();
   exit_ray_segments_.clear();
   final_ray_segments_.clear();
+  RayInfoPool::GetInstance()->Clear();
 }
 
 
@@ -25,8 +26,8 @@ void SimulationRayData::PrepareNewScatter(size_t ray_num) {
 }
 
 
-void SimulationRayData::EmplaceRay(RayInfoPtrU ray) {
-  rays_.back().emplace_back(std::move(ray));
+void SimulationRayData::EmplaceRay(RayInfo* ray) {
+  rays_.back().emplace_back(ray);
 }
 
 
@@ -197,6 +198,7 @@ void Simulator::SetCurrentWavelengthIndex(int index) {
 void Simulator::Run() {
   simulation_ray_data_.Clear();
   RaySegmentPool::GetInstance()->Clear();
+  RayInfoPool::GetInstance()->Clear();
   entry_ray_data_.Clear();
   entry_ray_offset_ = 0;
 
@@ -264,6 +266,7 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
   const auto* face_area = crystal->GetFaceArea();
 
   auto ray_pool = RaySegmentPool::GetInstance();
+  auto ray_info_pool = RayInfoPool::GetInstance();
 
   using math::RandomSampler;
   float axis_rot[3];
@@ -291,9 +294,9 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
 
     auto r = ray_pool->GetObject(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i], buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
-    r->root_ctx = new RayInfo(r, ctx->crystal.get(), axis_rot);
+    r->root_ctx = ray_info_pool->GetObject(r, ctx->crystal.get(), axis_rot);
     r->root_ctx->prev_ray_segment = prev_r;
-    simulation_ray_data_.EmplaceRay(RayInfoPtrU{ r->root_ctx });
+    simulation_ray_data_.EmplaceRay(r->root_ctx);
   }
 }
 

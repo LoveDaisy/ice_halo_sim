@@ -32,6 +32,17 @@ struct RaySegment {
 };
 
 
+struct RayInfo {
+  RayInfo();
+  RayInfo(RaySegment* seg, const Crystal* crystal, const float* main_axis_rot);
+
+  RaySegment* first_ray_segment;
+  RaySegment* prev_ray_segment;
+  const Crystal* crystal;
+  math::Vec3f main_axis_rot;
+};
+
+
 class Optics {
  public:
   static void HitSurface(const Crystal* crystal, float n, size_t num,                    // input

@@ -44,6 +44,9 @@ class ObjectPool {
 struct RaySegment;
 using RaySegmentPool = ObjectPool<RaySegment>;
 
+struct RayInfo;
+using RayInfoPool = ObjectPool<RayInfo>;
+
 
 }  // namespace icehalo
 

@@ -54,6 +54,14 @@ void Optics::HitSurface(const Crystal* crystal, float n, size_t num,            
 }
 
 
+RayInfo::RayInfo()
+    : first_ray_segment(nullptr), prev_ray_segment(nullptr), crystal(nullptr), main_axis_rot{ 0, 0, 0 } {}
+
+
+RayInfo::RayInfo(RaySegment* seg, const Crystal* crystal, const float* main_axis_rot)
+    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal(crystal), main_axis_rot(main_axis_rot) {}
+
+
 void Optics::Propagate(const Crystal* crystal, size_t num,                                                 // input
                        const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
                        float* pt_out, int* face_id_out) {                                                  // output
