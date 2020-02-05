@@ -12,6 +12,7 @@ set(SOURCE_FILE
     crystal.cpp
     files.cpp
     mymath.cpp
+    obj_pool.cpp
     optics.cpp
     render.cpp
     simulation.cpp

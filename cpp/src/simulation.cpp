@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "mymath.h"
+#include "obj_pool.h"
 #include "threadingpool.h"
 
 namespace icehalo {
@@ -166,7 +167,7 @@ void Simulator::EntryRayData::Allocate(size_t ray_number) {
     delete[] ray_seg;
 
     ray_dir = new float[ray_number * 3]{};
-    ray_seg = new RaySegment*[ray_number]{};
+    ray_seg = new RaySegment* [ray_number] {};
 
     buf_size = ray_number;
   } else {
@@ -288,8 +289,7 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
     auto prev_r = entry_ray_data_.ray_seg[entry_ray_offset_ + i];
     buffer_.w[0][i] = prev_r ? prev_r->w : 1.0f;
 
-    auto r =
-        ray_pool->GetRaySegment(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i], buffer_.face_id[0][i]);
+    auto r = ray_pool->GetObject(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i], buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
     r->root_ctx = new RayInfo(r, ctx->crystal.get(), axis_rot);
     r->root_ctx->prev_ray_segment = prev_r;
@@ -399,8 +399,8 @@ void Simulator::StoreRaySegments(const Crystal* crystal, AbstractRayPathFilter* 
       continue;
     }
 
-    auto r = ray_pool->GetRaySegment(buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3, buffer_.w[1][i],
-                                     buffer_.face_id[0][i / 2]);
+    auto r = ray_pool->GetObject(buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3, buffer_.w[1][i],
+                                 buffer_.face_id[0][i / 2]);
     if (buffer_.face_id[1][i] < 0) {
       r->is_finished = true;
     }

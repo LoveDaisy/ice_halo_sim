@@ -10,7 +10,6 @@
 
 #include "context.h"
 #include "mymath.h"
-#include "threadingpool.h"
 
 
 namespace icehalo {
@@ -20,19 +19,9 @@ RaySegment::RaySegment()
       face_id(-1), is_finished(false) {}
 
 
-void RaySegment::ResetWith(const float* pt, const float* dir, float w, int face_id) {
-  next_reflect = nullptr;
-  next_refract = nullptr;
-  prev = nullptr;
-  root_ctx = nullptr;
-
-  this->pt.val(pt);
-  this->dir.val(dir);
-  this->w = w;
-  this->face_id = face_id;
-
-  is_finished = false;
-}
+RaySegment::RaySegment(const float* pt, const float* dir, float w, int face_id)
+    : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root_ctx(nullptr), pt(pt), dir(dir), w(w),
+      face_id(face_id), is_finished(false) {}
 
 
 void Optics::HitSurface(const Crystal* crystal, float n, size_t num,                    // input
@@ -368,60 +357,6 @@ double IceRefractiveIndex::Get(double wave_length) {
   n += kCoefAvr[1] / (1 - kCoefAvr[3] * 1e2f / wave_length / wave_length);
 
   return std::sqrt(n);
-}
-
-
-RaySegmentPool::RaySegmentPool() : current_chunk_id_(0), next_unused_id_(0) {
-  auto* raySegPool = new RaySegment[kChunkSize];
-  segments_.push_back(raySegPool);
-}
-
-RaySegmentPool::~RaySegmentPool() {
-  for (auto seg : segments_) {
-    delete[] seg;
-  }
-  segments_.clear();
-}
-
-RaySegmentPool* RaySegmentPool::GetInstance() {
-  static auto instance = new RaySegmentPool();
-  return instance;
-}
-
-RaySegment* RaySegmentPool::GetRaySegment(const float* pt, const float* dir, float w, int faceId) {
-  RaySegment* seg;
-
-  auto id = RefreshChunkIndex();
-  seg = segments_[current_chunk_id_] + id;
-  seg->ResetWith(pt, dir, w, faceId);
-
-  return seg;
-}
-
-void RaySegmentPool::Clear() {
-  next_unused_id_ = 0;
-  current_chunk_id_ = 0;
-}
-
-uint32_t RaySegmentPool::RefreshChunkIndex() {
-  auto id = next_unused_id_.fetch_add(1);
-  if (id >= kChunkSize) {
-    const std::lock_guard<std::mutex> lock(id_mutex_);
-    id = next_unused_id_;
-    if (id > kChunkSize) {
-      auto seg_size = segments_.size();
-      if (current_chunk_id_ + 1 >= seg_size) {
-        auto* ray_seg_buf = new RaySegment[kChunkSize];
-        segments_.emplace_back(ray_seg_buf);
-        current_chunk_id_ = seg_size;
-      } else {
-        current_chunk_id_++;
-      }
-      id = 0;
-      next_unused_id_ = 0;
-    }
-  }
-  return id;
 }
 
 

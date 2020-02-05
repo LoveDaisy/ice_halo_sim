@@ -12,14 +12,11 @@
 
 namespace icehalo {
 
-class RaySegmentPool;
 struct RayInfo;
 
 struct RaySegment {
-  friend class RaySegmentPool;
-
- public:
-  void ResetWith(const float* pt, const float* dir, float w, int face_id);
+  RaySegment();
+  RaySegment(const float* pt, const float* dir, float w, int face_id);
 
   RaySegment* next_reflect;
   RaySegment* next_refract;
@@ -32,33 +29,6 @@ struct RaySegment {
   int face_id;
 
   bool is_finished;
-
- private:
-  RaySegment();
-};
-
-
-class RaySegmentPool {
- public:
-  ~RaySegmentPool();
-  RaySegmentPool(RaySegmentPool const&) = delete;
-  void operator=(RaySegmentPool const&) = delete;
-
-  RaySegment* GetRaySegment(const float* pt, const float* dir, float w, int faceId);
-  void Clear();
-
-  static RaySegmentPool* GetInstance();
-
- private:
-  RaySegmentPool();
-  uint32_t RefreshChunkIndex();
-
-  static constexpr uint32_t kChunkSize = 1024 * 1024;
-
-  std::vector<RaySegment*> segments_;
-  size_t current_chunk_id_;
-  std::atomic<uint32_t> next_unused_id_;
-  std::mutex id_mutex_;
 };
 
 

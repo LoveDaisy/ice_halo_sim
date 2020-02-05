@@ -3,7 +3,6 @@
 #include <opencv2/opencv.hpp>
 
 #include "context.h"
-#include "mymath.h"
 #include "render.h"
 #include "simulation.h"
 
