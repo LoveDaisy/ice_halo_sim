@@ -26,7 +26,7 @@ void SimulationRayData::PrepareNewScatter(size_t ray_num) {
 }
 
 
-void SimulationRayData::EmplaceRay(RayInfo* ray) {
+void SimulationRayData::AddRay(RayInfo* ray) {
   rays_.back().emplace_back(ray);
 }
 
@@ -43,7 +43,7 @@ void SimulationRayData::AddExitRaySegmentsToFinal() {
 }
 
 
-void SimulationRayData::EmplaceExitRaySegment(RaySegment* r) {
+void SimulationRayData::AddExitRaySegment(RaySegment* r) {
   exit_ray_segments_.back().emplace_back(r);
 }
 
@@ -296,7 +296,7 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
     buffer_.ray_seg[0][i] = r;
     r->root_ctx = ray_info_pool->GetObject(r, ctx->crystal.get(), axis_rot);
     r->root_ctx->prev_ray_segment = prev_r;
-    simulation_ray_data_.EmplaceRay(r->root_ctx);
+    simulation_ray_data_.AddRay(r->root_ctx);
   }
 }
 
@@ -422,7 +422,7 @@ void Simulator::StoreRaySegments(const Crystal* crystal, AbstractRayPathFilter* 
       continue;
     }
     if (r->is_finished || r->w < ProjectContext::kPropMinW) {
-      simulation_ray_data_.EmplaceExitRaySegment(r);
+      simulation_ray_data_.AddExitRaySegment(r);
     }
   }
 }
