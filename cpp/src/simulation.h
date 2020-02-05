@@ -57,6 +57,7 @@ class Simulator {
     float* ray_dir;
     RaySegment** ray_seg;
     size_t ray_num;
+    size_t buf_size;
   };
 
 

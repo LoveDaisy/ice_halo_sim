@@ -144,39 +144,36 @@ void Simulator::BufferData::Print() {
 }
 
 
-Simulator::EntryRayData::EntryRayData() : ray_dir(nullptr), ray_seg(nullptr), ray_num(0) {}
+Simulator::EntryRayData::EntryRayData() : ray_dir(nullptr), ray_seg(nullptr), ray_num(0), buf_size(0) {}
 
 
 Simulator::EntryRayData::~EntryRayData() {
-  Clear();
+  delete[] ray_dir;
+  delete[] ray_seg;
 }
 
 
 void Simulator::EntryRayData::Clear() {
-  delete[] ray_dir;
-  delete[] ray_seg;
-
-  ray_dir = nullptr;
-  ray_seg = nullptr;
-
+  std::fill(ray_dir, ray_dir + buf_size * 3, 0.0f);
+  std::fill(ray_seg, ray_seg + buf_size, nullptr);
   ray_num = 0;
 }
 
 
 void Simulator::EntryRayData::Allocate(size_t ray_number) {
-  Clear();
+  if (ray_number > buf_size) {
+    delete[] ray_dir;
+    delete[] ray_seg;
 
-  ray_dir = new float[ray_number * 3];
-  ray_seg = new RaySegment*[ray_number];
+    ray_dir = new float[ray_number * 3]{};
+    ray_seg = new RaySegment*[ray_number]{};
 
-  for (size_t i = 0; i < ray_number; i++) {
-    ray_dir[i * 3 + 0] = 0;
-    ray_dir[i * 3 + 1] = 0;
-    ray_dir[i * 3 + 2] = 0;
-    ray_seg[i] = nullptr;
+    buf_size = ray_number;
+  } else {
+    Clear();
   }
 
-  this->ray_num = ray_number;
+  ray_num = ray_number;
 }
 
 
