@@ -24,10 +24,18 @@ namespace icehalo {
 struct RaySegment;
 struct CrystalContext;
 class ProjectContext;
+class RenderContext;
+class CameraContext;
 enum class LensType;
 enum class VisibleRange;
 
 using CrystalContextPtrU = std::unique_ptr<CrystalContext>;
+using ProjectContextPtrU = std::unique_ptr<ProjectContext>;
+using ProjectContextPtr = std::shared_ptr<ProjectContext>;
+using RenderContextPtrU = std::unique_ptr<RenderContext>;
+using RenderContextPtr = std::shared_ptr<RenderContext>;
+using CameraContextPtrU = std::unique_ptr<CameraContext>;
+using CameraContextPtr = std::shared_ptr<CameraContext>;
 
 
 enum Symmetry : uint8_t {
@@ -174,6 +182,8 @@ class CameraContext {
   LensType GetLensType() const;
   void SetLensType(LensType type);
 
+  static CameraContextPtrU CreateFromJson(rapidjson::Document& d);
+
   static constexpr float kMinAngleRound = 0.0f;
   static constexpr float kMaxAngleRound = 360.0f;
   static constexpr float kMinAngleTilt = -90.0f;
@@ -225,6 +235,8 @@ class RenderContext {
   VisibleRange GetVisibleRange() const;
   void SetVisibleRange(VisibleRange r);
 
+  static RenderContextPtrU CreateFromJson(rapidjson::Document& d);
+
   static constexpr float kMinIntensity = 0.01f;
   static constexpr float kMaxIntensity = 100.0f;
 
@@ -250,8 +262,8 @@ struct WavelengthInfo {
 
 class ProjectContext {
  public:
-  static std::unique_ptr<ProjectContext> CreateFromFile(const char* filename);
-  static std::unique_ptr<ProjectContext> CreateDefault();
+  static ProjectContextPtrU CreateFromFile(const char* filename);
+  static ProjectContextPtrU CreateDefault();
 
   size_t GetInitRayNum() const;
   void SetInitRayNum(size_t ray_num);
@@ -278,8 +290,8 @@ class ProjectContext {
   static constexpr int kDefaultRayHitNum = 8;
 
   SunContext sun_ctx_;
-  CameraContext cam_ctx_;
-  RenderContext render_ctx_;
+  CameraContextPtr cam_ctx_;
+  RenderContextPtr render_ctx_;
   std::vector<WavelengthInfo> wavelengths_;  // (wavelength, weight)
   std::vector<MultiScatterContext> multi_scatter_info_;
 
@@ -288,8 +300,6 @@ class ProjectContext {
 
   void ParseSunSettings(rapidjson::Document& d);
   void ParseRaySettings(rapidjson::Document& d);
-  void ParseCameraSettings(rapidjson::Document& d);
-  void ParseRenderSettings(rapidjson::Document& d);
   void ParseDataSettings(const char* config_file_path, rapidjson::Document& d);
   void ParseCrystalSettings(rapidjson::Document& d);
   void ParseRayPathFilterSettings(rapidjson::Document& d);
@@ -339,8 +349,6 @@ struct CrystalContext {
   const std::unique_ptr<float[]> face_prob_buf;
 };
 
-
-using ProjectContextPtr = std::shared_ptr<ProjectContext>;
 
 }  // namespace icehalo
 

@@ -250,7 +250,7 @@ constexpr float SpectrumRenderer::kCmfZ[];
 SpectrumRenderer::SpectrumRenderer(ProjectContextPtr context)
     : context_(std::move(context)),
       output_image_buffer_{
-        new uint8_t[3 * context_->render_ctx_.GetImageWidth() * context_->render_ctx_.GetImageHeight()]
+        new uint8_t[3 * context_->render_ctx_->GetImageWidth() * context_->render_ctx_->GetImageHeight()]
       },
       total_w_(0) {}
 
@@ -261,7 +261,7 @@ SpectrumRenderer::~SpectrumRenderer() {
 
 
 void SpectrumRenderer::LoadDataFiles() {
-  auto projection_type = context_->cam_ctx_.GetLensType();
+  auto projection_type = context_->cam_ctx_->GetLensType();
   const auto& projection_functions = GetProjectionFunctions();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
     std::fprintf(stderr, "Unknown projection type!\n");
@@ -285,7 +285,7 @@ void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData&
   const auto& ray_seg_set = simulation_data.GetFinalRaySegments();
   auto num = ray_seg_set.size();
 
-  auto projection_type = context_->cam_ctx_.GetLensType();
+  auto projection_type = context_->cam_ctx_->GetLensType();
   auto& projection_functions = GetProjectionFunctions();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
     std::fprintf(stderr, "Unknown projection type!\n");
@@ -299,8 +299,8 @@ void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData&
     return;
   }
 
-  auto img_hei = context_->render_ctx_.GetImageHeight();
-  auto img_wid = context_->render_ctx_.GetImageWidth();
+  auto img_hei = context_->render_ctx_->GetImageHeight();
+  auto img_wid = context_->render_ctx_->GetImageWidth();
 
   if (!spectrum_data_.count(wavelength) || !spectrum_data_[wavelength]) {
     spectrum_data_[wavelength].reset(new float[img_hei * img_wid]{});
@@ -324,8 +324,8 @@ void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData&
 
     std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
     p = curr_data.get();
-    pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num, p, img_wid, img_hei,
-       tmp_xy.get(), context_->render_ctx_.GetVisibleRange());
+    pf(context_->cam_ctx_->GetCameraTargetDirection(), context_->cam_ctx_->GetFov(), current_num, p, img_wid, img_hei,
+       tmp_xy.get(), context_->render_ctx_->GetVisibleRange());
 
     for (size_t j = 0; j < current_num; j++) {
       int x = tmp_xy[j * 2 + 0];
@@ -334,8 +334,8 @@ void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData&
         continue;
       }
       if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
-        x += context_->render_ctx_.GetImageOffsetX();
-        y += context_->render_ctx_.GetImageOffsetY();
+        x += context_->render_ctx_->GetImageOffsetX();
+        y += context_->render_ctx_->GetImageOffsetY();
       }
       if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
         continue;
@@ -353,7 +353,7 @@ void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData&
 
 
 void SpectrumRenderer::LoadData(float wl, float weight, const float* curr_data, size_t num) {
-  auto projection_type = context_->cam_ctx_.GetLensType();
+  auto projection_type = context_->cam_ctx_->GetLensType();
   auto& projection_functions = GetProjectionFunctions();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
     std::fprintf(stderr, "Unknown projection type!\n");
@@ -367,8 +367,8 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* curr_data, 
     return;
   }
 
-  auto img_hei = context_->render_ctx_.GetImageHeight();
-  auto img_wid = context_->render_ctx_.GetImageWidth();
+  auto img_hei = context_->render_ctx_->GetImageHeight();
+  auto img_wid = context_->render_ctx_->GetImageWidth();
 
   if (!spectrum_data_.count(wavelength) || !spectrum_data_[wavelength]) {
     spectrum_data_[wavelength].reset(new float[img_hei * img_wid]{});
@@ -381,8 +381,8 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* curr_data, 
   threading_pool->AddRangeBasedJobs(num, [=](size_t start_idx, size_t end_idx) {
     size_t current_num = end_idx - start_idx;
     std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
-    pf(context_->cam_ctx_.GetCameraTargetDirection(), context_->cam_ctx_.GetFov(), current_num,
-       curr_data + start_idx * 4, img_wid, img_hei, tmp_xy.get(), context_->render_ctx_.GetVisibleRange());
+    pf(context_->cam_ctx_->GetCameraTargetDirection(), context_->cam_ctx_->GetFov(), current_num,
+       curr_data + start_idx * 4, img_wid, img_hei, tmp_xy.get(), context_->render_ctx_->GetVisibleRange());
 
     for (size_t j = 0; j < current_num; j++) {
       int x = tmp_xy[j * 2 + 0];
@@ -391,8 +391,8 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* curr_data, 
         continue;
       }
       if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
-        x += context_->render_ctx_.GetImageOffsetX();
-        y += context_->render_ctx_.GetImageOffsetY();
+        x += context_->render_ctx_->GetImageOffsetX();
+        y += context_->render_ctx_->GetImageOffsetY();
       }
       if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
         continue;
@@ -417,15 +417,15 @@ void SpectrumRenderer::ResetData() {
 
 
 void SpectrumRenderer::RenderToImage() {
-  auto img_hei = context_->render_ctx_.GetImageHeight();
-  auto img_wid = context_->render_ctx_.GetImageWidth();
+  auto img_hei = context_->render_ctx_->GetImageHeight();
+  auto img_wid = context_->render_ctx_->GetImageWidth();
   auto wl_num = spectrum_data_.size();
   std::unique_ptr<float[]> wl_data{ new float[wl_num] };
   std::unique_ptr<float[]> flat_spec_data{ new float[wl_num * img_wid * img_hei] };
 
   GatherSpectrumData(wl_data.get(), flat_spec_data.get());
-  auto ray_color = context_->render_ctx_.GetRayColor();
-  auto background_color = context_->render_ctx_.GetBackgroundColor();
+  auto ray_color = context_->render_ctx_->GetRayColor();
+  auto background_color = context_->render_ctx_->GetBackgroundColor();
   bool use_rgb = ray_color[0] < 0;
 
   if (use_rgb) {
@@ -493,9 +493,9 @@ int SpectrumRenderer::LoadDataFromFile(File& file) {
 
 
 void SpectrumRenderer::GatherSpectrumData(float* wl_data_out, float* sp_data_out) {
-  auto img_hei = context_->render_ctx_.GetImageHeight();
-  auto img_wid = context_->render_ctx_.GetImageWidth();
-  auto intensity_factor = static_cast<float>(context_->render_ctx_.GetIntensity());
+  auto img_hei = context_->render_ctx_->GetImageHeight();
+  auto img_wid = context_->render_ctx_->GetImageWidth();
+  auto intensity_factor = static_cast<float>(context_->render_ctx_->GetIntensity());
 
   int k = 0;
   for (const auto& kv : spectrum_data_) {

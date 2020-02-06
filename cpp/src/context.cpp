@@ -388,6 +388,89 @@ bool SunContext::SetSunDiameter(float d) {
 CameraContext::CameraContext() : target_dir_{ 0, 0, 0 }, fov_(0), lens_type_(LensType::kLinear) {}
 
 
+CameraContextPtrU CameraContext::CreateFromJson(rapidjson::Document& d) {
+  CameraContextPtrU cam_ctx{ new CameraContext };
+  cam_ctx->ResetCameraTargetDirection();
+  cam_ctx->SetFov(CameraContext::kMaxFovFisheye);
+  cam_ctx->SetLensType(LensType::kEqualArea);
+
+  float cam_az = CameraContext::kDefaultCamAzimuth;
+  float cam_el = CameraContext::kDefaultCamElevation;
+  float cam_ro = CameraContext::kDefaultCamRoll;
+
+  auto* p = Pointer("/camera/azimuth").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.azimuth>, using default %.1f!\n",
+                 CameraContext::kDefaultCamAzimuth);
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! config <camera.azimuth> is not a number, using default %.1f!\n",
+                 CameraContext::kDefaultCamAzimuth);
+  } else {
+    cam_az = static_cast<float>(p->GetDouble());
+    cam_az = std::max(std::min(cam_az, CameraContext::kMaxAngleRound), CameraContext::kMinAngleRound);
+    cam_az = 90.0f - cam_az;
+  }
+
+  p = Pointer("/camera/elevation").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.elevation>, using default %.1f!\n",
+                 CameraContext::kDefaultCamElevation);
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default %.1f!\n",
+                 CameraContext::kDefaultCamElevation);
+  } else {
+    cam_el = static_cast<float>(p->GetDouble());
+    cam_el = std::max(std::min(cam_el, CameraContext::kMaxAngleTilt), CameraContext::kMinAngleTilt);
+  }
+
+  p = Pointer("/camera/rotation").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.rotation>, using default %.1f!\n",
+                 CameraContext::kDefaultCamRoll);
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! config <camera.rotation> is not a number, using default %.1f!\n",
+                 CameraContext::kDefaultCamRoll);
+  } else {
+    cam_ro = static_cast<float>(p->GetDouble());
+    cam_ro = std::max(std::min(cam_ro, CameraContext::kMaxAngleHeading), CameraContext::kMinAngleHeading);
+  }
+
+  cam_ctx->SetCameraTargetDirection(cam_az, cam_el, cam_ro);
+
+  p = Pointer("/camera/lens").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.lens>, using default equal-area fisheye!\n");
+  } else if (!p->IsString()) {
+    std::fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equal-area fisheye!\n");
+  } else {
+    if (*p == "linear") {
+      cam_ctx->SetLensType(LensType::kLinear);
+    } else if (*p == "fisheye_equalarea" || *p == "fisheye") {
+      cam_ctx->SetLensType(LensType::kEqualArea);
+    } else if (*p == "fisheye_equidistant") {
+      cam_ctx->SetLensType(LensType::kEquidistant);
+    } else if (*p == "dual_fisheye_equidistant") {
+      cam_ctx->SetLensType(LensType::kDualEquidistant);
+    } else if (*p == "dual_fisheye_equalarea") {
+      cam_ctx->SetLensType(LensType::kDualEqualArea);
+    } else {
+      std::fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equal-area fisheye!\n");
+    }
+  }
+
+  p = Pointer("/camera/fov").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.fov>, using default %.1f!\n", cam_ctx->GetFov());
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default %.1f!\n", cam_ctx->GetFov());
+  } else {
+    cam_ctx->SetFov(static_cast<float>(p->GetDouble()));
+  }
+
+  return cam_ctx;
+}
+
+
 constexpr float CameraContext::kMinAngleRound;
 constexpr float CameraContext::kMaxAngleRound;
 constexpr float CameraContext::kMinAngleTilt;
@@ -471,6 +554,118 @@ void CameraContext::SetLensType(LensType type) {
 RenderContext::RenderContext()
     : ray_color_{ 1.0f, 1.0f, 1.0f }, background_color_{ 0.0f, 0.0f, 0.0f }, intensity_(1.0f), image_width_(0),
       image_height_(0), offset_x_(0), offset_y_(0), visible_range_(VisibleRange::kUpper) {}
+
+
+RenderContextPtrU RenderContext::CreateFromJson(rapidjson::Document& d) {
+  RenderContextPtrU render_ctx{ new RenderContext };
+  render_ctx->SetImageWidth(800);
+  auto p = Pointer("/render/width").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.width>, using default 800!\n");
+  } else if (!p->IsInt()) {
+    std::fprintf(stderr, "\nWARNING! config <camera.width> is not an integer, using default 800!\n");
+  } else {
+    render_ctx->SetImageWidth(p->GetInt());
+  }
+
+  render_ctx->SetImageHeight(800);
+  p = Pointer("/render/height").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.height>, using default 800!\n");
+  } else if (!p->IsInt()) {
+    std::fprintf(stderr, "\nWARNING! config <camera.height> is not an integer, using default 800!\n");
+  } else {
+    render_ctx->SetImageHeight(p->GetInt());
+  }
+
+  render_ctx->SetVisibleRange(VisibleRange::kUpper);
+  p = Pointer("/render/visible_semi_sphere").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <render.visible_semi_sphere>, using default kUpper!\n");
+  } else if (!p->IsString()) {
+    std::fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> is not a string, using default kUpper!\n");
+  } else if (*p == "upper") {
+    render_ctx->SetVisibleRange(VisibleRange::kUpper);
+  } else if (*p == "lower") {
+    render_ctx->SetVisibleRange(VisibleRange::kLower);
+  } else if (*p == "camera") {
+    render_ctx->SetVisibleRange(VisibleRange::kFront);
+  } else if (*p == "full") {
+    render_ctx->SetVisibleRange(VisibleRange::kFull);
+  } else {
+    std::fprintf(stderr,
+                 "\nWARNING! Config <render.visible_semi_sphere> cannot be recognized, using default kUpper!\n");
+  }
+
+  render_ctx->SetIntensity(1.0f);
+  p = Pointer("/render/intensity_factor").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <render.intensity_factor>, using default 1.0!\n");
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! Config <render.intensity_factor> is not a number, using default 1.0!\n");
+  } else {
+    auto f = static_cast<float>(p->GetDouble());
+    f = std::max(std::min(f, RenderContext::kMaxIntensity), RenderContext::kMinIntensity);
+    render_ctx->SetIntensity(f);
+  }
+
+  render_ctx->SetImageOffsetX(0);
+  render_ctx->SetImageOffsetY(0);
+  p = Pointer("/render/offset").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <render.offset>, using default [0, 0]!\n");
+  } else if (!p->IsArray()) {
+    std::fprintf(stderr, "\nWARNING! Config <render.offset> is not an array, using default [0, 0]!\n");
+  } else if (p->Size() != 2 || !(*p)[0].IsInt() || !(*p)[1].IsInt()) {
+    std::fprintf(stderr, "\nWARNING! Config <render.offset> cannot be recognized, using default [0, 0]!\n");
+  } else {
+    int offset_x = (*p)[0].GetInt();
+    int offset_y = (*p)[1].GetInt();
+    offset_x = std::max(std::min(offset_x, static_cast<int>(RenderContext::kMaxImageSize / 2)),
+                        -static_cast<int>(RenderContext::kMaxImageSize / 2));
+    offset_y = std::max(std::min(offset_y, static_cast<int>(RenderContext::kMaxImageSize / 2)),
+                        -static_cast<int>(RenderContext::kMaxImageSize / 2));
+    render_ctx->SetImageOffsetX(offset_x);
+    render_ctx->SetImageOffsetY(offset_y);
+  }
+
+  render_ctx->ResetBackgroundColor();
+  p = Pointer("/render/background_color").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default [0,0,0]!\n");
+  } else if (!p->IsArray()) {
+    std::fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array, using default [0,0,0]!\n");
+  } else if (p->Size() != 3 || !(*p)[0].IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default [0,0,0]!\n");
+  } else {
+    auto pa = p->GetArray();
+    float r = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
+    float g = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
+    float b = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
+    render_ctx->SetBackgroundColor(r, g, b);
+  }
+
+  render_ctx->ResetRayColor();
+  p = Pointer("/render/ray_color").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <render.ray_color>, using default real color!\n");
+  } else if (!p->IsArray() && !p->IsString()) {
+    std::fprintf(stderr, "\nWARNING! Config <render.ray_color> is not an array nor a string, ");
+    std::fprintf(stderr, "using default real color!\n");
+  } else if (p->IsArray() && (p->Size() != 3 || !(*p)[0].IsNumber())) {
+    std::fprintf(stderr, "\nWARNING! Config <render.ray_color> cannot be recognized, using default real color!\n");
+  } else if (p->IsString() && (*p) != "real") {
+    std::fprintf(stderr, "\nWARNING! Config <render.ray_color> cannot be recognized, using default real color!\n");
+  } else if (p->IsArray()) {
+    auto pa = p->GetArray();
+    float r = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
+    float g = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
+    float b = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
+    render_ctx->SetRayColor(r, g, b);
+  }
+
+  return render_ctx;
+}
 
 
 constexpr float RenderContext::kMinIntensity;
@@ -621,8 +816,8 @@ std::unique_ptr<ProjectContext> ProjectContext::CreateFromFile(const char* filen
 
   proj->ParseSunSettings(d);
   proj->ParseRaySettings(d);
-  proj->ParseCameraSettings(d);
-  proj->ParseRenderSettings(d);
+  proj->cam_ctx_ = CameraContext::CreateFromJson(d);
+  proj->render_ctx_ = RenderContext::CreateFromJson(d);
   proj->ParseDataSettings(filename, d);
   proj->ParseCrystalSettings(d);
   proj->ParseRayPathFilterSettings(d);
@@ -803,195 +998,6 @@ void ProjectContext::ParseRaySettings(rapidjson::Document& d) {
   wavelengths_.clear();
   for (decltype(tmp_wavelengths.size()) i = 0; i < tmp_wavelengths.size(); i++) {
     wavelengths_.emplace_back(WavelengthInfo{ static_cast<int>(tmp_wavelengths[i]), tmp_weights[i] });
-  }
-}
-
-
-void ProjectContext::ParseCameraSettings(rapidjson::Document& d) {
-  cam_ctx_.ResetCameraTargetDirection();
-  cam_ctx_.SetFov(CameraContext::kMaxFovFisheye);
-  cam_ctx_.SetLensType(LensType::kEqualArea);
-
-  float cam_az = CameraContext::kDefaultCamAzimuth;
-  float cam_el = CameraContext::kDefaultCamElevation;
-  float cam_ro = CameraContext::kDefaultCamRoll;
-
-  auto* p = Pointer("/camera/azimuth").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.azimuth>, using default %.1f!\n",
-                 CameraContext::kDefaultCamAzimuth);
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.azimuth> is not a number, using default %.1f!\n",
-                 CameraContext::kDefaultCamAzimuth);
-  } else {
-    cam_az = static_cast<float>(p->GetDouble());
-    cam_az = std::max(std::min(cam_az, CameraContext::kMaxAngleRound), CameraContext::kMinAngleRound);
-    cam_az = 90.0f - cam_az;
-  }
-
-  p = Pointer("/camera/elevation").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.elevation>, using default %.1f!\n",
-                 CameraContext::kDefaultCamElevation);
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default %.1f!\n",
-                 CameraContext::kDefaultCamElevation);
-  } else {
-    cam_el = static_cast<float>(p->GetDouble());
-    cam_el = std::max(std::min(cam_el, CameraContext::kMaxAngleTilt), CameraContext::kMinAngleTilt);
-  }
-
-  p = Pointer("/camera/rotation").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.rotation>, using default %.1f!\n",
-                 CameraContext::kDefaultCamRoll);
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.rotation> is not a number, using default %.1f!\n",
-                 CameraContext::kDefaultCamRoll);
-  } else {
-    cam_ro = static_cast<float>(p->GetDouble());
-    cam_ro = std::max(std::min(cam_ro, CameraContext::kMaxAngleHeading), CameraContext::kMinAngleHeading);
-  }
-
-  cam_ctx_.SetCameraTargetDirection(cam_az, cam_el, cam_ro);
-
-  p = Pointer("/camera/lens").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.lens>, using default equal-area fisheye!\n");
-  } else if (!p->IsString()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equal-area fisheye!\n");
-  } else {
-    if (*p == "linear") {
-      cam_ctx_.SetLensType(LensType::kLinear);
-    } else if (*p == "fisheye_equalarea" || *p == "fisheye") {
-      cam_ctx_.SetLensType(LensType::kEqualArea);
-    } else if (*p == "fisheye_equidistant") {
-      cam_ctx_.SetLensType(LensType::kEquidistant);
-    } else if (*p == "dual_fisheye_equidistant") {
-      cam_ctx_.SetLensType(LensType::kDualEquidistant);
-    } else if (*p == "dual_fisheye_equalarea") {
-      cam_ctx_.SetLensType(LensType::kDualEqualArea);
-    } else {
-      std::fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equal-area fisheye!\n");
-    }
-  }
-
-  p = Pointer("/camera/fov").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.fov>, using default %.1f!\n", cam_ctx_.GetFov());
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default %.1f!\n", cam_ctx_.GetFov());
-  } else {
-    cam_ctx_.SetFov(static_cast<float>(p->GetDouble()));
-  }
-}
-
-
-void ProjectContext::ParseRenderSettings(rapidjson::Document& d) {
-  render_ctx_.SetImageWidth(800);
-  auto p = Pointer("/render/width").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.width>, using default 800!\n");
-  } else if (!p->IsInt()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.width> is not an integer, using default 800!\n");
-  } else {
-    render_ctx_.SetImageWidth(p->GetInt());
-  }
-
-  render_ctx_.SetImageHeight(800);
-  p = Pointer("/render/height").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.height>, using default 800!\n");
-  } else if (!p->IsInt()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.height> is not an integer, using default 800!\n");
-  } else {
-    render_ctx_.SetImageHeight(p->GetInt());
-  }
-
-  render_ctx_.SetVisibleRange(VisibleRange::kUpper);
-  p = Pointer("/render/visible_semi_sphere").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <render.visible_semi_sphere>, using default kUpper!\n");
-  } else if (!p->IsString()) {
-    std::fprintf(stderr, "\nWARNING! Config <render.visible_semi_sphere> is not a string, using default kUpper!\n");
-  } else if (*p == "upper") {
-    render_ctx_.SetVisibleRange(VisibleRange::kUpper);
-  } else if (*p == "lower") {
-    render_ctx_.SetVisibleRange(VisibleRange::kLower);
-  } else if (*p == "camera") {
-    render_ctx_.SetVisibleRange(VisibleRange::kFront);
-  } else if (*p == "full") {
-    render_ctx_.SetVisibleRange(VisibleRange::kFull);
-  } else {
-    std::fprintf(stderr,
-                 "\nWARNING! Config <render.visible_semi_sphere> cannot be recognized, using default kUpper!\n");
-  }
-
-  render_ctx_.SetIntensity(1.0f);
-  p = Pointer("/render/intensity_factor").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <render.intensity_factor>, using default 1.0!\n");
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Config <render.intensity_factor> is not a number, using default 1.0!\n");
-  } else {
-    auto f = static_cast<float>(p->GetDouble());
-    f = std::max(std::min(f, RenderContext::kMaxIntensity), RenderContext::kMinIntensity);
-    render_ctx_.SetIntensity(f);
-  }
-
-  render_ctx_.SetImageOffsetX(0);
-  render_ctx_.SetImageOffsetY(0);
-  p = Pointer("/render/offset").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <render.offset>, using default [0, 0]!\n");
-  } else if (!p->IsArray()) {
-    std::fprintf(stderr, "\nWARNING! Config <render.offset> is not an array, using default [0, 0]!\n");
-  } else if (p->Size() != 2 || !(*p)[0].IsInt() || !(*p)[1].IsInt()) {
-    std::fprintf(stderr, "\nWARNING! Config <render.offset> cannot be recognized, using default [0, 0]!\n");
-  } else {
-    int offset_x = (*p)[0].GetInt();
-    int offset_y = (*p)[1].GetInt();
-    offset_x = std::max(std::min(offset_x, static_cast<int>(RenderContext::kMaxImageSize / 2)),
-                        -static_cast<int>(RenderContext::kMaxImageSize / 2));
-    offset_y = std::max(std::min(offset_y, static_cast<int>(RenderContext::kMaxImageSize / 2)),
-                        -static_cast<int>(RenderContext::kMaxImageSize / 2));
-    render_ctx_.SetImageOffsetX(offset_x);
-    render_ctx_.SetImageOffsetY(offset_y);
-  }
-
-  render_ctx_.ResetBackgroundColor();
-  p = Pointer("/render/background_color").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default [0,0,0]!\n");
-  } else if (!p->IsArray()) {
-    std::fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array, using default [0,0,0]!\n");
-  } else if (p->Size() != 3 || !(*p)[0].IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default [0,0,0]!\n");
-  } else {
-    auto pa = p->GetArray();
-    float r = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    float g = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    float b = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    render_ctx_.SetBackgroundColor(r, g, b);
-  }
-
-  render_ctx_.ResetRayColor();
-  p = Pointer("/render/ray_color").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <render.ray_color>, using default real color!\n");
-  } else if (!p->IsArray() && !p->IsString()) {
-    std::fprintf(stderr, "\nWARNING! Config <render.ray_color> is not an array nor a string, ");
-    std::fprintf(stderr, "using default real color!\n");
-  } else if (p->IsArray() && (p->Size() != 3 || !(*p)[0].IsNumber())) {
-    std::fprintf(stderr, "\nWARNING! Config <render.ray_color> cannot be recognized, using default real color!\n");
-  } else if (p->IsString() && (*p) != "real") {
-    std::fprintf(stderr, "\nWARNING! Config <render.ray_color> cannot be recognized, using default real color!\n");
-  } else if (p->IsArray()) {
-    auto pa = p->GetArray();
-    float r = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    float g = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    float b = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    render_ctx_.SetRayColor(r, g, b);
   }
 }
 

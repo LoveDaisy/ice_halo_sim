@@ -18,7 +18,8 @@ int main(int argc, char* argv[]) {
   renderer.LoadDataFiles();
   renderer.RenderToImage();
 
-  cv::Mat img(ctx->render_ctx_.GetImageHeight(), ctx->render_ctx_.GetImageWidth(), CV_8UC3, renderer.GetImageBuffer());
+  cv::Mat img(ctx->render_ctx_->GetImageHeight(), ctx->render_ctx_->GetImageWidth(), CV_8UC3,
+              renderer.GetImageBuffer());
   cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
   try {
     cv::imwrite(ctx->GetDefaultImagePath(), img);

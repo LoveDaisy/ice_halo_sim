@@ -47,7 +47,7 @@ int main(int argc, char* argv[]) {
 
     renderer.RenderToImage();
 
-    cv::Mat img(proj_ctx->render_ctx_.GetImageHeight(), proj_ctx->render_ctx_.GetImageWidth(), CV_8UC3,
+    cv::Mat img(proj_ctx->render_ctx_->GetImageHeight(), proj_ctx->render_ctx_->GetImageWidth(), CV_8UC3,
                 renderer.GetImageBuffer());
     cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
     try {
