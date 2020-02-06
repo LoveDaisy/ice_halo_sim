@@ -240,8 +240,8 @@ void Simulator::InitSunRays() {
   using math::RandomSampler;
 
   total_ray_num_ = context_->GetInitRayNum();
-  float sun_r = context_->sun_ctx_.GetSunDiameter() / 2;  // In degree
-  const float* sun_ray_dir = context_->sun_ctx_.GetSunPosition();
+  float sun_r = context_->sun_ctx_->GetSunDiameter() / 2;  // In degree
+  const float* sun_ray_dir = context_->sun_ctx_->GetSunPosition();
   if (entry_ray_data_.ray_num < total_ray_num_) {
     entry_ray_data_.Allocate(total_ray_num_);
   }

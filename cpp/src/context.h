@@ -21,21 +21,23 @@
 
 namespace icehalo {
 
-struct RaySegment;
 struct CrystalContext;
+class CameraContext;
 class ProjectContext;
 class RenderContext;
-class CameraContext;
+class SunContext;
 enum class LensType;
 enum class VisibleRange;
 
 using CrystalContextPtrU = std::unique_ptr<CrystalContext>;
+using CameraContextPtrU = std::unique_ptr<CameraContext>;
+using CameraContextPtr = std::shared_ptr<CameraContext>;
 using ProjectContextPtrU = std::unique_ptr<ProjectContext>;
 using ProjectContextPtr = std::shared_ptr<ProjectContext>;
 using RenderContextPtrU = std::unique_ptr<RenderContext>;
 using RenderContextPtr = std::shared_ptr<RenderContext>;
-using CameraContextPtrU = std::unique_ptr<CameraContext>;
-using CameraContextPtr = std::shared_ptr<CameraContext>;
+using SunContextPtrU = std::unique_ptr<SunContext>;
+using SunContextPtr = std::shared_ptr<SunContext>;
 
 
 enum Symmetry : uint8_t {
@@ -148,8 +150,6 @@ class MultiScatterContext {
 
 class SunContext {
  public:
-  explicit SunContext(float altitude, float diameter = 0.0f);
-
   const float* GetSunPosition() const;
 
   float GetSunAltitude() const;
@@ -158,10 +158,15 @@ class SunContext {
   float GetSunDiameter() const;
   bool SetSunDiameter(float d);
 
+  static SunContextPtrU CreateFromJson(rapidjson::Document& d);
+
   static constexpr float kMaxDiameter = 90.0f;
   static constexpr float kDefaultAltitude = 20.0f;
 
  private:
+  SunContext();
+  SunContext(float altitude, float diameter);
+
   float sun_diameter_;     // in degree
   float sun_altitude_;     // in degree
   float sun_position_[3];  // [x, y, z]
@@ -170,8 +175,6 @@ class SunContext {
 
 class CameraContext {
  public:
-  CameraContext();
-
   const float* GetCameraTargetDirection() const;
   void SetCameraTargetDirection(float azimuth, float altitude, float roll);
   void ResetCameraTargetDirection();
@@ -199,6 +202,8 @@ class CameraContext {
   static constexpr float kDefaultCamRoll = 0.0f;
 
  private:
+  CameraContext();
+
   float target_dir_[3];  // azimuth, altitude, roll
   float fov_;
   LensType lens_type_;
@@ -207,8 +212,6 @@ class CameraContext {
 
 class RenderContext {
  public:
-  RenderContext();
-
   const float* GetRayColor() const;
   void SetRayColor(float r, float g, float b);
   void ResetRayColor();
@@ -243,6 +246,8 @@ class RenderContext {
   static constexpr int kMaxImageSize = 4096;
 
  private:
+  RenderContext();
+
   float ray_color_[3];
   float background_color_[3];
   float intensity_;
@@ -289,7 +294,7 @@ class ProjectContext {
   static constexpr int kMaxRayHitNum = 12;
   static constexpr int kDefaultRayHitNum = 8;
 
-  SunContext sun_ctx_;
+  SunContextPtr sun_ctx_;
   CameraContextPtr cam_ctx_;
   RenderContextPtr render_ctx_;
   std::vector<WavelengthInfo> wavelengths_;  // (wavelength, weight)
@@ -298,7 +303,6 @@ class ProjectContext {
  private:
   ProjectContext();
 
-  void ParseSunSettings(rapidjson::Document& d);
   void ParseRaySettings(rapidjson::Document& d);
   void ParseDataSettings(const char* config_file_path, rapidjson::Document& d);
   void ParseCrystalSettings(rapidjson::Document& d);

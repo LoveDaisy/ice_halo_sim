@@ -342,10 +342,41 @@ void MultiScatterContext::NormalizeCrystalPopulation() {
 }
 
 
+SunContext::SunContext()
+    : sun_diameter_(0.0f),
+      sun_altitude_(kDefaultAltitude), sun_position_{ 0.0f, -std::cos(kDefaultAltitude * math::kDegreeToRad),
+                                                      -std::sin(kDefaultAltitude * math::kDegreeToRad) } {}
+
+
 SunContext::SunContext(float altitude, float diameter)
     : sun_diameter_(diameter), sun_altitude_(altitude), sun_position_{ 0.0f, -std::cos(altitude * math::kDegreeToRad),
                                                                        -std::sin(altitude * math::kDegreeToRad) } {}
 
+
+SunContextPtrU SunContext::CreateFromJson(rapidjson::Document& d) {
+  SunContextPtrU sun_ctx{ new SunContext };
+  float sun_altitude = 0.0f;
+  auto* p = Pointer("/sun/altitude").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <sun.altitude>, using default 0.0!\n");
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! config <sun.altitude> is not a number, using default 0.0!\n");
+  } else {
+    sun_altitude = static_cast<float>(p->GetDouble());
+  }
+  sun_ctx->SetSunAltitude(sun_altitude);
+
+  p = Pointer("/sun/diameter").Get(d);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <sun.diameter>, using default 0.5!\n");
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! Config <sun.diameter> is not a number, using default 0.5!\n");
+  } else {
+    sun_ctx->SetSunDiameter(static_cast<float>(p->GetDouble()));
+  }
+
+  return sun_ctx;
+}
 
 const float* SunContext::GetSunPosition() const {
   return sun_position_;
@@ -814,10 +845,10 @@ std::unique_ptr<ProjectContext> ProjectContext::CreateFromFile(const char* filen
   fclose(fp);
   std::unique_ptr<ProjectContext> proj = CreateDefault();
 
-  proj->ParseSunSettings(d);
-  proj->ParseRaySettings(d);
+  proj->sun_ctx_ = SunContext::CreateFromJson(d);
   proj->cam_ctx_ = CameraContext::CreateFromJson(d);
   proj->render_ctx_ = RenderContext::CreateFromJson(d);
+  proj->ParseRaySettings(d);
   proj->ParseDataSettings(filename, d);
   proj->ParseCrystalSettings(d);
   proj->ParseRayPathFilterSettings(d);
@@ -912,31 +943,8 @@ AbstractRayPathFilter* ProjectContext::GetRayPathFilter(int id) const {
 
 
 ProjectContext::ProjectContext()
-    : sun_ctx_(SunContext::kDefaultAltitude), cam_ctx_{}, render_ctx_{}, init_ray_num_(kDefaultInitRayNum),
-      ray_hit_num_(kDefaultRayHitNum), model_path_("") {}
-
-
-void ProjectContext::ParseSunSettings(rapidjson::Document& d) {
-  float sun_altitude = 0.0f;
-  auto* p = Pointer("/sun/altitude").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <sun.altitude>, using default 0.0!\n");
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! config <sun.altitude> is not a number, using default 0.0!\n");
-  } else {
-    sun_altitude = static_cast<float>(p->GetDouble());
-  }
-  sun_ctx_.SetSunAltitude(sun_altitude);
-
-  p = Pointer("/sun/diameter").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <sun.diameter>, using default 0.5!\n");
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Config <sun.diameter> is not a number, using default 0.5!\n");
-  } else {
-    sun_ctx_.SetSunDiameter(static_cast<float>(p->GetDouble()));
-  }
-}
+    : sun_ctx_{}, cam_ctx_{}, render_ctx_{}, init_ray_num_(kDefaultInitRayNum), ray_hit_num_(kDefaultRayHitNum),
+      model_path_("") {}
 
 
 void ProjectContext::ParseRaySettings(rapidjson::Document& d) {
