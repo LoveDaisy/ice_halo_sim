@@ -16,12 +16,12 @@ namespace icehalo {
 
 RaySegment::RaySegment()
     : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root_ctx(nullptr), pt(0, 0, 0), dir(0, 0, 0), w(0),
-      face_id(-1), is_finished(false) {}
+      face_id(-1), state(RaySegmentState::kOnGoing) {}
 
 
 RaySegment::RaySegment(const float* pt, const float* dir, float w, int face_id)
     : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root_ctx(nullptr), pt(pt), dir(dir), w(w),
-      face_id(face_id), is_finished(false) {}
+      face_id(face_id), state(RaySegmentState::kOnGoing) {}
 
 
 void Optics::HitSurface(const Crystal* crystal, float n, size_t num,                    // input

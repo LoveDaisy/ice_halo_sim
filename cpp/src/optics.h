@@ -14,6 +14,14 @@ namespace icehalo {
 
 struct RayInfo;
 
+enum class RaySegmentState : uint8_t {
+  kOnGoing = 0,
+  kFinished = 1,
+  kCrystalAbsorbed = 2,
+  kAirAbsorbed = 3,
+  kContinued = 4,
+};
+
 struct RaySegment {
   RaySegment();
   RaySegment(const float* pt, const float* dir, float w, int face_id);
@@ -28,7 +36,7 @@ struct RaySegment {
   float w;
   int face_id;
 
-  bool is_finished;
+  RaySegmentState state;
 };
 
 

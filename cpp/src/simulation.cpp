@@ -335,13 +335,17 @@ void Simulator::PrepareMultiScatterRays(float prob) {
   auto rng = math::RandomNumberGenerator::GetInstance();
   size_t idx = 0;
   for (const auto& r : simulation_ray_data_.GetExitRaySegments().back()) {
-    if (!r->is_finished || r->w < context_->kScatMinW) {
+    if (r->w < context_->kScatMinW) {
+      r->state = RaySegmentState::kAirAbsorbed;
+    }
+    if (r->state != RaySegmentState::kFinished) {
       continue;
     }
     if (rng->GetUniform() > prob) {
       simulation_ray_data_.AddFinalRaySegment(r);
       continue;
     }
+    r->state = RaySegmentState::kContinued;
     const auto axis_rot = r->root_ctx->main_axis_rot.val();
     math::RotateZBack(axis_rot, r->dir.val(), entry_ray_data_.ray_dir + idx * 3);
     entry_ray_data_.ray_seg[idx] = r;
@@ -405,7 +409,10 @@ void Simulator::StoreRaySegments(const Crystal* crystal, AbstractRayPathFilter* 
     auto r = ray_pool->GetObject(buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3, buffer_.w[1][i],
                                  buffer_.face_id[0][i / 2]);
     if (buffer_.face_id[1][i] < 0) {
-      r->is_finished = true;
+      r->state = RaySegmentState::kFinished;
+    }
+    if (r->w < ProjectContext::kPropMinW) {
+      r->state = RaySegmentState::kCrystalAbsorbed;
     }
 
     auto prev_ray_seg = buffer_.ray_seg[0][i / 2];
@@ -421,7 +428,7 @@ void Simulator::StoreRaySegments(const Crystal* crystal, AbstractRayPathFilter* 
     if (!filter->Filter(crystal, r)) {
       continue;
     }
-    if (r->is_finished || r->w < ProjectContext::kPropMinW) {
+    if (r->state == RaySegmentState::kFinished) {
       simulation_ray_data_.AddExitRaySegment(r);
     }
   }
