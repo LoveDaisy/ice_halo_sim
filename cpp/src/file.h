@@ -26,6 +26,7 @@ class File {
 
   bool Open(uint8_t mode = openmode::kRead);
   bool Close();
+  bool IsOpen() const;
 
   size_t GetBytes();
 

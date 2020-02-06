@@ -1,4 +1,4 @@
-#include "files.h"
+#include "file.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -84,6 +84,11 @@ bool File::Close() {
     file_opened_ = false;
   }
   return true;
+}
+
+
+bool File::IsOpen() const {
+  return file_opened_;
 }
 
 

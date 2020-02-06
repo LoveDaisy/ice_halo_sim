@@ -10,7 +10,7 @@ endif()
 set(SOURCE_FILE
     context.cpp
     crystal.cpp
-    files.cpp
+    file.cpp
     mymath.cpp
     obj_pool.cpp
     optics.cpp

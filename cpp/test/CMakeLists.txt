@@ -5,7 +5,7 @@ endif()
 set(SOURCE_FILE
   ${PROJ_SRC_DIR}/context.cpp
   ${PROJ_SRC_DIR}/crystal.cpp
-  ${PROJ_SRC_DIR}/files.cpp
+  ${PROJ_SRC_DIR}/file.cpp
   ${PROJ_SRC_DIR}/mymath.cpp
   ${PROJ_SRC_DIR}/obj_pool.cpp
   ${PROJ_SRC_DIR}/optics.cpp
