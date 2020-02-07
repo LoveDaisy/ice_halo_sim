@@ -6,10 +6,10 @@ namespace icehalo {
 
 template <typename T>
 ObjectPool<T>::~ObjectPool() {
-  for (auto seg : segments_) {
+  for (auto seg : objects_) {
     delete[] seg;
   }
-  segments_.clear();
+  objects_.clear();
 }
 
 
@@ -30,7 +30,7 @@ ObjectPool<T>* ObjectPool<T>::GetInstance() {
 template <typename T>
 ObjectPool<T>::ObjectPool() : current_chunk_id_(0), next_unused_id_(0) {
   auto* pool = new T[kChunkSize];
-  segments_.emplace_back(pool);
+  objects_.emplace_back(pool);
 }
 
 
@@ -41,10 +41,10 @@ uint32_t ObjectPool<T>::RefreshChunkIndex() {
     const std::lock_guard<std::mutex> lock(id_mutex_);
     id = next_unused_id_;
     if (id > kChunkSize) {
-      auto seg_size = segments_.size();
+      auto seg_size = objects_.size();
       if (current_chunk_id_ + 1 >= seg_size) {
         auto* curr_pool = new T[kChunkSize];
-        segments_.emplace_back(curr_pool);
+        objects_.emplace_back(curr_pool);
         current_chunk_id_ = seg_size;
       } else {
         current_chunk_id_++;

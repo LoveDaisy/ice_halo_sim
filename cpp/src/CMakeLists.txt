@@ -1,3 +1,5 @@
+# ==================================================================================================
+# Add some definitions
 if(MULTI_THREAD)
   add_compile_definitions(MULTI_THREAD)
 endif()
@@ -6,7 +8,18 @@ if(RANDOM_SEED)
   add_compile_definitions(RANDOM_SEED)
 endif()
 
+if(${OS_NAME} STREQUAL "Linux")
+  add_compile_definitions(OS_LINUX) 
+elseif(${OS_NAME} STREQUAL "Darwin")
+  add_compile_definitions(OS_MAC)
+elseif(${OS_NAME} STREQUAL "Windows")
+  add_compile_definitions(OS_WIN)
+endif()
 
+
+
+# ==================================================================================================
+# Add targets
 set(SOURCE_FILE
     context.cpp
     crystal.cpp
@@ -15,6 +28,7 @@ set(SOURCE_FILE
     obj_pool.cpp
     optics.cpp
     render.cpp
+    serialize.cpp
     simulation.cpp
     threadingpool.cpp)
 

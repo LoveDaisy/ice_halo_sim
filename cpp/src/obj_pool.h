@@ -20,7 +20,7 @@ class ObjectPool {
   template <class... Arg>
   T* GetObject(Arg&&... args) {
     auto id = RefreshChunkIndex();
-    T* obj = segments_[current_chunk_id_] + id;
+    T* obj = objects_[current_chunk_id_] + id;
     return new (obj) T(std::forward<Arg>(args)...);
   }
 
@@ -35,7 +35,7 @@ class ObjectPool {
 
   static constexpr uint32_t kChunkSize = 1024 * 1024;
 
-  std::vector<T*> segments_;
+  std::vector<T*> objects_;
   size_t current_chunk_id_;
   std::atomic<uint32_t> next_unused_id_;
   std::mutex id_mutex_;

@@ -6,7 +6,9 @@ project(IceHalo
 set(CMAKE_VERBOSE_MAKEFILE ON)
 option(DEBUG "Default OFF" OFF)
 
-if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+# ==================================================================================================
+# Compiler related
+if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
   # using regular Clang or AppleClang
   set(CXX_LINKER_FLAG_STRIP "-dead_strip")
 elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
@@ -22,6 +24,12 @@ else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -msse4 -D__STDC_FORMAT_MACROS")
 endif()
 
+# ==================================================================================================
+# OS related
+set(OS_NAME "${CMAKE_HOST_SYSTEM_NAME}")
+
+# ==================================================================================================
+# Basic
 set(CMAKE_CXX_STANDARD 11)            # C++11...
 set(CMAKE_CXX_STANDARD_REQUIRED ON)   #...is required...
 set(CMAKE_CXX_EXTENSIONS OFF)         #...without compiler extensions like gnu++11
@@ -92,7 +100,7 @@ set(Boost_USE_STATIC_RUNTIME OFF)
 
 find_package(Threads REQUIRED)  # GoogleTest needs it
 find_package(OpenCV REQUIRED core imgproc imgcodecs)
-find_package(Boost 1.54.0 COMPONENTS filesystem system REQUIRED)
+find_package(Boost 1.63.0 COMPONENTS filesystem system REQUIRED)
 
 # ==================================================================================================
 # Add subdirectory
