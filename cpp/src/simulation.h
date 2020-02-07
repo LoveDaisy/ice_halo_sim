@@ -16,15 +16,15 @@ class SimulationRayData {
   void Clear();
   void PrepareNewScatter(size_t ray_num);
   void AddRay(RayInfo* ray);
-  void AddFinalRaySegment(RaySegment* r);
-  void AddExitRaySegmentsToFinal();
-  void AddExitRaySegment(RaySegment* r);
 
-  size_t GetFinalRaySegmentNumber() const;
+  void CollectFinalRaySegments();
   const std::vector<RaySegment*>& GetFinalRaySegments() const;
 
-  size_t GetLastExitRaySegmentNumber() const;
+  void AddExitRaySegment(RaySegment* r);
+  const std::vector<RaySegment*>& GetLastExitRaySegments() const;
+#ifdef FOR_TEST
   const std::vector<std::vector<RaySegment*>>& GetExitRaySegments() const;
+#endif
 
  private:
   std::vector<std::vector<RayInfo*>> rays_;
