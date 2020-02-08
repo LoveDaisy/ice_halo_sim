@@ -25,6 +25,9 @@ T* ObjectPool<T>::GetSerializedPointer(uint32_t chunk_id, uint32_t obj_id) {
   if (deserialized_chunk_size_ == 0) {
     return nullptr;
   }
+  if (chunk_id == kInvalidIndex || obj_id == kInvalidIndex) {
+    return nullptr;
+  }
 
   size_t id = chunk_id * deserialized_chunk_size_ + obj_id;
   uint32_t this_chunk_id = id / kChunkSize;

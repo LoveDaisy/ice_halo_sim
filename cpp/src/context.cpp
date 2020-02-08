@@ -917,7 +917,7 @@ const Crystal* ProjectContext::GetCrystal(int id) const {
 }
 
 
-int ProjectContext::GetCrystalId(const Crystal* crystal) const {
+int32_t ProjectContext::GetCrystalId(const Crystal* crystal) const {
   for (const auto& kv : crystal_store_) {
     if (kv.second->crystal.get() == crystal) {
       return kv.first;

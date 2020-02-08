@@ -157,11 +157,72 @@ void Optics::HitSurface(const Crystal* crystal, float n, size_t num,            
 }
 
 
-RayInfo::RayInfo() : first_ray_segment(nullptr), prev_ray_segment(nullptr), crystal(nullptr), main_axis{ 0, 0, 0 } {}
+RayInfo::RayInfo() : first_ray_segment(nullptr), prev_ray_segment(nullptr), crystal_id(-1), main_axis{ 0, 0, 0 } {}
 
 
-RayInfo::RayInfo(RaySegment* seg, const Crystal* crystal, const float* main_axis)
-    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal(crystal), main_axis(main_axis) {}
+RayInfo::RayInfo(RaySegment* seg, int crystal_id, const float* main_axis)
+    : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_id(crystal_id), main_axis(main_axis) {}
+
+
+void RayInfo::Serialize(File& file, bool with_boi) {
+  if (with_boi) {
+    file.Write(ISerializable::kDefaultBoi);
+  }
+
+  uint32_t chunk_id, obj_id;
+  std::tie(chunk_id, obj_id) = RaySegmentPool::GetInstance()->GetObjectSerializeIndex(first_ray_segment);
+  file.Write(chunk_id);
+  file.Write(obj_id);
+
+  std::tie(chunk_id, obj_id) = RaySegmentPool::GetInstance()->GetObjectSerializeIndex(prev_ray_segment);
+  file.Write(chunk_id);
+  file.Write(obj_id);
+
+  file.Write(crystal_id);
+
+  file.Write(main_axis.val(), 3);
+}
+
+
+void RayInfo::Deserialize(File& file, endian::Endianness endianness) {
+  bool need_swap = false;
+  if (endianness == endian::kUnknownEndian) {
+    uint32_t test_boi;
+    file.Read(&test_boi);
+    if (test_boi != ISerializable::kDefaultBoi) {
+      need_swap = true;
+    }
+  }
+
+  uint32_t chunk_id, obj_id;
+  file.Read(&chunk_id);
+  file.Read(&obj_id);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&chunk_id);
+    endian::ByteSwap::Swap(&obj_id);
+  }
+  first_ray_segment = reinterpret_cast<RaySegment*>(CombineU32AsPointer(chunk_id, obj_id));
+
+  file.Read(&chunk_id);
+  file.Read(&obj_id);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&chunk_id);
+    endian::ByteSwap::Swap(&obj_id);
+  }
+  prev_ray_segment = reinterpret_cast<RaySegment*>(CombineU32AsPointer(chunk_id, obj_id));
+
+  file.Read(&crystal_id);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&crystal_id);
+  }
+
+  float vec3f_buf[3];
+  file.Read(vec3f_buf, 3);
+  if (need_swap) {
+    endian::ByteSwap::Swap(vec3f_buf, 3);
+  }
+  main_axis.val(vec3f_buf);
+}
 
 
 void Optics::Propagate(const Crystal* crystal, size_t num,                                                 // input

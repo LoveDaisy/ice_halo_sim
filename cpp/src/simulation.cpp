@@ -291,7 +291,7 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
 
     auto r = ray_pool->GetObject(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i], buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
-    r->root_ctx = ray_info_pool->GetObject(r, ctx->crystal.get(), axis_rot);
+    r->root_ctx = ray_info_pool->GetObject(r, context_->GetCrystalId(crystal.get()), axis_rot);
     r->root_ctx->prev_ray_segment = prev_r;
     simulation_ray_data_.AddRay(r->root_ctx);
   }

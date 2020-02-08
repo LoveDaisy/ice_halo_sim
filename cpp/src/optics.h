@@ -80,13 +80,45 @@ struct RaySegment : public ISerializable {
 };
 
 
-struct RayInfo {
+struct RayInfo : public ISerializable {
   RayInfo();
-  RayInfo(RaySegment* seg, const Crystal* crystal, const float* main_axis);
+  RayInfo(RaySegment* seg, int crystal_id, const float* main_axis);
+
+  /**
+   * @brief Serialize self to a file.
+   *
+   * There are 2 pointers in this struct, of type RaySegment. RaySegment is a pooled object type. Thus
+   * we store two uint32_t data (chunk ID, object ID) to hold the pointer.
+   *
+   * The file layout will be:
+   * uint32 * 2,            // first_ray_segment
+   * uint32 * 2,            // prev_ray_segment
+   * int32,                 // crystal ID
+   * float * 3,             // main_axis
+   *
+   * @param file
+   * @param with_boi
+   */
+  void Serialize(File& file, bool with_boi) override;
+
+  /**
+   * @brief Deserialize (load data) from a file.
+   *
+   * Since there are 2 pointer members in this struct, and they cannot be serialized plainly, we store
+   * 2 uint32 data (see RaySegment::Serialize(File&, bool) ) instead. The caller should further call
+   * ObjectPool<T>::GetSerializedPointer(uint32_t, uint32_t) to get real ray segment pointer.
+   *
+   * @warning ObjectPool<T>::GetSerializedPointer(uint32_t, uint32_t) must be called **AFTER** the entire
+   * object pool finishing its deserialization.
+   *
+   * @param file
+   * @param endianness
+   */
+  void Deserialize(File& file, endian::Endianness endianness) override;
 
   RaySegment* first_ray_segment;
   RaySegment* prev_ray_segment;
-  const Crystal* crystal;
+  int32_t crystal_id;
   math::Vec3f main_axis;
 };
 

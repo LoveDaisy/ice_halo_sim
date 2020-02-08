@@ -31,6 +31,10 @@ constexpr Endianness kUnknownEndian = 0;
 constexpr Endianness kLittleEndian = 1;
 constexpr Endianness kBigEndian = 2;
 
+/**
+ * Determine endianness on compile time.
+ * See [this page](https://stackoverflow.com/questions/4239993/determining-endianness-at-compile-time)
+ */
 #if defined(__BYTE_ORDER) && __BYTE_ORDER == __BIG_ENDIAN || defined(__BIG_ENDIAN__) || defined(__ARMEB__) || \
     defined(__THUMBEB__) || defined(__AARCH64EB__) || defined(_MIBSEB) || defined(__MIBSEB) || defined(__MIBSEB__)
 constexpr Endianness kCompileEndian = kBigEndian;
