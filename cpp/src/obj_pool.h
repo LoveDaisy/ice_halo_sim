@@ -9,6 +9,9 @@
 
 namespace icehalo {
 
+constexpr uint32_t kInvalidIndex = 0xffffffff;
+
+
 template <typename T>
 class ObjectPool {
  public:
@@ -32,8 +35,6 @@ class ObjectPool {
   void Map(std::function<void(T&)>);
 
   static ObjectPool<T>* GetInstance();
-
-  static constexpr uint32_t kInvalidIndex = 0xffffffff;
 
  private:
   ObjectPool();

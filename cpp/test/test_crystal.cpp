@@ -9,7 +9,8 @@ namespace {
 
 class CrystalTest : public ::testing::Test {
  protected:
-  void checkVertex(const std::vector<icehalo::math::Vec3f>& vtx1, const std::vector<icehalo::math::Vec3f>& vtx2) {
+  static void CheckVertex(const std::vector<icehalo::math::Vec3f>& vtx1,
+                          const std::vector<icehalo::math::Vec3f>& vtx2) {
     ASSERT_EQ(vtx1.size(), vtx2.size());
     for (decltype(vtx1.size()) i = 0; i < vtx1.size(); i++) {
       const auto& p0 = vtx1[i];
@@ -19,14 +20,14 @@ class CrystalTest : public ::testing::Test {
     }
   }
 
-  void checkFaceId(const std::vector<int>& ids1, const std::vector<int>& ids2) {
+  static void CheckFaceId(const std::vector<int>& ids1, const std::vector<int>& ids2) {
     ASSERT_EQ(ids1.size(), ids2.size());
     for (decltype(ids1.size()) i = 0; i < ids1.size(); i++) {
       EXPECT_EQ(ids1[i], ids2[i]);
     }
   }
 
-  void checkCrystal(const icehalo::CrystalPtrU& c1, const icehalo::CrystalPtrU& c2) {
+  static void CheckCrystal(const icehalo::CrystalPtrU& c1, const icehalo::CrystalPtrU& c2) {
     auto n1 = c1->GetFaceNorm();
     auto n2 = c2->GetFaceNorm();
     auto fn1 = c1->GetFaceNumberMap();
@@ -137,8 +138,8 @@ TEST_F(CrystalTest, HexPrismVertex) {
 
   auto c = icehalo::Crystal::CreateHexPrism(h);
   EXPECT_EQ(c->GetVertexes().size(), 12ul);
-  checkVertex(pts0, c->GetVertexes());
-  checkFaceId(face_number_map0, c->GetFaceNumberMap());
+  CheckVertex(pts0, c->GetVertexes());
+  CheckFaceId(face_number_map0, c->GetFaceNumberMap());
 }
 
 
@@ -193,18 +194,18 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
 
   auto c = icehalo::Crystal::CreateHexPyramid(h1, h2, h3);
   EXPECT_EQ(c->GetVertexes().size(), 24ul);
-  checkVertex(pts0, c->GetVertexes());
-  checkFaceId(face_number_map0, c->GetFaceNumberMap());
+  CheckVertex(pts0, c->GetVertexes());
+  CheckFaceId(face_number_map0, c->GetFaceNumberMap());
 
   c = icehalo::Crystal::CreateHexPyramid(1, 1, h1, h2, h3);
   EXPECT_EQ(c->GetVertexes().size(), 24ul);
-  checkVertex(pts0, c->GetVertexes());
-  checkFaceId(face_number_map0, c->GetFaceNumberMap());
+  CheckVertex(pts0, c->GetVertexes());
+  CheckFaceId(face_number_map0, c->GetFaceNumberMap());
 
   c = icehalo::Crystal::CreateHexPyramid(1, 1, 1, 1, h1, h2, h3);
   EXPECT_EQ(c->GetVertexes().size(), 24ul);
-  checkVertex(pts0, c->GetVertexes());
-  checkFaceId(face_number_map0, c->GetFaceNumberMap());
+  CheckVertex(pts0, c->GetVertexes());
+  CheckFaceId(face_number_map0, c->GetFaceNumberMap());
 }
 
 
@@ -221,7 +222,7 @@ TEST_F(CrystalTest, IrregularHexPyramid) {
   auto c2 = icehalo::Crystal::CreateIrregularHexPyramid(dist, idx, hs);
   EXPECT_EQ(c1->TotalFaces(), c2->TotalFaces());
   EXPECT_EQ(c1->TotalVertexes(), c2->TotalVertexes());
-  checkCrystal(c1, c2);
+  CheckCrystal(c1, c2);
 }
 
 
@@ -236,7 +237,7 @@ TEST_F(CrystalTest, IrregularHexPrismVertex0) {
 
   EXPECT_EQ(c1->TotalFaces(), c2->TotalFaces());
   EXPECT_EQ(c1->TotalVertexes(), c2->TotalVertexes());
-  checkCrystal(c1, c2);
+  CheckCrystal(c1, c2);
 }
 
 
@@ -283,7 +284,7 @@ TEST_F(CrystalTest, IrregularHexPrismVertex1) {
   auto c2 = icehalo::Crystal::CreateIrregularHexPrism(dist, h);
   EXPECT_EQ(c1->TotalVertexes(), c2->TotalVertexes());
   EXPECT_EQ(c1->TotalFaces(), c2->TotalFaces());
-  checkCrystal(c1, c2);
+  CheckCrystal(c1, c2);
 }
 
 }  // namespace
