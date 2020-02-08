@@ -21,7 +21,11 @@ void ObjectPool<T>::Clear() {
 
 
 template <typename T>
-T* ObjectPool<T>::GetSerializedPointer(uint32_t chunk_id, uint32_t obj_id) {
+T* ObjectPool<T>::GetPointerFromSerializeData(T* dummy_ptr) {
+  auto* id_ptr = reinterpret_cast<uint32_t*>(dummy_ptr);
+  uint32_t chunk_id = id_ptr[0];
+  uint32_t obj_id = id_ptr[1];
+
   if (deserialized_chunk_size_ == 0) {
     return nullptr;
   }

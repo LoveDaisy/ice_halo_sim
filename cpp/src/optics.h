@@ -56,9 +56,9 @@ struct RaySegment : public ISerializable {
    *
    * Since there are 4 pointer members in this struct, and they cannot be serialized plainly, we store
    * 2 uint32 data instead (see RaySegment::Serialize(File&, bool) ). The caller should further call
-   * ObjectPool<T>::GetSerializedPointer(uint32_t, uint32_t) to get real pointer.
+   * ObjectPool<T>::GetPointerFromSerializeData(T*) to get real pointer.
    *
-   * @warning ObjectPool<T>::GetSerializedPointer(uint32_t, uint32_t) must be called **AFTER** the entire
+   * @warning ObjectPool<T>::GetPointerFromSerializeData(T*) must be called **AFTER** the entire
    * object pool finishing its deserialization.
    *
    * @param file
@@ -106,9 +106,9 @@ struct RayInfo : public ISerializable {
    *
    * Since there are 2 pointer members in this struct, and they cannot be serialized plainly, we store
    * 2 uint32 data (see RaySegment::Serialize(File&, bool) ) instead. The caller should further call
-   * ObjectPool<T>::GetSerializedPointer(uint32_t, uint32_t) to get real ray segment pointer.
+   * ObjectPool<T>::GetPointerFromSerializeData(T*) to get real ray segment pointer.
    *
-   * @warning ObjectPool<T>::GetSerializedPointer(uint32_t, uint32_t) must be called **AFTER** the entire
+   * @warning ObjectPool<T>::GetPointerFromSerializeData(T*) must be called **AFTER** the entire
    * object pool finishing its deserialization.
    *
    * @param file
