@@ -445,10 +445,6 @@ void SpectrumRenderer::RenderToImage() {
       output_image_buffer_[i * 3 + c] = static_cast<uint8_t>(v);
     }
   }
-
-  /* Draw horizontal */
-  // float imgR = std::min(img_wid_ / 2, img_hei_) / 2.0f;
-  // TODO
 }
 
 
