@@ -316,7 +316,7 @@ void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData&
     auto* p = curr_data.get();
     for (size_t j = start_idx; j < end_idx; j++) {
       const auto& r = ray_seg_set[j];
-      auto axis_rot = r->root_ctx->main_axis_rot.val();
+      auto axis_rot = r->root_ctx->main_axis.val();
       icehalo::math::RotateZBack(axis_rot, r->dir.val(), p);
       p[3] = r->w;
       p += 4;

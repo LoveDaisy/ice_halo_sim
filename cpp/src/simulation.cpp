@@ -341,7 +341,7 @@ void Simulator::PrepareMultiScatterRays(float prob) {
       continue;
     }
     r->state = RaySegmentState::kContinued;
-    const auto axis_rot = r->root_ctx->main_axis_rot.val();
+    const auto axis_rot = r->root_ctx->main_axis.val();
     math::RotateZBack(axis_rot, r->dir.val(), entry_ray_data_.ray_dir + idx * 3);
     entry_ray_data_.ray_seg[idx] = r;
     idx++;
@@ -470,7 +470,7 @@ void Simulator::SaveFinalDirections(const char* filename) {
 
   float* curr_data = data.get();
   for (const auto& r : ray_seg_set) {
-    const auto axis_rot = r->root_ctx->main_axis_rot.val();
+    const auto axis_rot = r->root_ctx->main_axis.val();
     assert(r->root_ctx);
 
     math::RotateZBack(axis_rot, r->dir.val(), curr_data);

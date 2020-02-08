@@ -42,12 +42,12 @@ struct RaySegment {
 
 struct RayInfo {
   RayInfo();
-  RayInfo(RaySegment* seg, const Crystal* crystal, const float* main_axis_rot);
+  RayInfo(RaySegment* seg, const Crystal* crystal, const float* main_axis);
 
   RaySegment* first_ray_segment;
   RaySegment* prev_ray_segment;
   const Crystal* crystal;
-  math::Vec3f main_axis_rot;
+  math::Vec3f main_axis;
 };
 
 
