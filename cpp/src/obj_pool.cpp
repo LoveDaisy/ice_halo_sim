@@ -23,9 +23,9 @@ void ObjectPool<T>::Clear() {
 
 template <typename T>
 T* ObjectPool<T>::GetPointerFromSerializeData(T* dummy_ptr) {
-  auto* id_ptr = reinterpret_cast<uint32_t*>(dummy_ptr);
-  uint32_t chunk_id = id_ptr[0];
-  uint32_t obj_id = id_ptr[1];
+  auto combined_id = reinterpret_cast<uintptr_t>(dummy_ptr);
+  uint32_t chunk_id = (combined_id & 0xffffffff00000000) >> 32;
+  uint32_t obj_id = (combined_id & 0x00000000ffffffff);
 
   if (deserialized_chunk_size_ == 0) {
     return nullptr;
@@ -129,7 +129,7 @@ void ObjectPool<T>::Serialize(File& file, bool with_boi) {
   file.Write(kChunkSize);
 
   for (const auto& chunk : objects_) {
-    size_t num = (chunk == objects_.back() ? kChunkSize : next_unused_id_.load());
+    size_t num = (chunk == objects_.back() ? next_unused_id_.load() : kChunkSize);
     for (size_t i = 0; i < num; i++) {
       chunk[i].Serialize(file, false);
     }
@@ -167,10 +167,7 @@ void ObjectPool<T>::Deserialize(File& file, endian::Endianness endianness) {
       objects_.emplace_back(new T[kChunkSize]);
     }
     auto* chunk = objects_[current_chunk_id_];
-    for (next_unused_id_ = 0; next_unused_id_ < kChunkSize; next_unused_id_++) {
-      if (current_chunk_id_ * kChunkSize + next_unused_id_ >= total_num) {
-        break;
-      }
+    for (next_unused_id_ = 0; current_chunk_id_ * kChunkSize + next_unused_id_ < total_num; next_unused_id_++) {
       chunk[next_unused_id_].Deserialize(file, endianness);
     }
   }
