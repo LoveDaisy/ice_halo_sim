@@ -10,6 +10,7 @@
 
 #include "context.h"
 #include "mymath.h"
+#include "obj_pool.h"
 
 
 namespace icehalo {
@@ -22,6 +23,108 @@ RaySegment::RaySegment()
 RaySegment::RaySegment(const float* pt, const float* dir, float w, int face_id)
     : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root_ctx(nullptr), pt(pt), dir(dir), w(w),
       face_id(face_id), state(RaySegmentState::kOnGoing) {}
+
+
+void RaySegment::Serialize(File& file, bool with_boi) {
+  if (with_boi) {
+    file.Write(ISerializable::kDefaultBoi);
+  }
+
+  uint32_t chunk_id, obj_id;
+  std::tie(chunk_id, obj_id) = RaySegmentPool::GetInstance()->GetObjectSerializeIndex(next_reflect);
+  file.Write(chunk_id);
+  file.Write(obj_id);
+  std::tie(chunk_id, obj_id) = RaySegmentPool::GetInstance()->GetObjectSerializeIndex(next_refract);
+  file.Write(chunk_id);
+  file.Write(obj_id);
+  std::tie(chunk_id, obj_id) = RaySegmentPool::GetInstance()->GetObjectSerializeIndex(prev);
+  file.Write(chunk_id);
+  file.Write(obj_id);
+  std::tie(chunk_id, obj_id) = RayInfoPool::GetInstance()->GetObjectSerializeIndex(root_ctx);
+  file.Write(chunk_id);
+  file.Write(obj_id);
+
+  file.Write(pt.val(), 3);
+  file.Write(dir.val(), 3);
+  file.Write(w);
+  file.Write(static_cast<int16_t>(face_id));
+
+  file.Write(static_cast<uint8_t>(state));
+}
+
+
+void RaySegment::Deserialize(File& file, endian::Endianness endianness) {
+  bool need_swap = false;
+  if (endianness == endian::kUnknownEndian) {
+    uint32_t test_boi;
+    file.Read(&test_boi);
+    if (test_boi != ISerializable::kDefaultBoi) {
+      need_swap = true;
+    }
+  }
+
+  uint32_t chunk_id, obj_id;
+  file.Read(&chunk_id);
+  file.Read(&obj_id);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&chunk_id);
+    endian::ByteSwap::Swap(&obj_id);
+  }
+  next_reflect = reinterpret_cast<RaySegment*>(CombineU32AsPointer(chunk_id, obj_id));
+
+  file.Read(&chunk_id);
+  file.Read(&obj_id);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&chunk_id);
+    endian::ByteSwap::Swap(&obj_id);
+  }
+  next_refract = reinterpret_cast<RaySegment*>(CombineU32AsPointer(chunk_id, obj_id));
+
+  file.Read(&chunk_id);
+  file.Read(&obj_id);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&chunk_id);
+    endian::ByteSwap::Swap(&obj_id);
+  }
+  prev = reinterpret_cast<RaySegment*>(CombineU32AsPointer(chunk_id, obj_id));
+
+  file.Read(&chunk_id);
+  file.Read(&obj_id);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&chunk_id);
+    endian::ByteSwap::Swap(&obj_id);
+  }
+  root_ctx = reinterpret_cast<RayInfo*>(CombineU32AsPointer(chunk_id, obj_id));
+
+  float vec3f_buf[3];
+  file.Read(vec3f_buf, 3);
+  if (need_swap) {
+    endian::ByteSwap::Swap(vec3f_buf, 3);
+  }
+  pt.val(vec3f_buf);
+
+  file.Read(vec3f_buf, 3);
+  if (need_swap) {
+    endian::ByteSwap::Swap(vec3f_buf, 3);
+  }
+  dir.val(vec3f_buf);
+
+  file.Read(&w);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&w);
+  }
+
+  int16_t face_id_data;
+  file.Read(&face_id_data);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&face_id_data);
+  }
+  face_id = face_id_data;
+
+  uint8_t state_data;
+  file.Read(&state_data);
+  state = static_cast<RaySegmentState>(state_data);
+}
 
 
 void Optics::HitSurface(const Crystal* crystal, float n, size_t num,                    // input

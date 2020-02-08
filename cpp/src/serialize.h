@@ -30,6 +30,11 @@ struct ISerializable {
   static constexpr uint32_t kDefaultBoi = 0x34CD28AF;
 };
 
+
+constexpr uintptr_t CombineU32AsPointer(uint32_t high, uint32_t low) {
+  return static_cast<uintptr_t>(high) << 32 | static_cast<uintptr_t>(low);
+}
+
 }  // namespace icehalo
 
 #endif  // SRC_SERIALIZE_H_

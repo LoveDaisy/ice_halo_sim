@@ -53,16 +53,16 @@ inline Endianness CheckRuntimeEndianness() noexcept {
 
 
 template <size_t = 0>
-struct ByteSwap {};
+struct ByteSwapImp {};
 
 template <>
-struct ByteSwap<1> {
+struct ByteSwapImp<1> {
   template <typename T>
   void operator()(T*) noexcept {}
 };
 
 template <>
-struct ByteSwap<2> {
+struct ByteSwapImp<2> {
   template <typename T>
   void operator()(T* x) noexcept {
     *x = ntohs(*x);
@@ -70,7 +70,7 @@ struct ByteSwap<2> {
 };
 
 template <>
-struct ByteSwap<4> {
+struct ByteSwapImp<4> {
   template <typename T>
   void operator()(T* x) noexcept {
     *x = ntohl(*x);
@@ -78,7 +78,7 @@ struct ByteSwap<4> {
 };
 
 template <>
-struct ByteSwap<8> {
+struct ByteSwapImp<8> {
   template <typename T>
   void operator()(T* x) noexcept {
     auto* p0 = reinterpret_cast<uint32_t*>(x);
@@ -86,6 +86,22 @@ struct ByteSwap<8> {
     auto tmp = ntohl(*p0);
     *p0 = ntohl(*p1);
     *p1 = tmp;
+  }
+};
+
+struct ByteSwap {
+  template <typename T>
+  static void Swap(T* x) noexcept {
+    static ByteSwapImp<sizeof(T)> imp;
+    imp(x);
+  }
+
+  template <typename T>
+  static void Swap(T* x, size_t num) noexcept {
+    static ByteSwapImp<sizeof(T)> imp;
+    for (size_t i = 0; i < num; i++) {
+      imp(x + i);
+    }
   }
 };
 

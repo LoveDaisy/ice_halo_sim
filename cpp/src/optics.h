@@ -8,6 +8,7 @@
 
 #include "crystal.h"
 #include "mymath.h"
+#include "serialize.h"
 
 
 namespace icehalo {
@@ -22,9 +23,48 @@ enum class RaySegmentState : uint8_t {
   kContinued = 4,
 };
 
-struct RaySegment {
+struct RaySegment : public ISerializable {
   RaySegment();
   RaySegment(const float* pt, const float* dir, float w, int face_id);
+
+  /**
+   * @brief Serialize self to a file.
+   *
+   * There are 4 pointers in this struct, of 2 types, RaySegment and RayInfo. Both of them are pooled
+   * object types. Thus we store two uint32_t data (chunk ID, object ID) to hold the pointer.
+   *
+   * The file layout will be:
+   * uint32 * 2,        // next_reflect
+   * uint32 * 2,        // next_refract
+   * uint32 * 2,        // prev
+   * uint32 * 2,        // root_ctx
+   * float * 3,         // pt
+   * float * 3,         // dir
+   * float,             // w
+   * int16,             // face_id
+   * uint8,             // state
+   *
+   * @warning We do **NOT** store raw pointer, which is impossible and is improper for deserialization.
+   *
+   * @param file
+   * @param with_boi
+   */
+  void Serialize(File& file, bool with_boi) override;
+
+  /**
+   * @brief Deserialize (load data) from a file.
+   *
+   * Since there are 4 pointer members in this struct, and they cannot be serialized plainly, we store
+   * 2 uint32 data instead (see RaySegment::Serialize(File&, bool) ). The caller should further call
+   * ObjectPool<T>::GetSerializedPointer(uint32_t, uint32_t) to get real pointer.
+   *
+   * @warning ObjectPool<T>::GetSerializedPointer(uint32_t, uint32_t) must be called **AFTER** the entire
+   * object pool finishing its deserialization.
+   *
+   * @param file
+   * @param endianness
+   */
+  void Deserialize(File& file, endian::Endianness endianness) override;
 
   RaySegment* next_reflect;
   RaySegment* next_refract;
