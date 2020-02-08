@@ -282,6 +282,9 @@ class ProjectContext {
   std::string GetDataDirectory() const;
   std::string GetDefaultImagePath() const;
 
+  const Crystal* GetCrystal(int id) const;
+  int GetCrystalId(const Crystal* crystal) const;
+
 #ifdef FOR_TEST
   void PrintCrystalInfo() const;
 #endif

@@ -907,6 +907,26 @@ std::string ProjectContext::GetDefaultImagePath() const {
 }
 
 
+const Crystal* ProjectContext::GetCrystal(int id) const {
+  auto crystal_ctx = GetCrystalContext(id);
+  if (crystal_ctx) {
+    return crystal_ctx->crystal.get();
+  } else {
+    return nullptr;
+  }
+}
+
+
+int ProjectContext::GetCrystalId(const Crystal* crystal) const {
+  for (const auto& kv : crystal_store_) {
+    if (kv.second->crystal.get() == crystal) {
+      return kv.first;
+    }
+  }
+  return std::numeric_limits<int>::lowest();
+}
+
+
 const CrystalContext* ProjectContext::GetCrystalContext(int id) const {
   if (crystal_store_.count(id)) {
     return crystal_store_.at(id).get();

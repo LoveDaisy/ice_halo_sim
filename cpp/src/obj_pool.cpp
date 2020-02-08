@@ -61,7 +61,7 @@ std::tuple<uint32_t, uint32_t> ObjectPool<T>::GetObjectSerializeIndex(T* obj) {
 
 
 template <typename T>
-void ObjectPool<T>::Map(std::function<void (T &)> f) {
+void ObjectPool<T>::Map(std::function<void(T&)> f) {
   const std::lock_guard<std::mutex> lock(id_mutex_);
   for (const auto& chunk : objects_) {
     size_t chunk_size = (chunk == objects_.back() ? next_unused_id_.load() : kChunkSize);
