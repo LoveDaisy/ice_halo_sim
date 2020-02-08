@@ -27,7 +27,7 @@ namespace endian {
 #endif
 
 using Endianness = uint8_t;
-constexpr Endianness kUndetermined = 0;
+constexpr Endianness kUnknownEndian = 0;
 constexpr Endianness kLittleEndian = 1;
 constexpr Endianness kBigEndian = 2;
 
@@ -60,46 +60,40 @@ inline Endianness CheckRuntimeEndianness() noexcept {
 }
 
 
-template <Endianness from, size_t = 0>
-struct ConvertFrom {};
+template <size_t = 0>
+struct ByteSwap {};
 
-template <Endianness from>
-struct ConvertFrom<from, 1> {
+template <>
+struct ByteSwap<1> {
   template <typename T>
-  static void ToNative(T*) noexcept {}
+  void operator()(T*) noexcept {}
 };
 
-template <Endianness from>
-struct ConvertFrom<from, 2> {
+template <>
+struct ByteSwap<2> {
   template <typename T>
-  static void ToNative(T* x) noexcept {
-    if (CheckRuntimeEndianness() != from) {
-      *x = ntohs(*x);
-    }
+  void operator()(T* x) noexcept {
+    *x = ntohs(*x);
   }
 };
 
-template <Endianness from>
-struct ConvertFrom<from, 4> {
+template <>
+struct ByteSwap<4> {
   template <typename T>
-  static void ToNative(T* x) noexcept {
-    if (CheckRuntimeEndianness() != from) {
-      *x = ntohl(*x);
-    }
+  void operator()(T* x) noexcept {
+    *x = ntohl(*x);
   }
 };
 
-template <Endianness from>
-struct ConvertFrom<from, 8> {
+template <>
+struct ByteSwap<8> {
   template <typename T>
-  static void ToNative(T* x) noexcept {
-    if (CheckRuntimeEndianness() != from) {
-      auto* p0 = reinterpret_cast<uint32_t*>(x);
-      auto* p1 = p0 + 1;
-      auto tmp = ntohl(*p0);
-      *p0 = ntohl(*p1);
-      *p1 = tmp;
-    }
+  void operator()(T* x) noexcept {
+    auto* p0 = reinterpret_cast<uint32_t*>(x);
+    auto* p1 = p0 + 1;
+    auto tmp = ntohl(*p0);
+    *p0 = ntohl(*p1);
+    *p1 = tmp;
   }
 };
 

@@ -21,6 +21,46 @@ void ObjectPool<T>::Clear() {
 
 
 template <typename T>
+T* ObjectPool<T>::GetSerializedPointer(uint32_t chunk_id, uint32_t obj_id) {
+  if (deserialized_chunk_size_ == 0) {
+    return nullptr;
+  }
+
+  size_t id = chunk_id * deserialized_chunk_size_ + obj_id;
+  uint32_t this_chunk_id = id / kChunkSize;
+  uint32_t this_obj_id = id % kChunkSize;
+  if (this_chunk_id >= objects_.size()) {
+    return nullptr;
+  }
+
+  return objects_[this_chunk_id] + this_obj_id;
+}
+
+
+template <typename T>
+std::tuple<uint32_t, uint32_t> ObjectPool<T>::GetObjectSerializeIndex(T* obj) {
+  if (!obj) {
+    return { kInvalidIndex, kInvalidIndex };
+  }
+
+  uint32_t chunk_id = 0;
+  T* last_chunk = nullptr;
+  for (const auto& chunk : objects_) {
+    if (last_chunk && obj < chunk) {
+      return { chunk_id - 1, static_cast<uint32_t>(obj - last_chunk) };
+    }
+    chunk_id++;
+    last_chunk = chunk;
+  }
+  if (last_chunk && obj < objects_.back() + kChunkSize) {
+    return { chunk_id - 1, static_cast<uint32_t>(obj - last_chunk) };
+  } else {
+    return { kInvalidIndex, kInvalidIndex };
+  }
+}
+
+
+template <typename T>
 ObjectPool<T>* ObjectPool<T>::GetInstance() {
   static auto instance = new ObjectPool<T>();
   return instance;
@@ -28,7 +68,7 @@ ObjectPool<T>* ObjectPool<T>::GetInstance() {
 
 
 template <typename T>
-ObjectPool<T>::ObjectPool() : current_chunk_id_(0), next_unused_id_(0) {
+ObjectPool<T>::ObjectPool() : current_chunk_id_(0), next_unused_id_(0), deserialized_chunk_size_(0) {
   auto* pool = new T[kChunkSize];
   objects_.emplace_back(pool);
 }

@@ -26,19 +26,25 @@ class ObjectPool {
 
   void Clear();
 
+  T* GetSerializedPointer(uint32_t chunk_id, uint32_t obj_id);
+  std::tuple<uint32_t, uint32_t> GetObjectSerializeIndex(T* obj);
+
   static ObjectPool<T>* GetInstance();
+
+  static constexpr uint32_t kInvalidIndex = 0xffffffff;
 
  private:
   ObjectPool();
 
   uint32_t RefreshChunkIndex();
 
-  static constexpr uint32_t kChunkSize = 1024 * 1024;
+  static constexpr size_t kChunkSize = 1024 * 1024;
 
   std::vector<T*> objects_;
-  size_t current_chunk_id_;
+  uint32_t current_chunk_id_;
   std::atomic<uint32_t> next_unused_id_;
   std::mutex id_mutex_;
+  size_t deserialized_chunk_size_;
 };
 
 struct RaySegment;

@@ -18,7 +18,9 @@ struct ISerializable {
   /**
    * @brief Deserialize data from a file.
    * @param file The source file.
-   * @param endianness Whether write BOI(Byte Order Indicator).
+   * @param endianness The endianness of file. It can be endian::kUnknownEndian. When it is set to
+   *        endian::kUnknownEndian, this method will determine the endian itself, typically by reading
+   *        the BOI. That is, this method might read some extra bytes to determine the file endianness.
    */
   virtual void Deserialize(File& file, endian::Endianness endianness) = 0;
 

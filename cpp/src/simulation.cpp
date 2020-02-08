@@ -59,7 +59,7 @@ const std::vector<RaySegment*>& SimulationRayData::GetLastExitRaySegments() cons
 
 
 #ifdef FOR_TEST
-const std::vector<std::vector<RaySegment *> > & SimulationRayData::GetExitRaySegments() const {
+const std::vector<std::vector<RaySegment*>>& SimulationRayData::GetExitRaySegments() const {
   return exit_ray_segments_;
 }
 #endif
