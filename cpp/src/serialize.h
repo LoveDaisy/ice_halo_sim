@@ -24,6 +24,19 @@ struct ISerializable {
    */
   virtual void Deserialize(File& file, endian::Endianness endianness) = 0;
 
+  static endian::Endianness CheckEndianness(File& file, endian::Endianness endianness) {
+    if (endianness == endian::kUnknownEndian) {
+      uint32_t test_boi;
+      file.Read(&test_boi);
+      if (test_boi != ISerializable::kDefaultBoi) {
+        endianness = endian::kBigEndian;
+      } else {
+        endianness = endian::kCompileEndian;
+      }
+    }
+    return endianness;
+  }
+
   /**
    * @brief The default BOI(Byte Order Indicator).
    */

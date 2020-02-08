@@ -54,14 +54,8 @@ void RaySegment::Serialize(File& file, bool with_boi) {
 
 
 void RaySegment::Deserialize(File& file, endian::Endianness endianness) {
-  bool need_swap = false;
-  if (endianness == endian::kUnknownEndian) {
-    uint32_t test_boi;
-    file.Read(&test_boi);
-    if (test_boi != ISerializable::kDefaultBoi) {
-      need_swap = true;
-    }
-  }
+  endianness = CheckEndianness(file, endianness);
+  bool need_swap = (endianness != endian::kCompileEndian);
 
   uint32_t chunk_id, obj_id;
   file.Read(&chunk_id);
@@ -185,14 +179,8 @@ void RayInfo::Serialize(File& file, bool with_boi) {
 
 
 void RayInfo::Deserialize(File& file, endian::Endianness endianness) {
-  bool need_swap = false;
-  if (endianness == endian::kUnknownEndian) {
-    uint32_t test_boi;
-    file.Read(&test_boi);
-    if (test_boi != ISerializable::kDefaultBoi) {
-      need_swap = true;
-    }
-  }
+  endianness = CheckEndianness(file, endianness);
+  bool need_swap = (endianness != endian::kCompileEndian);
 
   uint32_t chunk_id, obj_id;
   file.Read(&chunk_id);

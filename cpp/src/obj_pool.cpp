@@ -17,6 +17,7 @@ template <typename T>
 void ObjectPool<T>::Clear() {
   next_unused_id_ = 0;
   current_chunk_id_ = 0;
+  deserialized_chunk_size_ = 0;
 }
 
 
@@ -113,6 +114,66 @@ uint32_t ObjectPool<T>::RefreshChunkIndex() {
     }
   }
   return id;
+}
+
+
+template <typename T>
+void ObjectPool<T>::Serialize(File& file, bool with_boi) {
+  const std::lock_guard<std::mutex> lock(id_mutex_);
+  if (with_boi) {
+    file.Write(ISerializable::kDefaultBoi);
+  }
+
+  size_t total_num = kChunkSize * (objects_.size() - 1) + next_unused_id_;
+  file.Write(total_num);
+  file.Write(kChunkSize);
+
+  for (const auto& chunk : objects_) {
+    size_t num = (chunk == objects_.back() ? kChunkSize : next_unused_id_.load());
+    for (size_t i = 0; i < num; i++) {
+      chunk[i].Serialize(file, false);
+    }
+  }
+}
+
+
+template <typename T>
+void ObjectPool<T>::Deserialize(File& file, endian::Endianness endianness) {
+  const std::lock_guard<std::mutex> lock(id_mutex_);
+
+  endianness = CheckEndianness(file, endianness);
+  bool need_swap = (endianness != endian::kCompileEndian);
+
+  size_t total_num;
+  file.Read(&total_num);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&total_num);
+  }
+
+  size_t chunk_size;
+  file.Read(&chunk_size);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&chunk_size);
+  }
+  if (chunk_size == 0) {
+    throw std::invalid_argument("Chunk size is invalid!");
+  }
+
+  Clear();
+  deserialized_chunk_size_ = chunk_size;
+  size_t chunks = total_num / kChunkSize + (total_num % kChunkSize ? 1 : 0);
+  for (current_chunk_id_ = 0; current_chunk_id_ < chunks; current_chunk_id_++) {
+    if (current_chunk_id_ >= objects_.size()) {
+      objects_.emplace_back(new T[kChunkSize]);
+    }
+    auto* chunk = objects_[current_chunk_id_];
+    for (next_unused_id_ = 0; next_unused_id_ < kChunkSize; next_unused_id_++) {
+      if (current_chunk_id_ * kChunkSize + next_unused_id_ >= total_num) {
+        break;
+      }
+      chunk[next_unused_id_].Deserialize(file, endianness);
+    }
+  }
 }
 
 template class ObjectPool<RaySegment>;

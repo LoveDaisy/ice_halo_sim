@@ -7,13 +7,15 @@
 #include <type_traits>
 #include <vector>
 
+#include "serialize.h"
+
 namespace icehalo {
 
 constexpr uint32_t kInvalidIndex = 0xffffffff;
 
 
 template <typename T>
-class ObjectPool {
+class ObjectPool : public ISerializable {
  public:
   ~ObjectPool();
 
@@ -28,11 +30,32 @@ class ObjectPool {
   }
 
   void Clear();
+  void Map(std::function<void(T&)>);
 
   T* GetPointerFromSerializeData(T* dummy_ptr);
   std::tuple<uint32_t, uint32_t> GetObjectSerializeIndex(T* obj);
 
-  void Map(std::function<void(T&)>);
+  /**
+   * @brief Serialize self to a file.
+   *
+   * This class is a template class. It has only 2 instantiations, RaySegmentPool and RayInfoPool, which
+   * all implement interface ISerializable. In fact, this method will call objects'
+   * ISerializable::Serialize(File&, bool) to serialize themselves.
+   *
+   * If the object contains pointers, it is necessary to call ObjectPool<T>::GetPointerFromSerializeData(T*)
+   * to get the real pointer. This could be done by calling ObjectPool<T>::Map(std::function<void(T&)>)
+   * to apply the action on every element in this pool.
+   *
+   * The file layout is:
+   * uint64,            // the number of object
+   * uint64,            // chunk size
+   * obj * N,           // the object serialization data
+   *
+   * @param file
+   * @param with_boi
+   */
+  void Serialize(File& file, bool with_boi) override;
+  void Deserialize(File& file, endian::Endianness endianness) override;
 
   static ObjectPool<T>* GetInstance();
 
