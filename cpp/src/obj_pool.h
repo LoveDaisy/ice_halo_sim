@@ -29,6 +29,8 @@ class ObjectPool {
   T* GetSerializedPointer(uint32_t chunk_id, uint32_t obj_id);
   std::tuple<uint32_t, uint32_t> GetObjectSerializeIndex(T* obj);
 
+  void Map(std::function<void(T&)>);
+
   static ObjectPool<T>* GetInstance();
 
   static constexpr uint32_t kInvalidIndex = 0xffffffff;
