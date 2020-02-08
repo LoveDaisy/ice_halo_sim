@@ -10,12 +10,11 @@
 
 namespace icehalo {
 
-namespace openmode {
-constexpr uint8_t kRead = 0b0001;
-constexpr uint8_t kWrite = 0b0010;
-constexpr uint8_t kAppend = 0b0100;
-constexpr uint8_t kBinary = 0b1000;
-}  // namespace openmode
+enum class FileOpenMode {
+  kRead,
+  kWrite,
+  kAppend,
+};
 
 
 namespace endian {
@@ -112,15 +111,21 @@ struct ByteSwap {
 }  // namespace endian
 
 
+enum class FileState {
+  kClosed,
+  kWriting,
+  kReading,
+};
+
+
 class File {
  public:
   explicit File(const char* filename);
   File(const char* path, const char* filename);
   ~File();
 
-  bool Open(uint8_t mode = openmode::kRead);
+  bool Open(FileOpenMode mode = FileOpenMode::kRead);
   bool Close();
-  bool IsOpen() const;
 
   size_t GetBytes();
 
@@ -135,7 +140,7 @@ class File {
 
  private:
   std::FILE* file_;
-  bool file_opened_;
+  FileState state_;
 
   boost::filesystem::path path_;
 };
@@ -143,8 +148,8 @@ class File {
 
 template <class T>
 size_t File::Read(T* buffer, size_t n) {
-  if (!file_opened_) {
-    return 0;
+  if (state_ != FileState::kReading) {
+    throw std::logic_error("File state is not for reading!");
   }
 
   auto count = std::fread(buffer, sizeof(T), n, file_);
@@ -154,8 +159,8 @@ size_t File::Read(T* buffer, size_t n) {
 
 template <class T>
 size_t File::Write(T data) {
-  if (!file_opened_) {
-    return 0;
+  if (state_ != FileState::kWriting) {
+    throw std::logic_error("File state is not for writing!");
   }
 
   auto count = std::fwrite(&data, sizeof(T), 1, file_);
@@ -165,8 +170,8 @@ size_t File::Write(T data) {
 
 template <class T>
 size_t File::Write(const T* data, size_t n) {
-  if (!file_opened_) {
-    return 0;
+  if (state_ != FileState::kWriting) {
+    throw std::logic_error("File state is not for writing!");
   }
 
   auto count = std::fwrite(data, sizeof(T), n, file_);

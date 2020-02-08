@@ -36,59 +36,59 @@ std::string PathJoin(const std::string& p1, const std::string& p2) {
 }
 
 
-File::File(const char* filename) : file_(nullptr), file_opened_(false), path_(filename) {}
+File::File(const char* filename) : file_(nullptr), state_(FileState::kClosed), path_(filename) {}
 
 
-File::File(const char* path, const char* filename) : file_(nullptr), file_opened_(false), path_(path) {
+File::File(const char* path, const char* filename) : file_(nullptr), state_(FileState::kClosed), path_(path) {
   path_ /= filename;
 }
 
 
 File::~File() {
-  if (file_opened_) {
+  if (state_ != FileState::kClosed) {
     fclose(file_);
-    file_opened_ = false;
+    state_ = FileState::kClosed;
   }
 }
 
 
-bool File::Open(uint8_t mode) {
+bool File::Open(FileOpenMode mode) {
   if (!boost::filesystem::exists(path_.parent_path())) {
     boost::filesystem::create_directories(path_.parent_path());
   }
 
-  char modeBuffer[32];
-  const char* m1;
-  if (mode & openmode::kRead) {
-    m1 = "r";
-  } else if (mode & openmode::kWrite) {
-    m1 = "w";
-  } else if (mode & openmode::kAppend) {
-    m1 = "a";
-  } else {
-    m1 = "r";
+  const char* m;
+  switch (mode) {
+    case FileOpenMode::kWrite:
+      m = "wb";
+      state_ = FileState::kWriting;
+      break;
+    case FileOpenMode::kAppend:
+      m = "ab";
+      state_ = FileState::kWriting;
+      break;
+    case FileOpenMode::kRead:
+    default:
+      m = "rb";
+      state_ = FileState::kReading;
+      break;
   }
-  const char* m2 = (mode & openmode::kBinary) ? "b" : "";
-  std::sprintf(modeBuffer, "%s%s", m1, m2);
 
-  file_ = std::fopen(path_.c_str(), modeBuffer);
-  file_opened_ = file_ != nullptr;
-  return file_opened_;
+  file_ = std::fopen(path_.c_str(), m);
+  if (!file_) {
+    state_ = FileState::kClosed;
+  }
+  return state_ != FileState::kClosed;
 }
 
 
 bool File::Close() {
-  if (file_opened_) {
+  if (state_ != FileState::kClosed) {
     std::fclose(file_);
     file_ = nullptr;
-    file_opened_ = false;
+    state_ = FileState::kClosed;
   }
   return true;
-}
-
-
-bool File::IsOpen() const {
-  return file_opened_;
 }
 
 

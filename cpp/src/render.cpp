@@ -461,7 +461,7 @@ int SpectrumRenderer::LoadDataFromFile(File& file) {
   auto file_size = file.GetBytes();
   std::unique_ptr<float[]> read_buffer{ new float[file_size / sizeof(float)]{} };
 
-  file.Open(openmode::kRead | openmode::kBinary);
+  file.Open(FileOpenMode::kRead);
   auto read_count = file.Read(read_buffer.get(), 2);
   if (read_count == 0) {
     std::fprintf(stderr, "Failed to read wavelength data!\n");

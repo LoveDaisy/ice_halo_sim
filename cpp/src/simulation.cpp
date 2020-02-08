@@ -452,7 +452,7 @@ const SimulationRayData& Simulator::GetSimulationRayData() {
 
 void Simulator::SaveFinalDirections(const char* filename) {
   File file(context_->GetDataDirectory().c_str(), filename);
-  if (!file.Open(openmode::kWrite | openmode::kBinary)) {
+  if (!file.Open(FileOpenMode::kWrite)) {
     return;
   }
 

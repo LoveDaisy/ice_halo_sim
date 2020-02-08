@@ -38,13 +38,13 @@ TEST_F(RaySegmentSerializationTest, SingleRaySegment) {
   r2->prev = r0;
 
   icehalo::File file(working_dir.c_str(), "tmp.bin");
-  file.Open(icehalo::openmode::kWrite);
+  file.Open(icehalo::FileOpenMode::kWrite);
   r0->Serialize(file, true);
   file.Close();
 
   ray_seg_pool->Clear();
 
-  file.Open(icehalo::openmode::kRead);
+  file.Open(icehalo::FileOpenMode::kRead);
   auto r_test = ray_seg_pool->GetObject();
   r_test->Deserialize(file, icehalo::endian::kUnknownEndian);
 
@@ -81,11 +81,11 @@ TEST_F(RaySegmentSerializationTest, RaySegPool) {
   r2->prev = r0;
 
   icehalo::File file(working_dir.c_str(), "tmp.bin");
-  file.Open(icehalo::openmode::kWrite);
+  file.Open(icehalo::FileOpenMode::kWrite);
   ray_seg_pool->Serialize(file, true);
   file.Close();
 
-  file.Open(icehalo::openmode::kRead);
+  file.Open(icehalo::FileOpenMode::kRead);
   ray_seg_pool->Deserialize(file, icehalo::endian::kUnknownEndian);
 
   using icehalo::RaySegment;
