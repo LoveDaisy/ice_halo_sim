@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "context/camera_context.h"
+#include "context/crystal_context.h"
 #include "context/multi_scatter_context.h"
 #include "context/render_context.h"
 #include "context/sun_context.h"
@@ -22,12 +23,10 @@
 
 namespace icehalo {
 
-struct CrystalContext;
 class ProjectContext;
 enum class LensType;
 enum class VisibleRange;
 
-using CrystalContextPtrU = std::unique_ptr<CrystalContext>;
 using ProjectContextPtrU = std::unique_ptr<ProjectContext>;
 using ProjectContextPtr = std::shared_ptr<ProjectContext>;
 
@@ -198,17 +197,6 @@ class ProjectContext {
 
   std::unordered_map<int, CrystalContextPtrU> crystal_store_;
   std::unordered_map<int, RayPathFilterPtrU> filter_store_;
-};
-
-
-struct CrystalContext {
-  CrystalContext(CrystalPtrU g, AxisDistribution axis);
-  CrystalContext(const CrystalContext& other) = delete;
-
-  int RandomSampleFace(const float* ray_dir) const;
-
-  const CrystalPtrU crystal;
-  const AxisDistribution axis;
 };
 
 

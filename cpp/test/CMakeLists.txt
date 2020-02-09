@@ -5,6 +5,7 @@ endif()
 set(SOURCE_FILE
     ${PROJ_SRC_DIR}/context/camera_context.cpp
     ${PROJ_SRC_DIR}/context/context.cpp
+    ${PROJ_SRC_DIR}/context/crystal_context.cpp
     ${PROJ_SRC_DIR}/context/multi_scatter_context.cpp
     ${PROJ_SRC_DIR}/context/render_context.cpp
     ${PROJ_SRC_DIR}/context/sun_context.cpp

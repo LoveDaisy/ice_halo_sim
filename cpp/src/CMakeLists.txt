@@ -23,6 +23,7 @@ endif()
 set(SOURCE_FILE
     context/camera_context.cpp
     context/context.cpp
+    context/crystal_context.cpp
     context/multi_scatter_context.cpp
     context/render_context.cpp
     context/sun_context.cpp
