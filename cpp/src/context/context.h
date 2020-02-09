@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "context/camera_context.h"
+#include "context/render_context.h"
 #include "context/sun_context.h"
 #include "core/crystal.h"
 #include "core/mymath.h"
@@ -26,15 +27,12 @@ namespace icehalo {
 
 struct CrystalContext;
 class ProjectContext;
-class RenderContext;
 enum class LensType;
 enum class VisibleRange;
 
 using CrystalContextPtrU = std::unique_ptr<CrystalContext>;
 using ProjectContextPtrU = std::unique_ptr<ProjectContext>;
 using ProjectContextPtr = std::shared_ptr<ProjectContext>;
-using RenderContextPtrU = std::unique_ptr<RenderContext>;
-using RenderContextPtr = std::shared_ptr<RenderContext>;
 
 
 enum Symmetry : uint8_t {
@@ -142,55 +140,6 @@ class MultiScatterContext {
  private:
   std::vector<CrystalInfo> crystal_infos_;  // crystal, population, filter
   float prob_;
-};
-
-
-class RenderContext {
- public:
-  const float* GetRayColor() const;
-  void SetRayColor(float r, float g, float b);
-  void ResetRayColor();
-  void UseRealRayColor();
-
-  const float* GetBackgroundColor() const;
-  void SetBackgroundColor(float r, float g, float b);
-  void ResetBackgroundColor();
-  void UseSkyBackground();
-
-  float GetIntensity() const;
-  void SetIntensity(float intensity);
-
-  int GetImageWidth() const;
-  int GetImageHeight() const;
-  void SetImageWidth(int w);
-  void SetImageHeight(int h);
-
-  int GetImageOffsetX() const;
-  int GetImageOffsetY() const;
-  void SetImageOffsetX(int offset_x);
-  void SetImageOffsetY(int offset_y);
-
-  VisibleRange GetVisibleRange() const;
-  void SetVisibleRange(VisibleRange r);
-
-  static RenderContextPtrU CreateFromJson(rapidjson::Document& d);
-
-  static constexpr float kMinIntensity = 0.01f;
-  static constexpr float kMaxIntensity = 100.0f;
-
-  static constexpr int kMaxImageSize = 4096;
-
- private:
-  RenderContext();
-
-  float ray_color_[3];
-  float background_color_[3];
-  float intensity_;
-  int image_width_;
-  int image_height_;
-  int offset_x_;
-  int offset_y_;
-  VisibleRange visible_range_;
 };
 
 
