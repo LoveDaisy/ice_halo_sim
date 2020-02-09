@@ -419,12 +419,8 @@ void Simulator::InitSunRays() {
 // Add RayContext and main axis rotation
 void Simulator::InitEntryRays(const CrystalContext* ctx) {
   auto& crystal = ctx->crystal;
-  auto total_faces = crystal->TotalFaces();
-
-  auto* prob = ctx->face_prob_buf.get();
-  const auto* face_norm = crystal->GetFaceNorm();
+  auto crystal_id = context_->GetCrystalId(crystal.get());
   const auto* face_vertex = crystal->GetFaceVertex();
-  const auto* face_area = crystal->GetFaceArea();
 
   auto ray_pool = RaySegmentPool::GetInstance();
   auto ray_info_pool = RayInfoPool::GetInstance();
@@ -435,19 +431,7 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
     InitMainAxis(ctx, axis_rot);
     math::RotateZ(axis_rot, entry_ray_data_.ray_dir + (i + entry_ray_offset_) * 3, buffer_.dir[0] + i * 3);
 
-    float sum = 0;
-    for (int k = 0; k < total_faces; k++) {
-      prob[k] = 0;
-      if (!std::isnan(face_norm[k * 3 + 0]) && face_area[k] > 0) {
-        prob[k] = std::max(-math::Dot3(face_norm + k * 3, buffer_.dir[0] + i * 3) * face_area[k], 0.0f);
-        sum += prob[k];
-      }
-    }
-    for (int k = 0; k < total_faces; k++) {
-      prob[k] /= sum;
-    }
-
-    buffer_.face_id[0][i] = RandomSampler::SampleInt(prob, total_faces);
+    buffer_.face_id[0][i] = ctx->RandomSampleFace(buffer_.dir[0] + i * 3);
     RandomSampler::SampleTriangularPoints(face_vertex + buffer_.face_id[0][i] * 9, buffer_.pt[0] + i * 3);
 
     auto prev_r = entry_ray_data_.ray_seg[entry_ray_offset_ + i];
@@ -455,7 +439,7 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
 
     auto r = ray_pool->GetObject(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i], buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
-    r->root_ctx = ray_info_pool->GetObject(r, context_->GetCrystalId(crystal.get()), axis_rot);
+    r->root_ctx = ray_info_pool->GetObject(r, crystal_id, axis_rot);
     r->root_ctx->prev_ray_segment = prev_r;
     simulation_ray_data_.AddRay(r->root_ctx);
   }

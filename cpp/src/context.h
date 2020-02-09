@@ -351,9 +351,10 @@ struct CrystalContext {
   CrystalContext(CrystalPtrU g, AxisDistribution axis);
   CrystalContext(const CrystalContext& other) = delete;
 
+  int RandomSampleFace(const float* ray_dir) const;
+
   const CrystalPtrU crystal;
   const AxisDistribution axis;
-  const std::unique_ptr<float[]> face_prob_buf;
 };
 
 
