@@ -171,13 +171,13 @@ class SunContext : public IJsonizable {
   SunContext();
   SunContext(float altitude, float diameter);
 
-  float sun_diameter_;     // in degree
-  float sun_altitude_;     // in degree
+  float diameter_;         // in degree
+  float altitude_;         // in degree
   float sun_position_[3];  // [x, y, z]
 };
 
 
-class CameraContext {
+class CameraContext : public IJsonizable {
  public:
   const float* GetCameraTargetDirection() const;
   void SetCameraTargetDirection(float azimuth, float altitude, float roll);
@@ -188,6 +188,9 @@ class CameraContext {
 
   LensType GetLensType() const;
   void SetLensType(LensType type);
+
+  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
+  void LoadFromJson(rapidjson::Value& root) override;
 
   static CameraContextPtrU CreateFromJson(rapidjson::Document& d);
 

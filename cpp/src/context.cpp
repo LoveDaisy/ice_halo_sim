@@ -343,14 +343,14 @@ void MultiScatterContext::NormalizeCrystalPopulation() {
 
 
 SunContext::SunContext()
-    : sun_diameter_(0.0f),
-      sun_altitude_(kDefaultAltitude), sun_position_{ 0.0f, -std::cos(kDefaultAltitude * math::kDegreeToRad),
-                                                      -std::sin(kDefaultAltitude * math::kDegreeToRad) } {}
+    : diameter_(0.0f),
+      altitude_(kDefaultAltitude), sun_position_{ 0.0f, -std::cos(kDefaultAltitude * math::kDegreeToRad),
+                                                  -std::sin(kDefaultAltitude * math::kDegreeToRad) } {}
 
 
 SunContext::SunContext(float altitude, float diameter)
-    : sun_diameter_(diameter), sun_altitude_(altitude), sun_position_{ 0.0f, -std::cos(altitude * math::kDegreeToRad),
-                                                                       -std::sin(altitude * math::kDegreeToRad) } {}
+    : diameter_(diameter), altitude_(altitude), sun_position_{ 0.0f, -std::cos(altitude * math::kDegreeToRad),
+                                                               -std::sin(altitude * math::kDegreeToRad) } {}
 
 
 SunContextPtrU SunContext::CreateFromJson(rapidjson::Document& d) {
@@ -366,7 +366,7 @@ const float* SunContext::GetSunPosition() const {
 
 
 float SunContext::GetSunAltitude() const {
-  return sun_altitude_;
+  return altitude_;
 }
 
 
@@ -374,7 +374,7 @@ bool SunContext::SetSunAltitude(float altitude) {
   if (altitude < -90 || altitude > 90) {
     return false;
   } else {
-    sun_altitude_ = altitude;
+    altitude_ = altitude;
     sun_position_[0] = 0.0f;
     sun_position_[1] = -std::cos(altitude * math::kDegreeToRad);
     sun_position_[2] = -std::sin(altitude * math::kDegreeToRad);
@@ -384,7 +384,7 @@ bool SunContext::SetSunAltitude(float altitude) {
 
 
 float SunContext::GetSunDiameter() const {
-  return sun_diameter_;
+  return diameter_;
 }
 
 
@@ -392,7 +392,7 @@ bool SunContext::SetSunDiameter(float d) {
   if (d < 0 || d > kMaxDiameter) {
     return false;
   } else {
-    sun_diameter_ = d;
+    diameter_ = d;
     return true;
   }
 }
@@ -400,8 +400,8 @@ bool SunContext::SetSunDiameter(float d) {
 
 void SunContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
   root.Clear();
-  Pointer("/altitude").Set(root, sun_altitude_, allocator);
-  Pointer("/diameter").Set(root, sun_diameter_, allocator);
+  Pointer("/altitude").Set(root, altitude_, allocator);
+  Pointer("/diameter").Set(root, diameter_, allocator);
 }
 
 
@@ -433,83 +433,8 @@ CameraContext::CameraContext() : target_dir_{ 0, 0, 0 }, fov_(0), lens_type_(Len
 
 CameraContextPtrU CameraContext::CreateFromJson(rapidjson::Document& d) {
   CameraContextPtrU cam_ctx{ new CameraContext };
-  cam_ctx->ResetCameraTargetDirection();
-  cam_ctx->SetFov(CameraContext::kMaxFovFisheye);
-  cam_ctx->SetLensType(LensType::kEqualArea);
-
-  float cam_az = CameraContext::kDefaultCamAzimuth;
-  float cam_el = CameraContext::kDefaultCamElevation;
-  float cam_ro = CameraContext::kDefaultCamRoll;
-
-  auto* p = Pointer("/camera/azimuth").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.azimuth>, using default %.1f!\n",
-                 CameraContext::kDefaultCamAzimuth);
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.azimuth> is not a number, using default %.1f!\n",
-                 CameraContext::kDefaultCamAzimuth);
-  } else {
-    cam_az = static_cast<float>(p->GetDouble());
-    cam_az = std::max(std::min(cam_az, CameraContext::kMaxAngleRound), CameraContext::kMinAngleRound);
-    cam_az = 90.0f - cam_az;
-  }
-
-  p = Pointer("/camera/elevation").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.elevation>, using default %.1f!\n",
-                 CameraContext::kDefaultCamElevation);
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.elevation> is not a number, using default %.1f!\n",
-                 CameraContext::kDefaultCamElevation);
-  } else {
-    cam_el = static_cast<float>(p->GetDouble());
-    cam_el = std::max(std::min(cam_el, CameraContext::kMaxAngleTilt), CameraContext::kMinAngleTilt);
-  }
-
-  p = Pointer("/camera/rotation").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.rotation>, using default %.1f!\n",
-                 CameraContext::kDefaultCamRoll);
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.rotation> is not a number, using default %.1f!\n",
-                 CameraContext::kDefaultCamRoll);
-  } else {
-    cam_ro = static_cast<float>(p->GetDouble());
-    cam_ro = std::max(std::min(cam_ro, CameraContext::kMaxAngleHeading), CameraContext::kMinAngleHeading);
-  }
-
-  cam_ctx->SetCameraTargetDirection(cam_az, cam_el, cam_ro);
-
-  p = Pointer("/camera/lens").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.lens>, using default equal-area fisheye!\n");
-  } else if (!p->IsString()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.lens> is not a string, using default equal-area fisheye!\n");
-  } else {
-    if (*p == "linear") {
-      cam_ctx->SetLensType(LensType::kLinear);
-    } else if (*p == "fisheye_equalarea" || *p == "fisheye") {
-      cam_ctx->SetLensType(LensType::kEqualArea);
-    } else if (*p == "fisheye_equidistant") {
-      cam_ctx->SetLensType(LensType::kEquidistant);
-    } else if (*p == "dual_fisheye_equidistant") {
-      cam_ctx->SetLensType(LensType::kDualEquidistant);
-    } else if (*p == "dual_fisheye_equalarea") {
-      cam_ctx->SetLensType(LensType::kDualEqualArea);
-    } else {
-      std::fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equal-area fisheye!\n");
-    }
-  }
-
-  p = Pointer("/camera/fov").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.fov>, using default %.1f!\n", cam_ctx->GetFov());
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default %.1f!\n", cam_ctx->GetFov());
-  } else {
-    cam_ctx->SetFov(static_cast<float>(p->GetDouble()));
-  }
-
+  rapidjson::Value* cam_dom = Pointer("/camera").Get(d);
+  cam_ctx->LoadFromJson(*cam_dom);
   return cam_ctx;
 }
 
@@ -590,6 +515,114 @@ void CameraContext::SetLensType(LensType type) {
       break;
     default:
       break;
+  }
+}
+
+
+void CameraContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
+  root.Clear();
+  Pointer("/azimuth").Set(root, target_dir_[0], allocator);
+  Pointer("/elevation").Set(root, target_dir_[1], allocator);
+  Pointer("/rotation").Set(root, target_dir_[2], allocator);
+  Pointer("/fov").Set(root, fov_, allocator);
+  auto p = Pointer("/lens");
+  switch (lens_type_) {
+    case LensType::kLinear:
+      p.Set(root, "linear", allocator);
+      break;
+    case LensType::kEquidistant:
+      p.Set(root, "fisheye_equidistant", allocator);
+      break;
+    case LensType::kDualEqualArea:
+      p.Set(root, "dual_fisheye_equalarea", allocator);
+      break;
+    case LensType::kDualEquidistant:
+      p.Set(root, "dual_fisheye_equidistant", allocator);
+      break;
+    case LensType::kEqualArea:
+    default:
+      p.Set(root, "fisheye_equalarea", allocator);
+      break;
+  }
+}
+
+
+void CameraContext::LoadFromJson(rapidjson::Value& root) {
+  ResetCameraTargetDirection();
+  SetFov(CameraContext::kMaxFovFisheye);
+  SetLensType(LensType::kEqualArea);
+
+  float cam_az = CameraContext::kDefaultCamAzimuth;
+  float cam_el = CameraContext::kDefaultCamElevation;
+  float cam_ro = CameraContext::kDefaultCamRoll;
+
+  auto* p = Pointer("/azimuth").Get(root);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Camera config missing <azimuth>, using default %.1f!\n",
+                 CameraContext::kDefaultCamAzimuth);
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! Camera config <azimuth> is not a number, using default %.1f!\n",
+                 CameraContext::kDefaultCamAzimuth);
+  } else {
+    cam_az = static_cast<float>(p->GetDouble());
+    cam_az = std::max(std::min(cam_az, CameraContext::kMaxAngleRound), CameraContext::kMinAngleRound);
+    cam_az = 90.0f - cam_az;
+  }
+
+  p = Pointer("/elevation").Get(root);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Camera config missing <elevation>, using default %.1f!\n",
+                 CameraContext::kDefaultCamElevation);
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! Camera config <elevation> is not a number, using default %.1f!\n",
+                 CameraContext::kDefaultCamElevation);
+  } else {
+    cam_el = static_cast<float>(p->GetDouble());
+    cam_el = std::max(std::min(cam_el, CameraContext::kMaxAngleTilt), CameraContext::kMinAngleTilt);
+  }
+
+  p = Pointer("/rotation").Get(root);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Camera config missing <rotation>, using default %.1f!\n",
+                 CameraContext::kDefaultCamRoll);
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! Camera config <rotation> is not a number, using default %.1f!\n",
+                 CameraContext::kDefaultCamRoll);
+  } else {
+    cam_ro = static_cast<float>(p->GetDouble());
+    cam_ro = std::max(std::min(cam_ro, CameraContext::kMaxAngleHeading), CameraContext::kMinAngleHeading);
+  }
+
+  SetCameraTargetDirection(cam_az, cam_el, cam_ro);
+
+  p = Pointer("/lens").Get(root);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Camera config missing <lens>, using default equal-area fisheye!\n");
+  } else if (!p->IsString()) {
+    std::fprintf(stderr, "\nWARNING! Camera config <lens> is not a string, using default equal-area fisheye!\n");
+  } else {
+    if (*p == "linear") {
+      SetLensType(LensType::kLinear);
+    } else if (*p == "fisheye_equalarea" || *p == "fisheye") {
+      SetLensType(LensType::kEqualArea);
+    } else if (*p == "fisheye_equidistant") {
+      SetLensType(LensType::kEquidistant);
+    } else if (*p == "dual_fisheye_equidistant") {
+      SetLensType(LensType::kDualEquidistant);
+    } else if (*p == "dual_fisheye_equalarea") {
+      SetLensType(LensType::kDualEqualArea);
+    } else {
+      std::fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equal-area fisheye!\n");
+    }
+  }
+
+  p = Pointer("/fov").Get(root);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Config missing <camera.fov>, using default %.1f!\n", GetFov());
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default %.1f!\n", GetFov());
+  } else {
+    SetFov(static_cast<float>(p->GetDouble()));
   }
 }
 
