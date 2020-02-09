@@ -10,6 +10,58 @@
 
 namespace icehalo {
 
+SimpleRayData::SimpleRayData(size_t num) : wavelength(0.0f), weight(0.0f), buf{ new float[num * 4] }, size(num) {}
+
+
+void SimpleRayData::Serialize(File& file, bool with_boi) {
+  if (with_boi) {
+    file.Write(ISerializable::kDefaultBoi);
+  }
+
+  file.Write(wavelength);
+  file.Write(weight);
+  file.Write(static_cast<uint64_t>(size));
+
+  float* p = buf.get();
+  for (size_t i = 0; i < size; i++) {
+    file.Write(p, 4);
+    p += 4;
+  }
+}
+
+
+void SimpleRayData::Deserialize(File& file, endian::Endianness endianness) {
+  endianness = CheckEndianness(file, endianness);
+  bool need_swap = (endianness != endian::kCompileEndian);
+
+  file.Read(&wavelength);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&wavelength);
+  }
+  file.Read(&weight);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&weight);
+  }
+
+  uint64_t num;
+  file.Read(&num);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&num);
+  }
+  size = num;
+
+  buf.reset(new float[num * 4]);
+  float* p = buf.get();
+  for (size_t i = 0; i < num; i++) {
+    file.Read(p, 4);
+    if (need_swap) {
+      endian::ByteSwap::Swap(p, 4);
+    }
+    p += 4;
+  }
+}
+
+
 void SimulationRayData::Clear() {
   rays_.clear();
   exit_ray_segments_.clear();
@@ -35,16 +87,31 @@ void SimulationRayData::AddExitRaySegment(RaySegment* r) {
 }
 
 
-std::vector<RaySegment*> SimulationRayData::GetFinalRaySegments() const {
-  std::vector<RaySegment*> final_ray_segments;
+SimpleRayData SimulationRayData::CollectFinalRayData() const {
+  size_t num = 0;
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
       if (r->state == RaySegmentState::kFinished) {
-        final_ray_segments.emplace_back(r);
+        num++;
       }
     }
   }
-  return final_ray_segments;
+
+  SimpleRayData final_ray_data(num);
+  final_ray_data.wavelength = static_cast<float>(wavelength_info_.wavelength);
+  final_ray_data.weight = wavelength_info_.weight;
+  float* p = final_ray_data.buf.get();
+  for (const auto& sr : exit_ray_segments_) {
+    for (const auto& r : sr) {
+      if (r->state == RaySegmentState::kFinished) {
+        const auto* axis = r->root_ctx->main_axis.val();
+        math::RotateZBack(axis, r->dir.val(), p);
+        p[3] = r->w;
+        p += 4;
+      }
+    }
+  }
+  return final_ray_data;
 }
 
 
@@ -557,25 +624,7 @@ void Simulator::SaveFinalDirections(const char* filename) {
     return;
   }
 
-  file.Write(static_cast<float>(simulation_ray_data_.wavelength_info_.wavelength));
-  file.Write(simulation_ray_data_.wavelength_info_.weight);
-
-  const auto ray_seg_set = simulation_ray_data_.GetFinalRaySegments();
-  auto ray_num = ray_seg_set.size();
-  size_t idx = 0;
-  std::unique_ptr<float[]> data{ new float[ray_num * 4] };  // dx, dy, dz, w
-
-  float* curr_data = data.get();
-  for (const auto& r : ray_seg_set) {
-    const auto axis_rot = r->root_ctx->main_axis.val();
-    assert(r->root_ctx);
-
-    math::RotateZBack(axis_rot, r->dir.val(), curr_data);
-    curr_data[3] = r->w;
-    curr_data += 4;
-    idx++;
-  }
-  file.Write(data.get(), idx * 4);
+  simulation_ray_data_.CollectFinalRayData().Serialize(file, true);
 }
 
 

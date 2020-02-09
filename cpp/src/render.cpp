@@ -281,9 +281,8 @@ void SpectrumRenderer::LoadDataFiles() {
 }
 
 
-void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData& simulation_data) {
-  const auto ray_seg_set = simulation_data.GetFinalRaySegments();
-  auto num = ray_seg_set.size();
+void SpectrumRenderer::LoadData(float wl, float weight, const SimpleRayData& final_ray_data) {
+  auto num = final_ray_data.size;
 
   auto projection_type = context_->cam_ctx_->GetLensType();
   auto& projection_functions = GetProjectionFunctions();
@@ -309,80 +308,14 @@ void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData&
   auto* current_data = spectrum_data_[wavelength].get();
   auto* current_data_compensation = spectrum_data_compensation_[wavelength].get();
 
-  auto threading_pool = ThreadingPool::GetInstance();
-  threading_pool->AddRangeBasedJobs(num, [=, &ray_seg_set](size_t start_idx, size_t end_idx) {
-    size_t current_num = end_idx - start_idx;
-    std::unique_ptr<float[]> curr_data{ new float[current_num * 4] };
-    auto* p = curr_data.get();
-    for (size_t j = start_idx; j < end_idx; j++) {
-      const auto& r = ray_seg_set[j];
-      auto axis_rot = r->root_ctx->main_axis.val();
-      icehalo::math::RotateZBack(axis_rot, r->dir.val(), p);
-      p[3] = r->w;
-      p += 4;
-    }
-
-    std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
-    p = curr_data.get();
-    pf(context_->cam_ctx_->GetCameraTargetDirection(), context_->cam_ctx_->GetFov(), current_num, p, img_wid, img_hei,
-       tmp_xy.get(), context_->render_ctx_->GetVisibleRange());
-
-    for (size_t j = 0; j < current_num; j++) {
-      int x = tmp_xy[j * 2 + 0];
-      int y = tmp_xy[j * 2 + 1];
-      if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
-        continue;
-      }
-      if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
-        x += context_->render_ctx_->GetImageOffsetX();
-        y += context_->render_ctx_->GetImageOffsetY();
-      }
-      if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
-        continue;
-      }
-      auto tmp_val = curr_data[j * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
-      auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
-      current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
-      current_data[y * img_wid + x] = tmp_sum;
-    }
-  });
-  threading_pool->WaitFinish();
-
-  total_w_ += context_->GetInitRayNum() * weight;
-}
-
-
-void SpectrumRenderer::LoadData(float wl, float weight, const float* curr_data, size_t num) {
-  auto projection_type = context_->cam_ctx_->GetLensType();
-  auto& projection_functions = GetProjectionFunctions();
-  if (projection_functions.find(projection_type) == projection_functions.end()) {
-    std::fprintf(stderr, "Unknown projection type!\n");
-    return;
-  }
-  auto& pf = projection_functions[projection_type];
-
-  auto wavelength = static_cast<int>(wl);
-  if (wavelength < SpectrumRenderer::kMinWavelength || wavelength > SpectrumRenderer::kMaxWaveLength || weight < 0) {
-    std::fprintf(stderr, "Wavelength out of range!\n");
-    return;
-  }
-
-  auto img_hei = context_->render_ctx_->GetImageHeight();
-  auto img_wid = context_->render_ctx_->GetImageWidth();
-
-  if (!spectrum_data_.count(wavelength) || !spectrum_data_[wavelength]) {
-    spectrum_data_[wavelength].reset(new float[img_hei * img_wid]{});
-    spectrum_data_compensation_[wavelength].reset(new float[img_hei * img_wid]{});
-  }
-  auto* current_data = spectrum_data_[wavelength].get();
-  auto* current_data_compensation = spectrum_data_compensation_[wavelength].get();
-
+  const auto* final_ray_buf = final_ray_data.buf.get();
   auto threading_pool = ThreadingPool::GetInstance();
   threading_pool->AddRangeBasedJobs(num, [=](size_t start_idx, size_t end_idx) {
     size_t current_num = end_idx - start_idx;
+
     std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
     pf(context_->cam_ctx_->GetCameraTargetDirection(), context_->cam_ctx_->GetFov(), current_num,
-       curr_data + start_idx * 4, img_wid, img_hei, tmp_xy.get(), context_->render_ctx_->GetVisibleRange());
+       final_ray_buf + start_idx * 4, img_wid, img_hei, tmp_xy.get(), context_->render_ctx_->GetVisibleRange());
 
     for (size_t j = 0; j < current_num; j++) {
       int x = tmp_xy[j * 2 + 0];
@@ -397,7 +330,7 @@ void SpectrumRenderer::LoadData(float wl, float weight, const float* curr_data, 
       if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
         continue;
       }
-      auto tmp_val = curr_data[(start_idx + j) * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
+      auto tmp_val = final_ray_buf[(start_idx + j) * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
       auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
       current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
       current_data[y * img_wid + x] = tmp_sum;
@@ -454,19 +387,13 @@ uint8_t* SpectrumRenderer::GetImageBuffer() const {
 
 
 int SpectrumRenderer::LoadDataFromFile(File& file) {
-  auto file_size = file.GetBytes();
-  std::unique_ptr<float[]> read_buffer{ new float[file_size / sizeof(float)]{} };
-
   file.Open(FileOpenMode::kRead);
-  auto read_count = file.Read(read_buffer.get(), 2);
-  if (read_count == 0) {
-    std::fprintf(stderr, "Failed to read wavelength data!\n");
-    file.Close();
-    return -1;
-  }
+  SimpleRayData final_ray_data(0);
+  final_ray_data.Deserialize(file, endian::kUnknownEndian);
+  file.Close();
 
-  auto wavelength = static_cast<int>(read_buffer[0]);
-  auto wavelength_weight = read_buffer[1];
+  auto wavelength = static_cast<int>(final_ray_data.wavelength);
+  auto wavelength_weight = final_ray_data.weight;
   if (wavelength < SpectrumRenderer::kMinWavelength || wavelength > SpectrumRenderer::kMaxWaveLength ||
       wavelength_weight < 0) {
     std::fprintf(stderr, "Wavelength out of range!\n");
@@ -474,17 +401,13 @@ int SpectrumRenderer::LoadDataFromFile(File& file) {
     return -1;
   }
 
-  read_count = file.Read(read_buffer.get(), file_size / sizeof(float));
-  auto total_ray_count = read_count / 4;
-  file.Close();
-
-  if (total_ray_count == 0) {
+  if (final_ray_data.size == 0) {
     return 0;
   }
 
-  LoadData(wavelength, wavelength_weight, read_buffer.get(), total_ray_count);
+  LoadData(wavelength, wavelength_weight, final_ray_data);
 
-  return static_cast<int>(total_ray_count);
+  return static_cast<int>(final_ray_data.size);
 }
 
 

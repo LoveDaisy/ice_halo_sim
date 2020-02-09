@@ -42,7 +42,7 @@ int main(int argc, char* argv[]) {
       std::printf("Ray tracing: %.2fms\n", diff.count());
 
       renderer.LoadData(static_cast<float>(wavelengths[i].wavelength), wavelengths[i].weight,
-                        simulator.GetSimulationRayData());
+                        simulator.GetSimulationRayData().CollectFinalRayData());
     }
 
     renderer.RenderToImage();

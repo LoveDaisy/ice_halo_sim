@@ -104,7 +104,7 @@ class SpectrumRenderer {
   explicit SpectrumRenderer(ProjectContextPtr context);
   ~SpectrumRenderer();
 
-  void LoadData(float wavelength, float weight, const SimulationRayData& simulation_data);
+  void LoadData(float wl, float weight, const SimpleRayData& final_ray_data);
   void LoadDataFiles();
   void ResetData();
   void RenderToImage();
@@ -112,7 +112,6 @@ class SpectrumRenderer {
 
  private:
   int LoadDataFromFile(File& file);
-  void LoadData(float wavelength, float weight, const float* ray_data, size_t num);
   void GatherSpectrumData(float* wl_data_out, float* sp_data_out);
 
   static void Rgb(size_t wavelength_number, size_t data_number,       //

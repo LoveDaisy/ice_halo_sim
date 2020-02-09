@@ -10,8 +10,41 @@
 
 namespace icehalo {
 
-class SimpleRaySegmentData {
-  ;
+struct SimpleRayData : public ISerializable {
+  explicit SimpleRayData(size_t num);
+
+  float wavelength;
+  float weight;
+  std::unique_ptr<float[]> buf;
+  size_t size;
+
+  /**
+   * @brief Serialize self to a file.
+   *
+   * This class is a simple wrapper for a piece of contiguous memory. So this method just simply write
+   * all float numbers to a file.
+   *
+   * The file layout is:
+   * float,                 // wavelength
+   * float,                 // weight
+   * uint64,                // number N
+   * (float * 4) * N,       // x, y, z, w
+   *
+   * @param file
+   * @param with_boi
+   */
+  void Serialize(File& file, bool with_boi) override;
+
+  /**
+   * @brief Deserialize (load data) from a file.
+   *
+   * This class is a simple wrapper for a piece of contiguous memory. So this method just simply read
+   * all float numbers from a file.
+   *
+   * @param file
+   * @param endianness
+   */
+  void Deserialize(File& file, endian::Endianness endianness) override;
 };
 
 
@@ -23,7 +56,7 @@ class SimulationRayData : public ISerializable {
   void PrepareNewScatter(size_t ray_num);
   void AddRay(RayInfo* ray);
 
-  std::vector<RaySegment*> GetFinalRaySegments() const;
+  SimpleRayData CollectFinalRayData() const;
 
   void AddExitRaySegment(RaySegment* r);
   const std::vector<RaySegment*>& GetLastExitRaySegments() const;
