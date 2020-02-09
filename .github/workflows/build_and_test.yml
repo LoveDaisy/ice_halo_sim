@@ -1,0 +1,18 @@
+name: C/C++ CI
+
+on:
+  push:
+    branches: 
+    - master
+    
+jobs:
+  build:
+    name: Build and test
+    strategy:
+      matrix:
+        os: [ubuntu-16.04, ubuntu-latest, macOS-10.14, macOS-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build on ${{ matrix.os }}
+      run: rm -rf build && ./build.sh -trj release
