@@ -28,7 +28,6 @@ set(SOURCE_FILE
     obj_pool.cpp
     optics.cpp
     render.cpp
-    serialize.cpp
     simulation.cpp
     threadingpool.cpp)
 
