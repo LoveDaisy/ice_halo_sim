@@ -15,4 +15,4 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build on ${{ matrix.os }}
-      run: rm -rf build && ./build.sh -trj release
+      run: cd cpp && rm -rf build && ./build.sh -trj release
