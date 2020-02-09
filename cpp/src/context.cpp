@@ -355,26 +355,8 @@ SunContext::SunContext(float altitude, float diameter)
 
 SunContextPtrU SunContext::CreateFromJson(rapidjson::Document& d) {
   SunContextPtrU sun_ctx{ new SunContext };
-  float sun_altitude = 0.0f;
-  auto* p = Pointer("/sun/altitude").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <sun.altitude>, using default 0.0!\n");
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! config <sun.altitude> is not a number, using default 0.0!\n");
-  } else {
-    sun_altitude = static_cast<float>(p->GetDouble());
-  }
-  sun_ctx->SetSunAltitude(sun_altitude);
-
-  p = Pointer("/sun/diameter").Get(d);
-  if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <sun.diameter>, using default 0.5!\n");
-  } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Config <sun.diameter> is not a number, using default 0.5!\n");
-  } else {
-    sun_ctx->SetSunDiameter(static_cast<float>(p->GetDouble()));
-  }
-
+  rapidjson::Value* sun_dom = Pointer("/sun").Get(d);
+  sun_ctx->LoadFromJson(*sun_dom);
   return sun_ctx;
 }
 
@@ -412,6 +394,36 @@ bool SunContext::SetSunDiameter(float d) {
   } else {
     sun_diameter_ = d;
     return true;
+  }
+}
+
+
+void SunContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
+  root.Clear();
+  Pointer("/altitude").Set(root, sun_altitude_, allocator);
+  Pointer("/diameter").Set(root, sun_diameter_, allocator);
+}
+
+
+void SunContext::LoadFromJson(rapidjson::Value& root) {
+  float sun_altitude = 0.0f;
+  auto* p = Pointer("/altitude").Get(root);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Sun config missing <altitude>, using default 0.0!\n");
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! Sun config <altitude> is not a number, using default 0.0!\n");
+  } else {
+    sun_altitude = static_cast<float>(p->GetDouble());
+  }
+  SetSunAltitude(sun_altitude);
+
+  p = Pointer("/diameter").Get(root);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Sun config missing <diameter>, using default 0.5!\n");
+  } else if (!p->IsNumber()) {
+    std::fprintf(stderr, "\nWARNING! Sun config <diameter> is not a number, using default 0.5!\n");
+  } else {
+    SetSunDiameter(static_cast<float>(p->GetDouble()));
   }
 }
 

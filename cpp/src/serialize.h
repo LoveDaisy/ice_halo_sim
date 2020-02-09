@@ -4,10 +4,13 @@
 #include <cstdint>
 
 #include "file.h"
+#include "rapidjson/document.h"
 
 namespace icehalo {
 
 struct ISerializable {
+  virtual ~ISerializable() = default;
+
   /**
    * @brief Serialize data into a file.
    * @param file The destination file.
@@ -51,17 +54,21 @@ constexpr uintptr_t CombineU32AsPointer(uint32_t high, uint32_t low) {
 
 class IJsonizable {
  public:
-  /**
-   * @brief Convert self to a JSON object and save it to a file.
-   * @param file The file to be saved.
-   */
-  virtual void SaveToJson(File& file) = 0;
+  virtual ~IJsonizable() = default;
 
   /**
-   * @brief Load data from a JSON file.
-   * @param file
+   * @brief Save self to a JSON object.
+   *
+   * @param root
+   * @param allocator
    */
-  virtual void LoadFromJson(File& file) = 0;
+  virtual void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) = 0;
+
+  /**
+   * @brief Load data from a JSON object.
+   * @param root
+   */
+  virtual void LoadFromJson(rapidjson::Value& root) = 0;
 };
 
 }  // namespace icehalo

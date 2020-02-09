@@ -17,6 +17,7 @@
 #include "mymath.h"
 #include "optics.h"
 #include "rapidjson/document.h"
+#include "serialize.h"
 
 
 namespace icehalo {
@@ -148,7 +149,7 @@ class MultiScatterContext {
 };
 
 
-class SunContext {
+class SunContext : public IJsonizable {
  public:
   const float* GetSunPosition() const;
 
@@ -157,6 +158,9 @@ class SunContext {
 
   float GetSunDiameter() const;
   bool SetSunDiameter(float d);
+
+  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
+  void LoadFromJson(rapidjson::Value& root) override;
 
   static SunContextPtrU CreateFromJson(rapidjson::Document& d);
 
