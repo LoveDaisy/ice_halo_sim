@@ -1,7 +1,5 @@
 # C++ codes
 
-![](https://github.com/LoveDaisy/ice_halo_sim/workflows/Build%20and%20test%20cpp/badge.svg?branch=master)
-
 [中文版说明](README_zh.md)
 
 After testing my algorithms on matlab codes, I start a C++ project for higher performance. Currently the C++ version 
