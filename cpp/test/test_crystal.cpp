@@ -1,9 +1,9 @@
 #include <algorithm>
 #include <vector>
 
-#include "crystal.h"
+#include "core/crystal.h"
+#include "core/mymath.h"
 #include "gtest/gtest.h"
-#include "mymath.h"
 
 namespace {
 

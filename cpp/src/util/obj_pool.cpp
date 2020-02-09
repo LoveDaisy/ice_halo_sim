@@ -1,6 +1,6 @@
-#include "obj_pool.h"
+#include "util/obj_pool.h"
 
-#include "optics.h"
+#include "core/optics.h"
 
 namespace icehalo {
 

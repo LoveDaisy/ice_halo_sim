@@ -5,9 +5,9 @@
 #include <limits>
 #include <utility>
 
-#include "context.h"
-#include "mymath.h"
-#include "threadingpool.h"
+#include "context/context.h"
+#include "core/mymath.h"
+#include "util/threadingpool.h"
 
 namespace icehalo {
 

@@ -1,10 +1,9 @@
 #include <chrono>
 #include <cstdio>
 #include <opencv2/opencv.hpp>
-#include <unordered_map>
 
-#include "context.h"
-#include "render.h"
+#include "context/context.h"
+#include "core/render.h"
 
 int main(int argc, char* argv[]) {
   if (argc != 2) {

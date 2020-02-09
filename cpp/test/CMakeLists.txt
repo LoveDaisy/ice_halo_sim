@@ -3,15 +3,15 @@ if(BUILD_TEST)
 endif()
 
 set(SOURCE_FILE
-  ${PROJ_SRC_DIR}/context.cpp
-  ${PROJ_SRC_DIR}/crystal.cpp
-  ${PROJ_SRC_DIR}/file.cpp
-  ${PROJ_SRC_DIR}/mymath.cpp
-  ${PROJ_SRC_DIR}/obj_pool.cpp
-  ${PROJ_SRC_DIR}/optics.cpp
-  ${PROJ_SRC_DIR}/render.cpp
-  ${PROJ_SRC_DIR}/simulation.cpp
-  ${PROJ_SRC_DIR}/threadingpool.cpp)
+    ${PROJ_SRC_DIR}/context/context.cpp
+    ${PROJ_SRC_DIR}/core/crystal.cpp
+    ${PROJ_SRC_DIR}/core/mymath.cpp
+    ${PROJ_SRC_DIR}/core/optics.cpp
+    ${PROJ_SRC_DIR}/core/render.cpp
+    ${PROJ_SRC_DIR}/core/simulation.cpp
+    ${PROJ_SRC_DIR}/io/file.cpp
+    ${PROJ_SRC_DIR}/util/obj_pool.cpp
+    ${PROJ_SRC_DIR}/util/threadingpool.cpp)
 
 add_executable(unit_test
   ${SOURCE_FILE}

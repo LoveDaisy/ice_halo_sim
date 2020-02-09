@@ -2,9 +2,9 @@
 #include <cstdio>
 #include <opencv2/opencv.hpp>
 
-#include "context.h"
-#include "render.h"
-#include "simulation.h"
+#include "context/context.h"
+#include "core/render.h"
+#include "core/simulation.h"
 
 int main(int argc, char* argv[]) {
   if (argc != 2) {

@@ -4,9 +4,9 @@
 #include <stack>
 #include <utility>
 
-#include "mymath.h"
-#include "obj_pool.h"
-#include "threadingpool.h"
+#include "core/mymath.h"
+#include "util/obj_pool.h"
+#include "util/threadingpool.h"
 
 namespace icehalo {
 

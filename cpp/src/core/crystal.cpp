@@ -1,10 +1,8 @@
-#include "crystal.h"
+#include "core/crystal.h"
 
 #include <algorithm>
 #include <cstring>
 #include <utility>
-
-#include "context.h"
 
 namespace icehalo {
 

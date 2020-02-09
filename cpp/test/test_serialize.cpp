@@ -1,7 +1,7 @@
-#include "file.h"
+#include "core/optics.h"
 #include "gtest/gtest.h"
-#include "obj_pool.h"
-#include "optics.h"
+#include "io/file.h"
+#include "util/obj_pool.h"
 
 extern std::string working_dir;
 

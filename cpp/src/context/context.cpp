@@ -4,12 +4,12 @@
 #include <limits>
 #include <utility>
 
-#include "optics.h"
+#include "core/optics.h"
+#include "core/render.h"
 #include "rapidjson/error/en.h"
 #include "rapidjson/filereadstream.h"
 #include "rapidjson/pointer.h"
-#include "render.h"
-#include "threadingpool.h"
+#include "util/threadingpool.h"
 
 
 namespace icehalo {

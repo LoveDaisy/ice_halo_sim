@@ -12,12 +12,12 @@
 #include <utility>
 #include <vector>
 
-#include "crystal.h"
-#include "file.h"
-#include "mymath.h"
-#include "optics.h"
+#include "core/crystal.h"
+#include "core/mymath.h"
+#include "core/optics.h"
+#include "io/file.h"
+#include "io/serialize.h"
 #include "rapidjson/document.h"
-#include "serialize.h"
 
 
 namespace icehalo {

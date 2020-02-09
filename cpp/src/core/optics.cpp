@@ -8,9 +8,9 @@
 #include <cmath>
 #include <limits>
 
-#include "context.h"
-#include "mymath.h"
-#include "obj_pool.h"
+#include "context/context.h"
+#include "core/mymath.h"
+#include "util/obj_pool.h"
 
 
 namespace icehalo {

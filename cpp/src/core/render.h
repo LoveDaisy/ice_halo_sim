@@ -4,9 +4,9 @@
 #include <functional>
 #include <unordered_map>
 
-#include "context.h"
-#include "file.h"
-#include "simulation.h"
+#include "context/context.h"
+#include "core/simulation.h"
+#include "io/file.h"
 
 
 namespace icehalo {

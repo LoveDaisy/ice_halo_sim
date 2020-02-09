@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-#include "mymath.h"
+#include "core/mymath.h"
 
 namespace icehalo {
 

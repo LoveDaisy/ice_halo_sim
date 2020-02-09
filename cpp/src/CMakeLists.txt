@@ -21,19 +21,19 @@ endif()
 # ==================================================================================================
 # Add targets
 set(SOURCE_FILE
-    context.cpp
-    crystal.cpp
-    file.cpp
-    mymath.cpp
-    obj_pool.cpp
-    optics.cpp
-    render.cpp
-    simulation.cpp
-    threadingpool.cpp)
+    context/context.cpp
+    core/crystal.cpp
+    core/mymath.cpp
+    core/optics.cpp
+    core/render.cpp
+    core/simulation.cpp
+    io/file.cpp
+    util/obj_pool.cpp
+    util/threadingpool.cpp)
 
 add_executable(IceHaloSim trace_main.cpp ${SOURCE_FILE})
 target_include_directories(IceHaloSim
-    PUBLIC ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
+    PUBLIC ${PROJ_SRC_DIR} ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
 target_link_libraries(IceHaloSim
     PUBLIC ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
 install(TARGETS IceHaloSim
@@ -41,7 +41,7 @@ install(TARGETS IceHaloSim
 
 add_executable(IceHaloRender render_main.cpp ${SOURCE_FILE})
 target_include_directories(IceHaloRender
-    PUBLIC ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
+    PUBLIC ${PROJ_SRC_DIR} ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
 target_link_libraries(IceHaloRender
     PUBLIC ${OpenCV_LIBS} ${Boost_LIBRARIES})
 install(TARGETS IceHaloRender
@@ -49,7 +49,7 @@ install(TARGETS IceHaloRender
 
 add_executable(IceHaloEndless endless_main.cpp ${SOURCE_FILE})
 target_include_directories(IceHaloEndless
-    PUBLIC ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
+    PUBLIC ${PROJ_SRC_DIR} ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
 target_link_libraries(IceHaloEndless
     PUBLIC ${OpenCV_LIBS} ${Boost_LIBRARIES})
 install(TARGETS IceHaloEndless

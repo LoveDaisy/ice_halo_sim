@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-#include "file.h"
+#include "io/file.h"
 #include "rapidjson/document.h"
 
 namespace icehalo {
