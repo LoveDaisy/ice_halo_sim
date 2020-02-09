@@ -1,0 +1,47 @@
+#ifndef SRC_CONTEXT_SUN_CONTEXT_H_
+#define SRC_CONTEXT_SUN_CONTEXT_H_
+
+#include <memory>
+
+#include "io/serialize.h"
+#include "rapidjson/document.h"
+
+
+namespace icehalo {
+
+class SunContext;
+
+using SunContextPtrU = std::unique_ptr<SunContext>;
+using SunContextPtr = std::shared_ptr<SunContext>;
+
+class SunContext : public IJsonizable {
+ public:
+  const float* GetSunPosition() const;
+
+  float GetSunAltitude() const;
+  bool SetSunAltitude(float altitude);
+
+  float GetSunDiameter() const;
+  bool SetSunDiameter(float d);
+
+  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
+  void LoadFromJson(rapidjson::Value& root) override;
+
+  static SunContextPtrU CreateFromJson(rapidjson::Document& d);
+
+  static constexpr float kMaxDiameter = 90.0f;
+  static constexpr float kDefaultAltitude = 20.0f;
+
+ private:
+  SunContext();
+  SunContext(float altitude, float diameter);
+
+  float diameter_;         // in degree
+  float altitude_;         // in degree
+  float sun_position_[3];  // [x, y, z]
+};
+
+}  // namespace icehalo
+
+
+#endif  // SRC_CONTEXT_SUN_CONTEXT_H_

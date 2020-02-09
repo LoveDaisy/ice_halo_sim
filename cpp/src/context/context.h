@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "context/sun_context.h"
 #include "core/crystal.h"
 #include "core/mymath.h"
 #include "core/optics.h"
@@ -26,7 +27,6 @@ struct CrystalContext;
 class CameraContext;
 class ProjectContext;
 class RenderContext;
-class SunContext;
 enum class LensType;
 enum class VisibleRange;
 
@@ -37,8 +37,6 @@ using ProjectContextPtrU = std::unique_ptr<ProjectContext>;
 using ProjectContextPtr = std::shared_ptr<ProjectContext>;
 using RenderContextPtrU = std::unique_ptr<RenderContext>;
 using RenderContextPtr = std::shared_ptr<RenderContext>;
-using SunContextPtrU = std::unique_ptr<SunContext>;
-using SunContextPtr = std::shared_ptr<SunContext>;
 
 
 enum Symmetry : uint8_t {
@@ -146,34 +144,6 @@ class MultiScatterContext {
  private:
   std::vector<CrystalInfo> crystal_infos_;  // crystal, population, filter
   float prob_;
-};
-
-
-class SunContext : public IJsonizable {
- public:
-  const float* GetSunPosition() const;
-
-  float GetSunAltitude() const;
-  bool SetSunAltitude(float altitude);
-
-  float GetSunDiameter() const;
-  bool SetSunDiameter(float d);
-
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(rapidjson::Value& root) override;
-
-  static SunContextPtrU CreateFromJson(rapidjson::Document& d);
-
-  static constexpr float kMaxDiameter = 90.0f;
-  static constexpr float kDefaultAltitude = 20.0f;
-
- private:
-  SunContext();
-  SunContext(float altitude, float diameter);
-
-  float diameter_;         // in degree
-  float altitude_;         // in degree
-  float sun_position_[3];  // [x, y, z]
 };
 
 

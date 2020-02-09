@@ -4,6 +4,7 @@ endif()
 
 set(SOURCE_FILE
     ${PROJ_SRC_DIR}/context/context.cpp
+    ${PROJ_SRC_DIR}/context/sun_context.cpp
     ${PROJ_SRC_DIR}/core/crystal.cpp
     ${PROJ_SRC_DIR}/core/mymath.cpp
     ${PROJ_SRC_DIR}/core/optics.cpp
