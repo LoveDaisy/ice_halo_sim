@@ -48,6 +48,22 @@ constexpr uintptr_t CombineU32AsPointer(uint32_t high, uint32_t low) {
   return static_cast<uintptr_t>(high) << 32 | static_cast<uintptr_t>(low);
 }
 
+
+class IJsonizable {
+ public:
+  /**
+   * @brief Convert self to a JSON object and save it to a file.
+   * @param file The file to be saved.
+   */
+  virtual void SaveToJson(File& file) = 0;
+
+  /**
+   * @brief Load data from a JSON file.
+   * @param file
+   */
+  virtual void LoadFromJson(File& file) = 0;
+};
+
 }  // namespace icehalo
 
 #endif  // SRC_SERIALIZE_H_
