@@ -46,6 +46,12 @@ T* ObjectPool<T>::GetPointerFromSerializeData(T* dummy_ptr) {
 
 
 template <typename T>
+T* ObjectPool<T>::GetPointerFromSerializeData(uint32_t chunk_id, uint32_t obj_id) {
+  return GetPointerFromSerializeData(reinterpret_cast<T*>(CombineU32AsPointer(chunk_id, obj_id)));
+}
+
+
+template <typename T>
 std::tuple<uint32_t, uint32_t> ObjectPool<T>::GetObjectSerializeIndex(T* obj) {
   if (!obj) {
     return { kInvalidIndex, kInvalidIndex };

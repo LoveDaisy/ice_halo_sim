@@ -33,6 +33,7 @@ class ObjectPool : public ISerializable {
   void Map(std::function<void(T&)>);
 
   T* GetPointerFromSerializeData(T* dummy_ptr);
+  T* GetPointerFromSerializeData(uint32_t chunk_id, uint32_t obj_id);
   std::tuple<uint32_t, uint32_t> GetObjectSerializeIndex(T* obj);
 
   /**

@@ -282,7 +282,7 @@ void SpectrumRenderer::LoadDataFiles() {
 
 
 void SpectrumRenderer::LoadData(float wl, float weight, const SimulationRayData& simulation_data) {
-  const auto& ray_seg_set = simulation_data.GetFinalRaySegments();
+  const auto ray_seg_set = simulation_data.GetFinalRaySegments();
   auto num = ray_seg_set.size();
 
   auto projection_type = context_->cam_ctx_->GetLensType();

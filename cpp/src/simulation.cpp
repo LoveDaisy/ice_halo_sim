@@ -13,7 +13,6 @@ namespace icehalo {
 void SimulationRayData::Clear() {
   rays_.clear();
   exit_ray_segments_.clear();
-  final_ray_segments_.clear();
   RayInfoPool::GetInstance()->Clear();
 }
 
@@ -36,20 +35,16 @@ void SimulationRayData::AddExitRaySegment(RaySegment* r) {
 }
 
 
-void SimulationRayData::CollectFinalRaySegments() {
-  final_ray_segments_.clear();
+std::vector<RaySegment*> SimulationRayData::GetFinalRaySegments() const {
+  std::vector<RaySegment*> final_ray_segments;
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
       if (r->state == RaySegmentState::kFinished) {
-        final_ray_segments_.emplace_back(r);
+        final_ray_segments.emplace_back(r);
       }
     }
   }
-}
-
-
-const std::vector<RaySegment*>& SimulationRayData::GetFinalRaySegments() const {
-  return final_ray_segments_;
+  return final_ray_segments;
 }
 
 
@@ -63,6 +58,110 @@ const std::vector<std::vector<RaySegment*>>& SimulationRayData::GetExitRaySegmen
   return exit_ray_segments_;
 }
 #endif
+
+
+void SimulationRayData::Serialize(File& file, bool with_boi) {
+  if (with_boi) {
+    file.Write(ISerializable::kDefaultBoi);
+  }
+
+  auto ray_info_pool = RayInfoPool::GetInstance();
+  auto ray_seg_pool = RaySegmentPool::GetInstance();
+  ray_info_pool->Serialize(file, false);
+  ray_seg_pool->Serialize(file, false);
+
+  uint32_t multi_scatters = rays_.size();
+  file.Write(multi_scatters);
+  for (const auto& sc : rays_) {
+    uint32_t num = sc.size();
+    file.Write(num);
+    for (const auto& r : sc) {
+      uint32_t chunk_id, obj_id;
+      std::tie(chunk_id, obj_id) = ray_info_pool->GetObjectSerializeIndex(r);
+      file.Write(chunk_id);
+      file.Write(obj_id);
+    }
+  }
+  for (const auto& sc : exit_ray_segments_) {
+    uint32_t num = sc.size();
+    file.Write(num);
+    for (const auto& r : sc) {
+      uint32_t chunk_id, obj_id;
+      std::tie(chunk_id, obj_id) = ray_seg_pool->GetObjectSerializeIndex(r);
+      file.Write(chunk_id);
+      file.Write(obj_id);
+    }
+  }
+}
+
+
+void SimulationRayData::Deserialize(File& file, endian::Endianness endianness) {
+  endianness = CheckEndianness(file, endianness);
+  bool need_swap = (endianness != endian::kCompileEndian);
+
+  Clear();
+
+  auto ray_info_pool = RayInfoPool::GetInstance();
+  auto ray_seg_pool = RaySegmentPool::GetInstance();
+  ray_info_pool->Deserialize(file, endianness);
+  ray_seg_pool->Deserialize(file, endianness);
+
+  ray_info_pool->Map([=](RayInfo& r) {
+    r.first_ray_segment = ray_seg_pool->GetPointerFromSerializeData(r.first_ray_segment);
+    r.prev_ray_segment = ray_seg_pool->GetPointerFromSerializeData(r.prev_ray_segment);
+  });
+  ray_seg_pool->Map([=](RaySegment& r) {
+    r.next_reflect = ray_seg_pool->GetPointerFromSerializeData(r.next_reflect);
+    r.next_refract = ray_seg_pool->GetPointerFromSerializeData(r.next_refract);
+    r.prev = ray_seg_pool->GetPointerFromSerializeData(r.prev);
+    r.root_ctx = ray_info_pool->GetPointerFromSerializeData(r.root_ctx);
+  });
+
+  uint32_t multi_scatters;
+  file.Read(&multi_scatters);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&multi_scatters);
+  }
+
+  for (size_t k = 0; k < multi_scatters; k++) {
+    rays_.emplace_back();
+    uint32_t num;
+    file.Read(&num);
+    if (need_swap) {
+      endian::ByteSwap::Swap(&num);
+    }
+    for (size_t i = 0; i < num; i++) {
+      uint32_t chunk_id, obj_id;
+      file.Read(&chunk_id);
+      file.Read(&obj_id);
+      if (need_swap) {
+        endian::ByteSwap::Swap(&chunk_id);
+        endian::ByteSwap::Swap(&obj_id);
+      }
+      rays_.back().emplace_back(ray_info_pool->GetPointerFromSerializeData(chunk_id, obj_id));
+    }
+  }
+
+  for (size_t k = 0; k < multi_scatters; k++) {
+    exit_ray_segments_.emplace_back();
+    uint32_t num;
+    file.Read(&num);
+    if (need_swap) {
+      endian::ByteSwap::Swap(&num);
+    }
+    for (size_t i = 0; i < num; i++) {
+      uint32_t chunk_id, obj_id;
+      file.Read(&chunk_id);
+      file.Read(&obj_id);
+      if (need_swap) {
+        endian::ByteSwap::Swap(&chunk_id);
+        endian::ByteSwap::Swap(&obj_id);
+      }
+      auto r = ray_seg_pool->GetPointerFromSerializeData(chunk_id, obj_id);
+      exit_ray_segments_.back().emplace_back(r);
+    }
+  }
+}
 
 
 Simulator::BufferData::BufferData()
@@ -226,8 +325,6 @@ void Simulator::Run() {
     }
     entry_ray_offset_ = 0;
   }
-
-  simulation_ray_data_.CollectFinalRaySegments();
 }
 
 
@@ -463,7 +560,7 @@ void Simulator::SaveFinalDirections(const char* filename) {
   file.Write(static_cast<float>(simulation_ray_data_.wavelength_info_.wavelength));
   file.Write(simulation_ray_data_.wavelength_info_.weight);
 
-  const auto& ray_seg_set = simulation_ray_data_.GetFinalRaySegments();
+  const auto ray_seg_set = simulation_ray_data_.GetFinalRaySegments();
   auto ray_num = ray_seg_set.size();
   size_t idx = 0;
   std::unique_ptr<float[]> data{ new float[ray_num * 4] };  // dx, dy, dz, w

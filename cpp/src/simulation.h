@@ -6,10 +6,16 @@
 #include "context.h"
 #include "crystal.h"
 #include "optics.h"
+#include "serialize.h"
 
 namespace icehalo {
 
-class SimulationRayData {
+class SimpleRaySegmentData {
+  ;
+};
+
+
+class SimulationRayData : public ISerializable {
  public:
   WavelengthInfo wavelength_info_{};
 
@@ -17,8 +23,7 @@ class SimulationRayData {
   void PrepareNewScatter(size_t ray_num);
   void AddRay(RayInfo* ray);
 
-  void CollectFinalRaySegments();
-  const std::vector<RaySegment*>& GetFinalRaySegments() const;
+  std::vector<RaySegment*> GetFinalRaySegments() const;
 
   void AddExitRaySegment(RaySegment* r);
   const std::vector<RaySegment*>& GetLastExitRaySegments() const;
@@ -26,10 +31,48 @@ class SimulationRayData {
   const std::vector<std::vector<RaySegment*>>& GetExitRaySegments() const;
 #endif
 
+  /**
+   * @brief Serialize self to a file.
+   *
+   * This class only holds pointers to ray segments and ray infos, rather than objects themselves.
+   * To serialize data completely, this method will serialize ray segment pool and ray info
+   * pool first.
+   *
+   * The layout of file is:
+   * ray info pool,         // ray info pool
+   * ray seg pool,          // ray seg pool
+   * uint32,                // multi-scatters, K
+   * {
+   *   uint32,              // ray numbers, N
+   *   (uint32 * 2) * N,    // ray info pointers
+   * } * K
+   * {
+   *   uint32,              // ray seg numbers, N
+   *   (uint32 * 2) * N,    // ray seg pointers
+   * } * K
+   *
+   * @param file
+   * @param with_boi
+   */
+  void Serialize(File& file, bool with_boi) override;
+
+  /**
+   * @brief Deserialize (load data) from a file.
+   *
+   * This class only holds pointers to ray segments and ray infos, rather than objects themselves.
+   * To load data correctly, this method will deserialize ray segment pool and ray info
+   * pool first, i.e. it will clear all existing data in ray segment pool and ray info pool.
+   *
+   * @warning It will clear all existing data in ray segment pool and ray info pool.
+   *
+   * @param file
+   * @param endianness
+   */
+  void Deserialize(File& file, endian::Endianness endianness) override;
+
  private:
   std::vector<std::vector<RayInfo*>> rays_;
   std::vector<std::vector<RaySegment*>> exit_ray_segments_;
-  std::vector<RaySegment*> final_ray_segments_;
 };
 
 class Simulator {
