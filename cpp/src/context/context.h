@@ -1,22 +1,19 @@
 #ifndef SRC_CONTEXT_CONTEXT_H_
 #define SRC_CONTEXT_CONTEXT_H_
 
-#include <atomic>
 #include <functional>
 #include <memory>
-#include <random>
 #include <string>
-#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "context/camera_context.h"
+#include "context/multi_scatter_context.h"
 #include "context/render_context.h"
 #include "context/sun_context.h"
 #include "core/crystal.h"
-#include "core/mymath.h"
 #include "core/optics.h"
 #include "io/file.h"
 #include "io/serialize.h"
@@ -113,33 +110,6 @@ class GeneralRayPathFilter : public AbstractRayPathFilter {
   std::unordered_set<uint16_t> entry_faces_;
   std::unordered_set<uint16_t> exit_faces_;
   std::unordered_set<int> hit_nums_;
-};
-
-
-class MultiScatterContext {
- public:
-  struct CrystalInfo {
-    const CrystalContext* crystal_ctx;
-    AbstractRayPathFilter* filter;
-    float population;
-
-    CrystalInfo(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter, float pop)
-        : crystal_ctx(crystal_ctx), filter(filter), population(pop){};
-  };
-
-  explicit MultiScatterContext(float prob = 1.0f);
-
-  float GetProbability() const;
-  bool SetProbability(float p);
-
-  const std::vector<CrystalInfo>& GetCrystalInfo() const;
-  void ClearCrystalInfo();
-  void AddCrystalInfo(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter, float population);
-  void NormalizeCrystalPopulation();
-
- private:
-  std::vector<CrystalInfo> crystal_infos_;  // crystal, population, filter
-  float prob_;
 };
 
 
