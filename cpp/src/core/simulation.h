@@ -1,5 +1,5 @@
-#ifndef SRC_SIMULATION_H_
-#define SRC_SIMULATION_H_
+#ifndef SRC_CORE_SIMULATION_H_
+#define SRC_CORE_SIMULATION_H_
 
 #include <vector>
 
@@ -187,4 +187,4 @@ class Simulator {
 
 }  // namespace icehalo
 
-#endif  // SRC_SIMULATION_H_
+#endif  // SRC_CORE_SIMULATION_H_

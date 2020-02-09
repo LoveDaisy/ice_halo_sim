@@ -1,5 +1,5 @@
-#ifndef SRC_CRYSTAL_H_
-#define SRC_CRYSTAL_H_
+#ifndef SRC_CORE_CRYSTAL_H_
+#define SRC_CORE_CRYSTAL_H_
 
 #include <memory>
 #include <utility>
@@ -194,4 +194,4 @@ using CrystalPtrU = std::unique_ptr<Crystal>;
 }  // namespace icehalo
 
 
-#endif  // SRC_CRYSTAL_H_
+#endif  // SRC_CORE_CRYSTAL_H_

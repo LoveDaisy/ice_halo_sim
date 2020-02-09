@@ -1,5 +1,5 @@
-#ifndef SRC_THREADINGPOOL_H_
-#define SRC_THREADINGPOOL_H_
+#ifndef SRC_UTIL_THREADINGPOOL_H_
+#define SRC_UTIL_THREADINGPOOL_H_
 
 #include <atomic>
 #include <condition_variable>
@@ -48,4 +48,4 @@ class ThreadingPool {
 }  // namespace icehalo
 
 
-#endif  // SRC_THREADINGPOOL_H_
+#endif  // SRC_UTIL_THREADINGPOOL_H_

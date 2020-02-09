@@ -1,5 +1,5 @@
-#ifndef SRC_CONTEXT_H_
-#define SRC_CONTEXT_H_
+#ifndef SRC_CONTEXT_CONTEXT_H_
+#define SRC_CONTEXT_CONTEXT_H_
 
 #include <atomic>
 #include <functional>
@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "context/camera_context.h"
 #include "context/sun_context.h"
 #include "core/crystal.h"
 #include "core/mymath.h"
@@ -24,15 +25,12 @@
 namespace icehalo {
 
 struct CrystalContext;
-class CameraContext;
 class ProjectContext;
 class RenderContext;
 enum class LensType;
 enum class VisibleRange;
 
 using CrystalContextPtrU = std::unique_ptr<CrystalContext>;
-using CameraContextPtrU = std::unique_ptr<CameraContext>;
-using CameraContextPtr = std::shared_ptr<CameraContext>;
 using ProjectContextPtrU = std::unique_ptr<ProjectContext>;
 using ProjectContextPtr = std::shared_ptr<ProjectContext>;
 using RenderContextPtrU = std::unique_ptr<RenderContext>;
@@ -144,46 +142,6 @@ class MultiScatterContext {
  private:
   std::vector<CrystalInfo> crystal_infos_;  // crystal, population, filter
   float prob_;
-};
-
-
-class CameraContext : public IJsonizable {
- public:
-  const float* GetCameraTargetDirection() const;
-  void SetCameraTargetDirection(float azimuth, float altitude, float roll);
-  void ResetCameraTargetDirection();
-
-  float GetFov() const;
-  void SetFov(float fov);
-
-  LensType GetLensType() const;
-  void SetLensType(LensType type);
-
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(rapidjson::Value& root) override;
-
-  static CameraContextPtrU CreateFromJson(rapidjson::Document& d);
-
-  static constexpr float kMinAngleRound = 0.0f;
-  static constexpr float kMaxAngleRound = 360.0f;
-  static constexpr float kMinAngleTilt = -90.0f;
-  static constexpr float kMaxAngleTilt = 90.0f;
-  static constexpr float kMinAngleHeading = -180.0f;
-  static constexpr float kMaxAngleHeading = 180.0f;
-
-  static constexpr float kMaxFovLinear = 65.0f;
-  static constexpr float kMaxFovFisheye = 120.0f;
-
-  static constexpr float kDefaultCamAzimuth = 90.0f;
-  static constexpr float kDefaultCamElevation = 89.9f;
-  static constexpr float kDefaultCamRoll = 0.0f;
-
- private:
-  CameraContext();
-
-  float target_dir_[3];  // azimuth, altitude, roll
-  float fov_;
-  LensType lens_type_;
 };
 
 
@@ -338,4 +296,4 @@ struct CrystalContext {
 }  // namespace icehalo
 
 
-#endif  // SRC_CONTEXT_H_
+#endif  // SRC_CONTEXT_CONTEXT_H_

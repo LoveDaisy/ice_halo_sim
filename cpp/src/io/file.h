@@ -1,5 +1,5 @@
-#ifndef SRC_FILES_H_
-#define SRC_FILES_H_
+#ifndef SRC_IO_FILE_H_
+#define SRC_IO_FILE_H_
 
 #include <string>
 #include <vector>
@@ -186,4 +186,4 @@ std::string PathJoin(const std::string& p1, const std::string& p2);
 
 }  // namespace icehalo
 
-#endif  // SRC_FILES_H_
+#endif  // SRC_IO_FILE_H_

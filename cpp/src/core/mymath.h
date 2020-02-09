@@ -1,5 +1,5 @@
-#ifndef SRC_MYMATH_H_
-#define SRC_MYMATH_H_
+#ifndef SRC_CORE_MYMATH_H_
+#define SRC_CORE_MYMATH_H_
 
 #include <cmath>
 #include <memory>
@@ -219,4 +219,4 @@ struct AxisDistribution {
 
 }  // namespace icehalo
 
-#endif  // SRC_MYMATH_H_
+#endif  // SRC_CORE_MYMATH_H_

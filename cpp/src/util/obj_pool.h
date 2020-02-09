@@ -1,5 +1,5 @@
-#ifndef SRC_OBJ_POOL_H_
-#define SRC_OBJ_POOL_H_
+#ifndef SRC_UTIL_OBJ_POOL_H_
+#define SRC_UTIL_OBJ_POOL_H_
 
 #include <atomic>
 #include <memory>
@@ -84,4 +84,4 @@ using RayInfoPool = ObjectPool<RayInfo>;
 }  // namespace icehalo
 
 
-#endif  // SRC_OBJ_POOL_H_
+#endif  // SRC_UTIL_OBJ_POOL_H_

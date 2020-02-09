@@ -1,5 +1,5 @@
-#ifndef SRC_SERIALIZE_H_
-#define SRC_SERIALIZE_H_
+#ifndef SRC_IO_SERIALIZE_H_
+#define SRC_IO_SERIALIZE_H_
 
 #include <cstdint>
 
@@ -73,4 +73,4 @@ class IJsonizable {
 
 }  // namespace icehalo
 
-#endif  // SRC_SERIALIZE_H_
+#endif  // SRC_IO_SERIALIZE_H_

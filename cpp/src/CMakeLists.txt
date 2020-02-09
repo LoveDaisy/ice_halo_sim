@@ -21,6 +21,7 @@ endif()
 # ==================================================================================================
 # Add targets
 set(SOURCE_FILE
+    context/camera_context.cpp
     context/context.cpp
     context/sun_context.cpp
     core/crystal.cpp

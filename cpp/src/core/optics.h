@@ -1,5 +1,5 @@
-#ifndef SRC_OPTICS_H_
-#define SRC_OPTICS_H_
+#ifndef SRC_CORE_OPTICS_H_
+#define SRC_CORE_OPTICS_H_
 
 #include <atomic>
 #include <memory>
@@ -183,4 +183,4 @@ class IceRefractiveIndex {
 }  // namespace icehalo
 
 
-#endif  // SRC_OPTICS_H_
+#endif  // SRC_CORE_OPTICS_H_

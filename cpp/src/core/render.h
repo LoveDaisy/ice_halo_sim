@@ -1,5 +1,5 @@
-#ifndef SRC_RENDER_H_
-#define SRC_RENDER_H_
+#ifndef SRC_CORE_RENDER_H_
+#define SRC_CORE_RENDER_H_
 
 #include <functional>
 #include <unordered_map>
@@ -384,4 +384,4 @@ class SpectrumRenderer {
 }  // namespace icehalo
 
 
-#endif  // SRC_RENDER_H_
+#endif  // SRC_CORE_RENDER_H_
