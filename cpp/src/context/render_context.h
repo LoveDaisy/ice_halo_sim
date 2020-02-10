@@ -15,7 +15,7 @@ using RenderContextPtrU = std::unique_ptr<RenderContext>;
 using RenderContextPtr = std::shared_ptr<RenderContext>;
 
 
-class RenderContext {
+class RenderContext : public IJsonizable {
  public:
   const float* GetRayColor() const;
   void SetRayColor(float r, float g, float b);
@@ -42,6 +42,9 @@ class RenderContext {
 
   VisibleRange GetVisibleRange() const;
   void SetVisibleRange(VisibleRange r);
+
+  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
+  void LoadFromJson(rapidjson::Value& root) override;
 
   static RenderContextPtrU CreateFromJson(rapidjson::Document& d);
 
