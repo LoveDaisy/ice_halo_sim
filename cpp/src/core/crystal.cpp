@@ -37,24 +37,10 @@ const std::vector<std::pair<math::Vec3f, int>>& GetCubicFaceNormToNumberList() {
 Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
                  std::vector<math::TriangleIdx> faces,  // face indices
                  CrystalType type)                      // crystal type
-    : vertexes_(std::move(vertexes)), faces_(std::move(faces)), type_(type), face_number_period_(-1),
+    : type_(type), vertexes_(std::move(vertexes)), faces_(std::move(faces)), face_number_period_(-1),
       face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitBasicData();
-  InitFaceNumber();
-  switch (type_) {
-    case CrystalType::kPrism:
-    case CrystalType::kPyramid:
-    case CrystalType::kStackPyramid:
-      face_number_period_ = 6;
-      break;
-    case CrystalType::kCubicPyramid:
-      face_number_period_ = 4;
-      break;
-    case CrystalType::kCustom:
-    case CrystalType::kUnknown:
-    default:
-      break;
-  }
+  InitCrystalTypeData();
 }
 
 
@@ -62,9 +48,9 @@ Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
                  std::vector<math::TriangleIdx> faces,  // face indices
                  std::vector<int> face_number_map,      // face to face number
                  CrystalType type)                      // crystal type
-    : vertexes_(std::move(vertexes)), faces_(std::move(faces)), face_number_map_(std::move(face_number_map)),
-      type_(type), face_number_period_(-1), face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr),
-      face_area_(nullptr) {
+    : type_(type), vertexes_(std::move(vertexes)), faces_(std::move(faces)),
+      face_number_map_(std::move(face_number_map)), face_number_period_(-1), face_bases_(nullptr),
+      face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitBasicData();
 }
 
@@ -162,17 +148,24 @@ void Crystal::InitBasicData() {
   }
 }
 
-void Crystal::InitFaceNumber() {
+void Crystal::InitCrystalTypeData() {
   switch (type_) {
     case CrystalType::kPrism:
-    case CrystalType::kPyramid:
+    case CrystalType::kPyramid_H3:
+    case CrystalType::kPyramid_I2H3:
+    case CrystalType::kPyramid_I4H3:
+    case CrystalType::kIrregularPrism:
+    case CrystalType::kIrregularPyramid:
       InitFaceNumberHex();
+      face_number_period_ = 6;
       break;
     case CrystalType::kCubicPyramid:
       InitFaceNumberCubic();
+      face_number_period_ = 4;
       break;
-    case CrystalType::kStackPyramid:
+    case CrystalType::kPyramidStackHalf:
       InitFaceNumberStack();
+      face_number_period_ = 6;
       break;
     case CrystalType::kCustom:
     case CrystalType::kUnknown:
@@ -328,7 +321,9 @@ CrystalPtrU Crystal::CreateHexPrism(float h) {
 
 
 CrystalPtrU Crystal::CreateHexPyramid(float h1, float h2, float h3) {
-  return CreateHexPyramid(1, 1, 1, 1, h1, h2, h3);
+  auto crystal = CreateHexPyramid(1, 1, 1, 1, h1, h2, h3);
+  crystal->type_ = CrystalType::kPyramid_H3;
+  return crystal;
 }
 
 
@@ -379,7 +374,9 @@ CrystalPtrU Crystal::CreateCubicPyramid(float h1, float h2) {
 
 CrystalPtrU Crystal::CreateHexPyramid(int i1, int i4,                  // Miller index
                                       float h1, float h2, float h3) {  // heights
-  return CreateHexPyramid(i1, i4, i1, i4, h1, h2, h3);
+  auto crystal = CreateHexPyramid(i1, i4, i1, i4, h1, h2, h3);
+  crystal->type_ = CrystalType::kPyramid_I2H3;
+  return crystal;
 }
 
 
@@ -442,7 +439,7 @@ CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4,  // upper 
   faces.emplace_back(21, 23, 22);
   faces.emplace_back(21, 18, 23);
 
-  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::kPyramid));
+  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::kPyramid_I4H3));
 }
 
 
@@ -507,7 +504,7 @@ CrystalPtrU Crystal::CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4,  
   faces.emplace_back(21, 23, 22);
   faces.emplace_back(21, 18, 23);
 
-  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::kStackPyramid));
+  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::kPyramidStackHalf));
 }
 
 
@@ -560,7 +557,7 @@ CrystalPtrU Crystal::CreateIrregularHexPrism(const float* dist, float h) {
   std::vector<TriangleIdx> faces;
   BuildPolyhedronFaces(hss, pts, faces);
 
-  return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::kPrism));
+  return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::kIrregularPrism));
 }
 
 
@@ -671,7 +668,7 @@ CrystalPtrU Crystal::CreateIrregularHexPyramid(const float* dist, const int* idx
   std::vector<TriangleIdx> faces;
   BuildPolyhedronFaces(hss, pts, faces);
 
-  return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::kPyramid));
+  return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::kIrregularPyramid));
 }
 
 

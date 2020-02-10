@@ -12,8 +12,12 @@ namespace icehalo {
 enum class CrystalType {
   kUnknown,
   kPrism,
-  kPyramid,
-  kStackPyramid,
+  kIrregularPrism,
+  kPyramid_H3,
+  kPyramid_I2H3,
+  kPyramid_I4H3,
+  kIrregularPyramid,
+  kPyramidStackHalf,
   kCubicPyramid,
   kCustom,
 };
@@ -147,15 +151,15 @@ class Crystal {
 
  protected:
   void InitBasicData();
-  void InitFaceNumber();
+  void InitCrystalTypeData();
   void InitFaceNumberHex();
   void InitFaceNumberCubic();
   void InitFaceNumberStack();
 
+  CrystalType type_;
   std::vector<math::Vec3f> vertexes_;
   std::vector<math::TriangleIdx> faces_;
   std::vector<int> face_number_map_;
-  CrystalType type_;
   int face_number_period_;
 
   std::unique_ptr<float[]> face_bases_;
