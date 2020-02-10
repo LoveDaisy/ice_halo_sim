@@ -26,9 +26,9 @@ class Crystal {
   int TotalFaces() const;
   int FaceNumber(int idx) const;
 
-  const std::vector<math::Vec3f>& GetVertexes();
-  const std::vector<math::TriangleIdx>& GetFaces();
-  const std::vector<int>& GetFaceNumberMap();
+  const std::vector<math::Vec3f>& GetVertexes() const;
+  const std::vector<math::TriangleIdx>& GetFaces() const;
+  const std::vector<int>& GetFaceNumberMap() const;
 
   const float* GetFaceVertex() const;
   const float* GetFaceBaseVector() const;

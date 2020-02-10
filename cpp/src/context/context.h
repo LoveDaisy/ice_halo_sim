@@ -23,6 +23,8 @@
 
 namespace icehalo {
 
+constexpr int kInvalidId = std::numeric_limits<int>::lowest();
+
 class ProjectContext;
 enum class LensType;
 enum class VisibleRange;
@@ -165,17 +167,7 @@ class ProjectContext {
   void ParseRayPathFilterSettings(rapidjson::Document& d);
   void ParseMultiScatterSettings(rapidjson::Document& d);
 
-  using CrystalParser = std::function<CrystalPtrU(const rapidjson::Value&, int)>;
-  static std::unordered_map<std::string, CrystalParser>& GetCrystalParsers(const std::string& model_path);
-  void ParseOneCrystal(const rapidjson::Value& c, int ci);
-  static AxisDistribution ParseCrystalAxis(const rapidjson::Value& c, int ci);
-  static CrystalPtrU ParseCrystalHexPrism(const rapidjson::Value& c, int ci);
-  static CrystalPtrU ParseCrystalHexPyramid(const rapidjson::Value& c, int ci);
-  static CrystalPtrU ParseCrystalHexPyramidStackHalf(const rapidjson::Value& c, int ci);
-  static CrystalPtrU ParseCrystalCubicPyramid(const rapidjson::Value& c, int ci);
-  static CrystalPtrU ParseCrystalIrregularHexPrism(const rapidjson::Value& c, int ci);
-  static CrystalPtrU ParseCrystalIrregularHexPyramid(const rapidjson::Value& c, int ci);
-  static CrystalPtrU ParseCrystalCustom(const rapidjson::Value& c, int ci, const std::string& model_path);
+  void ParseOneCrystal(const rapidjson::Value& c);
   const CrystalContext* GetCrystalContext(int id) const;
 
   using FilterParser = std::function<RayPathFilterPtrU(const rapidjson::Value&, int)>;
@@ -195,7 +187,7 @@ class ProjectContext {
   std::string model_path_;
   std::string data_path_;
 
-  std::unordered_map<int, CrystalContextPtrU> crystal_store_;
+  std::vector<CrystalContextPtrU> crystal_store_;
   std::unordered_map<int, RayPathFilterPtrU> filter_store_;
 };
 

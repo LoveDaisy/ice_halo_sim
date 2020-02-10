@@ -9,7 +9,7 @@
 
 namespace icehalo {
 
-struct CrystalContext;
+class CrystalContext;
 class AbstractRayPathFilter;
 
 class MultiScatterContext {

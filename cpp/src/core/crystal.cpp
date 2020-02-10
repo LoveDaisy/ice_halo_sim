@@ -41,17 +41,17 @@ Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
 }
 
 
-const std::vector<math::Vec3f>& Crystal::GetVertexes() {
+const std::vector<math::Vec3f>& Crystal::GetVertexes() const {
   return vertexes_;
 }
 
 
-const std::vector<math::TriangleIdx>& Crystal::GetFaces() {
+const std::vector<math::TriangleIdx>& Crystal::GetFaces() const {
   return faces_;
 }
 
 
-const std::vector<int>& Crystal::GetFaceNumberMap() {
+const std::vector<int>& Crystal::GetFaceNumberMap() const {
   return face_number_map_;
 }
 

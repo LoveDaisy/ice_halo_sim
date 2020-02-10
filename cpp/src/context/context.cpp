@@ -392,7 +392,7 @@ std::string ProjectContext::GetDefaultImagePath() const {
 const Crystal* ProjectContext::GetCrystal(int id) const {
   auto crystal_ctx = GetCrystalContext(id);
   if (crystal_ctx) {
-    return crystal_ctx->crystal.get();
+    return crystal_ctx->GetCrystal();
   } else {
     return nullptr;
   }
@@ -400,29 +400,30 @@ const Crystal* ProjectContext::GetCrystal(int id) const {
 
 
 int32_t ProjectContext::GetCrystalId(const Crystal* crystal) const {
-  for (const auto& kv : crystal_store_) {
-    if (kv.second->crystal.get() == crystal) {
-      return kv.first;
+  for (const auto& ctx : crystal_store_) {
+    if (ctx->GetCrystal() == crystal) {
+      return ctx->GetId();
     }
   }
-  return std::numeric_limits<int>::lowest();
+  return kInvalidId;
 }
 
 
 const CrystalContext* ProjectContext::GetCrystalContext(int id) const {
-  if (crystal_store_.count(id)) {
-    return crystal_store_.at(id).get();
-  } else {
-    return nullptr;
+  for (const auto& ctx : crystal_store_) {
+    if (ctx->GetId() == id) {
+      return ctx.get();
+    }
   }
+  return nullptr;
 }
 
 
 #ifdef FOR_TEST
 void ProjectContext::PrintCrystalInfo() const {
-  for (const auto& c : crystal_store_) {
-    auto g = c.second->crystal.get();
-    std::printf("-- ID: %d --\n", c.first);
+  for (const auto& ctx : crystal_store_) {
+    auto g = ctx->GetCrystal();
+    std::printf("-- ID: %d --\n", ctx->GetId());
     for (const auto& v : g->GetVertexes()) {
       std::printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
     }
@@ -541,7 +542,7 @@ void ProjectContext::ParseCrystalSettings(rapidjson::Document& d) {
 
   int ci = 0;
   for (const auto& c : p->GetArray()) {
-    ParseOneCrystal(c, ci);
+    ParseOneCrystal(c);
     ci++;
   }
 }
@@ -583,350 +584,9 @@ void ProjectContext::ParseMultiScatterSettings(rapidjson::Document& d) {
 }
 
 
-std::unordered_map<std::string, ProjectContext::CrystalParser>& ProjectContext::GetCrystalParsers(
-    const std::string& model_path) {
-  static std::unordered_map<std::string, CrystalParser> crystal_parsers = {
-    { "HexPrism", &ProjectContext::ParseCrystalHexPrism },
-    { "HexPyramid", &ProjectContext::ParseCrystalHexPyramid },
-    { "HexPyramidStackHalf", &ProjectContext::ParseCrystalHexPyramidStackHalf },
-    { "CubicPyramid", &ProjectContext::ParseCrystalCubicPyramid },
-    { "IrregularHexPrism", &ProjectContext::ParseCrystalIrregularHexPrism },
-    { "IrregularHexPyramid", &ProjectContext::ParseCrystalIrregularHexPyramid },
-    { "Custom", [=, &model_path](const rapidjson::Value& c,
-                                 int ci) { return ProjectContext::ParseCrystalCustom(c, ci, model_path); } },
-  };
-  return crystal_parsers;
-}
-
-
-void ProjectContext::ParseOneCrystal(const rapidjson::Value& c, int ci) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-
-  auto p = Pointer("/type").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].type> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-
-  auto& crystal_parsers = GetCrystalParsers(model_path_);
-  std::string type(c["type"].GetString());
-  if (crystal_parsers.find(type) == crystal_parsers.end()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].type> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-
-  p = Pointer("/id").Get(c);
-  if (p == nullptr || !p->IsInt()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].id> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-
-  auto axis = ParseCrystalAxis(c, ci);
-  auto id = p->GetInt();
-  crystal_store_.emplace(id, new CrystalContext(crystal_parsers[type](c, ci), axis));
-}
-
-
-AxisDistribution ProjectContext::ParseCrystalAxis(const rapidjson::Value& c, int ci) {
-  using math::Distribution;
-
-  AxisDistribution axis{};
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-
-  // Start parsing zenith settings.
-  const auto* p = Pointer("/zenith/type").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].zenith.type> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else if (*p == "gauss") {
-    axis.latitude_dist = Distribution::kGaussian;
-  } else if (*p == "uniform") {
-    axis.latitude_dist = Distribution::kUniform;
-  } else {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].zenith.type> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-
-  p = Pointer("/zenith/mean").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].zenith.mean> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else {
-    axis.latitude_mean = static_cast<float>(90 - p->GetDouble());
-  }
-
-  p = Pointer("/zenith/std").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].zenith.std> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else {
-    axis.latitude_std = static_cast<float>(p->GetDouble());
-  }
-
-  // Start parsing azimuth settings.
-  axis.azimuth_dist = math::Distribution::kUniform;
-  axis.azimuth_mean = 0;
-  axis.azimuth_std = 360;
-  p = Pointer("/azimuth").Get(c);
-  if (p == nullptr || !p->IsObject()) {
-    std::fprintf(stderr, "<crystal[%d].azimuth> cannot recognize! Use default.\n", ci);
-  } else {
-    p = Pointer("/azimuth/type").Get(c);
-    if (p == nullptr || !p->IsString()) {
-      std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].azimuth.type> cannot recognize!", ci);
-      throw std::invalid_argument(msg_buffer);
-    } else if (*p == "gauss") {
-      axis.azimuth_dist = Distribution::kGaussian;
-    } else if (*p == "uniform") {
-      axis.azimuth_dist = Distribution::kUniform;
-    } else {
-      std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].azimuth.type> cannot recognize!", ci);
-      throw std::invalid_argument(msg_buffer);
-    }
-
-    p = Pointer("/azimuth/mean").Get(c);
-    if (p == nullptr || !p->IsNumber()) {
-      std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].azimuth.mean> cannot recognize!", ci);
-      throw std::invalid_argument(msg_buffer);
-    } else {
-      axis.azimuth_mean = static_cast<float>(p->GetDouble());
-    }
-
-    p = Pointer("/azimuth/std").Get(c);
-    if (p == nullptr || !p->IsNumber()) {
-      std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].azimuth.std> cannot recognize!", ci);
-      throw std::invalid_argument(msg_buffer);
-    } else {
-      axis.azimuth_std = static_cast<float>(p->GetDouble());
-    }
-  }
-
-  // Start parsing roll settings.
-  p = Pointer("/roll/type").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else if (*p == "gauss") {
-    axis.roll_dist = Distribution::kGaussian;
-  } else if (*p == "uniform") {
-    axis.roll_dist = Distribution::kUniform;
-  } else {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.type> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-
-  p = Pointer("/roll/mean").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.mean> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else {
-    axis.roll_mean = static_cast<float>(p->GetDouble());
-  }
-
-  p = Pointer("/roll/std").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].roll.std> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else {
-    axis.roll_std = static_cast<float>(p->GetDouble());
-  }
-
-  return axis;
-}
-
-
-CrystalPtrU ProjectContext::ParseCrystalHexPrism(const rapidjson::Value& c, int ci) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-  auto h = static_cast<float>(p->GetDouble());
-  return Crystal::CreateHexPrism(h);
-}
-
-
-CrystalPtrU ProjectContext::ParseCrystalHexPyramid(const rapidjson::Value& c, int ci) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else if (p->Size() == 3) {
-    auto h1 = static_cast<float>((*p)[0].GetDouble());
-    auto h2 = static_cast<float>((*p)[1].GetDouble());
-    auto h3 = static_cast<float>((*p)[2].GetDouble());
-    return Crystal::CreateHexPyramid(h1, h2, h3);
-  } else if (p->Size() == 5) {
-    int i1 = (*p)[0].GetInt();
-    int i2 = (*p)[1].GetInt();
-    auto h1 = static_cast<float>((*p)[2].GetDouble());
-    auto h2 = static_cast<float>((*p)[3].GetDouble());
-    auto h3 = static_cast<float>((*p)[4].GetDouble());
-    return Crystal::CreateHexPyramid(i1, i2, h1, h2, h3);
-  } else if (p->Size() == 7) {
-    int upper_idx1 = (*p)[0].GetInt();
-    int upper_idx2 = (*p)[1].GetInt();
-    int lower_idx1 = (*p)[2].GetInt();
-    int lower_idx2 = (*p)[3].GetInt();
-    auto h1 = static_cast<float>((*p)[4].GetDouble());
-    auto h2 = static_cast<float>((*p)[5].GetDouble());
-    auto h3 = static_cast<float>((*p)[6].GetDouble());
-    return Crystal::CreateHexPyramid(upper_idx1, upper_idx2, lower_idx1, lower_idx2, h1, h2, h3);
-  } else {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-}
-
-
-CrystalPtrU ProjectContext::ParseCrystalHexPyramidStackHalf(const rapidjson::Value& c, int ci) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else if (p->Size() == 7) {
-    int upper_idx1 = (*p)[0].GetInt();
-    int upper_idx2 = (*p)[1].GetInt();
-    int lower_idx1 = (*p)[2].GetInt();
-    int lower_idx2 = (*p)[3].GetInt();
-    auto h1 = static_cast<float>((*p)[4].GetDouble());
-    auto h2 = static_cast<float>((*p)[5].GetDouble());
-    auto h3 = static_cast<float>((*p)[6].GetDouble());
-    return Crystal::CreateHexPyramidStackHalf(upper_idx1, upper_idx2, lower_idx1, lower_idx2, h1, h2, h3);
-  } else {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-}
-
-
-CrystalPtrU ProjectContext::ParseCrystalCubicPyramid(const rapidjson::Value& c, int ci) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else if (p->Size() == 2) {
-    auto h1 = static_cast<float>((*p)[0].GetDouble());
-    auto h2 = static_cast<float>((*p)[1].GetDouble());
-    return Crystal::CreateCubicPyramid(h1, h2);
-  } else {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-}
-
-
-CrystalPtrU ProjectContext::ParseCrystalIrregularHexPrism(const rapidjson::Value& c, int ci) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsArray() || p->Size() != 7) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else {
-    auto d1 = static_cast<float>((*p)[0].GetDouble());
-    auto d2 = static_cast<float>((*p)[1].GetDouble());
-    auto d3 = static_cast<float>((*p)[2].GetDouble());
-    auto d4 = static_cast<float>((*p)[3].GetDouble());
-    auto d5 = static_cast<float>((*p)[4].GetDouble());
-    auto d6 = static_cast<float>((*p)[5].GetDouble());
-    auto h = static_cast<float>((*p)[6].GetDouble());
-
-    float dist[6] = { d1, d2, d3, d4, d5, d6 };
-    return Crystal::CreateIrregularHexPrism(dist, h);
-  }
-}
-
-
-CrystalPtrU ProjectContext::ParseCrystalIrregularHexPyramid(const rapidjson::Value& c, int ci) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else if (p->Size() == 13) {
-    auto d1 = static_cast<float>((*p)[0].GetDouble());
-    auto d2 = static_cast<float>((*p)[1].GetDouble());
-    auto d3 = static_cast<float>((*p)[2].GetDouble());
-    auto d4 = static_cast<float>((*p)[3].GetDouble());
-    auto d5 = static_cast<float>((*p)[4].GetDouble());
-    auto d6 = static_cast<float>((*p)[5].GetDouble());
-    int i1 = (*p)[6].GetInt();
-    int i2 = (*p)[7].GetInt();
-    int i3 = (*p)[8].GetInt();
-    int i4 = (*p)[9].GetInt();
-    auto h1 = static_cast<float>((*p)[10].GetDouble());
-    auto h2 = static_cast<float>((*p)[11].GetDouble());
-    auto h3 = static_cast<float>((*p)[12].GetDouble());
-
-    float dist[6] = { d1, d2, d3, d4, d5, d6 };
-    int idx[4] = { i1, i2, i3, i4 };
-    float height[3] = { h1, h2, h3 };
-
-    return Crystal::CreateIrregularHexPyramid(dist, idx, height);
-  } else {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> number doesn't match!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-}
-
-
-CrystalPtrU ProjectContext::ParseCrystalCustom(const rapidjson::Value& c, int ci, const std::string& model_path) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  } else {
-    auto n = model_path.rfind('/');
-    if (n == std::string::npos) {
-      std::snprintf(msg_buffer, kMsgBufferSize, "models/%s", p->GetString());
-    } else {
-      std::snprintf(msg_buffer, kMsgBufferSize, "%s/models/%s", model_path.substr(0, n).c_str(), p->GetString());
-    }
-    std::FILE* file = std::fopen(msg_buffer, "r");
-    if (!file) {
-      std::snprintf(msg_buffer, kMsgBufferSize, "<crystal[%d].parameter> cannot open model file!", ci);
-      throw std::invalid_argument(msg_buffer);
-    }
-
-    std::vector<math::Vec3f> vertexes;
-    std::vector<math::TriangleIdx> faces;
-    float v_buf[3];
-    int f_buf[3];
-    int curr_char;
-    while ((curr_char = std::fgetc(file)) != EOF) {
-      switch (curr_char) {
-        case 'v':
-        case 'V':
-          std::fscanf(file, "%f %f %f", v_buf + 0, v_buf + 1, v_buf + 2);
-          vertexes.emplace_back(v_buf);
-          break;
-        case 'f':
-        case 'F':
-          std::fscanf(file, "%d %d %d", f_buf + 0, f_buf + 1, f_buf + 2);
-          faces.emplace_back(f_buf[0] - 1, f_buf[1] - 1, f_buf[2] - 1);
-          break;
-        default:
-          break;
-      }
-    }
-    std::fclose(file);
-
-    return Crystal::CreateCustomCrystal(vertexes, faces);
-  }
+void ProjectContext::ParseOneCrystal(const rapidjson::Value& c) {
+  crystal_store_.emplace_back(new CrystalContext);
+  crystal_store_.back()->LoadFromJson(c);
 }
 
 
@@ -1169,7 +829,7 @@ void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
       throw std::invalid_argument(msg_buffer);
     } else {
       int id = pc.GetInt();
-      if (crystal_store_.find(id) == crystal_store_.end()) {
+      if (!GetCrystal(id)) {
         std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> contains invalid ID!", ci);
         throw std::invalid_argument(msg_buffer);
       }

@@ -9,17 +9,28 @@
 
 namespace icehalo {
 
-struct CrystalContext;
+class CrystalContext;
 using CrystalContextPtrU = std::unique_ptr<CrystalContext>;
 
-struct CrystalContext {
-  CrystalContext(CrystalPtrU g, AxisDistribution axis);
+class CrystalContext : public IJsonizable {
+ public:
+  CrystalContext();
+  CrystalContext(int id, AxisDistribution axis, CrystalPtrU g);
   CrystalContext(const CrystalContext& other) = delete;
+
+  int GetId() const;
+  const Crystal* GetCrystal() const;
+  AxisDistribution GetAxisDistribution() const;
 
   int RandomSampleFace(const float* ray_dir) const;
 
-  const CrystalPtrU crystal;
-  const AxisDistribution axis;
+  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
+  void LoadFromJson(rapidjson::Value& root) override;
+
+ private:
+  int id_;
+  CrystalPtrU crystal_;
+  AxisDistribution axis_;
 };
 
 
