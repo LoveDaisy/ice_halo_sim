@@ -5,6 +5,7 @@
 #include <unordered_map>
 
 #include "context/context.h"
+#include "core/enum_map.h"
 #include "core/simulation.h"
 #include "io/file.h"
 
@@ -68,22 +69,6 @@ void RectLinear(const float* cam_rot,                                // Camera r
                 VisibleRange visible_range = VisibleRange::kUpper);  // Visible range
 
 
-/* A workaround for disgusting C++11 standard that enum class cannot be a key */
-struct EnumClassHash {
-  template <typename T>
-  std::size_t operator()(T t) const {
-    return static_cast<std::size_t>(t);
-  }
-};
-
-template <typename Key>
-using HashType = typename std::conditional<std::is_enum<Key>::value, EnumClassHash, std::hash<Key>>::type;
-
-template <typename Key, typename T>
-using MyUnorderedMap = std::unordered_map<Key, T, HashType<Key>>;
-/* Workaround end */
-
-
 using ProjectionFunction = std::function<void(const float* cam_rot,      // Camera rotation (lon, lat, roll), in degree.
                                               float hov,                 // Half field of view, in degree
                                               size_t data_number,        // Data number
@@ -93,7 +78,7 @@ using ProjectionFunction = std::function<void(const float* cam_rot,      // Came
                                               VisibleRange visible_semi_sphere)>;  // Which semi-sphere can be visible
 
 
-MyUnorderedMap<LensType, ProjectionFunction>& GetProjectionFunctions();
+EnumMap<LensType, ProjectionFunction>& GetProjectionFunctions();
 
 
 void SrgbGamma(float* linear_rgb);

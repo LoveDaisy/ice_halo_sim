@@ -216,8 +216,8 @@ void RectLinear(const float* cam_rot,          // Camera rotation. [lon, lat, ro
 }
 
 
-MyUnorderedMap<LensType, ProjectionFunction>& GetProjectionFunctions() {
-  static MyUnorderedMap<LensType, ProjectionFunction> projection_functions = {
+EnumMap<LensType, ProjectionFunction>& GetProjectionFunctions() {
+  static EnumMap<LensType, ProjectionFunction> projection_functions = {
     { LensType::kLinear, &RectLinear },
     { LensType::kEqualArea, &EqualAreaFishEye },
     { LensType::kEquidistant, &EquidistantFishEye },

@@ -3,7 +3,8 @@
 #include <algorithm>
 #include <limits>
 
-#include "context.h"
+#include "context/context.h"
+#include "core/enum_map.h"
 #include "rapidjson/document.h"
 #include "rapidjson/pointer.h"
 
@@ -454,73 +455,56 @@ void CrystalContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Alloca
   root.Clear();
 
   Pointer("/id").Set(root, id_, allocator);
-  switch (crystal_->GetType()) {
-    case CrystalType::kPrism: {
-      SaveHexPrismParam(root, allocator);
-    } break;
-    case CrystalType::kPyramid_H3: {
-      SaveHexPyramidH3Param(root, allocator);
-    } break;
-    case CrystalType::kPyramid_I2H3: {
-      Pointer("/type").Set(root, "HexPyramid", allocator);
-      Pointer("/parameter/0").Set(root, idx_param_[0], allocator);
-      Pointer("/parameter/-").Set(root, idx_param_[1], allocator);
-      Pointer("/parameter/-").Set(root, h_param_[0], allocator);
-      Pointer("/parameter/-").Set(root, h_param_[1], allocator);
-      Pointer("/parameter/-").Set(root, h_param_[2], allocator);
-    } break;
-    case CrystalType::kPyramid_I4H3:
-      Pointer("/type").Set(root, "HexPyramid", allocator);
-    case CrystalType::kPyramidStackHalf: {
-      Pointer("/type").Set(root, "HexPyramidStackHalf", allocator);
-      Pointer("/parameter/0").Set(root, idx_param_[0], allocator);
-      Pointer("/parameter/-").Set(root, idx_param_[1], allocator);
-      Pointer("/parameter/-").Set(root, idx_param_[2], allocator);
-      Pointer("/parameter/-").Set(root, idx_param_[3], allocator);
-      Pointer("/parameter/-").Set(root, h_param_[0], allocator);
-      Pointer("/parameter/-").Set(root, h_param_[1], allocator);
-      Pointer("/parameter/-").Set(root, h_param_[2], allocator);
-    } break;
-    case CrystalType::kIrregularPrism: {
-      Pointer("/type").Set(root, "IrregularHexPrism", allocator);
-      Pointer("/parameter/0").Set(root, d_param_[0], allocator);
-      Pointer("/parameter/-").Set(root, d_param_[1], allocator);
-      Pointer("/parameter/-").Set(root, d_param_[2], allocator);
-      Pointer("/parameter/-").Set(root, d_param_[3], allocator);
-      Pointer("/parameter/-").Set(root, d_param_[4], allocator);
-      Pointer("/parameter/-").Set(root, d_param_[5], allocator);
-      Pointer("/parameter/-").Set(root, h_param_[0], allocator);
-    } break;
-    case CrystalType::kIrregularPyramid: {
-      Pointer("/type").Set(root, "IrregularHexPyramid", allocator);
-      Pointer("/parameter/0").Set(root, d_param_[0], allocator);
-      Pointer("/parameter/-").Set(root, d_param_[1], allocator);
-      Pointer("/parameter/-").Set(root, d_param_[2], allocator);
-      Pointer("/parameter/-").Set(root, d_param_[3], allocator);
-      Pointer("/parameter/-").Set(root, d_param_[4], allocator);
-      Pointer("/parameter/-").Set(root, d_param_[5], allocator);
-      Pointer("/parameter/-").Set(root, idx_param_[0], allocator);
-      Pointer("/parameter/-").Set(root, idx_param_[1], allocator);
-      Pointer("/parameter/-").Set(root, idx_param_[2], allocator);
-      Pointer("/parameter/-").Set(root, idx_param_[3], allocator);
-      Pointer("/parameter/-").Set(root, h_param_[0], allocator);
-      Pointer("/parameter/-").Set(root, h_param_[1], allocator);
-      Pointer("/parameter/-").Set(root, h_param_[2], allocator);
-    } break;
-    case CrystalType::kCubicPyramid: {
-      Pointer("/type").Set(root, "CubicPyramid", allocator);
-      Pointer("/parameter/0").Set(root, h_param_[0], allocator);
-      Pointer("/parameter/-").Set(root, h_param_[1], allocator);
-    } break;
-    case CrystalType::kCustom: {
-      Pointer("/type").Set(root, "Custom", allocator);
-      Pointer("/parameter").Set(root, file_param_.c_str(), allocator);
-    } break;
-    case CrystalType::kUnknown:
-      break;
+
+  using ParamSaver = std::function<void(CrystalContext*, rapidjson::Value&, rapidjson::Value::AllocatorType&)>;
+  EnumMap<CrystalType, ParamSaver> param_saver{
+    { CrystalType::kPrism, &CrystalContext::SaveHexPrismParam },
+    { CrystalType::kPyramid_H3, &CrystalContext::SaveHexPyramidH3Param },
+    { CrystalType::kPyramid_I2H3, &CrystalContext::SaveHexPyramidI2H3Param },
+    { CrystalType::kPyramid_I4H3, &CrystalContext::SaveHexPyramidI4H3Param },
+    { CrystalType::kPyramidStackHalf, &CrystalContext::SaveHexPyramidStackHalfParam },
+    { CrystalType::kIrregularPrism, &CrystalContext::SaveIrregularHexPrismParam },
+    { CrystalType::kIrregularPyramid, &CrystalContext::SaveIrregularHexPyramidParam },
+    { CrystalType::kCubicPyramid, &CrystalContext::SaveCubicPyramidParam },
+    { CrystalType::kCustom, &CrystalContext::SaveCustomCrystalParam },
+  };
+
+  if (param_saver.count(crystal_->GetType())) {
+    param_saver[crystal_->GetType()](this, root, allocator);
   }
+
   Pointer("/zenith/mean").Set(root, 90.0f - axis_.latitude_mean, allocator);
   Pointer("/zenith/std").Set(root, axis_.latitude_std, allocator);
+  switch (axis_.latitude_dist) {
+    case math::Distribution::kGaussian:
+      Pointer("/zenith/type").Set(root, "gauss", allocator);
+      break;
+    case math::Distribution::kUniform:
+      Pointer("/zenith/type").Set(root, "uniform", allocator);
+      break;
+  }
+
+  Pointer("/roll/mean").Set(root, axis_.roll_mean, allocator);
+  Pointer("/roll/std").Set(root, axis_.roll_std, allocator);
+  switch (axis_.roll_dist) {
+    case math::Distribution::kGaussian:
+      Pointer("/roll/type").Set(root, "gauss", allocator);
+      break;
+    case math::Distribution::kUniform:
+      Pointer("/roll/type").Set(root, "uniform", allocator);
+      break;
+  }
+
+  Pointer("/azimuth/mean").Set(root, axis_.azimuth_mean, allocator);
+  Pointer("/azimuth/std").Set(root, axis_.azimuth_std, allocator);
+  switch (axis_.azimuth_dist) {
+    case math::Distribution::kGaussian:
+      Pointer("/azimuth/type").Set(root, "gauss", allocator);
+      break;
+    case math::Distribution::kUniform:
+      Pointer("/azimuth/type").Set(root, "uniform", allocator);
+      break;
+  }
 }
 
 
@@ -535,7 +519,7 @@ void CrystalContext::LoadFromJson(const rapidjson::Value& root) {
   }
 
   using CrystalParser = std::function<void(CrystalContext*, const rapidjson::Value&)>;
-  std::unordered_map<std::string, CrystalParser> crystal_parsers = {
+  std::unordered_map<std::string, CrystalParser> crystal_parsers{
     { "HexPrism", &CrystalContext::ParseHexPrism },
     { "HexPyramid", &CrystalContext::ParseHexPyramid },
     { "HexPyramidStackHalf", &CrystalContext::ParseHexPyramidStackHalf },
@@ -544,6 +528,7 @@ void CrystalContext::LoadFromJson(const rapidjson::Value& root) {
     { "IrregularHexPyramid", &CrystalContext::ParseIrregularHexPyramid },
     { "Custom", &CrystalContext::ParseCustomCrystal },
   };
+
   std::string type(root["type"].GetString());
   if (crystal_parsers.find(type) == crystal_parsers.end()) {
     std::snprintf(msg_buffer, kMsgBufferSize, "<crystal.type> cannot recognize!");
