@@ -68,7 +68,7 @@ class IJsonizable {
    * @brief Load data from a JSON object.
    * @param root
    */
-  virtual void LoadFromJson(rapidjson::Value& root) = 0;
+  virtual void LoadFromJson(const rapidjson::Value& root) = 0;
 };
 
 }  // namespace icehalo

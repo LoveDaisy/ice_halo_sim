@@ -371,7 +371,7 @@ int CrystalContext::RandomSampleFace(const float* ray_dir) const {
 void CrystalContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {}
 
 
-void CrystalContext::LoadFromJson(rapidjson::Value& root) {
+void CrystalContext::LoadFromJson(const rapidjson::Value& root) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
 

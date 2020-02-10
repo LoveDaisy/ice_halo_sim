@@ -29,7 +29,7 @@ class CameraContext : public IJsonizable {
   void SetLensType(LensType type);
 
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(rapidjson::Value& root) override;
+  void LoadFromJson(const rapidjson::Value& root) override;
 
   static CameraContextPtrU CreateFromJson(rapidjson::Document& d);
 

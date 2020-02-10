@@ -25,7 +25,7 @@ class SunContext : public IJsonizable {
   bool SetSunDiameter(float d);
 
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(rapidjson::Value& root) override;
+  void LoadFromJson(const rapidjson::Value& root) override;
 
   static SunContextPtrU CreateFromJson(rapidjson::Document& d);
 

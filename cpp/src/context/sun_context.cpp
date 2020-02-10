@@ -74,7 +74,7 @@ void SunContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorT
 }
 
 
-void SunContext::LoadFromJson(rapidjson::Value& root) {
+void SunContext::LoadFromJson(const rapidjson::Value& root) {
   float sun_altitude = 0.0f;
   auto* p = Pointer("/altitude").Get(root);
   if (p == nullptr) {

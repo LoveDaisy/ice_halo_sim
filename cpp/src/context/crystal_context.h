@@ -25,7 +25,7 @@ class CrystalContext : public IJsonizable {
   int RandomSampleFace(const float* ray_dir) const;
 
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(rapidjson::Value& root) override;
+  void LoadFromJson(const rapidjson::Value& root) override;
 
  private:
   int id_;

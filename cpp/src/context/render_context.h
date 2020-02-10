@@ -44,7 +44,7 @@ class RenderContext : public IJsonizable {
   void SetVisibleRange(VisibleRange r);
 
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(rapidjson::Value& root) override;
+  void LoadFromJson(const rapidjson::Value& root) override;
 
   static RenderContextPtrU CreateFromJson(rapidjson::Document& d);
 

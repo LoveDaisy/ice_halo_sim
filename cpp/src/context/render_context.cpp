@@ -178,7 +178,7 @@ void RenderContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Allocat
 }
 
 
-void RenderContext::LoadFromJson(rapidjson::Value& root) {
+void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   SetImageWidth(800);
   auto p = Pointer("/width").Get(root);
   if (p == nullptr) {

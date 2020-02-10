@@ -130,7 +130,7 @@ void CameraContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Allocat
 }
 
 
-void CameraContext::LoadFromJson(rapidjson::Value& root) {
+void CameraContext::LoadFromJson(const rapidjson::Value& root) {
   ResetCameraTargetDirection();
   SetFov(CameraContext::kMaxFovFisheye);
   SetLensType(LensType::kEqualArea);
