@@ -6,6 +6,34 @@
 
 namespace icehalo {
 
+const std::vector<std::pair<math::Vec3f, int>>& GetHexFaceNormToNumberList() {
+  static std::vector<std::pair<math::Vec3f, int>> face_norm_to_number_list{
+    { { 0, 0, 1 }, 1 },                      // top face
+    { { 0, 0, -1 }, 2 },                     // bottom face
+    { { 1, 0, 0 }, 3 },                      // prism face
+    { { math::kSqrt3 / 2, 0.5f, 0 }, 4 },    // prism face
+    { { -math::kSqrt3 / 2, 0.5f, 0 }, 5 },   // prism face
+    { { -1, 0, 0 }, 6 },                     // prism face
+    { { -math::kSqrt3 / 2, -0.5f, 0 }, 7 },  // prism face
+    { { math::kSqrt3 / 2, -0.5f, 0 }, 8 },   // prism face
+  };
+  return face_norm_to_number_list;
+}
+
+
+const std::vector<std::pair<math::Vec3f, int>>& GetCubicFaceNormToNumberList() {
+  static std::vector<std::pair<math::Vec3f, int>> face_norm_to_number_list{
+    { { 0, 0, 1 }, 1 },   // top face
+    { { 0, 0, -1 }, 2 },  // bottom face
+    { { 1, 0, 0 }, 3 },   // pyramidal face
+    { { 0, 1, 0 }, 4 },   // pyramidal face
+    { { -1, 0, 0 }, 5 },  // pyramidal face
+    { { 0, -1, 0 }, 6 },  // pyramidal face
+  };
+  return face_norm_to_number_list;
+}
+
+
 Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
                  std::vector<math::TriangleIdx> faces,  // face indices
                  CrystalType type)                      // crystal type
@@ -258,34 +286,6 @@ void Crystal::InitFaceNumberStack() {
       face_number_map_[i] += 40;
     }
   }
-}
-
-
-const std::vector<std::pair<math::Vec3f, int>>& Crystal::GetHexFaceNormToNumberList() {
-  static std::vector<std::pair<math::Vec3f, int>> face_norm_to_number_list{
-    { { 0, 0, 1 }, 1 },                      // top face
-    { { 0, 0, -1 }, 2 },                     // bottom face
-    { { 1, 0, 0 }, 3 },                      // prism face
-    { { math::kSqrt3 / 2, 0.5f, 0 }, 4 },    // prism face
-    { { -math::kSqrt3 / 2, 0.5f, 0 }, 5 },   // prism face
-    { { -1, 0, 0 }, 6 },                     // prism face
-    { { -math::kSqrt3 / 2, -0.5f, 0 }, 7 },  // prism face
-    { { math::kSqrt3 / 2, -0.5f, 0 }, 8 },   // prism face
-  };
-  return face_norm_to_number_list;
-}
-
-
-const std::vector<std::pair<math::Vec3f, int>>& Crystal::GetCubicFaceNormToNumberList() {
-  static std::vector<std::pair<math::Vec3f, int>> face_norm_to_number_list{
-    { { 0, 0, 1 }, 1 },   // top face
-    { { 0, 0, -1 }, 2 },  // bottom face
-    { { 1, 0, 0 }, 3 },   // pyramidal face
-    { { 0, 1, 0 }, 4 },   // pyramidal face
-    { { -1, 0, 0 }, 5 },  // pyramidal face
-    { { 0, -1, 0 }, 6 },  // pyramidal face
-  };
-  return face_norm_to_number_list;
 }
 
 

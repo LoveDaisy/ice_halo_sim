@@ -18,6 +18,9 @@ enum class CrystalType {
   kCustom,
 };
 
+class Crystal;
+using CrystalPtrU = std::unique_ptr<Crystal>;
+
 class Crystal {
  public:
   CrystalType GetType() const;
@@ -43,7 +46,7 @@ class Crystal {
    * @param h the height of prism. The diameter of basal face is 1
    * @return a pointer to the crystal
    */
-  static std::unique_ptr<Crystal> CreateHexPrism(float h);
+  static CrystalPtrU CreateHexPrism(float h);
 
   /*! @brief create a hexagon pyramid crystal
    *
@@ -52,7 +55,7 @@ class Crystal {
    * @param h3 height of bottom segment.
    * @return a pointer to the crystal.
    */
-  static std::unique_ptr<Crystal> CreateHexPyramid(float h1, float h2, float h3);
+  static CrystalPtrU CreateHexPyramid(float h1, float h2, float h3);
 
   /*! @brief create a hexagon pyramid crystal
    *
@@ -63,8 +66,8 @@ class Crystal {
    * @param h3 height of bottom segment.
    * @return a pointer to the crystal.
    */
-  static std::unique_ptr<Crystal> CreateHexPyramid(int i1, int i4,                 // Miller index
-                                                   float h1, float h2, float h3);  // heights
+  static CrystalPtrU CreateHexPyramid(int i1, int i4,                 // Miller index
+                                      float h1, float h2, float h3);  // heights
 
   /*! @brief create a hexagon pyramid crystal
    *
@@ -77,9 +80,9 @@ class Crystal {
    * @param h3 height of bottom segment.
    * @return a pointer to the crystal.
    */
-  static std::unique_ptr<Crystal> CreateHexPyramid(int upper_idx1, int upper_idx4,  // upper Miller index
-                                                   int lower_idx1, int lower_idx4,  // lower Miller index
-                                                   float h1, float h2, float h3);   // heights
+  static CrystalPtrU CreateHexPyramid(int upper_idx1, int upper_idx4,  // upper Miller index
+                                      int lower_idx1, int lower_idx4,  // lower Miller index
+                                      float h1, float h2, float h3);   // heights
 
   /*! @brief Create a hexagon half-stacked pyramid crystal
    *
@@ -92,12 +95,12 @@ class Crystal {
    * @param h3 height for prism segment.
    * @return a pointer to the crystal.
    */
-  static std::unique_ptr<Crystal> CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4,  // upper Miller index
-                                                            int lower_idx1, int lower_idx4,  // lower Miller index
-                                                            float h1, float h2, float h3);   // heights
+  static CrystalPtrU CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4,  // upper Miller index
+                                               int lower_idx1, int lower_idx4,  // lower Miller index
+                                               float h1, float h2, float h3);   // heights
 
   /* Cubic pyramid (crystal type of Ic) */
-  static std::unique_ptr<Crystal> CreateCubicPyramid(float h1, float h2);
+  static CrystalPtrU CreateCubicPyramid(float h1, float h2);
 
   /*! @brief Create an irregular hexagon prism crystal
    *
@@ -105,7 +108,7 @@ class Crystal {
    * @param h defines the height / diameter
    * @return
    */
-  static std::unique_ptr<Crystal> CreateIrregularHexPrism(const float* dist, float h);
+  static CrystalPtrU CreateIrregularHexPrism(const float* dist, float h);
 
   /*! @brief Create a irregular hexagon pyramid crystal
    *
@@ -120,7 +123,7 @@ class Crystal {
    *          diameter of original basal face.
    * @return
    */
-  static std::unique_ptr<Crystal> CreateIrregularHexPyramid(const float* dist, const int* idx, const float* h);
+  static CrystalPtrU CreateIrregularHexPyramid(const float* dist, const int* idx, const float* h);
 
   /*! @brief Create a customized crystal
    *
@@ -128,19 +131,19 @@ class Crystal {
    * @param faces the faces of the crystal
    * @return
    */
-  static std::unique_ptr<Crystal> CreateCustomCrystal(const std::vector<math::Vec3f>& pts,           // vertex points
-                                                      const std::vector<math::TriangleIdx>& faces);  // face indices
+  static CrystalPtrU CreateCustomCrystal(const std::vector<math::Vec3f>& pts,           // vertex points
+                                         const std::vector<math::TriangleIdx>& faces);  // face indices
 
   /*! @brief Create a customized crystal
    *
    * @param pts the vertexes
    * @param faces the faces
-   * @param faceIdMap the face number map
+   * @param face_number_map the face number map
    * @return
    */
-  static std::unique_ptr<Crystal> CreateCustomCrystal(const std::vector<math::Vec3f>& pts,          // vertex points
-                                                      const std::vector<math::TriangleIdx>& faces,  // face indices
-                                                      const std::vector<int>& face_number_map);  // face to face number
+  static CrystalPtrU CreateCustomCrystal(const std::vector<math::Vec3f>& pts,          // vertex points
+                                         const std::vector<math::TriangleIdx>& faces,  // face indices
+                                         const std::vector<int>& face_number_map);     // face to face-number
 
  protected:
   void InitBasicData();
@@ -148,9 +151,6 @@ class Crystal {
   void InitFaceNumberHex();
   void InitFaceNumberCubic();
   void InitFaceNumberStack();
-
-  static const std::vector<std::pair<math::Vec3f, int>>& GetHexFaceNormToNumberList();
-  static const std::vector<std::pair<math::Vec3f, int>>& GetCubicFaceNormToNumberList();
 
   std::vector<math::Vec3f> vertexes_;
   std::vector<math::TriangleIdx> faces_;
@@ -188,8 +188,6 @@ class Crystal {
           std::vector<int> face_number_map,      // face to face number
           CrystalType type);                     // crystal type
 };
-
-using CrystalPtrU = std::unique_ptr<Crystal>;
 
 }  // namespace icehalo
 
