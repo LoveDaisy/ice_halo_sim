@@ -9,18 +9,15 @@
 
 namespace icehalo {
 
-class CrystalContext;
-class AbstractRayPathFilter;
-
-class MultiScatterContext {
+class MultiScatterContext : public IJsonizable {
  public:
   struct CrystalInfo {
-    const CrystalContext* crystal_ctx;
-    AbstractRayPathFilter* filter;
+    int crystal_id;
+    int filter_id;
     float population;
 
-    CrystalInfo(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter, float pop)
-        : crystal_ctx(crystal_ctx), filter(filter), population(pop){};
+    CrystalInfo(int crystal_id, int filter_id, float pop)
+        : crystal_id(crystal_id), filter_id(filter_id), population(pop){};
   };
 
   explicit MultiScatterContext(float prob = 1.0f);
@@ -29,11 +26,14 @@ class MultiScatterContext {
   bool SetProbability(float p);
 
   const std::vector<CrystalInfo>& GetCrystalInfo() const;
-  void ClearCrystalInfo();
-  void AddCrystalInfo(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter, float population);
-  void NormalizeCrystalPopulation();
+
+  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
+  void LoadFromJson(const rapidjson::Value& root) override;
 
  private:
+  void ClearCrystalInfo();
+  void NormalizeCrystalPopulation();
+
   std::vector<CrystalInfo> crystal_infos_;  // crystal, population, filter
   float prob_;
 };

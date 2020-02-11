@@ -540,10 +540,9 @@ void ProjectContext::ParseCrystalSettings(rapidjson::Document& d) {
     throw std::invalid_argument(buffer);
   }
 
-  int ci = 0;
   for (const auto& c : p->GetArray()) {
-    ParseOneCrystal(c);
-    ci++;
+    crystal_store_.emplace_back(new CrystalContext);
+    crystal_store_.back()->LoadFromJson(c);
   }
 }
 
@@ -576,17 +575,11 @@ void ProjectContext::ParseMultiScatterSettings(rapidjson::Document& d) {
     throw std::invalid_argument(buffer);
   }
 
-  int ci = 0;
   for (const auto& c : p->GetArray()) {
-    ParseOneScatter(c, ci);
-    ci++;
+    MultiScatterContext scatter;
+    scatter.LoadFromJson(c);
+    multi_scatter_info_.emplace_back(scatter);
   }
-}
-
-
-void ProjectContext::ParseOneCrystal(const rapidjson::Value& c) {
-  crystal_store_.emplace_back(new CrystalContext);
-  crystal_store_.back()->LoadFromJson(c);
 }
 
 
@@ -796,91 +789,6 @@ RayPathFilterPtrU ProjectContext::ParseFilterGeneral(const rapidjson::Value& c, 
   }
 
   return filter;
-}
-
-
-void ProjectContext::ParseOneScatter(const rapidjson::Value& c, int ci) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
-
-  auto p = Pointer("/probability").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].probability> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-  auto prob = static_cast<float>(p->GetDouble());
-  if (prob < 0) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].probability> is invalid!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-
-  MultiScatterContext scatter(prob);
-  scatter.ClearCrystalInfo();
-
-  std::vector<int> tmp_crystals;
-  p = Pointer("/crystal").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-  for (auto& pc : p->GetArray()) {
-    if (!pc.IsUint()) {
-      std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> cannot recognize!", ci);
-      throw std::invalid_argument(msg_buffer);
-    } else {
-      int id = pc.GetInt();
-      if (!GetCrystal(id)) {
-        std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].crystal> contains invalid ID!", ci);
-        throw std::invalid_argument(msg_buffer);
-      }
-      tmp_crystals.emplace_back(id);
-    }
-  }
-
-  std::vector<float> tmp_population;
-  p = Pointer("/population").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].population> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-  for (auto& pp : p->GetArray()) {
-    if (!pp.IsNumber()) {
-      std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].population> cannot recognize!", ci);
-      throw std::invalid_argument(msg_buffer);
-    } else {
-      tmp_population.emplace_back(static_cast<float>(pp.GetDouble()));
-    }
-  }
-
-  std::vector<int> tmp_filter;
-  p = Pointer("/ray_path_filter").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> cannot recognize!", ci);
-    throw std::invalid_argument(msg_buffer);
-  }
-  for (auto& pf : p->GetArray()) {
-    if (!pf.IsUint()) {
-      std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> cannot recognize!", ci);
-      throw std::invalid_argument(msg_buffer);
-    } else {
-      int id = pf.GetInt();
-      if (filter_store_.count(id) == 0) {
-        std::snprintf(msg_buffer, kMsgBufferSize, "<multi_scatter[%d].ray_path_filter> contains invalid ID!", ci);
-        throw std::invalid_argument(msg_buffer);
-      }
-      tmp_filter.emplace_back(id);
-    }
-  }
-
-  for (size_t i = 0; i < tmp_crystals.size(); i++) {
-    auto crystal_ctx = GetCrystalContext(tmp_crystals[i]);
-    auto filter = GetRayPathFilter(tmp_filter[i]);
-    scatter.AddCrystalInfo(crystal_ctx, filter, tmp_population[i]);
-  }
-
-  scatter.NormalizeCrystalPopulation();
-
-  multi_scatter_info_.emplace_back(scatter);
 }
 
 }  // namespace icehalo

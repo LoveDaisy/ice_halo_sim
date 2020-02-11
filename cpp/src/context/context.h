@@ -139,6 +139,9 @@ class ProjectContext {
 
   const Crystal* GetCrystal(int id) const;
   int32_t GetCrystalId(const Crystal* crystal) const;
+  const CrystalContext* GetCrystalContext(int id) const;
+
+  AbstractRayPathFilter* GetRayPathFilter(int id) const;
 
 #ifdef FOR_TEST
   void PrintCrystalInfo() const;
@@ -167,9 +170,6 @@ class ProjectContext {
   void ParseRayPathFilterSettings(rapidjson::Document& d);
   void ParseMultiScatterSettings(rapidjson::Document& d);
 
-  void ParseOneCrystal(const rapidjson::Value& c);
-  const CrystalContext* GetCrystalContext(int id) const;
-
   using FilterParser = std::function<RayPathFilterPtrU(const rapidjson::Value&, int)>;
   static std::unordered_map<std::string, FilterParser>& GetFilterParsers();
   void ParseOneFilter(const rapidjson::Value& c, int ci);
@@ -177,9 +177,6 @@ class ProjectContext {
   static RayPathFilterPtrU ParseFilterNone(const rapidjson::Value& c, int ci);
   static RayPathFilterPtrU ParseFilterSpecific(const rapidjson::Value& c, int ci);
   static RayPathFilterPtrU ParseFilterGeneral(const rapidjson::Value& c, int ci);
-  AbstractRayPathFilter* GetRayPathFilter(int id) const;
-
-  void ParseOneScatter(const rapidjson::Value& c, int ci);
 
   size_t init_ray_num_;
   int ray_hit_num_;

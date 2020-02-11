@@ -382,9 +382,9 @@ void Simulator::Run() {
         buffer_size_ = total_ray_num_ * kBufferSizeFactor;
         buffer_.Allocate(buffer_size_);
       }
-      InitEntryRays(c.crystal_ctx);
+      InitEntryRays(context_->GetCrystalContext(c.crystal_id));
       entry_ray_offset_ += active_ray_num_;
-      TraceRays(c.crystal_ctx->GetCrystal(), c.filter);
+      TraceRays(context_->GetCrystal(c.crystal_id), context_->GetRayPathFilter(c.filter_id));
     }
 
     if (it != context_->multi_scatter_info_.end() - 1) {
