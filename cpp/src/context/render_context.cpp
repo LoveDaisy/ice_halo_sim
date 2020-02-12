@@ -16,10 +16,8 @@ RenderContext::RenderContext()
       image_height_(0), offset_x_(0), offset_y_(0), visible_range_(VisibleRange::kUpper) {}
 
 
-RenderContextPtrU RenderContext::CreateFromJson(rapidjson::Document& d) {
+RenderContextPtrU RenderContext::CreateDefault() {
   RenderContextPtrU render_ctx{ new RenderContext };
-  auto* p = Pointer("/render").Get(d);
-  render_ctx->LoadFromJson(*p);
   return render_ctx;
 }
 

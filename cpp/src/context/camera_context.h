@@ -31,7 +31,7 @@ class CameraContext : public IJsonizable {
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;
 
-  static CameraContextPtrU CreateFromJson(rapidjson::Document& d);
+  static CameraContextPtrU CreateDefault();
 
   static constexpr float kMinAngleRound = 0.0f;
   static constexpr float kMaxAngleRound = 360.0f;

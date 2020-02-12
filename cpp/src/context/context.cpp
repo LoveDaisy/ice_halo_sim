@@ -327,11 +327,10 @@ std::unique_ptr<ProjectContext> ProjectContext::CreateFromFile(const char* filen
   fclose(fp);
   std::unique_ptr<ProjectContext> proj = CreateDefault();
 
-  proj->sun_ctx_ = SunContext::CreateFromJson(d);
-  proj->cam_ctx_ = CameraContext::CreateFromJson(d);
-  proj->render_ctx_ = RenderContext::CreateFromJson(d);
-  proj->ParseRaySettings(d);
-  proj->ParseDataSettings(filename, d);
+  proj->ParseBasicSettings(d);
+  proj->ParseSunSettings(d);
+  proj->ParseCameraSettings(d);
+  proj->ParseRenderSettings(d);
   proj->ParseCrystalSettings(d);
   proj->ParseRayPathFilterSettings(d);
   proj->ParseMultiScatterSettings(d);
@@ -366,16 +365,6 @@ int ProjectContext::GetRayHitNum() const {
 
 void ProjectContext::SetRayHitNum(int hit_num) {
   ray_hit_num_ = std::min(std::max(hit_num, kMinRayHitNum), kMaxRayHitNum);
-}
-
-
-std::string ProjectContext::GetModelPath() const {
-  return model_path_;
-}
-
-
-void ProjectContext::SetModelPath(const std::string& path) {
-  model_path_ = path;
 }
 
 
@@ -446,11 +435,10 @@ AbstractRayPathFilter* ProjectContext::GetRayPathFilter(int id) const {
 
 
 ProjectContext::ProjectContext()
-    : sun_ctx_{}, cam_ctx_{}, render_ctx_{}, init_ray_num_(kDefaultInitRayNum), ray_hit_num_(kDefaultRayHitNum),
-      model_path_("") {}
+    : sun_ctx_{}, cam_ctx_{}, render_ctx_{}, init_ray_num_(kDefaultInitRayNum), ray_hit_num_(kDefaultRayHitNum) {}
 
 
-void ProjectContext::ParseRaySettings(rapidjson::Document& d) {
+void ProjectContext::ParseBasicSettings(rapidjson::Document& d) {
   auto p = Pointer("/ray/number").Get(d);
   if (p == nullptr) {
     std::fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default %d!\n", ProjectContext::kMinRayHitNum);
@@ -510,12 +498,9 @@ void ProjectContext::ParseRaySettings(rapidjson::Document& d) {
   for (decltype(tmp_wavelengths.size()) i = 0; i < tmp_wavelengths.size(); i++) {
     wavelengths_.emplace_back(WavelengthInfo{ static_cast<int>(tmp_wavelengths[i]), tmp_weights[i] });
   }
-}
 
-
-void ProjectContext::ParseDataSettings(const char* config_file_path, rapidjson::Document& d) {
   std::string dir = boost::filesystem::current_path().string();
-  auto p = Pointer("/data_folder").Get(d);
+  p = Pointer("/data_folder").Get(d);
   if (p == nullptr) {
     std::fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default current path!\n");
   } else if (!p->IsString()) {
@@ -524,9 +509,39 @@ void ProjectContext::ParseDataSettings(const char* config_file_path, rapidjson::
     dir = p->GetString();
   }
   data_path_ = dir;
+}
 
-  std::string config_file_path_str(config_file_path);
-  SetModelPath(PathJoin(config_file_path_str, "models"));
+
+void ProjectContext::ParseSunSettings(rapidjson::Document& d) {
+  sun_ctx_ = SunContext::CreateDefault();
+  auto root = Pointer("/sun").Get(d);
+  if (!root) {
+    std::fprintf(stderr, "\nWARNING! Config <sun> is missing. Use default!\n");
+  } else {
+    sun_ctx_->LoadFromJson(*root);
+  }
+}
+
+
+void ProjectContext::ParseCameraSettings(rapidjson::Document& d) {
+  cam_ctx_ = CameraContext::CreateDefault();
+  auto root = Pointer("/camera").Get(d);
+  if (!root) {
+    std::fprintf(stderr, "\nWARNING! Config <camera> is missing. Use default!\n");
+  } else {
+    cam_ctx_->LoadFromJson(*root);
+  }
+}
+
+
+void ProjectContext::ParseRenderSettings(rapidjson::Document& d) {
+  render_ctx_ = RenderContext::CreateDefault();
+  auto root = Pointer("/render").Get(d);
+  if (!root) {
+    std::fprintf(stderr, "\nWARNING! Config <render> is missing. Use default!\n");
+  } else {
+    render_ctx_->LoadFromJson(*root);
+  }
 }
 
 

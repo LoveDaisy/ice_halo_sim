@@ -17,17 +17,11 @@ SunContext::SunContext()
                                                   -std::sin(kDefaultAltitude * math::kDegreeToRad) } {}
 
 
-SunContext::SunContext(float altitude, float diameter)
-    : diameter_(diameter), altitude_(altitude), sun_position_{ 0.0f, -std::cos(altitude * math::kDegreeToRad),
-                                                               -std::sin(altitude * math::kDegreeToRad) } {}
-
-
-SunContextPtrU SunContext::CreateFromJson(rapidjson::Document& d) {
+SunContextPtrU SunContext::CreateDefault() {
   SunContextPtrU sun_ctx{ new SunContext };
-  rapidjson::Value* sun_dom = Pointer("/sun").Get(d);
-  sun_ctx->LoadFromJson(*sun_dom);
   return sun_ctx;
 }
+
 
 const float* SunContext::GetSunPosition() const {
   return sun_position_;

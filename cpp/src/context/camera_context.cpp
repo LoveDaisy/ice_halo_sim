@@ -14,10 +14,8 @@ using rapidjson::Pointer;
 CameraContext::CameraContext() : target_dir_{ 0, 0, 0 }, fov_(0), lens_type_(LensType::kLinear) {}
 
 
-CameraContextPtrU CameraContext::CreateFromJson(rapidjson::Document& d) {
+CameraContextPtrU CameraContext::CreateDefault() {
   CameraContextPtrU cam_ctx{ new CameraContext };
-  rapidjson::Value* cam_dom = Pointer("/camera").Get(d);
-  cam_ctx->LoadFromJson(*cam_dom);
   return cam_ctx;
 }
 

@@ -46,7 +46,7 @@ class RenderContext : public IJsonizable {
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;
 
-  static RenderContextPtrU CreateFromJson(rapidjson::Document& d);
+  static RenderContextPtrU CreateDefault();
 
   static constexpr float kMinIntensity = 0.01f;
   static constexpr float kMaxIntensity = 100.0f;

@@ -131,9 +131,6 @@ class ProjectContext {
   int GetRayHitNum() const;
   void SetRayHitNum(int hit_num);
 
-  std::string GetModelPath() const;
-  void SetModelPath(const std::string& path);
-
   std::string GetDataDirectory() const;
   std::string GetDefaultImagePath() const;
 
@@ -164,8 +161,10 @@ class ProjectContext {
  private:
   ProjectContext();
 
-  void ParseRaySettings(rapidjson::Document& d);
-  void ParseDataSettings(const char* config_file_path, rapidjson::Document& d);
+  void ParseBasicSettings(rapidjson::Document& d);
+  void ParseSunSettings(rapidjson::Document& d);
+  void ParseRenderSettings(rapidjson::Document& d);
+  void ParseCameraSettings(rapidjson::Document& d);
   void ParseCrystalSettings(rapidjson::Document& d);
   void ParseRayPathFilterSettings(rapidjson::Document& d);
   void ParseMultiScatterSettings(rapidjson::Document& d);
@@ -181,7 +180,6 @@ class ProjectContext {
   size_t init_ray_num_;
   int ray_hit_num_;
 
-  std::string model_path_;
   std::string data_path_;
 
   std::vector<CrystalContextPtrU> crystal_store_;

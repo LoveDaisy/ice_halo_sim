@@ -27,14 +27,13 @@ class SunContext : public IJsonizable {
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;
 
-  static SunContextPtrU CreateFromJson(rapidjson::Document& d);
+  static SunContextPtrU CreateDefault();
 
   static constexpr float kMaxDiameter = 90.0f;
   static constexpr float kDefaultAltitude = 20.0f;
 
  private:
   SunContext();
-  SunContext(float altitude, float diameter);
 
   float diameter_;         // in degree
   float altitude_;         // in degree
