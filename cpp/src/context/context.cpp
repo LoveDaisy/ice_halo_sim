@@ -311,9 +311,8 @@ void ProjectContext::ParseMultiScatterSettings(rapidjson::Document& d) {
   }
 
   for (const auto& c : p->GetArray()) {
-    MultiScatterContext scatter;
-    scatter.LoadFromJson(c);
-    multi_scatter_info_.emplace_back(scatter);
+    multi_scatter_info_.emplace_back(MultiScatterContext::CreateDefault());
+    multi_scatter_info_.back()->LoadFromJson(c);
   }
 }
 

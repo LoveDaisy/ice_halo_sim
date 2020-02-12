@@ -373,10 +373,11 @@ void Simulator::Run() {
 
   InitSunRays();
 
-  for (auto it = context_->multi_scatter_info_.begin(); it != context_->multi_scatter_info_.end(); ++it) {
+  const auto& multi_scatter_info = context_->multi_scatter_info_;
+  for (size_t i = 0; i < multi_scatter_info.size(); i++) {
     simulation_ray_data_.PrepareNewScatter(total_ray_num_);
 
-    for (const auto& c : it->GetCrystalInfo()) {
+    for (const auto& c : multi_scatter_info[i]->GetCrystalInfo()) {
       active_ray_num_ = static_cast<size_t>(c.population * total_ray_num_);
       if (buffer_size_ < total_ray_num_ * kBufferSizeFactor) {
         buffer_size_ = total_ray_num_ * kBufferSizeFactor;
@@ -387,8 +388,8 @@ void Simulator::Run() {
       TraceRays(context_->GetCrystal(c.crystal_id), context_->GetRayPathFilter(c.filter_id));
     }
 
-    if (it != context_->multi_scatter_info_.end() - 1) {
-      PrepareMultiScatterRays(it->GetProbability());  // total_ray_num_ is updated.
+    if (i != multi_scatter_info.size() - 1) {
+      PrepareMultiScatterRays(multi_scatter_info[i]->GetProbability());  // total_ray_num_ is updated.
     }
     entry_ray_offset_ = 0;
   }

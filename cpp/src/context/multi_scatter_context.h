@@ -9,6 +9,9 @@
 
 namespace icehalo {
 
+class MultiScatterContext;
+using MultiScatterContextPtrU = std::unique_ptr<MultiScatterContext>;
+
 class MultiScatterContext : public IJsonizable {
  public:
   struct CrystalInfo {
@@ -20,8 +23,6 @@ class MultiScatterContext : public IJsonizable {
         : crystal_id(crystal_id), filter_id(filter_id), population(pop){};
   };
 
-  explicit MultiScatterContext(float prob = 1.0f);
-
   float GetProbability() const;
   bool SetProbability(float p);
 
@@ -30,7 +31,11 @@ class MultiScatterContext : public IJsonizable {
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;
 
+  static MultiScatterContextPtrU CreateDefault();
+
  private:
+  explicit MultiScatterContext(float prob = 1.0f);
+
   void ClearCrystalInfo();
   void NormalizeCrystalPopulation();
 

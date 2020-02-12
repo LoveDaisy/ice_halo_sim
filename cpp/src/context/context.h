@@ -73,7 +73,7 @@ class ProjectContext {
   CameraContextPtr cam_ctx_;
   RenderContextPtr render_ctx_;
   std::vector<WavelengthInfo> wavelengths_;  // (wavelength, weight)
-  std::vector<MultiScatterContext> multi_scatter_info_;
+  std::vector<MultiScatterContextPtrU> multi_scatter_info_;
 
  private:
   ProjectContext();

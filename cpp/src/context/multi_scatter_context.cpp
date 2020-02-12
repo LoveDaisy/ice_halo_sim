@@ -13,6 +13,12 @@ using rapidjson::Pointer;
 MultiScatterContext::MultiScatterContext(float prob) : prob_(std::max(std::min(prob, 1.0f), 0.0f)) {}
 
 
+MultiScatterContextPtrU MultiScatterContext::CreateDefault() {
+  MultiScatterContextPtrU ctx{ new MultiScatterContext };
+  return ctx;
+}
+
+
 float MultiScatterContext::GetProbability() const {
   return prob_;
 }
