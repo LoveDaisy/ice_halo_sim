@@ -319,8 +319,10 @@ CrystalContext::CrystalContext()
     : id_(kInvalidId), crystal_{}, axis_{}, idx_param_{}, h_param_{}, d_param_{}, file_param_{} {}
 
 
-CrystalContext::CrystalContext(int id, AxisDistribution axis, CrystalPtrU g)
-    : id_(id), crystal_(std::move(g)), axis_(axis), idx_param_{}, h_param_{}, d_param_{}, file_param_{} {}
+CrystalContextPtrU CrystalContext::CreateDefault() {
+  CrystalContextPtrU ctx{ new CrystalContext };
+  return ctx;
+}
 
 
 int CrystalContext::GetId() const {

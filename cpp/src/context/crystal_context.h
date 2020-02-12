@@ -14,8 +14,6 @@ using CrystalContextPtrU = std::unique_ptr<CrystalContext>;
 
 class CrystalContext : public IJsonizable {
  public:
-  CrystalContext();
-  CrystalContext(int id, AxisDistribution axis, CrystalPtrU g);
   CrystalContext(const CrystalContext& other) = delete;
 
   int GetId() const;
@@ -27,7 +25,11 @@ class CrystalContext : public IJsonizable {
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;
 
+  static CrystalContextPtrU CreateDefault();
+
  private:
+  CrystalContext();
+
   void ParseHexPrism(const rapidjson::Value& c);
   void ParseHexPyramid(const rapidjson::Value& c);
   void ParseHexPyramidStackHalf(const rapidjson::Value& c);
