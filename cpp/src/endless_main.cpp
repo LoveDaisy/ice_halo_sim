@@ -15,7 +15,9 @@ int main(int argc, char* argv[]) {
   auto start = std::chrono::system_clock::now();
   icehalo::ProjectContextPtr proj_ctx = icehalo::ProjectContext::CreateFromFile(argv[1]);
   icehalo::Simulator simulator(proj_ctx);
-  icehalo::SpectrumRenderer renderer(proj_ctx);
+  icehalo::SpectrumRenderer renderer;
+  renderer.SetCameraContext(proj_ctx->cam_ctx_);
+  renderer.SetRenderContext(proj_ctx->render_ctx_);
 
   auto t = std::chrono::system_clock::now();
   std::chrono::duration<float, std::ratio<1, 1000>> diff = t - start;

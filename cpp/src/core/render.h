@@ -86,11 +86,13 @@ void SrgbGamma(float* linear_rgb);
 
 class SpectrumRenderer {
  public:
-  explicit SpectrumRenderer(ProjectContextPtr context);
+  SpectrumRenderer();
   ~SpectrumRenderer();
 
+  void SetCameraContext(CameraContextPtr cam_ctx);
+  void SetRenderContext(RenderContextPtr render_ctx);
   void LoadData(float wl, float weight, const SimpleRayData& final_ray_data);
-  void LoadDataFiles();
+  void LoadDataFiles(const std::string& data_folder);
   void ResetData();
   void RenderToImage();
   uint8_t* GetImageBuffer() const;
@@ -106,7 +108,8 @@ class SpectrumRenderer {
                    const float* wavelengths, const float* spec_data,  // spec_data: wavelength_number x data_number
                    uint8_t* rgb_data);                                // rgb data, data_number x 3
 
-  ProjectContextPtr context_;
+  CameraContextPtr cam_ctx_;
+  RenderContextPtr render_ctx_;
   std::unique_ptr<uint8_t[]> output_image_buffer_;
   std::unordered_map<int, std::unique_ptr<float[]>> spectrum_data_;
   std::unordered_map<int, std::unique_ptr<float[]>> spectrum_data_compensation_;

@@ -13,8 +13,10 @@ int main(int argc, char* argv[]) {
 
   auto start = std::chrono::system_clock::now();
   icehalo::ProjectContextPtr ctx = icehalo::ProjectContext::CreateFromFile(argv[1]);
-  icehalo::SpectrumRenderer renderer(ctx);
-  renderer.LoadDataFiles();
+  icehalo::SpectrumRenderer renderer;
+  renderer.SetCameraContext(ctx->cam_ctx_);
+  renderer.SetRenderContext(ctx->render_ctx_);
+  renderer.LoadDataFiles(ctx->GetDataDirectory());
   renderer.RenderToImage();
 
   cv::Mat img(ctx->render_ctx_->GetImageHeight(), ctx->render_ctx_->GetImageWidth(), CV_8UC3,
