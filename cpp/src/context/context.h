@@ -1,12 +1,9 @@
 #ifndef SRC_CONTEXT_CONTEXT_H_
 #define SRC_CONTEXT_CONTEXT_H_
 
-#include <functional>
+#include <limits>
 #include <memory>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include "context/camera_context.h"
@@ -17,7 +14,6 @@
 #include "context/sun_context.h"
 #include "core/crystal.h"
 #include "core/optics.h"
-#include "io/file.h"
 #include "io/serialize.h"
 #include "rapidjson/document.h"
 
@@ -39,9 +35,6 @@ struct WavelengthInfo {
 
 class ProjectContext {
  public:
-  static ProjectContextPtrU CreateFromFile(const char* filename);
-  static ProjectContextPtrU CreateDefault();
-
   size_t GetInitRayNum() const;
   void SetInitRayNum(size_t ray_num);
 
@@ -56,6 +49,9 @@ class ProjectContext {
   const CrystalContext* GetCrystalContext(int id) const;
 
   AbstractRayPathFilter* GetRayPathFilter(int id) const;
+
+  static ProjectContextPtrU CreateFromFile(const char* filename);
+  static ProjectContextPtrU CreateDefault();
 
 #ifdef FOR_TEST
   void PrintCrystalInfo() const;

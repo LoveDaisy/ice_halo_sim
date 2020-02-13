@@ -9,7 +9,6 @@
 #include "rapidjson/error/en.h"
 #include "rapidjson/filereadstream.h"
 #include "rapidjson/pointer.h"
-#include "util/threadingpool.h"
 
 
 namespace icehalo {
@@ -23,7 +22,7 @@ constexpr int ProjectContext::kMinRayHitNum;
 constexpr int ProjectContext::kMaxRayHitNum;
 
 
-std::unique_ptr<ProjectContext> ProjectContext::CreateFromFile(const char* filename) {
+ProjectContextPtrU ProjectContext::CreateFromFile(const char* filename) {
   printf("Reading config from: %s\n", filename);
 
   FILE* fp = fopen(filename, "rb");
@@ -45,7 +44,7 @@ std::unique_ptr<ProjectContext> ProjectContext::CreateFromFile(const char* filen
   }
 
   fclose(fp);
-  std::unique_ptr<ProjectContext> proj = CreateDefault();
+  ProjectContextPtrU proj = CreateDefault();
 
   proj->ParseBasicSettings(d);
   proj->ParseSunSettings(d);
@@ -59,8 +58,8 @@ std::unique_ptr<ProjectContext> ProjectContext::CreateFromFile(const char* filen
 }
 
 
-std::unique_ptr<ProjectContext> ProjectContext::CreateDefault() {
-  return std::unique_ptr<ProjectContext>(new ProjectContext());
+ProjectContextPtrU ProjectContext::CreateDefault() {
+  return ProjectContextPtrU(new ProjectContext());
 }
 
 
