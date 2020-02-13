@@ -308,7 +308,8 @@ ratio. So if one crystal set to 2.0 and the other set to 3.0, it is equivalent t
 the other to 30.
 
 * `type` and `parameter`:
-Currently there are 5 crystal shapes, `HexPrism`, `HexPyramid`, `HexPyramidStackHalf`, `CubicPyramid`,
+Currently there are 7 crystal shapes, `HexPrism`, `HexPyramid`, `HexPyramidStackHalf`,
+`IrregularHexPrism`, `IrregularHexPyramid`, `CubicPyramid`,
 `Custom`.
 Each shape has its own shape parameters.
 
@@ -364,12 +365,10 @@ Each shape has its own shape parameters.
   3D model file format, which means it is human read-frendly and you can open and edit the model file
   with any text editor. Of course it is a better and elegent way to create your crystal in
   a 3D modeling software, such as Maya, 3DMax, Blender, etc.  
-  *NOTE:* Though the obj file can contain polygons having more than 3 vertexes, my program
+  **NOTE**: Though the obj file can contain polygons having more than 3 vertexes, my program
   can only handle triangles. A face is only represented with its first 3 vertexes (if you set more than 3).
   Currently my program cannot handle vertex texture nor vertex normal information. Please make sure your
-  obj file does not contain any of them (the face line does not contain any slashes).  
-  All your models should be put in a folder named `models` and this folder must put at the same place
-  where configuration file locates. Otherwise my program cannot find them.
+  obj file does not contain any of them (the face line does not contain any slashes). 
 
 
 ## TODO list
