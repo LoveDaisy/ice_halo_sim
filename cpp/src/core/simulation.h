@@ -11,12 +11,13 @@
 namespace icehalo {
 
 struct SimpleRayData : public ISerializable {
-  explicit SimpleRayData(size_t num);
+  explicit SimpleRayData(size_t num = 0);
 
   float wavelength;
   float weight;
   std::unique_ptr<float[]> buf;
   size_t size;
+  size_t init_ray_num;
 
   /**
    * @brief Serialize self to a file.

@@ -338,7 +338,7 @@ void SpectrumRenderer::LoadData(float wl, float weight, const SimpleRayData& fin
   });
   threading_pool->WaitFinish();
 
-  total_w_ += context_->GetInitRayNum() * weight;
+  total_w_ += final_ray_data.init_ray_num * weight;
 }
 
 
@@ -388,7 +388,7 @@ uint8_t* SpectrumRenderer::GetImageBuffer() const {
 
 int SpectrumRenderer::LoadDataFromFile(File& file) {
   file.Open(FileOpenMode::kRead);
-  SimpleRayData final_ray_data(0);
+  SimpleRayData final_ray_data;
   final_ray_data.Deserialize(file, endian::kUnknownEndian);
   file.Close();
 
