@@ -30,23 +30,24 @@ or
 ./build.sh debug  # Debug version
 ~~~
 
-For other useful options, see the help message via `./build.sh help` or just `./build.sh`
+For other useful options, see the help message via `./build.sh -h` or just `./build.sh`.
 
 Then the release version executable binaries will be at `build/cmake_install`, and the debug version will be at
 `build/cmake_build`.
 
 Note, I introduce the [GoogleTest](https://github.com/google/googletest) framework to help do my unit tests.
-GoogleTest is a submodule of this project. Generally you should not
+GoogleTest is a submodule of this project. Generally you do not need to
 care about these codes nor the test cases in `test` folder. If you are interested in my unit tests, please
-pass `test` option when run the build script. If `test` option is set, then the final executable will not be
-installed when test cases failed.
+pass `-t` option when run the build script. If `-t` option is set, the test cases will be built and test on.
+Anf if test fails, the final executable will not be
+installed to `build/cmake_install`.
 
 ## Getting started
 
 ### Simulation
 
 You can start simulatino by
-`./IceHaloSim <config-file>`. The file [`config-example.json`](./config-example.json) 
+`./build/cmake_install/IceHaloSim <config-file>`. The file [`config-example.json`](./config-example.json) 
 is an example configuration file. After the simulation is done you will get several `.bin` files
 in your data path set in configuration file.
 You can run the simulation multiple times to cumulate many data and then render them at last.
@@ -58,7 +59,8 @@ as well as several lines printed on the screen that describe crystal geometry.
 I have prepared several tools for visualization those results. Some are matlab codes.
 
 * Halo picture.  
-  Please run `./IceHaloRender <config-file>` for visualization.
+  Please run `./build/cmake_install/IceHaloRender <config-file>` for visualization.
+I highly recommand this render your halo picture in this way, rather than the following matlab way.
 Just use the same configuration file as you run the simulation. The rendered picture
 will be placed at the data path set in configuration file.  
 
@@ -70,6 +72,14 @@ See [matlab](../matlab/) folder for details.
 The matlab script `matlab/src/plot_crystal-example.m` plots the shape of crystals. You can copy data from program output on
 screen. The lines start with `v` indicate vertex data, and those start with `f` indicate face data.
 See [matlab](../matlab/) folder for details.
+
+### Endless mode
+
+The simulate-and-then-render way need many disk space to store the intermediate `.bin` files. They are
+data files that will be used for further analysis (not develop yet).
+If you do not want to save these intermediate data, then this endless mode is good for you. Please run
+`./build/cmake_install/IceHaloEndless <config-file>` for endless mode. It runs endlessly, until you press
+`^+C` (control + C) to force break it.
 
 ## Configuration file
 
