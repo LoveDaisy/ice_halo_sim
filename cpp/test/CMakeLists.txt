@@ -11,6 +11,7 @@ set(SOURCE_FILE
     ${PROJ_SRC_DIR}/context/render_context.cpp
     ${PROJ_SRC_DIR}/context/sun_context.cpp
     ${PROJ_SRC_DIR}/core/crystal.cpp
+    ${PROJ_SRC_DIR}/core/filter.cpp
     ${PROJ_SRC_DIR}/core/mymath.cpp
     ${PROJ_SRC_DIR}/core/optics.cpp
     ${PROJ_SRC_DIR}/core/render.cpp

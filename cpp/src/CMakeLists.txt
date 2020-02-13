@@ -29,6 +29,7 @@ set(SOURCE_FILE
     context/render_context.cpp
     context/sun_context.cpp
     core/crystal.cpp
+    core/filter.cpp
     core/mymath.cpp
     core/optics.cpp
     core/render.cpp

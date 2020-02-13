@@ -11,13 +11,10 @@
 
 namespace icehalo {
 
-constexpr uint32_t kInvalidIndex = 0xffffffff;
-
-
 template <typename T>
 class ObjectPool : public ISerializable {
  public:
-  ~ObjectPool();
+  ~ObjectPool() override;
 
   ObjectPool(const ObjectPool&) = delete;
   void operator=(const ObjectPool&) = delete;

@@ -4,6 +4,9 @@
 
 namespace icehalo {
 
+constexpr uint32_t kInvalidIndex = 0xffffffff;
+
+
 template <typename T>
 ObjectPool<T>::~ObjectPool() {
   for (auto seg : objects_) {
