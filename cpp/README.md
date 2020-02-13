@@ -79,7 +79,8 @@ The simulate-and-then-render way need many disk space to store the intermediate 
 data files that will be used for further analysis (not develop yet).
 If you do not want to save these intermediate data, then this endless mode is good for you. Please run
 `./build/cmake_install/IceHaloEndless <config-file>` for endless mode. It runs endlessly, until you press
-`^+C` (control + C) to force break it.
+`^+C` (control + C) to force break it. It will continously refresh the output image. The total ray numbers
+and will be displayed on the screen.
 
 ## Configuration file
 
@@ -87,6 +88,22 @@ This file containing all configurations. It uses JSON format.
 I use [Rapidjson](http://rapidjson.org/index.html) to parse JSON file.
 
 ### Basic infomation for simulation
+
+Here is an example for basic information:
+
+~~~javascript
+"sun": {
+    "altitude": 25,
+    "diameter": 0.5
+},
+"ray": {
+    "number": 500000,
+    "wavelength": [420, 460, 500, 540, 580, 620],
+    "weight": [1, 1, 1, 1, 1, 1]
+},
+"max_recursion": 8,
+"data_folder": "<path-to-your-data-folder>"
+~~~
 
 * `sun`:
 It has two attributes,
@@ -98,7 +115,9 @@ It defines some properties of rays used in simulation,
   * `number`, the total ray number for simulation.
     Note that even with a single incident ray, it may result in multiple
     rays output, due to reflections and refractions in crystal. This `number` defines the input ray number,
-    but not output ray number.
+    but not output ray number. **Note**, this is the ray number for a single wavelength. If you want a real color
+    simulation (thus there will be multiple wavelengths), the total number will be multiplier of this `number`
+    by the number of following `wavelength`.
   * `wavelength`, the wavelengths used during simulation.
     It is an array contains all wavelengths you want to use. The refractive index data is from
     [Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice).
@@ -111,12 +130,32 @@ and still doesn't leave the crystal, it will be dropped.
 * `data_folder`:
 It defines where output data files should be located. The simulation program will put data into this
 folder and the rendering program will read data from this folder. Also the rendered image will be put
-in this folder.
+in this folder. In endless mode, there is no intermediate data file, only final image will be put in
+this folder.
 
 ### Simulation settings
 
+Here is an example of simulation settings:
+
+~~~javascript
+"multi_scatter": [
+    {
+        "crystal": [2, 1, 5, 11, 12],
+        "population": [150, 100, 15, 30, 10],
+        "probability": 1.0,
+        "ray_path_filter": [0, 0, 0, 0, 0]
+    },
+    {
+        "crystal": [2, 1, 5, 11, 12],
+        "population": [150, 100, 15, 30, 10],
+        "probability": 1.0,
+        "ray_path_filter": [0, 0, 0, 0, 0]
+    }
+]
+~~~
+
 * `multi_scatter`:
-It is an array defining how to perform multi/single scattering.
+It is an array defining how to perform multi/single scattering. The example defines a 2-scatter simulation.
 Each element in this array defines a single scattering process, and contains 4 properties:
   * `crystal`: what crystal(s) are used in this scattering process. It is an array, filled with crystal IDs
     (See the section Crystal Settings).
@@ -131,19 +170,41 @@ Each element in this array defines a single scattering process, and contains 4 p
 
 ### Rendering settings
 
+Here is an example of rendering settings:
+
+~~~javascript
+"camera": {
+    "azimuth": 0,
+    "elevation": 89.99,
+    "rotation": 0,
+    "fov": 95,
+    "lens": "fisheye_equidistant"
+},
+"render": {
+    "width": 4096,
+    "height": 4096,
+    "visible_semi_sphere": "upper",
+    "ray_color": "real",
+    "background_color": [0, 0, 0],
+    "intensity_factor": 20,
+    "offset": [0, 0]
+}
+~~~
+
 * `camera`:
 It defines properties related to camera, including:  
   * `azimuth`, `elevation`, `rotation`: the direction where camera pointing at. In degree.
   * `fov`: (half) field of view, the angle from center to edge. In degree.
-  * `width`, `height`: the size of output image. In pixel.
   * `lens`: lens type, can be one of these values: `fisheye`, `linear`, `dual_fisheye_equidistant`, `dual_fisheye_equiarea`.
 
 * `render`:
 It defines some useful attributes used when rendering:
-  * `visible_semi_sphere`, which semi-sphere should be rendered. Its default value is `uppper`,
-    indicating the upper semi sphere should be rendered, which is the common scene. If it is set to `lower`, then
+  * `width`, `height`: the size of output image. In pixel.
+  * `visible_semi_sphere`, which semi-sphere should be rendered. The example value is `uppper`,
+    indicating the upper semi sphere should be rendered, and the lower one will be black,
+    which is the common scene. If it is set to `lower`, then
     halos that occure under horizontal, say, [subparhilia](https://www.atoptics.co.uk/halo/subpars.htm),
-    will be rendered as well. The values could be one of these: `upper`, `lower`, `camera`, `full`.
+    will be rendered. The values could be one of these: `upper`, `lower`, `camera`, `full`.
   * `intensity_factor`, controls the intensity. The value locates between 0.01 and 100.0.
   * `offset`, defines the rendering offset. In pixel.
   * `ray_color`, defines the color used to plot the ray scatter points. It
@@ -154,30 +215,100 @@ It defines some useful attributes used when rendering:
 
 ### Crystal settings
 
-* `axis` and `roll`:
-These two fields defines the orientation of crystals. `axis` defines the c-axis orientation, and `roll`
-defines the rotation around c-axis (also regarded as z-axis in above figures and my program).
+Here is an example of it:
+
+~~~javascript
+"crystal": [
+    {
+        "id": 1,
+        "type": "HexPrism",
+        "parameter": 2.4,
+        "zenith": {
+            "mean": 90,
+            "std": 0.3,
+            "type": "gauss"
+        },
+        "roll": {
+            "mean": 0,
+            "std": 0,
+            "type": "uniform"
+        }
+    },
+    {
+        "id": 10,
+        "type": "HexPyramid",
+        "parameter": [0.0, 0.0, 0.2],
+        "zenith": {
+            "mean": 0,
+            "std": 0.3,
+            "type": "gauss"
+        },
+        "roll": {
+            "mean": 0,
+            "std": 0,
+            "type": "uniform"
+        }
+    },
+    {
+        "id": 3,
+        "type": "IrregularHexPyramid",
+        "parameter": [1, 2, 1, 2, 1, 2, 1, 1, 1, 1, 0.3, 0.8, 0.3],
+        "zenith": {
+            "mean": 90,
+            "std": 0.8,
+            "type": "gauss"
+        },
+        "roll": {
+            "mean": 0,
+            "std": 0,
+            "type": "uniform"
+        }
+    },
+    {
+        "id": 9,
+        "type": "CubicPyramid",
+        "parameter": [0.8, 0.8],
+        "zenith": {
+            "mean": 90,
+            "std": 0.3,
+            "type": "gauss"
+        },
+        "roll": {
+            "mean": 0,
+            "std": 0,
+            "type": "uniform"
+        }
+    }
+]
+~~~
+
+* `id` is the ID for this crystal. It is the only reference used in other settings, e.g. in multi-scatter settings.
+It should be a unique number greater than 0. It is not necessary to keep IDs increasing one by one.
+
+* `zenith`, `roll` and `azimuth` (optional):
+These fields defines the orientation of crystals. `zenith` defines the c-axis orientation, and `roll`
+defines the rotation around c-axis.
 
   These fields all has three attributes, `mean`, `std`, `type`.  
   * `type` defines the random distribution
-type, either `Gauss`, for Gaussian distribution, or `Uniform`, for uniform distribution. *NOTE:*
-if `type` of `axis` is `Uniform`, then `mean` and `std` will be ignored and
-the axis will uniformly distributed on sphere. Similarly, if `type` of `roll` is `Uniform`
+type, either `gauss`, for Gaussian distribution, or `uniform`, for uniform distribution. **NOTE**:
+if `type` of `axis` is `uniform`, then `mean` and `std` will be ignored and
+the axis will uniformly distributed on sphere. Similarly, if `type` of `roll` is `uniform`
 then it will uniformly distributed between 0 and 360 degree.
   * `mean` defines
-the mean of the random distribution. For `axis`, it means the zenith angle.  
+the mean of random distribution. For example for `zenith` it means the zenith angle.  
   * `std` defines the deviation of the distribution. For Gaussian distribution,
 it is the standard deviation, and for uniform distribution, it defines the value range.
 
   All angles are in degrees.
 
 * `population`:
-It defines how many crystals used in a simulation. Note that it is not the actual number, just for a
+It defines how many crystals used in a simulation. **Note** that it is not the actual number, just for a
 ratio. So if one crystal set to 2.0 and the other set to 3.0, it is equivalent to set one to 20 and
 the other to 30.
 
 * `type` and `parameter`:
-Currently I create 5 shapes, `HexPrism`, `HexPyramid`, `HexPyramidStackHalf`, `CubicPyramid`,
+Currently there are 5 crystal shapes, `HexPrism`, `HexPyramid`, `HexPyramidStackHalf`, `CubicPyramid`,
 `Custom`.
 Each shape has its own shape parameters.
 
@@ -189,18 +320,18 @@ Each shape has its own shape parameters.
   * `HexPyramid`:
   May have 3, 5, or 7 parameters.  
     * For 3 parameters case, they are `h1 / H1`, `h2 / a`, `h3 / H3` respectly,
-      where `H1` means the max possible height for pyramid segment, and `H3` the same.  
+      where `H1` means the max possible height for upper pyramid segment, and `H3` the same but for lower pyramid segment.  
       <img src="doc/figs/hex_pyramid_01.png" width="400">.  
     * For 5 parameters case, the last 3 parameters are same as the first case,
       and the first 2 parameters indicate the face direction. They must be integers. The
       face direction is described with [Miller index](https://en.wikipedia.org/wiki/Miller_index).
-      For example, `a`, `b`, represents a face with Miller index of (`a`, 0, `-a`, `b`). For a
-      typical ice crystal face (face number 13), its Miller index is (1, 0, -1, 1).
+      For example, `a`, `b`, represents a face with Miller index of `(a, 0, -a, b)`. For a
+      typical ice crystal face (face number 13), its Miller index is `(1, 0, -1, 1)`.
       So it can be described using parameters 1, 1.  
     * For 7 parameters case, the first 4 parameters are interges and describe the upper and lower pyramid segment
       face directions. For example `a`, `b`, `c`, `d` describe upper pyramid segment with Miller index of
-      (`a`, 0, `-a`, `b`) and lower pyramid segment of (`c`, 0, `-c`, `d`). NOTE: for faces with different
-      Miller index, their maximumn height `H` are also different.
+      `(a, 0, -a, b)` and lower pyramid segment of `(c, 0, -c, d)`. NOTE: for faces with different
+      Miller index, their maximumn height `H` for pyramid segment are also different.
 
     With these description, you will have the maximized freedom to design your crystal shape.
 
@@ -209,15 +340,10 @@ Each shape has its own shape parameters.
   for prism segment.  
   <img src="doc/figs/hex_pyramid_stack_half_01.png" width="400">.
 
-  * `TriPyramid`:
-  5 parameters. Similar to 5 parameter case of `HexPyramid`.
-  <img src="doc/figs/tri_pyramid_01.png" width="400">.
-
-  7 parameters. First 6 parameters define the prism face distance factor from the origin.
   * `IrregularHexPrism`:
   Last parameter is height of the crystal. The distance factor here means the ratio of actual distance
   w.r.t regular haxegon distance. Thus, a regular haxegon has distance of `[1, 1, 1, 1, 1, 1]`.
-  The figure shows an irregular hexegon with distance of `[1.1, 0.9, 1.5, 0.9, 1.7, 1.2]`  
+  The following figure shows an irregular hexegon with distance of `[1.1, 0.9, 1.5, 0.9, 1.7, 1.2]`  
   <img src="doc/figs/irr_hex_01.png" width="400">.
 
   * `IrregularHexPyramid`:
@@ -248,7 +374,6 @@ Each shape has its own shape parameters.
 
 ## TODO list
 
-* Add a feature: render halo with given optical path(s), rather than all possible paths.
 * Use OpenCL / OpenGL / CUDA to accelerate. Since I've seen good enough performance with a simple
   threading pool implemented by myself, I doubt the margin to more improvements.
 * Write a (web) GUI for these code.
