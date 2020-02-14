@@ -456,10 +456,10 @@ constexpr float kCmfZ[] = {
 };
 
 
-void Rgb(size_t wavelength_number, size_t data_number,  //
-         const int* wavelengths,
-         const float* spec_data,  // spec_data: wavelength_number x data_number
-         uint8_t* rgb_data) {     // rgb data, data_number x 3
+void RenderSpecToRgb(size_t wavelength_number, size_t data_number,  //
+                     const int* wavelengths,
+                     const float* spec_data,  // spec_data: wavelength_number x data_number
+                     uint8_t* rgb_data) {     // rgb data, data_number x 3
   for (size_t i = 0; i < data_number; i++) {
     /* Step 1. Spectrum to XYZ */
     float xyz[3]{};
@@ -512,10 +512,10 @@ void Rgb(size_t wavelength_number, size_t data_number,  //
 }
 
 
-void Gray(size_t wavelength_number, size_t data_number,  //
-          const int* wavelengths,
-          const float* spec_data,  // spec_data: wavelength_number x data_number
-          uint8_t* rgb_data) {     // rgb data, data_number x 3
+void RenderSpecToGray(size_t wavelength_number, size_t data_number,  //
+                      const int* wavelengths,
+                      const float* spec_data,  // spec_data: wavelength_number x data_number
+                      uint8_t* rgb_data) {     // rgb data, data_number x 3
   for (size_t i = 0; i < data_number; i++) {
     /* Step 1. Spectrum to XYZ */
     float xyz[3]{};
@@ -676,9 +676,9 @@ void SpectrumRenderer::RenderToImage() {
   bool use_rgb = ray_color[0] < 0;
 
   if (use_rgb) {
-    Rgb(wl_num, img_wid * img_hei, wl_data.get(), flat_spec_data.get(), output_image_buffer_.get());
+    RenderSpecToRgb(wl_num, img_wid * img_hei, wl_data.get(), flat_spec_data.get(), output_image_buffer_.get());
   } else {
-    Gray(wl_num, img_wid * img_hei, wl_data.get(), flat_spec_data.get(), output_image_buffer_.get());
+    RenderSpecToGray(wl_num, img_wid * img_hei, wl_data.get(), flat_spec_data.get(), output_image_buffer_.get());
   }
 
   constexpr uint8_t kColorMaxVal = std::numeric_limits<uint8_t>::max();

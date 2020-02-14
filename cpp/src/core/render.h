@@ -82,6 +82,12 @@ EnumMap<LensType, ProjectionFunction>& GetProjectionFunctions();
 
 
 void SrgbGamma(float* linear_rgb);
+void RenderSpecToRgb(size_t wavelength_number, size_t data_number,     //
+                     const int* wavelengths, const float* spec_data,   // spec_data: wavelength_number x data_number
+                     uint8_t* rgb_data);                               // rgb data, data_number x 3
+void RenderSpecToGray(size_t wavelength_number, size_t data_number,    //
+                      const int* wavelengths, const float* spec_data,  // spec_data: wavelength_number x data_number
+                      uint8_t* rgb_data);                              // rgb data, data_number x 3
 
 constexpr int kMinWavelength = 360;
 constexpr int kMaxWaveLength = 830;
