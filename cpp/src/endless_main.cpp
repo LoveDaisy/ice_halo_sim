@@ -43,8 +43,7 @@ int main(int argc, char* argv[]) {
       diff = t1 - t0;
       std::printf("Ray tracing: %.2fms\n", diff.count());
 
-      renderer.LoadRayData(static_cast<float>(wavelengths[i].wavelength), wavelengths[i].weight,
-                           simulator.GetSimulationRayData().CollectFinalRayData());
+      renderer.LoadRayData(simulator.GetSimulationRayData().CollectFinalRayData());
     }
 
     renderer.RenderToImage();
@@ -52,12 +51,7 @@ int main(int argc, char* argv[]) {
     cv::Mat img(proj_ctx->render_ctx_->GetImageHeight(), proj_ctx->render_ctx_->GetImageWidth(), CV_8UC3,
                 renderer.GetImageBuffer());
     cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
-    try {
-      cv::imwrite(proj_ctx->GetDefaultImagePath(), img);
-    } catch (cv::Exception& ex) {
-      std::fprintf(stderr, "Exception converting image to PNG format: %s\n", ex.what());
-      break;
-    }
+    cv::imwrite(proj_ctx->GetDefaultImagePath(), img);
 
     t = std::chrono::system_clock::now();
     total_ray_num += proj_ctx->GetInitRayNum() * wavelengths.size();
