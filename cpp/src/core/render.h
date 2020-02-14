@@ -87,13 +87,12 @@ void SrgbGamma(float* linear_rgb);
 class SpectrumRenderer {
  public:
   SpectrumRenderer();
-  ~SpectrumRenderer();
 
   void SetCameraContext(CameraContextPtr cam_ctx);
   void SetRenderContext(RenderContextPtr render_ctx);
-  void LoadData(float wl, float weight, const SimpleRayData& final_ray_data);
-  void LoadDataFiles(const std::string& data_folder);
-  void ResetData();
+  void LoadRayData(float wl, float weight, const SimpleRayData& final_ray_data);
+  void LoadRayDataFiles(const std::string& data_folder);
+  void ClearRayData();
   void RenderToImage();
   uint8_t* GetImageBuffer() const;
 

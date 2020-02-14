@@ -250,11 +250,6 @@ constexpr float SpectrumRenderer::kCmfZ[];
 SpectrumRenderer::SpectrumRenderer() : cam_ctx_{}, render_ctx_{}, output_image_buffer_{}, total_w_(0) {}
 
 
-SpectrumRenderer::~SpectrumRenderer() {
-  ResetData();
-}
-
-
 void SpectrumRenderer::SetCameraContext(CameraContextPtr cam_ctx) {
   cam_ctx_ = cam_ctx;
 }
@@ -266,7 +261,7 @@ void SpectrumRenderer::SetRenderContext(RenderContextPtr render_ctx) {
 }
 
 
-void SpectrumRenderer::LoadDataFiles(const std::string& data_folder) {
+void SpectrumRenderer::LoadRayDataFiles(const std::string& data_folder) {
   if (!cam_ctx_) {
     throw std::invalid_argument("Camera context is not set!");
   }
@@ -290,7 +285,7 @@ void SpectrumRenderer::LoadDataFiles(const std::string& data_folder) {
 }
 
 
-void SpectrumRenderer::LoadData(float wl, float weight, const SimpleRayData& final_ray_data) {
+void SpectrumRenderer::LoadRayData(float wl, float weight, const SimpleRayData& final_ray_data) {
   if (!cam_ctx_) {
     throw std::invalid_argument("Camera context is not set!");
   }
@@ -357,13 +352,6 @@ void SpectrumRenderer::LoadData(float wl, float weight, const SimpleRayData& fin
 }
 
 
-void SpectrumRenderer::ResetData() {
-  total_w_ = 0;
-  spectrum_data_.clear();
-  spectrum_data_compensation_.clear();
-}
-
-
 void SpectrumRenderer::RenderToImage() {
   if (!render_ctx_) {
     throw std::invalid_argument("Render context is not set!");
@@ -424,7 +412,7 @@ int SpectrumRenderer::LoadDataFromFile(File& file) {
     return 0;
   }
 
-  LoadData(wavelength, wavelength_weight, final_ray_data);
+  LoadRayData(wavelength, wavelength_weight, final_ray_data);
 
   return static_cast<int>(final_ray_data.size);
 }

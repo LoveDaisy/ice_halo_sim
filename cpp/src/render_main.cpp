@@ -16,7 +16,7 @@ int main(int argc, char* argv[]) {
   icehalo::SpectrumRenderer renderer;
   renderer.SetCameraContext(ctx->cam_ctx_);
   renderer.SetRenderContext(ctx->render_ctx_);
-  renderer.LoadDataFiles(ctx->GetDataDirectory());
+  renderer.LoadRayDataFiles(ctx->GetDataDirectory());
   renderer.RenderToImage();
 
   cv::Mat img(ctx->render_ctx_->GetImageHeight(), ctx->render_ctx_->GetImageWidth(), CV_8UC3,
