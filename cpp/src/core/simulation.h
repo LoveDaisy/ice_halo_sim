@@ -13,7 +13,7 @@ namespace icehalo {
 struct SimpleRayData : public ISerializable {
   explicit SimpleRayData(size_t num = 0);
 
-  float wavelength;
+  int wavelength;
   float weight;
   std::unique_ptr<float[]> buf;
   size_t size;

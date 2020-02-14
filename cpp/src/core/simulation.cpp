@@ -109,7 +109,7 @@ SimpleRayData SimulationRayData::CollectFinalRayData() const {
   if (!rays_.empty()) {
     final_ray_data.init_ray_num = rays_[0].size();
   }
-  final_ray_data.wavelength = static_cast<float>(wavelength_info_.wavelength);
+  final_ray_data.wavelength = wavelength_info_.wavelength;
   final_ray_data.weight = wavelength_info_.weight;
   float* p = final_ray_data.buf.get();
   for (const auto& sr : exit_ray_segments_) {

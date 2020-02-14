@@ -608,7 +608,7 @@ void SpectrumRenderer::LoadRayData(const SimpleRayData& final_ray_data) {
   }
   auto& pf = projection_functions[projection_type];
 
-  auto wavelength = static_cast<int>(final_ray_data.wavelength);
+  auto wavelength = final_ray_data.wavelength;
   auto weight = final_ray_data.weight;
   if (wavelength < kMinWavelength || wavelength > kMaxWaveLength || weight <= 0) {
     std::fprintf(stderr, "Wavelength out of range!\n");
