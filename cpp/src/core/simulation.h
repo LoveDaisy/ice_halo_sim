@@ -14,7 +14,8 @@ struct SimpleRayData : public ISerializable {
   explicit SimpleRayData(size_t num = 0);
 
   int wavelength;
-  float weight;
+  float wavelength_weight;
+  float total_ray_energy;
   std::unique_ptr<float[]> buf;
   size_t size;
   size_t init_ray_num;

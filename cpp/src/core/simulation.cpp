@@ -11,7 +11,8 @@
 namespace icehalo {
 
 SimpleRayData::SimpleRayData(size_t num)
-    : wavelength(0.0f), weight(0.0f), buf{ new float[num * 4] }, size(num), init_ray_num(0) {}
+    : wavelength(0.0f), wavelength_weight(0.0f), total_ray_energy(0.0f), buf{ new float[num * 4] }, size(num),
+      init_ray_num(0) {}
 
 
 void SimpleRayData::Serialize(File& file, bool with_boi) const {
@@ -20,7 +21,8 @@ void SimpleRayData::Serialize(File& file, bool with_boi) const {
   }
 
   file.Write(wavelength);
-  file.Write(weight);
+  file.Write(wavelength_weight);
+  file.Write(total_ray_energy);
   file.Write(static_cast<uint64_t>(size));
   file.Write(static_cast<uint64_t>(init_ray_num));
 
@@ -40,9 +42,13 @@ void SimpleRayData::Deserialize(File& file, endian::Endianness endianness) {
   if (need_swap) {
     endian::ByteSwap::Swap(&wavelength);
   }
-  file.Read(&weight);
+  file.Read(&wavelength_weight);
   if (need_swap) {
-    endian::ByteSwap::Swap(&weight);
+    endian::ByteSwap::Swap(&wavelength_weight);
+  }
+  file.Read(&total_ray_energy);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&total_ray_energy);
   }
 
   uint64_t num;
@@ -111,7 +117,7 @@ SimpleRayData SimulationRayData::CollectFinalRayData() const {
     final_ray_data.init_ray_num = rays_[0].size();
   }
   final_ray_data.wavelength = wavelength_info_.wavelength;
-  final_ray_data.weight = wavelength_info_.weight;
+  final_ray_data.wavelength_weight = wavelength_info_.weight;
   float* p = final_ray_data.buf.get();
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
@@ -119,6 +125,7 @@ SimpleRayData SimulationRayData::CollectFinalRayData() const {
         const auto* axis = r->root_ctx->main_axis.val();
         math::RotateZBack(axis, r->dir.val(), p);
         p[3] = r->w;
+        final_ray_data.total_ray_energy += r->w;
         p += 4;
       }
     }
