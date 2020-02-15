@@ -15,6 +15,13 @@ using RenderContextPtrU = std::unique_ptr<RenderContext>;
 using RenderContextPtr = std::shared_ptr<RenderContext>;
 
 
+enum class RenderColorCompactLevel {
+  kTrueColor,   //!< True color, use all 24-bit
+  kMonoChrome,  //!< Gray scale, 8-bit per channel
+  kLowQuality,  //!< 4-bit per channel
+};
+
+
 class RenderContext : public IJsonizable {
  public:
   const float* GetRayColor() const;

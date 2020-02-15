@@ -229,8 +229,8 @@ EnumMap<LensType, ProjectionFunction>& GetProjectionFunctions() {
 }
 
 
-void SrgbGamma(float* linear_rgb) {
-  for (int i = 0; i < 3; i++) {
+void SrgbGamma(float* linear_rgb, size_t num) {
+  for (size_t i = 0; i < num; i++) {
     if (linear_rgb[i] < 0.0031308) {
       linear_rgb[i] *= 12.92f;
     } else {
@@ -513,6 +513,7 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,  // spec_d
 
 void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_data: wavelength_number * data_number
                       size_t data_number, float factor,                 //
+                      RenderColorCompactLevel level, int index,         // color compact level and channel index
                       uint8_t* rgb_data) {                              // rgb data, data_number * 3
   for (size_t i = 0; i < data_number; i++) {
     /* Step 1. Spectrum to XYZ */
@@ -534,18 +535,48 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
       gray[j] = kWhitePointD65[j] * xyz[1];
     }
 
-    float rgb[3]{};
-    for (int j = 0; j < 3; j++) {
-      for (int k = 0; k < 3; k++) {
-        rgb[j] += gray[k] * kXyzToRgb[j * 3 + k];
+    if (level == RenderColorCompactLevel::kTrueColor) {
+      float r = 1.0f;
+      for (int j = 0; j < 3; j++) {
+        float a = 0, b = 0;
+        for (int k = 0; k < 3; k++) {
+          a += -gray[k] * kXyzToRgb[j * 3 + k];
+          b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
+        }
+        if (a * b > 0 && a / b < r) {
+          r = a / b;
+        }
       }
-      rgb[j] = std::min(std::max(rgb[j], 0.0f), 1.0f);
-    }
 
-    /* Step 3. Convert linear sRGB to sRGB */
-    SrgbGamma(rgb);
-    for (int j = 0; j < 3; j++) {
-      rgb_data[i * 3 + j] = static_cast<uint8_t>(rgb[j] * std::numeric_limits<uint8_t>::max());
+      float rgb[3]{};
+      for (int j = 0; j < 3; j++) {
+        for (int k = 0; k < 3; k++) {
+          rgb[j] += gray[k] * kXyzToRgb[j * 3 + k];
+        }
+        rgb[j] = std::min(std::max(rgb[j], 0.0f), 1.0f);
+      }
+
+      /* Step 3. Convert linear sRGB to sRGB */
+      SrgbGamma(rgb);
+      for (int j = 0; j < 3; j++) {
+        rgb_data[i * 3 + j] = static_cast<uint8_t>(rgb[j] * std::numeric_limits<uint8_t>::max());
+      }
+    } else {
+      float val = 0;
+      for (int k = 0; k < 3; k++) {
+        val += gray[k] * kXyzToRgb[3 + k];
+      }
+      val = std::min(std::max(val, 0.0f), 1.0f);
+
+      /* Step 3. Convert linear sRGB to sRGB */
+      SrgbGamma(&val, 1);
+      if (level == RenderColorCompactLevel::kMonoChrome && 0 <= index && index < 3) {
+        rgb_data[i * 3 + index] = static_cast<uint8_t>(val * std::numeric_limits<uint8_t>::max());
+      } else if (level == RenderColorCompactLevel::kLowQuality && 0 <= index && index < 6) {
+        constexpr uint8_t kMaxVal = 1 << 4;
+        auto tmp_val = static_cast<uint8_t>(val * kMaxVal);
+        rgb_data[i * 3 + index / 2] |= (tmp_val << (index % 2 ? 0 : 4));
+      }
     }
   }
 }
@@ -680,7 +711,8 @@ void SpectrumRenderer::RenderToImage() {
   if (use_rgb) {
     RenderSpecToRgb(spectrum_data_, img_wid * img_hei, factor, output_image_buffer_.get());
   } else {
-    RenderSpecToGray(spectrum_data_, img_wid * img_hei, factor, output_image_buffer_.get());
+    RenderSpecToGray(spectrum_data_, img_wid * img_hei, factor, RenderColorCompactLevel::kTrueColor, 0,
+                     output_image_buffer_.get());
   }
 
   constexpr uint8_t kColorMaxVal = std::numeric_limits<uint8_t>::max();
