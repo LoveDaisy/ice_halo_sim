@@ -14,7 +14,7 @@ SimpleRayData::SimpleRayData(size_t num)
     : wavelength(0.0f), weight(0.0f), buf{ new float[num * 4] }, size(num), init_ray_num(0) {}
 
 
-void SimpleRayData::Serialize(File& file, bool with_boi) {
+void SimpleRayData::Serialize(File& file, bool with_boi) const {
   if (with_boi) {
     file.Write(ISerializable::kDefaultBoi);
   }
@@ -74,6 +74,7 @@ void SimulationRayData::Clear() {
   rays_.clear();
   exit_ray_segments_.clear();
   RayInfoPool::GetInstance()->Clear();
+  wavelength_info_ = {};
 }
 
 
@@ -138,10 +139,14 @@ const std::vector<std::vector<RaySegment*>>& SimulationRayData::GetExitRaySegmen
 #endif
 
 
-void SimulationRayData::Serialize(File& file, bool with_boi) {
+void SimulationRayData::Serialize(File& file, bool with_boi) const {
   if (with_boi) {
     file.Write(ISerializable::kDefaultBoi);
   }
+
+  int32_t wl = wavelength_info_.wavelength;
+  file.Write(wl);
+  file.Write(wavelength_info_.weight);
 
   auto ray_info_pool = RayInfoPool::GetInstance();
   auto ray_seg_pool = RaySegmentPool::GetInstance();
@@ -178,6 +183,18 @@ void SimulationRayData::Deserialize(File& file, endian::Endianness endianness) {
   bool need_swap = (endianness != endian::kCompileEndian);
 
   Clear();
+
+  int32_t wl;
+  file.Read(&wl);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&wl);
+  }
+  wavelength_info_.wavelength = wl;
+
+  file.Read(&wavelength_info_.weight);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&wavelength_info_.weight);
+  }
 
   auto ray_info_pool = RayInfoPool::GetInstance();
   auto ray_seg_pool = RaySegmentPool::GetInstance();

@@ -127,8 +127,7 @@ uint32_t ObjectPool<T>::RefreshChunkIndex() {
 
 
 template <typename T>
-void ObjectPool<T>::Serialize(File& file, bool with_boi) {
-  const std::lock_guard<std::mutex> lock(id_mutex_);
+void ObjectPool<T>::Serialize(File& file, bool with_boi) const {
   if (with_boi) {
     file.Write(ISerializable::kDefaultBoi);
   }
@@ -176,7 +175,11 @@ void ObjectPool<T>::Deserialize(File& file, endian::Endianness endianness) {
       objects_.emplace_back(new T[kChunkSize]);
     }
     auto* chunk = objects_[current_chunk_id_];
-    for (next_unused_id_ = 0; current_chunk_id_ * kChunkSize + next_unused_id_ < total_num; next_unused_id_++) {
+    size_t curr_num = kChunkSize;
+    if (current_chunk_id_ + 1 == chunks) {
+      curr_num = total_num % kChunkSize;
+    }
+    for (next_unused_id_ = 0; next_unused_id_ < curr_num; next_unused_id_++) {
       chunk[next_unused_id_].Deserialize(file, endianness);
     }
   }

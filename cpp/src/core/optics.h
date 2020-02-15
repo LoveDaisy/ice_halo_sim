@@ -49,7 +49,7 @@ struct RaySegment : public ISerializable {
    * @param file
    * @param with_boi
    */
-  void Serialize(File& file, bool with_boi) override;
+  void Serialize(File& file, bool with_boi) const override;
 
   /**
    * @brief Deserialize (load data) from a file.
@@ -99,7 +99,7 @@ struct RayInfo : public ISerializable {
    * @param file
    * @param with_boi
    */
-  void Serialize(File& file, bool with_boi) override;
+  void Serialize(File& file, bool with_boi) const override;
 
   /**
    * @brief Deserialize (load data) from a file.

@@ -25,7 +25,7 @@ RaySegment::RaySegment(const float* pt, const float* dir, float w, int face_id)
       face_id(face_id), state(RaySegmentState::kOnGoing) {}
 
 
-void RaySegment::Serialize(File& file, bool with_boi) {
+void RaySegment::Serialize(File& file, bool with_boi) const {
   if (with_boi) {
     file.Write(ISerializable::kDefaultBoi);
   }
@@ -158,7 +158,7 @@ RayInfo::RayInfo(RaySegment* seg, int crystal_id, const float* main_axis)
     : first_ray_segment(seg), prev_ray_segment(nullptr), crystal_id(crystal_id), main_axis(main_axis) {}
 
 
-void RayInfo::Serialize(File& file, bool with_boi) {
+void RayInfo::Serialize(File& file, bool with_boi) const {
   if (with_boi) {
     file.Write(ISerializable::kDefaultBoi);
   }

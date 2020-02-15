@@ -52,7 +52,7 @@ class ObjectPool : public ISerializable {
    * @param file
    * @param with_boi
    */
-  void Serialize(File& file, bool with_boi) override;
+  void Serialize(File& file, bool with_boi) const override;
   void Deserialize(File& file, endian::Endianness endianness) override;
 
   static ObjectPool<T>* GetInstance();

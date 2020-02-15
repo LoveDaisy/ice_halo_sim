@@ -16,7 +16,7 @@ struct ISerializable {
    * @param file The destination file.
    * @param with_boi Whether write BOI(Byte Order Indicator).
    */
-  virtual void Serialize(File& file, bool with_boi) = 0;
+  virtual void Serialize(File& file, bool with_boi) const = 0;
 
   /**
    * @brief Deserialize data from a file.

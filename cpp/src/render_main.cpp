@@ -17,18 +17,19 @@ int main(int argc, char* argv[]) {
   renderer.SetCameraContext(ctx->cam_ctx_);
   renderer.SetRenderContext(ctx->render_ctx_);
 
-  icehalo::SimpleRayData ray_data;
+  icehalo::SimulationRayData ray_data;
   auto data_files = icehalo::ListDataFiles(ctx->GetDataDirectory().c_str());
   for (size_t i = 0; i < data_files.size(); i++) {
     auto t0 = std::chrono::system_clock::now();
     auto& file = data_files[i];
     file.Open(icehalo::FileOpenMode::kRead);
     ray_data.Deserialize(file, icehalo::endian::kUnknownEndian);
-    renderer.LoadRayData(ray_data);
+    auto final_ray_data = ray_data.CollectFinalRayData();
+    renderer.LoadRayData(final_ray_data);
     auto t1 = std::chrono::system_clock::now();
     std::chrono::duration<float, std::ratio<1, 1000>> diff = t1 - t0;
     std::printf(" Loading data (%zu/%zu): %.2fms; total %zu pts\n", i + 1, data_files.size(), diff.count(),
-                ray_data.size);
+                final_ray_data.size);
   }
   renderer.RenderToImage();
 
