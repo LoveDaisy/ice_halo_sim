@@ -456,19 +456,18 @@ constexpr float kCmfZ[] = {
 };
 
 
-void RenderSpecToRgb(size_t wavelength_number, size_t data_number,  //
-                     const int* wavelengths,
-                     const float* spec_data,  // spec_data: wavelength_number x data_number
-                     uint8_t* rgb_data) {     // rgb data, data_number x 3
+void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,  // spec_data: wavelength_number * data_number
+                     size_t data_number, float factor,                 //
+                     uint8_t* rgb_data) {                              // rgb data, data_number * 3
   for (size_t i = 0; i < data_number; i++) {
     /* Step 1. Spectrum to XYZ */
     float xyz[3]{};
-    for (size_t j = 0; j < wavelength_number; j++) {
-      auto wl = wavelengths[j];
+    for (const auto& d : spec_data) {
+      auto wl = d.first;
       if (wl < kMinWavelength || wl > kMaxWaveLength) {
         continue;
       }
-      float v = spec_data[j * data_number + i];
+      float v = d.second[i] * factor;
       xyz[0] += kCmfX[wl - kMinWavelength] * v;
       xyz[1] += kCmfY[wl - kMinWavelength] * v;
       xyz[2] += kCmfZ[wl - kMinWavelength] * v;
@@ -512,19 +511,18 @@ void RenderSpecToRgb(size_t wavelength_number, size_t data_number,  //
 }
 
 
-void RenderSpecToGray(size_t wavelength_number, size_t data_number,  //
-                      const int* wavelengths,
-                      const float* spec_data,  // spec_data: wavelength_number x data_number
-                      uint8_t* rgb_data) {     // rgb data, data_number x 3
+void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_data: wavelength_number * data_number
+                      size_t data_number, float factor,                 //
+                      uint8_t* rgb_data) {                              // rgb data, data_number * 3
   for (size_t i = 0; i < data_number; i++) {
     /* Step 1. Spectrum to XYZ */
     float xyz[3]{};
-    for (decltype(wavelength_number) j = 0; j < wavelength_number; j++) {
-      auto wl = wavelengths[j];
+    for (const auto& d : spec_data) {
+      auto wl = d.first;
       if (wl < kMinWavelength || wl > kMaxWaveLength) {
         continue;
       }
-      float v = spec_data[j * data_number + i];
+      float v = d.second[i] * factor;
       xyz[0] += kCmfX[wl - kMinWavelength] * v;
       xyz[1] += kCmfY[wl - kMinWavelength] * v;
       xyz[2] += kCmfZ[wl - kMinWavelength] * v;
@@ -557,12 +555,12 @@ SpectrumRenderer::SpectrumRenderer() : cam_ctx_{}, render_ctx_{}, output_image_b
 
 
 void SpectrumRenderer::SetCameraContext(CameraContextPtr cam_ctx) {
-  cam_ctx_ = cam_ctx;
+  cam_ctx_ = std::move(cam_ctx);
 }
 
 
 void SpectrumRenderer::SetRenderContext(RenderContextPtr render_ctx) {
-  render_ctx_ = render_ctx;
+  render_ctx_ = std::move(render_ctx);
   output_image_buffer_.reset(new uint8_t[render_ctx_->GetImageWidth() * render_ctx_->GetImageHeight() * 3]);
 }
 
@@ -618,12 +616,20 @@ void SpectrumRenderer::LoadRayData(const SimpleRayData& final_ray_data) {
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
 
-  if (!spectrum_data_.count(wavelength) || !spectrum_data_[wavelength]) {
-    spectrum_data_[wavelength].reset(new float[img_hei * img_wid]{});
-    spectrum_data_compensation_[wavelength].reset(new float[img_hei * img_wid]{});
+  float* current_data = nullptr;
+  float* current_data_compensation = nullptr;
+  for (size_t i = 0; i < spectrum_data_.size(); i++) {
+    if (spectrum_data_[i].first == wavelength) {
+      current_data = spectrum_data_[i].second.get();
+      current_data_compensation = spectrum_data_compensation_[i].second.get();
+    }
   }
-  auto* current_data = spectrum_data_[wavelength].get();
-  auto* current_data_compensation = spectrum_data_compensation_[wavelength].get();
+  if (!current_data) {
+    current_data = new float[img_hei * img_wid]{};
+    current_data_compensation = new float[img_hei * img_wid]{};
+    spectrum_data_.emplace_back(std::make_pair(wavelength, current_data));
+    spectrum_data_compensation_.emplace_back(std::make_pair(wavelength, current_data_compensation));
+  }
 
   const auto* final_ray_buf = final_ray_data.buf.get();
   auto threading_pool = ThreadingPool::GetInstance();
@@ -666,19 +672,15 @@ void SpectrumRenderer::RenderToImage() {
 
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
-  auto wl_num = spectrum_data_.size();
-  std::unique_ptr<int[]> wl_data{ new int[wl_num] };
-  std::unique_ptr<float[]> flat_spec_data{ new float[wl_num * img_wid * img_hei] };
-
-  GatherSpectrumData(wl_data.get(), flat_spec_data.get());
   auto ray_color = render_ctx_->GetRayColor();
   auto background_color = render_ctx_->GetBackgroundColor();
   bool use_rgb = ray_color[0] < 0;
 
+  auto factor = 1e5f / total_w_ * render_ctx_->GetIntensity();
   if (use_rgb) {
-    RenderSpecToRgb(wl_num, img_wid * img_hei, wl_data.get(), flat_spec_data.get(), output_image_buffer_.get());
+    RenderSpecToRgb(spectrum_data_, img_wid * img_hei, factor, output_image_buffer_.get());
   } else {
-    RenderSpecToGray(wl_num, img_wid * img_hei, wl_data.get(), flat_spec_data.get(), output_image_buffer_.get());
+    RenderSpecToGray(spectrum_data_, img_wid * img_hei, factor, output_image_buffer_.get());
   }
 
   constexpr uint8_t kColorMaxVal = std::numeric_limits<uint8_t>::max();
@@ -724,25 +726,5 @@ int SpectrumRenderer::LoadDataFromFile(File& file) {
 
   return static_cast<int>(final_ray_data.size);
 }
-
-
-void SpectrumRenderer::GatherSpectrumData(int* wl_data_out, float* sp_data_out) {
-  auto img_hei = render_ctx_->GetImageHeight();
-  auto img_wid = render_ctx_->GetImageWidth();
-  auto intensity_factor = static_cast<float>(render_ctx_->GetIntensity());
-
-  int k = 0;
-  for (const auto& kv : spectrum_data_) {
-    wl_data_out[k] = kv.first;
-    std::memcpy(sp_data_out + k * img_wid * img_hei, kv.second.get(), img_wid * img_hei * sizeof(float));
-    k++;
-  }
-
-  auto factor = 1e5f / total_w_ * intensity_factor;
-  for (size_t i = 0; i < img_wid * img_hei * spectrum_data_.size(); i++) {
-    sp_data_out[i] *= factor;
-  }
-}
-
 
 }  // namespace icehalo

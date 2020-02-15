@@ -81,13 +81,16 @@ using ProjectionFunction = std::function<void(const float* cam_rot,      // Came
 EnumMap<LensType, ProjectionFunction>& GetProjectionFunctions();
 
 
+using ImageSpectrumData = std::pair<int, std::unique_ptr<float[]>>;
+
+
 void SrgbGamma(float* linear_rgb);
-void RenderSpecToRgb(size_t wavelength_number, size_t data_number,     //
-                     const int* wavelengths, const float* spec_data,   // spec_data: wavelength_number x data_number
-                     uint8_t* rgb_data);                               // rgb data, data_number x 3
-void RenderSpecToGray(size_t wavelength_number, size_t data_number,    //
-                      const int* wavelengths, const float* spec_data,  // spec_data: wavelength_number x data_number
-                      uint8_t* rgb_data);                              // rgb data, data_number x 3
+void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,   // spec_data: wavelength_number * data_number
+                     size_t data_number, float factor,                  //
+                     uint8_t* rgb_data);                                // rgb data, data_number * 3
+void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_data: wavelength_number * data_number
+                      size_t data_number, float factor,                 //
+                      uint8_t* rgb_data);                               // rgb data, data_number * 3
 
 constexpr int kMinWavelength = 360;
 constexpr int kMaxWaveLength = 830;
@@ -102,20 +105,19 @@ class SpectrumRenderer {
 
   void LoadRayData(const SimpleRayData& final_ray_data);
   void LoadRayDataFiles(const std::string& data_folder);
-  void ClearRayData();
+  void Reset();
 
   void RenderToImage();
   uint8_t* GetImageBuffer() const;
 
  private:
   int LoadDataFromFile(File& file);
-  void GatherSpectrumData(int* wl_data_out, float* sp_data_out);
 
   CameraContextPtr cam_ctx_;
   RenderContextPtr render_ctx_;
   std::unique_ptr<uint8_t[]> output_image_buffer_;
-  std::unordered_map<int, std::unique_ptr<float[]>> spectrum_data_;
-  std::unordered_map<int, std::unique_ptr<float[]>> spectrum_data_compensation_;
+  std::vector<ImageSpectrumData> spectrum_data_;
+  std::vector<ImageSpectrumData> spectrum_data_compensation_;
   float total_w_;
 };
 
