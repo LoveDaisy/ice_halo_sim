@@ -122,6 +122,7 @@ class File {
  public:
   explicit File(const char* filename);
   File(const char* path, const char* filename);
+  File(File&& other) noexcept;
   ~File();
 
   bool Open(FileOpenMode mode = FileOpenMode::kRead);
@@ -138,11 +139,16 @@ class File {
   template <class T>
   size_t Write(const T* data, size_t n);
 
+  void Flush();
+
  private:
   std::FILE* file_;
   FileState state_;
-
+  std::unique_ptr<char[]> buffer_;
+  size_t buffer_offset_;
   boost::filesystem::path path_;
+
+  static constexpr size_t kBufferSize = 10 * 1024 * 1024;
 };
 
 
@@ -152,7 +158,29 @@ size_t File::Read(T* buffer, size_t n) {
     throw std::logic_error("File state is not for reading!");
   }
 
-  auto count = std::fread(buffer, sizeof(T), n, file_);
+  if (n == 0) {
+    return 0;
+  }
+
+  if (buffer_offset_ == 0) {
+    std::fread(buffer_.get(), 1, kBufferSize, file_);
+  }
+
+  constexpr size_t kTypeSize = sizeof(T);
+  size_t count = 0;
+  char* p = reinterpret_cast<char*>(buffer);
+  for (size_t i = 0; i < n; i++) {
+    if (buffer_offset_ + kTypeSize >= kBufferSize) {
+      size_t remained_bytes = kBufferSize - buffer_offset_;
+      std::memcpy(buffer_.get(), buffer_.get() + buffer_offset_, remained_bytes);
+      std::fread(buffer_.get() + remained_bytes, 1, kBufferSize - remained_bytes, file_);
+      buffer_offset_ = 0;
+    }
+    std::memcpy(p + i * kTypeSize, buffer_.get() + buffer_offset_, kTypeSize);
+    buffer_offset_ += kTypeSize;
+    count += kTypeSize;
+  }
+
   return count;
 }
 
@@ -163,7 +191,15 @@ size_t File::Write(T data) {
     throw std::logic_error("File state is not for writing!");
   }
 
-  auto count = std::fwrite(&data, sizeof(T), 1, file_);
+  constexpr size_t kTypeSize = sizeof(T);
+  size_t count = 0;
+  if (buffer_offset_ + kTypeSize >= kBufferSize) {
+    std::fwrite(buffer_.get(), 1, buffer_offset_, file_);
+    buffer_offset_ = 0;
+  }
+  std::memcpy(buffer_.get() + buffer_offset_, &data, kTypeSize);
+  buffer_offset_ += kTypeSize;
+  count += kTypeSize;
   return count;
 }
 
@@ -174,7 +210,18 @@ size_t File::Write(const T* data, size_t n) {
     throw std::logic_error("File state is not for writing!");
   }
 
-  auto count = std::fwrite(data, sizeof(T), n, file_);
+  constexpr size_t kTypeSize = sizeof(T);
+  size_t count = 0;
+  for (size_t i = 0; i < n; i++) {
+    if (buffer_offset_ + kTypeSize >= kBufferSize) {
+      std::fwrite(buffer_.get(), 1, buffer_offset_, file_);
+      buffer_offset_ = 0;
+    }
+    std::memcpy(buffer_.get() + buffer_offset_, data + i, kTypeSize);
+    buffer_offset_ += kTypeSize;
+    count += kTypeSize;
+  }
+
   return count;
 }
 

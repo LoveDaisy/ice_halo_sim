@@ -36,19 +36,24 @@ std::string PathJoin(const std::string& p1, const std::string& p2) {
 }
 
 
-File::File(const char* filename) : file_(nullptr), state_(FileState::kClosed), path_(filename) {}
+File::File(const char* filename)
+    : file_(nullptr), state_(FileState::kClosed), buffer_{ new char[kBufferSize] }, buffer_offset_(0), path_(filename) {
+}
 
 
-File::File(const char* path, const char* filename) : file_(nullptr), state_(FileState::kClosed), path_(path) {
+File::File(const char* path, const char* filename)
+    : file_(nullptr), state_(FileState::kClosed), buffer_{ new char[kBufferSize] }, buffer_offset_(0), path_(path) {
   path_ /= filename;
 }
 
 
+File::File(icehalo::File&& other) noexcept
+    : file_(other.file_), state_(other.state_), buffer_(std::move(other.buffer_)), buffer_offset_(other.buffer_offset_),
+      path_(std::move(other.path_)) {}
+
+
 File::~File() {
-  if (state_ != FileState::kClosed) {
-    fclose(file_);
-    state_ = FileState::kClosed;
-  }
+  Close();
 }
 
 
@@ -82,11 +87,22 @@ bool File::Open(FileOpenMode mode) {
 }
 
 
+void File::Flush() {
+  if (state_ != FileState::kWriting) {
+    return;
+  }
+  std::fwrite(buffer_.get(), 1, buffer_offset_, file_);
+  buffer_offset_ = 0;
+}
+
+
 bool File::Close() {
   if (state_ != FileState::kClosed) {
+    Flush();
     std::fclose(file_);
     file_ = nullptr;
     state_ = FileState::kClosed;
+    buffer_offset_ = 0;
   }
   return true;
 }
