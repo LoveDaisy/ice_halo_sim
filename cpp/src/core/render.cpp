@@ -596,30 +596,6 @@ void SpectrumRenderer::SetRenderContext(RenderContextPtr render_ctx) {
 }
 
 
-void SpectrumRenderer::LoadRayDataFiles(const std::string& data_folder) {
-  if (!cam_ctx_) {
-    throw std::invalid_argument("Camera context is not set!");
-  }
-  auto projection_type = cam_ctx_->GetLensType();
-  const auto& projection_functions = GetProjectionFunctions();
-  if (projection_functions.find(projection_type) == projection_functions.end()) {
-    std::fprintf(stderr, "Unknown projection type!\n");
-    return;
-  }
-
-  std::vector<File> files = ListDataFiles(data_folder.c_str());
-  int i = 0;
-  for (auto& f : files) {
-    auto t0 = std::chrono::system_clock::now();
-    auto num = LoadDataFromFile(f);
-    auto t1 = std::chrono::system_clock::now();
-    std::chrono::duration<float, std::ratio<1, 1000>> diff = t1 - t0;
-    std::printf(" Loading data (%d/%zu): %.2fms; total %d pts\n", i + 1, files.size(), diff.count(), num);
-    i++;
-  }
-}
-
-
 void SpectrumRenderer::LoadRayData(const SimpleRayData& final_ray_data) {
   if (!cam_ctx_) {
     throw std::invalid_argument("Camera context is not set!");
@@ -735,28 +711,5 @@ uint8_t* SpectrumRenderer::GetImageBuffer() const {
   return output_image_buffer_.get();
 }
 
-
-int SpectrumRenderer::LoadDataFromFile(File& file) {
-  file.Open(FileOpenMode::kRead);
-  SimpleRayData final_ray_data;
-  final_ray_data.Deserialize(file, endian::kUnknownEndian);
-  file.Close();
-
-  auto wavelength = static_cast<int>(final_ray_data.wavelength);
-  auto wavelength_weight = final_ray_data.weight;
-  if (wavelength < kMinWavelength || wavelength > kMaxWaveLength || wavelength_weight < 0) {
-    std::fprintf(stderr, "Wavelength out of range!\n");
-    file.Close();
-    return -1;
-  }
-
-  if (final_ray_data.size == 0) {
-    return 0;
-  }
-
-  LoadRayData(final_ray_data);
-
-  return static_cast<int>(final_ray_data.size);
-}
 
 }  // namespace icehalo

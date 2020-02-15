@@ -118,7 +118,6 @@ class Simulator {
   void Run();
   const SimulationRayData& GetSimulationRayData();
 
-  void SaveFinalDirections(const char* filename);
 #ifdef FOR_TEST
   void PrintRayInfo();  // For debug
 #endif

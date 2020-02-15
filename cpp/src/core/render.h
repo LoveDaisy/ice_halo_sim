@@ -105,7 +105,6 @@ class SpectrumRenderer {
   void SetRenderContext(RenderContextPtr render_ctx);
 
   void LoadRayData(const SimpleRayData& final_ray_data);
-  void LoadRayDataFiles(const std::string& data_folder);
   void ClearRayData();
 
   void RenderToImage();
@@ -113,8 +112,6 @@ class SpectrumRenderer {
   uint8_t* GetImageBuffer() const;
 
  private:
-  int LoadDataFromFile(File& file);
-
   CameraContextPtr cam_ctx_;
   RenderContextPtr render_ctx_;
   std::unique_ptr<uint8_t[]> output_image_buffer_;

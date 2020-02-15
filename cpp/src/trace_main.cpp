@@ -34,7 +34,9 @@ int main(int argc, char* argv[]) {
 
     t0 = std::chrono::system_clock::now();
     std::sprintf(filename, "directions_%d_%lli.bin", wl.wavelength, t0.time_since_epoch().count());
-    simulator.SaveFinalDirections(filename);
+    icehalo::File file(context->GetDataDirectory().c_str(), filename);
+    file.Open(icehalo::FileOpenMode::kWrite);
+    simulator.GetSimulationRayData().CollectFinalRayData().Serialize(file, true);
 
     t1 = std::chrono::system_clock::now();
     diff = t1 - t0;

@@ -611,20 +611,6 @@ const SimulationRayData& Simulator::GetSimulationRayData() {
 }
 
 
-void Simulator::SaveFinalDirections(const char* filename) {
-  File file(context_->GetDataDirectory().c_str(), filename);
-  if (!file.Open(FileOpenMode::kWrite)) {
-    return;
-  }
-
-  if (current_wavelength_index_ < 0 || current_wavelength_index_ >= static_cast<int>(context_->wavelengths_.size())) {
-    return;
-  }
-
-  simulation_ray_data_.CollectFinalRayData().Serialize(file, true);
-}
-
-
 #ifdef FOR_TEST
 void Simulator::PrintRayInfo() {
   std::stack<RaySegment*> s;
