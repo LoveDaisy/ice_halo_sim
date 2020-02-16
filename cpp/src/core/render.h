@@ -107,8 +107,20 @@ class SpectrumRenderer {
   void LoadRayData(const SimpleRayData& final_ray_data);
   void ClearRayData();
 
-  void RenderToImage();
-  void RenderToImage(ColorCompactLevel level, int index);
+  /**
+   * @brief Render ray data to image buffer.
+   *
+   * 1. Get `color_compact_level` by calling RenderContext::GetColorCompactLevel()
+   * 2. If `color_compact_level` is ColorCompactLevel::kTrueColor
+   *     2.1 Get `ray_color` by Calling RenderContext::GetRayColor()
+   *     2.1 If `ray_color[0]` is less than 0, then use true color
+   *     2.3 Else use `ray_color`
+   * 3. Else ignore other ray color settings and background color settings
+   *
+   * @param channel_index If `color_compact_level` is ColorCompactLevel::kTrueColor, this parameter
+   *        will be ignored.
+   */
+  void RenderToImage(int channel_index = 0);
   uint8_t* GetImageBuffer() const;
 
  private:

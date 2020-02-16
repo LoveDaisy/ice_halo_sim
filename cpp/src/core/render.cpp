@@ -672,7 +672,7 @@ void SpectrumRenderer::LoadRayData(const SimpleRayData& final_ray_data) {
 }
 
 
-void SpectrumRenderer::RenderToImage() {
+void SpectrumRenderer::RenderToImage(int channel_idx) {
   if (!render_ctx_) {
     throw std::invalid_argument("Render context is not set!");
   }
@@ -681,28 +681,28 @@ void SpectrumRenderer::RenderToImage() {
   auto img_wid = render_ctx_->GetImageWidth();
   auto ray_color = render_ctx_->GetRayColor();
   auto background_color = render_ctx_->GetBackgroundColor();
-  bool use_rgb = ray_color[0] < 0;
-
   auto factor = 1e5f / total_w_ * render_ctx_->GetIntensity();
-  if (use_rgb) {
-    RenderSpecToRgb(spectrum_data_, img_wid * img_hei, factor, output_image_buffer_.get());
-  } else {
-    RenderSpecToGray(spectrum_data_, img_wid * img_hei, factor, ColorCompactLevel::kTrueColor, 0,
-                     output_image_buffer_.get());
-  }
+  auto color_compact_level = render_ctx_->GetColorCompactLevel();
 
   constexpr uint8_t kColorMaxVal = std::numeric_limits<uint8_t>::max();
-  for (decltype(img_wid) i = 0; i < img_wid * img_hei; i++) {
-    for (int c = 0; c < 3; c++) {
-      auto v = static_cast<int>(background_color[c] * kColorMaxVal);
-      if (use_rgb) {
-        v += output_image_buffer_[i * 3 + c];
-      } else {
-        v += static_cast<int>(output_image_buffer_[i * 3 + c] * 1.0 * ray_color[c]);
+  if (color_compact_level == ColorCompactLevel::kTrueColor) {
+    RenderSpecToRgb(spectrum_data_, img_wid * img_hei, factor, output_image_buffer_.get());
+    bool use_rgb = ray_color[0] < 0;
+    for (int i = 0; i < img_wid * img_hei; i++) {
+      for (int c = 0; c < 3; c++) {
+        auto v = static_cast<int>(background_color[c] * kColorMaxVal);
+        if (use_rgb) {
+          v += output_image_buffer_[i * 3 + c];
+        } else {
+          v += static_cast<int>(output_image_buffer_[i * 3 + c] * 1.0 * ray_color[c]);
+        }
+        v = std::max(std::min(v, static_cast<int>(kColorMaxVal)), 0);
+        output_image_buffer_[i * 3 + c] = static_cast<uint8_t>(v);
       }
-      v = std::max(std::min(v, static_cast<int>(kColorMaxVal)), 0);
-      output_image_buffer_[i * 3 + c] = static_cast<uint8_t>(v);
     }
+  } else {
+    RenderSpecToGray(spectrum_data_, img_wid * img_hei, factor, color_compact_level, channel_idx,
+                     output_image_buffer_.get());
   }
 }
 

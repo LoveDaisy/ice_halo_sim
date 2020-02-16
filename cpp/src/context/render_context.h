@@ -22,6 +22,18 @@ enum class ColorCompactLevel : int {
 };
 
 
+/**
+ * @brief Context for render
+ *
+ * @note There are some properties prior to others when determine ray color.
+ *       The proper steps are as follows:
+ * 1. Get `color_compact_level` by calling GetColorCompactLevel()
+ * 2. If `color_compact_level` is ColorCompactLevel::kTrueColor
+ *     2.1 Get `ray_color` by Calling GetRayColor()
+ *     2.1 If `ray_color[0]` is less than 0, then use true color
+ *     2.3 Else use `ray_color`
+ * 3. Else ignore other ray color settings and background color settings
+ */
 class RenderContext : public IJsonizable {
  public:
   const float* GetRayColor() const;
