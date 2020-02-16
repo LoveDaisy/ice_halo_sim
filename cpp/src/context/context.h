@@ -93,6 +93,8 @@ class ProjectContext {
 };
 
 
+std::vector<uint16_t> GetReverseRayPath(const ProjectContextPtr& ctx, const RaySegment* last_ray);
+
 }  // namespace icehalo
 
 

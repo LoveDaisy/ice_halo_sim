@@ -1,6 +1,7 @@
 #include "simulation.h"
 
 #include <cstdio>
+#include <functional>
 #include <stack>
 #include <utility>
 
@@ -11,7 +12,7 @@
 namespace icehalo {
 
 SimpleRayData::SimpleRayData(size_t num)
-    : wavelength(0.0f), wavelength_weight(0.0f), total_ray_energy(0.0f), buf{ new float[num * 4] }, size(num),
+    : wavelength(0), wavelength_weight(1.0f), total_ray_energy(0.0f), buf{ new float[num * 4] }, size(num),
       init_ray_num(0) {}
 
 
@@ -76,6 +77,25 @@ void SimpleRayData::Deserialize(File& file, endian::Endianness endianness) {
 }
 
 
+SimpleRayPathData::SimpleRayPathData(size_t hash, std::vector<uint16_t> ray_path, SimpleRayData ray_data)
+    : ray_path_hash(hash), ray_path(std::move(ray_path)), ray_data(std::move(ray_data)) {}
+
+
+SimpleRayPathData::SimpleRayPathData(SimpleRayPathData&& other) noexcept
+    : ray_path_hash(other.ray_path_hash), ray_path(std::move(other.ray_path)), ray_data(std::move(other.ray_data)) {}
+
+
+SimpleRayPathData& SimpleRayPathData::operator=(SimpleRayPathData&& other) noexcept {
+  if (&other == this) {
+    return *this;
+  }
+  ray_path_hash = other.ray_path_hash;
+  ray_path = std::move(other.ray_path);
+  ray_data = std::move(other.ray_data);
+  return *this;
+}
+
+
 void SimulationRayData::Clear() {
   rays_.clear();
   exit_ray_segments_.clear();
@@ -121,16 +141,103 @@ SimpleRayData SimulationRayData::CollectFinalRayData() const {
   float* p = final_ray_data.buf.get();
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
-      if (r->state == RaySegmentState::kFinished) {
-        const auto* axis = r->root_ctx->main_axis.val();
-        math::RotateZBack(axis, r->dir.val(), p);
-        p[3] = r->w;
-        final_ray_data.total_ray_energy += r->w;
-        p += 4;
+      if (r->state != RaySegmentState::kFinished) {
+        continue;
       }
+      const auto* axis = r->root_ctx->main_axis.val();
+      math::RotateZBack(axis, r->dir.val(), p);
+      p[3] = r->w;
+      final_ray_data.total_ray_energy += r->w;
+      p += 4;
     }
   }
   return final_ray_data;
+}
+
+
+namespace ray_path_helper {
+
+struct RayPath {
+  size_t hash;
+  std::vector<uint16_t> reverse_path;
+
+  bool operator==(const RayPath& other) const { return hash == other.hash; }
+};
+
+
+struct RayPathHash {
+  size_t operator()(const RayPath& r) const noexcept { return r.hash; }
+};
+
+
+struct RayPathStatsData {
+  std::unordered_set<RayPath, RayPathHash> ray_path_set;
+  std::unordered_set<RayInfo*> ray_info_set;
+  float total_energy;
+  size_t exit_ray_seg_num;
+};
+
+}  // namespace ray_path_helper
+
+
+std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(const ProjectContextPtr& ctx) const {
+  std::unordered_map<size_t, ray_path_helper::RayPathStatsData> ray_path_stats;
+  for (const auto& sr : exit_ray_segments_) {
+    for (const auto& r : sr) {
+      if (r->state != RaySegmentState::kFinished) {
+        continue;
+      }
+      auto ray_path = GetReverseRayPath(ctx, r);  // Includes multi-scatter rays
+      auto ray_path_hash = RayPathHash(ray_path, true);
+
+      if (!ray_path_stats.count(ray_path_hash)) {
+        ray_path_helper::RayPathStatsData curr_data{};
+        curr_data.ray_path_set.emplace(ray_path_helper::RayPath{ ray_path_hash, ray_path });
+        ray_path_stats.emplace(ray_path_hash, curr_data);
+      }
+      ray_path_stats[ray_path_hash].exit_ray_seg_num += 1;
+      ray_path_stats[ray_path_hash].ray_info_set.emplace(r->root_ctx);
+      ray_path_stats[ray_path_hash].total_energy += r->w;
+    }
+  }
+
+  std::unordered_map<size_t, std::pair<size_t, SimpleRayPathData>> result_map;
+  for (const auto& sr : exit_ray_segments_) {
+    for (const auto& r : sr) {
+      if (r->state != RaySegmentState::kFinished) {
+        continue;
+      }
+      auto ray_path = GetReverseRayPath(ctx, r);  // Includes multi-scatter rays
+      auto ray_path_hash = RayPathHash(ray_path, true);
+
+      if (!result_map.count(ray_path_hash)) {
+        const auto& stats = ray_path_stats[ray_path_hash];
+        SimpleRayPathData curr_ray_data{ ray_path_hash, ray_path, SimpleRayData{ stats.exit_ray_seg_num } };
+        curr_ray_data.ray_data.init_ray_num = stats.ray_info_set.size();
+        curr_ray_data.ray_data.total_ray_energy = stats.total_energy;
+        curr_ray_data.ray_data.size = stats.exit_ray_seg_num;
+        result_map.emplace(ray_path_hash, std::make_pair(0, std::move(curr_ray_data)));
+      }
+      auto& idx = result_map.at(ray_path_hash).first;
+      auto& ray_data = result_map.at(ray_path_hash).second.ray_data;
+      auto p = ray_data.buf.get() + idx * 4;
+
+      const auto* axis = r->root_ctx->main_axis.val();
+      math::RotateZBack(axis, r->dir.val(), p);
+      p[3] = r->w;
+      idx++;
+    }
+  }
+
+  std::vector<SimpleRayPathData> result;
+  result.reserve(result_map.size());
+  for (auto& kv : result_map) {
+    result.emplace_back(std::move(kv.second.second));
+  }
+  std::sort(result.begin(), result.end(), [](const SimpleRayPathData& a, const SimpleRayPathData& b) {
+    return a.ray_data.total_ray_energy > b.ray_data.total_ray_energy;
+  });
+  return result;
 }
 
 

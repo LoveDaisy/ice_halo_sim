@@ -26,6 +26,7 @@ RenderContextPtrU RenderContext::CreateDefault() {
 constexpr float RenderContext::kMinIntensity;
 constexpr float RenderContext::kMaxIntensity;
 constexpr int RenderContext::kMaxImageSize;
+constexpr int RenderContext::kMaxTopHaloNumber;
 
 
 const float* RenderContext::GetRayColor() const {

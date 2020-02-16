@@ -81,7 +81,7 @@ using ProjectionFunction = std::function<void(const float* cam_rot,      // Came
 EnumMap<LensType, ProjectionFunction>& GetProjectionFunctions();
 
 
-using ImageSpectrumData = std::pair<int, std::unique_ptr<float[]>>;
+using ImageSpectrumData = std::pair<size_t, std::unique_ptr<float[]>>;
 
 
 void SrgbGamma(float* linear_rgb, size_t num = 3);
@@ -104,7 +104,7 @@ class SpectrumRenderer {
   void SetCameraContext(CameraContextPtr cam_ctx);
   void SetRenderContext(RenderContextPtr render_ctx);
 
-  void LoadRayData(const SimpleRayData& final_ray_data);
+  void LoadRayData(size_t identifier, const SimpleRayData& final_ray_data);
   void ClearRayData();
 
   /**
@@ -120,8 +120,10 @@ class SpectrumRenderer {
    * @param channel_index If `color_compact_level` is ColorCompactLevel::kTrueColor, this parameter
    *        will be ignored.
    */
-  void RenderToImage(int channel_index = 0);
+  void RenderToImage();
   uint8_t* GetImageBuffer() const;
+
+  static constexpr int kImageBits = 24;
 
  private:
   CameraContextPtr cam_ctx_;

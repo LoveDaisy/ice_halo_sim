@@ -19,9 +19,8 @@ enum Symmetry : uint8_t {
   kSymmetryDirection = 4u,
 };
 
-
 size_t RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse = false);
-size_t RayPathHash(const Crystal* crystal, const RaySegment* last_ray, int length, bool reverse = false);
+size_t RayPathReverseHash(const Crystal* crystal, const RaySegment* last_ray, int length);
 
 
 class AbstractRayPathFilter : public IJsonizable {

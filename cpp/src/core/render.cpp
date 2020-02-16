@@ -515,27 +515,30 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
                       size_t data_number, float factor,                 //
                       ColorCompactLevel level, int index,               // color compact level and channel index
                       uint8_t* rgb_data) {                              // rgb data, data_number * 3
+  if (index < 0 || static_cast<size_t>(index) >= spec_data.size()) {
+    return;
+  }
   for (size_t i = 0; i < data_number; i++) {
-    /* Step 1. Spectrum to XYZ */
-    float xyz[3]{};
-    for (const auto& d : spec_data) {
-      auto wl = d.first;
-      if (wl < kMinWavelength || wl > kMaxWaveLength) {
-        continue;
-      }
-      float v = d.second[i] * factor;
-      xyz[0] += kCmfX[wl - kMinWavelength] * v;
-      xyz[1] += kCmfY[wl - kMinWavelength] * v;
-      xyz[2] += kCmfZ[wl - kMinWavelength] * v;
-    }
-
-    /* Step 2. XYZ to linear RGB */
-    float gray[3];
-    for (int j = 0; j < 3; j++) {
-      gray[j] = kWhitePointD65[j] * xyz[1];
-    }
-
     if (level == ColorCompactLevel::kTrueColor) {
+      /* Step 1. Spectrum to XYZ */
+      float xyz[3]{};
+      for (const auto& d : spec_data) {
+        auto wl = d.first;
+        if (wl < kMinWavelength || wl > kMaxWaveLength) {
+          continue;
+        }
+        float v = d.second[i] * factor;
+        xyz[0] += kCmfX[wl - kMinWavelength] * v;
+        xyz[1] += kCmfY[wl - kMinWavelength] * v;
+        xyz[2] += kCmfZ[wl - kMinWavelength] * v;
+      }
+
+      /* Step 2. XYZ to linear RGB */
+      float gray[3];
+      for (int j = 0; j < 3; j++) {
+        gray[j] = kWhitePointD65[j] * xyz[1];
+      }
+
       float r = 1.0f;
       for (int j = 0; j < 3; j++) {
         float a = 0, b = 0;
@@ -562,6 +565,15 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
         rgb_data[i * 3 + j] = static_cast<uint8_t>(rgb[j] * std::numeric_limits<uint8_t>::max());
       }
     } else {
+      /* Step 1. Spectrum to XYZ */
+      float y = spec_data[index].second[i] * factor;
+
+      /* Step 2. XYZ to linear RGB */
+      float gray[3];
+      for (int j = 0; j < 3; j++) {
+        gray[j] = kWhitePointD65[j] * y;
+      }
+
       float val = 0;
       for (int k = 0; k < 3; k++) {
         val += gray[k] * kXyzToRgb[3 + k];
@@ -596,7 +608,7 @@ void SpectrumRenderer::SetRenderContext(RenderContextPtr render_ctx) {
 }
 
 
-void SpectrumRenderer::LoadRayData(const SimpleRayData& final_ray_data) {
+void SpectrumRenderer::LoadRayData(size_t identifier, const SimpleRayData& final_ray_data) {
   if (!cam_ctx_) {
     throw std::invalid_argument("Camera context is not set!");
   }
@@ -613,9 +625,11 @@ void SpectrumRenderer::LoadRayData(const SimpleRayData& final_ray_data) {
   }
   auto& pf = projection_functions[projection_type];
 
-  auto wavelength = final_ray_data.wavelength;
   auto weight = final_ray_data.wavelength_weight;
-  if (wavelength < kMinWavelength || wavelength > kMaxWaveLength || weight <= 0) {
+  auto color_compact_level = render_ctx_->GetColorCompactLevel();
+  auto wavelength = final_ray_data.wavelength;
+  if (color_compact_level == ColorCompactLevel::kTrueColor &&
+      (wavelength < kMinWavelength || wavelength > kMaxWaveLength || weight <= 0)) {
     std::fprintf(stderr, "Wavelength out of range!\n");
     return;
   }
@@ -626,7 +640,7 @@ void SpectrumRenderer::LoadRayData(const SimpleRayData& final_ray_data) {
   float* current_data = nullptr;
   float* current_data_compensation = nullptr;
   for (size_t i = 0; i < spectrum_data_.size(); i++) {
-    if (spectrum_data_[i].first == wavelength) {
+    if (spectrum_data_[i].first == identifier) {
       current_data = spectrum_data_[i].second.get();
       current_data_compensation = spectrum_data_compensation_[i].second.get();
     }
@@ -634,8 +648,8 @@ void SpectrumRenderer::LoadRayData(const SimpleRayData& final_ray_data) {
   if (!current_data) {
     current_data = new float[img_hei * img_wid]{};
     current_data_compensation = new float[img_hei * img_wid]{};
-    spectrum_data_.emplace_back(std::make_pair(wavelength, current_data));
-    spectrum_data_compensation_.emplace_back(std::make_pair(wavelength, current_data_compensation));
+    spectrum_data_.emplace_back(std::make_pair(identifier, current_data));
+    spectrum_data_compensation_.emplace_back(std::make_pair(identifier, current_data_compensation));
   }
 
   const auto* final_ray_buf = final_ray_data.buf.get();
@@ -672,7 +686,7 @@ void SpectrumRenderer::LoadRayData(const SimpleRayData& final_ray_data) {
 }
 
 
-void SpectrumRenderer::RenderToImage(int channel_idx) {
+void SpectrumRenderer::RenderToImage() {
   if (!render_ctx_) {
     throw std::invalid_argument("Render context is not set!");
   }
@@ -681,7 +695,7 @@ void SpectrumRenderer::RenderToImage(int channel_idx) {
   auto img_wid = render_ctx_->GetImageWidth();
   auto ray_color = render_ctx_->GetRayColor();
   auto background_color = render_ctx_->GetBackgroundColor();
-  auto factor = 1e5f / total_w_ * render_ctx_->GetIntensity();
+  auto factor = static_cast<float>(img_hei * img_wid / 160.0 / total_w_ * render_ctx_->GetIntensity());
   auto color_compact_level = render_ctx_->GetColorCompactLevel();
 
   constexpr uint8_t kColorMaxVal = std::numeric_limits<uint8_t>::max();
@@ -701,8 +715,10 @@ void SpectrumRenderer::RenderToImage(int channel_idx) {
       }
     }
   } else {
-    RenderSpecToGray(spectrum_data_, img_wid * img_hei, factor, color_compact_level, channel_idx,
-                     output_image_buffer_.get());
+    auto ch_num = std::min(spectrum_data_.size(), kImageBits / static_cast<size_t>(color_compact_level));
+    for (size_t i = 0; i < ch_num; i++) {
+      RenderSpecToGray(spectrum_data_, img_wid * img_hei, factor, color_compact_level, i, output_image_buffer_.get());
+    }
   }
 }
 

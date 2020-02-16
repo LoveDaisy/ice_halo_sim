@@ -6,6 +6,9 @@
 #include "core/render.h"
 #include "core/simulation.h"
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-noreturn"
+
 int main(int argc, char* argv[]) {
   if (argc != 2) {
     std::printf("USAGE: %s <config-file>\n", argv[0]);
@@ -43,7 +46,8 @@ int main(int argc, char* argv[]) {
       diff = t1 - t0;
       std::printf("Ray tracing: %.2fms\n", diff.count());
 
-      renderer.LoadRayData(simulator.GetSimulationRayData().CollectFinalRayData());
+      auto ray_data = simulator.GetSimulationRayData().CollectFinalRayData();
+      renderer.LoadRayData(static_cast<size_t>(ray_data.wavelength), ray_data);
     }
 
     renderer.RenderToImage();
@@ -66,3 +70,5 @@ int main(int argc, char* argv[]) {
 
   return 0;
 }
+
+#pragma clang diagnostic pop

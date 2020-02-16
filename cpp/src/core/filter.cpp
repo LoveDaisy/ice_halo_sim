@@ -165,25 +165,19 @@ size_t RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse) {
 }
 
 
-size_t RayPathHash(const Crystal* crystal,                  // used for get face number
-                   const RaySegment* last_ray, int length,  // ray path and length
-                   bool reverse) {
+size_t RayPathReverseHash(const Crystal* crystal,                    // used for get face number
+                          const RaySegment* last_ray, int length) {  // ray path and length
   constexpr size_t kStep = 7;
   constexpr size_t kTotalBits = sizeof(size_t) * CHAR_BIT;
 
   size_t result = 0;
-  size_t curr_offset = reverse ? kStep * (length - 1) % kTotalBits : 0;
+  size_t curr_offset = kStep * (length - 1) % kTotalBits;
   auto p = last_ray;
   while (p->prev) {
-    unsigned int fn = crystal->FaceNumber(p->face_id);
+    size_t fn = crystal->FaceNumber(p->face_id);
     size_t tmp_hash = (fn << curr_offset) | (fn >> (kTotalBits - curr_offset));
     result ^= tmp_hash;
-
-    if (reverse) {
-      curr_offset -= kStep;
-    } else {
-      curr_offset += kStep;
-    }
+    curr_offset -= kStep;
     curr_offset %= kTotalBits;
     p = p->prev;
   }
@@ -313,7 +307,7 @@ bool SpecificRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_
   }
 
   // Second, for each filter path, normalize current ray path, and find it in ray_path_hashes.
-  auto current_ray_path_hash = RayPathHash(crystal, last_r, curr_ray_path_len, true);
+  auto current_ray_path_hash = RayPathReverseHash(crystal, last_r, curr_ray_path_len);
   return ray_path_hashes_.count(current_ray_path_hash) != 0;
 }
 

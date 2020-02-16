@@ -323,4 +323,19 @@ void ProjectContext::ParseMultiScatterSettings(rapidjson::Document& d) {
   }
 }
 
+
+std::vector<uint16_t> GetReverseRayPath(const ProjectContextPtr& ctx, const RaySegment* last_ray) {
+  std::vector<uint16_t> result;
+  auto p = last_ray;
+  while (p) {
+    auto crystal = ctx->GetCrystal(p->root_ctx->crystal_id);
+    while (p->prev) {
+      result.emplace_back(crystal->FaceNumber(p->face_id));
+      p = p->prev;
+    }
+    p = p->root_ctx->prev_ray_segment;
+  }
+  return result;
+}
+
 }  // namespace icehalo
