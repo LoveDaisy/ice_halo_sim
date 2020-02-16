@@ -262,6 +262,14 @@ void ProjectContext::ParseRenderSettings(rapidjson::Document& d) {
   } else {
     render_ctx_->LoadFromJson(*root);
   }
+
+  top_halo_render_ctx_ = RenderContext::CreateDefault();
+  root = Pointer("/top_halo_render").Get(d);
+  if (!root) {
+    std::fprintf(stderr, "\nWARNING! Config <top_halo_render> is missing. Use default!\n");
+  } else {
+    top_halo_render_ctx_->LoadFromJson(*root);
+  }
 }
 
 

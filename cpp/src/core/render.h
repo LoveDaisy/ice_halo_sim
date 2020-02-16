@@ -90,7 +90,7 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,   // spec_
                      uint8_t* rgb_data);                                // rgb data, data_number * 3
 void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_data: wavelength_number * data_number
                       size_t data_number, float factor,                 //
-                      RenderColorCompactLevel level, int index,         // color compact level and channel index
+                      ColorCompactLevel level, int index,               // color compact level and channel index
                       uint8_t* rgb_data);                               // rgb data, data_number * 3
 
 constexpr int kMinWavelength = 360;
@@ -108,7 +108,7 @@ class SpectrumRenderer {
   void ClearRayData();
 
   void RenderToImage();
-  void RenderToImage(RenderColorCompactLevel level, int index);
+  void RenderToImage(ColorCompactLevel level, int index);
   uint8_t* GetImageBuffer() const;
 
  private:

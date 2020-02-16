@@ -15,10 +15,10 @@ using RenderContextPtrU = std::unique_ptr<RenderContext>;
 using RenderContextPtr = std::shared_ptr<RenderContext>;
 
 
-enum class RenderColorCompactLevel {
-  kTrueColor,   //!< True color, use all 24-bit
-  kMonoChrome,  //!< Gray scale, 8-bit per channel
-  kLowQuality,  //!< 4-bit per channel
+enum class ColorCompactLevel : int {
+  kTrueColor = 24,  //!< True color, use all 24-bit
+  kMonoChrome = 8,  //!< Gray scale, 8-bit per channel
+  kLowQuality = 4,  //!< 4-bit per channel
 };
 
 
@@ -47,6 +47,12 @@ class RenderContext : public IJsonizable {
   void SetImageOffsetX(int offset_x);
   void SetImageOffsetY(int offset_y);
 
+  int GetTopHaloNumber() const;
+  void SetTopHaloNumber(int n);
+
+  ColorCompactLevel GetColorCompactLevel() const;
+  void SetColorCompactLevel(ColorCompactLevel level);
+
   VisibleRange GetVisibleRange() const;
   void SetVisibleRange(VisibleRange r);
 
@@ -57,8 +63,8 @@ class RenderContext : public IJsonizable {
 
   static constexpr float kMinIntensity = 0.01f;
   static constexpr float kMaxIntensity = 100.0f;
-
   static constexpr int kMaxImageSize = 4096;
+  static constexpr int kMaxTopHaloNumber = 150;
 
  private:
   RenderContext();
@@ -70,7 +76,9 @@ class RenderContext : public IJsonizable {
   int image_height_;
   int offset_x_;
   int offset_y_;
+  int top_halo_num_;
   VisibleRange visible_range_;
+  ColorCompactLevel color_compact_level_;
 };
 
 }  // namespace icehalo

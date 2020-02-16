@@ -68,6 +68,7 @@ class ProjectContext {
   SunContextPtr sun_ctx_;
   CameraContextPtr cam_ctx_;
   RenderContextPtr render_ctx_;
+  RenderContextPtr top_halo_render_ctx_;
   std::vector<WavelengthInfo> wavelengths_;  // (wavelength, weight)
   std::vector<MultiScatterContextPtrU> multi_scatter_info_;
 

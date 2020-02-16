@@ -13,7 +13,8 @@ using rapidjson::Pointer;
 
 RenderContext::RenderContext()
     : ray_color_{ 1.0f, 1.0f, 1.0f }, background_color_{ 0.0f, 0.0f, 0.0f }, intensity_(1.0f), image_width_(0),
-      image_height_(0), offset_x_(0), offset_y_(0), visible_range_(VisibleRange::kUpper) {}
+      image_height_(0), offset_x_(0), offset_y_(0), top_halo_num_(0), visible_range_(VisibleRange::kUpper),
+      color_compact_level_(ColorCompactLevel::kTrueColor) {}
 
 
 RenderContextPtrU RenderContext::CreateDefault() {
@@ -127,6 +128,26 @@ void RenderContext::SetImageOffsetY(int offset_y) {
 }
 
 
+int RenderContext::GetTopHaloNumber() const {
+  return top_halo_num_;
+}
+
+
+void RenderContext::SetTopHaloNumber(int n) {
+  top_halo_num_ = std::max(std::min(n, kMaxTopHaloNumber), 0);
+}
+
+
+void RenderContext::SetColorCompactLevel(ColorCompactLevel level) {
+  color_compact_level_ = level;
+}
+
+
+ColorCompactLevel RenderContext::GetColorCompactLevel() const {
+  return color_compact_level_;
+}
+
+
 VisibleRange RenderContext::GetVisibleRange() const {
   return visible_range_;
 }
@@ -140,8 +161,8 @@ void RenderContext::SetVisibleRange(VisibleRange r) {
 void RenderContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
   root.Clear();
 
-  Pointer("/width").Set(root, GetImageWidth(), allocator);
-  Pointer("/height").Set(root, GetImageHeight(), allocator);
+  Pointer("/width").Set(root, image_width_, allocator);
+  Pointer("/height").Set(root, image_height_, allocator);
   switch (visible_range_) {
     case VisibleRange::kLower:
       Pointer("/visible_semi_sphere").Set(root, "lower", allocator);
@@ -157,14 +178,28 @@ void RenderContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Allocat
       Pointer("/visible_semi_sphere").Set(root, "upper", allocator);
       break;
   }
-  Pointer("/intensity_factor").Set(root, GetIntensity(), allocator);
+  Pointer("/intensity_factor").Set(root, intensity_, allocator);
 
-  Pointer("/offset/0").Set(root, GetImageOffsetX(), allocator);
-  Pointer("/offset/-").Set(root, GetImageOffsetY(), allocator);
+  Pointer("/offset/0").Set(root, offset_x_, allocator);
+  Pointer("/offset/-").Set(root, offset_y_, allocator);
 
-  Pointer("/background_color/0").Set(root, GetBackgroundColor()[0], allocator);
-  Pointer("/background_color/-").Set(root, GetBackgroundColor()[1], allocator);
-  Pointer("/background_color/-").Set(root, GetBackgroundColor()[2], allocator);
+  Pointer("/top_halo_number").Set(root, top_halo_num_, allocator);
+
+  switch (color_compact_level_) {
+    case ColorCompactLevel::kTrueColor:
+      Pointer("/ray_compact_level").Set(root, "true_color", allocator);
+      break;
+    case ColorCompactLevel::kMonoChrome:
+      Pointer("/ray_compact_level").Set(root, "monochrome", allocator);
+      break;
+    case ColorCompactLevel::kLowQuality:
+      Pointer("/ray_compact_level").Set(root, "low_quality", allocator);
+      break;
+  }
+
+  Pointer("/background_color/0").Set(root, background_color_[0], allocator);
+  Pointer("/background_color/-").Set(root, background_color_[1], allocator);
+  Pointer("/background_color/-").Set(root, background_color_[2], allocator);
 
   if (ray_color_[0] < 0) {
     Pointer("/ray_color").Set(root, "real", allocator);
@@ -246,6 +281,35 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
                         -static_cast<int>(RenderContext::kMaxImageSize / 2));
     SetImageOffsetX(offset_x);
     SetImageOffsetY(offset_y);
+  }
+
+  SetColorCompactLevel(ColorCompactLevel::kTrueColor);
+  p = Pointer("/color_compact_level").Get(root);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Render config missing <color_compact_level>, use default true color!\n");
+  } else if (!p->IsString()) {
+    std::fprintf(stderr, "\nWARNING! Render config <color_compact_level> is not a string, use default true color!\n");
+  } else {
+    if (*p == "true_color") {
+      color_compact_level_ = ColorCompactLevel::kTrueColor;
+    } else if (*p == "monochrome") {
+      color_compact_level_ = ColorCompactLevel::kMonoChrome;
+    } else if (*p == "low_quality") {
+      color_compact_level_ = ColorCompactLevel::kLowQuality;
+    } else {
+      std::fprintf(stderr,
+                   "\nWARNING! Render config <color_compact_level> cannot recognize, use default true color!\n");
+    }
+  }
+
+  SetTopHaloNumber(0);
+  p = Pointer("/top_halo_number").Get(root);
+  if (p == nullptr) {
+    std::fprintf(stderr, "\nWARNING! Render config missing <top_halo_number>, use default 0!\n");
+  } else if (!p->IsInt()) {
+    std::fprintf(stderr, "\nWARNING! Render config <top_halo_number> is not an integer, use default 0!\n");
+  } else {
+    SetTopHaloNumber(p->GetInt());
   }
 
   ResetBackgroundColor();
