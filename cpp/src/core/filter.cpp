@@ -374,8 +374,8 @@ void SpecificRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
           throw std::invalid_argument("<path> cannot recognize!");
         }
         tmp_path.emplace_back(pii.GetInt());
-        AddPath(tmp_path);
       }
+      AddPath(tmp_path);
     }
   }
 }
