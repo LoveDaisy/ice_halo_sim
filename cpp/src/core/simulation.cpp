@@ -171,7 +171,7 @@ struct RayPathHash {
 
 
 struct RayPathStatsData {
-  std::unordered_set<RayPath, RayPathHash> ray_path_set;
+  std::unordered_set<size_t> ray_path_hash_set;
   std::unordered_set<RayInfo*> ray_info_set;
   float total_energy;
   size_t exit_ray_seg_num;
@@ -181,23 +181,24 @@ struct RayPathStatsData {
 
 
 std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(const ProjectContextPtr& ctx) const {
+  std::unordered_map<size_t, std::vector<uint16_t>> ray_path_map;
   std::unordered_map<size_t, ray_path_helper::RayPathStatsData> ray_path_stats;
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
       if (r->state != RaySegmentState::kFinished) {
         continue;
       }
-      auto ray_path = GetReverseRayPath(ctx, r);  // Includes multi-scatter rays
-      auto ray_path_hash = RayPathHash(ray_path, true);
-
-      if (!ray_path_stats.count(ray_path_hash)) {
-        ray_path_helper::RayPathStatsData curr_data{};
-        curr_data.ray_path_set.emplace(ray_path_helper::RayPath{ ray_path_hash, ray_path });
-        ray_path_stats.emplace(ray_path_hash, curr_data);
+      auto ray_path_hash = RayPathReverseHash(ctx->GetCrystal(r->root_ctx->crystal_id), r, -1);
+      if (!ray_path_map.count(ray_path_hash)) {
+        ray_path_map.emplace(ray_path_hash, GetReverseRayPath(ctx, r));  // includes multi-scatter
       }
-      ray_path_stats[ray_path_hash].exit_ray_seg_num += 1;
-      ray_path_stats[ray_path_hash].ray_info_set.emplace(r->root_ctx);
-      ray_path_stats[ray_path_hash].total_energy += r->w;
+      if (!ray_path_stats.count(ray_path_hash)) {
+        ray_path_stats.emplace(ray_path_hash, ray_path_helper::RayPathStatsData{});
+        ray_path_stats.at(ray_path_hash).ray_path_hash_set.emplace(ray_path_hash);
+      }
+      ray_path_stats.at(ray_path_hash).exit_ray_seg_num += 1;
+      ray_path_stats.at(ray_path_hash).ray_info_set.emplace(r->root_ctx);
+      ray_path_stats.at(ray_path_hash).total_energy += r->w;
     }
   }
 
@@ -207,21 +208,19 @@ std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(cons
       if (r->state != RaySegmentState::kFinished) {
         continue;
       }
-      auto ray_path = GetReverseRayPath(ctx, r);  // Includes multi-scatter rays
-      auto ray_path_hash = RayPathHash(ray_path, true);
+      auto ray_path_hash = RayPathReverseHash(ctx->GetCrystal(r->root_ctx->crystal_id), r, -1);
 
       if (!result_map.count(ray_path_hash)) {
-        const auto& stats = ray_path_stats[ray_path_hash];
-        SimpleRayPathData curr_ray_data{ ray_path_hash, ray_path, SimpleRayData{ stats.exit_ray_seg_num } };
+        const auto& stats = ray_path_stats.at(ray_path_hash);
+        SimpleRayPathData curr_ray_data{ ray_path_hash, ray_path_map[ray_path_hash],
+                                         SimpleRayData{ stats.exit_ray_seg_num } };
         curr_ray_data.ray_data.init_ray_num = stats.ray_info_set.size();
         curr_ray_data.ray_data.total_ray_energy = stats.total_energy;
         curr_ray_data.ray_data.size = stats.exit_ray_seg_num;
         result_map.emplace(ray_path_hash, std::make_pair(0, std::move(curr_ray_data)));
       }
       auto& idx = result_map.at(ray_path_hash).first;
-      auto& ray_data = result_map.at(ray_path_hash).second.ray_data;
-      auto p = ray_data.buf.get() + idx * 4;
-
+      auto p = result_map.at(ray_path_hash).second.ray_data.buf.get() + idx * 4;
       const auto* axis = r->root_ctx->main_axis.val();
       math::RotateZBack(axis, r->dir.val(), p);
       p[3] = r->w;

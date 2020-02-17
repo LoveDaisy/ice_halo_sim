@@ -39,25 +39,36 @@ int main(int argc, char* argv[]) {
     auto t1 = std::chrono::system_clock::now();
     std::chrono::duration<float, std::ratio<1, 1000>> loading_time = t1 - t0;
 
-    auto final_ray_data = ray_data.CollectFinalRayData();
-    renderer.LoadRayData(static_cast<size_t>(final_ray_data.wavelength), final_ray_data);
-    auto t2 = std::chrono::system_clock::now();
-    std::chrono::duration<float, std::ratio<1, 1000>> final_ray_time = t2 - t1;
+    size_t init_ray_num, exit_seg_num;
+    decltype(t1) t2;
+    std::chrono::duration<float, std::ratio<1, 1000>> final_ray_time{};
+    {
+      auto final_ray_data = ray_data.CollectFinalRayData();
+      renderer.LoadRayData(static_cast<size_t>(final_ray_data.wavelength), final_ray_data);
+      t2 = std::chrono::system_clock::now();
+      final_ray_time = t2 - t1;
+      init_ray_num = final_ray_data.init_ray_num;
+      exit_seg_num = final_ray_data.size;
+    }  // Let final_ray_data be local.
 
-    auto top_halo_ray_data = ray_data.CollectAndSortRayPathData(ctx);
-    size_t curr_halo_num = std::min(static_cast<size_t>(top_halo_ctx->GetTopHaloNumber()), top_halo_ray_data.size());
-    for (size_t j = 0; j < curr_halo_num; j++) {
-      auto img_idx = j / top_halo_img_ch_num;
-      top_halo_renderers[img_idx].LoadRayData(top_halo_ray_data[j].ray_path_hash, top_halo_ray_data[j].ray_data);
-    }
-    auto t3 = std::chrono::system_clock::now();
-    std::chrono::duration<float, std::ratio<1, 1000>> top_halo_time = t3 - t2;
+    decltype(t1) t3;
+    std::chrono::duration<float, std::ratio<1, 1000>> top_halo_time{};
+    {
+      auto top_halo_ray_data = ray_data.CollectAndSortRayPathData(ctx);
+      size_t curr_halo_num = std::min(static_cast<size_t>(top_halo_ctx->GetTopHaloNumber()), top_halo_ray_data.size());
+      for (size_t j = 0; j < curr_halo_num; j++) {
+        auto img_idx = j / top_halo_img_ch_num;
+        top_halo_renderers[img_idx].LoadRayData(top_halo_ray_data[j].ray_path_hash, top_halo_ray_data[j].ray_data);
+      }
+      t3 = std::chrono::system_clock::now();
+      top_halo_time = t3 - t2;
+    }  // Let top_halo_ray_data be local.
 
     std::printf(
         " Loading data (%zu/%zu): %.2fms. Collecting final rays: %.2fms. Filtering top halo: %.2fms."
         " Total %zu rays, %zu pts\n",
-        i + 1, data_files.size(), loading_time.count(), final_ray_time.count(), top_halo_time.count(),
-        final_ray_data.init_ray_num, final_ray_data.size);
+        i + 1, data_files.size(), loading_time.count(), final_ray_time.count(), top_halo_time.count(), init_ray_num,
+        exit_seg_num);
   }
   renderer.RenderToImage();
   for (auto& r : top_halo_renderers) {

@@ -170,6 +170,15 @@ size_t RayPathReverseHash(const Crystal* crystal,                    // used for
   constexpr size_t kStep = 7;
   constexpr size_t kTotalBits = sizeof(size_t) * CHAR_BIT;
 
+  if (length < 0) {
+    length = 0;
+    auto p = last_ray;
+    while (p->prev) {
+      p = p->prev;
+      length++;
+    }
+  }
+
   size_t result = 0;
   size_t curr_offset = kStep * (length - 1) % kTotalBits;
   auto p = last_ray;
