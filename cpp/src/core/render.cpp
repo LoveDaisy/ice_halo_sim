@@ -480,7 +480,6 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,  // spec_d
       gray[j] = kWhitePointD65[j] * xyz[1];
     }
 
-    float rgb[3]{};
     if (use_real_color) {
       float r = 1.0f;
       for (int j = 0; j < 3; j++) {
@@ -502,6 +501,7 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,  // spec_d
         xyz[j] = gray[j];
       }
     }
+    float rgb[3]{};
     for (int j = 0; j < 3; j++) {
       for (int k = 0; k < 3; k++) {
         rgb[j] += xyz[k] * kXyzToRgb[j * 3 + k];
@@ -546,7 +546,7 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
 
     /* Step 3. Convert linear sRGB to sRGB */
     SrgbGamma(&val, 1);
-    if (level == ColorCompactLevel::kMonoChrome && 0 <= index && index < 3) {
+    if (level == ColorCompactLevel::kMonochrome && 0 <= index && index < 3) {
       rgb_data[i * 3 + index] = static_cast<uint8_t>(val * std::numeric_limits<uint8_t>::max());
     } else if (level == ColorCompactLevel::kLowQuality && 0 <= index && index < 6) {
       constexpr uint8_t kMaxVal = 1 << 4;

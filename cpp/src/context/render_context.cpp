@@ -11,10 +11,13 @@ namespace icehalo {
 
 using rapidjson::Pointer;
 
+RenderSplitter::RenderSplitter() : type(RenderSplitterType::kNone), top_halo_num(0), filter_id{}, symmetry_flag(0) {}
+
+
 RenderContext::RenderContext()
     : ray_color_{ 1.0f, 1.0f, 1.0f }, background_color_{ 0.0f, 0.0f, 0.0f }, intensity_(1.0f), image_width_(0),
-      image_height_(0), offset_x_(0), offset_y_(0), top_halo_num_(0), visible_range_(VisibleRange::kUpper),
-      color_compact_level_(ColorCompactLevel::kTrueColor) {}
+      image_height_(0), offset_x_(0), offset_y_(0), visible_range_(VisibleRange::kUpper),
+      color_compact_level_(ColorCompactLevel::kTrueColor), splitter_{} {}
 
 
 RenderContextPtrU RenderContext::CreateDefault() {
@@ -129,13 +132,15 @@ void RenderContext::SetImageOffsetY(int offset_y) {
 }
 
 
-int RenderContext::GetTopHaloNumber() const {
-  return top_halo_num_;
-}
-
-
-void RenderContext::SetTopHaloNumber(int n) {
-  top_halo_num_ = std::max(std::min(n, kMaxTopHaloNumber), 0);
+int RenderContext::GetSplitNumber() const {
+  switch (splitter_.type) {
+    case RenderSplitterType::kNone:
+      return 0;
+    case RenderSplitterType::kTopHalo:
+      return splitter_.top_halo_num;
+    case RenderSplitterType::kFilter:
+      return static_cast<int>(splitter_.filter_id.size());
+  }
 }
 
 
@@ -184,13 +189,49 @@ void RenderContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Allocat
   Pointer("/offset/0").Set(root, offset_x_, allocator);
   Pointer("/offset/-").Set(root, offset_y_, allocator);
 
-  Pointer("/top_halo_number").Set(root, top_halo_num_, allocator);
+  switch (splitter_.type) {
+    case RenderSplitterType::kTopHalo:
+      Pointer("/splitter/type").Set(root, "top_halo", allocator);
+      Pointer("/splitter/param").Set(root, splitter_.top_halo_num, allocator);
+      break;
+    case RenderSplitterType::kFilter: {
+      char id_buf[128];
+      Pointer("/splitter/type").Set(root, "filter", allocator);
+      for (size_t i = 0; i < splitter_.filter_id.size(); i++) {
+        const auto& fs = splitter_.filter_id[i];
+        for (size_t j = 0; j < fs.size(); j++) {
+          std::snprintf(id_buf, 128, "/splitter/%zu/%zu", i, j);
+          Pointer(id_buf).Set(root, fs[j], allocator);
+        }
+      }
+    } break;
+    case RenderSplitterType::kNone:
+      break;
+  }
+
+  char sym_buf[16];
+  int sym_buf_idx = 0;
+  if (splitter_.symmetry_flag & kSymmetryBasal) {
+    sym_buf[sym_buf_idx++] = 'B';
+  }
+  if (splitter_.symmetry_flag & kSymmetryDirection) {
+    sym_buf[sym_buf_idx++] = 'D';
+  }
+  if (splitter_.symmetry_flag & kSymmetryPrism) {
+    sym_buf[sym_buf_idx++] = 'P';
+  }
+  if (splitter_.symmetry_flag & kSymmetryRepeatedReflection) {
+    sym_buf[sym_buf_idx++] = 'X';
+  }
+  if (sym_buf_idx > 0) {
+    Pointer("/splitter/symmetry").Set(root, sym_buf, allocator);
+  }
 
   switch (color_compact_level_) {
     case ColorCompactLevel::kTrueColor:
       Pointer("/ray_compact_level").Set(root, "true_color", allocator);
       break;
-    case ColorCompactLevel::kMonoChrome:
+    case ColorCompactLevel::kMonochrome:
       Pointer("/ray_compact_level").Set(root, "monochrome", allocator);
       break;
     case ColorCompactLevel::kLowQuality:
@@ -294,7 +335,7 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
     if (*p == "true_color") {
       color_compact_level_ = ColorCompactLevel::kTrueColor;
     } else if (*p == "monochrome") {
-      color_compact_level_ = ColorCompactLevel::kMonoChrome;
+      color_compact_level_ = ColorCompactLevel::kMonochrome;
     } else if (*p == "low_quality") {
       color_compact_level_ = ColorCompactLevel::kLowQuality;
     } else {
@@ -303,14 +344,69 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
     }
   }
 
-  SetTopHaloNumber(0);
-  p = Pointer("/top_halo_number").Get(root);
+  splitter_ = {};
+  p = Pointer("/splitter").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Render config missing <top_halo_number>, use default 0!\n");
-  } else if (!p->IsInt()) {
-    std::fprintf(stderr, "\nWARNING! Render config <top_halo_number> is not an integer, use default 0!\n");
+    std::fprintf(stderr, "\nWARNING! Render config missing <splitter>, use default!\n");
+  } else if (!p->IsObject()) {
+    std::fprintf(stderr, "\nWARNING! Render config <splitter> is not an object, use default!\n");
   } else {
-    SetTopHaloNumber(p->GetInt());
+    auto pp = Pointer("/type").Get(*p);
+    if (pp && pp->IsString() && *pp == "top_halo") {
+      splitter_.type = RenderSplitterType::kTopHalo;
+    } else if (pp && pp->IsString() && *pp == "filter") {
+      splitter_.type = RenderSplitterType::kFilter;
+    }
+
+    pp = Pointer("/param").Get(*p);
+    if (pp && pp->IsInt() && splitter_.type == RenderSplitterType::kTopHalo) {
+      splitter_.top_halo_num = pp->GetInt();
+    } else if (pp && pp->IsArray() && splitter_.type == RenderSplitterType::kFilter) {
+      std::vector<std::vector<int>> filter_ids;
+      for (const auto& ppi : pp->GetArray()) {
+        if (ppi.IsArray()) {
+          std::vector<int> curr_ids;
+          for (const auto& fid : ppi.GetArray()) {
+            if (fid.IsInt()) {
+              curr_ids.emplace_back(fid.GetInt());
+            }
+          }
+          if (!curr_ids.empty()) {
+            filter_ids.emplace_back(curr_ids);
+          }
+        }
+      }
+      if (!filter_ids.empty()) {
+        splitter_.filter_id = filter_ids;
+      }
+    }
+
+    pp = Pointer("/symmetry").Get(*p);
+    if (pp && pp->IsString()) {
+      auto sym = pp->GetString();
+      for (decltype(pp->GetStringLength()) i = 0; i < pp->GetStringLength(); i++) {
+        switch (sym[i]) {
+          case 'P':
+          case 'p':
+            splitter_.symmetry_flag |= kSymmetryPrism;
+            break;
+          case 'B':
+          case 'b':
+            splitter_.symmetry_flag |= kSymmetryBasal;
+            break;
+          case 'D':
+          case 'd':
+            splitter_.symmetry_flag |= kSymmetryDirection;
+            break;
+          case 'X':
+          case 'x':
+            splitter_.symmetry_flag |= kSymmetryRepeatedReflection;
+            break;
+          default:
+            throw std::invalid_argument("<symmetry> cannot recognize!");
+        }
+      }
+    }
   }
 
   ResetBackgroundColor();

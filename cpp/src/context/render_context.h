@@ -17,8 +17,25 @@ using RenderContextPtr = std::shared_ptr<RenderContext>;
 
 enum class ColorCompactLevel : int {
   kTrueColor = 24,  //!< True color, use all 24-bit
-  kMonoChrome = 8,  //!< Gray scale, 8-bit per channel
+  kMonochrome = 8,  //!< Gray scale, 8-bit per channel
   kLowQuality = 4,  //!< 4-bit per channel
+};
+
+
+enum class RenderSplitterType {
+  kNone = 0,
+  kTopHalo,
+  kFilter,
+};
+
+
+struct RenderSplitter {
+  RenderSplitterType type;
+  int top_halo_num;
+  std::vector<std::vector<int>> filter_id;
+  uint8_t symmetry_flag;
+
+  RenderSplitter();
 };
 
 
@@ -59,8 +76,7 @@ class RenderContext : public IJsonizable {
   void SetImageOffsetX(int offset_x);
   void SetImageOffsetY(int offset_y);
 
-  int GetTopHaloNumber() const;
-  void SetTopHaloNumber(int n);
+  int GetSplitNumber() const;
 
   ColorCompactLevel GetColorCompactLevel() const;
   void SetColorCompactLevel(ColorCompactLevel level);
@@ -88,9 +104,9 @@ class RenderContext : public IJsonizable {
   int image_height_;
   int offset_x_;
   int offset_y_;
-  int top_halo_num_;
   VisibleRange visible_range_;
   ColorCompactLevel color_compact_level_;
+  RenderSplitter splitter_;
 };
 
 }  // namespace icehalo

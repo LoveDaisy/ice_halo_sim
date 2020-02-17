@@ -127,6 +127,15 @@ const CrystalContext* ProjectContext::GetCrystalContext(int id) const {
 }
 
 
+CrystalMap ProjectContext::GetCrystalMap() const {
+  CrystalMap crystal_map{};
+  for (const auto& c : crystal_store_) {
+    crystal_map.emplace(c->GetId(), c->GetCrystal());
+  }
+  return crystal_map;
+}
+
+
 #ifdef FOR_TEST
 void ProjectContext::PrintCrystalInfo() const {
   for (const auto& ctx : crystal_store_) {
@@ -263,12 +272,12 @@ void ProjectContext::ParseRenderSettings(rapidjson::Document& d) {
     render_ctx_->LoadFromJson(*root);
   }
 
-  top_halo_render_ctx_ = RenderContext::CreateDefault();
+  split_render_ctx_ = RenderContext::CreateDefault();
   root = Pointer("/top_halo_render").Get(d);
   if (!root) {
     std::fprintf(stderr, "\nWARNING! Config <top_halo_render> is missing. Use default!\n");
   } else {
-    top_halo_render_ctx_->LoadFromJson(*root);
+    split_render_ctx_->LoadFromJson(*root);
   }
 }
 
@@ -324,11 +333,10 @@ void ProjectContext::ParseMultiScatterSettings(rapidjson::Document& d) {
 }
 
 
-std::vector<uint16_t> GetReverseRayPath(const ProjectContextPtr& ctx, const RaySegment* last_ray) {
+std::vector<uint16_t> GetReverseRayPath(const Crystal* crystal, const RaySegment* last_ray) {
   std::vector<uint16_t> result;
   auto p = last_ray;
   while (p) {
-    auto crystal = ctx->GetCrystal(p->root_ctx->crystal_id);
     while (p->prev) {
       result.emplace_back(crystal->FaceNumber(p->face_id));
       p = p->prev;

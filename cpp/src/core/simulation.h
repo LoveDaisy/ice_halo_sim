@@ -71,7 +71,7 @@ class SimulationRayData : public ISerializable {
   void AddRay(RayInfo* ray);
 
   SimpleRayData CollectFinalRayData() const;
-  std::vector<SimpleRayPathData> CollectAndSortRayPathData(const ProjectContextPtr& ctx) const;
+  std::vector<SimpleRayPathData> CollectAndSortRayPathData(const CrystalMap& crystal_map) const;
 
   void AddExitRaySegment(RaySegment* r);
   const std::vector<RaySegment*>& GetLastExitRaySegments() const;

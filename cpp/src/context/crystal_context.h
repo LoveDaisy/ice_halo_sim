@@ -2,6 +2,7 @@
 #define SRC_CONTEXT_CRYSTAL_CONTEXT_H_
 
 #include <memory>
+#include <unordered_map>
 
 #include "core/crystal.h"
 #include "io/serialize.h"
@@ -57,6 +58,9 @@ class CrystalContext : public IJsonizable {
   float d_param_[6];
   std::string file_param_;
 };
+
+
+using CrystalMap = std::unordered_map<int, const Crystal*>;
 
 
 }  // namespace icehalo

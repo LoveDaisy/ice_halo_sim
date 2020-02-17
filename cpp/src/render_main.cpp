@@ -18,15 +18,15 @@ int main(int argc, char* argv[]) {
   renderer.SetRenderContext(ctx->render_ctx_);
 
   using ColorCompactLevelDataType = std::underlying_type<icehalo::ColorCompactLevel>::type;
-  auto& top_halo_ctx = ctx->top_halo_render_ctx_;
-  int top_halo_img_ch_num = icehalo::SpectrumRenderer::kImageBits /
-                            static_cast<ColorCompactLevelDataType>(top_halo_ctx->GetColorCompactLevel());
-  int top_halo_img_num = static_cast<int>(std::ceil(top_halo_ctx->GetTopHaloNumber() * 1.0 / top_halo_img_ch_num));
-  std::vector<icehalo::SpectrumRenderer> top_halo_renderers;
-  for (int i = 0; i < top_halo_img_num; i++) {
-    top_halo_renderers.emplace_back();
-    top_halo_renderers.back().SetCameraContext(ctx->cam_ctx_);
-    top_halo_renderers.back().SetRenderContext(top_halo_ctx);
+  auto& split_render_ctx = ctx->split_render_ctx_;
+  int split_img_ch_num = icehalo::SpectrumRenderer::kImageBits /
+                         static_cast<ColorCompactLevelDataType>(split_render_ctx->GetColorCompactLevel());
+  int split_img_num = static_cast<int>(std::ceil(split_render_ctx->GetSplitNumber() * 1.0 / split_img_ch_num));
+  std::vector<icehalo::SpectrumRenderer> split_renderers;
+  for (int i = 0; i < split_img_num; i++) {
+    split_renderers.emplace_back();
+    split_renderers.back().SetCameraContext(ctx->cam_ctx_);
+    split_renderers.back().SetRenderContext(split_render_ctx);
   }
 
   icehalo::SimulationRayData ray_data;
@@ -41,37 +41,38 @@ int main(int argc, char* argv[]) {
 
     size_t init_ray_num, exit_seg_num;
     decltype(t1) t2;
-    std::chrono::duration<float, std::ratio<1, 1000>> final_ray_time{};
+    std::chrono::duration<float, std::ratio<1, 1000>> final_render_time{};
     {
       auto final_ray_data = ray_data.CollectFinalRayData();
       renderer.LoadRayData(static_cast<size_t>(final_ray_data.wavelength), final_ray_data);
       t2 = std::chrono::system_clock::now();
-      final_ray_time = t2 - t1;
+      final_render_time = t2 - t1;
       init_ray_num = final_ray_data.init_ray_num;
       exit_seg_num = final_ray_data.size;
     }  // Let final_ray_data be local.
 
     decltype(t1) t3;
-    std::chrono::duration<float, std::ratio<1, 1000>> top_halo_time{};
+    std::chrono::duration<float, std::ratio<1, 1000>> split_render_time{};
     {
-      auto top_halo_ray_data = ray_data.CollectAndSortRayPathData(ctx);
-      size_t curr_halo_num = std::min(static_cast<size_t>(top_halo_ctx->GetTopHaloNumber()), top_halo_ray_data.size());
-      for (size_t j = 0; j < curr_halo_num; j++) {
-        auto img_idx = j / top_halo_img_ch_num;
-        top_halo_renderers[img_idx].LoadRayData(top_halo_ray_data[j].ray_path_hash, top_halo_ray_data[j].ray_data);
+      auto crystal_map = ctx->GetCrystalMap();
+      auto split_ray_data = ray_data.CollectAndSortRayPathData(crystal_map);
+      size_t curr_split_num = std::min(static_cast<size_t>(split_render_ctx->GetSplitNumber()), split_ray_data.size());
+      for (size_t j = 0; j < curr_split_num; j++) {
+        auto img_idx = j / split_img_ch_num;
+        split_renderers[img_idx].LoadRayData(split_ray_data[j].ray_path_hash, split_ray_data[j].ray_data);
       }
       t3 = std::chrono::system_clock::now();
-      top_halo_time = t3 - t2;
+      split_render_time = t3 - t2;
     }  // Let top_halo_ray_data be local.
 
     std::printf(
         " Loading data (%zu/%zu): %.2fms. Collecting final rays: %.2fms. Filtering top halo: %.2fms."
         " Total %zu rays, %zu pts\n",
-        i + 1, data_files.size(), loading_time.count(), final_ray_time.count(), top_halo_time.count(), init_ray_num,
-        exit_seg_num);
+        i + 1, data_files.size(), loading_time.count(), final_render_time.count(), split_render_time.count(),
+        init_ray_num, exit_seg_num);
   }
   renderer.RenderToImage();
-  for (auto& r : top_halo_renderers) {
+  for (auto& r : split_renderers) {
     r.RenderToImage();
   }
 
@@ -80,9 +81,9 @@ int main(int argc, char* argv[]) {
   cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
   cv::imwrite(icehalo::PathJoin(ctx->GetDataDirectory(), "img.jpg"), img);
   char filename_buf[256];
-  for (size_t i = 0; i < top_halo_renderers.size(); i++) {
-    cv::Mat halo_img(ctx->top_halo_render_ctx_->GetImageHeight(), ctx->top_halo_render_ctx_->GetImageWidth(), CV_8UC3,
-                     top_halo_renderers[i].GetImageBuffer());
+  for (size_t i = 0; i < split_renderers.size(); i++) {
+    cv::Mat halo_img(ctx->split_render_ctx_->GetImageHeight(), ctx->split_render_ctx_->GetImageWidth(), CV_8UC3,
+                     split_renderers[i].GetImageBuffer());
     cv::cvtColor(halo_img, halo_img, cv::COLOR_RGB2BGR);
     std::snprintf(filename_buf, 256, "halo_%03zu.jpg", i);
     cv::imwrite(icehalo::PathJoin(ctx->GetDataDirectory(), filename_buf), halo_img);

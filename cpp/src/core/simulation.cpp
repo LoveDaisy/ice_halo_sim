@@ -180,17 +180,20 @@ struct RayPathStatsData {
 }  // namespace ray_path_helper
 
 
-std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(const ProjectContextPtr& ctx) const {
+std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(const CrystalMap& crystal_map) const {
   std::unordered_map<size_t, std::vector<uint16_t>> ray_path_map;
+  std::vector<size_t> ray_path_hash_list;
   std::unordered_map<size_t, ray_path_helper::RayPathStatsData> ray_path_stats;
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
       if (r->state != RaySegmentState::kFinished) {
         continue;
       }
-      auto ray_path_hash = RayPathReverseHash(ctx->GetCrystal(r->root_ctx->crystal_id), r, -1);
+      auto crystal = crystal_map.at(r->root_ctx->crystal_id);
+      auto ray_path_hash = RayPathReverseHash(crystal, r, -1);
+      ray_path_hash_list.emplace_back(ray_path_hash);
       if (!ray_path_map.count(ray_path_hash)) {
-        ray_path_map.emplace(ray_path_hash, GetReverseRayPath(ctx, r));  // includes multi-scatter
+        ray_path_map.emplace(ray_path_hash, GetReverseRayPath(crystal, r));  // includes multi-scatter
       }
       if (!ray_path_stats.count(ray_path_hash)) {
         ray_path_stats.emplace(ray_path_hash, ray_path_helper::RayPathStatsData{});
@@ -203,12 +206,13 @@ std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(cons
   }
 
   std::unordered_map<size_t, std::pair<size_t, SimpleRayPathData>> result_map;
+  size_t ray_path_hash_idx = 0;
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
       if (r->state != RaySegmentState::kFinished) {
         continue;
       }
-      auto ray_path_hash = RayPathReverseHash(ctx->GetCrystal(r->root_ctx->crystal_id), r, -1);
+      auto ray_path_hash = ray_path_hash_list[ray_path_hash_idx++];
 
       if (!result_map.count(ray_path_hash)) {
         const auto& stats = ray_path_stats.at(ray_path_hash);

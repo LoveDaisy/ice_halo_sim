@@ -47,6 +47,7 @@ class ProjectContext {
   const Crystal* GetCrystal(int id) const;
   int32_t GetCrystalId(const Crystal* crystal) const;
   const CrystalContext* GetCrystalContext(int id) const;
+  CrystalMap GetCrystalMap() const;
 
   AbstractRayPathFilter* GetRayPathFilter(int id) const;
 
@@ -68,7 +69,7 @@ class ProjectContext {
   SunContextPtr sun_ctx_;
   CameraContextPtr cam_ctx_;
   RenderContextPtr render_ctx_;
-  RenderContextPtr top_halo_render_ctx_;
+  RenderContextPtr split_render_ctx_;
   std::vector<WavelengthInfo> wavelengths_;  // (wavelength, weight)
   std::vector<MultiScatterContextPtrU> multi_scatter_info_;
 
@@ -93,7 +94,7 @@ class ProjectContext {
 };
 
 
-std::vector<uint16_t> GetReverseRayPath(const ProjectContextPtr& ctx, const RaySegment* last_ray);
+std::vector<uint16_t> GetReverseRayPath(const Crystal* crystal, const RaySegment* last_ray);
 
 }  // namespace icehalo
 

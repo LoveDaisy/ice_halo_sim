@@ -17,6 +17,7 @@ enum Symmetry : uint8_t {
   kSymmetryPrism = 1u,
   kSymmetryBasal = 2u,
   kSymmetryDirection = 4u,
+  kSymmetryRepeatedReflection = 8u,
 };
 
 size_t RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse = false);
