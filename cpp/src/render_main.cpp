@@ -59,7 +59,12 @@ int main(int argc, char* argv[]) {
       size_t curr_split_num = std::min(static_cast<size_t>(split_render_ctx->GetSplitNumber()), split_ray_data.size());
       for (size_t j = 0; j < curr_split_num; j++) {
         auto img_idx = j / split_img_ch_num;
-        split_renderers[img_idx].LoadRayData(split_ray_data[j].ray_path_hash, split_ray_data[j].ray_data);
+        if (split_img_ch_num == 1) {
+          split_renderers[img_idx].LoadRayData(static_cast<size_t>(split_ray_data[j].ray_data.wavelength),
+                                               split_ray_data[j].ray_data);
+        } else {
+          split_renderers[img_idx].LoadRayData(split_ray_data[j].ray_path_hash, split_ray_data[j].ray_data);
+        }
       }
       t3 = std::chrono::system_clock::now();
       split_render_time = t3 - t2;

@@ -273,7 +273,7 @@ void ProjectContext::ParseRenderSettings(rapidjson::Document& d) {
   }
 
   split_render_ctx_ = RenderContext::CreateDefault();
-  root = Pointer("/top_halo_render").Get(d);
+  root = Pointer("/split_render").Get(d);
   if (!root) {
     std::fprintf(stderr, "\nWARNING! Config <top_halo_render> is missing. Use default!\n");
   } else {

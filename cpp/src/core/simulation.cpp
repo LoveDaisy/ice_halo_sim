@@ -221,6 +221,7 @@ std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(cons
         curr_ray_data.ray_data.init_ray_num = stats.ray_info_set.size();
         curr_ray_data.ray_data.total_ray_energy = stats.total_energy;
         curr_ray_data.ray_data.size = stats.exit_ray_seg_num;
+        curr_ray_data.ray_data.wavelength = wavelength_info_.wavelength;
         result_map.emplace(ray_path_hash, std::make_pair(0, std::move(curr_ray_data)));
       }
       auto& idx = result_map.at(ray_path_hash).first;
