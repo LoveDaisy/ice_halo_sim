@@ -458,7 +458,8 @@ constexpr float kCmfZ[] = {
 
 void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,  // spec_data: wavelength_number * data_number
                      size_t data_number, float factor,                 //
-                     uint8_t* rgb_data) {                              // rgb data, data_number * 3
+                     const float* ray_color, uint8_t* rgb_data) {      // rgb data, data_number * 3
+  bool use_real_color = rgb_data[0] < 0;
   for (size_t i = 0; i < data_number; i++) {
     /* Step 1. Spectrum to XYZ */
     float xyz[3]{};
@@ -479,27 +480,36 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,  // spec_d
       gray[j] = kWhitePointD65[j] * xyz[1];
     }
 
-    float r = 1.0f;
-    for (int j = 0; j < 3; j++) {
-      float a = 0, b = 0;
-      for (int k = 0; k < 3; k++) {
-        a += -gray[k] * kXyzToRgb[j * 3 + k];
-        b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
-      }
-      if (a * b > 0 && a / b < r) {
-        r = a / b;
-      }
-    }
-
     float rgb[3]{};
-    for (int j = 0; j < 3; j++) {
-      xyz[j] = (xyz[j] - gray[j]) * r + gray[j];
+    if (use_real_color) {
+      float r = 1.0f;
+      for (int j = 0; j < 3; j++) {
+        float a = 0, b = 0;
+        for (int k = 0; k < 3; k++) {
+          a += -gray[k] * kXyzToRgb[j * 3 + k];
+          b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
+        }
+        if (a * b > 0 && a / b < r) {
+          r = a / b;
+        }
+      }
+
+      for (int j = 0; j < 3; j++) {
+        xyz[j] = (xyz[j] - gray[j]) * r + gray[j];
+      }
+    } else {
+      for (int j = 0; j < 3; j++) {
+        xyz[j] = gray[j];
+      }
     }
     for (int j = 0; j < 3; j++) {
       for (int k = 0; k < 3; k++) {
         rgb[j] += xyz[k] * kXyzToRgb[j * 3 + k];
       }
       rgb[j] = std::min(std::max(rgb[j], 0.0f), 1.0f);
+      if (!use_real_color) {
+        rgb[j] *= ray_color[j];
+      }
     }
 
     /* Step 3. Convert linear sRGB to sRGB */
@@ -519,76 +529,29 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
     return;
   }
   for (size_t i = 0; i < data_number; i++) {
-    if (level == ColorCompactLevel::kTrueColor) {
-      /* Step 1. Spectrum to XYZ */
-      float xyz[3]{};
-      for (const auto& d : spec_data) {
-        auto wl = d.first;
-        if (wl < kMinWavelength || wl > kMaxWaveLength) {
-          continue;
-        }
-        float v = d.second[i] * factor;
-        xyz[0] += kCmfX[wl - kMinWavelength] * v;
-        xyz[1] += kCmfY[wl - kMinWavelength] * v;
-        xyz[2] += kCmfZ[wl - kMinWavelength] * v;
-      }
+    /* Step 1. Spectrum to XYZ */
+    float y = spec_data[index].second[i] * factor;
 
-      /* Step 2. XYZ to linear RGB */
-      float gray[3];
-      for (int j = 0; j < 3; j++) {
-        gray[j] = kWhitePointD65[j] * xyz[1];
-      }
+    /* Step 2. XYZ to linear RGB */
+    float gray[3];
+    for (int j = 0; j < 3; j++) {
+      gray[j] = kWhitePointD65[j] * y;
+    }
 
-      float r = 1.0f;
-      for (int j = 0; j < 3; j++) {
-        float a = 0, b = 0;
-        for (int k = 0; k < 3; k++) {
-          a += -gray[k] * kXyzToRgb[j * 3 + k];
-          b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
-        }
-        if (a * b > 0 && a / b < r) {
-          r = a / b;
-        }
-      }
+    float val = 0;
+    for (int k = 0; k < 3; k++) {
+      val += gray[k] * kXyzToRgb[3 + k];
+    }
+    val = std::min(std::max(val, 0.0f), 1.0f);
 
-      float rgb[3]{};
-      for (int j = 0; j < 3; j++) {
-        for (int k = 0; k < 3; k++) {
-          rgb[j] += gray[k] * kXyzToRgb[j * 3 + k];
-        }
-        rgb[j] = std::min(std::max(rgb[j], 0.0f), 1.0f);
-      }
-
-      /* Step 3. Convert linear sRGB to sRGB */
-      SrgbGamma(rgb);
-      for (int j = 0; j < 3; j++) {
-        rgb_data[i * 3 + j] = static_cast<uint8_t>(rgb[j] * std::numeric_limits<uint8_t>::max());
-      }
-    } else {
-      /* Step 1. Spectrum to XYZ */
-      float y = spec_data[index].second[i] * factor;
-
-      /* Step 2. XYZ to linear RGB */
-      float gray[3];
-      for (int j = 0; j < 3; j++) {
-        gray[j] = kWhitePointD65[j] * y;
-      }
-
-      float val = 0;
-      for (int k = 0; k < 3; k++) {
-        val += gray[k] * kXyzToRgb[3 + k];
-      }
-      val = std::min(std::max(val, 0.0f), 1.0f);
-
-      /* Step 3. Convert linear sRGB to sRGB */
-      SrgbGamma(&val, 1);
-      if (level == ColorCompactLevel::kMonoChrome && 0 <= index && index < 3) {
-        rgb_data[i * 3 + index] = static_cast<uint8_t>(val * std::numeric_limits<uint8_t>::max());
-      } else if (level == ColorCompactLevel::kLowQuality && 0 <= index && index < 6) {
-        constexpr uint8_t kMaxVal = 1 << 4;
-        auto tmp_val = static_cast<uint8_t>(val * kMaxVal);
-        rgb_data[i * 3 + index / 2] |= (tmp_val << (index % 2 ? 0 : 4));
-      }
+    /* Step 3. Convert linear sRGB to sRGB */
+    SrgbGamma(&val, 1);
+    if (level == ColorCompactLevel::kMonoChrome && 0 <= index && index < 3) {
+      rgb_data[i * 3 + index] = static_cast<uint8_t>(val * std::numeric_limits<uint8_t>::max());
+    } else if (level == ColorCompactLevel::kLowQuality && 0 <= index && index < 6) {
+      constexpr uint8_t kMaxVal = 1 << 4;
+      auto tmp_val = static_cast<uint8_t>(val * kMaxVal);
+      rgb_data[i * 3 + index / 2] |= (tmp_val << (index % 2 ? 0 : 4));
     }
   }
 }
@@ -700,16 +663,11 @@ void SpectrumRenderer::RenderToImage() {
 
   constexpr uint8_t kColorMaxVal = std::numeric_limits<uint8_t>::max();
   if (color_compact_level == ColorCompactLevel::kTrueColor) {
-    RenderSpecToRgb(spectrum_data_, img_wid * img_hei, factor, output_image_buffer_.get());
-    bool use_rgb = ray_color[0] < 0;
+    RenderSpecToRgb(spectrum_data_, img_wid * img_hei, factor, ray_color, output_image_buffer_.get());
     for (int i = 0; i < img_wid * img_hei; i++) {
       for (int c = 0; c < 3; c++) {
         auto v = static_cast<int>(background_color[c] * kColorMaxVal);
-        if (use_rgb) {
-          v += output_image_buffer_[i * 3 + c];
-        } else {
-          v += static_cast<int>(output_image_buffer_[i * 3 + c] * 1.0 * ray_color[c]);
-        }
+        v += output_image_buffer_[i * 3 + c];
         v = std::max(std::min(v, static_cast<int>(kColorMaxVal)), 0);
         output_image_buffer_[i * 3 + c] = static_cast<uint8_t>(v);
       }

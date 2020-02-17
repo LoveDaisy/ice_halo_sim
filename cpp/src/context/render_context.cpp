@@ -343,8 +343,8 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   } else if (p->IsArray()) {
     auto pa = p->GetArray();
     float r = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    float g = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    float b = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
+    float g = static_cast<float>(std::min(std::max(pa[1].GetDouble(), 0.0), 1.0));
+    float b = static_cast<float>(std::min(std::max(pa[2].GetDouble(), 0.0), 1.0));
     SetRayColor(r, g, b);
   }
 }
