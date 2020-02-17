@@ -456,10 +456,11 @@ constexpr float kCmfZ[] = {
 };
 
 
-void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,  // spec_data: wavelength_number * data_number
-                     size_t data_number, float factor,                 //
-                     const float* ray_color, uint8_t* rgb_data) {      // rgb data, data_number * 3
-  bool use_real_color = rgb_data[0] < 0;
+void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,        // spectrum data
+                     size_t data_number, float factor,                       //
+                     const float* background_color, const float* ray_color,  // background and ray color
+                     uint8_t* rgb_data) {                                    // rgb data, data_number * 3
+  bool use_real_color = ray_color[0] < 0;
   for (size_t i = 0; i < data_number; i++) {
     /* Step 1. Spectrum to XYZ */
     float xyz[3]{};
@@ -510,6 +511,7 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,  // spec_d
       if (!use_real_color) {
         rgb[j] *= ray_color[j];
       }
+      rgb[j] += background_color[j];
     }
 
     /* Step 3. Convert linear sRGB to sRGB */
@@ -661,17 +663,8 @@ void SpectrumRenderer::RenderToImage() {
   auto factor = static_cast<float>(img_hei * img_wid / 160.0 / total_w_ * render_ctx_->GetIntensity());
   auto color_compact_level = render_ctx_->GetColorCompactLevel();
 
-  constexpr uint8_t kColorMaxVal = std::numeric_limits<uint8_t>::max();
   if (color_compact_level == ColorCompactLevel::kTrueColor) {
-    RenderSpecToRgb(spectrum_data_, img_wid * img_hei, factor, ray_color, output_image_buffer_.get());
-    for (int i = 0; i < img_wid * img_hei; i++) {
-      for (int c = 0; c < 3; c++) {
-        auto v = static_cast<int>(background_color[c] * kColorMaxVal);
-        v += output_image_buffer_[i * 3 + c];
-        v = std::max(std::min(v, static_cast<int>(kColorMaxVal)), 0);
-        output_image_buffer_[i * 3 + c] = static_cast<uint8_t>(v);
-      }
-    }
+    RenderSpecToRgb(spectrum_data_, img_wid * img_hei, factor, background_color, ray_color, output_image_buffer_.get());
   } else {
     auto ch_num = std::min(spectrum_data_.size(), kImageBits / static_cast<size_t>(color_compact_level));
     for (size_t i = 0; i < ch_num; i++) {
