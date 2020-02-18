@@ -333,8 +333,8 @@ void ProjectContext::ParseMultiScatterSettings(rapidjson::Document& d) {
 }
 
 
-std::vector<uint16_t> GetReverseRayPath(const Crystal* crystal, const RaySegment* last_ray) {
-  std::vector<uint16_t> result;
+CrystalRayPath GetReverseRayPath(const Crystal* crystal, const RaySegment* last_ray) {
+  CrystalRayPath result;
   auto p = last_ray;
   while (p) {
     while (p->prev) {

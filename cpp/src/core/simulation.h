@@ -52,10 +52,10 @@ struct SimpleRayData : public ISerializable {
 
 struct SimpleRayPathData {
   size_t ray_path_hash;
-  std::vector<uint16_t> ray_path;
+  CrystalRayPath ray_path;
   SimpleRayData ray_data;
 
-  SimpleRayPathData(size_t hash, std::vector<uint16_t> ray_path, SimpleRayData ray_data);
+  SimpleRayPathData(size_t hash, CrystalRayPath ray_path, SimpleRayData ray_data);
   SimpleRayPathData(SimpleRayPathData&& other) noexcept;
 
   SimpleRayPathData& operator=(SimpleRayPathData&& other) noexcept;

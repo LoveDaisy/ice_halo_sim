@@ -20,7 +20,7 @@ class CrystalTest : public ::testing::Test {
     }
   }
 
-  static void CheckFaceId(const std::vector<int>& ids1, const std::vector<int>& ids2) {
+  static void CheckFaceId(const icehalo::FaceNumberTable& ids1, const icehalo::FaceNumberTable& ids2) {
     ASSERT_EQ(ids1.size(), ids2.size());
     for (decltype(ids1.size()) i = 0; i < ids1.size(); i++) {
       EXPECT_EQ(ids1[i], ids2[i]);
@@ -30,8 +30,8 @@ class CrystalTest : public ::testing::Test {
   static void CheckCrystal(const icehalo::CrystalPtrU& c1, const icehalo::CrystalPtrU& c2) {
     auto n1 = c1->GetFaceNorm();
     auto n2 = c2->GetFaceNorm();
-    auto fn1 = c1->GetFaceNumberMap();
-    auto fn2 = c2->GetFaceNumberMap();
+    auto fn1 = c1->GetFaceNumberTable();
+    auto fn2 = c2->GetFaceNumberTable();
 
     ASSERT_EQ(c1->TotalFaces(), c2->TotalFaces());
     ASSERT_EQ(fn1.size(), fn2.size());
@@ -97,13 +97,13 @@ TEST_F(CrystalTest, CreateNotNull) {
   EXPECT_NE(c, nullptr);
 
   /* IrregularHexPrism */
-  float dist[6] = { 1.0f, 1.0f, 1.5f, 1.0f, 2.5f, 1.0f };
+  float dist[6]{ 1.0f, 1.0f, 1.5f, 1.0f, 2.5f, 1.0f };
   c = icehalo::Crystal::CreateIrregularHexPrism(dist, 1.2f);
   EXPECT_NE(c, nullptr);
 
   /* IrregularHexPyramid */
-  int idx[4] = { 1, 1, 1, 1 };
-  float h[3] = { 0.3f, 1.2f, 0.9f };
+  int idx[4]{ 1, 1, 1, 1 };
+  float h[3]{ 0.3f, 1.2f, 0.9f };
   c = icehalo::Crystal::CreateIrregularHexPyramid(dist, idx, h);
   EXPECT_NE(c, nullptr);
 }
@@ -116,7 +116,7 @@ TEST_F(CrystalTest, HexPrismVertex) {
   float k = kSqrt3 / 2;
 
   // clang-format off
-  std::vector<icehalo::math::Vec3f> pts0 = {
+  std::vector<icehalo::math::Vec3f> pts0{
     {  k,    -0.5f,  h },
     {  k,     0.5f,  h },
     {  0.0f,  1.0f,  h },
@@ -132,14 +132,14 @@ TEST_F(CrystalTest, HexPrismVertex) {
   };
   // clang-format on
 
-  std::vector<int> face_number_map0 = {
+  icehalo::FaceNumberTable face_number_table0{
     1, 1, 1, 1, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 2, 2, 2, 2,
   };
 
   auto c = icehalo::Crystal::CreateHexPrism(h);
   EXPECT_EQ(c->GetVertexes().size(), 12ul);
   CheckVertex(pts0, c->GetVertexes());
-  CheckFaceId(face_number_map0, c->GetFaceNumberMap());
+  CheckFaceId(face_number_table0, c->GetFaceNumberTable());
 }
 
 
@@ -156,7 +156,7 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
   float k = kSqrt3 / 2;
 
   // clang-format off
-  std::vector<icehalo::math::Vec3f> pts0 = {
+  std::vector<icehalo::math::Vec3f> pts0{
     {     k * r1, -0.5f * r1,  h2 + h1 * H },
     {     k * r1,  0.5f * r1,  h2 + h1 * H },
     {  0.0f * r1,  1.0f * r1,  h2 + h1 * H },
@@ -184,7 +184,7 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
   };
   // clang-format on
 
-  std::vector<int> face_number_map0 = {
+  icehalo::FaceNumberTable face_number_table0{
     1,  1,  1,  1,                                   // top
     13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18,  // upper pyramidal
     3,  3,  4,  4,  5,  5,  6,  6,  7,  7,  8,  8,   // prism
@@ -195,17 +195,17 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
   auto c = icehalo::Crystal::CreateHexPyramid(h1, h2, h3);
   EXPECT_EQ(c->GetVertexes().size(), 24ul);
   CheckVertex(pts0, c->GetVertexes());
-  CheckFaceId(face_number_map0, c->GetFaceNumberMap());
+  CheckFaceId(face_number_table0, c->GetFaceNumberTable());
 
   c = icehalo::Crystal::CreateHexPyramid(1, 1, h1, h2, h3);
   EXPECT_EQ(c->GetVertexes().size(), 24ul);
   CheckVertex(pts0, c->GetVertexes());
-  CheckFaceId(face_number_map0, c->GetFaceNumberMap());
+  CheckFaceId(face_number_table0, c->GetFaceNumberTable());
 
   c = icehalo::Crystal::CreateHexPyramid(1, 1, 1, 1, h1, h2, h3);
   EXPECT_EQ(c->GetVertexes().size(), 24ul);
   CheckVertex(pts0, c->GetVertexes());
-  CheckFaceId(face_number_map0, c->GetFaceNumberMap());
+  CheckFaceId(face_number_table0, c->GetFaceNumberTable());
 }
 
 
@@ -214,9 +214,9 @@ TEST_F(CrystalTest, IrregularHexPyramid) {
   float h2 = 0.5;
   float h3 = 0.85;
 
-  float dist[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
-  int idx[4] = { 1, 1, 1, 1 };
-  float hs[3] = { h1, h2, h3 };
+  float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  int idx[4]{ 1, 1, 1, 1 };
+  float hs[3]{ h1, h2, h3 };
 
   auto c1 = icehalo::Crystal::CreateHexPyramid(h1, h2, h3);
   auto c2 = icehalo::Crystal::CreateIrregularHexPyramid(dist, idx, hs);
@@ -230,7 +230,7 @@ TEST_F(CrystalTest, IrregularHexPrismVertex0) {
   using icehalo::math::kSqrt3;
 
   float h = 1.2f;
-  float dist[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
 
   auto c1 = icehalo::Crystal::CreateHexPrism(h);
   auto c2 = icehalo::Crystal::CreateIrregularHexPrism(dist, h);
@@ -245,7 +245,7 @@ TEST_F(CrystalTest, IrregularHexPrismVertex1) {
   using icehalo::math::kSqrt3;
 
   float h = 1.2f;
-  float dist[6] = { 1.0f, 1.0f, 1.5f, 1.0f, 2.5f, 1.0f };
+  float dist[6]{ 1.0f, 1.0f, 1.5f, 1.0f, 2.5f, 1.0f };
 
   // clang-format off
   std::vector<icehalo::math::Vec3f> pts0 {
@@ -269,7 +269,7 @@ TEST_F(CrystalTest, IrregularHexPrismVertex1) {
     { 4, 5, 0 }, { 4, 9, 5 },
     { 5, 7, 6 }, { 5, 8, 7 }, { 5, 9, 8 },
   };
-  std::vector<int> face_number_map0 {
+  icehalo::FaceNumberTable face_number_map0 {
     1, 1, 1,
     3, 3,
     4, 4,

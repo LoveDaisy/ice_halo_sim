@@ -22,6 +22,13 @@ enum class CrystalType {
   kCustom,
 };
 
+using FaceNumberType = uint16_t;
+using FaceNumberTable = std::vector<FaceNumberType>;
+using CrystalRayPath = std::vector<FaceNumberType>;
+
+constexpr FaceNumberType kInvalidFaceNumber = 0xffff;
+
+
 class Crystal;
 using CrystalPtrU = std::unique_ptr<Crystal>;
 
@@ -31,11 +38,11 @@ class Crystal {
 
   int TotalVertexes() const;
   int TotalFaces() const;
-  int FaceNumber(int idx) const;
+  FaceNumberType FaceNumber(int idx) const;
 
   const std::vector<math::Vec3f>& GetVertexes() const;
   const std::vector<math::TriangleIdx>& GetFaces() const;
-  const std::vector<int>& GetFaceNumberMap() const;
+  const FaceNumberTable& GetFaceNumberTable() const;
 
   const float* GetFaceVertex() const;
   const float* GetFaceBaseVector() const;
@@ -147,7 +154,7 @@ class Crystal {
    */
   static CrystalPtrU CreateCustomCrystal(const std::vector<math::Vec3f>& pts,          // vertex points
                                          const std::vector<math::TriangleIdx>& faces,  // face indices
-                                         const std::vector<int>& face_number_map);     // face to face-number
+                                         const FaceNumberTable& face_number_table);    // face to face-number
 
  protected:
   void InitBasicData();
@@ -159,7 +166,7 @@ class Crystal {
   CrystalType type_;
   std::vector<math::Vec3f> vertexes_;
   std::vector<math::TriangleIdx> faces_;
-  std::vector<int> face_number_map_;
+  FaceNumberTable face_number_table_;
   int face_number_period_;
 
   std::unique_ptr<float[]> face_bases_;
@@ -189,7 +196,7 @@ class Crystal {
    */
   Crystal(std::vector<math::Vec3f> vertexes,     // vertex points
           std::vector<math::TriangleIdx> faces,  // face indices
-          std::vector<int> face_number_map,      // face to face number
+          FaceNumberTable face_number_table,     // face to face number
           CrystalType type);                     // crystal type
 };
 

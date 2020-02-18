@@ -20,7 +20,8 @@ enum Symmetry : uint8_t {
   kSymmetryRepeatedReflection = 8u,
 };
 
-size_t RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse = false);
+constexpr int kAutoDetectLength = -1;
+size_t RayPathHash(const CrystalRayPath& ray_path, bool reverse = false);
 size_t RayPathReverseHash(const Crystal* crystal, const RaySegment* last_ray, int length);
 
 
@@ -66,7 +67,7 @@ class NoneRayPathFilter : public AbstractRayPathFilter {
 
 class SpecificRayPathFilter : public AbstractRayPathFilter {
  public:
-  void AddPath(const std::vector<uint16_t>& path);
+  void AddPath(const CrystalRayPath& path);
   void ClearPaths();
 
   void ApplySymmetry(const Crystal* crystal) override;
@@ -78,14 +79,14 @@ class SpecificRayPathFilter : public AbstractRayPathFilter {
 
  private:
   std::unordered_set<size_t> ray_path_hashes_;
-  std::vector<std::vector<uint16_t>> ray_paths_;
+  std::vector<CrystalRayPath> ray_paths_;
 };
 
 
 class GeneralRayPathFilter : public AbstractRayPathFilter {
  public:
-  void AddEntryFace(uint16_t face_number);
-  void AddExitFace(uint16_t face_number);
+  void AddEntryFace(FaceNumberType face_number);
+  void AddExitFace(FaceNumberType face_number);
   void AddHitNumber(int hit_num);
   void ClearFaces();
   void ClearHitNumbers();
@@ -97,8 +98,8 @@ class GeneralRayPathFilter : public AbstractRayPathFilter {
   bool FilterPath(const Crystal* crystal, RaySegment* last_r) const override;
 
  private:
-  std::unordered_set<uint16_t> entry_faces_;
-  std::unordered_set<uint16_t> exit_faces_;
+  std::unordered_set<FaceNumberType> entry_faces_;
+  std::unordered_set<FaceNumberType> exit_faces_;
   std::unordered_set<int> hit_nums_;
 };
 

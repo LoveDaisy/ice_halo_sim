@@ -46,10 +46,10 @@ Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
 
 Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
                  std::vector<math::TriangleIdx> faces,  // face indices
-                 std::vector<int> face_number_map,      // face to face number
+                 FaceNumberTable face_number_table,     // face to face number
                  CrystalType type)                      // crystal type
     : type_(type), vertexes_(std::move(vertexes)), faces_(std::move(faces)),
-      face_number_map_(std::move(face_number_map)), face_number_period_(-1), face_bases_(nullptr),
+      face_number_table_(std::move(face_number_table)), face_number_period_(-1), face_bases_(nullptr),
       face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitBasicData();
 }
@@ -65,8 +65,8 @@ const std::vector<math::TriangleIdx>& Crystal::GetFaces() const {
 }
 
 
-const std::vector<int>& Crystal::GetFaceNumberMap() const {
-  return face_number_map_;
+const FaceNumberTable& Crystal::GetFaceNumberTable() const {
+  return face_number_table_;
 }
 
 
@@ -108,13 +108,13 @@ int Crystal::TotalFaces() const {
   return static_cast<int>(faces_.size());
 }
 
-int Crystal::FaceNumber(int idx) const {
-  if (face_number_map_.empty()) {
-    return -1;
-  } else if (idx < 0 || static_cast<size_t>(idx) >= face_number_map_.size()) {
-    return -1;
+FaceNumberType Crystal::FaceNumber(int idx) const {
+  if (face_number_table_.empty()) {
+    return kInvalidFaceNumber;
+  } else if (idx < 0 || static_cast<size_t>(idx) >= face_number_table_.size()) {
+    return kInvalidFaceNumber;
   } else {
-    return face_number_map_[idx];
+    return face_number_table_[idx];
   }
 }
 
@@ -193,7 +193,7 @@ void Crystal::InitFaceNumberHex() {
         max_face_number += 20;
       }
     }
-    face_number_map_.push_back(max_face_number);
+    face_number_table_.push_back(max_face_number);
   }
 }
 
@@ -217,7 +217,7 @@ void Crystal::InitFaceNumberCubic() {
         max_face_number += 20;
       }
     }
-    face_number_map_.push_back(max_face_number);
+    face_number_table_.push_back(max_face_number);
   }
 }
 
@@ -235,7 +235,7 @@ void Crystal::InitFaceNumberStack() {
         max_face_number = d.second;
       }
     }
-    face_number_map_.push_back(max_face_number);
+    face_number_table_.push_back(max_face_number);
 
     const auto idx = faces_[i].idx();
     for (int j = 0; j < 3; j++) {
@@ -250,7 +250,7 @@ void Crystal::InitFaceNumberStack() {
   }
 
   for (size_t i = 0; i < faces_.size(); i++) {
-    if (face_number_map_[i] < 3) {
+    if (face_number_table_[i] < 3) {
       continue;
     }
     const auto* idx = faces_[i].idx();
@@ -270,13 +270,13 @@ void Crystal::InitFaceNumberStack() {
     bool is_prism = std::abs(curr_face_norm[2]) < math::kFloatEps;
 
     if (is_top && !is_prism) {
-      face_number_map_[i] += 10;
+      face_number_table_[i] += 10;
     } else if (is_bottom && !is_prism) {
-      face_number_map_[i] += 20;
+      face_number_table_[i] += 20;
     } else if (is_upper && !is_prism) {
-      face_number_map_[i] += 30;
+      face_number_table_[i] += 30;
     } else if (is_lower && !is_prism) {
-      face_number_map_[i] += 40;
+      face_number_table_[i] += 40;
     }
   }
 }
@@ -680,8 +680,8 @@ CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<math::Vec3f>& pts,   
 
 CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<math::Vec3f>& pts,          // vertex points
                                          const std::vector<math::TriangleIdx>& faces,  // face indices
-                                         const std::vector<int>& face_number_map) {    // face to face number
-  return std::unique_ptr<Crystal>(new Crystal(pts, faces, face_number_map, CrystalType::kCustom));
+                                         const FaceNumberTable& face_number_table) {   // face to face number
+  return std::unique_ptr<Crystal>(new Crystal(pts, faces, face_number_table, CrystalType::kCustom));
 }
 
 }  // namespace icehalo

@@ -77,7 +77,7 @@ void SimpleRayData::Deserialize(File& file, endian::Endianness endianness) {
 }
 
 
-SimpleRayPathData::SimpleRayPathData(size_t hash, std::vector<uint16_t> ray_path, SimpleRayData ray_data)
+SimpleRayPathData::SimpleRayPathData(size_t hash, CrystalRayPath ray_path, SimpleRayData ray_data)
     : ray_path_hash(hash), ray_path(std::move(ray_path)), ray_data(std::move(ray_data)) {}
 
 
@@ -159,7 +159,7 @@ namespace ray_path_helper {
 
 struct RayPath {
   size_t hash;
-  std::vector<uint16_t> reverse_path;
+  CrystalRayPath reverse_path;
 
   bool operator==(const RayPath& other) const { return hash == other.hash; }
 };
@@ -181,7 +181,7 @@ struct RayPathStatsData {
 
 
 std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(const CrystalMap& crystal_map) const {
-  std::unordered_map<size_t, std::vector<uint16_t>> ray_path_map;
+  std::unordered_map<size_t, CrystalRayPath> ray_path_map;
   std::vector<size_t> ray_path_hash_list;
   std::unordered_map<size_t, ray_path_helper::RayPathStatsData> ray_path_stats;
   for (const auto& sr : exit_ray_segments_) {
@@ -190,7 +190,7 @@ std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(cons
         continue;
       }
       auto crystal = crystal_map.at(r->root_ctx->crystal_id);
-      auto ray_path_hash = RayPathReverseHash(crystal, r, -1);
+      auto ray_path_hash = RayPathReverseHash(crystal, r, kAutoDetectLength);
       ray_path_hash_list.emplace_back(ray_path_hash);
       if (!ray_path_map.count(ray_path_hash)) {
         ray_path_map.emplace(ray_path_hash, GetReverseRayPath(crystal, r));  // includes multi-scatter

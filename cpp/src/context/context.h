@@ -94,7 +94,7 @@ class ProjectContext {
 };
 
 
-std::vector<uint16_t> GetReverseRayPath(const Crystal* crystal, const RaySegment* last_ray);
+CrystalRayPath GetReverseRayPath(const Crystal* crystal, const RaySegment* last_ray);
 
 }  // namespace icehalo
 

@@ -139,7 +139,7 @@ void AbstractRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
 }
 
 
-size_t RayPathHash(const std::vector<uint16_t>& ray_path, bool reverse) {
+size_t RayPathHash(const CrystalRayPath& ray_path, bool reverse) {
   constexpr size_t kStep = 7;
   constexpr size_t kTotalBits = sizeof(size_t) * CHAR_BIT;
 
@@ -170,7 +170,7 @@ size_t RayPathReverseHash(const Crystal* crystal,                    // used for
   constexpr size_t kStep = 7;
   constexpr size_t kTotalBits = sizeof(size_t) * CHAR_BIT;
 
-  if (length < 0) {
+  if (length == kAutoDetectLength || length < 0) {
     length = 0;
     auto p = last_ray;
     while (p->prev) {
@@ -207,7 +207,7 @@ void NoneRayPathFilter::SaveToJson(rapidjson::Value& root, rapidjson::Value::All
 }
 
 
-void SpecificRayPathFilter::AddPath(const std::vector<uint16_t>& path) {
+void SpecificRayPathFilter::AddPath(const CrystalRayPath& path) {
   ray_paths_.emplace_back(path);
 }
 
@@ -218,7 +218,7 @@ void SpecificRayPathFilter::ClearPaths() {
 
 
 void SpecificRayPathFilter::ApplySymmetry(const Crystal* crystal) {
-  std::vector<std::vector<uint16_t>> augmented_ray_paths;
+  std::vector<CrystalRayPath> augmented_ray_paths;
 
   // Add the original path.
   for (const auto& rp : ray_paths_) {
@@ -227,15 +227,15 @@ void SpecificRayPathFilter::ApplySymmetry(const Crystal* crystal) {
 
   // Add symmetry P.
   auto period = crystal->GetFaceNumberPeriod();
-  std::vector<uint16_t> tmp_ray_path;
+  CrystalRayPath tmp_ray_path;
   if (period > 0 && (symmetry_flag_ & kSymmetryPrism)) {
-    std::vector<std::vector<uint16_t>> ray_paths_copy(augmented_ray_paths);
+    decltype(augmented_ray_paths) ray_paths_copy(augmented_ray_paths);
     for (const auto& rp : ray_paths_copy) {
       for (int i = 0; i < period; i++) {
         tmp_ray_path.clear();
         for (auto fn : rp) {
           if (fn != 1 && fn != 2) {
-            fn = static_cast<uint16_t>((fn + period + i - 3) % period + 3);
+            fn = static_cast<FaceNumberType>((fn + period + i - 3) % period + 3);
           }
           tmp_ray_path.emplace_back(fn);
         }
@@ -246,12 +246,12 @@ void SpecificRayPathFilter::ApplySymmetry(const Crystal* crystal) {
 
   // Add symmetry B.
   if (symmetry_flag_ & kSymmetryBasal) {
-    std::vector<std::vector<uint16_t>> ray_paths_copy(augmented_ray_paths);
+    decltype(augmented_ray_paths) ray_paths_copy(augmented_ray_paths);
     for (const auto& rp : ray_paths_copy) {
       tmp_ray_path.clear();
       for (auto fn : rp) {
         if (fn == 1 || fn == 2) {
-          fn = static_cast<uint16_t>(fn % 2 + 1);
+          fn = static_cast<FaceNumberType>(fn % 2 + 1);
         }
         tmp_ray_path.emplace_back(fn);
       }
@@ -261,12 +261,12 @@ void SpecificRayPathFilter::ApplySymmetry(const Crystal* crystal) {
 
   // Add symmetry D.
   if (period > 0 && (symmetry_flag_ & kSymmetryDirection)) {
-    std::vector<std::vector<uint16_t>> ray_paths_copy(augmented_ray_paths);
+    decltype(augmented_ray_paths) ray_paths_copy(augmented_ray_paths);
     for (const auto& rp : ray_paths_copy) {
       tmp_ray_path.clear();
       for (auto fn : rp) {
         if (fn != 1 && fn != 2) {
-          fn = static_cast<uint16_t>(5 + period - fn);
+          fn = static_cast<FaceNumberType>(5 + period - fn);
         }
         tmp_ray_path.emplace_back(fn);
       }
@@ -288,7 +288,7 @@ bool SpecificRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_
   }
 
   int curr_fn0 = crystal->FaceNumber(last_r->root_ctx->first_ray_segment->face_id);
-  if (curr_fn0 < 0 || crystal->GetFaceNumberPeriod() < 0) {  // If do not have face number mapping.
+  if (curr_fn0 == kInvalidFaceNumber || crystal->GetFaceNumberPeriod() < 0) {  // If do not have face number mapping.
     return true;
   }
 
@@ -297,7 +297,7 @@ bool SpecificRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_
   auto p = last_r;
   while (p->prev) {
     int curr_fn = crystal->FaceNumber(p->face_id);
-    if (curr_fn < 0) {
+    if (curr_fn == kInvalidFaceNumber) {
       return false;
     }
     p = p->prev;
@@ -358,7 +358,7 @@ void SpecificRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
   if (p->GetArray().Empty()) {
     std::fprintf(stderr, "<path> is empty. Ignore this setting.\n");
   } else if (p->GetArray()[0].IsInt()) {
-    std::vector<uint16_t> tmp_path;
+    CrystalRayPath tmp_path;
     for (auto const& pi : p->GetArray()) {
       if (!pi.IsInt()) {
         throw std::invalid_argument("<path> cannot recognize!");
@@ -371,7 +371,7 @@ void SpecificRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
       if (pi.GetArray().Empty()) {
         throw std::invalid_argument("<path> cannot recognize!");
       }
-      std::vector<uint16_t> tmp_path;
+      CrystalRayPath tmp_path;
       for (const auto& pii : pi.GetArray()) {
         if (!pii.IsInt()) {
           throw std::invalid_argument("<path> cannot recognize!");
@@ -384,12 +384,12 @@ void SpecificRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
 }
 
 
-void GeneralRayPathFilter::AddEntryFace(uint16_t face_number) {
+void GeneralRayPathFilter::AddEntryFace(FaceNumberType face_number) {
   entry_faces_.emplace(face_number);
 }
 
 
-void GeneralRayPathFilter::AddExitFace(uint16_t face_number) {
+void GeneralRayPathFilter::AddExitFace(FaceNumberType face_number) {
   exit_faces_.emplace(face_number);
 }
 
@@ -427,15 +427,14 @@ bool GeneralRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_r
     }
   }
 
-  int curr_entry_fn = crystal->FaceNumber(last_r->root_ctx->first_ray_segment->face_id);
-  int curr_exit_fn = crystal->FaceNumber(last_r->face_id);
-  if (curr_entry_fn < 0 || curr_exit_fn < 0 ||
+  auto curr_entry_fn = crystal->FaceNumber(last_r->root_ctx->first_ray_segment->face_id);
+  auto curr_exit_fn = crystal->FaceNumber(last_r->face_id);
+  if (curr_entry_fn == kInvalidFaceNumber || curr_exit_fn == kInvalidFaceNumber ||
       crystal->GetFaceNumberPeriod() < 0) {  // If do not have a face number mapping
     return true;
   }
 
-  return entry_faces_.count(static_cast<uint16_t>(curr_entry_fn)) != 0 &&
-         exit_faces_.count(static_cast<uint16_t>(curr_exit_fn)) != 0;
+  return entry_faces_.count(curr_entry_fn) != 0 && exit_faces_.count(curr_exit_fn) != 0;
 }
 
 
