@@ -24,7 +24,6 @@ enum class CrystalType {
 
 using FaceNumberType = uint16_t;
 using FaceNumberTable = std::vector<FaceNumberType>;
-using CrystalRayPath = std::vector<FaceNumberType>;
 
 constexpr FaceNumberType kInvalidFaceNumber = 0xffff;
 
