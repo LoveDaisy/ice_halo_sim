@@ -4,17 +4,14 @@
 #include <memory>
 #include <string>
 
-#include "io/serialize.h"
+#include "core/core_def.hpp"
+#include "io/serialize.hpp"
 #include "rapidjson/document.h"
 
 
 namespace icehalo {
 
-class CameraContext;
 enum class LensType;
-
-using CameraContextPtrU = std::unique_ptr<CameraContext>;
-using CameraContextPtr = std::shared_ptr<CameraContext>;
 
 class CameraContext : public IJsonizable {
  public:

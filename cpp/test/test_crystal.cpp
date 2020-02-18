@@ -1,8 +1,8 @@
 #include <algorithm>
 #include <vector>
 
-#include "core/crystal.h"
-#include "core/mymath.h"
+#include "core/crystal.hpp"
+#include "core/mymath.hpp"
 #include "gtest/gtest.h"
 
 namespace {
@@ -20,7 +20,8 @@ class CrystalTest : public ::testing::Test {
     }
   }
 
-  static void CheckFaceId(const icehalo::FaceNumberTable& ids1, const icehalo::FaceNumberTable& ids2) {
+  static void CheckFaceId(const icehalo::Crystal::FaceNumberTable& ids1,
+                          const icehalo::Crystal::FaceNumberTable& ids2) {
     ASSERT_EQ(ids1.size(), ids2.size());
     for (decltype(ids1.size()) i = 0; i < ids1.size(); i++) {
       EXPECT_EQ(ids1[i], ids2[i]);
@@ -132,7 +133,7 @@ TEST_F(CrystalTest, HexPrismVertex) {
   };
   // clang-format on
 
-  icehalo::FaceNumberTable face_number_table0{
+  icehalo::Crystal::FaceNumberTable face_number_table0{
     1, 1, 1, 1, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 2, 2, 2, 2,
   };
 
@@ -184,7 +185,7 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
   };
   // clang-format on
 
-  icehalo::FaceNumberTable face_number_table0{
+  icehalo::Crystal::FaceNumberTable face_number_table0{
     1,  1,  1,  1,                                   // top
     13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18,  // upper pyramidal
     3,  3,  4,  4,  5,  5,  6,  6,  7,  7,  8,  8,   // prism
@@ -269,7 +270,7 @@ TEST_F(CrystalTest, IrregularHexPrismVertex1) {
     { 4, 5, 0 }, { 4, 9, 5 },
     { 5, 7, 6 }, { 5, 8, 7 }, { 5, 9, 8 },
   };
-  icehalo::FaceNumberTable face_number_map0 {
+  icehalo::Crystal::FaceNumberTable face_number_map0 {
     1, 1, 1,
     3, 3,
     4, 4,

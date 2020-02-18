@@ -1,6 +1,6 @@
-#include "core/crystal.h"
-#include "core/optics.h"
-#include "core/simulation.h"
+#include "core/crystal.hpp"
+#include "core/optics.hpp"
+#include "core/simulation.hpp"
 #include "gtest/gtest.h"
 
 extern std::string config_file_name;

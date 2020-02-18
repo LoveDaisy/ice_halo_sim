@@ -6,9 +6,9 @@
 #include <mutex>
 #include <vector>
 
-#include "core/crystal.h"
-#include "core/mymath.h"
-#include "io/serialize.h"
+#include "core/crystal.hpp"
+#include "core/mymath.hpp"
+#include "io/serialize.hpp"
 
 
 namespace icehalo {

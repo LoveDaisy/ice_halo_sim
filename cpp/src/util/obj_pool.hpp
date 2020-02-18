@@ -7,7 +7,7 @@
 #include <type_traits>
 #include <vector>
 
-#include "io/serialize.h"
+#include "io/serialize.hpp"
 
 namespace icehalo {
 

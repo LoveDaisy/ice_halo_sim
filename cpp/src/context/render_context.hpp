@@ -3,17 +3,14 @@
 
 #include <memory>
 
-#include "io/serialize.h"
+#include "core/core_def.hpp"
+#include "io/serialize.hpp"
 #include "rapidjson/document.h"
 
 
 namespace icehalo {
 
 enum class VisibleRange;
-class RenderContext;
-using RenderContextPtrU = std::unique_ptr<RenderContext>;
-using RenderContextPtr = std::shared_ptr<RenderContext>;
-
 
 enum class ColorCompactLevel : int {
   kTrueColor = 24,  //!< True color, use all 24-bit

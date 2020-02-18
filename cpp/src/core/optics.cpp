@@ -1,4 +1,4 @@
-#include "optics.h"
+#include "optics.hpp"
 
 #include <immintrin.h>
 #include <smmintrin.h>
@@ -8,9 +8,9 @@
 #include <cmath>
 #include <limits>
 
-#include "context/context.h"
-#include "core/mymath.h"
-#include "util/obj_pool.h"
+#include "context/context.hpp"
+#include "core/mymath.hpp"
+#include "util/obj_pool.hpp"
 
 
 namespace icehalo {

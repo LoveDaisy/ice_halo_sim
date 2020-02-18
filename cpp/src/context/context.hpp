@@ -6,25 +6,20 @@
 #include <string>
 #include <vector>
 
-#include "context/camera_context.h"
-#include "context/crystal_context.h"
-#include "context/filter_context.h"
-#include "context/multi_scatter_context.h"
-#include "context/render_context.h"
-#include "context/sun_context.h"
-#include "core/crystal.h"
-#include "core/optics.h"
-#include "io/serialize.h"
+#include "context/camera_context.hpp"
+#include "context/crystal_context.hpp"
+#include "context/filter_context.hpp"
+#include "context/multi_scatter_context.hpp"
+#include "context/render_context.hpp"
+#include "context/sun_context.hpp"
+#include "core/core_def.hpp"
+#include "core/crystal.hpp"
+#include "core/optics.hpp"
+#include "io/serialize.hpp"
 #include "rapidjson/document.h"
 
 
 namespace icehalo {
-
-constexpr int kInvalidId = std::numeric_limits<int>::lowest();
-
-class ProjectContext;
-using ProjectContextPtrU = std::unique_ptr<ProjectContext>;
-using ProjectContextPtr = std::shared_ptr<ProjectContext>;
 
 
 struct WavelengthInfo {

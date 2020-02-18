@@ -3,16 +3,12 @@
 
 #include <memory>
 
-#include "io/serialize.h"
+#include "core/core_def.hpp"
+#include "io/serialize.hpp"
 #include "rapidjson/document.h"
 
 
 namespace icehalo {
-
-class SunContext;
-
-using SunContextPtrU = std::unique_ptr<SunContext>;
-using SunContextPtr = std::shared_ptr<SunContext>;
 
 class SunContext : public IJsonizable {
  public:

@@ -1,4 +1,4 @@
-#include "core/crystal.h"
+#include "core/crystal.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -65,7 +65,7 @@ const std::vector<math::TriangleIdx>& Crystal::GetFaces() const {
 }
 
 
-const FaceNumberTable& Crystal::GetFaceNumberTable() const {
+const Crystal::FaceNumberTable& Crystal::GetFaceNumberTable() const {
   return face_number_table_;
 }
 

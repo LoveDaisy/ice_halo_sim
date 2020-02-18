@@ -1,10 +1,10 @@
-#include "context/crystal_context.h"
+#include "context/crystal_context.hpp"
 
 #include <algorithm>
 #include <limits>
 
-#include "context/context.h"
-#include "core/enum_map.h"
+#include "context/context.hpp"
+#include "core/enum_map.hpp"
 #include "rapidjson/document.h"
 #include "rapidjson/pointer.h"
 

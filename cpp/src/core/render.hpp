@@ -4,10 +4,11 @@
 #include <functional>
 #include <unordered_map>
 
-#include "context/context.h"
-#include "core/enum_map.h"
-#include "core/simulation.h"
-#include "io/file.h"
+#include "context/context.hpp"
+#include "core/core_def.hpp"
+#include "core/enum_map.hpp"
+#include "core/simulation.hpp"
+#include "io/file.hpp"
 
 
 namespace icehalo {
@@ -82,7 +83,6 @@ EnumMap<LensType, ProjectionFunction>& GetProjectionFunctions();
 
 
 using ImageSpectrumData = std::pair<size_t, std::unique_ptr<float[]>>;
-
 
 void SrgbGamma(float* linear_rgb, size_t num = 3);
 void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,   // spec_data: wavelength_number * data_number

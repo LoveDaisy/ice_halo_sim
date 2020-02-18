@@ -1,13 +1,13 @@
-#include "render.h"
+#include "render.hpp"
 
 #include <cmath>
 #include <cstring>
 #include <limits>
 #include <utility>
 
-#include "context/context.h"
-#include "core/mymath.h"
-#include "util/threadingpool.h"
+#include "context/context.hpp"
+#include "core/mymath.hpp"
+#include "util/threadingpool.hpp"
 
 namespace icehalo {
 

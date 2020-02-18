@@ -1,8 +1,8 @@
-#include "context/sun_context.h"
+#include "context/sun_context.hpp"
 
 #include <algorithm>
 
-#include "core/optics.h"
+#include "core/optics.hpp"
 #include "rapidjson/filereadstream.h"
 #include "rapidjson/pointer.h"
 

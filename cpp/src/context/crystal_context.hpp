@@ -4,14 +4,12 @@
 #include <memory>
 #include <unordered_map>
 
-#include "core/crystal.h"
-#include "io/serialize.h"
+#include "core/core_def.hpp"
+#include "core/crystal.hpp"
+#include "io/serialize.hpp"
 
 
 namespace icehalo {
-
-class CrystalContext;
-using CrystalContextPtrU = std::unique_ptr<CrystalContext>;
 
 class CrystalContext : public IJsonizable {
  public:
@@ -58,9 +56,6 @@ class CrystalContext : public IJsonizable {
   float d_param_[6];
   std::string file_param_;
 };
-
-
-using CrystalMap = std::unordered_map<int, const Crystal*>;
 
 
 }  // namespace icehalo

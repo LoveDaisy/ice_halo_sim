@@ -3,14 +3,12 @@
 
 #include <memory>
 
-#include "io/serialize.h"
+#include "core/core_def.hpp"
+#include "io/serialize.hpp"
 #include "rapidjson/document.h"
 
 
 namespace icehalo {
-
-class MultiScatterContext;
-using MultiScatterContextPtrU = std::unique_ptr<MultiScatterContext>;
 
 class MultiScatterContext : public IJsonizable {
  public:

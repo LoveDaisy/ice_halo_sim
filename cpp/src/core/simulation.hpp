@@ -3,10 +3,10 @@
 
 #include <vector>
 
-#include "context/context.h"
-#include "core/crystal.h"
-#include "core/optics.h"
-#include "io/serialize.h"
+#include "context/context.hpp"
+#include "core/crystal.hpp"
+#include "core/optics.hpp"
+#include "io/serialize.hpp"
 
 namespace icehalo {
 

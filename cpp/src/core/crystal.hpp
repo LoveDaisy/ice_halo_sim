@@ -5,7 +5,8 @@
 #include <utility>
 #include <vector>
 
-#include "core/mymath.h"
+#include "core/core_def.hpp"
+#include "core/mymath.hpp"
 
 namespace icehalo {
 
@@ -22,15 +23,6 @@ enum class CrystalType {
   kCustom,
 };
 
-using FaceNumberType = uint16_t;
-using FaceNumberTable = std::vector<FaceNumberType>;
-
-constexpr FaceNumberType kInvalidFaceNumber = 0xffff;
-
-
-class Crystal;
-using CrystalPtrU = std::unique_ptr<Crystal>;
-
 class Crystal {
  public:
   CrystalType GetType() const;
@@ -39,6 +31,7 @@ class Crystal {
   int TotalFaces() const;
   FaceNumberType FaceNumber(int idx) const;
 
+  using FaceNumberTable = std::vector<FaceNumberType>;
   const std::vector<math::Vec3f>& GetVertexes() const;
   const std::vector<math::TriangleIdx>& GetFaces() const;
   const FaceNumberTable& GetFaceNumberTable() const;

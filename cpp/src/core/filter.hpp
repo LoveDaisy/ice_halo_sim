@@ -5,9 +5,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "core/crystal.h"
-#include "core/optics.h"
-#include "io/serialize.h"
+#include "core/core_def.hpp"
+#include "core/crystal.hpp"
+#include "core/optics.hpp"
+#include "io/serialize.hpp"
 
 
 namespace icehalo {
@@ -20,14 +21,8 @@ enum Symmetry : uint8_t {
   kSymmetryRepeatedReflection = 8u,
 };
 
-using CrystalRayPath = std::vector<FaceNumberType>;
-
-constexpr int kAutoDetectLength = -1;
 size_t RayPathHash(const CrystalRayPath& ray_path, bool reverse = false);
 size_t RayPathReverseHash(const Crystal* crystal, const RaySegment* last_ray, int length);
-
-void MakeSymmetryExtension(const CrystalRayPath& ref_ray_path,                         // the reference ray path
-                           std::unordered_map<size_t, CrystalRayPath>& ray_path_set);  // the ray path extension set
 
 
 class AbstractRayPathFilter : public IJsonizable {

@@ -2,9 +2,9 @@
 #include <cstdio>
 #include <opencv2/opencv.hpp>
 
-#include "context/context.h"
-#include "core/render.h"
-#include "core/simulation.h"
+#include "context/context.hpp"
+#include "core/render.hpp"
+#include "core/simulation.hpp"
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-noreturn"

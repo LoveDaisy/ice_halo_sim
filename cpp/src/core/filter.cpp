@@ -1,7 +1,7 @@
 #include <algorithm>
 #include <limits>
 
-#include "context/filter_context.h"
+#include "context/filter_context.hpp"
 #include "rapidjson/document.h"
 #include "rapidjson/pointer.h"
 

@@ -1,11 +1,11 @@
-#include "context/context.h"
+#include "context/context.hpp"
 
 #include <algorithm>
 #include <limits>
 #include <utility>
 
-#include "core/optics.h"
-#include "core/render.h"
+#include "core/optics.hpp"
+#include "core/render.hpp"
 #include "rapidjson/error/en.h"
 #include "rapidjson/filereadstream.h"
 #include "rapidjson/pointer.h"

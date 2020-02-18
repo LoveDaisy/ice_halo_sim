@@ -2,8 +2,8 @@
 #include <cstdio>
 #include <opencv2/opencv.hpp>
 
-#include "context/context.h"
-#include "core/render.h"
+#include "context/context.hpp"
+#include "core/render.hpp"
 
 int main(int argc, char* argv[]) {
   if (argc != 2) {

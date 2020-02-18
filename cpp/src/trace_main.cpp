@@ -1,7 +1,7 @@
 #include <chrono>
 
-#include "context/context.h"
-#include "core/simulation.h"
+#include "context/context.hpp"
+#include "core/simulation.hpp"
 
 using namespace icehalo;
 

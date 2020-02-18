@@ -1,8 +1,8 @@
-#include "context/camera_context.h"
+#include "context/camera_context.hpp"
 
 #include <algorithm>
 
-#include "core/render.h"
+#include "core/render.hpp"
 #include "rapidjson/filereadstream.h"
 #include "rapidjson/pointer.h"
 

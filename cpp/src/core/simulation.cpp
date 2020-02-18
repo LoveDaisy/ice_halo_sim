@@ -1,13 +1,13 @@
-#include "simulation.h"
+#include "simulation.hpp"
 
 #include <cstdio>
 #include <functional>
 #include <stack>
 #include <utility>
 
-#include "core/mymath.h"
-#include "util/obj_pool.h"
-#include "util/threadingpool.h"
+#include "core/mymath.hpp"
+#include "util/obj_pool.hpp"
+#include "util/threadingpool.hpp"
 
 namespace icehalo {
 

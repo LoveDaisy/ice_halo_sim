@@ -5,10 +5,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "core/crystal.h"
-#include "core/filter.h"
-#include "core/optics.h"
-#include "io/serialize.h"
+#include "core/crystal.hpp"
+#include "core/filter.hpp"
+#include "core/optics.hpp"
+#include "io/serialize.hpp"
 
 
 namespace icehalo {

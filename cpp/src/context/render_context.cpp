@@ -1,8 +1,8 @@
-#include "context/render_context.h"
+#include "context/render_context.hpp"
 
 #include <algorithm>
 
-#include "core/render.h"
+#include "core/render.hpp"
 #include "rapidjson/filereadstream.h"
 #include "rapidjson/pointer.h"
 

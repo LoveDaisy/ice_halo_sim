@@ -1,9 +1,9 @@
-#include "context/multi_scatter_context.h"
+#include "context/multi_scatter_context.hpp"
 
 #include <algorithm>
 
 #include "rapidjson/pointer.h"
-#include "util/threadingpool.h"
+#include "util/threadingpool.hpp"
 
 
 namespace icehalo {
