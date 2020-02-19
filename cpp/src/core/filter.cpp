@@ -195,7 +195,9 @@ void SpecificRayPathFilter::ApplySymmetry(const CrystalContext* crystal_ctx) {
   std::vector<RayPath> augmented_ray_paths{};
 
   // Add the original path.
-  for (const auto& rp : ray_paths_) {
+  for (auto rp : ray_paths_) {
+    rp.insert(rp.begin(), crystal_ctx->GetId());
+    rp.emplace_back(kInvalidFaceNumber);
     auto tmp_ray_path_list = MakeSymmetryExtension({}, rp, crystal_ctx, symmetry_flag_);
     for (auto& p : tmp_ray_path_list) {
       augmented_ray_paths.emplace_back(p);
@@ -414,11 +416,8 @@ void GeneralRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
 }
 
 
-std::vector<RayPath> MakeSymmetryExtension(const std::vector<RayPath>& ray_path_list, RayPath curr_ray_path,
+std::vector<RayPath> MakeSymmetryExtension(const std::vector<RayPath>& ray_path_list, const RayPath& curr_ray_path,
                                            const CrystalContext* crystal_ctx, uint8_t symmetry_flag) {
-  curr_ray_path.insert(curr_ray_path.begin(), crystal_ctx->GetId());
-  curr_ray_path.emplace_back(kInvalidFaceNumber);
-
   std::vector<RayPath> ray_path_extension{};
   ray_path_extension.emplace_back(curr_ray_path);
 
@@ -478,11 +477,15 @@ std::vector<RayPath> MakeSymmetryExtension(const std::vector<RayPath>& ray_path_
   }
 
   std::vector<RayPath> result;
-  for (const auto& rp : ray_path_list) {
-    for (const auto& p : ray_path_extension) {
-      result.emplace_back(rp);
-      for (const auto& fn : p) {
-        result.back().emplace_back(fn);
+  if (ray_path_list.empty()) {
+    result.swap(ray_path_extension);
+  } else {
+    for (const auto& rp : ray_path_list) {
+      for (const auto& p : ray_path_extension) {
+        result.emplace_back(rp);
+        for (const auto& fn : p) {
+          result.back().emplace_back(fn);
+        }
       }
     }
   }

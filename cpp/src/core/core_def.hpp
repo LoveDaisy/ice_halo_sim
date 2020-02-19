@@ -39,7 +39,7 @@ using SunContextPtr = std::shared_ptr<SunContext>;
 class Crystal;
 using CrystalPtrU = std::unique_ptr<Crystal>;
 
-using CrystalMap = std::unordered_map<int, const Crystal*>;
+using CrystalMap = std::unordered_map<ShortIdType, const Crystal*>;
 
 }  // namespace icehalo
 

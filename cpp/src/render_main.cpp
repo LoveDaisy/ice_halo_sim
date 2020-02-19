@@ -54,8 +54,7 @@ int main(int argc, char* argv[]) {
     decltype(t1) t3;
     std::chrono::duration<float, std::ratio<1, 1000>> split_render_time{};
     {
-      auto crystal_map = ctx->GetCrystalMap();
-      auto split_ray_data = ray_data.CollectAndSortRayPathData(crystal_map);
+      auto split_ray_data = ray_data.CollectSplitRayData(ctx, split_render_ctx->GetSplitter());
       size_t curr_split_num = std::min(static_cast<size_t>(split_render_ctx->GetSplitNumber()), split_ray_data.size());
       for (size_t j = 0; j < curr_split_num; j++) {
         auto img_idx = j / split_img_ch_num;

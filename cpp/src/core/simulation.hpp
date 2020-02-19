@@ -71,7 +71,8 @@ class SimulationRayData : public ISerializable {
   void AddRay(RayInfo* ray);
 
   SimpleRayData CollectFinalRayData() const;
-  std::vector<SimpleRayPathData> CollectAndSortRayPathData(const CrystalMap& crystal_map) const;
+  std::vector<SimpleRayPathData> CollectSplitRayData(const ProjectContextPtr& ctx,
+                                                     const RenderSplitter& splitter) const;
 
   void AddExitRaySegment(RaySegment* r);
   const std::vector<RaySegment*>& GetLastExitRaySegments() const;
@@ -119,6 +120,10 @@ class SimulationRayData : public ISerializable {
   void Deserialize(File& file, endian::Endianness endianness) override;
 
  private:
+  std::vector<SimpleRayPathData> CollectSplitHaloRayData(const icehalo::ProjectContextPtr& ctx) const;
+  std::vector<SimpleRayPathData> CollectSplitFilterRayData(const ProjectContextPtr& ctx,
+                                                           const RenderSplitter& splitter) const;
+
   std::vector<std::vector<RayInfo*>> rays_;
   std::vector<std::vector<RaySegment*>> exit_ray_segments_;
 };

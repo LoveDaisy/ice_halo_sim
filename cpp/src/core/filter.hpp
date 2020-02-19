@@ -105,7 +105,7 @@ class GeneralRayPathFilter : public AbstractRayPathFilter {
 
 std::vector<RayPath> MakeSymmetryExtension(
     const std::vector<RayPath>& ray_path_list,  // original ray path list
-    RayPath curr_ray_path,                      // current ray path. not include crystal id and kInvalidFaceNumber
+    const RayPath& curr_ray_path,               // current ray path. not include crystal id and kInvalidFaceNumber
     const CrystalContext* crystal_ctx,          // crystal
     uint8_t symmetry_flag);                     // symmetry
 

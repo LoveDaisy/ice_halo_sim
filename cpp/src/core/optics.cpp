@@ -309,21 +309,6 @@ void RayInfo::Deserialize(File& file, endian::Endianness endianness) {
 }
 
 
-RayPath GetRayPath(const Crystal* crystal, const RaySegment* last_ray) {
-  RayPath result;
-  auto p = last_ray;
-  while (p) {
-    while (p->prev) {
-      result.emplace_back(crystal->FaceNumber(p->face_id));
-      p = p->prev;
-    }
-    p = p->root_ctx->prev_ray_segment;
-  }
-  std::reverse(result.begin(), result.end());
-  return result;
-}
-
-
 void Optics::Propagate(const Crystal* crystal, size_t num,                                                 // input
                        const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
                        float* pt_out, int* face_id_out) {                                                  // output

@@ -11,7 +11,7 @@ namespace icehalo {
 
 using rapidjson::Pointer;
 
-RenderSplitter::RenderSplitter() : type(RenderSplitterType::kNone), top_halo_num(0), filter_id{}, symmetry_flag(0) {}
+RenderSplitter::RenderSplitter() : type(RenderSplitterType::kNone), top_halo_num(0), crystal_filters{} {}
 
 
 RenderContext::RenderContext()
@@ -132,6 +132,11 @@ void RenderContext::SetImageOffsetY(int offset_y) {
 }
 
 
+const RenderSplitter& RenderContext::GetSplitter() const {
+  return splitter_;
+}
+
+
 int RenderContext::GetSplitNumber() const {
   switch (splitter_.type) {
     case RenderSplitterType::kNone:
@@ -139,7 +144,7 @@ int RenderContext::GetSplitNumber() const {
     case RenderSplitterType::kTopHalo:
       return splitter_.top_halo_num;
     case RenderSplitterType::kFilter:
-      return static_cast<int>(splitter_.filter_id.size());
+      return static_cast<int>(splitter_.crystal_filters.size());
   }
 }
 
@@ -197,34 +202,16 @@ void RenderContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Allocat
     case RenderSplitterType::kFilter: {
       char id_buf[128];
       Pointer("/splitter/type").Set(root, "filter", allocator);
-      for (size_t i = 0; i < splitter_.filter_id.size(); i++) {
-        const auto& fs = splitter_.filter_id[i];
-        for (size_t j = 0; j < fs.size(); j++) {
+      for (size_t i = 0; i < splitter_.crystal_filters.size(); i++) {
+        const auto& ids = splitter_.crystal_filters[i];
+        for (size_t j = 0; j < ids.size(); j++) {
           std::snprintf(id_buf, 128, "/splitter/%zu/%zu", i, j);
-          Pointer(id_buf).Set(root, fs[j], allocator);
+          Pointer(id_buf).Set(root, ids[j], allocator);
         }
       }
     } break;
     case RenderSplitterType::kNone:
       break;
-  }
-
-  char sym_buf[16];
-  int sym_buf_idx = 0;
-  if (splitter_.symmetry_flag & kSymmetryBasal) {
-    sym_buf[sym_buf_idx++] = 'B';
-  }
-  if (splitter_.symmetry_flag & kSymmetryDirection) {
-    sym_buf[sym_buf_idx++] = 'D';
-  }
-  if (splitter_.symmetry_flag & kSymmetryPrism) {
-    sym_buf[sym_buf_idx++] = 'P';
-  }
-  if (splitter_.symmetry_flag & kSymmetryRepeatedReflection) {
-    sym_buf[sym_buf_idx++] = 'X';
-  }
-  if (sym_buf_idx > 0) {
-    Pointer("/splitter/symmetry").Set(root, sym_buf, allocator);
   }
 
   switch (color_compact_level_) {
@@ -362,49 +349,26 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
     if (pp && pp->IsInt() && splitter_.type == RenderSplitterType::kTopHalo) {
       splitter_.top_halo_num = pp->GetInt();
     } else if (pp && pp->IsArray() && splitter_.type == RenderSplitterType::kFilter) {
-      std::vector<std::vector<int>> filter_ids;
+      std::vector<std::vector<ShortIdType>> crystal_filters;
       for (const auto& ppi : pp->GetArray()) {
-        if (ppi.IsArray()) {
-          std::vector<int> curr_ids;
-          for (const auto& fid : ppi.GetArray()) {
-            if (fid.IsInt()) {
-              curr_ids.emplace_back(fid.GetInt());
-            }
+        if (!ppi.IsArray() || ppi.GetArray().Size() % 2 != 0) {
+          std::fprintf(stderr, "crystal filter param not recognize!");
+          continue;
+        }
+        std::vector<ShortIdType> tmp_ids{};
+        for (const auto& fid : ppi.GetArray()) {
+          if (!fid.IsUint()) {
+            std::fprintf(stderr, "crystal filter param not recognize!");
+            continue;
           }
-          if (!curr_ids.empty()) {
-            filter_ids.emplace_back(curr_ids);
-          }
+          tmp_ids.emplace_back(fid.GetUint());
+        }
+        if (!tmp_ids.empty()) {
+          crystal_filters.emplace_back(tmp_ids);
         }
       }
-      if (!filter_ids.empty()) {
-        splitter_.filter_id = filter_ids;
-      }
-    }
-
-    pp = Pointer("/symmetry").Get(*p);
-    if (pp && pp->IsString()) {
-      auto sym = pp->GetString();
-      for (decltype(pp->GetStringLength()) i = 0; i < pp->GetStringLength(); i++) {
-        switch (sym[i]) {
-          case 'P':
-          case 'p':
-            splitter_.symmetry_flag |= kSymmetryPrism;
-            break;
-          case 'B':
-          case 'b':
-            splitter_.symmetry_flag |= kSymmetryBasal;
-            break;
-          case 'D':
-          case 'd':
-            splitter_.symmetry_flag |= kSymmetryDirection;
-            break;
-          case 'X':
-          case 'x':
-            splitter_.symmetry_flag |= kSymmetryRepeatedReflection;
-            break;
-          default:
-            throw std::invalid_argument("<symmetry> cannot recognize!");
-        }
+      if (!crystal_filters.empty()) {
+        splitter_.crystal_filters = crystal_filters;
       }
     }
   }

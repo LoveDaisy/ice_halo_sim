@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "core/core_def.hpp"
+#include "core/filter.hpp"
 #include "io/serialize.hpp"
 #include "rapidjson/document.h"
 
@@ -29,8 +30,9 @@ enum class RenderSplitterType {
 struct RenderSplitter {
   RenderSplitterType type;
   int top_halo_num;
-  std::vector<std::vector<int>> filter_id;
-  uint8_t symmetry_flag;
+  std::vector<std::vector<ShortIdType>> crystal_filters;
+
+  static constexpr uint8_t kTopHaloSymmetry = kSymmetryPrism | kSymmetryDirection;
 
   RenderSplitter();
 };
@@ -73,6 +75,7 @@ class RenderContext : public IJsonizable {
   void SetImageOffsetX(int offset_x);
   void SetImageOffsetY(int offset_y);
 
+  const RenderSplitter& GetSplitter() const;
   int GetSplitNumber() const;
 
   ColorCompactLevel GetColorCompactLevel() const;

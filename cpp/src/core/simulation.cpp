@@ -167,53 +167,72 @@ struct RayPathStatsData {
 }  // namespace ray_path_helper
 
 
-std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(const CrystalMap& crystal_map) const {
+std::vector<SimpleRayPathData> SimulationRayData::CollectSplitRayData(const ProjectContextPtr& ctx,
+                                                                      const RenderSplitter& splitter) const {
+  switch (splitter.type) {
+    case RenderSplitterType::kNone:
+      return {};
+    case RenderSplitterType::kTopHalo:
+      return CollectSplitHaloRayData(ctx);
+    case RenderSplitterType::kFilter:
+      return CollectSplitFilterRayData(ctx, splitter);
+  }
+}
+
+
+std::vector<SimpleRayPathData> SimulationRayData::CollectSplitHaloRayData(const ProjectContextPtr& ctx) const {
+  std::unordered_map<size_t, size_t> symmetry_table;
   std::unordered_map<size_t, RayPath> ray_path_map;
-  std::vector<size_t> ray_path_hash_list;
   std::unordered_map<size_t, ray_path_helper::RayPathStatsData> ray_path_stats;
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
       if (r->state != RaySegmentState::kFinished) {
         continue;
       }
-      auto crystal = crystal_map.at(r->root_ctx->crystal_id);
       auto ray_path_hash = r->recorder.Hash();
-      ray_path_hash_list.emplace_back(ray_path_hash);
       if (!ray_path_map.count(ray_path_hash)) {
-        auto curr_path = GetRayPath(crystal, r);
+        auto curr_path = GetRayPath(ctx, r);
         ray_path_map.emplace(ray_path_hash, curr_path);  // includes multi-scatter
+        if (!symmetry_table.count(ray_path_hash)) {
+          auto symmetry_extension = MakeSymmetryExtension(
+              {}, curr_path, ctx->GetCrystalContext(r->root_ctx->crystal_id), RenderSplitter::kTopHaloSymmetry);
+          for (const auto& p : symmetry_extension) {
+            symmetry_table.emplace(RayPathRecorder::Hash(p), ray_path_hash);
+          }
+        }
       }
-      if (!ray_path_stats.count(ray_path_hash)) {
-        ray_path_stats.emplace(ray_path_hash, ray_path_helper::RayPathStatsData{});
-        ray_path_stats.at(ray_path_hash).ray_path_hash_set.emplace(ray_path_hash);
+      auto normalized_hash = symmetry_table[ray_path_hash];
+      if (!ray_path_stats.count(normalized_hash)) {
+        ray_path_stats.emplace(normalized_hash, ray_path_helper::RayPathStatsData{});
+        ray_path_stats.at(normalized_hash).ray_path_hash_set.emplace(ray_path_hash);
       }
-      ray_path_stats.at(ray_path_hash).exit_ray_seg_num += 1;
-      ray_path_stats.at(ray_path_hash).ray_info_set.emplace(r->root_ctx);
-      ray_path_stats.at(ray_path_hash).total_energy += r->w;
+      ray_path_stats.at(normalized_hash).exit_ray_seg_num += 1;
+      ray_path_stats.at(normalized_hash).ray_info_set.emplace(r->root_ctx);
+      ray_path_stats.at(normalized_hash).total_energy += r->w;
     }
   }
 
   std::unordered_map<size_t, std::pair<size_t, SimpleRayPathData>> result_map;
-  size_t ray_path_hash_idx = 0;
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
       if (r->state != RaySegmentState::kFinished) {
         continue;
       }
-      auto ray_path_hash = ray_path_hash_list[ray_path_hash_idx++];
+      auto ray_path_hash = r->recorder.Hash();
+      auto normalized_hash = symmetry_table[ray_path_hash];
 
-      if (!result_map.count(ray_path_hash)) {
-        const auto& stats = ray_path_stats.at(ray_path_hash);
+      if (!result_map.count(normalized_hash)) {
+        const auto& stats = ray_path_stats.at(normalized_hash);
         SimpleRayPathData curr_ray_data{ ray_path_hash, ray_path_map[ray_path_hash],
                                          SimpleRayData{ stats.exit_ray_seg_num } };
         curr_ray_data.ray_data.init_ray_num = stats.ray_info_set.size();
         curr_ray_data.ray_data.total_ray_energy = stats.total_energy;
         curr_ray_data.ray_data.size = stats.exit_ray_seg_num;
         curr_ray_data.ray_data.wavelength = wavelength_info_.wavelength;
-        result_map.emplace(ray_path_hash, std::make_pair(0, std::move(curr_ray_data)));
+        result_map.emplace(normalized_hash, std::make_pair(0, std::move(curr_ray_data)));
       }
-      auto& idx = result_map.at(ray_path_hash).first;
-      auto p = result_map.at(ray_path_hash).second.ray_data.buf.get() + idx * 4;
+      auto& idx = result_map.at(normalized_hash).first;
+      auto p = result_map.at(normalized_hash).second.ray_data.buf.get() + idx * 4;
       const auto* axis = r->root_ctx->main_axis.val();
       math::RotateZBack(axis, r->dir.val(), p);
       p[3] = r->w;
@@ -230,6 +249,12 @@ std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(cons
     return a.ray_data.total_ray_energy > b.ray_data.total_ray_energy;
   });
   return result;
+}
+
+
+std::vector<SimpleRayPathData> SimulationRayData::CollectSplitFilterRayData(const ProjectContextPtr& ctx,
+                                                                            const RenderSplitter& splitter) const {
+  ;
 }
 
 
