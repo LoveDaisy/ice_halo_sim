@@ -77,7 +77,7 @@ void SimpleRayData::Deserialize(File& file, endian::Endianness endianness) {
 }
 
 
-SimpleRayPathData::SimpleRayPathData(size_t hash, CrystalRayPath ray_path, SimpleRayData ray_data)
+SimpleRayPathData::SimpleRayPathData(size_t hash, RayPath ray_path, SimpleRayData ray_data)
     : ray_path_hash(hash), ray_path(std::move(ray_path)), ray_data(std::move(ray_data)) {}
 
 
@@ -157,19 +157,6 @@ SimpleRayData SimulationRayData::CollectFinalRayData() const {
 
 namespace ray_path_helper {
 
-struct RayPath {
-  size_t hash;
-  CrystalRayPath reverse_path;
-
-  bool operator==(const RayPath& other) const { return hash == other.hash; }
-};
-
-
-struct RayPathHash {
-  size_t operator()(const RayPath& r) const noexcept { return r.hash; }
-};
-
-
 struct RayPathStatsData {
   std::unordered_set<size_t> ray_path_hash_set;
   std::unordered_set<RayInfo*> ray_info_set;
@@ -181,7 +168,7 @@ struct RayPathStatsData {
 
 
 std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(const CrystalMap& crystal_map) const {
-  std::unordered_map<size_t, CrystalRayPath> ray_path_map;
+  std::unordered_map<size_t, RayPath> ray_path_map;
   std::vector<size_t> ray_path_hash_list;
   std::unordered_map<size_t, ray_path_helper::RayPathStatsData> ray_path_stats;
   for (const auto& sr : exit_ray_segments_) {
@@ -190,10 +177,12 @@ std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(cons
         continue;
       }
       auto crystal = crystal_map.at(r->root_ctx->crystal_id);
-      auto ray_path_hash = RayPathReverseHash(crystal, r, kAutoDetectLength);
+      auto ray_path_hash = r->recorder.Hash();
       ray_path_hash_list.emplace_back(ray_path_hash);
       if (!ray_path_map.count(ray_path_hash)) {
-        ray_path_map.emplace(ray_path_hash, GetReverseRayPath(crystal, r));  // includes multi-scatter
+        auto curr_path = GetReverseRayPath(crystal, r);
+        std::reverse(curr_path.begin(), curr_path.end());
+        ray_path_map.emplace(ray_path_hash, curr_path);  // includes multi-scatter
       }
       if (!ray_path_stats.count(ray_path_hash)) {
         ray_path_stats.emplace(ray_path_hash, ray_path_helper::RayPathStatsData{});
@@ -377,8 +366,7 @@ void SimulationRayData::Deserialize(File& file, endian::Endianness endianness) {
 }
 
 
-Simulator::BufferData::BufferData()
-    : pt{ nullptr }, dir{ nullptr }, w{ nullptr }, face_id{ nullptr }, ray_seg{ nullptr }, ray_num(0) {}
+Simulator::BufferData::BufferData() : pt{}, dir{}, w{}, face_id{}, ray_seg{}, ray_num(0) {}
 
 
 Simulator::BufferData::~BufferData() {
@@ -438,6 +426,7 @@ void Simulator::BufferData::Allocate(size_t ray_number) {
 }
 
 
+#ifdef FOR_TEST
 void Simulator::BufferData::Print() {
   std::printf("pt[0]                    dir[0]                   w[0]\n");
   for (decltype(ray_num) i = 0; i < ray_num; i++) {
@@ -453,6 +442,7 @@ void Simulator::BufferData::Print() {
     std::printf("%+.4f\n", w[1][i]);
   }
 }
+#endif
 
 
 Simulator::EntryRayData::EntryRayData() : ray_dir(nullptr), ray_seg(nullptr), ray_num(0), buf_size(0) {}
@@ -531,7 +521,7 @@ void Simulator::Run() {
       }
       InitEntryRays(context_->GetCrystalContext(c.crystal_id));
       entry_ray_offset_ += active_ray_num_;
-      TraceRays(context_->GetCrystal(c.crystal_id), context_->GetRayPathFilter(c.filter_id));
+      TraceRays(context_->GetCrystalContext(c.crystal_id), context_->GetRayPathFilter(c.filter_id));
     }
 
     if (i != multi_scatter_info.size() - 1) {
@@ -566,10 +556,10 @@ void Simulator::InitSunRays() {
 // Add RayContext and main axis rotation
 void Simulator::InitEntryRays(const CrystalContext* ctx) {
   const auto* crystal = ctx->GetCrystal();
-  auto crystal_id = context_->GetCrystalId(crystal);
+  auto crystal_id = ctx->GetId();
   const auto* face_vertex = crystal->GetFaceVertex();
 
-  auto ray_pool = RaySegmentPool::GetInstance();
+  auto ray_seg_pool = RaySegmentPool::GetInstance();
   auto ray_info_pool = RayInfoPool::GetInstance();
 
   using math::RandomSampler;
@@ -584,10 +574,15 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
     auto prev_r = entry_ray_data_.ray_seg[entry_ray_offset_ + i];
     buffer_.w[0][i] = prev_r ? prev_r->w : 1.0f;
 
-    auto r = ray_pool->GetObject(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i], buffer_.face_id[0][i]);
+    auto r =
+        ray_seg_pool->GetObject(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i], buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
     r->root_ctx = ray_info_pool->GetObject(r, crystal_id, axis_rot);
     r->root_ctx->prev_ray_segment = prev_r;
+    if (prev_r) {
+      r->recorder = prev_r->recorder;
+    }
+    r->recorder << crystal_id;
     simulation_ray_data_.AddRay(r->root_ctx);
   }
 }
@@ -662,9 +657,10 @@ void Simulator::PrepareMultiScatterRays(float prob) {
 
 // Trace rays.
 // Start from dir[0] and pt[0].
-void Simulator::TraceRays(const Crystal* crystal, AbstractRayPathFilter* filter) {
+void Simulator::TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter) {
   auto pool = ThreadingPool::GetInstance();
 
+  auto crystal = crystal_ctx->GetCrystal();
   int max_recursion_num = context_->GetRayHitNum();
   auto n = static_cast<float>(IceRefractiveIndex::Get(simulation_ray_data_.wavelength_info_.wavelength));
   for (int i = 0; i < max_recursion_num; i++) {
@@ -682,15 +678,16 @@ void Simulator::TraceRays(const Crystal* crystal, AbstractRayPathFilter* filter)
                         buffer_.pt[1] + idx0 * 6, buffer_.face_id[1] + idx0 * 2);                       //
     });
     pool->WaitFinish();
-    StoreRaySegments(crystal, filter);
+    StoreRaySegments(crystal_ctx, filter);
     RefreshBuffer();  // active_ray_num_ is updated.
   }
 }
 
 
 // Save rays
-void Simulator::StoreRaySegments(const Crystal* crystal, AbstractRayPathFilter* filter) {
-  filter->ApplySymmetry(crystal);
+void Simulator::StoreRaySegments(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter) {
+  auto crystal = crystal_ctx->GetCrystal();
+  filter->ApplySymmetry(crystal_ctx);
   auto ray_pool = RaySegmentPool::GetInstance();
   for (size_t i = 0; i < active_ray_num_ * 2; i++) {
     if (buffer_.w[1][i] <= 0) {  // Refractive rays in total reflection case
@@ -713,6 +710,11 @@ void Simulator::StoreRaySegments(const Crystal* crystal, AbstractRayPathFilter* 
       prev_ray_seg->next_refract = r;
     }
     r->prev = prev_ray_seg;
+    r->recorder = prev_ray_seg->recorder;
+    r->recorder << crystal->FaceNumber(r->face_id);
+    if (r->state == RaySegmentState::kFinished) {
+      r->recorder << kInvalidId;
+    }
     r->root_ctx = prev_ray_seg->root_ctx;
     buffer_.ray_seg[1][i] = r;
 

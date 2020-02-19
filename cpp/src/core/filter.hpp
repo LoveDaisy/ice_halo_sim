@@ -5,13 +5,15 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "context/crystal_context.hpp"
 #include "core/core_def.hpp"
-#include "core/crystal.hpp"
-#include "core/optics.hpp"
 #include "io/serialize.hpp"
 
 
 namespace icehalo {
+
+struct RaySegment;
+enum class RaySegmentState : uint8_t;
 
 enum Symmetry : uint8_t {
   kSymmetryNone = 0u,
@@ -20,9 +22,6 @@ enum Symmetry : uint8_t {
   kSymmetryDirection = 4u,
   kSymmetryRepeatedReflection = 8u,
 };
-
-size_t RayPathHash(const CrystalRayPath& ray_path, bool reverse = false);
-size_t RayPathReverseHash(const Crystal* crystal, const RaySegment* last_ray, int length);
 
 
 class AbstractRayPathFilter : public IJsonizable {
@@ -34,7 +33,7 @@ class AbstractRayPathFilter : public IJsonizable {
   void SetSymmetryFlag(uint8_t symmetry_flag);
   void AddSymmetry(Symmetry symmetry);
   uint8_t GetSymmetryFlag() const;
-  virtual void ApplySymmetry(const Crystal* crystal);
+  virtual void ApplySymmetry(const CrystalContext* crystal_ctx);
 
   void EnableComplementary(bool enable);
   bool GetComplementary() const;
@@ -67,10 +66,10 @@ class NoneRayPathFilter : public AbstractRayPathFilter {
 
 class SpecificRayPathFilter : public AbstractRayPathFilter {
  public:
-  void AddPath(const CrystalRayPath& path);
+  void AddPath(const RayPath& path);
   void ClearPaths();
 
-  void ApplySymmetry(const Crystal* crystal) override;
+  void ApplySymmetry(const CrystalContext* crystal_ctx) override;
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;
 
@@ -79,7 +78,7 @@ class SpecificRayPathFilter : public AbstractRayPathFilter {
 
  private:
   std::unordered_set<size_t> ray_path_hashes_;
-  std::vector<CrystalRayPath> ray_paths_;
+  std::vector<RayPath> ray_paths_;
 };
 
 

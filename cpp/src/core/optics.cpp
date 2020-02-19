@@ -15,14 +15,107 @@
 
 namespace icehalo {
 
+RayPathRecorder::RayPathRecorder() : hash_(0), offset_(0) {}
+
+bool RayPathRecorder::IsReverse() const noexcept {
+  return offset_ < 0;
+}
+
+
+size_t RayPathRecorder::Hash() const noexcept {
+  if (offset_ < 0) {
+    size_t reverse_hash = hash_;
+    endian::ByteSwap::Swap(&reverse_hash);
+    auto* p = reinterpret_cast<uint8_t*>(&reverse_hash);
+    for (size_t i = 0; i < sizeof(reverse_hash); i++) {
+      ReverseBits(p + i);
+    }
+    return reverse_hash;
+  } else {
+    return hash_;
+  }
+}
+
+
+size_t RayPathRecorder::Hash(const RayPath& ray_path) noexcept {
+  RayPathRecorder recorder{};
+  for (const auto& fn : ray_path) {
+    recorder << fn;
+  }
+  return recorder.Hash();
+}
+
+
+void RayPathRecorder::Serialize(File& file, bool with_boi) const {
+  if (with_boi) {
+    file.Write(ISerializable::kDefaultBoi);
+  }
+  file.Write(hash_);
+  file.Write(offset_);
+}
+
+
+void RayPathRecorder::Deserialize(File& file, endian::Endianness endianness) {
+  endianness = CheckEndianness(file, endianness);
+  bool need_swap = (endianness != endian::kCompileEndian);
+
+  file.Read(&hash_);
+  file.Read(&offset_);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&hash_);
+    endian::ByteSwap::Swap(&offset_);
+  }
+}
+
+
+RayPathRecorder& RayPathRecorder::operator<<(ShortIdType id) {
+  size_t tmp_hash = (id << offset_) | (id >> (kTotalBits - offset_));
+  hash_ ^= tmp_hash;
+  offset_ += kStep;
+  offset_ %= kTotalBits;
+  return *this;
+}
+
+
+RayPathRecorder& RayPathRecorder::operator>>(ShortIdType id) {
+  auto reverse_offset = -offset_;
+  size_t tmp_hash = (id << reverse_offset) | (id >> (kTotalBits - reverse_offset));
+  endian::ByteSwap::Swap(&tmp_hash);
+  auto* p = reinterpret_cast<uint8_t*>(&tmp_hash);
+  for (size_t i = 0; i < sizeof(tmp_hash); i++) {
+    ReverseBits(p + i);
+  }
+
+  hash_ ^= tmp_hash;
+  reverse_offset += kStep;
+  reverse_offset %= kTotalBits;
+  offset_ = -reverse_offset;
+
+  return *this;
+}
+
+
+RayPathRecorder &RayPathRecorder::operator,(ShortIdType id) {
+  return operator<<(id);
+}
+
+
+void RayPathRecorder::ReverseBits(uint8_t* n) {
+  static uint8_t lookup[16] = {
+    0x0, 0x8, 0x4, 0xc, 0x2, 0xa, 0x6, 0xe, 0x1, 0x9, 0x5, 0xd, 0x3, 0xb, 0x7, 0xf,
+  };
+  *n = (lookup[(*n) & 0xf] << 4) | lookup[(*n) >> 4];
+}
+
+
 RaySegment::RaySegment()
     : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root_ctx(nullptr), pt(0, 0, 0), dir(0, 0, 0), w(0),
-      face_id(-1), state(RaySegmentState::kOnGoing) {}
+      face_id(-1), state(RaySegmentState::kOnGoing), recorder{} {}
 
 
 RaySegment::RaySegment(const float* pt, const float* dir, float w, int face_id)
     : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root_ctx(nullptr), pt(pt), dir(dir), w(w),
-      face_id(face_id), state(RaySegmentState::kOnGoing) {}
+      face_id(face_id), state(RaySegmentState::kOnGoing), recorder{} {}
 
 
 void RaySegment::Serialize(File& file, bool with_boi) const {
@@ -48,8 +141,9 @@ void RaySegment::Serialize(File& file, bool with_boi) const {
   file.Write(dir.val(), 3);
   file.Write(w);
   file.Write(static_cast<int16_t>(face_id));
-
   file.Write(static_cast<uint8_t>(state));
+
+  recorder.Serialize(file, false);
 }
 
 
@@ -118,6 +212,8 @@ void RaySegment::Deserialize(File& file, endian::Endianness endianness) {
   uint8_t state_data;
   file.Read(&state_data);
   state = static_cast<RaySegmentState>(state_data);
+
+  recorder.Deserialize(file, endianness);
 }
 
 

@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <limits>
 
-#include "context/context.hpp"
 #include "core/enum_map.hpp"
 #include "rapidjson/document.h"
 #include "rapidjson/pointer.h"
@@ -358,7 +357,7 @@ int CrystalContext::RandomSampleFace(const float* ray_dir) const {
     face_prob_buf[k] /= sum;
   }
 
-  return math::RandomSampler::SampleInt(face_prob_buf.get(), total_faces);
+  return static_cast<ShortIdType>(math::RandomSampler::SampleInt(face_prob_buf.get(), total_faces));
 }
 
 

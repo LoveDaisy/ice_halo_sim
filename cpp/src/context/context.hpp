@@ -89,7 +89,7 @@ class ProjectContext {
 };
 
 
-CrystalRayPath GetReverseRayPath(const Crystal* crystal, const RaySegment* last_ray);
+RayPath GetReverseRayPath(const Crystal* crystal, const RaySegment* last_ray);
 
 }  // namespace icehalo
 

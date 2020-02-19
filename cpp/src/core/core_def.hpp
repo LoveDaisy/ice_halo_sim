@@ -10,7 +10,7 @@ using FaceNumberType = ShortIdType;
 constexpr ShortIdType kInvalidId = 0xffff;
 constexpr FaceNumberType kInvalidFaceNumber = kInvalidId;
 
-using CrystalRayPath = std::vector<FaceNumberType>;
+using RayPath = std::vector<FaceNumberType>;
 constexpr int kAutoDetectLength = -1;
 
 

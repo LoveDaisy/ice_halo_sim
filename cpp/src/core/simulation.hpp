@@ -52,10 +52,10 @@ struct SimpleRayData : public ISerializable {
 
 struct SimpleRayPathData {
   size_t ray_path_hash;
-  CrystalRayPath ray_path;
+  RayPath ray_path;
   SimpleRayData ray_data;
 
-  SimpleRayPathData(size_t hash, CrystalRayPath ray_path, SimpleRayData ray_data);
+  SimpleRayPathData(size_t hash, RayPath ray_path, SimpleRayData ray_data);
   SimpleRayPathData(SimpleRayPathData&& other) noexcept;
 
   SimpleRayPathData& operator=(SimpleRayPathData&& other) noexcept;
@@ -158,7 +158,9 @@ class Simulator {
 
     void Clear();
     void Allocate(size_t ray_number);
+#ifdef FOR_TEST
     void Print();
+#endif
 
     float* pt[2];
     float* dir[2];
@@ -177,9 +179,9 @@ class Simulator {
 
   void InitSunRays();
   void InitEntryRays(const CrystalContext* ctx);
-  void TraceRays(const Crystal* crystal, AbstractRayPathFilter* filter);
+  void TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter);
   void PrepareMultiScatterRays(float prob);
-  void StoreRaySegments(const Crystal* crystal, AbstractRayPathFilter* filter);
+  void StoreRaySegments(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter);
   void RefreshBuffer();
 
   static constexpr int kBufferSizeFactor = 4;
