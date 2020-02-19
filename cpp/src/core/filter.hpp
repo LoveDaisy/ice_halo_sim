@@ -78,7 +78,7 @@ class SpecificRayPathFilter : public AbstractRayPathFilter {
 
  private:
   std::unordered_set<size_t> ray_path_hashes_;
-  std::vector<RayPath> ray_paths_;
+  std::vector<RayPath> ray_paths_;  //!< The original ray path. Not include crystal ID and kInvalidFaceNumber
 };
 
 
@@ -101,6 +101,13 @@ class GeneralRayPathFilter : public AbstractRayPathFilter {
   std::unordered_set<FaceNumberType> exit_faces_;
   std::unordered_set<int> hit_nums_;
 };
+
+
+std::vector<RayPath> MakeSymmetryExtension(
+    const std::vector<RayPath>& ray_path_list,  // original ray path list
+    RayPath curr_ray_path,                      // current ray path. not include crystal id and kInvalidFaceNumber
+    const CrystalContext* crystal_ctx,          // crystal
+    uint8_t symmetry_flag);                     // symmetry
 
 
 }  // namespace icehalo

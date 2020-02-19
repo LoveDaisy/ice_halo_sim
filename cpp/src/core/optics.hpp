@@ -174,6 +174,9 @@ struct RayInfo : public ISerializable {
 };
 
 
+RayPath GetRayPath(const Crystal* crystal, const RaySegment* last_ray);
+
+
 class Optics {
  public:
   static void HitSurface(const Crystal* crystal, float n, size_t num,                    // input

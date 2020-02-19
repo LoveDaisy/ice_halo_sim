@@ -88,9 +88,6 @@ class ProjectContext {
   std::vector<RayPathFilterContextPtrU> filter_store_;
 };
 
-
-RayPath GetReverseRayPath(const Crystal* crystal, const RaySegment* last_ray);
-
 }  // namespace icehalo
 
 

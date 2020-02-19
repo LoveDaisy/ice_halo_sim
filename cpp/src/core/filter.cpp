@@ -192,76 +192,17 @@ void SpecificRayPathFilter::ClearPaths() {
 
 
 void SpecificRayPathFilter::ApplySymmetry(const CrystalContext* crystal_ctx) {
-  std::vector<RayPath> augmented_ray_paths;
+  std::vector<RayPath> augmented_ray_paths{};
 
   // Add the original path.
   for (const auto& rp : ray_paths_) {
-    auto rp_copy = rp;
-    if (rp_copy[0] != crystal_ctx->GetId()) {
-      rp_copy.insert(rp_copy.begin(), crystal_ctx->GetId());
-    }
-    if (rp_copy.back() != kInvalidFaceNumber) {
-      rp_copy.emplace_back(kInvalidFaceNumber);
-    }
-    augmented_ray_paths.emplace_back(rp_copy);
-  }
-
-  // Add symmetry P.
-  auto period = crystal_ctx->GetCrystal()->GetFaceNumberPeriod();
-  RayPath tmp_ray_path;
-  if (period > 0 && (symmetry_flag_ & kSymmetryPrism)) {
-    decltype(augmented_ray_paths) ray_paths_copy(augmented_ray_paths);
-    for (const auto& rp : ray_paths_copy) {
-      for (int i = 0; i < period; i++) {
-        tmp_ray_path.clear();
-        bool crystal_flag = true;
-        for (auto fn : rp) {
-          if (!crystal_flag && fn != kInvalidFaceNumber && fn != 1 && fn != 2) {
-            fn = static_cast<FaceNumberType>((fn + period + i - 3) % period + 3);
-          }
-          crystal_flag = (fn == kInvalidFaceNumber);
-          tmp_ray_path.emplace_back(fn);
-        }
-        augmented_ray_paths.emplace_back(tmp_ray_path);
-      }
+    auto tmp_ray_path_list = MakeSymmetryExtension({}, rp, crystal_ctx, symmetry_flag_);
+    for (auto& p : tmp_ray_path_list) {
+      augmented_ray_paths.emplace_back(p);
     }
   }
 
-  // Add symmetry B.
-  if (symmetry_flag_ & kSymmetryBasal) {
-    decltype(augmented_ray_paths) ray_paths_copy(augmented_ray_paths);
-    for (const auto& rp : ray_paths_copy) {
-      tmp_ray_path.clear();
-      bool crystal_flag = true;
-      for (auto fn : rp) {
-        if (!crystal_flag && fn != kInvalidFaceNumber && (fn == 1 || fn == 2)) {
-          fn = static_cast<FaceNumberType>(fn % 2 + 1);
-        }
-        crystal_flag = (fn == kInvalidFaceNumber);
-        tmp_ray_path.emplace_back(fn);
-      }
-      augmented_ray_paths.emplace_back(tmp_ray_path);
-    }
-  }
-
-  // Add symmetry D.
-  if (period > 0 && (symmetry_flag_ & kSymmetryDirection)) {
-    decltype(augmented_ray_paths) ray_paths_copy(augmented_ray_paths);
-    for (const auto& rp : ray_paths_copy) {
-      tmp_ray_path.clear();
-      bool crystal_flag = true;
-      for (auto fn : rp) {
-        if (!crystal_flag && fn != kInvalidFaceNumber && fn != 1 && fn != 2) {
-          fn = static_cast<FaceNumberType>(5 + period - fn);
-        }
-        crystal_flag = (fn == kInvalidFaceNumber);
-        tmp_ray_path.emplace_back(fn);
-      }
-      augmented_ray_paths.emplace_back(tmp_ray_path);
-    }
-  }
-
-  // Add them all.
+  // Calculate hash.
   ray_path_hashes_.clear();
   for (const auto& rp : augmented_ray_paths) {
     ray_path_hashes_.emplace(RayPathRecorder::Hash(rp));
@@ -472,5 +413,80 @@ void GeneralRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
   }
 }
 
+
+std::vector<RayPath> MakeSymmetryExtension(const std::vector<RayPath>& ray_path_list, RayPath curr_ray_path,
+                                           const CrystalContext* crystal_ctx, uint8_t symmetry_flag) {
+  curr_ray_path.insert(curr_ray_path.begin(), crystal_ctx->GetId());
+  curr_ray_path.emplace_back(kInvalidFaceNumber);
+
+  std::vector<RayPath> ray_path_extension{};
+  ray_path_extension.emplace_back(curr_ray_path);
+
+  // Add symmetry P.
+  auto period = crystal_ctx->GetCrystal()->GetFaceNumberPeriod();
+  RayPath tmp_ray_path;
+  if (period > 0 && (symmetry_flag & kSymmetryPrism)) {
+    decltype(ray_path_extension) ray_paths_copy(ray_path_extension);
+    for (const auto& rp : ray_paths_copy) {
+      for (int i = 0; i < period; i++) {
+        tmp_ray_path.clear();
+        bool crystal_flag = true;
+        for (auto fn : rp) {
+          if (!crystal_flag && fn != kInvalidFaceNumber && fn != 1 && fn != 2) {
+            fn = static_cast<FaceNumberType>((fn + period + i - 3) % period + 3);
+          }
+          crystal_flag = (fn == kInvalidFaceNumber);
+          tmp_ray_path.emplace_back(fn);
+        }
+        ray_path_extension.emplace_back(tmp_ray_path);
+      }
+    }
+  }
+
+  // Add symmetry B.
+  if (symmetry_flag & kSymmetryBasal) {
+    decltype(ray_path_extension) ray_paths_copy(ray_path_extension);
+    for (const auto& rp : ray_paths_copy) {
+      tmp_ray_path.clear();
+      bool crystal_flag = true;
+      for (auto fn : rp) {
+        if (!crystal_flag && fn != kInvalidFaceNumber && (fn == 1 || fn == 2)) {
+          fn = static_cast<FaceNumberType>(fn % 2 + 1);
+        }
+        crystal_flag = (fn == kInvalidFaceNumber);
+        tmp_ray_path.emplace_back(fn);
+      }
+      ray_path_extension.emplace_back(tmp_ray_path);
+    }
+  }
+
+  // Add symmetry D.
+  if (period > 0 && (symmetry_flag & kSymmetryDirection)) {
+    decltype(ray_path_extension) ray_paths_copy(ray_path_extension);
+    for (const auto& rp : ray_paths_copy) {
+      tmp_ray_path.clear();
+      bool crystal_flag = true;
+      for (auto fn : rp) {
+        if (!crystal_flag && fn != kInvalidFaceNumber && fn != 1 && fn != 2) {
+          fn = static_cast<FaceNumberType>(5 + period - fn);
+        }
+        crystal_flag = (fn == kInvalidFaceNumber);
+        tmp_ray_path.emplace_back(fn);
+      }
+      ray_path_extension.emplace_back(tmp_ray_path);
+    }
+  }
+
+  std::vector<RayPath> result;
+  for (const auto& rp : ray_path_list) {
+    for (const auto& p : ray_path_extension) {
+      result.emplace_back(rp);
+      for (const auto& fn : p) {
+        result.back().emplace_back(fn);
+      }
+    }
+  }
+  return result;
+}
 
 }  // namespace icehalo

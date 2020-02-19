@@ -180,8 +180,7 @@ std::vector<SimpleRayPathData> SimulationRayData::CollectAndSortRayPathData(cons
       auto ray_path_hash = r->recorder.Hash();
       ray_path_hash_list.emplace_back(ray_path_hash);
       if (!ray_path_map.count(ray_path_hash)) {
-        auto curr_path = GetReverseRayPath(crystal, r);
-        std::reverse(curr_path.begin(), curr_path.end());
+        auto curr_path = GetRayPath(crystal, r);
         ray_path_map.emplace(ray_path_hash, curr_path);  // includes multi-scatter
       }
       if (!ray_path_stats.count(ray_path_hash)) {
@@ -713,7 +712,7 @@ void Simulator::StoreRaySegments(const CrystalContext* crystal_ctx, AbstractRayP
     r->recorder = prev_ray_seg->recorder;
     r->recorder << crystal->FaceNumber(r->face_id);
     if (r->state == RaySegmentState::kFinished) {
-      r->recorder << kInvalidId;
+      r->recorder << kInvalidFaceNumber;
     }
     r->root_ctx = prev_ray_seg->root_ctx;
     buffer_.ray_seg[1][i] = r;
