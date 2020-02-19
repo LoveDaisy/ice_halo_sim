@@ -11,10 +11,10 @@ namespace icehalo {
 using rapidjson::Pointer;
 
 
-RayPathFilterContext::RayPathFilterContext() : id_(0), filter_{} {}
+RayPathFilterContext::RayPathFilterContext() : id_(kInvalidId), filter_{} {}
 
 
-int RayPathFilterContext::GetId() const {
+ShortIdType RayPathFilterContext::GetId() const {
   return id_;
 }
 
@@ -54,10 +54,10 @@ void RayPathFilterContext::LoadFromJson(const rapidjson::Value& root) {
   filter_->LoadFromJson(root);
 
   p = Pointer("/id").Get(root);
-  if (p == nullptr || !p->IsInt()) {
+  if (p == nullptr || !p->IsUint()) {
     throw std::invalid_argument("<id> cannot recognize!");
   }
-  id_ = p->GetInt();
+  id_ = p->GetUint();
 }
 
 }  // namespace icehalo

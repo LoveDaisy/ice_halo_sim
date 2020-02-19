@@ -5,10 +5,10 @@
 
 namespace icehalo {
 
-using SimpleIdType = uint16_t;
-using FaceNumberType = SimpleIdType;
-constexpr FaceNumberType kInvalidFaceNumber = 0xffff;
-constexpr int kInvalidId = std::numeric_limits<int>::lowest();
+using ShortIdType = uint16_t;
+using FaceNumberType = ShortIdType;
+constexpr ShortIdType kInvalidId = 0xffff;
+constexpr FaceNumberType kInvalidFaceNumber = kInvalidId;
 
 using CrystalRayPath = std::vector<FaceNumberType>;
 constexpr int kAutoDetectLength = -1;

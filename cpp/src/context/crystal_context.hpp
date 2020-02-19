@@ -15,7 +15,7 @@ class CrystalContext : public IJsonizable {
  public:
   CrystalContext(const CrystalContext& other) = delete;
 
-  int GetId() const;
+  ShortIdType GetId() const;
   const Crystal* GetCrystal() const;
   AxisDistribution GetAxisDistribution() const;
 
@@ -47,7 +47,7 @@ class CrystalContext : public IJsonizable {
   void SaveCubicPyramidParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
   void SaveCustomCrystalParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
 
-  int id_;
+  ShortIdType id_;
   CrystalPtrU crystal_;
   AxisDistribution axis_;
 

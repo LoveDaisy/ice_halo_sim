@@ -97,7 +97,7 @@ std::string ProjectContext::GetDefaultImagePath() const {
 }
 
 
-const Crystal* ProjectContext::GetCrystal(int id) const {
+const Crystal* ProjectContext::GetCrystal(ShortIdType id) const {
   auto crystal_ctx = GetCrystalContext(id);
   if (crystal_ctx) {
     return crystal_ctx->GetCrystal();
@@ -107,7 +107,7 @@ const Crystal* ProjectContext::GetCrystal(int id) const {
 }
 
 
-int32_t ProjectContext::GetCrystalId(const Crystal* crystal) const {
+ShortIdType ProjectContext::GetCrystalId(const Crystal* crystal) const {
   for (const auto& ctx : crystal_store_) {
     if (ctx->GetCrystal() == crystal) {
       return ctx->GetId();
@@ -117,7 +117,7 @@ int32_t ProjectContext::GetCrystalId(const Crystal* crystal) const {
 }
 
 
-const CrystalContext* ProjectContext::GetCrystalContext(int id) const {
+const CrystalContext* ProjectContext::GetCrystalContext(ShortIdType id) const {
   for (const auto& ctx : crystal_store_) {
     if (ctx->GetId() == id) {
       return ctx.get();
@@ -153,7 +153,7 @@ void ProjectContext::PrintCrystalInfo() const {
 #endif
 
 
-AbstractRayPathFilter* ProjectContext::GetRayPathFilter(int id) const {
+AbstractRayPathFilter* ProjectContext::GetRayPathFilter(ShortIdType id) const {
   for (const auto& f : filter_store_) {
     if (f->GetId() == id) {
       return f->GetFilter();

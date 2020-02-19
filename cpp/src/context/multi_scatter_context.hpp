@@ -13,11 +13,11 @@ namespace icehalo {
 class MultiScatterContext : public IJsonizable {
  public:
   struct CrystalInfo {
-    int crystal_id;
-    int filter_id;
+    ShortIdType crystal_id;
+    ShortIdType filter_id;
     float population;
 
-    CrystalInfo(int crystal_id, int filter_id, float pop)
+    CrystalInfo(ShortIdType crystal_id, ShortIdType filter_id, float pop)
         : crystal_id(crystal_id), filter_id(filter_id), population(pop){};
   };
 

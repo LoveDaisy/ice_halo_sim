@@ -39,12 +39,12 @@ class ProjectContext {
   std::string GetDataDirectory() const;
   std::string GetDefaultImagePath() const;
 
-  const Crystal* GetCrystal(int id) const;
-  int32_t GetCrystalId(const Crystal* crystal) const;
-  const CrystalContext* GetCrystalContext(int id) const;
+  const Crystal* GetCrystal(ShortIdType id) const;
+  ShortIdType GetCrystalId(const Crystal* crystal) const;
+  const CrystalContext* GetCrystalContext(ShortIdType id) const;
   CrystalMap GetCrystalMap() const;
 
-  AbstractRayPathFilter* GetRayPathFilter(int id) const;
+  AbstractRayPathFilter* GetRayPathFilter(ShortIdType id) const;
 
   static ProjectContextPtrU CreateFromFile(const char* filename);
   static ProjectContextPtrU CreateDefault();

@@ -325,7 +325,7 @@ CrystalContextPtrU CrystalContext::CreateDefault() {
 }
 
 
-int CrystalContext::GetId() const {
+ShortIdType CrystalContext::GetId() const {
   return id_;
 }
 
@@ -538,13 +538,13 @@ void CrystalContext::LoadFromJson(const rapidjson::Value& root) {
   }
 
   p = Pointer("/id").Get(root);
-  if (p == nullptr || !p->IsInt()) {
+  if (p == nullptr || !p->IsUint()) {
     std::snprintf(msg_buffer, kMsgBufferSize, "<crystal.id> cannot recognize!");
     throw std::invalid_argument(msg_buffer);
   }
 
   axis_ = ParseCrystalAxis(root);
-  id_ = p->GetInt();
+  id_ = p->GetUint();
   crystal_parsers[type](this, root);
 }
 

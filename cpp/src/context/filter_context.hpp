@@ -18,7 +18,7 @@ using RayPathFilterContextPtrU = std::unique_ptr<RayPathFilterContext>;
 
 class RayPathFilterContext : public IJsonizable {
  public:
-  int GetId() const;
+  ShortIdType GetId() const;
   AbstractRayPathFilter* GetFilter() const;
 
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
@@ -31,7 +31,7 @@ class RayPathFilterContext : public IJsonizable {
 
   using FilterParser = std::function<RayPathFilterPtrU(const rapidjson::Value&)>;
 
-  int id_;
+  ShortIdType id_;
   RayPathFilterPtrU filter_;
 };
 

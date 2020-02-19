@@ -81,7 +81,7 @@ void MultiScatterContext::LoadFromJson(const rapidjson::Value& root) {
   prob_ = prob;
 
   ClearCrystalInfo();
-  std::vector<int> tmp_crystal_id;
+  std::vector<ShortIdType> tmp_crystal_id;
   p = Pointer("/crystal").Get(root);
   if (p == nullptr || !p->IsArray()) {
     throw std::invalid_argument("<multi_scatter.crystal> cannot recognize!");
@@ -90,7 +90,7 @@ void MultiScatterContext::LoadFromJson(const rapidjson::Value& root) {
     if (!pc.IsUint()) {
       throw std::invalid_argument("<multi_scatter.crystal> cannot recognize!");
     } else {
-      tmp_crystal_id.emplace_back(pc.GetInt());
+      tmp_crystal_id.emplace_back(pc.GetUint());
     }
   }
 
@@ -107,7 +107,7 @@ void MultiScatterContext::LoadFromJson(const rapidjson::Value& root) {
     }
   }
 
-  std::vector<int> tmp_filter_id;
+  std::vector<ShortIdType> tmp_filter_id;
   p = Pointer("/ray_path_filter").Get(root);
   if (p == nullptr || !p->IsArray()) {
     throw std::invalid_argument("<multi_scatter.ray_path_filter> cannot recognize!");
@@ -116,7 +116,7 @@ void MultiScatterContext::LoadFromJson(const rapidjson::Value& root) {
     if (!pf.IsUint()) {
       throw std::invalid_argument("<multi_scatter.ray_path_filter> cannot recognize!");
     } else {
-      tmp_filter_id.emplace_back(pf.GetInt());
+      tmp_filter_id.emplace_back(pf.GetUint());
     }
   }
 
