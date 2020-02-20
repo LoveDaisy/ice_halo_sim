@@ -148,7 +148,7 @@ class File {
   size_t buffer_offset_;
   boost::filesystem::path path_;
 
-  static constexpr size_t kBufferSize = 10 * 1024 * 1024;
+  static constexpr size_t kBufferSize = 2 * 1024 * 1024;
 };
 
 
