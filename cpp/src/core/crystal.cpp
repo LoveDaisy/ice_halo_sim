@@ -4,6 +4,8 @@
 #include <cstring>
 #include <utility>
 
+#include "context/crystal_context.hpp"
+
 namespace icehalo {
 
 const std::vector<std::pair<math::Vec3f, int>>& GetHexFaceNormToNumberList() {
@@ -179,9 +181,9 @@ void Crystal::InitFaceNumberHex() {
     float max_val = -1;
     int max_face_number = -1;
     for (const auto& d : GetHexFaceNormToNumberList()) {
-      float tmpVal = math::Dot3(curr_face_norm, d.first.val());
-      if (tmpVal > max_val) {
-        max_val = tmpVal;
+      float tmp_val = math::Dot3(curr_face_norm, d.first.val());
+      if (tmp_val > max_val) {
+        max_val = tmp_val;
         max_face_number = d.second;
       }
     }
@@ -203,9 +205,9 @@ void Crystal::InitFaceNumberCubic() {
     float max_val = -1;
     int max_face_number = -1;
     for (const auto& d : GetCubicFaceNormToNumberList()) {
-      float tmpVal = math::Dot3(curr_face_norm, d.first.val());
-      if (tmpVal > max_val) {
-        max_val = tmpVal;
+      float tmp_val = math::Dot3(curr_face_norm, d.first.val());
+      if (tmp_val > max_val) {
+        max_val = tmp_val;
         max_face_number = d.second;
       }
     }
@@ -682,6 +684,83 @@ CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<math::Vec3f>& pts,   
                                          const std::vector<math::TriangleIdx>& faces,  // face indices
                                          const FaceNumberTable& face_number_table) {   // face to face number
   return std::unique_ptr<Crystal>(new Crystal(pts, faces, face_number_table, CrystalType::kCustom));
+}
+
+
+std::vector<RayPath> MakeSymmetryExtension(const std::vector<RayPath>& ray_path_list, const RayPath& curr_ray_path,
+                                           const CrystalContext* crystal_ctx, uint8_t symmetry_flag) {
+  std::vector<RayPath> ray_path_extension{};
+  ray_path_extension.emplace_back(curr_ray_path);
+
+  // Add symmetry P.
+  auto period = crystal_ctx->GetCrystal()->GetFaceNumberPeriod();
+  RayPath tmp_ray_path;
+  if (period > 0 && (symmetry_flag & kSymmetryPrism)) {
+    decltype(ray_path_extension) ray_paths_copy(ray_path_extension);
+    for (const auto& rp : ray_paths_copy) {
+      for (int i = 0; i < period; i++) {
+        tmp_ray_path.clear();
+        bool crystal_flag = true;
+        for (auto fn : rp) {
+          if (!crystal_flag && fn != kInvalidFaceNumber && fn != 1 && fn != 2) {
+            fn = static_cast<FaceNumberType>((fn + period + i - 3) % period + 3);
+          }
+          crystal_flag = (fn == kInvalidFaceNumber);
+          tmp_ray_path.emplace_back(fn);
+        }
+        ray_path_extension.emplace_back(tmp_ray_path);
+      }
+    }
+  }
+
+  // Add symmetry B.
+  if (symmetry_flag & kSymmetryBasal) {
+    decltype(ray_path_extension) ray_paths_copy(ray_path_extension);
+    for (const auto& rp : ray_paths_copy) {
+      tmp_ray_path.clear();
+      bool crystal_flag = true;
+      for (auto fn : rp) {
+        if (!crystal_flag && fn != kInvalidFaceNumber && (fn == 1 || fn == 2)) {
+          fn = static_cast<FaceNumberType>(fn % 2 + 1);
+        }
+        crystal_flag = (fn == kInvalidFaceNumber);
+        tmp_ray_path.emplace_back(fn);
+      }
+      ray_path_extension.emplace_back(tmp_ray_path);
+    }
+  }
+
+  // Add symmetry D.
+  if (period > 0 && (symmetry_flag & kSymmetryDirection)) {
+    decltype(ray_path_extension) ray_paths_copy(ray_path_extension);
+    for (const auto& rp : ray_paths_copy) {
+      tmp_ray_path.clear();
+      bool crystal_flag = true;
+      for (auto fn : rp) {
+        if (!crystal_flag && fn != kInvalidFaceNumber && fn != 1 && fn != 2) {
+          fn = static_cast<FaceNumberType>(5 + period - fn);
+        }
+        crystal_flag = (fn == kInvalidFaceNumber);
+        tmp_ray_path.emplace_back(fn);
+      }
+      ray_path_extension.emplace_back(tmp_ray_path);
+    }
+  }
+
+  std::vector<RayPath> result;
+  if (ray_path_list.empty()) {
+    result.swap(ray_path_extension);
+  } else {
+    for (const auto& rp : ray_path_list) {
+      for (const auto& p : ray_path_extension) {
+        result.emplace_back(rp);
+        for (const auto& fn : p) {
+          result.back().emplace_back(fn);
+        }
+      }
+    }
+  }
+  return result;
 }
 
 }  // namespace icehalo

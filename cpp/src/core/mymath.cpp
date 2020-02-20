@@ -69,40 +69,16 @@ void Vec3FromTo(const float* vec1, const float* vec2, float* vec) {
 
 
 void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num) {
-  return RotateZWithDataStep(lon_lat_roll, input_vec, output_vec, 3, 3, data_num);
+  return RotateZ(lon_lat_roll, input_vec, output_vec, 3, 3, data_num);
 }
 
 
-void RotateZWithDataStep(const float* lon_lat_roll,  // longitude, latitude, roll
-                         const float* input_vec,     // input data
-                         float* output_vec,          // output data
-                         size_t input_step, size_t output_step, size_t data_num) {
+void RotateZ(const float* lon_lat_roll,  // longitude, latitude, roll
+             const float* input_vec,     // input data
+             float* output_vec,          // output data
+             size_t input_step, size_t output_step, size_t data_num) {
   using std::cos;
   using std::sin;
-
-  // clang-format off
-  /* The original cods are as follows:
-   *
-   *   float ax[9] = {
-   *     -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-   *     -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-   *     cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
-   *     cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-   *     -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-   *     cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
-   *     cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-   *     cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
-   *     sin(lon_lat_roll[1])
-   *   };
-   *
-   *   ConstDummyMatrix mat_rot_trans(ax, 3, 3);
-   *   ConstDummyMatrix mat_input_vec(input_vec, data_num, 3);
-   *   DummyMatrix mat_res_vec(output_vec, data_num, 3);
-   *   MatrixMultiply(mat_input_vec, mat_rot_trans, &mat_res_vec);
-   *
-   * Since this method is called frequently, we use a little different way to do the multiplication.
-   */
-  // clang-format on
 
   const float ax[] = {
     -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
@@ -122,7 +98,7 @@ void RotateZWithDataStep(const float* lon_lat_roll,  // longitude, latitude, rol
   __m128 AX1 = _mm_loadu_ps(ax + 3);
   __m128 AX2 = _mm_loadu_ps(ax + 6);
 
-  for (decltype(data_num) i = 0; i < data_num; i++) {
+  for (size_t i = 0; i < data_num; i++) {
     float* tmp_out = output_vec + i * output_step;
 
     __m128 INPUT_V = _mm_loadu_ps(input_vec + i * input_step);
@@ -150,31 +126,6 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
   using std::cos;
   using std::sin;
 
-  // clang-format off
-  /* The original codes are as follows:
-   *
-   *   float ax[9] = {
-   *     -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-   *     cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-   *     cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-   *     -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-   *     -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-   *     cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
-   *     cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
-   *     cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
-   *     sin(lon_lat_roll[1])
-   *   };
-   *
-   *   ConstDummyMatrix mat_rot(ax, 3, 3);
-   *   ConstDummyMatrix mat_input_vec(input_vec, data_num, 3);
-   *   DummyMatrix mat_output_vec(output_vec, data_num, 3);
-   *   MatrixMultiply(mat_input_vec, mat_rot, &mat_output_vec);
-   *
-   * Since this method is called frequently, we use a little different way to do the multiplication.
-   */
-  // clang-format on
-
-  // Here the ax is transposed, for better memory locality.
   const float ax[] = {
     -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
     -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),

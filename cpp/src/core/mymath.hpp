@@ -188,8 +188,8 @@ void Normalized3(const float* vec, float* vec_out);
 void Vec3FromTo(const float* vec1, const float* vec2, float* vec);
 
 void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num = 1);
-void RotateZWithDataStep(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t input_step,
-                         size_t output_step, size_t data_num = 1);
+void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t input_step,
+             size_t output_step, size_t data_num = 1);
 void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num = 1);
 
 std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss);

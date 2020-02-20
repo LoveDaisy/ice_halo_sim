@@ -28,7 +28,7 @@ void EqualAreaFishEye(const float* cam_rot,          // Camera rotation. [lon, l
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  math::RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (size_t i = 0; i < data_number; i++) {
     if (std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -72,7 +72,7 @@ void EquidistantFishEye(const float* cam_rot,          // Camera rotation. [lon,
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  math::RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -116,7 +116,7 @@ void DualEqualAreaFishEye(const float* /* cam_rot */,          // Not used
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  math::RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -153,7 +153,7 @@ void DualEquidistantFishEye(const float* /* cam_rot */,          // Not used
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  math::RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -189,7 +189,7 @@ void RectLinear(const float* cam_rot,          // Camera rotation. [lon, lat, ro
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZWithDataStep(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  math::RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (size_t i = 0; i < data_number; i++) {
     if (dir_copy[i * 3 + 2] < 0 || std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();

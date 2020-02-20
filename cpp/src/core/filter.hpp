@@ -15,15 +15,6 @@ namespace icehalo {
 struct RaySegment;
 enum class RaySegmentState : uint8_t;
 
-enum Symmetry : uint8_t {
-  kSymmetryNone = 0u,
-  kSymmetryPrism = 1u,
-  kSymmetryBasal = 2u,
-  kSymmetryDirection = 4u,
-  kSymmetryRepeatedReflection = 8u,
-};
-
-
 class AbstractRayPathFilter : public IJsonizable {
  public:
   AbstractRayPathFilter();
@@ -101,13 +92,6 @@ class GeneralRayPathFilter : public AbstractRayPathFilter {
   std::unordered_set<FaceNumberType> exit_faces_;
   std::unordered_set<int> hit_nums_;
 };
-
-
-std::vector<RayPath> MakeSymmetryExtension(
-    const std::vector<RayPath>& ray_path_list,  // original ray path list
-    const RayPath& curr_ray_path,               // current ray path. not include crystal id and kInvalidFaceNumber
-    const CrystalContext* crystal_ctx,          // crystal
-    uint8_t symmetry_flag);                     // symmetry
 
 
 }  // namespace icehalo
