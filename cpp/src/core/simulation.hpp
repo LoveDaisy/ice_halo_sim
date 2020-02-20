@@ -15,10 +15,8 @@ struct SimpleRayData : public ISerializable {
 
   int wavelength;
   float wavelength_weight;
-  float total_ray_energy;
   std::unique_ptr<float[]> buf;
   size_t size;
-  size_t init_ray_num;
 
   /**
    * @brief Serialize self to a file.
@@ -50,16 +48,16 @@ struct SimpleRayData : public ISerializable {
 };
 
 
-struct SimpleRayPathData {
-  size_t ray_path_hash;
-  RayPath ray_path;
-  SimpleRayData ray_data;
-
-  SimpleRayPathData(size_t hash, RayPath ray_path, SimpleRayData ray_data);
-  SimpleRayPathData(SimpleRayPathData&& other) noexcept;
-
-  SimpleRayPathData& operator=(SimpleRayPathData&& other) noexcept;
+struct RayCollectionInfo {
+  size_t identifier;
+  size_t init_ray_num;
+  float total_energy;
+  bool is_partial_data;
+  std::vector<size_t> idx;
 };
+
+using RayCollectionInfoList = std::vector<RayCollectionInfo>;
+using RayPathMap = std::unordered_map<size_t, RayPath>;
 
 
 class SimulationData : public ISerializable {
@@ -70,9 +68,9 @@ class SimulationData : public ISerializable {
   void PrepareNewScatter(size_t ray_num);
   void AddRay(RayInfo* ray);
 
-  SimpleRayData CollectFinalRayData() const;
-  std::vector<SimpleRayPathData> CollectSplitRayData(const ProjectContextPtr& ctx,
-                                                     const RenderSplitter& splitter) const;
+  std::pair<RayCollectionInfo, SimpleRayData> CollectFinalRayData() const;
+  std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> CollectSplitRayData(
+      const ProjectContextPtr& ctx, const RenderSplitter& splitter) const;
 
   void AddExitRaySegment(RaySegment* r);
   const std::vector<RaySegment*>& GetLastExitRaySegments() const;
@@ -120,9 +118,10 @@ class SimulationData : public ISerializable {
   void Deserialize(File& file, endian::Endianness endianness) override;
 
  private:
-  std::vector<SimpleRayPathData> CollectSplitHaloRayData(const icehalo::ProjectContextPtr& ctx) const;
-  std::vector<SimpleRayPathData> CollectSplitFilterRayData(const ProjectContextPtr& ctx,
-                                                           const RenderSplitter& splitter) const;
+  std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> CollectSplitHaloRayData(
+      const icehalo::ProjectContextPtr& ctx) const;
+  std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> CollectSplitFilterRayData(
+      const ProjectContextPtr& ctx, const RenderSplitter& splitter) const;
 
   std::vector<std::vector<RayInfo*>> rays_;
   std::vector<std::vector<RaySegment*>> exit_ray_segments_;

@@ -44,25 +44,29 @@ int main(int argc, char* argv[]) {
     std::chrono::duration<float, std::ratio<1, 1000>> final_render_time{};
     {
       auto final_ray_data = ray_data.CollectFinalRayData();
-      renderer.LoadRayData(static_cast<size_t>(final_ray_data.wavelength), final_ray_data);
+      renderer.LoadRayData(static_cast<size_t>(final_ray_data.second.wavelength), final_ray_data.first,
+                           final_ray_data.second);
       t2 = std::chrono::system_clock::now();
       final_render_time = t2 - t1;
-      init_ray_num = final_ray_data.init_ray_num;
-      exit_seg_num = final_ray_data.size;
+      init_ray_num = final_ray_data.first.init_ray_num;
+      exit_seg_num = final_ray_data.second.size;
     }  // Let final_ray_data be local.
 
     decltype(t1) t3;
     std::chrono::duration<float, std::ratio<1, 1000>> split_render_time{};
     {
       auto split_ray_data = ray_data.CollectSplitRayData(ctx, split_render_ctx->GetSplitter());
-      size_t curr_split_num = std::min(static_cast<size_t>(split_render_ctx->GetSplitNumber()), split_ray_data.size());
+      const auto& exit_ray_data = std::get<1>(split_ray_data);
+      size_t curr_split_num =
+          std::min(static_cast<size_t>(split_render_ctx->GetSplitNumber()), std::get<0>(split_ray_data).size());
       for (size_t j = 0; j < curr_split_num; j++) {
         auto img_idx = j / split_img_ch_num;
+        const auto& collection_info = std::get<0>(split_ray_data)[j];
         if (split_img_ch_num == 1) {
-          split_renderers[img_idx].LoadRayData(static_cast<size_t>(split_ray_data[j].ray_data.wavelength),
-                                               split_ray_data[j].ray_data);
+          split_renderers[img_idx].LoadRayData(static_cast<size_t>(exit_ray_data.wavelength), collection_info,
+                                               std::get<1>(split_ray_data));
         } else {
-          split_renderers[img_idx].LoadRayData(split_ray_data[j].ray_path_hash, split_ray_data[j].ray_data);
+          split_renderers[img_idx].LoadRayData(collection_info.identifier, collection_info, exit_ray_data);
         }
       }
       t3 = std::chrono::system_clock::now();

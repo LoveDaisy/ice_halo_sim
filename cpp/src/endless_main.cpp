@@ -47,7 +47,7 @@ int main(int argc, char* argv[]) {
       std::printf("Ray tracing: %.2fms\n", diff.count());
 
       auto ray_data = simulator.GetSimulationRayData().CollectFinalRayData();
-      renderer.LoadRayData(static_cast<size_t>(ray_data.wavelength), ray_data);
+      renderer.LoadRayData(static_cast<size_t>(ray_data.second.wavelength), ray_data.first, ray_data.second);
     }
 
     renderer.RenderToImage();

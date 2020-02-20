@@ -573,7 +573,8 @@ void SpectrumRenderer::SetRenderContext(RenderContextPtr render_ctx) {
 }
 
 
-void SpectrumRenderer::LoadRayData(size_t identifier, const SimpleRayData& final_ray_data) {
+void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& collection_info,
+                                   const SimpleRayData& final_ray_data) {
   if (!cam_ctx_) {
     throw std::invalid_argument("Camera context is not set!");
   }
@@ -581,7 +582,6 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const SimpleRayData& final
     throw std::invalid_argument("Render context is not set!");
   }
 
-  auto num = final_ray_data.size;
   auto projection_type = cam_ctx_->GetLensType();
   auto& projection_functions = GetProjectionFunctions();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
@@ -618,36 +618,68 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const SimpleRayData& final
   }
 
   const auto* final_ray_buf = final_ray_data.buf.get();
+  const auto& idx = collection_info.idx;
   auto threading_pool = ThreadingPool::GetInstance();
-  threading_pool->AddRangeBasedJobs(num, [=](size_t start_idx, size_t end_idx) {
-    size_t current_num = end_idx - start_idx;
+  if (collection_info.is_partial_data) {
+    auto num = idx.size();
+    threading_pool->AddRangeBasedJobs(num, [=, &idx](size_t start_idx, size_t end_idx) {
+      size_t current_num = end_idx - start_idx;
 
-    std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
-    pf(cam_ctx_->GetCameraTargetDirection(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid,
-       img_hei, tmp_xy.get(), render_ctx_->GetVisibleRange());
+      std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
+      for (size_t j = 0; j < current_num; j++) {
+        pf(cam_ctx_->GetCameraTargetDirection(), cam_ctx_->GetFov(), 1, final_ray_buf + idx[start_idx + j] * 4, img_wid,
+           img_hei, tmp_xy.get() + j * 2, render_ctx_->GetVisibleRange());
 
-    for (size_t j = 0; j < current_num; j++) {
-      int x = tmp_xy[j * 2 + 0];
-      int y = tmp_xy[j * 2 + 1];
-      if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
-        continue;
+        int x = tmp_xy[j * 2 + 0];
+        int y = tmp_xy[j * 2 + 1];
+        if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
+          continue;
+        }
+        if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
+          x += render_ctx_->GetImageOffsetX();
+          y += render_ctx_->GetImageOffsetY();
+        }
+        if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
+          continue;
+        }
+        auto tmp_val = final_ray_buf[(start_idx + j) * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
+        auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
+        current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
+        current_data[y * img_wid + x] = tmp_sum;
       }
-      if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
-        x += render_ctx_->GetImageOffsetX();
-        y += render_ctx_->GetImageOffsetY();
+    });
+  } else {
+    auto num = final_ray_data.size;
+    threading_pool->AddRangeBasedJobs(num, [=](size_t start_idx, size_t end_idx) {
+      size_t current_num = end_idx - start_idx;
+
+      std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
+      pf(cam_ctx_->GetCameraTargetDirection(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid,
+         img_hei, tmp_xy.get(), render_ctx_->GetVisibleRange());
+
+      for (size_t j = 0; j < current_num; j++) {
+        int x = tmp_xy[j * 2 + 0];
+        int y = tmp_xy[j * 2 + 1];
+        if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
+          continue;
+        }
+        if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
+          x += render_ctx_->GetImageOffsetX();
+          y += render_ctx_->GetImageOffsetY();
+        }
+        if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
+          continue;
+        }
+        auto tmp_val = final_ray_buf[(start_idx + j) * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
+        auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
+        current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
+        current_data[y * img_wid + x] = tmp_sum;
       }
-      if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
-        continue;
-      }
-      auto tmp_val = final_ray_buf[(start_idx + j) * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
-      auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
-      current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
-      current_data[y * img_wid + x] = tmp_sum;
-    }
-  });
+    });
+  }
   threading_pool->WaitFinish();
 
-  total_w_ += final_ray_data.init_ray_num * weight;
+  total_w_ += collection_info.init_ray_num * weight;
 }
 
 

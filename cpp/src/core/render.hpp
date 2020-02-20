@@ -104,7 +104,7 @@ class SpectrumRenderer {
   void SetCameraContext(CameraContextPtr cam_ctx);
   void SetRenderContext(RenderContextPtr render_ctx);
 
-  void LoadRayData(size_t identifier, const SimpleRayData& final_ray_data);
+  void LoadRayData(size_t identifier, const RayCollectionInfo& collection_info, const SimpleRayData& final_ray_data);
   void ClearRayData();
 
   /**
