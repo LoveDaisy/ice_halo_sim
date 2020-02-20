@@ -62,7 +62,7 @@ struct SimpleRayPathData {
 };
 
 
-class SimulationRayData : public ISerializable {
+class SimulationData : public ISerializable {
  public:
   WavelengthInfo wavelength_info_{};
 
@@ -135,7 +135,7 @@ class Simulator {
 
   void SetCurrentWavelengthIndex(int index);
   void Run();
-  const SimulationRayData& GetSimulationRayData();
+  const SimulationData& GetSimulationRayData();
 
 #ifdef FOR_TEST
   void PrintRayInfo();  // For debug
@@ -193,7 +193,7 @@ class Simulator {
 
   ProjectContextPtr context_;
 
-  SimulationRayData simulation_ray_data_;
+  SimulationData simulation_ray_data_;
 
   int current_wavelength_index_;
 

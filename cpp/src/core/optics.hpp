@@ -54,7 +54,6 @@ class RayPathRecorder : public ISerializable {
 
   RayPathRecorder();
 
-  bool IsReverse() const noexcept;
   size_t Hash() const noexcept;
 
   static size_t Hash(const RayPath& ray_path) noexcept;
@@ -63,7 +62,7 @@ class RayPathRecorder : public ISerializable {
   void Deserialize(File& file, endian::Endianness endianness) override;
 
   RayPathRecorder& operator<<(ShortIdType id);
-  RayPathRecorder& operator>>(ShortIdType id);
+  RayPathRecorder& operator<<(const RayPathRecorder& second);
   RayPathRecorder& operator,(ShortIdType id);
 
  private:

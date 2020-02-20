@@ -96,7 +96,7 @@ SimpleRayPathData& SimpleRayPathData::operator=(SimpleRayPathData&& other) noexc
 }
 
 
-void SimulationRayData::Clear() {
+void SimulationData::Clear() {
   rays_.clear();
   exit_ray_segments_.clear();
   RayInfoPool::GetInstance()->Clear();
@@ -104,7 +104,7 @@ void SimulationRayData::Clear() {
 }
 
 
-void SimulationRayData::PrepareNewScatter(size_t ray_num) {
+void SimulationData::PrepareNewScatter(size_t ray_num) {
   rays_.emplace_back();
   rays_.back().reserve(ray_num);
   exit_ray_segments_.emplace_back();
@@ -112,17 +112,17 @@ void SimulationRayData::PrepareNewScatter(size_t ray_num) {
 }
 
 
-void SimulationRayData::AddRay(RayInfo* ray) {
+void SimulationData::AddRay(RayInfo* ray) {
   rays_.back().emplace_back(ray);
 }
 
 
-void SimulationRayData::AddExitRaySegment(RaySegment* r) {
+void SimulationData::AddExitRaySegment(RaySegment* r) {
   exit_ray_segments_.back().emplace_back(r);
 }
 
 
-SimpleRayData SimulationRayData::CollectFinalRayData() const {
+SimpleRayData SimulationData::CollectFinalRayData() const {
   size_t num = 0;
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
@@ -167,8 +167,8 @@ struct RayPathStatsData {
 }  // namespace ray_path_helper
 
 
-std::vector<SimpleRayPathData> SimulationRayData::CollectSplitRayData(const ProjectContextPtr& ctx,
-                                                                      const RenderSplitter& splitter) const {
+std::vector<SimpleRayPathData> SimulationData::CollectSplitRayData(const ProjectContextPtr& ctx,
+                                                                   const RenderSplitter& splitter) const {
   switch (splitter.type) {
     case RenderSplitterType::kNone:
       return {};
@@ -180,7 +180,7 @@ std::vector<SimpleRayPathData> SimulationRayData::CollectSplitRayData(const Proj
 }
 
 
-std::vector<SimpleRayPathData> SimulationRayData::CollectSplitHaloRayData(const ProjectContextPtr& ctx) const {
+std::vector<SimpleRayPathData> SimulationData::CollectSplitHaloRayData(const ProjectContextPtr& ctx) const {
   std::unordered_map<size_t, size_t> symmetry_table;
   std::unordered_map<size_t, RayPath> ray_path_map;
   std::unordered_map<size_t, ray_path_helper::RayPathStatsData> ray_path_stats;
@@ -189,15 +189,22 @@ std::vector<SimpleRayPathData> SimulationRayData::CollectSplitHaloRayData(const 
       if (r->state != RaySegmentState::kFinished) {
         continue;
       }
-      auto ray_path_hash = r->recorder.Hash();
+      RayPathRecorder recorder{};
+      RaySegment* p = r;
+      while (p) {
+        recorder << p->recorder;
+        p = p->root_ctx->prev_ray_segment;
+      }
+      auto ray_path_hash = recorder.Hash();
+
       if (!ray_path_map.count(ray_path_hash)) {
         auto curr_path = GetRayPath(ctx, r);
         ray_path_map.emplace(ray_path_hash, curr_path);  // includes multi-scatter
         if (!symmetry_table.count(ray_path_hash)) {
           auto symmetry_extension = MakeSymmetryExtension(
               {}, curr_path, ctx->GetCrystalContext(r->root_ctx->crystal_id), RenderSplitter::kTopHaloSymmetry);
-          for (const auto& p : symmetry_extension) {
-            symmetry_table.emplace(RayPathRecorder::Hash(p), ray_path_hash);
+          for (const auto& tmp_path : symmetry_extension) {
+            symmetry_table.emplace(RayPathRecorder::Hash(tmp_path), ray_path_hash);
           }
         }
       }
@@ -218,7 +225,13 @@ std::vector<SimpleRayPathData> SimulationRayData::CollectSplitHaloRayData(const 
       if (r->state != RaySegmentState::kFinished) {
         continue;
       }
-      auto ray_path_hash = r->recorder.Hash();
+      RayPathRecorder recorder{};
+      RaySegment* p = r;
+      while (p) {
+        recorder << p->recorder;
+        p = p->root_ctx->prev_ray_segment;
+      }
+      auto ray_path_hash = recorder.Hash();
       auto normalized_hash = symmetry_table[ray_path_hash];
 
       if (!result_map.count(normalized_hash)) {
@@ -232,10 +245,10 @@ std::vector<SimpleRayPathData> SimulationRayData::CollectSplitHaloRayData(const 
         result_map.emplace(normalized_hash, std::make_pair(0, std::move(curr_ray_data)));
       }
       auto& idx = result_map.at(normalized_hash).first;
-      auto p = result_map.at(normalized_hash).second.ray_data.buf.get() + idx * 4;
+      auto ray_data = result_map.at(normalized_hash).second.ray_data.buf.get() + idx * 4;
       const auto* axis = r->root_ctx->main_axis.val();
-      math::RotateZBack(axis, r->dir.val(), p);
-      p[3] = r->w;
+      math::RotateZBack(axis, r->dir.val(), ray_data);
+      ray_data[3] = r->w;
       idx++;
     }
   }
@@ -252,25 +265,25 @@ std::vector<SimpleRayPathData> SimulationRayData::CollectSplitHaloRayData(const 
 }
 
 
-std::vector<SimpleRayPathData> SimulationRayData::CollectSplitFilterRayData(const ProjectContextPtr& ctx,
-                                                                            const RenderSplitter& splitter) const {
+std::vector<SimpleRayPathData> SimulationData::CollectSplitFilterRayData(const ProjectContextPtr& ctx,
+                                                                         const RenderSplitter& splitter) const {
   ;
 }
 
 
-const std::vector<RaySegment*>& SimulationRayData::GetLastExitRaySegments() const {
+const std::vector<RaySegment*>& SimulationData::GetLastExitRaySegments() const {
   return exit_ray_segments_.back();
 }
 
 
 #ifdef FOR_TEST
-const std::vector<std::vector<RaySegment*>>& SimulationRayData::GetExitRaySegments() const {
+const std::vector<std::vector<RaySegment*>>& SimulationData::GetExitRaySegments() const {
   return exit_ray_segments_;
 }
 #endif
 
 
-void SimulationRayData::Serialize(File& file, bool with_boi) const {
+void SimulationData::Serialize(File& file, bool with_boi) const {
   if (with_boi) {
     file.Write(ISerializable::kDefaultBoi);
   }
@@ -309,7 +322,7 @@ void SimulationRayData::Serialize(File& file, bool with_boi) const {
 }
 
 
-void SimulationRayData::Deserialize(File& file, endian::Endianness endianness) {
+void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
   endianness = CheckEndianness(file, endianness);
   bool need_swap = (endianness != endian::kCompileEndian);
 
@@ -603,9 +616,6 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
     buffer_.ray_seg[0][i] = r;
     r->root_ctx = ray_info_pool->GetObject(r, crystal_id, axis_rot);
     r->root_ctx->prev_ray_segment = prev_r;
-    if (prev_r) {
-      r->recorder = prev_r->recorder;
-    }
     r->recorder << crystal_id;
     simulation_ray_data_.AddRay(r->root_ctx);
   }
@@ -734,7 +744,6 @@ void Simulator::StoreRaySegments(const CrystalContext* crystal_ctx, AbstractRayP
       prev_ray_seg->next_refract = r;
     }
     r->prev = prev_ray_seg;
-    r->recorder = prev_ray_seg->recorder;
     r->recorder << crystal->FaceNumber(r->face_id);
     if (r->state == RaySegmentState::kFinished) {
       r->recorder << kInvalidFaceNumber;
@@ -767,7 +776,7 @@ void Simulator::RefreshBuffer() {
 }
 
 
-const SimulationRayData& Simulator::GetSimulationRayData() {
+const SimulationData& Simulator::GetSimulationRayData() {
   return simulation_ray_data_;
 }
 

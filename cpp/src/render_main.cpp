@@ -29,7 +29,7 @@ int main(int argc, char* argv[]) {
     split_renderers.back().SetRenderContext(split_render_ctx);
   }
 
-  icehalo::SimulationRayData ray_data;
+  icehalo::SimulationData ray_data;
   auto data_files = icehalo::ListDataFiles(ctx->GetDataDirectory().c_str());
   for (size_t i = 0; i < data_files.size(); i++) {
     auto t0 = std::chrono::system_clock::now();

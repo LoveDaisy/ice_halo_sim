@@ -17,10 +17,6 @@ namespace icehalo {
 
 RayPathRecorder::RayPathRecorder() : hash_(0), offset_(0) {}
 
-bool RayPathRecorder::IsReverse() const noexcept {
-  return offset_ < 0;
-}
-
 
 size_t RayPathRecorder::Hash() const noexcept {
   if (offset_ < 0) {
@@ -77,20 +73,11 @@ RayPathRecorder& RayPathRecorder::operator<<(ShortIdType id) {
 }
 
 
-RayPathRecorder& RayPathRecorder::operator>>(ShortIdType id) {
-  auto reverse_offset = -offset_;
-  size_t tmp_hash = (id << reverse_offset) | (id >> (kTotalBits - reverse_offset));
-  endian::ByteSwap::Swap(&tmp_hash);
-  auto* p = reinterpret_cast<uint8_t*>(&tmp_hash);
-  for (size_t i = 0; i < sizeof(tmp_hash); i++) {
-    ReverseBits(p + i);
-  }
-
+RayPathRecorder& RayPathRecorder::operator<<(const RayPathRecorder& second) {
+  size_t tmp_hash = (second.hash_ << offset_) | (second.hash_ >> (kTotalBits - offset_));
   hash_ ^= tmp_hash;
-  reverse_offset += kStep;
-  reverse_offset %= kTotalBits;
-  offset_ = -reverse_offset;
-
+  offset_ += second.offset_;
+  offset_ %= kTotalBits;
   return *this;
 }
 
