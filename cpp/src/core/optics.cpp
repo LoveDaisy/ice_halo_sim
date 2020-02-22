@@ -65,7 +65,8 @@ void RayPathRecorder::Deserialize(File& file, endian::Endianness endianness) {
 
 
 RayPathRecorder& RayPathRecorder::operator<<(ShortIdType id) {
-  size_t tmp_hash = (id << offset_) | (id >> (kTotalBits - offset_));
+  size_t val = id;
+  size_t tmp_hash = (val << offset_) | (val >> (kTotalBits - offset_));
   hash_ ^= tmp_hash;
   offset_ += kStep;
   offset_ %= kTotalBits;

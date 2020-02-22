@@ -45,4 +45,18 @@ TEST_F(ContextTest, FillSunDir) {
   }
 }
 
+TEST_F(ContextTest, RayPathHash01) {
+  auto ctx = context->GetCrystalContext(4);
+
+  icehalo::RayPath ray_path_01{ 2, 3, 6, icehalo::kInvalidFaceNumber };
+  icehalo::RayPath ray_path_02{ 2, 5, 8, icehalo::kInvalidFaceNumber };
+
+  auto hash_01 = icehalo::RayPathRecorder::Hash(ray_path_01);
+  auto hash_02 = icehalo::RayPathRecorder::Hash(ray_path_02);
+  auto hash_01_normalized = icehalo::GetNormalizedHash(ray_path_01, ctx, icehalo::RenderSplitter::kTopHaloSymmetry);
+  auto hash_02_normalized = icehalo::GetNormalizedHash(ray_path_02, ctx, icehalo::RenderSplitter::kTopHaloSymmetry);
+  ASSERT_NE(hash_01, hash_02);
+  ASSERT_EQ(hash_01_normalized, hash_02_normalized);
+}
+
 }  // namespace
