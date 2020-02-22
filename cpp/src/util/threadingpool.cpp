@@ -1,5 +1,7 @@
 #include "util/threadingpool.hpp"
 
+#include "util/log.hpp"
+
 namespace icehalo {
 
 
@@ -28,7 +30,7 @@ void ThreadingPool::Start() {
   pool_.clear();
   alive_ = true;
   alive_threads_ = 0;
-  printf("Threading pool size: %zu\n", thread_num_);
+  LOG_DEBUG("Threading pool size: %zu", thread_num_);
   for (decltype(thread_num_) ii = 0; ii < thread_num_; ii++) {
     pool_.emplace_back(&ThreadingPool::WorkingFunction, this);
     alive_threads_ += 1;

@@ -2,6 +2,7 @@
 
 #include "context/context.hpp"
 #include "core/simulation.hpp"
+#include "util/log.hpp"
 
 using namespace icehalo;
 
@@ -17,26 +18,26 @@ int main(int argc, char* argv[]) {
 
   auto t = std::chrono::system_clock::now();
   std::chrono::duration<float, std::ratio<1, 1000>> diff = t - start;
-  printf("Initialization: %.2fms\n", diff.count());
+  LOG_INFO("Initialization: %.2fms", diff.count());
 
   const auto& wavelengths = context->wavelengths_;
   for (decltype(wavelengths.size()) i = 0; i < wavelengths.size(); i++) {
     const auto& wl = wavelengths[i];
-    printf("starting at wavelength: %d\n", wl.wavelength);
+    LOG_INFO("starting at wavelength: %d", wl.wavelength);
     simulator.SetCurrentWavelengthIndex(i);
 
     auto t0 = std::chrono::system_clock::now();
     simulator.Run();
     auto t1 = std::chrono::system_clock::now();
     diff = t1 - t0;
-    printf("Ray tracing: %.2fms\n", diff.count());
+    LOG_INFO("Ray tracing: %.2fms", diff.count());
   }
   context->PrintCrystalInfo();
   simulator.PrintRayInfo();
 
   auto end = std::chrono::system_clock::now();
   diff = end - start;
-  printf("Total: %.3fs\n", diff.count() / 1e3);
+  LOG_INFO("Total: %.3fs", diff.count() / 1e3);
 
   return 0;
 }

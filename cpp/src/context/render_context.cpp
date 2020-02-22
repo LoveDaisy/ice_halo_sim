@@ -5,6 +5,7 @@
 #include "core/render.hpp"
 #include "rapidjson/filereadstream.h"
 #include "rapidjson/pointer.h"
+#include "util/log.hpp"
 
 
 namespace icehalo {
@@ -244,9 +245,9 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   SetImageWidth(800);
   auto p = Pointer("/width").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Render config missing <width>, using default 800!\n");
+    LOG_INFO("Render config missing <width>, using default 800!");
   } else if (!p->IsInt()) {
-    std::fprintf(stderr, "\nWARNING! Render config <width> is not an integer, using default 800!\n");
+    LOG_INFO("Render config <width> is not an integer, using default 800!");
   } else {
     SetImageWidth(p->GetInt());
   }
@@ -254,9 +255,9 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   SetImageHeight(800);
   p = Pointer("/height").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Render config missing <height>, using default 800!\n");
+    LOG_INFO("Render config missing <height>, using default 800!");
   } else if (!p->IsInt()) {
-    std::fprintf(stderr, "\nWARNING! Render config <height> is not an integer, using default 800!\n");
+    LOG_INFO("Render config <height> is not an integer, using default 800!");
   } else {
     SetImageHeight(p->GetInt());
   }
@@ -264,9 +265,9 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   SetVisibleRange(VisibleRange::kUpper);
   p = Pointer("/visible_semi_sphere").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Render config missing <visible_semi_sphere>, using default kUpper!\n");
+    LOG_INFO("Render config missing <visible_semi_sphere>, using default kUpper!");
   } else if (!p->IsString()) {
-    std::fprintf(stderr, "\nWARNING! Render config <visible_semi_sphere> is not a string, using default kUpper!\n");
+    LOG_INFO("Render config <visible_semi_sphere> is not a string, using default kUpper!");
   } else if (*p == "upper") {
     SetVisibleRange(VisibleRange::kUpper);
   } else if (*p == "lower") {
@@ -283,9 +284,9 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   SetIntensity(1.0f);
   p = Pointer("/intensity_factor").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Render config missing <intensity_factor>, using default 1.0!\n");
+    LOG_INFO("Render config missing <intensity_factor>, using default 1.0!");
   } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Render config <intensity_factor> is not a number, using default 1.0!\n");
+    LOG_INFO("Render config <intensity_factor> is not a number, using default 1.0!");
   } else {
     auto f = static_cast<float>(p->GetDouble());
     f = std::max(std::min(f, RenderContext::kMaxIntensity), RenderContext::kMinIntensity);
@@ -296,11 +297,11 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   SetImageOffsetY(0);
   p = Pointer("/offset").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Render config missing <offset>, using default [0, 0]!\n");
+    LOG_INFO("Render config missing <offset>, using default [0, 0]!");
   } else if (!p->IsArray()) {
-    std::fprintf(stderr, "\nWARNING! Render config <offset> is not an array, using default [0, 0]!\n");
+    LOG_INFO("Render config <offset> is not an array, using default [0, 0]!");
   } else if (p->Size() != 2 || !(*p)[0].IsInt() || !(*p)[1].IsInt()) {
-    std::fprintf(stderr, "\nWARNING! Config <render.offset> cannot be recognized, using default [0, 0]!\n");
+    LOG_INFO("Config <render.offset> cannot be recognized, using default [0, 0]!");
   } else {
     int offset_x = (*p)[0].GetInt();
     int offset_y = (*p)[1].GetInt();
@@ -315,9 +316,9 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   SetColorCompactLevel(ColorCompactLevel::kTrueColor);
   p = Pointer("/color_compact_level").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Render config missing <color_compact_level>, use default true color!\n");
+    LOG_INFO("Render config missing <color_compact_level>, use default true color!");
   } else if (!p->IsString()) {
-    std::fprintf(stderr, "\nWARNING! Render config <color_compact_level> is not a string, use default true color!\n");
+    LOG_INFO("Render config <color_compact_level> is not a string, use default true color!");
   } else {
     if (*p == "true_color") {
       color_compact_level_ = ColorCompactLevel::kTrueColor;
@@ -334,9 +335,9 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   splitter_ = {};
   p = Pointer("/splitter").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Render config missing <splitter>, use default!\n");
+    LOG_INFO("Render config missing <splitter>, use default!");
   } else if (!p->IsObject()) {
-    std::fprintf(stderr, "\nWARNING! Render config <splitter> is not an object, use default!\n");
+    LOG_INFO("Render config <splitter> is not an object, use default!");
   } else {
     auto pp = Pointer("/type").Get(*p);
     if (pp && pp->IsString() && *pp == "top_halo") {
@@ -352,13 +353,13 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
       std::vector<std::vector<ShortIdType>> crystal_filters;
       for (const auto& ppi : pp->GetArray()) {
         if (!ppi.IsArray() || ppi.GetArray().Size() % 2 != 0) {
-          std::fprintf(stderr, "crystal filter param not recognize!");
+          LOG_INFO("crystal filter param not recognize!");
           continue;
         }
         std::vector<ShortIdType> tmp_ids{};
         for (const auto& fid : ppi.GetArray()) {
           if (!fid.IsUint()) {
-            std::fprintf(stderr, "crystal filter param not recognize!");
+            LOG_INFO("crystal filter param not recognize!");
             continue;
           }
           tmp_ids.emplace_back(fid.GetUint());
@@ -376,11 +377,11 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   ResetBackgroundColor();
   p = Pointer("/background_color").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <render.background_color>, using default [0,0,0]!\n");
+    LOG_INFO("Config missing <render.background_color>, using default [0,0,0]!");
   } else if (!p->IsArray()) {
-    std::fprintf(stderr, "\nWARNING! Config <render.background_color> is not an array, using default [0,0,0]!\n");
+    LOG_INFO("Config <render.background_color> is not an array, using default [0,0,0]!");
   } else if (p->Size() != 3 || !(*p)[0].IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Config <render.background_color> cannot be recognized, using default [0,0,0]!\n");
+    LOG_INFO("Config <render.background_color> cannot be recognized, using default [0,0,0]!");
   } else {
     auto pa = p->GetArray();
     float r = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
@@ -392,14 +393,14 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   ResetRayColor();
   p = Pointer("/ray_color").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <render.ray_color>, using default real color!\n");
+    LOG_INFO("Config missing <render.ray_color>, using default real color!");
   } else if (!p->IsArray() && !p->IsString()) {
-    std::fprintf(stderr, "\nWARNING! Config <render.ray_color> is not an array nor a string, ");
-    std::fprintf(stderr, "using default real color!\n");
+    LOG_INFO("Config <render.ray_color> is not an array nor a string, ");
+    LOG_INFO("using default real color!");
   } else if (p->IsArray() && (p->Size() != 3 || !(*p)[0].IsNumber())) {
-    std::fprintf(stderr, "\nWARNING! Config <render.ray_color> cannot be recognized, using default real color!\n");
+    LOG_INFO("Config <render.ray_color> cannot be recognized, using default real color!");
   } else if (p->IsString() && (*p) != "real") {
-    std::fprintf(stderr, "\nWARNING! Config <render.ray_color> cannot be recognized, using default real color!\n");
+    LOG_INFO("Config <render.ray_color> cannot be recognized, using default real color!");
   } else if (p->IsArray()) {
     auto pa = p->GetArray();
     float r = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));

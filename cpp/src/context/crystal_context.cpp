@@ -6,6 +6,7 @@
 #include "core/enum_map.hpp"
 #include "rapidjson/document.h"
 #include "rapidjson/pointer.h"
+#include "util/log.hpp"
 
 namespace icehalo {
 
@@ -256,7 +257,7 @@ AxisDistribution ParseCrystalAxis(const rapidjson::Value& c) {
   axis.azimuth_std = 360;
   p = Pointer("/azimuth").Get(c);
   if (p == nullptr || !p->IsObject()) {
-    std::fprintf(stderr, "<azimuth> cannot recognize! Use default.\n");
+    LOG_INFO("<azimuth> cannot recognize! Use default.");
   } else {
     p = Pointer("/azimuth/type").Get(c);
     if (p == nullptr || !p->IsString()) {

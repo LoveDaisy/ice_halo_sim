@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "core/mymath.hpp"
+#include "util/log.hpp"
 #include "util/obj_pool.hpp"
 #include "util/threadingpool.hpp"
 
@@ -459,18 +460,20 @@ void Simulator::BufferData::Allocate(size_t ray_number) {
 
 #ifdef FOR_TEST
 void Simulator::BufferData::Print() {
-  std::printf("pt[0]                    dir[0]                   w[0]\n");
+  LOG_DEBUG("pt[0]                    dir[0]                   w[0]");
   for (decltype(ray_num) i = 0; i < ray_num; i++) {
-    std::printf("%+.4f,%+.4f,%+.4f  ", pt[0][i * 3 + 0], pt[0][i * 3 + 1], pt[0][i * 3 + 2]);
-    std::printf("%+.4f,%+.4f,%+.4f  ", dir[0][i * 3 + 0], dir[0][i * 3 + 1], dir[0][i * 3 + 2]);
-    std::printf("%+.4f\n", w[0][i]);
+    LOG_DEBUG("%+.4f,%+.4f,%+.4f  %+.4f,%+.4f,%+.4f  %+.4f",            //
+              pt[0][i * 3 + 0], pt[0][i * 3 + 1], pt[0][i * 3 + 2],     // pt
+              dir[0][i * 3 + 0], dir[0][i * 3 + 1], dir[0][i * 3 + 2],  // dir
+              w[0][i]);
   }
 
-  std::printf("pt[1]                    dir[1]                   w[1]\n");
+  LOG_DEBUG("pt[1]                    dir[1]                   w[1]");
   for (decltype(ray_num) i = 0; i < ray_num; i++) {
-    std::printf("%+.4f,%+.4f,%+.4f  ", pt[1][i * 3 + 0], pt[1][i * 3 + 1], pt[1][i * 3 + 2]);
-    std::printf("%+.4f,%+.4f,%+.4f  ", dir[1][i * 3 + 0], dir[1][i * 3 + 1], dir[1][i * 3 + 2]);
-    std::printf("%+.4f\n", w[1][i]);
+    LOG_DEBUG("%+.4f,%+.4f,%+.4f  %+.4f,%+.4f,%+.4f  %+.4f",            //
+              pt[1][i * 3 + 0], pt[1][i * 3 + 1], pt[1][i * 3 + 2],     // pt
+              dir[1][i * 3 + 0], dir[1][i * 3 + 1], dir[1][i * 3 + 2],  // dir
+              w[1][i]);
   }
 }
 #endif
@@ -533,7 +536,7 @@ void Simulator::Run() {
   entry_ray_offset_ = 0;
 
   if (current_wavelength_index_ < 0) {
-    std::fprintf(stderr, "Warning! wavelength is not set!");
+    LOG_INFO("NOTE! wavelength is not set!");
     return;
   }
   simulation_ray_data_.wavelength_info_ = context_->wavelengths_[current_wavelength_index_];
@@ -787,14 +790,14 @@ void Simulator::PrintRayInfo() {
         s.push(p);
         p = p->prev;
       }
-      std::printf("%zu,0,0,0,0,0,-1\n", s.size());
+      LOG_DEBUG("%zu,0,0,0,0,0,-1", s.size());
       while (!s.empty()) {
         p = s.top();
         s.pop();
-        std::printf("%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f\n",  //
-                    p->pt.x(), p->pt.y(), p->pt.z(),                // point
-                    p->dir.x(), p->dir.y(), p->dir.z(),             // direction
-                    p->w);                                          // weight
+        LOG_DEBUG("%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f",  //
+                  p->pt.x(), p->pt.y(), p->pt.z(),              // point
+                  p->dir.x(), p->dir.y(), p->dir.z(),           // direction
+                  p->w);                                        // weight
       }
     }
   }

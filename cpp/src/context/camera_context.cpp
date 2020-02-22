@@ -5,6 +5,7 @@
 #include "core/render.hpp"
 #include "rapidjson/filereadstream.h"
 #include "rapidjson/pointer.h"
+#include "util/log.hpp"
 
 
 namespace icehalo {
@@ -139,11 +140,9 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
 
   auto* p = Pointer("/azimuth").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Camera config missing <azimuth>, using default %.1f!\n",
-                 CameraContext::kDefaultCamAzimuth);
+    LOG_INFO("Camera config missing <azimuth>. Use default %.1f!", CameraContext::kDefaultCamAzimuth);
   } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Camera config <azimuth> is not a number, using default %.1f!\n",
-                 CameraContext::kDefaultCamAzimuth);
+    LOG_INFO("Camera config <azimuth> is not a number. Use default %.1f!", CameraContext::kDefaultCamAzimuth);
   } else {
     cam_az = static_cast<float>(p->GetDouble());
     cam_az = std::max(std::min(cam_az, CameraContext::kMaxAngleRound), CameraContext::kMinAngleRound);
@@ -152,11 +151,9 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
 
   p = Pointer("/elevation").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Camera config missing <elevation>, using default %.1f!\n",
-                 CameraContext::kDefaultCamElevation);
+    LOG_INFO("Camera config missing <elevation>. Use default %.1f!", CameraContext::kDefaultCamElevation);
   } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Camera config <elevation> is not a number, using default %.1f!\n",
-                 CameraContext::kDefaultCamElevation);
+    LOG_INFO("Camera config <elevation> is not a number. Use default %.1f!", CameraContext::kDefaultCamElevation);
   } else {
     cam_el = static_cast<float>(p->GetDouble());
     cam_el = std::max(std::min(cam_el, CameraContext::kMaxAngleTilt), CameraContext::kMinAngleTilt);
@@ -164,11 +161,9 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
 
   p = Pointer("/rotation").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Camera config missing <rotation>, using default %.1f!\n",
-                 CameraContext::kDefaultCamRoll);
+    LOG_INFO("Camera config missing <rotation>. Use default %.1f!", CameraContext::kDefaultCamRoll);
   } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Camera config <rotation> is not a number, using default %.1f!\n",
-                 CameraContext::kDefaultCamRoll);
+    LOG_INFO("Camera config <rotation> is not a number. Use default %.1f!", CameraContext::kDefaultCamRoll);
   } else {
     cam_ro = static_cast<float>(p->GetDouble());
     cam_ro = std::max(std::min(cam_ro, CameraContext::kMaxAngleHeading), CameraContext::kMinAngleHeading);
@@ -178,9 +173,9 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
 
   p = Pointer("/lens").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Camera config missing <lens>, using default equal-area fisheye!\n");
+    LOG_INFO("Camera config missing <lens>. Use default equal-area fisheye!");
   } else if (!p->IsString()) {
-    std::fprintf(stderr, "\nWARNING! Camera config <lens> is not a string, using default equal-area fisheye!\n");
+    LOG_INFO("Camera config <lens> is not a string. Use default equal-area fisheye!");
   } else {
     if (*p == "linear") {
       SetLensType(LensType::kLinear);
@@ -193,15 +188,15 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
     } else if (*p == "dual_fisheye_equalarea") {
       SetLensType(LensType::kDualEqualArea);
     } else {
-      std::fprintf(stderr, "\nWARNING! config <camera.lens> cannot be recognized, using default equal-area fisheye!\n");
+      LOG_INFO("Camera config <lens> cannot be recognized. Use default equal-area fisheye!");
     }
   }
 
   p = Pointer("/fov").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <camera.fov>, using default %.1f!\n", GetFov());
+    LOG_INFO("Camera config missing <fov>. Use default %.1f!", GetFov());
   } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! config <camera.fov> is not a number, using default %.1f!\n", GetFov());
+    LOG_INFO("Camera config <fov> is not a number. Use default %.1f!\n", GetFov());
   } else {
     SetFov(static_cast<float>(p->GetDouble()));
   }

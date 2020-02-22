@@ -9,6 +9,7 @@
 #include "rapidjson/error/en.h"
 #include "rapidjson/filereadstream.h"
 #include "rapidjson/pointer.h"
+#include "util/log.hpp"
 
 
 namespace icehalo {
@@ -23,11 +24,11 @@ constexpr int ProjectContext::kMaxRayHitNum;
 
 
 ProjectContextPtrU ProjectContext::CreateFromFile(const char* filename) {
-  printf("Reading config from: %s\n", filename);
+  LOG_INFO("Reading config from: %s", filename);
 
   FILE* fp = fopen(filename, "rb");
   if (!fp) {
-    std::fprintf(stderr, "ERROR: file %s cannot be open!\n", filename);
+    LOG_ERROR("file %s cannot be open!", filename);
     std::fclose(fp);
     return nullptr;
   }
@@ -38,7 +39,7 @@ ProjectContextPtrU ProjectContext::CreateFromFile(const char* filename) {
 
   rapidjson::Document d;
   if (d.ParseStream(is).HasParseError()) {
-    std::fprintf(stderr, "\nError(offset %zu): %s\n", d.GetErrorOffset(), GetParseError_En(d.GetParseError()));
+    LOG_ERROR("Error(offset %zu): %s", d.GetErrorOffset(), GetParseError_En(d.GetParseError()));
     std::fclose(fp);
     return nullptr;
   }
@@ -140,13 +141,13 @@ CrystalMap ProjectContext::GetCrystalMap() const {
 void ProjectContext::PrintCrystalInfo() const {
   for (const auto& ctx : crystal_store_) {
     auto g = ctx->GetCrystal();
-    std::printf("-- ID: %d --\n", ctx->GetId());
+    LOG_DEBUG("-- ID: %d --", ctx->GetId());
     for (const auto& v : g->GetVertexes()) {
-      std::printf("v %+.4f %+.4f %+.4f\n", v.x(), v.y(), v.z());
+      LOG_DEBUG("v %+.4f %+.4f %+.4f", v.x(), v.y(), v.z());
     }
     for (const auto& f : g->GetFaces()) {
       auto idx = f.idx();
-      std::printf("f %d %d %d\n", idx[0] + 1, idx[1] + 1, idx[2] + 1);
+      LOG_DEBUG("f %d %d %d", idx[0] + 1, idx[1] + 1, idx[2] + 1);
     }
   }
 }
@@ -170,33 +171,30 @@ ProjectContext::ProjectContext()
 void ProjectContext::ParseBasicSettings(rapidjson::Document& d) {
   auto p = Pointer("/ray/number").Get(d);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <ray.number>, using default %d!\n", ProjectContext::kMinRayHitNum);
+    LOG_INFO("Config missing <ray.number>. Use default %d!", ProjectContext::kMinRayHitNum);
   } else if (!p->IsUint()) {
-    std::fprintf(stderr, "\nWARNING! Config <ray.number> is not unsigned int, using default %d!\n",
-                 ProjectContext::kMinRayHitNum);
+    LOG_INFO("Config <ray.number> is not unsigned int. Use default %d!", ProjectContext::kMinRayHitNum);
   } else {
     SetInitRayNum(p->GetUint());
   }
 
   p = Pointer("/max_recursion").Get(d);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <max_recursion>, using default %d!\n",
-                 ProjectContext::kMinRayHitNum);
+    LOG_INFO("Config missing <max_recursion>. Use default %d!", ProjectContext::kMinRayHitNum);
   } else if (!p->IsInt()) {
-    std::fprintf(stderr, "\nWARNING! config <max_recursion> is not a integer, using default %d!\n",
-                 ProjectContext::kMinRayHitNum);
+    LOG_INFO("Config <max_recursion> is not an integer. Use default %d!", ProjectContext::kMinRayHitNum);
   } else {
     SetRayHitNum(p->GetInt());
   }
 
-  std::vector<float> tmp_wavelengths{ 550.0f };
+  std::vector<int> tmp_wavelengths{ 550 };
   auto wl_p = Pointer("/ray/wavelength").Get(d);
   if (wl_p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <ray.wavelength>, using default 550!\n");
+    LOG_INFO("Config missing <ray.wavelength>. Use default 550!");
   } else if (!wl_p->IsArray()) {
-    std::fprintf(stderr, "\nWARNING! Config <ray.wavelength> is not an array, using default 550!\n");
-  } else if (!(*wl_p)[0].IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Config <ray.wavelength> cannot be recognized, using default 550!\n");
+    LOG_INFO("Config <ray.wavelength> is not an array. Use default 550!");
+  } else if (!(*wl_p)[0].IsInt()) {
+    LOG_INFO("Config <ray.wavelength> cannot be recognized, using default 550!");
   } else {
     tmp_wavelengths.clear();
     for (const auto& pi : wl_p->GetArray()) {
@@ -207,11 +205,11 @@ void ProjectContext::ParseBasicSettings(rapidjson::Document& d) {
   std::vector<float> tmp_weights{ 1.0f };
   auto wt_p = Pointer("/ray/weight").Get(d);
   if (wt_p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <ray.weight>, using default 1.0!\n");
+    LOG_INFO("Config missing <ray.weight>. Use default 1.0!");
   } else if (!wt_p->IsArray()) {
-    std::fprintf(stderr, "\nWARNING! Config <ray.wavelength> is not an array, using default 1.0!\n");
+    LOG_INFO("Config <ray.wavelength> is not an array. Use default 1.0!");
   } else if (!(*wt_p)[0].IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Config <ray.wavelength> cannot be recognized, using default 1.0!\n");
+    LOG_INFO("Config <ray.wavelength> cannot be recognized. Use default 1.0!");
   } else {
     tmp_weights.clear();
     for (const auto& pi : wt_p->GetArray()) {
@@ -231,9 +229,9 @@ void ProjectContext::ParseBasicSettings(rapidjson::Document& d) {
   std::string dir = boost::filesystem::current_path().string();
   p = Pointer("/data_folder").Get(d);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Config missing <data_folder>, using default current path!\n");
+    LOG_INFO("Config missing <data_folder>. Use default current path!");
   } else if (!p->IsString()) {
-    std::fprintf(stderr, "\nWARNING! Config <data_folder> is not a string, using default current path!\n");
+    LOG_INFO("Config <data_folder> is not a string. Use default current path!");
   } else {
     dir = p->GetString();
   }
@@ -245,7 +243,7 @@ void ProjectContext::ParseSunSettings(rapidjson::Document& d) {
   sun_ctx_ = SunContext::CreateDefault();
   auto root = Pointer("/sun").Get(d);
   if (!root) {
-    std::fprintf(stderr, "\nWARNING! Config <sun> is missing. Use default!\n");
+    LOG_INFO("Config <sun> is missing. Use default!");
   } else {
     sun_ctx_->LoadFromJson(*root);
   }
@@ -256,7 +254,7 @@ void ProjectContext::ParseCameraSettings(rapidjson::Document& d) {
   cam_ctx_ = CameraContext::CreateDefault();
   auto root = Pointer("/camera").Get(d);
   if (!root) {
-    std::fprintf(stderr, "\nWARNING! Config <camera> is missing. Use default!\n");
+    LOG_INFO("Config <camera> is missing. Use default!");
   } else {
     cam_ctx_->LoadFromJson(*root);
   }
@@ -267,7 +265,7 @@ void ProjectContext::ParseRenderSettings(rapidjson::Document& d) {
   render_ctx_ = RenderContext::CreateDefault();
   auto root = Pointer("/render").Get(d);
   if (!root) {
-    std::fprintf(stderr, "\nWARNING! Config <render> is missing. Use default!\n");
+    LOG_INFO("Config <render> is missing. Use default!");
   } else {
     render_ctx_->LoadFromJson(*root);
   }
@@ -275,7 +273,7 @@ void ProjectContext::ParseRenderSettings(rapidjson::Document& d) {
   split_render_ctx_ = RenderContext::CreateDefault();
   root = Pointer("/split_render").Get(d);
   if (!root) {
-    std::fprintf(stderr, "\nWARNING! Config <top_halo_render> is missing. Use default!\n");
+    LOG_INFO("Config <top_halo_render> is missing. Use default!");
   } else {
     split_render_ctx_->LoadFromJson(*root);
   }

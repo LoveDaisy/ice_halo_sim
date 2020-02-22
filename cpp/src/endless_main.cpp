@@ -5,6 +5,7 @@
 #include "context/context.hpp"
 #include "core/render.hpp"
 #include "core/simulation.hpp"
+#include "util/log.hpp"
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
@@ -23,12 +24,12 @@ int main(int argc, char* argv[]) {
   renderer.SetRenderContext(proj_ctx->render_ctx_);
 
   auto t = std::chrono::system_clock::now();
-  std::chrono::duration<float, std::ratio<1, 1000>> diff = t - start;
-  std::printf("Initialization: %.2fms\n", diff.count());
+  std::chrono::duration<float, std::milli> diff = t - start;
+  LOG_INFO("Initialization: %.2fms\n", diff.count());
 
   icehalo::File file(proj_ctx->GetDefaultImagePath().c_str());
   if (!file.Open(icehalo::FileOpenMode::kWrite)) {
-    std::fprintf(stderr, "Cannot create output image file!\n");
+    LOG_ERROR("Cannot create output image file!");
     return -1;
   }
   file.Close();
@@ -37,14 +38,14 @@ int main(int argc, char* argv[]) {
   while (true) {
     const auto& wavelengths = proj_ctx->wavelengths_;
     for (size_t i = 0; i < wavelengths.size(); i++) {
-      std::printf("starting at wavelength: %d\n", wavelengths[i].wavelength);
+      LOG_INFO("starting at wavelength: %d", wavelengths[i].wavelength);
       simulator.SetCurrentWavelengthIndex(i);
 
       auto t0 = std::chrono::system_clock::now();
       simulator.Run();
       auto t1 = std::chrono::system_clock::now();
       diff = t1 - t0;
-      std::printf("Ray tracing: %.2fms\n", diff.count());
+      LOG_INFO("Ray tracing: %.2fms", diff.count());
 
       auto ray_data = simulator.GetSimulationRayData().CollectFinalRayData();
       renderer.LoadRayData(static_cast<size_t>(ray_data.second.wavelength), ray_data.first, ray_data.second);
@@ -60,8 +61,8 @@ int main(int argc, char* argv[]) {
     t = std::chrono::system_clock::now();
     total_ray_num += proj_ctx->GetInitRayNum() * wavelengths.size();
     diff = t - start;
-    std::printf("=== Total %zu rays finished! ===\n", total_ray_num);
-    std::printf("=== Spent %.3f sec!          ===\n", diff.count() / 1000);
+    LOG_INFO("=== Total %zu rays finished! ===", total_ray_num);
+    LOG_INFO("=== Spent %.3f sec!          ===", diff.count() / 1000);
   }
 
   auto end = std::chrono::system_clock::now();

@@ -4,6 +4,7 @@
 
 #include "context/context.hpp"
 #include "core/render.hpp"
+#include "util/log.hpp"
 
 void PrintRayPath(const icehalo::RayPath& ray_path) {
   bool crystal_flag = true;
@@ -55,7 +56,7 @@ int main(int argc, char* argv[]) {
     ray_data.Deserialize(file, icehalo::endian::kUnknownEndian);
     file.Close();
     auto t1 = std::chrono::system_clock::now();
-    std::chrono::duration<float, std::ratio<1, 1000>> loading_time = t1 - t0;
+    std::chrono::duration<float, std::milli> loading_time = t1 - t0;
 
     size_t init_ray_num, exit_seg_num;
     {
@@ -66,7 +67,7 @@ int main(int argc, char* argv[]) {
       exit_seg_num = final_ray_data.second.size;
     }  // Let final_ray_data be local.
     auto t2 = std::chrono::system_clock::now();
-    std::chrono::duration<float, std::ratio<1, 1000>> final_render_time = t2 - t1;
+    std::chrono::duration<float, std::milli> final_render_time = t2 - t1;
 
     {
       auto split_ray_data = ray_data.CollectSplitRayData(ctx, split_render_ctx->GetSplitter());
@@ -101,11 +102,11 @@ int main(int argc, char* argv[]) {
       }
     }  // Let top_halo_ray_data be local.
     auto t3 = std::chrono::system_clock::now();
-    std::chrono::duration<float, std::ratio<1, 1000>> split_render_time = t3 - t2;
+    std::chrono::duration<float, std::milli> split_render_time = t3 - t2;
 
-    std::printf(
+    LOG_INFO(
         " Loading data (%zu/%zu): %.2fms. Collecting final rays: %.2fms. Filtering top halo: %.2fms."
-        " Total %zu rays, %zu pts\n",
+        " Total %zu rays, %zu pts",
         i + 1, data_files.size(), loading_time.count(), final_render_time.count(), split_render_time.count(),
         init_ray_num, exit_seg_num);
   }
@@ -129,8 +130,8 @@ int main(int argc, char* argv[]) {
   }
 
   auto t1 = std::chrono::system_clock::now();
-  std::chrono::duration<float, std::ratio<1, 1000>> diff = t1 - start;
-  std::printf("Total: %.2fms\n", diff.count());
+  std::chrono::duration<float, std::milli> diff = t1 - start;
+  LOG_INFO("Total: %.2fms", diff.count());
 
   return 0;
 }

@@ -13,20 +13,23 @@ def main(exe: str, config: str, ref: str):
     res = subprocess.run(f'"{exe}" "{config}" > tmp.log', timeout=2, shell=True, capture_output=True)
     res.check_returncode()
 
-    start_line = 16
     with open('tmp.log', 'r') as tmp_log, open(ref, 'r') as ref_log:
         read_lines = 0
+        same_lines = 0
         for line1, line2 in zip(ref_log, tmp_log):
             read_lines += 1
-            if read_lines < start_line:
-                continue
-            if line1.startswith('Total:'):
+            if not line1.startswith('[DEBUG]'):
                 continue
             if line1.strip() != line2.strip():
                 logging.warning(f'Log file does not match at line {read_lines}!')
                 logging.warning(f'ref: {line1}')
                 logging.warning(f'cur: {line2}')
                 exit(-1)
+            else:
+                same_lines += 1
+        if same_lines == 0:
+            logging.warning('No same lines!')
+            exit(-1)
 
 if __name__ == '__main__':
     parser = ArgumentParser()
