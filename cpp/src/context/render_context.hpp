@@ -32,7 +32,7 @@ struct RenderSplitter {
   int top_halo_num;
   std::vector<std::vector<ShortIdType>> crystal_filters;
 
-  static constexpr uint8_t kTopHaloSymmetry = kSymmetryPrism | kSymmetryDirection | kSymmetryBasal;
+  static constexpr uint8_t kDefaultSymmetry = kSymmetryPrism | kSymmetryDirection | kSymmetryBasal;
 
   RenderSplitter();
 };
