@@ -5,6 +5,22 @@
 #include "context/context.hpp"
 #include "core/render.hpp"
 
+void PrintRayPath(const icehalo::RayPath& ray_path) {
+  bool crystal_flag = true;
+  for (const auto& fn : ray_path) {
+    if (crystal_flag) {
+      std::printf("-(%u)", fn);
+      crystal_flag = false;
+    } else if (fn == icehalo::kInvalidFaceNumber) {
+      std::printf("-x");
+      crystal_flag = true;
+    } else {
+      std::printf("-%u", fn);
+    }
+  }
+  std::printf("\n");
+}
+
 int main(int argc, char* argv[]) {
   if (argc != 2) {
     std::printf("USAGE: %s config.json\n", argv[0]);
@@ -17,16 +33,18 @@ int main(int argc, char* argv[]) {
   renderer.SetCameraContext(ctx->cam_ctx_);
   renderer.SetRenderContext(ctx->render_ctx_);
 
-  using ColorCompactLevelDataType = std::underlying_type<icehalo::ColorCompactLevel>::type;
   auto& split_render_ctx = ctx->split_render_ctx_;
-  int split_img_ch_num = icehalo::SpectrumRenderer::kImageBits /
-                         static_cast<ColorCompactLevelDataType>(split_render_ctx->GetColorCompactLevel());
-  int split_img_num = static_cast<int>(std::ceil(split_render_ctx->GetSplitNumber() * 1.0 / split_img_ch_num));
-  std::vector<icehalo::SpectrumRenderer> split_renderers;
-  for (int i = 0; i < split_img_num; i++) {
-    split_renderers.emplace_back();
-    split_renderers.back().SetCameraContext(ctx->cam_ctx_);
-    split_renderers.back().SetRenderContext(split_render_ctx);
+  size_t split_img_ch_num =
+      icehalo::SpectrumRenderer::kImageBits / static_cast<int>(split_render_ctx->GetColorCompactLevel());
+  auto split_num = static_cast<size_t>(split_render_ctx->GetSplitNumber());
+  auto split_img_num = static_cast<size_t>(std::ceil(split_num * 1.0 / split_img_ch_num));
+  std::vector<icehalo::SpectrumRenderer> split_renderer_candidates;
+  std::vector<std::set<size_t>> renderer_ray_set;
+  for (size_t i = 0; i < split_img_num * 1.5; i++) {
+    split_renderer_candidates.emplace_back();
+    split_renderer_candidates.back().SetCameraContext(ctx->cam_ctx_);
+    split_renderer_candidates.back().SetRenderContext(split_render_ctx);
+    renderer_ray_set.emplace_back();
   }
 
   icehalo::SimulationData ray_data;
@@ -36,42 +54,54 @@ int main(int argc, char* argv[]) {
     auto& file = data_files[i];
     file.Open(icehalo::FileOpenMode::kRead);
     ray_data.Deserialize(file, icehalo::endian::kUnknownEndian);
+    file.Close();
     auto t1 = std::chrono::system_clock::now();
     std::chrono::duration<float, std::ratio<1, 1000>> loading_time = t1 - t0;
 
     size_t init_ray_num, exit_seg_num;
-    decltype(t1) t2;
-    std::chrono::duration<float, std::ratio<1, 1000>> final_render_time{};
     {
       auto final_ray_data = ray_data.CollectFinalRayData();
       renderer.LoadRayData(static_cast<size_t>(final_ray_data.second.wavelength), final_ray_data.first,
                            final_ray_data.second);
-      t2 = std::chrono::system_clock::now();
-      final_render_time = t2 - t1;
       init_ray_num = final_ray_data.first.init_ray_num;
       exit_seg_num = final_ray_data.second.size;
     }  // Let final_ray_data be local.
+    auto t2 = std::chrono::system_clock::now();
+    std::chrono::duration<float, std::ratio<1, 1000>> final_render_time = t2 - t1;
 
-    decltype(t1) t3;
-    std::chrono::duration<float, std::ratio<1, 1000>> split_render_time{};
     {
       auto split_ray_data = ray_data.CollectSplitRayData(ctx, split_render_ctx->GetSplitter());
       const auto& exit_ray_data = std::get<1>(split_ray_data);
-      size_t curr_split_num =
-          std::min(static_cast<size_t>(split_render_ctx->GetSplitNumber()), std::get<0>(split_ray_data).size());
+      const auto& ray_path_map = std::get<2>(split_ray_data);
+      size_t curr_split_num = std::min(split_num, std::get<0>(split_ray_data).size());
       for (size_t j = 0; j < curr_split_num; j++) {
-        auto img_idx = j / split_img_ch_num;
         const auto& collection_info = std::get<0>(split_ray_data)[j];
+        auto hash = collection_info.identifier;
+        size_t img_idx = 0;
+        for (size_t k = 0; k < renderer_ray_set.size(); k++) {
+          if (renderer_ray_set[k].count(hash)) {
+            img_idx = k;
+            break;
+          } else if (renderer_ray_set[k].size() < split_img_ch_num) {
+            renderer_ray_set[k].emplace(hash);
+            img_idx = k;
+            break;
+          }
+        }
+
+        std::printf("hash: %zu, img_idx: %zu, ray_path: ", hash, img_idx);
+        PrintRayPath(ray_path_map.at(hash));
+
         if (split_img_ch_num == 1) {
-          split_renderers[img_idx].LoadRayData(static_cast<size_t>(exit_ray_data.wavelength), collection_info,
-                                               std::get<1>(split_ray_data));
+          auto identifier = static_cast<size_t>(exit_ray_data.wavelength);
+          split_renderer_candidates[img_idx].LoadRayData(identifier, collection_info, exit_ray_data);
         } else {
-          split_renderers[img_idx].LoadRayData(collection_info.identifier, collection_info, exit_ray_data);
+          split_renderer_candidates[img_idx].LoadRayData(hash, collection_info, exit_ray_data);
         }
       }
-      t3 = std::chrono::system_clock::now();
-      split_render_time = t3 - t2;
     }  // Let top_halo_ray_data be local.
+    auto t3 = std::chrono::system_clock::now();
+    std::chrono::duration<float, std::ratio<1, 1000>> split_render_time = t3 - t2;
 
     std::printf(
         " Loading data (%zu/%zu): %.2fms. Collecting final rays: %.2fms. Filtering top halo: %.2fms."
@@ -80,18 +110,19 @@ int main(int argc, char* argv[]) {
         init_ray_num, exit_seg_num);
   }
   renderer.RenderToImage();
-  for (auto& r : split_renderers) {
-    r.RenderToImage();
-  }
 
   cv::Mat img(ctx->render_ctx_->GetImageHeight(), ctx->render_ctx_->GetImageWidth(), CV_8UC3,
               renderer.GetImageBuffer());
   cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
   cv::imwrite(icehalo::PathJoin(ctx->GetDataDirectory(), "img.jpg"), img);
+
+  for (auto& r : split_renderer_candidates) {
+    r.RenderToImage();
+  }
   char filename_buf[256];
-  for (size_t i = 0; i < split_renderers.size(); i++) {
+  for (size_t i = 0; i < std::min(split_renderer_candidates.size(), split_img_num); i++) {
     cv::Mat halo_img(ctx->split_render_ctx_->GetImageHeight(), ctx->split_render_ctx_->GetImageWidth(), CV_8UC3,
-                     split_renderers[i].GetImageBuffer());
+                     split_renderer_candidates[i].GetImageBuffer());
     cv::cvtColor(halo_img, halo_img, cv::COLOR_RGB2BGR);
     std::snprintf(filename_buf, 256, "halo_%03zu.jpg", i);
     cv::imwrite(icehalo::PathJoin(ctx->GetDataDirectory(), filename_buf), halo_img);

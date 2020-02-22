@@ -162,6 +162,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
         continue;
       }
       num++;
+      const auto* crystal_ctx = ctx->GetCrystalContext(r->root_ctx->crystal_id);
 
       // 1. Get hash for the whole path
       std::vector<RayPathRecorder> recorder_list;
@@ -181,17 +182,18 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
       if (!ray_path_map.count(ray_path_hash)) {
         auto curr_path = GetRayPath(ctx, r);
         ray_path_map.emplace(ray_path_hash, curr_path);  // includes multi-scatter, complete path
-        if (!symmetry_table.count(ray_path_hash)) {
-          auto symmetry_extension = MakeSymmetryExtension(
-              {}, curr_path, ctx->GetCrystalContext(r->root_ctx->crystal_id), RenderSplitter::kTopHaloSymmetry);
-          for (const auto& tmp_path : symmetry_extension) {
-            symmetry_table.emplace(RayPathRecorder::Hash(tmp_path), ray_path_hash);
-          }
+
+        auto normalized_hash = GetNormalizedHash(curr_path, crystal_ctx, RenderSplitter::kTopHaloSymmetry);
+        auto symmetry_extension = MakeSymmetryExtension({}, curr_path, crystal_ctx, RenderSplitter::kTopHaloSymmetry);
+        for (const auto& tmp_path : symmetry_extension) {
+          auto tmp_hash = RayPathRecorder::Hash(tmp_path);
+          symmetry_table.emplace(tmp_hash, normalized_hash);
+          ray_path_map.emplace(tmp_hash, tmp_path);
         }
       }
 
       // 3. Fill data
-      auto normalized_hash = symmetry_table[ray_path_hash];
+      auto normalized_hash = symmetry_table.at(ray_path_hash);
       if (!ray_collection_info_map.count(normalized_hash)) {
         ray_collection_info_map.emplace(normalized_hash, RayCollectionInfo{});
         ray_collection_info_map.at(normalized_hash).identifier = normalized_hash;
@@ -296,6 +298,8 @@ void SimulationData::Serialize(File& file, bool with_boi) const {
       file.Write(obj_id);
     }
   }
+  multi_scatters = exit_ray_segments_.size();
+  file.Write(multi_scatters);
   for (const auto& sc : exit_ray_segments_) {
     uint32_t num = sc.size();
     file.Write(num);
@@ -348,7 +352,6 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
   if (need_swap) {
     endian::ByteSwap::Swap(&multi_scatters);
   }
-
   for (size_t k = 0; k < multi_scatters; k++) {
     rays_.emplace_back();
     uint32_t num;
@@ -368,6 +371,10 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
     }
   }
 
+  file.Read(&multi_scatters);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&multi_scatters);
+  }
   for (size_t k = 0; k < multi_scatters; k++) {
     exit_ray_segments_.emplace_back();
     uint32_t num;
@@ -751,14 +758,15 @@ void Simulator::StoreRaySegments(const CrystalContext* crystal_ctx, AbstractRayP
 void Simulator::RefreshBuffer() {
   size_t idx = 0;
   for (size_t i = 0; i < active_ray_num_ * 2; i++) {
-    if (buffer_.face_id[1][i] >= 0 && buffer_.w[1][i] > ProjectContext::kPropMinW) {
-      std::memcpy(buffer_.pt[0] + idx * 3, buffer_.pt[1] + i * 3, sizeof(float) * 3);
-      std::memcpy(buffer_.dir[0] + idx * 3, buffer_.dir[1] + i * 3, sizeof(float) * 3);
-      buffer_.w[0][idx] = buffer_.w[1][i];
-      buffer_.face_id[0][idx] = buffer_.face_id[1][i];
-      buffer_.ray_seg[0][idx] = buffer_.ray_seg[1][i];
-      idx++;
+    if (buffer_.face_id[1][i] < 0 || buffer_.w[1][i] < ProjectContext::kPropMinW) {
+      continue;
     }
+    std::memcpy(buffer_.pt[0] + idx * 3, buffer_.pt[1] + i * 3, sizeof(float) * 3);
+    std::memcpy(buffer_.dir[0] + idx * 3, buffer_.dir[1] + i * 3, sizeof(float) * 3);
+    buffer_.w[0][idx] = buffer_.w[1][i];
+    buffer_.face_id[0][idx] = buffer_.face_id[1][i];
+    buffer_.ray_seg[0][idx] = buffer_.ray_seg[1][i];
+    idx++;
   }
   active_ray_num_ = idx;
 }

@@ -100,6 +100,10 @@ constexpr int kMaxWaveLength = 830;
 class SpectrumRenderer {
  public:
   SpectrumRenderer();
+  SpectrumRenderer(const SpectrumRenderer& other) = delete;
+  SpectrumRenderer(SpectrumRenderer&& other) noexcept;
+
+  SpectrumRenderer& operator=(SpectrumRenderer&& other) noexcept;
 
   void SetCameraContext(CameraContextPtr cam_ctx);
   void SetRenderContext(RenderContextPtr render_ctx);

@@ -562,6 +562,23 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
 SpectrumRenderer::SpectrumRenderer() : cam_ctx_{}, render_ctx_{}, output_image_buffer_{}, total_w_(0) {}
 
 
+SpectrumRenderer::SpectrumRenderer(SpectrumRenderer&& other) noexcept
+    : cam_ctx_(std::move(other.cam_ctx_)), render_ctx_(std::move(other.render_ctx_)),
+      output_image_buffer_(std::move(other.output_image_buffer_)), spectrum_data_(std::move(other.spectrum_data_)),
+      spectrum_data_compensation_(std::move(other.spectrum_data_compensation_)), total_w_(other.total_w_) {}
+
+
+SpectrumRenderer& SpectrumRenderer::operator=(SpectrumRenderer&& other) noexcept {
+  cam_ctx_ = std::move(other.cam_ctx_);
+  render_ctx_ = std::move(other.render_ctx_);
+  output_image_buffer_ = std::move(other.output_image_buffer_);
+  spectrum_data_ = std::move(other.spectrum_data_);
+  spectrum_data_compensation_ = std::move(other.spectrum_data_compensation_);
+  total_w_ = other.total_w_;
+  return *this;
+}
+
+
 void SpectrumRenderer::SetCameraContext(CameraContextPtr cam_ctx) {
   cam_ctx_ = std::move(cam_ctx);
 }
@@ -608,6 +625,7 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
     if (spectrum_data_[i].first == identifier) {
       current_data = spectrum_data_[i].second.get();
       current_data_compensation = spectrum_data_compensation_[i].second.get();
+      break;
     }
   }
   if (!current_data) {
