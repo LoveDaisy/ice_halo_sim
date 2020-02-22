@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "context/crystal_context.hpp"
+#include "core/optics.hpp"
 
 namespace icehalo {
 
@@ -761,6 +762,53 @@ std::vector<RayPath> MakeSymmetryExtension(const std::vector<RayPath>& ray_path_
     }
   }
   return result;
+}
+
+
+size_t GetNormalizedHash(RayPath ray_path, const CrystalContext* crystal_ctx, uint8_t symmetry_flag) {
+  auto period = crystal_ctx->GetCrystal()->GetFaceNumberPeriod();
+  bool crystal_flag = true;
+  FaceNumberType first_p_fn = kInvalidFaceNumber;
+  FaceNumberType second_p_fn = kInvalidFaceNumber;
+  FaceNumberType first_b_fn = kInvalidFaceNumber;
+  for (auto& fn : ray_path) {
+    if (crystal_flag) {
+      crystal_flag = false;
+    } else if (fn == kInvalidFaceNumber) {
+      crystal_flag = true;
+      first_p_fn = kInvalidFaceNumber;
+      second_p_fn = kInvalidFaceNumber;
+      first_b_fn = kInvalidFaceNumber;
+    } else {
+      bool is_basal = fn == 1 || fn == 2;
+      auto pyr = fn / 10;
+      if (first_p_fn == kInvalidFaceNumber && !is_basal) {
+        first_p_fn = fn;
+      } else if (second_p_fn == kInvalidFaceNumber && !is_basal) {
+        second_p_fn = fn;
+      } else if (first_b_fn == kInvalidFaceNumber && is_basal) {
+        first_b_fn = fn;
+      }
+
+      if ((symmetry_flag & kSymmetryPrism) && !is_basal) {
+        fn += period - first_p_fn;
+        fn %= period;
+      }
+      if (first_p_fn != kInvalidFaceNumber && second_p_fn != kInvalidFaceNumber &&
+          (symmetry_flag & kSymmetryDirection) && (second_p_fn - first_p_fn) % period > period / 2.0 && !is_basal) {
+        fn = period - fn;
+        fn %= period;
+      }
+      if ((symmetry_flag & kSymmetryBasal) && first_b_fn == 2 && is_basal) {
+        fn = fn % 2 + 1;
+      }
+      if (!is_basal) {
+        fn += 3 + pyr * 10;
+      }
+    }
+  }
+
+  return RayPathRecorder::Hash(ray_path);
 }
 
 }  // namespace icehalo

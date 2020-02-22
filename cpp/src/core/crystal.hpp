@@ -208,6 +208,9 @@ std::vector<RayPath> MakeSymmetryExtension(
     const CrystalContext* crystal_ctx,          // crystal
     uint8_t symmetry_flag);                     // symmetry
 
+
+size_t GetNormalizedHash(RayPath ray_path, const CrystalContext* crystal_ctx, uint8_t symmetry_flag);
+
 }  // namespace icehalo
 
 
