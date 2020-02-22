@@ -18,7 +18,6 @@ void PrintRayPath(const icehalo::RayPath& ray_path) {
       std::printf("-%u", fn);
     }
   }
-  std::printf("\n");
 }
 
 int main(int argc, char* argv[]) {
@@ -89,8 +88,9 @@ int main(int argc, char* argv[]) {
           }
         }
 
-        std::printf("hash: %zu, img_idx: %zu, ray_path: ", hash, img_idx);
+        std::printf("img_idx: %03zu, ray_path: ", img_idx);
         PrintRayPath(ray_path_map.at(hash));
+        std::printf(", hash: %zu\n", hash);
 
         if (split_img_ch_num == 1) {
           auto identifier = static_cast<size_t>(exit_ray_data.wavelength);

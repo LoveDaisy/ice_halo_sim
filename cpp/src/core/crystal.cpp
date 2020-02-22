@@ -784,7 +784,8 @@ size_t GetNormalizedHash(RayPath ray_path, const CrystalContext* crystal_ctx, ui
       auto pyr = fn / 10;
       if (first_p_fn == kInvalidFaceNumber && !is_basal) {
         first_p_fn = fn;
-      } else if (second_p_fn == kInvalidFaceNumber && !is_basal) {
+      } else if (second_p_fn == kInvalidFaceNumber && !is_basal &&
+                 ((period % 2 == 0 && (fn + period - first_p_fn) != period / 2) || period % 2 != 0)) {
         second_p_fn = fn;
       } else if (first_b_fn == kInvalidFaceNumber && is_basal) {
         first_b_fn = fn;
@@ -795,7 +796,8 @@ size_t GetNormalizedHash(RayPath ray_path, const CrystalContext* crystal_ctx, ui
         fn %= period;
       }
       if (first_p_fn != kInvalidFaceNumber && second_p_fn != kInvalidFaceNumber &&
-          (symmetry_flag & kSymmetryDirection) && (second_p_fn - first_p_fn) % period > period / 2.0 && !is_basal) {
+          (symmetry_flag & kSymmetryDirection) && (second_p_fn + period - first_p_fn) % period > period / 2.0 &&
+          !is_basal) {
         fn = period - fn;
         fn %= period;
       }

@@ -59,4 +59,24 @@ TEST_F(ContextTest, RayPathHash01) {
   ASSERT_EQ(hash_01_normalized, hash_02_normalized);
 }
 
+TEST_F(ContextTest, RayPathHash02) {
+  auto ctx = context->GetCrystalContext(4);
+  const auto sym_flag = icehalo::RenderSplitter::kTopHaloSymmetry;
+
+  std::vector<icehalo::RayPath> ray_path_list{
+    icehalo::RayPath{ 2, 3, 6, icehalo::kInvalidFaceNumber },
+    icehalo::RayPath{ 2, 8, 6, icehalo::kInvalidFaceNumber },
+    icehalo::RayPath{ 2, 8, 6, icehalo::kInvalidFaceNumber, 1, 3, 5, icehalo::kInvalidFaceNumber },
+  };
+
+  for (const auto& rp0 : ray_path_list) {
+    auto ext_ray_path_list = icehalo::MakeSymmetryExtension({}, rp0, ctx, sym_flag);
+    auto normalized_hash = icehalo::GetNormalizedHash(rp0, ctx, sym_flag);
+    for (const auto& rp : ext_ray_path_list) {
+      auto curr_hash = icehalo::GetNormalizedHash(rp, ctx, sym_flag);
+      EXPECT_EQ(normalized_hash, curr_hash);
+    }
+  }
+}
+
 }  // namespace
