@@ -12,6 +12,9 @@ build-FastHalo-*
 
 doc/figs/*.nb
 doc/figs/*.pdf
+doc/*.svg
+doc/*.txt
 
 config.json
+tmp.log
 
