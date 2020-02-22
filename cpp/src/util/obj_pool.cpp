@@ -119,7 +119,7 @@ uint32_t ObjectPool<T>::RefreshChunkIndex() {
         current_chunk_id_++;
       }
       id = 0;
-      next_unused_id_ = 0;
+      next_unused_id_ = 1;
     }
   }
   return id;
