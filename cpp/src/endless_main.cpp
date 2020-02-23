@@ -25,7 +25,7 @@ int main(int argc, char* argv[]) {
 
   auto t = std::chrono::system_clock::now();
   std::chrono::duration<float, std::milli> diff = t - start;
-  LOG_INFO("Initialization: %.2fms\n", diff.count());
+  LOG_INFO("Initialization: %.2fms", diff.count());
 
   icehalo::File file(proj_ctx->GetDefaultImagePath().c_str());
   if (!file.Open(icehalo::FileOpenMode::kWrite)) {

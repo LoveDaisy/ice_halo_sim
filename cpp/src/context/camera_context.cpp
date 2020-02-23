@@ -140,9 +140,9 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
 
   auto* p = Pointer("/azimuth").Get(root);
   if (p == nullptr) {
-    LOG_INFO("Camera config missing <azimuth>. Use default %.1f!", CameraContext::kDefaultCamAzimuth);
+    LOG_VERBOSE("Camera config missing <azimuth>. Use default %.1f!", CameraContext::kDefaultCamAzimuth);
   } else if (!p->IsNumber()) {
-    LOG_INFO("Camera config <azimuth> is not a number. Use default %.1f!", CameraContext::kDefaultCamAzimuth);
+    LOG_VERBOSE("Camera config <azimuth> is not a number. Use default %.1f!", CameraContext::kDefaultCamAzimuth);
   } else {
     cam_az = static_cast<float>(p->GetDouble());
     cam_az = std::max(std::min(cam_az, CameraContext::kMaxAngleRound), CameraContext::kMinAngleRound);
@@ -151,9 +151,9 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
 
   p = Pointer("/elevation").Get(root);
   if (p == nullptr) {
-    LOG_INFO("Camera config missing <elevation>. Use default %.1f!", CameraContext::kDefaultCamElevation);
+    LOG_VERBOSE("Camera config missing <elevation>. Use default %.1f!", CameraContext::kDefaultCamElevation);
   } else if (!p->IsNumber()) {
-    LOG_INFO("Camera config <elevation> is not a number. Use default %.1f!", CameraContext::kDefaultCamElevation);
+    LOG_VERBOSE("Camera config <elevation> is not a number. Use default %.1f!", CameraContext::kDefaultCamElevation);
   } else {
     cam_el = static_cast<float>(p->GetDouble());
     cam_el = std::max(std::min(cam_el, CameraContext::kMaxAngleTilt), CameraContext::kMinAngleTilt);
@@ -161,9 +161,9 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
 
   p = Pointer("/rotation").Get(root);
   if (p == nullptr) {
-    LOG_INFO("Camera config missing <rotation>. Use default %.1f!", CameraContext::kDefaultCamRoll);
+    LOG_VERBOSE("Camera config missing <rotation>. Use default %.1f!", CameraContext::kDefaultCamRoll);
   } else if (!p->IsNumber()) {
-    LOG_INFO("Camera config <rotation> is not a number. Use default %.1f!", CameraContext::kDefaultCamRoll);
+    LOG_VERBOSE("Camera config <rotation> is not a number. Use default %.1f!", CameraContext::kDefaultCamRoll);
   } else {
     cam_ro = static_cast<float>(p->GetDouble());
     cam_ro = std::max(std::min(cam_ro, CameraContext::kMaxAngleHeading), CameraContext::kMinAngleHeading);
@@ -173,9 +173,9 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
 
   p = Pointer("/lens").Get(root);
   if (p == nullptr) {
-    LOG_INFO("Camera config missing <lens>. Use default equal-area fisheye!");
+    LOG_VERBOSE("Camera config missing <lens>. Use default equal-area fisheye!");
   } else if (!p->IsString()) {
-    LOG_INFO("Camera config <lens> is not a string. Use default equal-area fisheye!");
+    LOG_VERBOSE("Camera config <lens> is not a string. Use default equal-area fisheye!");
   } else {
     if (*p == "linear") {
       SetLensType(LensType::kLinear);
@@ -188,15 +188,15 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
     } else if (*p == "dual_fisheye_equalarea") {
       SetLensType(LensType::kDualEqualArea);
     } else {
-      LOG_INFO("Camera config <lens> cannot be recognized. Use default equal-area fisheye!");
+      LOG_VERBOSE("Camera config <lens> cannot be recognized. Use default equal-area fisheye!");
     }
   }
 
   p = Pointer("/fov").Get(root);
   if (p == nullptr) {
-    LOG_INFO("Camera config missing <fov>. Use default %.1f!", GetFov());
+    LOG_VERBOSE("Camera config missing <fov>. Use default %.1f!", GetFov());
   } else if (!p->IsNumber()) {
-    LOG_INFO("Camera config <fov> is not a number. Use default %.1f!\n", GetFov());
+    LOG_VERBOSE("Camera config <fov> is not a number. Use default %.1f!\n", GetFov());
   } else {
     SetFov(static_cast<float>(p->GetDouble()));
   }

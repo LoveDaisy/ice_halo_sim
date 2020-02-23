@@ -3,8 +3,8 @@
 #include <algorithm>
 
 #include "core/optics.hpp"
-#include "rapidjson/filereadstream.h"
 #include "rapidjson/pointer.h"
+#include "util/log.hpp"
 
 
 namespace icehalo {
@@ -72,9 +72,9 @@ void SunContext::LoadFromJson(const rapidjson::Value& root) {
   float sun_altitude = 0.0f;
   auto* p = Pointer("/altitude").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Sun config missing <altitude>, using default 0.0!\n");
+    LOG_VERBOSE("Sun config missing <altitude>. Use default 0.0!");
   } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Sun config <altitude> is not a number, using default 0.0!\n");
+    LOG_VERBOSE("Sun config <altitude> is not a number. Use default 0.0!");
   } else {
     sun_altitude = static_cast<float>(p->GetDouble());
   }
@@ -82,9 +82,9 @@ void SunContext::LoadFromJson(const rapidjson::Value& root) {
 
   p = Pointer("/diameter").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "\nWARNING! Sun config missing <diameter>, using default 0.5!\n");
+    LOG_VERBOSE("Sun config missing <diameter>. Use default 0.5!");
   } else if (!p->IsNumber()) {
-    std::fprintf(stderr, "\nWARNING! Sun config <diameter> is not a number, using default 0.5!\n");
+    LOG_VERBOSE("Sun config <diameter> is not a number. Use default 0.5!");
   } else {
     SetSunDiameter(static_cast<float>(p->GetDouble()));
   }

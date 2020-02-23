@@ -6,17 +6,24 @@
 #include "core/render.hpp"
 #include "util/log.hpp"
 
-void PrintRayPath(const icehalo::RayPath& ray_path) {
+void PrintRayPath(const icehalo::RayPath& ray_path, char* buf, size_t size) {
   bool crystal_flag = true;
+  size_t offset = 0;
   for (const auto& fn : ray_path) {
     if (crystal_flag) {
-      std::printf("-(%u)", fn);
+      auto n = std::snprintf(buf + offset, size - offset, "-(%u)", fn);
+      offset += n;
       crystal_flag = false;
     } else if (fn == icehalo::kInvalidFaceNumber) {
-      std::printf("-x");
+      auto n = std::snprintf(buf + offset, size - offset, "-x");
+      offset += n;
       crystal_flag = true;
     } else {
-      std::printf("-%u", fn);
+      auto n = std::snprintf(buf + offset, size - offset, "-%u", fn);
+      offset += n;
+    }
+    if (offset > size) {
+      break;
     }
   }
 }
@@ -46,6 +53,9 @@ int main(int argc, char* argv[]) {
     split_renderer_candidates.back().SetRenderContext(split_render_ctx);
     renderer_ray_set.emplace_back();
   }
+
+  constexpr size_t kBufSize = 1024;
+  char str_buf[kBufSize];
 
   icehalo::SimulationData ray_data;
   auto data_files = icehalo::ListDataFiles(ctx->GetDataDirectory().c_str());
@@ -89,9 +99,8 @@ int main(int argc, char* argv[]) {
           }
         }
 
-        std::printf("img_idx: %03zu, ray_path: ", img_idx);
-        PrintRayPath(ray_path_map.at(hash));
-        std::printf(", hash: %zu\n", hash);
+        PrintRayPath(ray_path_map.at(hash), str_buf, kBufSize);
+        LOG_VERBOSE("img_idx: %03zu, hash: %016tx, ray_path: %s", img_idx, hash, str_buf);
 
         if (split_img_ch_num == 1) {
           auto identifier = static_cast<size_t>(exit_ray_data.wavelength);
@@ -120,13 +129,12 @@ int main(int argc, char* argv[]) {
   for (auto& r : split_renderer_candidates) {
     r.RenderToImage();
   }
-  char filename_buf[256];
   for (size_t i = 0; i < std::min(split_renderer_candidates.size(), split_img_num); i++) {
     cv::Mat halo_img(ctx->split_render_ctx_->GetImageHeight(), ctx->split_render_ctx_->GetImageWidth(), CV_8UC3,
                      split_renderer_candidates[i].GetImageBuffer());
     cv::cvtColor(halo_img, halo_img, cv::COLOR_RGB2BGR);
-    std::snprintf(filename_buf, 256, "halo_%03zu.jpg", i);
-    cv::imwrite(icehalo::PathJoin(ctx->GetDataDirectory(), filename_buf), halo_img);
+    std::snprintf(str_buf, kBufSize, "halo_%03zu.jpg", i);
+    cv::imwrite(icehalo::PathJoin(ctx->GetDataDirectory(), str_buf), halo_img);
   }
 
   auto t1 = std::chrono::system_clock::now();

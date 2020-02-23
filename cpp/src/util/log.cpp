@@ -7,17 +7,18 @@ namespace icehalo {
 
 void LogStdOutDest::Write(const LogMessage& message) {
   switch (message.level) {
+    case LogLevel::kVerbose:
+      std::printf("[VERBOSE] %s\n", message.text.c_str());
+      break;
     case LogLevel::kDebug:
-      std::printf("[DEBUG] ");
+      std::printf("[DEBUG] %s\n", message.text.c_str());
       break;
     case LogLevel::kInfo:
-      std::printf("[INFO] ");
+      std::printf("[INFO] %s\n", message.text.c_str());
       break;
-    case LogLevel::kVerbose:
     default:
       break;
   }
-  std::printf("%s\n", message.text.c_str());
 }
 
 
@@ -171,7 +172,13 @@ bool LogComplexFilter::Filter(const LogMessage& message) {
 
 
 Logger::Logger() {
+#if defined(DEBUG) || defined(FOR_TEST)
   LogFilterPtr stdout_filter = LogFilter::MakeLevelFilter({ LogLevel::kVerbose, LogLevel::kDebug, LogLevel::kInfo });
+#elif defined(VERBOSE)
+  LogFilterPtr stdout_filter = LogFilter::MakeLevelFilter({ LogLevel::kVerbose, LogLevel::kInfo });
+#else
+  LogFilterPtr stdout_filter = LogFilter::MakeLevelFilter({ LogLevel::kInfo });
+#endif
   LogFilterPtr stderr_filter = LogFilter::MakeLevelFilter({ LogLevel::kWarning, LogLevel::kError, LogLevel::kFatal });
   LogDestPtr stdout_dest = LogStdOutDest::GetInstance();
   LogDestPtr stderr_dest = LogStdErrDest::GetInstance();

@@ -257,7 +257,7 @@ AxisDistribution ParseCrystalAxis(const rapidjson::Value& c) {
   axis.azimuth_std = 360;
   p = Pointer("/azimuth").Get(c);
   if (p == nullptr || !p->IsObject()) {
-    LOG_INFO("<azimuth> cannot recognize! Use default.");
+    LOG_VERBOSE("<azimuth> cannot recognize! Use default.");
   } else {
     p = Pointer("/azimuth/type").Get(c);
     if (p == nullptr || !p->IsString()) {
