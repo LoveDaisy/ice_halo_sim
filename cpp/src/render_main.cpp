@@ -68,21 +68,16 @@ int main(int argc, char* argv[]) {
     auto t1 = std::chrono::system_clock::now();
     std::chrono::duration<float, std::milli> loading_time = t1 - t0;
 
-    size_t init_ray_num, exit_seg_num;
-    {
-      auto final_ray_data = ray_data.CollectFinalRayData();
-      renderer.LoadRayData(static_cast<size_t>(final_ray_data.second.wavelength), final_ray_data.first,
-                           final_ray_data.second);
-      init_ray_num = final_ray_data.first.init_ray_num;
-      exit_seg_num = final_ray_data.second.size;
-    }  // Let final_ray_data be local.
-    auto t2 = std::chrono::system_clock::now();
-    std::chrono::duration<float, std::milli> final_render_time = t2 - t1;
-
-    {
       auto split_ray_data = ray_data.CollectSplitRayData(ctx, split_render_ctx->GetSplitter());
       const auto& exit_ray_data = std::get<1>(split_ray_data);
       const auto& ray_path_map = std::get<2>(split_ray_data);
+
+      icehalo::RayCollectionInfo final_ray_info = std::get<0>(split_ray_data)[0];
+      final_ray_info.is_partial_data = false;
+      renderer.LoadRayData(static_cast<size_t>(exit_ray_data.wavelength), final_ray_info, exit_ray_data);
+      size_t init_ray_num = exit_ray_data.init_ray_num;
+      size_t exit_seg_num = exit_ray_data.buf_ray_num;
+
       size_t curr_split_num = std::min(split_num, std::get<0>(split_ray_data).size());
       for (size_t j = 0; j < curr_split_num; j++) {
         const auto& collection_info = std::get<0>(split_ray_data)[j];
@@ -109,15 +104,13 @@ int main(int argc, char* argv[]) {
           split_renderer_candidates[img_idx].LoadRayData(hash, collection_info, exit_ray_data);
         }
       }
-    }  // Let top_halo_ray_data be local.
-    auto t3 = std::chrono::system_clock::now();
-    std::chrono::duration<float, std::milli> split_render_time = t3 - t2;
+    auto t2 = std::chrono::system_clock::now();
+    std::chrono::duration<float, std::milli> split_render_time = t2 - t1;
 
     LOG_INFO(
-        " Loading data (%zu/%zu): %.2fms. Collecting final rays: %.2fms. Filtering top halo: %.2fms."
+        " Loading data (%zu/%zu): %.2fms. Filtering top halo: %.2fms."
         " Total %zu rays, %zu pts",
-        i + 1, data_files.size(), loading_time.count(), final_render_time.count(), split_render_time.count(),
-        init_ray_num, exit_seg_num);
+        i + 1, data_files.size(), loading_time.count(), split_render_time.count(), init_ray_num, exit_seg_num);
   }
   renderer.RenderToImage();
 

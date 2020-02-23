@@ -667,7 +667,7 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
       }
     });
   } else {
-    auto num = final_ray_data.size;
+    auto num = final_ray_data.buf_ray_num;
     threading_pool->AddRangeBasedJobs(num, [=](size_t start_idx, size_t end_idx) {
       size_t current_num = end_idx - start_idx;
 

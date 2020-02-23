@@ -13,7 +13,7 @@
 namespace icehalo {
 
 SimpleRayData::SimpleRayData(size_t num)
-    : wavelength(0), wavelength_weight(1.0f), buf{ new float[num * 4] }, size(num) {}
+    : wavelength(0), wavelength_weight(1.0f), buf{ new float[num * 4] }, buf_ray_num(num), init_ray_num(0) {}
 
 
 void SimpleRayData::Serialize(File& file, bool with_boi) const {
@@ -23,10 +23,11 @@ void SimpleRayData::Serialize(File& file, bool with_boi) const {
 
   file.Write(wavelength);
   file.Write(wavelength_weight);
-  file.Write(static_cast<uint64_t>(size));
+  file.Write(static_cast<uint64_t>(buf_ray_num));
+  file.Write(static_cast<uint64_t>(init_ray_num));
 
   float* p = buf.get();
-  for (size_t i = 0; i < size; i++) {
+  for (size_t i = 0; i < buf_ray_num; i++) {
     file.Write(p, 4);
     p += 4;
   }
@@ -51,11 +52,17 @@ void SimpleRayData::Deserialize(File& file, endian::Endianness endianness) {
   if (need_swap) {
     endian::ByteSwap::Swap(&num);
   }
-  size = num;
+  buf_ray_num = num;
 
-  buf.reset(new float[size * 4]);
+  file.Read(&num);
+  if (need_swap) {
+    endian::ByteSwap::Swap(&num);
+  }
+  init_ray_num = num;
+
+  buf.reset(new float[buf_ray_num * 4]);
   float* p = buf.get();
-  for (size_t i = 0; i < size; i++) {
+  for (size_t i = 0; i < buf_ray_num; i++) {
     file.Read(p, 4);
     if (need_swap) {
       endian::ByteSwap::Swap(p, 4);
@@ -105,6 +112,7 @@ std::pair<RayCollectionInfo, SimpleRayData> SimulationData::CollectFinalRayData(
   RayCollectionInfo collection_info{};
   if (!rays_.empty()) {
     collection_info.init_ray_num = rays_[0].size();
+    final_ray_data.init_ray_num = rays_[0].size();
   }
   final_ray_data.wavelength = wavelength_info_.wavelength;
   final_ray_data.wavelength_weight = wavelength_info_.weight;
@@ -212,9 +220,12 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
 
   // 4. Fill in result_ray_data
   SimpleRayData result_ray_data(num);
-  result_ray_data.size = num;
+  result_ray_data.buf_ray_num = num;
   result_ray_data.wavelength = wavelength_info_.wavelength;
   result_ray_data.wavelength_weight = wavelength_info_.weight;
+  if (!rays_.empty()) {
+    result_ray_data.init_ray_num = rays_[0].size();
+  }
   float* p = result_ray_data.buf.get();
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
