@@ -198,7 +198,7 @@ void SpecificRayPathFilter::ApplySymmetry(const CrystalContext* crystal_ctx) {
   for (auto rp : ray_paths_) {
     rp.insert(rp.begin(), crystal_ctx->GetId());
     rp.emplace_back(kInvalidFaceNumber);
-    auto tmp_ray_path_list = MakeSymmetryExtension({}, rp, crystal_ctx, symmetry_flag_);
+    auto tmp_ray_path_list = MakeSymmetryExtension(rp, crystal_ctx, symmetry_flag_);
     for (auto& p : tmp_ray_path_list) {
       augmented_ray_paths.emplace_back(p);
     }

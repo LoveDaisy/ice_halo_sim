@@ -70,7 +70,7 @@ TEST_F(ContextTest, RayPathHash02) {
   };
 
   for (const auto& rp0 : ray_path_list) {
-    auto ext_ray_path_list = icehalo::MakeSymmetryExtension({}, rp0, ctx, sym_flag);
+    auto ext_ray_path_list = icehalo::MakeSymmetryExtension(rp0, ctx, sym_flag);
     auto normalized_hash = icehalo::GetNormalizedHash(rp0, ctx, sym_flag);
     for (const auto& rp : ext_ray_path_list) {
       auto curr_hash = icehalo::GetNormalizedHash(rp, ctx, sym_flag);

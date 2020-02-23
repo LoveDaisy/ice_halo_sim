@@ -185,7 +185,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
         ray_path_map.emplace(ray_path_hash, curr_path);  // includes multi-scatter, complete path
 
         auto normalized_hash = GetNormalizedHash(curr_path, crystal_ctx, RenderSplitter::kDefaultSymmetry);
-        auto symmetry_extension = MakeSymmetryExtension({}, curr_path, crystal_ctx, RenderSplitter::kDefaultSymmetry);
+        auto symmetry_extension = MakeSymmetryExtension(curr_path, crystal_ctx, RenderSplitter::kDefaultSymmetry);
         for (const auto& tmp_path : symmetry_extension) {
           auto tmp_hash = RayPathRecorder::Hash(tmp_path);
           symmetry_table.emplace(tmp_hash, normalized_hash);

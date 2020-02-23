@@ -688,8 +688,8 @@ CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<math::Vec3f>& pts,   
 }
 
 
-std::vector<RayPath> MakeSymmetryExtension(const std::vector<RayPath>& ray_path_list, const RayPath& curr_ray_path,
-                                           const CrystalContext* crystal_ctx, uint8_t symmetry_flag) {
+void MakeSymmetryExtensionHelper(const RayPath& curr_ray_path, const CrystalContext* crystal_ctx,
+                                                 uint8_t symmetry_flag, std::vector<RayPath>& ray_path_list) {
   std::vector<RayPath> ray_path_extension{};
   ray_path_extension.emplace_back(curr_ray_path);
 
@@ -748,10 +748,10 @@ std::vector<RayPath> MakeSymmetryExtension(const std::vector<RayPath>& ray_path_
     }
   }
 
-  std::vector<RayPath> result;
   if (ray_path_list.empty()) {
-    result.swap(ray_path_extension);
+    ray_path_list.swap(ray_path_extension);
   } else {
+    std::vector<RayPath> result;
     for (const auto& rp : ray_path_list) {
       for (const auto& p : ray_path_extension) {
         result.emplace_back(rp);
@@ -760,7 +760,30 @@ std::vector<RayPath> MakeSymmetryExtension(const std::vector<RayPath>& ray_path_
         }
       }
     }
+    ray_path_list.swap(result);
   }
+}
+
+
+std::vector<RayPath> MakeSymmetryExtension(const RayPath& curr_ray_path, const CrystalContext* crystal_ctx,
+                                           uint8_t symmetry_flag) {
+  std::vector<RayPath> result{};
+
+  bool crystal_flag = true;
+  RayPath tmp_ray_path;
+  for (const auto& fn : curr_ray_path) {
+    if (crystal_flag) {
+      crystal_flag = false;
+      tmp_ray_path.clear();
+    } else if (fn == kInvalidFaceNumber) {
+      crystal_flag = true;
+    }
+    tmp_ray_path.emplace_back(fn);
+    if (crystal_flag) {
+      MakeSymmetryExtensionHelper(tmp_ray_path, crystal_ctx, symmetry_flag, result);
+    }
+  }
+
   return result;
 }
 
