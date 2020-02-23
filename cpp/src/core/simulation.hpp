@@ -126,6 +126,7 @@ class SimulationData : public ISerializable {
 
   std::vector<std::vector<RayInfo*>> rays_;
   std::vector<std::vector<RaySegment*>> exit_ray_segments_;
+  std::vector<size_t> exit_ray_seg_num_;
 };
 
 class Simulator {

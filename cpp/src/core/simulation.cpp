@@ -75,6 +75,7 @@ void SimpleRayData::Deserialize(File& file, endian::Endianness endianness) {
 void SimulationData::Clear() {
   rays_.clear();
   exit_ray_segments_.clear();
+  exit_ray_seg_num_.clear();
   RayInfoPool::GetInstance()->Clear();
   wavelength_info_ = {};
 }
@@ -85,6 +86,7 @@ void SimulationData::PrepareNewScatter(size_t ray_num) {
   rays_.back().reserve(ray_num);
   exit_ray_segments_.emplace_back();
   exit_ray_segments_.back().reserve(ray_num * 2);
+  exit_ray_seg_num_.emplace_back(0);
 }
 
 
@@ -95,17 +97,16 @@ void SimulationData::AddRay(RayInfo* ray) {
 
 void SimulationData::AddExitRaySegment(RaySegment* r) {
   exit_ray_segments_.back().emplace_back(r);
+  if (r->state == RaySegmentState::kFinished) {
+    exit_ray_seg_num_.back()++;
+  }
 }
 
 
 std::pair<RayCollectionInfo, SimpleRayData> SimulationData::CollectFinalRayData() const {
   size_t num = 0;
-  for (const auto& sr : exit_ray_segments_) {
-    for (const auto& r : sr) {
-      if (r->state == RaySegmentState::kFinished) {
-        num++;
-      }
-    }
+  for (const auto& n : exit_ray_seg_num_) {
+    num += n;
   }
 
   SimpleRayData final_ray_data(num);
@@ -165,12 +166,15 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
   std::unordered_map<size_t, RayCollectionInfo> ray_collection_info_map;
   std::unordered_map<size_t, std::unordered_set<RayInfo*>> ray_info_map;
   size_t num = 0;
+  for (const auto& n : exit_ray_seg_num_) {
+    num += n;
+  }
+
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
       if (r->state != RaySegmentState::kFinished) {
         continue;
       }
-      num++;
       const auto* crystal_ctx = ctx->GetCrystalContext(r->root_ctx->crystal_id);
 
       // 1. Get hash for the whole path
@@ -322,6 +326,10 @@ void SimulationData::Serialize(File& file, bool with_boi) const {
       file.Write(obj_id);
     }
   }
+  for (const auto& n : exit_ray_seg_num_) {
+    uint64_t num = n;
+    file.Write(num);
+  }
 }
 
 
@@ -405,6 +413,14 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
       auto r = ray_seg_pool->GetPointerFromSerializeData(chunk_id, obj_id);
       exit_ray_segments_.back().emplace_back(r);
     }
+  }
+  for (size_t k = 0; k < multi_scatters; k++) {
+    uint64_t n;
+    file.Read(&n);
+    if (need_swap) {
+      endian::ByteSwap::Swap(&n);
+    }
+    exit_ray_seg_num_.emplace_back(n);
   }
 }
 
