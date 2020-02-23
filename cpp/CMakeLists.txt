@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.12)
 project(IceHalo
         VERSION 2.1.1)
 
-set(CMAKE_VERBOSE_MAKEFILE ON)
+set(CMAKE_VERBOSE_MAKEFILE OFF)
 option(DEBUG "Default OFF" OFF)
 
 # ==================================================================================================
