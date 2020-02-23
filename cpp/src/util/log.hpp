@@ -2,9 +2,11 @@
 #define SRC_UTIL_LOG_H_
 
 #include <chrono>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace icehalo {
@@ -25,7 +27,7 @@ struct LogMessage {
   int line;
   std::string source_file;
   std::string tag;
-  std::string message;
+  std::string text;
   std::thread::id thread_id;
 };
 
@@ -73,12 +75,11 @@ class LogFilter {
   virtual bool Filter(const LogMessage& message) = 0;
 
   static LogFilterPtrU MakeTagFilter(const char* tag);
-  template <typename... LogLevel>
-  static LogFilterPtrU MakeLevelFilter(LogLevel... levels);
+  static LogFilterPtrU MakeLevelFilter(std::initializer_list<LogLevel> levels);
 };
 
-LogFilterPtr operator&&(LogFilterPtr a, LogFilterPtr b);
-LogFilterPtr operator||(LogFilterPtr a, LogFilterPtr b);
+LogFilterPtr operator&&(const LogFilterPtr& a, const LogFilterPtr& b);
+LogFilterPtr operator||(const LogFilterPtr& a, const LogFilterPtr& b);
 
 
 class LogTagFilter : public LogFilter {
@@ -94,8 +95,7 @@ class LogTagFilter : public LogFilter {
 
 class LogLevelFilter : public LogFilter {
  public:
-  template <typename... LogLevel>
-  explicit LogLevelFilter(LogLevel... levels) : levels_{ levels... } {}
+  LogLevelFilter(std::initializer_list<LogLevel> levels) : levels_{ levels } {}
 
   bool Filter(const LogMessage& message) override;
 
@@ -103,16 +103,11 @@ class LogLevelFilter : public LogFilter {
   std::vector<LogLevel> levels_;
 };
 
-template <typename... LogLevel>
-LogFilterPtrU LogFilter::MakeLevelFilter(LogLevel... levels) {
-  LogFilterPtrU filter{ new LogLevelFilter(levels...) };
-  return filter;
-}
-
 
 class LogComplexFilter : public LogFilter {
  public:
   LogComplexFilter() = default;
+  explicit LogComplexFilter(LogFilterPtr filter);
 
   void Reset();
   void And(LogFilterPtr other);
@@ -125,20 +120,9 @@ class LogComplexFilter : public LogFilter {
 };
 
 
-#define DECL_LOG_WRAPPER(name, level)                              \
-  template <typename... Args>                                      \
-  void name(Args&&... args) {                                      \
-    EmitLog<LogLevel::level>(std::forward<Args>(args)...);         \
-  }                                                                \
-  template <typename... Args>                                      \
-  void name##Tag(const char* tag, Args&&... args) {                \
-    EmitTagLog<LogLevel::level>(tag, std::forward<Args>(args)...); \
-  }
-
 class Logger {
  public:
-  template <LogLevel level>
-  void EmitLog(const char* file, int line, const char* fmt, ...) {
+  void EmitLog(const char* file, int line, LogLevel level, const char* fmt, ...) {
     char buf[kMaxMessageLength];
     va_list args;
     va_start(args, fmt);
@@ -146,15 +130,16 @@ class Logger {
     va_end(args);
 
     LogMessage msg{ level, std::chrono::system_clock::now(), line, file, "", buf, std::this_thread::get_id() };
+    std::unordered_set<LogDestPtr> dest_set;
     for (auto& kv : filter_dest_list_) {
-      if (kv.first->Filter(msg)) {
+      if (kv.first->Filter(msg) && !dest_set.count(kv.second)) {
         kv.second->Write(msg);
+        dest_set.emplace(kv.second);
       }
     }
   }
 
-  template <LogLevel level>
-  void EmitTagLog(const char* file, int line, const char* tag, const char* fmt, ...) {
+  void EmitTagLog(const char* file, int line, LogLevel level, const char* tag, const char* fmt, ...) {
     char buf[kMaxMessageLength];
     va_list args;
     va_start(args, fmt);
@@ -162,20 +147,14 @@ class Logger {
     va_end(args);
 
     LogMessage msg{ level, std::chrono::system_clock::now(), line, file, tag, buf, std::this_thread::get_id() };
+    std::unordered_set<LogDestPtr> dest_set;
     for (auto& kv : filter_dest_list_) {
-      if (kv.first->Filter(msg)) {
+      if (kv.first->Filter(msg) && !dest_set.count(kv.second)) {
         kv.second->Write(msg);
+        dest_set.emplace(kv.second);
       }
     }
   }
-
-  // Convenience wrappers for log.
-  DECL_LOG_WRAPPER(Verbose, kVerbose)
-  DECL_LOG_WRAPPER(Debug, kDebug)
-  DECL_LOG_WRAPPER(Info, kInfo)
-  DECL_LOG_WRAPPER(Warning, kWarning)
-  DECL_LOG_WRAPPER(Error, kError)
-  DECL_LOG_WRAPPER(Fatal, kFatal)
 
   static Logger* GetInstance();
 
@@ -187,29 +166,39 @@ class Logger {
   std::vector<std::pair<LogFilterPtr, LogDestPtr>> filter_dest_list_;
 };
 
-#undef DECL_LOG_WRAPPER
-#undef DECL_LOG_TAG_WRAPPER
-
 }  // namespace icehalo
 
 // Convenience macros for log
-#define LOG_DEBUG(fmt, ...) icehalo::Logger::GetInstance()->Debug(__FILE__, __LINE__, (fmt), ##__VA_ARGS__)
-#define LOG_VERBOSE(fmt, ...) icehalo::Logger::GetInstance()->Verbose(__FILE__, __LINE__, (fmt), ##__VA_ARGS__)
-#define LOG_INFO(fmt, ...) icehalo::Logger::GetInstance()->Info(__FILE__, __LINE__, (fmt), ##__VA_ARGS__)
-#define LOG_WARNING(fmt, ...) icehalo::Logger::GetInstance()->Warning(__FILE__, __LINE__, (fmt), ##__VA_ARGS__)
-#define LOG_ERROR(fmt, ...) icehalo::Logger::GetInstance()->Error(__FILE__, __LINE__, (fmt), ##__VA_ARGS__)
-#define LOG_FATAL(fmt, ...) icehalo::Logger::GetInstance()->Fatal(__FILE__, __LINE__, (fmt), ##__VA_ARGS__)
-#define LOG_TAG_DEBUG(tag, fmt, ...) \
-  icehalo::Logger::GetInstance()->DebugTag(__FILE__, __LINE__, (tag), (fmt), ##__VA_ARGS__)
-#define LOG_TAG_VERBOSE(tag, fmt, ...) \
-  icehalo::Logger::GetInstance()->VerboseTag(__FILE__, __LINE__, (tag), (fmt), ##__VA_ARGS__)
-#define LOG_TAG_INFO(tag, fmt, ...) \
-  icehalo::Logger::GetInstance()->InfoTag(__FILE__, __LINE__, (tag), (fmt), ##__VA_ARGS__)
-#define LOG_TAG_WARNING(tag, fmt, ...) \
-  icehalo::Logger::GetInstance()->WarningTag(__FILE__, __LINE__, (tag), (fmt), ##__VA_ARGS__)
-#define LOG_TAG_ERROR(tag, fmt, ...) \
-  icehalo::Logger::GetInstance()->ErrorTag(__FILE__, __LINE__, (tag), (fmt), ##__VA_ARGS__)
-#define LOG_TAG_FATAL(tag, fmt, ...) \
-  icehalo::Logger::GetInstance()->FatalTag(__FILE__, __LINE__, (tag), (fmt), ##__VA_ARGS__)
+#define LOG_DEBUG(fmt, ...) \
+  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kDebug, (fmt), ##__VA_ARGS__)
+#define LOG_VERBOSE(fmt, ...) \
+  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kVerbose, (fmt), ##__VA_ARGS__)
+#define LOG_INFO(fmt, ...) \
+  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kInfo, (fmt), ##__VA_ARGS__)
+#define LOG_WARNING(fmt, ...) \
+  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kWarning, (fmt), ##__VA_ARGS__)
+#define LOG_ERROR(fmt, ...) \
+  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kError, (fmt), ##__VA_ARGS__)
+#define LOG_FATAL(fmt, ...) \
+  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kFatal, (fmt), ##__VA_ARGS__)
+
+#define LOG_TAG_DEBUG(tag, fmt, ...)                                                                         \
+  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kDebugTag, (tag), (fmt), \
+                                             ##__VA_ARGS__)
+#define LOG_TAG_VERBOSE(tag, fmt, ...)                                                                         \
+  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kVerboseTag, (tag), (fmt), \
+                                             ##__VA_ARGS__)
+#define LOG_TAG_INFO(tag, fmt, ...)                                                                         \
+  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kInfoTag, (tag), (fmt), \
+                                             ##__VA_ARGS__)
+#define LOG_TAG_WARNING(tag, fmt, ...)                                                                         \
+  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kWarningTag, (tag), (fmt), \
+                                             ##__VA_ARGS__)
+#define LOG_TAG_ERROR(tag, fmt, ...)                                                                         \
+  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kErrorTag, (tag), (fmt), \
+                                             ##__VA_ARGS__)
+#define LOG_TAG_FATAL(tag, fmt, ...)                                                                         \
+  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kFatalTag, (tag), (fmt), \
+                                             ##__VA_ARGS__)
 
 #endif  // SRC_UTIL_LOG_H_
