@@ -161,15 +161,34 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
 
 std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::CollectSplitHaloRayData(
     const ProjectContextPtr& ctx) const {
-  std::unordered_map<size_t, size_t> symmetry_table;
-  RayPathMap ray_path_map;
-  std::unordered_map<size_t, RayCollectionInfo> ray_collection_info_map;
-  std::unordered_map<size_t, std::unordered_set<RayInfo*>> ray_info_map;
   size_t num = 0;
   for (const auto& n : exit_ray_seg_num_) {
     num += n;
   }
 
+  SimpleRayData result_ray_data(num);
+  result_ray_data.buf_ray_num = num;
+  result_ray_data.wavelength = wavelength_info_.wavelength;
+  result_ray_data.wavelength_weight = wavelength_info_.weight;
+  if (!rays_.empty()) {
+    result_ray_data.init_ray_num = rays_[0].size();
+  }
+  float* result_buf_p = result_ray_data.buf.get();
+
+  size_t hash_table_init_size = num / 3;
+  std::unordered_map<size_t, size_t> symmetry_table;
+  symmetry_table.reserve(hash_table_init_size);
+
+  RayPathMap ray_path_map;
+  ray_path_map.reserve(hash_table_init_size);
+
+  std::unordered_map<size_t, RayCollectionInfo> ray_collection_info_map;
+  ray_collection_info_map.reserve(hash_table_init_size);
+
+  std::unordered_map<size_t, std::unordered_set<RayInfo*>> ray_info_map;
+  ray_info_map.reserve(hash_table_init_size);
+
+  size_t ray_seg_idx = 0;
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
       if (r->state != RaySegmentState::kFinished) {
@@ -192,54 +211,43 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
 
 
       // 2. Check the path and put it into table
-      if (!ray_path_map.count(ray_path_hash)) {
+      if (!ray_path_map.count(ray_path_hash) || !symmetry_table.count(ray_path_hash)) {
         auto curr_path = GetRayPath(ctx, r);
-        ray_path_map.emplace(ray_path_hash, curr_path);  // includes multi-scatter, complete path
-
-        auto normalized_hash = GetNormalizedHash(curr_path, crystal_ctx, RenderSplitter::kDefaultSymmetry);
-        auto symmetry_extension = MakeSymmetryExtension(curr_path, crystal_ctx, RenderSplitter::kDefaultSymmetry);
-        for (const auto& tmp_path : symmetry_extension) {
-          auto tmp_hash = RayPathRecorder::Hash(tmp_path);
-          symmetry_table.emplace(tmp_hash, normalized_hash);
-          ray_path_map.emplace(tmp_hash, tmp_path);
-        }
+        RayPath normalized_path;
+        size_t normalized_hash;
+        std::tie(normalized_path, normalized_hash) =
+            NormalizeRayPath(curr_path, crystal_ctx, RenderSplitter::kDefaultSymmetry);
+        ray_path_map.emplace(ray_path_hash, std::move(curr_path));  // includes multi-scatter, complete path
+        ray_path_map.emplace(normalized_hash, std::move(normalized_path));
+        symmetry_table.emplace(ray_path_hash, normalized_hash);
       }
 
       // 3. Fill data
       auto normalized_hash = symmetry_table.at(ray_path_hash);
       if (!ray_collection_info_map.count(normalized_hash)) {
-        ray_collection_info_map.emplace(normalized_hash, RayCollectionInfo{});
-        ray_collection_info_map.at(normalized_hash).identifier = normalized_hash;
-        ray_collection_info_map.at(normalized_hash).is_partial_data = true;
+        RayCollectionInfo tmp_collection{};
+        tmp_collection.identifier = normalized_hash;
+        tmp_collection.is_partial_data = true;
+        ray_collection_info_map.emplace(normalized_hash, std::move(tmp_collection));
       }
       if (!ray_info_map.count(normalized_hash)) {
-        ray_info_map.emplace(normalized_hash, std::unordered_set<RayInfo*>{});
+        std::unordered_set<RayInfo*> tmp_set{};
+        ray_info_map.emplace(normalized_hash, std::move(tmp_set));
       }
-      ray_collection_info_map.at(normalized_hash).idx.emplace_back(num - 1);
-      ray_collection_info_map.at(normalized_hash).total_energy += r->w;
-      ray_info_map.at(normalized_hash).emplace(r->root_ctx);
-      ray_collection_info_map.at(normalized_hash).init_ray_num = ray_info_map.at(normalized_hash).size();
-    }
-  }
+      auto& collection_info = ray_collection_info_map[normalized_hash];
+      auto& ray_set = ray_info_map[normalized_hash];
+      collection_info.idx.emplace_back(ray_seg_idx);
+      collection_info.total_energy += r->w;
+      ray_set.emplace(r->root_ctx);
+      collection_info.init_ray_num = ray_set.size();
 
-  // 4. Fill in result_ray_data
-  SimpleRayData result_ray_data(num);
-  result_ray_data.buf_ray_num = num;
-  result_ray_data.wavelength = wavelength_info_.wavelength;
-  result_ray_data.wavelength_weight = wavelength_info_.weight;
-  if (!rays_.empty()) {
-    result_ray_data.init_ray_num = rays_[0].size();
-  }
-  float* p = result_ray_data.buf.get();
-  for (const auto& sr : exit_ray_segments_) {
-    for (const auto& r : sr) {
-      if (r->state != RaySegmentState::kFinished) {
-        continue;
-      }
+      // 4. Fill in result_ray_data
       const auto* axis = r->root_ctx->main_axis.val();
-      math::RotateZBack(axis, r->dir.val(), p);
-      p[3] = r->w;
-      p += 4;
+      math::RotateZBack(axis, r->dir.val(), result_buf_p);
+      result_buf_p[3] = r->w;
+      result_buf_p += 4;
+
+      ray_seg_idx++;
     }
   }
 

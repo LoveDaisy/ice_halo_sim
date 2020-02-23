@@ -53,8 +53,8 @@ TEST_F(ContextTest, RayPathHash01) {
 
   auto hash_01 = icehalo::RayPathRecorder::Hash(ray_path_01);
   auto hash_02 = icehalo::RayPathRecorder::Hash(ray_path_02);
-  auto hash_01_normalized = icehalo::GetNormalizedHash(ray_path_01, ctx, icehalo::RenderSplitter::kDefaultSymmetry);
-  auto hash_02_normalized = icehalo::GetNormalizedHash(ray_path_02, ctx, icehalo::RenderSplitter::kDefaultSymmetry);
+  auto hash_01_normalized = icehalo::NormalizeRayPath(ray_path_01, ctx, icehalo::RenderSplitter::kDefaultSymmetry);
+  auto hash_02_normalized = icehalo::NormalizeRayPath(ray_path_02, ctx, icehalo::RenderSplitter::kDefaultSymmetry);
   ASSERT_NE(hash_01, hash_02);
   ASSERT_EQ(hash_01_normalized, hash_02_normalized);
 }
@@ -71,9 +71,9 @@ TEST_F(ContextTest, RayPathHash02) {
 
   for (const auto& rp0 : ray_path_list) {
     auto ext_ray_path_list = icehalo::MakeSymmetryExtension(rp0, ctx, sym_flag);
-    auto normalized_hash = icehalo::GetNormalizedHash(rp0, ctx, sym_flag);
+    auto normalized_hash = icehalo::NormalizeRayPath(rp0, ctx, sym_flag);
     for (const auto& rp : ext_ray_path_list) {
-      auto curr_hash = icehalo::GetNormalizedHash(rp, ctx, sym_flag);
+      auto curr_hash = icehalo::NormalizeRayPath(rp, ctx, sym_flag);
       EXPECT_EQ(normalized_hash, curr_hash);
     }
   }

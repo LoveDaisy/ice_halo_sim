@@ -688,8 +688,8 @@ CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<math::Vec3f>& pts,   
 }
 
 
-void MakeSymmetryExtensionHelper(const RayPath& curr_ray_path, const CrystalContext* crystal_ctx,
-                                                 uint8_t symmetry_flag, std::vector<RayPath>& ray_path_list) {
+void MakeSymmetryExtensionHelper(const RayPath& curr_ray_path, const CrystalContext* crystal_ctx, uint8_t symmetry_flag,
+                                 std::vector<RayPath>& ray_path_list) {
   std::vector<RayPath> ray_path_extension{};
   ray_path_extension.emplace_back(curr_ray_path);
 
@@ -788,7 +788,8 @@ std::vector<RayPath> MakeSymmetryExtension(const RayPath& curr_ray_path, const C
 }
 
 
-size_t GetNormalizedHash(RayPath ray_path, const CrystalContext* crystal_ctx, uint8_t symmetry_flag) {
+std::pair<RayPath, size_t> NormalizeRayPath(RayPath ray_path, const CrystalContext* crystal_ctx,
+                                            uint8_t symmetry_flag) {
   auto period = crystal_ctx->GetCrystal()->GetFaceNumberPeriod();
   bool crystal_flag = true;
   FaceNumberType first_p_fn = kInvalidFaceNumber;
@@ -833,7 +834,7 @@ size_t GetNormalizedHash(RayPath ray_path, const CrystalContext* crystal_ctx, ui
     }
   }
 
-  return RayPathRecorder::Hash(ray_path);
+  return std::make_pair(ray_path, RayPathRecorder::Hash(ray_path));
 }
 
 }  // namespace icehalo
