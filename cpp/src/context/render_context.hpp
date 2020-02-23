@@ -27,7 +27,7 @@ enum class RenderSplitterType {
 };
 
 
-struct RenderSplitter {
+struct RenderSplitter : public IJsonizable {
   RenderSplitterType type;
   int top_halo_num;
   std::vector<std::vector<ShortIdType>> crystal_filters;
@@ -35,6 +35,9 @@ struct RenderSplitter {
   static constexpr uint8_t kDefaultSymmetry = kSymmetryPrism | kSymmetryDirection | kSymmetryBasal;
 
   RenderSplitter();
+
+  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
+  void LoadFromJson(const rapidjson::Value& root) override;
 };
 
 

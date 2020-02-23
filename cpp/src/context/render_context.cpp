@@ -15,6 +15,66 @@ using rapidjson::Pointer;
 RenderSplitter::RenderSplitter() : type(RenderSplitterType::kNone), top_halo_num(0), crystal_filters{} {}
 
 
+void RenderSplitter::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
+  switch (type) {
+    case RenderSplitterType::kTopHalo:
+      Pointer("/type").Set(root, "top_halo", allocator);
+      Pointer("/param").Set(root, top_halo_num, allocator);
+      break;
+    case RenderSplitterType::kFilter: {
+      char id_buf[128];
+      Pointer("/type").Set(root, "filter", allocator);
+      for (size_t i = 0; i < crystal_filters.size(); i++) {
+        const auto& ids = crystal_filters[i];
+        for (size_t j = 0; j < ids.size(); j++) {
+          std::snprintf(id_buf, 128, "/param/%zu/%zu", i, j);
+          Pointer(id_buf).Set(root, ids[j], allocator);
+        }
+      }
+    } break;
+    case RenderSplitterType::kNone:
+      break;
+  }
+}
+
+
+void RenderSplitter::LoadFromJson(const rapidjson::Value& root) {
+  auto p = Pointer("/type").Get(root);
+  if (p && p->IsString() && *p == "top_halo") {
+    type = RenderSplitterType::kTopHalo;
+  } else if (p && p->IsString() && *p == "filter") {
+    type = RenderSplitterType::kFilter;
+  }
+
+  p = Pointer("/param").Get(root);
+  if (p && p->IsInt() && type == RenderSplitterType::kTopHalo) {
+    top_halo_num = std::min(std::max(p->GetInt(), 0), RenderContext::kMaxTopHaloNumber);
+  } else if (p && p->IsArray() && type == RenderSplitterType::kFilter) {
+    std::vector<std::vector<ShortIdType>> new_crystal_filters;
+    for (const auto& pi : p->GetArray()) {
+      if (!pi.IsArray() || pi.GetArray().Size() % 2 != 0) {
+        LOG_VERBOSE("crystal filter param not recognize!");
+        continue;
+      }
+      std::vector<ShortIdType> tmp_ids{};
+      for (const auto& fid : pi.GetArray()) {
+        if (!fid.IsUint()) {
+          LOG_VERBOSE("crystal filter param not recognize!");
+          continue;
+        }
+        tmp_ids.emplace_back(fid.GetUint());
+      }
+      if (!tmp_ids.empty()) {
+        new_crystal_filters.emplace_back(tmp_ids);
+      }
+    }
+    if (!new_crystal_filters.empty()) {
+      crystal_filters = new_crystal_filters;
+    }
+  }
+}
+
+
 RenderContext::RenderContext()
     : ray_color_{ 1.0f, 1.0f, 1.0f }, background_color_{ 0.0f, 0.0f, 0.0f }, intensity_(1.0f), image_width_(0),
       image_height_(0), offset_x_(0), offset_y_(0), visible_range_(VisibleRange::kUpper),
@@ -195,25 +255,7 @@ void RenderContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Allocat
   Pointer("/offset/0").Set(root, offset_x_, allocator);
   Pointer("/offset/-").Set(root, offset_y_, allocator);
 
-  switch (splitter_.type) {
-    case RenderSplitterType::kTopHalo:
-      Pointer("/splitter/type").Set(root, "top_halo", allocator);
-      Pointer("/splitter/param").Set(root, splitter_.top_halo_num, allocator);
-      break;
-    case RenderSplitterType::kFilter: {
-      char id_buf[128];
-      Pointer("/splitter/type").Set(root, "filter", allocator);
-      for (size_t i = 0; i < splitter_.crystal_filters.size(); i++) {
-        const auto& ids = splitter_.crystal_filters[i];
-        for (size_t j = 0; j < ids.size(); j++) {
-          std::snprintf(id_buf, 128, "/splitter/%zu/%zu", i, j);
-          Pointer(id_buf).Set(root, ids[j], allocator);
-        }
-      }
-    } break;
-    case RenderSplitterType::kNone:
-      break;
-  }
+  splitter_.SaveToJson(Pointer("/splitter").Create(root, allocator), allocator);
 
   switch (color_compact_level_) {
     case ColorCompactLevel::kTrueColor:
@@ -319,7 +361,7 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   } else if (!p->IsString()) {
     LOG_VERBOSE("Render config <color_compact_level> is not a string. Use default true color!");
   } else {
-    if (*p == "true_color") {
+    if (*p == "no_compact") {
       color_compact_level_ = ColorCompactLevel::kTrueColor;
     } else if (*p == "monochrome") {
       color_compact_level_ = ColorCompactLevel::kMonochrome;
@@ -330,46 +372,14 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
     }
   }
 
-  splitter_ = {};
   p = Pointer("/splitter").Get(root);
+  splitter_ = {};
   if (p == nullptr) {
     LOG_VERBOSE("Render config missing <splitter>. Use default!");
   } else if (!p->IsObject()) {
     LOG_VERBOSE("Render config <splitter> is not an object. Use default!");
   } else {
-    auto pp = Pointer("/type").Get(*p);
-    if (pp && pp->IsString() && *pp == "top_halo") {
-      splitter_.type = RenderSplitterType::kTopHalo;
-    } else if (pp && pp->IsString() && *pp == "filter") {
-      splitter_.type = RenderSplitterType::kFilter;
-    }
-
-    pp = Pointer("/param").Get(*p);
-    if (pp && pp->IsInt() && splitter_.type == RenderSplitterType::kTopHalo) {
-      splitter_.top_halo_num = pp->GetInt();
-    } else if (pp && pp->IsArray() && splitter_.type == RenderSplitterType::kFilter) {
-      std::vector<std::vector<ShortIdType>> crystal_filters;
-      for (const auto& ppi : pp->GetArray()) {
-        if (!ppi.IsArray() || ppi.GetArray().Size() % 2 != 0) {
-          LOG_VERBOSE("crystal filter param not recognize!");
-          continue;
-        }
-        std::vector<ShortIdType> tmp_ids{};
-        for (const auto& fid : ppi.GetArray()) {
-          if (!fid.IsUint()) {
-            LOG_VERBOSE("crystal filter param not recognize!");
-            continue;
-          }
-          tmp_ids.emplace_back(fid.GetUint());
-        }
-        if (!tmp_ids.empty()) {
-          crystal_filters.emplace_back(tmp_ids);
-        }
-      }
-      if (!crystal_filters.empty()) {
-        splitter_.crystal_filters = crystal_filters;
-      }
-    }
+    splitter_.LoadFromJson(*p);
   }
 
   ResetBackgroundColor();
