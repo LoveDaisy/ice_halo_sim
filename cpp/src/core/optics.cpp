@@ -33,6 +33,12 @@ size_t RayPathRecorder::Hash() const noexcept {
 }
 
 
+void RayPathRecorder::Clear() noexcept {
+  hash_ = 0;
+  offset_ = 0;
+}
+
+
 size_t RayPathRecorder::Hash(const RayPath& ray_path) noexcept {
   RayPathRecorder recorder{};
   for (const auto& fn : ray_path) {

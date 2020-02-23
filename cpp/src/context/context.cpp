@@ -333,6 +333,7 @@ void ProjectContext::ParseMultiScatterSettings(rapidjson::Document& d) {
 
 RayPath GetRayPath(const ProjectContextPtr& ctx, const RaySegment* last_ray) {
   RayPath result{};
+  result.reserve(ctx->kMaxRayHitNum);
   auto p = last_ray;
   while (p) {
     result.emplace_back(kInvalidFaceNumber);

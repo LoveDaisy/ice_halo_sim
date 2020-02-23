@@ -55,6 +55,7 @@ class RayPathRecorder : public ISerializable {
   RayPathRecorder();
 
   size_t Hash() const noexcept;
+  void Clear() noexcept;
 
   static size_t Hash(const RayPath& ray_path) noexcept;
 

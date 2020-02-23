@@ -188,6 +188,9 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
   std::unordered_map<size_t, std::unordered_set<RayInfo*>> ray_info_map;
   ray_info_map.reserve(hash_table_init_size);
 
+  std::vector<RayPathRecorder*> recorder_list{};
+  recorder_list.reserve(ctx->multi_scatter_info_.size());
+  RayPathRecorder recorder;
   size_t ray_seg_idx = 0;
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
@@ -197,15 +200,15 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
       const auto* crystal_ctx = ctx->GetCrystalContext(r->root_ctx->crystal_id);
 
       // 1. Get hash for the whole path
-      std::vector<RayPathRecorder> recorder_list;
+      recorder_list.clear();
       RaySegment* p = r;
       while (p) {
-        recorder_list.emplace_back(p->recorder);
+        recorder_list.emplace_back(&(p->recorder));
         p = p->root_ctx->prev_ray_segment;
       }
-      RayPathRecorder recorder;
+      recorder.Clear();
       for (auto it = recorder_list.rbegin(); it != recorder_list.rend(); ++it) {
-        recorder << *it;
+        recorder << **it;
       }
       auto ray_path_hash = recorder.Hash();
 
