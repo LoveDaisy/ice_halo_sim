@@ -6,6 +6,9 @@
 #include "core/render.hpp"
 #include "util/log.hpp"
 
+constexpr size_t kBufSize = 1024;
+char str_buf[kBufSize];
+
 void PrintRayPath(const icehalo::RayPath& ray_path, char* buf, size_t size) {
   bool crystal_flag = true;
   size_t offset = 0;
@@ -33,9 +36,6 @@ std::tuple<icehalo::RayCollectionInfoList, icehalo::SimpleRayData, icehalo::RayP
     icehalo::SimulationData& ray_data, icehalo::ProjectContextPtr& ctx, icehalo::RenderContextPtr& split_render_ctx,
     std::vector<icehalo::SpectrumRenderer>& split_renderer_candidates,
     std::vector<std::set<size_t>>& renderer_ray_set) {
-  constexpr size_t kBufSize = 1024;
-  char str_buf[kBufSize];
-
   size_t split_img_ch_num =
       icehalo::SpectrumRenderer::kImageBits / static_cast<int>(split_render_ctx->GetColorCompactLevel());
   auto split_num = static_cast<size_t>(split_render_ctx->GetSplitNumber());
@@ -104,9 +104,6 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  constexpr size_t kBufSize = 1024;
-  char str_buf[kBufSize];
-
   icehalo::SimulationData ray_data;
   auto data_files = icehalo::ListDataFiles(ctx->GetDataDirectory().c_str());
   for (size_t i = 0; i < data_files.size(); i++) {
@@ -124,7 +121,6 @@ int main(int argc, char* argv[]) {
       auto split_ray_data =
           RenderSplitHalos(ray_data, ctx, split_render_ctx, split_renderer_candidates, renderer_ray_set);
       const auto& exit_ray_data = std::get<1>(split_ray_data);
-
       icehalo::RayCollectionInfo final_ray_info = std::get<0>(split_ray_data)[0];
       final_ray_info.is_partial_data = false;
       renderer.LoadRayData(static_cast<size_t>(exit_ray_data.wavelength), final_ray_info, exit_ray_data);
