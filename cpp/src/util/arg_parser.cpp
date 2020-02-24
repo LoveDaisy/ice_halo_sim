@@ -10,11 +10,20 @@ ArgParser::ArgParser() : mode_(ArgMode::kCompact) {}
 
 
 void ArgParser::AddArgument(const std::string& name, int value_num) {
+  AddArgument(name, value_num, "", "");
+}
+
+
+void ArgParser::AddArgument(const std::string& name, int value_num, const std::string& metavar,
+                            const std::string& help_msg) {
   if (name.size() > 1 && name[0] != '-') {
     LOG_WARNING("Add argument %s not starts with minus! Prepend a minus to it!", name.c_str());
-    option_map_.emplace("-" + name, value_num);
+    std::string tmp_name = "-" + name;
+    option_value_num_.emplace(tmp_name, value_num);
+    option_meta_.emplace(tmp_name, std::make_tuple(metavar, help_msg));
   } else {
-    option_map_.emplace(name, value_num);
+    option_value_num_.emplace(name, value_num);
+    option_meta_.emplace(name, std::make_tuple(metavar, help_msg));
   }
 }
 
@@ -35,18 +44,36 @@ void ArgParser::ShowHelp(const char* cmd) const {
     return;
   }
 
-  for (const auto& kv : option_map_) {
+  for (const auto& kv : option_value_num_) {
     n = std::snprintf(buf + offset, kBufSize - offset, " %s", kv.first.c_str());
     offset += n;
     if (offset > kBufSize) {
       return;
     }
+
+    std::string metavar;
+    std::tie(metavar, std::ignore) = option_meta_.at(kv.first);
     if (kv.second < 0) {
-      n = std::snprintf(buf + offset, kBufSize - offset, " [val]...");
+      if (!metavar.empty()) {
+        n = std::snprintf(buf + offset, kBufSize - offset, " [%s]...", metavar.c_str());
+      } else {
+        n = std::snprintf(buf + offset, kBufSize - offset, " [val]...");
+      }
       offset += n;
-    } else if (kv.second > 0) {
+    } else if (kv.second == 1) {
+      if (!metavar.empty()) {
+        n = std::snprintf(buf + offset, kBufSize - offset, " %s", metavar.c_str());
+      } else {
+        n = std::snprintf(buf + offset, kBufSize - offset, " val");
+      }
+      offset += n;
+    } else {
       for (int i = 0; i < kv.second; i++) {
-        n = std::snprintf(buf + offset, kBufSize - offset, " val%d", i);
+        if (!metavar.empty()) {
+          n = std::snprintf(buf + offset, kBufSize - offset, " %s%d", metavar.c_str(), i);
+        } else {
+          n = std::snprintf(buf + offset, kBufSize - offset, " val%d", i);
+        }
         offset += n;
       }
     }
@@ -54,6 +81,13 @@ void ArgParser::ShowHelp(const char* cmd) const {
 
   LOG_INFO("USAGE:");
   LOG_INFO("%s", buf);
+  LOG_INFO("OPTIONS:");
+
+  for (const auto& kv : option_value_num_) {
+    std::string help_info;
+    std::tie(std::ignore, help_info) = option_meta_.at(kv.first);
+    LOG_INFO("  %s: %s", kv.first.c_str(), help_info.c_str());
+  }
 }
 
 
@@ -188,7 +222,7 @@ ArgParseResult ArgParser::Parse(int argc, char** argv) const {
   ArgParseResult result{ { "", {} } };
   for (int i = 0; i < argc; i++) {
     curr_arg = argv[i];
-    state = state_actions[state](curr_arg, key, option_map_, mode_, result);
+    state = state_actions[state](curr_arg, key, option_value_num_, mode_, result);
     if (state == ParseState::kReceivedKey) {
       key = curr_arg;
     } else if (state == ParseState::kStart) {
@@ -199,7 +233,7 @@ ArgParseResult ArgParser::Parse(int argc, char** argv) const {
     }
   }
 
-  for (const auto& kv : option_map_) {
+  for (const auto& kv : option_value_num_) {
     if (kv.second > 0 && !result.count(kv.first)) {
       ShowHelp(argv[0]);
       throw std::invalid_argument("missing some required options!");

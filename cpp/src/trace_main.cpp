@@ -9,9 +9,15 @@ using namespace icehalo;
 
 int main(int argc, char* argv[]) {
   icehalo::ArgParser parser;
-  parser.AddArgument("-v", 0);
-  parser.AddArgument("--config", 1);
-  auto arg_parse_result = parser.Parse(argc, argv);
+  parser.AddArgument("-v", 0, "verbose", "make output verbose");
+  parser.AddArgument("--config", 1, "config-file", "config file");
+  icehalo::ArgParseResult arg_parse_result;
+  try {
+    arg_parse_result = parser.Parse(argc, argv);
+  } catch (...) {
+    return -1;
+  }
+
   const char* config_filename = arg_parse_result.at("--config")[0].c_str();
   if (arg_parse_result.count("-v")) {
     icehalo::LogFilterPtr stdout_filter = icehalo::LogFilter::MakeLevelFilter({ icehalo::LogLevel::kVerbose });

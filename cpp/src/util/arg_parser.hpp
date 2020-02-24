@@ -46,6 +46,7 @@ class ArgParser {
   ArgParser();
 
   void AddArgument(const std::string& name, int value_num);
+  void AddArgument(const std::string& name, int value_num, const std::string& metavar, const std::string& help_msg);
   void SetArgMode(ArgMode mode);
   ArgParseResult Parse(int argc, char** argv) const;
 
@@ -53,7 +54,8 @@ class ArgParser {
   void ShowHelp(const char* cmd) const;
 
   ArgMode mode_;
-  std::map<std::string, int> option_map_;
+  std::map<std::string, int> option_value_num_;
+  std::map<std::string, std::tuple<std::string, std::string>> option_meta_;  // metavar, help_info
 };
 
 }  // namespace icehalo
