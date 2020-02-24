@@ -174,8 +174,6 @@ bool LogComplexFilter::Filter(const LogMessage& message) {
 Logger::Logger() {
 #if defined(DEBUG) || defined(FOR_TEST)
   LogFilterPtr stdout_filter = LogFilter::MakeLevelFilter({ LogLevel::kVerbose, LogLevel::kDebug, LogLevel::kInfo });
-#elif defined(VERBOSE)
-  LogFilterPtr stdout_filter = LogFilter::MakeLevelFilter({ LogLevel::kVerbose, LogLevel::kInfo });
 #else
   LogFilterPtr stdout_filter = LogFilter::MakeLevelFilter({ LogLevel::kInfo });
 #endif
@@ -185,6 +183,11 @@ Logger::Logger() {
 
   filter_dest_list_.emplace_back(std::make_pair(stdout_filter, stdout_dest));
   filter_dest_list_.emplace_back(std::make_pair(stderr_filter, stderr_dest));
+}
+
+
+void Logger::AddDestination(LogFilterPtr filter, LogDestPtr dest) {
+  filter_dest_list_.emplace_back(std::make_pair(std::move(filter), std::move(dest)));
 }
 
 

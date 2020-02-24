@@ -156,6 +156,8 @@ class Logger {
     }
   }
 
+  void AddDestination(LogFilterPtr filter, LogDestPtr dest);
+
   static Logger* GetInstance();
 
   static constexpr size_t kMaxMessageLength = 1024;

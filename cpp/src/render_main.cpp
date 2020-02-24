@@ -4,6 +4,7 @@
 
 #include "context/context.hpp"
 #include "core/render.hpp"
+#include "util/arg_parser.hpp"
 #include "util/log.hpp"
 
 constexpr size_t kBufSize = 1024;
@@ -76,13 +77,19 @@ std::tuple<icehalo::RayCollectionInfoList, icehalo::SimpleRayData, icehalo::RayP
 
 
 int main(int argc, char* argv[]) {
-  if (argc != 2) {
-    std::printf("USAGE: %s config.json\n", argv[0]);
-    return -1;
+  icehalo::ArgParser parser;
+  parser.AddArgument("-v", 0);
+  parser.AddArgument("--config", 1);
+  auto arg_parse_result = parser.Parse(argc, argv);
+  const char* config_filename = arg_parse_result.at("--config")[0].c_str();
+  if (arg_parse_result.count("-v")) {
+    icehalo::LogFilterPtr stdout_filter = icehalo::LogFilter::MakeLevelFilter({ icehalo::LogLevel::kVerbose });
+    icehalo::LogDestPtr stdout_dest = icehalo::LogStdOutDest::GetInstance();
+    icehalo::Logger::GetInstance()->AddDestination(stdout_filter, stdout_dest);
   }
 
   auto start = std::chrono::system_clock::now();
-  icehalo::ProjectContextPtr ctx = icehalo::ProjectContext::CreateFromFile(argv[1]);
+  icehalo::ProjectContextPtr ctx = icehalo::ProjectContext::CreateFromFile(config_filename);
   icehalo::SpectrumRenderer renderer;
   renderer.SetCameraContext(ctx->cam_ctx_);
   renderer.SetRenderContext(ctx->render_ctx_);

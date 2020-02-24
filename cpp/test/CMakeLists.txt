@@ -17,6 +17,7 @@ set(SOURCE_FILE
     ${PROJ_SRC_DIR}/core/render.cpp
     ${PROJ_SRC_DIR}/core/simulation.cpp
     ${PROJ_SRC_DIR}/io/file.cpp
+    ${PROJ_SRC_DIR}/util/arg_parser.cpp
     ${PROJ_SRC_DIR}/util/log.cpp
     ${PROJ_SRC_DIR}/util/obj_pool.cpp
     ${PROJ_SRC_DIR}/util/threadingpool.cpp)

@@ -10,7 +10,7 @@ build() {
   rm -rf CMakeCache.txt
   rm -rf Makefile cmake_install.cmake
   cmake "${PROJ_DIR}" \
-        -DDEBUG=$DEBUG_FLAG -DVERBOSE=$VERBOSE -DBUILD_TEST=$BUILD_TEST \
+        -DDEBUG=$DEBUG_FLAG -DBUILD_TEST=$BUILD_TEST \
         -DMULTI_THREAD=$MULTI_THREAD \
         -DRANDOM_SEED=$RANDOM_SEED \
         -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR"
@@ -36,7 +36,6 @@ help() {
   echo "OPTIONS:"
   echo "  -t:          Build test cases and run test on them."
   echo "  -j:          Make in parallel, i.e. use make -j"
-  echo "  -v:          Make verbose output."
   echo "  -k:          Clean temporary building files."
   echo "  -r:          Use system time as seed for random number generator. Without this option,"
   echo "               the program will use default value. Thus generate a repeatable result (together with -1)."
@@ -57,7 +56,6 @@ INSTALL_FLAG=OFF
 MAKE_J_N=1
 MULTI_THREAD=ON
 RANDOM_SEED=OFF
-VERBOSE=OFF
 
 if [ $# -eq 0 ]; then
   help
@@ -68,7 +66,7 @@ fi
 # A POSIX variable
 OPTIND=1         # Reset in case getopts has been used previously in the shell.
 
-while getopts "htrjk1v" opt; do
+while getopts "htrjk1" opt; do
   case "$opt" in
   h)
     help
@@ -76,9 +74,6 @@ while getopts "htrjk1v" opt; do
     ;;
   t)
     BUILD_TEST=ON
-    ;;
-  v)
-    VERBOSE=ON
     ;;
   j)
     MAKE_J_N=""

@@ -35,6 +35,7 @@ set(SOURCE_FILE
     core/render.cpp
     core/simulation.cpp
     io/file.cpp
+    util/arg_parser.cpp
     util/log.cpp
     util/obj_pool.cpp
     util/threadingpool.cpp)
