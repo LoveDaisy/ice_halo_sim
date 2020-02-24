@@ -134,18 +134,6 @@ std::pair<RayCollectionInfo, SimpleRayData> SimulationData::CollectFinalRayData(
 }
 
 
-namespace ray_path_helper {
-
-struct RayPathStatsData {
-  std::unordered_set<size_t> ray_path_hash_set;
-  std::unordered_set<RayInfo*> ray_info_set;
-  float total_energy;
-  size_t exit_ray_seg_num;
-};
-
-}  // namespace ray_path_helper
-
-
 std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::CollectSplitRayData(
     const ProjectContextPtr& ctx, const RenderSplitter& splitter) const {
   switch (splitter.type) {

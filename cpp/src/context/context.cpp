@@ -270,11 +270,12 @@ void ProjectContext::ParseRenderSettings(rapidjson::Document& d) {
     render_ctx_->LoadFromJson(*root);
   }
 
-  split_render_ctx_ = RenderContext::CreateDefault();
   root = Pointer("/split_render").Get(d);
   if (!root) {
-    LOG_VERBOSE("Config <top_halo_render> is missing. Use default!");
+    LOG_VERBOSE("Config <split_render> is missing. Leave it empty!");
+    split_render_ctx_ = nullptr;
   } else {
+    split_render_ctx_ = RenderContext::CreateDefault();
     split_render_ctx_->LoadFromJson(*root);
   }
 }
