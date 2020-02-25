@@ -506,7 +506,7 @@ HalfSpaceSet::HalfSpaceSet(int n, float* a, float* b, float* c, float* d) : n(n)
 
 
 RandomNumberGenerator::RandomNumberGenerator(uint32_t seed)
-    : generator_{ static_cast<std::mt19937::result_type>(seed) } {}
+    : seed_(seed), generator_{ static_cast<std::mt19937::result_type>(seed) } {}
 
 
 RandomNumberGenerator* RandomNumberGenerator::GetInstance() {
@@ -537,6 +537,11 @@ float RandomNumberGenerator::Get(Distribution dist, float mean, float std) {
     case Distribution::kGaussian:
       return GetGaussian() * std + mean;
   }
+}
+
+
+void RandomNumberGenerator::Reset() {
+  generator_.seed(seed_);
 }
 
 

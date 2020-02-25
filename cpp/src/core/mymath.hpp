@@ -105,12 +105,14 @@ class RandomNumberGenerator {
   float GetGaussian();
   float GetUniform();
   float Get(Distribution dist, float mean, float std);
+  void Reset();
 
   static RandomNumberGenerator* GetInstance();
 
  private:
   explicit RandomNumberGenerator(uint32_t seed);
 
+  uint32_t seed_;
   std::mt19937 generator_;
   std::normal_distribution<float> gauss_dist_;
   std::uniform_real_distribution<float> uniform_dist_;
