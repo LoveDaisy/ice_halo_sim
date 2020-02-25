@@ -137,6 +137,8 @@ int main(int argc, char* argv[]) {
   size_t total_ray_num = 0;
   while (true) {
     const auto& wavelengths = proj_ctx->wavelengths_;
+    icehalo::SimpleRayData exit_ray_data;
+    std::vector<icehalo::RayCollectionInfo> ray_info_list;
     for (size_t i = 0; i < wavelengths.size(); i++) {
       LOG_INFO("starting at wavelength: %d", wavelengths[i].wavelength);
       simulator.SetCurrentWavelengthIndex(i);
@@ -149,10 +151,9 @@ int main(int argc, char* argv[]) {
 
       auto simulation_data = simulator.GetSimulationRayData();
       if (split_render_ctx) {
-        auto split_ray_data =
+        std::tie(ray_info_list, exit_ray_data, std::ignore) =
             RenderSplitHalos(simulation_data, proj_ctx, split_render_ctx, split_renderer_candidates, renderer_ray_set);
-        const auto& exit_ray_data = std::get<1>(split_ray_data);
-        icehalo::RayCollectionInfo final_ray_info = std::get<0>(split_ray_data)[0];
+        auto& final_ray_info = ray_info_list[0];
         final_ray_info.is_partial_data = false;
         final_ray_info.init_ray_num = exit_ray_data.init_ray_num;
         renderer.LoadRayData(wavelengths[i].wavelength, final_ray_info, exit_ray_data);
