@@ -181,7 +181,7 @@ int main(int argc, char* argv[]) {
         cv::Mat halo_img(proj_ctx->split_render_ctx_->GetImageHeight(), proj_ctx->split_render_ctx_->GetImageWidth(),
                          CV_8UC3, split_renderer_candidates[i].GetImageBuffer());
         cv::cvtColor(halo_img, halo_img, cv::COLOR_RGB2BGR);
-        std::snprintf(str_buf, kBufSize, "halo_%03zu.jpg", i);
+        std::snprintf(str_buf, kBufSize, "halo_%03zu.png", i);
         cv::imwrite(icehalo::PathJoin(proj_ctx->GetDataDirectory(), str_buf), halo_img);
       }
     }
@@ -189,7 +189,7 @@ int main(int argc, char* argv[]) {
     t = std::chrono::system_clock::now();
     total_ray_num += proj_ctx->GetInitRayNum() * wavelengths.size();
     diff = t - start;
-    LOG_INFO("=== Total %zu rays finished! ===", total_ray_num);
+    LOG_INFO("=== Total %.1fM rays finished! ===", total_ray_num / 1.0e6);
     LOG_INFO("=== Spent %.3f sec!          ===", diff.count() / 1000);
   }
 

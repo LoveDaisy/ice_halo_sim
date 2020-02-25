@@ -95,7 +95,7 @@ class RenderContext : public IJsonizable {
   static constexpr float kMinIntensity = 0.01f;
   static constexpr float kMaxIntensity = 100.0f;
   static constexpr int kMaxImageSize = 4096;
-  static constexpr int kMaxTopHaloNumber = 150;
+  static constexpr int kMaxTopHaloNumber = 300;
 
  private:
   RenderContext();
