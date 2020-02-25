@@ -139,6 +139,7 @@ int main(int argc, char* argv[]) {
     const auto& wavelengths = proj_ctx->wavelengths_;
     icehalo::SimpleRayData exit_ray_data;
     std::vector<icehalo::RayCollectionInfo> ray_info_list;
+    icehalo::RayPathMap ray_path_map;
     for (size_t i = 0; i < wavelengths.size(); i++) {
       LOG_INFO("starting at wavelength: %d", wavelengths[i].wavelength);
       simulator.SetCurrentWavelengthIndex(i);
@@ -151,8 +152,30 @@ int main(int argc, char* argv[]) {
 
       auto simulation_data = simulator.GetSimulationRayData();
       if (split_render_ctx) {
-        std::tie(ray_info_list, exit_ray_data, std::ignore) =
+        std::tie(ray_info_list, exit_ray_data, ray_path_map) =
             RenderSplitHalos(simulation_data, proj_ctx, split_render_ctx, split_renderer_candidates, renderer_ray_set);
+
+        if (total_ray_num == 0) {
+          auto ray_path_result_file = icehalo::PathJoin(proj_ctx->GetDataDirectory(), "ray_path_result.txt");
+          auto* fp = fopen(ray_path_result_file.c_str(), "w");
+          for (const auto& r : ray_info_list) {
+            auto hash = r.identifier;
+            size_t img_idx = 0;
+            for (size_t k = 0; k < renderer_ray_set.size(); k++) {
+              if (renderer_ray_set[k].count(hash)) {
+                img_idx = k;
+                break;
+              }
+            }
+
+            if (ray_path_map.count(hash)) {
+              PrintRayPath(ray_path_map.at(hash), str_buf, kBufSize);
+              std::fprintf(fp, "img_idx: %03zu, hash: %016tx, ray_path: %s\n", img_idx, hash, str_buf);
+            }
+          }
+          fclose(fp);
+        }
+
         auto& final_ray_info = ray_info_list[0];
         final_ray_info.is_partial_data = false;
         final_ray_info.init_ray_num = exit_ray_data.init_ray_num;
