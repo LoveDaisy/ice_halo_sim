@@ -142,10 +142,11 @@ int main(int argc, char* argv[]) {
         const auto& exit_ray_data = std::get<1>(split_ray_data);
         icehalo::RayCollectionInfo final_ray_info = std::get<0>(split_ray_data)[0];
         final_ray_info.is_partial_data = false;
-        renderer.LoadRayData(static_cast<size_t>(exit_ray_data.wavelength), final_ray_info, exit_ray_data);
+        final_ray_info.init_ray_num = exit_ray_data.init_ray_num;
+        renderer.LoadRayData(wavelengths[i].wavelength, final_ray_info, exit_ray_data);
       } else {
         auto ray_data = simulation_data.CollectFinalRayData();
-        renderer.LoadRayData(static_cast<size_t>(ray_data.second.wavelength), ray_data.first, ray_data.second);
+        renderer.LoadRayData(wavelengths[i].wavelength, ray_data.first, ray_data.second);
       }
       auto t2 = std::chrono::system_clock::now();
       diff = t2 - t0;
