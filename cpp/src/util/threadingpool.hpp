@@ -18,9 +18,11 @@ class ThreadingPool {
 
   void Start();
   void AddJob(std::function<void()> job);
-  void AddRangeBasedJobs(size_t size, const std::function<void(size_t start_idx, size_t end_idx)>& job);
+  void AddStepMapJobs(size_t num, const std::function<void(size_t start_idx, size_t end_idx, size_t step)>& job);
+  void AddRangeMapJobs(size_t num, const std::function<void(size_t start_idx, size_t end_idx)>& job);
   void WaitFinish();
   bool IsTaskRunning();
+  size_t GetPoolSize() const;
 
   static ThreadingPool* GetInstance();
 

@@ -216,7 +216,7 @@ void Optics::HitSurface(const Crystal* crystal, float n, size_t num,            
                         float* dir_out, float* w_out) {                                 // output
   auto face_norm = crystal->GetFaceNorm();
 
-  for (decltype(num) i = 0; i < num; i++) {
+  for (size_t i = 0; i < num; i++) {
     const float* tmp_dir = dir_in + i * 3;
     const float* tmp_norm = face_norm + face_id_in[i] * 3;
 
@@ -314,7 +314,7 @@ void Optics::Propagate(const Crystal* crystal, size_t num,                      
   auto face_bases = crystal->GetFaceBaseVector();
   auto face_vertexes = crystal->GetFaceVertex();
   auto face_norms = crystal->GetFaceNorm();
-  for (decltype(num) i = 0; i < num; i++) {
+  for (size_t i = 0; i < num; i++) {
     if (w_in[i] < ProjectContext::kPropMinW) {
       continue;
     }

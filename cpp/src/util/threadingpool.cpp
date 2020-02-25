@@ -51,7 +51,17 @@ void ThreadingPool::AddJob(std::function<void()> job) {
 }
 
 
-void ThreadingPool::AddRangeBasedJobs(size_t num, const std::function<void(size_t, size_t)>& job) {
+void ThreadingPool::AddStepMapJobs(size_t num, const std::function<void(size_t, size_t, size_t)>& job) {
+  auto step = GetPoolSize();
+  for (size_t i = 0; i < step; i++) {
+    size_t start_idx = i;
+    size_t end_idx = num;
+    AddJob([=] { job(start_idx, end_idx, step); });
+  }
+}
+
+
+void ThreadingPool::AddRangeMapJobs(size_t num, const std::function<void(size_t, size_t)>& job) {
   auto step = std::max(num / 100, static_cast<size_t>(10));
   for (size_t i = 0; i < num; i += step) {
     auto current_num = std::min(num - i, step);
@@ -70,6 +80,11 @@ void ThreadingPool::WaitFinish() {
 
 bool ThreadingPool::IsTaskRunning() {
   return running_jobs_ > 0 || !queue_.empty();
+}
+
+
+size_t ThreadingPool::GetPoolSize() const {
+  return pool_.size();
 }
 
 

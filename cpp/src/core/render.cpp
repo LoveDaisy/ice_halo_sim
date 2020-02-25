@@ -640,9 +640,8 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
   auto threading_pool = ThreadingPool::GetInstance();
   if (collection_info.is_partial_data) {
     auto num = idx.size();
-    threading_pool->AddRangeBasedJobs(num, [=, &idx](size_t start_idx, size_t end_idx) {
+    threading_pool->AddRangeMapJobs(num, [=, &idx](size_t start_idx, size_t end_idx) {
       size_t current_num = end_idx - start_idx;
-
       std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
       for (size_t j = 0; j < current_num; j++) {
         pf(cam_ctx_->GetCameraTargetDirection(), cam_ctx_->GetFov(), 1, final_ray_buf + idx[start_idx + j] * 4, img_wid,
@@ -668,9 +667,8 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
     });
   } else {
     auto num = final_ray_data.buf_ray_num;
-    threading_pool->AddRangeBasedJobs(num, [=](size_t start_idx, size_t end_idx) {
+    threading_pool->AddRangeMapJobs(num, [=](size_t start_idx, size_t end_idx) {
       size_t current_num = end_idx - start_idx;
-
       std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
       pf(cam_ctx_->GetCameraTargetDirection(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid,
          img_hei, tmp_xy.get(), render_ctx_->GetVisibleRange());

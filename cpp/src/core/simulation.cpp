@@ -249,18 +249,6 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
   }
 
   // 6. Sort
-  // std::sort(ray_collection_info_list.begin(), ray_collection_info_list.end(),
-  //           [&ray_path_map](const RayCollectionInfo& a, const RayCollectionInfo& b) {
-  //             auto a_len = ray_path_map.count(a.identifier) ? ray_path_map[a.identifier].size() : 0;
-  //             auto b_len = ray_path_map.count(b.identifier) ? ray_path_map[b.identifier].size() : 0;
-  //             if (a_len < b_len) {
-  //               return true;
-  //             } else if (a_len > b_len) {
-  //               return false;
-  //             } else {
-  //               return a.total_energy > b.total_energy;
-  //             }
-  //           });
   std::sort(ray_collection_info_list.begin(), ray_collection_info_list.end(),
             [](const RayCollectionInfo& a, const RayCollectionInfo& b) { return a.total_energy > b.total_energy; });
 
@@ -725,14 +713,15 @@ void Simulator::TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilt
       buffer_size_ = active_ray_num_ * kBufferSizeFactor;
       buffer_.Allocate(buffer_size_);
     }
-    pool->AddRangeBasedJobs(active_ray_num_, [=](size_t idx0, size_t idx1) {
-      size_t current_num = idx1 - idx0;
-      Optics::HitSurface(crystal, n, current_num,                                                       //
-                         buffer_.dir[0] + idx0 * 3, buffer_.face_id[0] + idx0, buffer_.w[0] + idx0,     //
-                         buffer_.dir[1] + idx0 * 6, buffer_.w[1] + idx0 * 2);                           //
-      Optics::Propagate(crystal, current_num * 2, buffer_.pt[0] + idx0 * 3,                             //
-                        buffer_.dir[1] + idx0 * 6, buffer_.w[1] + idx0 * 2, buffer_.face_id[0] + idx0,  //
-                        buffer_.pt[1] + idx0 * 6, buffer_.face_id[1] + idx0 * 2);                       //
+    pool->AddStepMapJobs(active_ray_num_, [=](size_t idx0, size_t idx1, size_t step) {
+      for (size_t i = idx0; i < idx1; i += step) {
+        Optics::HitSurface(crystal, n, 1,                                                        //
+                           buffer_.dir[0] + i * 3, buffer_.face_id[0] + i, buffer_.w[0] + i,     //
+                           buffer_.dir[1] + i * 6, buffer_.w[1] + i * 2);                        //
+        Optics::Propagate(crystal, 1 * 2, buffer_.pt[0] + i * 3,                                 //
+                          buffer_.dir[1] + i * 6, buffer_.w[1] + i * 2, buffer_.face_id[0] + i,  //
+                          buffer_.pt[1] + i * 6, buffer_.face_id[1] + i * 2);                    //
+      }
     });
     pool->WaitFinish();
     StoreRaySegments(crystal_ctx, filter);
