@@ -45,6 +45,7 @@ class ProjectContext {
   CrystalMap GetCrystalMap() const;
 
   AbstractRayPathFilter* GetRayPathFilter(ShortIdType id) const;
+  RayPath GetRayPath(const RaySegment* last_ray);
 
   static ProjectContextPtrU CreateFromFile(const char* filename);
   static ProjectContextPtrU CreateDefault();
@@ -88,8 +89,6 @@ class ProjectContext {
   std::vector<RayPathFilterContextPtrU> filter_store_;
 };
 
-
-RayPath GetRayPath(const ProjectContextPtr& ctx, const RaySegment* last_ray);
 
 }  // namespace icehalo
 

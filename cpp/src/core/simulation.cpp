@@ -76,7 +76,7 @@ void SimulationData::Clear() {
   rays_.clear();
   exit_ray_segments_.clear();
   exit_ray_seg_num_.clear();
-  RayInfoPool::GetInstance()->Clear();
+  ray_path_map_.clear();
   wavelength_info_ = {};
 }
 
@@ -103,7 +103,7 @@ void SimulationData::AddExitRaySegment(RaySegment* r) {
 }
 
 
-std::pair<RayCollectionInfo, SimpleRayData> SimulationData::CollectFinalRayData() const {
+std::pair<RayCollectionInfo, SimpleRayData> SimulationData::CollectFinalRayData() {
   size_t num = 0;
   for (const auto& n : exit_ray_seg_num_) {
     num += n;
@@ -134,8 +134,8 @@ std::pair<RayCollectionInfo, SimpleRayData> SimulationData::CollectFinalRayData(
 }
 
 
-std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::CollectSplitRayData(
-    const ProjectContextPtr& ctx, const RenderSplitter& splitter) const {
+std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitRayData(const ProjectContextPtr& ctx,
+                                                                                     const RenderSplitter& splitter) {
   switch (splitter.type) {
     case RenderSplitterType::kNone:
       return {};
@@ -147,8 +147,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
 }
 
 
-std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::CollectSplitHaloRayData(
-    const ProjectContextPtr& ctx) const {
+std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHaloRayData(const ProjectContextPtr& ctx) {
   size_t num = 0;
   for (const auto& n : exit_ray_seg_num_) {
     num += n;
@@ -163,13 +162,9 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
   }
   float* result_buf_p = result_ray_data.buf.get();
 
+  MakeRayPathMap(ctx);
+
   size_t hash_table_init_size = num / 3;
-  std::unordered_map<size_t, size_t> symmetry_table;
-  symmetry_table.reserve(hash_table_init_size);
-
-  RayPathMap ray_path_map;
-  ray_path_map.reserve(hash_table_init_size);
-
   std::unordered_map<size_t, RayCollectionInfo> ray_collection_info_map;
   ray_collection_info_map.reserve(hash_table_init_size);
 
@@ -185,7 +180,6 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
       if (r->state != RaySegmentState::kFinished) {
         continue;
       }
-      const auto* crystal_ctx = ctx->GetCrystalContext(r->root_ctx->crystal_id);
 
       // 1. Get hash for the whole path
       recorder_list.clear();
@@ -200,21 +194,8 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
       }
       auto ray_path_hash = recorder.Hash();
 
-
-      // 2. Check the path and put it into table
-      if (!ray_path_map.count(ray_path_hash) || !symmetry_table.count(ray_path_hash)) {
-        auto curr_path = GetRayPath(ctx, r);
-        RayPath normalized_path;
-        size_t normalized_hash;
-        std::tie(normalized_path, normalized_hash) =
-            NormalizeRayPath(curr_path, crystal_ctx, RenderSplitter::kDefaultSymmetry);
-        ray_path_map.emplace(ray_path_hash, std::move(curr_path));  // includes multi-scatter, complete path
-        ray_path_map.emplace(normalized_hash, std::move(normalized_path));
-        symmetry_table.emplace(ray_path_hash, normalized_hash);
-      }
-
       // 3. Fill data
-      auto normalized_hash = symmetry_table.at(ray_path_hash);
+      auto normalized_hash = ray_path_map_.at(ray_path_hash).second;
       if (!ray_collection_info_map.count(normalized_hash)) {
         RayCollectionInfo tmp_collection{};
         tmp_collection.identifier = normalized_hash;
@@ -253,12 +234,12 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
             [](const RayCollectionInfo& a, const RayCollectionInfo& b) { return a.total_energy > b.total_energy; });
 
   // return the final result
-  return std::make_tuple(std::move(ray_collection_info_list), std::move(result_ray_data), std::move(ray_path_map));
+  return std::make_tuple(std::move(ray_collection_info_list), std::move(result_ray_data));
 }
 
 
-std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::CollectSplitFilterRayData(
-    const ProjectContextPtr& ctx, const RenderSplitter& splitter) const {
+std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitFilterRayData(
+    const ProjectContextPtr& ctx, const RenderSplitter& splitter) {
   size_t num = 0;
   for (const auto& n : exit_ray_seg_num_) {
     num += n;
@@ -290,17 +271,13 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
   }
   float* result_buf_p = result_ray_data.buf.get();
 
-  RayPathMap ray_path_map;
   std::vector<RayCollectionInfo> ray_collection_info_list(crystal_filter.size());
   for (size_t i = 0; i < ray_collection_info_list.size(); i++) {
     ray_collection_info_list[i].identifier = i;
     ray_collection_info_list[i].is_partial_data = true;
   }
   std::vector<std::unordered_set<RayInfo*>> ray_info_map(crystal_filter.size());
-
-  std::vector<RayPathRecorder*> recorder_list{};
-  recorder_list.reserve(ctx->multi_scatter_info_.size());
-  RayPathRecorder recorder;
+  MakeRayPathMap(ctx);
 
   // 3. start filter all rays
   size_t ray_seg_idx = 0;
@@ -319,7 +296,6 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
         RaySegment* p = r;
         RayInfo* ray_info = r->root_ctx;
         bool pass = true;
-        recorder_list.clear();
         for (auto riter = cf.rbegin(); riter != cf.rend(); ++riter) {
           ray_info = p->root_ctx;
           if (p->root_ctx->crystal_id != riter->first->GetId()) {
@@ -331,21 +307,12 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
             pass = false;
             break;
           }
-          recorder_list.emplace_back(&(p->recorder));
           p = p->root_ctx->prev_ray_segment;
         }
 
         if (!pass) {
           continue;
         }
-
-        // 5. add ray path to ray path map
-        recorder.Clear();
-        for (auto it = recorder_list.rbegin(); it != recorder_list.rend(); ++it) {
-          recorder << **it;
-        }
-        auto curr_ray_path_hash = recorder.Hash();
-        ray_path_map.emplace(curr_ray_path_hash, GetRayPath(ctx, r));
 
         // 6. add to collection
         auto& collection = ray_collection_info_list[i];
@@ -366,12 +333,57 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
     }
   }
 
-  return std::make_tuple(std::move(ray_collection_info_list), std::move(result_ray_data), std::move(ray_path_map));
+  return std::make_tuple(std::move(ray_collection_info_list), std::move(result_ray_data));
 }
 
 
 const std::vector<RaySegment*>& SimulationData::GetLastExitRaySegments() const {
   return exit_ray_segments_.back();
+}
+
+
+void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
+  if (!ray_path_map_.empty()) {
+    return;
+  }
+
+  std::vector<RayPathRecorder*> recorder_list{};
+  recorder_list.reserve(proj_ctx->multi_scatter_info_.size());
+  RayPathRecorder recorder;
+  for (const auto& sr : exit_ray_segments_) {
+    for (const auto& r : sr) {
+      if (r->state != RaySegmentState::kFinished) {
+        continue;
+      }
+
+      // 1. Get hash for the whole path
+      recorder_list.clear();
+      RaySegment* p = r;
+      while (p) {
+        recorder_list.emplace_back(&(p->recorder));
+        p = p->root_ctx->prev_ray_segment;
+      }
+      recorder.Clear();
+      for (auto it = recorder_list.rbegin(); it != recorder_list.rend(); ++it) {
+        recorder << **it;
+      }
+      auto ray_path_hash = recorder.Hash();
+      if (ray_path_map_.count(ray_path_hash)) {
+        continue;
+      }
+
+      // 2. Normalize ray path
+      auto curr_path = proj_ctx->GetRayPath(r);
+      RayPath normalized_path;
+      size_t normalized_hash;
+      std::tie(normalized_path, normalized_hash) =
+          NormalizeRayPath(curr_path, proj_ctx, RenderSplitter::kDefaultSymmetry);
+      ray_path_map_.emplace(ray_path_hash, std::make_pair(curr_path, normalized_hash));
+      if (!ray_path_map_.count(normalized_hash)) {
+        ray_path_map_.emplace(normalized_hash, std::make_pair(normalized_path, normalized_hash));
+      }
+    }
+  }
 }
 
 

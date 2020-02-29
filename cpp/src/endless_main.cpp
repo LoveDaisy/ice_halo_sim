@@ -43,15 +43,14 @@ void PrintRayPath(const RayPath& ray_path, char* buf, size_t size) {
 }
 
 
-std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> RenderSplitHalos(const SimulationData& ray_data,
-                                                                              ProjectContextPtr& ctx,
-                                                                              RenderContextPtr& split_render_ctx) {
+std::tuple<RayCollectionInfoList, SimpleRayData> RenderSplitHalos(SimulationData& ray_data, ProjectContextPtr& ctx,
+                                                                  RenderContextPtr& split_render_ctx) {
   size_t split_img_ch_num = SpectrumRenderer::kImageBits / static_cast<int>(split_render_ctx->GetColorCompactLevel());
   auto split_num = static_cast<size_t>(split_render_ctx->GetSplitNumber());
 
   auto split_ray_data = ray_data.CollectSplitRayData(ctx, split_render_ctx->GetSplitter());
   const auto& exit_ray_data = std::get<1>(split_ray_data);
-  const auto& ray_path_map = std::get<2>(split_ray_data);
+  const auto& ray_path_map = ray_data.ray_path_map_;
 
   size_t curr_split_num = std::min(split_num, std::get<0>(split_ray_data).size());
   for (size_t j = 0; j < curr_split_num; j++) {
@@ -69,7 +68,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> RenderSplitHalos(co
       }
     }
 
-    PrintRayPath(ray_path_map.at(hash), str_buf, kBufSize);
+    PrintRayPath(ray_path_map.at(hash).first, str_buf, kBufSize);
     LOG_VERBOSE("img_idx: %03zu, hash: %016tx, energy: %03.3e, ray_path: %s", img_idx, hash,
                 collection_info.total_energy, str_buf);
 
@@ -113,7 +112,7 @@ void WriteRayPathMap(const ProjectContextPtr& proj_ctx, const std::vector<RayCol
       }
     }
 
-    PrintRayPath(ray_path_map.at(hash), str_buf, kBufSize);
+    PrintRayPath(ray_path_map.at(hash).first, str_buf, kBufSize);
     std::fprintf(fp, "img_idx: %03zu, hash: %016tx, energy: %04.3e, ray_path: %s\n", img_idx, hash, r.total_energy,
                  str_buf);
   }
@@ -167,7 +166,6 @@ int main(int argc, char* argv[]) {
     const auto& wavelengths = proj_ctx->wavelengths_;
     SimpleRayData exit_ray_data;
     std::vector<RayCollectionInfo> ray_info_list;
-    RayPathMap ray_path_map;
     for (size_t i = 0; i < wavelengths.size(); i++) {
       LOG_INFO("starting at wavelength: %d", wavelengths[i].wavelength);
       simulator.SetCurrentWavelengthIndex(i);
@@ -178,13 +176,12 @@ int main(int argc, char* argv[]) {
       diff = t1 - t0;
       LOG_INFO("Ray tracing: %.2fms", diff.count());
 
-      const auto& simulation_data = simulator.GetSimulationRayData();
+      auto simulation_data = simulator.GetSimulationRayData();
       if (split_render_ctx) {
-        std::tie(ray_info_list, exit_ray_data, ray_path_map) =
-            RenderSplitHalos(simulation_data, proj_ctx, split_render_ctx);
+        std::tie(ray_info_list, exit_ray_data) = RenderSplitHalos(simulation_data, proj_ctx, split_render_ctx);
 
         if (total_ray_num == 0) {
-          WriteRayPathMap(proj_ctx, ray_info_list, ray_path_map);
+          WriteRayPathMap(proj_ctx, ray_info_list, simulation_data.ray_path_map_);
         }
 
         auto& final_ray_info = ray_info_list[0];

@@ -6,14 +6,13 @@
 #include <mutex>
 #include <vector>
 
+#include "core/core_def.hpp"
 #include "core/crystal.hpp"
 #include "core/mymath.hpp"
 #include "io/serialize.hpp"
 
 
 namespace icehalo {
-
-struct RayInfo;
 
 enum class RaySegmentState : uint8_t {
   kOnGoing = 0,

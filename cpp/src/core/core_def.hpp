@@ -10,10 +10,12 @@ using FaceNumberType = ShortIdType;
 constexpr ShortIdType kInvalidId = 0xffff;
 constexpr FaceNumberType kInvalidFaceNumber = kInvalidId;
 
-using RayPath = std::vector<FaceNumberType>;
-using RayPathMap = std::unordered_map<size_t, RayPath>;
-constexpr int kAutoDetectLength = -1;
+struct RayInfo;
+struct RaySegment;
 
+using RayPath = std::vector<FaceNumberType>;
+using RayPathMap = std::unordered_map<size_t, std::pair<RayPath, size_t>>;
+constexpr int kAutoDetectLength = -1;
 
 class RenderContext;
 using RenderContextPtrU = std::unique_ptr<RenderContext>;

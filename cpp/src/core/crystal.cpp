@@ -4,7 +4,7 @@
 #include <cstring>
 #include <utility>
 
-#include "context/crystal_context.hpp"
+#include "context/context.hpp"
 #include "core/optics.hpp"
 
 namespace icehalo {
@@ -788,9 +788,9 @@ std::vector<RayPath> MakeSymmetryExtension(const RayPath& curr_ray_path, const C
 }
 
 
-std::pair<RayPath, size_t> NormalizeRayPath(RayPath ray_path, const CrystalContext* crystal_ctx,
+std::pair<RayPath, size_t> NormalizeRayPath(RayPath ray_path, const ProjectContextPtr& proj_ctx,
                                             uint8_t symmetry_flag) {
-  auto period = crystal_ctx->GetCrystal()->GetFaceNumberPeriod();
+  int period = 0;
   bool crystal_flag = true;
   FaceNumberType first_p_fn = kInvalidFaceNumber;
   FaceNumberType second_p_fn = kInvalidFaceNumber;
@@ -798,6 +798,7 @@ std::pair<RayPath, size_t> NormalizeRayPath(RayPath ray_path, const CrystalConte
   for (auto& fn : ray_path) {
     if (crystal_flag) {
       crystal_flag = false;
+      period = proj_ctx->GetCrystal(fn)->GetFaceNumberPeriod();
     } else if (fn == kInvalidFaceNumber) {
       crystal_flag = true;
       first_p_fn = kInvalidFaceNumber;
