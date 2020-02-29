@@ -259,7 +259,114 @@ std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::Col
 
 std::tuple<RayCollectionInfoList, SimpleRayData, RayPathMap> SimulationData::CollectSplitFilterRayData(
     const ProjectContextPtr& ctx, const RenderSplitter& splitter) const {
-  ;
+  size_t num = 0;
+  for (const auto& n : exit_ray_seg_num_) {
+    num += n;
+  }
+
+  auto ms_num = ctx->multi_scatter_info_.size();
+
+  // 1. prepare crystal filters
+  std::vector<std::vector<std::pair<const CrystalContext*, RayPathFilterPtrU>>> crystal_filter;
+  for (const auto& cf : splitter.crystal_filters) {
+    crystal_filter.emplace_back();
+    const CrystalContext* cp = nullptr;
+    AbstractRayPathFilter* fp = nullptr;
+    for (size_t i = 0; i < std::min(ms_num * 2, cf.size()); i += 2) {
+      cp = ctx->GetCrystalContext(cf[i]);
+      fp = ctx->GetRayPathFilter(cf[i + 1]);
+      crystal_filter.back().emplace_back(std::make_pair(cp, fp->MakeCopy()));
+      crystal_filter.back().back().second->ApplySymmetry(cp);
+    }
+  }
+
+  // 2. prepare some data storage.
+  SimpleRayData result_ray_data(num);
+  result_ray_data.buf_ray_num = num;
+  result_ray_data.wavelength = wavelength_info_.wavelength;
+  result_ray_data.wavelength_weight = wavelength_info_.weight;
+  if (!rays_.empty()) {
+    result_ray_data.init_ray_num = rays_[0].size();
+  }
+  float* result_buf_p = result_ray_data.buf.get();
+
+  RayPathMap ray_path_map;
+  std::vector<RayCollectionInfo> ray_collection_info_list(crystal_filter.size());
+  for (size_t i = 0; i < ray_collection_info_list.size(); i++) {
+    ray_collection_info_list[i].identifier = i;
+    ray_collection_info_list[i].is_partial_data = true;
+  }
+  std::vector<std::unordered_set<RayInfo*>> ray_info_map(crystal_filter.size());
+
+  std::vector<RayPathRecorder*> recorder_list{};
+  recorder_list.reserve(ctx->multi_scatter_info_.size());
+  RayPathRecorder recorder;
+
+  // 3. start filter all rays
+  size_t ray_seg_idx = 0;
+  for (size_t ms_idx = 0; ms_idx < exit_ray_segments_.size(); ms_idx++) {
+    for (const auto& r : exit_ray_segments_[ms_idx]) {
+      if (r->state != RaySegmentState::kFinished) {
+        continue;
+      }
+
+      // 4. filter
+      for (size_t i = 0; i < crystal_filter.size(); i++) {
+        const auto& cf = crystal_filter[i];
+        if (cf.size() != ms_idx + 1) {
+          continue;
+        }
+        RaySegment* p = r;
+        RayInfo* ray_info = r->root_ctx;
+        bool pass = true;
+        recorder_list.clear();
+        for (auto riter = cf.rbegin(); riter != cf.rend(); ++riter) {
+          ray_info = p->root_ctx;
+          if (p->root_ctx->crystal_id != riter->first->GetId()) {
+            pass = false;
+            break;
+          }
+          auto curr_crystal = riter->first->GetCrystal();
+          if (!riter->second->Filter(curr_crystal, p)) {
+            pass = false;
+            break;
+          }
+          recorder_list.emplace_back(&(p->recorder));
+          p = p->root_ctx->prev_ray_segment;
+        }
+
+        if (!pass) {
+          continue;
+        }
+
+        // 5. add ray path to ray path map
+        recorder.Clear();
+        for (auto it = recorder_list.rbegin(); it != recorder_list.rend(); ++it) {
+          recorder << **it;
+        }
+        auto curr_ray_path_hash = recorder.Hash();
+        ray_path_map.emplace(curr_ray_path_hash, GetRayPath(ctx, r));
+
+        // 6. add to collection
+        auto& collection = ray_collection_info_list[i];
+        collection.idx.emplace_back(ray_seg_idx);
+        collection.total_energy += r->w;
+        ray_info_map[i].emplace(ray_info);
+        collection.init_ray_num = ray_info_map[i].size();
+        break;
+      }
+
+      // 7. Fill in result_ray_data
+      const auto* axis = r->root_ctx->main_axis.val();
+      math::RotateZBack(axis, r->dir.val(), result_buf_p);
+      result_buf_p[3] = r->w;
+      result_buf_p += 4;
+
+      ray_seg_idx++;
+    }
+  }
+
+  return std::make_tuple(std::move(ray_collection_info_list), std::move(result_ray_data), std::move(ray_path_map));
 }
 
 
