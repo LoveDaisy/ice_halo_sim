@@ -186,7 +186,7 @@ int main(int argc, char* argv[]) {
 
         auto& final_ray_info = ray_info_list[0];
         final_ray_info.is_partial_data = false;
-        final_ray_info.init_ray_num = exit_ray_data.init_ray_num;
+        final_ray_info.total_energy = exit_ray_data.init_ray_num;
         renderer.LoadRayData(wavelengths[i].wavelength, final_ray_info, exit_ray_data);
       } else {
         auto ray_data = simulation_data.CollectFinalRayData();

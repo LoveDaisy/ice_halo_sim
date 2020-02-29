@@ -141,7 +141,7 @@ int main(int argc, char* argv[]) {
       auto final_ray_data = ray_data.CollectFinalRayData();
       renderer.LoadRayData(static_cast<size_t>(final_ray_data.second.wavelength), final_ray_data.first,
                            final_ray_data.second);
-      init_ray_num = final_ray_data.first.init_ray_num;
+      init_ray_num = final_ray_data.second.init_ray_num;
       exit_seg_num = final_ray_data.second.buf_ray_num;
     }
 

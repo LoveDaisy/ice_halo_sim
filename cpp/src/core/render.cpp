@@ -709,7 +709,7 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
   }
   threading_pool->WaitFinish();
 
-  total_w_ += collection_info.init_ray_num * weight;
+  total_w_ += final_ray_data.init_ray_num * weight;
 }
 
 

@@ -112,7 +112,6 @@ std::pair<RayCollectionInfo, SimpleRayData> SimulationData::CollectFinalRayData(
   SimpleRayData final_ray_data(num);
   RayCollectionInfo collection_info{};
   if (!rays_.empty()) {
-    collection_info.init_ray_num = rays_[0].size();
     final_ray_data.init_ray_num = rays_[0].size();
   }
   final_ray_data.wavelength = wavelength_info_.wavelength;
@@ -168,9 +167,6 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
   std::unordered_map<size_t, RayCollectionInfo> ray_collection_info_map;
   ray_collection_info_map.reserve(hash_table_init_size);
 
-  std::unordered_map<size_t, std::unordered_set<RayInfo*>> ray_info_map;
-  ray_info_map.reserve(hash_table_init_size);
-
   std::vector<RayPathRecorder*> recorder_list{};
   recorder_list.reserve(ctx->multi_scatter_info_.size());
   RayPathRecorder recorder;
@@ -202,16 +198,9 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
         tmp_collection.is_partial_data = true;
         ray_collection_info_map.emplace(normalized_hash, std::move(tmp_collection));
       }
-      if (!ray_info_map.count(normalized_hash)) {
-        std::unordered_set<RayInfo*> tmp_set{};
-        ray_info_map.emplace(normalized_hash, std::move(tmp_set));
-      }
       auto& collection_info = ray_collection_info_map[normalized_hash];
-      auto& ray_set = ray_info_map[normalized_hash];
       collection_info.idx.emplace_back(ray_seg_idx);
       collection_info.total_energy += r->w;
-      ray_set.emplace(r->root_ctx);
-      collection_info.init_ray_num = ray_set.size();
 
       // 4. Fill in result_ray_data
       const auto* axis = r->root_ctx->main_axis.val();
@@ -276,7 +265,6 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitFil
     ray_collection_info_list[i].identifier = i;
     ray_collection_info_list[i].is_partial_data = true;
   }
-  std::vector<std::unordered_set<RayInfo*>> ray_info_map(crystal_filter.size());
   MakeRayPathMap(ctx);
 
   // 3. start filter all rays
@@ -294,10 +282,8 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitFil
           continue;
         }
         RaySegment* p = r;
-        RayInfo* ray_info = r->root_ctx;
         bool pass = true;
         for (auto riter = cf.rbegin(); riter != cf.rend(); ++riter) {
-          ray_info = p->root_ctx;
           if (p->root_ctx->crystal_id != riter->first->GetId()) {
             pass = false;
             break;
@@ -318,8 +304,6 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitFil
         auto& collection = ray_collection_info_list[i];
         collection.idx.emplace_back(ray_seg_idx);
         collection.total_energy += r->w;
-        ray_info_map[i].emplace(ray_info);
-        collection.init_ray_num = ray_info_map[i].size();
         break;
       }
 

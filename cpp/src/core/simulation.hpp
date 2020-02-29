@@ -51,7 +51,6 @@ struct SimpleRayData : public ISerializable {
 
 struct RayCollectionInfo {
   size_t identifier;
-  size_t init_ray_num;
   float total_energy;
   bool is_partial_data;
   std::vector<size_t> idx;
