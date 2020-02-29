@@ -6,9 +6,9 @@
 
 #include "context/context.hpp"
 #include "core/core_def.hpp"
-#include "core/enum_map.hpp"
 #include "core/simulation.hpp"
 #include "io/file.hpp"
+#include "util/enum_map.hpp"
 
 
 namespace icehalo {

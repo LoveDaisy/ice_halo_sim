@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <limits>
 
-#include "core/enum_map.hpp"
 #include "rapidjson/document.h"
 #include "rapidjson/pointer.h"
+#include "util/enum_map.hpp"
 #include "util/log.hpp"
 
 namespace icehalo {

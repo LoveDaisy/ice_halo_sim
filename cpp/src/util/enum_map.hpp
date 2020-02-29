@@ -1,5 +1,5 @@
-#ifndef SRC_CORE_ENUM_MAP_H_
-#define SRC_CORE_ENUM_MAP_H_
+#ifndef SRC_UTIL_ENUM_MAP_H_
+#define SRC_UTIL_ENUM_MAP_H_
 
 #include <unordered_map>
 
@@ -19,4 +19,4 @@ using EnumMap = std::unordered_map<Key, T, HashType<Key>>;
 /* Workaround end */
 
 
-#endif  // SRC_CORE_ENUM_MAP_H_
+#endif  // SRC_UTIL_ENUM_MAP_H_
