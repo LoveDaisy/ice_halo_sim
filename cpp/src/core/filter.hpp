@@ -18,6 +18,9 @@ enum class RaySegmentState : uint8_t;
 class AbstractRayPathFilter : public IJsonizable {
  public:
   AbstractRayPathFilter();
+  AbstractRayPathFilter(const AbstractRayPathFilter& other);
+
+  virtual std::unique_ptr<AbstractRayPathFilter> MakeCopy() const = 0;
 
   bool Filter(const Crystal* crystal, RaySegment* last_r) const;
 
@@ -48,6 +51,8 @@ using RayPathFilterPtrU = std::unique_ptr<AbstractRayPathFilter>;
 
 class NoneRayPathFilter : public AbstractRayPathFilter {
  public:
+  RayPathFilterPtrU MakeCopy() const override;
+
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
 
  protected:
@@ -59,7 +64,9 @@ class SpecificRayPathFilter : public AbstractRayPathFilter {
  public:
   void AddPath(const RayPath& path);
   void ClearPaths();
+  std::vector<RayPath> GetRayPaths() const;
 
+  RayPathFilterPtrU MakeCopy() const override;
   void ApplySymmetry(const CrystalContext* crystal_ctx) override;
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;
@@ -81,6 +88,7 @@ class GeneralRayPathFilter : public AbstractRayPathFilter {
   void ClearFaces();
   void ClearHitNumbers();
 
+  RayPathFilterPtrU MakeCopy() const override;
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;
 

@@ -11,6 +11,7 @@ constexpr ShortIdType kInvalidId = 0xffff;
 constexpr FaceNumberType kInvalidFaceNumber = kInvalidId;
 
 using RayPath = std::vector<FaceNumberType>;
+using RayPathMap = std::unordered_map<size_t, RayPath>;
 constexpr int kAutoDetectLength = -1;
 
 

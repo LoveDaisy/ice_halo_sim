@@ -58,7 +58,6 @@ struct RayCollectionInfo {
 };
 
 using RayCollectionInfoList = std::vector<RayCollectionInfo>;
-using RayPathMap = std::unordered_map<size_t, RayPath>;
 
 
 class SimulationData : public ISerializable {

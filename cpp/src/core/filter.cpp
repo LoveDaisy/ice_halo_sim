@@ -14,6 +14,11 @@ AbstractRayPathFilter::AbstractRayPathFilter()
     : symmetry_flag_(kSymmetryNone), complementary_(false), remove_homodromous_(false) {}
 
 
+AbstractRayPathFilter::AbstractRayPathFilter(const AbstractRayPathFilter& other)
+    : symmetry_flag_(other.symmetry_flag_), complementary_(other.complementary_),
+      remove_homodromous_(other.remove_homodromous_) {}
+
+
 bool AbstractRayPathFilter::Filter(const Crystal* crystal, RaySegment* last_r) const {
   if (remove_homodromous_ &&
       math::Dot3(last_r->dir.val(), last_r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * math::kFloatEps) {
@@ -174,6 +179,11 @@ bool NoneRayPathFilter::FilterPath(const Crystal* /* crystal */, RaySegment* /* 
 }
 
 
+RayPathFilterPtrU NoneRayPathFilter::MakeCopy() const {
+  return std::unique_ptr<AbstractRayPathFilter>{ new NoneRayPathFilter(*this) };
+}
+
+
 void NoneRayPathFilter::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
   AbstractRayPathFilter::SaveToJson(root, allocator);
 
@@ -188,6 +198,16 @@ void SpecificRayPathFilter::AddPath(const RayPath& path) {
 
 void SpecificRayPathFilter::ClearPaths() {
   ray_paths_.clear();
+}
+
+
+std::vector<RayPath> SpecificRayPathFilter::GetRayPaths() const {
+  return ray_paths_;
+}
+
+
+RayPathFilterPtrU SpecificRayPathFilter::MakeCopy() const {
+  return std::unique_ptr<AbstractRayPathFilter>{ new SpecificRayPathFilter(*this) };
 }
 
 
@@ -341,6 +361,11 @@ bool GeneralRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_r
   }
 
   return entry_faces_.count(curr_entry_fn) != 0 && exit_faces_.count(curr_exit_fn) != 0;
+}
+
+
+RayPathFilterPtrU GeneralRayPathFilter::MakeCopy() const {
+  return std::unique_ptr<AbstractRayPathFilter>{ new GeneralRayPathFilter(*this) };
 }
 
 
