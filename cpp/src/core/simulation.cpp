@@ -325,24 +325,32 @@ void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
     return;
   }
 
-  RayPathRecorder recorder;
+  auto threading_pool = ThreadingPool::GetInstance();
+  auto pool_size = threading_pool->GetPoolSize();
+  std::vector<decltype(ray_path_map_)> tmp_ray_path_maps(pool_size);
+
+  LOG_DEBUG("start collecting ray path map...");
   for (const auto& sr : exit_ray_segments_) {
-    for (const auto& r : sr) {
+    threading_pool->AddPoolIndexedStepJobs(sr.size(), [=, &tmp_ray_path_maps, &sr](size_t i, size_t pool_idx) {
+      auto& tmp_map = tmp_ray_path_maps.at(pool_idx);
+      const auto& r = sr[i];
       if (r->state != RaySegmentState::kFinished) {
-        continue;
+        return;
       }
 
       // 1. Get hash for the whole path
-      recorder.Clear();
+      RayPathRecorder recorder;
       RaySegment* p = r;
       while (p) {
         p->recorder >> recorder;
         p = p->root_ctx->prev_ray_segment;
       }
       auto ray_path_hash = recorder.Hash();
-      if (ray_path_map_.count(ray_path_hash)) {
-        continue;
+      if (tmp_map.count(ray_path_hash)) {
+        return;
       }
+
+      LOG_DEBUG("tmp_ray_path_maps[%zu]: new ray path! hash: %zu", pool_idx, ray_path_hash);
 
       // 2. Normalize ray path
       auto curr_path = proj_ctx->GetRayPath(r);
@@ -350,10 +358,18 @@ void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
       size_t normalized_hash;
       std::tie(normalized_path, normalized_hash) =
           NormalizeRayPath(curr_path, proj_ctx, RenderSplitter::kDefaultSymmetry);
-      ray_path_map_.emplace(ray_path_hash, std::make_pair(curr_path, normalized_hash));
-      if (!ray_path_map_.count(normalized_hash)) {
-        ray_path_map_.emplace(normalized_hash, std::make_pair(normalized_path, normalized_hash));
+      tmp_map.emplace(ray_path_hash, std::make_pair(curr_path, normalized_hash));
+      if (!tmp_map.count(normalized_hash)) {
+        tmp_map.emplace(normalized_hash, std::make_pair(normalized_path, normalized_hash));
       }
+    });
+    threading_pool->WaitFinish();
+  }
+
+  LOG_DEBUG("merge tmp ray path maps together");
+  for (auto& map : tmp_ray_path_maps) {
+    for (auto& kv : map) {
+      ray_path_map_.emplace(std::move(kv));
     }
   }
 }
@@ -804,15 +820,13 @@ void Simulator::TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilt
       buffer_size_ = active_ray_num_ * kBufferSizeFactor;
       buffer_.Allocate(buffer_size_);
     }
-    pool->AddStepMapJobs(active_ray_num_, [=](size_t idx0, size_t idx1, size_t step) {
-      for (size_t i = idx0; i < idx1; i += step) {
-        Optics::HitSurface(crystal, n, 1,                                                        //
-                           buffer_.dir[0] + i * 3, buffer_.face_id[0] + i, buffer_.w[0] + i,     //
-                           buffer_.dir[1] + i * 6, buffer_.w[1] + i * 2);                        //
-        Optics::Propagate(crystal, 1 * 2, buffer_.pt[0] + i * 3,                                 //
-                          buffer_.dir[1] + i * 6, buffer_.w[1] + i * 2, buffer_.face_id[0] + i,  //
-                          buffer_.pt[1] + i * 6, buffer_.face_id[1] + i * 2);                    //
-      }
+    pool->AddStepJobs(active_ray_num_, [=](size_t i) {
+      Optics::HitSurface(crystal, n, 1,                                                        //
+                         buffer_.dir[0] + i * 3, buffer_.face_id[0] + i, buffer_.w[0] + i,     //
+                         buffer_.dir[1] + i * 6, buffer_.w[1] + i * 2);                        //
+      Optics::Propagate(crystal, 1 * 2, buffer_.pt[0] + i * 3,                                 //
+                        buffer_.dir[1] + i * 6, buffer_.w[1] + i * 2, buffer_.face_id[0] + i,  //
+                        buffer_.pt[1] + i * 6, buffer_.face_id[1] + i * 2);                    //
     });
     pool->WaitFinish();
     StoreRaySegments(crystal_ctx, filter);

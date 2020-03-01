@@ -125,6 +125,7 @@ void WriteRayPathMap(const ProjectContextPtr& proj_ctx, const std::vector<RayCol
 int main(int argc, char* argv[]) {
   ArgParser parser;
   parser.AddArgument("-v", 0, "verbose", "make output verbose");
+  parser.AddArgument("-d", 0, "debug", "display debug info");
   parser.AddArgument("--config", 1, "config-file", "config file");
   ArgParseResult arg_parse_result;
   try {
@@ -133,7 +134,11 @@ int main(int argc, char* argv[]) {
     return -1;
   }
   const char* config_filename = arg_parse_result.at("--config")[0].c_str();
-  if (arg_parse_result.count("-v")) {
+  if (arg_parse_result.count("-d")) {
+    LogFilterPtr stdout_filter = LogFilter::MakeLevelFilter({ LogLevel::kDebug, LogLevel::kVerbose });
+    LogDestPtr stdout_dest = LogStdOutDest::GetInstance();
+    Logger::GetInstance()->AddDestination(stdout_filter, stdout_dest);
+  } else if (arg_parse_result.count("-v")) {
     LogFilterPtr stdout_filter = LogFilter::MakeLevelFilter({ LogLevel::kVerbose });
     LogDestPtr stdout_dest = LogStdOutDest::GetInstance();
     Logger::GetInstance()->AddDestination(stdout_filter, stdout_dest);

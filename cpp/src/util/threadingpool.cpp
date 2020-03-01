@@ -31,43 +31,75 @@ void ThreadingPool::Start() {
   alive_ = true;
   alive_threads_ = 0;
   LOG_DEBUG("Threading pool size: %zu", thread_num_);
-  for (decltype(thread_num_) ii = 0; ii < thread_num_; ii++) {
-    pool_.emplace_back(&ThreadingPool::WorkingFunction, this);
+  for (size_t ii = 0; ii < thread_num_; ii++) {
+    pool_.emplace_back(&ThreadingPool::WorkingFunction, this, ii);
     alive_threads_ += 1;
   }
 }
 
 
-void ThreadingPool::AddJob(std::function<void()> job) {
+void ThreadingPool::AddJob(const std::function<void()>& job) {
   if (!alive_) {
     return;
   }
 
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    queue_.emplace(std::move(job));
+    queue_.emplace([=](size_t /* pool_idx */) { job(); });
   }
   queue_condition_.notify_one();
 }
 
 
-void ThreadingPool::AddStepMapJobs(size_t num, const std::function<void(size_t, size_t, size_t)>& job) {
+void ThreadingPool::AddStepJobs(size_t num, const std::function<void(size_t)>& job) {
+  if (!alive_) {
+    return;
+  }
+
   auto step = GetPoolSize();
   for (size_t i = 0; i < step; i++) {
     size_t start_idx = i;
     size_t end_idx = num;
-    AddJob([=] { job(start_idx, end_idx, step); });
+    AddJob([=] {
+      for (size_t i = start_idx; i < end_idx; i += step) {
+        job(i);
+      }
+    });
   }
 }
 
 
-void ThreadingPool::AddRangeMapJobs(size_t num, const std::function<void(size_t, size_t)>& job) {
-  auto step = std::max(num / 100, static_cast<size_t>(10));
+void ThreadingPool::AddRangeJobs(size_t num, const std::function<void(size_t, size_t)>& job) {
+  if (!alive_) {
+    return;
+  }
+
+  auto step = std::max(num / 97, static_cast<size_t>(10));
   for (size_t i = 0; i < num; i += step) {
     auto current_num = std::min(num - i, step);
     size_t start_idx = i;
     size_t end_idx = i + current_num;
     AddJob([=] { job(start_idx, end_idx); });
+  }
+}
+
+
+void ThreadingPool::AddPoolIndexedStepJobs(size_t num, const std::function<void(size_t, size_t)>& job) {
+  if (!alive_) {
+    return;
+  }
+
+  auto step = GetPoolSize();
+  for (size_t i = 0; i < step; i++) {
+    size_t start_idx = i;
+    size_t end_idx = num;
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    queue_.emplace([=](size_t pool_idx) {
+      for (size_t i = start_idx; i < end_idx; i += step) {
+        job(i, pool_idx);
+      }
+    });
+    queue_condition_.notify_one();
   }
 }
 
@@ -88,18 +120,18 @@ size_t ThreadingPool::GetPoolSize() const {
 }
 
 
-void ThreadingPool::WorkingFunction() {
+void ThreadingPool::WorkingFunction(size_t pool_idx) {
   std::unique_lock<std::mutex> lock(queue_mutex_);
   while (true) {
     if (!queue_.empty()) {
-      std::function<void()> job = queue_.front();
+      auto job = queue_.front();
       queue_.pop();
       lock.unlock();
       {
         std::lock_guard<std::mutex> lk(task_mutex_);
         running_jobs_ += 1;
       }
-      job();
+      job(pool_idx);
       {
         std::lock_guard<std::mutex> lk(task_mutex_);
         running_jobs_ -= 1;

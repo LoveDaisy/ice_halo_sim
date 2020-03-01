@@ -462,65 +462,63 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,        // 
                      uint8_t* rgb_data) {                                    // rgb data, data_number * 3
   bool use_real_color = ray_color[0] < 0;
   auto threading_pool = ThreadingPool::GetInstance();
-  threading_pool->AddStepMapJobs(data_number, [=, &spec_data](size_t idx0, size_t idx1, size_t step) {
-    for (size_t i = idx0; i < idx1; i += step) {
-      /* Step 1. Spectrum to XYZ */
-      float xyz[3]{};
-      for (const auto& d : spec_data) {
-        auto wl = d.first;
-        if (wl < kMinWavelength || wl > kMaxWaveLength) {
-          continue;
-        }
-        float v = d.second[i] * factor;
-        xyz[0] += kCmfX[wl - kMinWavelength] * v;
-        xyz[1] += kCmfY[wl - kMinWavelength] * v;
-        xyz[2] += kCmfZ[wl - kMinWavelength] * v;
+  threading_pool->AddStepJobs(data_number, [=, &spec_data](size_t i) {
+    /* Step 1. Spectrum to XYZ */
+    float xyz[3]{};
+    for (const auto& d : spec_data) {
+      auto wl = d.first;
+      if (wl < kMinWavelength || wl > kMaxWaveLength) {
+        continue;
       }
+      float v = d.second[i] * factor;
+      xyz[0] += kCmfX[wl - kMinWavelength] * v;
+      xyz[1] += kCmfY[wl - kMinWavelength] * v;
+      xyz[2] += kCmfZ[wl - kMinWavelength] * v;
+    }
 
-      /* Step 2. XYZ to linear RGB */
-      float gray[3];
+    /* Step 2. XYZ to linear RGB */
+    float gray[3];
+    for (int j = 0; j < 3; j++) {
+      gray[j] = kWhitePointD65[j] * xyz[1];
+    }
+
+    if (use_real_color) {
+      float r = 1.0f;
       for (int j = 0; j < 3; j++) {
-        gray[j] = kWhitePointD65[j] * xyz[1];
-      }
-
-      if (use_real_color) {
-        float r = 1.0f;
-        for (int j = 0; j < 3; j++) {
-          float a = 0, b = 0;
-          for (int k = 0; k < 3; k++) {
-            a += -gray[k] * kXyzToRgb[j * 3 + k];
-            b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
-          }
-          if (a * b > 0 && a / b < r) {
-            r = a / b;
-          }
-        }
-
-        for (int j = 0; j < 3; j++) {
-          xyz[j] = (xyz[j] - gray[j]) * r + gray[j];
-        }
-      } else {
-        for (int j = 0; j < 3; j++) {
-          xyz[j] = gray[j];
-        }
-      }
-      float rgb[3]{};
-      for (int j = 0; j < 3; j++) {
+        float a = 0, b = 0;
         for (int k = 0; k < 3; k++) {
-          rgb[j] += xyz[k] * kXyzToRgb[j * 3 + k];
+          a += -gray[k] * kXyzToRgb[j * 3 + k];
+          b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
         }
-        rgb[j] = std::min(std::max(rgb[j], 0.0f), 1.0f);
-        if (!use_real_color) {
-          rgb[j] *= ray_color[j];
+        if (a * b > 0 && a / b < r) {
+          r = a / b;
         }
-        rgb[j] += background_color[j];
       }
 
-      /* Step 3. Convert linear sRGB to sRGB */
-      SrgbGamma(rgb);
       for (int j = 0; j < 3; j++) {
-        rgb_data[i * 3 + j] = static_cast<uint8_t>(rgb[j] * std::numeric_limits<uint8_t>::max());
+        xyz[j] = (xyz[j] - gray[j]) * r + gray[j];
       }
+    } else {
+      for (int j = 0; j < 3; j++) {
+        xyz[j] = gray[j];
+      }
+    }
+    float rgb[3]{};
+    for (int j = 0; j < 3; j++) {
+      for (int k = 0; k < 3; k++) {
+        rgb[j] += xyz[k] * kXyzToRgb[j * 3 + k];
+      }
+      rgb[j] = std::min(std::max(rgb[j], 0.0f), 1.0f);
+      if (!use_real_color) {
+        rgb[j] *= ray_color[j];
+      }
+      rgb[j] += background_color[j];
+    }
+
+    /* Step 3. Convert linear sRGB to sRGB */
+    SrgbGamma(rgb);
+    for (int j = 0; j < 3; j++) {
+      rgb_data[i * 3 + j] = static_cast<uint8_t>(rgb[j] * std::numeric_limits<uint8_t>::max());
     }
   });
   threading_pool->WaitFinish();
@@ -536,32 +534,30 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
   }
   auto threading_pool = ThreadingPool::GetInstance();
   auto* curr_spec_data = spec_data[index].second.get();
-  threading_pool->AddStepMapJobs(data_number, [=](size_t idx0, size_t idx1, size_t step) {
-    for (size_t i = idx0; i < idx1; i += step) {
-      /* Step 1. Spectrum to XYZ */
-      float y = curr_spec_data[i] * factor;
+  threading_pool->AddStepJobs(data_number, [=](size_t i) {
+    /* Step 1. Spectrum to XYZ */
+    float y = curr_spec_data[i] * factor;
 
-      /* Step 2. XYZ to linear RGB */
-      float gray[3];
-      for (int j = 0; j < 3; j++) {
-        gray[j] = kWhitePointD65[j] * y;
-      }
+    /* Step 2. XYZ to linear RGB */
+    float gray[3];
+    for (int j = 0; j < 3; j++) {
+      gray[j] = kWhitePointD65[j] * y;
+    }
 
-      float val = 0;
-      for (int k = 0; k < 3; k++) {
-        val += gray[k] * kXyzToRgb[3 + k];
-      }
-      val = std::min(std::max(val, 0.0f), 1.0f);
+    float val = 0;
+    for (int k = 0; k < 3; k++) {
+      val += gray[k] * kXyzToRgb[3 + k];
+    }
+    val = std::min(std::max(val, 0.0f), 1.0f);
 
-      /* Step 3. Convert linear sRGB to sRGB */
-      SrgbGamma(&val, 1);
-      if (level == ColorCompactLevel::kMonochrome && 0 <= index && index < 3) {
-        rgb_data[i * 3 + index] = static_cast<uint8_t>(val * std::numeric_limits<uint8_t>::max());
-      } else if (level == ColorCompactLevel::kLowQuality && 0 <= index && index < 6) {
-        constexpr uint8_t kMaxVal = 1 << 4;
-        auto tmp_val = static_cast<uint8_t>(val * kMaxVal);
-        rgb_data[i * 3 + index / 2] |= (tmp_val << (index % 2 ? 0 : 4));
-      }
+    /* Step 3. Convert linear sRGB to sRGB */
+    SrgbGamma(&val, 1);
+    if (level == ColorCompactLevel::kMonochrome && 0 <= index && index < 3) {
+      rgb_data[i * 3 + index] = static_cast<uint8_t>(val * std::numeric_limits<uint8_t>::max());
+    } else if (level == ColorCompactLevel::kLowQuality && 0 <= index && index < 6) {
+      constexpr uint8_t kMaxVal = 1 << 4;
+      auto tmp_val = static_cast<uint8_t>(val * kMaxVal);
+      rgb_data[i * 3 + index / 2] |= (tmp_val << (index % 2 ? 0 : 4));
     }
   });
   threading_pool->WaitFinish();
@@ -643,7 +639,7 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
     current_data_compensation = new float[img_hei * img_wid];
     spectrum_data_.emplace_back(std::make_pair(identifier, current_data));
     spectrum_data_compensation_.emplace_back(std::make_pair(identifier, current_data_compensation));
-    threading_pool->AddRangeMapJobs(img_hei * img_wid, [=](size_t start_idx, size_t end_idx) {
+    threading_pool->AddRangeJobs(img_hei * img_wid, [=](size_t start_idx, size_t end_idx) {
       std::memset(current_data + start_idx, 0, (end_idx - start_idx) * sizeof(float));
       std::memset(current_data_compensation + start_idx, 0, (end_idx - start_idx) * sizeof(float));
     });
@@ -654,7 +650,7 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
   const auto& idx = collection_info.idx;
   if (collection_info.is_partial_data) {
     auto num = idx.size();
-    threading_pool->AddRangeMapJobs(num, [=, &idx](size_t start_idx, size_t end_idx) {
+    threading_pool->AddRangeJobs(num, [=, &idx](size_t start_idx, size_t end_idx) {
       size_t current_num = end_idx - start_idx;
       std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
       for (size_t j = 0; j < current_num; j++) {
@@ -681,7 +677,7 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
     });
   } else {
     auto num = final_ray_data.buf_ray_num;
-    threading_pool->AddRangeMapJobs(num, [=](size_t start_idx, size_t end_idx) {
+    threading_pool->AddRangeJobs(num, [=](size_t start_idx, size_t end_idx) {
       size_t current_num = end_idx - start_idx;
       std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
       pf(cam_ctx_->GetCameraTargetDirection(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid,

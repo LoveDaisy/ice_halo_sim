@@ -17,9 +17,10 @@ class ThreadingPool {
   ~ThreadingPool() = default;
 
   void Start();
-  void AddJob(std::function<void()> job);
-  void AddStepMapJobs(size_t num, const std::function<void(size_t start_idx, size_t end_idx, size_t step)>& job);
-  void AddRangeMapJobs(size_t num, const std::function<void(size_t start_idx, size_t end_idx)>& job);
+  void AddJob(const std::function<void()>& job);
+  void AddStepJobs(size_t num, const std::function<void(size_t idx)>& job);
+  void AddRangeJobs(size_t num, const std::function<void(size_t start_idx, size_t end_idx)>& job);
+  void AddPoolIndexedStepJobs(size_t num, const std::function<void(size_t i, size_t pool_idx)>& job);
   void WaitFinish();
   bool IsTaskRunning();
   size_t GetPoolSize() const;
@@ -33,7 +34,7 @@ class ThreadingPool {
   std::vector<std::thread> pool_;
   std::atomic<bool> alive_;
 
-  std::queue<std::function<void()>> queue_;
+  std::queue<std::function<void(size_t)>> queue_;
   std::mutex queue_mutex_;
   std::condition_variable queue_condition_;
 
@@ -42,7 +43,7 @@ class ThreadingPool {
   std::mutex task_mutex_;
   std::condition_variable task_condition_;
 
-  void WorkingFunction();
+  void WorkingFunction(size_t pool_idx);
 
   static const unsigned int kHardwareConcurrency;
 };
