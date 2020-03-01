@@ -80,6 +80,8 @@ class RenderContext : public IJsonizable {
 
   const RenderSplitter& GetSplitter() const;
   int GetSplitNumber() const;
+  int GetSplitNumberPerImage() const;
+  int GetSplitImageNumber() const;
 
   ColorCompactLevel GetColorCompactLevel() const;
   void SetColorCompactLevel(ColorCompactLevel level);

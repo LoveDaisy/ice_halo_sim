@@ -38,8 +38,8 @@ void PrintRayPath(const RayPath& ray_path, char* buf, size_t size) {
 std::tuple<RayCollectionInfoList, SimpleRayData> RenderSplitHalos(
     SimulationData& ray_data, ProjectContextPtr& ctx, RenderContextPtr& split_render_ctx,
     std::vector<SpectrumRenderer>& split_renderer_candidates, std::vector<std::set<size_t>>& renderer_ray_set) {
-  size_t split_img_ch_num = SpectrumRenderer::kImageBits / static_cast<int>(split_render_ctx->GetColorCompactLevel());
   auto split_num = static_cast<size_t>(split_render_ctx->GetSplitNumber());
+  size_t split_img_ch_num = split_render_ctx->GetSplitNumberPerImage();
 
   auto split_ray_data = ray_data.CollectSplitRayData(ctx, split_render_ctx->GetSplitter());
   const auto& exit_ray_data = std::get<1>(split_ray_data);
@@ -104,9 +104,7 @@ int main(int argc, char* argv[]) {
   std::vector<std::set<size_t>> renderer_ray_set;
   size_t split_img_num = 0;
   if (split_render_ctx) {
-    size_t split_img_ch_num = SpectrumRenderer::kImageBits / static_cast<int>(split_render_ctx->GetColorCompactLevel());
-    auto split_num = static_cast<size_t>(split_render_ctx->GetSplitNumber());
-    split_img_num = static_cast<size_t>(std::ceil(split_num * 1.0 / split_img_ch_num));
+    split_img_num = static_cast<size_t>(split_render_ctx->GetSplitImageNumber());
     for (size_t i = 0; i < split_img_num * 1.5; i++) {
       split_renderer_candidates.emplace_back();
       split_renderer_candidates.back().SetCameraContext(ctx->cam_ctx_);
@@ -128,7 +126,7 @@ int main(int argc, char* argv[]) {
 
     size_t init_ray_num;
     size_t exit_seg_num;
-    if (split_render_ctx) {
+    if (split_render_ctx && split_render_ctx->GetSplitNumber() > 0) {
       auto split_ray_data =
           RenderSplitHalos(ray_data, ctx, split_render_ctx, split_renderer_candidates, renderer_ray_set);
       const auto& exit_ray_data = std::get<1>(split_ray_data);

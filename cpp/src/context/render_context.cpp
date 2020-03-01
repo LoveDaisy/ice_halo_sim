@@ -210,6 +210,21 @@ int RenderContext::GetSplitNumber() const {
 }
 
 
+int RenderContext::GetSplitImageNumber() const {
+  auto split_num = GetSplitNumber();
+  if (split_num <= 0) {
+    return 0;
+  }
+  auto channels = GetSplitNumberPerImage();
+  return static_cast<int>(std::ceil(split_num * 1.0 / channels));
+}
+
+
+int RenderContext::GetSplitNumberPerImage() const {
+  return SpectrumRenderer::kImageBits / static_cast<int>(color_compact_level_);
+}
+
+
 void RenderContext::SetColorCompactLevel(ColorCompactLevel level) {
   color_compact_level_ = level;
 }

@@ -45,12 +45,16 @@ void PrintRayPath(const RayPath& ray_path, char* buf, size_t size) {
 
 std::tuple<RayCollectionInfoList, SimpleRayData> RenderSplitHalos(SimulationData& ray_data, ProjectContextPtr& ctx,
                                                                   RenderContextPtr& split_render_ctx) {
-  size_t split_img_ch_num = SpectrumRenderer::kImageBits / static_cast<int>(split_render_ctx->GetColorCompactLevel());
   auto split_num = static_cast<size_t>(split_render_ctx->GetSplitNumber());
+  size_t split_img_ch_num = split_render_ctx->GetSplitNumberPerImage();
 
   auto split_ray_data = ray_data.CollectSplitRayData(ctx, split_render_ctx->GetSplitter());
   const auto& exit_ray_data = std::get<1>(split_ray_data);
   const auto& ray_path_map = ray_data.ray_path_map_;
+
+  if (exit_ray_data.buf_ray_num == 0) {
+    return split_ray_data;
+  }
 
   size_t curr_split_num = std::min(split_num, std::get<0>(split_ray_data).size());
   for (size_t j = 0; j < curr_split_num; j++) {
@@ -85,9 +89,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData> RenderSplitHalos(SimulationData
 
 
 size_t PrepareSplitRender(const ProjectContextPtr& proj_ctx, const RenderContextPtr& split_render_ctx) {
-  size_t split_img_ch_num = SpectrumRenderer::kImageBits / static_cast<int>(split_render_ctx->GetColorCompactLevel());
-  auto split_num = static_cast<size_t>(split_render_ctx->GetSplitNumber());
-  auto split_img_num = static_cast<size_t>(std::ceil(split_num * 1.0 / split_img_ch_num));
+  auto split_img_num = static_cast<size_t>(split_render_ctx->GetSplitImageNumber());
   for (size_t i = 0; i < split_img_num * 1.5; i++) {
     split_renderer_candidates.emplace_back();
     split_renderer_candidates.back().SetCameraContext(proj_ctx->cam_ctx_);
@@ -179,6 +181,9 @@ int main(int argc, char* argv[]) {
       auto simulation_data = simulator.GetSimulationRayData();
       if (split_render_ctx) {
         std::tie(ray_info_list, exit_ray_data) = RenderSplitHalos(simulation_data, proj_ctx, split_render_ctx);
+        if (exit_ray_data.buf_ray_num == 0) {
+          continue;
+        }
 
         if (total_ray_num == 0) {
           WriteRayPathMap(proj_ctx, ray_info_list, simulation_data.ray_path_map_);
@@ -190,6 +195,9 @@ int main(int argc, char* argv[]) {
         renderer.LoadRayData(wavelengths[i].wavelength, final_ray_info, exit_ray_data);
       } else {
         auto ray_data = simulation_data.CollectFinalRayData();
+        if (ray_data.second.buf_ray_num == 0) {
+          continue;
+        }
         renderer.LoadRayData(wavelengths[i].wavelength, ray_data.first, ray_data.second);
       }
       auto t2 = std::chrono::system_clock::now();
