@@ -340,25 +340,30 @@ AxisDistribution CrystalContext::GetAxisDistribution() const {
 }
 
 
-int CrystalContext::RandomSampleFace(const float* ray_dir) const {
+int CrystalContext::RandomSampleFace(const float* ray_dir, float* prob_buf) const {
   int total_faces = crystal_->TotalFaces();
-  std::unique_ptr<float[]> face_prob_buf{ new float[total_faces] };
   const auto* face_norm = crystal_->GetFaceNorm();
   const auto* face_area = crystal_->GetFaceArea();
 
+  std::unique_ptr<float[]> face_prob_buf;
+  if (!prob_buf) {
+    face_prob_buf.reset(new float[total_faces]);
+    prob_buf = face_prob_buf.get();
+  }
+
   float sum = 0;
   for (int k = 0; k < total_faces; k++) {
-    face_prob_buf[k] = 0;
+    prob_buf[k] = 0;
     if (!std::isnan(face_norm[k * 3 + 0]) && face_area[k] > 0) {
-      face_prob_buf[k] = std::max(-math::Dot3(face_norm + k * 3, ray_dir) * face_area[k], 0.0f);
-      sum += face_prob_buf[k];
+      prob_buf[k] = std::max(-math::Dot3(face_norm + k * 3, ray_dir) * face_area[k], 0.0f);
+      sum += prob_buf[k];
     }
   }
   for (int k = 0; k < total_faces; k++) {
-    face_prob_buf[k] /= sum;
+    prob_buf[k] /= sum;
   }
 
-  return static_cast<ShortIdType>(math::RandomSampler::SampleInt(face_prob_buf.get(), total_faces));
+  return static_cast<ShortIdType>(math::RandomSampler::SampleInt(prob_buf, total_faces));
 }
 
 

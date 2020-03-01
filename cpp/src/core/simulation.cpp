@@ -152,15 +152,6 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
     num += n;
   }
 
-  SimpleRayData result_ray_data(num);
-  result_ray_data.buf_ray_num = num;
-  result_ray_data.wavelength = wavelength_info_.wavelength;
-  result_ray_data.wavelength_weight = wavelength_info_.weight;
-  if (!rays_.empty()) {
-    result_ray_data.init_ray_num = rays_[0].size();
-  }
-  float* result_buf_p = result_ray_data.buf.get();
-
   MakeRayPathMap(ctx);
 
   size_t hash_table_init_size = num / 3;
@@ -184,7 +175,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
       }
       auto ray_path_hash = recorder.Hash();
 
-      // 3. Fill data
+      // 3. Fill collection data
       auto normalized_hash = ray_path_map_.at(ray_path_hash).second;
       if (!ray_collection_info_map.count(normalized_hash)) {
         RayCollectionInfo tmp_collection{};
@@ -196,13 +187,30 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
       collection_info.idx.emplace_back(ray_seg_idx);
       collection_info.total_energy += r->w;
 
-      // 4. Fill in result_ray_data
+      ray_seg_idx++;
+    }
+  }
+
+  // 4. Fill in result_ray_data
+  SimpleRayData result_ray_data(num);
+  result_ray_data.buf_ray_num = num;
+  result_ray_data.wavelength = wavelength_info_.wavelength;
+  result_ray_data.wavelength_weight = wavelength_info_.weight;
+  if (!rays_.empty()) {
+    result_ray_data.init_ray_num = rays_[0].size();
+  }
+  float* result_buf_p = result_ray_data.buf.get();
+
+  for (const auto& sr : exit_ray_segments_) {
+    for (const auto& r : sr) {
+      if (r->state != RaySegmentState::kFinished) {
+        continue;
+      }
+
       const auto* axis = r->root_ctx->main_axis.val();
       math::RotateZBack(axis, r->dir.val(), result_buf_p);
       result_buf_p[3] = r->w;
       result_buf_p += 4;
-
-      ray_seg_idx++;
     }
   }
 
@@ -329,7 +337,6 @@ void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
   auto pool_size = threading_pool->GetPoolSize();
   std::vector<decltype(ray_path_map_)> tmp_ray_path_maps(pool_size);
 
-  LOG_DEBUG("start collecting ray path map...");
   for (const auto& sr : exit_ray_segments_) {
     threading_pool->AddPoolIndexedStepJobs(sr.size(), [=, &tmp_ray_path_maps, &sr](size_t i, size_t pool_idx) {
       auto& tmp_map = tmp_ray_path_maps.at(pool_idx);
@@ -350,23 +357,18 @@ void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
         return;
       }
 
-      LOG_DEBUG("tmp_ray_path_maps[%zu]: new ray path! hash: %zu", pool_idx, ray_path_hash);
-
       // 2. Normalize ray path
       auto curr_path = proj_ctx->GetRayPath(r);
       RayPath normalized_path;
       size_t normalized_hash;
       std::tie(normalized_path, normalized_hash) =
           NormalizeRayPath(curr_path, proj_ctx, RenderSplitter::kDefaultSymmetry);
-      tmp_map.emplace(ray_path_hash, std::make_pair(curr_path, normalized_hash));
-      if (!tmp_map.count(normalized_hash)) {
-        tmp_map.emplace(normalized_hash, std::make_pair(normalized_path, normalized_hash));
-      }
+      tmp_map.emplace(ray_path_hash, std::make_pair(std::move(curr_path), normalized_hash));
+      tmp_map.emplace(normalized_hash, std::make_pair(std::move(normalized_path), normalized_hash));
     });
     threading_pool->WaitFinish();
   }
 
-  LOG_DEBUG("merge tmp ray path maps together");
   for (auto& map : tmp_ray_path_maps) {
     for (auto& kv : map) {
       ray_path_map_.emplace(std::move(kv));
@@ -719,11 +721,12 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
 
   using math::RandomSampler;
   float axis_rot[3];
+  std::unique_ptr<float[]> face_prob_buf{ new float[ctx->GetCrystal()->TotalFaces()] };
   for (size_t i = 0; i < active_ray_num_; i++) {
     InitMainAxis(ctx, axis_rot);
     math::RotateZ(axis_rot, entry_ray_data_.ray_dir + (i + entry_ray_offset_) * 3, buffer_.dir[0] + i * 3);
 
-    buffer_.face_id[0][i] = ctx->RandomSampleFace(buffer_.dir[0] + i * 3);
+    buffer_.face_id[0][i] = ctx->RandomSampleFace(buffer_.dir[0] + i * 3, face_prob_buf.get());
     RandomSampler::SampleTriangularPoints(face_vertex + buffer_.face_id[0][i] * 9, buffer_.pt[0] + i * 3);
 
     auto prev_r = entry_ray_data_.ray_seg[entry_ray_offset_ + i];

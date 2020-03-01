@@ -19,7 +19,7 @@ class CrystalContext : public IJsonizable {
   const Crystal* GetCrystal() const;
   AxisDistribution GetAxisDistribution() const;
 
-  int RandomSampleFace(const float* ray_dir) const;
+  int RandomSampleFace(const float* ray_dir, float* prob_buf = nullptr) const;
 
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;
