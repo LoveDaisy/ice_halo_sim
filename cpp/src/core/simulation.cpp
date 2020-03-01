@@ -167,8 +167,6 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
   std::unordered_map<size_t, RayCollectionInfo> ray_collection_info_map;
   ray_collection_info_map.reserve(hash_table_init_size);
 
-  std::vector<RayPathRecorder*> recorder_list{};
-  recorder_list.reserve(ctx->multi_scatter_info_.size());
   RayPathRecorder recorder;
   size_t ray_seg_idx = 0;
   for (const auto& sr : exit_ray_segments_) {
@@ -178,15 +176,11 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
       }
 
       // 1. Get hash for the whole path
-      recorder_list.clear();
+      recorder.Clear();
       RaySegment* p = r;
       while (p) {
-        recorder_list.emplace_back(&(p->recorder));
+        p->recorder >> recorder;
         p = p->root_ctx->prev_ray_segment;
-      }
-      recorder.Clear();
-      for (auto it = recorder_list.rbegin(); it != recorder_list.rend(); ++it) {
-        recorder << **it;
       }
       auto ray_path_hash = recorder.Hash();
 
@@ -331,8 +325,6 @@ void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
     return;
   }
 
-  std::vector<RayPathRecorder*> recorder_list{};
-  recorder_list.reserve(proj_ctx->multi_scatter_info_.size());
   RayPathRecorder recorder;
   for (const auto& sr : exit_ray_segments_) {
     for (const auto& r : sr) {
@@ -341,15 +333,11 @@ void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
       }
 
       // 1. Get hash for the whole path
-      recorder_list.clear();
+      recorder.Clear();
       RaySegment* p = r;
       while (p) {
-        recorder_list.emplace_back(&(p->recorder));
+        p->recorder >> recorder;
         p = p->root_ctx->prev_ray_segment;
-      }
-      recorder.Clear();
-      for (auto it = recorder_list.rbegin(); it != recorder_list.rend(); ++it) {
-        recorder << **it;
       }
       auto ray_path_hash = recorder.Hash();
       if (ray_path_map_.count(ray_path_hash)) {

@@ -63,10 +63,13 @@ class RayPathRecorder : public ISerializable {
 
   RayPathRecorder& operator<<(ShortIdType id);
   RayPathRecorder& operator<<(const RayPathRecorder& second);
+  RayPathRecorder& operator>>(RayPathRecorder& second);
   RayPathRecorder& operator,(ShortIdType id);
 
  private:
   static void ReverseBits(uint8_t* n);
+  static size_t RightCircularShift(size_t val, unsigned int n);
+  static size_t LeftCircularShift(size_t val, unsigned int n);
 
   size_t hash_;
   int16_t offset_;

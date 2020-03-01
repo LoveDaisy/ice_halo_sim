@@ -71,9 +71,7 @@ void RayPathRecorder::Deserialize(File& file, endian::Endianness endianness) {
 
 
 RayPathRecorder& RayPathRecorder::operator<<(ShortIdType id) {
-  size_t val = id;
-  size_t tmp_hash = (val << offset_) | (val >> (kTotalBits - offset_));
-  hash_ ^= tmp_hash;
+  hash_ ^= LeftCircularShift(id, offset_);
   offset_ += kStep;
   offset_ %= kTotalBits;
   return *this;
@@ -81,11 +79,18 @@ RayPathRecorder& RayPathRecorder::operator<<(ShortIdType id) {
 
 
 RayPathRecorder& RayPathRecorder::operator<<(const RayPathRecorder& second) {
-  size_t tmp_hash = (second.hash_ << offset_) | (second.hash_ >> (kTotalBits - offset_));
-  hash_ ^= tmp_hash;
+  hash_ ^= LeftCircularShift(second.hash_, offset_);
   offset_ += second.offset_;
   offset_ %= kTotalBits;
   return *this;
+}
+
+
+RayPathRecorder& RayPathRecorder::operator>>(RayPathRecorder& second) {
+  second.hash_ = hash_ ^ LeftCircularShift(second.hash_, offset_);
+  second.offset_ += offset_;
+  second.offset_ %= kTotalBits;
+  return second;
 }
 
 
@@ -99,6 +104,18 @@ void RayPathRecorder::ReverseBits(uint8_t* n) {
     0x0, 0x8, 0x4, 0xc, 0x2, 0xa, 0x6, 0xe, 0x1, 0x9, 0x5, 0xd, 0x3, 0xb, 0x7, 0xf,
   };
   *n = (lookup[(*n) & 0xf] << 4) | lookup[(*n) >> 4];
+}
+
+
+size_t RayPathRecorder::RightCircularShift(size_t val, unsigned int n) {
+  n %= kTotalBits;
+  return (val >> n) | (val << (kTotalBits - n));
+}
+
+
+size_t RayPathRecorder::LeftCircularShift(size_t val, unsigned int n) {
+  n %= kTotalBits;
+  return (val << n) | (val >> (kTotalBits - n));
 }
 
 

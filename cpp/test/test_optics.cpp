@@ -216,4 +216,30 @@ TEST_F(OpticsTest, RayFaceIntersection1) {
   }
 }
 
+
+TEST_F(OpticsTest, RayPathHash) {
+  icehalo::RayPathRecorder recorder1;
+  icehalo::RayPathRecorder recorder2;
+  recorder1 << 1 << 3 << 5 << icehalo::kInvalidFaceNumber;
+  ASSERT_EQ(recorder1.Hash(), 0x1fffe14181);
+
+  recorder1.Clear();
+  recorder1 << 1, 3, 5, icehalo::kInvalidFaceNumber;
+  ASSERT_EQ(recorder1.Hash(), 0x1fffe14181);
+
+  recorder1.Clear();
+  recorder1 << 1, 3;
+  recorder2.Clear();
+  recorder2 << 5, icehalo::kInvalidFaceNumber;
+  recorder1 << recorder2;
+  ASSERT_EQ(recorder1.Hash(), 0x1fffe14181);
+
+  recorder2.Clear();
+  recorder2 << 5, icehalo::kInvalidFaceNumber;
+  recorder1.Clear();
+  recorder1 << 1, 3;
+  recorder1 >> recorder2;
+  ASSERT_EQ(recorder2.Hash(), 0x1fffe14181);
+}
+
 }  // namespace
