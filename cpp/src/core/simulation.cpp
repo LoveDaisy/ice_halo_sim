@@ -867,7 +867,7 @@ void Simulator::StoreRaySegments(const CrystalContext* crystal_ctx, AbstractRayP
     r->recorder = prev_ray_seg->recorder;
     r->recorder << crystal->FaceNumber(r->face_id);
     if (r->state == RaySegmentState::kFinished) {
-      r->recorder << kInvalidFaceNumber;
+      r->recorder << kInvalidId;
     }
     r->root_ctx = prev_ray_seg->root_ctx;
     buffer_.ray_seg[1][i] = r;

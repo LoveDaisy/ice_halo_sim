@@ -6,9 +6,7 @@
 namespace icehalo {
 
 using ShortIdType = uint16_t;
-using FaceNumberType = ShortIdType;
 constexpr ShortIdType kInvalidId = 0xffff;
-constexpr FaceNumberType kInvalidFaceNumber = kInvalidId;
 
 struct RayInfo;
 struct RaySegment;

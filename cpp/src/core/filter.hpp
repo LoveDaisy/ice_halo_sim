@@ -82,8 +82,8 @@ class SpecificRayPathFilter : public AbstractRayPathFilter {
 
 class GeneralRayPathFilter : public AbstractRayPathFilter {
  public:
-  void AddEntryFace(FaceNumberType face_number);
-  void AddExitFace(FaceNumberType face_number);
+  void AddEntryFace(ShortIdType face_number);
+  void AddExitFace(ShortIdType face_number);
   void AddHitNumber(int hit_num);
   void ClearFaces();
   void ClearHitNumbers();
@@ -96,8 +96,8 @@ class GeneralRayPathFilter : public AbstractRayPathFilter {
   bool FilterPath(const Crystal* crystal, RaySegment* last_r) const override;
 
  private:
-  std::unordered_set<FaceNumberType> entry_faces_;
-  std::unordered_set<FaceNumberType> exit_faces_;
+  std::unordered_set<ShortIdType> entry_faces_;
+  std::unordered_set<ShortIdType> exit_faces_;
   std::unordered_set<int> hit_nums_;
 };
 

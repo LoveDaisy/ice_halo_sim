@@ -20,7 +20,7 @@ void PrintRayPath(const RayPath& ray_path, char* buf, size_t size) {
       auto n = std::snprintf(buf + offset, size - offset, "-(%u)", fn);
       offset += n;
       crystal_flag = false;
-    } else if (fn == kInvalidFaceNumber) {
+    } else if (fn == kInvalidId) {
       auto n = std::snprintf(buf + offset, size - offset, "-x");
       offset += n;
       crystal_flag = true;

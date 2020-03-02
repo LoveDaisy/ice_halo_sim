@@ -6,6 +6,7 @@
 
 #include "context/context.hpp"
 #include "core/optics.hpp"
+#include "util/log.hpp"
 
 namespace icehalo {
 
@@ -111,11 +112,11 @@ int Crystal::TotalFaces() const {
   return static_cast<int>(faces_.size());
 }
 
-FaceNumberType Crystal::FaceNumber(int idx) const {
+ShortIdType Crystal::FaceNumber(int idx) const {
   if (face_number_table_.empty()) {
-    return kInvalidFaceNumber;
+    return kInvalidId;
   } else if (idx < 0 || static_cast<size_t>(idx) >= face_number_table_.size()) {
-    return kInvalidFaceNumber;
+    return kInvalidId;
   } else {
     return face_number_table_[idx];
   }
@@ -703,11 +704,11 @@ void MakeSymmetryExtensionHelper(const RayPath& curr_ray_path, const CrystalCont
         tmp_ray_path.clear();
         bool crystal_flag = true;
         for (auto fn : rp) {
-          if (!crystal_flag && fn != kInvalidFaceNumber && fn != 1 && fn != 2) {
-            fn = static_cast<FaceNumberType>((fn + period + i - 3) % period + 3);
+          if (!crystal_flag && fn != kInvalidId && fn != 1 && fn != 2) {
+            fn = static_cast<ShortIdType>((fn + period + i - 3) % period + 3);
           }
-          crystal_flag = (fn == kInvalidFaceNumber);
           tmp_ray_path.emplace_back(fn);
+          crystal_flag = (fn == kInvalidId);
         }
         ray_path_extension.emplace_back(tmp_ray_path);
       }
@@ -721,11 +722,11 @@ void MakeSymmetryExtensionHelper(const RayPath& curr_ray_path, const CrystalCont
       tmp_ray_path.clear();
       bool crystal_flag = true;
       for (auto fn : rp) {
-        if (!crystal_flag && fn != kInvalidFaceNumber && (fn == 1 || fn == 2)) {
-          fn = static_cast<FaceNumberType>(fn % 2 + 1);
+        if (!crystal_flag && fn != kInvalidId && (fn == 1 || fn == 2)) {
+          fn = static_cast<ShortIdType>(fn % 2 + 1);
         }
-        crystal_flag = (fn == kInvalidFaceNumber);
         tmp_ray_path.emplace_back(fn);
+        crystal_flag = (fn == kInvalidId);
       }
       ray_path_extension.emplace_back(tmp_ray_path);
     }
@@ -738,11 +739,11 @@ void MakeSymmetryExtensionHelper(const RayPath& curr_ray_path, const CrystalCont
       tmp_ray_path.clear();
       bool crystal_flag = true;
       for (auto fn : rp) {
-        if (!crystal_flag && fn != kInvalidFaceNumber && fn != 1 && fn != 2) {
-          fn = static_cast<FaceNumberType>(5 + period - fn);
+        if (!crystal_flag && fn != kInvalidId && fn != 1 && fn != 2) {
+          fn = static_cast<ShortIdType>(5 + period - fn);
         }
-        crystal_flag = (fn == kInvalidFaceNumber);
         tmp_ray_path.emplace_back(fn);
+        crystal_flag = (fn == kInvalidId);
       }
       ray_path_extension.emplace_back(tmp_ray_path);
     }
@@ -775,7 +776,7 @@ std::vector<RayPath> MakeSymmetryExtension(const RayPath& curr_ray_path, const C
     if (crystal_flag) {
       crystal_flag = false;
       tmp_ray_path.clear();
-    } else if (fn == kInvalidFaceNumber) {
+    } else if (fn == kInvalidId) {
       crystal_flag = true;
     }
     tmp_ray_path.emplace_back(fn);
@@ -792,27 +793,31 @@ std::pair<RayPath, size_t> NormalizeRayPath(RayPath ray_path, const ProjectConte
                                             uint8_t symmetry_flag) {
   int period = 0;
   bool crystal_flag = true;
-  FaceNumberType first_p_fn = kInvalidFaceNumber;
-  FaceNumberType second_p_fn = kInvalidFaceNumber;
-  FaceNumberType first_b_fn = kInvalidFaceNumber;
+  ShortIdType first_p_fn = kInvalidId;
+  ShortIdType second_p_fn = kInvalidId;
+  ShortIdType first_b_fn = kInvalidId;
   for (auto& fn : ray_path) {
     if (crystal_flag) {
       crystal_flag = false;
-      period = proj_ctx->GetCrystal(fn)->GetFaceNumberPeriod();
-    } else if (fn == kInvalidFaceNumber) {
+      auto crystal = proj_ctx->GetCrystal(fn);
+      if (!crystal) {
+        LOG_ERROR("NormalizeRayPath no crystal of ID: %u", fn);
+      }
+      period = crystal->GetFaceNumberPeriod();
+    } else if (fn == kInvalidId) {
       crystal_flag = true;
-      first_p_fn = kInvalidFaceNumber;
-      second_p_fn = kInvalidFaceNumber;
-      first_b_fn = kInvalidFaceNumber;
+      first_p_fn = kInvalidId;
+      second_p_fn = kInvalidId;
+      first_b_fn = kInvalidId;
     } else {
       bool is_basal = fn == 1 || fn == 2;
       auto pyr = fn / 10;
-      if (first_p_fn == kInvalidFaceNumber && !is_basal) {
+      if (first_p_fn == kInvalidId && !is_basal) {
         first_p_fn = fn;
-      } else if (second_p_fn == kInvalidFaceNumber && !is_basal &&
+      } else if (second_p_fn == kInvalidId && !is_basal &&
                  ((period % 2 == 0 && (fn + period - first_p_fn) != period / 2) || period % 2 != 0)) {
         second_p_fn = fn;
-      } else if (first_b_fn == kInvalidFaceNumber && is_basal) {
+      } else if (first_b_fn == kInvalidId && is_basal) {
         first_b_fn = fn;
       }
 
@@ -820,9 +825,8 @@ std::pair<RayPath, size_t> NormalizeRayPath(RayPath ray_path, const ProjectConte
         fn += period - first_p_fn;
         fn %= period;
       }
-      if (first_p_fn != kInvalidFaceNumber && second_p_fn != kInvalidFaceNumber &&
-          (symmetry_flag & kSymmetryDirection) && (second_p_fn + period - first_p_fn) % period > period / 2.0 &&
-          !is_basal) {
+      if (first_p_fn != kInvalidId && second_p_fn != kInvalidId && (symmetry_flag & kSymmetryDirection) &&
+          (second_p_fn + period - first_p_fn) % period > period / 2.0 && !is_basal) {
         fn = period - fn;
         fn %= period;
       }
@@ -835,7 +839,7 @@ std::pair<RayPath, size_t> NormalizeRayPath(RayPath ray_path, const ProjectConte
     }
   }
 
-  return std::make_pair(ray_path, RayPathRecorder::Hash(ray_path));
+  return std::make_pair(std::move(ray_path), RayPathRecorder::Hash(ray_path));
 }
 
 }  // namespace icehalo

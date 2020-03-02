@@ -46,8 +46,8 @@ TEST_F(ContextTest, FillSunDir) {
 }
 
 TEST_F(ContextTest, RayPathHash01) {
-  icehalo::RayPath ray_path_01{ 2, 3, 6, icehalo::kInvalidFaceNumber };
-  icehalo::RayPath ray_path_02{ 2, 5, 8, icehalo::kInvalidFaceNumber };
+  icehalo::RayPath ray_path_01{ 2, 3, 6, icehalo::kInvalidId };
+  icehalo::RayPath ray_path_02{ 2, 5, 8, icehalo::kInvalidId };
 
   auto hash_01 = icehalo::RayPathRecorder::Hash(ray_path_01);
   auto hash_02 = icehalo::RayPathRecorder::Hash(ray_path_02);
@@ -62,9 +62,9 @@ TEST_F(ContextTest, RayPathHash02) {
   const auto sym_flag = icehalo::RenderSplitter::kDefaultSymmetry;
 
   std::vector<icehalo::RayPath> ray_path_list{
-    icehalo::RayPath{ 2, 3, 6, icehalo::kInvalidFaceNumber },
-    icehalo::RayPath{ 2, 8, 6, icehalo::kInvalidFaceNumber },
-    icehalo::RayPath{ 2, 8, 6, icehalo::kInvalidFaceNumber, 1, 3, 5, icehalo::kInvalidFaceNumber },
+    icehalo::RayPath{ 2, 3, 6, icehalo::kInvalidId },
+    icehalo::RayPath{ 2, 8, 6, icehalo::kInvalidId },
+    icehalo::RayPath{ 2, 8, 6, icehalo::kInvalidId, 1, 3, 5, icehalo::kInvalidId },
   };
 
   for (const auto& rp0 : ray_path_list) {

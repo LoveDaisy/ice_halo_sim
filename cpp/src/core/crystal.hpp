@@ -29,9 +29,9 @@ class Crystal {
 
   int TotalVertexes() const;
   int TotalFaces() const;
-  FaceNumberType FaceNumber(int idx) const;
+  ShortIdType FaceNumber(int idx) const;
 
-  using FaceNumberTable = std::vector<FaceNumberType>;
+  using FaceNumberTable = std::vector<ShortIdType>;
   const std::vector<math::Vec3f>& GetVertexes() const;
   const std::vector<math::TriangleIdx>& GetFaces() const;
   const FaceNumberTable& GetFaceNumberTable() const;

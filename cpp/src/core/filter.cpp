@@ -238,7 +238,7 @@ bool SpecificRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_
   }
 
   int curr_fn0 = crystal->FaceNumber(last_r->root_ctx->first_ray_segment->face_id);
-  if (curr_fn0 == kInvalidFaceNumber || crystal->GetFaceNumberPeriod() < 0) {  // If do not have face number mapping.
+  if (curr_fn0 == kInvalidId || crystal->GetFaceNumberPeriod() < 0) {  // If do not have face number mapping.
     return true;
   }
 
@@ -310,12 +310,12 @@ void SpecificRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
 }
 
 
-void GeneralRayPathFilter::AddEntryFace(FaceNumberType face_number) {
+void GeneralRayPathFilter::AddEntryFace(ShortIdType face_number) {
   entry_faces_.emplace(face_number);
 }
 
 
-void GeneralRayPathFilter::AddExitFace(FaceNumberType face_number) {
+void GeneralRayPathFilter::AddExitFace(ShortIdType face_number) {
   exit_faces_.emplace(face_number);
 }
 
@@ -355,7 +355,7 @@ bool GeneralRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_r
 
   auto curr_entry_fn = crystal->FaceNumber(last_r->root_ctx->first_ray_segment->face_id);
   auto curr_exit_fn = crystal->FaceNumber(last_r->face_id);
-  if (curr_entry_fn == kInvalidFaceNumber || curr_exit_fn == kInvalidFaceNumber ||
+  if (curr_entry_fn == kInvalidId || curr_exit_fn == kInvalidId ||
       crystal->GetFaceNumberPeriod() < 0) {  // If do not have a face number mapping
     return true;
   }
