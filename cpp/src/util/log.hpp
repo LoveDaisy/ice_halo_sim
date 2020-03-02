@@ -32,6 +32,34 @@ struct LogMessage {
 };
 
 
+class LogFormatter;
+using LogFormatterPtr = std::shared_ptr<LogFormatter>;
+
+class LogFormatter {
+ public:
+  LogFormatter();
+  virtual ~LogFormatter() = default;
+
+  virtual const char* Format(const LogMessage& msg) = 0;
+
+  void EnableSeverity(bool enable);
+  void EnableThreadId(bool enable);
+
+ protected:
+  static constexpr size_t kBufSize = 1024;
+
+  bool enable_severity_;
+  bool enable_thread_id_;
+  char buf_[kBufSize];
+};
+
+
+class SimpleLogFormatter : public LogFormatter {
+ public:
+  const char* Format(const LogMessage& msg) override;
+};
+
+
 class LogDestination;
 using LogDestPtrU = std::unique_ptr<LogDestination>;
 using LogDestPtr = std::shared_ptr<LogDestination>;
@@ -39,13 +67,13 @@ using LogDestPtr = std::shared_ptr<LogDestination>;
 class LogDestination {
  public:
   virtual ~LogDestination() = default;
-  virtual void Write(const LogMessage& message) = 0;
+  virtual void Write(const LogMessage& message, LogFormatterPtr& formatter) = 0;
 };
 
 
 class LogStdOutDest : public LogDestination {
  public:
-  void Write(const LogMessage& message) override;
+  void Write(const LogMessage& message, LogFormatterPtr& formatter) override;
 
   static LogDestPtr GetInstance();
 
@@ -56,7 +84,7 @@ class LogStdOutDest : public LogDestination {
 
 class LogStdErrDest : public LogDestination {
  public:
-  void Write(const LogMessage& message) override;
+  void Write(const LogMessage& message, LogFormatterPtr& formatter) override;
 
   static LogDestPtr GetInstance();
 
@@ -133,7 +161,7 @@ class Logger {
     std::unordered_set<LogDestPtr> dest_set;
     for (auto& kv : filter_dest_list_) {
       if (kv.first->Filter(msg) && !dest_set.count(kv.second)) {
-        kv.second->Write(msg);
+        kv.second->Write(msg, default_formatter_);
         dest_set.emplace(kv.second);
       }
     }
@@ -150,13 +178,15 @@ class Logger {
     std::unordered_set<LogDestPtr> dest_set;
     for (auto& kv : filter_dest_list_) {
       if (kv.first->Filter(msg) && !dest_set.count(kv.second)) {
-        kv.second->Write(msg);
+        kv.second->Write(msg, default_formatter_);
         dest_set.emplace(kv.second);
       }
     }
   }
 
   void AddDestination(LogFilterPtr filter, LogDestPtr dest);
+  void EnableSeverity(bool enable);
+  void EnableThreadId(bool enable);
 
   static Logger* GetInstance();
 
@@ -165,6 +195,7 @@ class Logger {
  private:
   Logger();
 
+  LogFormatterPtr default_formatter_;
   std::vector<std::pair<LogFilterPtr, LogDestPtr>> filter_dest_list_;
 };
 
@@ -202,5 +233,10 @@ class Logger {
 #define LOG_TAG_FATAL(tag, fmt, ...)                                                                         \
   icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kFatalTag, (tag), (fmt), \
                                              ##__VA_ARGS__)
+
+#define ENABLE_LOG_SEVERITY icehalo::Logger::GetInstance()->EnableSeverity(true)
+#define DISABLE_LOG_SEVERITY icehalo::Logger::GetInstance()->EnableSeverity(false)
+#define ENABLE_LOG_THREAD_ID icehalo::Logger::GetInstance()->EnableThreadId(true)
+#define DISABLE_LOG_THREAD_ID icehalo::Logger::GetInstance()->EnableThreadId(false)
 
 #endif  // SRC_UTIL_LOG_H_

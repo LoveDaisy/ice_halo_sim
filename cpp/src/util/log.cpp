@@ -5,19 +5,25 @@
 
 namespace icehalo {
 
-void LogStdOutDest::Write(const LogMessage& message) {
-  switch (message.level) {
-    case LogLevel::kVerbose:
-      std::printf("[VERBOSE] %s\n", message.text.c_str());
-      break;
-    case LogLevel::kDebug:
-      std::printf("[DEBUG] %s\n", message.text.c_str());
-      break;
-    case LogLevel::kInfo:
-      std::printf("[INFO] %s\n", message.text.c_str());
-      break;
-    default:
-      break;
+void LogStdOutDest::Write(const LogMessage& message, LogFormatterPtr& formatter) {
+  if (!formatter) {
+    const char* level_str = "";
+    switch (message.level) {
+      case LogLevel::kVerbose:
+        level_str = "[VERBOSE]";
+        break;
+      case LogLevel::kDebug:
+        level_str = "[DEBUG]";
+        break;
+      case LogLevel::kInfo:
+        level_str = "[INFO]";
+        break;
+      default:
+        break;
+    }
+    std::printf("%s(%016zx) %s\n", level_str, std::hash<std::thread::id>{}(message.thread_id), message.text.c_str());
+  } else {
+    std::printf("%s\n", formatter->Format(message));
   }
 }
 
@@ -28,21 +34,27 @@ LogDestPtr LogStdOutDest::GetInstance() {
 }
 
 
-void LogStdErrDest::Write(const LogMessage& message) {
-  switch (message.level) {
-    case LogLevel::kWarning:
-      std::fprintf(stderr, "[WARNING] ");
-      break;
-    case LogLevel::kError:
-      std::fprintf(stderr, "[ERROR] ");
-      break;
-    case LogLevel::kFatal:
-      std::fprintf(stderr, "[FATAL] ");
-      break;
-    default:
-      break;
+void LogStdErrDest::Write(const LogMessage& message, LogFormatterPtr& formatter) {
+  if (!formatter) {
+    const char* level_str = "";
+    switch (message.level) {
+      case LogLevel::kWarning:
+        level_str = "[WARNING]";
+        break;
+      case LogLevel::kError:
+        level_str = "[ERROR]";
+        break;
+      case LogLevel::kFatal:
+        level_str = "[FATAL]";
+        break;
+      default:
+        break;
+    }
+    std::fprintf(stderr, "%s(%016zx) %s\n", level_str, std::hash<std::thread::id>{}(message.thread_id),
+                 message.text.c_str());
+  } else {
+    std::fprintf(stderr, "%s\n", formatter->Format(message));
   }
-  std::fprintf(stderr, "%s\n", message.text.c_str());
 }
 
 
@@ -171,7 +183,7 @@ bool LogComplexFilter::Filter(const LogMessage& message) {
 }
 
 
-Logger::Logger() {
+Logger::Logger() : default_formatter_{ std::make_shared<SimpleLogFormatter>() } {
 #if defined(DEBUG) || defined(FOR_TEST)
   LogFilterPtr stdout_filter = LogFilter::MakeLevelFilter({ LogLevel::kVerbose, LogLevel::kDebug, LogLevel::kInfo });
 #else
@@ -191,9 +203,67 @@ void Logger::AddDestination(LogFilterPtr filter, LogDestPtr dest) {
 }
 
 
+void Logger::EnableSeverity(bool enable) {
+  default_formatter_->EnableSeverity(enable);
+}
+
+
+void Logger::EnableThreadId(bool enable) {
+  default_formatter_->EnableThreadId(enable);
+}
+
+
 Logger* Logger::GetInstance() {
   static Logger logger;
   return &logger;
+}
+
+
+LogFormatter::LogFormatter() : enable_severity_(true), enable_thread_id_(true), buf_{} {}
+
+
+void LogFormatter::EnableSeverity(bool enable) {
+  enable_severity_ = enable;
+}
+
+
+void LogFormatter::EnableThreadId(bool enable) {
+  enable_thread_id_ = enable;
+}
+
+
+const char* SimpleLogFormatter::Format(const LogMessage& message) {
+  size_t offset = 0;
+  const char* level_str = "";
+  if (enable_severity_) {
+    switch (message.level) {
+      case LogLevel::kDebug:
+        level_str = "[DEBUG]";
+        break;
+      case LogLevel::kVerbose:
+        level_str = "[VERBOSE]";
+        break;
+      case LogLevel::kInfo:
+        level_str = "[INFO]";
+        break;
+      case LogLevel::kWarning:
+        level_str = "[WARNING]";
+        break;
+      case LogLevel::kError:
+        level_str = "[ERROR]";
+        break;
+      case LogLevel::kFatal:
+        level_str = "[FATAL]";
+        break;
+    }
+  }
+  offset += std::snprintf(buf_ + offset, kBufSize - offset, "%s", level_str);
+  if (enable_thread_id_) {
+    offset +=
+        std::snprintf(buf_ + offset, kBufSize - offset, "(%016zx)", std::hash<std::thread::id>{}(message.thread_id));
+  }
+  std::snprintf(buf_ + offset, kBufSize - offset, " %s", message.text.c_str());
+  return buf_;
 }
 
 }  // namespace icehalo

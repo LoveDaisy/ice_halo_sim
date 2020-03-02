@@ -12,6 +12,8 @@ int main(int argc, char* argv[]) {
     return -1;
   }
 
+  ENABLE_LOG_SEVERITY;
+  DISABLE_LOG_THREAD_ID;
   auto start = std::chrono::system_clock::now();
   ProjectContextPtr context = ProjectContext::CreateFromFile(argv[1]);
   Simulator simulator(context);
