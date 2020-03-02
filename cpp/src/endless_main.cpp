@@ -233,8 +233,8 @@ int main(int argc, char* argv[]) {
     t = std::chrono::system_clock::now();
     total_ray_num += proj_ctx->GetInitRayNum() * wavelengths.size();
     diff = t - start;
-    LOG_INFO("=== Total %.1fM rays finished! ===", total_ray_num / 1.0e6);
-    LOG_INFO("=== Spent %.3f sec!          ===", diff.count() / 1000);
+    LOG_INFO("=== Total %6.1fM rays finished! ===", total_ray_num / 1.0e6);
+    LOG_INFO("=== Spent %7.2f sec!           ===", diff.count() / 1000);
   }
 
   auto end = std::chrono::system_clock::now();
