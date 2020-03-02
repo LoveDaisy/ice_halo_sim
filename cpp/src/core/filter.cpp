@@ -192,7 +192,7 @@ void NoneRayPathFilter::SaveToJson(rapidjson::Value& root, rapidjson::Value::All
 
 
 void SpecificRayPathFilter::AddPath(const RayPath& path) {
-  ray_paths_.emplace_back(path);
+  ray_paths_.emplace_back(path.MakePermanentCopy());
 }
 
 
@@ -216,8 +216,8 @@ void SpecificRayPathFilter::ApplySymmetry(const CrystalContext* crystal_ctx) {
 
   // Add the original path.
   for (auto rp : ray_paths_) {
-    rp.insert(rp.begin(), crystal_ctx->GetId());
-    rp.emplace_back(kInvalidFaceNumber);
+    rp.PrependId(crystal_ctx->GetId());
+    rp << kInvalidId;
     auto tmp_ray_path_list = MakeSymmetryExtension(rp, crystal_ctx, symmetry_flag_);
     for (auto& p : tmp_ray_path_list) {
       augmented_ray_paths.emplace_back(p);
@@ -261,9 +261,9 @@ void SpecificRayPathFilter::SaveToJson(rapidjson::Value& root, rapidjson::Value:
     constexpr size_t kBufSize = 32;
     char buf[kBufSize]{};
     for (size_t p_idx = 0; p_idx < ray_paths_.size(); p_idx++) {
-      for (size_t f_idx = 0; f_idx < ray_paths_[p_idx].size(); f_idx++) {
+      for (size_t f_idx = 0; f_idx < ray_paths_[p_idx].len; f_idx++) {
         std::snprintf(buf, kBufSize, "/path/%zu/%zu", p_idx, f_idx);
-        Pointer(buf).Set(root, ray_paths_[p_idx][f_idx], allocator);
+        Pointer(buf).Set(root, ray_paths_[p_idx].ids[f_idx], allocator);
       }
     }
   }
@@ -289,7 +289,7 @@ void SpecificRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
       if (!pi.IsInt()) {
         throw std::invalid_argument("<path> cannot recognize!");
       }
-      tmp_path.emplace_back(pi.GetInt());
+      tmp_path << pi.GetInt();
     }
     AddPath(tmp_path);
   } else {  // p[0].IsArray()
@@ -302,7 +302,7 @@ void SpecificRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
         if (!pii.IsInt()) {
           throw std::invalid_argument("<path> cannot recognize!");
         }
-        tmp_path.emplace_back(pii.GetInt());
+        tmp_path << pii.GetInt();
       }
       AddPath(tmp_path);
     }

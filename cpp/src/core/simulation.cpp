@@ -655,6 +655,7 @@ void Simulator::Run() {
   simulation_ray_data_.Clear();
   RaySegmentPool::GetInstance()->Clear();
   RayInfoPool::GetInstance()->Clear();
+  IdPool::GetInstance()->Clear();
   entry_ray_data_.Clear();
   entry_ray_offset_ = 0;
 

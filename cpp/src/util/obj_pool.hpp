@@ -7,23 +7,31 @@
 #include <type_traits>
 #include <vector>
 
+#include "core/core_def.hpp"
 #include "io/serialize.hpp"
 
 namespace icehalo {
 
 template <typename T>
-class ObjectPool : public ISerializable {
+class ObjectPool {
  public:
-  ~ObjectPool() override;
+  ~ObjectPool();
 
   ObjectPool(const ObjectPool&) = delete;
   void operator=(const ObjectPool&) = delete;
 
   template <class... Arg>
   T* GetObject(Arg&&... args) {
-    auto id = RefreshChunkIndex();
-    T* obj = objects_[current_chunk_id_] + id;
+    T* obj = RefreshChunkIndex(1);
     return new (obj) T(std::forward<Arg>(args)...);
+  }
+
+  T* AllocateObjectArray(size_t n) {
+    if (n > 0) {
+      return RefreshChunkIndex(n);
+    } else {
+      return nullptr;
+    }
   }
 
   void Clear();
@@ -32,6 +40,30 @@ class ObjectPool : public ISerializable {
   T* GetPointerFromSerializeData(T* dummy_ptr);
   T* GetPointerFromSerializeData(uint32_t chunk_id, uint32_t obj_id);
   std::tuple<uint32_t, uint32_t> GetObjectSerializeIndex(T* obj);
+
+  static ObjectPool<T>* GetInstance();
+
+ protected:
+  ObjectPool();
+
+  T* RefreshChunkIndex(uint32_t n);
+
+  static constexpr size_t kChunkSize = 1024 * 1024;
+  static constexpr size_t kUnusedIdMask = 0xffffffff;
+  static constexpr size_t kChunkIdMask = 0xffffffff00000000;
+  static constexpr unsigned kIdOffset = 32;
+
+  std::vector<T*> objects_;
+  std::atomic_uint64_t id_;  //!< chunk_id << 32 | next_unused_id
+  std::mutex id_mutex_;
+  size_t deserialized_chunk_size_;
+};
+
+
+template <typename T>
+class SerializableObjectPool : public ObjectPool<T>, public ISerializable {
+ public:
+  ~SerializableObjectPool() override = default;
 
   /**
    * @brief Serialize self to a file.
@@ -55,28 +87,13 @@ class ObjectPool : public ISerializable {
   void Serialize(File& file, bool with_boi) const override;
   void Deserialize(File& file, endian::Endianness endianness) override;
 
-  static ObjectPool<T>* GetInstance();
-
- private:
-  ObjectPool();
-
-  uint32_t RefreshChunkIndex();
-
-  static constexpr size_t kChunkSize = 1024 * 1024;
-
-  std::vector<T*> objects_;
-  uint32_t current_chunk_id_;
-  std::atomic<uint32_t> next_unused_id_;
-  std::mutex id_mutex_;
-  size_t deserialized_chunk_size_;
+  static SerializableObjectPool<T>* GetInstance();
 };
 
-struct RaySegment;
-using RaySegmentPool = ObjectPool<RaySegment>;
 
-struct RayInfo;
-using RayInfoPool = ObjectPool<RayInfo>;
-
+using RaySegmentPool = SerializableObjectPool<RaySegment>;
+using RayInfoPool = SerializableObjectPool<RayInfo>;
+using IdPool = ObjectPool<ShortIdType>;
 
 }  // namespace icehalo
 

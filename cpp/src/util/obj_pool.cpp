@@ -1,6 +1,7 @@
 #include "util/obj_pool.hpp"
 
 #include "core/optics.hpp"
+#include "util/log.hpp"
 
 namespace icehalo {
 
@@ -18,8 +19,7 @@ ObjectPool<T>::~ObjectPool() {
 
 template <typename T>
 void ObjectPool<T>::Clear() {
-  next_unused_id_ = 0;
-  current_chunk_id_ = 0;
+  id_ = 0;
   deserialized_chunk_size_ = 0;
 }
 
@@ -81,7 +81,7 @@ template <typename T>
 void ObjectPool<T>::Map(std::function<void(T&)> f) {
   const std::lock_guard<std::mutex> lock(id_mutex_);
   for (const auto& chunk : objects_) {
-    size_t chunk_size = (chunk == objects_.back() ? next_unused_id_.load() : kChunkSize);
+    size_t chunk_size = (chunk == objects_.back() ? (id_.load() & kUnusedIdMask) : kChunkSize);
     for (size_t j = 0; j < chunk_size; j++) {
       f(chunk[j]);
     }
@@ -97,47 +97,52 @@ ObjectPool<T>* ObjectPool<T>::GetInstance() {
 
 
 template <typename T>
-ObjectPool<T>::ObjectPool() : current_chunk_id_(0), next_unused_id_(0), deserialized_chunk_size_(0) {
+ObjectPool<T>::ObjectPool() : id_(0), deserialized_chunk_size_(0) {
   auto* pool = new T[kChunkSize];
   objects_.emplace_back(pool);
 }
 
 
 template <typename T>
-uint32_t ObjectPool<T>::RefreshChunkIndex() {
-  auto id = next_unused_id_.fetch_add(1);
-  if (id >= kChunkSize) {
+T* ObjectPool<T>::RefreshChunkIndex(uint32_t n) {
+  auto curr_id = id_.fetch_add(n);
+  auto id = curr_id & kUnusedIdMask;
+  auto c_id = (curr_id & kChunkIdMask) >> kIdOffset;
+  if (id + n > kChunkSize) {
     const std::lock_guard<std::mutex> lock(id_mutex_);
-    id = next_unused_id_;
+    curr_id = id_.fetch_add(n);
+    id = curr_id & kUnusedIdMask;
+    c_id = (curr_id & kChunkIdMask) >> kIdOffset;
     if (id > kChunkSize) {
       auto seg_size = objects_.size();
-      if (current_chunk_id_ + 1 >= seg_size) {
+      if (c_id + 1 >= seg_size) {
         auto* curr_pool = new T[kChunkSize];
         objects_.emplace_back(curr_pool);
-        current_chunk_id_ = seg_size;
+        c_id = seg_size;
       } else {
-        current_chunk_id_++;
+        c_id++;
       }
       id = 0;
-      next_unused_id_ = 1;
+      id_ = (c_id << kIdOffset) | (id + n);
     }
   }
-  return id;
+  return objects_[c_id] + id;
 }
 
 
 template <typename T>
-void ObjectPool<T>::Serialize(File& file, bool with_boi) const {
+void SerializableObjectPool<T>::Serialize(File& file, bool with_boi) const {
   if (with_boi) {
     file.Write(ISerializable::kDefaultBoi);
   }
 
-  size_t total_num = kChunkSize * (objects_.size() - 1) + next_unused_id_;
+  auto next_unused_id = (ObjectPool<T>::id_ & ObjectPool<T>::kUnusedIdMask);
+  size_t total_num = ObjectPool<T>::kChunkSize * (ObjectPool<T>::objects_.size() - 1) + next_unused_id;
   file.Write(total_num);
-  file.Write(kChunkSize);
+  file.Write(ObjectPool<T>::kChunkSize);
 
-  for (const auto& chunk : objects_) {
-    size_t num = (chunk == objects_.back() ? next_unused_id_.load() : kChunkSize);
+  for (const auto& chunk : ObjectPool<T>::objects_) {
+    size_t num = (chunk == ObjectPool<T>::objects_.back() ? next_unused_id : ObjectPool<T>::kChunkSize);
     for (size_t i = 0; i < num; i++) {
       chunk[i].Serialize(file, false);
     }
@@ -146,8 +151,8 @@ void ObjectPool<T>::Serialize(File& file, bool with_boi) const {
 
 
 template <typename T>
-void ObjectPool<T>::Deserialize(File& file, endian::Endianness endianness) {
-  const std::lock_guard<std::mutex> lock(id_mutex_);
+void SerializableObjectPool<T>::Deserialize(File& file, endian::Endianness endianness) {
+  const std::lock_guard<std::mutex> lock(ObjectPool<T>::id_mutex_);
 
   endianness = CheckEndianness(file, endianness);
   bool need_swap = (endianness != endian::kCompileEndian);
@@ -167,25 +172,37 @@ void ObjectPool<T>::Deserialize(File& file, endian::Endianness endianness) {
     throw std::invalid_argument("Chunk size is invalid!");
   }
 
-  Clear();
-  deserialized_chunk_size_ = chunk_size;
-  size_t chunks = total_num / kChunkSize + (total_num % kChunkSize ? 1 : 0);
-  for (current_chunk_id_ = 0; current_chunk_id_ < chunks; current_chunk_id_++) {
-    if (current_chunk_id_ >= objects_.size()) {
-      objects_.emplace_back(new T[kChunkSize]);
+  ObjectPool<T>::Clear();
+  ObjectPool<T>::deserialized_chunk_size_ = chunk_size;
+  size_t chunks = total_num / ObjectPool<T>::kChunkSize + (total_num % ObjectPool<T>::kChunkSize ? 1 : 0);
+  for (size_t i = 0; i < chunks; i++) {
+    if (i >= ObjectPool<T>::objects_.size()) {
+      ObjectPool<T>::objects_.emplace_back(new T[ObjectPool<T>::kChunkSize]);
     }
-    auto* chunk = objects_[current_chunk_id_];
-    size_t curr_num = kChunkSize;
-    if (current_chunk_id_ + 1 == chunks) {
-      curr_num = total_num % kChunkSize;
+    auto* chunk = ObjectPool<T>::objects_[i];
+    size_t curr_num = ObjectPool<T>::kChunkSize;
+    if (i + 1 == chunks) {
+      curr_num = total_num % ObjectPool<T>::kChunkSize;
     }
-    for (next_unused_id_ = 0; next_unused_id_ < curr_num; next_unused_id_++) {
-      chunk[next_unused_id_].Deserialize(file, endianness);
+    for (size_t j = 0; j < curr_num; j++) {
+      chunk[j].Deserialize(file, endianness);
     }
+    ObjectPool<T>::id_ = (chunks << ObjectPool<T>::kIdOffset) | curr_num;
   }
 }
 
+
+template <typename T>
+SerializableObjectPool<T>* SerializableObjectPool<T>::GetInstance() {
+  static auto instance = new SerializableObjectPool<T>();
+  return instance;
+}
+
+
+template class SerializableObjectPool<RaySegment>;
+template class SerializableObjectPool<RayInfo>;
 template class ObjectPool<RaySegment>;
 template class ObjectPool<RayInfo>;
+template class ObjectPool<ShortIdType>;
 
 }  // namespace icehalo

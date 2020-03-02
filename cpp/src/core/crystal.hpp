@@ -202,6 +202,36 @@ enum Symmetry : uint8_t {
 };
 
 
+struct RayPath {
+  static constexpr size_t kDefaultCapacity = 7;
+
+  size_t len;
+  size_t capacity;
+  ShortIdType* ids;
+  bool is_permanent;
+
+  RayPath();
+  explicit RayPath(size_t reserve_len);
+  RayPath(std::initializer_list<ShortIdType> ids);
+  RayPath(const RayPath& other);
+  RayPath(RayPath&& other) noexcept;
+  ~RayPath();
+
+  void Clear();
+  void PrependId(ShortIdType id);
+  RayPath MakePermanentCopy() const;
+
+  // convenience for the range-based for loop
+  ShortIdType* begin() const noexcept { return ids; }
+  ShortIdType* end() const noexcept { return ids + len; }
+
+  RayPath& operator=(const RayPath& other) noexcept;
+  RayPath& operator=(RayPath&& other) noexcept;
+  RayPath& operator<<(ShortIdType id);
+  bool operator==(const RayPath& other) const noexcept;
+};
+
+
 std::vector<RayPath> MakeSymmetryExtension(
     const RayPath& curr_ray_path,       // current ray path. not include crystal id and kInvalidFaceNumber
     const CrystalContext* crystal_ctx,  // crystal

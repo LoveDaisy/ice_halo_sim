@@ -333,18 +333,17 @@ void ProjectContext::ParseMultiScatterSettings(rapidjson::Document& d) {
 
 
 RayPath ProjectContext::GetRayPath(const RaySegment* last_ray) {
-  RayPath result{};
-  result.reserve(kMaxRayHitNum);
+  RayPath result(kMaxRayHitNum + 2);
   auto p = last_ray;
   while (p) {
-    result.emplace_back(kInvalidFaceNumber);
+    result << kInvalidId;
     auto crystal = GetCrystal(p->root_ctx->crystal_id);
 
     while (p->prev) {
-      result.emplace_back(crystal->FaceNumber(p->face_id));
+      result << crystal->FaceNumber(p->face_id);
       p = p->prev;
     }
-    result.emplace_back(p->root_ctx->crystal_id);
+    result << p->root_ctx->crystal_id;
     p = p->root_ctx->prev_ray_segment;
   }
   std::reverse(result.begin(), result.end());

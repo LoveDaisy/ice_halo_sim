@@ -11,7 +11,7 @@ constexpr ShortIdType kInvalidId = 0xffff;
 struct RayInfo;
 struct RaySegment;
 
-using RayPath = std::vector<FaceNumberType>;
+struct RayPath;
 using RayPathMap = std::unordered_map<size_t, std::pair<RayPath, size_t>>;
 constexpr int kAutoDetectLength = -1;
 

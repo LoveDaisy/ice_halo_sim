@@ -7,6 +7,7 @@
 #include "context/context.hpp"
 #include "core/optics.hpp"
 #include "util/log.hpp"
+#include "util/obj_pool.hpp"
 
 namespace icehalo {
 
@@ -701,14 +702,14 @@ void MakeSymmetryExtensionHelper(const RayPath& curr_ray_path, const CrystalCont
     decltype(ray_path_extension) ray_paths_copy(ray_path_extension);
     for (const auto& rp : ray_paths_copy) {
       for (int i = 0; i < period; i++) {
-        tmp_ray_path.clear();
+        tmp_ray_path.Clear();
         bool crystal_flag = true;
         for (auto fn : rp) {
           if (!crystal_flag && fn != kInvalidId && fn != 1 && fn != 2) {
             fn = static_cast<ShortIdType>((fn + period + i - 3) % period + 3);
           }
-          tmp_ray_path.emplace_back(fn);
           crystal_flag = (fn == kInvalidId);
+          tmp_ray_path << fn;
         }
         ray_path_extension.emplace_back(tmp_ray_path);
       }
@@ -719,14 +720,14 @@ void MakeSymmetryExtensionHelper(const RayPath& curr_ray_path, const CrystalCont
   if (symmetry_flag & kSymmetryBasal) {
     decltype(ray_path_extension) ray_paths_copy(ray_path_extension);
     for (const auto& rp : ray_paths_copy) {
-      tmp_ray_path.clear();
+      tmp_ray_path.Clear();
       bool crystal_flag = true;
       for (auto fn : rp) {
         if (!crystal_flag && fn != kInvalidId && (fn == 1 || fn == 2)) {
           fn = static_cast<ShortIdType>(fn % 2 + 1);
         }
-        tmp_ray_path.emplace_back(fn);
         crystal_flag = (fn == kInvalidId);
+        tmp_ray_path << fn;
       }
       ray_path_extension.emplace_back(tmp_ray_path);
     }
@@ -736,14 +737,14 @@ void MakeSymmetryExtensionHelper(const RayPath& curr_ray_path, const CrystalCont
   if (period > 0 && (symmetry_flag & kSymmetryDirection)) {
     decltype(ray_path_extension) ray_paths_copy(ray_path_extension);
     for (const auto& rp : ray_paths_copy) {
-      tmp_ray_path.clear();
+      tmp_ray_path.Clear();
       bool crystal_flag = true;
       for (auto fn : rp) {
         if (!crystal_flag && fn != kInvalidId && fn != 1 && fn != 2) {
           fn = static_cast<ShortIdType>(5 + period - fn);
         }
-        tmp_ray_path.emplace_back(fn);
         crystal_flag = (fn == kInvalidId);
+        tmp_ray_path << fn;
       }
       ray_path_extension.emplace_back(tmp_ray_path);
     }
@@ -757,12 +758,171 @@ void MakeSymmetryExtensionHelper(const RayPath& curr_ray_path, const CrystalCont
       for (const auto& p : ray_path_extension) {
         result.emplace_back(rp);
         for (const auto& fn : p) {
-          result.back().emplace_back(fn);
+          result.back() << fn;
         }
       }
     }
     ray_path_list.swap(result);
   }
+}
+
+
+RayPath::RayPath()
+    : len(0), capacity(kDefaultCapacity), ids(IdPool::GetInstance()->AllocateObjectArray(capacity)),
+      is_permanent(false) {}
+
+
+RayPath::RayPath(size_t reserve_len)
+    : len(0), capacity(reserve_len), ids(IdPool::GetInstance()->AllocateObjectArray(capacity)), is_permanent(false) {}
+
+
+RayPath::RayPath(std::initializer_list<ShortIdType> ids)
+    : len(ids.size()), capacity(ids.size()), ids(IdPool::GetInstance()->AllocateObjectArray(capacity)),
+      is_permanent(false) {
+  size_t i = 0;
+  for (const auto& id : ids) {
+    this->ids[i++] = id;
+  }
+}
+
+
+RayPath::RayPath(const icehalo::RayPath& other)
+    : len(other.len), capacity(other.capacity), ids(nullptr), is_permanent(other.is_permanent) {
+  if (is_permanent) {
+    ids = new ShortIdType[capacity];
+  } else {
+    ids = IdPool::GetInstance()->AllocateObjectArray(capacity);
+  }
+  std::memcpy(ids, other.ids, sizeof(ShortIdType) * len);
+  if (ids[len - 1] != kInvalidId || len > capacity) {
+    LOG_WARNING("RayPath copy ctr. ids wrong!");
+  }
+}
+
+
+RayPath::RayPath(RayPath&& other) noexcept
+    : len(other.len), capacity(other.capacity), ids(other.ids), is_permanent(other.is_permanent) {
+  other.len = 0;
+  other.capacity = 0;
+  other.ids = nullptr;
+}
+
+
+RayPath::~RayPath() {
+  if (is_permanent) {
+    delete[] ids;
+  }
+}
+
+
+RayPath& RayPath::operator=(const RayPath& other) noexcept {
+  if (&other == this) {
+    return *this;
+  }
+
+  len = other.len;
+  capacity = other.capacity;
+  if (other.is_permanent) {
+    ids = new ShortIdType[capacity];
+  } else {
+    ids = IdPool::GetInstance()->AllocateObjectArray(capacity);
+  }
+  std::memcpy(ids, other.ids, sizeof(ShortIdType) * len);
+  if (ids[len - 1] != kInvalidId || len > capacity) {
+    LOG_WARNING("RayPath copy ass. ids wrong!");
+  }
+  return *this;
+}
+
+
+RayPath& RayPath::operator=(RayPath&& other) noexcept {
+  if (&other == this) {
+    return *this;
+  }
+
+  len = other.len;
+  capacity = other.capacity;
+  ids = other.ids;
+  is_permanent = other.is_permanent;
+  other.len = 0;
+  other.capacity = 0;
+  other.ids = nullptr;
+  return *this;
+}
+
+
+RayPath& RayPath::operator<<(ShortIdType id) {
+  if (len >= capacity) {
+    ShortIdType* new_ids;
+    if (is_permanent) {
+      new_ids = new ShortIdType[capacity * 2];
+    } else {
+      new_ids = IdPool::GetInstance()->AllocateObjectArray(capacity * 2);
+    }
+    std::memcpy(new_ids, ids, sizeof(ShortIdType) * len);
+    if (is_permanent) {
+      delete[] ids;
+    }
+    ids = new_ids;
+    capacity *= 2;
+  }
+  ids[len++] = id;
+  return *this;
+}
+
+
+bool RayPath::operator==(const RayPath& other) const noexcept {
+  if (len != other.len) {
+    return false;
+  }
+
+  for (size_t i = 0; i < len; i++) {
+    if (ids[i] != other.ids[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+
+void RayPath::Clear() {
+  len = 0;
+}
+
+
+void RayPath::PrependId(ShortIdType id) {
+  if (len >= capacity) {
+    ShortIdType* new_ids;
+    if (is_permanent) {
+      new_ids = new ShortIdType[capacity * 2];
+    } else {
+      new_ids = IdPool ::GetInstance()->AllocateObjectArray(capacity * 2);
+    }
+    std::memcpy(new_ids + 1, ids, sizeof(ShortIdType) * len);
+    if (is_permanent) {
+      delete[] ids;
+    }
+    ids = new_ids;
+    capacity *= 2;
+  } else {
+    for (size_t i = 0; i < len; i++) {
+      ids[len - i] = ids[len - i - 1];
+    }
+  }
+  len++;
+  ids[0] = id;
+  if (ids[len - 1] != kInvalidId || len > capacity) {
+    LOG_WARNING("RayPath::PrependId() ids wrong!");
+  }
+}
+
+
+RayPath RayPath::MakePermanentCopy() const {
+  RayPath copy(0);
+  copy.is_permanent = true;
+  copy.ids = new ShortIdType[capacity];
+  std::memcpy(copy.ids, ids, sizeof(ShortIdType) * len);
+  return copy;
 }
 
 
@@ -775,11 +935,11 @@ std::vector<RayPath> MakeSymmetryExtension(const RayPath& curr_ray_path, const C
   for (const auto& fn : curr_ray_path) {
     if (crystal_flag) {
       crystal_flag = false;
-      tmp_ray_path.clear();
+      tmp_ray_path.Clear();
     } else if (fn == kInvalidId) {
       crystal_flag = true;
     }
-    tmp_ray_path.emplace_back(fn);
+    tmp_ray_path << fn;
     if (crystal_flag) {
       MakeSymmetryExtensionHelper(tmp_ray_path, crystal_ctx, symmetry_flag, result);
     }
