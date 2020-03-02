@@ -153,21 +153,24 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
   }
 
   MakeRayPathMap(ctx);
+  auto idx_list = GenerateIdxList();
 
+  auto threading_pool = ThreadingPool::GetInstance();
   size_t hash_table_init_size = num / 3;
   std::unordered_map<size_t, RayCollectionInfo> ray_collection_info_map;
   ray_collection_info_map.reserve(hash_table_init_size);
 
-  RayPathRecorder recorder;
-  size_t ray_seg_idx = 0;
-  for (const auto& sr : exit_ray_segments_) {
-    for (const auto& r : sr) {
+  for (size_t i = 0; i < exit_ray_segments_.size(); i++) {
+    const auto& sr = exit_ray_segments_[i];
+    const auto& curr_idx_list = idx_list[i];
+    for (size_t j = 0; j < sr.size(); j++) {
+      const auto& r = sr[j];
       if (r->state != RaySegmentState::kFinished) {
         continue;
       }
 
       // 1. Get hash for the whole path
-      recorder.Clear();
+      RayPathRecorder recorder;
       RaySegment* p = r;
       while (p) {
         p->recorder >> recorder;
@@ -184,10 +187,8 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
         ray_collection_info_map.emplace(normalized_hash, std::move(tmp_collection));
       }
       auto& collection_info = ray_collection_info_map[normalized_hash];
-      collection_info.idx.emplace_back(ray_seg_idx);
+      collection_info.idx.emplace_back(curr_idx_list[j]);
       collection_info.total_energy += r->w;
-
-      ray_seg_idx++;
     }
   }
 
@@ -201,17 +202,20 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
   }
   float* result_buf_p = result_ray_data.buf.get();
 
-  for (const auto& sr : exit_ray_segments_) {
-    for (const auto& r : sr) {
+  for (size_t i = 0; i < exit_ray_segments_.size(); i++) {
+    const auto& sr = exit_ray_segments_[i];
+    threading_pool->AddStepJobs(sr.size(), [=, &idx_list, &sr](size_t j) {
+      const auto& r = sr[j];
       if (r->state != RaySegmentState::kFinished) {
-        continue;
+        return;
       }
 
+      auto* p = result_buf_p + idx_list[i][j] * 4;
       const auto* axis = r->root_ctx->main_axis.val();
-      math::RotateZBack(axis, r->dir.val(), result_buf_p);
-      result_buf_p[3] = r->w;
-      result_buf_p += 4;
-    }
+      math::RotateZBack(axis, r->dir.val(), p);
+      p[3] = r->w;
+    });
+    threading_pool->WaitFinish();
   }
 
   // 5. Make result
@@ -374,6 +378,24 @@ void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
       ray_path_map_.emplace(std::move(kv));
     }
   }
+}
+
+
+std::vector<std::vector<size_t>> SimulationData::GenerateIdxList() const {
+  size_t ray_seg_idx = 0;
+  std::vector<std::vector<size_t>> idx_list;
+  for (const auto& sr : exit_ray_segments_) {
+    idx_list.emplace_back(std::vector<size_t>(sr.size()));
+    for (size_t i = 0; i < sr.size(); i++) {
+      idx_list.back()[i] = ray_seg_idx;
+      const auto& r = sr[i];
+      if (r->state != RaySegmentState::kFinished) {
+        continue;
+      }
+      ray_seg_idx++;
+    }
+  }
+  return idx_list;
 }
 
 

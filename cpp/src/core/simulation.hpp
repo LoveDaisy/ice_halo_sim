@@ -122,6 +122,7 @@ class SimulationData : public ISerializable {
   std::tuple<RayCollectionInfoList, SimpleRayData> CollectSplitHaloRayData(const ProjectContextPtr& ctx);
   std::tuple<RayCollectionInfoList, SimpleRayData> CollectSplitFilterRayData(const ProjectContextPtr& ctx,
                                                                              const RenderSplitter& splitter);
+  std::vector<std::vector<size_t>> GenerateIdxList() const;
 
   std::vector<std::vector<RayInfo*>> rays_;
   std::vector<std::vector<RaySegment*>> exit_ray_segments_;
