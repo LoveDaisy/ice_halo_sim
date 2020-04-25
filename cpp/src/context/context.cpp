@@ -137,21 +137,19 @@ CrystalMap ProjectContext::GetCrystalMap() const {
 }
 
 
-#ifdef FOR_TEST
 void ProjectContext::PrintCrystalInfo() const {
   for (const auto& ctx : crystal_store_) {
     auto g = ctx->GetCrystal();
-    LOG_DEBUG("-- ID: %d --", ctx->GetId());
+    LOG_VERBOSE("-- ID: %d --", ctx->GetId());
     for (const auto& v : g->GetVertexes()) {
-      LOG_DEBUG("v %+.4f %+.4f %+.4f", v.x(), v.y(), v.z());
+      LOG_VERBOSE("v %+.4f %+.4f %+.4f", v.x(), v.y(), v.z());
     }
     for (const auto& f : g->GetFaces()) {
       auto idx = f.idx();
-      LOG_DEBUG("f %d %d %d", idx[0] + 1, idx[1] + 1, idx[2] + 1);
+      LOG_VERBOSE("f %d %d %d", idx[0] + 1, idx[1] + 1, idx[2] + 1);
     }
   }
 }
-#endif
 
 
 AbstractRayPathFilter* ProjectContext::GetRayPathFilter(ShortIdType id) const {
@@ -295,6 +293,8 @@ void ProjectContext::ParseCrystalSettings(rapidjson::Document& d) {
     crystal_store_.emplace_back(CrystalContext::CreateDefault());
     crystal_store_.back()->LoadFromJson(c);
   }
+
+  PrintCrystalInfo();
 }
 
 

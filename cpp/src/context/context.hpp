@@ -50,9 +50,7 @@ class ProjectContext {
   static ProjectContextPtrU CreateFromFile(const char* filename);
   static ProjectContextPtrU CreateDefault();
 
-#ifdef FOR_TEST
   void PrintCrystalInfo() const;
-#endif
 
   static constexpr float kPropMinW = 1e-6;
   static constexpr float kScatMinW = 1e-3;

@@ -450,16 +450,27 @@ CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4,  // upper 
 
 CrystalPtrU Crystal::CreateHexPyramid(float angle1, float angle2,      // wedge angles
                                       float h1, float h2, float h3) {  // heights
+  using math::kDegreeToRad;
   using math::kPi;
   using math::kSqrt3;
-  using math::kDegreeToRad;
   using math::TriangleIdx;
   using math::Vec3f;
 
-  float H1 = kSqrt3 / 4.0f / std::tan(angle1 / 2.0f * kDegreeToRad);
-  float H3 = kSqrt3 / 4.0f / std::tan(angle2 / 2.0f * kDegreeToRad);
+  angle1 *= kDegreeToRad;
+  angle2 *= kDegreeToRad;
+  float tan_a1 = std::tan(angle1 / 2.0f);
+  float tan_a2 = std::tan(angle2 / 2.0f);
+  float H1 = kSqrt3 / 2.0f / tan_a1;
+  float H3 = kSqrt3 / 2.0f / tan_a2;
   h1 = std::max(std::min(h1, 1.0f), 0.0f);
   h3 = std::max(std::min(h3, 1.0f), 0.0f);
+  if (h1 * H1 + h3 * H3 + h2 * 2 < 0) {
+    h1 = -h2 * 2.0f * tan_a2 / (tan_a1 + tan_a2);
+    h3 = -h2 * 2.0f * tan_a1 / (tan_a1 + tan_a2);
+  } else {
+    h1 *= H1;
+    h3 *= H3;
+  }
 
   std::vector<Vec3f> vertexes;
   std::vector<TriangleIdx> faces;
@@ -469,7 +480,7 @@ CrystalPtrU Crystal::CreateHexPyramid(float angle1, float angle2,      // wedge 
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h1),  // x
                           sin(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h1),  // y
-                          h2 + h1 * H1);                                            // z
+                          h2 + h1);                                                 // z
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6),  // x
@@ -484,7 +495,7 @@ CrystalPtrU Crystal::CreateHexPyramid(float angle1, float angle2,      // wedge 
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h3),  // x
                           sin(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h3),  // y
-                          -h2 - h3 * H3);                                           // z
+                          -h2 - h3);                                                // z
   }
 
   faces.emplace_back(0, 1, 2);
