@@ -461,7 +461,7 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,        // 
                      const float* background_color, const float* ray_color,  // background and ray color
                      uint8_t* rgb_data) {                                    // rgb data, data_number * 3
   bool use_real_color = ray_color[0] < 0;
-  auto threading_pool = ThreadingPool::GetInstance();
+  auto* threading_pool = ThreadingPool::GetInstance();
   threading_pool->AddStepJobs(data_number, [=, &spec_data](size_t i) {
     /* Step 1. Spectrum to XYZ */
     float xyz[3]{};
@@ -532,7 +532,7 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
   if (index < 0 || static_cast<size_t>(index) >= spec_data.size()) {
     return;
   }
-  auto threading_pool = ThreadingPool::GetInstance();
+  auto* threading_pool = ThreadingPool::GetInstance();
   auto* curr_spec_data = spec_data[index].second.get();
   threading_pool->AddStepJobs(data_number, [=](size_t i) {
     /* Step 1. Spectrum to XYZ */
@@ -624,7 +624,7 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
 
-  auto threading_pool = ThreadingPool::GetInstance();
+  auto* threading_pool = ThreadingPool::GetInstance();
   float* current_data = nullptr;
   float* current_data_compensation = nullptr;
   for (size_t i = 0; i < spectrum_data_.size(); i++) {
@@ -716,8 +716,8 @@ void SpectrumRenderer::RenderToImage() {
 
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
-  auto ray_color = render_ctx_->GetRayColor();
-  auto background_color = render_ctx_->GetBackgroundColor();
+  const auto* ray_color = render_ctx_->GetRayColor();
+  const auto* background_color = render_ctx_->GetBackgroundColor();
   auto factor = static_cast<float>(img_hei * img_wid / 160.0 / total_w_ * render_ctx_->GetIntensity());
   auto color_compact_level = render_ctx_->GetColorCompactLevel();
 
