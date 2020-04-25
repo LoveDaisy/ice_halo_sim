@@ -36,17 +36,31 @@ void CrystalContext::ParseHexPyramid(const rapidjson::Value& c) {
     h_param_[2] = h3;
     crystal_ = Crystal::CreateHexPyramid(h1, h2, h3);
   } else if (p->Size() == 5) {
-    int i1 = (*p)[0].GetInt();
-    int i2 = (*p)[1].GetInt();
-    auto h1 = static_cast<float>((*p)[2].GetDouble());
-    auto h2 = static_cast<float>((*p)[3].GetDouble());
-    auto h3 = static_cast<float>((*p)[4].GetDouble());
-    idx_param_[0] = i1;
-    idx_param_[1] = i2;
-    h_param_[0] = h1;
-    h_param_[1] = h2;
-    h_param_[2] = h3;
-    crystal_ = Crystal::CreateHexPyramid(i1, i2, h1, h2, h3);
+    if ((*p)[0].IsInt()) {  // Using Miller Index
+      int i1 = (*p)[0].GetInt();
+      int i2 = (*p)[1].GetInt();
+      auto h1 = static_cast<float>((*p)[2].GetDouble());
+      auto h2 = static_cast<float>((*p)[3].GetDouble());
+      auto h3 = static_cast<float>((*p)[4].GetDouble());
+      idx_param_[0] = i1;
+      idx_param_[1] = i2;
+      h_param_[0] = h1;
+      h_param_[1] = h2;
+      h_param_[2] = h3;
+      crystal_ = Crystal::CreateHexPyramid(i1, i2, h1, h2, h3);
+    } else {  // Using wedge angle
+      auto a1 = static_cast<float>((*p)[0].GetDouble());
+      auto a2 = static_cast<float>((*p)[1].GetDouble());
+      auto h1 = static_cast<float>((*p)[2].GetDouble());
+      auto h2 = static_cast<float>((*p)[3].GetDouble());
+      auto h3 = static_cast<float>((*p)[4].GetDouble());
+      a_param_[0] = a1;
+      a_param_[1] = a2;
+      h_param_[0] = h1;
+      h_param_[1] = h2;
+      h_param_[2] = h3;
+      crystal_ = Crystal::CreateHexPyramid(a1, a2, h1, h2, h3);
+    }
   } else if (p->Size() == 7) {
     int upper_idx1 = (*p)[0].GetInt();
     int upper_idx2 = (*p)[1].GetInt();
@@ -316,7 +330,7 @@ AxisDistribution ParseCrystalAxis(const rapidjson::Value& c) {
 
 
 CrystalContext::CrystalContext()
-    : id_(kInvalidId), crystal_{}, axis_{}, idx_param_{}, h_param_{}, d_param_{}, file_param_{} {}
+    : id_(kInvalidId), crystal_{}, axis_{}, idx_param_{}, a_param_{}, h_param_{}, d_param_{}, file_param_{} {}
 
 
 CrystalContextPtrU CrystalContext::CreateDefault() {
@@ -403,6 +417,16 @@ void CrystalContext::SaveHexPyramidI4H3Param(rapidjson::Value& root, rapidjson::
 }
 
 
+void CrystalContext::SaveHexPyramidA2H3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
+  Pointer("/type").Set(root, "HexPyramid", allocator);
+  Pointer("/parameter/0").Set(root, a_param_[0], allocator);
+  Pointer("/parameter/-").Set(root, a_param_[1], allocator);
+  Pointer("/parameter/-").Set(root, h_param_[0], allocator);
+  Pointer("/parameter/-").Set(root, h_param_[1], allocator);
+  Pointer("/parameter/-").Set(root, h_param_[2], allocator);
+}
+
+
 void CrystalContext::SaveHexPyramidStackHalfParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
   Pointer("/type").Set(root, "HexPyramidStackHalf", allocator);
   Pointer("/parameter/0").Set(root, idx_param_[0], allocator);
@@ -469,6 +493,7 @@ void CrystalContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Alloca
     { CrystalType::kPyramid_H3, &CrystalContext::SaveHexPyramidH3Param },
     { CrystalType::kPyramid_I2H3, &CrystalContext::SaveHexPyramidI2H3Param },
     { CrystalType::kPyramid_I4H3, &CrystalContext::SaveHexPyramidI4H3Param },
+    { CrystalType::kPyramid_A2H3, &CrystalContext::SaveHexPyramidA2H3Param },
     { CrystalType::kPyramidStackHalf, &CrystalContext::SaveHexPyramidStackHalfParam },
     { CrystalType::kIrregularPrism, &CrystalContext::SaveIrregularHexPrismParam },
     { CrystalType::kIrregularPyramid, &CrystalContext::SaveIrregularHexPyramidParam },
@@ -519,7 +544,7 @@ void CrystalContext::LoadFromJson(const rapidjson::Value& root) {
   constexpr size_t kMsgBufferSize = 256;
   char msg_buffer[kMsgBufferSize];
 
-  auto p = Pointer("/type").Get(root);
+  const auto* p = Pointer("/type").Get(root);
   if (p == nullptr || !p->IsString()) {
     std::snprintf(msg_buffer, kMsgBufferSize, "<crystal.type> cannot recognize!");
     throw std::invalid_argument(msg_buffer);

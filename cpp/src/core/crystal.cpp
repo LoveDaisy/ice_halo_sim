@@ -159,6 +159,7 @@ void Crystal::InitCrystalTypeData() {
     case CrystalType::kPyramid_H3:
     case CrystalType::kPyramid_I2H3:
     case CrystalType::kPyramid_I4H3:
+    case CrystalType::kPyramid_A2H3:
     case CrystalType::kIrregularPrism:
     case CrystalType::kIrregularPyramid:
       InitFaceNumberHex();
@@ -445,6 +446,69 @@ CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4,  // upper 
   faces.emplace_back(21, 18, 23);
 
   return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::kPyramid_I4H3));
+}
+
+CrystalPtrU Crystal::CreateHexPyramid(float angle1, float angle2,      // wedge angles
+                                      float h1, float h2, float h3) {  // heights
+  using math::kPi;
+  using math::kSqrt3;
+  using math::kDegreeToRad;
+  using math::TriangleIdx;
+  using math::Vec3f;
+
+  float H1 = kSqrt3 / 4.0f / std::tan(angle1 / 2.0f * kDegreeToRad);
+  float H3 = kSqrt3 / 4.0f / std::tan(angle2 / 2.0f * kDegreeToRad);
+  h1 = std::max(std::min(h1, 1.0f), 0.0f);
+  h3 = std::max(std::min(h3, 1.0f), 0.0f);
+
+  std::vector<Vec3f> vertexes;
+  std::vector<TriangleIdx> faces;
+  vertexes.reserve(24);
+  faces.reserve(44);
+
+  for (int i = 0; i < 6; i++) {
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h1),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h1),  // y
+                          h2 + h1 * H1);                                            // z
+  }
+  for (int i = 0; i < 6; i++) {
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi / 6),  // y
+                          h2);                                           // z
+  }
+  for (int i = 0; i < 6; i++) {
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi / 6),  // y
+                          -h2);                                          // z
+  }
+  for (int i = 0; i < 6; i++) {
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h3),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h3),  // y
+                          -h2 - h3 * H3);                                           // z
+  }
+
+  faces.emplace_back(0, 1, 2);
+  faces.emplace_back(0, 2, 3);
+  faces.emplace_back(3, 4, 5);
+  faces.emplace_back(3, 5, 0);
+  for (int i = 0; i < 6; ++i) {
+    faces.emplace_back(i, i + 6, (i + 1) % 6);
+    faces.emplace_back(i + 6, (i + 1) % 6 + 6, (i + 1) % 6);
+  }
+  for (int i = 6; i < 12; ++i) {
+    faces.emplace_back(i, i + 6, (i + 1) % 6 + 6);
+    faces.emplace_back(i + 6, (i + 1) % 6 + 12, (i + 1) % 6 + 6);
+  }
+  for (int i = 12; i < 18; ++i) {
+    faces.emplace_back(i, i + 6, (i + 1) % 6 + 12);
+    faces.emplace_back(i + 6, (i + 1) % 6 + 18, (i + 1) % 6 + 12);
+  }
+  faces.emplace_back(18, 20, 19);
+  faces.emplace_back(18, 21, 20);
+  faces.emplace_back(21, 23, 22);
+  faces.emplace_back(21, 18, 23);
+
+  return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::kPyramid_A2H3));
 }
 
 

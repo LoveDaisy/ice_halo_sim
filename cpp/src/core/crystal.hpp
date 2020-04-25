@@ -17,6 +17,7 @@ enum class CrystalType {
   kPyramid_H3,
   kPyramid_I2H3,
   kPyramid_I4H3,
+  kPyramid_A2H3,
   kIrregularPyramid,
   kPyramidStackHalf,
   kCubicPyramid,
@@ -72,7 +73,7 @@ class Crystal {
   static CrystalPtrU CreateHexPyramid(int i1, int i4,                 // Miller index
                                       float h1, float h2, float h3);  // heights
 
-  /*! @brief create a hexagon pyramid crystal
+  /*! @brief create a hexagonal pyramid crystal
    *
    * @param upperIdx1 Miller index 1 for top segment.
    * @param upperIdx4 Miller index 4 for top segment.
@@ -87,7 +88,21 @@ class Crystal {
                                       int lower_idx1, int lower_idx4,  // lower Miller index
                                       float h1, float h2, float h3);   // heights
 
-  /*! @brief Create a hexagon half-stacked pyramid crystal
+  /**
+   * @brief create a hexagonal pyramid crystal
+   *
+   * @param angle1 wedge angle for upper pyramid. it is the angle between pyramidal face and prism face.
+   *        for regular prism crystals, this angle is 90 degree.
+   * @param angle2 wedge angle for lower pyramid
+   * @param h1 height of top segment
+   * @param h2 height of middle segment
+   * @param h3 height of lower segment
+   * @return a pointer to the crystal.
+   */
+  static CrystalPtrU CreateHexPyramid(float angle1, float angle2,     // wedge angle
+                                      float h1, float h2, float h3);  // heights
+
+  /*! @brief Create a hexagonal half-stacked pyramid crystal
    *
    * @param upperIdx1 Miller index 1 for upper segment.
    * @param upperIdx4 Miller index 4 for upper segment.

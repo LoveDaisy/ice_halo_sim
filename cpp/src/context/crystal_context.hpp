@@ -41,6 +41,7 @@ class CrystalContext : public IJsonizable {
   void SaveHexPyramidH3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
   void SaveHexPyramidI2H3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
   void SaveHexPyramidI4H3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
+  void SaveHexPyramidA2H3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
   void SaveHexPyramidStackHalfParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
   void SaveIrregularHexPrismParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
   void SaveIrregularHexPyramidParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
@@ -52,6 +53,7 @@ class CrystalContext : public IJsonizable {
   AxisDistribution axis_;
 
   int idx_param_[4];
+  float a_param_[2];
   float h_param_[3];
   float d_param_[6];
   std::string file_param_;
