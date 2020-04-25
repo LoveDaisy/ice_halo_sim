@@ -465,11 +465,10 @@ CrystalPtrU Crystal::CreateHexPyramid(float angle1, float angle2,      // wedge 
   h1 = std::max(std::min(h1, 1.0f), 0.0f);
   h3 = std::max(std::min(h3, 1.0f), 0.0f);
   if (h1 * H1 + h3 * H3 + h2 * 2 < 0) {
-    h1 = -h2 * 2.0f * tan_a2 / (tan_a1 + tan_a2);
-    h3 = -h2 * 2.0f * tan_a1 / (tan_a1 + tan_a2);
-  } else {
-    h1 *= H1;
-    h3 *= H3;
+    auto real_h1 = -h2 * 2.0f * tan_a2 / (tan_a1 + tan_a2);
+    auto real_h3 = -h2 * 2.0f * tan_a1 / (tan_a1 + tan_a2);
+    h1 = real_h1 / H1;
+    h3 = real_h3 / H3;
   }
 
   std::vector<Vec3f> vertexes;
@@ -480,7 +479,7 @@ CrystalPtrU Crystal::CreateHexPyramid(float angle1, float angle2,      // wedge 
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h1),  // x
                           sin(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h1),  // y
-                          h2 + h1);                                                 // z
+                          h2 + h1 * H1);                                            // z
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6),  // x
@@ -495,7 +494,7 @@ CrystalPtrU Crystal::CreateHexPyramid(float angle1, float angle2,      // wedge 
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h3),  // x
                           sin(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h3),  // y
-                          -h2 - h3);                                                // z
+                          -h2 - h3 * H3);                                           // z
   }
 
   faces.emplace_back(0, 1, 2);
