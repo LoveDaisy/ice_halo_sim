@@ -47,7 +47,7 @@ void SimpleRayData::Deserialize(File& file, endian::Endianness endianness) {
     endian::ByteSwap::Swap(&wavelength_weight);
   }
 
-  uint64_t num;
+  uint64_t num = 0;
   file.Read(&num);
   if (need_swap) {
     endian::ByteSwap::Swap(&num);
@@ -155,7 +155,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
   MakeRayPathMap(ctx);
   auto idx_list = GenerateIdxList();
 
-  auto threading_pool = ThreadingPool::GetInstance();
+  auto* threading_pool = ThreadingPool::GetInstance();
   size_t hash_table_init_size = num / 3;
   std::unordered_map<size_t, RayCollectionInfo> ray_collection_info_map;
   ray_collection_info_map.reserve(hash_table_init_size);
@@ -247,10 +247,9 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitFil
   for (const auto& cf : splitter.crystal_filters) {
     crystal_filter.emplace_back();
     const CrystalContext* cp = nullptr;
-    AbstractRayPathFilter* fp = nullptr;
     for (size_t i = 0; i < std::min(ms_num * 2, cf.size()); i += 2) {
       cp = ctx->GetCrystalContext(cf[i]);
-      fp = ctx->GetRayPathFilter(cf[i + 1]);
+      auto* fp = ctx->GetRayPathFilter(cf[i + 1]);
       crystal_filter.back().emplace_back(std::make_pair(cp, fp->MakeCopy()));
       crystal_filter.back().back().second->ApplySymmetry(cp);
     }
@@ -294,7 +293,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitFil
             pass = false;
             break;
           }
-          auto curr_crystal = riter->first->GetCrystal();
+          const auto* curr_crystal = riter->first->GetCrystal();
           if (!riter->second->Filter(curr_crystal, p)) {
             pass = false;
             break;
@@ -337,7 +336,7 @@ void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
     return;
   }
 
-  auto threading_pool = ThreadingPool::GetInstance();
+  auto* threading_pool = ThreadingPool::GetInstance();
   auto pool_size = threading_pool->GetPoolSize();
   std::vector<decltype(ray_path_map_)> tmp_ray_path_maps(pool_size);
 
@@ -364,7 +363,7 @@ void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
       // 2. Normalize ray path
       auto curr_path = proj_ctx->GetRayPath(r);
       RayPath normalized_path;
-      size_t normalized_hash;
+      size_t normalized_hash = 0;
       std::tie(normalized_path, normalized_hash) =
           NormalizeRayPath(curr_path, proj_ctx, RenderSplitter::kDefaultSymmetry);
       tmp_map.emplace(ray_path_hash, std::make_pair(std::move(curr_path), normalized_hash));
@@ -415,8 +414,8 @@ void SimulationData::Serialize(File& file, bool with_boi) const {
   file.Write(wl);
   file.Write(wavelength_info_.weight);
 
-  auto ray_info_pool = RayInfoPool::GetInstance();
-  auto ray_seg_pool = RaySegmentPool::GetInstance();
+  auto* ray_info_pool = RayInfoPool::GetInstance();
+  auto* ray_seg_pool = RaySegmentPool::GetInstance();
   ray_info_pool->Serialize(file, false);
   ray_seg_pool->Serialize(file, false);
 
@@ -426,7 +425,7 @@ void SimulationData::Serialize(File& file, bool with_boi) const {
     uint32_t num = sc.size();
     file.Write(num);
     for (const auto& r : sc) {
-      uint32_t chunk_id, obj_id;
+      uint32_t chunk_id = 0, obj_id = 0;
       std::tie(chunk_id, obj_id) = ray_info_pool->GetObjectSerializeIndex(r);
       file.Write(chunk_id);
       file.Write(obj_id);
@@ -438,7 +437,7 @@ void SimulationData::Serialize(File& file, bool with_boi) const {
     uint32_t num = sc.size();
     file.Write(num);
     for (const auto& r : sc) {
-      uint32_t chunk_id, obj_id;
+      uint32_t chunk_id = 0, obj_id = 0;
       std::tie(chunk_id, obj_id) = ray_seg_pool->GetObjectSerializeIndex(r);
       file.Write(chunk_id);
       file.Write(obj_id);
@@ -457,7 +456,7 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
 
   Clear();
 
-  int32_t wl;
+  int32_t wl = 0;
   file.Read(&wl);
   if (need_swap) {
     endian::ByteSwap::Swap(&wl);
@@ -469,8 +468,8 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
     endian::ByteSwap::Swap(&wavelength_info_.weight);
   }
 
-  auto ray_info_pool = RayInfoPool::GetInstance();
-  auto ray_seg_pool = RaySegmentPool::GetInstance();
+  auto* ray_info_pool = RayInfoPool::GetInstance();
+  auto* ray_seg_pool = RaySegmentPool::GetInstance();
   ray_info_pool->Deserialize(file, endianness);
   ray_seg_pool->Deserialize(file, endianness);
 
@@ -485,20 +484,20 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
     r.root_ctx = ray_info_pool->GetPointerFromSerializeData(r.root_ctx);
   });
 
-  uint32_t multi_scatters;
+  uint32_t multi_scatters = 0;
   file.Read(&multi_scatters);
   if (need_swap) {
     endian::ByteSwap::Swap(&multi_scatters);
   }
   for (size_t k = 0; k < multi_scatters; k++) {
     rays_.emplace_back();
-    uint32_t num;
+    uint32_t num = 0;
     file.Read(&num);
     if (need_swap) {
       endian::ByteSwap::Swap(&num);
     }
     for (size_t i = 0; i < num; i++) {
-      uint32_t chunk_id, obj_id;
+      uint32_t chunk_id = 0, obj_id = 0;
       file.Read(&chunk_id);
       file.Read(&obj_id);
       if (need_swap) {
@@ -515,25 +514,25 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
   }
   for (size_t k = 0; k < multi_scatters; k++) {
     exit_ray_segments_.emplace_back();
-    uint32_t num;
+    uint32_t num = 0;
     file.Read(&num);
     if (need_swap) {
       endian::ByteSwap::Swap(&num);
     }
     for (size_t i = 0; i < num; i++) {
-      uint32_t chunk_id, obj_id;
+      uint32_t chunk_id = 0, obj_id = 0;
       file.Read(&chunk_id);
       file.Read(&obj_id);
       if (need_swap) {
         endian::ByteSwap::Swap(&chunk_id);
         endian::ByteSwap::Swap(&obj_id);
       }
-      auto r = ray_seg_pool->GetPointerFromSerializeData(chunk_id, obj_id);
+      auto* r = ray_seg_pool->GetPointerFromSerializeData(chunk_id, obj_id);
       exit_ray_segments_.back().emplace_back(r);
     }
   }
   for (size_t k = 0; k < multi_scatters; k++) {
-    uint64_t n;
+    uint64_t n = 0;
     file.Read(&n);
     if (need_swap) {
       endian::ByteSwap::Swap(&n);
@@ -576,11 +575,11 @@ void Simulator::BufferData::DeleteBuffer(int idx) {
 
 void Simulator::BufferData::Allocate(size_t ray_number) {
   for (int i = 0; i < 2; i++) {
-    auto tmp_pt = new float[ray_number * 3];
-    auto tmp_dir = new float[ray_number * 3];
-    auto tmp_w = new float[ray_number];
-    auto tmp_face_id = new int[ray_number];
-    auto tmp_ray_seg = new RaySegment*[ray_number];
+    auto* tmp_pt = new float[ray_number * 3];
+    auto* tmp_dir = new float[ray_number * 3];
+    auto* tmp_w = new float[ray_number];
+    auto* tmp_face_id = new int[ray_number];
+    auto* tmp_ray_seg = new RaySegment*[ray_number];
 
     if (pt[i]) {
       size_t n = std::min(this->ray_num, ray_number);
@@ -739,8 +738,8 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
   auto crystal_id = ctx->GetId();
   const auto* face_vertex = crystal->GetFaceVertex();
 
-  auto ray_seg_pool = RaySegmentPool::GetInstance();
-  auto ray_info_pool = RayInfoPool::GetInstance();
+  auto* ray_seg_pool = RaySegmentPool::GetInstance();
+  auto* ray_info_pool = RayInfoPool::GetInstance();
 
   using math::RandomSampler;
   float axis_rot[3];
@@ -752,10 +751,10 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
     buffer_.face_id[0][i] = ctx->RandomSampleFace(buffer_.dir[0] + i * 3, face_prob_buf.get());
     RandomSampler::SampleTriangularPoints(face_vertex + buffer_.face_id[0][i] * 9, buffer_.pt[0] + i * 3);
 
-    auto prev_r = entry_ray_data_.ray_seg[entry_ray_offset_ + i];
+    auto* prev_r = entry_ray_data_.ray_seg[entry_ray_offset_ + i];
     buffer_.w[0][i] = prev_r ? prev_r->w : 1.0f;
 
-    auto r =
+    auto* r =
         ray_seg_pool->GetObject(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i], buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
     r->root_ctx = ray_info_pool->GetObject(r, crystal_id, axis_rot);
@@ -769,7 +768,7 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
 // Init crystal main axis.
 // Random sample points on a sphere with given parameters.
 void Simulator::InitMainAxis(const CrystalContext* ctx, float* axis) {
-  auto rng = math::RandomNumberGenerator::GetInstance();
+  auto* rng = math::RandomNumberGenerator::GetInstance();
 
   auto axis_dist = ctx->GetAxisDistribution();
   if (axis_dist.latitude_dist == math::Distribution::kUniform) {
@@ -799,7 +798,7 @@ void Simulator::PrepareMultiScatterRays(float prob) {
     entry_ray_data_.Allocate(last_exit_ray_seg_num);
   }
 
-  auto rng = math::RandomNumberGenerator::GetInstance();
+  auto* rng = math::RandomNumberGenerator::GetInstance();
   size_t idx = 0;
   for (const auto& r : simulation_ray_data_.GetLastExitRaySegments()) {
     if (r->w < context_->kScatMinW) {
@@ -810,7 +809,7 @@ void Simulator::PrepareMultiScatterRays(float prob) {
       continue;
     }
     r->state = RaySegmentState::kContinued;
-    const auto axis_rot = r->root_ctx->main_axis.val();
+    const auto* axis_rot = r->root_ctx->main_axis.val();
     math::RotateZBack(axis_rot, r->dir.val(), entry_ray_data_.ray_dir + idx * 3);
     entry_ray_data_.ray_seg[idx] = r;
     idx++;
@@ -836,9 +835,9 @@ void Simulator::PrepareMultiScatterRays(float prob) {
 // Trace rays.
 // Start from dir[0] and pt[0].
 void Simulator::TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter) {
-  auto pool = ThreadingPool::GetInstance();
+  auto* pool = ThreadingPool::GetInstance();
 
-  auto crystal = crystal_ctx->GetCrystal();
+  const auto* crystal = crystal_ctx->GetCrystal();
   int max_recursion_num = context_->GetRayHitNum();
   auto n = static_cast<float>(IceRefractiveIndex::Get(simulation_ray_data_.wavelength_info_.wavelength));
   for (int i = 0; i < max_recursion_num; i++) {
@@ -863,16 +862,16 @@ void Simulator::TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilt
 
 // Save rays
 void Simulator::StoreRaySegments(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter) {
-  auto crystal = crystal_ctx->GetCrystal();
+  const auto* crystal = crystal_ctx->GetCrystal();
   filter->ApplySymmetry(crystal_ctx);
-  auto ray_pool = RaySegmentPool::GetInstance();
+  auto* ray_pool = RaySegmentPool::GetInstance();
   for (size_t i = 0; i < active_ray_num_ * 2; i++) {
     if (buffer_.w[1][i] <= 0) {  // Refractive rays in total reflection case
       continue;
     }
 
-    auto r = ray_pool->GetObject(buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3, buffer_.w[1][i],
-                                 buffer_.face_id[0][i / 2]);
+    auto* r = ray_pool->GetObject(buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3, buffer_.w[1][i],
+                                  buffer_.face_id[0][i / 2]);
     if (buffer_.face_id[1][i] < 0) {
       r->state = RaySegmentState::kFinished;
     }
@@ -880,7 +879,7 @@ void Simulator::StoreRaySegments(const CrystalContext* crystal_ctx, AbstractRayP
       r->state = RaySegmentState::kCrystalAbsorbed;
     }
 
-    auto prev_ray_seg = buffer_.ray_seg[0][i / 2];
+    auto* prev_ray_seg = buffer_.ray_seg[0][i / 2];
     if (i % 2 == 0) {
       prev_ray_seg->next_reflect = r;
     } else {
