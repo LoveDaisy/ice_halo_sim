@@ -114,9 +114,7 @@ int Crystal::TotalFaces() const {
 }
 
 ShortIdType Crystal::FaceNumber(int idx) const {
-  if (face_number_table_.empty()) {
-    return kInvalidId;
-  } else if (idx < 0 || static_cast<size_t>(idx) >= face_number_table_.size()) {
+  if (face_number_table_.empty() || idx < 0 || static_cast<size_t>(idx) >= face_number_table_.size()) {
     return kInvalidId;
   } else {
     return face_number_table_[idx];
@@ -133,13 +131,13 @@ void Crystal::InitBasicData() {
   face_norm_.reset(new float[face_num * 3]);
   face_area_.reset(new float[face_num]);
 
-  auto face_bases_ptr = face_bases_.get();
-  auto face_vertexes_ptr = face_vertexes_.get();
-  auto face_norm_ptr = face_norm_.get();
+  auto* face_bases_ptr = face_bases_.get();
+  auto* face_vertexes_ptr = face_vertexes_.get();
+  auto* face_norm_ptr = face_norm_.get();
 
   for (size_t i = 0; i < faces_.size(); i++) {
     const auto& f = faces_[i];
-    auto idx = f.idx();
+    const auto* idx = f.idx();
     math::Vec3FromTo(vertexes_[idx[0]].val(), vertexes_[idx[1]].val(), face_bases_ptr + i * 6 + 0);
     math::Vec3FromTo(vertexes_[idx[0]].val(), vertexes_[idx[2]].val(), face_bases_ptr + i * 6 + 3);
     math::Cross3(face_bases_ptr + i * 6 + 0, face_bases_ptr + i * 6 + 3, face_norm_ptr + i * 3);
@@ -181,7 +179,7 @@ void Crystal::InitCrystalTypeData() {
 
 void Crystal::InitFaceNumberHex() {
   for (size_t i = 0; i < faces_.size(); i++) {
-    const auto curr_face_norm = face_norm_.get() + i * 3;
+    const auto* curr_face_norm = face_norm_.get() + i * 3;
     float max_val = -1;
     int max_face_number = -1;
     for (const auto& d : GetHexFaceNormToNumberList()) {
@@ -205,7 +203,7 @@ void Crystal::InitFaceNumberHex() {
 
 void Crystal::InitFaceNumberCubic() {
   for (size_t i = 0; i < faces_.size(); i++) {
-    const auto curr_face_norm = face_norm_.get() + i * 3;
+    const auto* curr_face_norm = face_norm_.get() + i * 3;
     float max_val = -1;
     int max_face_number = -1;
     for (const auto& d : GetCubicFaceNormToNumberList()) {
@@ -231,7 +229,7 @@ void Crystal::InitFaceNumberStack() {
   float max_height = std::numeric_limits<float>::lowest();
   float min_height = std::numeric_limits<float>::max();
   for (size_t i = 0; i < faces_.size(); i++) {
-    const auto curr_face_norm = face_norm_.get() + i * 3;
+    const auto* curr_face_norm = face_norm_.get() + i * 3;
     float max_val = -1;
     int max_face_number = -1;
     for (const auto& d : GetHexFaceNormToNumberList()) {
@@ -243,7 +241,7 @@ void Crystal::InitFaceNumberStack() {
     }
     face_number_table_.push_back(max_face_number);
 
-    const auto idx = faces_[i].idx();
+    const auto* idx = faces_[i].idx();
     for (int j = 0; j < 3; j++) {
       float h = vertexes_[idx[j]].z();
       if (h > max_height) {
@@ -260,7 +258,7 @@ void Crystal::InitFaceNumberStack() {
       continue;
     }
     const auto* idx = faces_[i].idx();
-    const auto curr_face_norm = face_norm_.get() + i * 3;
+    const auto* curr_face_norm = face_norm_.get() + i * 3;
 
     bool is_top = false;
     bool is_bottom = false;
@@ -743,7 +741,7 @@ CrystalPtrU Crystal::CreateIrregularHexPyramid(const float* dist, const int* idx
   pts = FindInnerPoints(hss);
   SortAndRemoveDuplicate(&pts);
 
-  /* Step 2. Build convex hull with verteces */
+  /* Step 2. Build convex hull with vertexes */
   std::vector<TriangleIdx> faces;
   BuildPolyhedronFaces(hss, pts, faces);
 
@@ -927,7 +925,7 @@ RayPath& RayPath::operator=(RayPath&& other) noexcept {
 
 RayPath& RayPath::operator<<(ShortIdType id) {
   if (len >= capacity) {
-    ShortIdType* new_ids;
+    ShortIdType* new_ids = nullptr;
     if (is_permanent) {
       new_ids = new ShortIdType[capacity * 2];
     } else {
@@ -966,7 +964,7 @@ void RayPath::Clear() {
 
 void RayPath::PrependId(ShortIdType id) {
   if (len >= capacity) {
-    ShortIdType* new_ids;
+    ShortIdType* new_ids = nullptr;
     if (is_permanent) {
       new_ids = new ShortIdType[capacity * 2];
     } else {
@@ -1033,7 +1031,7 @@ std::pair<RayPath, size_t> NormalizeRayPath(RayPath ray_path, const ProjectConte
   for (auto& fn : ray_path) {
     if (crystal_flag) {
       crystal_flag = false;
-      auto crystal = proj_ctx->GetCrystal(fn);
+      const auto* crystal = proj_ctx->GetCrystal(fn);
       if (!crystal) {
         LOG_ERROR("NormalizeRayPath no crystal of ID: %u", fn);
       }
