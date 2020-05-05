@@ -3,7 +3,6 @@
 #include <algorithm>
 
 #include "rapidjson/pointer.h"
-#include "util/threadingpool.hpp"
 
 
 namespace icehalo {

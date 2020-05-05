@@ -7,7 +7,7 @@
 
 #include "context/context.hpp"
 #include "core/mymath.hpp"
-#include "util/threadingpool.hpp"
+#include "util/threading_pool.hpp"
 
 namespace icehalo {
 
@@ -461,8 +461,8 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,        // 
                      const float* background_color, const float* ray_color,  // background and ray color
                      uint8_t* rgb_data) {                                    // rgb data, data_number * 3
   bool use_real_color = ray_color[0] < 0;
-  auto* threading_pool = ThreadingPool::GetInstance();
-  threading_pool->AddStepJobs(data_number, [=, &spec_data](size_t i) {
+  auto threading_pool = ThreadingPool::CreatePool();
+  threading_pool->CommitRangeStepJobsAndWait(0, data_number, [=, &spec_data](int, int i) {
     /* Step 1. Spectrum to XYZ */
     float xyz[3]{};
     for (const auto& d : spec_data) {
@@ -521,7 +521,6 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,        // 
       rgb_data[i * 3 + j] = static_cast<uint8_t>(rgb[j] * std::numeric_limits<uint8_t>::max());
     }
   });
-  threading_pool->WaitFinish();
 }
 
 
@@ -532,9 +531,9 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
   if (index < 0 || static_cast<size_t>(index) >= spec_data.size()) {
     return;
   }
-  auto* threading_pool = ThreadingPool::GetInstance();
+  auto threading_pool = ThreadingPool::CreatePool();
   auto* curr_spec_data = spec_data[index].second.get();
-  threading_pool->AddStepJobs(data_number, [=](size_t i) {
+  threading_pool->CommitRangeStepJobsAndWait(0, data_number, [=](int, int i) {
     /* Step 1. Spectrum to XYZ */
     float y = curr_spec_data[i] * factor;
 
@@ -560,7 +559,6 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
       rgb_data[i * 3 + index / 2] |= (tmp_val << (index % 2 ? 0 : 4));
     }
   });
-  threading_pool->WaitFinish();
 }
 
 
@@ -624,7 +622,7 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
 
-  auto* threading_pool = ThreadingPool::GetInstance();
+  auto threading_pool = ThreadingPool::CreatePool();
   float* current_data = nullptr;
   float* current_data_compensation = nullptr;
   for (size_t i = 0; i < spectrum_data_.size(); i++) {
@@ -639,18 +637,17 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
     current_data_compensation = new float[img_hei * img_wid];
     spectrum_data_.emplace_back(std::make_pair(identifier, current_data));
     spectrum_data_compensation_.emplace_back(std::make_pair(identifier, current_data_compensation));
-    threading_pool->AddRangeJobs(img_hei * img_wid, [=](size_t start_idx, size_t end_idx) {
+    threading_pool->CommitRangeSliceJobsAndWait(0, img_hei * img_wid, [=](int, int start_idx, int end_idx) {
       std::memset(current_data + start_idx, 0, (end_idx - start_idx) * sizeof(float));
       std::memset(current_data_compensation + start_idx, 0, (end_idx - start_idx) * sizeof(float));
     });
-    threading_pool->WaitFinish();
   }
 
   const auto* final_ray_buf = final_ray_data.buf.get();
   const auto& idx = collection_info.idx;
   if (collection_info.is_partial_data) {
     auto num = idx.size();
-    threading_pool->AddRangeJobs(num, [=, &idx](size_t start_idx, size_t end_idx) {
+    threading_pool->CommitRangeSliceJobsAndWait(0, num, [=, &idx](int, int start_idx, int end_idx) {
       size_t current_num = end_idx - start_idx;
       std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
       for (size_t j = 0; j < current_num; j++) {
@@ -677,7 +674,7 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
     });
   } else {
     auto num = final_ray_data.buf_ray_num;
-    threading_pool->AddRangeJobs(num, [=](size_t start_idx, size_t end_idx) {
+    threading_pool->CommitRangeSliceJobsAndWait(0, num, [=](int, int start_idx, int end_idx) {
       size_t current_num = end_idx - start_idx;
       std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
       pf(cam_ctx_->GetCameraTargetDirection(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid,
@@ -703,7 +700,6 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
       }
     });
   }
-  threading_pool->WaitFinish();
 
   total_w_ += final_ray_data.init_ray_num * weight;
 }

@@ -8,7 +8,7 @@
 #include "core/mymath.hpp"
 #include "util/log.hpp"
 #include "util/obj_pool.hpp"
-#include "util/threadingpool.hpp"
+#include "util/threading_pool.hpp"
 
 namespace icehalo {
 
@@ -155,7 +155,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
   MakeRayPathMap(ctx);
   auto idx_list = GenerateIdxList();
 
-  auto* threading_pool = ThreadingPool::GetInstance();
+  auto threading_pool = ThreadingPool::CreatePool();
   size_t hash_table_init_size = num / 3;
   std::unordered_map<size_t, RayCollectionInfo> ray_collection_info_map;
   ray_collection_info_map.reserve(hash_table_init_size);
@@ -204,7 +204,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
 
   for (size_t i = 0; i < exit_ray_segments_.size(); i++) {
     const auto& sr = exit_ray_segments_[i];
-    threading_pool->AddStepJobs(sr.size(), [=, &idx_list, &sr](size_t j) {
+    threading_pool->CommitRangeStepJobsAndWait(0, sr.size(), [=, &idx_list, &sr](int, int j) {
       const auto& r = sr[j];
       if (r->state != RaySegmentState::kFinished) {
         return;
@@ -215,7 +215,6 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
       math::RotateZBack(axis, r->dir.val(), p);
       p[3] = r->w;
     });
-    threading_pool->WaitFinish();
   }
 
   // 5. Make result
@@ -336,12 +335,12 @@ void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
     return;
   }
 
-  auto* threading_pool = ThreadingPool::GetInstance();
+  auto threading_pool = ThreadingPool::CreatePool();
   auto pool_size = threading_pool->GetPoolSize();
   std::vector<decltype(ray_path_map_)> tmp_ray_path_maps(pool_size);
 
   for (const auto& sr : exit_ray_segments_) {
-    threading_pool->AddPoolIndexedStepJobs(sr.size(), [=, &tmp_ray_path_maps, &sr](size_t i, size_t pool_idx) {
+    threading_pool->CommitRangeStepJobsAndWait(0, sr.size(), [=, &tmp_ray_path_maps, &sr](int pool_idx, int i) {
       auto& tmp_map = tmp_ray_path_maps.at(pool_idx);
       const auto& r = sr[i];
       if (r->state != RaySegmentState::kFinished) {
@@ -369,7 +368,6 @@ void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
       tmp_map.emplace(ray_path_hash, std::make_pair(std::move(curr_path), normalized_hash));
       tmp_map.emplace(normalized_hash, std::make_pair(std::move(normalized_path), normalized_hash));
     });
-    threading_pool->WaitFinish();
   }
 
   for (auto& map : tmp_ray_path_maps) {
@@ -835,7 +833,7 @@ void Simulator::PrepareMultiScatterRays(float prob) {
 // Trace rays.
 // Start from dir[0] and pt[0].
 void Simulator::TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter) {
-  auto* pool = ThreadingPool::GetInstance();
+  auto pool = ThreadingPool::CreatePool();
 
   const auto* crystal = crystal_ctx->GetCrystal();
   int max_recursion_num = context_->GetRayHitNum();
@@ -845,7 +843,7 @@ void Simulator::TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilt
       buffer_size_ = active_ray_num_ * kBufferSizeFactor;
       buffer_.Allocate(buffer_size_);
     }
-    pool->AddStepJobs(active_ray_num_, [=](size_t i) {
+    pool->CommitRangeStepJobsAndWait(0, active_ray_num_, [=](int, int i) {
       Optics::HitSurface(crystal, n, 1,                                                        //
                          buffer_.dir[0] + i * 3, buffer_.face_id[0] + i, buffer_.w[0] + i,     //
                          buffer_.dir[1] + i * 6, buffer_.w[1] + i * 2);                        //
@@ -853,7 +851,6 @@ void Simulator::TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilt
                         buffer_.dir[1] + i * 6, buffer_.w[1] + i * 2, buffer_.face_id[0] + i,  //
                         buffer_.pt[1] + i * 6, buffer_.face_id[1] + i * 2);                    //
     });
-    pool->WaitFinish();
     StoreRaySegments(crystal_ctx, filter);
     RefreshBuffer();  // active_ray_num_ is updated.
   }

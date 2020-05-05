@@ -38,7 +38,7 @@ set(SOURCE_FILE
     util/arg_parser.cpp
     util/log.cpp
     util/obj_pool.cpp
-    util/threadingpool.cpp)
+    util/threading_pool.cpp)
 
 add_executable(IceHaloSim trace_main.cpp ${SOURCE_FILE})
 target_include_directories(IceHaloSim

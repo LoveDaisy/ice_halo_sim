@@ -311,7 +311,6 @@
 [VERBOSE] f 10 7 12
 [INFO] Initialization: 1.12ms
 [INFO] starting at wavelength: 420
-[DEBUG] Threading pool size: 1
 [INFO] Ray tracing: 68.70ms
 [INFO] starting at wavelength: 460
 [INFO] Ray tracing: 0.48ms
