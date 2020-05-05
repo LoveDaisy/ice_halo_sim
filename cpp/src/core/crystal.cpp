@@ -342,11 +342,13 @@ void Crystal::RefineFaces() {
   std::fill(face_remove.begin(), face_remove.end(), false);
 
   for (size_t i = 0; i < faces; i++) {
-    if (face_remove[i]) {
-      continue;
-    }
     if (face_area_[i] < math::kFloatEps) {
       face_remove[i] = true;
+    }
+  }
+
+  for (size_t i = 0; i < faces; i++) {
+    if (face_remove[i]) {
       continue;
     }
     const auto* n1 = face_norm_.get() + i * 3;
@@ -354,11 +356,7 @@ void Crystal::RefineFaces() {
     for (size_t j = i + 1; j < faces; j++) {
       const auto* n2 = face_norm_.get() + j * 3;
       if (face_remove[j] || face_number_table_[i] == face_number_table_[j] ||
-          std::abs(math::Dot3(n1, n2)) < 1 - math::kFloatEps) {
-        continue;
-      }
-      if (face_area_[j] < math::kFloatEps) {
-        face_remove[j] = true;
+          math::Dot3(n1, n2) > -1 + math::kFloatEps) {
         continue;
       }
       float pd = -1, d = -1;
