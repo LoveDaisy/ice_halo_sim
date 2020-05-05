@@ -345,12 +345,20 @@ void Crystal::RefineFaces() {
     if (face_remove[i]) {
       continue;
     }
+    if (face_area_[i] < math::kFloatEps) {
+      face_remove[i] = true;
+      continue;
+    }
     const auto* n1 = face_norm_.get() + i * 3;
     Vec3f v1(face_vertexes_.get() + i * 9 + 0 * 3);
     for (size_t j = i + 1; j < faces; j++) {
       const auto* n2 = face_norm_.get() + j * 3;
       if (face_remove[j] || face_number_table_[i] == face_number_table_[j] ||
           std::abs(math::Dot3(n1, n2)) < 1 - math::kFloatEps) {
+        continue;
+      }
+      if (face_area_[j] < math::kFloatEps) {
+        face_remove[j] = true;
         continue;
       }
       float pd = -1, d = -1;

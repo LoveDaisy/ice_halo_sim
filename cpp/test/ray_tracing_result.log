@@ -215,18 +215,6 @@
 [VERBOSE] f 11 12 6
 [VERBOSE] f 6 12 1
 [VERBOSE] f 12 7 1
-[VERBOSE] f 7 13 8
-[VERBOSE] f 13 14 8
-[VERBOSE] f 8 14 9
-[VERBOSE] f 14 15 9
-[VERBOSE] f 9 15 10
-[VERBOSE] f 15 16 10
-[VERBOSE] f 10 16 11
-[VERBOSE] f 16 17 11
-[VERBOSE] f 11 17 12
-[VERBOSE] f 17 18 12
-[VERBOSE] f 12 18 7
-[VERBOSE] f 18 13 7
 [VERBOSE] f 13 19 14
 [VERBOSE] f 19 20 14
 [VERBOSE] f 14 20 15
@@ -309,19 +297,19 @@
 [VERBOSE] f 7 10 9
 [VERBOSE] f 10 12 11
 [VERBOSE] f 10 7 12
-[INFO] Initialization: 1.12ms
+[INFO] Initialization: 0.87ms
 [INFO] starting at wavelength: 420
-[INFO] Ray tracing: 68.70ms
+[INFO] Ray tracing: 66.75ms
 [INFO] starting at wavelength: 460
-[INFO] Ray tracing: 0.48ms
+[INFO] Ray tracing: 0.51ms
 [INFO] starting at wavelength: 500
-[INFO] Ray tracing: 0.44ms
+[INFO] Ray tracing: 0.52ms
 [INFO] starting at wavelength: 540
-[INFO] Ray tracing: 0.42ms
-[INFO] starting at wavelength: 580
-[INFO] Ray tracing: 0.48ms
-[INFO] starting at wavelength: 620
 [INFO] Ray tracing: 0.43ms
+[INFO] starting at wavelength: 580
+[INFO] Ray tracing: 0.44ms
+[INFO] starting at wavelength: 620
+[INFO] Ray tracing: 0.45ms
 [VERBOSE] -- ID: 1 --
 [VERBOSE] v -0.8660 -0.5000 -1.2000
 [VERBOSE] v -0.8660 -0.5000 +1.2000
@@ -525,18 +513,6 @@
 [VERBOSE] f 11 12 6
 [VERBOSE] f 6 12 1
 [VERBOSE] f 12 7 1
-[VERBOSE] f 7 13 8
-[VERBOSE] f 13 14 8
-[VERBOSE] f 8 14 9
-[VERBOSE] f 14 15 9
-[VERBOSE] f 9 15 10
-[VERBOSE] f 15 16 10
-[VERBOSE] f 10 16 11
-[VERBOSE] f 16 17 11
-[VERBOSE] f 11 17 12
-[VERBOSE] f 17 18 12
-[VERBOSE] f 12 18 7
-[VERBOSE] f 18 13 7
 [VERBOSE] f 13 19 14
 [VERBOSE] f 19 20 14
 [VERBOSE] f 14 20 15
@@ -1745,4 +1721,4 @@
 [DEBUG] +0.1458,-0.3549,-0.8145,+0.1885,-0.7163,+0.6718,+0.0000
 [DEBUG] +0.1737,-0.4606,-0.7153,-0.0902,-0.2336,+0.9681,+0.0000
 [DEBUG] +0.0766,-0.7119,+0.3258,-0.1181,-0.3058,+0.9447,+0.0000
-[INFO] Total: 0.075s
+[INFO] Total: 0.073s
