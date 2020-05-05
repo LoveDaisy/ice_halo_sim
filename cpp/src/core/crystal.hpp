@@ -171,6 +171,7 @@ class Crystal {
   void InitFaceNumberIrregularHex();
   void InitFaceNumberCubic();
   void InitFaceNumberStack();
+  void RefineFaces();
 
   CrystalType type_;
   std::vector<math::Vec3f> vertexes_;

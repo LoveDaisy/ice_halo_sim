@@ -49,6 +49,7 @@ Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
       face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitBasicData();
   InitCrystalTypeData();
+  RefineFaces();
 }
 
 
@@ -331,6 +332,90 @@ void Crystal::InitFaceNumberStack() {
       face_number_table_[i] += 40;
     }
   }
+}
+
+void Crystal::RefineFaces() {
+  using math::Vec3f;
+  size_t faces = faces_.size();
+  // Remove those parts whose thickness is 0
+  std::vector<bool> face_remove(faces);
+  std::fill(face_remove.begin(), face_remove.end(), false);
+
+  for (size_t i = 0; i < faces; i++) {
+    if (face_remove[i]) {
+      continue;
+    }
+    const auto* n1 = face_norm_.get() + i * 3;
+    Vec3f v1(face_vertexes_.get() + i * 9 + 0 * 3);
+    for (size_t j = i + 1; j < faces; j++) {
+      const auto* n2 = face_norm_.get() + j * 3;
+      if (face_remove[j] || face_number_table_[i] == face_number_table_[j] ||
+          std::abs(math::Dot3(n1, n2)) < 1 - math::kFloatEps) {
+        continue;
+      }
+      float pd = -1, d = -1;
+      int tmp_idx = 0;
+      while (pd <= math::kFloatEps && tmp_idx < 3) {
+        const auto* vp2 = face_vertexes_.get() + j * 9 + tmp_idx * 3;
+        auto vd = Vec3f::FromTo(v1, Vec3f(vp2));
+        pd = math::Norm3(vd.val());
+        d = std::abs(math::Dot3(vd.val(), n1));
+        tmp_idx++;
+      }
+      float min_pd = std::numeric_limits<float>::max();
+      for (int i1 = 0; i1 < 3; i1++) {
+        for (int i2 = 0; i2 < 3; i2++) {
+          const auto* tmp_p1 = face_vertexes_.get() + i * 9 + i1 * 3;
+          const auto* tmp_p2 = face_vertexes_.get() + j * 9 + i2 * 3;
+          auto tmp_d = math::DiffNorm3(tmp_p1, tmp_p2);
+          if (tmp_d < min_pd) {
+            min_pd = tmp_d;
+          }
+        }
+      }
+      if (d < math::kFloatEps && min_pd < math::kFloatEps) {
+        for (size_t i1 = 0; i1 < faces; i1++) {
+          if (face_number_table_[i1] == face_number_table_[j] || face_number_table_[i1] == face_number_table_[i]) {
+            face_remove[i1] = true;
+          }
+        }
+      }
+    }
+  }
+
+  size_t new_face_num = 0;
+  for (auto r : face_remove) {
+    if (!r) {
+      new_face_num++;
+    }
+  }
+
+  decltype(faces_) new_faces;
+  decltype(face_number_table_) new_face_number_table;
+
+  std::unique_ptr<float[]> new_face_bases{ new float[new_face_num * 6]{} };
+  std::unique_ptr<float[]> new_face_vertexes{ new float[new_face_num * 9]{} };
+  std::unique_ptr<float[]> new_face_norm{ new float[new_face_num * 3]{} };
+  std::unique_ptr<float[]> new_face_area{ new float[new_face_num]{} };
+
+  for (size_t i = 0, j = 0; i < faces; i++) {
+    if (!face_remove[i]) {
+      new_faces.emplace_back(faces_[i]);
+      new_face_number_table.emplace_back(face_number_table_[i]);
+      std::memcpy(new_face_bases.get() + j * 6, face_bases_.get() + i * 6, 6 * sizeof(float));
+      std::memcpy(new_face_vertexes.get() + j * 9, face_vertexes_.get() + i * 9, 9 * sizeof(float));
+      std::memcpy(new_face_norm.get() + j * 3, face_norm_.get() + i * 3, 3 * sizeof(float));
+      new_face_area[j] = face_area_[i];
+      j++;
+    }
+  }
+
+  faces_.swap(new_faces);
+  face_number_table_.swap(new_face_number_table);
+  face_bases_ = std::move(new_face_bases);
+  face_vertexes_ = std::move(new_face_vertexes);
+  face_norm_ = std::move(new_face_norm);
+  face_area_ = std::move(new_face_area);
 }
 
 
