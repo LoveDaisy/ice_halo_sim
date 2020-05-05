@@ -166,7 +166,9 @@ class Crystal {
  protected:
   void InitBasicData();
   void InitCrystalTypeData();
-  void InitFaceNumberHex();
+  void InitFaceNumberHexPrism();
+  void InitFaceNumberHexPyramid();
+  void InitFaceNumberIrregularHex();
   void InitFaceNumberCubic();
   void InitFaceNumberStack();
 

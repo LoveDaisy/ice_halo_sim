@@ -29,20 +29,20 @@ class CrystalTest : public ::testing::Test {
   }
 
   static void CheckCrystal(const icehalo::CrystalPtrU& c1, const icehalo::CrystalPtrU& c2) {
-    auto n1 = c1->GetFaceNorm();
-    auto n2 = c2->GetFaceNorm();
+    const auto* n1 = c1->GetFaceNorm();
+    const auto* n2 = c2->GetFaceNorm();
     auto fn1 = c1->GetFaceNumberTable();
     auto fn2 = c2->GetFaceNumberTable();
 
     ASSERT_EQ(c1->TotalFaces(), c2->TotalFaces());
     ASSERT_EQ(fn1.size(), fn2.size());
     for (decltype(c1->TotalFaces()) i = 0; i < c1->TotalFaces(); i++) {
-      const auto n = n1 + i * 3;
+      const auto* n = n1 + i * 3;
       int fn = fn1[i];
 
       bool find_same_norm = false;
       for (decltype(c2->TotalFaces()) j = 0; j < c2->TotalFaces(); j++) {
-        const auto tmp_n = n2 + j * 3;
+        const auto* tmp_n = n2 + j * 3;
         int tmp_fn = fn2[j];
         if (icehalo::math::DiffNorm3(n, tmp_n) < icehalo::math::kFloatEps) {
           find_same_norm = true;
@@ -53,12 +53,12 @@ class CrystalTest : public ::testing::Test {
     }
 
     for (decltype(c2->TotalFaces()) i = 0; i < c2->TotalFaces(); i++) {
-      const auto n = n2 + i * 3;
+      const auto* n = n2 + i * 3;
       int fn = fn2[i];
 
       bool find_same_norm = false;
       for (decltype(c1->TotalFaces()) j = 0; j < c1->TotalFaces(); j++) {
-        const auto tmp_n = n1 + j * 3;
+        const auto* tmp_n = n1 + j * 3;
         int tmp_fn = fn1[j];
         if (icehalo::math::DiffNorm3(n, tmp_n) < icehalo::math::kFloatEps) {
           find_same_norm = true;

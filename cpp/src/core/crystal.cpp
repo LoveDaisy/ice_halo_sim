@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <tuple>
 #include <utility>
 
 #include "context/context.hpp"
@@ -11,8 +12,10 @@
 
 namespace icehalo {
 
-const std::vector<std::pair<math::Vec3f, int>>& GetHexFaceNormToNumberList() {
-  static std::vector<std::pair<math::Vec3f, int>> face_norm_to_number_list{
+using CrystalPrimitiveNormTalbe = std::vector<std::pair<math::Vec3f, int>>;
+
+const CrystalPrimitiveNormTalbe& GetHexFaceNormToNumberList() {
+  static CrystalPrimitiveNormTalbe face_norm_to_number_list{
     { { 0, 0, 1 }, 1 },                      // top face
     { { 0, 0, -1 }, 2 },                     // bottom face
     { { 1, 0, 0 }, 3 },                      // prism face
@@ -26,8 +29,8 @@ const std::vector<std::pair<math::Vec3f, int>>& GetHexFaceNormToNumberList() {
 }
 
 
-const std::vector<std::pair<math::Vec3f, int>>& GetCubicFaceNormToNumberList() {
-  static std::vector<std::pair<math::Vec3f, int>> face_norm_to_number_list{
+const CrystalPrimitiveNormTalbe& GetCubicFaceNormToNumberList() {
+  static CrystalPrimitiveNormTalbe face_norm_to_number_list{
     { { 0, 0, 1 }, 1 },   // top face
     { { 0, 0, -1 }, 2 },  // bottom face
     { { 1, 0, 0 }, 3 },   // pyramidal face
@@ -154,13 +157,19 @@ void Crystal::InitBasicData() {
 void Crystal::InitCrystalTypeData() {
   switch (type_) {
     case CrystalType::kPrism:
+      InitFaceNumberHexPrism();
+      face_number_period_ = 6;
+      break;
     case CrystalType::kPyramid_H3:
     case CrystalType::kPyramid_I2H3:
     case CrystalType::kPyramid_I4H3:
     case CrystalType::kPyramid_A2H3:
-    case CrystalType::kIrregularPrism:
+      InitFaceNumberHexPyramid();
+      face_number_period_ = 6;
+      break;
     case CrystalType::kIrregularPyramid:
-      InitFaceNumberHex();
+    case CrystalType::kIrregularPrism:
+      InitFaceNumberIrregularHex();
       face_number_period_ = 6;
       break;
     case CrystalType::kCubicPyramid:
@@ -177,18 +186,63 @@ void Crystal::InitCrystalTypeData() {
   }
 }
 
-void Crystal::InitFaceNumberHex() {
+std::tuple<float, int> FindMatchedPrimitiveNorm(const float* norm,
+                                                const CrystalPrimitiveNormTalbe& primitive_norm_table) {
+  float max_val = -1;
+  int max_face_number = -1;
+  for (const auto& d : primitive_norm_table) {
+    float curr_val = math::Dot3(norm, d.first.val());
+    if (curr_val > max_val) {
+      max_val = curr_val;
+      max_face_number = d.second;
+    }
+  }
+  return { max_val, max_face_number };
+}
+
+void Crystal::InitFaceNumberHexPrism() {
+  face_number_table_.clear();
+  for (int i = 0; i < 4; i++) {
+    face_number_table_.emplace_back(1);
+  }
+  for (int i = 0; i < 6; i++) {
+    face_number_table_.emplace_back(i + 3);
+    face_number_table_.emplace_back(i + 3);
+  }
+  for (int i = 0; i < 4; i++) {
+    face_number_table_.emplace_back(2);
+  }
+}
+
+
+void Crystal::InitFaceNumberHexPyramid() {
+  face_number_table_.clear();
+  for (int i = 0; i < 4; i++) {
+    face_number_table_.emplace_back(1);
+  }
+  for (int i = 0; i < 6; i++) {
+    face_number_table_.emplace_back(i + 13);
+    face_number_table_.emplace_back(i + 13);
+  }
+  for (int i = 0; i < 6; i++) {
+    face_number_table_.emplace_back(i + 3);
+    face_number_table_.emplace_back(i + 3);
+  }
+  for (int i = 0; i < 6; i++) {
+    face_number_table_.emplace_back(i + 23);
+    face_number_table_.emplace_back(i + 23);
+  }
+  for (int i = 0; i < 4; i++) {
+    face_number_table_.emplace_back(2);
+  }
+}
+
+void Crystal::InitFaceNumberIrregularHex() {
   for (size_t i = 0; i < faces_.size(); i++) {
     const auto* curr_face_norm = face_norm_.get() + i * 3;
     float max_val = -1;
     int max_face_number = -1;
-    for (const auto& d : GetHexFaceNormToNumberList()) {
-      float tmp_val = math::Dot3(curr_face_norm, d.first.val());
-      if (tmp_val > max_val) {
-        max_val = tmp_val;
-        max_face_number = d.second;
-      }
-    }
+    std::tie(max_val, max_face_number) = FindMatchedPrimitiveNorm(curr_face_norm, GetHexFaceNormToNumberList());
 
     if (max_val > 0) {
       if (std::abs(max_val - 1) > math::kFloatEps && curr_face_norm[2] > math::kFloatEps) {
@@ -206,13 +260,7 @@ void Crystal::InitFaceNumberCubic() {
     const auto* curr_face_norm = face_norm_.get() + i * 3;
     float max_val = -1;
     int max_face_number = -1;
-    for (const auto& d : GetCubicFaceNormToNumberList()) {
-      float tmp_val = math::Dot3(curr_face_norm, d.first.val());
-      if (tmp_val > max_val) {
-        max_val = tmp_val;
-        max_face_number = d.second;
-      }
-    }
+    std::tie(max_val, max_face_number) = FindMatchedPrimitiveNorm(curr_face_norm, GetCubicFaceNormToNumberList());
 
     if (max_val > 0) {
       if (std::abs(max_val - 1) > math::kFloatEps && curr_face_norm[2] > math::kFloatEps) {
@@ -1044,13 +1092,19 @@ std::pair<RayPath, size_t> NormalizeRayPath(RayPath ray_path, const ProjectConte
     } else {
       bool is_basal = fn == 1 || fn == 2;
       auto pyr = fn / 10;
+      fn %= 10;
       if (first_p_fn == kInvalidId && !is_basal) {
         first_p_fn = fn;
-      } else if (second_p_fn == kInvalidId && !is_basal &&
+      } else if (second_p_fn == kInvalidId && !is_basal && fn != first_p_fn &&
                  ((period % 2 == 0 && (fn + period - first_p_fn) != period / 2) || period % 2 != 0)) {
         second_p_fn = fn;
-      } else if (first_b_fn == kInvalidId && is_basal) {
-        first_b_fn = fn;
+      }
+      if (first_b_fn == kInvalidId) {
+        if (is_basal) {
+          first_b_fn = fn;
+        } else if (first_p_fn != kInvalidId) {
+          first_b_fn = pyr;
+        }
       }
 
       if ((symmetry_flag & kSymmetryPrism) && !is_basal) {
@@ -1062,8 +1116,12 @@ std::pair<RayPath, size_t> NormalizeRayPath(RayPath ray_path, const ProjectConte
         fn = period - fn;
         fn %= period;
       }
-      if ((symmetry_flag & kSymmetryBasal) && first_b_fn == 2 && is_basal) {
-        fn = fn % 2 + 1;
+      if ((symmetry_flag & kSymmetryBasal) && first_b_fn == 2) {
+        if (is_basal) {
+          fn = fn % 2 + 1;
+        } else if (pyr != 0) {
+          pyr = pyr % 2 + 1;
+        }
       }
       if (!is_basal) {
         fn += 3 + pyr * 10;
