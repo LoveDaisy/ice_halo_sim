@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <queue>
+#include <set>
 #include <tuple>
 #include <utility>
 
@@ -19,11 +21,11 @@ const CrystalPrimitiveNormTalbe& GetHexFaceNormToNumberList() {
     { { 0, 0, 1 }, 1 },                      // top face
     { { 0, 0, -1 }, 2 },                     // bottom face
     { { 1, 0, 0 }, 3 },                      // prism face
-    { { math::kSqrt3 / 2, 0.5f, 0 }, 4 },    // prism face
-    { { -math::kSqrt3 / 2, 0.5f, 0 }, 5 },   // prism face
+    { { 0.5f, math::kSqrt3 / 2, 0 }, 4 },    // prism face
+    { { -0.5f, math::kSqrt3 / 2, 0 }, 5 },   // prism face
     { { -1, 0, 0 }, 6 },                     // prism face
-    { { -math::kSqrt3 / 2, -0.5f, 0 }, 7 },  // prism face
-    { { math::kSqrt3 / 2, -0.5f, 0 }, 8 },   // prism face
+    { { -0.5f, -math::kSqrt3 / 2, 0 }, 7 },  // prism face
+    { { 0.5f, -math::kSqrt3 / 2, 0 }, 8 },   // prism face
   };
   return face_norm_to_number_list;
 }
@@ -48,8 +50,9 @@ Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
     : type_(type), vertexes_(std::move(vertexes)), faces_(std::move(faces)), face_number_period_(-1),
       face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitBasicData();
-  InitCrystalTypeData();
+  InitPrimaryFaceNumber();
   RefineFaces();
+  RefineFaceNumber();
 }
 
 
@@ -153,33 +156,20 @@ void Crystal::InitBasicData() {
     std::memcpy(face_vertexes_ptr + i * 9 + 3, vertexes_[idx[1]].val(), 3 * sizeof(float));
     std::memcpy(face_vertexes_ptr + i * 9 + 6, vertexes_[idx[2]].val(), 3 * sizeof(float));
   }
-}
 
-void Crystal::InitCrystalTypeData() {
   switch (type_) {
     case CrystalType::kPrism:
-      InitFaceNumberHexPrism();
-      face_number_period_ = 6;
-      break;
     case CrystalType::kPyramid_H3:
     case CrystalType::kPyramid_I2H3:
     case CrystalType::kPyramid_I4H3:
     case CrystalType::kPyramid_A2H3:
-      InitFaceNumberHexPyramid();
-      face_number_period_ = 6;
-      break;
+    case CrystalType::kPyramidStackHalf:
     case CrystalType::kIrregularPyramid:
     case CrystalType::kIrregularPrism:
-      InitFaceNumberIrregularHex();
       face_number_period_ = 6;
       break;
     case CrystalType::kCubicPyramid:
-      InitFaceNumberCubic();
       face_number_period_ = 4;
-      break;
-    case CrystalType::kPyramidStackHalf:
-      InitFaceNumberStack();
-      face_number_period_ = 6;
       break;
     case CrystalType::kCustom:
     case CrystalType::kUnknown:
@@ -187,233 +177,127 @@ void Crystal::InitCrystalTypeData() {
   }
 }
 
-std::tuple<float, int> FindMatchedPrimitiveNorm(const float* norm,
-                                                const CrystalPrimitiveNormTalbe& primitive_norm_table) {
-  float max_val = -1;
-  int max_face_number = -1;
-  for (const auto& d : primitive_norm_table) {
-    float curr_val = math::Dot3(norm, d.first.val());
-    if (curr_val > max_val) {
-      max_val = curr_val;
-      max_face_number = d.second;
-    }
-  }
-  return { max_val, max_face_number };
-}
+void Crystal::InitPrimaryFaceNumber() {
+  size_t face_num = faces_.size();
 
-void Crystal::InitFaceNumberHexPrism() {
   face_number_table_.clear();
-  for (int i = 0; i < 4; i++) {
-    face_number_table_.emplace_back(1);
-  }
-  for (int i = 0; i < 6; i++) {
-    face_number_table_.emplace_back(i + 3);
-    face_number_table_.emplace_back(i + 3);
-  }
-  for (int i = 0; i < 4; i++) {
-    face_number_table_.emplace_back(2);
-  }
-}
+  face_number_table_.resize(face_num);
+  std::fill(face_number_table_.begin(), face_number_table_.end(), 0);
 
-
-void Crystal::InitFaceNumberHexPyramid() {
-  face_number_table_.clear();
-  for (int i = 0; i < 4; i++) {
-    face_number_table_.emplace_back(1);
-  }
-  for (int i = 0; i < 6; i++) {
-    face_number_table_.emplace_back(i + 13);
-    face_number_table_.emplace_back(i + 13);
-  }
-  for (int i = 0; i < 6; i++) {
-    face_number_table_.emplace_back(i + 3);
-    face_number_table_.emplace_back(i + 3);
-  }
-  for (int i = 0; i < 6; i++) {
-    face_number_table_.emplace_back(i + 23);
-    face_number_table_.emplace_back(i + 23);
-  }
-  for (int i = 0; i < 4; i++) {
-    face_number_table_.emplace_back(2);
-  }
-}
-
-void Crystal::InitFaceNumberIrregularHex() {
-  for (size_t i = 0; i < faces_.size(); i++) {
-    const auto* curr_face_norm = face_norm_.get() + i * 3;
-    float max_val = -1;
-    int max_face_number = -1;
-    std::tie(max_val, max_face_number) = FindMatchedPrimitiveNorm(curr_face_norm, GetHexFaceNormToNumberList());
-
-    if (max_val > 0) {
-      if (std::abs(max_val - 1) > math::kFloatEps && curr_face_norm[2] > math::kFloatEps) {
-        max_face_number += 10;
-      } else if (std::abs(max_val - 1) > math::kFloatEps && curr_face_norm[2] < -math::kFloatEps) {
-        max_face_number += 20;
-      }
-    }
-    face_number_table_.push_back(max_face_number);
-  }
-}
-
-void Crystal::InitFaceNumberCubic() {
-  for (size_t i = 0; i < faces_.size(); i++) {
-    const auto* curr_face_norm = face_norm_.get() + i * 3;
-    float max_val = -1;
-    int max_face_number = -1;
-    std::tie(max_val, max_face_number) = FindMatchedPrimitiveNorm(curr_face_norm, GetCubicFaceNormToNumberList());
-
-    if (max_val > 0) {
-      if (std::abs(max_val - 1) > math::kFloatEps && curr_face_norm[2] > math::kFloatEps) {
-        max_face_number += 10;
-      } else if (std::abs(max_val - 1) > math::kFloatEps && curr_face_norm[2] < -math::kFloatEps) {
-        max_face_number += 20;
-      }
-    }
-    face_number_table_.push_back(max_face_number);
-  }
-}
-
-void Crystal::InitFaceNumberStack() {
-  float max_height = std::numeric_limits<float>::lowest();
-  float min_height = std::numeric_limits<float>::max();
-  for (size_t i = 0; i < faces_.size(); i++) {
-    const auto* curr_face_norm = face_norm_.get() + i * 3;
-    float max_val = -1;
-    int max_face_number = -1;
-    for (const auto& d : GetHexFaceNormToNumberList()) {
-      float tmp_val = math::Dot3(curr_face_norm, d.first.val());
-      if (tmp_val > max_val) {
-        max_val = tmp_val;
-        max_face_number = d.second;
-      }
-    }
-    face_number_table_.push_back(max_face_number);
-
-    const auto* idx = faces_[i].idx();
-    for (int j = 0; j < 3; j++) {
-      float h = vertexes_[idx[j]].z();
-      if (h > max_height) {
-        max_height = h;
-      }
-      if (h < min_height) {
-        min_height = h;
-      }
-    }
-  }
-
-  for (size_t i = 0; i < faces_.size(); i++) {
-    if (face_number_table_[i] < 3) {
+  ShortIdType curr_id = std::numeric_limits<ShortIdType>::max() - 1;
+  for (size_t i = 0; i < face_num; i++) {
+    if (face_number_table_[i] != 0) {
       continue;
     }
-    const auto* idx = faces_[i].idx();
-    const auto* curr_face_norm = face_norm_.get() + i * 3;
-
-    bool is_top = false;
-    bool is_bottom = false;
-    bool is_upper = true;
-    bool is_lower = true;
-    for (int j = 0; j < 3; j++) {
-      is_top = is_top || std::abs(vertexes_[idx[j]].z() - max_height) < math::kFloatEps;
-      is_bottom = is_bottom || std::abs(vertexes_[idx[j]].z() - min_height) < math::kFloatEps;
-      is_upper = is_upper && vertexes_[idx[j]].z() > math::kFloatEps;
-      is_lower = is_lower && vertexes_[idx[j]].z() < -math::kFloatEps;
+    // Propagate this face number to other faces
+    std::queue<size_t> tmp_queue;
+    tmp_queue.emplace(i);
+    while (!tmp_queue.empty()) {
+      auto curr_i = tmp_queue.front();
+      tmp_queue.pop();
+      face_number_table_[curr_i] = curr_id;
+      for (size_t j = 0; j < face_num; j++) {
+        if (face_number_table_[j] == 0 && IsAdjacent(curr_i, j) && IsCoplanar(curr_i, j)) {
+          tmp_queue.emplace(j);
+        }
+      }
     }
-
-    bool is_prism = std::abs(curr_face_norm[2]) < math::kFloatEps;
-
-    if (is_top && !is_prism) {
-      face_number_table_[i] += 10;
-    } else if (is_bottom && !is_prism) {
-      face_number_table_[i] += 20;
-    } else if (is_upper && !is_prism) {
-      face_number_table_[i] += 30;
-    } else if (is_lower && !is_prism) {
-      face_number_table_[i] += 40;
-    }
+    curr_id--;
   }
 }
+
 
 void Crystal::RefineFaces() {
   using math::Vec3f;
-  size_t faces = faces_.size();
-  // Remove those parts whose thickness is 0
-  std::vector<bool> face_remove(faces);
-  std::fill(face_remove.begin(), face_remove.end(), false);
 
-  for (size_t i = 0; i < faces; i++) {
+  size_t faces_num = faces_.size();
+  std::vector<bool> face_remove(faces_num, false);
+
+  // 1. remove area = 0
+  for (size_t i = 0; i < faces_num; i++) {
     if (face_area_[i] < math::kFloatEps) {
       face_remove[i] = true;
     }
   }
 
-  for (size_t i = 0; i < faces; i++) {
+  // 2. remove those thickness = 0 parts
+  for (size_t i = 0; i < faces_num; i++) {
     if (face_remove[i]) {
       continue;
     }
-    const auto* n1 = face_norm_.get() + i * 3;
-    Vec3f v1(face_vertexes_.get() + i * 9 + 0 * 3);
-    for (size_t j = i + 1; j < faces; j++) {
-      const auto* n2 = face_norm_.get() + j * 3;
-      if (face_remove[j] || face_number_table_[i] == face_number_table_[j] ||
-          math::Dot3(n1, n2) > -1 + math::kFloatEps) {
+    for (size_t j = i + 1; j < faces_num; j++) {
+      if (face_remove[j] || face_number_table_[i] == face_number_table_[j] || !IsCounterCoplanar(i, j)) {
         continue;
       }
-      float pd = -1, d = -1;
-      int tmp_idx = 0;
-      while (pd <= math::kFloatEps && tmp_idx < 3) {
-        const auto* vp2 = face_vertexes_.get() + j * 9 + tmp_idx * 3;
-        auto vd = Vec3f::FromTo(v1, Vec3f(vp2));
-        pd = math::Norm3(vd.val());
-        d = std::abs(math::Dot3(vd.val(), n1));
-        tmp_idx++;
-      }
-      float min_pd = std::numeric_limits<float>::max();
-      for (int i1 = 0; i1 < 3; i1++) {
-        for (int i2 = 0; i2 < 3; i2++) {
-          const auto* tmp_p1 = face_vertexes_.get() + i * 9 + i1 * 3;
-          const auto* tmp_p2 = face_vertexes_.get() + j * 9 + i2 * 3;
-          auto tmp_d = math::DiffNorm3(tmp_p1, tmp_p2);
-          if (tmp_d < min_pd) {
-            min_pd = tmp_d;
-          }
+      // 1. Find all vertexes of the two surfaces
+      std::set<int> surface1_v;
+      std::set<int> surface2_v;
+      for (size_t k = 0; k < faces_num; k++) {
+        if (face_number_table_[i] == face_number_table_[k]) {
+          surface1_v.emplace(faces_[i].idx()[0]);
+          surface1_v.emplace(faces_[i].idx()[1]);
+          surface1_v.emplace(faces_[i].idx()[2]);
+        } else if (face_number_table_[j] == face_number_table_[k]) {
+          surface2_v.emplace(faces_[j].idx()[0]);
+          surface2_v.emplace(faces_[j].idx()[1]);
+          surface2_v.emplace(faces_[j].idx()[2]);
         }
       }
-      if (d < math::kFloatEps && min_pd < math::kFloatEps) {
-        for (size_t i1 = 0; i1 < faces; i1++) {
-          if (face_number_table_[i1] == face_number_table_[j] || face_number_table_[i1] == face_number_table_[i]) {
-            face_remove[i1] = true;
+      // 2. Check if every vertex are matched
+      bool all_matched = true;
+      for (auto v1 : surface1_v) {
+        float min_d = std::numeric_limits<float>::max();
+        for (auto v2 : surface2_v) {
+          auto tmp_d = math::DiffNorm3(vertexes_[v1].val(), vertexes_[v2].val());
+          if (tmp_d < min_d) {
+            min_d = tmp_d;
           }
+        }
+        if (min_d > math::kFloatEps) {
+          all_matched = false;
+          break;
+        }
+      }
+      if (all_matched) {
+        // 3. Remove faces
+        for (auto v1 : surface1_v) {
+          face_remove[v1] = true;
+        }
+        for (auto v2 : surface2_v) {
+          face_remove[v2] = true;
         }
       }
     }
   }
 
-  size_t new_face_num = 0;
+  // 3. Collect remained faces
+  size_t new_faces_num = 0;
   for (auto r : face_remove) {
-    if (!r) {
-      new_face_num++;
-    }
+    new_faces_num += !r;
+  }
+  if (new_faces_num == faces_num) {
+    return;
   }
 
   decltype(faces_) new_faces;
   decltype(face_number_table_) new_face_number_table;
+  std::unique_ptr<float[]> new_face_bases{ new float[new_faces_num * 6]{} };
+  std::unique_ptr<float[]> new_face_vertexes{ new float[new_faces_num * 9]{} };
+  std::unique_ptr<float[]> new_face_norm{ new float[new_faces_num * 3]{} };
+  std::unique_ptr<float[]> new_face_area{ new float[new_faces_num * 1]{} };
 
-  std::unique_ptr<float[]> new_face_bases{ new float[new_face_num * 6]{} };
-  std::unique_ptr<float[]> new_face_vertexes{ new float[new_face_num * 9]{} };
-  std::unique_ptr<float[]> new_face_norm{ new float[new_face_num * 3]{} };
-  std::unique_ptr<float[]> new_face_area{ new float[new_face_num]{} };
-
-  for (size_t i = 0, j = 0; i < faces; i++) {
-    if (!face_remove[i]) {
-      new_faces.emplace_back(faces_[i]);
-      new_face_number_table.emplace_back(face_number_table_[i]);
-      std::memcpy(new_face_bases.get() + j * 6, face_bases_.get() + i * 6, 6 * sizeof(float));
-      std::memcpy(new_face_vertexes.get() + j * 9, face_vertexes_.get() + i * 9, 9 * sizeof(float));
-      std::memcpy(new_face_norm.get() + j * 3, face_norm_.get() + i * 3, 3 * sizeof(float));
-      new_face_area[j] = face_area_[i];
-      j++;
+  size_t new_idx = 0;
+  for (size_t i = 0; i < faces_num; i++) {
+    if (face_remove[i]) {
+      continue;
     }
+    new_faces.emplace_back(faces_[i]);
+    new_face_number_table.emplace_back(face_number_table_[i]);
+    std::memcpy(new_face_bases.get() + new_idx * 6, face_bases_.get() + i * 6, 6 * sizeof(float));
+    std::memcpy(new_face_vertexes.get() + new_idx * 9, face_vertexes_.get() + i * 9, 9 * sizeof(float));
+    std::memcpy(new_face_norm.get() + new_idx * 3, face_norm_.get() + i * 3, 3 * sizeof(float));
+    new_face_area[new_idx] = face_area_[i];
+    new_idx++;
   }
 
   faces_.swap(new_faces);
@@ -422,6 +306,129 @@ void Crystal::RefineFaces() {
   face_vertexes_ = std::move(new_face_vertexes);
   face_norm_ = std::move(new_face_norm);
   face_area_ = std::move(new_face_area);
+}
+
+void Crystal::RefineFaceNumber() {
+  using math::Vec3f;
+
+  size_t face_num = faces_.size();
+
+  // Find all pyramidal faces z component
+  using PyrIdxInfo = std::pair<float, int>;  // {z-comp, pyr idx}
+  std::vector<PyrIdxInfo> norm_z_pyr;
+  for (size_t i = 0; i < face_num; i++) {
+    auto curr_z = face_norm_[i * 3 + 2];
+    if (std::abs(curr_z) > 1 - math::kFloatEps || std::abs(curr_z) < math::kFloatEps) {
+      continue;
+    }
+    auto iter = std::find_if(norm_z_pyr.begin(), norm_z_pyr.end(),
+                             [=](const PyrIdxInfo& a) { return std::abs(a.first - curr_z) < math::kFloatEps; });
+    if (iter == norm_z_pyr.end()) {
+      norm_z_pyr.emplace_back(curr_z, 0);
+    }
+  }
+
+  if (norm_z_pyr.size() > 1) {
+    // Sort them
+    std::sort(norm_z_pyr.begin(), norm_z_pyr.end(),
+              [=](const PyrIdxInfo& a, const PyrIdxInfo& b) { return a.first < b.first; });
+    // Assign pyramidal index
+    for (int lower_iter = 0, upper_iter = static_cast<int>(norm_z_pyr.size()) - 1, lower_idx = 2, upper_idx = 1;
+         lower_iter < upper_iter; lower_iter++, upper_iter--) {
+      norm_z_pyr[lower_iter].second = lower_idx++;
+      norm_z_pyr[upper_iter].second = upper_idx++;
+    }
+  } else if (norm_z_pyr.size() == 1) {
+    float min_z = std::numeric_limits<float>::max();
+    for (size_t i = 0; i < face_num; i++) {
+      for (int j = 0; j < 3; j++) {
+        if (face_vertexes_[i * 9 + j * 3 + 2] < min_z) {
+          min_z = face_vertexes_[i * 9 + j * 3 + 2];
+        }
+      }
+    }
+    norm_z_pyr[0].second = norm_z_pyr[0].first > min_z + math::kFloatEps ? 1 : 2;
+  }
+
+  const CrystalPrimitiveNormTalbe& primitive_fn_table =
+      face_number_period_ == 6 ? GetHexFaceNormToNumberList() : GetCubicFaceNormToNumberList();
+  ShortIdType fn_th = std::numeric_limits<ShortIdType>::max() / 2;
+  // Assign primitive face number
+  for (size_t i = 0; i < face_num; i++) {
+    if (face_number_table_[i] < fn_th) {
+      continue;
+    }
+    const auto* curr_norm = face_norm_.get() + i * 3;
+    for (const auto& p : primitive_fn_table) {
+      if (std::abs(math::Dot3(p.first.val(), curr_norm) - 1) < math::kFloatEps) {
+        face_number_table_[i] = p.second;
+        break;
+      }
+    }
+  }
+
+  // Assign those pyramidal faces
+  for (size_t i = 0; i < face_num; i++) {
+    if (face_number_table_[i] < fn_th) {
+      continue;
+    }
+    auto curr_fn = face_number_table_[i];
+    const auto* curr_norm = face_norm_.get() + i * 3;
+    auto cmp = [=](const std::pair<Vec3f, int>& a, const std::pair<Vec3f, int>& b) {
+      float hor_n[3]{ curr_norm[0], curr_norm[1], 0.0f };
+      return math::Dot3(hor_n, a.first.val()) < math::Dot3(hor_n, b.first.val());
+    };
+    decltype(primitive_fn_table.begin()) max_iter, min_iter;
+    std::tie(min_iter, max_iter) = std::minmax_element(primitive_fn_table.begin() + 2, primitive_fn_table.end(), cmp);
+    float face_center[3]{};
+    for (int j = 0; j < 3; j++) {
+      face_center[0] += face_vertexes_[i * 9 + j * 3 + 0] / 3.0f;
+      face_center[1] += face_vertexes_[i * 9 + j * 3 + 1] / 3.0f;
+    }
+    auto max_dot3 = math::Dot3(face_center, max_iter->first.val());
+    auto min_dot3 = math::Dot3(face_center, min_iter->first.val());
+    int fn = max_dot3 > min_dot3 ? max_iter->second : min_iter->second;
+
+    auto z_iter = std::find_if(norm_z_pyr.begin(), norm_z_pyr.end(),
+                               [=](const PyrIdxInfo& x) { return std::abs(x.first - curr_norm[2]) < math::kFloatEps; });
+    int pyr = z_iter == norm_z_pyr.end() ? 0 : z_iter->second;
+
+    for (size_t j = 0; j < face_num; j++) {
+      if (face_number_table_[j] == curr_fn) {
+        face_number_table_[j] = pyr * 10 + fn;
+      }
+    }
+  }
+}
+
+bool Crystal::IsCoplanar(size_t idx1, size_t idx2) const {
+  const auto* face_norm_ptr = face_norm_.get();
+  return math::Dot3(face_norm_ptr + idx1 * 3, face_norm_ptr + idx2 * 3) > 1 - math::kFloatEps;
+}
+
+bool Crystal::IsCounterCoplanar(size_t idx1, size_t idx2) const {
+  const auto* face_norm_ptr = face_norm_.get();
+  return math::Dot3(face_norm_ptr + idx1 * 3, face_norm_ptr + idx2 * 3) < -1 + math::kFloatEps;
+}
+
+bool Crystal::IsAdjacent(size_t idx1, size_t idx2) const {
+  return MatchedVertexes(idx1, idx2) == 2;
+}
+
+bool Crystal::IsConnected(size_t idx1, size_t idx2) const {
+  return MatchedVertexes(idx1, idx2) > 0;
+}
+
+int Crystal::MatchedVertexes(size_t idx1, size_t idx2) const {
+  int matched_v = 0;
+  for (int i = 0; i < 3; i++) {
+    auto v1 = faces_[idx1].idx()[i];
+    for (int j = 0; j < 3; j++) {
+      auto v2 = faces_[idx2].idx()[j];
+      matched_v += (v1 == v2);
+    }
+  }
+  return matched_v;
 }
 
 

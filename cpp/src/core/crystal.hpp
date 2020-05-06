@@ -165,13 +165,15 @@ class Crystal {
 
  protected:
   void InitBasicData();
-  void InitCrystalTypeData();
-  void InitFaceNumberHexPrism();
-  void InitFaceNumberHexPyramid();
-  void InitFaceNumberIrregularHex();
-  void InitFaceNumberCubic();
-  void InitFaceNumberStack();
+  void InitPrimaryFaceNumber();
+  void RefineFaceNumber();
   void RefineFaces();
+
+  bool IsCoplanar(size_t idx1, size_t idx2) const;
+  bool IsCounterCoplanar(size_t idx1, size_t idx2) const;
+  bool IsConnected(size_t idx1, size_t idx2) const;
+  bool IsAdjacent(size_t idx1, size_t idx2) const;
+  int MatchedVertexes(size_t idx1, size_t idx2) const;
 
   CrystalType type_;
   std::vector<math::Vec3f> vertexes_;
