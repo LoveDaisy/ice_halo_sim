@@ -1,11 +1,11 @@
 #ifndef UTIL_THREADING_POOL_H_
 #define UTIL_THREADING_POOL_H_
 
-#include <queue>
 #include <atomic>
 #include <functional>
 #include <future>
 #include <memory>
+#include <queue>
 #include <thread>
 #include <vector>
 
@@ -26,7 +26,10 @@ class ThreadingPool {
    *                                        ^ ^--------|  |
    *     ...................................|.............|...........
    *                                        |             v
-   *     These are not kCommittable ==>  kStarting    kStopping  -->  kTerminated
+   *     These are not kCommittable ==>  kStarting    kStopping --> kTerminated
+   *
+   * `kIdle` and `kRunning` are both `kCommittable`, i.e. `kIdle & kCommittable == true`
+   * and `kRunning & kCommittable == true`.
    */
   enum State : uint8_t {
     kCommittable = 1u,
@@ -57,72 +60,104 @@ class ThreadingPool {
   void WaitFinish();
 
   /**
-   * @brief Tells the pool to stop all jobs as soon as possible, and to drop all jobs in the queue
-   *        that have not started yet. This function is non-blocked, and returns quickly.
+   * @brief Tells the pool to stop all jobs as soon as possible.
+   *
+   * Tells the pool to stop all worker threads as soon as possible, and to drop all jobs in the queue
+   * that have not started yet. This function is blocked, until all worker threads are stopped.
    */
-  void StopAllJobs();
+  void Shutdown();
 
   uint8_t GetState() const;
 
   size_t GetPoolSize() const;
 
   /**
-   * @brief Adds range-step jobs to the pool. These jobs will handle data from `start` inclusive, to
-   *        data `end` exclusive.
-   *        This function is blocked until all jobs are committed to job queue. Since job queue has
-   *        limited capacity, this function call may NOT return immediately. If jobs are less than
-   *        job queue capacity, this function will return quickly.
-   *        NOTE: Jobs may NOT finish when this function returns. You need to call
-   *        ThreadingPool::WaitFinish() to wait all jobs finishing.
+   * @brief Adds range-step jobs to the pool.
+   *
+   * This function adds range-step jobs to the pool.
+   * These jobs will handle data from `start` inclusive, to data `end` exclusive.
+   * It is a convenient pack-up of normal for-loop and ThreadingPool::CommitSingleJob().
+   * It is equivalent to:
+   * ~~~{.cpp}
+   * for (int i = 0; i < POOL_SIZE; i++) {
+   *   CommitSingleJob([=](int thread_id) {
+   *     for (int j = start + i; j < end; j += POOL_SIZE) {
+   *       range_step_func(thread_id, j);
+   *     }
+   *   });
+   * }
+   * ~~~
+   *
+   * NOTE: Jobs may NOT finish when this function returns. You need to call
+   * ThreadingPool::WaitFinish() to wait all jobs finishing.
+   *
    * @warning If the pool is shutdown, this function will not do anything and return false.
    * @param start The start index for data, inclusive.
    * @param end Then end index for data, exclusive.
    * @param range_step_func A functor has signature of `void function(int thread_idx, int i)`.
    *        The arguments are automatically determined by the pool.
    * @return true if all jobs successfully added. false if any job is failed to commit (for example by a
-   *         ThreadingPool::StopAllJobs() call).
+   *         ThreadingPool::Shutdown() call).
    */
   bool CommitRangeStepJobs(int start, int end, const std::function<void(int, int)>& range_step_func);
 
   /**
-   * @brief It is equivalent to call ThreadingPool::CommitRangeStepJobs() and
-   *        then call ThreadingPool::WaitFinish(). See ThreadingPool::CommitRangeStepJobs()
+   * @brief It is equivalent to call ThreadingPool::CommitRangeStepJobs() and then ThreadingPool::WaitFinish().
+   *
+   * See ThreadingPool::CommitRangeStepJobs()
+   *
    * @warning If the pool is shutdown, this function will not do anything and return false.
    * @param start The start index for data, inclusive.
    * @param end The end index for data, exclusive.
    * @param range_step_func A functor has signature of `void function(int thread_idx, int i)`.
    *        The arguments are automatically determined by the pool.
    * @return true if all jobs finished successfully. false if any job is cancelled (for example by
-   *         a ThreadingPool::StopAllJobs() call).
+   *         a ThreadingPool::Shutdown() call).
    */
   bool CommitRangeStepJobsAndWait(int start, int end, const std::function<void(int, int)>& range_step_func);
 
   /**
-   * @brief Adds range-slice jobs to the pool. These jobs will handle data from `start` inclusive, to
-   *        data `end` exclusive.
-   *        This function is blocked until all jobs are committed to job queue. Since job queue has
-   *        limited capacity, this function call may NOT return immediately. If jobs are less then
-   *        job queue capacity, this function will return quickly.
+   * @brief Adds range-slice jobs to the pool.
+   *
+   * This function adds range-slice jobs to the pool.
+   * These jobs will handle data from `start` inclusive, to data `end` exclusive.
+   * It is a convenient pack-up of normal for-loop and ThreadingPool::CommitSingleJob().
+   * It is equivalent to:
+   * ~~~{.cpp}
+   * for (int i = 0; i < POOL_SIZE; i++) {
+   *   int idx1 = (end - start) * i / POOL_SIZE;
+   *   int idx2 = (end - start) * i / POOL_SIZE;
+   *   CommitSingleJob([=](int thread_id) {
+   *     range_slice_func(thread_id, idx1, idx2);
+   *   });
+   * }
+   * ~~~
+   *
+   * NOTE: Jobs may NOT finish when this function returns. You need to call
+   * ThreadingPool::WaitFinish() to wait all jobs finishing.
+   *
    * @warning If the pool is shutdown, this function will do nothing and return false.
    * @param start The start index for data, inclusive.
    * @param end The end index for data, exclusive.
    * @param range_slice_func A functor has signature of `void function(int thread_idx, int start, int end)`.
    *        The arguments are automatically determined by the pool.
    * @return true if all jobs finished successfully. false if any job is cancelled (for example by
-   *         a ThreadingPool::StopAllJobs() call).
+   *         a ThreadingPool::Shutdown() call).
    */
   bool CommitRangeSliceJobs(int start, int end, const std::function<void(int, int, int)>& range_slice_func);
 
   /**
-   * @brief It is equivalent to call ThreadingPool::CommitRangeSliceJobs()
-   *        and then call ThreadingPool::WaitFinish(). See ThreadingPool::CommitRangeSliceJobs()
+   * @brief It is equivalent to call ThreadingPool::CommitRangeSliceJobs() and then ThreadingPool::WaitFinish().
+   *
+   * See ThreadingPool::CommitRangeSliceJobs()
+   *
    * @warning If the pool is shutdown, this function will not do anything and return false.
    * @param start The start index for data, inclusive.
    * @param end The end index for data, exclusive.
    * @param range_slice_func A functor has signature of `void function(int thread_idx, int start, int end)`.
    *        The arguments are automatically determined by the pool.
    * @return true if all jobs finished successfully. false if any job is cancelled (for example by a
-   *         ThreadingPool::StopAllJobs() call).
+   *         ThreadingPool::Shutdown() call).
    */
   bool CommitRangeSliceJobsAndWait(int start, int end, const std::function<void(int, int, int)>& range_slice_func);
 
@@ -133,8 +168,7 @@ class ThreadingPool {
 
   /**
    * @brief Starts the pool with given size.
-   * @note Call this function on a pool that is already started has no effect. If you want to change
-   *       pool size, you need to shutdown it first and then start it with new size.
+   * @note Private use.
    * @param size The pool size.
    */
   void StartPool(size_t size);

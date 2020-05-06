@@ -16,7 +16,7 @@ ThreadingPool::ThreadingPool(size_t size)
 
 
 ThreadingPool::~ThreadingPool() {
-  StopAllJobs();
+  Shutdown();
 }
 
 
@@ -58,7 +58,7 @@ void ThreadingPool::WaitFinish() {
 }
 
 
-void ThreadingPool::StopAllJobs() {
+void ThreadingPool::Shutdown() {
   if (stop_flag_ || state_ == kStopping || state_ == kTerminated) {
     return;
   }
@@ -165,7 +165,7 @@ bool ThreadingPool::CommitSingleJob(std::function<void(int)> job) {
     } else {
       auto task = std::make_shared<std::packaged_task<void(int)>>(std::move(job));
       job_future_list_.emplace_back(task->get_future());
-      job_queue_.emplace([=](int idx){ (*task)(idx); });
+      job_queue_.emplace([=](int idx) { (*task)(idx); });
       res = true;
     }
   }
