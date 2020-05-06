@@ -95,7 +95,7 @@ void AbstractRayPathFilter::SaveToJson(rapidjson::Value& root, rapidjson::Value:
 
 
 void AbstractRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
-  auto p = Pointer("/complementary").Get(root);
+  const auto* p = Pointer("/complementary").Get(root);
   if (p == nullptr) {
     EnableComplementary(false);
   } else if (p->IsBool()) {
@@ -122,7 +122,7 @@ void AbstractRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
     throw std::invalid_argument("<ray_path_filter[%d].symmetry> cannot recognize!");
   }
 
-  auto sym = p->GetString();
+  const auto* sym = p->GetString();
   for (decltype(p->GetStringLength()) i = 0; i < p->GetStringLength(); i++) {
     switch (sym[i]) {
       case 'P':
@@ -149,9 +149,13 @@ size_t RayPathReverseHash(const Crystal* crystal,                    // used for
   constexpr size_t kStep = 7;
   constexpr size_t kTotalBits = sizeof(size_t) * CHAR_BIT;
 
-  if (length == kAutoDetectLength || length < 0) {
+  if (length < 0 && length != kAutoDetectLength) {
+    return 0;
+  }
+
+  if (length == kAutoDetectLength) {
     length = 0;
-    auto p = last_ray;
+    const auto* p = last_ray;
     while (p->prev) {
       p = p->prev;
       length++;
@@ -160,7 +164,7 @@ size_t RayPathReverseHash(const Crystal* crystal,                    // used for
 
   size_t result = 0;
   size_t curr_offset = kStep * (length - 1) % kTotalBits;
-  auto p = last_ray;
+  const auto* p = last_ray;
   while (p->prev) {
     size_t fn = crystal->FaceNumber(p->face_id);
     size_t tmp_hash = (fn << curr_offset) | (fn >> (kTotalBits - curr_offset));
@@ -218,8 +222,7 @@ void SpecificRayPathFilter::ApplySymmetry(const CrystalContext* crystal_ctx) {
   for (auto rp : ray_paths_) {
     rp.PrependId(crystal_ctx->GetId());
     rp << kInvalidId;
-    auto tmp_ray_path_list = MakeSymmetryExtension(rp, crystal_ctx, symmetry_flag_);
-    for (auto& p : tmp_ray_path_list) {
+    for (auto&& p : MakeSymmetryExtension(rp, crystal_ctx, symmetry_flag_)) {
       augmented_ray_paths.emplace_back(p);
     }
   }
@@ -274,7 +277,7 @@ void SpecificRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
   AbstractRayPathFilter::LoadFromJson(root);
 
   ClearPaths();
-  auto p = Pointer("/path").Get(root);
+  const auto* p = Pointer("/path").Get(root);
   if (p == nullptr || !p->IsArray()) {
     throw std::invalid_argument("<path> cannot recognize!");
   }
@@ -342,7 +345,7 @@ bool GeneralRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_r
   }
 
   if (!hit_nums_.empty()) {  // Check hit number.
-    auto p = last_r;
+    auto* p = last_r;
     int n = 0;
     while (p) {
       p = p->prev;
@@ -403,7 +406,7 @@ void GeneralRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
   ClearHitNumbers();
   ClearFaces();
 
-  auto p = Pointer("/entry").Get(root);
+  const auto* p = Pointer("/entry").Get(root);
   if (p == nullptr || !p->IsArray()) {
     throw std::invalid_argument("<entry> cannot recognize!");
   }

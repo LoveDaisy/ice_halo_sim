@@ -1012,9 +1012,6 @@ RayPath::RayPath(const icehalo::RayPath& other)
     ids = IdPool::GetInstance()->AllocateObjectArray(capacity);
   }
   std::memcpy(ids, other.ids, sizeof(ShortIdType) * len);
-  if (ids[len - 1] != kInvalidId || len > capacity) {
-    LOG_WARNING("RayPath copy ctr. ids wrong!");
-  }
 }
 
 
@@ -1129,14 +1126,13 @@ void RayPath::PrependId(ShortIdType id) {
   }
   len++;
   ids[0] = id;
-  if (ids[len - 1] != kInvalidId || len > capacity) {
-    LOG_WARNING("RayPath::PrependId() ids wrong!");
-  }
 }
 
 
 RayPath RayPath::MakePermanentCopy() const {
   RayPath copy(0);
+  copy.len = len;
+  copy.capacity = capacity;
   copy.is_permanent = true;
   copy.ids = new ShortIdType[capacity];
   std::memcpy(copy.ids, ids, sizeof(ShortIdType) * len);
