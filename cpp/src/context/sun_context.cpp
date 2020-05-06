@@ -70,7 +70,7 @@ void SunContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorT
 
 void SunContext::LoadFromJson(const rapidjson::Value& root) {
   float sun_altitude = 0.0f;
-  auto* p = Pointer("/altitude").Get(root);
+  const auto* p = Pointer("/altitude").Get(root);
   if (p == nullptr) {
     LOG_VERBOSE("Sun config missing <altitude>. Use default 0.0!");
   } else if (!p->IsNumber()) {

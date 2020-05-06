@@ -39,7 +39,7 @@ void RenderSplitter::SaveToJson(rapidjson::Value& root, rapidjson::Value::Alloca
 
 
 void RenderSplitter::LoadFromJson(const rapidjson::Value& root) {
-  auto p = Pointer("/type").Get(root);
+  const auto* p = Pointer("/type").Get(root);
   if (p && p->IsString() && *p == "top_halo") {
     type = RenderSplitterType::kTopHalo;
   } else if (p && p->IsString() && *p == "filter") {
@@ -300,7 +300,7 @@ void RenderContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Allocat
 
 void RenderContext::LoadFromJson(const rapidjson::Value& root) {
   SetImageWidth(800);
-  auto p = Pointer("/width").Get(root);
+  const auto* p = Pointer("/width").Get(root);
   if (p == nullptr) {
     LOG_VERBOSE("Render config missing <width>. Use default 800!");
   } else if (!p->IsInt()) {

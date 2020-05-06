@@ -3,7 +3,6 @@
 #include <algorithm>
 
 #include "core/render.hpp"
-#include "rapidjson/filereadstream.h"
 #include "rapidjson/pointer.h"
 #include "util/log.hpp"
 
@@ -138,7 +137,7 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
   float cam_el = CameraContext::kDefaultCamElevation;
   float cam_ro = CameraContext::kDefaultCamRoll;
 
-  auto* p = Pointer("/azimuth").Get(root);
+  const auto* p = Pointer("/azimuth").Get(root);
   if (p == nullptr) {
     LOG_VERBOSE("Camera config missing <azimuth>. Use default %.1f!", CameraContext::kDefaultCamAzimuth);
   } else if (!p->IsNumber()) {

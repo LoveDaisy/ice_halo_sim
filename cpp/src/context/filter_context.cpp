@@ -1,7 +1,6 @@
 #include "context/filter_context.hpp"
 
 #include <algorithm>
-#include <limits>
 
 #include "rapidjson/document.h"
 #include "rapidjson/pointer.h"
@@ -37,7 +36,7 @@ void RayPathFilterContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::
 
 
 void RayPathFilterContext::LoadFromJson(const rapidjson::Value& root) {
-  auto p = Pointer("/type").Get(root);
+  const auto* p = Pointer("/type").Get(root);
   if (p == nullptr || !p->IsString()) {
     throw std::invalid_argument("<type> cannot recognize!");
   }

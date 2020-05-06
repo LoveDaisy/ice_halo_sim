@@ -69,7 +69,7 @@ void MultiScatterContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::A
 
 
 void MultiScatterContext::LoadFromJson(const rapidjson::Value& root) {
-  auto p = Pointer("/probability").Get(root);
+  const auto* p = Pointer("/probability").Get(root);
   if (p == nullptr || !p->IsNumber()) {
     throw std::invalid_argument("<multi_scatter.probability> cannot recognize!");
   }
@@ -85,7 +85,7 @@ void MultiScatterContext::LoadFromJson(const rapidjson::Value& root) {
   if (p == nullptr || !p->IsArray()) {
     throw std::invalid_argument("<multi_scatter.crystal> cannot recognize!");
   }
-  for (auto& pc : p->GetArray()) {
+  for (const auto& pc : p->GetArray()) {
     if (!pc.IsUint()) {
       throw std::invalid_argument("<multi_scatter.crystal> cannot recognize!");
     } else {
@@ -98,7 +98,7 @@ void MultiScatterContext::LoadFromJson(const rapidjson::Value& root) {
   if (p == nullptr || !p->IsArray()) {
     throw std::invalid_argument("<multi_scatter.population> cannot recognize!");
   }
-  for (auto& pp : p->GetArray()) {
+  for (const auto& pp : p->GetArray()) {
     if (!pp.IsNumber()) {
       throw std::invalid_argument("<multi_scatter.population> cannot recognize!");
     } else {
@@ -111,7 +111,7 @@ void MultiScatterContext::LoadFromJson(const rapidjson::Value& root) {
   if (p == nullptr || !p->IsArray()) {
     throw std::invalid_argument("<multi_scatter.ray_path_filter> cannot recognize!");
   }
-  for (auto& pf : p->GetArray()) {
+  for (const auto& pf : p->GetArray()) {
     if (!pf.IsUint()) {
       throw std::invalid_argument("<multi_scatter.ray_path_filter> cannot recognize!");
     } else {
