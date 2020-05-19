@@ -51,15 +51,15 @@ Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
       face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitBasicData();
   InitPrimaryFaceNumber();
-  RefineFaces();
+  PruneRedundantFaces();
   RefineFaceNumber();
 }
 
 
-Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
-                 std::vector<math::TriangleIdx> faces,  // face indices
-                 FaceNumberTable face_number_table,     // face to face number
-                 CrystalType type)                      // crystal type
+Crystal::Crystal(std::vector<math::Vec3f> vertexes,           // vertex
+                 std::vector<math::TriangleIdx> faces,        // face indices
+                 std::vector<ShortIdType> face_number_table,  // face to face number
+                 CrystalType type)                            // crystal type
     : type_(type), vertexes_(std::move(vertexes)), faces_(std::move(faces)),
       face_number_table_(std::move(face_number_table)), face_number_period_(-1), face_bases_(nullptr),
       face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
@@ -77,7 +77,7 @@ const std::vector<math::TriangleIdx>& Crystal::GetFaces() const {
 }
 
 
-const Crystal::FaceNumberTable& Crystal::GetFaceNumberTable() const {
+const std::vector<ShortIdType>& Crystal::GetFaceNumberTable() const {
   return face_number_table_;
 }
 
@@ -207,7 +207,7 @@ void Crystal::InitPrimaryFaceNumber() {
 }
 
 
-void Crystal::RefineFaces() {
+void Crystal::PruneRedundantFaces() {
   using math::Vec3f;
 
   size_t faces_num = faces_.size();
@@ -901,9 +901,9 @@ CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<math::Vec3f>& pts,   
 }
 
 
-CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<math::Vec3f>& pts,          // vertex points
-                                         const std::vector<math::TriangleIdx>& faces,  // face indices
-                                         const FaceNumberTable& face_number_table) {   // face to face number
+CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<math::Vec3f>& pts,                  // vertex points
+                                         const std::vector<math::TriangleIdx>& faces,          // face indices
+                                         const std::vector<ShortIdType>& face_number_table) {  // face to face number
   return std::unique_ptr<Crystal>(new Crystal(pts, faces, face_number_table, CrystalType::kCustom));
 }
 

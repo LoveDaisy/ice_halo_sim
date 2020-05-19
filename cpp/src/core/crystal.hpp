@@ -32,10 +32,9 @@ class Crystal {
   int TotalFaces() const;
   ShortIdType FaceNumber(int idx) const;
 
-  using FaceNumberTable = std::vector<ShortIdType>;
   const std::vector<math::Vec3f>& GetVertexes() const;
   const std::vector<math::TriangleIdx>& GetFaces() const;
-  const FaceNumberTable& GetFaceNumberTable() const;
+  const std::vector<ShortIdType>& GetFaceNumberTable() const;
 
   const float* GetFaceVertex() const;
   const float* GetFaceBaseVector() const;
@@ -159,15 +158,15 @@ class Crystal {
    * @param face_number_map the face number map
    * @return
    */
-  static CrystalPtrU CreateCustomCrystal(const std::vector<math::Vec3f>& pts,          // vertex points
-                                         const std::vector<math::TriangleIdx>& faces,  // face indices
-                                         const FaceNumberTable& face_number_table);    // face to face-number
+  static CrystalPtrU CreateCustomCrystal(const std::vector<math::Vec3f>& pts,                 // vertex points
+                                         const std::vector<math::TriangleIdx>& faces,         // face indices
+                                         const std::vector<ShortIdType>& face_number_table);  // face to face-number
 
  protected:
   void InitBasicData();
   void InitPrimaryFaceNumber();
   void RefineFaceNumber();
-  void RefineFaces();
+  void PruneRedundantFaces();
 
   bool IsCoplanar(size_t idx1, size_t idx2) const;
   bool IsCounterCoplanar(size_t idx1, size_t idx2) const;
@@ -178,7 +177,7 @@ class Crystal {
   CrystalType type_;
   std::vector<math::Vec3f> vertexes_;
   std::vector<math::TriangleIdx> faces_;
-  FaceNumberTable face_number_table_;
+  std::vector<ShortIdType> face_number_table_;
   int face_number_period_;
 
   std::unique_ptr<float[]> face_bases_;
@@ -206,10 +205,10 @@ class Crystal {
    *        and [Pyramidal Crystal Face Numbers](https://www.atoptics.co.uk/halo/fnumpyr.htm)
    * @param type
    */
-  Crystal(std::vector<math::Vec3f> vertexes,     // vertex points
-          std::vector<math::TriangleIdx> faces,  // face indices
-          FaceNumberTable face_number_table,     // face to face number
-          CrystalType type);                     // crystal type
+  Crystal(std::vector<math::Vec3f> vertexes,           // vertex points
+          std::vector<math::TriangleIdx> faces,        // face indices
+          std::vector<ShortIdType> face_number_table,  // face to face number
+          CrystalType type);                           // crystal type
 };
 
 
