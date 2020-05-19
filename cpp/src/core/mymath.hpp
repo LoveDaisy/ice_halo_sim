@@ -18,7 +18,7 @@ namespace math {
 
 constexpr float kPi = 3.14159265359f;
 constexpr float kSqrt3 = 1.73205080757f;
-constexpr float kFloatEps = 1e-6;
+constexpr float kFloatEps = 1e-5;
 constexpr float kDegreeToRad = kPi / 180.0f;
 constexpr float kRadToDegree = 180.0f / kPi;
 
