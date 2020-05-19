@@ -494,10 +494,24 @@ Vec3<T> Vec3<T>::FromTo(const Vec3<T>& v1, const Vec3<T>& v2) {
 template class Vec3<float>;
 
 
-TriangleIdx::TriangleIdx(int id1, int id2, int id3) : idx_{ id1, id2, id3 } {}
+TriangleIdx::TriangleIdx(ShortIdType id1, ShortIdType id2, ShortIdType id3) : idx_{ id1, id2, id3 } {}
 
 
-const int* TriangleIdx::idx() const {
+const ShortIdType* TriangleIdx::idx() const {
+  return idx_;
+}
+
+
+PolygonIdx::PolygonIdx() : idx_() {}
+
+
+PolygonIdx::PolygonIdx(std::initializer_list<ShortIdType> idx) : idx_(idx) {}
+
+
+PolygonIdx::PolygonIdx(std::vector<ShortIdType> idx) : idx_(std::move(idx)) {}
+
+
+const std::vector<ShortIdType>& PolygonIdx::idx() const {
   return idx_;
 }
 

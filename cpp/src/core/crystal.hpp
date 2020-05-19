@@ -1,6 +1,7 @@
 #ifndef SRC_CORE_CRYSTAL_H_
 #define SRC_CORE_CRYSTAL_H_
 
+#include <map>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -35,6 +36,7 @@ class Crystal {
   const std::vector<math::Vec3f>& GetVertexes() const;
   const std::vector<math::TriangleIdx>& GetFaces() const;
   const std::vector<ShortIdType>& GetFaceNumberTable() const;
+  const std::map<ShortIdType, math::PolygonIdx>& GetMergedFaces() const;
 
   const float* GetFaceVertex() const;
   const float* GetFaceBaseVector() const;
@@ -165,8 +167,9 @@ class Crystal {
  protected:
   void InitBasicData();
   void InitPrimaryFaceNumber();
-  void RefineFaceNumber();
   void PruneRedundantFaces();
+  void RefineFaceNumber();
+  void MergeFaces();
 
   bool IsCoplanar(size_t idx1, size_t idx2) const;
   bool IsCounterCoplanar(size_t idx1, size_t idx2) const;
@@ -178,6 +181,7 @@ class Crystal {
   std::vector<math::Vec3f> vertexes_;
   std::vector<math::TriangleIdx> faces_;
   std::vector<ShortIdType> face_number_table_;
+  std::map<ShortIdType, math::PolygonIdx> merged_faces_;
   int face_number_period_;
 
   std::unique_ptr<float[]> face_bases_;

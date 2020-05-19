@@ -53,6 +53,7 @@ Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
   InitPrimaryFaceNumber();
   PruneRedundantFaces();
   RefineFaceNumber();
+  MergeFaces();
 }
 
 
@@ -64,6 +65,7 @@ Crystal::Crystal(std::vector<math::Vec3f> vertexes,           // vertex
       face_number_table_(std::move(face_number_table)), face_number_period_(-1), face_bases_(nullptr),
       face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitBasicData();
+  MergeFaces();
 }
 
 
@@ -79,6 +81,11 @@ const std::vector<math::TriangleIdx>& Crystal::GetFaces() const {
 
 const std::vector<ShortIdType>& Crystal::GetFaceNumberTable() const {
   return face_number_table_;
+}
+
+
+const std::map<ShortIdType, math::PolygonIdx>& Crystal::GetMergedFaces() const {
+  return merged_faces_;
 }
 
 
@@ -397,6 +404,80 @@ void Crystal::RefineFaceNumber() {
       if (face_number_table_[j] == curr_fn) {
         face_number_table_[j] = pyr * 10 + fn;
       }
+    }
+  }
+}
+
+void Crystal::MergeFaces() {
+  size_t face_num = faces_.size();
+  std::unique_ptr<int[]> tmp_mat{ new int[face_num * face_num] };
+  for (size_t fid = 0; fid < face_num; fid++) {
+    auto curr_face_num = face_number_table_[fid];
+    if (merged_faces_.count(curr_face_num)) {
+      continue;
+    }
+
+    std::memset(tmp_mat.get(), 0, sizeof(int) * face_num * face_num);
+    for (size_t tmp_fid = fid; tmp_fid < face_num; tmp_fid++) {
+      if (face_number_table_[tmp_fid] != curr_face_num) {
+        continue;
+      }
+      const auto* tmp_tri_idx = faces_[tmp_fid].idx();
+      for (int i = 0; i < 3; i++) {
+        ShortIdType id1 = tmp_tri_idx[i % 3];
+        ShortIdType id2 = tmp_tri_idx[(i + 1) % 3];
+        tmp_mat[id1 * face_num + id2] = 1;
+      }
+    }
+    for (size_t r = 0; r < face_num; r++) {
+      for (size_t c = r + 1; c < face_num; c++) {
+        if (tmp_mat[r * face_num + c] > 0 && tmp_mat[c * face_num + r] > 0) {
+          tmp_mat[r * face_num + c] = 0;
+          tmp_mat[c * face_num + r] = 0;
+        } else if (tmp_mat[r * face_num + c] > 0) {
+          tmp_mat[c * face_num + r] -= 1;
+        } else if (tmp_mat[c * face_num + r] > 0) {
+          tmp_mat[r * face_num + c] -= 1;
+        }
+      }
+    }
+
+    std::vector<ShortIdType> curr_face;
+    {
+      bool found = false;
+      size_t r = 0, c = 0;
+      for (; r < face_num; r++) {
+        for (c = 0; c < face_num; c++) {
+          if (tmp_mat[r * face_num + c] > 0) {
+            found = true;
+            break;
+          }
+        }
+        if (found) {
+          break;
+        }
+      }
+
+      bool finished = !found;
+      curr_face.emplace_back(r + 1);
+      while (!finished) {
+        curr_face.emplace_back(c + 1);
+        tmp_mat[r * face_num + c] = 0;
+        r = c;
+        finished = true;
+        for (c = 0; c < face_num; c++) {
+          if (tmp_mat[r * face_num + c] > 0) {
+            finished = false;
+            break;
+          }
+        }
+      }
+
+      curr_face.pop_back();
+    }
+
+    if (!curr_face.empty()) {
+      merged_faces_.emplace(curr_face_num, math::PolygonIdx(curr_face));
     }
   }
 }

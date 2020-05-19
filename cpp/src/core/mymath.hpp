@@ -7,22 +7,19 @@
 #include <random>
 #include <vector>
 
+#include "core_def.hpp"
+
 namespace icehalo {
 
 struct AxisDistribution;
 
 namespace math {
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-const-variable"
-
 constexpr float kPi = 3.14159265359f;
 constexpr float kSqrt3 = 1.73205080757f;
 constexpr float kFloatEps = 1e-5;
 constexpr float kDegreeToRad = kPi / 180.0f;
 constexpr float kRadToDegree = 180.0f / kPi;
-
-#pragma clang diagnostic pop
 
 
 template <typename T>
@@ -70,12 +67,25 @@ using Vec3f = Vec3<float>;
 
 class TriangleIdx {
  public:
-  TriangleIdx(int id1, int id2, int id3);
+  TriangleIdx(ShortIdType id1, ShortIdType id2, ShortIdType id3);
 
-  const int* idx() const;
+  const ShortIdType* idx() const;
 
  private:
-  int idx_[3];
+  ShortIdType idx_[3];
+};
+
+
+class PolygonIdx {
+ public:
+  PolygonIdx();
+  PolygonIdx(std::initializer_list<ShortIdType> idx);
+  explicit PolygonIdx(std::vector<ShortIdType> idx);
+
+  const std::vector<ShortIdType>& idx() const;
+
+ private:
+  std::vector<ShortIdType> idx_;
 };
 
 

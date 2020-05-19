@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <sstream>
 
 #include "rapidjson/document.h"
 #include "rapidjson/pointer.h"
@@ -585,9 +586,13 @@ void CrystalContext::PrintCrystal() const {
   for (const auto& v : g->GetVertexes()) {
     LOG_VERBOSE("v %+.4f %+.4f %+.4f", v.x(), v.y(), v.z());
   }
-  for (const auto& f : g->GetFaces()) {
-    const auto* idx = f.idx();
-    LOG_VERBOSE("f %d %d %d", idx[0] + 1, idx[1] + 1, idx[2] + 1);
+  for (const auto& f : g->GetMergedFaces()) {
+    std::stringstream ss;
+    ss << "f";
+    for (auto id : f.second.idx()) {
+      ss << " " << id;
+    }
+    LOG_VERBOSE(ss.str());
   }
 }
 
