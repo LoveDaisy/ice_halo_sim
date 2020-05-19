@@ -198,6 +198,56 @@ Logger::Logger() : default_formatter_{ std::make_shared<SimpleLogFormatter>() } 
 }
 
 
+void Logger::EmitLog(const char* file, int line, LogLevel level, const char* fmt, ...) {
+  char buf[kMaxMessageLength];
+  va_list args;
+  va_start(args, fmt);
+  std::vsnprintf(buf, kMaxMessageLength, fmt, args);
+  va_end(args);
+
+  EmitLog(file, line, level, std::string(buf));
+}
+
+
+void Logger::EmitLog(const char* file, int line, LogLevel level, std::string msg_str) {
+  LogMessage msg{
+    level, std::chrono::system_clock::now(), line, file, "", std::move(msg_str), std::this_thread::get_id()
+  };
+  std::unordered_set<LogDestPtr> dest_set;
+  for (auto& kv : filter_dest_list_) {
+    if (kv.first->Filter(msg) && !dest_set.count(kv.second)) {
+      kv.second->Write(msg, default_formatter_);
+      dest_set.emplace(kv.second);
+    }
+  }
+}
+
+
+void Logger::EmitTagLog(const char* file, int line, LogLevel level, const char* tag, const char* fmt, ...) {
+  char buf[kMaxMessageLength];
+  va_list args;
+  va_start(args, fmt);
+  std::vsnprintf(buf, kMaxMessageLength, fmt, args);
+  va_end(args);
+
+  EmitTagLog(file, line, level, tag, std::string(buf));
+}
+
+
+void Logger::EmitTagLog(const char* file, int line, LogLevel level, const char* tag, std::string msg_str) {
+  LogMessage msg{
+    level, std::chrono::system_clock::now(), line, file, tag, std::move(msg_str), std::this_thread::get_id()
+  };
+  std::unordered_set<LogDestPtr> dest_set;
+  for (auto& kv : filter_dest_list_) {
+    if (kv.first->Filter(msg) && !dest_set.count(kv.second)) {
+      kv.second->Write(msg, default_formatter_);
+      dest_set.emplace(kv.second);
+    }
+  }
+}
+
+
 void Logger::AddDestination(LogFilterPtr filter, LogDestPtr dest) {
   filter_dest_list_.emplace_back(std::make_pair(std::move(filter), std::move(dest)));
 }

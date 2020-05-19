@@ -150,39 +150,10 @@ class LogComplexFilter : public LogFilter {
 
 class Logger {
  public:
-  void EmitLog(const char* file, int line, LogLevel level, const char* fmt, ...) {
-    char buf[kMaxMessageLength];
-    va_list args;
-    va_start(args, fmt);
-    std::vsnprintf(buf, kMaxMessageLength, fmt, args);
-    va_end(args);
-
-    LogMessage msg{ level, std::chrono::system_clock::now(), line, file, "", buf, std::this_thread::get_id() };
-    std::unordered_set<LogDestPtr> dest_set;
-    for (auto& kv : filter_dest_list_) {
-      if (kv.first->Filter(msg) && !dest_set.count(kv.second)) {
-        kv.second->Write(msg, default_formatter_);
-        dest_set.emplace(kv.second);
-      }
-    }
-  }
-
-  void EmitTagLog(const char* file, int line, LogLevel level, const char* tag, const char* fmt, ...) {
-    char buf[kMaxMessageLength];
-    va_list args;
-    va_start(args, fmt);
-    std::vsnprintf(buf, kMaxMessageLength, fmt, args);
-    va_end(args);
-
-    LogMessage msg{ level, std::chrono::system_clock::now(), line, file, tag, buf, std::this_thread::get_id() };
-    std::unordered_set<LogDestPtr> dest_set;
-    for (auto& kv : filter_dest_list_) {
-      if (kv.first->Filter(msg) && !dest_set.count(kv.second)) {
-        kv.second->Write(msg, default_formatter_);
-        dest_set.emplace(kv.second);
-      }
-    }
-  }
+  void EmitLog(const char* file, int line, LogLevel level, const char* fmt, ...);
+  void EmitLog(const char* file, int line, LogLevel level, std::string msg_str);
+  void EmitTagLog(const char* file, int line, LogLevel level, const char* tag, const char* fmt, ...);
+  void EmitTagLog(const char* file, int line, LogLevel level, const char* tag, std::string msg_str);
 
   void AddDestination(LogFilterPtr filter, LogDestPtr dest);
   void EnableSeverity(bool enable);
@@ -202,37 +173,31 @@ class Logger {
 }  // namespace icehalo
 
 // Convenience macros for log
-#define LOG_DEBUG(fmt, ...) \
-  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kDebug, (fmt), ##__VA_ARGS__)
-#define LOG_VERBOSE(fmt, ...) \
-  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kVerbose, (fmt), ##__VA_ARGS__)
-#define LOG_INFO(fmt, ...) \
-  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kInfo, (fmt), ##__VA_ARGS__)
-#define LOG_WARNING(fmt, ...) \
-  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kWarning, (fmt), ##__VA_ARGS__)
-#define LOG_ERROR(fmt, ...) \
-  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kError, (fmt), ##__VA_ARGS__)
-#define LOG_FATAL(fmt, ...) \
-  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kFatal, (fmt), ##__VA_ARGS__)
+#define LOG_DEBUG(...) \
+  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kDebug, ##__VA_ARGS__)
+#define LOG_VERBOSE(...) \
+  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kVerbose, ##__VA_ARGS__)
+#define LOG_INFO(...) \
+  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kInfo, ##__VA_ARGS__)
+#define LOG_WARNING(...) \
+  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kWarning, ##__VA_ARGS__)
+#define LOG_ERROR(...) \
+  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kError, ##__VA_ARGS__)
+#define LOG_FATAL(...) \
+  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kFatal, ##__VA_ARGS__)
 
-#define LOG_TAG_DEBUG(tag, fmt, ...)                                                                         \
-  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kDebugTag, (tag), (fmt), \
-                                             ##__VA_ARGS__)
-#define LOG_TAG_VERBOSE(tag, fmt, ...)                                                                         \
-  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kVerboseTag, (tag), (fmt), \
-                                             ##__VA_ARGS__)
-#define LOG_TAG_INFO(tag, fmt, ...)                                                                         \
-  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kInfoTag, (tag), (fmt), \
-                                             ##__VA_ARGS__)
-#define LOG_TAG_WARNING(tag, fmt, ...)                                                                         \
-  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kWarningTag, (tag), (fmt), \
-                                             ##__VA_ARGS__)
-#define LOG_TAG_ERROR(tag, fmt, ...)                                                                         \
-  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kErrorTag, (tag), (fmt), \
-                                             ##__VA_ARGS__)
-#define LOG_TAG_FATAL(tag, fmt, ...)                                                                         \
-  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kFatalTag, (tag), (fmt), \
-                                             ##__VA_ARGS__)
+#define TAG_LOG_DEBUG(...) \
+  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kDebug, ##__VA_ARGS__)
+#define TAG_LOG_VERBOSE(...) \
+  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kVerbose, ##__VA_ARGS__)
+#define TAG_LOG_INFO(...) \
+  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kInfo, ##__VA_ARGS__)
+#define TAG_LOG_WARNING(...) \
+  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kWarning, ##__VA_ARGS__)
+#define TAG_LOG_ERROR(...) \
+  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kError, ##__VA_ARGS__)
+#define TAG_LOG_FATAL(...) \
+  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kFatal, ##__VA_ARGS__)
 
 #define ENABLE_LOG_SEVERITY icehalo::Logger::GetInstance()->EnableSeverity(true)
 #define DISABLE_LOG_SEVERITY icehalo::Logger::GetInstance()->EnableSeverity(false)
