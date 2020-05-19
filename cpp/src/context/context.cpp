@@ -139,15 +139,7 @@ CrystalMap ProjectContext::GetCrystalMap() const {
 
 void ProjectContext::PrintCrystalInfo() const {
   for (const auto& ctx : crystal_store_) {
-    auto g = ctx->GetCrystal();
-    LOG_VERBOSE("-- ID: %d --", ctx->GetId());
-    for (const auto& v : g->GetVertexes()) {
-      LOG_VERBOSE("v %+.4f %+.4f %+.4f", v.x(), v.y(), v.z());
-    }
-    for (const auto& f : g->GetFaces()) {
-      auto idx = f.idx();
-      LOG_VERBOSE("f %d %d %d", idx[0] + 1, idx[1] + 1, idx[2] + 1);
-    }
+    ctx->PrintCrystal();
   }
 }
 

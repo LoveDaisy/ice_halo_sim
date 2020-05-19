@@ -578,4 +578,17 @@ void CrystalContext::LoadFromJson(const rapidjson::Value& root) {
   crystal_parsers[type](this, root);
 }
 
+
+void CrystalContext::PrintCrystal() const {
+  const auto* g = GetCrystal();
+  LOG_VERBOSE("-- ID: %d --", GetId());
+  for (const auto& v : g->GetVertexes()) {
+    LOG_VERBOSE("v %+.4f %+.4f %+.4f", v.x(), v.y(), v.z());
+  }
+  for (const auto& f : g->GetFaces()) {
+    const auto* idx = f.idx();
+    LOG_VERBOSE("f %d %d %d", idx[0] + 1, idx[1] + 1, idx[2] + 1);
+  }
+}
+
 }  // namespace icehalo

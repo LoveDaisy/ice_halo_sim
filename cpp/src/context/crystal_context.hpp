@@ -23,6 +23,7 @@ class CrystalContext : public IJsonizable {
 
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;
+  void PrintCrystal() const;
 
   static CrystalContextPtrU CreateDefault();
 
