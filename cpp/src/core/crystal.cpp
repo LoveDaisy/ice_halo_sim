@@ -685,24 +685,24 @@ CrystalPtrU Crystal::CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4,  
 
   float r = (1.0f - h2) * (1.0f - h1);
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(cos(2 * kPi * static_cast<float>(i) / 6) * r,  // x
-                          sin(2 * kPi * static_cast<float>(i) / 6) * r,  // y
+    vertexes.emplace_back(cos(kPi * static_cast<float>(2 * i - 1) / 6) * r,  // x
+                          sin(kPi * static_cast<float>(2 * i - 1) / 6) * r,  // y
                           h1 * H1 * (1.0f - h2) + h2 * H2 + h3 * 2);     // z
   }
   r = 1.0f - h2;
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(cos(2 * kPi * static_cast<float>(i) / 6) * r,  // x
-                          sin(2 * kPi * static_cast<float>(i) / 6) * r,  // y
+    vertexes.emplace_back(cos(kPi * static_cast<float>(2 * i - 1) / 6) * r,  // x
+                          sin(kPi * static_cast<float>(2 * i - 1) / 6) * r,  // y
                           h2 * H2 + h3 * 2);                             // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(cos(2 * kPi * static_cast<float>(i) / 6),  // x
-                          sin(2 * kPi * static_cast<float>(i) / 6),  // y
+    vertexes.emplace_back(cos(kPi * static_cast<float>(2 * i - 1) / 6),  // x
+                          sin(kPi * static_cast<float>(2 * i - 1) / 6),  // y
                           h3 * 2);                                   // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(cos(2 * kPi * static_cast<float>(i) / 6),  // x
-                          sin(2 * kPi * static_cast<float>(i) / 6),  // y
+    vertexes.emplace_back(cos(kPi * static_cast<float>(2 * i - 1) / 6),  // x
+                          sin(kPi * static_cast<float>(2 * i - 1) / 6),  // y
                           0);                                        // z
   }
 
