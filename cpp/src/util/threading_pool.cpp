@@ -217,4 +217,4 @@ void ThreadingPool::WorkingFunction(int idx) {
   worker_cv_.notify_one();
 }
 
-}  // namespace kve
+}  // namespace icehalo

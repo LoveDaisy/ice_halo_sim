@@ -410,14 +410,15 @@ void Crystal::RefineFaceNumber() {
 
 void Crystal::MergeFaces() {
   size_t face_num = faces_.size();
-  std::unique_ptr<int[]> tmp_mat{ new int[face_num * face_num] };
+  size_t vertex_num = vertexes_.size();
+  std::unique_ptr<int[]> tmp_mat{ new int[vertex_num * vertex_num] };
   for (size_t fid = 0; fid < face_num; fid++) {
     auto curr_face_num = face_number_table_[fid];
     if (merged_faces_.count(curr_face_num)) {
       continue;
     }
 
-    std::memset(tmp_mat.get(), 0, sizeof(int) * face_num * face_num);
+    std::memset(tmp_mat.get(), 0, sizeof(int) * vertex_num * vertex_num);
     for (size_t tmp_fid = fid; tmp_fid < face_num; tmp_fid++) {
       if (face_number_table_[tmp_fid] != curr_face_num) {
         continue;
@@ -426,18 +427,18 @@ void Crystal::MergeFaces() {
       for (int i = 0; i < 3; i++) {
         ShortIdType id1 = tmp_tri_idx[i % 3];
         ShortIdType id2 = tmp_tri_idx[(i + 1) % 3];
-        tmp_mat[id1 * face_num + id2] = 1;
+        tmp_mat[id1 * vertex_num + id2] = 1;
       }
     }
-    for (size_t r = 0; r < face_num; r++) {
-      for (size_t c = r + 1; c < face_num; c++) {
-        if (tmp_mat[r * face_num + c] > 0 && tmp_mat[c * face_num + r] > 0) {
-          tmp_mat[r * face_num + c] = 0;
-          tmp_mat[c * face_num + r] = 0;
-        } else if (tmp_mat[r * face_num + c] > 0) {
-          tmp_mat[c * face_num + r] -= 1;
-        } else if (tmp_mat[c * face_num + r] > 0) {
-          tmp_mat[r * face_num + c] -= 1;
+    for (size_t r = 0; r < vertex_num; r++) {
+      for (size_t c = r + 1; c < vertex_num; c++) {
+        if (tmp_mat[r * vertex_num + c] > 0 && tmp_mat[c * vertex_num + r] > 0) {
+          tmp_mat[r * vertex_num + c] = 0;
+          tmp_mat[c * vertex_num + r] = 0;
+        } else if (tmp_mat[r * vertex_num + c] > 0) {
+          tmp_mat[c * vertex_num + r] -= 1;
+        } else if (tmp_mat[c * vertex_num + r] > 0) {
+          tmp_mat[r * vertex_num + c] -= 1;
         }
       }
     }
@@ -446,9 +447,9 @@ void Crystal::MergeFaces() {
     {
       bool found = false;
       size_t r = 0, c = 0;
-      for (; r < face_num; r++) {
-        for (c = 0; c < face_num; c++) {
-          if (tmp_mat[r * face_num + c] > 0) {
+      for (; r < vertex_num; r++) {
+        for (c = 0; c < vertex_num; c++) {
+          if (tmp_mat[r * vertex_num + c] > 0) {
             found = true;
             break;
           }
@@ -462,11 +463,11 @@ void Crystal::MergeFaces() {
       curr_face.emplace_back(r + 1);
       while (!finished) {
         curr_face.emplace_back(c + 1);
-        tmp_mat[r * face_num + c] = 0;
+        tmp_mat[r * vertex_num + c] = 0;
         r = c;
         finished = true;
-        for (c = 0; c < face_num; c++) {
-          if (tmp_mat[r * face_num + c] > 0) {
+        for (c = 0; c < vertex_num; c++) {
+          if (tmp_mat[r * vertex_num + c] > 0) {
             finished = false;
             break;
           }
@@ -768,23 +769,23 @@ CrystalPtrU Crystal::CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4,  
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(cos(kPi * static_cast<float>(2 * i - 1) / 6) * r,  // x
                           sin(kPi * static_cast<float>(2 * i - 1) / 6) * r,  // y
-                          h1 * H1 * (1.0f - h2) + h2 * H2 + h3 * 2);     // z
+                          h1 * H1 * (1.0f - h2) + h2 * H2 + h3 * 2);         // z
   }
   r = 1.0f - h2;
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(cos(kPi * static_cast<float>(2 * i - 1) / 6) * r,  // x
                           sin(kPi * static_cast<float>(2 * i - 1) / 6) * r,  // y
-                          h2 * H2 + h3 * 2);                             // z
+                          h2 * H2 + h3 * 2);                                 // z
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(cos(kPi * static_cast<float>(2 * i - 1) / 6),  // x
                           sin(kPi * static_cast<float>(2 * i - 1) / 6),  // y
-                          h3 * 2);                                   // z
+                          h3 * 2);                                       // z
   }
   for (int i = 0; i < 6; i++) {
     vertexes.emplace_back(cos(kPi * static_cast<float>(2 * i - 1) / 6),  // x
                           sin(kPi * static_cast<float>(2 * i - 1) / 6),  // y
-                          0);                                        // z
+                          0);                                            // z
   }
 
   faces.emplace_back(0, 1, 2);

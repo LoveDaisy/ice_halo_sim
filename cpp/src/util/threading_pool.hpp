@@ -187,6 +187,6 @@ class ThreadingPool {
   std::condition_variable worker_cv_;
 };
 
-}  // namespace kve
+}  // namespace icehalo
 
 #endif  // UTIL_THREADING_POOL_H_
