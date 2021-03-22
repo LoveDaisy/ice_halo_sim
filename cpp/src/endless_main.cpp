@@ -8,9 +8,6 @@
 #include "util/arg_parser.hpp"
 #include "util/log.hpp"
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wmissing-noreturn"
-
 
 constexpr size_t kBufSize = 1024;
 char str_buf[kBufSize];
@@ -244,4 +241,3 @@ int main(int argc, char* argv[]) {
   return 0;
 }
 
-#pragma clang diagnostic pop
