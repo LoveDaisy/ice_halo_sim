@@ -1,5 +1,6 @@
 [VERBOSE] Reading config from: /Users/zhangjiajie/Codes/Ice Halo/cpp/test/config_01.json
 [VERBOSE] Config missing <data_folder>. Use default current path!
+[VERBOSE] Config missing <main_image_name>. Use default img.jpg
 [VERBOSE] Render config missing <width>. Use default 800!
 [VERBOSE] Render config missing <height>. Use default 800!
 [VERBOSE] Render config missing <color_compact_level>. Use default true color!
@@ -198,19 +199,19 @@
 [VERBOSE] f 4 10 11 5
 [VERBOSE] f 5 11 12 6
 [VERBOSE] f 1 6 12 7
-[INFO] Initialization: 1.77ms
+[INFO] Initialization: 1.60ms
 [INFO] starting at wavelength: 420
-[INFO] Ray tracing: 65.30ms
+[INFO] Ray tracing: 61.02ms
 [INFO] starting at wavelength: 460
-[INFO] Ray tracing: 0.54ms
+[INFO] Ray tracing: 0.53ms
 [INFO] starting at wavelength: 500
 [INFO] Ray tracing: 0.46ms
 [INFO] starting at wavelength: 540
 [INFO] Ray tracing: 0.44ms
 [INFO] starting at wavelength: 580
-[INFO] Ray tracing: 0.45ms
+[INFO] Ray tracing: 0.46ms
 [INFO] starting at wavelength: 620
-[INFO] Ray tracing: 0.47ms
+[INFO] Ray tracing: 0.46ms
 [VERBOSE] -- ID: 1 --
 [VERBOSE] v -0.8660 -0.5000 -1.2000
 [VERBOSE] v -0.8660 -0.5000 +1.2000
@@ -1523,4 +1524,4 @@
 [DEBUG] +0.1458,-0.3549,-0.8145,+0.1885,-0.7163,+0.6718,+0.0000
 [DEBUG] +0.1737,-0.4606,-0.7153,-0.0902,-0.2336,+0.9681,+0.0000
 [DEBUG] +0.0766,-0.7119,+0.3258,-0.1181,-0.3058,+0.9447,+0.0000
-[INFO] Total: 0.072s
+[INFO] Total: 0.067s

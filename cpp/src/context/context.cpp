@@ -93,8 +93,8 @@ std::string ProjectContext::GetDataDirectory() const {
 }
 
 
-std::string ProjectContext::GetDefaultImagePath() const {
-  return PathJoin(data_path_, "img.jpg");
+std::string ProjectContext::GetMainImagePath() const {
+  return PathJoin(data_path_, main_img_filename_);
 }
 
 
@@ -226,6 +226,16 @@ void ProjectContext::ParseBasicSettings(rapidjson::Document& d) {
     dir = p->GetString();
   }
   data_path_ = dir;
+
+  main_img_filename_ = "img.jpg";
+  p = Pointer("/main_image_name").Get(d);
+  if (p == nullptr) {
+    LOG_VERBOSE("Config missing <main_image_name>. Use default %s", main_img_filename_.c_str());
+  } else if (!p->IsString()) {
+    LOG_VERBOSE("Config <main_image_name> is not a string. Use default %s", main_img_filename_.c_str());
+  } else {
+    main_img_filename_ = p->GetString();
+  }
 }
 
 

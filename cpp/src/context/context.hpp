@@ -37,7 +37,7 @@ class ProjectContext {
   void SetRayHitNum(int hit_num);
 
   std::string GetDataDirectory() const;
-  std::string GetDefaultImagePath() const;
+  std::string GetMainImagePath() const;
 
   const Crystal* GetCrystal(ShortIdType id) const;
   ShortIdType GetCrystalId(const Crystal* crystal) const;
@@ -82,6 +82,7 @@ class ProjectContext {
   int ray_hit_num_;
 
   std::string data_path_;
+  std::string main_img_filename_;
 
   std::vector<CrystalContextPtrU> crystal_store_;
   std::vector<RayPathFilterContextPtrU> filter_store_;

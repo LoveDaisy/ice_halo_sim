@@ -123,14 +123,15 @@ int main(int argc, char* argv[]) {
   ArgParser parser;
   parser.AddArgument("-v", 0, "verbose", "make output verbose");
   parser.AddArgument("-d", 0, "debug", "display debug info");
-  parser.AddArgument("--config", 1, "config-file", "config file");
+  parser.AddArgument("-n", 1, "repeat-number", "repeat number");
+  parser.AddArgument("-f", 1, "config-file", "config file");
   ArgParseResult arg_parse_result;
   try {
     arg_parse_result = parser.Parse(argc, argv);
   } catch (...) {
     return -1;
   }
-  const char* config_filename = arg_parse_result.at("--config")[0].c_str();
+  const char* config_filename = arg_parse_result.at("-f")[0].c_str();
   if (arg_parse_result.count("-d")) {
     LogFilterPtr stdout_filter = LogFilter::MakeLevelFilter({ LogLevel::kDebug, LogLevel::kVerbose });
     LogDestPtr stdout_dest = LogStdOutDest::GetInstance();
@@ -158,14 +159,20 @@ int main(int argc, char* argv[]) {
   std::chrono::duration<float, std::milli> diff = t - start;
   LOG_INFO("Initialization: %.2fms", diff.count());
 
-  File file(proj_ctx->GetDefaultImagePath().c_str());
+  File file(proj_ctx->GetMainImagePath().c_str());
   if (!file.Open(FileOpenMode::kWrite)) {
     LOG_ERROR("Cannot create output image file!");
     return -1;
   }
   file.Close();
 
+  long repeat_num = -1;
+  if (arg_parse_result.count("-n")) {
+    repeat_num = std::strtol(arg_parse_result.at("-n")[0].c_str(), nullptr, 10);
+  }
+
   size_t total_ray_num = 0;
+  long curr_repeat = 0;
   while (true) {
     const auto& wavelengths = proj_ctx->wavelengths_;
     SimpleRayData exit_ray_data;
@@ -212,7 +219,7 @@ int main(int argc, char* argv[]) {
     cv::Mat img(proj_ctx->render_ctx_->GetImageHeight(), proj_ctx->render_ctx_->GetImageWidth(), CV_8UC3,
                 renderer.GetImageBuffer());
     cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
-    cv::imwrite(PathJoin(proj_ctx->GetDataDirectory(), "img.jpg"), img);
+    cv::imwrite(proj_ctx->GetMainImagePath(), img);
 
     if (split_render_ctx) {
       for (auto& r : split_renderer_candidates) {
@@ -232,6 +239,11 @@ int main(int argc, char* argv[]) {
     diff = t - start;
     LOG_INFO("=== Total %6.1fM rays finished! ===", total_ray_num / 1.0e6);
     LOG_INFO("=== Spent %7.2f sec!           ===", diff.count() / 1000);
+
+    curr_repeat++;
+    if (repeat_num > 0 && curr_repeat >= repeat_num) {
+      break;
+    }
   }
 
   auto end = std::chrono::system_clock::now();
