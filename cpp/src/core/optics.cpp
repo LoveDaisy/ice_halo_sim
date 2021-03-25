@@ -237,7 +237,7 @@ void Optics::HitSurface(const Crystal* crystal, float n, size_t num,            
     const float* tmp_dir = dir_in + i * 3;
     const float* tmp_norm = face_norm + face_id_in[i] * 3;
 
-    float cos_theta = math::Dot3(tmp_dir, tmp_norm);
+    float cos_theta = Dot3(tmp_dir, tmp_norm);
     float rr = cos_theta > 0 ? n : 1.0f / n;
     float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
 
@@ -371,14 +371,14 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir,  // i
                                         float* p, int* idx) {               // output
   float min_t = std::numeric_limits<float>::max();
   const float* norm_in = face_norm + face_id * 3;
-  float flag_in = math::Dot3(dir, norm_in);
+  float flag_in = Dot3(dir, norm_in);
 
   for (int i = 0; i < face_num; i++) {
     const float* curr_face_point = face_points + i * 9;
     const float* curr_face_base = face_bases + i * 6;
     const float* curr_face_norm = face_norm + i * 3;
 
-    if (math::Dot3(dir, curr_face_norm) * flag_in >= 0) {
+    if (Dot3(dir, curr_face_norm) * flag_in >= 0) {
       continue;
     }
 
@@ -390,7 +390,7 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir,  // i
     float ff24 = curr_face_base[2] * curr_face_base[4];
 
     float c = dir[0] * ff15 + dir[1] * ff23 + dir[2] * ff04 - dir[0] * ff24 - dir[1] * ff05 - dir[2] * ff13;
-    if (math::FloatEqualZero(c)) {
+    if (FloatEqualZero(c)) {
       continue;
     }
 
@@ -498,7 +498,7 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir,  
     __m128 SUB_PERM_FF = _mm_permute_ps(_mm_sub_ps(FF1, FF0), 0xD2);
     __m128 C = _mm_dp_ps(DIR, SUB_PERM_FF, 0x71);
 
-    if (math::FloatEqualZero(C[0])) {
+    if (FloatEqualZero(C[0])) {
       continue;
     }
 

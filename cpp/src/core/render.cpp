@@ -11,7 +11,7 @@
 
 namespace icehalo {
 
-void EqualAreaFishEye(const math::Pose3f& cam_pose,  // Camera rotation. [lon, lat, roll]
+void EqualAreaFishEye(const Pose3f& cam_pose,        // Camera rotation. [lon, lat, roll]
                       float hov,                     // Half field of view.
                       size_t data_number,            // Data number
                       const float* dir,              // Ray directions, [x, y, z]
@@ -28,9 +28,9 @@ void EqualAreaFishEye(const math::Pose3f& cam_pose,  // Camera rotation. [lon, l
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (size_t i = 0; i < data_number; i++) {
-    if (std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
+    if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
@@ -44,7 +44,7 @@ void EqualAreaFishEye(const math::Pose3f& cam_pose,  // Camera rotation. [lon, l
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / math::Norm3(dir_copy.get() + i * 3));
+      float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
       float proj_r = img_r / 2.0f / std::sin(hov / 2.0f * math::kDegreeToRad);
       float r = 2.0f * proj_r * std::sin((math::kPi / 2.0f - lat) / 2.0f);
 
@@ -55,7 +55,7 @@ void EqualAreaFishEye(const math::Pose3f& cam_pose,  // Camera rotation. [lon, l
 }
 
 
-void EquidistantFishEye(const math::Pose3f& cam_pose,  // Camera rotation. [lon, lat, roll]
+void EquidistantFishEye(const Pose3f& cam_pose,        // Camera rotation. [lon, lat, roll]
                         float hov,                     // Half field of view.
                         size_t data_number,            // Data number
                         const float* dir,              // Ray directions, [x, y, z]
@@ -72,9 +72,9 @@ void EquidistantFishEye(const math::Pose3f& cam_pose,  // Camera rotation. [lon,
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
-    if (std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
+    if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
@@ -88,7 +88,7 @@ void EquidistantFishEye(const math::Pose3f& cam_pose,  // Camera rotation. [lon,
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / math::Norm3(dir_copy.get() + i * 3));
+      float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
       float r = (math::kPi / 2.0f - lat) / (hov * math::kDegreeToRad) * img_r;
 
       img_xy[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + img_wid / 2.0));
@@ -98,7 +98,7 @@ void EquidistantFishEye(const math::Pose3f& cam_pose,  // Camera rotation. [lon,
 }
 
 
-void DualEqualAreaFishEye(const math::Pose3f& /* cam_rot */,   // Not used
+void DualEqualAreaFishEye(const Pose3f& /* cam_rot */,         // Not used
                           float /* hov */,                     // Not used
                           size_t data_number,                  // Data number
                           const float* dir,                    // Ray directions, [x, y, z]
@@ -116,14 +116,14 @@ void DualEqualAreaFishEye(const math::Pose3f& /* cam_rot */,   // Not used
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
-    if (std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
+    if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / math::Norm3(dir_copy.get() + i * 3));
+      float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
       if (lat < 0) {
         lon = math::kPi - lon;
       }
@@ -136,7 +136,7 @@ void DualEqualAreaFishEye(const math::Pose3f& /* cam_rot */,   // Not used
 }
 
 
-void DualEquidistantFishEye(const math::Pose3f& /* cam_rot */,   // Not used
+void DualEquidistantFishEye(const Pose3f& /* cam_rot */,         // Not used
                             float /* hov */,                     // Not used
                             size_t data_number,                  // Data number
                             const float* dir,                    // Ray directions, [x, y, z]
@@ -153,14 +153,14 @@ void DualEquidistantFishEye(const math::Pose3f& /* cam_rot */,   // Not used
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
-    if (std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
+    if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / math::Norm3(dir_copy.get() + i * 3));
+      float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
       if (lat < 0) {
         lon = math::kPi - lon;
       }
@@ -173,7 +173,7 @@ void DualEquidistantFishEye(const math::Pose3f& /* cam_rot */,   // Not used
 }
 
 
-void RectLinear(const math::Pose3f& cam_pose,  // Camera rotation. [lon, lat, roll]
+void RectLinear(const Pose3f& cam_pose,        // Camera rotation. [lon, lat, roll]
                 float hov,                     // Half field of view.
                 size_t data_number,            // Data number
                 const float* dir,              // Ray directions, [x, y, z]
@@ -189,9 +189,9 @@ void RectLinear(const math::Pose3f& cam_pose,  // Camera rotation. [lon, lat, ro
     i *= math::kDegreeToRad;
   }
 
-  math::RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
   for (size_t i = 0; i < data_number; i++) {
-    if (dir_copy[i * 3 + 2] < 0 || std::abs(math::Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
+    if (dir_copy[i * 3 + 2] < 0 || std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
       img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
     } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {

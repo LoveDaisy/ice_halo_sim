@@ -9,8 +9,7 @@ namespace {
 
 class CrystalTest : public ::testing::Test {
  protected:
-  static void CheckVertex(const std::vector<icehalo::math::Vec3f>& vtx1,
-                          const std::vector<icehalo::math::Vec3f>& vtx2) {
+  static void CheckVertex(const std::vector<icehalo::Vec3f>& vtx1, const std::vector<icehalo::Vec3f>& vtx2) {
     ASSERT_EQ(vtx1.size(), vtx2.size());
     for (decltype(vtx1.size()) i = 0; i < vtx1.size(); i++) {
       const auto& p0 = vtx1[i];
@@ -44,7 +43,7 @@ class CrystalTest : public ::testing::Test {
       for (decltype(c2->TotalFaces()) j = 0; j < c2->TotalFaces(); j++) {
         const auto* tmp_n = n2 + j * 3;
         int tmp_fn = fn2[j];
-        if (icehalo::math::DiffNorm3(n, tmp_n) < icehalo::math::kFloatEps) {
+        if (icehalo::DiffNorm3(n, tmp_n) < icehalo::math::kFloatEps) {
           find_same_norm = true;
           EXPECT_EQ(tmp_fn, fn);
         }
@@ -60,7 +59,7 @@ class CrystalTest : public ::testing::Test {
       for (decltype(c1->TotalFaces()) j = 0; j < c1->TotalFaces(); j++) {
         const auto* tmp_n = n1 + j * 3;
         int tmp_fn = fn1[j];
-        if (icehalo::math::DiffNorm3(n, tmp_n) < icehalo::math::kFloatEps) {
+        if (icehalo::DiffNorm3(n, tmp_n) < icehalo::math::kFloatEps) {
           find_same_norm = true;
           EXPECT_EQ(tmp_fn, fn);
         }
@@ -117,7 +116,7 @@ TEST_F(CrystalTest, HexPrismVertex) {
   float k = kSqrt3 / 2;
 
   // clang-format off
-  std::vector<icehalo::math::Vec3f> pts0{
+  std::vector<icehalo::Vec3f> pts0{
     {  k,    -0.5f,  h },
     {  k,     0.5f,  h },
     {  0.0f,  1.0f,  h },
@@ -157,7 +156,7 @@ TEST_F(CrystalTest, HexPyramidVertex0) {
   float k = kSqrt3 / 2;
 
   // clang-format off
-  std::vector<icehalo::math::Vec3f> pts0{
+  std::vector<icehalo::Vec3f> pts0{
     {     k * r1, -0.5f * r1,  h2 + h1 * H },
     {     k * r1,  0.5f * r1,  h2 + h1 * H },
     {  0.0f * r1,  1.0f * r1,  h2 + h1 * H },
@@ -249,7 +248,7 @@ TEST_F(CrystalTest, IrregularHexPrismVertex1) {
   float dist[6]{ 1.0f, 1.0f, 1.5f, 1.0f, 2.5f, 1.0f };
 
   // clang-format off
-  std::vector<icehalo::math::Vec3f> pts0 {
+  std::vector<icehalo::Vec3f> pts0 {
     {  kSqrt3 / 2, -0.5f,  h },
     {  kSqrt3 / 2,  0.5f,  h },
     { -kSqrt3 / 4, 1.25f,  h },
@@ -261,7 +260,7 @@ TEST_F(CrystalTest, IrregularHexPrismVertex1) {
     { -kSqrt3 / 2,  1.0f, -h },
     { -kSqrt3 / 2, -1.5f, -h },
   };
-  std::vector<icehalo::math::TriangleIdx> faces0 {
+  std::vector<icehalo::TriangleIdx> faces0 {
     { 0, 1, 2 }, { 0, 2, 3 }, { 0, 3, 4 },
     { 0, 6, 1 }, { 0, 5, 6 },
     { 1, 7, 2 }, { 1, 6, 7 },

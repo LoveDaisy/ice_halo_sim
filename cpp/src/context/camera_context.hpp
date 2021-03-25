@@ -16,7 +16,7 @@ enum class LensType;
 
 class CameraContext : public IJsonizable {
  public:
-  math::Pose3f GetCameraPose() const;
+  Pose3f GetCameraPose() const;
   void SetCameraTargetDirection(float azimuth, float altitude, float roll);
   void ResetCameraTargetDirection();
 

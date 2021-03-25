@@ -25,7 +25,7 @@ enum class LensType {
 };
 
 
-void EqualAreaFishEye(const math::Pose3f& cam_pose,                        // Camera rotation. [lon, lat, roll]
+void EqualAreaFishEye(const Pose3f& cam_pose,                              // Camera rotation. [lon, lat, roll]
                       float hov,                                           // Half field of view.
                       size_t data_number,                                  // Data number
                       const float* dir,                                    // Ray directions, [x, y, z]
@@ -34,7 +34,7 @@ void EqualAreaFishEye(const math::Pose3f& cam_pose,                        // Ca
                       VisibleRange visible_range = VisibleRange::kUpper);  // Visible range
 
 
-void EquidistantFishEye(const math::Pose3f& cam_pose,                        // Camera rotation. [lon, lat, roll]
+void EquidistantFishEye(const Pose3f& cam_pose,                              // Camera rotation. [lon, lat, roll]
                         float hov,                                           // Half field of view.
                         size_t data_number,                                  // Data number
                         const float* dir,                                    // Ray directions, [x, y, z]
@@ -43,7 +43,7 @@ void EquidistantFishEye(const math::Pose3f& cam_pose,                        // 
                         VisibleRange visible_range = VisibleRange::kUpper);  // Visible range
 
 
-void DualEqualAreaFishEye(const math::Pose3f& cam_pose,                        // Not used
+void DualEqualAreaFishEye(const Pose3f& cam_pose,                              // Not used
                           float hov,                                           // Not used
                           size_t data_number,                                  // Data number
                           const float* dir,                                    // Ray directions, [x, y, z]
@@ -52,7 +52,7 @@ void DualEqualAreaFishEye(const math::Pose3f& cam_pose,                        /
                           VisibleRange visible_range = VisibleRange::kUpper);  // Not used
 
 
-void DualEquidistantFishEye(const math::Pose3f& cam_pose,                        // Not used
+void DualEquidistantFishEye(const Pose3f& cam_pose,                              // Not used
                             float hov,                                           // Not used
                             size_t data_number,                                  // Data number
                             const float* dir,                                    // Ray directions, [x, y, z]
@@ -61,7 +61,7 @@ void DualEquidistantFishEye(const math::Pose3f& cam_pose,                       
                             VisibleRange visible_range = VisibleRange::kUpper);  // Not used
 
 
-void RectLinear(const math::Pose3f& cam_pose,                        // Camera rotation. [lon, lat, roll]
+void RectLinear(const Pose3f& cam_pose,                              // Camera rotation. [lon, lat, roll]
                 float hov,                                           // Half field of view.
                 size_t data_number,                                  // Data number
                 const float* dir,                                    // Ray directions, [x, y, z]
@@ -70,14 +70,13 @@ void RectLinear(const math::Pose3f& cam_pose,                        // Camera r
                 VisibleRange visible_range = VisibleRange::kUpper);  // Visible range
 
 
-using ProjectionFunction =
-    std::function<void(const math::Pose3f& cam_pose,        // Camera rotation (lon, lat, roll), in degree.
-                       float hov,                           // Half field of view, in degree
-                       size_t data_number,                  // Data number
-                       const float* dir,                    // Ray directions, [x, y, z]
-                       int img_wid, int img_hei,            // Image size
-                       int* img_xy,                         // Image coordinates
-                       VisibleRange visible_semi_sphere)>;  // Which semi-sphere can be visible
+using ProjectionFunction = std::function<void(const Pose3f& cam_pose,    // Camera rotation (lon, lat, roll), in degree.
+                                              float hov,                 // Half field of view, in degree
+                                              size_t data_number,        // Data number
+                                              const float* dir,          // Ray directions, [x, y, z]
+                                              int img_wid, int img_hei,  // Image size
+                                              int* img_xy,               // Image coordinates
+                                              VisibleRange visible_semi_sphere)>;  // Which semi-sphere can be visible
 
 
 EnumMap<LensType, ProjectionFunction>& GetProjectionFunctions();

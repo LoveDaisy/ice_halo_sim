@@ -21,7 +21,7 @@ AbstractRayPathFilter::AbstractRayPathFilter(const AbstractRayPathFilter& other)
 
 bool AbstractRayPathFilter::Filter(const Crystal* crystal, RaySegment* last_r) const {
   if (remove_homodromous_ &&
-      math::Dot3(last_r->dir.val(), last_r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * math::kFloatEps) {
+      Dot3(last_r->dir.val(), last_r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * math::kFloatEps) {
     return false;
   }
 

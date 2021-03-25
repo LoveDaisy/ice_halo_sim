@@ -123,7 +123,7 @@ std::pair<RayCollectionInfo, SimpleRayData> SimulationData::CollectFinalRayData(
         continue;
       }
       const auto* axis = r->root_ctx->main_axis.val();
-      math::RotateZBack(axis, r->dir.val(), p);
+      RotateZBack(axis, r->dir.val(), p);
       p[3] = r->w;
       collection_info.total_energy += r->w;
       p += 4;
@@ -212,7 +212,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
 
       auto* p = result_buf_p + idx_list[i][j] * 4;
       const auto* axis = r->root_ctx->main_axis.val();
-      math::RotateZBack(axis, r->dir.val(), p);
+      RotateZBack(axis, r->dir.val(), p);
       p[3] = r->w;
     });
   }
@@ -313,7 +313,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitFil
 
       // 7. Fill in result_ray_data
       const auto* axis = r->root_ctx->main_axis.val();
-      math::RotateZBack(axis, r->dir.val(), result_buf_p);
+      RotateZBack(axis, r->dir.val(), result_buf_p);
       result_buf_p[3] = r->w;
       result_buf_p += 4;
 
@@ -712,8 +712,6 @@ void Simulator::Run() {
 // Init sun rays, and fill into dir[1]. They will be rotated and fill into dir[0] in InitEntryRays().
 // In world frame.
 void Simulator::InitSunRays() {
-  using math::RandomSampler;
-
   total_ray_num_ = context_->GetInitRayNum();
   float sun_r = context_->sun_ctx_->GetSunDiameter() / 2;  // In degree
   const float* sun_ray_dir = context_->sun_ctx_->GetSunPosition();
@@ -739,12 +737,11 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
   auto* ray_seg_pool = RaySegmentPool::GetInstance();
   auto* ray_info_pool = RayInfoPool::GetInstance();
 
-  using math::RandomSampler;
   float axis_rot[3];
   std::unique_ptr<float[]> face_prob_buf{ new float[ctx->GetCrystal()->TotalFaces()] };
   for (size_t i = 0; i < active_ray_num_; i++) {
     InitMainAxis(ctx, axis_rot);
-    math::RotateZ(axis_rot, entry_ray_data_.ray_dir + (i + entry_ray_offset_) * 3, buffer_.dir[0] + i * 3);
+    RotateZ(axis_rot, entry_ray_data_.ray_dir + (i + entry_ray_offset_) * 3, buffer_.dir[0] + i * 3);
 
     buffer_.face_id[0][i] = ctx->RandomSampleFace(buffer_.dir[0] + i * 3, face_prob_buf.get());
     RandomSampler::SampleTriangularPoints(face_vertex + buffer_.face_id[0][i] * 9, buffer_.pt[0] + i * 3);
@@ -766,17 +763,17 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
 // Init crystal main axis.
 // Random sample points on a sphere with given parameters.
 void Simulator::InitMainAxis(const CrystalContext* ctx, float* axis) {
-  auto* rng = math::RandomNumberGenerator::GetInstance();
+  auto* rng = RandomNumberGenerator::GetInstance();
 
   auto axis_dist = ctx->GetAxisDistribution();
-  if (axis_dist.latitude_dist == math::Distribution::kUniform) {
+  if (axis_dist.latitude_dist == Distribution::kUniform) {
     // Random sample on full sphere, ignore other parameters.
-    math::RandomSampler::SampleSphericalPointsSph(axis);
+    RandomSampler::SampleSphericalPointsSph(axis);
   } else {
-    math::RandomSampler::SampleSphericalPointsSph(axis_dist, axis);
+    RandomSampler::SampleSphericalPointsSph(axis_dist, axis);
   }
 
-  if (axis_dist.roll_dist == math::Distribution::kUniform) {
+  if (axis_dist.roll_dist == Distribution::kUniform) {
     // Random roll, ignore other parameters.
     axis[2] = rng->GetUniform() * 2 * math::kPi;
   } else {
@@ -796,7 +793,7 @@ void Simulator::PrepareMultiScatterRays(float prob) {
     entry_ray_data_.Allocate(last_exit_ray_seg_num);
   }
 
-  auto* rng = math::RandomNumberGenerator::GetInstance();
+  auto* rng = RandomNumberGenerator::GetInstance();
   size_t idx = 0;
   for (const auto& r : simulation_ray_data_.GetLastExitRaySegments()) {
     if (r->w < context_->kScatMinW) {
@@ -808,7 +805,7 @@ void Simulator::PrepareMultiScatterRays(float prob) {
     }
     r->state = RaySegmentState::kContinued;
     const auto* axis_rot = r->root_ctx->main_axis.val();
-    math::RotateZBack(axis_rot, r->dir.val(), entry_ray_data_.ray_dir + idx * 3);
+    RotateZBack(axis_rot, r->dir.val(), entry_ray_data_.ray_dir + idx * 3);
     entry_ray_data_.ray_seg[idx] = r;
     idx++;
   }
@@ -816,7 +813,7 @@ void Simulator::PrepareMultiScatterRays(float prob) {
 
   // Shuffle
   for (size_t i = 0; i < total_ray_num_; i++) {
-    int tmp_idx = math::RandomSampler::SampleInt(static_cast<int>(total_ray_num_ - i));
+    int tmp_idx = RandomSampler::SampleInt(static_cast<int>(total_ray_num_ - i));
 
     float tmp_dir[3];
     std::memcpy(tmp_dir, entry_ray_data_.ray_dir + (i + tmp_idx) * 3, sizeof(float) * 3);

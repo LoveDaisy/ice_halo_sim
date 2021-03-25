@@ -14,7 +14,7 @@
 
 namespace icehalo {
 
-using CrystalPrimitiveNormTalbe = std::vector<std::pair<math::Vec3f, int>>;
+using CrystalPrimitiveNormTalbe = std::vector<std::pair<Vec3f, int>>;
 
 const CrystalPrimitiveNormTalbe& GetHexFaceNormToNumberList() {
   static CrystalPrimitiveNormTalbe face_norm_to_number_list{
@@ -44,9 +44,9 @@ const CrystalPrimitiveNormTalbe& GetCubicFaceNormToNumberList() {
 }
 
 
-Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
-                 std::vector<math::TriangleIdx> faces,  // face indices
-                 CrystalType type)                      // crystal type
+Crystal::Crystal(std::vector<Vec3f> vertexes,     // vertex
+                 std::vector<TriangleIdx> faces,  // face indices
+                 CrystalType type)                // crystal type
     : type_(type), vertexes_(std::move(vertexes)), faces_(std::move(faces)), face_number_period_(-1),
       face_bases_(nullptr), face_vertexes_(nullptr), face_norm_(nullptr), face_area_(nullptr) {
   InitBasicData();
@@ -57,8 +57,8 @@ Crystal::Crystal(std::vector<math::Vec3f> vertexes,     // vertex
 }
 
 
-Crystal::Crystal(std::vector<math::Vec3f> vertexes,           // vertex
-                 std::vector<math::TriangleIdx> faces,        // face indices
+Crystal::Crystal(std::vector<Vec3f> vertexes,                 // vertex
+                 std::vector<TriangleIdx> faces,              // face indices
                  std::vector<ShortIdType> face_number_table,  // face to face number
                  CrystalType type)                            // crystal type
     : type_(type), vertexes_(std::move(vertexes)), faces_(std::move(faces)),
@@ -69,12 +69,12 @@ Crystal::Crystal(std::vector<math::Vec3f> vertexes,           // vertex
 }
 
 
-const std::vector<math::Vec3f>& Crystal::GetVertexes() const {
+const std::vector<Vec3f>& Crystal::GetVertexes() const {
   return vertexes_;
 }
 
 
-const std::vector<math::TriangleIdx>& Crystal::GetFaces() const {
+const std::vector<TriangleIdx>& Crystal::GetFaces() const {
   return faces_;
 }
 
@@ -84,7 +84,7 @@ const std::vector<ShortIdType>& Crystal::GetFaceNumberTable() const {
 }
 
 
-const std::map<ShortIdType, math::PolygonIdx>& Crystal::GetMergedFaces() const {
+const std::map<ShortIdType, PolygonIdx>& Crystal::GetMergedFaces() const {
   return merged_faces_;
 }
 
@@ -137,8 +137,6 @@ ShortIdType Crystal::FaceNumber(int idx) const {
 
 
 void Crystal::InitBasicData() {
-  using math::Vec3f;
-
   auto face_num = faces_.size();
   face_bases_.reset(new float[face_num * 6]);
   face_vertexes_.reset(new float[face_num * 9]);
@@ -152,12 +150,12 @@ void Crystal::InitBasicData() {
   for (size_t i = 0; i < faces_.size(); i++) {
     const auto& f = faces_[i];
     const auto* idx = f.idx();
-    math::Vec3FromTo(vertexes_[idx[0]].val(), vertexes_[idx[1]].val(), face_bases_ptr + i * 6 + 0);
-    math::Vec3FromTo(vertexes_[idx[0]].val(), vertexes_[idx[2]].val(), face_bases_ptr + i * 6 + 3);
-    math::Cross3(face_bases_ptr + i * 6 + 0, face_bases_ptr + i * 6 + 3, face_norm_ptr + i * 3);
+    Vec3FromTo(vertexes_[idx[0]].val(), vertexes_[idx[1]].val(), face_bases_ptr + i * 6 + 0);
+    Vec3FromTo(vertexes_[idx[0]].val(), vertexes_[idx[2]].val(), face_bases_ptr + i * 6 + 3);
+    Cross3(face_bases_ptr + i * 6 + 0, face_bases_ptr + i * 6 + 3, face_norm_ptr + i * 3);
 
-    face_area_[i] = math::Norm3(face_norm_ptr + i * 3) / 2;
-    math::Normalize3(face_norm_ptr + i * 3);
+    face_area_[i] = Norm3(face_norm_ptr + i * 3) / 2;
+    Normalize3(face_norm_ptr + i * 3);
 
     std::memcpy(face_vertexes_ptr + i * 9 + 0, vertexes_[idx[0]].val(), 3 * sizeof(float));
     std::memcpy(face_vertexes_ptr + i * 9 + 3, vertexes_[idx[1]].val(), 3 * sizeof(float));
@@ -215,8 +213,6 @@ void Crystal::InitPrimaryFaceNumber() {
 
 
 void Crystal::PruneRedundantFaces() {
-  using math::Vec3f;
-
   size_t faces_num = faces_.size();
   std::vector<bool> face_remove(faces_num, false);
 
@@ -255,7 +251,7 @@ void Crystal::PruneRedundantFaces() {
       for (auto v1 : surface1_v) {
         float min_d = std::numeric_limits<float>::max();
         for (auto v2 : surface2_v) {
-          auto tmp_d = math::DiffNorm3(vertexes_[v1].val(), vertexes_[v2].val());
+          auto tmp_d = DiffNorm3(vertexes_[v1].val(), vertexes_[v2].val());
           if (tmp_d < min_d) {
             min_d = tmp_d;
           }
@@ -316,8 +312,6 @@ void Crystal::PruneRedundantFaces() {
 }
 
 void Crystal::RefineFaceNumber() {
-  using math::Vec3f;
-
   size_t face_num = faces_.size();
 
   // Find all pyramidal faces z component
@@ -367,7 +361,7 @@ void Crystal::RefineFaceNumber() {
     }
     const auto* curr_norm = face_norm_.get() + i * 3;
     for (const auto& p : primitive_fn_table) {
-      if (std::abs(math::Dot3(p.first.val(), curr_norm) - 1) < math::kFloatEps) {
+      if (std::abs(Dot3(p.first.val(), curr_norm) - 1) < math::kFloatEps) {
         face_number_table_[i] = p.second;
         break;
       }
@@ -383,7 +377,7 @@ void Crystal::RefineFaceNumber() {
     const auto* curr_norm = face_norm_.get() + i * 3;
     auto cmp = [=](const std::pair<Vec3f, int>& a, const std::pair<Vec3f, int>& b) {
       float hor_n[3]{ curr_norm[0], curr_norm[1], 0.0f };
-      return math::Dot3(hor_n, a.first.val()) < math::Dot3(hor_n, b.first.val());
+      return Dot3(hor_n, a.first.val()) < Dot3(hor_n, b.first.val());
     };
     decltype(primitive_fn_table.begin()) max_iter, min_iter;
     std::tie(min_iter, max_iter) = std::minmax_element(primitive_fn_table.begin() + 2, primitive_fn_table.end(), cmp);
@@ -392,8 +386,8 @@ void Crystal::RefineFaceNumber() {
       face_center[0] += face_vertexes_[i * 9 + j * 3 + 0] / 3.0f;
       face_center[1] += face_vertexes_[i * 9 + j * 3 + 1] / 3.0f;
     }
-    auto max_dot3 = math::Dot3(face_center, max_iter->first.val());
-    auto min_dot3 = math::Dot3(face_center, min_iter->first.val());
+    auto max_dot3 = Dot3(face_center, max_iter->first.val());
+    auto min_dot3 = Dot3(face_center, min_iter->first.val());
     int fn = max_dot3 > min_dot3 ? max_iter->second : min_iter->second;
 
     auto z_iter = std::find_if(norm_z_pyr.begin(), norm_z_pyr.end(),
@@ -478,19 +472,19 @@ void Crystal::MergeFaces() {
     }
 
     if (!curr_face.empty()) {
-      merged_faces_.emplace(curr_face_num, math::PolygonIdx(curr_face));
+      merged_faces_.emplace(curr_face_num, PolygonIdx(curr_face));
     }
   }
 }
 
 bool Crystal::IsCoplanar(size_t idx1, size_t idx2) const {
   const auto* face_norm_ptr = face_norm_.get();
-  return math::Dot3(face_norm_ptr + idx1 * 3, face_norm_ptr + idx2 * 3) > 1 - math::kFloatEps;
+  return Dot3(face_norm_ptr + idx1 * 3, face_norm_ptr + idx2 * 3) > 1 - math::kFloatEps;
 }
 
 bool Crystal::IsCounterCoplanar(size_t idx1, size_t idx2) const {
   const auto* face_norm_ptr = face_norm_.get();
-  return math::Dot3(face_norm_ptr + idx1 * 3, face_norm_ptr + idx2 * 3) < -1 + math::kFloatEps;
+  return Dot3(face_norm_ptr + idx1 * 3, face_norm_ptr + idx2 * 3) < -1 + math::kFloatEps;
 }
 
 bool Crystal::IsAdjacent(size_t idx1, size_t idx2) const {
@@ -516,8 +510,6 @@ int Crystal::MatchedVertexes(size_t idx1, size_t idx2) const {
 
 CrystalPtrU Crystal::CreateHexPrism(float h) {
   using math::kPi;
-  using math::TriangleIdx;
-  using math::Vec3f;
 
   std::vector<Vec3f> vertexes;
   std::vector<TriangleIdx> faces;
@@ -561,8 +553,6 @@ CrystalPtrU Crystal::CreateHexPyramid(float h1, float h2, float h3) {
 
 CrystalPtrU Crystal::CreateCubicPyramid(float h1, float h2) {
   using math::kPi;
-  using math::TriangleIdx;
-  using math::Vec3f;
 
   h1 = std::min(h1, 1.f);
   h2 = std::min(h2, 1.f);
@@ -616,8 +606,6 @@ CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4,  // upper 
                                       int lower_idx1, int lower_idx4,  // lower Miller index
                                       float h1, float h2, float h3) {  // heights
   using math::kPi;
-  using math::TriangleIdx;
-  using math::Vec3f;
 
   float H1 = kC * static_cast<float>(upper_idx1 * 1.0 / upper_idx4);
   float H3 = kC * static_cast<float>(lower_idx1 * 1.0 / lower_idx4);
@@ -679,8 +667,6 @@ CrystalPtrU Crystal::CreateHexPyramid(float angle1, float angle2,      // wedge 
   using math::kDegreeToRad;
   using math::kPi;
   using math::kSqrt3;
-  using math::TriangleIdx;
-  using math::Vec3f;
 
   angle1 *= kDegreeToRad;
   angle2 *= kDegreeToRad;
@@ -752,8 +738,6 @@ CrystalPtrU Crystal::CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4,  
                                                int lower_idx1, int lower_idx4,  // lower Miller index
                                                float h1, float h2, float h3) {  // heights
   using math::kPi;
-  using math::TriangleIdx;
-  using math::Vec3f;
 
   float H1 = kC * static_cast<float>(upper_idx1 * 1.0 / upper_idx4);
   float H2 = kC * static_cast<float>(lower_idx1 * 1.0 / lower_idx4);
@@ -821,10 +805,7 @@ CrystalPtrU Crystal::CreateIrregularHexPrism(const float* dist, float h) {
    *  2.2 Else drop this point;
    * 3. Construct a convex hull from point set P.
    */
-  using math::HalfSpaceSet;
   using math::kSqrt3;
-  using math::TriangleIdx;
-  using math::Vec3f;
 
   constexpr int kConstraintNum = 8;
   constexpr int kFaceNum = 6;
@@ -882,10 +863,7 @@ CrystalPtrU Crystal::CreateIrregularHexPyramid(const float* dist, const int* idx
    * 2. Find all co-planner points.
    * 3. For points in each face, construct a triangular division.
    */
-  using math::HalfSpaceSet;
   using math::kSqrt3;
-  using math::TriangleIdx;
-  using math::Vec3f;
 
   constexpr int kConstraintNum = 20;
   constexpr int kFaceNum = 6;
@@ -977,14 +955,14 @@ CrystalPtrU Crystal::CreateIrregularHexPyramid(const float* dist, const int* idx
 }
 
 
-CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<math::Vec3f>& pts,            // vertex points
-                                         const std::vector<math::TriangleIdx>& faces) {  // face indices
+CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<Vec3f>& pts,            // vertex points
+                                         const std::vector<TriangleIdx>& faces) {  // face indices
   return std::unique_ptr<Crystal>(new Crystal(pts, faces, CrystalType::kCustom));
 }
 
 
-CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<math::Vec3f>& pts,                  // vertex points
-                                         const std::vector<math::TriangleIdx>& faces,          // face indices
+CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<Vec3f>& pts,                        // vertex points
+                                         const std::vector<TriangleIdx>& faces,                // face indices
                                          const std::vector<ShortIdType>& face_number_table) {  // face to face number
   return std::unique_ptr<Crystal>(new Crystal(pts, faces, face_number_table, CrystalType::kCustom));
 }

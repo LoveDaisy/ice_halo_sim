@@ -33,10 +33,10 @@ class Crystal {
   int TotalFaces() const;
   ShortIdType FaceNumber(int idx) const;
 
-  const std::vector<math::Vec3f>& GetVertexes() const;
-  const std::vector<math::TriangleIdx>& GetFaces() const;
+  const std::vector<Vec3f>& GetVertexes() const;
+  const std::vector<TriangleIdx>& GetFaces() const;
   const std::vector<ShortIdType>& GetFaceNumberTable() const;
-  const std::map<ShortIdType, math::PolygonIdx>& GetMergedFaces() const;
+  const std::map<ShortIdType, PolygonIdx>& GetMergedFaces() const;
 
   const float* GetFaceVertex() const;
   const float* GetFaceBaseVector() const;
@@ -150,8 +150,8 @@ class Crystal {
    * @param faces the faces of the crystal
    * @return
    */
-  static CrystalPtrU CreateCustomCrystal(const std::vector<math::Vec3f>& pts,           // vertex points
-                                         const std::vector<math::TriangleIdx>& faces);  // face indices
+  static CrystalPtrU CreateCustomCrystal(const std::vector<Vec3f>& pts,           // vertex points
+                                         const std::vector<TriangleIdx>& faces);  // face indices
 
   /*! @brief Create a customized crystal
    *
@@ -160,8 +160,8 @@ class Crystal {
    * @param face_number_map the face number map
    * @return
    */
-  static CrystalPtrU CreateCustomCrystal(const std::vector<math::Vec3f>& pts,                 // vertex points
-                                         const std::vector<math::TriangleIdx>& faces,         // face indices
+  static CrystalPtrU CreateCustomCrystal(const std::vector<Vec3f>& pts,                       // vertex points
+                                         const std::vector<TriangleIdx>& faces,               // face indices
                                          const std::vector<ShortIdType>& face_number_table);  // face to face-number
 
  protected:
@@ -178,10 +178,10 @@ class Crystal {
   int MatchedVertexes(size_t idx1, size_t idx2) const;
 
   CrystalType type_;
-  std::vector<math::Vec3f> vertexes_;
-  std::vector<math::TriangleIdx> faces_;
+  std::vector<Vec3f> vertexes_;
+  std::vector<TriangleIdx> faces_;
   std::vector<ShortIdType> face_number_table_;
-  std::map<ShortIdType, math::PolygonIdx> merged_faces_;
+  std::map<ShortIdType, PolygonIdx> merged_faces_;
   int face_number_period_;
 
   std::unique_ptr<float[]> face_bases_;
@@ -196,9 +196,9 @@ class Crystal {
    * @param faces
    * @param type
    */
-  Crystal(std::vector<math::Vec3f> vertexes,     // vertex points
-          std::vector<math::TriangleIdx> faces,  // face indices
-          CrystalType type);                     // crystal type
+  Crystal(std::vector<Vec3f> vertexes,     // vertex points
+          std::vector<TriangleIdx> faces,  // face indices
+          CrystalType type);               // crystal type
 
   /*! @brief Constructor, given vertexes, faces and face_number_map
    *
@@ -209,8 +209,8 @@ class Crystal {
    *        and [Pyramidal Crystal Face Numbers](https://www.atoptics.co.uk/halo/fnumpyr.htm)
    * @param type
    */
-  Crystal(std::vector<math::Vec3f> vertexes,           // vertex points
-          std::vector<math::TriangleIdx> faces,        // face indices
+  Crystal(std::vector<Vec3f> vertexes,                 // vertex points
+          std::vector<TriangleIdx> faces,              // face indices
           std::vector<ShortIdType> face_number_table,  // face to face number
           CrystalType type);                           // crystal type
 };

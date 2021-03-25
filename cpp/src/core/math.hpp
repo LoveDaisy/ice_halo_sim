@@ -21,6 +21,8 @@ constexpr float kFloatEps = 1e-5;
 constexpr float kDegreeToRad = kPi / 180.0f;
 constexpr float kRadToDegree = 180.0f / kPi;
 
+}  // namespace math
+
 
 template <typename T>
 class Vec3 {
@@ -212,8 +214,8 @@ class RandomSampler {
 using RandomSamplerPtrU = std::unique_ptr<RandomSampler>;
 
 
-bool FloatEqual(float a, float b, float threshold = kFloatEps);
-bool FloatEqualZero(float a, float threshold = kFloatEps);
+bool FloatEqual(float a, float b, float threshold = math::kFloatEps);
+bool FloatEqualZero(float a, float threshold = math::kFloatEps);
 
 float Dot3(const float* vec1, const float* vec2);
 void Cross3(const float* vec1, const float* vec2, float* vec);
@@ -231,20 +233,17 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
 std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss);
 void SortAndRemoveDuplicate(std::vector<Vec3f>* pts);
 std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& n0, float d0);
-void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<math::Vec3f>& pts,
-                          std::vector<math::TriangleIdx>& faces);
+void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Vec3f>& pts, std::vector<TriangleIdx>& faces);
 void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n, std::vector<int>& pts_idx,
                              std::vector<TriangleIdx>& faces);
-
-}  // namespace math
 
 
 struct AxisDistribution {
   AxisDistribution();
 
-  math::Distribution latitude_dist;
-  math::Distribution azimuth_dist;
-  math::Distribution roll_dist;
+  Distribution latitude_dist;
+  Distribution azimuth_dist;
+  Distribution roll_dist;
   float latitude_mean;
   float azimuth_mean;
   float roll_mean;

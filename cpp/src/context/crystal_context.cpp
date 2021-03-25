@@ -206,8 +206,8 @@ void CrystalContext::ParseCustomCrystal(const rapidjson::Value& c) {
       throw std::invalid_argument("<crystal.parameter> cannot open model file!");
     }
 
-    std::vector<math::Vec3f> vertexes;
-    std::vector<math::TriangleIdx> faces;
+    std::vector<Vec3f> vertexes;
+    std::vector<TriangleIdx> faces;
     float v_buf[3];
     int f_buf[3];
     int curr_char;
@@ -236,8 +236,6 @@ void CrystalContext::ParseCustomCrystal(const rapidjson::Value& c) {
 
 
 AxisDistribution ParseCrystalAxis(const rapidjson::Value& c) {
-  using math::Distribution;
-
   AxisDistribution axis{};
 
   // Start parsing zenith settings.
@@ -267,7 +265,7 @@ AxisDistribution ParseCrystalAxis(const rapidjson::Value& c) {
   }
 
   // Start parsing azimuth settings.
-  axis.azimuth_dist = math::Distribution::kUniform;
+  axis.azimuth_dist = Distribution::kUniform;
   axis.azimuth_mean = 0;
   axis.azimuth_std = 360;
   p = Pointer("/azimuth").Get(c);
@@ -370,7 +368,7 @@ int CrystalContext::RandomSampleFace(const float* ray_dir, float* prob_buf) cons
   for (int k = 0; k < total_faces; k++) {
     prob_buf[k] = 0;
     if (!std::isnan(face_norm[k * 3 + 0]) && face_area[k] > 0) {
-      prob_buf[k] = std::max(-math::Dot3(face_norm + k * 3, ray_dir) * face_area[k], 0.0f);
+      prob_buf[k] = std::max(-Dot3(face_norm + k * 3, ray_dir) * face_area[k], 0.0f);
       sum += prob_buf[k];
     }
   }
@@ -378,7 +376,7 @@ int CrystalContext::RandomSampleFace(const float* ray_dir, float* prob_buf) cons
     prob_buf[k] /= sum;
   }
 
-  return static_cast<ShortIdType>(math::RandomSampler::SampleInt(prob_buf, total_faces));
+  return static_cast<ShortIdType>(RandomSampler::SampleInt(prob_buf, total_faces));
 }
 
 
@@ -509,10 +507,10 @@ void CrystalContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Alloca
   Pointer("/zenith/mean").Set(root, 90.0f - axis_.latitude_mean, allocator);
   Pointer("/zenith/std").Set(root, axis_.latitude_std, allocator);
   switch (axis_.latitude_dist) {
-    case math::Distribution::kGaussian:
+    case Distribution::kGaussian:
       Pointer("/zenith/type").Set(root, "gauss", allocator);
       break;
-    case math::Distribution::kUniform:
+    case Distribution::kUniform:
       Pointer("/zenith/type").Set(root, "uniform", allocator);
       break;
   }
@@ -520,10 +518,10 @@ void CrystalContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Alloca
   Pointer("/roll/mean").Set(root, axis_.roll_mean, allocator);
   Pointer("/roll/std").Set(root, axis_.roll_std, allocator);
   switch (axis_.roll_dist) {
-    case math::Distribution::kGaussian:
+    case Distribution::kGaussian:
       Pointer("/roll/type").Set(root, "gauss", allocator);
       break;
-    case math::Distribution::kUniform:
+    case Distribution::kUniform:
       Pointer("/roll/type").Set(root, "uniform", allocator);
       break;
   }
@@ -531,10 +529,10 @@ void CrystalContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Alloca
   Pointer("/azimuth/mean").Set(root, axis_.azimuth_mean, allocator);
   Pointer("/azimuth/std").Set(root, axis_.azimuth_std, allocator);
   switch (axis_.azimuth_dist) {
-    case math::Distribution::kGaussian:
+    case Distribution::kGaussian:
       Pointer("/azimuth/type").Set(root, "gauss", allocator);
       break;
-    case math::Distribution::kUniform:
+    case Distribution::kUniform:
       Pointer("/azimuth/type").Set(root, "uniform", allocator);
       break;
   }

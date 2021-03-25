@@ -124,8 +124,8 @@ struct RaySegment : public ISerializable {
   RaySegment* prev;
   RayInfo* root_ctx;
 
-  math::Vec3f pt;
-  math::Vec3f dir;
+  Vec3f pt;
+  Vec3f dir;
   float w;
   int face_id;
   RaySegmentState state;
@@ -172,7 +172,7 @@ struct RayInfo : public ISerializable {
   RaySegment* first_ray_segment;
   RaySegment* prev_ray_segment;
   int32_t crystal_id;
-  math::Vec3f main_axis;
+  Vec3f main_axis;
 };
 
 
