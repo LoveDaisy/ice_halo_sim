@@ -61,7 +61,7 @@ struct ByteSwapImp {};
 template <>
 struct ByteSwapImp<1> {
   template <typename T>
-  void operator()(T*) noexcept {}
+  void operator()(T* /* x */) noexcept {}
 };
 
 template <>
@@ -122,8 +122,12 @@ class File {
  public:
   explicit File(const char* filename);
   File(const char* path, const char* filename);
+  File(const File& other) = delete;
   File(File&& other) noexcept;
   ~File();
+
+  File& operator=(const File& other) = delete;
+  File& operator=(File&& other);
 
   bool Open(FileOpenMode mode = FileOpenMode::kRead);
   bool Close();

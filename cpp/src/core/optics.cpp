@@ -134,7 +134,8 @@ void RaySegment::Serialize(File& file, bool with_boi) const {
     file.Write(ISerializable::kDefaultBoi);
   }
 
-  uint32_t chunk_id, obj_id;
+  uint32_t chunk_id = 0;
+  uint32_t obj_id = 0;
   std::tie(chunk_id, obj_id) = RaySegmentPool::GetInstance()->GetObjectSerializeIndex(next_reflect);
   file.Write(chunk_id);
   file.Write(obj_id);
@@ -162,7 +163,8 @@ void RaySegment::Deserialize(File& file, endian::Endianness endianness) {
   endianness = CheckEndianness(file, endianness);
   bool need_swap = (endianness != endian::kCompileEndian);
 
-  uint32_t chunk_id, obj_id;
+  uint32_t chunk_id = 0;
+  uint32_t obj_id = 0;
   file.Read(&chunk_id);
   file.Read(&obj_id);
   if (need_swap) {
@@ -213,14 +215,14 @@ void RaySegment::Deserialize(File& file, endian::Endianness endianness) {
     endian::ByteSwap::Swap(&w);
   }
 
-  int16_t face_id_data;
+  int16_t face_id_data = 0;
   file.Read(&face_id_data);
   if (need_swap) {
     endian::ByteSwap::Swap(&face_id_data);
   }
   face_id = face_id_data;
 
-  uint8_t state_data;
+  uint8_t state_data = 0;
   file.Read(&state_data);
   state = static_cast<RaySegmentState>(state_data);
 
@@ -270,7 +272,8 @@ void RayInfo::Serialize(File& file, bool with_boi) const {
     file.Write(ISerializable::kDefaultBoi);
   }
 
-  uint32_t chunk_id, obj_id;
+  uint32_t chunk_id = 0;
+  uint32_t obj_id = 0;
   std::tie(chunk_id, obj_id) = RaySegmentPool::GetInstance()->GetObjectSerializeIndex(first_ray_segment);
   file.Write(chunk_id);
   file.Write(obj_id);
@@ -289,7 +292,8 @@ void RayInfo::Deserialize(File& file, endian::Endianness endianness) {
   endianness = CheckEndianness(file, endianness);
   bool need_swap = (endianness != endian::kCompileEndian);
 
-  uint32_t chunk_id, obj_id;
+  uint32_t chunk_id = 0;
+  uint32_t obj_id = 0;
   file.Read(&chunk_id);
   file.Read(&obj_id);
   if (need_swap) {
@@ -450,7 +454,7 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir,  
   __m128 DIR = _mm_loadu_ps(dir);
   __m128 PT = _mm_loadu_ps(pt);
   __m128 NORM_IN = _mm_loadu_ps(norm_in);
-  __m128 DN_IN = _mm_dp_ps(DIR, NORM_IN, 0x71);
+  auto DN_IN = _mm_dp_ps(DIR, NORM_IN, 0x71);
 
   for (int i = 0; i < face_num; i++) {
     const float* curr_face_point = face_points + i * 9;
@@ -459,7 +463,7 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir,  
 
     __m128 CURR_FACE_NORM = _mm_loadu_ps(curr_face_norm);
 
-    __m128 DN_CURR = _mm_dp_ps(DIR, CURR_FACE_NORM, 0x71);
+    auto DN_CURR = _mm_dp_ps(DIR, CURR_FACE_NORM, 0x71);
     __m128 FLAG = _mm_mul_ps(DN_IN, DN_CURR);
 
     if (FLAG[0] >= 0) {
@@ -495,8 +499,8 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir,  
      * dir: 2   1   0   -   2   1   0
      * ff1: 1   0   2  ff0: 1   0   2
      */
-    __m128 SUB_PERM_FF = _mm_permute_ps(_mm_sub_ps(FF1, FF0), 0xD2);
-    __m128 C = _mm_dp_ps(DIR, SUB_PERM_FF, 0x71);
+    auto SUB_PERM_FF = _mm_permute_ps(_mm_sub_ps(FF1, FF0), 0xD2);
+    auto C = _mm_dp_ps(DIR, SUB_PERM_FF, 0x71);
 
     if (FloatEqualZero(C[0])) {
       continue;
@@ -514,8 +518,8 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir,  
      * ff1  : 1   0   2  ff0: 1   0   2
      */
     __m128 CURR_FACE_POINT = _mm_loadu_ps(curr_face_point);
-    __m128 A = _mm_dp_ps(SUB_PERM_FF, CURR_FACE_POINT, 0x71);
-    __m128 B = _mm_dp_ps(SUB_PERM_FF, PT, 0x71);
+    auto A = _mm_dp_ps(SUB_PERM_FF, CURR_FACE_POINT, 0x71);
+    auto B = _mm_dp_ps(SUB_PERM_FF, PT, 0x71);
     float t = (A[0] - B[0]) / C[0];
     if (t <= math::kFloatEps) {
       continue;

@@ -52,6 +52,18 @@ File::File(icehalo::File&& other) noexcept
       path_(std::move(other.path_)) {}
 
 
+File& File::operator=(File&& other) {
+  if (&other != this) {
+    file_ = other.file_;
+    state_ = other.state_;
+    buffer_ = std::move(other.buffer_);
+    buffer_offset_ = other.buffer_offset_;
+    path_ = std::move(other.path_);
+  }
+  return *this;
+}
+
+
 File::~File() {
   Close();
 }
@@ -62,7 +74,7 @@ bool File::Open(FileOpenMode mode) {
     boost::filesystem::create_directories(path_.parent_path());
   }
 
-  const char* m;
+  const char* m = nullptr;
   switch (mode) {
     case FileOpenMode::kWrite:
       m = "wb";

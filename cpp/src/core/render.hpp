@@ -48,8 +48,10 @@ class SpectrumRenderer {
   SpectrumRenderer();
   SpectrumRenderer(const SpectrumRenderer& other) = delete;
   SpectrumRenderer(SpectrumRenderer&& other) noexcept;
+  ~SpectrumRenderer() = default;
 
   SpectrumRenderer& operator=(SpectrumRenderer&& other) noexcept;
+  SpectrumRenderer& operator=(const SpectrumRenderer& other) = delete;
 
   void SetCameraContext(CameraContextPtr cam_ctx);
   void SetRenderContext(RenderContextPtr render_ctx);

@@ -38,7 +38,10 @@ using LogFormatterPtr = std::shared_ptr<LogFormatter>;
 class LogFormatter {
  public:
   LogFormatter();
+  LogFormatter(const LogFormatter& other) = default;
   virtual ~LogFormatter() = default;
+
+  LogFormatter& operator=(const LogFormatter& other) = default;
 
   virtual const char* Format(const LogMessage& msg) = 0;
 
@@ -66,7 +69,12 @@ using LogDestPtr = std::shared_ptr<LogDestination>;
 
 class LogDestination {
  public:
+  LogDestination() = default;
+  LogDestination(const LogDestination& other) = default;
   virtual ~LogDestination() = default;
+
+  LogDestination& operator=(const LogDestination& other) = default;
+
   virtual void Write(const LogMessage& message, LogFormatterPtr& formatter) = 0;
 };
 
@@ -99,7 +107,10 @@ using LogFilterPtr = std::shared_ptr<LogFilter>;
 
 class LogFilter {
  public:
+  LogFilter() = default;
+  LogFilter(const LogFilter& other) = default;
   virtual ~LogFilter() = default;
+  LogFilter& operator=(const LogFilter& other) = default;
   virtual bool Filter(const LogMessage& message) = 0;
 
   static LogFilterPtrU MakeTagFilter(const char* tag);

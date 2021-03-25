@@ -100,7 +100,7 @@ void RotateZ(const float* lon_lat_roll,  // longitude, latitude, roll
     float* tmp_out = output_vec + i * output_step;
 
     __m128 INPUT_V = _mm_loadu_ps(input_vec + i * input_step);
-    __m128 DP = _mm_dp_ps(INPUT_V, AX0, 0x71);
+    auto DP = _mm_dp_ps(INPUT_V, AX0, 0x71);
     tmp_out[0] = DP[0];
     DP = _mm_dp_ps(INPUT_V, AX1, 0x71);
     tmp_out[1] = DP[0];
@@ -146,7 +146,7 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
     float* tmp_out = output_vec + i * 3;
 
     __m128 INPUT_V = _mm_loadu_ps(input_vec + i * 3);
-    __m128 DP = _mm_dp_ps(INPUT_V, AX0, 0x71);
+    auto DP = _mm_dp_ps(INPUT_V, AX0, 0x71);
     tmp_out[0] = DP[0];
     DP = _mm_dp_ps(INPUT_V, AX1, 0x71);
     tmp_out[1] = DP[0];
@@ -167,7 +167,10 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
 
 
 std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss) {
-  float *a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
+  float* a = hss.a;
+  float* b = hss.b;
+  float* c = hss.c;
+  float* d = hss.d;
   int n = hss.n;
 
   std::vector<Vec3f> pts;
@@ -252,7 +255,10 @@ std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& 
 void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Vec3f>& pts,  // input
                           std::vector<TriangleIdx>& faces) {                       // output
   int num = hss.n;
-  float *a = hss.a, *b = hss.b, *c = hss.c, *d = hss.d;
+  float* a = hss.a;
+  float* b = hss.b;
+  float* c = hss.c;
+  float* d = hss.d;
 
   for (int i = 0; i < num; i++) {
     /* Find co-planer points */

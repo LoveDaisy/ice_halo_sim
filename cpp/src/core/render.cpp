@@ -470,7 +470,8 @@ void SpecToRgbJob(int i, bool use_real_color, const std::vector<ImageSpectrumDat
   if (use_real_color) {
     float r = 1.0f;
     for (int j = 0; j < 3; j++) {
-      float a = 0, b = 0;
+      float a = 0;
+      float b = 0;
       for (int k = 0; k < 3; k++) {
         a += -gray[k] * kXyzToRgb[j * 3 + k];
         b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
@@ -512,7 +513,7 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,        // 
                      uint8_t* rgb_data) {                                    // rgb data, data_number * 3
   bool use_real_color = ray_color[0] < 0;
   auto threading_pool = ThreadingPool::CreatePool();
-  threading_pool->CommitRangeStepJobsAndWait(0, data_number, [=, &spec_data](int, int i) {
+  threading_pool->CommitRangeStepJobsAndWait(0, data_number, [=, &spec_data](int /* thread_id */, int i) {
     SpecToRgbJob(i, use_real_color, spec_data, factor, background_color, ray_color, rgb_data);
   });
 }
@@ -527,7 +528,7 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
   }
   auto threading_pool = ThreadingPool::CreatePool();
   auto* curr_spec_data = spec_data[index].second.get();
-  threading_pool->CommitRangeStepJobsAndWait(0, data_number, [=](int, int i) {
+  threading_pool->CommitRangeStepJobsAndWait(0, data_number, [=](int /* thread_id */, int i) {
     /* Step 1. Spectrum to XYZ */
     float y = curr_spec_data[i] * factor;
 
@@ -653,7 +654,7 @@ void SpectrumRenderer::LoadPartialRayData(const std::vector<size_t>& idx, LensTy
   auto weight = final_ray_data.wavelength_weight;
   auto threading_pool = ThreadingPool::CreatePool();
   auto num = idx.size();
-  threading_pool->CommitRangeSliceJobsAndWait(0, num, [=](int, int start_idx, int end_idx) {
+  threading_pool->CommitRangeSliceJobsAndWait(0, num, [=](int /* thread_id */, int start_idx, int end_idx) {
     size_t current_num = end_idx - start_idx;
     std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
     for (size_t j = 0; j < current_num; j++) {
@@ -691,7 +692,7 @@ void SpectrumRenderer::LoadFullRayData(LensType projection_type, const Projectio
   auto num = final_ray_data.buf_ray_num;
   const auto* final_ray_buf = final_ray_data.buf.get();
   auto weight = final_ray_data.wavelength_weight;
-  threading_pool->CommitRangeSliceJobsAndWait(0, num, [=](int, int start_idx, int end_idx) {
+  threading_pool->CommitRangeSliceJobsAndWait(0, num, [=](int /* thread_id */, int start_idx, int end_idx) {
     size_t current_num = end_idx - start_idx;
     std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
     pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid, img_hei,

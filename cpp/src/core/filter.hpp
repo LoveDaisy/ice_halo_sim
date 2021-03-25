@@ -19,6 +19,9 @@ class AbstractRayPathFilter : public IJsonizable {
  public:
   AbstractRayPathFilter();
   AbstractRayPathFilter(const AbstractRayPathFilter& other);
+  ~AbstractRayPathFilter() override = default;
+
+  AbstractRayPathFilter& operator=(const AbstractRayPathFilter& other);
 
   virtual std::unique_ptr<AbstractRayPathFilter> MakeCopy() const = 0;
 

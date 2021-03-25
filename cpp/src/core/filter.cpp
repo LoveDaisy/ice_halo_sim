@@ -19,6 +19,16 @@ AbstractRayPathFilter::AbstractRayPathFilter(const AbstractRayPathFilter& other)
       remove_homodromous_(other.remove_homodromous_) {}
 
 
+AbstractRayPathFilter& AbstractRayPathFilter::operator=(const AbstractRayPathFilter& other) {
+  if (&other != this) {
+    symmetry_flag_ = other.symmetry_flag_;
+    complementary_ = other.complementary_;
+    remove_homodromous_ = other.remove_homodromous_;
+  }
+  return *this;
+}
+
+
 bool AbstractRayPathFilter::Filter(const Crystal* crystal, RaySegment* last_r) const {
   if (remove_homodromous_ &&
       Dot3(last_r->dir.val(), last_r->root_ctx->first_ray_segment->dir.val()) > 1.0 - 5 * math::kFloatEps) {

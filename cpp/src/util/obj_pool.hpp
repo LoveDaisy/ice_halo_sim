@@ -63,7 +63,11 @@ class ObjectPool {
 template <typename T>
 class SerializableObjectPool : public ObjectPool<T>, public ISerializable {
  public:
+  SerializableObjectPool() = default;
+  SerializableObjectPool(const SerializableObjectPool& other) = delete;
   ~SerializableObjectPool() override = default;
+
+  SerializableObjectPool& operator=(const SerializableObjectPool& other) = delete;
 
   /**
    * @brief Serialize self to a file.

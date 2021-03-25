@@ -204,7 +204,7 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitHal
 
   for (size_t i = 0; i < exit_ray_segments_.size(); i++) {
     const auto& sr = exit_ray_segments_[i];
-    threading_pool->CommitRangeStepJobsAndWait(0, sr.size(), [=, &idx_list, &sr](int, int j) {
+    threading_pool->CommitRangeStepJobsAndWait(0, sr.size(), [=, &idx_list, &sr](int /* thread_id */, int j) {
       const auto& r = sr[j];
       if (r->state != RaySegmentState::kFinished) {
         return;
@@ -423,7 +423,8 @@ void SimulationData::Serialize(File& file, bool with_boi) const {
     uint32_t num = sc.size();
     file.Write(num);
     for (const auto& r : sc) {
-      uint32_t chunk_id = 0, obj_id = 0;
+      uint32_t chunk_id = 0;
+      uint32_t obj_id = 0;
       std::tie(chunk_id, obj_id) = ray_info_pool->GetObjectSerializeIndex(r);
       file.Write(chunk_id);
       file.Write(obj_id);
@@ -435,7 +436,8 @@ void SimulationData::Serialize(File& file, bool with_boi) const {
     uint32_t num = sc.size();
     file.Write(num);
     for (const auto& r : sc) {
-      uint32_t chunk_id = 0, obj_id = 0;
+      uint32_t chunk_id = 0;
+      uint32_t obj_id = 0;
       std::tie(chunk_id, obj_id) = ray_seg_pool->GetObjectSerializeIndex(r);
       file.Write(chunk_id);
       file.Write(obj_id);
@@ -495,7 +497,8 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
       endian::ByteSwap::Swap(&num);
     }
     for (size_t i = 0; i < num; i++) {
-      uint32_t chunk_id = 0, obj_id = 0;
+      uint32_t chunk_id = 0;
+      uint32_t obj_id = 0;
       file.Read(&chunk_id);
       file.Read(&obj_id);
       if (need_swap) {
@@ -518,7 +521,8 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
       endian::ByteSwap::Swap(&num);
     }
     for (size_t i = 0; i < num; i++) {
-      uint32_t chunk_id = 0, obj_id = 0;
+      uint32_t chunk_id = 0;
+      uint32_t obj_id = 0;
       file.Read(&chunk_id);
       file.Read(&obj_id);
       if (need_swap) {
@@ -840,7 +844,7 @@ void Simulator::TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilt
       buffer_size_ = active_ray_num_ * kBufferSizeFactor;
       buffer_.Allocate(buffer_size_);
     }
-    pool->CommitRangeStepJobsAndWait(0, active_ray_num_, [=](int, int i) {
+    pool->CommitRangeStepJobsAndWait(0, active_ray_num_, [=](int /* thread_id */, int i) {
       Optics::HitSurface(crystal, n, 1,                                                        //
                          buffer_.dir[0] + i * 3, buffer_.face_id[0] + i, buffer_.w[0] + i,     //
                          buffer_.dir[1] + i * 6, buffer_.w[1] + i * 2);                        //

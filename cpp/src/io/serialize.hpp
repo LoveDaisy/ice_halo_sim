@@ -9,7 +9,11 @@
 namespace icehalo {
 
 struct ISerializable {
+  ISerializable() = default;
+  ISerializable(const ISerializable& other) = default;
   virtual ~ISerializable() = default;
+
+  ISerializable& operator=(const ISerializable& other) = default;
 
   /**
    * @brief Serialize data into a file.
@@ -29,7 +33,7 @@ struct ISerializable {
 
   static endian::Endianness CheckEndianness(File& file, endian::Endianness endianness) {
     if (endianness == endian::kUnknownEndian) {
-      uint32_t test_boi;
+      uint32_t test_boi = 0;
       file.Read(&test_boi);
       if (test_boi != ISerializable::kDefaultBoi) {
         endianness = endian::kBigEndian;
@@ -54,7 +58,11 @@ constexpr uintptr_t CombineU32AsPointer(uint32_t high, uint32_t low) {
 
 class IJsonizable {
  public:
+  IJsonizable() = default;
+  IJsonizable(const IJsonizable& other) = default;
   virtual ~IJsonizable() = default;
+
+  IJsonizable& operator=(const IJsonizable& other) = default;
 
   /**
    * @brief Save self to a JSON object.

@@ -133,6 +133,9 @@ class Simulator {
  public:
   explicit Simulator(ProjectContextPtr context);
   Simulator(const Simulator& other) = delete;
+  ~Simulator() = default;
+
+  Simulator& operator=(const Simulator& other) = delete;
 
   void SetCurrentWavelengthIndex(int index);
   void Run();
@@ -145,7 +148,10 @@ class Simulator {
  private:
   struct EntryRayData {
     EntryRayData();
+    EntryRayData(const EntryRayData& other) = delete;
     ~EntryRayData();
+
+    EntryRayData& operator=(const EntryRayData& other) = delete;
 
     void Clear();
     void Allocate(size_t ray_number);
@@ -160,7 +166,10 @@ class Simulator {
   struct BufferData {
    public:
     BufferData();
+    BufferData(const BufferData& other) = delete;
     ~BufferData();
+
+    BufferData& operator=(const BufferData& other) = delete;
 
     void Clear();
     void Allocate(size_t ray_number);

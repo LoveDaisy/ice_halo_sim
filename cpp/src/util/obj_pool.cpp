@@ -157,13 +157,13 @@ void SerializableObjectPool<T>::Deserialize(File& file, endian::Endianness endia
   endianness = CheckEndianness(file, endianness);
   bool need_swap = (endianness != endian::kCompileEndian);
 
-  size_t total_num;
+  size_t total_num = 0;
   file.Read(&total_num);
   if (need_swap) {
     endian::ByteSwap::Swap(&total_num);
   }
 
-  size_t chunk_size;
+  size_t chunk_size = 0;
   file.Read(&chunk_size);
   if (need_swap) {
     endian::ByteSwap::Swap(&chunk_size);
