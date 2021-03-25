@@ -462,6 +462,66 @@ constexpr float kCmfZ[] = {
 };
 
 
+void SpecToRgbJob(int i, bool use_real_color, const std::vector<ImageSpectrumData>& spec_data, float factor,
+                  const float* background_color, const float* ray_color, uint8_t* rgb_data) {
+  /* Step 1. Spectrum to XYZ */
+  float xyz[3]{};
+  for (const auto& d : spec_data) {
+    auto wl = d.first;
+    if (wl < kMinWavelength || wl > kMaxWaveLength) {
+      continue;
+    }
+    float v = d.second[i] * factor;
+    xyz[0] += kCmfX[wl - kMinWavelength] * v;
+    xyz[1] += kCmfY[wl - kMinWavelength] * v;
+    xyz[2] += kCmfZ[wl - kMinWavelength] * v;
+  }
+
+  /* Step 2. XYZ to linear RGB */
+  float gray[3];
+  for (int j = 0; j < 3; j++) {
+    gray[j] = kWhitePointD65[j] * xyz[1];
+  }
+
+  if (use_real_color) {
+    float r = 1.0f;
+    for (int j = 0; j < 3; j++) {
+      float a = 0, b = 0;
+      for (int k = 0; k < 3; k++) {
+        a += -gray[k] * kXyzToRgb[j * 3 + k];
+        b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
+      }
+      if (a * b > 0 && a / b < r) {
+        r = a / b;
+      }
+    }
+
+    for (int j = 0; j < 3; j++) {
+      xyz[j] = (xyz[j] - gray[j]) * r + gray[j];
+    }
+  } else {
+    std::memcpy(xyz, gray, sizeof(xyz));
+  }
+  float rgb[3]{};
+  for (int j = 0; j < 3; j++) {
+    for (int k = 0; k < 3; k++) {
+      rgb[j] += xyz[k] * kXyzToRgb[j * 3 + k];
+    }
+    rgb[j] = std::min(std::max(rgb[j], 0.0f), 1.0f);
+    if (!use_real_color) {
+      rgb[j] *= ray_color[j];
+    }
+    rgb[j] += background_color[j];
+  }
+
+  /* Step 3. Convert linear sRGB to sRGB */
+  SrgbGamma(rgb, 3);
+  for (int j = 0; j < 3; j++) {
+    rgb_data[i * 3 + j] = static_cast<uint8_t>(rgb[j] * std::numeric_limits<uint8_t>::max());
+  }
+}
+
+
 void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,        // spectrum data
                      size_t data_number, float factor,                       //
                      const float* background_color, const float* ray_color,  // background and ray color
@@ -469,63 +529,7 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,        // 
   bool use_real_color = ray_color[0] < 0;
   auto threading_pool = ThreadingPool::CreatePool();
   threading_pool->CommitRangeStepJobsAndWait(0, data_number, [=, &spec_data](int, int i) {
-    /* Step 1. Spectrum to XYZ */
-    float xyz[3]{};
-    for (const auto& d : spec_data) {
-      auto wl = d.first;
-      if (wl < kMinWavelength || wl > kMaxWaveLength) {
-        continue;
-      }
-      float v = d.second[i] * factor;
-      xyz[0] += kCmfX[wl - kMinWavelength] * v;
-      xyz[1] += kCmfY[wl - kMinWavelength] * v;
-      xyz[2] += kCmfZ[wl - kMinWavelength] * v;
-    }
-
-    /* Step 2. XYZ to linear RGB */
-    float gray[3];
-    for (int j = 0; j < 3; j++) {
-      gray[j] = kWhitePointD65[j] * xyz[1];
-    }
-
-    if (use_real_color) {
-      float r = 1.0f;
-      for (int j = 0; j < 3; j++) {
-        float a = 0, b = 0;
-        for (int k = 0; k < 3; k++) {
-          a += -gray[k] * kXyzToRgb[j * 3 + k];
-          b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
-        }
-        if (a * b > 0 && a / b < r) {
-          r = a / b;
-        }
-      }
-
-      for (int j = 0; j < 3; j++) {
-        xyz[j] = (xyz[j] - gray[j]) * r + gray[j];
-      }
-    } else {
-      for (int j = 0; j < 3; j++) {
-        xyz[j] = gray[j];
-      }
-    }
-    float rgb[3]{};
-    for (int j = 0; j < 3; j++) {
-      for (int k = 0; k < 3; k++) {
-        rgb[j] += xyz[k] * kXyzToRgb[j * 3 + k];
-      }
-      rgb[j] = std::min(std::max(rgb[j], 0.0f), 1.0f);
-      if (!use_real_color) {
-        rgb[j] *= ray_color[j];
-      }
-      rgb[j] += background_color[j];
-    }
-
-    /* Step 3. Convert linear sRGB to sRGB */
-    SrgbGamma(rgb, 3);
-    for (int j = 0; j < 3; j++) {
-      rgb_data[i * 3 + j] = static_cast<uint8_t>(rgb[j] * std::numeric_limits<uint8_t>::max());
-    }
+    SpecToRgbJob(i, use_real_color, spec_data, factor, background_color, ray_color, rgb_data);
   });
 }
 
@@ -627,86 +631,107 @@ void SpectrumRenderer::LoadRayData(int identifier, const RayCollectionInfo& coll
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
 
+  auto data_iter = std::find_if(spectrum_data_.begin(), spectrum_data_.end(),
+                                [=](const ImageSpectrumData& d) { return d.first == identifier; });
+  if (data_iter == spectrum_data_.end()) {
+    spectrum_data_.emplace_back(identifier, new float[img_hei * img_wid]{});
+    data_iter = spectrum_data_.end() - 1;
+  }
+  auto* current_data = data_iter->second.get();
+
+  auto data_cmp_iter = std::find_if(spectrum_data_compensation_.begin(), spectrum_data_compensation_.end(),
+                                    [=](const ImageSpectrumData& d) { return d.first == identifier; });
+  if (data_cmp_iter == spectrum_data_compensation_.end()) {
+    spectrum_data_compensation_.emplace_back(identifier, new float[img_hei * img_wid]{});
+    data_cmp_iter = spectrum_data_compensation_.end() - 1;
+  }
+  auto* current_data_compensation = data_cmp_iter->second.get();
+
   auto threading_pool = ThreadingPool::CreatePool();
-  float* current_data = nullptr;
-  float* current_data_compensation = nullptr;
-  for (size_t i = 0; i < spectrum_data_.size(); i++) {
-    if (spectrum_data_[i].first == identifier) {
-      current_data = spectrum_data_[i].second.get();
-      current_data_compensation = spectrum_data_compensation_[i].second.get();
-      break;
-    }
-  }
-  if (!current_data) {
-    current_data = new float[img_hei * img_wid];
-    current_data_compensation = new float[img_hei * img_wid];
-    spectrum_data_.emplace_back(std::make_pair(identifier, current_data));
-    spectrum_data_compensation_.emplace_back(std::make_pair(identifier, current_data_compensation));
-    threading_pool->CommitRangeSliceJobsAndWait(0, img_hei * img_wid, [=](int, int start_idx, int end_idx) {
-      std::memset(current_data + start_idx, 0, (end_idx - start_idx) * sizeof(float));
-      std::memset(current_data_compensation + start_idx, 0, (end_idx - start_idx) * sizeof(float));
-    });
-  }
-
-  const auto* final_ray_buf = final_ray_data.buf.get();
-  const auto& idx = collection_info.idx;
   if (collection_info.is_partial_data) {
-    auto num = idx.size();
-    threading_pool->CommitRangeSliceJobsAndWait(0, num, [=, &idx](int, int start_idx, int end_idx) {
-      size_t current_num = end_idx - start_idx;
-      std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
-      for (size_t j = 0; j < current_num; j++) {
-        pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), 1, final_ray_buf + idx[start_idx + j] * 4, img_wid, img_hei,
-           tmp_xy.get() + j * 2, render_ctx_->GetVisibleRange());
-
-        int x = tmp_xy[j * 2 + 0];
-        int y = tmp_xy[j * 2 + 1];
-        if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
-          continue;
-        }
-        if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
-          x += render_ctx_->GetImageOffsetX();
-          y += render_ctx_->GetImageOffsetY();
-        }
-        if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
-          continue;
-        }
-        auto tmp_val = final_ray_buf[(start_idx + j) * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
-        auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
-        current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
-        current_data[y * img_wid + x] = tmp_sum;
-      }
-    });
+    LoadPartialRayData(collection_info.idx, projection_type, pf, final_ray_data, current_data,
+                       current_data_compensation);
   } else {
-    auto num = final_ray_data.buf_ray_num;
-    threading_pool->CommitRangeSliceJobsAndWait(0, num, [=](int, int start_idx, int end_idx) {
-      size_t current_num = end_idx - start_idx;
-      std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
-      pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid, img_hei,
-         tmp_xy.get(), render_ctx_->GetVisibleRange());
-
-      for (size_t j = 0; j < current_num; j++) {
-        int x = tmp_xy[j * 2 + 0];
-        int y = tmp_xy[j * 2 + 1];
-        if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
-          continue;
-        }
-        if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
-          x += render_ctx_->GetImageOffsetX();
-          y += render_ctx_->GetImageOffsetY();
-        }
-        if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
-          continue;
-        }
-        auto tmp_val = final_ray_buf[(start_idx + j) * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
-        auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
-        current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
-        current_data[y * img_wid + x] = tmp_sum;
-      }
-    });
+    LoadFullRayData(projection_type, pf, final_ray_data, current_data, current_data_compensation);
   }
 
   total_w_ += final_ray_data.init_ray_num * weight;
+}
+
+
+void SpectrumRenderer::LoadPartialRayData(const std::vector<size_t>& idx, LensType projection_type,
+                                          const ProjectionFunction& pf, const SimpleRayData& final_ray_data,
+                                          float* current_data, float* current_data_compensation) {
+  auto img_hei = render_ctx_->GetImageHeight();
+  auto img_wid = render_ctx_->GetImageWidth();
+
+  const auto* final_ray_buf = final_ray_data.buf.get();
+  auto weight = final_ray_data.wavelength_weight;
+  auto threading_pool = ThreadingPool::CreatePool();
+  auto num = idx.size();
+  threading_pool->CommitRangeSliceJobsAndWait(0, num, [=](int, int start_idx, int end_idx) {
+    size_t current_num = end_idx - start_idx;
+    std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
+    for (size_t j = 0; j < current_num; j++) {
+      pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), 1, final_ray_buf + idx[start_idx + j] * 4, img_wid, img_hei,
+         tmp_xy.get() + j * 2, render_ctx_->GetVisibleRange());
+
+      int x = tmp_xy[j * 2 + 0];
+      int y = tmp_xy[j * 2 + 1];
+      if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
+        continue;
+      }
+      if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
+        x += render_ctx_->GetImageOffsetX();
+        y += render_ctx_->GetImageOffsetY();
+      }
+      if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
+        continue;
+      }
+      auto tmp_val = final_ray_buf[(start_idx + j) * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
+      auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
+      current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
+      current_data[y * img_wid + x] = tmp_sum;
+    }
+  });
+}
+
+
+void SpectrumRenderer::LoadFullRayData(LensType projection_type, const ProjectionFunction& pf,
+                                       const SimpleRayData& final_ray_data, float* current_data,
+                                       float* current_data_compensation) {
+  auto img_hei = render_ctx_->GetImageHeight();
+  auto img_wid = render_ctx_->GetImageWidth();
+
+  auto threading_pool = ThreadingPool::CreatePool();
+  auto num = final_ray_data.buf_ray_num;
+  const auto* final_ray_buf = final_ray_data.buf.get();
+  auto weight = final_ray_data.wavelength_weight;
+  threading_pool->CommitRangeSliceJobsAndWait(0, num, [=](int, int start_idx, int end_idx) {
+    size_t current_num = end_idx - start_idx;
+    std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
+    pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid, img_hei,
+       tmp_xy.get(), render_ctx_->GetVisibleRange());
+
+    for (size_t j = 0; j < current_num; j++) {
+      int x = tmp_xy[j * 2 + 0];
+      int y = tmp_xy[j * 2 + 1];
+      if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
+        continue;
+      }
+      if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
+        x += render_ctx_->GetImageOffsetX();
+        y += render_ctx_->GetImageOffsetY();
+      }
+      if (x < 0 || x >= static_cast<int>(img_wid) || y < 0 || y >= static_cast<int>(img_hei)) {
+        continue;
+      }
+      auto tmp_val = final_ray_buf[(start_idx + j) * 4 + 3] * weight - current_data_compensation[y * img_wid + x];
+      auto tmp_sum = current_data[y * img_wid + x] + tmp_val;
+      current_data_compensation[y * img_wid + x] = tmp_sum - current_data[y * img_wid + x] - tmp_val;
+      current_data[y * img_wid + x] = tmp_sum;
+    }
+  });
 }
 
 

@@ -75,6 +75,11 @@ class SpectrumRenderer {
   static constexpr int kImageBits = 24;
 
  private:
+  void LoadPartialRayData(const std::vector<size_t>& idx, LensType projection_type, const ProjectionFunction& pf,
+                          const SimpleRayData& final_ray_data, float* current_data, float* current_data_compensation);
+  void LoadFullRayData(LensType projection_type, const ProjectionFunction& pf, const SimpleRayData& final_ray_data,
+                       float* current_data, float* current_data_compensation);
+
   CameraContextPtr cam_ctx_;
   RenderContextPtr render_ctx_;
   std::unique_ptr<uint8_t[]> output_image_buffer_;
