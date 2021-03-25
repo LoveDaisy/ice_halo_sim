@@ -517,7 +517,7 @@ void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,        // 
     }
 
     /* Step 3. Convert linear sRGB to sRGB */
-    SrgbGamma(rgb);
+    SrgbGamma(rgb, 3);
     for (int j = 0; j < 3; j++) {
       rgb_data[i * 3 + j] = static_cast<uint8_t>(rgb[j] * std::numeric_limits<uint8_t>::max());
     }
