@@ -156,8 +156,6 @@ class RandomNumberGenerator {
   static constexpr uint32_t kDefaultRandomSeed = 1;
 };
 
-using RngPtrU = std::unique_ptr<RandomNumberGenerator>;
-
 
 class RandomSampler {
  public:
@@ -210,8 +208,6 @@ class RandomSampler {
 
   RandomSampler() = delete;
 };
-
-using RandomSamplerPtrU = std::unique_ptr<RandomSampler>;
 
 
 bool FloatEqual(float a, float b, float threshold = math::kFloatEps);

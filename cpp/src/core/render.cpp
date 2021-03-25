@@ -7,6 +7,7 @@
 
 #include "context/context.hpp"
 #include "core/math.hpp"
+#include "core/simulation.hpp"
 #include "util/threading_pool.hpp"
 
 namespace icehalo {

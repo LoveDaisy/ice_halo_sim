@@ -2,12 +2,9 @@
 #define SRC_CORE_RENDER_H_
 
 #include <functional>
-#include <unordered_map>
 
 #include "context/context.hpp"
 #include "core/core_def.hpp"
-#include "core/simulation.hpp"
-#include "io/file.hpp"
 #include "util/enum_map.hpp"
 
 
@@ -96,6 +93,9 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
 constexpr int kMinWavelength = 360;
 constexpr int kMaxWaveLength = 830;
 
+
+struct RayCollectionInfo;
+struct SimpleRayData;
 
 class SpectrumRenderer {
  public:

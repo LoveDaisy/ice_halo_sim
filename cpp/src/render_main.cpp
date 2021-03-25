@@ -4,6 +4,7 @@
 
 #include "context/context.hpp"
 #include "core/render.hpp"
+#include "core/simulation.hpp"
 #include "util/arg_parser.hpp"
 #include "util/log.hpp"
 
