@@ -35,8 +35,8 @@ constexpr float CameraContext::kDefaultCamElevation;
 constexpr float CameraContext::kDefaultCamRoll;
 
 
-const float* CameraContext::GetCameraTargetDirection() const {
-  return target_dir_;
+math::Pose3f CameraContext::GetCameraPose() const {
+  return math::Pose3f(target_dir_);
 }
 
 

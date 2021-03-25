@@ -11,7 +11,7 @@
 
 namespace icehalo {
 
-void EqualAreaFishEye(const float* cam_rot,          // Camera rotation. [lon, lat, roll]
+void EqualAreaFishEye(const math::Pose3f& cam_pose,  // Camera rotation. [lon, lat, roll]
                       float hov,                     // Half field of view.
                       size_t data_number,            // Data number
                       const float* dir,              // Ray directions, [x, y, z]
@@ -21,7 +21,7 @@ void EqualAreaFishEye(const float* cam_rot,          // Camera rotation. [lon, l
   float img_r = std::max(img_wid, img_hei) / 2.0f;
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
   float cam_rot_copy[3];
-  std::memcpy(cam_rot_copy, cam_rot, sizeof(float) * 3);
+  std::memcpy(cam_rot_copy, cam_pose.val(), sizeof(float) * 3);
   cam_rot_copy[0] *= -1;
   cam_rot_copy[1] *= -1;
   for (auto& i : cam_rot_copy) {
@@ -55,7 +55,7 @@ void EqualAreaFishEye(const float* cam_rot,          // Camera rotation. [lon, l
 }
 
 
-void EquidistantFishEye(const float* cam_rot,          // Camera rotation. [lon, lat, roll]
+void EquidistantFishEye(const math::Pose3f& cam_pose,  // Camera rotation. [lon, lat, roll]
                         float hov,                     // Half field of view.
                         size_t data_number,            // Data number
                         const float* dir,              // Ray directions, [x, y, z]
@@ -65,7 +65,7 @@ void EquidistantFishEye(const float* cam_rot,          // Camera rotation. [lon,
   float img_r = std::max(img_wid, img_hei) / 2.0f;
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
   float cam_rot_copy[3];
-  std::memcpy(cam_rot_copy, cam_rot, sizeof(float) * 3);
+  std::memcpy(cam_rot_copy, cam_pose.val(), sizeof(float) * 3);
   cam_rot_copy[0] *= -1;
   cam_rot_copy[1] *= -1;
   for (auto& i : cam_rot_copy) {
@@ -98,7 +98,7 @@ void EquidistantFishEye(const float* cam_rot,          // Camera rotation. [lon,
 }
 
 
-void DualEqualAreaFishEye(const float* /* cam_rot */,          // Not used
+void DualEqualAreaFishEye(const math::Pose3f& /* cam_rot */,   // Not used
                           float /* hov */,                     // Not used
                           size_t data_number,                  // Data number
                           const float* dir,                    // Ray directions, [x, y, z]
@@ -136,7 +136,7 @@ void DualEqualAreaFishEye(const float* /* cam_rot */,          // Not used
 }
 
 
-void DualEquidistantFishEye(const float* /* cam_rot */,          // Not used
+void DualEquidistantFishEye(const math::Pose3f& /* cam_rot */,   // Not used
                             float /* hov */,                     // Not used
                             size_t data_number,                  // Data number
                             const float* dir,                    // Ray directions, [x, y, z]
@@ -173,7 +173,7 @@ void DualEquidistantFishEye(const float* /* cam_rot */,          // Not used
 }
 
 
-void RectLinear(const float* cam_rot,          // Camera rotation. [lon, lat, roll]
+void RectLinear(const math::Pose3f& cam_pose,  // Camera rotation. [lon, lat, roll]
                 float hov,                     // Half field of view.
                 size_t data_number,            // Data number
                 const float* dir,              // Ray directions, [x, y, z]
@@ -182,7 +182,7 @@ void RectLinear(const float* cam_rot,          // Camera rotation. [lon, lat, ro
                 VisibleRange visible_range) {  // Visible range
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
   float cam_rot_copy[3];
-  std::memcpy(cam_rot_copy, cam_rot, sizeof(float) * 3);
+  std::memcpy(cam_rot_copy, cam_pose.val(), sizeof(float) * 3);
   cam_rot_copy[0] *= -1;
   cam_rot_copy[1] *= -1;
   for (auto& i : cam_rot_copy) {
@@ -651,8 +651,8 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
       size_t current_num = end_idx - start_idx;
       std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
       for (size_t j = 0; j < current_num; j++) {
-        pf(cam_ctx_->GetCameraTargetDirection(), cam_ctx_->GetFov(), 1, final_ray_buf + idx[start_idx + j] * 4, img_wid,
-           img_hei, tmp_xy.get() + j * 2, render_ctx_->GetVisibleRange());
+        pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), 1, final_ray_buf + idx[start_idx + j] * 4, img_wid, img_hei,
+           tmp_xy.get() + j * 2, render_ctx_->GetVisibleRange());
 
         int x = tmp_xy[j * 2 + 0];
         int y = tmp_xy[j * 2 + 1];
@@ -677,8 +677,8 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
     threading_pool->CommitRangeSliceJobsAndWait(0, num, [=](int, int start_idx, int end_idx) {
       size_t current_num = end_idx - start_idx;
       std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
-      pf(cam_ctx_->GetCameraTargetDirection(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid,
-         img_hei, tmp_xy.get(), render_ctx_->GetVisibleRange());
+      pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid, img_hei,
+         tmp_xy.get(), render_ctx_->GetVisibleRange());
 
       for (size_t j = 0; j < current_num; j++) {
         int x = tmp_xy[j * 2 + 0];

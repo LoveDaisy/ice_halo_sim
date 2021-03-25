@@ -65,6 +65,30 @@ bool operator==(const Vec3<float>& lhs, const Vec3<float>& rhs);
 using Vec3f = Vec3<float>;
 
 
+template <class T>
+class Pose3 {
+ public:
+  explicit Pose3(const T* data);
+  Pose3(T lon, T lat, T roll);
+
+  T lon() const;
+  T lat() const;
+  T roll() const;
+  void lon(T lon);
+  void lat(T lat);
+  void roll(T roll);
+
+  const T* val() const;
+  void val(T lat, T lon, T roll);
+  void val(const T* data);
+
+ private:
+  Vec3<T> val_;
+};
+
+using Pose3f = Pose3<float>;
+
+
 class TriangleIdx {
  public:
   TriangleIdx(ShortIdType id1, ShortIdType id2, ShortIdType id3);

@@ -5,6 +5,7 @@
 #include <string>
 
 #include "core/core_def.hpp"
+#include "core/math.hpp"
 #include "io/serialize.hpp"
 #include "rapidjson/document.h"
 
@@ -15,7 +16,7 @@ enum class LensType;
 
 class CameraContext : public IJsonizable {
  public:
-  const float* GetCameraTargetDirection() const;
+  math::Pose3f GetCameraPose() const;
   void SetCameraTargetDirection(float azimuth, float altitude, float roll);
   void ResetCameraTargetDirection();
 

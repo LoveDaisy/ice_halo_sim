@@ -494,6 +494,60 @@ Vec3<T> Vec3<T>::FromTo(const Vec3<T>& v1, const Vec3<T>& v2) {
 template class Vec3<float>;
 
 
+template <class T>
+Pose3<T>::Pose3(const T* data) : val_(data) {}
+
+template <class T>
+Pose3<T>::Pose3(T lon, T lat, T roll) : val_(lon, lat, roll) {}
+
+template <class T>
+T Pose3<T>::lon() const {
+  return val_.x();
+}
+
+template <class T>
+T Pose3<T>::lat() const {
+  return val_.y();
+}
+
+template <class T>
+T Pose3<T>::roll() const {
+  return val_.z();
+}
+
+template <class T>
+void Pose3<T>::lon(T lon) {
+  val_.x(lon);
+}
+
+template <class T>
+void Pose3<T>::lat(T lat) {
+  val_.y(lat);
+}
+
+template <class T>
+void Pose3<T>::roll(T roll) {
+  val_.z(roll);
+}
+
+template <class T>
+const T* Pose3<T>::val() const {
+  return val_.val();
+}
+
+template <class T>
+void Pose3<T>::val(const T* data) {
+  val_.val(data);
+}
+
+template <class T>
+void Pose3<T>::val(T lat, T lon, T roll) {
+  val_.val(lat, lon, roll);
+}
+
+template class Pose3<float>;
+
+
 TriangleIdx::TriangleIdx(ShortIdType id1, ShortIdType id2, ShortIdType id3) : idx_{ id1, id2, id3 } {}
 
 
