@@ -218,7 +218,7 @@ void RectLinear(const Pose3f& cam_pose,        // Camera rotation. [lon, lat, ro
 }
 
 
-EnumMap<LensType, ProjectionFunction>& GetProjectionFunctions() {
+ProjectionFunction GetProjectionFunction(LensType lens_type) {
   static EnumMap<LensType, ProjectionFunction> projection_functions = {
     { LensType::kLinear, &RectLinear },
     { LensType::kEqualArea, &EqualAreaFishEye },
@@ -227,7 +227,11 @@ EnumMap<LensType, ProjectionFunction>& GetProjectionFunctions() {
     { LensType::kDualEqualArea, &DualEqualAreaFishEye },
   };
 
-  return projection_functions;
+  if (projection_functions.count(lens_type)) {
+    return projection_functions[lens_type];
+  } else {
+    return {};
+  }
 }
 
 
@@ -605,12 +609,11 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
   }
 
   auto projection_type = cam_ctx_->GetLensType();
-  auto& projection_functions = GetProjectionFunctions();
-  if (projection_functions.find(projection_type) == projection_functions.end()) {
+  auto pf = GetProjectionFunction(projection_type);
+  if (!pf) {
     LOG_ERROR("Unknown projection type!");
     return;
   }
-  auto& pf = projection_functions[projection_type];
 
   auto weight = final_ray_data.wavelength_weight;
   auto color_compact_level = render_ctx_->GetColorCompactLevel();

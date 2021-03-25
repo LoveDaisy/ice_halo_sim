@@ -31,7 +31,7 @@ using ProjectionFunction = std::function<void(const Pose3f& cam_pose,    // Came
                                               VisibleRange visible_semi_sphere)>;  // Which semi-sphere can be visible
 
 
-EnumMap<LensType, ProjectionFunction>& GetProjectionFunctions();
+ProjectionFunction GetProjectionFunction(LensType lens_type);
 
 
 using ImageSpectrumData = std::pair<size_t, std::unique_ptr<float[]>>;
