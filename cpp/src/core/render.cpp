@@ -13,7 +13,7 @@
 
 namespace icehalo {
 
-void EqualAreaFishEye(const Pose3f& cam_pose,        // Camera rotation. [lon, lat, roll]
+void EqualAreaFishEye(Pose3f cam_pose,               // Camera rotation. [lon, lat, roll]
                       float hov,                     // Half field of view.
                       size_t data_number,            // Data number
                       const float* dir,              // Ray directions, [x, y, z]
@@ -22,15 +22,11 @@ void EqualAreaFishEye(const Pose3f& cam_pose,        // Camera rotation. [lon, l
                       VisibleRange visible_range) {  // Visible range
   float img_r = std::max(img_wid, img_hei) / 2.0f;
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
-  float cam_rot_copy[3];
-  std::memcpy(cam_rot_copy, cam_pose.val(), sizeof(float) * 3);
-  cam_rot_copy[0] *= -1;
-  cam_rot_copy[1] *= -1;
-  for (auto& i : cam_rot_copy) {
-    i *= math::kDegreeToRad;
-  }
 
-  RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  cam_pose.ReflectInOrigin();
+  cam_pose.ToRad();
+
+  RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
   for (size_t i = 0; i < data_number; i++) {
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -57,7 +53,7 @@ void EqualAreaFishEye(const Pose3f& cam_pose,        // Camera rotation. [lon, l
 }
 
 
-void EquidistantFishEye(const Pose3f& cam_pose,        // Camera rotation. [lon, lat, roll]
+void EquidistantFishEye(Pose3f cam_pose,               // Camera rotation. [lon, lat, roll]
                         float hov,                     // Half field of view.
                         size_t data_number,            // Data number
                         const float* dir,              // Ray directions, [x, y, z]
@@ -66,15 +62,11 @@ void EquidistantFishEye(const Pose3f& cam_pose,        // Camera rotation. [lon,
                         VisibleRange visible_range) {  // Visible range
   float img_r = std::max(img_wid, img_hei) / 2.0f;
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
-  float cam_rot_copy[3];
-  std::memcpy(cam_rot_copy, cam_pose.val(), sizeof(float) * 3);
-  cam_rot_copy[0] *= -1;
-  cam_rot_copy[1] *= -1;
-  for (auto& i : cam_rot_copy) {
-    i *= math::kDegreeToRad;
-  }
 
-  RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  cam_pose.ReflectInOrigin();
+  cam_pose.ToRad();
+
+  RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -100,7 +92,7 @@ void EquidistantFishEye(const Pose3f& cam_pose,        // Camera rotation. [lon,
 }
 
 
-void DualEqualAreaFishEye(const Pose3f& /* cam_rot */,         // Not used
+void DualEqualAreaFishEye(Pose3f /* cam_rot */,                // Not used
                           float /* hov */,                     // Not used
                           size_t data_number,                  // Data number
                           const float* dir,                    // Ray directions, [x, y, z]
@@ -111,14 +103,12 @@ void DualEqualAreaFishEye(const Pose3f& /* cam_rot */,         // Not used
   float proj_r = img_r / 2.0f / std::sin(45.0f * math::kDegreeToRad);
 
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
-  float cam_rot_copy[3] = { 90.0f, 89.999f, 0.0f };
-  cam_rot_copy[0] *= -1;
-  cam_rot_copy[1] *= -1;
-  for (auto& i : cam_rot_copy) {
-    i *= math::kDegreeToRad;
-  }
 
-  RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  Pose3f cam_pose(90.0f, 89.999f, 0.0f);
+  cam_pose.ReflectInOrigin();
+  cam_pose.ToRad();
+
+  RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -138,7 +128,7 @@ void DualEqualAreaFishEye(const Pose3f& /* cam_rot */,         // Not used
 }
 
 
-void DualEquidistantFishEye(const Pose3f& /* cam_rot */,         // Not used
+void DualEquidistantFishEye(Pose3f /* cam_rot */,                // Not used
                             float /* hov */,                     // Not used
                             size_t data_number,                  // Data number
                             const float* dir,                    // Ray directions, [x, y, z]
@@ -148,14 +138,12 @@ void DualEquidistantFishEye(const Pose3f& /* cam_rot */,         // Not used
   float img_r = std::min(img_wid / 2, img_hei) / 2.0f;
 
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
-  float cam_rot_copy[3] = { 90.0f, 89.999f, 0.0f };
-  cam_rot_copy[0] *= -1;
-  cam_rot_copy[1] *= -1;
-  for (auto& i : cam_rot_copy) {
-    i *= math::kDegreeToRad;
-  }
 
-  RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  Pose3f cam_pose(90.0f, 89.999f, 0.0f);
+  cam_pose.ReflectInOrigin();
+  cam_pose.ToRad();
+
+  RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
@@ -175,7 +163,7 @@ void DualEquidistantFishEye(const Pose3f& /* cam_rot */,         // Not used
 }
 
 
-void RectLinear(const Pose3f& cam_pose,        // Camera rotation. [lon, lat, roll]
+void RectLinear(Pose3f cam_pose,               // Camera rotation. [lon, lat, roll]
                 float hov,                     // Half field of view.
                 size_t data_number,            // Data number
                 const float* dir,              // Ray directions, [x, y, z]
@@ -183,15 +171,11 @@ void RectLinear(const Pose3f& cam_pose,        // Camera rotation. [lon, lat, ro
                 int* img_xy,                   // Image coordinates
                 VisibleRange visible_range) {  // Visible range
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
-  float cam_rot_copy[3];
-  std::memcpy(cam_rot_copy, cam_pose.val(), sizeof(float) * 3);
-  cam_rot_copy[0] *= -1;
-  cam_rot_copy[1] *= -1;
-  for (auto& i : cam_rot_copy) {
-    i *= math::kDegreeToRad;
-  }
 
-  RotateZ(cam_rot_copy, dir, dir_copy.get(), 4, 3, data_number);
+  cam_pose.ReflectInOrigin();
+  cam_pose.ToRad();
+
+  RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
   for (size_t i = 0; i < data_number; i++) {
     if (dir_copy[i * 3 + 2] < 0 || std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<int>::min();

@@ -493,10 +493,10 @@ template class Vec3<float>;
 
 
 template <class T>
-Pose3<T>::Pose3(const T* data) : val_(data) {}
+Pose3<T>::Pose3(const T* data, AngleUnit unit) : val_(data), unit_(unit) {}
 
 template <class T>
-Pose3<T>::Pose3(T lon, T lat, T roll) : val_(lon, lat, roll) {}
+Pose3<T>::Pose3(T lon, T lat, T roll, AngleUnit unit) : val_(lon, lat, roll), unit_(unit) {}
 
 template <class T>
 T Pose3<T>::lon() const {
@@ -541,6 +541,31 @@ void Pose3<T>::val(const T* data) {
 template <class T>
 void Pose3<T>::val(T lat, T lon, T roll) {
   val_.val(lat, lon, roll);
+}
+
+template <class T>
+AngleUnit Pose3<T>::unit() const {
+  return unit_;
+}
+
+template <class T>
+void Pose3<T>::ToDegree() {
+  if (unit_ == AngleUnit::kRad) {
+    val_ *= math::kRadToDegree;
+  }
+}
+
+template <class T>
+void Pose3<T>::ToRad() {
+  if (unit_ == AngleUnit::kDegree) {
+    val_ *= math::kDegreeToRad;
+  }
+}
+
+template <class T>
+void Pose3<T>::ReflectInOrigin() {
+  val_.x(val_.x() * -1);
+  val_.y(val_.y() * -1);
 }
 
 template class Pose3<float>;

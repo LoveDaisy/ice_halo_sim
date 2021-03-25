@@ -22,7 +22,7 @@ enum class LensType {
 };
 
 
-using ProjectionFunction = std::function<void(const Pose3f& cam_pose,    // Camera rotation (lon, lat, roll), in degree.
+using ProjectionFunction = std::function<void(Pose3f cam_pose,           // Camera rotation (lon, lat, roll), in degree.
                                               float hov,                 // Half field of view, in degree
                                               size_t data_number,        // Data number
                                               const float* dir,          // Ray directions, [x, y, z]

@@ -24,6 +24,12 @@ constexpr float kRadToDegree = 180.0f / kPi;
 }  // namespace math
 
 
+enum class AngleUnit {
+  kDegree,
+  kRad,
+};
+
+
 template <typename T>
 class Vec3 {
  public:
@@ -70,8 +76,8 @@ using Vec3f = Vec3<float>;
 template <class T>
 class Pose3 {
  public:
-  explicit Pose3(const T* data);
-  Pose3(T lon, T lat, T roll);
+  explicit Pose3(const T* data, AngleUnit unit = AngleUnit::kDegree);
+  Pose3(T lon, T lat, T roll, AngleUnit unit = AngleUnit::kDegree);
 
   T lon() const;
   T lat() const;
@@ -84,8 +90,14 @@ class Pose3 {
   void val(T lat, T lon, T roll);
   void val(const T* data);
 
+  AngleUnit unit() const;
+  void ToDegree();
+  void ToRad();
+  void ReflectInOrigin();
+
  private:
   Vec3<T> val_;
+  AngleUnit unit_;
 };
 
 using Pose3f = Pose3<float>;
