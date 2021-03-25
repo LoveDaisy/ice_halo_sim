@@ -8,6 +8,7 @@
 #include "context/context.hpp"
 #include "core/math.hpp"
 #include "core/simulation.hpp"
+#include "util/log.hpp"
 #include "util/threading_pool.hpp"
 
 namespace icehalo {
@@ -606,7 +607,7 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
   auto projection_type = cam_ctx_->GetLensType();
   auto& projection_functions = GetProjectionFunctions();
   if (projection_functions.find(projection_type) == projection_functions.end()) {
-    std::fprintf(stderr, "Unknown projection type!\n");
+    LOG_ERROR("Unknown projection type!");
     return;
   }
   auto& pf = projection_functions[projection_type];
@@ -616,7 +617,7 @@ void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& c
   auto wavelength = final_ray_data.wavelength;
   if (color_compact_level == ColorCompactLevel::kTrueColor &&
       (wavelength < kMinWavelength || wavelength > kMaxWaveLength || weight <= 0)) {
-    std::fprintf(stderr, "Wavelength out of range!\n");
+    LOG_ERROR("Wavelength out of range!");
     return;
   }
 
