@@ -80,6 +80,9 @@ class SpectrumRenderer {
   void LoadFullRayData(LensType projection_type, const ProjectionFunction& pf, const SimpleRayData& final_ray_data,
                        float* current_data, float* current_data_compensation);
 
+  void RenderHaloImage();
+  void DrawGrids();
+
   CameraContextPtr cam_ctx_;
   RenderContextPtr render_ctx_;
   std::unique_ptr<uint8_t[]> output_image_buffer_;

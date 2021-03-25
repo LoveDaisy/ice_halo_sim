@@ -724,6 +724,12 @@ void SpectrumRenderer::Render() {
     throw std::invalid_argument("Render context is not set!");
   }
 
+  RenderHaloImage();
+  DrawGrids();
+}
+
+
+void SpectrumRenderer::RenderHaloImage() {
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
   const auto* ray_color = render_ctx_->GetRayColor();
@@ -740,6 +746,9 @@ void SpectrumRenderer::Render() {
     }
   }
 }
+
+
+void SpectrumRenderer::DrawGrids() {}
 
 
 uint8_t* SpectrumRenderer::GetImageBuffer() const {
