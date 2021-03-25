@@ -599,7 +599,7 @@ void SpectrumRenderer::SetRenderContext(RenderContextPtr render_ctx) {
 }
 
 
-void SpectrumRenderer::LoadRayData(size_t identifier, const RayCollectionInfo& collection_info,
+void SpectrumRenderer::LoadRayData(int identifier, const RayCollectionInfo& collection_info,
                                    const SimpleRayData& final_ray_data) {
   if (!cam_ctx_) {
     throw std::invalid_argument("Camera context is not set!");

@@ -34,7 +34,7 @@ using ProjectionFunction = std::function<void(const Pose3f& cam_pose,    // Came
 ProjectionFunction GetProjectionFunction(LensType lens_type);
 
 
-using ImageSpectrumData = std::pair<size_t, std::unique_ptr<float[]>>;
+using ImageSpectrumData = std::pair<int, std::unique_ptr<float[]>>;
 
 constexpr int kMinWavelength = 360;
 constexpr int kMaxWaveLength = 830;
@@ -54,7 +54,7 @@ class SpectrumRenderer {
   void SetCameraContext(CameraContextPtr cam_ctx);
   void SetRenderContext(RenderContextPtr render_ctx);
 
-  void LoadRayData(size_t identifier, const RayCollectionInfo& collection_info, const SimpleRayData& final_ray_data);
+  void LoadRayData(int identifier, const RayCollectionInfo& collection_info, const SimpleRayData& final_ray_data);
 
   /**
    * @brief Render ray data to image buffer.
