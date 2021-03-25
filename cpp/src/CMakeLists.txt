@@ -30,7 +30,7 @@ set(SOURCE_FILE
     context/sun_context.cpp
     core/crystal.cpp
     core/filter.cpp
-    core/mymath.cpp
+    core/math.cpp
     core/optics.cpp
     core/render.cpp
     core/simulation.cpp

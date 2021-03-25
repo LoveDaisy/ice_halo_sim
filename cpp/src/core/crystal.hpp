@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "core/core_def.hpp"
-#include "core/mymath.hpp"
+#include "core/math.hpp"
 
 namespace icehalo {
 

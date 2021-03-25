@@ -9,7 +9,7 @@
 #include <limits>
 
 #include "context/context.hpp"
-#include "core/mymath.hpp"
+#include "core/math.hpp"
 #include "util/obj_pool.hpp"
 
 

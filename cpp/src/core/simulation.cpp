@@ -5,7 +5,7 @@
 #include <stack>
 #include <utility>
 
-#include "core/mymath.hpp"
+#include "core/math.hpp"
 #include "util/log.hpp"
 #include "util/obj_pool.hpp"
 #include "util/threading_pool.hpp"

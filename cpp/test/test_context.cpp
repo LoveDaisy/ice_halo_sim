@@ -1,7 +1,7 @@
 #include <string>
 
 #include "context/context.hpp"
-#include "core/mymath.hpp"
+#include "core/math.hpp"
 #include "gtest/gtest.h"
 
 extern std::string config_file_name;

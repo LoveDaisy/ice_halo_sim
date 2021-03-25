@@ -1,4 +1,4 @@
-#include "core/mymath.hpp"
+#include "core/math.hpp"
 
 #include <smmintrin.h>
 #include <xmmintrin.h>

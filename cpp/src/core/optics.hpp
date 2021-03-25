@@ -8,7 +8,7 @@
 
 #include "core/core_def.hpp"
 #include "core/crystal.hpp"
-#include "core/mymath.hpp"
+#include "core/math.hpp"
 #include "io/serialize.hpp"
 
 

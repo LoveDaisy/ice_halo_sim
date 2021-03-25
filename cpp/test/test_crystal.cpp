@@ -2,7 +2,7 @@
 #include <vector>
 
 #include "core/crystal.hpp"
-#include "core/mymath.hpp"
+#include "core/math.hpp"
 #include "gtest/gtest.h"
 
 namespace {
