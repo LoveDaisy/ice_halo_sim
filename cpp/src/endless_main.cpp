@@ -214,7 +214,7 @@ int main(int argc, char* argv[]) {
       LOG_INFO("Collecting rays: %.2fms", diff.count());
     }
 
-    renderer.RenderToImage();
+    renderer.Render();
 
     cv::Mat img(proj_ctx->render_ctx_->GetImageHeight(), proj_ctx->render_ctx_->GetImageWidth(), CV_8UC3,
                 renderer.GetImageBuffer());
@@ -223,7 +223,7 @@ int main(int argc, char* argv[]) {
 
     if (split_render_ctx) {
       for (auto& r : split_renderer_candidates) {
-        r.RenderToImage();
+        r.Render();
       }
       for (size_t i = 0; i < std::min(split_renderer_candidates.size(), split_img_num); i++) {
         cv::Mat halo_img(proj_ctx->split_render_ctx_->GetImageHeight(), proj_ctx->split_render_ctx_->GetImageWidth(),

@@ -719,7 +719,7 @@ void SpectrumRenderer::LoadFullRayData(LensType projection_type, const Projectio
 }
 
 
-void SpectrumRenderer::RenderToImage() {
+void SpectrumRenderer::Render() {
   if (!render_ctx_) {
     throw std::invalid_argument("Render context is not set!");
   }

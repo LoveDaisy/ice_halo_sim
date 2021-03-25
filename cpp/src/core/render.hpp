@@ -69,7 +69,7 @@ class SpectrumRenderer {
    * @param channel_index If `color_compact_level` is ColorCompactLevel::kTrueColor, this parameter
    *        will be ignored.
    */
-  void RenderToImage();
+  void Render();
   uint8_t* GetImageBuffer() const;
 
   static constexpr int kImageBits = 24;

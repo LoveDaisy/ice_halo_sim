@@ -152,7 +152,7 @@ int main(int argc, char* argv[]) {
         " Total %zu rays, %zu pts",
         i + 1, data_files.size(), loading_time.count(), split_render_time.count(), init_ray_num, exit_seg_num);
   }
-  renderer.RenderToImage();
+  renderer.Render();
 
   cv::Mat img(ctx->render_ctx_->GetImageHeight(), ctx->render_ctx_->GetImageWidth(), CV_8UC3,
               renderer.GetImageBuffer());
@@ -161,7 +161,7 @@ int main(int argc, char* argv[]) {
 
   if (split_render_ctx) {
     for (auto& r : split_renderer_candidates) {
-      r.RenderToImage();
+      r.Render();
     }
     for (size_t i = 0; i < std::min(split_renderer_candidates.size(), split_img_num); i++) {
       cv::Mat halo_img(ctx->split_render_ctx_->GetImageHeight(), ctx->split_render_ctx_->GetImageWidth(), CV_8UC3,
