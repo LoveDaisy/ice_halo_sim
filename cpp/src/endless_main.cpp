@@ -3,8 +3,8 @@
 #include <opencv2/opencv.hpp>
 
 #include "context/context.hpp"
-#include "core/render.hpp"
-#include "core/simulation.hpp"
+#include "process/render.hpp"
+#include "process/simulation.hpp"
 #include "util/arg_parser.hpp"
 #include "util/log.hpp"
 

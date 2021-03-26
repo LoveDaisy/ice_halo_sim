@@ -7,7 +7,7 @@
 #include <random>
 #include <vector>
 
-#include "core_def.hpp"
+#include "core/core_def.hpp"
 
 namespace icehalo {
 

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <limits>
 
+#include "context/crystal_context.hpp"
 #include "context/filter_context.hpp"
 #include "rapidjson/document.h"
 #include "rapidjson/pointer.h"

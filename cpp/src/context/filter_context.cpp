@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "core/filter.hpp"
 #include "rapidjson/document.h"
 #include "rapidjson/pointer.h"
 

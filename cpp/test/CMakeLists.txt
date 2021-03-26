@@ -14,9 +14,9 @@ set(SOURCE_FILE
     ${PROJ_SRC_DIR}/core/filter.cpp
     ${PROJ_SRC_DIR}/core/math.cpp
     ${PROJ_SRC_DIR}/core/optics.cpp
-    ${PROJ_SRC_DIR}/core/render.cpp
-    ${PROJ_SRC_DIR}/core/simulation.cpp
     ${PROJ_SRC_DIR}/io/file.cpp
+    ${PROJ_SRC_DIR}/process/render.cpp
+    ${PROJ_SRC_DIR}/process/simulation.cpp
     ${PROJ_SRC_DIR}/util/arg_parser.cpp
     ${PROJ_SRC_DIR}/util/log.cpp
     ${PROJ_SRC_DIR}/util/obj_pool.cpp

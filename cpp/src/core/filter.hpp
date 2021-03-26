@@ -5,7 +5,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "context/crystal_context.hpp"
 #include "core/core_def.hpp"
 #include "io/serialize.hpp"
 

@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "core/optics.hpp"
-#include "core/render.hpp"
+#include "process/render.hpp"
 #include "rapidjson/error/en.h"
 #include "rapidjson/filereadstream.h"
 #include "rapidjson/pointer.h"

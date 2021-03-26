@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-#include "core/render.hpp"
+#include "process/render.hpp"
 #include "rapidjson/pointer.h"
 #include "util/log.hpp"
 

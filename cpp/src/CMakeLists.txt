@@ -32,8 +32,8 @@ set(SOURCE_FILE
     core/filter.cpp
     core/math.cpp
     core/optics.cpp
-    core/render.cpp
-    core/simulation.cpp
+    process/render.cpp
+    process/simulation.cpp
     io/file.cpp
     util/arg_parser.cpp
     util/log.cpp

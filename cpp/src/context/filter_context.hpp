@@ -29,8 +29,6 @@ class RayPathFilterContext : public IJsonizable {
  private:
   RayPathFilterContext();
 
-  using FilterParser = std::function<RayPathFilterPtrU(const rapidjson::Value&)>;
-
   ShortIdType id_;
   RayPathFilterPtrU filter_;
 };
