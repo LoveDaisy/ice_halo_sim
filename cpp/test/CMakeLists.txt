@@ -1,43 +1,29 @@
-if(BUILD_TEST)
+# ==================================================================================================
+# Add some definitions
+if (BUILD_TEST)
   add_compile_definitions(FOR_TEST)
 endif()
 
-set(SOURCE_FILE
-    ${PROJ_SRC_DIR}/context/camera_context.cpp
-    ${PROJ_SRC_DIR}/context/context.cpp
-    ${PROJ_SRC_DIR}/context/crystal_context.cpp
-    ${PROJ_SRC_DIR}/context/filter_context.cpp
-    ${PROJ_SRC_DIR}/context/multi_scatter_context.cpp
-    ${PROJ_SRC_DIR}/context/render_context.cpp
-    ${PROJ_SRC_DIR}/context/sun_context.cpp
-    ${PROJ_SRC_DIR}/core/crystal.cpp
-    ${PROJ_SRC_DIR}/core/filter.cpp
-    ${PROJ_SRC_DIR}/core/math.cpp
-    ${PROJ_SRC_DIR}/core/optics.cpp
-    ${PROJ_SRC_DIR}/io/file.cpp
-    ${PROJ_SRC_DIR}/process/render.cpp
-    ${PROJ_SRC_DIR}/process/simulation.cpp
-    ${PROJ_SRC_DIR}/util/arg_parser.cpp
-    ${PROJ_SRC_DIR}/util/log.cpp
-    ${PROJ_SRC_DIR}/util/obj_pool.cpp
-    ${PROJ_SRC_DIR}/util/threading_pool.cpp)
-
+message(STATUS "[test] icehalo_libs: ${icehalo_libs}")
+message(STATUS "[test] icehalo_include: ${icehalo_include}")
 add_executable(unit_test
-  ${SOURCE_FILE}
-  test_crystal.cpp
-  test_context.cpp
-  test_optics.cpp
-  test_serialize.cpp
-  test_main.cpp)
+  ${icehalo_src}
+  "${PROJ_TEST_DIR}/test_crystal.cpp"
+  "${PROJ_TEST_DIR}/test_context.cpp"
+  "${PROJ_TEST_DIR}/test_optics.cpp"
+  "${PROJ_TEST_DIR}/test_serialize.cpp"
+  "${PROJ_TEST_DIR}/test_main.cpp")
 target_include_directories(unit_test
-  PUBLIC ${PROJ_SRC_DIR} ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
+  PUBLIC ${icehalo_include} ${PROJ_TEST_DIR})
 target_link_libraries(unit_test
-  PUBLIC ${Boost_LIBRARIES} gtest)
+  PUBLIC gtest ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
 
 
-add_executable(RayTracingTest test_ray_tracing_main.cpp ${SOURCE_FILE})
+add_executable(RayTracingTest
+  ${icehalo_src}
+  "${PROJ_TEST_DIR}/test_ray_tracing_main.cpp")
 target_include_directories(RayTracingTest
-    PUBLIC ${PROJ_SRC_DIR} ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
+    PUBLIC ${icehalo_include} ${PROJ_TEST_DIR})
 target_link_libraries(RayTracingTest
     PUBLIC ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
 

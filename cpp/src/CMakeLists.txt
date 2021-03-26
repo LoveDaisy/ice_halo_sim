@@ -8,57 +8,38 @@ if(RANDOM_SEED)
   add_compile_definitions(RANDOM_SEED)
 endif()
 
-if(${OS_NAME} STREQUAL "Linux")
-  add_compile_definitions(OS_LINUX) 
-elseif(${OS_NAME} STREQUAL "Darwin")
-  add_compile_definitions(OS_MAC)
-elseif(${OS_NAME} STREQUAL "Windows")
-  add_compile_definitions(OS_WIN)
-endif()
-
+message(STATUS "[src] CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 
 
 # ==================================================================================================
 # Add targets
-set(SOURCE_FILE
-    context/camera_context.cpp
-    context/context.cpp
-    context/crystal_context.cpp
-    context/filter_context.cpp
-    context/multi_scatter_context.cpp
-    context/render_context.cpp
-    context/sun_context.cpp
-    core/crystal.cpp
-    core/filter.cpp
-    core/math.cpp
-    core/optics.cpp
-    process/render.cpp
-    process/simulation.cpp
-    io/file.cpp
-    util/arg_parser.cpp
-    util/log.cpp
-    util/obj_pool.cpp
-    util/threading_pool.cpp)
-
-add_executable(IceHaloSim trace_main.cpp ${SOURCE_FILE})
+message(STATUS "[src] icehalo_libs: ${icehalo_libs}")
+message(STATUS "[src] icehalo_include: ${icehalo_include}")
+add_executable(IceHaloSim
+    trace_main.cpp
+    ${icehalo_src})
 target_include_directories(IceHaloSim
-    PUBLIC ${PROJ_SRC_DIR} ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
+    PUBLIC ${icehalo_include})
 target_link_libraries(IceHaloSim
-    PUBLIC ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
+    PUBLIC ${OpenCV_LIBS} ${Boost_LIBRARIES})
 install(TARGETS IceHaloSim
     DESTINATION "${CMAKE_INSTALL_PREFIX}")
 
-add_executable(IceHaloRender render_main.cpp ${SOURCE_FILE})
+add_executable(IceHaloRender
+    render_main.cpp
+    ${icehalo_src})
 target_include_directories(IceHaloRender
-    PUBLIC ${PROJ_SRC_DIR} ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
+    PUBLIC ${icehalo_include})
 target_link_libraries(IceHaloRender
     PUBLIC ${OpenCV_LIBS} ${Boost_LIBRARIES})
 install(TARGETS IceHaloRender
     DESTINATION "${CMAKE_INSTALL_PREFIX}")
 
-add_executable(IceHaloEndless endless_main.cpp ${SOURCE_FILE})
+add_executable(IceHaloEndless
+    endless_main.cpp
+    ${icehalo_src})
 target_include_directories(IceHaloEndless
-    PUBLIC ${PROJ_SRC_DIR} ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
+    PUBLIC ${icehalo_include})
 target_link_libraries(IceHaloEndless
     PUBLIC ${OpenCV_LIBS} ${Boost_LIBRARIES})
 install(TARGETS IceHaloEndless
