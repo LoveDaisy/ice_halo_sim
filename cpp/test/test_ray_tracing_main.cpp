@@ -4,7 +4,6 @@
 #include "process/simulation.hpp"
 #include "util/log.hpp"
 
-using namespace icehalo;
 
 int main(int argc, char* argv[]) {
   if (argc != 2) {
@@ -15,8 +14,8 @@ int main(int argc, char* argv[]) {
   ENABLE_LOG_SEVERITY;
   DISABLE_LOG_THREAD_ID;
   auto start = std::chrono::system_clock::now();
-  ProjectContextPtr context = ProjectContext::CreateFromFile(argv[1]);
-  Simulator simulator(context);
+  icehalo::ProjectContextPtr context = icehalo::ProjectContext::CreateFromFile(argv[1]);
+  icehalo::Simulator simulator(context);
 
   auto t = std::chrono::system_clock::now();
   std::chrono::duration<float, std::ratio<1, 1000>> diff = t - start;
