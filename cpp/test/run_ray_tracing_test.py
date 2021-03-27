@@ -14,12 +14,13 @@ def main(exe: str, config: str, ref: str):
     res.check_returncode()
 
     with open('tmp.log', 'r') as tmp_log, open(ref, 'r') as ref_log:
+        tmp_log_lines = [line.strip() for line in tmp_log if line.startswith('[DEBUG]')]
+        ref_log_lines = [line.strip() for line in ref_log if line.startswith('[DEBUG]')]
+
         read_lines = 0
         same_lines = 0
-        for line1, line2 in zip(ref_log, tmp_log):
+        for line1, line2 in zip(ref_log_lines, tmp_log_lines):
             read_lines += 1
-            if not line1.startswith('[DEBUG]'):
-                continue
             if line1.strip() != line2.strip():
                 logging.warning(f'Log file does not match at line {read_lines}!')
                 logging.warning(f'ref: {line1}')
