@@ -41,6 +41,35 @@ struct RenderSplitter : public IJsonizable {
 };
 
 
+enum class LineType {
+  kSolid = 0,
+  kDashed,
+};
+
+
+struct LineSpecifier : public IJsonizable {
+  LineType type;
+  float width;
+  float color[3];
+
+  static constexpr float kDefaultWidth = 0.8f;
+  static constexpr float kMinWidth = 0.1f;
+  static constexpr float kDefaultColor[3] = { 0.5f, 0.5f, 0.5f };
+
+  LineSpecifier();
+  LineSpecifier(LineType type, float width, const float color[3]);
+
+  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
+  void LoadFromJson(const rapidjson::Value& root) override;
+};
+
+
+struct GridLine {
+  float value;
+  LineSpecifier line_specifier;
+};
+
+
 /**
  * @brief Context for render
  *
@@ -94,13 +123,31 @@ class RenderContext : public IJsonizable {
 
   static RenderContextPtrU CreateDefault();
 
+  static constexpr float kDefaultIntensity = 1.0f;
   static constexpr float kMinIntensity = 0.01f;
   static constexpr float kMaxIntensity = 100.0f;
+  static constexpr int kDefaultImageSize = 800;
   static constexpr int kMaxImageSize = 4096;
   static constexpr int kMaxTopHaloNumber = 300;
 
  private:
   RenderContext();
+
+  void LoadColorConfig(const rapidjson::Value& root);
+  void LoadIntensity(const rapidjson::Value& root);
+  void LoadImageSize(const rapidjson::Value& root);
+  void LoadImageOffset(const rapidjson::Value& root);
+  void LoadVisibleRange(const rapidjson::Value& root);
+  void LoadRenderSplitter(const rapidjson::Value& root);
+  void LoadGridLines(const rapidjson::Value& root);
+
+  void SaveColorConfig(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
+  void SaveIntensity(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
+  void SaveImageSize(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
+  void SaveImageOffset(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
+  void SaveVisibleRange(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
+  void SaveRenderSplitter(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
+  void SaveGridLines(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
 
   float ray_color_[3];
   float background_color_[3];
@@ -112,6 +159,8 @@ class RenderContext : public IJsonizable {
   VisibleRange visible_range_;
   ColorCompactLevel color_compact_level_;
   RenderSplitter splitter_;
+  std::vector<GridLine> elevation_grid_;
+  std::vector<GridLine> radius_rid_;
 };
 
 }  // namespace icehalo

@@ -75,6 +75,77 @@ void RenderSplitter::LoadFromJson(const rapidjson::Value& root) {
 }
 
 
+constexpr float LineSpecifier::kDefaultColor[3];
+
+
+LineSpecifier::LineSpecifier() : LineSpecifier(LineType::kSolid, kDefaultWidth, kDefaultColor) {}
+
+
+LineSpecifier::LineSpecifier(LineType type, float width, const float color[3])
+    : type(type), width(width), color{ color[0], color[1], color[2] } {}
+
+
+void LineSpecifier::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
+  switch (type) {
+    case LineType::kSolid:
+      Pointer("/type").Set(root, "solid", allocator);
+      break;
+    case LineType::kDashed:
+      Pointer("/type").Set(root, "dashed", allocator);
+      break;
+  }
+
+  Pointer("/width").Set(root, width, allocator);
+
+  Pointer("/color/0").Set(root, color[0], allocator);
+  Pointer("/color/-").Set(root, color[1], allocator);
+  Pointer("/color/-").Set(root, color[2], allocator);
+}
+
+
+void LineSpecifier::LoadFromJson(const rapidjson::Value& root) {
+  type = LineType::kSolid;
+  const auto* p = Pointer("/type").Get(root);
+  if (p == nullptr) {
+    LOG_VERBOSE("Line specifier missing <type>. Use default solid type.");
+  } else if (!p->IsString()) {
+    LOG_VERBOSE("Line specifier <type> is not a string. Ignore it.");
+  } else if (*p == "solid") {
+    type = LineType::kSolid;
+  } else if (*p == "dashed") {
+    type = LineType::kDashed;
+  } else {
+    LOG_VERBOSE("Line specifier <type> cannot recognize! Use default solid type.");
+  }
+
+  width = kDefaultWidth;
+  p = Pointer("/width").Get(root);
+  if (p == nullptr) {
+    LOG_VERBOSE("Line specifier missing <width>. Use default %.2f.", kDefaultWidth);
+  } else if (!p->IsNumber()) {
+    LOG_VERBOSE("Line specifier <width> is not a number. Use default %.2f.", kDefaultWidth);
+  } else {
+    auto w = p->GetDouble();
+    width = std::max(static_cast<float>(w), kMinWidth);
+  }
+
+  std::memcpy(color, kDefaultColor, sizeof(color));
+  p = Pointer("/color").Get(root);
+  if (p == nullptr) {
+    LOG_VERBOSE("Line specifier missing <color>. Use default color!");
+  } else if (!p->IsArray()) {
+    LOG_VERBOSE("Line specifier <color> is not an array. Use default color!");
+  } else if (p->IsArray() && (p->Size() != 3 || !(*p)[0].IsNumber())) {
+    LOG_VERBOSE("Line Specifier <color> cannot be recognized. Use default color!");
+  } else {
+    auto pa = p->GetArray();
+    color[0] = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
+    color[1] = static_cast<float>(std::min(std::max(pa[1].GetDouble(), 0.0), 1.0));
+    color[2] = static_cast<float>(std::min(std::max(pa[2].GetDouble(), 0.0), 1.0));
+  }
+}
+
+
 RenderContext::RenderContext()
     : ray_color_{ 1.0f, 1.0f, 1.0f }, background_color_{ 0.0f, 0.0f, 0.0f }, intensity_(1.0f), image_width_(0),
       image_height_(0), offset_x_(0), offset_y_(0), visible_range_(VisibleRange::kUpper),
@@ -247,31 +318,17 @@ void RenderContext::SetVisibleRange(VisibleRange r) {
 
 void RenderContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
   root.Clear();
+  SaveColorConfig(root, allocator);
+  SaveIntensity(root, allocator);
+  SaveImageSize(root, allocator);
+  SaveImageOffset(root, allocator);
+  SaveVisibleRange(root, allocator);
+  SaveRenderSplitter(root, allocator);
+  SaveGridLines(root, allocator);
+}
 
-  Pointer("/width").Set(root, image_width_, allocator);
-  Pointer("/height").Set(root, image_height_, allocator);
-  switch (visible_range_) {
-    case VisibleRange::kLower:
-      Pointer("/visible_semi_sphere").Set(root, "lower", allocator);
-      break;
-    case VisibleRange::kFront:
-      Pointer("/visible_semi_sphere").Set(root, "camera", allocator);
-      break;
-    case VisibleRange::kFull:
-      Pointer("/visible_semi_sphere").Set(root, "full", allocator);
-      break;
-    case VisibleRange::kUpper:
-    default:
-      Pointer("/visible_semi_sphere").Set(root, "upper", allocator);
-      break;
-  }
-  Pointer("/intensity_factor").Set(root, intensity_, allocator);
 
-  Pointer("/offset/0").Set(root, offset_x_, allocator);
-  Pointer("/offset/-").Set(root, offset_y_, allocator);
-
-  splitter_.SaveToJson(Pointer("/splitter").Create(root, allocator), allocator);
-
+void RenderContext::SaveColorConfig(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
   switch (color_compact_level_) {
     case ColorCompactLevel::kTrueColor:
       Pointer("/ray_compact_level").Set(root, "true_color", allocator);
@@ -298,79 +355,78 @@ void RenderContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Allocat
 }
 
 
+void RenderContext::SaveIntensity(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
+  Pointer("/intensity_factor").Set(root, intensity_, allocator);
+}
+
+
+void RenderContext::SaveImageSize(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
+  Pointer("/width").Set(root, image_width_, allocator);
+  Pointer("/height").Set(root, image_height_, allocator);
+}
+
+
+void RenderContext::SaveImageOffset(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
+  Pointer("/offset/0").Set(root, offset_x_, allocator);
+  Pointer("/offset/-").Set(root, offset_y_, allocator);
+}
+
+
+void RenderContext::SaveVisibleRange(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
+  switch (visible_range_) {
+    case VisibleRange::kLower:
+      Pointer("/visible_semi_sphere").Set(root, "lower", allocator);
+      break;
+    case VisibleRange::kFront:
+      Pointer("/visible_semi_sphere").Set(root, "camera", allocator);
+      break;
+    case VisibleRange::kFull:
+      Pointer("/visible_semi_sphere").Set(root, "full", allocator);
+      break;
+    case VisibleRange::kUpper:
+    default:
+      Pointer("/visible_semi_sphere").Set(root, "upper", allocator);
+      break;
+  }
+}
+
+
+void RenderContext::SaveRenderSplitter(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
+  splitter_.SaveToJson(Pointer("/splitter").Create(root, allocator), allocator);
+}
+
+
+void RenderContext::SaveGridLines(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
+  Pointer("/elevation_grid/0").Create(root, allocator);
+  for (auto& g : elevation_grid_) {
+    auto& curr_obj = Pointer("/elevation_grid/-").Create(root, allocator);
+    Pointer("/value").Set(curr_obj, g.value, allocator);
+    g.line_specifier.SaveToJson(curr_obj, allocator);
+  }
+
+  Pointer("/radius_grid/0").Create(root, allocator);
+  for (auto& g : radius_rid_) {
+    auto& curr_obj = Pointer("/radius_grid/-").Create(root, allocator);
+    Pointer("/value").Set(curr_obj, g.value, allocator);
+    g.line_specifier.SaveToJson(curr_obj, allocator);
+  }
+}
+
+
 void RenderContext::LoadFromJson(const rapidjson::Value& root) {
-  SetImageWidth(800);
-  const auto* p = Pointer("/width").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <width>. Use default 800!");
-  } else if (!p->IsInt()) {
-    LOG_VERBOSE("Render config <width> is not an integer. Use default 800!");
-  } else {
-    SetImageWidth(p->GetInt());
-  }
+  LoadColorConfig(root);
+  LoadImageSize(root);
+  LoadImageOffset(root);
+  LoadVisibleRange(root);
+  LoadIntensity(root);
+  LoadRenderSplitter(root);
+  LoadGridLines(root);
+}
 
-  SetImageHeight(800);
-  p = Pointer("/height").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <height>. Use default 800!");
-  } else if (!p->IsInt()) {
-    LOG_VERBOSE("Render config <height> is not an integer. Use default 800!");
-  } else {
-    SetImageHeight(p->GetInt());
-  }
 
-  SetVisibleRange(VisibleRange::kUpper);
-  p = Pointer("/visible_semi_sphere").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <visible_semi_sphere>. Use default upper!");
-  } else if (!p->IsString()) {
-    LOG_VERBOSE("Render config <visible_semi_sphere> is not a string. Use default upper!");
-  } else if (*p == "upper") {
-    SetVisibleRange(VisibleRange::kUpper);
-  } else if (*p == "lower") {
-    SetVisibleRange(VisibleRange::kLower);
-  } else if (*p == "camera") {
-    SetVisibleRange(VisibleRange::kFront);
-  } else if (*p == "full") {
-    SetVisibleRange(VisibleRange::kFull);
-  } else {
-    LOG_VERBOSE("Render config <visible_semi_sphere> cannot be recognized. Use default upper!");
-  }
-
-  SetIntensity(1.0f);
-  p = Pointer("/intensity_factor").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <intensity_factor>. Use default 1.0!");
-  } else if (!p->IsNumber()) {
-    LOG_VERBOSE("Render config <intensity_factor> is not a number. Use default 1.0!");
-  } else {
-    auto f = static_cast<float>(p->GetDouble());
-    f = std::max(std::min(f, RenderContext::kMaxIntensity), RenderContext::kMinIntensity);
-    SetIntensity(f);
-  }
-
-  SetImageOffsetX(0);
-  SetImageOffsetY(0);
-  p = Pointer("/offset").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <offset>. Use default [0, 0]!");
-  } else if (!p->IsArray()) {
-    LOG_VERBOSE("Render config <offset> is not an array. Use default [0, 0]!");
-  } else if (p->Size() != 2 || !(*p)[0].IsInt() || !(*p)[1].IsInt()) {
-    LOG_VERBOSE("Config <offset> cannot be recognized. Use default [0, 0]!");
-  } else {
-    int offset_x = (*p)[0].GetInt();
-    int offset_y = (*p)[1].GetInt();
-    offset_x = std::max(std::min(offset_x, static_cast<int>(RenderContext::kMaxImageSize / 2)),
-                        -static_cast<int>(RenderContext::kMaxImageSize / 2));
-    offset_y = std::max(std::min(offset_y, static_cast<int>(RenderContext::kMaxImageSize / 2)),
-                        -static_cast<int>(RenderContext::kMaxImageSize / 2));
-    SetImageOffsetX(offset_x);
-    SetImageOffsetY(offset_y);
-  }
-
+void RenderContext::LoadColorConfig(const rapidjson::Value& root) {
   SetColorCompactLevel(ColorCompactLevel::kTrueColor);
-  p = Pointer("/color_compact_level").Get(root);
+  const auto* p = Pointer("/color_compact_level").Get(root);
   if (p == nullptr) {
     LOG_VERBOSE("Render config missing <color_compact_level>. Use default true color!");
   } else if (!p->IsString()) {
@@ -385,16 +441,6 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
     } else {
       LOG_VERBOSE("Render config <color_compact_level> cannot recognize. Use default true color!");
     }
-  }
-
-  p = Pointer("/splitter").Get(root);
-  splitter_ = {};
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <splitter>. Use default!");
-  } else if (!p->IsObject()) {
-    LOG_VERBOSE("Render config <splitter> is not an object. Use default!");
-  } else {
-    splitter_.LoadFromJson(*p);
   }
 
   ResetBackgroundColor();
@@ -429,6 +475,140 @@ void RenderContext::LoadFromJson(const rapidjson::Value& root) {
     float g = static_cast<float>(std::min(std::max(pa[1].GetDouble(), 0.0), 1.0));
     float b = static_cast<float>(std::min(std::max(pa[2].GetDouble(), 0.0), 1.0));
     SetRayColor(r, g, b);
+  }
+}
+
+
+void RenderContext::LoadImageSize(const rapidjson::Value& root) {
+  SetImageWidth(kDefaultImageSize);
+  const auto* p = Pointer("/width").Get(root);
+  if (p == nullptr) {
+    LOG_VERBOSE("Render config missing <width>. Use default 800!");
+  } else if (!p->IsInt()) {
+    LOG_VERBOSE("Render config <width> is not an integer. Use default 800!");
+  } else {
+    SetImageWidth(p->GetInt());
+  }
+
+  SetImageHeight(kDefaultImageSize);
+  p = Pointer("/height").Get(root);
+  if (p == nullptr) {
+    LOG_VERBOSE("Render config missing <height>. Use default 800!");
+  } else if (!p->IsInt()) {
+    LOG_VERBOSE("Render config <height> is not an integer. Use default 800!");
+  } else {
+    SetImageHeight(p->GetInt());
+  }
+}
+
+
+void RenderContext::LoadImageOffset(const rapidjson::Value& root) {
+  SetImageOffsetX(0);
+  SetImageOffsetY(0);
+  const auto* p = Pointer("/offset").Get(root);
+  if (p == nullptr) {
+    LOG_VERBOSE("Render config missing <offset>. Use default [0, 0]!");
+  } else if (!p->IsArray()) {
+    LOG_VERBOSE("Render config <offset> is not an array. Use default [0, 0]!");
+  } else if (p->Size() != 2 || !(*p)[0].IsInt() || !(*p)[1].IsInt()) {
+    LOG_VERBOSE("Config <offset> cannot be recognized. Use default [0, 0]!");
+  } else {
+    int offset_x = (*p)[0].GetInt();
+    int offset_y = (*p)[1].GetInt();
+    offset_x = std::max(std::min(offset_x, static_cast<int>(RenderContext::kMaxImageSize / 2)),
+                        -static_cast<int>(RenderContext::kMaxImageSize / 2));
+    offset_y = std::max(std::min(offset_y, static_cast<int>(RenderContext::kMaxImageSize / 2)),
+                        -static_cast<int>(RenderContext::kMaxImageSize / 2));
+    SetImageOffsetX(offset_x);
+    SetImageOffsetY(offset_y);
+  }
+}
+
+
+void RenderContext::LoadVisibleRange(const rapidjson::Value& root) {
+  SetVisibleRange(VisibleRange::kUpper);
+  const auto* p = Pointer("/visible_semi_sphere").Get(root);
+  if (p == nullptr) {
+    LOG_VERBOSE("Render config missing <visible_semi_sphere>. Use default upper!");
+  } else if (!p->IsString()) {
+    LOG_VERBOSE("Render config <visible_semi_sphere> is not a string. Use default upper!");
+  } else if (*p == "upper") {
+    SetVisibleRange(VisibleRange::kUpper);
+  } else if (*p == "lower") {
+    SetVisibleRange(VisibleRange::kLower);
+  } else if (*p == "camera") {
+    SetVisibleRange(VisibleRange::kFront);
+  } else if (*p == "full") {
+    SetVisibleRange(VisibleRange::kFull);
+  } else {
+    LOG_VERBOSE("Render config <visible_semi_sphere> cannot be recognized. Use default upper!");
+  }
+}
+
+
+void RenderContext::LoadIntensity(const rapidjson::Value& root) {
+  SetIntensity(kDefaultIntensity);
+  const auto* p = Pointer("/intensity_factor").Get(root);
+  if (p == nullptr) {
+    LOG_VERBOSE("Render config missing <intensity_factor>. Use default 1.0!");
+  } else if (!p->IsNumber()) {
+    LOG_VERBOSE("Render config <intensity_factor> is not a number. Use default 1.0!");
+  } else {
+    auto f = static_cast<float>(p->GetDouble());
+    f = std::max(std::min(f, RenderContext::kMaxIntensity), RenderContext::kMinIntensity);
+    SetIntensity(f);
+  }
+}
+
+
+void RenderContext::LoadRenderSplitter(const rapidjson::Value& root) {
+  const auto* p = Pointer("/splitter").Get(root);
+  splitter_ = {};
+  if (p == nullptr) {
+    LOG_VERBOSE("Render config missing <splitter>. Use default!");
+  } else if (!p->IsObject()) {
+    LOG_VERBOSE("Render config <splitter> is not an object. Use default!");
+  } else {
+    splitter_.LoadFromJson(*p);
+  }
+}
+
+
+void RenderContext::LoadGridLines(const rapidjson::Value& root) {
+  const auto* p = Pointer("/elevation_grid").Get(root);
+  if (p == nullptr) {
+    LOG_VERBOSE("Render config missing <elevation_grid>. No elevation grid will be drawn.");
+  } else if (!p->IsArray() || !p[0].IsObject()) {
+    LOG_VERBOSE("Render config <elevation_grid> is not an array. Ignore it.");
+  } else {
+    for (size_t i = 0; i < p->GetArray().Size(); i++) {
+      if (!p[i].HasMember("value") || !p[i]["value"].IsNumber()) {
+        LOG_VERBOSE("Render config <elevation_grid>[%zu] cannot recognize. Ignore it.", i);
+        continue;
+      }
+      GridLine tmp_line;
+      tmp_line.value = p[i]["value"].GetDouble();
+      tmp_line.line_specifier.LoadFromJson(p[i]);
+      elevation_grid_.emplace_back(tmp_line);
+    }
+  }
+
+  p = Pointer("/radius_grid").Get(root);
+  if (p == nullptr) {
+    LOG_VERBOSE("Render config missing <radius_grid>. No elevation grid will be drawn.");
+  } else if (!p->IsArray()) {
+    LOG_VERBOSE("Render config <radius_grid> is not an array. Ignore it.");
+  } else {
+    for (size_t i = 0; i < p->GetArray().Size(); i++) {
+      if (!p[i].HasMember("value") || !p[i]["value"].IsNumber()) {
+        LOG_VERBOSE("Render config <radius_grid>[%zu] cannot recognize. Ignore it.", i);
+        continue;
+      }
+      GridLine tmp_line;
+      tmp_line.value = p[i]["value"].GetDouble();
+      tmp_line.line_specifier.LoadFromJson(p[i]);
+      elevation_grid_.emplace_back(tmp_line);
+    }
   }
 }
 
