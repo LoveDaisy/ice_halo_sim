@@ -67,9 +67,6 @@ class SpectrumRenderer {
    *     2.1 If `ray_color[0]` is less than 0, then use true color
    *     2.3 Else use `ray_color`
    * 3. Else ignore other ray color settings and background color settings
-   *
-   * @param channel_index If `color_compact_level` is ColorCompactLevel::kTrueColor, this parameter
-   *        will be ignored.
    */
   void Render();
   uint8_t* GetImageBuffer() const;
