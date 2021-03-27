@@ -292,7 +292,7 @@ int RenderContext::GetSplitImageNumber() const {
 
 
 int RenderContext::GetSplitNumberPerImage() const {
-  return SpectrumRenderer::kImageBits / static_cast<int>(color_compact_level_);
+  return Renderer::kImageBits / static_cast<int>(color_compact_level_);
 }
 
 

@@ -13,7 +13,7 @@ constexpr size_t kBufSize = 1024;
 char str_buf[kBufSize];
 
 using namespace icehalo;
-std::vector<SpectrumRenderer> split_renderer_candidates;
+std::vector<Renderer> split_renderer_candidates;
 std::vector<std::set<size_t>> renderer_ray_set;
 
 
@@ -145,7 +145,7 @@ int main(int argc, char* argv[]) {
   auto start = std::chrono::system_clock::now();
   ProjectContextPtr proj_ctx = ProjectContext::CreateFromFile(config_filename);
   Simulator simulator(proj_ctx);
-  SpectrumRenderer renderer;
+  Renderer renderer;
   renderer.SetCameraContext(proj_ctx->cam_ctx_);
   renderer.SetRenderContext(proj_ctx->render_ctx_);
 

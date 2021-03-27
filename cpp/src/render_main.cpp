@@ -36,9 +36,10 @@ void PrintRayPath(const RayPath& ray_path, char* buf, size_t size) {
 }
 
 
-std::tuple<RayCollectionInfoList, SimpleRayData> RenderSplitHalos(
-    SimulationData& ray_data, ProjectContextPtr& ctx, RenderContextPtr& split_render_ctx,
-    std::vector<SpectrumRenderer>& split_renderer_candidates, std::vector<std::set<size_t>>& renderer_ray_set) {
+std::tuple<RayCollectionInfoList, SimpleRayData> RenderSplitHalos(SimulationData& ray_data, ProjectContextPtr& ctx,
+                                                                  RenderContextPtr& split_render_ctx,
+                                                                  std::vector<Renderer>& split_renderer_candidates,
+                                                                  std::vector<std::set<size_t>>& renderer_ray_set) {
   auto split_num = static_cast<size_t>(split_render_ctx->GetSplitNumber());
   size_t split_img_ch_num = split_render_ctx->GetSplitNumberPerImage();
 
@@ -96,12 +97,12 @@ int main(int argc, char* argv[]) {
 
   auto start = std::chrono::system_clock::now();
   ProjectContextPtr ctx = ProjectContext::CreateFromFile(config_filename);
-  SpectrumRenderer renderer;
+  Renderer renderer;
   renderer.SetCameraContext(ctx->cam_ctx_);
   renderer.SetRenderContext(ctx->render_ctx_);
 
   auto& split_render_ctx = ctx->split_render_ctx_;
-  std::vector<SpectrumRenderer> split_renderer_candidates;
+  std::vector<Renderer> split_renderer_candidates;
   std::vector<std::set<size_t>> renderer_ray_set;
   size_t split_img_num = 0;
   if (split_render_ctx) {

@@ -43,15 +43,15 @@ constexpr int kMaxWaveLength = 830;
 struct RayCollectionInfo;
 struct SimpleRayData;
 
-class SpectrumRenderer {
+class Renderer {
  public:
-  SpectrumRenderer();
-  SpectrumRenderer(const SpectrumRenderer& other) = delete;
-  SpectrumRenderer(SpectrumRenderer&& other) noexcept;
-  ~SpectrumRenderer() = default;
+  Renderer();
+  Renderer(const Renderer& other) = delete;
+  Renderer(Renderer&& other) noexcept;
+  ~Renderer() = default;
 
-  SpectrumRenderer& operator=(SpectrumRenderer&& other) noexcept;
-  SpectrumRenderer& operator=(const SpectrumRenderer& other) = delete;
+  Renderer& operator=(Renderer&& other) noexcept;
+  Renderer& operator=(const Renderer& other) = delete;
 
   void SetCameraContext(CameraContextPtr cam_ctx);
   void SetRenderContext(RenderContextPtr render_ctx);

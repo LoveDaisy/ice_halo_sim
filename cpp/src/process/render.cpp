@@ -557,16 +557,16 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
 }
 
 
-SpectrumRenderer::SpectrumRenderer() : cam_ctx_{}, render_ctx_{}, output_image_buffer_{}, total_w_(0) {}
+Renderer::Renderer() : cam_ctx_{}, render_ctx_{}, output_image_buffer_{}, total_w_(0) {}
 
 
-SpectrumRenderer::SpectrumRenderer(SpectrumRenderer&& other) noexcept
+Renderer::Renderer(Renderer&& other) noexcept
     : cam_ctx_(std::move(other.cam_ctx_)), render_ctx_(std::move(other.render_ctx_)),
       output_image_buffer_(std::move(other.output_image_buffer_)), spectrum_data_(std::move(other.spectrum_data_)),
       spectrum_data_compensation_(std::move(other.spectrum_data_compensation_)), total_w_(other.total_w_) {}
 
 
-SpectrumRenderer& SpectrumRenderer::operator=(SpectrumRenderer&& other) noexcept {
+Renderer& Renderer::operator=(Renderer&& other) noexcept {
   cam_ctx_ = std::move(other.cam_ctx_);
   render_ctx_ = std::move(other.render_ctx_);
   output_image_buffer_ = std::move(other.output_image_buffer_);
@@ -577,19 +577,19 @@ SpectrumRenderer& SpectrumRenderer::operator=(SpectrumRenderer&& other) noexcept
 }
 
 
-void SpectrumRenderer::SetCameraContext(CameraContextPtr cam_ctx) {
+void Renderer::SetCameraContext(CameraContextPtr cam_ctx) {
   cam_ctx_ = std::move(cam_ctx);
 }
 
 
-void SpectrumRenderer::SetRenderContext(RenderContextPtr render_ctx) {
+void Renderer::SetRenderContext(RenderContextPtr render_ctx) {
   render_ctx_ = std::move(render_ctx);
   output_image_buffer_.reset(new uint8_t[render_ctx_->GetImageWidth() * render_ctx_->GetImageHeight() * 3]);
 }
 
 
-void SpectrumRenderer::LoadRayData(int identifier, const RayCollectionInfo& collection_info,
-                                   const SimpleRayData& final_ray_data) {
+void Renderer::LoadRayData(int identifier, const RayCollectionInfo& collection_info,
+                           const SimpleRayData& final_ray_data) {
   if (!cam_ctx_) {
     throw std::invalid_argument("Camera context is not set!");
   }
@@ -644,9 +644,9 @@ void SpectrumRenderer::LoadRayData(int identifier, const RayCollectionInfo& coll
 }
 
 
-void SpectrumRenderer::LoadPartialRayData(const std::vector<size_t>& idx, LensType projection_type,
-                                          const ProjectionFunction& pf, const SimpleRayData& final_ray_data,
-                                          float* current_data, float* current_data_compensation) {
+void Renderer::LoadPartialRayData(const std::vector<size_t>& idx, LensType projection_type,
+                                  const ProjectionFunction& pf, const SimpleRayData& final_ray_data,
+                                  float* current_data, float* current_data_compensation) {
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
 
@@ -682,9 +682,9 @@ void SpectrumRenderer::LoadPartialRayData(const std::vector<size_t>& idx, LensTy
 }
 
 
-void SpectrumRenderer::LoadFullRayData(LensType projection_type, const ProjectionFunction& pf,
-                                       const SimpleRayData& final_ray_data, float* current_data,
-                                       float* current_data_compensation) {
+void Renderer::LoadFullRayData(LensType projection_type, const ProjectionFunction& pf,
+                               const SimpleRayData& final_ray_data, float* current_data,
+                               float* current_data_compensation) {
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
 
@@ -720,7 +720,7 @@ void SpectrumRenderer::LoadFullRayData(LensType projection_type, const Projectio
 }
 
 
-void SpectrumRenderer::Render() {
+void Renderer::Render() {
   if (!render_ctx_) {
     throw std::invalid_argument("Render context is not set!");
   }
@@ -730,7 +730,7 @@ void SpectrumRenderer::Render() {
 }
 
 
-void SpectrumRenderer::RenderHaloImage() {
+void Renderer::RenderHaloImage() {
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
   const auto* ray_color = render_ctx_->GetRayColor();
@@ -749,10 +749,10 @@ void SpectrumRenderer::RenderHaloImage() {
 }
 
 
-void SpectrumRenderer::DrawGrids() {}
+void Renderer::DrawGrids() {}
 
 
-uint8_t* SpectrumRenderer::GetImageBuffer() const {
+uint8_t* Renderer::GetImageBuffer() const {
   return output_image_buffer_.get();
 }
 
