@@ -379,9 +379,7 @@ void Crystal::RefineFaceNumber() {
       float hor_n[3]{ curr_norm[0], curr_norm[1], 0.0f };
       return Dot3(hor_n, a.first.val()) < Dot3(hor_n, b.first.val());
     };
-    decltype(primitive_fn_table.begin()) max_iter;
-    decltype(primitive_fn_table.begin()) min_iter;
-    std::tie(min_iter, max_iter) = std::minmax_element(primitive_fn_table.begin() + 2, primitive_fn_table.end(), cmp);
+    auto [min_iter, max_iter] = std::minmax_element(primitive_fn_table.begin() + 2, primitive_fn_table.end(), cmp);
     float face_center[3]{};
     for (int j = 0; j < 3; j++) {
       face_center[0] += face_vertexes_[i * 9 + j * 3 + 0] / 3.0f;

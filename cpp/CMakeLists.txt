@@ -20,8 +20,8 @@ if(MSVC)
   add_definitions(-DNOMINMAX)
   set(CMAKE_DEBUG_POSTFIX "d")
 else()
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fexceptions -fpermissive -pthread -frtti")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -msse4 -D__STDC_FORMAT_MACROS")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexceptions -fpermissive -pthread -frtti")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -msse4 -mavx -D__STDC_FORMAT_MACROS")
 endif()
 
 # ==================================================================================================
@@ -30,7 +30,7 @@ set(OS_NAME "${CMAKE_HOST_SYSTEM_NAME}")
 
 # ==================================================================================================
 # Basic
-set(CMAKE_CXX_STANDARD 11)            # C++11...
+set(CMAKE_CXX_STANDARD 17)            # C++17...
 set(CMAKE_CXX_STANDARD_REQUIRED ON)   #...is required...
 set(CMAKE_CXX_EXTENSIONS OFF)         #...without compiler extensions like gnu++11
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")

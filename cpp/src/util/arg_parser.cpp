@@ -51,8 +51,7 @@ void ArgParser::ShowHelp(const char* cmd) const {
       return;
     }
 
-    std::string metavar;
-    std::tie(metavar, std::ignore) = option_meta_.at(kv.first);
+    auto [metavar, help_info] = option_meta_.at(kv.first);
     if (kv.second < 0) {
       if (!metavar.empty()) {
         n = std::snprintf(buf + offset, kBufSize - offset, " [%s]...", metavar.c_str());
@@ -84,8 +83,7 @@ void ArgParser::ShowHelp(const char* cmd) const {
   LOG_INFO("OPTIONS:");
 
   for (const auto& kv : option_value_num_) {
-    std::string help_info;
-    std::tie(std::ignore, help_info) = option_meta_.at(kv.first);
+    auto [meta_var, help_info] = option_meta_.at(kv.first);
     LOG_INFO("  %s: %s", kv.first.c_str(), help_info.c_str());
   }
 }

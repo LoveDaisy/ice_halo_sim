@@ -361,10 +361,7 @@ void SimulationData::MakeRayPathMap(const ProjectContextPtr& proj_ctx) {
 
       // 2. Normalize ray path
       auto curr_path = proj_ctx->GetRayPath(r);
-      RayPath normalized_path;
-      size_t normalized_hash = 0;
-      std::tie(normalized_path, normalized_hash) =
-          NormalizeRayPath(curr_path, proj_ctx, RenderSplitter::kDefaultSymmetry);
+      auto [normalized_path, normalized_hash] = NormalizeRayPath(curr_path, proj_ctx, RenderSplitter::kDefaultSymmetry);
       tmp_map.emplace(ray_path_hash, std::make_pair(std::move(curr_path), normalized_hash));
       tmp_map.emplace(normalized_hash, std::make_pair(std::move(normalized_path), normalized_hash));
     });
