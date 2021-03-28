@@ -675,6 +675,12 @@ void Simulator::SetCurrentWavelengthIndex(int index) {
 
 // Start simulation
 void Simulator::Run() {
+#ifndef FOR_TEST
+  if (context_->GetInitRayNum() < ProjectContext::kMinInitRayNum) {
+    return;
+  }
+#endif
+
   simulation_ray_data_.Clear();
   RaySegmentPool::GetInstance()->Clear();
   RayInfoPool::GetInstance()->Clear();

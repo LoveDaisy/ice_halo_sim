@@ -73,7 +73,7 @@ void ProjectContext::SetInitRayNum(size_t ray_num) {
 #ifdef FOR_TEST
   init_ray_num_ = ray_num;
 #else
-  init_ray_num_ = std::max(ray_num, kMinInitRayNum);
+  init_ray_num_ = ray_num;
 #endif
 }
 

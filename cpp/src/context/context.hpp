@@ -54,7 +54,7 @@ class ProjectContext {
 
   static constexpr float kPropMinW = 1e-6;
   static constexpr float kScatMinW = 1e-3;
-  static constexpr size_t kMinInitRayNum = 10000;
+  static constexpr size_t kMinInitRayNum = 1000;
   static constexpr size_t kDefaultInitRayNum = 500000;
   static constexpr int kMinRayHitNum = 1;
   static constexpr int kMaxRayHitNum = 12;
