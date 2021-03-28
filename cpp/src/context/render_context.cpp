@@ -76,6 +76,7 @@ void RenderSplitter::LoadFromJson(const rapidjson::Value& root) {
 
 
 constexpr float LineSpecifier::kDefaultColor[3];
+constexpr float LineSpecifier::kMinWidth;
 
 
 LineSpecifier::LineSpecifier() : LineSpecifier(LineType::kSolid, kDefaultWidth, kDefaultColor) {}
@@ -313,6 +314,16 @@ VisibleRange RenderContext::GetVisibleRange() const {
 
 void RenderContext::SetVisibleRange(VisibleRange r) {
   visible_range_ = r;
+}
+
+
+const std::vector<GridLine>& RenderContext::GetElevationGrids() const {
+  return elevation_grid_;
+}
+
+
+const std::vector<GridLine>& RenderContext::GetRadiusGrids() const {
+  return radius_rid_;
 }
 
 

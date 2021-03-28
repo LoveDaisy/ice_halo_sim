@@ -754,7 +754,120 @@ void Renderer::RenderHaloImage() {
 }
 
 
-void Renderer::DrawGrids() {}
+void DrawLine(size_t pt_num, const int* xy, const float line_color[3], int img_wid, int img_hei, uint8_t* image_data) {
+  for (size_t i = 0; i + 1 < pt_num; i++) {
+    auto curr_x = xy[i * 2 + 0];
+    auto curr_y = xy[i * 2 + 1];
+    auto next_x = xy[(i + 1) * 2 + 0];
+    auto next_y = xy[(i + 1) * 2 + 1];
+
+    if ((curr_x < 0 || curr_x >= img_wid || curr_y < 0 || curr_y >= img_hei) &&
+        (next_x < 0 || next_x >= img_wid || next_y < 0 || next_y >= img_hei)) {
+      continue;
+    }
+
+    auto dx = std::abs(next_x - curr_x);
+    auto sx = curr_x < next_x ? 1 : -1;
+    auto dy = -std::abs(next_y - curr_y);
+    auto sy = curr_y < next_y ? 1 : -1;
+    auto err = dx + dy;
+
+    if (dx - dy > 200) {
+      LOG_ERROR("ERROR!!");
+    }
+
+    while (true) {
+      if (curr_x >= 0 && curr_x < img_wid && curr_y >= 0 && curr_y < img_hei) {
+        auto curr_ind = (curr_y * img_wid + curr_x) * 3;
+        image_data[curr_ind + 0] = static_cast<uint8_t>(line_color[0] * std::numeric_limits<uint8_t>::max());
+        image_data[curr_ind + 1] = static_cast<uint8_t>(line_color[1] * std::numeric_limits<uint8_t>::max());
+        image_data[curr_ind + 2] = static_cast<uint8_t>(line_color[2] * std::numeric_limits<uint8_t>::max());
+      }
+      if (err * 2 > dy) {
+        err += dy;
+        curr_x += sx;
+      }
+      if (curr_x == next_x && curr_y == next_y) {
+        break;
+      }
+      if (err * 2 < dx) {
+        err += dx;
+        curr_y += sy;
+      }
+      if (curr_x == next_x && curr_y == next_y) {
+        break;
+      }
+    }
+  }
+}
+
+
+void Renderer::DrawGrids() {
+  auto projection_type = cam_ctx_->GetLensType();
+  auto pf = GetProjectionFunction(projection_type);
+  if (!pf) {
+    LOG_ERROR("Unknown projection type!");
+    return;
+  }
+
+  auto cam_pose = cam_ctx_->GetCameraPose();
+  auto hov = cam_ctx_->GetFov();
+  auto img_wid = render_ctx_->GetImageWidth();
+  auto img_hei = render_ctx_->GetImageHeight();
+  auto visible_range = render_ctx_->GetVisibleRange();
+  auto need_offset =
+      (cam_ctx_->GetLensType() != LensType::kDualEqualArea && cam_ctx_->GetLensType() != LensType::kDualEquidistant);
+
+  std::vector<int> line_pts;
+  // 1. Elevation grids
+  for (const auto& g : render_ctx_->GetElevationGrids()) {
+    line_pts.clear();
+    constexpr float kAziStep = 1.0f;
+    float curr_dir[3]{};
+    int curr_xy[2]{};
+    for (float azi = 0.0f; azi < 360.0f + kAziStep / 2; azi += kAziStep) {
+      curr_dir[0] = std::cos(azi * math::kDegreeToRad) * std::cos(g.value * math::kDegreeToRad);
+      curr_dir[1] = std::sin(azi * math::kDegreeToRad) * std::cos(g.value * math::kDegreeToRad);
+      curr_dir[2] = std::sin(g.value * math::kDegreeToRad);
+      pf(cam_pose, hov, 1, curr_dir, img_wid, img_hei, curr_xy, visible_range);
+      if (need_offset) {
+        curr_xy[0] += render_ctx_->GetImageOffsetX();
+        curr_xy[1] += render_ctx_->GetImageOffsetY();
+      }
+      line_pts.emplace_back(curr_xy[0]);
+      line_pts.emplace_back(curr_xy[1]);
+    }
+    DrawLine(line_pts.size() / 2, line_pts.data(), g.line_specifier.color, img_wid, img_hei,
+             output_image_buffer_.get());
+  }
+
+  // 2. Radius grids
+  Pose3f sun_pose{90.0f, sun_ctx_->GetSunAltitude(), 0};
+  sun_pose.ReflectInOrigin();
+  sun_pose.ToRad();
+  for (const auto& g : render_ctx_->GetRadiusGrids()) {
+    line_pts.clear();
+    constexpr float kAngStep = 1.0f;
+    float curr_dir[3]{};
+    float central_dir[3]{};
+    int curr_xy[2]{};
+    for (float ang = 0.0f; ang < 360.0f + kAngStep / 2; ang += kAngStep) {
+      central_dir[0] = std::cos(ang * math::kDegreeToRad) * std::sin(g.value * math::kDegreeToRad);
+      central_dir[1] = std::sin(ang * math::kDegreeToRad) * std::sin(g.value * math::kDegreeToRad);
+      central_dir[2] = std::cos(g.value * math::kDegreeToRad);
+      RotateZBack(sun_pose.val(), central_dir, curr_dir);
+      pf(cam_pose, hov, 1, curr_dir, img_wid, img_hei, curr_xy, visible_range);
+      if (need_offset) {
+        curr_xy[0] += render_ctx_->GetImageOffsetX();
+        curr_xy[1] += render_ctx_->GetImageOffsetY();
+      }
+      line_pts.emplace_back(curr_xy[0]);
+      line_pts.emplace_back(curr_xy[1]);
+    }
+    DrawLine(line_pts.size() / 2, line_pts.data(), g.line_specifier.color, img_wid, img_hei,
+             output_image_buffer_.get());
+  }
+}
 
 
 uint8_t* Renderer::GetImageBuffer() const {

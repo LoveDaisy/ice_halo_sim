@@ -118,6 +118,9 @@ class RenderContext : public IJsonizable {
   VisibleRange GetVisibleRange() const;
   void SetVisibleRange(VisibleRange r);
 
+  const std::vector<GridLine>& GetElevationGrids() const;
+  const std::vector<GridLine>& GetRadiusGrids() const;
+
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;
 
