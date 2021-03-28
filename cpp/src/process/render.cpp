@@ -557,18 +557,20 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
 }
 
 
-Renderer::Renderer() : cam_ctx_{}, render_ctx_{}, output_image_buffer_{}, total_w_(0) {}
+Renderer::Renderer() : cam_ctx_{}, render_ctx_{}, sun_ctx_{}, output_image_buffer_{}, total_w_(0) {}
 
 
 Renderer::Renderer(Renderer&& other) noexcept
     : cam_ctx_(std::move(other.cam_ctx_)), render_ctx_(std::move(other.render_ctx_)),
-      output_image_buffer_(std::move(other.output_image_buffer_)), spectrum_data_(std::move(other.spectrum_data_)),
+      sun_ctx_(std::move(other.sun_ctx_)), output_image_buffer_(std::move(other.output_image_buffer_)),
+      spectrum_data_(std::move(other.spectrum_data_)),
       spectrum_data_compensation_(std::move(other.spectrum_data_compensation_)), total_w_(other.total_w_) {}
 
 
 Renderer& Renderer::operator=(Renderer&& other) noexcept {
   cam_ctx_ = std::move(other.cam_ctx_);
   render_ctx_ = std::move(other.render_ctx_);
+  sun_ctx_ = std::move(other.sun_ctx_);
   output_image_buffer_ = std::move(other.output_image_buffer_);
   spectrum_data_ = std::move(other.spectrum_data_);
   spectrum_data_compensation_ = std::move(other.spectrum_data_compensation_);
@@ -842,7 +844,7 @@ void Renderer::DrawGrids() {
   }
 
   // 2. Radius grids
-  Pose3f sun_pose{90.0f, sun_ctx_->GetSunAltitude(), 0};
+  Pose3f sun_pose{ 90.0f, sun_ctx_->GetSunAltitude(), 0 };
   sun_pose.ReflectInOrigin();
   sun_pose.ToRad();
   for (const auto& g : render_ctx_->GetRadiusGrids()) {
