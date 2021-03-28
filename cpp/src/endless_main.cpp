@@ -91,6 +91,7 @@ size_t PrepareSplitRender(const ProjectContextPtr& proj_ctx, const RenderContext
     split_renderer_candidates.emplace_back();
     split_renderer_candidates.back().SetCameraContext(proj_ctx->cam_ctx_);
     split_renderer_candidates.back().SetRenderContext(split_render_ctx);
+    split_renderer_candidates.back().SetSunContext(proj_ctx->sun_ctx_);
     renderer_ray_set.emplace_back();
   }
   return split_img_num;
@@ -148,6 +149,7 @@ int main(int argc, char* argv[]) {
   Renderer renderer;
   renderer.SetCameraContext(proj_ctx->cam_ctx_);
   renderer.SetRenderContext(proj_ctx->render_ctx_);
+  renderer.SetSunContext(proj_ctx->sun_ctx_);
 
   auto& split_render_ctx = proj_ctx->split_render_ctx_;
   size_t split_img_num = 0;

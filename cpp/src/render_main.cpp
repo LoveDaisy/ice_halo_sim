@@ -100,6 +100,7 @@ int main(int argc, char* argv[]) {
   Renderer renderer;
   renderer.SetCameraContext(ctx->cam_ctx_);
   renderer.SetRenderContext(ctx->render_ctx_);
+  renderer.SetSunContext(ctx->sun_ctx_);
 
   auto& split_render_ctx = ctx->split_render_ctx_;
   std::vector<Renderer> split_renderer_candidates;
@@ -111,6 +112,7 @@ int main(int argc, char* argv[]) {
       split_renderer_candidates.emplace_back();
       split_renderer_candidates.back().SetCameraContext(ctx->cam_ctx_);
       split_renderer_candidates.back().SetRenderContext(split_render_ctx);
+      split_renderer_candidates.back().SetSunContext(ctx->sun_ctx_);
       renderer_ray_set.emplace_back();
     }
   }

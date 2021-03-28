@@ -55,6 +55,7 @@ class Renderer {
 
   void SetCameraContext(CameraContextPtr cam_ctx);
   void SetRenderContext(RenderContextPtr render_ctx);
+  void SetSunContext(SunContextPtr sun_ctx);
 
   void LoadRayData(int identifier, const RayCollectionInfo& collection_info, const SimpleRayData& final_ray_data);
 
@@ -84,6 +85,7 @@ class Renderer {
 
   CameraContextPtr cam_ctx_;
   RenderContextPtr render_ctx_;
+  SunContextPtr sun_ctx_;
   std::unique_ptr<uint8_t[]> output_image_buffer_;
   std::vector<ImageSpectrumData> spectrum_data_;
   std::vector<ImageSpectrumData> spectrum_data_compensation_;

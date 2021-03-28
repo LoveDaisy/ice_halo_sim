@@ -588,6 +588,11 @@ void Renderer::SetRenderContext(RenderContextPtr render_ctx) {
 }
 
 
+void Renderer::SetSunContext(SunContextPtr sun_ctx) {
+  sun_ctx_ = std::move(sun_ctx);
+}
+
+
 void Renderer::LoadRayData(int identifier, const RayCollectionInfo& collection_info,
                            const SimpleRayData& final_ray_data) {
   if (!cam_ctx_) {
