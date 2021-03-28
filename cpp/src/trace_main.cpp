@@ -5,12 +5,11 @@
 #include "util/arg_parser.hpp"
 #include "util/log.hpp"
 
-using namespace icehalo;
 
 int main(int argc, char* argv[]) {
   icehalo::ArgParser parser;
   parser.AddArgument("-v", 0, "verbose", "make output verbose");
-  parser.AddArgument("--config", 1, "config-file", "config file");
+  parser.AddArgument("-f", 1, "config-file", "config file");
   icehalo::ArgParseResult arg_parse_result;
   try {
     arg_parse_result = parser.Parse(argc, argv);
@@ -18,7 +17,7 @@ int main(int argc, char* argv[]) {
     return -1;
   }
 
-  const char* config_filename = arg_parse_result.at("--config")[0].c_str();
+  const char* config_filename = arg_parse_result.at("-f")[0].c_str();
   if (arg_parse_result.count("-v")) {
     icehalo::LogFilterPtr stdout_filter = icehalo::LogFilter::MakeLevelFilter({ icehalo::LogLevel::kVerbose });
     icehalo::LogDestPtr stdout_dest = icehalo::LogStdOutDest::GetInstance();
@@ -26,8 +25,8 @@ int main(int argc, char* argv[]) {
   }
 
   auto start = std::chrono::system_clock::now();
-  ProjectContextPtr context = ProjectContext::CreateFromFile(config_filename);
-  Simulator simulator(context);
+  icehalo::ProjectContextPtr context = icehalo::ProjectContext::CreateFromFile(config_filename);
+  icehalo::Simulator simulator(context);
 
   auto t = std::chrono::system_clock::now();
   std::chrono::duration<float, std::milli> diff = t - start;
