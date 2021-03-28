@@ -589,11 +589,13 @@ void RenderContext::LoadGridLines(const rapidjson::Value& root) {
   const auto* p = Pointer("/elevation_grid").Get(root);
   if (p == nullptr) {
     LOG_VERBOSE("Render config missing <elevation_grid>. No elevation grid will be drawn.");
-  } else if (!p->IsArray() || !(*p)[0].IsObject()) {
+  } else if (!p->IsArray()) {
     LOG_VERBOSE("Render config <elevation_grid> is not an array. Ignore it.");
+  } else if (p->GetArray().Size() == 0) {
+    LOG_VERBOSE("Render config <elevation_grid> is empty. Ignore it.");
   } else {
     for (size_t i = 0; i < p->GetArray().Size(); i++) {
-      if (!(*p)[i].HasMember("value") || !(*p)[i]["value"].IsNumber()) {
+      if (!(*p)[i].IsObject() || !(*p)[i].HasMember("value") || !(*p)[i]["value"].IsNumber()) {
         LOG_VERBOSE("Render config <elevation_grid>[%zu] cannot recognize. Ignore it.", i);
         continue;
       }
@@ -607,11 +609,13 @@ void RenderContext::LoadGridLines(const rapidjson::Value& root) {
   p = Pointer("/radius_grid").Get(root);
   if (p == nullptr) {
     LOG_VERBOSE("Render config missing <radius_grid>. No elevation grid will be drawn.");
-  } else if (!p->IsArray() || !(*p)[0].IsObject()) {
+  } else if (!p->IsArray()) {
     LOG_VERBOSE("Render config <radius_grid> is not an array. Ignore it.");
+  } else if (p->GetArray().Size() == 0) {
+    LOG_VERBOSE("Render config <radius_grid> is empty. Ignore it.");
   } else {
     for (size_t i = 0; i < p->GetArray().Size(); i++) {
-      if (!(*p)[i].HasMember("value") || !(*p)[i]["value"].IsNumber()) {
+      if (!(*p)[i].IsObject() || !(*p)[i].HasMember("value") || !(*p)[i]["value"].IsNumber()) {
         LOG_VERBOSE("Render config <radius_grid>[%zu] cannot recognize. Ignore it.", i);
         continue;
       }
