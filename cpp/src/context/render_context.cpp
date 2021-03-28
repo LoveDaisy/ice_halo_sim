@@ -578,17 +578,17 @@ void RenderContext::LoadGridLines(const rapidjson::Value& root) {
   const auto* p = Pointer("/elevation_grid").Get(root);
   if (p == nullptr) {
     LOG_VERBOSE("Render config missing <elevation_grid>. No elevation grid will be drawn.");
-  } else if (!p->IsArray() || !p[0].IsObject()) {
+  } else if (!p->IsArray() || !(*p)[0].IsObject()) {
     LOG_VERBOSE("Render config <elevation_grid> is not an array. Ignore it.");
   } else {
     for (size_t i = 0; i < p->GetArray().Size(); i++) {
-      if (!p[i].HasMember("value") || !p[i]["value"].IsNumber()) {
+      if (!(*p)[i].HasMember("value") || !(*p)[i]["value"].IsNumber()) {
         LOG_VERBOSE("Render config <elevation_grid>[%zu] cannot recognize. Ignore it.", i);
         continue;
       }
       GridLine tmp_line;
-      tmp_line.value = p[i]["value"].GetDouble();
-      tmp_line.line_specifier.LoadFromJson(p[i]);
+      tmp_line.value = (*p)[i]["value"].GetDouble();
+      tmp_line.line_specifier.LoadFromJson((*p)[i]);
       elevation_grid_.emplace_back(tmp_line);
     }
   }
@@ -596,18 +596,18 @@ void RenderContext::LoadGridLines(const rapidjson::Value& root) {
   p = Pointer("/radius_grid").Get(root);
   if (p == nullptr) {
     LOG_VERBOSE("Render config missing <radius_grid>. No elevation grid will be drawn.");
-  } else if (!p->IsArray()) {
+  } else if (!p->IsArray() || !(*p)[0].IsObject()) {
     LOG_VERBOSE("Render config <radius_grid> is not an array. Ignore it.");
   } else {
     for (size_t i = 0; i < p->GetArray().Size(); i++) {
-      if (!p[i].HasMember("value") || !p[i]["value"].IsNumber()) {
+      if (!(*p)[i].HasMember("value") || !(*p)[i]["value"].IsNumber()) {
         LOG_VERBOSE("Render config <radius_grid>[%zu] cannot recognize. Ignore it.", i);
         continue;
       }
       GridLine tmp_line;
-      tmp_line.value = p[i]["value"].GetDouble();
-      tmp_line.line_specifier.LoadFromJson(p[i]);
-      elevation_grid_.emplace_back(tmp_line);
+      tmp_line.value = (*p)[i]["value"].GetDouble();
+      tmp_line.line_specifier.LoadFromJson((*p)[i]);
+      radius_rid_.emplace_back(tmp_line);
     }
   }
 }
