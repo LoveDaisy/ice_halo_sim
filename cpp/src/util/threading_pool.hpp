@@ -12,6 +12,7 @@
 namespace icehalo {
 
 class ThreadingPool;
+using ThreadingPoolPtr = std::shared_ptr<ThreadingPool>;
 using ThreadingPoolPtrU = std::unique_ptr<ThreadingPool>;
 
 class ThreadingPool {

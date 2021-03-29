@@ -656,8 +656,9 @@ void Simulator::EntryRayData::Allocate(size_t ray_number) {
 
 
 Simulator::Simulator(ProjectContextPtr context)
-    : context_(std::move(context)), simulation_ray_data_{}, current_wavelength_index_(-1), total_ray_num_(0),
-      active_ray_num_(0), buffer_size_(0), buffer_{}, entry_ray_data_{}, entry_ray_offset_(0) {}
+    : context_(std::move(context)), threading_pool_(ThreadingPool::CreatePool()), simulation_ray_data_{},
+      current_wavelength_index_(-1), total_ray_num_(0), active_ray_num_(0),
+      buffer_size_(0), buffer_{}, entry_ray_data_{}, entry_ray_offset_(0) {}
 
 
 void Simulator::SetCurrentWavelengthIndex(int index) {
@@ -837,8 +838,6 @@ void Simulator::PrepareMultiScatterRays(float prob) {
 // Trace rays.
 // Start from dir[0] and pt[0].
 void Simulator::TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilter* filter) {
-  auto pool = ThreadingPool::CreatePool();
-
   const auto* crystal = crystal_ctx->GetCrystal();
   int max_recursion_num = context_->GetRayHitNum();
   auto n = static_cast<float>(IceRefractiveIndex::Get(simulation_ray_data_.wavelength_info_.wavelength));
@@ -847,7 +846,7 @@ void Simulator::TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilt
       buffer_size_ = active_ray_num_ * kBufferSizeFactor;
       buffer_.Allocate(buffer_size_);
     }
-    pool->CommitRangeStepJobsAndWait(0, active_ray_num_, [=](int /* thread_id */, int i) {
+    threading_pool_->CommitRangeStepJobsAndWait(0, active_ray_num_, [=](int /* thread_id */, int i) {
       Optics::HitSurface(crystal, n, 1,                                                        //
                          buffer_.dir[0] + i * 3, buffer_.face_id[0] + i, buffer_.w[0] + i,     //
                          buffer_.dir[1] + i * 6, buffer_.w[1] + i * 2);                        //

@@ -3,9 +3,9 @@
 
 #include "context/crystal_context.hpp"
 #include "context/filter_context.hpp"
-#include "util/log.hpp"
 #include "rapidjson/document.h"
 #include "rapidjson/pointer.h"
+#include "util/log.hpp"
 
 namespace icehalo {
 

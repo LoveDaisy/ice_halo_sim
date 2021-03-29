@@ -6,6 +6,7 @@
 #include "context/context.hpp"
 #include "core/core_def.hpp"
 #include "util/enum_map.hpp"
+#include "util/threading_pool.hpp"
 
 
 namespace icehalo {
@@ -90,6 +91,7 @@ class Renderer {
   std::vector<ImageSpectrumData> spectrum_data_;
   std::vector<ImageSpectrumData> spectrum_data_compensation_;
   float total_w_;
+  ThreadingPoolPtr threading_pool_;
 };
 
 }  // namespace icehalo

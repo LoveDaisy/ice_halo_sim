@@ -507,26 +507,26 @@ void SpecToRgbJob(int i, bool use_real_color, const std::vector<ImageSpectrumDat
 }
 
 
-void RenderSpecToRgb(const std::vector<ImageSpectrumData>& spec_data,        // spectrum data
+void RenderSpecToRgb(const ThreadingPoolPtr& threading_pool,
+                     const std::vector<ImageSpectrumData>& spec_data,        // spectrum data
                      size_t data_number, float factor,                       //
                      const float* background_color, const float* ray_color,  // background and ray color
                      uint8_t* rgb_data) {                                    // rgb data, data_number * 3
   bool use_real_color = ray_color[0] < 0;
-  auto threading_pool = ThreadingPool::CreatePool();
   threading_pool->CommitRangeStepJobsAndWait(0, data_number, [=, &spec_data](int /* thread_id */, int i) {
     SpecToRgbJob(i, use_real_color, spec_data, factor, background_color, ray_color, rgb_data);
   });
 }
 
 
-void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_data: wavelength_number * data_number
+void RenderSpecToGray(const ThreadingPoolPtr& threading_pool,
+                      const std::vector<ImageSpectrumData>& spec_data,  // spec_data: wavelength_number * data_number
                       size_t data_number, float factor,                 //
                       ColorCompactLevel level, int index,               // color compact level and channel index
                       uint8_t* rgb_data) {                              // rgb data, data_number * 3
   if (index < 0 || static_cast<size_t>(index) >= spec_data.size()) {
     return;
   }
-  auto threading_pool = ThreadingPool::CreatePool();
   auto* curr_spec_data = spec_data[index].second.get();
   threading_pool->CommitRangeStepJobsAndWait(0, data_number, [=](int /* thread_id */, int i) {
     /* Step 1. Spectrum to XYZ */
@@ -557,14 +557,17 @@ void RenderSpecToGray(const std::vector<ImageSpectrumData>& spec_data,  // spec_
 }
 
 
-Renderer::Renderer() : cam_ctx_{}, render_ctx_{}, sun_ctx_{}, output_image_buffer_{}, total_w_(0) {}
+Renderer::Renderer()
+    : cam_ctx_{}, render_ctx_{}, sun_ctx_{}, output_image_buffer_{}, total_w_(0),
+      threading_pool_(ThreadingPool::CreatePool()) {}
 
 
 Renderer::Renderer(Renderer&& other) noexcept
     : cam_ctx_(std::move(other.cam_ctx_)), render_ctx_(std::move(other.render_ctx_)),
       sun_ctx_(std::move(other.sun_ctx_)), output_image_buffer_(std::move(other.output_image_buffer_)),
       spectrum_data_(std::move(other.spectrum_data_)),
-      spectrum_data_compensation_(std::move(other.spectrum_data_compensation_)), total_w_(other.total_w_) {}
+      spectrum_data_compensation_(std::move(other.spectrum_data_compensation_)), total_w_(other.total_w_),
+      threading_pool_(std::move(other.threading_pool_)) {}
 
 
 Renderer& Renderer::operator=(Renderer&& other) noexcept {
@@ -575,6 +578,7 @@ Renderer& Renderer::operator=(Renderer&& other) noexcept {
   spectrum_data_ = std::move(other.spectrum_data_);
   spectrum_data_compensation_ = std::move(other.spectrum_data_compensation_);
   total_w_ = other.total_w_;
+  threading_pool_ = std::move(other.threading_pool_);
   return *this;
 }
 
@@ -639,7 +643,6 @@ void Renderer::LoadRayData(int identifier, const RayCollectionInfo& collection_i
   }
   auto* current_data_compensation = data_cmp_iter->second.get();
 
-  auto threading_pool = ThreadingPool::CreatePool();
   if (collection_info.is_partial_data) {
     LoadPartialRayData(collection_info.idx, projection_type, pf, final_ray_data, current_data,
                        current_data_compensation);
@@ -659,9 +662,8 @@ void Renderer::LoadPartialRayData(const std::vector<size_t>& idx, LensType proje
 
   const auto* final_ray_buf = final_ray_data.buf.get();
   auto weight = final_ray_data.wavelength_weight;
-  auto threading_pool = ThreadingPool::CreatePool();
   auto num = idx.size();
-  threading_pool->CommitRangeSliceJobsAndWait(0, num, [=](int /* thread_id */, int start_idx, int end_idx) {
+  threading_pool_->CommitRangeSliceJobsAndWait(0, num, [=](int /* thread_id */, int start_idx, int end_idx) {
     size_t current_num = end_idx - start_idx;
     std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
     for (size_t j = 0; j < current_num; j++) {
@@ -695,11 +697,10 @@ void Renderer::LoadFullRayData(LensType projection_type, const ProjectionFunctio
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
 
-  auto threading_pool = ThreadingPool::CreatePool();
   auto num = final_ray_data.buf_ray_num;
   const auto* final_ray_buf = final_ray_data.buf.get();
   auto weight = final_ray_data.wavelength_weight;
-  threading_pool->CommitRangeSliceJobsAndWait(0, num, [=](int /* thread_id */, int start_idx, int end_idx) {
+  threading_pool_->CommitRangeSliceJobsAndWait(0, num, [=](int /* thread_id */, int start_idx, int end_idx) {
     size_t current_num = end_idx - start_idx;
     std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
     pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid, img_hei,
@@ -746,11 +747,13 @@ void Renderer::RenderHaloImage() {
   auto color_compact_level = render_ctx_->GetColorCompactLevel();
 
   if (color_compact_level == ColorCompactLevel::kTrueColor) {
-    RenderSpecToRgb(spectrum_data_, img_wid * img_hei, factor, background_color, ray_color, output_image_buffer_.get());
+    RenderSpecToRgb(threading_pool_, spectrum_data_, img_wid * img_hei, factor, background_color, ray_color,
+                    output_image_buffer_.get());
   } else {
     auto ch_num = std::min(spectrum_data_.size(), kImageBits / static_cast<size_t>(color_compact_level));
     for (size_t i = 0; i < ch_num; i++) {
-      RenderSpecToGray(spectrum_data_, img_wid * img_hei, factor, color_compact_level, i, output_image_buffer_.get());
+      RenderSpecToGray(threading_pool_, spectrum_data_, img_wid * img_hei, factor, color_compact_level, i,
+                       output_image_buffer_.get());
     }
   }
 }
@@ -773,10 +776,6 @@ void DrawLine(size_t pt_num, const int* xy, const float line_color[3], int img_w
     auto dy = -std::abs(next_y - curr_y);
     auto sy = curr_y < next_y ? 1 : -1;
     auto err = dx + dy;
-
-    if (dx - dy > 200) {
-      LOG_ERROR("ERROR!!");
-    }
 
     while (true) {
       if (curr_x >= 0 && curr_x < img_wid && curr_y >= 0 && curr_y < img_hei) {

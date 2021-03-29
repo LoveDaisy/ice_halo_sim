@@ -7,6 +7,7 @@
 #include "core/crystal.hpp"
 #include "core/optics.hpp"
 #include "io/serialize.hpp"
+#include "util/threading_pool.hpp"
 
 namespace icehalo {
 
@@ -202,6 +203,7 @@ class Simulator {
   static constexpr int kBufferSizeFactor = 4;
 
   ProjectContextPtr context_;
+  ThreadingPoolPtr threading_pool_;
 
   SimulationData simulation_ray_data_;
 
