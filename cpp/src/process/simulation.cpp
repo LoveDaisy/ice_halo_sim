@@ -72,6 +72,16 @@ void SimpleRayData::Deserialize(File& file, endian::Endianness endianness) {
 }
 
 
+SimulationData::SimulationData()
+    : wavelength_info_(), ray_path_map_(), rays_(), exit_ray_segments_(), exit_ray_seg_num_(),
+      threading_pool_(ThreadingPool::CreatePool()) {}
+
+
+void SimulationData::SetThreadingPool(ThreadingPoolPtr threading_pool) {
+  threading_pool_ = std::move(threading_pool);
+}
+
+
 void SimulationData::Clear() {
   rays_.clear();
   exit_ray_segments_.clear();
@@ -118,16 +128,23 @@ std::pair<RayCollectionInfo, SimpleRayData> SimulationData::CollectFinalRayData(
   final_ray_data.wavelength_weight = wavelength_info_.weight;
   float* p = final_ray_data.buf.get();
   for (const auto& sr : exit_ray_segments_) {
+    const auto* sr_data = sr.data();
+    threading_pool_->CommitRangeStepJobsAndWait(0, sr.size(), [=](int /* thread_id */, int i) {
+      const auto& r = sr_data[i];
+      if (r->state != RaySegmentState::kFinished) {
+        return;
+      }
+      const auto* axis = r->root_ctx->main_axis.val();
+      RotateZBack(axis, r->dir.val(), p + i * 4);
+      p[i * 4 + 3] = r->w;
+    });
     for (const auto& r : sr) {
       if (r->state != RaySegmentState::kFinished) {
         continue;
       }
-      const auto* axis = r->root_ctx->main_axis.val();
-      RotateZBack(axis, r->dir.val(), p);
-      p[3] = r->w;
       collection_info.total_energy += r->w;
-      p += 4;
     }
+    p += sr.size() * 4;
   }
   return std::make_pair(std::move(collection_info), std::move(final_ray_data));
 }
@@ -658,7 +675,9 @@ void Simulator::EntryRayData::Allocate(size_t ray_number) {
 Simulator::Simulator(ProjectContextPtr context)
     : context_(std::move(context)), threading_pool_(ThreadingPool::CreatePool()), simulation_ray_data_{},
       current_wavelength_index_(-1), total_ray_num_(0), active_ray_num_(0),
-      buffer_size_(0), buffer_{}, entry_ray_data_{}, entry_ray_offset_(0) {}
+      buffer_size_(0), buffer_{}, entry_ray_data_{}, entry_ray_offset_(0) {
+  simulation_ray_data_.SetThreadingPool(threading_pool_);
+}
 
 
 void Simulator::SetCurrentWavelengthIndex(int index) {

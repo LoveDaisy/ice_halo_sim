@@ -62,8 +62,12 @@ using RayCollectionInfoList = std::vector<RayCollectionInfo>;
 
 class SimulationData : public ISerializable {
  public:
-  WavelengthInfo wavelength_info_{};
+  SimulationData();
+
+  WavelengthInfo wavelength_info_;
   RayPathMap ray_path_map_;
+
+  void SetThreadingPool(ThreadingPoolPtr threading_pool);
 
   void Clear();
   void PrepareNewScatter(size_t ray_num);
@@ -128,6 +132,7 @@ class SimulationData : public ISerializable {
   std::vector<std::vector<RayInfo*>> rays_;
   std::vector<std::vector<RaySegment*>> exit_ray_segments_;
   std::vector<size_t> exit_ray_seg_num_;
+  ThreadingPoolPtr threading_pool_;
 };
 
 class Simulator {
