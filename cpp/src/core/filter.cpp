@@ -3,6 +3,7 @@
 
 #include "context/crystal_context.hpp"
 #include "context/filter_context.hpp"
+#include "util/log.hpp"
 #include "rapidjson/document.h"
 #include "rapidjson/pointer.h"
 
@@ -296,7 +297,7 @@ void SpecificRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
     throw std::invalid_argument("<path> cannot recognize!");
   }
   if (p->GetArray().Empty()) {
-    std::fprintf(stderr, "<path> is empty. Ignore this setting.\n");
+    LOG_WARNING("<path> is empty. Ignore this setting.");
   } else if (p->GetArray()[0].IsInt()) {
     RayPath tmp_path;
     for (auto const& pi : p->GetArray()) {
@@ -441,7 +442,7 @@ void GeneralRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
 
   p = Pointer("/hit").Get(root);
   if (p == nullptr) {
-    std::fprintf(stderr, "<hit> is empty. Ignore this setting.\n");
+    LOG_WARNING("<hit> is empty. Ignore this setting.");
   } else if (!p->IsArray()) {
     throw std::invalid_argument("<hit> cannot recognize!");
   } else {

@@ -250,7 +250,7 @@ int main(int argc, char* argv[]) {
 
   auto end = std::chrono::system_clock::now();
   diff = end - start;
-  std::printf("Total: %.3fs\n", diff.count() / 1e3);
+  LOG_INFO("Total: %.3fs\n", diff.count() / 1e3);
 
   return 0;
 }
