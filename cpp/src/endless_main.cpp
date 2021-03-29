@@ -84,14 +84,15 @@ std::tuple<icehalo::RayCollectionInfoList, icehalo::SimpleRayData> RenderSplitHa
 }
 
 
-size_t PrepareSplitRender(const icehalo::ProjectContextPtr& proj_ctx,
-                          const icehalo::RenderContextPtr& split_render_ctx) {
+size_t PrepareSplitRender(const icehalo::ProjectContextPtr& proj_ctx, const icehalo::RenderContextPtr& split_render_ctx,
+                          icehalo::ThreadingPoolPtr threading_pool) {
   auto split_img_num = static_cast<size_t>(split_render_ctx->GetSplitImageNumber());
   for (size_t i = 0; i < split_img_num * 1.5; i++) {
     split_renderer_candidates.emplace_back();
     split_renderer_candidates.back().SetCameraContext(proj_ctx->cam_ctx_);
     split_renderer_candidates.back().SetRenderContext(split_render_ctx);
     split_renderer_candidates.back().SetSunContext(proj_ctx->sun_ctx_);
+    split_renderer_candidates.back().SetThreadingPool(std::move(threading_pool));
     renderer_ray_set.emplace_back();
   }
   return split_img_num;
@@ -145,18 +146,23 @@ int main(int argc, char* argv[]) {
     icehalo::Logger::GetInstance()->AddDestination(stdout_filter, stdout_dest);
   }
 
+  icehalo::ThreadingPoolPtr threading_pool = icehalo::ThreadingPool::CreatePool();
+
   auto start = std::chrono::system_clock::now();
   icehalo::ProjectContextPtr proj_ctx = icehalo::ProjectContext::CreateFromFile(config_filename);
   icehalo::Simulator simulator(proj_ctx);
+  simulator.SetThreadingPool(threading_pool);
+
   icehalo::Renderer renderer;
   renderer.SetCameraContext(proj_ctx->cam_ctx_);
   renderer.SetRenderContext(proj_ctx->render_ctx_);
   renderer.SetSunContext(proj_ctx->sun_ctx_);
+  renderer.SetThreadingPool(threading_pool);
 
   auto& split_render_ctx = proj_ctx->split_render_ctx_;
   size_t split_img_num = 0;
   if (split_render_ctx) {
-    split_img_num = PrepareSplitRender(proj_ctx, split_render_ctx);
+    split_img_num = PrepareSplitRender(proj_ctx, split_render_ctx, threading_pool);
   }
 
   auto t = std::chrono::system_clock::now();

@@ -139,6 +139,7 @@ class Simulator {
   Simulator& operator=(const Simulator& other) = delete;
 
   void SetCurrentWavelengthIndex(int index);
+  void SetThreadingPool(ThreadingPoolPtr threading_pool);
   void Run();
   const SimulationData& GetSimulationRayData();
 

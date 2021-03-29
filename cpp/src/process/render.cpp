@@ -599,6 +599,11 @@ void Renderer::SetSunContext(SunContextPtr sun_ctx) {
 }
 
 
+void Renderer::SetThreadingPool(ThreadingPoolPtr threading_pool) {
+  threading_pool_ = std::move(threading_pool);
+}
+
+
 void Renderer::LoadRayData(int identifier, const RayCollectionInfo& collection_info,
                            const SimpleRayData& final_ray_data) {
   if (!cam_ctx_) {

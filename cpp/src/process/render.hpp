@@ -57,6 +57,7 @@ class Renderer {
   void SetCameraContext(CameraContextPtr cam_ctx);
   void SetRenderContext(RenderContextPtr render_ctx);
   void SetSunContext(SunContextPtr sun_ctx);
+  void SetThreadingPool(ThreadingPoolPtr threading_pool);
 
   void LoadRayData(int identifier, const RayCollectionInfo& collection_info, const SimpleRayData& final_ray_data);
 

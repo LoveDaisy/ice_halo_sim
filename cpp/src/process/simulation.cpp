@@ -671,6 +671,11 @@ void Simulator::SetCurrentWavelengthIndex(int index) {
 }
 
 
+void Simulator::SetThreadingPool(ThreadingPoolPtr threading_pool) {
+  threading_pool_ = std::move(threading_pool);
+}
+
+
 // Start simulation
 void Simulator::Run() {
 #ifndef FOR_TEST
