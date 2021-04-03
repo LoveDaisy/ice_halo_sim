@@ -692,6 +692,7 @@ void Simulator::SetCurrentWavelengthIndex(int index) {
 
 void Simulator::SetThreadingPool(ThreadingPoolPtr threading_pool) {
   threading_pool_ = std::move(threading_pool);
+  simulation_ray_data_.SetThreadingPool(threading_pool_);
 }
 
 
