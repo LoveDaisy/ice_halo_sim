@@ -766,26 +766,31 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
   const auto* crystal = ctx->GetCrystal();
   auto crystal_id = ctx->GetId();
   const auto* face_vertex = crystal->GetFaceVertex();
+  auto total_face = ctx->GetCrystal()->TotalFaces();
 
   auto* ray_seg_pool = RaySegmentPool::GetInstance();
   auto* ray_info_pool = RayInfoPool::GetInstance();
 
-  float axis_rot[3];
-  std::unique_ptr<float[]> face_prob_buf{ new float[ctx->GetCrystal()->TotalFaces()] };
-  for (size_t i = 0; i < active_ray_num_; i++) {
-    InitMainAxis(ctx, axis_rot);
-    RotateZ(axis_rot, entry_ray_data_.ray_dir + (i + entry_ray_offset_) * 3, buffer_.dir[0] + i * 3);
+  std::unique_ptr<float[]> axis_rot{ new float[active_ray_num_ * 3] };
+  auto* axis_rot_ptr = axis_rot.get();
+  std::unique_ptr<float[]> face_prob_buf{ new float[total_face * active_ray_num_] };
+  auto* face_prob_buf_ptr = face_prob_buf.get();
+  threading_pool_->CommitRangeStepJobsAndWait(0, active_ray_num_, [=](int /* thread_id */, int i) {
+    InitMainAxis(ctx, axis_rot_ptr + i * 3);
+    RotateZ(axis_rot_ptr + i * 3, entry_ray_data_.ray_dir + (i + entry_ray_offset_) * 3, buffer_.dir[0] + i * 3);
 
-    buffer_.face_id[0][i] = ctx->RandomSampleFace(buffer_.dir[0] + i * 3, face_prob_buf.get());
+    buffer_.face_id[0][i] = ctx->RandomSampleFace(buffer_.dir[0] + i * 3, face_prob_buf_ptr + i * total_face);
     RandomSampler::SampleTriangularPoints(face_vertex + buffer_.face_id[0][i] * 9, buffer_.pt[0] + i * 3);
 
     auto* prev_r = entry_ray_data_.ray_seg[entry_ray_offset_ + i];
     buffer_.w[0][i] = prev_r ? prev_r->w : 1.0f;
-
+  });
+  for (size_t i = 0; i < active_ray_num_; i++) {
+    auto* prev_r = entry_ray_data_.ray_seg[entry_ray_offset_ + i];
     auto* r =
         ray_seg_pool->GetObject(buffer_.pt[0] + i * 3, buffer_.dir[0] + i * 3, buffer_.w[0][i], buffer_.face_id[0][i]);
     buffer_.ray_seg[0][i] = r;
-    r->root_ctx = ray_info_pool->GetObject(r, crystal_id, axis_rot);
+    r->root_ctx = ray_info_pool->GetObject(r, crystal_id, axis_rot_ptr + i * 3);
     r->root_ctx->prev_ray_segment = prev_r;
     r->recorder << crystal_id;
     simulation_ray_data_.AddRay(r->root_ctx);
