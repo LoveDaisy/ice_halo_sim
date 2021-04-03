@@ -11,6 +11,7 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_crystal.cpp"
   "${PROJ_TEST_DIR}/test_context.cpp"
   "${PROJ_TEST_DIR}/test_optics.cpp"
+  "${PROJ_TEST_DIR}/test_rng.cpp"
   "${PROJ_TEST_DIR}/test_serialize.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
 target_include_directories(unit_test
