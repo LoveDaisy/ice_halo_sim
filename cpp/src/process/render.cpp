@@ -18,7 +18,7 @@ void EqualAreaFishEye(Pose3f cam_pose,               // Camera rotation. [lon, l
                       size_t data_number,            // Data number
                       const float* dir,              // Ray directions, [x, y, z]
                       int img_wid, int img_hei,      // Image size
-                      int* img_xy,                   // Image coordinates
+                      float* img_xy,                 // Image coordinates
                       VisibleRange visible_range) {  // Visible range
   float img_r = std::max(img_wid, img_hei) / 2.0f;
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
@@ -29,25 +29,25 @@ void EqualAreaFishEye(Pose3f cam_pose,               // Camera rotation. [lon, l
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
   for (size_t i = 0; i < data_number; i++) {
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else if (visible_range == VisibleRange::kUpper && dir[i * 4 + 2] > 0) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else if (visible_range == VisibleRange::kLower && dir[i * 4 + 2] < 0) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
       float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
       float proj_r = img_r / 2.0f / std::sin(hov / 2.0f * math::kDegreeToRad);
       float r = 2.0f * proj_r * std::sin((math::kPi / 2.0f - lat) / 2.0f);
 
-      img_xy[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + img_wid / 2.0));
-      img_xy[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + img_hei / 2.0));
+      img_xy[i * 2 + 0] = r * std::cos(lon) + img_wid / 2.0f;
+      img_xy[i * 2 + 1] = r * std::sin(lon) + img_hei / 2.0f;
     }
   }
 }
@@ -58,7 +58,7 @@ void EquidistantFishEye(Pose3f cam_pose,               // Camera rotation. [lon,
                         size_t data_number,            // Data number
                         const float* dir,              // Ray directions, [x, y, z]
                         int img_wid, int img_hei,      // Image size
-                        int* img_xy,                   // Image coordinates
+                        float* img_xy,                 // Image coordinates
                         VisibleRange visible_range) {  // Visible range
   float img_r = std::max(img_wid, img_hei) / 2.0f;
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
@@ -69,24 +69,24 @@ void EquidistantFishEye(Pose3f cam_pose,               // Camera rotation. [lon,
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else if (visible_range == VisibleRange::kUpper && dir[i * 4 + 2] > 0) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else if (visible_range == VisibleRange::kLower && dir[i * 4 + 2] < 0) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
       float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
       float r = (math::kPi / 2.0f - lat) / (hov * math::kDegreeToRad) * img_r;
 
-      img_xy[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + img_wid / 2.0));
-      img_xy[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + img_hei / 2.0));
+      img_xy[i * 2 + 0] = r * std::cos(lon) + img_wid / 2.0f;
+      img_xy[i * 2 + 1] = r * std::sin(lon) + img_hei / 2.0f;
     }
   }
 }
@@ -97,7 +97,7 @@ void DualEqualAreaFishEye(Pose3f /* cam_rot */,                // Not used
                           size_t data_number,                  // Data number
                           const float* dir,                    // Ray directions, [x, y, z]
                           int img_wid, int img_hei,            // Image size
-                          int* img_xy,                         // Image coordinates
+                          float* img_xy,                       // Image coordinates
                           VisibleRange /* visible_range */) {  // Not used
   float img_r = std::min(img_wid / 2, img_hei) / 2.0f;
   float proj_r = img_r / 2.0f / std::sin(45.0f * math::kDegreeToRad);
@@ -111,8 +111,8 @@ void DualEqualAreaFishEye(Pose3f /* cam_rot */,                // Not used
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
       float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
@@ -121,8 +121,8 @@ void DualEqualAreaFishEye(Pose3f /* cam_rot */,                // Not used
       }
       float r = 2.0f * proj_r * std::sin((math::kPi / 2.0f - std::abs(lat)) / 2.0f);
 
-      img_xy[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + img_r + (lat > 0 ? -0.5 : 2 * img_r - 0.5)));
-      img_xy[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + img_r - 0.5));
+      img_xy[i * 2 + 0] = r * std::cos(lon) + img_r + (lat > 0 ? -0.5f : 2 * img_r - 0.5f);
+      img_xy[i * 2 + 1] = r * std::sin(lon) + img_r - 0.5f;
     }
   }
 }
@@ -133,7 +133,7 @@ void DualEquidistantFishEye(Pose3f /* cam_rot */,                // Not used
                             size_t data_number,                  // Data number
                             const float* dir,                    // Ray directions, [x, y, z]
                             int img_wid, int img_hei,            // Image size
-                            int* img_xy,                         // Image coordinates
+                            float* img_xy,                       // Image coordinates
                             VisibleRange /* visible_range */) {  // Not used
   float img_r = std::min(img_wid / 2, img_hei) / 2.0f;
 
@@ -146,8 +146,8 @@ void DualEquidistantFishEye(Pose3f /* cam_rot */,                // Not used
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
   for (decltype(data_number) i = 0; i < data_number; i++) {
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else {
       float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
       float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
@@ -156,8 +156,8 @@ void DualEquidistantFishEye(Pose3f /* cam_rot */,                // Not used
       }
       float r = (1.0f - std::abs(lat) * 2.0f / math::kPi) * img_r;
 
-      img_xy[i * 2 + 0] = static_cast<int>(std::round(r * std::cos(lon) + img_r + (lat > 0 ? -0.5 : 2 * img_r - 0.5)));
-      img_xy[i * 2 + 1] = static_cast<int>(std::round(r * std::sin(lon) + img_r - 0.5));
+      img_xy[i * 2 + 0] = r * std::cos(lon) + img_r + (lat > 0 ? -0.5f : 2 * img_r - 0.5f);
+      img_xy[i * 2 + 1] = r * std::sin(lon) + img_r - 0.5f;
     }
   }
 }
@@ -168,7 +168,7 @@ void RectLinear(Pose3f cam_pose,               // Camera rotation. [lon, lat, ro
                 size_t data_number,            // Data number
                 const float* dir,              // Ray directions, [x, y, z]
                 int img_wid, int img_hei,      // Image size
-                int* img_xy,                   // Image coordinates
+                float* img_xy,                 // Image coordinates
                 VisibleRange visible_range) {  // Visible range
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
 
@@ -178,25 +178,23 @@ void RectLinear(Pose3f cam_pose,               // Camera rotation. [lon, lat, ro
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
   for (size_t i = 0; i < data_number; i++) {
     if (dir_copy[i * 3 + 2] < 0 || std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else if (visible_range == VisibleRange::kUpper && dir[i * 4 + 2] > 0) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else if (visible_range == VisibleRange::kLower && dir[i * 4 + 2] < 0) {
-      img_xy[i * 2 + 0] = std::numeric_limits<int>::min();
-      img_xy[i * 2 + 1] = std::numeric_limits<int>::min();
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else {
       float x = dir_copy[i * 3 + 0] / dir_copy[i * 3 + 2];
       float y = dir_copy[i * 3 + 1] / dir_copy[i * 3 + 2];
-      x = static_cast<float>(img_wid / 2.0 * x / std::tan(hov * math::kDegreeToRad) + img_wid / 2.0);
-      y = static_cast<float>(img_wid / 2.0 * y / std::tan(hov * math::kDegreeToRad) + img_hei / 2.0);
 
-      img_xy[i * 2 + 0] = static_cast<int>(std::round(x));
-      img_xy[i * 2 + 1] = static_cast<int>(std::round(y));
+      img_xy[i * 2 + 0] = img_wid / 2.0f * x / std::tan(hov * math::kDegreeToRad) + img_wid / 2.0f;
+      img_xy[i * 2 + 1] = img_wid / 2.0f * y / std::tan(hov * math::kDegreeToRad) + img_hei / 2.0f;
     }
   }
 }
@@ -670,16 +668,17 @@ void Renderer::LoadPartialRayData(const std::vector<size_t>& idx, LensType proje
   auto num = idx.size();
   threading_pool_->CommitRangeSliceJobsAndWait(0, num, [=](int /* thread_id */, int start_idx, int end_idx) {
     size_t current_num = end_idx - start_idx;
-    std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
+    std::unique_ptr<float[]> tmp_xy{ new float[current_num * 2] };
     for (size_t j = 0; j < current_num; j++) {
       pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), 1, final_ray_buf + idx[start_idx + j] * 4, img_wid, img_hei,
          tmp_xy.get() + j * 2, render_ctx_->GetVisibleRange());
 
-      int x = tmp_xy[j * 2 + 0];
-      int y = tmp_xy[j * 2 + 1];
-      if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
+      if (tmp_xy[j * 2 + 0] == std::numeric_limits<float>::quiet_NaN() ||
+          tmp_xy[j * 2 + 1] == std::numeric_limits<float>::quiet_NaN()) {
         continue;
       }
+      int x = static_cast<int>(tmp_xy[j * 2 + 0]);
+      int y = static_cast<int>(tmp_xy[j * 2 + 1]);
       if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
         x += render_ctx_->GetImageOffsetX();
         y += render_ctx_->GetImageOffsetY();
@@ -707,16 +706,17 @@ void Renderer::LoadFullRayData(LensType projection_type, const ProjectionFunctio
   auto weight = final_ray_data.wavelength_weight;
   threading_pool_->CommitRangeSliceJobsAndWait(0, num, [=](int /* thread_id */, int start_idx, int end_idx) {
     size_t current_num = end_idx - start_idx;
-    std::unique_ptr<int[]> tmp_xy{ new int[current_num * 2] };
+    std::unique_ptr<float[]> tmp_xy{ new float[current_num * 2] };
     pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid, img_hei,
        tmp_xy.get(), render_ctx_->GetVisibleRange());
 
     for (size_t j = 0; j < current_num; j++) {
-      int x = tmp_xy[j * 2 + 0];
-      int y = tmp_xy[j * 2 + 1];
-      if (x == std::numeric_limits<int>::min() || y == std::numeric_limits<int>::min()) {
+      if (tmp_xy[j * 2 + 0] == std::numeric_limits<float>::quiet_NaN() ||
+          tmp_xy[j * 2 + 1] == std::numeric_limits<float>::quiet_NaN()) {
         continue;
       }
+      int x = static_cast<int>(tmp_xy[j * 2 + 0]);
+      int y = static_cast<int>(tmp_xy[j * 2 + 1]);
       if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
         x += render_ctx_->GetImageOffsetX();
         y += render_ctx_->GetImageOffsetY();
@@ -778,15 +778,15 @@ void SetPixelValue(int img_wid, int img_hei, uint8_t* image_data, int x, int y, 
 }
 
 
-void DrawLine(size_t pt_num, const int* xy, int img_wid, int img_hei, uint8_t* image_data, LineSpecifier line_spec) {
+void DrawLine(size_t pt_num, const float* xy, int img_wid, int img_hei, uint8_t* image_data, LineSpecifier line_spec) {
   /* It is like a modification from Xiaolin Wu's algorithm. From:
    * http://members.chello.at/~easyfilter/bresenham.js
    */
   for (size_t i = 0; i + 1 < pt_num; i++) {
-    auto curr_x = xy[i * 2 + 0];
-    auto curr_y = xy[i * 2 + 1];
-    auto next_x = xy[(i + 1) * 2 + 0];
-    auto next_y = xy[(i + 1) * 2 + 1];
+    auto curr_x = static_cast<int>(xy[i * 2 + 0]);
+    auto curr_y = static_cast<int>(xy[i * 2 + 1]);
+    auto next_x = static_cast<int>(xy[(i + 1) * 2 + 0]);
+    auto next_y = static_cast<int>(xy[(i + 1) * 2 + 1]);
 
     if ((curr_x < 0 || curr_x >= img_wid || curr_y < 0 || curr_y >= img_hei) &&
         (next_x < 0 || next_x >= img_wid || next_y < 0 || next_y >= img_hei)) {
@@ -809,11 +809,13 @@ void DrawLine(size_t pt_num, const int* xy, int img_wid, int img_hei, uint8_t* i
       auto err = x1 * dy - th / 2;
       for (curr_x -= x1 * sx;; curr_y += sy) {
         x1 = curr_x;
-        SetPixelValue(img_wid, img_hei, image_data, x1, curr_y, line_spec.color, (1.0f - err / 255.0f) * alpha);
+        SetPixelValue(img_wid, img_hei, image_data, x1, static_cast<int>(curr_y), line_spec.color,
+                      (1.0f - err / 255.0f) * alpha);
         for (e2 = dy - err - th; e2 + dy < 255; e2 += dy) {
-          SetPixelValue(img_wid, img_hei, image_data, x1 += sx, curr_y, line_spec.color, alpha);
+          SetPixelValue(img_wid, img_hei, image_data, x1 += sx, static_cast<int>(curr_y), line_spec.color, alpha);
         }
-        SetPixelValue(img_wid, img_hei, image_data, x1 + sx, curr_y, line_spec.color, (1.0f - e2 / 255.0f) * alpha);
+        SetPixelValue(img_wid, img_hei, image_data, x1 + sx, static_cast<int>(curr_y), line_spec.color,
+                      (1.0f - e2 / 255.0f) * alpha);
         if (curr_y == next_y) {
           break;
         }
@@ -828,11 +830,13 @@ void DrawLine(size_t pt_num, const int* xy, int img_wid, int img_hei, uint8_t* i
       auto err = y1 * dx - th / 2;
       for (curr_y -= y1 * sy;; curr_x += sx) {
         y1 = curr_y;
-        SetPixelValue(img_wid, img_hei, image_data, curr_x, y1, line_spec.color, (1.0f - err / 255.0f) * alpha);
+        SetPixelValue(img_wid, img_hei, image_data, static_cast<int>(curr_x), y1, line_spec.color,
+                      (1.0f - err / 255.0f) * alpha);
         for (e2 = dx - err - th; e2 + dx < 255; e2 += dx) {
-          SetPixelValue(img_wid, img_hei, image_data, curr_x, y1 += sy, line_spec.color, alpha);
+          SetPixelValue(img_wid, img_hei, image_data, static_cast<int>(curr_x), y1 += sy, line_spec.color, alpha);
         }
-        SetPixelValue(img_wid, img_hei, image_data, curr_x, y1 + sy, line_spec.color, (1.0f - e2 / 255.0f) * alpha);
+        SetPixelValue(img_wid, img_hei, image_data, static_cast<int>(curr_x), y1 + sy, line_spec.color,
+                      (1.0f - e2 / 255.0f) * alpha);
         if (curr_x == next_x) {
           break;
         }
@@ -881,12 +885,12 @@ void Renderer::DrawElevationGrids() {
     }
   }
 
-  std::vector<int> line_pts;
+  std::vector<float> line_pts;
   for (const auto& g : elevation_grids) {
     line_pts.clear();
     constexpr float kAziStep = 1.0f;
     float curr_dir[3]{};
-    int curr_xy[2]{};
+    float curr_xy[2]{};
     for (float azi = 0.0f; azi < 360.0f + kAziStep / 2; azi += kAziStep) {
       curr_dir[0] = std::cos(azi * math::kDegreeToRad) * std::cos(g.value * math::kDegreeToRad);
       curr_dir[1] = std::sin(azi * math::kDegreeToRad) * std::cos(g.value * math::kDegreeToRad);
@@ -920,7 +924,7 @@ void Renderer::DrawRadiusGrids() {
   auto need_offset =
       (cam_ctx_->GetLensType() != LensType::kDualEqualArea && cam_ctx_->GetLensType() != LensType::kDualEquidistant);
 
-  std::vector<int> line_pts;
+  std::vector<float> line_pts;
   Pose3f sun_pose{ 90.0f, sun_ctx_->GetSunAltitude(), 0 };
   sun_pose.ReflectInOrigin();
   sun_pose.ToRad();
@@ -930,7 +934,7 @@ void Renderer::DrawRadiusGrids() {
     float curr_dir[3]{};
     float last_z = 0;
     float central_dir[3]{};
-    int curr_xy[2]{};
+    float curr_xy[2]{};
     for (float ang = 0.0f; ang < 360.0f + kAngStep / 2; ang += kAngStep) {
       central_dir[0] = std::cos(ang * math::kDegreeToRad) * std::sin(g.value * math::kDegreeToRad);
       central_dir[1] = std::sin(ang * math::kDegreeToRad) * std::sin(g.value * math::kDegreeToRad);
