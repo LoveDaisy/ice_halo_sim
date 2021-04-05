@@ -807,8 +807,8 @@ void DrawLine(size_t pt_num, const float* xy, int img_wid, int img_hei, uint8_t*
     auto dy = next_y - curr_y;
     auto gradient = dy / dx;
 
-    auto start_x = curr_x - width / 2.0f;
-    auto end_x = next_x + width / 2.0f;
+    auto start_x = i == 0 ? curr_x - width / 2.0f : curr_x;
+    auto end_x = i + 2 == pt_num ? next_x + width / 2.0f : next_x;
     for (auto s = std::floor(start_x); s < std::ceil(end_x); s += 1.0f) {
       auto tmp_dx = s - curr_x;
       auto start_y = curr_y + tmp_dx * gradient - width / 2.0f;
