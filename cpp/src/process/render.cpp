@@ -764,7 +764,7 @@ void Renderer::RenderHaloImage() {
 }
 
 
-void SetPixelValue(int img_wid, int img_hei, uint8_t* image_data, int x, int y, float color[3], float alpha) {
+void SetPixelValue(int img_wid, int img_hei, uint8_t* image_data, int x, int y, const float color[3], float alpha) {
   constexpr uint8_t kMaxPixelValue = std::numeric_limits<uint8_t>::max();
   if (x >= 0 && x < img_wid && y >= 0 && y < img_hei) {
     auto curr_ind = y * img_wid + x;
@@ -779,72 +779,54 @@ void SetPixelValue(int img_wid, int img_hei, uint8_t* image_data, int x, int y, 
 
 
 void DrawLine(size_t pt_num, const float* xy, int img_wid, int img_hei, uint8_t* image_data, LineSpecifier line_spec) {
-  /* It is like a modification from Xiaolin Wu's algorithm. From:
-   * http://members.chello.at/~easyfilter/bresenham.js
-   */
+  auto width = line_spec.width;
+  auto alpha = line_spec.alpha;
+  const auto* color = line_spec.color;
+
   for (size_t i = 0; i + 1 < pt_num; i++) {
-    auto curr_x = static_cast<int>(xy[i * 2 + 0]);
-    auto curr_y = static_cast<int>(xy[i * 2 + 1]);
-    auto next_x = static_cast<int>(xy[(i + 1) * 2 + 0]);
-    auto next_y = static_cast<int>(xy[(i + 1) * 2 + 1]);
+    auto curr_x = xy[i * 2 + 0];
+    auto curr_y = xy[i * 2 + 1];
+    auto next_x = xy[(i + 1) * 2 + 0];
+    auto next_y = xy[(i + 1) * 2 + 1];
 
     if ((curr_x < 0 || curr_x >= img_wid || curr_y < 0 || curr_y >= img_hei) &&
         (next_x < 0 || next_x >= img_wid || next_y < 0 || next_y >= img_hei)) {
       continue;
     }
 
-    auto dx = std::abs(next_x - curr_x);
-    auto dy = std::abs(next_y - curr_y);
-    auto sx = next_x > curr_x ? 1 : -1;
-    auto sy = next_y > curr_y ? 1 : -1;
+    bool steep = std::abs(next_y - curr_y) > std::abs(next_x - curr_x);
+    if (steep) {
+      std::swap(curr_x, curr_y);
+      std::swap(next_x, next_y);
+    }
+    if (curr_x > next_x) {
+      std::swap(curr_x, next_x);
+      std::swap(curr_y, next_y);
+    }
+    auto dx = next_x - curr_x;
+    auto dy = next_y - curr_y;
+    auto gradient = dy / dx;
 
-    float e2 = std::sqrt(static_cast<float>(dx * dx + dy * dy));
-    dx *= 255 / e2;
-    dy *= 255 / e2;
-    auto th = 255 * (line_spec.width - 1);
-    auto alpha = line_spec.alpha;
+    auto start_x = curr_x - width / 2.0f;
+    auto end_x = next_x + width / 2.0f;
+    for (auto s = std::floor(start_x); s < std::ceil(end_x); s += 1.0f) {
+      auto tmp_dx = s - curr_x;
+      auto start_y = curr_y + tmp_dx * gradient - width / 2.0f;
+      auto end_y = curr_y + tmp_dx * gradient + width / 2.0f;
+      for (auto t = std::floor(start_y); t < std::ceil(end_y); t += 1.0f) {
+        auto tmp_dy = t - curr_y;
+        auto p = (tmp_dx * dx + tmp_dy * dy) / (dx * dx + dy * dy);
+        p = std::min(std::max(p, 0.0f), 1.0f);
+        auto d = std::sqrt((tmp_dx - p * dx) * (tmp_dx - p * dx) + (tmp_dy - p * dy) * (tmp_dy - p * dy));
+        auto weight = 0.5f - d + width / 2.0f;
+        weight = std::min(std::max(weight, 0.0f), 1.0f);
 
-    if (dx < dy) {
-      auto x1 = static_cast<int>(std::round((e2 + th / 2) / dy));
-      auto err = x1 * dy - th / 2;
-      for (curr_x -= x1 * sx;; curr_y += sy) {
-        x1 = curr_x;
-        SetPixelValue(img_wid, img_hei, image_data, x1, static_cast<int>(curr_y), line_spec.color,
-                      (1.0f - err / 255.0f) * alpha);
-        for (e2 = dy - err - th; e2 + dy < 255; e2 += dy) {
-          SetPixelValue(img_wid, img_hei, image_data, x1 += sx, static_cast<int>(curr_y), line_spec.color, alpha);
+        auto tmp_x = static_cast<int>(s);
+        auto tmp_y = static_cast<int>(t);
+        if (steep) {
+          std::swap(tmp_x, tmp_y);
         }
-        SetPixelValue(img_wid, img_hei, image_data, x1 + sx, static_cast<int>(curr_y), line_spec.color,
-                      (1.0f - e2 / 255.0f) * alpha);
-        if (curr_y == next_y) {
-          break;
-        }
-        err += dx;
-        if (err > 255) {
-          err -= dy;
-          curr_x += sx;
-        }
-      }
-    } else {
-      auto y1 = static_cast<int>(std::round((e2 + th / 2) / dx));
-      auto err = y1 * dx - th / 2;
-      for (curr_y -= y1 * sy;; curr_x += sx) {
-        y1 = curr_y;
-        SetPixelValue(img_wid, img_hei, image_data, static_cast<int>(curr_x), y1, line_spec.color,
-                      (1.0f - err / 255.0f) * alpha);
-        for (e2 = dx - err - th; e2 + dx < 255; e2 += dx) {
-          SetPixelValue(img_wid, img_hei, image_data, static_cast<int>(curr_x), y1 += sy, line_spec.color, alpha);
-        }
-        SetPixelValue(img_wid, img_hei, image_data, static_cast<int>(curr_x), y1 + sy, line_spec.color,
-                      (1.0f - e2 / 255.0f) * alpha);
-        if (curr_x == next_x) {
-          break;
-        }
-        err += dy;
-        if (err > 255) {
-          err -= dx;
-          curr_y += sy;
-        }
+        SetPixelValue(img_wid, img_hei, image_data, tmp_x, tmp_y, color, weight * alpha);
       }
     }
   }

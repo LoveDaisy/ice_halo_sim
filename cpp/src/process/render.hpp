@@ -28,7 +28,7 @@ using ProjectionFunction = std::function<void(Pose3f cam_pose,           // Came
                                               size_t data_number,        // Data number
                                               const float* dir,          // Ray directions, [x, y, z]
                                               int img_wid, int img_hei,  // Image size
-                                              float* img_xy,               // Image coordinates
+                                              float* img_xy,             // Image coordinates
                                               VisibleRange visible_semi_sphere)>;  // Which semi-sphere can be visible
 
 
