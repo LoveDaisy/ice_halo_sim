@@ -779,8 +779,8 @@ void SetPixelValue(int img_wid, int img_hei, uint8_t* image_data, int x, int y, 
 
 
 void DrawLine(size_t pt_num, const int* xy, int img_wid, int img_hei, uint8_t* image_data, LineSpecifier line_spec) {
-  /* Modified Bresenham algorithm
-   * http://members.chello.at/~easyfilter/bresenham.html
+  /* It is like a modification from Xiaolin Wu's algorithm. From:
+   * http://members.chello.at/~easyfilter/bresenham.js
    */
   for (size_t i = 0; i + 1 < pt_num; i++) {
     auto curr_x = xy[i * 2 + 0];
@@ -794,26 +794,52 @@ void DrawLine(size_t pt_num, const int* xy, int img_wid, int img_hei, uint8_t* i
     }
 
     auto dx = std::abs(next_x - curr_x);
-    auto sx = curr_x < next_x ? 1 : -1;
-    auto dy = -std::abs(next_y - curr_y);
-    auto sy = curr_y < next_y ? 1 : -1;
-    auto err = dx + dy;
+    auto dy = std::abs(next_y - curr_y);
+    auto sx = next_x > curr_x ? 1 : -1;
+    auto sy = next_y > curr_y ? 1 : -1;
 
-    while (true) {
-      SetPixelValue(img_wid, img_hei, image_data, curr_x, curr_y, line_spec.color, 1.0f);
-      if (err * 2 > dy) {
-        err += dy;
-        curr_x += sx;
-      }
-      if (curr_x == next_x && curr_y == next_y) {
-        break;
-      }
-      if (err * 2 < dx) {
+    float e2 = std::sqrt(static_cast<float>(dx * dx + dy * dy));
+    dx *= 255 / e2;
+    dy *= 255 / e2;
+    auto th = 255 * (line_spec.width - 1);
+
+    if (dx < dy) {
+      auto x1 = static_cast<int>(std::round((e2 + th / 2) / dy));
+      auto err = x1 * dy - th / 2;
+      for (curr_x -= x1 * sx;; curr_y += sy) {
+        x1 = curr_x;
+        SetPixelValue(img_wid, img_hei, image_data, x1, curr_y, line_spec.color, 1.0f - err / 255.0f);
+        for (e2 = dy - err - th; e2 + dy < 255; e2 += dy) {
+          SetPixelValue(img_wid, img_hei, image_data, x1 += sx, curr_y, line_spec.color, 1.0f);
+        }
+        SetPixelValue(img_wid, img_hei, image_data, x1 + sx, curr_y, line_spec.color, 1.0f - e2 / 255.0f);
+        if (curr_y == next_y) {
+          break;
+        }
         err += dx;
-        curr_y += sy;
+        if (err > 255) {
+          err -= dy;
+          curr_x += sx;
+        }
       }
-      if (curr_x == next_x && curr_y == next_y) {
-        break;
+    } else {
+      auto y1 = static_cast<int>(std::round((e2 + th / 2) / dx));
+      auto err = y1 * dx - th / 2;
+      for (curr_y -= y1 * sy;; curr_x += sx) {
+        y1 = curr_y;
+        SetPixelValue(img_wid, img_hei, image_data, curr_x, y1, line_spec.color, 1.0f - err / 255.0f);
+        for (e2 = dx - err - th; e2 + dx < 255; e2 += dx) {
+          SetPixelValue(img_wid, img_hei, image_data, curr_x, y1 += sy, line_spec.color, 1.0f);
+        }
+        SetPixelValue(img_wid, img_hei, image_data, curr_x, y1 + sy, line_spec.color, 1.0f - e2 / 255.0f);
+        if (curr_x == next_x) {
+          break;
+        }
+        err += dy;
+        if (err > 255) {
+          err -= dx;
+          curr_y += sy;
+        }
       }
     }
   }
