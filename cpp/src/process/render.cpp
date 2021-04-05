@@ -802,17 +802,18 @@ void DrawLine(size_t pt_num, const int* xy, int img_wid, int img_hei, uint8_t* i
     dx *= 255 / e2;
     dy *= 255 / e2;
     auto th = 255 * (line_spec.width - 1);
+    auto alpha = line_spec.alpha;
 
     if (dx < dy) {
       auto x1 = static_cast<int>(std::round((e2 + th / 2) / dy));
       auto err = x1 * dy - th / 2;
       for (curr_x -= x1 * sx;; curr_y += sy) {
         x1 = curr_x;
-        SetPixelValue(img_wid, img_hei, image_data, x1, curr_y, line_spec.color, 1.0f - err / 255.0f);
+        SetPixelValue(img_wid, img_hei, image_data, x1, curr_y, line_spec.color, (1.0f - err / 255.0f) * alpha);
         for (e2 = dy - err - th; e2 + dy < 255; e2 += dy) {
-          SetPixelValue(img_wid, img_hei, image_data, x1 += sx, curr_y, line_spec.color, 1.0f);
+          SetPixelValue(img_wid, img_hei, image_data, x1 += sx, curr_y, line_spec.color, alpha);
         }
-        SetPixelValue(img_wid, img_hei, image_data, x1 + sx, curr_y, line_spec.color, 1.0f - e2 / 255.0f);
+        SetPixelValue(img_wid, img_hei, image_data, x1 + sx, curr_y, line_spec.color, (1.0f - e2 / 255.0f) * alpha);
         if (curr_y == next_y) {
           break;
         }
@@ -827,11 +828,11 @@ void DrawLine(size_t pt_num, const int* xy, int img_wid, int img_hei, uint8_t* i
       auto err = y1 * dx - th / 2;
       for (curr_y -= y1 * sy;; curr_x += sx) {
         y1 = curr_y;
-        SetPixelValue(img_wid, img_hei, image_data, curr_x, y1, line_spec.color, 1.0f - err / 255.0f);
+        SetPixelValue(img_wid, img_hei, image_data, curr_x, y1, line_spec.color, (1.0f - err / 255.0f) * alpha);
         for (e2 = dx - err - th; e2 + dx < 255; e2 += dx) {
-          SetPixelValue(img_wid, img_hei, image_data, curr_x, y1 += sy, line_spec.color, 1.0f);
+          SetPixelValue(img_wid, img_hei, image_data, curr_x, y1 += sy, line_spec.color, alpha);
         }
-        SetPixelValue(img_wid, img_hei, image_data, curr_x, y1 + sy, line_spec.color, 1.0f - e2 / 255.0f);
+        SetPixelValue(img_wid, img_hei, image_data, curr_x, y1 + sy, line_spec.color, (1.0f - e2 / 255.0f) * alpha);
         if (curr_x == next_x) {
           break;
         }

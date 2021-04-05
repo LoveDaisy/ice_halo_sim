@@ -75,8 +75,7 @@ void RenderSplitter::LoadFromJson(const rapidjson::Value& root) {
 }
 
 
-
-LineSpecifier::LineSpecifier() : LineSpecifier(LineType::kSolid, kDefaultWidth, kDefaultColor, 1.0f) {}
+LineSpecifier::LineSpecifier() : LineSpecifier(LineType::kSolid, kDefaultWidth, kDefaultColor, kDefaultAlpha) {}
 
 
 LineSpecifier::LineSpecifier(LineType type, float width, const float color[3], float alpha)
@@ -98,6 +97,8 @@ void LineSpecifier::SaveToJson(rapidjson::Value& root, rapidjson::Value::Allocat
   Pointer("/color/0").Set(root, color[0], allocator);
   Pointer("/color/-").Set(root, color[1], allocator);
   Pointer("/color/-").Set(root, color[2], allocator);
+
+  Pointer("/alpha").Set(root, alpha, allocator);
 }
 
 
@@ -140,6 +141,17 @@ void LineSpecifier::LoadFromJson(const rapidjson::Value& root) {
     color[0] = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
     color[1] = static_cast<float>(std::min(std::max(pa[1].GetDouble(), 0.0), 1.0));
     color[2] = static_cast<float>(std::min(std::max(pa[2].GetDouble(), 0.0), 1.0));
+  }
+
+  alpha = kDefaultAlpha;
+  p = Pointer("/alpha").Get(root);
+  if (p == nullptr) {
+    LOG_VERBOSE("Line specifier missing <alpha>. Use default %.2f.", kDefaultAlpha);
+  } else if (!p->IsNumber()) {
+    LOG_VERBOSE("Line specifier <alpha> is not a number. Use default %.2f.", kDefaultAlpha);
+  } else {
+    auto a = p->GetDouble();
+    alpha = std::max(std::min(static_cast<float>(a), 1.0f), 0.0f);
   }
 }
 
