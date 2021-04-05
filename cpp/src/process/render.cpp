@@ -800,12 +800,7 @@ void DrawLine(size_t pt_num, const int* xy, int img_wid, int img_hei, uint8_t* i
     auto err = dx + dy;
 
     while (true) {
-      if (curr_x >= 0 && curr_x < img_wid && curr_y >= 0 && curr_y < img_hei) {
-        auto curr_ind = (curr_y * img_wid + curr_x) * 3;
-        image_data[curr_ind + 0] = static_cast<uint8_t>(line_spec.color[0] * std::numeric_limits<uint8_t>::max());
-        image_data[curr_ind + 1] = static_cast<uint8_t>(line_spec.color[1] * std::numeric_limits<uint8_t>::max());
-        image_data[curr_ind + 2] = static_cast<uint8_t>(line_spec.color[2] * std::numeric_limits<uint8_t>::max());
-      }
+      SetPixelValue(img_wid, img_hei, image_data, curr_x, curr_y, line_spec.color, 1.0f);
       if (err * 2 > dy) {
         err += dy;
         curr_x += sx;
