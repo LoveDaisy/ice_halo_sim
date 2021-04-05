@@ -54,9 +54,10 @@ struct LineSpecifier : public IJsonizable {
   float alpha;
 
   static constexpr float kDefaultWidth = 0.8f;
-  static constexpr float kDefaultAlpha = 1.0f;
   static constexpr float kMinWidth = 0.1f;
+  static constexpr float kDefaultAlpha = 1.0f;
   static constexpr float kDefaultColor[3]{ 0.5f, 0.5f, 0.5f };
+  static constexpr float kDefaultDashSize = 7.0f;  // Measured by line width
 
   LineSpecifier();
   LineSpecifier(LineType type, float width, const float color[3], float alpha);

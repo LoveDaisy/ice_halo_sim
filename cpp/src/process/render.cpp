@@ -783,6 +783,10 @@ void DrawLine(size_t pt_num, const float* xy, int img_wid, int img_hei, uint8_t*
   auto alpha = line_spec.alpha;
   const auto* color = line_spec.color;
 
+  float last_arc_len = 0.0f;
+  float last_s = std::numeric_limits<float>::quiet_NaN();
+  float last_t = std::numeric_limits<float>::quiet_NaN();
+  bool draw_line = true;
   for (size_t i = 0; i + 1 < pt_num; i++) {
     auto curr_x = xy[i * 2 + 0];
     auto curr_y = xy[i * 2 + 1];
@@ -791,6 +795,8 @@ void DrawLine(size_t pt_num, const float* xy, int img_wid, int img_hei, uint8_t*
 
     if ((curr_x < 0 || curr_x >= img_wid || curr_y < 0 || curr_y >= img_hei) &&
         (next_x < 0 || next_x >= img_wid || next_y < 0 || next_y >= img_hei)) {
+      last_s = std::numeric_limits<float>::quiet_NaN();
+      last_t = std::numeric_limits<float>::quiet_NaN();
       continue;
     }
 
@@ -809,11 +815,30 @@ void DrawLine(size_t pt_num, const float* xy, int img_wid, int img_hei, uint8_t*
 
     auto start_x = i == 0 ? curr_x - width / 2.0f : curr_x;
     auto end_x = i + 2 == pt_num ? next_x + width / 2.0f : next_x;
+    float curr_seg_len = 0.0f;
     for (auto s = std::floor(start_x); s < std::ceil(end_x); s += 1.0f) {
       auto tmp_dx = s - curr_x;
       auto start_y = curr_y + tmp_dx * gradient - width / 2.0f;
       auto end_y = curr_y + tmp_dx * gradient + width / 2.0f;
       for (auto t = std::floor(start_y); t < std::ceil(end_y); t += 1.0f) {
+        if (std::isnan(last_s)) {
+          last_s = s;
+          last_t = t;
+        }
+        if (line_spec.type == LineType::kDashed) {
+          curr_seg_len = std::sqrt((s - last_s) * (s - last_s) + (t - last_t) * (t - last_t));
+          if (last_arc_len + curr_seg_len >= LineSpecifier::kDefaultDashSize * width) {
+            last_arc_len = 0.0f;
+            last_s = s;
+            last_t = t;
+            draw_line = !draw_line;
+          }
+        }
+
+        if (!draw_line) {
+          continue;
+        }
+
         auto tmp_dy = t - curr_y;
         auto p = (tmp_dx * dx + tmp_dy * dy) / (dx * dx + dy * dy);
         p = std::min(std::max(p, 0.0f), 1.0f);
@@ -829,6 +854,7 @@ void DrawLine(size_t pt_num, const float* xy, int img_wid, int img_hei, uint8_t*
         SetPixelValue(img_wid, img_hei, image_data, tmp_x, tmp_y, color, weight * alpha);
       }
     }
+    last_arc_len += curr_seg_len;
   }
 }
 
