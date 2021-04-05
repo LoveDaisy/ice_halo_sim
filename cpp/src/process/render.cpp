@@ -673,8 +673,7 @@ void Renderer::LoadPartialRayData(const std::vector<size_t>& idx, LensType proje
       pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), 1, final_ray_buf + idx[start_idx + j] * 4, img_wid, img_hei,
          tmp_xy.get() + j * 2, render_ctx_->GetVisibleRange());
 
-      if (tmp_xy[j * 2 + 0] == std::numeric_limits<float>::quiet_NaN() ||
-          tmp_xy[j * 2 + 1] == std::numeric_limits<float>::quiet_NaN()) {
+      if (std::isnan(tmp_xy[j * 2 + 0]) || std::isnan(tmp_xy[j * 2 + 1])) {
         continue;
       }
       int x = static_cast<int>(tmp_xy[j * 2 + 0]);
@@ -711,8 +710,7 @@ void Renderer::LoadFullRayData(LensType projection_type, const ProjectionFunctio
        tmp_xy.get(), render_ctx_->GetVisibleRange());
 
     for (size_t j = 0; j < current_num; j++) {
-      if (tmp_xy[j * 2 + 0] == std::numeric_limits<float>::quiet_NaN() ||
-          tmp_xy[j * 2 + 1] == std::numeric_limits<float>::quiet_NaN()) {
+      if (std::isnan(tmp_xy[j * 2 + 0]) || std::isnan(tmp_xy[j * 2 + 1])) {
         continue;
       }
       int x = static_cast<int>(tmp_xy[j * 2 + 0]);
