@@ -84,6 +84,8 @@ class Renderer {
 
   void RenderHaloImage();
   void DrawGrids();
+  void DrawElevationGrids();
+  void DrawRadiusGrids();
 
   CameraContextPtr cam_ctx_;
   RenderContextPtr render_ctx_;
