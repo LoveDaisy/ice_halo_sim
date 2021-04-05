@@ -764,7 +764,24 @@ void Renderer::RenderHaloImage() {
 }
 
 
+void SetPixelValue(int img_wid, int img_hei, uint8_t* image_data, int x, int y, float color[3], float alpha) {
+  constexpr uint8_t kMaxPixelValue = std::numeric_limits<uint8_t>::max();
+  if (x >= 0 && x < img_wid && y >= 0 && y < img_hei) {
+    auto curr_ind = y * img_wid + x;
+    image_data[curr_ind * 3 + 0] =
+        static_cast<uint8_t>(color[0] * alpha * kMaxPixelValue + image_data[curr_ind * 3 + 0] * (1 - alpha));
+    image_data[curr_ind * 3 + 1] =
+        static_cast<uint8_t>(color[1] * alpha * kMaxPixelValue + image_data[curr_ind * 3 + 1] * (1 - alpha));
+    image_data[curr_ind * 3 + 2] =
+        static_cast<uint8_t>(color[2] * alpha * kMaxPixelValue + image_data[curr_ind * 3 + 2] * (1 - alpha));
+  }
+}
+
+
 void DrawLine(size_t pt_num, const int* xy, int img_wid, int img_hei, uint8_t* image_data, LineSpecifier line_spec) {
+  /* Modified Bresenham algorithm
+   * http://members.chello.at/~easyfilter/bresenham.html
+   */
   for (size_t i = 0; i + 1 < pt_num; i++) {
     auto curr_x = xy[i * 2 + 0];
     auto curr_y = xy[i * 2 + 1];
