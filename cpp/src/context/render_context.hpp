@@ -51,13 +51,15 @@ struct LineSpecifier : public IJsonizable {
   LineType type;
   float width;
   float color[3];
+  float alpha;
 
   static constexpr float kDefaultWidth = 0.8f;
+  static constexpr float kDefaultAlpha = 1.0f;
   static constexpr float kMinWidth = 0.1f;
-  static constexpr float kDefaultColor[3] = { 0.5f, 0.5f, 0.5f };
+  static constexpr float kDefaultColor[3]{ 0.5f, 0.5f, 0.5f };
 
   LineSpecifier();
-  LineSpecifier(LineType type, float width, const float color[3]);
+  LineSpecifier(LineType type, float width, const float color[3], float alpha);
 
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;

@@ -75,15 +75,12 @@ void RenderSplitter::LoadFromJson(const rapidjson::Value& root) {
 }
 
 
-constexpr float LineSpecifier::kDefaultColor[3];
-constexpr float LineSpecifier::kMinWidth;
+
+LineSpecifier::LineSpecifier() : LineSpecifier(LineType::kSolid, kDefaultWidth, kDefaultColor, 1.0f) {}
 
 
-LineSpecifier::LineSpecifier() : LineSpecifier(LineType::kSolid, kDefaultWidth, kDefaultColor) {}
-
-
-LineSpecifier::LineSpecifier(LineType type, float width, const float color[3])
-    : type(type), width(width), color{ color[0], color[1], color[2] } {}
+LineSpecifier::LineSpecifier(LineType type, float width, const float color[3], float alpha)
+    : type(type), width(width), color{ color[0], color[1], color[2] }, alpha(alpha) {}
 
 
 void LineSpecifier::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
