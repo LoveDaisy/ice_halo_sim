@@ -42,7 +42,7 @@ class CameraContext : public IJsonizable {
   static constexpr float kMaxFovFisheye = 120.0f;
 
   static constexpr float kDefaultCamAzimuth = 90.0f;
-  static constexpr float kDefaultCamElevation = 89.9f;
+  static constexpr float kDefaultCamElevation = 90.0f;
   static constexpr float kDefaultCamRoll = 0.0f;
 
  private:

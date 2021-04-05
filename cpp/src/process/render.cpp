@@ -104,7 +104,7 @@ void DualEqualAreaFishEye(Pose3f /* cam_rot */,                // Not used
 
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
 
-  Pose3f cam_pose(90.0f, 89.999f, 0.0f);
+  Pose3f cam_pose(90.0f, 90.0f, 0.0f);
   cam_pose.ReflectInOrigin();
   cam_pose.ToRad();
 
@@ -139,7 +139,7 @@ void DualEquidistantFishEye(Pose3f /* cam_rot */,                // Not used
 
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
 
-  Pose3f cam_pose(90.0f, 89.999f, 0.0f);
+  Pose3f cam_pose(90.0f, 90.0f, 0.0f);
   cam_pose.ReflectInOrigin();
   cam_pose.ToRad();
 
