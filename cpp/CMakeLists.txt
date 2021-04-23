@@ -21,7 +21,7 @@ if(MSVC)
   set(CMAKE_DEBUG_POSTFIX "d")
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexceptions -fpermissive -pthread -frtti")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -msse4 -mavx -D__STDC_FORMAT_MACROS")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -msse4 -mavx -D__STDC_FORMAT_MACROS -ftime-trace")
 endif()
 
 # ==================================================================================================
