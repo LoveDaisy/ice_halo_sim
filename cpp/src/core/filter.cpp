@@ -325,13 +325,8 @@ void SpecificRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
 }
 
 
-void GeneralRayPathFilter::AddEntryFace(ShortIdType face_number) {
-  entry_faces_.emplace(face_number);
-}
-
-
-void GeneralRayPathFilter::AddExitFace(ShortIdType face_number) {
-  exit_faces_.emplace(face_number);
+void GeneralRayPathFilter::AddEntryExitFace(ShortIdType entry_face, ShortIdType exit_face) {
+  entry_exit_faces_.emplace_back(EntryExitFace{ entry_face, exit_face });
 }
 
 
@@ -341,8 +336,7 @@ void GeneralRayPathFilter::AddHitNumber(int hit_num) {
 
 
 void GeneralRayPathFilter::ClearFaces() {
-  entry_faces_.clear();
-  exit_faces_.clear();
+  entry_exit_faces_.clear();
 }
 
 
@@ -352,7 +346,7 @@ void GeneralRayPathFilter::ClearHitNumbers() {
 
 
 bool GeneralRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_r) const {
-  if (entry_faces_.empty() && exit_faces_.empty()) {
+  if (entry_exit_faces_.empty()) {
     return true;
   }
 
@@ -375,7 +369,9 @@ bool GeneralRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_r
     return true;
   }
 
-  return entry_faces_.count(curr_entry_fn) != 0 && exit_faces_.count(curr_exit_fn) != 0;
+  auto iter = std::find_if(entry_exit_faces_.begin(), entry_exit_faces_.end(),
+                           [=](const EntryExitFace& f) { return f.entry == curr_entry_fn && f.exit == curr_exit_fn; });
+  return iter != entry_exit_faces_.end();
 }
 
 
@@ -384,23 +380,30 @@ RayPathFilterPtrU GeneralRayPathFilter::MakeCopy() const {
 }
 
 
+void GeneralRayPathFilter::ApplySymmetry(const CrystalContext* crystal_ctx) {
+  std::vector<EntryExitFace> tmp_faces;
+  tmp_faces.emplace_back(entry_exit_faces_[0]);
+
+  RayPath rp;
+  rp << crystal_ctx->GetId() << tmp_faces[0].entry << tmp_faces[0].exit << kInvalidId;
+  for (auto&& p : MakeSymmetryExtension(rp, crystal_ctx, symmetry_flag_)) {
+    tmp_faces.emplace_back(EntryExitFace{ p.ids[1], p.ids[p.len - 2] });
+  }
+
+  entry_exit_faces_.swap(tmp_faces);
+}
+
+
 void GeneralRayPathFilter::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
   AbstractRayPathFilter::SaveToJson(root, allocator);
 
   Pointer("/type").Set(root, "general", allocator);
 
-  if (!entry_faces_.empty()) {
-    Pointer("/entry/0").Create(root, allocator);
-    for (const auto& f : entry_faces_) {
-      Pointer("/entry/-").Set(root, f, allocator);
-    }
-  }
-
-  if (!exit_faces_.empty()) {
-    Pointer("/exit/0").Create(root, allocator);
-    for (const auto& f : exit_faces_) {
-      Pointer("/exit/-").Set(root, f, allocator);
-    }
+  if (!entry_exit_faces_.empty()) {
+    auto entry = entry_exit_faces_[0].entry;
+    auto exit = entry_exit_faces_[0].exit;
+    Pointer("/entry").Set(root, entry, allocator);
+    Pointer("/exit").Set(root, exit, allocator);
   }
 
   if (!hit_nums_.empty()) {
@@ -419,26 +422,17 @@ void GeneralRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
   ClearFaces();
 
   const auto* p = Pointer("/entry").Get(root);
-  if (p == nullptr || !p->IsArray()) {
+  if (p == nullptr || !p->IsInt()) {
     throw std::invalid_argument("<entry> cannot recognize!");
   }
-  for (const auto& pi : p->GetArray()) {
-    if (!pi.IsInt()) {
-      throw std::invalid_argument("<entry> cannot recognize!");
-    }
-    AddEntryFace(pi.GetInt());
-  }
+  auto entry = p->GetInt();
 
   p = Pointer("/exit").Get(root);
-  if (p == nullptr || !p->IsArray()) {
+  if (p == nullptr || !p->IsInt()) {
     throw std::invalid_argument("<exit> cannot recognize!");
   }
-  for (const auto& pi : p->GetArray()) {
-    if (!pi.IsInt()) {
-      throw std::invalid_argument("<exit> cannot recognize!");
-    }
-    AddExitFace(pi.GetInt());
-  }
+  auto exit = p->GetInt();
+  AddEntryExitFace(entry, exit);
 
   p = Pointer("/hit").Get(root);
   if (p == nullptr) {

@@ -84,13 +84,13 @@ class SpecificRayPathFilter : public AbstractRayPathFilter {
 
 class GeneralRayPathFilter : public AbstractRayPathFilter {
  public:
-  void AddEntryFace(ShortIdType face_number);
-  void AddExitFace(ShortIdType face_number);
+  void AddEntryExitFace(ShortIdType entry_face, ShortIdType exit_face);
   void AddHitNumber(int hit_num);
   void ClearFaces();
   void ClearHitNumbers();
 
   RayPathFilterPtrU MakeCopy() const override;
+  void ApplySymmetry(const CrystalContext* crystal_ctx) override;
   void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
   void LoadFromJson(const rapidjson::Value& root) override;
 
@@ -98,8 +98,11 @@ class GeneralRayPathFilter : public AbstractRayPathFilter {
   bool FilterPath(const Crystal* crystal, RaySegment* last_r) const override;
 
  private:
-  std::unordered_set<ShortIdType> entry_faces_;
-  std::unordered_set<ShortIdType> exit_faces_;
+  struct EntryExitFace {
+    ShortIdType entry;
+    ShortIdType exit;
+  };
+  std::vector<EntryExitFace> entry_exit_faces_;
   std::unordered_set<int> hit_nums_;
 };
 
