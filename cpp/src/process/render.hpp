@@ -77,10 +77,10 @@ class Renderer {
   static constexpr int kImageBits = 24;
 
  private:
-  void LoadPartialRayData(const std::vector<size_t>& idx, LensType projection_type, const ProjectionFunction& pf,
-                          const SimpleRayData& final_ray_data, float* current_data, float* current_data_compensation);
-  void LoadFullRayData(LensType projection_type, const ProjectionFunction& pf, const SimpleRayData& final_ray_data,
-                       float* current_data, float* current_data_compensation);
+  void LoadPartialRayData(const std::vector<size_t>& idx, LensType projection_type, const SimpleRayData& final_ray_data,
+                          float* current_data, float* current_data_compensation);
+  void LoadFullRayData(LensType projection_type, const SimpleRayData& final_ray_data, float* current_data,
+                       float* current_data_compensation);
 
   void RenderHaloImage();
   void DrawGrids();
