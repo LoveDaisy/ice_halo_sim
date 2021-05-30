@@ -23,7 +23,6 @@ void EqualAreaFishEye(Pose3f cam_pose,               // Camera rotation. [lon, l
   float img_r = std::max(img_wid, img_hei) / 2.0f;
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
 
-  cam_pose.ReflectInOrigin();
   cam_pose.ToRad();
 
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
@@ -31,7 +30,7 @@ void EqualAreaFishEye(Pose3f cam_pose,               // Camera rotation. [lon, l
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
-    } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
+    } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] > 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else if (visible_range == VisibleRange::kUpper && dir[i * 4 + 2] > 0) {
@@ -41,13 +40,13 @@ void EqualAreaFishEye(Pose3f cam_pose,               // Camera rotation. [lon, l
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else {
-      float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
+      float lon = std::atan2(-dir_copy[i * 3 + 1], -dir_copy[i * 3 + 0]);
+      float lat = std::asin(-dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
       float proj_r = img_r / 2.0f / std::sin(hov / 2.0f * math::kDegreeToRad);
       float r = 2.0f * proj_r * std::sin((math::kPi / 2.0f - lat) / 2.0f);
 
-      img_xy[i * 2 + 0] = r * std::cos(lon) + img_wid / 2.0f;
-      img_xy[i * 2 + 1] = r * std::sin(lon) + img_hei / 2.0f;
+      img_xy[i * 2 + 0] = r * std::cos(lon) + img_wid / 2.0f - 0.5f;
+      img_xy[i * 2 + 1] = -r * std::sin(lon) + img_hei / 2.0f - 0.5f;  // y increase downside on image
     }
   }
 }
@@ -63,7 +62,6 @@ void EquidistantFishEye(Pose3f cam_pose,               // Camera rotation. [lon,
   float img_r = std::max(img_wid, img_hei) / 2.0f;
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
 
-  cam_pose.ReflectInOrigin();
   cam_pose.ToRad();
 
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
@@ -71,7 +69,7 @@ void EquidistantFishEye(Pose3f cam_pose,               // Camera rotation. [lon,
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
-    } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
+    } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] > 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else if (visible_range == VisibleRange::kUpper && dir[i * 4 + 2] > 0) {
@@ -81,12 +79,12 @@ void EquidistantFishEye(Pose3f cam_pose,               // Camera rotation. [lon,
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else {
-      float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
+      float lon = std::atan2(-dir_copy[i * 3 + 1], -dir_copy[i * 3 + 0]);
+      float lat = std::asin(-dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
       float r = (math::kPi / 2.0f - lat) / (hov * math::kDegreeToRad) * img_r;
 
-      img_xy[i * 2 + 0] = r * std::cos(lon) + img_wid / 2.0f;
-      img_xy[i * 2 + 1] = r * std::sin(lon) + img_hei / 2.0f;
+      img_xy[i * 2 + 0] = r * std::cos(lon) + img_wid / 2.0f - 0.5f;
+      img_xy[i * 2 + 1] = -r * std::sin(lon) + img_hei / 2.0f - 0.5f;  // y increase downside on image
     }
   }
 }
@@ -105,7 +103,6 @@ void DualEqualAreaFishEye(Pose3f /* cam_rot */,                // Not used
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
 
   Pose3f cam_pose(90.0f, 90.0f, 0.0f);
-  cam_pose.ReflectInOrigin();
   cam_pose.ToRad();
 
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
@@ -114,15 +111,15 @@ void DualEqualAreaFishEye(Pose3f /* cam_rot */,                // Not used
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else {
-      float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
+      float lon = std::atan2(-dir_copy[i * 3 + 1], -dir_copy[i * 3 + 0]);
+      float lat = std::asin(-dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
       if (lat < 0) {
         lon = math::kPi - lon;
       }
       float r = 2.0f * proj_r * std::sin((math::kPi / 2.0f - std::abs(lat)) / 2.0f);
 
       img_xy[i * 2 + 0] = r * std::cos(lon) + img_r + (lat > 0 ? -0.5f : 2 * img_r - 0.5f);
-      img_xy[i * 2 + 1] = r * std::sin(lon) + img_r - 0.5f;
+      img_xy[i * 2 + 1] = -r * std::sin(lon) + img_r - 0.5f;  // y increase downside on image
     }
   }
 }
@@ -140,7 +137,6 @@ void DualEquidistantFishEye(Pose3f /* cam_rot */,                // Not used
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
 
   Pose3f cam_pose(90.0f, 90.0f, 0.0f);
-  cam_pose.ReflectInOrigin();
   cam_pose.ToRad();
 
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
@@ -149,15 +145,15 @@ void DualEquidistantFishEye(Pose3f /* cam_rot */,                // Not used
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else {
-      float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
+      float lon = std::atan2(-dir_copy[i * 3 + 1], -dir_copy[i * 3 + 0]);
+      float lat = std::asin(-dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
       if (lat < 0) {
         lon = math::kPi - lon;
       }
       float r = (1.0f - std::abs(lat) * 2.0f / math::kPi) * img_r;
 
       img_xy[i * 2 + 0] = r * std::cos(lon) + img_r + (lat > 0 ? -0.5f : 2 * img_r - 0.5f);
-      img_xy[i * 2 + 1] = r * std::sin(lon) + img_r - 0.5f;
+      img_xy[i * 2 + 1] = -r * std::sin(lon) + img_r - 0.5f;  // y increase downside on image
     }
   }
 }
@@ -172,15 +168,14 @@ void Linear(Pose3f cam_pose,               // Camera rotation. [lon, lat, roll]
             VisibleRange visible_range) {  // Visible range
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
 
-  cam_pose.ReflectInOrigin();
   cam_pose.ToRad();
 
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
   for (size_t i = 0; i < data_number; i++) {
-    if (dir_copy[i * 3 + 2] < 0 || std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
+    if (dir_copy[i * 3 + 2] > 0 || std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
-    } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] < 0) {
+    } else if (visible_range == VisibleRange::kFront && dir_copy[i * 3 + 2] > 0) {
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else if (visible_range == VisibleRange::kUpper && dir[i * 4 + 2] > 0) {
@@ -193,8 +188,8 @@ void Linear(Pose3f cam_pose,               // Camera rotation. [lon, lat, roll]
       float x = dir_copy[i * 3 + 0] / dir_copy[i * 3 + 2];
       float y = dir_copy[i * 3 + 1] / dir_copy[i * 3 + 2];
 
-      img_xy[i * 2 + 0] = img_wid / 2.0f * x / std::tan(hov * math::kDegreeToRad) + img_wid / 2.0f;
-      img_xy[i * 2 + 1] = img_wid / 2.0f * y / std::tan(hov * math::kDegreeToRad) + img_hei / 2.0f;
+      img_xy[i * 2 + 0] = img_wid / 2.0f + img_wid / 2.0f * x / std::tan(hov * math::kDegreeToRad);
+      img_xy[i * 2 + 1] = img_hei / 2.0f - img_wid / 2.0f * y / std::tan(hov * math::kDegreeToRad);
     }
   }
 }
@@ -211,8 +206,7 @@ void Equirectangular(Pose3f /* cam_pose */,               // Not used
 
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
 
-  Pose3f cam_pose(180.0f, -90.0f, 0.0f);
-  cam_pose.ReflectInOrigin();
+  Pose3f cam_pose(0.0f, 90.0f, 0.0f);
   cam_pose.ToRad();
 
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
@@ -221,10 +215,10 @@ void Equirectangular(Pose3f /* cam_pose */,               // Not used
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
     } else {
-      float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
-      float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
+      float lon = std::atan2(-dir_copy[i * 3 + 1], -dir_copy[i * 3 + 0]);
+      float lat = std::asin(-dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
       img_xy[i * 2 + 0] = static_cast<int>(img_wid / 2.0f + lon / math::kPi * 2 * img_r - 0.5f);
-      img_xy[i * 2 + 1] = static_cast<int>(img_hei / 2.0f + lat / math::kPi * 2 * img_r - 0.5f);
+      img_xy[i * 2 + 1] = static_cast<int>(img_hei / 2.0f - lat / math::kPi * 2 * img_r - 0.5f);
     }
   }
 }
@@ -971,7 +965,6 @@ void Renderer::DrawRadiusGrids() {
 
   std::vector<float> line_pts;
   Pose3f sun_pose{ 90.0f, sun_ctx_->GetSunAltitude(), 0 };
-  sun_pose.ReflectInOrigin();
   sun_pose.ToRad();
   for (const auto& g : render_ctx_->GetRadiusGrids()) {
     line_pts.clear();
@@ -981,9 +974,9 @@ void Renderer::DrawRadiusGrids() {
     float central_dir[3]{};
     float curr_xy[2]{};
     for (float ang = 0.0f; ang < 360.0f + kAngStep / 2; ang += kAngStep) {
-      central_dir[0] = std::cos(ang * math::kDegreeToRad) * std::sin(g.value * math::kDegreeToRad);
-      central_dir[1] = std::sin(ang * math::kDegreeToRad) * std::sin(g.value * math::kDegreeToRad);
-      central_dir[2] = std::cos(g.value * math::kDegreeToRad);
+      central_dir[0] = -std::cos(ang * math::kDegreeToRad) * std::sin(g.value * math::kDegreeToRad);
+      central_dir[1] = -std::sin(ang * math::kDegreeToRad) * std::sin(g.value * math::kDegreeToRad);
+      central_dir[2] = -std::cos(g.value * math::kDegreeToRad);
       RotateZBack(sun_pose.val(), central_dir, curr_dir);
       pf(cam_pose, hov, 1, curr_dir, img_wid, img_hei, curr_xy, visible_range);
       if (need_offset) {

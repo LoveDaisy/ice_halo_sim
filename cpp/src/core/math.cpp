@@ -568,12 +568,6 @@ void Pose3<T>::ToRad() {
   }
 }
 
-template <class T>
-void Pose3<T>::ReflectInOrigin() {
-  val_.x(val_.x() * -1);
-  val_.y(val_.y() * -1);
-}
-
 template class Pose3<float>;
 
 

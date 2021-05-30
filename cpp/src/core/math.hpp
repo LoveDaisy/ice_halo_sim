@@ -93,7 +93,6 @@ class Pose3 {
   AngleUnit unit() const;
   void ToDegree();
   void ToRad();
-  void ReflectInOrigin();
 
  private:
   Vec3<T> val_;
