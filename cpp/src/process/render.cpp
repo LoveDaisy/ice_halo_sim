@@ -109,7 +109,7 @@ void DualEqualAreaFishEye(Pose3f /* cam_rot */,                // Not used
   cam_pose.ToRad();
 
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
-  for (decltype(data_number) i = 0; i < data_number; i++) {
+  for (size_t i = 0; i < data_number; i++) {
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
@@ -144,7 +144,7 @@ void DualEquidistantFishEye(Pose3f /* cam_rot */,                // Not used
   cam_pose.ToRad();
 
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
-  for (decltype(data_number) i = 0; i < data_number; i++) {
+  for (size_t i = 0; i < data_number; i++) {
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
@@ -163,13 +163,13 @@ void DualEquidistantFishEye(Pose3f /* cam_rot */,                // Not used
 }
 
 
-void RectLinear(Pose3f cam_pose,               // Camera rotation. [lon, lat, roll]
-                float hov,                     // Half field of view.
-                size_t data_number,            // Data number
-                const float* dir,              // Ray directions, [x, y, z]
-                int img_wid, int img_hei,      // Image size
-                float* img_xy,                 // Image coordinates
-                VisibleRange visible_range) {  // Visible range
+void Linear(Pose3f cam_pose,               // Camera rotation. [lon, lat, roll]
+            float hov,                     // Half field of view.
+            size_t data_number,            // Data number
+            const float* dir,              // Ray directions, [x, y, z]
+            int img_wid, int img_hei,      // Image size
+            float* img_xy,                 // Image coordinates
+            VisibleRange visible_range) {  // Visible range
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
 
   cam_pose.ReflectInOrigin();
@@ -200,13 +200,44 @@ void RectLinear(Pose3f cam_pose,               // Camera rotation. [lon, lat, ro
 }
 
 
+void Equirectangular(Pose3f /* cam_pose */,               // Not used
+                     float /* hov */,                     // Not used
+                     size_t data_number,                  // Data number
+                     const float* dir,                    // Ray directions [x, y, z]
+                     int img_wid, int img_hei,            // Image size
+                     float* img_xy,                       // Image coordinates
+                     VisibleRange /* visible_range */) {  // Not used
+  float img_r = std::min(img_wid / 2, img_hei) / 2.0f;
+
+  std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
+
+  Pose3f cam_pose(180.0f, -90.0f, 0.0f);
+  cam_pose.ReflectInOrigin();
+  cam_pose.ToRad();
+
+  RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
+  for (size_t i = 0; i < data_number; i++) {
+    if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
+      img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
+      img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();
+    } else {
+      float lon = std::atan2(dir_copy[i * 3 + 1], dir_copy[i * 3 + 0]);
+      float lat = std::asin(dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
+      img_xy[i * 2 + 0] = static_cast<int>(img_wid / 2.0f + lon / math::kPi * 2 * img_r - 0.5f);
+      img_xy[i * 2 + 1] = static_cast<int>(img_hei / 2.0f + lat / math::kPi * 2 * img_r - 0.5f);
+    }
+  }
+}
+
+
 ProjectionFunction GetProjectionFunction(LensType lens_type) {
   static EnumMap<LensType, ProjectionFunction> projection_functions = {
-    { LensType::kLinear, &RectLinear },
+    { LensType::kLinear, &Linear },
     { LensType::kEqualArea, &EqualAreaFishEye },
     { LensType::kEquidistant, &EquidistantFishEye },
     { LensType::kDualEquidistant, &DualEquidistantFishEye },
     { LensType::kDualEqualArea, &DualEqualAreaFishEye },
+    { LensType::kEquirectangular, &Equirectangular },
   };
 
   if (projection_functions.count(lens_type)) {
@@ -611,13 +642,6 @@ void Renderer::LoadRayData(int identifier, const RayCollectionInfo& collection_i
     throw std::invalid_argument("Render context is not set!");
   }
 
-  auto projection_type = cam_ctx_->GetLensType();
-  auto pf = GetProjectionFunction(projection_type);
-  if (!pf) {
-    LOG_ERROR("Unknown projection type!");
-    return;
-  }
-
   auto weight = final_ray_data.wavelength_weight;
   auto color_compact_level = render_ctx_->GetColorCompactLevel();
   auto wavelength = final_ray_data.wavelength;
@@ -647,21 +671,26 @@ void Renderer::LoadRayData(int identifier, const RayCollectionInfo& collection_i
   auto* current_data_compensation = data_cmp_iter->second.get();
 
   if (collection_info.is_partial_data) {
-    LoadPartialRayData(collection_info.idx, projection_type, final_ray_data, current_data, current_data_compensation);
+    LoadPartialRayData(collection_info.idx, final_ray_data, current_data, current_data_compensation);
   } else {
-    LoadFullRayData(projection_type, final_ray_data, current_data, current_data_compensation);
+    LoadFullRayData(final_ray_data, current_data, current_data_compensation);
   }
 
   total_w_ += final_ray_data.init_ray_num * weight;
 }
 
 
-void Renderer::LoadPartialRayData(const std::vector<size_t>& idx, LensType projection_type,
-                                  const SimpleRayData& final_ray_data, float* current_data,
-                                  float* current_data_compensation) {
+void Renderer::LoadPartialRayData(const std::vector<size_t>& idx, const SimpleRayData& final_ray_data,
+                                  float* current_data, float* current_data_compensation) {
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
+
+  auto projection_type = cam_ctx_->GetLensType();
   auto pf = GetProjectionFunction(projection_type);
+  if (!pf) {
+    LOG_ERROR("Unknown projection type!");
+    return;
+  }
 
   const auto* final_ray_buf = final_ray_data.buf.get();
   auto weight = final_ray_data.wavelength_weight;
@@ -678,7 +707,8 @@ void Renderer::LoadPartialRayData(const std::vector<size_t>& idx, LensType proje
       }
       int x = static_cast<int>(tmp_xy[j * 2 + 0]);
       int y = static_cast<int>(tmp_xy[j * 2 + 1]);
-      if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
+      if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant &&
+          projection_type != LensType::kEquirectangular) {
         x += render_ctx_->GetImageOffsetX();
         y += render_ctx_->GetImageOffsetY();
       }
@@ -694,11 +724,17 @@ void Renderer::LoadPartialRayData(const std::vector<size_t>& idx, LensType proje
 }
 
 
-void Renderer::LoadFullRayData(LensType projection_type, const SimpleRayData& final_ray_data, float* current_data,
+void Renderer::LoadFullRayData(const SimpleRayData& final_ray_data, float* current_data,
                                float* current_data_compensation) {
   auto img_hei = render_ctx_->GetImageHeight();
   auto img_wid = render_ctx_->GetImageWidth();
+
+  auto projection_type = cam_ctx_->GetLensType();
   auto pf = GetProjectionFunction(projection_type);
+  if (!pf) {
+    LOG_ERROR("Unknown projection type!");
+    return;
+  }
 
   auto num = final_ray_data.buf_ray_num;
   const auto* final_ray_buf = final_ray_data.buf.get();
@@ -715,7 +751,8 @@ void Renderer::LoadFullRayData(LensType projection_type, const SimpleRayData& fi
       }
       int x = static_cast<int>(tmp_xy[j * 2 + 0]);
       int y = static_cast<int>(tmp_xy[j * 2 + 1]);
-      if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant) {
+      if (projection_type != LensType::kDualEqualArea && projection_type != LensType::kDualEquidistant &&
+          projection_type != LensType::kEquirectangular) {
         x += render_ctx_->GetImageOffsetX();
         y += render_ctx_->GetImageOffsetY();
       }
@@ -877,7 +914,8 @@ void Renderer::DrawElevationGrids() {
   auto img_hei = render_ctx_->GetImageHeight();
   auto visible_range = render_ctx_->GetVisibleRange();
   auto need_offset =
-      (cam_ctx_->GetLensType() != LensType::kDualEqualArea && cam_ctx_->GetLensType() != LensType::kDualEquidistant);
+      (cam_ctx_->GetLensType() != LensType::kDualEqualArea && cam_ctx_->GetLensType() != LensType::kDualEquidistant &&
+       cam_ctx_->GetLensType() != LensType::kEquirectangular);
 
   std::vector<GridLine> elevation_grids{};
   for (const auto& g : render_ctx_->GetElevationGrids()) {
@@ -928,7 +966,8 @@ void Renderer::DrawRadiusGrids() {
   auto img_hei = render_ctx_->GetImageHeight();
   auto visible_range = render_ctx_->GetVisibleRange();
   auto need_offset =
-      (cam_ctx_->GetLensType() != LensType::kDualEqualArea && cam_ctx_->GetLensType() != LensType::kDualEquidistant);
+      (cam_ctx_->GetLensType() != LensType::kDualEqualArea && cam_ctx_->GetLensType() != LensType::kDualEquidistant &&
+       cam_ctx_->GetLensType() != LensType::kEquirectangular);
 
   std::vector<float> line_pts;
   Pose3f sun_pose{ 90.0f, sun_ctx_->GetSunAltitude(), 0 };

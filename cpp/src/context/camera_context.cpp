@@ -20,21 +20,6 @@ CameraContextPtrU CameraContext::CreateDefault() {
 }
 
 
-constexpr float CameraContext::kMinAngleRound;
-constexpr float CameraContext::kMaxAngleRound;
-constexpr float CameraContext::kMinAngleTilt;
-constexpr float CameraContext::kMaxAngleTilt;
-constexpr float CameraContext::kMinAngleHeading;
-constexpr float CameraContext::kMaxAngleHeading;
-
-constexpr float CameraContext::kMaxFovLinear;
-constexpr float CameraContext::kMaxFovFisheye;
-
-constexpr float CameraContext::kDefaultCamAzimuth;
-constexpr float CameraContext::kDefaultCamElevation;
-constexpr float CameraContext::kDefaultCamRoll;
-
-
 Pose3f CameraContext::GetCameraPose() const {
   return Pose3f(target_dir_);
 }
@@ -120,6 +105,9 @@ void CameraContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Allocat
     case LensType::kDualEquidistant:
       p.Set(root, "dual_fisheye_equidistant", allocator);
       break;
+    case LensType::kEquirectangular:
+      p.Set(root, "equirectangular", allocator);
+      break;
     case LensType::kEqualArea:
     default:
       p.Set(root, "fisheye_equalarea", allocator);
@@ -186,6 +174,8 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
       SetLensType(LensType::kDualEquidistant);
     } else if (*p == "dual_fisheye_equalarea") {
       SetLensType(LensType::kDualEqualArea);
+    } else if (*p == "equirectangular") {
+      SetLensType(LensType::kEquirectangular);
     } else {
       LOG_VERBOSE("Camera config <lens> cannot be recognized. Use default equal-area fisheye!");
     }
