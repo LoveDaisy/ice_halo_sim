@@ -895,13 +895,14 @@ void Simulator::StoreRaySegments(const CrystalContext* crystal_ctx, AbstractRayP
   const auto* crystal = crystal_ctx->GetCrystal();
   filter->ApplySymmetry(crystal_ctx);
   auto* ray_pool = RaySegmentPool::GetInstance();
+  auto* r_array = ray_pool->AllocateObjectArray(active_ray_num_ * 2);
   for (size_t i = 0; i < active_ray_num_ * 2; i++) {
     if (buffer_.w[1][i] <= 0) {  // Refractive rays in total reflection case
       continue;
     }
 
-    auto* r = ray_pool->GetObject(buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3, buffer_.w[1][i],
-                                  buffer_.face_id[0][i / 2]);
+    auto* r = new (r_array + i)
+        RaySegment(buffer_.pt[0] + i / 2 * 3, buffer_.dir[1] + i * 3, buffer_.w[1][i], buffer_.face_id[0][i / 2]);
     if (buffer_.face_id[1][i] < 0) {
       r->state = RaySegmentState::kFinished;
     }
