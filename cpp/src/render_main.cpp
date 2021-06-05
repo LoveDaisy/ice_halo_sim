@@ -115,13 +115,13 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  icehalo::SimulationData ray_data;
+  icehalo::SimulationData simulation_data;
   auto data_files = icehalo::ListDataFiles(ctx->GetDataDirectory().c_str());
   for (size_t i = 0; i < data_files.size(); i++) {
     auto t0 = std::chrono::system_clock::now();
     auto& file = data_files[i];
     file.Open(icehalo::FileOpenMode::kRead);
-    ray_data.Deserialize(file, icehalo::endian::kUnknownEndian);
+    simulation_data.Deserialize(file, icehalo::endian::kUnknownEndian);
     file.Close();
     auto t1 = std::chrono::system_clock::now();
     std::chrono::duration<float, std::milli> loading_time = t1 - t0;
@@ -130,7 +130,7 @@ int main(int argc, char* argv[]) {
     size_t exit_seg_num = 0;
     if (split_render_ctx && split_render_ctx->GetSplitNumber() > 0) {
       auto split_ray_data =
-          RenderSplitHalos(ray_data, ctx, split_render_ctx, split_renderer_candidates, renderer_ray_set);
+          RenderSplitHalos(simulation_data, ctx, split_render_ctx, split_renderer_candidates, renderer_ray_set);
       const auto& exit_ray_data = std::get<1>(split_ray_data);
       icehalo::RayCollectionInfo final_ray_info = std::get<0>(split_ray_data)[0];
       final_ray_info.is_partial_data = false;
@@ -138,11 +138,10 @@ int main(int argc, char* argv[]) {
       init_ray_num = exit_ray_data.init_ray_num;
       exit_seg_num = exit_ray_data.buf_ray_num;
     } else {
-      auto final_ray_data = ray_data.CollectFinalRayData();
-      renderer.LoadRayData(static_cast<size_t>(final_ray_data.second.wavelength), final_ray_data.first,
-                           final_ray_data.second);
-      init_ray_num = final_ray_data.second.init_ray_num;
-      exit_seg_num = final_ray_data.second.buf_ray_num;
+      auto [ray_info, ray_data] = simulation_data.CollectFinalRayData();
+      renderer.LoadRayData(static_cast<size_t>(ray_data.wavelength), ray_info, ray_data);
+      init_ray_num = ray_data.init_ray_num;
+      exit_seg_num = ray_data.buf_ray_num;
     }
 
     auto t2 = std::chrono::system_clock::now();

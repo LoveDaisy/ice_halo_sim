@@ -211,11 +211,11 @@ int main(int argc, char* argv[]) {
         final_ray_info.total_energy = exit_ray_data.init_ray_num;
         renderer.LoadRayData(wavelengths[i].wavelength, final_ray_info, exit_ray_data);
       } else {
-        auto ray_data = simulation_data.CollectFinalRayData();
-        if (ray_data.second.buf_ray_num == 0) {
+        auto [ray_info, ray_data] = simulation_data.CollectFinalRayData();
+        if (ray_data.buf_ray_num == 0) {
           continue;
         }
-        renderer.LoadRayData(wavelengths[i].wavelength, ray_data.first, ray_data.second);
+        renderer.LoadRayData(wavelengths[i].wavelength, ray_info, ray_data);
       }
       auto t2 = std::chrono::system_clock::now();
       diff = t2 - t0;

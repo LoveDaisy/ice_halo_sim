@@ -113,7 +113,7 @@ void SimulationData::AddExitRaySegment(RaySegment* r) {
 }
 
 
-std::pair<RayCollectionInfo, SimpleRayData> SimulationData::CollectFinalRayData() {
+std::tuple<RayCollectionInfo, SimpleRayData> SimulationData::CollectFinalRayData() {
   size_t num = 0;
   for (const auto& n : exit_ray_seg_num_) {
     num += n;

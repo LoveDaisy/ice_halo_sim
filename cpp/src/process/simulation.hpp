@@ -73,8 +73,7 @@ class SimulationData : public ISerializable {
   void PrepareNewScatter(size_t ray_num);
   void AddRay(RayInfo* ray);
 
-  void MakeRayPathMap(const ProjectContextPtr& proj_ctx);
-  std::pair<RayCollectionInfo, SimpleRayData> CollectFinalRayData();
+  std::tuple<RayCollectionInfo, SimpleRayData> CollectFinalRayData();
   std::tuple<RayCollectionInfoList, SimpleRayData> CollectSplitRayData(const ProjectContextPtr& ctx,
                                                                        const RenderSplitter& splitter);
 
@@ -124,6 +123,7 @@ class SimulationData : public ISerializable {
   void Deserialize(File& file, endian::Endianness endianness) override;
 
  private:
+  void MakeRayPathMap(const ProjectContextPtr& proj_ctx);
   std::tuple<RayCollectionInfoList, SimpleRayData> CollectSplitHaloRayData(const ProjectContextPtr& ctx);
   std::tuple<RayCollectionInfoList, SimpleRayData> CollectSplitFilterRayData(const ProjectContextPtr& ctx,
                                                                              const RenderSplitter& splitter);
