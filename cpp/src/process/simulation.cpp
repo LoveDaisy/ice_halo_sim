@@ -726,6 +726,7 @@ void Simulator::Run() {
     for (const auto& c : multi_scatter_info[i]->GetCrystalInfo()) {
       active_ray_num_ = static_cast<size_t>(c.population * total_ray_num_);
       if (buffer_size_ < total_ray_num_ * kBufferSizeFactor) {
+        LOG_DEBUG("Allocate buffer in Run()");
         buffer_size_ = total_ray_num_ * kBufferSizeFactor;
         buffer_.Allocate(buffer_size_);
       }
@@ -824,6 +825,7 @@ void Simulator::InitMainAxis(const CrystalContext* ctx, float* axis) {
 void Simulator::PrepareMultiScatterRays(float prob) {
   auto last_exit_ray_seg_num = simulation_ray_data_.GetLastExitRaySegments().size();
   if (buffer_size_ < last_exit_ray_seg_num * 2) {
+    LOG_DEBUG("Allocate buffer in PrepareMultiScatterRays()");
     buffer_size_ = last_exit_ray_seg_num * 2;
     buffer_.Allocate(buffer_size_);
   }
@@ -833,7 +835,7 @@ void Simulator::PrepareMultiScatterRays(float prob) {
 
   auto* rng = RandomNumberGenerator::GetInstance();
   size_t idx = 0;
-  for (const auto& r : simulation_ray_data_.GetLastExitRaySegments()) {
+  for (const auto r : simulation_ray_data_.GetLastExitRaySegments()) {
     if (r->w < context_->kScatMinW) {
       r->state = RaySegmentState::kAirAbsorbed;
       continue;
@@ -873,6 +875,7 @@ void Simulator::TraceRays(const CrystalContext* crystal_ctx, AbstractRayPathFilt
   auto n = static_cast<float>(IceRefractiveIndex::Get(simulation_ray_data_.wavelength_info_.wavelength));
   for (int i = 0; i < max_recursion_num; i++) {
     if (buffer_size_ < active_ray_num_ * 2) {
+      LOG_DEBUG("Allocate buffer in TraceRays()");
       buffer_size_ = active_ray_num_ * kBufferSizeFactor;
       buffer_.Allocate(buffer_size_);
     }
