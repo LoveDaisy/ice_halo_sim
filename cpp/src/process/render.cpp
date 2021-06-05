@@ -473,12 +473,11 @@ void SpecToRgbJob(int i, const std::vector<ImageSpectrumData>& spec_data, float 
                   const float* ray_color, uint8_t* rgb_data) {
   /* Step 1. Spectrum to XYZ */
   float xyz[3]{};
-  for (const auto& d : spec_data) {
-    auto wl = d.first;
+  for (const auto& [wl, val] : spec_data) {
     if (wl < kMinWavelength || wl > kMaxWaveLength) {
       continue;
     }
-    float v = d.second[i] * factor;
+    float v = val[i] * factor;
     xyz[0] += kCmfX[wl - kMinWavelength] * v;
     xyz[1] += kCmfY[wl - kMinWavelength] * v;
     xyz[2] += kCmfZ[wl - kMinWavelength] * v;

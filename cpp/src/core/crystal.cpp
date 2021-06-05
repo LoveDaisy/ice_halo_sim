@@ -360,9 +360,9 @@ void Crystal::RefineFaceNumber() {
       continue;
     }
     const auto* curr_norm = face_norm_.get() + i * 3;
-    for (const auto& p : primitive_fn_table) {
-      if (std::abs(Dot3(p.first.val(), curr_norm) - 1) < math::kFloatEps) {
-        face_number_table_[i] = p.second;
+    for (const auto& [p_norm, face_num] : primitive_fn_table) {
+      if (std::abs(Dot3(p_norm.val(), curr_norm) - 1) < math::kFloatEps) {
+        face_number_table_[i] = face_num;
         break;
       }
     }

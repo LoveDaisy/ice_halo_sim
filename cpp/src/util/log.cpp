@@ -214,10 +214,10 @@ void Logger::EmitLog(const char* file, int line, LogLevel level, std::string msg
     level, std::chrono::system_clock::now(), line, file, "", std::move(msg_str), std::this_thread::get_id()
   };
   std::unordered_set<LogDestPtr> dest_set;
-  for (auto& kv : filter_dest_list_) {
-    if (kv.first->Filter(msg) && !dest_set.count(kv.second)) {
-      kv.second->Write(msg, default_formatter_);
-      dest_set.emplace(kv.second);
+  for (auto& [filter, dest] : filter_dest_list_) {
+    if (filter->Filter(msg) && !dest_set.count(dest)) {
+      dest->Write(msg, default_formatter_);
+      dest_set.emplace(dest);
     }
   }
 }
@@ -239,10 +239,10 @@ void Logger::EmitTagLog(const char* file, int line, LogLevel level, const char* 
     level, std::chrono::system_clock::now(), line, file, tag, std::move(msg_str), std::this_thread::get_id()
   };
   std::unordered_set<LogDestPtr> dest_set;
-  for (auto& kv : filter_dest_list_) {
-    if (kv.first->Filter(msg) && !dest_set.count(kv.second)) {
-      kv.second->Write(msg, default_formatter_);
-      dest_set.emplace(kv.second);
+  for (auto& [filter, dest] : filter_dest_list_) {
+    if (filter->Filter(msg) && !dest_set.count(dest)) {
+      dest->Write(msg, default_formatter_);
+      dest_set.emplace(dest);
     }
   }
 }

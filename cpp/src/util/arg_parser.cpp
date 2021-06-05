@@ -44,22 +44,22 @@ void ArgParser::ShowHelp(const char* cmd) const {
     return;
   }
 
-  for (const auto& kv : option_value_num_) {
-    n = std::snprintf(buf + offset, kBufSize - offset, " %s", kv.first.c_str());
+  for (const auto& [opt_val, opt_num] : option_value_num_) {
+    n = std::snprintf(buf + offset, kBufSize - offset, " %s", opt_val.c_str());
     offset += n;
     if (offset > kBufSize) {
       return;
     }
 
-    auto [metavar, help_info] = option_meta_.at(kv.first);
-    if (kv.second < 0) {
+    auto [metavar, help_info] = option_meta_.at(opt_val);
+    if (opt_num < 0) {
       if (!metavar.empty()) {
         n = std::snprintf(buf + offset, kBufSize - offset, " [%s]...", metavar.c_str());
       } else {
         n = std::snprintf(buf + offset, kBufSize - offset, " [val]...");
       }
       offset += n;
-    } else if (kv.second == 1) {
+    } else if (opt_num == 1) {
       if (!metavar.empty()) {
         n = std::snprintf(buf + offset, kBufSize - offset, " %s", metavar.c_str());
       } else {
@@ -67,7 +67,7 @@ void ArgParser::ShowHelp(const char* cmd) const {
       }
       offset += n;
     } else {
-      for (int i = 0; i < kv.second; i++) {
+      for (int i = 0; i < opt_num; i++) {
         if (!metavar.empty()) {
           n = std::snprintf(buf + offset, kBufSize - offset, " %s%d", metavar.c_str(), i);
         } else {
@@ -231,8 +231,8 @@ ArgParseResult ArgParser::Parse(int argc, char** argv) const {
     }
   }
 
-  for (const auto& kv : option_value_num_) {
-    if (kv.second > 0 && !result.count(kv.first)) {
+  for (const auto& [opt_val, opt_num] : option_value_num_) {
+    if (opt_num > 0 && !result.count(opt_val)) {
       ShowHelp(argv[0]);
       throw std::invalid_argument("missing some required options!");
     }
