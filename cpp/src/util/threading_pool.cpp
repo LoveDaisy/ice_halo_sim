@@ -135,8 +135,8 @@ bool ThreadingPool::CommitRangeSliceJobs(int start, int end,
   auto num = static_cast<int>(pool_.size());
   bool res = true;
   for (int i = 0; i < num; i++) {
-    auto idx1 = (end - start) * i / num;
-    auto idx2 = (end - start) * (i + 1) / num;
+    auto idx1 = (end - start) * i / num + start;
+    auto idx2 = (end - start) * (i + 1) / num + start;
     res = res && CommitSingleJob([=](int ti) { range_slice_func(ti, idx1, idx2); });
   }
   return res;
