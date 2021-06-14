@@ -126,7 +126,7 @@ int main(int argc, char* argv[]) {
   icehalo::ArgParser parser;
   parser.AddArgument("-v", 0, "verbose", "make output verbose");
   parser.AddArgument("-d", 0, "debug", "display debug info");
-  parser.AddArgument("-n", 1, "repeat-number", "repeat number");
+  parser.AddArgument("-n", 1, "repeat-number", "repeat number (-1 means infinity)");
   parser.AddArgument("-f", 1, "config-file", "config file");
   icehalo::ArgParseResult arg_parse_result;
   try {
