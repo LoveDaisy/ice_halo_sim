@@ -353,7 +353,7 @@ void Optics::Propagate(const Crystal* crystal, size_t num,                      
 
 
 float Optics::GetReflectRatio(float cos_angle, float rr) {
-  float s = std::sqrt(1.0f - cos_angle * cos_angle);
+  float s = std::sqrt(std::max(1.0f - cos_angle * cos_angle, 0.0f));
   float c = std::abs(cos_angle);
   float d = std::max(1.0f - (rr * s) * (rr * s), 0.0f);
   float d_sqrt = std::sqrt(d);
