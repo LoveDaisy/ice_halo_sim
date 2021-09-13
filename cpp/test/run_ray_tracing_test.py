@@ -9,13 +9,16 @@ import logging
 
 logging.basicConfig(format='%(asctime)s [%(levelname)s]: %(message)s', level=logging.DEBUG)
 
+
 def main(exe: str, config: str, ref: str):
     res = subprocess.run(f'"{exe}" "{config}" > tmp.log', timeout=2, shell=True, capture_output=True)
     res.check_returncode()
 
     with open('tmp.log', 'r') as tmp_log, open(ref, 'r') as ref_log:
-        tmp_log_lines = [line.strip() for line in tmp_log if line.startswith('[DEBUG]')]
-        ref_log_lines = [line.strip() for line in ref_log if line.startswith('[DEBUG]')]
+        tmp_log_lines = [line.strip() for line in tmp_log if line.startswith('[VERBOSE]') and
+                         line.split(']')[1][1] in ('-', 'v', 'f')]
+        ref_log_lines = [line.strip() for line in ref_log if line.startswith('[VERBOSE]') and
+                         line.split(']')[1][1] in ('-', 'v', 'f')]
 
         read_lines = 0
         same_lines = 0
@@ -31,6 +34,7 @@ def main(exe: str, config: str, ref: str):
         if same_lines == 0:
             logging.warning('No same lines!')
             exit(-1)
+
 
 if __name__ == '__main__':
     parser = ArgumentParser()
