@@ -602,10 +602,10 @@ RandomNumberGenerator::RandomNumberGenerator(uint32_t seed)
 
 RandomNumberGenerator* RandomNumberGenerator::GetInstance() {
 #ifdef RANDOM_SEED
-  static std::unique_ptr<RandomNumberGenerator> instance_{ new RandomNumberGenerator(
+  static thread_local std::unique_ptr<RandomNumberGenerator> instance_{ new RandomNumberGenerator(
       static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count())) };
 #else
-  static std::unique_ptr<RandomNumberGenerator> instance_{ new RandomNumberGenerator(kDefaultRandomSeed) };
+  static thread_local std::unique_ptr<RandomNumberGenerator> instance_{ new RandomNumberGenerator(kDefaultRandomSeed) };
 #endif
   return instance_.get();
 }
