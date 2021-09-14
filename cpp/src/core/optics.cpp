@@ -332,9 +332,9 @@ void Optics::Propagate(const Crystal* crystal, size_t num,                      
   }
 
   auto total_faces = crystal->TotalFaces();
-  auto face_bases = crystal->GetFaceBaseVector();
-  auto face_vertexes = crystal->GetFaceVertex();
-  auto face_norms = crystal->GetFaceNorm();
+  const auto* face_bases = crystal->GetFaceBaseVector();
+  const auto* face_vertexes = crystal->GetFaceVertex();
+  const auto* face_norms = crystal->GetFaceNorm();
   for (size_t i = 0; i < num; i++) {
     if (w_in[i] < ProjectContext::kPropMinW) {
       continue;
