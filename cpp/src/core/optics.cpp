@@ -327,7 +327,7 @@ void RayInfo::Deserialize(File& file, endian::Endianness endianness) {
 void Optics::Propagate(const Crystal* crystal, size_t num,                                                 // input
                        const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
                        float* pt_out, int* face_id_out) {                                                  // output
-  for (decltype(num) i = 0; i < num; i++) {
+  for (size_t i = 0; i < num; i++) {
     face_id_out[i] = -1;
   }
 

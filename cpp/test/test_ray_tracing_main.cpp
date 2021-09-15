@@ -22,7 +22,7 @@ int main(int argc, char* argv[]) {
   LOG_INFO("Initialization: %.2fms", diff.count());
 
   const auto& wavelengths = context->wavelengths_;
-  for (decltype(wavelengths.size()) i = 0; i < wavelengths.size(); i++) {
+  for (size_t i = 0; i < wavelengths.size(); i++) {
     const auto& wl = wavelengths[i];
     LOG_INFO("starting at wavelength: %d", wl.wavelength);
     simulator.SetCurrentWavelengthIndex(i);

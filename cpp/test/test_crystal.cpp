@@ -11,7 +11,7 @@ class CrystalTest : public ::testing::Test {
  protected:
   static void CheckVertex(const std::vector<icehalo::Vec3f>& vtx1, const std::vector<icehalo::Vec3f>& vtx2) {
     ASSERT_EQ(vtx1.size(), vtx2.size());
-    for (decltype(vtx1.size()) i = 0; i < vtx1.size(); i++) {
+    for (size_t i = 0; i < vtx1.size(); i++) {
       const auto& p0 = vtx1[i];
       const auto& p = vtx2[i];
 
@@ -22,7 +22,7 @@ class CrystalTest : public ::testing::Test {
   static void CheckFaceId(const std::vector<icehalo::ShortIdType>& ids1,
                           const std::vector<icehalo::ShortIdType>& ids2) {
     ASSERT_EQ(ids1.size(), ids2.size());
-    for (decltype(ids1.size()) i = 0; i < ids1.size(); i++) {
+    for (size_t i = 0; i < ids1.size(); i++) {
       EXPECT_EQ(ids1[i], ids2[i]);
     }
   }
@@ -35,12 +35,12 @@ class CrystalTest : public ::testing::Test {
 
     ASSERT_EQ(c1->TotalFaces(), c2->TotalFaces());
     ASSERT_EQ(fn1.size(), fn2.size());
-    for (decltype(c1->TotalFaces()) i = 0; i < c1->TotalFaces(); i++) {
+    for (int i = 0; i < c1->TotalFaces(); i++) {
       const auto* n = n1 + i * 3;
       int fn = fn1[i];
 
       bool find_same_norm = false;
-      for (decltype(c2->TotalFaces()) j = 0; j < c2->TotalFaces(); j++) {
+      for (int j = 0; j < c2->TotalFaces(); j++) {
         const auto* tmp_n = n2 + j * 3;
         int tmp_fn = fn2[j];
         if (icehalo::DiffNorm3(n, tmp_n) < icehalo::math::kFloatEps) {
@@ -51,12 +51,12 @@ class CrystalTest : public ::testing::Test {
       EXPECT_TRUE(find_same_norm);
     }
 
-    for (decltype(c2->TotalFaces()) i = 0; i < c2->TotalFaces(); i++) {
+    for (int i = 0; i < c2->TotalFaces(); i++) {
       const auto* n = n2 + i * 3;
       int fn = fn2[i];
 
       bool find_same_norm = false;
-      for (decltype(c1->TotalFaces()) j = 0; j < c1->TotalFaces(); j++) {
+      for (int j = 0; j < c1->TotalFaces(); j++) {
         const auto* tmp_n = n1 + j * 3;
         int tmp_fn = fn1[j];
         if (icehalo::DiffNorm3(n, tmp_n) < icehalo::math::kFloatEps) {

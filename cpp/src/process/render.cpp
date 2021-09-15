@@ -65,7 +65,7 @@ void EquidistantFishEye(Pose3f cam_pose,               // Camera rotation. [lon,
   cam_pose.ToRad();
 
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
-  for (decltype(data_number) i = 0; i < data_number; i++) {
+  for (size_t i = 0; i < data_number; i++) {
     if (std::abs(Norm3(dir_copy.get() + i * 3) - 1.0) > 1e-4) {
       img_xy[i * 2 + 0] = std::numeric_limits<float>::quiet_NaN();
       img_xy[i * 2 + 1] = std::numeric_limits<float>::quiet_NaN();

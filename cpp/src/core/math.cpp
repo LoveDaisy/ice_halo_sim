@@ -109,7 +109,7 @@ void RotateZ(const float* lon_lat_roll,  // longitude, latitude, roll
   }
 #else
   // Then do the matrix multiplication (using Dot3 actually)
-  for (decltype(data_num) i = 0; i < data_num; i++) {
+  for (size_t i = 0; i < data_num; i++) {
     const float* tmp_v = input_vec + i * input_step;
     float* tmp_out = output_vec + i * output_step;
     for (int j = 0; j < 3; j++) {
@@ -155,7 +155,7 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
   }
 #else
   // Then do the matrix multiplication (using Dot3 actually)
-  for (decltype(data_num) i = 0; i < data_num; i++) {
+  for (size_t i = 0; i < data_num; i++) {
     const float* tmp_v = input_vec + i * 3;
     float* tmp_out = output_vec + i * 3;
     for (int j = 0; j < 3; j++) {
@@ -242,7 +242,7 @@ void SortAndRemoveDuplicate(std::vector<Vec3f>* pts) {
 
 std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& n0, float d0) {
   std::vector<int> pts_idx;
-  for (decltype(pts.size()) j = 0; j < pts.size(); j++) {
+  for (size_t j = 0; j < pts.size(); j++) {
     const auto& p = pts[j];
     if (FloatEqual(Vec3f::Dot(n0, p) + d0, 0)) {
       pts_idx.push_back(static_cast<int>(j));
@@ -312,7 +312,7 @@ void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,  
   });
 
   /* Construct a triangular division */
-  for (decltype(pts_idx.size()) j = 1; j < pts_idx.size() - 1; j++) {
+  for (size_t j = 1; j < pts_idx.size() - 1; j++) {
     faces.emplace_back(pts_idx[0], pts_idx[j], pts_idx[j + 1]);
   }
 }
@@ -646,7 +646,7 @@ void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float
   std::unique_ptr<float[]> tmp_dir{ new float[num * 3] };
 
   double dz = 2 * std::sin(std / 2.0 * math::kDegreeToRad) * std::sin(std / 2.0 * math::kDegreeToRad);
-  for (decltype(num) i = 0; i < num; i++) {
+  for (size_t i = 0; i < num; i++) {
     double udz = rng->GetUniform() * dz;
     double q = rng->GetUniform() * 2 * math::kPi;
 
@@ -661,7 +661,7 @@ void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float
 
 void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t step) {
   auto* rng = RandomNumberGenerator::GetInstance();
-  for (decltype(num) i = 0; i < num; i++) {
+  for (size_t i = 0; i < num; i++) {
     float u = rng->GetUniform() * 2 - 1;
     float lambda = rng->GetUniform() * 2 * math::kPi;
 
@@ -673,7 +673,7 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t ste
 
 void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num) {
   auto* rng = RandomNumberGenerator::GetInstance();
-  for (decltype(num) i = 0; i < num; i++) {
+  for (size_t i = 0; i < num; i++) {
     float phi = rng->Get(axis_dist.latitude_dist,                       // distribute
                          axis_dist.latitude_mean * math::kDegreeToRad,  // mean
                          axis_dist.latitude_std * math::kDegreeToRad);  // standard deviation
@@ -700,7 +700,7 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
 
 void RandomSampler::SampleTriangularPoints(const float* vertexes, float* data, size_t num) {
   auto* rng = RandomNumberGenerator::GetInstance();
-  for (decltype(num) i = 0; i < num; i++) {
+  for (size_t i = 0; i < num; i++) {
     float a = rng->GetUniform();
     float b = rng->GetUniform();
 
@@ -722,7 +722,7 @@ int RandomSampler::SampleInt(const float* p, int max) {
   float current_cum_p = 0;
   float current_p = rng->GetUniform();
 
-  for (decltype(max) i = 0; i < max; i++) {
+  for (size_t i = 0; i < max; i++) {
     current_cum_p += p[i];
     if (current_p < current_cum_p) {
       return i;

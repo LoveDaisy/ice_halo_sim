@@ -212,7 +212,7 @@ void ProjectContext::ParseBasicSettings(rapidjson::Document& d) {
   }
 
   wavelengths_.clear();
-  for (decltype(tmp_wavelengths.size()) i = 0; i < tmp_wavelengths.size(); i++) {
+  for (size_t i = 0; i < tmp_wavelengths.size(); i++) {
     wavelengths_.emplace_back(WavelengthInfo{ static_cast<int>(tmp_wavelengths[i]), tmp_weights[i] });
   }
 

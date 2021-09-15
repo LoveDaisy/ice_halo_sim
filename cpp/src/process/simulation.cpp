@@ -786,6 +786,7 @@ void Simulator::InitEntryRays(const CrystalContext* ctx) {
     auto* prev_r = entry_ray_data_.ray_seg[entry_ray_offset_ + i];
     buffer_.w[0][i] = prev_r ? prev_r->w : 1.0f;
   });
+
   for (size_t i = 0; i < active_ray_num_; i++) {
     auto* prev_r = entry_ray_data_.ray_seg[entry_ray_offset_ + i];
     auto* r =
