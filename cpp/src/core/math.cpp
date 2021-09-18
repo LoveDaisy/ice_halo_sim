@@ -722,7 +722,7 @@ int RandomSampler::SampleInt(const float* p, int max) {
   float current_cum_p = 0;
   float current_p = rng->GetUniform();
 
-  for (size_t i = 0; i < max; i++) {
+  for (int i = 0; i < max; i++) {
     current_cum_p += p[i];
     if (current_p < current_cum_p) {
       return i;
