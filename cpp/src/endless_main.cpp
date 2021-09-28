@@ -92,7 +92,7 @@ size_t PrepareSplitRender(const icehalo::ProjectContextPtr& proj_ctx, const iceh
     split_renderer_candidates.back().SetCameraContext(proj_ctx->cam_ctx_);
     split_renderer_candidates.back().SetRenderContext(split_render_ctx);
     split_renderer_candidates.back().SetSunContext(proj_ctx->sun_ctx_);
-    split_renderer_candidates.back().SetThreadingPool(std::move(threading_pool));
+    split_renderer_candidates.back().SetThreadingPool(threading_pool);
     renderer_ray_set.emplace_back();
   }
   return split_img_num;
