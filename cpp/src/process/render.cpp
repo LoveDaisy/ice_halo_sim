@@ -823,6 +823,11 @@ void DrawLine(size_t pt_num, const float* xy, int img_wid, int img_hei, uint8_t*
         (next_x < 0 || next_x >= img_wid || next_y < 0 || next_y >= img_hei)) {
       continue;
     }
+    auto d2 = (curr_x - next_x) * (curr_x - next_x) + (curr_y - next_y) * (curr_y - next_y);
+    auto exclusion_limit = std::max(img_wid, img_hei) * Renderer::kLineD2ExclusionLimitRatio;
+    if (d2 > exclusion_limit * exclusion_limit) {
+      continue;
+    }
 
     bool steep = std::abs(next_y - curr_y) > std::abs(next_x - curr_x);
     if (steep) {
@@ -925,10 +930,11 @@ void Renderer::DrawElevationGrids() {
   std::vector<float> line_pts;
   for (const auto& g : elevation_grids) {
     line_pts.clear();
-    constexpr float kAziStep = 1.0f;
+    float curr_step = kDefaultLineStep;
     float curr_dir[3]{};
     float curr_xy[2]{};
-    for (float azi = 0.0f; azi < 360.0f + kAziStep / 2; azi += kAziStep) {
+    float last_xy[2]{};
+    for (float azi = 0.0f; azi < 360.0f + curr_step / 2; /* update azi inside loop */) {
       curr_dir[0] = std::cos(azi * math::kDegreeToRad) * std::cos(g.value * math::kDegreeToRad);
       curr_dir[1] = std::sin(azi * math::kDegreeToRad) * std::cos(g.value * math::kDegreeToRad);
       curr_dir[2] = std::sin(g.value * math::kDegreeToRad);
@@ -937,6 +943,20 @@ void Renderer::DrawElevationGrids() {
         curr_xy[0] += render_ctx_->GetImageOffsetX();
         curr_xy[1] += render_ctx_->GetImageOffsetY();
       }
+      if (line_pts.size() >= 2 && (curr_xy[0] > 0 && curr_xy[0] < img_wid && curr_xy[1] > 0 && curr_xy[1] < img_hei)) {
+        float d2 = (last_xy[0] - curr_xy[0]) * (last_xy[0] - curr_xy[0]) +
+                   (last_xy[1] - curr_xy[1]) * (last_xy[1] - curr_xy[1]);
+        if (d2 > kLineD2Upper && curr_step > kMinLineStep) {
+          azi = azi - curr_step / 2.0f;
+          curr_step /= 2.0f;
+          continue;
+        } else if (d2 < kLineD2Lower && curr_step < kMaxLineStep) {
+          azi = azi + curr_step;
+          curr_step *= 2.0f;
+          continue;
+        }
+      }
+      azi += curr_step;
       line_pts.emplace_back(curr_xy[0]);
       line_pts.emplace_back(curr_xy[1]);
     }
@@ -967,12 +987,14 @@ void Renderer::DrawRadiusGrids() {
   sun_pose.ToRad();
   for (const auto& g : render_ctx_->GetRadiusGrids()) {
     line_pts.clear();
-    constexpr float kAngStep = 1.0f;
-    float curr_dir[3]{};
+    // constexpr float kAngStep = 1.0f;
+    float curr_step = kDefaultLineStep;
     float last_z = 0;
+    float curr_dir[3]{};
     float central_dir[3]{};
     float curr_xy[2]{};
-    for (float ang = 0.0f; ang < 360.0f + kAngStep / 2; ang += kAngStep) {
+    float last_xy[2]{};
+    for (float ang = 0.0f; ang < 360.0f + curr_step / 2; /* update ang inside loop */) {
       central_dir[0] = -std::cos(ang * math::kDegreeToRad) * std::sin(g.value * math::kDegreeToRad);
       central_dir[1] = -std::sin(ang * math::kDegreeToRad) * std::sin(g.value * math::kDegreeToRad);
       central_dir[2] = -std::cos(g.value * math::kDegreeToRad);
@@ -982,6 +1004,21 @@ void Renderer::DrawRadiusGrids() {
         curr_xy[0] += render_ctx_->GetImageOffsetX();
         curr_xy[1] += render_ctx_->GetImageOffsetY();
       }
+      if (line_pts.size() >= 2 && (curr_xy[0] > 0 && curr_xy[0] < img_wid && curr_xy[1] > 0 && curr_xy[1] < img_hei)) {
+        float d2 = (last_xy[0] - curr_xy[0]) * (last_xy[0] - curr_xy[0]) +
+                   (last_xy[1] - curr_xy[1]) * (last_xy[1] - curr_xy[1]);
+        if (d2 > kLineD2Upper && curr_step > kMinLineStep) {
+          ang = ang - curr_step / 2.0f;
+          curr_step /= 2.0f;
+          continue;
+        } else if (d2 < kLineD2Lower && curr_step < kMaxLineStep) {
+          ang = ang + curr_step;
+          curr_step *= 2.0f;
+          continue;
+        }
+      }
+      ang += curr_step;
+
       if (!need_offset && !line_pts.empty() && last_z * curr_dir[2] < 0) {
         DrawLine(line_pts.size() / 2, line_pts.data(), img_wid, img_hei, output_image_buffer_.get(), g.line_specifier);
         line_pts.clear();
@@ -989,6 +1026,8 @@ void Renderer::DrawRadiusGrids() {
       line_pts.emplace_back(curr_xy[0]);
       line_pts.emplace_back(curr_xy[1]);
       last_z = curr_dir[2];
+      last_xy[0] = curr_xy[0];
+      last_xy[1] = curr_xy[1];
     }
     DrawLine(line_pts.size() / 2, line_pts.data(), img_wid, img_hei, output_image_buffer_.get(), g.line_specifier);
   }

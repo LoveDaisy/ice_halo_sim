@@ -76,6 +76,7 @@ class Renderer {
   uint8_t* GetImageBuffer() const;
 
   static constexpr int kImageBits = 24;
+  static constexpr float kLineD2ExclusionLimitRatio = 0.1;
 
  private:
   void LoadPartialRayData(const std::vector<size_t>& idx, const SimpleRayData& final_ray_data, float* current_data,
@@ -86,6 +87,12 @@ class Renderer {
   void DrawGrids();
   void DrawElevationGrids();
   void DrawRadiusGrids();
+
+  static constexpr int kLineD2Lower = 2;
+  static constexpr int kLineD2Upper = 20;
+  static constexpr float kDefaultLineStep = 1.0f;
+  static constexpr float kMinLineStep = 0.05f;
+  static constexpr float kMaxLineStep = 5.0f;
 
   CameraContextPtr cam_ctx_;
   RenderContextPtr render_ctx_;
