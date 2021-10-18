@@ -26,9 +26,12 @@ Pose3f CameraContext::GetCameraPose() const {
 
 
 void CameraContext::SetCameraTargetDirection(float azimuth, float altitude, float roll) {
-  azimuth = std::min(std::max(azimuth, kMinAngleRound), kMaxAngleRound);
-  altitude = std::min(std::max(altitude, kMinAngleTilt), kMaxAngleTilt);
-  roll = std::min(std::max(roll, kMinAngleHeading), kMaxAngleHeading);
+  azimuth = std::fmod(azimuth, 360.0f);
+  altitude = std::fmod(altitude, 180.0f);
+  if (altitude > 90.0f) {
+    altitude -= 180.0f;
+  }
+  roll = std::fmod(roll, 360.0f);
 
   target_dir_[0] = azimuth;
   target_dir_[1] = altitude;
@@ -132,7 +135,6 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
     LOG_VERBOSE("Camera config <azimuth> is not a number. Use default %.1f!", CameraContext::kDefaultCamAzimuth);
   } else {
     cam_az = static_cast<float>(p->GetDouble());
-    cam_az = std::max(std::min(cam_az, CameraContext::kMaxAngleRound), CameraContext::kMinAngleRound);
     cam_az = 90.0f - cam_az;
   }
 
@@ -143,7 +145,6 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
     LOG_VERBOSE("Camera config <elevation> is not a number. Use default %.1f!", CameraContext::kDefaultCamElevation);
   } else {
     cam_el = static_cast<float>(p->GetDouble());
-    cam_el = std::max(std::min(cam_el, CameraContext::kMaxAngleTilt), CameraContext::kMinAngleTilt);
   }
 
   p = Pointer("/rotation").Get(root);
@@ -153,7 +154,6 @@ void CameraContext::LoadFromJson(const rapidjson::Value& root) {
     LOG_VERBOSE("Camera config <rotation> is not a number. Use default %.1f!", CameraContext::kDefaultCamRoll);
   } else {
     cam_ro = static_cast<float>(p->GetDouble());
-    cam_ro = std::max(std::min(cam_ro, CameraContext::kMaxAngleHeading), CameraContext::kMinAngleHeading);
   }
 
   SetCameraTargetDirection(cam_az, cam_el, cam_ro);

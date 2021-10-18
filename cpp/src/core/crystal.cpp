@@ -1256,7 +1256,7 @@ std::pair<RayPath, size_t> NormalizeRayPath(RayPath ray_path, const ProjectConte
       if (first_b_fn == kInvalidId) {
         if (is_basal) {
           first_b_fn = fn;
-        } else if (first_p_fn != kInvalidId) {
+        } else if (first_p_fn != kInvalidId && pyr > 0) {
           first_b_fn = pyr;
         }
       }
