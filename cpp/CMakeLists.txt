@@ -119,7 +119,7 @@ endif()
 # ==================================================================================================
 # Set submodules
 set(icehalo_include
-  "${PROJ_SRC_DIR}" ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/rapidjson/include")
+  "${PROJ_SRC_DIR}" ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/nlohmann_json")
 
 set(icehalo_context_src
   "${PROJ_SRC_DIR}/context/camera_context.cpp"
