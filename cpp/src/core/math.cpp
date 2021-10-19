@@ -621,11 +621,11 @@ float RandomNumberGenerator::GetUniform() {
 }
 
 
-float RandomNumberGenerator::Get(Distribution dist, float mean, float std) {
+float RandomNumberGenerator::Get(DistributionType dist, float mean, float std) {
   switch (dist) {
-    case Distribution::kUniform:
+    case DistributionType::kUniform:
       return (GetUniform() - 0.5f) * 2 * std + mean;
-    case Distribution::kGaussian:
+    case DistributionType::kGaussian:
       return GetGaussian() * std + mean;
   }
 }
@@ -674,9 +674,9 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t ste
 void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num) {
   auto* rng = RandomNumberGenerator::GetInstance();
   for (size_t i = 0; i < num; i++) {
-    float phi = rng->Get(axis_dist.latitude_dist,                       // distribute
-                         axis_dist.latitude_mean * math::kDegreeToRad,  // mean
-                         axis_dist.latitude_std * math::kDegreeToRad);  // standard deviation
+    float phi = rng->Get(axis_dist.latitude_dist.type,                       // distribute
+                         axis_dist.latitude_dist.mean * math::kDegreeToRad,  // mean
+                         axis_dist.latitude_dist.std * math::kDegreeToRad);  // standard deviation
     if (phi > math::kPi / 2) {
       phi = math::kPi - phi;
     }
@@ -684,12 +684,12 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
       phi = -math::kPi - phi;
     }
     float lambda = 0;
-    if (axis_dist.azimuth_dist == Distribution::kUniform) {
+    if (axis_dist.azimuth_dist.type == DistributionType::kUniform) {
       lambda = rng->GetUniform() * 2 * math::kPi;
     } else {
-      lambda = rng->Get(axis_dist.azimuth_dist,                       // distribution
-                        axis_dist.azimuth_mean * math::kDegreeToRad,  // mean
-                        axis_dist.azimuth_std * math::kDegreeToRad);  // standard deviation
+      lambda = rng->Get(axis_dist.azimuth_dist.type,                       // distribution
+                        axis_dist.azimuth_dist.mean * math::kDegreeToRad,  // mean
+                        axis_dist.azimuth_dist.std * math::kDegreeToRad);  // standard deviation
     }
 
     data[i * 2 + 0] = lambda;
@@ -740,7 +740,8 @@ int RandomSampler::SampleInt(int max) {
 
 
 AxisDistribution::AxisDistribution()
-    : latitude_dist(Distribution::kUniform), azimuth_dist(Distribution::kUniform), roll_dist(Distribution::kUniform),
-      latitude_mean(0), azimuth_mean(0), roll_mean(0), latitude_std(0), azimuth_std(0), roll_std(0) {}
+    : azimuth_dist{ DistributionType::kUniform, 0, 0 }, latitude_dist{ DistributionType::kUniform, 0, 0 }, roll_dist{
+        DistributionType::kUniform, 0, 0
+      } {}
 
 }  // namespace icehalo

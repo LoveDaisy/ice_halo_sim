@@ -16,7 +16,6 @@
 #include "core/crystal.hpp"
 #include "core/optics.hpp"
 #include "io/serialize.hpp"
-#include "rapidjson/document.h"
 
 
 namespace icehalo {
@@ -70,13 +69,13 @@ class ProjectContext {
  private:
   ProjectContext();
 
-  void ParseBasicSettings(rapidjson::Document& d);
-  void ParseSunSettings(rapidjson::Document& d);
-  void ParseRenderSettings(rapidjson::Document& d);
-  void ParseCameraSettings(rapidjson::Document& d);
-  void ParseCrystalSettings(rapidjson::Document& d);
-  void ParseRayPathFilterSettings(rapidjson::Document& d);
-  void ParseMultiScatterSettings(rapidjson::Document& d);
+  void ParseBasicSettings(const nlohmann::json& obj);
+  void ParseSunSettings(const nlohmann::json& obj);
+  void ParseRenderSettings(const nlohmann::json& obj);
+  void ParseCameraSettings(const nlohmann::json& obj);
+  void ParseCrystalSettings(const nlohmann::json& obj);
+  void ParseRayPathFilterSettings(const nlohmann::json& obj);
+  void ParseMultiScatterSettings(const nlohmann::json& obj);
 
   size_t init_ray_num_;
   int ray_hit_num_;

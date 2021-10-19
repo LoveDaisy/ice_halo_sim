@@ -2,12 +2,8 @@
 
 #include <algorithm>
 
-#include "rapidjson/pointer.h"
-
 
 namespace icehalo {
-
-using rapidjson::Pointer;
 
 MultiScatterContext::MultiScatterContext(float prob) : prob_(std::max(std::min(prob, 1.0f), 0.0f)) {}
 
@@ -54,76 +50,34 @@ void MultiScatterContext::NormalizeCrystalPopulation() {
 }
 
 
-void MultiScatterContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/probability").Set(root, prob_, allocator);
-
-  Pointer("/crystal/0").Create(root, allocator);
-  Pointer("/ray_path_filter/0").Create(root, allocator);
-  Pointer("/population/0").Create(root, allocator);
-  for (const auto& c : crystal_infos_) {
-    Pointer("/crystal/-").Set(root, c.crystal_id, allocator);
-    Pointer("/ray_path_filter/-").Set(root, c.filter_id, allocator);
-    Pointer("/population/-").Set(root, c.population, allocator);
+void to_json(nlohmann::json& obj, const MultiScatterContext& ctx) {
+  obj["probability"] = ctx.GetProbability();
+  for (const auto& c : ctx.GetCrystalInfo()) {
+    obj["crystal"].emplace_back(c.crystal_id);
+    obj["ray_path_filter"].emplace_back(c.filter_id);
+    obj["population"].emplace_back(c.population);
   }
 }
 
 
-void MultiScatterContext::LoadFromJson(const rapidjson::Value& root) {
-  const auto* p = Pointer("/probability").Get(root);
-  if (p == nullptr || !p->IsNumber()) {
-    throw std::invalid_argument("<multi_scatter.probability> cannot recognize!");
-  }
-  auto prob = static_cast<float>(p->GetDouble());
-  if (prob < 0) {
-    throw std::invalid_argument("<multi_scatter.probability> is invalid!");
-  }
-  prob_ = prob;
+void from_json(const nlohmann::json& obj, MultiScatterContext& ctx) {
+  auto prob = obj.at("probability").get<float>();
+  ctx.SetProbability(prob);
 
-  ClearCrystalInfo();
-  std::vector<ShortIdType> tmp_crystal_id;
-  p = Pointer("/crystal").Get(root);
-  if (p == nullptr || !p->IsArray()) {
-    throw std::invalid_argument("<multi_scatter.crystal> cannot recognize!");
+  if (!obj.at("crystal").is_array() || !obj.at("ray_path_filter").is_array() || !obj.at("population").is_array() ||
+      obj.at("crystal").size() != obj.at("ray_path_filter").size() ||
+      obj.at("crystal").size() != obj.at("population").size()) {
+    throw nlohmann::detail::other_error::create(
+        -1, "crystal ray_path_filter and population should be arrays with same length!", obj);
   }
-  for (const auto& pc : p->GetArray()) {
-    if (!pc.IsUint()) {
-      throw std::invalid_argument("<multi_scatter.crystal> cannot recognize!");
-    } else {
-      tmp_crystal_id.emplace_back(pc.GetUint());
-    }
+  ctx.ClearCrystalInfo();
+  for (size_t i = 0; i < obj.at("crystal").size(); i++) {
+    auto crystal_id = obj.at("crystal")[i].get<ShortIdType>();
+    auto filter_id = obj.at("ray_path_filter")[i].get<ShortIdType>();
+    auto pop = obj.at("population")[i].get<float>();
+    ctx.crystal_infos_.emplace_back(MultiScatterContext::CrystalInfo(crystal_id, filter_id, pop));
   }
-
-  std::vector<float> tmp_population;
-  p = Pointer("/population").Get(root);
-  if (p == nullptr || !p->IsArray()) {
-    throw std::invalid_argument("<multi_scatter.population> cannot recognize!");
-  }
-  for (const auto& pp : p->GetArray()) {
-    if (!pp.IsNumber()) {
-      throw std::invalid_argument("<multi_scatter.population> cannot recognize!");
-    } else {
-      tmp_population.emplace_back(static_cast<float>(pp.GetDouble()));
-    }
-  }
-
-  std::vector<ShortIdType> tmp_filter_id;
-  p = Pointer("/ray_path_filter").Get(root);
-  if (p == nullptr || !p->IsArray()) {
-    throw std::invalid_argument("<multi_scatter.ray_path_filter> cannot recognize!");
-  }
-  for (const auto& pf : p->GetArray()) {
-    if (!pf.IsUint()) {
-      throw std::invalid_argument("<multi_scatter.ray_path_filter> cannot recognize!");
-    } else {
-      tmp_filter_id.emplace_back(pf.GetUint());
-    }
-  }
-
-  for (size_t i = 0; i < tmp_crystal_id.size(); i++) {
-    crystal_infos_.emplace_back(CrystalInfo{ tmp_crystal_id[i], tmp_filter_id[i], tmp_population[i] });
-  }
-
-  NormalizeCrystalPopulation();
+  ctx.NormalizeCrystalPopulation();
 }
 
 }  // namespace icehalo

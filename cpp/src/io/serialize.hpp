@@ -4,7 +4,6 @@
 #include <cstdint>
 
 #include "io/file.hpp"
-#include "rapidjson/document.h"
 
 namespace icehalo {
 
@@ -54,30 +53,6 @@ struct ISerializable {
 constexpr uintptr_t CombineU32AsPointer(uint32_t high, uint32_t low) {
   return static_cast<uintptr_t>(high) << 32 | static_cast<uintptr_t>(low);
 }
-
-
-class IJsonizable {
- public:
-  IJsonizable() = default;
-  IJsonizable(const IJsonizable& other) = default;
-  virtual ~IJsonizable() = default;
-
-  IJsonizable& operator=(const IJsonizable& other) = default;
-
-  /**
-   * @brief Save self to a JSON object.
-   *
-   * @param root
-   * @param allocator
-   */
-  virtual void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) = 0;
-
-  /**
-   * @brief Load data from a JSON object.
-   * @param root
-   */
-  virtual void LoadFromJson(const rapidjson::Value& root) = 0;
-};
 
 }  // namespace icehalo
 

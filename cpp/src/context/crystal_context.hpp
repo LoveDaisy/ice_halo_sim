@@ -7,11 +7,11 @@
 #include "core/core_def.hpp"
 #include "core/crystal.hpp"
 #include "io/serialize.hpp"
-
+#include "json.hpp"
 
 namespace icehalo {
 
-class CrystalContext : public IJsonizable {
+class CrystalContext {
  public:
   CrystalContext(const CrystalContext& other) = delete;
 
@@ -21,33 +21,35 @@ class CrystalContext : public IJsonizable {
 
   int RandomSampleFace(const float* ray_dir, float* prob_buf = nullptr) const;
 
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(const rapidjson::Value& root) override;
   void PrintCrystal() const;
 
   static CrystalContextPtrU CreateDefault();
 
+  friend void to_json(nlohmann::json& obj, const CrystalContext& ctx);
+
+  friend void from_json(const nlohmann::json& obj, CrystalContext& ctx);
+
  private:
   CrystalContext();
 
-  void ParseHexPrism(const rapidjson::Value& c);
-  void ParseHexPyramid(const rapidjson::Value& c);
-  void ParseHexPyramidStackHalf(const rapidjson::Value& c);
-  void ParseCubicPyramid(const rapidjson::Value& c);
-  void ParseIrregularHexPrism(const rapidjson::Value& c);
-  void ParseIrregularHexPyramid(const rapidjson::Value& c);
-  void ParseCustomCrystal(const rapidjson::Value& c);
+  void ParseHexPrism(const nlohmann::json& obj);
+  void ParseHexPyramid(const nlohmann::json& obj);
+  void ParseHexPyramidStackHalf(const nlohmann::json& obj);
+  void ParseCubicPyramid(const nlohmann::json& obj);
+  void ParseIrregularHexPrism(const nlohmann::json& obj);
+  void ParseIrregularHexPyramid(const nlohmann::json& obj);
+  void ParseCustomCrystal(const nlohmann::json& obj);
 
-  void SaveHexPrismParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveHexPyramidH3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveHexPyramidI2H3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveHexPyramidI4H3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveHexPyramidA2H3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveHexPyramidStackHalfParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveIrregularHexPrismParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveIrregularHexPyramidParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveCubicPyramidParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveCustomCrystalParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
+  void SaveHexPrismParam(nlohmann::json& obj) const;
+  void SaveHexPyramidH3Param(nlohmann::json& obj) const;
+  void SaveHexPyramidI2H3Param(nlohmann::json& obj) const;
+  void SaveHexPyramidI4H3Param(nlohmann::json& obj) const;
+  void SaveHexPyramidA2H3Param(nlohmann::json& obj) const;
+  void SaveHexPyramidStackHalfParam(nlohmann::json& obj) const;
+  void SaveIrregularHexPrismParam(nlohmann::json& obj) const;
+  void SaveIrregularHexPyramidParam(nlohmann::json& obj) const;
+  void SaveCubicPyramidParam(nlohmann::json& obj) const;
+  void SaveCustomCrystalParam(nlohmann::json& obj) const;
 
   ShortIdType id_;
   CrystalPtrU crystal_;
@@ -60,6 +62,17 @@ class CrystalContext : public IJsonizable {
   std::string file_param_;
 };
 
+
+void to_json(nlohmann::json& obj, const AxisDistribution& dist);
+
+void from_json(const nlohmann::json& obj, AxisDistribution& dist);
+
+NLOHMANN_JSON_SERIALIZE_ENUM(DistributionType, {
+                                                   { DistributionType::kUniform, "uniform" },
+                                                   { DistributionType::kGaussian, "gauss" },
+                                               })
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Distribution, type, mean, std)
 
 }  // namespace icehalo
 

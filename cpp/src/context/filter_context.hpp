@@ -9,22 +9,22 @@
 #include "core/filter.hpp"
 #include "core/optics.hpp"
 #include "io/serialize.hpp"
-
+#include "json.hpp"
 
 namespace icehalo {
 
 class RayPathFilterContext;
 using RayPathFilterContextPtrU = std::unique_ptr<RayPathFilterContext>;
 
-class RayPathFilterContext : public IJsonizable {
+class RayPathFilterContext {
  public:
   ShortIdType GetId() const;
   AbstractRayPathFilter* GetFilter() const;
 
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(const rapidjson::Value& root) override;
-
   static RayPathFilterContextPtrU CreateDefault();
+
+  friend void to_json(nlohmann::json& obj, const RayPathFilterContext& ctx);
+  friend void from_json(const nlohmann::json& obj, RayPathFilterContext& ctx);
 
  private:
   RayPathFilterContext();

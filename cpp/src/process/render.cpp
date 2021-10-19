@@ -692,8 +692,8 @@ void Renderer::LoadPartialRayData(const std::vector<size_t>& idx, const SimpleRa
     size_t current_num = end_idx - start_idx;
     std::unique_ptr<float[]> tmp_xy{ new float[current_num * 2] };
     for (size_t j = 0; j < current_num; j++) {
-      pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), 1, final_ray_buf + idx[start_idx + j] * 4, img_wid, img_hei,
-         tmp_xy.get() + j * 2, render_ctx_->GetVisibleRange());
+      pf(cam_ctx_->GetCameraTargetDirection(), cam_ctx_->GetFov(), 1, final_ray_buf + idx[start_idx + j] * 4, img_wid,
+         img_hei, tmp_xy.get() + j * 2, render_ctx_->GetVisibleRange());
 
       if (std::isnan(tmp_xy[j * 2 + 0]) || std::isnan(tmp_xy[j * 2 + 1])) {
         continue;
@@ -735,8 +735,8 @@ void Renderer::LoadFullRayData(const SimpleRayData& final_ray_data, float* curre
   threading_pool_->CommitRangeSliceJobsAndWait(0, num, [=](int /* thread_id */, int start_idx, int end_idx) {
     size_t current_num = end_idx - start_idx;
     std::unique_ptr<float[]> tmp_xy{ new float[current_num * 2] };
-    pf(cam_ctx_->GetCameraPose(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid, img_hei,
-       tmp_xy.get(), render_ctx_->GetVisibleRange());
+    pf(cam_ctx_->GetCameraTargetDirection(), cam_ctx_->GetFov(), current_num, final_ray_buf + start_idx * 4, img_wid,
+       img_hei, tmp_xy.get(), render_ctx_->GetVisibleRange());
 
     for (size_t j = 0; j < current_num; j++) {
       if (std::isnan(tmp_xy[j * 2 + 0]) || std::isnan(tmp_xy[j * 2 + 1])) {
@@ -906,7 +906,7 @@ void Renderer::DrawElevationGrids() {
     return;
   }
 
-  auto cam_pose = cam_ctx_->GetCameraPose();
+  auto cam_pose = cam_ctx_->GetCameraTargetDirection();
   auto hov = cam_ctx_->GetFov();
   auto img_wid = render_ctx_->GetImageWidth();
   auto img_hei = render_ctx_->GetImageHeight();
@@ -973,7 +973,7 @@ void Renderer::DrawRadiusGrids() {
     return;
   }
 
-  auto cam_pose = cam_ctx_->GetCameraPose();
+  auto cam_pose = cam_ctx_->GetCameraTargetDirection();
   auto hov = cam_ctx_->GetFov();
   auto img_wid = render_ctx_->GetImageWidth();
   auto img_hei = render_ctx_->GetImageHeight();

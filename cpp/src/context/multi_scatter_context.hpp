@@ -5,12 +5,11 @@
 
 #include "core/core_def.hpp"
 #include "io/serialize.hpp"
-#include "rapidjson/document.h"
-
+#include "json.hpp"
 
 namespace icehalo {
 
-class MultiScatterContext : public IJsonizable {
+class MultiScatterContext {
  public:
   struct CrystalInfo {
     ShortIdType crystal_id;
@@ -26,10 +25,10 @@ class MultiScatterContext : public IJsonizable {
 
   const std::vector<CrystalInfo>& GetCrystalInfo() const;
 
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(const rapidjson::Value& root) override;
-
   static MultiScatterContextPtrU CreateDefault();
+
+  friend void to_json(nlohmann::json& obj, const MultiScatterContext& ctx);
+  friend void from_json(const nlohmann::json& obj, MultiScatterContext& ctx);
 
  private:
   explicit MultiScatterContext(float prob = 1.0f);

@@ -3,74 +3,56 @@
 #include <algorithm>
 
 #include "process/render.hpp"
-#include "rapidjson/filereadstream.h"
-#include "rapidjson/pointer.h"
 #include "util/log.hpp"
 
 
 namespace icehalo {
 
-using rapidjson::Pointer;
-
-RenderSplitter::RenderSplitter() : type(RenderSplitterType::kNone), top_halo_num(0), crystal_filters{} {}
+RenderSplitter::RenderSplitter() : type(RenderSplitterType::kNone), top_halo_num(0) {}
 
 
-void RenderSplitter::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  switch (type) {
+void to_json(nlohmann::json& obj, const RenderSplitter& splitter) {
+  obj["type"] = splitter.type;
+  switch (splitter.type) {
     case RenderSplitterType::kTopHalo:
-      Pointer("/type").Set(root, "top_halo", allocator);
-      Pointer("/param").Set(root, top_halo_num, allocator);
+      obj["param"] = splitter.top_halo_num;
       break;
     case RenderSplitterType::kFilter: {
-      char id_buf[128];
-      Pointer("/type").Set(root, "filter", allocator);
-      for (size_t i = 0; i < crystal_filters.size(); i++) {
-        const auto& ids = crystal_filters[i];
-        for (size_t j = 0; j < ids.size(); j++) {
-          std::snprintf(id_buf, 128, "/param/%zu/%zu", i, j);
-          Pointer(id_buf).Set(root, ids[j], allocator);
+      for (const auto& ids : splitter.crystal_filters) {
+        obj["param"].emplace_back(nlohmann::json::array());
+        for (const auto& f : ids) {
+          obj["param"].back().emplace_back(f);
         }
       }
     } break;
     case RenderSplitterType::kNone:
+    default:
       break;
   }
 }
 
 
-void RenderSplitter::LoadFromJson(const rapidjson::Value& root) {
-  const auto* p = Pointer("/type").Get(root);
-  if (p && p->IsString() && *p == "top_halo") {
-    type = RenderSplitterType::kTopHalo;
-  } else if (p && p->IsString() && *p == "filter") {
-    type = RenderSplitterType::kFilter;
-  }
-
-  p = Pointer("/param").Get(root);
-  if (p && p->IsInt() && type == RenderSplitterType::kTopHalo) {
-    top_halo_num = std::min(std::max(p->GetInt(), 0), RenderContext::kMaxTopHaloNumber);
-  } else if (p && p->IsArray() && type == RenderSplitterType::kFilter) {
-    std::vector<std::vector<ShortIdType>> new_crystal_filters;
-    for (const auto& pi : p->GetArray()) {
-      if (!pi.IsArray() || pi.GetArray().Size() % 2 != 0) {
-        LOG_VERBOSE("crystal filter param not recognize!");
-        continue;
+void from_json(const nlohmann::json& obj, RenderSplitter& splitter) {
+  obj.at("type").get_to(splitter.type);
+  switch (splitter.type) {
+    case RenderSplitterType::kTopHalo:
+      obj.at("param").get_to(splitter.top_halo_num);
+      break;
+    case RenderSplitterType::kFilter: {
+      splitter.crystal_filters.clear();
+      if (!obj.at("param").is_array() || !obj.at("param")[0].is_array()) {
+        throw nlohmann::detail::other_error::create(-1, "param must be a nested array!", obj);
       }
-      std::vector<ShortIdType> tmp_ids{};
-      for (const auto& fid : pi.GetArray()) {
-        if (!fid.IsUint()) {
-          LOG_VERBOSE("crystal filter param not recognize!");
-          continue;
+      for (const auto& f : obj.at("param")) {
+        splitter.crystal_filters.emplace_back();
+        for (const auto& n : f) {
+          splitter.crystal_filters.back().emplace_back(n.get<ShortIdType>());
         }
-        tmp_ids.emplace_back(fid.GetUint());
       }
-      if (!tmp_ids.empty()) {
-        new_crystal_filters.emplace_back(tmp_ids);
-      }
-    }
-    if (!new_crystal_filters.empty()) {
-      crystal_filters = new_crystal_filters;
-    }
+    } break;
+    case RenderSplitterType::kNone:
+    default:
+      break;
   }
 }
 
@@ -82,96 +64,36 @@ LineSpecifier::LineSpecifier(LineType type, float width, const float color[3], f
     : type(type), width(width), color{ color[0], color[1], color[2] }, alpha(alpha) {}
 
 
-void LineSpecifier::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  switch (type) {
-    case LineType::kSolid:
-      Pointer("/type").Set(root, "solid", allocator);
-      break;
-    case LineType::kDashed:
-      Pointer("/type").Set(root, "dashed", allocator);
-      break;
-  }
-
-  Pointer("/width").Set(root, width, allocator);
-
-  Pointer("/color/0").Set(root, color[0], allocator);
-  Pointer("/color/-").Set(root, color[1], allocator);
-  Pointer("/color/-").Set(root, color[2], allocator);
-
-  Pointer("/alpha").Set(root, alpha, allocator);
+void to_json(nlohmann::json& obj, const LineSpecifier& line) {
+  obj["type"] = line.type;
+  obj["width"] = line.width;
+  obj["color"] = { line.color[0], line.color[1], line.color[2] };
+  obj["alpha"] = line.alpha;
 }
 
 
-void LineSpecifier::LoadFromJson(const rapidjson::Value& root) {
-  type = LineType::kSolid;
-  const auto* p = Pointer("/type").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Line specifier missing <type>. Use default solid type.");
-  } else if (!p->IsString()) {
-    LOG_VERBOSE("Line specifier <type> is not a string. Ignore it.");
-  } else if (*p == "solid") {
-    type = LineType::kSolid;
-  } else if (*p == "dashed") {
-    type = LineType::kDashed;
-  } else {
-    LOG_VERBOSE("Line specifier <type> cannot recognize! Use default solid type.");
-  }
-
-  width = kDefaultWidth;
-  p = Pointer("/width").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Line specifier missing <width>. Use default %.2f.", kDefaultWidth);
-  } else if (!p->IsNumber()) {
-    LOG_VERBOSE("Line specifier <width> is not a number. Use default %.2f.", kDefaultWidth);
-  } else {
-    auto w = p->GetDouble();
-    width = std::max(static_cast<float>(w), kMinWidth);
-  }
-
-  std::memcpy(color, kDefaultColor, sizeof(color));
-  p = Pointer("/color").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Line specifier missing <color>. Use default color!");
-  } else if (!p->IsArray()) {
-    LOG_VERBOSE("Line specifier <color> is not an array. Use default color!");
-  } else if (p->IsArray() && (p->Size() != 3 || !(*p)[0].IsNumber())) {
-    LOG_VERBOSE("Line Specifier <color> cannot be recognized. Use default color!");
-  } else {
-    auto pa = p->GetArray();
-    color[0] = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    color[1] = static_cast<float>(std::min(std::max(pa[1].GetDouble(), 0.0), 1.0));
-    color[2] = static_cast<float>(std::min(std::max(pa[2].GetDouble(), 0.0), 1.0));
-  }
-
-  alpha = kDefaultAlpha;
-  p = Pointer("/alpha").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Line specifier missing <alpha>. Use default %.2f.", kDefaultAlpha);
-  } else if (!p->IsNumber()) {
-    LOG_VERBOSE("Line specifier <alpha> is not a number. Use default %.2f.", kDefaultAlpha);
-  } else {
-    auto a = p->GetDouble();
-    alpha = std::max(std::min(static_cast<float>(a), 1.0f), 0.0f);
-  }
+void from_json(const nlohmann::json& obj, LineSpecifier& line) {
+  obj.at("type").get_to(line.type);
+  try {
+    obj.at("width").get_to(line.width);
+    obj.at("alpha").get_to(line.alpha);
+    obj.at("color")[0].get_to(line.color[0]);
+    obj.at("color")[1].get_to(line.color[1]);
+    obj.at("color")[2].get_to(line.color[2]);
+  } catch (...) {}
 }
 
 
 RenderContext::RenderContext()
     : ray_color_{ 1.0f, 1.0f, 1.0f }, background_color_{ 0.0f, 0.0f, 0.0f }, intensity_(1.0f), image_width_(0),
       image_height_(0), offset_x_(0), offset_y_(0), visible_range_(VisibleRange::kUpper),
-      color_compact_level_(ColorCompactLevel::kTrueColor), splitter_{} {}
+      color_compact_level_(ColorCompactLevel::kTrueColor) {}
 
 
 RenderContextPtrU RenderContext::CreateDefault() {
   RenderContextPtrU render_ctx{ new RenderContext };
   return render_ctx;
 }
-
-
-constexpr float RenderContext::kMinIntensity;
-constexpr float RenderContext::kMaxIntensity;
-constexpr int RenderContext::kMaxImageSize;
-constexpr int RenderContext::kMaxTopHaloNumber;
 
 
 const float* RenderContext::GetRayColor() const {
@@ -336,304 +258,176 @@ const std::vector<GridLine>& RenderContext::GetRadiusGrids() const {
 }
 
 
-void RenderContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  root.Clear();
-  SaveColorConfig(root, allocator);
-  SaveIntensity(root, allocator);
-  SaveImageSize(root, allocator);
-  SaveImageOffset(root, allocator);
-  SaveVisibleRange(root, allocator);
-  SaveRenderSplitter(root, allocator);
-  SaveGridLines(root, allocator);
+void to_json(nlohmann::json& obj, const RenderContext& ctx) {
+  ctx.SaveColorConfig(obj);
+  ctx.SaveIntensity(obj);
+  ctx.SaveImageSize(obj);
+  ctx.SaveImageOffset(obj);
+  ctx.SaveVisibleRange(obj);
+  ctx.SaveRenderSplitter(obj);
+  ctx.SaveGridLines(obj);
 }
 
 
-void RenderContext::SaveColorConfig(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  switch (color_compact_level_) {
-    case ColorCompactLevel::kTrueColor:
-      Pointer("/ray_compact_level").Set(root, "true_color", allocator);
-      break;
-    case ColorCompactLevel::kMonochrome:
-      Pointer("/ray_compact_level").Set(root, "monochrome", allocator);
-      break;
-    case ColorCompactLevel::kLowQuality:
-      Pointer("/ray_compact_level").Set(root, "low_quality", allocator);
-      break;
-  }
-
-  Pointer("/background_color/0").Set(root, background_color_[0], allocator);
-  Pointer("/background_color/-").Set(root, background_color_[1], allocator);
-  Pointer("/background_color/-").Set(root, background_color_[2], allocator);
+void RenderContext::SaveColorConfig(nlohmann::json& obj) const {
+  obj["ray_compact_level"] = color_compact_level_;
+  obj["background_color"][0] = background_color_[0];
+  obj["background_color"][1] = background_color_[1];
+  obj["background_color"][2] = background_color_[2];
 
   if (ray_color_[0] < 0) {
-    Pointer("/ray_color").Set(root, "real", allocator);
+    obj["ray_color"] = "real";
   } else {
-    Pointer("/ray_color/0").Set(root, ray_color_[0], allocator);
-    Pointer("/ray_color/-").Set(root, ray_color_[1], allocator);
-    Pointer("/ray_color/-").Set(root, ray_color_[2], allocator);
+    obj["ray_color"][0] = ray_color_[0];
+    obj["ray_color"][1] = ray_color_[1];
+    obj["ray_color"][2] = ray_color_[2];
   }
 }
 
 
-void RenderContext::SaveIntensity(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/intensity_factor").Set(root, intensity_, allocator);
+void RenderContext::SaveIntensity(nlohmann::json& obj) const {
+  obj["intensity_factor"] = intensity_;
 }
 
 
-void RenderContext::SaveImageSize(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/width").Set(root, image_width_, allocator);
-  Pointer("/height").Set(root, image_height_, allocator);
+void RenderContext::SaveImageSize(nlohmann::json& obj) const {
+  obj["width"] = image_width_;
+  obj["height"] = image_height_;
 }
 
 
-void RenderContext::SaveImageOffset(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/offset/0").Set(root, offset_x_, allocator);
-  Pointer("/offset/-").Set(root, offset_y_, allocator);
+void RenderContext::SaveImageOffset(nlohmann::json& obj) const {
+  obj["offset"][0] = offset_x_;
+  obj["offset"][1] = offset_y_;
 }
 
 
-void RenderContext::SaveVisibleRange(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  switch (visible_range_) {
-    case VisibleRange::kLower:
-      Pointer("/visible_semi_sphere").Set(root, "lower", allocator);
-      break;
-    case VisibleRange::kFront:
-      Pointer("/visible_semi_sphere").Set(root, "camera", allocator);
-      break;
-    case VisibleRange::kFull:
-      Pointer("/visible_semi_sphere").Set(root, "full", allocator);
-      break;
-    case VisibleRange::kUpper:
-    default:
-      Pointer("/visible_semi_sphere").Set(root, "upper", allocator);
-      break;
+void RenderContext::SaveVisibleRange(nlohmann::json& obj) const {
+  obj["visible_semi_sphere"] = visible_range_;
+}
+
+
+void RenderContext::SaveRenderSplitter(nlohmann::json& obj) const {
+  obj["splitter"] = splitter_;
+}
+
+
+void RenderContext::SaveGridLines(nlohmann::json& obj) const {
+  for (const auto& l : elevation_grid_) {
+    obj["elevation_grid"].emplace_back(l);
+  }
+  for (const auto& l : radius_rid_) {
+    obj["radius_grid"].emplace_back(l);
   }
 }
 
 
-void RenderContext::SaveRenderSplitter(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  splitter_.SaveToJson(Pointer("/splitter").Create(root, allocator), allocator);
+void from_json(const nlohmann::json& obj, RenderContext& ctx) {
+  ctx.LoadColorConfig(obj);
+  ctx.LoadImageSize(obj);
+  ctx.LoadImageOffset(obj);
+  ctx.LoadVisibleRange(obj);
+  ctx.LoadIntensity(obj);
+  ctx.LoadRenderSplitter(obj);
+  ctx.LoadGridLines(obj);
 }
 
 
-void RenderContext::SaveGridLines(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/elevation_grid/0").Create(root, allocator);
-  for (auto& g : elevation_grid_) {
-    auto& curr_obj = Pointer("/elevation_grid/-").Create(root, allocator);
-    Pointer("/value").Set(curr_obj, g.value, allocator);
-    g.line_specifier.SaveToJson(curr_obj, allocator);
-  }
-
-  Pointer("/radius_grid/0").Create(root, allocator);
-  for (auto& g : radius_rid_) {
-    auto& curr_obj = Pointer("/radius_grid/-").Create(root, allocator);
-    Pointer("/value").Set(curr_obj, g.value, allocator);
-    g.line_specifier.SaveToJson(curr_obj, allocator);
-  }
-}
-
-
-void RenderContext::LoadFromJson(const rapidjson::Value& root) {
-  LoadColorConfig(root);
-  LoadImageSize(root);
-  LoadImageOffset(root);
-  LoadVisibleRange(root);
-  LoadIntensity(root);
-  LoadRenderSplitter(root);
-  LoadGridLines(root);
-}
-
-
-void RenderContext::LoadColorConfig(const rapidjson::Value& root) {
+void RenderContext::LoadColorConfig(const nlohmann::json& obj) {
   SetColorCompactLevel(ColorCompactLevel::kTrueColor);
-  const auto* p = Pointer("/color_compact_level").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <color_compact_level>. Use default true color!");
-  } else if (!p->IsString()) {
-    LOG_VERBOSE("Render config <color_compact_level> is not a string. Use default true color!");
-  } else {
-    if (*p == "no_compact") {
-      color_compact_level_ = ColorCompactLevel::kTrueColor;
-    } else if (*p == "monochrome") {
-      color_compact_level_ = ColorCompactLevel::kMonochrome;
-    } else if (*p == "low_quality") {
-      color_compact_level_ = ColorCompactLevel::kLowQuality;
-    } else {
-      LOG_VERBOSE("Render config <color_compact_level> cannot recognize. Use default true color!");
-    }
+  try {
+    obj.at("color_compact_level").get_to(color_compact_level_);
+  } catch (...) {
+    LOG_VERBOSE("cannot parse color_compact_level. use default %d", color_compact_level_);
   }
 
   ResetBackgroundColor();
-  p = Pointer("/background_color").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Config missing <background_color>. Use default [0,0,0]!");
-  } else if (!p->IsArray()) {
-    LOG_VERBOSE("Config <background_color> is not an array. Use default [0,0,0]!");
-  } else if (p->Size() != 3 || !(*p)[0].IsNumber()) {
-    LOG_VERBOSE("Config <background_color> cannot be recognized. Use default [0,0,0]!");
-  } else {
-    auto pa = p->GetArray();
-    float r = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    float g = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    float b = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    SetBackgroundColor(r, g, b);
-  }
+  auto r = obj.at("background_color")[0].get<float>();
+  auto g = obj.at("background_color")[1].get<float>();
+  auto b = obj.at("background_color")[2].get<float>();
+  SetBackgroundColor(r, g, b);
 
   ResetRayColor();
-  p = Pointer("/ray_color").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Config missing <ray_color>. Use default real color!");
-  } else if (!p->IsArray() && !p->IsString()) {
-    LOG_VERBOSE("Config <ray_color> is not an array nor a string. Use default real color!");
-  } else if (p->IsArray() && (p->Size() != 3 || !(*p)[0].IsNumber())) {
-    LOG_VERBOSE("Config <ray_color> cannot be recognized. Use default real color!");
-  } else if (p->IsString() && (*p) != "real") {
-    LOG_VERBOSE("Config <ray_color> cannot be recognized. Use default real color!");
-  } else if (p->IsArray()) {
-    auto pa = p->GetArray();
-    float r = static_cast<float>(std::min(std::max(pa[0].GetDouble(), 0.0), 1.0));
-    float g = static_cast<float>(std::min(std::max(pa[1].GetDouble(), 0.0), 1.0));
-    float b = static_cast<float>(std::min(std::max(pa[2].GetDouble(), 0.0), 1.0));
+  if (obj.at("ray_color").is_array()) {
+    r = obj.at("ray_color")[0].get<float>();
+    g = obj.at("ray_color")[1].get<float>();
+    b = obj.at("ray_color")[2].get<float>();
     SetRayColor(r, g, b);
   }
 }
 
 
-void RenderContext::LoadImageSize(const rapidjson::Value& root) {
+void RenderContext::LoadImageSize(const nlohmann::json& obj) {
   SetImageWidth(kDefaultImageSize);
-  const auto* p = Pointer("/width").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <width>. Use default 800!");
-  } else if (!p->IsInt()) {
-    LOG_VERBOSE("Render config <width> is not an integer. Use default 800!");
-  } else {
-    SetImageWidth(p->GetInt());
-  }
+  try {
+    auto width = obj.at("width").get<int>();
+    SetImageWidth(width);
+  } catch (...) {}
 
   SetImageHeight(kDefaultImageSize);
-  p = Pointer("/height").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <height>. Use default 800!");
-  } else if (!p->IsInt()) {
-    LOG_VERBOSE("Render config <height> is not an integer. Use default 800!");
-  } else {
-    SetImageHeight(p->GetInt());
-  }
+  try {
+    auto height = obj.at("height").get<int>();
+    SetImageHeight(height);
+  } catch (...) {}
 }
 
 
-void RenderContext::LoadImageOffset(const rapidjson::Value& root) {
+void RenderContext::LoadImageOffset(const nlohmann::json& obj) {
   SetImageOffsetX(0);
   SetImageOffsetY(0);
-  const auto* p = Pointer("/offset").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <offset>. Use default [0, 0]!");
-  } else if (!p->IsArray()) {
-    LOG_VERBOSE("Render config <offset> is not an array. Use default [0, 0]!");
-  } else if (p->Size() != 2 || !(*p)[0].IsInt() || !(*p)[1].IsInt()) {
-    LOG_VERBOSE("Config <offset> cannot be recognized. Use default [0, 0]!");
-  } else {
-    int offset_x = (*p)[0].GetInt();
-    int offset_y = (*p)[1].GetInt();
-    offset_x = std::max(std::min(offset_x, static_cast<int>(RenderContext::kMaxImageSize / 2)),
-                        -static_cast<int>(RenderContext::kMaxImageSize / 2));
-    offset_y = std::max(std::min(offset_y, static_cast<int>(RenderContext::kMaxImageSize / 2)),
-                        -static_cast<int>(RenderContext::kMaxImageSize / 2));
-    SetImageOffsetX(offset_x);
-    SetImageOffsetY(offset_y);
-  }
+  auto offset_x = obj.at("offset")[0].get<int>();
+  auto offset_y = obj.at("offset")[1].get<int>();
+  offset_x = std::max(std::min(offset_x, RenderContext::kMaxImageSize / 2), -RenderContext::kMaxImageSize / 2);
+  offset_y = std::max(std::min(offset_y, RenderContext::kMaxImageSize / 2), -RenderContext::kMaxImageSize / 2);
+  SetImageOffsetX(offset_x);
+  SetImageOffsetY(offset_y);
 }
 
 
-void RenderContext::LoadVisibleRange(const rapidjson::Value& root) {
+void RenderContext::LoadVisibleRange(const nlohmann::json& obj) {
   SetVisibleRange(VisibleRange::kUpper);
-  const auto* p = Pointer("/visible_semi_sphere").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <visible_semi_sphere>. Use default upper!");
-  } else if (!p->IsString()) {
-    LOG_VERBOSE("Render config <visible_semi_sphere> is not a string. Use default upper!");
-  } else if (*p == "upper") {
-    SetVisibleRange(VisibleRange::kUpper);
-  } else if (*p == "lower") {
-    SetVisibleRange(VisibleRange::kLower);
-  } else if (*p == "camera") {
-    SetVisibleRange(VisibleRange::kFront);
-  } else if (*p == "full") {
-    SetVisibleRange(VisibleRange::kFull);
-  } else {
-    LOG_VERBOSE("Render config <visible_semi_sphere> cannot be recognized. Use default upper!");
-  }
+  auto range = obj.at("visible_semi_sphere").get<VisibleRange>();
+  SetVisibleRange(range);
 }
 
 
-void RenderContext::LoadIntensity(const rapidjson::Value& root) {
+void RenderContext::LoadIntensity(const nlohmann::json& obj) {
   SetIntensity(kDefaultIntensity);
-  const auto* p = Pointer("/intensity_factor").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <intensity_factor>. Use default 1.0!");
-  } else if (!p->IsNumber()) {
-    LOG_VERBOSE("Render config <intensity_factor> is not a number. Use default 1.0!");
-  } else {
-    auto f = static_cast<float>(p->GetDouble());
-    f = std::max(std::min(f, RenderContext::kMaxIntensity), RenderContext::kMinIntensity);
-    SetIntensity(f);
-  }
+  auto f = obj.at("intensity_factor").get<float>();
+  f = std::max(std::min(f, RenderContext::kMaxIntensity), RenderContext::kMinIntensity);
+  SetIntensity(f);
 }
 
 
-void RenderContext::LoadRenderSplitter(const rapidjson::Value& root) {
-  const auto* p = Pointer("/splitter").Get(root);
-  splitter_ = {};
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <splitter>. Use default!");
-  } else if (!p->IsObject()) {
-    LOG_VERBOSE("Render config <splitter> is not an object. Use default!");
-  } else {
-    splitter_.LoadFromJson(*p);
-  }
+void RenderContext::LoadRenderSplitter(const nlohmann::json& obj) {
+  try {
+    obj.at("splitter").get_to(splitter_);
+  } catch (...) {}
 }
 
 
-void RenderContext::LoadGridLines(const rapidjson::Value& root) {
-  const auto* p = Pointer("/elevation_grid").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <elevation_grid>. No elevation grid will be drawn.");
-  } else if (!p->IsArray()) {
-    LOG_VERBOSE("Render config <elevation_grid> is not an array. Ignore it.");
-  } else if (p->GetArray().Size() == 0) {
-    LOG_VERBOSE("Render config <elevation_grid> is empty. Ignore it.");
-  } else {
-    for (size_t i = 0; i < p->GetArray().Size(); i++) {
-      if (!(*p)[i].IsObject() || !(*p)[i].HasMember("value") || !(*p)[i]["value"].IsNumber()) {
-        LOG_VERBOSE("Render config <elevation_grid>[%zu] cannot recognize. Ignore it.", i);
-        continue;
-      }
-      GridLine tmp_line;
-      tmp_line.value = (*p)[i]["value"].GetDouble();
-      tmp_line.line_specifier.LoadFromJson((*p)[i]);
-      elevation_grid_.emplace_back(tmp_line);
+void RenderContext::LoadGridLines(const nlohmann::json& obj) {
+  try {
+    if (!obj.at("elevation_grid").is_array()) {
+      throw nlohmann::detail::other_error::create(-1, "elevation_grid must be an array!", obj);
     }
-  }
 
-  p = Pointer("/radius_grid").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Render config missing <radius_grid>. No elevation grid will be drawn.");
-  } else if (!p->IsArray()) {
-    LOG_VERBOSE("Render config <radius_grid> is not an array. Ignore it.");
-  } else if (p->GetArray().Size() == 0) {
-    LOG_VERBOSE("Render config <radius_grid> is empty. Ignore it.");
-  } else {
-    for (size_t i = 0; i < p->GetArray().Size(); i++) {
-      if (!(*p)[i].IsObject() || !(*p)[i].HasMember("value") || !(*p)[i]["value"].IsNumber()) {
-        LOG_VERBOSE("Render config <radius_grid>[%zu] cannot recognize. Ignore it.", i);
-        continue;
-      }
-      GridLine tmp_line;
-      tmp_line.value = (*p)[i]["value"].GetDouble();
-      tmp_line.line_specifier.LoadFromJson((*p)[i]);
-      radius_rid_.emplace_back(tmp_line);
+    for (const auto& l : obj.at("elevation_grid")) {
+      auto curr_line = l.get<GridLine>();
+      elevation_grid_.emplace_back(curr_line);
     }
-  }
+  } catch (...) {}
+
+  try {
+    if (!obj.at("radius_grid").is_array()) {
+      throw nlohmann::detail::other_error::create(-1, "radius_grid must be an array!", obj);
+    }
+
+    for (const auto& l : obj.at("radius_grid")) {
+      auto curr_line = l.get<GridLine>();
+      radius_rid_.emplace_back(curr_line);
+    }
+  } catch (...) {}
 }
 
 }  // namespace icehalo

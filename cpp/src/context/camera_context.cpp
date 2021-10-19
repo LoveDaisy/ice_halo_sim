@@ -3,13 +3,10 @@
 #include <algorithm>
 
 #include "process/render.hpp"
-#include "rapidjson/pointer.h"
 #include "util/log.hpp"
 
 
 namespace icehalo {
-
-using rapidjson::Pointer;
 
 CameraContext::CameraContext() : target_dir_{ 0, 0, 0 }, fov_(0), lens_type_(LensType::kLinear) {}
 
@@ -20,7 +17,7 @@ CameraContextPtrU CameraContext::CreateDefault() {
 }
 
 
-Pose3f CameraContext::GetCameraPose() const {
+Pose3f CameraContext::GetCameraTargetDirection() const {
   return Pose3f(target_dir_);
 }
 
@@ -88,107 +85,30 @@ void CameraContext::SetLensType(LensType type) {
 }
 
 
-void CameraContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  root.Clear();
-  Pointer("/azimuth").Set(root, target_dir_[0], allocator);
-  Pointer("/elevation").Set(root, target_dir_[1], allocator);
-  Pointer("/rotation").Set(root, target_dir_[2], allocator);
-  Pointer("/fov").Set(root, fov_, allocator);
-  auto p = Pointer("/lens");
-  switch (lens_type_) {
-    case LensType::kLinear:
-      p.Set(root, "linear", allocator);
-      break;
-    case LensType::kEquidistant:
-      p.Set(root, "fisheye_equidistant", allocator);
-      break;
-    case LensType::kDualEqualArea:
-      p.Set(root, "dual_fisheye_equalarea", allocator);
-      break;
-    case LensType::kDualEquidistant:
-      p.Set(root, "dual_fisheye_equidistant", allocator);
-      break;
-    case LensType::kEquirectangular:
-      p.Set(root, "equirectangular", allocator);
-      break;
-    case LensType::kEqualArea:
-    default:
-      p.Set(root, "fisheye_equalarea", allocator);
-      break;
-  }
+void to_json(nlohmann::json& obj, const CameraContext& ctx) {
+  auto cam_pos = ctx.GetCameraTargetDirection();
+  obj["azimuth"] = 90.0 - cam_pos.lon();
+  obj["elevation"] = cam_pos.lat();
+  obj["rotation"] = cam_pos.roll();
+  obj["fov"] = ctx.GetFov();
+  obj["lens"] = ctx.GetLensType();
 }
 
 
-void CameraContext::LoadFromJson(const rapidjson::Value& root) {
-  ResetCameraTargetDirection();
-  SetFov(CameraContext::kMaxFovFisheye);
-  SetLensType(LensType::kEqualArea);
-
-  float cam_az = CameraContext::kDefaultCamAzimuth;
-  float cam_el = CameraContext::kDefaultCamElevation;
-  float cam_ro = CameraContext::kDefaultCamRoll;
-
-  const auto* p = Pointer("/azimuth").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Camera config missing <azimuth>. Use default %.1f!", CameraContext::kDefaultCamAzimuth);
-  } else if (!p->IsNumber()) {
-    LOG_VERBOSE("Camera config <azimuth> is not a number. Use default %.1f!", CameraContext::kDefaultCamAzimuth);
-  } else {
-    cam_az = static_cast<float>(p->GetDouble());
-    cam_az = 90.0f - cam_az;
+void from_json(const nlohmann::json& obj, CameraContext& ctx) {
+  auto cam_az = obj.at("azimuth").get<double>();
+  auto cam_el = obj.at("elevation").get<double>();
+  double cam_ro = 0.0;
+  try {
+    cam_ro = obj.at("roll").get<double>();
+  } catch (...) {
+    LOG_VERBOSE("cannot parse roll. use default: %f", cam_ro);
   }
-
-  p = Pointer("/elevation").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Camera config missing <elevation>. Use default %.1f!", CameraContext::kDefaultCamElevation);
-  } else if (!p->IsNumber()) {
-    LOG_VERBOSE("Camera config <elevation> is not a number. Use default %.1f!", CameraContext::kDefaultCamElevation);
-  } else {
-    cam_el = static_cast<float>(p->GetDouble());
-  }
-
-  p = Pointer("/rotation").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Camera config missing <rotation>. Use default %.1f!", CameraContext::kDefaultCamRoll);
-  } else if (!p->IsNumber()) {
-    LOG_VERBOSE("Camera config <rotation> is not a number. Use default %.1f!", CameraContext::kDefaultCamRoll);
-  } else {
-    cam_ro = static_cast<float>(p->GetDouble());
-  }
-
-  SetCameraTargetDirection(cam_az, cam_el, cam_ro);
-
-  p = Pointer("/lens").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Camera config missing <lens>. Use default equal-area fisheye!");
-  } else if (!p->IsString()) {
-    LOG_VERBOSE("Camera config <lens> is not a string. Use default equal-area fisheye!");
-  } else {
-    if (*p == "linear") {
-      SetLensType(LensType::kLinear);
-    } else if (*p == "fisheye_equalarea" || *p == "fisheye") {
-      SetLensType(LensType::kEqualArea);
-    } else if (*p == "fisheye_equidistant") {
-      SetLensType(LensType::kEquidistant);
-    } else if (*p == "dual_fisheye_equidistant") {
-      SetLensType(LensType::kDualEquidistant);
-    } else if (*p == "dual_fisheye_equalarea") {
-      SetLensType(LensType::kDualEqualArea);
-    } else if (*p == "equirectangular") {
-      SetLensType(LensType::kEquirectangular);
-    } else {
-      LOG_VERBOSE("Camera config <lens> cannot be recognized. Use default equal-area fisheye!");
-    }
-  }
-
-  p = Pointer("/fov").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Camera config missing <fov>. Use default %.1f!", GetFov());
-  } else if (!p->IsNumber()) {
-    LOG_VERBOSE("Camera config <fov> is not a number. Use default %.1f!\n", GetFov());
-  } else {
-    SetFov(static_cast<float>(p->GetDouble()));
-  }
+  ctx.SetCameraTargetDirection(90.0 - cam_az, cam_el, cam_ro);
+  auto fov = obj.at("fov").get<double>();
+  ctx.SetFov(fov);
+  auto lens = obj.at("lens").get<LensType>();
+  ctx.SetLensType(lens);
 }
 
 }  // namespace icehalo

@@ -3,14 +3,9 @@
 
 #include "context/crystal_context.hpp"
 #include "context/filter_context.hpp"
-#include "rapidjson/document.h"
-#include "rapidjson/pointer.h"
 #include "util/log.hpp"
 
 namespace icehalo {
-
-using rapidjson::Pointer;
-
 
 AbstractRayPathFilter::AbstractRayPathFilter()
     : symmetry_flag_(kSymmetryNone), complementary_(false), remove_homodromous_(false) {}
@@ -80,79 +75,66 @@ bool AbstractRayPathFilter::GetRemoveHomodromous() const {
 }
 
 
-void AbstractRayPathFilter::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  if (complementary_) {
-    Pointer("/complementary").Set(root, true, allocator);
-  }
-
-  if (remove_homodromous_) {
-    Pointer("/remove_homodromous").Set(root, true, allocator);
-  }
-
-  if (symmetry_flag_ != kSymmetryNone) {
+void to_json(nlohmann::json& obj, const AbstractRayPathFilter& filter) {
+  obj["complementary"] = filter.complementary_;
+  obj["remove_homodromous"] = filter.remove_homodromous_;
+  if (filter.symmetry_flag_ != kSymmetryNone) {
     char sym_buf[16]{};
     size_t buf_idx = 0;
-    if (symmetry_flag_ & kSymmetryBasal) {
+    if (filter.symmetry_flag_ & kSymmetryBasal) {
       sym_buf[buf_idx++] = 'B';
     }
-    if (symmetry_flag_ & kSymmetryDirection) {
+    if (filter.symmetry_flag_ & kSymmetryDirection) {
       sym_buf[buf_idx++] = 'D';
     }
-    if (symmetry_flag_ & kSymmetryPrism) {
+    if (filter.symmetry_flag_ & kSymmetryPrism) {
       sym_buf[buf_idx] = 'P';
     }
-    Pointer("/symmetry").Set(root, sym_buf, allocator);
+    obj["symmetry"] = sym_buf;
   }
+
+  filter.SaveToJson(obj);
 }
 
 
-void AbstractRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
-  const auto* p = Pointer("/complementary").Get(root);
-  if (p == nullptr) {
-    EnableComplementary(false);
-  } else if (p->IsBool()) {
-    EnableComplementary(p->GetBool());
-  } else {
-    throw std::invalid_argument("<filter[%d].complementary> cannot recognize!");
+void from_json(const nlohmann::json& obj, AbstractRayPathFilter& filter) {
+  try {
+    obj.at("complementary").get_to(filter.complementary_);
+  } catch (const std::exception& e) {
+    LOG_VERBOSE(e.what());
+  }
+  try {
+    obj.at("remove_homodromous").get_to(filter.remove_homodromous_);
+  } catch (const std::exception& e) {
+    LOG_VERBOSE(e.what());
   }
 
-  p = Pointer("/remove_homodromous").Get(root);
-  if (p == nullptr) {
-    EnableRemoveHomodromous(false);
-  } else if (p->IsBool()) {
-    EnableRemoveHomodromous(p->GetBool());
-  } else {
-    throw std::invalid_argument("<filter[%d].remove_homodromous> cannot recognize!");
-  }
-
-  SetSymmetryFlag(kSymmetryNone);
-
-  p = Pointer("/symmetry").Get(root);
-  if (p == nullptr) {
-    return;
-  } else if (!p->IsString()) {
-    throw std::invalid_argument("<ray_path_filter[%d].symmetry> cannot recognize!");
-  }
-
-  const auto* sym = p->GetString();
-  for (decltype(p->GetStringLength()) i = 0; i < p->GetStringLength(); i++) {
-    switch (sym[i]) {
-      case 'P':
-      case 'p':
-        AddSymmetry(kSymmetryPrism);
-        break;
-      case 'B':
-      case 'b':
-        AddSymmetry(kSymmetryBasal);
-        break;
-      case 'D':
-      case 'd':
-        AddSymmetry(kSymmetryDirection);
-        break;
-      default:
-        throw std::invalid_argument("<ray_path_filter[%d].symmetry> cannot recognize!");
+  filter.symmetry_flag_ = kSymmetryNone;
+  try {
+    const auto sym = obj.at("symmetry").get<std::string>();
+    for (const auto c : sym) {
+      switch (c) {
+        case 'P':
+        case 'p':
+          filter.AddSymmetry(kSymmetryPrism);
+          break;
+        case 'B':
+        case 'b':
+          filter.AddSymmetry(kSymmetryBasal);
+          break;
+        case 'D':
+        case 'd':
+          filter.AddSymmetry(kSymmetryDirection);
+          break;
+        default:
+          throw std::invalid_argument("<ray_path_filter[%d].symmetry> cannot recognize!");
+      }
     }
+  } catch (const std::exception& e) {
+    LOG_VERBOSE(e.what());
   }
+
+  filter.LoadFromJson(obj);
 }
 
 
@@ -200,11 +182,12 @@ RayPathFilterPtrU NoneRayPathFilter::MakeCopy() const {
 }
 
 
-void NoneRayPathFilter::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  AbstractRayPathFilter::SaveToJson(root, allocator);
-
-  Pointer("/type").Set(root, "none", allocator);
+void NoneRayPathFilter::SaveToJson(nlohmann::json& obj) const {
+  obj["type"] = "none";
 }
+
+
+void NoneRayPathFilter::LoadFromJson(const nlohmann::json& /* obj */) {}
 
 
 void SpecificRayPathFilter::AddPath(const RayPath& path) {
@@ -262,65 +245,43 @@ bool SpecificRayPathFilter::FilterPath(const Crystal* crystal, RaySegment* last_
 }
 
 
-void SpecificRayPathFilter::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  AbstractRayPathFilter::SaveToJson(root, allocator);
-
-  Pointer("/type").Set(root, "specific", allocator);
+void SpecificRayPathFilter::SaveToJson(nlohmann::json& obj) const {
+  obj["type"] = "specific";
 
   if (ray_paths_.size() == 1) {
-    Pointer("/path/0").Create(root, allocator);
     for (const auto& f : ray_paths_[0]) {
-      Pointer("/path/-").Set(root, f, allocator);
+      obj["path"].emplace_back(f);
     }
   } else if (ray_paths_.size() > 1) {
-    constexpr size_t kBufSize = 32;
-    char buf[kBufSize]{};
-    for (size_t p_idx = 0; p_idx < ray_paths_.size(); p_idx++) {
-      for (size_t f_idx = 0; f_idx < ray_paths_[p_idx].len; f_idx++) {
-        std::snprintf(buf, kBufSize, "/path/%zu/%zu", p_idx, f_idx);
-        Pointer(buf).Set(root, ray_paths_[p_idx].ids[f_idx], allocator);
+    for (const auto& rp : ray_paths_) {
+      obj["path"].emplace_back(nlohmann::json::array());
+      for (const auto& f : rp) {
+        obj["path"].back().emplace_back(f);
       }
     }
   }
 }
 
 
-void SpecificRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
-  AbstractRayPathFilter::LoadFromJson(root);
-
+void SpecificRayPathFilter::LoadFromJson(const nlohmann::json& obj) {
   ClearPaths();
-  const auto* p = Pointer("/path").Get(root);
-  if (p == nullptr || !p->IsArray()) {
-    throw std::invalid_argument("<path> cannot recognize!");
+  if (!obj["path"].is_array()) {
+    throw nlohmann::detail::other_error::create(-1, "filter path is not an array!", obj);
   }
-  if (!p->GetArray().Empty() && !p->GetArray()[0].IsInt() && !p->GetArray()[0].IsArray()) {
-    throw std::invalid_argument("<path> cannot recognize!");
-  }
-  if (p->GetArray().Empty()) {
-    LOG_WARNING("<path> is empty. Ignore this setting.");
-  } else if (p->GetArray()[0].IsInt()) {
-    RayPath tmp_path;
-    for (auto const& pi : p->GetArray()) {
-      if (!pi.IsInt()) {
-        throw std::invalid_argument("<path> cannot recognize!");
+  if (obj["path"][0].is_array()) {
+    for (const auto& p : obj["path"]) {
+      RayPath curr_path;
+      for (const auto& f : p) {
+        curr_path << f.get<int>();
       }
-      tmp_path << pi.GetInt();
+      AddPath(curr_path);
     }
-    AddPath(tmp_path);
-  } else {  // p[0].IsArray()
-    for (const auto& pi : p->GetArray()) {
-      if (pi.GetArray().Empty()) {
-        throw std::invalid_argument("<path> cannot recognize!");
-      }
-      RayPath tmp_path;
-      for (const auto& pii : pi.GetArray()) {
-        if (!pii.IsInt()) {
-          throw std::invalid_argument("<path> cannot recognize!");
-        }
-        tmp_path << pii.GetInt();
-      }
-      AddPath(tmp_path);
+  } else {
+    RayPath curr_path;
+    for (const auto& f : obj["path"]) {
+      curr_path << f.get<int>();
     }
+    AddPath(curr_path);
   }
 }
 
@@ -394,58 +355,37 @@ void GeneralRayPathFilter::ApplySymmetry(const CrystalContext* crystal_ctx) {
 }
 
 
-void GeneralRayPathFilter::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  AbstractRayPathFilter::SaveToJson(root, allocator);
-
-  Pointer("/type").Set(root, "general", allocator);
+void GeneralRayPathFilter::SaveToJson(nlohmann::json& obj) const {
+  obj["type"] = "general";
 
   if (!entry_exit_faces_.empty()) {
     auto entry = entry_exit_faces_[0].entry;
     auto exit = entry_exit_faces_[0].exit;
-    Pointer("/entry").Set(root, entry, allocator);
-    Pointer("/exit").Set(root, exit, allocator);
+    obj["entry"] = entry;
+    obj["exit"] = exit;
   }
 
   if (!hit_nums_.empty()) {
-    Pointer("/hit/0").Create(root, allocator);
     for (const auto& n : hit_nums_) {
-      Pointer("/hit/-").Set(root, n, allocator);
+      obj["hit"].emplace_back(n);
     }
   }
 }
 
 
-void GeneralRayPathFilter::LoadFromJson(const rapidjson::Value& root) {
-  AbstractRayPathFilter::LoadFromJson(root);
-
+void GeneralRayPathFilter::LoadFromJson(const nlohmann::json& obj) {
   ClearHitNumbers();
   ClearFaces();
 
-  const auto* p = Pointer("/entry").Get(root);
-  if (p == nullptr || !p->IsInt()) {
-    throw std::invalid_argument("<entry> cannot recognize!");
-  }
-  auto entry = p->GetInt();
-
-  p = Pointer("/exit").Get(root);
-  if (p == nullptr || !p->IsInt()) {
-    throw std::invalid_argument("<exit> cannot recognize!");
-  }
-  auto exit = p->GetInt();
+  auto entry = obj.at("entry").get<ShortIdType>();
+  auto exit = obj.at("exit").get<ShortIdType>();
   AddEntryExitFace(entry, exit);
 
-  p = Pointer("/hit").Get(root);
-  if (p == nullptr) {
-    LOG_WARNING("<hit> is empty. Ignore this setting.");
-  } else if (!p->IsArray()) {
-    throw std::invalid_argument("<hit> cannot recognize!");
-  } else {
-    for (const auto& pi : p->GetArray()) {
-      if (!pi.IsInt()) {
-        throw std::invalid_argument("<hit> cannot recognize!");
-      }
-      AddHitNumber(pi.GetInt());
-    }
+  if (!obj.at("hit").is_array()) {
+    throw nlohmann::detail::other_error::create(-1, "<hit> must be an array!", obj);
+  }
+  for (const auto& n : obj.at("hit")) {
+    AddHitNumber(n.get<int>());
   }
 }
 

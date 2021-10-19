@@ -6,54 +6,27 @@
 
 #include "core/optics.hpp"
 #include "process/render.hpp"
-#include "rapidjson/error/en.h"
-#include "rapidjson/filereadstream.h"
-#include "rapidjson/pointer.h"
 #include "util/log.hpp"
 
 
 namespace icehalo {
 
-using rapidjson::Pointer;
-
-constexpr float ProjectContext::kPropMinW;
-constexpr float ProjectContext::kScatMinW;
-constexpr size_t ProjectContext::kMinInitRayNum;
-constexpr int ProjectContext::kMinRayHitNum;
-constexpr int ProjectContext::kMaxRayHitNum;
-
-
 ProjectContextPtrU ProjectContext::CreateFromFile(const char* filename) {
   LOG_VERBOSE("Reading config from: %s", filename);
 
-  FILE* fp = fopen(filename, "rb");
-  if (!fp) {
-    LOG_ERROR("file %s cannot be open!", filename);
-    std::fclose(fp);
-    return nullptr;
-  }
+  std::ifstream input_stream(filename);
+  nlohmann::json json_obj;
+  input_stream >> json_obj;
 
-  constexpr size_t kTmpBufferSize = 65536;
-  char buffer[kTmpBufferSize];
-  rapidjson::FileReadStream is(fp, buffer, sizeof(buffer));
-
-  rapidjson::Document d;
-  if (d.ParseStream(is).HasParseError()) {
-    LOG_ERROR("Error(offset %zu): %s", d.GetErrorOffset(), GetParseError_En(d.GetParseError()));
-    std::fclose(fp);
-    return nullptr;
-  }
-
-  fclose(fp);
   ProjectContextPtrU proj = CreateDefault();
 
-  proj->ParseBasicSettings(d);
-  proj->ParseSunSettings(d);
-  proj->ParseCameraSettings(d);
-  proj->ParseRenderSettings(d);
-  proj->ParseCrystalSettings(d);
-  proj->ParseRayPathFilterSettings(d);
-  proj->ParseMultiScatterSettings(d);
+  proj->ParseBasicSettings(json_obj);
+  proj->ParseSunSettings(json_obj);
+  proj->ParseCameraSettings(json_obj);
+  proj->ParseRenderSettings(json_obj);
+  proj->ParseCrystalSettings(json_obj);
+  proj->ParseRayPathFilterSettings(json_obj);
+  proj->ParseMultiScatterSettings(json_obj);
 
   return proj;
 }
@@ -154,182 +127,103 @@ AbstractRayPathFilter* ProjectContext::GetRayPathFilter(ShortIdType id) const {
 }
 
 
-ProjectContext::ProjectContext()
-    : sun_ctx_{}, cam_ctx_{}, render_ctx_{}, init_ray_num_(kDefaultInitRayNum), ray_hit_num_(kDefaultRayHitNum) {}
+ProjectContext::ProjectContext() : init_ray_num_(kDefaultInitRayNum), ray_hit_num_(kDefaultRayHitNum) {}
 
 
-void ProjectContext::ParseBasicSettings(rapidjson::Document& d) {
-  auto p = Pointer("/ray/number").Get(d);
-  if (p == nullptr) {
-    LOG_VERBOSE("Config missing <ray.number>. Use default %d!", ProjectContext::kMinRayHitNum);
-  } else if (!p->IsUint()) {
-    LOG_VERBOSE("Config <ray.number> is not unsigned int. Use default %d!", ProjectContext::kMinRayHitNum);
-  } else {
-    SetInitRayNum(p->GetUint());
-  }
+void ProjectContext::ParseBasicSettings(const nlohmann::json& obj) {
+  SetInitRayNum(obj.at("ray").at("number").get<uint64_t>());
+  SetRayHitNum(obj.at("max_recursion").get<int>());
 
-  p = Pointer("/max_recursion").Get(d);
-  if (p == nullptr) {
-    LOG_VERBOSE("Config missing <max_recursion>. Use default %d!", ProjectContext::kMinRayHitNum);
-  } else if (!p->IsInt()) {
-    LOG_VERBOSE("Config <max_recursion> is not an integer. Use default %d!", ProjectContext::kMinRayHitNum);
-  } else {
-    SetRayHitNum(p->GetInt());
-  }
-
-  std::vector<int> tmp_wavelengths{ 550 };
-  auto wl_p = Pointer("/ray/wavelength").Get(d);
-  if (wl_p == nullptr) {
-    LOG_VERBOSE("Config missing <ray.wavelength>. Use default 550!");
-  } else if (!wl_p->IsArray()) {
-    LOG_VERBOSE("Config <ray.wavelength> is not an array. Use default 550!");
-  } else if (!(*wl_p)[0].IsInt()) {
-    LOG_VERBOSE("Config <ray.wavelength> cannot be recognized, using default 550!");
-  } else {
-    tmp_wavelengths.clear();
-    for (const auto& pi : wl_p->GetArray()) {
-      tmp_wavelengths.emplace_back(static_cast<float>(pi.GetDouble()));
-    }
-  }
-
-  std::vector<float> tmp_weights{ 1.0f };
-  auto wt_p = Pointer("/ray/weight").Get(d);
-  if (wt_p == nullptr) {
-    LOG_VERBOSE("Config missing <ray.weight>. Use default 1.0!");
-  } else if (!wt_p->IsArray()) {
-    LOG_VERBOSE("Config <ray.wavelength> is not an array. Use default 1.0!");
-  } else if (!(*wt_p)[0].IsNumber()) {
-    LOG_VERBOSE("Config <ray.wavelength> cannot be recognized. Use default 1.0!");
-  } else {
-    tmp_weights.clear();
-    for (const auto& pi : wt_p->GetArray()) {
-      tmp_weights.emplace_back(static_cast<float>(pi.GetDouble()));
-    }
-  }
-
-  if (tmp_wavelengths.size() != tmp_weights.size()) {
-    throw std::invalid_argument("size of ray.wavelength and ray.weight doesn't match!");
+  const auto& ray_obj = obj.at("ray");
+  if (!ray_obj.at("wavelength").is_array() || !ray_obj.at("weight").is_array() ||
+      ray_obj.at("wavelength").size() != ray_obj.at("weight").size()) {
+    throw nlohmann::detail::other_error::create(-1, "wavelength and weight must be arrays with same length!", obj);
   }
 
   wavelengths_.clear();
-  for (size_t i = 0; i < tmp_wavelengths.size(); i++) {
-    wavelengths_.emplace_back(WavelengthInfo{ static_cast<int>(tmp_wavelengths[i]), tmp_weights[i] });
+  for (size_t i = 0; i < ray_obj.at("wavelength").size(); i++) {
+    auto l = ray_obj.at("wavelength")[i].get<int>();
+    auto w = ray_obj.at("weight")[i].get<float>();
+    wavelengths_.emplace_back(WavelengthInfo{ l, w });
   }
 
-  std::string dir = boost::filesystem::current_path().string();
-  p = Pointer("/data_folder").Get(d);
-  if (p == nullptr) {
-    LOG_VERBOSE("Config missing <data_folder>. Use default current path!");
-  } else if (!p->IsString()) {
-    LOG_VERBOSE("Config <data_folder> is not a string. Use default current path!");
-  } else {
-    dir = p->GetString();
+  data_path_ = boost::filesystem::current_path().string();
+  try {
+    obj.at("data_folder").get_to(data_path_);
+  } catch (...) {
+    LOG_VERBOSE("cannot parse data_folder. use default: %s", data_path_.c_str());
   }
-  data_path_ = dir;
-
   main_img_filename_ = "img.jpg";
-  p = Pointer("/main_image_name").Get(d);
-  if (p == nullptr) {
-    LOG_VERBOSE("Config missing <main_image_name>. Use default %s", main_img_filename_.c_str());
-  } else if (!p->IsString()) {
-    LOG_VERBOSE("Config <main_image_name> is not a string. Use default %s", main_img_filename_.c_str());
-  } else {
-    main_img_filename_ = p->GetString();
+  try {
+    obj.at("main_image_name").get_to(main_img_filename_);
+  } catch (...) {
+    LOG_VERBOSE("cannot parse main_image_name. use default: %s", main_img_filename_.c_str());
   }
 }
 
 
-void ProjectContext::ParseSunSettings(rapidjson::Document& d) {
+void ProjectContext::ParseSunSettings(const nlohmann::json& obj) {
   sun_ctx_ = SunContext::CreateDefault();
-  auto root = Pointer("/sun").Get(d);
-  if (!root) {
-    LOG_VERBOSE("Config <sun> is missing. Use default!");
-  } else {
-    sun_ctx_->LoadFromJson(*root);
-  }
+  obj.at("sun").get_to(*sun_ctx_);
 }
 
 
-void ProjectContext::ParseCameraSettings(rapidjson::Document& d) {
+void ProjectContext::ParseCameraSettings(const nlohmann::json& obj) {
   cam_ctx_ = CameraContext::CreateDefault();
-  auto root = Pointer("/camera").Get(d);
-  if (!root) {
-    LOG_VERBOSE("Config <camera> is missing. Use default!");
-  } else {
-    cam_ctx_->LoadFromJson(*root);
-  }
+  obj.at("camera").get_to(*cam_ctx_);
 }
 
 
-void ProjectContext::ParseRenderSettings(rapidjson::Document& d) {
+void ProjectContext::ParseRenderSettings(const nlohmann::json& obj) {
   render_ctx_ = RenderContext::CreateDefault();
-  auto root = Pointer("/render").Get(d);
-  if (!root) {
-    LOG_VERBOSE("Config <render> is missing. Use default!");
-  } else {
-    render_ctx_->LoadFromJson(*root);
-  }
+  obj.at("render").get_to(*render_ctx_);
 
-  root = Pointer("/split_render").Get(d);
-  if (!root) {
-    LOG_VERBOSE("Config <split_render> is missing. Leave it empty!");
-    split_render_ctx_ = nullptr;
-  } else {
+  if (obj.contains("split_render")) {
     split_render_ctx_ = RenderContext::CreateDefault();
-    split_render_ctx_->LoadFromJson(*root);
+    obj.at("split_render").get_to(*split_render_ctx_);
+  } else {
+    split_render_ctx_ = nullptr;
   }
 }
 
 
-void ProjectContext::ParseCrystalSettings(rapidjson::Document& d) {
-  constexpr size_t kTmpBufferSize = 512;
-  char buffer[kTmpBufferSize];
-
-  const auto* p = Pointer("/crystal").Get(d);
-  if (p == nullptr || !p->IsArray()) {
-    std::snprintf(buffer, kTmpBufferSize, "Missing <crystal>. Parsing fail!");
-    throw std::invalid_argument(buffer);
+void ProjectContext::ParseCrystalSettings(const nlohmann::json& obj) {
+  if (!obj.at("crystal").is_array()) {
+    throw nlohmann::detail::other_error::create(-1, "crystal should be an array!", obj);
   }
 
-  for (const auto& c : p->GetArray()) {
-    crystal_store_.emplace_back(CrystalContext::CreateDefault());
-    crystal_store_.back()->LoadFromJson(c);
+  for (const auto& c : obj.at("crystal")) {
+    auto crystal = CrystalContext::CreateDefault();
+    c.get_to(*crystal);
+    crystal_store_.emplace_back(std::move(crystal));
   }
 
   PrintCrystalInfo();
 }
 
 
-void ProjectContext::ParseRayPathFilterSettings(rapidjson::Document& d) {
-  constexpr size_t kTmpBufferSize = 512;
-  char buffer[kTmpBufferSize];
-
-  const auto* p = Pointer("/ray_path_filter").Get(d);
-  if (p == nullptr || !p->IsArray()) {
-    std::snprintf(buffer, kTmpBufferSize, "Missing <ray_path_filter>. Parsing fail!");
-    throw std::invalid_argument(buffer);
+void ProjectContext::ParseRayPathFilterSettings(const nlohmann::json& obj) {
+  if (!obj.at("ray_path_filter").is_array()) {
+    throw nlohmann::detail::other_error::create(-1, "ray_path_filter should be an array!", obj);
   }
 
-  for (const auto& c : p->GetArray()) {
-    filter_store_.emplace_back(RayPathFilterContext::CreateDefault());
-    filter_store_.back()->LoadFromJson(c);
+  for (const auto& f : obj.at("ray_path_filter")) {
+    auto filter = RayPathFilterContext::CreateDefault();
+    f.get_to(*filter);
+    filter_store_.emplace_back(std::move(filter));
   }
 }
 
 
-void ProjectContext::ParseMultiScatterSettings(rapidjson::Document& d) {
-  constexpr size_t kTmpBufferSize = 512;
-  char buffer[kTmpBufferSize];
-
-  auto p = Pointer("/multi_scatter").Get(d);
-  if (p == nullptr || !p->IsArray() || !p->GetArray()[0].IsObject()) {
-    std::snprintf(buffer, kTmpBufferSize, "Config <multi_scatter> cannot be recognized!");
-    throw std::invalid_argument(buffer);
+void ProjectContext::ParseMultiScatterSettings(const nlohmann::json& obj) {
+  if (!obj.at("multi_scatter").is_array()) {
+    throw nlohmann::detail::other_error::create(-1, "multi_scatter should be an array!", obj);
   }
 
-  for (const auto& c : p->GetArray()) {
-    multi_scatter_info_.emplace_back(MultiScatterContext::CreateDefault());
-    multi_scatter_info_.back()->LoadFromJson(c);
+  for (const auto& s : obj.at("multi_scatter")) {
+    auto scatter = MultiScatterContext::CreateDefault();
+    s.get_to(*scatter);
+    multi_scatter_info_.emplace_back(std::move(scatter));
   }
 }
 

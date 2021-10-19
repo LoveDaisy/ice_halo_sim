@@ -13,16 +13,12 @@ namespace icehalo {
 
 enum class VisibleRange { kUpper, kLower, kFront, kFull };
 
-
-enum class LensType {
-  kLinear,
-  kEqualArea,
-  kEquidistant,
-  kDualEqualArea,
-  kDualEquidistant,
-  kEquirectangular,
-};
-
+NLOHMANN_JSON_SERIALIZE_ENUM(VisibleRange, {
+                                               { VisibleRange::kFull, "full" },
+                                               { VisibleRange::kUpper, "upper" },
+                                               { VisibleRange::kLower, "lower" },
+                                               { VisibleRange::kFront, "front" },
+                                           })
 
 using ProjectionFunction = std::function<void(Pose3f cam_pose,           // Camera rotation (lon, lat, roll), in degree.
                                               float hov,                 // Half field of view, in degree

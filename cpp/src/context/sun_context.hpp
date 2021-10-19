@@ -5,12 +5,11 @@
 
 #include "core/core_def.hpp"
 #include "io/serialize.hpp"
-#include "rapidjson/document.h"
-
+#include "json.hpp"
 
 namespace icehalo {
 
-class SunContext : public IJsonizable {
+class SunContext {
  public:
   const float* GetSunPosition() const;
 
@@ -19,9 +18,6 @@ class SunContext : public IJsonizable {
 
   float GetSunDiameter() const;
   bool SetSunDiameter(float d);
-
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(const rapidjson::Value& root) override;
 
   static SunContextPtrU CreateDefault();
 
@@ -35,6 +31,10 @@ class SunContext : public IJsonizable {
   float altitude_;         // in degree
   float sun_position_[3];  // [x, y, z]
 };
+
+void to_json(nlohmann::json& obj, const SunContext& ctx);
+
+void from_json(const nlohmann::json& obj, SunContext& ctx);
 
 }  // namespace icehalo
 

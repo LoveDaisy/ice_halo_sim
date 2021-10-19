@@ -6,8 +6,7 @@
 #include "core/core_def.hpp"
 #include "core/crystal.hpp"
 #include "io/serialize.hpp"
-#include "rapidjson/document.h"
-
+#include "json.hpp"
 
 namespace icehalo {
 
@@ -19,6 +18,12 @@ enum class ColorCompactLevel : int {
   kLowQuality = 4,  //!< 4-bit per channel
 };
 
+NLOHMANN_JSON_SERIALIZE_ENUM(ColorCompactLevel, {
+                                                    { ColorCompactLevel::kTrueColor, "true_color" },
+                                                    { ColorCompactLevel::kMonochrome, "monochrome" },
+                                                    { ColorCompactLevel::kLowQuality, "low_quality" },
+                                                })
+
 
 enum class RenderSplitterType {
   kNone = 0,
@@ -26,8 +31,14 @@ enum class RenderSplitterType {
   kFilter,
 };
 
+NLOHMANN_JSON_SERIALIZE_ENUM(RenderSplitterType, {
+                                                     { RenderSplitterType::kNone, "none" },
+                                                     { RenderSplitterType::kTopHalo, "top_halo" },
+                                                     { RenderSplitterType::kFilter, "filter" },
+                                                 })
 
-struct RenderSplitter : public IJsonizable {
+
+struct RenderSplitter {
   RenderSplitterType type;
   int top_halo_num;
   std::vector<std::vector<ShortIdType>> crystal_filters;
@@ -35,10 +46,10 @@ struct RenderSplitter : public IJsonizable {
   static constexpr uint8_t kDefaultSymmetry = kSymmetryPrism | kSymmetryDirection | kSymmetryBasal;
 
   RenderSplitter();
-
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(const rapidjson::Value& root) override;
 };
+
+void to_json(nlohmann::json& obj, const RenderSplitter& splitter);
+void from_json(const nlohmann::json& obj, RenderSplitter& splitter);
 
 
 enum class LineType {
@@ -46,8 +57,13 @@ enum class LineType {
   kDashed,
 };
 
+NLOHMANN_JSON_SERIALIZE_ENUM(LineType, {
+                                           { LineType::kSolid, "solid" },
+                                           { LineType::kDashed, "dashed" },
+                                       })
 
-struct LineSpecifier : public IJsonizable {
+
+struct LineSpecifier {
   LineType type;
   float width;
   float color[3];
@@ -61,16 +77,18 @@ struct LineSpecifier : public IJsonizable {
 
   LineSpecifier();
   LineSpecifier(LineType type, float width, const float color[3], float alpha);
-
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(const rapidjson::Value& root) override;
 };
+
+void to_json(nlohmann::json& obj, const LineSpecifier& line);
+void from_json(const nlohmann::json& obj, LineSpecifier& line);
 
 
 struct GridLine {
   float value;
   LineSpecifier line_specifier;
 };
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GridLine, value, line_specifier)
 
 
 /**
@@ -85,7 +103,7 @@ struct GridLine {
  *     2.3 Else use `ray_color`
  * 3. Else ignore other ray color settings and background color settings
  */
-class RenderContext : public IJsonizable {
+class RenderContext {
  public:
   const float* GetRayColor() const;
   void SetRayColor(float r, float g, float b);
@@ -124,9 +142,6 @@ class RenderContext : public IJsonizable {
   const std::vector<GridLine>& GetElevationGrids() const;
   const std::vector<GridLine>& GetRadiusGrids() const;
 
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(const rapidjson::Value& root) override;
-
   static RenderContextPtrU CreateDefault();
 
   static constexpr float kDefaultIntensity = 1.0f;
@@ -136,24 +151,27 @@ class RenderContext : public IJsonizable {
   static constexpr int kMaxImageSize = 65535;
   static constexpr int kMaxTopHaloNumber = 300;
 
+  friend void to_json(nlohmann::json& obj, const RenderContext& ctx);
+  friend void from_json(const nlohmann::json& obj, RenderContext& ctx);
+
  private:
   RenderContext();
 
-  void LoadColorConfig(const rapidjson::Value& root);
-  void LoadIntensity(const rapidjson::Value& root);
-  void LoadImageSize(const rapidjson::Value& root);
-  void LoadImageOffset(const rapidjson::Value& root);
-  void LoadVisibleRange(const rapidjson::Value& root);
-  void LoadRenderSplitter(const rapidjson::Value& root);
-  void LoadGridLines(const rapidjson::Value& root);
+  void LoadColorConfig(const nlohmann::json& obj);
+  void LoadIntensity(const nlohmann::json& obj);
+  void LoadImageSize(const nlohmann::json& obj);
+  void LoadImageOffset(const nlohmann::json& obj);
+  void LoadVisibleRange(const nlohmann::json& obj);
+  void LoadRenderSplitter(const nlohmann::json& obj);
+  void LoadGridLines(const nlohmann::json& obj);
 
-  void SaveColorConfig(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveIntensity(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveImageSize(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveImageOffset(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveVisibleRange(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveRenderSplitter(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
-  void SaveGridLines(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator);
+  void SaveColorConfig(nlohmann::json& obj) const;
+  void SaveIntensity(nlohmann::json& obj) const;
+  void SaveImageSize(nlohmann::json& obj) const;
+  void SaveImageOffset(nlohmann::json& obj) const;
+  void SaveVisibleRange(nlohmann::json& obj) const;
+  void SaveRenderSplitter(nlohmann::json& obj) const;
+  void SaveGridLines(nlohmann::json& obj) const;
 
   float ray_color_[3];
   float background_color_[3];

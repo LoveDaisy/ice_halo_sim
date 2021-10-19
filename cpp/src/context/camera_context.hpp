@@ -7,16 +7,34 @@
 #include "core/core_def.hpp"
 #include "core/math.hpp"
 #include "io/serialize.hpp"
-#include "rapidjson/document.h"
+#include "json.hpp"
 
 
 namespace icehalo {
 
-enum class LensType;
+enum class LensType {
+  kLinear,
+  kEqualArea,
+  kEquidistant,
+  kDualEqualArea,
+  kDualEquidistant,
+  kEquirectangular,
+};
 
-class CameraContext : public IJsonizable {
+
+NLOHMANN_JSON_SERIALIZE_ENUM(LensType, {
+                                           { LensType::kEqualArea, "fisheye_equalarea" },
+                                           { LensType::kDualEqualArea, "dual_fisheye_equalarea" },
+                                           { LensType::kEquidistant, "fisheye_equidistant" },
+                                           { LensType::kDualEquidistant, "dual_fisheye_equidistant" },
+                                           { LensType::kLinear, "linear" },
+                                           { LensType::kEquirectangular, "equirectangular" },
+                                       })
+
+
+class CameraContext {
  public:
-  Pose3f GetCameraPose() const;
+  Pose3f GetCameraTargetDirection() const;
   void SetCameraTargetDirection(float azimuth, float altitude, float roll);
   void ResetCameraTargetDirection();
 
@@ -26,17 +44,7 @@ class CameraContext : public IJsonizable {
   LensType GetLensType() const;
   void SetLensType(LensType type);
 
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(const rapidjson::Value& root) override;
-
   static CameraContextPtrU CreateDefault();
-
-  static constexpr float kMinAngleRound = 0.0f;
-  static constexpr float kMaxAngleRound = 360.0f;
-  static constexpr float kMinAngleTilt = -90.0f;
-  static constexpr float kMaxAngleTilt = 90.0f;
-  static constexpr float kMinAngleHeading = -180.0f;
-  static constexpr float kMaxAngleHeading = 180.0f;
 
   static constexpr float kMaxFovLinear = 65.0f;
   static constexpr float kMaxFovFisheye = 120.0f;
@@ -52,6 +60,11 @@ class CameraContext : public IJsonizable {
   float fov_;
   LensType lens_type_;
 };
+
+
+void to_json(nlohmann::json& obj, const CameraContext& ctx);
+
+void from_json(const nlohmann::json& obj, CameraContext& ctx);
 
 }  // namespace icehalo
 

@@ -7,18 +7,18 @@
 
 #include "core/core_def.hpp"
 #include "io/serialize.hpp"
-
+#include "json.hpp"
 
 namespace icehalo {
 
 struct RaySegment;
 enum class RaySegmentState : uint8_t;
 
-class AbstractRayPathFilter : public IJsonizable {
+class AbstractRayPathFilter {
  public:
   AbstractRayPathFilter();
   AbstractRayPathFilter(const AbstractRayPathFilter& other);
-  ~AbstractRayPathFilter() override = default;
+  virtual ~AbstractRayPathFilter() = default;
 
   AbstractRayPathFilter& operator=(const AbstractRayPathFilter& other);
 
@@ -37,11 +37,14 @@ class AbstractRayPathFilter : public IJsonizable {
   void EnableRemoveHomodromous(bool enable);
   bool GetRemoveHomodromous() const;
 
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(const rapidjson::Value& root) override;
+  friend void to_json(nlohmann::json& obj, const AbstractRayPathFilter& filter);
+  friend void from_json(const nlohmann::json& obj, AbstractRayPathFilter& filter);
 
  protected:
   virtual bool FilterPath(const Crystal* crystal, RaySegment* last_r) const = 0;
+
+  virtual void SaveToJson(nlohmann::json& obj) const = 0;
+  virtual void LoadFromJson(const nlohmann::json& obj) = 0;
 
   uint8_t symmetry_flag_;
   bool complementary_;
@@ -55,10 +58,11 @@ class NoneRayPathFilter : public AbstractRayPathFilter {
  public:
   RayPathFilterPtrU MakeCopy() const override;
 
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-
  protected:
   bool FilterPath(const Crystal* crystal, RaySegment* last_r) const override;
+
+  void SaveToJson(nlohmann::json& obj) const override;
+  void LoadFromJson(const nlohmann::json& obj) override;
 };
 
 
@@ -70,11 +74,12 @@ class SpecificRayPathFilter : public AbstractRayPathFilter {
 
   RayPathFilterPtrU MakeCopy() const override;
   void ApplySymmetry(const CrystalContext* crystal_ctx) override;
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(const rapidjson::Value& root) override;
 
  protected:
   bool FilterPath(const Crystal* crystal, RaySegment* last_r) const override;
+
+  void SaveToJson(nlohmann::json& obj) const override;
+  void LoadFromJson(const nlohmann::json& obj) override;
 
  private:
   std::unordered_set<size_t> ray_path_hashes_;
@@ -91,11 +96,12 @@ class GeneralRayPathFilter : public AbstractRayPathFilter {
 
   RayPathFilterPtrU MakeCopy() const override;
   void ApplySymmetry(const CrystalContext* crystal_ctx) override;
-  void SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) override;
-  void LoadFromJson(const rapidjson::Value& root) override;
 
  protected:
   bool FilterPath(const Crystal* crystal, RaySegment* last_r) const override;
+
+  void SaveToJson(nlohmann::json& obj) const override;
+  void LoadFromJson(const nlohmann::json& obj) override;
 
  private:
   struct EntryExitFace {

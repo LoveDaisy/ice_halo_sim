@@ -143,13 +143,12 @@ set(icehalo_process_src
 set(icehalo_io_src
   "${PROJ_SRC_DIR}/io/file.cpp")
 
- set(icehalo_util_src
+set(icehalo_util_src
   "${PROJ_SRC_DIR}/util/arg_parser.cpp"
   "${PROJ_SRC_DIR}/util/log.cpp"
   "${PROJ_SRC_DIR}/util/obj_pool.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
-
-  set(icehalo_src
+set(icehalo_src
   ${icehalo_context_src} ${icehalo_core_src} ${icehalo_io_src} ${icehalo_process_src} ${icehalo_util_src})
 
 

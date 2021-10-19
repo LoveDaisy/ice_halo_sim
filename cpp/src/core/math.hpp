@@ -141,8 +141,8 @@ struct HalfSpaceSet {
 };
 
 
-enum class Distribution {
-  kUniform,
+enum class DistributionType {
+  kUniform = 0,
   kGaussian,
 };
 
@@ -151,7 +151,7 @@ class RandomNumberGenerator {
  public:
   float GetGaussian();
   float GetUniform();
-  float Get(Distribution dist, float mean, float std);
+  float Get(DistributionType dist, float mean, float std);
   void Reset();
 
   static RandomNumberGenerator* GetInstance();
@@ -245,18 +245,19 @@ void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n, s
                              std::vector<TriangleIdx>& faces);
 
 
+struct Distribution {
+  DistributionType type;
+  float mean;
+  float std;
+};
+
+
 struct AxisDistribution {
   AxisDistribution();
 
-  Distribution latitude_dist;
   Distribution azimuth_dist;
+  Distribution latitude_dist;
   Distribution roll_dist;
-  float latitude_mean;
-  float azimuth_mean;
-  float roll_mean;
-  float latitude_std;
-  float azimuth_std;
-  float roll_std;
 };
 
 }  // namespace icehalo

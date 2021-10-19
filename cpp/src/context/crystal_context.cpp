@@ -1,48 +1,38 @@
 #include "context/crystal_context.hpp"
 
 #include <algorithm>
-#include <limits>
 #include <sstream>
 
-#include "rapidjson/document.h"
-#include "rapidjson/pointer.h"
-#include "util/enum_map.hpp"
 #include "util/log.hpp"
 
 namespace icehalo {
 
-using rapidjson::Pointer;
-
-void CrystalContext::ParseHexPrism(const rapidjson::Value& c) {
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    throw std::invalid_argument("<crystal.parameter> cannot recognize!");
-  }
-  auto h = static_cast<float>(p->GetDouble());
-  h_param_[0] = h;
-  crystal_ = Crystal::CreateHexPrism(h);
+void CrystalContext::ParseHexPrism(const nlohmann::json& obj) {
+  h_param_[0] = obj.at("parameter").get<float>();
+  crystal_ = Crystal::CreateHexPrism(h_param_[0]);
 }
 
 
-void CrystalContext::ParseHexPyramid(const rapidjson::Value& c) {
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    throw std::invalid_argument("<crystal.parameter> cannot recognize!");
-  } else if (p->Size() == 3) {
-    auto h1 = static_cast<float>((*p)[0].GetDouble());
-    auto h2 = static_cast<float>((*p)[1].GetDouble());
-    auto h3 = static_cast<float>((*p)[2].GetDouble());
+void CrystalContext::ParseHexPyramid(const nlohmann::json& obj) {
+  auto p_obj = obj.at("parameter");
+  if (!p_obj.is_array()) {
+    throw nlohmann::detail::other_error::create(-1, "crystal parameter must be array!", obj);
+  }
+  if (p_obj.size() == 3) {
+    auto h1 = p_obj[0].get<float>();
+    auto h2 = p_obj[1].get<float>();
+    auto h3 = p_obj[2].get<float>();
     h_param_[0] = h1;
     h_param_[1] = h2;
     h_param_[2] = h3;
     crystal_ = Crystal::CreateHexPyramid(h1, h2, h3);
-  } else if (p->Size() == 5) {
-    if ((*p)[0].IsInt()) {  // Using Miller Index
-      int i1 = (*p)[0].GetInt();
-      int i2 = (*p)[1].GetInt();
-      auto h1 = static_cast<float>((*p)[2].GetDouble());
-      auto h2 = static_cast<float>((*p)[3].GetDouble());
-      auto h3 = static_cast<float>((*p)[4].GetDouble());
+  } else if (p_obj.size() == 5) {
+    if (p_obj[0].is_number_integer()) {  // Using Miller Index
+      int i1 = p_obj[0].get<int>();
+      int i2 = p_obj[1].get<int>();
+      auto h1 = p_obj[2].get<float>();
+      auto h2 = p_obj[3].get<float>();
+      auto h3 = p_obj[4].get<float>();
       idx_param_[0] = i1;
       idx_param_[1] = i2;
       h_param_[0] = h1;
@@ -50,11 +40,11 @@ void CrystalContext::ParseHexPyramid(const rapidjson::Value& c) {
       h_param_[2] = h3;
       crystal_ = Crystal::CreateHexPyramid(i1, i2, h1, h2, h3);
     } else {  // Using wedge angle
-      auto a1 = static_cast<float>((*p)[0].GetDouble());
-      auto a2 = static_cast<float>((*p)[1].GetDouble());
-      auto h1 = static_cast<float>((*p)[2].GetDouble());
-      auto h2 = static_cast<float>((*p)[3].GetDouble());
-      auto h3 = static_cast<float>((*p)[4].GetDouble());
+      auto a1 = p_obj[0].get<float>();
+      auto a2 = p_obj[1].get<float>();
+      auto h1 = p_obj[2].get<float>();
+      auto h2 = p_obj[3].get<float>();
+      auto h3 = p_obj[4].get<float>();
       a_param_[0] = a1;
       a_param_[1] = a2;
       h_param_[0] = h1;
@@ -62,14 +52,14 @@ void CrystalContext::ParseHexPyramid(const rapidjson::Value& c) {
       h_param_[2] = h3;
       crystal_ = Crystal::CreateHexPyramid(a1, a2, h1, h2, h3);
     }
-  } else if (p->Size() == 7) {
-    int upper_idx1 = (*p)[0].GetInt();
-    int upper_idx2 = (*p)[1].GetInt();
-    int lower_idx1 = (*p)[2].GetInt();
-    int lower_idx2 = (*p)[3].GetInt();
-    auto h1 = static_cast<float>((*p)[4].GetDouble());
-    auto h2 = static_cast<float>((*p)[5].GetDouble());
-    auto h3 = static_cast<float>((*p)[6].GetDouble());
+  } else if (p_obj.size() == 7) {
+    int upper_idx1 = p_obj[0].get<int>();
+    int upper_idx2 = p_obj[1].get<int>();
+    int lower_idx1 = p_obj[2].get<int>();
+    int lower_idx2 = p_obj[3].get<int>();
+    auto h1 = p_obj[4].get<float>();
+    auto h2 = p_obj[5].get<float>();
+    auto h3 = p_obj[6].get<float>();
     idx_param_[0] = upper_idx1;
     idx_param_[1] = upper_idx2;
     idx_param_[2] = lower_idx1;
@@ -84,18 +74,19 @@ void CrystalContext::ParseHexPyramid(const rapidjson::Value& c) {
 }
 
 
-void CrystalContext::ParseHexPyramidStackHalf(const rapidjson::Value& c) {
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    throw std::invalid_argument("<crystal.parameter> cannot recognize!");
-  } else if (p->Size() == 7) {
-    int upper_idx1 = (*p)[0].GetInt();
-    int upper_idx2 = (*p)[1].GetInt();
-    int lower_idx1 = (*p)[2].GetInt();
-    int lower_idx2 = (*p)[3].GetInt();
-    auto h1 = static_cast<float>((*p)[4].GetDouble());
-    auto h2 = static_cast<float>((*p)[5].GetDouble());
-    auto h3 = static_cast<float>((*p)[6].GetDouble());
+void CrystalContext::ParseHexPyramidStackHalf(const nlohmann::json& obj) {
+  auto p_obj = obj.at("parameter");
+  if (!p_obj.is_array()) {
+    throw nlohmann::detail::other_error::create(-1, "crystal parameter must be array!", obj);
+  }
+  if (p_obj.size() == 7) {
+    int upper_idx1 = p_obj[0].get<int>();
+    int upper_idx2 = p_obj[1].get<int>();
+    int lower_idx1 = p_obj[2].get<int>();
+    int lower_idx2 = p_obj[3].get<int>();
+    auto h1 = p_obj[4].get<float>();
+    auto h2 = p_obj[5].get<float>();
+    auto h3 = p_obj[6].get<float>();
     idx_param_[0] = upper_idx1;
     idx_param_[1] = upper_idx2;
     idx_param_[2] = lower_idx1;
@@ -110,13 +101,14 @@ void CrystalContext::ParseHexPyramidStackHalf(const rapidjson::Value& c) {
 }
 
 
-void CrystalContext::ParseCubicPyramid(const rapidjson::Value& c) {
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    throw std::invalid_argument("<crystal.parameter> cannot recognize!");
-  } else if (p->Size() == 2) {
-    auto h1 = static_cast<float>((*p)[0].GetDouble());
-    auto h2 = static_cast<float>((*p)[1].GetDouble());
+void CrystalContext::ParseCubicPyramid(const nlohmann::json& obj) {
+  auto p_obj = obj.at("parameter");
+  if (!p_obj.is_array()) {
+    throw nlohmann::detail::other_error::create(-1, "crystal parameter must be array!", obj);
+  }
+  if (p_obj.size() == 2) {
+    auto h1 = p_obj[0].get<float>();
+    auto h2 = p_obj[1].get<float>();
     h_param_[0] = h1;
     h_param_[1] = h2;
     crystal_ = Crystal::CreateCubicPyramid(h1, h2);
@@ -126,18 +118,19 @@ void CrystalContext::ParseCubicPyramid(const rapidjson::Value& c) {
 }
 
 
-void CrystalContext::ParseIrregularHexPrism(const rapidjson::Value& c) {
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsArray() || p->Size() != 7) {
-    throw std::invalid_argument("<crystal.parameter> cannot recognize!");
-  } else {
-    auto d1 = static_cast<float>((*p)[0].GetDouble());
-    auto d2 = static_cast<float>((*p)[1].GetDouble());
-    auto d3 = static_cast<float>((*p)[2].GetDouble());
-    auto d4 = static_cast<float>((*p)[3].GetDouble());
-    auto d5 = static_cast<float>((*p)[4].GetDouble());
-    auto d6 = static_cast<float>((*p)[5].GetDouble());
-    auto h = static_cast<float>((*p)[6].GetDouble());
+void CrystalContext::ParseIrregularHexPrism(const nlohmann::json& obj) {
+  auto p_obj = obj.at("parameter");
+  if (!p_obj.is_array()) {
+    throw nlohmann::detail::other_error::create(-1, "crystal parameter must be array!", obj);
+  }
+  if (p_obj.size() == 7) {
+    auto d1 = p_obj[0].get<float>();
+    auto d2 = p_obj[1].get<float>();
+    auto d3 = p_obj[2].get<float>();
+    auto d4 = p_obj[3].get<float>();
+    auto d5 = p_obj[4].get<float>();
+    auto d6 = p_obj[5].get<float>();
+    auto h = p_obj[6].get<float>();
 
     float dist[6] = { d1, d2, d3, d4, d5, d6 };
 
@@ -149,28 +142,31 @@ void CrystalContext::ParseIrregularHexPrism(const rapidjson::Value& c) {
     d_param_[5] = d6;
     h_param_[0] = h;
     crystal_ = Crystal::CreateIrregularHexPrism(dist, h);
+  } else {
+    throw std::invalid_argument("<crystal.parameter> number doesn't match!");
   }
 }
 
 
-void CrystalContext::ParseIrregularHexPyramid(const rapidjson::Value& c) {
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsArray()) {
-    throw std::invalid_argument("<crystal.parameter> cannot recognize!");
-  } else if (p->Size() == 13) {
-    auto d1 = static_cast<float>((*p)[0].GetDouble());
-    auto d2 = static_cast<float>((*p)[1].GetDouble());
-    auto d3 = static_cast<float>((*p)[2].GetDouble());
-    auto d4 = static_cast<float>((*p)[3].GetDouble());
-    auto d5 = static_cast<float>((*p)[4].GetDouble());
-    auto d6 = static_cast<float>((*p)[5].GetDouble());
-    int i1 = (*p)[6].GetInt();
-    int i2 = (*p)[7].GetInt();
-    int i3 = (*p)[8].GetInt();
-    int i4 = (*p)[9].GetInt();
-    auto h1 = static_cast<float>((*p)[10].GetDouble());
-    auto h2 = static_cast<float>((*p)[11].GetDouble());
-    auto h3 = static_cast<float>((*p)[12].GetDouble());
+void CrystalContext::ParseIrregularHexPyramid(const nlohmann::json& obj) {
+  auto p_obj = obj.at("parameter");
+  if (!p_obj.is_array()) {
+    throw nlohmann::detail::other_error::create(-1, "crystal parameter must be array!", obj);
+  }
+  if (p_obj.size() == 13) {
+    auto d1 = p_obj[0].get<float>();
+    auto d2 = p_obj[1].get<float>();
+    auto d3 = p_obj[2].get<float>();
+    auto d4 = p_obj[3].get<float>();
+    auto d5 = p_obj[4].get<float>();
+    auto d6 = p_obj[5].get<float>();
+    int i1 = p_obj[6].get<int>();
+    int i2 = p_obj[7].get<int>();
+    int i3 = p_obj[8].get<int>();
+    int i4 = p_obj[9].get<int>();
+    auto h1 = p_obj[10].get<float>();
+    auto h2 = p_obj[11].get<float>();
+    auto h3 = p_obj[12].get<float>();
 
     float dist[6] = { d1, d2, d3, d4, d5, d6 };
     int idx[4] = { i1, i2, i3, i4 };
@@ -196,140 +192,63 @@ void CrystalContext::ParseIrregularHexPyramid(const rapidjson::Value& c) {
 }
 
 
-void CrystalContext::ParseCustomCrystal(const rapidjson::Value& c) {
-  const auto* p = Pointer("/parameter").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    throw std::invalid_argument("<crystal.parameter> cannot recognize!");
-  } else {
-    std::FILE* file = std::fopen(p->GetString(), "r");
-    if (!file) {
-      throw std::invalid_argument("<crystal.parameter> cannot open model file!");
-    }
+void CrystalContext::ParseCustomCrystal(const nlohmann::json& obj) {
+  file_param_ = obj.at("parameter").get<std::string>();
+  std::FILE* file = std::fopen(file_param_.c_str(), "r");
+  if (!file) {
+    throw std::invalid_argument("<crystal.parameter> cannot open model file!");
+  }
 
-    std::vector<Vec3f> vertexes;
-    std::vector<TriangleIdx> faces;
-    float v_buf[3];
-    int f_buf[3];
-    int curr_char;
-    while ((curr_char = std::fgetc(file)) != EOF) {
-      switch (curr_char) {
-        case 'v':
-        case 'V':
-          std::fscanf(file, "%f %f %f", v_buf + 0, v_buf + 1, v_buf + 2);
-          vertexes.emplace_back(v_buf);
-          break;
-        case 'f':
-        case 'F':
-          std::fscanf(file, "%d %d %d", f_buf + 0, f_buf + 1, f_buf + 2);
-          faces.emplace_back(f_buf[0] - 1, f_buf[1] - 1, f_buf[2] - 1);
-          break;
-        default:
-          break;
-      }
+  std::vector<Vec3f> vertexes;
+  std::vector<TriangleIdx> faces;
+  float v_buf[3];
+  int f_buf[3];
+  int curr_char = 0;
+  while ((curr_char = std::fgetc(file)) != EOF) {
+    switch (curr_char) {
+      case 'v':
+      case 'V':
+        std::fscanf(file, "%f %f %f", v_buf + 0, v_buf + 1, v_buf + 2);
+        vertexes.emplace_back(v_buf);
+        break;
+      case 'f':
+      case 'F':
+        std::fscanf(file, "%d %d %d", f_buf + 0, f_buf + 1, f_buf + 2);
+        faces.emplace_back(f_buf[0] - 1, f_buf[1] - 1, f_buf[2] - 1);
+        break;
+      default:
+        break;
     }
-    std::fclose(file);
+  }
+  std::fclose(file);
+  crystal_ = Crystal::CreateCustomCrystal(vertexes, faces);
+}
 
-    file_param_ = p->GetString();
-    crystal_ = Crystal::CreateCustomCrystal(vertexes, faces);
+
+void to_json(nlohmann::json& obj, const AxisDistribution& axis) {
+  obj["zenith"] = axis.latitude_dist;
+  obj["zenith"]["mean"] = 90.0f - axis.latitude_dist.mean;
+  obj["azimuth"] = axis.azimuth_dist;
+  obj["roll"] = axis.roll_dist;
+}
+
+void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
+  obj.at("zenith").get_to(axis.latitude_dist);
+  axis.latitude_dist.mean = 90.0f - axis.latitude_dist.mean;
+  try {
+    obj.at("azimuth").get_to(axis.azimuth_dist);
+  } catch (const std::exception& e) {
+    LOG_VERBOSE(e.what());
+  }
+  try {
+    obj.at("roll").get_to(axis.roll_dist);
+  } catch (const std::exception& e) {
+    LOG_VERBOSE(e.what());
   }
 }
 
 
-AxisDistribution ParseCrystalAxis(const rapidjson::Value& c) {
-  AxisDistribution axis{};
-
-  // Start parsing zenith settings.
-  const auto* p = Pointer("/zenith/type").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    throw std::invalid_argument("<zenith.type> cannot recognize!");
-  } else if (*p == "gauss") {
-    axis.latitude_dist = Distribution::kGaussian;
-  } else if (*p == "uniform") {
-    axis.latitude_dist = Distribution::kUniform;
-  } else {
-    throw std::invalid_argument("<zenith.type> cannot recognize!");
-  }
-
-  p = Pointer("/zenith/mean").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    throw std::invalid_argument("<zenith.mean> cannot recognize!");
-  } else {
-    axis.latitude_mean = static_cast<float>(90 - p->GetDouble());
-  }
-
-  p = Pointer("/zenith/std").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    throw std::invalid_argument("<zenith.std> cannot recognize!");
-  } else {
-    axis.latitude_std = static_cast<float>(p->GetDouble());
-  }
-
-  // Start parsing azimuth settings.
-  axis.azimuth_dist = Distribution::kUniform;
-  axis.azimuth_mean = 0;
-  axis.azimuth_std = 360;
-  p = Pointer("/azimuth").Get(c);
-  if (p == nullptr || !p->IsObject()) {
-    LOG_VERBOSE("<azimuth> cannot recognize! Use default.");
-  } else {
-    p = Pointer("/azimuth/type").Get(c);
-    if (p == nullptr || !p->IsString()) {
-      throw std::invalid_argument("<azimuth.type> cannot recognize!");
-    } else if (*p == "gauss") {
-      axis.azimuth_dist = Distribution::kGaussian;
-    } else if (*p == "uniform") {
-      axis.azimuth_dist = Distribution::kUniform;
-    } else {
-      throw std::invalid_argument("<azimuth.type> cannot recognize!");
-    }
-
-    p = Pointer("/azimuth/mean").Get(c);
-    if (p == nullptr || !p->IsNumber()) {
-      throw std::invalid_argument("<azimuth.mean> cannot recognize!");
-    } else {
-      axis.azimuth_mean = static_cast<float>(p->GetDouble());
-    }
-
-    p = Pointer("/azimuth/std").Get(c);
-    if (p == nullptr || !p->IsNumber()) {
-      throw std::invalid_argument("<azimuth.std> cannot recognize!");
-    } else {
-      axis.azimuth_std = static_cast<float>(p->GetDouble());
-    }
-  }
-
-  // Start parsing roll settings.
-  p = Pointer("/roll/type").Get(c);
-  if (p == nullptr || !p->IsString()) {
-    throw std::invalid_argument("<roll.type> cannot recognize!");
-  } else if (*p == "gauss") {
-    axis.roll_dist = Distribution::kGaussian;
-  } else if (*p == "uniform") {
-    axis.roll_dist = Distribution::kUniform;
-  } else {
-    throw std::invalid_argument("<roll.type> cannot recognize!");
-  }
-
-  p = Pointer("/roll/mean").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    throw std::invalid_argument("<roll.mean> cannot recognize!");
-  } else {
-    axis.roll_mean = static_cast<float>(p->GetDouble());
-  }
-
-  p = Pointer("/roll/std").Get(c);
-  if (p == nullptr || !p->IsNumber()) {
-    throw std::invalid_argument("<roll.std> cannot recognize!");
-  } else {
-    axis.roll_std = static_cast<float>(p->GetDouble());
-  }
-
-  return axis;
-}
-
-
-CrystalContext::CrystalContext()
-    : id_(kInvalidId), crystal_{}, axis_{}, idx_param_{}, a_param_{}, h_param_{}, d_param_{}, file_param_{} {}
+CrystalContext::CrystalContext() : id_(kInvalidId), idx_param_{}, a_param_{}, h_param_{}, d_param_{} {}
 
 
 CrystalContextPtrU CrystalContext::CreateDefault() {
@@ -380,114 +299,112 @@ int CrystalContext::RandomSampleFace(const float* ray_dir, float* prob_buf) cons
 }
 
 
-void CrystalContext::SaveHexPrismParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/type").Set(root, "HexPrism", allocator);
-  Pointer("/parameter").Set(root, h_param_[0], allocator);
+void CrystalContext::SaveHexPrismParam(nlohmann::json& obj) const {
+  obj["type"] = "HexPrism";
+  obj["parameter"] = h_param_[0];
 }
 
 
-void CrystalContext::SaveHexPyramidH3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/type").Set(root, "HexPyramid", allocator);
-  Pointer("/parameter/0").Set(root, h_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[2], allocator);
+void CrystalContext::SaveHexPyramidH3Param(nlohmann::json& obj) const {
+  obj["type"] = "HexPyramid";
+  obj["parameter"].emplace_back(h_param_[0]);
+  obj["parameter"].emplace_back(h_param_[1]);
+  obj["parameter"].emplace_back(h_param_[2]);
 }
 
 
-void CrystalContext::SaveHexPyramidI2H3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/type").Set(root, "HexPyramid", allocator);
-  Pointer("/parameter/0").Set(root, idx_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, idx_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[2], allocator);
+void CrystalContext::SaveHexPyramidI2H3Param(nlohmann::json& obj) const {
+  obj["type"] = "HexPyramid";
+  obj["parameter"].emplace_back(idx_param_[0]);
+  obj["parameter"].emplace_back(idx_param_[1]);
+  obj["parameter"].emplace_back(h_param_[0]);
+  obj["parameter"].emplace_back(h_param_[1]);
+  obj["parameter"].emplace_back(h_param_[2]);
 }
 
 
-void CrystalContext::SaveHexPyramidI4H3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/type").Set(root, "HexPyramid", allocator);
-  Pointer("/parameter/0").Set(root, idx_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, idx_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, idx_param_[2], allocator);
-  Pointer("/parameter/-").Set(root, idx_param_[3], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[2], allocator);
+void CrystalContext::SaveHexPyramidI4H3Param(nlohmann::json& obj) const {
+  obj["type"] = "HexPyramid";
+  obj["parameter"].emplace_back(idx_param_[0]);
+  obj["parameter"].emplace_back(idx_param_[1]);
+  obj["parameter"].emplace_back(idx_param_[2]);
+  obj["parameter"].emplace_back(idx_param_[3]);
+  obj["parameter"].emplace_back(h_param_[0]);
+  obj["parameter"].emplace_back(h_param_[1]);
+  obj["parameter"].emplace_back(h_param_[2]);
 }
 
 
-void CrystalContext::SaveHexPyramidA2H3Param(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/type").Set(root, "HexPyramid", allocator);
-  Pointer("/parameter/0").Set(root, a_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, a_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[2], allocator);
+void CrystalContext::SaveHexPyramidA2H3Param(nlohmann::json& obj) const {
+  obj["type"] = "HexPyramid";
+  obj["parameter"].emplace_back(a_param_[0]);
+  obj["parameter"].emplace_back(a_param_[1]);
+  obj["parameter"].emplace_back(h_param_[0]);
+  obj["parameter"].emplace_back(h_param_[1]);
+  obj["parameter"].emplace_back(h_param_[2]);
 }
 
 
-void CrystalContext::SaveHexPyramidStackHalfParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/type").Set(root, "HexPyramidStackHalf", allocator);
-  Pointer("/parameter/0").Set(root, idx_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, idx_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, idx_param_[2], allocator);
-  Pointer("/parameter/-").Set(root, idx_param_[3], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[2], allocator);
+void CrystalContext::SaveHexPyramidStackHalfParam(nlohmann::json& obj) const {
+  obj["type"] = "HexPyramidStackHalf";
+  obj["parameter"].emplace_back(idx_param_[0]);
+  obj["parameter"].emplace_back(idx_param_[1]);
+  obj["parameter"].emplace_back(idx_param_[2]);
+  obj["parameter"].emplace_back(idx_param_[3]);
+  obj["parameter"].emplace_back(h_param_[0]);
+  obj["parameter"].emplace_back(h_param_[1]);
+  obj["parameter"].emplace_back(h_param_[2]);
 }
 
 
-void CrystalContext::SaveIrregularHexPrismParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/type").Set(root, "IrregularHexPrism", allocator);
-  Pointer("/parameter/0").Set(root, d_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, d_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, d_param_[2], allocator);
-  Pointer("/parameter/-").Set(root, d_param_[3], allocator);
-  Pointer("/parameter/-").Set(root, d_param_[4], allocator);
-  Pointer("/parameter/-").Set(root, d_param_[5], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[0], allocator);
+void CrystalContext::SaveIrregularHexPrismParam(nlohmann::json& obj) const {
+  obj["type"] = "IrregularHexPrism";
+  obj["parameter"].emplace_back(d_param_[0]);
+  obj["parameter"].emplace_back(d_param_[1]);
+  obj["parameter"].emplace_back(d_param_[2]);
+  obj["parameter"].emplace_back(d_param_[3]);
+  obj["parameter"].emplace_back(d_param_[4]);
+  obj["parameter"].emplace_back(d_param_[5]);
+  obj["parameter"].emplace_back(h_param_[0]);
 }
 
 
-void CrystalContext::SaveIrregularHexPyramidParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/type").Set(root, "IrregularHexPyramid", allocator);
-  Pointer("/parameter/0").Set(root, d_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, d_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, d_param_[2], allocator);
-  Pointer("/parameter/-").Set(root, d_param_[3], allocator);
-  Pointer("/parameter/-").Set(root, d_param_[4], allocator);
-  Pointer("/parameter/-").Set(root, d_param_[5], allocator);
-  Pointer("/parameter/-").Set(root, idx_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, idx_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, idx_param_[2], allocator);
-  Pointer("/parameter/-").Set(root, idx_param_[3], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[1], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[2], allocator);
+void CrystalContext::SaveIrregularHexPyramidParam(nlohmann::json& obj) const {
+  obj["type"] = "IrregularHexPyramid";
+  obj["parameter"].emplace_back(d_param_[0]);
+  obj["parameter"].emplace_back(d_param_[1]);
+  obj["parameter"].emplace_back(d_param_[2]);
+  obj["parameter"].emplace_back(d_param_[3]);
+  obj["parameter"].emplace_back(d_param_[4]);
+  obj["parameter"].emplace_back(d_param_[5]);
+  obj["parameter"].emplace_back(idx_param_[0]);
+  obj["parameter"].emplace_back(idx_param_[1]);
+  obj["parameter"].emplace_back(idx_param_[2]);
+  obj["parameter"].emplace_back(idx_param_[3]);
+  obj["parameter"].emplace_back(h_param_[0]);
+  obj["parameter"].emplace_back(h_param_[1]);
+  obj["parameter"].emplace_back(h_param_[2]);
 }
 
 
-void CrystalContext::SaveCubicPyramidParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/type").Set(root, "CubicPyramid", allocator);
-  Pointer("/parameter/0").Set(root, h_param_[0], allocator);
-  Pointer("/parameter/-").Set(root, h_param_[1], allocator);
+void CrystalContext::SaveCubicPyramidParam(nlohmann::json& obj) const {
+  obj["type"] = "CubicPyramid";
+  obj["parameter"].emplace_back(h_param_[0]);
+  obj["parameter"].emplace_back(h_param_[1]);
 }
 
 
-void CrystalContext::SaveCustomCrystalParam(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  Pointer("/type").Set(root, "Custom", allocator);
-  Pointer("/parameter").Set(root, file_param_.c_str(), allocator);
+void CrystalContext::SaveCustomCrystalParam(nlohmann::json& obj) const {
+  obj["type"] = "Custom";
+  obj["parameter"] = file_param_;
 }
 
 
-void CrystalContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  root.Clear();
+void to_json(nlohmann::json& obj, const CrystalContext& ctx) {
+  obj["id"] = ctx.id_;
 
-  Pointer("/id").Set(root, id_, allocator);
-
-  using ParamSaver = std::function<void(CrystalContext*, rapidjson::Value&, rapidjson::Value::AllocatorType&)>;
-  EnumMap<CrystalType, ParamSaver> param_saver{
+  using ParamSaver = std::function<void(const CrystalContext*, nlohmann::json&)>;
+  std::map<CrystalType, ParamSaver> param_saver{
     { CrystalType::kPrism, &CrystalContext::SaveHexPrismParam },
     { CrystalType::kPyramid_H3, &CrystalContext::SaveHexPyramidH3Param },
     { CrystalType::kPyramid_I2H3, &CrystalContext::SaveHexPyramidI2H3Param },
@@ -499,58 +416,20 @@ void CrystalContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::Alloca
     { CrystalType::kCubicPyramid, &CrystalContext::SaveCubicPyramidParam },
     { CrystalType::kCustom, &CrystalContext::SaveCustomCrystalParam },
   };
+  param_saver.at(ctx.crystal_->GetType())(&ctx, obj);
 
-  if (param_saver.count(crystal_->GetType())) {
-    param_saver[crystal_->GetType()](this, root, allocator);
-  }
-
-  Pointer("/zenith/mean").Set(root, 90.0f - axis_.latitude_mean, allocator);
-  Pointer("/zenith/std").Set(root, axis_.latitude_std, allocator);
-  switch (axis_.latitude_dist) {
-    case Distribution::kGaussian:
-      Pointer("/zenith/type").Set(root, "gauss", allocator);
-      break;
-    case Distribution::kUniform:
-      Pointer("/zenith/type").Set(root, "uniform", allocator);
-      break;
-  }
-
-  Pointer("/roll/mean").Set(root, axis_.roll_mean, allocator);
-  Pointer("/roll/std").Set(root, axis_.roll_std, allocator);
-  switch (axis_.roll_dist) {
-    case Distribution::kGaussian:
-      Pointer("/roll/type").Set(root, "gauss", allocator);
-      break;
-    case Distribution::kUniform:
-      Pointer("/roll/type").Set(root, "uniform", allocator);
-      break;
-  }
-
-  Pointer("/azimuth/mean").Set(root, axis_.azimuth_mean, allocator);
-  Pointer("/azimuth/std").Set(root, axis_.azimuth_std, allocator);
-  switch (axis_.azimuth_dist) {
-    case Distribution::kGaussian:
-      Pointer("/azimuth/type").Set(root, "gauss", allocator);
-      break;
-    case Distribution::kUniform:
-      Pointer("/azimuth/type").Set(root, "uniform", allocator);
-      break;
-  }
+  obj["zenith"] = ctx.axis_.latitude_dist;
+  obj["zenith"]["mean"] = 90.0f - ctx.axis_.latitude_dist.mean;
+  obj["azimuth"] = ctx.axis_.azimuth_dist;
+  obj["roll"] = ctx.axis_.roll_dist;
 }
 
 
-void CrystalContext::LoadFromJson(const rapidjson::Value& root) {
-  constexpr size_t kMsgBufferSize = 256;
-  char msg_buffer[kMsgBufferSize];
+void from_json(const nlohmann::json& obj, CrystalContext& ctx) {
+  obj.at("id").get_to(ctx.id_);
 
-  const auto* p = Pointer("/type").Get(root);
-  if (p == nullptr || !p->IsString()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal.type> cannot recognize!");
-    throw std::invalid_argument(msg_buffer);
-  }
-
-  using CrystalParser = std::function<void(CrystalContext*, const rapidjson::Value&)>;
-  std::unordered_map<std::string, CrystalParser> crystal_parsers{
+  using CrystalParser = std::function<void(CrystalContext*, const nlohmann::json&)>;
+  std::map<std::string, CrystalParser> crystal_parsers{
     { "HexPrism", &CrystalContext::ParseHexPrism },
     { "HexPyramid", &CrystalContext::ParseHexPyramid },
     { "HexPyramidStackHalf", &CrystalContext::ParseHexPyramidStackHalf },
@@ -560,21 +439,21 @@ void CrystalContext::LoadFromJson(const rapidjson::Value& root) {
     { "Custom", &CrystalContext::ParseCustomCrystal },
   };
 
-  std::string type(root["type"].GetString());
-  if (crystal_parsers.find(type) == crystal_parsers.end()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal.type> cannot recognize!");
-    throw std::invalid_argument(msg_buffer);
-  }
+  auto type = obj.at("type").get<std::string>();
+  crystal_parsers.at(type)(&ctx, obj);
 
-  p = Pointer("/id").Get(root);
-  if (p == nullptr || !p->IsUint()) {
-    std::snprintf(msg_buffer, kMsgBufferSize, "<crystal.id> cannot recognize!");
-    throw std::invalid_argument(msg_buffer);
+  obj.at("zenith").get_to(ctx.axis_.latitude_dist);
+  ctx.axis_.latitude_dist.mean = 90.0f - ctx.axis_.latitude_dist.mean;
+  try {
+    obj.at("azimuth").get_to(ctx.axis_.azimuth_dist);
+  } catch (const std::exception& e) {
+    LOG_VERBOSE(e.what());
   }
-
-  axis_ = ParseCrystalAxis(root);
-  id_ = p->GetUint();
-  crystal_parsers[type](this, root);
+  try {
+    obj.at("roll").get_to(ctx.axis_.roll_dist);
+  } catch (const std::exception& e) {
+    LOG_VERBOSE(e.what());
+  }
 }
 
 

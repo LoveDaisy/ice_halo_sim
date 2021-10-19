@@ -72,9 +72,7 @@ void SimpleRayData::Deserialize(File& file, endian::Endianness endianness) {
 }
 
 
-SimulationData::SimulationData()
-    : wavelength_info_(), ray_path_map_(), rays_(), exit_ray_segments_(), exit_ray_seg_num_(),
-      threading_pool_(ThreadingPool::CreatePool()) {}
+SimulationData::SimulationData() : wavelength_info_(), threading_pool_(ThreadingPool::CreatePool()) {}
 
 
 void SimulationData::SetThreadingPool(ThreadingPoolPtr threading_pool) {
@@ -673,9 +671,8 @@ void Simulator::EntryRayData::Allocate(size_t ray_number) {
 
 
 Simulator::Simulator(ProjectContextPtr context)
-    : context_(std::move(context)), threading_pool_(ThreadingPool::CreatePool()), simulation_ray_data_{},
-      current_wavelength_index_(-1), total_ray_num_(0), active_ray_num_(0),
-      buffer_size_(0), buffer_{}, entry_ray_data_{}, entry_ray_offset_(0) {
+    : context_(std::move(context)), threading_pool_(ThreadingPool::CreatePool()), current_wavelength_index_(-1),
+      total_ray_num_(0), active_ray_num_(0), buffer_size_(0), entry_ray_offset_(0) {
   simulation_ray_data_.SetThreadingPool(threading_pool_);
 }
 
@@ -806,18 +803,19 @@ void Simulator::InitMainAxis(const CrystalContext* ctx, float* axis) {
   auto* rng = RandomNumberGenerator::GetInstance();
 
   auto axis_dist = ctx->GetAxisDistribution();
-  if (axis_dist.latitude_dist == Distribution::kUniform) {
+  if (axis_dist.latitude_dist.type == DistributionType::kUniform) {
     // Random sample on full sphere, ignore other parameters.
     RandomSampler::SampleSphericalPointsSph(axis);
   } else {
     RandomSampler::SampleSphericalPointsSph(axis_dist, axis);
   }
 
-  if (axis_dist.roll_dist == Distribution::kUniform) {
+  if (axis_dist.roll_dist.type == DistributionType::kUniform) {
     // Random roll, ignore other parameters.
     axis[2] = rng->GetUniform() * 2 * math::kPi;
   } else {
-    axis[2] = rng->Get(axis_dist.roll_dist, axis_dist.roll_mean, axis_dist.roll_std) * math::kDegreeToRad;
+    axis[2] =
+        rng->Get(axis_dist.roll_dist.type, axis_dist.roll_dist.mean, axis_dist.roll_dist.std) * math::kDegreeToRad;
   }
 }
 

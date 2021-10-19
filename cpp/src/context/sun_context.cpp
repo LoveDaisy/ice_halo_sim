@@ -3,13 +3,8 @@
 #include <algorithm>
 
 #include "core/optics.hpp"
-#include "rapidjson/pointer.h"
-#include "util/log.hpp"
-
 
 namespace icehalo {
-
-using rapidjson::Pointer;
 
 SunContext::SunContext()
     : diameter_(0.0f),
@@ -61,33 +56,17 @@ bool SunContext::SetSunDiameter(float d) {
 }
 
 
-void SunContext::SaveToJson(rapidjson::Value& root, rapidjson::Value::AllocatorType& allocator) {
-  root.Clear();
-  Pointer("/altitude").Set(root, altitude_, allocator);
-  Pointer("/diameter").Set(root, diameter_, allocator);
+void to_json(nlohmann::json& obj, const SunContext& ctx) {
+  obj["altitude"] = ctx.GetSunAltitude();
+  obj["diameter"] = ctx.GetSunDiameter();
 }
 
 
-void SunContext::LoadFromJson(const rapidjson::Value& root) {
-  float sun_altitude = 0.0f;
-  const auto* p = Pointer("/altitude").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Sun config missing <altitude>. Use default 0.0!");
-  } else if (!p->IsNumber()) {
-    LOG_VERBOSE("Sun config <altitude> is not a number. Use default 0.0!");
-  } else {
-    sun_altitude = static_cast<float>(p->GetDouble());
-  }
-  SetSunAltitude(sun_altitude);
-
-  p = Pointer("/diameter").Get(root);
-  if (p == nullptr) {
-    LOG_VERBOSE("Sun config missing <diameter>. Use default 0.5!");
-  } else if (!p->IsNumber()) {
-    LOG_VERBOSE("Sun config <diameter> is not a number. Use default 0.5!");
-  } else {
-    SetSunDiameter(static_cast<float>(p->GetDouble()));
-  }
+void from_json(const nlohmann::json& obj, SunContext& ctx) {
+  auto alt = obj.at("altitude").get<double>();
+  ctx.SetSunAltitude(alt);
+  auto d = obj.at("diameter").get<double>();
+  ctx.SetSunDiameter(d);
 }
 
 }  // namespace icehalo
