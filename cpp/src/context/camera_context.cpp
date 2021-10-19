@@ -96,19 +96,14 @@ void to_json(nlohmann::json& obj, const CameraContext& ctx) {
 
 
 void from_json(const nlohmann::json& obj, CameraContext& ctx) {
-  auto cam_az = obj.at("azimuth").get<double>();
-  auto cam_el = obj.at("elevation").get<double>();
-  double cam_ro = 0.0;
-  try {
-    cam_ro = obj.at("roll").get<double>();
-  } catch (...) {
-    LOG_VERBOSE("cannot parse roll. use default: %f", cam_ro);
-  }
+  auto cam_az = obj.at("azimuth").get<float>();
+  auto cam_el = obj.at("elevation").get<float>();
+  float cam_ro = 0.0f;
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "roll", cam_ro)
   ctx.SetCameraTargetDirection(90.0 - cam_az, cam_el, cam_ro);
-  auto fov = obj.at("fov").get<double>();
-  ctx.SetFov(fov);
-  auto lens = obj.at("lens").get<LensType>();
-  ctx.SetLensType(lens);
+
+  JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, "fov", float, ctx.SetFov)
+  JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, "lens", LensType, ctx.SetLensType)
 }
 
 }  // namespace icehalo

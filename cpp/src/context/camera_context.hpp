@@ -6,8 +6,8 @@
 
 #include "core/core_def.hpp"
 #include "core/math.hpp"
+#include "io/json_util.hpp"
 #include "io/serialize.hpp"
-#include "json.hpp"
 
 
 namespace icehalo {

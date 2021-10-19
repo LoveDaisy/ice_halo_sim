@@ -98,16 +98,8 @@ void to_json(nlohmann::json& obj, const AbstractRayPathFilter& filter) {
 
 
 void from_json(const nlohmann::json& obj, AbstractRayPathFilter& filter) {
-  try {
-    obj.at("complementary").get_to(filter.complementary_);
-  } catch (const std::exception& e) {
-    LOG_VERBOSE(e.what());
-  }
-  try {
-    obj.at("remove_homodromous").get_to(filter.remove_homodromous_);
-  } catch (const std::exception& e) {
-    LOG_VERBOSE(e.what());
-  }
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "complementary", filter.complementary_)
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "remove_homodromous", filter.remove_homodromous_)
 
   filter.symmetry_flag_ = kSymmetryNone;
   try {

@@ -235,16 +235,9 @@ void to_json(nlohmann::json& obj, const AxisDistribution& axis) {
 void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
   obj.at("zenith").get_to(axis.latitude_dist);
   axis.latitude_dist.mean = 90.0f - axis.latitude_dist.mean;
-  try {
-    obj.at("azimuth").get_to(axis.azimuth_dist);
-  } catch (const std::exception& e) {
-    LOG_VERBOSE(e.what());
-  }
-  try {
-    obj.at("roll").get_to(axis.roll_dist);
-  } catch (const std::exception& e) {
-    LOG_VERBOSE(e.what());
-  }
+
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "azimuth", axis.azimuth_dist)
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "roll", axis.roll_dist)
 }
 
 
@@ -444,16 +437,9 @@ void from_json(const nlohmann::json& obj, CrystalContext& ctx) {
 
   obj.at("zenith").get_to(ctx.axis_.latitude_dist);
   ctx.axis_.latitude_dist.mean = 90.0f - ctx.axis_.latitude_dist.mean;
-  try {
-    obj.at("azimuth").get_to(ctx.axis_.azimuth_dist);
-  } catch (const std::exception& e) {
-    LOG_VERBOSE(e.what());
-  }
-  try {
-    obj.at("roll").get_to(ctx.axis_.roll_dist);
-  } catch (const std::exception& e) {
-    LOG_VERBOSE(e.what());
-  }
+
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "azimuth", ctx.axis_.azimuth_dist)
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "roll", ctx.axis_.roll_dist)
 }
 
 

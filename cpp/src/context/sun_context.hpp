@@ -4,8 +4,8 @@
 #include <memory>
 
 #include "core/core_def.hpp"
+#include "io/json_util.hpp"
 #include "io/serialize.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 
@@ -33,7 +33,6 @@ class SunContext {
 };
 
 void to_json(nlohmann::json& obj, const SunContext& ctx);
-
 void from_json(const nlohmann::json& obj, SunContext& ctx);
 
 }  // namespace icehalo

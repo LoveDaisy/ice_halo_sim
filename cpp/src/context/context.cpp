@@ -131,10 +131,10 @@ ProjectContext::ProjectContext() : init_ray_num_(kDefaultInitRayNum), ray_hit_nu
 
 
 void ProjectContext::ParseBasicSettings(const nlohmann::json& obj) {
-  SetInitRayNum(obj.at("ray").at("number").get<uint64_t>());
+  const auto& ray_obj = obj.at("ray");
+  SetInitRayNum(ray_obj.at("number").get<uint64_t>());
   SetRayHitNum(obj.at("max_recursion").get<int>());
 
-  const auto& ray_obj = obj.at("ray");
   if (!ray_obj.at("wavelength").is_array() || !ray_obj.at("weight").is_array() ||
       ray_obj.at("wavelength").size() != ray_obj.at("weight").size()) {
     throw nlohmann::detail::other_error::create(-1, "wavelength and weight must be arrays with same length!", obj);
@@ -148,17 +148,10 @@ void ProjectContext::ParseBasicSettings(const nlohmann::json& obj) {
   }
 
   data_path_ = boost::filesystem::current_path().string();
-  try {
-    obj.at("data_folder").get_to(data_path_);
-  } catch (...) {
-    LOG_VERBOSE("cannot parse data_folder. use default: %s", data_path_.c_str());
-  }
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "data_folder", data_path_)
+
   main_img_filename_ = "img.jpg";
-  try {
-    obj.at("main_image_name").get_to(main_img_filename_);
-  } catch (...) {
-    LOG_VERBOSE("cannot parse main_image_name. use default: %s", main_img_filename_.c_str());
-  }
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "main_image_name", main_img_filename_)
 }
 
 
@@ -178,12 +171,8 @@ void ProjectContext::ParseRenderSettings(const nlohmann::json& obj) {
   render_ctx_ = RenderContext::CreateDefault();
   obj.at("render").get_to(*render_ctx_);
 
-  if (obj.contains("split_render")) {
-    split_render_ctx_ = RenderContext::CreateDefault();
-    obj.at("split_render").get_to(*split_render_ctx_);
-  } else {
-    split_render_ctx_ = nullptr;
-  }
+  split_render_ctx_ = nullptr;
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "split_render", *split_render_ctx_);
 }
 
 

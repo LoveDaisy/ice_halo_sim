@@ -5,8 +5,8 @@
 
 #include "core/core_def.hpp"
 #include "core/crystal.hpp"
+#include "io/json_util.hpp"
 #include "io/serialize.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 
@@ -88,7 +88,8 @@ struct GridLine {
   LineSpecifier line_specifier;
 };
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GridLine, value, line_specifier)
+void to_json(nlohmann::json& obj, const GridLine& line);
+void from_json(const nlohmann::json& obj, GridLine& line);
 
 
 /**

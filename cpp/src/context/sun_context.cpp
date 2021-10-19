@@ -63,10 +63,8 @@ void to_json(nlohmann::json& obj, const SunContext& ctx) {
 
 
 void from_json(const nlohmann::json& obj, SunContext& ctx) {
-  auto alt = obj.at("altitude").get<double>();
-  ctx.SetSunAltitude(alt);
-  auto d = obj.at("diameter").get<double>();
-  ctx.SetSunDiameter(d);
+  JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, "altitude", float, ctx.SetSunAltitude)
+  JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, "diameter", float, ctx.SetSunDiameter)
 }
 
 }  // namespace icehalo

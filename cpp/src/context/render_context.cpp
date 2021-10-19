@@ -74,13 +74,21 @@ void to_json(nlohmann::json& obj, const LineSpecifier& line) {
 
 void from_json(const nlohmann::json& obj, LineSpecifier& line) {
   obj.at("type").get_to(line.type);
-  try {
-    obj.at("width").get_to(line.width);
-    obj.at("alpha").get_to(line.alpha);
-    obj.at("color")[0].get_to(line.color[0]);
-    obj.at("color")[1].get_to(line.color[1]);
-    obj.at("color")[2].get_to(line.color[2]);
-  } catch (...) {}
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "width", line.width)
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "alpha", line.alpha)
+  JSON_CHECK_AND_UPDATE_ARRAY_VALUE(obj, "color", line.color, 3)
+}
+
+
+void to_json(nlohmann::json& obj, const GridLine& line) {
+  obj = line.line_specifier;
+  obj["value"] = line.value;
+}
+
+
+void from_json(const nlohmann::json& obj, GridLine& line) {
+  obj.get_to(line.line_specifier);
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "value", line.value)
 }
 
 
@@ -152,7 +160,7 @@ float RenderContext::GetIntensity() const {
 
 
 void RenderContext::SetIntensity(float intensity) {
-  intensity_ = std::min(std::max(intensity, kMinIntensity), kMaxIntensity);
+  intensity_ = std::clamp(intensity, kMinIntensity, kMaxIntensity);
 }
 
 
@@ -187,12 +195,12 @@ int RenderContext::GetImageOffsetY() const {
 
 
 void RenderContext::SetImageOffsetX(int offset_x) {
-  offset_x_ = offset_x;
+  offset_x_ = std::clamp(offset_x, -kMaxImageSize / 2, kMaxImageSize / 2);
 }
 
 
 void RenderContext::SetImageOffsetY(int offset_y) {
-  offset_y_ = offset_y;
+  offset_y_ = std::clamp(offset_y, -kMaxImageSize / 2, kMaxImageSize / 2);
 }
 
 
@@ -335,11 +343,7 @@ void from_json(const nlohmann::json& obj, RenderContext& ctx) {
 
 void RenderContext::LoadColorConfig(const nlohmann::json& obj) {
   SetColorCompactLevel(ColorCompactLevel::kTrueColor);
-  try {
-    obj.at("color_compact_level").get_to(color_compact_level_);
-  } catch (...) {
-    LOG_VERBOSE("cannot parse color_compact_level. use default %d", color_compact_level_);
-  }
+  JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, "color_compact_level", ColorCompactLevel, SetColorCompactLevel)
 
   ResetBackgroundColor();
   auto r = obj.at("background_color")[0].get<float>();
@@ -359,75 +363,41 @@ void RenderContext::LoadColorConfig(const nlohmann::json& obj) {
 
 void RenderContext::LoadImageSize(const nlohmann::json& obj) {
   SetImageWidth(kDefaultImageSize);
-  try {
-    auto width = obj.at("width").get<int>();
-    SetImageWidth(width);
-  } catch (...) {}
+  JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, "width", int, SetImageWidth)
 
   SetImageHeight(kDefaultImageSize);
-  try {
-    auto height = obj.at("height").get<int>();
-    SetImageHeight(height);
-  } catch (...) {}
+  JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, "height", int, SetImageHeight)
 }
 
 
 void RenderContext::LoadImageOffset(const nlohmann::json& obj) {
-  SetImageOffsetX(0);
-  SetImageOffsetY(0);
-  auto offset_x = obj.at("offset")[0].get<int>();
-  auto offset_y = obj.at("offset")[1].get<int>();
-  offset_x = std::max(std::min(offset_x, RenderContext::kMaxImageSize / 2), -RenderContext::kMaxImageSize / 2);
-  offset_y = std::max(std::min(offset_y, RenderContext::kMaxImageSize / 2), -RenderContext::kMaxImageSize / 2);
-  SetImageOffsetX(offset_x);
-  SetImageOffsetY(offset_y);
+  int offset[2]{};
+  JSON_CHECK_AND_UPDATE_ARRAY_VALUE(obj, "offset", offset, 2)
+  SetImageOffsetX(offset[0]);
+  SetImageOffsetY(offset[1]);
 }
 
 
 void RenderContext::LoadVisibleRange(const nlohmann::json& obj) {
   SetVisibleRange(VisibleRange::kUpper);
-  auto range = obj.at("visible_semi_sphere").get<VisibleRange>();
-  SetVisibleRange(range);
+  JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, "visible_semi_sphere", VisibleRange, SetVisibleRange)
 }
 
 
 void RenderContext::LoadIntensity(const nlohmann::json& obj) {
   SetIntensity(kDefaultIntensity);
-  auto f = obj.at("intensity_factor").get<float>();
-  f = std::max(std::min(f, RenderContext::kMaxIntensity), RenderContext::kMinIntensity);
-  SetIntensity(f);
+  JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, "intensity_factor", float, SetIntensity)
 }
 
 
 void RenderContext::LoadRenderSplitter(const nlohmann::json& obj) {
-  try {
-    obj.at("splitter").get_to(splitter_);
-  } catch (...) {}
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "splitter", splitter_)
 }
 
 
 void RenderContext::LoadGridLines(const nlohmann::json& obj) {
-  try {
-    if (!obj.at("elevation_grid").is_array()) {
-      throw nlohmann::detail::other_error::create(-1, "elevation_grid must be an array!", obj);
-    }
-
-    for (const auto& l : obj.at("elevation_grid")) {
-      auto curr_line = l.get<GridLine>();
-      elevation_grid_.emplace_back(curr_line);
-    }
-  } catch (...) {}
-
-  try {
-    if (!obj.at("radius_grid").is_array()) {
-      throw nlohmann::detail::other_error::create(-1, "radius_grid must be an array!", obj);
-    }
-
-    for (const auto& l : obj.at("radius_grid")) {
-      auto curr_line = l.get<GridLine>();
-      radius_rid_.emplace_back(curr_line);
-    }
-  } catch (...) {}
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "elevation_grid", elevation_grid_)
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "radius_grid", radius_rid_)
 }
 
 }  // namespace icehalo

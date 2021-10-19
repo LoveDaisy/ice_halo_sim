@@ -15,8 +15,8 @@
 #include "core/core_def.hpp"
 #include "core/crystal.hpp"
 #include "core/optics.hpp"
+#include "io/json_util.hpp"
 #include "io/serialize.hpp"
-
 
 namespace icehalo {
 
