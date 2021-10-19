@@ -13,7 +13,6 @@ message(STATUS "[src] CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 
 # ==================================================================================================
 # Add targets
-message(STATUS "[src] icehalo_libs: ${icehalo_libs}")
 message(STATUS "[src] icehalo_include: ${icehalo_include}")
 add_executable(IceHaloSim
     trace_main.cpp

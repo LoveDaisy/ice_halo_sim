@@ -129,54 +129,27 @@ set(icehalo_context_src
   "${PROJ_SRC_DIR}/context/multi_scatter_context.cpp"
   "${PROJ_SRC_DIR}/context/render_context.cpp"
   "${PROJ_SRC_DIR}/context/sun_context.cpp")
-add_library(icehalo_context OBJECT ${icehalo_context_src})
-target_include_directories(icehalo_context
-  PUBLIC ${icehalo_include})
-target_link_libraries(icehalo_context
-  PUBLIC ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
 
 set(icehalo_core_src
   "${PROJ_SRC_DIR}/core/crystal.cpp"
   "${PROJ_SRC_DIR}/core/filter.cpp"
   "${PROJ_SRC_DIR}/core/math.cpp"
   "${PROJ_SRC_DIR}/core/optics.cpp")
-add_library(icehalo_core OBJECT ${icehalo_core_src})
-target_include_directories(icehalo_core
-  PUBLIC ${icehalo_include})
-target_link_libraries(icehalo_core
-  PUBLIC ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
 
 set(icehalo_process_src
   "${PROJ_SRC_DIR}/process/render.cpp"
   "${PROJ_SRC_DIR}/process/simulation.cpp")
-add_library(icehalo_process OBJECT ${icehalo_process_src})
-target_include_directories(icehalo_process
-  PUBLIC ${icehalo_include})
-target_link_libraries(icehalo_process
-  PUBLIC ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
 
 set(icehalo_io_src
   "${PROJ_SRC_DIR}/io/file.cpp")
-add_library(icehalo_io OBJECT ${icehalo_io_src})
-target_include_directories(icehalo_io
-  PUBLIC ${icehalo_include})
-target_link_libraries(icehalo_io
-  PUBLIC ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
 
  set(icehalo_util_src
   "${PROJ_SRC_DIR}/util/arg_parser.cpp"
   "${PROJ_SRC_DIR}/util/log.cpp"
   "${PROJ_SRC_DIR}/util/obj_pool.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
-add_library(icehalo_util OBJECT ${icehalo_util_src})
-target_include_directories(icehalo_util
-  PUBLIC ${icehalo_include})
-target_link_libraries(icehalo_util
-  PUBLIC ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
 
-set(icehalo_libs
-  icehalo_context icehalo_core icehalo_io icehalo_process icehalo_util)
-set(icehalo_src
+  set(icehalo_src
   ${icehalo_context_src} ${icehalo_core_src} ${icehalo_io_src} ${icehalo_process_src} ${icehalo_util_src})
 
 
