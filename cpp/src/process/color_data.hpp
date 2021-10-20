@@ -1,3 +1,8 @@
+#ifndef SRC_PROCESS_COLOR_DATA_H_
+#define SRC_PROCESS_COLOR_DATA_H_
+
+namespace icehalo {
+
 constexpr float kWhitePointD65[] = { 0.95047f, 1.00000f, 1.08883f };  // D65 for sRGB
 constexpr float kXyzToRgb[] = { 3.2405f, -1.5371f, -0.4985f, -0.9693f, 1.8760f, 0.0416f, 0.0556f, -0.2040f, 1.0572f };
 constexpr float kCmfX[] = {
@@ -213,3 +218,6 @@ constexpr float kCmfZ[] = {
   0.000000000000f, 0.000000000000f
 };
 
+}  // namespace icehalo
+
+#endif  // SRC_PROCESS_COLOR_DATA_H_

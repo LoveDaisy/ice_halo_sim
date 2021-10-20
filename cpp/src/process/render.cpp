@@ -7,6 +7,7 @@
 
 #include "context/context.hpp"
 #include "core/math.hpp"
+#include "process/color_data.hpp"
 #include "process/simulation.hpp"
 #include "util/log.hpp"
 #include "util/threading_pool.hpp"
@@ -251,8 +252,6 @@ void SrgbGamma(float* linear_rgb, size_t num) {
     }
   }
 }
-
-#include "process/color_data.inc"
 
 void SpecToRgbJob(int i, const std::vector<ImageSpectrumData>& spec_data, float factor, const float* background_color,
                   const float* ray_color, uint8_t* rgb_data) {
