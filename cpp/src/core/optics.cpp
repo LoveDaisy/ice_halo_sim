@@ -233,7 +233,7 @@ void RaySegment::Deserialize(File& file, endian::Endianness endianness) {
 void Optics::HitSurface(const Crystal* crystal, float n, size_t num,                    // input
                         const float* dir_in, const int* face_id_in, const float* w_in,  // input
                         float* dir_out, float* w_out) {                                 // output
-  auto face_norm = crystal->GetFaceNorm();
+  const auto* face_norm = crystal->GetFaceNorm();
 
   for (size_t i = 0; i < num; i++) {
     const float* tmp_dir = dir_in + i * 3;
