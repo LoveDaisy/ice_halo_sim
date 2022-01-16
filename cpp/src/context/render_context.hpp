@@ -147,7 +147,7 @@ class RenderContext {
 
   static constexpr float kDefaultIntensity = 1.0f;
   static constexpr float kMinIntensity = 0.01f;
-  static constexpr float kMaxIntensity = 100000.0f;
+  static constexpr float kMaxIntensity = 5.0e6f;
   static constexpr int kDefaultImageSize = 800;
   static constexpr int kMaxImageSize = 65535;
   static constexpr int kMaxTopHaloNumber = 300;

@@ -743,6 +743,8 @@ void Renderer::DrawElevationGrids() {
       azi += curr_step;
       line_pts.emplace_back(curr_xy[0]);
       line_pts.emplace_back(curr_xy[1]);
+      last_xy[0] = curr_xy[0];
+      last_xy[1] = curr_xy[1];
     }
     DrawLine(line_pts.size() / 2, line_pts.data(), img_wid, img_hei, output_image_buffer_.get(), g.line_specifier);
   }

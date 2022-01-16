@@ -102,8 +102,8 @@ void from_json(const nlohmann::json& obj, CameraContext& ctx) {
   JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "roll", cam_ro)
   ctx.SetCameraTargetDirection(90.0 - cam_az, cam_el, cam_ro);
 
-  JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, "fov", float, ctx.SetFov)
   JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, "lens", LensType, ctx.SetLensType)
+  JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, "fov", float, ctx.SetFov)
 }
 
 }  // namespace icehalo
