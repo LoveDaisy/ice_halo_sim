@@ -196,7 +196,7 @@ void Linear(Pose3f cam_pose,               // Camera rotation. [lon, lat, roll]
 }
 
 
-void Equirectangular(Pose3f /* cam_pose */,               // Not used
+void Equirectangular(Pose3f cam_pose,                     // Not used
                      float /* hov */,                     // Not used
                      size_t data_number,                  // Data number
                      const float* dir,                    // Ray directions [x, y, z]
@@ -207,7 +207,7 @@ void Equirectangular(Pose3f /* cam_pose */,               // Not used
 
   std::unique_ptr<float[]> dir_copy{ new float[data_number * 3]{} };
 
-  Pose3f cam_pose(0.0f, 90.0f, 0.0f);
+  cam_pose.val(90.0f - cam_pose.lon(), 90.0f, 0.0f);
   cam_pose.ToRad();
 
   RotateZ(cam_pose.val(), dir, dir_copy.get(), 4, 3, data_number);
