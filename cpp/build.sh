@@ -5,32 +5,29 @@ PROJ_DIR=${ROOT_DIR}
 
 build() {
   mkdir -p "${BUILD_DIR}"
-  cd "${BUILD_DIR}"
-  rm -rf CMakeFiles
-  rm -rf CMakeCache.txt
-  rm -rf Makefile cmake_install.cmake
-  cmake "${PROJ_DIR}" \
-        -DDEBUG=$DEBUG_FLAG -DBUILD_TEST=$BUILD_TEST \
+  pushd "${BUILD_DIR}"
+  cmake -S "${PROJ_DIR}" -B "${BUILD_DIR}" \
+        -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TEST=$BUILD_TEST \
         -DMULTI_THREAD=$MULTI_THREAD \
         -DRANDOM_SEED=$RANDOM_SEED \
         -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR"
-  make -j$MAKE_J_N
+  cmake --build "${BUILD_DIR}" -j $MAKE_J_N
   ret=$?
   if [[ $ret == 0 && $BUILD_TEST == ON ]]; then
     echo "Testing..."
-    make test
+    ctest
     ret=$?
   fi
   if [[ $ret == 0 && $INSTALL_FLAG == ON ]]; then
     echo "Installing..."
-    make install
+    cmake --build "${BUILD_DIR}" --target install
   fi
 }
 
 
 help() {
   echo "Usage:"
-  echo "  ./build.sh [-tjkrh1] <debug|release>"
+  echo "  ./build.sh [-tjkrh1] <debug|release|minsizerel>"
   echo "    Build executables for debug | release"
   echo "    Executables will be installed at build/cmake_install"
   echo "OPTIONS:"
@@ -50,7 +47,7 @@ clean_all() {
 }
 
 
-DEBUG_FLAG=OFF
+BUILD_TYPE=Debug
 BUILD_TEST=OFF
 INSTALL_FLAG=OFF
 MAKE_J_N=1
@@ -101,13 +98,19 @@ shift $((OPTIND-1))
 while [ ! $# -eq 0 ]; do
   case $1 in
     debug)
-      DEBUG_FLAG=ON
+      BUILD_TYPE=Debug
       INSTALL_FLAG=OFF
       build
       exit 0
     ;;
     release)
-      DEBUG_FLAG=OFF
+      BUILD_TYPE=Release
+      INSTALL_FLAG=ON
+      build
+      exit 0
+    ;;
+    minsizerel)
+      BUILD_TYPE=MinSizeRel
       INSTALL_FLAG=ON
       build
       exit 0
