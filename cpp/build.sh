@@ -10,7 +10,7 @@ build() {
         -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TEST=$BUILD_TEST \
         -DMULTI_THREAD=$MULTI_THREAD \
         -DRANDOM_SEED=$RANDOM_SEED \
-        -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR"
+        -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}"
   cmake --build "${BUILD_DIR}" -j $MAKE_J_N
   ret=$?
   if [[ $ret == 0 && $BUILD_TEST == ON ]]; then
@@ -21,7 +21,15 @@ build() {
   if [[ $ret == 0 && $INSTALL_FLAG == ON ]]; then
     echo "Installing..."
     cmake --build "${BUILD_DIR}" --target install
+    ret=$?
   fi
+}
+
+
+benchmarking() {
+  python3 "${PROJ_DIR}/test/run_bench.py" --exe "${INSTALL_DIR}/IceHaloEndless" \
+          --config "${PROJ_DIR}/test/benchmark_config_template.json" \
+          --tmp_dir "${BUILD_DIR}"
 }
 
 
@@ -34,6 +42,7 @@ help() {
   echo "  -t:          Build test cases and run test on them."
   echo "  -j:          Make in parallel, i.e. use make -j"
   echo "  -k:          Clean temporary building files."
+  echo "  -b:          Run benchmarking."
   echo "  -r:          Use system time as seed for random number generator. Without this option,"
   echo "               the program will use default value. Thus generate a repeatable result (together with -1)."
   echo "  -1:          Use single thread."
@@ -63,7 +72,7 @@ fi
 # A POSIX variable
 OPTIND=1         # Reset in case getopts has been used previously in the shell.
 
-while getopts "htrjk1" opt; do
+while getopts "htrjkb1" opt; do
   case "$opt" in
   h)
     help
@@ -80,6 +89,9 @@ while getopts "htrjk1" opt; do
     ;;
   k)
     clean_all
+    ;;
+  b)
+    benchmarking
     ;;
   1)
     MULTI_THREAD=OFF

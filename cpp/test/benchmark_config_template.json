@@ -1,0 +1,75 @@
+{
+  "sun": {
+    "altitude": 10,
+    "diameter": 0.0
+  },
+  "ray": {
+    "number": 100000,
+    "wavelength": [ 420, 460, 500, 540, 580, 620 ],
+    "weight": [ 1, 1, 1, 1, 1, 1 ]
+  },
+  "max_recursion": 6,
+  "data_folder": ".",
+  "camera": {
+    "azimuth": 180,
+    "elevation": 15,
+    "rotation": 0,
+    "fov": 55,
+    "lens": "dual_fisheye_equalarea"
+  },
+  "render": {
+    "width": 3600,
+    "height": 1800,
+    "visible_semi_sphere": "full",
+    "ray_color": "real",
+    "background_color": [ 0, 0, 0 ],
+    "intensity_factor": 100,
+    "offset": [ 0, 0 ],
+    "elevation_grid": [
+    ],
+    "radius_grid": [
+      { "value": 0.5, "type": "solid", "width": 1.0, "alpha": 1.0, "color": [1, 1, 1] }
+    ]
+  },
+  "multi_scatter": [ { "crystal": [ 0, 1, 2, 3 ], "population": [ 100, 20, 50, 5 ], "probability": 0.3, "ray_path_filter": [ 0, 0, 0, 0 ] } ],
+  "ray_path_filter": [
+    { "id": 0, "type": "none", "remove_homodromous": true },
+    { "id": 1, "type": "specific", "path": [ 1,3,4,6,2 ], "symmetry": "PBD" },
+    { "id": 2, "type": "specific", "path": [ 1, 2, 1, 2, 3 ], "remove_homodromous": true },
+    { "id": 3, "type": "none", "remove_homodromous": true }
+  ],
+  "crystal": [
+    {
+      "id": 0,
+      "type": "HexPrism",
+      "parameter": 2,
+      "zenith": { "mean": 90, "std": 0.2, "type": "gauss" },
+      "roll": { "mean": 0, "std": 360, "type": "uniform" },
+      "azimuth": { "mean": 0, "std": 360, "type": "uniform" }
+    },
+    {
+      "id": 1,
+      "type": "HexPrism",
+      "parameter": 2,
+      "zenith": { "mean": 90, "std": 0.2, "type": "gauss" },
+      "roll": { "mean": 90, "std": 1, "type": "gauss" },
+      "azimuth": { "mean": 0, "std": 360, "type": "uniform" }
+    },
+    {
+      "id": 2,
+      "type": "HexPrism",
+      "parameter": 0.2,
+      "zenith": { "mean": 0, "std": 2, "type": "gauss" },
+      "roll": { "mean": 0, "std": 360, "type": "uniform" },
+      "azimuth": { "mean": 0, "std": 360, "type": "uniform" }
+    },
+    {
+      "id": 3,
+      "type": "HexPrism",
+      "parameter": 1,
+      "zenith": { "mean": 0, "std": 360, "type": "uniform" },
+      "roll": { "mean": 0, "std": 360, "type": "uniform" },
+      "azimuth": { "mean": 0, "std": 360, "type": "uniform" }
+    }
+  ]
+}
