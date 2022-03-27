@@ -13,7 +13,7 @@ Requires: Boost (>= 1.54), OpenCV (>= 3.3), CMake (>= 3.12). Has been tested on 
 First download the entire project,
 
 ~~~bash
-git clone --recursive git@github.com:LoveDaisy/ice_halo_sim.git
+git clone git@github.com:LoveDaisy/ice_halo_sim.git
 cd ice_halo_sim/cpp
 ~~~
 
@@ -21,7 +21,7 @@ This C++ project is built with [CMake](https://cmake.org/).
 You can just run the build script to build the executable:
 
 ~~~bash
-./build.sh release  # Release version. Max performance.
+./build.sh -rj release  # Release version. See help for meaning of options.
 ~~~
 
 or
@@ -36,56 +36,26 @@ Then the release version executable binaries will be at `build/cmake_install`, a
 `build/cmake_build`.
 
 Note, I introduce the [GoogleTest](https://github.com/google/googletest) framework to help do my unit tests.
-GoogleTest is a submodule of this project. Generally you do not need to
+Generally you do not need to
 care about these codes nor the test cases in `test` folder. If you are interested in my unit tests, please
 pass `-t` option when run the build script. If `-t` option is set, the test cases will be built and test on.
-Anf if test fails, the final executable will not be
+Anf if test fails, the final executable will **NOT** be
 installed to `build/cmake_install`.
 
 ## Getting started
 
-### Simulation
-
-You can start simulatino by
-`./build/cmake_install/IceHaloSim <config-file>`. The file [`config-example.json`](./config-example.json) 
-is an example configuration file. After the simulation is done you will get several `.bin` files
-in your data path set in configuration file.
-You can run the simulation multiple times to cumulate many data and then render them at last.
-
-### Visualization
-
-After all simulations are done, you will get several `.bin` files that contain results of ray tracing,
-as well as several lines printed on the screen that describe crystal geometry.
-I have prepared several tools for visualization those results. Some are matlab codes.
-
-* Halo picture.  
-  Please run `./build/cmake_install/IceHaloRender <config-file>` for visualization.
-I highly recommand this render your halo picture in this way, rather than the following matlab way.
-Just use the same configuration file as you run the simulation. The rendered picture
-will be placed at the data path set in configuration file.  
-
-  There is also a matlab tool for generating halo picture.
-Script `matlab/src/read_binary_result-example.m` reads the `.bin` files and renders the ray tracing result.
-See [matlab](../matlab/) folder for details.
-
-* Crystals  
-The matlab script `matlab/src/plot_crystal-example.m` plots the shape of crystals. You can copy data from program output on
-screen. The lines start with `v` indicate vertex data, and those start with `f` indicate face data.
-See [matlab](../matlab/) folder for details.
-
 ### Endless mode
 
-The simulate-and-then-render way need many disk space to store the intermediate `.bin` files. They are
-data files that will be used for further analysis (not develop yet).
-If you do not want to save these intermediate data, then this endless mode is good for you. Please run
-`./build/cmake_install/IceHaloEndless <config-file>` for endless mode. It runs endlessly, until you press
-`^+C` (control + C) to force break it. It will continously refresh the output image. The total ray numbers
-and will be displayed on the screen.
+Please run `./build/cmake_install/IceHaloEndless -f <config-file> -n <simulation_times>`
+for endless mode. It runs endlessly, until you press
+`^+C` (control + C) to force break it, or hits the number specified by `<simulation_times>` (-1 means endless).
+It will continously refresh the output image. The total ray numbers
+and other information will be displayed on the screen.
 
 ## Configuration file
 
 This file containing all configurations. It uses JSON format.
-I use [Rapidjson](http://rapidjson.org/index.html) to parse JSON file.
+I use [nlohmann's json](https://github.com/nlohmann/json) to parse JSON file.
 
 ### Basic infomation for simulation
 
