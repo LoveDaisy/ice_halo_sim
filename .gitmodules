@@ -1,6 +1,0 @@
-[submodule "cpp/thirdparty/rapidjson"]
-	path = cpp/thirdparty/rapidjson
-	url = git@github.com:Tencent/rapidjson.git
-[submodule "cpp/thirdparty/googletest"]
-	path = cpp/thirdparty/googletest
-	url = git@github.com:google/googletest.git

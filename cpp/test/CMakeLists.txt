@@ -1,30 +1,27 @@
 # ==================================================================================================
 # Google Test
-set(GoogleTest_DIR "${MODULE_ROOT}/googletest")
-
-configure_file(CMakeLists.GoogleTest.cmake googletest-download/CMakeLists.txt)
-execute_process(COMMAND ${CMAKE_COMMAND} -G "${CMAKE_GENERATOR}" .
-  RESULT_VARIABLE result
-  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/googletest-download)
-if(result)
-  message(FATAL_ERROR "CMake step for googletest failed: ${result}")
+find_package(GTest)
+if(NOT GTest_FOUND)
+  if("${GTEST_DIR}" STREQUAL "")
+    message(STATUS "[test] GTEST_DIR is NOT set! Use github source.")
+    set(GTEST_REPO "https://github.com/google/googletest.git")
+  else()
+    message(STATUS "[test] GTEST_DIR is set! Use local gtest at ${GTEST_DIR}")
+    set(GTEST_REPO "file://${GTEST_DIR}/.git")
+  endif()
+  
+  include(FetchContent)
+  FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY ${GTEST_REPO}
+    GIT_TAG release-1.11.0
+    PREFIX ${CMAKE_CURRENT_BINARY_DIR}/gtest
+  )
+  # For Windows: Prevent overriding the parent project's compiler/linker settings
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  FetchContent_Populate(googletest)
+  add_subdirectory(${googletest_SOURCE_DIR} ${googletest_BINARY_DIR} EXCLUDE_FROM_ALL)
 endif()
-execute_process(COMMAND ${CMAKE_COMMAND} --build .
-  RESULT_VARIABLE result
-  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/googletest-download)
-if(result)
-  message(FATAL_ERROR "Build step for googletest failed: ${result}")
-endif()
-
-# Prevent overriding the parent project's compiler/linker
-# settings on Windows
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-
-# Add googletest directly to our build. This defines
-# the gtest and gtest_main targets.
-add_subdirectory(${GoogleTest_DIR}
-                 ${CMAKE_CURRENT_BINARY_DIR}/googletest-build
-                 EXCLUDE_FROM_ALL)
 
 # ==================================================================================================
 message(STATUS "[test] icehalo_libs: ${icehalo_libs}")
@@ -41,7 +38,7 @@ target_include_directories(unit_test
   PUBLIC ${icehalo_include}
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_test
-  PRIVATE gtest ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
 
 
 add_executable(RayTracingTest

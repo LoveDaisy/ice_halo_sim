@@ -10,7 +10,7 @@ build() {
         -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TEST=$BUILD_TEST \
         -DMULTI_THREAD=$MULTI_THREAD \
         -DRANDOM_SEED=$RANDOM_SEED \
-        -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}"
+        -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}" -DGTEST_DIR="${GTEST_DIR}"
   cmake --build "${BUILD_DIR}" -j $MAKE_J_N
   ret=$?
   if [[ $ret == 0 && $BUILD_TEST == ON ]]; then
