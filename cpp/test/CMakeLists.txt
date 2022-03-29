@@ -52,10 +52,10 @@ target_compile_definitions(RayTracingTest PRIVATE FOR_TEST)
 
 
 add_test(NAME "IceHaloUnitTest" COMMAND unit_test
-        "${PROJ_ROOT}/test/config_01.json"
+        "${PROJ_TEST_DIR}/config_01.json"
         "${CMAKE_CURRENT_BINARY_DIR}")
 add_test(NAME "IceHaloRayTracingTest" 
-         COMMAND python3 ${PROJECT_SOURCE_DIR}/test/run_ray_tracing_test.py
+         COMMAND python3 ${PROJ_TEST_DIR}/run_ray_tracing_test.py
           --exe $<TARGET_FILE:RayTracingTest>
-          --config ${PROJECT_SOURCE_DIR}/test/config_01.json
-          --ref ${PROJECT_SOURCE_DIR}/test/ray_tracing_result.log)
+          --config ${PROJ_TEST_DIR}/config_01.json
+          --ref ${PROJ_TEST_DIR}/ray_tracing_result.log)
