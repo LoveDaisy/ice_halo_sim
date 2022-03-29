@@ -75,4 +75,4 @@ add_executable(bench_optics
   ${icehalo_src}
   "${PROJ_TEST_DIR}/bench_optics.cpp")
 target_include_directories(bench_optics PRIVATE ${icehalo_include})
-target_link_libraries(bench_optics PRIVATE benchmark::benchmark ${Boost_LIBRARIES})
+target_link_libraries(bench_optics PRIVATE benchmark::benchmark_main ${Boost_LIBRARIES})
