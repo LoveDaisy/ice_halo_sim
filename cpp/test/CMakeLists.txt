@@ -59,3 +59,20 @@ add_test(NAME "IceHaloRayTracingTest"
           --exe $<TARGET_FILE:RayTracingTest>
           --config ${PROJ_TEST_DIR}/config_01.json
           --ref ${PROJ_TEST_DIR}/ray_tracing_result.log)
+
+
+# ==================================================================================================
+# Google benchmark
+find_package(benchmark)
+if(NOT benchmark_FOUND)
+  message(STATUS "[test] Can NOT find google-benchmark. Abort benchmarking.")
+  return()
+else()
+  message(STATUS "[test] lib google-benchmark found.")
+endif()
+
+add_executable(bench_optics
+  ${icehalo_src}
+  "${PROJ_TEST_DIR}/bench_optics.cpp")
+target_include_directories(bench_optics PRIVATE ${icehalo_include})
+target_link_libraries(bench_optics PRIVATE benchmark::benchmark ${Boost_LIBRARIES})

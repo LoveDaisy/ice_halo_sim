@@ -186,8 +186,6 @@ class Optics {
                         const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
                         float* pt_out, int* face_id_out);                                                   // output
 
-  static float GetReflectRatio(float cos_angle, float rr);
-
   /*! \brief Intersect a line with many faces and find the nearest intersection point.
    *
    * \param pt a point on the line, 3 floats
@@ -211,6 +209,9 @@ class Optics {
                                              const float* face_points,           //
                                              const float* face_norm,             //
                                              float* p, int* idx);                // output
+
+ private:
+  static float GetReflectRatio(float delta, float rr);
 };
 
 

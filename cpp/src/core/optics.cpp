@@ -245,7 +245,7 @@ void Optics::HitSurface(const Crystal* crystal, float n, size_t num,            
 
     bool is_total_reflected = d <= 0.0f;
 
-    w_out[2 * i + 0] = GetReflectRatio(cos_theta, rr) * w_in[i];
+    w_out[2 * i + 0] = GetReflectRatio(std::max(d, 0.0f), rr) * w_in[i];
     w_out[2 * i + 1] = is_total_reflected ? -1 : w_in[i] - w_out[2 * i + 0];
 
     float* tmp_dir_reflection = dir_out + (i * 2 + 0) * 3;
@@ -352,15 +352,12 @@ void Optics::Propagate(const Crystal* crystal, size_t num,                      
 }
 
 
-float Optics::GetReflectRatio(float cos_angle, float rr) {
-  float s = std::sqrt(std::max(1.0f - cos_angle * cos_angle, 0.0f));
-  float c = std::abs(cos_angle);
-  float d = std::max(1.0f - (rr * s) * (rr * s), 0.0f);
-  float d_sqrt = std::sqrt(d);
+float Optics::GetReflectRatio(float delta, float rr) {
+  float d_sqrt = std::sqrt(delta);
 
-  float Rs = (rr * c - d_sqrt) / (rr * c + d_sqrt);
+  float Rs = (rr - d_sqrt) / (rr + d_sqrt);
   Rs *= Rs;
-  float Rp = (rr * d_sqrt - c) / (rr * d_sqrt + c);
+  float Rp = (1 - rr * d_sqrt) / (1 + rr * d_sqrt);
   Rp *= Rp;
 
   return (Rs + Rp) / 2;
