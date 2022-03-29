@@ -14,7 +14,6 @@ class TestOptics : public ::benchmark::Fixture {
     crystal_ = icehalo::Crystal::CreateHexPrism(1.2f);
 
     auto face_num = crystal_->TotalFaces();
-    auto face_norm = crystal_->GetFaceNorm();
     auto face_base = crystal_->GetFaceBaseVector();
     auto face_point = crystal_->GetFaceVertex();
 
@@ -76,6 +75,22 @@ BENCHMARK_DEFINE_F(TestOptics, TestHitSurface)(::benchmark::State& st) {
   }
 }
 BENCHMARK_REGISTER_F(TestOptics, TestHitSurface)->Arg(10)->Arg(100)->Arg(1000);
+
+
+// ========== HitSurfaceNew ==========
+BENCHMARK_DEFINE_F(TestOptics, TestHitSurfaceNew)(::benchmark::State& st) {
+  auto ray_num = st.range(0);
+
+  std::unique_ptr<float[]> dir_out{ new float[ray_num * 6] };
+  std::unique_ptr<float[]> w_out{ new float[ray_num * 2] };
+
+  for (auto _ : st) {
+    icehalo::optics::HitSurface(crystal_.get(), 1.31f, ray_num,                 // input
+                                dir_in_.get(), face_id_in_.get(), w_in_.get(),  // input
+                                dir_out.get(), w_out.get());                    // output
+  }
+}
+BENCHMARK_REGISTER_F(TestOptics, TestHitSurfaceNew)->Arg(10)->Arg(100)->Arg(1000);
 
 
 // ========== IntersectLineWithTriangles ==========

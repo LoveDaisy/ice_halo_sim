@@ -82,17 +82,24 @@ TEST_F(OpticsTest, HitSurface) {
   };
 
   float dir_out[2 * kNum * 3];
+  float dir_out_new[2 * kNum * 3];
   float w_out[2 * kNum];
+  float w_out_new[2 * kNum];
 
   icehalo::Optics::HitSurface(crystal_.get(), kN, kNum,  // input
                               dir_in, face_id_in, w_in,  // input
                               dir_out, w_out);           // output
+  icehalo::optics::HitSurface(crystal_.get(), kN, kNum,  // input
+                              dir_in, face_id_in, w_in,  // input
+                              dir_out_new, w_out_new);   // output
 
   using icehalo::math::kFloatEps;
   for (int i = 0; i < kNum * 2; i++) {
-    EXPECT_NEAR(w_out[i], w_out_e[i], kFloatEps);
+    EXPECT_NEAR(w_out[i], w_out_e[i], kFloatEps) << "@(" << i << ")";
+    EXPECT_NEAR(w_out[i], w_out_new[i], kFloatEps) << "@(" << i << ")";
     for (int j = 0; j < 3; j++) {
-      EXPECT_NEAR(dir_out[i * 3 + j], dir_out_e[i * 3 + j], kFloatEps);
+      EXPECT_NEAR(dir_out[i * 3 + j], dir_out_e[i * 3 + j], kFloatEps) << "@(" << i << "," << j << ")";
+      EXPECT_NEAR(dir_out[i * 3 + j], dir_out_new[i * 3 + j], kFloatEps) << "@(" << i << "," << j << ")";
     }
   }
 }

@@ -175,6 +175,15 @@ struct RayInfo : public ISerializable {
   Vec3f main_axis;
 };
 
+namespace optics {
+
+#if defined(__AVX__) && defined(__SSE__)
+void HitSurface(const Crystal* crystal, float n, size_t num,                    // input
+                const float* dir_in, const int* face_id_in, const float* w_in,  // input
+                float* dir_out, float* w_out);                                  // output
+#endif
+}  // namespace optics
+
 
 class Optics {
  public:

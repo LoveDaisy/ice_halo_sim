@@ -1,8 +1,6 @@
 #include "optics.hpp"
 
 #include <immintrin.h>
-#include <smmintrin.h>
-#include <xmmintrin.h>
 
 #include <algorithm>
 #include <cmath>
@@ -228,6 +226,128 @@ void RaySegment::Deserialize(File& file, endian::Endianness endianness) {
 
   recorder.Deserialize(file, endianness);
 }
+
+
+namespace optics {
+
+#if defined(__SSE__)
+void Transpose4x4_f(float* data) {
+  __m128 row0 = _mm_loadu_ps(data + 0);
+  __m128 row1 = _mm_loadu_ps(data + 4);
+  __m128 row2 = _mm_loadu_ps(data + 8);
+  __m128 row3 = _mm_loadu_ps(data + 12);
+
+  auto tmp0 = _mm_shuffle_ps(row0, row1, 0x88);  // 0 2 4 6
+  auto tmp1 = _mm_shuffle_ps(row0, row1, 0xdd);  // 1 3 5 7
+  auto tmp2 = _mm_shuffle_ps(row2, row3, 0x88);  // 8 a c e
+  auto tmp3 = _mm_shuffle_ps(row2, row3, 0xdd);  // 9 b d f
+
+  row0 = _mm_shuffle_ps(tmp0, tmp2, 0x88);  // 0 4 8 c
+  row1 = _mm_shuffle_ps(tmp1, tmp3, 0x88);  // 1 5 9 d
+  row2 = _mm_shuffle_ps(tmp0, tmp2, 0xdd);  // 2 6 a e
+  row3 = _mm_shuffle_ps(tmp1, tmp3, 0xdd);  // 3 7 b f
+
+  _mm_storeu_ps(data + 0, row0);
+  _mm_storeu_ps(data + 4, row1);
+  _mm_storeu_ps(data + 8, row2);
+  _mm_storeu_ps(data + 12, row3);
+}
+#endif
+
+#if defined(__AVX__) && defined(__SSE__)
+void HitSurface(const Crystal* crystal, float n, size_t num,                    // input
+                const float* dir_in, const int* face_id_in, const float* w_in,  // input
+                float* dir_out, float* w_out) {                                 // output
+  const auto* face_norm = crystal->GetFaceNorm();
+  __m128 zero_ = _mm_set_ps1(0.0f);
+  __m128 one_ = _mm_set_ps1(1.0f);
+  __m128 minus_one_ = _mm_set_ps1(-1.0f);
+  __m128 half_ = _mm_set_ps1(0.5f);
+  __m128 two_ = _mm_set_ps1(2.0f);
+  __m128 n_ = _mm_set_ps1(n);
+  __m128 n_inv_ = _mm_set_ps1(1.0f / n);
+
+  float d[24];           // x1*4, y1*4, z1*4, x2*4, y2*4, z2*4
+  float w[8];            // w1*4, w2*4
+  float inter_data[16];  // for transpose
+
+  __m128 dir_[3], dir_L_[3], dir_R_[3];  // dx_, dy_, dz_
+  __m128 norm_[3];                       // nx_, ny_, nz_
+
+  size_t i = 0;
+  for (; i + 4 < num; i += 4) {
+    const float* d_ptr = dir_in + i * 3;
+
+    for (int j = 0; j < 4; j++) {
+      std::memcpy(inter_data + j * 4, d_ptr + j * 3, 3 * sizeof(float));
+    }
+    Transpose4x4_f(inter_data);
+    for (int j = 0; j < 3; j++) {
+      dir_[j] = _mm_loadu_ps(inter_data + 4 * j);
+    }
+
+    for (int j = 0; j < 4; j++) {
+      std::memcpy(inter_data + j * 4, face_norm + face_id_in[i + j] * 3, 3 * sizeof(float));
+    }
+    Transpose4x4_f(inter_data);
+    for (int j = 0; j < 3; j++) {
+      norm_[j] = _mm_loadu_ps(inter_data + 4 * j);
+    }
+
+    __m128 w_ = _mm_loadu_ps(w_in + i);
+
+    auto c_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(dir_[0], norm_[0]), _mm_mul_ps(dir_[1], norm_[1])),
+                         _mm_mul_ps(dir_[2], norm_[2]));
+    auto rr_ = _mm_blendv_ps(n_inv_, n_, _mm_cmp_ps(c_, zero_, 14));  // 14: GT, greater than
+    auto rr2_ = _mm_mul_ps(rr_, rr_);
+    auto d_ = _mm_add_ps(_mm_div_ps(_mm_sub_ps(one_, rr2_), _mm_mul_ps(c_, c_)), rr2_);
+    auto d_sqrt_ = _mm_sqrt_ps(_mm_max_ps(d_, zero_));
+    auto is_total_ref_ = _mm_cmp_ps(d_, zero_, 1);  // 1: LT, less than
+
+    auto Rs_ = _mm_div_ps(_mm_sub_ps(rr_, d_sqrt_), _mm_add_ps(rr_, d_sqrt_));
+    auto Rs2_ = _mm_mul_ps(Rs_, Rs_);
+    auto Rp_ = _mm_div_ps(_mm_sub_ps(one_, _mm_mul_ps(rr_, d_sqrt_)), _mm_add_ps(one_, _mm_mul_ps(rr_, d_sqrt_)));
+    auto Rp2_ = _mm_mul_ps(Rp_, Rp_);
+    auto R_ = _mm_mul_ps(_mm_add_ps(Rs2_, Rp2_), half_);
+
+    auto w_L_ = _mm_mul_ps(R_, w_);
+    auto w_R_ = _mm_blendv_ps(_mm_sub_ps(w_, w_L_), minus_one_, is_total_ref_);
+
+    for (int j = 0; j < 3; j++) {
+      dir_L_[j] = _mm_sub_ps(dir_[j], _mm_mul_ps(two_, _mm_mul_ps(c_, norm_[j])));
+      dir_R_[j] = _mm_blendv_ps(
+          _mm_sub_ps(_mm_mul_ps(rr_, dir_[j]), _mm_mul_ps(_mm_mul_ps(_mm_sub_ps(rr_, d_sqrt_), c_), norm_[j])),
+          dir_L_[j], is_total_ref_);
+    }
+
+    _mm_storeu_ps(w, w_L_);
+    _mm_storeu_ps(w + 4, w_R_);
+
+    for (int j = 0; j < 3; j++) {
+      _mm_storeu_ps(d + j * 4, dir_L_[j]);
+      _mm_storeu_ps(d + j * 4 + 12, dir_R_[j]);
+    }
+
+    for (int j = 0; j < 4; j++) {
+      w_out[(i + j) * 2 + 0] = w[j];
+      w_out[(i + j) * 2 + 1] = w[j + 4];
+
+      dir_out[(i + j) * 6 + 0] = d[j];
+      dir_out[(i + j) * 6 + 1] = d[j + 4];
+      dir_out[(i + j) * 6 + 2] = d[j + 8];
+      dir_out[(i + j) * 6 + 3] = d[j + 12];
+      dir_out[(i + j) * 6 + 4] = d[j + 16];
+      dir_out[(i + j) * 6 + 5] = d[j + 20];
+    }
+  }
+
+  Optics::HitSurface(crystal, n, num - i,                       // input
+                     dir_in + i * 3, face_id_in + i, w_in + i,  // input
+                     dir_out + i * 6, w_out + i * 2);           // output
+}
+#endif
+
+}  // namespace optics
 
 
 void Optics::HitSurface(const Crystal* crystal, float n, size_t num,                    // input
