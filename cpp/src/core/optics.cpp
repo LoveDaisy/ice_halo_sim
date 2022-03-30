@@ -230,10 +230,50 @@ void RaySegment::Deserialize(File& file, endian::Endianness endianness) {
 
 namespace optics {
 
+float GetReflectRatio(float delta, float rr) {
+  float d_sqrt = std::sqrt(delta);
+
+  float Rs = (rr - d_sqrt) / (rr + d_sqrt);
+  Rs *= Rs;
+  float Rp = (1 - rr * d_sqrt) / (1 + rr * d_sqrt);
+  Rp *= Rp;
+
+  return (Rs + Rp) / 2;
+}
+
+void HitSurfaceNormal(const Crystal* crystal, float n, size_t num,                    // input
+                      const float* dir_in, const int* face_id_in, const float* w_in,  // input
+                      float* dir_out, float* w_out) {                                 // output
+  const auto* face_norm = crystal->GetFaceNorm();
+
+  for (size_t i = 0; i < num; i++) {
+    const float* tmp_dir = dir_in + i * 3;
+    const float* tmp_norm = face_norm + face_id_in[i] * 3;
+
+    float cos_theta = Dot3(tmp_dir, tmp_norm);
+    float rr = cos_theta > 0 ? n : 1.0f / n;
+    float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
+
+    bool is_total_reflected = d <= 0.0f;
+
+    w_out[2 * i + 0] = GetReflectRatio(std::max(d, 0.0f), rr) * w_in[i];
+    w_out[2 * i + 1] = is_total_reflected ? -1 : w_in[i] - w_out[2 * i + 0];
+
+    float* tmp_dir_reflection = dir_out + (i * 2 + 0) * 3;
+    float* tmp_dir_refraction = dir_out + (i * 2 + 1) * 3;
+    for (int j = 0; j < 3; j++) {
+      tmp_dir_reflection[j] = tmp_dir[j] - 2 * cos_theta * tmp_norm[j];  // Reflection
+      tmp_dir_refraction[j] = is_total_reflected ?
+                                  tmp_dir_reflection[j] :
+                                  rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];  // Refraction
+    }
+  }
+}
+
 #if defined(__AVX__) && defined(__SSE__)
-void HitSurface(const Crystal* crystal, float n, size_t num,                    // input
-                const float* dir_in, const int* face_id_in, const float* w_in,  // input
-                float* dir_out, float* w_out) {                                 // output
+void HitSurfaceSimd(const Crystal* crystal, float n, size_t num,                    // input
+                    const float* dir_in, const int* face_id_in, const float* w_in,  // input
+                    float* dir_out, float* w_out) {                                 // output
   const auto* face_norm = crystal->GetFaceNorm();
   __m128 zero_ = _mm_set_ps1(0.0f);
   __m128 one_ = _mm_set_ps1(1.0f);
@@ -243,8 +283,8 @@ void HitSurface(const Crystal* crystal, float n, size_t num,                    
   __m128 n_ = _mm_set_ps1(n);
   __m128 n_inv_ = _mm_set_ps1(1.0f / n);
 
-  float d[24];           // x1*4, y1*4, z1*4, x2*4, y2*4, z2*4
-  float w[8];            // w1*4, w2*4
+  float d[24];  // x1*4, y1*4, z1*4, x2*4, y2*4, z2*4
+  float w[8];   // w1*4, w2*4
 
   __m128 dir_[3], dir_L_[3], dir_R_[3];  // dx_, dy_, dz_
   __m128 norm_[3];                       // nx_, ny_, nz_
@@ -259,7 +299,7 @@ void HitSurface(const Crystal* crystal, float n, size_t num,                    
       norm_[j] = _mm_set_ps(face_norm[ids[3] * 3 + j], face_norm[ids[2] * 3 + j], face_norm[ids[1] * 3 + j],
                             face_norm[ids[0] * 3 + j]);
     }
-    __m128 w_ = _mm_loadu_ps(w_in + i);
+    __m128 w_ = _mm_load_ps(w_in + i);
 
     auto c_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(dir_[0], norm_[0]), _mm_mul_ps(dir_[1], norm_[1])),
                          _mm_mul_ps(dir_[2], norm_[2]));
@@ -285,12 +325,12 @@ void HitSurface(const Crystal* crystal, float n, size_t num,                    
           dir_L_[j], is_total_ref_);
     }
 
-    _mm_storeu_ps(w, w_L_);
-    _mm_storeu_ps(w + 4, w_R_);
+    _mm_store_ps(w, w_L_);
+    _mm_store_ps(w + 4, w_R_);
 
     for (int j = 0; j < 3; j++) {
-      _mm_storeu_ps(d + j * 4, dir_L_[j]);
-      _mm_storeu_ps(d + j * 4 + 12, dir_R_[j]);
+      _mm_store_ps(d + j * 4, dir_L_[j]);
+      _mm_store_ps(d + j * 4 + 12, dir_R_[j]);
     }
 
     for (int j = 0; j < 4; j++) {
@@ -306,11 +346,22 @@ void HitSurface(const Crystal* crystal, float n, size_t num,                    
     }
   }
 
-  Optics::HitSurface(crystal, n, num - i,                       // input
-                     dir_in + i * 3, face_id_in + i, w_in + i,  // input
-                     dir_out + i * 6, w_out + i * 2);           // output
+  HitSurfaceNormal(crystal, n, num - i,                       // input
+                   dir_in + i * 3, face_id_in + i, w_in + i,  // input
+                   dir_out + i * 6, w_out + i * 2);           // output
 }
 #endif
+
+
+void HitSurface(const Crystal* crystal, float n, size_t num,                    // input
+                const float* dir_in, const int* face_id_in, const float* w_in,  // input
+                float* dir_out, float* w_out) {                                 // output
+#if defined(__SSE__) && defined(__AVX__)
+  HitSurfaceSimd(crystal, n, num, dir_in, face_id_in, w_in, dir_out, w_out);
+#else
+  HitSurfaceNormal(crystal, n, num, dir_in, face_id_in, w_in, dir_out, w_out);
+#endif
+}
 
 }  // namespace optics
 

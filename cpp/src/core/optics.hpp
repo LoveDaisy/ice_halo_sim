@@ -177,11 +177,22 @@ struct RayInfo : public ISerializable {
 
 namespace optics {
 
-#if defined(__AVX__) && defined(__SSE__)
+/**
+ * @brief Compute the reflective & refractive result when a ray hits a surface.
+ *
+ * @param crystal [input]
+ * @param n [input] refractive index
+ * @param num [input] how many rays
+ * @param dir_in [input] direction, [dx, dy, dz], ...
+ * @param face_id_in [input] index of crystal face. NOT face number (which used in raypaths)
+ * @param w_in [input] intensity
+ * @param dir_out [output] direction, [dx, dy, dz]_{reflective, refractive}, ...
+ * @param w_out [output] intensity, w_{reflective, refractive}, ...
+ */
 void HitSurface(const Crystal* crystal, float n, size_t num,                    // input
                 const float* dir_in, const int* face_id_in, const float* w_in,  // input
                 float* dir_out, float* w_out);                                  // output
-#endif
+
 }  // namespace optics
 
 
