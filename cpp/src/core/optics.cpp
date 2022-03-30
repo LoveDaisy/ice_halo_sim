@@ -230,30 +230,6 @@ void RaySegment::Deserialize(File& file, endian::Endianness endianness) {
 
 namespace optics {
 
-#if defined(__SSE__)
-void Transpose4x4_f(float* data) {
-  __m128 row0 = _mm_loadu_ps(data + 0);
-  __m128 row1 = _mm_loadu_ps(data + 4);
-  __m128 row2 = _mm_loadu_ps(data + 8);
-  __m128 row3 = _mm_loadu_ps(data + 12);
-
-  auto tmp0 = _mm_shuffle_ps(row0, row1, 0x88);  // 0 2 4 6
-  auto tmp1 = _mm_shuffle_ps(row0, row1, 0xdd);  // 1 3 5 7
-  auto tmp2 = _mm_shuffle_ps(row2, row3, 0x88);  // 8 a c e
-  auto tmp3 = _mm_shuffle_ps(row2, row3, 0xdd);  // 9 b d f
-
-  row0 = _mm_shuffle_ps(tmp0, tmp2, 0x88);  // 0 4 8 c
-  row1 = _mm_shuffle_ps(tmp1, tmp3, 0x88);  // 1 5 9 d
-  row2 = _mm_shuffle_ps(tmp0, tmp2, 0xdd);  // 2 6 a e
-  row3 = _mm_shuffle_ps(tmp1, tmp3, 0xdd);  // 3 7 b f
-
-  _mm_storeu_ps(data + 0, row0);
-  _mm_storeu_ps(data + 4, row1);
-  _mm_storeu_ps(data + 8, row2);
-  _mm_storeu_ps(data + 12, row3);
-}
-#endif
-
 #if defined(__AVX__) && defined(__SSE__)
 void HitSurface(const Crystal* crystal, float n, size_t num,                    // input
                 const float* dir_in, const int* face_id_in, const float* w_in,  // input
@@ -269,7 +245,6 @@ void HitSurface(const Crystal* crystal, float n, size_t num,                    
 
   float d[24];           // x1*4, y1*4, z1*4, x2*4, y2*4, z2*4
   float w[8];            // w1*4, w2*4
-  float inter_data[16];  // for transpose
 
   __m128 dir_[3], dir_L_[3], dir_R_[3];  // dx_, dy_, dz_
   __m128 norm_[3];                       // nx_, ny_, nz_
@@ -277,23 +252,13 @@ void HitSurface(const Crystal* crystal, float n, size_t num,                    
   size_t i = 0;
   for (; i + 4 < num; i += 4) {
     const float* d_ptr = dir_in + i * 3;
+    int ids[4] = { face_id_in[i], face_id_in[i + 1], face_id_in[i + 2], face_id_in[i + 3] };
 
-    for (int j = 0; j < 4; j++) {
-      std::memcpy(inter_data + j * 4, d_ptr + j * 3, 3 * sizeof(float));
-    }
-    Transpose4x4_f(inter_data);
     for (int j = 0; j < 3; j++) {
-      dir_[j] = _mm_loadu_ps(inter_data + 4 * j);
+      dir_[j] = _mm_set_ps(d_ptr[j + 9], d_ptr[j + 6], d_ptr[j + 3], d_ptr[j + 0]);
+      norm_[j] = _mm_set_ps(face_norm[ids[3] * 3 + j], face_norm[ids[2] * 3 + j], face_norm[ids[1] * 3 + j],
+                            face_norm[ids[0] * 3 + j]);
     }
-
-    for (int j = 0; j < 4; j++) {
-      std::memcpy(inter_data + j * 4, face_norm + face_id_in[i + j] * 3, 3 * sizeof(float));
-    }
-    Transpose4x4_f(inter_data);
-    for (int j = 0; j < 3; j++) {
-      norm_[j] = _mm_loadu_ps(inter_data + 4 * j);
-    }
-
     __m128 w_ = _mm_loadu_ps(w_in + i);
 
     auto c_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(dir_[0], norm_[0]), _mm_mul_ps(dir_[1], norm_[1])),
