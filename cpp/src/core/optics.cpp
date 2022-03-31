@@ -290,7 +290,7 @@ void HitSurfaceSimd(const Crystal* crystal, float n, size_t num,                
   __m128 norm_[3];                       // nx_, ny_, nz_
 
   size_t i = 0;
-  for (; i + 4 < num; i += 4) {
+  for (; i + 3 < num; i += 4) {
     const float* d_ptr = dir_in + i * 3;
     int ids[4] = { face_id_in[i], face_id_in[i + 1], face_id_in[i + 2], face_id_in[i + 3] };
 
