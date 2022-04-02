@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 
 #include "context/context.hpp"
 #include "core/math.hpp"
@@ -361,6 +362,116 @@ void HitSurface(const Crystal* crystal, float n, size_t num,                    
 #else
   HitSurface_Normal(crystal, n, num, dir_in, face_id_in, w_in, dir_out, w_out);
 #endif
+}
+
+
+void RayTriangleBW(const float* ray_pt, const float* ray_dir, int face_id,  // input
+                   int face_num, const float* face_transform,               // input
+                   float* out_pt, int* out_face_id) {
+  float min_t = -1.0f;
+  *out_face_id = -1;
+
+  float d[3];
+  float p[3];
+
+  for (int i = 0; i < face_num; i++) {
+    if (i == face_id) {
+      continue;
+    }
+
+    const float* tf = face_transform + i * 12;
+    p[0] = Dot3(ray_pt, tf + 0) + tf[3];
+    p[1] = Dot3(ray_pt, tf + 4) + tf[7];
+    p[2] = Dot3(ray_pt, tf + 8) + tf[11];
+
+    d[0] = Dot3(ray_dir, tf + 0);
+    d[1] = Dot3(ray_dir, tf + 4);
+    d[2] = Dot3(ray_dir, tf + 8);
+
+    if (FloatEqualZero(d[2])) {
+      continue;  // Parallel to this triangle
+    }
+
+    auto t = -p[2] / d[2];
+    if (t < math::kFloatEps) {
+      continue;
+    }
+
+    auto u = p[0] + t * d[0];
+    if (u < -math::kFloatEps || u > 1.0f) {
+      continue;  // out of this triangle
+    }
+
+    auto v = p[1] + t * d[1];
+    if (v < -math::kFloatEps || v > 1.0f) {
+      continue;  // out of this triangle
+    }
+
+    if (u + v > 1.0f) {
+      continue;  // out of this triangle
+    }
+
+    if (min_t < -math::kFloatEps || (t < min_t && min_t > 0.0f)) {
+      min_t = t;
+      *out_face_id = i;
+      for (int j = 0; j < 3; j++) {
+        out_pt[j] = ray_pt[j] + t * ray_dir[j];
+      }
+    }
+  }
+}
+
+
+void Propagate(const Crystal* crystal, size_t num,                                                 // input
+               const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
+               float* pt_out, int* face_id_out) {                                                  // output
+  auto face_num = crystal->TotalFaces();
+  auto face_norm = crystal->GetFaceNorm();
+  auto face_base = crystal->GetFaceBaseVector();
+  auto face_point = crystal->GetFaceVertex();
+
+  // Initialize transform for every face
+  // TODO: put this initialization into class Crystal.
+  std::unique_ptr<float[]> face_transform{ new float[face_num * 12]{} };
+  float m[3];
+  for (int i = 0; i < face_num; i++) {
+    Cross3(face_base + i * 6 + 0, face_base + i * 6 + 3, m);
+    auto a = Dot3(face_norm + i * 3, m);
+    face_transform[i * 12 + 0] =
+        (face_base[i * 6 + 4] * face_norm[i * 3 + 2] - face_base[i * 6 + 5] * face_norm[i * 3 + 1]) / a;
+    face_transform[i * 12 + 1] =
+        (face_base[i * 6 + 5] * face_norm[i * 3 + 0] - face_base[i * 6 + 3] * face_norm[i * 3 + 2]) / a;
+    face_transform[i * 12 + 2] =
+        (face_base[i * 6 + 3] * face_norm[i * 3 + 1] - face_base[i * 6 + 4] * face_norm[i * 3 + 0]) / a;
+
+    face_transform[i * 12 + 4] =
+        (face_base[i * 6 + 2] * face_norm[i * 3 + 1] - face_base[i * 6 + 1] * face_norm[i * 3 + 2]) / a;
+    face_transform[i * 12 + 5] =
+        (face_base[i * 6 + 0] * face_norm[i * 3 + 2] - face_base[i * 6 + 2] * face_norm[i * 3 + 0]) / a;
+    face_transform[i * 12 + 6] =
+        (face_base[i * 6 + 1] * face_norm[i * 3 + 0] - face_base[i * 6 + 0] * face_norm[i * 3 + 1]) / a;
+
+    face_transform[i * 12 + 8] =
+        (face_base[i * 6 + 1] * face_base[i * 6 + 5] - face_base[i * 6 + 2] * face_base[i * 6 + 4]) / a;
+    face_transform[i * 12 + 9] =
+        (face_base[i * 6 + 2] * face_base[i * 6 + 3] - face_base[i * 6 + 0] * face_base[i * 6 + 5]) / a;
+    face_transform[i * 12 + 10] =
+        (face_base[i * 6 + 0] * face_base[i * 6 + 4] - face_base[i * 6 + 1] * face_base[i * 6 + 3]) / a;
+
+    face_transform[i * 12 + 3] = -Dot3(face_transform.get() + i * 12 + 0, face_point + i * 9);
+    face_transform[i * 12 + 7] = -Dot3(face_transform.get() + i * 12 + 4, face_point + i * 9);
+    face_transform[i * 12 + 11] = -Dot3(face_transform.get() + i * 12 + 8, face_point + i * 9);
+  }
+
+  // Do main work
+  for (size_t i = 0; i < num; i++) {
+    if (w_in[i] < ProjectContext::kPropMinW) {
+      continue;
+    }
+    RayTriangleBW(pt_in + i * 3, dir_in + i * 3, face_id_in[i],  // input
+                  face_num, face_transform.get(),                // input
+                  pt_out + i * 3, face_id_out + i);              // output
+  }
 }
 
 }  // namespace optics

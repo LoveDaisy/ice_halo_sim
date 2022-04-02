@@ -162,6 +162,61 @@ TEST_F(OpticsTest, RayFaceIntersection) {
 }
 
 
+TEST_F(OpticsTest, Propagate) {
+  auto c = icehalo::Crystal::CreateHexPrism(1.0f);
+
+  constexpr int kNum = 5;
+  using icehalo::math::kSqrt3;
+  float dir_in[kNum * 3]{
+    kSqrt3 / 2,  0.5f,         0.0f,          // case 1
+    1.0f,        0.0f,         0.0f,          // case 2
+    0.5f,        0.0f,         -kSqrt3 / 2,   // case 3
+    0.5f,        -kSqrt3 / 2,  0.0f,          // case 4
+    0.35693541f, -0.18690710f, -0.91523923f,  // case 5
+  };
+  float pt_in[kNum * 3]{
+    -kSqrt3 / 2, 0.0f,           0.0f,  // case 1
+    -0.5f,       kSqrt3 * 5 / 6, 0.8f,  // case 2
+    0.0f,        0.0f,           0.0f,  // case 3
+    kSqrt3 / 2,  -0.2f,          0.5f,  // case 4
+    -0.1f,       0.82679492f,    0.8f,  // case 5
+  };
+  float w_in[kNum]{
+    1.0f,  // case 1
+    1.0f,  // case 2
+    1.0f,  // case 3
+    1.0f,  // case 4
+    1.0f,  // case 5
+  };
+  int id_in[kNum]{ 10, 8, 1, 4, 8 };
+
+  float pt_out[kNum * 3]{
+    kSqrt3 / 4, 0.75f,     0.0f,   // case 1
+    0.0f,       0.0f,      0.0f,   // case 2
+    0.577350f,  0.0f,      -1.0f,  // case 3
+    0.0f,       0.0f,      0.0f,   // case 4
+    0.601984f,  0.459205f, -1.0f,  // case 5
+  };
+  int id_out[kNum]{ 6, -1, 16, -1, 16 };
+
+  float pt_out_result[kNum * 3]{};
+  int id_out_result[kNum]{};
+
+
+  icehalo::optics::Propagate(c.get(), kNum,                  // input
+                             pt_in, dir_in, w_in, id_in,     // input
+                             pt_out_result, id_out_result);  // output
+
+  using icehalo::math::kFloatEps;
+  for (int i = 0; i < kNum; i++) {
+    EXPECT_EQ(id_out[i], id_out_result[i]);
+    for (int j = 0; j < 3; j++) {
+      EXPECT_NEAR(pt_out_result[i * 3 + j], pt_out[i * 3 + j], kFloatEps) << "@(" << i << "," << j << ")";
+    }
+  }
+}
+
+
 TEST_F(OpticsTest, RayPathHash) {
   icehalo::RayPathRecorder recorder1;
   icehalo::RayPathRecorder recorder2;

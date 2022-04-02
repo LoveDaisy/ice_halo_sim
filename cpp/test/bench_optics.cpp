@@ -1,5 +1,6 @@
 #include <benchmark/benchmark.h>
 #include <immintrin.h>
+#include <xmmintrin.h>
 
 #include <memory>
 #include <string>
@@ -246,9 +247,9 @@ void RayTriangleBW(const float* ray_pt, const float* ray_dir, int face_id,  // i
     p[1] = icehalo::Dot3(ray_pt, tf + 4) + tf[7];
     p[2] = icehalo::Dot3(ray_pt, tf + 8) + tf[11];
 
-    d[0] = icehalo::Dot3(ray_dir, tf + 0) + tf[3];
-    d[1] = icehalo::Dot3(ray_dir, tf + 4) + tf[7];
-    d[2] = icehalo::Dot3(ray_dir, tf + 8) + tf[11];
+    d[0] = icehalo::Dot3(ray_dir, tf + 0);
+    d[1] = icehalo::Dot3(ray_dir, tf + 4);
+    d[2] = icehalo::Dot3(ray_dir, tf + 8);
 
     if (icehalo::FloatEqualZero(d[2])) {
       continue;  // Parallel to this triangle
@@ -373,11 +374,11 @@ void RayTriangleBWSimd(const float* ray_pt, const float* ray_dir, int face_id,  
                           _mm_fmadd_ps(ray_p_[2], tf_[10], tf_[11]));
 
     auto dx_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(ray_d_[0], tf_[0]), _mm_mul_ps(ray_d_[1], tf_[1])),
-                          _mm_fmadd_ps(ray_d_[2], tf_[2], tf_[3]));
+                          _mm_mul_ps(ray_d_[2], tf_[2]));
     auto dy_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(ray_d_[0], tf_[4]), _mm_mul_ps(ray_d_[1], tf_[5])),
-                          _mm_fmadd_ps(ray_d_[2], tf_[6], tf_[7]));
+                          _mm_mul_ps(ray_d_[2], tf_[6]));
     auto dz_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(ray_d_[0], tf_[8]), _mm_mul_ps(ray_d_[1], tf_[9])),
-                          _mm_fmadd_ps(ray_d_[2], tf_[10], tf_[11]));
+                          _mm_mul_ps(ray_d_[2], tf_[10]));
 
     auto t_ = _mm_div_ps(-pz_, dz_);
     auto u_ = _mm_fmadd_ps(t_, dx_, px_);
