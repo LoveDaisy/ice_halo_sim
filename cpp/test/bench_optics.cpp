@@ -1,4 +1,5 @@
 #include <benchmark/benchmark.h>
+#include <immintrin.h>
 
 #include <memory>
 #include <string>
@@ -130,18 +131,17 @@ BENCHMARK_DEFINE_F(TestOptics, RayTriangle_simd)(::benchmark::State& st) {
   auto face_point = crystal_->GetFaceVertex();
 
   auto ray_num = st.range(0);
-  float out_pt_normal[]{ 0, 0, 0 };
-  int out_id_normal = -1;
-
   using icehalo::Optics;
   for (auto _ : st) {
     const auto* pt_in = pt_in_.get();
     const auto* dir_in = dir_in_.get();
     const auto* id_in = face_id_in_.get();
+    float* pt_out = pt_out_.get();
+    int* id_out = face_id_out_.get();
     for (int64_t i = 0; i < ray_num; i++) {
       Optics::IntersectLineWithTrianglesSimd(pt_in + i * 3, dir_in + i * 3, id_in[i], face_num,  // input
                                              face_base, face_point, face_norm,                   // input
-                                             out_pt_normal, &out_id_normal);                     // output
+                                             pt_out + i * 3, id_out + i);                        // output
     }
   }
 }
@@ -337,6 +337,132 @@ BENCHMARK_DEFINE_F(TestOptics, RayTriangle_BW)(::benchmark::State& st) {
 }
 
 
+// ========== RayTriangle_BW_simd ==========
+void RayTriangleBWSimd(const float* ray_pt, const float* ray_dir, int face_id,  // input
+                       int face_num, const float* face_transform,               // input
+                       float* out_pt, int* out_face_id) {
+  float min_t = -1.0f;
+  *out_face_id = -1;
+
+  float tmp_dz[4];
+  float tmp_t[4];
+  float tmp_u[4];
+  float tmp_v[4];
+
+  __m128 tf_[12];
+  __m128 ray_p_[3];
+  __m128 ray_d_[3];
+  for (int j = 0; j < 3; j++) {
+    ray_p_[j] = _mm_set_ps1(ray_pt[j]);
+    ray_d_[j] = _mm_set_ps1(ray_dir[j]);
+  }
+
+  int i = 0;
+  for (; i + 3 < face_num; i += 4) {
+    const float* tf = face_transform + i * 12;
+
+    for (int j = 0; j < 12; j++) {
+      tf_[j] = _mm_set_ps(tf[36 + j], tf[24 + j], tf[12 + j], tf[j]);
+    }
+
+    auto px_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(ray_p_[0], tf_[0]), _mm_mul_ps(ray_p_[1], tf_[1])),
+                          _mm_fmadd_ps(ray_p_[2], tf_[2], tf_[3]));
+    auto py_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(ray_p_[0], tf_[4]), _mm_mul_ps(ray_p_[1], tf_[5])),
+                          _mm_fmadd_ps(ray_p_[2], tf_[6], tf_[7]));
+    auto pz_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(ray_p_[0], tf_[8]), _mm_mul_ps(ray_p_[1], tf_[9])),
+                          _mm_fmadd_ps(ray_p_[2], tf_[10], tf_[11]));
+
+    auto dx_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(ray_d_[0], tf_[0]), _mm_mul_ps(ray_d_[1], tf_[1])),
+                          _mm_fmadd_ps(ray_d_[2], tf_[2], tf_[3]));
+    auto dy_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(ray_d_[0], tf_[4]), _mm_mul_ps(ray_d_[1], tf_[5])),
+                          _mm_fmadd_ps(ray_d_[2], tf_[6], tf_[7]));
+    auto dz_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(ray_d_[0], tf_[8]), _mm_mul_ps(ray_d_[1], tf_[9])),
+                          _mm_fmadd_ps(ray_d_[2], tf_[10], tf_[11]));
+
+    auto t_ = _mm_div_ps(-pz_, dz_);
+    auto u_ = _mm_fmadd_ps(t_, dx_, px_);
+    auto v_ = _mm_fmadd_ps(t_, dy_, py_);
+
+    _mm_storeu_ps(tmp_dz, dz_);
+    _mm_storeu_ps(tmp_t, t_);
+    _mm_storeu_ps(tmp_u, u_);
+    _mm_storeu_ps(tmp_v, v_);
+
+    for (int j = 0; j < 4; j++) {
+      if (i + j == face_id) {
+        continue;
+      }
+      if (icehalo::FloatEqualZero(tmp_dz[j])) {
+        continue;
+      }
+      if (tmp_t[j] < 0.0f || tmp_u[j] < 0.0f || tmp_v[j] < 0.0f || tmp_u[j] + tmp_v[j] > 1.0f) {
+        continue;
+      }
+      if (min_t < 0.0f || (tmp_t[j] < min_t && min_t > 0.0f)) {
+        min_t = tmp_t[j];
+        *out_face_id = i + j;
+        for (int k = 0; k < 3; k++) {
+          out_pt[k] = ray_pt[k] + tmp_t[j] * ray_dir[k];
+        }
+      }
+    }
+  }
+}
+
+BENCHMARK_DEFINE_F(TestOptics, RayTriangle_BW_simd)(::benchmark::State& st) {
+  auto face_num = crystal_->TotalFaces();
+  auto face_norm = crystal_->GetFaceNorm();
+  auto face_base = crystal_->GetFaceBaseVector();
+  auto face_point = crystal_->GetFaceVertex();
+
+  auto ray_num = st.range(0);
+  std::unique_ptr<float[]> face_transform{ new float[face_num * 12] };
+  float m[3];
+  for (int i = 0; i < face_num; i++) {
+    icehalo::Cross3(face_base + i * 6 + 3, face_norm + i * 3, m);
+    auto a = icehalo::Dot3(face_base + i * 6, m);
+    face_transform[i * 12 + 0] =
+        (face_base[i * 6 + 4] * face_norm[i * 3 + 2] - face_base[i * 6 + 5] * face_norm[i * 3 + 1]) / a;
+    face_transform[i * 12 + 1] =
+        (face_base[i * 6 + 5] * face_norm[i * 3 + 0] - face_base[i * 6 + 3] * face_norm[i * 3 + 2]) / a;
+    face_transform[i * 12 + 2] =
+        (face_base[i * 6 + 3] * face_norm[i * 3 + 1] - face_base[i * 6 + 4] * face_norm[i * 3 + 0]) / a;
+
+    face_transform[i * 12 + 4] =
+        (face_base[i * 6 + 2] * face_norm[i * 3 + 1] - face_base[i * 6 + 1] * face_norm[i * 3 + 2]) / a;
+    face_transform[i * 12 + 5] =
+        (face_base[i * 6 + 0] * face_norm[i * 3 + 2] - face_base[i * 6 + 2] * face_norm[i * 3 + 0]) / a;
+    face_transform[i * 12 + 6] =
+        (face_base[i * 6 + 1] * face_norm[i * 3 + 0] - face_base[i * 6 + 0] * face_norm[i * 3 + 1]) / a;
+
+    face_transform[i * 12 + 8] =
+        (face_base[i * 6 + 1] * face_base[i * 6 + 5] - face_base[i * 6 + 2] * face_base[i * 6 + 4]) / a;
+    face_transform[i * 12 + 9] =
+        (face_base[i * 6 + 2] * face_base[i * 6 + 3] - face_base[i * 6 + 0] * face_base[i * 6 + 5]) / a;
+    face_transform[i * 12 + 10] =
+        (face_base[i * 6 + 0] * face_base[i * 6 + 4] - face_base[i * 6 + 1] * face_base[i * 6 + 3]) / a;
+
+    face_transform[i * 12 + 3] = -icehalo::Dot3(face_transform.get() + i * 12 + 0, face_point + i * 9);
+    face_transform[i * 12 + 7] = -icehalo::Dot3(face_transform.get() + i * 12 + 4, face_point + i * 9);
+    face_transform[i * 12 + 11] = -icehalo::Dot3(face_transform.get() + i * 12 + 8, face_point + i * 9);
+  }
+
+  using icehalo::Optics;
+  for (auto _ : st) {
+    const auto* pt_in = pt_in_.get();
+    const auto* dir_in = dir_in_.get();
+    const auto* id_in = face_id_in_.get();
+    float* pt_out = pt_out_.get();
+    int* id_out = face_id_out_.get();
+    for (int64_t i = 0; i < ray_num; i++) {
+      RayTriangleBWSimd(pt_in + i * 3, dir_in + i * 3, id_in[i],  // input
+                        face_num, face_transform.get(),           // input
+                        pt_out + i * 3, id_out + i);              // output
+    }
+  }
+}
+
+
 ///////////////////////// Register bechmarks //////////////////////////////////////
 BENCHMARK_REGISTER_F(TestOptics, HitSurface)->Arg(10)->Arg(100)->Arg(1000);
 BENCHMARK_REGISTER_F(TestOptics, HitSurface_new)->Arg(10)->Arg(100)->Arg(1000);
@@ -346,4 +472,5 @@ constexpr int kStepMultiplier = 2;
 BENCHMARK_REGISTER_F(TestOptics, RayTriangle)->RangeMultiplier(kStepMultiplier)->RAY_TRIANGLE_RANGE;
 BENCHMARK_REGISTER_F(TestOptics, RayTriangle_MT)->RangeMultiplier(kStepMultiplier)->RAY_TRIANGLE_RANGE;
 BENCHMARK_REGISTER_F(TestOptics, RayTriangle_BW)->RangeMultiplier(kStepMultiplier)->RAY_TRIANGLE_RANGE;
-// BENCHMARK_REGISTER_F(TestOptics, RayTriangle_simd)->RangeMultiplier(kStepMultiplier)->RAY_TRIANGLE_RANGE;
+BENCHMARK_REGISTER_F(TestOptics, RayTriangle_BW_simd)->RangeMultiplier(kStepMultiplier)->RAY_TRIANGLE_RANGE;
+BENCHMARK_REGISTER_F(TestOptics, RayTriangle_simd)->RangeMultiplier(kStepMultiplier)->RAY_TRIANGLE_RANGE;
