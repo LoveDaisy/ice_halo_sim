@@ -241,9 +241,9 @@ float GetReflectRatio(float delta, float rr) {
   return (Rs + Rp) / 2;
 }
 
-void HitSurfaceNormal(const Crystal* crystal, float n, size_t num,                    // input
-                      const float* dir_in, const int* face_id_in, const float* w_in,  // input
-                      float* dir_out, float* w_out) {                                 // output
+void HitSurface_Normal(const Crystal* crystal, float n, size_t num,                    // input
+                       const float* dir_in, const int* face_id_in, const float* w_in,  // input
+                       float* dir_out, float* w_out) {                                 // output
   const auto* face_norm = crystal->GetFaceNorm();
 
   for (size_t i = 0; i < num; i++) {
@@ -271,9 +271,9 @@ void HitSurfaceNormal(const Crystal* crystal, float n, size_t num,              
 }
 
 #if defined(__AVX__) && defined(__SSE__)
-void HitSurfaceSimd(const Crystal* crystal, float n, size_t num,                    // input
-                    const float* dir_in, const int* face_id_in, const float* w_in,  // input
-                    float* dir_out, float* w_out) {                                 // output
+void HitSurface_Simd(const Crystal* crystal, float n, size_t num,                    // input
+                     const float* dir_in, const int* face_id_in, const float* w_in,  // input
+                     float* dir_out, float* w_out) {                                 // output
   const auto* face_norm = crystal->GetFaceNorm();
   __m128 zero_ = _mm_set_ps1(0.0f);
   __m128 one_ = _mm_set_ps1(1.0f);
@@ -346,9 +346,9 @@ void HitSurfaceSimd(const Crystal* crystal, float n, size_t num,                
     }
   }
 
-  HitSurfaceNormal(crystal, n, num - i,                       // input
-                   dir_in + i * 3, face_id_in + i, w_in + i,  // input
-                   dir_out + i * 6, w_out + i * 2);           // output
+  HitSurface_Normal(crystal, n, num - i,                       // input
+                    dir_in + i * 3, face_id_in + i, w_in + i,  // input
+                    dir_out + i * 6, w_out + i * 2);           // output
 }
 #endif
 
@@ -357,9 +357,9 @@ void HitSurface(const Crystal* crystal, float n, size_t num,                    
                 const float* dir_in, const int* face_id_in, const float* w_in,  // input
                 float* dir_out, float* w_out) {                                 // output
 #if defined(__SSE__) && defined(__AVX__)
-  HitSurfaceSimd(crystal, n, num, dir_in, face_id_in, w_in, dir_out, w_out);
+  HitSurface_Simd(crystal, n, num, dir_in, face_id_in, w_in, dir_out, w_out);
 #else
-  HitSurfaceNormal(crystal, n, num, dir_in, face_id_in, w_in, dir_out, w_out);
+  HitSurface_Normal(crystal, n, num, dir_in, face_id_in, w_in, dir_out, w_out);
 #endif
 }
 

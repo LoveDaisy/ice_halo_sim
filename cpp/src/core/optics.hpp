@@ -180,18 +180,39 @@ namespace optics {
 /**
  * @brief Compute the reflective & refractive result when a ray hits a surface.
  *
- * @param crystal [input]
- * @param n [input] refractive index
- * @param num [input] how many rays
- * @param dir_in [input] direction, [dx, dy, dz], ...
- * @param face_id_in [input] index of crystal face. NOT face number (which used in raypaths)
- * @param w_in [input] intensity
- * @param dir_out [output] direction, [dx, dy, dz]_{reflective, refractive}, ...
- * @param w_out [output] intensity, w_{reflective, refractive}, ...
+ * @param crystal    [input]
+ * @param n          [input] refractive index
+ * @param num        [input] how many rays
+ * @param dir_in     [input] direction. sizeof(float) * num * 3, [dx, dy, dz], ...
+ * @param face_id_in [input] index of crystal face. NOT face number (which used in raypaths).
+ *                           sizeof(int) * num
+ * @param w_in       [input] intensity. sizeof(float) * num
+ *
+ * @param dir_out    [output] direction. sizeof(float) * num * 6,
+ *                            [dx, dy, dz]_{reflective, refractive}, ...
+ * @param w_out      [output] intensity. sizeof(float) * num, w_{reflective, refractive}, ...
  */
 void HitSurface(const Crystal* crystal, float n, size_t num,                    // input
                 const float* dir_in, const int* face_id_in, const float* w_in,  // input
                 float* dir_out, float* w_out);                                  // output
+
+/**
+ * @brief Find out which face (triangle) will a ray hit, then calculate its intersection point.
+ *
+ * @param crystal     [input]
+ * @param num         [input] how many rays
+ * @param pt_in       [input] start point of rays. sizeof(float) * num * 3, [px, py, pz], ...
+ * @param dir_in      [input] direction of rays. sizeof(float) * num * 3, [dx, dy, dz], ...
+ * @param w_in        [input] intensity. sizeof(float) * num
+ * @param face_id_in  [input] index of crystal face. NOT face number (which used in raypaths).
+ *                            sizeof(int) * num
+ *
+ * @param pt_out      [output] intersection point. sizeof(float) * num * 3, [px, py, pz], ...
+ * @param face_id_out [output] index of crystal face. sizeof(int) * num.
+ */
+void Propagate(const Crystal* crystal, size_t num,                                                 // input
+               const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
+               float* pt_out, int* face_id_out);                                                   // output
 
 }  // namespace optics
 

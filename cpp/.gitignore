@@ -3,6 +3,7 @@
 
 # VSCode
 .vscode
+.cache
 
 # CMake build directory
 cmake-build-debug
