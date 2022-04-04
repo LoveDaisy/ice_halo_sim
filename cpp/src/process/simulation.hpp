@@ -1,6 +1,8 @@
 #ifndef SRC_CORE_SIMULATION_H_
 #define SRC_CORE_SIMULATION_H_
 
+#include <cstddef>
+#include <memory>
 #include <vector>
 
 #include "context/context.hpp"
@@ -134,6 +136,66 @@ class SimulationData : public ISerializable {
   std::vector<size_t> exit_ray_seg_num_;
   ThreadingPoolPtr threading_pool_;
 };
+
+namespace v3 {
+
+constexpr size_t kMaxMultiScatterings = 4;
+
+struct SimulationConfig {
+  float sun_altitude_;
+  float sun_diameter_;
+
+  int ray_num_;
+  int max_hits_;
+
+  int ms_num_;
+  float ms_prob_;
+  Crystal* ms_crystal_[kMaxMultiScatterings];
+};
+
+struct SimulationData {
+  size_t num_;
+  std::unique_ptr<float[]> d_;
+  std::unique_ptr<float[]> p_;
+  std::unique_ptr<float[]> w_;
+  std::unique_ptr<int[]> fid_;
+
+  SimulationData(size_t num)
+      : num_(num), d_(new float[num * 3]{}), p_(new float[num * 3]{}), w_(new float[num]{}), fid_(new int[num]{}) {}
+};
+
+using SimConfigPtrS = std::shared_ptr<SimulationConfig>;
+using SimConfigPtrU = std::unique_ptr<SimulationConfig>;
+using SimDataPtrS = std::shared_ptr<SimulationData>;
+using SimDataPtrU = std::unique_ptr<SimulationData>;
+
+template <class T>
+class Queue;
+
+template <class T>
+using QueuePtrU = std::unique_ptr<Queue<T>>;
+template <class T>
+using QueuePtrS = std::shared_ptr<Queue<T>>;
+
+class Simulator {
+ public:
+  enum State {
+    kIdle,
+    kRunning,
+  };
+
+  Simulator(QueuePtrS<SimConfigPtrS> config_queue, QueuePtrS<SimDataPtrS> data_queue);
+
+  void operator()();
+
+  void Stop();  // Stop running works, and set idle
+
+ private:
+  QueuePtrS<SimConfigPtrS> config_queue_;
+  QueuePtrS<SimDataPtrS> data_queue_;
+};
+
+}  // namespace v3
 
 class Simulator {
  public:

@@ -229,7 +229,7 @@ void RaySegment::Deserialize(File& file, endian::Endianness endianness) {
 }
 
 
-namespace optics {
+namespace v3 {
 
 float GetReflectRatio(float delta, float rr) {
   float d_sqrt = std::sqrt(delta);
@@ -474,7 +474,7 @@ void Propagate(const Crystal* crystal, size_t num,                              
   }
 }
 
-}  // namespace optics
+}  // namespace v3
 
 
 void Optics::HitSurface(const Crystal* crystal, float n, size_t num,                    // input

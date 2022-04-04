@@ -175,7 +175,7 @@ struct RayInfo : public ISerializable {
   Vec3f main_axis;
 };
 
-namespace optics {
+namespace v3 {
 
 /**
  * @brief Compute the reflective & refractive result when a ray hits a surface.
@@ -214,7 +214,7 @@ void Propagate(const Crystal* crystal, size_t num,                              
                const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
                float* pt_out, int* face_id_out);                                                   // output
 
-}  // namespace optics
+}  // namespace v3
 
 
 class Optics {

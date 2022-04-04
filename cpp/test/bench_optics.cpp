@@ -92,9 +92,9 @@ BENCHMARK_DEFINE_F(TestOptics, HitSurface_new)(::benchmark::State& st) {
   std::unique_ptr<float[]> w_out{ new float[ray_num * 2] };
 
   for (auto _ : st) {
-    icehalo::optics::HitSurface(crystal_.get(), 1.31f, ray_num,                 // input
-                                dir_in_.get(), face_id_in_.get(), w_in_.get(),  // input
-                                dir_out.get(), w_out.get());                    // output
+    icehalo::v3::HitSurface(crystal_.get(), 1.31f, ray_num,                 // input
+                            dir_in_.get(), face_id_in_.get(), w_in_.get(),  // input
+                            dir_out.get(), w_out.get());                    // output
   }
 }
 

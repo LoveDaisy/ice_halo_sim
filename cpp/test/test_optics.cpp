@@ -89,9 +89,9 @@ TEST_F(OpticsTest, HitSurface) {
   icehalo::Optics::HitSurface(crystal_.get(), kN, kNum,  // input
                               dir_in, face_id_in, w_in,  // input
                               dir_out, w_out);           // output
-  icehalo::optics::HitSurface(crystal_.get(), kN, kNum,  // input
-                              dir_in, face_id_in, w_in,  // input
-                              dir_out_new, w_out_new);   // output
+  icehalo::v3::HitSurface(crystal_.get(), kN, kNum,      // input
+                          dir_in, face_id_in, w_in,      // input
+                          dir_out_new, w_out_new);       // output
 
   using icehalo::math::kFloatEps;
   for (int i = 0; i < kNum * 2; i++) {
@@ -203,9 +203,9 @@ TEST_F(OpticsTest, Propagate) {
   int id_out_result[kNum]{};
 
 
-  icehalo::optics::Propagate(c.get(), kNum,                  // input
-                             pt_in, dir_in, w_in, id_in,     // input
-                             pt_out_result, id_out_result);  // output
+  icehalo::v3::Propagate(c.get(), kNum,                  // input
+                         pt_in, dir_in, w_in, id_in,     // input
+                         pt_out_result, id_out_result);  // output
 
   using icehalo::math::kFloatEps;
   for (int i = 0; i < kNum; i++) {

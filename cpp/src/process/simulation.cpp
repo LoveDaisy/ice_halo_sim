@@ -1,13 +1,19 @@
 #include "simulation.hpp"
 
+#include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <functional>
+#include <memory>
 #include <stack>
 #include <utility>
 
+#include "core/crystal.hpp"
 #include "core/math.hpp"
+#include "core/optics.hpp"
 #include "util/log.hpp"
 #include "util/obj_pool.hpp"
+#include "util/queue.hpp"
 #include "util/threading_pool.hpp"
 
 namespace icehalo {
@@ -554,6 +560,107 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
     exit_ray_seg_num_.emplace_back(n);
   }
 }
+
+
+namespace v3 {
+
+void Simulator::operator()() {
+  while (true) {
+    auto config = config_queue_->Get();  // Will block until get one
+    if (!config) {                       // No data in the queue and recieve a terminal signal
+      break;
+    }
+    // TODO: other (terminal) signal checking points.
+
+    // 1. Initialize data: sample points on crystal surface, generate ray directions, ...
+    int ray_num = config->ray_num_;  // For memory saving, it's better to keep ray_num small.
+
+    std::unique_ptr<float[]> init_p{ new float[ray_num * config->max_hits_ * kMaxMultiScatterings * 3]{} };
+    std::unique_ptr<float[]> init_d{ new float[ray_num * config->max_hits_ * kMaxMultiScatterings * 3]{} };
+    std::unique_ptr<float[]> init_w{ new float[ray_num * config->max_hits_ * kMaxMultiScatterings * 1]{} };
+    std::unique_ptr<int[]> init_fid{ new int[ray_num * config->max_hits_ * kMaxMultiScatterings * 1]{} };
+
+    std::unique_ptr<float[]> p_buffer[2]{ std::unique_ptr<float[]>{ new float[ray_num * 6] },
+                                          std::unique_ptr<float[]>{ new float[ray_num * 6] } };
+    std::unique_ptr<float[]> d_buffer[2]{ std::unique_ptr<float[]>{ new float[ray_num * 6] },
+                                          std::unique_ptr<float[]>{ new float[ray_num * 6] } };
+    std::unique_ptr<float[]> w_buffer[2]{ std::unique_ptr<float[]>{ new float[ray_num * 2] },
+                                          std::unique_ptr<float[]>{ new float[ray_num * 2] } };
+    std::unique_ptr<int[]> fid_buffer[2]{ std::unique_ptr<int[]>{ new int[ray_num * 2] },
+                                          std::unique_ptr<int[]>{ new int[ray_num * 2] } };
+    // ...
+
+    auto* rng = RandomNumberGenerator::GetInstance();
+    for (int m = 0; m < config->ms_num_; m++) {
+      // 1.1 Copy initial data
+      std::memcpy(p_buffer[0].get(), init_p.get(), 3 * ray_num * sizeof(float));
+      std::memcpy(d_buffer[0].get(), init_d.get(), 3 * ray_num * sizeof(float));
+      std::memcpy(w_buffer[0].get(), init_w.get(), 1 * ray_num * sizeof(float));
+      std::memcpy(fid_buffer[0].get(), init_fid.get(), 1 * ray_num * sizeof(int));
+
+      auto* current_crystal = config->ms_crystal_[m];
+      // 2. Start
+      for (int i = 0; i < config->max_hits_; i++) {
+        // 2.1 HitSurface. {d1, (d2), w1, (w2)} --> () --> {d1', d2', w1', w2'}
+        v3::HitSurface(current_crystal, 1.31, ray_num,                             // Input
+                       d_buffer[0].get(), fid_buffer[0].get(), w_buffer[0].get(),  // Input
+                       d_buffer[1].get(), w_buffer[1].get());                      // Output
+
+        // 2.2 Propagate.  {d1', d2', p1, (p2)} --> () --> {p1', p2'}
+        v3::Propagate(current_crystal, ray_num,                                                      // Input
+                      p_buffer[0].get(), d_buffer[1].get(), w_buffer[1].get(), fid_buffer[0].get(),  // Input
+                      p_buffer[1].get(), fid_buffer[1].get());                                       // Output
+
+        // 2.3
+        //  a. Copy outgoing rays into output data, at probability of (1 - p) --> It can be sent
+        //  b. Copy outgoing rays into initial data, at probability of p
+        //  c. Squeeze (better swap?) buffers.
+
+        auto out_data = std::make_shared<SimulationData>(ray_num);
+        size_t out_data_idx = 0;
+        size_t init_data_idx = 0;
+        for (int j = 0; j < ray_num * 2; j++) {
+          float* tmp_p = nullptr;
+          float* tmp_d = nullptr;
+          float* tmp_w = nullptr;
+          int* tmp_fid = nullptr;
+          if (fid_buffer[1][j] < 0 &&                                              // 2.3.a. Outgoing ray, and ...
+              config->ms_prob_ < 1.0f && rng->GetUniform() >= config->ms_prob_) {  // NOT choosed for next scattering
+            tmp_p = out_data->p_.get() + out_data_idx * 3;
+            tmp_d = out_data->d_.get() + out_data_idx * 3;
+            tmp_w = out_data->w_.get() + out_data_idx;
+            tmp_fid = out_data->fid_.get() + out_data_idx;
+            out_data_idx++;  // Note that there are 2*n rays in *_buffer, but at most half of them are outgoing.
+                             // So out_data_idx will keep in range, and we do not check it here.
+          } else if (fid_buffer[1][j] < 0) {  // 2.3.b. Outgoing, but for next scattering
+            tmp_p = init_p.get() + init_data_idx * 3;
+            tmp_d = init_d.get() + init_data_idx * 3;
+            tmp_w = init_w.get() + init_data_idx;
+            tmp_fid = init_fid.get() + init_data_idx;
+            init_data_idx++;
+          } else {  // 2.3.c. Ingoing. Squeeze data from buffer[1] to buffer[0]
+            tmp_p = p_buffer[0].get() + j / 2 * 3;
+            tmp_d = d_buffer[0].get() + j / 2 * 3;
+            tmp_w = w_buffer[0].get() + j / 2;
+            tmp_fid = fid_buffer[0].get() + j / 2;
+          }
+          std::memcpy(tmp_p, p_buffer[1].get() + j * 3, 3 * sizeof(float));
+          std::memcpy(tmp_d, d_buffer[1].get() + j * 3, 3 * sizeof(float));
+          std::memcpy(tmp_w, w_buffer[1].get() + j, 1 * sizeof(float));
+          std::memcpy(tmp_fid, fid_buffer[1].get() + j, 1 * sizeof(int));
+        }
+
+        // Send data
+        if (out_data_idx > 0) {
+          out_data->num_ = out_data_idx;
+          data_queue_->Push(out_data);
+        }
+      }
+    }
+  }
+}
+
+}  // namespace v3
 
 
 Simulator::BufferData::BufferData() : pt{}, dir{}, w{}, face_id{}, ray_seg{}, ray_num(0) {}
