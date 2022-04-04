@@ -112,9 +112,33 @@ BENCHMARK_DEFINE_F(TestMath, Mat3x3MulV3_naive)(::benchmark::State& st) {
 }
 
 
+//////////////////// Random number generator ///////////////////////////////////////////
+// ========== Legacy ==========
+BENCHMARK_DEFINE_F(TestMath, Rng_legacy)(::benchmark::State& st) {
+  auto num = st.range(0);
+  icehalo::RandomNumberGenerator* rng = nullptr;
+  if (st.thread_index() == 0) {
+    rng = icehalo::RandomNumberGenerator::GetInstance();
+  }
+
+  for (auto _ : st) {
+    rng = icehalo::RandomNumberGenerator::GetInstance();
+    for (int i = 0; i < num; i++) {
+      v1f_output1_[i] = rng->GetGaussian();
+    }
+  }
+}
+
+
 // ========== Register ==========
 BENCHMARK_REGISTER_F(TestMath, DotV3_naive)->RangeMultiplier(10)->Range(100, 1e5);
 BENCHMARK_REGISTER_F(TestMath, DotV3_vec3f)->RangeMultiplier(10)->Range(100, 1e5);
 BENCHMARK_REGISTER_F(TestMath, DotV3_simd)->RangeMultiplier(10)->Range(100, 1e5);
 
 BENCHMARK_REGISTER_F(TestMath, Mat3x3MulV3_naive)->RangeMultiplier(10)->Range(100, 1e4);
+
+BENCHMARK_REGISTER_F(TestMath, Rng_legacy)
+    ->RangeMultiplier(2)
+    ->Range(1 << 6, 1 << 16)
+    ->ThreadRange(1, 4)
+    ->UseRealTime();
