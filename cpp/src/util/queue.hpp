@@ -18,7 +18,9 @@ class Queue {
     if (q_.empty()) {
       q_cv_.wait(lock, [=]() { return !q_.empty(); });  // Block
     }
-    return q_.pop();
+    T e = q_.front();
+    q_.pop();
+    return e;
   }
 
   void Push(const T& t) {

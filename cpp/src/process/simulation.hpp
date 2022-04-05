@@ -2,6 +2,7 @@
 #define SRC_CORE_SIMULATION_H_
 
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -162,6 +163,26 @@ struct SimulationData {
 
   SimulationData(size_t num)
       : num_(num), d_(new float[num * 3]{}), p_(new float[num * 3]{}), w_(new float[num]{}), fid_(new int[num]{}) {}
+
+  float* d() const { return d_.get(); }
+  float* p() const { return p_.get(); }
+  float* w() const { return w_.get(); }
+  int* fid() const { return fid_.get(); }
+
+  void Reset(size_t num) {
+    d_.reset(new float[num * 3]{});
+    p_.reset(new float[num * 3]{});
+    w_.reset(new float[num]{});
+    fid_.reset(new int[num]{});
+    num_ = num;
+  }
+
+  static void CopyData(SimulationData& dst, size_t dst_idx, SimulationData& src, size_t src_idx, size_t num) {
+    std::memcpy(dst.d_.get() + dst_idx * 3, src.d_.get() + src_idx * 3, num * 3 * sizeof(float));
+    std::memcpy(dst.p_.get() + dst_idx * 3, src.p_.get() + src_idx * 3, num * 3 * sizeof(float));
+    std::memcpy(dst.w_.get() + dst_idx * 1, src.w_.get() + src_idx * 1, num * 1 * sizeof(float));
+    std::memcpy(dst.fid_.get() + dst_idx * 1, src.fid_.get() + src_idx * 1, num * 1 * sizeof(int));
+  }
 };
 
 using SimConfigPtrS = std::shared_ptr<SimulationConfig>;
