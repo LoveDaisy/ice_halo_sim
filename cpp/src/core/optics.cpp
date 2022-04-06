@@ -427,8 +427,8 @@ void Propagate(const Crystal* crystal, size_t num,                              
                float* pt_out, int* face_id_out) {                                                  // output
   auto face_num = crystal->TotalFaces();
   auto face_norm = crystal->GetFaceNorm();
-  auto face_base = crystal->GetFaceBaseVector();
-  auto face_point = crystal->GetFaceVertex();
+  auto face_base = crystal->GetFaceEdgeVec();
+  auto face_point = crystal->GetFaceVtx();
 
   // Initialize transform for every face
   // TODO: put this initialization into class Crystal.

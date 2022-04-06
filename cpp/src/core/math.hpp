@@ -2,6 +2,8 @@
 #define SRC_CORE_MYMATH_H_
 
 #include <cmath>
+#include <cstddef>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <random>
@@ -28,6 +30,49 @@ enum class AngleUnit {
   kDegree,
   kRad,
 };
+
+namespace v3 {
+
+class Transform {
+ public:
+  virtual void operator()(const float*) = 0;
+};
+
+class Rotate : public Transform {
+ public:
+  void operator()(const float* p) override;
+};
+
+
+void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num = 1);
+
+void SampleTrianglePoint(const float* vertices, float* out_pt, size_t sample_num = 1);
+
+void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt, size_t sample_num = 1,
+                       AngleUnit unit = AngleUnit::kDegree);
+
+
+class Mesh {
+ public:
+  Mesh(size_t vtx_cnt, size_t triangle_cnt);
+
+  size_t GetVtxCnt() const;
+  size_t GetTriangleCnt() const;
+
+  void SetVtx(const float* data);
+  void SetTriangle(const int* idx);
+
+  float* GetVtxPtr(size_t idx);
+  int* GetTrianglePtr(size_t idx);
+
+ private:
+  size_t vtx_cnt_;
+  size_t triangle_cnt_;
+  std::unique_ptr<float[]> vertices_;  // vertex coordinates, 3 * vtx_cnt_
+  std::unique_ptr<int[]> triangle_;    // vertex index, 3 * triangle_cnt_
+};
+
+}  // namespace v3
 
 
 template <typename T>

@@ -203,9 +203,9 @@ TEST_F(OpticsTest, Propagate) {
   int id_out_result[kNum]{};
 
 
-  icehalo::v3::Propagate(c.get(), kNum,                  // input
-                         pt_in, dir_in, w_in, id_in,     // input
-                         pt_out_result, id_out_result);  // output
+  icehalo::Optics::Propagate(c.get(), kNum,                  // input
+                             pt_in, dir_in, w_in, id_in,     // input
+                             pt_out_result, id_out_result);  // output
 
   using icehalo::math::kFloatEps;
   for (int i = 0; i < kNum; i++) {

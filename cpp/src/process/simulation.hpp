@@ -142,9 +142,11 @@ namespace v3 {
 
 constexpr size_t kMaxMultiScatterings = 4;
 
-struct SimulationConfig {
+struct SimConfig {
   float sun_altitude_;
   float sun_diameter_;
+
+  float wl_;  // wavelength
 
   int ray_num_;
   int max_hits_;
@@ -154,41 +156,40 @@ struct SimulationConfig {
   Crystal* ms_crystal_[kMaxMultiScatterings];
 };
 
-struct SimulationData {
-  size_t num_;
-  std::unique_ptr<float[]> d_;
-  std::unique_ptr<float[]> p_;
-  std::unique_ptr<float[]> w_;
-  std::unique_ptr<int[]> fid_;
+using SimConfigPtrS = std::shared_ptr<SimConfig>;
+using SimConfigPtrU = std::unique_ptr<SimConfig>;
 
-  SimulationData(size_t num)
-      : num_(num), d_(new float[num * 3]{}), p_(new float[num * 3]{}), w_(new float[num]{}), fid_(new int[num]{}) {}
 
+class SimData {
+ public:
+  static void Copy(SimData& dst, size_t dst_idx, const SimData& src, size_t src_idx, size_t num);
+
+  SimData(size_t capacity);
+
+  size_t capacity() const { return capacity_; }
+  size_t size() const { return num_; }
   float* d() const { return d_.get(); }
   float* p() const { return p_.get(); }
   float* w() const { return w_.get(); }
   int* fid() const { return fid_.get(); }
 
-  void Reset(size_t num) {
-    d_.reset(new float[num * 3]{});
-    p_.reset(new float[num * 3]{});
-    w_.reset(new float[num]{});
-    fid_.reset(new int[num]{});
-    num_ = num;
-  }
+  void Reset(size_t capacity);
 
-  static void CopyData(SimulationData& dst, size_t dst_idx, SimulationData& src, size_t src_idx, size_t num) {
-    std::memcpy(dst.d_.get() + dst_idx * 3, src.d_.get() + src_idx * 3, num * 3 * sizeof(float));
-    std::memcpy(dst.p_.get() + dst_idx * 3, src.p_.get() + src_idx * 3, num * 3 * sizeof(float));
-    std::memcpy(dst.w_.get() + dst_idx * 1, src.w_.get() + src_idx * 1, num * 1 * sizeof(float));
-    std::memcpy(dst.fid_.get() + dst_idx * 1, src.fid_.get() + src_idx * 1, num * 1 * sizeof(int));
-  }
+  void EmplaceBack(const SimData& src, size_t src_idx, size_t cnt);
+
+  bool Empty() const;
+
+ private:
+  size_t num_;
+  size_t capacity_;
+  std::unique_ptr<float[]> d_;
+  std::unique_ptr<float[]> p_;
+  std::unique_ptr<float[]> w_;
+  std::unique_ptr<int[]> fid_;
 };
 
-using SimConfigPtrS = std::shared_ptr<SimulationConfig>;
-using SimConfigPtrU = std::unique_ptr<SimulationConfig>;
-using SimDataPtrS = std::shared_ptr<SimulationData>;
-using SimDataPtrU = std::unique_ptr<SimulationData>;
+using SimDataPtrS = std::shared_ptr<SimData>;
+using SimDataPtrU = std::unique_ptr<SimData>;
 
 template <class T>
 class Queue;

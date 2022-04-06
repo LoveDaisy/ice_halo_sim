@@ -25,6 +25,30 @@ enum class CrystalType {
   kCustom,
 };
 
+namespace v3 {
+
+class Crystal {
+ public:
+  int TotalFaces() const;
+
+  const float* GetFaceVtx() const;
+  const float* GetFaceEdgeVec() const;
+  const float* GetFaceNorm() const;
+  const float* GetFaceArea() const;
+
+  float GetRefractiveIndex(float wl) const;
+
+ private:
+  Mesh mesh_;
+  std::unique_ptr<float[]> face_v_;         // vertex coordinate of every face. 9 * face_cnt
+  std::unique_ptr<float[]> face_ev_;        // edge vector [v0v1, v0v2]. 6 * face_cnt
+  std::unique_ptr<float[]> face_n_;         // normal of every face. 3 * face_cnt
+  std::unique_ptr<float[]> face_area_;      // area of every face. 1 * face_cnt
+  std::unique_ptr<float[]> face_coord_tf_;  // transform for barycentric coordinate. 12 * face_cnt
+};
+
+}  // namespace v3
+
 class Crystal {
  public:
   CrystalType GetType() const;

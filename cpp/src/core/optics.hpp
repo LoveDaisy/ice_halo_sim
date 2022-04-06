@@ -177,6 +177,25 @@ struct RayInfo : public ISerializable {
 
 namespace v3 {
 
+struct RaySeg;
+struct CrystalStub;
+
+struct RayRoot {
+  RayRoot* prev_;
+  RaySeg* r0_;
+  CrystalStub* crystal_;
+};
+
+struct RaySeg {
+  float d_[3];
+  float p_[3];
+  float w_;
+  int fid_;
+
+  RaySeg* prev_;
+  RayRoot* root_;
+};
+
 /**
  * @brief Compute the reflective & refractive result when a ray hits a surface.
  *
