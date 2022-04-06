@@ -1,6 +1,7 @@
 #ifndef SRC_CORE_CRYSTAL_H_
 #define SRC_CORE_CRYSTAL_H_
 
+#include <cstddef>
 #include <map>
 #include <memory>
 #include <utility>
@@ -27,18 +28,27 @@ enum class CrystalType {
 
 namespace v3 {
 
+class Crystal;
+using CrystalPtrS = std::shared_ptr<Crystal>;
+using CrystalPtrU = std::unique_ptr<Crystal>;
+
 class Crystal {
  public:
-  int TotalFaces() const;
+  static CrystalPtrU CreatePrism(float h);
+
+  size_t TotalFaces() const;
 
   const float* GetFaceVtx() const;
   const float* GetFaceEdgeVec() const;
   const float* GetFaceNorm() const;
   const float* GetFaceArea() const;
+  const float* GetFaceCoordTf() const;
 
   float GetRefractiveIndex(float wl) const;
 
  private:
+  Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx);
+
   Mesh mesh_;
   std::unique_ptr<float[]> face_v_;         // vertex coordinate of every face. 9 * face_cnt
   std::unique_ptr<float[]> face_ev_;        // edge vector [v0v1, v0v2]. 6 * face_cnt

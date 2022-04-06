@@ -38,7 +38,7 @@ set(CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL} -ffunction-section
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT result OUTPUT output)
-if(result)
+if(result AND "${CMAKE_BUILD_TYPE}" STREQUAL "Release")
   message(STATUS "IPO supported. Enable inter-procedural optimization.")
   set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()

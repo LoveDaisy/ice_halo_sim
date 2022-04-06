@@ -604,7 +604,7 @@ void InitSimData(SimConfigPtrS config, SimData& init_data) {
   std::unique_ptr<float[]> project_face_area{ new float[crystal->TotalFaces()]{} };
   for (size_t i = 0; i < ray_num; i++) {
     // Compute the projected face area
-    for (int j = 0; j < crystal->TotalFaces(); j++) {
+    for (size_t j = 0; j < crystal->TotalFaces(); j++) {
       project_face_area[j] = -Dot3(init_data.d() + i * 3, crystal->GetFaceNorm() + j * 3) * crystal->GetFaceArea()[j];
     }
     // Choose a face

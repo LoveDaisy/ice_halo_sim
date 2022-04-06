@@ -7,9 +7,13 @@ namespace {
 
 class OpticsTest : public ::testing::Test {
  protected:
-  void SetUp() override { crystal_ = icehalo::Crystal::CreateHexPrism(1.2f); }
+  void SetUp() override {
+    crystal_ = icehalo::Crystal::CreateHexPrism(1.2f);
+    new_crystal_ = icehalo::v3::Crystal::CreatePrism(1.2f);
+  }
 
   icehalo::CrystalPtrU crystal_;
+  icehalo::v3::CrystalPtrU new_crystal_;
 };
 
 
@@ -89,7 +93,7 @@ TEST_F(OpticsTest, HitSurface) {
   icehalo::Optics::HitSurface(crystal_.get(), kN, kNum,  // input
                               dir_in, face_id_in, w_in,  // input
                               dir_out, w_out);           // output
-  icehalo::v3::HitSurface(crystal_.get(), kN, kNum,      // input
+  icehalo::v3::HitSurface(new_crystal_.get(), kN, kNum,  // input
                           dir_in, face_id_in, w_in,      // input
                           dir_out_new, w_out_new);       // output
 
@@ -163,23 +167,25 @@ TEST_F(OpticsTest, RayFaceIntersection) {
 
 
 TEST_F(OpticsTest, Propagate) {
-  auto c = icehalo::Crystal::CreateHexPrism(1.0f);
+  auto c = icehalo::v3::Crystal::CreatePrism(1.0f);
 
   constexpr int kNum = 5;
   using icehalo::math::kSqrt3;
+  using icehalo::math::kSqrt3_2;
+  using icehalo::math::kSqrt3_4;
   float dir_in[kNum * 3]{
-    kSqrt3 / 2,  0.5f,         0.0f,          // case 1
+    kSqrt3_2,    0.5f,         0.0f,          // case 1
     1.0f,        0.0f,         0.0f,          // case 2
-    0.5f,        0.0f,         -kSqrt3 / 2,   // case 3
-    0.5f,        -kSqrt3 / 2,  0.0f,          // case 4
+    0.5f,        0.0f,         -kSqrt3_2,     // case 3
+    0.5f,        -kSqrt3_2,    0.0f,          // case 4
     0.35693541f, -0.18690710f, -0.91523923f,  // case 5
   };
   float pt_in[kNum * 3]{
-    -kSqrt3 / 2, 0.0f,           0.0f,  // case 1
-    -0.5f,       kSqrt3 * 5 / 6, 0.8f,  // case 2
-    0.0f,        0.0f,           0.0f,  // case 3
-    kSqrt3 / 2,  -0.2f,          0.5f,  // case 4
-    -0.1f,       0.82679492f,    0.8f,  // case 5
+    -kSqrt3_4, 0.0000f,          0.000000f,  // case 1
+    -0.25f,    kSqrt3_4 * 5 / 3, 0.400000f,  // case 2
+    0.0f,      0.0000f,          0.000000f,  // case 3
+    kSqrt3_4,  -0.1000f,         0.25f,      // case 4
+    -0.05f,    0.41339746f,      0.400000f,  // case 5
   };
   float w_in[kNum]{
     1.0f,  // case 1
@@ -191,11 +197,11 @@ TEST_F(OpticsTest, Propagate) {
   int id_in[kNum]{ 10, 8, 1, 4, 8 };
 
   float pt_out[kNum * 3]{
-    kSqrt3 / 4, 0.75f,     0.0f,   // case 1
-    0.0f,       0.0f,      0.0f,   // case 2
-    0.577350f,  0.0f,      -1.0f,  // case 3
-    0.0f,       0.0f,      0.0f,   // case 4
-    0.601984f,  0.459205f, -1.0f,  // case 5
+    kSqrt3_4 / 2, 0.375f,    0.0f,   // case 1
+    0.0f,         0.0f,      0.0f,   // case 2
+    0.288675f,    0.0f,      -0.5f,  // case 3
+    0.0f,         0.0f,      0.0f,   // case 4
+    0.300992f,    0.229603f, -0.5f,  // case 5
   };
   int id_out[kNum]{ 6, -1, 16, -1, 16 };
 
@@ -203,9 +209,9 @@ TEST_F(OpticsTest, Propagate) {
   int id_out_result[kNum]{};
 
 
-  icehalo::Optics::Propagate(c.get(), kNum,                  // input
-                             pt_in, dir_in, w_in, id_in,     // input
-                             pt_out_result, id_out_result);  // output
+  icehalo::v3::Propagate(c.get(), kNum,                  // input
+                         pt_in, dir_in, w_in, id_in,     // input
+                         pt_out_result, id_out_result);  // output
 
   using icehalo::math::kFloatEps;
   for (int i = 0; i < kNum; i++) {

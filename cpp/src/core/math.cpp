@@ -5,6 +5,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <cstring>
+#include <memory>
 
 
 namespace icehalo {
@@ -316,6 +320,125 @@ void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,  
     faces.emplace_back(pts_idx[0], pts_idx[j], pts_idx[j + 1]);
   }
 }
+
+
+namespace v3 {
+
+void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num) {
+  if (pop_size <= 0) {
+    return;
+  }
+  if (pop_size == 1) {
+    for (size_t i = 0; i < sample_num; i++) {
+      out[i] = 0;
+    }
+    return;
+  }
+
+  std::unique_ptr<float[]> p{ new float[pop_size + 1]{} };
+  std::memcpy(p.get() + 1, weight, pop_size * sizeof(float));
+  for (int i = 1; i < pop_size; i++) {
+    p[i + 1] = std::max(p[i + 1], 0.0f) + p[i];
+  }
+  for (int i = 0; i < pop_size; i++) {
+    p[i + 1] /= p[pop_size];
+  }
+
+  auto* rng = RandomNumberGenerator::GetInstance();
+  for (size_t i = 0; i < sample_num; i++) {
+    auto curr_p = rng->GetUniform();
+    for (int j = 0; j < pop_size; j++) {
+      if (p[j] < curr_p && curr_p <= p[j + 1]) {
+        out[i] = j;
+        break;
+      }
+    }
+  }
+}
+
+
+void SampleTrianglePoint(const float* vertices, float* out_pt, size_t sample_num) {
+  auto* rng = RandomNumberGenerator::GetInstance();
+  float e1[3]{ vertices[3] - vertices[0], vertices[4] - vertices[1], vertices[5] - vertices[2] };
+  float e2[3]{ vertices[6] - vertices[0], vertices[7] - vertices[1], vertices[8] - vertices[2] };
+  for (size_t i = 0; i < sample_num; i++) {
+    auto u = rng->GetUniform();
+    auto v = rng->GetUniform();
+    if (u + v > 1.0f) {
+      u = 1.0f - u;
+      v = 1.0f - v;
+    }
+    out_pt[i * 3 + 0] = u * e1[0] + v * e2[0];
+    out_pt[i * 3 + 1] = u * e1[1] + v * e2[1];
+    out_pt[i * 3 + 2] = u * e1[2] + v * e2[2];
+  }
+}
+
+
+void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt, size_t sample_num, AngleUnit unit) {
+  if (unit == AngleUnit::kDegree) {
+    lon *= math::kDegreeToRad;
+    lat *= math::kDegreeToRad;
+    cap_radii *= math::kDegreeToRad;
+  }
+
+  auto* rng = RandomNumberGenerator::GetInstance();
+  float c_cap = std::cos(cap_radii);
+  float c_lon = std::cos(lon);
+  float s_lon = std::sin(lon);
+  float c_lat = std::cos(lat);
+  float s_lat = std::sin(lat);
+  for (size_t i = 0; i < sample_num; i++) {
+    // 1. Sample arount x-axis
+    float x = rng->GetUniform();
+    x += (1 - x) * c_cap;
+    float r = std::sqrt(1.0f - x * x);
+
+    float u = rng->GetUniform() * 2 * math::kPi;
+    float y = std::cos(u) * r;
+    float z = std::sin(u) * r;
+
+    // 2. Then rotate
+    // R = Rz(lon).Ry(-lat)
+    //     | cos(lon)cos(lat), -sin(lon), -cos(lon)sin(lat) |
+    //   = | sin(lon)cos(lat),  cos(lon), -sin(lon)sin(lat) |
+    //     | sin(lat),          0,         cos(lat)         |
+    out_pt[i * 3 + 0] = c_lon * c_lat * x - s_lon * y - c_lon * s_lat * z;
+    out_pt[i * 3 + 1] = s_lon * c_lat * x - c_lon * y - s_lon * s_lat * z;
+    out_pt[i * 3 + 2] = s_lat * x + c_lat * z;
+  }
+}
+
+
+Mesh::Mesh(size_t vtx_cnt, size_t triangle_cnt)
+    : vtx_cnt_(vtx_cnt), triangle_cnt_(triangle_cnt), vertices_(new float[vtx_cnt * 3]{}),
+      triangle_(new int[triangle_cnt * 3]{}) {}
+
+size_t Mesh::GetVtxCnt() const {
+  return vtx_cnt_;
+}
+
+size_t Mesh::GetTriangleCnt() const {
+  return triangle_cnt_;
+}
+
+void Mesh::SetVtx(const float* data) {
+  std::memcpy(vertices_.get(), data, vtx_cnt_ * 3 * sizeof(float));
+}
+
+void Mesh::SetTriangle(const int* idx) {
+  std::memcpy(triangle_.get(), idx, triangle_cnt_ * 3 * sizeof(int));
+}
+
+float* Mesh::GetVtxPtr(size_t idx) {
+  return vertices_.get() + idx * 3;
+}
+
+int* Mesh::GetTrianglePtr(size_t idx) {
+  return triangle_.get() + idx * 3;
+}
+
+}  // namespace v3
 
 
 template <typename T>

@@ -426,42 +426,7 @@ void Propagate(const Crystal* crystal, size_t num,                              
                const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
                float* pt_out, int* face_id_out) {                                                  // output
   auto face_num = crystal->TotalFaces();
-  auto face_norm = crystal->GetFaceNorm();
-  auto face_base = crystal->GetFaceEdgeVec();
-  auto face_point = crystal->GetFaceVtx();
-
-  // Initialize transform for every face
-  // TODO: put this initialization into class Crystal.
-  std::unique_ptr<float[]> face_transform{ new float[face_num * 12]{} };
-  float m[3];
-  for (int i = 0; i < face_num; i++) {
-    Cross3(face_base + i * 6 + 0, face_base + i * 6 + 3, m);
-    auto a = Dot3(face_norm + i * 3, m);
-    face_transform[i * 12 + 0] =
-        (face_base[i * 6 + 4] * face_norm[i * 3 + 2] - face_base[i * 6 + 5] * face_norm[i * 3 + 1]) / a;
-    face_transform[i * 12 + 1] =
-        (face_base[i * 6 + 5] * face_norm[i * 3 + 0] - face_base[i * 6 + 3] * face_norm[i * 3 + 2]) / a;
-    face_transform[i * 12 + 2] =
-        (face_base[i * 6 + 3] * face_norm[i * 3 + 1] - face_base[i * 6 + 4] * face_norm[i * 3 + 0]) / a;
-
-    face_transform[i * 12 + 4] =
-        (face_base[i * 6 + 2] * face_norm[i * 3 + 1] - face_base[i * 6 + 1] * face_norm[i * 3 + 2]) / a;
-    face_transform[i * 12 + 5] =
-        (face_base[i * 6 + 0] * face_norm[i * 3 + 2] - face_base[i * 6 + 2] * face_norm[i * 3 + 0]) / a;
-    face_transform[i * 12 + 6] =
-        (face_base[i * 6 + 1] * face_norm[i * 3 + 0] - face_base[i * 6 + 0] * face_norm[i * 3 + 1]) / a;
-
-    face_transform[i * 12 + 8] =
-        (face_base[i * 6 + 1] * face_base[i * 6 + 5] - face_base[i * 6 + 2] * face_base[i * 6 + 4]) / a;
-    face_transform[i * 12 + 9] =
-        (face_base[i * 6 + 2] * face_base[i * 6 + 3] - face_base[i * 6 + 0] * face_base[i * 6 + 5]) / a;
-    face_transform[i * 12 + 10] =
-        (face_base[i * 6 + 0] * face_base[i * 6 + 4] - face_base[i * 6 + 1] * face_base[i * 6 + 3]) / a;
-
-    face_transform[i * 12 + 3] = -Dot3(face_transform.get() + i * 12 + 0, face_point + i * 9);
-    face_transform[i * 12 + 7] = -Dot3(face_transform.get() + i * 12 + 4, face_point + i * 9);
-    face_transform[i * 12 + 11] = -Dot3(face_transform.get() + i * 12 + 8, face_point + i * 9);
-  }
+  const auto* face_transform = crystal->GetFaceCoordTf();
 
   // Do main work
   for (size_t i = 0; i < num; i++) {
@@ -469,7 +434,7 @@ void Propagate(const Crystal* crystal, size_t num,                              
       continue;
     }
     RayTriangleBW(pt_in + i * 3, dir_in + i * 3, face_id_in[i],  // input
-                  face_num, face_transform.get(),                // input
+                  face_num, face_transform,                      // input
                   pt_out + i * 3, face_id_out + i);              // output
   }
 }

@@ -1,13 +1,17 @@
 #include "core/crystal.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
+#include <memory>
 #include <queue>
 #include <set>
 #include <tuple>
 #include <utility>
 
 #include "context/context.hpp"
+#include "core/core_def.hpp"
+#include "core/math.hpp"
 #include "core/optics.hpp"
 #include "util/log.hpp"
 #include "util/obj_pool.hpp"
@@ -602,6 +606,7 @@ CrystalPtrU Crystal::CreateHexPyramid(int i1, int i4,                  // Miller
 }
 
 
+// NOLINTBEGIN(readability-magic-numbers)
 CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4,  // upper Miller index
                                       int lower_idx1, int lower_idx4,  // lower Miller index
                                       float h1, float h2, float h3) {  // heights
@@ -732,6 +737,7 @@ CrystalPtrU Crystal::CreateHexPyramid(float angle1, float angle2,      // wedge 
 
   return std::unique_ptr<Crystal>(new Crystal(vertexes, faces, CrystalType::kPyramid_A2H3));
 }
+// NOLINTEND(readability-magic-numbers)
 
 
 CrystalPtrU Crystal::CreateHexPyramidStackHalf(int upper_idx1, int upper_idx4,  // upper Miller index
@@ -966,6 +972,136 @@ CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<Vec3f>& pts,         
                                          const std::vector<ShortIdType>& face_number_table) {  // face to face number
   return std::unique_ptr<Crystal>(new Crystal(pts, faces, face_number_table, CrystalType::kCustom));
 }
+
+
+namespace v3 {
+
+CrystalPtrU Crystal::CreatePrism(float h) {
+  using math::kSqrt3;
+  std::unique_ptr<float[]> vtx{ new float[12 * 3]{
+      kSqrt3 / 4.0f,  -1.0f / 4.0f, h / 2,   // upper: vtx1
+      kSqrt3 / 4.0f,  1.0f / 4.0f,  h / 2,   // upper: vtx2
+      0.0f,           1.0f / 2.0f,  h / 2,   // upper: vtx3
+      -kSqrt3 / 4.0f, 1.0f / 4.0f,  h / 2,   // upper: vtx4
+      -kSqrt3 / 4.0f, -1.0f / 4.0f, h / 2,   // upper: vtx5
+      0.0f,           -1.0f / 2.0f, h / 2,   // upper: vtx6
+      kSqrt3 / 4.0f,  -1.0f / 4.0f, -h / 2,  // lower: vtx1
+      kSqrt3 / 4.0f,  1.0f / 4.0f,  -h / 2,  // lower: vtx2
+      0.0f,           1.0f / 2.0f,  -h / 2,  // lower: vtx3
+      -kSqrt3 / 4.0f, 1.0f / 4.0f,  -h / 2,  // lower: vtx4
+      -kSqrt3 / 4.0f, -1.0f / 4.0f, -h / 2,  // lower: vtx5
+      0.0f,           -1.0f / 2.0f, -h / 2,  // lower: vtx6
+  } };
+  std::unique_ptr<int[]> triangle_idx{ new int[20 * 3]{
+      0,  1,  2,   // upper: fn1
+      0,  2,  3,   // upper: fn1
+      3,  4,  5,   // upper: fn1
+      3,  5,  0,   // upper: fn1
+      0,  6,  1,   // side: fn3
+      6,  7,  1,   // side: fn3
+      1,  7,  2,   // side: fn4
+      7,  8,  2,   // side: fn4
+      2,  8,  3,   // side: fn5
+      8,  9,  3,   // side: fn5
+      3,  9,  4,   // side: fn6
+      9,  10, 4,   // side: fn6
+      4,  10, 5,   // side: fn7
+      10, 11, 5,   // side: fn7
+      5,  11, 0,   // side: fn8
+      11, 6,  0,   // side: fn8
+      6,  8,  7,   // lower: fn2
+      6,  9,  8,   // lower: fn2
+      9,  11, 10,  // lower: fn2
+      9,  6,  11,  // lower: fn2
+  } };
+  return CrystalPtrU{ new Crystal(12, vtx.get(), 20, triangle_idx.get()) };
+}
+
+Crystal::Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx)
+    : mesh_(vtx_cnt, triangle_cnt), face_v_(new float[triangle_cnt * 9]{}), face_ev_(new float[triangle_cnt * 6]{}),
+      face_n_(new float[triangle_cnt * 3]{}), face_area_(new float[triangle_cnt]{}),
+      face_coord_tf_(new float[triangle_cnt * 12]{}) {
+  mesh_.SetVtx(vtx);
+  mesh_.SetTriangle(triangle_idx);
+
+  // Initialize other pre-computed data
+  float m[3];
+  for (size_t i = 0; i < triangle_cnt; i++) {
+    // face_v_
+    for (int j = 0; j < 3; j++) {
+      std::memcpy(face_v_.get() + i * 9 + j * 3, vtx + triangle_idx[i * 3 + j] * 3, 3 * sizeof(float));
+    }
+
+    // face_ev_
+    for (int j = 0; j < 3; j++) {
+      face_ev_[i * 6 + j + 0] = face_v_[i * 9 + j + 3] - face_v_[i * 9 + j + 0];
+      face_ev_[i * 6 + j + 3] = face_v_[i * 9 + j + 6] - face_v_[i * 9 + j + 0];
+    }
+
+    // face_n_ && face_area_
+    Cross3(face_ev_.get() + i * 6 + 0, face_ev_.get() + i * 6 + 3, face_n_.get() + i * 3);
+    face_area_[i] = Norm3(face_n_.get() + i * 3) / 2.0f;
+    Normalize3(face_n_.get() + i * 3);
+
+    // face_coord_tf_
+    Cross3(face_ev_.get() + i * 6 + 0, face_ev_.get() + i * 6 + 3, m);
+    auto a = Dot3(face_n_.get() + i * 3, m);
+    face_coord_tf_[i * 12 + 0] =
+        (face_ev_[i * 6 + 4] * face_n_[i * 3 + 2] - face_ev_[i * 6 + 5] * face_n_[i * 3 + 1]) / a;
+    face_coord_tf_[i * 12 + 1] =
+        (face_ev_[i * 6 + 5] * face_n_[i * 3 + 0] - face_ev_[i * 6 + 3] * face_n_[i * 3 + 2]) / a;
+    face_coord_tf_[i * 12 + 2] =
+        (face_ev_[i * 6 + 3] * face_n_[i * 3 + 1] - face_ev_[i * 6 + 4] * face_n_[i * 3 + 0]) / a;
+
+    face_coord_tf_[i * 12 + 4] =
+        (face_ev_[i * 6 + 2] * face_n_[i * 3 + 1] - face_ev_[i * 6 + 1] * face_n_[i * 3 + 2]) / a;
+    face_coord_tf_[i * 12 + 5] =
+        (face_ev_[i * 6 + 0] * face_n_[i * 3 + 2] - face_ev_[i * 6 + 2] * face_n_[i * 3 + 0]) / a;
+    face_coord_tf_[i * 12 + 6] =
+        (face_ev_[i * 6 + 1] * face_n_[i * 3 + 0] - face_ev_[i * 6 + 0] * face_n_[i * 3 + 1]) / a;
+
+    face_coord_tf_[i * 12 + 8] =
+        (face_ev_[i * 6 + 1] * face_ev_[i * 6 + 5] - face_ev_[i * 6 + 2] * face_ev_[i * 6 + 4]) / a;
+    face_coord_tf_[i * 12 + 9] =
+        (face_ev_[i * 6 + 2] * face_ev_[i * 6 + 3] - face_ev_[i * 6 + 0] * face_ev_[i * 6 + 5]) / a;
+    face_coord_tf_[i * 12 + 10] =
+        (face_ev_[i * 6 + 0] * face_ev_[i * 6 + 4] - face_ev_[i * 6 + 1] * face_ev_[i * 6 + 3]) / a;
+
+    face_coord_tf_[i * 12 + 3] = -Dot3(face_coord_tf_.get() + i * 12 + 0, face_v_.get() + i * 9);
+    face_coord_tf_[i * 12 + 7] = -Dot3(face_coord_tf_.get() + i * 12 + 4, face_v_.get() + i * 9);
+    face_coord_tf_[i * 12 + 11] = -Dot3(face_coord_tf_.get() + i * 12 + 8, face_v_.get() + i * 9);
+  }
+}
+
+size_t Crystal::TotalFaces() const {
+  return mesh_.GetTriangleCnt();
+}
+
+const float* Crystal::GetFaceVtx() const {
+  return face_v_.get();
+}
+
+const float* Crystal::GetFaceEdgeVec() const {
+  return face_ev_.get();
+}
+
+const float* Crystal::GetFaceNorm() const {
+  return face_n_.get();
+}
+
+const float* Crystal::GetFaceArea() const {
+  return face_area_.get();
+}
+
+const float* Crystal::GetFaceCoordTf() const {
+  return face_coord_tf_.get();
+}
+
+float Crystal::GetRefractiveIndex(float wl) const {
+  return IceRefractiveIndex::Get(wl);
+}
+
+}  // namespace v3
 
 
 void MakeSymmetryExtensionHelper(const RayPath& curr_ray_path, const CrystalContext* crystal_ctx, uint8_t symmetry_flag,

@@ -14,6 +14,7 @@ class TestOptics : public ::benchmark::Fixture {
  public:
   void SetUp(::benchmark::State& state) override {
     crystal_ = icehalo::Crystal::CreateHexPrism(1.2f);
+    new_crystal_ = icehalo::v3::Crystal::CreatePrism(1.2f);
 
     auto face_num = crystal_->TotalFaces();
     auto face_base = crystal_->GetFaceBaseVector();
@@ -60,6 +61,7 @@ class TestOptics : public ::benchmark::Fixture {
 
  protected:
   icehalo::CrystalPtrU crystal_;
+  icehalo::v3::CrystalPtrU new_crystal_;
   std::unique_ptr<float[]> dir_in_;
   std::unique_ptr<float[]> pt_in_;
   std::unique_ptr<float[]> w_in_;
@@ -92,7 +94,7 @@ BENCHMARK_DEFINE_F(TestOptics, HitSurface_new)(::benchmark::State& st) {
   std::unique_ptr<float[]> w_out{ new float[ray_num * 2] };
 
   for (auto _ : st) {
-    icehalo::v3::HitSurface(crystal_.get(), 1.31f, ray_num,                 // input
+    icehalo::v3::HitSurface(new_crystal_.get(), 1.31f, ray_num,             // input
                             dir_in_.get(), face_id_in_.get(), w_in_.get(),  // input
                             dir_out.get(), w_out.get());                    // output
   }
