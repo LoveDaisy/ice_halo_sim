@@ -584,6 +584,15 @@ size_t RaypathHash::operator()(const std::vector<IdType>& rp) {
 }
 
 
+void CopySimDataBase(SimData& dst, size_t dst_idx, const SimData& src, size_t src_idx, size_t num) {
+  std::memcpy(dst.d_.get() + dst_idx * 3, src.d_.get() + src_idx * 3, num * 3 * sizeof(float));
+  std::memcpy(dst.p_.get() + dst_idx * 3, src.p_.get() + src_idx * 3, num * 3 * sizeof(float));
+  std::memcpy(dst.w_.get() + dst_idx * 1, src.w_.get() + src_idx * 1, num * 1 * sizeof(float));
+  std::memcpy(dst.fid_.get() + dst_idx, src.fid_.get() + src_idx, num * sizeof(int));
+  std::memcpy(dst.prev_p_.get() + dst_idx * 3, src.prev_p_.get() + src_idx * 3, num * 3 * sizeof(float));
+  std::memcpy(dst.rp_record_.get() + dst_idx, src.rp_record_.get() + src_idx, num * sizeof(RaypathHashHelper));
+}
+
 SimData::SimData() : size_(0), capacity_(0), ms_idx_(0) {}
 
 SimData::SimData(size_t capacity)
@@ -601,23 +610,8 @@ void SimData::Reset(size_t capacity) {
   capacity_ = capacity;
 }
 
-void SimData::EmplaceBaseData(const SimData& src, size_t src_idx, size_t cnt) {
-  cnt = std::min(cnt, capacity_ - size_);
-  SimData::CopyBaseData(*this, size_, src, src_idx, cnt);
-  size_ += cnt;
-}
-
 bool SimData::Empty() const {
   return size_ == 0;
-}
-
-void SimData::CopyBaseData(SimData& dst, size_t dst_idx, const SimData& src, size_t src_idx, size_t num) {
-  std::memcpy(dst.d_.get() + dst_idx * 3, src.d_.get() + src_idx * 3, num * 3 * sizeof(float));
-  std::memcpy(dst.p_.get() + dst_idx * 3, src.p_.get() + src_idx * 3, num * 3 * sizeof(float));
-  std::memcpy(dst.w_.get() + dst_idx * 1, src.w_.get() + src_idx * 1, num * 1 * sizeof(float));
-  std::memcpy(dst.fid_.get() + dst_idx, src.fid_.get() + src_idx, num * sizeof(int));
-  std::memcpy(dst.prev_p_.get() + dst_idx * 3, src.prev_p_.get() + src_idx * 3, num * 3 * sizeof(float));
-  std::memcpy(dst.rp_record_.get() + dst_idx, src.rp_record_.get() + src_idx, num * sizeof(RaypathHashHelper));
 }
 
 enum class SimDataInitType {
@@ -674,13 +668,13 @@ SimDataPtrU CollectData(const SimConfig* config, const Crystal* crystal, SimData
     if (is_outgoing &&                                                       // 2.3.a. Outgoing ray, and ...
         config->ms_prob_ < 1.0f && rng->GetUniform() >= config->ms_prob_) {  // NOT choosed for next scattering
       // Copy d, p, w, fid, and prev_p
-      out_data->EmplaceBaseData(buffer_data[1], j, 1);
+      CopySimDataBase(*out_data, out_data->size_++, buffer_data[1], j, 1);
       // Note that there are 2*n rays in buffer, but at most half of them are outgoing.
       // So size of out_data will keep in range, and we do not check it here.
     } else if (is_outgoing) {  // 2.3.b. Outgoing, and for next scattering
-      init_data->EmplaceBaseData(buffer_data[1], j, 1);
+      CopySimDataBase(*init_data, init_data->size_++, buffer_data[1], j, 1);
     } else {  // 2.3.c. Ingoing. Squeeze data from buffer[1] to buffer[0]
-      SimData::CopyBaseData(buffer_data[0], j / 2, buffer_data[1], j, 1);
+      CopySimDataBase(buffer_data[0], j / 2, buffer_data[1], j, 1);
     }
   }
   return out_data;
@@ -718,7 +712,7 @@ void Simulator::operator()() {
       }
 
       // 1.1 Copy initial data
-      SimData::CopyBaseData(buffer_data[0], 0, init_data, 0, init_data.size_);
+      CopySimDataBase(buffer_data[0], 0, init_data, 0, init_data.size_);
 
       init_data.Reset(init_data.size_ * config->max_hits_);  // Resize for next multi-scattering
 

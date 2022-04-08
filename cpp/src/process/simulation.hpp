@@ -179,8 +179,6 @@ struct RaypathHash {
 
 class SimData {
  public:
-  static void CopyBaseData(SimData& dst, size_t dst_idx, const SimData& src, size_t src_idx, size_t num);
-
   SimData();
   SimData(size_t capacity);
 
@@ -192,7 +190,6 @@ class SimData {
   float* prev_p() const { return prev_p_.get(); }
   RaypathHashHelper* rp_record() const { return rp_record_.get(); }
 
-  void EmplaceBaseData(const SimData& src, size_t src_idx, size_t cnt);
   void Reset(size_t capacity);
   bool Empty() const;
 
