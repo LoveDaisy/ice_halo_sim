@@ -18,14 +18,15 @@ class Queue {
     if (q_.empty()) {
       q_cv_.wait(lock, [=]() { return !q_.empty(); });  // Block
     }
-    T e = q_.front();
+    T e = std::move(q_.front());
     q_.pop();
     return e;
   }
 
-  void Push(const T& t) {
+  template <class... Args>
+  void Emplace(Args&&... args) {
     std::unique_lock lock(q_mutex_);
-    q_.push(t);
+    q_.emplace(std::forward<Args>(args)...);
   }
 
  private:

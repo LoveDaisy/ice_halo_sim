@@ -8,6 +8,7 @@
 #include <stack>
 #include <utility>
 
+#include "core/core_def.hpp"
 #include "core/crystal.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
@@ -564,75 +565,92 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
 
 namespace v3 {
 
+SimData::SimData() : size_(0), capacity_(0), ms_idx_(0) {}
+
 SimData::SimData(size_t capacity)
-    : num_(0), capacity_(capacity), d_(new float[capacity * 3]{}), p_(new float[capacity * 3]{}),
-      w_(new float[capacity]{}), fid_(new int[capacity]{}) {}
+    : size_(0), capacity_(capacity), d_(new float[capacity * 3]{}), p_(new float[capacity * 3]{}),
+      w_(new float[capacity]{}), fid_(new int[capacity]{}), prev_p_(new float[capacity * 3]{}),
+      ms_idx_(0), ms_crystal{} {}
 
 void SimData::Reset(size_t capacity) {
   d_.reset(new float[capacity * 3]{});
   p_.reset(new float[capacity * 3]{});
   w_.reset(new float[capacity]{});
   fid_.reset(new int[capacity]{});
-  num_ = 0;
+  size_ = 0;
   capacity_ = capacity;
 }
 
-void SimData::EmplaceBack(const SimData& src, size_t src_idx, size_t cnt) {
-  cnt = std::min(cnt, capacity_ - num_);
-  SimData::Copy(*this, num_, src, src_idx, cnt);
-  num_ += cnt;
+void SimData::EmplaceBaseData(const SimData& src, size_t src_idx, size_t cnt) {
+  cnt = std::min(cnt, capacity_ - size_);
+  SimData::CopyBaseData(*this, size_, src, src_idx, cnt);
+  size_ += cnt;
 }
 
 bool SimData::Empty() const {
-  return num_ == 0;
+  return size_ == 0;
 }
 
-void SimData::Copy(SimData& dst, size_t dst_idx, const SimData& src, size_t src_idx, size_t num) {
+void SimData::CopyBaseData(SimData& dst, size_t dst_idx, const SimData& src, size_t src_idx, size_t num) {
   std::memcpy(dst.d_.get() + dst_idx * 3, src.d_.get() + src_idx * 3, num * 3 * sizeof(float));
   std::memcpy(dst.p_.get() + dst_idx * 3, src.p_.get() + src_idx * 3, num * 3 * sizeof(float));
   std::memcpy(dst.w_.get() + dst_idx * 1, src.w_.get() + src_idx * 1, num * 1 * sizeof(float));
   std::memcpy(dst.fid_.get() + dst_idx * 1, src.fid_.get() + src_idx * 1, num * 1 * sizeof(int));
 }
 
-void InitSimData(SimConfigPtrS config, SimData& init_data) {
-  size_t ray_num = init_data.size();
-  auto* crystal = config->ms_crystal_[0];  // Assume the crystal is rotated in world frame
+void InitSimData(const SimConfig* config, const SimData* last_data, SimData* out_data) {
+  if (!out_data) {
+    return;
+  }
+
+  size_t ray_num = out_data->size_;
+  auto* crystal = config->ms_crystal_[0].get();  // Assume the crystal is rotated in world frame
 
   // Sample on sun disk
-  SampleSphCapPoint(180.0f, -config->sun_altitude_, config->sun_diameter_ / 2.0f, init_data.d(), ray_num);
+  const float* ray_in_d = out_data->d();
+  if (!last_data) {
+    SampleSphCapPoint(180.0f, -config->sun_altitude_, config->sun_diameter_ / 2.0f, out_data->d(), ray_num);
+  } else {
+    ray_in_d = last_data->d();
+  }
 
   std::unique_ptr<float[]> project_face_area{ new float[crystal->TotalFaces()]{} };
   for (size_t i = 0; i < ray_num; i++) {
     // Compute the projected face area
     for (size_t j = 0; j < crystal->TotalFaces(); j++) {
-      project_face_area[j] = -Dot3(init_data.d() + i * 3, crystal->GetFaceNorm() + j * 3) * crystal->GetFaceArea()[j];
+      project_face_area[j] = -Dot3(ray_in_d + i * 3, crystal->GetFaceNorm() + j * 3) * crystal->GetFaceArea()[j];
     }
     // Choose a face
-    RandomSample(crystal->TotalFaces(), project_face_area.get(), init_data.fid() + i);
+    RandomSample(crystal->TotalFaces(), project_face_area.get(), out_data->fid() + i);
 
     // Sample on a triangle
-    int curr_fid = init_data.fid()[i];
-    SampleTrianglePoint(crystal->GetFaceVtx() + curr_fid * 9, init_data.p() + i * 3);
+    int curr_fid = out_data->fid()[i];
+    SampleTrianglePoint(crystal->GetFaceVtx() + curr_fid * 9, out_data->p() + i * 3);
 
     // Set intensity
-    init_data.w()[i] = 1.0f;
+    if (!last_data) {
+      out_data->w()[i] = 1.0f;
+    }
   }
 }
 
-SimDataPtrS CollectSimData(SimConfigPtrS config, SimData buffer_data[2], SimData* init_data) {
-  size_t ray_num = buffer_data[0].capacity() / 2;
+SimDataPtrU CollectData(const SimConfig* config, const float* prev_p, SimData* buffer_data, SimData* init_data) {
+  size_t ray_num = buffer_data[0].capacity_ / 2;
   auto* rng = RandomNumberGenerator::GetInstance();
-  auto out_data = std::make_shared<SimData>(ray_num);
+  auto out_data = std::make_unique<SimData>(ray_num);
   for (size_t j = 0; j < ray_num * 2; j++) {
     if (buffer_data[1].fid()[j] < 0 &&                                       // 2.3.a. Outgoing ray, and ...
         config->ms_prob_ < 1.0f && rng->GetUniform() >= config->ms_prob_) {  // NOT choosed for next scattering
-      out_data->EmplaceBack(buffer_data[1], j, 1);
+      // 1. Set prev_p. Here use out_data->size_, which will change after next step.
+      std::memcpy(out_data->prev_p_.get() + out_data->size_ * 3, prev_p + j / 2 * 3, 3 * sizeof(float));
+      // 2. Copy d, p, w, fid (**NO** prev_p)
+      out_data->EmplaceBaseData(buffer_data[1], j, 1);
       // Note that there are 2*n rays in buffer, but at most half of them are outgoing.
       // So size of out_data will keep in range, and we do not check it here.
     } else if (buffer_data[1].fid()[j] < 0) {  // 2.3.b. Outgoing, and for next scattering
-      init_data->EmplaceBack(buffer_data[1], j, 1);
+      init_data->EmplaceBaseData(buffer_data[1], j, 1);
     } else {  // 2.3.c. Ingoing. Squeeze data from buffer[1] to buffer[0]
-      SimData::Copy(buffer_data[0], j / 2, buffer_data[1], j, 1);
+      SimData::CopyBaseData(buffer_data[0], j / 2, buffer_data[1], j, 1);
     }
   }
   return out_data;
@@ -650,44 +668,63 @@ void Simulator::operator()() {
     // Actually, if ms_prob = 1.0, i.e. all outgoing rays will be sent to next crystal,
     // then the final ray number for init_data will be (n0 * max_hits^ms_num), which increase rapidily.
 
-    SimData init_data(ray_num);
-    SimData buffer_data[2]{ SimData(ray_num * 2), SimData(ray_num * 2) };
+    SimData init_data(ray_num);  // Init data will increase its size between iterations of multi-scattering.
+    SimData buffer_data[2]{ SimData(), SimData() };  // And so do buffer data.
 
     // 1. Initialize data: sample points on crystal surface, generate ray directions, ...
-    InitSimData(config, init_data);
+    InitSimData(config.get(), nullptr, &init_data);
 
+    CrystalPtrS ms_crystal[kMaxMultiScatterings]{};
     for (int m = 0; m < config->ms_num_; m++) {
-      auto* current_crystal = config->ms_crystal_[m];  // The crystal should be rotated in world frame.
-      float refractive_index = current_crystal->GetRefractiveIndex(config->wl_);
+      CrystalPtrS curr_crystal = std::move(config->ms_crystal_[m]);  // The crystal is rotated properly in world frame.
+      ms_crystal[m] = curr_crystal;
+      float refractive_index = curr_crystal->GetRefractiveIndex(config->wl_);
+
+      // 1. Initialize data
+      buffer_data[0].Reset(ray_num * 2);
+      buffer_data[1].Reset(ray_num * 2);
+      std::unique_ptr<float[]> prev_p{ new float[ray_num * 3]{} };
+      std::memcpy(prev_p.get(), init_data.p(), ray_num * 3 * sizeof(float));
+      InitSimData(config.get(), &init_data, &init_data);
 
       // 1.1 Copy initial data
-      SimData::Copy(buffer_data[0], 0, init_data, 0, init_data.size());
-      init_data.Reset(init_data.size() * config->max_hits_);
+      SimData::CopyBaseData(buffer_data[0], 0, init_data, 0, init_data.size_);
+
+      init_data.Reset(init_data.size_ * config->max_hits_);  // Resize for next multi-scattering
 
       // 2. Start
       for (int i = 0; i < config->max_hits_; i++) {
         // 2.1 HitSurface. {d1, (d2), w1, (w2)} --> () --> {d1', d2', w1', w2'}
-        v3::HitSurface(current_crystal, refractive_index, ray_num,                    // Input
-                       buffer_data[0].d(), buffer_data[0].fid(), buffer_data[0].w(),  // Input
-                       buffer_data[1].d(), buffer_data[1].w());                       // Output
+        HitSurface(curr_crystal.get(), refractive_index, ray_num,                 // Input
+                   buffer_data[0].d(), buffer_data[0].fid(), buffer_data[0].w(),  // Input
+                   buffer_data[1].d(), buffer_data[1].w());                       // Output
 
         // 2.2 Propagate.  {d1', d2', p1, (p2)} --> () --> {p1', p2'}
-        v3::Propagate(current_crystal, ray_num,                   // Input
-                      buffer_data[0].p(), buffer_data[1].d(),     // Input
-                      buffer_data[1].w(), buffer_data[0].fid(),   // Input
-                      buffer_data[1].p(), buffer_data[1].fid());  // Output
+        Propagate(curr_crystal.get(), ray_num,                // Input
+                  buffer_data[0].p(), buffer_data[1].d(),     // Input
+                  buffer_data[1].w(), buffer_data[0].fid(),   // Input
+                  buffer_data[1].p(), buffer_data[1].fid());  // Output
 
         // 2.3
         //  a. Copy outgoing rays into output data, at probability of (1 - p) --> It can be sent
         //  b. Copy outgoing rays into initial data, at probability of p
         //  c. Squeeze (better swap?) buffers.
-        auto out_data = CollectSimData(config, buffer_data, &init_data);
+        auto out_data = CollectData(config.get(), prev_p.get(), buffer_data, &init_data);
+        // Above procedure fills d, p, w, fid, and prev_p
+
+        // Fill in other out data
+        out_data->ms_idx_ = m;
+        for (int j = 0; j <= m; j++) {
+          out_data->ms_crystal[j] = ms_crystal[j];
+        }
+
         if (!out_data->Empty()) {
           // Send data
-          data_queue_->Push(out_data);
-          // TODO: How to trace every ray segment to its parent/root?
+          data_queue_->Emplace(std::move(out_data));
         }
       }
+
+      ray_num = init_data.size_;
     }
   }
 }

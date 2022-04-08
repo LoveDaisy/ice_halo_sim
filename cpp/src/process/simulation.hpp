@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "context/context.hpp"
+#include "core/core_def.hpp"
 #include "core/crystal.hpp"
 #include "core/optics.hpp"
 #include "io/serialize.hpp"
@@ -140,9 +141,8 @@ class SimulationData : public ISerializable {
 
 namespace v3 {
 
-constexpr size_t kMaxMultiScatterings = 4;
-
-struct SimConfig {
+class SimConfig {
+ public:
   float sun_altitude_;
   float sun_diameter_;
 
@@ -153,7 +153,7 @@ struct SimConfig {
 
   int ms_num_;
   float ms_prob_;
-  Crystal* ms_crystal_[kMaxMultiScatterings];
+  CrystalPtrU ms_crystal_[kMaxMultiScatterings];
 };
 
 using SimConfigPtrS = std::shared_ptr<SimConfig>;
@@ -162,30 +162,32 @@ using SimConfigPtrU = std::unique_ptr<SimConfig>;
 
 class SimData {
  public:
-  static void Copy(SimData& dst, size_t dst_idx, const SimData& src, size_t src_idx, size_t num);
+  static void CopyBaseData(SimData& dst, size_t dst_idx, const SimData& src, size_t src_idx, size_t num);
 
+  SimData();
   SimData(size_t capacity);
 
-  size_t capacity() const { return capacity_; }
-  size_t size() const { return num_; }
+  // Following methods are for convinient access to raw pointer
   float* d() const { return d_.get(); }
   float* p() const { return p_.get(); }
   float* w() const { return w_.get(); }
   int* fid() const { return fid_.get(); }
 
+  void EmplaceBaseData(const SimData& src, size_t src_idx, size_t cnt);
   void Reset(size_t capacity);
-
-  void EmplaceBack(const SimData& src, size_t src_idx, size_t cnt);
-
   bool Empty() const;
 
- private:
-  size_t num_;
+  size_t size_;
   size_t capacity_;
   std::unique_ptr<float[]> d_;
   std::unique_ptr<float[]> p_;
   std::unique_ptr<float[]> w_;
   std::unique_ptr<int[]> fid_;
+  std::unique_ptr<float[]> prev_p_;
+
+  size_t ms_idx_;
+  CrystalPtrS ms_crystal[kMaxMultiScatterings];
+  // TODO: rp_record
 };
 
 using SimDataPtrS = std::shared_ptr<SimData>;
@@ -206,15 +208,15 @@ class Simulator {
     kRunning,
   };
 
-  Simulator(QueuePtrS<SimConfigPtrS> config_queue, QueuePtrS<SimDataPtrS> data_queue);
+  Simulator(QueuePtrS<SimConfigPtrU> config_queue, QueuePtrS<SimDataPtrU> data_queue);
 
   void operator()();
 
   void Stop();  // Stop running works, and set idle
 
  private:
-  QueuePtrS<SimConfigPtrS> config_queue_;
-  QueuePtrS<SimDataPtrS> data_queue_;
+  QueuePtrS<SimConfigPtrU> config_queue_;
+  QueuePtrS<SimDataPtrU> data_queue_;
 };
 
 }  // namespace v3

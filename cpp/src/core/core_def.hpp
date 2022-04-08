@@ -1,6 +1,7 @@
 #ifndef SRC_CORE_DEF_H_
 #define SRC_CORE_DEF_H_
 
+#include <cstddef>
 #include <unordered_map>
 
 namespace icehalo {
@@ -41,6 +42,10 @@ class Crystal;
 using CrystalPtrU = std::unique_ptr<Crystal>;
 
 using CrystalMap = std::unordered_map<ShortIdType, const Crystal*>;
+
+namespace v3 {
+constexpr size_t kMaxMultiScatterings = 4;
+}  // namespace v3
 
 }  // namespace icehalo
 
