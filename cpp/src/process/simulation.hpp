@@ -160,6 +160,23 @@ using SimConfigPtrS = std::shared_ptr<SimConfig>;
 using SimConfigPtrU = std::unique_ptr<SimConfig>;
 
 
+class RaypathHashHelper {
+  // Use SDBM algorithm. See http://www.cse.yorku.ca/~oz/hash.html for detail.
+ public:
+  RaypathHashHelper& operator<<(IdType c);
+  size_t GetHash() const;
+
+ private:
+  static constexpr unsigned kMagic = 65599u;
+  size_t hash_ = 0;
+};
+
+
+struct RaypathHash {
+  size_t operator()(const std::vector<IdType>& rp);
+};
+
+
 class SimData {
  public:
   static void CopyBaseData(SimData& dst, size_t dst_idx, const SimData& src, size_t src_idx, size_t num);
@@ -172,6 +189,8 @@ class SimData {
   float* p() const { return p_.get(); }
   float* w() const { return w_.get(); }
   int* fid() const { return fid_.get(); }
+  float* prev_p() const { return prev_p_.get(); }
+  RaypathHashHelper* rp_record() const { return rp_record_.get(); }
 
   void EmplaceBaseData(const SimData& src, size_t src_idx, size_t cnt);
   void Reset(size_t capacity);
@@ -184,10 +203,10 @@ class SimData {
   std::unique_ptr<float[]> w_;
   std::unique_ptr<int[]> fid_;
   std::unique_ptr<float[]> prev_p_;
+  std::unique_ptr<RaypathHashHelper[]> rp_record_;
 
   size_t ms_idx_;
   CrystalPtrS ms_crystal[kMaxMultiScatterings];
-  // TODO: rp_record
 };
 
 using SimDataPtrS = std::shared_ptr<SimData>;

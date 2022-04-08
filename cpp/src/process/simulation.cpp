@@ -565,18 +565,38 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
 
 namespace v3 {
 
+RaypathHashHelper& RaypathHashHelper::operator<<(IdType c) {
+  hash_ = hash_ * kMagic + c;
+  return *this;
+}
+
+size_t RaypathHashHelper::GetHash() const {
+  return hash_;
+}
+
+
+size_t RaypathHash::operator()(const std::vector<IdType>& rp) {
+  RaypathHashHelper h;
+  for (auto x : rp) {
+    h << x;
+  }
+  return h.GetHash();
+}
+
+
 SimData::SimData() : size_(0), capacity_(0), ms_idx_(0) {}
 
 SimData::SimData(size_t capacity)
     : size_(0), capacity_(capacity), d_(new float[capacity * 3]{}), p_(new float[capacity * 3]{}),
       w_(new float[capacity]{}), fid_(new int[capacity]{}), prev_p_(new float[capacity * 3]{}),
-      ms_idx_(0), ms_crystal{} {}
+      rp_record_(new RaypathHashHelper[capacity]{}), ms_idx_(0), ms_crystal{} {}
 
 void SimData::Reset(size_t capacity) {
   d_.reset(new float[capacity * 3]{});
   p_.reset(new float[capacity * 3]{});
   w_.reset(new float[capacity]{});
   fid_.reset(new int[capacity]{});
+  rp_record_.reset(new RaypathHashHelper[capacity]{});
   size_ = 0;
   capacity_ = capacity;
 }
@@ -595,10 +615,17 @@ void SimData::CopyBaseData(SimData& dst, size_t dst_idx, const SimData& src, siz
   std::memcpy(dst.d_.get() + dst_idx * 3, src.d_.get() + src_idx * 3, num * 3 * sizeof(float));
   std::memcpy(dst.p_.get() + dst_idx * 3, src.p_.get() + src_idx * 3, num * 3 * sizeof(float));
   std::memcpy(dst.w_.get() + dst_idx * 1, src.w_.get() + src_idx * 1, num * 1 * sizeof(float));
-  std::memcpy(dst.fid_.get() + dst_idx * 1, src.fid_.get() + src_idx * 1, num * 1 * sizeof(int));
+  std::memcpy(dst.fid_.get() + dst_idx, src.fid_.get() + src_idx, num * sizeof(int));
+  std::memcpy(dst.prev_p_.get() + dst_idx * 3, src.prev_p_.get() + src_idx * 3, num * 3 * sizeof(float));
+  std::memcpy(dst.rp_record_.get() + dst_idx, src.rp_record_.get() + src_idx, num * sizeof(RaypathHashHelper));
 }
 
-void InitSimData(const SimConfig* config, const SimData* last_data, SimData* out_data) {
+enum class SimDataInitType {
+  kSun,
+  kPrev,
+};
+
+void InitSimData(const SimConfig* config, SimData* out_data, SimDataInitType type) {
   if (!out_data) {
     return;
   }
@@ -607,18 +634,15 @@ void InitSimData(const SimConfig* config, const SimData* last_data, SimData* out
   auto* crystal = config->ms_crystal_[0].get();  // Assume the crystal is rotated in world frame
 
   // Sample on sun disk
-  const float* ray_in_d = out_data->d();
-  if (!last_data) {
+  if (type == SimDataInitType::kSun) {
     SampleSphCapPoint(180.0f, -config->sun_altitude_, config->sun_diameter_ / 2.0f, out_data->d(), ray_num);
-  } else {
-    ray_in_d = last_data->d();
   }
 
   std::unique_ptr<float[]> project_face_area{ new float[crystal->TotalFaces()]{} };
   for (size_t i = 0; i < ray_num; i++) {
     // Compute the projected face area
     for (size_t j = 0; j < crystal->TotalFaces(); j++) {
-      project_face_area[j] = -Dot3(ray_in_d + i * 3, crystal->GetFaceNorm() + j * 3) * crystal->GetFaceArea()[j];
+      project_face_area[j] = -Dot3(out_data->d() + i * 3, crystal->GetFaceNorm() + j * 3) * crystal->GetFaceArea()[j];
     }
     // Choose a face
     RandomSample(crystal->TotalFaces(), project_face_area.get(), out_data->fid() + i);
@@ -626,28 +650,34 @@ void InitSimData(const SimConfig* config, const SimData* last_data, SimData* out
     // Sample on a triangle
     int curr_fid = out_data->fid()[i];
     SampleTrianglePoint(crystal->GetFaceVtx() + curr_fid * 9, out_data->p() + i * 3);
+    out_data->rp_record()[i] << crystal->config_id_ << crystal->GetFn(curr_fid);
 
     // Set intensity
-    if (!last_data) {
+    if (type == SimDataInitType::kSun) {
       out_data->w()[i] = 1.0f;
     }
   }
 }
 
-SimDataPtrU CollectData(const SimConfig* config, const float* prev_p, SimData* buffer_data, SimData* init_data) {
+SimDataPtrU CollectData(const SimConfig* config, const Crystal* crystal, SimData* buffer_data, SimData* init_data) {
   size_t ray_num = buffer_data[0].capacity_ / 2;
   auto* rng = RandomNumberGenerator::GetInstance();
   auto out_data = std::make_unique<SimData>(ray_num);
+
   for (size_t j = 0; j < ray_num * 2; j++) {
-    if (buffer_data[1].fid()[j] < 0 &&                                       // 2.3.a. Outgoing ray, and ...
+    auto is_outgoing = buffer_data[1].fid()[j] < 0;
+    if (is_outgoing) {
+      buffer_data[1].rp_record()[j] << kInvalidId;
+    } else {
+      buffer_data[1].rp_record()[j] << crystal->GetFn(buffer_data[1].fid()[j]);
+    }
+    if (is_outgoing &&                                                       // 2.3.a. Outgoing ray, and ...
         config->ms_prob_ < 1.0f && rng->GetUniform() >= config->ms_prob_) {  // NOT choosed for next scattering
-      // 1. Set prev_p. Here use out_data->size_, which will change after next step.
-      std::memcpy(out_data->prev_p_.get() + out_data->size_ * 3, prev_p + j / 2 * 3, 3 * sizeof(float));
-      // 2. Copy d, p, w, fid (**NO** prev_p)
+      // Copy d, p, w, fid, and prev_p
       out_data->EmplaceBaseData(buffer_data[1], j, 1);
       // Note that there are 2*n rays in buffer, but at most half of them are outgoing.
       // So size of out_data will keep in range, and we do not check it here.
-    } else if (buffer_data[1].fid()[j] < 0) {  // 2.3.b. Outgoing, and for next scattering
+    } else if (is_outgoing) {  // 2.3.b. Outgoing, and for next scattering
       init_data->EmplaceBaseData(buffer_data[1], j, 1);
     } else {  // 2.3.c. Ingoing. Squeeze data from buffer[1] to buffer[0]
       SimData::CopyBaseData(buffer_data[0], j / 2, buffer_data[1], j, 1);
@@ -671,9 +701,6 @@ void Simulator::operator()() {
     SimData init_data(ray_num);  // Init data will increase its size between iterations of multi-scattering.
     SimData buffer_data[2]{ SimData(), SimData() };  // And so do buffer data.
 
-    // 1. Initialize data: sample points on crystal surface, generate ray directions, ...
-    InitSimData(config.get(), nullptr, &init_data);
-
     CrystalPtrS ms_crystal[kMaxMultiScatterings]{};
     for (int m = 0; m < config->ms_num_; m++) {
       CrystalPtrS curr_crystal = std::move(config->ms_crystal_[m]);  // The crystal is rotated properly in world frame.
@@ -683,9 +710,12 @@ void Simulator::operator()() {
       // 1. Initialize data
       buffer_data[0].Reset(ray_num * 2);
       buffer_data[1].Reset(ray_num * 2);
-      std::unique_ptr<float[]> prev_p{ new float[ray_num * 3]{} };
-      std::memcpy(prev_p.get(), init_data.p(), ray_num * 3 * sizeof(float));
-      InitSimData(config.get(), &init_data, &init_data);
+      if (m > 0) {
+        std::memcpy(init_data.prev_p(), init_data.p(), ray_num * 3 * sizeof(float));
+        InitSimData(config.get(), &init_data, SimDataInitType::kPrev);  // prev_p is NOT changed here.
+      } else {
+        InitSimData(config.get(), &init_data, SimDataInitType::kSun);  // prev_p is NOT changed here.
+      }
 
       // 1.1 Copy initial data
       SimData::CopyBaseData(buffer_data[0], 0, init_data, 0, init_data.size_);
@@ -709,7 +739,7 @@ void Simulator::operator()() {
         //  a. Copy outgoing rays into output data, at probability of (1 - p) --> It can be sent
         //  b. Copy outgoing rays into initial data, at probability of p
         //  c. Squeeze (better swap?) buffers.
-        auto out_data = CollectData(config.get(), prev_p.get(), buffer_data, &init_data);
+        auto out_data = CollectData(config.get(), curr_crystal.get(), buffer_data, &init_data);
         // Above procedure fills d, p, w, fid, and prev_p
 
         // Fill in other out data

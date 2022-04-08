@@ -28,6 +28,8 @@ enum class CrystalType {
 
 namespace v3 {
 
+using IdType = uint16_t;
+
 class Crystal;
 using CrystalPtrS = std::shared_ptr<Crystal>;
 using CrystalPtrU = std::unique_ptr<Crystal>;
@@ -44,7 +46,11 @@ class Crystal {
   const float* GetFaceArea() const;
   const float* GetFaceCoordTf() const;
 
+  IdType GetFn(int fid) const;
+
   float GetRefractiveIndex(float wl) const;
+
+  IdType config_id_ = kInvalidId;
 
  private:
   Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx);
