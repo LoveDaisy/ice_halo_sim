@@ -112,6 +112,17 @@ set(icehalo_src
   ${icehalo_context_src} ${icehalo_core_src} ${icehalo_io_src} ${icehalo_process_src} ${icehalo_util_src})
 
 # ==================================================================================================
+# Add targets
+add_library(icehalo_lib OBJECT ${icehalo_src})
+target_include_directories(icehalo_lib PUBLIC ${icehalo_include})
+if(MULTI_THREAD)
+  target_compile_definitions(icehalo_lib PUBLIC MULTI_THREAD)
+endif()
+if(RANDOM_SEED)
+  target_compile_definitions(icehalo_lib PUBLIC RANDOM_SEED)
+endif()
+
+# ==================================================================================================
 # Add subdirectory
 add_subdirectory(src)
 if(BUILD_TEST)

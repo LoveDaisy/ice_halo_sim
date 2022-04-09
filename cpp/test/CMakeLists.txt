@@ -24,10 +24,12 @@ if(NOT GTest_FOUND)
 endif()
 
 # ==================================================================================================
-message(STATUS "[test] icehalo_libs: ${icehalo_libs}")
-message(STATUS "[test] icehalo_include: ${icehalo_include}")
+add_library(icehalo_test_lib OBJECT ${icehalo_src})
+target_include_directories(icehalo_test_lib PUBLIC ${icehalo_include})
+target_compile_definitions(icehalo_test_lib PUBLIC FOR_TEST)
+
+
 add_executable(unit_test
-  ${icehalo_src}
   "${PROJ_TEST_DIR}/test_crystal.cpp"
   "${PROJ_TEST_DIR}/test_context.cpp"
   "${PROJ_TEST_DIR}/test_optics.cpp"
@@ -35,20 +37,17 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_serialize.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
 target_include_directories(unit_test
-  PUBLIC ${icehalo_include}
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_test
-  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} Boost::filesystem Boost::system icehalo_test_lib)
 
 
 add_executable(RayTracingTest
-  ${icehalo_src}
   "${PROJ_TEST_DIR}/test_ray_tracing_main.cpp")
 target_include_directories(RayTracingTest
-    PRIVATE ${icehalo_include} ${PROJ_TEST_DIR})
+    PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(RayTracingTest
-    PRIVATE ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
-target_compile_definitions(RayTracingTest PRIVATE FOR_TEST)
+    PRIVATE ${CMAKE_THREAD_LIBS_INIT} Boost::filesystem Boost::system icehalo_test_lib)
 
 
 add_test(NAME "IceHaloUnitTest" COMMAND unit_test
@@ -72,8 +71,6 @@ else()
 endif()
 
 add_executable(bench
-  ${icehalo_src}
   "${PROJ_TEST_DIR}/bench_math.cpp"
   "${PROJ_TEST_DIR}/bench_optics.cpp")
-target_include_directories(bench PRIVATE ${icehalo_include})
-target_link_libraries(bench PRIVATE benchmark::benchmark_main ${Boost_LIBRARIES})
+target_link_libraries(bench PRIVATE benchmark::benchmark_main Boost::filesystem Boost::system icehalo_lib)
