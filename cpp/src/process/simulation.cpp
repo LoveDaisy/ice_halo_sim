@@ -661,8 +661,8 @@ SimDataPtrU CollectData(const SimConfig* config, const Crystal* crystal, SimData
 
   auto is_ms = config->ms_num_ > 1 && config->ms_prob_ > 0.0f;
   for (size_t j = 0; j < ray_num * 2; j++) {
-    auto is_outgoing = buffer_data[1].fid()[j] < 0;
     auto is_total_reflection = buffer_data[1].w()[j] < 0;
+    auto is_outgoing = buffer_data[1].fid()[j] < 0 && !is_total_reflection;
     auto for_next_ms = is_outgoing && is_ms && (config->ms_prob_ > 0.0f && rng->GetUniform() < config->ms_prob_);
 
     buffer_data[1].rp_record()[j] << crystal->GetFn(buffer_data[1].fid()[j]);  // FIXME:

@@ -43,18 +43,26 @@ TEST_F(V3Test, Simple) {
   config_queue->Emplace(std::move(config));
 
   v3::Simulator simulator(config_queue, data_queue);
-  std::thread t([&simulator]() { simulator.Run(); });
+  std::thread producer([&simulator]() { simulator.Run(); });
+  std::thread consumer([=]() {
+    while (true) {
+      auto data = data_queue->Get();
+      if (!data || data->Empty()) {
+        break;
+      }
+      LOG_DEBUG("p  d  w");
+      for (size_t i = 0; i < data->size_; i++) {
+        LOG_DEBUG("%.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f", data->p()[i * 3 + 0], data->p()[i * 3 + 1],
+                  data->p()[i * 3 + 2], data->d()[i * 3 + 0], data->d()[i * 3 + 1], data->d()[i * 3 + 2], data->w()[i]);
+      }
+    }
+  });
 
-  auto data = data_queue->Get();
-  LOG_DEBUG("p  d  w");
-  for (size_t i = 0; i < data->size_; i++) {
-    LOG_DEBUG("%.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f", data->p()[i * 3 + 0], data->p()[i * 3 + 1], data->p()[i * 3 + 2],
-              data->d()[i * 3 + 0], data->d()[i * 3 + 1], data->d()[i * 3 + 2], data->w()[i]);
-  }
-
+  std::this_thread::sleep_for(500ms);
   simulator.Stop();
 
-  t.join();
+  producer.join();
+  consumer.join();
 }
 
 }  // namespace
