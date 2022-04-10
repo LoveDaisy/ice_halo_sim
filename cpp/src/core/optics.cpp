@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <memory>
 
@@ -370,6 +371,7 @@ void RayTriangleBW(const float* ray_pt, const float* ray_dir, int face_id,  // i
                    float* out_pt, int* out_face_id) {
   float min_t = -1.0f;
   *out_face_id = -1;
+  std::memcpy(out_pt, ray_pt, 3 * sizeof(float));
 
   float d[3];
   float p[3];
@@ -415,7 +417,7 @@ void RayTriangleBW(const float* ray_pt, const float* ray_dir, int face_id,  // i
       min_t = t;
       *out_face_id = i;
       for (int j = 0; j < 3; j++) {
-        out_pt[j] = ray_pt[j] + t * ray_dir[j];
+        out_pt[j] += t * ray_dir[j];
       }
     }
   }
@@ -430,7 +432,7 @@ void Propagate(const Crystal* crystal, size_t num,                              
 
   // Do main work
   for (size_t i = 0; i < num; i++) {
-    if (w_in[i] < ProjectContext::kPropMinW) {
+    if (w_in[i] < 0) {  // Total reflection
       continue;
     }
     RayTriangleBW(pt_in + i * 3, dir_in + i * 3, face_id_in[i],  // input

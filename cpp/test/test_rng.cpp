@@ -1,8 +1,10 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <cmath>
 
+#include "core/crystal.hpp"
 #include "core/math.hpp"
-#include "gtest/gtest.h"
 #include "util/threading_pool.hpp"
 
 namespace {
@@ -68,6 +70,22 @@ TEST_F(RngTest, UniformMultithreadTest) {
     }
     ASSERT_EQ(match_cnt, 1);
   });
+}
+
+
+TEST_F(RngTest, TriangleSample) {
+  auto crystal = icehalo::v3::Crystal::CreatePrism(0.2f);
+
+  float p[3];
+  float v[3];
+  int fid = 0;
+  const float* face_vtx = crystal->GetFaceVtx() + fid * 9;
+  icehalo::v3::SampleTrianglePoint(face_vtx, p);
+  for (int k = 0; k < 3; k++) {
+    v[k] = p[k] - face_vtx[k];
+  }
+  float dot = icehalo::Dot3(v, crystal->GetFaceNorm() + fid * 3);
+  EXPECT_NEAR(dot, 0.0f, kFloatEps);
 }
 
 

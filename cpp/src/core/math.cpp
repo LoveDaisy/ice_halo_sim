@@ -368,9 +368,9 @@ void SampleTrianglePoint(const float* vertices, float* out_pt, size_t sample_num
       u = 1.0f - u;
       v = 1.0f - v;
     }
-    out_pt[i * 3 + 0] = u * e1[0] + v * e2[0];
-    out_pt[i * 3 + 1] = u * e1[1] + v * e2[1];
-    out_pt[i * 3 + 2] = u * e1[2] + v * e2[2];
+    out_pt[i * 3 + 0] = u * e1[0] + v * e2[0] + vertices[0];
+    out_pt[i * 3 + 1] = u * e1[1] + v * e2[1] + vertices[1];
+    out_pt[i * 3 + 2] = u * e1[2] + v * e2[2] + vertices[2];
   }
 }
 

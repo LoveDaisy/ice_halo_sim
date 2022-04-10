@@ -181,11 +181,11 @@ TEST_F(OpticsTest, Propagate) {
     0.35693541f, -0.18690710f, -0.91523923f,  // case 5
   };
   float pt_in[kNum * 3]{
-    -kSqrt3_4, 0.0000f,          0.000000f,  // case 1
-    -0.25f,    kSqrt3_4 * 5 / 3, 0.400000f,  // case 2
-    0.0f,      0.0000f,          0.000000f,  // case 3
-    kSqrt3_4,  -0.1000f,         0.25f,      // case 4
-    -0.05f,    0.41339746f,      0.400000f,  // case 5
+    -kSqrt3_4,  0.000000f,        0.000000f,  // case 1
+    -0.250000f, kSqrt3_4 * 5 / 3, 0.400000f,  // case 2
+    0.000000f,  0.000000f,        0.000000f,  // case 3
+    kSqrt3_4,   -0.100000f,       0.250000f,  // case 4
+    -0.050000f, 0.41339746f,      0.400000f,  // case 5
   };
   float w_in[kNum]{
     1.0f,  // case 1
@@ -197,11 +197,11 @@ TEST_F(OpticsTest, Propagate) {
   int id_in[kNum]{ 10, 8, 1, 4, 8 };
 
   float pt_out[kNum * 3]{
-    kSqrt3_4 / 2, 0.375f,    0.0f,   // case 1
-    0.0f,         0.0f,      0.0f,   // case 2
-    0.288675f,    0.0f,      -0.5f,  // case 3
-    0.0f,         0.0f,      0.0f,   // case 4
-    0.300992f,    0.229603f, -0.5f,  // case 5
+    kSqrt3_4 / 2, 0.375000f,        0.000000f,   // case 1
+    -0.250000f,   kSqrt3_4 * 5 / 3, 0.400000f,   // case 2
+    0.288675f,    0.000000f,        -0.500000f,  // case 3
+    kSqrt3_4,     -0.100000f,       0.250000f,   // case 4
+    0.300992f,    0.229603f,        -0.500000f,  // case 5
   };
   int id_out[kNum]{ 6, -1, 16, -1, 16 };
 
