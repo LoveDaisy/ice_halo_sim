@@ -734,24 +734,16 @@ void Simulator::Run() {
           break;
         }
 
-        for (int k = 0; k < ray_num; k++) {
-          // 2.1 HitSurface.
-          HitSurface(curr_crystal, refractive_index, 1,                                             // Input
-                     buffer_data[0].d() + k * 3, buffer_data[0].fid() + k, buffer_data[0].w() + k,  // Input
-                     buffer_data[1].d() + k * 6, buffer_data[1].w() + k * 2);                       // Output
+        // 2.1 HitSurface.
+        HitSurface(curr_crystal, refractive_index, ray_num,                       // Input
+                   buffer_data[0].d(), buffer_data[0].fid(), buffer_data[0].w(),  // Input
+                   buffer_data[1].d(), buffer_data[1].w());                       // Output
 
-          // 2.2 Propagate.
-          // For reflection
-          Propagate(curr_crystal, 1,                                            // Input
-                    buffer_data[0].p() + k * 3, buffer_data[1].d() + k * 6,     // Input
-                    buffer_data[1].w() + k * 2, buffer_data[0].fid() + k,       // Input
-                    buffer_data[1].p() + k * 6, buffer_data[1].fid() + k * 2);  // Output
-          // For refraction
-          Propagate(curr_crystal, 1,                                                    // Input
-                    buffer_data[0].p() + k * 3, buffer_data[1].d() + k * 6 + 3,         // Input
-                    buffer_data[1].w() + k * 2 + 1, buffer_data[0].fid() + k,           // Input
-                    buffer_data[1].p() + k * 6 + 3, buffer_data[1].fid() + k * 2 + 1);  // Output
-        }
+        // 2.2 Propagate.
+        // For reflection
+        Propagate(curr_crystal, ray_num * 2, 2,                                // Input
+                  buffer_data[0].p(), buffer_data[1].d(), buffer_data[1].w(),  // Input
+                  buffer_data[1].p(), buffer_data[1].fid());                   // Output
 
         buffer_data[0].size_ = 0;
         buffer_data[1].size_ = ray_num * 2;

@@ -2,6 +2,7 @@
 #define SRC_CORE_OPTICS_H_
 
 #include <atomic>
+#include <cstddef>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -229,9 +230,9 @@ void HitSurface(const Crystal* crystal, float n, size_t num,                    
  * @param pt_out      [output] intersection point. sizeof(float) * num * 3, [px, py, pz], ...
  * @param face_id_out [output] index of crystal face. sizeof(int) * num.
  */
-void Propagate(const Crystal* crystal, size_t num,                                                 // input
-               const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
-               float* pt_out, int* face_id_out);                                                   // output
+void Propagate(const Crystal* crystal, size_t num, size_t step,             // input
+               const float* pt_in, const float* dir_in, const float* w_in,  // input
+               float* pt_out, int* face_id_out);                            // output
 
 }  // namespace v3
 

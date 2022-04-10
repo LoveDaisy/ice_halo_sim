@@ -1,6 +1,7 @@
+#include <gtest/gtest.h>
+
 #include "core/crystal.hpp"
 #include "core/optics.hpp"
-#include "gtest/gtest.h"
 #include "util/log.hpp"
 
 namespace {
@@ -194,7 +195,6 @@ TEST_F(OpticsTest, Propagate) {
     1.0f,  // case 4
     1.0f,  // case 5
   };
-  int id_in[kNum]{ 10, 8, 1, 4, 8 };
 
   float pt_out[kNum * 3]{
     kSqrt3_4 / 2, 0.375000f,        0.000000f,   // case 1
@@ -209,8 +209,8 @@ TEST_F(OpticsTest, Propagate) {
   int id_out_result[kNum]{};
 
 
-  icehalo::v3::Propagate(c.get(), kNum,                  // input
-                         pt_in, dir_in, w_in, id_in,     // input
+  icehalo::v3::Propagate(c.get(), kNum, 1,               // input
+                         pt_in, dir_in, w_in,            // input
                          pt_out_result, id_out_result);  // output
 
   using icehalo::math::kFloatEps;

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -366,8 +367,8 @@ void HitSurface(const Crystal* crystal, float n, size_t num,                    
 }
 
 
-void RayTriangleBW(const float* ray_pt, const float* ray_dir, int face_id,  // input
-                   int face_num, const float* face_transform,               // input
+void RayTriangleBW(const float* ray_pt, const float* ray_dir,  // input
+                   int face_num, const float* face_transform,  // input
                    float* out_pt, int* out_face_id) {
   float min_t = -1.0f;
   *out_face_id = -1;
@@ -377,10 +378,6 @@ void RayTriangleBW(const float* ray_pt, const float* ray_dir, int face_id,  // i
   float p[3];
 
   for (int i = 0; i < face_num; i++) {
-    if (i == face_id) {
-      continue;
-    }
-
     const float* tf = face_transform + i * 12;
     p[0] = Dot3(ray_pt, tf + 0) + tf[3];
     p[1] = Dot3(ray_pt, tf + 4) + tf[7];
@@ -424,9 +421,9 @@ void RayTriangleBW(const float* ray_pt, const float* ray_dir, int face_id,  // i
 }
 
 
-void Propagate(const Crystal* crystal, size_t num,                                                 // input
-               const float* pt_in, const float* dir_in, const float* w_in, const int* face_id_in,  // input
-               float* pt_out, int* face_id_out) {                                                  // output
+void Propagate(const Crystal* crystal, size_t num, size_t step,             // input
+               const float* pt_in, const float* dir_in, const float* w_in,  // input
+               float* pt_out, int* face_id_out) {                           // output
   auto face_num = crystal->TotalFaces();
   const auto* face_transform = crystal->GetFaceCoordTf();
 
@@ -435,9 +432,9 @@ void Propagate(const Crystal* crystal, size_t num,                              
     if (w_in[i] < 0) {  // Total reflection
       continue;
     }
-    RayTriangleBW(pt_in + i * 3, dir_in + i * 3, face_id_in[i],  // input
-                  face_num, face_transform,                      // input
-                  pt_out + i * 3, face_id_out + i);              // output
+    RayTriangleBW(pt_in + i / step * 3, dir_in + i * 3,  // input
+                  face_num, face_transform,              // input
+                  pt_out + i * 3, face_id_out + i);      // output
   }
 }
 
