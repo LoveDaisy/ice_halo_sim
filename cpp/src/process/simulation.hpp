@@ -1,6 +1,7 @@
 #ifndef SRC_CORE_SIMULATION_H_
 #define SRC_CORE_SIMULATION_H_
 
+#include <atomic>
 #include <cstddef>
 #include <cstring>
 #include <memory>
@@ -153,7 +154,7 @@ class SimConfig {
 
   int ms_num_;
   float ms_prob_;
-  CrystalPtrU ms_crystal_[kMaxMultiScatterings];
+  CrystalPtrS ms_crystal_[kMaxMultiScatterings];
 };
 
 using SimConfigPtrS = std::shared_ptr<SimConfig>;
@@ -226,13 +227,13 @@ class Simulator {
 
   Simulator(QueuePtrS<SimConfigPtrU> config_queue, QueuePtrS<SimDataPtrU> data_queue);
 
-  void operator()();
-
-  void Stop();  // Stop running works, and set idle
+  void Run();
+  void Stop();
 
  private:
   QueuePtrS<SimConfigPtrU> config_queue_;
   QueuePtrS<SimDataPtrU> data_queue_;
+  std::atomic_bool stop_;
 };
 
 }  // namespace v3

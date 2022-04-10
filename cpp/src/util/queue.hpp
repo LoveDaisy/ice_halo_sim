@@ -15,9 +15,17 @@ class Queue {
  public:
   T Get() {
     std::unique_lock lock(q_mutex_);
-    if (q_.empty()) {
-      q_cv_.wait(lock, [=]() { return !q_.empty(); });  // Block
+    if (shutdown_) {
+      return T();
     }
+
+    if (q_.empty()) {
+      q_cv_.wait(lock, [=]() { return !q_.empty() || shutdown_; });  // Block
+    }
+    if (shutdown_) {
+      return T();
+    }
+
     T e = std::move(q_.front());
     q_.pop();
     return e;
@@ -26,13 +34,25 @@ class Queue {
   template <class... Args>
   void Emplace(Args&&... args) {
     std::unique_lock lock(q_mutex_);
+    if (shutdown_) {
+      return;
+    }
     q_.emplace(std::forward<Args>(args)...);
+  }
+
+  void Shutdown() {
+    std::unique_lock<std::mutex> lock(q_mutex_);
+    std::queue<T> tmp_q;
+    q_.swap(tmp_q);
+    shutdown_ = true;
+    q_cv_.notify_all();
   }
 
  private:
   std::queue<T> q_;  // Just simple example
   std::mutex q_mutex_;
   std::condition_variable q_cv_;
+  bool shutdown_ = false;
 };
 
 }  // namespace v3

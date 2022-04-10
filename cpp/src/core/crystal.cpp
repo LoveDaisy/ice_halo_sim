@@ -1097,6 +1097,10 @@ const float* Crystal::GetFaceCoordTf() const {
   return face_coord_tf_.get();
 }
 
+IdType Crystal::GetFn(int /*fid*/) const {
+  return 1u;  // TODO:
+}
+
 float Crystal::GetRefractiveIndex(float wl) const {
   return IceRefractiveIndex::Get(wl);
 }
