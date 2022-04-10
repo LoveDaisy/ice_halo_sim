@@ -659,17 +659,18 @@ SimDataPtrU CollectData(const SimConfig* config, const Crystal* crystal, SimData
   auto* rng = RandomNumberGenerator::GetInstance();
   auto out_data = std::make_unique<SimData>(ray_num);
 
+  auto is_ms = config->ms_num_ > 1 && config->ms_prob_ > 0.0f;
   for (size_t j = 0; j < ray_num * 2; j++) {
     auto is_outgoing = buffer_data[1].fid()[j] < 0;
     auto is_total_reflection = buffer_data[1].w()[j] < 0;
+    auto for_next_ms = is_outgoing && is_ms && (config->ms_prob_ > 0.0f && rng->GetUniform() < config->ms_prob_);
 
     buffer_data[1].rp_record()[j] << crystal->GetFn(buffer_data[1].fid()[j]);  // FIXME:
     if (is_outgoing) {
       buffer_data[1].rp_record()[j] << kInvalidId;
     }
 
-    if (is_outgoing &&                                                       // 2.3.a. Outgoing ray, and ...
-        config->ms_prob_ < 1.0f && rng->GetUniform() >= config->ms_prob_) {  // NOT choosed for next scattering
+    if (is_outgoing && !for_next_ms) {  // 2.3.a. Outgoing ray, and NOT choosed for next scattering
       // Copy d, p, w, fid, and prev_p
       CopySimDataBase(*out_data, out_data->size_++, buffer_data[1], j, 1);
       // Note that there are 2*n rays in buffer, but at most half of them are outgoing.
@@ -768,10 +769,8 @@ void Simulator::Run() {
           out_data->ms_crystal[j] = config->ms_crystal_[m];
         }
 
-        if (!out_data->Empty()) {
-          // Send data
-          data_queue_->Emplace(std::move(out_data));
-        }
+        // Send data. No matter whether it is empty or not.
+        data_queue_->Emplace(std::move(out_data));
       }
 
       ray_num = init_data.size_;

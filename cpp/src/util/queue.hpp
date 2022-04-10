@@ -38,6 +38,7 @@ class Queue {
       return;
     }
     q_.emplace(std::forward<Args>(args)...);
+    q_cv_.notify_one();
   }
 
   void Shutdown() {

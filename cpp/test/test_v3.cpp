@@ -1,12 +1,14 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstddef>
 #include <memory>
 #include <thread>
 
 #include "context/context.hpp"
 #include "core/crystal.hpp"
 #include "process/simulation.hpp"
+#include "util/log.hpp"
 #include "util/queue.hpp"
 
 extern std::string config_file_name;
@@ -43,7 +45,13 @@ TEST_F(V3Test, Simple) {
   v3::Simulator simulator(config_queue, data_queue);
   std::thread t([&simulator]() { simulator.Run(); });
 
-  std::this_thread::sleep_for(200ms);
+  auto data = data_queue->Get();
+  LOG_DEBUG("p  d  w");
+  for (size_t i = 0; i < data->size_; i++) {
+    LOG_DEBUG("%.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f", data->p()[i * 3 + 0], data->p()[i * 3 + 1], data->p()[i * 3 + 2],
+              data->d()[i * 3 + 0], data->d()[i * 3 + 1], data->d()[i * 3 + 2], data->w()[i]);
+  }
+
   simulator.Stop();
 
   t.join();
