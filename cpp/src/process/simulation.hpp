@@ -154,7 +154,7 @@ class SimConfig {
 
   int ms_num_;
   float ms_prob_;
-  CrystalPtrS ms_crystal_[kMaxMultiScatterings];
+  CrystalPtrS ms_crystal_[kMaxMsNum];
 };
 
 using SimConfigPtrS = std::shared_ptr<SimConfig>;
@@ -204,7 +204,7 @@ class SimData {
   std::unique_ptr<RaypathHashHelper[]> rp_record_;
 
   size_t ms_idx_;
-  CrystalPtrS ms_crystal[kMaxMultiScatterings];
+  CrystalPtrS ms_crystal[kMaxMsNum];
 };
 
 using SimDataPtrS = std::shared_ptr<SimData>;

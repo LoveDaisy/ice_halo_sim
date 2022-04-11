@@ -189,7 +189,8 @@ struct HalfSpaceSet {
 
 
 enum class DistributionType {
-  kUniform = 0,
+  kNoRandom,
+  kUniform,
   kGaussian,
 };
 

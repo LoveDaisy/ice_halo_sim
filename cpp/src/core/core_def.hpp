@@ -44,7 +44,9 @@ using CrystalPtrU = std::unique_ptr<Crystal>;
 using CrystalMap = std::unordered_map<ShortIdType, const Crystal*>;
 
 namespace v3 {
-constexpr size_t kMaxMultiScatterings = 4;
+constexpr size_t kMaxMsNum = 4;        // How many multi-satterings at most.
+constexpr size_t kMaxWlNum = 32;       // How many different wavelengths in one configuration.
+constexpr size_t kMaxCrystalNum = 16;  // How many crystal types in one configuration.
 }  // namespace v3
 
 }  // namespace icehalo
