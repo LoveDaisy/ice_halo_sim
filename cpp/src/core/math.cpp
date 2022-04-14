@@ -324,6 +324,73 @@ void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,  
 
 namespace v3 {
 
+Rotation::Rotation() : mat_{ 1, 0, 0, 0, 1, 0, 0, 0, 1 } {}
+
+Rotation::Rotation(const float* ax, float theta) : mat_{} {
+  FillMat(ax, theta);
+}
+
+Rotation::Rotation(const float* from, const float* to) : mat_{} {
+  float ax[3];
+  Cross3(from, to, ax);
+  float theta = Norm3(ax);
+  for (auto& x : ax) {
+    x /= theta;
+  }
+  FillMat(ax, theta);
+}
+
+Rotation& Rotation::Chain(const Rotation& rotate) {
+  // Left-multiply next rotate matrix
+  float m0[9];
+  std::memcpy(m0, mat_, 9 * sizeof(float));
+
+  // Naive matrix multiply
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 3; j++) {
+      mat_[i * 3 + j] = 0;
+      for (int k = 0; k < 3; k++) {
+        mat_[i * 3 + j] += rotate.mat_[i * 3 + k] * m0[k * 3 + j];
+      }
+    }
+  }
+  return *this;
+}
+
+Rotation& Rotation::Chain(const float* ax, float theta) {
+  return Chain(Rotation(ax, theta));
+}
+
+Rotation& Rotation::Chain(const float* from, const float* to) {
+  return Chain(Rotation(from, to));
+}
+
+void Rotation::Apply(float* pt, size_t num) const {
+  float new_pt[3];
+  for (size_t id = 0; id < num; id++) {
+    for (int k = 0; k < 3; k++) {
+      new_pt[k] = Dot3(mat_ + k * 3, pt + id * 3);
+    }
+    std::memcpy(pt + id * 3, new_pt, 3 * sizeof(float));
+  }
+}
+
+void Rotation::FillMat(const float* ax, float theta) {
+  float c = std::cos(theta);
+  float s = std::sin(theta);
+  float cc = 1 - c;
+  mat_[0] = ax[0] * ax[0] * cc + c;
+  mat_[1] = ax[0] * ax[1] * cc - ax[2] * s;
+  mat_[2] = ax[0] * ax[2] * cc + ax[1] * s;
+  mat_[3] = ax[0] * ax[1] * cc + ax[2] * s;
+  mat_[4] = ax[1] * ax[1] * cc + c;
+  mat_[5] = ax[1] * ax[2] * cc - ax[0] * s;
+  mat_[6] = ax[0] * ax[2] * cc - ax[1] * s;
+  mat_[7] = ax[1] * ax[2] * cc + ax[0] * s;
+  mat_[8] = ax[2] * ax[2] * cc + c;
+}
+
+
 void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num) {
   if (pop_size <= 0) {
     return;
@@ -421,6 +488,22 @@ void SampleSph(float radii, float* out_pt, size_t sample_num) {
   }
   for (size_t i = 0; i < sample_num * 3; i++) {
     out_pt[i] *= radii;
+  }
+}
+
+void SampleBall(float radii, float* out_pt, size_t sample_num) {
+  auto* rng = RandomNumberGenerator::GetInstance();
+  for (size_t i = 0; i < sample_num; i++) {
+    float u = rng->GetUniform();
+    float r = std::cbrt(u) * radii;
+    float z = (rng->GetUniform() * 2 - 1.0f) * r;
+    float rr = std::sqrt(r * r - z * z);
+    float q = rng->GetUniform() * 2 * math::kPi;
+    float x = std::cos(q) * rr;
+    float y = std::sin(q) * rr;
+    out_pt[i * 3 + 0] = x;
+    out_pt[i * 3 + 1] = y;
+    out_pt[i * 3 + 2] = z;
   }
 }
 
@@ -759,14 +842,14 @@ float RandomNumberGenerator::GetUniform() {
 }
 
 
-float RandomNumberGenerator::Get(DistributionType dist, float mean, float std) {
-  switch (dist) {
+float RandomNumberGenerator::Get(Distribution dist) {
+  switch (dist.type) {
     case DistributionType::kUniform:
-      return (GetUniform() - 0.5f) * 2 * std + mean;
+      return (GetUniform() - 0.5f) * 2 * dist.std + dist.mean;
     case DistributionType::kGaussian:
-      return GetGaussian() * std + mean;
+      return GetGaussian() * dist.std + dist.mean;
     case DistributionType::kNoRandom:
-      return mean;
+      return dist.mean;
   }
 }
 
@@ -814,9 +897,7 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t ste
 void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num) {
   auto* rng = RandomNumberGenerator::GetInstance();
   for (size_t i = 0; i < num; i++) {
-    float phi = rng->Get(axis_dist.latitude_dist.type,                       // distribute
-                         axis_dist.latitude_dist.mean * math::kDegreeToRad,  // mean
-                         axis_dist.latitude_dist.std * math::kDegreeToRad);  // standard deviation
+    float phi = rng->Get(axis_dist.latitude_dist) * math::kDegreeToRad;
     if (phi > math::kPi / 2) {
       phi = math::kPi - phi;
     }
@@ -827,9 +908,7 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     if (axis_dist.azimuth_dist.type == DistributionType::kUniform) {
       lambda = rng->GetUniform() * 2 * math::kPi;
     } else {
-      lambda = rng->Get(axis_dist.azimuth_dist.type,                       // distribution
-                        axis_dist.azimuth_dist.mean * math::kDegreeToRad,  // mean
-                        axis_dist.azimuth_dist.std * math::kDegreeToRad);  // standard deviation
+      lambda = rng->Get(axis_dist.azimuth_dist) * math::kDegreeToRad;
     }
 
     data[i * 2 + 0] = lambda;

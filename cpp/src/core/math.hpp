@@ -36,14 +36,21 @@ enum class AngleUnit {
 
 namespace v3 {
 
-class Transform {
+class Rotation {
  public:
-  virtual void operator()(const float*) = 0;
-};
+  Rotation();
+  Rotation(const float* ax, float theta);
+  Rotation(const float* from, const float* to);
 
-class Rotate : public Transform {
- public:
-  void operator()(const float* p) override;
+  Rotation& Chain(const Rotation& rotate);
+  Rotation& Chain(const float* ax, float theta);
+  Rotation& Chain(const float* from, const float* to);
+  void Apply (float* pt, size_t num = 1) const;
+
+ private:
+  void FillMat(const float* ax, float theta);
+
+  float mat_[9];
 };
 
 
@@ -74,6 +81,8 @@ void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt, siz
                        AngleUnit unit = AngleUnit::kDegree);
 
 void SampleSph(float radii, float* out_pt, size_t sample_num = 1);
+
+void SampleBall(float radii, float* out_pt, size_t sample_num = 1);
 
 
 class Mesh {
@@ -217,11 +226,18 @@ enum class DistributionType {
 };
 
 
+struct Distribution {
+  DistributionType type;
+  float mean;
+  float std;
+};
+
+
 class RandomNumberGenerator {
  public:
   float GetGaussian();
   float GetUniform();
-  float Get(DistributionType dist, float mean, float std);
+  float Get(Distribution dist);
   void Reset();
 
   static RandomNumberGenerator* GetInstance();
@@ -313,13 +329,6 @@ std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& 
 void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Vec3f>& pts, std::vector<TriangleIdx>& faces);
 void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n, std::vector<int>& pts_idx,
                              std::vector<TriangleIdx>& faces);
-
-
-struct Distribution {
-  DistributionType type;
-  float mean;
-  float std;
-};
 
 
 struct AxisDistribution {

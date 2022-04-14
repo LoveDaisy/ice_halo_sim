@@ -9,6 +9,7 @@
 #include <utility>
 #include <variant>
 
+#include "context/crystal_config.hpp"
 #include "context/light_config.hpp"
 #include "core/core_def.hpp"
 #include "core/crystal.hpp"
@@ -728,13 +729,46 @@ std::unique_ptr<CrystalPtrU[]> SampleMsCrystal(const SimConfig* config) {
   for (const auto& m : config->ms_param_) {
     total += m.crystal_info_.size();
   }
+  auto* rng = RandomNumberGenerator::GetInstance();
   std::unique_ptr<CrystalPtrU[]> crystals{ new CrystalPtrU[total]{} };
   auto* p = crystals.get();
   for (const auto& m : config->ms_param_) {
     for (const auto& c : m.crystal_info_) {
-      // TODO: Sample current scattering crystals
-      // TODO: and set origin
-      *p = Crystal::CreatePrism(1.2f);
+      // Sample current scattering crystals
+      if (std::holds_alternative<PrismCrystalParam>(c.crystal_.param_)) {
+        const auto& param = std::get<PrismCrystalParam>(c.crystal_.param_);
+        float h = rng->Get(param.h_);
+        *p = Crystal::CreatePrism(h);
+        // TODO: prism face distance
+      } else if (std::holds_alternative<PyramidCrystalParam>(c.crystal_.param_)) {
+        const auto& param = std::get<PyramidCrystalParam>(c.crystal_.param_);
+        // TODO:
+      }
+      p[0]->config_id_ = c.crystal_.id_;
+
+      // Set axis orientation
+      {
+        float lon = rng->Get(c.crystal_.axis_.azimuth_dist) * math::kDegreeToRad;
+        float lat = rng->Get(c.crystal_.axis_.latitude_dist) * math::kDegreeToRad;
+        float roll = rng->Get(c.crystal_.axis_.roll_dist) * math::kDegreeToRad;
+        float axis[9]{ 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+        auto rot = Rotation(axis + 6, roll).Chain(axis + 3, math::kPi / 2 - lat).Chain(axis + 6, lon);
+        p[0]->Rotate(rot);
+      }
+
+      // Set origin
+      if (std::holds_alternative<BoxRange>(c.crystal_.range_)) {
+        const auto& range = std::get<BoxRange>(c.crystal_.range_);
+        float x = rng->GetUniform() * (range.x_.upper_ - range.x_.lower_) + range.x_.lower_;
+        float y = rng->GetUniform() * (range.y_.upper_ - range.y_.lower_) + range.y_.lower_;
+        float z = rng->GetUniform() * (range.z_.upper_ - range.z_.lower_) + range.z_.lower_;
+        p[0]->Translate(x, y, z);
+      } else if (std::holds_alternative<BallRange>(c.crystal_.range_)) {
+        const auto& range = std::get<BallRange>(c.crystal_.range_);
+        float origin[3];
+        SampleBall(range.radii_, origin);
+        p[0]->Translate(origin[0] + range.center_[0], origin[1] + range.center_[1], origin[2] + range.center_[2]);
+      }
       p++;
     }
   }
@@ -1121,8 +1155,7 @@ void Simulator::InitMainAxis(const CrystalContext* ctx, float* axis) {
     // Random roll, ignore other parameters.
     axis[2] = rng->GetUniform() * 2 * math::kPi;
   } else {
-    axis[2] =
-        rng->Get(axis_dist.roll_dist.type, axis_dist.roll_dist.mean, axis_dist.roll_dist.std) * math::kDegreeToRad;
+    axis[2] = rng->Get(axis_dist.roll_dist) * math::kDegreeToRad;
   }
 }
 

@@ -1025,6 +1025,13 @@ Crystal::Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const in
   mesh_.SetTriangle(triangle_idx);
 
   // Initialize other pre-computed data
+  ComputeCacheData();
+}
+
+void Crystal::ComputeCacheData() {
+  auto triangle_cnt = mesh_.GetTriangleCnt();
+  const auto* vtx = mesh_.GetVtxPtr(0);
+  const auto* triangle_idx = mesh_.GetTrianglePtr(0);
   float m[3];
   for (size_t i = 0; i < triangle_cnt; i++) {
     // face_v_
@@ -1103,6 +1110,21 @@ const float* Crystal::GetOrigin() const {
 
 IdType Crystal::GetFn(int /*fid*/) const {
   return 1u;  // TODO:
+}
+
+Crystal& Crystal::Rotate(const Rotation& r) {
+  auto vtx_cnt = mesh_.GetVtxCnt();
+  auto* vtx = mesh_.GetVtxPtr(0);
+  r.Apply(vtx, vtx_cnt);
+  ComputeCacheData();
+  return *this;
+}
+
+Crystal& Crystal::Translate(float dx, float dy, float dz) {
+  origin_[0] += dx;
+  origin_[1] += dy;
+  origin_[2] += dz;
+  return *this;
 }
 
 float Crystal::GetRefractiveIndex(float wl) const {

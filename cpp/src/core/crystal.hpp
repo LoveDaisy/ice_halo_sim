@@ -46,6 +46,8 @@ class Crystal {
   const float* GetOrigin() const;
 
   IdType GetFn(int fid) const;
+  Crystal& Rotate(const Rotation& r);
+  Crystal& Translate(float dx, float dy, float dz);
 
   float GetRefractiveIndex(float wl) const;
 
@@ -53,6 +55,8 @@ class Crystal {
 
  private:
   Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx);
+
+  void ComputeCacheData();
 
   Mesh mesh_;
   float origin_[3];                         // world origin
