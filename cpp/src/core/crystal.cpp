@@ -1018,9 +1018,9 @@ CrystalPtrU Crystal::CreatePrism(float h) {
 }
 
 Crystal::Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx)
-    : mesh_(vtx_cnt, triangle_cnt), face_v_(new float[triangle_cnt * 9]{}), face_ev_(new float[triangle_cnt * 6]{}),
-      face_n_(new float[triangle_cnt * 3]{}), face_area_(new float[triangle_cnt]{}),
-      face_coord_tf_(new float[triangle_cnt * 12]{}) {
+    : mesh_(vtx_cnt, triangle_cnt), origin_{}, face_v_(new float[triangle_cnt * 9]{}),
+      face_ev_(new float[triangle_cnt * 6]{}), face_n_(new float[triangle_cnt * 3]{}),
+      face_area_(new float[triangle_cnt]{}), face_coord_tf_(new float[triangle_cnt * 12]{}) {
   mesh_.SetVtx(vtx);
   mesh_.SetTriangle(triangle_idx);
 
@@ -1095,6 +1095,10 @@ const float* Crystal::GetFaceArea() const {
 
 const float* Crystal::GetFaceCoordTf() const {
   return face_coord_tf_.get();
+}
+
+const float* Crystal::GetOrigin() const {
+  return origin_;
 }
 
 IdType Crystal::GetFn(int /*fid*/) const {

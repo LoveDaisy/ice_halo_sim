@@ -28,8 +28,6 @@ enum class CrystalType {
 
 namespace v3 {
 
-using IdType = uint16_t;
-
 class Crystal;
 using CrystalPtrS = std::shared_ptr<Crystal>;
 using CrystalPtrU = std::unique_ptr<Crystal>;
@@ -45,6 +43,7 @@ class Crystal {
   const float* GetFaceNorm() const;
   const float* GetFaceArea() const;
   const float* GetFaceCoordTf() const;
+  const float* GetOrigin() const;
 
   IdType GetFn(int fid) const;
 
@@ -56,6 +55,7 @@ class Crystal {
   Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx);
 
   Mesh mesh_;
+  float origin_[3];                         // world origin
   std::unique_ptr<float[]> face_v_;         // vertex coordinate of every face. 9 * face_cnt
   std::unique_ptr<float[]> face_ev_;        // edge vector [v0v1, v0v2]. 6 * face_cnt
   std::unique_ptr<float[]> face_n_;         // normal of every face. 3 * face_cnt

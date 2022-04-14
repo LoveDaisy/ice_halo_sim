@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <random>
+#include <variant>
 #include <vector>
 
 #include "core/core_def.hpp"
@@ -46,12 +47,33 @@ class Rotate : public Transform {
 };
 
 
+struct Span {
+  float lower_;
+  float upper_;
+};
+
+struct BoxRange {
+  Span x_;
+  Span y_;
+  Span z_;
+};
+
+struct BallRange {
+  float radii_;
+  float center_[3];
+};
+
+using SpaceRange = std::variant<BoxRange, BallRange>;
+
+
 void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num = 1);
 
 void SampleTrianglePoint(const float* vertices, float* out_pt, size_t sample_num = 1);
 
 void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt, size_t sample_num = 1,
                        AngleUnit unit = AngleUnit::kDegree);
+
+void SampleSph(float radii, float* out_pt, size_t sample_num = 1);
 
 
 class Mesh {

@@ -3,15 +3,13 @@
 
 #include <atomic>
 #include <cstddef>
-#include <cstring>
 #include <memory>
-#include <vector>
 
 #include "context/context.hpp"
 #include "core/core_def.hpp"
-#include "core/crystal.hpp"
 #include "core/optics.hpp"
 #include "io/serialize.hpp"
+#include "process/protocol.hpp"
 #include "util/threading_pool.hpp"
 
 namespace icehalo {
@@ -142,74 +140,6 @@ class SimulationData : public ISerializable {
 
 namespace v3 {
 
-class SimConfig {
- public:
-  float sun_altitude_;
-  float sun_diameter_;
-
-  float wl_;  // wavelength
-
-  int ray_num_;
-  int max_hits_;
-
-  int ms_num_;
-  float ms_prob_;
-  CrystalPtrS ms_crystal_[kMaxMsNum];
-};
-
-using SimConfigPtrS = std::shared_ptr<SimConfig>;
-using SimConfigPtrU = std::unique_ptr<SimConfig>;
-
-
-class RaypathHashHelper {
-  // Use SDBM algorithm. See http://www.cse.yorku.ca/~oz/hash.html for detail.
- public:
-  RaypathHashHelper& operator<<(IdType c);
-  size_t GetHash() const;
-
- private:
-  static constexpr unsigned kMagic = 65599u;
-  size_t hash_ = 0;
-};
-
-
-struct RaypathHash {
-  size_t operator()(const std::vector<IdType>& rp);
-};
-
-
-class SimData {
- public:
-  SimData();
-  SimData(size_t capacity);
-
-  // Following methods are for convinient access to raw pointer
-  float* d() const { return d_.get(); }
-  float* p() const { return p_.get(); }
-  float* w() const { return w_.get(); }
-  int* fid() const { return fid_.get(); }
-  float* prev_p() const { return prev_p_.get(); }
-  RaypathHashHelper* rp_record() const { return rp_record_.get(); }
-
-  void Reset(size_t capacity);
-  bool Empty() const;
-
-  size_t size_;
-  size_t capacity_;
-  std::unique_ptr<float[]> d_;
-  std::unique_ptr<float[]> p_;
-  std::unique_ptr<float[]> w_;
-  std::unique_ptr<int[]> fid_;
-  std::unique_ptr<float[]> prev_p_;
-  std::unique_ptr<RaypathHashHelper[]> rp_record_;
-
-  size_t ms_idx_;
-  CrystalPtrS ms_crystal[kMaxMsNum];
-};
-
-using SimDataPtrS = std::shared_ptr<SimData>;
-using SimDataPtrU = std::unique_ptr<SimData>;
-
 template <class T>
 class Queue;
 
@@ -225,14 +155,14 @@ class Simulator {
     kRunning,
   };
 
-  Simulator(QueuePtrS<SimConfigPtrU> config_queue, QueuePtrS<SimDataPtrU> data_queue);
+  Simulator(QueuePtrS<SimConfigPtrU> config_queue, QueuePtrS<SimBasicDataPtrU> data_queue);
 
   void Run();
   void Stop();
 
  private:
   QueuePtrS<SimConfigPtrU> config_queue_;
-  QueuePtrS<SimDataPtrU> data_queue_;
+  QueuePtrS<SimBasicDataPtrU> data_queue_;
   std::atomic_bool stop_;
 };
 

@@ -409,6 +409,21 @@ void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt, siz
   }
 }
 
+void SampleSph(float radii, float* out_pt, size_t sample_num) {
+  auto* rng = RandomNumberGenerator::GetInstance();
+  for (size_t i = 0; i < sample_num; i++) {
+    auto z = rng->GetUniform() * 2 - 1;
+    float r = std::sqrt(1.0f - z * z);
+    float q = rng->GetUniform() * 2 * math::kPi;
+    out_pt[i * 3 + 0] = std::cos(q) * r;
+    out_pt[i * 3 + 1] = std::sin(q) * r;
+    out_pt[i * 3 + 2] = z;
+  }
+  for (size_t i = 0; i < sample_num * 3; i++) {
+    out_pt[i] *= radii;
+  }
+}
+
 
 Mesh::Mesh(size_t vtx_cnt, size_t triangle_cnt)
     : vtx_cnt_(vtx_cnt), triangle_cnt_(triangle_cnt), vertices_(new float[vtx_cnt * 3]{}),

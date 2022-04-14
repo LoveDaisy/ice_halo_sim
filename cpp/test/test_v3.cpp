@@ -7,7 +7,10 @@
 #include <thread>
 
 #include "context/context.hpp"
+#include "context/crystal_config.hpp"
+#include "context/light_config.hpp"
 #include "core/crystal.hpp"
+#include "core/math.hpp"
 #include "process/simulation.hpp"
 #include "util/log.hpp"
 #include "util/queue.hpp"
@@ -30,17 +33,32 @@ class V3Test : public ::testing::Test {
 
 TEST_F(V3Test, Simple) {
   auto config_queue = std::make_shared<v3::Queue<v3::SimConfigPtrU>>();
-  auto data_queue = std::make_shared<v3::Queue<v3::SimDataPtrU>>();
+  auto data_queue = std::make_shared<v3::Queue<v3::SimBasicDataPtrU>>();
 
   auto config = std::make_unique<v3::SimConfig>();
-  config->sun_altitude_ = 20;
-  config->sun_diameter_ = 0.5;
-  config->wl_ = 550.0f;
   config->ray_num_ = 2;
   config->max_hits_ = 7;
-  config->ms_num_ = 1;
-  config->ms_prob_ = 1.0f;
-  config->ms_crystal_[0] = v3::Crystal::CreatePrism(0.3f);
+  auto& light_source = config->light_source_;
+  light_source.param_ = v3::SunParam{ 20.0f, 0.5f };
+  light_source.wl_param_.emplace_back(v3::WlParam{ 550.0f, 1.0f });
+  config->ms_param_.emplace_back(v3::SimConfig::SimMsParam{});
+  auto& ms_param = config->ms_param_[0];
+  ms_param.ms_prob_ = 0.0f;
+  ms_param.crystal_info_.emplace_back(v3::SimConfig::SimCrystalInfo{});
+  auto& crystal_info = ms_param.crystal_info_[0];
+  crystal_info.proportion_ = 10.0f;
+  crystal_info.crystal_.id_ = 1;
+  crystal_info.crystal_.param_ =
+      v3::PrismCrystalParam{ Distribution{ DistributionType::kNoRandom, 1.2f, 0.0f },
+                             { Distribution{ DistributionType::kNoRandom, math::kSqrt3_4, 0.0f },
+                               Distribution{ DistributionType::kNoRandom, math::kSqrt3_4, 0.0f },
+                               Distribution{ DistributionType::kNoRandom, math::kSqrt3_4, 0.0f },
+                               Distribution{ DistributionType::kNoRandom, math::kSqrt3_4, 0.0f },
+                               Distribution{ DistributionType::kNoRandom, math::kSqrt3_4, 0.0f },
+                               Distribution{ DistributionType::kNoRandom, math::kSqrt3_4, 0.0f } } };
+  crystal_info.crystal_.axis_.azimuth_dist = { DistributionType::kUniform, 0.0f, 0.0f };
+  crystal_info.crystal_.axis_.latitude_dist = { DistributionType::kNoRandom, 90.0f, 0.0f };
+  crystal_info.crystal_.axis_.roll_dist = { DistributionType::kUniform, 0.0f, 0.0f };
   config_queue->Emplace(std::move(config));
 
   v3::Simulator simulator(config_queue, data_queue);
@@ -57,11 +75,12 @@ TEST_F(V3Test, Simple) {
       }
       LOG_DEBUG("p  d  w");
       for (size_t i = 0; i < data->size_; i++) {
-        LOG_DEBUG("%.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f", data->p()[i * 3 + 0], data->p()[i * 3 + 1],
-                  data->p()[i * 3 + 2], data->d()[i * 3 + 0], data->d()[i * 3 + 1], data->d()[i * 3 + 2], data->w()[i]);
-        std::memcpy(output_data_ptr + offset * 7 + 0, data->p() + i * 3, 3 * sizeof(float));
-        std::memcpy(output_data_ptr + offset * 7 + 3, data->d() + i * 3, 3 * sizeof(float));
-        std::memcpy(output_data_ptr + offset * 7 + 6, data->w() + i * 1, 1 * sizeof(float));
+        const auto& ray = data->rays_[i];
+        LOG_DEBUG("%.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f", ray.p_[0], ray.p_[1], ray.p_[2], ray.d_[0], ray.d_[1],
+                  ray.d_[2], ray.w_);
+        std::memcpy(output_data_ptr + offset * 7 + 0, ray.p_, 3 * sizeof(float));
+        std::memcpy(output_data_ptr + offset * 7 + 3, ray.d_, 3 * sizeof(float));
+        output_data_ptr[offset * 7 + 6] = ray.w_;
         offset++;
       }
     }
