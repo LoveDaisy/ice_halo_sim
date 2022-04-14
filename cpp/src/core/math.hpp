@@ -19,9 +19,13 @@ struct AxisDistribution;
 namespace math {
 
 constexpr float kPi = 3.14159265359f;
+constexpr float kPi_2 = kPi / 2.0f;
+constexpr float kPi_3 = kPi / 3.0f;
+constexpr float kPi_4 = kPi / 4.0f;
+constexpr float kPi_6 = kPi / 6.0f;
 constexpr float kSqrt3 = 1.73205080757f;
-constexpr float kSqrt3_2 = 0.86602540378f;
-constexpr float kSqrt3_4 = 0.43301270189f;
+constexpr float kSqrt3_2 = kSqrt3 / 2.0f;
+constexpr float kSqrt3_4 = kSqrt3 / 4.0f;
 constexpr float kFloatEps = 1e-5;
 constexpr float kDegreeToRad = kPi / 180.0f;
 constexpr float kRadToDegree = 180.0f / kPi;
@@ -45,7 +49,7 @@ class Rotation {
   Rotation& Chain(const Rotation& rotate);
   Rotation& Chain(const float* ax, float theta);
   Rotation& Chain(const float* from, const float* to);
-  void Apply (float* pt, size_t num = 1) const;
+  void Apply(float* pt, size_t num = 1) const;
 
  private:
   void FillMat(const float* ax, float theta);

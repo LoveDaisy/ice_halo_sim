@@ -898,10 +898,10 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
   auto* rng = RandomNumberGenerator::GetInstance();
   for (size_t i = 0; i < num; i++) {
     float phi = rng->Get(axis_dist.latitude_dist) * math::kDegreeToRad;
-    if (phi > math::kPi / 2) {
+    if (phi > math::kPi_2) {
       phi = math::kPi - phi;
     }
-    if (phi < -math::kPi / 2) {
+    if (phi < -math::kPi_2) {
       phi = -math::kPi - phi;
     }
     float lambda = 0;

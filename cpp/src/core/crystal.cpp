@@ -513,7 +513,7 @@ int Crystal::MatchedVertexes(size_t idx1, size_t idx2) const {
 
 
 CrystalPtrU Crystal::CreateHexPrism(float h) {
-  using math::kPi;
+  using math::kPi_6;
 
   std::vector<Vec3f> vertexes;
   std::vector<TriangleIdx> faces;
@@ -521,14 +521,14 @@ CrystalPtrU Crystal::CreateHexPrism(float h) {
   faces.reserve(20);
 
   for (int i = 0; i < 6; ++i) {
-    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6),  // x
-                          sin(static_cast<float>(2 * i - 1) * kPi / 6),  // y
-                          h);                                            // z
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi_6),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi_6),  // y
+                          h);                                          // z
   }
   for (int i = 0; i < 6; ++i) {
-    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6),  // x
-                          sin(static_cast<float>(2 * i - 1) * kPi / 6),  // y
-                          -h);                                           // z
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi_6),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi_6),  // y
+                          -h);                                         // z
   }
 
   faces.emplace_back(0, 1, 2);
@@ -556,7 +556,8 @@ CrystalPtrU Crystal::CreateHexPyramid(float h1, float h2, float h3) {
 
 
 CrystalPtrU Crystal::CreateCubicPyramid(float h1, float h2) {
-  using math::kPi;
+  using math::kPi_2;
+  using math::kPi_4;
 
   h1 = std::min(h1, 1.f);
   h2 = std::min(h2, 1.f);
@@ -566,19 +567,19 @@ CrystalPtrU Crystal::CreateCubicPyramid(float h1, float h2) {
   vertexes.reserve(12);
 
   for (int i = 0; i < 4; i++) {
-    vertexes.emplace_back(cos(kPi / 4 + kPi / 2 * static_cast<float>(i)) * (1 - h1),  // x
-                          sin(kPi / 4 + kPi / 2 * static_cast<float>(i)) * (1 - h1),  // y
-                          h1);                                                        // z
+    vertexes.emplace_back(cos(kPi_4 + kPi_2 * static_cast<float>(i)) * (1 - h1),  // x
+                          sin(kPi_4 + kPi_2 * static_cast<float>(i)) * (1 - h1),  // y
+                          h1);                                                    // z
   }
   for (int i = 0; i < 4; i++) {
-    vertexes.emplace_back(cos(kPi / 4 + kPi / 2 * static_cast<float>(i)),  // x
-                          sin(kPi / 4 + kPi / 2 * static_cast<float>(i)),  // y
-                          0);                                              // z
+    vertexes.emplace_back(cos(kPi_4 + kPi_2 * static_cast<float>(i)),  // x
+                          sin(kPi_4 + kPi_2 * static_cast<float>(i)),  // y
+                          0);                                          // z
   }
   for (int i = 0; i < 4; i++) {
-    vertexes.emplace_back(cos(kPi / 4 + kPi / 2 * static_cast<float>(i)) * (1 - h2),  // x
-                          sin(kPi / 4 + kPi / 2 * static_cast<float>(i)) * (1 - h2),  // y
-                          -h2);                                                       // z
+    vertexes.emplace_back(cos(kPi_4 + kPi_2 * static_cast<float>(i)) * (1 - h2),  // x
+                          sin(kPi_4 + kPi_2 * static_cast<float>(i)) * (1 - h2),  // y
+                          -h2);                                                   // z
   }
 
   faces.emplace_back(0, 1, 2);
@@ -610,7 +611,7 @@ CrystalPtrU Crystal::CreateHexPyramid(int i1, int i4,                  // Miller
 CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4,  // upper Miller index
                                       int lower_idx1, int lower_idx4,  // lower Miller index
                                       float h1, float h2, float h3) {  // heights
-  using math::kPi;
+  using math::kPi_6;
 
   float H1 = kC * static_cast<float>(upper_idx1 * 1.0 / upper_idx4);
   float H3 = kC * static_cast<float>(lower_idx1 * 1.0 / lower_idx4);
@@ -623,24 +624,24 @@ CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4,  // upper 
   faces.reserve(44);
 
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h1),  // x
-                          sin(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h1),  // y
-                          h2 + h1 * H1);                                            // z
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi_6) * (1 - h1),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi_6) * (1 - h1),  // y
+                          h2 + h1 * H1);                                          // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6),  // x
-                          sin(static_cast<float>(2 * i - 1) * kPi / 6),  // y
-                          h2);                                           // z
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi_6),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi_6),  // y
+                          h2);                                         // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6),  // x
-                          sin(static_cast<float>(2 * i - 1) * kPi / 6),  // y
-                          -h2);                                          // z
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi_6),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi_6),  // y
+                          -h2);                                        // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h3),  // x
-                          sin(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h3),  // y
-                          -h2 - h3 * H3);                                           // z
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi_6) * (1 - h3),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi_6) * (1 - h3),  // y
+                          -h2 - h3 * H3);                                         // z
   }
 
   faces.emplace_back(0, 1, 2);
@@ -670,7 +671,7 @@ CrystalPtrU Crystal::CreateHexPyramid(int upper_idx1, int upper_idx4,  // upper 
 CrystalPtrU Crystal::CreateHexPyramid(float angle1, float angle2,      // wedge angles
                                       float h1, float h2, float h3) {  // heights
   using math::kDegreeToRad;
-  using math::kPi;
+  using math::kPi_6;
   using math::kSqrt3;
 
   angle1 *= kDegreeToRad;
@@ -694,24 +695,24 @@ CrystalPtrU Crystal::CreateHexPyramid(float angle1, float angle2,      // wedge 
   faces.reserve(44);
 
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h1),  // x
-                          sin(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h1),  // y
-                          h2 + h1 * H1);                                            // z
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi_6) * (1 - h1),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi_6) * (1 - h1),  // y
+                          h2 + h1 * H1);                                          // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6),  // x
-                          sin(static_cast<float>(2 * i - 1) * kPi / 6),  // y
-                          h2);                                           // z
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi_6),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi_6),  // y
+                          h2);                                         // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6),  // x
-                          sin(static_cast<float>(2 * i - 1) * kPi / 6),  // y
-                          -h2);                                          // z
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi_6),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi_6),  // y
+                          -h2);                                        // z
   }
   for (int i = 0; i < 6; i++) {
-    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h3),  // x
-                          sin(static_cast<float>(2 * i - 1) * kPi / 6) * (1 - h3),  // y
-                          -h2 - h3 * H3);                                           // z
+    vertexes.emplace_back(cos(static_cast<float>(2 * i - 1) * kPi_6) * (1 - h3),  // x
+                          sin(static_cast<float>(2 * i - 1) * kPi_6) * (1 - h3),  // y
+                          -h2 - h3 * H3);                                         // z
   }
 
   faces.emplace_back(0, 1, 2);

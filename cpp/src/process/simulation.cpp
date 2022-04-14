@@ -750,9 +750,12 @@ std::unique_ptr<CrystalPtrU[]> SampleMsCrystal(const SimConfig* config) {
       {
         float lon = rng->Get(c.crystal_.axis_.azimuth_dist) * math::kDegreeToRad;
         float lat = rng->Get(c.crystal_.axis_.latitude_dist) * math::kDegreeToRad;
+        if (lat > math::kPi_2) {
+          lat = math::kPi - lat;
+        }
         float roll = rng->Get(c.crystal_.axis_.roll_dist) * math::kDegreeToRad;
         float axis[9]{ 1, 0, 0, 0, 1, 0, 0, 0, 1 };
-        auto rot = Rotation(axis + 6, roll).Chain(axis + 3, math::kPi / 2 - lat).Chain(axis + 6, lon);
+        auto rot = Rotation(axis + 6, roll).Chain(axis + 3, math::kPi_2 - lat).Chain(axis + 6, lon);
         p[0]->Rotate(rot);
       }
 
@@ -763,6 +766,7 @@ std::unique_ptr<CrystalPtrU[]> SampleMsCrystal(const SimConfig* config) {
         float y = rng->GetUniform() * (range.y_.upper_ - range.y_.lower_) + range.y_.lower_;
         float z = rng->GetUniform() * (range.z_.upper_ - range.z_.lower_) + range.z_.lower_;
         p[0]->Translate(x, y, z);
+        // TODO: multi-scattering streetlight?
       } else if (std::holds_alternative<BallRange>(c.crystal_.range_)) {
         const auto& range = std::get<BallRange>(c.crystal_.range_);
         float origin[3];
