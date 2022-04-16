@@ -9,13 +9,13 @@
 #include <utility>
 #include <variant>
 
-#include "context/crystal_config.hpp"
-#include "context/light_config.hpp"
 #include "core/core_def.hpp"
 #include "core/crystal.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
-#include "process/protocol.hpp"
+#include "protocol/crystal_config.hpp"
+#include "protocol/light_config.hpp"
+#include "protocol/sim_config.hpp"
 #include "util/log.hpp"
 #include "util/obj_pool.hpp"
 #include "util/queue.hpp"

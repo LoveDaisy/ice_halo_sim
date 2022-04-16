@@ -97,7 +97,7 @@ set(icehalo_core_src
   "${PROJ_SRC_DIR}/core/optics.cpp")
 
 set(icehalo_process_src
-  "${PROJ_SRC_DIR}/process/protocol.cpp"
+  "${PROJ_SRC_DIR}/protocol/sim_config.cpp"
   "${PROJ_SRC_DIR}/process/render.cpp"
   "${PROJ_SRC_DIR}/process/simulation.cpp")
 

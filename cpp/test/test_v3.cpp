@@ -7,11 +7,11 @@
 #include <thread>
 
 #include "context/context.hpp"
-#include "context/crystal_config.hpp"
-#include "context/light_config.hpp"
 #include "core/crystal.hpp"
 #include "core/math.hpp"
 #include "process/simulation.hpp"
+#include "protocol/crystal_config.hpp"
+#include "protocol/light_config.hpp"
 #include "util/log.hpp"
 #include "util/queue.hpp"
 

@@ -3,9 +3,9 @@
 
 #include <memory>
 
-#include "context/crystal_config.hpp"
-#include "context/light_config.hpp"
 #include "core/core_def.hpp"
+#include "protocol/crystal_config.hpp"
+#include "protocol/light_config.hpp"
 
 namespace icehalo {
 namespace v3 {
