@@ -38,7 +38,7 @@ void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
     for (const auto& j_d : j.at("face_distance")) {
       j_d.get_to(p.d_[i]);
       i++;
-      if (i >= 5) {
+      if (i >= 6) {
         break;
       }
     }
