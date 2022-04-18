@@ -13,9 +13,7 @@
 #include "core/crystal.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
-#include "protocol/crystal_config.hpp"
-#include "protocol/light_config.hpp"
-#include "protocol/sim_config.hpp"
+#include "protocol/protocol.hpp"
 #include "util/log.hpp"
 #include "util/obj_pool.hpp"
 #include "util/queue.hpp"
@@ -672,8 +670,8 @@ void InitSimData(const LightSourceConfig& light_config, size_t ray_num, size_t r
   out_data->size_ = ray_num;
 }
 
-SimBasicDataPtrU CollectData(const SimConfig::SimMsParam& ms_param, const Crystal* crystal,  // input
-                             SimBufferData* buffer_data, SimBufferData* init_data) {         // output
+SimBasicDataPtrU CollectData(const MsInfo& ms_info, const Crystal* crystal,           // input
+                             SimBufferData* buffer_data, SimBufferData* init_data) {  // output
   size_t ray_num = buffer_data[1].size_ / 2;
   auto* rng = RandomNumberGenerator::GetInstance();
   auto out_data = std::make_unique<SimBasicData>(ray_num);
@@ -682,7 +680,7 @@ SimBasicDataPtrU CollectData(const SimConfig::SimMsParam& ms_param, const Crysta
   for (size_t j = 0; j < ray_num * 2; j++) {
     auto is_total_reflection = buffer_data[1].w_[j] < 0;
     auto is_outgoing = buffer_data[1].fid_[j] < 0 && !is_total_reflection;
-    auto for_next_ms = is_outgoing && (ms_param.ms_prob_ > 0.0f && rng->GetUniform() < ms_param.ms_prob_);
+    auto for_next_ms = is_outgoing && (ms_info.prob_ > 0.0f && rng->GetUniform() < ms_info.prob_);
     // NOTE: If prob > 0 and there is only one scattering, then for_next_ms will be true and no data
     // will be sent to out_data
 
@@ -724,16 +722,16 @@ SimBasicDataPtrU CollectData(const SimConfig::SimMsParam& ms_param, const Crysta
   return out_data;
 }
 
-std::unique_ptr<CrystalPtrU[]> SampleMsCrystal(const SimConfig* config) {
+std::unique_ptr<CrystalPtrU[]> SampleMsCrystal(const SceneConfig* config) {
   size_t total = 0;
-  for (const auto& m : config->ms_param_) {
-    total += m.crystal_info_.size();
+  for (const auto& m : config->ms_) {
+    total += m.setting_.size();
   }
   auto* rng = RandomNumberGenerator::GetInstance();
   std::unique_ptr<CrystalPtrU[]> crystals{ new CrystalPtrU[total]{} };
   auto* p = crystals.get();
-  for (const auto& m : config->ms_param_) {
-    for (const auto& c : m.crystal_info_) {
+  for (const auto& m : config->ms_) {
+    for (const auto& c : m.setting_) {
       // Sample current scattering crystals
       if (std::holds_alternative<PrismCrystalParam>(c.crystal_.param_)) {
         const auto& param = std::get<PrismCrystalParam>(c.crystal_.param_);
@@ -741,7 +739,6 @@ std::unique_ptr<CrystalPtrU[]> SampleMsCrystal(const SimConfig* config) {
         *p = Crystal::CreatePrism(h);
         // TODO: prism face distance
       } else if (std::holds_alternative<PyramidCrystalParam>(c.crystal_.param_)) {
-        const auto& param = std::get<PyramidCrystalParam>(c.crystal_.param_);
         // TODO:
       }
       p[0]->config_id_ = c.crystal_.id_;
@@ -766,12 +763,12 @@ std::unique_ptr<CrystalPtrU[]> SampleMsCrystal(const SimConfig* config) {
   return crystals;
 }
 
-std::unique_ptr<size_t[]> PartitionCrystalRayNum(const SimConfig::SimMsParam& ms_param, int ray_num) {
-  auto crystal_cnt = ms_param.crystal_info_.size();
+std::unique_ptr<size_t[]> PartitionCrystalRayNum(const MsInfo& ms_info, int ray_num) {
+  auto crystal_cnt = ms_info.setting_.size();
   std::unique_ptr<size_t[]> c_num{ new size_t[crystal_cnt]{} };
   std::unique_ptr<float[]> prob{ new float[crystal_cnt + 1]{} };
   for (size_t ci = 0; ci < crystal_cnt; ci++) {
-    prob[ci + 1] = ms_param.crystal_info_[ci].proportion_ + prob[ci];
+    prob[ci + 1] = ms_info.setting_[ci].crystal_proportion_ + prob[ci];
   }
   for (size_t ci = 0; ci < crystal_cnt; ci++) {
     prob[ci] /= prob[crystal_cnt];
@@ -792,7 +789,7 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const SimConfig::SimMsParam& ms
 }
 
 
-Simulator::Simulator(QueuePtrS<SimConfigPtrU> config_queue, QueuePtrS<SimBasicDataPtrU> data_queue)
+Simulator::Simulator(QueuePtrS<SceneConfigPtrU> config_queue, QueuePtrS<SimBasicDataPtrU> data_queue)
     : config_queue_(config_queue), data_queue_(data_queue), stop_(false) {}
 
 void Simulator::Run() {
@@ -817,8 +814,8 @@ void Simulator::Run() {
 
     bool first_ms = true;
     size_t ms_ci = 0;
-    for (const auto& m : config->ms_param_) {
-      auto ms_crystal_cnt = m.crystal_info_.size();
+    for (const auto& m : config->ms_) {
+      auto ms_crystal_cnt = m.setting_.size();
       auto crystal_ray_num = PartitionCrystalRayNum(m, ray_num);
 
       // NOTE: ray_num will change between different scatterings.
@@ -833,12 +830,12 @@ void Simulator::Run() {
 
         // 1. Initialize data
         const SimBufferData* init_ptr = first_ms ? nullptr : init_data + 0;
-        InitSimData(config->light_source_, curr_ray_num, rn_offset,            // input
-                    m.crystal_info_[ci].crystal_.id_, curr_crystal, init_ptr,  // input
-                    buffer_data + 0);                                          // output
+        InitSimData(config->light_source_, curr_ray_num, rn_offset,       // input
+                    m.setting_[ci].crystal_.id_, curr_crystal, init_ptr,  // input
+                    buffer_data + 0);                                     // output
 
         // 2. Start tracing
-        for (int i = 0; i < config->max_hits_; i++) {
+        for (size_t i = 0; i < config->max_hits_; i++) {
           // 2.1 HitSurface.
           HitSurface(curr_crystal, refractive_index, curr_ray_num,                  // Input
                      buffer_data[0].d(), buffer_data[0].fid(), buffer_data[0].w(),  // Input

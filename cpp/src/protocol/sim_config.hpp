@@ -6,35 +6,15 @@
 #include "core/core_def.hpp"
 #include "protocol/crystal_config.hpp"
 #include "protocol/light_config.hpp"
+#include "protocol/protocol.hpp"
 
 namespace icehalo {
 namespace v3 {
 
 // ========== Producer & consumer protocol ==========
 // ---------- 1. For producer ----------
-
-struct SimConfig {
-  // ----- Some inner struct -----
-  struct SimCrystalInfo {
-    CrystalConfig crystal_;
-    float proportion_;
-  };
-
-  struct SimMsParam {
-    float ms_prob_;
-    std::vector<SimCrystalInfo> crystal_info_;
-  };
-
-  // ----- Data member -----
-  int ray_num_;
-  int max_hits_;
-  LightSourceConfig light_source_;
-  std::vector<SimMsParam> ms_param_;
-};
-
-using SimConfigPtrS = std::shared_ptr<SimConfig>;
-using SimConfigPtrU = std::unique_ptr<SimConfig>;
-
+using SceneConfigPtrU = std::unique_ptr<SceneConfig>;
+using SceneConfigPtrS = std::shared_ptr<SceneConfig>;
 
 // ---------- 2. For consumer ----------
 

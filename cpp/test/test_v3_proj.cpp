@@ -23,23 +23,23 @@ class V3TestProj : public ::testing::Test {
 
 
 TEST_F(V3TestProj, SimpleProj) {
-  auto config_queue = std::make_shared<v3::Queue<v3::SimConfigPtrU>>();
+  auto config_queue = std::make_shared<v3::Queue<v3::SceneConfigPtrU>>();
   auto data_queue = std::make_shared<v3::Queue<v3::SimBasicDataPtrU>>();
 
   constexpr int kMaxHits = 7;
 
-  auto config = std::make_unique<v3::SimConfig>();
+  auto config = std::make_unique<v3::SceneConfig>();
   config->ray_num_ = 2;
   config->max_hits_ = kMaxHits;
   auto& light_source = config->light_source_;
   light_source.param_ = v3::SunParam{ 20.0f, 0.5f };
   light_source.wl_param_.emplace_back(v3::WlParam{ 550.0f, 1.0f });
-  config->ms_param_.emplace_back(v3::SimConfig::SimMsParam{});
-  auto& ms_param = config->ms_param_[0];
-  ms_param.ms_prob_ = 0.0f;
-  ms_param.crystal_info_.emplace_back(v3::SimConfig::SimCrystalInfo{});
-  auto& crystal_info = ms_param.crystal_info_[0];
-  crystal_info.proportion_ = 10.0f;
+  config->ms_.emplace_back(v3::MsInfo{});
+  auto& ms_param = config->ms_[0];
+  ms_param.prob_ = 0.0f;
+  ms_param.setting_.emplace_back(v3::ScatteringSetting{});
+  auto& crystal_info = ms_param.setting_[0];
+  crystal_info.crystal_proportion_ = 10.0f;
   crystal_info.crystal_.id_ = 1;
   crystal_info.crystal_.param_ =
       v3::PrismCrystalParam{ Distribution{ DistributionType::kNoRandom, 1.2f, 0.0f },

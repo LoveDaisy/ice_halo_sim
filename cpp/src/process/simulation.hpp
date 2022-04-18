@@ -155,13 +155,13 @@ class Simulator {
     kRunning,
   };
 
-  Simulator(QueuePtrS<SimConfigPtrU> config_queue, QueuePtrS<SimBasicDataPtrU> data_queue);
+  Simulator(QueuePtrS<SceneConfigPtrU> config_queue, QueuePtrS<SimBasicDataPtrU> data_queue);
 
   void Run();
   void Stop();
 
  private:
-  QueuePtrS<SimConfigPtrU> config_queue_;
+  QueuePtrS<SceneConfigPtrU> config_queue_;
   QueuePtrS<SimBasicDataPtrU> data_queue_;
   std::atomic_bool stop_;
 };

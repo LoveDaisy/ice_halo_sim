@@ -19,8 +19,8 @@ namespace icehalo {
 namespace v3 {
 
 struct ScatteringSetting {
-  FilterConfig filter_id_;
-  CrystalConfig crystal_id_;
+  FilterConfig filter_;
+  CrystalConfig crystal_;
   float crystal_proportion_;
 };
 
@@ -32,7 +32,8 @@ struct MsInfo {
 struct SceneConfig {
   IdType id_;
   LightSourceConfig light_source_;
-  size_t ray_num_;          // For every single wavelength.
+  size_t ray_num_;  // For every single wavelength.
+  size_t max_hits_;
   std::vector<MsInfo> ms_;  // (prob, [scattering_info, ...])
 };
 
