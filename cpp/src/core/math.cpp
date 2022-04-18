@@ -1001,6 +1001,13 @@ void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
   obj.at("zenith").get_to(axis.latitude_dist);
   axis.latitude_dist.mean = 90.0f - axis.latitude_dist.mean;
 
+  axis.azimuth_dist.type = DistributionType::kUniform;
+  axis.azimuth_dist.mean = 0.0f;
+  axis.azimuth_dist.std = 360.0f;
+  axis.roll_dist.type = DistributionType::kUniform;
+  axis.roll_dist.mean = 0.0f;
+  axis.roll_dist.std = 360.0f;
+
   JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "azimuth", axis.azimuth_dist)
   JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "roll", axis.roll_dist)
 }

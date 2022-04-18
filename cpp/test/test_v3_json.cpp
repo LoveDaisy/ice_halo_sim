@@ -66,6 +66,17 @@ TEST_F(V3TestJson, Crystal3) {
     ASSERT_NEAR(x.mean, 1.0f, 1e-5);
     ASSERT_NEAR(x.std, 0.2f, 1e-5);
   }
+
+  const auto& axis = c.axis_;
+  ASSERT_EQ(axis.azimuth_dist.type, DistributionType::kUniform);
+  ASSERT_NEAR(axis.azimuth_dist.mean, 0, 1e-5);
+  ASSERT_NEAR(axis.azimuth_dist.std, 360, 1e-5);
+  ASSERT_EQ(axis.latitude_dist.type, DistributionType::kGaussian);
+  ASSERT_NEAR(axis.latitude_dist.mean, 90, 1e-5);
+  ASSERT_NEAR(axis.latitude_dist.std, 1.2, 1e-5);
+  ASSERT_EQ(axis.roll_dist.type, DistributionType::kUniform);
+  ASSERT_NEAR(axis.roll_dist.mean, 0, 1e-5);
+  ASSERT_NEAR(axis.roll_dist.std, 360, 1e-5);
 }
 
 }  // namespace
