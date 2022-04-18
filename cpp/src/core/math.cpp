@@ -10,6 +10,9 @@
 #include <cstring>
 #include <memory>
 
+#include "io/json_util.hpp"
+#include "util/log.hpp"
+
 
 namespace icehalo {
 
@@ -962,5 +965,45 @@ AxisDistribution::AxisDistribution()
     : azimuth_dist{ DistributionType::kUniform, 0, 0 }, latitude_dist{ DistributionType::kUniform, 0, 0 }, roll_dist{
         DistributionType::kUniform, 0, 0
       } {}
+
+
+void to_json(nlohmann::json& obj, const Distribution& dist) {
+  if (dist.type == DistributionType::kNoRandom) {
+    obj = dist.mean;
+  } else {
+    obj["type"] = dist.type;
+    obj["mean"] = dist.mean;
+    obj["std"] = dist.std;
+  }
+}
+
+void from_json(const nlohmann::json& obj, Distribution& dist) {
+  if (obj.is_number()) {
+    dist.type = DistributionType::kNoRandom;
+    obj.get_to(dist.mean);
+  } else if (obj.is_object()) {
+    JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "type", dist.type)
+    JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "mean", dist.mean)
+    JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "std", dist.std)
+  } else {
+    LOG_ERROR("Cannot recognize distribution!");
+  }
+}
+
+void to_json(nlohmann::json& obj, const AxisDistribution& axis) {
+  obj["zenith"] = axis.latitude_dist;
+  obj["zenith"]["mean"] = 90.0f - axis.latitude_dist.mean;
+  obj["azimuth"] = axis.azimuth_dist;
+  obj["roll"] = axis.roll_dist;
+}
+
+void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
+  obj.at("zenith").get_to(axis.latitude_dist);
+  axis.latitude_dist.mean = 90.0f - axis.latitude_dist.mean;
+
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "azimuth", axis.azimuth_dist)
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "roll", axis.roll_dist)
+}
+
 
 }  // namespace icehalo

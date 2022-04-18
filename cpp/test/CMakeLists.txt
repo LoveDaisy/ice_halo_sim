@@ -35,11 +35,20 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_optics.cpp"
   "${PROJ_TEST_DIR}/test_rng.cpp"
   "${PROJ_TEST_DIR}/test_serialize.cpp"
-  "${PROJ_TEST_DIR}/test_v3.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
 target_include_directories(unit_test
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_test
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} Boost::filesystem Boost::system icehalo_test_lib)
+
+
+add_executable(unit_test_v3
+  "${PROJ_TEST_DIR}/test_v3_json.cpp"
+  "${PROJ_TEST_DIR}/test_v3_proj.cpp"
+  "${PROJ_TEST_DIR}/test_main.cpp")
+target_include_directories(unit_test_v3
+  PRIVATE ${PROJ_TEST_DIR})
+target_link_libraries(unit_test_v3
   PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} Boost::filesystem Boost::system icehalo_test_lib)
 
 
@@ -53,6 +62,9 @@ target_link_libraries(RayTracingTest
 
 add_test(NAME "IceHaloUnitTest" COMMAND unit_test
         "${PROJ_TEST_DIR}/config_01.json"
+        "${CMAKE_CURRENT_BINARY_DIR}")
+add_test(NAME "IceHaloUnitTestV3" COMMAND unit_test_v3
+        "${PROJ_ROOT}/v3_config_example.json"
         "${CMAKE_CURRENT_BINARY_DIR}")
 add_test(NAME "IceHaloRayTracingTest" 
          COMMAND python3 ${PROJ_TEST_DIR}/run_ray_tracing_test.py

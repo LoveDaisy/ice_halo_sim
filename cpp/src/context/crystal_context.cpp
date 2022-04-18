@@ -225,22 +225,6 @@ void CrystalContext::ParseCustomCrystal(const nlohmann::json& obj) {
 }
 
 
-void to_json(nlohmann::json& obj, const AxisDistribution& axis) {
-  obj["zenith"] = axis.latitude_dist;
-  obj["zenith"]["mean"] = 90.0f - axis.latitude_dist.mean;
-  obj["azimuth"] = axis.azimuth_dist;
-  obj["roll"] = axis.roll_dist;
-}
-
-void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
-  obj.at("zenith").get_to(axis.latitude_dist);
-  axis.latitude_dist.mean = 90.0f - axis.latitude_dist.mean;
-
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "azimuth", axis.azimuth_dist)
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "roll", axis.roll_dist)
-}
-
-
 CrystalContext::CrystalContext() : id_(kInvalidId), idx_param_{}, a_param_{}, h_param_{}, d_param_{} {}
 
 

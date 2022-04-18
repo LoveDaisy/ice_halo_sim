@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/core_def.hpp"
+#include "json.hpp"
 
 namespace icehalo {
 
@@ -56,25 +57,6 @@ class Rotation {
 
   float mat_[9];
 };
-
-
-struct Span {
-  float lower_;
-  float upper_;
-};
-
-struct BoxRange {
-  Span x_;
-  Span y_;
-  Span z_;
-};
-
-struct BallRange {
-  float radii_;
-  float center_[3];
-};
-
-using SpaceRange = std::variant<BoxRange, BallRange>;
 
 
 void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num = 1);
@@ -342,6 +324,18 @@ struct AxisDistribution {
   Distribution latitude_dist;
   Distribution roll_dist;
 };
+
+// convertion to & from json object
+NLOHMANN_JSON_SERIALIZE_ENUM(DistributionType, {
+                                                   { DistributionType::kUniform, "uniform" },
+                                                   { DistributionType::kGaussian, "gauss" },
+                                               })
+
+void to_json(nlohmann::json& obj, const Distribution& dist);
+void from_json(const nlohmann::json& obj, Distribution& dist);
+
+void to_json(nlohmann::json& obj, const AxisDistribution& dist);
+void from_json(const nlohmann::json& obj, AxisDistribution& dist);
 
 }  // namespace icehalo
 

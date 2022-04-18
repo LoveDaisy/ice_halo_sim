@@ -6,12 +6,7 @@
 #include <memory>
 #include <thread>
 
-#include "context/context.hpp"
-#include "core/crystal.hpp"
-#include "core/math.hpp"
 #include "process/simulation.hpp"
-#include "protocol/crystal_config.hpp"
-#include "protocol/light_config.hpp"
 #include "util/log.hpp"
 #include "util/queue.hpp"
 
@@ -21,17 +16,13 @@ using namespace std::chrono_literals;
 
 namespace {
 
-class V3Test : public ::testing::Test {
+class V3TestProj : public ::testing::Test {
  protected:
-  void SetUp() override {
-    context_ = ProjectContext::CreateFromFile(config_file_name.c_str());  // read from file
-  }
-
-  ProjectContextPtr context_;
+  void SetUp() override {}
 };
 
 
-TEST_F(V3Test, Simple) {
+TEST_F(V3TestProj, SimpleProj) {
   auto config_queue = std::make_shared<v3::Queue<v3::SimConfigPtrU>>();
   auto data_queue = std::make_shared<v3::Queue<v3::SimBasicDataPtrU>>();
 

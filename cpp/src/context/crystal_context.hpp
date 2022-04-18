@@ -62,18 +62,6 @@ class CrystalContext {
   std::string file_param_;
 };
 
-
-void to_json(nlohmann::json& obj, const AxisDistribution& dist);
-
-void from_json(const nlohmann::json& obj, AxisDistribution& dist);
-
-NLOHMANN_JSON_SERIALIZE_ENUM(DistributionType, {
-                                                   { DistributionType::kUniform, "uniform" },
-                                                   { DistributionType::kGaussian, "gauss" },
-                                               })
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Distribution, type, mean, std)
-
 }  // namespace icehalo
 
 

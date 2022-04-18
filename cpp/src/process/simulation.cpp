@@ -759,20 +759,7 @@ std::unique_ptr<CrystalPtrU[]> SampleMsCrystal(const SimConfig* config) {
         p[0]->Rotate(rot);
       }
 
-      // Set origin
-      if (std::holds_alternative<BoxRange>(c.crystal_.range_)) {
-        const auto& range = std::get<BoxRange>(c.crystal_.range_);
-        float x = rng->GetUniform() * (range.x_.upper_ - range.x_.lower_) + range.x_.lower_;
-        float y = rng->GetUniform() * (range.y_.upper_ - range.y_.lower_) + range.y_.lower_;
-        float z = rng->GetUniform() * (range.z_.upper_ - range.z_.lower_) + range.z_.lower_;
-        p[0]->Translate(x, y, z);
-        // TODO: multi-scattering streetlight?
-      } else if (std::holds_alternative<BallRange>(c.crystal_.range_)) {
-        const auto& range = std::get<BallRange>(c.crystal_.range_);
-        float origin[3];
-        SampleBall(range.radii_, origin);
-        p[0]->Translate(origin[0] + range.center_[0], origin[1] + range.center_[1], origin[2] + range.center_[2]);
-      }
+      // TODO: Set origin
       p++;
     }
   }

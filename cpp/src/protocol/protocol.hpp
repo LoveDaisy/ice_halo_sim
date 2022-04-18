@@ -2,8 +2,6 @@
 #define SRC_CONTEXT_BACKEND_CONFIG_H_
 
 #include <cstddef>
-#include <map>
-#include <memory>
 #include <vector>
 
 #include "core/core_def.hpp"
@@ -33,6 +31,7 @@ struct MsInfo {
 
 struct SceneConfig {
   IdType id_;
+  LightSourceConfig light_source_;
   size_t ray_num_;          // For every single wavelength.
   std::vector<MsInfo> ms_;  // (prob, [scattering_info, ...])
 };
@@ -40,29 +39,6 @@ struct SceneConfig {
 struct ProjConfig {
   SceneConfig scene_;                  // One scene for one project.
   std::vector<RenderConfig> renders_;  // One project may have multipile renderer.
-};
-
-class ConfigManager {
- public:
-  static ConfigManager& GetInstance();
-
-  ConfigManager& AddLightSource(IdType id, LightSourceConfig config);
-  ConfigManager& AddCrystal(IdType id, CrystalConfig config);
-  ConfigManager& AddFilter(IdType id, FilterConfig config);
-  ConfigManager& AddRenderer(IdType id, RenderConfig config);
-
-  LightSourceConfig GetLightSource(IdType id);
-  FilterConfig GetFilter(IdType id);
-  CrystalConfig GetCrystal(IdType id);
-  RenderConfig GetRenderer(IdType id);
-
- private:
-  ConfigManager() {}
-
-  std::map<IdType, LightSourceConfig> light_sources_;
-  std::map<IdType, CrystalConfig> crystals_;
-  std::map<IdType, FilterConfig> filters_;
-  std::map<IdType, RenderConfig> renderers_;
 };
 
 }  // namespace v3

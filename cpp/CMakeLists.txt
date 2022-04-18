@@ -97,9 +97,12 @@ set(icehalo_core_src
   "${PROJ_SRC_DIR}/core/optics.cpp")
 
 set(icehalo_process_src
-  "${PROJ_SRC_DIR}/protocol/sim_config.cpp"
   "${PROJ_SRC_DIR}/process/render.cpp"
   "${PROJ_SRC_DIR}/process/simulation.cpp")
+
+set(icehalo_protocol_src
+  "${PROJ_SRC_DIR}/protocol/crystal_config.cpp"
+  "${PROJ_SRC_DIR}/protocol/sim_config.cpp")
 
 set(icehalo_io_src
   "${PROJ_SRC_DIR}/io/file.cpp")
@@ -110,7 +113,8 @@ set(icehalo_util_src
   "${PROJ_SRC_DIR}/util/obj_pool.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
 set(icehalo_src
-  ${icehalo_context_src} ${icehalo_core_src} ${icehalo_io_src} ${icehalo_process_src} ${icehalo_util_src})
+  ${icehalo_context_src} ${icehalo_core_src} ${icehalo_io_src}
+  ${icehalo_process_src} ${icehalo_protocol_src} ${icehalo_util_src})
 
 # ==================================================================================================
 # Add targets

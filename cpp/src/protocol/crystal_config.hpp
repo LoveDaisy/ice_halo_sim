@@ -6,6 +6,7 @@
 
 #include "core/core_def.hpp"
 #include "core/math.hpp"
+#include "json.hpp"
 
 namespace icehalo {
 namespace v3 {
@@ -24,7 +25,6 @@ struct PyramidCrystalParam {
 
 using CrystalParam = std::variant<PrismCrystalParam, PyramidCrystalParam>;
 
-
 /**
  * @brief It is a part of Simulation Backend Protocol
  *
@@ -33,11 +33,14 @@ struct CrystalConfig {
   IdType id_;
   CrystalParam param_;
   AxisDistribution axis_;
-  SpaceRange range_;
 };
 
 using CrystalConfigPtrU = std::unique_ptr<CrystalConfig>;
 using CrystalConfigPtrS = std::shared_ptr<CrystalConfig>;
+
+// convert to & from json object
+void to_json(nlohmann::json& j, const CrystalConfig& c);
+void from_json(const nlohmann::json& j, CrystalConfig& c);
 
 }  // namespace v3
 }  // namespace icehalo
