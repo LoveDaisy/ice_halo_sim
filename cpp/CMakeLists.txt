@@ -102,7 +102,7 @@ set(icehalo_process_src
 
 set(icehalo_protocol_src
   "${PROJ_SRC_DIR}/protocol/crystal_config.cpp"
-  "${PROJ_SRC_DIR}/protocol/sim_config.cpp")
+  "${PROJ_SRC_DIR}/protocol/sim_data.cpp")
 
 set(icehalo_io_src
   "${PROJ_SRC_DIR}/io/file.cpp")

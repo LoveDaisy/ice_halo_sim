@@ -1,4 +1,4 @@
-#include "protocol/sim_config.hpp"
+#include "protocol/sim_data.hpp"
 
 namespace icehalo {
 namespace v3 {

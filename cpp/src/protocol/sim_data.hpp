@@ -6,17 +6,10 @@
 #include "core/core_def.hpp"
 #include "protocol/crystal_config.hpp"
 #include "protocol/light_config.hpp"
-#include "protocol/protocol.hpp"
+#include "protocol/proj_config.hpp"
 
 namespace icehalo {
 namespace v3 {
-
-// ========== Producer & consumer protocol ==========
-// ---------- 1. For producer ----------
-using SceneConfigPtrU = std::unique_ptr<SceneConfig>;
-using SceneConfigPtrS = std::shared_ptr<SceneConfig>;
-
-// ---------- 2. For consumer ----------
 
 class RaypathHashHelper {
   // Use SDBM algorithm. See http://www.cse.yorku.ca/~oz/hash.html for detail.

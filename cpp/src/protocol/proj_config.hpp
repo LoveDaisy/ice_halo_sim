@@ -10,11 +10,6 @@
 #include "protocol/light_config.hpp"
 #include "protocol/render_config.hpp"
 
-/*
- * We define some public protocols (accessable outside the lib) here.
- * And also some of them can be used in simulator and renderer queues (internal usage).
- */
-
 namespace icehalo {
 namespace v3 {
 
@@ -36,6 +31,9 @@ struct SceneConfig {
   size_t max_hits_;
   std::vector<MsInfo> ms_;  // (prob, [scattering_info, ...])
 };
+
+using SceneConfigPtrU = std::unique_ptr<SceneConfig>;
+using SceneConfigPtrS = std::shared_ptr<SceneConfig>;
 
 struct ProjConfig {
   SceneConfig scene_;                  // One scene for one project.

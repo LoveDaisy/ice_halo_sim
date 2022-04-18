@@ -13,7 +13,7 @@
 #include "core/crystal.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
-#include "protocol/protocol.hpp"
+#include "protocol/proj_config.hpp"
 #include "util/log.hpp"
 #include "util/obj_pool.hpp"
 #include "util/queue.hpp"
