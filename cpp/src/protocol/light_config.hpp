@@ -4,6 +4,8 @@
 #include <variant>
 #include <vector>
 
+#include "core/core_def.hpp"
+
 namespace icehalo {
 namespace v3 {
 
@@ -26,6 +28,7 @@ struct WlParam {
 };
 
 struct LightSourceConfig {
+  IdType id;
   LightSourceParam param_;
   std::vector<WlParam> wl_param_;
 };

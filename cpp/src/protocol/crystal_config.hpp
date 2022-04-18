@@ -4,6 +4,7 @@
 #include <memory>
 #include <variant>
 
+#include "core/core_def.hpp"
 #include "core/math.hpp"
 
 namespace icehalo {
@@ -29,7 +30,7 @@ using CrystalParam = std::variant<PrismCrystalParam, PyramidCrystalParam>;
  *
  */
 struct CrystalConfig {
-  int id_;
+  IdType id_;
   CrystalParam param_;
   AxisDistribution axis_;
   SpaceRange range_;

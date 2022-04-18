@@ -2,12 +2,14 @@
 #define SRC_CORE_DEF_H_
 
 #include <cstddef>
+#include <limits>
 #include <unordered_map>
 
 namespace icehalo {
 
 using ShortIdType = uint16_t;
 constexpr ShortIdType kInvalidId = 0xffff;
+constexpr size_t kInfSize = std::numeric_limits<size_t>::max();
 
 struct RayInfo;
 struct RaySegment;

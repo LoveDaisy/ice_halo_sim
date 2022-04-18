@@ -119,19 +119,14 @@
     {
       "id": 2,
       "type": "raypath",
-      "raypath": [3, 5],
+      "raypath": [3, 1, 5, 7, 4],
       "symmetry": "PBD"
-    },
-    {
-      "id": 3,
-      "type": "raypath",
-      "raypath": [[3, 5], [3, 1, 5]],
-      "action": "filter_out"
     },
     {
       "id": 4,
       "type": "entry_exit",
-      "raypath": [[3, 5], [1, 2]],
+      "entry": 3,
+      "exit": 5,
       "action": "filter_in"
     },
     {
@@ -148,54 +143,37 @@
     {
       "id": 7,
       "type": "complex",
-      "graph": [
-        [1, 6, 5],
-        [1, 3]
-      ]
-    },
-    {
-      "id": 8,
-      "type": "multi_scattering",
-      "filter": [ 1, 7 ]
+      "composition": [1, [3, 6], 5]
     }
   ],
-  "lens": [
+  "scene": [
     {
       "id": 1,
-      "type": "linear",
-      "fov": 90
-    },
-    {
-      "id": 2,
-      "type": "linear",
-      "f": 20
-    },
-    {
-      "id": 3,
-      "type": "fisheye_equal_area",
-      "fov": 120
+      "light_source": 1,
+      "ray_num": -1,
+      "scattering": [
+        {
+          "crystal": [1, 2, 3],
+          "prob": 0.2
+        },
+        {
+          "crystal": [2, 3],
+          "proportion": [20, 100],
+          "filter": 2
+        }
+      ]
     }
   ],
-  "scene": {
-    "light_source": 1,
-    "scattering": [
-      {
-        "crystal": [1, 2, 3],
-        "prob": 0.2
-      },
-      {
-        "crystal": [2, 3],
-        "proportion": [20, 100]
-      }
-    ]
-  },
   "render": [
     {
       "id": 1,
-      "lens": 2,
+      "lens": {
+        "type": "linear",
+        "f": 20
+      },
       "resolution": [1920, 1080],
       "lens_shift": [0, 200],
-      "camera": {
+      "view": {
         "azimuth": 80,
         "elevation": 30,
         "roll": 0
@@ -203,13 +181,52 @@
     },
     {
       "id": 2,
-      "lens": 1,
+      "lens": {
+        "type": "fisheye_equal_area",
+        "fov": 120
+      },
       "resolution": [1920, 1080],
-      "lens_shift": [0, 200],
-      "camera": {
+      "view": {
         "elevation": 30
       },
-      "filter": 8
+      "filter": [4, 7]
+    },
+    {
+      "id": 3,
+      "lens": {
+        "type": "linear",
+        "fov": 40
+      },
+      "resolution": [1920, 1080],
+      "view": {
+        "azimuth": -50,
+        "elevation": 30,
+        "roll": 0,
+        "distance": 8
+      },
+      "visible": "upper",
+      "background": [0, 0, 0],
+      "ray": [1, 1, 1],
+      "opacity": 0.8,
+      "grid": {
+        "central": [
+          {
+            "value": 22,
+            "color": [1, 1, 1],
+            "opacity": 0.4,
+            "width": 1.2
+          }
+        ],
+        "elevation": [],
+        "outline": true
+      }
+    }
+  ],
+  "project": [
+    {
+      "id": 1,
+      "scene": 1,
+      "render": [1, 2]
     }
   ]
 }
