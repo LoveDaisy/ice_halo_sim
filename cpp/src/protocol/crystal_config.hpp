@@ -25,10 +25,6 @@ struct PyramidCrystalParam {
 
 using CrystalParam = std::variant<PrismCrystalParam, PyramidCrystalParam>;
 
-/**
- * @brief It is a part of Simulation Backend Protocol
- *
- */
 struct CrystalConfig {
   IdType id_;
   CrystalParam param_;

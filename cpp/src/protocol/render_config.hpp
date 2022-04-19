@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "core/core_def.hpp"
+#include "protocol/filter_config.hpp"
 
 namespace icehalo {
 namespace v3 {
@@ -28,7 +29,12 @@ struct GridLineParam {
   RgbColor color_;
 };
 
-struct RenderConfig {
+struct ResolutionParam {
+  int width_;
+  int height_;
+};
+
+struct LensParam {
   enum LensType {
     kLinear,
     kFisheyeEqualArea,
@@ -40,6 +46,11 @@ struct RenderConfig {
     kRectangular,
   };
 
+  LensType type_;
+  float fov_;
+};
+
+struct RenderConfig {
   enum VisibleRange {
     kUpper,
     kLower,
@@ -47,9 +58,8 @@ struct RenderConfig {
   };
 
   IdType id_;
-  LensType lens_;
-  int width_;
-  int height_;
+  LensParam lens_;
+  ResolutionParam resolution_;
   ViewParam view_;
   VisibleRange visible_;
 
@@ -60,6 +70,8 @@ struct RenderConfig {
   std::vector<GridLineParam> central_grid_;
   std::vector<GridLineParam> elevation_grid_;
   bool celestial_outline_;
+
+  FilterConfig filter_;
 };
 
 }  // namespace v3

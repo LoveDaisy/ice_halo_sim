@@ -7,6 +7,7 @@
 #include <thread>
 
 #include "process/simulation.hpp"
+#include "protocol/config_manager.hpp"
 #include "util/log.hpp"
 #include "util/queue.hpp"
 
@@ -28,35 +29,14 @@ class V3TestProj : public ::testing::Test {
 
 
 TEST_F(V3TestProj, SimpleProj) {
+  v3::ConfigManager config_manager = config_json_.get<v3::ConfigManager>();
+
   auto config_queue = std::make_shared<v3::Queue<v3::SceneConfigPtrU>>();
   auto data_queue = std::make_shared<v3::Queue<v3::SimBasicDataPtrU>>();
 
-  constexpr int kMaxHits = 7;
+  constexpr int kMaxHits = 8;
 
-  auto config = std::make_unique<v3::SceneConfig>();
-  config->ray_num_ = 2;
-  config->max_hits_ = kMaxHits;
-  auto& light_source = config->light_source_;
-  light_source.param_ = v3::SunParam{ 20.0f, 0.0f, 0.5f };
-  light_source.wl_param_.emplace_back(v3::WlParam{ 550.0f, 1.0f });
-  config->ms_.emplace_back(v3::MsInfo{});
-  auto& ms_param = config->ms_[0];
-  ms_param.prob_ = 0.0f;
-  ms_param.setting_.emplace_back(v3::ScatteringSetting{});
-  auto& crystal_info = ms_param.setting_[0];
-  crystal_info.crystal_proportion_ = 10.0f;
-  crystal_info.crystal_.id_ = 1;
-  crystal_info.crystal_.param_ =
-      v3::PrismCrystalParam{ Distribution{ DistributionType::kNoRandom, 1.2f, 0.0f },
-                             { Distribution{ DistributionType::kNoRandom, math::kSqrt3_4, 0.0f },
-                               Distribution{ DistributionType::kNoRandom, math::kSqrt3_4, 0.0f },
-                               Distribution{ DistributionType::kNoRandom, math::kSqrt3_4, 0.0f },
-                               Distribution{ DistributionType::kNoRandom, math::kSqrt3_4, 0.0f },
-                               Distribution{ DistributionType::kNoRandom, math::kSqrt3_4, 0.0f },
-                               Distribution{ DistributionType::kNoRandom, math::kSqrt3_4, 0.0f } } };
-  crystal_info.crystal_.axis_.azimuth_dist = { DistributionType::kUniform, 0.0f, 0.0f };
-  crystal_info.crystal_.axis_.latitude_dist = { DistributionType::kNoRandom, 90.0f, 0.0f };
-  crystal_info.crystal_.axis_.roll_dist = { DistributionType::kUniform, 0.0f, 0.0f };
+  auto config = std::make_unique<v3::SceneConfig>(config_manager.scenes_.at(1));
   config_queue->Emplace(std::move(config));
 
   v3::Simulator simulator(config_queue, data_queue);
@@ -92,19 +72,20 @@ TEST_F(V3TestProj, SimpleProj) {
 
   float expect_out[kMaxHits * 2 * 7]{
     /* --------- p --------------->|<-------------- d ------------->|<-- w -->|*/
-    -0.250816, 0.026764, 0.600000,  -0.940760, 0.003027, 0.339059,  0.129463,  // data 1,1
-    0.433013,  0.037085, -0.134507, 0.939679,  0.003654, -0.342039, 0.018280,  // data 1,2
-    -0.433013, 0.027350, 0.423164,  -0.407769, 0.003027, -0.913080, 0.793246,  // data 2,1
-    -0.433013, 0.039586, -0.368557, -0.939679, 0.003654, -0.342039, 0.963774,  // data 2,2
-    0.433013,  0.030137, -0.417380, 0.407769,  0.003027, -0.913080, 0.070429,  // data 3,1
-    0.244857,  0.030742, -0.600000, -0.940760, 0.003027, -0.339058, 0.005974,  // data 4,1
-    0.433013,  0.042086, -0.597393, 0.939679,  0.003654, 0.342039,  0.017618,  // data 4,2
-    -0.433013, 0.032923, 0.057924,  -0.407769, 0.003027, 0.913080,  0.000810,  // data 5,1
-    -0.433013, 0.044586, -0.363344, -0.939679, 0.003654, 0.342039,  0.000322,  // data 5,2
-    0.125496,  0.034720, 0.600000,  0.940760,  0.003027, 0.339058,  0.000069,  // data 6,1
-    0.433013,  0.047087, -0.129294, 0.939679,  0.003654, 0.342039,  0.000006,  // data 6,2
-    0.433013,  0.035710, 0.301532,  0.407769,  0.003027, -0.913080, 0.000009,  // data 7,1
-    -0.433013, 0.049587, 0.104756,  -0.939679, 0.003654, 0.342039,  0.000000,  // data 7,2
+    0.433013,  -0.203831, 0.316693,  1.000000,  -0.000000, 0.000000,  0.018111,  // data 1,1
+    0.433013,  0.037085,  -0.134507, 1.000000,  -0.000000, 0.000000,  0.018111,  // data 1,2
+    -0.433013, -0.203831, 0.316693,  -1.000000, -0.000000, 0.000000,  0.964105,  // data 2,1
+    -0.433013, 0.037085,  -0.134507, -1.000000, -0.000000, -0.000000, 0.964105,  // data 2,2
+    0.433013,  -0.203831, 0.316693,  1.000000,  -0.000000, 0.000000,  0.017461,  // data 3,1
+    0.433013,  0.037085,  -0.134507, 1.000000,  -0.000000, -0.000000, 0.017461,  // data 3,2
+    -0.433013, -0.203831, 0.316693,  -1.000000, -0.000000, 0.000000,  0.000316,  // data 4,1
+    -0.433013, 0.037085,  -0.134507, -1.000000, -0.000000, -0.000000, 0.000316,  // data 4,2
+    0.433013,  -0.203831, 0.316693,  1.000000,  -0.000000, 0.000000,  0.000006,  // data 5,1
+    0.433013,  0.037085,  -0.134507, 1.000000,  -0.000000, -0.000000, 0.000006,  // data 5,2
+    -0.433013, -0.203831, 0.316693,  -1.000000, -0.000000, 0.000000,  0.000000,  // data 6,1
+    -0.433013, 0.037085,  -0.134507, -1.000000, -0.000000, -0.000000, 0.000000,  // data 6,2
+    0.433013,  -0.203831, 0.316693,  1.000000,  -0.000000, 0.000000,  0.000000,  // data 7,1
+    0.433013,  0.037085,  -0.134507, 1.000000,  -0.000000, -0.000000, 0.000000,  // data 7,2
   };
 
   for (int i = 0; i < kMaxHits * 2; i++) {

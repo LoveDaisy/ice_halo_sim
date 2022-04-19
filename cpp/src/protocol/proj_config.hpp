@@ -2,9 +2,11 @@
 #define SRC_CONTEXT_BACKEND_CONFIG_H_
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 #include "core/core_def.hpp"
+#include "json.hpp"
 #include "protocol/crystal_config.hpp"
 #include "protocol/filter_config.hpp"
 #include "protocol/light_config.hpp"
@@ -26,19 +28,24 @@ struct MsInfo {
 
 struct SceneConfig {
   IdType id_;
-  LightSourceConfig light_source_;
   size_t ray_num_;  // For every single wavelength.
   size_t max_hits_;
+  LightSourceConfig light_source_;
   std::vector<MsInfo> ms_;  // (prob, [scattering_info, ...])
 };
 
 using SceneConfigPtrU = std::unique_ptr<SceneConfig>;
 using SceneConfigPtrS = std::shared_ptr<SceneConfig>;
 
+// =============== Project configuration ===============
 struct ProjConfig {
-  SceneConfig scene_;                  // One scene for one project.
-  std::vector<RenderConfig> renders_;  // One project may have multipile renderer.
+  IdType id_;
+  SceneConfig scene_;                    // One scene for one project.
+  std::vector<RenderConfig> renderers_;  // One project may have multipile renderer.
 };
+
+using ProjConfigPtrU = std::unique_ptr<ProjConfig>;
+using ProjConfigPtrS = std::shared_ptr<ProjConfig>;
 
 }  // namespace v3
 }  // namespace icehalo

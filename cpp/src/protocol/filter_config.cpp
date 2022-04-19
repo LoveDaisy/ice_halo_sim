@@ -85,8 +85,8 @@ void from_json(const nlohmann::json& j, FilterConfig& f) {
     f.param_ = p;
   } else if (type == "direction") {
     DirectionFilterParam p{};
-    j.at("az")[0].get_to(p.lon_);
-    j.at("el")[1].get_to(p.lat_);
+    j.at("az").get_to(p.lon_);
+    j.at("el").get_to(p.lat_);
     j.at("radii").get_to(p.radii_);
     f.param_ = p;
   } else if (type == "crystal") {

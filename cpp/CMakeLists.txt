@@ -101,7 +101,9 @@ set(icehalo_process_src
   "${PROJ_SRC_DIR}/process/simulation.cpp")
 
 set(icehalo_protocol_src
+  "${PROJ_SRC_DIR}/protocol/config_manager.cpp"
   "${PROJ_SRC_DIR}/protocol/crystal_config.cpp"
+  "${PROJ_SRC_DIR}/protocol/light_config.cpp"
   "${PROJ_SRC_DIR}/protocol/filter_config.cpp"
   "${PROJ_SRC_DIR}/protocol/sim_data.cpp")
 
