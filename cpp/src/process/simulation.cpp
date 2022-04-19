@@ -630,7 +630,7 @@ void InitSimData(const LightSourceConfig& light_config, size_t ray_num, size_t r
     // d: sample direction
     if (std::holds_alternative<SunParam>(light_param)) {
       const auto& param = std::get<SunParam>(light_param);
-      SampleSphCapPoint(-180.0f, -param.altitude_, param.diameter_ / 2.0f, out_data->d(), ray_num);
+      SampleSphCapPoint(param.azimuth_ + 180.0f, -param.altitude_, param.diameter_ / 2.0f, out_data->d(), ray_num);
     } else if (std::holds_alternative<StreetLightParam>(light_param)) {
       const auto& param = std::get<StreetLightParam>(light_param);
       SampleSph(param.diameter_ / 2.0f, out_data->d(), ray_num);

@@ -18,7 +18,12 @@ namespace {
 
 class V3TestProj : public ::testing::Test {
  protected:
-  void SetUp() override {}
+  void SetUp() override {
+    std::ifstream f(config_file_name);
+    f >> config_json_;
+  }
+
+  nlohmann::json config_json_;
 };
 
 
@@ -32,7 +37,7 @@ TEST_F(V3TestProj, SimpleProj) {
   config->ray_num_ = 2;
   config->max_hits_ = kMaxHits;
   auto& light_source = config->light_source_;
-  light_source.param_ = v3::SunParam{ 20.0f, 0.5f };
+  light_source.param_ = v3::SunParam{ 20.0f, 0.0f, 0.5f };
   light_source.wl_param_.emplace_back(v3::WlParam{ 550.0f, 1.0f });
   config->ms_.emplace_back(v3::MsInfo{});
   auto& ms_param = config->ms_[0];

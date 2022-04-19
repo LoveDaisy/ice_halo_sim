@@ -11,6 +11,7 @@ namespace v3 {
 
 struct SunParam {
   float altitude_;  // Degree
+  float azimuth_;   // Degree
   float diameter_;  // Degree
 };
 

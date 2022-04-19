@@ -37,6 +37,8 @@ void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
     int i = 0;
     for (const auto& j_d : j.at("face_distance")) {
       j_d.get_to(p.d_[i]);
+      p.d_[i].mean *= math::kSqrt3_4;  // To real size
+      p.d_[i].std *= math::kSqrt3_4;   // To real size
       i++;
       if (i >= 6) {
         break;
@@ -74,7 +76,12 @@ void from_json(const nlohmann::json& j, CrystalConfig& c) {
     LOG_ERROR("Unknown crystal type!");
   }
 
-  j.at("axis").get_to(c.axis_);
+  if (j.contains("axis")) {
+    j.at("axis").get_to(c.axis_);
+  } else {
+    c.axis_.latitude_dist.type = DistributionType::kNoRandom;
+    c.axis_.latitude_dist.mean = 90.0f;
+  }
 }
 
 }  // namespace v3

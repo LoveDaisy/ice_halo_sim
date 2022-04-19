@@ -64,8 +64,8 @@ TEST_F(V3TestJson, Crystal_PrismFull) {
   ASSERT_NEAR(p.h_.std, 0.4, 1e-5);
   for (const auto& x : p.d_) {
     ASSERT_EQ(x.type, DistributionType::kGaussian);
-    ASSERT_NEAR(x.mean, 1.0f, 1e-5);
-    ASSERT_NEAR(x.std, 0.2f, 1e-5);
+    ASSERT_NEAR(x.mean, 1.0f * math::kSqrt3_4, 1e-5);
+    ASSERT_NEAR(x.std, 0.2f * math::kSqrt3_4, 1e-5);
   }
 
   const auto& axis = c.axis_;
