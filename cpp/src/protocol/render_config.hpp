@@ -56,8 +56,8 @@ struct RenderConfig {
   RgbColor background_;
   RgbColor ray_color_;
   float opacity_;
-  
-	std::vector<GridLineParam> central_grid_;
+
+  std::vector<GridLineParam> central_grid_;
   std::vector<GridLineParam> elevation_grid_;
   bool celestial_outline_;
 };

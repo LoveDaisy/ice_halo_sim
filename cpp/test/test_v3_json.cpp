@@ -7,6 +7,7 @@
 #include "core/math.hpp"
 #include "json.hpp"
 #include "protocol/crystal_config.hpp"
+#include "protocol/filter_config.hpp"
 
 extern std::string config_file_name;
 using namespace icehalo;
@@ -32,7 +33,7 @@ TEST_F(V3TestJson, Distribution) {
   ASSERT_NEAR(d.std, 0.2, 1e-5);
 }
 
-TEST_F(V3TestJson, Crystal1) {
+TEST_F(V3TestJson, Crystal_PrismSimple) {
   const auto& j_crystal = config_json_.at("crystal")[1];
   auto c = j_crystal.get<v3::CrystalConfig>();
 
@@ -50,7 +51,7 @@ TEST_F(V3TestJson, Crystal1) {
   }
 }
 
-TEST_F(V3TestJson, Crystal3) {
+TEST_F(V3TestJson, Crystal_PrismFull) {
   const auto& j_crystal = config_json_.at("crystal")[3];
   auto c = j_crystal.get<v3::CrystalConfig>();
 
@@ -77,6 +78,14 @@ TEST_F(V3TestJson, Crystal3) {
   ASSERT_EQ(axis.roll_dist.type, DistributionType::kUniform);
   ASSERT_NEAR(axis.roll_dist.mean, 0, 1e-5);
   ASSERT_NEAR(axis.roll_dist.std, 360, 1e-5);
+}
+
+TEST_F(V3TestJson, Filter_None) {
+  const auto& j_filter = config_json_.at("filter")[0];
+  auto f = j_filter.get<v3::FilterConfig>();
+
+  ASSERT_EQ(f.id, 1);
+  ASSERT_TRUE(std::holds_alternative<v3::NoneFilterParam>(f.param_));
 }
 
 }  // namespace

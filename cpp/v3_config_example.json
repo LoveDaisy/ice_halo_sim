@@ -154,7 +154,8 @@
     {
       "id": 5,
       "type": "direction",
-      "direction": [180, 60],
+      "az": 180,
+      "el": 25,
       "radii": 0.5
     },
     {

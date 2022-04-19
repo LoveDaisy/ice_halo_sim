@@ -326,10 +326,12 @@ struct AxisDistribution {
 };
 
 // convertion to & from json object
-NLOHMANN_JSON_SERIALIZE_ENUM(DistributionType, {
-                                                   { DistributionType::kUniform, "uniform" },
-                                                   { DistributionType::kGaussian, "gauss" },
-                                               })
+NLOHMANN_JSON_SERIALIZE_ENUM(  // declear macro
+    DistributionType,          // enum type
+    {
+        { DistributionType::kUniform, "uniform" },
+        { DistributionType::kGaussian, "gauss" },
+    })
 
 void to_json(nlohmann::json& obj, const Distribution& dist);
 void from_json(const nlohmann::json& obj, Distribution& dist);

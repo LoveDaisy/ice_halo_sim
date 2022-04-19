@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "core/core_def.hpp"
+#include "json.hpp"
 
 namespace icehalo {
 namespace v3 {
@@ -38,12 +39,10 @@ using FilterParam = std::variant<NoneFilterParam, RaypathFilterParam, EntryExitF
                                  CrystalFilterParam, ComplexFilterParam>;
 
 struct FilterConfig {
-  enum Symmetry {
-    kNone,
-    kPrismatic,
-    kBasal,
-    kDirectional,
-  };
+  static constexpr uint8_t kSymNone = 0;
+  static constexpr uint8_t kSymP = 1;
+  static constexpr uint8_t kSymB = 2;
+  static constexpr uint8_t kSymD = 4;
 
   enum Action {
     kFilterIn,
@@ -51,10 +50,14 @@ struct FilterConfig {
   };
 
   IdType id;
-  Symmetry symmetry_;
+  uint8_t symmetry_;
   Action action_;
   FilterParam param_;
 };
+
+// convert to/from json object
+void to_json(nlohmann::json& j, const FilterConfig& f);
+void from_json(const nlohmann::json& j, FilterConfig& f);
 
 }  // namespace v3
 }  // namespace icehalo

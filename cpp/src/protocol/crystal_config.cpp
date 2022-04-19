@@ -74,7 +74,7 @@ void from_json(const nlohmann::json& j, CrystalConfig& c) {
     LOG_ERROR("Unknown crystal type!");
   }
 
-	j.at("axis").get_to(c.axis_);
+  j.at("axis").get_to(c.axis_);
 }
 
 }  // namespace v3
