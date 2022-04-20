@@ -138,7 +138,7 @@
         "upper_h": 0.1,
         "lower_h": 0.5,
         "prism_h": 1.2,
-        "upper_indices": [1, 0, 1]
+        "upper_indices": [2, 0, 3]
       },
       "axis": {
         "zenith": 0
