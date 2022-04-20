@@ -105,6 +105,8 @@ set(icehalo_protocol_src
   "${PROJ_SRC_DIR}/protocol/crystal_config.cpp"
   "${PROJ_SRC_DIR}/protocol/light_config.cpp"
   "${PROJ_SRC_DIR}/protocol/filter_config.cpp"
+  "${PROJ_SRC_DIR}/protocol/proj_config.cpp"
+  "${PROJ_SRC_DIR}/protocol/render_config.cpp"
   "${PROJ_SRC_DIR}/protocol/sim_data.cpp")
 
 set(icehalo_io_src

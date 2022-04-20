@@ -208,7 +208,7 @@
         {
           "crystal": [2, 3],
           "proportion": [20, 100],
-          "filter": 2
+          "filter": [2, 1]
         }
       ]
     }
@@ -238,7 +238,7 @@
       "view": {
         "elevation": 30
       },
-      "filter": [4, 7]
+      "filter": 4
     },
     {
       "id": 3,

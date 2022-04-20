@@ -1,7 +1,8 @@
 #include "protocol/config_manager.hpp"
 
+#include <algorithm>
 #include <cstddef>
-#include <utility>
+#include <variant>
 
 #include "core/core_def.hpp"
 #include "io/json_util.hpp"
@@ -14,13 +15,83 @@
 namespace icehalo {
 namespace v3 {
 
+void to_json(nlohmann::json& j, const ConfigManager& m) {
+  // Light sources
+  for (const auto& [_, v] : m.lights_) {
+    j["light_source"].emplace_back(v);
+  }
+
+  // Crystals
+  for (const auto& [_, v] : m.crystals_) {
+    j["crystal"].emplace_back(v);
+  }
+
+  // Filters
+  for (const auto& [_, v] : m.filters_) {
+    j["filter"].emplace_back(v);
+  }
+
+  // Renderers
+  for (const auto& [_, v] : m.renderers_) {
+    j["render"].emplace_back(v);
+  }
+
+  // Scenes
+  for (const auto& [_, v] : m.scenes_) {
+    j["scene"].emplace_back(v);
+  }
+
+  // Projects
+  for (const auto& [_, v] : m.projects_) {
+    j["project"].emplace_back(v);
+  }
+}
+
 RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManager& m) {
   RenderConfig render{};
 
-  // id
   j_render.at("id").get_to(render.id_);
+  j_render.at("resolution").get_to(render.resolution_);
 
-  // TODO:
+  render.lens_.type_ = LensParam::kLinear;
+  render.lens_.fov_ = 90.0f;
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "lens", render.lens_)              // default {kLinear, 90.0}
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "lens_shift", render.lens_shift_)  // default [0, 0]
+
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "view", render.view_)  // default {0.0, 0.0, 0.0}
+
+  render.visible_ = RenderConfig::kUpper;
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "visible", render.visible_)  // default kUpper
+
+  std::fill(std::begin(render.background_), std::end(render.background_), 0.0f);
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "background", render.background_)  // default [0, 0, 0]
+
+  std::fill(std::begin(render.ray_color_), std::end(render.ray_color_), -1.0f);
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "ray", render.ray_color_)  // default [-1, -1, -1]
+
+  render.opacity_ = 1.0f;
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "opacity", render.opacity_)  // default 1
+
+  render.celestial_outline_ = true;
+  if (j_render.contains("grid")) {
+    const auto& j_grid = j_render.at("grid");
+    if (j_grid.contains("central")) {
+      j_grid.at("central").get_to(render.central_grid_);
+    }
+    if (j_grid.contains("elevation")) {
+      j_grid.at("elevation").get_to(render.elevation_grid_);
+    }
+    if (j_grid.contains("outline")) {
+      j_grid.at("outline").get_to(render.celestial_outline_);
+    }
+  }
+
+  render.filter_.id = kInvalidId;
+  render.filter_.param_ = NoneFilterParam{};
+  if (j_render.contains("filter")) {
+    IdType fid = j_render.at("filter").get<IdType>();
+    render.filter_ = m.filters_.at(fid);
+  }
 
   return render;
 }
@@ -88,39 +159,35 @@ SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager&
 }
 
 
-void to_json(nlohmann::json& j, const ConfigManager& m) {
-  ;
-}
-
 void from_json(const nlohmann::json& j, ConfigManager& m) {
-  // Light source
+  // Light sources
   for (const auto& j_light : j.at("light_source")) {
     IdType id = j_light.at("id").get<IdType>();
-    m.lights_.emplace(std::make_pair(id, j_light.get<LightSourceConfig>()));
+    m.lights_.emplace(id, j_light.get<LightSourceConfig>());
   }
 
   // Crystals
   for (const auto& j_crystal : j.at("crystal")) {
     IdType id = j_crystal.at("id").get<IdType>();
-    m.crystals_.emplace(std::make_pair(id, j_crystal.get<CrystalConfig>()));
+    m.crystals_.emplace(id, j_crystal.get<CrystalConfig>());
   }
 
   // Filters
   for (const auto& j_filter : j.at("filter")) {
     IdType id = j_filter.at("id").get<IdType>();
-    m.filters_.emplace(std::make_pair(id, j_filter.get<FilterConfig>()));
+    m.filters_.emplace(id, j_filter.get<FilterConfig>());
   }
 
   // Renderers
   for (const auto& j_render : j.at("render")) {
     auto renderer = ParseRenderConfig(j_render, m);
-    m.renderers_.emplace(std::make_pair(renderer.id_, renderer));
+    m.renderers_.emplace(renderer.id_, renderer);
   }
 
   // Scenes
   for (const auto& j_scene : j.at("scene")) {
     auto scene = ParseSceneConfig(j_scene, m);
-    m.scenes_.emplace(std::make_pair(scene.id_, scene));
+    m.scenes_.emplace(scene.id_, scene);
   }
 
   // Projects
@@ -141,6 +208,8 @@ void from_json(const nlohmann::json& j, ConfigManager& m) {
         proj.renderers_.emplace_back(m.renderers_.at(render_id));
       }
     }
+
+    m.projects_.emplace(proj.id_, proj);
   }
 }
 

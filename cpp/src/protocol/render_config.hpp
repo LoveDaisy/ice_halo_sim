@@ -4,16 +4,11 @@
 #include <vector>
 
 #include "core/core_def.hpp"
+#include "json.hpp"
 #include "protocol/filter_config.hpp"
 
 namespace icehalo {
 namespace v3 {
-
-struct RgbColor {
-  float r_;
-  float g_;
-  float b_;
-};
 
 struct ViewParam {
   float az_;  // Azimuth
@@ -22,17 +17,18 @@ struct ViewParam {
   float d_;   // Distance
 };
 
+void to_json(nlohmann::json& j, const ViewParam& v);
+void from_json(const nlohmann::json& j, ViewParam& v);
+
 struct GridLineParam {
   float value_;
-  float with_;
+  float width_;
   float opacity_;
-  RgbColor color_;
+  float color_[3];  // r, g, b
 };
 
-struct ResolutionParam {
-  int width_;
-  int height_;
-};
+void to_json(nlohmann::json& j, const GridLineParam& l);
+void from_json(const nlohmann::json& j, GridLineParam& l);
 
 struct LensParam {
   enum LensType {
@@ -50,6 +46,22 @@ struct LensParam {
   float fov_;
 };
 
+NLOHMANN_JSON_SERIALIZE_ENUM(  // declear
+    LensParam::LensType,       // type
+    {
+        { LensParam::kLinear, "linear" },
+        { LensParam::kFisheyeEqualArea, "fisheye_equal_area" },
+        { LensParam::kFisheyeEquidistant, "fisheye_equidistant" },
+        { LensParam::kFisheyeStereographic, "fisheye_stereographic" },
+        { LensParam::kDualFisheyeEqualArea, "dual_fisheye_equal_area" },
+        { LensParam::kDualFisheyeEquidistant, "dual_fisheye_equidistant" },
+        { LensParam::kDualFisheyeStereographic, "dual_fisheye_stereographic" },
+        { LensParam::kRectangular, "rectangular" },
+    })
+
+void to_json(nlohmann::json& j, const LensParam& l);
+void from_json(const nlohmann::json& j, LensParam& l);
+
 struct RenderConfig {
   enum VisibleRange {
     kUpper,
@@ -59,12 +71,13 @@ struct RenderConfig {
 
   IdType id_;
   LensParam lens_;
-  ResolutionParam resolution_;
+  int lens_shift_[2];  // dx, dy
+  int resolution_[2];  // width, height
   ViewParam view_;
   VisibleRange visible_;
 
-  RgbColor background_;
-  RgbColor ray_color_;
+  float background_[3];  // r, g, b
+  float ray_color_[3];   // r, g, b
   float opacity_;
 
   std::vector<GridLineParam> central_grid_;
@@ -73,6 +86,16 @@ struct RenderConfig {
 
   FilterConfig filter_;
 };
+
+NLOHMANN_JSON_SERIALIZE_ENUM(    // declear
+    RenderConfig::VisibleRange,  // type
+    {
+        { RenderConfig::kUpper, "upper" },
+        { RenderConfig::kLower, "lower" },
+        { RenderConfig::kFull, "full" },
+    })
+
+void to_json(nlohmann::json& j, const RenderConfig& r);
 
 }  // namespace v3
 }  // namespace icehalo

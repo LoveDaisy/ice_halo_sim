@@ -37,6 +37,8 @@ struct SceneConfig {
 using SceneConfigPtrU = std::unique_ptr<SceneConfig>;
 using SceneConfigPtrS = std::shared_ptr<SceneConfig>;
 
+void to_json(nlohmann::json& j, const SceneConfig& s);
+
 // =============== Project configuration ===============
 struct ProjConfig {
   IdType id_;
@@ -46,6 +48,8 @@ struct ProjConfig {
 
 using ProjConfigPtrU = std::unique_ptr<ProjConfig>;
 using ProjConfigPtrS = std::shared_ptr<ProjConfig>;
+
+void to_json(nlohmann::json& j, const ProjConfig& p);
 
 }  // namespace v3
 }  // namespace icehalo
