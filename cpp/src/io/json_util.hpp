@@ -44,8 +44,13 @@ struct function_traits<std::function<R(Args...)>> {
   } else if (!obj.at(key).is_array()) {                     \
     LOG_VERBOSE("%s must be an array.", key);               \
   } else {                                                  \
-    for (decltype(n) i = 0; i < (n); i++) {                 \
-      obj.at(key)[i].get_to((dst)[i]);                      \
+    int i = 0;                                              \
+    for (const auto& j : obj.at(key)) {                     \
+      if (i >= n) {                                         \
+        break;                                              \
+      }                                                     \
+      j.get_to((dst)[i]);                                   \
+      i++;                                                  \
     }                                                       \
   }
 

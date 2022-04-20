@@ -1,8 +1,10 @@
 #include "protocol/crystal_config.hpp"
 
 #include <string>
+#include <variant>
 
 #include "core/math.hpp"
+#include "io/json_util.hpp"
 #include "json.hpp"
 #include "util/log.hpp"
 
@@ -12,8 +14,8 @@ namespace v3 {
 // convert to & from json object
 // ========== PrismCrystalParam ==========
 void to_json(nlohmann::json& j, const PrismCrystalParam& p) {
-  j = nlohmann::json{ { "shape", { "height", p.h_ } } };
-  j.at("shape")["distance"] = p.d_;
+  j["height"] = p.h_;
+  j["distance"] = p.d_;
 }
 
 void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
@@ -28,40 +30,73 @@ void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
   for (auto& x : p.d_) {
     x.type = DistributionType::kNoRandom;
     x.mean = 1.0f;
+    x.std = 0.0f;
   }
-  if (j.contains("face_distance")) {
-    if (!j.at("face_distance").is_array()) {
-      LOG_ERROR("Cannot recognize face_distance of crystal!");
-    }
-
-    int i = 0;
-    for (const auto& j_d : j.at("face_distance")) {
-      j_d.get_to(p.d_[i]);
-      p.d_[i].mean *= math::kSqrt3_4;  // To real size
-      p.d_[i].std *= math::kSqrt3_4;   // To real size
-      i++;
-      if (i >= 6) {
-        break;
-      }
-    }
+  JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "face_distance", p.d_, 6)
+  for (auto& x : p.d_) {
+    x.mean *= math::kSqrt3_4;
+    x.std *= math::kSqrt3_4;
   }
 }
 
 
 // ========== PyramidCrystalParam ==========
 void to_json(nlohmann::json& j, const PyramidCrystalParam& p) {
-  j = nlohmann::json{ { "shape", { "height", { p.h_pyr_u_, p.h_prs_, p.h_pyr_l_ } } } };
-  j.at("shape")["distance"] = p.d_;
+  j["prism_h"] = p.h_prs_;
+  j["upper_h"] = p.h_pyr_u_;
+  j["lower_h"] = p.h_pyr_l_;
+  j["upper_indices"] = p.miller_indices_u_;
+  j["lower_indices"] = p.miller_indices_l_;
+  j["distance"] = p.d_;
 }
 
 void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
-  ;
+  // Heights
+  j.at("prism_h").get_to(p.h_prs_);
+
+  p.h_pyr_u_.type = DistributionType::kNoRandom;
+  p.h_pyr_u_.mean = 0.0f;
+  p.h_pyr_l_.type = DistributionType::kNoRandom;
+  p.h_pyr_l_.mean = 0.0f;
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "upper_h", p.h_pyr_u_)
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "lower_h", p.h_pyr_l_)
+
+  // Miller indices
+  p.miller_indices_u_[0] = 1;
+  p.miller_indices_u_[1] = 0;
+  p.miller_indices_u_[2] = 1;
+  JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "upper_indices", p.miller_indices_u_, 3)
+
+  p.miller_indices_l_[0] = 1;
+  p.miller_indices_l_[1] = 0;
+  p.miller_indices_l_[2] = 1;
+  JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "lower_indices", p.miller_indices_l_, 3)
+
+  // Face distance
+  for (auto& x : p.d_) {
+    x.type = DistributionType::kNoRandom;
+    x.mean = 1.0f;
+    x.std = 0.0f;
+  }
+  JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "face_distance", p.d_, 6)
+  for (auto& x : p.d_) {
+    x.mean *= math::kSqrt3_4;
+    x.std *= math::kSqrt3_4;
+  }
 }
 
 
 // ========== CrystalConfig ==========
 void to_json(nlohmann::json& j, const CrystalConfig& c) {
-  ;
+  j["id"] = c.id_;
+
+  if (std::holds_alternative<PrismCrystalParam>(c.param_)) {
+    j["shape"] = std::get<PrismCrystalParam>(c.param_);
+  } else if (std::holds_alternative<PyramidCrystalParam>(c.param_)) {
+    j["shape"] = std::get<PyramidCrystalParam>(c.param_);
+  }
+
+  j["axis"] = c.axis_;
 }
 
 void from_json(const nlohmann::json& j, CrystalConfig& c) {

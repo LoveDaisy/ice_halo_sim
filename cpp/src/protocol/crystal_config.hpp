@@ -17,10 +17,14 @@ struct PrismCrystalParam {
 };
 
 struct PyramidCrystalParam {
-  Distribution h_prs_;    // Prism height
-  Distribution h_pyr_u_;  // Upper pyramidal relative height, from 0.0 to 1.0
-  Distribution h_pyr_l_;  // Lower pyramidal relative height, from 0.0 to 1.0
-  Distribution d_[6];     // Distance to center for prism faces
+  Distribution h_prs_;       // Prism height
+  Distribution h_pyr_u_;     // Upper pyramidal relative height, from 0.0 to 1.0
+  Distribution h_pyr_l_;     // Lower pyramidal relative height, from 0.0 to 1.0
+  Distribution d_[6];        // Distance to center for prism faces
+  int miller_indices_u_[3];  // Miller indices, c1: -30 dgree, c2: 90 degree, c3: -150 degree
+  int miller_indices_l_[3];  // Miller indices, c1: -30 dgree, c2: 90 degree, c3: -150 degree
+  // Miller indices (i1, i2, -(i1+i2), i3)
+  // c1: -30 dgree, c2: 90 degree, c3: -150 degree
 };
 
 using CrystalParam = std::variant<PrismCrystalParam, PyramidCrystalParam>;
