@@ -642,6 +642,9 @@ void InitSimData(const LightSourceConfig& light_config, size_t ray_num, size_t r
         d[2] += (-param.height_ + crystal_origin[2]);
         Normalize3(d);
       }
+    } else {
+      LOG_ERROR("unknown light source type!");
+      // TODO: throw?
     }
   } else {
     // w: copy weight.
