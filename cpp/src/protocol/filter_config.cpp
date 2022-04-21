@@ -103,6 +103,7 @@ void from_json(const nlohmann::json& j, FilterConfig& f) {
       }
       p.filters_.emplace_back(f);
     }
+    f.param_ = p;
   }
 
   f.symmetry_ = FilterConfig::kSymNone;

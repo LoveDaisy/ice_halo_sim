@@ -168,7 +168,8 @@
       "type": "direction",
       "az": 180,
       "el": 25,
-      "radii": 0.5
+      "radii": 0.5,
+      "action": "filter_out"
     },
     {
       "id": 6,
