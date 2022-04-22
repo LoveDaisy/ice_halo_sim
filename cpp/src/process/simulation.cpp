@@ -632,16 +632,7 @@ void InitSimData(const LightSourceConfig& light_config, size_t ray_num, size_t r
       const auto& param = std::get<SunParam>(light_param);
       SampleSphCapPoint(param.azimuth_ + 180.0f, -param.altitude_, param.diameter_ / 2.0f, out_data->d(), ray_num);
     } else if (std::holds_alternative<StreetLightParam>(light_param)) {
-      const auto& param = std::get<StreetLightParam>(light_param);
-      SampleSph(param.diameter_ / 2.0f, out_data->d(), ray_num);
-      const auto* crystal_origin = curr_crystal->GetOrigin();
-      for (size_t i = 0; i < ray_num; i++) {
-        auto* d = out_data->d() + i * 3;
-        d[0] += (-param.distace_ + crystal_origin[0]);
-        d[1] += curr_crystal->GetOrigin()[1];
-        d[2] += (-param.height_ + crystal_origin[2]);
-        Normalize3(d);
-      }
+      // TODO: current we do **NOT** support street light source
     } else {
       LOG_ERROR("unknown light source type!");
       // TODO: throw?
@@ -797,14 +788,17 @@ Simulator::Simulator(QueuePtrS<SceneConfigPtrU> config_queue, QueuePtrS<SimBasic
 
 void Simulator::Run() {
   while (true) {
+    // Config in the config_queue is processed by frontend of simulator (NOT GUI) so that
+    // it has small ray_num and contains only one wavelength parameter of light source.
     auto config = config_queue_->Get();  // Will block until get one
-    if (stop_ || !config) {              // No data in the queue and recieve a terminal signal
+    if (stop_ || !config) {
+      // If no data in the queue or recieve a terminal signal, abort simulation
       break;
     }
 
     auto ms_crystals = SampleMsCrystal(config.get());
 
-    float wl = config->light_source_.wl_param_[0].wl_;  // Take first wl ONLY. Single wl in a single run.
+    float wl = config->light_source_.wl_param_[0].wl_;  // Take first wl **ONLY**. Single wl in a single run.
 
     int ray_num = config->ray_num_;
     // For memory saving, it's better to keep ray_num small.
@@ -821,7 +815,7 @@ void Simulator::Run() {
       auto ms_crystal_cnt = m.setting_.size();
       auto crystal_ray_num = PartitionCrystalRayNum(m, ray_num);
 
-      // NOTE: ray_num will change between different scatterings.
+      // NOTE: ray_num will change between scatterings.
       buffer_data[0].Reset(ray_num * 2);
       buffer_data[1].Reset(ray_num * 2);
 

@@ -53,28 +53,6 @@ TEST_F(V3TestJson, LightSource_Sun) {
   ASSERT_NEAR(p.diameter_, 0.5f, 1e-5);
 }
 
-TEST_F(V3TestJson, LightSource_Streetlight) {
-  const auto& j_light = config_json_.at("light_source")[2];
-  auto s = j_light.get<v3::LightSourceConfig>();
-
-  ASSERT_EQ(s.id, 3);
-  ASSERT_EQ(s.wl_param_.size(), 2);
-
-  std::vector<v3::WlParam> wl_param = { { 589.0f, 1.0f }, { 589.6f, 1.0f } };
-  for (size_t i = 0; i < wl_param.size(); i++) {
-    ASSERT_NEAR(s.wl_param_[i].wl_, wl_param[i].wl_, 1e-5);
-    ASSERT_NEAR(s.wl_param_[i].weight_, wl_param[i].weight_, 1e-5);
-  }
-
-  ASSERT_TRUE(std::holds_alternative<v3::StreetLightParam>(s.param_));
-  const auto& p = std::get<v3::StreetLightParam>(s.param_);
-
-  ASSERT_NEAR(p.azimuth_, 30.0f, 1e-5);
-  ASSERT_NEAR(p.distace_, 120.0f, 1e-5);
-  ASSERT_NEAR(p.diameter_, 0.2f, 1e-5);
-  ASSERT_NEAR(p.height_, 8.0f, 1e-5);
-}
-
 
 // =============== Crystal ===============
 #define CHECK_DISTRIBUTION(d, t, m, s) \

@@ -17,16 +17,6 @@
       "diameter": 0.5,
       "wavelength": [ 420, 480, 540, 600, 660, 720 ],
       "wl_weight": [ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 ]
-    },
-    {
-      "id": 3,
-      "type": "streetlight",
-      "height": 8.0,
-      "azimuth": 30,
-      "distance": 120.0,
-      "diameter": 0.2,
-      "wavelength": [ 589, 589.6 ],
-      "wl_weight": [ 1.0, 1.0 ]
     }
   ],
   "crystal": [
