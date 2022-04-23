@@ -9,6 +9,7 @@
 #include "core/core_def.hpp"
 #include "core/optics.hpp"
 #include "io/serialize.hpp"
+#include "protocol/proj_config.hpp"
 #include "protocol/sim_data.hpp"
 #include "util/threading_pool.hpp"
 

@@ -445,7 +445,9 @@ void SampleTrianglePoint(const float* vertices, float* out_pt, size_t sample_num
 }
 
 
-void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt, size_t sample_num, AngleUnit unit) {
+void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt,  //
+                       size_t sample_num, size_t step,                        //
+                       AngleUnit unit) {
   if (unit == AngleUnit::kDegree) {
     lon *= math::kDegreeToRad;
     lat *= math::kDegreeToRad;
@@ -473,9 +475,10 @@ void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt, siz
     //     | cos(lon)cos(lat), -sin(lon), -cos(lon)sin(lat) |
     //   = | sin(lon)cos(lat),  cos(lon), -sin(lon)sin(lat) |
     //     | sin(lat),          0,         cos(lat)         |
-    out_pt[i * 3 + 0] = c_lon * c_lat * x - s_lon * y - c_lon * s_lat * z;
-    out_pt[i * 3 + 1] = s_lon * c_lat * x - c_lon * y - s_lon * s_lat * z;
-    out_pt[i * 3 + 2] = s_lat * x + c_lat * z;
+    auto* p = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(out_pt) + i * step);
+    p[0] = c_lon * c_lat * x - s_lon * y - c_lon * s_lat * z;
+    p[1] = s_lon * c_lat * x - c_lon * y - s_lon * s_lat * z;
+    p[2] = s_lat * x + c_lat * z;
   }
 }
 

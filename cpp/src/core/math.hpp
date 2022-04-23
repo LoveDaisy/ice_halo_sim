@@ -63,8 +63,9 @@ void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num
 
 void SampleTrianglePoint(const float* vertices, float* out_pt, size_t sample_num = 1);
 
-void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt, size_t sample_num = 1,
-                       AngleUnit unit = AngleUnit::kDegree);
+void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt,    //
+                       size_t sample_num = 1, size_t step = 3 * sizeof(float),  //
+                       AngleUnit unit = AngleUnit::kDegree);                    //
 
 void SampleSph(float radii, float* out_pt, size_t sample_num = 1);
 

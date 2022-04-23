@@ -4,9 +4,7 @@
 #include <memory>
 
 #include "core/core_def.hpp"
-#include "protocol/crystal_config.hpp"
-#include "protocol/light_config.hpp"
-#include "protocol/proj_config.hpp"
+#include "core/optics.hpp"
 
 namespace icehalo {
 namespace v3 {
@@ -25,14 +23,6 @@ class RaypathHashHelper {
 
 struct RaypathHash {
   size_t operator()(const std::vector<IdType>& rp);
-};
-
-struct RaySeg {
-  float d_[3];
-  float p_[3];
-  float w_;
-  int fid_;
-  RaypathHashHelper rp_;
 };
 
 

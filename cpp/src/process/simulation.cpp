@@ -14,6 +14,7 @@
 #include "core/math.hpp"
 #include "core/optics.hpp"
 #include "protocol/proj_config.hpp"
+#include "protocol/sim_data.hpp"
 #include "util/log.hpp"
 #include "util/obj_pool.hpp"
 #include "util/queue.hpp"
@@ -567,54 +568,15 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
 
 namespace v3 {
 
-struct SimBufferData {
-  SimBufferData() : size_(0), capacity_(0) {}
-  SimBufferData(size_t capacity) : size_(0), capacity_(capacity) {}
-
-  void Reset(size_t capacity) {
-    d_.reset(new float[capacity * 3]{});
-    p_.reset(new float[capacity * 3]{});
-    w_.reset(new float[capacity * 1]{});
-    fid_.reset(new int[capacity * 1]{});
-    rp_.reset(new RaypathHashHelper[capacity * 1]{});
-    capacity_ = capacity;
-    size_ = 0;
-  }
-
-  float* d() const { return d_.get(); }
-  float* p() const { return p_.get(); }
-  float* w() const { return w_.get(); }
-  int* fid() const { return fid_.get(); }
-  RaypathHashHelper* rp() const { return rp_.get(); }
-
-  size_t size_;
-  size_t capacity_;
-
-  std::unique_ptr<float[]> d_;
-  std::unique_ptr<float[]> p_;
-  std::unique_ptr<float[]> w_;
-  std::unique_ptr<int[]> fid_;
-  std::unique_ptr<RaypathHashHelper[]> rp_;
-};
-
-
 /**
  * @brief Init buffer data at beginning of every multi-scattering. It makes following things:
  *        1. Sample ray directions (for first scattering). Init data d.
  *        2. Sample points on crystal surfaces. Init data p & fid & rp.
  *        3. Set ray intensity (for first scattering). Init data w.
- *
- * @param light_config
- * @param ray_num
- * @param rn_offset
- * @param crystal_id
- * @param curr_crystal
- * @param init_data
- * @param out_data
  */
-void InitSimData(const LightSourceConfig& light_config, size_t ray_num, size_t rn_offset,         // input
-                 IdType crystal_id, const Crystal* curr_crystal, const SimBufferData* init_data,  // input
-                 SimBufferData* out_data) {                                                       // output
+void InitSimData(const LightSourceConfig& light_config, size_t ray_num, size_t rn_offset,        // input
+                 IdType crystal_id, const Crystal* curr_crystal, const SimBasicData* init_data,  // input
+                 SimBasicData* out_data) {                                                       // output
   if (!out_data) {
     return;
   }
@@ -625,12 +587,13 @@ void InitSimData(const LightSourceConfig& light_config, size_t ray_num, size_t r
   if (!init_data) {  // First MS
     // w: set init weight.
     for (size_t i = 0; i < ray_num; i++) {
-      out_data->w_[i] = w0;
+      out_data->rays_[i].w_ = w0;
     }
     // d: sample direction
     if (std::holds_alternative<SunParam>(light_param)) {
       const auto& param = std::get<SunParam>(light_param);
-      SampleSphCapPoint(param.azimuth_ + 180.0f, -param.altitude_, param.diameter_ / 2.0f, out_data->d(), ray_num);
+      SampleSphCapPoint(param.azimuth_ + 180.0f, -param.altitude_, param.diameter_ / 2.0f, out_data->rays_[0].d_,
+                        ray_num, sizeof(RaySeg));
     } else if (std::holds_alternative<StreetLightParam>(light_param)) {
       // TODO: current we do **NOT** support street light source
     } else {
@@ -638,78 +601,50 @@ void InitSimData(const LightSourceConfig& light_config, size_t ray_num, size_t r
       // TODO: throw?
     }
   } else {
-    // w: copy weight.
-    std::memcpy(out_data->w(), init_data->w() + rn_offset, sizeof(float) * ray_num);
-    // d: copy direction.
-    std::memcpy(out_data->d(), init_data->d() + rn_offset * 3, sizeof(float) * ray_num * 3);
+    // Copy data. Actually only w & d is needed, other member will reset at following stage.
+    std::memcpy(out_data->rays_.get(), init_data->rays_.get() + rn_offset, sizeof(RaySeg) * ray_num);
   }
-  // p & fid & rp: sample on crystal faces
+  // p & fid: sample on crystal faces
   std::unique_ptr<float[]> proj_prob{ new float[curr_crystal->TotalFaces()]{} };
   const auto* face_norm = curr_crystal->GetFaceNorm();
   const auto* face_area = curr_crystal->GetFaceArea();
   auto total_faces = curr_crystal->TotalFaces();
   for (size_t i = 0; i < ray_num; i++) {
-    const auto* d = out_data->d() + i * 3;
+    const auto* d = out_data->rays_[i].d_;
     for (size_t j = 0; j < total_faces; j++) {
       proj_prob[j] = std::max(-Dot3(d, face_norm + j * 3) * face_area[j], 0.0f);
     }
     // fid
-    RandomSample(total_faces, proj_prob.get(), out_data->fid() + i);
-    auto fid = out_data->fid_[i];
+    RandomSample(total_faces, proj_prob.get(), &out_data->rays_[i].fid_);
+    auto fid = out_data->rays_[i].fid_;
     // p
-    SampleTrianglePoint(curr_crystal->GetFaceVtx() + fid * 9, out_data->p() + i * 3);
-    // rp
-    out_data->rp_[i] << crystal_id << curr_crystal->GetFn(fid);
+    SampleTrianglePoint(curr_crystal->GetFaceVtx() + fid * 9, out_data->rays_[i].p_);
   }
   out_data->size_ = ray_num;
 }
 
-SimBasicDataPtrU CollectData(const MsInfo& ms_info, const Crystal* crystal,           // input
-                             SimBufferData* buffer_data, SimBufferData* init_data) {  // output
+SimBasicDataPtrU CollectData(const MsInfo& ms_info, const Crystal* crystal,         // input
+                             SimBasicData* buffer_data, SimBasicData* init_data) {  // output
   size_t ray_num = buffer_data[1].size_ / 2;
   auto* rng = RandomNumberGenerator::GetInstance();
   auto out_data = std::make_unique<SimBasicData>(ray_num);
 
   buffer_data[0].size_ = 0;
   for (size_t j = 0; j < ray_num * 2; j++) {
-    auto is_total_reflection = buffer_data[1].w_[j] < 0;
-    auto is_outgoing = buffer_data[1].fid_[j] < 0 && !is_total_reflection;
+    auto is_total_reflection = buffer_data[1].rays_[j].w_ < 0;
+    auto is_outgoing = buffer_data[1].rays_[j].fid_ < 0 && !is_total_reflection;
     auto for_next_ms = is_outgoing && (ms_info.prob_ > 0.0f && rng->GetUniform() < ms_info.prob_);
     // NOTE: If prob > 0 and there is only one scattering, then for_next_ms will be true and no data
     // will be sent to out_data
 
-    buffer_data[1].rp_[j] << crystal->GetFn(buffer_data[1].fid_[j]);
-    if (is_outgoing) {
-      buffer_data[1].rp_[j] << kInvalidId;
-    }
-
     if (is_outgoing && !for_next_ms) {  // 2.3.a. Outgoing ray, and NOT choosed for next scattering
-      // Copy d, p, w, fid, and prev_p
       // Note that there are 2*n rays in buffer, but at most half of them are outgoing.
       // So size of out_data will keep in range, and we do not check it here.
-      auto dst_idx = out_data->size_;
-      std::memcpy(out_data->rays_[dst_idx].d_, buffer_data[1].d() + j * 3, 3 * sizeof(float));
-      std::memcpy(out_data->rays_[dst_idx].p_, buffer_data[1].p() + j * 3, 3 * sizeof(float));
-      out_data->rays_[dst_idx].w_ = buffer_data[1].w_[j];
-      out_data->rays_[dst_idx].fid_ = buffer_data[1].fid_[j];
-      out_data->rays_[dst_idx].rp_ = buffer_data[1].rp_[j];
-      out_data->size_++;
+      out_data->rays_[out_data->size_++] = buffer_data[1].rays_[j];
     } else if (is_outgoing) {  // 2.3.b. Outgoing, and for next scattering
-      auto dst_idx = init_data->size_;
-      std::memcpy(init_data->d() + dst_idx * 3, buffer_data[1].d() + j * 3, 3 * sizeof(float));
-      std::memcpy(init_data->p() + dst_idx * 3, buffer_data[1].p() + j * 3, 3 * sizeof(float));
-      init_data->w_[dst_idx] = buffer_data[1].w_[j];
-      init_data->fid_[dst_idx] = buffer_data[1].fid_[j];
-      init_data->rp_[dst_idx] = buffer_data[1].rp_[j];
-      init_data->size_++;
+      init_data->rays_[init_data->size_++] = buffer_data->rays_[j];
     } else if (!is_total_reflection) {  // 2.3.c. Ingoing. Squeeze data from buffer[1] to buffer[0]
-      auto dst_idx = buffer_data[0].size_;
-      std::memcpy(buffer_data[0].d() + dst_idx * 3, buffer_data[1].d() + j * 3, 3 * sizeof(float));
-      std::memcpy(buffer_data[0].p() + dst_idx * 3, buffer_data[1].p() + j * 3, 3 * sizeof(float));
-      buffer_data[0].w_[dst_idx] = buffer_data[1].w_[j];
-      buffer_data[0].fid_[dst_idx] = buffer_data[1].fid_[j];
-      buffer_data[0].rp_[dst_idx] = buffer_data[1].rp_[j];
-      buffer_data[0].size_++;
+      buffer_data[0].rays_[buffer_data->size_++] = buffer_data[1].rays_[j];
     }
   }
   buffer_data[1].size_ = 0;
@@ -806,8 +741,8 @@ void Simulator::Run() {
     // then the final ray number for init_data will be (num0 * (max_hits + 1)^ms_num),
     // which increase rapidily.
 
-    SimBufferData init_data[2]{ SimBufferData(), SimBufferData(ray_num * (config->max_hits_ + 1)) };
-    SimBufferData buffer_data[2]{};
+    SimBasicData init_data[2]{ SimBasicData(), SimBasicData(ray_num * (config->max_hits_ + 1)) };
+    SimBasicData buffer_data[2]{};
 
     bool first_ms = true;
     size_t ms_ci = 0;
@@ -826,7 +761,7 @@ void Simulator::Run() {
         auto curr_ray_num = crystal_ray_num[ci];
 
         // 1. Initialize data
-        const SimBufferData* init_ptr = first_ms ? nullptr : init_data + 0;
+        const SimBasicData* init_ptr = first_ms ? nullptr : init_data + 0;
         InitSimData(config->light_source_, curr_ray_num, rn_offset,       // input
                     m.setting_[ci].crystal_.id_, curr_crystal, init_ptr,  // input
                     buffer_data + 0);                                     // output
@@ -834,14 +769,19 @@ void Simulator::Run() {
         // 2. Start tracing
         for (size_t i = 0; i < config->max_hits_; i++) {
           // 2.1 HitSurface.
-          HitSurface(curr_crystal, refractive_index, curr_ray_num,                  // Input
-                     buffer_data[0].d(), buffer_data[0].fid(), buffer_data[0].w(),  // Input
-                     buffer_data[1].d(), buffer_data[1].w());                       // Output
+          HitSurface(curr_crystal, refractive_index,            // input
+                     curr_ray_num, buffer_data[0].rays_.get(),  // Input
+                     buffer_data[1].rays_.get());               // Output
+
+          for (size_t k = 0; k < curr_ray_num * 2; k++) {
+            std::memcpy(buffer_data[0].rays_[k].d_, buffer_data[1].rays_[k].d_, 3 * sizeof(float));
+            buffer_data[0].rays_[k].w_ = buffer_data[1].rays_[k].w_;
+          }
 
           // 2.2 Propagate.
-          Propagate(curr_crystal, curr_ray_num * 2, 2,                           // Input
-                    buffer_data[0].p(), buffer_data[1].d(), buffer_data[1].w(),  // Input
-                    buffer_data[1].p(), buffer_data[1].fid());                   // Output
+          Propagate(curr_crystal,                                     // Input
+                    curr_ray_num * 2, 2, buffer_data[0].rays_.get(),  // Input
+                    buffer_data[1].rays_.get());                      // Output
 
           buffer_data[0].size_ = 0;
           buffer_data[1].size_ = curr_ray_num * 2;
