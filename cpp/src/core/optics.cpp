@@ -244,10 +244,10 @@ float GetReflectRatio(float delta, float rr) {
   return (Rs + Rp) / 2;
 }
 
-void HitSurface_Normal(const Crystal* crystal, float n,   // input
+void HitSurface_Normal(const Crystal& crystal, float n,   // input
                        size_t num, const RaySeg* ray_in,  // input
                        RaySeg* ray_out) {                 // output
-  const auto* face_norm = crystal->GetFaceNorm();
+  const auto* face_norm = crystal.GetFaceNorm();
 
   for (size_t i = 0; i < num; i++) {
     const float* tmp_dir = ray_in[i].d_;
@@ -274,10 +274,10 @@ void HitSurface_Normal(const Crystal* crystal, float n,   // input
 }
 
 #if defined(__AVX__) && defined(__SSE__)
-void HitSurface_Simd(const Crystal* crystal, float n,   // input
+void HitSurface_Simd(const Crystal& crystal, float n,   // input
                      size_t num, const RaySeg* ray_in,  // input
                      RaySeg* ray_out) {                 // output
-  const auto* face_norm = crystal->GetFaceNorm();
+  const auto* face_norm = crystal.GetFaceNorm();
   __m128 zero_ = _mm_set_ps1(0.0f);
   __m128 one_ = _mm_set_ps1(1.0f);
   __m128 minus_one_ = _mm_set_ps1(-1.0f);
@@ -355,7 +355,7 @@ void HitSurface_Simd(const Crystal* crystal, float n,   // input
 #endif
 
 
-void HitSurface(const Crystal* crystal, float n,   // input
+void HitSurface(const Crystal& crystal, float n,   // input
                 size_t num, const RaySeg* ray_in,  // input
                 RaySeg* ray_out) {                 // output
 #if defined(__SSE__) && defined(__AVX__)
@@ -420,11 +420,11 @@ void RayTriangleBW(const float* ray_pt, const float* ray_dir,  // input
 }
 
 
-void Propagate(const Crystal* crystal,                         // input
+void Propagate(const Crystal& crystal,                         // input
                size_t num, size_t step, const RaySeg* ray_in,  // input
                RaySeg* ray_out) {                              // output
-  auto face_num = crystal->TotalFaces();
-  const auto* face_transform = crystal->GetFaceCoordTf();
+  auto face_num = crystal.TotalFaces();
+  const auto* face_transform = crystal.GetFaceCoordTf();
 
   // Do main work
   for (size_t i = 0; i < num; i++) {

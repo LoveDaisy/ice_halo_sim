@@ -188,11 +188,11 @@ struct RaySeg {
 };
 
 
-void HitSurface(const Crystal* crystal, float n,   // input
+void HitSurface(const Crystal& crystal, float n,   // input
                 size_t num, const RaySeg* ray_in,  // input
                 RaySeg* ray_out);                  // output
 
-void Propagate(const Crystal* crystal,                         // input
+void Propagate(const Crystal& crystal,                         // input
                size_t num, size_t step, const RaySeg* ray_in,  // input
                RaySeg* ray_out);                               // output
 

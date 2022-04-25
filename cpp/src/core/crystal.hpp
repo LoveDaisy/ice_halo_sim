@@ -34,7 +34,16 @@ using CrystalPtrU = std::unique_ptr<Crystal>;
 
 class Crystal {
  public:
-  static CrystalPtrU CreatePrism(float h);
+  static Crystal CreatePrism(float h);
+
+  Crystal();
+  Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx);
+  Crystal(const Crystal& other);
+  Crystal(Crystal&& other);
+  ~Crystal() = default;
+
+  Crystal& operator=(const Crystal& other);
+  Crystal& operator=(Crystal&& other);
 
   size_t TotalFaces() const;
 
@@ -54,8 +63,6 @@ class Crystal {
   IdType config_id_ = kInvalidId;
 
  private:
-  Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx);
-
   void ComputeCacheData();
 
   Mesh mesh_;

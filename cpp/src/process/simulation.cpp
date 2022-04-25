@@ -13,6 +13,7 @@
 #include "core/crystal.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
+#include "protocol/light_config.hpp"
 #include "protocol/proj_config.hpp"
 #include "protocol/sim_data.hpp"
 #include "util/log.hpp"
@@ -569,59 +570,65 @@ void SimulationData::Deserialize(File& file, endian::Endianness endianness) {
 namespace v3 {
 
 /**
- * @brief Init buffer data at beginning of every multi-scattering. It makes following things:
- *        1. Sample ray directions (for first scattering). Init data d.
- *        2. Sample points on crystal surfaces. Init data p & fid & rp.
- *        3. Set ray intensity (for first scattering). Init data w.
+ * @brief Sample on crystal & init origin (p & fid) of rays.
+ *        NOTE: direction of rays should be given.
  */
-void InitSimData(const LightSourceConfig& light_config, size_t ray_num, size_t rn_offset,     // input
-                 IdType crystal_id, const Crystal* curr_crystal, const RayBuffer* init_data,  // input
-                 RayBuffer* out_data) {                                                       // output
-  if (!out_data) {
+void InitRayPFid(const Crystal& curr_crystal,  // input
+                 RayBuffer* ray_buf_ptr) {     // output
+  if (!ray_buf_ptr) {
     return;
   }
 
-  const auto& light_param = light_config.param_;
-  float w0 = light_config.wl_param_[0].weight_;
-
-  if (!init_data) {  // First MS
-    // w: set init weight.
-    for (size_t i = 0; i < ray_num; i++) {
-      out_data->rays_[i].w_ = w0;
-    }
-    // d: sample direction
-    if (std::holds_alternative<SunParam>(light_param)) {
-      const auto& param = std::get<SunParam>(light_param);
-      SampleSphCapPoint(param.azimuth_ + 180.0f, -param.altitude_, param.diameter_ / 2.0f, out_data->rays_[0].d_,
-                        ray_num, sizeof(RaySeg));
-    } else if (std::holds_alternative<StreetLightParam>(light_param)) {
-      // TODO: current we do **NOT** support street light source
-    } else {
-      LOG_ERROR("unknown light source type!");
-      // TODO: throw?
-    }
-  } else {
-    // Copy data. Actually only w & d is needed, other member will reset at following stage.
-    std::memcpy(out_data->rays_.get(), init_data->rays_.get() + rn_offset, sizeof(RaySeg) * ray_num);
-  }
+  RayBuffer& ray_buf = *ray_buf_ptr;
   // p & fid: sample on crystal faces
-  std::unique_ptr<float[]> proj_prob{ new float[curr_crystal->TotalFaces()]{} };
-  const auto* face_norm = curr_crystal->GetFaceNorm();
-  const auto* face_area = curr_crystal->GetFaceArea();
-  auto total_faces = curr_crystal->TotalFaces();
-  for (size_t i = 0; i < ray_num; i++) {
-    const auto* d = out_data->rays_[i].d_;
+  std::unique_ptr<float[]> proj_prob{ new float[curr_crystal.TotalFaces()]{} };
+  const auto* face_norm = curr_crystal.GetFaceNorm();
+  const auto* face_area = curr_crystal.GetFaceArea();
+  auto total_faces = curr_crystal.TotalFaces();
+  for (size_t i = 0; i < ray_buf.size_; i++) {
+    const auto* d = ray_buf[i].d_;
     for (size_t j = 0; j < total_faces; j++) {
       proj_prob[j] = std::max(-Dot3(d, face_norm + j * 3) * face_area[j], 0.0f);
     }
     // fid
-    RandomSample(total_faces, proj_prob.get(), &out_data->rays_[i].fid_);
-    auto fid = out_data->rays_[i].fid_;
+    RandomSample(total_faces, proj_prob.get(), &ray_buf[i].fid_);
+    auto fid = ray_buf[i].fid_;
     // p
-    SampleTrianglePoint(curr_crystal->GetFaceVtx() + fid * 9, out_data->rays_[i].p_);
+    SampleTrianglePoint(curr_crystal.GetFaceVtx() + fid * 9, ray_buf[i].p_);
   }
-  out_data->size_ = ray_num;
 }
+
+/**
+ * @brief Set initial value of d & w (direction and intensity) for rays.
+ *
+ */
+void InitRayDW(const LightSourceConfig& light_config, size_t ray_num,  // input
+               RayBuffer* ray_buf_ptr) {                               // output
+  if (!ray_buf_ptr) {
+    return;
+  }
+  const auto& ray_buf = *ray_buf_ptr;
+  const auto& light_param = light_config.param_;
+  float w0 = light_config.wl_param_[0].weight_;
+
+  // w: set init weight.
+  for (size_t i = 0; i < ray_num; i++) {
+    ray_buf[i].w_ = w0;
+  }
+
+  // d: sample direction
+  if (std::holds_alternative<SunParam>(light_param)) {
+    const auto& param = std::get<SunParam>(light_param);
+    SampleSphCapPoint(param.azimuth_ + 180.0f, -param.altitude_, param.diameter_ / 2.0f, ray_buf[0].d_, ray_num,
+                      sizeof(RaySeg));
+  } else if (std::holds_alternative<StreetLightParam>(light_param)) {
+    LOG_WARNING("we will support street light later.");
+    // TODO: current we do **NOT** support street light source
+  } else {
+    LOG_ERROR("unknown light source type!");
+  }
+}
+
 
 // SimBasicDataPtrU CollectData(const MsInfo& ms_info, const Crystal* crystal,         // input
 //                              RayBuffer* buffer_data, RayBuffer* init_data) {  // output
@@ -651,26 +658,27 @@ void InitSimData(const LightSourceConfig& light_config, size_t ray_num, size_t r
 //   return out_data;
 // }
 
-std::unique_ptr<CrystalPtrU[]> SampleMsCrystal(const SceneConfig* config) {
+std::vector<Crystal> SampleMsCrystal(const SceneConfig* config) {
   size_t total = 0;
   for (const auto& m : config->ms_) {
     total += m.setting_.size();
   }
   auto* rng = RandomNumberGenerator::GetInstance();
-  std::unique_ptr<CrystalPtrU[]> crystals{ new CrystalPtrU[total]{} };
-  auto* p = crystals.get();
+  std::vector<Crystal> crystals;
+  crystals.reserve(total);
+
   for (const auto& m : config->ms_) {
     for (const auto& c : m.setting_) {
       // Sample current scattering crystals
       if (std::holds_alternative<PrismCrystalParam>(c.crystal_.param_)) {
         const auto& param = std::get<PrismCrystalParam>(c.crystal_.param_);
         float h = rng->Get(param.h_);
-        *p = Crystal::CreatePrism(h);
+        crystals.emplace_back(Crystal::CreatePrism(h));
         // TODO: prism face distance
       } else if (std::holds_alternative<PyramidCrystalParam>(c.crystal_.param_)) {
         // TODO:
       }
-      p[0]->config_id_ = c.crystal_.id_;
+      crystals.back().config_id_ = c.crystal_.id_;
 
       // Set axis orientation
       {
@@ -682,11 +690,10 @@ std::unique_ptr<CrystalPtrU[]> SampleMsCrystal(const SceneConfig* config) {
         float roll = rng->Get(c.crystal_.axis_.roll_dist) * math::kDegreeToRad;
         float axis[9]{ 1, 0, 0, 0, 1, 0, 0, 0, 1 };
         auto rot = Rotation(axis + 6, roll).Chain(axis + 3, math::kPi_2 - lat).Chain(axis + 6, lon);
-        p[0]->Rotate(rot);
+        crystals.back().Rotate(rot);
       }
 
       // TODO: Set origin
-      p++;
     }
   }
   return crystals;
@@ -718,7 +725,7 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const MsInfo& ms_info, int ray_
 }
 
 
-Simulator::Simulator(QueuePtrS<SceneConfigPtrU> config_queue, QueuePtrS<SimBasicDataPtrU> data_queue)
+Simulator::Simulator(QueuePtrS<SceneConfigPtrU> config_queue, QueuePtrS<SimDataPtrU> data_queue)
     : config_queue_(config_queue), data_queue_(data_queue), stop_(false) {}
 
 void Simulator::Run() {
@@ -741,7 +748,22 @@ void Simulator::Run() {
     // then the final ray number for init_data will be (num0 * (max_hits + 1)^ms_num),
     // which increase rapidily.
 
-    RayBuffer init_data[2]{ RayBuffer(), RayBuffer(ray_num * (config->max_hits_ + 1)) };
+    // Calculate total rays (expected value) used in the whole simulation.
+    // total = n * (2 * k + 1) * (1 + k * p1 + k^2 * p1 * p2 + k^3 * p1 * p2 * p3 + ...)
+    // where k = max_hits
+    size_t total_ray_num = ray_num * (2 * config->max_hits_ + 1);
+    {
+      size_t x = 1;
+      size_t y = 1;
+      for (size_t i = 0; i + 1 < config->ms_.size(); i++) {
+        y *= config->max_hits_ * config->ms_[i].prob_;
+        x += y;
+      }
+      total_ray_num *= x;
+    }
+
+    RayBuffer all_data(total_ray_num);
+    RayBuffer init_data[2]{ RayBuffer(), RayBuffer(ray_num * config->max_hits_) };
     RayBuffer buffer_data[2]{};
 
     bool first_ms = true;
@@ -754,17 +776,29 @@ void Simulator::Run() {
       buffer_data[0].Reset(ray_num * 2);
       buffer_data[1].Reset(ray_num * 2);
 
-      size_t rn_offset = 0;
+      size_t init_ray_offset = 0;
       for (size_t ci = 0; ci < ms_crystal_cnt; ci++) {
-        const auto* curr_crystal = ms_crystals[ms_ci + ci].get();
-        float refractive_index = curr_crystal->GetRefractiveIndex(wl);
+        const auto& curr_crystal = ms_crystals[ms_ci + ci];
+        float refractive_index = curr_crystal.GetRefractiveIndex(wl);
         auto curr_ray_num = crystal_ray_num[ci];
 
         // 1. Initialize data
-        const RayBuffer* init_ptr = first_ms ? nullptr : init_data + 0;
-        InitSimData(config->light_source_, curr_ray_num, rn_offset,       // input
-                    m.setting_[ci].crystal_.id_, curr_crystal, init_ptr,  // input
-                    buffer_data + 0);                                     // output
+        buffer_data[0].size_ = 0;
+        if (first_ms) {
+          InitRayDW(config->light_source_, curr_ray_num, buffer_data + 0);
+          for (size_t i = 0; i < curr_ray_num; i++) {
+            buffer_data[0][i].prev_ray_id_ = kInvalidId;
+          }
+          buffer_data[0].size_ = curr_ray_num;
+        } else {
+          buffer_data[0].EmplaceBack(init_data[0], init_ray_offset, curr_ray_num);
+          init_ray_offset += curr_ray_num;
+        }
+        InitRayPFid(curr_crystal, buffer_data + 0);
+        for (size_t i = 0; i < buffer_data[0].size_; i++) {
+          buffer_data[0][i].crystal_id_ = ms_ci + ci;
+        }
+        all_data.EmplaceBack(buffer_data[0]);
 
         // 2. Start tracing
         for (size_t i = 0; i < config->max_hits_; i++) {
@@ -786,27 +820,46 @@ void Simulator::Run() {
           buffer_data[0].size_ = 0;
           buffer_data[1].size_ = curr_ray_num * 2;
 
-          // 2.3
-          //  a. Copy outgoing rays into output data, with probability of (1 - p), which can be sent immediately
-          //  b. Copy outgoing rays into initial data, with probability of p
-          //  c. Squeeze (better swap?) buffers.
-          // And this procedure fills rays (d, p, w, fid, rp) of out_data
-
-          // auto out_data = CollectData(m, curr_crystal, buffer_data, init_data + 1);
-          // out_data->curr_wl_ = wl;
-
-          // data_queue_->Emplace(std::move(out_data));
-        }
-
-        rn_offset += curr_ray_num;
-      }
+          // 2.3 Collect data.
+          auto* rng = RandomNumberGenerator::GetInstance();
+          size_t all_ray_offset = all_data.size_;
+          for (size_t j = 0; j < buffer_data[1].size_; j++) {
+            auto& r = buffer_data[1][j];
+            r.crystal_id_ = ms_ci + ci;
+            if (i == 0) {
+              r.prev_ray_id_ = j / 2 + all_ray_offset - curr_ray_num;
+            } else if (i == 1) {
+              r.prev_ray_id_ = j / 2 * 2 + 1 + all_ray_offset - curr_ray_num * 2;
+            } else {
+              r.prev_ray_id_ = j / 2 * 2 + 0 + all_ray_offset - curr_ray_num * 2;
+            }
+            if (r.fid_ < 0) {
+              //  a. Copy outgoing rays into initial data, with probability of p
+              if (rng->GetUniform() < m.prob_) {
+                init_data[1].EmplaceBack(r);
+              }
+            } else {
+              //  b. Squeeze (or better swap?) buffers.
+              buffer_data[0].EmplaceBack(r);
+            }
+          }
+          // c. Copy to all_data
+          all_data.EmplaceBack(buffer_data[1]);
+        }  // hit loop
+      }    // crystal loop
       ms_ci += ms_crystal_cnt;
       ray_num = init_data[1].size_;
       init_data[0].Reset(ray_num * (config->max_hits_ + 1));
       std::swap(init_data[0], init_data[1]);
 
       first_ms = false;
-    }
+    }  // ms loop
+
+    auto sim_data = std::make_unique<SimData>();
+    sim_data->curr_wl_ = wl;
+    sim_data->crystals_ = std::move(ms_crystals);
+    sim_data->ray_buffer_ = std::move(all_data);
+    data_queue_->Emplace(std::move(sim_data));
 
     if (stop_) {
       break;

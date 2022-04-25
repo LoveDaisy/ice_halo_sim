@@ -17,7 +17,7 @@ class OpticsTest : public ::testing::Test {
   }
 
   icehalo::CrystalPtrU crystal_;
-  icehalo::v3::CrystalPtrU new_crystal_;
+  icehalo::v3::Crystal new_crystal_;
 };
 
 
@@ -102,7 +102,7 @@ TEST_F(OpticsTest, HitSurface) {
   icehalo::Optics::HitSurface(crystal_.get(), kN, kNum,  // input
                               dir_in, face_id_in, w_in,  // input
                               dir_out, w_out);           // output
-  icehalo::v3::HitSurface(new_crystal_.get(), kN,        // input
+  icehalo::v3::HitSurface(new_crystal_, kN,              // input
                           kNum, ray_in,                  // input
                           ray_out);                      // output
 
@@ -220,7 +220,7 @@ TEST_F(OpticsTest, Propagate) {
   int id_out[kNum]{ 6, -1, 16, -1, 16 };
   icehalo::v3::RaySeg ray_out[kNum];
 
-  icehalo::v3::Propagate(c.get(),          // input
+  icehalo::v3::Propagate(c,                // input
                          kNum, 1, ray_in,  // input
                          ray_out);         // output
 

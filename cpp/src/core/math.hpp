@@ -74,7 +74,14 @@ void SampleBall(float radii, float* out_pt, size_t sample_num = 1);
 
 class Mesh {
  public:
+  Mesh();
   Mesh(size_t vtx_cnt, size_t triangle_cnt);
+  Mesh(const Mesh& other);
+  Mesh(Mesh&& other);
+  ~Mesh() = default;
+
+  Mesh& operator=(const Mesh& other);
+  Mesh& operator=(Mesh&& other);
 
   size_t GetVtxCnt() const;
   size_t GetTriangleCnt() const;

@@ -32,7 +32,7 @@ TEST_F(V3TestProj, SimpleProj) {
   v3::ConfigManager config_manager = config_json_.get<v3::ConfigManager>();
 
   auto config_queue = std::make_shared<v3::Queue<v3::SceneConfigPtrU>>();
-  auto data_queue = std::make_shared<v3::Queue<v3::SimBasicDataPtrU>>();
+  auto data_queue = std::make_shared<v3::Queue<v3::SimDataPtrU>>();
 
   constexpr int kMaxHits = 8;
 
@@ -48,17 +48,24 @@ TEST_F(V3TestProj, SimpleProj) {
     int offset = 0;
     while (true) {
       auto data = data_queue->Get();
-      if (!data || data->Empty()) {
+      if (!data || data->ray_buffer_.Empty()) {
         break;
       }
+      const auto& rays = data->ray_buffer_;
       LOG_DEBUG("p  d  w");
-      for (size_t i = 0; i < data->size_; i++) {
-        const auto& ray = data->rays_[i];
-        LOG_DEBUG("%.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f", ray.p_[0], ray.p_[1], ray.p_[2], ray.d_[0], ray.d_[1],
-                  ray.d_[2], ray.w_);
-        std::memcpy(output_data_ptr + offset * 7 + 0, ray.p_, 3 * sizeof(float));
-        std::memcpy(output_data_ptr + offset * 7 + 3, ray.d_, 3 * sizeof(float));
-        output_data_ptr[offset * 7 + 6] = ray.w_;
+      for (size_t i = 0; i < rays.size_; i++) {
+        const auto& r = rays[i];
+        LOG_DEBUG("%.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f %d",  //
+                  r.p_[0], r.p_[1], r.p_[2],                  // p
+                  r.d_[0], r.d_[1], r.d_[2],                  // d
+                  r.w_,                                       // w
+                  r.fid_);                                    // fid
+        if (r.fid_ > 0 || r.w_ < 0) {
+          continue;
+        }
+        std::memcpy(output_data_ptr + offset * 7 + 0, r.p_, 3 * sizeof(float));
+        std::memcpy(output_data_ptr + offset * 7 + 3, r.d_, 3 * sizeof(float));
+        output_data_ptr[offset * 7 + 6] = r.w_;
         offset++;
       }
     }

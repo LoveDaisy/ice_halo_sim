@@ -34,7 +34,12 @@ struct RayBuffer {
 
   void Reset(size_t capacity);
   bool Empty() const;
+  void EmplaceBack(RaySeg r);
+  void EmplaceBack(const RayBuffer& buffer, size_t start = 0, size_t len = kInfSize);
+
   RaySeg* rays() const;
+  RaySeg* begin() const;
+  RaySeg* end() const;
 
   size_t capacity_;
   size_t size_;
@@ -47,7 +52,7 @@ struct SimData {
   SimData(size_t capacity);
   SimData(const SimData& other);
   SimData(SimData&& other);
-  ~SimData();
+  ~SimData() = default;
 
   SimData& operator=(const SimData& other);
   SimData& operator=(SimData&& other);
@@ -55,10 +60,11 @@ struct SimData {
   // ----- Data -----
   float curr_wl_;
   RayBuffer ray_buffer_;
+  std::vector<Crystal> crystals_;
 };
 
-using SimBasicDataPtrS = std::shared_ptr<SimData>;
-using SimBasicDataPtrU = std::unique_ptr<SimData>;
+using SimDataPtrS = std::shared_ptr<SimData>;
+using SimDataPtrU = std::unique_ptr<SimData>;
 
 struct SimBackTracingData {};
 

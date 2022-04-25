@@ -514,9 +514,58 @@ void SampleBall(float radii, float* out_pt, size_t sample_num) {
 }
 
 
+Mesh::Mesh() : vtx_cnt_(0), triangle_cnt_(0) {}
+
 Mesh::Mesh(size_t vtx_cnt, size_t triangle_cnt)
     : vtx_cnt_(vtx_cnt), triangle_cnt_(triangle_cnt), vertices_(new float[vtx_cnt * 3]{}),
       triangle_(new int[triangle_cnt * 3]{}) {}
+
+Mesh::Mesh(const Mesh& other)
+    : vtx_cnt_(other.vtx_cnt_), triangle_cnt_(other.triangle_cnt_), vertices_(new float[other.vtx_cnt_ * 3]),
+      triangle_(new int[other.triangle_cnt_ * 3]) {
+  std::memcpy(vertices_.get(), other.vertices_.get(), vtx_cnt_ * 3 * sizeof(float));
+  std::memcpy(triangle_.get(), other.triangle_.get(), vtx_cnt_ * 3 * sizeof(int));
+}
+
+Mesh::Mesh(Mesh&& other)
+    : vtx_cnt_(other.vtx_cnt_), triangle_cnt_(other.triangle_cnt_), vertices_(std::move(other.vertices_)),
+      triangle_(std::move(other.triangle_)) {
+  other.vtx_cnt_ = 0;
+  other.triangle_cnt_ = 0;
+  other.vertices_ = nullptr;
+  other.triangle_ = nullptr;
+}
+
+Mesh& Mesh::operator=(const Mesh& other) {
+  if (&other == this) {
+    return *this;
+  }
+
+  vtx_cnt_ = other.vtx_cnt_;
+  triangle_cnt_ = other.triangle_cnt_;
+  vertices_.reset(new float[vtx_cnt_ * 3]);
+  triangle_.reset(new int[triangle_cnt_ * 3]);
+  std::memcpy(vertices_.get(), other.vertices_.get(), vtx_cnt_ * 3 * sizeof(float));
+  std::memcpy(triangle_.get(), other.triangle_.get(), triangle_cnt_ * 3 * sizeof(int));
+  return *this;
+}
+
+Mesh& Mesh::operator=(Mesh&& other) {
+  if (&other == this) {
+    return *this;
+  }
+
+  vtx_cnt_ = other.vtx_cnt_;
+  triangle_cnt_ = other.triangle_cnt_;
+  vertices_ = std::move(other.vertices_);
+  triangle_ = std::move(other.triangle_);
+
+  other.vtx_cnt_ = 0;
+  other.triangle_cnt_ = 0;
+  other.vertices_ = nullptr;
+  other.triangle_ = nullptr;
+  return *this;
+}
 
 size_t Mesh::GetVtxCnt() const {
   return vtx_cnt_;
