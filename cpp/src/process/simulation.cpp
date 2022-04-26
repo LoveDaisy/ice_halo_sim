@@ -629,35 +629,6 @@ void InitRayDW(const LightSourceConfig& light_config, size_t ray_num,  // input
   }
 }
 
-
-// SimBasicDataPtrU CollectData(const MsInfo& ms_info, const Crystal* crystal,         // input
-//                              RayBuffer* buffer_data, RayBuffer* init_data) {  // output
-//   size_t ray_num = buffer_data[1].size_ / 2;
-//   auto* rng = RandomNumberGenerator::GetInstance();
-//   auto out_data = std::make_unique<RayBuffer>(ray_num);
-
-//   buffer_data[0].size_ = 0;
-//   for (size_t j = 0; j < ray_num * 2; j++) {
-//     auto is_total_reflection = buffer_data[1].rays_[j].w_ < 0;
-//     auto is_outgoing = buffer_data[1].rays_[j].fid_ < 0 && !is_total_reflection;
-//     auto for_next_ms = is_outgoing && (ms_info.prob_ > 0.0f && rng->GetUniform() < ms_info.prob_);
-//     // NOTE: If prob > 0 and there is only one scattering, then for_next_ms will be true and no data
-//     // will be sent to out_data
-
-//     if (is_outgoing && !for_next_ms) {  // 2.3.a. Outgoing ray, and NOT choosed for next scattering
-//       // Note that there are 2*n rays in buffer, but at most half of them are outgoing.
-//       // So size of out_data will keep in range, and we do not check it here.
-//       out_data->rays_[out_data->size_++] = buffer_data[1].rays_[j];
-//     } else if (is_outgoing) {  // 2.3.b. Outgoing, and for next scattering
-//       init_data->rays_[init_data->size_++] = buffer_data->rays_[j];
-//     } else if (!is_total_reflection) {  // 2.3.c. Ingoing. Squeeze data from buffer[1] to buffer[0]
-//       buffer_data[0].rays_[buffer_data->size_++] = buffer_data[1].rays_[j];
-//     }
-//   }
-//   buffer_data[1].size_ = 0;
-//   return out_data;
-// }
-
 std::vector<Crystal> SampleMsCrystal(const SceneConfig* config) {
   size_t total = 0;
   for (const auto& m : config->ms_) {
@@ -724,6 +695,55 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const MsInfo& ms_info, int ray_
   return c_num;
 }
 
+void TraceRays(const Crystal& curr_crystal, float refractive_index, size_t curr_ray_num, RayBuffer* buffer_data) {
+  // 1 HitSurface.
+  HitSurface(curr_crystal, refractive_index,       // input
+             curr_ray_num, buffer_data[0].rays(),  // Input
+             buffer_data[1].rays());               // Output
+
+  for (size_t k = 0; k < curr_ray_num * 2; k++) {
+    std::memcpy(buffer_data[0][k].d_, buffer_data[1][k].d_, 3 * sizeof(float));
+    buffer_data[0][k].w_ = buffer_data[1][k].w_;
+  }
+
+  // 2 Propagate.
+  Propagate(curr_crystal,                                // Input
+            curr_ray_num * 2, 2, buffer_data[0].rays(),  // Input
+            buffer_data[1].rays());                      // Output
+
+  buffer_data[0].size_ = 0;
+  buffer_data[1].size_ = curr_ray_num * 2;
+}
+
+void CollectData(size_t hit_loop_idx, size_t crystal_idx, float ms_prob,  //
+                 RayBuffer* buffer_data, RayBuffer* init_data, RayBuffer* all_data) {
+  size_t curr_ray_num = buffer_data[1].size_ / 2;
+  auto* rng = RandomNumberGenerator::GetInstance();
+  size_t all_ray_offset = all_data->size_;
+  for (size_t j = 0; j < buffer_data[1].size_; j++) {
+    auto& r = buffer_data[1][j];
+    r.crystal_id_ = crystal_idx;
+    if (hit_loop_idx == 0) {
+      r.prev_ray_id_ = j / 2 + all_ray_offset - curr_ray_num;
+    } else if (hit_loop_idx == 1) {
+      r.prev_ray_id_ = j / 2 * 2 + 1 + all_ray_offset - curr_ray_num * 2;
+    } else {
+      r.prev_ray_id_ = j / 2 * 2 + 0 + all_ray_offset - curr_ray_num * 2;
+    }
+    if (r.fid_ < 0) {
+      //  a. Copy outgoing rays into initial data, with probability of p
+      if (rng->GetUniform() < ms_prob) {
+        init_data[1].EmplaceBack(r);
+      }
+    } else {
+      //  b. Squeeze (or better swap?) buffers.
+      buffer_data[0].EmplaceBack(r);
+    }
+  }
+  // c. Copy to all_data
+  all_data->EmplaceBack(buffer_data[1]);
+}
+
 
 Simulator::Simulator(QueuePtrS<SceneConfigPtrU> config_queue, QueuePtrS<SimDataPtrU> data_queue)
     : config_queue_(config_queue), data_queue_(data_queue), stop_(false) {}
@@ -742,11 +762,11 @@ void Simulator::Run() {
 
     float wl = config->light_source_.wl_param_[0].wl_;  // Take first wl **ONLY**. Single wl in a single run.
 
-    size_t ray_num = config->ray_num_;
     // For memory saving, it's better to keep ray_num small.
     // Actually, if ms_prob = 1.0, i.e. all outgoing rays will be sent to next crystal,
     // then the final ray number for init_data will be (num0 * (max_hits + 1)^ms_num),
     // which increase rapidily.
+    size_t ray_num = config->ray_num_;
 
     // Calculate total rays (expected value) used in the whole simulation.
     // total = n * (2 * k + 1) * (1 + k * p1 + k^2 * p1 * p2 + k^3 * p1 * p2 * p3 + ...)
@@ -783,74 +803,46 @@ void Simulator::Run() {
         auto curr_ray_num = crystal_ray_num[ci];
 
         // 1. Initialize data
-        buffer_data[0].size_ = 0;
-        if (first_ms) {
-          InitRayDW(config->light_source_, curr_ray_num, buffer_data + 0);
-          for (size_t i = 0; i < curr_ray_num; i++) {
-            buffer_data[0][i].prev_ray_id_ = kInvalidId;
+        {
+          buffer_data[0].size_ = 0;
+          if (first_ms) {
+            InitRayDW(config->light_source_, curr_ray_num, buffer_data + 0);
+            for (size_t i = 0; i < curr_ray_num; i++) {
+              buffer_data[0][i].prev_ray_id_ = kInvalidId;
+            }
+            buffer_data[0].size_ = curr_ray_num;
+          } else {
+            buffer_data[0].EmplaceBack(init_data[0], init_ray_offset, curr_ray_num);
+            init_ray_offset += curr_ray_num;
           }
-          buffer_data[0].size_ = curr_ray_num;
-        } else {
-          buffer_data[0].EmplaceBack(init_data[0], init_ray_offset, curr_ray_num);
-          init_ray_offset += curr_ray_num;
+          InitRayPFid(curr_crystal, buffer_data + 0);
+          for (auto& r : buffer_data[0]) {
+            r.crystal_id_ = ms_ci + ci;
+          }
+          all_data.EmplaceBack(buffer_data[0]);
         }
-        InitRayPFid(curr_crystal, buffer_data + 0);
-        for (size_t i = 0; i < buffer_data[0].size_; i++) {
-          buffer_data[0][i].crystal_id_ = ms_ci + ci;
-        }
-        all_data.EmplaceBack(buffer_data[0]);
 
         // 2. Start tracing
         for (size_t i = 0; i < config->max_hits_; i++) {
-          // 2.1 HitSurface.
-          HitSurface(curr_crystal, refractive_index,       // input
-                     curr_ray_num, buffer_data[0].rays(),  // Input
-                     buffer_data[1].rays());               // Output
+          // 2.1 Trace rays.
+          TraceRays(curr_crystal, refractive_index, curr_ray_num, buffer_data);
+          // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
 
-          for (size_t k = 0; k < curr_ray_num * 2; k++) {
-            std::memcpy(buffer_data[0][k].d_, buffer_data[1][k].d_, 3 * sizeof(float));
-            buffer_data[0][k].w_ = buffer_data[1][k].w_;
-          }
-
-          // 2.2 Propagate.
-          Propagate(curr_crystal,                                // Input
-                    curr_ray_num * 2, 2, buffer_data[0].rays(),  // Input
-                    buffer_data[1].rays());                      // Output
-
-          buffer_data[0].size_ = 0;
-          buffer_data[1].size_ = curr_ray_num * 2;
-
-          // 2.3 Collect data.
-          auto* rng = RandomNumberGenerator::GetInstance();
-          size_t all_ray_offset = all_data.size_;
-          for (size_t j = 0; j < buffer_data[1].size_; j++) {
-            auto& r = buffer_data[1][j];
-            r.crystal_id_ = ms_ci + ci;
-            if (i == 0) {
-              r.prev_ray_id_ = j / 2 + all_ray_offset - curr_ray_num;
-            } else if (i == 1) {
-              r.prev_ray_id_ = j / 2 * 2 + 1 + all_ray_offset - curr_ray_num * 2;
-            } else {
-              r.prev_ray_id_ = j / 2 * 2 + 0 + all_ray_offset - curr_ray_num * 2;
-            }
-            if (r.fid_ < 0) {
-              //  a. Copy outgoing rays into initial data, with probability of p
-              if (rng->GetUniform() < m.prob_) {
-                init_data[1].EmplaceBack(r);
-              }
-            } else {
-              //  b. Squeeze (or better swap?) buffers.
-              buffer_data[0].EmplaceBack(r);
-            }
-          }
-          // c. Copy to all_data
-          all_data.EmplaceBack(buffer_data[1]);
+          // 2.2 Collect data.
+          CollectData(i, ms_ci + ci, m.prob_, buffer_data, init_data, &all_data);
         }  // hit loop
       }    // crystal loop
       ms_ci += ms_crystal_cnt;
       ray_num = init_data[1].size_;
       init_data[0].Reset(ray_num * (config->max_hits_ + 1));
       std::swap(init_data[0], init_data[1]);
+
+      // Shuffle init_data
+      auto* rng = RandomNumberGenerator::GetInstance();
+      for (size_t i = 0; i < init_data[0].size_; i++) {
+        size_t j = static_cast<size_t>(rng->GetUniform() * (init_data[0].size_ - i)) + i;
+        std::swap(init_data[0][i], init_data[0][j]);
+      }
 
       first_ms = false;
     }  // ms loop
