@@ -154,21 +154,27 @@ TEST_F(OpticsTest, RayFaceIntersection) {
 
   using icehalo::math::kFloatEps;
   for (int i = 0; i < kNum; i++) {
-    float out_pt_simd[]{ 0, 0, 0 };
     float out_pt_normal[]{ 0, 0, 0 };
-    int out_id_simd = -1;
     int out_id_normal = -1;
     icehalo::Optics::IntersectLineWithTriangles(p_in + i * 3, dir_in + i * 3, id_in[i], face_num,  // input
                                                 face_base, face_point, face_norm,                  // input
                                                 out_pt_normal, &out_id_normal);                    // output
-
+#if defined(USE_SIMD) && defined(__SSE__) && defined(__AVX__)
+    float out_pt_simd[]{ 0, 0, 0 };
+    int out_id_simd = -1;
     icehalo::Optics::IntersectLineWithTrianglesSimd(p_in + i * 3, dir_in + i * 3, id_in[i], face_num,  // input
                                                     face_base, face_point, face_norm,                  // input
                                                     out_pt_simd, &out_id_simd);                        // output
+#endif
+
     EXPECT_EQ(out_id_normal, id_out[i]);
+#if defined(USE_SIMD) && defined(__SSE__) && defined(__AVX__)
     EXPECT_EQ(out_id_normal, out_id_simd);
+#endif
     for (int j = 0; j < 3; j++) {
+#if defined(USE_SIMD) && defined(__SSE__) && defined(__AVX__)
       EXPECT_NEAR(out_pt_simd[j], out_pt_normal[j], kFloatEps);
+#endif
       EXPECT_NEAR(out_pt_normal[j], p_out[i * 3 + j], kFloatEps);
     }
   }

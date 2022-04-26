@@ -1,6 +1,8 @@
 #include "optics.hpp"
 
+#ifdef USE_SIMD
 #include <immintrin.h>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -273,7 +275,7 @@ void HitSurface_Normal(const Crystal& crystal, float n,   // input
   }
 }
 
-#if defined(__AVX__) && defined(__SSE__)
+#if defined(USE_SIMD) && defined(__AVX__) && defined(__SSE__)
 void HitSurface_Simd(const Crystal& crystal, float n,   // input
                      size_t num, const RaySeg* ray_in,  // input
                      RaySeg* ray_out) {                 // output
@@ -358,7 +360,7 @@ void HitSurface_Simd(const Crystal& crystal, float n,   // input
 void HitSurface(const Crystal& crystal, float n,   // input
                 size_t num, const RaySeg* ray_in,  // input
                 RaySeg* ray_out) {                 // output
-#if defined(__SSE__) && defined(__AVX__)
+#if defined(USE_SIMD) && defined(__SSE__) && defined(__AVX__)
   HitSurface_Simd(crystal, n, num, ray_in, ray_out);
 #else
   HitSurface_Normal(crystal, n, num, ray_in, ray_out);
@@ -549,7 +551,7 @@ void Optics::Propagate(const Crystal* crystal, size_t num,                      
     if (w_in[i] < ProjectContext::kPropMinW) {
       continue;
     }
-#if defined(__SSE4_1__) && defined(__AVX__)
+#if defined(USE_SIMD) && defined(__SSE4_1__) && defined(__AVX__)
     IntersectLineWithTrianglesSimd(pt_in + i / 2 * 3, dir_in + i * 3, face_id_in[i / 2], total_faces,  //
                                    face_bases, face_vertexes, face_norms,                              //
                                    pt_out + i * 3, face_id_out + i);                                   // output
@@ -649,6 +651,7 @@ void Optics::IntersectLineWithTriangles(const float* pt, const float* dir,  // i
 }
 
 
+#if defined(USE_SIMD) && defined(__SSE__) && defined(__AVX__)
 void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir,  // input
                                             int face_id, int face_num,          // input
                                             const float* face_bases,            // input
@@ -810,6 +813,7 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir,  
     }
   }
 }
+#endif
 
 
 constexpr float IceRefractiveIndex::kCoefAvr[];

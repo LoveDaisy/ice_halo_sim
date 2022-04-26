@@ -1,7 +1,8 @@
 #include "core/math.hpp"
 
-#include <smmintrin.h>
-#include <xmmintrin.h>
+#ifdef USE_SIMD
+#include <immintrin.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -98,7 +99,7 @@ void RotateZ(const float* lon_lat_roll,  // longitude, latitude, roll
     0
   };
 
-#if defined(__AVX__) && defined(__SSE4_1__)
+#if defined(USE_SIMD) && defined(__AVX__) && defined(__SSE4_1__)
   __m128 AX0 = _mm_loadu_ps(ax + 0);
   __m128 AX1 = _mm_loadu_ps(ax + 3);
   __m128 AX2 = _mm_loadu_ps(ax + 6);
@@ -144,7 +145,7 @@ void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* outpu
     0
   };
 
-#if defined(__AVX__) && defined(__SSE4_1__)
+#if defined(USE_SIMD) && defined(__AVX__) && defined(__SSE4_1__)
   __m128 AX0 = _mm_loadu_ps(ax + 0);
   __m128 AX1 = _mm_loadu_ps(ax + 3);
   __m128 AX2 = _mm_loadu_ps(ax + 6);

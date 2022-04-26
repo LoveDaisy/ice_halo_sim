@@ -225,13 +225,14 @@ class Optics {
                                          const float* face_points,           // input (pt1, pt2, pt3)
                                          const float* face_norm,             // input
                                          float* p, int* idx);                // output
-
+#if defined(USE_SIMD) && defined(__SSE__) && defined(__AVX__)
   static void IntersectLineWithTrianglesSimd(const float* pt, const float* dir,  // input
                                              int face_id, int face_num,          // input
                                              const float* face_bases,            //
                                              const float* face_points,           //
                                              const float* face_norm,             //
                                              float* p, int* idx);                // output
+#endif
 
  private:
   static float GetReflectRatio(float delta, float rr);

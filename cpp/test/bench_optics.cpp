@@ -1,6 +1,5 @@
 #include <benchmark/benchmark.h>
 #include <immintrin.h>
-#include <xmmintrin.h>
 
 #include <memory>
 #include <string>
