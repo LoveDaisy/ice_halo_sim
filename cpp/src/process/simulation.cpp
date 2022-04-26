@@ -770,13 +770,17 @@ void Simulator::Run() {
     // where k = max_hits
     size_t total_ray_num = ray_num * (2 * config->max_hits_ + 1);
     {
-      size_t x = 1;
-      size_t y = 1;
+      float x = 1;
+      float y = 1;
+      float x_max = 1;
+      float y_max = 1;
       for (size_t i = 0; i + 1 < config->ms_.size(); i++) {
         y *= config->max_hits_ * config->ms_[i].prob_;
         x += y;
+        y_max *= config->max_hits_;
+        x_max += y_max;
       }
-      total_ray_num *= x;
+      total_ray_num = static_cast<size_t>(total_ray_num * std::min(x * 1.5f, x_max));
     }
 
     RayBuffer all_data(total_ray_num);
