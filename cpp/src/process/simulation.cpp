@@ -698,8 +698,8 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const MsInfo& ms_info, int ray_
 void TraceRays(const Crystal& curr_crystal, float refractive_index, size_t curr_ray_num, RayBuffer* buffer_data) {
   // 1 HitSurface.
   HitSurface(curr_crystal, refractive_index,       // input
-             curr_ray_num, buffer_data[0].rays(),  // Input
-             buffer_data[1].rays());               // Output
+             curr_ray_num, buffer_data[0].rays(),  // Input, d, w, fid
+             buffer_data[1].rays());               // Output, d, w
 
   for (size_t k = 0; k < curr_ray_num * 2; k++) {
     std::memcpy(buffer_data[0][k].d_, buffer_data[1][k].d_, 3 * sizeof(float));
@@ -708,27 +708,26 @@ void TraceRays(const Crystal& curr_crystal, float refractive_index, size_t curr_
 
   // 2 Propagate.
   Propagate(curr_crystal,                                // Input
-            curr_ray_num * 2, 2, buffer_data[0].rays(),  // Input
-            buffer_data[1].rays());                      // Output
+            curr_ray_num * 2, 2, buffer_data[0].rays(),  // Input, d, w, p(1/2)
+            buffer_data[1].rays());                      // Output, p, fid
 
   buffer_data[0].size_ = 0;
   buffer_data[1].size_ = curr_ray_num * 2;
 }
 
-void CollectData(size_t hit_loop_idx, size_t crystal_idx, float ms_prob,  //
-                 RayBuffer* buffer_data, RayBuffer* init_data, RayBuffer* all_data) {
+void CollectData(size_t hit_loop_idx, size_t crystal_idx, size_t ray_id_offset, float ms_prob,  //
+                 RayBuffer* buffer_data, RayBuffer* init_data) {
   size_t curr_ray_num = buffer_data[1].size_ / 2;
   auto* rng = RandomNumberGenerator::GetInstance();
-  size_t all_ray_offset = all_data->size_;
   for (size_t j = 0; j < buffer_data[1].size_; j++) {
     auto& r = buffer_data[1][j];
     r.crystal_id_ = crystal_idx;
     if (hit_loop_idx == 0) {
-      r.prev_ray_id_ = j / 2 + all_ray_offset - curr_ray_num;
+      r.prev_ray_id_ = j / 2 + ray_id_offset - curr_ray_num;
     } else if (hit_loop_idx == 1) {
-      r.prev_ray_id_ = j / 2 * 2 + 1 + all_ray_offset - curr_ray_num * 2;
+      r.prev_ray_id_ = j / 2 * 2 + 1 + ray_id_offset - curr_ray_num * 2;
     } else {
-      r.prev_ray_id_ = j / 2 * 2 + 0 + all_ray_offset - curr_ray_num * 2;
+      r.prev_ray_id_ = j / 2 * 2 + 0 + ray_id_offset - curr_ray_num * 2;
     }
     if (r.fid_ < 0) {
       //  a. Copy outgoing rays into initial data, with probability of p
@@ -740,8 +739,6 @@ void CollectData(size_t hit_loop_idx, size_t crystal_idx, float ms_prob,  //
       buffer_data[0].EmplaceBack(r);
     }
   }
-  // c. Copy to all_data
-  all_data->EmplaceBack(buffer_data[1]);
 }
 
 
@@ -829,9 +826,25 @@ void Simulator::Run() {
           // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
 
           // 2.2 Collect data.
-          CollectData(i, ms_ci + ci, m.prob_, buffer_data, init_data, &all_data);
+          CollectData(i, ms_ci + ci, all_data.size_, m.prob_, buffer_data, init_data);
+
+          // 2.3 Copy to all_data
+          all_data.EmplaceBack(buffer_data[1]);
+
+          if (stop_) {
+            break;
+          }
         }  // hit loop
-      }    // crystal loop
+
+        if (stop_) {
+          break;
+        }
+      }  // crystal loop
+
+      if (stop_) {
+        break;
+      }
+
       ms_ci += ms_crystal_cnt;
       ray_num = init_data[1].size_;
       init_data[0].Reset(ray_num * (config->max_hits_ + 1));
@@ -846,6 +859,10 @@ void Simulator::Run() {
 
       first_ms = false;
     }  // ms loop
+
+    if (stop_) {
+      break;
+    }
 
     auto sim_data = std::make_unique<SimData>();
     sim_data->curr_wl_ = wl;

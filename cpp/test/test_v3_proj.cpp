@@ -52,14 +52,15 @@ TEST_F(V3TestProj, SimpleProj) {
         break;
       }
       const auto& rays = data->ray_buffer_;
-      LOG_DEBUG("p  d  w");
+      LOG_DEBUG("p  d  w fid prev_id");
       for (size_t i = 0; i < rays.size_; i++) {
         const auto& r = rays[i];
-        LOG_DEBUG("%.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f %d",  //
-                  r.p_[0], r.p_[1], r.p_[2],                  // p
-                  r.d_[0], r.d_[1], r.d_[2],                  // d
-                  r.w_,                                       // w
-                  r.fid_);                                    // fid
+        LOG_DEBUG("%.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f  %d  %d",  //
+                  r.p_[0], r.p_[1], r.p_[2],                       // p
+                  r.d_[0], r.d_[1], r.d_[2],                       // d
+                  r.w_,                                            // w
+                  r.fid_,                                          // fid
+                  r.prev_ray_id_);                                 // prev_ray_id
         if (r.fid_ > 0 || r.w_ < 0) {
           continue;
         }
