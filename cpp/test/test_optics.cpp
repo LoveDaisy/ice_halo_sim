@@ -59,12 +59,6 @@ TEST_F(OpticsTest, HitSurface) {
     0,  // Case 5: top face. (face number 2)
     0,  // Case 6: top face. (face number 2)
   };
-  icehalo::v3::RaySeg ray_in[kNum]{};
-  for (int i = 0; i < kNum; i++) {
-    std::memcpy(ray_in[i].d_, dir_in + i * 3, 3 * sizeof(float));
-    ray_in[i].w_ = w_in[i];
-    ray_in[i].fid_ = face_id_in[i];
-  }
 
   float dir_out_e[2 * kNum * 3]{
     0.0f,      0.0f, 1.0f,        // Case 1: reflective
@@ -97,22 +91,23 @@ TEST_F(OpticsTest, HitSurface) {
 
   float dir_out[2 * kNum * 3];
   float w_out[2 * kNum];
-  icehalo::v3::RaySeg ray_out[kNum * 2]{};
+  float dir_out_new[2 * kNum * 3];
+  float w_out_new[2 * kNum];
 
-  icehalo::Optics::HitSurface(crystal_.get(), kN, kNum,  // input
-                              dir_in, face_id_in, w_in,  // input
-                              dir_out, w_out);           // output
-  icehalo::v3::HitSurface(new_crystal_, kN,              // input
-                          kNum, ray_in,                  // input
-                          ray_out);                      // output
+  icehalo::Optics::HitSurface(crystal_.get(), kN, kNum,                     // input
+                              dir_in, face_id_in, w_in,                     // input
+                              dir_out, w_out);                              // output
+  icehalo::v3::HitSurface(new_crystal_, kN, kNum,                           // input
+                          { dir_in, 3 * sizeof(float) }, w_in, face_id_in,  // input
+                          { dir_out_new, 3 * sizeof(float) }, w_out_new);   // output
 
   using icehalo::math::kFloatEps;
   for (int i = 0; i < kNum * 2; i++) {
     EXPECT_NEAR(w_out[i], w_out_e[i], kFloatEps) << "@(" << i << ")";
-    EXPECT_NEAR(w_out[i], ray_out[i].w_, kFloatEps) << "@(" << i << ")";
+    EXPECT_NEAR(w_out[i], w_out_new[i], kFloatEps) << "@(" << i << ")";
     for (int j = 0; j < 3; j++) {
       EXPECT_NEAR(dir_out[i * 3 + j], dir_out_e[i * 3 + j], kFloatEps) << "@(" << i << "," << j << ")";
-      EXPECT_NEAR(dir_out[i * 3 + j], ray_out[i].d_[j], kFloatEps) << "@(" << i << "," << j << ")";
+      EXPECT_NEAR(dir_out[i * 3 + j], dir_out_new[i * 3 + j], kFloatEps) << "@(" << i << "," << j << ")";
     }
   }
 }
@@ -209,12 +204,6 @@ TEST_F(OpticsTest, Propagate) {
     1.0f,  // case 4
     1.0f,  // case 5
   };
-  icehalo::v3::RaySeg ray_in[kNum]{};
-  for (int i = 0; i < kNum; i++) {
-    std::memcpy(ray_in[i].d_, dir_in + i * 3, 3 * sizeof(float));
-    std::memcpy(ray_in[i].p_, pt_in + i * 3, 3 * sizeof(float));
-    ray_in[i].w_ = w_in[i];
-  }
 
   float pt_out[kNum * 3]{
     kSqrt3_4 / 2, 0.375000f,        0.000000f,   // case 1
@@ -224,17 +213,18 @@ TEST_F(OpticsTest, Propagate) {
     0.300992f,    0.229603f,        -0.500000f,  // case 5
   };
   int id_out[kNum]{ 6, -1, 16, -1, 16 };
-  icehalo::v3::RaySeg ray_out[kNum];
+  float pt_out_new[kNum * 3];
+  int id_out_new[kNum];
 
-  icehalo::v3::Propagate(c,                // input
-                         kNum, 1, ray_in,  // input
-                         ray_out);         // output
+  icehalo::v3::Propagate(c, kNum, 1,                                                         // input
+                         { dir_in, 3 * sizeof(float) }, { pt_in, 3 * sizeof(float) }, w_in,  // input
+                         { pt_out_new, 3 * sizeof(float) }, id_out_new);                     // output
 
   using icehalo::math::kFloatEps;
   for (int i = 0; i < kNum; i++) {
-    EXPECT_EQ(id_out[i], ray_out[i].fid_);
+    EXPECT_EQ(id_out[i], id_out_new[i]);
     for (int j = 0; j < 3; j++) {
-      EXPECT_NEAR(ray_out[i].p_[j], pt_out[i * 3 + j], kFloatEps) << "@(" << i << "," << j << ")";
+      EXPECT_NEAR(pt_out_new[i * 3 + j], pt_out[i * 3 + j], kFloatEps) << "@(" << i << "," << j << ")";
     }
   }
 }

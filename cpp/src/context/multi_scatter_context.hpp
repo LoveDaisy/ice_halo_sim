@@ -3,7 +3,7 @@
 
 #include <memory>
 
-#include "core/core_def.hpp"
+#include "core/def.hpp"
 #include "io/serialize.hpp"
 #include "json.hpp"
 

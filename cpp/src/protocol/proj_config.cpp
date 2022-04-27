@@ -1,6 +1,6 @@
 #include "protocol/proj_config.hpp"
 
-#include "core/core_def.hpp"
+#include "core/def.hpp"
 #include "json.hpp"
 
 namespace icehalo {

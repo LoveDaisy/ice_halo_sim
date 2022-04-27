@@ -4,7 +4,7 @@
 #include <functional>
 
 #include "context/context.hpp"
-#include "core/core_def.hpp"
+#include "core/def.hpp"
 #include "util/enum_map.hpp"
 #include "util/threading_pool.hpp"
 

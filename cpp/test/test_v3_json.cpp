@@ -6,7 +6,7 @@
 #include <variant>
 #include <vector>
 
-#include "core/core_def.hpp"
+#include "core/def.hpp"
 #include "core/math.hpp"
 #include "json.hpp"
 #include "protocol/config_manager.hpp"

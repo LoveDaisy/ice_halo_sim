@@ -6,7 +6,7 @@
 #include <memory>
 
 #include "context/context.hpp"
-#include "core/core_def.hpp"
+#include "core/def.hpp"
 #include "core/optics.hpp"
 #include "io/serialize.hpp"
 #include "protocol/proj_config.hpp"

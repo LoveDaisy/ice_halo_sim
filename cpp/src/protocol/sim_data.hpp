@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <memory>
 
-#include "core/core_def.hpp"
+#include "core/def.hpp"
 #include "core/optics.hpp"
 
 namespace icehalo {
@@ -24,6 +24,16 @@ class RaypathHashHelper {
 
 struct RaypathHash {
   size_t operator()(const std::vector<IdType>& rp);
+};
+
+
+struct RaySeg {
+  float d_[3];
+  float p_[3];  // Generally it is for end point, **NOT** for start point.
+  float w_;
+  int fid_;
+  IdType prev_ray_id_;
+  IdType crystal_id_;
 };
 
 struct RayBuffer {

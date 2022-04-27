@@ -246,14 +246,14 @@ float GetReflectRatio(float delta, float rr) {
   return (Rs + Rp) / 2;
 }
 
-void HitSurface_Normal(const Crystal& crystal, float n,   // input
-                       size_t num, const RaySeg* ray_in,  // input
-                       RaySeg* ray_out) {                 // output
+void HitSurface_Normal(const Crystal& crystal, float n, size_t num,                          // input
+                       const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
+                       float_bf_t d_out, float_bf_t w_out) {                                 // output
   const auto* face_norm = crystal.GetFaceNorm();
 
   for (size_t i = 0; i < num; i++) {
-    const float* tmp_dir = ray_in[i].d_;
-    const float* tmp_norm = face_norm + ray_in[i].fid_ * 3;
+    const float* tmp_dir = d_in.Ptr(i);
+    const float* tmp_norm = face_norm + fid_in[i] * 3;
 
     float cos_theta = Dot3(tmp_dir, tmp_norm);
     float rr = cos_theta > 0 ? n : 1.0f / n;
@@ -261,11 +261,11 @@ void HitSurface_Normal(const Crystal& crystal, float n,   // input
 
     bool is_total_reflected = d <= 0.0f;
 
-    ray_out[2 * i + 0].w_ = GetReflectRatio(std::max(d, 0.0f), rr) * ray_in[i].w_;
-    ray_out[2 * i + 1].w_ = is_total_reflected ? -1 : ray_in[i].w_ - ray_out[2 * i + 0].w_;
+    w_out[2 * i + 0] = GetReflectRatio(std::max(d, 0.0f), rr) * w_in[i];
+    w_out[2 * i + 1] = is_total_reflected ? -1 : w_in[i] - w_out[2 * i + 0];
 
-    float* tmp_dir_reflection = ray_out[i * 2 + 0].d_;
-    float* tmp_dir_refraction = ray_out[i * 2 + 1].d_;
+    float* tmp_dir_reflection = d_out.Ptr(i * 2 + 0);
+    float* tmp_dir_refraction = d_out.Ptr(i * 2 + 1);
     for (int j = 0; j < 3; j++) {
       tmp_dir_reflection[j] = tmp_dir[j] - 2 * cos_theta * tmp_norm[j];  // Reflection
       tmp_dir_refraction[j] = is_total_reflected ?
@@ -357,13 +357,13 @@ void HitSurface_Simd(const Crystal& crystal, float n,   // input
 #endif
 
 
-void HitSurface(const Crystal& crystal, float n,   // input
-                size_t num, const RaySeg* ray_in,  // input
-                RaySeg* ray_out) {                 // output
+void HitSurface(const Crystal& crystal, float n, size_t num,                          // input
+                const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
+                float_bf_t d_out, float_bf_t w_out) {                                 // output
 #if defined(USE_SIMD) && defined(__SSE__) && defined(__AVX__)
   HitSurface_Simd(crystal, n, num, ray_in, ray_out);
 #else
-  HitSurface_Normal(crystal, n, num, ray_in, ray_out);
+  HitSurface_Normal(crystal, n, num, d_in, w_in, fid_in, d_out, w_out);
 #endif
 }
 
@@ -422,20 +422,20 @@ void RayTriangleBW(const float* ray_pt, const float* ray_dir,  // input
 }
 
 
-void Propagate(const Crystal& crystal,                         // input
-               size_t num, size_t step, const RaySeg* ray_in,  // input
-               RaySeg* ray_out) {                              // output
+void Propagate(const Crystal& crystal, size_t num, size_t step,                      // input
+               const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input, d, p, w
+               float_bf_t p_out, int_bf_t fid_out) {                                 // output, p, fid
   auto face_num = crystal.TotalFaces();
   const auto* face_transform = crystal.GetFaceCoordTf();
 
   // Do main work
   for (size_t i = 0; i < num; i++) {
-    if (ray_in[i].w_ < 0) {  // Total reflection
+    if (w_in[i] < 0) {  // Total reflection
       continue;
     }
-    RayTriangleBW(ray_in[i / step].p_, ray_in[i].d_,  // input
-                  face_num, face_transform,           // input
-                  ray_out[i].p_, &ray_out[i].fid_);   // output
+    RayTriangleBW(p_in.Ptr(i / step), d_in.Ptr(i),  // input
+                  face_num, face_transform,         // input
+                  p_out.Ptr(i), fid_out.Ptr(i));    // output
   }
 }
 

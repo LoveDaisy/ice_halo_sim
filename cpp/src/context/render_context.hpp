@@ -3,8 +3,8 @@
 
 #include <memory>
 
-#include "core/core_def.hpp"
 #include "core/crystal.hpp"
+#include "core/def.hpp"
 #include "io/json_util.hpp"
 #include "io/serialize.hpp"
 

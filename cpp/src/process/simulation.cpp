@@ -9,8 +9,9 @@
 #include <utility>
 #include <variant>
 
-#include "core/core_def.hpp"
+#include "core/buffer.hpp"
 #include "core/crystal.hpp"
+#include "core/def.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
 #include "protocol/light_config.hpp"
@@ -697,9 +698,16 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const MsInfo& ms_info, int ray_
 
 void TraceRays(const Crystal& curr_crystal, float refractive_index, size_t curr_ray_num, RayBuffer* buffer_data) {
   // 1 HitSurface.
-  HitSurface(curr_crystal, refractive_index,       // input
-             curr_ray_num, buffer_data[0].rays(),  // Input, d, w, fid
-             buffer_data[1].rays());               // Output, d, w
+  {
+    float_bf_t d_in{ buffer_data[0][0].d_, sizeof(RaySeg) };
+    float_bf_t w_in{ &buffer_data[0][0].w_, sizeof(RaySeg) };
+    int_bf_t fid_in{ &buffer_data[0][0].fid_, sizeof(RaySeg) };
+    float_bf_t d_out{ buffer_data[1][0].d_, sizeof(RaySeg) };
+    float_bf_t w_out{ &buffer_data[1][0].w_, sizeof(RaySeg) };
+    HitSurface(curr_crystal, refractive_index, curr_ray_num,  // Input
+               d_in, w_in, fid_in,                            // Input, d, w, fid
+               d_out, w_out);                                 // Output, d, w
+  }
 
   for (size_t k = 0; k < curr_ray_num * 2; k++) {
     std::memcpy(buffer_data[0][k].d_, buffer_data[1][k].d_, 3 * sizeof(float));
@@ -707,9 +715,16 @@ void TraceRays(const Crystal& curr_crystal, float refractive_index, size_t curr_
   }
 
   // 2 Propagate.
-  Propagate(curr_crystal,                                // Input
-            curr_ray_num * 2, 2, buffer_data[0].rays(),  // Input, d, w, p(1/2)
-            buffer_data[1].rays());                      // Output, p, fid
+  {
+    float_bf_t d_in{ buffer_data[1][0].d_, sizeof(RaySeg) };
+    float_bf_t w_in{ &buffer_data[1][0].w_, sizeof(RaySeg) };
+    float_bf_t p_in{ buffer_data[0][0].p_, sizeof(RaySeg) };
+    float_bf_t p_out{ buffer_data[1][0].p_, sizeof(RaySeg) };
+    int_bf_t fid_out{ &buffer_data[1][0].fid_, sizeof(RaySeg) };
+    Propagate(curr_crystal, curr_ray_num * 2, 2,  // Input
+              d_in, p_in, w_in,                   // Input, d, w, p(1/2)
+              p_out, fid_out);                    // Output, p, fid
+  }
 
   buffer_data[0].size_ = 0;
   buffer_data[1].size_ = curr_ray_num * 2;

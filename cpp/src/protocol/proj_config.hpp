@@ -5,7 +5,7 @@
 #include <memory>
 #include <vector>
 
-#include "core/core_def.hpp"
+#include "core/def.hpp"
 #include "json.hpp"
 #include "protocol/crystal_config.hpp"
 #include "protocol/filter_config.hpp"

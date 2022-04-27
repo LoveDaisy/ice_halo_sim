@@ -3,7 +3,7 @@
 
 #include <vector>
 
-#include "core/core_def.hpp"
+#include "core/def.hpp"
 #include "json.hpp"
 #include "protocol/filter_config.hpp"
 

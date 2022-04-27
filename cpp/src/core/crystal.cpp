@@ -10,7 +10,7 @@
 #include <utility>
 
 #include "context/context.hpp"
-#include "core/core_def.hpp"
+#include "core/def.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
 #include "util/log.hpp"

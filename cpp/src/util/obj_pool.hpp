@@ -7,7 +7,7 @@
 #include <type_traits>
 #include <vector>
 
-#include "core/core_def.hpp"
+#include "core/def.hpp"
 #include "io/serialize.hpp"
 
 namespace icehalo {

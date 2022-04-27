@@ -3,7 +3,7 @@
 #include <variant>
 #include <vector>
 
-#include "core/core_def.hpp"
+#include "core/def.hpp"
 #include "util/log.hpp"
 
 namespace icehalo {

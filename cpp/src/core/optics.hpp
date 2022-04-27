@@ -7,8 +7,9 @@
 #include <mutex>
 #include <vector>
 
-#include "core/core_def.hpp"
+#include "core/buffer.hpp"
 #include "core/crystal.hpp"
+#include "core/def.hpp"
 #include "core/math.hpp"
 #include "io/serialize.hpp"
 
@@ -178,23 +179,13 @@ struct RayInfo : public ISerializable {
 
 namespace v3 {
 
-struct RaySeg {
-  float d_[3];
-  float p_[3];  // Generally it is for end point, **NOT** for start point.
-  float w_;
-  int fid_;
-  IdType prev_ray_id_;
-  IdType crystal_id_;
-};
+void HitSurface(const Crystal& crystal, float n, size_t num,                          // input
+                const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
+                float_bf_t d_out, float_bf_t w_out);                                  // output
 
-
-void HitSurface(const Crystal& crystal, float n,   // input
-                size_t num, const RaySeg* ray_in,  // input
-                RaySeg* ray_out);                  // output
-
-void Propagate(const Crystal& crystal,                         // input
-               size_t num, size_t step, const RaySeg* ray_in,  // input
-               RaySeg* ray_out);                               // output
+void Propagate(const Crystal& crystal, size_t num, size_t step,                      // input
+               const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input
+               float_bf_t p_out, int_bf_t fid_out);                                  // output
 
 }  // namespace v3
 

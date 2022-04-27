@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <variant>
 
-#include "core/core_def.hpp"
+#include "core/def.hpp"
 #include "io/json_util.hpp"
 #include "json.hpp"
 #include "protocol/filter_config.hpp"
