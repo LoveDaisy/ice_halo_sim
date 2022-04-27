@@ -1,27 +1,74 @@
 #include "protocol/sim_data.hpp"
 
+#include <climits>
 #include <cstddef>
 #include <cstring>
+
+#include "core/def.hpp"
 
 namespace icehalo {
 namespace v3 {
 
-RaypathHashHelper& RaypathHashHelper::operator<<(IdType c) {
-  hash_ = hash_ * kMagic + c;
+constexpr int kRp01Bits = CHAR_BIT - kRpIdBits;
+constexpr int kRp12Bits = 2 * CHAR_BIT - 2 * kRpIdBits;
+constexpr int kRp23Bits = kRpIdBits;
+
+RaypathRecorder& RaypathRecorder::operator<<(IdType fn) {
+  if (size_ >= kMaxRpLen) {
+    return *this;
+  }
+
+  switch (size_ % 4) {
+    case 0:
+      recorder_[size_ / 4] |= static_cast<std::byte>(fn & kRpIdMask);
+      break;
+    case 1:
+      recorder_[size_ / 4] |= static_cast<std::byte>((fn & 0x0003) << (CHAR_BIT - kRp01Bits));
+      recorder_[size_ / 4 + 1] |= static_cast<std::byte>(fn & 0x003c);
+      break;
+    case 2:
+      recorder_[size_ / 4 + 1] |= static_cast<std::byte>((fn & 0x000f) << (CHAR_BIT - kRp12Bits));
+      recorder_[size_ / 4 + 2] |= static_cast<std::byte>(fn & 0x0030);
+      break;
+    case 3:
+      recorder_[size_ / 4 + 2] |= static_cast<std::byte>((fn & kRpIdMask) << (CHAR_BIT - kRp23Bits));
+      break;
+  }
+
+  size_++;
   return *this;
 }
 
-size_t RaypathHashHelper::GetHash() const {
-  return hash_;
-}
+constexpr std::byte kRp00Mask{ kRpIdMask };
+constexpr std::byte kRp01Mask{ 0xc0 };
+constexpr std::byte kRp11Mask{ 0x0f };
+constexpr std::byte kRp12Mask{ 0xf0 };
+constexpr std::byte kRp22Mask{ 0x30 };
+constexpr std::byte kRp23Mask{ 0xfc };
 
-
-size_t RaypathHash::operator()(const std::vector<IdType>& rp) {
-  RaypathHashHelper h;
-  for (auto x : rp) {
-    h << x;
+IdType RaypathRecorder::operator[](size_t idx) {
+  if (idx >= size_) {
+    return kInvalidId;
   }
-  return h.GetHash();
+
+  IdType fn = 0;
+  switch (idx % 4) {
+    case 0:
+      fn = static_cast<IdType>(recorder_[idx / 4] & kRp00Mask);
+      break;
+    case 1:
+      fn = static_cast<IdType>((recorder_[idx / 4] & kRp01Mask) >> (CHAR_BIT - kRp01Bits));
+      fn |= static_cast<IdType>((recorder_[idx / 4 + 1] & kRp11Mask) << kRp01Bits);
+      break;
+    case 2:
+      fn = static_cast<IdType>((recorder_[idx / 4 + 1] & kRp12Mask) >> (CHAR_BIT - kRp12Bits));
+      fn |= static_cast<IdType>((recorder_[idx / 4 + 2] & kRp22Mask) << kRp12Bits);
+      break;
+    case 3:
+      fn = static_cast<IdType>((recorder_[idx / 4 + 2] & kRp23Mask) >> (CHAR_BIT - kRp23Bits));
+      break;
+  }
+  return fn;
 }
 
 

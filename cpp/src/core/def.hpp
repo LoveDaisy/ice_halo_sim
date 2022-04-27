@@ -45,12 +45,29 @@ using CrystalPtrU = std::unique_ptr<Crystal>;
 
 using CrystalMap = std::unordered_map<ShortIdType, const Crystal*>;
 
+enum Symmetry : uint8_t {
+  kSymmetryNone = 0u,
+  kSymmetryPrism = 1u,
+  kSymmetryBasal = 2u,
+  kSymmetryDirection = 4u,
+  kSymmetryRepeatedReflection = 8u,
+};
+
+
 namespace v3 {
+
 constexpr size_t kMaxMsNum = 4;        // How many multi-satterings at most.
+constexpr size_t kMaxHits = 8;         // How many hits in one crystal.
 constexpr size_t kMaxWlNum = 32;       // How many different wavelengths in one configuration.
 constexpr size_t kMaxCrystalNum = 16;  // How many crystal types in one configuration.
 
 using IdType = uint16_t;
+
+constexpr int kRpIdBits = 6;      // use 6 bits for IDs in a raypath
+constexpr uint8_t kRpEnd = 0x3f;  // 2^6-1
+constexpr IdType kRpIdMask = 0x003f;
+constexpr size_t kMaxRpLen = kMaxMsNum * kMaxHits;
+constexpr size_t kRpRcdBytes = (kMaxRpLen * kRpIdBits + CHAR_BIT - 1) / CHAR_BIT;
 
 }  // namespace v3
 

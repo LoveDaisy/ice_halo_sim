@@ -10,22 +10,25 @@
 namespace icehalo {
 namespace v3 {
 
-class RaypathHashHelper {
-  // Use SDBM algorithm. See http://www.cse.yorku.ca/~oz/hash.html for detail.
- public:
-  RaypathHashHelper& operator<<(IdType c);
-  size_t GetHash() const;
+struct RaypathRecorder {
+  RaypathRecorder& operator<<(IdType fn);
+  IdType operator[](size_t idx);
 
- private:
-  static constexpr unsigned kMagic = 65599u;
-  size_t hash_ = 0;
+  size_t size_ = 0;
+  std::byte recorder_[kRpRcdBytes]{};
+
+  /*
+   * Use 6 bits (kRpIdBits) for a face number ID in a raypath.
+   *
+   * byte  |<-- byte 0  -->|<-- byte 1  -->|<-- byte 2  -->|
+   *        <-- low bits                      high bits -->
+   * bit    0 1 2 3 4 5 6 7 8 9 a b c d e f 0 1 2 3 4 5 6 7
+   * fn    |<- fn 0  ->|<- fn 1  ->|<- fn 2  ->|<- fn 3  ->|
+   *
+   * For fn0, we can simply use fn0 = recorder_[0] & 0x3f
+   * and for fn1, it will be fn1 = ((recorder_[0] & 0xc0) >> 6) | ((recorder_[1] & 0x0f) << 2)
+   */
 };
-
-
-struct RaypathHash {
-  size_t operator()(const std::vector<IdType>& rp);
-};
-
 
 struct RaySeg {
   float d_[3];
@@ -34,6 +37,7 @@ struct RaySeg {
   int fid_;
   IdType prev_ray_id_;
   IdType crystal_id_;
+  RaypathRecorder rp_;
 };
 
 struct RayBuffer {

@@ -267,15 +267,6 @@ class Crystal {
 };
 
 
-enum Symmetry : uint8_t {
-  kSymmetryNone = 0u,
-  kSymmetryPrism = 1u,
-  kSymmetryBasal = 2u,
-  kSymmetryDirection = 4u,
-  kSymmetryRepeatedReflection = 8u,
-};
-
-
 struct RayPath {
   static constexpr size_t kDefaultCapacity = 7;
 

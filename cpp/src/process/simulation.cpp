@@ -730,23 +730,15 @@ void TraceRays(const Crystal& curr_crystal, float refractive_index, size_t curr_
   buffer_data[1].size_ = curr_ray_num * 2;
 }
 
-void CollectData(size_t hit_loop_idx, size_t crystal_idx, size_t ray_id_offset, float ms_prob,  //
+void CollectData(const MsInfo& ms_info, size_t ci,  //
                  RayBuffer* buffer_data, RayBuffer* init_data) {
-  size_t curr_ray_num = buffer_data[1].size_ / 2;
+  const auto& filter = ms_info.setting_[ci].filter_;  // TODO:
   auto* rng = RandomNumberGenerator::GetInstance();
   for (size_t j = 0; j < buffer_data[1].size_; j++) {
     auto& r = buffer_data[1][j];
-    r.crystal_id_ = crystal_idx;
-    if (hit_loop_idx == 0) {
-      r.prev_ray_id_ = j / 2 + ray_id_offset - curr_ray_num;
-    } else if (hit_loop_idx == 1) {
-      r.prev_ray_id_ = j / 2 * 2 + 1 + ray_id_offset - curr_ray_num * 2;
-    } else {
-      r.prev_ray_id_ = j / 2 * 2 + 0 + ray_id_offset - curr_ray_num * 2;
-    }
     if (r.fid_ < 0) {
       //  a. Copy outgoing rays into initial data, with probability of p
-      if (rng->GetUniform() < ms_prob) {
+      if (rng->GetUniform() < ms_info.prob_) {
         init_data[1].EmplaceBack(r);
       }
     } else {
@@ -833,7 +825,9 @@ void Simulator::Run() {
           }
           InitRayPFid(curr_crystal, buffer_data + 0);
           for (auto& r : buffer_data[0]) {
+            const auto& c = ms_crystals[ms_ci + ci];
             r.crystal_id_ = ms_ci + ci;
+            r.rp_ << r.crystal_id_ << c.GetFn(r.fid_);
           }
           all_data.EmplaceBack(buffer_data[0]);
         }
@@ -844,10 +838,29 @@ void Simulator::Run() {
           TraceRays(curr_crystal, refractive_index, curr_ray_num, buffer_data);
           // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
 
-          // 2.2 Collect data.
-          CollectData(i, ms_ci + ci, all_data.size_, m.prob_, buffer_data, init_data);
+          // 2.2 Fill some information
+          {
+            size_t ray_id_offset = all_data.size_;
+            for (size_t j = 0; j < buffer_data[1].size_; j++) {
+              auto& r = buffer_data[1][j];
+              const auto& c = ms_crystals[ms_ci + ci];
+              r.rp_ << c.GetFn(r.fid_);
+              r.crystal_id_ = ms_ci + ci;
 
-          // 2.3 Copy to all_data
+              if (i == 0) {
+                r.prev_ray_id_ = j / 2 + ray_id_offset - curr_ray_num;
+              } else if (i == 1) {
+                r.prev_ray_id_ = j / 2 * 2 + 1 + ray_id_offset - curr_ray_num * 2;
+              } else {
+                r.prev_ray_id_ = j / 2 * 2 + 0 + ray_id_offset - curr_ray_num * 2;
+              }
+            }
+          }
+
+          // 2.3 Collect data.
+          CollectData(m, ci, buffer_data, init_data);
+
+          // 2.4 Copy to all_data
           all_data.EmplaceBack(buffer_data[1]);
 
           if (stop_) {

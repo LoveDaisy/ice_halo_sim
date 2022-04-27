@@ -1,6 +1,7 @@
 #ifndef SRC_CORE_FILTER_H_
 #define SRC_CORE_FILTER_H_
 
+#include <cstddef>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -111,6 +112,9 @@ class GeneralRayPathFilter : public AbstractRayPathFilter {
   std::vector<EntryExitFace> entry_exit_faces_;
   std::unordered_set<int> hit_nums_;
 };
+
+
+namespace v3 {}  // namespace v3
 
 
 }  // namespace icehalo
