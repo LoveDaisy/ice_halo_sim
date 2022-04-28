@@ -650,7 +650,6 @@ std::vector<Crystal> SampleMsCrystal(const SceneConfig* config) {
       } else if (std::holds_alternative<PyramidCrystalParam>(c.crystal_.param_)) {
         // TODO:
       }
-      crystals.back().config_id_ = c.crystal_.id_;
 
       // Set axis orientation
       {
@@ -709,11 +708,6 @@ void TraceRays(const Crystal& curr_crystal, float refractive_index, size_t curr_
                d_out, w_out);                                 // Output, d, w
   }
 
-  for (size_t k = 0; k < curr_ray_num * 2; k++) {
-    std::memcpy(buffer_data[0][k].d_, buffer_data[1][k].d_, 3 * sizeof(float));
-    buffer_data[0][k].w_ = buffer_data[1][k].w_;
-  }
-
   // 2 Propagate.
   {
     float_bf_t d_in{ buffer_data[1][0].d_, sizeof(RaySeg) };
@@ -736,14 +730,20 @@ void CollectData(const MsInfo& ms_info, size_t ci,  //
   auto* rng = RandomNumberGenerator::GetInstance();
   for (size_t j = 0; j < buffer_data[1].size_; j++) {
     auto& r = buffer_data[1][j];
-    if (r.fid_ < 0) {
+    if (r.w_ < 0) {
+      r.state_ = RaySeg::kStopped;
+    } else if (r.fid_ < 0) {
       //  a. Copy outgoing rays into initial data, with probability of p
       if (rng->GetUniform() < ms_info.prob_) {
+        r.state_ = RaySeg::kContinue;
         init_data[1].EmplaceBack(r);
+      } else {
+        r.state_ = RaySeg::kOutgoing;
       }
     } else {
       //  b. Squeeze (or better swap?) buffers.
       buffer_data[0].EmplaceBack(r);
+      r.state_ = RaySeg::kNormal;
     }
   }
 }
@@ -813,32 +813,42 @@ void Simulator::Run() {
         // 1. Initialize data
         {
           buffer_data[0].size_ = 0;
+          size_t all_data_idx = all_data.size_;
+
+          // 1.1 init d & w & (prev_ray_idx)
           if (first_ms) {
             InitRayDW(config->light_source_, curr_ray_num, buffer_data + 0);
             for (size_t i = 0; i < curr_ray_num; i++) {
-              buffer_data[0][i].prev_ray_id_ = kInvalidId;
+              buffer_data[0][i].prev_ray_idx_ = kInfSize;
             }
             buffer_data[0].size_ = curr_ray_num;
           } else {
             buffer_data[0].EmplaceBack(init_data[0], init_ray_offset, curr_ray_num);
             init_ray_offset += curr_ray_num;
           }
+
+          // 1.2 init p & fid
           InitRayPFid(curr_crystal, buffer_data + 0);
+
+          // 1.3 init crystal_id, root_ray_idx, rp, state
           for (auto& r : buffer_data[0]) {
             const auto& c = ms_crystals[ms_ci + ci];
             r.crystal_id_ = ms_ci + ci;
-            r.rp_ << r.crystal_id_ << c.GetFn(r.fid_);
+            r.root_ray_idx_ = all_data_idx++;
+            r.state_ = RaySeg::kNormal;
+            r.rp_ << c.GetFn(r.fid_);
           }
+
           all_data.EmplaceBack(buffer_data[0]);
         }
 
         // 2. Start tracing
         for (size_t i = 0; i < config->max_hits_; i++) {
-          // 2.1 Trace rays.
+          // 2.1 Trace rays. Deal with d, p, w, fid
           TraceRays(curr_crystal, refractive_index, curr_ray_num, buffer_data);
           // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
 
-          // 2.2 Fill some information
+          // 2.2 Fill some information: crystal_id, rp, prev_ray_idx, root_ray_idx
           {
             size_t ray_id_offset = all_data.size_;
             for (size_t j = 0; j < buffer_data[1].size_; j++) {
@@ -848,16 +858,18 @@ void Simulator::Run() {
               r.crystal_id_ = ms_ci + ci;
 
               if (i == 0) {
-                r.prev_ray_id_ = j / 2 + ray_id_offset - curr_ray_num;
+                r.prev_ray_idx_ = j / 2 + ray_id_offset - curr_ray_num;
               } else if (i == 1) {
-                r.prev_ray_id_ = j / 2 * 2 + 1 + ray_id_offset - curr_ray_num * 2;
+                r.prev_ray_idx_ = j / 2 * 2 + 1 + ray_id_offset - curr_ray_num * 2;
               } else {
-                r.prev_ray_id_ = j / 2 * 2 + 0 + ray_id_offset - curr_ray_num * 2;
+                r.prev_ray_idx_ = j / 2 * 2 + 0 + ray_id_offset - curr_ray_num * 2;
               }
+
+              r.root_ray_idx_ = all_data[r.prev_ray_idx_].root_ray_idx_;
             }
           }
 
-          // 2.3 Collect data.
+          // 2.3 Collect data. And set ray properties: state
           CollectData(m, ci, buffer_data, init_data);
 
           // 2.4 Copy to all_data
@@ -899,7 +911,7 @@ void Simulator::Run() {
     auto sim_data = std::make_unique<SimData>();
     sim_data->curr_wl_ = wl;
     sim_data->crystals_ = std::move(ms_crystals);
-    sim_data->ray_buffer_ = std::move(all_data);
+    sim_data->rays_ = std::move(all_data);
     data_queue_->Emplace(std::move(sim_data));
 
     if (stop_) {

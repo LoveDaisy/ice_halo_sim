@@ -9,69 +9,6 @@
 namespace icehalo {
 namespace v3 {
 
-constexpr int kRp01Bits = CHAR_BIT - kRpIdBits;
-constexpr int kRp12Bits = 2 * CHAR_BIT - 2 * kRpIdBits;
-constexpr int kRp23Bits = kRpIdBits;
-
-RaypathRecorder& RaypathRecorder::operator<<(IdType fn) {
-  if (size_ >= kMaxRpLen) {
-    return *this;
-  }
-
-  switch (size_ % 4) {
-    case 0:
-      recorder_[size_ / 4] |= static_cast<std::byte>(fn & kRpIdMask);
-      break;
-    case 1:
-      recorder_[size_ / 4] |= static_cast<std::byte>((fn & 0x0003) << (CHAR_BIT - kRp01Bits));
-      recorder_[size_ / 4 + 1] |= static_cast<std::byte>(fn & 0x003c);
-      break;
-    case 2:
-      recorder_[size_ / 4 + 1] |= static_cast<std::byte>((fn & 0x000f) << (CHAR_BIT - kRp12Bits));
-      recorder_[size_ / 4 + 2] |= static_cast<std::byte>(fn & 0x0030);
-      break;
-    case 3:
-      recorder_[size_ / 4 + 2] |= static_cast<std::byte>((fn & kRpIdMask) << (CHAR_BIT - kRp23Bits));
-      break;
-  }
-
-  size_++;
-  return *this;
-}
-
-constexpr std::byte kRp00Mask{ kRpIdMask };
-constexpr std::byte kRp01Mask{ 0xc0 };
-constexpr std::byte kRp11Mask{ 0x0f };
-constexpr std::byte kRp12Mask{ 0xf0 };
-constexpr std::byte kRp22Mask{ 0x30 };
-constexpr std::byte kRp23Mask{ 0xfc };
-
-IdType RaypathRecorder::operator[](size_t idx) {
-  if (idx >= size_) {
-    return kInvalidId;
-  }
-
-  IdType fn = 0;
-  switch (idx % 4) {
-    case 0:
-      fn = static_cast<IdType>(recorder_[idx / 4] & kRp00Mask);
-      break;
-    case 1:
-      fn = static_cast<IdType>((recorder_[idx / 4] & kRp01Mask) >> (CHAR_BIT - kRp01Bits));
-      fn |= static_cast<IdType>((recorder_[idx / 4 + 1] & kRp11Mask) << kRp01Bits);
-      break;
-    case 2:
-      fn = static_cast<IdType>((recorder_[idx / 4 + 1] & kRp12Mask) >> (CHAR_BIT - kRp12Bits));
-      fn |= static_cast<IdType>((recorder_[idx / 4 + 2] & kRp22Mask) << kRp12Bits);
-      break;
-    case 3:
-      fn = static_cast<IdType>((recorder_[idx / 4 + 2] & kRp23Mask) >> (CHAR_BIT - kRp23Bits));
-      break;
-  }
-  return fn;
-}
-
-
 RayBuffer::RayBuffer() : capacity_(0), size_(0) {}
 
 RayBuffer::RayBuffer(size_t capacity) : capacity_(capacity), size_(0), rays_(new RaySeg[capacity]{}) {}
@@ -120,22 +57,22 @@ RaySeg* RayBuffer::end() const {
 
 SimData::SimData() : curr_wl_(0.0f) {}
 
-SimData::SimData(size_t capacity) : curr_wl_(0.0f), ray_buffer_(capacity) {}
+SimData::SimData(size_t capacity) : curr_wl_(0.0f), rays_(capacity) {}
 
 SimData::SimData(const SimData& other)
-    : curr_wl_(other.curr_wl_), ray_buffer_(other.ray_buffer_.capacity_), crystals_(other.crystals_) {
-  ray_buffer_.size_ = other.ray_buffer_.size_;
-  std::memcpy(ray_buffer_.rays_.get(), other.ray_buffer_.rays_.get(), sizeof(RaySeg) * other.ray_buffer_.capacity_);
+    : curr_wl_(other.curr_wl_), rays_(other.rays_.capacity_), crystals_(other.crystals_) {
+  rays_.size_ = other.rays_.size_;
+  std::memcpy(rays_.rays_.get(), other.rays_.rays_.get(), sizeof(RaySeg) * other.rays_.capacity_);
 }
 
 SimData::SimData(SimData&& other) : curr_wl_(other.curr_wl_), crystals_(std::move(other.crystals_)) {
-  ray_buffer_.size_ = other.ray_buffer_.size_;
-  ray_buffer_.capacity_ = other.ray_buffer_.capacity_;
-  ray_buffer_.rays_ = std::move(other.ray_buffer_.rays_);
+  rays_.size_ = other.rays_.size_;
+  rays_.capacity_ = other.rays_.capacity_;
+  rays_.rays_ = std::move(other.rays_.rays_);
 
-  other.ray_buffer_.size_ = 0;
-  other.ray_buffer_.capacity_ = 0;
-  other.ray_buffer_.rays_ = nullptr;
+  other.rays_.size_ = 0;
+  other.rays_.capacity_ = 0;
+  other.rays_.rays_ = nullptr;
 }
 
 SimData& SimData::operator=(const SimData& other) {
@@ -144,10 +81,10 @@ SimData& SimData::operator=(const SimData& other) {
   }
 
   curr_wl_ = other.curr_wl_;
-  ray_buffer_.size_ = other.ray_buffer_.size_;
-  ray_buffer_.capacity_ = other.ray_buffer_.capacity_;
-  ray_buffer_.rays_.reset(new RaySeg[ray_buffer_.capacity_]);
-  std::memcpy(ray_buffer_.rays_.get(), other.ray_buffer_.rays_.get(), sizeof(RaySeg) * ray_buffer_.capacity_);
+  rays_.size_ = other.rays_.size_;
+  rays_.capacity_ = other.rays_.capacity_;
+  rays_.rays_.reset(new RaySeg[rays_.capacity_]);
+  std::memcpy(rays_.rays_.get(), other.rays_.rays_.get(), sizeof(RaySeg) * rays_.capacity_);
   crystals_ = other.crystals_;
   return *this;
 }
@@ -158,14 +95,14 @@ SimData& SimData::operator=(SimData&& other) {
   }
 
   curr_wl_ = other.curr_wl_;
-  ray_buffer_.size_ = other.ray_buffer_.size_;
-  ray_buffer_.capacity_ = other.ray_buffer_.capacity_;
-  ray_buffer_.rays_ = std::move(other.ray_buffer_.rays_);
+  rays_.size_ = other.rays_.size_;
+  rays_.capacity_ = other.rays_.capacity_;
+  rays_.rays_ = std::move(other.rays_.rays_);
   crystals_ = std::move(other.crystals_);
 
-  other.ray_buffer_.capacity_ = 0;
-  other.ray_buffer_.size_ = 0;
-  other.ray_buffer_.rays_ = nullptr;
+  other.rays_.capacity_ = 0;
+  other.rays_.size_ = 0;
+  other.rays_.rays_ = nullptr;
   return *this;
 }
 

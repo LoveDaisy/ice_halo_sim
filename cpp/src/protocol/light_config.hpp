@@ -31,7 +31,7 @@ struct WlParam {
 };
 
 struct LightSourceConfig {
-  IdType id;
+  IdType id_;
   LightSourceParam param_;
   std::vector<WlParam> wl_param_;
 };

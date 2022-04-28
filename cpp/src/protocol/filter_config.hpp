@@ -31,12 +31,14 @@ struct CrystalFilterParam {
   IdType crystal_id_;
 };
 
+using SimpleFilterParam =
+    std::variant<NoneFilterParam, RaypathFilterParam, EntryExitFilterParam, DirectionFilterParam, CrystalFilterParam>;
+
 struct ComplexFilterParam {
-  std::vector<std::vector<IdType>> filters_;  // (f + ...) * (f + ...) * ...
+  std::vector<std::vector<std::pair<IdType, SimpleFilterParam>>> filters_;  // (f + ...) * (f + ...) * ...
 };
 
-using FilterParam = std::variant<NoneFilterParam, RaypathFilterParam, EntryExitFilterParam, DirectionFilterParam,
-                                 CrystalFilterParam, ComplexFilterParam>;
+using FilterParam = std::variant<SimpleFilterParam, ComplexFilterParam>;
 
 struct FilterConfig {
   static constexpr uint8_t kSymNone = 0;
@@ -49,7 +51,7 @@ struct FilterConfig {
     kFilterOut,
   };
 
-  IdType id;
+  IdType id_;
   uint8_t symmetry_;
   Action action_;
   FilterParam param_;

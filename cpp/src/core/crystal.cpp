@@ -8,11 +8,13 @@
 #include <set>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "context/context.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
+#include "protocol/filter_config.hpp"
 #include "util/log.hpp"
 #include "util/obj_pool.hpp"
 
@@ -1015,7 +1017,17 @@ Crystal Crystal::CreatePrism(float h) {
       9,  11, 10,  // lower: fn2
       9,  6,  11,  // lower: fn2
   } };
-  return Crystal(12, vtx.get(), 20, triangle_idx.get());
+  auto c = Crystal(12, vtx.get(), 20, triangle_idx.get());
+  c.fn_period_ = 6;
+  for (int i = 0; i < 4; i++) {
+    c.fn_map_.emplace(i, 1);
+    c.fn_map_.emplace(i + 16, 2);
+  }
+  for (int i = 0; i < 6; i++) {
+    c.fn_map_.emplace(i * 2 + 4, i + 3);
+    c.fn_map_.emplace(i * 2 + 5, i + 3);
+  }
+  return c;
 }
 
 Crystal::Crystal() : origin_{} {}
@@ -1023,7 +1035,7 @@ Crystal::Crystal() : origin_{} {}
 Crystal::Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx)
     : mesh_(vtx_cnt, triangle_cnt), origin_{}, face_v_(new float[triangle_cnt * 9]{}),
       face_ev_(new float[triangle_cnt * 6]{}), face_n_(new float[triangle_cnt * 3]{}),
-      face_area_(new float[triangle_cnt]{}), face_coord_tf_(new float[triangle_cnt * 12]{}) {
+      face_area_(new float[triangle_cnt]{}), face_coord_tf_(new float[triangle_cnt * 12]{}), fn_period_(-1) {
   mesh_.SetVtx(vtx);
   mesh_.SetTriangle(triangle_idx);
 
@@ -1035,7 +1047,7 @@ Crystal::Crystal(const Crystal& other)
     : mesh_(other.mesh_), origin_{ other.origin_[0], other.origin_[1], other.origin_[2] },
       face_v_(new float[other.TotalFaces() * 9]{}), face_ev_(new float[other.TotalFaces() * 6]{}),
       face_n_(new float[other.TotalFaces() * 3]{}), face_area_(new float[other.TotalFaces()]{}),
-      face_coord_tf_(new float[other.TotalFaces() * 12]) {
+      face_coord_tf_(new float[other.TotalFaces() * 12]), fn_map_(other.fn_map_), fn_period_(other.fn_period_) {
   auto n = other.TotalFaces();
   std::memcpy(face_v_.get(), other.face_v_.get(), n * 9 * sizeof(float));
   std::memcpy(face_ev_.get(), other.face_ev_.get(), n * 6 * sizeof(float));
@@ -1047,7 +1059,8 @@ Crystal::Crystal(const Crystal& other)
 Crystal::Crystal(Crystal&& other)
     : mesh_(std::move(other.mesh_)), origin_{ other.origin_[0], other.origin_[1], other.origin_[2] },
       face_v_(std::move(other.face_v_)), face_ev_(std::move(other.face_ev_)), face_n_(std::move(other.face_n_)),
-      face_area_(std::move(other.face_area_)), face_coord_tf_(std::move(other.face_coord_tf_)) {}
+      face_area_(std::move(other.face_area_)), face_coord_tf_(std::move(other.face_coord_tf_)),
+      fn_map_(std::move(other.fn_map_)), fn_period_(other.fn_period_) {}
 
 Crystal& Crystal::operator=(const Crystal& other) {
   if (&other == this) {
@@ -1070,6 +1083,8 @@ Crystal& Crystal::operator=(const Crystal& other) {
   std::memcpy(face_area_.get(), other.face_area_.get(), n * 1 * sizeof(float));
   std::memcpy(face_coord_tf_.get(), other.face_coord_tf_.get(), n * 12 * sizeof(float));
 
+  fn_map_ = other.fn_map_;
+  fn_period_ = other.fn_period_;
   return *this;
 }
 
@@ -1087,6 +1102,8 @@ Crystal& Crystal::operator=(Crystal&& other) {
   face_area_ = std::move(other.face_area_);
   face_coord_tf_ = std::move(other.face_coord_tf_);
 
+  fn_map_ = std::move(other.fn_map_);
+  fn_period_ = other.fn_period_;
   return *this;
 }
 
@@ -1170,8 +1187,12 @@ const float* Crystal::GetOrigin() const {
   return origin_;
 }
 
-IdType Crystal::GetFn(int /*fid*/) const {
-  return 1u;  // TODO:
+IdType Crystal::GetFn(int fid) const {
+  if (fn_map_.count(fid)) {
+    return fn_map_.at(fid);
+  } else {
+    return kInvalidId;
+  }
 }
 
 Crystal& Crystal::Rotate(const Rotation& r) {
@@ -1187,6 +1208,164 @@ Crystal& Crystal::Translate(float dx, float dy, float dz) {
   origin_[1] += dy;
   origin_[2] += dz;
   return *this;
+}
+
+std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
+  if (symmetry == FilterConfig::kSymNone) {
+    return rp;
+  }
+
+  std::vector<IdType> reduced_rp = rp;
+  if (symmetry | FilterConfig::kSymP) {
+    IdType first_pri = kInvalidId;
+    for (auto& x : reduced_rp) {
+      if (x < 3) {
+        continue;
+      }
+      IdType pyr = x / 10;
+      IdType pri = x % 10;
+      if (first_pri == kInvalidId) {
+        first_pri = pri;
+      }
+      pri -= first_pri;
+      pri %= fn_period_;
+      pri += 3;
+      x = pyr * 10 + pri;
+    }
+  }
+
+  if (symmetry | FilterConfig::kSymD) {
+    IdType pri1 = kInvalidId;
+    IdType pri2 = kInvalidId;
+    for (auto& x : reduced_rp) {
+      if (x < 3) {
+        continue;
+      }
+      IdType pyr = x / 10;
+      IdType pri = x % 10 - 3;
+      if (pri1 == kInvalidId) {
+        pri1 = pri;
+        continue;
+      }
+
+      if (pri2 == kInvalidId) {
+        if ((2 * pri1 - pri) % fn_period_ == pri) {
+          continue;
+        } else if ((2 * pri1 - pri) % fn_period_ > pri) {
+          break;  // Do nothing. It is already reduced.
+        } else {
+          pri2 = pri;
+        }
+      }
+
+      pri = (2 * pri1 - pri) % fn_period_;
+      pri += 3;
+      x = pyr * 10 + pri;
+    }
+  }
+
+  if (symmetry | FilterConfig::kSymB) {
+    IdType b1 = kInvalidId;
+    for (auto& x : reduced_rp) {
+      if (x > 2) {
+        continue;
+      }
+      if (b1 == kInvalidId) {
+        b1 = x;
+      }
+      if (b1 == 1) {
+        break;  // Do nothing. It is alread reduced.
+      }
+
+      x = 3 - x;
+    }
+  }
+
+  return reduced_rp;
+}
+
+std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
+  std::vector<std::vector<IdType>> result;
+  result.emplace_back(rp);
+  if (symmetry == FilterConfig::kSymNone) {
+    return result;
+  }
+
+  if (symmetry | FilterConfig::kSymP) {
+    for (int i = 1; i < fn_period_; i++) {
+      std::vector<IdType> curr_rp{ rp };
+      bool changed = false;
+      for (auto& x : curr_rp) {
+        if (x < 3) {
+          continue;
+        }
+
+        IdType pyr = x / 10;
+        IdType pri = x % 10;
+        pri -= 3;
+        pri += i;
+        pri %= fn_period_;
+        pri += 3;
+        x = pyr * 10 + pri;
+        changed = true;
+      }
+      if (changed) {
+        result.emplace_back(curr_rp);
+      }
+    }
+  }
+
+  if (symmetry | FilterConfig::kSymD) {
+    auto size = result.size();
+    for (size_t i = 0; i < size; i++) {
+      auto curr_rp = result[i];
+      IdType pri0 = kInvalidId;
+      bool changed = false;
+      for (auto& x : curr_rp) {
+        if (x < 3) {
+          continue;
+        }
+
+        IdType pyr = x / 10;
+        IdType pri = x % 10;
+        if (pri0 == kInvalidId) {
+          pri0 = pri;
+          continue;
+        }
+
+        pri -= 3;
+        pri = 2 * pri0 - pri;
+        pri %= fn_period_;
+        pri += 3;
+        x = pyr * 10 + pri;
+        changed = true;
+      }
+      if (changed) {
+        result.emplace_back(curr_rp);
+      }
+    }
+  }
+
+  if (symmetry | FilterConfig::kSymB) {
+    auto size = result.size();
+    for (size_t i = 0; i < size; i++) {
+      auto curr_rp = result[i];
+      bool changed = false;
+      for (auto& x : curr_rp) {
+        if (x > 2) {
+          continue;
+        }
+
+        x = 3 - x;
+        changed = true;
+      }
+      if (changed) {
+        result.emplace_back(curr_rp);
+      }
+    }
+  }
+
+  return result;
 }
 
 float Crystal::GetRefractiveIndex(float wl) const {

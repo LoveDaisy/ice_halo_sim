@@ -58,9 +58,10 @@ class Crystal {
   Crystal& Rotate(const Rotation& r);
   Crystal& Translate(float dx, float dy, float dz);
 
-  float GetRefractiveIndex(float wl) const;
+  std::vector<IdType> ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const;
+  std::vector<std::vector<IdType>> ExpandRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const;
 
-  IdType config_id_ = kInvalidId;
+  float GetRefractiveIndex(float wl) const;
 
  private:
   void ComputeCacheData();
@@ -72,6 +73,9 @@ class Crystal {
   std::unique_ptr<float[]> face_n_;         // normal of every face. 3 * face_cnt
   std::unique_ptr<float[]> face_area_;      // area of every face. 1 * face_cnt
   std::unique_ptr<float[]> face_coord_tf_;  // transform for barycentric coordinate. 12 * face_cnt
+
+  std::map<int, IdType> fn_map_;  // fid --> fn
+  int fn_period_;                 // for raypath symmetry
 };
 
 }  // namespace v3

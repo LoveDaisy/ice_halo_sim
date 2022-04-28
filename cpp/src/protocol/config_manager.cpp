@@ -86,11 +86,17 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
     }
   }
 
-  render.filter_.id = kInvalidId;
-  render.filter_.param_ = NoneFilterParam{};
   if (j_render.contains("filter")) {
-    IdType fid = j_render.at("filter").get<IdType>();
-    render.filter_ = m.filters_.at(fid);
+    for (const auto& j_filter : j_render.at("filter")) {
+      if (auto id = j_filter.get<IdType>() > 0) {
+        render.ms_filter_.emplace_back(m.filters_.at(id));
+      } else {
+        FilterConfig none_filter;
+        none_filter.id_ = kInvalidId;
+        none_filter.param_ = NoneFilterParam{};
+        render.ms_filter_.emplace_back(none_filter);
+      }
+    }
   }
 
   return render;
@@ -116,7 +122,7 @@ SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager&
     scene.light_source_ = m.lights_.at(id);
   } else {
     LOG_ERROR("Light source ID(%u) cannot be found!", id);
-    scene.light_source_.id = kInvalidId;
+    scene.light_source_.id_ = kInvalidId;
   }
 
   // scattering
@@ -174,8 +180,32 @@ void from_json(const nlohmann::json& j, ConfigManager& m) {
 
   // Filters
   for (const auto& j_filter : j.at("filter")) {
+    if (j_filter.at("type") == "complex") {
+      continue;
+    }
     IdType id = j_filter.at("id").get<IdType>();
     m.filters_.emplace(id, j_filter.get<FilterConfig>());
+  }
+  for (const auto& j_filter : j.at("filter")) {
+    if (j_filter.at("type") != "complex") {
+      continue;
+    }
+    IdType id = j_filter.at("id").get<IdType>();
+    auto complex_filter = j_filter.get<FilterConfig>();  // incompleted
+
+    const auto& cmp = j_filter.at("composition");
+    ComplexFilterParam p;
+    for (const auto& c : cmp) {
+      std::vector<std::pair<IdType, SimpleFilterParam>> f;
+      for (const auto& cc : c) {
+        IdType fid = cc.get<IdType>();
+        const auto& p = m.filters_.at(fid).param_;
+        f.emplace_back(fid, std::get<SimpleFilterParam>(p));
+      }
+      p.filters_.emplace_back(f);
+    }
+    complex_filter.param_ = p;
+    m.filters_.emplace(id, complex_filter);
   }
 
   // Renderers

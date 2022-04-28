@@ -169,7 +169,7 @@
     {
       "id": 7,
       "type": "complex",
-      "composition": [1, [3, 6], 5]
+      "composition": [1, [2, 6], 5]
     }
   ],
   "scene": [

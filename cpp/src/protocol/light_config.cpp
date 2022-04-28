@@ -11,7 +11,7 @@ namespace icehalo {
 namespace v3 {
 
 void to_json(nlohmann::json& j, const LightSourceConfig& l) {
-  j["id"] = l.id;
+  j["id"] = l.id_;
   std::vector<float> wl;
   std::vector<float> weight;
   for (const auto& w : l.wl_param_) {
@@ -38,7 +38,7 @@ void to_json(nlohmann::json& j, const LightSourceConfig& l) {
 }
 
 void from_json(const nlohmann::json& j, LightSourceConfig& l) {
-  j.at("id").get_to(l.id);
+  j.at("id").get_to(l.id_);
 
   size_t wi = 0;
   const auto& j_weight = j.at("wl_weight");

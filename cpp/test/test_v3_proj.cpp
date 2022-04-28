@@ -48,10 +48,10 @@ TEST_F(V3TestProj, SimpleProj) {
     int offset = 0;
     while (true) {
       auto data = data_queue->Get();
-      if (!data || data->ray_buffer_.Empty()) {
+      if (!data || data->rays_.Empty()) {
         break;
       }
-      const auto& rays = data->ray_buffer_;
+      const auto& rays = data->rays_;
       LOG_DEBUG("p  d  w fid prev_id");
       for (size_t i = 0; i < rays.size_; i++) {
         const auto& r = rays[i];
@@ -60,7 +60,7 @@ TEST_F(V3TestProj, SimpleProj) {
                   r.d_[0], r.d_[1], r.d_[2],                       // d
                   r.w_,                                            // w
                   r.fid_,                                          // fid
-                  r.prev_ray_id_);                                 // prev_ray_id
+                  r.prev_ray_idx_);                                // prev_ray_id
         if (r.fid_ > 0 || r.w_ < 0) {
           continue;
         }

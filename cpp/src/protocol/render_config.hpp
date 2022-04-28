@@ -84,7 +84,7 @@ struct RenderConfig {
   std::vector<GridLineParam> elevation_grid_;
   bool celestial_outline_;
 
-  FilterConfig filter_;
+  std::vector<FilterConfig> ms_filter_;  // for multi-scattering
 };
 
 NLOHMANN_JSON_SERIALIZE_ENUM(    // declear

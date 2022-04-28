@@ -63,12 +63,6 @@ constexpr size_t kMaxCrystalNum = 16;  // How many crystal types in one configur
 
 using IdType = uint16_t;
 
-constexpr int kRpIdBits = 6;      // use 6 bits for IDs in a raypath
-constexpr uint8_t kRpEnd = 0x3f;  // 2^6-1
-constexpr IdType kRpIdMask = 0x003f;
-constexpr size_t kMaxRpLen = kMaxMsNum * kMaxHits;
-constexpr size_t kRpRcdBytes = (kMaxRpLen * kRpIdBits + CHAR_BIT - 1) / CHAR_BIT;
-
 }  // namespace v3
 
 }  // namespace icehalo

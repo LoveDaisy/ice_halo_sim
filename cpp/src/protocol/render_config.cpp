@@ -1,10 +1,12 @@
 #include "protocol/render_config.hpp"
 
 #include <cmath>
+#include <variant>
 
 #include "core/math.hpp"
 #include "io/json_util.hpp"
 #include "json.hpp"
+#include "protocol/filter_config.hpp"
 
 namespace icehalo {
 namespace v3 {
@@ -56,14 +58,17 @@ void to_json(nlohmann::json& j, const LensParam& l) {
 }
 
 void from_json(const nlohmann::json& j, LensParam& l) {
+  constexpr int kErrCodeMissingKey = 403;
+  constexpr float kHalfDiagLen = 21.63f;
+
   j.at("type").get_to(l.type_);
   if (j.contains("fov")) {
     j.at("fov").get_to(l.fov_);
   } else if (j.contains("f")) {
     float f = j.at("f").get<float>();
-    l.fov_ = std::atan2(21.63, f) * 2 * math::kRadToDegree;  // atan2(y, x)
+    l.fov_ = std::atan2(kHalfDiagLen, f) * 2 * math::kRadToDegree;  // atan2(y, x)
   } else {
-    throw nlohmann::detail::out_of_range::create(403, "missing key [fov] or [f]", j);
+    throw nlohmann::detail::out_of_range::create(kErrCodeMissingKey, "missing key [fov] or [f]", j);
   }
 }
 
@@ -84,8 +89,13 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["grid"].emplace("elevation", r.elevation_grid_);
   j["grid"].emplace("outline", r.celestial_outline_);
 
-  if (r.filter_.id != kInvalidId && !std::holds_alternative<NoneFilterParam>(r.filter_.param_)) {
-    j["filter"] = r.filter_.id;
+  for (const auto& f : r.ms_filter_) {
+    if (f.id_ == kInvalidId || std::holds_alternative<SimpleFilterParam>(f.param_) ||
+        std::holds_alternative<NoneFilterParam>(std::get<SimpleFilterParam>(f.param_))) {
+      j["filter"].emplace_back(-1);
+    } else {
+      j["filter"].emplace_back(f.id_);
+    }
   }
 }
 
