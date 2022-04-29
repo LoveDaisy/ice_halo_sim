@@ -4,12 +4,63 @@
 #include <vector>
 
 #include "core/def.hpp"
+#include "json.hpp"
 #include "util/log.hpp"
 
 namespace icehalo {
 namespace v3 {
 
 // =============== FilterConfig ===============
+struct SimpleFilterParamToJson {
+  nlohmann::json& j_;
+
+  void operator()(const NoneFilterParam& /* p */) { j_["type"] = "none"; }
+
+  void operator()(const RaypathFilterParam& p) {
+    j_["type"] = "raypath";
+    j_["raypath"] = p.raypath_;
+  }
+
+  void operator()(const EntryExitFilterParam& p) {
+    j_["type"] = "entry_exit";
+    j_["entry"] = p.entry_;
+    j_["exit"] = p.exit_;
+  }
+
+  void operator()(const DirectionFilterParam& p) {
+    j_["type"] = "direction";
+    j_["az"] = p.lon_;
+    j_["el"] = p.lat_;
+    j_["radii"] = p.radii_;
+  }
+
+  void operator()(const CrystalFilterParam& p) {
+    j_["type"] = "crystal";
+    j_["crystal_id"] = p.crystal_id_;
+  }
+};
+
+struct FilterParamToJson {
+  nlohmann::json& j_;
+
+  void operator()(const SimpleFilterParam& p) { std::visit(SimpleFilterParamToJson{ j_ }, p); }
+
+  void operator()(const ComplexFilterParam& p) {
+    j_["type"] = "complex";
+    for (const auto& c : p.filters_) {
+      if (c.size() == 1) {
+        j_["composition"].emplace_back(c[0].first);
+      } else {
+        std::vector<IdType> tmp_id;
+        for (const auto& cc : c) {
+          tmp_id.emplace_back(cc.first);
+        }
+        j_["composition"].emplace_back(tmp_id);
+      }
+    }
+  }
+};
+
 void to_json(nlohmann::json& j, const FilterConfig& f) {
   j["id"] = f.id_;
 
@@ -34,45 +85,7 @@ void to_json(nlohmann::json& j, const FilterConfig& f) {
   }
   j["symmetry"] = sym;
 
-  if (std::holds_alternative<SimpleFilterParam>(f.param_)) {
-    const auto& simple_param = std::get<SimpleFilterParam>(f.param_);
-    if (std::holds_alternative<NoneFilterParam>(simple_param)) {
-      j["type"] = "none";
-    } else if (std::holds_alternative<RaypathFilterParam>(simple_param)) {
-      const auto& p = std::get<RaypathFilterParam>(simple_param);
-      j["type"] = "raypath";
-      j["raypath"] = p.raypath_;
-    } else if (std::holds_alternative<EntryExitFilterParam>(simple_param)) {
-      const auto& p = std::get<EntryExitFilterParam>(simple_param);
-      j["type"] = "entry_exit";
-      j["entry"] = p.entry_;
-      j["exit"] = p.exit_;
-    } else if (std::holds_alternative<DirectionFilterParam>(simple_param)) {
-      const auto& p = std::get<DirectionFilterParam>(simple_param);
-      j["type"] = "direction";
-      j["az"] = p.lon_;
-      j["el"] = p.lat_;
-      j["radii"] = p.radii_;
-    } else if (std::holds_alternative<CrystalFilterParam>(simple_param)) {
-      const auto& p = std::get<CrystalFilterParam>(simple_param);
-      j["type"] = "crystal";
-      j["crystal_id"] = p.crystal_id_;
-    }
-  } else if (std::holds_alternative<ComplexFilterParam>(f.param_)) {
-    const auto& p = std::get<ComplexFilterParam>(f.param_);
-    j["type"] = "complex";
-    for (const auto& c : p.filters_) {
-      if (c.size() == 1) {
-        j["composition"].emplace_back(c[0].first);
-      } else {
-        std::vector<IdType> tmp_id;
-        for (const auto& cc : c) {
-          tmp_id.emplace_back(cc.first);
-        }
-        j["composition"].emplace_back(tmp_id);
-      }
-    }
-  }
+  std::visit(FilterParamToJson{ j }, f.param_);
 }
 
 void from_json(const nlohmann::json& j, FilterConfig& f) {

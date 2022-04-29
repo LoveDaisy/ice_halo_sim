@@ -5,10 +5,30 @@
 #include <vector>
 
 #include "io/json_util.hpp"
+#include "json.hpp"
 #include "util/log.hpp"
 
 namespace icehalo {
 namespace v3 {
+
+struct LightParamToJson {
+  nlohmann::json& j_;
+
+  void operator()(const SunParam& p) {
+    j_["type"] = "sun";
+    j_["altitude"] = p.altitude_;
+    j_["azimuth"] = p.azimuth_;
+    j_["diameter"] = p.diameter_;
+  }
+
+  void operator()(const StreetLightParam& p) {
+    j_["type"] = "streetlight";
+    j_["height"] = p.height_;
+    j_["azimuth"] = p.azimuth_;
+    j_["distance"] = p.distace_;
+    j_["diametre"] = p.diameter_;
+  }
+};
 
 void to_json(nlohmann::json& j, const LightSourceConfig& l) {
   j["id"] = l.id_;
@@ -21,20 +41,7 @@ void to_json(nlohmann::json& j, const LightSourceConfig& l) {
   j["wavelength"] = wl;
   j["wl_weight"] = weight;
 
-  if (std::holds_alternative<SunParam>(l.param_)) {
-    const auto& p = std::get<SunParam>(l.param_);
-    j["type"] = "sun";
-    j["altitude"] = p.altitude_;
-    j["azimuth"] = p.azimuth_;
-    j["diameter"] = p.diameter_;
-  } else if (std::holds_alternative<StreetLightParam>(l.param_)) {
-    const auto& p = std::get<StreetLightParam>(l.param_);
-    j["type"] = "streetlight";
-    j["height"] = p.height_;
-    j["azimuth"] = p.azimuth_;
-    j["distance"] = p.distace_;
-    j["diametre"] = p.diameter_;
-  }
+  std::visit(LightParamToJson{ j }, l.param_);
 }
 
 void from_json(const nlohmann::json& j, LightSourceConfig& l) {
