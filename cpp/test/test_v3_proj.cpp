@@ -7,6 +7,7 @@
 #include <memory>
 #include <thread>
 
+#include "consumer/show_rays.hpp"
 #include "core/simulator.hpp"
 #include "protocol/config_manager.hpp"
 #include "util/log.hpp"
@@ -29,6 +30,28 @@ class V3TestProj : public ::testing::Test {
 };
 
 
+// For test
+class CopyRayDataConsumer : public v3::IConsume {
+ public:
+  CopyRayDataConsumer(float* output_data) : output_data_(output_data) {}
+
+  void Consume(const v3::SimData& data) override {
+    int offset = 0;
+    for (const auto& r : data.rays_) {
+      if (r.fid_ > 0 || r.w_ < 0) {
+        continue;
+      }
+      std::memcpy(output_data_ + offset * 7 + 0, r.p_, 3 * sizeof(float));
+      std::memcpy(output_data_ + offset * 7 + 3, r.d_, 3 * sizeof(float));
+      output_data_[offset * 7 + 6] = r.w_;
+      offset++;
+    }
+  }
+
+ private:
+  float* output_data_;
+};
+
 TEST_F(V3TestProj, SimpleProj) {
   v3::ConfigManager config_manager = config_json_.get<v3::ConfigManager>();
 
@@ -36,48 +59,27 @@ TEST_F(V3TestProj, SimpleProj) {
   auto data_queue = std::make_shared<v3::Queue<v3::SimData>>();
 
   constexpr int kMaxHits = 8;
+  std::unique_ptr<float[]> output_data{ new float[kMaxHits * 2 * 7]{} };
+  float* output_data_ptr = output_data.get();
+
+  v3::Simulator simulator(config_queue, data_queue);
+
+  v3::Consumer consumer(data_queue);
+  consumer.RegisterConsumer(v3::ConsumerPtrU(new v3::ShowRaysInfo));
+  consumer.RegisterConsumer(v3::ConsumerPtrU(new CopyRayDataConsumer(output_data_ptr)));
+
+  std::thread prod_thread([&simulator]() { simulator.Run(); });
+  std::thread cons_thread([&consumer]() { consumer.Run(); });
 
   auto config = config_manager.scenes_.at(1);
   config_queue->Emplace(std::move(config));
 
-  v3::Simulator simulator(config_queue, data_queue);
-  std::unique_ptr<float[]> output_data{ new float[kMaxHits * 2 * 7]{} };
-  float* output_data_ptr = output_data.get();
-
-  std::thread producer([&simulator]() { simulator.Run(); });
-  std::thread consumer([=]() {
-    int offset = 0;
-    while (true) {
-      auto data = data_queue->Get();
-      if (data.rays_.Empty()) {
-        break;
-      }
-      const auto& rays = data.rays_;
-      LOG_DEBUG("p  d  w fid prev_id");
-      for (size_t i = 0; i < rays.size_; i++) {
-        const auto& r = rays[i];
-        LOG_DEBUG("%.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f  %d  %d",  //
-                  r.p_[0], r.p_[1], r.p_[2],                       // p
-                  r.d_[0], r.d_[1], r.d_[2],                       // d
-                  r.w_,                                            // w
-                  r.fid_,                                          // fid
-                  r.prev_ray_idx_);                                // prev_ray_id
-        if (r.fid_ > 0 || r.w_ < 0) {
-          continue;
-        }
-        std::memcpy(output_data_ptr + offset * 7 + 0, r.p_, 3 * sizeof(float));
-        std::memcpy(output_data_ptr + offset * 7 + 3, r.d_, 3 * sizeof(float));
-        output_data_ptr[offset * 7 + 6] = r.w_;
-        offset++;
-      }
-    }
-  });
-
   std::this_thread::sleep_for(500ms);
   simulator.Stop();
+  consumer.Stop();
 
-  consumer.join();
-  producer.join();
+  cons_thread.join();
+  prod_thread.join();
 
   float expect_out[kMaxHits * 2 * 7]{
     /* --------- p --------------->|<-------------- d ------------->|<-- w -->|*/

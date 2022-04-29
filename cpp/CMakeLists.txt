@@ -80,6 +80,10 @@ endif()
 set(icehalo_include
   "${PROJ_SRC_DIR}" ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/nlohmann_json")
 
+set(icehalo_consumer_src
+  "${PROJ_SRC_DIR}/consumer/consumer.cpp"
+  "${PROJ_SRC_DIR}/consumer/show_rays.cpp")
+
 set(icehalo_context_src
   "${PROJ_SRC_DIR}/context/camera_context.cpp"
   "${PROJ_SRC_DIR}/context/context.cpp"
@@ -119,7 +123,7 @@ set(icehalo_util_src
   "${PROJ_SRC_DIR}/util/obj_pool.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
 set(icehalo_src
-  ${icehalo_context_src} ${icehalo_core_src} ${icehalo_io_src}
+  ${icehalo_consumer_src} ${icehalo_context_src} ${icehalo_core_src} ${icehalo_io_src}
   ${icehalo_process_src} ${icehalo_protocol_src} ${icehalo_util_src})
 
 # ==================================================================================================
