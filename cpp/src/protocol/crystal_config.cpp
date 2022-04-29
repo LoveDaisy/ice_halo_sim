@@ -89,14 +89,8 @@ void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
 // ========== CrystalConfig ==========
 void to_json(nlohmann::json& j, const CrystalConfig& c) {
   j["id"] = c.id_;
-
-  if (std::holds_alternative<PrismCrystalParam>(c.param_)) {
-    j["shape"] = std::get<PrismCrystalParam>(c.param_);
-  } else if (std::holds_alternative<PyramidCrystalParam>(c.param_)) {
-    j["shape"] = std::get<PyramidCrystalParam>(c.param_);
-  }
-
   j["axis"] = c.axis_;
+  std::visit([&j](auto&& p) { j["shape"] = p; }, c.param_);
 }
 
 void from_json(const nlohmann::json& j, CrystalConfig& c) {

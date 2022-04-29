@@ -14,6 +14,7 @@
 #include "core/def.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
+#include "protocol/crystal_config.hpp"
 #include "protocol/light_config.hpp"
 #include "protocol/proj_config.hpp"
 #include "protocol/sim_data.hpp"
@@ -574,8 +575,7 @@ namespace v3 {
  * @brief Sample on crystal & init origin (p & fid) of rays.
  *        NOTE: direction of rays should be given.
  */
-void InitRayPFid(const Crystal& curr_crystal,  // input
-                 RayBuffer* ray_buf_ptr) {     // output
+void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
   if (!ray_buf_ptr) {
     return;
   }
@@ -586,25 +586,38 @@ void InitRayPFid(const Crystal& curr_crystal,  // input
   const auto* face_norm = curr_crystal.GetFaceNorm();
   const auto* face_area = curr_crystal.GetFaceArea();
   auto total_faces = curr_crystal.TotalFaces();
-  for (size_t i = 0; i < ray_buf.size_; i++) {
-    const auto* d = ray_buf[i].d_;
+  for (auto& r : ray_buf) {
+    const auto* d = r.d_;
     for (size_t j = 0; j < total_faces; j++) {
       proj_prob[j] = std::max(-Dot3(d, face_norm + j * 3) * face_area[j], 0.0f);
     }
     // fid
-    RandomSample(total_faces, proj_prob.get(), &ray_buf[i].fid_);
-    auto fid = ray_buf[i].fid_;
+    RandomSample(total_faces, proj_prob.get(), &r.fid_);
     // p
-    SampleTrianglePoint(curr_crystal.GetFaceVtx() + fid * 9, ray_buf[i].p_);
+    SampleTrianglePoint(curr_crystal.GetFaceVtx() + r.fid_ * 9, r.p_);
   }
 }
 
+struct RayDirSampler {
+  float* d_;
+  size_t num_;
+  size_t step_;
+
+  void operator()(const SunParam& p) {
+    SampleSphCapPoint(p.azimuth_ + 180.0f, -p.altitude_, p.diameter_ / 2.0f, d_, num_, step_);
+  }
+
+  void operator()(const StreetLightParam& /* p */) {
+    // NOTE: current we do **NOT** support street light source
+    LOG_WARNING("we will support street light later.");
+  }
+};
+
 /**
  * @brief Set initial value of d & w (direction and intensity) for rays.
- *
  */
-void InitRayDW(const LightSourceConfig& light_config, size_t ray_num,  // input
-               RayBuffer* ray_buf_ptr) {                               // output
+void InitRay_d_w_previdx(const LightSourceConfig& light_config, size_t ray_num,  // input
+                         RayBuffer* ray_buf_ptr) {                               // output
   if (!ray_buf_ptr) {
     return;
   }
@@ -612,23 +625,31 @@ void InitRayDW(const LightSourceConfig& light_config, size_t ray_num,  // input
   const auto& light_param = light_config.param_;
   float w0 = light_config.wl_param_[0].weight_;
 
-  // w: set init weight.
-  for (size_t i = 0; i < ray_num; i++) {
-    ray_buf[i].w_ = w0;
+  // w, prev_ray_idx: set init weight & previous ray index
+  for (auto& r : ray_buf) {
+    r.w_ = w0;
+    r.prev_ray_idx_ = kInfSize;
   }
 
   // d: sample direction
-  if (std::holds_alternative<SunParam>(light_param)) {
-    const auto& param = std::get<SunParam>(light_param);
-    SampleSphCapPoint(param.azimuth_ + 180.0f, -param.altitude_, param.diameter_ / 2.0f, ray_buf[0].d_, ray_num,
-                      sizeof(RaySeg));
-  } else if (std::holds_alternative<StreetLightParam>(light_param)) {
-    LOG_WARNING("we will support street light later.");
-    // TODO: current we do **NOT** support street light source
-  } else {
-    LOG_ERROR("unknown light source type!");
-  }
+  std::visit(RayDirSampler{ ray_buf[0].d_, ray_num, sizeof(RaySeg) }, light_param);
 }
+
+
+struct CrystalSampler {
+  Crystal operator()(const PrismCrystalParam& p) {
+    auto* rng = RandomNumberGenerator::GetInstance();
+    float h = rng->Get(p.h_);
+    // TODO: face distance
+    return Crystal::CreatePrism(h);
+  }
+
+  Crystal operator()(const PyramidCrystalParam& /* p */) {
+    // TODO:
+    return Crystal{};
+  }
+};
+
 
 std::vector<Crystal> SampleMsCrystal(const SceneConfig* config) {
   size_t total = 0;
@@ -642,14 +663,7 @@ std::vector<Crystal> SampleMsCrystal(const SceneConfig* config) {
   for (const auto& m : config->ms_) {
     for (const auto& c : m.setting_) {
       // Sample current scattering crystals
-      if (std::holds_alternative<PrismCrystalParam>(c.crystal_.param_)) {
-        const auto& param = std::get<PrismCrystalParam>(c.crystal_.param_);
-        float h = rng->Get(param.h_);
-        crystals.emplace_back(Crystal::CreatePrism(h));
-        // TODO: prism face distance
-      } else if (std::holds_alternative<PyramidCrystalParam>(c.crystal_.param_)) {
-        // TODO:
-      }
+      crystals.emplace_back(std::visit(CrystalSampler{}, c.crystal_.param_));
 
       // Set axis orientation
       {
@@ -664,11 +678,13 @@ std::vector<Crystal> SampleMsCrystal(const SceneConfig* config) {
         crystals.back().Rotate(rot);
       }
 
-      // TODO: Set origin
+      // Set origin
+      // NOTE: Since we do **NOT** support streetlight cases, we ignore the initialization for origin.
     }
   }
   return crystals;
 }
+
 
 std::unique_ptr<size_t[]> PartitionCrystalRayNum(const MsInfo& ms_info, int ray_num) {
   auto crystal_cnt = ms_info.setting_.size();
@@ -724,9 +740,9 @@ void TraceRays(const Crystal& curr_crystal, float refractive_index, size_t curr_
   buffer_data[1].size_ = curr_ray_num * 2;
 }
 
-void CollectData(const MsInfo& ms_info, size_t ci,  //
-                 RayBuffer* buffer_data, RayBuffer* init_data) {
-  const auto& filter = ms_info.setting_[ci].filter_;  // TODO:
+void CollectData(const MsInfo& ms_info, size_t ci,                // input
+                 RayBuffer* buffer_data, RayBuffer* init_data) {  // output
+  const auto& filter = ms_info.setting_[ci].filter_;              // TODO:
   auto* rng = RandomNumberGenerator::GetInstance();
   for (size_t j = 0; j < buffer_data[1].size_; j++) {
     auto& r = buffer_data[1][j];
@@ -817,18 +833,15 @@ void Simulator::Run() {
 
           // 1.1 init d & w & (prev_ray_idx)
           if (first_ms) {
-            InitRayDW(config->light_source_, curr_ray_num, buffer_data + 0);
-            for (size_t i = 0; i < curr_ray_num; i++) {
-              buffer_data[0][i].prev_ray_idx_ = kInfSize;
-            }
             buffer_data[0].size_ = curr_ray_num;
+            InitRay_d_w_previdx(config->light_source_, curr_ray_num, buffer_data + 0);
           } else {
             buffer_data[0].EmplaceBack(init_data[0], init_ray_offset, curr_ray_num);
             init_ray_offset += curr_ray_num;
           }
 
           // 1.2 init p & fid
-          InitRayPFid(curr_crystal, buffer_data + 0);
+          InitRay_p_fid(curr_crystal, buffer_data + 0);
 
           // 1.3 init crystal_id, root_ray_idx, rp, state
           for (auto& r : buffer_data[0]) {

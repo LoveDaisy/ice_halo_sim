@@ -90,8 +90,8 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["grid"].emplace("outline", r.celestial_outline_);
 
   for (const auto& f : r.ms_filter_) {
-    if (f.id_ == kInvalidId || std::holds_alternative<SimpleFilterParam>(f.param_) ||
-        std::holds_alternative<NoneFilterParam>(std::get<SimpleFilterParam>(f.param_))) {
+    if (f.id_ == kInvalidId || (std::holds_alternative<SimpleFilterParam>(f.param_) &&
+                                std::holds_alternative<NoneFilterParam>(std::get<SimpleFilterParam>(f.param_)))) {
       j["filter"].emplace_back(-1);
     } else {
       j["filter"].emplace_back(f.id_);
