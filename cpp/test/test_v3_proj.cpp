@@ -3,10 +3,11 @@
 #include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <thread>
 
-#include "process/simulation.hpp"
+#include "core/simulator.hpp"
 #include "protocol/config_manager.hpp"
 #include "util/log.hpp"
 #include "util/queue.hpp"
@@ -31,12 +32,12 @@ class V3TestProj : public ::testing::Test {
 TEST_F(V3TestProj, SimpleProj) {
   v3::ConfigManager config_manager = config_json_.get<v3::ConfigManager>();
 
-  auto config_queue = std::make_shared<v3::Queue<v3::SceneConfigPtrU>>();
-  auto data_queue = std::make_shared<v3::Queue<v3::SimDataPtrU>>();
+  auto config_queue = std::make_shared<v3::Queue<v3::SceneConfig>>();
+  auto data_queue = std::make_shared<v3::Queue<v3::SimData>>();
 
   constexpr int kMaxHits = 8;
 
-  auto config = std::make_unique<v3::SceneConfig>(config_manager.scenes_.at(1));
+  auto config = config_manager.scenes_.at(1);
   config_queue->Emplace(std::move(config));
 
   v3::Simulator simulator(config_queue, data_queue);
@@ -48,10 +49,10 @@ TEST_F(V3TestProj, SimpleProj) {
     int offset = 0;
     while (true) {
       auto data = data_queue->Get();
-      if (!data || data->rays_.Empty()) {
+      if (data.rays_.Empty()) {
         break;
       }
-      const auto& rays = data->rays_;
+      const auto& rays = data.rays_;
       LOG_DEBUG("p  d  w fid prev_id");
       for (size_t i = 0; i < rays.size_; i++) {
         const auto& r = rays[i];

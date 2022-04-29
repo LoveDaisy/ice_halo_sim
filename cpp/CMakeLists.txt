@@ -94,7 +94,8 @@ set(icehalo_core_src
   "${PROJ_SRC_DIR}/core/filter.cpp"
   "${PROJ_SRC_DIR}/core/math.cpp"
   "${PROJ_SRC_DIR}/core/optics.cpp"
-  "${PROJ_SRC_DIR}/core/raypath.cpp")
+  "${PROJ_SRC_DIR}/core/raypath.cpp"
+  "${PROJ_SRC_DIR}/core/simulator.cpp")
 
 set(icehalo_process_src
   "${PROJ_SRC_DIR}/process/render.cpp"

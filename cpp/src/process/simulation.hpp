@@ -139,35 +139,6 @@ class SimulationData : public ISerializable {
   ThreadingPoolPtr threading_pool_;
 };
 
-namespace v3 {
-
-template <class T>
-class Queue;
-
-template <class T>
-using QueuePtrU = std::unique_ptr<Queue<T>>;
-template <class T>
-using QueuePtrS = std::shared_ptr<Queue<T>>;
-
-class Simulator {
- public:
-  enum State {
-    kIdle,
-    kRunning,
-  };
-
-  Simulator(QueuePtrS<SceneConfigPtrU> config_queue, QueuePtrS<SimDataPtrU> data_queue);
-
-  void Run();
-  void Stop();
-
- private:
-  QueuePtrS<SceneConfigPtrU> config_queue_;
-  QueuePtrS<SimDataPtrU> data_queue_;
-  std::atomic_bool stop_;
-};
-
-}  // namespace v3
 
 class Simulator {
  public:
