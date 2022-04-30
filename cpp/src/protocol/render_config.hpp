@@ -14,7 +14,6 @@ struct ViewParam {
   float az_;  // Azimuth
   float el_;  // Elevation
   float ro_;  // Roll
-  float d_;   // Distance
 };
 
 void to_json(nlohmann::json& j, const ViewParam& v);

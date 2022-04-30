@@ -16,14 +16,12 @@ void to_json(nlohmann::json& j, const ViewParam& v) {
   j["azimuth"] = v.az_;
   j["elevation"] = v.el_;
   j["roll"] = v.ro_;
-  j["distance"] = v.d_;
 }
 
 void from_json(const nlohmann::json& j, ViewParam& v) {
   JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "azimuth", v.az_)
   JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "elevation", v.el_)
   JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "roll", v.ro_)
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "distance", v.d_)
 }
 
 

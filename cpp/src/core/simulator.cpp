@@ -1,6 +1,7 @@
 #include "core/simulator.hpp"
 
 #include "core/buffer.hpp"
+#include "core/filter.hpp"
 #include "core/optics.hpp"
 #include "util/log.hpp"
 #include "util/queue.hpp"
@@ -177,24 +178,29 @@ void TraceRays(const Crystal& curr_crystal, float refractive_index, size_t curr_
   buffer_data[1].size_ = curr_ray_num * 2;
 }
 
-void CollectData(const MsInfo& ms_info, size_t ci,                // input
+void CollectData(const MsInfo& ms_info, const Filter* filter,     // input
                  RayBuffer* buffer_data, RayBuffer* init_data) {  // output
-  const auto& filter = ms_info.setting_[ci].filter_;              // TODO:
   auto* rng = RandomNumberGenerator::GetInstance();
   for (size_t j = 0; j < buffer_data[1].size_; j++) {
     auto& r = buffer_data[1][j];
     if (r.w_ < 0) {
+      // 0. Total reflection.
       r.state_ = RaySeg::kStopped;
     } else if (r.fid_ < 0) {
-      //  a. Copy outgoing rays into initial data, with probability of p
-      if (rng->GetUniform() < ms_info.prob_) {
+      // 1. Outgoing rays.
+      if (!filter->Check(r)) {
+        // 1.1 Filter out. Marked as stopped.
+        r.state_ = RaySeg::kStopped;
+      } else if (rng->GetUniform() < ms_info.prob_) {
+        // 1.2 Copy outgoing rays into initial data, with probability of p
         r.state_ = RaySeg::kContinue;
         init_data[1].EmplaceBack(r);
       } else {
+        // 1.3 Final outgoing rays.
         r.state_ = RaySeg::kOutgoing;
       }
     } else {
-      //  b. Squeeze (or better swap?) buffers.
+      // 2. Normal rays. Squeeze (or better swap?) buffers.
       buffer_data[0].EmplaceBack(r);
       r.state_ = RaySeg::kNormal;
     }
@@ -320,7 +326,9 @@ void Simulator::Run() {
           }
 
           // 2.3 Collect data. And set ray properties: state
-          CollectData(m, ci, buffer_data, init_data);
+          auto filter = Filter::Create(m.setting_[ci].filter_);
+          filter->InitCrystalSymmetry(curr_crystal);
+          CollectData(m, filter.get(), buffer_data, init_data);
 
           // 2.4 Copy to all_data
           all_data.EmplaceBack(buffer_data[1]);
@@ -360,6 +368,7 @@ void Simulator::Run() {
 
     SimData sim_data;
     sim_data.curr_wl_ = wl;
+    sim_data.total_intensity_ = config.light_source_.wl_param_[0].weight_ * config.ray_num_;
     sim_data.crystals_ = std::move(ms_crystals);
     sim_data.rays_ = std::move(all_data);
     data_queue_->Emplace(std::move(sim_data));
