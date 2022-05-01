@@ -80,8 +80,18 @@ endif()
 set(icehalo_include
   "${PROJ_SRC_DIR}" ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/nlohmann_json")
 
+set(icehalo_config_src
+  "${PROJ_SRC_DIR}/config/config_manager.cpp"
+  "${PROJ_SRC_DIR}/config/crystal_config.cpp"
+  "${PROJ_SRC_DIR}/config/filter_config.cpp"
+  "${PROJ_SRC_DIR}/config/light_config.cpp"
+  "${PROJ_SRC_DIR}/config/proj_config.cpp"
+  "${PROJ_SRC_DIR}/config/render_config.cpp"
+  "${PROJ_SRC_DIR}/config/sim_data.cpp")
+
 set(icehalo_consumer_src
   "${PROJ_SRC_DIR}/consumer/consumer.cpp"
+  "${PROJ_SRC_DIR}/consumer/render.cpp"
   "${PROJ_SRC_DIR}/consumer/show_rays.cpp")
 
 set(icehalo_context_src
@@ -93,6 +103,9 @@ set(icehalo_context_src
   "${PROJ_SRC_DIR}/context/render_context.cpp"
   "${PROJ_SRC_DIR}/context/sun_context.cpp")
 
+set(icehalo_include_src
+  "${PROJ_SRC_DIR}/include/server.cpp")
+
 set(icehalo_core_src
   "${PROJ_SRC_DIR}/core/crystal.cpp"
   "${PROJ_SRC_DIR}/core/filter.cpp"
@@ -101,30 +114,22 @@ set(icehalo_core_src
   "${PROJ_SRC_DIR}/core/raypath.cpp"
   "${PROJ_SRC_DIR}/core/simulator.cpp")
 
+set(icehalo_io_src
+  "${PROJ_SRC_DIR}/io/file.cpp")
+
 set(icehalo_process_src
   "${PROJ_SRC_DIR}/process/render.cpp"
   "${PROJ_SRC_DIR}/process/simulation.cpp")
-
-set(icehalo_config_src
-  "${PROJ_SRC_DIR}/config/config_manager.cpp"
-  "${PROJ_SRC_DIR}/config/crystal_config.cpp"
-  "${PROJ_SRC_DIR}/config/light_config.cpp"
-  "${PROJ_SRC_DIR}/config/filter_config.cpp"
-  "${PROJ_SRC_DIR}/config/proj_config.cpp"
-  "${PROJ_SRC_DIR}/config/render_config.cpp"
-  "${PROJ_SRC_DIR}/config/sim_data.cpp")
-
-set(icehalo_io_src
-  "${PROJ_SRC_DIR}/io/file.cpp")
 
 set(icehalo_util_src
   "${PROJ_SRC_DIR}/util/arg_parser.cpp"
   "${PROJ_SRC_DIR}/util/log.cpp"
   "${PROJ_SRC_DIR}/util/obj_pool.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
-set(icehalo_src
-  ${icehalo_consumer_src} ${icehalo_context_src} ${icehalo_core_src} ${icehalo_io_src}
-  ${icehalo_process_src} ${icehalo_config_src} ${icehalo_util_src})
+
+  set(icehalo_src
+  ${icehalo_config_src} ${icehalo_consumer_src} ${icehalo_context_src} ${icehalo_core_src}
+  ${icehalo_include_src} ${icehalo_io_src} ${icehalo_process_src} ${icehalo_util_src})
 
 # ==================================================================================================
 # Add targets
