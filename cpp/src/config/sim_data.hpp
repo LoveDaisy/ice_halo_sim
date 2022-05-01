@@ -1,5 +1,5 @@
-#ifndef SRC_PROCESS_PROTOCOL_H_
-#define SRC_PROCESS_PROTOCOL_H_
+#ifndef CONFIG_SIM_DATA_H_
+#define CONFIG_SIM_DATA_H_
 
 #include <cstddef>
 #include <memory>
@@ -57,4 +57,4 @@ struct SimBackTracingData {};
 }  // namespace v3
 }  // namespace icehalo
 
-#endif  // SRC_PROCESS_PROTOCOL_H_
+#endif  // CONFIG_SIM_DATA_H_

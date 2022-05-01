@@ -1,5 +1,5 @@
-#ifndef PROTOCOL_FILTER_CONFIG_H_
-#define PROTOCOL_FILTER_CONFIG_H_
+#ifndef CONFIG_FILTER_CONFIG_H_
+#define CONFIG_FILTER_CONFIG_H_
 
 #include <variant>
 #include <vector>
@@ -64,4 +64,4 @@ void from_json(const nlohmann::json& j, FilterConfig& f);
 }  // namespace v3
 }  // namespace icehalo
 
-#endif  // PROTOCOL_FILTER_CONFIG_H_
+#endif  // CONFIG_FILTER_CONFIG_H_

@@ -1,15 +1,15 @@
-#ifndef PROTOCOL_CONFIG_MANAGER_H_
-#define PROTOCOL_CONFIG_MANAGER_H_
+#ifndef CONFIG_CONFIG_MANAGER_H_
+#define CONFIG_CONFIG_MANAGER_H_
 
 #include <map>
 
+#include "config/crystal_config.hpp"
+#include "config/filter_config.hpp"
+#include "config/light_config.hpp"
+#include "config/proj_config.hpp"
+#include "config/render_config.hpp"
 #include "core/def.hpp"
 #include "json.hpp"
-#include "protocol/crystal_config.hpp"
-#include "protocol/filter_config.hpp"
-#include "protocol/light_config.hpp"
-#include "protocol/proj_config.hpp"
-#include "protocol/render_config.hpp"
 
 namespace icehalo {
 namespace v3 {
@@ -30,4 +30,4 @@ void from_json(const nlohmann::json& j, ConfigManager& m);
 }  // namespace v3
 }  // namespace icehalo
 
-#endif  // PROTOCOL_CONFIG_MANAGER_H_
+#endif  // CONFIG_CONFIG_MANAGER_H_

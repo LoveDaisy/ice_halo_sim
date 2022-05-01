@@ -5,12 +5,12 @@
 #include <cstddef>
 #include <memory>
 
+#include "config/proj_config.hpp"
+#include "config/sim_data.hpp"
 #include "context/context.hpp"
 #include "core/def.hpp"
 #include "core/optics.hpp"
 #include "io/serialize.hpp"
-#include "protocol/proj_config.hpp"
-#include "protocol/sim_data.hpp"
 #include "util/threading_pool.hpp"
 
 namespace icehalo {

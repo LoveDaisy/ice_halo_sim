@@ -4,8 +4,8 @@
 #include <map>
 #include <memory>
 
+#include "config/render_config.hpp"
 #include "consumer/consumer.hpp"
-#include "protocol/render_config.hpp"
 
 namespace icehalo {
 namespace v3 {

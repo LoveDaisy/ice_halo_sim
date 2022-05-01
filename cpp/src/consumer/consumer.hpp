@@ -5,7 +5,7 @@
 #include <memory>
 #include <vector>
 
-#include "protocol/sim_data.hpp"
+#include "config/sim_data.hpp"
 
 namespace icehalo {
 namespace v3 {

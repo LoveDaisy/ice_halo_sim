@@ -10,11 +10,11 @@
 #include <utility>
 #include <vector>
 
+#include "config/filter_config.hpp"
 #include "context/context.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
-#include "protocol/filter_config.hpp"
 #include "util/log.hpp"
 #include "util/obj_pool.hpp"
 

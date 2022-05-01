@@ -9,13 +9,13 @@
 #include <variant>
 #include <vector>
 
+#include "config/filter_config.hpp"
 #include "context/crystal_context.hpp"
 #include "context/filter_context.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
-#include "protocol/filter_config.hpp"
 #include "util/log.hpp"
 
 namespace icehalo {

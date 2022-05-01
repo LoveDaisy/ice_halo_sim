@@ -3,8 +3,8 @@
 
 #include <memory>
 
-#include "protocol/proj_config.hpp"
-#include "protocol/sim_data.hpp"
+#include "config/proj_config.hpp"
+#include "config/sim_data.hpp"
 
 namespace icehalo {
 namespace v3 {

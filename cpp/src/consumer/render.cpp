@@ -7,13 +7,13 @@
 #include <memory>
 #include <vector>
 
+#include "config/render_config.hpp"
+#include "config/sim_data.hpp"
 #include "core/def.hpp"
 #include "core/filter.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 #include "process/color_data.hpp"
-#include "protocol/render_config.hpp"
-#include "protocol/sim_data.hpp"
 
 namespace icehalo {
 namespace v3 {

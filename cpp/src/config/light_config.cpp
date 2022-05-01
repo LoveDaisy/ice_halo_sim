@@ -1,4 +1,4 @@
-#include "protocol/light_config.hpp"
+#include "config/light_config.hpp"
 
 #include <cstddef>
 #include <variant>

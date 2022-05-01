@@ -1,15 +1,15 @@
-#include "protocol/config_manager.hpp"
+#include "config/config_manager.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <variant>
 
+#include "config/filter_config.hpp"
+#include "config/light_config.hpp"
+#include "config/render_config.hpp"
 #include "core/def.hpp"
 #include "io/json_util.hpp"
 #include "json.hpp"
-#include "protocol/filter_config.hpp"
-#include "protocol/light_config.hpp"
-#include "protocol/render_config.hpp"
 #include "util/log.hpp"
 
 namespace icehalo {

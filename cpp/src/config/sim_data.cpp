@@ -1,4 +1,4 @@
-#include "protocol/sim_data.hpp"
+#include "config/sim_data.hpp"
 
 #include <climits>
 #include <cstddef>

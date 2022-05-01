@@ -1,11 +1,11 @@
-#ifndef PROTOCOL_RENDER_CONFIG_H_
-#define PROTOCOL_RENDER_CONFIG_H_
+#ifndef CONFIG_RENDER_CONFIG_H_
+#define CONFIG_RENDER_CONFIG_H_
 
 #include <vector>
 
+#include "config/filter_config.hpp"
 #include "core/def.hpp"
 #include "json.hpp"
-#include "protocol/filter_config.hpp"
 
 namespace icehalo {
 namespace v3 {
@@ -99,4 +99,4 @@ void to_json(nlohmann::json& j, const RenderConfig& r);
 }  // namespace v3
 }  // namespace icehalo
 
-#endif  // PROTOCOL_RENDER_CONFIG_H_
+#endif  // CONFIG_RENDER_CONFIG_H_

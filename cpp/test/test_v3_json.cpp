@@ -6,14 +6,14 @@
 #include <variant>
 #include <vector>
 
+#include "config/config_manager.hpp"
+#include "config/crystal_config.hpp"
+#include "config/filter_config.hpp"
+#include "config/light_config.hpp"
+#include "config/proj_config.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
 #include "json.hpp"
-#include "protocol/config_manager.hpp"
-#include "protocol/crystal_config.hpp"
-#include "protocol/filter_config.hpp"
-#include "protocol/light_config.hpp"
-#include "protocol/proj_config.hpp"
 
 extern std::string config_file_name;
 using namespace icehalo;

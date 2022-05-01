@@ -1,5 +1,5 @@
-#ifndef SRC_CONTEXT_CRYSTAL_CONFIG_H_
-#define SRC_CONTEXT_CRYSTAL_CONFIG_H_
+#ifndef CONFIG_CRYSTAL_CONFIG_H_
+#define CONFIG_CRYSTAL_CONFIG_H_
 
 #include <memory>
 #include <variant>
@@ -45,4 +45,4 @@ void from_json(const nlohmann::json& j, CrystalConfig& c);
 }  // namespace v3
 }  // namespace icehalo
 
-#endif  // SRC_CONTEXT_CRYSTAL_CONFIG_H_
+#endif  // CONFIG_CRYSTAL_CONFIG_H_

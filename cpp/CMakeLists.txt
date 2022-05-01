@@ -105,14 +105,14 @@ set(icehalo_process_src
   "${PROJ_SRC_DIR}/process/render.cpp"
   "${PROJ_SRC_DIR}/process/simulation.cpp")
 
-set(icehalo_protocol_src
-  "${PROJ_SRC_DIR}/protocol/config_manager.cpp"
-  "${PROJ_SRC_DIR}/protocol/crystal_config.cpp"
-  "${PROJ_SRC_DIR}/protocol/light_config.cpp"
-  "${PROJ_SRC_DIR}/protocol/filter_config.cpp"
-  "${PROJ_SRC_DIR}/protocol/proj_config.cpp"
-  "${PROJ_SRC_DIR}/protocol/render_config.cpp"
-  "${PROJ_SRC_DIR}/protocol/sim_data.cpp")
+set(icehalo_config_src
+  "${PROJ_SRC_DIR}/config/config_manager.cpp"
+  "${PROJ_SRC_DIR}/config/crystal_config.cpp"
+  "${PROJ_SRC_DIR}/config/light_config.cpp"
+  "${PROJ_SRC_DIR}/config/filter_config.cpp"
+  "${PROJ_SRC_DIR}/config/proj_config.cpp"
+  "${PROJ_SRC_DIR}/config/render_config.cpp"
+  "${PROJ_SRC_DIR}/config/sim_data.cpp")
 
 set(icehalo_io_src
   "${PROJ_SRC_DIR}/io/file.cpp")
@@ -124,7 +124,7 @@ set(icehalo_util_src
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
 set(icehalo_src
   ${icehalo_consumer_src} ${icehalo_context_src} ${icehalo_core_src} ${icehalo_io_src}
-  ${icehalo_process_src} ${icehalo_protocol_src} ${icehalo_util_src})
+  ${icehalo_process_src} ${icehalo_config_src} ${icehalo_util_src})
 
 # ==================================================================================================
 # Add targets

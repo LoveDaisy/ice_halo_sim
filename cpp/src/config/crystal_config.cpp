@@ -1,4 +1,4 @@
-#include "protocol/crystal_config.hpp"
+#include "config/crystal_config.hpp"
 
 #include <string>
 #include <variant>

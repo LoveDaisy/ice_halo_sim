@@ -7,9 +7,9 @@
 #include <memory>
 #include <thread>
 
+#include "config/config_manager.hpp"
 #include "consumer/show_rays.hpp"
 #include "core/simulator.hpp"
-#include "protocol/config_manager.hpp"
 #include "util/log.hpp"
 #include "util/queue.hpp"
 

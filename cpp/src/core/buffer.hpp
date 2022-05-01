@@ -1,5 +1,5 @@
-#ifndef UTIL_BUFFER_H_
-#define UTIL_BUFFER_H_
+#ifndef CORE_BUFFER_H_
+#define CORE_BUFFER_H_
 
 #include <cstddef>
 #include <memory>
@@ -26,4 +26,4 @@ using int_bf_t = BufferWrapper<int>;
 }  // namespace v3
 }  // namespace icehalo
 
-#endif  // UTIL_BUFFER_H_
+#endif  // CORE_BUFFER_H_

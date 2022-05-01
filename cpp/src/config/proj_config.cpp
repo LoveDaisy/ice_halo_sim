@@ -1,4 +1,4 @@
-#include "protocol/proj_config.hpp"
+#include "config/proj_config.hpp"
 
 #include "core/def.hpp"
 #include "json.hpp"

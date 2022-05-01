@@ -1,12 +1,12 @@
-#include "protocol/render_config.hpp"
+#include "config/render_config.hpp"
 
 #include <cmath>
 #include <variant>
 
+#include "config/filter_config.hpp"
 #include "core/math.hpp"
 #include "io/json_util.hpp"
 #include "json.hpp"
-#include "protocol/filter_config.hpp"
 
 namespace icehalo {
 namespace v3 {

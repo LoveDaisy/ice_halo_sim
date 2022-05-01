@@ -1,5 +1,5 @@
-#ifndef SRC_UTIL_QUEUE_HPP_
-#define SRC_UTIL_QUEUE_HPP_
+#ifndef UTIL_QUEUE_H_
+#define UTIL_QUEUE_H_
 
 #include <condition_variable>
 #include <memory>
@@ -59,4 +59,4 @@ class Queue {
 }  // namespace v3
 }  // namespace icehalo
 
-#endif  // SRC_UTIL_QUEUE_HPP_
+#endif  // UTIL_QUEUE_H_

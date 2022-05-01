@@ -1,4 +1,4 @@
-#include "protocol/filter_config.hpp"
+#include "config/filter_config.hpp"
 
 #include <variant>
 #include <vector>

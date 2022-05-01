@@ -1,16 +1,16 @@
-#ifndef SRC_CONTEXT_BACKEND_CONFIG_H_
-#define SRC_CONTEXT_BACKEND_CONFIG_H_
+#ifndef CONFIG_PROJ_CONFIG_H_
+#define CONFIG_PROJ_CONFIG_H_
 
 #include <cstddef>
 #include <memory>
 #include <vector>
 
+#include "config/crystal_config.hpp"
+#include "config/filter_config.hpp"
+#include "config/light_config.hpp"
+#include "config/render_config.hpp"
 #include "core/def.hpp"
 #include "json.hpp"
-#include "protocol/crystal_config.hpp"
-#include "protocol/filter_config.hpp"
-#include "protocol/light_config.hpp"
-#include "protocol/render_config.hpp"
 
 namespace icehalo {
 namespace v3 {
@@ -54,4 +54,4 @@ void to_json(nlohmann::json& j, const ProjConfig& p);
 }  // namespace v3
 }  // namespace icehalo
 
-#endif  // SRC_CONTEXT_BACKEND_CONFIG_H_
+#endif  // CONFIG_PROJ_CONFIG_H_

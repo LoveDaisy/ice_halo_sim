@@ -1,5 +1,5 @@
-#ifndef SRC_CONTEXT_LIGHT_CONFIG_H_
-#define SRC_CONTEXT_LIGHT_CONFIG_H_
+#ifndef CONFIG_LIGHT_CONFIG_H_
+#define CONFIG_LIGHT_CONFIG_H_
 
 #include <variant>
 #include <vector>
@@ -43,4 +43,4 @@ void from_json(const nlohmann::json& j, LightSourceConfig& l);
 }  // namespace v3
 }  // namespace icehalo
 
-#endif  // SRC_CONTEXT_LIGHT_CONFIG_H_
+#endif  // CONFIG_LIGHT_CONFIG_H_
