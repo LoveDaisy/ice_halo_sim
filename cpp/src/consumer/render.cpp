@@ -146,7 +146,7 @@ void Renderer::Consume(const SimData& data) {
   total_intensity_ += data.total_intensity_;
 }
 
-const uint8_t* Renderer::RenderToImage(float factor) {
+Result Renderer::GetResult() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::unique_ptr<float[]> float_data{ new float[total_pix * 3]{} };
   for (const auto& [wl, data] : internal_data_) {
@@ -156,7 +156,7 @@ const uint8_t* Renderer::RenderToImage(float factor) {
     for (int i = 0; i < total_pix; i++) {
       // Step 1. Spectrum to XYZ
       float* xyz = float_data.get() + i * 3;
-      float v = data[i] * factor / total_intensity_ * 1e4;  // TODO: determine the scale factor
+      float v = data[i] * config_.intensity_factor_ / total_intensity_ * 1e4;  // TODO: determine the scale factor
       xyz[0] += kCmfX[wl - kMinWavelength] * v;
       xyz[1] += kCmfY[wl - kMinWavelength] * v;
       xyz[2] += kCmfZ[wl - kMinWavelength] * v;
@@ -219,7 +219,7 @@ const uint8_t* Renderer::RenderToImage(float factor) {
   for (int i = 0; i < total_pix * 3; i++) {
     image_buffer_[i] = static_cast<uint8_t>(float_data[i] * 255);
   }
-  return image_buffer_.get();
+  return RenderResult{ config_.resolution_[0], config_.resolution_[1], image_buffer_.get() };
 }
 
 }  // namespace v3

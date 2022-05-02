@@ -9,7 +9,6 @@
 
 struct SimResultHandler {
   void operator()(const icehalo::v3::NoneResult& /* r */) { LOG_INFO("none result!"); }
-  void operator()(const icehalo::v3::ProcessBarResult& r) { LOG_INFO("process %.2f...", r.curr_pct_ * 100.0f); }
   void operator()(const icehalo::v3::RenderResult& r) {
     LOG_INFO("render result (w x h): %d x %d", r.img_width_, r.img_height_);
   }

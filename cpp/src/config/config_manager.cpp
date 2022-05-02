@@ -72,6 +72,9 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   render.opacity_ = 1.0f;
   JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "opacity", render.opacity_)  // default 1
 
+  render.intensity_factor_ = 1.0f;
+  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "intensity_factor", render.intensity_factor_)  // default 1
+
   render.celestial_outline_ = true;
   if (j_render.contains("grid")) {
     const auto& j_grid = j_render.at("grid");

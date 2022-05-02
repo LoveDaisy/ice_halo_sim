@@ -212,6 +212,7 @@ Simulator::Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> dat
     : config_queue_(config_queue), data_queue_(data_queue), stop_(false) {}
 
 void Simulator::Run() {
+  stop_ = false;
   while (true) {
     // Config in the config_queue is processed by frontend of simulator (NOT GUI) so that
     // it has small ray_num and contains only one wavelength parameter of light source.

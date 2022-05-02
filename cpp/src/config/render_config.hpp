@@ -78,6 +78,7 @@ struct RenderConfig {
   float background_[3];  // r, g, b
   float ray_color_[3];   // r, g, b
   float opacity_;
+  float intensity_factor_;
 
   std::vector<GridLineParam> central_grid_;
   std::vector<GridLineParam> elevation_grid_;

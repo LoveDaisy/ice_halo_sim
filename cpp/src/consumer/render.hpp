@@ -18,7 +18,7 @@ class Renderer : public IConsume {
   Renderer(RenderConfig config);
 
   void Consume(const SimData& data) override;
-  const uint8_t* RenderToImage(float factor);
+  Result GetResult() override;
 
  private:
   RenderConfig config_;

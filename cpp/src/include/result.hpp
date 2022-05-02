@@ -1,7 +1,6 @@
 #ifndef INCLUDE_RESULT_H_
 #define INCLUDE_RESULT_H_
 
-#include <cstdint>
 #include <variant>
 
 namespace icehalo {
@@ -15,11 +14,7 @@ struct RenderResult {
   const uint8_t* img_buffer_;
 };
 
-struct ProcessBarResult {
-  float curr_pct_;
-};
-
-using Result = std::variant<NoneResult, RenderResult, ProcessBarResult>;
+using Result = std::variant<NoneResult, RenderResult>;
 
 }  // namespace v3
 }  // namespace icehalo

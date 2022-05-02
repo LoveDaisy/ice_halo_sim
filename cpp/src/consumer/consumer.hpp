@@ -6,10 +6,12 @@
 #include <vector>
 
 #include "config/sim_data.hpp"
+#include "include/result.hpp"
 
 namespace icehalo {
 namespace v3 {
 
+// =============== Interface ===============
 class IConsume {
  public:
   IConsume() = default;
@@ -21,6 +23,7 @@ class IConsume {
   IConsume& operator=(IConsume&&) = delete;
 
   virtual void Consume(const SimData& data) = 0;
+  virtual Result GetResult() { return NoneResult{}; }
 };
 
 using ConsumerPtrU = std::unique_ptr<IConsume>;

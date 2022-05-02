@@ -13,6 +13,8 @@ class ServerImpl;
 
 class Server {
  public:
+  Server();
+
   void CommitConfig(std::string config_str);
   void CommitConfig(std::ifstream& config_file);
   Result GetResult();  // Will block until a new result arrives or intrrupted by Stop().

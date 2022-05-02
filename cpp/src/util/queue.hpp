@@ -43,10 +43,19 @@ class Queue {
 
   void Shutdown() {
     std::unique_lock<std::mutex> lock(q_mutex_);
+    if (shutdown_) {
+      return;
+    }
+
     std::queue<T> tmp_q;
     q_.swap(tmp_q);
     shutdown_ = true;
     q_cv_.notify_all();
+  }
+
+  void Start() {
+    std::unique_lock<std::mutex> lock(q_mutex_);
+    shutdown_ = false;
   }
 
  private:
