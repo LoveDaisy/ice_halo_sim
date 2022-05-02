@@ -133,23 +133,26 @@ SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager&
   for (const auto& j_s : j_scene.at("scattering")) {
     MsInfo ms{};
     if (j_s.contains("prob")) {
-      j_s.at("prob").get_to(ms.prob_);
+      j_s.at("prob").get_to(ms.prob_);  // default 0.0f (ms is zero-initialized)
     }
+
     for (const auto& j_c : j_s.at("crystal")) {
       IdType id = j_c.get<IdType>();
       ScatteringSetting s{ default_none_filter, m.crystals_.at(id), 100.0 };
       ms.setting_.emplace_back(s);
     }
+
     if (j_s.contains("proportion")) {
       size_t i = 0;
       for (const auto& j_p : j_s.at("proportion")) {
         if (i >= ms.setting_.size()) {
           break;
         }
-        j_p.get_to(ms.setting_[i].crystal_proportion_);
+        j_p.get_to(ms.setting_[i].crystal_proportion_);  // default 100.0. see above
         i++;
       }
     }
+
     if (j_s.contains("filter")) {
       size_t i = 0;
       for (const auto& j_f : j_s.at("filter")) {

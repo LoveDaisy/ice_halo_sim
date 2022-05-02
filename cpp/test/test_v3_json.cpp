@@ -48,7 +48,7 @@ TEST_F(V3TestJson, LightSource_Sun) {
   ASSERT_TRUE(std::holds_alternative<v3::SunParam>(s.param_));
   const auto& p = std::get<v3::SunParam>(s.param_);
 
-  ASSERT_NEAR(p.azimuth_, -40.0f, 1e-5);
+  ASSERT_NEAR(p.azimuth_, 0.0f, 1e-5);
   ASSERT_NEAR(p.altitude_, 20.0f, 1e-5);
   ASSERT_NEAR(p.diameter_, 0.5f, 1e-5);
 }

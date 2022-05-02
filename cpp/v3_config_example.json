@@ -13,7 +13,7 @@
       "id": 2,
       "type": "sun",
       "altitude": 20.0,
-      "azimuth": -40,
+      "azimuth": 0,
       "diameter": 0.5,
       "wavelength": [ 420, 480, 540, 600, 660, 720 ],
       "wl_weight": [ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 ]
@@ -190,6 +190,17 @@
       "id": 2,
       "light_source": 2,
       "ray_num": -1,
+      "max_hits": 7,
+      "scattering": [
+        {
+          "crystal": 2
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "light_source": 2,
+      "ray_num": 100000,
       "max_hits": 7,
       "scattering": [
         {
