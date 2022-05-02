@@ -200,7 +200,7 @@
     {
       "id": 3,
       "light_source": 2,
-      "ray_num": 100000,
+      "ray_num": 1000000,
       "max_hits": 7,
       "scattering": [
         {

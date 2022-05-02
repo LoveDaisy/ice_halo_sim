@@ -38,7 +38,7 @@ class ServerImpl {
   bool IsIdle();
 
  private:
-  static constexpr int kDefaultSimulators = 4;
+  static constexpr int kDefaultSimulatorCnt = 4;
   static constexpr int kMaxSceneCnt = 100;
   static constexpr size_t kDefaultRayNum = 1024 * 16;  // 16k rays
 
@@ -59,9 +59,8 @@ class ServerImpl {
 
   std::atomic_bool stop_;
   std::atomic_int sim_scene_cnt_;
-  std::atomic<SceneConfig*> curr_scene_ptr_;
-  std::condition_variable scene_cv_;
   std::mutex scene_mutex_;
+  std::condition_variable scene_cv_;
 
   std::thread consume_data_thread_;
   std::thread generate_scene_thread_;
@@ -71,7 +70,7 @@ class ServerImpl {
 ServerImpl::ServerImpl()
     : config_manager_{}, proj_queue_{}, scene_queue_(std::make_shared<Queue<SceneConfig>>()),
       data_queue_(std::make_shared<Queue<SimData>>()) {
-  for (int i = 0; i < kDefaultSimulators; i++) {
+  for (int i = 0; i < kDefaultSimulatorCnt; i++) {
     simulators_.emplace_back(scene_queue_, data_queue_);
   }
   Start();
@@ -113,7 +112,6 @@ void ServerImpl::Start() {
 
   stop_ = false;
   sim_scene_cnt_ = 0;
-  curr_scene_ptr_ = nullptr;
 
   // Start queues & jobs
   data_queue_->Start();
@@ -147,7 +145,7 @@ void ServerImpl::Stop() {
   scene_queue_->Shutdown();
   data_queue_->Shutdown();
 
-  scene_cv_.notify_all();
+  scene_cv_.notify_one();
 
   // Stop running jobs
   {
@@ -188,7 +186,7 @@ bool ServerImpl::IsIdle() {
       return false;
     }
   }
-  return !stop_ && curr_scene_ptr_ == nullptr;
+  return !stop_ && sim_scene_cnt_ <= 0;
 }
 
 
@@ -202,14 +200,43 @@ void ServerImpl::ConsumeData() {
   LOG_DEBUG("ServerImpl::ConsumeData: entry");
   while (true) {
     CHECK_STOP
+    auto sim_data = data_queue_->Get();
+    if (sim_data.rays_.Empty()) {
+      // Simulation is interrupted.
+      break;
+    }
+    CHECK_STOP
+
+    LOG_DEBUG("ServerImpl::ConsumeData: get data: %p", &sim_data);
+
+    {
+      std::unique_lock<std::mutex> lock(cons_mutex);
+      LOG_DEBUG("ServerImpl::ConsumeData: lock on cons_mutex. consume data.");
+      for (auto& c : consumers_) {
+        c->Consume(sim_data);
+      }
+      LOG_DEBUG("ServerImpl::ConsumeData: unlock cons_mutex. consume data finishes.");
+    }
+    sim_scene_cnt_--;
+    scene_cv_.notify_one();
+    CHECK_STOP
+  }
+  LOG_DEBUG("ServerImpl::ConsumeData exit");
+}
+
+
+void ServerImpl::GenerateScene() {
+  LOG_DEBUG("ServerImpl::GenerateScene entry");
+  while (true) {
+    CHECK_STOP
     auto proj_config = proj_queue_.Get();
     if (stop_ || (proj_config.id_ == 0 && proj_config.scene_.ray_num_ == 0)) {
       // Stop, or queue shutdown.
       break;
     }
-    LOG_DEBUG("ServerImpl::ConsumeData: get proj: %u", proj_config.id_);
-
+    LOG_DEBUG("ServerImpl::GenerateScene: get proj: %u", proj_config.id_);
     CHECK_STOP
+
     // Setup consumers.
     {
       std::unique_lock<std::mutex> lock(cons_mutex);
@@ -221,62 +248,12 @@ void ServerImpl::ConsumeData() {
       LOG_DEBUG("ServerImpl::ConsumeData: unlock cons_mutex. init consumers finishes.");
     }
 
-    // Notify scene dispatch thread
-    curr_scene_ptr_ = &proj_config.scene_;
-    scene_cv_.notify_one();
-
-    // Consume data & wait for current project finishing.
-    while (true) {
-      CHECK_STOP
-      auto sim_data = data_queue_->Get();
-      if (sim_data.rays_.Empty()) {
-        // Simulation is interrupted.
-        break;
-      } else {
-        sim_scene_cnt_--;
-      }
-      scene_cv_.notify_one();
-      CHECK_STOP
-
-      LOG_DEBUG("ServerImpl::ConsumeData: get data: %p", &sim_data);
-
-      {
-        std::unique_lock<std::mutex> lock(cons_mutex);
-        LOG_DEBUG("ServerImpl::ConsumeData: lock on cons_mutex. consume data.");
-        for (auto& c : consumers_) {
-          c->Consume(sim_data);
-        }
-        LOG_DEBUG("ServerImpl::ConsumeData: unlock cons_mutex. consume data finishes.");
-      }
-
-      if (sim_scene_cnt_ <= 0) {
-        // Project is finished.
-        break;
-      }
-    }
-    CHECK_STOP
-  }
-  LOG_DEBUG("ServerImpl::ConsumeData exit");
-}
-
-
-void ServerImpl::GenerateScene() {
-  LOG_DEBUG("ServerImpl::GenerateScene entry");
-  while (true) {
-    CHECK_STOP
-    if (!curr_scene_ptr_) {
-      // All projects are finished. Just wait for next.
-      std::unique_lock<std::mutex> lock(scene_mutex_);
-      scene_cv_.wait(lock, [=]() { return stop_ || curr_scene_ptr_ != nullptr; });
-    }
-    CHECK_STOP
-
-    auto ray_num = curr_scene_ptr_.load()->ray_num_;
+    auto ray_num = proj_config.scene_.ray_num_;
     size_t committed_num = 0;
-    while (curr_scene_ptr_ && (ray_num == kInfSize || committed_num < ray_num)) {
-      const auto& wls = curr_scene_ptr_.load()->light_source_.wl_param_;
+    while (ray_num == kInfSize || committed_num < ray_num) {
+      const auto& wls = proj_config.scene_.light_source_.wl_param_;
       for (const auto& wl_param : wls) {
-        auto curr_scene = *curr_scene_ptr_;
+        auto curr_scene = proj_config.scene_;
         curr_scene.ray_num_ = std::min(kDefaultRayNum, ray_num - committed_num);
         curr_scene.light_source_.wl_param_.clear();
         curr_scene.light_source_.wl_param_.emplace_back(wl_param);
@@ -285,22 +262,20 @@ void ServerImpl::GenerateScene() {
 
         LOG_DEBUG("ServerImpl::GenerateScene: put a scene(%u): ray(%zu/%zu, %zu), wl(%.1f,%.2f)", curr_scene.id_,
                   curr_scene.ray_num_, ray_num, committed_num, wl_param.wl_, wl_param.weight_);
+        CHECK_STOP
 
-        CHECK_STOP
         if (sim_scene_cnt_ >= kMaxSceneCnt) {
+          LOG_DEBUG("ServerImpl::GenerateScene: too many scenes generated. wait for consumer");
           std::unique_lock<std::mutex> lock(scene_mutex_);
-          scene_cv_.wait(lock, [=]() { return stop_ || sim_scene_cnt_ < kMaxSceneCnt || curr_scene_ptr_ == nullptr; });
+          scene_cv_.wait(lock, [=]() { return stop_ || sim_scene_cnt_ < kMaxSceneCnt; });
+          LOG_DEBUG("ServerImpl::GenerateScene: continue to generate scenes.");
         }
         CHECK_STOP
-        if (!curr_scene_ptr_) {
-          break;
-        }
       }
+      CHECK_STOP
       committed_num += kDefaultRayNum;
       LOG_DEBUG("ServerImpl::GenerateScene: finish wl");
-      CHECK_STOP
     }
-    curr_scene_ptr_ = nullptr;
     LOG_DEBUG("ServerImpl::GenerateScene: finish ray_num");
   }
   LOG_DEBUG("ServerImpl::GenerateScene exit");
