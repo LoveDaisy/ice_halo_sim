@@ -23,7 +23,6 @@ int main(int argc, char** argv) {
   icehalo::ArgParser parser;
   parser.AddArgument("-v", 0, "verbose", "make output verbose");
   parser.AddArgument("-d", 0, "debug", "display debug info");
-  parser.AddArgument("-n", 1, "repeat-number", "repeat number (-1 means infinity)");
   parser.AddArgument("-f", 1, "config-file", "config file");
   icehalo::ArgParseResult arg_parse_result;
   try {
@@ -53,11 +52,19 @@ int main(int argc, char** argv) {
   s.CommitConfig(config_file);
 
   while (true) {
+    std::this_thread::sleep_for(100ms);
     auto res = s.GetResults();
+    if (res.empty()) {
+      continue;
+    }
+
     for (const auto& r : res) {
       std::visit(SimResultHandler{}, r);
     }
-    std::this_thread::sleep_for(100ms);
+    if (s.IsIdle()) {
+      s.Terminate();
+      break;
+    }
   }
 
   return 0;

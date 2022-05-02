@@ -56,6 +56,7 @@ class Queue {
   void Start() {
     std::unique_lock<std::mutex> lock(q_mutex_);
     shutdown_ = false;
+    q_cv_.notify_all();
   }
 
  private:

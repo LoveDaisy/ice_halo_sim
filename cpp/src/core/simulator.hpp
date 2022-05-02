@@ -25,6 +25,12 @@ class Simulator {
   };
 
   Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue);
+  Simulator(const Simulator& other) = delete;
+  Simulator(Simulator&& other);
+  ~Simulator() = default;
+
+  Simulator& operator=(const Simulator& other) = delete;
+  Simulator& operator=(Simulator&& other);
 
   void Run();
   void Stop();

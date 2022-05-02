@@ -18,9 +18,11 @@ class Server {
 
   void CommitConfig(std::string config_str);
   void CommitConfig(std::ifstream& config_file);
-  std::vector<Result> GetResults() const;  // if there is no result, it returns NoneResult, and does **NOT** block.
+  std::vector<Result> GetResults();  // if there is no result, it returns NoneResult, and does **NOT** block.
 
   void Stop();  // No Run() method. Because server start running immediately after construction.
+  void Terminate();
+  bool IsIdle() const;
 
  private:
   std::shared_ptr<ServerImpl> impl_;

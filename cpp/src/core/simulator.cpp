@@ -211,6 +211,21 @@ void CollectData(const MsInfo& ms_info, const Filter* filter,     // input
 Simulator::Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue)
     : config_queue_(config_queue), data_queue_(data_queue), stop_(false) {}
 
+Simulator::Simulator(Simulator&& other)
+    : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
+      stop_(other.stop_.load()) {}
+
+Simulator& Simulator::operator=(Simulator&& other) {
+  if (this == &other) {
+    return *this;
+  }
+
+  config_queue_ = std::move(other.config_queue_);
+  data_queue_ = std::move(other.data_queue_);
+  stop_ = other.stop_.load();
+  return *this;
+}
+
 void Simulator::Run() {
   stop_ = false;
   while (true) {
