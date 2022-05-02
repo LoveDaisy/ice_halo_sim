@@ -39,7 +39,7 @@ class ServerImpl {
 
  private:
   static constexpr int kDefaultSimulatorCnt = 4;
-  static constexpr int kMaxSceneCnt = 100;
+  static constexpr int kMaxSceneCnt = 128;
   static constexpr size_t kDefaultRayNum = 1024 * 16;  // 16k rays
 
   void ConsumeData();
@@ -218,7 +218,9 @@ void ServerImpl::ConsumeData() {
       LOG_DEBUG("ServerImpl::ConsumeData: unlock cons_mutex. consume data finishes.");
     }
     sim_scene_cnt_--;
-    scene_cv_.notify_one();
+    if (sim_scene_cnt_ < kMaxSceneCnt / 2) {
+      scene_cv_.notify_one();
+    }
     CHECK_STOP
   }
   LOG_DEBUG("ServerImpl::ConsumeData exit");
