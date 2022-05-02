@@ -35,15 +35,15 @@ class ServerImpl {
 
   void Stop();
   void Start();
-  bool IsIdle() const;
+  bool IsIdle();
 
  private:
   static constexpr int kDefaultSimulators = 4;
   static constexpr int kMaxSceneCnt = 100;
-  static constexpr size_t kDefaultRayNum = 1024;
+  static constexpr size_t kDefaultRayNum = 1024 * 16;  // 16k rays
 
-  void MainWorker();
-  void SceneDispatcher();
+  void ConsumeData();
+  void GenerateScene();
 
   ConfigManager config_manager_;
 
@@ -54,8 +54,8 @@ class ServerImpl {
   std::vector<Simulator> simulators_;
   std::vector<ConsumerPtrU> consumers_;
   std::vector<std::thread> simulator_threads_;
-  std::vector<std::thread> consumer_threads_;
-  std::mutex prod_cons_mutex_;
+  std::mutex prod_mutex;
+  std::mutex cons_mutex;
 
   std::atomic_bool stop_;
   std::atomic_int sim_scene_cnt_;
@@ -63,8 +63,8 @@ class ServerImpl {
   std::condition_variable scene_cv_;
   std::mutex scene_mutex_;
 
-  std::thread main_working_thread_;
-  std::thread scene_dispatch_thread_;
+  std::thread consume_data_thread_;
+  std::thread generate_scene_thread_;
 };
 
 
@@ -95,12 +95,12 @@ void ServerImpl::CommitConfig(const nlohmann::json& config_json) {
 
 std::vector<Result> ServerImpl::GetResults() {
   std::vector<Result> results;
-  std::unique_lock<std::mutex> lock(prod_cons_mutex_);
-  LOG_DEBUG("ServerImpl::GetResults: lock on prod_cons_mutex");
+  std::unique_lock<std::mutex> lock(cons_mutex);
+  LOG_DEBUG("ServerImpl::GetResults: lock on cons_mutex");
   for (const auto& c : consumers_) {
     results.emplace_back(c->GetResult());
   }
-  LOG_DEBUG("ServerImpl::GetResults: unlock prod_cons_mutex");
+  LOG_DEBUG("ServerImpl::GetResults: unlock cons_mutex");
   return results;
 }
 
@@ -120,17 +120,17 @@ void ServerImpl::Start() {
   scene_queue_->Start();
   proj_queue_.Start();
   {
-    std::unique_lock<std::mutex> lock(prod_cons_mutex_);
-    LOG_DEBUG("ServerImpl::Start: lock on prod_cons_mutex");
+    std::unique_lock<std::mutex> lock(prod_mutex);
+    LOG_DEBUG("ServerImpl::Start: lock on prod_mutex");
     for (auto& s : simulators_) {
       simulator_threads_.emplace_back(&Simulator::Run, &s);
     }
-    LOG_DEBUG("ServerImpl::Start: unlock prod_cons_mutex");
+    LOG_DEBUG("ServerImpl::Start: unlock prod_mutex");
   }
 
   // Start main working thread & scene dispatch thread
-  main_working_thread_ = std::thread(&ServerImpl::MainWorker, this);
-  scene_dispatch_thread_ = std::thread(&ServerImpl::SceneDispatcher, this);
+  consume_data_thread_ = std::thread(&ServerImpl::ConsumeData, this);
+  generate_scene_thread_ = std::thread(&ServerImpl::GenerateScene, this);
 }
 
 
@@ -151,38 +151,43 @@ void ServerImpl::Stop() {
 
   // Stop running jobs
   {
-    std::unique_lock<std::mutex> lock(prod_cons_mutex_);
-    LOG_DEBUG("ServerImpl::Stop: lock on prod_cons_mutex");
+    std::unique_lock<std::mutex> lock(prod_mutex);
+    LOG_DEBUG("ServerImpl::Stop: lock on prod_mutex. stop simulators. clear simulator threads.");
     for (auto& s : simulators_) {
       s.Stop();
     }
-    LOG_DEBUG("ServerImpl::Stop: unlock prod_cons_mutex");
-  }
-  for (auto& t : simulator_threads_) {
-    if (t.joinable()) {
-      t.join();
+    for (auto& t : simulator_threads_) {
+      if (t.joinable()) {
+        t.join();
+      }
     }
+    simulator_threads_.clear();
+    LOG_DEBUG("ServerImpl::Stop: unlock prod_mutex");
   }
-  for (auto& t : consumer_threads_) {
-    if (t.joinable()) {
-      t.join();
-    }
+  {
+    std::unique_lock<std::mutex> lock(cons_mutex);
+    LOG_DEBUG("ServerImpl::Stop: lock on cons_mutex. clear consumers.");
+    consumers_.clear();
+    LOG_DEBUG("ServerImpl::Stop: unlock cons_mutex");
   }
-  simulator_threads_.clear();
-  consumer_threads_.clear();
-  consumers_.clear();
 
   // Stop main working thread & scene dispatch thread
   LOG_DEBUG("ServerImpl::Stop: waiting main worker & dispatcher stop.");
-  if (main_working_thread_.joinable()) {
-    main_working_thread_.join();
+  if (consume_data_thread_.joinable()) {
+    consume_data_thread_.join();
   }
-  if (scene_dispatch_thread_.joinable()) {
-    scene_dispatch_thread_.join();
+  if (generate_scene_thread_.joinable()) {
+    generate_scene_thread_.join();
   }
 }
 
-bool ServerImpl::IsIdle() const {
+bool ServerImpl::IsIdle() {
+  std::unique_lock<std::mutex> lock(prod_mutex);
+  for (const auto& s : simulators_) {
+    if (!s.IsIdle()) {
+      return false;
+    }
+  }
   return !stop_ && curr_scene_ptr_ == nullptr;
 }
 
@@ -193,8 +198,8 @@ bool ServerImpl::IsIdle() const {
   }
 
 
-void ServerImpl::MainWorker() {
-  LOG_DEBUG("ServerImpl::MainWorker: entry");
+void ServerImpl::ConsumeData() {
+  LOG_DEBUG("ServerImpl::ConsumeData: entry");
   while (true) {
     CHECK_STOP
     auto proj_config = proj_queue_.Get();
@@ -202,17 +207,18 @@ void ServerImpl::MainWorker() {
       // Stop, or queue shutdown.
       break;
     }
-    LOG_DEBUG("ServerImpl::MainWorker: get proj: %u", proj_config.id_);
+    LOG_DEBUG("ServerImpl::ConsumeData: get proj: %u", proj_config.id_);
 
     CHECK_STOP
     // Setup consumers.
     {
-      std::unique_lock<std::mutex> lock(prod_cons_mutex_);
-      LOG_DEBUG("ServerImpl::MainWorker: lock on prod_cons_mutex. init consumers.");
+      std::unique_lock<std::mutex> lock(cons_mutex);
+      LOG_DEBUG("ServerImpl::ConsumeData: lock on cons_mutex. init consumers.");
+      consumers_.clear();
       for (const auto& r : proj_config.renderers_) {
         consumers_.emplace_back(ConsumerPtrU{ new Renderer(r) });
       }
-      LOG_DEBUG("ServerImpl::MainWorker: unlock prod_cons_mutex. init consumers finishes.");
+      LOG_DEBUG("ServerImpl::ConsumeData: unlock cons_mutex. init consumers finishes.");
     }
 
     // Notify scene dispatch thread
@@ -232,15 +238,15 @@ void ServerImpl::MainWorker() {
       scene_cv_.notify_one();
       CHECK_STOP
 
-      LOG_DEBUG("ServerImpl::MainWorker: get data: %p", &sim_data);
+      LOG_DEBUG("ServerImpl::ConsumeData: get data: %p", &sim_data);
 
       {
-        std::unique_lock<std::mutex> lock(prod_cons_mutex_);
-        LOG_DEBUG("ServerImpl::MainWorker: lock on prod_cons_mutex. consume data.");
+        std::unique_lock<std::mutex> lock(cons_mutex);
+        LOG_DEBUG("ServerImpl::ConsumeData: lock on cons_mutex. consume data.");
         for (auto& c : consumers_) {
           c->Consume(sim_data);
         }
-        LOG_DEBUG("ServerImpl::MainWorker: unlock prod_cons_mutex. consume data finishes.");
+        LOG_DEBUG("ServerImpl::ConsumeData: unlock cons_mutex. consume data finishes.");
       }
 
       if (sim_scene_cnt_ <= 0) {
@@ -250,12 +256,12 @@ void ServerImpl::MainWorker() {
     }
     CHECK_STOP
   }
-  LOG_DEBUG("ServerImpl::MainWorker exit");
+  LOG_DEBUG("ServerImpl::ConsumeData exit");
 }
 
 
-void ServerImpl::SceneDispatcher() {
-  LOG_DEBUG("ServerImpl::SceneDispatcher entry");
+void ServerImpl::GenerateScene() {
+  LOG_DEBUG("ServerImpl::GenerateScene entry");
   while (true) {
     CHECK_STOP
     if (!curr_scene_ptr_) {
@@ -276,9 +282,8 @@ void ServerImpl::SceneDispatcher() {
         curr_scene.light_source_.wl_param_.emplace_back(wl_param);
         scene_queue_->Emplace(curr_scene);
         sim_scene_cnt_++;
-        committed_num += kDefaultRayNum;
 
-        LOG_DEBUG("ServerImpl::SceneDispatcher: put a scene(%u): ray(%zu/%zu, %zu), wl(%.1f,%.2f)", curr_scene.id_,
+        LOG_DEBUG("ServerImpl::GenerateScene: put a scene(%u): ray(%zu/%zu, %zu), wl(%.1f,%.2f)", curr_scene.id_,
                   curr_scene.ray_num_, ray_num, committed_num, wl_param.wl_, wl_param.weight_);
 
         CHECK_STOP
@@ -291,13 +296,14 @@ void ServerImpl::SceneDispatcher() {
           break;
         }
       }
-      LOG_DEBUG("ServerImpl::SceneDispatcher: finish wl");
+      committed_num += kDefaultRayNum;
+      LOG_DEBUG("ServerImpl::GenerateScene: finish wl");
       CHECK_STOP
     }
     curr_scene_ptr_ = nullptr;
-    LOG_DEBUG("ServerImpl::SceneDispatcher: finish ray_num");
+    LOG_DEBUG("ServerImpl::GenerateScene: finish ray_num");
   }
-  LOG_DEBUG("ServerImpl::SceneDispatcher exit");
+  LOG_DEBUG("ServerImpl::GenerateScene exit");
 }
 
 

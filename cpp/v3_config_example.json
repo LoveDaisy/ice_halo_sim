@@ -276,7 +276,7 @@
   "project": [
     {
       "id": 1,
-      "scene": 1,
+      "scene": 3,
       "render": [1, 3]
     }
   ]

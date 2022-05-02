@@ -209,11 +209,11 @@ void CollectData(const MsInfo& ms_info, const Filter* filter,     // input
 
 
 Simulator::Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue)
-    : config_queue_(config_queue), data_queue_(data_queue), stop_(false) {}
+    : config_queue_(config_queue), data_queue_(data_queue), stop_(false), idle_(true) {}
 
 Simulator::Simulator(Simulator&& other)
     : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
-      stop_(other.stop_.load()) {}
+      stop_(other.stop_.load()), idle_(other.idle_.load()) {}
 
 Simulator& Simulator::operator=(Simulator&& other) {
   if (this == &other) {
@@ -223,8 +223,14 @@ Simulator& Simulator::operator=(Simulator&& other) {
   config_queue_ = std::move(other.config_queue_);
   data_queue_ = std::move(other.data_queue_);
   stop_ = other.stop_.load();
+  idle_ = other.idle_.load();
   return *this;
 }
+
+#define CHECK_STOP \
+  if (stop_) {     \
+    break;         \
+  }
 
 void Simulator::Run() {
   stop_ = false;
@@ -232,11 +238,16 @@ void Simulator::Run() {
     // Config in the config_queue is processed by frontend of simulator (NOT GUI) so that
     // it has small ray_num and contains only one wavelength parameter of light source.
     auto config = config_queue_->Get();  // Will block until get one
-    if (stop_ || config.ray_num_ == 0) {
+    if (config.ray_num_ == 0) {
       // If no data in the queue or recieve a terminal signal, abort simulation
       break;
     }
+    CHECK_STOP
 
+    LOG_DEBUG("Simulator::Run: get config(%u): ray(%zu), wl(%.1f,%.2f)", config.id_, config.ray_num_,
+              config.light_source_.wl_param_[0].wl_, config.light_source_.wl_param_[0].weight_);
+
+    idle_ = false;
     auto ms_crystals = SampleMsCrystal(config);
 
     float wl = config.light_source_.wl_param_[0].wl_;  // Take first wl **ONLY**. Single wl in a single run.
@@ -348,20 +359,11 @@ void Simulator::Run() {
 
           // 2.4 Copy to all_data
           all_data.EmplaceBack(buffer_data[1]);
-
-          if (stop_) {
-            break;
-          }
+          CHECK_STOP
         }  // hit loop
-
-        if (stop_) {
-          break;
-        }
+        CHECK_STOP
       }  // crystal loop
-
-      if (stop_) {
-        break;
-      }
+      CHECK_STOP
 
       ms_ci += ms_crystal_cnt;
       ray_num = init_data[1].size_;
@@ -377,10 +379,7 @@ void Simulator::Run() {
 
       first_ms = false;
     }  // ms loop
-
-    if (stop_) {
-      break;
-    }
+    CHECK_STOP
 
     SimData sim_data;
     sim_data.curr_wl_ = wl;
@@ -389,9 +388,8 @@ void Simulator::Run() {
     sim_data.rays_ = std::move(all_data);
     data_queue_->Emplace(std::move(sim_data));
 
-    if (stop_) {
-      break;
-    }
+    CHECK_STOP
+    idle_ = true;
   }
 }
 
@@ -399,6 +397,10 @@ void Simulator::Stop() {
   stop_ = true;
   config_queue_->Shutdown();
   data_queue_->Shutdown();
+}
+
+bool Simulator::IsIdle() const {
+  return !stop_ && idle_;
 }
 
 }  // namespace v3

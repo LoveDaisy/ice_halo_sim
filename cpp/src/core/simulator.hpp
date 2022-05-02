@@ -34,11 +34,13 @@ class Simulator {
 
   void Run();
   void Stop();
+  bool IsIdle() const;
 
  private:
   QueuePtrS<SceneConfig> config_queue_;
   QueuePtrS<SimData> data_queue_;
   std::atomic_bool stop_;
+  std::atomic_bool idle_;
 };
 
 }  // namespace v3
