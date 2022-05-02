@@ -23,7 +23,7 @@ class IConsume {
   IConsume& operator=(IConsume&&) = delete;
 
   virtual void Consume(const SimData& data) = 0;
-  virtual Result GetResult() { return NoneResult{}; }
+  virtual Result GetResult() const { return NoneResult{}; }
 };
 
 using ConsumerPtrU = std::unique_ptr<IConsume>;

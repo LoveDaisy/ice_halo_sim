@@ -146,7 +146,7 @@ void Renderer::Consume(const SimData& data) {
   total_intensity_ += data.total_intensity_;
 }
 
-Result Renderer::GetResult() {
+Result Renderer::GetResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::unique_ptr<float[]> float_data{ new float[total_pix * 3]{} };
   for (const auto& [wl, data] : internal_data_) {

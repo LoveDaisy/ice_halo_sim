@@ -3,6 +3,7 @@
 
 #include <fstream>
 #include <memory>
+#include <vector>
 
 #include "include/result.hpp"
 
@@ -17,7 +18,7 @@ class Server {
 
   void CommitConfig(std::string config_str);
   void CommitConfig(std::ifstream& config_file);
-  Result GetResult();  // Will block until a new result arrives or intrrupted by Stop().
+  std::vector<Result> GetResults() const;  // if there is no result, it returns NoneResult, and does **NOT** block.
 
   void Stop();  // No Run() method. Because server start running immediately after construction.
 

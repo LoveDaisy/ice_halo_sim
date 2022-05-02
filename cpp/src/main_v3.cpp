@@ -1,4 +1,5 @@
 #include <fstream>
+#include <thread>
 #include <variant>
 
 #include "include/result.hpp"
@@ -8,12 +9,14 @@
 
 
 struct SimResultHandler {
-  void operator()(const icehalo::v3::NoneResult& /* r */) { LOG_INFO("none result!"); }
+  void operator()(const icehalo::v3::NoneResult& /* r */) { LOG_INFO("<NoneResult>"); }
   void operator()(const icehalo::v3::RenderResult& r) {
-    LOG_INFO("render result (w x h): %d x %d", r.img_width_, r.img_height_);
+    LOG_INFO("<RenderResult>: w = %d, h = %d, buffer = %p", r.img_width_, r.img_height_, r.img_buffer_);
   }
 };
 
+
+using namespace std::chrono_literals;
 
 int main(int argc, char** argv) {
   // Setup argument parser and parse arguments
@@ -50,8 +53,11 @@ int main(int argc, char** argv) {
   s.CommitConfig(config_file);
 
   while (true) {
-    auto res = s.GetResult();
-    std::visit(SimResultHandler{}, res);
+    auto res = s.GetResults();
+    for (const auto& r : res) {
+      std::visit(SimResultHandler{}, r);
+    }
+    std::this_thread::sleep_for(100ms);
   }
 
   return 0;

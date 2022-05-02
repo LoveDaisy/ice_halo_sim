@@ -12,6 +12,7 @@
 #include "consumer/consumer.hpp"
 #include "consumer/render.hpp"
 #include "core/simulator.hpp"
+#include "include/result.hpp"
 #include "json.hpp"
 #include "util/queue.hpp"
 
@@ -22,7 +23,7 @@ namespace v3 {
 class ServerImpl {
  public:
   void CommitConfig(const nlohmann::json& config_json);
-  Result GetResult();
+  std::vector<Result> GetResults() const;
 
  private:
   static constexpr int kDefaultSimulators = 4;
@@ -36,7 +37,6 @@ class ServerImpl {
   Queue<ProjConfig> proj_queue_;
   QueuePtrS<SceneConfig> scene_queue_;
   QueuePtrS<SimData> data_queue_;
-  QueuePtrS<Result> result_queue_;
 
   std::vector<Simulator> simulators_;
   std::vector<ConsumerPtrU> consumers_;
@@ -54,7 +54,6 @@ void ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   proj_queue_.Shutdown();
   scene_queue_->Shutdown();
   data_queue_->Shutdown();
-  result_queue_->Shutdown();
   for (auto& t : simulator_threads_) {
     if (t.joinable()) {
       t.join();
@@ -70,7 +69,6 @@ void ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   consumers_.clear();
 
   // Start all jobs and queues
-  result_queue_->Start();
   data_queue_->Start();
   scene_queue_->Start();
   proj_queue_.Start();
@@ -84,8 +82,12 @@ void ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   }
 }
 
-Result ServerImpl::GetResult() {
-  return result_queue_->Get();
+std::vector<Result> ServerImpl::GetResults() const {
+  std::vector<Result> results;
+  for (const auto& c : consumers_) {
+    results.emplace_back(c->GetResult());
+  }
+  return results;
 }
 
 void ServerImpl::WorkerFunc() {
@@ -147,8 +149,8 @@ void Server::CommitConfig(std::ifstream& f) {
   impl_->CommitConfig(config_json);
 }
 
-Result Server::GetResult() {
-  return NoneResult{};
+std::vector<Result> Server::GetResults() const {
+  return impl_->GetResults();
 }
 
 }  // namespace v3

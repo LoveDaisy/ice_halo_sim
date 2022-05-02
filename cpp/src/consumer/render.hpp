@@ -18,7 +18,7 @@ class Renderer : public IConsume {
   Renderer(RenderConfig config);
 
   void Consume(const SimData& data) override;
-  Result GetResult() override;
+  Result GetResult() const override;
 
  private:
   RenderConfig config_;
