@@ -51,8 +51,9 @@ int main(int argc, char** argv) {
   icehalo::v3::Server s;
   s.CommitConfig(config_file);
 
+  const auto kRefreshInterval = 500ms;
   while (true) {
-    std::this_thread::sleep_for(100ms);
+    std::this_thread::sleep_for(kRefreshInterval);
     auto res = s.GetResults();
     if (res.empty()) {
       continue;
