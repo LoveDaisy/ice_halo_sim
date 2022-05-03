@@ -14,6 +14,7 @@
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 #include "process/color_data.hpp"
+#include "util/log.hpp"
 
 namespace icehalo {
 namespace v3 {
@@ -34,12 +35,16 @@ using ProjFunc = std::function<void(const LensProjParam&, const float*, int*)>;
 void LinearProject(const LensProjParam& p, const float* d, int* xy) {
   if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
       (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
+    xy[0] = -1;
+    xy[1] = -1;
     return;
   }
 
   float d_cam[3]{ d[1], -d[0], -d[2] };  // original (x, y, z) --> (-y, x, z) camera convention
   p.rot_.Apply(d_cam);
   if (d_cam[2] < 0) {
+    xy[0] = -1;
+    xy[1] = -1;
     return;
   }
 
@@ -102,6 +107,7 @@ void Renderer::Consume(const SimData& data) {
                             config_.visible_,
                             { config_.resolution_[0], config_.resolution_[1] },
                             { config_.lens_shift_[0], config_.lens_shift_[1] } };
+  const auto& crystals = data.crystals_;
 
   for (size_t i = 0; i < data.rays_.size_; i++) {
     const auto& r = data.rays_[i];
@@ -123,6 +129,7 @@ void Renderer::Consume(const SimData& data) {
         break;
       }
 
+      (*fit)->InitCrystalSymmetry(crystals.at(r.crystal_id_));
       if (!(*fit)->Check(data.rays_[curr_idx])) {
         filter_checked = false;
         break;
@@ -132,16 +139,17 @@ void Renderer::Consume(const SimData& data) {
       curr_idx = data.rays_[root_idx].prev_ray_idx_;
       fit++;
     }
-    if (!filter_checked || curr_idx != kInvalidId) {
+    if (!filters.empty() && (!filter_checked || curr_idx != kInvalidId)) {
       continue;
     }
 
     // Do rendering
+    LOG_DEBUG("render ray: %.4f,%.4f,%.4f,%.4f", r.d_[0], r.d_[1], r.d_[2], r.w_);
     lens_proj(proj_param, r.d_, xy);
     if (xy[0] < 0 || xy[0] >= config_.resolution_[0] || xy[1] < 0 || xy[1] >= config_.resolution_[1]) {
       continue;
     }
-    curr_data[xy[1] * config_.resolution_[1] + xy[0]] += r.w_;
+    curr_data[xy[1] * config_.resolution_[0] + xy[0]] += r.w_;
   }
   total_intensity_ += data.total_intensity_;
 }
@@ -156,7 +164,7 @@ Result Renderer::GetResult() const {
     for (int i = 0; i < total_pix; i++) {
       // Step 1. Spectrum to XYZ
       float* xyz = float_data.get() + i * 3;
-      float v = data[i] * config_.intensity_factor_ / total_intensity_ * 1e4;  // TODO: determine the scale factor
+      float v = data[i] * config_.intensity_factor_ / total_intensity_ * 1e12;  // TODO: determine the scale factor
       xyz[0] += kCmfX[wl - kMinWavelength] * v;
       xyz[1] += kCmfY[wl - kMinWavelength] * v;
       xyz[2] += kCmfZ[wl - kMinWavelength] * v;

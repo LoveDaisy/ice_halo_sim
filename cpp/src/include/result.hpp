@@ -11,7 +11,7 @@ struct NoneResult {};
 struct RenderResult {
   int img_width_;
   int img_height_;
-  const uint8_t* img_buffer_;
+  uint8_t* img_buffer_;
 };
 
 using Result = std::variant<NoneResult, RenderResult>;

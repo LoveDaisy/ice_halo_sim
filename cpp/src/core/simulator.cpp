@@ -174,6 +174,11 @@ void TraceRays(const Crystal& curr_crystal, float refractive_index, size_t curr_
               p_out, fid_out);                    // Output, p, fid
   }
 
+  for (size_t i = 0; i < curr_ray_num; i++) {
+    buffer_data[1][i * 2 + 0].rp_ = buffer_data[0][i].rp_;
+    buffer_data[1][i * 2 + 1].rp_ = buffer_data[0][i].rp_;
+  }
+
   buffer_data[0].size_ = 0;
   buffer_data[1].size_ = curr_ray_num * 2;
 }
@@ -337,7 +342,9 @@ void Simulator::Run() {
             for (size_t j = 0; j < buffer_data[1].size_; j++) {
               auto& r = buffer_data[1][j];
               const auto& c = ms_crystals[ms_ci + ci];
-              r.rp_ << c.GetFn(r.fid_);
+              if (r.fid_ > 0) {
+                r.rp_ << c.GetFn(r.fid_);
+              }
               r.crystal_id_ = ms_ci + ci;
 
               if (i == 0) {

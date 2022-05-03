@@ -60,12 +60,13 @@ SimData::SimData() : curr_wl_(0.0f) {}
 SimData::SimData(size_t capacity) : curr_wl_(0.0f), rays_(capacity) {}
 
 SimData::SimData(const SimData& other)
-    : curr_wl_(other.curr_wl_), rays_(other.rays_.capacity_), crystals_(other.crystals_) {
+    : curr_wl_(other.curr_wl_), total_intensity_(0), rays_(other.rays_.capacity_), crystals_(other.crystals_) {
   rays_.size_ = other.rays_.size_;
   std::memcpy(rays_.rays_.get(), other.rays_.rays_.get(), sizeof(RaySeg) * other.rays_.capacity_);
 }
 
-SimData::SimData(SimData&& other) : curr_wl_(other.curr_wl_), crystals_(std::move(other.crystals_)) {
+SimData::SimData(SimData&& other)
+    : curr_wl_(other.curr_wl_), total_intensity_(other.total_intensity_), crystals_(std::move(other.crystals_)) {
   rays_.size_ = other.rays_.size_;
   rays_.capacity_ = other.rays_.capacity_;
   rays_.rays_ = std::move(other.rays_.rays_);
@@ -81,6 +82,7 @@ SimData& SimData::operator=(const SimData& other) {
   }
 
   curr_wl_ = other.curr_wl_;
+  total_intensity_ = other.total_intensity_;
   rays_.size_ = other.rays_.size_;
   rays_.capacity_ = other.rays_.capacity_;
   rays_.rays_.reset(new RaySeg[rays_.capacity_]);
@@ -95,6 +97,7 @@ SimData& SimData::operator=(SimData&& other) {
   }
 
   curr_wl_ = other.curr_wl_;
+  total_intensity_ = other.total_intensity_;
   rays_.size_ = other.rays_.size_;
   rays_.capacity_ = other.rays_.capacity_;
   rays_.rays_ = std::move(other.rays_.rays_);
