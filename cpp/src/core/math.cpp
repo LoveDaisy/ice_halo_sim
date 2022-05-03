@@ -901,7 +901,7 @@ float RandomNumberGenerator::GetUniform() {
 float RandomNumberGenerator::Get(Distribution dist) {
   switch (dist.type) {
     case DistributionType::kUniform:
-      return (GetUniform() - 0.5f) * 2 * dist.std + dist.mean;
+      return (GetUniform() - 0.5f) * dist.std + dist.mean;
     case DistributionType::kGaussian:
       return GetGaussian() * dist.std + dist.mean;
     case DistributionType::kNoRandom:

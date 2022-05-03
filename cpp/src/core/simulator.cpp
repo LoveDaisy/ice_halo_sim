@@ -114,6 +114,8 @@ std::vector<Crystal> SampleMsCrystal(const SceneConfig& config) {
         float axis[9]{ 1, 0, 0, 0, 1, 0, 0, 0, 1 };
         auto rot = Rotation(axis + 6, roll).Chain(axis + 3, math::kPi_2 - lat).Chain(axis + 6, lon);
         crystals.back().Rotate(rot);
+
+        LOG_DEBUG("crystal axis: %.4f,%.4f,%.4f", lon, lat, roll);
       }
 
       // Set origin
@@ -325,6 +327,9 @@ void Simulator::Run() {
             r.root_ray_idx_ = all_data_idx++;
             r.state_ = RaySeg::kNormal;
             r.rp_ << c.GetFn(r.fid_);
+
+            LOG_DEBUG("init ray d: %.6f,%.6f,%.6f", r.d_[0], r.d_[1], r.d_[2]);
+            LOG_DEBUG("init ray p: %.6f,%.6f,%.6f", r.p_[0], r.p_[1], r.p_[2]);
           }
 
           all_data.EmplaceBack(buffer_data[0]);
@@ -356,6 +361,9 @@ void Simulator::Run() {
               }
 
               r.root_ray_idx_ = all_data[r.prev_ray_idx_].root_ray_idx_;
+
+              LOG_DEBUG("hit loop ray p: %.6f,%.6f,%.6f,%zu", r.p_[0], r.p_[1], r.p_[2], i);
+              LOG_DEBUG("hit loop ray d: %.6f,%.6f,%.6f,%zu", r.d_[0], r.d_[1], r.d_[2], i);
             }
           }
 

@@ -8,3 +8,6 @@ bin
 data
 build
 out
+
+tmp*
+*.jpg

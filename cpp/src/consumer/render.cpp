@@ -57,22 +57,22 @@ void LinearProject(const LensProjParam& p, const float* d, int* xy) {
 
 void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy) {
   // visible_range is ignored here
-  auto short_res = std::min(p.resolution_[0], p.resolution_[1]);
+  auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
 
   float az = std::atan2(-d[1], -d[0]);
-  float theta = std::asin(-d[2]);
+  float theta = math::kPi_2 - std::abs(std::asin(-d[2]));
 
   // fov is ignored here
   float scale = short_res / 2.0f / std::sin(math::kPi_4);
   float r = scale * std::abs(std::sin(theta / 2));
-  if (theta < 0) {
+  if (d[2] > 0) {
     // Lower semisphere
-    xy[0] = static_cast<int>(r * std::cos(-math::kPi_2 + az) + p.resolution_[0] / 2.0f + 0.5f + short_res / 2.0f);
-    xy[1] = static_cast<int>(r * std::sin(-math::kPi_2 + az) + p.resolution_[1] / 2.0f + 0.5f);
+    xy[0] = static_cast<int>(r * std::cos(math::kPi_2 - az) + p.resolution_[0] / 2.0f + 0.5f + short_res / 2.0f);
+    xy[1] = static_cast<int>(r * std::sin(math::kPi_2 - az) + p.resolution_[1] / 2.0f + 0.5f);
   } else {
     // Upper semisphere
-    xy[0] = static_cast<int>(r * std::cos(-math::kPi_2 - az) + p.resolution_[0] / 2.0f + 0.5f - short_res / 2.0f);
-    xy[1] = static_cast<int>(r * std::sin(-math::kPi_2 - az) + p.resolution_[1] / 2.0f + 0.5f);
+    xy[0] = static_cast<int>(r * std::cos(math::kPi_2 + az) + p.resolution_[0] / 2.0f + 0.5f - short_res / 2.0f);
+    xy[1] = static_cast<int>(r * std::sin(math::kPi_2 + az) + p.resolution_[1] / 2.0f + 0.5f);
   }
 }
 
@@ -174,6 +174,7 @@ void Renderer::Consume(const SimData& data) {
     curr_data[xy[1] * config_.resolution_[0] + xy[0]] += r.w_;
   }
   total_intensity_ += data.total_intensity_;
+  LOG_DEBUG("renderer wl: %zu", internal_data_.size());
 }
 
 Result Renderer::GetResult() const {
@@ -186,7 +187,7 @@ Result Renderer::GetResult() const {
     for (int i = 0; i < total_pix; i++) {
       // Step 1. Spectrum to XYZ
       float* xyz = float_data.get() + i * 3;
-      float v = data[i] * config_.intensity_factor_ / total_intensity_ * 1e12;  // TODO: determine the scale factor
+      float v = data[i] * config_.intensity_factor_ / total_intensity_ * 1e5;  // TODO: determine the scale factor
       xyz[0] += kCmfX[wl - kMinWavelength] * v;
       xyz[1] += kCmfY[wl - kMinWavelength] * v;
       xyz[2] += kCmfZ[wl - kMinWavelength] * v;
@@ -194,57 +195,51 @@ Result Renderer::GetResult() const {
   }
 
   bool use_real_color = config_.ray_color_[0] < 0;
-  for (const auto& [wl, data] : internal_data_) {
-    if (wl < kMinWavelength || wl > kMaxWavelength) {
-      continue;
+  float gray[3];
+  for (int i = 0; i < total_pix; i++) {
+    // Step 2. XYZ to linear RGB
+    float* xyz = float_data.get() + i * 3;
+    for (int j = 0; j < 3; j++) {
+      gray[j] = kWhitePointD65[j] * xyz[1];
     }
 
-    float gray[3];
-    for (int i = 0; i < total_pix; i++) {
-      // Step 2. XYZ to linear RGB
-      float* xyz = float_data.get() + i * 3;
+    if (use_real_color) {
+      float r = 1.0f;
       for (int j = 0; j < 3; j++) {
-        gray[j] = kWhitePointD65[j] * xyz[1];
-      }
-
-      if (use_real_color) {
-        float r = 1.0f;
-        for (int j = 0; j < 3; j++) {
-          float a = 0;
-          float b = 0;
-          for (int k = 0; k < 3; k++) {
-            a += -gray[k] * kXyzToRgb[j * 3 + k];
-            b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
-          }
-          if (a * b > 0 && a / b < r) {
-            r = a / b;
-          }
-        }
-
-        for (int j = 0; j < 3; j++) {
-          xyz[j] = (xyz[j] - gray[j]) * r + gray[j];
-        }
-      } else {
-        std::memcpy(xyz, gray, 3 * sizeof(float));
-      }
-
-      float rgb[3]{};
-      for (int j = 0; j < 3; j++) {
+        float a = 0;
+        float b = 0;
         for (int k = 0; k < 3; k++) {
-          rgb[j] += xyz[k] * kXyzToRgb[j * 3 + k];
+          a += -gray[k] * kXyzToRgb[j * 3 + k];
+          b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
         }
-        if (!use_real_color) {
-          rgb[j] *= config_.ray_color_[j];
+        if (a * b > 0 && a / b < r) {
+          r = a / b;
         }
-        rgb[j] += config_.background_[j];
-        rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
       }
 
-      // Step 3. Convert linear sRGB to sRGB
-      SrgbGamma(rgb, 3);
-      std::memcpy(float_data.get() + i * 3, rgb, 3 * sizeof(float));
+      for (int j = 0; j < 3; j++) {
+        xyz[j] = (xyz[j] - gray[j]) * r + gray[j];
+      }
+    } else {
+      std::memcpy(xyz, gray, 3 * sizeof(float));
     }
+
+    float rgb[3]{};
+    for (int j = 0; j < 3; j++) {
+      for (int k = 0; k < 3; k++) {
+        rgb[j] += xyz[k] * kXyzToRgb[j * 3 + k];
+      }
+      if (!use_real_color) {
+        rgb[j] *= config_.ray_color_[j];
+      }
+      rgb[j] += config_.background_[j];
+      rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
+    }
+    std::memcpy(float_data.get() + i * 3, rgb, 3 * sizeof(float));
   }
+
+  // Step 3. Convert linear sRGB to sRGB
+  SrgbGamma(float_data.get(), 3 * total_pix);
 
   for (int i = 0; i < total_pix * 3; i++) {
     image_buffer_[i] = static_cast<uint8_t>(float_data[i] * 255);

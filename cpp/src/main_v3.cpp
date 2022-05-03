@@ -14,6 +14,7 @@ struct SimResultHandler {
   void operator()(const icehalo::v3::RenderResult& r) {
     LOG_INFO("<RenderResult>: w = %d, h = %d, buffer = %p", r.img_width_, r.img_height_, r.img_buffer_);
     cv::Mat mat(r.img_height_, r.img_width_, CV_8UC3, r.img_buffer_);
+    cv::cvtColor(mat, mat, cv::COLOR_RGB2BGR);
     cv::imwrite("img.jpg", mat);
   }
 };
@@ -54,7 +55,7 @@ int main(int argc, char** argv) {
   icehalo::v3::Server s;
   s.CommitConfig(config_file);
 
-  const auto kRefreshInterval = 500ms;
+  const auto kRefreshInterval = 1000ms;
   while (true) {
     std::this_thread::sleep_for(kRefreshInterval);
     auto res = s.GetResults();
