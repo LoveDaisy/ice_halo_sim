@@ -1,6 +1,7 @@
 #ifndef INCLUDE_RESULT_H_
 #define INCLUDE_RESULT_H_
 
+#include <cstddef>
 #include <variant>
 
 namespace icehalo {
@@ -14,7 +15,11 @@ struct RenderResult {
   uint8_t* img_buffer_;
 };
 
-using Result = std::variant<NoneResult, RenderResult>;
+struct StatsResult {
+  size_t total_ray_num_;
+};
+
+using Result = std::variant<NoneResult, RenderResult, StatsResult>;
 
 }  // namespace v3
 }  // namespace icehalo

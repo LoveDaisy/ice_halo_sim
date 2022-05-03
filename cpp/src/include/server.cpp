@@ -15,6 +15,7 @@
 #include "config/sim_data.hpp"
 #include "consumer/consumer.hpp"
 #include "consumer/render.hpp"
+#include "consumer/stats.hpp"
 #include "core/def.hpp"
 #include "core/simulator.hpp"
 #include "include/result.hpp"
@@ -247,6 +248,7 @@ void ServerImpl::GenerateScene() {
       for (const auto& r : proj_config.renderers_) {
         consumers_.emplace_back(ConsumerPtrU{ new Renderer(r) });
       }
+      consumers_.emplace_back(ConsumerPtrU{ new Stats });
       LOG_DEBUG("ServerImpl::ConsumeData: unlock cons_mutex. init consumers finishes.");
     }
 

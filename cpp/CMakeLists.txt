@@ -92,7 +92,8 @@ set(icehalo_config_src
 set(icehalo_consumer_src
   "${PROJ_SRC_DIR}/consumer/consumer.cpp"
   "${PROJ_SRC_DIR}/consumer/render.cpp"
-  "${PROJ_SRC_DIR}/consumer/show_rays.cpp")
+  "${PROJ_SRC_DIR}/consumer/show_rays.cpp"
+  "${PROJ_SRC_DIR}/consumer/stats.cpp")
 
 set(icehalo_context_src
   "${PROJ_SRC_DIR}/context/camera_context.cpp"
