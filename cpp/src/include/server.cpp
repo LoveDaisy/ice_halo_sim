@@ -56,7 +56,6 @@ class ServerImpl {
   std::vector<ConsumerPtrU> consumers_;
   std::vector<std::thread> simulator_threads_;
   std::mutex prod_mutex;
-  std::mutex cons_mutex;
 
   std::atomic_bool stop_;
   std::atomic_int sim_scene_cnt_;
@@ -95,12 +94,9 @@ void ServerImpl::CommitConfig(const nlohmann::json& config_json) {
 
 std::vector<Result> ServerImpl::GetResults() {
   std::vector<Result> results;
-  std::unique_lock<std::mutex> lock(cons_mutex);
-  LOG_DEBUG("ServerImpl::GetResults: lock on cons_mutex");
   for (const auto& c : consumers_) {
     results.emplace_back(c->GetResult());
   }
-  LOG_DEBUG("ServerImpl::GetResults: unlock cons_mutex");
   return results;
 }
 
@@ -163,12 +159,7 @@ void ServerImpl::Stop() {
     simulator_threads_.clear();
     LOG_DEBUG("ServerImpl::Stop: unlock prod_mutex");
   }
-  {
-    std::unique_lock<std::mutex> lock(cons_mutex);
-    LOG_DEBUG("ServerImpl::Stop: lock on cons_mutex. clear consumers.");
-    consumers_.clear();
-    LOG_DEBUG("ServerImpl::Stop: unlock cons_mutex");
-  }
+  consumers_.clear();
 
   // Stop main working thread & scene dispatch thread
   LOG_DEBUG("ServerImpl::Stop: waiting main worker & dispatcher stop.");
@@ -210,13 +201,10 @@ void ServerImpl::ConsumeData() {
 
     LOG_DEBUG("ServerImpl::ConsumeData: get data: %p", &sim_data);
 
-    {
-      std::unique_lock<std::mutex> lock(cons_mutex);
-      LOG_DEBUG("ServerImpl::ConsumeData: lock on cons_mutex. consume data.");
+    if (sim_scene_cnt_ > 0) {
       for (auto& c : consumers_) {
         c->Consume(sim_data);
       }
-      LOG_DEBUG("ServerImpl::ConsumeData: unlock cons_mutex. consume data finishes.");
     }
     sim_scene_cnt_--;
     if (sim_scene_cnt_ < kMaxSceneCnt / 2) {
@@ -241,16 +229,12 @@ void ServerImpl::GenerateScene() {
     CHECK_STOP
 
     // Setup consumers.
-    {
-      std::unique_lock<std::mutex> lock(cons_mutex);
-      LOG_DEBUG("ServerImpl::ConsumeData: lock on cons_mutex. init consumers.");
-      consumers_.clear();
-      for (const auto& r : proj_config.renderers_) {
-        consumers_.emplace_back(ConsumerPtrU{ new Renderer(r) });
-      }
-      consumers_.emplace_back(ConsumerPtrU{ new Stats });
-      LOG_DEBUG("ServerImpl::ConsumeData: unlock cons_mutex. init consumers finishes.");
+    std::vector<ConsumerPtrU> new_consumers;
+    for (const auto& r : proj_config.renderers_) {
+      new_consumers.emplace_back(ConsumerPtrU{ new Renderer(r) });
     }
+    new_consumers.emplace_back(ConsumerPtrU{ new Stats });
+    consumers_.swap(new_consumers);
 
     auto ray_num = proj_config.scene_.ray_num_;
     size_t committed_num = 0;

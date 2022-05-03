@@ -108,6 +108,39 @@ Renderer::Renderer(RenderConfig config)
       .Chain({ ax_z, -config.view_.ro_ * math::kDegreeToRad });
 }
 
+
+bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& filters,
+               const std::vector<Crystal>& crystals) {
+  if (filters.empty()) {
+    return true;
+  }
+
+  const auto& r = rays[i];
+  bool filter_checked = true;
+  size_t curr_idx = i;
+  size_t root_idx = r.root_ray_idx_;
+  for (auto fit = filters.rbegin(); fit != filters.rend(); /* increament see below */) {
+    if (curr_idx != kInvalidId) {
+      root_idx = rays[curr_idx].root_ray_idx_;
+    } else {
+      filter_checked = false;
+      break;
+    }
+
+    (*fit)->InitCrystalSymmetry(crystals.at(r.crystal_id_));
+    if (!(*fit)->Check(rays[curr_idx])) {
+      filter_checked = false;
+      break;
+    }
+
+    // increament
+    curr_idx = rays[root_idx].prev_ray_idx_;
+    fit++;
+  }
+  return filter_checked && curr_idx == kInvalidId;
+}
+
+
 void Renderer::Consume(const SimData& data) {
   std::vector<FilterPtrU> filters;
   for (const auto& f : config_.ms_filter_) {
@@ -140,28 +173,7 @@ void Renderer::Consume(const SimData& data) {
     }
 
     // 2. then check every filter for every scattering
-    bool filter_checked = true;
-    size_t curr_idx = i;
-    size_t root_idx = r.root_ray_idx_;
-    for (auto fit = filters.rbegin(); fit != filters.rend(); /* increament see below */) {
-      if (curr_idx != kInvalidId) {
-        root_idx = data.rays_[curr_idx].root_ray_idx_;
-      } else {
-        filter_checked = false;
-        break;
-      }
-
-      (*fit)->InitCrystalSymmetry(crystals.at(r.crystal_id_));
-      if (!(*fit)->Check(data.rays_[curr_idx])) {
-        filter_checked = false;
-        break;
-      }
-
-      // increament
-      curr_idx = data.rays_[root_idx].prev_ray_idx_;
-      fit++;
-    }
-    if (!filters.empty() && (!filter_checked || curr_idx != kInvalidId)) {
+    if (!FilterRay(data.rays_, i, filters, crystals)) {
       continue;
     }
 
