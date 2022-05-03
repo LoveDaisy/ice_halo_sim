@@ -142,6 +142,9 @@ endif()
 if(RANDOM_SEED)
   target_compile_definitions(icehalo_lib PUBLIC RANDOM_SEED)
 endif()
+if(VERBOSE_LOG)
+  target_compile_definitions(icehalo_lib PUBLIC VERBOSE_LOG)
+endif()
 
 # ==================================================================================================
 # Add subdirectory

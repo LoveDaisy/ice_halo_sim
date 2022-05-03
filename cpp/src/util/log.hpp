@@ -184,8 +184,13 @@ class Logger {
 }  // namespace icehalo
 
 // Convenience macros for log
+#ifdef VERBOSE_LOG
 #define LOG_DEBUG(...) \
   icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kDebug, ##__VA_ARGS__)
+#else
+#define LOG_DEBUG(...) \
+  {}
+#endif
 #define LOG_VERBOSE(...) \
   icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kVerbose, ##__VA_ARGS__)
 #define LOG_INFO(...) \
@@ -197,8 +202,13 @@ class Logger {
 #define LOG_FATAL(...) \
   icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kFatal, ##__VA_ARGS__)
 
+#ifdef VERBOSE_LOG
 #define TAG_LOG_DEBUG(...) \
   icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kDebug, ##__VA_ARGS__)
+#else
+#define TAG_LOG_DEBUG(...) \
+  {}
+#endif
 #define TAG_LOG_VERBOSE(...) \
   icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kVerbose, ##__VA_ARGS__)
 #define TAG_LOG_INFO(...) \

@@ -8,8 +8,7 @@ build() {
   pushd "${BUILD_DIR}"
   cmake -S "${PROJ_DIR}" -B "${BUILD_DIR}" \
         -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TEST=$BUILD_TEST \
-        -DMULTI_THREAD=$MULTI_THREAD \
-        -DRANDOM_SEED=$RANDOM_SEED \
+        -DMULTI_THREAD=$MULTI_THREAD -DRANDOM_SEED=$RANDOM_SEED -DVERBOSE_LOG=$VERBOSE_LOG \
         -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}" -DGTEST_DIR="${GTEST_DIR}"
   cmake --build "${BUILD_DIR}" -j $MAKE_J_N
   ret=$?
@@ -43,6 +42,7 @@ help() {
   echo "  -j:          Make in parallel, i.e. use make -j"
   echo "  -k:          Clean temporary building files."
   echo "  -b:          Run benchmarking."
+  echo "  -v:          Enable verbose log."
   echo "  -r:          Use system time as seed for random number generator. Without this option,"
   echo "               the program will use default value. Thus generate a repeatable result (together with -1)."
   echo "  -1:          Use single thread."
@@ -62,6 +62,7 @@ INSTALL_FLAG=OFF
 MAKE_J_N=1
 MULTI_THREAD=ON
 RANDOM_SEED=OFF
+VERBOSE_LOG=OFF
 
 if [ $# -eq 0 ]; then
   help
@@ -86,6 +87,9 @@ while getopts "htrjkb1" opt; do
     ;;
   r)
     RANDOM_SEED=ON
+    ;;
+  v)
+    VERBOSE_LOG=ON
     ;;
   k)
     clean_all
