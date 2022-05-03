@@ -55,9 +55,31 @@ void LinearProject(const LensProjParam& p, const float* d, int* xy) {
   xy[1] = static_cast<int>(d_cam[1] * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]);
 }
 
+void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy) {
+  // visible_range is ignored here
+  auto short_res = std::min(p.resolution_[0], p.resolution_[1]);
+
+  float az = std::atan2(-d[1], -d[0]);
+  float theta = std::asin(-d[2]);
+
+  // fov is ignored here
+  float scale = short_res / 2.0f / std::sin(math::kPi_4);
+  float r = scale * std::abs(std::sin(theta / 2));
+  if (theta < 0) {
+    // Lower semisphere
+    xy[0] = static_cast<int>(r * std::cos(-math::kPi_2 + az) + p.resolution_[0] / 2.0f + 0.5f + short_res / 2.0f);
+    xy[1] = static_cast<int>(r * std::sin(-math::kPi_2 + az) + p.resolution_[1] / 2.0f + 0.5f);
+  } else {
+    // Upper semisphere
+    xy[0] = static_cast<int>(r * std::cos(-math::kPi_2 - az) + p.resolution_[0] / 2.0f + 0.5f - short_res / 2.0f);
+    xy[1] = static_cast<int>(r * std::sin(-math::kPi_2 - az) + p.resolution_[1] / 2.0f + 0.5f);
+  }
+}
+
 ProjFunc GetProjFunc(LensParam::LensType type) {
   static std::map<LensParam::LensType, ProjFunc> lens_proj_map{
     { LensParam::kLinear, LinearProject },
+    { LensParam::kDualFisheyeEqualArea, DualFisheyeEqualAreaProject },
   };
 
   return lens_proj_map.at(type);

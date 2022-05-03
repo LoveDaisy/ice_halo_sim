@@ -233,14 +233,13 @@
     {
       "id": 2,
       "lens": {
-        "type": "fisheye_equal_area",
+        "type": "dual_fisheye_equal_area",
         "fov": 120
       },
-      "resolution": [1920, 1080],
+      "resolution": [2048, 1024],
       "view": {
         "elevation": 30
-      },
-      "filter": 4
+      }
     },
     {
       "id": 3,
@@ -277,7 +276,7 @@
     {
       "id": 1,
       "scene": 2,
-      "render": [1]
+      "render": [2]
     }
   ]
 }
