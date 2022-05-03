@@ -1,4 +1,5 @@
 #include <fstream>
+#include <opencv2/opencv.hpp>
 #include <thread>
 #include <variant>
 
@@ -12,6 +13,8 @@ struct SimResultHandler {
   void operator()(const icehalo::v3::NoneResult& /* r */) { LOG_INFO("<NoneResult>"); }
   void operator()(const icehalo::v3::RenderResult& r) {
     LOG_INFO("<RenderResult>: w = %d, h = %d, buffer = %p", r.img_width_, r.img_height_, r.img_buffer_);
+    cv::Mat mat(r.img_height_, r.img_width_, CV_8UC3, r.img_buffer_);
+    cv::imwrite("img.jpg", mat);
   }
 };
 
