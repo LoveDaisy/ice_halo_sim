@@ -38,8 +38,8 @@ TEST_F(V3TestJson, LightSource_Sun) {
   ASSERT_EQ(s.id_, 2);
   ASSERT_EQ(s.wl_param_.size(), 6);
 
-  std::vector<v3::WlParam> wl_param = { { 420.0f, 1.0f }, { 480.0f, 1.0f }, { 540.0f, 1.0f },
-                                        { 600.0f, 1.0f }, { 660.0f, 1.0f }, { 720.0f, 1.0f } };
+  std::vector<v3::WlParam> wl_param = { { 420.0f, 1.0f }, { 460.0f, 1.0f }, { 500.0f, 1.0f },
+                                        { 540.0f, 1.0f }, { 580.0f, 1.0f }, { 620.0f, 1.0f } };
   for (size_t i = 0; i < wl_param.size(); i++) {
     ASSERT_NEAR(s.wl_param_[i].wl_, wl_param[i].wl_, 1e-5);
     ASSERT_NEAR(s.wl_param_[i].weight_, wl_param[i].weight_, 1e-5);
