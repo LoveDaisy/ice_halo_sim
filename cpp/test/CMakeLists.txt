@@ -43,6 +43,7 @@ target_link_libraries(unit_test
 
 
 add_executable(unit_test_v3
+  "${PROJ_TEST_DIR}/test_v3_crystal.cpp"
   "${PROJ_TEST_DIR}/test_v3_json.cpp"
   "${PROJ_TEST_DIR}/test_v3_proj.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
