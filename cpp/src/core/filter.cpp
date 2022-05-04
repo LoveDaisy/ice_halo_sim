@@ -16,7 +16,7 @@
 #include "core/def.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
-#include "util/log.hpp"
+#include "include/log.hpp"
 
 namespace icehalo {
 

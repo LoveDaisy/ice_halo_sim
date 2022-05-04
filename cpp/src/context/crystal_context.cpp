@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <sstream>
 
-#include "util/log.hpp"
+#include "include/log.hpp"
 
 namespace icehalo {
 

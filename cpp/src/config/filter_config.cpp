@@ -4,8 +4,8 @@
 #include <vector>
 
 #include "core/def.hpp"
+#include "include/log.hpp"
 #include "json.hpp"
-#include "util/log.hpp"
 
 namespace icehalo {
 namespace v3 {

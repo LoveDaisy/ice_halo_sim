@@ -1,4 +1,4 @@
-#include "consumer/render.hpp"
+#include "server/render.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -14,8 +14,8 @@
 #include "core/filter.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
+#include "include/log.hpp"
 #include "process/color_data.hpp"
-#include "util/log.hpp"
 
 namespace icehalo {
 namespace v3 {

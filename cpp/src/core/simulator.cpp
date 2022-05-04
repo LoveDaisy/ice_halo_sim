@@ -3,7 +3,7 @@
 #include "core/buffer.hpp"
 #include "core/filter.hpp"
 #include "core/optics.hpp"
-#include "util/log.hpp"
+#include "include/log.hpp"
 #include "util/queue.hpp"
 
 namespace icehalo {

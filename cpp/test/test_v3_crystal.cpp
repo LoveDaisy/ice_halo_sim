@@ -5,7 +5,7 @@
 
 #include "config/config_manager.hpp"
 #include "core/crystal.hpp"
-#include "util/log.hpp"
+#include "include/log.hpp"
 
 extern std::string config_file_name;
 using namespace icehalo;

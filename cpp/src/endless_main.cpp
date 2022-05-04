@@ -3,10 +3,10 @@
 #include <opencv2/opencv.hpp>
 
 #include "context/context.hpp"
+#include "include/arg_parser.hpp"
+#include "include/log.hpp"
 #include "process/render.hpp"
 #include "process/simulation.hpp"
-#include "util/arg_parser.hpp"
-#include "util/log.hpp"
 
 
 constexpr size_t kBufSize = 1024;

@@ -1,8 +1,8 @@
-#include "util/arg_parser.hpp"
+#include "include/arg_parser.hpp"
 
 #include <stdexcept>
 
-#include "util/log.hpp"
+#include "include/log.hpp"
 
 namespace icehalo {
 

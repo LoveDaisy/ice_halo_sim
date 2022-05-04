@@ -2,8 +2,8 @@
 
 #include <algorithm>
 
+#include "include/log.hpp"
 #include "process/render.hpp"
-#include "util/log.hpp"
 
 
 namespace icehalo {

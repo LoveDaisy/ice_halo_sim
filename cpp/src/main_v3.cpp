@@ -3,10 +3,10 @@
 #include <thread>
 #include <variant>
 
+#include "include/arg_parser.hpp"
+#include "include/log.hpp"
 #include "include/result.hpp"
 #include "include/server.hpp"
-#include "util/arg_parser.hpp"
-#include "util/log.hpp"
 
 
 struct SimResultHandler {

@@ -1,4 +1,5 @@
-#include "consumer/stats.hpp"
+#include "server/stats.hpp"
+
 #include <set>
 
 namespace icehalo {

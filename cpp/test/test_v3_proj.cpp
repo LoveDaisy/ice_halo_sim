@@ -8,9 +8,9 @@
 #include <thread>
 
 #include "config/config_manager.hpp"
-#include "consumer/show_rays.hpp"
 #include "core/simulator.hpp"
-#include "util/log.hpp"
+#include "include/log.hpp"
+#include "server/show_rays.hpp"
 #include "util/queue.hpp"
 
 extern std::string config_file_name;

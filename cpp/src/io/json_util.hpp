@@ -1,8 +1,8 @@
 #ifndef SRC_IO_JSON_UTIL_H_
 #define SRC_IO_JSON_UTIL_H_
 
+#include "include/log.hpp"
 #include "json.hpp"
-#include "util/log.hpp"
 
 namespace icehalo {
 

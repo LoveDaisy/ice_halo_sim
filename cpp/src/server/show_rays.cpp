@@ -1,6 +1,6 @@
-#include "consumer/show_rays.hpp"
+#include "server/show_rays.hpp"
 
-#include "util/log.hpp"
+#include "include/log.hpp"
 
 namespace icehalo {
 namespace v3 {

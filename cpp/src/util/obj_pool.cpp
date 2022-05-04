@@ -1,7 +1,7 @@
 #include "util/obj_pool.hpp"
 
 #include "core/optics.hpp"
-#include "util/log.hpp"
+#include "include/log.hpp"
 
 namespace icehalo {
 

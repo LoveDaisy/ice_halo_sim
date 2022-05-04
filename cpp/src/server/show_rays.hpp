@@ -1,7 +1,7 @@
 #ifndef CONSUMER_SHOW_RAYS_H_
 #define CONSUMER_SHOW_RAYS_H_
 
-#include "consumer/consumer.hpp"
+#include "server/consumer.hpp"
 
 namespace icehalo {
 namespace v3 {

@@ -5,7 +5,7 @@
 #include <memory>
 
 #include "config/render_config.hpp"
-#include "consumer/consumer.hpp"
+#include "server/consumer.hpp"
 
 namespace icehalo {
 namespace v3 {
