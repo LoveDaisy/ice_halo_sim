@@ -32,16 +32,17 @@ void SrgbGamma(float* rgb, size_t num) {
   }
 }
 
-void SpectrumToXyz(float wl, const float* v, float* xyz, size_t num = 1) {
+void SpectrumToXyz(float wl, const float* v, const int* xy, float* xyz, size_t num = 1) {
   int wl_key = static_cast<int>(wl + 0.5f);
   if (wl_key < kMinWavelength || wl_key > kMaxWavelength) {
     return;
   }
 
   for (size_t i = 0; i < num; i++) {
-    xyz[i * 3 + 0] += kCmfX[wl_key - kMinWavelength] * v[i];
-    xyz[i * 3 + 1] += kCmfY[wl_key - kMinWavelength] * v[i];
-    xyz[i * 3 + 2] += kCmfZ[wl_key - kMinWavelength] * v[i];
+    size_t idx = xy == nullptr ? i * 3 : xy[i] * 3;
+    xyz[idx + 0] += kCmfX[wl_key - kMinWavelength] * v[i];
+    xyz[idx + 1] += kCmfY[wl_key - kMinWavelength] * v[i];
+    xyz[idx + 2] += kCmfZ[wl_key - kMinWavelength] * v[i];
   }
 }
 
@@ -57,49 +58,53 @@ struct LensProjParam {
 };
 
 
-using ProjFunc = std::function<void(const LensProjParam&, const float*, int*)>;
+using ProjFunc = std::function<void(const LensProjParam&, const float*, int*, size_t)>;
 
-void LinearProject(const LensProjParam& p, const float* d, int* xy) {
-  if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
-      (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
-    xy[0] = -1;
-    xy[1] = -1;
-    return;
-  }
-
-  float d_cam[3]{ d[1], -d[0], -d[2] };  // original (x, y, z) --> (-y, x, z) camera convention
-  p.rot_.Apply(d_cam);
-  if (d_cam[2] < 0) {
-    xy[0] = -1;
-    xy[1] = -1;
-    return;
-  }
-
-  d_cam[0] /= d_cam[2];
-  d_cam[1] /= d_cam[2];
+void LinearProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   float scale = p.diag_pix_ / std::tan(p.fov_ / 2.0f * math::kDegreeToRad);
-  xy[0] = static_cast<int>(d_cam[0] * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]);
-  xy[1] = static_cast<int>(d_cam[1] * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]);
+  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
+    if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
+        (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
+      xy[0] = -1;
+      xy[1] = -1;
+      continue;
+    }
+
+    float d_cam[3]{ d[1], -d[0], -d[2] };  // original (x, y, z) --> (-y, x, z) camera convention
+    p.rot_.Apply(d_cam);
+    if (d_cam[2] < 0) {
+      xy[0] = -1;
+      xy[1] = -1;
+      continue;
+    }
+
+    d_cam[0] /= d_cam[2];
+    d_cam[1] /= d_cam[2];
+    xy[0] = static_cast<int>(d_cam[0] * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]);
+    xy[1] = static_cast<int>(d_cam[1] * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]);
+  }
 }
 
-void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy) {
+void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   // visible_range is ignored here
   auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
-
-  float az = std::atan2(-d[1], -d[0]);
-  float theta = math::kPi_2 - std::abs(std::asin(-d[2]));
-
-  // fov is ignored here
   float scale = short_res / 2.0f / std::sin(math::kPi_4);
-  float r = scale * std::abs(std::sin(theta / 2));
-  if (d[2] > 0) {
-    // Lower semisphere
-    xy[0] = static_cast<int>(r * std::cos(math::kPi_2 - az) + p.resolution_[0] / 2.0f + 0.5f + short_res / 2.0f);
-    xy[1] = static_cast<int>(r * std::sin(math::kPi_2 - az) + p.resolution_[1] / 2.0f + 0.5f);
-  } else {
-    // Upper semisphere
-    xy[0] = static_cast<int>(r * std::cos(math::kPi_2 + az) + p.resolution_[0] / 2.0f + 0.5f - short_res / 2.0f);
-    xy[1] = static_cast<int>(r * std::sin(math::kPi_2 + az) + p.resolution_[1] / 2.0f + 0.5f);
+
+  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
+    float az = std::atan2(-d[1], -d[0]);
+    float theta = math::kPi_2 - std::abs(std::asin(-d[2]));
+
+    // fov is ignored here
+    float r = scale * std::abs(std::sin(theta / 2));
+    if (d[2] > 0) {
+      // Lower semisphere
+      xy[0] = static_cast<int>(r * std::cos(math::kPi_2 - az) + p.resolution_[0] / 2.0f + 0.5f + short_res / 2.0f);
+      xy[1] = static_cast<int>(r * std::sin(math::kPi_2 - az) + p.resolution_[1] / 2.0f + 0.5f);
+    } else {
+      // Upper semisphere
+      xy[0] = static_cast<int>(r * std::cos(math::kPi_2 + az) + p.resolution_[0] / 2.0f + 0.5f - short_res / 2.0f);
+      xy[1] = static_cast<int>(r * std::sin(math::kPi_2 + az) + p.resolution_[1] / 2.0f + 0.5f);
+    }
   }
 }
 
@@ -165,16 +170,13 @@ void Renderer::Consume(const SimData& data) {
     filters.emplace_back(Filter::Create(f));
   }
 
-  int xy[2];
-  auto lens_proj = GetProjFunc(config_.lens_.type_);
-  LensProjParam proj_param{ config_.lens_.fov_,
-                            diag_pix_,
-                            rot_,
-                            config_.visible_,
-                            { config_.resolution_[0], config_.resolution_[1] },
-                            { config_.lens_shift_[0], config_.lens_shift_[1] } };
   const auto& crystals = data.crystals_;
 
+  std::unique_ptr<float[]> d_data{ new float[data.rays_.size_ * 3]{} };
+  std::unique_ptr<float[]> w_data{ new float[data.rays_.size_ * 1]{} };
+  std::unique_ptr<int[]> xy_data{ new int[data.rays_.size_ * 2]{} };
+
+  size_t filtered_ray_num = 0;
   for (size_t i = 0; i < data.rays_.size_; i++) {
     const auto& r = data.rays_[i];
     // Filter current ray
@@ -190,12 +192,31 @@ void Renderer::Consume(const SimData& data) {
 
     // Do rendering
     LOG_DEBUG("render ray: %.4f,%.4f,%.4f,%.4f", r.d_[0], r.d_[1], r.d_[2], r.w_);
-    lens_proj(proj_param, r.d_, xy);
-    if (xy[0] < 0 || xy[0] >= config_.resolution_[0] || xy[1] < 0 || xy[1] >= config_.resolution_[1]) {
+    std::memcpy(d_data.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
+    w_data[filtered_ray_num] = r.w_;
+    filtered_ray_num++;
+  }
+
+  auto lens_proj = GetProjFunc(config_.lens_.type_);
+  LensProjParam proj_param{ config_.lens_.fov_,
+                            diag_pix_,
+                            rot_,
+                            config_.visible_,
+                            { config_.resolution_[0], config_.resolution_[1] },
+                            { config_.lens_shift_[0], config_.lens_shift_[1] } };
+  lens_proj(proj_param, d_data.get(), xy_data.get(), filtered_ray_num);
+
+  size_t final_ray_num = 0;
+  for (size_t i = 0; i < filtered_ray_num; i++) {
+    if (xy_data[i * 2 + 0] < 0 || xy_data[i * 2 + 0] >= config_.resolution_[0] ||  //
+        xy_data[i * 2 + 1] < 0 || xy_data[i * 2 + 1] >= config_.resolution_[1]) {
       continue;
     }
-    SpectrumToXyz(data.curr_wl_, &r.w_, internal_xyz_.get() + (xy[1] * config_.resolution_[0] + xy[0]) * 3);
+    xy_data[final_ray_num] = xy_data[i * 2 + 1] * config_.resolution_[0] + xy_data[i * 2 + 0];
+    w_data[final_ray_num] = w_data[i];
+    final_ray_num++;
   }
+  SpectrumToXyz(data.curr_wl_, w_data.get(), xy_data.get(), internal_xyz_.get(), final_ray_num);
   total_intensity_ += data.total_intensity_;
   LOG_DEBUG("renderer wl: %zu", internal_data_.size());
 }
