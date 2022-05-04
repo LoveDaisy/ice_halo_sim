@@ -25,8 +25,7 @@ class Renderer : public IConsume {
   Rotation rot_;  // from world to camera
   float diag_pix_ = 0;
   float total_intensity_ = 0;
-  std::map<int, std::unique_ptr<float[]>> internal_data_;  // (wl, data)
-
+  std::unique_ptr<float[]> internal_xyz_;
   std::unique_ptr<uint8_t[]> image_buffer_;
 };
 

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <functional>
 #include <map>
 #include <memory>
@@ -18,6 +19,32 @@
 
 namespace icehalo {
 namespace v3 {
+
+// =============== Color transforms ===============
+// Convert linear rgb to sRGB
+void SrgbGamma(float* rgb, size_t num) {
+  for (size_t i = 0; i < num; i++) {
+    if (rgb[i] < 0.0031308) {
+      rgb[i] *= 12.92f;
+    } else {
+      rgb[i] = 1.055f * std::pow(rgb[i], 1.0f / 2.4f) - 0.055f;
+    }
+  }
+}
+
+void SpectrumToXyz(float wl, const float* v, float* xyz, size_t num = 1) {
+  int wl_key = static_cast<int>(wl + 0.5f);
+  if (wl_key < kMinWavelength || wl_key > kMaxWavelength) {
+    return;
+  }
+
+  for (size_t i = 0; i < num; i++) {
+    xyz[i * 3 + 0] += kCmfX[wl_key - kMinWavelength] * v[i];
+    xyz[i * 3 + 1] += kCmfY[wl_key - kMinWavelength] * v[i];
+    xyz[i * 3 + 2] += kCmfZ[wl_key - kMinWavelength] * v[i];
+  }
+}
+
 
 // =============== Lens projections ===============
 struct LensProjParam {
@@ -86,20 +113,11 @@ ProjFunc GetProjFunc(LensParam::LensType type) {
 }
 
 
-void SrgbGamma(float* linear_rgb, size_t num) {
-  for (size_t i = 0; i < num; i++) {
-    if (linear_rgb[i] < 0.0031308) {
-      linear_rgb[i] *= 12.92f;
-    } else {
-      linear_rgb[i] = static_cast<float>(1.055 * std::pow(linear_rgb[i], 1.0 / 2.4) - 0.055);
-    }
-  }
-}
-
 // =============== Renderer ===============
 Renderer::Renderer(RenderConfig config)
     : config_(config), diag_pix_(std::sqrt(config.resolution_[0] * config.resolution_[0] +
                                            config.resolution_[1] * config.resolution_[1])),
+      internal_xyz_(new float[config.resolution_[0] * config.resolution_[1] * 3]{}),
       image_buffer_(new uint8_t[config.resolution_[0] * config.resolution_[1] * 3]{}) {
   float ax_z[3]{ 0, 0, 1 };
   float ax_y[3]{ 0, 1, 0 };
@@ -147,13 +165,6 @@ void Renderer::Consume(const SimData& data) {
     filters.emplace_back(Filter::Create(f));
   }
 
-  int wl_key = static_cast<int>(data.curr_wl_);
-  if (!internal_data_.count(wl_key)) {
-    int total_pix = config_.resolution_[0] * config_.resolution_[1];
-    internal_data_.emplace(wl_key, std::unique_ptr<float[]>{ new float[total_pix]{} });
-  }
-  float* curr_data = internal_data_.at(wl_key).get();
-
   int xy[2];
   auto lens_proj = GetProjFunc(config_.lens_.type_);
   LensProjParam proj_param{ config_.lens_.fov_,
@@ -183,7 +194,7 @@ void Renderer::Consume(const SimData& data) {
     if (xy[0] < 0 || xy[0] >= config_.resolution_[0] || xy[1] < 0 || xy[1] >= config_.resolution_[1]) {
       continue;
     }
-    curr_data[xy[1] * config_.resolution_[0] + xy[0]] += r.w_;
+    SpectrumToXyz(data.curr_wl_, &r.w_, internal_xyz_.get() + (xy[1] * config_.resolution_[0] + xy[0]) * 3);
   }
   total_intensity_ += data.total_intensity_;
   LOG_DEBUG("renderer wl: %zu", internal_data_.size());
@@ -192,18 +203,9 @@ void Renderer::Consume(const SimData& data) {
 Result Renderer::GetResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::unique_ptr<float[]> float_data{ new float[total_pix * 3]{} };
-  for (const auto& [wl, data] : internal_data_) {
-    if (wl < kMinWavelength || wl > kMaxWavelength) {
-      continue;
-    }
-    for (int i = 0; i < total_pix; i++) {
-      // Step 1. Spectrum to XYZ
-      float* xyz = float_data.get() + i * 3;
-      float v = data[i] * config_.intensity_factor_ / total_intensity_ * 1e5;  // TODO: determine the scale factor
-      xyz[0] += kCmfX[wl - kMinWavelength] * v;
-      xyz[1] += kCmfY[wl - kMinWavelength] * v;
-      xyz[2] += kCmfZ[wl - kMinWavelength] * v;
-    }
+  std::memcpy(float_data.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
+  for (int i = 0; i < total_pix * 3; i++) {
+    float_data[i] *= config_.intensity_factor_ / total_intensity_ * 1e5;
   }
 
   bool use_real_color = config_.ray_color_[0] < 0;
