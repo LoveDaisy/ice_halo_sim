@@ -380,12 +380,7 @@ void RayTriangleBW(const float* ray_pt, const float* ray_dir,  // input
 
   for (int i = 0; i < face_num; i++) {
     const float* tf = face_transform + i * 12;
-    p[0] = Dot3(ray_pt, tf + 0) + tf[3];
-    p[1] = Dot3(ray_pt, tf + 4) + tf[7];
     p[2] = Dot3(ray_pt, tf + 8) + tf[11];
-
-    d[0] = Dot3(ray_dir, tf + 0);
-    d[1] = Dot3(ray_dir, tf + 4);
     d[2] = Dot3(ray_dir, tf + 8);
 
     if (FloatEqualZero(d[2])) {
@@ -397,10 +392,16 @@ void RayTriangleBW(const float* ray_pt, const float* ray_dir,  // input
       continue;
     }
 
+    p[0] = Dot3(ray_pt, tf + 0) + tf[3];
+    d[0] = Dot3(ray_dir, tf + 0);
+
     auto u = p[0] + t * d[0];
     if (u < -math::kFloatEps || u > 1.0f) {
       continue;  // out of this triangle
     }
+
+    p[1] = Dot3(ray_pt, tf + 4) + tf[7];
+    d[1] = Dot3(ray_dir, tf + 4);
 
     auto v = p[1] + t * d[1];
     if (v < -math::kFloatEps || v > 1.0f) {
