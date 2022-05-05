@@ -1,6 +1,8 @@
 #include "include/log.hpp"
 
+#include <chrono>
 #include <cstdio>
+#include <ctime>
 #include <unordered_set>
 #include <utility>
 
@@ -285,6 +287,13 @@ void LogFormatter::EnableThreadId(bool enable) {
 
 const char* SimpleLogFormatter::Format(const LogMessage& message) {
   size_t offset = 0;
+  const auto tm = std::chrono::system_clock::to_time_t(message.time);
+  offset += std::strftime(buf_ + offset, kBufSize - offset, "%T.", std::localtime(&tm));
+
+  auto t_sec = std::chrono::floor<std::chrono::seconds>(message.time);
+  std::chrono::duration<double, std::milli> d_ms = message.time - t_sec;
+  offset += std::snprintf(buf_ + offset, kBufSize - offset, "%03d", static_cast<int>(d_ms.count()));
+
   const char* level_str = "";
   if (enable_severity_) {
     switch (message.level) {
