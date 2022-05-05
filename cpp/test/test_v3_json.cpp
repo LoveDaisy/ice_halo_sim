@@ -161,7 +161,7 @@ TEST_F(V3TestJson, Filter_Raypath) {
 }
 
 TEST_F(V3TestJson, Filter_EntryExit) {
-  const auto& j_filter = config_json_.at("filter")[2];
+  const auto& j_filter = config_json_.at("filter")[3];
   auto f = j_filter.get<v3::FilterConfig>();
 
   ASSERT_EQ(f.id_, 4);
@@ -176,7 +176,7 @@ TEST_F(V3TestJson, Filter_EntryExit) {
 }
 
 TEST_F(V3TestJson, Filter_Direction) {
-  const auto& j_filter = config_json_.at("filter")[3];
+  const auto& j_filter = config_json_.at("filter")[4];
   auto f = j_filter.get<v3::FilterConfig>();
 
   ASSERT_EQ(f.id_, 5);
@@ -192,7 +192,7 @@ TEST_F(V3TestJson, Filter_Direction) {
 }
 
 TEST_F(V3TestJson, Filter_Crystal) {
-  const auto& j_filter = config_json_.at("filter")[4];
+  const auto& j_filter = config_json_.at("filter")[5];
   auto f = j_filter.get<v3::FilterConfig>();
 
   ASSERT_EQ(f.id_, 6);

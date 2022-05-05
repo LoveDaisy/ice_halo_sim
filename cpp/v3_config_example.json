@@ -52,7 +52,7 @@
         "zenith": {
           "type": "gauss",
           "mean": 90,
-          "std": 1
+          "std": 0.3
         },
         "roll": {
           "type": "uniform",
@@ -133,6 +133,20 @@
       "axis": {
         "zenith": 0
       }
+    },
+    {
+      "id": 6,
+      "type": "prism",
+      "shape": {
+        "height": 0.3
+      },
+      "axis": {
+        "zenith": {
+          "type": "gauss",
+          "mean": 0,
+          "std": 0.8
+        }
+      }
     }
   ],
   "filter": [
@@ -144,6 +158,12 @@
       "id": 2,
       "type": "raypath",
       "raypath": [3, 1, 5, 7, 4],
+      "symmetry": "PBD"
+    },
+    {
+      "id": 3,
+      "type": "raypath",
+      "raypath": [3, 5],
       "symmetry": "PBD"
     },
     {
@@ -193,7 +213,9 @@
       "max_hits": 7,
       "scattering": [
         {
-          "crystal": 3
+          "crystal": [3, 6],
+          "proportion": [100, 30],
+          "filter": [3, 3]
         }
       ]
     },
