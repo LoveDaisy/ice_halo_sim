@@ -239,26 +239,20 @@ void ServerImpl::GenerateScene() {
     auto ray_num = proj_config.scene_.ray_num_;
     size_t committed_num = 0;
     while (ray_num == kInfSize || committed_num < ray_num) {
-      const auto& wls = proj_config.scene_.light_source_.wl_param_;
-      for (const auto& wl_param : wls) {
-        auto curr_scene = proj_config.scene_;
-        curr_scene.ray_num_ = std::min(kDefaultRayNum, ray_num - committed_num);
-        curr_scene.light_source_.wl_param_.clear();
-        curr_scene.light_source_.wl_param_.emplace_back(wl_param);
-        scene_queue_->Emplace(curr_scene);
-        sim_scene_cnt_++;
+      auto curr_scene = proj_config.scene_;
+      curr_scene.ray_num_ = std::min(kDefaultRayNum, ray_num - committed_num);
+      scene_queue_->Emplace(curr_scene);
+      sim_scene_cnt_++;
 
-        LOG_DEBUG("ServerImpl::GenerateScene: put a scene(%u): ray(%zu/%zu, %zu), wl(%.1f,%.2f)", curr_scene.id_,
-                  curr_scene.ray_num_, ray_num, committed_num, wl_param.wl_, wl_param.weight_);
-        CHECK_STOP
+      LOG_DEBUG("ServerImpl::GenerateScene: put a scene(%u): ray(%zu/%zu, %zu)", curr_scene.id_, curr_scene.ray_num_,
+                ray_num, committed_num);
+      CHECK_STOP
 
-        if (sim_scene_cnt_ >= kMaxSceneCnt) {
-          LOG_DEBUG("ServerImpl::GenerateScene: too many scenes generated. wait for consumer");
-          std::unique_lock<std::mutex> lock(scene_mutex_);
-          scene_cv_.wait(lock, [=]() { return stop_ || sim_scene_cnt_ < kMaxSceneCnt; });
-          LOG_DEBUG("ServerImpl::GenerateScene: continue to generate scenes.");
-        }
-        CHECK_STOP
+      if (sim_scene_cnt_ >= kMaxSceneCnt) {
+        LOG_DEBUG("ServerImpl::GenerateScene: too many scenes generated. wait for consumer");
+        std::unique_lock<std::mutex> lock(scene_mutex_);
+        scene_cv_.wait(lock, [=]() { return stop_ || sim_scene_cnt_ < kMaxSceneCnt; });
+        LOG_DEBUG("ServerImpl::GenerateScene: continue to generate scenes.");
       }
       CHECK_STOP
       committed_num += kDefaultRayNum;

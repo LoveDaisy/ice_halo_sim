@@ -62,18 +62,16 @@ struct RayDirSampler {
 /**
  * @brief Set initial value of d & w (direction and intensity) for rays.
  */
-void InitRay_d_w_previdx(const LightSourceConfig& light_config, size_t ray_num,  // input
-                         RayBuffer* ray_buf_ptr) {                               // output
+void InitRay_d_w_previdx(const LightSourceParam& light_param, const WlParam& wl_param, size_t ray_num,  // input
+                         RayBuffer* ray_buf_ptr) {                                                      // output
   if (!ray_buf_ptr) {
     return;
   }
   const auto& ray_buf = *ray_buf_ptr;
-  const auto& light_param = light_config.param_;
-  float w0 = light_config.wl_param_[0].weight_;
 
   // w, prev_ray_idx: set init weight & previous ray index
   for (auto& r : ray_buf) {
-    r.w_ = w0;
+    r.w_ = wl_param.weight_;
     r.prev_ray_idx_ = kInfSize;
   }
 
@@ -82,15 +80,15 @@ void InitRay_d_w_previdx(const LightSourceConfig& light_config, size_t ray_num, 
 }
 
 
-void InitRayFirstMs(const LightSourceConfig& light_source, size_t curr_ray_num,  // input
-                    const Crystal& curr_crystal, size_t curr_crystal_id,         // input
-                    RayBuffer buffer_data[2], RayBuffer& all_data) {             // output
+void InitRayFirstMs(const LightSourceParam& light_param, const WlParam& wl_param, size_t curr_ray_num,  // input
+                    const Crystal& curr_crystal, size_t curr_crystal_id,                                // input
+                    RayBuffer buffer_data[2], RayBuffer& all_data) {                                    // output
   buffer_data[0].size_ = 0;
   size_t all_data_idx = all_data.size_;
 
   // 1.1 init d & w & (prev_ray_idx)
   buffer_data[0].size_ = curr_ray_num;
-  InitRay_d_w_previdx(light_source, curr_ray_num, buffer_data + 0);
+  InitRay_d_w_previdx(light_param, wl_param, curr_ray_num, buffer_data + 0);
 
   // 1.2 init p & fid
   InitRay_p_fid(curr_crystal, buffer_data + 0);
@@ -356,103 +354,107 @@ void Simulator::Run() {
     }
     CHECK_STOP
 
-    LOG_DEBUG("Simulator::Run: get config(%u): ray(%zu), wl(%.1f,%.2f)", config.id_, config.ray_num_,
-              config.light_source_.wl_param_[0].wl_, config.light_source_.wl_param_[0].weight_);
-
-    idle_ = false;
     size_t curr_rng_seed = std::chrono::system_clock::now().time_since_epoch().count() ^
                            (std::hash<std::thread::id>{}(std::this_thread::get_id()));
-    rng_.SetSeed(curr_rng_seed);
 
-    float wl = config.light_source_.wl_param_[0].wl_;  // Take first wl **ONLY**. Single wl in a single run.
+    idle_ = false;
+    for (const auto& curr_wl_param : config.light_source_.wl_param_) {
+      LOG_DEBUG("Simulator::Run: get config(%u): ray(%zu), wl(%.1f,%.2f)",  //
+                config.id_, config.ray_num_, curr_wl_param.wl_, curr_wl_param.weight_);
 
-    // For memory saving, it's better to keep ray_num small.
-    // Actually, if ms_prob = 1.0, i.e. all outgoing rays will be sent to next crystal,
-    // then the final ray number for init_data will be (num0 * (max_hits + 1)^ms_num),
-    // which increase rapidily.
-    size_t ray_num = config.ray_num_;
+      rng_.SetSeed(curr_rng_seed);
+      float wl = curr_wl_param.wl_;  // Take first wl **ONLY**. Single wl in a single run.
 
-    RayBuffer all_data = AllocateAllData(config);
-    RayBuffer init_data[2]{ RayBuffer(), RayBuffer(ray_num * config.max_hits_) };
-    RayBuffer buffer_data[2]{};
+      // For memory saving, it's better to keep ray_num small.
+      // Actually, if ms_prob = 1.0, i.e. all outgoing rays will be sent to next crystal,
+      // then the final ray number for init_data will be (num0 * (max_hits + 1)^ms_num),
+      // which increase rapidily.
+      size_t ray_num = config.ray_num_;
 
-    std::vector<Crystal> all_crystals;
+      RayBuffer all_data = AllocateAllData(config);
+      RayBuffer init_data[2]{ RayBuffer(), RayBuffer(ray_num * config.max_hits_) };
+      RayBuffer buffer_data[2]{};
 
-    bool first_ms = true;
-    for (const auto& m : config.ms_) {
-      auto ms_crystal_cnt = m.setting_.size();
-      auto crystal_ray_num = PartitionCrystalRayNum(rng_, m, ray_num);
+      std::vector<Crystal> all_crystals;
 
-      // NOTE: ray_num will change between scatterings.
-      buffer_data[0].Reset(ray_num * 2);
-      buffer_data[1].Reset(ray_num * 2);
+      bool first_ms = true;
+      for (const auto& m : config.ms_) {
+        auto ms_crystal_cnt = m.setting_.size();
+        auto crystal_ray_num = PartitionCrystalRayNum(rng_, m, ray_num);
 
-      size_t init_ray_offset = 0;
-      for (size_t ci = 0; ci < ms_crystal_cnt; ci++) {
-        const auto& s = m.setting_[ci];
-        auto curr_ray_num = crystal_ray_num[ci];
+        // NOTE: ray_num will change between scatterings.
+        buffer_data[0].Reset(ray_num * 2);
+        buffer_data[1].Reset(ray_num * 2);
 
-        size_t curr_crystal_id = all_crystals.size();
-        all_crystals.emplace_back(SampleCrystal(rng_, s.crystal_));
-        const auto& curr_crystal = all_crystals.back();
+        size_t init_ray_offset = 0;
+        for (size_t ci = 0; ci < ms_crystal_cnt; ci++) {
+          const auto& s = m.setting_[ci];
+          auto curr_ray_num = crystal_ray_num[ci];
 
-        float refractive_index = curr_crystal.GetRefractiveIndex(wl);
+          size_t curr_crystal_id = all_crystals.size();
+          all_crystals.emplace_back(SampleCrystal(rng_, s.crystal_));
+          const auto& curr_crystal = all_crystals.back();
 
-        // 1. Initialize data
-        if (first_ms) {
-          InitRayFirstMs(config.light_source_, curr_ray_num, curr_crystal, curr_crystal_id,  // input
-                         buffer_data, all_data);                                             // output
-        } else {
-          InitRayOtherMs(init_data, curr_ray_num, curr_crystal, curr_crystal_id,  // input
-                         buffer_data, all_data, init_ray_offset);                 // output
+          float refractive_index = curr_crystal.GetRefractiveIndex(wl);
+
+          // 1. Initialize data
+          if (first_ms) {
+            InitRayFirstMs(config.light_source_.param_, curr_wl_param, curr_ray_num,  // input
+                           curr_crystal, curr_crystal_id,                             // input
+                           buffer_data, all_data);                                    // output
+          } else {
+            InitRayOtherMs(init_data, curr_ray_num, curr_crystal, curr_crystal_id,  // input
+                           buffer_data, all_data, init_ray_offset);                 // output
+          }
+
+          // 2. Start tracing
+          for (size_t i = 0; i < config.max_hits_; i++) {
+            // 2.1 Trace rays. Deal with d, p, w, fid
+            TraceRayBasicInfo(curr_crystal, refractive_index, curr_ray_num,  // input
+                              buffer_data);                                  // output
+            // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
+
+            // 2.2 Fill some information: crystal_id, rp, prev_ray_idx, root_ray_idx
+            FillRayOtherInfo(curr_ray_num, i, curr_crystal, curr_crystal_id, all_data,  // input
+                             buffer_data);                                              // output
+
+            // 2.3 Collect data. And set ray properties: state
+            auto filter = Filter::Create(s.filter_);
+            filter->InitCrystalSymmetry(curr_crystal);
+            CollectData(rng_, m, filter.get(),    // input
+                        buffer_data, init_data);  // output
+
+            // 2.4 Copy to all_data
+            all_data.EmplaceBack(buffer_data[1]);
+            CHECK_STOP
+          }  // hit loop
+          CHECK_STOP
+        }  // crystal loop
+        CHECK_STOP
+
+        ray_num = init_data[1].size_;
+        init_data[0].Reset(ray_num * (config.max_hits_ + 1));
+        std::swap(init_data[0], init_data[1]);
+
+        // Shuffle init_data
+        for (size_t i = 0; i < init_data[0].size_; i++) {
+          size_t j = static_cast<size_t>(rng_.GetUniform() * (init_data[0].size_ - i)) + i;
+          std::swap(init_data[0][i], init_data[0][j]);
         }
 
-        // 2. Start tracing
-        for (size_t i = 0; i < config.max_hits_; i++) {
-          // 2.1 Trace rays. Deal with d, p, w, fid
-          TraceRayBasicInfo(curr_crystal, refractive_index, curr_ray_num,  // input
-                            buffer_data);                                  // output
-          // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
-
-          // 2.2 Fill some information: crystal_id, rp, prev_ray_idx, root_ray_idx
-          FillRayOtherInfo(curr_ray_num, i, curr_crystal, curr_crystal_id, all_data,  // input
-                           buffer_data);                                              // output
-
-          // 2.3 Collect data. And set ray properties: state
-          auto filter = Filter::Create(s.filter_);
-          filter->InitCrystalSymmetry(curr_crystal);
-          CollectData(rng_, m, filter.get(),    // input
-                      buffer_data, init_data);  // output
-
-          // 2.4 Copy to all_data
-          all_data.EmplaceBack(buffer_data[1]);
-          CHECK_STOP
-        }  // hit loop
-        CHECK_STOP
-      }  // crystal loop
+        first_ms = false;
+      }  // ms loop
       CHECK_STOP
 
-      ray_num = init_data[1].size_;
-      init_data[0].Reset(ray_num * (config.max_hits_ + 1));
-      std::swap(init_data[0], init_data[1]);
+      SimData sim_data;
+      sim_data.curr_wl_ = wl;
+      sim_data.total_intensity_ = curr_wl_param.weight_ * config.ray_num_;
+      sim_data.crystals_ = std::move(all_crystals);
+      sim_data.rays_ = std::move(all_data);
+      data_queue_->Emplace(std::move(sim_data));
 
-      // Shuffle init_data
-      for (size_t i = 0; i < init_data[0].size_; i++) {
-        size_t j = static_cast<size_t>(rng_.GetUniform() * (init_data[0].size_ - i)) + i;
-        std::swap(init_data[0][i], init_data[0][j]);
-      }
-
-      first_ms = false;
-    }  // ms loop
-    CHECK_STOP
-
-    SimData sim_data;
-    sim_data.curr_wl_ = wl;
-    sim_data.total_intensity_ = config.light_source_.wl_param_[0].weight_ * config.ray_num_;
-    sim_data.crystals_ = std::move(all_crystals);
-    sim_data.rays_ = std::move(all_data);
-    data_queue_->Emplace(std::move(sim_data));
-
+      CHECK_STOP
+    }  // wl_param loop
     CHECK_STOP
     idle_ = true;
   }
