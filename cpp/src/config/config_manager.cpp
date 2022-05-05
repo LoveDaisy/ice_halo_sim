@@ -91,8 +91,8 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
 
   if (j_render.contains("filter")) {
     for (const auto& j_filter : j_render.at("filter")) {
-      if (auto id = j_filter.get<IdType>() > 0) {
-        render.ms_filter_.emplace_back(m.filters_.at(id));
+      if (auto id = j_filter.get<int>(); id >= 0) {
+        render.ms_filter_.emplace_back(m.filters_.at(static_cast<IdType>(id)));
       } else {
         FilterConfig none_filter;
         none_filter.id_ = kInvalidId;

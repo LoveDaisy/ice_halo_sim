@@ -488,7 +488,7 @@ class CrystalFilter : public Filter {
   CrystalFilter(IdType crystal_id) : crystal_id_(crystal_id){};
 
  protected:
-  bool InternalCheck(const RaySeg& ray) const override { return ray.crystal_id_ == crystal_id_; }
+  bool InternalCheck(const RaySeg& ray) const override { return ray.crystal_config_id_ == crystal_id_; }
 
  private:
   IdType crystal_id_;

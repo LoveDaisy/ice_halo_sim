@@ -84,6 +84,7 @@ void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, siz
                         RayBuffer buffer_data[2]) {                                                // output
   for (auto& r : buffer_data[0]) {
     r.crystal_id_ = curr_crystal_id;
+    r.crystal_config_id_ = curr_crystal.config_id_;
     r.root_ray_idx_ = all_data_idx++;
     r.state_ = RaySeg::kNormal;
     r.rp_.Clear();
@@ -126,7 +127,7 @@ void InitRayOtherMs(const RayBuffer init_data[2], size_t curr_ray_num,          
   // 1.2 init p & fid
   InitRay_p_fid(curr_crystal, buffer_data + 0);
 
-  // 1.3 init crystal_id, root_ray_idx, rp, state
+  // 1.3 init crystal_id, crystal_config_id, root_ray_idx, rp, state
   InitRay_other_info(curr_crystal, curr_crystal_id, all_data.size_, buffer_data);
 
   all_data.EmplaceBack(buffer_data[0]);
@@ -151,6 +152,7 @@ struct CrystalMaker {
 
 Crystal SampleCrystal(RandomNumberGenerator& rng, const CrystalConfig& crystal_config) {
   auto crystal = std::visit(CrystalMaker{ rng }, crystal_config.param_);
+  crystal.config_id_ = crystal_config.id_;
 
   float lon = rng.Get(crystal_config.axis_.azimuth_dist) * math::kDegreeToRad;
   float lat = rng.Get(crystal_config.axis_.latitude_dist) * math::kDegreeToRad;
@@ -270,6 +272,7 @@ void FillRayOtherInfo(size_t curr_ray_num, size_t i,                           /
     }
 
     r.crystal_id_ = all_data[r.prev_ray_idx_].crystal_id_;
+    r.crystal_config_id_ = all_data[r.prev_ray_idx_].crystal_config_id_;
     r.root_ray_idx_ = all_data[r.prev_ray_idx_].root_ray_idx_;
 
     LOG_DEBUG("hit loop ray p: %.6f,%.6f,%.6f,%zu", r.p_[0], r.p_[1], r.p_[2], i);
@@ -372,7 +375,7 @@ void Simulator::Run() {
       RayBuffer init_data[2]{ RayBuffer(), RayBuffer(ray_num * config.max_hits_) };
       RayBuffer buffer_data[2]{};
 
-      std::vector<Crystal> all_crystals;
+      std::vector<Crystal> all_crystals(16);
 
       bool first_ms = true;
       for (const auto& m : config.ms_) {

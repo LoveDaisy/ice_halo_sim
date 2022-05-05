@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "config/render_config.hpp"
+#include "core/filter.hpp"
 #include "server/consumer.hpp"
 
 namespace icehalo {
@@ -22,6 +23,7 @@ class Renderer : public IConsume {
 
  private:
   RenderConfig config_;
+  std::vector<FilterPtrU> filters_;
   Rotation rot_;  // from world to camera
   float diag_pix_ = 0;
   float total_intensity_ = 0;

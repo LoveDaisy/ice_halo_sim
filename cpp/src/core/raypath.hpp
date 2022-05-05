@@ -48,6 +48,7 @@ struct RaySeg {
   size_t prev_ray_idx_;
   size_t root_ray_idx_;
   IdType crystal_id_;
+  IdType crystal_config_id_;
   State state_;
   RaypathRecorder rp_;  // Raypath in **CURRENT** crystal.
 };

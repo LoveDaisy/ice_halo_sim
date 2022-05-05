@@ -63,6 +63,8 @@ class Crystal {
 
   float GetRefractiveIndex(float wl) const;
 
+  IdType config_id_ = kInvalidId;
+
  private:
   void ComputeCacheData();
 

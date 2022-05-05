@@ -1045,7 +1045,7 @@ Crystal::Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const in
 }
 
 Crystal::Crystal(const Crystal& other)
-    : mesh_(other.mesh_), origin_{ other.origin_[0], other.origin_[1], other.origin_[2] },
+    : config_id_(other.config_id_), mesh_(other.mesh_), origin_{ other.origin_[0], other.origin_[1], other.origin_[2] },
       cache_data_(new float[other.TotalFaces() * 31]{}), face_v_(cache_data_.get()),
       face_ev_(cache_data_.get() + other.TotalFaces() * 9), face_n_(cache_data_.get() + other.TotalFaces() * 15),
       face_area_(cache_data_.get() + other.TotalFaces() * 18),
@@ -1056,7 +1056,8 @@ Crystal::Crystal(const Crystal& other)
 }
 
 Crystal::Crystal(Crystal&& other)
-    : mesh_(std::move(other.mesh_)), origin_{ other.origin_[0], other.origin_[1], other.origin_[2] },
+    : config_id_(other.config_id_),
+      mesh_(std::move(other.mesh_)), origin_{ other.origin_[0], other.origin_[1], other.origin_[2] },
       cache_data_(std::move(other.cache_data_)), face_v_(cache_data_.get()),
       face_ev_(cache_data_.get() + mesh_.GetTriangleCnt() * 9),
       face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * 15),
@@ -1075,6 +1076,7 @@ Crystal& Crystal::operator=(const Crystal& other) {
     return *this;
   }
 
+  config_id_ = other.config_id_;
   mesh_ = other.mesh_;
   std::memcpy(origin_, other.origin_, 3 * sizeof(float));
 
@@ -1098,6 +1100,7 @@ Crystal& Crystal::operator=(Crystal&& other) {
     return *this;
   }
 
+  config_id_ = other.config_id_;
   mesh_ = std::move(other.mesh_);
   std::memcpy(origin_, other.origin_, 3 * sizeof(float));
 

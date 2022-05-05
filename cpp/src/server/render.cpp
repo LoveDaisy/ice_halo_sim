@@ -129,6 +129,10 @@ Renderer::Renderer(RenderConfig config)
   rot_.Chain({ ax_z, -config.view_.az_ * math::kDegreeToRad })
       .Chain({ ax_y, -(90.0f - config.view_.el_) * math::kDegreeToRad })
       .Chain({ ax_z, -config.view_.ro_ * math::kDegreeToRad });
+
+  for (const auto& f : config_.ms_filter_) {
+    filters_.emplace_back(Filter::Create(f));
+  }
 }
 
 
@@ -160,16 +164,11 @@ bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& f
     curr_idx = rays[root_idx].prev_ray_idx_;
     fit++;
   }
-  return filter_checked && curr_idx == kInvalidId;
+  return filter_checked && curr_idx == kInfSize;
 }
 
 
 void Renderer::Consume(const SimData& data) {
-  std::vector<FilterPtrU> filters;
-  for (const auto& f : config_.ms_filter_) {
-    filters.emplace_back(Filter::Create(f));
-  }
-
   const auto& crystals = data.crystals_;
 
   std::unique_ptr<float[]> d_data{ new float[data.rays_.size_ * 3]{} };
@@ -186,7 +185,7 @@ void Renderer::Consume(const SimData& data) {
     }
 
     // 2. then check every filter for every scattering
-    if (!FilterRay(data.rays_, i, filters, crystals)) {
+    if (!FilterRay(data.rays_, i, filters_, crystals)) {
       continue;
     }
 
