@@ -229,6 +229,8 @@ struct Distribution {
 
 class RandomNumberGenerator {
  public:
+  explicit RandomNumberGenerator(uint32_t seed);
+
   float GetGaussian();
   float GetUniform();
   float Get(Distribution dist);
@@ -237,8 +239,6 @@ class RandomNumberGenerator {
   static RandomNumberGenerator* GetInstance();
 
  private:
-  explicit RandomNumberGenerator(uint32_t seed);
-
   uint32_t seed_;
   std::mt19937 generator_;
   std::normal_distribution<float> gauss_dist_;

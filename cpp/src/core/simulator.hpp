@@ -1,10 +1,12 @@
 #ifndef CORE_SIMULATOR_H_
 #define CORE_SIMULATOR_H_
 
+#include <cstddef>
 #include <memory>
 
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/math.hpp"
 
 namespace icehalo {
 namespace v3 {
@@ -41,6 +43,9 @@ class Simulator {
   QueuePtrS<SimData> data_queue_;
   std::atomic_bool stop_;
   std::atomic_bool idle_;
+  
+  size_t default_seed_;
+  RandomNumberGenerator rng;
 };
 
 }  // namespace v3
