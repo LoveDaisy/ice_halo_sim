@@ -235,6 +235,7 @@ class RandomNumberGenerator {
   float GetUniform();
   float Get(Distribution dist);
   void Reset();
+  void SetSeed(uint32_t seed);
 
   static RandomNumberGenerator* GetInstance();
 

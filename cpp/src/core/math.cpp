@@ -915,6 +915,12 @@ void RandomNumberGenerator::Reset() {
 }
 
 
+void RandomNumberGenerator::SetSeed(uint32_t seed) {
+  seed_ = seed;
+  generator_.seed(seed_);
+}
+
+
 void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float* data, size_t num) {
   auto* rng = RandomNumberGenerator::GetInstance();
 

@@ -218,7 +218,6 @@ void Renderer::Consume(const SimData& data) {
   }
   SpectrumToXyz(data.curr_wl_, w_data.get(), xy_data.get(), internal_xyz_.get(), final_ray_num);
   total_intensity_ += data.total_intensity_;
-  LOG_DEBUG("renderer wl: %zu", internal_data_.size());
 }
 
 Result Renderer::GetResult() const {

@@ -44,8 +44,7 @@ class Simulator {
   std::atomic_bool stop_;
   std::atomic_bool idle_;
   
-  size_t default_seed_;
-  RandomNumberGenerator rng;
+  RandomNumberGenerator rng_;
 };
 
 }  // namespace v3

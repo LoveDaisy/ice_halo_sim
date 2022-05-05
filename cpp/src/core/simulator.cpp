@@ -4,6 +4,7 @@
 
 #include "core/buffer.hpp"
 #include "core/filter.hpp"
+#include "core/math.hpp"
 #include "core/optics.hpp"
 #include "include/log.hpp"
 #include "util/queue.hpp"
@@ -77,9 +78,10 @@ void InitRay_d_w_previdx(const LightSourceConfig& light_config, size_t ray_num, 
 
 
 struct CrystalMaker {
+  RandomNumberGenerator& rng_;
+
   Crystal operator()(const PrismCrystalParam& p) {
-    auto* rng = RandomNumberGenerator::GetInstance();
-    float h = rng->Get(p.h_);
+    float h = rng_.Get(p.h_);
     // TODO: face distance
     return Crystal::CreatePrism(h);
   }
@@ -91,16 +93,15 @@ struct CrystalMaker {
 };
 
 
-Crystal SampleCrystal(const CrystalConfig& crystal_config) {
-  auto crystal = std::visit(CrystalMaker{}, crystal_config.param_);
+Crystal SampleCrystal(RandomNumberGenerator& rng, const CrystalConfig& crystal_config) {
+  auto crystal = std::visit(CrystalMaker{ rng }, crystal_config.param_);
 
-  auto* rng = RandomNumberGenerator::GetInstance();
-  float lon = rng->Get(crystal_config.axis_.azimuth_dist) * math::kDegreeToRad;
-  float lat = rng->Get(crystal_config.axis_.latitude_dist) * math::kDegreeToRad;
+  float lon = rng.Get(crystal_config.axis_.azimuth_dist) * math::kDegreeToRad;
+  float lat = rng.Get(crystal_config.axis_.latitude_dist) * math::kDegreeToRad;
   if (lat > math::kPi_2) {
     lat = math::kPi - lat;
   }
-  float roll = rng->Get(crystal_config.axis_.roll_dist) * math::kDegreeToRad;
+  float roll = rng.Get(crystal_config.axis_.roll_dist) * math::kDegreeToRad;
   float axis[9]{ 1, 0, 0, 0, 1, 0, 0, 0, 1 };
   auto rot = Rotation(axis + 6, roll).Chain(axis + 3, math::kPi_2 - lat).Chain(axis + 6, lon);
   crystal.Rotate(rot);
@@ -110,7 +111,7 @@ Crystal SampleCrystal(const CrystalConfig& crystal_config) {
 }
 
 
-std::unique_ptr<size_t[]> PartitionCrystalRayNum(const MsInfo& ms_info, int ray_num) {
+std::unique_ptr<size_t[]> PartitionCrystalRayNum(RandomNumberGenerator& rng, const MsInfo& ms_info, int ray_num) {
   auto crystal_cnt = ms_info.setting_.size();
   std::unique_ptr<size_t[]> c_num{ new size_t[crystal_cnt]{} };
   std::unique_ptr<float[]> prob{ new float[crystal_cnt + 1]{} };
@@ -121,9 +122,8 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const MsInfo& ms_info, int ray_
     prob[ci] /= prob[crystal_cnt];
   }
 
-  auto* rng = RandomNumberGenerator::GetInstance();
   for (int i = 0; i < ray_num; i++) {
-    auto u = rng->GetUniform();
+    auto u = rng.GetUniform();
     for (size_t ci = 0; ci < crystal_cnt; ci++) {
       if (prob[ci] <= u && u < prob[ci + 1]) {
         c_num[ci]++;
@@ -169,9 +169,8 @@ void TraceRays(const Crystal& curr_crystal, float refractive_index, size_t curr_
   buffer_data[1].size_ = curr_ray_num * 2;
 }
 
-void CollectData(const MsInfo& ms_info, const Filter* filter,     // input
-                 RayBuffer* buffer_data, RayBuffer* init_data) {  // output
-  auto* rng = RandomNumberGenerator::GetInstance();
+void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter* filter,  // input
+                 RayBuffer* buffer_data, RayBuffer* init_data) {                           // output
   for (size_t j = 0; j < buffer_data[1].size_; j++) {
     auto& r = buffer_data[1][j];
     if (r.w_ < 0) {
@@ -182,7 +181,7 @@ void CollectData(const MsInfo& ms_info, const Filter* filter,     // input
       if (!filter->Check(r)) {
         // 1.1 Filter out. Marked as stopped.
         r.state_ = RaySeg::kStopped;
-      } else if (rng->GetUniform() < ms_info.prob_) {
+      } else if (rng.GetUniform() < ms_info.prob_) {
         // 1.2 Copy outgoing rays into initial data, with probability of p
         r.state_ = RaySeg::kContinue;
         init_data[1].EmplaceBack(r);
@@ -201,14 +200,18 @@ void CollectData(const MsInfo& ms_info, const Filter* filter,     // input
 
 Simulator::Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue)
     : config_queue_(config_queue), data_queue_(data_queue), stop_(false), idle_(true),
-      default_seed_(std::chrono::system_clock::now().time_since_epoch().count() ^
-                    (std::hash<std::thread::id>{}(std::this_thread::get_id()))),
-      rng(default_seed_) {}
+#ifdef RANDOM_SEED
+      rng_(std::chrono::system_clock::now().time_since_epoch().count() ^
+           (std::hash<std::thread::id>{}(std::this_thread::get_id())))
+#else
+      rng_(0)
+#endif
+{
+}
 
 Simulator::Simulator(Simulator&& other)
     : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
-      stop_(other.stop_.load()), idle_(other.idle_.load()), default_seed_(other.default_seed_),
-      rng(std::move(other.rng)) {}
+      stop_(other.stop_.load()), idle_(other.idle_.load()), rng_(std::move(other.rng_)) {}
 
 Simulator& Simulator::operator=(Simulator&& other) {
   if (this == &other) {
@@ -219,8 +222,7 @@ Simulator& Simulator::operator=(Simulator&& other) {
   data_queue_ = std::move(other.data_queue_);
   stop_ = other.stop_.load();
   idle_ = other.idle_.load();
-  default_seed_ = other.default_seed_;
-  rng = std::move(other.rng);
+  rng_ = std::move(other.rng_);
   return *this;
 }
 
@@ -245,6 +247,9 @@ void Simulator::Run() {
               config.light_source_.wl_param_[0].wl_, config.light_source_.wl_param_[0].weight_);
 
     idle_ = false;
+    size_t curr_rng_seed = std::chrono::system_clock::now().time_since_epoch().count() ^
+                           (std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    rng_.SetSeed(curr_rng_seed);
 
     float wl = config.light_source_.wl_param_[0].wl_;  // Take first wl **ONLY**. Single wl in a single run.
 
@@ -281,7 +286,7 @@ void Simulator::Run() {
     bool first_ms = true;
     for (const auto& m : config.ms_) {
       auto ms_crystal_cnt = m.setting_.size();
-      auto crystal_ray_num = PartitionCrystalRayNum(m, ray_num);
+      auto crystal_ray_num = PartitionCrystalRayNum(rng_, m, ray_num);
 
       // NOTE: ray_num will change between scatterings.
       buffer_data[0].Reset(ray_num * 2);
@@ -293,7 +298,7 @@ void Simulator::Run() {
         auto curr_ray_num = crystal_ray_num[ci];
 
         size_t curr_crystal_id = all_crystals.size();
-        all_crystals.emplace_back(SampleCrystal(s.crystal_));
+        all_crystals.emplace_back(SampleCrystal(rng_, s.crystal_));
         const auto& curr_crystal = all_crystals.back();
 
         float refractive_index = curr_crystal.GetRefractiveIndex(wl);
@@ -363,7 +368,7 @@ void Simulator::Run() {
           // 2.3 Collect data. And set ray properties: state
           auto filter = Filter::Create(s.filter_);
           filter->InitCrystalSymmetry(curr_crystal);
-          CollectData(m, filter.get(), buffer_data, init_data);
+          CollectData(rng_, m, filter.get(), buffer_data, init_data);
 
           // 2.4 Copy to all_data
           all_data.EmplaceBack(buffer_data[1]);
@@ -378,9 +383,8 @@ void Simulator::Run() {
       std::swap(init_data[0], init_data[1]);
 
       // Shuffle init_data
-      auto* rng = RandomNumberGenerator::GetInstance();
       for (size_t i = 0; i < init_data[0].size_; i++) {
-        size_t j = static_cast<size_t>(rng->GetUniform() * (init_data[0].size_ - i)) + i;
+        size_t j = static_cast<size_t>(rng_.GetUniform() * (init_data[0].size_ - i)) + i;
         std::swap(init_data[0][i], init_data[0][j]);
       }
 
