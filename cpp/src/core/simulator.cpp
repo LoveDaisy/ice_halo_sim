@@ -389,6 +389,7 @@ void Simulator::Run() {
         size_t init_ray_offset = 0;
         for (size_t ci = 0; ci < ms_crystal_cnt; ci++) {
           const auto& s = m.setting_[ci];
+          auto filter = Filter::Create(s.filter_);
 
           for (size_t cn = 0; cn < crystal_ray_num[ci]; cn += kSmallBatchRayNum) {
             size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - cn);
@@ -396,6 +397,7 @@ void Simulator::Run() {
             size_t curr_crystal_id = all_crystals.size();
             all_crystals.emplace_back(SampleCrystal(rng_, s.crystal_));
             const auto& curr_crystal = all_crystals.back();
+            filter->InitCrystalSymmetry(curr_crystal);
 
             // 1. Initialize data
             if (first_ms) {
@@ -420,8 +422,6 @@ void Simulator::Run() {
                                buffer_data);                             // output
 
               // 2.3 Collect data. And set ray properties: state
-              auto filter = Filter::Create(s.filter_);
-              filter->InitCrystalSymmetry(curr_crystal);
               CollectData(rng_, m, filter.get(),    // input
                           buffer_data, init_data);  // output
 

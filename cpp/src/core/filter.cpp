@@ -407,6 +407,7 @@ class RaypathFilter : public Filter {
   RaypathFilter(const std::vector<IdType>& rp) : rp_(rp) {}
 
   void InitCrystalSymmetry(const Crystal& crystal) override {
+    candidate_hash_.clear();
     auto expand_rp = crystal.ExpandRaypath(rp_, symmetry_);
     RaypathHash h;
     for (const auto& rp : expand_rp) {
