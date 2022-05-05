@@ -80,11 +80,24 @@ void InitRay_d_w_previdx(const LightSourceParam& light_param, const WlParam& wl_
 }
 
 
+void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, size_t all_data_idx,  // input
+                        RayBuffer buffer_data[2]) {                                                // output
+  for (auto& r : buffer_data[0]) {
+    r.crystal_id_ = curr_crystal_id;
+    r.root_ray_idx_ = all_data_idx++;
+    r.state_ = RaySeg::kNormal;
+    r.rp_ << curr_crystal.GetFn(r.fid_);
+
+    LOG_DEBUG("init ray d: %.6f,%.6f,%.6f", r.d_[0], r.d_[1], r.d_[2]);
+    LOG_DEBUG("init ray p: %.6f,%.6f,%.6f", r.p_[0], r.p_[1], r.p_[2]);
+  }
+}
+
+
 void InitRayFirstMs(const LightSourceParam& light_param, const WlParam& wl_param, size_t curr_ray_num,  // input
                     const Crystal& curr_crystal, size_t curr_crystal_id,                                // input
                     RayBuffer buffer_data[2], RayBuffer& all_data) {                                    // output
   buffer_data[0].size_ = 0;
-  size_t all_data_idx = all_data.size_;
 
   // 1.1 init d & w & (prev_ray_idx)
   buffer_data[0].size_ = curr_ray_num;
@@ -94,26 +107,18 @@ void InitRayFirstMs(const LightSourceParam& light_param, const WlParam& wl_param
   InitRay_p_fid(curr_crystal, buffer_data + 0);
 
   // 1.3 init crystal_id, root_ray_idx, rp, state
-  for (auto& r : buffer_data[0]) {
-    r.crystal_id_ = curr_crystal_id;
-    r.root_ray_idx_ = all_data_idx++;
-    r.state_ = RaySeg::kNormal;
-    r.rp_ << curr_crystal.GetFn(r.fid_);
-
-    LOG_DEBUG("init ray d: %.6f,%.6f,%.6f", r.d_[0], r.d_[1], r.d_[2]);
-    LOG_DEBUG("init ray p: %.6f,%.6f,%.6f", r.p_[0], r.p_[1], r.p_[2]);
-  }
+  InitRay_other_info(curr_crystal, curr_crystal_id, all_data.size_, buffer_data);
 
   all_data.EmplaceBack(buffer_data[0]);
 }
+
 
 void InitRayOtherMs(const RayBuffer init_data[2], size_t curr_ray_num,                         // input
                     const Crystal& curr_crystal, size_t curr_crystal_id,                       // input
                     RayBuffer buffer_data[2], RayBuffer& all_data, size_t& init_ray_offset) {  // output
   buffer_data[0].size_ = 0;
-  size_t all_data_idx = all_data.size_;
 
-  // 1.1 init d & w & (prev_ray_idx)
+  // 1.1 copy previous rays
   buffer_data[0].EmplaceBack(init_data[0], init_ray_offset, curr_ray_num);
   init_ray_offset += curr_ray_num;
 
@@ -121,15 +126,7 @@ void InitRayOtherMs(const RayBuffer init_data[2], size_t curr_ray_num,          
   InitRay_p_fid(curr_crystal, buffer_data + 0);
 
   // 1.3 init crystal_id, root_ray_idx, rp, state
-  for (auto& r : buffer_data[0]) {
-    r.crystal_id_ = curr_crystal_id;
-    r.root_ray_idx_ = all_data_idx++;
-    r.state_ = RaySeg::kNormal;
-    r.rp_ << curr_crystal.GetFn(r.fid_);
-
-    LOG_DEBUG("init ray d: %.6f,%.6f,%.6f", r.d_[0], r.d_[1], r.d_[2]);
-    LOG_DEBUG("init ray p: %.6f,%.6f,%.6f", r.p_[0], r.p_[1], r.p_[2]);
-  }
+  InitRay_other_info(curr_crystal, curr_crystal_id, all_data.size_, buffer_data);
 
   all_data.EmplaceBack(buffer_data[0]);
 }
@@ -253,16 +250,15 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
 }
 
 
-void FillRayOtherInfo(size_t curr_ray_num, size_t i,                                                   // input
-                      const Crystal& curr_crystal, size_t curr_crystal_id, const RayBuffer& all_data,  // input
-                      RayBuffer buffer_data[2]) {                                                      // output
+void FillRayOtherInfo(size_t curr_ray_num, size_t i,                           // input
+                      const Crystal& curr_crystal, const RayBuffer& all_data,  // input
+                      RayBuffer buffer_data[2]) {                              // output
   size_t ray_id_offset = all_data.size_;
   for (size_t j = 0; j < buffer_data[1].size_; j++) {
     auto& r = buffer_data[1][j];
     if (r.fid_ > 0) {
       r.rp_ << curr_crystal.GetFn(r.fid_);
     }
-    r.crystal_id_ = curr_crystal_id;
 
     if (i == 0) {
       r.prev_ray_idx_ = j / 2 + ray_id_offset - curr_ray_num;
@@ -272,6 +268,7 @@ void FillRayOtherInfo(size_t curr_ray_num, size_t i,                            
       r.prev_ray_idx_ = j / 2 * 2 + 0 + ray_id_offset - curr_ray_num * 2;
     }
 
+    r.crystal_id_ = all_data[r.prev_ray_idx_].crystal_id_;
     r.root_ray_idx_ = all_data[r.prev_ray_idx_].root_ray_idx_;
 
     LOG_DEBUG("hit loop ray p: %.6f,%.6f,%.6f,%zu", r.p_[0], r.p_[1], r.p_[2], i);
@@ -282,8 +279,7 @@ void FillRayOtherInfo(size_t curr_ray_num, size_t i,                            
 
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter* filter,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data) {                           // output
-  for (size_t j = 0; j < buffer_data[1].size_; j++) {
-    auto& r = buffer_data[1][j];
+  for (auto& r : buffer_data[1]) {
     if (r.w_ < 0) {
       // 0. Total reflection.
       r.state_ = RaySeg::kStopped;
@@ -390,15 +386,13 @@ void Simulator::Run() {
         for (size_t ci = 0; ci < ms_crystal_cnt; ci++) {
           const auto& s = m.setting_[ci];
 
-          size_t crystal_total_ray_num = 0;
-          while (crystal_total_ray_num < crystal_ray_num[ci]) {
-            size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - crystal_total_ray_num);
-            crystal_total_ray_num += curr_ray_num;
+          for (size_t cn = 0; cn < crystal_ray_num[ci]; /* see below */) {
+            size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - cn);
+            cn += curr_ray_num;
+
             size_t curr_crystal_id = all_crystals.size();
             all_crystals.emplace_back(SampleCrystal(rng_, s.crystal_));
             const auto& curr_crystal = all_crystals.back();
-
-            float refractive_index = curr_crystal.GetRefractiveIndex(wl);
 
             // 1. Initialize data
             if (first_ms) {
@@ -411,6 +405,7 @@ void Simulator::Run() {
             }
 
             // 2. Start tracing
+            float refractive_index = curr_crystal.GetRefractiveIndex(wl);
             for (size_t i = 0; i < config.max_hits_; i++) {
               // 2.1 Trace rays. Deal with d, p, w, fid
               TraceRayBasicInfo(curr_crystal, refractive_index, curr_ray_num,  // input
@@ -418,8 +413,8 @@ void Simulator::Run() {
               // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
 
               // 2.2 Fill some information: crystal_id, rp, prev_ray_idx, root_ray_idx
-              FillRayOtherInfo(curr_ray_num, i, curr_crystal, curr_crystal_id, all_data,  // input
-                               buffer_data);                                              // output
+              FillRayOtherInfo(curr_ray_num, i, curr_crystal, all_data,  // input
+                               buffer_data);                             // output
 
               // 2.3 Collect data. And set ray properties: state
               auto filter = Filter::Create(s.filter_);
@@ -431,7 +426,8 @@ void Simulator::Run() {
               all_data.EmplaceBack(buffer_data[1]);
               CHECK_STOP
             }  // hit loop
-          }
+            CHECK_STOP
+          }  // small batch loop
           CHECK_STOP
         }  // crystal loop
         CHECK_STOP

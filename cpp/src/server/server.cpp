@@ -41,7 +41,7 @@ class ServerImpl {
  private:
   static constexpr int kDefaultSimulatorCnt = 4;
   static constexpr int kMaxSceneCnt = 128;
-  static constexpr size_t kDefaultRayNum = 32;
+  static constexpr size_t kDefaultRayNum = 128;
 
   void ConsumeData();
   void GenerateScene();
