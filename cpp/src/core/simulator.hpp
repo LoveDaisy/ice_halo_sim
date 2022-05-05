@@ -39,11 +39,13 @@ class Simulator {
   bool IsIdle() const;
 
  private:
+  static constexpr size_t kSmallBatchRayNum = 16;
+
   QueuePtrS<SceneConfig> config_queue_;
   QueuePtrS<SimData> data_queue_;
   std::atomic_bool stop_;
   std::atomic_bool idle_;
-  
+
   RandomNumberGenerator rng_;
 };
 

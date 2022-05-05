@@ -389,45 +389,49 @@ void Simulator::Run() {
         size_t init_ray_offset = 0;
         for (size_t ci = 0; ci < ms_crystal_cnt; ci++) {
           const auto& s = m.setting_[ci];
-          auto curr_ray_num = crystal_ray_num[ci];
 
-          size_t curr_crystal_id = all_crystals.size();
-          all_crystals.emplace_back(SampleCrystal(rng_, s.crystal_));
-          const auto& curr_crystal = all_crystals.back();
+          size_t crystal_total_ray_num = 0;
+          while (crystal_total_ray_num < crystal_ray_num[ci]) {
+            size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - crystal_total_ray_num);
+            crystal_total_ray_num += curr_ray_num;
+            size_t curr_crystal_id = all_crystals.size();
+            all_crystals.emplace_back(SampleCrystal(rng_, s.crystal_));
+            const auto& curr_crystal = all_crystals.back();
 
-          float refractive_index = curr_crystal.GetRefractiveIndex(wl);
+            float refractive_index = curr_crystal.GetRefractiveIndex(wl);
 
-          // 1. Initialize data
-          if (first_ms) {
-            InitRayFirstMs(config.light_source_.param_, curr_wl_param, curr_ray_num,  // input
-                           curr_crystal, curr_crystal_id,                             // input
-                           buffer_data, all_data);                                    // output
-          } else {
-            InitRayOtherMs(init_data, curr_ray_num, curr_crystal, curr_crystal_id,  // input
-                           buffer_data, all_data, init_ray_offset);                 // output
+            // 1. Initialize data
+            if (first_ms) {
+              InitRayFirstMs(config.light_source_.param_, curr_wl_param, curr_ray_num,  // input
+                             curr_crystal, curr_crystal_id,                             // input
+                             buffer_data, all_data);                                    // output
+            } else {
+              InitRayOtherMs(init_data, curr_ray_num, curr_crystal, curr_crystal_id,  // input
+                             buffer_data, all_data, init_ray_offset);                 // output
+            }
+
+            // 2. Start tracing
+            for (size_t i = 0; i < config.max_hits_; i++) {
+              // 2.1 Trace rays. Deal with d, p, w, fid
+              TraceRayBasicInfo(curr_crystal, refractive_index, curr_ray_num,  // input
+                                buffer_data);                                  // output
+              // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
+
+              // 2.2 Fill some information: crystal_id, rp, prev_ray_idx, root_ray_idx
+              FillRayOtherInfo(curr_ray_num, i, curr_crystal, curr_crystal_id, all_data,  // input
+                               buffer_data);                                              // output
+
+              // 2.3 Collect data. And set ray properties: state
+              auto filter = Filter::Create(s.filter_);
+              filter->InitCrystalSymmetry(curr_crystal);
+              CollectData(rng_, m, filter.get(),    // input
+                          buffer_data, init_data);  // output
+
+              // 2.4 Copy to all_data
+              all_data.EmplaceBack(buffer_data[1]);
+              CHECK_STOP
+            }  // hit loop
           }
-
-          // 2. Start tracing
-          for (size_t i = 0; i < config.max_hits_; i++) {
-            // 2.1 Trace rays. Deal with d, p, w, fid
-            TraceRayBasicInfo(curr_crystal, refractive_index, curr_ray_num,  // input
-                              buffer_data);                                  // output
-            // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
-
-            // 2.2 Fill some information: crystal_id, rp, prev_ray_idx, root_ray_idx
-            FillRayOtherInfo(curr_ray_num, i, curr_crystal, curr_crystal_id, all_data,  // input
-                             buffer_data);                                              // output
-
-            // 2.3 Collect data. And set ray properties: state
-            auto filter = Filter::Create(s.filter_);
-            filter->InitCrystalSymmetry(curr_crystal);
-            CollectData(rng_, m, filter.get(),    // input
-                        buffer_data, init_data);  // output
-
-            // 2.4 Copy to all_data
-            all_data.EmplaceBack(buffer_data[1]);
-            CHECK_STOP
-          }  // hit loop
           CHECK_STOP
         }  // crystal loop
         CHECK_STOP
