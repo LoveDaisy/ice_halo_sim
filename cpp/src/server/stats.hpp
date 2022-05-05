@@ -16,6 +16,7 @@ class Stats : public IConsume {
 
  private:
   size_t total_rays_ = 0;
+  size_t total_crystals_ = 0;
 };
 
 }  // namespace v3

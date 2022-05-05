@@ -386,9 +386,8 @@ void Simulator::Run() {
         for (size_t ci = 0; ci < ms_crystal_cnt; ci++) {
           const auto& s = m.setting_[ci];
 
-          for (size_t cn = 0; cn < crystal_ray_num[ci]; /* see below */) {
+          for (size_t cn = 0; cn < crystal_ray_num[ci]; cn += kSmallBatchRayNum) {
             size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - cn);
-            cn += curr_ray_num;
 
             size_t curr_crystal_id = all_crystals.size();
             all_crystals.emplace_back(SampleCrystal(rng_, s.crystal_));

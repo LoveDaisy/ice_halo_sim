@@ -17,7 +17,9 @@ struct SimResultHandler {
     cv::cvtColor(mat, mat, cv::COLOR_RGB2BGR);
     cv::imwrite("img.jpg", mat);
   }
-  void operator()(const icehalo::v3::StatsResult& r) { LOG_INFO("total rays: %zu", r.total_ray_num_); }
+  void operator()(const icehalo::v3::StatsResult& r) {
+    LOG_INFO("total rays: %.2fM, crystals: %.2fM", r.total_ray_num_ * 1.0 / 1e6, r.total_crystal_num_ * 1.0 / 1e6);
+  }
 };
 
 

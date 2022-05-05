@@ -17,6 +17,7 @@ struct RenderResult {
 
 struct StatsResult {
   size_t total_ray_num_;
+  size_t total_crystal_num_;
 };
 
 using Result = std::variant<NoneResult, RenderResult, StatsResult>;

@@ -11,10 +11,11 @@ void Stats::Consume(const SimData& data) {
     idx_set.emplace(r.root_ray_idx_);
   }
   total_rays_ += idx_set.size();
+  total_crystals_ += data.crystals_.size();
 }
 
 Result Stats::GetResult() const {
-  return StatsResult{ total_rays_ };
+  return StatsResult{ total_rays_, total_crystals_ };
 }
 
 }  // namespace v3
