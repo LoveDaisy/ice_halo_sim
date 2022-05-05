@@ -1,6 +1,8 @@
 #ifndef CORE_RAYPATH_H_
 #define CORE_RAYPATH_H_
 
+#include <algorithm>
+#include <iterator>
 #include <vector>
 
 #include "core/def.hpp"
@@ -11,6 +13,11 @@ namespace v3 {
 struct RaypathRecorder {
   RaypathRecorder& operator<<(IdType fn);
   IdType operator[](size_t idx) const;
+
+  void Clear() {
+    size_ = 0;
+    std::fill(std::begin(recorder_), std::end(recorder_), 0);
+  }
 
   const uint8_t* begin() const { return recorder_ + 0; }
   const uint8_t* end() const { return recorder_ + size_; }

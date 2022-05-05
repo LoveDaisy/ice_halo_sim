@@ -164,7 +164,7 @@
       "id": 3,
       "type": "raypath",
       "raypath": [3, 5],
-      "symmetry": "PBD"
+      "symmetry": "P"
     },
     {
       "id": 4,

@@ -86,6 +86,7 @@ void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, siz
     r.crystal_id_ = curr_crystal_id;
     r.root_ray_idx_ = all_data_idx++;
     r.state_ = RaySeg::kNormal;
+    r.rp_.Clear();
     r.rp_ << curr_crystal.GetFn(r.fid_);
 
     LOG_DEBUG("init ray d: %.6f,%.6f,%.6f", r.d_[0], r.d_[1], r.d_[2]);

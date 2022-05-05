@@ -1303,7 +1303,7 @@ std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType
     return result;
   }
 
-  if (symmetry | FilterConfig::kSymP) {
+  if (symmetry & FilterConfig::kSymP) {
     for (int i = 1; i < fn_period_; i++) {
       std::vector<IdType> curr_rp{ rp };
       bool changed = false;
@@ -1327,7 +1327,7 @@ std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType
     }
   }
 
-  if (symmetry | FilterConfig::kSymD) {
+  if (symmetry & FilterConfig::kSymD) {
     auto size = result.size();
     for (size_t i = 0; i < size; i++) {
       auto curr_rp = result[i];
@@ -1358,7 +1358,7 @@ std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType
     }
   }
 
-  if (symmetry | FilterConfig::kSymB) {
+  if (symmetry & FilterConfig::kSymB) {
     auto size = result.size();
     for (size_t i = 0; i < size; i++) {
       auto curr_rp = result[i];
