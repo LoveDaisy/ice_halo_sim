@@ -18,7 +18,8 @@ struct SimResultHandler {
     cv::imwrite("img.jpg", mat);
   }
   void operator()(const icehalo::v3::StatsResult& r) {
-    LOG_INFO("total rays: %.2fM, crystals: %.2fM", r.total_ray_num_ * 1.0 / 1e6, r.total_crystal_num_ * 1.0 / 1e6);
+    LOG_INFO("sim rays: %.2fM, crystals: %.2fM",  //
+             r.sim_ray_num_ * 1.0 / 1e6, r.crystal_num_ * 1.0 / 1e6);
   }
 };
 

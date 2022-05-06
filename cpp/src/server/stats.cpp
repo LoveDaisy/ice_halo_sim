@@ -2,20 +2,23 @@
 
 #include <set>
 
+#include "core/def.hpp"
+
 namespace icehalo {
 namespace v3 {
 
 void Stats::Consume(const SimData& data) {
-  std::set<size_t> idx_set;
   for (const auto& r : data.rays_) {
-    idx_set.emplace(r.root_ray_idx_);
+    if (r.prev_ray_idx_ == kInfSize) {
+      sim_rays_++;
+    }
   }
-  total_rays_ += idx_set.size();
-  total_crystals_ += data.crystals_.size();
+  total_rays_ += data.rays_.size_;
+  crystals_ += data.crystals_.size();
 }
 
 Result Stats::GetResult() const {
-  return StatsResult{ total_rays_, total_crystals_ };
+  return StatsResult{ total_rays_, sim_rays_, crystals_ };
 }
 
 }  // namespace v3
