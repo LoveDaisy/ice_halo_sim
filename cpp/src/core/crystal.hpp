@@ -78,8 +78,8 @@ class Crystal {
   float* face_area_;      // area of every face. 1 * face_cnt
   float* face_coord_tf_;  // transform for barycentric coordinate. 12 * face_cnt
 
-  std::map<int, IdType> fn_map_;  // fid --> fn
-  int fn_period_;                 // for raypath symmetry
+  std::unique_ptr<IdType[]> fn_map_;  // fid --> fn
+  int fn_period_;                     // for raypath symmetry
 };
 
 }  // namespace v3

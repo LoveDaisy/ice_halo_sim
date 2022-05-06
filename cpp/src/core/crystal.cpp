@@ -1020,12 +1020,12 @@ Crystal Crystal::CreatePrism(float h) {
   auto c = Crystal(12, vtx.get(), 20, triangle_idx.get());
   c.fn_period_ = 6;
   for (int i = 0; i < 4; i++) {
-    c.fn_map_.emplace(i, 1);
-    c.fn_map_.emplace(i + 16, 2);
+    c.fn_map_[i] = 1;
+    c.fn_map_[i + 16] = 2;
   }
   for (int i = 0; i < 6; i++) {
-    c.fn_map_.emplace(i * 2 + 4, i + 3);
-    c.fn_map_.emplace(i * 2 + 5, i + 3);
+    c.fn_map_[i * 2 + 4] = i + 3;
+    c.fn_map_[i * 2 + 5] = i + 3;
   }
   return c;
 }
@@ -1036,7 +1036,7 @@ Crystal::Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const in
     : mesh_(vtx_cnt, triangle_cnt), origin_{}, cache_data_(new float[triangle_cnt * 31]{}), face_v_(cache_data_.get()),
       face_ev_(cache_data_.get() + triangle_cnt * 9), face_n_(cache_data_.get() + triangle_cnt * 15),
       face_area_(cache_data_.get() + triangle_cnt * 18), face_coord_tf_(cache_data_.get() + triangle_cnt * 19),
-      fn_period_(-1) {
+      fn_map_(new IdType[triangle_cnt]{}), fn_period_(-1) {
   mesh_.SetVtx(vtx);
   mesh_.SetTriangle(triangle_idx);
 
@@ -1049,10 +1049,11 @@ Crystal::Crystal(const Crystal& other)
       cache_data_(new float[other.TotalFaces() * 31]{}), face_v_(cache_data_.get()),
       face_ev_(cache_data_.get() + other.TotalFaces() * 9), face_n_(cache_data_.get() + other.TotalFaces() * 15),
       face_area_(cache_data_.get() + other.TotalFaces() * 18),
-      face_coord_tf_(cache_data_.get() + other.TotalFaces() * 19), fn_map_(other.fn_map_),
+      face_coord_tf_(cache_data_.get() + other.TotalFaces() * 19), fn_map_(new IdType[other.TotalFaces()]{}),
       fn_period_(other.fn_period_) {
   auto n = other.TotalFaces();
   std::memcpy(cache_data_.get(), other.cache_data_.get(), n * 31 * sizeof(float));
+  std::memcpy(fn_map_.get(), other.fn_map_.get(), n * sizeof(IdType));
 }
 
 Crystal::Crystal(Crystal&& other)
@@ -1087,10 +1088,11 @@ Crystal& Crystal::operator=(const Crystal& other) {
   face_n_ = cache_data_.get() + n * 15;
   face_area_ = cache_data_.get() + n * 18;
   face_coord_tf_ = cache_data_.get() + n * 19;
+  fn_map_.reset(new IdType[n]);
 
   std::memcpy(cache_data_.get(), other.cache_data_.get(), n * 31 * sizeof(float));
+  std::memcpy(fn_map_.get(), other.fn_map_.get(), n * sizeof(IdType));
 
-  fn_map_ = other.fn_map_;
   fn_period_ = other.fn_period_;
   return *this;
 }
@@ -1203,10 +1205,10 @@ const float* Crystal::GetOrigin() const {
 }
 
 IdType Crystal::GetFn(int fid) const {
-  if (fn_map_.count(fid)) {
-    return fn_map_.at(fid);
-  } else {
+  if (fid < 0 || fid >= static_cast<int>(mesh_.GetTriangleCnt())) {
     return kInvalidId;
+  } else {
+    return fn_map_[fid];
   }
 }
 
