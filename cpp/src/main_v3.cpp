@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <fstream>
 #include <opencv2/opencv.hpp>
 #include <thread>
@@ -11,12 +12,16 @@
 
 struct SimResultHandler {
   void operator()(const icehalo::v3::NoneResult& /* r */) { LOG_INFO("<NoneResult>"); }
+
   void operator()(const icehalo::v3::RenderResult& r) {
-    LOG_INFO("<RenderResult>: w = %d, h = %d, buffer = %p", r.img_width_, r.img_height_, r.img_buffer_);
+    LOG_INFO("Renderer %02d: w = %d, h = %d, buffer = %p", r.renderer_id_, r.img_width_, r.img_height_, r.img_buffer_);
+    char filename[32];
+    std::snprintf(filename, 32, "img_%02d.jpg", r.renderer_id_);
     cv::Mat mat(r.img_height_, r.img_width_, CV_8UC3, r.img_buffer_);
     cv::cvtColor(mat, mat, cv::COLOR_RGB2BGR);
-    cv::imwrite("img.jpg", mat);
+    cv::imwrite(filename, mat);
   }
+
   void operator()(const icehalo::v3::StatsResult& r) {
     LOG_INFO("sim rays: %.2fM, crystals: %.2fM",  //
              r.sim_ray_num_ * 1.0 / 1e6, r.crystal_num_ * 1.0 / 1e6);

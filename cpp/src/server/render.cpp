@@ -70,8 +70,8 @@ void LinearProject(const LensProjParam& p, const float* d, int* xy, size_t num =
       continue;
     }
 
-    float d_cam[3]{ d[1], -d[0], -d[2] };  // original (x, y, z) --> (-y, x, z) camera convention
-    p.rot_.Apply(d_cam);
+    float d_cam[3]{ -d[0], -d[1], -d[2] };
+    p.rot_.ApplyInverse(d_cam);
     if (d_cam[2] < 0) {
       xy[0] = -1;
       xy[1] = -1;
@@ -126,9 +126,9 @@ Renderer::Renderer(RenderConfig config)
       image_buffer_(new uint8_t[config.resolution_[0] * config.resolution_[1] * 3]{}) {
   float ax_z[3]{ 0, 0, 1 };
   float ax_y[3]{ 0, 1, 0 };
-  rot_.Chain({ ax_z, -config.view_.az_ * math::kDegreeToRad })
-      .Chain({ ax_y, -(90.0f - config.view_.el_) * math::kDegreeToRad })
-      .Chain({ ax_z, -config.view_.ro_ * math::kDegreeToRad });
+  rot_.Chain({ ax_z, (-90.0f + config.view_.ro_) * math::kDegreeToRad })
+      .Chain({ ax_y, (90.0f - config.view_.el_) * math::kDegreeToRad })
+      .Chain({ ax_z, config.view_.az_ * math::kDegreeToRad });
 
   for (const auto& f : config_.ms_filter_) {
     filters_.emplace_back(Filter::Create(f));
@@ -277,7 +277,7 @@ Result Renderer::GetResult() const {
   for (int i = 0; i < total_pix * 3; i++) {
     image_buffer_[i] = static_cast<uint8_t>(float_data[i] * 255);
   }
-  return RenderResult{ config_.resolution_[0], config_.resolution_[1], image_buffer_.get() };
+  return RenderResult{ config_.id_, config_.resolution_[0], config_.resolution_[1], image_buffer_.get() };
 }
 
 }  // namespace v3

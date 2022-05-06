@@ -10,6 +10,7 @@ namespace v3 {
 struct NoneResult {};
 
 struct RenderResult {
+  int renderer_id_;
   int img_width_;
   int img_height_;
   uint8_t* img_buffer_;

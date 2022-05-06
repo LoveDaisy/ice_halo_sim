@@ -159,8 +159,9 @@ SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager&
         if (i >= ms.setting_.size()) {
           break;
         }
-        IdType id = j_f.get<IdType>();
-        ms.setting_[i].filter_ = m.filters_.at(id);
+        if (auto id = j_f.get<int>(); id >= 0) {
+          ms.setting_[i].filter_ = m.filters_.at(id);
+        }
         i++;
       }
     }

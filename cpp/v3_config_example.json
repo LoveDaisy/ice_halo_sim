@@ -215,7 +215,7 @@
         {
           "crystal": [3, 6],
           "proportion": [100, 30],
-          "filter": [3, 3]
+          "filter": [-1, -1]
         }
       ]
     },
@@ -242,13 +242,13 @@
       "id": 1,
       "lens": {
         "type": "linear",
-        "f": 20
+        "f": 14
       },
       "resolution": [1920, 1080],
       "lens_shift": [0, 200],
       "view": {
-        "azimuth": 80,
-        "elevation": 30,
+        "azimuth": -10,
+        "elevation": 20,
         "roll": 0
       }
     },
@@ -298,7 +298,7 @@
     {
       "id": 1,
       "scene": 2,
-      "render": [2]
+      "render": [1, 2]
     }
   ]
 }

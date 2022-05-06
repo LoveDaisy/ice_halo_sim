@@ -24,7 +24,7 @@ class Renderer : public IConsume {
  private:
   RenderConfig config_;
   std::vector<FilterPtrU> filters_;
-  Rotation rot_;  // from world to camera
+  Rotation rot_;  // camera pose rotation
   float diag_pix_ = 0;
   float total_intensity_ = 0;
   std::unique_ptr<float[]> internal_xyz_;
