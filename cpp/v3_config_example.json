@@ -292,13 +292,24 @@
         "elevation": [],
         "outline": true
       }
+    },
+    {
+      "id": 4,
+      "lens": {
+        "type": "fisheye_equal_area",
+        "fov": 120
+      },
+      "resolution": [1920, 1080],
+      "view": {
+        "elevation": 30
+      }
     }
   ],
   "project": [
     {
       "id": 1,
       "scene": 2,
-      "render": [1, 2]
+      "render": [1, 2, 4]
     }
   ]
 }

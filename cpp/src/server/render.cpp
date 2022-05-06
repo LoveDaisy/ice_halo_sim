@@ -85,6 +85,33 @@ void LinearProject(const LensProjParam& p, const float* d, int* xy, size_t num =
   }
 }
 
+void FisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
+  float scale = p.diag_pix_ / 2.0f / std::sin(p.fov_ / 4.0f * math::kDegreeToRad);
+
+  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
+    if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
+        (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
+      xy[0] = -1;
+      xy[1] = -1;
+      continue;
+    }
+
+    float d_cam[3]{ -d[0], -d[1], -d[2] };
+    p.rot_.ApplyInverse(d_cam);
+    if (d_cam[2] < 0) {
+      xy[0] = -1;
+      xy[1] = -1;
+      continue;
+    }
+
+    float az = std::atan2(d_cam[1], d_cam[0]);
+    float theta = math::kPi_2 - std::asin(d_cam[2]);
+    float r = scale * std::sin(theta / 2.0f);
+    xy[0] = static_cast<int>(r * std::cos(az) + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]);
+    xy[1] = static_cast<int>(r * std::sin(az) + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]);
+  }
+}
+
 void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   // visible_range is ignored here
   auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
@@ -95,7 +122,7 @@ void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy
     float theta = math::kPi_2 - std::abs(std::asin(-d[2]));
 
     // fov is ignored here
-    float r = scale * std::abs(std::sin(theta / 2));
+    float r = scale * std::abs(std::sin(theta / 2.0f));
     if (d[2] > 0) {
       // Lower semisphere
       xy[0] = static_cast<int>(r * std::cos(math::kPi_2 - az) + p.resolution_[0] / 2.0f + 0.5f + short_res / 2.0f);
@@ -111,6 +138,7 @@ void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy
 ProjFunc GetProjFunc(LensParam::LensType type) {
   static std::map<LensParam::LensType, ProjFunc> lens_proj_map{
     { LensParam::kLinear, LinearProject },
+    { LensParam::kFisheyeEqualArea, FisheyeEqualAreaProject },
     { LensParam::kDualFisheyeEqualArea, DualFisheyeEqualAreaProject },
   };
 
