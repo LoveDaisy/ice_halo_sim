@@ -154,7 +154,7 @@ bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& f
       break;
     }
 
-    (*fit)->InitCrystalSymmetry(crystals.at(r.crystal_id_));
+    (*fit)->InitCrystalSymmetry(crystals.at(r.crystal_idx_));
     if (!(*fit)->Check(rays[curr_idx])) {
       filter_checked = false;
       break;

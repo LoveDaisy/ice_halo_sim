@@ -1,8 +1,11 @@
 #include "core/simulator.hpp"
 
 #include <cstddef>
+#include <cstring>
+#include <memory>
 #include <thread>
 
+#include "config/crystal_config.hpp"
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
@@ -28,10 +31,12 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
 
   RayBuffer& ray_buf = *ray_buf_ptr;
   // p & fid: sample on crystal faces
-  std::unique_ptr<float[]> proj_prob{ new float[curr_crystal.TotalFaces()]{} };
-  const auto* face_norm = curr_crystal.GetFaceNorm();
-  const auto* face_area = curr_crystal.GetFaceArea();
   auto total_faces = curr_crystal.TotalFaces();
+  const auto* face_area = curr_crystal.GetFaceArea();
+  const auto* face_norm = curr_crystal.GetFaceNorm();
+  const auto* face_vtx = curr_crystal.GetFaceVtx();
+
+  std::unique_ptr<float[]> proj_prob{ new float[total_faces]{} };
   for (auto& r : ray_buf) {
     const auto* d = r.d_;
     for (size_t j = 0; j < total_faces; j++) {
@@ -40,7 +45,7 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
     // fid
     RandomSample(total_faces, proj_prob.get(), &r.fid_);
     // p
-    SampleTrianglePoint(curr_crystal.GetFaceVtx() + r.fid_ * 9, r.p_);
+    SampleTrianglePoint(face_vtx + r.fid_ * 9, r.p_);
   }
 }
 
@@ -77,13 +82,36 @@ void InitRay_d_w_previdx(const LightSourceParam& light_param, const WlParam& wl_
 
   // d: sample direction
   std::visit(RayDirSampler{ ray_buf[0].d_, ray_num, sizeof(RaySeg) }, light_param);
+
+  // Then rotate
+  for (auto& r : ray_buf) {
+    r.crystal_rot_.ApplyInverse(r.d_);
+  }
+}
+
+
+void InitRay_rot(RandomNumberGenerator& rng, const AxisDistribution& crystal_axis,  // input
+                 RayBuffer buffer_data[2]) {                                        // output
+  float axis[9]{ 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+  for (auto& r : buffer_data[0]) {
+    float lon = rng.Get(crystal_axis.azimuth_dist) * math::kDegreeToRad;
+    float lat = rng.Get(crystal_axis.latitude_dist) * math::kDegreeToRad;
+    if (lat > math::kPi_2) {
+      lat = math::kPi - lat;
+    }
+    if (lat < -math::kPi_2) {
+      lat = -math::kPi_2 - lat;
+    }
+    float roll = rng.Get(crystal_axis.roll_dist) * math::kDegreeToRad;
+    r.crystal_rot_ = Rotation(axis + 6, roll).Chain(axis + 3, math::kPi_2 - lat).Chain(axis + 6, lon);
+  }
 }
 
 
 void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, size_t all_data_idx,  // input
                         RayBuffer buffer_data[2]) {                                                // output
   for (auto& r : buffer_data[0]) {
-    r.crystal_id_ = curr_crystal_id;
+    r.crystal_idx_ = curr_crystal_id;
     r.crystal_config_id_ = curr_crystal.config_id_;
     r.root_ray_idx_ = all_data_idx++;
     r.state_ = RaySeg::kNormal;
@@ -96,13 +124,16 @@ void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, siz
 }
 
 
-void InitRayFirstMs(const LightSourceParam& light_param, const WlParam& wl_param, size_t curr_ray_num,  // input
-                    const Crystal& curr_crystal, size_t curr_crystal_id,                                // input
-                    RayBuffer buffer_data[2], RayBuffer& all_data) {                                    // output
-  buffer_data[0].size_ = 0;
+void InitRayFirstMs(RandomNumberGenerator& rng, const LightSourceParam& light_param, const WlParam& wl_param,
+                    size_t curr_ray_num,                                                                        // input
+                    const Crystal& curr_crystal, size_t curr_crystal_id, const AxisDistribution& crystal_axis,  // input
+                    RayBuffer buffer_data[2], RayBuffer& all_data) {  // output
+  buffer_data[0].size_ = curr_ray_num;
+
+  // 1.0 init crystal_rot
+  InitRay_rot(rng, crystal_axis, buffer_data);
 
   // 1.1 init d & w & (prev_ray_idx)
-  buffer_data[0].size_ = curr_ray_num;
   InitRay_d_w_previdx(light_param, wl_param, curr_ray_num, buffer_data + 0);
 
   // 1.2 init p & fid
@@ -115,14 +146,21 @@ void InitRayFirstMs(const LightSourceParam& light_param, const WlParam& wl_param
 }
 
 
-void InitRayOtherMs(const RayBuffer init_data[2], size_t curr_ray_num,                         // input
-                    const Crystal& curr_crystal, size_t curr_crystal_id,                       // input
+void InitRayOtherMs(RandomNumberGenerator& rng, const RayBuffer init_data[2], size_t curr_ray_num,              // input
+                    const Crystal& curr_crystal, size_t curr_crystal_id, const AxisDistribution& crystal_axis,  // input
                     RayBuffer buffer_data[2], RayBuffer& all_data, size_t& init_ray_offset) {  // output
   buffer_data[0].size_ = 0;
 
-  // 1.1 copy previous rays
+  // 1.0 copy previous rays.
   buffer_data[0].EmplaceBack(init_data[0], init_ray_offset, curr_ray_num);
   init_ray_offset += curr_ray_num;
+
+  // 1.1 init crystal_rot
+  InitRay_rot(rng, crystal_axis, buffer_data);
+  // Then rotate d
+  for (auto& r : buffer_data[0]) {
+    r.crystal_rot_.ApplyInverse(r.d_);
+  }
 
   // 1.2 init p & fid
   InitRay_p_fid(curr_crystal, buffer_data + 0);
@@ -148,25 +186,6 @@ struct CrystalMaker {
     return Crystal{};
   }
 };
-
-
-Crystal SampleCrystal(RandomNumberGenerator& rng, const CrystalConfig& crystal_config) {
-  auto crystal = std::visit(CrystalMaker{ rng }, crystal_config.param_);
-  crystal.config_id_ = crystal_config.id_;
-
-  float lon = rng.Get(crystal_config.axis_.azimuth_dist) * math::kDegreeToRad;
-  float lat = rng.Get(crystal_config.axis_.latitude_dist) * math::kDegreeToRad;
-  if (lat > math::kPi_2) {
-    lat = math::kPi - lat;
-  }
-  float roll = rng.Get(crystal_config.axis_.roll_dist) * math::kDegreeToRad;
-  float axis[9]{ 1, 0, 0, 0, 1, 0, 0, 0, 1 };
-  auto rot = Rotation(axis + 6, roll).Chain(axis + 3, math::kPi_2 - lat).Chain(axis + 6, lon);
-  crystal.Rotate(rot);
-
-  LOG_DEBUG("crystal axis: %.4f,%.4f,%.4f", lon, lat, roll);
-  return crystal;
-}
 
 
 RayBuffer AllocateAllData(const SceneConfig& config) {
@@ -271,8 +290,9 @@ void FillRayOtherInfo(size_t curr_ray_num, size_t i,                           /
       r.prev_ray_idx_ = j / 2 * 2 + 0 + ray_id_offset - curr_ray_num * 2;
     }
 
-    r.crystal_id_ = all_data[r.prev_ray_idx_].crystal_id_;
+    r.crystal_idx_ = all_data[r.prev_ray_idx_].crystal_idx_;
     r.crystal_config_id_ = all_data[r.prev_ray_idx_].crystal_config_id_;
+    r.crystal_rot_ = all_data[r.prev_ray_idx_].crystal_rot_;
     r.root_ray_idx_ = all_data[r.prev_ray_idx_].root_ray_idx_;
 
     LOG_DEBUG("hit loop ray p: %.6f,%.6f,%.6f,%zu", r.p_[0], r.p_[1], r.p_[2], i);
@@ -295,15 +315,23 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       } else if (rng.GetUniform() < ms_info.prob_) {
         // 1.2 Copy outgoing rays into initial data, with probability of p
         r.state_ = RaySeg::kContinue;
-        init_data[1].EmplaceBack(r);
       } else {
         // 1.3 Final outgoing rays.
         r.state_ = RaySeg::kOutgoing;
       }
     } else {
       // 2. Normal rays. Squeeze (or better swap?) buffers.
-      buffer_data[0].EmplaceBack(r);
       r.state_ = RaySeg::kNormal;
+    }
+
+    if (r.state_ != RaySeg::kNormal) {
+      r.crystal_rot_.Apply(r.d_);
+      r.crystal_rot_.Apply(r.p_);
+    } else {
+      buffer_data[0].EmplaceBack(r);
+    }
+    if (r.state_ == RaySeg::kContinue) {
+      init_data[1].EmplaceBack(r);
     }
   }
 }
@@ -391,22 +419,23 @@ void Simulator::Run() {
           const auto& s = m.setting_[ci];
           auto filter = Filter::Create(s.filter_);
 
-          for (size_t cn = 0; cn < crystal_ray_num[ci]; cn += kSmallBatchRayNum) {
+          for (size_t cn = 0; cn < crystal_ray_num[ci]; cn += kSmallBatchRayNum) {  // for a same crystal
             size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - cn);
 
             size_t curr_crystal_id = all_crystals.size();
-            all_crystals.emplace_back(SampleCrystal(rng_, s.crystal_));
-            const auto& curr_crystal = all_crystals.back();
+            all_crystals.emplace_back(std::visit(CrystalMaker{ rng_ }, s.crystal_.param_));
+            const auto& curr_crystal = all_crystals.back();  // **NO** rotation
             filter->InitCrystalSymmetry(curr_crystal);
 
             // 1. Initialize data
             if (first_ms) {
-              InitRayFirstMs(config.light_source_.param_, curr_wl_param, curr_ray_num,  // input
-                             curr_crystal, curr_crystal_id,                             // input
-                             buffer_data, all_data);                                    // output
+              InitRayFirstMs(rng_, config.light_source_.param_, curr_wl_param, curr_ray_num,  // input
+                             curr_crystal, curr_crystal_id, s.crystal_.axis_,                 // input
+                             buffer_data, all_data);                                          // output
             } else {
-              InitRayOtherMs(init_data, curr_ray_num, curr_crystal, curr_crystal_id,  // input
-                             buffer_data, all_data, init_ray_offset);                 // output
+              InitRayOtherMs(rng_, init_data, curr_ray_num,                    // input
+                             curr_crystal, curr_crystal_id, s.crystal_.axis_,  // input
+                             buffer_data, all_data, init_ray_offset);          // output
             }
 
             // 2. Start tracing
@@ -417,7 +446,7 @@ void Simulator::Run() {
                                 buffer_data);                                  // output
               // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
 
-              // 2.2 Fill some information: crystal_id, rp, prev_ray_idx, root_ray_idx
+              // 2.2 Fill other information: all but (d, p, w, fid)
               FillRayOtherInfo(curr_ray_num, i, curr_crystal, all_data,  // input
                                buffer_data);                             // output
 

@@ -39,7 +39,7 @@ class Simulator {
   bool IsIdle() const;
 
  private:
-  static constexpr size_t kSmallBatchRayNum = 16;
+  static constexpr size_t kSmallBatchRayNum = 32;
 
   QueuePtrS<SceneConfig> config_queue_;
   QueuePtrS<SimData> data_queue_;

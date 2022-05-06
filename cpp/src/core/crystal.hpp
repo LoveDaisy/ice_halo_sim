@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "core/def.hpp"
-#include "core/math.hpp"
+#include "core/geo3d.hpp"
 
 namespace icehalo {
 

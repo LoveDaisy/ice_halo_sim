@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/def.hpp"
+#include "core/geo3d.hpp"
 
 namespace icehalo {
 namespace v3 {
@@ -41,14 +42,20 @@ struct RaySeg {
     kStopped,   // exceed max_hits, or filtered out
   };
 
+  // NOTE: if state == kNormal, d and p are in crystal-local coordinates; otherwise
+  // d and p are in world coordinates.
   float d_[3];
   float p_[3];  // Generally it is for end point, **NOT** for start point.
   float w_;
   int fid_;
+
   size_t prev_ray_idx_;
   size_t root_ray_idx_;
-  IdType crystal_id_;
+
+  IdType crystal_idx_;
   IdType crystal_config_id_;
+  Rotation crystal_rot_;
+
   State state_;
   RaypathRecorder rp_;  // Raypath in **CURRENT** crystal.
 };
