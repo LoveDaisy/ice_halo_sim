@@ -2,55 +2,62 @@
 
 [中文版说明](README_zh.md)
 
-After testing my algorithms on matlab codes, I start a C++ project for higher performance. Currently the C++ version 
-can only run from command, no GUI.
+It is a simulation program for ice halo. It is fast and efficient.
 
+## Quick start
 
-## Installation
-
-Requires: Boost (>= 1.54), OpenCV (>= 3.3), CMake (>= 3.12). Has been tested on Mac OSX 10.14 and Ubuntu 14.04.
-
-First download the entire project,
+After cloning, you can just run the build script to build and install it.
 
 ~~~bash
-git clone git@github.com:LoveDaisy/ice_halo_sim.git
 cd ice_halo_sim/cpp
+./build.sh -rj release
 ~~~
 
-This C++ project is built with [CMake](https://cmake.org/).
-You can just run the build script to build the executable:
+If everything goes well, the executable will be installed into `cpp/build/cmake_install`. And
+just run it like:
 
 ~~~bash
-./build.sh -rj release  # Release version. See help for meaning of options.
+./build/cmake_install/IceHaloV3 -f v3_config_example.json
 ~~~
 
-or
+It will output some information, as well as several rendered picture files.
+
+If you are interested in more details, just go ahead for following sections.
+
+
+## Getting start
+
+### Build project
+
+This project is built with [CMake](https://cmake.org/).
+I put a build script to make things simpler.
+
+With `-h` you will see help message:
 
 ~~~bash
-./build.sh debug  # Debug version
+./build.sh -h
+Usage:
+  ./build.sh [-tjkrh1] <debug|release|minsizerel>
+    Executables will be installed at build/cmake_install
+OPTIONS:
+  -t:          Build test cases and run test on them.
+  -j:          Build in parallel, i.e. use make -j
+  -k:          Clean temporary building files.
+  -b:          Run a benchmarking. It tells how fast the program runs on your computer.
+  -v:          Enable verbose log.
+  -r:          Use random seed for random number generator. Without this option,
+               the program will use a constant value. Thus generate a repeatable result
+               (usually together with -1).
+  -1:          Use single thread.
+  -h:          Show this message.
 ~~~
 
-For other useful options, see the help message via `./build.sh -h` or just `./build.sh`.
+Note that debug version will not be installed, so it is found in `build/cmake_build`.
 
-Then the release version executable binaries will be at `build/cmake_install`, and the debug version will be at
-`build/cmake_build`.
+I use the [GoogleTest](https://github.com/google/googletest) framework for my unit tests.
+If `-t` option is set, the test cases will be built and test on.
+It is usefull in a CI/CD pipeline.
 
-Note, I introduce the [GoogleTest](https://github.com/google/googletest) framework to help do my unit tests.
-Generally you do not need to
-care about these codes nor the test cases in `test` folder. If you are interested in my unit tests, please
-pass `-t` option when run the build script. If `-t` option is set, the test cases will be built and test on.
-Anf if test fails, the final executable will **NOT** be
-installed to `build/cmake_install`.
-
-## Getting started
-
-### Endless mode
-
-Please run `./build/cmake_install/IceHaloEndless -f <config-file> -n <simulation_times>`
-for endless mode. It runs endlessly, until you press
-`^+C` (control + C) to force break it, or hits the number specified by `<simulation_times>` (-1 means endless).
-It will continously refresh the output image. The total ray numbers
-and other information will be displayed on the screen.
 
 ## Configuration file
 
