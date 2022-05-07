@@ -9,7 +9,7 @@
 namespace icehalo {
 namespace v3 {
 
-class Stats : public IConsume {
+class StatsConsumer : public IConsume {
  public:
   void Consume(const SimData& data) override;
   Result GetResult() const override;

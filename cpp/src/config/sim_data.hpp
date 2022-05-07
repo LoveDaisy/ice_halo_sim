@@ -52,8 +52,6 @@ struct SimData {
 using SimDataPtrS = std::shared_ptr<SimData>;
 using SimDataPtrU = std::unique_ptr<SimData>;
 
-struct SimBackTracingData {};
-
 }  // namespace v3
 }  // namespace icehalo
 

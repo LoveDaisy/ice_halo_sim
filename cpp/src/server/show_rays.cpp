@@ -5,7 +5,7 @@
 namespace icehalo {
 namespace v3 {
 
-void ShowRaysInfo::Consume(const SimData& data) {
+void ShowRayInfoConsumer::Consume(const SimData& data) {
   LOG_INFO("p  d  w fid prev_id");
   for (const auto& r : data.rays_) {
     LOG_INFO("%.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f  %d  %d",  //

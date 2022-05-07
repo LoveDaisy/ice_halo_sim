@@ -231,9 +231,9 @@ void ServerImpl::GenerateScene() {
     // Setup consumers.
     std::vector<ConsumerPtrU> new_consumers;
     for (const auto& r : proj_config.renderers_) {
-      new_consumers.emplace_back(ConsumerPtrU{ new Renderer(r) });
+      new_consumers.emplace_back(ConsumerPtrU{ new RenderConsumer(r) });
     }
-    new_consumers.emplace_back(ConsumerPtrU{ new Stats });
+    new_consumers.emplace_back(ConsumerPtrU{ new StatsConsumer });
     consumers_.swap(new_consumers);
 
     auto ray_num = proj_config.scene_.ray_num_;

@@ -14,9 +14,9 @@ namespace v3 {
 constexpr int kMinWavelength = 360;
 constexpr int kMaxWavelength = 830;
 
-class Renderer : public IConsume {
+class RenderConsumer : public IConsume {
  public:
-  Renderer(RenderConfig config);
+  RenderConsumer(RenderConfig config);
 
   void Consume(const SimData& data) override;
   Result GetResult() const override;

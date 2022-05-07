@@ -64,7 +64,7 @@ TEST_F(V3TestProj, SimpleProj) {
   v3::Simulator simulator(config_queue, data_queue);
 
   v3::Consumer consumer(data_queue);
-  consumer.RegisterConsumer(v3::ConsumerPtrU(new v3::ShowRaysInfo));
+  consumer.RegisterConsumer(v3::ConsumerPtrU(new v3::ShowRayInfoConsumer));
   consumer.RegisterConsumer(v3::ConsumerPtrU(new CopyRayDataConsumer(output_data.get())));
 
   std::thread prod_thread([&simulator]() { simulator.Run(); });

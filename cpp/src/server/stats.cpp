@@ -7,7 +7,7 @@
 namespace icehalo {
 namespace v3 {
 
-void Stats::Consume(const SimData& data) {
+void StatsConsumer::Consume(const SimData& data) {
   for (const auto& r : data.rays_) {
     if (r.prev_ray_idx_ == kInfSize) {
       sim_rays_++;
@@ -17,7 +17,7 @@ void Stats::Consume(const SimData& data) {
   crystals_ += data.crystals_.size();
 }
 
-Result Stats::GetResult() const {
+Result StatsConsumer::GetResult() const {
   return StatsResult{ total_rays_, sim_rays_, crystals_ };
 }
 

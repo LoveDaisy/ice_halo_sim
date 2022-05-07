@@ -172,7 +172,7 @@ ProjFunc GetProjFunc(LensParam::LensType type) {
 
 
 // =============== Renderer ===============
-Renderer::Renderer(RenderConfig config)
+RenderConsumer::RenderConsumer(RenderConfig config)
     : config_(config), diag_pix_(std::sqrt(config.resolution_[0] * config.resolution_[0] +
                                            config.resolution_[1] * config.resolution_[1])),
       internal_xyz_(new float[config.resolution_[0] * config.resolution_[1] * 3]{}),
@@ -221,7 +221,7 @@ bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& f
 }
 
 
-void Renderer::Consume(const SimData& data) {
+void RenderConsumer::Consume(const SimData& data) {
   const auto& crystals = data.crystals_;
 
   std::unique_ptr<float[]> d_data{ new float[data.rays_.size_ * 3]{} };
@@ -272,7 +272,7 @@ void Renderer::Consume(const SimData& data) {
   total_intensity_ += data.total_intensity_;
 }
 
-Result Renderer::GetResult() const {
+Result RenderConsumer::GetResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::unique_ptr<float[]> float_data{ new float[total_pix * 3]{} };
   std::memcpy(float_data.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));

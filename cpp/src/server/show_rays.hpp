@@ -6,7 +6,7 @@
 namespace icehalo {
 namespace v3 {
 
-class ShowRaysInfo : public IConsume {
+class ShowRayInfoConsumer : public IConsume {
  public:
   void Consume(const SimData& data) override;
 };
