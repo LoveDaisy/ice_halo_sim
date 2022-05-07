@@ -803,4 +803,26 @@ void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
 }
 
 
+namespace v3 {
+
+void SolveLinear2(const float* coef1, const float* coef2, float* res) {
+  float det = coef1[0] * coef2[1] - coef2[0] * coef1[1];
+  float x = (coef1[1] * coef2[2] - coef2[1] * coef1[2]) / det;
+  float y = (coef1[2] * coef2[0] - coef2[2] * coef1[0]) / det;
+  res[0] = x;
+  res[1] = y;
+}
+
+bool IsInPolygon2(int n, const float* coef, const float xy[2]) {
+  bool in = true;
+  for (int j = 0; j < n; j++) {
+    if (coef[0] * xy[0] + coef[1] * xy[1] + coef[2] > math::kFloatEps) {
+      in = false;
+      break;
+    }
+  }
+  return in;
+}
+
+}  // namespace v3
 }  // namespace icehalo

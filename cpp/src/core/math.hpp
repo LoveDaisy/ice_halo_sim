@@ -272,6 +272,16 @@ struct AxisDistribution {
   Distribution roll_dist;
 };
 
+
+namespace v3 {
+
+void SolveLinear2(const float* coef1, const float* coef2, float* res);
+
+bool IsInPolygon2(int n, const float* coef, const float xy[2]);
+
+}  // namespace v3
+
+
 // convertion to & from json object
 NLOHMANN_JSON_SERIALIZE_ENUM(  // declear macro
     DistributionType,          // enum type

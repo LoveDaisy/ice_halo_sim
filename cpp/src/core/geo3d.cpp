@@ -4,6 +4,8 @@
 #include <memory>
 #include <utility>
 
+#include "core/math.hpp"
+
 namespace icehalo {
 namespace v3 {
 
@@ -235,7 +237,7 @@ Mesh::Mesh(const Mesh& other)
     : vtx_cnt_(other.vtx_cnt_), triangle_cnt_(other.triangle_cnt_), vertices_(new float[other.vtx_cnt_ * 3]),
       triangle_(new int[other.triangle_cnt_ * 3]) {
   std::memcpy(vertices_.get(), other.vertices_.get(), vtx_cnt_ * 3 * sizeof(float));
-  std::memcpy(triangle_.get(), other.triangle_.get(), vtx_cnt_ * 3 * sizeof(int));
+  std::memcpy(triangle_.get(), other.triangle_.get(), triangle_cnt_ * 3 * sizeof(int));
 }
 
 Mesh::Mesh(Mesh&& other)
@@ -300,6 +302,82 @@ float* Mesh::GetVtxPtr(size_t idx) {
 
 int* Mesh::GetTrianglePtr(size_t idx) {
   return triangle_.get() + idx * 3;
+}
+
+
+Mesh Mesh::CreateIrregularPrism(float h, const float* dist) {
+  using math::kSqrt3_2;
+
+  // a*x + b*y + c <= 0, (a, b, c)
+  const float kCoef[6 * 3]{
+    1.0f,  0.0f,      -dist[0],  //
+    0.5f,  kSqrt3_2,  -dist[1],  //
+    -0.5f, kSqrt3_2,  -dist[2],  //
+    -1.0f, 0.0f,      -dist[3],  //
+    -0.5f, -kSqrt3_2, -dist[4],  //
+    0.5f,  -kSqrt3_2, -dist[5],  //
+  };
+
+  std::unique_ptr<float[]> vtx{ new float[kHexPrismVtxCnt * 3]{} };
+  for (int i = 0; i < 6; i++) {
+    int i1 = i;
+    int i2 = (i + 5) % 6;
+    SolveLinear2(kCoef + i1 * 3, kCoef + i2 * 3, vtx.get() + i * 3);
+    vtx[i * 3 + 2] = h / 2.0f;
+  }
+  // Filter out invalid vertices
+  size_t vtx_cnt = 0;
+  for (size_t i = 0; i < 6; i++) {
+    // Check every plane
+    if (IsInPolygon2(6, kCoef, vtx.get() + i * 3)) {
+      if (vtx_cnt < i) {
+        std::memcpy(vtx.get() + vtx_cnt * 3, vtx.get() + i * 3, 3 * sizeof(float));
+      }
+    } else {
+      int i1 = (i + 1) % 6;
+      int i2 = (i + 5) % 6;
+      SolveLinear2(kCoef + i1 * 3, kCoef + i2 * 3, vtx.get() + vtx_cnt * 3);
+      vtx[vtx_cnt * 3 + 2] = h / 2.0f;
+      i++;
+    }
+    vtx_cnt++;
+  }
+
+  std::memcpy(vtx.get() + vtx_cnt * 3, vtx.get(), vtx_cnt * 3 * sizeof(float));
+  for (int i = 0; i < 6; i++) {
+    vtx[vtx_cnt * 3 + i * 3 + 2] = -h / 2.0f;
+  }
+
+  std::unique_ptr<int[]> triangle_idx{ new int[kHexPrismTriCnt * 3]{} };
+  size_t triangle_cnt = 0;
+  for (size_t i = 1; i + 1 < vtx_cnt; i++) {
+    // fn1
+    triangle_idx[triangle_cnt * 3 + 0] = 0;
+    triangle_idx[triangle_cnt * 3 + 1] = i;
+    triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
+    triangle_cnt++;
+  }
+  for (size_t i = 0; i < vtx_cnt; i++) {
+    // prism face 0
+    triangle_idx[triangle_cnt * 3 + 0] = i;
+    triangle_idx[triangle_cnt * 3 + 1] = i + vtx_cnt;
+    triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
+    triangle_cnt++;
+    // prism face 1
+    triangle_idx[triangle_cnt * 3 + 0] = i + vtx_cnt;
+    triangle_idx[triangle_cnt * 3 + 1] = (i + 1) % vtx_cnt + vtx_cnt;
+    triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
+    triangle_cnt++;
+  }
+  for (size_t i = 1; i + 1 < vtx_cnt; i++) {
+    // fn2
+    triangle_idx[triangle_cnt * 3 + 0] = vtx_cnt;
+    triangle_idx[triangle_cnt * 3 + 1] = (i + 1) % vtx_cnt + vtx_cnt;
+    triangle_idx[triangle_cnt * 3 + 2] = i + vtx_cnt;
+    triangle_cnt++;
+  }
+
+  return Mesh(vtx_cnt * 2, std::move(vtx), triangle_cnt, std::move(triangle_idx));
 }
 
 }  // namespace v3

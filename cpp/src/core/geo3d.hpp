@@ -44,6 +44,11 @@ void SampleBall(float radii, float* out_pt, size_t sample_num = 1);
 
 class Mesh {
  public:
+  static Mesh CreateIrregularPrism(float h, const float* dist);
+
+  static constexpr int kHexPrismVtxCnt = 12;
+  static constexpr int kHexPrismTriCnt = 20;
+
   Mesh();
   Mesh(size_t vtx_cnt, size_t triangle_cnt);
   Mesh(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_cnt, std::unique_ptr<int[]> triangle_idx);

@@ -13,6 +13,7 @@
 #include "config/filter_config.hpp"
 #include "context/context.hpp"
 #include "core/def.hpp"
+#include "core/geo3d.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
 #include "include/log.hpp"
@@ -979,12 +980,9 @@ CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<Vec3f>& pts,         
 
 namespace v3 {
 
-constexpr int kPrismCrystalVtxCnt = 12;
-constexpr int kPrismCrystalTriangleCnt = 20;
-
 Crystal Crystal::CreatePrism(float h) {
   using math::kSqrt3_4;
-  std::unique_ptr<float[]> vtx{ new float[kPrismCrystalVtxCnt * 3]{
+  std::unique_ptr<float[]> vtx{ new float[Mesh::kHexPrismVtxCnt * 3]{
       kSqrt3_4,  -1.0f / 4.0f, h / 2.0f,   // upper: vtx1
       kSqrt3_4,  1.0f / 4.0f,  h / 2.0f,   // upper: vtx2
       0.0f,      1.0f / 2.0f,  h / 2.0f,   // upper: vtx3
@@ -998,7 +996,7 @@ Crystal Crystal::CreatePrism(float h) {
       -kSqrt3_4, -1.0f / 4.0f, -h / 2.0f,  // lower: vtx5
       0.0f,      -1.0f / 2.0f, -h / 2.0f,  // lower: vtx6
   } };
-  std::unique_ptr<int[]> triangle_idx{ new int[kPrismCrystalTriangleCnt * 3]{
+  std::unique_ptr<int[]> triangle_idx{ new int[Mesh::kHexPrismTriCnt * 3]{
       0,  1,  2,   // upper: fn1
       0,  2,  3,   // upper: fn1
       3,  4,  5,   // upper: fn1
@@ -1020,7 +1018,7 @@ Crystal Crystal::CreatePrism(float h) {
       9,  11, 10,  // lower: fn2
       9,  6,  11,  // lower: fn2
   } };
-  auto c = Crystal(kPrismCrystalVtxCnt, std::move(vtx), kPrismCrystalTriangleCnt, std::move(triangle_idx));
+  auto c = Crystal(Mesh::kHexPrismVtxCnt, std::move(vtx), Mesh::kHexPrismTriCnt, std::move(triangle_idx));
   c.fn_period_ = 6;
   for (int i = 0; i < 4; i++) {
     c.fn_map_[i] = 1;
@@ -1034,94 +1032,9 @@ Crystal Crystal::CreatePrism(float h) {
 }
 
 Crystal Crystal::CreatePrism(float h, const float* fd) {
-  using math::kSqrt3;
   using math::kSqrt3_2;
-  using math::kSqrt3_4;
 
-  // a*x + b*y + c <= 0, (a, b, c)
-  float coef[6 * 3]{
-    1.0f,  0.0f,      -fd[0],  //
-    0.5f,  kSqrt3_2,  -fd[1],  //
-    -0.5f, kSqrt3_2,  -fd[2],  //
-    -1.0f, 0.0f,      -fd[3],  //
-    -0.5f, -kSqrt3_2, -fd[4],  //
-    0.5f,  -kSqrt3_2, -fd[5],  //
-  };
-
-  std::unique_ptr<float[]> vtx{ new float[kPrismCrystalVtxCnt * 3]{} };
-  for (int i = 0; i < 6; i++) {
-    int i1 = i;
-    int i2 = (i + 5) % 6;
-    float det = coef[i1 * 3 + 0] * coef[i2 * 3 + 1] - coef[i2 * 3 + 0] * coef[i1 * 3 + 1];
-    float x = (coef[i1 * 3 + 1] * coef[i2 * 3 + 2] - coef[i2 * 3 + 1] * coef[i1 * 3 + 2]) / det;
-    float y = (coef[i1 * 3 + 2] * coef[i2 * 3 + 0] - coef[i2 * 3 + 2] * coef[i1 * 3 + 0]) / det;
-    vtx[i * 3 + 0] = x;
-    vtx[i * 3 + 1] = y;
-    vtx[i * 3 + 2] = h / 2.0f;
-  }
-  // Filter out invalid vertices
-  size_t vtx_cnt = 0;
-  for (size_t i = 0; i < 6; i++) {
-    // Check every plane
-    bool in = true;
-    for (int j = 0; j < 6; j++) {
-      if (coef[j * 3 + 0] * vtx[i * 3 + 0] + coef[j * 3 + 1] * vtx[i * 3 + 1] + coef[j * 3 + 2] > math::kFloatEps) {
-        in = false;
-        break;
-      }
-    }
-    if (in) {
-      if (vtx_cnt < i) {
-        std::memcpy(vtx.get() + vtx_cnt * 3, vtx.get() + i * 3, 3 * sizeof(float));
-      }
-    } else {
-      int i1 = (i + 1) % 6;
-      int i2 = (i + 5) % 6;
-      float det = coef[i1 * 3 + 0] * coef[i2 * 3 + 1] - coef[i2 * 3 + 0] * coef[i1 * 3 + 1];
-      float x = (coef[i1 * 3 + 1] * coef[i2 * 3 + 2] - coef[i2 * 3 + 1] * coef[i1 * 3 + 2]) / det;
-      float y = (coef[i1 * 3 + 2] * coef[i2 * 3 + 0] - coef[i2 * 3 + 2] * coef[i1 * 3 + 0]) / det;
-      vtx[vtx_cnt * 3 + 0] = x;
-      vtx[vtx_cnt * 3 + 1] = y;
-      vtx[vtx_cnt * 3 + 2] = h / 2.0f;
-      i++;
-    }
-    vtx_cnt++;
-  }
-  std::memcpy(vtx.get() + vtx_cnt * 3, vtx.get(), vtx_cnt * 3 * sizeof(float));
-  for (int i = 0; i < 6; i++) {
-    vtx[vtx_cnt * 3 + i * 3 + 2] = -h / 2.0f;
-  }
-
-  std::unique_ptr<int[]> triangle_idx{ new int[kPrismCrystalTriangleCnt * 3]{} };
-  size_t triangle_cnt = 0;
-  for (size_t i = 1; i + 1 < vtx_cnt; i++) {
-    // fn1
-    triangle_idx[triangle_cnt * 3 + 0] = 0;
-    triangle_idx[triangle_cnt * 3 + 1] = i;
-    triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
-    triangle_cnt++;
-  }
-  for (size_t i = 0; i < vtx_cnt; i++) {
-    // prism face 0
-    triangle_idx[triangle_cnt * 3 + 0] = i;
-    triangle_idx[triangle_cnt * 3 + 1] = i + vtx_cnt;
-    triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
-    triangle_cnt++;
-    // prism face 1
-    triangle_idx[triangle_cnt * 3 + 0] = i + vtx_cnt;
-    triangle_idx[triangle_cnt * 3 + 1] = (i + 1) % vtx_cnt + vtx_cnt;
-    triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
-    triangle_cnt++;
-  }
-  for (size_t i = 1; i + 1 < vtx_cnt; i++) {
-    // fn2
-    triangle_idx[triangle_cnt * 3 + 0] = vtx_cnt;
-    triangle_idx[triangle_cnt * 3 + 1] = (i + 1) % vtx_cnt + vtx_cnt;
-    triangle_idx[triangle_cnt * 3 + 2] = i + vtx_cnt;
-    triangle_cnt++;
-  }
-
-  auto c = Crystal(vtx_cnt * 2, std::move(vtx), triangle_cnt, std::move(triangle_idx));
+  auto c = Crystal(Mesh::CreateIrregularPrism(h, fd));
   c.fn_period_ = 6;
 
   float ref_norms[9 * 3]{
@@ -1137,7 +1050,7 @@ Crystal Crystal::CreatePrism(float h, const float* fd) {
   };
 
   const float* curr_fn = c.GetFaceNorm();
-  for (size_t i = 0; i < triangle_cnt; i++) {
+  for (size_t i = 0; i < c.TotalFaces(); i++) {
     for (IdType j = 1; j < 9; j++) {
       auto d = Dot3(curr_fn, ref_norms + j * 3);
       if (std::abs(1.0f - d) < math::kFloatEps) {
@@ -1187,6 +1100,17 @@ Crystal::Crystal(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_c
       face_coord_tf_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kTf), fn_map_(new IdType[triangle_cnt]{}),
       fn_period_(-1) {
   // Initialize other pre-computed data
+  ComputeCacheData();
+}
+
+Crystal::Crystal(Mesh mesh)
+    : mesh_(std::move(mesh)), origin_{}, cache_data_(new float[mesh_.GetTriangleCnt() * CrystalCachOffset::kTotal]{}),
+      face_v_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kVtx),
+      face_ev_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kEdgeVec),
+      face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
+      face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea),
+      face_coord_tf_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kTf),
+      fn_map_(new IdType[mesh_.GetTriangleCnt()]{}), fn_period_(-1) {
   ComputeCacheData();
 }
 
