@@ -184,7 +184,7 @@ struct CrystalMaker {
         break;
       }
     }
-    
+
     if (regular) {
       return Crystal::CreatePrism(h);
     } else {

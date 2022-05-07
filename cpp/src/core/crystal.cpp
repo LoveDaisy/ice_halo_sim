@@ -1051,7 +1051,7 @@ Crystal Crystal::CreatePrism(float h, const float* fd) {
   std::unique_ptr<float[]> vtx{ new float[kPrismCrystalVtxCnt * 3]{} };
   for (int i = 0; i < 6; i++) {
     int i1 = i;
-    int i2 = (i1 + 5) % 6;
+    int i2 = (i + 5) % 6;
     float det = coef[i1 * 3 + 0] * coef[i2 * 3 + 1] - coef[i2 * 3 + 0] * coef[i1 * 3 + 1];
     float x = (coef[i1 * 3 + 1] * coef[i2 * 3 + 2] - coef[i2 * 3 + 1] * coef[i1 * 3 + 2]) / det;
     float y = (coef[i1 * 3 + 2] * coef[i2 * 3 + 0] - coef[i2 * 3 + 2] * coef[i1 * 3 + 0]) / det;
@@ -1074,8 +1074,18 @@ Crystal Crystal::CreatePrism(float h, const float* fd) {
       if (vtx_cnt < i) {
         std::memcpy(vtx.get() + vtx_cnt * 3, vtx.get() + i * 3, 3 * sizeof(float));
       }
-      vtx_cnt++;
+    } else {
+      int i1 = (i + 1) % 6;
+      int i2 = (i + 5) % 6;
+      float det = coef[i1 * 3 + 0] * coef[i2 * 3 + 1] - coef[i2 * 3 + 0] * coef[i1 * 3 + 1];
+      float x = (coef[i1 * 3 + 1] * coef[i2 * 3 + 2] - coef[i2 * 3 + 1] * coef[i1 * 3 + 2]) / det;
+      float y = (coef[i1 * 3 + 2] * coef[i2 * 3 + 0] - coef[i2 * 3 + 2] * coef[i1 * 3 + 0]) / det;
+      vtx[vtx_cnt * 3 + 0] = x;
+      vtx[vtx_cnt * 3 + 1] = y;
+      vtx[vtx_cnt * 3 + 2] = h / 2.0f;
+      i++;
     }
+    vtx_cnt++;
   }
   std::memcpy(vtx.get() + vtx_cnt * 3, vtx.get(), vtx_cnt * 3 * sizeof(float));
   for (int i = 0; i < 6; i++) {
