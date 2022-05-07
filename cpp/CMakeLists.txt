@@ -115,7 +115,6 @@ set(icehalo_process_src
   "${PROJ_SRC_DIR}/process/simulation.cpp")
 
 set(icehalo_server_src
-  "${PROJ_SRC_DIR}/server/consumer.cpp"
   "${PROJ_SRC_DIR}/server/render.cpp"
   "${PROJ_SRC_DIR}/server/server.cpp"
   "${PROJ_SRC_DIR}/server/show_rays.cpp"

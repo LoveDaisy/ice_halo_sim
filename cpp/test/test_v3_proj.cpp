@@ -52,6 +52,36 @@ class CopyRayDataConsumer : public v3::IConsume {
   float* output_data_;
 };
 
+class Consumer {
+ public:
+  Consumer(icehalo::v3::QueuePtrS<icehalo::v3::SimData> data_queue) : data_queue_(data_queue), stop_(false) {}
+
+  void RegisterConsumer(icehalo::v3::ConsumerPtrU consumer) { consumers_.emplace_back(std::move(consumer)); }
+
+  void Run() {
+    while (true) {
+      auto data = data_queue_->Get();
+      if (stop_ || data.rays_.Empty()) {
+        break;
+      }
+
+      for (auto& c : consumers_) {
+        c->Consume(data);
+      }
+      if (stop_) {
+        break;
+      }
+    }
+  }
+
+  void Stop() { stop_ = true; }
+
+ private:
+  std::vector<icehalo::v3::ConsumerPtrU> consumers_;
+  icehalo::v3::QueuePtrS<icehalo::v3::SimData> data_queue_;
+  std::atomic_bool stop_;
+};
+
 TEST_F(V3TestProj, SimpleProj) {
   v3::ConfigManager config_manager = config_json_.get<v3::ConfigManager>();
 
@@ -63,7 +93,7 @@ TEST_F(V3TestProj, SimpleProj) {
 
   v3::Simulator simulator(config_queue, data_queue);
 
-  v3::Consumer consumer(data_queue);
+  Consumer consumer(data_queue);
   consumer.RegisterConsumer(v3::ConsumerPtrU(new v3::ShowRayInfoConsumer));
   consumer.RegisterConsumer(v3::ConsumerPtrU(new CopyRayDataConsumer(output_data.get())));
 

@@ -38,20 +38,6 @@ using QueuePtrU = std::unique_ptr<Queue<T>>;
 template <class T>
 using QueuePtrS = std::shared_ptr<Queue<T>>;
 
-class Consumer {
- public:
-  Consumer(QueuePtrS<SimData> data_queue);
-
-  void RegisterConsumer(ConsumerPtrU consumer);
-  void Run();
-  void Stop();
-
- private:
-  std::vector<ConsumerPtrU> consumers_;
-  QueuePtrS<SimData> data_queue_;
-  std::atomic_bool stop_;
-};
-
 }  // namespace v3
 }  // namespace icehalo
 
