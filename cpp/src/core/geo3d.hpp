@@ -18,7 +18,7 @@ class Rotation {
   Rotation& Chain(const Rotation& rotate);
   Rotation& Chain(const float* ax, float theta);
   Rotation& Chain(const float* from, const float* to);
-	Rotation& Inverse();
+  Rotation& Inverse();
   void Apply(float* pt, size_t num = 1) const;
   void ApplyInverse(float* pt, size_t num = 1) const;
 
