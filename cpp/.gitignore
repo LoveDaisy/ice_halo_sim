@@ -13,8 +13,11 @@ build-FastHalo-*
 
 doc/figs/*.nb
 doc/figs/*.pdf
+doc/html
+doc/latex
 
 config.json
 test.json
 tmp.log
+*.jpg
 
