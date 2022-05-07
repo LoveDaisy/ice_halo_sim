@@ -1040,21 +1040,21 @@ Crystal Crystal::CreatePrism(float h, const float* fd) {
 
   // a*x + b*y + c <= 0, (a, b, c)
   float coef[6 * 3]{
-    1.0f,  0.0f,      -fd[0] * kSqrt3_4,  //
-    0.5f,  kSqrt3_2,  -fd[1] * kSqrt3_4,  //
-    -0.5f, kSqrt3_2,  -fd[2] * kSqrt3_4,  //
-    -1.0f, 0.0f,      -fd[3] * kSqrt3_4,  //
-    -0.5f, -kSqrt3_2, -fd[4] * kSqrt3_4,  //
-    0.5f,  -kSqrt3_2, -fd[5] * kSqrt3_4,  //
+    1.0f,  0.0f,      -fd[0],  //
+    0.5f,  kSqrt3_2,  -fd[1],  //
+    -0.5f, kSqrt3_2,  -fd[2],  //
+    -1.0f, 0.0f,      -fd[3],  //
+    -0.5f, -kSqrt3_2, -fd[4],  //
+    0.5f,  -kSqrt3_2, -fd[5],  //
   };
 
   std::unique_ptr<float[]> vtx{ new float[kPrismCrystalVtxCnt * 3]{} };
   for (int i = 0; i < 6; i++) {
     int i1 = i;
-    int i2 = (i1 - 1) % 6;
-    float det = coef[i1 * 6 + 0] * coef[i2 * 6 + 1] - coef[i2 * 6 + 0] * coef[i1 * 6 + 1];
-    float x = (coef[i1 * 6 + 1] * coef[i2 * 6 + 2] - coef[i2 * 6 + 1] * coef[i1 * 6 + 2]) / det;
-    float y = (coef[i1 * 6 + 0] * coef[i2 * 6 + 2] - coef[i2 * 6 + 0] * coef[i1 * 6 + 2]) / det;
+    int i2 = (i1 + 5) % 6;
+    float det = coef[i1 * 3 + 0] * coef[i2 * 3 + 1] - coef[i2 * 3 + 0] * coef[i1 * 3 + 1];
+    float x = (coef[i1 * 3 + 1] * coef[i2 * 3 + 2] - coef[i2 * 3 + 1] * coef[i1 * 3 + 2]) / det;
+    float y = (coef[i1 * 3 + 2] * coef[i2 * 3 + 0] - coef[i2 * 3 + 2] * coef[i1 * 3 + 0]) / det;
     vtx[i * 3 + 0] = x;
     vtx[i * 3 + 1] = y;
     vtx[i * 3 + 2] = h / 2.0f;
@@ -1065,7 +1065,7 @@ Crystal Crystal::CreatePrism(float h, const float* fd) {
     // Check every plane
     bool in = true;
     for (int j = 0; j < 6; j++) {
-      if (coef[j * 3 + 0] * vtx[i * 3 + 0] + coef[j * 3 + 1] * vtx[i * 3 + 1] + coef[j * 3 + 2] > 0) {
+      if (coef[j * 3 + 0] * vtx[i * 3 + 0] + coef[j * 3 + 1] * vtx[i * 3 + 1] + coef[j * 3 + 2] > math::kFloatEps) {
         in = false;
         break;
       }
@@ -1078,6 +1078,9 @@ Crystal Crystal::CreatePrism(float h, const float* fd) {
     }
   }
   std::memcpy(vtx.get() + vtx_cnt * 3, vtx.get(), vtx_cnt * 3 * sizeof(float));
+  for (int i = 0; i < 6; i++) {
+    vtx[vtx_cnt * 3 + i * 3 + 2] = -h / 2.0f;
+  }
 
   std::unique_ptr<int[]> triangle_idx{ new int[kPrismCrystalTriangleCnt * 3]{} };
   size_t triangle_cnt = 0;
@@ -1086,11 +1089,6 @@ Crystal Crystal::CreatePrism(float h, const float* fd) {
     triangle_idx[triangle_cnt * 3 + 0] = 0;
     triangle_idx[triangle_cnt * 3 + 1] = i;
     triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
-    triangle_cnt++;
-    // fn2
-    triangle_idx[triangle_cnt * 3 + 0] = 0;
-    triangle_idx[triangle_cnt * 3 + 1] = (i + 1) % vtx_cnt;
-    triangle_idx[triangle_cnt * 3 + 2] = i;
     triangle_cnt++;
   }
   for (size_t i = 0; i < vtx_cnt; i++) {
@@ -1103,6 +1101,13 @@ Crystal Crystal::CreatePrism(float h, const float* fd) {
     triangle_idx[triangle_cnt * 3 + 0] = i + vtx_cnt;
     triangle_idx[triangle_cnt * 3 + 1] = (i + 1) % vtx_cnt + vtx_cnt;
     triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
+    triangle_cnt++;
+  }
+  for (size_t i = 1; i + 1 < vtx_cnt; i++) {
+    // fn2
+    triangle_idx[triangle_cnt * 3 + 0] = vtx_cnt;
+    triangle_idx[triangle_cnt * 3 + 1] = (i + 1) % vtx_cnt + vtx_cnt;
+    triangle_idx[triangle_cnt * 3 + 2] = i + vtx_cnt;
     triangle_cnt++;
   }
 
@@ -1378,7 +1383,7 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
       if (first_pri == kInvalidId) {
         first_pri = pri;
       }
-      pri -= first_pri;
+      pri += fn_period_ - first_pri;
       pri %= fn_period_;
       pri += 3;
       x = pyr * 10 + pri;
@@ -1400,16 +1405,16 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
       }
 
       if (pri2 == kInvalidId) {
-        if ((2 * pri1 - pri) % fn_period_ == pri) {
+        if ((2 * pri1 - pri + fn_period_) % fn_period_ == pri) {
           continue;
-        } else if ((2 * pri1 - pri) % fn_period_ > pri) {
+        } else if ((2 * pri1 - pri + fn_period_) % fn_period_ > pri) {
           break;  // Do nothing. It is already reduced.
         } else {
           pri2 = pri;
         }
       }
 
-      pri = (2 * pri1 - pri) % fn_period_;
+      pri = (2 * pri1 - pri + fn_period_) % fn_period_;
       pri += 3;
       x = pyr * 10 + pri;
     }
@@ -1453,7 +1458,7 @@ std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType
 
         IdType pyr = x / 10;
         IdType pri = x % 10;
-        pri -= 3;
+        pri += fn_period_ - 3;
         pri += i;
         pri %= fn_period_;
         pri += 3;
@@ -1485,7 +1490,7 @@ std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType
         }
 
         pri -= 3;
-        pri = 2 * pri0 - pri;
+        pri = 2 * pri0 - pri + fn_period_;
         pri %= fn_period_;
         pri += 3;
         x = pyr * 10 + pri;

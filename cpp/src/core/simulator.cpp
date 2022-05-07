@@ -176,7 +176,7 @@ struct CrystalMaker {
   RandomNumberGenerator& rng_;
 
   Crystal operator()(const PrismCrystalParam& p) {
-    float h = rng_.Get(p.h_);
+    float h = std::abs(rng_.Get(p.h_));
     bool regular = true;
     for (const auto& d : p.d_) {
       if (d.type != DistributionType::kNoRandom) {
@@ -191,7 +191,7 @@ struct CrystalMaker {
       float dist[6];
       int i = 0;
       for (const auto& d : p.d_) {
-        dist[i++] = rng_.Get(d);
+        dist[i++] = std::abs(rng_.Get(d));
       }
       return Crystal::CreatePrism(h, dist);
     }
