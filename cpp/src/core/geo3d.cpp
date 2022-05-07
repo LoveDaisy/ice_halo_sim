@@ -1,6 +1,8 @@
 #include "core/geo3d.hpp"
 
 #include <cstddef>
+#include <memory>
+#include <utility>
 
 namespace icehalo {
 namespace v3 {
@@ -225,6 +227,9 @@ Mesh::Mesh() : vtx_cnt_(0), triangle_cnt_(0) {}
 Mesh::Mesh(size_t vtx_cnt, size_t triangle_cnt)
     : vtx_cnt_(vtx_cnt), triangle_cnt_(triangle_cnt), vertices_(new float[vtx_cnt * 3]{}),
       triangle_(new int[triangle_cnt * 3]{}) {}
+
+Mesh::Mesh(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_cnt, std::unique_ptr<int[]> triangle_idx)
+    : vtx_cnt_(vtx_cnt), triangle_cnt_(triangle_cnt), vertices_(std::move(vtx)), triangle_(std::move(triangle_idx)) {}
 
 Mesh::Mesh(const Mesh& other)
     : vtx_cnt_(other.vtx_cnt_), triangle_cnt_(other.triangle_cnt_), vertices_(new float[other.vtx_cnt_ * 3]),

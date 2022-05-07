@@ -35,9 +35,11 @@ using CrystalPtrU = std::unique_ptr<Crystal>;
 class Crystal {
  public:
   static Crystal CreatePrism(float h);
+  static Crystal CreatePrism(float h, const float* fd);
 
   Crystal();
   Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx);
+  Crystal(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_cnt, std::unique_ptr<int[]> triangle_idx);
   Crystal(const Crystal& other);
   Crystal(Crystal&& other);
   ~Crystal() = default;

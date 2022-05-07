@@ -177,8 +177,24 @@ struct CrystalMaker {
 
   Crystal operator()(const PrismCrystalParam& p) {
     float h = rng_.Get(p.h_);
-    // TODO: face distance
-    return Crystal::CreatePrism(h);
+    bool regular = true;
+    for (const auto& d : p.d_) {
+      if (d.type != DistributionType::kNoRandom) {
+        regular = false;
+        break;
+      }
+    }
+    
+    if (regular) {
+      return Crystal::CreatePrism(h);
+    } else {
+      float dist[6];
+      int i = 0;
+      for (const auto& d : p.d_) {
+        dist[i++] = rng_.Get(d);
+      }
+      return Crystal::CreatePrism(h, dist);
+    }
   }
 
   Crystal operator()(const PyramidCrystalParam& /* p */) {

@@ -46,6 +46,7 @@ class Mesh {
  public:
   Mesh();
   Mesh(size_t vtx_cnt, size_t triangle_cnt);
+  Mesh(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_cnt, std::unique_ptr<int[]> triangle_idx);
   Mesh(const Mesh& other);
   Mesh(Mesh&& other);
   ~Mesh() = default;
