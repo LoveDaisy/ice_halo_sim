@@ -91,7 +91,7 @@ TEST_F(V3TestJson, Crystal_PrismFull) {
   ASSERT_TRUE(std::holds_alternative<v3::PrismCrystalParam>(c.param_));
 
   const auto& p = std::get<v3::PrismCrystalParam>(c.param_);
-  CHECK_DISTRIBUTION(p.h_, DistributionType::kUniform, 1.2f, 0.4f);
+  CHECK_DISTRIBUTION(p.h_, DistributionType::kUniform, 0.5f, 0.4f);
   for (const auto& x : p.d_) {
     CHECK_DISTRIBUTION(x, DistributionType::kGaussian, 1.0f * math::kSqrt3_4, 0.2f * math::kSqrt3_4);
   }
