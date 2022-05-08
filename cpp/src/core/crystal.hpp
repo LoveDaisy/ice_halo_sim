@@ -69,6 +69,7 @@ class Crystal {
   IdType config_id_ = kInvalidId;
 
  private:
+  void FillFnMap();
   void ComputeCacheData();
 
   Mesh mesh_;

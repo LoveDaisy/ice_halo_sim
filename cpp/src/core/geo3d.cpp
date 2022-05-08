@@ -318,14 +318,17 @@ Mesh Mesh::CreateIrregularPrism(float h, const float* dist) {
     0.5f,  -kSqrt3_2, -dist[5],  //
   };
 
+  // 1. Find out all candidate vertices
   std::unique_ptr<float[]> vtx{ new float[kHexPrismVtxCnt * 3]{} };
   for (int i = 0; i < 6; i++) {
+    // A vertex is the intersection of current and previous plane
     int i1 = i;
     int i2 = (i + 5) % 6;
     SolveLinear2(kCoef + i1 * 3, kCoef + i2 * 3, vtx.get() + i * 3);
     vtx[i * 3 + 2] = h / 2.0f;
   }
-  // Filter out invalid vertices
+
+  // 2. Filter out invalid vertices
   size_t vtx_cnt = 0;
   for (size_t i = 0; i < 6; i++) {
     // Check every plane
@@ -334,6 +337,7 @@ Mesh Mesh::CreateIrregularPrism(float h, const float* dist) {
         std::memcpy(vtx.get() + vtx_cnt * 3, vtx.get() + i * 3, 3 * sizeof(float));
       }
     } else {
+      // If invalid, then new vertex must be the intersection of previous and next plane
       int i1 = (i + 1) % 6;
       int i2 = (i + 5) % 6;
       SolveLinear2(kCoef + i1 * 3, kCoef + i2 * 3, vtx.get() + vtx_cnt * 3);
@@ -343,6 +347,7 @@ Mesh Mesh::CreateIrregularPrism(float h, const float* dist) {
     vtx_cnt++;
   }
 
+  // 3. Copy data to make another basal face
   std::memcpy(vtx.get() + vtx_cnt * 3, vtx.get(), vtx_cnt * 3 * sizeof(float));
   for (int i = 0; i < 6; i++) {
     vtx[vtx_cnt * 3 + i * 3 + 2] = -h / 2.0f;
@@ -351,26 +356,26 @@ Mesh Mesh::CreateIrregularPrism(float h, const float* dist) {
   std::unique_ptr<int[]> triangle_idx{ new int[kHexPrismTriCnt * 3]{} };
   size_t triangle_cnt = 0;
   for (size_t i = 1; i + 1 < vtx_cnt; i++) {
-    // fn1
+    // Basal face. Face number 1
     triangle_idx[triangle_cnt * 3 + 0] = 0;
     triangle_idx[triangle_cnt * 3 + 1] = i;
     triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
     triangle_cnt++;
   }
   for (size_t i = 0; i < vtx_cnt; i++) {
-    // prism face 0
+    // Prism face first half
     triangle_idx[triangle_cnt * 3 + 0] = i;
     triangle_idx[triangle_cnt * 3 + 1] = i + vtx_cnt;
     triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
     triangle_cnt++;
-    // prism face 1
+    // Prism face second half
     triangle_idx[triangle_cnt * 3 + 0] = i + vtx_cnt;
     triangle_idx[triangle_cnt * 3 + 1] = (i + 1) % vtx_cnt + vtx_cnt;
     triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
     triangle_cnt++;
   }
   for (size_t i = 1; i + 1 < vtx_cnt; i++) {
-    // fn2
+    // Basal face. Face number 2
     triangle_idx[triangle_cnt * 3 + 0] = vtx_cnt;
     triangle_idx[triangle_cnt * 3 + 1] = (i + 1) % vtx_cnt + vtx_cnt;
     triangle_idx[triangle_cnt * 3 + 2] = i + vtx_cnt;

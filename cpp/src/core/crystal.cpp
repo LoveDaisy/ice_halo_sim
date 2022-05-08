@@ -1032,34 +1032,9 @@ Crystal Crystal::CreatePrism(float h) {
 }
 
 Crystal Crystal::CreatePrism(float h, const float* fd) {
-  using math::kSqrt3_2;
-
   auto c = Crystal(Mesh::CreateIrregularPrism(h, fd));
   c.fn_period_ = 6;
-
-  float ref_norms[9 * 3]{
-    0.0f,  0.0f,      0.0f,   // placeholder
-    0.0f,  0.0f,      1.0f,   // 1
-    0.0f,  0.0f,      -1.0f,  // 2
-    1.0f,  0.0f,      0.0f,   // 3
-    0.5f,  kSqrt3_2,  0.0f,   // 4
-    -0.5f, kSqrt3_2,  0.0f,   // 5
-    -1.0f, 0.0f,      0.0f,   // 6
-    -0.5,  -kSqrt3_2, 0.0f,   // 7
-    0.5f,  -kSqrt3_2, 0.0f,   // 8
-  };
-
-  const float* curr_fn = c.GetFaceNorm();
-  for (size_t i = 0; i < c.TotalFaces(); i++) {
-    for (IdType j = 1; j < 9; j++) {
-      auto d = Dot3(curr_fn, ref_norms + j * 3);
-      if (std::abs(1.0f - d) < math::kFloatEps) {
-        c.fn_map_[i] = j;
-        break;
-      }
-    }
-    curr_fn += 3;
-  }
+  c.FillFnMap();
   return c;
 }
 
@@ -1246,6 +1221,49 @@ void Crystal::ComputeCacheData() {
     face_coord_tf_[i * 12 + 3] = -Dot3(face_coord_tf_ + i * 12 + 0, face_v_ + i * 9);
     face_coord_tf_[i * 12 + 7] = -Dot3(face_coord_tf_ + i * 12 + 4, face_v_ + i * 9);
     face_coord_tf_[i * 12 + 11] = -Dot3(face_coord_tf_ + i * 12 + 8, face_v_ + i * 9);
+  }
+}
+
+void Crystal::FillFnMap() {
+  using math::kSqrt3_2;
+
+  std::fill(fn_map_.get(), fn_map_.get() + mesh_.GetTriangleCnt(), kInvalidId);
+
+  float ref_norms[9 * 3]{
+    0.0f,  0.0f,      0.0f,   // placeholder
+    0.0f,  0.0f,      1.0f,   // 1
+    0.0f,  0.0f,      -1.0f,  // 2
+    1.0f,  0.0f,      0.0f,   // 3
+    0.5f,  kSqrt3_2,  0.0f,   // 4
+    -0.5f, kSqrt3_2,  0.0f,   // 5
+    -1.0f, 0.0f,      0.0f,   // 6
+    -0.5,  -kSqrt3_2, 0.0f,   // 7
+    0.5f,  -kSqrt3_2, 0.0f,   // 8
+  };
+
+  const float* curr_norm = face_n_;
+  for (size_t i = 0; i < mesh_.GetTriangleCnt(); i++) {
+    IdType pri = 0;
+    float p_comp = -1;
+    for (IdType j = 3; j < 9; j++) {
+      if (auto p = Dot3(curr_norm, ref_norms + j * 3); p > math::kFloatEps && p > p_comp) {
+        pri = j;
+        p_comp = p;
+      }
+    }
+
+    IdType pyr = 0;
+    if (Dot3(curr_norm, ref_norms + 3) > math::kFloatEps) {
+      pyr = 1;
+    } else if (Dot3(curr_norm, ref_norms + 6) > math::kFloatEps) {
+      pyr = 2;
+    }
+
+    if (pri > 0 || pyr > 0) {
+      fn_map_[i] = pyr * 10 + pri;
+    } else {
+      LOG_WARNING("Unrecognized face number!");
+    }
   }
 }
 
