@@ -282,7 +282,7 @@ void Server::CommitConfig(std::string config_str) {
     LOG_WARNING("Server is terminated!");
     return;
   }
-  nlohmann::json config_json(config_str);
+  auto config_json = nlohmann::json::parse(config_str);
   impl_->CommitConfig(config_json);
 }
 

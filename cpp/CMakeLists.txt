@@ -30,10 +30,12 @@ endif()
 set(CMAKE_CXX_STANDARD 17)            # C++17...
 set(CMAKE_CXX_STANDARD_REQUIRED ON)   #...is required...
 set(CMAKE_CXX_EXTENSIONS OFF)         #...without compiler extensions like gnu++11
+set(CMAKE_C_STANDARD 11)              # C11...
 
 # Flags
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -Wall -g -ggdb")
-set(CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL} -ffunction-sections -fdata-sections")
+set(CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL} -ffunction-sections -fdata-sections -fvisibility=hidden")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -ffunction-sections -fdata-sections -fvisibility=hidden")
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT result OUTPUT output)
