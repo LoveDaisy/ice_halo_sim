@@ -66,6 +66,11 @@ class Queue {
   bool shutdown_ = false;
 };
 
+template <class T>
+using QueuePtrU = std::unique_ptr<Queue<T>>;
+template <class T>
+using QueuePtrS = std::shared_ptr<Queue<T>>;
+
 }  // namespace v3
 }  // namespace icehalo
 
