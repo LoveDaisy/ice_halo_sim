@@ -5,7 +5,6 @@
 #include <variant>
 #include <vector>
 
-#include "include/result.hpp"
 #include "include/server.hpp"
 
 namespace ns = icehalo::v3;

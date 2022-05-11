@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "config/sim_data.hpp"
-#include "include/result.hpp"
+#include "include/server.hpp"
 
 namespace icehalo {
 namespace v3 {

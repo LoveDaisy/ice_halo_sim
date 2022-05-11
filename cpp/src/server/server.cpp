@@ -16,7 +16,7 @@
 #include "core/def.hpp"
 #include "core/simulator.hpp"
 #include "include/log.hpp"
-#include "include/result.hpp"
+#include "include/server.hpp"
 #include "json.hpp"
 #include "server/consumer.hpp"
 #include "server/render.hpp"

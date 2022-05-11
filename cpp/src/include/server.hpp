@@ -5,11 +5,30 @@
 #include <memory>
 #include <vector>
 
-#include "include/result.hpp"
 
 namespace icehalo {
 namespace v3 {
 
+// =============== Result ===============
+struct NoneResult {};
+
+struct RenderResult {
+  int renderer_id_;
+  int img_width_;
+  int img_height_;
+  uint8_t* img_buffer_;
+};
+
+struct StatsResult {
+  size_t ray_seg_num_;
+  size_t sim_ray_num_;
+  size_t crystal_num_;
+};
+
+using Result = std::variant<NoneResult, RenderResult, StatsResult>;
+
+
+// =============== Server ===============
 class ServerImpl;
 
 class Server {
