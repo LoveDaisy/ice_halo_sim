@@ -539,19 +539,19 @@ class ComplexFilter : public Filter {
 
  protected:
   bool InternalCheck(const RaySeg& ray) const override {
-    for (const auto& and_f : filters_) {
-      bool or_check = false;
-      for (const auto& or_f : and_f) {
-        if (or_f->Check(ray)) {
-          or_check = true;
+    for (const auto& or_f : filters_) {
+      bool and_check = true;
+      for (const auto& and_f : or_f) {
+        if (!and_f->Check(ray)) {
+          and_check = false;
           break;
         }
       }
-      if (!or_check) {
-        return false;
+      if (and_check) {
+        return true;
       }
     }
-    return true;
+    return false;
   }
 
  private:

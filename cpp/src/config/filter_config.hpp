@@ -35,7 +35,7 @@ using SimpleFilterParam =
     std::variant<NoneFilterParam, RaypathFilterParam, EntryExitFilterParam, DirectionFilterParam, CrystalFilterParam>;
 
 struct ComplexFilterParam {
-  std::vector<std::vector<std::pair<IdType, SimpleFilterParam>>> filters_;  // (f + ...) * (f + ...) * ...
+  std::vector<std::vector<std::pair<IdType, SimpleFilterParam>>> filters_;  // (f * ...) + (f * ...) + ...
 };
 
 using FilterParam = std::variant<SimpleFilterParam, ComplexFilterParam>;
