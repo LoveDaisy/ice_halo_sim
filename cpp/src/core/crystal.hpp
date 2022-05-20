@@ -59,7 +59,6 @@ class Crystal {
 
   IdType GetFn(int fid) const;
   Crystal& Rotate(const Rotation& r);
-  Crystal& Translate(float dx, float dy, float dz);
 
   std::vector<IdType> ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const;
   std::vector<std::vector<IdType>> ExpandRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const;
@@ -72,7 +71,6 @@ class Crystal {
   void ComputeCacheData();
 
   Mesh mesh_;
-  float origin_[3];  // world origin
 
   std::unique_ptr<float[]> cache_data_;
   float* face_v_;         // vertex coordinate of every face. 9 * face_cnt

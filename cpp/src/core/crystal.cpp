@@ -1091,10 +1091,10 @@ enum CrystalCachOffset {
   kTotal = 31,
 };
 
-Crystal::Crystal() : origin_{} {}
+Crystal::Crystal() {}
 
 Crystal::Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx)
-    : mesh_(vtx_cnt, triangle_cnt), origin_{}, cache_data_(new float[triangle_cnt * CrystalCachOffset::kTotal]{}),
+    : mesh_(vtx_cnt, triangle_cnt), cache_data_(new float[triangle_cnt * CrystalCachOffset::kTotal]{}),
       face_v_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kVtx),
       face_ev_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kEdgeVec),
       face_n_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kNormal),
@@ -1109,7 +1109,7 @@ Crystal::Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const in
 }
 
 Crystal::Crystal(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_cnt, std::unique_ptr<int[]> triangle_idx)
-    : mesh_(vtx_cnt, std::move(vtx), triangle_cnt, std::move(triangle_idx)), origin_{},
+    : mesh_(vtx_cnt, std::move(vtx), triangle_cnt, std::move(triangle_idx)),
       cache_data_(new float[triangle_cnt * CrystalCachOffset::kTotal]{}),
       face_v_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kVtx),
       face_ev_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kEdgeVec),
@@ -1122,7 +1122,7 @@ Crystal::Crystal(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_c
 }
 
 Crystal::Crystal(Mesh mesh)
-    : mesh_(std::move(mesh)), origin_{}, cache_data_(new float[mesh_.GetTriangleCnt() * CrystalCachOffset::kTotal]{}),
+    : mesh_(std::move(mesh)), cache_data_(new float[mesh_.GetTriangleCnt() * CrystalCachOffset::kTotal]{}),
       face_v_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kVtx),
       face_ev_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kEdgeVec),
       face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
@@ -1133,7 +1133,7 @@ Crystal::Crystal(Mesh mesh)
 }
 
 Crystal::Crystal(const Crystal& other)
-    : config_id_(other.config_id_), mesh_(other.mesh_), origin_{ other.origin_[0], other.origin_[1], other.origin_[2] },
+    : config_id_(other.config_id_), mesh_(other.mesh_),
       cache_data_(new float[other.TotalFaces() * CrystalCachOffset::kTotal]{}),
       face_v_(cache_data_.get() + other.TotalFaces() * CrystalCachOffset::kVtx),
       face_ev_(cache_data_.get() + other.TotalFaces() * CrystalCachOffset::kEdgeVec),
@@ -1147,9 +1147,7 @@ Crystal::Crystal(const Crystal& other)
 }
 
 Crystal::Crystal(Crystal&& other)
-    : config_id_(other.config_id_),
-      mesh_(std::move(other.mesh_)), origin_{ other.origin_[0], other.origin_[1], other.origin_[2] },
-      cache_data_(std::move(other.cache_data_)),
+    : config_id_(other.config_id_), mesh_(std::move(other.mesh_)), cache_data_(std::move(other.cache_data_)),
       face_v_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kVtx),
       face_ev_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kEdgeVec),
       face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
@@ -1170,7 +1168,6 @@ Crystal& Crystal::operator=(const Crystal& other) {
 
   config_id_ = other.config_id_;
   mesh_ = other.mesh_;
-  std::memcpy(origin_, other.origin_, 3 * sizeof(float));
 
   auto n = other.TotalFaces();
   cache_data_.reset(new float[n * CrystalCachOffset::kTotal]);
@@ -1195,7 +1192,6 @@ Crystal& Crystal::operator=(Crystal&& other) {
 
   config_id_ = other.config_id_;
   mesh_ = std::move(other.mesh_);
-  std::memcpy(origin_, other.origin_, 3 * sizeof(float));
 
   auto n = mesh_.GetTriangleCnt();
   cache_data_ = std::move(other.cache_data_);
@@ -1291,10 +1287,6 @@ const float* Crystal::GetFaceCoordTf() const {
   return face_coord_tf_;
 }
 
-const float* Crystal::GetOrigin() const {
-  return origin_;
-}
-
 IdType Crystal::GetFn(int fid) const {
   if (fid < 0 || fid >= static_cast<int>(mesh_.GetTriangleCnt())) {
     return kInvalidId;
@@ -1308,13 +1300,6 @@ Crystal& Crystal::Rotate(const Rotation& r) {
   auto* vtx = mesh_.GetVtxPtr(0);
   r.Apply(vtx, vtx_cnt);
   ComputeCacheData();
-  return *this;
-}
-
-Crystal& Crystal::Translate(float dx, float dy, float dz) {
-  origin_[0] += dx;
-  origin_[1] += dy;
-  origin_[2] += dz;
   return *this;
 }
 
