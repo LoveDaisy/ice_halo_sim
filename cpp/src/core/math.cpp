@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <memory>
 
 #include "include/log.hpp"
@@ -805,18 +806,60 @@ void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
 
 namespace v3 {
 
-void SolveLinear2(const float* coef1, const float* coef2, float* res) {
+bool SolveLines(const float* coef1, const float* coef2, float* res) {
   float det = coef1[0] * coef2[1] - coef2[0] * coef1[1];
+  if (FloatEqualZero(det)) {
+    res[0] = std::numeric_limits<float>::quiet_NaN();
+    res[1] = std::numeric_limits<float>::quiet_NaN();
+    return false;
+  }
   float x = (coef1[1] * coef2[2] - coef2[1] * coef1[2]) / det;
   float y = (coef1[2] * coef2[0] - coef2[2] * coef1[0]) / det;
   res[0] = x;
   res[1] = y;
+  return true;
 }
+
+
+bool SolvePlanes(const float* coef1, const float* coef2, const float* coef3, float* res) {
+  float det = coef1[0] * coef2[1] * coef3[2] + coef1[1] * coef2[2] * coef3[0] + coef1[2] * coef2[0] * coef3[1] -
+              coef1[2] * coef2[1] * coef3[0] - coef1[0] * coef2[2] * coef3[1] - coef1[1] * coef2[0] * coef3[2];
+  if (FloatEqualZero(det)) {
+    res[0] = std::numeric_limits<float>::quiet_NaN();
+    res[1] = std::numeric_limits<float>::quiet_NaN();
+    res[2] = std::numeric_limits<float>::quiet_NaN();
+    return false;
+  }
+  float x = coef1[1] * coef2[2] * coef3[3] + coef1[2] * coef2[3] * coef3[1] + coef1[3] * coef2[1] * coef3[2] -
+            coef1[3] * coef2[2] * coef3[1] - coef1[1] * coef2[3] * coef3[2] - coef1[2] * coef2[1] * coef3[3];
+  float y = coef1[0] * coef2[2] * coef3[3] + coef1[2] * coef2[3] * coef3[0] + coef1[3] * coef2[0] * coef3[2] -
+            coef1[3] * coef2[2] * coef3[0] - coef1[0] * coef2[3] * coef3[2] - coef1[2] * coef2[0] * coef3[3];
+  float z = coef1[0] * coef2[1] * coef3[3] + coef1[1] * coef2[3] * coef3[0] + coef1[3] * coef2[0] * coef3[1] -
+            coef1[3] * coef2[1] * coef3[0] - coef1[0] * coef2[3] * coef3[1] - coef1[1] * coef2[0] * coef3[3];
+  res[0] = x / det;
+  res[1] = y / det;
+  res[2] = z / det;
+  return true;
+}
+
 
 bool IsInPolygon2(int n, const float* coef, const float xy[2]) {
   bool in = true;
+  float tmp[3]{ xy[0], xy[1], 1.0f };
   for (int j = 0; j < n; j++) {
-    if (coef[0] * xy[0] + coef[1] * xy[1] + coef[2] > math::kFloatEps) {
+    if (Dot3(coef + j * 3, tmp) > math::kFloatEps) {
+      in = false;
+      break;
+    }
+  }
+  return in;
+}
+
+
+bool IsInPolyhedron3(int n, const float* coef, const float xyz[3]) {
+  bool in = true;
+  for (int j = 0; j < n; j++) {
+    if (Dot3(coef + j * 4, xyz) + coef[j * 4 + 3] > math::kFloatEps) {
       in = false;
       break;
     }

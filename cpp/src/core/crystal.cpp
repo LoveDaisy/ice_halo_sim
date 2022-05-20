@@ -1025,7 +1025,7 @@ void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map) {
 
 Crystal Crystal::CreatePrism(float h) {
   using math::kSqrt3_4;
-  std::unique_ptr<float[]> vtx{ new float[Mesh::kHexPrismVtxCnt * 3]{
+  std::unique_ptr<float[]> vtx{ new float[kHexPrismVtxCnt * 3]{
       kSqrt3_4,  -1.0f / 4.0f, h / 2.0f,   // upper: vtx1
       kSqrt3_4,  1.0f / 4.0f,  h / 2.0f,   // upper: vtx2
       0.0f,      1.0f / 2.0f,  h / 2.0f,   // upper: vtx3
@@ -1039,7 +1039,7 @@ Crystal Crystal::CreatePrism(float h) {
       -kSqrt3_4, -1.0f / 4.0f, -h / 2.0f,  // lower: vtx5
       0.0f,      -1.0f / 2.0f, -h / 2.0f,  // lower: vtx6
   } };
-  std::unique_ptr<int[]> triangle_idx{ new int[Mesh::kHexPrismTriCnt * 3]{
+  std::unique_ptr<int[]> triangle_idx{ new int[kHexPrismTriCnt * 3]{
       0,  1,  2,   // upper: fn1
       0,  2,  3,   // upper: fn1
       3,  4,  5,   // upper: fn1
@@ -1061,7 +1061,7 @@ Crystal Crystal::CreatePrism(float h) {
       9,  11, 10,  // lower: fn2
       9,  6,  11,  // lower: fn2
   } };
-  auto c = Crystal(Mesh::kHexPrismVtxCnt, std::move(vtx), Mesh::kHexPrismTriCnt, std::move(triangle_idx));
+  auto c = Crystal(kHexPrismVtxCnt, std::move(vtx), kHexPrismTriCnt, std::move(triangle_idx));
   c.fn_period_ = 6;
   for (int i = 0; i < 4; i++) {
     c.fn_map_[i] = 1;
@@ -1075,7 +1075,7 @@ Crystal Crystal::CreatePrism(float h) {
 }
 
 Crystal Crystal::CreatePrism(float h, const float* fd) {
-  auto c = Crystal(Mesh::CreateIrregularPrism(h, fd));
+  auto c = Crystal(CreateIrregularPrismMesh(h, fd));
   c.fn_period_ = 6;
   FillHexFnMap(c.mesh_.GetTriangleCnt(), c.face_n_, c.fn_map_.get());
   return c;

@@ -275,9 +275,52 @@ struct AxisDistribution {
 
 namespace v3 {
 
-void SolveLinear2(const float* coef1, const float* coef2, float* res);
+/**
+ * @brief Find the intersection point of two 2D lines. Lines have forms of a*x + b*y + c = 0
+ *
+ * @param coef1 Coefficients for first line. [a, b, c]
+ * @param coef2 Coefficients for second line. [a, b, c]
+ * @param res Intersection point. [x, y]
+ * @return true Find the intersection.
+ * @return false No intersection.
+ */
+bool SolveLines(const float* coef1, const float* coef2, float* res);
 
+/**
+ * @brief Find the intersection point of three 3D planes. Planes have forms of a*x + b*y + c*z + d = 0
+ *
+ * @param coef1 Coefficients for 1st plane. [a, b, c, d]
+ * @param coef2 Coefficients for 2nd plane. [a, b, c, d]
+ * @param coef3 Coefficients for 3rd plane. [a, b, c, d]
+ * @param res Intersection point. [x, y, z]
+ * @return true Find the intersection.
+ * @return false No intersection.
+ */
+bool SolvePlanes(const float* coef1, const float* coef2, const float* coef3, float* res);
+
+/**
+ * @brief Check if a 2D point locates **IN** a polygon. The polygon is defined by intersection of
+ *        multiple half planes: a*x + b*y + c <= 0
+ *
+ * @param n Polygon edge number. The number of half planes.
+ * @param coef Coefficients of half planes.
+ * @param xy Point to be checked.
+ * @return true
+ * @return false
+ */
 bool IsInPolygon2(int n, const float* coef, const float xy[2]);
+
+/**
+ * @brief Check if a 3D point locates **IN** a polyhedron. The polyhedron is defined by intersection of
+ *        multiple half spaces: a*x + b*y + c*z + d <= 0
+ *
+ * @param n Number of half spaces.
+ * @param coef Coefficients of half spaces. [a, b, c, d]
+ * @param xyz Point to be checked.
+ * @return true
+ * @return false
+ */
+bool IsInPolyhedron3(int n, const float* coef, const float xyz[3]);
 
 }  // namespace v3
 

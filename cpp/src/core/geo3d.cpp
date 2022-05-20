@@ -305,7 +305,7 @@ int* Mesh::GetTrianglePtr(size_t idx) {
 }
 
 
-Mesh Mesh::CreateIrregularPrism(float h, const float* dist) {
+Mesh CreateIrregularPrismMesh(float h, const float* dist) {
   using math::kSqrt3_2;
 
   // a*x + b*y + c <= 0, (a, b, c)
@@ -324,7 +324,7 @@ Mesh Mesh::CreateIrregularPrism(float h, const float* dist) {
     // A vertex is the intersection of current and previous plane
     int i1 = i;
     int i2 = (i + 5) % 6;
-    SolveLinear2(kCoef + i1 * 3, kCoef + i2 * 3, vtx.get() + i * 3);
+    SolveLines(kCoef + i1 * 3, kCoef + i2 * 3, vtx.get() + i * 3);
     vtx[i * 3 + 2] = h / 2.0f;
   }
 
@@ -340,7 +340,7 @@ Mesh Mesh::CreateIrregularPrism(float h, const float* dist) {
       // If invalid, then new vertex must be the intersection of previous and next plane
       int i1 = (i + 1) % 6;
       int i2 = (i + 5) % 6;
-      SolveLinear2(kCoef + i1 * 3, kCoef + i2 * 3, vtx.get() + vtx_cnt * 3);
+      SolveLines(kCoef + i1 * 3, kCoef + i2 * 3, vtx.get() + vtx_cnt * 3);
       vtx[vtx_cnt * 3 + 2] = h / 2.0f;
       i++;
     }
