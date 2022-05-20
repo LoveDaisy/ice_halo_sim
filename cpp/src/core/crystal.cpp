@@ -980,6 +980,49 @@ CrystalPtrU Crystal::CreateCustomCrystal(const std::vector<Vec3f>& pts,         
 
 namespace v3 {
 
+void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map) {
+  using math::kSqrt3_2;
+
+  std::fill(fn_map, fn_map + face_cnt, kInvalidId);
+
+  float ref_norms[9 * 3]{
+    0.0f,  0.0f,      0.0f,   // placeholder
+    0.0f,  0.0f,      1.0f,   // 1
+    0.0f,  0.0f,      -1.0f,  // 2
+    1.0f,  0.0f,      0.0f,   // 3
+    0.5f,  kSqrt3_2,  0.0f,   // 4
+    -0.5f, kSqrt3_2,  0.0f,   // 5
+    -1.0f, 0.0f,      0.0f,   // 6
+    -0.5,  -kSqrt3_2, 0.0f,   // 7
+    0.5f,  -kSqrt3_2, 0.0f,   // 8
+  };
+
+  for (size_t i = 0; i < face_cnt; i++) {
+    const float* curr_norm = face_n + i * 3;
+    IdType pri = 0;
+    float p_comp = -1;
+    for (IdType j = 3; j < 9; j++) {
+      if (auto p = Dot3(curr_norm, ref_norms + j * 3); p > math::kFloatEps && p > p_comp) {
+        pri = j;
+        p_comp = p;
+      }
+    }
+
+    IdType pyr = 0;
+    if (Dot3(curr_norm, ref_norms + 3) > math::kFloatEps) {
+      pyr = 1;
+    } else if (Dot3(curr_norm, ref_norms + 6) > math::kFloatEps) {
+      pyr = 2;
+    }
+
+    if (pri > 0 || pyr > 0) {
+      fn_map[i] = pyr * 10 + pri;
+    } else {
+      LOG_WARNING("Unrecognized face number!");
+    }
+  }
+}
+
 Crystal Crystal::CreatePrism(float h) {
   using math::kSqrt3_4;
   std::unique_ptr<float[]> vtx{ new float[Mesh::kHexPrismVtxCnt * 3]{
@@ -1034,7 +1077,7 @@ Crystal Crystal::CreatePrism(float h) {
 Crystal Crystal::CreatePrism(float h, const float* fd) {
   auto c = Crystal(Mesh::CreateIrregularPrism(h, fd));
   c.fn_period_ = 6;
-  c.FillFnMap();
+  FillHexFnMap(c.mesh_.GetTriangleCnt(), c.face_n_, c.fn_map_.get());
   return c;
 }
 
@@ -1224,49 +1267,6 @@ void Crystal::ComputeCacheData() {
   }
 }
 
-void Crystal::FillFnMap() {
-  using math::kSqrt3_2;
-
-  std::fill(fn_map_.get(), fn_map_.get() + mesh_.GetTriangleCnt(), kInvalidId);
-
-  float ref_norms[9 * 3]{
-    0.0f,  0.0f,      0.0f,   // placeholder
-    0.0f,  0.0f,      1.0f,   // 1
-    0.0f,  0.0f,      -1.0f,  // 2
-    1.0f,  0.0f,      0.0f,   // 3
-    0.5f,  kSqrt3_2,  0.0f,   // 4
-    -0.5f, kSqrt3_2,  0.0f,   // 5
-    -1.0f, 0.0f,      0.0f,   // 6
-    -0.5,  -kSqrt3_2, 0.0f,   // 7
-    0.5f,  -kSqrt3_2, 0.0f,   // 8
-  };
-
-  const float* curr_norm = face_n_;
-  for (size_t i = 0; i < mesh_.GetTriangleCnt(); i++) {
-    IdType pri = 0;
-    float p_comp = -1;
-    for (IdType j = 3; j < 9; j++) {
-      if (auto p = Dot3(curr_norm, ref_norms + j * 3); p > math::kFloatEps && p > p_comp) {
-        pri = j;
-        p_comp = p;
-      }
-    }
-
-    IdType pyr = 0;
-    if (Dot3(curr_norm, ref_norms + 3) > math::kFloatEps) {
-      pyr = 1;
-    } else if (Dot3(curr_norm, ref_norms + 6) > math::kFloatEps) {
-      pyr = 2;
-    }
-
-    if (pri > 0 || pyr > 0) {
-      fn_map_[i] = pyr * 10 + pri;
-    } else {
-      LOG_WARNING("Unrecognized face number!");
-    }
-  }
-}
-
 size_t Crystal::TotalFaces() const {
   return mesh_.GetTriangleCnt();
 }
@@ -1319,7 +1319,7 @@ Crystal& Crystal::Translate(float dx, float dy, float dz) {
 }
 
 std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
-  if (symmetry == FilterConfig::kSymNone) {
+  if (symmetry == FilterConfig::kSymNone || fn_period_ < 0) {
     return rp;
   }
 
@@ -1395,7 +1395,7 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
 std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
   std::vector<std::vector<IdType>> result;
   result.emplace_back(rp);
-  if (symmetry == FilterConfig::kSymNone) {
+  if (symmetry == FilterConfig::kSymNone || fn_period_ < 0) {
     return result;
   }
 
