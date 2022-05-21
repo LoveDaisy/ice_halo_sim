@@ -75,6 +75,16 @@ void Vec3FromTo(const float* vec1, const float* vec2, float* vec) {
 }
 
 
+void TriangleNormal(const float* p1, const float* p2, const float* p3, float* normal) {
+  float v1[3]{};
+  float v2[3]{};
+  Vec3FromTo(p1, p2, v1);
+  Vec3FromTo(p1, p3, v2);
+  Cross3(v1, v2, normal);
+  Normalize3(normal);
+}
+
+
 void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num) {
   return RotateZ(lon_lat_roll, input_vec, output_vec, 3, 3, data_num);
 }

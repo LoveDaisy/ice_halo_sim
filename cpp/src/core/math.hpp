@@ -250,6 +250,7 @@ float DiffNorm3(const float* vec1, const float* vec2);
 void Normalize3(float* vec);
 void Normalized3(const float* vec, float* vec_out);
 void Vec3FromTo(const float* vec1, const float* vec2, float* vec);
+void TriangleNormal(const float* p1, const float* p2, const float* p3, float* normal);
 
 void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num = 1);
 void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t input_step,

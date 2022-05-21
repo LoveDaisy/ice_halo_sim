@@ -1024,44 +1024,7 @@ void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map) {
 }
 
 Crystal Crystal::CreatePrism(float h) {
-  using math::kSqrt3_4;
-  std::unique_ptr<float[]> vtx{ new float[kHexPrismVtxCnt * 3]{
-      kSqrt3_4,  -1.0f / 4.0f, h / 2.0f,   // upper: vtx1
-      kSqrt3_4,  1.0f / 4.0f,  h / 2.0f,   // upper: vtx2
-      0.0f,      1.0f / 2.0f,  h / 2.0f,   // upper: vtx3
-      -kSqrt3_4, 1.0f / 4.0f,  h / 2.0f,   // upper: vtx4
-      -kSqrt3_4, -1.0f / 4.0f, h / 2.0f,   // upper: vtx5
-      0.0f,      -1.0f / 2.0f, h / 2.0f,   // upper: vtx6
-      kSqrt3_4,  -1.0f / 4.0f, -h / 2.0f,  // lower: vtx1
-      kSqrt3_4,  1.0f / 4.0f,  -h / 2.0f,  // lower: vtx2
-      0.0f,      1.0f / 2.0f,  -h / 2.0f,  // lower: vtx3
-      -kSqrt3_4, 1.0f / 4.0f,  -h / 2.0f,  // lower: vtx4
-      -kSqrt3_4, -1.0f / 4.0f, -h / 2.0f,  // lower: vtx5
-      0.0f,      -1.0f / 2.0f, -h / 2.0f,  // lower: vtx6
-  } };
-  std::unique_ptr<int[]> triangle_idx{ new int[kHexPrismTriCnt * 3]{
-      0,  1,  2,   // upper: fn1
-      0,  2,  3,   // upper: fn1
-      3,  4,  5,   // upper: fn1
-      3,  5,  0,   // upper: fn1
-      0,  6,  1,   // side: fn3
-      6,  7,  1,   // side: fn3
-      1,  7,  2,   // side: fn4
-      7,  8,  2,   // side: fn4
-      2,  8,  3,   // side: fn5
-      8,  9,  3,   // side: fn5
-      3,  9,  4,   // side: fn6
-      9,  10, 4,   // side: fn6
-      4,  10, 5,   // side: fn7
-      10, 11, 5,   // side: fn7
-      5,  11, 0,   // side: fn8
-      11, 6,  0,   // side: fn8
-      6,  8,  7,   // lower: fn2
-      6,  9,  8,   // lower: fn2
-      9,  11, 10,  // lower: fn2
-      9,  6,  11,  // lower: fn2
-  } };
-  auto c = Crystal(kHexPrismVtxCnt, std::move(vtx), kHexPrismTriCnt, std::move(triangle_idx));
+  auto c = Crystal(CreatePrismMesh(h));
   c.fn_period_ = 6;
   for (int i = 0; i < 4; i++) {
     c.fn_map_[i] = 1;
@@ -1077,7 +1040,35 @@ Crystal Crystal::CreatePrism(float h) {
 Crystal Crystal::CreatePrism(float h, const float* fd) {
   auto c = Crystal(CreateIrregularPrismMesh(h, fd));
   c.fn_period_ = 6;
-  FillHexFnMap(c.mesh_.GetTriangleCnt(), c.face_n_, c.fn_map_.get());
+  FillHexFnMap(c.TotalFaces(), c.face_n_, c.fn_map_.get());
+  return c;
+}
+
+Crystal Crystal::CreatePyramid(float h1, float h2, float h3) {
+  auto c = Crystal(CreatePyramidMesh(h1, h2, h3));
+  c.fn_period_ = 6;
+  for (int i = 0; i < 4; i++) {
+    c.fn_map_[i] = 1;
+    c.fn_map_[i + 40] = 1;
+  }
+  for (int i = 0; i < 6; i++) {
+    c.fn_map_[i * 2 + 4] = i + 13;
+    c.fn_map_[i * 2 + 5] = i + 13;
+    c.fn_map_[i * 2 + 16] = i + 3;
+    c.fn_map_[i * 2 + 17] = i + 3;
+    c.fn_map_[i * 2 + 28] = i + 23;
+    c.fn_map_[i * 2 + 29] = i + 23;
+  }
+  return c;
+}
+
+
+Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int lower_i4,  // Miller index
+                               float h1, float h2, float h3,                            // height
+                               const float* dist) {                                     // face distance
+  auto c = Crystal(CreateIrregularPyramidMesh(upper_i1, upper_i4, lower_i1, lower_i4, h1, h2, h3, dist));
+  c.fn_period_ = 6;
+  FillHexFnMap(c.TotalFaces(), c.face_n_, c.fn_map_.get());
   return c;
 }
 

@@ -72,8 +72,19 @@ class Mesh {
 
 constexpr int kHexPrismVtxCnt = 12;
 constexpr int kHexPrismTriCnt = 20;
+constexpr int kHexPyramidVtxCnt = 24;
+constexpr int kHexPyramidTriCnt = 44;
+constexpr float kIceCrystalC = 1.629f;
+
+Mesh CreatePrismMesh(float h);
 
 Mesh CreateIrregularPrismMesh(float h, const float* dist);
+
+Mesh CreatePyramidMesh(float h1, float h2, float h3);
+
+Mesh CreateIrregularPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
+                                float h1, float h2, float h3,                                    // height
+                                const float* dist);                                              // face distance
 
 }  // namespace v3
 

@@ -36,6 +36,10 @@ class Crystal {
  public:
   static Crystal CreatePrism(float h);
   static Crystal CreatePrism(float h, const float* fd);
+  static Crystal CreatePyramid(float h1, float h2, float h3);
+  static Crystal CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int lower_i4,  // Miller index
+                               float h1, float h2, float h3,                            // height
+                               const float* dist);                                      // face distance
 
   Crystal();
   Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx);
