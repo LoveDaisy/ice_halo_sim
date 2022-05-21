@@ -5,6 +5,8 @@
 
 #include "config/config_manager.hpp"
 #include "core/crystal.hpp"
+#include "core/geo3d.hpp"
+#include "core/math.hpp"
 #include "include/log.hpp"
 
 extern std::string config_file_name;
@@ -25,7 +27,7 @@ class V3TestCrystal : public ::testing::Test {
 TEST_F(V3TestCrystal, CrystalCacheData) {
   auto crystal = v3::Crystal::CreatePrism(1.3);
 
-  const auto* face_v = crystal.GetFaceVtx();
+  const auto* face_v = crystal.GetTriangleVtx();
   float expect_face_v[9 * 20]{
     0.433013,  -0.250000, 0.650000,  0.433013,  0.250000,  0.650000,  0.000000,  0.500000,  0.650000,   //
     0.433013,  -0.250000, 0.650000,  0.000000,  0.500000,  0.650000,  -0.433013, 0.250000,  0.650000,   //
@@ -49,7 +51,7 @@ TEST_F(V3TestCrystal, CrystalCacheData) {
     -0.433013, 0.250000,  -0.650000, 0.433013,  -0.250000, -0.650000, 0.000000,  -0.500000, -0.650000,  //
   };
 
-  const auto* face_ev = crystal.GetFaceEdgeVec();
+  const auto* face_ev = crystal.GetTriangleEdgeVec();
   float expect_face_ev[6 * 20]{
     0.000000,  0.500000,  0.000000,  -0.433013, 0.750000,  0.000000,  //
     -0.433013, 0.750000,  0.000000,  -0.866025, 0.500000,  0.000000,  //
@@ -73,7 +75,7 @@ TEST_F(V3TestCrystal, CrystalCacheData) {
     0.866025,  -0.500000, 0.000000,  0.433013,  -0.750000, 0.000000,  //
   };
 
-  const auto* face_n = crystal.GetFaceNorm();
+  const auto* face_n = crystal.GetTriangleNormal();
   float expect_face_n[3 * 20]{
     0.000000,  -0.000000, 1.000000,   //
     0.000000,  0.000000,  1.000000,   //
@@ -97,13 +99,13 @@ TEST_F(V3TestCrystal, CrystalCacheData) {
     0.000000,  0.000000,  -1.000000,  //
   };
 
-  const auto* face_area = crystal.GetFaceArea();
+  const auto* face_area = crystal.GetTirangleArea();
   float expect_face_area[20]{
     0.108253, 0.216506, 0.108253, 0.216506, 0.325000, 0.325000, 0.325000, 0.325000, 0.325000, 0.325000,
     0.325000, 0.325000, 0.325000, 0.325000, 0.325000, 0.325000, 0.108253, 0.216506, 0.108253, 0.216506,
   };
 
-  const auto* face_tf = crystal.GetFaceCoordTf();
+  const auto* face_tf = crystal.GetTriangleCoordTf();
   float expect_face_tf[12 * 20]{
     3.464102,  2.000000,  0.000000,  -1.000000, -2.309401, 0.000000,
     0.000000,  1.000000,  0.000000,  -0.000000, 1.000000,  -0.650000,  //
@@ -147,7 +149,7 @@ TEST_F(V3TestCrystal, CrystalCacheData) {
     -0.000000, -0.000000, 0.000000,  0.000000,  -1.000000, -0.650000,  //
   };
 
-  auto n = crystal.TotalFaces();
+  auto n = crystal.TotalTriangles();
   LOG_VERBOSE("face_v");
   for (size_t i = 0; i < n; i++) {
     LOG_VERBOSE("(%02zu): %.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f,%.6f,%.6f", i,  //
@@ -193,6 +195,72 @@ TEST_F(V3TestCrystal, CrystalCacheData) {
     for (int j = 0; j < 12; j++) {
       ASSERT_NEAR(face_tf[i * 12 + j], expect_face_tf[i * 12 + j], 1e-5);
     }
+  }
+}
+
+TEST_F(V3TestCrystal, PrismMesh) {
+  float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  auto c1 = v3::CreatePrismMesh(1.5f);
+  auto c2 = v3::CreateIrregularPrismMesh(1.5f, dist);
+
+  ASSERT_EQ(c1.GetTriangleCnt(), c2.GetTriangleCnt());
+  ASSERT_EQ(c1.GetVtxCnt(), c2.GetVtxCnt());
+
+  // Check all vertices are identical.
+  const auto* vtx1 = c1.GetVtxPtr(0);
+  const auto* vtx2 = c2.GetVtxPtr(0);
+  for (size_t i = 0; i < c1.GetVtxCnt(); i++) {
+    bool match = false;
+    for (size_t j = 0; j < c2.GetVtxCnt(); j++) {
+      if (FloatEqualZero(DiffNorm3(vtx1 + i * 3, vtx2 + j * 3))) {
+        match = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(match);
+  }
+  for (size_t i = 0; i < c2.GetVtxCnt(); i++) {
+    bool match = false;
+    for (size_t j = 0; j < c1.GetVtxCnt(); j++) {
+      if (FloatEqualZero(DiffNorm3(vtx2 + i * 3, vtx1 + j * 3))) {
+        match = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(match);
+  }
+}
+
+TEST_F(V3TestCrystal, PyramidMesh) {
+  float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  auto c1 = v3::CreatePyramidMesh(0.2f, 1.4f, 0.8f);
+  auto c2 = v3::CreateIrregularPyramidMesh(1, 1, 1, 1, 0.2f, 1.4f, 0.8f, dist);
+
+  ASSERT_EQ(c1.GetTriangleCnt(), c2.GetTriangleCnt());
+  ASSERT_EQ(c1.GetVtxCnt(), c2.GetVtxCnt());
+
+  // Check all vertices are identical.
+  const auto* vtx1 = c1.GetVtxPtr(0);
+  const auto* vtx2 = c2.GetVtxPtr(0);
+  for (size_t i = 0; i < c1.GetVtxCnt(); i++) {
+    bool match = false;
+    for (size_t j = 0; j < c2.GetVtxCnt(); j++) {
+      if (FloatEqualZero(DiffNorm3(vtx1 + i * 3, vtx2 + j * 3))) {
+        match = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(match);
+  }
+  for (size_t i = 0; i < c2.GetVtxCnt(); i++) {
+    bool match = false;
+    for (size_t j = 0; j < c1.GetVtxCnt(); j++) {
+      if (FloatEqualZero(DiffNorm3(vtx2 + i * 3, vtx1 + j * 3))) {
+        match = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(match);
   }
 }
 

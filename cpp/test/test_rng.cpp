@@ -79,12 +79,12 @@ TEST_F(RngTest, TriangleSample) {
   float p[3];
   float v[3];
   int fid = 0;
-  const float* face_vtx = crystal.GetFaceVtx() + fid * 9;
+  const float* face_vtx = crystal.GetTriangleVtx() + fid * 9;
   icehalo::v3::SampleTrianglePoint(face_vtx, p);
   for (int k = 0; k < 3; k++) {
     v[k] = p[k] - face_vtx[k];
   }
-  float dot = icehalo::Dot3(v, crystal.GetFaceNorm() + fid * 3);
+  float dot = icehalo::Dot3(v, crystal.GetTriangleNormal() + fid * 3);
   EXPECT_NEAR(dot, 0.0f, kFloatEps);
 }
 

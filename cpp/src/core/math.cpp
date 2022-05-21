@@ -840,12 +840,12 @@ bool SolvePlanes(const float* coef1, const float* coef2, const float* coef3, flo
     res[2] = std::numeric_limits<float>::quiet_NaN();
     return false;
   }
-  float x = coef1[1] * coef2[2] * coef3[3] + coef1[2] * coef2[3] * coef3[1] + coef1[3] * coef2[1] * coef3[2] -
-            coef1[3] * coef2[2] * coef3[1] - coef1[1] * coef2[3] * coef3[2] - coef1[2] * coef2[1] * coef3[3];
+  float x = coef1[3] * coef2[2] * coef3[1] + coef1[1] * coef2[3] * coef3[2] + coef1[2] * coef2[1] * coef3[3] -
+            coef1[1] * coef2[2] * coef3[3] - coef1[2] * coef2[3] * coef3[1] - coef1[3] * coef2[1] * coef3[2];
   float y = coef1[0] * coef2[2] * coef3[3] + coef1[2] * coef2[3] * coef3[0] + coef1[3] * coef2[0] * coef3[2] -
             coef1[3] * coef2[2] * coef3[0] - coef1[0] * coef2[3] * coef3[2] - coef1[2] * coef2[0] * coef3[3];
-  float z = coef1[0] * coef2[1] * coef3[3] + coef1[1] * coef2[3] * coef3[0] + coef1[3] * coef2[0] * coef3[1] -
-            coef1[3] * coef2[1] * coef3[0] - coef1[0] * coef2[3] * coef3[1] - coef1[1] * coef2[0] * coef3[3];
+  float z = coef1[3] * coef2[1] * coef3[0] + coef1[0] * coef2[3] * coef3[1] + coef1[1] * coef2[0] * coef3[3] -
+            coef1[0] * coef2[1] * coef3[3] - coef1[1] * coef2[3] * coef3[0] - coef1[3] * coef2[0] * coef3[1];
   res[0] = x / det;
   res[1] = y / det;
   res[2] = z / det;

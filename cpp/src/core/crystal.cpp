@@ -1040,7 +1040,7 @@ Crystal Crystal::CreatePrism(float h) {
 Crystal Crystal::CreatePrism(float h, const float* fd) {
   auto c = Crystal(CreateIrregularPrismMesh(h, fd));
   c.fn_period_ = 6;
-  FillHexFnMap(c.TotalFaces(), c.face_n_, c.fn_map_.get());
+  FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
   return c;
 }
 
@@ -1068,7 +1068,7 @@ Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int low
                                const float* dist) {                                     // face distance
   auto c = Crystal(CreateIrregularPyramidMesh(upper_i1, upper_i4, lower_i1, lower_i4, h1, h2, h3, dist));
   c.fn_period_ = 6;
-  FillHexFnMap(c.TotalFaces(), c.face_n_, c.fn_map_.get());
+  FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
   return c;
 }
 
@@ -1125,14 +1125,14 @@ Crystal::Crystal(Mesh mesh)
 
 Crystal::Crystal(const Crystal& other)
     : config_id_(other.config_id_), mesh_(other.mesh_),
-      cache_data_(new float[other.TotalFaces() * CrystalCachOffset::kTotal]{}),
-      face_v_(cache_data_.get() + other.TotalFaces() * CrystalCachOffset::kVtx),
-      face_ev_(cache_data_.get() + other.TotalFaces() * CrystalCachOffset::kEdgeVec),
-      face_n_(cache_data_.get() + other.TotalFaces() * CrystalCachOffset::kNormal),
-      face_area_(cache_data_.get() + other.TotalFaces() * CrystalCachOffset::kArea),
-      face_coord_tf_(cache_data_.get() + other.TotalFaces() * CrystalCachOffset::kTf),
-      fn_map_(new IdType[other.TotalFaces()]{}), fn_period_(other.fn_period_) {
-  auto n = other.TotalFaces();
+      cache_data_(new float[other.TotalTriangles() * CrystalCachOffset::kTotal]{}),
+      face_v_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kVtx),
+      face_ev_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kEdgeVec),
+      face_n_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kNormal),
+      face_area_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kArea),
+      face_coord_tf_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kTf),
+      fn_map_(new IdType[other.TotalTriangles()]{}), fn_period_(other.fn_period_) {
+  auto n = other.TotalTriangles();
   std::memcpy(cache_data_.get(), other.cache_data_.get(), n * CrystalCachOffset::kTotal * sizeof(float));
   std::memcpy(fn_map_.get(), other.fn_map_.get(), n * sizeof(IdType));
 }
@@ -1160,7 +1160,7 @@ Crystal& Crystal::operator=(const Crystal& other) {
   config_id_ = other.config_id_;
   mesh_ = other.mesh_;
 
-  auto n = other.TotalFaces();
+  auto n = other.TotalTriangles();
   cache_data_.reset(new float[n * CrystalCachOffset::kTotal]);
   face_v_ = cache_data_.get() + n * CrystalCachOffset::kVtx;
   face_ev_ = cache_data_.get() + n * CrystalCachOffset::kEdgeVec;
@@ -1254,27 +1254,31 @@ void Crystal::ComputeCacheData() {
   }
 }
 
-size_t Crystal::TotalFaces() const {
+size_t Crystal::TotalTriangles() const {
   return mesh_.GetTriangleCnt();
 }
 
-const float* Crystal::GetFaceVtx() const {
+size_t Crystal::TotalVertices() const {
+  return mesh_.GetVtxCnt();
+}
+
+const float* Crystal::GetTriangleVtx() const {
   return face_v_;
 }
 
-const float* Crystal::GetFaceEdgeVec() const {
+const float* Crystal::GetTriangleEdgeVec() const {
   return face_ev_;
 }
 
-const float* Crystal::GetFaceNorm() const {
+const float* Crystal::GetTriangleNormal() const {
   return face_n_;
 }
 
-const float* Crystal::GetFaceArea() const {
+const float* Crystal::GetTirangleArea() const {
   return face_area_;
 }
 
-const float* Crystal::GetFaceCoordTf() const {
+const float* Crystal::GetTriangleCoordTf() const {
   return face_coord_tf_;
 }
 

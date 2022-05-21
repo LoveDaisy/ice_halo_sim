@@ -31,10 +31,10 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
 
   RayBuffer& ray_buf = *ray_buf_ptr;
   // p & fid: sample on crystal faces
-  auto total_faces = curr_crystal.TotalFaces();
-  const auto* face_area = curr_crystal.GetFaceArea();
-  const auto* face_norm = curr_crystal.GetFaceNorm();
-  const auto* face_vtx = curr_crystal.GetFaceVtx();
+  auto total_faces = curr_crystal.TotalTriangles();
+  const auto* face_area = curr_crystal.GetTirangleArea();
+  const auto* face_norm = curr_crystal.GetTriangleNormal();
+  const auto* face_vtx = curr_crystal.GetTriangleVtx();
 
   std::unique_ptr<float[]> proj_prob{ new float[total_faces]{} };
   for (auto& r : ray_buf) {

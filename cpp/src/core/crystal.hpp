@@ -52,14 +52,14 @@ class Crystal {
   Crystal& operator=(const Crystal& other);
   Crystal& operator=(Crystal&& other);
 
-  size_t TotalFaces() const;
+  size_t TotalTriangles() const;
+  size_t TotalVertices() const;
 
-  const float* GetFaceVtx() const;
-  const float* GetFaceEdgeVec() const;
-  const float* GetFaceNorm() const;
-  const float* GetFaceArea() const;
-  const float* GetFaceCoordTf() const;
-  const float* GetOrigin() const;
+  const float* GetTriangleVtx() const;
+  const float* GetTriangleEdgeVec() const;
+  const float* GetTriangleNormal() const;
+  const float* GetTirangleArea() const;
+  const float* GetTriangleCoordTf() const;
 
   IdType GetFn(int fid) const;
   Crystal& Rotate(const Rotation& r);

@@ -249,7 +249,7 @@ float GetReflectRatio(float delta, float rr) {
 void HitSurface_Normal(const Crystal& crystal, float n, size_t num,                          // input
                        const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
                        float_bf_t d_out, float_bf_t w_out) {                                 // output
-  const auto* face_norm = crystal.GetFaceNorm();
+  const auto* face_norm = crystal.GetTriangleNormal();
 
   for (size_t i = 0; i < num; i++) {
     const float* tmp_dir = d_in.Ptr(i);
@@ -426,8 +426,8 @@ void RayTriangleBW(const float* ray_pt, const float* ray_dir,  // input
 void Propagate(const Crystal& crystal, size_t num, size_t step,                      // input
                const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input, d, p, w
                float_bf_t p_out, int_bf_t fid_out) {                                 // output, p, fid
-  auto face_num = crystal.TotalFaces();
-  const auto* face_transform = crystal.GetFaceCoordTf();
+  auto face_num = crystal.TotalTriangles();
+  const auto* face_transform = crystal.GetTriangleCoordTf();
 
   // Do main work
   for (size_t i = 0; i < num; i++) {
