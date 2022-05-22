@@ -1,12 +1,14 @@
 #include "core/geo3d.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <limits>
 #include <memory>
 #include <set>
+#include <tuple>
 #include <utility>
 
 #include "core/math.hpp"
@@ -312,6 +314,7 @@ int* Mesh::GetTrianglePtr(size_t idx) {
 
 Mesh CreatePrismMesh(float h) {
   using math::kSqrt3_4;
+
   std::unique_ptr<float[]> vtx{ new float[kHexPrismVtxCnt * 3]{
       kSqrt3_4,  -1.0f / 4.0f, h / 2.0f,   // upper: vtx1
       kSqrt3_4,  1.0f / 4.0f,  h / 2.0f,   // upper: vtx2
@@ -436,6 +439,7 @@ Mesh CreateIrregularPrismMesh(float h, const float* dist) {
 
 Mesh CreatePyramidMesh(float h1, float h2, float h3) {
   using math::kSqrt3_4;
+
   float h2_2 = h2 / 2.0f;
   float z1 = h2_2 + kIceCrystalC / 2.0f * h1;
   float z3 = -h2_2 - kIceCrystalC / 2.0f * h3;
@@ -519,27 +523,29 @@ Mesh CreatePyramidMesh(float h1, float h2, float h3) {
 }
 
 
-Mesh CreateIrregularPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
-                                float h1, float h2, float h3,                                    // height
-                                const float* dist) {                                             // face distance
-  using math::kFloatEps;
+constexpr int kHexPyramidPlaneCnt = 20;
+
+std::array<float, kHexPyramidPlaneCnt * 4> FillIrregularPyramidCoef(int upper_idx1, int upper_idx4,  //
+                                                                    int lower_idx1, int lower_idx4,  //
+                                                                    float h1, float h2, float h3,    //
+                                                                    const float* dist) {             //
   using math::kPi;
-  using math::kSqrt3_2;
-  using math::kSqrt3_4;
+
+  constexpr int kUpperPyrOffset = 2;
+  constexpr int kLowerPyrOffset = 14;
+  constexpr int kPriOffset = 8;
 
   float h2_2 = h2 / 2.0f;
   float a1 = upper_idx1 * kIceCrystalC / upper_idx4 / 2.0f;
   float a2 = lower_idx1 * kIceCrystalC / lower_idx4 / 2.0f;
 
-  // Step 1. Construct coefficients.
-  constexpr int kUpperPyrOffset = 2;
-  constexpr int kLowerPyrOffset = 14;
-  constexpr int kPriOffset = 8;
-  constexpr int kPlaneCnt = 20;
-  float coef[kPlaneCnt * 4]{
-    0, 0, 1.0f,  0,  // uppper basal, coef_d to be determined
-    0, 0, -1.0f, 0,  // lower basal, coef_d to be determined
-  };
+  std::array<float, kHexPyramidPlaneCnt * 4> coef{};
+  auto* coef_ptr = coef.data();
+
+  coef[2] = 1.0f;
+  coef[6] = -1.0f;
+
+  // Step 1. Fill coefficients except basal surfaces.
   for (int i = 0; i < 6; i++) {
     // upper pyramidal
     float x1 = 0.5f * std::cos(-kPi / 6 + i * kPi / 3);
@@ -567,15 +573,15 @@ Mesh CreateIrregularPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, 
   float z_max = std::numeric_limits<float>::lowest();
   float z_min = std::numeric_limits<float>::max();
   float xyz[3];
-  for (int i = 2; i < kPlaneCnt; i++) {
-    for (int j = i + 1; j < kPlaneCnt; j++) {
-      for (int k = j + 1; k < kPlaneCnt; k++) {
+  for (int i = 2; i < kHexPyramidPlaneCnt; i++) {
+    for (int j = i + 1; j < kHexPyramidPlaneCnt; j++) {
+      for (int k = j + 1; k < kHexPyramidPlaneCnt; k++) {
         // Find an intersection point
-        if (!SolvePlanes(coef + i * 4, coef + j * 4, coef + k * 4, xyz)) {
+        if (!SolvePlanes(coef_ptr + i * 4, coef_ptr + j * 4, coef_ptr + k * 4, xyz)) {
           continue;
         }
         // Check if it is inner point.
-        if (IsInPolyhedron3(kPlaneCnt - 2, coef + 8, xyz)) {
+        if (IsInPolyhedron3(kHexPyramidPlaneCnt - 2, coef_ptr + 8, xyz)) {
           if (xyz[2] > z_max) {
             z_max = xyz[2];
           }
@@ -589,20 +595,27 @@ Mesh CreateIrregularPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, 
   coef[3] = (-z_max + h2_2) * h1 - h2_2;
   coef[7] = (z_min + h2_2) * h3 - h2_2;
 
-  // Step 3. Find out all inner points.
-  std::unique_ptr<float[]> vtx{ new float[kHexPyramidVtxCnt * 3]{} };
+  return coef;
+}
+
+
+std::tuple<std::unique_ptr<float[]>, int> FindPolyhedronVtx(int vtx_cap, int plane_cnt, const float* coef_ptr) {
+  using math::kFloatEps;
+
+  std::unique_ptr<float[]> vtx{ new float[vtx_cap * 3]{} };
   float* vtx_ptr = vtx.get();
-  float vtx_center[3]{};
+
+  float xyz[3]{};
   int vtx_cnt = 0;
-  for (int i = 0; i < kPlaneCnt; i++) {
-    for (int j = i + 1; j < kPlaneCnt; j++) {
-      for (int k = j + 1; k < kPlaneCnt; k++) {
+  for (int i = 0; i < plane_cnt; i++) {
+    for (int j = i + 1; j < plane_cnt; j++) {
+      for (int k = j + 1; k < plane_cnt; k++) {
         // Find an intersection point
-        if (!SolvePlanes(coef + i * 4, coef + j * 4, coef + k * 4, xyz)) {
+        if (!SolvePlanes(coef_ptr + i * 4, coef_ptr + j * 4, coef_ptr + k * 4, xyz)) {
           continue;
         }
         // Check if it is inner point.
-        if (!IsInPolyhedron3(kPlaneCnt, coef, xyz)) {
+        if (!IsInPolyhedron3(plane_cnt, coef_ptr, xyz)) {
           continue;
         }
         // Check if it is already listed.
@@ -618,28 +631,54 @@ Mesh CreateIrregularPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, 
         }
 
         std::memcpy(vtx_ptr + vtx_cnt * 3, xyz, 3 * sizeof(float));
-        for (int m = 0; m < 3; m++) {
-          vtx_center[m] += xyz[m];
-        }
         vtx_cnt++;
       }
     }
   }
-  for (float& x : vtx_center) {
-    x /= vtx_cnt;
-  }
 
-  // Step 4. Find all plannar faces
-  std::vector<std::set<int>> checked_faces;
+  return std::make_tuple(std::move(vtx), vtx_cnt);
+}
+
+
+std::vector<int> CollectSurfaceVtx(int vtx_cnt, const float* vtx_ptr,          //
+                                   int checking_plane, const float* coef_ptr,  //
+                                   const std::vector<std::set<int>>& checked_faces) {
+  std::vector<int> curr_face;
+  bool listed = false;
+  for (int k = 0; k < vtx_cnt; k++) {
+    if (!FloatEqualZero(Dot3(coef_ptr + checking_plane * 4, vtx_ptr + k * 3) + coef_ptr[checking_plane * 4 + 3])) {
+      continue;
+    }
+    curr_face.emplace_back(k);
+    // Check if it is already listed
+    if (curr_face.size() == 3) {
+      for (const auto& s : checked_faces) {
+        if (s.count(curr_face[0]) && s.count(curr_face[1]) && s.count(curr_face[2])) {
+          listed = true;
+          curr_face.clear();
+          break;
+        }
+      }
+    }
+    if (listed) {
+      break;
+    }
+  }
+  return curr_face;
+}
+
+
+std::vector<std::set<int>> FindAllSurfaceVtx(int vtx_cnt, const float* vtx_ptr, int plane_cnt, const float* coef_ptr) {
+  std::vector<std::set<int>> plannar_faces;
   for (int i = 0; i < vtx_cnt; i++) {
     for (int j = i + 1; j < vtx_cnt; j++) {
       // Current edge is (i,j)
       // Find planes that meet at edge (i,j)
       int plane1 = -1;
       int plane2 = -1;
-      for (int k = 0; k < kPlaneCnt; k++) {
-        if (!FloatEqualZero(Dot3(coef + k * 4, vtx_ptr + i * 3) + coef[k * 4 + 3]) ||
-            !FloatEqualZero(Dot3(coef + k * 4, vtx_ptr + j * 3) + coef[k * 4 + 3])) {
+      for (int k = 0; k < plane_cnt; k++) {
+        if (!FloatEqualZero(Dot3(coef_ptr + k * 4, vtx_ptr + i * 3) + coef_ptr[k * 4 + 3]) ||
+            !FloatEqualZero(Dot3(coef_ptr + k * 4, vtx_ptr + j * 3) + coef_ptr[k * 4 + 3])) {
           continue;
         }
         if (plane1 < 0) {
@@ -655,63 +694,37 @@ Mesh CreateIrregularPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, 
 
       // Count in all vertices on two planes
       // Plane 1
-      std::vector<int> curr_face;
-      bool listed = false;
-      for (int k = 0; k < vtx_cnt; k++) {
-        if (!FloatEqualZero(Dot3(coef + plane1 * 4, vtx_ptr + k * 3) + coef[plane1 * 4 + 3])) {
-          continue;
-        }
-        curr_face.emplace_back(k);
-        // Check if it is already listed
-        if (curr_face.size() == 3) {
-          for (const auto& s : checked_faces) {
-            if (s.count(curr_face[0]) && s.count(curr_face[1]) && s.count(curr_face[2])) {
-              listed = true;
-              curr_face.clear();
-              break;
-            }
-          }
-        }
-        if (listed) {
-          break;
-        }
-      }
-      if (!curr_face.empty()) {
-        checked_faces.emplace_back(curr_face.begin(), curr_face.end());
+      auto face1 = CollectSurfaceVtx(vtx_cnt, vtx_ptr, plane1, coef_ptr, plannar_faces);
+      if (!face1.empty()) {
+        plannar_faces.emplace_back(face1.begin(), face1.end());
       }
 
       // Plane 2
-      curr_face.clear();
-      listed = false;
-      for (int k = 0; k < vtx_cnt; k++) {
-        if (!FloatEqualZero(Dot3(coef + plane2 * 4, vtx_ptr + k * 3) + coef[plane2 * 4 + 3])) {
-          continue;
-        }
-        curr_face.emplace_back(k);
-        // Check if it is already listed
-        if (curr_face.size() == 3) {
-          for (const auto& s : checked_faces) {
-            if (s.count(curr_face[0]) && s.count(curr_face[1]) && s.count(curr_face[2])) {
-              listed = true;
-              curr_face.clear();
-              break;
-            }
-          }
-        }
-        if (listed) {
-          break;
-        }
-      }
-      if (!curr_face.empty()) {
-        checked_faces.emplace_back(curr_face.begin(), curr_face.end());
+      auto face2 = CollectSurfaceVtx(vtx_cnt, vtx_ptr, plane2, coef_ptr, plannar_faces);
+      if (!face2.empty()) {
+        plannar_faces.emplace_back(face2.begin(), face2.end());
       }
     }
   }
+  return plannar_faces;
+}
 
-  // Step 5. Triangulation
-  std::unique_ptr<int[]> tri{ new int[kHexPyramidTriCnt * 3]{} };
+
+std::tuple<std::unique_ptr<int[]>, int> Triangulate(int vtx_cnt, const float* vtx_ptr, int tri_cap,
+                                                    const std::vector<std::set<int>>& plannar_faces) {
+  float vtx_center[3]{};
+  for (int i = 0; i < vtx_cnt; i++) {
+    for (int j = 0; j < 3; j++) {
+      vtx_center[j] += vtx_ptr[i * 3 + j];
+    }
+  }
+  for (float& x : vtx_center) {
+    x /= vtx_cnt;
+  }
+
+  std::unique_ptr<int[]> tri{ new int[tri_cap * 3]{} };
   int tri_cnt = 0;
-  for (const auto& curr_face : checked_faces) {
+  for (const auto& curr_face : plannar_faces) {
     if (curr_face.size() < 3) {
       continue;
     }
@@ -720,7 +733,7 @@ Mesh CreateIrregularPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, 
     std::vector<int> curr_idx;
     for (auto x : curr_face) {
       for (int i = 0; i < 3; i++) {
-        face_center[i] += vtx[x * 3 + i];
+        face_center[i] += vtx_ptr[x * 3 + i];
       }
       curr_idx.emplace_back(x);
     }
@@ -773,6 +786,27 @@ Mesh CreateIrregularPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, 
       tri_cnt++;
     }
   }
+
+  return std::make_tuple(std::move(tri), tri_cnt);
+}
+
+
+Mesh CreateIrregularPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
+                                float h1, float h2, float h3,                                    // height
+                                const float* dist) {                                             // face distance
+  // Step 1. Construct coefficients.
+  auto coef = FillIrregularPyramidCoef(upper_idx1, upper_idx4, lower_idx1, lower_idx4, h1, h2, h3, dist);
+  auto* coef_ptr = coef.data();
+
+  // Step 2. Find out all inner points.
+  auto [vtx, vtx_cnt] = FindPolyhedronVtx(kHexPyramidVtxCnt, kHexPyramidPlaneCnt, coef_ptr);
+  auto* vtx_ptr = vtx.get();
+
+  // Step 3. Find all plannar faces
+  auto plannar_faces = FindAllSurfaceVtx(vtx_cnt, vtx_ptr, kHexPyramidPlaneCnt, coef_ptr);
+
+  // Step 4. Triangulation
+  auto [tri, tri_cnt] = Triangulate(vtx_cnt, vtx_ptr, kHexPyramidTriCnt, plannar_faces);
 
   return Mesh(vtx_cnt, std::move(vtx), tri_cnt, std::move(tri));
 }

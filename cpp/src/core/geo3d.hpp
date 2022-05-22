@@ -70,6 +70,7 @@ class Mesh {
   std::unique_ptr<int[]> triangle_;    // vertex index, 3 * triangle_cnt_
 };
 
+
 constexpr int kHexPrismVtxCnt = 12;
 constexpr int kHexPrismTriCnt = 20;
 constexpr int kHexPyramidVtxCnt = 24;
