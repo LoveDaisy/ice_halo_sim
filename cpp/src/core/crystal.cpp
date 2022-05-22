@@ -1084,21 +1084,6 @@ enum CrystalCachOffset {
 
 Crystal::Crystal() {}
 
-Crystal::Crystal(size_t vtx_cnt, const float* vtx, size_t triangle_cnt, const int* triangle_idx)
-    : mesh_(vtx_cnt, triangle_cnt), cache_data_(new float[triangle_cnt * CrystalCachOffset::kTotal]{}),
-      face_v_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kVtx),
-      face_ev_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kEdgeVec),
-      face_n_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kNormal),
-      face_area_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kArea),
-      face_coord_tf_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kTf), fn_map_(new IdType[triangle_cnt]{}),
-      fn_period_(-1) {
-  mesh_.SetVtx(vtx);
-  mesh_.SetTriangle(triangle_idx);
-
-  // Initialize other pre-computed data
-  ComputeCacheData();
-}
-
 Crystal::Crystal(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_cnt, std::unique_ptr<int[]> triangle_idx)
     : mesh_(vtx_cnt, std::move(vtx), triangle_cnt, std::move(triangle_idx)),
       cache_data_(new float[triangle_cnt * CrystalCachOffset::kTotal]{}),

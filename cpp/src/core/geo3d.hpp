@@ -57,9 +57,6 @@ class Mesh {
   size_t GetVtxCnt() const;
   size_t GetTriangleCnt() const;
 
-  void SetVtx(const float* data);
-  void SetTriangle(const int* idx);
-
   float* GetVtxPtr(size_t idx);
   int* GetTrianglePtr(size_t idx);
 
@@ -88,8 +85,6 @@ Mesh CreateIrregularPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, 
                                 const float* dist);                                              // face distance
 
 }  // namespace v3
-
-
 }  // namespace icehalo
 
 #endif  // CORE_GEO3D_H_

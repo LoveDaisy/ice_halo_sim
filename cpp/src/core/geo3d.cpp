@@ -295,14 +295,6 @@ size_t Mesh::GetTriangleCnt() const {
   return triangle_cnt_;
 }
 
-void Mesh::SetVtx(const float* data) {
-  std::memcpy(vertices_.get(), data, vtx_cnt_ * 3 * sizeof(float));
-}
-
-void Mesh::SetTriangle(const int* idx) {
-  std::memcpy(triangle_.get(), idx, triangle_cnt_ * 3 * sizeof(int));
-}
-
 float* Mesh::GetVtxPtr(size_t idx) {
   return vertices_.get() + idx * 3;
 }
@@ -796,11 +788,11 @@ Mesh CreateIrregularPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, 
                                 const float* dist) {                                             // face distance
   // Step 1. Construct coefficients.
   auto coef = FillIrregularPyramidCoef(upper_idx1, upper_idx4, lower_idx1, lower_idx4, h1, h2, h3, dist);
-  auto* coef_ptr = coef.data();
+  const auto* coef_ptr = coef.data();
 
   // Step 2. Find out all inner points.
   auto [vtx, vtx_cnt] = FindPolyhedronVtx(kHexPyramidVtxCnt, kHexPyramidPlaneCnt, coef_ptr);
-  auto* vtx_ptr = vtx.get();
+  const auto* vtx_ptr = vtx.get();
 
   // Step 3. Find all plannar faces
   auto plannar_faces = FindAllSurfaceVtx(vtx_cnt, vtx_ptr, kHexPyramidPlaneCnt, coef_ptr);
