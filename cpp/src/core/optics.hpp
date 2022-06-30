@@ -243,6 +243,9 @@ class IceRefractiveIndex {
    *   n^2 = 1 + B1 * lambda^2 / (lambda^2 - C1^2)
    *           + B2 * lambda^2 / (lambda^2 - C2^2)
    *   lambda in micrometer, C1 * 1e-2, C2 * 1e2
+   *
+   * Data from https://refractiveindex.info/?shelf=3d&book=crystals&page=ice
+   * Fitted formula by myself.
    */
   static constexpr float kCoefAvr[] = { 0.701777f, 1.091144f, 0.884400f, 0.796950f };  // B1, B2, C1, C2
   static constexpr float kCoefO[] = { 0.696364f, 0.719271f, 0.957220f, 1.096889f };
