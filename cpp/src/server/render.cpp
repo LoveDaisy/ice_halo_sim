@@ -139,13 +139,28 @@ void RectangularProject(const LensProjParam& p, const float* d, int* xy, size_t 
   float ax_z[3]{ 0, 0, 1 };
   p.rot_.Apply(ax_z);
 
-  auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
-  float scale = short_res / math::kPi;
+  bool full_sky = p.fov_ <= 0;
+
+  auto short_res = full_sky ? std::min(p.resolution_[0] / 2, p.resolution_[1]) : 0;
+  float scale = full_sky ? short_res / math::kPi : p.resolution_[0] / (p.fov_ * math::kDegreeToRad);
 
   float az0 = std::atan2(ax_z[1], ax_z[0]);
+  float lat0 = full_sky ? 0.0f : std::asin(ax_z[2]);
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     float lon = std::atan2(-d[1], -d[0]) - az0;
-    float lat = std::asin(-d[2]);
+    if (lon < -math::kPi) {
+      lon += 2 * math::kPi;
+    }
+    if (lon > math::kPi) {
+      lon -= 2 * math::kPi;
+    }
+    float lat = std::asin(-d[2]) - lat0;
+    if (lat > math::kPi_2) {
+      lat = math::kPi - lat;
+    }
+    if (lat < -math::kPi_2) {
+      lat = -math::kPi - lat;
+    }
 
     while (lon < -math::kPi) {
       lon += 2 * math::kPi;
@@ -154,7 +169,7 @@ void RectangularProject(const LensProjParam& p, const float* d, int* xy, size_t 
       lon -= 2 * math::kPi;
     }
 
-    xy[0] = static_cast<int>(lon * scale + p.resolution_[0] / 2.0f + 0.5f - short_res / 2.0f);
+    xy[0] = static_cast<int>(lon * scale + p.resolution_[0] / 2.0f + 0.5f);
     xy[1] = static_cast<int>(-lat * scale + p.resolution_[1] / 2.0f + 0.5f);
   }
 }
