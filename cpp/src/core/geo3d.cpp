@@ -347,7 +347,7 @@ Mesh CreatePrismMesh(float h) {
 }
 
 
-Mesh CreateIrregularPrismMesh(float h, const float* dist) {
+Mesh CreateGeneralPrismMesh(float h, const float* dist) {
   using math::kSqrt3_2;
   using math::kSqrt3_4;
 
@@ -517,10 +517,10 @@ Mesh CreatePyramidMesh(float h1, float h2, float h3) {
 
 constexpr int kHexPyramidPlaneCnt = 20;
 
-std::array<float, kHexPyramidPlaneCnt * 4> FillIrregularPyramidCoef(int upper_idx1, int upper_idx4,  //
-                                                                    int lower_idx1, int lower_idx4,  //
-                                                                    float h1, float h2, float h3,    //
-                                                                    const float* dist) {             //
+std::array<float, kHexPyramidPlaneCnt * 4> FillGeneralPyramidCoef(int upper_idx1, int upper_idx4,  //
+                                                                  int lower_idx1, int lower_idx4,  //
+                                                                  float h1, float h2, float h3,    //
+                                                                  const float* dist) {             //
   using math::kPi;
 
   constexpr int kUpperPyrOffset = 2;
@@ -783,22 +783,20 @@ std::tuple<std::unique_ptr<int[]>, int> Triangulate(int vtx_cnt, const float* vt
 }
 
 
-Mesh CreateIrregularPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
-                                float h1, float h2, float h3,                                    // height
-                                const float* dist) {                                             // face distance
+Mesh CreateGenearlPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
+                              float h1, float h2, float h3,                                    // height
+                              const float* dist) {                                             // face distance
   // Step 1. Construct coefficients.
-  auto coef = FillIrregularPyramidCoef(upper_idx1, upper_idx4, lower_idx1, lower_idx4, h1, h2, h3, dist);
-  const auto* coef_ptr = coef.data();
+  auto coef = FillGeneralPyramidCoef(upper_idx1, upper_idx4, lower_idx1, lower_idx4, h1, h2, h3, dist);
 
   // Step 2. Find out all inner points.
-  auto [vtx, vtx_cnt] = FindPolyhedronVtx(kHexPyramidVtxCnt, kHexPyramidPlaneCnt, coef_ptr);
-  const auto* vtx_ptr = vtx.get();
+  auto [vtx, vtx_cnt] = FindPolyhedronVtx(kHexPyramidVtxCnt, kHexPyramidPlaneCnt, coef.data());
 
   // Step 3. Find all plannar faces
-  auto plannar_faces = FindAllSurfaceVtx(vtx_cnt, vtx_ptr, kHexPyramidPlaneCnt, coef_ptr);
+  auto plannar_faces = FindAllSurfaceVtx(vtx_cnt, vtx.get(), kHexPyramidPlaneCnt, coef.data());
 
   // Step 4. Triangulation
-  auto [tri, tri_cnt] = Triangulate(vtx_cnt, vtx_ptr, kHexPyramidTriCnt, plannar_faces);
+  auto [tri, tri_cnt] = Triangulate(vtx_cnt, vtx.get(), kHexPyramidTriCnt, plannar_faces);
 
   return Mesh(vtx_cnt, std::move(vtx), tri_cnt, std::move(tri));
 }

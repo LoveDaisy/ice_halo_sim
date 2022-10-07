@@ -46,8 +46,8 @@ void EqualAreaFishEye(Pose3f cam_pose,               // Camera rotation. [lon, l
       float proj_r = img_r / 2.0f / std::sin(hov / 2.0f * math::kDegreeToRad);
       float r = 2.0f * proj_r * std::sin((math::kPi_2 - lat) / 2.0f);
 
-      img_xy[i * 2 + 0] = r * std::cos(lon) + img_wid / 2.0f - 0.5f;
-      img_xy[i * 2 + 1] = -r * std::sin(lon) + img_hei / 2.0f - 0.5f;  // y increase downside on image
+      img_xy[i * 2 + 0] = r * std::cos(lon) + img_wid / 2.0f;
+      img_xy[i * 2 + 1] = -r * std::sin(lon) + img_hei / 2.0f;  // y increase downside on image
     }
   }
 }
@@ -84,8 +84,8 @@ void EquidistantFishEye(Pose3f cam_pose,               // Camera rotation. [lon,
       float lat = std::asin(-dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
       float r = (math::kPi_2 - lat) / (hov * math::kDegreeToRad) * img_r;
 
-      img_xy[i * 2 + 0] = r * std::cos(lon) + img_wid / 2.0f - 0.5f;
-      img_xy[i * 2 + 1] = -r * std::sin(lon) + img_hei / 2.0f - 0.5f;  // y increase downside on image
+      img_xy[i * 2 + 0] = r * std::cos(lon) + img_wid / 2.0f;
+      img_xy[i * 2 + 1] = -r * std::sin(lon) + img_hei / 2.0f;  // y increase downside on image
     }
   }
 }
@@ -119,8 +119,8 @@ void DualEqualAreaFishEye(Pose3f /* cam_rot */,                // Not used
       }
       float r = 2.0f * proj_r * std::sin((math::kPi_2 - std::abs(lat)) / 2.0f);
 
-      img_xy[i * 2 + 0] = r * std::cos(lon) + img_r + (lat > 0 ? -0.5f : 2 * img_r - 0.5f);
-      img_xy[i * 2 + 1] = -r * std::sin(lon) + img_r - 0.5f;  // y increase downside on image
+      img_xy[i * 2 + 0] = r * std::cos(lon) + img_r + (lat > 0 ? 0 : 2 * img_r);
+      img_xy[i * 2 + 1] = -r * std::sin(lon) + img_r;  // y increase downside on image
     }
   }
 }
@@ -153,8 +153,8 @@ void DualEquidistantFishEye(Pose3f /* cam_rot */,                // Not used
       }
       float r = (1.0f - std::abs(lat) * 2.0f / math::kPi) * img_r;
 
-      img_xy[i * 2 + 0] = r * std::cos(lon) + img_r + (lat > 0 ? -0.5f : 2 * img_r - 0.5f);
-      img_xy[i * 2 + 1] = -r * std::sin(lon) + img_r - 0.5f;  // y increase downside on image
+      img_xy[i * 2 + 0] = r * std::cos(lon) + img_r + (lat > 0 ? 0 : 2 * img_r);
+      img_xy[i * 2 + 1] = -r * std::sin(lon) + img_r;  // y increase downside on image
     }
   }
 }
@@ -218,8 +218,8 @@ void Equirectangular(Pose3f cam_pose,                     // Not used
     } else {
       float lon = std::atan2(-dir_copy[i * 3 + 1], -dir_copy[i * 3 + 0]);
       float lat = std::asin(-dir_copy[i * 3 + 2] / Norm3(dir_copy.get() + i * 3));
-      img_xy[i * 2 + 0] = static_cast<int>(img_wid / 2.0f + lon / math::kPi * 2 * img_r - 0.5f);
-      img_xy[i * 2 + 1] = static_cast<int>(img_hei / 2.0f - lat / math::kPi * 2 * img_r - 0.5f);
+      img_xy[i * 2 + 0] = static_cast<int>(img_wid / 2.0f + lon / math::kPi * 2 * img_r);
+      img_xy[i * 2 + 1] = static_cast<int>(img_hei / 2.0f - lat / math::kPi * 2 * img_r);
     }
   }
 }

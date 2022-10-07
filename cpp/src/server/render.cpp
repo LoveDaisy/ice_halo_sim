@@ -148,10 +148,10 @@ void RectangularProject(const LensProjParam& p, const float* d, int* xy, size_t 
   float lat0 = full_sky ? 0.0f : std::asin(ax_z[2]);
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     float lon = std::atan2(-d[1], -d[0]) - az0;
-    if (lon < -math::kPi) {
+    while (lon < -math::kPi) {
       lon += 2 * math::kPi;
     }
-    if (lon > math::kPi) {
+    while (lon > math::kPi) {
       lon -= 2 * math::kPi;
     }
     float lat = std::asin(-d[2]) - lat0;
@@ -160,13 +160,6 @@ void RectangularProject(const LensProjParam& p, const float* d, int* xy, size_t 
     }
     if (lat < -math::kPi_2) {
       lat = -math::kPi - lat;
-    }
-
-    while (lon < -math::kPi) {
-      lon += 2 * math::kPi;
-    }
-    while (lon > math::kPi) {
-      lon -= 2 * math::kPi;
     }
 
     xy[0] = static_cast<int>(lon * scale + p.resolution_[0] / 2.0f + 0.5f);

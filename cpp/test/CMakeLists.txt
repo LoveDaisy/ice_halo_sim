@@ -73,7 +73,7 @@ else()
   message(STATUS "[test] lib google-benchmark found.")
 endif()
 
-add_executable(bench
-  "${PROJ_TEST_DIR}/bench_math.cpp"
-  "${PROJ_TEST_DIR}/bench_optics.cpp")
-target_link_libraries(bench PRIVATE benchmark::benchmark_main Boost::filesystem Boost::system icehalo_lib)
+# add_executable(bench
+#   "${PROJ_TEST_DIR}/bench_math.cpp"
+#   "${PROJ_TEST_DIR}/bench_optics.cpp")
+# target_link_libraries(bench PRIVATE benchmark::benchmark_main Boost::filesystem Boost::system icehalo_lib)

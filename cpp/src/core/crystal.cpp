@@ -1038,7 +1038,7 @@ Crystal Crystal::CreatePrism(float h) {
 }
 
 Crystal Crystal::CreatePrism(float h, const float* fd) {
-  auto c = Crystal(CreateIrregularPrismMesh(h, fd));
+  auto c = Crystal(CreateGeneralPrismMesh(h, fd));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
   return c;
@@ -1066,7 +1066,7 @@ Crystal Crystal::CreatePyramid(float h1, float h2, float h3) {
 Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int lower_i4,  // Miller index
                                float h1, float h2, float h3,                            // height
                                const float* dist) {                                     // face distance
-  auto c = Crystal(CreateIrregularPyramidMesh(upper_i1, upper_i4, lower_i1, lower_i4, h1, h2, h3, dist));
+  auto c = Crystal(CreateGenearlPyramidMesh(upper_i1, upper_i4, lower_i1, lower_i4, h1, h2, h3, dist));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
   return c;
