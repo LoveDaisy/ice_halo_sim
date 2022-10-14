@@ -5,9 +5,8 @@
 #include <cstddef>
 #include <initializer_list>
 #include <memory>
-#include <mutex>
 #include <random>
-#include <variant>
+#include <set>
 #include <vector>
 
 #include "core/def.hpp"
@@ -306,10 +305,11 @@ bool SolvePlanes(const float* coef1, const float* coef2, const float* coef3, flo
  * @param n Polygon edge number. The number of half planes.
  * @param coef Coefficients of half planes.
  * @param xy Point to be checked.
+ * @param boundary Whether include boundary.
  * @return true
  * @return false
  */
-bool IsInPolygon2(int n, const float* coef, const float xy[2]);
+bool IsInPolygon2(int n, const float* coef, const float xy[2], bool boundary = true);
 
 /**
  * @brief Check if a 3D point locates **IN** a polyhedron. The polyhedron is defined by intersection of
@@ -318,10 +318,56 @@ bool IsInPolygon2(int n, const float* coef, const float xy[2]);
  * @param n Number of half spaces.
  * @param coef Coefficients of half spaces. [a, b, c, d]
  * @param xyz Point to be checked.
+ * @param boundary Whether include boundary.
  * @return true
  * @return false
  */
-bool IsInPolyhedron3(int n, const float* coef, const float xyz[3]);
+bool IsInPolyhedron3(int n, const float* coef, const float xyz[3], bool boundary = true);
+
+/**
+ * @brief Find all vertices of a convex polyhedron, which is defined by intersection of multiple half spaces:
+ *        a*x + b*y + c*z + d <= 0
+ *
+ * @param plane_cnt Number of half spaces.
+ * @param coef_ptr Coefficients of half spaces. [a, b, c, c]
+ * @return std::tuple<std::unique_ptr<float[]>, int> Vertices coordinates and actual vertices number.
+ */
+std::tuple<std::unique_ptr<float[]>, int> SolveConvexPolyhedronVtx(int plane_cnt, const float* coef_ptr);
+
+/**
+ * @brief Find vertices of the difference of two convex polyhedrons.
+ *
+ * @param plane_cnt1 Half space number of first polyhedron.
+ * @param coef_ptr1 Half space coefficients of first polyhedron.
+ * @param plane_cnt2 Half space number of second polyhedron.
+ * @param coef_ptr2 Half space coefficients of second polyhedron.
+ * @param vtx_cap
+ * @return std::tuple<std::unique_ptr<float[]>, int> Vertices coordinates & vertices number.
+ */
+std::tuple<std::unique_ptr<float[]>, int> ConvexPolyhedronDifferenceVtx(int plane_cnt1, const float* coef_ptr1,
+                                                                        int plane_cnt2, const float* coef_ptr2);
+
+/**
+ * @brief Collect those vertices on a same plane together by given surface plane.
+ *
+ * @param vtx_cnt Vertices number.
+ * @param vtx_ptr Vertices coordinate. [x, y, z]
+ * @param plane_cnt Plane number.
+ * @param coef_ptr Plane coefficients. [a, b, c, d]
+ * @return std::vector<std::set<int>> Vertices collections. Each set<int> is a set of co-plannar vertices.
+ */
+std::vector<std::set<int>> CollectSurfaceVtx(int vtx_cnt, const float* vtx_ptr, int plane_cnt, const float* coef_ptr);
+
+/**
+ * @brief Triangulate mesh.
+ *
+ * @param vtx_cnt Vertices number.
+ * @param vtx_ptr Vertices coordinates. [x, y, z]
+ * @param surface_vtx_idx Mesh surface indices. Each set is a surface.
+ * @return std::tuple<std::unique_ptr<int[]>, int> Triangle indices, [i1, i2, i3], and triangle number.
+ */
+std::tuple<std::unique_ptr<int[]>, int> Triangulate(int vtx_cnt, const float* vtx_ptr,
+                                                    const std::vector<std::set<int>>& surface_vtx_idx);
 
 }  // namespace v3
 

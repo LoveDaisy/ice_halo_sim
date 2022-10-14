@@ -598,7 +598,7 @@ const ShortIdType* TriangleIdx::idx() const {
 }
 
 
-PolygonIdx::PolygonIdx() : idx_() {}
+PolygonIdx::PolygonIdx() {}
 
 
 PolygonIdx::PolygonIdx(std::initializer_list<ShortIdType> idx) : idx_(idx) {}
@@ -853,11 +853,12 @@ bool SolvePlanes(const float* coef1, const float* coef2, const float* coef3, flo
 }
 
 
-bool IsInPolygon2(int n, const float* coef, const float xy[2]) {
+bool IsInPolygon2(int n, const float* coef, const float xy[2], bool boundary) {
+  auto th = boundary ? math::kFloatEps : -math::kFloatEps;
   bool in = true;
   float tmp[3]{ xy[0], xy[1], 1.0f };
   for (int j = 0; j < n; j++) {
-    if (Dot3(coef + j * 3, tmp) > math::kFloatEps) {
+    if (Dot3(coef + j * 3, tmp) > th) {
       in = false;
       break;
     }
@@ -866,15 +867,279 @@ bool IsInPolygon2(int n, const float* coef, const float xy[2]) {
 }
 
 
-bool IsInPolyhedron3(int n, const float* coef, const float xyz[3]) {
+bool IsInPolyhedron3(int n, const float* coef, const float xyz[3], bool boundary) {
+  auto th = boundary ? math::kFloatEps : -math::kFloatEps;
   bool in = true;
   for (int j = 0; j < n; j++) {
-    if (Dot3(coef + j * 4, xyz) + coef[j * 4 + 3] > math::kFloatEps) {
+    if (Dot3(coef + j * 4, xyz) + coef[j * 4 + 3] > th) {
       in = false;
       break;
     }
   }
   return in;
+}
+
+
+std::tuple<std::unique_ptr<float[]>, int> SolveConvexPolyhedronVtx(int plane_cnt, const float* coef_ptr) {
+  using math::kFloatEps;
+
+  int vtx_cap = plane_cnt * (plane_cnt - 1) * (plane_cnt - 2) / 6;
+  std::unique_ptr<float[]> vtx{ new float[vtx_cap * 3]{} };
+  float* vtx_ptr = vtx.get();
+
+  float xyz[3]{};
+  int vtx_cnt = 0;
+  for (int i = 0; i < plane_cnt; i++) {
+    for (int j = i + 1; j < plane_cnt; j++) {
+      for (int k = j + 1; k < plane_cnt; k++) {
+        // Find an intersection point
+        if (!SolvePlanes(coef_ptr + i * 4, coef_ptr + j * 4, coef_ptr + k * 4, xyz)) {
+          continue;
+        }
+        // Check if it is inner point.
+        if (!IsInPolyhedron3(plane_cnt, coef_ptr, xyz)) {
+          continue;
+        }
+        // Check if it is already listed.
+        bool listed = false;
+        for (int m = 0; m < vtx_cnt; m++) {
+          if (FloatEqualZero(DiffNorm3(vtx_ptr + m * 3, xyz), 2 * kFloatEps)) {
+            listed = true;
+            break;
+          }
+        }
+        if (listed) {
+          continue;
+        }
+
+        std::memcpy(vtx_ptr + vtx_cnt * 3, xyz, 3 * sizeof(float));
+        vtx_cnt++;
+      }
+    }
+  }
+
+  std::unique_ptr<float[]> final_vtx{ new float[vtx_cnt * 3]{} };
+  std::memcpy(final_vtx.get(), vtx.get(), vtx_cnt * 3 * sizeof(float));
+
+  return std::make_tuple(std::move(final_vtx), vtx_cnt);
+}
+
+
+std::tuple<std::unique_ptr<float[]>, int> ConvexPolyhedronDifferenceVtx(int plane_cnt1, const float* coef_ptr1,
+                                                                        int plane_cnt2, const float* coef_ptr2) {
+  // All polyhedron faces are defined by plane coefficients:
+  //    ax + by + cz + d <= 0
+  // Difference of two convex polyhedrons, A - B, is defined as points that are in A but not in B.
+
+  using math::kFloatEps;
+
+  int plane_cnt = plane_cnt1 + plane_cnt2;
+  int vtx_cap = plane_cnt * (plane_cnt - 1) * (plane_cnt - 2) / 6;
+
+  std::unique_ptr<float[]> vtx{ new float[vtx_cap * 3]{} };
+  float* vtx_ptr = vtx.get();
+
+  float xyz[3]{};
+  int vtx_cnt = 0;
+  for (int i = 0; i < plane_cnt; i++) {
+    for (int j = i + 1; j < plane_cnt; j++) {
+      for (int k = j + 1; k < plane_cnt; k++) {
+        // Find an intersection point
+        const auto* p1 = i < plane_cnt1 ? coef_ptr1 + i * 4 : coef_ptr2 + (i - plane_cnt1) * 4;
+        const auto* p2 = j < plane_cnt1 ? coef_ptr1 + j * 4 : coef_ptr2 + (j - plane_cnt1) * 4;
+        const auto* p3 = k < plane_cnt1 ? coef_ptr1 + k * 4 : coef_ptr2 + (k - plane_cnt1) * 4;
+        if (!SolvePlanes(p1, p2, p3, xyz)) {
+          continue;
+        }
+        // Check if it is in polyhedron 1
+        if (!IsInPolyhedron3(plane_cnt1, coef_ptr1, xyz)) {
+          continue;
+        }
+        // Check if it is out polyhedron 2
+        if (IsInPolyhedron3(plane_cnt2, coef_ptr2, xyz, false)) {
+          continue;
+        }
+        // Check if it is already listed.
+        bool listed = false;
+        for (int m = 0; m < vtx_cnt; m++) {
+          if (FloatEqualZero(DiffNorm3(vtx_ptr + m * 3, xyz), 2 * kFloatEps)) {
+            listed = true;
+            break;
+          }
+        }
+        if (listed) {
+          continue;
+        }
+
+        std::memcpy(vtx_ptr + vtx_cnt * 3, xyz, 3 * sizeof(float));
+        vtx_cnt++;
+      }
+    }
+  }
+
+  std::unique_ptr<float[]> vtx_final{ new float[vtx_cnt * 3]{} };
+  std::memcpy(vtx_final.get(), vtx.get(), vtx_cnt * 3 * sizeof(float));
+  return std::make_tuple(std::move(vtx_final), vtx_cnt);
+}
+
+
+// Helper function for CollectSurfaceVtx
+std::vector<int> CollectSurfaceVtx(int vtx_cnt, const float* vtx_ptr,          //
+                                   int checking_plane, const float* coef_ptr,  //
+                                   const std::vector<std::set<int>>& checked_faces) {
+  std::vector<int> curr_face;
+  bool listed = false;
+  for (int k = 0; k < vtx_cnt; k++) {
+    if (!FloatEqualZero(Dot3(coef_ptr + checking_plane * 4, vtx_ptr + k * 3) + coef_ptr[checking_plane * 4 + 3])) {
+      continue;
+    }
+    curr_face.emplace_back(k);
+    // Check if it is already listed
+    if (curr_face.size() == 3) {
+      for (const auto& s : checked_faces) {
+        if (s.count(curr_face[0]) && s.count(curr_face[1]) && s.count(curr_face[2])) {
+          listed = true;
+          curr_face.clear();
+          break;
+        }
+      }
+    }
+    if (listed) {
+      break;
+    }
+  }
+  return curr_face;
+}
+
+
+std::vector<std::set<int>> CollectSurfaceVtx(int vtx_cnt, const float* vtx_ptr, int plane_cnt, const float* coef_ptr) {
+  std::vector<std::set<int>> plannar_faces;
+  for (int i = 0; i < vtx_cnt; i++) {
+    for (int j = i + 1; j < vtx_cnt; j++) {
+      // Current edge is (i,j)
+      // Find planes that meet at edge (i,j)
+      int plane1 = -1;
+      int plane2 = -1;
+      for (int k = 0; k < plane_cnt; k++) {
+        if (!FloatEqualZero(Dot3(coef_ptr + k * 4, vtx_ptr + i * 3) + coef_ptr[k * 4 + 3]) ||
+            !FloatEqualZero(Dot3(coef_ptr + k * 4, vtx_ptr + j * 3) + coef_ptr[k * 4 + 3])) {
+          continue;
+        }
+        if (plane1 < 0) {
+          plane1 = k;
+        } else {
+          plane2 = k;
+          break;
+        }
+      }
+      if (plane1 < 0 || plane2 < 0) {
+        continue;
+      }
+
+      // Count in all vertices on two planes
+      // Plane 1
+      auto face1 = CollectSurfaceVtx(vtx_cnt, vtx_ptr, plane1, coef_ptr, plannar_faces);
+      if (!face1.empty()) {
+        plannar_faces.emplace_back(face1.begin(), face1.end());
+      }
+
+      // Plane 2
+      auto face2 = CollectSurfaceVtx(vtx_cnt, vtx_ptr, plane2, coef_ptr, plannar_faces);
+      if (!face2.empty()) {
+        plannar_faces.emplace_back(face2.begin(), face2.end());
+      }
+    }
+  }
+  return plannar_faces;
+}
+
+
+std::tuple<std::unique_ptr<int[]>, int> Triangulate(int vtx_cnt, const float* vtx_ptr,
+                                                    const std::vector<std::set<int>>& surface_vtx_idx) {
+  float vtx_center[3]{};
+  for (int i = 0; i < vtx_cnt; i++) {
+    for (int j = 0; j < 3; j++) {
+      vtx_center[j] += vtx_ptr[i * 3 + j];
+    }
+  }
+  for (float& x : vtx_center) {
+    x /= vtx_cnt;
+  }
+
+  int tri_cap = 0;
+  for (const auto& curr_face : surface_vtx_idx) {
+    if (curr_face.size() < 3) {
+      continue;
+    }
+    tri_cap += curr_face.size() - 2;
+  }
+
+  std::unique_ptr<int[]> tri{ new int[tri_cap * 3]{} };
+  int tri_cnt = 0;
+  for (const auto& curr_face : surface_vtx_idx) {
+    if (curr_face.size() < 3) {
+      continue;
+    }
+
+    float face_center[3]{};
+    std::vector<int> curr_idx;
+    for (auto idx : curr_face) {
+      for (int i = 0; i < 3; i++) {
+        face_center[i] += vtx_ptr[idx * 3 + i];
+      }
+      curr_idx.emplace_back(idx);
+    }
+    for (auto& x : face_center) {
+      x /= curr_face.size();
+    }
+
+    // Sort by angle
+    float v0[3]{};
+    Vec3FromTo(face_center, vtx_ptr + curr_idx[0] * 3, v0);
+    Normalize3(v0);
+    std::sort(curr_idx.begin(), curr_idx.end(), [=](int i1, int i2) {
+      float v1[3]{};
+      float v2[3]{};
+      Vec3FromTo(face_center, vtx_ptr + i1, v1);
+      Normalize3(v1);
+      Vec3FromTo(face_center, vtx_ptr + i2, v2);
+      Normalize3(v2);
+
+      float n1[3]{};
+      float n2[3]{};
+      Cross3(v0, v1, n1);
+      Cross3(v0, v2, n2);
+
+      float s1 = Norm3(n1);
+      float s2 = Norm3(n2);
+      float c1 = Dot3(v0, v1);
+      float c2 = Dot3(v0, v2);
+
+      return atan2(s1, c1) < atan2(s2, c2);
+    });
+
+    // Check normal direction.
+    float n0[3]{};
+    TriangleNormal(vtx_ptr + curr_idx[0] * 3, vtx_ptr + curr_idx[1] * 3, vtx_ptr + curr_idx[2] * 3, n0);
+    Vec3FromTo(vtx_center, vtx_ptr + curr_idx[0] * 3, v0);
+    if (Dot3(v0, n0) < 0) {
+      std::reverse(curr_idx.begin(), curr_idx.end());
+    }
+
+    // Fill triangle index
+    tri[tri_cnt * 3 + 0] = curr_idx[0];
+    tri[tri_cnt * 3 + 1] = curr_idx[1];
+    tri[tri_cnt * 3 + 2] = curr_idx[2];
+    tri_cnt++;
+    for (size_t i = 3; i < curr_idx.size(); i++) {
+      tri[tri_cnt * 3 + 0] = curr_idx[0];
+      tri[tri_cnt * 3 + 1] = curr_idx[i - 1];
+      tri[tri_cnt * 3 + 2] = curr_idx[i];
+      tri_cnt++;
+    }
+  }
+
+  return std::make_tuple(std::move(tri), tri_cnt);
 }
 
 }  // namespace v3

@@ -76,13 +76,17 @@ constexpr float kIceCrystalC = 1.629f;
 
 Mesh CreatePrismMesh(float h);
 
-Mesh CreateGeneralPrismMesh(float h, const float* dist);
+Mesh CreatePrismMesh(float h, const float* dist);
 
 Mesh CreatePyramidMesh(float h1, float h2, float h3);
 
-Mesh CreateGenearlPyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
-                              float h1, float h2, float h3,                                    // height
-                              const float* dist);                                              // face distance
+Mesh CreatePyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
+                       float h1, float h2, float h3,                                    // height
+                       const float* dist);                                              // face distance
+
+Mesh CreatePyramidMesh(float upper_alpha, float lower_alpha,  // wedge angle, angle between pyramidal face and c-axis
+                       float h1, float h2, float h3,          // height
+                       const float* dist);                    // face distance
 
 }  // namespace v3
 }  // namespace icehalo

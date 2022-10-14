@@ -201,7 +201,7 @@ TEST_F(V3TestCrystal, CrystalCacheData) {
 TEST_F(V3TestCrystal, PrismMesh) {
   float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
   auto c1 = v3::CreatePrismMesh(1.5f);
-  auto c2 = v3::CreateGeneralPrismMesh(1.5f, dist);
+  auto c2 = v3::CreatePrismMesh(1.5f, dist);
 
   ASSERT_EQ(c1.GetTriangleCnt(), c2.GetTriangleCnt());
   ASSERT_EQ(c1.GetVtxCnt(), c2.GetVtxCnt());
@@ -234,7 +234,7 @@ TEST_F(V3TestCrystal, PrismMesh) {
 TEST_F(V3TestCrystal, PyramidMesh) {
   float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
   auto c1 = v3::CreatePyramidMesh(0.2f, 1.4f, 0.8f);
-  auto c2 = v3::CreateGenearlPyramidMesh(1, 1, 1, 1, 0.2f, 1.4f, 0.8f, dist);
+  auto c2 = v3::CreatePyramidMesh(1, 1, 1, 1, 0.2f, 1.4f, 0.8f, dist);
 
   ASSERT_EQ(c1.GetTriangleCnt(), c2.GetTriangleCnt());
   ASSERT_EQ(c1.GetVtxCnt(), c2.GetVtxCnt());
