@@ -74,10 +74,12 @@ constexpr int kHexPyramidVtxCnt = 24;
 constexpr int kHexPyramidTriCnt = 44;
 constexpr float kIceCrystalC = 1.629f;
 
+// ====== Prism ======
 Mesh CreatePrismMesh(float h);
 
 Mesh CreatePrismMesh(float h, const float* dist);
 
+// ====== Pyramid ======
 Mesh CreatePyramidMesh(float h1, float h2, float h3);
 
 Mesh CreatePyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
@@ -87,6 +89,17 @@ Mesh CreatePyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower
 Mesh CreatePyramidMesh(float upper_alpha, float lower_alpha,  // wedge angle, angle between pyramidal face and c-axis
                        float h1, float h2, float h3,          // height
                        const float* dist);                    // face distance
+
+// ====== Concave pyramid ======
+Mesh CreateConcavePyramidMesh(float h1, float h2, float h3);
+
+Mesh CreateConcavePyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
+                              float h1, float h2, float h3,                                    // height
+                              const float* dist);                                              // face distance
+
+Mesh CreateConcavePyramidMesh(float upper_alpha, float lower_alpha,  // wedge angle
+                              float h1, float h2, float h3,          // height
+                              const float* dist);                    // face distance
 
 }  // namespace v3
 }  // namespace icehalo

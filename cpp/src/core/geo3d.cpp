@@ -592,22 +592,21 @@ std::array<float, kHexPyramidPlaneCnt * 4> FillGeneralPyramidCoef(float upper_al
 }
 
 
-std::array<float, kHexPyramidPlaneCnt * 4> FillGeneralPyramidCoef(int upper_idx1, int upper_idx4,  //
-                                                                  int lower_idx1, int lower_idx4,  //
-                                                                  float h1, float h2, float h3,    //
-                                                                  const float* dist) {             //
-  float upper_alpha = std::atan(math::kSqrt3_2 * upper_idx4 / upper_idx1 / kIceCrystalC) * math::kRadToDegree;
-  float lower_alpha = std::atan(math::kSqrt3_2 * lower_idx4 / lower_idx1 / kIceCrystalC) * math::kRadToDegree;
-
-  return FillGeneralPyramidCoef(upper_alpha, lower_alpha, h1, h2, h3, dist);
-}
-
-
 Mesh CreatePyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
                        float h1, float h2, float h3,                                    // height
                        const float* dist) {                                             // face distance
+  float upper_alpha = std::atan(math::kSqrt3_2 * upper_idx4 / upper_idx1 / kIceCrystalC) * math::kRadToDegree;
+  float lower_alpha = std::atan(math::kSqrt3_2 * lower_idx4 / lower_idx1 / kIceCrystalC) * math::kRadToDegree;
+
+  return CreatePyramidMesh(upper_alpha, lower_alpha, h1, h2, h3, dist);
+}
+
+
+Mesh CreatePyramidMesh(float upper_alpha, float lower_alpha,  // wedge angle
+                       float h1, float h2, float h3,          // height
+                       const float* dist) {                   // face distance
   // Step 1. Construct coefficients.
-  auto coef = FillGeneralPyramidCoef(upper_idx1, upper_idx4, lower_idx1, lower_idx4, h1, h2, h3, dist);
+  auto coef = FillGeneralPyramidCoef(upper_alpha, lower_alpha, h1, h2, h3, dist);
 
   // Step 2. Find out all inner points.
   auto [vtx, vtx_cnt] = SolveConvexPolyhedronVtx(kHexPyramidPlaneCnt, coef.data());
