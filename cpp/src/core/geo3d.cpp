@@ -516,6 +516,9 @@ Mesh CreatePyramidMesh(float h1, float h2, float h3) {
 
 
 constexpr int kHexPyramidPlaneCnt = 20;
+constexpr int kUpperPyramidPlaneCnt = 6;
+constexpr int kLowerPyramidPlaneCnt = 6;
+constexpr int kMiddlePrismPlaneCnt = 6;
 
 
 std::array<float, kHexPyramidPlaneCnt * 4> FillGeneralPyramidCoef(float upper_alpha, float lower_alpha,  //
@@ -525,15 +528,14 @@ std::array<float, kHexPyramidPlaneCnt * 4> FillGeneralPyramidCoef(float upper_al
   using math::kPi_6;
 
   constexpr int kUpperPyrOffset = 2;
-  constexpr int kLowerPyrOffset = 14;
   constexpr int kPriOffset = 8;
+  constexpr int kLowerPyrOffset = 14;
 
   float h2_2 = h2 / 2.0f;
   float a1 = math::kSqrt3_4 / std::tan(upper_alpha * math::kDegreeToRad);
   float a2 = math::kSqrt3_4 / std::tan(lower_alpha * math::kDegreeToRad);
 
   std::array<float, kHexPyramidPlaneCnt * 4> coef{};
-  auto* coef_ptr = coef.data();
 
   coef[2] = 1.0f;
   coef[6] = -1.0f;
@@ -546,8 +548,8 @@ std::array<float, kHexPyramidPlaneCnt * 4> FillGeneralPyramidCoef(float upper_al
     float y1 = 0.5f * std::sin(-kPi_6 + i * kPi_3);
     float y2 = 0.5f * std::sin(kPi_6 + i * kPi_3);
     float det = x1 * y2 - x2 * y1;
-    coef[(i + kUpperPyrOffset) * 4 + 0] = a1 * (y2 - y1);
-    coef[(i + kUpperPyrOffset) * 4 + 1] = a1 * (x1 - x2);
+    coef[(i + kUpperPyrOffset) * 4 + 0] = a1 * (y2 - y1) * dist[i];
+    coef[(i + kUpperPyrOffset) * 4 + 1] = a1 * (x1 - x2) * dist[i];
     coef[(i + kUpperPyrOffset) * 4 + 2] = det;
     coef[(i + kUpperPyrOffset) * 4 + 3] = -(h2_2 + a1 * dist[i]) * det;
     // prismatic
@@ -556,8 +558,8 @@ std::array<float, kHexPyramidPlaneCnt * 4> FillGeneralPyramidCoef(float upper_al
     coef[(i + kPriOffset) * 4 + 2] = 0;
     coef[(i + kPriOffset) * 4 + 3] = -dist[i] * det;
     // lower pyramidal
-    coef[(i + kLowerPyrOffset) * 4 + 0] = a2 * (y2 - y1);
-    coef[(i + kLowerPyrOffset) * 4 + 1] = a2 * (x1 - x2);
+    coef[(i + kLowerPyrOffset) * 4 + 0] = a2 * (y2 - y1) * dist[i];
+    coef[(i + kLowerPyrOffset) * 4 + 1] = a2 * (x1 - x2) * dist[i];
     coef[(i + kLowerPyrOffset) * 4 + 2] = -det;
     coef[(i + kLowerPyrOffset) * 4 + 3] = -(h2_2 + a2 * dist[i]) * det;
   }
@@ -565,6 +567,7 @@ std::array<float, kHexPyramidPlaneCnt * 4> FillGeneralPyramidCoef(float upper_al
   // Step 2. Find out min and max z value, and complete coefficient array.
   float z_max = std::numeric_limits<float>::lowest();
   float z_min = std::numeric_limits<float>::max();
+  const auto* coef_ptr = coef.data();
   float xyz[3];
   for (int i = 2; i < kHexPyramidPlaneCnt; i++) {
     for (int j = i + 1; j < kHexPyramidPlaneCnt; j++) {
@@ -597,7 +600,6 @@ Mesh CreatePyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower
                        const float* dist) {                                             // face distance
   float upper_alpha = std::atan(math::kSqrt3_2 * upper_idx4 / upper_idx1 / kIceCrystalC) * math::kRadToDegree;
   float lower_alpha = std::atan(math::kSqrt3_2 * lower_idx4 / lower_idx1 / kIceCrystalC) * math::kRadToDegree;
-
   return CreatePyramidMesh(upper_alpha, lower_alpha, h1, h2, h3, dist);
 }
 
@@ -618,6 +620,162 @@ Mesh CreatePyramidMesh(float upper_alpha, float lower_alpha,  // wedge angle
   auto [tri, tri_cnt] = Triangulate(vtx_cnt, vtx.get(), plannar_faces);
 
   return Mesh(vtx_cnt, std::move(vtx), tri_cnt, std::move(tri));
+}
+
+
+std::array<float, kHexPyramidPlaneCnt * 4> FillConcavePyramidCoef(float upper_alpha, float lower_alpha,  //
+                                                                  float h1, float h2, float h3,          //
+                                                                  const float* dist) {                   //
+  using math::kPi_3;
+  using math::kPi_6;
+
+  constexpr int kUpperPyrOffset = 2;
+  constexpr int kPriOffset = 8;
+  constexpr int kLowerPyrOffset = 14;
+
+  float h2_2 = h2 / 2.0f;
+  float a1 = -math::kSqrt3_4 / std::tan(upper_alpha * math::kDegreeToRad);
+  float a2 = -math::kSqrt3_4 / std::tan(lower_alpha * math::kDegreeToRad);
+
+  // Faces: [upper basal, lower basal, upper pyramidal, lower pyramidal, prismatic]
+  std::array<float, kHexPyramidPlaneCnt * 4> coef{};
+
+  coef[2] = -1.0f;  // negative polyhedron
+  coef[6] = 1.0f;   // negative polyhedron
+
+  // Step 1. Fill coefficients except basal surfaces.
+  for (int i = 0; i < 6; i++) {
+    // upper pyramidal
+    float x1 = 0.5f * std::cos(-kPi_6 + i * kPi_3);
+    float x2 = 0.5f * std::cos(kPi_6 + i * kPi_3);
+    float y1 = 0.5f * std::sin(-kPi_6 + i * kPi_3);
+    float y2 = 0.5f * std::sin(kPi_6 + i * kPi_3);
+    float det = x1 * y2 - x2 * y1;
+    coef[(i + kUpperPyrOffset) * 4 + 0] = -a1 * (y2 - y1) * dist[i];    // negative polyhedron
+    coef[(i + kUpperPyrOffset) * 4 + 1] = -a1 * (x1 - x2) * dist[i];    // negative polyhedron
+    coef[(i + kUpperPyrOffset) * 4 + 2] = -det;                         // negative polyhedron
+    coef[(i + kUpperPyrOffset) * 4 + 3] = (h2_2 + a1 * dist[i]) * det;  // negative polyhedron
+    // prismatic
+    coef[(i + kPriOffset) * 4 + 0] = y2 - y1;
+    coef[(i + kPriOffset) * 4 + 1] = x1 - x2;
+    coef[(i + kPriOffset) * 4 + 2] = 0;
+    coef[(i + kPriOffset) * 4 + 3] = -dist[i] * det;
+    // lower pyramidal
+    coef[(i + kLowerPyrOffset) * 4 + 0] = -a2 * (y2 - y1) * dist[i];    // negative polyhedron
+    coef[(i + kLowerPyrOffset) * 4 + 1] = -a2 * (x1 - x2) * dist[i];    // negative polyhedron
+    coef[(i + kLowerPyrOffset) * 4 + 2] = det;                          // negative polyhedron
+    coef[(i + kLowerPyrOffset) * 4 + 3] = (h2_2 + a2 * dist[i]) * det;  // negative polyhedron
+  }
+
+  // Step 2. Find out min z value for upper pyramid, and max z value for lower pyramid, then complete coefficient array.
+  float xyz[3];
+  const auto* coef_ptr = coef.data();
+  // Upper
+  float z_min = std::numeric_limits<float>::max();  // For upper pyramid
+  for (int i = kUpperPyrOffset; i < kPriOffset; i++) {
+    for (int j = i + 1; j < kPriOffset; j++) {
+      for (int k = j + 1; k < kPriOffset; k++) {
+        // Find an intersection point
+        if (!SolvePlanes(coef_ptr + i * 4, coef_ptr + j * 4, coef_ptr + k * 4, xyz)) {
+          continue;
+        }
+        // Check if it is inner point.
+        if (IsInPolyhedron3(kUpperPyramidPlaneCnt, coef_ptr + kUpperPyrOffset, xyz)) {
+          if (xyz[2] < z_min) {
+            z_min = xyz[2];
+          }
+        }
+      }
+    }
+  }
+  coef[3] = (z_min - h2_2) * h1 + h2_2;  // negative polyhedron
+
+  // Lower
+  float z_max = std::numeric_limits<float>::lowest();  // For lower pyramid
+  for (int i = kLowerPyrOffset; i < kHexPyramidPlaneCnt; i++) {
+    for (int j = i + 1; j < kHexPyramidPlaneCnt; j++) {
+      for (int k = j + 1; k < kHexPyramidPlaneCnt; k++) {
+        // Find an intersection point
+        if (!SolvePlanes(coef_ptr + i * 4, coef_ptr + j * 4, coef_ptr + k * 4, xyz)) {
+          continue;
+        }
+        // Check if it is inner point.
+        if (IsInPolyhedron3(kLowerPyramidPlaneCnt, coef_ptr + kLowerPyrOffset, xyz)) {
+          if (xyz[2] > z_max) {
+            z_max = xyz[2];
+          }
+        }
+      }
+    }
+  }
+  coef[7] = -(z_max + h2_2) * h3 + h2_2;  // negative polyhedron
+
+  return coef;
+}
+
+
+Mesh CreateConcavePyramidMesh(float h1, float h2, float h3) {
+  std::unique_ptr<float[]> dist{ new float[6]{} };
+  std::fill(dist.get(), dist.get() + 6, 1.0f);
+  return CreateConcavePyramidMesh(1, 1, 1, 1, h1, h2, h3, dist.get());
+}
+
+
+Mesh CreateConcavePyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
+                              float h1, float h2, float h3,                                    // height
+                              const float* dist) {                                             // face distance
+  float upper_alpha = std::atan(math::kSqrt3_2 * upper_idx4 / upper_idx1 / kIceCrystalC) * math::kRadToDegree;
+  float lower_alpha = std::atan(math::kSqrt3_2 * lower_idx4 / lower_idx1 / kIceCrystalC) * math::kRadToDegree;
+  return CreateConcavePyramidMesh(upper_alpha, lower_alpha, h1, h2, h3, dist);
+}
+
+
+Mesh CreateConcavePyramidMesh(float upper_alpha, float lower_alpha,  // wedge angle
+                              float h1, float h2, float h3,          // height
+                              const float* dist) {                   // face distance
+  // Step 1. Construct coefficients
+  // surface order:
+  // upper basal, lower basal (negative)
+  // upper pyramidal (negative)
+  // prismatic
+  // lower pyramidal (negative)
+  auto coef = FillConcavePyramidCoef(upper_alpha, lower_alpha, h1, h2, h3, dist);
+  const auto* coef_ptr = coef.data();
+
+  // Step 2. Find all vertices
+  // Negative upper pyramid
+  std::unique_ptr<float[]> upper_negative_pyramid_coef{
+    new float[(kUpperPyramidPlaneCnt + kMiddlePrismPlaneCnt + 1) * 4]{}
+  };
+  std::memcpy(upper_negative_pyramid_coef.get(), coef_ptr, 4 * sizeof(float));
+  std::memcpy(upper_negative_pyramid_coef.get() + 4, coef_ptr + 4 * 2, 4 * 6 * sizeof(float));
+  std::memcpy(upper_negative_pyramid_coef.get() + 28, coef_ptr + 4 * 8, 4 * 6 * sizeof(float));
+  // Negative lower pyramid
+  std::unique_ptr<float[]> lower_negative_pyramid_coef{
+    new float[(kLowerPyramidPlaneCnt + kMiddlePrismPlaneCnt + 1) * 4]{}
+  };
+  std::memcpy(lower_negative_pyramid_coef.get(), coef_ptr, 4 * sizeof(float));
+  std::memcpy(lower_negative_pyramid_coef.get() + 4, coef_ptr + 4 * 2, 4 * 6 * sizeof(float));
+  std::memcpy(lower_negative_pyramid_coef.get() + 28, coef_ptr + 4 * 8, 4 * 6 * sizeof(float));
+
+  auto [upper_vtx, upper_vtx_cnt] = ConvexPolyhedronDifferenceVtx(
+      kUpperPyramidPlaneCnt + kMiddlePrismPlaneCnt + 1, upper_negative_pyramid_coef.get(),
+      kLowerPyramidPlaneCnt + kMiddlePrismPlaneCnt + 1, lower_negative_pyramid_coef.get());
+  auto [lower_vtx, lower_vtx_cnt] = ConvexPolyhedronDifferenceVtx(
+      kLowerPyramidPlaneCnt + kMiddlePrismPlaneCnt + 1, lower_negative_pyramid_coef.get(),
+      kUpperPyramidPlaneCnt + kMiddlePrismPlaneCnt + 1, upper_negative_pyramid_coef.get());
+
+  std::unique_ptr<float[]> vtx{ new float[(upper_vtx_cnt + lower_vtx_cnt) * 3]{} };
+  std::memcpy(vtx.get(), upper_vtx.get(), upper_vtx_cnt * 3 * sizeof(float));
+  std::memcpy(vtx.get() + upper_vtx_cnt * 3, lower_vtx.get(), lower_vtx_cnt * 3 * sizeof(float));
+
+  // Step 3. Collect vertices by surface.
+  auto plannar_faces = CollectSurfaceVtx(upper_vtx_cnt + lower_vtx_cnt, vtx.get(), kHexPyramidPlaneCnt, coef_ptr);
+
+  // Step 4. Triangulation
+  auto [tri, tri_cnt] = Triangulate(upper_vtx_cnt + lower_vtx_cnt, vtx.get(), plannar_faces);
+
+  return Mesh(upper_vtx_cnt + lower_vtx_cnt, std::move(vtx), tri_cnt, std::move(tri));
 }
 
 }  // namespace v3
