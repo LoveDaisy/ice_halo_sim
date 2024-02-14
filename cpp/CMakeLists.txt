@@ -2,14 +2,13 @@ cmake_minimum_required(VERSION 3.14)
 project(IceHalo VERSION 2.1.1)
 
 set(CMAKE_VERBOSE_MAKEFILE OFF)
-option(DEBUG "Default OFF" OFF)
 
 # ==================================================================================================
 # Compiler related
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
   # using regular Clang or AppleClang
   set(CMAKE_EXE_LINKER_FLAGS_MINSIZEREL "${CMAKE_EXE_LINKER_FLAGS_MINSIZEREL} -dead_strip")
-elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+elseif("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
   # using GCC
   set(CMAKE_EXE_LINKER_FLAGS_MINSIZEREL "${CMAKE_EXE_LINKER_FLAGS_MINSIZEREL} --gc-sections")
 endif()
@@ -39,6 +38,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -ffunction-sections -fda
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT result OUTPUT output)
+
 if(result AND "${CMAKE_BUILD_TYPE}" STREQUAL "Release")
   message(STATUS "IPO supported. Enable inter-procedural optimization.")
   set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
@@ -65,17 +65,15 @@ find_package(Threads REQUIRED)  # GoogleTest needs it
 find_package(OpenCV REQUIRED core imgproc imgcodecs)
 find_package(Boost 1.63.0 COMPONENTS filesystem system REQUIRED)
 
-
 # ==================================================================================================
 # Add some definitions
 if(${CMAKE_HOST_SYSTEM_NAME} STREQUAL "Linux")
-  add_compile_definitions(OS_LINUX) 
+  add_compile_definitions(OS_LINUX)
 elseif(${CMAKE_HOST_SYSTEM_NAME} STREQUAL "Darwin")
   add_compile_definitions(OS_MAC)
 elseif(${CMAKE_HOST_SYSTEM_NAME} STREQUAL "Windows")
   add_compile_definitions(OS_WIN)
 endif()
-
 
 # ==================================================================================================
 # Set submodules
@@ -128,7 +126,7 @@ set(icehalo_util_src
   "${PROJ_SRC_DIR}/util/obj_pool.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
 
-  set(icehalo_src
+set(icehalo_src
   ${icehalo_config_src} ${icehalo_context_src} ${icehalo_core_src}
   ${icehalo_io_src} ${icehalo_process_src} ${icehalo_server_src} ${icehalo_util_src})
 
@@ -136,12 +134,15 @@ set(icehalo_util_src
 # Add targets
 add_library(icehalo_lib OBJECT ${icehalo_src})
 target_include_directories(icehalo_lib PUBLIC ${icehalo_include})
+
 if(MULTI_THREAD)
   target_compile_definitions(icehalo_lib PUBLIC MULTI_THREAD)
 endif()
+
 if(RANDOM_SEED)
   target_compile_definitions(icehalo_lib PUBLIC RANDOM_SEED)
 endif()
+
 if(VERBOSE_LOG)
   target_compile_definitions(icehalo_lib PUBLIC VERBOSE_LOG)
 endif()
@@ -149,8 +150,8 @@ endif()
 # ==================================================================================================
 # Add subdirectory
 add_subdirectory(src)
-if(BUILD_TEST)
-    enable_testing()
-    add_subdirectory(test)
-endif()
 
+if(BUILD_TEST)
+  enable_testing()
+  add_subdirectory(test)
+endif()

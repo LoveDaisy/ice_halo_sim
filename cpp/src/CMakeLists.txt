@@ -1,7 +1,6 @@
 # ==================================================================================================
 message(STATUS "[src] CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 
-
 # ==================================================================================================
 # Add targets
 add_executable(IceHaloEndless
@@ -29,7 +28,7 @@ target_link_libraries(IceHaloLibV3 PRIVATE
 target_include_directories(IceHaloLibV3 PUBLIC
     $<BUILD_INTERFACE:${PROJ_SRC_DIR}/src/include>
     $<INSTALL_INTERFACE:include>)
-target_compile_definitions(IceHaloLibV3 PRIVATE 
+target_compile_definitions(IceHaloLibV3 PRIVATE
     $<$<CONFIG:Debug>:DEBUG>)
 install(TARGETS IceHaloLibV3
     DESTINATION "${CMAKE_INSTALL_PREFIX}")
