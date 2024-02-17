@@ -108,8 +108,12 @@ void from_json(const nlohmann::json& j, CrystalConfig& c) {
   if (j.contains("axis")) {
     j.at("axis").get_to(c.axis_);
   } else {
+    c.axis_.azimuth_dist.type = DistributionType::kNoRandom;
+    c.axis_.azimuth_dist.mean = 0.0f;
     c.axis_.latitude_dist.type = DistributionType::kNoRandom;
     c.axis_.latitude_dist.mean = 90.0f;
+    c.axis_.roll_dist.type = DistributionType::kNoRandom;
+    c.axis_.roll_dist.mean = 0.0f;
   }
 }
 
