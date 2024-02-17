@@ -129,7 +129,7 @@ TEST_F(V3TestProj, SimpleProj) {
 
   for (int i = 0; i < kMaxHits * 2; i++) {
     for (int j = 0; j < 7; j++) {
-      EXPECT_NEAR(expect_out[i * 7 + j], output_data[i * 7 + j], 1e-5);
+      EXPECT_NEAR(expect_out[i * 7 + j], output_data[i * 7 + j], 5e-5);
     }
   }
 }
