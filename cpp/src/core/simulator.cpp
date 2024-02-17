@@ -435,7 +435,8 @@ void Simulator::Run() {
       RayBuffer init_data[2]{ RayBuffer(), RayBuffer(ray_num * config.max_hits_) };
       RayBuffer buffer_data[2]{};
 
-      std::vector<Crystal> all_crystals(16);
+      std::vector<Crystal> all_crystals;
+      all_crystals.reserve(16);
 
       bool first_ms = true;
       for (const auto& m : config.ms_) {
