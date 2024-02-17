@@ -176,29 +176,45 @@ struct CrystalMaker {
   RandomNumberGenerator& rng_;
 
   Crystal operator()(const PrismCrystalParam& p) {
+    // Check all face distributions. If they are all no-random, then create a regular prism.
+    bool regular = !std::any_of(std::begin(p.d_), std::end(p.d_),
+                                [](const auto& d) { return d.type != DistributionType::kNoRandom; });
+
     float h = std::abs(rng_.Get(p.h_));
-    bool regular = true;
-    for (const auto& d : p.d_) {
-      if (d.type != DistributionType::kNoRandom) {
-        regular = false;
-        break;
-      }
-    }
 
     if (regular) {
       return Crystal::CreatePrism(h);
     } else {
-      float dist[6];
-      int i = 0;
-      for (const auto& d : p.d_) {
-        dist[i++] = std::abs(rng_.Get(d));
+      float dist[6]{};
+      for (int i = 0; i < 6; i++) {
+        dist[i] = std::abs(rng_.Get(p.d_[i]));
       }
       return Crystal::CreatePrism(h, dist);
     }
   }
 
-  Crystal operator()(const PyramidCrystalParam& /* p */) {
-    // TODO:
+  Crystal operator()(const PyramidCrystalParam& p) {
+    // Check all face distributions. If they are all no-random, then it is face-regular.
+    bool face_regular = !std::any_of(std::begin(p.d_), std::end(p.d_),
+                                     [](const auto& d) { return d.type != DistributionType::kNoRandom; });
+    // Check Miller index. If they are [1, 0, 1], then it is miller-regular.
+    bool miller_regular_u = p.miller_indices_u_[0] == 1 && p.miller_indices_u_[1] == 0 && p.miller_indices_u_[2] == 1;
+    bool miller_regular_l = p.miller_indices_l_[0] == 1 && p.miller_indices_l_[1] == 0 && p.miller_indices_l_[2] == 1;
+
+    float h1 = std::abs(rng_.Get(p.h_pyr_u_));
+    float h2 = std::abs(rng_.Get(p.h_prs_));
+    float h3 = std::abs(rng_.Get(p.h_pyr_l_));
+
+    if (face_regular && miller_regular_u && miller_regular_l) {
+      return Crystal::CreatePyramid(h1, h2, h3);
+    } else {
+      float dist[6]{};
+      for (int i = 0; i < 6; i++) {
+        dist[i] = std::abs(rng_.Get(p.d_[i]));
+      }
+      return Crystal::CreatePyramid(p.miller_indices_u_[0], p.miller_indices_u_[2], p.miller_indices_l_[0],
+                                    p.miller_indices_l_[2], h1, h2, h3, dist);
+    }
     return Crystal{};
   }
 };
