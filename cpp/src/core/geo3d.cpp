@@ -505,10 +505,10 @@ Mesh CreatePyramidMesh(float h1, float h2, float h3) {
       22, 23, 17,  // pyramid: fn27
       17, 23, 12,  // pyramid: fn28
       23, 18, 12,  // pyramid: fn28
-      24, 26, 25,  // lower basal: fn2
-      24, 27, 26,  // lower basal: fn2
-      27, 29, 28,  // lower basal: fn2
-      27, 24, 29,  // lower basal: fn2
+      18, 20, 19,  // lower basal: fn2
+      18, 21, 20,  // lower basal: fn2
+      21, 18, 23,  // lower basal: fn2
+      21, 23, 22,  // lower basal: fn2
   } };
 
   return Mesh(kHexPyramidVtxCnt, std::move(vtx), kHexPyramidTriCnt, std::move(tri));

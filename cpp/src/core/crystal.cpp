@@ -1049,7 +1049,7 @@ Crystal Crystal::CreatePyramid(float h1, float h2, float h3) {
   c.fn_period_ = 6;
   for (int i = 0; i < 4; i++) {
     c.fn_map_[i] = 1;
-    c.fn_map_[i + 40] = 1;
+    c.fn_map_[i + 40] = 2;
   }
   for (int i = 0; i < 6; i++) {
     c.fn_map_[i * 2 + 4] = i + 13;
