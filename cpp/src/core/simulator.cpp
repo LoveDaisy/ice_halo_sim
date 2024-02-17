@@ -93,17 +93,17 @@ void InitRay_d_w_previdx(const LightSourceParam& light_param, const WlParam& wl_
 void InitRay_rot(RandomNumberGenerator& rng, const AxisDistribution& crystal_axis,  // input
                  RayBuffer buffer_data[2]) {                                        // output
   float axis[9]{ 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+  float lon_lat[2]{};
   for (auto& r : buffer_data[0]) {
-    float lon = rng.Get(crystal_axis.azimuth_dist) * math::kDegreeToRad;
-    float lat = rng.Get(crystal_axis.latitude_dist) * math::kDegreeToRad;
-    if (lat > math::kPi_2) {
-      lat = math::kPi - lat;
-    }
-    if (lat < -math::kPi_2) {
-      lat = -math::kPi_2 - lat;
+    if (crystal_axis.azimuth_dist.type != DistributionType::kUniform ||
+        crystal_axis.latitude_dist.type != DistributionType::kUniform) {
+      RandomSampler::SampleSphericalPointsSph(crystal_axis, lon_lat);
+    } else {
+      // Randomly sample on sphere
+      RandomSampler::SampleSphericalPointsSph(lon_lat);
     }
     float roll = rng.Get(crystal_axis.roll_dist) * math::kDegreeToRad;
-    r.crystal_rot_ = Rotation(axis + 6, roll).Chain(axis + 3, math::kPi_2 - lat).Chain(axis + 6, lon);
+    r.crystal_rot_ = Rotation(axis + 6, roll).Chain(axis + 3, math::kPi_2 - lon_lat[1]).Chain(axis + 6, lon_lat[0]);
   }
 }
 
