@@ -1,7 +1,5 @@
 #include <gtest/gtest.h>
 
-#include <chrono>
-#include <cstddef>
 #include <cstring>
 #include <fstream>
 #include <memory>
@@ -9,12 +7,10 @@
 
 #include "config/config_manager.hpp"
 #include "core/simulator.hpp"
-#include "include/log.hpp"
 #include "server/show_rays.hpp"
 #include "util/queue.hpp"
 
 extern std::string config_file_name;
-using namespace icehalo;
 using namespace std::chrono_literals;
 
 namespace {
@@ -31,11 +27,11 @@ class V3TestProj : public ::testing::Test {
 
 
 // For test
-class CopyRayDataConsumer : public v3::IConsume {
+class CopyRayDataConsumer : public icehalo::v3::IConsume {
  public:
   CopyRayDataConsumer(float* output_data) : output_data_(output_data) {}
 
-  void Consume(const v3::SimData& data) override {
+  void Consume(const icehalo::v3::SimData& data) override {
     int offset = 0;
     for (const auto& r : data.rays_) {
       if (r.fid_ >= 0 || r.w_ < 0) {
@@ -83,19 +79,19 @@ class Consumer {
 };
 
 TEST_F(V3TestProj, SimpleProj) {
-  v3::ConfigManager config_manager = config_json_.get<v3::ConfigManager>();
+  icehalo::v3::ConfigManager config_manager = config_json_.get<icehalo::v3::ConfigManager>();
 
-  auto config_queue = std::make_shared<v3::Queue<v3::SceneConfig>>();
-  auto data_queue = std::make_shared<v3::Queue<v3::SimData>>();
+  auto config_queue = std::make_shared<icehalo::v3::Queue<icehalo::v3::SceneConfig>>();
+  auto data_queue = std::make_shared<icehalo::v3::Queue<icehalo::v3::SimData>>();
 
   constexpr int kMaxHits = 8;
   std::unique_ptr<float[]> output_data{ new float[kMaxHits * 2 * 7]{} };
 
-  v3::Simulator simulator(config_queue, data_queue);
+  icehalo::v3::Simulator simulator(config_queue, data_queue);
 
   Consumer consumer(data_queue);
-  consumer.RegisterConsumer(v3::ConsumerPtrU(new v3::ShowRayInfoConsumer));
-  consumer.RegisterConsumer(v3::ConsumerPtrU(new CopyRayDataConsumer(output_data.get())));
+  consumer.RegisterConsumer(icehalo::v3::ConsumerPtrU(new icehalo::v3::ShowRayInfoConsumer));
+  consumer.RegisterConsumer(icehalo::v3::ConsumerPtrU(new CopyRayDataConsumer(output_data.get())));
 
   std::thread prod_thread([&simulator]() { simulator.Run(); });
   std::thread cons_thread([&consumer]() { consumer.Run(); });
