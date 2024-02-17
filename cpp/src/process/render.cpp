@@ -5,11 +5,11 @@
 #include <limits>
 #include <utility>
 
-#include "context/context.hpp"
 #include "core/math.hpp"
 #include "include/log.hpp"
 #include "process/color_data.hpp"
 #include "process/simulation.hpp"
+#include "util/enum_map.hpp"
 #include "util/threading_pool.hpp"
 
 namespace icehalo {
@@ -363,9 +363,7 @@ void RenderSpecToGray(const ThreadingPoolPtr& threading_pool,
 }
 
 
-Renderer::Renderer()
-    : cam_ctx_{}, render_ctx_{}, sun_ctx_{}, output_image_buffer_{}, total_w_(0),
-      threading_pool_(ThreadingPool::CreatePool()) {}
+Renderer::Renderer() : total_w_(0), threading_pool_(ThreadingPool::CreatePool()) {}
 
 
 Renderer::Renderer(Renderer&& other) noexcept

@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <limits>
 #include <memory>
 #include <set>
 #include <variant>
@@ -11,10 +10,10 @@
 
 #include "config/filter_config.hpp"
 #include "context/crystal_context.hpp"
-#include "context/filter_context.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
+#include "core/optics.hpp"
 #include "core/raypath.hpp"
 #include "include/log.hpp"
 

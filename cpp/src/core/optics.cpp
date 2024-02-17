@@ -9,7 +9,6 @@
 #include <cstddef>
 #include <cstring>
 #include <limits>
-#include <memory>
 
 #include "context/context.hpp"
 #include "core/math.hpp"
@@ -124,12 +123,12 @@ size_t RayPathRecorder::LeftCircularShift(size_t val, unsigned int n) {
 
 RaySegment::RaySegment()
     : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root_ctx(nullptr), pt(0, 0, 0), dir(0, 0, 0), w(0),
-      face_id(-1), state(RaySegmentState::kOnGoing), recorder{} {}
+      face_id(-1), state(RaySegmentState::kOnGoing) {}
 
 
 RaySegment::RaySegment(const float* pt, const float* dir, float w, int face_id)
     : next_reflect(nullptr), next_refract(nullptr), prev(nullptr), root_ctx(nullptr), pt(pt), dir(dir), w(w),
-      face_id(face_id), state(RaySegmentState::kOnGoing), recorder{} {}
+      face_id(face_id), state(RaySegmentState::kOnGoing) {}
 
 
 void RaySegment::Serialize(File& file, bool with_boi) const {
@@ -816,10 +815,6 @@ void Optics::IntersectLineWithTrianglesSimd(const float* pt, const float* dir,  
 }
 #endif
 
-
-constexpr float IceRefractiveIndex::kCoefAvr[];
-constexpr float IceRefractiveIndex::kCoefO[];
-constexpr float IceRefractiveIndex::kCoefE[];
 
 double IceRefractiveIndex::Get(double wave_length) {
   /* Shellmeier's equation:

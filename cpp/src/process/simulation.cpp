@@ -5,22 +5,18 @@
 #include <cstring>
 #include <functional>
 #include <memory>
-#include <stack>
 #include <utility>
-#include <variant>
 
-#include "config/crystal_config.hpp"
-#include "config/light_config.hpp"
-#include "config/proj_config.hpp"
-#include "config/sim_data.hpp"
-#include "core/buffer.hpp"
+#ifdef FOR_TEST
+#include <stack>
+#endif
+
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
 #include "include/log.hpp"
 #include "util/obj_pool.hpp"
-#include "util/queue.hpp"
 #include "util/threading_pool.hpp"
 
 namespace icehalo {
@@ -971,6 +967,7 @@ const SimulationData& Simulator::GetSimulationRayData() {
 
 
 #ifdef FOR_TEST
+
 void Simulator::PrintRayInfo() {
   std::stack<RaySegment*> s;
   for (const auto& rs : simulation_ray_data_.GetExitRaySegments()) {

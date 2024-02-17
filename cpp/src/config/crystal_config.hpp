@@ -4,7 +4,6 @@
 #include <memory>
 #include <variant>
 
-#include "core/def.hpp"
 #include "core/math.hpp"
 #include "json.hpp"
 

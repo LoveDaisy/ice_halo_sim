@@ -3,15 +3,12 @@
 
 #include <cstddef>
 #include <memory>
-#include <unordered_map>
 #include <unordered_set>
 
 #include "config/filter_config.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "core/raypath.hpp"
-#include "io/json_util.hpp"
-#include "io/serialize.hpp"
 
 namespace icehalo {
 

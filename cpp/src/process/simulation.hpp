@@ -1,12 +1,9 @@
 #ifndef SRC_CORE_SIMULATION_H_
 #define SRC_CORE_SIMULATION_H_
 
-#include <atomic>
 #include <cstddef>
 #include <memory>
 
-#include "config/proj_config.hpp"
-#include "config/sim_data.hpp"
 #include "context/context.hpp"
 #include "core/def.hpp"
 #include "core/optics.hpp"

@@ -2,7 +2,7 @@
 #define CORE_BUFFER_H_
 
 #include <cstddef>
-#include <memory>
+#include <cstdint>
 
 namespace icehalo {
 namespace v3 {

@@ -9,7 +9,6 @@
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"
 #include "config/render_config.hpp"
-#include "core/def.hpp"
 #include "json.hpp"
 
 namespace icehalo {

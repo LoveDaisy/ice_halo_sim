@@ -1,7 +1,6 @@
 #ifndef SRC_CORE_MYMATH_H_
 #define SRC_CORE_MYMATH_H_
 
-#include <cmath>
 #include <cstddef>
 #include <initializer_list>
 #include <memory>

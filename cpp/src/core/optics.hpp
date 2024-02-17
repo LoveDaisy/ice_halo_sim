@@ -1,11 +1,7 @@
 #ifndef SRC_CORE_OPTICS_H_
 #define SRC_CORE_OPTICS_H_
 
-#include <atomic>
 #include <cstddef>
-#include <memory>
-#include <mutex>
-#include <vector>
 
 #include "core/buffer.hpp"
 #include "core/crystal.hpp"
