@@ -61,7 +61,7 @@ struct LensProjParam {
 using ProjFunc = std::function<void(const LensProjParam&, const float*, int*, size_t)>;
 
 void LinearProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.diag_pix_ / std::tan(p.fov_ / 2.0f * math::kDegreeToRad);
+  float scale = p.diag_pix_ / 2.0f / std::tan(p.fov_ / 2.0f * math::kDegreeToRad);
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
         (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
