@@ -627,6 +627,8 @@ float RandomNumberGenerator::Get(DistributionType dist, float mean, float std) {
       return (GetUniform() - 0.5f) * 2 * std + mean;
     case DistributionType::kGaussian:
       return GetGaussian() * std + mean;
+    default:
+      return 0.0f;
   }
 }
 

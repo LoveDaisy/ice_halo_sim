@@ -157,6 +157,8 @@ std::tuple<RayCollectionInfoList, SimpleRayData> SimulationData::CollectSplitRay
       return CollectSplitHaloRayData(ctx);
     case RenderSplitterType::kFilter:
       return CollectSplitFilterRayData(ctx, splitter);
+    default:
+      return std::make_tuple<RayCollectionInfoList, SimpleRayData>({}, SimpleRayData());
   }
 }
 

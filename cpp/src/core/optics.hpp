@@ -2,6 +2,7 @@
 #define SRC_CORE_OPTICS_H_
 
 #include <atomic>
+#include <climits>
 #include <memory>
 #include <mutex>
 #include <vector>

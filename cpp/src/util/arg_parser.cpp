@@ -1,5 +1,6 @@
 #include "util/arg_parser.hpp"
 
+#include <functional>
 #include <stdexcept>
 
 #include "util/log.hpp"
