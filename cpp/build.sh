@@ -82,7 +82,7 @@ while getopts "htrjkb1" opt; do
     BUILD_TEST=ON
     ;;
   j)
-    MAKE_J_N=""
+    MAKE_J_N=$(sysctl -n hw.ncpu) || MAKE_J_N=$(cat /proc/cpuinfo | grep processor | wc -l) || MAKE_J_N=8
     ;;
   r)
     RANDOM_SEED=ON
