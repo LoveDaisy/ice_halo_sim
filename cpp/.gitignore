@@ -4,6 +4,9 @@
 # VSCode
 .vscode
 
+# cache
+.cache
+
 # CMake build directory
 cmake-build-debug
 cmake-build-release
@@ -16,4 +19,5 @@ doc/figs/*.pdf
 config.json
 test.json
 tmp.log
+*.jpg
 
