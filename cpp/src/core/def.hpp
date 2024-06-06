@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <limits>
+#include <memory>
 #include <unordered_map>
 
 namespace icehalo {

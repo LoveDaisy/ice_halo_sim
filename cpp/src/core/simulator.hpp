@@ -1,6 +1,7 @@
 #ifndef CORE_SIMULATOR_H_
 #define CORE_SIMULATOR_H_
 
+#include <atomic>
 #include <cstddef>
 #include <memory>
 

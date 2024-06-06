@@ -1,6 +1,7 @@
 #include "include/log.hpp"
 
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <ctime>
 #include <unordered_set>

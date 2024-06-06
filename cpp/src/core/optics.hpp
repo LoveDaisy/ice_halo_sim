@@ -1,6 +1,7 @@
 #ifndef SRC_CORE_OPTICS_H_
 #define SRC_CORE_OPTICS_H_
 
+#include <climits>
 #include <cstddef>
 
 #include "core/buffer.hpp"

@@ -217,6 +217,8 @@ int RenderContext::GetSplitNumber() const {
       return splitter_.top_halo_num;
     case RenderSplitterType::kFilter:
       return static_cast<int>(splitter_.crystal_filters.size());
+    default:
+      return -1;
   }
 }
 

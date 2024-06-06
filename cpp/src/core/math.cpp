@@ -648,6 +648,8 @@ float RandomNumberGenerator::Get(Distribution dist) {
       return GetGaussian() * dist.std + dist.mean;
     case DistributionType::kNoRandom:
       return dist.mean;
+    default:
+      return 0.0f;
   }
 }
 
