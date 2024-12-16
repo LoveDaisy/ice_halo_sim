@@ -7,9 +7,9 @@
 namespace icehalo {
 
 SunContext::SunContext()
-    : diameter_(0.0f),
-      altitude_(kDefaultAltitude), sun_position_{ 0.0f, -std::cos(kDefaultAltitude * math::kDegreeToRad),
-                                                  -std::sin(kDefaultAltitude * math::kDegreeToRad) } {}
+    : diameter_(0.0f), altitude_(kDefaultAltitude),
+      sun_position_{ 0.0f, -std::cos(kDefaultAltitude * math::kDegreeToRad),
+                     -std::sin(kDefaultAltitude * math::kDegreeToRad) } {}
 
 
 SunContextPtrU SunContext::CreateDefault() {

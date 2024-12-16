@@ -765,9 +765,8 @@ int RandomSampler::SampleInt(int max) {
 
 
 AxisDistribution::AxisDistribution()
-    : azimuth_dist{ DistributionType::kUniform, 0, 0 }, latitude_dist{ DistributionType::kUniform, 0, 0 }, roll_dist{
-        DistributionType::kUniform, 0, 0
-      } {}
+    : azimuth_dist{ DistributionType::kUniform, 0, 0 }, latitude_dist{ DistributionType::kUniform, 0, 0 },
+      roll_dist{ DistributionType::kUniform, 0, 0 } {}
 
 
 void to_json(nlohmann::json& obj, const Distribution& dist) {

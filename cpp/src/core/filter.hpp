@@ -131,7 +131,7 @@ class Filter {
   Filter& operator=(const Filter& other) = default;
 
   bool Check(const RaySeg& ray) const;  // Put action logic here, and detail logic in InternalCheck()
-  virtual void InitCrystalSymmetry(const Crystal& /* crystal */){};
+  virtual void InitCrystalSymmetry(const Crystal& /* crystal */) {};
 
  protected:
   virtual bool InternalCheck(const RaySeg& ray) const = 0;
