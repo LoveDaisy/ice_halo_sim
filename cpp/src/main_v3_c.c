@@ -23,8 +23,8 @@ int main(int argc, char** argv) {
   HS_HaloSimServer* server = HS_CreateServer();
   HS_CommitConfig(server, buf);
 
+  sleep(1);
   while (1) {
-    sleep(1);
     HS_SimResult* result = NULL;
     for (result = HS_GetAllResults(server);  //
          HS_HasNextResult(result);           //
