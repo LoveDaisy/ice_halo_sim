@@ -244,6 +244,15 @@ Here is an example:
 Nothing complicated. It just keep references to scene and render.
 
 
+## Documentation
+
+For detailed documentation, please refer to:
+- [Documentation Index](doc/README.md) - Navigation and index of all documents
+- [Configuration Guide](doc/configuration.md) - Complete V3 configuration reference
+- [Architecture Document](doc/architecture.md) - V3 system architecture
+- [Developer Guide](doc/developer-guide.md) - Developer guide (to be created)
+- [C API Documentation](doc/c_api.md) - C interface usage (to be created)
+
 ## TODO list
 
 * Write a (web) GUI for these code.

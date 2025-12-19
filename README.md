@@ -15,7 +15,10 @@ Details including how to build and run can be found on following pages. *NOTE:* 
 on matlab codes. These are just legacy codes remained here for reference.
 
 * [C++ codes](cpp)  
-* [Matlab codes](matlab)  
+* [Matlab codes](matlab)
+
+For detailed documentation:
+* [C++ Documentation Index](cpp/doc/README.md)  
 
 ## Features
 

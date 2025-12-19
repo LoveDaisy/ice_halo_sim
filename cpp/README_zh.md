@@ -5,6 +5,14 @@
 
 [English version](README.md)
 
+## 文档导航
+
+- [文档索引](doc/README.md) - 所有文档的导航和索引
+- [配置文档](doc/configuration.md) - V3配置文件的完整说明
+- [系统架构文档](doc/architecture.md) - V3系统架构设计
+- [开发指南](doc/developer-guide.md) - 开发指南（待创建）
+- [C接口文档](doc/c_api.md) - C接口使用说明（待创建）
+
 这是一个冰晕模拟程序，速度快且高效。
 
 ## 快速开始
