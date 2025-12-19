@@ -29,6 +29,9 @@ HS_HaloSimServer* HS_CreateServer() {
 
 
 void HS_DestroyServer(HS_HaloSimServer* server) {
+  if (!server) {
+    return;
+  }
   delete server;
 }
 

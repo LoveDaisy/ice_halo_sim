@@ -1,190 +1,329 @@
 # C++ 代码
 
-*提示: 从开发方便的角度, 我会以英文版文档为优先, 中文版内容可能滞后. 个人精力有限, 无法全面照顾, 敬请谅解*
+**版本**: V3  
+**最后更新**: 2025-12-19
 
 [English version](README.md)
 
-matlab 代码只是一个原型, 并没有充分考虑性能, 因此我专门写了一个 C++ 项目, 以期获得高性能表现.
-目前 C++ 版本没有用户界面, 只能从命令行启动.
+## 文档导航
 
+- [文档索引](doc/README.md) - 所有文档的导航和索引
+- [配置文档](doc/configuration.md) - V3配置文件的完整说明
+- [系统架构文档](doc/architecture.md) - V3系统架构设计
+- [开发指南](doc/developer-guide.md) - 开发指南
+- [C接口文档](doc/c_api.md) - C接口使用说明
+- [API文档](doc/api/html/) - 自动生成的API文档（需要本地生成）
 
-## 构建
+这是一个冰晕模拟程序，速度快且高效。
 
-系统要求: Boost (>= 1.54), OpenCV (>= 3.3), CMake (>= 3.10). 本项目在 Mac OSX 10.14 和 Ubuntu 14.04 平台测试通过.
+## 快速开始
 
-首先下载整个项目,
+克隆项目后，可以运行构建脚本来构建和安装：
 
 ~~~bash
-git clone --recursive git@github.com:LoveDaisy/ice_halo_sim.git
 cd ice_halo_sim/cpp
+./build.sh -rj release
 ~~~
 
-本项目使用 [CMake](https://cmake.org/) 构建. 你可以直接使用构建脚本来进行编译:
+如果一切顺利，可执行文件将安装到 `cpp/build/cmake_install`。然后可以这样运行：
 
 ~~~bash
-./build.sh release  # Release 版本, 最大化性能
+./build/cmake_install/IceHaloV3 -f v3_config_example.json
 ~~~
 
-或者
+程序将输出一些信息，以及几张渲染的图片文件。
+
+如果你需要更多详细信息，请继续阅读下面的章节。
+
+## 开始使用
+
+### 构建项目
+
+本项目使用 [CMake](https://cmake.org/) 构建。它依赖于 [OpenCV](https://opencv.org/) 和 [boost](https://www.boost.org/)。在开始构建之前，请确保已安装这些依赖。（实际上它们对核心功能并不关键，我计划移除这些依赖）。
+
+我提供了一个构建脚本来简化操作。
+使用 `-h` 可以看到帮助信息：
 
 ~~~bash
-./build.sh debug  # Debug 版本
+./build.sh -h
+Usage:
+  ./build.sh [-tjkrh1] <debug|release|minsizerel>
+    Executables will be installed at build/cmake_install
+OPTIONS:
+  -t:          Build test cases and run test on them.
+  -j:          Build in parallel, i.e. use make -j option.
+  -k:          Clean temporary building files.
+  -b:          Run a benchmarking. It tells how fast the program runs on your computer.
+  -v:          Enable verbose log.
+  -r:          Use random seed for random number generator. Without this option,
+               the program will use a constant value. Thus generate a repeatable result
+               (usually together with -1).
+  -1:          Use single thread.
+  -h:          Show this message.
 ~~~
 
-其他编译选项, 参见脚本的帮助信息, `./build.sh help` 或者直接运行 `./build.sh`.
+注意，debug 版本的可执行文件不会被安装，它们位于 `build/cmake_build`。
 
-生成的 release 版可执行程序位于 `build/cmake_install`, debug 版可执行程序位于 `build/cmake_build`.
-
-我在工程中使用 [GoogleTest](https://github.com/google/googletest)
-框架来帮助进行单元测试.
-测试相关的代码在 `test` 文件夹中, 一般情况下不必改动, 也不需要运行. 如果你对我的单元测试感兴趣, 可以查看对应代码.
-可以通过传入 `test` 选项来编译并运行测试用例. 在编译 release 版本的情况下, 如果测试用例不通过,
-可执行程序不会被安装到 `build/cmake_install` 目录.
-
-## 简单运行
-
-### 仿真
-
-在命令行输入
-`./IceHaloSim <config-file>` 即可运行.
-这里有一个 [`config-example.json`](./config-example.json) 文件作为输入配置的样本, 可供参考.
-在运行程序之后, 你将得到一些 `.bin` 文件, 这些文件包含了所有光线追踪的结果.
-这些数据文件位于配置文件中指定的数据路径中. 你可以多次运行仿真程序, 积累更多的数据, 然后再运行可视化程序进行最后渲染.
-
-### 可视化
-
-运行仿真程序后将生成一些 `.bin` 文件, 以及输出一些晶体的形状信息. 项目中我准备了几个小工具来做可视化相关的工作.
-
-* 仿真结果图  
-  命令行输入 `./IceHaloRender <config-file>` 运行渲染过程. 这里使用仿真过程同样的配置文件.
-渲染的结果存放在配置文件中指定的数据文件夹内, 与数据文件相同.
-
-  此外还可以使用 matlab 脚本进行数据读取和渲染. 具体可以参见
-`matlab/src/read_binary_result.m` 我个人更推荐使用 C++ 版本的可视化工具, 速度更快.
-
-* 冰晶形状  
-  `matlab/src/plot_crystal_main.m` 用于绘制冰晶的形状. 你可以把程序运行后在屏幕输出的结果作为数据, 其中,
-`v` 开头的那些代表顶点 (verte) 数据, `f` 开头的那些代表面 (face) 数据.
+我使用 [GoogleTest](https://github.com/google/googletest) 框架进行单元测试。
+如果设置了 `-t` 选项，测试用例将被构建并运行。
+这在 CI/CD 管道中很有用。
 
 ## 配置文件
 
-配置文件中包含了用于模拟的所有参数, 配置文件使用 JSON 格式,
-本项目中我选择了 [Rapidjson](http://rapidjson.org/index.html)
-对 JSON 文件进行解析.
+配置文件包含所有配置。它使用 JSON 格式编写。
+我使用 [nlohmann's json](https://github.com/nlohmann/json) 来解析 JSON 文件。
 
-### 模拟的基本设置
+我提供了一个示例配置文件 `v3_config_example.json`。
 
-* `sun`:
-有两个属性,
-  * `altitude`, 用于定义太阳的地平高度.  
-  * `diameter`, 定义太阳的直径, 单位是度. 对于真实太阳, 这里设置为 0.5 即可
+### 光源
 
-* `ray`:
-定义了用于模拟的光线相关的属性, 有两个,
-  * `number`, 用于模拟的光线总数量. 请注意, 这里光线数量并不是最终输出的光线数量, 而是输入光线数量.
-    由于光线在晶体内部进行折射和反射, 在模拟中对所有的折射和反射光线都进行记录, 因此最终的输出光线数量将大于这里定义的值.
-  * `wavelength`, 用于模拟的光线波长. 用一个数组来表示, 单位为 nm. 冰的折射率数值来源于
-    [Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice).
+以下是一个元素的示例：
 
-* `max_recursion`:
-定义了在模拟中光线与晶体表面相交的最多次数. 如果模拟中光线与晶体表面相交次数超过这个值, 而仍然没有离开晶体,
-那么对这条光线的模拟将终止, 这条光线的结果将被舍弃.
+~~~json
+"id": 2,
+"type": "sun",
+"altitude": 20.0,
+"azimuth": 0,
+"diameter": 0.5,
+"wavelength": [ 420, 460, 500, 540, 580, 620 ],
+"wl_weight": [ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 ]
+~~~
 
-* `multi_scatter`:
-定义了有关多晶折射相关的属性, 有两个,
-  * `repeat`, 定义多晶折射的次数, 对于普通日晕模拟, 设置为 1 即可; 大多数多晶情况只需要设置为 2 即可模拟出效果.  
-  * `probability`, 在每次穿过晶体之后有多少比例继续进入下一个晶体进行折射.
+`light_source` 节描述光源的属性。它可以包含多个元素，对应多个光源。它们通过 `id` 引用。
+ID 应该是大于 0 的唯一数字。ID 不必连续递增。
 
-### 渲染设置
+字段 `azimuth`、`altitude` 描述太阳的位置。它们以度为单位，`diameter` 也是如此。
 
-* `camera`:
-定义了与相机相关的设置,
-  * `azimuth`, `elevation`, `rotation`: 这几个定义了相机的指向. 单位是度.
-  * `fov`: 相机的(半)视场角, 从视场中心到边缘的角度. 单位是度.
-  * `width`, `height`: 输出图像的尺寸. 单位是像素.
-  * `lens`: 镜头类型, 可以是 `fisheye` (鱼眼镜头) 或者 `linear` (普通广角镜头) 其中之一.
+`wavelength` 和 `wl_weight` 描述光源的光谱。
+它们是数组，包含你想要在模拟中使用的所有波长。波长决定折射率，其数据来自
+[Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice)。
 
-* `render`:
-定义了与最后输出效果相关的设置:
-  * `visible_semi_sphere`, 定义了全空间中哪一部分光线最终被渲染. 默认设置为 `upper` (上半球), 也即是普通的场景,
-    只能看见地平线上方的晕. 如果设置为 `lower`, 那么只有下半球 (地平线下方) 的光线会被渲染,
-    可以看到一些特殊的晕, 比如说, [下映日](https://www.atoptics.co.uk/halo/subpars.htm).
-    这个参数可以取 `upper`, `lower`, `camera`, `full` 等几个值.
-  * `intensity_factor`, 控制输出图像的亮度.
-  * `offset`, 输出图像本身的偏移量.
-  * `ray_color`, 光线本身的颜色, 可以是一个 RGB 三元数, 也可以是 `real`, 代表模拟真彩色.
-  * `background_color`, 背景颜色, 是一个 RGB 三元数.
+**注意**：
+- `azimuth` 和 `diameter` 是可选的（有默认值）
+- `wavelength` 和 `wl_weight` 数组长度必须相等
 
-### 晶体设置
+### 晶体
 
-* `axis` and `roll`:
-这两个参数定义了晶体的朝向, 其中 `axis` 定义了 c-轴 的指向,`roll` 定义了晶体自身绕 c-轴 的旋转.
+以下是一个元素的示例：
 
-  这两个参数都有 3 个属性, `mean`, `std`, `type`. 其中 `type` 定义了随机分布的类型. 要么是 `Gauss`,
-代表高斯分布, 要么是 `Uniform`, 代表平均分布. `mean` 定义了随机分布的均值. 对 `axis` 来说,
-这个值代表天顶角, 从天顶开始度量.
-`std` 定义了随机分布的范围. 对高斯分布来说, 这个值就是高斯分布的标准差,
-对平均分布来说, 这个值定义了取值范围的大小.
+~~~json
+"id": 3,
+"type": "prism",
+"shape": {
+  "height": 1.3,
+  "face_distance": [1, 1, 1, 1, 1, 1]
+},
+"axis": {
+  "zenith": {
+    "type": "gauss",
+    "mean": 90,
+    "std": 0.3
+  },
+  "roll": {
+    "type": "uniform",
+    "mean": 0,
+    "std": 360
+  },
+  "azimuth": {
+    "type": "uniform",
+    "mean": 0,
+    "std": 360
+  }
+}
+~~~
 
-  所有角度单位都是度.
+`crystal` 节存储模拟中使用的所有晶体。它可以包含多个元素（不同的晶体）。它们通过 `id` 引用。
 
-  *注意*,
-  1. 如果 `axis` 的分布类型为 `Uniform`, 那么将忽略其他参数, 认为 c-轴 指向为球面均匀分布.
-  2. 如果 `roll` 的分布类型为 `Uniform`, 那么将忽略其他参数, 认为晶体绕自身的旋转为 0-360 度之间的均匀分布.
+`zenith`、`roll` 和 `azimuth`（可选）：
+这些字段定义晶体的姿态。`zenith` 定义 c 轴方向，`roll` 定义绕 c 轴的旋转。
+它们是*分布类型*，可以是标量（表示确定性分布），也可以是元组 (`type`, `mean`, `std`) 描述均匀分布或高斯分布。所有角度都以度为单位。
 
-* `population`:
-这个参数定义了用于模拟的晶体数量. 请注意, 这里并不是实际数量, 而是一个比例. 比如两种晶体一种是 2.0 一种是 3.0,
-那么这等价于一种是 20 另一种是 30.
+**默认值**：如果 `axis` 字段不存在，则使用以下默认值：
+- `zenith`: 90度（水平方向）
+- `azimuth`: 0度
+- `roll`: 0度
 
-* `type` 和 `parameter`:
-用于设置晶体的类型和形状参数. 目前我支持 5 种晶体,
-`HexPrism`, `HexPyramid`, `HexPyramidStackHalf`, `CubicPyramid`, `Custom`.
-每种晶体都有自己的形状参数.
+`type` 和 `shape`：它们描述晶体的形状。
+目前有两种晶体类型：`prism` 和 `pyramid`。
+每种类型都有自己的形状参数。
 
-  * `HexPrism`: 六棱柱形冰晶.
-  只有 1 个参数, `h`, 定义为 `h / a`, 其中 `h` 是柱体的高, `a` 是底面直径.
-  <img src="doc/figs/hex_cylinder_01.png" width="400">.
+  * `prism`（六棱柱）：
+    参数 `height`，定义为 `h / a`，其中 `h` 是棱柱高度，`a` 是沿 a 轴（也是程序中的 x 轴）的直径。它是*分布类型*。
+    `face_distance` 描述不规则六边形面（稍后描述）。
+    **默认值**：
+    - `height`: 1.0（如果未指定）
+    - `face_distance`: [1, 1, 1, 1, 1, 1]（如果未指定，表示正六边形）
+    <img src="doc/figs/hex_prism_01.png" width="400">.
 
-  * `HexPyramid`: 六棱锥形冰晶.
-  可能有 3, 5, 或者 7 个参数.
-    * 3 个参数的情况, 分别表示 `h1 / H1`, `h2 / a`, `h3 / H3`, 其中 `H1` 代表第一段锥体最大可能高度, `H3` 类似.
-      <img src="doc/figs/hex_pyramid_01.png" width="400">.
-    * 5 个参数的情况. 最后 3 个参数含义同上, 开头 2 个参数用于定义晶体表面的方向, 这 2 个参数必须是整数.
-      这里使用 [Miller index](https://en.wikipedia.org/wiki/Miller_index) 来表示晶体表面方向.
-      举个例子, 2 个参数为 `a`, `b`, 那么表示 Miller index (`a`, 0, `-a`, `b`). 对于一个正常的冰晶,
-      比如编号 13 的那个表面, 对应的 Miller index 是 (1, 0, -1, 1), 那么这里参数就写成 1, 1.
-    * 7 个参数的情况. 最后 3 个参数含义同上, 开头 4 个参数用于定义晶体表面方向, 前 2 个定义上面一段锥体的表面,
-      后 2 个定义下面一段锥体表面, 定义方式同样是基于 Miller index, 与之前的相同.
-      请注意, 对不同 Miller index 的表面, 其最大可能高度 `H` 是不一样的.
+  * `pyramid`（六棱锥）：
+    `{upper|lower|prism}_h` 描述各段的高度，见下图。`{upper|lower}_h` 分别表示 `h1 / H1` 和 `h3 / H3`，其中
+    `H1` 表示上锥段的最大可能高度，`H3` 类似。`prism_h` 是柱体段的高度比 h/a。
+    <img src="doc/figs/hex_pyramid_01.png" width="400">.
+    `{upper|lower}_indices` 是
+    [Miller index](https://en.wikipedia.org/wiki/Miller_index) 描述
+    锥面的方向。
+    例如，`[a, b, c]` 表示 Miller index `(a, 0, -a, b)`，其中第三个值 `c` 对应 `-30°`、`90°`、`-150°` 方向。
+    对于典型的冰晶面（面编号 13），其 Miller index 是 `(1, 0, -1, 1)`，因此这里参数写成 `[1, 0, 1]`。
+    它也可以有 `face_distance` 参数。
+    **默认值**：
+    - `prism_h`: 必填
+    - `upper_h`: 0.0（如果未指定）
+    - `lower_h`: 0.0（如果未指定）
+    - `upper_indices`: [1, 0, 1]（如果未指定）
+    - `lower_indices`: [1, 0, 1]（如果未指定）
+    - `face_distance`: [1, 1, 1, 1, 1, 1]（如果未指定）
 
-  * `HexPyramidStackHalf`:
-  有 7 个参数. 与前面六棱锥形冰晶参数类似, 开头 4 个参数用于定义锥面的角度, 后面 3 个参数用于定义 3 段的长度,
-  对锥体段表示 `h / H`, 对柱体段表示 `h / a`.
-  <img src="doc/figs/hex_pyramid_stack_half_01.png" width="400">.
+  * `face_distance`：
+    这里的距离表示实际面距离与正六边形距离的比值。正六边形的距离为 `[1, 1, 1, 1, 1, 1]`。
+    下图显示了一个不规则六边形，距离为 `[1.1, 0.9, 1.5, 0.9, 1.7, 1.2]`
+    <img src="doc/figs/irr_hex_01.png" width="400">.
 
-  * `TriPyramid`:
-  有 5 个参数. 与前面六棱锥形冰晶参数类似, 开头 2 个参数用于定义锥面的角度. 这里上下两个锥体段角度是一样的.
-  (其他情况的我稍后有空再加进程序里).
-  <img src="doc/figs/tri_pyramid_01.png" width="400">.
+### 过滤器
 
-  * `CubicPyramid`:
-  有 2 个参数. 与上面的情形类似, 2 个参数定义了上下两段锥体的长度. 请注意, 这里是立方晶系.
-  <img src="doc/figs/cubic_pyramid_01.png" width="400">
+以下是两个常见示例：
 
-  * `Custom`:
-  有 1 个参数, 代表自定义模型的文件名.
-  自定义模型支持 [obj 文件格式](https://www.wikiwand.com/en/Wavefront_.obj_file).
-  这种 3D 文件格式是基于 ASCII 编码的, 因此使用任意一款文本编辑器即可直接阅读和修改, 十分方便.
-  当然, 最好还是在 3D 建模软件里进行编辑和修改, 比如 Maya, 3DMax, Blender, 等等.
-  *注意:* obj 文件格式本身允许存在多边形, 也即某一个表面拥有多余 3 个顶点, 但我的程序里无法识别这种情况,
-  只能处理三角形. 并且我的程序无法处理纹理和法线信息. 在使用建模软件创建模型的时候请不要包含这些.
-  所以的自定义模型必须放在 `models` 的文件夹内, 这个文件夹必须放在配置文件相同的目录下,
-  否则程序无法找到模型文件.
+~~~json
+[
+  {
+    "id": 3,
+    "type": "raypath",
+    "raypath": [3, 5],
+    "symmetry": "P"
+  },
+  {
+    "id": 4,
+    "type": "entry_exit",
+    "entry": 3,
+    "exit": 5,
+    "action": "filter_in"
+  }
+]
+~~~
 
+`type`：可以是以下类型之一：`raypath`、`entry_exit`、`direction`、`crystal`、`complex`、`none`。
 
-## 未来的工作
+### 场景
 
-* 使用 OpenCL / OpenGL / CUDA 等对程序进行加速. 不过, 目前使用一个我自己实现的线程池做并行化计算,
-  结果已经很好, 进一步加速的必要性并不大.
-* 增加更多方便的内置模型, 比如异形六边形的柱晶和锥晶.
-* 写一个用户界面, 可能是基于网页的.
+以下是一个示例：
+
+~~~json
+"id": 3,
+"light_source": 2,
+"ray_num": 1000000,
+"max_hits": 7,
+"scattering": [
+  {
+    "crystal": [1, 2, 3],
+    "prob": 0.2
+  },
+  {
+    "crystal": [2, 3],
+    "proportion": [20, 100],
+    "filter": [2, 1]
+  }
+]
+~~~
+
+`scattering` 数组定义了多晶散射配置。每个元素可以包含：
+- `crystal`: 晶体ID数组（必填）
+- `proportion`: 比例数组，长度必须等于 `crystal` 数组长度（可选）
+- `prob`: 概率值，用于多散射（可选）
+- `filter`: 过滤器ID数组，长度必须等于 `crystal` 数组长度（可选，使用 -1 表示无过滤器）
+
+**注意**：
+- `ray_num` 可以为 -1，表示自动计算光线数量
+- `max_hits` 定义光线与晶体表面的最大碰撞次数
+
+### 渲染
+
+以下是一个示例：
+
+~~~json
+"id": 3,
+"lens": {
+  "type": "linear",
+  "fov": 40
+},
+"resolution": [1920, 1080],
+"view": {
+  "azimuth": -50,
+  "elevation": 30,
+  "roll": 0,
+  "distance": 8
+},
+"visible": "upper",
+"background": [0, 0, 0],
+"ray": [1, 1, 1],
+"opacity": 0.8,
+"grid": {
+  "central": [
+    {
+      "value": 22,
+      "color": [1, 1, 1],
+      "opacity": 0.4,
+      "width": 1.2
+    }
+  ],
+  "elevation": [],
+  "outline": true
+}
+~~~
+
+`view`：描述相机姿态。
+
+`lens`：镜头类型，可以是以下值之一：`fisheye`、`linear`、`dual_fisheye_equidistant`、`dual_fisheye_equiarea`、`rectangular`。
+可以使用 `fov`（视场角，度）或 `f`（焦距，mm）来指定。如果使用 `f`，程序会自动计算对应的 `fov`。
+
+**默认值**：
+- `view` 的各个字段（`azimuth`, `elevation`, `roll`, `distance`）都有默认值，如果未指定则使用默认值
+- `visible`: "upper"（如果未指定）
+- `background`: [0, 0, 0]（如果未指定）
+- `ray`: [1, 1, 1]（如果未指定）
+- `opacity`: 1.0（如果未指定）
+- `lens_shift`: [0, 0]（如果未指定）
+
+### 项目
+
+没什么复杂的。它只是保持对场景和渲染器的引用。
+
+## V3 版本说明
+
+V3 是当前主要开发的版本，相对旧版本有较大重构：
+
+### 架构改进
+
+- **服务器-消费者模式**：采用服务器-消费者架构，支持多线程并行处理
+- **模块化配置系统**：配置系统更加模块化和灵活
+- **批量处理**：支持多场景、多渲染器的批量处理
+
+### 程序入口
+
+**旧版本入口**（计划废弃）：
+- `trace_main.cpp` → `IceHaloTrace`: 仅执行光线追踪
+- `render_main.cpp` → `IceHaloRender`: 仅渲染已有数据
+- `endless_main.cpp` → `IceHaloEndless`: 循环执行追踪-渲染
+
+**V3 入口**（推荐使用）：
+- `main_v3.cpp` → `IceHaloV3`: C++ 接口的主程序
+- `main_v3_c.c` → `IceHaloV3C`: C 接口的封装程序
+- `server/cserver.cpp` → `IceHaloLibV3`: 静态库，供 C 接口使用
+
+### 配置格式变化
+
+V3 版本的配置格式与旧版本不同：
+
+- **光源配置**：从 `sun` 改为 `light_source` 数组
+- **晶体配置**：从 `type: "HexPrism"` 改为 `type: "prism"`，参数结构从 `parameter` 改为 `shape`
+- **晶体方向**：从 `axis`（天顶角）改为 `zenith`、`azimuth`、`roll`
+- **多散射配置**：从 `multi_scatter` 改为 `scene.scattering` 数组
+- **新增配置节**：`filter`（过滤器）、`scene`（场景）、`project`（项目）
+
+### 命名空间隔离
+
+- V3 代码主要在 `icehalo::v3` 命名空间
+- 旧代码在 `icehalo` 命名空间
+- 两者可以共存，便于逐步迁移
+
+## TODO 列表
+
+* 为这些代码编写一个（Web）GUI。
