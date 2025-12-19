@@ -51,11 +51,12 @@ cpp/doc/
   - 线程安全性说明
   - 与其他语言集成示例
 
-- **[API文档](api/)**: 自动生成的API文档（待创建）
+- **[API文档](api/html/)**: 自动生成的API文档
   - 使用Doxygen生成
   - 包含所有公共API的详细说明
-  - 本地生成：运行 `doxygen .doxygen-config`
-  - 将来由CI自动生成并发布
+  - **本地生成**：运行 `doxygen .doxygen-config`（在 `cpp` 目录下）
+  - 生成的文档位于 `doc/api/html/`
+  - **注意**：生成的文档可以删除，将来由CI自动生成并发布到GitHub Pages
 
 ## 快速链接
 
@@ -81,9 +82,12 @@ cpp/doc/
 cd cpp
 doxygen .doxygen-config
 ```
-生成的文档位于 `cpp/doc/api/`（或配置指定的目录）。
+生成的文档位于 `cpp/doc/api/html/`。
 
-**注意**：生成的API文档可以删除，将来由CI pipeline自动生成并发布到GitHub Pages。
+**注意**：
+- 生成的API文档可以删除，不需要提交到版本控制
+- 将来由CI pipeline自动生成并发布到GitHub Pages
+- 文档生成需要Doxygen工具（`brew install doxygen` 或 `apt-get install doxygen`）
 
 ### 文档模板
 
