@@ -10,3 +10,8 @@ build
 out
 
 tmp*
+
+scratchpad/
+
+# Vide Codeing
+.claude
