@@ -148,7 +148,7 @@ ID 应该是大于 0 的唯一数字。ID 不必连续递增。
 
   * `pyramid`（六棱锥）：
     `{upper|lower|prism}_h` 描述各段的高度，见下图。`{upper|lower}_h` 分别表示 `h1 / H1` 和 `h3 / H3`，其中
-    `H1` 表示上锥段的最大可能高度，`H3` 类似。`prism_h` 的含义与 `HexPrism` 相同。
+    `H1` 表示上锥段的最大可能高度，`H3` 类似。`prism_h` 是柱体段的高度比 h/a。
     <img src="doc/figs/hex_pyramid_01.png" width="400">.
     `{upper|lower}_indices` 是
     [Miller index](https://en.wikipedia.org/wiki/Miller_index) 描述
