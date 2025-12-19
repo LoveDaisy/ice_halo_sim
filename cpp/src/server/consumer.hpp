@@ -12,6 +12,12 @@ namespace icehalo {
 namespace v3 {
 
 // =============== Interface ===============
+/**
+ * @brief Consumer interface for processing simulation data
+ * @details This interface defines the contract for consumers that process simulation data.
+ *          Consumers are used to render images, collect statistics, or perform other operations
+ *          on the simulation results.
+ */
 class IConsume {
  public:
   IConsume() = default;
@@ -22,7 +28,19 @@ class IConsume {
   IConsume& operator=(const IConsume&) = delete;
   IConsume& operator=(IConsume&&) = delete;
 
+  /**
+   * @brief Consume simulation data
+   * @param data Simulation data to process
+   * @note This method is called by the server for each simulation data batch
+   */
   virtual void Consume(const SimData& data) = 0;
+
+  /**
+   * @brief Get processing result
+   * @return Result object containing the processing result
+   * @note Default implementation returns NoneResult
+   * @note Override this method to return custom results (e.g., RenderResult, StatsResult)
+   */
   virtual Result GetResult() const { return NoneResult{}; }
 };
 
