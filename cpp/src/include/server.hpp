@@ -144,6 +144,16 @@ struct StatsResult {
 using Result = std::variant<NoneResult, RenderResult, StatsResult>;
 
 
+// =============== Server Status ===============
+/**
+ * @brief Server status enumeration
+ */
+enum class ServerStatus {
+  kIdle,    ///< Idle (completed or not started)
+  kRunning, ///< Running (processing)
+  kError    ///< Error state
+};
+
 // =============== Server ===============
 class ServerImpl;
 
@@ -221,8 +231,15 @@ class Server {
   void Terminate();
 
   /**
+   * @brief Get server status
+   * @return Current server status
+   */
+  ServerStatus GetStatus() const;
+
+  /**
    * @brief Check if server is idle
    * @return true if server is idle (no processing), false if processing
+   * @note Convenience method, equivalent to GetStatus() == ServerStatus::kIdle
    */
   bool IsIdle() const;
 

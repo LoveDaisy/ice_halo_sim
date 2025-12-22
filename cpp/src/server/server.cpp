@@ -37,6 +37,7 @@ class ServerImpl {
 
   void Stop();
   void Start();
+  ServerStatus GetStatus() const;
   bool IsIdle();
 
  private:
@@ -56,7 +57,7 @@ class ServerImpl {
   std::vector<Simulator> simulators_;
   std::vector<ConsumerPtrU> consumers_;
   std::vector<std::thread> simulator_threads_;
-  std::mutex prod_mutex;
+  mutable std::mutex prod_mutex;
 
   std::atomic_bool stop_;
   std::atomic_int sim_scene_cnt_;
@@ -65,12 +66,15 @@ class ServerImpl {
 
   std::thread consume_data_thread_;
   std::thread generate_scene_thread_;
+
+  mutable std::mutex status_mutex_;
+  ServerStatus status_;
 };
 
 
 ServerImpl::ServerImpl()
     : config_manager_{}, proj_queue_{}, scene_queue_(std::make_shared<Queue<SceneConfig>>()),
-      data_queue_(std::make_shared<Queue<SimData>>()) {
+      data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
   for (int i = 0; i < kDefaultSimulatorCnt; i++) {
     simulators_.emplace_back(scene_queue_, data_queue_);
   }
@@ -84,15 +88,31 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     config_manager_ = config_json.get<ConfigManager>();
   } catch (const nlohmann::json::out_of_range& e) {
     LOG_ERROR("ServerImpl::CommitConfig: Missing field: %s", e.what());
+    {
+      std::lock_guard<std::mutex> lock(status_mutex_);
+      status_ = ServerStatus::kError;
+    }
     return Error::MissingField(e.what());
   } catch (const nlohmann::json::exception& e) {
     LOG_ERROR("ServerImpl::CommitConfig: JSON parsing error: %s", e.what());
+    {
+      std::lock_guard<std::mutex> lock(status_mutex_);
+      status_ = ServerStatus::kError;
+    }
     return Error::InvalidJson(e.what());
   } catch (const std::exception& e) {
     LOG_ERROR("ServerImpl::CommitConfig: Configuration error: %s", e.what());
+    {
+      std::lock_guard<std::mutex> lock(status_mutex_);
+      status_ = ServerStatus::kError;
+    }
     return Error::InvalidConfig(e.what());
   } catch (...) {
     LOG_ERROR("ServerImpl::CommitConfig: Unknown error");
+    {
+      std::lock_guard<std::mutex> lock(status_mutex_);
+      status_ = ServerStatus::kError;
+    }
     return Error::InvalidConfig("Unknown configuration error");
   }
 
@@ -139,6 +159,11 @@ void ServerImpl::Start() {
 
   stop_ = false;
   sim_scene_cnt_ = 0;
+
+  {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    status_ = ServerStatus::kRunning;
+  }
 
   // Start queues & jobs
   data_queue_->Start();
@@ -199,16 +224,42 @@ void ServerImpl::Stop() {
   if (generate_scene_thread_.joinable()) {
     generate_scene_thread_.join();
   }
+
+  {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    status_ = ServerStatus::kIdle;
+  }
+}
+
+ServerStatus ServerImpl::GetStatus() const {
+  // Check error status first
+  {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    if (status_ == ServerStatus::kError) {
+      return status_;
+    }
+  }
+
+  // Check actual running state
+  std::unique_lock<std::mutex> prod_lock(prod_mutex);
+  bool any_busy = false;
+  for (const auto& s : simulators_) {
+    if (!s.IsIdle()) {
+      any_busy = true;
+      break;
+    }
+  }
+  prod_lock.unlock();
+
+  if (any_busy || (!stop_ && sim_scene_cnt_ > 0)) {
+    return ServerStatus::kRunning;
+  } else {
+    return ServerStatus::kIdle;
+  }
 }
 
 bool ServerImpl::IsIdle() {
-  std::unique_lock<std::mutex> lock(prod_mutex);
-  for (const auto& s : simulators_) {
-    if (!s.IsIdle()) {
-      return false;
-    }
-  }
-  return !stop_ && sim_scene_cnt_ <= 0;
+  return GetStatus() == ServerStatus::kIdle;
 }
 
 
@@ -366,11 +417,15 @@ void Server::Terminate() {
   impl_ = nullptr;
 }
 
-bool Server::IsIdle() const {
+ServerStatus Server::GetStatus() const {
   if (!impl_) {
-    return false;
+    return ServerStatus::kError;
   }
-  return impl_->IsIdle();
+  return impl_->GetStatus();
+}
+
+bool Server::IsIdle() const {
+  return GetStatus() == ServerStatus::kIdle;
 }
 
 }  // namespace v3
