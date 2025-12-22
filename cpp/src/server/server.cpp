@@ -170,7 +170,7 @@ void ServerImpl::Start() {
   scene_queue_->Start();
   proj_queue_.Start();
   {
-    std::unique_lock<std::mutex> lock(prod_mutex);
+    std::lock_guard<std::mutex> lock(prod_mutex);
     LOG_DEBUG("ServerImpl::Start: lock on prod_mutex");
     for (auto& s : simulators_) {
       simulator_threads_.emplace_back(&Simulator::Run, &s);
@@ -201,7 +201,7 @@ void ServerImpl::Stop() {
 
   // Stop running jobs
   {
-    std::unique_lock<std::mutex> lock(prod_mutex);
+    std::lock_guard<std::mutex> lock(prod_mutex);
     LOG_DEBUG("ServerImpl::Stop: lock on prod_mutex. stop simulators. clear simulator threads.");
     for (auto& s : simulators_) {
       s.Stop();
@@ -241,15 +241,16 @@ ServerStatus ServerImpl::GetStatus() const {
   }
 
   // Check actual running state
-  std::unique_lock<std::mutex> prod_lock(prod_mutex);
   bool any_busy = false;
-  for (const auto& s : simulators_) {
-    if (!s.IsIdle()) {
-      any_busy = true;
-      break;
+  {
+    std::lock_guard<std::mutex> lock(prod_mutex);
+    for (const auto& s : simulators_) {
+      if (!s.IsIdle()) {
+        any_busy = true;
+        break;
+      }
     }
   }
-  prod_lock.unlock();
 
   if (any_busy || (!stop_ && sim_scene_cnt_ > 0)) {
     return ServerStatus::kRunning;
