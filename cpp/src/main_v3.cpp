@@ -16,9 +16,14 @@ struct SimResultHandler {
     LOG_INFO("Renderer %02d: w = %d, h = %d, buffer = %p", r.renderer_id_, r.img_width_, r.img_height_, r.img_buffer_);
     char filename[32];
     std::snprintf(filename, 32, "img_%02d.jpg", r.renderer_id_);
-    cv::Mat mat(r.img_height_, r.img_width_, CV_8UC3, r.img_buffer_);
+    // Note: OpenCV Mat constructor requires non-const pointer, but we only read the data
+    // The buffer is managed by Server and remains valid during this call
+    cv::Mat mat(r.img_height_, r.img_width_, CV_8UC3, const_cast<uint8_t*>(r.img_buffer_));
     cv::cvtColor(mat, mat, cv::COLOR_RGB2BGR);
     cv::imwrite(filename, mat);
+    // Alternative: Use CopyBuffer() for long-term storage:
+    // auto buffer_copy = r.CopyBuffer();
+    // cv::Mat mat_copy(r.img_height_, r.img_width_, CV_8UC3, buffer_copy.data());
   }
 
   void operator()(const icehalo::v3::StatsResult& r) {

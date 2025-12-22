@@ -99,11 +99,40 @@ struct Error {
 // =============== Result ===============
 struct NoneResult {};
 
+/**
+ * @brief Render result containing rendered image data
+ * @details Contains metadata and pixel data for a rendered image
+ */
 struct RenderResult {
-  int renderer_id_;
-  int img_width_;
-  int img_height_;
-  uint8_t* img_buffer_;
+  int renderer_id_;  ///< Renderer ID
+  int img_width_;     ///< Image width in pixels
+  int img_height_;    ///< Image height in pixels
+
+  /**
+   * @brief Image data buffer (read-only)
+   * @details
+   * - Format: RGB, 3 bytes per pixel, row-major order
+   * - Size: img_width_ * img_height_ * 3 bytes
+   * - Ownership: Managed internally by Server, user should not free
+   * - Lifetime: Valid until next call to GetRenderResults() or CommitConfig()
+   * - Usage: For long-term storage, use CopyBuffer() to copy the data
+   *
+   * @warning Do not access this pointer outside its lifetime, undefined behavior may occur
+   */
+  const uint8_t* img_buffer_;
+
+  /**
+   * @brief Copy image data to a new vector
+   * @return Vector containing image data (RGB format)
+   * @details Use this method when you need to store the image data for an extended period
+   */
+  std::vector<uint8_t> CopyBuffer() const {
+    if (!img_buffer_ || img_width_ <= 0 || img_height_ <= 0) {
+      return std::vector<uint8_t>();
+    }
+    size_t size = static_cast<size_t>(img_width_) * static_cast<size_t>(img_height_) * 3;
+    return std::vector<uint8_t>(img_buffer_, img_buffer_ + size);
+  }
 };
 
 struct StatsResult {

@@ -27,7 +27,7 @@ typedef struct HS_RenderResult_ {
   int renderer_id_;
   int img_width_;
   int img_height_;
-  unsigned char* img_buffer_;
+  const unsigned char* img_buffer_;  // Read-only buffer, managed by Server
 } HS_RenderResult;
 
 typedef struct HS_StatsResult_ {
