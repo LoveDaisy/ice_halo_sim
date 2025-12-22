@@ -77,8 +77,21 @@ HS_SimResult* HS_GetAllResults(HS_HaloSimServer* server) {
   }
 
   auto* res = new HS_SimResult;
-  res->results_ = server->server_->GetResults();
+  res->results_.clear();
   res->curr_idx_ = 0;
+
+  // Get render results
+  auto render_results = server->server_->GetRenderResults();
+  for (const auto& r : render_results) {
+    res->results_.emplace_back(r);
+  }
+
+  // Get statistics result
+  auto stats_result = server->server_->GetStatsResult();
+  if (stats_result.has_value()) {
+    res->results_.emplace_back(stats_result.value());
+  }
+
   return res;
 }
 

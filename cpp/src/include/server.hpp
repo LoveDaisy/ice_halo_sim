@@ -192,12 +192,20 @@ class Server {
   Error CommitConfigFromFile(const std::string& filename);
 
   /**
-   * @brief Get all available results
-   * @return Vector of Result objects. Returns empty vector if no results available.
+   * @brief Get all render results
+   * @return Vector of RenderResult objects. Returns empty vector if no render results available.
    * @note This is a non-blocking call. It returns immediately even if processing is ongoing.
-   * @note If there are no results, the vector may contain NoneResult entries
+   * @note Only returns RenderResult entries, filters out other result types
    */
-  std::vector<Result> GetResults();
+  std::vector<RenderResult> GetRenderResults() const;
+
+  /**
+   * @brief Get statistics result
+   * @return Optional StatsResult. Returns std::nullopt if no statistics result available.
+   * @note This is a non-blocking call. It returns immediately even if processing is ongoing.
+   * @note Only returns StatsResult if available, otherwise returns std::nullopt
+   */
+  std::optional<StatsResult> GetStatsResult() const;
 
   /**
    * @brief Stop the server

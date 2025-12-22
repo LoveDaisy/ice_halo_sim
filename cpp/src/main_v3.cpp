@@ -77,14 +77,21 @@ int main(int argc, char** argv) {
   const auto kRefreshInterval = 1000ms;
   while (true) {
     std::this_thread::sleep_for(kRefreshInterval);
-    auto res = s.GetResults();
-    if (res.empty()) {
-      continue;
+
+    // Get render results
+    auto render_results = s.GetRenderResults();
+    for (const auto& r : render_results) {
+      SimResultHandler handler;
+      handler(r);
     }
 
-    for (const auto& r : res) {
-      std::visit(SimResultHandler{}, r);
+    // Get statistics result
+    auto stats_result = s.GetStatsResult();
+    if (stats_result.has_value()) {
+      SimResultHandler handler;
+      handler(stats_result.value());
     }
+
     if (s.IsIdle()) {
       s.Terminate();
       break;

@@ -32,7 +32,8 @@ class ServerImpl {
   ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json);
-  std::vector<Result> GetResults();
+  std::vector<RenderResult> GetRenderResults() const;
+  std::optional<StatsResult> GetStatsResult() const;
 
   void Stop();
   void Start();
@@ -108,12 +109,25 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
 }
 
 
-std::vector<Result> ServerImpl::GetResults() {
-  std::vector<Result> results;
+std::vector<RenderResult> ServerImpl::GetRenderResults() const {
+  std::vector<RenderResult> results;
   for (const auto& c : consumers_) {
-    results.emplace_back(c->GetResult());
+    auto result = c->GetResult();
+    if (auto* render = std::get_if<RenderResult>(&result)) {
+      results.push_back(*render);
+    }
   }
   return results;
+}
+
+std::optional<StatsResult> ServerImpl::GetStatsResult() const {
+  for (const auto& c : consumers_) {
+    auto result = c->GetResult();
+    if (auto* stats = std::get_if<StatsResult>(&result)) {
+      return *stats;
+    }
+  }
+  return std::nullopt;
 }
 
 
@@ -320,12 +334,20 @@ Error Server::CommitConfigFromFile(const std::string& filename) {
   }
 }
 
-std::vector<Result> Server::GetResults() {
+std::vector<RenderResult> Server::GetRenderResults() const {
   if (!impl_) {
     LOG_WARNING("Server is terminated!");
     return {};
   }
-  return impl_->GetResults();
+  return impl_->GetRenderResults();
+}
+
+std::optional<StatsResult> Server::GetStatsResult() const {
+  if (!impl_) {
+    LOG_WARNING("Server is terminated!");
+    return std::nullopt;
+  }
+  return impl_->GetStatsResult();
 }
 
 void Server::Stop() {
