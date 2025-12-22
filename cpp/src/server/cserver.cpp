@@ -55,6 +55,8 @@ void HS_CommitConfig(HS_HaloSimServer* server, const char* config_str) {
     return;
   }
 
+  // C API ignores errors for backward compatibility
+  // Error handling can be added in future C API updates
   server->server_->CommitConfig(config_str);
 }
 

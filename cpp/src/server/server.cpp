@@ -31,7 +31,7 @@ class ServerImpl {
  public:
   ServerImpl();
 
-  void CommitConfig(const nlohmann::json& config_json);
+  Error CommitConfig(const nlohmann::json& config_json);
   std::vector<Result> GetResults();
 
   void Stop();
@@ -77,9 +77,23 @@ ServerImpl::ServerImpl()
 }
 
 
-void ServerImpl::CommitConfig(const nlohmann::json& config_json) {
+Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   LOG_DEBUG("ServerImpl::CommitConfig: entry");
-  config_manager_ = config_json.get<ConfigManager>();
+  try {
+    config_manager_ = config_json.get<ConfigManager>();
+  } catch (const nlohmann::json::out_of_range& e) {
+    LOG_ERROR("ServerImpl::CommitConfig: Missing field: %s", e.what());
+    return Error::MissingField(e.what());
+  } catch (const nlohmann::json::exception& e) {
+    LOG_ERROR("ServerImpl::CommitConfig: JSON parsing error: %s", e.what());
+    return Error::InvalidJson(e.what());
+  } catch (const std::exception& e) {
+    LOG_ERROR("ServerImpl::CommitConfig: Configuration error: %s", e.what());
+    return Error::InvalidConfig(e.what());
+  } catch (...) {
+    LOG_ERROR("ServerImpl::CommitConfig: Unknown error");
+    return Error::InvalidConfig("Unknown configuration error");
+  }
 
   Stop();
   Start();
@@ -89,6 +103,8 @@ void ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     LOG_DEBUG("ServerImpl::CommitConfig: put proj %u", proj.id_);
     proj_queue_.Emplace(proj);
   }
+
+  return Error::Success();
 }
 
 
@@ -267,23 +283,41 @@ void ServerImpl::GenerateScene() {
 // =============== Server ===============
 Server::Server() : impl_(std::make_shared<ServerImpl>()) {}
 
-void Server::CommitConfig(std::ifstream& f) {
+Error Server::CommitConfig(const std::string& config_str) {
   if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return;
+    return Error::ServerNotReady("Server is terminated");
   }
-  nlohmann::json config_json;
-  f >> config_json;
-  impl_->CommitConfig(config_json);
+  try {
+    auto config_json = nlohmann::json::parse(config_str);
+    return impl_->CommitConfig(config_json);
+  } catch (const nlohmann::json::parse_error& e) {
+    LOG_ERROR("Server::CommitConfig: JSON parse error: %s", e.what());
+    return Error::InvalidJson(e.what());
+  } catch (...) {
+    LOG_ERROR("Server::CommitConfig: Unknown error");
+    return Error::InvalidJson("Unknown JSON parsing error");
+  }
 }
 
-void Server::CommitConfig(std::string config_str) {
+Error Server::CommitConfigFromFile(const std::string& filename) {
   if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return;
+    return Error::ServerNotReady("Server is terminated");
   }
-  auto config_json = nlohmann::json::parse(config_str);
-  impl_->CommitConfig(config_json);
+  std::ifstream f(filename);
+  if (!f.is_open()) {
+    return Error::InvalidConfig("Cannot open file: " + filename);
+  }
+  try {
+    nlohmann::json config_json;
+    f >> config_json;
+    return impl_->CommitConfig(config_json);
+  } catch (const nlohmann::json::parse_error& e) {
+    LOG_ERROR("Server::CommitConfigFromFile: JSON parse error: %s", e.what());
+    return Error::InvalidJson(e.what());
+  } catch (...) {
+    LOG_ERROR("Server::CommitConfigFromFile: Unknown error");
+    return Error::InvalidJson("Unknown JSON parsing error");
+  }
 }
 
 std::vector<Result> Server::GetResults() {

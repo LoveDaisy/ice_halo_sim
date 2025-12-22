@@ -57,11 +57,17 @@ int main(int argc, char** argv) {
 
   // Open config file
   const char* config_filename = arg_parse_result.at("-f")[0].c_str();
-  std::ifstream config_file(config_filename);
 
   // Setup simulation server
   icehalo::v3::Server s;
-  s.CommitConfig(config_file);
+  auto err = s.CommitConfigFromFile(config_filename);
+  if (err) {
+    LOG_ERROR("Failed to commit configuration: %s", err.message.c_str());
+    if (!err.field.empty()) {
+      LOG_ERROR("Error field: %s", err.field.c_str());
+    }
+    return -1;
+  }
 
   const auto kRefreshInterval = 1000ms;
   while (true) {

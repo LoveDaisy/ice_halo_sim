@@ -3,12 +3,98 @@
 
 #include <fstream>
 #include <memory>
+#include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
 
 namespace icehalo {
 namespace v3 {
+
+// =============== Error ===============
+/**
+ * @brief Error code enumeration
+ */
+enum class ErrorCode {
+  kSuccess,        ///< Success (no error)
+  kInvalidJson,    ///< JSON format error
+  kInvalidConfig,  ///< Configuration content error
+  kMissingField,   ///< Missing required field
+  kInvalidValue,   ///< Invalid field value
+  kServerNotReady, ///< Server not ready
+  kServerError,    ///< Server internal error
+};
+
+/**
+ * @brief Error structure for error handling
+ * @details Contains error code, message, and optional field name
+ */
+struct Error {
+  ErrorCode code;           ///< Error code
+  std::string message;      ///< Error message
+  std::string field;        ///< Field name where error occurred (optional)
+
+  /**
+   * @brief Default constructor: success state
+   */
+  Error() : code(ErrorCode::kSuccess), message(""), field("") {}
+
+  /**
+   * @brief Constructor with error code and message
+   * @param c Error code
+   * @param msg Error message
+   * @param f Field name (optional)
+   */
+  Error(ErrorCode c, const std::string& msg, const std::string& f = "")
+      : code(c), message(msg), field(f) {}
+
+  /**
+   * @brief Check if operation was successful
+   * @return true if success, false if error
+   */
+  bool IsSuccess() const { return code == ErrorCode::kSuccess; }
+
+  /**
+   * @brief Check if there was an error
+   * @return true if error, false if success
+   */
+  bool IsError() const { return code != ErrorCode::kSuccess; }
+
+  /**
+   * @brief Boolean conversion operator
+   * @return true if error, false if success
+   * @note Allows usage: if (err) { ... }
+   */
+  operator bool() const { return IsError(); }
+
+  // Factory methods for common error types
+  static Error Success() { return Error(); }
+
+  static Error InvalidJson(const std::string& msg) {
+    return Error(ErrorCode::kInvalidJson, msg);
+  }
+
+  static Error InvalidConfig(const std::string& msg) {
+    return Error(ErrorCode::kInvalidConfig, msg);
+  }
+
+  static Error MissingField(const std::string& field) {
+    return Error(ErrorCode::kMissingField, "Missing required field: " + field, field);
+  }
+
+  static Error InvalidValue(const std::string& field, const std::string& msg) {
+    return Error(ErrorCode::kInvalidValue, msg, field);
+  }
+
+  static Error ServerNotReady(const std::string& msg = "Server is not ready") {
+    return Error(ErrorCode::kServerNotReady, msg);
+  }
+
+  static Error ServerError(const std::string& msg) {
+    return Error(ErrorCode::kServerError, msg);
+  }
+};
 
 // =============== Result ===============
 struct NoneResult {};
@@ -49,18 +135,32 @@ class Server {
   /**
    * @brief Commit configuration from string
    * @param config_str JSON configuration string
+   * @return Error object indicating success or failure
    * @note The configuration format should follow V3 configuration schema
    * @see configuration.md for configuration format details
+   * @example
+   *   auto err = server.CommitConfig(config_str);
+   *   if (err) {  // Check if error occurred
+   *     std::cerr << "Error: " << err.message << std::endl;
+   *     return;
+   *   }
    */
-  void CommitConfig(std::string config_str);
+  Error CommitConfig(const std::string& config_str);
 
   /**
    * @brief Commit configuration from file
-   * @param config_file Input file stream containing JSON configuration
+   * @param filename Path to JSON configuration file
+   * @return Error object indicating success or failure
    * @note The configuration format should follow V3 configuration schema
    * @see configuration.md for configuration format details
+   * @example
+   *   auto err = server.CommitConfigFromFile("config.json");
+   *   if (err) {
+   *     std::cerr << "Error: " << err.message << std::endl;
+   *     return;
+   *   }
    */
-  void CommitConfig(std::ifstream& config_file);
+  Error CommitConfigFromFile(const std::string& filename);
 
   /**
    * @brief Get all available results
