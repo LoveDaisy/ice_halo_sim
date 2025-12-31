@@ -31,11 +31,13 @@ class ServerImpl {
  public:
   ServerImpl();
 
-  void CommitConfig(const nlohmann::json& config_json);
-  std::vector<Result> GetResults();
+  Error CommitConfig(const nlohmann::json& config_json);
+  std::vector<RenderResult> GetRenderResults() const;
+  std::optional<StatsResult> GetStatsResult() const;
 
   void Stop();
   void Start();
+  ServerStatus GetStatus() const;
   bool IsIdle();
 
  private:
@@ -55,7 +57,7 @@ class ServerImpl {
   std::vector<Simulator> simulators_;
   std::vector<ConsumerPtrU> consumers_;
   std::vector<std::thread> simulator_threads_;
-  std::mutex prod_mutex;
+  mutable std::mutex prod_mutex;
 
   std::atomic_bool stop_;
   std::atomic_int sim_scene_cnt_;
@@ -64,12 +66,15 @@ class ServerImpl {
 
   std::thread consume_data_thread_;
   std::thread generate_scene_thread_;
+
+  mutable std::mutex status_mutex_;
+  ServerStatus status_;
 };
 
 
 ServerImpl::ServerImpl()
     : config_manager_{}, proj_queue_{}, scene_queue_(std::make_shared<Queue<SceneConfig>>()),
-      data_queue_(std::make_shared<Queue<SimData>>()) {
+      data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
   for (int i = 0; i < kDefaultSimulatorCnt; i++) {
     simulators_.emplace_back(scene_queue_, data_queue_);
   }
@@ -77,9 +82,39 @@ ServerImpl::ServerImpl()
 }
 
 
-void ServerImpl::CommitConfig(const nlohmann::json& config_json) {
+Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   LOG_DEBUG("ServerImpl::CommitConfig: entry");
-  config_manager_ = config_json.get<ConfigManager>();
+  try {
+    config_manager_ = config_json.get<ConfigManager>();
+  } catch (const nlohmann::json::out_of_range& e) {
+    LOG_ERROR("ServerImpl::CommitConfig: Missing field: %s", e.what());
+    {
+      std::lock_guard<std::mutex> lock(status_mutex_);
+      status_ = ServerStatus::kError;
+    }
+    return Error::MissingField(e.what());
+  } catch (const nlohmann::json::exception& e) {
+    LOG_ERROR("ServerImpl::CommitConfig: JSON parsing error: %s", e.what());
+    {
+      std::lock_guard<std::mutex> lock(status_mutex_);
+      status_ = ServerStatus::kError;
+    }
+    return Error::InvalidJson(e.what());
+  } catch (const std::exception& e) {
+    LOG_ERROR("ServerImpl::CommitConfig: Configuration error: %s", e.what());
+    {
+      std::lock_guard<std::mutex> lock(status_mutex_);
+      status_ = ServerStatus::kError;
+    }
+    return Error::InvalidConfig(e.what());
+  } catch (...) {
+    LOG_ERROR("ServerImpl::CommitConfig: Unknown error");
+    {
+      std::lock_guard<std::mutex> lock(status_mutex_);
+      status_ = ServerStatus::kError;
+    }
+    return Error::InvalidConfig("Unknown configuration error");
+  }
 
   Stop();
   Start();
@@ -89,15 +124,30 @@ void ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     LOG_DEBUG("ServerImpl::CommitConfig: put proj %u", proj.id_);
     proj_queue_.Emplace(proj);
   }
+
+  return Error::Success();
 }
 
 
-std::vector<Result> ServerImpl::GetResults() {
-  std::vector<Result> results;
+std::vector<RenderResult> ServerImpl::GetRenderResults() const {
+  std::vector<RenderResult> results;
   for (const auto& c : consumers_) {
-    results.emplace_back(c->GetResult());
+    auto result = c->GetResult();
+    if (auto* render = std::get_if<RenderResult>(&result)) {
+      results.push_back(*render);
+    }
   }
   return results;
+}
+
+std::optional<StatsResult> ServerImpl::GetStatsResult() const {
+  for (const auto& c : consumers_) {
+    auto result = c->GetResult();
+    if (auto* stats = std::get_if<StatsResult>(&result)) {
+      return *stats;
+    }
+  }
+  return std::nullopt;
 }
 
 
@@ -110,12 +160,17 @@ void ServerImpl::Start() {
   stop_ = false;
   sim_scene_cnt_ = 0;
 
+  {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    status_ = ServerStatus::kRunning;
+  }
+
   // Start queues & jobs
   data_queue_->Start();
   scene_queue_->Start();
   proj_queue_.Start();
   {
-    std::unique_lock<std::mutex> lock(prod_mutex);
+    std::lock_guard<std::mutex> lock(prod_mutex);
     LOG_DEBUG("ServerImpl::Start: lock on prod_mutex");
     for (auto& s : simulators_) {
       simulator_threads_.emplace_back(&Simulator::Run, &s);
@@ -146,7 +201,7 @@ void ServerImpl::Stop() {
 
   // Stop running jobs
   {
-    std::unique_lock<std::mutex> lock(prod_mutex);
+    std::lock_guard<std::mutex> lock(prod_mutex);
     LOG_DEBUG("ServerImpl::Stop: lock on prod_mutex. stop simulators. clear simulator threads.");
     for (auto& s : simulators_) {
       s.Stop();
@@ -169,16 +224,43 @@ void ServerImpl::Stop() {
   if (generate_scene_thread_.joinable()) {
     generate_scene_thread_.join();
   }
+
+  {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    status_ = ServerStatus::kIdle;
+  }
+}
+
+ServerStatus ServerImpl::GetStatus() const {
+  // Check error status first
+  {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    if (status_ == ServerStatus::kError) {
+      return status_;
+    }
+  }
+
+  // Check actual running state
+  bool any_busy = false;
+  {
+    std::lock_guard<std::mutex> lock(prod_mutex);
+    for (const auto& s : simulators_) {
+      if (!s.IsIdle()) {
+        any_busy = true;
+        break;
+      }
+    }
+  }
+
+  if (any_busy || (!stop_ && sim_scene_cnt_ > 0)) {
+    return ServerStatus::kRunning;
+  } else {
+    return ServerStatus::kIdle;
+  }
 }
 
 bool ServerImpl::IsIdle() {
-  std::unique_lock<std::mutex> lock(prod_mutex);
-  for (const auto& s : simulators_) {
-    if (!s.IsIdle()) {
-      return false;
-    }
-  }
-  return !stop_ && sim_scene_cnt_ <= 0;
+  return GetStatus() == ServerStatus::kIdle;
 }
 
 
@@ -267,31 +349,57 @@ void ServerImpl::GenerateScene() {
 // =============== Server ===============
 Server::Server() : impl_(std::make_shared<ServerImpl>()) {}
 
-void Server::CommitConfig(std::ifstream& f) {
+Error Server::CommitConfig(const std::string& config_str) {
   if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return;
+    return Error::ServerNotReady("Server is terminated");
   }
-  nlohmann::json config_json;
-  f >> config_json;
-  impl_->CommitConfig(config_json);
+  try {
+    auto config_json = nlohmann::json::parse(config_str);
+    return impl_->CommitConfig(config_json);
+  } catch (const nlohmann::json::parse_error& e) {
+    LOG_ERROR("Server::CommitConfig: JSON parse error: %s", e.what());
+    return Error::InvalidJson(e.what());
+  } catch (...) {
+    LOG_ERROR("Server::CommitConfig: Unknown error");
+    return Error::InvalidJson("Unknown JSON parsing error");
+  }
 }
 
-void Server::CommitConfig(std::string config_str) {
+Error Server::CommitConfigFromFile(const std::string& filename) {
   if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return;
+    return Error::ServerNotReady("Server is terminated");
   }
-  auto config_json = nlohmann::json::parse(config_str);
-  impl_->CommitConfig(config_json);
+  std::ifstream f(filename);
+  if (!f.is_open()) {
+    return Error::InvalidConfig("Cannot open file: " + filename);
+  }
+  try {
+    nlohmann::json config_json;
+    f >> config_json;
+    return impl_->CommitConfig(config_json);
+  } catch (const nlohmann::json::parse_error& e) {
+    LOG_ERROR("Server::CommitConfigFromFile: JSON parse error: %s", e.what());
+    return Error::InvalidJson(e.what());
+  } catch (...) {
+    LOG_ERROR("Server::CommitConfigFromFile: Unknown error");
+    return Error::InvalidJson("Unknown JSON parsing error");
+  }
 }
 
-std::vector<Result> Server::GetResults() {
+std::vector<RenderResult> Server::GetRenderResults() const {
   if (!impl_) {
     LOG_WARNING("Server is terminated!");
     return {};
   }
-  return impl_->GetResults();
+  return impl_->GetRenderResults();
+}
+
+std::optional<StatsResult> Server::GetStatsResult() const {
+  if (!impl_) {
+    LOG_WARNING("Server is terminated!");
+    return std::nullopt;
+  }
+  return impl_->GetStatsResult();
 }
 
 void Server::Stop() {
@@ -310,11 +418,15 @@ void Server::Terminate() {
   impl_ = nullptr;
 }
 
-bool Server::IsIdle() const {
+ServerStatus Server::GetStatus() const {
   if (!impl_) {
-    return false;
+    return ServerStatus::kError;
   }
-  return impl_->IsIdle();
+  return impl_->GetStatus();
+}
+
+bool Server::IsIdle() const {
+  return GetStatus() == ServerStatus::kIdle;
 }
 
 }  // namespace v3

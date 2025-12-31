@@ -16,9 +16,14 @@ struct SimResultHandler {
     LOG_INFO("Renderer %02d: w = %d, h = %d, buffer = %p", r.renderer_id_, r.img_width_, r.img_height_, r.img_buffer_);
     char filename[32];
     std::snprintf(filename, 32, "img_%02d.jpg", r.renderer_id_);
-    cv::Mat mat(r.img_height_, r.img_width_, CV_8UC3, r.img_buffer_);
+    // Note: OpenCV Mat constructor requires non-const pointer, but we only read the data
+    // The buffer is managed by Server and remains valid during this call
+    cv::Mat mat(r.img_height_, r.img_width_, CV_8UC3, const_cast<uint8_t*>(r.img_buffer_));
     cv::cvtColor(mat, mat, cv::COLOR_RGB2BGR);
     cv::imwrite(filename, mat);
+    // Alternative: Use CopyBuffer() for long-term storage:
+    // auto buffer_copy = r.CopyBuffer();
+    // cv::Mat mat_copy(r.img_height_, r.img_width_, CV_8UC3, buffer_copy.data());
   }
 
   void operator()(const icehalo::v3::StatsResult& r) {
@@ -57,23 +62,36 @@ int main(int argc, char** argv) {
 
   // Open config file
   const char* config_filename = arg_parse_result.at("-f")[0].c_str();
-  std::ifstream config_file(config_filename);
 
   // Setup simulation server
   icehalo::v3::Server s;
-  s.CommitConfig(config_file);
+  auto err = s.CommitConfigFromFile(config_filename);
+  if (err) {
+    LOG_ERROR("Failed to commit configuration: %s", err.message.c_str());
+    if (!err.field.empty()) {
+      LOG_ERROR("Error field: %s", err.field.c_str());
+    }
+    return -1;
+  }
 
   const auto kRefreshInterval = 1000ms;
   while (true) {
     std::this_thread::sleep_for(kRefreshInterval);
-    auto res = s.GetResults();
-    if (res.empty()) {
-      continue;
+
+    // Get render results
+    auto render_results = s.GetRenderResults();
+    for (const auto& r : render_results) {
+      SimResultHandler handler;
+      handler(r);
     }
 
-    for (const auto& r : res) {
-      std::visit(SimResultHandler{}, r);
+    // Get statistics result
+    auto stats_result = s.GetStatsResult();
+    if (stats_result.has_value()) {
+      SimResultHandler handler;
+      handler(stats_result.value());
     }
+
     if (s.IsIdle()) {
       s.Terminate();
       break;

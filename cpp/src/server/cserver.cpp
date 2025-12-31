@@ -55,6 +55,8 @@ void HS_CommitConfig(HS_HaloSimServer* server, const char* config_str) {
     return;
   }
 
+  // C API ignores errors for backward compatibility
+  // Error handling can be added in future C API updates
   server->server_->CommitConfig(config_str);
 }
 
@@ -75,8 +77,21 @@ HS_SimResult* HS_GetAllResults(HS_HaloSimServer* server) {
   }
 
   auto* res = new HS_SimResult;
-  res->results_ = server->server_->GetResults();
+  res->results_.clear();
   res->curr_idx_ = 0;
+
+  // Get render results
+  auto render_results = server->server_->GetRenderResults();
+  for (const auto& r : render_results) {
+    res->results_.emplace_back(r);
+  }
+
+  // Get statistics result
+  auto stats_result = server->server_->GetStatsResult();
+  if (stats_result.has_value()) {
+    res->results_.emplace_back(stats_result.value());
+  }
+
   return res;
 }
 
