@@ -7,6 +7,9 @@
 #include <memory>
 #include <utility>
 
+// TODO(FOR_TEST): 消除 FOR_TEST 宏，改用运行时配置或 friend class。
+// 当前 FOR_TEST 通过条件编译暴露调试方法和放宽运行时检查，导致测试需要独立的
+// OBJECT library (icehalo_test_lib) 重复编译全部源码。
 #ifdef FOR_TEST
 #include <stack>
 #endif
@@ -706,6 +709,7 @@ void Simulator::SetThreadingPool(ThreadingPoolPtr threading_pool) {
 
 // Start simulation
 void Simulator::Run() {
+// TODO(FOR_TEST): 测试时跳过最小光线数检查，应改为运行时可配置的阈值。
 #ifndef FOR_TEST
   if (context_->GetInitRayNum() < ProjectContext::kMinInitRayNum) {
     return;

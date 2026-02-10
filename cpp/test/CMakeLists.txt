@@ -26,6 +26,8 @@ if(NOT GTest_FOUND)
 endif()
 
 # ==================================================================================================
+# TODO(FOR_TEST): icehalo_test_lib 重复编译全部源文件，仅为添加 FOR_TEST 和 VERBOSE_LOG 宏。
+# 未来应消除 FOR_TEST 条件编译，改为运行时配置或 friend class，从而复用 icehalo_lib。
 add_library(icehalo_test_lib OBJECT ${icehalo_src})
 target_include_directories(icehalo_test_lib PUBLIC ${icehalo_include})
 target_link_libraries(icehalo_test_lib PUBLIC nlohmann_json::nlohmann_json)

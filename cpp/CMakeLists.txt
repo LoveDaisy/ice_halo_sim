@@ -32,7 +32,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${BUILD_DIR}/${CMAKE_BUILD_TYPE}/bin/${ARCH}
 set(PROJ_SRC_DIR "${CMAKE_SOURCE_DIR}/src")
 set(PROJ_TEST_DIR "${CMAKE_SOURCE_DIR}/test")
 set(PROJ_ROOT "${CMAKE_SOURCE_DIR}")
-set(MODULE_ROOT "${CMAKE_SOURCE_DIR}/thirdparty")
+
 
 # ==================================================================================================
 # Find modules
