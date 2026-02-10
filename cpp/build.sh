@@ -11,7 +11,7 @@ build() {
   pushd "${BUILD_DIR}" > /dev/null
   cmake -S "${PROJ_DIR}" -B "${BUILD_DIR}" \
         -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TEST=$BUILD_TEST \
-        -DMULTI_THREAD=$MULTI_THREAD -DRANDOM_SEED=$RANDOM_SEED -DVERBOSE_LOG=$VERBOSE_LOG \
+        -DRANDOM_SEED=$RANDOM_SEED \
         -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}"
   cmake --build "${BUILD_DIR}" -j $MAKE_J_N
   ret=$?
@@ -29,27 +29,16 @@ build() {
 }
 
 
-benchmarking() {
-  python3 "${PROJ_DIR}/test/run_bench.py" --exe "${INSTALL_DIR}/IceHaloEndless" \
-          --config "${PROJ_DIR}/test/benchmark_config_template.json" \
-          --tmp_dir "${BUILD_DIR}"
-}
-
-
 help() {
   echo "Usage:"
-  echo "  ./build.sh [-tjkvrhb1] <debug|release|minsizerel>"
+  echo "  ./build.sh [-tjkrh] <debug|release|minsizerel>"
   echo "    Executables will be installed at build/cmake_install"
   echo "OPTIONS:"
   echo "  -t:          Build test cases and run test on them."
   echo "  -j:          Build in parallel, i.e. use make -j"
   echo "  -k:          Clean temporary building files."
-  echo "  -b:          Run a benchmarking. It tells how fast the program runs on your computer."
-  echo "  -v:          Enable verbose log."
   echo "  -r:          Use random seed for random number generator. Without this option,"
-  echo "               the program will use a constant value. Thus generate a repeatable result"
-  echo "               (usually together with -1)."
-  echo "  -1:          Use single thread."
+  echo "               the program will use a constant value. Thus generate a repeatable result."
   echo "  -h:          Show this message."
 }
 
@@ -64,9 +53,7 @@ BUILD_TYPE=Debug
 BUILD_TEST=OFF
 INSTALL_FLAG=OFF
 MAKE_J_N=1
-MULTI_THREAD=ON
 RANDOM_SEED=OFF
-VERBOSE_LOG=OFF
 
 if [ $# -eq 0 ]; then
   help
@@ -77,7 +64,7 @@ fi
 # A POSIX variable
 OPTIND=1         # Reset in case getopts has been used previously in the shell.
 
-while getopts "htvrjkb1" opt; do
+while getopts "htrjk" opt; do
   case "$opt" in
   h)
     help
@@ -92,17 +79,8 @@ while getopts "htvrjkb1" opt; do
   r)
     RANDOM_SEED=ON
     ;;
-  v)
-    VERBOSE_LOG=ON
-    ;;
   k)
     clean_all
-    ;;
-  b)
-    benchmarking
-    ;;
-  1)
-    MULTI_THREAD=OFF
     ;;
   *)
     help

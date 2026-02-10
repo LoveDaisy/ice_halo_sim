@@ -218,10 +218,10 @@ clang-format -i src/**/*.{hpp,cpp}
 #include <vector>                     // 2. C++标准库
 #include <memory>
 
-#include "json.hpp"                   // 3. 第三方库
+#include <nlohmann/json.hpp>           // 3. 第三方库
 
 #include "core/crystal.hpp"           // 4. 项目其他头文件
-#include "include/log.hpp"
+#include "util/log.hpp"
 ```
 
 ### 注释规范
@@ -487,76 +487,6 @@ ctest
   - `EXPECT_*`: 测试失败继续执行
   - `ASSERT_*`: 测试失败立即停止
 
-### 基准测试
-
-#### 测试框架
-
-项目使用Google Benchmark框架进行性能基准测试。
-
-#### 编写基准测试
-
-1. **创建基准测试文件**：
-   - 位置：`test/` 目录
-   - 命名：`bench_*.cpp`
-
-2. **测试结构**：
-```cpp
-#include <benchmark/benchmark.h>
-#include "core/math.hpp"
-
-static void BM_Dot3(benchmark::State& state) {
-  float a[3] = {1.0f, 2.0f, 3.0f};
-  float b[3] = {4.0f, 5.0f, 6.0f};
-  
-  for (auto _ : state) {
-    float result = icehalo::Dot3(a, b);
-    benchmark::DoNotOptimize(result);
-  }
-}
-BENCHMARK(BM_Dot3);
-
-BENCHMARK_MAIN();
-```
-
-3. **使用Fixture**：
-```cpp
-class MathBenchmark : public ::benchmark::Fixture {
- public:
-  void SetUp(::benchmark::State& state) override {
-    // 初始化测试数据
-  }
-  
- protected:
-  float* data_;
-};
-
-BENCHMARK_DEFINE_F(MathBenchmark, Dot3)(::benchmark::State& state) {
-  for (auto _ : state) {
-    // 基准测试代码
-  }
-}
-BENCHMARK_REGISTER_F(MathBenchmark, Dot3);
-```
-
-#### 运行基准测试
-
-```bash
-# 使用构建脚本
-cd cpp
-./build.sh -b release
-
-# 或手动运行
-cd build/cmake_build
-./bench_math  # 或相应的基准测试可执行文件
-```
-
-#### 基准测试最佳实践
-
-- **避免优化**：使用 `benchmark::DoNotOptimize()` 防止编译器优化
-- **多次运行**：基准测试会自动多次运行取平均值
-- **参数化测试**：使用 `state.range(0)` 进行参数化测试
-- **结果解读**：关注时间复杂度和实际性能
-
 ## 调试技巧
 
 ### 日志系统
@@ -573,7 +503,7 @@ cd build/cmake_build
 #### 使用日志
 
 ```cpp
-#include "include/log.hpp"
+#include "util/log.hpp"
 
 LOG_DEBUG("Debug message: %d", value);
 LOG_VERBOSE("Verbose message");

@@ -29,9 +29,11 @@ TEST_F(RngTest, GaussianTest) {
     values1[i] = rng->GetGaussian();
   }
 
-  // Fill the buffer in multi-threading mode.
+  // Fill the buffer using a single-worker thread pool.
+  // RNG is thread_local, so with pool size 1 the worker thread has its own RNG
+  // seeded identically, producing the same sequence in the same order.
   rng->Reset();
-  auto thread_pool = icehalo::ThreadingPool::CreatePool();
+  auto thread_pool = icehalo::ThreadingPool::CreatePool(1);
   thread_pool->CommitRangeStepJobsAndWait(
       0, kCheckSize, [&values2, &rng](int /* thread_id */, int i) { values2[i] = rng->GetGaussian(); });
 
@@ -57,9 +59,9 @@ TEST_F(RngTest, UniformTest) {
     values1[i] = rng->GetUniform();
   }
 
-  // Fill the buffer in multi-threading mode.
+  // Fill the buffer using a single-worker thread pool.
   rng->Reset();
-  auto thread_pool = icehalo::ThreadingPool::CreatePool();
+  auto thread_pool = icehalo::ThreadingPool::CreatePool(1);
   thread_pool->CommitRangeStepJobsAndWait(
       0, kCheckSize, [&values2, &rng](int /* thread_id */, int i) { values2[i] = rng->GetUniform(); });
 

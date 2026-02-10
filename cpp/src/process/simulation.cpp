@@ -7,13 +7,6 @@
 #include <memory>
 #include <utility>
 
-// TODO(FOR_TEST): 消除 FOR_TEST 宏，改用运行时配置或 friend class。
-// 当前 FOR_TEST 通过条件编译暴露调试方法和放宽运行时检查，导致测试需要独立的
-// OBJECT library (icehalo_test_lib) 重复编译全部源码。
-#ifdef FOR_TEST
-#include <stack>
-#endif
-
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
@@ -422,11 +415,9 @@ std::vector<std::vector<size_t>> SimulationData::GenerateIdxList() const {
 }
 
 
-#ifdef FOR_TEST
 const std::vector<std::vector<RaySegment*>>& SimulationData::GetExitRaySegments() const {
   return exit_ray_segments_;
 }
-#endif
 
 
 void SimulationData::Serialize(File& file, bool with_boi) const {
@@ -630,27 +621,6 @@ void Simulator::BufferData::Allocate(size_t ray_number) {
 }
 
 
-#ifdef FOR_TEST
-void Simulator::BufferData::Print() {
-  LOG_DEBUG("pt[0]                    dir[0]                   w[0]");
-  for (decltype(ray_num) i = 0; i < ray_num; i++) {
-    LOG_DEBUG("%+.4f,%+.4f,%+.4f  %+.4f,%+.4f,%+.4f  %+.4f",            //
-              pt[0][i * 3 + 0], pt[0][i * 3 + 1], pt[0][i * 3 + 2],     // pt
-              dir[0][i * 3 + 0], dir[0][i * 3 + 1], dir[0][i * 3 + 2],  // dir
-              w[0][i]);
-  }
-
-  LOG_DEBUG("pt[1]                    dir[1]                   w[1]");
-  for (decltype(ray_num) i = 0; i < ray_num; i++) {
-    LOG_DEBUG("%+.4f,%+.4f,%+.4f  %+.4f,%+.4f,%+.4f  %+.4f",            //
-              pt[1][i * 3 + 0], pt[1][i * 3 + 1], pt[1][i * 3 + 2],     // pt
-              dir[1][i * 3 + 0], dir[1][i * 3 + 1], dir[1][i * 3 + 2],  // dir
-              w[1][i]);
-  }
-}
-#endif
-
-
 Simulator::EntryRayData::EntryRayData() : ray_dir(nullptr), ray_seg(nullptr), ray_num(0), buf_size(0) {}
 
 
@@ -709,13 +679,6 @@ void Simulator::SetThreadingPool(ThreadingPoolPtr threading_pool) {
 
 // Start simulation
 void Simulator::Run() {
-// TODO(FOR_TEST): 测试时跳过最小光线数检查，应改为运行时可配置的阈值。
-#ifndef FOR_TEST
-  if (context_->GetInitRayNum() < ProjectContext::kMinInitRayNum) {
-    return;
-  }
-#endif
-
   simulation_ray_data_.Clear();
   RaySegmentPool::GetInstance()->Clear();
   RayInfoPool::GetInstance()->Clear();
@@ -970,31 +933,5 @@ void Simulator::RefreshBuffer() {
 const SimulationData& Simulator::GetSimulationRayData() {
   return simulation_ray_data_;
 }
-
-
-#ifdef FOR_TEST
-
-void Simulator::PrintRayInfo() {
-  std::stack<RaySegment*> s;
-  for (const auto& rs : simulation_ray_data_.GetExitRaySegments()) {
-    for (const auto& r : rs) {
-      auto p = r;
-      while (p) {
-        s.push(p);
-        p = p->prev;
-      }
-      LOG_DEBUG("%zu,0,0,0,0,0,-1", s.size());
-      while (!s.empty()) {
-        p = s.top();
-        s.pop();
-        LOG_DEBUG("%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f,%+.4f",  //
-                  p->pt.x(), p->pt.y(), p->pt.z(),              // point
-                  p->dir.x(), p->dir.y(), p->dir.z(),           // direction
-                  p->w);                                        // weight
-      }
-    }
-  }
-}
-#endif
 
 }  // namespace icehalo
