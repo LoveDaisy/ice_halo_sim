@@ -6,8 +6,8 @@
 #include <utility>
 
 #include "core/optics.hpp"
-#include "include/log.hpp"
 #include "process/render.hpp"
+#include "util/log.hpp"
 
 
 namespace icehalo {
@@ -43,12 +43,10 @@ size_t ProjectContext::GetInitRayNum() const {
 }
 
 
+// TODO(FOR_TEST): 此处 FOR_TEST 分支与 else 分支代码完全相同，条件编译无实际效果，
+// 历史上可能用于绕过某些检查。应在后续重构中移除此条件编译。
 void ProjectContext::SetInitRayNum(size_t ray_num) {
-#ifdef FOR_TEST
   init_ray_num_ = ray_num;
-#else
-  init_ray_num_ = ray_num;
-#endif
 }
 
 
@@ -148,7 +146,7 @@ void ProjectContext::ParseBasicSettings(const nlohmann::json& obj) {
     wavelengths_.emplace_back(WavelengthInfo{ l, w });
   }
 
-  data_path_ = boost::filesystem::current_path().string();
+  data_path_ = std::filesystem::current_path().string();
   JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "data_folder", data_path_)
 
   main_img_filename_ = "img.jpg";

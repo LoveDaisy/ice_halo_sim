@@ -1,4 +1,4 @@
-#include "include/log.hpp"
+#include "util/log.hpp"
 
 #include <chrono>
 #include <cstdarg>
@@ -188,6 +188,7 @@ bool LogComplexFilter::Filter(const LogMessage& message) {
 
 
 Logger::Logger() : default_formatter_{ std::make_shared<SimpleLogFormatter>() } {
+  // TODO(FOR_TEST): 测试时启用 verbose/debug 日志级别，应改为运行时配置。
 #if defined(DEBUG) || defined(FOR_TEST)
   LogFilterPtr stdout_filter = LogFilter::MakeLevelFilter({ LogLevel::kVerbose, LogLevel::kDebug, LogLevel::kInfo });
 #else

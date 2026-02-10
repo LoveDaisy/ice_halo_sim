@@ -1,11 +1,11 @@
 #ifndef CONFIG_RENDER_CONFIG_H_
 #define CONFIG_RENDER_CONFIG_H_
 
+#include <nlohmann/json.hpp>
 #include <vector>
 
 #include "config/filter_config.hpp"
 #include "core/def.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 namespace v3 {

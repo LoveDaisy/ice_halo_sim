@@ -3,13 +3,13 @@
 
 #include <cstddef>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <vector>
 
 #include "config/crystal_config.hpp"
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"
 #include "config/render_config.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 namespace v3 {

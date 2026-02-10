@@ -16,7 +16,7 @@
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
-#include "include/log.hpp"
+#include "util/log.hpp"
 #include "util/obj_pool.hpp"
 
 namespace icehalo {

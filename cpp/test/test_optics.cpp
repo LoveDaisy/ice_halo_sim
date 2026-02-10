@@ -5,7 +5,7 @@
 
 #include "core/crystal.hpp"
 #include "core/optics.hpp"
-#include "include/log.hpp"
+#include "util/log.hpp"
 
 namespace {
 

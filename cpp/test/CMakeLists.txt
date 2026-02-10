@@ -3,19 +3,11 @@
 find_package(GTest)
 
 if(NOT GTest_FOUND)
-  if("${GTEST_DIR}" STREQUAL "")
-    message(STATUS "[test] GTEST_DIR is NOT set! Use github source.")
-    set(GTEST_REPO "https://github.com/google/googletest.git")
-  else()
-    message(STATUS "[test] GTEST_DIR is set! Use local gtest at ${GTEST_DIR}")
-    set(GTEST_REPO "file://${GTEST_DIR}/.git")
-  endif()
-
   include(FetchContent)
   FetchContent_Declare(
     googletest
-    GIT_REPOSITORY ${GTEST_REPO}
-    GIT_TAG release-1.11.0
+    URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.tar.gz
+    URL_HASH SHA256=7b42b4d6ed48810c5362c265a17faebe90dc2373c885e5216439d37927f02926
     PREFIX ${CMAKE_CURRENT_BINARY_DIR}/gtest
   )
 
@@ -26,8 +18,11 @@ if(NOT GTest_FOUND)
 endif()
 
 # ==================================================================================================
+# TODO(FOR_TEST): icehalo_test_lib 重复编译全部源文件，仅为添加 FOR_TEST 和 VERBOSE_LOG 宏。
+# 未来应消除 FOR_TEST 条件编译，改为运行时配置或 friend class，从而复用 icehalo_lib。
 add_library(icehalo_test_lib OBJECT ${icehalo_src})
 target_include_directories(icehalo_test_lib PUBLIC ${icehalo_include})
+target_link_libraries(icehalo_test_lib PUBLIC nlohmann_json::nlohmann_json)
 target_compile_definitions(icehalo_test_lib PUBLIC FOR_TEST)
 target_compile_definitions(icehalo_test_lib PUBLIC VERBOSE_LOG)
 
@@ -41,7 +36,7 @@ add_executable(unit_test
 target_include_directories(unit_test
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_test
-  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} Boost::filesystem Boost::system icehalo_test_lib)
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} icehalo_test_lib)
 set_target_properties(unit_test PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
@@ -54,7 +49,7 @@ add_executable(unit_test_v3
 target_include_directories(unit_test_v3
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_test_v3
-  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} Boost::filesystem Boost::system icehalo_test_lib)
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} icehalo_test_lib)
 set_target_properties(unit_test_v3 PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
@@ -65,18 +60,3 @@ add_test(NAME "IceHaloUnitTestV3" COMMAND unit_test_v3
   "${PROJ_ROOT}/v3_config_example.json"
   "${CMAKE_CURRENT_BINARY_DIR}")
 
-# ==================================================================================================
-# Google benchmark
-find_package(benchmark)
-
-if(NOT benchmark_FOUND)
-  message(STATUS "[test] Can NOT find google-benchmark. Abort benchmarking.")
-  return()
-else()
-  message(STATUS "[test] lib google-benchmark found.")
-endif()
-
-# add_executable(bench
-# "${PROJ_TEST_DIR}/bench_math.cpp"
-# "${PROJ_TEST_DIR}/bench_optics.cpp")
-# target_link_libraries(bench PRIVATE benchmark::benchmark_main Boost::filesystem Boost::system icehalo_lib)

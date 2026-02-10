@@ -1,7 +1,8 @@
 #include "config/proj_config.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include "core/def.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 namespace v3 {

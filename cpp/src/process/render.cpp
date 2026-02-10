@@ -6,10 +6,10 @@
 #include <utility>
 
 #include "core/math.hpp"
-#include "include/log.hpp"
 #include "process/color_data.hpp"
 #include "process/simulation.hpp"
 #include "util/enum_map.hpp"
+#include "util/log.hpp"
 #include "util/threading_pool.hpp"
 
 namespace icehalo {

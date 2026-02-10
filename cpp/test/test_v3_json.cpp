@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <fstream>
+#include <nlohmann/json.hpp>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -13,7 +14,6 @@
 #include "config/proj_config.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
-#include "json.hpp"
 
 extern std::string config_file_name;
 using namespace icehalo;

@@ -2,13 +2,13 @@
 #define CONFIG_CONFIG_MANAGER_H_
 
 #include <map>
+#include <nlohmann/json.hpp>
 
 #include "config/crystal_config.hpp"
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 namespace v3 {
