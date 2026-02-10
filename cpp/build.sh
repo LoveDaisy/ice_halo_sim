@@ -1,15 +1,18 @@
-ROOT_DIR=$(cd "$(dirname $0)"; pwd)
+#!/usr/bin/env bash
+set -e
+
+ROOT_DIR=$(cd "$(dirname "$0")"; pwd)
 BUILD_DIR="${ROOT_DIR}/build/cmake_build"
 INSTALL_DIR="${ROOT_DIR}/build/cmake_install"
 PROJ_DIR=${ROOT_DIR}
 
 build() {
   mkdir -p "${BUILD_DIR}"
-  pushd "${BUILD_DIR}"
+  pushd "${BUILD_DIR}" > /dev/null
   cmake -S "${PROJ_DIR}" -B "${BUILD_DIR}" \
         -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TEST=$BUILD_TEST \
         -DMULTI_THREAD=$MULTI_THREAD -DRANDOM_SEED=$RANDOM_SEED -DVERBOSE_LOG=$VERBOSE_LOG \
-        -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}" -DGTEST_DIR="${GTEST_DIR}"
+        -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}"
   cmake --build "${BUILD_DIR}" -j $MAKE_J_N
   ret=$?
   if [[ $ret == 0 && $BUILD_TEST == ON ]]; then
@@ -22,6 +25,7 @@ build() {
     cmake --build "${BUILD_DIR}" --target install
     ret=$?
   fi
+  popd > /dev/null
 }
 
 
@@ -34,7 +38,7 @@ benchmarking() {
 
 help() {
   echo "Usage:"
-  echo "  ./build.sh [-tjkrh1] <debug|release|minsizerel>"
+  echo "  ./build.sh [-tjkvrhb1] <debug|release|minsizerel>"
   echo "    Executables will be installed at build/cmake_install"
   echo "OPTIONS:"
   echo "  -t:          Build test cases and run test on them."
@@ -73,7 +77,7 @@ fi
 # A POSIX variable
 OPTIND=1         # Reset in case getopts has been used previously in the shell.
 
-while getopts "htrjkb1" opt; do
+while getopts "htvrjkb1" opt; do
   case "$opt" in
   h)
     help
@@ -83,7 +87,7 @@ while getopts "htrjkb1" opt; do
     BUILD_TEST=ON
     ;;
   j)
-    MAKE_J_N=$(sysctl -n hw.ncpu) || MAKE_J_N=$(cat /proc/cpuinfo | grep processor | wc -l) || MAKE_J_N=8
+    MAKE_J_N=$(nproc 2>/dev/null) || MAKE_J_N=$(sysctl -n hw.ncpu 2>/dev/null) || MAKE_J_N=8
     ;;
   r)
     RANDOM_SEED=ON
