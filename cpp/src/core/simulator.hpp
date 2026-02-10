@@ -1,6 +1,8 @@
 #ifndef CORE_SIMULATOR_H_
 #define CORE_SIMULATOR_H_
 
+#include <spdlog/logger.h>
+
 #include <atomic>
 #include <cstddef>
 #include <memory>
@@ -49,6 +51,7 @@ class Simulator {
 
   uint32_t seed_;
   RandomNumberGenerator rng_;
+  std::shared_ptr<spdlog::logger> logger_;
 };
 
 }  // namespace v3

@@ -18,10 +18,10 @@ int main(int argc, char* argv[]) {
   }
 
   const char* config_filename = arg_parse_result.at("-f")[0].c_str();
+
+  icehalo::InitLogger();
   if (arg_parse_result.count("-v")) {
-    icehalo::LogFilterPtr stdout_filter = icehalo::LogFilter::MakeLevelFilter({ icehalo::LogLevel::kVerbose });
-    icehalo::LogDestPtr stdout_dest = icehalo::LogStdOutDest::GetInstance();
-    icehalo::Logger::GetInstance()->AddDestination(stdout_filter, stdout_dest);
+    icehalo::SetLogLevel(spdlog::level::trace);
   }
 
   auto start = std::chrono::system_clock::now();
@@ -30,20 +30,20 @@ int main(int argc, char* argv[]) {
 
   auto t = std::chrono::system_clock::now();
   std::chrono::duration<float, std::milli> diff = t - start;
-  LOG_INFO("Initialization: %.2fms", diff.count());
+  LOG_INFO("Initialization: {:.2f}ms", diff.count());
 
   char filename[256];
   const auto& wavelengths = context->wavelengths_;
   for (size_t i = 0; i < wavelengths.size(); i++) {
     const auto& wl = wavelengths[i];
-    LOG_INFO("starting at wavelength: %d", wl.wavelength);
+    LOG_INFO("starting at wavelength: {}", wl.wavelength);
     simulator.SetCurrentWavelengthIndex(i);
 
     auto t0 = std::chrono::system_clock::now();
     simulator.Run();
     auto t1 = std::chrono::system_clock::now();
     diff = t1 - t0;
-    LOG_INFO("Ray tracing: %.2fms", diff.count());
+    LOG_INFO("Ray tracing: {:.2f}ms", diff.count());
 
     t0 = std::chrono::system_clock::now();
     std::sprintf(filename, "directions_%d_%lli.bin", wl.wavelength, t0.time_since_epoch().count());
@@ -53,12 +53,12 @@ int main(int argc, char* argv[]) {
 
     t1 = std::chrono::system_clock::now();
     diff = t1 - t0;
-    LOG_INFO("Saving: %.2fms", diff.count());
+    LOG_INFO("Saving: {:.2f}ms", diff.count());
   }
 
   auto end = std::chrono::system_clock::now();
   diff = end - start;
-  LOG_INFO("Total: %.3fs", diff.count() / 1e3);
+  LOG_INFO("Total: {:.3f}s", diff.count() / 1e3);
 
   return 0;
 }

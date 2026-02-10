@@ -69,12 +69,14 @@ class ServerImpl {
 
   mutable std::mutex status_mutex_;
   ServerStatus status_;
+
+  std::shared_ptr<spdlog::logger> logger_;
 };
 
 
 ServerImpl::ServerImpl()
     : config_manager_{}, proj_queue_{}, scene_queue_(std::make_shared<Queue<SceneConfig>>()),
-      data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
+      data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle), logger_(GetLogger("ServerImpl")) {
   for (int i = 0; i < kDefaultSimulatorCnt; i++) {
     simulators_.emplace_back(scene_queue_, data_queue_);
   }
@@ -83,32 +85,32 @@ ServerImpl::ServerImpl()
 
 
 Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
-  LOG_DEBUG("ServerImpl::CommitConfig: entry");
+  SPDLOG_LOGGER_DEBUG(logger_, "CommitConfig: entry");
   try {
     config_manager_ = config_json.get<ConfigManager>();
   } catch (const nlohmann::json::out_of_range& e) {
-    LOG_ERROR("ServerImpl::CommitConfig: Missing field: %s", e.what());
+    SPDLOG_LOGGER_ERROR(logger_, "CommitConfig: Missing field: {}", e.what());
     {
       std::lock_guard<std::mutex> lock(status_mutex_);
       status_ = ServerStatus::kError;
     }
     return Error::MissingField(e.what());
   } catch (const nlohmann::json::exception& e) {
-    LOG_ERROR("ServerImpl::CommitConfig: JSON parsing error: %s", e.what());
+    SPDLOG_LOGGER_ERROR(logger_, "CommitConfig: JSON parsing error: {}", e.what());
     {
       std::lock_guard<std::mutex> lock(status_mutex_);
       status_ = ServerStatus::kError;
     }
     return Error::InvalidJson(e.what());
   } catch (const std::exception& e) {
-    LOG_ERROR("ServerImpl::CommitConfig: Configuration error: %s", e.what());
+    SPDLOG_LOGGER_ERROR(logger_, "CommitConfig: Configuration error: {}", e.what());
     {
       std::lock_guard<std::mutex> lock(status_mutex_);
       status_ = ServerStatus::kError;
     }
     return Error::InvalidConfig(e.what());
   } catch (...) {
-    LOG_ERROR("ServerImpl::CommitConfig: Unknown error");
+    SPDLOG_LOGGER_ERROR(logger_, "CommitConfig: Unknown error");
     {
       std::lock_guard<std::mutex> lock(status_mutex_);
       status_ = ServerStatus::kError;
@@ -121,7 +123,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
 
   // Commit all projects
   for (const auto& [_, proj] : config_manager_.projects_) {
-    LOG_DEBUG("ServerImpl::CommitConfig: put proj %u", proj.id_);
+    SPDLOG_LOGGER_DEBUG(logger_, "CommitConfig: put proj {}", proj.id_);
     proj_queue_.Emplace(proj);
   }
 
@@ -152,7 +154,7 @@ std::optional<StatsResult> ServerImpl::GetStatsResult() const {
 
 
 void ServerImpl::Start() {
-  LOG_DEBUG("ServerImpl::Start: entry");
+  SPDLOG_LOGGER_DEBUG(logger_, "Start: entry");
   if (!stop_) {
     return;
   }
@@ -171,11 +173,11 @@ void ServerImpl::Start() {
   proj_queue_.Start();
   {
     std::lock_guard<std::mutex> lock(prod_mutex);
-    LOG_DEBUG("ServerImpl::Start: lock on prod_mutex");
+    SPDLOG_LOGGER_DEBUG(logger_, "Start: lock on prod_mutex");
     for (auto& s : simulators_) {
       simulator_threads_.emplace_back(&Simulator::Run, &s);
     }
-    LOG_DEBUG("ServerImpl::Start: unlock prod_mutex");
+    SPDLOG_LOGGER_DEBUG(logger_, "Start: unlock prod_mutex");
   }
 
   // Start main working thread & scene dispatch thread
@@ -185,7 +187,7 @@ void ServerImpl::Start() {
 
 
 void ServerImpl::Stop() {
-  LOG_DEBUG("ServerImpl::Stop: entry");
+  SPDLOG_LOGGER_DEBUG(logger_, "Stop: entry");
   if (stop_) {
     return;
   }
@@ -202,7 +204,7 @@ void ServerImpl::Stop() {
   // Stop running jobs
   {
     std::lock_guard<std::mutex> lock(prod_mutex);
-    LOG_DEBUG("ServerImpl::Stop: lock on prod_mutex. stop simulators. clear simulator threads.");
+    SPDLOG_LOGGER_DEBUG(logger_, "Stop: lock on prod_mutex. stop simulators. clear simulator threads.");
     for (auto& s : simulators_) {
       s.Stop();
     }
@@ -212,12 +214,12 @@ void ServerImpl::Stop() {
       }
     }
     simulator_threads_.clear();
-    LOG_DEBUG("ServerImpl::Stop: unlock prod_mutex");
+    SPDLOG_LOGGER_DEBUG(logger_, "Stop: unlock prod_mutex");
   }
   consumers_.clear();
 
   // Stop main working thread & scene dispatch thread
-  LOG_DEBUG("ServerImpl::Stop: waiting main worker & dispatcher stop.");
+  SPDLOG_LOGGER_DEBUG(logger_, "Stop: waiting main worker & dispatcher stop.");
   if (consume_data_thread_.joinable()) {
     consume_data_thread_.join();
   }
@@ -271,7 +273,7 @@ bool ServerImpl::IsIdle() {
 
 
 void ServerImpl::ConsumeData() {
-  LOG_DEBUG("ServerImpl::ConsumeData: entry");
+  SPDLOG_LOGGER_DEBUG(logger_, "ConsumeData: entry");
   while (true) {
     CHECK_STOP
     auto sim_data = data_queue_->Get();
@@ -281,7 +283,7 @@ void ServerImpl::ConsumeData() {
     }
     CHECK_STOP
 
-    LOG_DEBUG("ServerImpl::ConsumeData: get data: %p", &sim_data);
+    SPDLOG_LOGGER_DEBUG(logger_, "ConsumeData: get data: {}", fmt::ptr(&sim_data));
 
     if (sim_scene_cnt_ > 0) {
       for (auto& c : consumers_) {
@@ -294,12 +296,12 @@ void ServerImpl::ConsumeData() {
     }
     CHECK_STOP
   }
-  LOG_DEBUG("ServerImpl::ConsumeData exit");
+  SPDLOG_LOGGER_DEBUG(logger_, "ConsumeData exit");
 }
 
 
 void ServerImpl::GenerateScene() {
-  LOG_DEBUG("ServerImpl::GenerateScene entry");
+  SPDLOG_LOGGER_DEBUG(logger_, "GenerateScene entry");
   while (true) {
     CHECK_STOP
     auto proj_config = proj_queue_.Get();
@@ -307,7 +309,7 @@ void ServerImpl::GenerateScene() {
       // Stop, or queue shutdown.
       break;
     }
-    LOG_DEBUG("ServerImpl::GenerateScene: get proj: %u", proj_config.id_);
+    SPDLOG_LOGGER_DEBUG(logger_, "GenerateScene: get proj: {}", proj_config.id_);
     CHECK_STOP
 
     // Setup consumers.
@@ -326,27 +328,32 @@ void ServerImpl::GenerateScene() {
       scene_queue_->Emplace(curr_scene);
       sim_scene_cnt_++;
 
-      LOG_DEBUG("ServerImpl::GenerateScene: put a scene(%u): ray(%zu/%zu, %zu)", curr_scene.id_, curr_scene.ray_num_,
-                ray_num, committed_num);
+      SPDLOG_LOGGER_DEBUG(logger_, "GenerateScene: put a scene({}): ray({}/{}, {})", curr_scene.id_,
+                          curr_scene.ray_num_, ray_num, committed_num);
       CHECK_STOP
 
       if (sim_scene_cnt_ >= kMaxSceneCnt) {
-        LOG_DEBUG("ServerImpl::GenerateScene: too many scenes generated. wait for consumer");
+        SPDLOG_LOGGER_DEBUG(logger_, "GenerateScene: too many scenes generated. wait for consumer");
         std::unique_lock<std::mutex> lock(scene_mutex_);
         scene_cv_.wait(lock, [=]() { return stop_ || sim_scene_cnt_ < kMaxSceneCnt; });
-        LOG_DEBUG("ServerImpl::GenerateScene: continue to generate scenes.");
+        SPDLOG_LOGGER_DEBUG(logger_, "GenerateScene: continue to generate scenes.");
       }
       CHECK_STOP
       committed_num += kDefaultRayNum;
-      LOG_DEBUG("ServerImpl::GenerateScene: finish wl");
+      SPDLOG_LOGGER_DEBUG(logger_, "GenerateScene: finish wl");
     }
-    LOG_DEBUG("ServerImpl::GenerateScene: finish ray_num");
+    SPDLOG_LOGGER_DEBUG(logger_, "GenerateScene: finish ray_num");
   }
-  LOG_DEBUG("ServerImpl::GenerateScene exit");
+  SPDLOG_LOGGER_DEBUG(logger_, "GenerateScene exit");
 }
 
 
 // =============== Server ===============
+static auto& ServerLogger() {
+  static auto logger = GetLogger("Server");
+  return logger;
+}
+
 Server::Server() : impl_(std::make_shared<ServerImpl>()) {}
 
 Error Server::CommitConfig(const std::string& config_str) {
@@ -357,10 +364,10 @@ Error Server::CommitConfig(const std::string& config_str) {
     auto config_json = nlohmann::json::parse(config_str);
     return impl_->CommitConfig(config_json);
   } catch (const nlohmann::json::parse_error& e) {
-    LOG_ERROR("Server::CommitConfig: JSON parse error: %s", e.what());
+    SPDLOG_LOGGER_ERROR(ServerLogger(), "CommitConfig: JSON parse error: {}", e.what());
     return Error::InvalidJson(e.what());
   } catch (...) {
-    LOG_ERROR("Server::CommitConfig: Unknown error");
+    SPDLOG_LOGGER_ERROR(ServerLogger(), "CommitConfig: Unknown error");
     return Error::InvalidJson("Unknown JSON parsing error");
   }
 }
@@ -378,17 +385,17 @@ Error Server::CommitConfigFromFile(const std::string& filename) {
     f >> config_json;
     return impl_->CommitConfig(config_json);
   } catch (const nlohmann::json::parse_error& e) {
-    LOG_ERROR("Server::CommitConfigFromFile: JSON parse error: %s", e.what());
+    SPDLOG_LOGGER_ERROR(ServerLogger(), "CommitConfigFromFile: JSON parse error: {}", e.what());
     return Error::InvalidJson(e.what());
   } catch (...) {
-    LOG_ERROR("Server::CommitConfigFromFile: Unknown error");
+    SPDLOG_LOGGER_ERROR(ServerLogger(), "CommitConfigFromFile: Unknown error");
     return Error::InvalidJson("Unknown JSON parsing error");
   }
 }
 
 std::vector<RenderResult> Server::GetRenderResults() const {
   if (!impl_) {
-    LOG_WARNING("Server is terminated!");
+    SPDLOG_LOGGER_WARN(ServerLogger(), "Server is terminated!");
     return {};
   }
   return impl_->GetRenderResults();
@@ -396,7 +403,7 @@ std::vector<RenderResult> Server::GetRenderResults() const {
 
 std::optional<StatsResult> Server::GetStatsResult() const {
   if (!impl_) {
-    LOG_WARNING("Server is terminated!");
+    SPDLOG_LOGGER_WARN(ServerLogger(), "Server is terminated!");
     return std::nullopt;
   }
   return impl_->GetStatsResult();
@@ -410,7 +417,7 @@ void Server::Stop() {
 }
 
 void Server::Terminate() {
-  LOG_DEBUG("Server::Terminate: entry");
+  SPDLOG_LOGGER_DEBUG(ServerLogger(), "Terminate: entry");
   if (!impl_) {
     return;
   }

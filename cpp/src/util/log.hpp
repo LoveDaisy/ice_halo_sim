@@ -1,227 +1,48 @@
 #ifndef SRC_UTIL_LOG_H_
 #define SRC_UTIL_LOG_H_
 
-#include <chrono>
-#include <initializer_list>
+#include <spdlog/spdlog.h>
+
 #include <memory>
 #include <string>
-#include <thread>
-#include <vector>
 
 namespace icehalo {
 
-enum class LogLevel {
-  kDebug,
-  kVerbose,
-  kInfo,
-  kWarning,
-  kError,
-  kFatal,
-};
+// Log output pattern: "2026-01-02 10:11:12.345 [I] this is a message"
+constexpr const char* kLogPattern = "%Y-%m-%d %H:%M:%S.%e [%L] %v";
 
+// Initialize the default logger with the project pattern.
+// Call this once at program startup (e.g., in main()).
+inline void InitLogger() {
+  spdlog::set_pattern(kLogPattern);
+  spdlog::set_level(spdlog::level::info);
+}
 
-struct LogMessage {
-  LogLevel level;
-  std::chrono::system_clock::time_point time;
-  int line;
-  std::string source_file;
-  std::string tag;
-  std::string text;
-  std::thread::id thread_id;
-};
+// Set the global log level at runtime (e.g., from -v / -d flags).
+inline void SetLogLevel(spdlog::level::level_enum level) {
+  spdlog::set_level(level);
+}
 
-
-class LogFormatter;
-using LogFormatterPtr = std::shared_ptr<LogFormatter>;
-
-class LogFormatter {
- public:
-  LogFormatter();
-  LogFormatter(const LogFormatter& other) = default;
-  virtual ~LogFormatter() = default;
-
-  LogFormatter& operator=(const LogFormatter& other) = default;
-
-  virtual const char* Format(const LogMessage& msg) = 0;
-
-  void EnableSeverity(bool enable);
-  void EnableThreadId(bool enable);
-
- protected:
-  static constexpr size_t kBufSize = 1024;
-
-  bool enable_severity_;
-  bool enable_thread_id_;
-  char buf_[kBufSize];
-};
-
-
-class SimpleLogFormatter : public LogFormatter {
- public:
-  const char* Format(const LogMessage& msg) override;
-};
-
-
-class LogDestination;
-using LogDestPtrU = std::unique_ptr<LogDestination>;
-using LogDestPtr = std::shared_ptr<LogDestination>;
-
-class LogDestination {
- public:
-  LogDestination() = default;
-  LogDestination(const LogDestination& other) = default;
-  virtual ~LogDestination() = default;
-
-  LogDestination& operator=(const LogDestination& other) = default;
-
-  virtual void Write(const LogMessage& message, LogFormatterPtr& formatter) = 0;
-};
-
-
-class LogStdOutDest : public LogDestination {
- public:
-  void Write(const LogMessage& message, LogFormatterPtr& formatter) override;
-
-  static LogDestPtr GetInstance();
-
- private:
-  LogStdOutDest() = default;
-};
-
-
-class LogStdErrDest : public LogDestination {
- public:
-  void Write(const LogMessage& message, LogFormatterPtr& formatter) override;
-
-  static LogDestPtr GetInstance();
-
- private:
-  LogStdErrDest() = default;
-};
-
-
-class LogFilter;
-using LogFilterPtrU = std::unique_ptr<LogFilter>;
-using LogFilterPtr = std::shared_ptr<LogFilter>;
-
-class LogFilter {
- public:
-  LogFilter() = default;
-  LogFilter(const LogFilter& other) = default;
-  virtual ~LogFilter() = default;
-  LogFilter& operator=(const LogFilter& other) = default;
-  virtual bool Filter(const LogMessage& message) = 0;
-
-  static LogFilterPtrU MakeTagFilter(const char* tag);
-  static LogFilterPtrU MakeLevelFilter(std::initializer_list<LogLevel> levels);
-};
-
-LogFilterPtr operator&&(const LogFilterPtr& a, const LogFilterPtr& b);
-LogFilterPtr operator||(const LogFilterPtr& a, const LogFilterPtr& b);
-
-
-class LogTagFilter : public LogFilter {
- public:
-  explicit LogTagFilter(const char* tag) : tag_(tag) {}
-
-  bool Filter(const LogMessage& message) override;
-
- private:
-  std::string tag_;
-};
-
-
-class LogLevelFilter : public LogFilter {
- public:
-  LogLevelFilter(std::initializer_list<LogLevel> levels) : levels_{ levels } {}
-
-  bool Filter(const LogMessage& message) override;
-
- private:
-  std::vector<LogLevel> levels_;
-};
-
-
-class LogComplexFilter : public LogFilter {
- public:
-  LogComplexFilter() = default;
-  explicit LogComplexFilter(LogFilterPtr filter);
-
-  void Reset();
-  void And(LogFilterPtr other);
-  void Or(LogFilterPtr other);
-
-  bool Filter(const LogMessage& message) override;
-
- private:
-  std::vector<std::vector<LogFilterPtr>> filters_;
-};
-
-
-class Logger {
- public:
-  void EmitLog(const char* file, int line, LogLevel level, const char* fmt, ...);
-  void EmitLog(const char* file, int line, LogLevel level, std::string msg_str);
-  void EmitTagLog(const char* file, int line, LogLevel level, const char* tag, const char* fmt, ...);
-  void EmitTagLog(const char* file, int line, LogLevel level, const char* tag, std::string msg_str);
-
-  void AddDestination(LogFilterPtr filter, LogDestPtr dest);
-  void EnableSeverity(bool enable);
-  void EnableThreadId(bool enable);
-
-  static Logger* GetInstance();
-
-  static constexpr size_t kMaxMessageLength = 1024;
-
- private:
-  Logger();
-
-  LogFormatterPtr default_formatter_;
-  std::vector<std::pair<LogFilterPtr, LogDestPtr>> filter_dest_list_;
-};
+// Create a named logger for class-level use.
+// Returns an existing logger if one with the same name already exists.
+// Usage: static auto logger = icehalo::GetLogger("ClassName");
+inline std::shared_ptr<spdlog::logger> GetLogger(const std::string& name) {
+  auto logger = spdlog::get(name);
+  if (!logger) {
+    logger = spdlog::default_logger()->clone(name);
+    spdlog::register_logger(logger);
+  }
+  return logger;
+}
 
 }  // namespace icehalo
 
-// Convenience macros for log
-#ifdef VERBOSE_LOG
-#define LOG_DEBUG(...) \
-  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kDebug, ##__VA_ARGS__)
-#else
-#define LOG_DEBUG(...) \
-  {}
-#endif
-#define LOG_VERBOSE(...) \
-  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kVerbose, ##__VA_ARGS__)
-#define LOG_INFO(...) \
-  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kInfo, ##__VA_ARGS__)
-#define LOG_WARNING(...) \
-  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kWarning, ##__VA_ARGS__)
-#define LOG_ERROR(...) \
-  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kError, ##__VA_ARGS__)
-#define LOG_FATAL(...) \
-  icehalo::Logger::GetInstance()->EmitLog(__FILE__, __LINE__, icehalo::LogLevel::kFatal, ##__VA_ARGS__)
-
-#ifdef VERBOSE_LOG
-#define TAG_LOG_DEBUG(...) \
-  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kDebug, ##__VA_ARGS__)
-#else
-#define TAG_LOG_DEBUG(...) \
-  {}
-#endif
-#define TAG_LOG_VERBOSE(...) \
-  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kVerbose, ##__VA_ARGS__)
-#define TAG_LOG_INFO(...) \
-  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kInfo, ##__VA_ARGS__)
-#define TAG_LOG_WARNING(...) \
-  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kWarning, ##__VA_ARGS__)
-#define TAG_LOG_ERROR(...) \
-  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kError, ##__VA_ARGS__)
-#define TAG_LOG_FATAL(...) \
-  icehalo::Logger::GetInstance()->EmitTagLog(__FILE__, __LINE__, icehalo::LogLevel::kFatal, ##__VA_ARGS__)
-
-#define ENABLE_LOG_SEVERITY icehalo::Logger::GetInstance()->EnableSeverity(true)
-#define DISABLE_LOG_SEVERITY icehalo::Logger::GetInstance()->EnableSeverity(false)
-#define ENABLE_LOG_THREAD_ID icehalo::Logger::GetInstance()->EnableThreadId(true)
-#define DISABLE_LOG_THREAD_ID icehalo::Logger::GetInstance()->EnableThreadId(false)
+// Convenience macros — map to spdlog default logger
+#define LOG_DEBUG(...) SPDLOG_DEBUG(__VA_ARGS__)
+#define LOG_VERBOSE(...) SPDLOG_TRACE(__VA_ARGS__)
+#define LOG_INFO(...) SPDLOG_INFO(__VA_ARGS__)
+#define LOG_WARNING(...) SPDLOG_WARN(__VA_ARGS__)
+#define LOG_ERROR(...) SPDLOG_ERROR(__VA_ARGS__)
+#define LOG_FATAL(...) SPDLOG_CRITICAL(__VA_ARGS__)
 
 #endif  // SRC_UTIL_LOG_H_

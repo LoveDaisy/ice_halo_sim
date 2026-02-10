@@ -13,7 +13,7 @@
 namespace icehalo {
 
 ProjectContextPtrU ProjectContext::CreateFromFile(const char* filename) {
-  LOG_VERBOSE("Reading config from: %s", filename);
+  LOG_VERBOSE("Reading config from: {}", filename);
 
   std::ifstream input_stream(filename);
   nlohmann::json json_obj;

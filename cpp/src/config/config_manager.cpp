@@ -124,7 +124,7 @@ SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager&
   if (IdType id = j_scene.at("light_source").get<IdType>(); m.lights_.count(id)) {
     scene.light_source_ = m.lights_.at(id);
   } else {
-    LOG_ERROR("Light source ID(%u) cannot be found!", id);
+    LOG_ERROR("Light source ID({}) cannot be found!", id);
     scene.light_source_.id_ = kInvalidId;
   }
 

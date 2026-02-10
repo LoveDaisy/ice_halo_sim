@@ -62,7 +62,7 @@ std::tuple<icehalo::RayCollectionInfoList, icehalo::SimpleRayData> RenderSplitHa
     }
 
     PrintRayPath(ray_path_map.at(hash).first, str_buf, kBufSize);
-    LOG_VERBOSE("img_idx: %03zu, hash: %016tx, ray_path: %s", img_idx, hash, str_buf);
+    LOG_VERBOSE("img_idx: {:03}, hash: {:016x}, ray_path: {}", img_idx, hash, str_buf);
 
     if (split_img_ch_num == 1) {
       auto identifier = static_cast<size_t>(exit_ray_data.wavelength);
@@ -87,10 +87,10 @@ int main(int argc, char* argv[]) {
     return -1;
   }
   const char* config_filename = arg_parse_result.at("-f")[0].c_str();
+
+  icehalo::InitLogger();
   if (arg_parse_result.count("-v")) {
-    icehalo::LogFilterPtr stdout_filter = icehalo::LogFilter::MakeLevelFilter({ icehalo::LogLevel::kVerbose });
-    icehalo::LogDestPtr stdout_dest = icehalo::LogStdOutDest::GetInstance();
-    icehalo::Logger::GetInstance()->AddDestination(stdout_filter, stdout_dest);
+    icehalo::SetLogLevel(spdlog::level::trace);
   }
 
   auto start = std::chrono::system_clock::now();
@@ -148,8 +148,8 @@ int main(int argc, char* argv[]) {
     std::chrono::duration<float, std::milli> split_render_time = t2 - t1;
 
     LOG_INFO(
-        " Loading data (%zu/%zu): %.2fms. Filtering top halo: %.2fms."
-        " Total %zu rays, %zu pts",
+        " Loading data ({}/{}): {:.2f}ms. Filtering top halo: {:.2f}ms."
+        " Total {} rays, {} pts",
         i + 1, data_files.size(), loading_time.count(), split_render_time.count(), init_ray_num, exit_seg_num);
   }
   renderer.Render();
@@ -174,7 +174,7 @@ int main(int argc, char* argv[]) {
 
   auto t1 = std::chrono::system_clock::now();
   std::chrono::duration<float, std::milli> diff = t1 - start;
-  LOG_INFO("Total: %.2fms", diff.count());
+  LOG_INFO("Total: {:.2f}ms", diff.count());
 
   return 0;
 }

@@ -39,15 +39,40 @@ set(PROJ_ROOT "${CMAKE_SOURCE_DIR}")
 find_package(Threads REQUIRED)  # GoogleTest needs it
 find_package(OpenCV REQUIRED core imgproc imgcodecs)
 
+# ==================================================================================================
+# CPM.cmake — lightweight dependency manager (wrapper around FetchContent)
+include(cmake/CPM.cmake)
+
 # nlohmann/json: download only headers (~255KB) instead of full source (~6.7MB)
-include(FetchContent)
-FetchContent_Declare(json
+CPMAddPackage(
+  NAME nlohmann_json
   URL https://github.com/nlohmann/json/releases/download/v3.10.5/include.zip
-  URL_HASH SHA256=b94997df68856753b72f0d7a3703b7d484d4745c567f3584ef97c96c25a5798e)
-FetchContent_Populate(json)
-add_library(nlohmann_json INTERFACE)
-add_library(nlohmann_json::nlohmann_json ALIAS nlohmann_json)
-target_include_directories(nlohmann_json INTERFACE ${json_SOURCE_DIR}/include)
+  URL_HASH SHA256=b94997df68856753b72f0d7a3703b7d484d4745c567f3584ef97c96c25a5798e
+)
+if(nlohmann_json_ADDED)
+  add_library(nlohmann_json INTERFACE)
+  add_library(nlohmann_json::nlohmann_json ALIAS nlohmann_json)
+  target_include_directories(nlohmann_json INTERFACE ${nlohmann_json_SOURCE_DIR}/include)
+endif()
+
+# spdlog: header-only mode (skip building the static library)
+CPMAddPackage(
+  NAME spdlog
+  GITHUB_REPOSITORY gabime/spdlog
+  VERSION 1.15.0
+  OPTIONS "SPDLOG_BUILD_SHARED OFF" "SPDLOG_ENABLE_PCH OFF" "SPDLOG_BUILD_EXAMPLE OFF"
+)
+if(spdlog_ADDED)
+  set_target_properties(spdlog PROPERTIES EXCLUDE_FROM_ALL YES)
+endif()
+
+# tl-expected: header-only expected<T,E> for C++17
+CPMAddPackage(
+  NAME tl-expected
+  GITHUB_REPOSITORY TartanLlama/expected
+  VERSION 1.1.0
+  OPTIONS "EXPECTED_BUILD_TESTS OFF"
+)
 
 # ==================================================================================================
 # Add some definitions
@@ -106,7 +131,6 @@ set(icehalo_server_src
 
 set(icehalo_util_src
   "${PROJ_SRC_DIR}/util/arg_parser.cpp"
-  "${PROJ_SRC_DIR}/util/log.cpp"
   "${PROJ_SRC_DIR}/util/obj_pool.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
 
@@ -118,7 +142,7 @@ set(icehalo_src
 # Add targets
 add_library(icehalo_lib OBJECT ${icehalo_src})
 target_include_directories(icehalo_lib PUBLIC ${icehalo_include})
-target_link_libraries(icehalo_lib PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
+target_link_libraries(icehalo_lib PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog_header_only tl::expected Threads::Threads)
 
 if(NOT MSVC)
   target_compile_options(icehalo_lib PRIVATE
@@ -133,7 +157,6 @@ if(NOT MSVC)
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:GNU>:--gc-sections>>)
 endif()
 
-target_compile_definitions(icehalo_lib PUBLIC VERBOSE_LOG)
 
 # ==================================================================================================
 # Add subdirectory
