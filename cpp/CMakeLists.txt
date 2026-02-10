@@ -4,37 +4,16 @@ project(IceHalo VERSION 2.1.1)
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 
 # ==================================================================================================
-# Compiler related
-if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
-  # using regular Clang or AppleClang
-  set(CMAKE_EXE_LINKER_FLAGS_MINSIZEREL "${CMAKE_EXE_LINKER_FLAGS_MINSIZEREL} -dead_strip")
-elseif("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
-  # using GCC
-  set(CMAKE_EXE_LINKER_FLAGS_MINSIZEREL "${CMAKE_EXE_LINKER_FLAGS_MINSIZEREL} --gc-sections")
-endif()
-
-if(MSVC)
-  add_definitions(-DNOMINMAX)
-  set(CMAKE_DEBUG_POSTFIX "d")
-else()
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexceptions -fpermissive -pthread -frtti")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -D__STDC_FORMAT_MACROS")
-endif()
-
-# ==================================================================================================
-# OS related
-
-# ==================================================================================================
 # Basic
 set(CMAKE_CXX_STANDARD 17)            # C++17...
 set(CMAKE_CXX_STANDARD_REQUIRED ON)   #...is required...
 set(CMAKE_CXX_EXTENSIONS OFF)         #...without compiler extensions like gnu++11
 set(CMAKE_C_STANDARD 11)              # C11...
 
-# Flags
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -Wall -g -ggdb")
-set(CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL} -ffunction-sections -fdata-sections -fvisibility=hidden")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -ffunction-sections -fdata-sections -fvisibility=hidden")
+if(MSVC)
+  add_definitions(-DNOMINMAX)
+  set(CMAKE_DEBUG_POSTFIX "d")
+endif()
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT result OUTPUT output)
@@ -136,7 +115,20 @@ set(icehalo_src
 # Add targets
 add_library(icehalo_lib OBJECT ${icehalo_src})
 target_include_directories(icehalo_lib PUBLIC ${icehalo_include})
-target_link_libraries(icehalo_lib PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(icehalo_lib PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
+
+if(NOT MSVC)
+  target_compile_options(icehalo_lib PRIVATE
+    -Wall -Wextra -fexceptions -fpermissive -frtti)
+  target_compile_definitions(icehalo_lib PRIVATE __STDC_FORMAT_MACROS)
+  target_compile_options(icehalo_lib PRIVATE
+    $<$<CONFIG:Debug>:-O0 -g -ggdb>
+    $<$<CONFIG:Release>:-ffunction-sections -fdata-sections -fvisibility=hidden>
+    $<$<CONFIG:MinSizeRel>:-ffunction-sections -fdata-sections -fvisibility=hidden>)
+  target_link_options(icehalo_lib PUBLIC
+    $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:AppleClang,Clang>:-dead_strip>>
+    $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:GNU>:--gc-sections>>)
+endif()
 
 if(MULTI_THREAD)
   target_compile_definitions(icehalo_lib PUBLIC MULTI_THREAD)
