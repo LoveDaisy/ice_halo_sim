@@ -3,19 +3,11 @@
 find_package(GTest)
 
 if(NOT GTest_FOUND)
-  if("${GTEST_DIR}" STREQUAL "")
-    message(STATUS "[test] GTEST_DIR is NOT set! Use github source.")
-    set(GTEST_REPO "https://github.com/google/googletest.git")
-  else()
-    message(STATUS "[test] GTEST_DIR is set! Use local gtest at ${GTEST_DIR}")
-    set(GTEST_REPO "file://${GTEST_DIR}/.git")
-  endif()
-
   include(FetchContent)
   FetchContent_Declare(
     googletest
-    GIT_REPOSITORY ${GTEST_REPO}
-    GIT_TAG v1.15.2
+    URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.tar.gz
+    URL_HASH SHA256=7b42b4d6ed48810c5362c265a17faebe90dc2373c885e5216439d37927f02926
     PREFIX ${CMAKE_CURRENT_BINARY_DIR}/gtest
   )
 
