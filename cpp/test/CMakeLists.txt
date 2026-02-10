@@ -18,14 +18,6 @@ if(NOT GTest_FOUND)
 endif()
 
 # ==================================================================================================
-# TODO(FOR_TEST): icehalo_test_lib 重复编译全部源文件，仅为添加 FOR_TEST 和 VERBOSE_LOG 宏。
-# 未来应消除 FOR_TEST 条件编译，改为运行时配置或 friend class，从而复用 icehalo_lib。
-add_library(icehalo_test_lib OBJECT ${icehalo_src})
-target_include_directories(icehalo_test_lib PUBLIC ${icehalo_include})
-target_link_libraries(icehalo_test_lib PUBLIC nlohmann_json::nlohmann_json)
-target_compile_definitions(icehalo_test_lib PUBLIC FOR_TEST)
-target_compile_definitions(icehalo_test_lib PUBLIC VERBOSE_LOG)
-
 add_executable(unit_test
   "${PROJ_TEST_DIR}/test_crystal.cpp"
   "${PROJ_TEST_DIR}/test_context.cpp"
@@ -36,7 +28,7 @@ add_executable(unit_test
 target_include_directories(unit_test
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_test
-  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} icehalo_test_lib)
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} icehalo_lib)
 set_target_properties(unit_test PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
@@ -49,7 +41,7 @@ add_executable(unit_test_v3
 target_include_directories(unit_test_v3
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_test_v3
-  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} icehalo_test_lib)
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} icehalo_lib)
 set_target_properties(unit_test_v3 PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
@@ -59,4 +51,3 @@ add_test(NAME "IceHaloUnitTest" COMMAND unit_test
 add_test(NAME "IceHaloUnitTestV3" COMMAND unit_test_v3
   "${PROJ_ROOT}/v3_config_example.json"
   "${CMAKE_CURRENT_BINARY_DIR}")
-
