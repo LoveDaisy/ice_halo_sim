@@ -133,10 +133,6 @@ if(NOT MSVC)
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:GNU>:--gc-sections>>)
 endif()
 
-if(MULTI_THREAD)
-  target_compile_definitions(icehalo_lib PUBLIC MULTI_THREAD)
-endif()
-
 if(RANDOM_SEED)
   target_compile_definitions(icehalo_lib PUBLIC RANDOM_SEED)
 endif()

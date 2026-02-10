@@ -2,11 +2,7 @@
 
 namespace icehalo {
 
-#ifdef MULTI_THREAD
 const size_t ThreadingPool::kDefaultPoolSize = std::thread::hardware_concurrency();
-#else
-const size_t ThreadingPool::kDefaultPoolSize = 1;
-#endif
 
 
 ThreadingPool::ThreadingPool(size_t size)

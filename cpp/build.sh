@@ -11,7 +11,7 @@ build() {
   pushd "${BUILD_DIR}" > /dev/null
   cmake -S "${PROJ_DIR}" -B "${BUILD_DIR}" \
         -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TEST=$BUILD_TEST \
-        -DMULTI_THREAD=$MULTI_THREAD -DRANDOM_SEED=$RANDOM_SEED \
+        -DRANDOM_SEED=$RANDOM_SEED \
         -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}"
   cmake --build "${BUILD_DIR}" -j $MAKE_J_N
   ret=$?
@@ -31,16 +31,14 @@ build() {
 
 help() {
   echo "Usage:"
-  echo "  ./build.sh [-tjkrh1] <debug|release|minsizerel>"
+  echo "  ./build.sh [-tjkrh] <debug|release|minsizerel>"
   echo "    Executables will be installed at build/cmake_install"
   echo "OPTIONS:"
   echo "  -t:          Build test cases and run test on them."
   echo "  -j:          Build in parallel, i.e. use make -j"
   echo "  -k:          Clean temporary building files."
   echo "  -r:          Use random seed for random number generator. Without this option,"
-  echo "               the program will use a constant value. Thus generate a repeatable result"
-  echo "               (usually together with -1)."
-  echo "  -1:          Use single thread."
+  echo "               the program will use a constant value. Thus generate a repeatable result."
   echo "  -h:          Show this message."
 }
 
@@ -55,7 +53,6 @@ BUILD_TYPE=Debug
 BUILD_TEST=OFF
 INSTALL_FLAG=OFF
 MAKE_J_N=1
-MULTI_THREAD=ON
 RANDOM_SEED=OFF
 
 if [ $# -eq 0 ]; then
@@ -67,7 +64,7 @@ fi
 # A POSIX variable
 OPTIND=1         # Reset in case getopts has been used previously in the shell.
 
-while getopts "htrjk1" opt; do
+while getopts "htrjk" opt; do
   case "$opt" in
   h)
     help
@@ -84,9 +81,6 @@ while getopts "htrjk1" opt; do
     ;;
   k)
     clean_all
-    ;;
-  1)
-    MULTI_THREAD=OFF
     ;;
   *)
     help
