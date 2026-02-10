@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <nlohmann/json.hpp>
 #include <variant>
 
 #include "config/filter_config.hpp"
@@ -10,7 +11,6 @@
 #include "core/def.hpp"
 #include "include/log.hpp"
 #include "io/json_util.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 namespace v3 {

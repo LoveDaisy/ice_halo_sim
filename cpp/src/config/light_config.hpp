@@ -1,11 +1,11 @@
 #ifndef CONFIG_LIGHT_CONFIG_H_
 #define CONFIG_LIGHT_CONFIG_H_
 
+#include <nlohmann/json.hpp>
 #include <variant>
 #include <vector>
 
 #include "core/def.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 namespace v3 {

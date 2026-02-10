@@ -1,12 +1,12 @@
 #include "config/light_config.hpp"
 
 #include <cstddef>
+#include <nlohmann/json.hpp>
 #include <variant>
 #include <vector>
 
 #include "include/log.hpp"
 #include "io/json_util.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 namespace v3 {

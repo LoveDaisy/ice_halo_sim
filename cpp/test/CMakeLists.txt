@@ -28,6 +28,7 @@ endif()
 # ==================================================================================================
 add_library(icehalo_test_lib OBJECT ${icehalo_src})
 target_include_directories(icehalo_test_lib PUBLIC ${icehalo_include})
+target_link_libraries(icehalo_test_lib PUBLIC nlohmann_json::nlohmann_json)
 target_compile_definitions(icehalo_test_lib PUBLIC FOR_TEST)
 target_compile_definitions(icehalo_test_lib PUBLIC VERBOSE_LOG)
 

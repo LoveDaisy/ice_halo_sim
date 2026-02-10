@@ -4,12 +4,12 @@
 #include <cstddef>
 #include <initializer_list>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <random>
 #include <set>
 #include <vector>
 
 #include "core/def.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 

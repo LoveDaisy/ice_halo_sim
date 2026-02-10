@@ -1,8 +1,9 @@
 #ifndef SRC_IO_JSON_UTIL_H_
 #define SRC_IO_JSON_UTIL_H_
 
+#include <nlohmann/json.hpp>
+
 #include "include/log.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 

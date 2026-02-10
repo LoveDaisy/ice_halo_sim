@@ -2,10 +2,10 @@
 #define CONFIG_CRYSTAL_CONFIG_H_
 
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <variant>
 
 #include "core/math.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 namespace v3 {

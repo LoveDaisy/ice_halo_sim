@@ -2,10 +2,10 @@
 #define SRC_CONTEXT_MULTI_SCATTER_CONTEXT_H_
 
 #include <memory>
+#include <nlohmann/json.hpp>
 
 #include "core/def.hpp"
 #include "io/serialize.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 

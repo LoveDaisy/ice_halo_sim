@@ -60,6 +60,13 @@ set(MODULE_ROOT "${CMAKE_SOURCE_DIR}/thirdparty")
 find_package(Threads REQUIRED)  # GoogleTest needs it
 find_package(OpenCV REQUIRED core imgproc imgcodecs)
 
+# nlohmann/json: use FetchContent to pin v3.10.5 (system version may be incompatible)
+include(FetchContent)
+FetchContent_Declare(json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG v3.10.5)
+FetchContent_MakeAvailable(json)
+
 # ==================================================================================================
 # Add some definitions
 if(${CMAKE_HOST_SYSTEM_NAME} STREQUAL "Linux")
@@ -73,7 +80,7 @@ endif()
 # ==================================================================================================
 # Set submodules
 set(icehalo_include
-  "${PROJ_SRC_DIR}" "${MODULE_ROOT}/nlohmann_json")
+  "${PROJ_SRC_DIR}")
 
 set(icehalo_config_src
   "${PROJ_SRC_DIR}/config/config_manager.cpp"
@@ -129,6 +136,7 @@ set(icehalo_src
 # Add targets
 add_library(icehalo_lib OBJECT ${icehalo_src})
 target_include_directories(icehalo_lib PUBLIC ${icehalo_include})
+target_link_libraries(icehalo_lib PUBLIC nlohmann_json::nlohmann_json)
 
 if(MULTI_THREAD)
   target_compile_definitions(icehalo_lib PUBLIC MULTI_THREAD)

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <thread>
 #include <vector>
@@ -17,7 +18,6 @@
 #include "core/simulator.hpp"
 #include "include/log.hpp"
 #include "include/server.hpp"
-#include "json.hpp"
 #include "server/consumer.hpp"
 #include "server/render.hpp"
 #include "server/stats.hpp"

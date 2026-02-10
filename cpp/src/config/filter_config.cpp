@@ -1,10 +1,10 @@
 #include "config/filter_config.hpp"
 
+#include <nlohmann/json.hpp>
 #include <variant>
 #include <vector>
 
 #include "core/def.hpp"
-#include "json.hpp"
 
 namespace icehalo {
 namespace v3 {
