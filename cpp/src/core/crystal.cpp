@@ -1715,7 +1715,7 @@ std::pair<RayPath, size_t> NormalizeRayPath(RayPath ray_path, const ProjectConte
       crystal_flag = false;
       const auto* crystal = proj_ctx->GetCrystal(fn);
       if (!crystal) {
-        LOG_ERROR("NormalizeRayPath no crystal of ID: %u", fn);
+        LOG_ERROR("NormalizeRayPath no crystal of ID: {}", fn);
       }
       period = crystal->GetFaceNumberPeriod();
     } else if (fn == kInvalidId) {

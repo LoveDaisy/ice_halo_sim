@@ -429,9 +429,9 @@ void from_json(const nlohmann::json& obj, CrystalContext& ctx) {
 
 void CrystalContext::PrintCrystal() const {
   const auto* g = GetCrystal();
-  LOG_VERBOSE("-- ID: %d --", GetId());
+  LOG_VERBOSE("-- ID: {} --", GetId());
   for (const auto& v : g->GetVertexes()) {
-    LOG_VERBOSE("v %+.4f %+.4f %+.4f", v.x(), v.y(), v.z());
+    LOG_VERBOSE("v {:+.4f} {:+.4f} {:+.4f}", v.x(), v.y(), v.z());
   }
   for (const auto& f : g->GetMergedFaces()) {
     std::stringstream ss;

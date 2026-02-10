@@ -87,21 +87,21 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   try {
     config_manager_ = config_json.get<ConfigManager>();
   } catch (const nlohmann::json::out_of_range& e) {
-    LOG_ERROR("ServerImpl::CommitConfig: Missing field: %s", e.what());
+    LOG_ERROR("ServerImpl::CommitConfig: Missing field: {}", e.what());
     {
       std::lock_guard<std::mutex> lock(status_mutex_);
       status_ = ServerStatus::kError;
     }
     return Error::MissingField(e.what());
   } catch (const nlohmann::json::exception& e) {
-    LOG_ERROR("ServerImpl::CommitConfig: JSON parsing error: %s", e.what());
+    LOG_ERROR("ServerImpl::CommitConfig: JSON parsing error: {}", e.what());
     {
       std::lock_guard<std::mutex> lock(status_mutex_);
       status_ = ServerStatus::kError;
     }
     return Error::InvalidJson(e.what());
   } catch (const std::exception& e) {
-    LOG_ERROR("ServerImpl::CommitConfig: Configuration error: %s", e.what());
+    LOG_ERROR("ServerImpl::CommitConfig: Configuration error: {}", e.what());
     {
       std::lock_guard<std::mutex> lock(status_mutex_);
       status_ = ServerStatus::kError;
@@ -121,7 +121,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
 
   // Commit all projects
   for (const auto& [_, proj] : config_manager_.projects_) {
-    LOG_DEBUG("ServerImpl::CommitConfig: put proj %u", proj.id_);
+    LOG_DEBUG("ServerImpl::CommitConfig: put proj {}", proj.id_);
     proj_queue_.Emplace(proj);
   }
 
@@ -281,7 +281,7 @@ void ServerImpl::ConsumeData() {
     }
     CHECK_STOP
 
-    LOG_DEBUG("ServerImpl::ConsumeData: get data: %p", &sim_data);
+    LOG_DEBUG("ServerImpl::ConsumeData: get data: {}", fmt::ptr(&sim_data));
 
     if (sim_scene_cnt_ > 0) {
       for (auto& c : consumers_) {
@@ -307,7 +307,7 @@ void ServerImpl::GenerateScene() {
       // Stop, or queue shutdown.
       break;
     }
-    LOG_DEBUG("ServerImpl::GenerateScene: get proj: %u", proj_config.id_);
+    LOG_DEBUG("ServerImpl::GenerateScene: get proj: {}", proj_config.id_);
     CHECK_STOP
 
     // Setup consumers.
@@ -326,7 +326,7 @@ void ServerImpl::GenerateScene() {
       scene_queue_->Emplace(curr_scene);
       sim_scene_cnt_++;
 
-      LOG_DEBUG("ServerImpl::GenerateScene: put a scene(%u): ray(%zu/%zu, %zu)", curr_scene.id_, curr_scene.ray_num_,
+      LOG_DEBUG("ServerImpl::GenerateScene: put a scene({}): ray({}/{}, {})", curr_scene.id_, curr_scene.ray_num_,
                 ray_num, committed_num);
       CHECK_STOP
 
@@ -357,7 +357,7 @@ Error Server::CommitConfig(const std::string& config_str) {
     auto config_json = nlohmann::json::parse(config_str);
     return impl_->CommitConfig(config_json);
   } catch (const nlohmann::json::parse_error& e) {
-    LOG_ERROR("Server::CommitConfig: JSON parse error: %s", e.what());
+    LOG_ERROR("Server::CommitConfig: JSON parse error: {}", e.what());
     return Error::InvalidJson(e.what());
   } catch (...) {
     LOG_ERROR("Server::CommitConfig: Unknown error");
@@ -378,7 +378,7 @@ Error Server::CommitConfigFromFile(const std::string& filename) {
     f >> config_json;
     return impl_->CommitConfig(config_json);
   } catch (const nlohmann::json::parse_error& e) {
-    LOG_ERROR("Server::CommitConfigFromFile: JSON parse error: %s", e.what());
+    LOG_ERROR("Server::CommitConfigFromFile: JSON parse error: {}", e.what());
     return Error::InvalidJson(e.what());
   } catch (...) {
     LOG_ERROR("Server::CommitConfigFromFile: Unknown error");

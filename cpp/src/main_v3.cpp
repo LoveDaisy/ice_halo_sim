@@ -13,7 +13,8 @@ struct SimResultHandler {
   void operator()(const icehalo::v3::NoneResult& /* r */) { LOG_INFO("<NoneResult>"); }
 
   void operator()(const icehalo::v3::RenderResult& r) {
-    LOG_INFO("Renderer %02d: w = %d, h = %d, buffer = %p", r.renderer_id_, r.img_width_, r.img_height_, r.img_buffer_);
+    LOG_INFO("Renderer {:02d}: w = {}, h = {}, buffer = {:p}", r.renderer_id_, r.img_width_, r.img_height_,
+             static_cast<const void*>(r.img_buffer_));
     char filename[32];
     std::snprintf(filename, 32, "img_%02d.jpg", r.renderer_id_);
     // Note: OpenCV Mat constructor requires non-const pointer, but we only read the data
@@ -27,7 +28,7 @@ struct SimResultHandler {
   }
 
   void operator()(const icehalo::v3::StatsResult& r) {
-    LOG_INFO("sim rays: %.2fM, crystals: %.2fM",  //
+    LOG_INFO("sim rays: {:.2f}M, crystals: {:.2f}M",  //
              r.sim_ray_num_ * 1.0 / 1e6, r.crystal_num_ * 1.0 / 1e6);
   }
 };
@@ -48,16 +49,12 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  // Setup log levels
+  // Initialize logger with project pattern and set log level from args
+  icehalo::InitLogger();
   if (arg_parse_result.count("-d")) {
-    icehalo::LogFilterPtr stdout_filter =
-        icehalo::LogFilter::MakeLevelFilter({ icehalo::LogLevel::kDebug, icehalo::LogLevel::kVerbose });
-    icehalo::LogDestPtr stdout_dest = icehalo::LogStdOutDest::GetInstance();
-    icehalo::Logger::GetInstance()->AddDestination(stdout_filter, stdout_dest);
+    icehalo::SetLogLevel(spdlog::level::debug);
   } else if (arg_parse_result.count("-v")) {
-    icehalo::LogFilterPtr stdout_filter = icehalo::LogFilter::MakeLevelFilter({ icehalo::LogLevel::kVerbose });
-    icehalo::LogDestPtr stdout_dest = icehalo::LogStdOutDest::GetInstance();
-    icehalo::Logger::GetInstance()->AddDestination(stdout_filter, stdout_dest);
+    icehalo::SetLogLevel(spdlog::level::trace);
   }
 
   // Open config file
@@ -67,9 +64,9 @@ int main(int argc, char** argv) {
   icehalo::v3::Server s;
   auto err = s.CommitConfigFromFile(config_filename);
   if (err) {
-    LOG_ERROR("Failed to commit configuration: %s", err.message.c_str());
+    LOG_ERROR("Failed to commit configuration: {}", err.message);
     if (!err.field.empty()) {
-      LOG_ERROR("Error field: %s", err.field.c_str());
+      LOG_ERROR("Error field: {}", err.field);
     }
     return -1;
   }

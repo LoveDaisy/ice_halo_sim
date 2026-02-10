@@ -69,7 +69,7 @@ std::tuple<icehalo::RayCollectionInfoList, icehalo::SimpleRayData> RenderSplitHa
     }
 
     PrintRayPath(ray_path_map.at(hash).first, str_buf, kBufSize);
-    LOG_VERBOSE("img_idx: %03zu, hash: %016tx, energy: %03.3e, ray_path: %s", img_idx, hash,
+    LOG_VERBOSE("img_idx: {:03}, hash: {:016x}, energy: {:03.3e}, ray_path: {}", img_idx, hash,
                 collection_info.total_energy, str_buf);
 
     if (split_img_ch_num == 1) {
@@ -135,15 +135,12 @@ int main(int argc, char* argv[]) {
     return -1;
   }
   const char* config_filename = arg_parse_result.at("-f")[0].c_str();
+
+  icehalo::InitLogger();
   if (arg_parse_result.count("-d")) {
-    icehalo::LogFilterPtr stdout_filter =
-        icehalo::LogFilter::MakeLevelFilter({ icehalo::LogLevel::kDebug, icehalo::LogLevel::kVerbose });
-    icehalo::LogDestPtr stdout_dest = icehalo::LogStdOutDest::GetInstance();
-    icehalo::Logger::GetInstance()->AddDestination(stdout_filter, stdout_dest);
+    icehalo::SetLogLevel(spdlog::level::debug);
   } else if (arg_parse_result.count("-v")) {
-    icehalo::LogFilterPtr stdout_filter = icehalo::LogFilter::MakeLevelFilter({ icehalo::LogLevel::kVerbose });
-    icehalo::LogDestPtr stdout_dest = icehalo::LogStdOutDest::GetInstance();
-    icehalo::Logger::GetInstance()->AddDestination(stdout_filter, stdout_dest);
+    icehalo::SetLogLevel(spdlog::level::trace);
   }
 
   icehalo::ThreadingPoolPtr threading_pool = icehalo::ThreadingPool::CreatePool();
@@ -167,7 +164,7 @@ int main(int argc, char* argv[]) {
 
   auto t = std::chrono::system_clock::now();
   std::chrono::duration<float, std::milli> diff = t - start;
-  LOG_INFO("Initialization: %.2fms", diff.count());
+  LOG_INFO("Initialization: {:.2f}ms", diff.count());
 
   icehalo::File file(proj_ctx->GetMainImagePath().c_str());
   if (!file.Open(icehalo::FileOpenMode::kWrite)) {
@@ -186,14 +183,14 @@ int main(int argc, char* argv[]) {
   while (true) {
     const auto& wavelengths = proj_ctx->wavelengths_;
     for (size_t i = 0; i < wavelengths.size(); i++) {
-      LOG_INFO("starting at wavelength: %d", wavelengths[i].wavelength);
+      LOG_INFO("starting at wavelength: {}", wavelengths[i].wavelength);
       simulator.SetCurrentWavelengthIndex(i);
 
       auto t0 = std::chrono::system_clock::now();
       simulator.Run();
       auto t1 = std::chrono::system_clock::now();
       diff = t1 - t0;
-      LOG_INFO("Ray tracing: %.2fms", diff.count());
+      LOG_INFO("Ray tracing: {:.2f}ms", diff.count());
 
       auto simulation_data = simulator.GetSimulationRayData();
       if (split_render_ctx) {
@@ -219,7 +216,7 @@ int main(int argc, char* argv[]) {
       }
       auto t2 = std::chrono::system_clock::now();
       diff = t2 - t0;
-      LOG_INFO("Collecting rays: %.2fms", diff.count());
+      LOG_INFO("Collecting rays: {:.2f}ms", diff.count());
     }
 
     renderer.Render();
@@ -245,8 +242,8 @@ int main(int argc, char* argv[]) {
     t = std::chrono::system_clock::now();
     total_ray_num += proj_ctx->GetInitRayNum() * wavelengths.size();
     diff = t - start;
-    LOG_INFO("=== Total %6.1fM rays finished! ===", total_ray_num / 1.0e6);
-    LOG_INFO("=== Spent %7.2f sec!           ===", diff.count() / 1000);
+    LOG_INFO("=== Total {:6.1f}M rays finished! ===", total_ray_num / 1.0e6);
+    LOG_INFO("=== Spent {:7.2f} sec!           ===", diff.count() / 1000);
 
     curr_repeat++;
     if (repeat_num > 0 && curr_repeat >= repeat_num) {
@@ -256,7 +253,7 @@ int main(int argc, char* argv[]) {
 
   auto end = std::chrono::system_clock::now();
   diff = end - start;
-  LOG_INFO("Total: %.3fs\n", diff.count() / 1e3);
+  LOG_INFO("Total: {:.3f}s\n", diff.count() / 1e3);
 
   return 0;
 }

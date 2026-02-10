@@ -251,7 +251,7 @@ void RenderConsumer::Consume(const SimData& data) {
     }
 
     // Do rendering
-    LOG_DEBUG("render ray: %.4f,%.4f,%.4f,%.4f", r.d_[0], r.d_[1], r.d_[2], r.w_);
+    LOG_DEBUG("render ray: {:.4f},{:.4f},{:.4f},{:.4f}", r.d_[0], r.d_[1], r.d_[2], r.w_);
     std::memcpy(d_data.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
     w_data[filtered_ray_num] = r.w_;
     filtered_ray_num++;

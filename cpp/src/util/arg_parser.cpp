@@ -18,7 +18,7 @@ void ArgParser::AddArgument(const std::string& name, int value_num) {
 void ArgParser::AddArgument(const std::string& name, int value_num, const std::string& metavar,
                             const std::string& help_msg) {
   if (name.size() > 1 && name[0] != '-') {
-    LOG_WARNING("Add argument %s not starts with minus! Prepend a minus to it!", name.c_str());
+    LOG_WARNING("Add argument {} not starts with minus! Prepend a minus to it!", name);
     std::string tmp_name = "-" + name;
     option_value_num_.emplace(tmp_name, value_num);
     option_meta_.emplace(tmp_name, std::make_tuple(metavar, help_msg));
@@ -80,12 +80,12 @@ void ArgParser::ShowHelp(const char* cmd) const {
   }
 
   LOG_INFO("USAGE:");
-  LOG_INFO("%s", buf);
+  LOG_INFO("{}", buf);
   LOG_INFO("OPTIONS:");
 
   for (const auto& kv : option_value_num_) {
     auto [meta_var, help_info] = option_meta_.at(kv.first);
-    LOG_INFO("  %s: %s", kv.first.c_str(), help_info.c_str());
+    LOG_INFO("  {}: {}", kv.first, help_info);
   }
 }
 

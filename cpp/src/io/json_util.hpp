@@ -28,7 +28,7 @@ struct function_traits<std::function<R(Args...)>> {
   if (obj.contains(key)) {                                  \
     obj.at(key).get_to(dst);                                \
   } else {                                                  \
-    LOG_VERBOSE("missing key %s. use default value.", key); \
+    LOG_VERBOSE("missing key {}. use default value.", key); \
   }
 
 #define JSON_CHECK_AND_APPLY_SIMPLE_VALUE(obj, key, type, f) \
@@ -36,14 +36,14 @@ struct function_traits<std::function<R(Args...)>> {
     auto tmp = obj.at(key).get<type>();                      \
     f(tmp);                                                  \
   } else {                                                   \
-    LOG_VERBOSE("missing key %s. do nothing.", key);         \
+    LOG_VERBOSE("missing key {}. do nothing.", key);         \
   }
 
 #define JSON_CHECK_AND_UPDATE_ARRAY_VALUE(obj, key, dst, n) \
   if (!obj.contains(key)) {                                 \
-    LOG_VERBOSE("missing key %s", key);                     \
+    LOG_VERBOSE("missing key {}", key);                     \
   } else if (!obj.at(key).is_array()) {                     \
-    LOG_VERBOSE("%s must be an array.", key);               \
+    LOG_VERBOSE("{} must be an array.", key);               \
   } else {                                                  \
     int i = 0;                                              \
     for (const auto& j : obj.at(key)) {                     \

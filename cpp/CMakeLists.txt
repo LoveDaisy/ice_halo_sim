@@ -131,7 +131,6 @@ set(icehalo_server_src
 
 set(icehalo_util_src
   "${PROJ_SRC_DIR}/util/arg_parser.cpp"
-  "${PROJ_SRC_DIR}/util/log.cpp"
   "${PROJ_SRC_DIR}/util/obj_pool.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
 
@@ -158,7 +157,6 @@ if(NOT MSVC)
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:GNU>:--gc-sections>>)
 endif()
 
-target_compile_definitions(icehalo_lib PUBLIC VERBOSE_LOG)
 
 # ==================================================================================================
 # Add subdirectory
