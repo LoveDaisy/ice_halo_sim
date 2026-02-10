@@ -57,13 +57,8 @@ set(MODULE_ROOT "${CMAKE_SOURCE_DIR}/thirdparty")
 
 # ==================================================================================================
 # Find modules
-set(Boost_USE_STATIC_LIBS OFF)
-set(Boost_USE_MULTITHREADED ON)
-set(Boost_USE_STATIC_RUNTIME OFF)
-
 find_package(Threads REQUIRED)  # GoogleTest needs it
 find_package(OpenCV REQUIRED core imgproc imgcodecs)
-find_package(Boost 1.63.0 COMPONENTS filesystem system REQUIRED)
 
 # ==================================================================================================
 # Add some definitions
@@ -78,7 +73,7 @@ endif()
 # ==================================================================================================
 # Set submodules
 set(icehalo_include
-  "${PROJ_SRC_DIR}" ${Boost_INCLUDE_DIRS} "${MODULE_ROOT}/nlohmann_json")
+  "${PROJ_SRC_DIR}" "${MODULE_ROOT}/nlohmann_json")
 
 set(icehalo_config_src
   "${PROJ_SRC_DIR}/config/config_manager.cpp"

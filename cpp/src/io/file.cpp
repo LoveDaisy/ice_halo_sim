@@ -7,13 +7,13 @@
 namespace icehalo {
 
 bool FileExists(const char* filename) {
-  boost::filesystem::path p(filename);
+  std::filesystem::path p(filename);
   return exists(p);
 }
 
 
 std::vector<File> ListDataFiles(const char* dir) {
-  namespace f = boost::filesystem;
+  namespace f = std::filesystem;
 
   std::vector<File> files;
   f::path p(dir);
@@ -30,7 +30,7 @@ std::vector<File> ListDataFiles(const char* dir) {
 
 
 std::string PathJoin(const std::string& p1, const std::string& p2) {
-  boost::filesystem::path p(p1);
+  std::filesystem::path p(p1);
   p /= (p2);
   return p.string();
 }
@@ -70,8 +70,8 @@ File::~File() {
 
 
 bool File::Open(FileOpenMode mode) {
-  if (!boost::filesystem::exists(path_.parent_path())) {
-    boost::filesystem::create_directories(path_.parent_path());
+  if (!std::filesystem::exists(path_.parent_path())) {
+    std::filesystem::create_directories(path_.parent_path());
   }
 
   const char* m = nullptr;

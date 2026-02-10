@@ -148,7 +148,7 @@ void ProjectContext::ParseBasicSettings(const nlohmann::json& obj) {
     wavelengths_.emplace_back(WavelengthInfo{ l, w });
   }
 
-  data_path_ = boost::filesystem::current_path().string();
+  data_path_ = std::filesystem::current_path().string();
   JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "data_folder", data_path_)
 
   main_img_filename_ = "img.jpg";

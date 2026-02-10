@@ -41,7 +41,7 @@ add_executable(unit_test
 target_include_directories(unit_test
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_test
-  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} Boost::filesystem Boost::system icehalo_test_lib)
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} icehalo_test_lib)
 set_target_properties(unit_test PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
@@ -54,7 +54,7 @@ add_executable(unit_test_v3
 target_include_directories(unit_test_v3
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_test_v3
-  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} Boost::filesystem Boost::system icehalo_test_lib)
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} icehalo_test_lib)
 set_target_properties(unit_test_v3 PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 

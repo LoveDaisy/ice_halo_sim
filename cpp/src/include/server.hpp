@@ -17,13 +17,13 @@ namespace v3 {
  * @brief Error code enumeration
  */
 enum class ErrorCode {
-  kSuccess,        ///< Success (no error)
-  kInvalidJson,    ///< JSON format error
-  kInvalidConfig,  ///< Configuration content error
-  kMissingField,   ///< Missing required field
-  kInvalidValue,   ///< Invalid field value
-  kServerNotReady, ///< Server not ready
-  kServerError,    ///< Server internal error
+  kSuccess,         ///< Success (no error)
+  kInvalidJson,     ///< JSON format error
+  kInvalidConfig,   ///< Configuration content error
+  kMissingField,    ///< Missing required field
+  kInvalidValue,    ///< Invalid field value
+  kServerNotReady,  ///< Server not ready
+  kServerError,     ///< Server internal error
 };
 
 /**
@@ -31,9 +31,9 @@ enum class ErrorCode {
  * @details Contains error code, message, and optional field name
  */
 struct Error {
-  ErrorCode code;           ///< Error code
-  std::string message;      ///< Error message
-  std::string field;        ///< Field name where error occurred (optional)
+  ErrorCode code;       ///< Error code
+  std::string message;  ///< Error message
+  std::string field;    ///< Field name where error occurred (optional)
 
   /**
    * @brief Default constructor: success state
@@ -46,8 +46,7 @@ struct Error {
    * @param msg Error message
    * @param f Field name (optional)
    */
-  Error(ErrorCode c, const std::string& msg, const std::string& f = "")
-      : code(c), message(msg), field(f) {}
+  Error(ErrorCode c, const std::string& msg, const std::string& f = "") : code(c), message(msg), field(f) {}
 
   /**
    * @brief Check if operation was successful
@@ -71,13 +70,9 @@ struct Error {
   // Factory methods for common error types
   static Error Success() { return Error(); }
 
-  static Error InvalidJson(const std::string& msg) {
-    return Error(ErrorCode::kInvalidJson, msg);
-  }
+  static Error InvalidJson(const std::string& msg) { return Error(ErrorCode::kInvalidJson, msg); }
 
-  static Error InvalidConfig(const std::string& msg) {
-    return Error(ErrorCode::kInvalidConfig, msg);
-  }
+  static Error InvalidConfig(const std::string& msg) { return Error(ErrorCode::kInvalidConfig, msg); }
 
   static Error MissingField(const std::string& field) {
     return Error(ErrorCode::kMissingField, "Missing required field: " + field, field);
@@ -91,9 +86,7 @@ struct Error {
     return Error(ErrorCode::kServerNotReady, msg);
   }
 
-  static Error ServerError(const std::string& msg) {
-    return Error(ErrorCode::kServerError, msg);
-  }
+  static Error ServerError(const std::string& msg) { return Error(ErrorCode::kServerError, msg); }
 };
 
 // =============== Result ===============
@@ -105,8 +98,8 @@ struct NoneResult {};
  */
 struct RenderResult {
   int renderer_id_;  ///< Renderer ID
-  int img_width_;     ///< Image width in pixels
-  int img_height_;    ///< Image height in pixels
+  int img_width_;    ///< Image width in pixels
+  int img_height_;   ///< Image height in pixels
 
   /**
    * @brief Image data buffer (read-only)
@@ -149,9 +142,9 @@ using Result = std::variant<NoneResult, RenderResult, StatsResult>;
  * @brief Server status enumeration
  */
 enum class ServerStatus {
-  kIdle,    ///< Idle (completed or not started)
-  kRunning, ///< Running (processing)
-  kError    ///< Error state
+  kIdle,     ///< Idle (completed or not started)
+  kRunning,  ///< Running (processing)
+  kError     ///< Error state
 };
 
 // =============== Server ===============

@@ -1,11 +1,9 @@
 #ifndef SRC_IO_FILE_H_
 #define SRC_IO_FILE_H_
 
+#include <filesystem>
 #include <string>
 #include <vector>
-
-#define BOOST_FILESYSTEM_NO_DEPRECATED
-#include <boost/filesystem.hpp>
 
 
 namespace icehalo {
@@ -150,7 +148,7 @@ class File {
   FileState state_;
   std::unique_ptr<char[]> buffer_;
   size_t buffer_offset_;
-  boost::filesystem::path path_;
+  std::filesystem::path path_;
 
   static constexpr size_t kBufferSize = 2 * 1024 * 1024;
 };
