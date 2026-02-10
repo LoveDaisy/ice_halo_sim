@@ -3,7 +3,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "include/log.hpp"
+#include "util/log.hpp"
 
 namespace icehalo {
 

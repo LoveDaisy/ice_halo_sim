@@ -2,7 +2,7 @@
 
 #include <cstddef>
 
-#include "include/log.hpp"
+#include "util/log.hpp"
 
 namespace icehalo {
 namespace v3 {

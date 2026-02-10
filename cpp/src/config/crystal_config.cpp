@@ -5,8 +5,8 @@
 #include <variant>
 
 #include "core/math.hpp"
-#include "include/log.hpp"
 #include "io/json_util.hpp"
+#include "util/log.hpp"
 
 namespace icehalo {
 namespace v3 {

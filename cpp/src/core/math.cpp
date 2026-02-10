@@ -12,8 +12,8 @@
 #include <limits>
 #include <memory>
 
-#include "include/log.hpp"
 #include "io/json_util.hpp"
+#include "util/log.hpp"
 
 
 namespace icehalo {
