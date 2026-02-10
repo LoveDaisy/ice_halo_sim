@@ -55,6 +55,25 @@ if(nlohmann_json_ADDED)
   target_include_directories(nlohmann_json INTERFACE ${nlohmann_json_SOURCE_DIR}/include)
 endif()
 
+# spdlog: header-only mode (skip building the static library)
+CPMAddPackage(
+  NAME spdlog
+  GITHUB_REPOSITORY gabime/spdlog
+  VERSION 1.15.0
+  OPTIONS "SPDLOG_BUILD_SHARED OFF" "SPDLOG_ENABLE_PCH OFF" "SPDLOG_BUILD_EXAMPLE OFF"
+)
+if(spdlog_ADDED)
+  set_target_properties(spdlog PROPERTIES EXCLUDE_FROM_ALL YES)
+endif()
+
+# tl-expected: header-only expected<T,E> for C++17
+CPMAddPackage(
+  NAME tl-expected
+  GITHUB_REPOSITORY TartanLlama/expected
+  VERSION 1.1.0
+  OPTIONS "EXPECTED_BUILD_TESTS OFF"
+)
+
 # ==================================================================================================
 # Add some definitions
 if(${CMAKE_HOST_SYSTEM_NAME} STREQUAL "Linux")
@@ -124,7 +143,7 @@ set(icehalo_src
 # Add targets
 add_library(icehalo_lib OBJECT ${icehalo_src})
 target_include_directories(icehalo_lib PUBLIC ${icehalo_include})
-target_link_libraries(icehalo_lib PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
+target_link_libraries(icehalo_lib PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog_header_only tl::expected Threads::Threads)
 
 if(NOT MSVC)
   target_compile_options(icehalo_lib PRIVATE
