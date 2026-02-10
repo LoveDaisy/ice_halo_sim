@@ -39,15 +39,21 @@ set(PROJ_ROOT "${CMAKE_SOURCE_DIR}")
 find_package(Threads REQUIRED)  # GoogleTest needs it
 find_package(OpenCV REQUIRED core imgproc imgcodecs)
 
+# ==================================================================================================
+# CPM.cmake — lightweight dependency manager (wrapper around FetchContent)
+include(cmake/CPM.cmake)
+
 # nlohmann/json: download only headers (~255KB) instead of full source (~6.7MB)
-include(FetchContent)
-FetchContent_Declare(json
+CPMAddPackage(
+  NAME nlohmann_json
   URL https://github.com/nlohmann/json/releases/download/v3.10.5/include.zip
-  URL_HASH SHA256=b94997df68856753b72f0d7a3703b7d484d4745c567f3584ef97c96c25a5798e)
-FetchContent_Populate(json)
-add_library(nlohmann_json INTERFACE)
-add_library(nlohmann_json::nlohmann_json ALIAS nlohmann_json)
-target_include_directories(nlohmann_json INTERFACE ${json_SOURCE_DIR}/include)
+  URL_HASH SHA256=b94997df68856753b72f0d7a3703b7d484d4745c567f3584ef97c96c25a5798e
+)
+if(nlohmann_json_ADDED)
+  add_library(nlohmann_json INTERFACE)
+  add_library(nlohmann_json::nlohmann_json ALIAS nlohmann_json)
+  target_include_directories(nlohmann_json INTERFACE ${nlohmann_json_SOURCE_DIR}/include)
+endif()
 
 # ==================================================================================================
 # Add some definitions
