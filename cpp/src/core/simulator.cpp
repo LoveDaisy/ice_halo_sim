@@ -374,11 +374,13 @@ Simulator::Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> dat
     : config_queue_(config_queue), data_queue_(data_queue), stop_(false), idle_(true), seed_(seed),
       rng_(seed != 0 ? seed :
                        static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count() ^
-                                             (std::hash<std::thread::id>{}(std::this_thread::get_id())))) {}
+                                             (std::hash<std::thread::id>{}(std::this_thread::get_id())))),
+      logger_(GetLogger("Simulator")) {}
 
 Simulator::Simulator(Simulator&& other)
     : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
-      stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), rng_(std::move(other.rng_)) {}
+      stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), rng_(std::move(other.rng_)),
+      logger_(std::move(other.logger_)) {}
 
 Simulator& Simulator::operator=(Simulator&& other) {
   if (this == &other) {
@@ -391,6 +393,7 @@ Simulator& Simulator::operator=(Simulator&& other) {
   idle_ = other.idle_.load();
   seed_ = other.seed_;
   rng_ = std::move(other.rng_);
+  logger_ = std::move(other.logger_);
   return *this;
 }
 
@@ -421,8 +424,8 @@ void Simulator::Run() {
 
     idle_ = false;
     for (const auto& curr_wl_param : config.light_source_.wl_param_) {
-      LOG_DEBUG("Simulator::Run: get config({}): ray({}), wl({:.1f},{:.2f})",  //
-                config.id_, config.ray_num_, curr_wl_param.wl_, curr_wl_param.weight_);
+      SPDLOG_LOGGER_DEBUG(logger_, "Run: get config({}): ray({}), wl({:.1f},{:.2f})",  //
+                          config.id_, config.ray_num_, curr_wl_param.wl_, curr_wl_param.weight_);
 
       float wl = curr_wl_param.wl_;  // Take first wl **ONLY**. Single wl in a single run.
 
