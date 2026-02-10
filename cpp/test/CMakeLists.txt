@@ -15,7 +15,7 @@ if(NOT GTest_FOUND)
   FetchContent_Declare(
     googletest
     GIT_REPOSITORY ${GTEST_REPO}
-    GIT_TAG release-1.11.0
+    GIT_TAG v1.15.2
     PREFIX ${CMAKE_CURRENT_BINARY_DIR}/gtest
   )
 
@@ -66,18 +66,3 @@ add_test(NAME "IceHaloUnitTestV3" COMMAND unit_test_v3
   "${PROJ_ROOT}/v3_config_example.json"
   "${CMAKE_CURRENT_BINARY_DIR}")
 
-# ==================================================================================================
-# Google benchmark
-find_package(benchmark)
-
-if(NOT benchmark_FOUND)
-  message(STATUS "[test] Can NOT find google-benchmark. Abort benchmarking.")
-  return()
-else()
-  message(STATUS "[test] lib google-benchmark found.")
-endif()
-
-# add_executable(bench
-# "${PROJ_TEST_DIR}/bench_math.cpp"
-# "${PROJ_TEST_DIR}/bench_optics.cpp")
-# target_link_libraries(bench PRIVATE benchmark::benchmark_main Boost::filesystem Boost::system icehalo_lib)
