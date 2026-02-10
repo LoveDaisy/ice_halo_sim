@@ -1,5 +1,6 @@
 #include "core/simulator.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <memory>
@@ -369,20 +370,15 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
 }
 
 
-Simulator::Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue)
-    : config_queue_(config_queue), data_queue_(data_queue), stop_(false), idle_(true),
-#ifdef RANDOM_SEED
-      rng_(std::chrono::system_clock::now().time_since_epoch().count() ^
-           (std::hash<std::thread::id>{}(std::this_thread::get_id())))
-#else
-      rng_(0)
-#endif
-{
-}
+Simulator::Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed)
+    : config_queue_(config_queue), data_queue_(data_queue), stop_(false), idle_(true), seed_(seed),
+      rng_(seed != 0 ? seed :
+                       static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count() ^
+                                             (std::hash<std::thread::id>{}(std::this_thread::get_id())))) {}
 
 Simulator::Simulator(Simulator&& other)
     : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
-      stop_(other.stop_.load()), idle_(other.idle_.load()), rng_(std::move(other.rng_)) {}
+      stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), rng_(std::move(other.rng_)) {}
 
 Simulator& Simulator::operator=(Simulator&& other) {
   if (this == &other) {
@@ -393,6 +389,7 @@ Simulator& Simulator::operator=(Simulator&& other) {
   data_queue_ = std::move(other.data_queue_);
   stop_ = other.stop_.load();
   idle_ = other.idle_.load();
+  seed_ = other.seed_;
   rng_ = std::move(other.rng_);
   return *this;
 }
@@ -404,6 +401,14 @@ Simulator& Simulator::operator=(Simulator&& other) {
 
 void Simulator::Run() {
   stop_ = false;
+
+  // When a fixed seed is provided, also seed the thread-local global RNG singleton
+  // used by sampling functions (RandomSample, SampleTrianglePoint, SampleSphCapPoint, etc.)
+  // to ensure fully deterministic behavior.
+  if (seed_ != 0) {
+    RandomNumberGenerator::GetInstance()->SetSeed(seed_);
+  }
+
   while (true) {
     // Config in the config_queue is processed by frontend of simulator (NOT GUI) so that
     // it has small ray_num and contains only one wavelength parameter of light source.
@@ -414,15 +419,11 @@ void Simulator::Run() {
     }
     CHECK_STOP
 
-    size_t curr_rng_seed = std::chrono::system_clock::now().time_since_epoch().count() ^
-                           (std::hash<std::thread::id>{}(std::this_thread::get_id()));
-
     idle_ = false;
     for (const auto& curr_wl_param : config.light_source_.wl_param_) {
       LOG_DEBUG("Simulator::Run: get config(%u): ray(%zu), wl(%.1f,%.2f)",  //
                 config.id_, config.ray_num_, curr_wl_param.wl_, curr_wl_param.weight_);
 
-      rng_.SetSeed(curr_rng_seed);
       float wl = curr_wl_param.wl_;  // Take first wl **ONLY**. Single wl in a single run.
 
       // For memory saving, it's better to keep ray_num small.

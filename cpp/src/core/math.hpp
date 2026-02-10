@@ -180,8 +180,6 @@ class RandomNumberGenerator {
   std::mt19937 generator_;
   std::normal_distribution<float> gauss_dist_;
   std::uniform_real_distribution<float> uniform_dist_;
-
-  static constexpr uint32_t kDefaultRandomSeed = 1;
 };
 
 
