@@ -80,10 +80,7 @@ class SimulationData : public ISerializable {
 
   void AddExitRaySegment(RaySegment* r);
   const std::vector<RaySegment*>& GetLastExitRaySegments() const;
-  // TODO(FOR_TEST): 暴露内部数据供测试使用，应改为 friend class 或测试专用接口。
-#ifdef FOR_TEST
   const std::vector<std::vector<RaySegment*>>& GetExitRaySegments() const;
-#endif
 
   /**
    * @brief Serialize self to a file.
@@ -151,11 +148,6 @@ class Simulator {
   void Run();
   const SimulationData& GetSimulationRayData();
 
-  // TODO(FOR_TEST): 调试方法，应改为 friend class 或独立的调试工具。
-#ifdef FOR_TEST
-  void PrintRayInfo();  // For debug
-#endif
-
  private:
   struct EntryRayData {
     EntryRayData();
@@ -184,11 +176,6 @@ class Simulator {
 
     void Clear();
     void Allocate(size_t ray_number);
-    // TODO(FOR_TEST): 调试方法，应改为 friend class 或独立的调试工具。
-#ifdef FOR_TEST
-    void Print();
-#endif
-
     float* pt[2];
     float* dir[2];
     float* w[2];

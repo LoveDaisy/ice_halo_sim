@@ -43,8 +43,6 @@ size_t ProjectContext::GetInitRayNum() const {
 }
 
 
-// TODO(FOR_TEST): 此处 FOR_TEST 分支与 else 分支代码完全相同，条件编译无实际效果，
-// 历史上可能用于绕过某些检查。应在后续重构中移除此条件编译。
 void ProjectContext::SetInitRayNum(size_t ray_num) {
   init_ray_num_ = ray_num;
 }
