@@ -27,7 +27,7 @@ class Simulator {
     kRunning,
   };
 
-  Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue);
+  Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed = 0);
   Simulator(const Simulator& other) = delete;
   Simulator(Simulator&& other);
   ~Simulator() = default;
@@ -47,6 +47,7 @@ class Simulator {
   std::atomic_bool stop_;
   std::atomic_bool idle_;
 
+  uint32_t seed_;
   RandomNumberGenerator rng_;
 };
 

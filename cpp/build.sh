@@ -11,7 +11,6 @@ build() {
   pushd "${BUILD_DIR}" > /dev/null
   cmake -S "${PROJ_DIR}" -B "${BUILD_DIR}" \
         -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TEST=$BUILD_TEST \
-        -DRANDOM_SEED=$RANDOM_SEED \
         -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}"
   cmake --build "${BUILD_DIR}" -j $MAKE_J_N
   ret=$?
@@ -31,14 +30,12 @@ build() {
 
 help() {
   echo "Usage:"
-  echo "  ./build.sh [-tjkrh] <debug|release|minsizerel>"
+  echo "  ./build.sh [-tjkh] <debug|release|minsizerel>"
   echo "    Executables will be installed at build/cmake_install"
   echo "OPTIONS:"
   echo "  -t:          Build test cases and run test on them."
   echo "  -j:          Build in parallel, i.e. use make -j"
   echo "  -k:          Clean temporary building files."
-  echo "  -r:          Use random seed for random number generator. Without this option,"
-  echo "               the program will use a constant value. Thus generate a repeatable result."
   echo "  -h:          Show this message."
 }
 
@@ -53,7 +50,6 @@ BUILD_TYPE=Debug
 BUILD_TEST=OFF
 INSTALL_FLAG=OFF
 MAKE_J_N=1
-RANDOM_SEED=OFF
 
 if [ $# -eq 0 ]; then
   help
@@ -64,7 +60,7 @@ fi
 # A POSIX variable
 OPTIND=1         # Reset in case getopts has been used previously in the shell.
 
-while getopts "htrjk" opt; do
+while getopts "htjk" opt; do
   case "$opt" in
   h)
     help
@@ -75,9 +71,6 @@ while getopts "htrjk" opt; do
     ;;
   j)
     MAKE_J_N=$(nproc 2>/dev/null) || MAKE_J_N=$(sysctl -n hw.ncpu 2>/dev/null) || MAKE_J_N=8
-    ;;
-  r)
-    RANDOM_SEED=ON
     ;;
   k)
     clean_all
