@@ -106,9 +106,6 @@ set(icehalo_core_src
   "${PROJ_SRC_DIR}/core/raypath.cpp"
   "${PROJ_SRC_DIR}/core/simulator.cpp")
 
-set(icehalo_io_src
-  "${PROJ_SRC_DIR}/io/file.cpp")
-
 set(icehalo_server_src
   "${PROJ_SRC_DIR}/server/cserver.cpp"
   "${PROJ_SRC_DIR}/server/render.cpp"
@@ -122,7 +119,7 @@ set(icehalo_util_src
 
 set(icehalo_src
   ${icehalo_config_src} ${icehalo_core_src}
-  ${icehalo_io_src} ${icehalo_server_src} ${icehalo_util_src})
+  ${icehalo_server_src} ${icehalo_util_src})
 
 # ==================================================================================================
 # Add targets
