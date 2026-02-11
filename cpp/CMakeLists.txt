@@ -98,15 +98,6 @@ set(icehalo_config_src
   "${PROJ_SRC_DIR}/config/render_config.cpp"
   "${PROJ_SRC_DIR}/config/sim_data.cpp")
 
-set(icehalo_context_src
-  "${PROJ_SRC_DIR}/context/camera_context.cpp"
-  "${PROJ_SRC_DIR}/context/context.cpp"
-  "${PROJ_SRC_DIR}/context/crystal_context.cpp"
-  "${PROJ_SRC_DIR}/context/filter_context.cpp"
-  "${PROJ_SRC_DIR}/context/multi_scatter_context.cpp"
-  "${PROJ_SRC_DIR}/context/render_context.cpp"
-  "${PROJ_SRC_DIR}/context/sun_context.cpp")
-
 set(icehalo_core_src
   "${PROJ_SRC_DIR}/core/crystal.cpp"
   "${PROJ_SRC_DIR}/core/filter.cpp"
@@ -119,10 +110,6 @@ set(icehalo_core_src
 set(icehalo_io_src
   "${PROJ_SRC_DIR}/io/file.cpp")
 
-set(icehalo_process_src
-  "${PROJ_SRC_DIR}/process/render.cpp"
-  "${PROJ_SRC_DIR}/process/simulation.cpp")
-
 set(icehalo_server_src
   "${PROJ_SRC_DIR}/server/render.cpp"
   "${PROJ_SRC_DIR}/server/server.cpp"
@@ -131,12 +118,11 @@ set(icehalo_server_src
 
 set(icehalo_util_src
   "${PROJ_SRC_DIR}/util/arg_parser.cpp"
-  "${PROJ_SRC_DIR}/util/obj_pool.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
 
 set(icehalo_src
-  ${icehalo_config_src} ${icehalo_context_src} ${icehalo_core_src}
-  ${icehalo_io_src} ${icehalo_process_src} ${icehalo_server_src} ${icehalo_util_src})
+  ${icehalo_config_src} ${icehalo_core_src}
+  ${icehalo_io_src} ${icehalo_server_src} ${icehalo_util_src})
 
 # ==================================================================================================
 # Add targets

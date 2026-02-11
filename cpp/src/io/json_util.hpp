@@ -5,24 +5,6 @@
 
 #include "util/log.hpp"
 
-namespace icehalo {
-
-template <typename T>
-struct function_traits;
-
-template <typename R, typename... Args>
-struct function_traits<std::function<R(Args...)>> {
-  static const size_t nargs = sizeof...(Args);
-
-  using result_type = R;
-
-  template <size_t i>
-  struct arg {
-    using type = typename std::tuple_element<i, std::tuple<Args...>>::type;
-  };
-};
-
-}  // namespace icehalo
 
 #define JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, key, dst)   \
   if (obj.contains(key)) {                                  \

@@ -2,7 +2,6 @@
 #define SRC_CORE_MYMATH_H_
 
 #include <cstddef>
-#include <initializer_list>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <random>
@@ -121,34 +120,6 @@ class TriangleIdx {
 };
 
 
-class PolygonIdx {
- public:
-  PolygonIdx();
-  PolygonIdx(std::initializer_list<ShortIdType> idx);
-  explicit PolygonIdx(std::vector<ShortIdType> idx);
-
-  const std::vector<ShortIdType>& idx() const;
-
- private:
-  std::vector<ShortIdType> idx_;
-};
-
-
-/* A set of half spaces.
- * Half space is defined as:
- *    a * x + b * y + c * z + d <= 0
- */
-struct HalfSpaceSet {
-  HalfSpaceSet(int n, float* a, float* b, float* c, float* d);
-
-  int n;
-  float* a;
-  float* b;
-  float* c;
-  float* d;
-};
-
-
 enum class DistributionType {
   kNoRandom,
   kUniform,
@@ -248,17 +219,7 @@ void Normalized3(const float* vec, float* vec_out);
 void Vec3FromTo(const float* vec1, const float* vec2, float* vec);
 void TriangleNormal(const float* p1, const float* p2, const float* p3, float* normal);
 
-void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num = 1);
-void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t input_step,
-             size_t output_step, size_t data_num = 1);
 void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num = 1);
-
-std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss);
-void SortAndRemoveDuplicate(std::vector<Vec3f>* pts);
-std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& n0, float d0);
-void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Vec3f>& pts, std::vector<TriangleIdx>& faces);
-void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n, std::vector<int>& pts_idx,
-                             std::vector<TriangleIdx>& faces);
 
 
 struct AxisDistribution {
