@@ -2,22 +2,22 @@
 
 [中文版说明](README_zh.md)
 
-It is a simulation program for ice halo. It is fast and efficient.
+A simulation program for ice halo phenomena. It traces light rays interacting with ice crystals to reproduce various halo patterns. Fast and efficient, supporting natural color rendering, multiple scattering, and custom crystal models (.obj format).
 
 ## Quick start
 
 After cloning, you can run the build script to build and install it.
 
 ~~~bash
-cd ice_halo_sim/cpp
-./build.sh -rj release
+cd cpp
+./build.sh -j release
 ~~~
 
-If everything goes well, the executable will be installed into `cpp/build/cmake_install`. And
+If everything goes well, the executable will be installed into `build/cmake_install`. And
 you can run it like:
 
 ~~~bash
-./build/cmake_install/IceHaloV3 -f v3_config_example.json
+./build/cmake_install/IceHalo -f config_example.json
 ~~~
 
 It will output some information, as well as several rendered picture files.
@@ -25,46 +25,55 @@ It will output some information, as well as several rendered picture files.
 If you are interested in more details, just go ahead to following sections.
 
 
-## Getting start
+## Getting started
+
+### Prerequisites
+
+- **CMake** >= 3.14
+- **Ninja** (recommended, used as default build generator; install via `brew install ninja` on macOS or `apt install ninja-build` on Ubuntu)
+- **C++17** compatible compiler (GCC, Clang, or MSVC)
+
+All other dependencies are automatically downloaded and managed via [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake):
+- [nlohmann/json](https://github.com/nlohmann/json) v3.10.5 — JSON parsing (header-only)
+- [spdlog](https://github.com/gabime/spdlog) v1.15.0 — Logging (header-only)
+- [tl-expected](https://github.com/TartanLlama/expected) v1.1.0 — `expected<T,E>` for C++17 (header-only)
+- [GoogleTest](https://github.com/google/googletest) v1.15.2 — Unit testing (downloaded when `-t` is enabled)
+
+> **Note on Ninja**: If Ninja is not installed, you can remove `-G Ninja` from `build.sh` to fall back to the system default generator (usually Unix Makefiles).
 
 ### Build project
 
-This project is built with [CMake](https://cmake.org/). And it denpends on [OpenCV](https://opencv.org/) and [boost](https://www.boost.org/). Make sure they are installed before you start to build. (In fact they are not critical for core functions. I'm planning remove the dependencies).
-
-I put a build script to make things simpler.
+A build script is provided to simplify the process.
 With `-h` you will see help message:
 
 ~~~bash
 ./build.sh -h
 Usage:
-  ./build.sh [-tjkrh1] <debug|release|minsizerel>
+  ./build.sh [-tjksh] <debug|release|minsizerel>
     Executables will be installed at build/cmake_install
 OPTIONS:
   -t:          Build test cases and run test on them.
-  -j:          Build in parallel, i.e. use make -j option.
+  -j:          Build in parallel, i.e. use make -j
   -k:          Clean temporary building files.
-  -b:          Run a benchmarking. It tells how fast the program runs on your computer.
-  -v:          Enable verbose log.
-  -r:          Use random seed for random number generator. Without this option,
-               the program will use a constant value. Thus generate a repeatable result
-               (usually together with -1).
-  -1:          Use single thread.
+  -s:          Build shared library (default: static).
   -h:          Show this message.
 ~~~
 
 Note that debug version executables will not be installed, so they will be found in `build/cmake_build`.
 
-I use the [GoogleTest](https://github.com/google/googletest) framework for my unit tests.
-If `-t` option is set, the test cases will be built and test on.
-It is usefull in a CI/CD pipeline.
+[GoogleTest](https://github.com/google/googletest) is used for unit tests.
+If `-t` option is set, the test cases will be built and run.
 
 
 ## Configuration file
 
-Configuration file contains all configurations. It written in JSON format.
-I use [nlohmann's json](https://github.com/nlohmann/json) to parse JSON file.
+Configuration file contains all settings for a simulation. It is written in JSON format,
+parsed with [nlohmann/json](https://github.com/nlohmann/json).
 
-I put a example configuration file `v3_config_example.json`.
+An example configuration file is provided: `config_example.json`.
+
+For the complete configuration reference, see [Configuration Guide](doc/configuration.md).
+Below is a brief overview of each section.
 
 ### Light source
 
@@ -80,12 +89,12 @@ Here is an example for one element:
 "wl_weight": [ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 ]
 ~~~
 
-A `light_source` section describes properties of light source. It may contain multiple elements corrensponding to multiple light sources. They are referenced by `id`.
+A `light_source` section describes properties of light source. It may contain multiple elements corresponding to multiple light sources. They are referenced by `id`.
 ID should be a unique number greater than 0. It is not necessary to keep IDs increasing one by one.
 
 Fields `azimuth`, `altitude` describe position of the sun. They are in degrees, and so is `diameter`.
 
-`wavelength` and `wl_weight` descibe spectrum of the light source.
+`wavelength` and `wl_weight` describe spectrum of the light source.
 They are arrays containing all wavelengths you want to use in a simulation. Wavelength determines refractive index, whose data is from
 [Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice).
 
@@ -123,35 +132,32 @@ Here is an example for one element:
 A `crystal` section stores all crystals used in simulation. It may contain multiple elements (different crystals). They are referenced by `id`.
 
 `zenith`, `roll` and `azimuth` (optional):
-These fields defines the pose of crystals. `zenith` defines the c-axis orientation, and `roll`
+These fields define the pose of crystals. `zenith` defines the c-axis orientation, and `roll`
 defines the rotation around c-axis.
-They are of *distribution type*, which can be a scalar, indicating a deterministic distribution, or can be a tuple of (`type`, `mean`, `std`) discribing a uniform or Gaussian distribution. All angles are in degrees.
+They are of *distribution type*, which can be a scalar, indicating a deterministic distribution, or can be a tuple of (`type`, `mean`, `std`) describing a uniform or Gaussian distribution. All angles are in degrees.
 
 `type` and `shape`: they describe the shape of a crystal.
-Currently there are 2 kind of crystals, `HexPrism`, `HexPyramid`.
+Currently there are 2 kinds of crystals, `prism` and `pyramid`.
 Each type has its own shape parameters.
 
-  * `HexPrism`:
-  parameter `height`, defines `h / a` where `h` is the prism height, `a` is the diameter along
-  a-axis (also x-axis in my program). It is of *distribution type*.
-  And `face_distance` describes an irregular hexangonal face (will describe later).  
+  * `prism` (hexagonal prism):
+  Parameter `height` defines `h / a` where `h` is the prism height, `a` is the diameter along
+  a-axis (also x-axis in the program). It is of *distribution type*. Default: `1.0`.
+  `face_distance` describes an irregular hexagonal face (see below). Default: `[1, 1, 1, 1, 1, 1]`.
   <img src="doc/figs/hex_prism_01.png" width="400">.
 
-  * `HexPyramid`:
-  `{upper|lower|prism}_h` describe heights of each segment, see picture below. `{upper|lower}_h` represent `h1 / H1` and `h3 / H3` respectly, where
-  `H1` means the max possible height for upper pyramid segment, and `H3` the same but for lower pyramid segment. `prism_h` has the same meaning as for `HexPrism`.  
-      <img src="doc/figs/hex_pyramid_01.png" width="400">.  
-  `{upper|lower}_indices` are 
+  * `pyramid` (hexagonal pyramid):
+  `{upper|lower|prism}_h` describe heights of each segment, see picture below. `{upper|lower}_h` represent `h1 / H1` and `h3 / H3` respectively, where
+  `H1` means the max possible height for upper pyramid segment, and `H3` the same but for lower pyramid segment. `prism_h` has the same meaning as for `prism`.
+      <img src="doc/figs/hex_pyramid_01.png" width="400">.
+  `{upper|lower}_indices` are
   [Miller index](https://en.wikipedia.org/wiki/Miller_index) describing the
-  pyramidal face orientation.
-  For example, `[a, b]`, means a face with Miller index of `(a, 0, -a, b)`. For a
-  typical ice crystal face (face number 13), its Miller index is `(1, 0, -1, 1)`.  
-  It may also have a `face_distance` parameter.
+  pyramidal face orientation. Default: `[1, 0, 1]`.
 
   * `face_distance`:
   The distance here means the ratio of actual face distance
-  to a regular haxegon distance. A regular haxegon has distance of `[1, 1, 1, 1, 1, 1]`.
-  The following figure shows an irregular hexegon with distance of `[1.1, 0.9, 1.5, 0.9, 1.7, 1.2]`  
+  to a regular hexagon distance. A regular hexagon has distance of `[1, 1, 1, 1, 1, 1]`.
+  The following figure shows an irregular hexagon with distance of `[1.1, 0.9, 1.5, 0.9, 1.7, 1.2]`
   <img src="doc/figs/irr_hex_01.png" width="400">.
 
 ### Filter
@@ -176,7 +182,7 @@ Here are two common examples:
 ]
 ~~~
 
-`type`: can be one of these types: `raypath`, `entry_exit`, `direction`, `crystal`.
+`type`: can be one of these types: `raypath`, `entry_exit`, `direction`, `crystal`, `complex`, `none`.
 
 ### Scene
 
@@ -237,23 +243,21 @@ Here is an example:
 
 `view`: describes camera pose.
 
-`lens`: lens type, can be one of these values: `fisheye`, `linear`, `dual_fisheye_equidistant`, `dual_fisheye_equiarea`, `rectangular`.
+`lens`: lens type, can be one of these values: `linear`, `fisheye_equal_area`, `fisheye_equidistant`, `fisheye_stereographic`, `dual_fisheye_equal_area`, `dual_fisheye_equidistant`, `dual_fisheye_stereographic`, `rectangular`.
+
+You can use `fov` (field of view in degrees) or `f` (focal length in mm) to specify the lens. If `f` is used, the program automatically calculates the corresponding `fov`.
 
 ### Project
 
-Nothing complicated. It just keep references to scene and render.
+Nothing complicated. It just keeps references to scene and render.
 
 
 ## Documentation
 
 For detailed documentation, please refer to:
 - [Documentation Index](doc/README.md) - Navigation and index of all documents
-- [Configuration Guide](doc/configuration.md) - Complete V3 configuration reference
-- [Architecture Document](doc/architecture.md) - V3 system architecture
+- [Configuration Guide](doc/configuration.md) - Complete configuration reference
+- [Architecture Document](doc/architecture.md) - System architecture
 - [Developer Guide](doc/developer-guide.md) - Developer guide
 - [C API Documentation](doc/c_api.md) - C interface usage
 - [API Documentation](doc/api/html/) - Auto-generated API docs (generate locally with `doxygen .doxygen-config`)
-
-## TODO list
-
-* Write a (web) GUI for these code.
