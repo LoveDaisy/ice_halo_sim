@@ -1,4 +1,4 @@
-#include "include/server.hpp"
+#include "server/server.hpp"
 
 #include <atomic>
 #include <condition_variable>
@@ -16,9 +16,9 @@
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
 #include "core/simulator.hpp"
-#include "include/server.hpp"
 #include "server/consumer.hpp"
 #include "server/render.hpp"
+#include "server/server.hpp"
 #include "server/stats.hpp"
 #include "util/log.hpp"
 #include "util/queue.hpp"

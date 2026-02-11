@@ -2,7 +2,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "include/cserver.h"
+#include "cserver.h"
 
 int main(int argc, char** argv) {
   printf("argc: %d\n", argc);

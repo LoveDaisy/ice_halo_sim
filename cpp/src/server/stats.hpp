@@ -3,8 +3,8 @@
 
 #include <cstddef>
 
-#include "include/server.hpp"
 #include "server/consumer.hpp"
+#include "server/server.hpp"
 
 namespace icehalo {
 namespace v3 {

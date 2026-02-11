@@ -37,7 +37,6 @@ set(PROJ_ROOT "${CMAKE_SOURCE_DIR}")
 # ==================================================================================================
 # Find modules
 find_package(Threads REQUIRED)  # GoogleTest needs it
-find_package(OpenCV REQUIRED core imgproc imgcodecs)
 
 # ==================================================================================================
 # CPM.cmake — lightweight dependency manager (wrapper around FetchContent)
@@ -111,6 +110,7 @@ set(icehalo_io_src
   "${PROJ_SRC_DIR}/io/file.cpp")
 
 set(icehalo_server_src
+  "${PROJ_SRC_DIR}/server/cserver.cpp"
   "${PROJ_SRC_DIR}/server/render.cpp"
   "${PROJ_SRC_DIR}/server/server.cpp"
   "${PROJ_SRC_DIR}/server/show_rays.cpp"
@@ -126,8 +126,13 @@ set(icehalo_src
 
 # ==================================================================================================
 # Add targets
-add_library(icehalo_lib OBJECT ${icehalo_src})
-target_include_directories(icehalo_lib PUBLIC ${icehalo_include})
+add_library(icehalo_lib ${icehalo_src})
+target_include_directories(icehalo_lib
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJ_SRC_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  PRIVATE
+    ${icehalo_include})
 target_link_libraries(icehalo_lib PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog_header_only tl::expected Threads::Threads)
 
 if(NOT MSVC)

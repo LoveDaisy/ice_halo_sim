@@ -17,7 +17,7 @@ add_executable(unit_test_v3
   "${PROJ_TEST_DIR}/test_v3_proj.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
 target_include_directories(unit_test_v3
-  PRIVATE ${PROJ_TEST_DIR})
+  PRIVATE ${PROJ_TEST_DIR} ${PROJ_SRC_DIR})
 target_link_libraries(unit_test_v3
   PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} icehalo_lib)
 set_target_properties(unit_test_v3 PROPERTIES
