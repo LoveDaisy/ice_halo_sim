@@ -6,7 +6,7 @@
 #include "include/icehalo.h"
 #include "server/server.hpp"
 
-namespace ns = icehalo::v3;
+namespace ns = icehalo;
 
 // =============== C API ===============
 struct HS_HaloSimServer_ {

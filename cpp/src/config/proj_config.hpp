@@ -12,7 +12,6 @@
 #include "config/render_config.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 struct ScatteringSetting {
   FilterConfig filter_;
@@ -50,7 +49,6 @@ using ProjConfigPtrS = std::shared_ptr<ProjConfig>;
 
 void to_json(nlohmann::json& j, const ProjConfig& p);
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CONFIG_PROJ_CONFIG_H_

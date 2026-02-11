@@ -9,7 +9,6 @@
 #include "io/json_util.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 // ========== ViewParam ==========
 void to_json(nlohmann::json& j, const ViewParam& v) {
@@ -98,5 +97,4 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   }
 }
 
-}  // namespace v3
 }  // namespace icehalo

@@ -4,14 +4,12 @@
 #include "server/consumer.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 class ShowRayInfoConsumer : public IConsume {
  public:
   void Consume(const SimData& data) override;
 };
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CONSUMER_SHOW_RAYS_H_

@@ -13,7 +13,6 @@
 #include "util/log.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 class NoneFilter : public Filter {
  protected:
@@ -211,5 +210,4 @@ bool Filter::Check(const RaySeg& ray) const {
   }
 }
 
-}  // namespace v3
 }  // namespace icehalo

@@ -196,8 +196,6 @@ struct AxisDistribution {
 };
 
 
-namespace v3 {
-
 /**
  * @brief Find the intersection point of two 2D lines. Lines have forms of a*x + b*y + c = 0
  *
@@ -291,8 +289,6 @@ std::vector<std::set<int>> CollectSurfaceVtx(int vtx_cnt, const float* vtx_ptr, 
  */
 std::tuple<std::unique_ptr<int[]>, int> Triangulate(int vtx_cnt, const float* vtx_ptr,
                                                     const std::vector<std::set<int>>& surface_vtx_idx);
-
-}  // namespace v3
 
 
 // convertion to & from json object

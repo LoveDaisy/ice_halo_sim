@@ -11,7 +11,6 @@
 #include "config/render_config.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 struct ConfigManager {
   std::map<IdType, LightSourceConfig> lights_;
@@ -26,7 +25,6 @@ struct ConfigManager {
 void to_json(nlohmann::json& j, const ConfigManager& m);
 void from_json(const nlohmann::json& j, ConfigManager& m);
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CONFIG_CONFIG_MANAGER_H_

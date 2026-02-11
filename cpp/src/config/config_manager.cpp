@@ -13,7 +13,6 @@
 #include "util/log.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 void to_json(nlohmann::json& j, const ConfigManager& m) {
   // Light sources
@@ -250,5 +249,4 @@ void from_json(const nlohmann::json& j, ConfigManager& m) {
   }
 }
 
-}  // namespace v3
 }  // namespace icehalo

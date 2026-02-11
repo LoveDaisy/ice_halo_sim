@@ -24,7 +24,6 @@
 #include "util/queue.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 // =============== ServerImpl ===============
 class ServerImpl {
@@ -436,5 +435,4 @@ bool Server::IsIdle() const {
   return GetStatus() == ServerStatus::kIdle;
 }
 
-}  // namespace v3
 }  // namespace icehalo

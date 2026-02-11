@@ -31,7 +31,6 @@ class IceRefractiveIndex {
   static constexpr float kCoefE[] = { 0.699934f, 0.640071f, 0.960906f, 0.964654f };
 };
 
-namespace v3 {
 
 void HitSurface(const Crystal& crystal, float n, size_t num,                          // input
                 const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
@@ -41,7 +40,6 @@ void Propagate(const Crystal& crystal, size_t num, size_t step,                 
                const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input
                float_bf_t p_out, int_bf_t fid_out);                                  // output
 
-}  // namespace v3
 }  // namespace icehalo
 
 

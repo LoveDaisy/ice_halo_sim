@@ -5,7 +5,6 @@
 #include "core/def.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 void to_json(nlohmann::json& j, const SceneConfig& s) {
   j["id"] = s.id_;
@@ -35,5 +34,4 @@ void to_json(nlohmann::json& j, const ProjConfig& p) {
   j["scene"] = p.scene_.id_;
 }
 
-}  // namespace v3
 }  // namespace icehalo

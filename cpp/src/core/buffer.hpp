@@ -5,7 +5,6 @@
 #include <cstdint>
 
 namespace icehalo {
-namespace v3 {
 
 template <class T>
 struct BufferWrapper {
@@ -23,7 +22,6 @@ struct BufferWrapper {
 using float_bf_t = BufferWrapper<float>;
 using int_bf_t = BufferWrapper<int>;
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CORE_BUFFER_H_

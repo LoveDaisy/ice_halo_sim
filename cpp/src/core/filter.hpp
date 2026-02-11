@@ -9,7 +9,6 @@
 #include "core/raypath.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 class Filter;
 using FilterPtrU = std::unique_ptr<Filter>;
@@ -35,7 +34,6 @@ class Filter {
   FilterConfig::Action action_;
 };
 
-}  // namespace v3
 }  // namespace icehalo
 
 

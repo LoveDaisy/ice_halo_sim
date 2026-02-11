@@ -8,7 +8,6 @@
 #include <utility>
 
 namespace icehalo {
-namespace v3 {
 
 template <class T>
 class Queue {
@@ -71,7 +70,6 @@ using QueuePtrU = std::unique_ptr<Queue<T>>;
 template <class T>
 using QueuePtrS = std::shared_ptr<Queue<T>>;
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // UTIL_QUEUE_H_

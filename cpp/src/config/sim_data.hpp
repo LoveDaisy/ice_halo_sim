@@ -9,7 +9,6 @@
 #include "core/raypath.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 struct RayBuffer {
   RayBuffer();
@@ -52,7 +51,6 @@ struct SimData {
 using SimDataPtrS = std::shared_ptr<SimData>;
 using SimDataPtrU = std::unique_ptr<SimData>;
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CONFIG_SIM_DATA_H_

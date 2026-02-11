@@ -24,7 +24,6 @@ enum class CrystalType {
   kCustom,
 };
 
-namespace v3 {
 
 class Crystal;
 using CrystalPtrS = std::shared_ptr<Crystal>;
@@ -208,7 +207,6 @@ class Crystal {
   int fn_period_;                     // for raypath symmetry
 };
 
-}  // namespace v3
 
 }  // namespace icehalo
 

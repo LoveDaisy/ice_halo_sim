@@ -25,7 +25,7 @@ class V3TestCrystal : public ::testing::Test {
 };
 
 TEST_F(V3TestCrystal, CrystalCacheData) {
-  auto crystal = v3::Crystal::CreatePrism(1.3);
+  auto crystal = Crystal::CreatePrism(1.3);
 
   const auto* face_v = crystal.GetTriangleVtx();
   float expect_face_v[9 * 20]{
@@ -200,8 +200,8 @@ TEST_F(V3TestCrystal, CrystalCacheData) {
 
 TEST_F(V3TestCrystal, PrismMesh) {
   float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
-  auto c1 = v3::CreatePrismMesh(1.5f);
-  auto c2 = v3::CreatePrismMesh(1.5f, dist);
+  auto c1 = CreatePrismMesh(1.5f);
+  auto c2 = CreatePrismMesh(1.5f, dist);
 
   ASSERT_EQ(c1.GetTriangleCnt(), c2.GetTriangleCnt());
   ASSERT_EQ(c1.GetVtxCnt(), c2.GetVtxCnt());
@@ -233,8 +233,8 @@ TEST_F(V3TestCrystal, PrismMesh) {
 
 TEST_F(V3TestCrystal, PyramidMesh) {
   float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
-  auto c1 = v3::CreatePyramidMesh(0.2f, 1.4f, 0.8f);
-  auto c2 = v3::CreatePyramidMesh(1, 1, 1, 1, 0.2f, 1.4f, 0.8f, dist);
+  auto c1 = CreatePyramidMesh(0.2f, 1.4f, 0.8f);
+  auto c2 = CreatePyramidMesh(1, 1, 1, 1, 0.2f, 1.4f, 0.8f, dist);
 
   ASSERT_EQ(c1.GetTriangleCnt(), c2.GetTriangleCnt());
   ASSERT_EQ(c1.GetVtxCnt(), c2.GetVtxCnt());

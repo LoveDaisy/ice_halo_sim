@@ -12,7 +12,6 @@
 
 
 namespace icehalo {
-namespace v3 {
 
 float GetReflectRatio(float delta, float rr) {
   float d_sqrt = std::sqrt(delta);
@@ -218,8 +217,6 @@ void Propagate(const Crystal& crystal, size_t num, size_t step,                 
                   p_out.Ptr(i), fid_out.Ptr(i));    // output
   }
 }
-
-}  // namespace v3
 
 
 double IceRefractiveIndex::Get(double wave_length) {

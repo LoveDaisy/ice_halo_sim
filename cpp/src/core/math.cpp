@@ -478,8 +478,6 @@ void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
 }
 
 
-namespace v3 {
-
 bool SolveLines(const float* coef1, const float* coef2, float* res) {
   float det = coef1[0] * coef2[1] - coef2[0] * coef1[1];
   if (FloatEqualZero(det)) {
@@ -806,5 +804,4 @@ std::tuple<std::unique_ptr<int[]>, int> Triangulate(int vtx_cnt, const float* vt
   return std::make_tuple(std::move(tri), tri_cnt);
 }
 
-}  // namespace v3
 }  // namespace icehalo

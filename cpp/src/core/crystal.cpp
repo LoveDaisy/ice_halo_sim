@@ -15,7 +15,6 @@
 #include "util/log.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map) {
   using math::kSqrt3_2;
@@ -482,5 +481,4 @@ float Crystal::GetRefractiveIndex(float wl) const {
   return IceRefractiveIndex::Get(wl);
 }
 
-}  // namespace v3
 }  // namespace icehalo

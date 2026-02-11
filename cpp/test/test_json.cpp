@@ -33,20 +33,20 @@ class V3TestJson : public ::testing::Test {
 // =============== LightSource ===============
 TEST_F(V3TestJson, LightSource_Sun) {
   const auto& j_light = config_json_.at("light_source")[1];
-  auto s = j_light.get<v3::LightSourceConfig>();
+  auto s = j_light.get<LightSourceConfig>();
 
   ASSERT_EQ(s.id_, 2);
   ASSERT_EQ(s.wl_param_.size(), 6);
 
-  std::vector<v3::WlParam> wl_param = { { 420.0f, 1.0f }, { 460.0f, 1.0f }, { 500.0f, 1.0f },
-                                        { 540.0f, 1.0f }, { 580.0f, 1.0f }, { 620.0f, 1.0f } };
+  std::vector<WlParam> wl_param = { { 420.0f, 1.0f }, { 460.0f, 1.0f }, { 500.0f, 1.0f },
+                                    { 540.0f, 1.0f }, { 580.0f, 1.0f }, { 620.0f, 1.0f } };
   for (size_t i = 0; i < wl_param.size(); i++) {
     ASSERT_NEAR(s.wl_param_[i].wl_, wl_param[i].wl_, 1e-5);
     ASSERT_NEAR(s.wl_param_[i].weight_, wl_param[i].weight_, 1e-5);
   }
 
-  ASSERT_TRUE(std::holds_alternative<v3::SunParam>(s.param_));
-  const auto& p = std::get<v3::SunParam>(s.param_);
+  ASSERT_TRUE(std::holds_alternative<SunParam>(s.param_));
+  const auto& p = std::get<SunParam>(s.param_);
 
   ASSERT_NEAR(p.azimuth_, 0.0f, 1e-5);
   ASSERT_NEAR(p.altitude_, 20.0f, 1e-5);
@@ -71,12 +71,12 @@ TEST_F(V3TestJson, Distribution) {
 
 TEST_F(V3TestJson, Crystal_PrismSimple) {
   const auto& j_crystal = config_json_.at("crystal")[1];
-  auto c = j_crystal.get<v3::CrystalConfig>();
+  auto c = j_crystal.get<CrystalConfig>();
 
   ASSERT_EQ(c.id_, 2);
-  ASSERT_TRUE(std::holds_alternative<v3::PrismCrystalParam>(c.param_));
+  ASSERT_TRUE(std::holds_alternative<PrismCrystalParam>(c.param_));
 
-  const auto& p = std::get<v3::PrismCrystalParam>(c.param_);
+  const auto& p = std::get<PrismCrystalParam>(c.param_);
   CHECK_DISTRIBUTION(p.h_, DistributionType::kGaussian, 1.3, 0.2);
   for (const auto& x : p.d_) {
     CHECK_DISTRIBUTION(x, DistributionType::kNoRandom, 1.0f * math::kSqrt3_4, 0.0f);
@@ -85,12 +85,12 @@ TEST_F(V3TestJson, Crystal_PrismSimple) {
 
 TEST_F(V3TestJson, Crystal_PrismFull) {
   const auto& j_crystal = config_json_.at("crystal")[3];
-  auto c = j_crystal.get<v3::CrystalConfig>();
+  auto c = j_crystal.get<CrystalConfig>();
 
   ASSERT_EQ(c.id_, 4);
-  ASSERT_TRUE(std::holds_alternative<v3::PrismCrystalParam>(c.param_));
+  ASSERT_TRUE(std::holds_alternative<PrismCrystalParam>(c.param_));
 
-  const auto& p = std::get<v3::PrismCrystalParam>(c.param_);
+  const auto& p = std::get<PrismCrystalParam>(c.param_);
   CHECK_DISTRIBUTION(p.h_, DistributionType::kUniform, 0.5f, 0.4f);
   for (const auto& x : p.d_) {
     CHECK_DISTRIBUTION(x, DistributionType::kGaussian, 1.0f * math::kSqrt3_4, 0.2f * math::kSqrt3_4);
@@ -104,12 +104,12 @@ TEST_F(V3TestJson, Crystal_PrismFull) {
 
 TEST_F(V3TestJson, Crystal_PyramidSimple) {
   const auto& j_crystal = config_json_.at("crystal")[4];
-  auto c = j_crystal.get<v3::CrystalConfig>();
+  auto c = j_crystal.get<CrystalConfig>();
 
   ASSERT_EQ(c.id_, 5);
-  ASSERT_TRUE(std::holds_alternative<v3::PyramidCrystalParam>(c.param_));
+  ASSERT_TRUE(std::holds_alternative<PyramidCrystalParam>(c.param_));
 
-  const auto& p = std::get<v3::PyramidCrystalParam>(c.param_);
+  const auto& p = std::get<PyramidCrystalParam>(c.param_);
   CHECK_DISTRIBUTION(p.h_pyr_u_, DistributionType::kNoRandom, 0.1, 0);
   CHECK_DISTRIBUTION(p.h_pyr_l_, DistributionType::kNoRandom, 0.5, 0);
   CHECK_DISTRIBUTION(p.h_prs_, DistributionType::kNoRandom, 1.2, 0);
@@ -136,56 +136,56 @@ TEST_F(V3TestJson, Crystal_PyramidSimple) {
 // =============== Filter ===============
 TEST_F(V3TestJson, Filter_None) {
   const auto& j_filter = config_json_.at("filter")[0];
-  auto f = j_filter.get<v3::FilterConfig>();
+  auto f = j_filter.get<FilterConfig>();
 
   ASSERT_EQ(f.id_, 1);
-  const auto& sp = std::get<v3::SimpleFilterParam>(f.param_);
-  ASSERT_TRUE(std::holds_alternative<v3::NoneFilterParam>(sp));
-  ASSERT_EQ(f.action_, v3::FilterConfig::kFilterIn);
-  ASSERT_EQ(f.symmetry_, v3::FilterConfig::kSymNone);
+  const auto& sp = std::get<SimpleFilterParam>(f.param_);
+  ASSERT_TRUE(std::holds_alternative<NoneFilterParam>(sp));
+  ASSERT_EQ(f.action_, FilterConfig::kFilterIn);
+  ASSERT_EQ(f.symmetry_, FilterConfig::kSymNone);
 }
 
 TEST_F(V3TestJson, Filter_Raypath) {
   const auto& j_filter = config_json_.at("filter")[1];
-  auto f = j_filter.get<v3::FilterConfig>();
+  auto f = j_filter.get<FilterConfig>();
 
   ASSERT_EQ(f.id_, 2);
-  const auto& sp = std::get<v3::SimpleFilterParam>(f.param_);
-  ASSERT_TRUE(std::holds_alternative<v3::RaypathFilterParam>(sp));
-  ASSERT_EQ(f.action_, v3::FilterConfig::kFilterIn);
-  ASSERT_EQ(f.symmetry_, v3::FilterConfig::kSymP | v3::FilterConfig::kSymB | v3::FilterConfig::kSymD);
+  const auto& sp = std::get<SimpleFilterParam>(f.param_);
+  ASSERT_TRUE(std::holds_alternative<RaypathFilterParam>(sp));
+  ASSERT_EQ(f.action_, FilterConfig::kFilterIn);
+  ASSERT_EQ(f.symmetry_, FilterConfig::kSymP | FilterConfig::kSymB | FilterConfig::kSymD);
 
-  const auto& p = std::get<v3::RaypathFilterParam>(sp);
-  std::vector<v3::IdType> expect_raypath = { 3, 1, 5, 7, 4 };
+  const auto& p = std::get<RaypathFilterParam>(sp);
+  std::vector<IdType> expect_raypath = { 3, 1, 5, 7, 4 };
   ASSERT_EQ(p.raypath_, expect_raypath);
 }
 
 TEST_F(V3TestJson, Filter_EntryExit) {
   const auto& j_filter = config_json_.at("filter")[3];
-  auto f = j_filter.get<v3::FilterConfig>();
+  auto f = j_filter.get<FilterConfig>();
 
   ASSERT_EQ(f.id_, 4);
-  const auto& sp = std::get<v3::SimpleFilterParam>(f.param_);
-  ASSERT_TRUE(std::holds_alternative<v3::EntryExitFilterParam>(sp));
-  ASSERT_EQ(f.action_, v3::FilterConfig::kFilterIn);
-  ASSERT_EQ(f.symmetry_, v3::FilterConfig::kSymNone);
+  const auto& sp = std::get<SimpleFilterParam>(f.param_);
+  ASSERT_TRUE(std::holds_alternative<EntryExitFilterParam>(sp));
+  ASSERT_EQ(f.action_, FilterConfig::kFilterIn);
+  ASSERT_EQ(f.symmetry_, FilterConfig::kSymNone);
 
-  const auto& p = std::get<v3::EntryExitFilterParam>(sp);
+  const auto& p = std::get<EntryExitFilterParam>(sp);
   ASSERT_EQ(p.entry_, 3);
   ASSERT_EQ(p.exit_, 5);
 }
 
 TEST_F(V3TestJson, Filter_Direction) {
   const auto& j_filter = config_json_.at("filter")[4];
-  auto f = j_filter.get<v3::FilterConfig>();
+  auto f = j_filter.get<FilterConfig>();
 
   ASSERT_EQ(f.id_, 5);
-  const auto& sp = std::get<v3::SimpleFilterParam>(f.param_);
-  ASSERT_TRUE(std::holds_alternative<v3::DirectionFilterParam>(sp));
-  ASSERT_EQ(f.action_, v3::FilterConfig::kFilterOut);
-  ASSERT_EQ(f.symmetry_, v3::FilterConfig::kSymNone);
+  const auto& sp = std::get<SimpleFilterParam>(f.param_);
+  ASSERT_TRUE(std::holds_alternative<DirectionFilterParam>(sp));
+  ASSERT_EQ(f.action_, FilterConfig::kFilterOut);
+  ASSERT_EQ(f.symmetry_, FilterConfig::kSymNone);
 
-  const auto& p = std::get<v3::DirectionFilterParam>(sp);
+  const auto& p = std::get<DirectionFilterParam>(sp);
   ASSERT_NEAR(p.lat_, 25, 1e-5);
   ASSERT_NEAR(p.lon_, 180, 1e-5);
   ASSERT_NEAR(p.radii_, 0.5, 1e-5);
@@ -193,29 +193,29 @@ TEST_F(V3TestJson, Filter_Direction) {
 
 TEST_F(V3TestJson, Filter_Crystal) {
   const auto& j_filter = config_json_.at("filter")[5];
-  auto f = j_filter.get<v3::FilterConfig>();
+  auto f = j_filter.get<FilterConfig>();
 
   ASSERT_EQ(f.id_, 6);
-  const auto& sp = std::get<v3::SimpleFilterParam>(f.param_);
-  ASSERT_TRUE(std::holds_alternative<v3::CrystalFilterParam>(sp));
-  ASSERT_EQ(f.action_, v3::FilterConfig::kFilterIn);
-  ASSERT_EQ(f.symmetry_, v3::FilterConfig::kSymNone);
+  const auto& sp = std::get<SimpleFilterParam>(f.param_);
+  ASSERT_TRUE(std::holds_alternative<CrystalFilterParam>(sp));
+  ASSERT_EQ(f.action_, FilterConfig::kFilterIn);
+  ASSERT_EQ(f.symmetry_, FilterConfig::kSymNone);
 
-  const auto& p = std::get<v3::CrystalFilterParam>(sp);
+  const auto& p = std::get<CrystalFilterParam>(sp);
   ASSERT_EQ(p.crystal_id_, 3);
 }
 
 TEST_F(V3TestJson, Filter_Complex) {
-  auto manager = config_json_.get<v3::ConfigManager>();
+  auto manager = config_json_.get<ConfigManager>();
   auto f = manager.filters_.at(7);
 
   ASSERT_EQ(f.id_, 7);
-  ASSERT_TRUE(std::holds_alternative<v3::ComplexFilterParam>(f.param_));
-  ASSERT_EQ(f.action_, v3::FilterConfig::kFilterIn);
-  ASSERT_EQ(f.symmetry_, v3::FilterConfig::kSymNone);
+  ASSERT_TRUE(std::holds_alternative<ComplexFilterParam>(f.param_));
+  ASSERT_EQ(f.action_, FilterConfig::kFilterIn);
+  ASSERT_EQ(f.symmetry_, FilterConfig::kSymNone);
 
-  const auto& p = std::get<v3::ComplexFilterParam>(f.param_);
-  std::vector<std::vector<v3::IdType>> expect_composition = { { 1 }, { 2, 6 }, { 5 } };
+  const auto& p = std::get<ComplexFilterParam>(f.param_);
+  std::vector<std::vector<IdType>> expect_composition = { { 1 }, { 2, 6 }, { 5 } };
   ASSERT_EQ(p.filters_.size(), expect_composition.size());
   for (size_t i = 0; i < p.filters_.size(); i++) {
     ASSERT_EQ(p.filters_[i].size(), expect_composition[i].size());
@@ -228,7 +228,7 @@ TEST_F(V3TestJson, Filter_Complex) {
 
 // =============== Scene ===============
 TEST_F(V3TestJson, Scene_SingleScattering) {
-  auto manager = config_json_.get<v3::ConfigManager>();
+  auto manager = config_json_.get<ConfigManager>();
   auto s = manager.scenes_.at(1);
 
   ASSERT_EQ(s.id_, 1);
@@ -242,8 +242,8 @@ TEST_F(V3TestJson, Scene_SingleScattering) {
   ASSERT_EQ(s.ms_[0].setting_[0].crystal_.id_, 1);
   ASSERT_NEAR(s.ms_[0].setting_[0].crystal_proportion_, 10, 1e-5);
   ASSERT_EQ(s.ms_[0].setting_[0].filter_.id_, kInvalidId);
-  const auto& sp = std::get<v3::SimpleFilterParam>(s.ms_[0].setting_[0].filter_.param_);
-  ASSERT_TRUE(std::holds_alternative<v3::NoneFilterParam>(sp));
+  const auto& sp = std::get<SimpleFilterParam>(s.ms_[0].setting_[0].filter_.param_);
+  ASSERT_TRUE(std::holds_alternative<NoneFilterParam>(sp));
 }
 
 }  // namespace

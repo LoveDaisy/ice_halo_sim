@@ -7,7 +7,6 @@
 #include "core/math.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 class Rotation {
  public:
@@ -101,7 +100,6 @@ Mesh CreateConcavePyramidMesh(float upper_alpha, float lower_alpha,  // wedge an
                               float h1, float h2, float h3,          // height
                               const float* dist);                    // face distance
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CORE_GEO3D_H_

@@ -9,7 +9,6 @@
 #include "util/log.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 // convert to & from json object
 // ========== PrismCrystalParam ==========
@@ -117,5 +116,4 @@ void from_json(const nlohmann::json& j, CrystalConfig& c) {
   }
 }
 
-}  // namespace v3
 }  // namespace icehalo
