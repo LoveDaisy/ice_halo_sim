@@ -10,19 +10,19 @@ CPMAddPackage(
 )
 
 # ==================================================================================================
-add_executable(unit_test_v3
-  "${PROJ_TEST_DIR}/test_v3_crystal.cpp"
-  "${PROJ_TEST_DIR}/test_v3_json.cpp"
-  "${PROJ_TEST_DIR}/test_v3_math.cpp"
-  "${PROJ_TEST_DIR}/test_v3_proj.cpp"
+add_executable(unit_test
+  "${PROJ_TEST_DIR}/test_crystal.cpp"
+  "${PROJ_TEST_DIR}/test_json.cpp"
+  "${PROJ_TEST_DIR}/test_math.cpp"
+  "${PROJ_TEST_DIR}/test_proj.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
-target_include_directories(unit_test_v3
+target_include_directories(unit_test
   PRIVATE ${PROJ_TEST_DIR} ${PROJ_SRC_DIR})
-target_link_libraries(unit_test_v3
-  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} icehalo_lib)
-set_target_properties(unit_test_v3 PROPERTIES
+target_link_libraries(unit_test
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} icehalo)
+set_target_properties(unit_test PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
-add_test(NAME "IceHaloUnitTestV3" COMMAND unit_test_v3
+add_test(NAME "IceHaloUnitTest" COMMAND unit_test
   "${PROJ_ROOT}/v3_config_example.json"
   "${CMAKE_CURRENT_BINARY_DIR}")

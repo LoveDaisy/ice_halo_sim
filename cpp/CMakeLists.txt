@@ -126,24 +126,24 @@ set(icehalo_src
 
 # ==================================================================================================
 # Add targets
-add_library(icehalo_lib ${icehalo_src})
-target_include_directories(icehalo_lib
+add_library(icehalo ${icehalo_src})
+target_include_directories(icehalo
   PUBLIC
     $<BUILD_INTERFACE:${PROJ_SRC_DIR}/include>
     $<INSTALL_INTERFACE:include>
   PRIVATE
     ${icehalo_include})
-target_link_libraries(icehalo_lib PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog_header_only tl::expected Threads::Threads)
+target_link_libraries(icehalo PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog_header_only tl::expected Threads::Threads)
 
 if(NOT MSVC)
-  target_compile_options(icehalo_lib PRIVATE
+  target_compile_options(icehalo PRIVATE
     -Wall -Wextra -fexceptions -fpermissive -frtti)
-  target_compile_definitions(icehalo_lib PRIVATE __STDC_FORMAT_MACROS)
-  target_compile_options(icehalo_lib PRIVATE
+  target_compile_definitions(icehalo PRIVATE __STDC_FORMAT_MACROS)
+  target_compile_options(icehalo PRIVATE
     $<$<CONFIG:Debug>:-O0 -g -ggdb>
     $<$<CONFIG:Release>:-ffunction-sections -fdata-sections -fvisibility=hidden>
     $<$<CONFIG:MinSizeRel>:-ffunction-sections -fdata-sections -fvisibility=hidden>)
-  target_link_options(icehalo_lib PUBLIC
+  target_link_options(icehalo PUBLIC
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:AppleClang,Clang>:-dead_strip>>
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:GNU>:--gc-sections>>)
 endif()
