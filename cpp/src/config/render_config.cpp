@@ -6,7 +6,7 @@
 
 #include "config/filter_config.hpp"
 #include "core/math.hpp"
-#include "io/json_util.hpp"
+#include "util/json_util.hpp"
 
 namespace icehalo {
 

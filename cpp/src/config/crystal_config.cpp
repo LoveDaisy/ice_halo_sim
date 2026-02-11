@@ -5,7 +5,7 @@
 #include <variant>
 
 #include "core/math.hpp"
-#include "io/json_util.hpp"
+#include "util/json_util.hpp"
 #include "util/log.hpp"
 
 namespace icehalo {

@@ -14,7 +14,7 @@
 #include "core/filter.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
-#include "process/color_data.hpp"
+#include "util/color_data.hpp"
 #include "util/log.hpp"
 
 namespace icehalo {

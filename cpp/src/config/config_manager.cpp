@@ -9,7 +9,7 @@
 #include "config/light_config.hpp"
 #include "config/render_config.hpp"
 #include "core/def.hpp"
-#include "io/json_util.hpp"
+#include "util/json_util.hpp"
 #include "util/log.hpp"
 
 namespace icehalo {
