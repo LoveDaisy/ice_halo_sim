@@ -9,7 +9,7 @@ PROJ_DIR=${ROOT_DIR}
 build() {
   mkdir -p "${BUILD_DIR}"
   pushd "${BUILD_DIR}" > /dev/null
-  cmake -S "${PROJ_DIR}" -B "${BUILD_DIR}" \
+  cmake -S "${PROJ_DIR}" -B "${BUILD_DIR}" -G Ninja \
         -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TEST=$BUILD_TEST \
         -DBUILD_SHARED_LIBS=$BUILD_SHARED \
         -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}"
