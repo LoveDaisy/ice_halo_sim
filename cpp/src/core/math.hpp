@@ -156,15 +156,6 @@ class RandomNumberGenerator {
 
 class RandomSampler {
  public:
-  /*! @brief Generate points distributed uniformly on sphere around a give point, in Cartesian form.
-   *
-   * @param dir the given point, xyz.
-   * @param std half range (like radii), in degree.
-   * @param data output data, xyz.
-   * @param num number of points.
-   */
-  static void SampleSphericalPointsCart(const float* dir, float std, float* data, size_t num = 1);
-
   /*! @brief Generate points distributed uniformly on sphere, in spherical form, (lon, lat).
    *
    * @param data output data, (lon, lat), in rad
@@ -179,29 +170,6 @@ class RandomSampler {
    * @param num number of points.
    */
   static void SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num = 1);
-
-  /*! @brief Generate points evenly distributed on a triangle, in Cartesian form, xyz.
-   *
-   * @param vertexes vertexes of the triangle.
-   * @param data output data, xyz.
-   * @param num number of points.
-   */
-  static void SampleTriangularPoints(const float* vertexes, float* data, size_t num = 1);
-
-  /*! @brief Random choose an integer index from [0, max), proportional to probabilities in p.
-   *
-   * @param p probabilities, must have max values, sum of all p should be 1.0f.
-   * @param max range bound.
-   * @return chosen index.
-   */
-  static int SampleInt(const float* p, int max);
-
-  /*! @brief Random choose an integer from [0, max)
-   *
-   * @param max range bound.
-   * @return chosen integer.
-   */
-  static int SampleInt(int max);
 
   RandomSampler() = delete;
 };
@@ -218,9 +186,6 @@ void Normalize3(float* vec);
 void Normalized3(const float* vec, float* vec_out);
 void Vec3FromTo(const float* vec1, const float* vec2, float* vec);
 void TriangleNormal(const float* p1, const float* p2, const float* p3, float* normal);
-
-void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num = 1);
-
 
 struct AxisDistribution {
   AxisDistribution();

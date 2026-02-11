@@ -85,52 +85,6 @@ void TriangleNormal(const float* p1, const float* p2, const float* p3, float* no
 }
 
 
-void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num) {
-  using std::cos;
-  using std::sin;
-
-  const float ax[] = {
-    -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-    -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-    cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
-    cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-    -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-    cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
-    cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-    cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
-    sin(lon_lat_roll[1]),
-    0
-  };
-
-#if defined(USE_SIMD) && defined(__AVX__) && defined(__SSE4_1__)
-  __m128 AX0 = _mm_loadu_ps(ax + 0);
-  __m128 AX1 = _mm_loadu_ps(ax + 3);
-  __m128 AX2 = _mm_loadu_ps(ax + 6);
-
-  for (size_t i = 0; i < data_num; i++) {
-    float* tmp_out = output_vec + i * 3;
-
-    __m128 INPUT_V = _mm_loadu_ps(input_vec + i * 3);
-    auto DP = _mm_dp_ps(INPUT_V, AX0, 0x71);
-    tmp_out[0] = DP[0];
-    DP = _mm_dp_ps(INPUT_V, AX1, 0x71);
-    tmp_out[1] = DP[0];
-    DP = _mm_dp_ps(INPUT_V, AX2, 0x71);
-    tmp_out[2] = DP[0];
-  }
-#else
-  // Then do the matrix multiplication (using Dot3 actually)
-  for (size_t i = 0; i < data_num; i++) {
-    const float* tmp_v = input_vec + i * 3;
-    float* tmp_out = output_vec + i * 3;
-    for (int j = 0; j < 3; j++) {
-      tmp_out[j] = Dot3(tmp_v, ax + j * 3);
-    }
-  }
-#endif
-}
-
-
 template <typename T>
 Vec3<T>::Vec3(T x, T y, T z) : val_{ x, y, z } {}
 
@@ -438,29 +392,6 @@ void RandomNumberGenerator::SetSeed(uint32_t seed) {
 }
 
 
-void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float* data, size_t num) {
-  auto* rng = RandomNumberGenerator::GetInstance();
-
-  float lon = std::atan2(dir[1], dir[0]);
-  float lat = std::asin(dir[2] / Norm3(dir));
-  float rot[3] = { lon, lat, 0 };
-
-  std::unique_ptr<float[]> tmp_dir{ new float[num * 3] };
-
-  double dz = 2 * std::sin(std / 2.0 * math::kDegreeToRad) * std::sin(std / 2.0 * math::kDegreeToRad);
-  for (size_t i = 0; i < num; i++) {
-    double udz = rng->GetUniform() * dz;
-    double q = rng->GetUniform() * 2 * math::kPi;
-
-    double r = std::sqrt((2.0f - udz) * udz);
-    tmp_dir[i * 3 + 0] = static_cast<float>(std::cos(q) * r);
-    tmp_dir[i * 3 + 1] = static_cast<float>(std::sin(q) * r);
-    tmp_dir[i * 3 + 2] = static_cast<float>(1.0 - udz);
-  }
-  RotateZBack(rot, tmp_dir.get(), data, num);
-}
-
-
 void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t step) {
   auto* rng = RandomNumberGenerator::GetInstance();
   for (size_t i = 0; i < num; i++) {
@@ -493,47 +424,6 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     data[i * 2 + 0] = lambda;
     data[i * 2 + 1] = phi;
   }
-}
-
-
-void RandomSampler::SampleTriangularPoints(const float* vertexes, float* data, size_t num) {
-  auto* rng = RandomNumberGenerator::GetInstance();
-  for (size_t i = 0; i < num; i++) {
-    float a = rng->GetUniform();
-    float b = rng->GetUniform();
-
-    if (a + b > 1.0f) {
-      a = 1.0f - a;
-      b = 1.0f - b;
-    }
-
-    for (int j = 0; j < 3; j++) {
-      data[i * 3 + j] = (vertexes[j + 3] - vertexes[j]) * a + (vertexes[j + 6] - vertexes[j]) * b + vertexes[j];
-    }
-  }
-}
-
-
-int RandomSampler::SampleInt(const float* p, int max) {
-  auto* rng = RandomNumberGenerator::GetInstance();
-
-  float current_cum_p = 0;
-  float current_p = rng->GetUniform();
-
-  for (int i = 0; i < max; i++) {
-    current_cum_p += p[i];
-    if (current_p < current_cum_p) {
-      return i;
-    }
-  }
-
-  return max - 1;
-}
-
-
-int RandomSampler::SampleInt(int max) {
-  auto* rng = RandomNumberGenerator::GetInstance();
-  return std::min(static_cast<int>(rng->GetUniform() * max), max - 1);
 }
 
 
