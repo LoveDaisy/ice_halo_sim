@@ -59,6 +59,7 @@ class ServerImpl {
   mutable std::mutex prod_mutex;
 
   std::atomic_bool stop_;
+  std::atomic_bool work_started_;  // true after GenerateScene picks up first project
   std::atomic_int sim_scene_cnt_;
   std::mutex scene_mutex_;
   std::condition_variable scene_cv_;
@@ -159,6 +160,7 @@ void ServerImpl::Start() {
   }
 
   stop_ = false;
+  work_started_ = false;
   sim_scene_cnt_ = 0;
 
   {
@@ -233,15 +235,22 @@ void ServerImpl::Stop() {
 }
 
 ServerStatus ServerImpl::GetStatus() const {
-  // Check error status first
+  // status_ is the authoritative state. Return immediately for non-running states.
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
-    if (status_ == ServerStatus::kError) {
+    if (status_ != ServerStatus::kRunning) {
       return status_;
     }
   }
 
-  // Check actual running state
+  // status_ == kRunning: check if work is actually complete.
+  // During the startup window (threads spawned but GenerateScene hasn't picked up
+  // a project yet), work_started_ is false — report kRunning to avoid false idle.
+  if (!work_started_) {
+    return ServerStatus::kRunning;
+  }
+
+  // Pipeline has started. Poll simulators to detect completion.
   bool any_busy = false;
   {
     std::lock_guard<std::mutex> lock(prod_mutex);
@@ -253,11 +262,11 @@ ServerStatus ServerImpl::GetStatus() const {
     }
   }
 
-  if (any_busy || (!stop_ && sim_scene_cnt_ > 0)) {
+  if (any_busy || sim_scene_cnt_ > 0) {
     return ServerStatus::kRunning;
-  } else {
-    return ServerStatus::kIdle;
   }
+
+  return ServerStatus::kIdle;
 }
 
 bool ServerImpl::IsIdle() {
@@ -309,6 +318,7 @@ void ServerImpl::GenerateScene() {
       break;
     }
     SPDLOG_LOGGER_DEBUG(logger_, "GenerateScene: get proj: {}", proj_config.id_);
+    work_started_ = true;
     CHECK_STOP
 
     // Setup consumers.
