@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
   HS_InitLogger(server);
   HS_SetLogLevel(server, log_level);
 
-  if (HS_CommitConfigFromFile(server, config_filename) != 0) {
+  if (HS_CommitConfigFromFile(server, config_filename) != HS_OK) {
     HS_DestroyServer(server);
     return 1;
   }
@@ -68,29 +68,24 @@ int main(int argc, char** argv) {
   while (1) {
     usleep(kPollIntervalUs);
 
-    HS_SimResult* result = NULL;
-    for (result = HS_GetAllResults(server);  //
-         HS_HasNextResult(result);           //
-         result = HS_GetNextResult(result)) {
-      HS_SimResultType res_type = HS_QueryResultType(result);
-      switch (res_type) {
-        case HS_RESULT_RENDER: {
-          HS_RenderResult p = HS_GetRenderResult(result);
-          printf("<render result>[%02d]: w: %d, h: %d, buff: %p\n",  //
-                 p.renderer_id_, p.img_width_, p.img_height_, (const void*)p.img_buffer_);
-        } break;
-        case HS_RESULT_STATS: {
-          HS_StatsResult p = HS_GetStatsResult(result);
-          printf("<stats result>: sim_rays: %lu, crystals: %lu\n", p.sim_ray_num_, p.crystal_num_);
-        } break;
-        case HS_RESULT_NONE:
-          break;
+    HS_RenderResult renders[HS_MAX_RENDER_RESULTS + 1];
+    if (HS_GetRenderResults(server, renders, HS_MAX_RENDER_RESULTS) == HS_OK) {
+      for (int i = 0; renders[i].img_buffer != NULL; i++) {
+        printf("<render result>[%02d]: w: %d, h: %d, buff: %p\n",
+               renders[i].renderer_id, renders[i].img_width, renders[i].img_height,
+               (const void*)renders[i].img_buffer);
       }
     }
-    HS_DeleteAllResults(result);
 
-    HS_ServerState state = HS_QueryServerState(server);
-    if (state == HS_SERVER_IDLE) {
+    HS_StatsResult stats[HS_MAX_STATS_RESULTS + 1];
+    if (HS_GetStatsResults(server, stats, HS_MAX_STATS_RESULTS) == HS_OK) {
+      for (int i = 0; stats[i].sim_ray_num != 0; i++) {
+        printf("<stats result>: sim_rays: %lu, crystals: %lu\n", stats[i].sim_ray_num, stats[i].crystal_num);
+      }
+    }
+
+    HS_ServerState state;
+    if (HS_QueryServerState(server, &state) == HS_OK && state == HS_SERVER_IDLE) {
       break;
     }
   }

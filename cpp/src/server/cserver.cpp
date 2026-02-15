@@ -1,7 +1,5 @@
-#include <cstddef>
+#include <cstring>
 #include <memory>
-#include <variant>
-#include <vector>
 
 #include "include/icehalo.h"
 #include "server/server.hpp"
@@ -9,18 +7,33 @@
 
 namespace ns = icehalo;
 
-// =============== C API ===============
+// =============== Internal Helpers ===============
 struct HS_HaloSimServer_ {
   std::unique_ptr<ns::Server> server_;
 };
 
-struct HS_SimResult_ {
-  std::vector<ns::Result> results_;
-  size_t curr_idx_;
-};
+
+static HS_ErrorCode MapErrorCode(ns::ErrorCode code) {
+  switch (code) {
+    case ns::ErrorCode::kSuccess:
+      return HS_OK;
+    case ns::ErrorCode::kInvalidJson:
+      return HS_ERR_INVALID_JSON;
+    case ns::ErrorCode::kInvalidConfig:
+      return HS_ERR_INVALID_CONFIG;
+    case ns::ErrorCode::kMissingField:
+      return HS_ERR_MISSING_FIELD;
+    case ns::ErrorCode::kInvalidValue:
+      return HS_ERR_INVALID_VALUE;
+    case ns::ErrorCode::kServerNotReady:
+    case ns::ErrorCode::kServerError:
+    default:
+      return HS_ERR_SERVER;
+  }
+}
 
 
-// =============== Creation & Destroy ===============
+// =============== Server Lifecycle ===============
 HS_HaloSimServer* HS_CreateServer() {
   auto* s = new HS_HaloSimServer;
   s->server_ = std::unique_ptr<ns::Server>{ new ns::Server{} };
@@ -59,23 +72,10 @@ void HS_SetLogLevel(HS_HaloSimServer* server, HS_LogLevel level) {
 }
 
 
-// =============== Control ===============
-HS_ServerState HS_QueryServerState(HS_HaloSimServer* server) {
-  if (!server) {
-    return HS_SERVER_NOT_READY;
-  }
-
-  if (server->server_->IsIdle()) {
-    return HS_SERVER_IDLE;
-  } else {
-    return HS_SERVER_RUNNING;
-  }
-}
-
-
-int HS_CommitConfig(HS_HaloSimServer* server, const char* config_str) {
-  if (!server) {
-    return -1;
+// =============== Configuration ===============
+HS_ErrorCode HS_CommitConfig(HS_HaloSimServer* server, const char* config_str) {
+  if (!server || !config_str) {
+    return HS_ERR_NULL_ARG;
   }
 
   auto err = server->server_->CommitConfig(config_str);
@@ -84,15 +84,15 @@ int HS_CommitConfig(HS_HaloSimServer* server, const char* config_str) {
     if (!err.field.empty()) {
       LOG_ERROR("Error field: {}", err.field);
     }
-    return -1;
+    return MapErrorCode(err.code);
   }
-  return 0;
+  return HS_OK;
 }
 
 
-int HS_CommitConfigFromFile(HS_HaloSimServer* server, const char* filename) {
+HS_ErrorCode HS_CommitConfigFromFile(HS_HaloSimServer* server, const char* filename) {
   if (!server || !filename) {
-    return -1;
+    return HS_ERR_NULL_ARG;
   }
 
   auto err = server->server_->CommitConfigFromFile(filename);
@@ -101,9 +101,74 @@ int HS_CommitConfigFromFile(HS_HaloSimServer* server, const char* filename) {
     if (!err.field.empty()) {
       LOG_ERROR("Error field: {}", err.field);
     }
-    return -1;
+    return MapErrorCode(err.code);
   }
-  return 0;
+  return HS_OK;
+}
+
+
+// =============== Results ===============
+HS_ErrorCode HS_GetRenderResults(HS_HaloSimServer* server, HS_RenderResult* out, int max_count) {
+  if (!server || !out) {
+    return HS_ERR_NULL_ARG;
+  }
+
+  auto render_results = server->server_->GetRenderResults();
+  int count = static_cast<int>(render_results.size());
+  if (count > max_count) {
+    count = max_count;
+  }
+
+  for (int i = 0; i < count; i++) {
+    out[i].renderer_id = render_results[i].renderer_id_;
+    out[i].img_width = render_results[i].img_width_;
+    out[i].img_height = render_results[i].img_height_;
+    out[i].img_buffer = render_results[i].img_buffer_;
+  }
+
+  // Sentinel
+  std::memset(&out[count], 0, sizeof(HS_RenderResult));
+
+  return HS_OK;
+}
+
+
+HS_ErrorCode HS_GetStatsResults(HS_HaloSimServer* server, HS_StatsResult* out, int max_count) {
+  if (!server || !out) {
+    return HS_ERR_NULL_ARG;
+  }
+
+  int count = 0;
+  if (max_count > 0) {
+    auto stats_result = server->server_->GetStatsResult();
+    if (stats_result.has_value()) {
+      out[0].ray_seg_num = stats_result->ray_seg_num_;
+      out[0].sim_ray_num = stats_result->sim_ray_num_;
+      out[0].crystal_num = stats_result->crystal_num_;
+      count = 1;
+    }
+  }
+
+  // Sentinel
+  std::memset(&out[count], 0, sizeof(HS_StatsResult));
+
+  return HS_OK;
+}
+
+
+// =============== State & Control ===============
+HS_ErrorCode HS_QueryServerState(HS_HaloSimServer* server, HS_ServerState* out) {
+  if (!server || !out) {
+    return HS_ERR_NULL_ARG;
+  }
+
+  if (server->server_->IsIdle()) {
+    *out = HS_SERVER_IDLE;
+  } else {
+    *out = HS_SERVER_RUNNING;
+  }
+
+  return HS_OK;
 }
 
 
@@ -113,105 +178,4 @@ void HS_StopServer(HS_HaloSimServer* server) {
   }
 
   server->server_->Stop();
-}
-
-
-// =============== Result ===============
-HS_SimResult* HS_GetAllResults(HS_HaloSimServer* server) {
-  if (!server) {
-    return nullptr;
-  }
-
-  auto* res = new HS_SimResult;
-  res->results_.clear();
-  res->curr_idx_ = 0;
-
-  // Get render results
-  auto render_results = server->server_->GetRenderResults();
-  for (const auto& r : render_results) {
-    res->results_.emplace_back(r);
-  }
-
-  // Get statistics result
-  auto stats_result = server->server_->GetStatsResult();
-  if (stats_result.has_value()) {
-    res->results_.emplace_back(stats_result.value());
-  }
-
-  return res;
-}
-
-
-int HS_HasNextResult(HS_SimResult* result) {
-  if (!result) {
-    return 0;
-  }
-
-  return result->curr_idx_ < result->results_.size();
-}
-
-
-HS_SimResult* HS_GetNextResult(HS_SimResult* result) {
-  if (!result) {
-    return nullptr;
-  }
-
-  result->curr_idx_++;
-  return result;
-}
-
-
-struct ResultTypeIndicator {
-  HS_SimResultType operator()(const ns::NoneResult& /* res */) { return HS_RESULT_NONE; }
-
-  HS_SimResultType operator()(const ns::StatsResult& /* res */) { return HS_RESULT_STATS; }
-
-  HS_SimResultType operator()(const ns::RenderResult& /* res */) { return HS_RESULT_RENDER; }
-};
-
-HS_SimResultType HS_QueryResultType(HS_SimResult* result) {
-  if (!result || result->curr_idx_ >= result->results_.size()) {
-    return HS_RESULT_NONE;
-  }
-
-  return std::visit(ResultTypeIndicator{}, result->results_[result->curr_idx_]);
-}
-
-
-HS_RenderResult HS_GetRenderResult(HS_SimResult* result) {
-  if (!result || result->curr_idx_ >= result->results_.size()) {
-    return HS_RenderResult{};
-  }
-
-  if (const auto* p = std::get_if<ns::RenderResult>(&(result->results_[result->curr_idx_]))) {
-    HS_RenderResult res{};
-    res.renderer_id_ = p->renderer_id_;
-    res.img_width_ = p->img_width_;
-    res.img_height_ = p->img_height_;
-    res.img_buffer_ = p->img_buffer_;
-    return res;
-  } else {
-    return HS_RenderResult{};
-  }
-}
-
-
-HS_StatsResult HS_GetStatsResult(HS_SimResult* result) {
-  if (!result || result->curr_idx_ >= result->results_.size()) {
-    return HS_StatsResult{};
-  }
-
-  if (const auto* p = std::get_if<ns::StatsResult>(&(result->results_[result->curr_idx_]))) {
-    HS_StatsResult res{};
-    res.crystal_num_ = p->crystal_num_;
-    res.ray_seg_num_ = p->ray_seg_num_;
-    res.sim_ray_num_ = p->sim_ray_num_;
-    return res;
-  } else {
-    return HS_StatsResult{};
-  }
-}
-
-void HS_DeleteAllResults(HS_SimResult* result) {
-  delete result;
 }
