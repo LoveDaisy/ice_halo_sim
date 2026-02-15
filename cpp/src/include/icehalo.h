@@ -36,14 +36,28 @@ typedef struct HS_StatsResult_ {
   unsigned long crystal_num_;
 } HS_StatsResult;
 
+typedef enum HS_LogLevel_ {
+  HS_LOG_TRACE,
+  HS_LOG_DEBUG,
+  HS_LOG_INFO,
+  HS_LOG_WARNING,
+  HS_LOG_ERROR,
+  HS_LOG_OFF,
+} HS_LogLevel;
+
 
 // =============== Creation & Destroy ===============
-HS_HaloSimServer* HS_CreateServer();
+HS_HaloSimServer* HS_CreateServer(void);
 void HS_DestroyServer(HS_HaloSimServer* server);
+
+// =============== Logging ===============
+void HS_InitLogger(HS_HaloSimServer* server);
+void HS_SetLogLevel(HS_HaloSimServer* server, HS_LogLevel level);
 
 // =============== Control ===============
 HS_ServerState HS_QueryServerState(HS_HaloSimServer* server);
-void HS_CommitConfig(HS_HaloSimServer* server, const char* config_str);
+int HS_CommitConfig(HS_HaloSimServer* server, const char* config_str);
+int HS_CommitConfigFromFile(HS_HaloSimServer* server, const char* filename);
 void HS_StopServer(HS_HaloSimServer* server);
 
 // =============== Result ===============

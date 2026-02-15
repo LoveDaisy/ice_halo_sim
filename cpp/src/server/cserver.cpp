@@ -5,6 +5,7 @@
 
 #include "include/icehalo.h"
 #include "server/server.hpp"
+#include "util/log.hpp"
 
 namespace ns = icehalo;
 
@@ -35,6 +36,29 @@ void HS_DestroyServer(HS_HaloSimServer* server) {
 }
 
 
+// =============== Logging ===============
+void HS_InitLogger(HS_HaloSimServer* server) {
+  (void)server;
+  ns::InitLogger();
+}
+
+
+void HS_SetLogLevel(HS_HaloSimServer* server, HS_LogLevel level) {
+  (void)server;
+  static constexpr spdlog::level::level_enum kLevelMap[] = {
+    spdlog::level::trace,  // HS_LOG_TRACE
+    spdlog::level::debug,  // HS_LOG_DEBUG
+    spdlog::level::info,   // HS_LOG_INFO
+    spdlog::level::warn,   // HS_LOG_WARNING
+    spdlog::level::err,    // HS_LOG_ERROR
+    spdlog::level::off,    // HS_LOG_OFF
+  };
+  if (level >= HS_LOG_TRACE && level <= HS_LOG_OFF) {
+    ns::SetLogLevel(kLevelMap[level]);
+  }
+}
+
+
 // =============== Control ===============
 HS_ServerState HS_QueryServerState(HS_HaloSimServer* server) {
   if (!server) {
@@ -49,14 +73,37 @@ HS_ServerState HS_QueryServerState(HS_HaloSimServer* server) {
 }
 
 
-void HS_CommitConfig(HS_HaloSimServer* server, const char* config_str) {
+int HS_CommitConfig(HS_HaloSimServer* server, const char* config_str) {
   if (!server) {
-    return;
+    return -1;
   }
 
-  // C API ignores errors for backward compatibility
-  // Error handling can be added in future C API updates
-  server->server_->CommitConfig(config_str);
+  auto err = server->server_->CommitConfig(config_str);
+  if (err) {
+    LOG_ERROR("Failed to commit configuration: {}", err.message);
+    if (!err.field.empty()) {
+      LOG_ERROR("Error field: {}", err.field);
+    }
+    return -1;
+  }
+  return 0;
+}
+
+
+int HS_CommitConfigFromFile(HS_HaloSimServer* server, const char* filename) {
+  if (!server || !filename) {
+    return -1;
+  }
+
+  auto err = server->server_->CommitConfigFromFile(filename);
+  if (err) {
+    LOG_ERROR("Failed to load configuration from file '{}': {}", filename, err.message);
+    if (!err.field.empty()) {
+      LOG_ERROR("Error field: {}", err.field);
+    }
+    return -1;
+  }
+  return 0;
 }
 
 
