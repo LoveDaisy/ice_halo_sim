@@ -45,6 +45,7 @@ void HS_DestroyServer(HS_HaloSimServer* server) {
   if (!server) {
     return;
   }
+  server->server_->Terminate();
   delete server;
 }
 
