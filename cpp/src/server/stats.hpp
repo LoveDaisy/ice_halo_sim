@@ -3,11 +3,10 @@
 
 #include <cstddef>
 
-#include "include/server.hpp"
 #include "server/consumer.hpp"
+#include "server/server.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 class StatsConsumer : public IConsume {
  public:
@@ -20,7 +19,6 @@ class StatsConsumer : public IConsume {
   size_t crystals_ = 0;
 };
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CONSUMER_STATS_H_

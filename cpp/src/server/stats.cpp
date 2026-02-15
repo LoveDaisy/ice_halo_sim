@@ -5,7 +5,6 @@
 #include "core/def.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 void StatsConsumer::Consume(const SimData& data) {
   for (const auto& r : data.rays_) {
@@ -21,5 +20,4 @@ Result StatsConsumer::GetResult() const {
   return StatsResult{ total_rays_, sim_rays_, crystals_ };
 }
 
-}  // namespace v3
 }  // namespace icehalo

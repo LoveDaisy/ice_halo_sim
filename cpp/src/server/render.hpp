@@ -9,7 +9,6 @@
 #include "server/consumer.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 constexpr int kMinWavelength = 360;
 constexpr int kMaxWavelength = 830;
@@ -31,7 +30,6 @@ class RenderConsumer : public IConsume {
   std::unique_ptr<uint8_t[]> image_buffer_;
 };
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CONSUMER_RENDER_H_

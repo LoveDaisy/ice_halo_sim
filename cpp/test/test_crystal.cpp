@@ -1,290 +1,267 @@
-#include <algorithm>
-#include <vector>
+#include <gtest/gtest.h>
 
+#include <cstddef>
+#include <fstream>
+
+#include "config/config_manager.hpp"
 #include "core/crystal.hpp"
+#include "core/geo3d.hpp"
 #include "core/math.hpp"
-#include "gtest/gtest.h"
+#include "util/log.hpp"
+
+extern std::string config_file_name;
+using namespace icehalo;
 
 namespace {
 
-class CrystalTest : public ::testing::Test {
+class V3TestCrystal : public ::testing::Test {
  protected:
-  static void CheckVertex(const std::vector<icehalo::Vec3f>& vtx1, const std::vector<icehalo::Vec3f>& vtx2) {
-    ASSERT_EQ(vtx1.size(), vtx2.size());
-    for (size_t i = 0; i < vtx1.size(); i++) {
-      const auto& p0 = vtx1[i];
-      const auto& p = vtx2[i];
-
-      EXPECT_TRUE(p0 == p);
-    }
+  void SetUp() override {
+    std::ifstream f(config_file_name);
+    f >> config_json_;
   }
 
-  static void CheckFaceId(const std::vector<icehalo::ShortIdType>& ids1,
-                          const std::vector<icehalo::ShortIdType>& ids2) {
-    ASSERT_EQ(ids1.size(), ids2.size());
-    for (size_t i = 0; i < ids1.size(); i++) {
-      EXPECT_EQ(ids1[i], ids2[i]);
-    }
-  }
-
-  static void CheckCrystal(const icehalo::CrystalPtrU& c1, const icehalo::CrystalPtrU& c2) {
-    const auto* n1 = c1->GetFaceNorm();
-    const auto* n2 = c2->GetFaceNorm();
-    auto fn1 = c1->GetFaceNumberTable();
-    auto fn2 = c2->GetFaceNumberTable();
-
-    ASSERT_EQ(c1->TotalFaces(), c2->TotalFaces());
-    ASSERT_EQ(fn1.size(), fn2.size());
-    for (int i = 0; i < c1->TotalFaces(); i++) {
-      const auto* n = n1 + i * 3;
-      int fn = fn1[i];
-
-      bool find_same_norm = false;
-      for (int j = 0; j < c2->TotalFaces(); j++) {
-        const auto* tmp_n = n2 + j * 3;
-        int tmp_fn = fn2[j];
-        if (icehalo::DiffNorm3(n, tmp_n) < icehalo::math::kFloatEps) {
-          find_same_norm = true;
-          EXPECT_EQ(tmp_fn, fn);
-        }
-      }
-      EXPECT_TRUE(find_same_norm);
-    }
-
-    for (int i = 0; i < c2->TotalFaces(); i++) {
-      const auto* n = n2 + i * 3;
-      int fn = fn2[i];
-
-      bool find_same_norm = false;
-      for (int j = 0; j < c1->TotalFaces(); j++) {
-        const auto* tmp_n = n1 + j * 3;
-        int tmp_fn = fn1[j];
-        if (icehalo::DiffNorm3(n, tmp_n) < icehalo::math::kFloatEps) {
-          find_same_norm = true;
-          EXPECT_EQ(tmp_fn, fn);
-        }
-      }
-      EXPECT_TRUE(find_same_norm);
-    }
-
-    auto v1 = c1->GetVertexes();
-    auto v2 = c2->GetVertexes();
-    for (const auto& v : v1) {
-      auto findIter = std::find(v2.begin(), v2.end(), v);
-      EXPECT_NE(findIter, v2.end());
-    }
-    for (const auto& v : v2) {
-      auto findIter = std::find(v1.begin(), v1.end(), v);
-      EXPECT_NE(findIter, v1.end());
-    }
-  }
+  nlohmann::json config_json_;
 };
 
+TEST_F(V3TestCrystal, CrystalCacheData) {
+  auto crystal = Crystal::CreatePrism(1.3);
 
-TEST_F(CrystalTest, CreateNotNull) {
-  /* Prism */
-  auto c = icehalo::Crystal::CreateHexPrism(1.2f);
-  EXPECT_NE(c, nullptr);
+  const auto* face_v = crystal.GetTriangleVtx();
+  float expect_face_v[9 * 20]{
+    0.433013,  -0.250000, 0.650000,  0.433013,  0.250000,  0.650000,  0.000000,  0.500000,  0.650000,   //
+    0.433013,  -0.250000, 0.650000,  0.000000,  0.500000,  0.650000,  -0.433013, 0.250000,  0.650000,   //
+    -0.433013, 0.250000,  0.650000,  -0.433013, -0.250000, 0.650000,  0.000000,  -0.500000, 0.650000,   //
+    -0.433013, 0.250000,  0.650000,  0.000000,  -0.500000, 0.650000,  0.433013,  -0.250000, 0.650000,   //
+    0.433013,  -0.250000, 0.650000,  0.433013,  -0.250000, -0.650000, 0.433013,  0.250000,  0.650000,   //
+    0.433013,  -0.250000, -0.650000, 0.433013,  0.250000,  -0.650000, 0.433013,  0.250000,  0.650000,   //
+    0.433013,  0.250000,  0.650000,  0.433013,  0.250000,  -0.650000, 0.000000,  0.500000,  0.650000,   //
+    0.433013,  0.250000,  -0.650000, 0.000000,  0.500000,  -0.650000, 0.000000,  0.500000,  0.650000,   //
+    0.000000,  0.500000,  0.650000,  0.000000,  0.500000,  -0.650000, -0.433013, 0.250000,  0.650000,   //
+    0.000000,  0.500000,  -0.650000, -0.433013, 0.250000,  -0.650000, -0.433013, 0.250000,  0.650000,   //
+    -0.433013, 0.250000,  0.650000,  -0.433013, 0.250000,  -0.650000, -0.433013, -0.250000, 0.650000,   //
+    -0.433013, 0.250000,  -0.650000, -0.433013, -0.250000, -0.650000, -0.433013, -0.250000, 0.650000,   //
+    -0.433013, -0.250000, 0.650000,  -0.433013, -0.250000, -0.650000, 0.000000,  -0.500000, 0.650000,   //
+    -0.433013, -0.250000, -0.650000, 0.000000,  -0.500000, -0.650000, 0.000000,  -0.500000, 0.650000,   //
+    0.000000,  -0.500000, 0.650000,  0.000000,  -0.500000, -0.650000, 0.433013,  -0.250000, 0.650000,   //
+    0.000000,  -0.500000, -0.650000, 0.433013,  -0.250000, -0.650000, 0.433013,  -0.250000, 0.650000,   //
+    0.433013,  -0.250000, -0.650000, 0.000000,  0.500000,  -0.650000, 0.433013,  0.250000,  -0.650000,  //
+    0.433013,  -0.250000, -0.650000, -0.433013, 0.250000,  -0.650000, 0.000000,  0.500000,  -0.650000,  //
+    -0.433013, 0.250000,  -0.650000, 0.000000,  -0.500000, -0.650000, -0.433013, -0.250000, -0.650000,  //
+    -0.433013, 0.250000,  -0.650000, 0.433013,  -0.250000, -0.650000, 0.000000,  -0.500000, -0.650000,  //
+  };
 
-  /* Pyramid */
-  c = icehalo::Crystal::CreateHexPyramid(1.2f, 1.2f, 1.2f);
-  EXPECT_NE(c, nullptr);
+  const auto* face_ev = crystal.GetTriangleEdgeVec();
+  float expect_face_ev[6 * 20]{
+    0.000000,  0.500000,  0.000000,  -0.433013, 0.750000,  0.000000,  //
+    -0.433013, 0.750000,  0.000000,  -0.866025, 0.500000,  0.000000,  //
+    0.000000,  -0.500000, 0.000000,  0.433013,  -0.750000, 0.000000,  //
+    0.433013,  -0.750000, 0.000000,  0.866025,  -0.500000, 0.000000,  //
+    0.000000,  0.000000,  -1.300000, 0.000000,  0.500000,  0.000000,  //
+    0.000000,  0.500000,  0.000000,  0.000000,  0.500000,  1.300000,  //
+    0.000000,  0.000000,  -1.300000, -0.433013, 0.250000,  0.000000,  //
+    -0.433013, 0.250000,  0.000000,  -0.433013, 0.250000,  1.300000,  //
+    0.000000,  0.000000,  -1.300000, -0.433013, -0.250000, 0.000000,  //
+    -0.433013, -0.250000, 0.000000,  -0.433013, -0.250000, 1.300000,  //
+    0.000000,  0.000000,  -1.300000, 0.000000,  -0.500000, 0.000000,  //
+    0.000000,  -0.500000, 0.000000,  0.000000,  -0.500000, 1.300000,  //
+    0.000000,  0.000000,  -1.300000, 0.433013,  -0.250000, 0.000000,  //
+    0.433013,  -0.250000, 0.000000,  0.433013,  -0.250000, 1.300000,  //
+    0.000000,  0.000000,  -1.300000, 0.433013,  0.250000,  0.000000,  //
+    0.433013,  0.250000,  0.000000,  0.433013,  0.250000,  1.300000,  //
+    -0.433013, 0.750000,  0.000000,  0.000000,  0.500000,  0.000000,  //
+    -0.866025, 0.500000,  0.000000,  -0.433013, 0.750000,  0.000000,  //
+    0.433013,  -0.750000, 0.000000,  0.000000,  -0.500000, 0.000000,  //
+    0.866025,  -0.500000, 0.000000,  0.433013,  -0.750000, 0.000000,  //
+  };
 
-  c = icehalo::Crystal::CreateHexPyramid(1, 1, 1.2f, 1.2f, 1.2f);
-  EXPECT_NE(c, nullptr);
+  const auto* face_n = crystal.GetTriangleNormal();
+  float expect_face_n[3 * 20]{
+    0.000000,  -0.000000, 1.000000,   //
+    0.000000,  0.000000,  1.000000,   //
+    0.000000,  0.000000,  1.000000,   //
+    0.000000,  0.000000,  1.000000,   //
+    1.000000,  -0.000000, 0.000000,   //
+    1.000000,  0.000000,  0.000000,   //
+    0.500000,  0.866025,  0.000000,   //
+    0.500000,  0.866025,  0.000000,   //
+    -0.500000, 0.866025,  0.000000,   //
+    -0.500000, 0.866025,  0.000000,   //
+    -1.000000, -0.000000, -0.000000,  //
+    -1.000000, 0.000000,  0.000000,   //
+    -0.500000, -0.866025, -0.000000,  //
+    -0.500000, -0.866025, 0.000000,   //
+    0.500000,  -0.866025, 0.000000,   //
+    0.500000,  -0.866025, 0.000000,   //
+    0.000000,  0.000000,  -1.000000,  //
+    0.000000,  0.000000,  -1.000000,  //
+    0.000000,  0.000000,  -1.000000,  //
+    0.000000,  0.000000,  -1.000000,  //
+  };
 
-  c = icehalo::Crystal::CreateHexPyramid(1, 1, 2, 3, 1.2f, 1.2f, 1.2f);
-  EXPECT_NE(c, nullptr);
+  const auto* face_area = crystal.GetTirangleArea();
+  float expect_face_area[20]{
+    0.108253, 0.216506, 0.108253, 0.216506, 0.325000, 0.325000, 0.325000, 0.325000, 0.325000, 0.325000,
+    0.325000, 0.325000, 0.325000, 0.325000, 0.325000, 0.325000, 0.108253, 0.216506, 0.108253, 0.216506,
+  };
 
-  /* IrregularHexPrism */
-  float dist[6]{ 1.0f, 1.0f, 1.5f, 1.0f, 2.5f, 1.0f };
-  c = icehalo::Crystal::CreateIrregularHexPrism(dist, 1.2f);
-  EXPECT_NE(c, nullptr);
+  const auto* face_tf = crystal.GetTriangleCoordTf();
+  float expect_face_tf[12 * 20]{
+    3.464102,  2.000000,  0.000000,  -1.000000, -2.309401, 0.000000,
+    0.000000,  1.000000,  0.000000,  -0.000000, 1.000000,  -0.650000,  //
+    1.154701,  2.000000,  -0.000000, -0.000000, -1.732051, -1.000000,
+    0.000000,  0.500000,  0.000000,  0.000000,  1.000000,  -0.650000,  //
+    -3.464102, -2.000000, 0.000000,  -1.000000, 2.309401,  0.000000,
+    -0.000000, 1.000000,  0.000000,  0.000000,  1.000000,  -0.650000,  //
+    -1.154701, -2.000000, 0.000000,  -0.000000, 1.732051,  1.000000,
+    -0.000000, 0.500000,  0.000000,  0.000000,  1.000000,  -0.650000,  //
+    0.000000,  0.000000,  -0.769231, 0.500000,  0.000000,  2.000000,
+    0.000000,  0.500000,  1.000000,  -0.000000, 0.000000,  -0.433013,  //
+    0.000000,  2.000000,  -0.769231, -0.000000, 0.000000,  0.000000,
+    0.769231,  0.500000,  1.000000,  0.000000,  0.000000,  -0.433013,  //
+    0.000000,  0.000000,  -0.769231, 0.500000,  -1.732051, 1.000000,
+    0.000000,  0.500000,  0.500000,  0.866025,  0.000000,  -0.433013,  //
+    -1.732051, 1.000000,  -0.769231, -0.000000, 0.000000,  -0.000000,
+    0.769231,  0.500000,  0.500000,  0.866025,  0.000000,  -0.433013,  //
+    -0.000000, 0.000000,  -0.769231, 0.500000,  -1.732051, -1.000000,
+    -0.000000, 0.500000,  -0.500000, 0.866025,  0.000000,  -0.433013,  //
+    -1.732051, -1.000000, -0.769231, 0.000000,  0.000000,  0.000000,
+    0.769231,  0.500000,  -0.500000, 0.866025,  0.000000,  -0.433013,  //
+    0.000000,  0.000000,  -0.769231, 0.500000,  0.000000,  -2.000000,
+    0.000000,  0.500000,  -1.000000, -0.000000, -0.000000, -0.433013,  //
+    -0.000000, -2.000000, -0.769231, -0.000000, 0.000000,  0.000000,
+    0.769231,  0.500000,  -1.000000, 0.000000,  0.000000,  -0.433013,  //
+    0.000000,  0.000000,  -0.769231, 0.500000,  1.732051,  -1.000000,
+    0.000000,  0.500000,  -0.500000, -0.866025, -0.000000, -0.433013,  //
+    1.732051,  -1.000000, -0.769231, -0.000000, 0.000000,  0.000000,
+    0.769231,  0.500000,  -0.500000, -0.866025, 0.000000,  -0.433013,  //
+    0.000000,  0.000000,  -0.769231, 0.500000,  1.732051,  1.000000,
+    0.000000,  0.500000,  0.500000,  -0.866025, 0.000000,  -0.433013,  //
+    1.732051,  1.000000,  -0.769231, 0.000000,  -0.000000, 0.000000,
+    0.769231,  0.500000,  0.500000,  -0.866025, 0.000000,  -0.433013,  //
+    -2.309401, 0.000000,  0.000000,  1.000000,  3.464102,  2.000000,
+    0.000000,  -1.000000, 0.000000,  0.000000,  -1.000000, -0.650000,  //
+    -1.732051, -1.000000, -0.000000, 0.500000,  1.154701,  2.000000,
+    0.000000,  -0.000000, 0.000000,  0.000000,  -1.000000, -0.650000,  //
+    2.309401,  0.000000,  0.000000,  1.000000,  -3.464102, -2.000000,
+    -0.000000, -1.000000, 0.000000,  0.000000,  -1.000000, -0.650000,  //
+    1.732051,  1.000000,  0.000000,  0.500000,  -1.154701, -2.000000,
+    -0.000000, -0.000000, 0.000000,  0.000000,  -1.000000, -0.650000,  //
+  };
 
-  /* IrregularHexPyramid */
-  int idx[4]{ 1, 1, 1, 1 };
-  float h[3]{ 0.3f, 1.2f, 0.9f };
-  c = icehalo::Crystal::CreateIrregularHexPyramid(dist, idx, h);
-  EXPECT_NE(c, nullptr);
+  auto n = crystal.TotalTriangles();
+  LOG_VERBOSE("face_v");
+  for (size_t i = 0; i < n; i++) {
+    LOG_VERBOSE("(%02zu): %.6f,%.6f,%.6f  %.6f,%.6f,%.6f  %.6f,%.6f,%.6f", i,  //
+                face_v[i * 9 + 0], face_v[i * 9 + 1], face_v[i * 9 + 2],       //
+                face_v[i * 9 + 3], face_v[i * 9 + 4], face_v[i * 9 + 5],       //
+                face_v[i * 9 + 6], face_v[i * 9 + 7], face_v[i * 9 + 8]);
+    for (int j = 0; j < 9; j++) {
+      ASSERT_NEAR(face_v[i * 9 + j], expect_face_v[i * 9 + j], 1e-5);
+    }
+  }
+
+  LOG_VERBOSE("face_ev");
+  for (size_t i = 0; i < n; i++) {
+    LOG_VERBOSE("(%02zu): %.6f,%.6f,%.6f  %.6f,%.6f,%.6f", i,                //
+                face_ev[i * 6 + 0], face_ev[i * 6 + 1], face_ev[i * 6 + 2],  //
+                face_ev[i * 6 + 3], face_ev[i * 6 + 4], face_ev[i * 6 + 5]);
+    for (int j = 0; j < 6; j++) {
+      ASSERT_NEAR(face_ev[i * 6 + j], expect_face_ev[i * 6 + j], 1e-5);
+    }
+  }
+
+  LOG_VERBOSE("face_n");
+  for (size_t i = 0; i < n; i++) {
+    LOG_VERBOSE("(%02zu): %.6f,%.6f,%.6f", i,  //
+                face_n[i * 3 + 0], face_n[i * 3 + 1], face_n[i * 3 + 2]);
+    for (int j = 0; j < 3; j++) {
+      ASSERT_NEAR(face_n[i * 3 + j], expect_face_n[i * 3 + j], 1e-5);
+    }
+  }
+
+  LOG_VERBOSE("face_area");
+  for (size_t i = 0; i < n; i++) {
+    LOG_VERBOSE("(%02zu): %.6f", i, face_area[i]);
+    ASSERT_NEAR(face_area[i], expect_face_area[i], 1e-5);
+  }
+
+  LOG_VERBOSE("face_tf");
+  for (size_t i = 0; i < n; i++) {
+    LOG_VERBOSE("(%02zu): %.6f,%.6f,%.6f,%.6f  %.6f,%.6f,%.6f,%.6f  %.6f,%.6f,%.6f,%.6f", i,         //
+                face_tf[i * 12 + 0], face_tf[i * 12 + 1], face_tf[i * 12 + 2], face_tf[i * 12 + 3],  //
+                face_tf[i * 12 + 4], face_tf[i * 12 + 5], face_tf[i * 12 + 6], face_tf[i * 12 + 7],  //
+                face_tf[i * 12 + 8], face_tf[i * 12 + 9], face_tf[i * 12 + 10], face_tf[i * 12 + 11]);
+    for (int j = 0; j < 12; j++) {
+      ASSERT_NEAR(face_tf[i * 12 + j], expect_face_tf[i * 12 + j], 1e-5);
+    }
+  }
 }
 
-
-TEST_F(CrystalTest, HexPrismVertex) {
-  using icehalo::math::kSqrt3;
-
-  float h = 1.2f;
-  float k = kSqrt3 / 2;
-
-  // clang-format off
-  std::vector<icehalo::Vec3f> pts0{
-    {  k,    -0.5f,  h },
-    {  k,     0.5f,  h },
-    {  0.0f,  1.0f,  h },
-    { -k,     0.5f,  h },
-    { -k,    -0.5f,  h },
-    {  0.0f, -1.0f,  h },
-    {  k,    -0.5f, -h },
-    {  k,     0.5f, -h },
-    {  0.0f,  1.0f, -h },
-    { -k,     0.5f, -h },
-    { -k,    -0.5f, -h },
-    {  0.0f, -1.0f, -h },
-  };
-  // clang-format on
-
-  std::vector<icehalo::ShortIdType> face_number_table0{
-    1, 1, 1, 1, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 2, 2, 2, 2,
-  };
-
-  auto c = icehalo::Crystal::CreateHexPrism(h);
-  EXPECT_EQ(c->GetVertexes().size(), 12ul);
-  CheckVertex(pts0, c->GetVertexes());
-  CheckFaceId(face_number_table0, c->GetFaceNumberTable());
-}
-
-
-TEST_F(CrystalTest, HexPyramidVertex0) {
-  using icehalo::math::kSqrt3;
-
-  float h1 = 0.3f;
-  float h2 = 1.0f;
-  float h3 = 0.9f;
-  float H = icehalo::Crystal::kC;
-
-  float r1 = 1.0f - h1;
-  float r3 = 1.0f - h3;
-  float k = kSqrt3 / 2;
-
-  // clang-format off
-  std::vector<icehalo::Vec3f> pts0{
-    {     k * r1, -0.5f * r1,  h2 + h1 * H },
-    {     k * r1,  0.5f * r1,  h2 + h1 * H },
-    {  0.0f * r1,  1.0f * r1,  h2 + h1 * H },
-    {    -k * r1,  0.5f * r1,  h2 + h1 * H },
-    {    -k * r1, -0.5f * r1,  h2 + h1 * H },
-    {  0.0f * r1, -1.0f * r1,  h2 + h1 * H },
-    {     k, -0.5f,  h2 },
-    {     k,  0.5f,  h2 },
-    {  0.0f,  1.0f,  h2 },
-    {    -k,  0.5f,  h2 },
-    {    -k, -0.5f,  h2 },
-    {  0.0f, -1.0f,  h2 },
-    {     k, -0.5f, -h2 },
-    {     k,  0.5f, -h2 },
-    {  0.0f,  1.0f, -h2 },
-    {    -k,  0.5f, -h2 },
-    {    -k, -0.5f, -h2 },
-    {  0.0f, -1.0f, -h2 },
-    {     k * r3, -0.5f * r3, -h2 - h3 * H },
-    {     k * r3,  0.5f * r3, -h2 - h3 * H },
-    {  0.0f * r3,  1.0f * r3, -h2 - h3 * H },
-    {    -k * r3,  0.5f * r3, -h2 - h3 * H },
-    {    -k * r3, -0.5f * r3, -h2 - h3 * H },
-    {  0.0f * r3, -1.0f * r3, -h2 - h3 * H },
-  };
-  // clang-format on
-
-  std::vector<icehalo::ShortIdType> face_number_table0{
-    1,  1,  1,  1,                                   // top
-    13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18,  // upper pyramidal
-    3,  3,  4,  4,  5,  5,  6,  6,  7,  7,  8,  8,   // prism
-    23, 23, 24, 24, 25, 25, 26, 26, 27, 27, 28, 28,  // lower pyramidal
-    2,  2,  2,  2,                                   // bottom
-  };
-
-  auto c = icehalo::Crystal::CreateHexPyramid(h1, h2, h3);
-  EXPECT_EQ(c->GetVertexes().size(), 24ul);
-  CheckVertex(pts0, c->GetVertexes());
-  CheckFaceId(face_number_table0, c->GetFaceNumberTable());
-
-  c = icehalo::Crystal::CreateHexPyramid(1, 1, h1, h2, h3);
-  EXPECT_EQ(c->GetVertexes().size(), 24ul);
-  CheckVertex(pts0, c->GetVertexes());
-  CheckFaceId(face_number_table0, c->GetFaceNumberTable());
-
-  c = icehalo::Crystal::CreateHexPyramid(1, 1, 1, 1, h1, h2, h3);
-  EXPECT_EQ(c->GetVertexes().size(), 24ul);
-  CheckVertex(pts0, c->GetVertexes());
-  CheckFaceId(face_number_table0, c->GetFaceNumberTable());
-}
-
-
-TEST_F(CrystalTest, IrregularHexPyramid) {
-  float h1 = 0.3;
-  float h2 = 0.5;
-  float h3 = 0.85;
-
+TEST_F(V3TestCrystal, PrismMesh) {
   float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
-  int idx[4]{ 1, 1, 1, 1 };
-  float hs[3]{ h1, h2, h3 };
+  auto c1 = CreatePrismMesh(1.5f);
+  auto c2 = CreatePrismMesh(1.5f, dist);
 
-  auto c1 = icehalo::Crystal::CreateHexPyramid(h1, h2, h3);
-  auto c2 = icehalo::Crystal::CreateIrregularHexPyramid(dist, idx, hs);
-  EXPECT_EQ(c1->TotalFaces(), c2->TotalFaces());
-  EXPECT_EQ(c1->TotalVertexes(), c2->TotalVertexes());
-  CheckCrystal(c1, c2);
+  ASSERT_EQ(c1.GetTriangleCnt(), c2.GetTriangleCnt());
+  ASSERT_EQ(c1.GetVtxCnt(), c2.GetVtxCnt());
+
+  // Check all vertices are identical.
+  const auto* vtx1 = c1.GetVtxPtr(0);
+  const auto* vtx2 = c2.GetVtxPtr(0);
+  for (size_t i = 0; i < c1.GetVtxCnt(); i++) {
+    bool match = false;
+    for (size_t j = 0; j < c2.GetVtxCnt(); j++) {
+      if (FloatEqualZero(DiffNorm3(vtx1 + i * 3, vtx2 + j * 3))) {
+        match = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(match);
+  }
+  for (size_t i = 0; i < c2.GetVtxCnt(); i++) {
+    bool match = false;
+    for (size_t j = 0; j < c1.GetVtxCnt(); j++) {
+      if (FloatEqualZero(DiffNorm3(vtx2 + i * 3, vtx1 + j * 3))) {
+        match = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(match);
+  }
 }
 
-
-TEST_F(CrystalTest, IrregularHexPrismVertex0) {
-  using icehalo::math::kSqrt3;
-
-  float h = 1.2f;
+TEST_F(V3TestCrystal, PyramidMesh) {
   float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  auto c1 = CreatePyramidMesh(0.2f, 1.4f, 0.8f);
+  auto c2 = CreatePyramidMesh(1, 1, 1, 1, 0.2f, 1.4f, 0.8f, dist);
 
-  auto c1 = icehalo::Crystal::CreateHexPrism(h);
-  auto c2 = icehalo::Crystal::CreateIrregularHexPrism(dist, h);
+  ASSERT_EQ(c1.GetTriangleCnt(), c2.GetTriangleCnt());
+  ASSERT_EQ(c1.GetVtxCnt(), c2.GetVtxCnt());
 
-  EXPECT_EQ(c1->TotalFaces(), c2->TotalFaces());
-  EXPECT_EQ(c1->TotalVertexes(), c2->TotalVertexes());
-  CheckCrystal(c1, c2);
-}
-
-
-TEST_F(CrystalTest, IrregularHexPrismVertex1) {
-  using icehalo::math::kSqrt3;
-
-  float h = 1.2f;
-  float dist[6]{ 1.0f, 1.0f, 1.5f, 1.0f, 2.5f, 1.0f };
-
-  // clang-format off
-  std::vector<icehalo::Vec3f> pts0 {
-    {  kSqrt3 / 2, -0.5f,  h },
-    {  kSqrt3 / 2,  0.5f,  h },
-    { -kSqrt3 / 4, 1.25f,  h },
-    { -kSqrt3 / 2,  1.0f,  h },
-    { -kSqrt3 / 2, -1.5f,  h },
-    {  kSqrt3 / 2, -0.5f, -h },
-    {  kSqrt3 / 2,  0.5f, -h },
-    { -kSqrt3 / 4, 1.25f, -h },
-    { -kSqrt3 / 2,  1.0f, -h },
-    { -kSqrt3 / 2, -1.5f, -h },
-  };
-  std::vector<icehalo::TriangleIdx> faces0 {
-    { 0, 1, 2 }, { 0, 2, 3 }, { 0, 3, 4 },
-    { 0, 6, 1 }, { 0, 5, 6 },
-    { 1, 7, 2 }, { 1, 6, 7 },
-    { 2, 8, 3 }, { 2, 7, 8 },
-    { 3, 9, 4 }, { 3, 8, 9 },
-    { 4, 5, 0 }, { 4, 9, 5 },
-    { 5, 7, 6 }, { 5, 8, 7 }, { 5, 9, 8 },
-  };
-  std::vector<icehalo::ShortIdType> face_number_map0 {
-    1, 1, 1,
-    3, 3,
-    4, 4,
-    5, 5,
-    6, 6,
-    8, 8,
-    2, 2, 2,
-  };
-  // clang-format on
-
-  auto c1 = icehalo::Crystal::CreateCustomCrystal(pts0, faces0, face_number_map0);
-  auto c2 = icehalo::Crystal::CreateIrregularHexPrism(dist, h);
-  EXPECT_EQ(c1->TotalVertexes(), c2->TotalVertexes());
-  EXPECT_EQ(c1->TotalFaces(), c2->TotalFaces());
-  CheckCrystal(c1, c2);
+  // Check all vertices are identical.
+  const auto* vtx1 = c1.GetVtxPtr(0);
+  const auto* vtx2 = c2.GetVtxPtr(0);
+  for (size_t i = 0; i < c1.GetVtxCnt(); i++) {
+    bool match = false;
+    for (size_t j = 0; j < c2.GetVtxCnt(); j++) {
+      if (FloatEqualZero(DiffNorm3(vtx1 + i * 3, vtx2 + j * 3))) {
+        match = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(match);
+  }
+  for (size_t i = 0; i < c2.GetVtxCnt(); i++) {
+    bool match = false;
+    for (size_t j = 0; j < c1.GetVtxCnt(); j++) {
+      if (FloatEqualZero(DiffNorm3(vtx2 + i * 3, vtx1 + j * 3))) {
+        match = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(match);
+  }
 }
 
 }  // namespace

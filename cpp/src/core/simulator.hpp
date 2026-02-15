@@ -12,7 +12,6 @@
 #include "core/math.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 template <class T>
 class Queue;
@@ -54,7 +53,6 @@ class Simulator {
   std::shared_ptr<spdlog::logger> logger_;
 };
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CORE_SIMULATOR_H_

@@ -1,5 +1,5 @@
-#ifndef ICEHALOSIM_CSERVER_H_
-#define ICEHALOSIM_CSERVER_H_
+#ifndef ICEHALO_H_
+#define ICEHALO_H_
 
 #ifdef __cplusplus
 extern "C" {
@@ -61,4 +61,4 @@ void HS_DeleteAllResults(HS_SimResult* result);
 }
 #endif
 
-#endif  // ICEHALOSIM_CSERVER_H_
+#endif  // ICEHALO_H_

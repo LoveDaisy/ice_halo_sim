@@ -10,7 +10,6 @@
 
 
 namespace icehalo {
-namespace v3 {
 
 // =============== Error ===============
 /**
@@ -240,7 +239,6 @@ class Server {
   std::shared_ptr<ServerImpl> impl_;
 };
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // INCLUDE_SERVER_H_

@@ -19,7 +19,6 @@
 #include "util/queue.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 /**
  * @brief Sample on crystal & init origin (p & fid) of rays.
@@ -539,5 +538,4 @@ bool Simulator::IsIdle() const {
   return !stop_ && idle_;
 }
 
-}  // namespace v3
 }  // namespace icehalo

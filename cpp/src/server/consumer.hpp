@@ -6,10 +6,9 @@
 #include <vector>
 
 #include "config/sim_data.hpp"
-#include "include/server.hpp"
+#include "server/server.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 // =============== Interface ===============
 /**
@@ -47,7 +46,6 @@ class IConsume {
 using ConsumerPtrU = std::unique_ptr<IConsume>;
 using ConsumerPtrS = std::shared_ptr<IConsume>;
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CONSUMER_CONSUMER_H_

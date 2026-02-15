@@ -2,7 +2,6 @@
 #define SRC_CORE_MYMATH_H_
 
 #include <cstddef>
-#include <initializer_list>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <random>
@@ -121,34 +120,6 @@ class TriangleIdx {
 };
 
 
-class PolygonIdx {
- public:
-  PolygonIdx();
-  PolygonIdx(std::initializer_list<ShortIdType> idx);
-  explicit PolygonIdx(std::vector<ShortIdType> idx);
-
-  const std::vector<ShortIdType>& idx() const;
-
- private:
-  std::vector<ShortIdType> idx_;
-};
-
-
-/* A set of half spaces.
- * Half space is defined as:
- *    a * x + b * y + c * z + d <= 0
- */
-struct HalfSpaceSet {
-  HalfSpaceSet(int n, float* a, float* b, float* c, float* d);
-
-  int n;
-  float* a;
-  float* b;
-  float* c;
-  float* d;
-};
-
-
 enum class DistributionType {
   kNoRandom,
   kUniform,
@@ -185,15 +156,6 @@ class RandomNumberGenerator {
 
 class RandomSampler {
  public:
-  /*! @brief Generate points distributed uniformly on sphere around a give point, in Cartesian form.
-   *
-   * @param dir the given point, xyz.
-   * @param std half range (like radii), in degree.
-   * @param data output data, xyz.
-   * @param num number of points.
-   */
-  static void SampleSphericalPointsCart(const float* dir, float std, float* data, size_t num = 1);
-
   /*! @brief Generate points distributed uniformly on sphere, in spherical form, (lon, lat).
    *
    * @param data output data, (lon, lat), in rad
@@ -208,29 +170,6 @@ class RandomSampler {
    * @param num number of points.
    */
   static void SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num = 1);
-
-  /*! @brief Generate points evenly distributed on a triangle, in Cartesian form, xyz.
-   *
-   * @param vertexes vertexes of the triangle.
-   * @param data output data, xyz.
-   * @param num number of points.
-   */
-  static void SampleTriangularPoints(const float* vertexes, float* data, size_t num = 1);
-
-  /*! @brief Random choose an integer index from [0, max), proportional to probabilities in p.
-   *
-   * @param p probabilities, must have max values, sum of all p should be 1.0f.
-   * @param max range bound.
-   * @return chosen index.
-   */
-  static int SampleInt(const float* p, int max);
-
-  /*! @brief Random choose an integer from [0, max)
-   *
-   * @param max range bound.
-   * @return chosen integer.
-   */
-  static int SampleInt(int max);
 
   RandomSampler() = delete;
 };
@@ -248,19 +187,6 @@ void Normalized3(const float* vec, float* vec_out);
 void Vec3FromTo(const float* vec1, const float* vec2, float* vec);
 void TriangleNormal(const float* p1, const float* p2, const float* p3, float* normal);
 
-void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num = 1);
-void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t input_step,
-             size_t output_step, size_t data_num = 1);
-void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num = 1);
-
-std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss);
-void SortAndRemoveDuplicate(std::vector<Vec3f>* pts);
-std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& n0, float d0);
-void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Vec3f>& pts, std::vector<TriangleIdx>& faces);
-void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n, std::vector<int>& pts_idx,
-                             std::vector<TriangleIdx>& faces);
-
-
 struct AxisDistribution {
   AxisDistribution();
 
@@ -269,8 +195,6 @@ struct AxisDistribution {
   Distribution roll_dist;
 };
 
-
-namespace v3 {
 
 /**
  * @brief Find the intersection point of two 2D lines. Lines have forms of a*x + b*y + c = 0
@@ -365,8 +289,6 @@ std::vector<std::set<int>> CollectSurfaceVtx(int vtx_cnt, const float* vtx_ptr, 
  */
 std::tuple<std::unique_ptr<int[]>, int> Triangulate(int vtx_cnt, const float* vtx_ptr,
                                                     const std::vector<std::set<int>>& surface_vtx_idx);
-
-}  // namespace v3
 
 
 // convertion to & from json object

@@ -12,7 +12,7 @@
 #include <limits>
 #include <memory>
 
-#include "io/json_util.hpp"
+#include "util/json_util.hpp"
 #include "util/log.hpp"
 
 
@@ -82,258 +82,6 @@ void TriangleNormal(const float* p1, const float* p2, const float* p3, float* no
   Vec3FromTo(p1, p3, v2);
   Cross3(v1, v2, normal);
   Normalize3(normal);
-}
-
-
-void RotateZ(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num) {
-  return RotateZ(lon_lat_roll, input_vec, output_vec, 3, 3, data_num);
-}
-
-
-void RotateZ(const float* lon_lat_roll,  // longitude, latitude, roll
-             const float* input_vec,     // input data
-             float* output_vec,          // output data
-             size_t input_step, size_t output_step, size_t data_num) {
-  using std::cos;
-  using std::sin;
-
-  const float ax[] = {
-    -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-    cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-    cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-    -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-    -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-    cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
-    cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
-    cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
-    sin(lon_lat_roll[1]),
-    0
-  };
-
-#if defined(USE_SIMD) && defined(__AVX__) && defined(__SSE4_1__)
-  __m128 AX0 = _mm_loadu_ps(ax + 0);
-  __m128 AX1 = _mm_loadu_ps(ax + 3);
-  __m128 AX2 = _mm_loadu_ps(ax + 6);
-
-  for (size_t i = 0; i < data_num; i++) {
-    float* tmp_out = output_vec + i * output_step;
-
-    __m128 INPUT_V = _mm_loadu_ps(input_vec + i * input_step);
-    auto DP = _mm_dp_ps(INPUT_V, AX0, 0x71);
-    tmp_out[0] = DP[0];
-    DP = _mm_dp_ps(INPUT_V, AX1, 0x71);
-    tmp_out[1] = DP[0];
-    DP = _mm_dp_ps(INPUT_V, AX2, 0x71);
-    tmp_out[2] = DP[0];
-  }
-#else
-  // Then do the matrix multiplication (using Dot3 actually)
-  for (size_t i = 0; i < data_num; i++) {
-    const float* tmp_v = input_vec + i * input_step;
-    float* tmp_out = output_vec + i * output_step;
-    for (int j = 0; j < 3; j++) {
-      tmp_out[j] = Dot3(tmp_v, ax + j * 3);
-    }
-  }
-#endif
-}
-
-
-void RotateZBack(const float* lon_lat_roll, const float* input_vec, float* output_vec, size_t data_num) {
-  using std::cos;
-  using std::sin;
-
-  const float ax[] = {
-    -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-    -cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) * sin(lon_lat_roll[1]) + sin(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-    cos(lon_lat_roll[0]) * cos(lon_lat_roll[1]),
-    cos(lon_lat_roll[0]) * cos(lon_lat_roll[2]) - sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-    -cos(lon_lat_roll[2]) * sin(lon_lat_roll[0]) * sin(lon_lat_roll[1]) - cos(lon_lat_roll[0]) * sin(lon_lat_roll[2]),
-    cos(lon_lat_roll[1]) * sin(lon_lat_roll[0]),
-    cos(lon_lat_roll[1]) * sin(lon_lat_roll[2]),
-    cos(lon_lat_roll[1]) * cos(lon_lat_roll[2]),
-    sin(lon_lat_roll[1]),
-    0
-  };
-
-#if defined(USE_SIMD) && defined(__AVX__) && defined(__SSE4_1__)
-  __m128 AX0 = _mm_loadu_ps(ax + 0);
-  __m128 AX1 = _mm_loadu_ps(ax + 3);
-  __m128 AX2 = _mm_loadu_ps(ax + 6);
-
-  for (size_t i = 0; i < data_num; i++) {
-    float* tmp_out = output_vec + i * 3;
-
-    __m128 INPUT_V = _mm_loadu_ps(input_vec + i * 3);
-    auto DP = _mm_dp_ps(INPUT_V, AX0, 0x71);
-    tmp_out[0] = DP[0];
-    DP = _mm_dp_ps(INPUT_V, AX1, 0x71);
-    tmp_out[1] = DP[0];
-    DP = _mm_dp_ps(INPUT_V, AX2, 0x71);
-    tmp_out[2] = DP[0];
-  }
-#else
-  // Then do the matrix multiplication (using Dot3 actually)
-  for (size_t i = 0; i < data_num; i++) {
-    const float* tmp_v = input_vec + i * 3;
-    float* tmp_out = output_vec + i * 3;
-    for (int j = 0; j < 3; j++) {
-      tmp_out[j] = Dot3(tmp_v, ax + j * 3);
-    }
-  }
-#endif
-}
-
-
-std::vector<Vec3f> FindInnerPoints(const HalfSpaceSet& hss) {
-  float* a = hss.a;
-  float* b = hss.b;
-  float* c = hss.c;
-  float* d = hss.d;
-  int n = hss.n;
-
-  std::vector<Vec3f> pts;
-  for (int i = 0; i < n; i++) {
-    for (int j = i + 1; j < n; j++) {
-      for (int k = j + 1; k < n; k++) {
-        float det = a[k] * b[j] * c[i] - a[j] * b[k] * c[i] - a[k] * b[i] * c[j] + a[i] * b[k] * c[j] +
-                    a[j] * b[i] * c[k] - a[i] * b[j] * c[k];
-        if (std::abs(det) <= math::kFloatEps) {
-          continue;
-        }
-        float x = -(b[k] * c[j] * d[i] - b[j] * c[k] * d[i] - b[k] * c[i] * d[j] + b[i] * c[k] * d[j] +
-                    b[j] * c[i] * d[k] - b[i] * c[j] * d[k]) /
-                  det;
-        float y = -(-(a[k] * c[j] * d[i]) + a[j] * c[k] * d[i] + a[k] * c[i] * d[j] - a[i] * c[k] * d[j] -
-                    a[j] * c[i] * d[k] + a[i] * c[j] * d[k]) /
-                  det;
-        float z = -(a[k] * b[j] * d[i] - a[j] * b[k] * d[i] - a[k] * b[i] * d[j] + a[i] * b[k] * d[j] +
-                    a[j] * b[i] * d[k] - a[i] * b[j] * d[k]) /
-                  det;
-
-        bool in = true;
-        for (int ii = 0; ii < n; ii++) {
-          in = in && (a[ii] * x + b[ii] * y + c[ii] * z + d[ii] <= math::kFloatEps);
-          if (!in) {
-            break;
-          }
-        }
-        if (in) {
-          pts.emplace_back(x, y, z);
-        }
-      }
-    }
-  }
-
-  return pts;
-}
-
-
-void SortAndRemoveDuplicate(std::vector<Vec3f>* pts) {
-  /* Sort by coordinates */
-  std::sort(pts->begin(), pts->end(), [=](const Vec3f& p1, const Vec3f& p2) {
-    if (p1 == p2) {
-      return false;
-    }
-    if (p1.x() < p2.x() - math::kFloatEps) {
-      return true;
-    }
-    if (FloatEqual(p1.x(), p2.x()) && p1.y() < p2.y() - math::kFloatEps) {
-      return true;
-    }
-    if (FloatEqual(p1.x(), p2.x()) && FloatEqual(p1.y(), p2.y()) && p1.z() < p2.z() - math::kFloatEps) {
-      return true;
-    }
-    return false;
-  });
-
-  /* Remove duplicated points */
-  for (auto iter = pts->begin(), last_iter = pts->begin(); iter != pts->end();) {
-    if (iter != last_iter && (*iter) == (*last_iter)) {
-      iter = pts->erase(iter);
-    } else {
-      last_iter = iter;
-      ++iter;
-    }
-  }
-}
-
-
-std::vector<int> FindCoplanarPoints(const std::vector<Vec3f>& pts, const Vec3f& n0, float d0) {
-  std::vector<int> pts_idx;
-  for (size_t j = 0; j < pts.size(); j++) {
-    const auto& p = pts[j];
-    if (FloatEqual(Vec3f::Dot(n0, p) + d0, 0)) {
-      pts_idx.push_back(static_cast<int>(j));
-    }
-  }
-  return pts_idx;
-}
-
-
-void BuildPolyhedronFaces(const HalfSpaceSet& hss, const std::vector<Vec3f>& pts,  // input
-                          std::vector<TriangleIdx>& faces) {                       // output
-  int num = hss.n;
-  float* a = hss.a;
-  float* b = hss.b;
-  float* c = hss.c;
-  float* d = hss.d;
-
-  for (int i = 0; i < num; i++) {
-    /* Find co-planer points */
-    Vec3f n0(a[i], b[i], c[i]);
-    std::vector<int> face_pts_idx = FindCoplanarPoints(pts, n0, d[i]);
-    if (face_pts_idx.empty()) {
-      continue;
-    }
-
-    /* Build triangular division */
-    BuildTriangularDivision(pts, n0, face_pts_idx, faces);
-  }
-}
-
-
-void BuildTriangularDivision(const std::vector<Vec3f>& vertex, const Vec3f& n,              // input
-                             std::vector<int>& pts_idx, std::vector<TriangleIdx>& faces) {  // output
-  /* Find the center of co-planer points */
-  Vec3f center(0.0f, 0.0f, 0.0f);
-  for (auto p : pts_idx) {
-    center += vertex[p];
-  }
-  center /= pts_idx.size();
-
-  /* Sort by angle */
-  int idx0 = pts_idx[0];
-  std::sort(pts_idx.begin() + 1, pts_idx.end(), [&n, &vertex, &center, idx0](const int idx1, const int idx2) {
-    Vec3f p0 = Vec3f::FromTo(center, vertex[idx0]).Normalized();
-    Vec3f p1 = Vec3f::FromTo(center, vertex[idx1]).Normalized();
-    Vec3f p2 = Vec3f::FromTo(center, vertex[idx2]).Normalized();
-
-    Vec3f n1 = Vec3f::Cross(p0, p1);
-    float dir = Vec3f::Dot(n1, n);
-    float c1 = Vec3f::Dot(p0, p1);
-    float s1 = std::abs(dir) > math::kFloatEps ? Vec3f::Norm(n1) * (dir / std::abs(dir)) : 0;
-    float angle1 = atan2(s1, c1);
-    angle1 += (angle1 < 0 ? 2 * math::kPi : 0);
-
-    Vec3f n2 = Vec3f::Cross(p0, p2);
-    dir = Vec3f::Dot(n2, n);
-    float c2 = Vec3f::Dot(p0, p2);
-    float s2 = std::abs(dir) > math::kFloatEps ? Vec3f::Norm(n2) * (dir / std::abs(dir)) : 0;
-    float angle2 = atan2(s2, c2);
-    angle2 += (angle2 < 0 ? 2 * math::kPi : 0);
-
-    if (FloatEqual(angle1, angle2)) {
-      return false;
-    } else {
-      return angle1 < angle2;
-    }
-  });
-
-  /* Construct a triangular division */
-  for (size_t j = 1; j < pts_idx.size() - 1; j++) {
-    faces.emplace_back(pts_idx[0], pts_idx[j], pts_idx[j + 1]);
-  }
 }
 
 
@@ -598,23 +346,6 @@ const ShortIdType* TriangleIdx::idx() const {
 }
 
 
-PolygonIdx::PolygonIdx() {}
-
-
-PolygonIdx::PolygonIdx(std::initializer_list<ShortIdType> idx) : idx_(idx) {}
-
-
-PolygonIdx::PolygonIdx(std::vector<ShortIdType> idx) : idx_(std::move(idx)) {}
-
-
-const std::vector<ShortIdType>& PolygonIdx::idx() const {
-  return idx_;
-}
-
-
-HalfSpaceSet::HalfSpaceSet(int n, float* a, float* b, float* c, float* d) : n(n), a(a), b(b), c(c), d(d) {}
-
-
 RandomNumberGenerator::RandomNumberGenerator(uint32_t seed)
     : seed_(seed), generator_{ static_cast<std::mt19937::result_type>(seed) } {}
 
@@ -661,29 +392,6 @@ void RandomNumberGenerator::SetSeed(uint32_t seed) {
 }
 
 
-void RandomSampler::SampleSphericalPointsCart(const float* dir, float std, float* data, size_t num) {
-  auto* rng = RandomNumberGenerator::GetInstance();
-
-  float lon = std::atan2(dir[1], dir[0]);
-  float lat = std::asin(dir[2] / Norm3(dir));
-  float rot[3] = { lon, lat, 0 };
-
-  std::unique_ptr<float[]> tmp_dir{ new float[num * 3] };
-
-  double dz = 2 * std::sin(std / 2.0 * math::kDegreeToRad) * std::sin(std / 2.0 * math::kDegreeToRad);
-  for (size_t i = 0; i < num; i++) {
-    double udz = rng->GetUniform() * dz;
-    double q = rng->GetUniform() * 2 * math::kPi;
-
-    double r = std::sqrt((2.0f - udz) * udz);
-    tmp_dir[i * 3 + 0] = static_cast<float>(std::cos(q) * r);
-    tmp_dir[i * 3 + 1] = static_cast<float>(std::sin(q) * r);
-    tmp_dir[i * 3 + 2] = static_cast<float>(1.0 - udz);
-  }
-  RotateZBack(rot, tmp_dir.get(), data, num);
-}
-
-
 void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t step) {
   auto* rng = RandomNumberGenerator::GetInstance();
   for (size_t i = 0; i < num; i++) {
@@ -716,47 +424,6 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     data[i * 2 + 0] = lambda;
     data[i * 2 + 1] = phi;
   }
-}
-
-
-void RandomSampler::SampleTriangularPoints(const float* vertexes, float* data, size_t num) {
-  auto* rng = RandomNumberGenerator::GetInstance();
-  for (size_t i = 0; i < num; i++) {
-    float a = rng->GetUniform();
-    float b = rng->GetUniform();
-
-    if (a + b > 1.0f) {
-      a = 1.0f - a;
-      b = 1.0f - b;
-    }
-
-    for (int j = 0; j < 3; j++) {
-      data[i * 3 + j] = (vertexes[j + 3] - vertexes[j]) * a + (vertexes[j + 6] - vertexes[j]) * b + vertexes[j];
-    }
-  }
-}
-
-
-int RandomSampler::SampleInt(const float* p, int max) {
-  auto* rng = RandomNumberGenerator::GetInstance();
-
-  float current_cum_p = 0;
-  float current_p = rng->GetUniform();
-
-  for (int i = 0; i < max; i++) {
-    current_cum_p += p[i];
-    if (current_p < current_cum_p) {
-      return i;
-    }
-  }
-
-  return max - 1;
-}
-
-
-int RandomSampler::SampleInt(int max) {
-  auto* rng = RandomNumberGenerator::GetInstance();
-  return std::min(static_cast<int>(rng->GetUniform() * max), max - 1);
 }
 
 
@@ -810,8 +477,6 @@ void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
   JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "roll", axis.roll_dist)
 }
 
-
-namespace v3 {
 
 bool SolveLines(const float* coef1, const float* coef2, float* res) {
   float det = coef1[0] * coef2[1] - coef2[0] * coef1[1];
@@ -1139,5 +804,4 @@ std::tuple<std::unique_ptr<int[]>, int> Triangulate(int vtx_cnt, const float* vt
   return std::make_tuple(std::move(tri), tri_cnt);
 }
 
-}  // namespace v3
 }  // namespace icehalo

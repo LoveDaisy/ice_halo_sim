@@ -75,13 +75,13 @@ TEST_F(RngTest, UniformTest) {
 
 
 TEST_F(RngTest, TriangleSample) {
-  auto crystal = icehalo::v3::Crystal::CreatePrism(0.2f);
+  auto crystal = icehalo::Crystal::CreatePrism(0.2f);
 
   float p[3];
   float v[3];
   int fid = 0;
   const float* face_vtx = crystal.GetTriangleVtx() + fid * 9;
-  icehalo::v3::SampleTrianglePoint(face_vtx, p);
+  icehalo::SampleTrianglePoint(face_vtx, p);
   for (int k = 0; k < 3; k++) {
     v[k] = p[k] - face_vtx[k];
   }

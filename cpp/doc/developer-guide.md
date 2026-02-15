@@ -1,22 +1,23 @@
 # 开发指南
 
-**版本**: V3  
-**最后更新**: 2025-12-19
-
 本文档为项目开发者提供开发环境设置、代码风格、功能扩展、测试和调试等方面的指导。
 
 ## 开发环境设置
 
 ### 系统要求
 
-- **操作系统**: macOS 10.14+ 或 Linux (Ubuntu 14.04+)
+- **操作系统**: macOS 10.14+ 或 Linux (Ubuntu 18.04+)
 - **编译器**: 支持C++17的编译器（GCC 7+, Clang 5+）
 - **CMake**: >= 3.14
-- **依赖库**:
-  - OpenCV >= 3.3 (用于图像处理)
-  - Boost >= 1.63 (filesystem, system)
-  - nlohmann/json (已包含在 thirdparty 目录)
-  - GoogleTest (用于单元测试，CMake会自动下载)
+- **Ninja**（推荐）: 默认构建生成器，增量构建更快且自动并行
+
+所有其他依赖通过 [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) 自动下载和管理：
+- [nlohmann/json](https://github.com/nlohmann/json) v3.10.5 — JSON 解析（header-only）
+- [spdlog](https://github.com/gabime/spdlog) v1.15.0 — 日志（header-only）
+- [tl-expected](https://github.com/TartanLlama/expected) v1.1.0 — C++17 `expected<T,E>`（header-only）
+- [GoogleTest](https://github.com/google/googletest) v1.15.2 — 单元测试（启用 `-t` 时下载）
+
+> **关于 Ninja**: 若未安装 Ninja，可将 `build.sh` 中的 `-G Ninja` 删除，CMake 将回退到系统默认生成器（通常为 Unix Makefiles）。
 
 ### 依赖安装
 
@@ -24,14 +25,14 @@
 
 ```bash
 # 使用 Homebrew
-brew install opencv boost cmake
+brew install cmake ninja
 ```
 
 #### Linux (Ubuntu/Debian)
 
 ```bash
 sudo apt-get update
-sudo apt-get install libopencv-dev libboost-filesystem-dev libboost-system-dev cmake
+sudo apt-get install cmake ninja-build
 ```
 
 ### 构建配置
@@ -40,16 +41,16 @@ sudo apt-get install libopencv-dev libboost-filesystem-dev libboost-system-dev c
 
 ```bash
 cd cpp
-./build.sh release    # Release版本（推荐）
-./build.sh debug      # Debug版本（用于调试）
+./build.sh -j release    # Release版本（推荐）
+./build.sh -j debug      # Debug版本（用于调试）
 ```
 
 **构建选项**：
-- `-j`: 并行编译
 - `-t`: 编译并运行测试
+- `-j`: 并行编译
 - `-k`: 清理构建文件
-- `-v`: 启用详细日志
-- `-b`: 运行性能基准测试
+- `-s`: 构建共享库（默认为静态库）
+- `-h`: 显示帮助信息
 
 ### IDE配置
 
@@ -78,8 +79,8 @@ cd cpp
 ```bash
 cd cpp
 ./build.sh debug
-lldb ./build/cmake_build/IceHaloV3
-(lldb) run -f v3_config_example.json
+lldb ./build/cmake_build/IceHalo
+(lldb) run -f config_example.json
 ```
 
 #### 使用GDB (Linux)
@@ -87,8 +88,8 @@ lldb ./build/cmake_build/IceHaloV3
 ```bash
 cd cpp
 ./build.sh debug
-gdb ./build/cmake_build/IceHaloV3
-(gdb) run -f v3_config_example.json
+gdb ./build/cmake_build/IceHalo
+(gdb) run -f config_example.json
 ```
 
 ## 代码风格指南
@@ -154,18 +155,15 @@ static constexpr size_t kMaxSceneCnt = 128;
 #### 命名空间
 
 - 使用 `snake_case`
-- V3代码使用 `icehalo::v3` 命名空间
-- 旧代码使用 `icehalo` 命名空间
+- 所有代码使用 `icehalo` 命名空间
 
 ```cpp
 namespace icehalo {
-namespace v3 {
 
 class Crystal {
   // ...
 };
 
-}  // namespace v3
 }  // namespace icehalo
 ```
 
@@ -182,9 +180,7 @@ class Crystal {
 **格式化代码**：
 ```bash
 cd cpp
-./format.sh  # 如果有格式化脚本
-# 或使用 clang-format
-clang-format -i src/**/*.{hpp,cpp}
+./format.sh
 ```
 
 ### 文件组织
@@ -362,21 +358,19 @@ bool Filter::ApplyNewFilter(const NewFilterParam& param, const RaySeg& ray) {
 #include "server/consumer.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 class MyConsumer : public IConsume {
  public:
   void Consume(const SimData& data) override {
     // 处理数据
   }
-  
+
   Result GetResult() const override {
     // 返回结果
     return MyResult{};
   }
 };
 
-}  // namespace v3
 }  // namespace icehalo
 ```
 
@@ -428,7 +422,7 @@ struct ConfigManager {
 
 1. **创建测试文件**：
    - 位置：`test/` 目录
-   - 命名：`test_*.cpp` 或 `test_v3_*.cpp`
+   - 命名：`test_*.cpp`
 
 2. **测试结构**：
 ```cpp
@@ -438,13 +432,13 @@ struct ConfigManager {
 using namespace icehalo;
 
 TEST(CrystalTest, CreatePrism) {
-  auto crystal = v3::Crystal::CreatePrism(1.3);
+  auto crystal = Crystal::CreatePrism(1.3);
   EXPECT_GT(crystal.TotalTriangles(), 0);
   EXPECT_GT(crystal.TotalVertices(), 0);
 }
 
 TEST(CrystalTest, CreatePyramid) {
-  auto crystal = v3::Crystal::CreatePyramid(0.1, 1.2, 0.5);
+  auto crystal = Crystal::CreatePyramid(0.1, 1.2, 0.5);
   EXPECT_GT(crystal.TotalTriangles(), 0);
 }
 ```
@@ -454,10 +448,10 @@ TEST(CrystalTest, CreatePyramid) {
 class CrystalTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    crystal_ = v3::Crystal::CreatePrism(1.3);
+    crystal_ = Crystal::CreatePrism(1.3);
   }
-  
-  v3::Crystal crystal_;
+
+  Crystal crystal_;
 };
 
 TEST_F(CrystalTest, GetTriangleVtx) {
@@ -491,35 +485,57 @@ ctest
 
 ### 日志系统
 
+项目使用 [spdlog](https://github.com/gabime/spdlog) 作为日志后端，通过 `util/log.hpp` 提供便捷宏。
+
 #### 日志级别
 
-项目提供了日志系统，支持以下级别：
+- `TRACE` / `VERBOSE`: 最详细的跟踪信息
 - `DEBUG`: 调试信息
-- `VERBOSE`: 详细信息
-- `INFO`: 一般信息
+- `INFO`: 一般信息（默认级别）
 - `WARNING`: 警告信息
 - `ERROR`: 错误信息
+- `CRITICAL` / `FATAL`: 严重错误信息
 
 #### 使用日志
 
 ```cpp
 #include "util/log.hpp"
 
-LOG_DEBUG("Debug message: %d", value);
+LOG_DEBUG("Debug message: {}", value);
 LOG_VERBOSE("Verbose message");
 LOG_INFO("Info message");
 LOG_WARNING("Warning message");
-LOG_ERROR("Error message: %s", error_str);
+LOG_ERROR("Error message: {}", error_str);
 ```
 
-#### 启用日志
+日志使用 [fmt](https://fmt.dev/) 格式化语法（`{}` 占位符），而非 `printf` 风格的 `%d`/`%s`。
 
-```bash
-# 启用详细输出
-./build/cmake_install/IceHaloV3 -f config.json -v
+#### 类级别日志
 
-# 启用调试输出
-./build/cmake_install/IceHaloV3 -f config.json -d
+对于需要区分来源的日志，可使用命名 logger：
+
+```cpp
+#include "util/log.hpp"
+
+class MyClass {
+  static auto logger = icehalo::GetLogger("MyClass");
+
+  void DoWork() {
+    logger->info("Working on task {}", task_id);
+    logger->debug("Detail: {}", detail);
+  }
+};
+```
+
+#### 设置日志级别
+
+日志级别可通过 `icehalo::SetLogLevel()` 在程序中设置：
+
+```cpp
+#include "util/log.hpp"
+
+icehalo::InitLogger();                              // 初始化（程序启动时调用一次）
+icehalo::SetLogLevel(spdlog::level::debug);         // 设置为 debug 级别
 ```
 
 ### 调试工具
@@ -528,14 +544,14 @@ LOG_ERROR("Error message: %s", error_str);
 
 ```bash
 # 启动调试
-lldb ./build/cmake_build/IceHaloV3
+lldb ./build/cmake_build/IceHalo
 
 # 设置断点
 (lldb) breakpoint set --file crystal.cpp --line 100
 (lldb) b crystal.cpp:100
 
 # 运行程序
-(lldb) run -f config.json
+(lldb) run -f config_example.json
 
 # 查看变量
 (lldb) print variable_name
@@ -553,18 +569,18 @@ lldb ./build/cmake_build/IceHaloV3
 #### Valgrind内存检查（Linux）
 
 ```bash
-valgrind --leak-check=full ./build/cmake_build/IceHaloV3 -f config.json
+valgrind --leak-check=full ./build/cmake_build/IceHalo -f config_example.json
 ```
 
 #### 性能分析
 
 ```bash
 # 使用 perf (Linux)
-perf record ./build/cmake_install/IceHaloV3 -f config.json
+perf record ./build/cmake_install/IceHalo -f config_example.json
 perf report
 
 # 使用 Instruments (macOS)
-instruments -t "Time Profiler" ./build/cmake_install/IceHaloV3 -f config.json
+instruments -t "Time Profiler" ./build/cmake_install/IceHalo -f config_example.json
 ```
 
 ### 常见问题排查
@@ -602,9 +618,8 @@ instruments -t "Time Profiler" ./build/cmake_install/IceHaloV3 -f config.json
 #### 性能问题
 
 1. **运行缓慢**：
-   - 使用基准测试定位瓶颈
    - 检查是否使用了Debug版本（应使用Release版本）
-   - 使用性能分析工具
+   - 使用性能分析工具定位瓶颈
 
 2. **内存占用高**：
    - 检查是否有内存泄漏

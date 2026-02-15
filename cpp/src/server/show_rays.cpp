@@ -5,7 +5,6 @@
 #include "util/log.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 void ShowRayInfoConsumer::Consume(const SimData& data) {
   LOG_INFO("(id) p  d  w fid prev_id");
@@ -21,5 +20,4 @@ void ShowRayInfoConsumer::Consume(const SimData& data) {
   }
 }
 
-}  // namespace v3
 }  // namespace icehalo

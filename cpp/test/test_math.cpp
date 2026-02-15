@@ -24,7 +24,7 @@ TEST_F(V3TestMath, Solve3Case1) {
   };
 
   float xyz[3];
-  auto solved = v3::SolvePlanes(coef, coef + 4, coef + 8, xyz);
+  auto solved = SolvePlanes(coef, coef + 4, coef + 8, xyz);
 
   ASSERT_TRUE(solved);
   ASSERT_NEAR(xyz[0], 0.0f, math::kFloatEps);
@@ -40,7 +40,7 @@ TEST_F(V3TestMath, Solve3Case2) {
   };
 
   float xyz[3];
-  auto solved = v3::SolvePlanes(coef, coef + 4, coef + 8, xyz);
+  auto solved = SolvePlanes(coef, coef + 4, coef + 8, xyz);
 
   ASSERT_TRUE(solved);
   ASSERT_NEAR(xyz[0], 0.34577f, 2e-5);
@@ -60,7 +60,7 @@ TEST_F(V3TestMath, SolveLinesIntersect) {
   float coef2[3]{ 1, 1, -2 };
   float res[2];
 
-  ASSERT_TRUE(v3::SolveLines(coef1, coef2, res));
+  ASSERT_TRUE(SolveLines(coef1, coef2, res));
   EXPECT_NEAR(res[0], 1.0f, math::kFloatEps);
   EXPECT_NEAR(res[1], 1.0f, math::kFloatEps);
 }
@@ -73,7 +73,7 @@ TEST_F(V3TestMath, SolveLinesPerpendicular) {
   float coef2[3]{ 0, 1, 2 };
   float res[2];
 
-  ASSERT_TRUE(v3::SolveLines(coef1, coef2, res));
+  ASSERT_TRUE(SolveLines(coef1, coef2, res));
   EXPECT_NEAR(res[0], 3.0f, math::kFloatEps);
   EXPECT_NEAR(res[1], -2.0f, math::kFloatEps);
 }
@@ -85,7 +85,7 @@ TEST_F(V3TestMath, SolveLinesParallel) {
   float coef2[3]{ 2, -1, 3 };
   float res[2];
 
-  ASSERT_FALSE(v3::SolveLines(coef1, coef2, res));
+  ASSERT_FALSE(SolveLines(coef1, coef2, res));
   EXPECT_TRUE(std::isnan(res[0]));
   EXPECT_TRUE(std::isnan(res[1]));
 }
@@ -96,7 +96,7 @@ TEST_F(V3TestMath, SolveLinesCoincident) {
   float coef2[3]{ 2, 2, -2 };  // Scaled version
   float res[2];
 
-  ASSERT_FALSE(v3::SolveLines(coef1, coef2, res));
+  ASSERT_FALSE(SolveLines(coef1, coef2, res));
 }
 
 // ============================================================================
@@ -113,7 +113,7 @@ TEST_F(V3TestMath, IsInPolygon2TriangleInside) {
   };
 
   float inside[2]{ 0.5f, 0.5f };
-  EXPECT_TRUE(v3::IsInPolygon2(3, coef, inside));
+  EXPECT_TRUE(IsInPolygon2(3, coef, inside));
 }
 
 TEST_F(V3TestMath, IsInPolygon2TriangleOutside) {
@@ -122,7 +122,7 @@ TEST_F(V3TestMath, IsInPolygon2TriangleOutside) {
   };
 
   float outside[2]{ 1.5f, 1.5f };  // x + y = 3 > 2
-  EXPECT_FALSE(v3::IsInPolygon2(3, coef, outside));
+  EXPECT_FALSE(IsInPolygon2(3, coef, outside));
 }
 
 TEST_F(V3TestMath, IsInPolygon2TriangleBoundary) {
@@ -130,9 +130,9 @@ TEST_F(V3TestMath, IsInPolygon2TriangleBoundary) {
     0, -1, 0, -1, 0, 0, 1, 1, -2,
   };
 
-  float on_edge[2]{ 1.0f, 1.0f };                           // x + y = 2, exactly on boundary
-  EXPECT_TRUE(v3::IsInPolygon2(3, coef, on_edge, true));    // boundary included
-  EXPECT_FALSE(v3::IsInPolygon2(3, coef, on_edge, false));  // boundary excluded
+  float on_edge[2]{ 1.0f, 1.0f };                       // x + y = 2, exactly on boundary
+  EXPECT_TRUE(IsInPolygon2(3, coef, on_edge, true));    // boundary included
+  EXPECT_FALSE(IsInPolygon2(3, coef, on_edge, false));  // boundary excluded
 }
 
 TEST_F(V3TestMath, IsInPolygon2Square) {
@@ -146,13 +146,13 @@ TEST_F(V3TestMath, IsInPolygon2Square) {
   };
 
   float center[2]{ 0.5f, 0.5f };
-  EXPECT_TRUE(v3::IsInPolygon2(4, coef, center));
+  EXPECT_TRUE(IsInPolygon2(4, coef, center));
 
   float corner[2]{ 0.0f, 0.0f };
-  EXPECT_TRUE(v3::IsInPolygon2(4, coef, corner, true));
+  EXPECT_TRUE(IsInPolygon2(4, coef, corner, true));
 
   float outside[2]{ 1.5f, 0.5f };
-  EXPECT_FALSE(v3::IsInPolygon2(4, coef, outside));
+  EXPECT_FALSE(IsInPolygon2(4, coef, outside));
 }
 
 // ============================================================================
@@ -171,7 +171,7 @@ TEST_F(V3TestMath, IsInPolyhedron3CubeInside) {
   };
 
   float center[3]{ 0.5f, 0.5f, 0.5f };
-  EXPECT_TRUE(v3::IsInPolyhedron3(6, coef, center));
+  EXPECT_TRUE(IsInPolyhedron3(6, coef, center));
 }
 
 TEST_F(V3TestMath, IsInPolyhedron3CubeOutside) {
@@ -180,7 +180,7 @@ TEST_F(V3TestMath, IsInPolyhedron3CubeOutside) {
   };
 
   float outside[3]{ 1.5f, 0.5f, 0.5f };
-  EXPECT_FALSE(v3::IsInPolyhedron3(6, coef, outside));
+  EXPECT_FALSE(IsInPolyhedron3(6, coef, outside));
 }
 
 TEST_F(V3TestMath, IsInPolyhedron3CubeBoundary) {
@@ -189,12 +189,12 @@ TEST_F(V3TestMath, IsInPolyhedron3CubeBoundary) {
   };
 
   float on_face[3]{ 1.0f, 0.5f, 0.5f };  // On x=1 face
-  EXPECT_TRUE(v3::IsInPolyhedron3(6, coef, on_face, true));
-  EXPECT_FALSE(v3::IsInPolyhedron3(6, coef, on_face, false));
+  EXPECT_TRUE(IsInPolyhedron3(6, coef, on_face, true));
+  EXPECT_FALSE(IsInPolyhedron3(6, coef, on_face, false));
 
   float on_edge[3]{ 0.0f, 0.0f, 0.5f };  // On edge x=0,y=0
-  EXPECT_TRUE(v3::IsInPolyhedron3(6, coef, on_edge, true));
-  EXPECT_FALSE(v3::IsInPolyhedron3(6, coef, on_edge, false));
+  EXPECT_TRUE(IsInPolyhedron3(6, coef, on_edge, true));
+  EXPECT_FALSE(IsInPolyhedron3(6, coef, on_edge, false));
 }
 
 TEST_F(V3TestMath, IsInPolyhedron3Tetrahedron) {
@@ -209,10 +209,10 @@ TEST_F(V3TestMath, IsInPolyhedron3Tetrahedron) {
   };
 
   float origin[3]{ 0.0f, 0.0f, 0.0f };
-  EXPECT_TRUE(v3::IsInPolyhedron3(4, coef, origin));
+  EXPECT_TRUE(IsInPolyhedron3(4, coef, origin));
 
   float far_out[3]{ 5.0f, 5.0f, 5.0f };
-  EXPECT_FALSE(v3::IsInPolyhedron3(4, coef, far_out));
+  EXPECT_FALSE(IsInPolyhedron3(4, coef, far_out));
 }
 
 // ============================================================================
@@ -225,7 +225,7 @@ class V3TestRotation : public ::testing::Test {
 };
 
 TEST_F(V3TestRotation, DefaultIdentity) {
-  v3::Rotation rot;
+  Rotation rot;
   float pt[3]{ 1.0f, 2.0f, 3.0f };
   float orig[3];
   std::memcpy(orig, pt, sizeof(pt));
@@ -240,7 +240,7 @@ TEST_F(V3TestRotation, DefaultIdentity) {
 TEST_F(V3TestRotation, RotateAroundZ90) {
   // Rotate 90 degrees around Z axis: (1,0,0) -> (0,1,0)
   float z_axis[3]{ 0, 0, 1 };
-  v3::Rotation rot(z_axis, math::kPi_2);
+  Rotation rot(z_axis, math::kPi_2);
 
   float pt[3]{ 1.0f, 0.0f, 0.0f };
   rot.Apply(pt);
@@ -253,7 +253,7 @@ TEST_F(V3TestRotation, RotateAroundZ90) {
 TEST_F(V3TestRotation, RotateAroundX180) {
   // Rotate 180 degrees around X axis: (0,1,0) -> (0,-1,0)
   float x_axis[3]{ 1, 0, 0 };
-  v3::Rotation rot(x_axis, math::kPi);
+  Rotation rot(x_axis, math::kPi);
 
   float pt[3]{ 0.0f, 1.0f, 0.0f };
   rot.Apply(pt);
@@ -265,7 +265,7 @@ TEST_F(V3TestRotation, RotateAroundX180) {
 
 TEST_F(V3TestRotation, InverseRestoresOriginal) {
   float y_axis[3]{ 0, 1, 0 };
-  v3::Rotation rot(y_axis, 0.7f);
+  Rotation rot(y_axis, 0.7f);
 
   float pt[3]{ 1.0f, 2.0f, 3.0f };
   float orig[3];
@@ -286,7 +286,7 @@ TEST_F(V3TestRotation, InverseRestoresOriginal) {
 
 TEST_F(V3TestRotation, ApplyInverseEquivalent) {
   float z_axis[3]{ 0, 0, 1 };
-  v3::Rotation rot(z_axis, 1.2f);
+  Rotation rot(z_axis, 1.2f);
 
   float pt1[3]{ 3.0f, 4.0f, 5.0f };
   float pt2[3]{ 3.0f, 4.0f, 5.0f };
@@ -297,7 +297,7 @@ TEST_F(V3TestRotation, ApplyInverseEquivalent) {
   rot.Apply(pt1);
 
   // Method 2: Apply, then ApplyInverse (on a fresh rotation)
-  v3::Rotation rot2(z_axis, 1.2f);
+  Rotation rot2(z_axis, 1.2f);
   rot2.Apply(pt2);
   rot2.ApplyInverse(pt2);
 
@@ -309,7 +309,7 @@ TEST_F(V3TestRotation, ApplyInverseEquivalent) {
 TEST_F(V3TestRotation, ChainTwoRotations) {
   // Two 90-degree rotations around Z = one 180-degree rotation
   float z_axis[3]{ 0, 0, 1 };
-  v3::Rotation rot(z_axis, math::kPi_2);
+  Rotation rot(z_axis, math::kPi_2);
   rot.Chain(z_axis, math::kPi_2);
 
   float pt[3]{ 1.0f, 0.0f, 0.0f };
@@ -323,7 +323,7 @@ TEST_F(V3TestRotation, ChainTwoRotations) {
 
 TEST_F(V3TestRotation, MultiplePoints) {
   float z_axis[3]{ 0, 0, 1 };
-  v3::Rotation rot(z_axis, math::kPi_2);
+  Rotation rot(z_axis, math::kPi_2);
 
   float pts[6]{ 1, 0, 0, 0, 1, 0 };  // Two points
   rot.Apply(pts, 2);

@@ -5,11 +5,10 @@
 #include <variant>
 #include <vector>
 
-#include "io/json_util.hpp"
+#include "util/json_util.hpp"
 #include "util/log.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 struct LightParamToJson {
   nlohmann::json& j_;
@@ -79,5 +78,4 @@ void from_json(const nlohmann::json& j, LightSourceConfig& l) {
   }
 }
 
-}  // namespace v3
 }  // namespace icehalo

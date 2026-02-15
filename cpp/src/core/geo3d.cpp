@@ -13,7 +13,6 @@
 #include "core/math.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 Rotation::Rotation() : mat_{ 1, 0, 0, 0, 1, 0, 0, 0, 1 } {}
 
@@ -777,5 +776,4 @@ Mesh CreateConcavePyramidMesh(float upper_alpha, float lower_alpha,  // wedge an
   return Mesh(upper_vtx_cnt + lower_vtx_cnt, std::move(vtx), tri_cnt, std::move(tri));
 }
 
-}  // namespace v3
 }  // namespace icehalo

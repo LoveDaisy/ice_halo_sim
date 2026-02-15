@@ -14,11 +14,10 @@
 #include "core/filter.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
-#include "process/color_data.hpp"
+#include "util/color_data.hpp"
 #include "util/log.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 // =============== Color transforms ===============
 // Convert linear rgb to sRGB
@@ -341,5 +340,4 @@ Result RenderConsumer::GetResult() const {
   return RenderResult{ config_.id_, config_.resolution_[0], config_.resolution_[1], image_buffer_.get() };
 }
 
-}  // namespace v3
 }  // namespace icehalo

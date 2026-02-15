@@ -9,8 +9,9 @@ PROJ_DIR=${ROOT_DIR}
 build() {
   mkdir -p "${BUILD_DIR}"
   pushd "${BUILD_DIR}" > /dev/null
-  cmake -S "${PROJ_DIR}" -B "${BUILD_DIR}" \
+  cmake -S "${PROJ_DIR}" -B "${BUILD_DIR}" -G Ninja \
         -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TEST=$BUILD_TEST \
+        -DBUILD_SHARED_LIBS=$BUILD_SHARED \
         -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}"
   cmake --build "${BUILD_DIR}" -j $MAKE_J_N
   ret=$?
@@ -30,12 +31,13 @@ build() {
 
 help() {
   echo "Usage:"
-  echo "  ./build.sh [-tjkh] <debug|release|minsizerel>"
+  echo "  ./build.sh [-tjksh] <debug|release|minsizerel>"
   echo "    Executables will be installed at build/cmake_install"
   echo "OPTIONS:"
   echo "  -t:          Build test cases and run test on them."
   echo "  -j:          Build in parallel, i.e. use make -j"
   echo "  -k:          Clean temporary building files."
+  echo "  -s:          Build shared library (default: static)."
   echo "  -h:          Show this message."
 }
 
@@ -48,6 +50,7 @@ clean_all() {
 
 BUILD_TYPE=Debug
 BUILD_TEST=OFF
+BUILD_SHARED=OFF
 INSTALL_FLAG=OFF
 MAKE_J_N=1
 
@@ -60,7 +63,7 @@ fi
 # A POSIX variable
 OPTIND=1         # Reset in case getopts has been used previously in the shell.
 
-while getopts "htjk" opt; do
+while getopts "htjks" opt; do
   case "$opt" in
   h)
     help
@@ -74,6 +77,9 @@ while getopts "htjk" opt; do
     ;;
   k)
     clean_all
+    ;;
+  s)
+    BUILD_SHARED=ON
     ;;
   *)
     help

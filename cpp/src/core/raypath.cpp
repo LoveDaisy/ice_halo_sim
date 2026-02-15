@@ -1,7 +1,6 @@
 #include "core/raypath.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 RaypathRecorder& RaypathRecorder::operator<<(IdType fn) {
   if (size_ >= kMaxHits) {
@@ -53,5 +52,4 @@ size_t RaypathHash::operator()(const RaypathRecorder& rp) {
   return h.GetHash();
 }
 
-}  // namespace v3
 }  // namespace icehalo

@@ -8,7 +8,6 @@
 #include "core/def.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 struct NoneFilterParam {};
 
@@ -61,7 +60,6 @@ struct FilterConfig {
 void to_json(nlohmann::json& j, const FilterConfig& f);
 void from_json(const nlohmann::json& j, FilterConfig& f);
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CONFIG_FILTER_CONFIG_H_

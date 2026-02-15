@@ -1,23 +1,20 @@
 # C接口使用文档
 
-**版本**: V3  
-**最后更新**: 2025-12-19
-
-本文档详细说明V3版本的C接口API使用方法。
+本文档详细说明C接口API使用方法。
 
 ## 概述
 
-Ice Halo Simulation 提供了完整的C接口，方便与其他语言集成。C接口封装了V3版本的C++实现，提供了简洁的API。
+Ice Halo Simulation 提供了完整的C接口，方便与其他语言集成。C接口封装了C++实现，提供了简洁的API。
 
 ### 头文件
 
 ```c
-#include "cserver.h"
+#include "icehalo.h"
 ```
 
 ### 链接库
 
-链接 `IceHaloLibV3` 静态库。
+链接 `icehalo` 静态库。
 
 ## API参考
 
@@ -347,7 +344,7 @@ void HS_DeleteAllResults(HS_SimResult* result);
 ### 基础示例
 
 ```c
-#include "cserver.h"
+#include "icehalo.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -414,7 +411,7 @@ int main() {
 ### 完整示例（包含错误处理）
 
 ```c
-#include "cserver.h"
+#include "icehalo.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -671,9 +668,9 @@ import ctypes
 import json
 
 # 加载库
-lib = ctypes.CDLL('./libIceHaloLibV3.so')  # Linux
-# lib = ctypes.CDLL('./libIceHaloLibV3.dylib')  # macOS
-# lib = ctypes.WinDLL('./IceHaloLibV3.dll')  # Windows
+lib = ctypes.CDLL('./libicehalo.so')  # Linux
+# lib = ctypes.CDLL('./libicehalo.dylib')  # macOS
+# lib = ctypes.WinDLL('./icehalo.dll')  # Windows
 
 # 定义类型
 class HS_RenderResult(ctypes.Structure):
@@ -762,7 +759,7 @@ struct HS_StatsResult {
     crystal_num: c_ulong,
 }
 
-#[link(name = "IceHaloLibV3")]
+#[link(name = "icehalo")]
 extern "C" {
     fn HS_CreateServer() -> *mut c_void;
     fn HS_DestroyServer(server: *mut c_void);

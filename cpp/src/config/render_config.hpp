@@ -8,7 +8,6 @@
 #include "core/def.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 struct ViewParam {
   float az_;  // Azimuth
@@ -97,7 +96,6 @@ NLOHMANN_JSON_SERIALIZE_ENUM(    // declear
 
 void to_json(nlohmann::json& j, const RenderConfig& r);
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CONFIG_RENDER_CONFIG_H_

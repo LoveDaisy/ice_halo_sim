@@ -7,7 +7,6 @@
 #include "core/def.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 // =============== FilterConfig ===============
 struct SimpleFilterParamToJson {
@@ -148,5 +147,4 @@ void from_json(const nlohmann::json& j, FilterConfig& f) {
   }
 }
 
-}  // namespace v3
 }  // namespace icehalo

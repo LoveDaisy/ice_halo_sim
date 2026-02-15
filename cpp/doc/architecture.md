@@ -1,13 +1,10 @@
-# V3 系统架构文档
+# 系统架构文档
 
-**版本**: V3  
-**最后更新**: 2025-12-19
-
-本文档描述 Ice Halo Simulation 项目 V3 版本的系统架构设计。
+本文档描述 Ice Halo Simulation 项目的系统架构设计。
 
 ## 概述
 
-V3 版本是当前主要开发的版本，采用了服务器-消费者（Server-Consumer）架构模式，支持多线程并行处理和批量处理能力。
+项目采用服务器-消费者（Server-Consumer）架构模式，支持多线程并行光线追踪和批量处理。
 
 ### 设计目标
 
@@ -19,15 +16,13 @@ V3 版本是当前主要开发的版本，采用了服务器-消费者（Server-
 ### 架构特点
 
 - **服务器-消费者模式**：采用生产者-消费者模式，实现模拟和渲染的解耦
-- **多线程并行**：默认使用4个模拟器线程并行处理
+- **多线程并行**：默认使用 4 个模拟器线程并行处理
 - **队列系统**：使用线程安全的队列进行数据传递
 - **批量处理**：支持在一个配置文件中定义多个场景和渲染器
 
-## V3 架构设计
+## 整体架构
 
-### 整体架构
-
-V3 版本采用三层架构：
+采用三层架构：
 
 ```
 ┌─────────────────────────────────────────┐
@@ -46,11 +41,11 @@ V3 版本采用三层架构：
 └─────────────────────────────────────────┘
 ```
 
-### 核心组件
+## 核心组件
 
-#### 1. Server（服务器）
+### 1. Server（服务器）
 
-`Server` 类是 V3 架构的核心，负责：
+`Server` 类是架构的核心入口，采用 PIMPL 模式将实现隐藏在 `ServerImpl` 中。负责：
 
 - 配置管理：解析和管理 JSON 配置文件
 - 任务调度：将项目配置分发到模拟器
@@ -58,12 +53,23 @@ V3 版本采用三层架构：
 - 生命周期管理：控制服务器启动和停止
 
 **主要接口**：
-- `CommitConfig()`: 提交配置
-- `GetResults()`: 获取处理结果（非阻塞）
+- `CommitConfig(const std::string&)`: 提交 JSON 配置字符串
+- `CommitConfigFromFile(const std::string&)`: 从文件加载配置
+- `GetRenderResults()`: 获取渲染结果（非阻塞）
+- `GetStatsResult()`: 获取统计结果（非阻塞）
 - `IsIdle()`: 检查是否空闲
 - `Stop()` / `Terminate()`: 停止服务器
 
-#### 2. Simulator（模拟器）
+**错误处理**：
+```cpp
+struct Error {
+  ErrorCode code;   // kSuccess, kInvalidJson, kInvalidConfig, kMissingField, ...
+  std::string message;
+  std::string field;
+};
+```
+
+### 2. Simulator（模拟器）
 
 `Simulator` 负责光线追踪模拟：
 
@@ -72,32 +78,33 @@ V3 版本采用三层架构：
 - 将模拟结果放入数据队列
 
 **特点**：
-- 多实例并行：默认创建4个 Simulator 实例
+- 多实例并行：默认创建 4 个 Simulator 实例
 - 独立线程：每个 Simulator 运行在独立线程中
-- 批量处理：可以处理多个场景
+- 独立随机数生成器：每个实例使用不同的种子
 
-#### 3. Consumer（消费者）
+### 3. Consumer（消费者）
 
 `IConsume` 接口定义了消费者的抽象：
 
-- `Consume()`: 消费模拟数据
+- `Consume(const SimData&)`: 消费模拟数据
 - `GetResult()`: 获取处理结果
 
 **实现类**：
 - `RenderConsumer`: 渲染消费者，将模拟数据渲染为图像
-- `StatsConsumer`: 统计消费者，收集统计信息
+- `StatsConsumer`: 统计消费者，收集光线数量、晶体数量等统计信息
+- `ShowRayInfoConsumer`: 光线信息消费者，用于调试
 
-#### 4. 队列系统
+### 4. 队列系统
 
-使用线程安全的队列进行数据传递：
+使用线程安全的 `Queue<T>` 模板进行数据传递，基于 `std::mutex` 和 `std::condition_variable` 实现阻塞式获取：
 
 - `proj_queue_`: 项目配置队列
-- `scene_queue_`: 场景配置队列（共享）
-- `data_queue_`: 模拟数据队列（共享）
+- `scene_queue_`: 场景配置队列（多个 Simulator 共享）
+- `data_queue_`: 模拟数据队列（多个 Simulator 共享）
 
-### 数据流
+## 数据流
 
-#### 配置加载流程
+### 配置加载流程
 
 ```
 JSON配置文件
@@ -111,7 +118,7 @@ ProjConfig (组合场景和渲染器)
 proj_queue_ (项目队列)
 ```
 
-#### 模拟流程
+### 模拟流程
 
 ```
 ProjConfig (从proj_queue_)
@@ -127,21 +134,21 @@ SimData (模拟数据)
 data_queue_ (数据队列，共享)
 ```
 
-#### 渲染流程
+### 渲染流程
 
 ```
 SimData (从data_queue_)
     ↓
 ConsumeData() (分发到Consumer)
     ↓
-RenderConsumer (渲染)
+RenderConsumer / StatsConsumer
     ↓
-RenderResult (图像数据)
+RenderResult / StatsResult
     ↓
-GetResults() (返回结果)
+GetRenderResults() / GetStatsResult()
 ```
 
-#### 完整流程
+### 完整流程
 
 ```
 配置文件
@@ -167,13 +174,13 @@ Result (结果)
 Server::GetResults()
 ```
 
-### 线程模型
+## 线程模型
 
-V3 版本使用多线程架构：
+使用多线程架构：
 
-1. **主线程**：运行 `main()` 函数，调用 `Server::CommitConfig()` 和 `Server::GetResults()`
-2. **模拟器线程**：默认4个线程，每个运行一个 `Simulator::Run()`
-3. **场景生成线程**：`GenerateScene()` 线程，从项目队列生成场景
+1. **主线程**：运行 `main()` 函数，调用 `Server::CommitConfig()` 和结果获取接口
+2. **模拟器线程**：默认 4 个线程，每个运行一个 `Simulator::Run()`
+3. **场景生成线程**：`GenerateScene()` 线程，从项目队列生成场景配置
 4. **数据消费线程**：`ConsumeData()` 线程，从数据队列分发数据到消费者
 
 **线程同步**：
@@ -188,169 +195,118 @@ V3 版本使用多线程架构：
 **职责**：配置解析和管理
 
 **主要类**：
-- `ConfigManager`: 统一配置管理器，管理所有配置对象
+- `ConfigManager`: 统一配置管理器，持有所有配置对象的映射（`std::map<IdType, *Config>`）
 - `LightSourceConfig`: 光源配置
 - `CrystalConfig`: 晶体配置
 - `FilterConfig`: 过滤器配置
 - `RenderConfig`: 渲染配置
-- `SceneConfig`: 场景配置
-- `ProjConfig`: 项目配置
+- `SceneConfig`: 场景配置（包含散射设置 `ScatteringSetting`、多次散射信息 `MsInfo`）
+- `ProjConfig`: 项目配置（组合场景和渲染器引用）
+- `SimData`: 模拟输出数据结构（包含 `RayBuffer` 和晶体列表）
 
-**依赖关系**：
+**依赖**：
 - 依赖 `nlohmann/json` 进行 JSON 解析
 - 依赖 `core/math` 中的 `Distribution` 类型
 
 ### core 模块
 
-**职责**：核心算法实现
+**职责**：核心物理算法实现
 
 **主要类**：
-- `Crystal`: 晶体几何和操作
-- `Simulator`: 光线追踪模拟器
-- `Filter`: 过滤器系统
-- `RayPath`: 光线路径管理
-- `Optics`: 光学计算（折射、反射）
-- `Geo3D`: 3D 几何计算
-- `Math`: 数学工具（向量、矩阵等）
-
-**关键算法**：
-- 光线与晶体相交算法
-- 折射/反射计算
-- 光线路径追踪
-- 多散射处理
+- `Crystal`: 晶体几何表示（三角面片网格），支持创建六棱柱（`CreatePrism`）和六棱锥（`CreatePyramid`）
+- `Simulator`: 光线追踪模拟器，从队列获取场景、执行光线追踪、输出 `SimData`
+- `Filter`: 过滤器系统，支持光线路径、入射/出射面、方向等多种过滤方式
+- `RayPath` / `RaySeg`: 光线路径和光线段数据结构
+- `Optics`: 光学计算（折射、反射、菲涅尔系数）
+- `Geo3D`: 3D 几何计算（三角形相交、法向量等）
+- `Math`: 数学工具（向量运算、矩阵、随机数分布等）
 
 ### server 模块
 
 **职责**：服务器架构实现
 
 **主要类**：
-- `Server`: 服务器公开接口
-- `ServerImpl`: 服务器实现
-- `IConsume`: 消费者接口
-- `RenderConsumer`: 渲染消费者
+- `Server`: 服务器公开接口（PIMPL 模式）
+- `ServerImpl`: 服务器内部实现，管理线程、队列和消费者
+- `IConsume`: 消费者抽象接口
+- `RenderConsumer`: 渲染消费者，实现各种镜头投影算法
 - `StatsConsumer`: 统计消费者
+- `ShowRayInfoConsumer`: 光线信息消费者
+- `cserver.cpp`: C API 封装实现
 
 **特点**：
 - 线程安全的队列系统
 - 多线程并行处理
 - 非阻塞的结果获取
 
-### process 模块
-
-**职责**：处理流程编排
-
-**主要类**：
-- `Simulation`: 模拟流程（旧版，V3中已整合到Simulator）
-- `Render`: 渲染流程（旧版，V3中已整合到Consumer）
-
-**注意**：V3 版本中，这些流程已整合到 server 模块中。
-
-### context 模块
-
-**职责**：上下文管理
-
-**主要类**：
-- `CameraContext`: 相机上下文
-- `CrystalContext`: 晶体上下文
-- `FilterContext`: 过滤器上下文
-- `RenderContext`: 渲染上下文
-- `SunContext`: 太阳光源上下文
-
-**用途**：为旧版代码提供上下文管理，V3 版本中部分功能已整合到配置系统。
-
-### io 模块
-
-**职责**：文件 I/O 和序列化
-
-**主要类**：
-- `File`: 文件操作
-- `Serialize`: 序列化（二进制格式）
-
 ### util 模块
 
-**职责**：工具类
+**职责**：工具和基础设施
 
 **主要类**：
-- `ThreadingPool`: 线程池（旧版使用）
-- `ObjectPool`: 对象池
-- `Logger`: 日志系统
-- `Queue`: 线程安全队列
+- `Queue<T>`: 线程安全的阻塞队列模板，基于 `std::condition_variable`
+- `ThreadingPool`: 线程池，支持范围分片/分步任务提交
+- `log.hpp`: spdlog 薄封装，提供 `LOG_DEBUG` / `LOG_INFO` 等宏和 `GetLogger()` 命名 logger
+- `ArgParser`: 命令行参数解析器
+- `json_util.hpp`: JSON 辅助宏
+- `color_data.hpp`: CIE 色彩匹配函数数据
 
-## 程序入口说明
+### include 模块
 
-### 旧版本入口（计划废弃）
+**职责**：公共 C API 头文件
 
-以下入口计划废弃，不建议新项目使用：
+- `icehalo.h`: 对外暴露的 C 接口头文件，使用不透明指针（opaque pointer）模式
 
-1. **`trace_main.cpp` → `IceHaloTrace`**
-   - 功能：仅执行光线追踪
-   - 状态：计划废弃
-   - 不推荐使用的原因：功能单一，不支持批量处理
+## 程序入口
 
-2. **`render_main.cpp` → `IceHaloRender`**
-   - 功能：仅渲染已有数据
-   - 状态：计划废弃
-   - 不推荐使用的原因：需要先运行追踪程序，流程繁琐
+当前唯一的程序入口：
 
-3. **`endless_main.cpp` → `IceHaloEndless`**
-   - 功能：循环执行追踪-渲染
-   - 状态：计划废弃
-   - 不推荐使用的原因：不支持多线程并行，性能较差
+**`main.c` → `IceHalo`**
+- 功能：C 接口主程序
+- 通过 `icehalo.h` 公共 API 与核心库交互
+- 使用方式：
+  ```bash
+  ./build/cmake_install/IceHalo -f config_example.json
+  ```
 
-### V3 入口（推荐使用）
+构建目标：
+- `icehalo`: 核心静态/共享库（默认静态，`-DBUILD_SHARED_LIBS=ON` 编译为共享库）
+- `IceHalo`: 可执行文件，链接 `icehalo` 库
 
-以下入口是 V3 版本推荐的入口：
+## C API
 
-1. **`main_v3.cpp` → `IceHaloV3`**
-   - 功能：C++ 接口的主程序
-   - 使用场景：C++ 项目集成，命令行使用
-   - 推荐度：⭐⭐⭐⭐⭐
-   - 示例：
-     ```bash
-     ./build/cmake_install/IceHaloV3 -f v3_config_example.json
-     ```
+公共 API 通过 C 接口（`icehalo.h`）暴露，使用不透明指针模式：
 
-2. **`main_v3_c.c` → `IceHaloV3C`**
-   - 功能：C 接口的封装程序
-   - 使用场景：需要 C 接口的项目
-   - 推荐度：⭐⭐⭐⭐
-   - 示例：
-     ```bash
-     ./build/cmake_install/IceHaloV3C -f v3_config_example.json
-     ```
+```c
+// 创建和销毁
+HS_HaloSimServer* HS_CreateServer();
+void HS_DestroyServer(HS_HaloSimServer* server);
 
-3. **`server/cserver.cpp` → `IceHaloLibV3`**
-   - 功能：静态库，供 C 接口使用
-   - 使用场景：作为库集成到其他项目
-   - 推荐度：⭐⭐⭐⭐⭐
-   - API：参见 `include/cserver.h`
+// 配置和控制
+void HS_CommitConfig(HS_HaloSimServer* server, const char* config_str);
+HS_ServerState HS_QueryServerState(HS_HaloSimServer* server);
+void HS_StopServer(HS_HaloSimServer* server);
 
-## 与旧版本对比
+// 结果获取（链表迭代模式）
+HS_SimResult* HS_GetAllResults(HS_HaloSimServer* server);
+int HS_HasNextResult(HS_SimResult* result);
+HS_SimResult* HS_GetNextResult(HS_SimResult* result);
+HS_SimResultType HS_QueryResultType(HS_SimResult* result);
+HS_RenderResult HS_GetRenderResult(HS_SimResult* result);
+HS_StatsResult HS_GetStatsResult(HS_SimResult* result);
+void HS_DeleteAllResults(HS_SimResult* result);
+```
 
-### 架构变化
+## 依赖关系
 
-| 方面 | 旧版本 | V3 版本 |
-|------|--------|---------|
-| 架构模式 | 单线程顺序处理 | 服务器-消费者模式，多线程并行 |
-| 配置系统 | 单一配置结构 | 模块化配置系统 |
-| 批量处理 | 不支持 | 支持多场景、多渲染器 |
-| 程序入口 | 3个独立入口 | 统一的 Server 接口 |
+所有依赖通过 [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) 自动管理：
 
-### 命名空间隔离
-
-- **旧代码**：`icehalo` 命名空间
-- **V3 代码**：`icehalo::v3` 命名空间
-- **共存策略**：两者可以共存，便于逐步迁移
-
-### 配置格式变化
-
-详见 `README_zh.md` 中的"V3 版本说明"章节。
-
-### 性能改进
-
-- **多线程并行**：默认4个模拟器线程，显著提升处理速度
-- **批量处理**：一次配置可以处理多个场景，减少配置开销
-- **队列系统**：高效的线程安全队列，减少锁竞争
+| 依赖 | 版本 | 用途 |
+|------|------|------|
+| [nlohmann/json](https://github.com/nlohmann/json) | v3.10.5 | JSON 配置解析 |
+| [spdlog](https://github.com/gabime/spdlog) | v1.15.0 | 日志系统 |
+| [tl-expected](https://github.com/TartanLlama/expected) | v1.1.0 | C++17 `expected<T,E>` |
+| [GoogleTest](https://github.com/google/googletest) | v1.15.2 | 单元测试 |
 
 ## 扩展点
 
@@ -382,5 +338,8 @@ V3 版本使用多线程架构：
 
 ## 相关文档
 
-- [README_zh.md](../README_zh.md): 用户文档
-- [configuration.md](configuration.md): 配置文档（待完成）
+- [README](../README.md) - 用户文档
+- [配置文档](configuration.md) - 配置格式说明
+- [开发指南](developer-guide.md) - 开发指南
+- [C接口文档](c_api.md) - C接口使用说明
+- [文档索引](README.md) - 所有文档的导航

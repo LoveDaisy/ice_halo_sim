@@ -1,7 +1,5 @@
 # 文档索引
 
-**最后更新**: 2025-12-19
-
 欢迎查阅 Ice Halo Simulation 项目文档。本文档提供所有文档的导航和索引。
 
 ## 文档结构
@@ -11,9 +9,9 @@ cpp/doc/
 ├── README.md              # 本文档索引
 ├── architecture.md        # 系统架构文档
 ├── configuration.md       # 配置文档
-├── c_api.md              # C接口使用文档（待创建）
-├── developer-guide.md    # 开发指南（待创建）
-├── api/                  # API文档（Doxygen生成，待创建）
+├── c_api.md              # C接口使用文档
+├── developer-guide.md    # 开发指南
+├── api/                  # API文档（Doxygen生成）
 └── figs/                 # 图片资源
 ```
 
@@ -21,13 +19,12 @@ cpp/doc/
 
 面向使用本项目的用户：
 
-- **[配置文档](configuration.md)**: V3版本配置文件的完整说明
+- **[配置文档](configuration.md)**: 配置文件的完整说明
   - 配置项详细说明和默认值
   - 配置验证规则
   - 常见配置错误和解决方案
-  - V3配置迁移指南
 
-- **[系统架构文档](architecture.md)**: V3版本系统架构设计
+- **[系统架构文档](architecture.md)**: 系统架构设计
   - 服务器-消费者架构说明
   - 模块职责和依赖关系
   - 数据流和处理流程
@@ -63,7 +60,7 @@ cpp/doc/
 - [项目主README](../README.md)
 - [C++项目README](../README.md)
 - [C++项目中文README](../README_zh.md)
-- [配置示例文件](../v3_config_example.json)
+- [配置示例文件](../config_example.json)
 
 ## 文档维护
 
@@ -93,12 +90,12 @@ doxygen .doxygen-config
 
 创建新文档时，可以参考 [文档模板](TEMPLATE.md)。
 
-## 文档版本
+## 文档状态
 
-- **架构文档**: V3版本 ✅
-- **配置文档**: V3版本 ✅
-- **开发指南**: V3版本 ✅
-- **C接口文档**: V3版本 ✅
+- **架构文档**: ✅
+- **配置文档**: ✅
+- **开发指南**: ✅
+- **C接口文档**: ✅
 - **API文档**: 待生成（Doxygen）
 
 ## 反馈和建议

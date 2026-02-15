@@ -7,7 +7,6 @@
 #include "core/def.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 RayBuffer::RayBuffer() : capacity_(0), size_(0) {}
 
@@ -109,5 +108,4 @@ SimData& SimData::operator=(SimData&& other) {
   return *this;
 }
 
-}  // namespace v3
 }  // namespace icehalo

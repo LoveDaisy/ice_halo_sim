@@ -9,7 +9,6 @@
 #include "core/geo3d.hpp"
 
 namespace icehalo {
-namespace v3 {
 
 struct RaypathRecorder {
   RaypathRecorder& operator<<(IdType fn);
@@ -60,7 +59,6 @@ struct RaySeg {
   RaypathRecorder rp_;  // Raypath in **CURRENT** crystal.
 };
 
-}  // namespace v3
 }  // namespace icehalo
 
 #endif  // CORE_RAYPATH_H_

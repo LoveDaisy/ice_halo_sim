@@ -27,11 +27,11 @@ class V3TestProj : public ::testing::Test {
 
 
 // For test
-class CopyRayDataConsumer : public icehalo::v3::IConsume {
+class CopyRayDataConsumer : public icehalo::IConsume {
  public:
   CopyRayDataConsumer(float* output_data) : output_data_(output_data) {}
 
-  void Consume(const icehalo::v3::SimData& data) override {
+  void Consume(const icehalo::SimData& data) override {
     int offset = 0;
     for (const auto& r : data.rays_) {
       if (r.fid_ >= 0 || r.w_ < 0) {
@@ -50,9 +50,9 @@ class CopyRayDataConsumer : public icehalo::v3::IConsume {
 
 class Consumer {
  public:
-  Consumer(icehalo::v3::QueuePtrS<icehalo::v3::SimData> data_queue) : data_queue_(data_queue), stop_(false) {}
+  Consumer(icehalo::QueuePtrS<icehalo::SimData> data_queue) : data_queue_(data_queue), stop_(false) {}
 
-  void RegisterConsumer(icehalo::v3::ConsumerPtrU consumer) { consumers_.emplace_back(std::move(consumer)); }
+  void RegisterConsumer(icehalo::ConsumerPtrU consumer) { consumers_.emplace_back(std::move(consumer)); }
 
   void Run() {
     while (true) {
@@ -73,26 +73,26 @@ class Consumer {
   void Stop() { stop_ = true; }
 
  private:
-  std::vector<icehalo::v3::ConsumerPtrU> consumers_;
-  icehalo::v3::QueuePtrS<icehalo::v3::SimData> data_queue_;
+  std::vector<icehalo::ConsumerPtrU> consumers_;
+  icehalo::QueuePtrS<icehalo::SimData> data_queue_;
   std::atomic_bool stop_;
 };
 
 TEST_F(V3TestProj, SimpleProj) {
-  icehalo::v3::ConfigManager config_manager = config_json_.get<icehalo::v3::ConfigManager>();
+  icehalo::ConfigManager config_manager = config_json_.get<icehalo::ConfigManager>();
 
-  auto config_queue = std::make_shared<icehalo::v3::Queue<icehalo::v3::SceneConfig>>();
-  auto data_queue = std::make_shared<icehalo::v3::Queue<icehalo::v3::SimData>>();
+  auto config_queue = std::make_shared<icehalo::Queue<icehalo::SceneConfig>>();
+  auto data_queue = std::make_shared<icehalo::Queue<icehalo::SimData>>();
 
   constexpr int kMaxHits = 8;
   std::unique_ptr<float[]> output_data{ new float[kMaxHits * 2 * 7]{} };
 
   constexpr uint32_t kTestSeed = 42;
-  icehalo::v3::Simulator simulator(config_queue, data_queue, kTestSeed);
+  icehalo::Simulator simulator(config_queue, data_queue, kTestSeed);
 
   Consumer consumer(data_queue);
-  consumer.RegisterConsumer(icehalo::v3::ConsumerPtrU(new icehalo::v3::ShowRayInfoConsumer));
-  consumer.RegisterConsumer(icehalo::v3::ConsumerPtrU(new CopyRayDataConsumer(output_data.get())));
+  consumer.RegisterConsumer(icehalo::ConsumerPtrU(new icehalo::ShowRayInfoConsumer));
+  consumer.RegisterConsumer(icehalo::ConsumerPtrU(new CopyRayDataConsumer(output_data.get())));
 
   std::thread prod_thread([&simulator]() { simulator.Run(); });
   std::thread cons_thread([&consumer]() { consumer.Run(); });
