@@ -78,6 +78,14 @@ CPMAddPackage(
   OPTIONS "EXPECTED_BUILD_TESTS OFF"
 )
 
+# stb: header-only image writing (only stb_image_write.h used)
+CPMAddPackage(
+  NAME stb
+  URL https://github.com/nothings/stb/archive/f1c79c02822848a9bed4315b12c8c8f3761e1296.tar.gz
+  URL_HASH SHA256=a39b0f2d96d9b64171ac1fd73295b7c5866f904e653b379da886d050a6900db9
+  DOWNLOAD_ONLY YES
+)
+
 # ==================================================================================================
 # Add some definitions
 if(${CMAKE_HOST_SYSTEM_NAME} STREQUAL "Linux")
