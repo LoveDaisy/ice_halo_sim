@@ -5,6 +5,10 @@
 extern "C" {
 #endif
 
+// 符号可见性：配合 CMakeLists.txt 中 Release 构建的 -fvisibility=hidden，
+// 仅导出此 pragma 块内的 C API 函数，其余内部符号均隐藏。
+// NOTE: 当前为 GCC/Clang 专用。若需支持 MSVC 共享库（DLL），应替换为逐函数
+// HS_API 宏（构建时 __declspec(dllexport)，使用时 __declspec(dllimport)）。
 #pragma GCC visibility push(default)
 
 // =============== Constants ===============

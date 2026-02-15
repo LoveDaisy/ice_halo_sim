@@ -141,6 +141,11 @@ if(NOT MSVC)
   target_compile_options(icehalo PRIVATE
     -Wall -Wextra -fexceptions -fpermissive -frtti)
   target_compile_definitions(icehalo PRIVATE __STDC_FORMAT_MACROS)
+  # -fvisibility=hidden: Release/MinSizeRel 下隐藏所有符号，仅导出 icehalo.h 中
+  # 由 #pragma GCC visibility push(default) 标记的 C API 函数。
+  # Debug 构建不设置此标志，所有符号均可见，便于调试。
+  # NOTE: 当前仅支持 GCC/Clang。若需支持 MSVC 共享库，需将 pragma 改为
+  # HS_API 宏（__declspec(dllexport/dllimport)），参见 icehalo.h 中的注释。
   target_compile_options(icehalo PRIVATE
     $<$<CONFIG:Debug>:-O0 -g -ggdb>
     $<$<CONFIG:Release>:-ffunction-sections -fdata-sections -fvisibility=hidden>
