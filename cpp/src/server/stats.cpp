@@ -4,7 +4,7 @@
 
 #include "core/def.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 void StatsConsumer::Consume(const SimData& data) {
   for (const auto& r : data.rays_) {
@@ -20,4 +20,4 @@ Result StatsConsumer::GetResult() const {
   return StatsResult{ total_rays_, sim_rays_, crystals_ };
 }
 
-}  // namespace icehalo
+}  // namespace lumice

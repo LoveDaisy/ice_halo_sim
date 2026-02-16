@@ -6,7 +6,7 @@
 #include <memory>
 #include <string>
 
-namespace icehalo {
+namespace lumice {
 
 // Log output pattern: "2026-01-02 10:11:12.345 [I] this is a message"
 constexpr const char* kLogPattern = "%Y-%m-%d %H:%M:%S.%e [%L] %v";
@@ -70,7 +70,7 @@ inline void InitGlobalLogger() {
   GetGlobalLogger().SetLevel(LogLevel::kInfo);
 }
 
-}  // namespace icehalo
+}  // namespace lumice
 
 
 // Instance logger macros (for classes that own a Logger member)
@@ -81,10 +81,10 @@ inline void InitGlobalLogger() {
 #define ILOG_ERROR(logger, ...) SPDLOG_LOGGER_ERROR((logger).GetSpdLogger(), __VA_ARGS__)
 
 // Global logger macros (for config/core/util utility code)
-#define LOG_VERBOSE(...) ILOG_TRACE(icehalo::GetGlobalLogger(), __VA_ARGS__)
-#define LOG_DEBUG(...) ILOG_DEBUG(icehalo::GetGlobalLogger(), __VA_ARGS__)
-#define LOG_INFO(...) ILOG_INFO(icehalo::GetGlobalLogger(), __VA_ARGS__)
-#define LOG_WARNING(...) ILOG_WARN(icehalo::GetGlobalLogger(), __VA_ARGS__)
-#define LOG_ERROR(...) ILOG_ERROR(icehalo::GetGlobalLogger(), __VA_ARGS__)
+#define LOG_VERBOSE(...) ILOG_TRACE(lumice::GetGlobalLogger(), __VA_ARGS__)
+#define LOG_DEBUG(...) ILOG_DEBUG(lumice::GetGlobalLogger(), __VA_ARGS__)
+#define LOG_INFO(...) ILOG_INFO(lumice::GetGlobalLogger(), __VA_ARGS__)
+#define LOG_WARNING(...) ILOG_WARN(lumice::GetGlobalLogger(), __VA_ARGS__)
+#define LOG_ERROR(...) ILOG_ERROR(lumice::GetGlobalLogger(), __VA_ARGS__)
 
 #endif  // SRC_UTIL_LOGGER_H_

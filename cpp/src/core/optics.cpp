@@ -11,7 +11,7 @@
 #include "core/math.hpp"
 
 
-namespace icehalo {
+namespace lumice {
 
 float GetReflectRatio(float delta, float rr) {
   float d_sqrt = std::sqrt(delta);
@@ -239,4 +239,4 @@ double IceRefractiveIndex::Get(double wave_length) {
   return std::sqrt(n);
 }
 
-}  // namespace icehalo
+}  // namespace lumice

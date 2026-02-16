@@ -11,7 +11,7 @@
 #include "util/logger.hpp"
 
 
-namespace icehalo {
+namespace lumice {
 
 // =============== Error ===============
 /**
@@ -244,6 +244,6 @@ class Server {
   std::shared_ptr<ServerImpl> impl_;
 };
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // INCLUDE_SERVER_H_

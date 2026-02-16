@@ -8,7 +8,7 @@
 #include "util/json_util.hpp"
 #include "util/logger.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 // convert to & from json object
 // ========== PrismCrystalParam ==========
@@ -116,4 +116,4 @@ void from_json(const nlohmann::json& j, CrystalConfig& c) {
   }
 }
 
-}  // namespace icehalo
+}  // namespace lumice

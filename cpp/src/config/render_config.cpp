@@ -8,7 +8,7 @@
 #include "core/math.hpp"
 #include "util/json_util.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 // ========== ViewParam ==========
 void to_json(nlohmann::json& j, const ViewParam& v) {
@@ -97,4 +97,4 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   }
 }
 
-}  // namespace icehalo
+}  // namespace lumice

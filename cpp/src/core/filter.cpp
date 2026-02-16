@@ -12,7 +12,7 @@
 #include "core/raypath.hpp"
 #include "util/logger.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 class NoneFilter : public Filter {
  protected:
@@ -210,4 +210,4 @@ bool Filter::Check(const RaySeg& ray) const {
   }
 }
 
-}  // namespace icehalo
+}  // namespace lumice

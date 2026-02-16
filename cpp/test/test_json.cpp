@@ -16,7 +16,7 @@
 #include "core/math.hpp"
 
 extern std::string config_file_name;
-using namespace icehalo;
+using namespace lumice;
 
 namespace {
 

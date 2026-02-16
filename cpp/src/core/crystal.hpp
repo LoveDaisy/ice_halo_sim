@@ -8,7 +8,7 @@
 #include "core/def.hpp"
 #include "core/geo3d.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 enum class CrystalType {
   kUnknown,
@@ -208,6 +208,6 @@ class Crystal {
 };
 
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // SRC_CORE_CRYSTAL_H_

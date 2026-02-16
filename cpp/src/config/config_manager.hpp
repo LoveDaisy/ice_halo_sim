@@ -10,7 +10,7 @@
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 struct ConfigManager {
   std::map<IdType, LightSourceConfig> lights_;
@@ -25,6 +25,6 @@ struct ConfigManager {
 void to_json(nlohmann::json& j, const ConfigManager& m);
 void from_json(const nlohmann::json& j, ConfigManager& m);
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CONFIG_CONFIG_MANAGER_H_

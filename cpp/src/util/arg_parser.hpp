@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace icehalo {
+namespace lumice {
 
 enum class ArgMode {
   kCompact,
@@ -58,6 +58,6 @@ class ArgParser {
   std::map<std::string, std::tuple<std::string, std::string>> option_meta_;  // metavar, help_info
 };
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // SRC_UTIL_ARG_PARSER_H_

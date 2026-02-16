@@ -5,7 +5,7 @@
 #include "server/server.hpp"
 #include "util/logger.hpp"
 
-namespace ns = icehalo;
+namespace ns = lumice;
 
 // =============== Internal Helpers ===============
 struct HS_HaloSimServer_ {

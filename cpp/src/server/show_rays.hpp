@@ -3,13 +3,13 @@
 
 #include "server/consumer.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 class ShowRayInfoConsumer : public IConsume {
  public:
   void Consume(const SimData& data) override;
 };
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CONSUMER_SHOW_RAYS_H_

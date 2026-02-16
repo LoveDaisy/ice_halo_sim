@@ -6,7 +6,7 @@
 #include "server/consumer.hpp"
 #include "server/server.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 class StatsConsumer : public IConsume {
  public:
@@ -19,6 +19,6 @@ class StatsConsumer : public IConsume {
   size_t crystals_ = 0;
 };
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CONSUMER_STATS_H_

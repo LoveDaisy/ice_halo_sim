@@ -10,7 +10,7 @@
 
 #include "core/def.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 struct AxisDistribution;
 
@@ -305,6 +305,6 @@ void from_json(const nlohmann::json& obj, Distribution& dist);
 void to_json(nlohmann::json& obj, const AxisDistribution& dist);
 void from_json(const nlohmann::json& obj, AxisDistribution& dist);
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // SRC_CORE_MYMATH_H_

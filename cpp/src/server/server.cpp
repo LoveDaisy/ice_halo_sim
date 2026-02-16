@@ -23,7 +23,7 @@
 #include "util/logger.hpp"
 #include "util/queue.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 // =============== ServerImpl ===============
 class ServerImpl {
@@ -464,4 +464,4 @@ bool Server::IsIdle() const {
   return GetStatus() == ServerStatus::kIdle;
 }
 
-}  // namespace icehalo
+}  // namespace lumice

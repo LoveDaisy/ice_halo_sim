@@ -8,7 +8,7 @@
 #include "core/def.hpp"
 #include "core/geo3d.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 struct RaypathRecorder {
   RaypathRecorder& operator<<(IdType fn);
@@ -59,6 +59,6 @@ struct RaySeg {
   RaypathRecorder rp_;  // Raypath in **CURRENT** crystal.
 };
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CORE_RAYPATH_H_

@@ -16,7 +16,7 @@
 #include "util/logger.hpp"
 
 
-namespace icehalo {
+namespace lumice {
 
 bool FloatEqual(float a, float b, float threshold) {
   return std::abs(a - b) < threshold;
@@ -804,4 +804,4 @@ std::tuple<std::unique_ptr<int[]>, int> Triangulate(int vtx_cnt, const float* vt
   return std::make_tuple(std::move(tri), tri_cnt);
 }
 
-}  // namespace icehalo
+}  // namespace lumice

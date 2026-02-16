@@ -9,7 +9,7 @@
 #include "server/consumer.hpp"
 #include "util/logger.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 constexpr int kMinWavelength = 360;
 constexpr int kMaxWavelength = 830;
@@ -32,6 +32,6 @@ class RenderConsumer : public IConsume {
   Logger logger_{ "Render" };
 };
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CONSUMER_RENDER_H_

@@ -18,7 +18,7 @@
 #include "util/logger.hpp"
 #include "util/queue.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 /**
  * @brief Sample on crystal & init origin (p & fid) of rays.
@@ -541,4 +541,4 @@ void Simulator::SetLogLevel(LogLevel level) {
   logger_.SetLevel(level);
 }
 
-}  // namespace icehalo
+}  // namespace lumice

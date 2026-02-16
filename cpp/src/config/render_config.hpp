@@ -7,7 +7,7 @@
 #include "config/filter_config.hpp"
 #include "core/def.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 struct ViewParam {
   float az_;  // Azimuth
@@ -96,6 +96,6 @@ NLOHMANN_JSON_SERIALIZE_ENUM(    // declear
 
 void to_json(nlohmann::json& j, const RenderConfig& r);
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CONFIG_RENDER_CONFIG_H_

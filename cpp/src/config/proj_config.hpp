@@ -11,7 +11,7 @@
 #include "config/light_config.hpp"
 #include "config/render_config.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 struct ScatteringSetting {
   FilterConfig filter_;
@@ -49,6 +49,6 @@ using ProjConfigPtrS = std::shared_ptr<ProjConfig>;
 
 void to_json(nlohmann::json& j, const ProjConfig& p);
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CONFIG_PROJ_CONFIG_H_

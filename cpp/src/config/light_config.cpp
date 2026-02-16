@@ -8,7 +8,7 @@
 #include "util/json_util.hpp"
 #include "util/logger.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 struct LightParamToJson {
   nlohmann::json& j_;
@@ -78,4 +78,4 @@ void from_json(const nlohmann::json& j, LightSourceConfig& l) {
   }
 }
 
-}  // namespace icehalo
+}  // namespace lumice

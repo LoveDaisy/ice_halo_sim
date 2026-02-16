@@ -10,7 +10,7 @@
 #include "core/math.hpp"
 #include "util/logger.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 template <class T>
 class Queue;
@@ -53,6 +53,6 @@ class Simulator {
   Logger logger_{ "Simulator" };
 };
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CORE_SIMULATOR_H_

@@ -1,6 +1,6 @@
 #include "util/threading_pool.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 const size_t ThreadingPool::kDefaultPoolSize = std::thread::hardware_concurrency();
 
@@ -213,4 +213,4 @@ void ThreadingPool::WorkingFunction(int idx) {
   worker_cv_.notify_one();
 }
 
-}  // namespace icehalo
+}  // namespace lumice

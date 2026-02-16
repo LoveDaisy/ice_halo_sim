@@ -27,11 +27,11 @@ class V3TestProj : public ::testing::Test {
 
 
 // For test
-class CopyRayDataConsumer : public icehalo::IConsume {
+class CopyRayDataConsumer : public lumice::IConsume {
  public:
   CopyRayDataConsumer(float* output_data) : output_data_(output_data) {}
 
-  void Consume(const icehalo::SimData& data) override {
+  void Consume(const lumice::SimData& data) override {
     int offset = 0;
     for (const auto& r : data.rays_) {
       if (r.fid_ >= 0 || r.w_ < 0) {
@@ -50,9 +50,9 @@ class CopyRayDataConsumer : public icehalo::IConsume {
 
 class Consumer {
  public:
-  Consumer(icehalo::QueuePtrS<icehalo::SimData> data_queue) : data_queue_(data_queue), stop_(false) {}
+  Consumer(lumice::QueuePtrS<lumice::SimData> data_queue) : data_queue_(data_queue), stop_(false) {}
 
-  void RegisterConsumer(icehalo::ConsumerPtrU consumer) { consumers_.emplace_back(std::move(consumer)); }
+  void RegisterConsumer(lumice::ConsumerPtrU consumer) { consumers_.emplace_back(std::move(consumer)); }
 
   void Run() {
     while (true) {
@@ -73,25 +73,25 @@ class Consumer {
   void Stop() { stop_ = true; }
 
  private:
-  std::vector<icehalo::ConsumerPtrU> consumers_;
-  icehalo::QueuePtrS<icehalo::SimData> data_queue_;
+  std::vector<lumice::ConsumerPtrU> consumers_;
+  lumice::QueuePtrS<lumice::SimData> data_queue_;
   std::atomic_bool stop_;
 };
 
 TEST_F(V3TestProj, SimpleProj) {
-  icehalo::ConfigManager config_manager = config_json_.get<icehalo::ConfigManager>();
+  lumice::ConfigManager config_manager = config_json_.get<lumice::ConfigManager>();
 
-  auto config_queue = std::make_shared<icehalo::Queue<icehalo::SceneConfig>>();
-  auto data_queue = std::make_shared<icehalo::Queue<icehalo::SimData>>();
+  auto config_queue = std::make_shared<lumice::Queue<lumice::SceneConfig>>();
+  auto data_queue = std::make_shared<lumice::Queue<lumice::SimData>>();
 
   constexpr int kMaxHits = 8;
   auto output_data = std::make_unique<float[]>(kMaxHits * 2 * 7);
 
   constexpr uint32_t kTestSeed = 42;
-  icehalo::Simulator simulator(config_queue, data_queue, kTestSeed);
+  lumice::Simulator simulator(config_queue, data_queue, kTestSeed);
 
   Consumer consumer(data_queue);
-  consumer.RegisterConsumer(std::make_unique<icehalo::ShowRayInfoConsumer>());
+  consumer.RegisterConsumer(std::make_unique<lumice::ShowRayInfoConsumer>());
   consumer.RegisterConsumer(std::make_unique<CopyRayDataConsumer>(output_data.get()));
 
   std::thread prod_thread([&simulator]() { simulator.Run(); });

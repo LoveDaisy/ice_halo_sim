@@ -14,7 +14,7 @@
 #include "core/optics.hpp"
 #include "util/logger.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map) {
   using math::kSqrt3_2;
@@ -482,4 +482,4 @@ float Crystal::GetRefractiveIndex(float wl) const {
   return IceRefractiveIndex::Get(wl);
 }
 
-}  // namespace icehalo
+}  // namespace lumice

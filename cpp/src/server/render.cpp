@@ -17,7 +17,7 @@
 #include "util/color_data.hpp"
 #include "util/logger.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 // =============== Color transforms ===============
 // Convert linear rgb to sRGB
@@ -340,4 +340,4 @@ Result RenderConsumer::GetResult() const {
   return RenderResult{ config_.id_, config_.resolution_[0], config_.resolution_[1], image_buffer_.get() };
 }
 
-}  // namespace icehalo
+}  // namespace lumice
