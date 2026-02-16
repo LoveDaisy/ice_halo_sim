@@ -36,7 +36,7 @@ static HS_ErrorCode MapErrorCode(ns::ErrorCode code) {
 // =============== Server Lifecycle ===============
 HS_HaloSimServer* HS_CreateServer() {
   auto* s = new HS_HaloSimServer;
-  s->server_ = std::unique_ptr<ns::Server>{ new ns::Server{} };
+  s->server_ = std::make_unique<ns::Server>();
   return s;
 }
 

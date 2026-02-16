@@ -118,27 +118,27 @@ class CrystalFilter : public Filter {
 struct SimpleFilterCreator {
   FilterPtrU operator()(const NoneFilterParam& /* p */) {
     // NoneFilter
-    return FilterPtrU{ new NoneFilter };
+    return std::make_unique<NoneFilter>();
   }
 
   FilterPtrU operator()(const RaypathFilterParam& p) {
     // RaypathFilter
-    return FilterPtrU{ new RaypathFilter{ p.raypath_ } };
+    return std::make_unique<RaypathFilter>(p.raypath_);
   }
 
   FilterPtrU operator()(const EntryExitFilterParam& p) {
     // EntryExitFilter
-    return FilterPtrU{ new EntryExitFilter{ p.entry_, p.exit_ } };
+    return std::make_unique<EntryExitFilter>(p.entry_, p.exit_);
   }
 
   FilterPtrU operator()(const DirectionFilterParam& p) {
     // DirectionFilter
-    return FilterPtrU{ new DirectionFilter{ p.lon_, p.lat_, p.radii_ } };
+    return std::make_unique<DirectionFilter>(p.lon_, p.lat_, p.radii_);
   }
 
   FilterPtrU operator()(const CrystalFilterParam& p) {
     // CrystalFilter
-    return FilterPtrU{ new CrystalFilter{ p.crystal_id_ } };
+    return std::make_unique<CrystalFilter>(p.crystal_id_);
   }
 };
 
@@ -185,7 +185,7 @@ struct FilterCreator {
 
   FilterPtrU operator()(const ComplexFilterParam& p) {
     // ComplexFilters
-    return FilterPtrU{ new ComplexFilter{ p.filters_ } };
+    return std::make_unique<ComplexFilter>(p.filters_);
   }
 };
 

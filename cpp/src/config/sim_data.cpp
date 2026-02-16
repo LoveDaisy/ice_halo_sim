@@ -10,7 +10,7 @@ namespace icehalo {
 
 RayBuffer::RayBuffer() : capacity_(0), size_(0) {}
 
-RayBuffer::RayBuffer(size_t capacity) : capacity_(capacity), size_(0), rays_(new RaySeg[capacity]{}) {}
+RayBuffer::RayBuffer(size_t capacity) : capacity_(capacity), size_(0), rays_(std::make_unique<RaySeg[]>(capacity)) {}
 
 RaySeg& RayBuffer::operator[](size_t idx) const {
   return rays_[idx];
@@ -18,7 +18,7 @@ RaySeg& RayBuffer::operator[](size_t idx) const {
 
 void RayBuffer::Reset(size_t capacity) {
   if (capacity > capacity_) {
-    rays_.reset(new RaySeg[capacity]{});
+    rays_ = std::make_unique<RaySeg[]>(capacity);
     capacity_ = capacity;
   }
   size_ = 0;
@@ -84,7 +84,7 @@ SimData& SimData::operator=(const SimData& other) {
   total_intensity_ = other.total_intensity_;
   rays_.size_ = other.rays_.size_;
   rays_.capacity_ = other.rays_.capacity_;
-  rays_.rays_.reset(new RaySeg[rays_.capacity_]);
+  rays_.rays_ = std::make_unique<RaySeg[]>(rays_.capacity_);
   std::memcpy(rays_.rays_.get(), other.rays_.rays_.get(), sizeof(RaySeg) * rays_.capacity_);
   crystals_ = other.crystals_;
   return *this;
