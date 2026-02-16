@@ -79,7 +79,7 @@ cd cpp
 ```bash
 cd cpp
 ./build.sh debug
-lldb ./build/cmake_build/IceHalo
+lldb ./build/cmake_build/Lumice
 (lldb) run -f config_example.json
 ```
 
@@ -88,7 +88,7 @@ lldb ./build/cmake_build/IceHalo
 ```bash
 cd cpp
 ./build.sh debug
-gdb ./build/cmake_build/IceHalo
+gdb ./build/cmake_build/Lumice
 (gdb) run -f config_example.json
 ```
 
@@ -155,16 +155,16 @@ static constexpr size_t kMaxSceneCnt = 128;
 #### 命名空间
 
 - 使用 `snake_case`
-- 所有代码使用 `icehalo` 命名空间
+- 所有代码使用 `lumice` 命名空间
 
 ```cpp
-namespace icehalo {
+namespace lumice {
 
 class Crystal {
   // ...
 };
 
-}  // namespace icehalo
+}  // namespace lumice
 ```
 
 ### 代码格式
@@ -357,7 +357,7 @@ bool Filter::ApplyNewFilter(const NewFilterParam& param, const RaySeg& ray) {
 ```cpp
 #include "server/consumer.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 class MyConsumer : public IConsume {
  public:
@@ -371,7 +371,7 @@ class MyConsumer : public IConsume {
   }
 };
 
-}  // namespace icehalo
+}  // namespace lumice
 ```
 
 2. **在 `ServerImpl` 中注册消费者**：
@@ -429,7 +429,7 @@ struct ConfigManager {
 #include <gtest/gtest.h>
 #include "core/crystal.hpp"
 
-using namespace icehalo;
+using namespace lumice;
 
 TEST(CrystalTest, CreatePrism) {
   auto crystal = Crystal::CreatePrism(1.3);
@@ -518,7 +518,7 @@ LOG_ERROR("Error message: {}", error_str);
 #include "util/log.hpp"
 
 class MyClass {
-  static auto logger = icehalo::GetLogger("MyClass");
+  static auto logger = lumice::GetLogger("MyClass");
 
   void DoWork() {
     logger->info("Working on task {}", task_id);
@@ -529,13 +529,13 @@ class MyClass {
 
 #### 设置日志级别
 
-日志级别可通过 `icehalo::SetLogLevel()` 在程序中设置：
+日志级别可通过 `lumice::SetLogLevel()` 在程序中设置：
 
 ```cpp
 #include "util/log.hpp"
 
-icehalo::InitLogger();                              // 初始化（程序启动时调用一次）
-icehalo::SetLogLevel(spdlog::level::debug);         // 设置为 debug 级别
+lumice::InitLogger();                              // 初始化（程序启动时调用一次）
+lumice::SetLogLevel(spdlog::level::debug);         // 设置为 debug 级别
 ```
 
 ### 调试工具
@@ -544,7 +544,7 @@ icehalo::SetLogLevel(spdlog::level::debug);         // 设置为 debug 级别
 
 ```bash
 # 启动调试
-lldb ./build/cmake_build/IceHalo
+lldb ./build/cmake_build/Lumice
 
 # 设置断点
 (lldb) breakpoint set --file crystal.cpp --line 100
@@ -569,18 +569,18 @@ lldb ./build/cmake_build/IceHalo
 #### Valgrind内存检查（Linux）
 
 ```bash
-valgrind --leak-check=full ./build/cmake_build/IceHalo -f config_example.json
+valgrind --leak-check=full ./build/cmake_build/Lumice -f config_example.json
 ```
 
 #### 性能分析
 
 ```bash
 # 使用 perf (Linux)
-perf record ./build/cmake_install/IceHalo -f config_example.json
+perf record ./build/cmake_install/Lumice -f config_example.json
 perf report
 
 # 使用 Instruments (macOS)
-instruments -t "Time Profiler" ./build/cmake_install/IceHalo -f config_example.json
+instruments -t "Time Profiler" ./build/cmake_install/Lumice -f config_example.json
 ```
 
 ### 常见问题排查

@@ -1,6 +1,6 @@
 # 系统架构文档
 
-本文档描述 Ice Halo Simulation 项目的系统架构设计。
+本文档描述 Lumice 项目的系统架构设计。
 
 ## 概述
 
@@ -255,48 +255,48 @@ Server::GetResults()
 
 **职责**：公共 C API 头文件
 
-- `icehalo.h`: 对外暴露的 C 接口头文件，使用不透明指针（opaque pointer）模式
+- `lumice.h`: 对外暴露的 C 接口头文件，使用不透明指针（opaque pointer）模式
 
 ## 程序入口
 
 当前唯一的程序入口：
 
-**`main.c` → `IceHalo`**
+**`main.c` → `Lumice`**
 - 功能：C 接口主程序
-- 通过 `icehalo.h` 公共 API 与核心库交互
+- 通过 `lumice.h` 公共 API 与核心库交互
 - 使用方式：
   ```bash
-  ./build/cmake_install/IceHalo -f config_example.json
+  ./build/cmake_install/Lumice -f config_example.json
   ```
 
 构建目标：
-- `icehalo`: 核心静态/共享库（默认静态，`-DBUILD_SHARED_LIBS=ON` 编译为共享库）
-- `IceHalo`: 可执行文件，链接 `icehalo` 库
+- `lumice`: 核心静态/共享库（默认静态，`-DBUILD_SHARED_LIBS=ON` 编译为共享库）
+- `Lumice`: 可执行文件，链接 `lumice` 库
 
 ## C API
 
-公共 API 通过 C 接口（`icehalo.h`）暴露，使用不透明指针模式。大多数 API 返回 `HS_ErrorCode` 错误码，实际输出通过指针参数传递：
+公共 API 通过 C 接口（`lumice.h`）暴露，使用不透明指针模式。大多数 API 返回 `LUMICE_ErrorCode` 错误码，实际输出通过指针参数传递：
 
 ```c
 // 服务器生命周期
-HS_HaloSimServer* HS_CreateServer(void);
-void HS_DestroyServer(HS_HaloSimServer* server);
+LUMICE_Server* LUMICE_CreateServer(void);
+void LUMICE_DestroyServer(LUMICE_Server* server);
 
 // 日志
-void HS_InitLogger(HS_HaloSimServer* server);
-void HS_SetLogLevel(HS_HaloSimServer* server, HS_LogLevel level);
+void LUMICE_InitLogger(LUMICE_Server* server);
+void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level);
 
-// 配置（返回 HS_ErrorCode）
-HS_ErrorCode HS_CommitConfig(HS_HaloSimServer* server, const char* config_str);
-HS_ErrorCode HS_CommitConfigFromFile(HS_HaloSimServer* server, const char* filename);
+// 配置（返回 LUMICE_ErrorCode）
+LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_str);
+LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename);
 
-// 结果获取（数组+哨兵模式，返回 HS_ErrorCode）
-HS_ErrorCode HS_GetRenderResults(HS_HaloSimServer* server, HS_RenderResult* out, int max_count);
-HS_ErrorCode HS_GetStatsResults(HS_HaloSimServer* server, HS_StatsResult* out, int max_count);
+// 结果获取（数组+哨兵模式，返回 LUMICE_ErrorCode）
+LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
+LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
 
 // 状态与控制
-HS_ErrorCode HS_QueryServerState(HS_HaloSimServer* server, HS_ServerState* out);
-void HS_StopServer(HS_HaloSimServer* server);
+LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out);
+void LUMICE_StopServer(LUMICE_Server* server);
 ```
 
 详细用法参见 [C 接口使用文档](c_api.md)。

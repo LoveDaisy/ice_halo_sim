@@ -17,7 +17,7 @@ If everything goes well, the executable will be installed into `build/cmake_inst
 you can run it like:
 
 ~~~bash
-./build/cmake_install/IceHalo -f config_example.json
+./build/cmake_install/Lumice -f config_example.json
 ~~~
 
 It will output some information, as well as several rendered picture files.
