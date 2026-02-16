@@ -275,27 +275,31 @@ Server::GetResults()
 
 ## C API
 
-公共 API 通过 C 接口（`icehalo.h`）暴露，使用不透明指针模式：
+公共 API 通过 C 接口（`icehalo.h`）暴露，使用不透明指针模式。大多数 API 返回 `HS_ErrorCode` 错误码，实际输出通过指针参数传递：
 
 ```c
-// 创建和销毁
-HS_HaloSimServer* HS_CreateServer();
+// 服务器生命周期
+HS_HaloSimServer* HS_CreateServer(void);
 void HS_DestroyServer(HS_HaloSimServer* server);
 
-// 配置和控制
-void HS_CommitConfig(HS_HaloSimServer* server, const char* config_str);
-HS_ServerState HS_QueryServerState(HS_HaloSimServer* server);
-void HS_StopServer(HS_HaloSimServer* server);
+// 日志
+void HS_InitLogger(HS_HaloSimServer* server);
+void HS_SetLogLevel(HS_HaloSimServer* server, HS_LogLevel level);
 
-// 结果获取（链表迭代模式）
-HS_SimResult* HS_GetAllResults(HS_HaloSimServer* server);
-int HS_HasNextResult(HS_SimResult* result);
-HS_SimResult* HS_GetNextResult(HS_SimResult* result);
-HS_SimResultType HS_QueryResultType(HS_SimResult* result);
-HS_RenderResult HS_GetRenderResult(HS_SimResult* result);
-HS_StatsResult HS_GetStatsResult(HS_SimResult* result);
-void HS_DeleteAllResults(HS_SimResult* result);
+// 配置（返回 HS_ErrorCode）
+HS_ErrorCode HS_CommitConfig(HS_HaloSimServer* server, const char* config_str);
+HS_ErrorCode HS_CommitConfigFromFile(HS_HaloSimServer* server, const char* filename);
+
+// 结果获取（数组+哨兵模式，返回 HS_ErrorCode）
+HS_ErrorCode HS_GetRenderResults(HS_HaloSimServer* server, HS_RenderResult* out, int max_count);
+HS_ErrorCode HS_GetStatsResults(HS_HaloSimServer* server, HS_StatsResult* out, int max_count);
+
+// 状态与控制
+HS_ErrorCode HS_QueryServerState(HS_HaloSimServer* server, HS_ServerState* out);
+void HS_StopServer(HS_HaloSimServer* server);
 ```
+
+详细用法参见 [C 接口使用文档](c_api.md)。
 
 ## 依赖关系
 

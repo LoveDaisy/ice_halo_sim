@@ -40,6 +40,11 @@ find_package(Threads REQUIRED)  # GoogleTest needs it
 
 # ==================================================================================================
 # CPM.cmake — lightweight dependency manager (wrapper around FetchContent)
+# Cache CPM downloads outside cmake_build so clean builds (-k) don't re-download
+if(NOT DEFINED CPM_SOURCE_CACHE AND NOT DEFINED ENV{CPM_SOURCE_CACHE})
+  set(CPM_SOURCE_CACHE "${CMAKE_SOURCE_DIR}/build/cpm_cache"
+      CACHE PATH "Directory to cache CPM dependency sources")
+endif()
 include(cmake/CPM.cmake)
 
 # nlohmann/json: download only headers (~255KB) instead of full source (~6.7MB)
@@ -57,8 +62,8 @@ endif()
 # spdlog: header-only mode (skip building the static library)
 CPMAddPackage(
   NAME spdlog
-  GITHUB_REPOSITORY gabime/spdlog
-  VERSION 1.15.0
+  URL https://github.com/gabime/spdlog/archive/refs/tags/v1.15.0.tar.gz
+  URL_HASH SHA256=9962648c9b4f1a7bbc76fd8d9172555bad1871fdb14ff4f842ef87949682caa5
   OPTIONS "SPDLOG_BUILD_SHARED OFF" "SPDLOG_ENABLE_PCH OFF" "SPDLOG_BUILD_EXAMPLE OFF"
 )
 if(spdlog_ADDED)
@@ -68,9 +73,17 @@ endif()
 # tl-expected: header-only expected<T,E> for C++17
 CPMAddPackage(
   NAME tl-expected
-  GITHUB_REPOSITORY TartanLlama/expected
-  VERSION 1.1.0
+  URL https://github.com/TartanLlama/expected/archive/refs/tags/v1.1.0.tar.gz
+  URL_HASH SHA256=1db357f46dd2b24447156aaf970c4c40a793ef12a8a9c2ad9e096d9801368df6
   OPTIONS "EXPECTED_BUILD_TESTS OFF"
+)
+
+# stb: header-only image writing (only stb_image_write.h used)
+CPMAddPackage(
+  NAME stb
+  URL https://github.com/nothings/stb/archive/f1c79c02822848a9bed4315b12c8c8f3761e1296.tar.gz
+  URL_HASH SHA256=a39b0f2d96d9b64171ac1fd73295b7c5866f904e653b379da886d050a6900db9
+  DOWNLOAD_ONLY YES
 )
 
 # ==================================================================================================
@@ -136,6 +149,11 @@ if(NOT MSVC)
   target_compile_options(icehalo PRIVATE
     -Wall -Wextra -fexceptions -fpermissive -frtti)
   target_compile_definitions(icehalo PRIVATE __STDC_FORMAT_MACROS)
+  # -fvisibility=hidden: Release/MinSizeRel 下隐藏所有符号，仅导出 icehalo.h 中
+  # 由 #pragma GCC visibility push(default) 标记的 C API 函数。
+  # Debug 构建不设置此标志，所有符号均可见，便于调试。
+  # NOTE: 当前仅支持 GCC/Clang。若需支持 MSVC 共享库，需将 pragma 改为
+  # HS_API 宏（__declspec(dllexport/dllimport)），参见 icehalo.h 中的注释。
   target_compile_options(icehalo PRIVATE
     $<$<CONFIG:Debug>:-O0 -g -ggdb>
     $<$<CONFIG:Release>:-ffunction-sections -fdata-sections -fvisibility=hidden>

@@ -1,59 +1,120 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "icehalo.h"
+#include "stb_image_write.h"
+
+static const int kPollIntervalUs = 1000000;  // 1 second
+static const int kJpegQuality = 95;
+
+static void print_usage(const char* prog_name) {
+  fprintf(stdout,
+          "Usage: %s -f <config_file> [options]\n"
+          "\n"
+          "Ice Halo Simulation — simulate ice halos by tracing rays through ice crystals.\n"
+          "\n"
+          "Options:\n"
+          "  -f <file>    Specify the configuration file (required)\n"
+          "  -o <dir>     Output directory for rendered images (default: current directory)\n"
+          "  -v           Verbose output (trace level logging)\n"
+          "  -d           Debug output (debug level logging)\n"
+          "  -h           Show this help message and exit\n"
+          "\n"
+          "Examples:\n"
+          "  %s -f config.json\n"
+          "  %s -f config.json -o /tmp/output\n"
+          "  %s -f config.json -v\n",
+          prog_name, prog_name, prog_name, prog_name);
+}
 
 int main(int argc, char** argv) {
-  printf("argc: %d\n", argc);
   const char* config_filename = NULL;
+  const char* output_dir = ".";
+  HS_LogLevel log_level = HS_LOG_INFO;
+  int opt;
 
-  for (int i = 1; i < argc; i++) {
-    printf("argv[%d]: %s\n", i, argv[i]);
-    if (strcmp(argv[i], "-f") == 0) {
-      config_filename = argv[i + 1];
+  while ((opt = getopt(argc, argv, "f:o:vdh")) != -1) {
+    switch (opt) {
+      case 'f':
+        config_filename = optarg;
+        break;
+      case 'o':
+        output_dir = optarg;
+        break;
+      case 'v':
+        log_level = HS_LOG_TRACE;
+        break;
+      case 'd':
+        log_level = HS_LOG_DEBUG;
+        break;
+      case 'h':
+        print_usage(argv[0]);
+        return 0;
+      default:
+        print_usage(argv[0]);
+        return 1;
     }
   }
-  printf("config_filename: %s\n", config_filename);
 
-  char buf[1024 * 1024];  // 1MB
-  FILE* config_file = fopen(config_filename, "r");
-  fread(buf, 1, 1024 * 1024, config_file);
+  if (!config_filename) {
+    fprintf(stderr, "Error: configuration file is required (-f <file>)\n\n");
+    print_usage(argv[0]);
+    return 1;
+  }
+
+  // Verify output directory exists
+  struct stat st;
+  if (stat(output_dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+    fprintf(stderr, "Error: output directory does not exist: %s\n", output_dir);
+    return 1;
+  }
 
   HS_HaloSimServer* server = HS_CreateServer();
-  HS_CommitConfig(server, buf);
+  HS_InitLogger(server);
+  HS_SetLogLevel(server, log_level);
 
-  sleep(1);
+  if (HS_CommitConfigFromFile(server, config_filename) != HS_OK) {
+    HS_DestroyServer(server);
+    return 1;
+  }
+
   while (1) {
-    HS_SimResult* result = NULL;
-    for (result = HS_GetAllResults(server);  //
-         HS_HasNextResult(result);           //
-         result = HS_GetNextResult(result)) {
-      HS_SimResultType res_type = HS_QueryResultType(result);
-      switch (res_type) {
-        case HS_RESULT_RENDER: {
-          HS_RenderResult p = HS_GetRenderResult(result);
-          printf("<render result>[%02d]: w: %d, h: %d, buff: %p\n",  //
-                 p.renderer_id_, p.img_width_, p.img_height_, p.img_buffer_);
-        } break;
-        case HS_RESULT_STATS: {
-          HS_StatsResult p = HS_GetStatsResult(result);
-          printf("<stats result>: sim_rays: %lu, crystals: %lu\n", p.sim_ray_num_, p.crystal_num_);
-        } break;
-        case HS_RESULT_NONE:
-          printf("<none result>\n");
-          break;
-      }
-    }
-    HS_DeleteAllResults(result);
+    usleep(kPollIntervalUs);
 
-    HS_ServerState state = HS_QueryServerState(server);
-    if (state == HS_SERVER_IDLE) {
-      printf("server is idle! abort!\n");
-      HS_StopServer(server);
+    HS_ServerState state;
+    if (HS_QueryServerState(server, &state) == HS_OK && state == HS_SERVER_IDLE) {
       break;
     }
   }
+
+  // Save render results
+  HS_RenderResult renders[HS_MAX_RENDER_RESULTS + 1];
+  if (HS_GetRenderResults(server, renders, HS_MAX_RENDER_RESULTS) == HS_OK) {
+    for (int i = 0; renders[i].img_buffer != NULL; i++) {
+      char filepath[512];
+      snprintf(filepath, sizeof(filepath), "%s/img_%02d.jpg", output_dir, renders[i].renderer_id);
+
+      int ok = stbi_write_jpg(filepath, renders[i].img_width, renders[i].img_height, 3, renders[i].img_buffer,
+                              kJpegQuality);
+      if (ok) {
+        printf("Saved: %s (%dx%d)\n", filepath, renders[i].img_width, renders[i].img_height);
+      } else {
+        fprintf(stderr, "Error: failed to write %s\n", filepath);
+      }
+    }
+  }
+
+  // Print stats
+  HS_StatsResult stats[HS_MAX_STATS_RESULTS + 1];
+  if (HS_GetStatsResults(server, stats, HS_MAX_STATS_RESULTS) == HS_OK) {
+    for (int i = 0; stats[i].sim_ray_num != 0; i++) {
+      printf("Stats: sim_rays=%lu, crystals=%lu\n", stats[i].sim_ray_num, stats[i].crystal_num);
+    }
+  }
+
   HS_DestroyServer(server);
   return 0;
 }

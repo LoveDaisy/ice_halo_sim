@@ -31,20 +31,26 @@ build() {
 
 help() {
   echo "Usage:"
-  echo "  ./build.sh [-tjksh] <debug|release|minsizerel>"
+  echo "  ./build.sh [-tjksxh] <debug|release|minsizerel>"
   echo "    Executables will be installed at build/cmake_install"
   echo "OPTIONS:"
   echo "  -t:          Build test cases and run test on them."
   echo "  -j:          Build in parallel, i.e. use make -j"
-  echo "  -k:          Clean temporary building files."
+  echo "  -k:          Clean build artifacts (keep dependency cache)."
+  echo "  -x:          Clean everything including dependency cache."
   echo "  -s:          Build shared library (default: static)."
   echo "  -h:          Show this message."
 }
 
 
 clean_all() {
-  echo "Cleaning temporary building files..."
+  echo "Cleaning build artifacts..."
   rm -rf "${BUILD_DIR}" "${INSTALL_DIR}"
+}
+
+clean_everything() {
+  echo "Cleaning all build files and dependency cache..."
+  rm -rf "${ROOT_DIR}/build"
 }
 
 
@@ -63,7 +69,7 @@ fi
 # A POSIX variable
 OPTIND=1         # Reset in case getopts has been used previously in the shell.
 
-while getopts "htjks" opt; do
+while getopts "htjksx" opt; do
   case "$opt" in
   h)
     help
@@ -77,6 +83,9 @@ while getopts "htjks" opt; do
     ;;
   k)
     clean_all
+    ;;
+  x)
+    clean_everything
     ;;
   s)
     BUILD_SHARED=ON
