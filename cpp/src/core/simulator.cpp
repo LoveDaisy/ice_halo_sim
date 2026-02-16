@@ -36,7 +36,7 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
   const auto* face_norm = curr_crystal.GetTriangleNormal();
   const auto* face_vtx = curr_crystal.GetTriangleVtx();
 
-  std::unique_ptr<float[]> proj_prob{ new float[total_faces]{} };
+  auto proj_prob = std::make_unique<float[]>(total_faces);
   for (auto& r : ray_buf) {
     const auto* d = r.d_;
     for (size_t j = 0; j < total_faces; j++) {
@@ -245,8 +245,8 @@ RayBuffer AllocateAllData(const SceneConfig& config) {
 
 std::unique_ptr<size_t[]> PartitionCrystalRayNum(RandomNumberGenerator& rng, const MsInfo& ms_info, int ray_num) {
   auto crystal_cnt = ms_info.setting_.size();
-  std::unique_ptr<size_t[]> c_num{ new size_t[crystal_cnt]{} };
-  std::unique_ptr<float[]> prob{ new float[crystal_cnt + 1]{} };
+  auto c_num = std::make_unique<size_t[]>(crystal_cnt);
+  auto prob = std::make_unique<float[]>(crystal_cnt + 1);
   for (size_t ci = 0; ci < crystal_cnt; ci++) {
     prob[ci + 1] = ms_info.setting_[ci].crystal_proportion_ + prob[ci];
   }

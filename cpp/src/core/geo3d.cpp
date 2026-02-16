@@ -120,7 +120,7 @@ void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num
     return;
   }
 
-  std::unique_ptr<float[]> p{ new float[pop_size + 1]{} };
+  auto p = std::make_unique<float[]>(pop_size + 1);
   std::memcpy(p.get() + 1, weight, pop_size * sizeof(float));
   for (int i = 1; i < pop_size; i++) {
     p[i + 1] = std::max(p[i + 1], 0.0f) + p[i];
@@ -232,15 +232,16 @@ void SampleBall(float radii, float* out_pt, size_t sample_num) {
 Mesh::Mesh() : vtx_cnt_(0), triangle_cnt_(0) {}
 
 Mesh::Mesh(size_t vtx_cnt, size_t triangle_cnt)
-    : vtx_cnt_(vtx_cnt), triangle_cnt_(triangle_cnt), vertices_(new float[vtx_cnt * 3]{}),
-      triangle_(new int[triangle_cnt * 3]{}) {}
+    : vtx_cnt_(vtx_cnt), triangle_cnt_(triangle_cnt), vertices_(std::make_unique<float[]>(vtx_cnt * 3)),
+      triangle_(std::make_unique<int[]>(triangle_cnt * 3)) {}
 
 Mesh::Mesh(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_cnt, std::unique_ptr<int[]> triangle_idx)
     : vtx_cnt_(vtx_cnt), triangle_cnt_(triangle_cnt), vertices_(std::move(vtx)), triangle_(std::move(triangle_idx)) {}
 
 Mesh::Mesh(const Mesh& other)
-    : vtx_cnt_(other.vtx_cnt_), triangle_cnt_(other.triangle_cnt_), vertices_(new float[other.vtx_cnt_ * 3]),
-      triangle_(new int[other.triangle_cnt_ * 3]) {
+    : vtx_cnt_(other.vtx_cnt_), triangle_cnt_(other.triangle_cnt_),
+      vertices_(std::make_unique<float[]>(other.vtx_cnt_ * 3)),
+      triangle_(std::make_unique<int[]>(other.triangle_cnt_ * 3)) {
   std::memcpy(vertices_.get(), other.vertices_.get(), vtx_cnt_ * 3 * sizeof(float));
   std::memcpy(triangle_.get(), other.triangle_.get(), triangle_cnt_ * 3 * sizeof(int));
 }
@@ -261,8 +262,8 @@ Mesh& Mesh::operator=(const Mesh& other) {
 
   vtx_cnt_ = other.vtx_cnt_;
   triangle_cnt_ = other.triangle_cnt_;
-  vertices_.reset(new float[vtx_cnt_ * 3]);
-  triangle_.reset(new int[triangle_cnt_ * 3]);
+  vertices_ = std::make_unique<float[]>(vtx_cnt_ * 3);
+  triangle_ = std::make_unique<int[]>(triangle_cnt_ * 3);
   std::memcpy(vertices_.get(), other.vertices_.get(), vtx_cnt_ * 3 * sizeof(float));
   std::memcpy(triangle_.get(), other.triangle_.get(), triangle_cnt_ * 3 * sizeof(int));
   return *this;
@@ -360,7 +361,7 @@ Mesh CreatePrismMesh(float h, const float* dist) {
   };
 
   // 1. Find out all candidate vertices
-  std::unique_ptr<float[]> vtx{ new float[kHexPrismVtxCnt * 3]{} };
+  auto vtx = std::make_unique<float[]>(kHexPrismVtxCnt * 3);
   for (int i = 0; i < 6; i++) {
     // A vertex is the intersection of current and previous plane
     int i1 = i;
@@ -394,7 +395,7 @@ Mesh CreatePrismMesh(float h, const float* dist) {
     vtx[vtx_cnt * 3 + i * 3 + 2] = -h / 2.0f;
   }
 
-  std::unique_ptr<int[]> triangle_idx{ new int[kHexPrismTriCnt * 3]{} };
+  auto triangle_idx = std::make_unique<int[]>(kHexPrismTriCnt * 3);
   size_t triangle_cnt = 0;
   for (size_t i = 1; i + 1 < vtx_cnt; i++) {
     // Basal face. Face number 1
@@ -713,7 +714,7 @@ std::array<float, kHexPyramidPlaneCnt * 4> FillConcavePyramidCoef(float upper_al
 
 
 Mesh CreateConcavePyramidMesh(float h1, float h2, float h3) {
-  std::unique_ptr<float[]> dist{ new float[6]{} };
+  auto dist = std::make_unique<float[]>(6);
   std::fill(dist.get(), dist.get() + 6, 1.0f);
   return CreateConcavePyramidMesh(1, 1, 1, 1, h1, h2, h3, dist.get());
 }
@@ -742,16 +743,12 @@ Mesh CreateConcavePyramidMesh(float upper_alpha, float lower_alpha,  // wedge an
 
   // Step 2. Find all vertices
   // Negative upper pyramid
-  std::unique_ptr<float[]> upper_negative_pyramid_coef{
-    new float[(kUpperPyramidPlaneCnt + kMiddlePrismPlaneCnt + 1) * 4]{}
-  };
+  auto upper_negative_pyramid_coef = std::make_unique<float[]>((kUpperPyramidPlaneCnt + kMiddlePrismPlaneCnt + 1) * 4);
   std::memcpy(upper_negative_pyramid_coef.get(), coef_ptr, 4 * sizeof(float));
   std::memcpy(upper_negative_pyramid_coef.get() + 4, coef_ptr + 4 * 2, 4 * 6 * sizeof(float));
   std::memcpy(upper_negative_pyramid_coef.get() + 28, coef_ptr + 4 * 8, 4 * 6 * sizeof(float));
   // Negative lower pyramid
-  std::unique_ptr<float[]> lower_negative_pyramid_coef{
-    new float[(kLowerPyramidPlaneCnt + kMiddlePrismPlaneCnt + 1) * 4]{}
-  };
+  auto lower_negative_pyramid_coef = std::make_unique<float[]>((kLowerPyramidPlaneCnt + kMiddlePrismPlaneCnt + 1) * 4);
   std::memcpy(lower_negative_pyramid_coef.get(), coef_ptr, 4 * sizeof(float));
   std::memcpy(lower_negative_pyramid_coef.get() + 4, coef_ptr + 4 * 2, 4 * 6 * sizeof(float));
   std::memcpy(lower_negative_pyramid_coef.get() + 28, coef_ptr + 4 * 8, 4 * 6 * sizeof(float));
@@ -763,7 +760,7 @@ Mesh CreateConcavePyramidMesh(float upper_alpha, float lower_alpha,  // wedge an
       kLowerPyramidPlaneCnt + kMiddlePrismPlaneCnt + 1, lower_negative_pyramid_coef.get(),
       kUpperPyramidPlaneCnt + kMiddlePrismPlaneCnt + 1, upper_negative_pyramid_coef.get());
 
-  std::unique_ptr<float[]> vtx{ new float[(upper_vtx_cnt + lower_vtx_cnt) * 3]{} };
+  auto vtx = std::make_unique<float[]>((upper_vtx_cnt + lower_vtx_cnt) * 3);
   std::memcpy(vtx.get(), upper_vtx.get(), upper_vtx_cnt * 3 * sizeof(float));
   std::memcpy(vtx.get() + upper_vtx_cnt * 3, lower_vtx.get(), lower_vtx_cnt * 3 * sizeof(float));
 

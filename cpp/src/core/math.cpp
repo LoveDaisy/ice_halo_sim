@@ -351,8 +351,8 @@ RandomNumberGenerator::RandomNumberGenerator(uint32_t seed)
 
 
 RandomNumberGenerator* RandomNumberGenerator::GetInstance() {
-  static thread_local std::unique_ptr<RandomNumberGenerator> instance_{ new RandomNumberGenerator(
-      static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count())) };
+  static thread_local auto instance_ = std::make_unique<RandomNumberGenerator>(
+      static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count()));
   return instance_.get();
 }
 
@@ -546,7 +546,7 @@ std::tuple<std::unique_ptr<float[]>, int> SolveConvexPolyhedronVtx(int plane_cnt
   using math::kFloatEps;
 
   int vtx_cap = plane_cnt * (plane_cnt - 1) * (plane_cnt - 2) / 6;
-  std::unique_ptr<float[]> vtx{ new float[vtx_cap * 3]{} };
+  auto vtx = std::make_unique<float[]>(vtx_cap * 3);
   float* vtx_ptr = vtx.get();
 
   float xyz[3]{};
@@ -580,7 +580,7 @@ std::tuple<std::unique_ptr<float[]>, int> SolveConvexPolyhedronVtx(int plane_cnt
     }
   }
 
-  std::unique_ptr<float[]> final_vtx{ new float[vtx_cnt * 3]{} };
+  auto final_vtx = std::make_unique<float[]>(vtx_cnt * 3);
   std::memcpy(final_vtx.get(), vtx.get(), vtx_cnt * 3 * sizeof(float));
 
   return std::make_tuple(std::move(final_vtx), vtx_cnt);
@@ -598,7 +598,7 @@ std::tuple<std::unique_ptr<float[]>, int> ConvexPolyhedronDifferenceVtx(int plan
   int plane_cnt = plane_cnt1 + plane_cnt2;
   int vtx_cap = plane_cnt * (plane_cnt - 1) * (plane_cnt - 2) / 6;
 
-  std::unique_ptr<float[]> vtx{ new float[vtx_cap * 3]{} };
+  auto vtx = std::make_unique<float[]>(vtx_cap * 3);
   float* vtx_ptr = vtx.get();
 
   float xyz[3]{};
@@ -639,7 +639,7 @@ std::tuple<std::unique_ptr<float[]>, int> ConvexPolyhedronDifferenceVtx(int plan
     }
   }
 
-  std::unique_ptr<float[]> vtx_final{ new float[vtx_cnt * 3]{} };
+  auto vtx_final = std::make_unique<float[]>(vtx_cnt * 3);
   std::memcpy(vtx_final.get(), vtx.get(), vtx_cnt * 3 * sizeof(float));
   return std::make_tuple(std::move(vtx_final), vtx_cnt);
 }
@@ -736,7 +736,7 @@ std::tuple<std::unique_ptr<int[]>, int> Triangulate(int vtx_cnt, const float* vt
     tri_cap += curr_face.size() - 2;
   }
 
-  std::unique_ptr<int[]> tri{ new int[tri_cap * 3]{} };
+  auto tri = std::make_unique<int[]>(tri_cap * 3);
   int tri_cnt = 0;
   for (const auto& curr_face : surface_vtx_idx) {
     if (curr_face.size() < 3) {
