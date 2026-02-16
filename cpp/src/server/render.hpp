@@ -7,6 +7,7 @@
 #include "config/render_config.hpp"
 #include "core/filter.hpp"
 #include "server/consumer.hpp"
+#include "util/logger.hpp"
 
 namespace icehalo {
 
@@ -28,6 +29,7 @@ class RenderConsumer : public IConsume {
   float total_intensity_ = 0;
   std::unique_ptr<float[]> internal_xyz_;
   std::unique_ptr<uint8_t[]> image_buffer_;
+  Logger logger_{ "Render" };
 };
 
 }  // namespace icehalo

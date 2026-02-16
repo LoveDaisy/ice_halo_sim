@@ -52,23 +52,29 @@ void HS_DestroyServer(HS_HaloSimServer* server) {
 
 // =============== Logging ===============
 void HS_InitLogger(HS_HaloSimServer* server) {
-  (void)server;
-  ns::InitLogger();
+  if (!server) {
+    return;
+  }
+  ns::InitGlobalLogger();
 }
 
 
 void HS_SetLogLevel(HS_HaloSimServer* server, HS_LogLevel level) {
-  (void)server;
-  static constexpr spdlog::level::level_enum kLevelMap[] = {
-    spdlog::level::trace,  // HS_LOG_TRACE
-    spdlog::level::debug,  // HS_LOG_DEBUG
-    spdlog::level::info,   // HS_LOG_INFO
-    spdlog::level::warn,   // HS_LOG_WARNING
-    spdlog::level::err,    // HS_LOG_ERROR
-    spdlog::level::off,    // HS_LOG_OFF
+  if (!server) {
+    return;
+  }
+  static constexpr ns::LogLevel kLevelMap[] = {
+    ns::LogLevel::kTrace,    // HS_LOG_TRACE
+    ns::LogLevel::kDebug,    // HS_LOG_DEBUG
+    ns::LogLevel::kInfo,     // HS_LOG_INFO
+    ns::LogLevel::kWarning,  // HS_LOG_WARNING
+    ns::LogLevel::kError,    // HS_LOG_ERROR
+    ns::LogLevel::kOff,      // HS_LOG_OFF
   };
   if (level >= HS_LOG_TRACE && level <= HS_LOG_OFF) {
-    ns::SetLogLevel(kLevelMap[level]);
+    auto mapped = kLevelMap[level];
+    server->server_->SetLogLevel(mapped);
+    ns::GetGlobalLogger().SetLevel(mapped);
   }
 }
 
