@@ -18,8 +18,8 @@ class RngTest : public ::testing::Test {
 
 TEST_F(RngTest, GaussianTest) {
   // Prepare buffers to store the random values.
-  std::unique_ptr<float[]> values1(new float[kCheckSize]);
-  std::unique_ptr<float[]> values2(new float[kCheckSize]);
+  auto values1 = std::make_unique<float[]>(kCheckSize);
+  auto values2 = std::make_unique<float[]>(kCheckSize);
 
   auto* rng = icehalo::RandomNumberGenerator::GetInstance();
 
@@ -48,8 +48,8 @@ TEST_F(RngTest, GaussianTest) {
 
 TEST_F(RngTest, UniformTest) {
   // Prepare buffers to store the random values.
-  std::unique_ptr<float[]> values1(new float[kCheckSize]);
-  std::unique_ptr<float[]> values2(new float[kCheckSize]);
+  auto values1 = std::make_unique<float[]>(kCheckSize);
+  auto values2 = std::make_unique<float[]>(kCheckSize);
 
   auto* rng = icehalo::RandomNumberGenerator::GetInstance();
 

@@ -85,14 +85,14 @@ TEST_F(V3TestProj, SimpleProj) {
   auto data_queue = std::make_shared<icehalo::Queue<icehalo::SimData>>();
 
   constexpr int kMaxHits = 8;
-  std::unique_ptr<float[]> output_data{ new float[kMaxHits * 2 * 7]{} };
+  auto output_data = std::make_unique<float[]>(kMaxHits * 2 * 7);
 
   constexpr uint32_t kTestSeed = 42;
   icehalo::Simulator simulator(config_queue, data_queue, kTestSeed);
 
   Consumer consumer(data_queue);
-  consumer.RegisterConsumer(icehalo::ConsumerPtrU(new icehalo::ShowRayInfoConsumer));
-  consumer.RegisterConsumer(icehalo::ConsumerPtrU(new CopyRayDataConsumer(output_data.get())));
+  consumer.RegisterConsumer(std::make_unique<icehalo::ShowRayInfoConsumer>());
+  consumer.RegisterConsumer(std::make_unique<CopyRayDataConsumer>(output_data.get()));
 
   std::thread prod_thread([&simulator]() { simulator.Run(); });
   std::thread cons_thread([&consumer]() { consumer.Run(); });
