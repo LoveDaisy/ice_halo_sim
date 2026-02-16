@@ -232,7 +232,7 @@ Server::GetResults()
 - `RenderConsumer`: 渲染消费者，实现各种镜头投影算法
 - `StatsConsumer`: 统计消费者
 - `ShowRayInfoConsumer`: 光线信息消费者
-- `cserver.cpp`: C API 封装实现
+- `c_api.cpp`: C API 封装实现
 
 **特点**：
 - 线程安全的队列系统
