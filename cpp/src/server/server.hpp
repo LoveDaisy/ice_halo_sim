@@ -8,6 +8,8 @@
 #include <variant>
 #include <vector>
 
+#include "util/logger.hpp"
+
 
 namespace icehalo {
 
@@ -221,6 +223,9 @@ class Server {
    * @note Stops processing and prepares for destruction. Server cannot be used after termination.
    */
   void Terminate();
+
+  void InitLogger();
+  void SetLogLevel(LogLevel level);
 
   /**
    * @brief Get server status

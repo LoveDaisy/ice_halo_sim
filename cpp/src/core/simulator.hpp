@@ -1,8 +1,6 @@
 #ifndef CORE_SIMULATOR_H_
 #define CORE_SIMULATOR_H_
 
-#include <spdlog/logger.h>
-
 #include <atomic>
 #include <cstddef>
 #include <memory>
@@ -10,6 +8,7 @@
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/math.hpp"
+#include "util/logger.hpp"
 
 namespace icehalo {
 
@@ -39,6 +38,7 @@ class Simulator {
   void Run();
   void Stop();
   bool IsIdle() const;
+  void SetLogLevel(LogLevel level);
 
  private:
   static constexpr size_t kSmallBatchRayNum = 32;
@@ -50,7 +50,7 @@ class Simulator {
 
   uint32_t seed_;
   RandomNumberGenerator rng_;
-  std::shared_ptr<spdlog::logger> logger_;
+  Logger logger_{ "Simulator" };
 };
 
 }  // namespace icehalo
