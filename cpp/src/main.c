@@ -4,7 +4,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "icehalo.h"
+#include "lumice.h"
 #include "stb_image_write.h"
 
 static const int kPollIntervalUs = 1000000;  // 1 second
@@ -14,7 +14,7 @@ static void print_usage(const char* prog_name) {
   fprintf(stdout,
           "Usage: %s -f <config_file> [options]\n"
           "\n"
-          "Ice Halo Simulation — simulate ice halos by tracing rays through ice crystals.\n"
+          "Lumice — simulate ice halos by tracing rays through ice crystals.\n"
           "\n"
           "Options:\n"
           "  -f <file>    Specify the configuration file (required)\n"
@@ -33,7 +33,7 @@ static void print_usage(const char* prog_name) {
 int main(int argc, char** argv) {
   const char* config_filename = NULL;
   const char* output_dir = ".";
-  HS_LogLevel log_level = HS_LOG_INFO;
+  LUMICE_LogLevel log_level = LUMICE_LOG_INFO;
   int opt;
 
   while ((opt = getopt(argc, argv, "f:o:vdh")) != -1) {
@@ -45,10 +45,10 @@ int main(int argc, char** argv) {
         output_dir = optarg;
         break;
       case 'v':
-        log_level = HS_LOG_TRACE;
+        log_level = LUMICE_LOG_TRACE;
         break;
       case 'd':
-        log_level = HS_LOG_DEBUG;
+        log_level = LUMICE_LOG_DEBUG;
         break;
       case 'h':
         print_usage(argv[0]);
@@ -72,27 +72,27 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  HS_HaloSimServer* server = HS_CreateServer();
-  HS_InitLogger(server);
-  HS_SetLogLevel(server, log_level);
+  LUMICE_Server* server = LUMICE_CreateServer();
+  LUMICE_InitLogger(server);
+  LUMICE_SetLogLevel(server, log_level);
 
-  if (HS_CommitConfigFromFile(server, config_filename) != HS_OK) {
-    HS_DestroyServer(server);
+  if (LUMICE_CommitConfigFromFile(server, config_filename) != LUMICE_OK) {
+    LUMICE_DestroyServer(server);
     return 1;
   }
 
   while (1) {
     usleep(kPollIntervalUs);
 
-    HS_ServerState state;
-    if (HS_QueryServerState(server, &state) == HS_OK && state == HS_SERVER_IDLE) {
+    LUMICE_ServerState state;
+    if (LUMICE_QueryServerState(server, &state) == LUMICE_OK && state == LUMICE_SERVER_IDLE) {
       break;
     }
   }
 
   // Save render results
-  HS_RenderResult renders[HS_MAX_RENDER_RESULTS + 1];
-  if (HS_GetRenderResults(server, renders, HS_MAX_RENDER_RESULTS) == HS_OK) {
+  LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
+  if (LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
     for (int i = 0; renders[i].img_buffer != NULL; i++) {
       char filepath[512];
       snprintf(filepath, sizeof(filepath), "%s/img_%02d.jpg", output_dir, renders[i].renderer_id);
@@ -108,13 +108,13 @@ int main(int argc, char** argv) {
   }
 
   // Print stats
-  HS_StatsResult stats[HS_MAX_STATS_RESULTS + 1];
-  if (HS_GetStatsResults(server, stats, HS_MAX_STATS_RESULTS) == HS_OK) {
+  LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
+  if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK) {
     for (int i = 0; stats[i].sim_ray_num != 0; i++) {
       printf("Stats: sim_rays=%lu, crystals=%lu\n", stats[i].sim_ray_num, stats[i].crystal_num);
     }
   }
 
-  HS_DestroyServer(server);
+  LUMICE_DestroyServer(server);
   return 0;
 }
