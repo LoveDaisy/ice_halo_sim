@@ -7,7 +7,7 @@
 
 #include "core/def.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 struct SunParam {
   float altitude_;  // Degree
@@ -39,6 +39,6 @@ struct LightSourceConfig {
 void to_json(nlohmann::json& j, const LightSourceConfig& l);
 void from_json(const nlohmann::json& j, LightSourceConfig& l);
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CONFIG_LIGHT_CONFIG_H_

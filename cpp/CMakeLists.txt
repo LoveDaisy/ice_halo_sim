@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(IceHalo VERSION 2.1.1)
+project(Lumice VERSION 2.1.1)
 
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 
@@ -98,10 +98,10 @@ endif()
 
 # ==================================================================================================
 # Set submodules
-set(icehalo_include
+set(lumice_include
   "${PROJ_SRC_DIR}")
 
-set(icehalo_config_src
+set(lumice_config_src
   "${PROJ_SRC_DIR}/config/config_manager.cpp"
   "${PROJ_SRC_DIR}/config/crystal_config.cpp"
   "${PROJ_SRC_DIR}/config/filter_config.cpp"
@@ -110,7 +110,7 @@ set(icehalo_config_src
   "${PROJ_SRC_DIR}/config/render_config.cpp"
   "${PROJ_SRC_DIR}/config/sim_data.cpp")
 
-set(icehalo_core_src
+set(lumice_core_src
   "${PROJ_SRC_DIR}/core/crystal.cpp"
   "${PROJ_SRC_DIR}/core/filter.cpp"
   "${PROJ_SRC_DIR}/core/geo3d.cpp"
@@ -119,46 +119,46 @@ set(icehalo_core_src
   "${PROJ_SRC_DIR}/core/raypath.cpp"
   "${PROJ_SRC_DIR}/core/simulator.cpp")
 
-set(icehalo_server_src
-  "${PROJ_SRC_DIR}/server/cserver.cpp"
+set(lumice_server_src
+  "${PROJ_SRC_DIR}/server/c_api.cpp"
   "${PROJ_SRC_DIR}/server/render.cpp"
   "${PROJ_SRC_DIR}/server/server.cpp"
   "${PROJ_SRC_DIR}/server/show_rays.cpp"
   "${PROJ_SRC_DIR}/server/stats.cpp")
 
-set(icehalo_util_src
+set(lumice_util_src
   "${PROJ_SRC_DIR}/util/arg_parser.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
 
-set(icehalo_src
-  ${icehalo_config_src} ${icehalo_core_src}
-  ${icehalo_server_src} ${icehalo_util_src})
+set(lumice_src
+  ${lumice_config_src} ${lumice_core_src}
+  ${lumice_server_src} ${lumice_util_src})
 
 # ==================================================================================================
 # Add targets
-add_library(icehalo ${icehalo_src})
-target_include_directories(icehalo
+add_library(lumice ${lumice_src})
+target_include_directories(lumice
   PUBLIC
     $<BUILD_INTERFACE:${PROJ_SRC_DIR}/include>
     $<INSTALL_INTERFACE:include>
   PRIVATE
-    ${icehalo_include})
-target_link_libraries(icehalo PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog_header_only tl::expected Threads::Threads)
+    ${lumice_include})
+target_link_libraries(lumice PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog_header_only tl::expected Threads::Threads)
 
 if(NOT MSVC)
-  target_compile_options(icehalo PRIVATE
+  target_compile_options(lumice PRIVATE
     -Wall -Wextra -fexceptions -fpermissive -frtti)
-  target_compile_definitions(icehalo PRIVATE __STDC_FORMAT_MACROS)
-  # -fvisibility=hidden: Release/MinSizeRel 下隐藏所有符号，仅导出 icehalo.h 中
+  target_compile_definitions(lumice PRIVATE __STDC_FORMAT_MACROS)
+  # -fvisibility=hidden: Release/MinSizeRel 下隐藏所有符号，仅导出 lumice.h 中
   # 由 #pragma GCC visibility push(default) 标记的 C API 函数。
   # Debug 构建不设置此标志，所有符号均可见，便于调试。
   # NOTE: 当前仅支持 GCC/Clang。若需支持 MSVC 共享库，需将 pragma 改为
-  # HS_API 宏（__declspec(dllexport/dllimport)），参见 icehalo.h 中的注释。
-  target_compile_options(icehalo PRIVATE
+  # LUMICE_API 宏（__declspec(dllexport/dllimport)），参见 lumice.h 中的注释。
+  target_compile_options(lumice PRIVATE
     $<$<CONFIG:Debug>:-O0 -g -ggdb>
     $<$<CONFIG:Release>:-ffunction-sections -fdata-sections -fvisibility=hidden>
     $<$<CONFIG:MinSizeRel>:-ffunction-sections -fdata-sections -fvisibility=hidden>)
-  target_link_options(icehalo PUBLIC
+  target_link_options(lumice PUBLIC
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:AppleClang,Clang>:-dead_strip>>
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:GNU>:--gc-sections>>)
 endif()

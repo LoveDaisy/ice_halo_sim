@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace icehalo {
+namespace lumice {
 
 template <class T>
 struct BufferWrapper {
@@ -22,6 +22,6 @@ struct BufferWrapper {
 using float_bf_t = BufferWrapper<float>;
 using int_bf_t = BufferWrapper<int>;
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CORE_BUFFER_H_

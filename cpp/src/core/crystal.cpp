@@ -12,9 +12,9 @@
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map) {
   using math::kSqrt3_2;
@@ -122,37 +122,38 @@ Crystal::Crystal() {}
 
 Crystal::Crystal(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_cnt, std::unique_ptr<int[]> triangle_idx)
     : mesh_(vtx_cnt, std::move(vtx), triangle_cnt, std::move(triangle_idx)),
-      cache_data_(new float[triangle_cnt * CrystalCachOffset::kTotal]{}),
+      cache_data_(std::make_unique<float[]>(triangle_cnt * CrystalCachOffset::kTotal)),
       face_v_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kVtx),
       face_ev_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kEdgeVec),
       face_n_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kNormal),
       face_area_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kArea),
-      face_coord_tf_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kTf), fn_map_(new IdType[triangle_cnt]{}),
-      fn_period_(-1) {
+      face_coord_tf_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kTf),
+      fn_map_(std::make_unique<IdType[]>(triangle_cnt)), fn_period_(-1) {
   // Initialize other pre-computed data
   ComputeCacheData();
 }
 
 Crystal::Crystal(Mesh mesh)
-    : mesh_(std::move(mesh)), cache_data_(new float[mesh_.GetTriangleCnt() * CrystalCachOffset::kTotal]{}),
+    : mesh_(std::move(mesh)),
+      cache_data_(std::make_unique<float[]>(mesh_.GetTriangleCnt() * CrystalCachOffset::kTotal)),
       face_v_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kVtx),
       face_ev_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kEdgeVec),
       face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
       face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea),
       face_coord_tf_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kTf),
-      fn_map_(new IdType[mesh_.GetTriangleCnt()]{}), fn_period_(-1) {
+      fn_map_(std::make_unique<IdType[]>(mesh_.GetTriangleCnt())), fn_period_(-1) {
   ComputeCacheData();
 }
 
 Crystal::Crystal(const Crystal& other)
     : config_id_(other.config_id_), mesh_(other.mesh_),
-      cache_data_(new float[other.TotalTriangles() * CrystalCachOffset::kTotal]{}),
+      cache_data_(std::make_unique<float[]>(other.TotalTriangles() * CrystalCachOffset::kTotal)),
       face_v_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kVtx),
       face_ev_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kEdgeVec),
       face_n_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kNormal),
       face_area_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kArea),
       face_coord_tf_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kTf),
-      fn_map_(new IdType[other.TotalTriangles()]{}), fn_period_(other.fn_period_) {
+      fn_map_(std::make_unique<IdType[]>(other.TotalTriangles())), fn_period_(other.fn_period_) {
   auto n = other.TotalTriangles();
   std::memcpy(cache_data_.get(), other.cache_data_.get(), n * CrystalCachOffset::kTotal * sizeof(float));
   std::memcpy(fn_map_.get(), other.fn_map_.get(), n * sizeof(IdType));
@@ -182,13 +183,13 @@ Crystal& Crystal::operator=(const Crystal& other) {
   mesh_ = other.mesh_;
 
   auto n = other.TotalTriangles();
-  cache_data_.reset(new float[n * CrystalCachOffset::kTotal]);
+  cache_data_ = std::make_unique<float[]>(n * CrystalCachOffset::kTotal);
   face_v_ = cache_data_.get() + n * CrystalCachOffset::kVtx;
   face_ev_ = cache_data_.get() + n * CrystalCachOffset::kEdgeVec;
   face_n_ = cache_data_.get() + n * CrystalCachOffset::kNormal;
   face_area_ = cache_data_.get() + n * CrystalCachOffset::kArea;
   face_coord_tf_ = cache_data_.get() + n * CrystalCachOffset::kTf;
-  fn_map_.reset(new IdType[n]);
+  fn_map_ = std::make_unique<IdType[]>(n);
 
   std::memcpy(cache_data_.get(), other.cache_data_.get(), n * CrystalCachOffset::kTotal * sizeof(float));
   std::memcpy(fn_map_.get(), other.fn_map_.get(), n * sizeof(IdType));
@@ -481,4 +482,4 @@ float Crystal::GetRefractiveIndex(float wl) const {
   return IceRefractiveIndex::Get(wl);
 }
 
-}  // namespace icehalo
+}  // namespace lumice

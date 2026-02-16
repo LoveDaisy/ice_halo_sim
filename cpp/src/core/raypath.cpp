@@ -1,6 +1,6 @@
 #include "core/raypath.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 RaypathRecorder& RaypathRecorder::operator<<(IdType fn) {
   if (size_ >= kMaxHits) {
@@ -52,4 +52,4 @@ size_t RaypathHash::operator()(const RaypathRecorder& rp) {
   return h.GetHash();
 }
 
-}  // namespace icehalo
+}  // namespace lumice

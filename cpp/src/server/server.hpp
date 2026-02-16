@@ -8,8 +8,10 @@
 #include <variant>
 #include <vector>
 
+#include "util/logger.hpp"
 
-namespace icehalo {
+
+namespace lumice {
 
 // =============== Error ===============
 /**
@@ -222,6 +224,9 @@ class Server {
    */
   void Terminate();
 
+  void InitLogger();
+  void SetLogLevel(LogLevel level);
+
   /**
    * @brief Get server status
    * @return Current server status
@@ -239,6 +244,6 @@ class Server {
   std::shared_ptr<ServerImpl> impl_;
 };
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // INCLUDE_SERVER_H_

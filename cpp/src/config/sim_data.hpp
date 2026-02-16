@@ -8,7 +8,7 @@
 #include "core/def.hpp"
 #include "core/raypath.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 struct RayBuffer {
   RayBuffer();
@@ -51,6 +51,6 @@ struct SimData {
 using SimDataPtrS = std::shared_ptr<SimData>;
 using SimDataPtrU = std::unique_ptr<SimData>;
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CONFIG_SIM_DATA_H_

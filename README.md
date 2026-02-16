@@ -1,4 +1,4 @@
-# Ice halo simulation program
+# Lumice
 
 ## Introduction
 
@@ -54,7 +54,7 @@ For detailed documentation:
 3. [Rapidjson](http://rapidjson.org/index.html)
 
 
-# 冰晕模拟程序
+# Lumice
 
 ## 简介
 

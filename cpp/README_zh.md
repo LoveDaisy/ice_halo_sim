@@ -16,7 +16,7 @@ cd cpp
 如果一切顺利，可执行文件将安装到 `build/cmake_install`。然后可以这样运行：
 
 ~~~bash
-./build/cmake_install/IceHalo -f config_example.json
+./build/cmake_install/Lumice -f config_example.json
 ~~~
 
 程序将输出一些信息，以及几张渲染的图片文件。

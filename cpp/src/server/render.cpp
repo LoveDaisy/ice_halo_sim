@@ -15,9 +15,9 @@
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 #include "util/color_data.hpp"
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 // =============== Color transforms ===============
 // Convert linear rgb to sRGB
@@ -182,8 +182,8 @@ ProjFunc GetProjFunc(LensParam::LensType type) {
 RenderConsumer::RenderConsumer(RenderConfig config)
     : config_(config), diag_pix_(std::sqrt(config.resolution_[0] * config.resolution_[0] +
                                            config.resolution_[1] * config.resolution_[1])),
-      internal_xyz_(new float[config.resolution_[0] * config.resolution_[1] * 3]{}),
-      image_buffer_(new uint8_t[config.resolution_[0] * config.resolution_[1] * 3]{}) {
+      internal_xyz_(std::make_unique<float[]>(config.resolution_[0] * config.resolution_[1] * 3)),
+      image_buffer_(std::make_unique<uint8_t[]>(config.resolution_[0] * config.resolution_[1] * 3)) {
   float ax_z[3]{ 0, 0, 1 };
   float ax_y[3]{ 0, 1, 0 };
   rot_.Chain({ ax_z, (-90.0f + config.view_.ro_) * math::kDegreeToRad })
@@ -231,9 +231,9 @@ bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& f
 void RenderConsumer::Consume(const SimData& data) {
   const auto& crystals = data.crystals_;
 
-  std::unique_ptr<float[]> d_data{ new float[data.rays_.size_ * 3]{} };
-  std::unique_ptr<float[]> w_data{ new float[data.rays_.size_ * 1]{} };
-  std::unique_ptr<int[]> xy_data{ new int[data.rays_.size_ * 2]{} };
+  auto d_data = std::make_unique<float[]>(data.rays_.size_ * 3);
+  auto w_data = std::make_unique<float[]>(data.rays_.size_ * 1);
+  auto xy_data = std::make_unique<int[]>(data.rays_.size_ * 2);
 
   size_t filtered_ray_num = 0;
   for (size_t i = 0; i < data.rays_.size_; i++) {
@@ -250,7 +250,7 @@ void RenderConsumer::Consume(const SimData& data) {
     }
 
     // Do rendering
-    LOG_DEBUG("render ray: {:.4f},{:.4f},{:.4f},{:.4f}", r.d_[0], r.d_[1], r.d_[2], r.w_);
+    ILOG_DEBUG(logger_, "render ray: {:.4f},{:.4f},{:.4f},{:.4f}", r.d_[0], r.d_[1], r.d_[2], r.w_);
     std::memcpy(d_data.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
     w_data[filtered_ray_num] = r.w_;
     filtered_ray_num++;
@@ -281,7 +281,7 @@ void RenderConsumer::Consume(const SimData& data) {
 
 Result RenderConsumer::GetResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
-  std::unique_ptr<float[]> float_data{ new float[total_pix * 3]{} };
+  auto float_data = std::make_unique<float[]>(total_pix * 3);
   std::memcpy(float_data.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
   for (int i = 0; i < total_pix * 3; i++) {
     float_data[i] *= config_.intensity_factor_ / total_intensity_ * 1e5;
@@ -340,4 +340,4 @@ Result RenderConsumer::GetResult() const {
   return RenderResult{ config_.id_, config_.resolution_[0], config_.resolution_[1], image_buffer_.get() };
 }
 
-}  // namespace icehalo
+}  // namespace lumice

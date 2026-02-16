@@ -4,7 +4,7 @@
 
 #include "core/def.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 void to_json(nlohmann::json& j, const SceneConfig& s) {
   j["id"] = s.id_;
@@ -34,4 +34,4 @@ void to_json(nlohmann::json& j, const ProjConfig& p) {
   j["scene"] = p.scene_.id_;
 }
 
-}  // namespace icehalo
+}  // namespace lumice

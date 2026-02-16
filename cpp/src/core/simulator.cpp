@@ -15,10 +15,10 @@
 #include "core/filter.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
-#include "util/log.hpp"
+#include "util/logger.hpp"
 #include "util/queue.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 /**
  * @brief Sample on crystal & init origin (p & fid) of rays.
@@ -36,7 +36,7 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
   const auto* face_norm = curr_crystal.GetTriangleNormal();
   const auto* face_vtx = curr_crystal.GetTriangleVtx();
 
-  std::unique_ptr<float[]> proj_prob{ new float[total_faces]{} };
+  auto proj_prob = std::make_unique<float[]>(total_faces);
   for (auto& r : ray_buf) {
     const auto* d = r.d_;
     for (size_t j = 0; j < total_faces; j++) {
@@ -245,8 +245,8 @@ RayBuffer AllocateAllData(const SceneConfig& config) {
 
 std::unique_ptr<size_t[]> PartitionCrystalRayNum(RandomNumberGenerator& rng, const MsInfo& ms_info, int ray_num) {
   auto crystal_cnt = ms_info.setting_.size();
-  std::unique_ptr<size_t[]> c_num{ new size_t[crystal_cnt]{} };
-  std::unique_ptr<float[]> prob{ new float[crystal_cnt + 1]{} };
+  auto c_num = std::make_unique<size_t[]>(crystal_cnt);
+  auto prob = std::make_unique<float[]>(crystal_cnt + 1);
   for (size_t ci = 0; ci < crystal_cnt; ci++) {
     prob[ci + 1] = ms_info.setting_[ci].crystal_proportion_ + prob[ci];
   }
@@ -373,8 +373,7 @@ Simulator::Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> dat
     : config_queue_(config_queue), data_queue_(data_queue), stop_(false), idle_(true), seed_(seed),
       rng_(seed != 0 ? seed :
                        static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count() ^
-                                             (std::hash<std::thread::id>{}(std::this_thread::get_id())))),
-      logger_(GetLogger("Simulator")) {}
+                                             (std::hash<std::thread::id>{}(std::this_thread::get_id())))) {}
 
 Simulator::Simulator(Simulator&& other)
     : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
@@ -423,8 +422,8 @@ void Simulator::Run() {
 
     idle_ = false;
     for (const auto& curr_wl_param : config.light_source_.wl_param_) {
-      SPDLOG_LOGGER_DEBUG(logger_, "Run: get config({}): ray({}), wl({:.1f},{:.2f})",  //
-                          config.id_, config.ray_num_, curr_wl_param.wl_, curr_wl_param.weight_);
+      ILOG_DEBUG(logger_, "Run: get config({}): ray({}), wl({:.1f},{:.2f})",  //
+                 config.id_, config.ray_num_, curr_wl_param.wl_, curr_wl_param.weight_);
 
       float wl = curr_wl_param.wl_;  // Take first wl **ONLY**. Single wl in a single run.
 
@@ -538,4 +537,8 @@ bool Simulator::IsIdle() const {
   return !stop_ && idle_;
 }
 
-}  // namespace icehalo
+void Simulator::SetLogLevel(LogLevel level) {
+  logger_.SetLevel(level);
+}
+
+}  // namespace lumice

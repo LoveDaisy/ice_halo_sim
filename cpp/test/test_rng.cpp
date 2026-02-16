@@ -18,10 +18,10 @@ class RngTest : public ::testing::Test {
 
 TEST_F(RngTest, GaussianTest) {
   // Prepare buffers to store the random values.
-  std::unique_ptr<float[]> values1(new float[kCheckSize]);
-  std::unique_ptr<float[]> values2(new float[kCheckSize]);
+  auto values1 = std::make_unique<float[]>(kCheckSize);
+  auto values2 = std::make_unique<float[]>(kCheckSize);
 
-  auto* rng = icehalo::RandomNumberGenerator::GetInstance();
+  auto* rng = lumice::RandomNumberGenerator::GetInstance();
 
   // Fill the buffer with Gaussian-distributed random values.
   rng->Reset();
@@ -33,7 +33,7 @@ TEST_F(RngTest, GaussianTest) {
   // RNG is thread_local, so with pool size 1 the worker thread has its own RNG
   // seeded identically, producing the same sequence in the same order.
   rng->Reset();
-  auto thread_pool = icehalo::ThreadingPool::CreatePool(1);
+  auto thread_pool = lumice::ThreadingPool::CreatePool(1);
   thread_pool->CommitRangeStepJobsAndWait(
       0, kCheckSize, [&values2, &rng](int /* thread_id */, int i) { values2[i] = rng->GetGaussian(); });
 
@@ -48,10 +48,10 @@ TEST_F(RngTest, GaussianTest) {
 
 TEST_F(RngTest, UniformTest) {
   // Prepare buffers to store the random values.
-  std::unique_ptr<float[]> values1(new float[kCheckSize]);
-  std::unique_ptr<float[]> values2(new float[kCheckSize]);
+  auto values1 = std::make_unique<float[]>(kCheckSize);
+  auto values2 = std::make_unique<float[]>(kCheckSize);
 
-  auto* rng = icehalo::RandomNumberGenerator::GetInstance();
+  auto* rng = lumice::RandomNumberGenerator::GetInstance();
 
   // Fill the buffer with uniform-distributed random values.
   rng->Reset();
@@ -61,7 +61,7 @@ TEST_F(RngTest, UniformTest) {
 
   // Fill the buffer using a single-worker thread pool.
   rng->Reset();
-  auto thread_pool = icehalo::ThreadingPool::CreatePool(1);
+  auto thread_pool = lumice::ThreadingPool::CreatePool(1);
   thread_pool->CommitRangeStepJobsAndWait(
       0, kCheckSize, [&values2, &rng](int /* thread_id */, int i) { values2[i] = rng->GetUniform(); });
 
@@ -75,17 +75,17 @@ TEST_F(RngTest, UniformTest) {
 
 
 TEST_F(RngTest, TriangleSample) {
-  auto crystal = icehalo::Crystal::CreatePrism(0.2f);
+  auto crystal = lumice::Crystal::CreatePrism(0.2f);
 
   float p[3];
   float v[3];
   int fid = 0;
   const float* face_vtx = crystal.GetTriangleVtx() + fid * 9;
-  icehalo::SampleTrianglePoint(face_vtx, p);
+  lumice::SampleTrianglePoint(face_vtx, p);
   for (int k = 0; k < 3; k++) {
     v[k] = p[k] - face_vtx[k];
   }
-  float dot = icehalo::Dot3(v, crystal.GetTriangleNormal() + fid * 3);
+  float dot = lumice::Dot3(v, crystal.GetTriangleNormal() + fid * 3);
   EXPECT_NEAR(dot, 0.0f, kFloatEps);
 }
 

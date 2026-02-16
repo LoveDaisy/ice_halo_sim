@@ -7,7 +7,7 @@
 
 #include "core/def.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 struct NoneFilterParam {};
 
@@ -60,6 +60,6 @@ struct FilterConfig {
 void to_json(nlohmann::json& j, const FilterConfig& f);
 void from_json(const nlohmann::json& j, FilterConfig& f);
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CONFIG_FILTER_CONFIG_H_

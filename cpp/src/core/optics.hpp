@@ -7,7 +7,7 @@
 #include "core/crystal.hpp"
 
 
-namespace icehalo {
+namespace lumice {
 
 class IceRefractiveIndex {
  public:
@@ -40,7 +40,7 @@ void Propagate(const Crystal& crystal, size_t num, size_t step,                 
                const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input
                float_bf_t p_out, int_bf_t fid_out);                                  // output
 
-}  // namespace icehalo
+}  // namespace lumice
 
 
 #endif  // SRC_CORE_OPTICS_H_

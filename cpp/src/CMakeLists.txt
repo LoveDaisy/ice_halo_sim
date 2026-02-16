@@ -4,15 +4,15 @@ message(STATUS "[src] CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 # ==================================================================================================
 # Add targets
 
-install(TARGETS icehalo
+install(TARGETS lumice
     DESTINATION "${CMAKE_INSTALL_PREFIX}")
 
-add_executable(IceHalo
+add_executable(Lumice
     "${PROJ_SRC_DIR}/main.c"
     "${PROJ_SRC_DIR}/stb_impl.c")
-target_include_directories(IceHalo PRIVATE
+target_include_directories(Lumice PRIVATE
     ${stb_SOURCE_DIR})
-target_link_libraries(IceHalo PRIVATE
-    icehalo)
-install(TARGETS IceHalo
+target_link_libraries(Lumice PRIVATE
+    lumice)
+install(TARGETS Lumice
     DESTINATION "${CMAKE_INSTALL_PREFIX}")

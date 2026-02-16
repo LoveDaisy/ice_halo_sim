@@ -8,7 +8,7 @@
 #include "core/crystal.hpp"
 #include "core/raypath.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 class Filter;
 using FilterPtrU = std::unique_ptr<Filter>;
@@ -34,7 +34,7 @@ class Filter {
   FilterConfig::Action action_;
 };
 
-}  // namespace icehalo
+}  // namespace lumice
 
 
 #endif  // SRC_CORE_FILTER_H_

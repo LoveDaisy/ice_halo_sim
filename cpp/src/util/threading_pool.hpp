@@ -9,7 +9,7 @@
 #include <thread>
 #include <vector>
 
-namespace icehalo {
+namespace lumice {
 
 class ThreadingPool;
 using ThreadingPoolPtr = std::shared_ptr<ThreadingPool>;
@@ -188,6 +188,6 @@ class ThreadingPool {
   std::condition_variable worker_cv_;
 };
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // UTIL_THREADING_POOL_H_

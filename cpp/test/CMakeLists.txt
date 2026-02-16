@@ -20,10 +20,10 @@ add_executable(unit_test
 target_include_directories(unit_test
   PRIVATE ${PROJ_TEST_DIR} ${PROJ_SRC_DIR})
 target_link_libraries(unit_test
-  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} icehalo)
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice)
 set_target_properties(unit_test PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
-add_test(NAME "IceHaloUnitTest" COMMAND unit_test
+add_test(NAME "LumiceUnitTest" COMMAND unit_test
   "${PROJ_ROOT}/config_example.json"
   "${CMAKE_CURRENT_BINARY_DIR}")

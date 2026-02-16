@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <limits>
 
-namespace icehalo {
+namespace lumice {
 
 using ShortIdType = uint16_t;
 constexpr ShortIdType kInvalidId = 0xffff;
@@ -27,6 +27,6 @@ constexpr size_t kMaxCrystalNum = 16;  // How many crystal types in one configur
 using IdType = uint16_t;
 
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // SRC_CORE_DEF_H_

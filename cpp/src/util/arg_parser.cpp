@@ -3,9 +3,9 @@
 #include <functional>
 #include <stdexcept>
 
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 ArgParser::ArgParser() : mode_(ArgMode::kCompact) {}
 
@@ -241,4 +241,4 @@ ArgParseResult ArgParser::Parse(int argc, char** argv) const {
   return result;
 }
 
-}  // namespace icehalo
+}  // namespace lumice

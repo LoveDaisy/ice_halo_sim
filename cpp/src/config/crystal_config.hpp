@@ -7,7 +7,7 @@
 
 #include "core/math.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 struct PrismCrystalParam {
   Distribution h_;     // Height, equal to c/a in HP2.0
@@ -40,6 +40,6 @@ using CrystalConfigPtrS = std::shared_ptr<CrystalConfig>;
 void to_json(nlohmann::json& j, const CrystalConfig& c);
 void from_json(const nlohmann::json& j, CrystalConfig& c);
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CONFIG_CRYSTAL_CONFIG_H_

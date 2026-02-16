@@ -1,47 +1,47 @@
 #include <cstring>
 #include <memory>
 
-#include "include/icehalo.h"
+#include "include/lumice.h"
 #include "server/server.hpp"
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
-namespace ns = icehalo;
+namespace ns = lumice;
 
 // =============== Internal Helpers ===============
-struct HS_HaloSimServer_ {
+struct LUMICE_Server_ {
   std::unique_ptr<ns::Server> server_;
 };
 
 
-static HS_ErrorCode MapErrorCode(ns::ErrorCode code) {
+static LUMICE_ErrorCode MapErrorCode(ns::ErrorCode code) {
   switch (code) {
     case ns::ErrorCode::kSuccess:
-      return HS_OK;
+      return LUMICE_OK;
     case ns::ErrorCode::kInvalidJson:
-      return HS_ERR_INVALID_JSON;
+      return LUMICE_ERR_INVALID_JSON;
     case ns::ErrorCode::kInvalidConfig:
-      return HS_ERR_INVALID_CONFIG;
+      return LUMICE_ERR_INVALID_CONFIG;
     case ns::ErrorCode::kMissingField:
-      return HS_ERR_MISSING_FIELD;
+      return LUMICE_ERR_MISSING_FIELD;
     case ns::ErrorCode::kInvalidValue:
-      return HS_ERR_INVALID_VALUE;
+      return LUMICE_ERR_INVALID_VALUE;
     case ns::ErrorCode::kServerNotReady:
     case ns::ErrorCode::kServerError:
     default:
-      return HS_ERR_SERVER;
+      return LUMICE_ERR_SERVER;
   }
 }
 
 
 // =============== Server Lifecycle ===============
-HS_HaloSimServer* HS_CreateServer() {
-  auto* s = new HS_HaloSimServer;
-  s->server_ = std::unique_ptr<ns::Server>{ new ns::Server{} };
+LUMICE_Server* LUMICE_CreateServer() {
+  auto* s = new LUMICE_Server;
+  s->server_ = std::make_unique<ns::Server>();
   return s;
 }
 
 
-void HS_DestroyServer(HS_HaloSimServer* server) {
+void LUMICE_DestroyServer(LUMICE_Server* server) {
   if (!server) {
     return;
   }
@@ -51,32 +51,38 @@ void HS_DestroyServer(HS_HaloSimServer* server) {
 
 
 // =============== Logging ===============
-void HS_InitLogger(HS_HaloSimServer* server) {
-  (void)server;
-  ns::InitLogger();
+void LUMICE_InitLogger(LUMICE_Server* server) {
+  if (!server) {
+    return;
+  }
+  ns::InitGlobalLogger();
 }
 
 
-void HS_SetLogLevel(HS_HaloSimServer* server, HS_LogLevel level) {
-  (void)server;
-  static constexpr spdlog::level::level_enum kLevelMap[] = {
-    spdlog::level::trace,  // HS_LOG_TRACE
-    spdlog::level::debug,  // HS_LOG_DEBUG
-    spdlog::level::info,   // HS_LOG_INFO
-    spdlog::level::warn,   // HS_LOG_WARNING
-    spdlog::level::err,    // HS_LOG_ERROR
-    spdlog::level::off,    // HS_LOG_OFF
+void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level) {
+  if (!server) {
+    return;
+  }
+  static constexpr ns::LogLevel kLevelMap[] = {
+    ns::LogLevel::kTrace,    // LUMICE_LOG_TRACE
+    ns::LogLevel::kDebug,    // LUMICE_LOG_DEBUG
+    ns::LogLevel::kInfo,     // LUMICE_LOG_INFO
+    ns::LogLevel::kWarning,  // LUMICE_LOG_WARNING
+    ns::LogLevel::kError,    // LUMICE_LOG_ERROR
+    ns::LogLevel::kOff,      // LUMICE_LOG_OFF
   };
-  if (level >= HS_LOG_TRACE && level <= HS_LOG_OFF) {
-    ns::SetLogLevel(kLevelMap[level]);
+  if (level >= LUMICE_LOG_TRACE && level <= LUMICE_LOG_OFF) {
+    auto mapped = kLevelMap[level];
+    server->server_->SetLogLevel(mapped);
+    ns::GetGlobalLogger().SetLevel(mapped);
   }
 }
 
 
 // =============== Configuration ===============
-HS_ErrorCode HS_CommitConfig(HS_HaloSimServer* server, const char* config_str) {
+LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_str) {
   if (!server || !config_str) {
-    return HS_ERR_NULL_ARG;
+    return LUMICE_ERR_NULL_ARG;
   }
 
   auto err = server->server_->CommitConfig(config_str);
@@ -87,13 +93,13 @@ HS_ErrorCode HS_CommitConfig(HS_HaloSimServer* server, const char* config_str) {
     }
     return MapErrorCode(err.code);
   }
-  return HS_OK;
+  return LUMICE_OK;
 }
 
 
-HS_ErrorCode HS_CommitConfigFromFile(HS_HaloSimServer* server, const char* filename) {
+LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename) {
   if (!server || !filename) {
-    return HS_ERR_NULL_ARG;
+    return LUMICE_ERR_NULL_ARG;
   }
 
   auto err = server->server_->CommitConfigFromFile(filename);
@@ -104,14 +110,14 @@ HS_ErrorCode HS_CommitConfigFromFile(HS_HaloSimServer* server, const char* filen
     }
     return MapErrorCode(err.code);
   }
-  return HS_OK;
+  return LUMICE_OK;
 }
 
 
 // =============== Results ===============
-HS_ErrorCode HS_GetRenderResults(HS_HaloSimServer* server, HS_RenderResult* out, int max_count) {
+LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count) {
   if (!server || !out) {
-    return HS_ERR_NULL_ARG;
+    return LUMICE_ERR_NULL_ARG;
   }
 
   auto render_results = server->server_->GetRenderResults();
@@ -128,15 +134,15 @@ HS_ErrorCode HS_GetRenderResults(HS_HaloSimServer* server, HS_RenderResult* out,
   }
 
   // Sentinel
-  std::memset(&out[count], 0, sizeof(HS_RenderResult));
+  std::memset(&out[count], 0, sizeof(LUMICE_RenderResult));
 
-  return HS_OK;
+  return LUMICE_OK;
 }
 
 
-HS_ErrorCode HS_GetStatsResults(HS_HaloSimServer* server, HS_StatsResult* out, int max_count) {
+LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count) {
   if (!server || !out) {
-    return HS_ERR_NULL_ARG;
+    return LUMICE_ERR_NULL_ARG;
   }
 
   int count = 0;
@@ -151,29 +157,29 @@ HS_ErrorCode HS_GetStatsResults(HS_HaloSimServer* server, HS_StatsResult* out, i
   }
 
   // Sentinel
-  std::memset(&out[count], 0, sizeof(HS_StatsResult));
+  std::memset(&out[count], 0, sizeof(LUMICE_StatsResult));
 
-  return HS_OK;
+  return LUMICE_OK;
 }
 
 
 // =============== State & Control ===============
-HS_ErrorCode HS_QueryServerState(HS_HaloSimServer* server, HS_ServerState* out) {
+LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out) {
   if (!server || !out) {
-    return HS_ERR_NULL_ARG;
+    return LUMICE_ERR_NULL_ARG;
   }
 
   if (server->server_->IsIdle()) {
-    *out = HS_SERVER_IDLE;
+    *out = LUMICE_SERVER_IDLE;
   } else {
-    *out = HS_SERVER_RUNNING;
+    *out = LUMICE_SERVER_RUNNING;
   }
 
-  return HS_OK;
+  return LUMICE_OK;
 }
 
 
-void HS_StopServer(HS_HaloSimServer* server) {
+void LUMICE_StopServer(LUMICE_Server* server) {
   if (!server) {
     return;
   }

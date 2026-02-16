@@ -8,7 +8,7 @@
 #include "config/sim_data.hpp"
 #include "server/server.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 // =============== Interface ===============
 /**
@@ -46,6 +46,6 @@ class IConsume {
 using ConsumerPtrU = std::unique_ptr<IConsume>;
 using ConsumerPtrS = std::shared_ptr<IConsume>;
 
-}  // namespace icehalo
+}  // namespace lumice
 
 #endif  // CONSUMER_CONSUMER_H_

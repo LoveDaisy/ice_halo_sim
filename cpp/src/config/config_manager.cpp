@@ -10,9 +10,9 @@
 #include "config/render_config.hpp"
 #include "core/def.hpp"
 #include "util/json_util.hpp"
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
-namespace icehalo {
+namespace lumice {
 
 void to_json(nlohmann::json& j, const ConfigManager& m) {
   // Light sources
@@ -249,4 +249,4 @@ void from_json(const nlohmann::json& j, ConfigManager& m) {
   }
 }
 
-}  // namespace icehalo
+}  // namespace lumice
