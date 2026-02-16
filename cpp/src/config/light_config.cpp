@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "util/json_util.hpp"
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
 namespace icehalo {
 

@@ -1,0 +1,108 @@
+#ifndef SRC_UTIL_LOGGER_H_
+#define SRC_UTIL_LOGGER_H_
+
+#include <spdlog/spdlog.h>
+
+#include <memory>
+#include <string>
+
+namespace icehalo {
+
+// Log output pattern: "2026-01-02 10:11:12.345 [I] this is a message"
+constexpr const char* kLogPattern = "%Y-%m-%d %H:%M:%S.%e [%L] %v";
+
+
+enum class LogLevel {
+  kTrace,
+  kDebug,
+  kInfo,
+  kWarning,
+  kError,
+  kOff,
+};
+
+
+class Logger {
+ public:
+  explicit Logger(const std::string& name) : impl_(spdlog::default_logger()->clone(name)) {
+    impl_->set_pattern(kLogPattern);
+  }
+
+  void SetLevel(LogLevel level) { impl_->set_level(ToSpdLevel(level)); }
+
+  spdlog::logger* GetSpdLogger() const { return impl_.get(); }
+
+ private:
+  static spdlog::level::level_enum ToSpdLevel(LogLevel level) {
+    switch (level) {
+      case LogLevel::kTrace:
+        return spdlog::level::trace;
+      case LogLevel::kDebug:
+        return spdlog::level::debug;
+      case LogLevel::kInfo:
+        return spdlog::level::info;
+      case LogLevel::kWarning:
+        return spdlog::level::warn;
+      case LogLevel::kError:
+        return spdlog::level::err;
+      case LogLevel::kOff:
+        return spdlog::level::off;
+      default:
+        return spdlog::level::info;
+    }
+  }
+
+  std::shared_ptr<spdlog::logger> impl_;
+};
+
+
+// Global Logger singleton (used by LOG_* macros).
+inline Logger& GetGlobalLogger() {
+  static Logger instance("global");
+  return instance;
+}
+
+// Initialize the global logger and spdlog default logger pattern.
+// Call once at program startup.
+inline void InitGlobalLogger() {
+  spdlog::set_pattern(kLogPattern);
+  spdlog::set_level(spdlog::level::info);
+  GetGlobalLogger().SetLevel(LogLevel::kInfo);
+}
+
+// Temporary shims — will be removed in Step 2–4 when callers switch to Logger.
+inline void InitLogger() {
+  InitGlobalLogger();
+}
+
+inline void SetLogLevel(spdlog::level::level_enum level) {
+  spdlog::set_level(level);
+}
+
+inline std::shared_ptr<spdlog::logger> GetLogger(const std::string& name) {
+  auto logger = spdlog::get(name);
+  if (!logger) {
+    logger = spdlog::default_logger()->clone(name);
+    spdlog::register_logger(logger);
+  }
+  return logger;
+}
+
+}  // namespace icehalo
+
+
+// Instance logger macros (for classes that own a Logger member)
+#define ILOG_TRACE(logger, ...) SPDLOG_LOGGER_TRACE((logger).GetSpdLogger(), __VA_ARGS__)
+#define ILOG_DEBUG(logger, ...) SPDLOG_LOGGER_DEBUG((logger).GetSpdLogger(), __VA_ARGS__)
+#define ILOG_INFO(logger, ...) SPDLOG_LOGGER_INFO((logger).GetSpdLogger(), __VA_ARGS__)
+#define ILOG_WARN(logger, ...) SPDLOG_LOGGER_WARN((logger).GetSpdLogger(), __VA_ARGS__)
+#define ILOG_ERROR(logger, ...) SPDLOG_LOGGER_ERROR((logger).GetSpdLogger(), __VA_ARGS__)
+
+// Global logger macros (for config/core/util utility code)
+#define LOG_VERBOSE(...) ILOG_TRACE(icehalo::GetGlobalLogger(), __VA_ARGS__)
+#define LOG_DEBUG(...) ILOG_DEBUG(icehalo::GetGlobalLogger(), __VA_ARGS__)
+#define LOG_INFO(...) ILOG_INFO(icehalo::GetGlobalLogger(), __VA_ARGS__)
+#define LOG_WARNING(...) ILOG_WARN(icehalo::GetGlobalLogger(), __VA_ARGS__)
+#define LOG_ERROR(...) ILOG_ERROR(icehalo::GetGlobalLogger(), __VA_ARGS__)
+
+#endif  // SRC_UTIL_LOGGER_H_

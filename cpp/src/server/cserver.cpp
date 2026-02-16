@@ -3,7 +3,7 @@
 
 #include "include/icehalo.h"
 #include "server/server.hpp"
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
 namespace ns = icehalo;
 

@@ -3,7 +3,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
 
 #define JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, key, dst)   \

@@ -3,7 +3,7 @@
 #include <functional>
 #include <stdexcept>
 
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
 namespace icehalo {
 

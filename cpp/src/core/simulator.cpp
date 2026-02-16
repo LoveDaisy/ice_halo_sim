@@ -15,7 +15,7 @@
 #include "core/filter.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
-#include "util/log.hpp"
+#include "util/logger.hpp"
 #include "util/queue.hpp"
 
 namespace icehalo {

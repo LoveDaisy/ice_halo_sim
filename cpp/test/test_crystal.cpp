@@ -7,7 +7,7 @@
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
 extern std::string config_file_name;
 using namespace icehalo;

@@ -20,7 +20,7 @@
 #include "server/render.hpp"
 #include "server/server.hpp"
 #include "server/stats.hpp"
-#include "util/log.hpp"
+#include "util/logger.hpp"
 #include "util/queue.hpp"
 
 namespace icehalo {

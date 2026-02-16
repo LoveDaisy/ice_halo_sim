@@ -10,7 +10,7 @@
 #include "config/render_config.hpp"
 #include "core/def.hpp"
 #include "util/json_util.hpp"
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
 namespace icehalo {
 

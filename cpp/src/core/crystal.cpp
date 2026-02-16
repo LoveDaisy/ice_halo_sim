@@ -12,7 +12,7 @@
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
 namespace icehalo {
 
