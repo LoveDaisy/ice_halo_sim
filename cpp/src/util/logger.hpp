@@ -70,24 +70,6 @@ inline void InitGlobalLogger() {
   GetGlobalLogger().SetLevel(LogLevel::kInfo);
 }
 
-// Temporary shims — will be removed in Step 2–4 when callers switch to Logger.
-inline void InitLogger() {
-  InitGlobalLogger();
-}
-
-inline void SetLogLevel(spdlog::level::level_enum level) {
-  spdlog::set_level(level);
-}
-
-inline std::shared_ptr<spdlog::logger> GetLogger(const std::string& name) {
-  auto logger = spdlog::get(name);
-  if (!logger) {
-    logger = spdlog::default_logger()->clone(name);
-    spdlog::register_logger(logger);
-  }
-  return logger;
-}
-
 }  // namespace icehalo
 
 
