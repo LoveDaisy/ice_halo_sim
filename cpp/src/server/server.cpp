@@ -125,11 +125,9 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   Stop();
   Start();
 
-  // Commit all projects
-  for (const auto& [_, proj] : config_manager_.projects_) {
-    ILOG_DEBUG(logger_, "CommitConfig: put proj {}", proj.id_);
-    proj_queue_.Emplace(proj);
-  }
+  // Commit project
+  ILOG_DEBUG(logger_, "CommitConfig: put proj {}", config_manager_.project_.id_);
+  proj_queue_.Emplace(config_manager_.project_);
 
   return Error::Success();
 }

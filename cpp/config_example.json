@@ -305,11 +305,9 @@
       }
     }
   ],
-  "project": [
-    {
-      "id": 1,
-      "scene": 2,
-      "render": [1, 2, 4]
-    }
-  ]
+  "project": {
+    "id": 1,
+    "scene": 2,
+    "render": [1, 2, 4]
+  }
 }
