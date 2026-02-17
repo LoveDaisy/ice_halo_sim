@@ -9,7 +9,7 @@
 ### 设计目标
 
 1. **高性能**：通过多线程并行处理提升模拟速度
-2. **可扩展性**：支持多场景、多渲染器的批量处理
+2. **可扩展性**：支持多渲染器并行处理
 3. **模块化**：清晰的模块划分，便于维护和扩展
 4. **灵活性**：灵活的配置系统，支持复杂的模拟场景
 
@@ -18,7 +18,7 @@
 - **服务器-消费者模式**：采用生产者-消费者模式，实现模拟和渲染的解耦
 - **多线程并行**：默认使用 4 个模拟器线程并行处理
 - **队列系统**：使用线程安全的队列进行数据传递
-- **批量处理**：支持在一个配置文件中定义多个场景和渲染器
+- **单项目模式**：每次提交一个项目配置（包含一个场景和多个渲染器）
 
 ## 整体架构
 
@@ -98,7 +98,6 @@ struct Error {
 
 使用线程安全的 `Queue<T>` 模板进行数据传递，基于 `std::mutex` 和 `std::condition_variable` 实现阻塞式获取：
 
-- `proj_queue_`: 项目配置队列
 - `scene_queue_`: 场景配置队列（多个 Simulator 共享）
 - `data_queue_`: 模拟数据队列（多个 Simulator 共享）
 
@@ -115,13 +114,13 @@ ConfigManager (解析)
     ↓
 ProjConfig (组合场景和渲染器)
     ↓
-proj_queue_ (项目队列)
+CommitConfig() (创建Consumer, 启动线程)
 ```
 
 ### 模拟流程
 
 ```
-ProjConfig (从proj_queue_)
+ProjConfig (从config_manager_.project_)
     ↓
 GenerateScene() (生成SceneConfig)
     ↓
@@ -157,19 +156,19 @@ Server::CommitConfig()
   ↓
 ConfigManager (解析配置)
   ↓
-proj_queue_ (项目队列)
+创建 Consumer (Render/Stats)
   ↓
-GenerateScene() (生成场景)
+Start() → GenerateScene() (生成场景)
   ↓
 scene_queue_ (场景队列) ──→ Simulator × 4 (并行)
   ↓                                    ↓
 data_queue_ (数据队列) ←──────────────┘
   ↓
-ConsumeData() (分发)
+ConsumeData() (分发, consumer_mutex_ 保护)
   ↓
 Consumer (Render/Stats)
   ↓
-Result (结果)
+Result (结果, consumer_mutex_ 保护)
   ↓
 Server::GetResults()
 ```
@@ -180,11 +179,12 @@ Server::GetResults()
 
 1. **主线程**：运行 `main()` 函数，调用 `Server::CommitConfig()` 和结果获取接口
 2. **模拟器线程**：默认 4 个线程，每个运行一个 `Simulator::Run()`
-3. **场景生成线程**：`GenerateScene()` 线程，从项目队列生成场景配置
+3. **场景生成线程**：`GenerateScene()` 线程，从项目配置生成场景并放入 `scene_queue_`
 4. **数据消费线程**：`ConsumeData()` 线程，从数据队列分发数据到消费者
 
 **线程同步**：
 - 使用 `std::mutex` 保护共享资源
+- `consumer_mutex_`：保护 `consumers_` 的 `Consume()` 和 `GetResult()` 调用，防止数据消费线程与主线程之间的竞争
 - 使用 `std::condition_variable` 进行线程间通信
 - 使用原子变量（`std::atomic_bool`）控制线程状态
 
