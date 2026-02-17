@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include "lumice.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
 static const int kPollIntervalUs = 1000000;  // 1 second
