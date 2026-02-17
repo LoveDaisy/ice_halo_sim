@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include "lumice.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
 static const int kPollIntervalUs = 1000000;  // 1 second
@@ -28,6 +29,33 @@ static void print_usage(const char* prog_name) {
           "  %s -f config.json -o /tmp/output\n"
           "  %s -f config.json -v\n",
           prog_name, prog_name, prog_name, prog_name);
+}
+
+static void save_render_results(LUMICE_Server* server, const char* output_dir) {
+  LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
+  if (LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
+    for (int i = 0; renders[i].img_buffer != NULL; i++) {
+      char filepath[512];
+      snprintf(filepath, sizeof(filepath), "%s/img_%02d.jpg", output_dir, renders[i].renderer_id);
+
+      int ok = stbi_write_jpg(filepath, renders[i].img_width, renders[i].img_height, 3, renders[i].img_buffer,
+                              kJpegQuality);
+      if (ok) {
+        printf("Saved: %s (%dx%d)\n", filepath, renders[i].img_width, renders[i].img_height);
+      } else {
+        fprintf(stderr, "Error: failed to write %s\n", filepath);
+      }
+    }
+  }
+}
+
+static void print_stats(LUMICE_Server* server) {
+  LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
+  if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK) {
+    for (int i = 0; stats[i].sim_ray_num != 0; i++) {
+      printf("Stats: sim_rays=%lu, crystals=%lu\n", stats[i].sim_ray_num, stats[i].crystal_num);
+    }
+  }
 }
 
 int main(int argc, char** argv) {
@@ -84,36 +112,18 @@ int main(int argc, char** argv) {
   while (1) {
     usleep(kPollIntervalUs);
 
+    save_render_results(server, output_dir);
+    print_stats(server);
+
     LUMICE_ServerState state;
     if (LUMICE_QueryServerState(server, &state) == LUMICE_OK && state == LUMICE_SERVER_IDLE) {
       break;
     }
   }
 
-  // Save render results
-  LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
-  if (LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
-    for (int i = 0; renders[i].img_buffer != NULL; i++) {
-      char filepath[512];
-      snprintf(filepath, sizeof(filepath), "%s/img_%02d.jpg", output_dir, renders[i].renderer_id);
-
-      int ok = stbi_write_jpg(filepath, renders[i].img_width, renders[i].img_height, 3, renders[i].img_buffer,
-                              kJpegQuality);
-      if (ok) {
-        printf("Saved: %s (%dx%d)\n", filepath, renders[i].img_width, renders[i].img_height);
-      } else {
-        fprintf(stderr, "Error: failed to write %s\n", filepath);
-      }
-    }
-  }
-
-  // Print stats
-  LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
-  if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK) {
-    for (int i = 0; stats[i].sim_ray_num != 0; i++) {
-      printf("Stats: sim_rays=%lu, crystals=%lu\n", stats[i].sim_ray_num, stats[i].crystal_num);
-    }
-  }
+  // Final fetch after loop exit
+  save_render_results(server, output_dir);
+  print_stats(server);
 
   LUMICE_DestroyServer(server);
   return 0;

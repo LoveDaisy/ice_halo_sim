@@ -183,6 +183,7 @@ RenderConsumer::RenderConsumer(RenderConfig config)
     : config_(config), diag_pix_(std::sqrt(config.resolution_[0] * config.resolution_[0] +
                                            config.resolution_[1] * config.resolution_[1])),
       internal_xyz_(std::make_unique<float[]>(config.resolution_[0] * config.resolution_[1] * 3)),
+      snapshot_xyz_(std::make_unique<float[]>(config.resolution_[0] * config.resolution_[1] * 3)),
       image_buffer_(std::make_unique<uint8_t[]>(config.resolution_[0] * config.resolution_[1] * 3)) {
   float ax_z[3]{ 0, 0, 1 };
   float ax_y[3]{ 0, 1, 0 };
@@ -231,9 +232,13 @@ bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& f
 void RenderConsumer::Consume(const SimData& data) {
   const auto& crystals = data.crystals_;
 
-  auto d_data = std::make_unique<float[]>(data.rays_.size_ * 3);
-  auto w_data = std::make_unique<float[]>(data.rays_.size_ * 1);
-  auto xy_data = std::make_unique<int[]>(data.rays_.size_ * 2);
+  // Resize pre-allocated buffers if needed (grow-only)
+  if (data.rays_.size_ > buf_capacity_) {
+    buf_capacity_ = data.rays_.size_;
+    d_buf_ = std::make_unique<float[]>(buf_capacity_ * 3);
+    w_buf_ = std::make_unique<float[]>(buf_capacity_);
+    xy_buf_ = std::make_unique<int[]>(buf_capacity_ * 2);
+  }
 
   size_t filtered_ray_num = 0;
   for (size_t i = 0; i < data.rays_.size_; i++) {
@@ -251,8 +256,8 @@ void RenderConsumer::Consume(const SimData& data) {
 
     // Do rendering
     ILOG_DEBUG(logger_, "render ray: {:.4f},{:.4f},{:.4f},{:.4f}", r.d_[0], r.d_[1], r.d_[2], r.w_);
-    std::memcpy(d_data.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
-    w_data[filtered_ray_num] = r.w_;
+    std::memcpy(d_buf_.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
+    w_buf_[filtered_ray_num] = r.w_;
     filtered_ray_num++;
   }
 
@@ -263,35 +268,42 @@ void RenderConsumer::Consume(const SimData& data) {
                             config_.visible_,
                             { config_.resolution_[0], config_.resolution_[1] },
                             { config_.lens_shift_[0], config_.lens_shift_[1] } };
-  lens_proj(proj_param, d_data.get(), xy_data.get(), filtered_ray_num);
+  lens_proj(proj_param, d_buf_.get(), xy_buf_.get(), filtered_ray_num);
 
   size_t final_ray_num = 0;
   for (size_t i = 0; i < filtered_ray_num; i++) {
-    if (xy_data[i * 2 + 0] < 0 || xy_data[i * 2 + 0] >= config_.resolution_[0] ||  //
-        xy_data[i * 2 + 1] < 0 || xy_data[i * 2 + 1] >= config_.resolution_[1]) {
+    if (xy_buf_[i * 2 + 0] < 0 || xy_buf_[i * 2 + 0] >= config_.resolution_[0] ||  //
+        xy_buf_[i * 2 + 1] < 0 || xy_buf_[i * 2 + 1] >= config_.resolution_[1]) {
       continue;
     }
-    xy_data[final_ray_num] = xy_data[i * 2 + 1] * config_.resolution_[0] + xy_data[i * 2 + 0];
-    w_data[final_ray_num] = w_data[i];
+    xy_buf_[final_ray_num] = xy_buf_[i * 2 + 1] * config_.resolution_[0] + xy_buf_[i * 2 + 0];
+    w_buf_[final_ray_num] = w_buf_[i];
     final_ray_num++;
   }
-  SpectrumToXyz(data.curr_wl_, w_data.get(), xy_data.get(), internal_xyz_.get(), final_ray_num);
+  SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), final_ray_num);
   total_intensity_ += data.total_intensity_;
+}
+
+void RenderConsumer::PrepareSnapshot() {
+  int total_pix = config_.resolution_[0] * config_.resolution_[1];
+  std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
+  snapshot_intensity_ = total_intensity_;
 }
 
 Result RenderConsumer::GetResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
-  auto float_data = std::make_unique<float[]>(total_pix * 3);
-  std::memcpy(float_data.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
+
+  // Operate on snapshot_xyz_ in-place (destructive — see PrepareSnapshot contract).
+  float* float_data = snapshot_xyz_.get();
   for (int i = 0; i < total_pix * 3; i++) {
-    float_data[i] *= config_.intensity_factor_ / total_intensity_ * 1e5;
+    float_data[i] *= config_.intensity_factor_ / snapshot_intensity_ * 1e5;
   }
 
   bool use_real_color = config_.ray_color_[0] < 0;
   float gray[3];
   for (int i = 0; i < total_pix; i++) {
     // Step 2. XYZ to linear RGB
-    float* xyz = float_data.get() + i * 3;
+    float* xyz = float_data + i * 3;
     for (int j = 0; j < 3; j++) {
       gray[j] = kWhitePointD65[j] * xyz[1];
     }
@@ -328,11 +340,11 @@ Result RenderConsumer::GetResult() const {
       rgb[j] += config_.background_[j];
       rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
     }
-    std::memcpy(float_data.get() + i * 3, rgb, 3 * sizeof(float));
+    std::memcpy(float_data + i * 3, rgb, 3 * sizeof(float));
   }
 
   // Step 3. Convert linear sRGB to sRGB
-  SrgbGamma(float_data.get(), 3 * total_pix);
+  SrgbGamma(float_data, 3 * total_pix);
 
   for (int i = 0; i < total_pix * 3; i++) {
     image_buffer_[i] = static_cast<uint8_t>(float_data[i] * 255);

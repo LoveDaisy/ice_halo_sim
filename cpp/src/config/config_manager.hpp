@@ -18,7 +18,7 @@ struct ConfigManager {
   std::map<IdType, FilterConfig> filters_;
   std::map<IdType, RenderConfig> renderers_;
   std::map<IdType, SceneConfig> scenes_;
-  std::map<IdType, ProjConfig> projects_;
+  ProjConfig project_;
 };
 
 // convert to/from json object

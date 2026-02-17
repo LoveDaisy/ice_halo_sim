@@ -40,10 +40,8 @@ void to_json(nlohmann::json& j, const ConfigManager& m) {
     j["scene"].emplace_back(v);
   }
 
-  // Projects
-  for (const auto& [_, v] : m.projects_) {
-    j["project"].emplace_back(v);
-  }
+  // Project
+  j["project"] = m.project_;
 }
 
 RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManager& m) {
@@ -226,26 +224,20 @@ void from_json(const nlohmann::json& j, ConfigManager& m) {
     m.scenes_.emplace(scene.id_, scene);
   }
 
-  // Projects
-  for (const auto& j_proj : j.at("project")) {
-    ProjConfig proj{};
+  // Project
+  {
+    const auto& j_proj = j.at("project");
+    j_proj.at("id").get_to(m.project_.id_);
 
-    // id
-    j_proj.at("id").get_to(proj.id_);
-
-    // scene
     IdType scene_id = j_proj.at("scene").get<IdType>();
-    proj.scene_ = m.scenes_.at(scene_id);
+    m.project_.scene_ = m.scenes_.at(scene_id);
 
-    // renderer
     if (j_proj.contains("render")) {
       for (const auto& j_render : j_proj.at("render")) {
         IdType render_id = j_render.get<IdType>();
-        proj.renderers_.emplace_back(m.renderers_.at(render_id));
+        m.project_.renderers_.emplace_back(m.renderers_.at(render_id));
       }
     }
-
-    m.projects_.emplace(proj.id_, proj);
   }
 }
 

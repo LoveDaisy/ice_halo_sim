@@ -16,8 +16,14 @@ void StatsConsumer::Consume(const SimData& data) {
   crystals_ += data.crystals_.size();
 }
 
+void StatsConsumer::PrepareSnapshot() {
+  snapshot_total_rays_ = total_rays_;
+  snapshot_sim_rays_ = sim_rays_;
+  snapshot_crystals_ = crystals_;
+}
+
 Result StatsConsumer::GetResult() const {
-  return StatsResult{ total_rays_, sim_rays_, crystals_ };
+  return StatsResult{ snapshot_total_rays_, snapshot_sim_rays_, snapshot_crystals_ };
 }
 
 }  // namespace lumice
