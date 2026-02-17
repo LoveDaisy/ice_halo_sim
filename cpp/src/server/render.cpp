@@ -183,6 +183,7 @@ RenderConsumer::RenderConsumer(RenderConfig config)
     : config_(config), diag_pix_(std::sqrt(config.resolution_[0] * config.resolution_[0] +
                                            config.resolution_[1] * config.resolution_[1])),
       internal_xyz_(std::make_unique<float[]>(config.resolution_[0] * config.resolution_[1] * 3)),
+      snapshot_xyz_(std::make_unique<float[]>(config.resolution_[0] * config.resolution_[1] * 3)),
       image_buffer_(std::make_unique<uint8_t[]>(config.resolution_[0] * config.resolution_[1] * 3)) {
   float ax_z[3]{ 0, 0, 1 };
   float ax_y[3]{ 0, 1, 0 };
@@ -279,19 +280,26 @@ void RenderConsumer::Consume(const SimData& data) {
   total_intensity_ += data.total_intensity_;
 }
 
+void RenderConsumer::PrepareSnapshot() {
+  int total_pix = config_.resolution_[0] * config_.resolution_[1];
+  std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
+  snapshot_intensity_ = total_intensity_;
+}
+
 Result RenderConsumer::GetResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
-  auto float_data = std::make_unique<float[]>(total_pix * 3);
-  std::memcpy(float_data.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
+
+  // Operate on snapshot_xyz_ in-place (destructive — see PrepareSnapshot contract).
+  float* float_data = snapshot_xyz_.get();
   for (int i = 0; i < total_pix * 3; i++) {
-    float_data[i] *= config_.intensity_factor_ / total_intensity_ * 1e5;
+    float_data[i] *= config_.intensity_factor_ / snapshot_intensity_ * 1e5;
   }
 
   bool use_real_color = config_.ray_color_[0] < 0;
   float gray[3];
   for (int i = 0; i < total_pix; i++) {
     // Step 2. XYZ to linear RGB
-    float* xyz = float_data.get() + i * 3;
+    float* xyz = float_data + i * 3;
     for (int j = 0; j < 3; j++) {
       gray[j] = kWhitePointD65[j] * xyz[1];
     }
@@ -328,11 +336,11 @@ Result RenderConsumer::GetResult() const {
       rgb[j] += config_.background_[j];
       rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
     }
-    std::memcpy(float_data.get() + i * 3, rgb, 3 * sizeof(float));
+    std::memcpy(float_data + i * 3, rgb, 3 * sizeof(float));
   }
 
   // Step 3. Convert linear sRGB to sRGB
-  SrgbGamma(float_data.get(), 3 * total_pix);
+  SrgbGamma(float_data, 3 * total_pix);
 
   for (int i = 0; i < total_pix * 3; i++) {
     image_buffer_[i] = static_cast<uint8_t>(float_data[i] * 255);

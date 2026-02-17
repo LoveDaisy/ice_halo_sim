@@ -1,6 +1,7 @@
 #include "server/server.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <fstream>
@@ -138,7 +139,20 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
 
 
 std::vector<RenderResult> ServerImpl::GetRenderResults() const {
-  std::lock_guard<std::mutex> lock(consumer_mutex_);
+  // Phase 1: snapshot under lock
+  {
+    auto t0 = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    auto t1 = std::chrono::steady_clock::now();
+    for (const auto& c : consumers_) {
+      c->PrepareSnapshot();
+    }
+    auto t2 = std::chrono::steady_clock::now();
+    ILOG_INFO(logger_, "GetRenderResults: lock_wait={}us snapshot={}us",
+              std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count(),
+              std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
+  }
+  // Phase 2: GetResult without lock
   std::vector<RenderResult> results;
   for (const auto& c : consumers_) {
     auto result = c->GetResult();
@@ -150,7 +164,14 @@ std::vector<RenderResult> ServerImpl::GetRenderResults() const {
 }
 
 std::optional<StatsResult> ServerImpl::GetStatsResult() const {
-  std::lock_guard<std::mutex> lock(consumer_mutex_);
+  // Phase 1: snapshot under lock
+  {
+    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    for (const auto& c : consumers_) {
+      c->PrepareSnapshot();
+    }
+  }
+  // Phase 2: GetResult without lock
   for (const auto& c : consumers_) {
     auto result = c->GetResult();
     if (auto* stats = std::get_if<StatsResult>(&result)) {
