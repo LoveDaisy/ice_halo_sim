@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "config/config_manager.hpp"
-#include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
 #include "core/simulator.hpp"
@@ -49,7 +48,6 @@ class ServerImpl {
 
   ConfigManager config_manager_;
 
-  Queue<ProjConfig> proj_queue_;
   QueuePtrS<SceneConfig> scene_queue_;
   QueuePtrS<SimData> data_queue_;
 
@@ -58,8 +56,8 @@ class ServerImpl {
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex;
 
-  std::atomic_bool stop_;
-  std::atomic_bool work_started_;  // true after GenerateScene picks up first project
+  std::atomic_bool stop_{ true };
+  std::atomic_bool work_started_{ false };
   std::atomic_int sim_scene_cnt_;
   std::mutex scene_mutex_;
   std::condition_variable scene_cv_;
@@ -79,12 +77,12 @@ class ServerImpl {
 
 
 ServerImpl::ServerImpl()
-    : config_manager_{}, proj_queue_{}, scene_queue_(std::make_shared<Queue<SceneConfig>>()),
+    : config_manager_{}, scene_queue_(std::make_shared<Queue<SceneConfig>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
   for (int i = 0; i < kDefaultSimulatorCnt; i++) {
     simulators_.emplace_back(scene_queue_, data_queue_);
   }
-  Start();
+  // Don't Start() here — wait for CommitConfig to provide a valid project.
 }
 
 
@@ -123,11 +121,16 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   }
 
   Stop();
-  Start();
 
-  // Commit project
-  ILOG_DEBUG(logger_, "CommitConfig: put proj {}", config_manager_.project_.id_);
-  proj_queue_.Emplace(config_manager_.project_);
+  // Setup consumers from project config.
+  ILOG_DEBUG(logger_, "CommitConfig: setup consumers for proj {}", config_manager_.project_.id_);
+  consumers_.clear();
+  for (const auto& r : config_manager_.project_.renderers_) {
+    consumers_.emplace_back(std::make_unique<RenderConsumer>(r));
+  }
+  consumers_.emplace_back(std::make_unique<StatsConsumer>());
+
+  Start();
 
   return Error::Success();
 }
@@ -173,7 +176,6 @@ void ServerImpl::Start() {
   // Start queues & jobs
   data_queue_->Start();
   scene_queue_->Start();
-  proj_queue_.Start();
   {
     std::lock_guard<std::mutex> lock(prod_mutex);
     ILOG_DEBUG(logger_, "Start: lock on prod_mutex");
@@ -198,7 +200,6 @@ void ServerImpl::Stop() {
   stop_ = true;
 
   // Stop queues
-  proj_queue_.Shutdown();
   scene_queue_->Shutdown();
   data_queue_->Shutdown();
 
@@ -246,8 +247,8 @@ ServerStatus ServerImpl::GetStatus() const {
   }
 
   // status_ == kRunning: check if work is actually complete.
-  // During the startup window (threads spawned but GenerateScene hasn't picked up
-  // a project yet), work_started_ is false — report kRunning to avoid false idle.
+  // During the startup window (threads spawned but GenerateScene hasn't started yet),
+  // work_started_ is false — report kRunning to avoid false idle.
   if (!work_started_) {
     return ServerStatus::kRunning;
   }
@@ -312,48 +313,30 @@ void ServerImpl::ConsumeData() {
 
 void ServerImpl::GenerateScene() {
   ILOG_DEBUG(logger_, "GenerateScene entry");
-  while (true) {
+  work_started_ = true;
+
+  const auto& scene = config_manager_.project_.scene_;
+  auto ray_num = scene.ray_num_;
+  size_t committed_num = 0;
+  while (ray_num == kInfSize || committed_num < ray_num) {
+    auto curr_scene = scene;
+    curr_scene.ray_num_ = std::min(kDefaultRayNum, ray_num - committed_num);
+    scene_queue_->Emplace(curr_scene);
+    sim_scene_cnt_++;
+
+    ILOG_DEBUG(logger_, "GenerateScene: put a scene({}): ray({}/{}, {})", curr_scene.id_, curr_scene.ray_num_, ray_num,
+               committed_num);
     CHECK_STOP
-    auto proj_config = proj_queue_.Get();
-    if (stop_ || (proj_config.id_ == 0 && proj_config.scene_.ray_num_ == 0)) {
-      // Stop, or queue shutdown.
-      break;
+
+    if (sim_scene_cnt_ >= kMaxSceneCnt) {
+      ILOG_DEBUG(logger_, "GenerateScene: too many scenes generated. wait for consumer");
+      std::unique_lock<std::mutex> lock(scene_mutex_);
+      scene_cv_.wait(lock, [=]() { return stop_ || sim_scene_cnt_ < kMaxSceneCnt; });
+      ILOG_DEBUG(logger_, "GenerateScene: continue to generate scenes.");
     }
-    ILOG_DEBUG(logger_, "GenerateScene: get proj: {}", proj_config.id_);
-    work_started_ = true;
     CHECK_STOP
-
-    // Setup consumers.
-    std::vector<ConsumerPtrU> new_consumers;
-    for (const auto& r : proj_config.renderers_) {
-      new_consumers.emplace_back(std::make_unique<RenderConsumer>(r));
-    }
-    new_consumers.emplace_back(std::make_unique<StatsConsumer>());
-    consumers_.swap(new_consumers);
-
-    auto ray_num = proj_config.scene_.ray_num_;
-    size_t committed_num = 0;
-    while (ray_num == kInfSize || committed_num < ray_num) {
-      auto curr_scene = proj_config.scene_;
-      curr_scene.ray_num_ = std::min(kDefaultRayNum, ray_num - committed_num);
-      scene_queue_->Emplace(curr_scene);
-      sim_scene_cnt_++;
-
-      ILOG_DEBUG(logger_, "GenerateScene: put a scene({}): ray({}/{}, {})", curr_scene.id_, curr_scene.ray_num_,
-                 ray_num, committed_num);
-      CHECK_STOP
-
-      if (sim_scene_cnt_ >= kMaxSceneCnt) {
-        ILOG_DEBUG(logger_, "GenerateScene: too many scenes generated. wait for consumer");
-        std::unique_lock<std::mutex> lock(scene_mutex_);
-        scene_cv_.wait(lock, [=]() { return stop_ || sim_scene_cnt_ < kMaxSceneCnt; });
-        ILOG_DEBUG(logger_, "GenerateScene: continue to generate scenes.");
-      }
-      CHECK_STOP
-      committed_num += kDefaultRayNum;
-      ILOG_DEBUG(logger_, "GenerateScene: finish wl");
-    }
-    ILOG_DEBUG(logger_, "GenerateScene: finish ray_num");
+    committed_num += kDefaultRayNum;
+    ILOG_DEBUG(logger_, "GenerateScene: finish wl");
   }
   ILOG_DEBUG(logger_, "GenerateScene exit");
 }
