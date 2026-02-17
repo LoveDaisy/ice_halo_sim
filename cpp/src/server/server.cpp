@@ -53,6 +53,7 @@ class ServerImpl {
 
   std::vector<Simulator> simulators_;
   std::vector<ConsumerPtrU> consumers_;
+  mutable std::mutex consumer_mutex_;
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex;
 
@@ -137,6 +138,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
 
 
 std::vector<RenderResult> ServerImpl::GetRenderResults() const {
+  std::lock_guard<std::mutex> lock(consumer_mutex_);
   std::vector<RenderResult> results;
   for (const auto& c : consumers_) {
     auto result = c->GetResult();
@@ -148,6 +150,7 @@ std::vector<RenderResult> ServerImpl::GetRenderResults() const {
 }
 
 std::optional<StatsResult> ServerImpl::GetStatsResult() const {
+  std::lock_guard<std::mutex> lock(consumer_mutex_);
   for (const auto& c : consumers_) {
     auto result = c->GetResult();
     if (auto* stats = std::get_if<StatsResult>(&result)) {
@@ -297,6 +300,7 @@ void ServerImpl::ConsumeData() {
     ILOG_DEBUG(logger_, "ConsumeData: get data: {}", fmt::ptr(&sim_data));
 
     if (sim_scene_cnt_ > 0) {
+      std::lock_guard<std::mutex> lock(consumer_mutex_);
       for (auto& c : consumers_) {
         c->Consume(sim_data);
       }
