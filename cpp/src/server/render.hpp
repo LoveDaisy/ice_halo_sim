@@ -32,6 +32,13 @@ class RenderConsumer : public IConsume {
   std::unique_ptr<float[]> internal_xyz_;
   std::unique_ptr<float[]> snapshot_xyz_;
   std::unique_ptr<uint8_t[]> image_buffer_;
+
+  // Pre-allocated Consume() buffers (grow-only)
+  std::unique_ptr<float[]> d_buf_;
+  std::unique_ptr<float[]> w_buf_;
+  std::unique_ptr<int[]> xy_buf_;
+  size_t buf_capacity_ = 0;
+
   Logger logger_{ "Render" };
 };
 
