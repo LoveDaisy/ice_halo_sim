@@ -124,6 +124,7 @@ void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, siz
 }
 
 
+// NOLINTNEXTLINE(readability-function-size)
 void InitRayFirstMs(RandomNumberGenerator& rng, const LightSourceParam& light_param, const WlParam& wl_param,
                     size_t curr_ray_num,                                                                        // input
                     const Crystal& curr_crystal, size_t curr_crystal_id, const AxisDistribution& crystal_axis,  // input
@@ -146,6 +147,7 @@ void InitRayFirstMs(RandomNumberGenerator& rng, const LightSourceParam& light_pa
 }
 
 
+// NOLINTNEXTLINE(readability-function-size)
 void InitRayOtherMs(RandomNumberGenerator& rng, const RayBuffer init_data[2], size_t curr_ray_num,              // input
                     const Crystal& curr_crystal, size_t curr_crystal_id, const AxisDistribution& crystal_axis,  // input
                     RayBuffer buffer_data[2], RayBuffer& all_data, size_t& init_ray_offset) {  // output
