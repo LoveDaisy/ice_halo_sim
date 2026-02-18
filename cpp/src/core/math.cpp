@@ -542,6 +542,7 @@ bool IsInPolyhedron3(int n, const float* coef, const float xyz[3], bool boundary
 }
 
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::tuple<std::unique_ptr<float[]>, int> SolveConvexPolyhedronVtx(int plane_cnt, const float* coef_ptr) {
   using math::kFloatEps;
 
@@ -587,6 +588,7 @@ std::tuple<std::unique_ptr<float[]>, int> SolveConvexPolyhedronVtx(int plane_cnt
 }
 
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::tuple<std::unique_ptr<float[]>, int> ConvexPolyhedronDifferenceVtx(int plane_cnt1, const float* coef_ptr1,
                                                                         int plane_cnt2, const float* coef_ptr2) {
   // All polyhedron faces are defined by plane coefficients:
@@ -674,6 +676,7 @@ std::vector<int> CollectSurfaceVtx(int vtx_cnt, const float* vtx_ptr,          /
 }
 
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::vector<std::set<int>> CollectSurfaceVtx(int vtx_cnt, const float* vtx_ptr, int plane_cnt, const float* coef_ptr) {
   std::vector<std::set<int>> plannar_faces;
   for (int i = 0; i < vtx_cnt; i++) {

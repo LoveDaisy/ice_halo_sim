@@ -99,6 +99,7 @@ Crystal Crystal::CreatePyramid(float h1, float h2, float h3) {
 }
 
 
+// NOLINTNEXTLINE(readability-function-size)
 Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int lower_i4,  // Miller index
                                float h1, float h2, float h3,                            // height
                                const float* dist) {                                     // face distance
@@ -320,6 +321,7 @@ Crystal& Crystal::Rotate(const Rotation& r) {
   return *this;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
   if (symmetry == FilterConfig::kSymNone || fn_period_ < 0) {
     return rp;
@@ -394,6 +396,7 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
   return reduced_rp;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
   std::vector<std::vector<IdType>> result;
   result.emplace_back(rp);

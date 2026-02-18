@@ -290,6 +290,7 @@ void RenderConsumer::PrepareSnapshot() {
   snapshot_intensity_ = total_intensity_;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 Result RenderConsumer::GetResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
 

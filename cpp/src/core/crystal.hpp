@@ -14,10 +14,10 @@ enum class CrystalType {
   kUnknown,
   kPrism,
   kIrregularPrism,
-  kPyramid_H3,
-  kPyramid_I2H3,
-  kPyramid_I4H3,
-  kPyramid_A2H3,
+  kPyramid_H3,    // NOLINT(readability-identifier-naming)
+  kPyramid_I2H3,  // NOLINT(readability-identifier-naming)
+  kPyramid_I4H3,  // NOLINT(readability-identifier-naming)
+  kPyramid_A2H3,  // NOLINT(readability-identifier-naming)
   kIrregularPyramid,
   kPyramidStackHalf,
   kCubicPyramid,
