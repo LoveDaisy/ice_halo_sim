@@ -1,10 +1,7 @@
 #include "config/sim_data.hpp"
 
-#include <climits>
 #include <cstddef>
 #include <cstring>
-
-#include "core/def.hpp"
 
 namespace lumice {
 

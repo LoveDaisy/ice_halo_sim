@@ -1,7 +1,6 @@
 #include "config/crystal_config.hpp"
 
 #include <nlohmann/json.hpp>
-#include <string>
 #include <variant>
 
 #include "core/math.hpp"

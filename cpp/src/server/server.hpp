@@ -1,7 +1,6 @@
 #ifndef INCLUDE_SERVER_H_
 #define INCLUDE_SERVER_H_
 
-#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
