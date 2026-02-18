@@ -47,11 +47,11 @@ class Mesh {
   Mesh(size_t vtx_cnt, size_t triangle_cnt);
   Mesh(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_cnt, std::unique_ptr<int[]> triangle_idx);
   Mesh(const Mesh& other);
-  Mesh(Mesh&& other);
+  Mesh(Mesh&& other) noexcept;
   ~Mesh() = default;
 
   Mesh& operator=(const Mesh& other);
-  Mesh& operator=(Mesh&& other);
+  Mesh& operator=(Mesh&& other) noexcept;
 
   size_t GetVtxCnt() const;
   size_t GetTriangleCnt() const;

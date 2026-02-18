@@ -246,7 +246,7 @@ Mesh::Mesh(const Mesh& other)
   std::memcpy(triangle_.get(), other.triangle_.get(), triangle_cnt_ * 3 * sizeof(int));
 }
 
-Mesh::Mesh(Mesh&& other)
+Mesh::Mesh(Mesh&& other) noexcept
     : vtx_cnt_(other.vtx_cnt_), triangle_cnt_(other.triangle_cnt_), vertices_(std::move(other.vertices_)),
       triangle_(std::move(other.triangle_)) {
   other.vtx_cnt_ = 0;
@@ -269,7 +269,7 @@ Mesh& Mesh::operator=(const Mesh& other) {
   return *this;
 }
 
-Mesh& Mesh::operator=(Mesh&& other) {
+Mesh& Mesh::operator=(Mesh&& other) noexcept {
   if (&other == this) {
     return *this;
   }

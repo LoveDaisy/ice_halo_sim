@@ -101,14 +101,14 @@ class Crystal {
    * @brief Construct crystal from mesh
    * @param mesh Mesh object containing vertex and triangle data
    */
-  Crystal(Mesh mesh);
+  explicit Crystal(Mesh mesh);
 
   Crystal(const Crystal& other);
-  Crystal(Crystal&& other);
+  Crystal(Crystal&& other) noexcept;
   ~Crystal() = default;
 
   Crystal& operator=(const Crystal& other);
-  Crystal& operator=(Crystal&& other);
+  Crystal& operator=(Crystal&& other) noexcept;
 
   /**
    * @brief Get total number of triangles

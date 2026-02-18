@@ -55,7 +55,7 @@ class ServerImpl {
   std::vector<ConsumerPtrU> consumers_;
   mutable std::mutex consumer_mutex_;
   std::vector<std::thread> simulator_threads_;
-  mutable std::mutex prod_mutex;
+  mutable std::mutex prod_mutex_;
 
   std::atomic_bool stop_{ true };
   std::atomic_bool work_started_{ false };
@@ -194,12 +194,12 @@ void ServerImpl::Start() {
   data_queue_->Start();
   scene_queue_->Start();
   {
-    std::lock_guard<std::mutex> lock(prod_mutex);
-    ILOG_DEBUG(logger_, "Start: lock on prod_mutex");
+    std::lock_guard<std::mutex> lock(prod_mutex_);
+    ILOG_DEBUG(logger_, "Start: lock on prod_mutex_");
     for (auto& s : simulators_) {
       simulator_threads_.emplace_back(&Simulator::Run, &s);
     }
-    ILOG_DEBUG(logger_, "Start: unlock prod_mutex");
+    ILOG_DEBUG(logger_, "Start: unlock prod_mutex_");
   }
 
   // Start main working thread & scene dispatch thread
@@ -224,8 +224,8 @@ void ServerImpl::Stop() {
 
   // Stop running jobs
   {
-    std::lock_guard<std::mutex> lock(prod_mutex);
-    ILOG_DEBUG(logger_, "Stop: lock on prod_mutex. stop simulators. clear simulator threads.");
+    std::lock_guard<std::mutex> lock(prod_mutex_);
+    ILOG_DEBUG(logger_, "Stop: lock on prod_mutex_. stop simulators. clear simulator threads.");
     for (auto& s : simulators_) {
       s.Stop();
     }
@@ -235,7 +235,7 @@ void ServerImpl::Stop() {
       }
     }
     simulator_threads_.clear();
-    ILOG_DEBUG(logger_, "Stop: unlock prod_mutex");
+    ILOG_DEBUG(logger_, "Stop: unlock prod_mutex_");
   }
   consumers_.clear();
 
@@ -273,7 +273,7 @@ ServerStatus ServerImpl::GetStatus() const {
   // Pipeline has started. Poll simulators to detect completion.
   bool any_busy = false;
   {
-    std::lock_guard<std::mutex> lock(prod_mutex);
+    std::lock_guard<std::mutex> lock(prod_mutex_);
     for (const auto& s : simulators_) {
       if (!s.IsIdle()) {
         any_busy = true;
@@ -363,7 +363,7 @@ void ServerImpl::GenerateScene() {
 // =============== ServerImpl::SetLogLevel ===============
 void ServerImpl::SetLogLevel(LogLevel level) {
   logger_.SetLevel(level);
-  std::lock_guard<std::mutex> lock(prod_mutex);
+  std::lock_guard<std::mutex> lock(prod_mutex_);
   for (auto& s : simulators_) {
     s.SetLogLevel(level);
   }

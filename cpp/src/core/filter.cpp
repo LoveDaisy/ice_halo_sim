@@ -22,7 +22,7 @@ class NoneFilter : public Filter {
 
 class RaypathFilter : public Filter {
  public:
-  RaypathFilter(const std::vector<IdType>& rp) : rp_(rp) {}
+  explicit RaypathFilter(const std::vector<IdType>& rp) : rp_(rp) {}
 
   void InitCrystalSymmetry(const Crystal& crystal) override {
     candidate_hash_.clear();
@@ -104,7 +104,7 @@ class DirectionFilter : public Filter {
 
 class CrystalFilter : public Filter {
  public:
-  CrystalFilter(IdType crystal_id) : crystal_id_(crystal_id){};
+  explicit CrystalFilter(IdType crystal_id) : crystal_id_(crystal_id){};
 
  protected:
   bool InternalCheck(const RaySeg& ray) const override { return ray.crystal_config_id_ == crystal_id_; }
@@ -145,7 +145,7 @@ struct SimpleFilterCreator {
 
 class ComplexFilter : public Filter {
  public:
-  ComplexFilter(const std::vector<std::vector<std::pair<IdType, SimpleFilterParam>>>& all_param) {
+  explicit ComplexFilter(const std::vector<std::vector<std::pair<IdType, SimpleFilterParam>>>& all_param) {
     for (const auto& p : all_param) {
       std::vector<FilterPtrU> f;
       for (const auto& pp : p) {

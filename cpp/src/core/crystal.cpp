@@ -159,7 +159,7 @@ Crystal::Crystal(const Crystal& other)
   std::memcpy(fn_map_.get(), other.fn_map_.get(), n * sizeof(IdType));
 }
 
-Crystal::Crystal(Crystal&& other)
+Crystal::Crystal(Crystal&& other) noexcept
     : config_id_(other.config_id_), mesh_(std::move(other.mesh_)), cache_data_(std::move(other.cache_data_)),
       face_v_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kVtx),
       face_ev_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kEdgeVec),
@@ -198,7 +198,7 @@ Crystal& Crystal::operator=(const Crystal& other) {
   return *this;
 }
 
-Crystal& Crystal::operator=(Crystal&& other) {
+Crystal& Crystal::operator=(Crystal&& other) noexcept {
   if (&other == this) {
     return *this;
   }

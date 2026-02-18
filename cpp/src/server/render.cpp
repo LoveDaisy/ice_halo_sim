@@ -180,16 +180,16 @@ ProjFunc GetProjFunc(LensParam::LensType type) {
 
 // =============== Renderer ===============
 RenderConsumer::RenderConsumer(RenderConfig config)
-    : config_(config), diag_pix_(std::sqrt(config.resolution_[0] * config.resolution_[0] +
-                                           config.resolution_[1] * config.resolution_[1])),
-      internal_xyz_(std::make_unique<float[]>(config.resolution_[0] * config.resolution_[1] * 3)),
-      snapshot_xyz_(std::make_unique<float[]>(config.resolution_[0] * config.resolution_[1] * 3)),
-      image_buffer_(std::make_unique<uint8_t[]>(config.resolution_[0] * config.resolution_[1] * 3)) {
+    : config_(std::move(config)), diag_pix_(std::sqrt(config_.resolution_[0] * config_.resolution_[0] +
+                                                      config_.resolution_[1] * config_.resolution_[1])),
+      internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
+      snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
+      image_buffer_(std::make_unique<uint8_t[]>(config_.resolution_[0] * config_.resolution_[1] * 3)) {
   float ax_z[3]{ 0, 0, 1 };
   float ax_y[3]{ 0, 1, 0 };
-  rot_.Chain({ ax_z, (-90.0f + config.view_.ro_) * math::kDegreeToRad })
-      .Chain({ ax_y, (90.0f - config.view_.el_) * math::kDegreeToRad })
-      .Chain({ ax_z, config.view_.az_ * math::kDegreeToRad });
+  rot_.Chain({ ax_z, (-90.0f + config_.view_.ro_) * math::kDegreeToRad })
+      .Chain({ ax_y, (90.0f - config_.view_.el_) * math::kDegreeToRad })
+      .Chain({ ax_z, config_.view_.az_ * math::kDegreeToRad });
 
   for (const auto& f : config_.ms_filter_) {
     filters_.emplace_back(Filter::Create(f));

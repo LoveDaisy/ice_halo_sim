@@ -6,7 +6,7 @@ const size_t ThreadingPool::kDefaultPoolSize = std::thread::hardware_concurrency
 
 
 ThreadingPool::ThreadingPool(size_t size)
-    : running_jobs_(0), pool_{}, state_(kStarting), running_workers_(0), stop_flag_(false) {
+    : running_jobs_(0), state_(kStarting), running_workers_(0), stop_flag_(false) {
   StartPool(size);
 }
 
