@@ -351,8 +351,9 @@ RandomNumberGenerator::RandomNumberGenerator(uint32_t seed)
 
 
 RandomNumberGenerator* RandomNumberGenerator::GetInstance() {
-  static thread_local auto instance_ = std::make_unique<RandomNumberGenerator>(
-      static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count()));
+  static thread_local auto instance_ =
+      std::make_unique<RandomNumberGenerator>(  // NOLINT(readability-identifier-naming)
+          static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count()));
   return instance_.get();
 }
 

@@ -16,14 +16,15 @@ namespace lumice {
 float GetReflectRatio(float delta, float rr) {
   float d_sqrt = std::sqrt(delta);
 
-  float Rs = (rr - d_sqrt) / (rr + d_sqrt);
+  float Rs = (rr - d_sqrt) / (rr + d_sqrt);  // NOLINT(readability-identifier-naming) Fresnel notation
   Rs *= Rs;
-  float Rp = (1 - rr * d_sqrt) / (1 + rr * d_sqrt);
+  float Rp = (1 - rr * d_sqrt) / (1 + rr * d_sqrt);  // NOLINT(readability-identifier-naming) Fresnel notation
   Rp *= Rp;
 
   return (Rs + Rp) / 2;
 }
 
+// NOLINTNEXTLINE(readability-function-size,readability-identifier-naming)
 void HitSurface_Normal(const Crystal& crystal, float n, size_t num,                          // input
                        const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
                        float_bf_t d_out, float_bf_t w_out) {                                 // output
@@ -135,6 +136,7 @@ void HitSurface_Simd(const Crystal& crystal, float n,   // input
 #endif
 
 
+// NOLINTNEXTLINE(readability-function-size)
 void HitSurface(const Crystal& crystal, float n, size_t num,                          // input
                 const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
                 float_bf_t d_out, float_bf_t w_out) {                                 // output
@@ -201,6 +203,7 @@ void RayTriangleBW(const float* ray_pt, const float* ray_dir,  // input
 }
 
 
+// NOLINTNEXTLINE(readability-function-size)
 void Propagate(const Crystal& crystal, size_t num, size_t step,                      // input
                const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input, d, p, w
                float_bf_t p_out, int_bf_t fid_out) {                                 // output, p, fid
