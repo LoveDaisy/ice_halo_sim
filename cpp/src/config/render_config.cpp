@@ -6,7 +6,6 @@
 
 #include "config/filter_config.hpp"
 #include "core/math.hpp"
-#include "util/json_util.hpp"
 
 namespace lumice {
 
@@ -18,9 +17,15 @@ void to_json(nlohmann::json& j, const ViewParam& v) {
 }
 
 void from_json(const nlohmann::json& j, ViewParam& v) {
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "azimuth", v.az_)
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "elevation", v.el_)
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "roll", v.ro_)
+  if (j.contains("azimuth")) {
+    j.at("azimuth").get_to(v.az_);
+  }
+  if (j.contains("elevation")) {
+    j.at("elevation").get_to(v.el_);
+  }
+  if (j.contains("roll")) {
+    j.at("roll").get_to(v.ro_);
+  }
 }
 
 
@@ -35,16 +40,15 @@ void to_json(nlohmann::json& j, const GridLineParam& l) {
 void from_json(const nlohmann::json& j, GridLineParam& l) {
   j.at("value").get_to(l.value_);
 
-  l.color_[0] = 1.0f;
-  l.color_[1] = 1.0f;
-  l.color_[2] = 1.0f;
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "color", l.color_)
-
-  l.opacity_ = 1.0f;
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "opacity", l.opacity_)
-
-  l.width_ = 1.0f;
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "width", l.width_)
+  if (j.contains("color")) {
+    j.at("color").get_to(l.color_);
+  }
+  if (j.contains("opacity")) {
+    j.at("opacity").get_to(l.opacity_);
+  }
+  if (j.contains("width")) {
+    j.at("width").get_to(l.width_);
+  }
 }
 
 

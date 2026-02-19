@@ -1,6 +1,5 @@
 #include "config/config_manager.hpp"
 
-#include <algorithm>
 #include <cstddef>
 #include <nlohmann/json.hpp>
 
@@ -8,7 +7,6 @@
 #include "config/light_config.hpp"
 #include "config/render_config.hpp"
 #include "core/def.hpp"
-#include "util/json_util.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
@@ -49,29 +47,31 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   j_render.at("id").get_to(render.id_);
   j_render.at("resolution").get_to(render.resolution_);
 
-  render.lens_.type_ = LensParam::kLinear;
-  render.lens_.fov_ = 90.0f;
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "lens", render.lens_)              // default {kLinear, 90.0}
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "lens_shift", render.lens_shift_)  // default [0, 0]
+  if (j_render.contains("lens")) {
+    j_render.at("lens").get_to(render.lens_);
+  }
+  if (j_render.contains("lens_shift")) {
+    j_render.at("lens_shift").get_to(render.lens_shift_);
+  }
+  if (j_render.contains("view")) {
+    j_render.at("view").get_to(render.view_);
+  }
+  if (j_render.contains("visible")) {
+    j_render.at("visible").get_to(render.visible_);
+  }
+  if (j_render.contains("background")) {
+    j_render.at("background").get_to(render.background_);
+  }
+  if (j_render.contains("ray")) {
+    j_render.at("ray").get_to(render.ray_color_);
+  }
+  if (j_render.contains("opacity")) {
+    j_render.at("opacity").get_to(render.opacity_);
+  }
+  if (j_render.contains("intensity_factor")) {
+    j_render.at("intensity_factor").get_to(render.intensity_factor_);
+  }
 
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "view", render.view_)  // default {0.0, 0.0, 0.0}
-
-  render.visible_ = RenderConfig::kUpper;
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "visible", render.visible_)  // default kUpper
-
-  std::fill(std::begin(render.background_), std::end(render.background_), 0.0f);
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "background", render.background_)  // default [0, 0, 0]
-
-  std::fill(std::begin(render.ray_color_), std::end(render.ray_color_), -1.0f);
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "ray", render.ray_color_)  // default [-1, -1, -1]
-
-  render.opacity_ = 1.0f;
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "opacity", render.opacity_)  // default 1
-
-  render.intensity_factor_ = 1.0f;
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j_render, "intensity_factor", render.intensity_factor_)  // default 1
-
-  render.celestial_outline_ = true;
   if (j_render.contains("grid")) {
     const auto& j_grid = j_render.at("grid");
     if (j_grid.contains("central")) {

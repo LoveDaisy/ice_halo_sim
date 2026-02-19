@@ -10,19 +10,19 @@
 namespace lumice {
 
 struct ViewParam {
-  float az_;  // Azimuth
-  float el_;  // Elevation
-  float ro_;  // Roll
+  float az_{};  // Azimuth
+  float el_{};  // Elevation
+  float ro_{};  // Roll
 };
 
 void to_json(nlohmann::json& j, const ViewParam& v);
 void from_json(const nlohmann::json& j, ViewParam& v);
 
 struct GridLineParam {
-  float value_;
-  float width_;
-  float opacity_;
-  float color_[3];  // r, g, b
+  float value_{};
+  float width_{ 1.0f };
+  float opacity_{ 1.0f };
+  float color_[3]{ 1.0f, 1.0f, 1.0f };
 };
 
 void to_json(nlohmann::json& j, const GridLineParam& l);
@@ -67,21 +67,21 @@ struct RenderConfig {
     kFull,
   };
 
-  IdType id_;
-  LensParam lens_;
-  int lens_shift_[2];  // dx, dy
-  int resolution_[2];  // width, height
-  ViewParam view_;
-  VisibleRange visible_;
+  IdType id_{};
+  LensParam lens_{ LensParam::kLinear, 90.0f };
+  int lens_shift_[2]{};  // dx, dy
+  int resolution_[2]{};  // width, height
+  ViewParam view_{};
+  VisibleRange visible_ = kUpper;
 
-  float background_[3];  // r, g, b
-  float ray_color_[3];   // r, g, b
-  float opacity_;
-  float intensity_factor_;
+  float background_[3]{};                      // r, g, b
+  float ray_color_[3]{ -1.0f, -1.0f, -1.0f };  // r, g, b
+  float opacity_ = 1.0f;
+  float intensity_factor_ = 1.0f;
 
   std::vector<GridLineParam> central_grid_;
   std::vector<GridLineParam> elevation_grid_;
-  bool celestial_outline_;
+  bool celestial_outline_ = true;
 
   std::vector<FilterConfig> ms_filter_;  // for multi-scattering
 };
