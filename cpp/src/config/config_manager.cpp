@@ -101,22 +101,58 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   return render;
 }
 
+static MsInfo ParseScatteringInfo(const nlohmann::json& j_s, const ConfigManager& m) {
+  static const FilterConfig kDefaultNoneFilter{ kInvalidId, FilterConfig::kSymNone, FilterConfig::kFilterIn,
+                                                NoneFilterParam{} };
+  MsInfo ms{};
+  if (j_s.contains("prob")) {
+    j_s.at("prob").get_to(ms.prob_);
+  }
+
+  for (const auto& j_c : j_s.at("crystal")) {
+    IdType id = j_c.get<IdType>();
+    ms.setting_.emplace_back(ScatteringSetting{ kDefaultNoneFilter, m.crystals_.at(id), 100.0 });
+  }
+
+  if (j_s.contains("proportion")) {
+    size_t i = 0;
+    for (const auto& j_p : j_s.at("proportion")) {
+      if (i >= ms.setting_.size()) {
+        break;
+      }
+      j_p.get_to(ms.setting_[i].crystal_proportion_);
+      i++;
+    }
+  }
+
+  if (j_s.contains("filter")) {
+    size_t i = 0;
+    for (const auto& j_f : j_s.at("filter")) {
+      if (i >= ms.setting_.size()) {
+        break;
+      }
+      if (auto id = j_f.get<int>(); id >= 0) {
+        ms.setting_[i].filter_ = m.filters_.at(id);
+      }
+      i++;
+    }
+  }
+
+  return ms;
+}
+
 SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager& m) {
   SceneConfig scene{};
-  // id
   j_scene.at("id").get_to(scene.id_);
 
-  // ray_num
   if (int n = j_scene.at("ray_num").get<int>(); n < 0) {
     scene.ray_num_ = kInfSize;
   } else {
     scene.ray_num_ = static_cast<size_t>(n);
   }
 
-  // max_hits
   j_scene.at("max_hits").get_to(scene.max_hits_);
 
-  // light_source
   if (IdType id = j_scene.at("light_source").get<IdType>(); m.lights_.count(id)) {
     scene.light_source_ = m.lights_.at(id);
   } else {
@@ -124,44 +160,8 @@ SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager&
     scene.light_source_.id_ = kInvalidId;
   }
 
-  // scattering
-  FilterConfig default_none_filter{ kInvalidId, FilterConfig::kSymNone, FilterConfig::kFilterIn, NoneFilterParam{} };
   for (const auto& j_s : j_scene.at("scattering")) {
-    MsInfo ms{};
-    if (j_s.contains("prob")) {
-      j_s.at("prob").get_to(ms.prob_);  // default 0.0f (ms is zero-initialized)
-    }
-
-    for (const auto& j_c : j_s.at("crystal")) {
-      IdType id = j_c.get<IdType>();
-      ScatteringSetting s{ default_none_filter, m.crystals_.at(id), 100.0 };
-      ms.setting_.emplace_back(s);
-    }
-
-    if (j_s.contains("proportion")) {
-      size_t i = 0;
-      for (const auto& j_p : j_s.at("proportion")) {
-        if (i >= ms.setting_.size()) {
-          break;
-        }
-        j_p.get_to(ms.setting_[i].crystal_proportion_);  // default 100.0. see above
-        i++;
-      }
-    }
-
-    if (j_s.contains("filter")) {
-      size_t i = 0;
-      for (const auto& j_f : j_s.at("filter")) {
-        if (i >= ms.setting_.size()) {
-          break;
-        }
-        if (auto id = j_f.get<int>(); id >= 0) {
-          ms.setting_[i].filter_ = m.filters_.at(id);
-        }
-        i++;
-      }
-    }
-    scene.ms_.emplace_back(ms);
+    scene.ms_.emplace_back(ParseScatteringInfo(j_s, m));
   }
 
   return scene;
