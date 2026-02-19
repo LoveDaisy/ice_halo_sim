@@ -4,7 +4,6 @@
 #include <variant>
 
 #include "core/math.hpp"
-#include "util/json_util.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
@@ -26,8 +25,16 @@ void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
     x.type = DistributionType::kNoRandom;
     x.mean = 1.0f;
   }
-  // NOLINTNEXTLINE(bugprone-branch-clone)
-  JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "face_distance", p.d_, 6)
+  if (j.contains("face_distance")) {
+    size_t i = 0;
+    for (const auto& elem : j.at("face_distance")) {
+      if (i >= 6) {
+        break;
+      }
+      elem.get_to(p.d_[i]);
+      i++;
+    }
+  }
   for (auto& x : p.d_) {
     x.mean *= math::kSqrt3_4;
     x.std *= math::kSqrt3_4;
@@ -68,8 +75,16 @@ void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
     x.type = DistributionType::kNoRandom;
     x.mean = 1.0f;
   }
-  // NOLINTNEXTLINE(bugprone-branch-clone)
-  JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "face_distance", p.d_, 6)
+  if (j.contains("face_distance")) {
+    size_t i = 0;
+    for (const auto& elem : j.at("face_distance")) {
+      if (i >= 6) {
+        break;
+      }
+      elem.get_to(p.d_[i]);
+      i++;
+    }
+  }
   for (auto& x : p.d_) {
     x.mean *= math::kSqrt3_4;
     x.std *= math::kSqrt3_4;
