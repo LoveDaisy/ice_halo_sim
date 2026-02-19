@@ -429,8 +429,8 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
 
 
 AxisDistribution::AxisDistribution()
-    : azimuth_dist{ DistributionType::kUniform, 0, 0 }, latitude_dist{ DistributionType::kUniform, 0, 0 },
-      roll_dist{ DistributionType::kUniform, 0, 0 } {}
+    : azimuth_dist{ DistributionType::kNoRandom, 0, 0 }, latitude_dist{ DistributionType::kNoRandom, 90.0f, 0 },
+      roll_dist{ DistributionType::kNoRandom, 0, 0 } {}
 
 
 void to_json(nlohmann::json& obj, const Distribution& dist) {
