@@ -38,7 +38,7 @@ struct Error {
   /**
    * @brief Default constructor: success state
    */
-  Error() : code(ErrorCode::kSuccess), message(""), field("") {}
+  Error() : code(ErrorCode::kSuccess) {}
 
   /**
    * @brief Constructor with error code and message
@@ -65,7 +65,7 @@ struct Error {
    * @return true if error, false if success
    * @note Allows usage: if (err) { ... }
    */
-  operator bool() const { return IsError(); }
+  explicit operator bool() const { return IsError(); }
 
   // Factory methods for common error types
   static Error Success() { return Error(); }

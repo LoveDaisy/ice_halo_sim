@@ -17,13 +17,13 @@ struct AxisDistribution;
 namespace math {
 
 constexpr float kPi = 3.14159265359f;
-constexpr float kPi_2 = kPi / 2.0f;
-constexpr float kPi_3 = kPi / 3.0f;
-constexpr float kPi_4 = kPi / 4.0f;
-constexpr float kPi_6 = kPi / 6.0f;
+constexpr float kPi_2 = kPi / 2.0f;  // NOLINT(readability-identifier-naming) math notation π/2
+constexpr float kPi_3 = kPi / 3.0f;  // NOLINT(readability-identifier-naming) math notation π/3
+constexpr float kPi_4 = kPi / 4.0f;  // NOLINT(readability-identifier-naming) math notation π/4
+constexpr float kPi_6 = kPi / 6.0f;  // NOLINT(readability-identifier-naming) math notation π/6
 constexpr float kSqrt3 = 1.73205080757f;
-constexpr float kSqrt3_2 = kSqrt3 / 2.0f;
-constexpr float kSqrt3_4 = kSqrt3 / 4.0f;
+constexpr float kSqrt3_2 = kSqrt3 / 2.0f;  // NOLINT(readability-identifier-naming) math notation √3/2
+constexpr float kSqrt3_4 = kSqrt3 / 4.0f;  // NOLINT(readability-identifier-naming) math notation √3/4
 constexpr float kFloatEps = 1e-5;
 constexpr float kDegreeToRad = kPi / 180.0f;
 constexpr float kRadToDegree = 180.0f / kPi;

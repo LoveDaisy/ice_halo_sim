@@ -1,3 +1,5 @@
+HeaderFilterRegex: 'src/.*\.hpp$'
+
 Checks: "-*,
         bugprone-argument-comment,
         bugprone-branch-clone,
@@ -85,7 +87,7 @@ CheckOptions:
   - key:    readability-identifier-naming.FunctionCase
     value:  CamelCase
   - key:    readability-identifier-naming.FunctionIgnoredRegexp
-    value:  "^(to_json|from_json|begin|end|rays|x|y|z|val|lon|lat|roll|unit|InitRay_.*|HitSurface_.*)$"
+    value:  "^(to_json|from_json|begin|end|rays|idx|x|y|z|val|lon|lat|roll|unit|InitRay_.*|HitSurface_.*)$"
   - key:    readability-identifier-naming.ConstantParameterCase
     value:  lower_case
   - key:    readability-identifier-naming.VariableCase

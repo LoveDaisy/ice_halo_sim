@@ -46,6 +46,8 @@ class ThreadingPool {
   static ThreadingPoolPtrU CreatePool(int size);
 
   ~ThreadingPool();
+  ThreadingPool(const ThreadingPool&) = delete;
+  ThreadingPool& operator=(const ThreadingPool&) = delete;
 
   /**
    * @brief Adds a job to the pool.
