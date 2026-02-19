@@ -10,7 +10,7 @@ template <class T>
 struct BufferWrapper {
   BufferWrapper() : data_(nullptr), step_(0) {}
   BufferWrapper(T* data, int step) : data_(data), step_(step) {}
-  BufferWrapper(T* data) : data_(data), step_(sizeof(T)) {}
+  explicit BufferWrapper(T* data) : data_(data), step_(sizeof(T)) {}
 
   T* data_;
   int step_;  // bytes to next object

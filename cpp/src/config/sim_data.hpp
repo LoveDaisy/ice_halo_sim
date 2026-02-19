@@ -12,7 +12,7 @@ namespace lumice {
 
 struct RayBuffer {
   RayBuffer();
-  RayBuffer(size_t capacity);
+  explicit RayBuffer(size_t capacity);
 
   RaySeg& operator[](size_t idx) const;
 
@@ -33,13 +33,13 @@ struct RayBuffer {
 
 struct SimData {
   SimData();
-  SimData(size_t capacity);
+  explicit SimData(size_t capacity);
   SimData(const SimData& other);
-  SimData(SimData&& other);
+  SimData(SimData&& other) noexcept;
   ~SimData() = default;
 
   SimData& operator=(const SimData& other);
-  SimData& operator=(SimData&& other);
+  SimData& operator=(SimData&& other) noexcept;
 
   // ----- Data -----
   float curr_wl_;

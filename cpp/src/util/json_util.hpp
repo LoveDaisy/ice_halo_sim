@@ -6,6 +6,7 @@
 #include "util/logger.hpp"
 
 
+// NOLINTBEGIN(bugprone-macro-parentheses)
 #define JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, key, dst)   \
   if (obj.contains(key)) {                                  \
     obj.at(key).get_to(dst);                                \
@@ -36,5 +37,6 @@
       i++;                                                  \
     }                                                       \
   }
+// NOLINTEND(bugprone-macro-parentheses)
 
 #endif  // SRC_IO_JSON_UTIL_H_

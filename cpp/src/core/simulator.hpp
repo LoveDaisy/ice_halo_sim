@@ -29,11 +29,11 @@ class Simulator {
 
   Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed = 0);
   Simulator(const Simulator& other) = delete;
-  Simulator(Simulator&& other);
+  Simulator(Simulator&& other) noexcept;
   ~Simulator() = default;
 
   Simulator& operator=(const Simulator& other) = delete;
-  Simulator& operator=(Simulator&& other);
+  Simulator& operator=(Simulator&& other) noexcept;
 
   void Run();
   void Stop();

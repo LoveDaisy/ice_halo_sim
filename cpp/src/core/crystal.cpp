@@ -99,6 +99,7 @@ Crystal Crystal::CreatePyramid(float h1, float h2, float h3) {
 }
 
 
+// NOLINTNEXTLINE(readability-function-size)
 Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int lower_i4,  // Miller index
                                float h1, float h2, float h3,                            // height
                                const float* dist) {                                     // face distance
@@ -159,7 +160,7 @@ Crystal::Crystal(const Crystal& other)
   std::memcpy(fn_map_.get(), other.fn_map_.get(), n * sizeof(IdType));
 }
 
-Crystal::Crystal(Crystal&& other)
+Crystal::Crystal(Crystal&& other) noexcept
     : config_id_(other.config_id_), mesh_(std::move(other.mesh_)), cache_data_(std::move(other.cache_data_)),
       face_v_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kVtx),
       face_ev_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kEdgeVec),
@@ -198,7 +199,7 @@ Crystal& Crystal::operator=(const Crystal& other) {
   return *this;
 }
 
-Crystal& Crystal::operator=(Crystal&& other) {
+Crystal& Crystal::operator=(Crystal&& other) noexcept {
   if (&other == this) {
     return *this;
   }
@@ -320,6 +321,7 @@ Crystal& Crystal::Rotate(const Rotation& r) {
   return *this;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
   if (symmetry == FilterConfig::kSymNone || fn_period_ < 0) {
     return rp;
@@ -394,6 +396,7 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
   return reduced_rp;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
   std::vector<std::vector<IdType>> result;
   result.emplace_back(rp);

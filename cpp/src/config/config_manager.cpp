@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <nlohmann/json.hpp>
-#include <variant>
 
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"

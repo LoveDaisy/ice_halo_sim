@@ -1,30 +1,55 @@
+HeaderFilterRegex: 'src/.*\.hpp$'
+
 Checks: "-*,
+        bugprone-argument-comment,
+        bugprone-branch-clone,
+        bugprone-integer-division,
+        bugprone-macro-parentheses,
+        bugprone-sizeof-container,
+        bugprone-sizeof-expression,
+        bugprone-string-constructor,
+        bugprone-suspicious-memset-usage,
+        bugprone-swapped-arguments,
+        bugprone-undefined-memory-manipulation,
+        bugprone-use-after-move,
         cppcoreguidelines-init-variables,
         cppcoreguidelines-no-malloc,
         cppcoreguidelines-special-member-functions,
         google-build-using-namespace,
+        google-explicit-constructor,
         llvm-include-order,
-        performance-unnecessary-copy-initialization,
-        performance-inefficient-algorithm,
-        modernize-use-using,
-        modernize-use-nullptr,
-        modernize-use-emplace,
-        modernize-use-bool-literals,
-        modernize-make-shared,
-        modernize-loop-convert,
+        misc-redundant-expression,
+        misc-unused-using-decls,
         modernize-deprecated-headers,
-        modernize-use-override,
         modernize-explicit-conversions,
+        modernize-loop-convert,
+        modernize-make-shared,
         modernize-move-const-arg,
         modernize-noexcept-move,
         modernize-use-auto,
-        misc-redundant-expression,
+        modernize-use-bool-literals,
+        modernize-use-emplace,
+        modernize-use-nullptr,
+        modernize-use-override,
+        modernize-use-using,
+        performance-for-range-copy,
+        performance-move-const-arg,
+        performance-noexcept-move-constructor,
+        performance-inefficient-algorithm,
+        performance-move-constructor-init,
+        performance-unnecessary-copy-initialization,
+        performance-unnecessary-value-param,
         readability-braces-around-statements,
-        readability-isolate-declaration,
         readability-container-size-empty,
         readability-delete-null-pointer,
+        readability-function-cognitive-complexity,
+        readability-function-size,
+        readability-identifier-naming,
+        readability-implicit-bool-conversion,
+        readability-isolate-declaration,
         readability-misleading-indentation,
         readability-misplaced-array-index,
+        readability-named-parameter,
         readability-redundant-declaration,
         readability-redundant-function-ptr-dereference,
         readability-redundant-member-init,
@@ -33,58 +58,47 @@ Checks: "-*,
         readability-simplify-boolean-expr,
         readability-static-definition-in-anonymous-namespace,
         readability-string-compare,
-        readability-uniqueptr-delete-release,
-        readability-named-parameter"
+        readability-uniqueptr-delete-release"
 
 
 CheckOptions:
-  - key:    cppcoreguidelines-macro-usage.CheckCapsOnly
-    value:  '1'
-  - key:    cppcoreguidelines-pro-type-member-init.IgnoreArrays
-    value:  '1'
   - key:    cppcoreguidelines-special-member-functions.AllowMissingMoveFunctions
-    value:  '1'
-  - key:    misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
     value:  '1'
   - key:    modernize-use-override.IgnoreDestructors
     value:  '1'
+  - key:    modernize-loop-convert.MaxCopySize
+    value:  '16'
+  - key:    modernize-loop-convert.MinConfidence
+    value:  reasonable
   - key:    readability-implicit-bool-conversion.AllowIntegerConditions
     value:  '1'
   - key:    readability-implicit-bool-conversion.AllowPointerConditions
     value:  '1'
-  - key:    readability-magic-numbers.IgnorePowersOf2IntegerValues
-    value:  true
-  - key:    readability-magic-numbers.IgnoreAllFloatingPointValues
-    value:  true
-  - key:    readability-magic-numbers.IgnoredIntegerValues
-    value:  '3;4;5;6;7;8;9;10;11;12;15;20;24;40;48;56;60;100;255;384;420;438;493;511;1000;65535'
-  - key:    readability-identifier-naming.NamespaceCase,
+  - key:    readability-identifier-naming.NamespaceCase
     value:  lower_case
-  - key:    readability-identifier-naming.ClassCase,
+  - key:    readability-identifier-naming.ClassCase
     value:  CamelCase
-  - key:    readability-identifier-naming.EnumCase,
+  - key:    readability-identifier-naming.EnumCase
     value:  CamelCase
-  - key:    readability-identifier-naming.PrivateMemberSuffix,
+  - key:    readability-identifier-naming.PrivateMemberSuffix
     value:  "_"
-  - key:    readability-identifier-naming.StructCase,
+  - key:    readability-identifier-naming.StructCase
     value:  CamelCase
-  - key:    readability-identifier-naming.FunctionCase,
+  - key:    readability-identifier-naming.FunctionCase
     value:  CamelCase
-  - key:    readability-identifier-naming.VariableCase,
+  - key:    readability-identifier-naming.FunctionIgnoredRegexp
+    value:  "^(to_json|from_json|begin|end|rays|idx|x|y|z|val|lon|lat|roll|unit|InitRay_.*|HitSurface_.*)$"
+  - key:    readability-identifier-naming.ConstantParameterCase
     value:  lower_case
-  - key:    readability-identifier-naming.ConstantCase,
+  - key:    readability-identifier-naming.VariableCase
+    value:  lower_case
+  - key:    readability-identifier-naming.ConstantCase
     value:  CamelCase
-  - key:    readability-identifier-naming.ConstantPrefix,
+  - key:    readability-identifier-naming.ConstantPrefix
     value:  "k"
   - key:    readability-function-size.StatementThreshold
     value:  '200'
   - key:    readability-function-size.ParameterThreshold
     value:  '7'
   - key:    readability-function-cognitive-complexity.Threshold
-    value:  '87'
-  - key:    misc-definitions-in-headers.HeaderFileExtensions
-    value:  ',h,hh,hpp,hxx'
-  - key:    modernize-loop-convert.MaxCopySize
-    value:  '16'
-  - key:    modernize-loop-convert.MinConfidence
-    value:  reasonable
+    value:  '25'

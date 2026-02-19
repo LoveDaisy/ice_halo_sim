@@ -1,7 +1,6 @@
 #ifndef CONSUMER_RENDER_H_
 #define CONSUMER_RENDER_H_
 
-#include <map>
 #include <memory>
 
 #include "config/render_config.hpp"
@@ -16,7 +15,7 @@ constexpr int kMaxWavelength = 830;
 
 class RenderConsumer : public IConsume {
  public:
-  RenderConsumer(RenderConfig config);
+  explicit RenderConsumer(RenderConfig config);
 
   void Consume(const SimData& data) override;
   void PrepareSnapshot() override;

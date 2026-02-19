@@ -124,6 +124,7 @@ void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, siz
 }
 
 
+// NOLINTNEXTLINE(readability-function-size)
 void InitRayFirstMs(RandomNumberGenerator& rng, const LightSourceParam& light_param, const WlParam& wl_param,
                     size_t curr_ray_num,                                                                        // input
                     const Crystal& curr_crystal, size_t curr_crystal_id, const AxisDistribution& crystal_axis,  // input
@@ -146,6 +147,7 @@ void InitRayFirstMs(RandomNumberGenerator& rng, const LightSourceParam& light_pa
 }
 
 
+// NOLINTNEXTLINE(readability-function-size)
 void InitRayOtherMs(RandomNumberGenerator& rng, const RayBuffer init_data[2], size_t curr_ray_num,              // input
                     const Crystal& curr_crystal, size_t curr_crystal_id, const AxisDistribution& crystal_axis,  // input
                     RayBuffer buffer_data[2], RayBuffer& all_data, size_t& init_ray_offset) {  // output
@@ -370,17 +372,18 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
 
 
 Simulator::Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed)
-    : config_queue_(config_queue), data_queue_(data_queue), stop_(false), idle_(true), seed_(seed),
-      rng_(seed != 0 ? seed :
-                       static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count() ^
-                                             (std::hash<std::thread::id>{}(std::this_thread::get_id())))) {}
+    : config_queue_(std::move(config_queue)), data_queue_(std::move(data_queue)), stop_(false), idle_(true),
+      seed_(seed), rng_(seed != 0 ? seed :
+                                    static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count() ^
+                                                          (std::hash<std::thread::id>{}(std::this_thread::get_id())))) {
+}
 
-Simulator::Simulator(Simulator&& other)
+Simulator::Simulator(Simulator&& other) noexcept
     : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
-      stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), rng_(std::move(other.rng_)),
+      stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), rng_(other.rng_),
       logger_(std::move(other.logger_)) {}
 
-Simulator& Simulator::operator=(Simulator&& other) {
+Simulator& Simulator::operator=(Simulator&& other) noexcept {
   if (this == &other) {
     return *this;
   }
@@ -390,7 +393,7 @@ Simulator& Simulator::operator=(Simulator&& other) {
   stop_ = other.stop_.load();
   idle_ = other.idle_.load();
   seed_ = other.seed_;
-  rng_ = std::move(other.rng_);
+  rng_ = other.rng_;
   logger_ = std::move(other.logger_);
   return *this;
 }

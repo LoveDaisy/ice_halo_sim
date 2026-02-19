@@ -1,7 +1,6 @@
 #include "config/crystal_config.hpp"
 
 #include <nlohmann/json.hpp>
-#include <string>
 #include <variant>
 
 #include "core/math.hpp"
@@ -31,6 +30,7 @@ void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
     x.mean = 1.0f;
     x.std = 0.0f;
   }
+  // NOLINTNEXTLINE(bugprone-branch-clone)
   JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "face_distance", p.d_, 6)
   for (auto& x : p.d_) {
     x.mean *= math::kSqrt3_4;
@@ -64,11 +64,13 @@ void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
   p.miller_indices_u_[0] = 1;
   p.miller_indices_u_[1] = 0;
   p.miller_indices_u_[2] = 1;
+  // NOLINTNEXTLINE(bugprone-branch-clone)
   JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "upper_indices", p.miller_indices_u_, 3)
 
   p.miller_indices_l_[0] = 1;
   p.miller_indices_l_[1] = 0;
   p.miller_indices_l_[2] = 1;
+  // NOLINTNEXTLINE(bugprone-branch-clone)
   JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "lower_indices", p.miller_indices_l_, 3)
 
   // Face distance
@@ -77,6 +79,7 @@ void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
     x.mean = 1.0f;
     x.std = 0.0f;
   }
+  // NOLINTNEXTLINE(bugprone-branch-clone)
   JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "face_distance", p.d_, 6)
   for (auto& x : p.d_) {
     x.mean *= math::kSqrt3_4;

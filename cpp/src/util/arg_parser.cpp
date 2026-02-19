@@ -124,7 +124,7 @@ ParseState StartAction(const std::string& curr_arg,                   // current
     tmp_arg[0] = '-';
     for (size_t i = 1; i < curr_arg.size(); i++) {
       tmp_arg[1] = curr_arg[i];
-      if (result.count(tmp_arg)) {
+      if (result.count(tmp_arg) != 0) {
         result.at(tmp_arg).clear();
       } else {
         result.emplace(tmp_arg, std::vector<std::string>{});

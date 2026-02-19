@@ -14,10 +14,10 @@ enum class CrystalType {
   kUnknown,
   kPrism,
   kIrregularPrism,
-  kPyramid_H3,
-  kPyramid_I2H3,
-  kPyramid_I4H3,
-  kPyramid_A2H3,
+  kPyramid_H3,    // NOLINT(readability-identifier-naming)
+  kPyramid_I2H3,  // NOLINT(readability-identifier-naming)
+  kPyramid_I4H3,  // NOLINT(readability-identifier-naming)
+  kPyramid_A2H3,  // NOLINT(readability-identifier-naming)
   kIrregularPyramid,
   kPyramidStackHalf,
   kCubicPyramid,
@@ -101,14 +101,14 @@ class Crystal {
    * @brief Construct crystal from mesh
    * @param mesh Mesh object containing vertex and triangle data
    */
-  Crystal(Mesh mesh);
+  explicit Crystal(Mesh mesh);
 
   Crystal(const Crystal& other);
-  Crystal(Crystal&& other);
+  Crystal(Crystal&& other) noexcept;
   ~Crystal() = default;
 
   Crystal& operator=(const Crystal& other);
-  Crystal& operator=(Crystal&& other);
+  Crystal& operator=(Crystal&& other) noexcept;
 
   /**
    * @brief Get total number of triangles

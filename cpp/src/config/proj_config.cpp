@@ -2,8 +2,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include "core/def.hpp"
-
 namespace lumice {
 
 void to_json(nlohmann::json& j, const SceneConfig& s) {

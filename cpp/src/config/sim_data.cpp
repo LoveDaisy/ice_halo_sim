@@ -1,10 +1,7 @@
 #include "config/sim_data.hpp"
 
-#include <climits>
 #include <cstddef>
 #include <cstring>
-
-#include "core/def.hpp"
 
 namespace lumice {
 
@@ -30,7 +27,7 @@ bool RayBuffer::Empty() const {
 
 void RayBuffer::EmplaceBack(RaySeg r) {
   if (size_ + 1 < capacity_) {
-    rays_[size_++] = std::move(r);
+    rays_[size_++] = r;
   }
 }
 
@@ -64,7 +61,7 @@ SimData::SimData(const SimData& other)
   std::memcpy(rays_.rays_.get(), other.rays_.rays_.get(), sizeof(RaySeg) * other.rays_.capacity_);
 }
 
-SimData::SimData(SimData&& other)
+SimData::SimData(SimData&& other) noexcept
     : curr_wl_(other.curr_wl_), total_intensity_(other.total_intensity_), crystals_(std::move(other.crystals_)) {
   rays_.size_ = other.rays_.size_;
   rays_.capacity_ = other.rays_.capacity_;
@@ -90,7 +87,7 @@ SimData& SimData::operator=(const SimData& other) {
   return *this;
 }
 
-SimData& SimData::operator=(SimData&& other) {
+SimData& SimData::operator=(SimData&& other) noexcept {
   if (&other == this) {
     return *this;
   }
