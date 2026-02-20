@@ -1,9 +1,5 @@
 #include "optics.hpp"
 
-#ifdef USE_SIMD
-#include <immintrin.h>
-#endif
-
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -54,97 +50,11 @@ void HitSurface_Normal(const Crystal& crystal, float n, size_t num,             
   }
 }
 
-#if defined(USE_SIMD) && defined(__AVX__) && defined(__SSE__)
-void HitSurface_Simd(const Crystal& crystal, float n,   // input
-                     size_t num, const RaySeg* ray_in,  // input
-                     RaySeg* ray_out) {                 // output
-  const auto* face_norm = crystal.GetFaceNorm();
-  __m128 zero_ = _mm_set_ps1(0.0f);
-  __m128 one_ = _mm_set_ps1(1.0f);
-  __m128 minus_one_ = _mm_set_ps1(-1.0f);
-  __m128 half_ = _mm_set_ps1(0.5f);
-  __m128 two_ = _mm_set_ps1(2.0f);
-  __m128 n_ = _mm_set_ps1(n);
-  __m128 n_inv_ = _mm_set_ps1(1.0f / n);
 
-  float d[24];  // x1*4, y1*4, z1*4, x2*4, y2*4, z2*4
-  float w[8];   // w1*4, w2*4
-
-  __m128 dir_[3], dir_L_[3], dir_R_[3];  // dx_, dy_, dz_
-  __m128 norm_[3];                       // nx_, ny_, nz_
-
-  size_t i = 0;
-  for (; i + 3 < num; i += 4) {
-    int ids[4] = { ray_in[i].fid_, ray_in[i + 1].fid_, ray_in[i + 2].fid_, ray_in[i + 3].fid_ };
-
-    for (int j = 0; j < 3; j++) {
-      dir_[j] = _mm_set_ps(ray_in[i + 3].d_[j], ray_in[i + 2].d_[j], ray_in[i + 1].d_[j], ray_in[i].d_[j]);
-      norm_[j] = _mm_set_ps(face_norm[ids[3] * 3 + j], face_norm[ids[2] * 3 + j], face_norm[ids[1] * 3 + j],
-                            face_norm[ids[0] * 3 + j]);
-    }
-    __m128 w_ = _mm_set_ps(ray_in[i + 3].w_, ray_in[i + 2].w_, ray_in[i + 1].w_, ray_in[i].w_);
-
-    auto c_ = _mm_add_ps(_mm_add_ps(_mm_mul_ps(dir_[0], norm_[0]), _mm_mul_ps(dir_[1], norm_[1])),
-                         _mm_mul_ps(dir_[2], norm_[2]));
-    auto rr_ = _mm_blendv_ps(n_inv_, n_, _mm_cmp_ps(c_, zero_, 14));  // 14: GT, greater than
-    auto rr2_ = _mm_mul_ps(rr_, rr_);
-    auto d_ = _mm_add_ps(_mm_div_ps(_mm_sub_ps(one_, rr2_), _mm_mul_ps(c_, c_)), rr2_);
-    auto d_sqrt_ = _mm_sqrt_ps(_mm_max_ps(d_, zero_));
-    auto is_total_ref_ = _mm_cmp_ps(d_, zero_, 1);  // 1: LT, less than
-
-    auto Rs_ = _mm_div_ps(_mm_sub_ps(rr_, d_sqrt_), _mm_add_ps(rr_, d_sqrt_));
-    auto Rs2_ = _mm_mul_ps(Rs_, Rs_);
-    auto Rp_ = _mm_div_ps(_mm_sub_ps(one_, _mm_mul_ps(rr_, d_sqrt_)), _mm_add_ps(one_, _mm_mul_ps(rr_, d_sqrt_)));
-    auto Rp2_ = _mm_mul_ps(Rp_, Rp_);
-    auto R_ = _mm_mul_ps(_mm_add_ps(Rs2_, Rp2_), half_);
-
-    auto w_L_ = _mm_mul_ps(R_, w_);
-    auto w_R_ = _mm_blendv_ps(_mm_sub_ps(w_, w_L_), minus_one_, is_total_ref_);
-
-    for (int j = 0; j < 3; j++) {
-      dir_L_[j] = _mm_sub_ps(dir_[j], _mm_mul_ps(two_, _mm_mul_ps(c_, norm_[j])));
-      dir_R_[j] = _mm_blendv_ps(
-          _mm_sub_ps(_mm_mul_ps(rr_, dir_[j]), _mm_mul_ps(_mm_mul_ps(_mm_sub_ps(rr_, d_sqrt_), c_), norm_[j])),
-          dir_L_[j], is_total_ref_);
-    }
-
-    _mm_store_ps(w, w_L_);
-    _mm_store_ps(w + 4, w_R_);
-
-    for (int j = 0; j < 3; j++) {
-      _mm_store_ps(d + j * 4, dir_L_[j]);
-      _mm_store_ps(d + j * 4 + 12, dir_R_[j]);
-    }
-
-    for (int j = 0; j < 4; j++) {
-      ray_out[(i + j) * 2 + 0].w_ = w[j];
-      ray_out[(i + j) * 2 + 1].w_ = w[j + 4];
-
-      ray_out[(i + j) * 2 + 0].d_[0] = d[j];
-      ray_out[(i + j) * 2 + 0].d_[1] = d[j + 4];
-      ray_out[(i + j) * 2 + 0].d_[2] = d[j + 8];
-      ray_out[(i + j) * 2 + 1].d_[0] = d[j + 12];
-      ray_out[(i + j) * 2 + 1].d_[1] = d[j + 16];
-      ray_out[(i + j) * 2 + 1].d_[2] = d[j + 20];
-    }
-  }
-
-  HitSurface_Normal(crystal, n,           // input
-                    num - i, ray_in + i,  // input
-                    ray_out + i * 2);     // output
-}
-#endif
-
-
-// NOLINTNEXTLINE(readability-function-size)
 void HitSurface(const Crystal& crystal, float n, size_t num,                          // input
                 const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
                 float_bf_t d_out, float_bf_t w_out) {                                 // output
-#if defined(USE_SIMD) && defined(__SSE__) && defined(__AVX__)
-  HitSurface_Simd(crystal, n, num, ray_in, ray_out);
-#else
   HitSurface_Normal(crystal, n, num, d_in, w_in, fid_in, d_out, w_out);
-#endif
 }
 
 

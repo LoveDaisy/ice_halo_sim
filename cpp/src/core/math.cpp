@@ -1,9 +1,5 @@
 #include "core/math.hpp"
 
-#ifdef USE_SIMD
-#include <immintrin.h>
-#endif
-
 #include <algorithm>
 #include <chrono>
 #include <cmath>
