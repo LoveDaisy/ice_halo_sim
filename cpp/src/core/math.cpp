@@ -12,7 +12,6 @@
 #include <limits>
 #include <memory>
 
-#include "util/json_util.hpp"
 #include "util/logger.hpp"
 
 
@@ -429,8 +428,8 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
 
 
 AxisDistribution::AxisDistribution()
-    : azimuth_dist{ DistributionType::kUniform, 0, 0 }, latitude_dist{ DistributionType::kUniform, 0, 0 },
-      roll_dist{ DistributionType::kUniform, 0, 0 } {}
+    : azimuth_dist{ DistributionType::kNoRandom, 0, 0 }, latitude_dist{ DistributionType::kNoRandom, 90.0f, 0 },
+      roll_dist{ DistributionType::kNoRandom, 0, 0 } {}
 
 
 void to_json(nlohmann::json& obj, const Distribution& dist) {
@@ -448,9 +447,15 @@ void from_json(const nlohmann::json& obj, Distribution& dist) {
     dist.type = DistributionType::kNoRandom;
     obj.get_to(dist.mean);
   } else if (obj.is_object()) {
-    JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "type", dist.type)
-    JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "mean", dist.mean)
-    JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "std", dist.std)
+    if (obj.contains("type")) {
+      obj.at("type").get_to(dist.type);
+    }
+    if (obj.contains("mean")) {
+      obj.at("mean").get_to(dist.mean);
+    }
+    if (obj.contains("std")) {
+      obj.at("std").get_to(dist.std);
+    }
   } else {
     LOG_ERROR("Cannot recognize distribution!");
   }
@@ -474,8 +479,12 @@ void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
   axis.roll_dist.mean = 0.0f;
   axis.roll_dist.std = 360.0f;
 
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "azimuth", axis.azimuth_dist)
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(obj, "roll", axis.roll_dist)
+  if (obj.contains("azimuth")) {
+    obj.at("azimuth").get_to(axis.azimuth_dist);
+  }
+  if (obj.contains("roll")) {
+    obj.at("roll").get_to(axis.roll_dist);
+  }
 }
 
 

@@ -10,17 +10,17 @@
 namespace lumice {
 
 struct PrismCrystalParam {
-  Distribution h_;     // Height, equal to c/a in HP2.0
-  Distribution d_[6];  // Distance to center for prism faces
+  Distribution h_{ DistributionType::kNoRandom, 1.0f, 0.0f };  // Height, equal to c/a in HP2.0
+  Distribution d_[6]{};                                        // Distance to center for prism faces
 };
 
 struct PyramidCrystalParam {
-  Distribution h_prs_;       // Prism height
-  Distribution h_pyr_u_;     // Upper pyramidal relative height, from 0.0 to 1.0
-  Distribution h_pyr_l_;     // Lower pyramidal relative height, from 0.0 to 1.0
-  Distribution d_[6];        // Distance to center for prism faces
-  int miller_indices_u_[3];  // Miller indices, c1: -30 dgree, c2: 90 degree, c3: -150 degree
-  int miller_indices_l_[3];  // Miller indices, c1: -30 dgree, c2: 90 degree, c3: -150 degree
+  Distribution h_prs_{};                                             // Prism height
+  Distribution h_pyr_u_{ DistributionType::kNoRandom, 0.0f, 0.0f };  // Upper pyramidal relative height, from 0.0 to 1.0
+  Distribution h_pyr_l_{ DistributionType::kNoRandom, 0.0f, 0.0f };  // Lower pyramidal relative height, from 0.0 to 1.0
+  Distribution d_[6]{};                                              // Distance to center for prism faces
+  int miller_indices_u_[3]{ 1, 0, 1 };  // Miller indices, c1: -30 dgree, c2: 90 degree, c3: -150 degree
+  int miller_indices_l_[3]{ 1, 0, 1 };  // Miller indices, c1: -30 dgree, c2: 90 degree, c3: -150 degree
   // Miller indices (i1, i2, -(i1+i2), i3)
   // c1: -30 dgree, c2: 90 degree, c3: -150 degree
 };

@@ -41,6 +41,8 @@ class Simulator {
   void SetLogLevel(LogLevel level);
 
  private:
+  void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param);
+
   static constexpr size_t kSmallBatchRayNum = 32;
 
   QueuePtrS<SceneConfig> config_queue_;

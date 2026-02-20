@@ -5,7 +5,6 @@
 #include <variant>
 #include <vector>
 
-#include "util/json_util.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
@@ -63,15 +62,21 @@ void from_json(const nlohmann::json& j, LightSourceConfig& l) {
   if (j_type == "sun") {
     SunParam p{};
     j.at("altitude").get_to(p.altitude_);
-    JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "azimuth", p.azimuth_)
-    JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "diameter", p.diameter_)
+    if (j.contains("azimuth")) {
+      j.at("azimuth").get_to(p.azimuth_);
+    }
+    if (j.contains("diameter")) {
+      j.at("diameter").get_to(p.diameter_);
+    }
     l.param_ = p;
   } else if (j_type == "streetlight") {
     StreetLightParam p{};
     j.at("azimuth").get_to(p.azimuth_);
     j.at("distance").get_to(p.distace_);
     j.at("height").get_to(p.height_);
-    JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "diameter", p.diameter_)
+    if (j.contains("diameter")) {
+      j.at("diameter").get_to(p.diameter_);
+    }
     l.param_ = p;
   } else {
     LOG_ERROR("Unknown light source type!");

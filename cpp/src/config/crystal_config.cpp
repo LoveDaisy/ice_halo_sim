@@ -4,7 +4,6 @@
 #include <variant>
 
 #include "core/math.hpp"
-#include "util/json_util.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
@@ -17,21 +16,25 @@ void to_json(nlohmann::json& j, const PrismCrystalParam& p) {
 }
 
 void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
-  // ----- height -----
-  p.h_.type = DistributionType::kNoRandom;
-  p.h_.mean = 1.0f;
   if (j.contains("height")) {
     j.at("height").get_to(p.h_);
   }
 
-  // ----- face distance ------
+  // Face distance: default mean=1.0, then scale by √3/4
   for (auto& x : p.d_) {
     x.type = DistributionType::kNoRandom;
     x.mean = 1.0f;
-    x.std = 0.0f;
   }
-  // NOLINTNEXTLINE(bugprone-branch-clone)
-  JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "face_distance", p.d_, 6)
+  if (j.contains("face_distance")) {
+    size_t i = 0;
+    for (const auto& elem : j.at("face_distance")) {
+      if (i >= 6) {
+        break;
+      }
+      elem.get_to(p.d_[i]);
+      i++;
+    }
+  }
   for (auto& x : p.d_) {
     x.mean *= math::kSqrt3_4;
     x.std *= math::kSqrt3_4;
@@ -52,35 +55,36 @@ void to_json(nlohmann::json& j, const PyramidCrystalParam& p) {
 void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
   // Heights
   j.at("prism_h").get_to(p.h_prs_);
-
-  p.h_pyr_u_.type = DistributionType::kNoRandom;
-  p.h_pyr_u_.mean = 0.0f;
-  p.h_pyr_l_.type = DistributionType::kNoRandom;
-  p.h_pyr_l_.mean = 0.0f;
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "upper_h", p.h_pyr_u_)
-  JSON_CHECK_AND_UPDATE_SIMPLE_VALUE(j, "lower_h", p.h_pyr_l_)
+  if (j.contains("upper_h")) {
+    j.at("upper_h").get_to(p.h_pyr_u_);
+  }
+  if (j.contains("lower_h")) {
+    j.at("lower_h").get_to(p.h_pyr_l_);
+  }
 
   // Miller indices
-  p.miller_indices_u_[0] = 1;
-  p.miller_indices_u_[1] = 0;
-  p.miller_indices_u_[2] = 1;
-  // NOLINTNEXTLINE(bugprone-branch-clone)
-  JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "upper_indices", p.miller_indices_u_, 3)
+  if (j.contains("upper_indices")) {
+    j.at("upper_indices").get_to(p.miller_indices_u_);
+  }
+  if (j.contains("lower_indices")) {
+    j.at("lower_indices").get_to(p.miller_indices_l_);
+  }
 
-  p.miller_indices_l_[0] = 1;
-  p.miller_indices_l_[1] = 0;
-  p.miller_indices_l_[2] = 1;
-  // NOLINTNEXTLINE(bugprone-branch-clone)
-  JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "lower_indices", p.miller_indices_l_, 3)
-
-  // Face distance
+  // Face distance: default mean=1.0, then scale by √3/4
   for (auto& x : p.d_) {
     x.type = DistributionType::kNoRandom;
     x.mean = 1.0f;
-    x.std = 0.0f;
   }
-  // NOLINTNEXTLINE(bugprone-branch-clone)
-  JSON_CHECK_AND_UPDATE_ARRAY_VALUE(j, "face_distance", p.d_, 6)
+  if (j.contains("face_distance")) {
+    size_t i = 0;
+    for (const auto& elem : j.at("face_distance")) {
+      if (i >= 6) {
+        break;
+      }
+      elem.get_to(p.d_[i]);
+      i++;
+    }
+  }
   for (auto& x : p.d_) {
     x.mean *= math::kSqrt3_4;
     x.std *= math::kSqrt3_4;
@@ -109,13 +113,6 @@ void from_json(const nlohmann::json& j, CrystalConfig& c) {
 
   if (j.contains("axis")) {
     j.at("axis").get_to(c.axis_);
-  } else {
-    c.axis_.azimuth_dist.type = DistributionType::kNoRandom;
-    c.axis_.azimuth_dist.mean = 0.0f;
-    c.axis_.latitude_dist.type = DistributionType::kNoRandom;
-    c.axis_.latitude_dist.mean = 90.0f;
-    c.axis_.roll_dist.type = DistributionType::kNoRandom;
-    c.axis_.roll_dist.mean = 0.0f;
   }
 }
 
