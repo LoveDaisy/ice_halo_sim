@@ -223,6 +223,24 @@ struct CrystalMaker {
 };
 
 
+bool IsDeterministic(const CrystalParam& param) {
+  auto all_no_random = [](const Distribution* d, size_t n) {
+    return !std::any_of(d, d + n, [](const auto& x) { return x.type != DistributionType::kNoRandom; });
+  };
+  return std::visit(
+      [&](const auto& p) {
+        if constexpr (std::is_same_v<std::decay_t<decltype(p)>, PrismCrystalParam>) {
+          return p.h_.type == DistributionType::kNoRandom && all_no_random(p.d_, 6);
+        } else {
+          return p.h_prs_.type == DistributionType::kNoRandom &&  //
+                 p.h_pyr_u_.type == DistributionType::kNoRandom && p.h_pyr_l_.type == DistributionType::kNoRandom &&
+                 all_no_random(p.d_, 6);
+        }
+      },
+      param);
+}
+
+
 RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num) {
   // Calculate total rays (expected value) used in the whole simulation.
   // total = n * (2 * k + 1) * (1 + k * p1 + k^2 * p1 * p2 + k^3 * p1 * p2 * p3 + ...)
@@ -407,6 +425,8 @@ void Simulator::Run() {
     RandomNumberGenerator::GetInstance()->SetSeed(seed_);
   }
 
+  CrystalCache crystal_cache;
+
   while (true) {
     auto batch = config_queue_->Get();  // Will block until get one
     if (batch.ray_num_ == 0 || stop_) {
@@ -421,7 +441,7 @@ void Simulator::Run() {
       // Standard illuminant: uniform wavelength sampling + SPD weight
       float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
       float weight = GetIlluminantSpd(*illuminant, wl);
-      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_);
+      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_, crystal_cache);
     } else {
       // Discrete wavelength list
       const auto& wl_params = std::get<std::vector<WlParam>>(spectrum);
@@ -429,7 +449,7 @@ void Simulator::Run() {
         if (stop_) {
           break;
         }
-        SimulateOneWavelength(config, wl_param, batch.ray_num_);
+        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache);
       }
     }
 
@@ -438,7 +458,8 @@ void Simulator::Run() {
 }
 
 
-void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num) {
+void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
+                                      CrystalCache& crystal_cache) {
   ILOG_DEBUG(logger_, "Run: get config({}): ray({}), wl({:.1f},{:.2f})",  //
              config.id_, ray_num, wl_param.wl_, wl_param.weight_);
 
@@ -466,12 +487,46 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
       const auto& s = m.setting_[ci];
       auto filter = Filter::Create(s.filter_);
 
+      bool deterministic = IsDeterministic(s.crystal_.param_);
+
+      // Look up cross-call cache for deterministic crystal params.
+      const CrystalParam* param_ptr = &s.crystal_.param_;
+      const Crystal* cached_crystal = nullptr;
+      if (deterministic) {
+        for (const auto& [key, val] : crystal_cache) {
+          if (key == param_ptr) {
+            cached_crystal = &val;
+            break;
+          }
+        }
+      }
+
+      // For deterministic params, create/copy crystal once per ci iteration.
+      size_t ci_crystal_id = kInfSize;
+
       for (size_t cn = 0; cn < crystal_ray_num[ci] && !stop_; cn += kSmallBatchRayNum) {  // for a same crystal
         size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - cn);
 
-        size_t curr_crystal_id = all_crystals.size();
-        all_crystals.emplace_back(std::visit(CrystalMaker{ rng_ }, s.crystal_.param_));
-        const auto& curr_crystal = all_crystals.back();  // **NO** rotation
+        size_t curr_crystal_id = 0;
+        if (deterministic && ci_crystal_id != kInfSize) {
+          // Reuse crystal from earlier batch in this ci loop
+          curr_crystal_id = ci_crystal_id;
+        } else if (cached_crystal != nullptr) {
+          // Copy from cross-call cache (deterministic, first batch of this ci)
+          curr_crystal_id = all_crystals.size();
+          all_crystals.emplace_back(*cached_crystal);
+          ci_crystal_id = curr_crystal_id;
+        } else {
+          // Create new crystal (random params, or first-ever deterministic creation)
+          curr_crystal_id = all_crystals.size();
+          all_crystals.emplace_back(std::visit(CrystalMaker{ rng_ }, s.crystal_.param_));
+          if (deterministic) {
+            crystal_cache.emplace_back(param_ptr, all_crystals.back());
+            cached_crystal = &crystal_cache.back().second;
+            ci_crystal_id = curr_crystal_id;
+          }
+        }
+        const auto& curr_crystal = all_crystals[curr_crystal_id];
         filter->InitCrystalSymmetry(curr_crystal);
 
         // 1. Initialize data

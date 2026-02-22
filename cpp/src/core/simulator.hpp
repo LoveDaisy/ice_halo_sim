@@ -4,9 +4,11 @@
 #include <atomic>
 #include <cstddef>
 #include <memory>
+#include <vector>
 
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/crystal.hpp"
 #include "core/math.hpp"
 #include "util/logger.hpp"
 
@@ -46,7 +48,9 @@ class Simulator {
   void SetLogLevel(LogLevel level);
 
  private:
-  void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num);
+  using CrystalCache = std::vector<std::pair<const CrystalParam*, Crystal>>;
+  void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
+                             CrystalCache& crystal_cache);
 
   static constexpr size_t kSmallBatchRayNum = 32;
 
