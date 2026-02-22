@@ -222,9 +222,7 @@ struct CrystalMaker {
 };
 
 
-RayBuffer AllocateAllData(const SceneConfig& config) {
-  size_t ray_num = config.ray_num_;
-
+RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num) {
   // Calculate total rays (expected value) used in the whole simulation.
   // total = n * (2 * k + 1) * (1 + k * p1 + k^2 * p1 * p2 + k^3 * p1 * p2 * p3 + ...)
   // where k = max_hits
@@ -371,7 +369,7 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
 }
 
 
-Simulator::Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed)
+Simulator::Simulator(QueuePtrS<SimBatch> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed)
     : config_queue_(std::move(config_queue)), data_queue_(std::move(data_queue)), stop_(false), idle_(true),
       seed_(seed), rng_(seed != 0 ? seed :
                                     static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count() ^
@@ -409,38 +407,31 @@ void Simulator::Run() {
   }
 
   while (true) {
-    // Config in the config_queue is processed by frontend of simulator (NOT GUI) so that
-    // it has small ray_num and contains only one wavelength parameter of light source.
-    auto config = config_queue_->Get();  // Will block until get one
-    if (config.ray_num_ == 0 || stop_) {
+    auto batch = config_queue_->Get();  // Will block until get one
+    if (batch.ray_num_ == 0 || stop_) {
       break;
     }
 
+    const auto& config = *batch.scene_;
     idle_ = false;
     for (const auto& wl_param : config.light_source_.wl_param_) {
       if (stop_) {
         break;
       }
-      SimulateOneWavelength(config, wl_param);
+      SimulateOneWavelength(config, wl_param, batch.ray_num_);
     }
     idle_ = true;
   }
 }
 
 
-void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param) {
+void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num) {
   ILOG_DEBUG(logger_, "Run: get config({}): ray({}), wl({:.1f},{:.2f})",  //
-             config.id_, config.ray_num_, wl_param.wl_, wl_param.weight_);
+             config.id_, ray_num, wl_param.wl_, wl_param.weight_);
 
   float wl = wl_param.wl_;
 
-  // For memory saving, it's better to keep ray_num small.
-  // Actually, if ms_prob = 1.0, i.e. all outgoing rays will be sent to next crystal,
-  // then the final ray number for init_data will be (num0 * (max_hits + 1)^ms_num),
-  // which increase rapidily.
-  size_t ray_num = config.ray_num_;
-
-  RayBuffer all_data = AllocateAllData(config);
+  RayBuffer all_data = AllocateAllData(config, ray_num);
   RayBuffer init_data[2]{ RayBuffer(), RayBuffer(ray_num * config.max_hits_) };
   RayBuffer buffer_data[2]{};
 
@@ -521,7 +512,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
 
   SimData sim_data;
   sim_data.curr_wl_ = wl;
-  sim_data.total_intensity_ = wl_param.weight_ * config.ray_num_;
+  sim_data.total_intensity_ = wl_param.weight_ * ray_num;
   sim_data.crystals_ = std::move(all_crystals);
   sim_data.rays_ = std::move(all_data);
   data_queue_->Emplace(std::move(sim_data));

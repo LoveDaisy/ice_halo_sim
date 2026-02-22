@@ -20,6 +20,11 @@ using QueuePtrU = std::unique_ptr<Queue<T>>;
 template <class T>
 using QueuePtrS = std::shared_ptr<Queue<T>>;
 
+struct SimBatch {
+  size_t ray_num_ = 0;
+  const SceneConfig* scene_ = nullptr;
+};
+
 class Simulator {
  public:
   enum State {
@@ -27,7 +32,7 @@ class Simulator {
     kRunning,
   };
 
-  Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed = 0);
+  Simulator(QueuePtrS<SimBatch> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed = 0);
   Simulator(const Simulator& other) = delete;
   Simulator(Simulator&& other) noexcept;
   ~Simulator() = default;
@@ -41,11 +46,11 @@ class Simulator {
   void SetLogLevel(LogLevel level);
 
  private:
-  void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param);
+  void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num);
 
   static constexpr size_t kSmallBatchRayNum = 32;
 
-  QueuePtrS<SceneConfig> config_queue_;
+  QueuePtrS<SimBatch> config_queue_;
   QueuePtrS<SimData> data_queue_;
   std::atomic_bool stop_;
   std::atomic_bool idle_;

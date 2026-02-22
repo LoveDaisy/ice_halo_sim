@@ -49,7 +49,7 @@ class ServerImpl {
 
   ConfigManager config_manager_;
 
-  QueuePtrS<SceneConfig> scene_queue_;
+  QueuePtrS<SimBatch> scene_queue_;
   QueuePtrS<SimData> data_queue_;
 
   std::vector<Simulator> simulators_;
@@ -81,7 +81,7 @@ const int ServerImpl::kDefaultSimulatorCnt = std::max(1, static_cast<int>(std::t
 
 
 ServerImpl::ServerImpl()
-    : config_manager_{}, scene_queue_(std::make_shared<Queue<SceneConfig>>()),
+    : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
   for (int i = 0; i < kDefaultSimulatorCnt; i++) {
     simulators_.emplace_back(scene_queue_, data_queue_);
@@ -340,12 +340,11 @@ void ServerImpl::GenerateScene() {
   auto ray_num = scene.ray_num_;
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
-    auto curr_scene = scene;
-    curr_scene.ray_num_ = std::min(kDefaultRayNum, ray_num - committed_num);
-    scene_queue_->Emplace(curr_scene);
+    size_t batch_ray_num = std::min(kDefaultRayNum, ray_num - committed_num);
+    scene_queue_->Emplace(SimBatch{ batch_ray_num, &scene });
     sim_scene_cnt_++;
 
-    ILOG_DEBUG(logger_, "GenerateScene: put a scene({}): ray({}/{}, {})", curr_scene.id_, curr_scene.ray_num_, ray_num,
+    ILOG_DEBUG(logger_, "GenerateScene: put a scene({}): ray({}/{}, {})", scene.id_, batch_ray_num, ray_num,
                committed_num);
     CHECK_STOP
 

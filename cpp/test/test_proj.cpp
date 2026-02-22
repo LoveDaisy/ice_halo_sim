@@ -81,7 +81,7 @@ class Consumer {
 TEST_F(V3TestProj, SimpleProj) {
   lumice::ConfigManager config_manager = config_json_.get<lumice::ConfigManager>();
 
-  auto config_queue = std::make_shared<lumice::Queue<lumice::SceneConfig>>();
+  auto config_queue = std::make_shared<lumice::Queue<lumice::SimBatch>>();
   auto data_queue = std::make_shared<lumice::Queue<lumice::SimData>>();
 
   constexpr int kMaxHits = 8;
@@ -97,8 +97,8 @@ TEST_F(V3TestProj, SimpleProj) {
   std::thread prod_thread([&simulator]() { simulator.Run(); });
   std::thread cons_thread([&consumer]() { consumer.Run(); });
 
-  auto config = config_manager.scenes_.at(1);
-  config_queue->Emplace(std::move(config));
+  const auto& config = config_manager.scenes_.at(1);
+  config_queue->Emplace(lumice::SimBatch{ config.ray_num_, &config });
 
   std::this_thread::sleep_for(500ms);
   simulator.Stop();
