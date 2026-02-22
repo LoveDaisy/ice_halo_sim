@@ -120,8 +120,16 @@ void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num
     return;
   }
 
-  auto p = std::make_unique<float[]>(pop_size + 1);
-  std::memcpy(p.get() + 1, weight, pop_size * sizeof(float));
+  constexpr int kMaxStackPopSize = 64;
+  float p_stack[kMaxStackPopSize + 1];
+  std::unique_ptr<float[]> p_heap;
+  float* p = p_stack;
+  if (pop_size > kMaxStackPopSize) {
+    p_heap = std::make_unique<float[]>(pop_size + 1);
+    p = p_heap.get();
+  }
+  p[0] = 0;
+  std::memcpy(p + 1, weight, pop_size * sizeof(float));
   for (int i = 1; i < pop_size; i++) {
     p[i + 1] = std::max(p[i + 1], 0.0f) + p[i];
   }

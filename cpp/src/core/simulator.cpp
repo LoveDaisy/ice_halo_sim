@@ -37,14 +37,21 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
   const auto* face_norm = curr_crystal.GetTriangleNormal();
   const auto* face_vtx = curr_crystal.GetTriangleVtx();
 
-  auto proj_prob = std::make_unique<float[]>(total_faces);
+  constexpr size_t kMaxTriangles = 64;
+  float proj_prob_buf[kMaxTriangles];
+  std::unique_ptr<float[]> proj_prob_heap;
+  float* proj_prob = proj_prob_buf;
+  if (total_faces > kMaxTriangles) {
+    proj_prob_heap = std::make_unique<float[]>(total_faces);
+    proj_prob = proj_prob_heap.get();
+  }
   for (auto& r : ray_buf) {
     const auto* d = r.d_;
     for (size_t j = 0; j < total_faces; j++) {
       proj_prob[j] = std::max(-Dot3(d, face_norm + j * 3) * face_area[j], 0.0f);
     }
     // fid
-    RandomSample(total_faces, proj_prob.get(), &r.fid_);
+    RandomSample(total_faces, proj_prob, &r.fid_);
     // p
     SampleTrianglePoint(face_vtx + r.fid_ * 9, r.p_);
   }
@@ -426,6 +433,7 @@ void Simulator::Run() {
   }
 
   CrystalCache crystal_cache;
+  SimWorkspace workspace;
 
   while (true) {
     auto batch = config_queue_->Get();  // Will block until get one
@@ -441,7 +449,7 @@ void Simulator::Run() {
       // Standard illuminant: uniform wavelength sampling + SPD weight
       float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
       float weight = GetIlluminantSpd(*illuminant, wl);
-      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_, crystal_cache);
+      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_, crystal_cache, workspace);
     } else {
       // Discrete wavelength list
       const auto& wl_params = std::get<std::vector<WlParam>>(spectrum);
@@ -449,7 +457,7 @@ void Simulator::Run() {
         if (stop_) {
           break;
         }
-        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache);
+        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace);
       }
     }
 
@@ -459,15 +467,17 @@ void Simulator::Run() {
 
 
 void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
-                                      CrystalCache& crystal_cache) {
+                                      CrystalCache& crystal_cache, SimWorkspace& workspace) {
   ILOG_DEBUG(logger_, "Run: get config({}): ray({}), wl({:.1f},{:.2f})",  //
              config.id_, ray_num, wl_param.wl_, wl_param.weight_);
 
   float wl = wl_param.wl_;
 
   RayBuffer all_data = AllocateAllData(config, ray_num);
-  RayBuffer init_data[2]{ RayBuffer(), RayBuffer(ray_num * config.max_hits_) };
-  RayBuffer buffer_data[2]{};
+  auto& init_data = workspace.init_data;
+  auto& buffer_data = workspace.buffer_data;
+  init_data[0].size_ = 0;
+  init_data[1].Reset(ray_num * config.max_hits_);
 
   std::vector<Crystal> all_crystals;
   all_crystals.reserve(16);

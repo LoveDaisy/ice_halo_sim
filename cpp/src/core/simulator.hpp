@@ -49,8 +49,12 @@ class Simulator {
 
  private:
   using CrystalCache = std::vector<std::pair<const CrystalParam*, Crystal>>;
+  struct SimWorkspace {
+    RayBuffer buffer_data[2]{};
+    RayBuffer init_data[2]{};
+  };
   void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
-                             CrystalCache& crystal_cache);
+                             CrystalCache& crystal_cache, SimWorkspace& workspace);
 
   static constexpr size_t kSmallBatchRayNum = 32;
 
