@@ -51,10 +51,81 @@ void HitSurface(const Crystal& crystal, float n, size_t num,                    
 }
 
 
+constexpr size_t kMaxSlabRays = 128;
+
+// Per-polygon-face half-space interval method with face-outer/ray-inner SoA loop.
 // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
-void Propagate(const Crystal& crystal, size_t num, size_t step,                      // input
-               const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input, d, p, w
-               float_bf_t p_out, int_bf_t fid_out) {                                 // output, p, fid
+static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const float_bf_t d_in, const float_bf_t p_in,
+                          const float_bf_t w_in, float_bf_t p_out, int_bf_t fid_out) {
+  auto poly_cnt = crystal.PolygonFaceCount();
+  const auto* pn = crystal.GetPolygonFaceNormal();
+  const auto* pd = crystal.GetPolygonFaceDist();
+  const auto* tri_id = crystal.GetPolygonFaceTriId();
+
+  // Gather strided BufferWrapper data into contiguous SoA arrays
+  alignas(64) float dx[kMaxSlabRays], dy[kMaxSlabRays], dz[kMaxSlabRays];
+  alignas(64) float px[kMaxSlabRays], py[kMaxSlabRays], pz[kMaxSlabRays];
+  alignas(64) float t_far[kMaxSlabRays];
+  int far_face[kMaxSlabRays];
+
+  for (size_t i = 0; i < num; i++) {
+    const float* d = d_in.Ptr(i);
+    const float* p = p_in.Ptr(i / step);
+    dx[i] = d[0];
+    dy[i] = d[1];
+    dz[i] = d[2];
+    px[i] = p[0];
+    py[i] = p[1];
+    pz[i] = p[2];
+    t_far[i] = 1e30f;
+    far_face[i] = -1;
+  }
+
+  // Face-outer, ray-inner: find minimum t among exit faces (denom > eps)
+  for (size_t fi = 0; fi < poly_cnt; fi++) {
+    float nx = pn[fi * 3 + 0];
+    float ny = pn[fi * 3 + 1];
+    float nz = pn[fi * 3 + 2];
+    float fd = pd[fi];
+
+    for (size_t i = 0; i < num; i++) {
+      float denom = dx[i] * nx + dy[i] * ny + dz[i] * nz;
+      float t = -(px[i] * nx + py[i] * ny + pz[i] * nz + fd) / denom;
+      if (denom > math::kFloatEps && t < t_far[i]) {
+        t_far[i] = t;
+        far_face[i] = static_cast<int>(fi);
+      }
+    }
+  }
+
+  // Scatter results back to strided BufferWrapper
+  for (size_t i = 0; i < num; i++) {
+    if (w_in[i] < 0) {
+      continue;
+    }
+
+    float* out_pt = p_out.Ptr(i);
+    int* out_fid = fid_out.Ptr(i);
+
+    if (far_face[i] >= 0 && t_far[i] > math::kFloatEps) {
+      float t = t_far[i];
+      out_pt[0] = px[i] + t * dx[i];
+      out_pt[1] = py[i] + t * dy[i];
+      out_pt[2] = pz[i] + t * dz[i];
+      *out_fid = tri_id[far_face[i]];
+    } else {
+      out_pt[0] = px[i];
+      out_pt[1] = py[i];
+      out_pt[2] = pz[i];
+      *out_fid = -1;
+    }
+  }
+}
+
+// Per-triangle barycentric intersection (original algorithm, used as fallback).
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
+static void PropagateTriangle(const Crystal& crystal, size_t num, size_t step, const float_bf_t d_in,
+                              const float_bf_t p_in, const float_bf_t w_in, float_bf_t p_out, int_bf_t fid_out) {
   auto face_num = crystal.TotalTriangles();
   const auto* face_transform = crystal.GetTriangleCoordTf();
 
@@ -118,6 +189,17 @@ void Propagate(const Crystal& crystal, size_t num, size_t step,                 
         }
       }
     }
+  }
+}
+
+// NOLINTNEXTLINE(readability-function-size)
+void Propagate(const Crystal& crystal, size_t num, size_t step,                      // input
+               const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input, d, p, w
+               float_bf_t p_out, int_bf_t fid_out) {                                 // output, p, fid
+  if (crystal.PolygonFaceCount() > 0 && num <= kMaxSlabRays) {
+    PropagateSlab(crystal, num, step, d_in, p_in, w_in, p_out, fid_out);
+  } else {
+    PropagateTriangle(crystal, num, step, d_in, p_in, w_in, p_out, fid_out);
   }
 }
 
