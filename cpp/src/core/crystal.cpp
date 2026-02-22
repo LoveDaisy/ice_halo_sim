@@ -112,11 +112,10 @@ Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int low
 
 enum CrystalCachOffset {
   kVtx = 0,
-  kEdgeVec = 9,
-  kNormal = 15,
-  kArea = 18,
-  kTf = 19,
-  kTotal = 31,
+  kNormal = 9,
+  kArea = 12,
+  kTf = 13,
+  kTotal = 25,
 };
 
 Crystal::Crystal() {}
@@ -125,12 +124,10 @@ Crystal::Crystal(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_c
     : mesh_(vtx_cnt, std::move(vtx), triangle_cnt, std::move(triangle_idx)),
       cache_data_(std::make_unique<float[]>(triangle_cnt * CrystalCachOffset::kTotal)),
       face_v_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kVtx),
-      face_ev_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kEdgeVec),
       face_n_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kNormal),
       face_area_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kArea),
       face_coord_tf_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kTf),
       fn_map_(std::make_unique<IdType[]>(triangle_cnt)), fn_period_(-1) {
-  // Initialize other pre-computed data
   ComputeCacheData();
 }
 
@@ -138,7 +135,6 @@ Crystal::Crystal(Mesh mesh)
     : mesh_(std::move(mesh)),
       cache_data_(std::make_unique<float[]>(mesh_.GetTriangleCnt() * CrystalCachOffset::kTotal)),
       face_v_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kVtx),
-      face_ev_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kEdgeVec),
       face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
       face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea),
       face_coord_tf_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kTf),
@@ -150,7 +146,6 @@ Crystal::Crystal(const Crystal& other)
     : config_id_(other.config_id_), mesh_(other.mesh_),
       cache_data_(std::make_unique<float[]>(other.TotalTriangles() * CrystalCachOffset::kTotal)),
       face_v_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kVtx),
-      face_ev_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kEdgeVec),
       face_n_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kNormal),
       face_area_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kArea),
       face_coord_tf_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kTf),
@@ -163,13 +158,11 @@ Crystal::Crystal(const Crystal& other)
 Crystal::Crystal(Crystal&& other) noexcept
     : config_id_(other.config_id_), mesh_(std::move(other.mesh_)), cache_data_(std::move(other.cache_data_)),
       face_v_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kVtx),
-      face_ev_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kEdgeVec),
       face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
       face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea),
       face_coord_tf_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kTf),
       fn_map_(std::move(other.fn_map_)), fn_period_(other.fn_period_) {
   other.face_v_ = nullptr;
-  other.face_ev_ = nullptr;
   other.face_n_ = nullptr;
   other.face_area_ = nullptr;
   other.face_coord_tf_ = nullptr;
@@ -186,7 +179,6 @@ Crystal& Crystal::operator=(const Crystal& other) {
   auto n = other.TotalTriangles();
   cache_data_ = std::make_unique<float[]>(n * CrystalCachOffset::kTotal);
   face_v_ = cache_data_.get() + n * CrystalCachOffset::kVtx;
-  face_ev_ = cache_data_.get() + n * CrystalCachOffset::kEdgeVec;
   face_n_ = cache_data_.get() + n * CrystalCachOffset::kNormal;
   face_area_ = cache_data_.get() + n * CrystalCachOffset::kArea;
   face_coord_tf_ = cache_data_.get() + n * CrystalCachOffset::kTf;
@@ -210,12 +202,10 @@ Crystal& Crystal::operator=(Crystal&& other) noexcept {
   auto n = mesh_.GetTriangleCnt();
   cache_data_ = std::move(other.cache_data_);
   face_v_ = cache_data_.get() + n * CrystalCachOffset::kVtx;
-  face_ev_ = cache_data_.get() + n * CrystalCachOffset::kEdgeVec;
   face_n_ = cache_data_.get() + n * CrystalCachOffset::kNormal;
   face_area_ = cache_data_.get() + n * CrystalCachOffset::kArea;
   face_coord_tf_ = cache_data_.get() + n * CrystalCachOffset::kTf;
   other.face_v_ = nullptr;
-  other.face_ev_ = nullptr;
   other.face_n_ = nullptr;
   other.face_area_ = nullptr;
   other.face_coord_tf_ = nullptr;
@@ -229,6 +219,7 @@ void Crystal::ComputeCacheData() {
   auto triangle_cnt = mesh_.GetTriangleCnt();
   const auto* vtx = mesh_.GetVtxPtr(0);
   const auto* triangle_idx = mesh_.GetTrianglePtr(0);
+  float ev[6];
   float m[3];
   for (size_t i = 0; i < triangle_cnt; i++) {
     // face_v_
@@ -236,40 +227,31 @@ void Crystal::ComputeCacheData() {
       std::memcpy(face_v_ + i * 9 + j * 3, vtx + triangle_idx[i * 3 + j] * 3, 3 * sizeof(float));
     }
 
-    // face_ev_
+    // edge vectors (local)
     for (int j = 0; j < 3; j++) {
-      face_ev_[i * 6 + j + 0] = face_v_[i * 9 + j + 3] - face_v_[i * 9 + j + 0];
-      face_ev_[i * 6 + j + 3] = face_v_[i * 9 + j + 6] - face_v_[i * 9 + j + 0];
+      ev[j + 0] = face_v_[i * 9 + j + 3] - face_v_[i * 9 + j + 0];
+      ev[j + 3] = face_v_[i * 9 + j + 6] - face_v_[i * 9 + j + 0];
     }
 
     // face_n_ && face_area_
-    Cross3(face_ev_ + i * 6 + 0, face_ev_ + i * 6 + 3, face_n_ + i * 3);
+    Cross3(ev + 0, ev + 3, face_n_ + i * 3);
     face_area_[i] = Norm3(face_n_ + i * 3) / 2.0f;
     Normalize3(face_n_ + i * 3);
 
     // face_coord_tf_
-    Cross3(face_ev_ + i * 6 + 0, face_ev_ + i * 6 + 3, m);
+    Cross3(ev + 0, ev + 3, m);
     auto a = Dot3(face_n_ + i * 3, m);
-    face_coord_tf_[i * 12 + 0] =
-        (face_ev_[i * 6 + 4] * face_n_[i * 3 + 2] - face_ev_[i * 6 + 5] * face_n_[i * 3 + 1]) / a;
-    face_coord_tf_[i * 12 + 1] =
-        (face_ev_[i * 6 + 5] * face_n_[i * 3 + 0] - face_ev_[i * 6 + 3] * face_n_[i * 3 + 2]) / a;
-    face_coord_tf_[i * 12 + 2] =
-        (face_ev_[i * 6 + 3] * face_n_[i * 3 + 1] - face_ev_[i * 6 + 4] * face_n_[i * 3 + 0]) / a;
+    face_coord_tf_[i * 12 + 0] = (ev[4] * face_n_[i * 3 + 2] - ev[5] * face_n_[i * 3 + 1]) / a;
+    face_coord_tf_[i * 12 + 1] = (ev[5] * face_n_[i * 3 + 0] - ev[3] * face_n_[i * 3 + 2]) / a;
+    face_coord_tf_[i * 12 + 2] = (ev[3] * face_n_[i * 3 + 1] - ev[4] * face_n_[i * 3 + 0]) / a;
 
-    face_coord_tf_[i * 12 + 4] =
-        (face_ev_[i * 6 + 2] * face_n_[i * 3 + 1] - face_ev_[i * 6 + 1] * face_n_[i * 3 + 2]) / a;
-    face_coord_tf_[i * 12 + 5] =
-        (face_ev_[i * 6 + 0] * face_n_[i * 3 + 2] - face_ev_[i * 6 + 2] * face_n_[i * 3 + 0]) / a;
-    face_coord_tf_[i * 12 + 6] =
-        (face_ev_[i * 6 + 1] * face_n_[i * 3 + 0] - face_ev_[i * 6 + 0] * face_n_[i * 3 + 1]) / a;
+    face_coord_tf_[i * 12 + 4] = (ev[2] * face_n_[i * 3 + 1] - ev[1] * face_n_[i * 3 + 2]) / a;
+    face_coord_tf_[i * 12 + 5] = (ev[0] * face_n_[i * 3 + 2] - ev[2] * face_n_[i * 3 + 0]) / a;
+    face_coord_tf_[i * 12 + 6] = (ev[1] * face_n_[i * 3 + 0] - ev[0] * face_n_[i * 3 + 1]) / a;
 
-    face_coord_tf_[i * 12 + 8] =
-        (face_ev_[i * 6 + 1] * face_ev_[i * 6 + 5] - face_ev_[i * 6 + 2] * face_ev_[i * 6 + 4]) / a;
-    face_coord_tf_[i * 12 + 9] =
-        (face_ev_[i * 6 + 2] * face_ev_[i * 6 + 3] - face_ev_[i * 6 + 0] * face_ev_[i * 6 + 5]) / a;
-    face_coord_tf_[i * 12 + 10] =
-        (face_ev_[i * 6 + 0] * face_ev_[i * 6 + 4] - face_ev_[i * 6 + 1] * face_ev_[i * 6 + 3]) / a;
+    face_coord_tf_[i * 12 + 8] = (ev[1] * ev[5] - ev[2] * ev[4]) / a;
+    face_coord_tf_[i * 12 + 9] = (ev[2] * ev[3] - ev[0] * ev[5]) / a;
+    face_coord_tf_[i * 12 + 10] = (ev[0] * ev[4] - ev[1] * ev[3]) / a;
 
     face_coord_tf_[i * 12 + 3] = -Dot3(face_coord_tf_ + i * 12 + 0, face_v_ + i * 9);
     face_coord_tf_[i * 12 + 7] = -Dot3(face_coord_tf_ + i * 12 + 4, face_v_ + i * 9);
@@ -287,10 +269,6 @@ size_t Crystal::TotalVertices() const {
 
 const float* Crystal::GetTriangleVtx() const {
   return face_v_;
-}
-
-const float* Crystal::GetTriangleEdgeVec() const {
-  return face_ev_;
 }
 
 const float* Crystal::GetTriangleNormal() const {
