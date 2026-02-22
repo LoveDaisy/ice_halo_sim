@@ -128,6 +128,7 @@ set(lumice_server_src
 
 set(lumice_util_src
   "${PROJ_SRC_DIR}/util/arg_parser.cpp"
+  "${PROJ_SRC_DIR}/util/illuminant.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
 
 set(lumice_src
