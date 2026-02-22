@@ -135,29 +135,36 @@ set(lumice_src
   ${lumice_server_src} ${lumice_util_src})
 
 # ==================================================================================================
-# Add targets
-add_library(lumice ${lumice_src})
-target_include_directories(lumice
+# OBJECT library — compile sources once, reuse .o files across targets (library, test, bench).
+# test/bench link lumice_obj directly so all symbols are accessible regardless of
+# -fvisibility=hidden (visibility only affects shared-library export, not executable linking).
+add_library(lumice_obj OBJECT ${lumice_src})
+target_include_directories(lumice_obj
   PUBLIC
     $<BUILD_INTERFACE:${PROJ_SRC_DIR}/include>
     $<INSTALL_INTERFACE:include>
-  PRIVATE
     ${lumice_include})
-target_link_libraries(lumice PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog_header_only tl::expected Threads::Threads)
+target_link_libraries(lumice_obj PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog_header_only tl::expected Threads::Threads)
 
 if(NOT MSVC)
-  target_compile_options(lumice PRIVATE
+  target_compile_options(lumice_obj PRIVATE
     -Wall -Wextra -fexceptions -fpermissive -frtti)
-  target_compile_definitions(lumice PRIVATE __STDC_FORMAT_MACROS)
+  target_compile_definitions(lumice_obj PRIVATE __STDC_FORMAT_MACROS)
   # -fvisibility=hidden: Release/MinSizeRel 下隐藏所有符号，仅导出 lumice.h 中
   # 由 #pragma GCC visibility push(default) 标记的 C API 函数。
   # Debug 构建不设置此标志，所有符号均可见，便于调试。
   # NOTE: 当前仅支持 GCC/Clang。若需支持 MSVC 共享库，需将 pragma 改为
   # LUMICE_API 宏（__declspec(dllexport/dllimport)），参见 lumice.h 中的注释。
-  target_compile_options(lumice PRIVATE
+  target_compile_options(lumice_obj PRIVATE
     $<$<CONFIG:Debug>:-O0 -g -ggdb>
     $<$<CONFIG:Release>:-ffunction-sections -fdata-sections -fvisibility=hidden>
     $<$<CONFIG:MinSizeRel>:-ffunction-sections -fdata-sections -fvisibility=hidden>)
+endif()
+
+# Library target — static or shared per BUILD_SHARED_LIBS; reuses lumice_obj objects.
+add_library(lumice)
+target_link_libraries(lumice PUBLIC lumice_obj)
+if(NOT MSVC)
   target_link_options(lumice PUBLIC
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:AppleClang,Clang>:-dead_strip>>
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:GNU>:--gc-sections>>)
