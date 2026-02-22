@@ -71,6 +71,62 @@ TEST_F(V3TestCrystal, CrystalCacheData) {
   ASSERT_EQ(basal_1_cnt + basal_2_cnt + prism_cnt, static_cast<int>(n));
 }
 
+TEST_F(V3TestCrystal, PolygonFaceDataPrism) {
+  auto crystal = Crystal::CreatePrism(1.3);
+
+  // Prism has 8 planes: 2 basal + 6 prism
+  ASSERT_EQ(crystal.PolygonFaceCount(), 8u);
+
+  const auto* pn = crystal.GetPolygonFaceNormal();
+  const auto* pd = crystal.GetPolygonFaceDist();
+  const auto* tri_id = crystal.GetPolygonFaceTriId();
+  ASSERT_NE(pn, nullptr);
+  ASSERT_NE(pd, nullptr);
+  ASSERT_NE(tri_id, nullptr);
+
+  auto tri_cnt = crystal.TotalTriangles();
+  const auto* face_n = crystal.GetTriangleNormal();
+
+  for (size_t i = 0; i < crystal.PolygonFaceCount(); i++) {
+    // Normals should be unit vectors
+    float len = Norm3(pn + i * 3);
+    EXPECT_NEAR(len, 1.0f, 1e-5) << "polygon face " << i;
+
+    // tri_id should be in range
+    EXPECT_GE(tri_id[i], 0);
+    EXPECT_LT(tri_id[i], static_cast<int>(tri_cnt));
+
+    // Polygon face normal should match its representative triangle normal
+    float dot = Dot3(pn + i * 3, face_n + tri_id[i] * 3);
+    EXPECT_GT(dot, 0.999f) << "polygon face " << i << " tri_id " << tri_id[i];
+  }
+}
+
+TEST_F(V3TestCrystal, PolygonFaceDataPyramid) {
+  auto crystal = Crystal::CreatePyramid(0.3f, 1.0f, 0.3f);
+
+  // Full pyramid has 20 planes: 2 basal + 6 prism + 6 upper + 6 lower
+  ASSERT_EQ(crystal.PolygonFaceCount(), 20u);
+
+  const auto* pn = crystal.GetPolygonFaceNormal();
+  const auto* pd = crystal.GetPolygonFaceDist();
+  const auto* tri_id = crystal.GetPolygonFaceTriId();
+
+  auto tri_cnt = crystal.TotalTriangles();
+  const auto* face_n = crystal.GetTriangleNormal();
+
+  for (size_t i = 0; i < crystal.PolygonFaceCount(); i++) {
+    float len = Norm3(pn + i * 3);
+    EXPECT_NEAR(len, 1.0f, 1e-5) << "polygon face " << i;
+
+    EXPECT_GE(tri_id[i], 0);
+    EXPECT_LT(tri_id[i], static_cast<int>(tri_cnt));
+
+    float dot = Dot3(pn + i * 3, face_n + tri_id[i] * 3);
+    EXPECT_GT(dot, 0.999f) << "polygon face " << i << " tri_id " << tri_id[i];
+  }
+}
+
 TEST_F(V3TestCrystal, PrismMesh) {
   float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
   auto c1 = CreatePrismMesh(1.5f);

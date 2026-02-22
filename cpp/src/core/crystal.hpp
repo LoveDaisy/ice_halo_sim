@@ -183,10 +183,16 @@ class Crystal {
    */
   float GetRefractiveIndex(float wl) const;
 
+  size_t PolygonFaceCount() const;
+  const float* GetPolygonFaceNormal() const;
+  const float* GetPolygonFaceDist() const;
+  const int* GetPolygonFaceTriId() const;
+
   IdType config_id_ = kInvalidId;
 
  private:
   void ComputeCacheData();
+  void BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt);
 
   Mesh mesh_;
 
@@ -198,6 +204,13 @@ class Crystal {
 
   std::unique_ptr<IdType[]> fn_map_;  // fid --> fn
   int fn_period_;                     // for raypath symmetry
+
+  // Polygon face data for per-plane intersection
+  size_t poly_face_cnt_ = 0;
+  std::unique_ptr<float[]> poly_face_data_;  // single allocation: n(3*cnt) + d(cnt) + tri_id(cnt as float)
+  float* poly_face_n_ = nullptr;             // unit normals, 3 * poly_face_cnt_
+  float* poly_face_d_ = nullptr;             // plane distances, poly_face_cnt_
+  int* poly_face_tri_id_ = nullptr;          // representative triangle ID, poly_face_cnt_
 };
 
 

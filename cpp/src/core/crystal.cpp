@@ -69,6 +69,7 @@ Crystal Crystal::CreatePrism(float h) {
   auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
+  c.BuildPolygonFaceData(coef, plane_cnt);
   return c;
 }
 
@@ -78,6 +79,7 @@ Crystal Crystal::CreatePrism(float h, const float* fd) {
   auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
+  c.BuildPolygonFaceData(coef, plane_cnt);
   return c;
 }
 
@@ -89,6 +91,7 @@ Crystal Crystal::CreatePyramid(float h1, float h2, float h3) {
   auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
+  c.BuildPolygonFaceData(coef, plane_cnt);
   return c;
 }
 
@@ -102,6 +105,7 @@ Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int low
   auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
+  c.BuildPolygonFaceData(coef, plane_cnt);
   return c;
 }
 
@@ -145,10 +149,19 @@ Crystal::Crystal(const Crystal& other)
       face_n_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kNormal),
       face_area_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kArea),
       face_coord_tf_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kTf),
-      fn_map_(std::make_unique<IdType[]>(other.TotalTriangles())), fn_period_(other.fn_period_) {
+      fn_map_(std::make_unique<IdType[]>(other.TotalTriangles())), fn_period_(other.fn_period_),
+      poly_face_cnt_(other.poly_face_cnt_) {
   auto n = other.TotalTriangles();
   std::memcpy(cache_data_.get(), other.cache_data_.get(), n * CrystalCachOffset::kTotal * sizeof(float));
   std::memcpy(fn_map_.get(), other.fn_map_.get(), n * sizeof(IdType));
+
+  if (poly_face_cnt_ > 0) {
+    poly_face_data_ = std::make_unique<float[]>(poly_face_cnt_ * 5);
+    poly_face_n_ = poly_face_data_.get();
+    poly_face_d_ = poly_face_data_.get() + poly_face_cnt_ * 3;
+    poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
+    std::memcpy(poly_face_data_.get(), other.poly_face_data_.get(), poly_face_cnt_ * 5 * sizeof(float));
+  }
 }
 
 Crystal::Crystal(Crystal&& other) noexcept
@@ -157,11 +170,22 @@ Crystal::Crystal(Crystal&& other) noexcept
       face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
       face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea),
       face_coord_tf_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kTf),
-      fn_map_(std::move(other.fn_map_)), fn_period_(other.fn_period_) {
+      fn_map_(std::move(other.fn_map_)), fn_period_(other.fn_period_), poly_face_cnt_(other.poly_face_cnt_),
+      poly_face_data_(std::move(other.poly_face_data_)) {
   other.face_v_ = nullptr;
   other.face_n_ = nullptr;
   other.face_area_ = nullptr;
   other.face_coord_tf_ = nullptr;
+
+  if (poly_face_cnt_ > 0) {
+    poly_face_n_ = poly_face_data_.get();
+    poly_face_d_ = poly_face_data_.get() + poly_face_cnt_ * 3;
+    poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
+  }
+  other.poly_face_cnt_ = 0;
+  other.poly_face_n_ = nullptr;
+  other.poly_face_d_ = nullptr;
+  other.poly_face_tri_id_ = nullptr;
 }
 
 Crystal& Crystal::operator=(const Crystal& other) {
@@ -184,6 +208,21 @@ Crystal& Crystal::operator=(const Crystal& other) {
   std::memcpy(fn_map_.get(), other.fn_map_.get(), n * sizeof(IdType));
 
   fn_period_ = other.fn_period_;
+
+  poly_face_cnt_ = other.poly_face_cnt_;
+  if (poly_face_cnt_ > 0) {
+    poly_face_data_ = std::make_unique<float[]>(poly_face_cnt_ * 5);
+    poly_face_n_ = poly_face_data_.get();
+    poly_face_d_ = poly_face_data_.get() + poly_face_cnt_ * 3;
+    poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
+    std::memcpy(poly_face_data_.get(), other.poly_face_data_.get(), poly_face_cnt_ * 5 * sizeof(float));
+  } else {
+    poly_face_data_.reset();
+    poly_face_n_ = nullptr;
+    poly_face_d_ = nullptr;
+    poly_face_tri_id_ = nullptr;
+  }
+
   return *this;
 }
 
@@ -208,6 +247,23 @@ Crystal& Crystal::operator=(Crystal&& other) noexcept {
 
   fn_map_ = std::move(other.fn_map_);
   fn_period_ = other.fn_period_;
+
+  poly_face_cnt_ = other.poly_face_cnt_;
+  poly_face_data_ = std::move(other.poly_face_data_);
+  if (poly_face_cnt_ > 0) {
+    poly_face_n_ = poly_face_data_.get();
+    poly_face_d_ = poly_face_data_.get() + poly_face_cnt_ * 3;
+    poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
+  } else {
+    poly_face_n_ = nullptr;
+    poly_face_d_ = nullptr;
+    poly_face_tri_id_ = nullptr;
+  }
+  other.poly_face_cnt_ = 0;
+  other.poly_face_n_ = nullptr;
+  other.poly_face_d_ = nullptr;
+  other.poly_face_tri_id_ = nullptr;
+
   return *this;
 }
 
@@ -292,6 +348,10 @@ Crystal& Crystal::Rotate(const Rotation& r) {
   auto* vtx = mesh_.GetVtxPtr(0);
   r.Apply(vtx, vtx_cnt);
   ComputeCacheData();
+  // Rotate polygon face normals (d unchanged — rotation preserves origin distance)
+  if (poly_face_cnt_ > 0) {
+    r.Apply(poly_face_n_, poly_face_cnt_);
+  }
   return *this;
 }
 
@@ -453,6 +513,95 @@ std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType
   }
 
   return result;
+}
+
+size_t Crystal::PolygonFaceCount() const {
+  return poly_face_cnt_;
+}
+
+const float* Crystal::GetPolygonFaceNormal() const {
+  return poly_face_n_;
+}
+
+const float* Crystal::GetPolygonFaceDist() const {
+  return poly_face_d_;
+}
+
+const int* Crystal::GetPolygonFaceTriId() const {
+  return poly_face_tri_id_;
+}
+
+void Crystal::BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt) {
+  static_assert(sizeof(int) == sizeof(float), "BuildPolygonFaceData requires sizeof(int)==sizeof(float)");
+
+  auto tri_cnt = TotalTriangles();
+
+  // First pass: count valid faces (planes that match at least one triangle normal)
+  size_t valid_cnt = 0;
+  for (size_t p = 0; p < plane_cnt; p++) {
+    const float* coef = plane_coef + p * 4;
+    float norm_len = Norm3(coef);
+    if (norm_len < math::kFloatEps) {
+      continue;
+    }
+
+    float n[3]{ coef[0] / norm_len, coef[1] / norm_len, coef[2] / norm_len };
+    for (size_t t = 0; t < tri_cnt; t++) {
+      if (Dot3(n, face_n_ + t * 3) > 1.0f - 1e-3f) {
+        valid_cnt++;
+        break;
+      }
+    }
+  }
+
+  poly_face_cnt_ = valid_cnt;
+  if (valid_cnt == 0) {
+    poly_face_data_.reset();
+    poly_face_n_ = nullptr;
+    poly_face_d_ = nullptr;
+    poly_face_tri_id_ = nullptr;
+    return;
+  }
+
+  // Allocate: normals(3*cnt) + dist(cnt) + tri_id as int(cnt) = 5*cnt floats
+  poly_face_data_ = std::make_unique<float[]>(valid_cnt * 5);
+  poly_face_n_ = poly_face_data_.get();
+  poly_face_d_ = poly_face_data_.get() + valid_cnt * 3;
+  poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + valid_cnt * 4);
+
+  // Second pass: fill data
+  size_t idx = 0;
+  for (size_t p = 0; p < plane_cnt; p++) {
+    const float* coef = plane_coef + p * 4;
+    float norm_len = Norm3(coef);
+    if (norm_len < math::kFloatEps) {
+      continue;
+    }
+
+    float n[3]{ coef[0] / norm_len, coef[1] / norm_len, coef[2] / norm_len };
+    float d = coef[3] / norm_len;
+
+    int best_tri = -1;
+    float best_dot = -1.0f;
+    for (size_t t = 0; t < tri_cnt; t++) {
+      float dot = Dot3(n, face_n_ + t * 3);
+      if (dot > best_dot) {
+        best_dot = dot;
+        best_tri = static_cast<int>(t);
+      }
+    }
+
+    if (best_tri < 0 || best_dot < 1.0f - 1e-3f) {
+      continue;
+    }
+
+    poly_face_n_[idx * 3 + 0] = n[0];
+    poly_face_n_[idx * 3 + 1] = n[1];
+    poly_face_n_[idx * 3 + 2] = n[2];
+    poly_face_d_[idx] = d;
+    poly_face_tri_id_[idx] = best_tri;
+    idx++;
+  }
 }
 
 float Crystal::GetRefractiveIndex(float wl) const {
