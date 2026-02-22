@@ -82,4 +82,4 @@ static void BM_Scene(benchmark::State& state) {
   }
   state.SetItemsProcessed(state.iterations() * ray_num);
 }
-BENCHMARK(BM_Scene)->Arg(1000)->Arg(10000)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_Scene)->Arg(1000)->Arg(10000)->Arg(100000)->Arg(1000000)->Unit(benchmark::kMillisecond);
