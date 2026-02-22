@@ -92,8 +92,11 @@ ServerImpl::ServerImpl()
 
 Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   ILOG_DEBUG(logger_, "CommitConfig: entry");
+
+  // Parse into a temporary first so that a parse failure leaves the running server untouched.
+  ConfigManager new_config;
   try {
-    config_manager_ = config_json.get<ConfigManager>();
+    new_config = config_json.get<ConfigManager>();
   } catch (const nlohmann::json::out_of_range& e) {
     ILOG_ERROR(logger_, "CommitConfig: Missing field: {}", e.what());
     {
@@ -124,7 +127,10 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     return Error::InvalidConfig("Unknown configuration error");
   }
 
+  // Stop all running threads before replacing config, so no simulator references stale data.
   Stop();
+
+  config_manager_ = std::move(new_config);
 
   // Setup consumers from project config.
   ILOG_DEBUG(logger_, "CommitConfig: setup consumers for proj {}", config_manager_.project_.id_);
@@ -240,9 +246,9 @@ void ServerImpl::Stop() {
     simulator_threads_.clear();
     ILOG_DEBUG(logger_, "Stop: unlock prod_mutex_");
   }
-  consumers_.clear();
 
-  // Stop main working thread & scene dispatch thread
+  // Stop main working thread & scene dispatch thread.
+  // Must join these BEFORE clearing consumers, since ConsumeData accesses consumers_.
   ILOG_DEBUG(logger_, "Stop: waiting main worker & dispatcher stop.");
   if (consume_data_thread_.joinable()) {
     consume_data_thread_.join();
@@ -250,6 +256,8 @@ void ServerImpl::Stop() {
   if (generate_scene_thread_.joinable()) {
     generate_scene_thread_.join();
   }
+
+  consumers_.clear();
 
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
