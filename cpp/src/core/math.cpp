@@ -764,16 +764,20 @@ std::tuple<std::unique_ptr<int[]>, int> Triangulate(int vtx_cnt, const float* vt
       x /= curr_face.size();
     }
 
-    // Sort by angle
+    // Sort by signed angle around face outward normal
+    float ref_n[3]{};
+    Vec3FromTo(vtx_center, face_center, ref_n);
+    Normalize3(ref_n);
+
     float v0[3]{};
     Vec3FromTo(face_center, vtx_ptr + curr_idx[0] * 3, v0);
     Normalize3(v0);
     std::sort(curr_idx.begin(), curr_idx.end(), [=](int i1, int i2) {
       float v1[3]{};
       float v2[3]{};
-      Vec3FromTo(face_center, vtx_ptr + i1, v1);
+      Vec3FromTo(face_center, vtx_ptr + i1 * 3, v1);
       Normalize3(v1);
-      Vec3FromTo(face_center, vtx_ptr + i2, v2);
+      Vec3FromTo(face_center, vtx_ptr + i2 * 3, v2);
       Normalize3(v2);
 
       float n1[3]{};
@@ -781,8 +785,8 @@ std::tuple<std::unique_ptr<int[]>, int> Triangulate(int vtx_cnt, const float* vt
       Cross3(v0, v1, n1);
       Cross3(v0, v2, n2);
 
-      float s1 = Norm3(n1);
-      float s2 = Norm3(n2);
+      float s1 = Dot3(n1, ref_n);
+      float s2 = Dot3(n2, ref_n);
       float c1 = Dot3(v0, v1);
       float c2 = Dot3(v0, v2);
 

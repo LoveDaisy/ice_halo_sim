@@ -72,6 +72,17 @@ constexpr int kHexPrismTriCnt = 20;
 constexpr int kHexPyramidVtxCnt = 24;
 constexpr int kHexPyramidTriCnt = 44;
 constexpr float kIceCrystalC = 1.629f;
+constexpr int kMaxHexCrystalPlanes = 20;  // 2 basal + 6 prism + 6 upper pyr + 6 lower pyr
+
+// ====== Unified hex crystal plane equations ======
+// Generates plane equations for hexagonal crystal (convex: prism and/or pyramid).
+// Prism = h1≈0, h3≈0 degenerate case (8 planes). Full pyramid = up to 20 planes.
+// Returns actual plane count. out_coef must hold at least kMaxHexCrystalPlanes * 4 floats.
+size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float h2, float h3, const float* dist,
+                          float* out_coef);
+
+// ====== Unified convex polyhedron mesh creation ======
+Mesh CreateConvexPolyhedronMesh(int plane_cnt, const float* coef);
 
 // ====== Prism ======
 Mesh CreatePrismMesh(float h);

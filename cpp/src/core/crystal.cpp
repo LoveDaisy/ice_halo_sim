@@ -1,6 +1,7 @@
 #include "core/crystal.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <memory>
@@ -51,8 +52,10 @@ void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map) {
       pyr = 2;
     }
 
-    if (pri > 0 || pyr > 0) {
-      fn_map[i] = pyr * 10 + pri;
+    if (pri == 0 && pyr > 0) {
+      fn_map[i] = pyr;  // basal: 1 or 2
+    } else if (pri > 0) {
+      fn_map[i] = pyr * 10 + pri;  // prism/pyramidal: 3-8, 13-18, 23-28
     } else {
       LOG_WARNING("Unrecognized face number!");
     }
@@ -60,50 +63,43 @@ void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map) {
 }
 
 Crystal Crystal::CreatePrism(float h) {
-  auto c = Crystal(CreatePrismMesh(h));
+  float dist[6]{ 1, 1, 1, 1, 1, 1 };
+  float coef[kMaxHexCrystalPlanes * 4];
+  auto plane_cnt = FillHexCrystalCoef(0, 0, 0, h, 0, dist, coef);
+  auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
   c.fn_period_ = 6;
-  for (int i = 0; i < 4; i++) {
-    c.fn_map_[i] = 1;
-    c.fn_map_[i + 16] = 2;
-  }
-  for (int i = 0; i < 6; i++) {
-    c.fn_map_[i * 2 + 4] = i + 3;
-    c.fn_map_[i * 2 + 5] = i + 3;
-  }
+  FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
   return c;
 }
 
 Crystal Crystal::CreatePrism(float h, const float* fd) {
-  auto c = Crystal(CreatePrismMesh(h, fd));
+  float coef[kMaxHexCrystalPlanes * 4];
+  auto plane_cnt = FillHexCrystalCoef(0, 0, 0, h, 0, fd, coef);
+  auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
   return c;
 }
 
 Crystal Crystal::CreatePyramid(float h1, float h2, float h3) {
-  auto c = Crystal(CreatePyramidMesh(h1, h2, h3));
+  float dist[6]{ 1, 1, 1, 1, 1, 1 };
+  float alpha = std::atan(math::kSqrt3_2 / kIceCrystalC) * math::kRadToDegree;
+  float coef[kMaxHexCrystalPlanes * 4];
+  auto plane_cnt = FillHexCrystalCoef(alpha, alpha, h1, h2, h3, dist, coef);
+  auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
   c.fn_period_ = 6;
-  for (int i = 0; i < 4; i++) {
-    c.fn_map_[i] = 1;
-    c.fn_map_[i + 40] = 2;
-  }
-  for (int i = 0; i < 6; i++) {
-    c.fn_map_[i * 2 + 4] = i + 13;
-    c.fn_map_[i * 2 + 5] = i + 13;
-    c.fn_map_[i * 2 + 16] = i + 3;
-    c.fn_map_[i * 2 + 17] = i + 3;
-    c.fn_map_[i * 2 + 28] = i + 23;
-    c.fn_map_[i * 2 + 29] = i + 23;
-  }
+  FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
   return c;
 }
 
-
-// NOLINTNEXTLINE(readability-function-size)
 Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int lower_i4,  // Miller index
                                float h1, float h2, float h3,                            // height
                                const float* dist) {                                     // face distance
-  auto c = Crystal(CreatePyramidMesh(upper_i1, upper_i4, lower_i1, lower_i4, h1, h2, h3, dist));
+  float upper_alpha = std::atan(math::kSqrt3_2 * upper_i4 / upper_i1 / kIceCrystalC) * math::kRadToDegree;
+  float lower_alpha = std::atan(math::kSqrt3_2 * lower_i4 / lower_i1 / kIceCrystalC) * math::kRadToDegree;
+  float coef[kMaxHexCrystalPlanes * 4];
+  auto plane_cnt = FillHexCrystalCoef(upper_alpha, lower_alpha, h1, h2, h3, dist, coef);
+  auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
   return c;
