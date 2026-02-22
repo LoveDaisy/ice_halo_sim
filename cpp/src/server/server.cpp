@@ -1,5 +1,6 @@
 #include "server/server.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -39,7 +40,7 @@ class ServerImpl {
   bool IsIdle();
 
  private:
-  static constexpr int kDefaultSimulatorCnt = 4;
+  static const int kDefaultSimulatorCnt;  // runtime: max(1, hardware_concurrency - 2)
   static constexpr int kMaxSceneCnt = 128;
   static constexpr size_t kDefaultRayNum = 128;
 
@@ -75,6 +76,8 @@ class ServerImpl {
   void SetLogLevel(LogLevel level);
   Logger& GetLogger() { return logger_; }
 };
+
+const int ServerImpl::kDefaultSimulatorCnt = std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 2);
 
 
 ServerImpl::ServerImpl()
