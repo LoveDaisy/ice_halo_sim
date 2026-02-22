@@ -1,6 +1,7 @@
 #include <benchmark/benchmark.h>
 
 #include <chrono>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -63,22 +64,35 @@ std::string MakeConfig(int64_t ray_num) {
 }  // namespace
 
 
-static void BM_Scene(benchmark::State& state) {
+class SceneFixture : public benchmark::Fixture {
+ public:
+  void SetUp(benchmark::State& /*state*/) override { server_ = std::make_unique<Server>(); }
+  void TearDown(benchmark::State& /*state*/) override {
+    server_->Terminate();
+    server_.reset();
+  }
+  std::unique_ptr<Server> server_;
+};
+
+BENCHMARK_DEFINE_F(SceneFixture, BM_Scene)(benchmark::State& state) {
   auto ray_num = state.range(0);
   std::string config = MakeConfig(ray_num);
 
   for (auto _ : state) {
-    Server server;
-    auto err = server.CommitConfig(config);
+    auto err = server_->CommitConfig(config);
     if (err) {
       state.SkipWithError("CommitConfig failed");
       return;
     }
-    while (!server.IsIdle()) {
+    while (!server_->IsIdle()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    server.Terminate();
   }
   state.SetItemsProcessed(state.iterations() * ray_num);
 }
-BENCHMARK(BM_Scene)->Arg(1000)->Arg(10000)->Arg(100000)->Arg(1000000)->Unit(benchmark::kMillisecond);
+BENCHMARK_REGISTER_F(SceneFixture, BM_Scene)
+    ->Arg(1000)
+    ->Arg(10000)
+    ->Arg(100000)
+    ->Arg(1000000)
+    ->Unit(benchmark::kMillisecond);
