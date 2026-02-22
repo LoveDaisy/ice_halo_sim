@@ -20,10 +20,10 @@ float GetReflectRatio(float delta, float rr) {
   return (Rs + Rp) / 2;
 }
 
-// NOLINTNEXTLINE(readability-function-size,readability-identifier-naming)
-void HitSurface_Normal(const Crystal& crystal, float n, size_t num,                          // input
-                       const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
-                       float_bf_t d_out, float_bf_t w_out) {                                 // output
+// NOLINTNEXTLINE(readability-function-size)
+void HitSurface(const Crystal& crystal, float n, size_t num,                          // input
+                const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
+                float_bf_t d_out, float_bf_t w_out) {                                 // output
   const auto* face_norm = crystal.GetTriangleNormal();
 
   for (size_t i = 0; i < num; i++) {
@@ -51,83 +51,73 @@ void HitSurface_Normal(const Crystal& crystal, float n, size_t num,             
 }
 
 
-void HitSurface(const Crystal& crystal, float n, size_t num,                          // input
-                const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
-                float_bf_t d_out, float_bf_t w_out) {                                 // output
-  HitSurface_Normal(crystal, n, num, d_in, w_in, fid_in, d_out, w_out);
-}
-
-
-void RayTriangleBW(const float* ray_pt, const float* ray_dir,  // input
-                   int face_num, const float* face_transform,  // input
-                   float* out_pt, int* out_face_id) {
-  float min_t = -1.0f;
-  *out_face_id = -1;
-  std::memcpy(out_pt, ray_pt, 3 * sizeof(float));
-
-  float d[3];
-  float p[3];
-
-  for (int i = 0; i < face_num; i++) {
-    const float* tf = face_transform + i * 12;
-    p[2] = Dot3(ray_pt, tf + 8) + tf[11];
-    d[2] = Dot3(ray_dir, tf + 8);
-
-    if (FloatEqualZero(d[2])) {
-      continue;  // Parallel to this triangle
-    }
-
-    auto t = -p[2] / d[2];
-    if (t < math::kFloatEps) {
-      continue;
-    }
-
-    p[0] = Dot3(ray_pt, tf + 0) + tf[3];
-    d[0] = Dot3(ray_dir, tf + 0);
-
-    auto u = p[0] + t * d[0];
-    if (u < -math::kFloatEps || u > 1.0f) {
-      continue;  // out of this triangle
-    }
-
-    p[1] = Dot3(ray_pt, tf + 4) + tf[7];
-    d[1] = Dot3(ray_dir, tf + 4);
-
-    auto v = p[1] + t * d[1];
-    if (v < -math::kFloatEps || v > 1.0f) {
-      continue;  // out of this triangle
-    }
-
-    if (u + v > 1.0f) {
-      continue;  // out of this triangle
-    }
-
-    if (min_t < -math::kFloatEps || (t < min_t && min_t > 0.0f)) {
-      min_t = t;
-      *out_face_id = i;
-      for (int j = 0; j < 3; j++) {
-        out_pt[j] += t * ray_dir[j];
-      }
-    }
-  }
-}
-
-
-// NOLINTNEXTLINE(readability-function-size)
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 void Propagate(const Crystal& crystal, size_t num, size_t step,                      // input
                const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input, d, p, w
                float_bf_t p_out, int_bf_t fid_out) {                                 // output, p, fid
   auto face_num = crystal.TotalTriangles();
   const auto* face_transform = crystal.GetTriangleCoordTf();
 
-  // Do main work
   for (size_t i = 0; i < num; i++) {
     if (w_in[i] < 0) {  // Total reflection
       continue;
     }
-    RayTriangleBW(p_in.Ptr(i / step), d_in.Ptr(i),  // input
-                  face_num, face_transform,         // input
-                  p_out.Ptr(i), fid_out.Ptr(i));    // output
+
+    // --- Inlined RayTriangleBW: find nearest triangle intersection ---
+    const float* ray_pt = p_in.Ptr(i / step);
+    const float* ray_dir = d_in.Ptr(i);
+    float* out_pt = p_out.Ptr(i);
+    int* out_face_id = fid_out.Ptr(i);
+
+    float min_t = -1.0f;
+    *out_face_id = -1;
+    std::memcpy(out_pt, ray_pt, 3 * sizeof(float));
+
+    float d[3];
+    float p[3];
+
+    for (int fi = 0; fi < static_cast<int>(face_num); fi++) {
+      const float* tf = face_transform + fi * 12;
+      p[2] = Dot3(ray_pt, tf + 8) + tf[11];
+      d[2] = Dot3(ray_dir, tf + 8);
+
+      if (FloatEqualZero(d[2])) {
+        continue;  // Parallel to this triangle
+      }
+
+      auto t = -p[2] / d[2];
+      if (t < math::kFloatEps) {
+        continue;
+      }
+
+      p[0] = Dot3(ray_pt, tf + 0) + tf[3];
+      d[0] = Dot3(ray_dir, tf + 0);
+
+      auto u = p[0] + t * d[0];
+      if (u < -math::kFloatEps || u > 1.0f) {
+        continue;  // out of this triangle
+      }
+
+      p[1] = Dot3(ray_pt, tf + 4) + tf[7];
+      d[1] = Dot3(ray_dir, tf + 4);
+
+      auto v = p[1] + t * d[1];
+      if (v < -math::kFloatEps || v > 1.0f) {
+        continue;  // out of this triangle
+      }
+
+      if (u + v > 1.0f) {
+        continue;  // out of this triangle
+      }
+
+      if (min_t < -math::kFloatEps || (t < min_t && min_t > 0.0f)) {
+        min_t = t;
+        *out_face_id = fi;
+        for (int j = 0; j < 3; j++) {
+          out_pt[j] += t * ray_dir[j];
+        }
+      }
+    }
   }
 }
 
