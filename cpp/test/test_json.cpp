@@ -36,13 +36,15 @@ TEST_F(V3TestJson, LightSource_Sun) {
   auto s = j_light.get<LightSourceConfig>();
 
   ASSERT_EQ(s.id_, 2);
-  ASSERT_EQ(s.wl_param_.size(), 6);
+  ASSERT_TRUE(std::holds_alternative<std::vector<WlParam>>(s.spectrum_));
+  const auto& wl_params = std::get<std::vector<WlParam>>(s.spectrum_);
+  ASSERT_EQ(wl_params.size(), 6);
 
-  std::vector<WlParam> wl_param = { { 420.0f, 1.0f }, { 460.0f, 1.0f }, { 500.0f, 1.0f },
+  std::vector<WlParam> expected = { { 420.0f, 1.0f }, { 460.0f, 1.0f }, { 500.0f, 1.0f },
                                     { 540.0f, 1.0f }, { 580.0f, 1.0f }, { 620.0f, 1.0f } };
-  for (size_t i = 0; i < wl_param.size(); i++) {
-    ASSERT_NEAR(s.wl_param_[i].wl_, wl_param[i].wl_, 1e-5);
-    ASSERT_NEAR(s.wl_param_[i].weight_, wl_param[i].weight_, 1e-5);
+  for (size_t i = 0; i < expected.size(); i++) {
+    ASSERT_NEAR(wl_params[i].wl_, expected[i].wl_, 1e-5);
+    ASSERT_NEAR(wl_params[i].weight_, expected[i].weight_, 1e-5);
   }
 
   ASSERT_TRUE(std::holds_alternative<SunParam>(s.param_));

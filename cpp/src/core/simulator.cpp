@@ -15,6 +15,7 @@
 #include "core/filter.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
+#include "util/illuminant.hpp"
 #include "util/logger.hpp"
 #include "util/queue.hpp"
 
@@ -414,12 +415,24 @@ void Simulator::Run() {
 
     const auto& config = *batch.scene_;
     idle_ = false;
-    for (const auto& wl_param : config.light_source_.wl_param_) {
-      if (stop_) {
-        break;
+
+    const auto& spectrum = config.light_source_.spectrum_;
+    if (auto* illuminant = std::get_if<IlluminantType>(&spectrum)) {
+      // Standard illuminant: uniform wavelength sampling + SPD weight
+      float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
+      float weight = GetIlluminantSpd(*illuminant, wl);
+      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_);
+    } else {
+      // Discrete wavelength list
+      const auto& wl_params = std::get<std::vector<WlParam>>(spectrum);
+      for (const auto& wl_param : wl_params) {
+        if (stop_) {
+          break;
+        }
+        SimulateOneWavelength(config, wl_param, batch.ray_num_);
       }
-      SimulateOneWavelength(config, wl_param, batch.ray_num_);
     }
+
     idle_ = true;
   }
 }

@@ -19,8 +19,7 @@ const std::string kBenchConfigTemplate = R"({
     "altitude": 20.0,
     "azimuth": 0,
     "diameter": 0.5,
-    "wavelength": [550],
-    "wl_weight": [1.0]
+    "spectrum": [{"wavelength": 550, "weight": 1.0}]
   }],
   "crystal": [{
     "id": 1,
