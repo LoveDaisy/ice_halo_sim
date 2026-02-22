@@ -157,7 +157,7 @@ if(NOT MSVC)
   # LUMICE_API 宏（__declspec(dllexport/dllimport)），参见 lumice.h 中的注释。
   target_compile_options(lumice_obj PRIVATE
     $<$<CONFIG:Debug>:-O0 -g -ggdb>
-    $<$<CONFIG:Release>:-ffunction-sections -fdata-sections -fvisibility=hidden>
+    $<$<CONFIG:Release>:-march=native -ffunction-sections -fdata-sections -fvisibility=hidden>
     $<$<CONFIG:MinSizeRel>:-ffunction-sections -fdata-sections -fvisibility=hidden>)
 endif()
 
