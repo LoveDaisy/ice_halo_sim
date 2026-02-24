@@ -1,0 +1,10 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}",
+    "cmake.buildDirectory": "${workspaceFolder}/build/cmake_build",
+    "cmake.generator": "Ninja",
+    "cmake.configureArgs": [
+        "-DBUILD_TEST=ON",
+        "-DCMAKE_INSTALL_PREFIX=${workspaceFolder}/build/cmake_install"
+    ],
+    "cmake.copyCompileCommands": "${workspaceFolder}/build/compile_commands.json"
+}
