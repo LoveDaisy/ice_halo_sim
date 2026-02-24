@@ -1,15 +1,40 @@
-# C++ codes
+# Lumice
 
-[中文版说明](README_zh.md)
+[中文版 / Chinese version](README_zh.md)
 
 A simulation program for ice halo phenomena. It traces light rays interacting with ice crystals to reproduce various halo patterns. Fast and efficient, supporting natural color rendering, multiple scattering, and custom crystal models (.obj format).
+
+Inspired by [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) and
+[HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm).
+
+## Features
+
+* **High speed.**
+  The simulation program is 50~100 times faster than HaloPoint. On general cases
+  this program runs at a speed of 140k~200k rays per second. On multi-scattering cases
+  it runs as fast as 50k~80k rays per second.
+
+* **Natural and vivid color.**
+  Based on the [Spectrum Renderer](https://github.com/LoveDaisy/spec_render) project,
+  this simulation program can render very natural and vivid color.
+  <img src="doc/figs/sim05E_50M.jpg" width="400">
+
+* **Full multi-scattering support.**
+  This program is designed to handle multi-scattering cases. It allows you
+  to simulate any multi-scattering scenario freely. The following multi-scattering display
+  is generated in 14 minutes with totally *72 million* starting rays traced.
+  <img src="doc/figs/44-degree parhelia.jpg" width="400">
+
+* **Customized crystal model.**
+  This program has a built-in parser for [.obj file](https://en.wikipedia.org/wiki/Wavefront_.obj_file)
+  and users can simulate with any complex crystal models, e.g. hollow hex-cylinder,
+  created via 3D modeling software.
 
 ## Quick start
 
 After cloning, you can run the build script to build and install it.
 
 ~~~bash
-cd cpp
 ./build.sh -j release
 ~~~
 
@@ -261,3 +286,8 @@ For detailed documentation, please refer to:
 - [Developer Guide](doc/developer-guide.md) - Developer guide
 - [C API Documentation](doc/c_api.md) - C interface usage
 - [API Documentation](doc/api/html/) - Auto-generated API docs (generate locally with `doxygen .doxygen-config`)
+
+## Acknowledgements
+
+1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) &
+   [HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)
