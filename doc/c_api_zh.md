@@ -1,43 +1,43 @@
-[中文版](c_api_zh.md)
+[English version](c_api.md)
 
-# C API Documentation
+# C接口使用文档
 
-This document provides detailed instructions on how to use the C API.
+本文档详细说明C接口API使用方法。
 
-## Overview
+## 概述
 
-Lumice provides a complete C interface for easy integration with other languages. The C interface wraps the C++ implementation and exposes a concise API.
+Lumice 提供了完整的C接口，方便与其他语言集成。C接口封装了C++实现，提供了简洁的API。
 
-### Header File
+### 头文件
 
 ```c
 #include "lumice.h"
 ```
 
-### Link Library
+### 链接库
 
-Link against the `lumice` static library.
+链接 `lumice` 静态库。
 
-### Design Principles
+### 设计原则
 
-- **Unified error codes**: Most APIs return `LUMICE_ErrorCode`, with actual outputs passed via pointer parameters
-- **Array + sentinel pattern**: Result retrieval APIs use fixed-size arrays with sentinel termination, requiring no heap allocation
-- **Zero-copy**: The `img_buffer` in render results points directly to the internal buffer, with no copy overhead
+- **统一错误码**：大多数 API 返回 `LUMICE_ErrorCode`，实际输出通过指针参数传递
+- **数组+哨兵模式**：结果获取 API 使用固定大小数组 + 哨兵终止，无堆分配
+- **零拷贝**：渲染结果的 `img_buffer` 直接指向内部缓冲区，无拷贝开销
 
-## API Reference
+## API参考
 
-### Constants
+### 常量
 
 ```c
-#define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
-#define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
+#define LUMICE_MAX_RENDER_RESULTS 16  // 渲染结果数组最大容量
+#define LUMICE_MAX_STATS_RESULTS 1    // 统计结果数组最大容量
 ```
 
-### Data Types
+### 数据类型
 
 #### LUMICE_Server
 
-Server handle, an opaque pointer type.
+服务器句柄，不透明指针类型。
 
 ```c
 typedef struct LUMICE_Server_ LUMICE_Server;
@@ -45,121 +45,121 @@ typedef struct LUMICE_Server_ LUMICE_Server;
 
 #### LUMICE_ErrorCode
 
-Error code enum. The return type of most APIs.
+错误码枚举。大多数 API 的返回值。
 
 ```c
 typedef enum LUMICE_ErrorCode_ {
-  LUMICE_OK = 0,             // Success
-  LUMICE_ERR_NULL_ARG,       // NULL argument
-  LUMICE_ERR_INVALID_JSON,   // Invalid JSON format
-  LUMICE_ERR_INVALID_CONFIG, // Invalid configuration content
-  LUMICE_ERR_MISSING_FIELD,  // Missing required field
-  LUMICE_ERR_INVALID_VALUE,  // Invalid field value
-  LUMICE_ERR_FILE_NOT_FOUND, // File not found / cannot be opened
-  LUMICE_ERR_SERVER,         // Internal server error
+  LUMICE_OK = 0,             // 成功
+  LUMICE_ERR_NULL_ARG,       // NULL 参数
+  LUMICE_ERR_INVALID_JSON,   // JSON 格式错误
+  LUMICE_ERR_INVALID_CONFIG, // 配置内容错误
+  LUMICE_ERR_MISSING_FIELD,  // 缺少必填字段
+  LUMICE_ERR_INVALID_VALUE,  // 字段值无效
+  LUMICE_ERR_FILE_NOT_FOUND, // 文件不存在/无法打开
+  LUMICE_ERR_SERVER,         // 服务器内部错误
 } LUMICE_ErrorCode;
 ```
 
 #### LUMICE_ServerState
 
-Server state enum.
+服务器状态枚举。
 
 ```c
 typedef enum LUMICE_ServerState_ {
-  LUMICE_SERVER_IDLE,      // Idle
-  LUMICE_SERVER_RUNNING,   // Running
-  LUMICE_SERVER_NOT_READY, // Not ready
+  LUMICE_SERVER_IDLE,      // 空闲状态
+  LUMICE_SERVER_RUNNING,   // 运行中
+  LUMICE_SERVER_NOT_READY, // 未就绪
 } LUMICE_ServerState;
 ```
 
 #### LUMICE_LogLevel
 
-Log level enum.
+日志级别枚举。
 
 ```c
 typedef enum LUMICE_LogLevel_ {
-  LUMICE_LOG_TRACE,    // Trace
-  LUMICE_LOG_DEBUG,    // Debug
-  LUMICE_LOG_INFO,     // Info (default)
-  LUMICE_LOG_WARNING,  // Warning
-  LUMICE_LOG_ERROR,    // Error
-  LUMICE_LOG_OFF,      // Logging disabled
+  LUMICE_LOG_TRACE,    // 追踪
+  LUMICE_LOG_DEBUG,    // 调试
+  LUMICE_LOG_INFO,     // 信息（默认）
+  LUMICE_LOG_WARNING,  // 警告
+  LUMICE_LOG_ERROR,    // 错误
+  LUMICE_LOG_OFF,      // 关闭日志
 } LUMICE_LogLevel;
 ```
 
 #### LUMICE_RenderResult
 
-Render result structure.
+渲染结果结构体。
 
 ```c
 typedef struct LUMICE_RenderResult_ {
-  int renderer_id;                   // Renderer ID
-  int img_width;                     // Image width (pixels)
-  int img_height;                    // Image height (pixels)
-  const unsigned char* img_buffer;   // Image data buffer (RGB format, read-only)
+  int renderer_id;                   // 渲染器ID
+  int img_width;                     // 图像宽度（像素）
+  int img_height;                    // 图像高度（像素）
+  const unsigned char* img_buffer;   // 图像数据缓冲区（RGB格式，只读）
 } LUMICE_RenderResult;
 ```
 
-**Notes**:
-- The image data pointed to by `img_buffer` is managed internally by the library and does not need to be freed manually
-- `img_buffer` remains valid until the next call to `LUMICE_GetRenderResults()` or `LUMICE_CommitConfig()`
-- If you need to retain the data long-term, you should `memcpy` it yourself
-- Image data is in RGB format, with 3 bytes per pixel (R, G, B)
-- Image data size = `img_width * img_height * 3` bytes
-- Sentinel marker: `img_buffer == NULL`
+**注意**：
+- `img_buffer` 指向的图像数据由库内部管理，不需要手动释放
+- `img_buffer` 有效期：直到下一次 `LUMICE_GetRenderResults()` 或 `LUMICE_CommitConfig()` 调用
+- 如需长期持有，应自行 `memcpy` 拷贝
+- 图像数据格式为RGB，每个像素3个字节（R, G, B）
+- 图像数据大小 = `img_width * img_height * 3` 字节
+- 哨兵标识：`img_buffer == NULL`
 
 #### LUMICE_StatsResult
 
-Statistics result structure.
+统计结果结构体。
 
 ```c
 typedef struct LUMICE_StatsResult_ {
-  unsigned long ray_seg_num;   // Number of ray segments
-  unsigned long sim_ray_num;   // Number of simulated rays
-  unsigned long crystal_num;   // Number of crystals
+  unsigned long ray_seg_num;   // 光线段数量
+  unsigned long sim_ray_num;   // 模拟光线数量
+  unsigned long crystal_num;   // 晶体数量
 } LUMICE_StatsResult;
 ```
 
-**Notes**:
-- Sentinel marker: all zeros (`sim_ray_num == 0`)
+**注意**：
+- 哨兵标识：全零（`sim_ray_num == 0`）
 
-### Server Lifecycle
+### 服务器生命周期
 
 #### LUMICE_CreateServer
 
-Creates a server instance.
+创建服务器实例。
 
 ```c
 LUMICE_Server* LUMICE_CreateServer(void);
 ```
 
-**Return value**:
-- On success: returns a server handle pointer
-- On failure: returns `NULL`
+**返回值**：
+- 成功：返回服务器句柄指针
+- 失败：返回 `NULL`
 
-**Notes**:
-- The returned handle must be freed using `LUMICE_DestroyServer()`
+**注意**：
+- 返回的句柄必须使用 `LUMICE_DestroyServer()` 释放
 
 #### LUMICE_DestroyServer
 
-Destroys a server instance.
+销毁服务器实例。
 
 ```c
 void LUMICE_DestroyServer(LUMICE_Server* server);
 ```
 
-**Parameters**:
-- `server`: server handle pointer; passing `NULL` is safe
+**参数**：
+- `server`: 服务器句柄指针，可以为 `NULL`（安全）
 
-**Notes**:
-- Destroying the server stops all ongoing processing
-- The handle must not be used after destruction
+**注意**：
+- 销毁服务器会停止所有正在进行的处理
+- 销毁后不应再使用该句柄
 
-### Logging
+### 日志
 
 #### LUMICE_InitLogger
 
-Initializes the logging system.
+初始化日志系统。
 
 ```c
 void LUMICE_InitLogger(LUMICE_Server* server);
@@ -167,163 +167,163 @@ void LUMICE_InitLogger(LUMICE_Server* server);
 
 #### LUMICE_SetLogLevel
 
-Sets the log level.
+设置日志级别。
 
 ```c
 void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level);
 ```
 
-### Configuration
+### 配置
 
 #### LUMICE_CommitConfig
 
-Submits a configuration as a JSON string.
+提交JSON字符串配置。
 
 ```c
 LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_str);
 ```
 
-**Parameters**:
-- `server`: server handle pointer
-- `config_str`: configuration string in JSON format
+**参数**：
+- `server`: 服务器句柄指针
+- `config_str`: JSON格式的配置字符串
 
-**Return value**:
-- `LUMICE_OK`: success
-- `LUMICE_ERR_NULL_ARG`: `server` or `config_str` is `NULL`
-- `LUMICE_ERR_INVALID_JSON`: invalid JSON format
-- `LUMICE_ERR_INVALID_CONFIG` / `LUMICE_ERR_MISSING_FIELD` / `LUMICE_ERR_INVALID_VALUE`: invalid configuration content
+**返回值**：
+- `LUMICE_OK`: 成功
+- `LUMICE_ERR_NULL_ARG`: `server` 或 `config_str` 为 `NULL`
+- `LUMICE_ERR_INVALID_JSON`: JSON 格式错误
+- `LUMICE_ERR_INVALID_CONFIG` / `LUMICE_ERR_MISSING_FIELD` / `LUMICE_ERR_INVALID_VALUE`: 配置内容错误
 
-**Notes**:
-- After submitting the configuration, the server begins processing immediately
-- See the [Configuration Documentation](configuration.md) for the configuration format
+**注意**：
+- 提交配置后，服务器会立即开始处理
+- 配置格式参见 [配置文档](configuration_zh.md)
 
 #### LUMICE_CommitConfigFromFile
 
-Loads and submits a configuration from a file.
+从文件加载并提交配置。
 
 ```c
 LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename);
 ```
 
-**Parameters**:
-- `server`: server handle pointer
-- `filename`: path to the configuration file
+**参数**：
+- `server`: 服务器句柄指针
+- `filename`: 配置文件路径
 
-**Return value**:
-- `LUMICE_OK`: success
-- `LUMICE_ERR_NULL_ARG`: `server` or `filename` is `NULL`
-- `LUMICE_ERR_FILE_NOT_FOUND`: file does not exist or cannot be opened
-- Other error codes: invalid configuration content
+**返回值**：
+- `LUMICE_OK`: 成功
+- `LUMICE_ERR_NULL_ARG`: `server` 或 `filename` 为 `NULL`
+- `LUMICE_ERR_FILE_NOT_FOUND`: 文件不存在或无法打开
+- 其他错误码：配置内容错误
 
-### Retrieving Results
+### 结果获取
 
-Result retrieval uses a unified array + sentinel pattern:
-- Function signature: `LUMICE_ErrorCode LUMICE_GetXxxResults(server, out, max_count)`
-- The `out` array must be at least `max_count + 1` in size (to include the sentinel entry)
-- A zero-valued sentinel entry immediately follows the valid results
-- The caller loops until it encounters the sentinel
+结果获取使用统一的数组+哨兵模式：
+- 函数签名：`LUMICE_ErrorCode LUMICE_GetXxxResults(server, out, max_count)`
+- `out` 数组大小至少为 `max_count + 1`（含哨兵位）
+- 有效结果之后紧跟一个全零的哨兵条目
+- 调用方循环到哨兵自然结束
 
 #### LUMICE_GetRenderResults
 
-Retrieves render results.
+获取渲染结果。
 
 ```c
 LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
 ```
 
-**Parameters**:
-- `server`: server handle pointer
-- `out`: output array, at least `max_count + 1` in size
-- `max_count`: maximum number of results (recommended: `LUMICE_MAX_RENDER_RESULTS`)
+**参数**：
+- `server`: 服务器句柄指针
+- `out`: 输出数组，大小至少为 `max_count + 1`
+- `max_count`: 最大结果数量（推荐使用 `LUMICE_MAX_RENDER_RESULTS`）
 
-**Return value**:
-- `LUMICE_OK`: success
-- `LUMICE_ERR_NULL_ARG`: `server` or `out` is `NULL`
+**返回值**：
+- `LUMICE_OK`: 成功
+- `LUMICE_ERR_NULL_ARG`: `server` 或 `out` 为 `NULL`
 
-**Sentinel**: the trailing entry has `img_buffer == NULL`
+**哨兵**：末尾条目的 `img_buffer == NULL`
 
 #### LUMICE_GetStatsResults
 
-Retrieves statistics results.
+获取统计结果。
 
 ```c
 LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
 ```
 
-**Parameters**:
-- `server`: server handle pointer
-- `out`: output array, at least `max_count + 1` in size
-- `max_count`: maximum number of results (recommended: `LUMICE_MAX_STATS_RESULTS`)
+**参数**：
+- `server`: 服务器句柄指针
+- `out`: 输出数组，大小至少为 `max_count + 1`
+- `max_count`: 最大结果数量（推荐使用 `LUMICE_MAX_STATS_RESULTS`）
 
-**Return value**:
-- `LUMICE_OK`: success
-- `LUMICE_ERR_NULL_ARG`: `server` or `out` is `NULL`
+**返回值**：
+- `LUMICE_OK`: 成功
+- `LUMICE_ERR_NULL_ARG`: `server` 或 `out` 为 `NULL`
 
-**Sentinel**: the trailing entry has `sim_ray_num == 0`
+**哨兵**：末尾条目的 `sim_ray_num == 0`
 
-### State and Control
+### 状态与控制
 
 #### LUMICE_QueryServerState
 
-Queries the server state.
+查询服务器状态。
 
 ```c
 LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out);
 ```
 
-**Parameters**:
-- `server`: server handle pointer
-- `out`: pointer to receive the state
+**参数**：
+- `server`: 服务器句柄指针
+- `out`: 输出状态指针
 
-**Return value**:
-- `LUMICE_OK`: success, state written to `*out`
-- `LUMICE_ERR_NULL_ARG`: `server` or `out` is `NULL`
+**返回值**：
+- `LUMICE_OK`: 成功，状态写入 `*out`
+- `LUMICE_ERR_NULL_ARG`: `server` 或 `out` 为 `NULL`
 
 #### LUMICE_StopServer
 
-Stops the server.
+停止服务器。
 
 ```c
 void LUMICE_StopServer(LUMICE_Server* server);
 ```
 
-**Parameters**:
-- `server`: server handle pointer; passing `NULL` is safe
+**参数**：
+- `server`: 服务器句柄指针，可以为 `NULL`（安全）
 
-**Notes**:
-- After stopping, you can still submit new configurations
-- Stopping does not release server resources; call `LUMICE_DestroyServer()` to release them
+**注意**：
+- 停止后可以继续提交新配置
+- 停止不会释放服务器资源，需要调用 `LUMICE_DestroyServer()` 释放
 
-## Usage Examples
+## 使用示例
 
-### Basic Example
+### 基础示例
 
 ```c
 #include "lumice.h"
 #include <stdio.h>
 
 int main() {
-    // 1. Create server
+    // 1. 创建服务器
     LUMICE_Server* server = LUMICE_CreateServer();
     if (!server) {
         fprintf(stderr, "Failed to create server\n");
         return 1;
     }
 
-    // 2. Initialize logging
+    // 2. 初始化日志
     LUMICE_InitLogger(server);
 
-    // 3. Load configuration from file
+    // 3. 从文件加载配置
     if (LUMICE_CommitConfigFromFile(server, "config.json") != LUMICE_OK) {
         LUMICE_DestroyServer(server);
         return 1;
     }
 
-    // 4. Poll for results
+    // 4. 轮询结果
     while (1) {
         usleep(1000000);  // 1 second
 
-        // Get render results
+        // 获取渲染结果
         LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
         if (LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
             for (int i = 0; renders[i].img_buffer != NULL; i++) {
@@ -332,7 +332,7 @@ int main() {
             }
         }
 
-        // Get stats results
+        // 获取统计结果
         LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
         if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK) {
             for (int i = 0; stats[i].sim_ray_num != 0; i++) {
@@ -341,20 +341,20 @@ int main() {
             }
         }
 
-        // Check if processing is complete
+        // 检查是否完成
         LUMICE_ServerState state;
         if (LUMICE_QueryServerState(server, &state) == LUMICE_OK && state == LUMICE_SERVER_IDLE) {
             break;
         }
     }
 
-    // 5. Destroy server
+    // 5. 销毁服务器
     LUMICE_DestroyServer(server);
     return 0;
 }
 ```
 
-### Full Example (with Error Handling)
+### 完整示例（包含错误处理）
 
 ```c
 #include "lumice.h"
@@ -368,18 +368,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // 1. Create server
+    // 1. 创建服务器
     LUMICE_Server* server = LUMICE_CreateServer();
     if (!server) {
         fprintf(stderr, "Error: Failed to create server\n");
         return 1;
     }
 
-    // 2. Initialize logging
+    // 2. 初始化日志
     LUMICE_InitLogger(server);
     LUMICE_SetLogLevel(server, LUMICE_LOG_INFO);
 
-    // 3. Load configuration
+    // 3. 加载配置
     LUMICE_ErrorCode err = LUMICE_CommitConfigFromFile(server, argv[1]);
     if (err != LUMICE_OK) {
         fprintf(stderr, "Error: Failed to load config (error code: %d)\n", err);
@@ -387,11 +387,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // 4. Poll for results
+    // 4. 轮询结果
     while (1) {
         usleep(1000000);
 
-        // Get render results
+        // 获取渲染结果
         LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
         if (LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
             for (int i = 0; renders[i].img_buffer != NULL; i++) {
@@ -399,7 +399,7 @@ int main(int argc, char* argv[]) {
                        renders[i].renderer_id, renders[i].img_width, renders[i].img_height,
                        (const void*)renders[i].img_buffer);
 
-                // Save image (example)
+                // 保存图像（示例）
                 char filename[256];
                 snprintf(filename, sizeof(filename), "output_%d_%dx%d.raw",
                          renders[i].renderer_id, renders[i].img_width, renders[i].img_height);
@@ -412,7 +412,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Get stats results
+        // 获取统计结果
         LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
         if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK) {
             for (int i = 0; stats[i].sim_ray_num != 0; i++) {
@@ -421,24 +421,24 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Check if processing is complete
+        // 检查是否完成
         LUMICE_ServerState state;
         if (LUMICE_QueryServerState(server, &state) == LUMICE_OK && state == LUMICE_SERVER_IDLE) {
             break;
         }
     }
 
-    // 5. Clean up
+    // 5. 清理
     LUMICE_DestroyServer(server);
     return 0;
 }
 ```
 
-## Error Handling
+## 错误处理
 
-### LUMICE_ErrorCode Error Codes
+### LUMICE_ErrorCode 错误码
 
-All configuration, query, and result retrieval APIs return `LUMICE_ErrorCode`. Best practice:
+所有配置/查询/结果获取 API 返回 `LUMICE_ErrorCode`。最佳实践：
 
 ```c
 LUMICE_ErrorCode err = LUMICE_CommitConfigFromFile(server, "config.json");
@@ -460,45 +460,45 @@ if (err != LUMICE_OK) {
 }
 ```
 
-### Error Handling Best Practices
+### 错误处理最佳实践
 
-1. **Check error codes**: Always check the return value of all functions that return `LUMICE_ErrorCode`
-2. **Check creation results**: `LUMICE_CreateServer()` returns `NULL` on failure
-3. **Resource cleanup**: Ensure `LUMICE_DestroyServer()` is called on all exit paths
+1. **检查错误码**：所有返回 `LUMICE_ErrorCode` 的函数都应检查返回值
+2. **检查创建结果**：`LUMICE_CreateServer()` 返回 `NULL` 表示失败
+3. **资源清理**：确保在所有退出路径上调用 `LUMICE_DestroyServer()`
 
-## Thread Safety
+## 线程安全性
 
-### Thread-Safe APIs
+### 线程安全API
 
-The following APIs are **thread-safe**:
-- `LUMICE_QueryServerState()`: can be safely called from multiple threads
-- `LUMICE_GetRenderResults()` / `LUMICE_GetStatsResults()`: can be safely called from multiple threads
+以下API是**线程安全**的：
+- `LUMICE_QueryServerState()`: 可以安全地从多个线程调用
+- `LUMICE_GetRenderResults()` / `LUMICE_GetStatsResults()`: 可以安全地从多个线程调用
 
-### Non-Thread-Safe APIs
+### 非线程安全API
 
-The following APIs are **not thread-safe** and must not be called simultaneously from multiple threads:
-- `LUMICE_CreateServer()` / `LUMICE_DestroyServer()`: server lifecycle management
-- `LUMICE_CommitConfig()` / `LUMICE_CommitConfigFromFile()`: configuration submission
-- `LUMICE_StopServer()`: server shutdown
+以下API**不是线程安全**的，不应从多个线程同时调用：
+- `LUMICE_CreateServer()` / `LUMICE_DestroyServer()`: 服务器生命周期管理
+- `LUMICE_CommitConfig()` / `LUMICE_CommitConfigFromFile()`: 配置提交
+- `LUMICE_StopServer()`: 服务器停止
 
-### Multithreading Recommendations
+### 多线程使用建议
 
-1. **Single server, multiple threads**: Use a mutex to protect non-thread-safe operations
-2. **Multiple servers**: Use a separate server instance per thread
+1. **单服务器多线程**：使用互斥锁保护非线程安全的操作
+2. **多服务器**：每个线程使用独立的服务器实例
 
-## Integration with Other Languages
+## 与其他语言集成
 
-### Python Integration (using ctypes)
+### Python集成（使用ctypes）
 
 ```python
 import ctypes
 import json
 
-# Load library
+# 加载库
 lib = ctypes.CDLL('./liblumice.so')  # Linux
 # lib = ctypes.CDLL('./liblumice.dylib')  # macOS
 
-# Define types
+# 定义类型
 class LUMICE_RenderResult(ctypes.Structure):
     _fields_ = [
         ('renderer_id', ctypes.c_int),
@@ -517,7 +517,7 @@ class LUMICE_StatsResult(ctypes.Structure):
 LUMICE_MAX_RENDER_RESULTS = 16
 LUMICE_MAX_STATS_RESULTS = 1
 
-# Define function signatures
+# 定义函数签名
 lib.LUMICE_CreateServer.restype = ctypes.c_void_p
 lib.LUMICE_DestroyServer.argtypes = [ctypes.c_void_p]
 lib.LUMICE_CommitConfigFromFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
@@ -530,7 +530,7 @@ lib.LUMICE_QueryServerState.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c
 lib.LUMICE_QueryServerState.restype = ctypes.c_int
 lib.LUMICE_StopServer.argtypes = [ctypes.c_void_p]
 
-# Usage example
+# 使用示例
 def simulate(config_file):
     server = lib.LUMICE_CreateServer()
     if not server:
@@ -545,7 +545,7 @@ def simulate(config_file):
         while True:
             time.sleep(1)
 
-            # Get render results
+            # 获取渲染结果
             renders = (LUMICE_RenderResult * (LUMICE_MAX_RENDER_RESULTS + 1))()
             if lib.LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) == 0:
                 for r in renders:
@@ -553,7 +553,7 @@ def simulate(config_file):
                         break
                     print(f"Render[{r.renderer_id:02d}]: {r.img_width}x{r.img_height}")
 
-            # Check state
+            # 检查状态
             state = ctypes.c_int()
             if lib.LUMICE_QueryServerState(server, ctypes.byref(state)) == 0 and state.value == 0:
                 break
@@ -561,7 +561,7 @@ def simulate(config_file):
         lib.LUMICE_DestroyServer(server)
 ```
 
-### Rust Integration
+### Rust集成
 
 ```rust
 use std::ffi::CString;
@@ -597,31 +597,31 @@ extern "C" {
 }
 ```
 
-## FAQ
+## 常见问题
 
-### Q1: How do I load a configuration from a file?
+### Q1: 如何从文件读取配置？
 
-**A**: Use `LUMICE_CommitConfigFromFile()` and pass the file path directly. Alternatively, you can read the file contents into a string and pass it to `LUMICE_CommitConfig()`.
+**A**: 使用 `LUMICE_CommitConfigFromFile()`，直接传入文件路径。也可以将文件内容读取为字符串后传给 `LUMICE_CommitConfig()`。
 
-### Q2: What is the image data format?
+### Q2: 图像数据格式是什么？
 
-**A**: RGB format, 3 bytes per pixel (R, G, B), stored row by row. Image size = `img_width * img_height * 3` bytes.
+**A**: RGB格式，每个像素3个字节（R, G, B），按行存储。图像大小 = `img_width * img_height * 3` 字节。
 
-### Q3: When does img_buffer become invalid?
+### Q3: img_buffer 何时失效？
 
-**A**: The `img_buffer` pointer remains valid until the next call to `LUMICE_GetRenderResults()` or `LUMICE_CommitConfig()`. If you need to retain the data long-term, you should `memcpy` it yourself.
+**A**: `img_buffer` 指针有效至下一次 `LUMICE_GetRenderResults()` 或 `LUMICE_CommitConfig()` 调用。如需长期持有，应自行 `memcpy` 拷贝数据。
 
-### Q4: Can the server process multiple configurations simultaneously?
+### Q4: 服务器可以同时处理多个配置吗？
 
-**A**: No. Each call to `LUMICE_CommitConfig()` stops the current task and starts a new one. To process in parallel, create multiple server instances.
+**A**: 不可以。每次调用 `LUMICE_CommitConfig()` 会停止当前任务并开始新任务。如需并行处理，应创建多个服务器实例。
 
-### Q5: How do I check if the result array is empty?
+### Q5: 如何判断结果数组是否为空？
 
-**A**: Check whether the first element is the sentinel. For render results: `renders[0].img_buffer == NULL` means no results. For stats results: `stats[0].sim_ray_num == 0` means no results.
+**A**: 检查数组第一个元素是否为哨兵。对于渲染结果：`renders[0].img_buffer == NULL` 表示无结果。对于统计结果：`stats[0].sim_ray_num == 0` 表示无结果。
 
-## Related Documentation
+## 相关文档
 
-- [Configuration Documentation](configuration.md) - Detailed configuration format reference
-- [System Architecture](architecture.md) - System architecture design
-- [Developer Guide](developer-guide.md) - Development guide
-- [Documentation Index](README.md) - Navigation for all documentation
+- [配置文档](configuration_zh.md) - 配置格式详细说明
+- [系统架构文档](architecture_zh.md) - 系统架构设计
+- [开发指南](developer-guide_zh.md) - 开发指南
+- [文档索引](README_zh.md) - 所有文档的导航

@@ -1,30 +1,32 @@
-# 开发指南
+[中文版](developer-guide_zh.md)
 
-本文档为项目开发者提供开发环境设置、代码风格、功能扩展、测试和调试等方面的指导。
+# Developer Guide
 
-## 开发环境设置
+This document provides guidance for project developers on development environment setup, code style, feature extension, testing, and debugging.
 
-### 系统要求
+## Development Environment Setup
 
-- **操作系统**: macOS 10.14+ 或 Linux (Ubuntu 18.04+)
-- **编译器**: 支持C++17的编译器（GCC 7+, Clang 5+）
+### System Requirements
+
+- **Operating System**: macOS 10.14+ or Linux (Ubuntu 18.04+)
+- **Compiler**: C++17-compatible compiler (GCC 7+, Clang 5+)
 - **CMake**: >= 3.14
-- **Ninja**（推荐）: 默认构建生成器，增量构建更快且自动并行
+- **Ninja** (recommended): Default build generator, provides faster incremental builds with automatic parallelism
 
-所有其他依赖通过 [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) 自动下载和管理：
-- [nlohmann/json](https://github.com/nlohmann/json) v3.10.5 — JSON 解析（header-only）
-- [spdlog](https://github.com/gabime/spdlog) v1.15.0 — 日志（header-only）
-- [tl-expected](https://github.com/TartanLlama/expected) v1.1.0 — C++17 `expected<T,E>`（header-only）
-- [GoogleTest](https://github.com/google/googletest) v1.15.2 — 单元测试（启用 `-t` 时下载）
+All other dependencies are automatically downloaded and managed via [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake):
+- [nlohmann/json](https://github.com/nlohmann/json) v3.10.5 — JSON parsing (header-only)
+- [spdlog](https://github.com/gabime/spdlog) v1.15.0 — Logging (header-only)
+- [tl-expected](https://github.com/TartanLlama/expected) v1.1.0 — C++17 `expected<T,E>` (header-only)
+- [GoogleTest](https://github.com/google/googletest) v1.15.2 — Unit testing (downloaded when `-t` is enabled)
 
-> **关于 Ninja**: 若未安装 Ninja，可将 `build.sh` 中的 `-G Ninja` 删除，CMake 将回退到系统默认生成器（通常为 Unix Makefiles）。
+> **About Ninja**: If Ninja is not installed, you can remove `-G Ninja` from `build.sh`, and CMake will fall back to the system default generator (typically Unix Makefiles).
 
-### 依赖安装
+### Installing Dependencies
 
 #### macOS
 
 ```bash
-# 使用 Homebrew
+# Using Homebrew
 brew install cmake ninja
 ```
 
@@ -35,77 +37,74 @@ sudo apt-get update
 sudo apt-get install cmake ninja-build
 ```
 
-### 构建配置
+### Build Configuration
 
-项目使用CMake构建，提供了 `build.sh` 脚本简化构建过程：
+The project uses CMake for building and provides a `build.sh` script to simplify the build process:
 
 ```bash
-cd cpp
-./build.sh -j release    # Release版本（推荐）
-./build.sh -j debug      # Debug版本（用于调试）
+./build.sh -j release    # Release build (recommended)
+./build.sh -j debug      # Debug build (for debugging)
 ```
 
-**构建选项**：
-- `-t`: 编译并运行测试
-- `-j`: 并行编译
-- `-k`: 清理构建文件
-- `-s`: 构建共享库（默认为静态库）
-- `-h`: 显示帮助信息
+**Build options**:
+- `-t`: Compile and run tests
+- `-j`: Parallel compilation
+- `-k`: Clean build files
+- `-s`: Build shared libraries (static libraries by default)
+- `-h`: Show help information
 
-### IDE配置
+### IDE Configuration
 
 #### CLion
 
-1. 打开项目根目录
-2. CLion会自动识别CMake配置
-3. 配置CMake选项（如需要）
+1. Open the project root directory
+2. CLion will automatically detect the CMake configuration
+3. Configure CMake options (if needed)
 
 #### VS Code
 
-1. 安装C/C++扩展
-2. 安装CMake Tools扩展
-3. 打开 `cpp` 目录
-4. 配置CMake（按需）
+1. Install the C/C++ extension
+2. Install the CMake Tools extension
+3. Open the project root directory
+4. Configure CMake (as needed)
 
-#### 其他IDE
+#### Other IDEs
 
-- 使用CMake生成项目文件
-- 配置包含路径和库路径
+- Use CMake to generate project files
+- Configure include paths and library paths
 
-### 调试环境配置
+### Debugging Environment Configuration
 
-#### 使用LLDB (macOS)
+#### Using LLDB (macOS)
 
 ```bash
-cd cpp
 ./build.sh debug
 lldb ./build/cmake_build/Lumice
 (lldb) run -f config_example.json
 ```
 
-#### 使用GDB (Linux)
+#### Using GDB (Linux)
 
 ```bash
-cd cpp
 ./build.sh debug
 gdb ./build/cmake_build/Lumice
 (gdb) run -f config_example.json
 ```
 
-## 代码风格指南
+## Code Style Guide
 
-### 总体原则
+### General Principles
 
-- 使用C++17标准
-- 遵循项目现有的代码风格
-- 使用 `clang-format` 自动格式化代码
+- Use the C++17 standard
+- Follow the existing code style of the project
+- Use `clang-format` to automatically format code
 
-### 命名规范
+### Naming Conventions
 
-#### 类名
+#### Class Names
 
-- 使用 `PascalCase`（大驼峰）
-- 示例：`Crystal`, `ServerImpl`, `ConfigManager`
+- Use `PascalCase`
+- Examples: `Crystal`, `ServerImpl`, `ConfigManager`
 
 ```cpp
 class Crystal {
@@ -117,10 +116,10 @@ class ServerImpl {
 };
 ```
 
-#### 函数名
+#### Function Names
 
-- 使用 `PascalCase`（与类方法一致）
-- 示例：`CreatePrism()`, `GetResults()`, `CommitConfig()`
+- Use `PascalCase` (consistent with class methods)
+- Examples: `CreatePrism()`, `GetResults()`, `CommitConfig()`
 
 ```cpp
 class Server {
@@ -130,11 +129,11 @@ class Server {
 };
 ```
 
-#### 变量名
+#### Variable Names
 
-- 使用 `snake_case`（小写下划线）
-- 成员变量可以加后缀 `_`（如 `server_`, `config_`）
-- 示例：`ray_num`, `max_hits`, `img_buffer_`
+- Use `snake_case`
+- Member variables may use a trailing `_` suffix (e.g., `server_`, `config_`)
+- Examples: `ray_num`, `max_hits`, `img_buffer_`
 
 ```cpp
 int ray_num = 1000000;
@@ -142,20 +141,20 @@ size_t max_hits_ = 7;
 float* img_buffer_ = nullptr;
 ```
 
-#### 常量名
+#### Constant Names
 
-- 使用 `k` 前缀 + `PascalCase`
-- 示例：`kDefaultSimulatorCnt`, `kMaxSceneCnt`
+- Use `k` prefix + `PascalCase`
+- Examples: `kDefaultSimulatorCnt`, `kMaxSceneCnt`
 
 ```cpp
 static constexpr int kDefaultSimulatorCnt = 4;
 static constexpr size_t kMaxSceneCnt = 128;
 ```
 
-#### 命名空间
+#### Namespaces
 
-- 使用 `snake_case`
-- 所有代码使用 `lumice` 命名空间
+- Use `snake_case`
+- All code uses the `lumice` namespace
 
 ```cpp
 namespace lumice {
@@ -167,28 +166,27 @@ class Crystal {
 }  // namespace lumice
 ```
 
-### 代码格式
+### Code Formatting
 
-项目使用 `.clang-format` 配置文件，主要规则：
+The project uses a `.clang-format` configuration file. Key rules:
 
-- **缩进**: 2个空格
-- **行宽**: 120字符
-- **指针对齐**: 左对齐 (`int* ptr`)
-- **命名空间**: 不缩进
-- **括号风格**: Attach风格
+- **Indentation**: 2 spaces
+- **Line width**: 120 characters
+- **Pointer alignment**: Left-aligned (`int* ptr`)
+- **Namespaces**: Not indented
+- **Brace style**: Attach style
 
-**格式化代码**：
+**Format code**:
 ```bash
-cd cpp
 ./format.sh
 ```
 
-### 文件组织
+### File Organization
 
-#### 头文件
+#### Header Files
 
-- 使用 `.hpp` 扩展名
-- 包含头文件保护：
+- Use the `.hpp` extension
+- Include header guards:
 ```cpp
 #ifndef MODULE_FILE_H_
 #define MODULE_FILE_H_
@@ -196,33 +194,33 @@ cd cpp
 #endif  // MODULE_FILE_H_
 ```
 
-#### 源文件
+#### Source Files
 
-- 使用 `.cpp` 扩展名
-- 对应的头文件放在同一目录
+- Use the `.cpp` extension
+- Place the corresponding header file in the same directory
 
-#### Include顺序
+#### Include Order
 
-1. 对应的头文件
-2. C++标准库
-3. 第三方库
-4. 项目其他头文件
+1. Corresponding header file
+2. C++ standard library
+3. Third-party libraries
+4. Other project header files
 
 ```cpp
-#include "config/config_manager.hpp"  // 1. 对应头文件
+#include "config/config_manager.hpp"  // 1. Corresponding header file
 
-#include <vector>                     // 2. C++标准库
+#include <vector>                     // 2. C++ standard library
 #include <memory>
 
-#include <nlohmann/json.hpp>           // 3. 第三方库
+#include <nlohmann/json.hpp>           // 3. Third-party libraries
 
-#include "core/crystal.hpp"           // 4. 项目其他头文件
+#include "core/crystal.hpp"           // 4. Other project header files
 #include "util/log.hpp"
 ```
 
-### 注释规范
+### Commenting Conventions
 
-#### 文件头注释（可选）
+#### File Header Comments (Optional)
 
 ```cpp
 /**
@@ -231,7 +229,7 @@ cd cpp
  */
 ```
 
-#### 类注释
+#### Class Comments
 
 ```cpp
 /**
@@ -244,7 +242,7 @@ class Crystal {
 };
 ```
 
-#### 函数注释
+#### Function Comments
 
 ```cpp
 /**
@@ -257,24 +255,24 @@ class Crystal {
 static Crystal CreatePrism(float h, const float* fd = nullptr);
 ```
 
-#### 行内注释
+#### Inline Comments
 
-- 使用英文注释
-- 解释"为什么"而不是"是什么"
-- 复杂逻辑必须注释
+- Use English for comments
+- Explain "why" rather than "what"
+- Complex logic must be commented
 
 ```cpp
 // Multiply by sqrt(3)/4 to convert face distance to actual distance
 x.mean *= math::kSqrt3_4;
 ```
 
-## 如何添加新功能
+## How to Add New Features
 
-### 添加新的晶体类型
+### Adding a New Crystal Type
 
-#### 步骤
+#### Steps
 
-1. **在 `crystal_config.hpp` 中添加参数结构**：
+1. **Add a parameter struct in `crystal_config.hpp`**:
 ```cpp
 struct NewCrystalParam {
   Distribution param1_;
@@ -282,37 +280,37 @@ struct NewCrystalParam {
 };
 ```
 
-2. **更新 `CrystalParam` variant**：
+2. **Update the `CrystalParam` variant**:
 ```cpp
 using CrystalParam = std::variant<PrismCrystalParam, PyramidCrystalParam, NewCrystalParam>;
 ```
 
-3. **在 `crystal_config.cpp` 中实现JSON解析**：
+3. **Implement JSON parsing in `crystal_config.cpp`**:
 ```cpp
 void from_json(const nlohmann::json& j, NewCrystalParam& p) {
-  // 解析逻辑
+  // Parsing logic
 }
 ```
 
-4. **在 `crystal.hpp` 中添加创建方法**：
+4. **Add a creation method in `crystal.hpp`**:
 ```cpp
 static Crystal CreateNewType(float param1, const float* param2);
 ```
 
-5. **在 `crystal.cpp` 中实现创建逻辑**：
+5. **Implement the creation logic in `crystal.cpp`**:
 ```cpp
 Crystal Crystal::CreateNewType(float param1, const float* param2) {
-  // 创建逻辑
+  // Creation logic
 }
 ```
 
-6. **更新配置文档**：在 `configuration.md` 中添加新类型的说明
+6. **Update the configuration documentation**: Add a description of the new type in `configuration.md`
 
-### 添加新的过滤器类型
+### Adding a New Filter Type
 
-#### 步骤
+#### Steps
 
-1. **在 `filter_config.hpp` 中添加参数结构**：
+1. **Add a parameter struct in `filter_config.hpp`**:
 ```cpp
 struct NewFilterParam {
   IdType target_id_;
@@ -320,14 +318,14 @@ struct NewFilterParam {
 };
 ```
 
-2. **更新 `SimpleFilterParam` variant**：
+2. **Update the `SimpleFilterParam` variant**:
 ```cpp
 using SimpleFilterParam = std::variant<
     NoneFilterParam, RaypathFilterParam, EntryExitFilterParam,
     DirectionFilterParam, CrystalFilterParam, NewFilterParam>;
 ```
 
-3. **在 `filter_config.cpp` 中实现JSON解析**：
+3. **Implement JSON parsing in `filter_config.cpp`**:
 ```cpp
 void from_json(const nlohmann::json& j, FilterConfig& f) {
   // ...
@@ -340,20 +338,20 @@ void from_json(const nlohmann::json& j, FilterConfig& f) {
 }
 ```
 
-4. **在 `filter.cpp` 中实现过滤逻辑**：
+4. **Implement the filtering logic in `filter.cpp`**:
 ```cpp
 bool Filter::ApplyNewFilter(const NewFilterParam& param, const RaySeg& ray) {
-  // 过滤逻辑
+  // Filtering logic
 }
 ```
 
-5. **更新配置文档**：在 `configuration.md` 中添加新过滤器类型的说明
+5. **Update the configuration documentation**: Add a description of the new filter type in `configuration.md`
 
-### 添加新的消费者
+### Adding a New Consumer
 
-#### 步骤
+#### Steps
 
-1. **继承 `IConsume` 接口**：
+1. **Inherit the `IConsume` interface**:
 ```cpp
 #include "server/consumer.hpp"
 
@@ -362,11 +360,11 @@ namespace lumice {
 class MyConsumer : public IConsume {
  public:
   void Consume(const SimData& data) override {
-    // 处理数据
+    // Process data
   }
 
   Result GetResult() const override {
-    // 返回结果
+    // Return result
     return MyResult{};
   }
 };
@@ -374,33 +372,33 @@ class MyConsumer : public IConsume {
 }  // namespace lumice
 ```
 
-2. **在 `ServerImpl` 中注册消费者**：
+2. **Register the consumer in `ServerImpl`**:
 ```cpp
-// 在 ServerImpl::Start() 或类似位置
+// In ServerImpl::Start() or a similar location
 consumers_.emplace_back(std::make_unique<MyConsumer>());
 ```
 
-3. **更新文档**：在 `architecture.md` 中添加消费者说明
+3. **Update the documentation**: Add consumer description in `architecture.md`
 
-### 添加新的配置类型
+### Adding a New Configuration Type
 
-#### 步骤
+#### Steps
 
-1. **定义配置结构体**：
+1. **Define the configuration struct**:
 ```cpp
 struct MyConfig {
   IdType id_;
-  // 其他字段
+  // Other fields
 };
 ```
 
-2. **实现JSON序列化**：
+2. **Implement JSON serialization**:
 ```cpp
 void to_json(nlohmann::json& j, const MyConfig& c);
 void from_json(const nlohmann::json& j, MyConfig& c);
 ```
 
-3. **在 `ConfigManager` 中添加管理**：
+3. **Add management in `ConfigManager`**:
 ```cpp
 struct ConfigManager {
   std::map<IdType, MyConfig> my_configs_;
@@ -408,23 +406,23 @@ struct ConfigManager {
 };
 ```
 
-4. **更新配置文档**：在 `configuration.md` 中添加新配置类型的说明
+4. **Update the configuration documentation**: Add a description of the new configuration type in `configuration.md`
 
-## 测试指南
+## Testing Guide
 
-### 单元测试
+### Unit Testing
 
-#### 测试框架
+#### Testing Framework
 
-项目使用GoogleTest框架进行单元测试。
+The project uses the GoogleTest framework for unit testing.
 
-#### 编写测试
+#### Writing Tests
 
-1. **创建测试文件**：
-   - 位置：`test/` 目录
-   - 命名：`test_*.cpp`
+1. **Create test files**:
+   - Location: `test/` directory
+   - Naming: `test_*.cpp`
 
-2. **测试结构**：
+2. **Test structure**:
 ```cpp
 #include <gtest/gtest.h>
 #include "core/crystal.hpp"
@@ -443,7 +441,7 @@ TEST(CrystalTest, CreatePyramid) {
 }
 ```
 
-3. **测试Fixture**：
+3. **Test Fixtures**:
 ```cpp
 class CrystalTest : public ::testing::Test {
  protected:
@@ -460,43 +458,42 @@ TEST_F(CrystalTest, GetTriangleVtx) {
 }
 ```
 
-#### 运行测试
+#### Running Tests
 
 ```bash
-# 使用构建脚本
-cd cpp
+# Using the build script
 ./build.sh -t release
 
-# 或手动运行
+# Or run manually
 cd build/cmake_build
 ctest
 ```
 
-#### 测试最佳实践
+#### Testing Best Practices
 
-- **测试命名**：`TestSuiteName_TestCaseName`
-- **测试独立性**：每个测试应该独立，不依赖其他测试
-- **测试数据**：使用固定数据或随机种子确保可复现
-- **断言选择**：
-  - `EXPECT_*`: 测试失败继续执行
-  - `ASSERT_*`: 测试失败立即停止
+- **Test naming**: `TestSuiteName_TestCaseName`
+- **Test independence**: Each test should be independent and not rely on other tests
+- **Test data**: Use fixed data or random seeds to ensure reproducibility
+- **Assertion choice**:
+  - `EXPECT_*`: Test continues execution on failure
+  - `ASSERT_*`: Test stops immediately on failure
 
-## 调试技巧
+## Debugging Tips
 
-### 日志系统
+### Logging System
 
-项目使用 [spdlog](https://github.com/gabime/spdlog) 作为日志后端，通过 `util/log.hpp` 提供便捷宏。
+The project uses [spdlog](https://github.com/gabime/spdlog) as the logging backend, with convenient macros provided through `util/log.hpp`.
 
-#### 日志级别
+#### Log Levels
 
-- `TRACE` / `VERBOSE`: 最详细的跟踪信息
-- `DEBUG`: 调试信息
-- `INFO`: 一般信息（默认级别）
-- `WARNING`: 警告信息
-- `ERROR`: 错误信息
-- `CRITICAL` / `FATAL`: 严重错误信息
+- `TRACE` / `VERBOSE`: Most detailed trace information
+- `DEBUG`: Debug information
+- `INFO`: General information (default level)
+- `WARNING`: Warning messages
+- `ERROR`: Error messages
+- `CRITICAL` / `FATAL`: Critical error messages
 
-#### 使用日志
+#### Using Logging
 
 ```cpp
 #include "util/log.hpp"
@@ -508,11 +505,11 @@ LOG_WARNING("Warning message");
 LOG_ERROR("Error message: {}", error_str);
 ```
 
-日志使用 [fmt](https://fmt.dev/) 格式化语法（`{}` 占位符），而非 `printf` 风格的 `%d`/`%s`。
+Logging uses [fmt](https://fmt.dev/) formatting syntax (`{}` placeholders), not `printf`-style `%d`/`%s`.
 
-#### 类级别日志
+#### Class-Level Logging
 
-对于需要区分来源的日志，可使用命名 logger：
+For logs that need to distinguish their source, use a named logger:
 
 ```cpp
 #include "util/log.hpp"
@@ -527,147 +524,147 @@ class MyClass {
 };
 ```
 
-#### 设置日志级别
+#### Setting the Log Level
 
-日志级别可通过 `lumice::SetLogLevel()` 在程序中设置：
+The log level can be set programmatically via `lumice::SetLogLevel()`:
 
 ```cpp
 #include "util/log.hpp"
 
-lumice::InitLogger();                              // 初始化（程序启动时调用一次）
-lumice::SetLogLevel(spdlog::level::debug);         // 设置为 debug 级别
+lumice::InitLogger();                              // Initialize (call once at program startup)
+lumice::SetLogLevel(spdlog::level::debug);         // Set to debug level
 ```
 
-### 调试工具
+### Debugging Tools
 
-#### GDB/LLDB基本命令
+#### GDB/LLDB Basic Commands
 
 ```bash
-# 启动调试
+# Start debugging
 lldb ./build/cmake_build/Lumice
 
-# 设置断点
+# Set breakpoints
 (lldb) breakpoint set --file crystal.cpp --line 100
 (lldb) b crystal.cpp:100
 
-# 运行程序
+# Run the program
 (lldb) run -f config_example.json
 
-# 查看变量
+# Inspect variables
 (lldb) print variable_name
 (lldb) p variable_name
 
-# 查看调用栈
+# View the call stack
 (lldb) bt
 
-# 单步执行
-(lldb) step      # 进入函数
-(lldb) next      # 下一行
-(lldb) continue  # 继续执行
+# Step execution
+(lldb) step      # Step into function
+(lldb) next      # Next line
+(lldb) continue  # Continue execution
 ```
 
-#### Valgrind内存检查（Linux）
+#### Valgrind Memory Check (Linux)
 
 ```bash
 valgrind --leak-check=full ./build/cmake_build/Lumice -f config_example.json
 ```
 
-#### 性能分析
+#### Performance Profiling
 
 ```bash
-# 使用 perf (Linux)
+# Using perf (Linux)
 perf record ./build/cmake_install/Lumice -f config_example.json
 perf report
 
-# 使用 Instruments (macOS)
+# Using Instruments (macOS)
 instruments -t "Time Profiler" ./build/cmake_install/Lumice -f config_example.json
 ```
 
-### 常见问题排查
+### Common Troubleshooting
 
-#### 编译错误
+#### Compilation Errors
 
-1. **找不到头文件**：
-   - 检查 `CMakeLists.txt` 中的包含路径
-   - 检查头文件路径是否正确
+1. **Header file not found**:
+   - Check include paths in `CMakeLists.txt`
+   - Verify the header file path is correct
 
-2. **链接错误**：
-   - 检查库是否正确链接
-   - 检查库路径是否正确
+2. **Linking errors**:
+   - Check that libraries are linked correctly
+   - Verify the library paths are correct
 
-3. **C++17特性不支持**：
-   - 检查编译器版本
-   - 检查CMake配置中的C++标准设置
+3. **C++17 features not supported**:
+   - Check the compiler version
+   - Verify the C++ standard setting in the CMake configuration
 
-#### 运行时错误
+#### Runtime Errors
 
-1. **段错误（Segmentation Fault）**：
-   - 使用GDB/LLDB调试
-   - 检查空指针访问
-   - 检查数组越界
+1. **Segmentation Fault**:
+   - Debug with GDB/LLDB
+   - Check for null pointer dereferences
+   - Check for array out-of-bounds access
 
-2. **配置解析错误**：
-   - 检查JSON格式是否正确
-   - 启用详细日志查看错误信息
-   - 参考配置文档验证配置项
+2. **Configuration parsing errors**:
+   - Verify the JSON format is correct
+   - Enable verbose logging to view error messages
+   - Refer to the configuration documentation to validate configuration entries
 
-3. **内存泄漏**：
-   - 使用Valgrind检查
-   - 检查资源是否正确释放
+3. **Memory leaks**:
+   - Check with Valgrind
+   - Verify that resources are properly released
 
-#### 性能问题
+#### Performance Issues
 
-1. **运行缓慢**：
-   - 检查是否使用了Debug版本（应使用Release版本）
-   - 使用性能分析工具定位瓶颈
+1. **Slow execution**:
+   - Check whether you are using a Debug build (use Release build instead)
+   - Use profiling tools to locate bottlenecks
 
-2. **内存占用高**：
-   - 检查是否有内存泄漏
-   - 检查数据结构是否合理
-   - 考虑使用对象池减少分配
+2. **High memory usage**:
+   - Check for memory leaks
+   - Review whether data structures are appropriate
+   - Consider using object pools to reduce allocations
 
-## 贡献指南
+## Contribution Guide
 
-### 代码提交流程
+### Code Submission Workflow
 
-1. **创建分支**：
+1. **Create a branch**:
    ```bash
    git checkout -b feature/my-feature
    ```
 
-2. **编写代码**：
-   - 遵循代码风格指南
-   - 添加必要的测试
-   - 更新相关文档
+2. **Write code**:
+   - Follow the code style guide
+   - Add necessary tests
+   - Update relevant documentation
 
-3. **提交代码**：
+3. **Commit code**:
    ```bash
    git add .
    git commit -m "feat: add new feature"
    ```
 
-4. **推送并创建PR**：
+4. **Push and create a PR**:
    ```bash
    git push origin feature/my-feature
    ```
 
-### Pull Request规范
+### Pull Request Guidelines
 
-- **标题**：简洁描述变更内容
-- **描述**：详细说明变更原因和影响
-- **测试**：说明如何测试变更
-- **文档**：更新相关文档（如需要）
+- **Title**: Concisely describe the changes
+- **Description**: Explain the reason for and impact of the changes in detail
+- **Testing**: Describe how to test the changes
+- **Documentation**: Update relevant documentation (if needed)
 
-### 代码审查要求
+### Code Review Requirements
 
-- 代码风格符合项目规范
-- 有适当的测试覆盖
-- 文档已更新（如需要）
-- 没有引入新的警告或错误
+- Code style conforms to project standards
+- Adequate test coverage is provided
+- Documentation is updated (if needed)
+- No new warnings or errors are introduced
 
-## 相关文档
+## Related Documentation
 
-- [系统架构文档](architecture.md) - 了解系统设计
-- [配置文档](configuration.md) - 配置格式说明
-- [C接口文档](c_api.md) - C接口使用说明
-- [文档索引](README.md) - 所有文档的导航
+- [System Architecture](architecture.md) - Understand the system design
+- [Configuration Documentation](configuration.md) - Configuration format reference
+- [C API Documentation](c_api.md) - C interface usage guide
+- [Documentation Index](README.md) - Navigation for all documents

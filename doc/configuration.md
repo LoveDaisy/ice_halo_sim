@@ -1,65 +1,67 @@
-# 配置文档
+[中文版](configuration_zh.md)
 
-本文档详细说明配置文件格式、各配置项的含义、默认值以及配置验证规则。
+# Configuration Reference
 
-## 配置概述
+This document provides a detailed description of the configuration file format, the meaning of each configuration field, default values, and validation rules.
 
-使用 JSON 格式的配置文件，配置文件包含以下主要部分：
+## Configuration Overview
 
-- `light_source`: 光源定义数组
-- `crystal`: 晶体定义数组
-- `filter`: 过滤器定义数组
-- `scene`: 场景定义数组
-- `render`: 渲染器定义数组
-- `project`: 项目定义（单个对象）
+The configuration file uses JSON format and contains the following main sections:
 
-**重要提示**：
-- 样例配置文件（`config_example.json`）并未穷举所有合法的配置写法
-- 大量配置参数具有默认值，如果不写会使用默认值
-- **必须参考代码实现**来了解完整的配置逻辑和默认值
-- 本文档基于代码实现提取了所有默认值信息
+- `light_source`: Array of light source definitions
+- `crystal`: Array of crystal definitions
+- `filter`: Array of filter definitions
+- `scene`: Array of scene definitions
+- `render`: Array of renderer definitions
+- `project`: Project definition (single object)
 
-## 配置项详细说明
+**Important notes**:
+- The example configuration file (`config_example.json`) does not exhaustively cover all valid configuration patterns
+- Many configuration parameters have default values that will be used when not explicitly specified
+- **You should refer to the source code** for the complete configuration logic and default values
+- This document extracts all default value information based on the code implementation
 
-### light_source（光源配置）
+## Configuration Fields
 
-光源配置定义模拟中使用的光源属性。
+### light_source (Light Source Configuration)
 
-#### 基本结构
+The light source configuration defines the properties of the light sources used in the simulation.
+
+#### Basic Structure
 
 ```json
 {
-  "id": <唯一标识符>,
+  "id": <unique identifier>,
   "type": "sun" | "streetlight",
-  "altitude": <角度>,
-  "azimuth": <角度>,
-  "diameter": <角度>,
-  "spectrum": <光谱配置>
+  "altitude": <angle>,
+  "azimuth": <angle>,
+  "diameter": <angle>,
+  "spectrum": <spectrum configuration>
 }
 ```
 
-#### 字段说明
+#### Field Descriptions
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `id` | 整数 | 是 | - | 唯一标识符，必须大于0 |
-| `type` | 字符串 | 是 | - | 光源类型："sun" 或 "streetlight" |
-| `altitude` | 浮点数 | 是 | - | 地平高度（度） |
-| `azimuth` | 浮点数 | 否 | 0.0 | 方位角（度） |
-| `diameter` | 浮点数 | 否 | 0.5 | 直径（度），真实太阳通常为0.5 |
-| `spectrum` | 字符串或对象数组 | 是 | - | 光谱配置，见下方说明 |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `id` | integer | yes | - | Unique identifier, must be greater than 0 |
+| `type` | string | yes | - | Light source type: "sun" or "streetlight" |
+| `altitude` | float | yes | - | Altitude above the horizon (degrees) |
+| `azimuth` | float | no | 0.0 | Azimuth angle (degrees) |
+| `diameter` | float | no | 0.5 | Diameter (degrees), typically 0.5 for the real Sun |
+| `spectrum` | string or object array | yes | - | Spectrum configuration, see below |
 
-#### spectrum（光谱配置）
+#### spectrum (Spectrum Configuration)
 
-`spectrum` 支持两种格式：
+`spectrum` supports two formats:
 
-**1. 标准光源模式**（字符串）——使用 CIE 标准光源的光谱功率分布（SPD）：
+**1. Standard illuminant mode** (string) -- uses the spectral power distribution (SPD) of a CIE standard illuminant:
 ```json
 "spectrum": "D65"
 ```
-支持的标准光源：`"D50"`、`"D55"`、`"D65"`、`"D75"`、`"A"`、`"E"`
+Supported standard illuminants: `"D50"`, `"D55"`, `"D65"`, `"D75"`, `"A"`, `"E"`
 
-**2. 离散波长模式**（对象数组）——手动指定波长和权重：
+**2. Discrete wavelength mode** (object array) -- manually specifies wavelengths and weights:
 ```json
 "spectrum": [
   {"wavelength": 420, "weight": 1.0},
@@ -67,7 +69,7 @@
 ]
 ```
 
-#### 示例
+#### Examples
 
 ```json
 {
@@ -97,67 +99,67 @@
 }
 ```
 
-#### 注意事项
+#### Notes
 
-- 波长决定折射率，数据来自 [Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice)
-- `azimuth` 和 `diameter` 是可选的，如果不指定会使用默认值
-- 标准光源模式下，模拟器从 [380, 780] nm 范围内均匀采样波长，按 SPD 加权
+- Wavelength determines the refractive index; data is sourced from [Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice)
+- `azimuth` and `diameter` are optional; default values are used when not specified
+- In standard illuminant mode, the simulator uniformly samples wavelengths from the [380, 780] nm range, weighted by SPD
 
-### crystal（晶体配置）
+### crystal (Crystal Configuration)
 
-晶体配置定义模拟中使用的晶体形状和朝向分布。
+The crystal configuration defines the crystal shapes and orientation distributions used in the simulation.
 
-#### 基本结构
+#### Basic Structure
 
 ```json
 {
-  "id": <唯一标识符>,
+  "id": <unique identifier>,
   "type": "prism" | "pyramid",
   "shape": { ... },
   "axis": { ... }
 }
 ```
 
-#### 字段说明
+#### Field Descriptions
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `id` | 整数 | 是 | - | 唯一标识符，必须大于0 |
-| `type` | 字符串 | 是 | - | 晶体类型："prism" 或 "pyramid" |
-| `shape` | 对象 | 是 | - | 形状参数，见下方说明 |
-| `axis` | 对象 | 否 | 见下方 | 晶体方向分布 |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `id` | integer | yes | - | Unique identifier, must be greater than 0 |
+| `type` | string | yes | - | Crystal type: "prism" or "pyramid" |
+| `shape` | object | yes | - | Shape parameters, see below |
+| `axis` | object | no | see below | Crystal orientation distribution |
 
-#### axis（方向分布）默认值
+#### axis (Orientation Distribution) Defaults
 
-如果 `axis` 字段不存在，使用以下默认值：
+If the `axis` field is absent, the following defaults are used:
 
 ```json
 {
-  "zenith": 90.0,    // 水平方向
+  "zenith": 90.0,    // horizontal orientation
   "azimuth": 0.0,
   "roll": 0.0
 }
 ```
 
-#### prism（六棱柱）类型
+#### prism (Hexagonal Prism) Type
 
-**shape 结构**：
+**shape structure**:
 
 ```json
 {
-  "height": <数值或分布>,
-  "face_distance": [<6个数值或分布>]
+  "height": <value or distribution>,
+  "face_distance": [<6 values or distributions>]
 }
 ```
 
-**字段说明**：
+**Field descriptions**:
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `height` | 数值/分布 | 否 | 1.0 | 高度比 h/a，h是棱柱高度，a是底面直径 |
-| `face_distance` | 数组 | 否 | [1,1,1,1,1,1] | 6个面的距离比，正六边形为[1,1,1,1,1,1] |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `height` | value/distribution | no | 1.0 | Height ratio h/a, where h is the prism height and a is the base diameter |
+| `face_distance` | array | no | [1,1,1,1,1,1] | Distance ratios for 6 faces; [1,1,1,1,1,1] for a regular hexagon |
 
-**示例**：
+**Example**:
 
 ```json
 {
@@ -170,33 +172,33 @@
 }
 ```
 
-#### pyramid（六棱锥）类型
+#### pyramid (Hexagonal Pyramid) Type
 
-**shape 结构**：
+**shape structure**:
 
 ```json
 {
-  "prism_h": <数值或分布>,
-  "upper_h": <数值或分布>,
-  "lower_h": <数值或分布>,
-  "upper_indices": [<3个整数>],
-  "lower_indices": [<3个整数>],
-  "face_distance": [<6个数值或分布>]
+  "prism_h": <value or distribution>,
+  "upper_h": <value or distribution>,
+  "lower_h": <value or distribution>,
+  "upper_indices": [<3 integers>],
+  "lower_indices": [<3 integers>],
+  "face_distance": [<6 values or distributions>]
 }
 ```
 
-**字段说明**：
+**Field descriptions**:
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `prism_h` | 数值/分布 | 是 | - | 棱柱段高度比 |
-| `upper_h` | 数值/分布 | 否 | 0.0 | 上锥段相对高度（0.0-1.0） |
-| `lower_h` | 数值/分布 | 否 | 0.0 | 下锥段相对高度（0.0-1.0） |
-| `upper_indices` | 整数数组 | 否 | [1,0,1] | 上锥段Miller指数 |
-| `lower_indices` | 整数数组 | 否 | [1,0,1] | 下锥段Miller指数 |
-| `face_distance` | 数组 | 否 | [1,1,1,1,1,1] | 6个面的距离比 |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `prism_h` | value/distribution | yes | - | Prism segment height ratio |
+| `upper_h` | value/distribution | no | 0.0 | Upper pyramid segment relative height (0.0-1.0) |
+| `lower_h` | value/distribution | no | 0.0 | Lower pyramid segment relative height (0.0-1.0) |
+| `upper_indices` | integer array | no | [1,0,1] | Miller indices for the upper pyramid segment |
+| `lower_indices` | integer array | no | [1,0,1] | Miller indices for the lower pyramid segment |
+| `face_distance` | array | no | [1,1,1,1,1,1] | Distance ratios for 6 faces |
 
-**示例**：
+**Example**:
 
 ```json
 {
@@ -211,16 +213,16 @@
 }
 ```
 
-#### 分布类型（Distribution）
+#### Distribution Types
 
-许多参数支持分布类型，可以是：
+Many parameters support distribution types, which can be:
 
-1. **标量值**：确定性值
+1. **Scalar value**: A deterministic value
    ```json
    "height": 1.3
    ```
 
-2. **分布对象**：均匀分布或高斯分布
+2. **Distribution object**: Uniform or Gaussian distribution
    ```json
    "height": {
      "type": "gauss",
@@ -228,7 +230,7 @@
      "std": 0.2
    }
    ```
-   或
+   or
    ```json
    "height": {
      "type": "uniform",
@@ -237,19 +239,19 @@
    }
    ```
 
-**分布类型说明**：
-- `gauss`: 高斯分布，`mean` 为均值，`std` 为标准差
-- `uniform`: 均匀分布，`mean` 为中心值，`std` 为范围的一半
+**Distribution type descriptions**:
+- `gauss`: Gaussian distribution, where `mean` is the mean and `std` is the standard deviation
+- `uniform`: Uniform distribution, where `mean` is the center value and `std` is half the range
 
-### filter（过滤器配置）
+### filter (Filter Configuration)
 
-过滤器用于过滤光线路径或方向。
+Filters are used to filter ray paths or directions.
 
-#### 基本结构
+#### Basic Structure
 
 ```json
 {
-  "id": <唯一标识符>,
+  "id": <unique identifier>,
   "type": "none" | "raypath" | "entry_exit" | "direction" | "crystal" | "complex",
   "symmetry": "P" | "B" | "D" | "PBD" | ...,
   "action": "filter_in" | "filter_out",
@@ -257,18 +259,18 @@
 }
 ```
 
-#### 字段说明
+#### Field Descriptions
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `id` | 整数 | 是 | - | 唯一标识符 |
-| `type` | 字符串 | 是 | - | 过滤器类型 |
-| `symmetry` | 字符串 | 否 | "" | 对称性："P"（平面）、"B"（双面）、"D"（双重） |
-| `action` | 字符串 | 否 | "filter_in" | 动作："filter_in" 或 "filter_out" |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `id` | integer | yes | - | Unique identifier |
+| `type` | string | yes | - | Filter type |
+| `symmetry` | string | no | "" | Symmetry: "P" (planar), "B" (basal), "D" (direction) |
+| `action` | string | no | "filter_in" | Action: "filter_in" or "filter_out" |
 
-#### 各类型特定参数
+#### Type-Specific Parameters
 
-**1. none（无过滤器）**
+**1. none (No filter)**
 ```json
 {
   "id": 1,
@@ -276,7 +278,7 @@
 }
 ```
 
-**2. raypath（光线路径）**
+**2. raypath (Ray Path)**
 ```json
 {
   "id": 2,
@@ -285,9 +287,9 @@
   "symmetry": "P"
 }
 ```
-- `raypath`: 整数数组，光线路径面编号
+- `raypath`: Integer array of face numbers along the ray path
 
-**3. entry_exit（入口出口）**
+**3. entry_exit (Entry/Exit)**
 ```json
 {
   "id": 3,
@@ -297,10 +299,10 @@
   "action": "filter_in"
 }
 ```
-- `entry`: 入口面编号
-- `exit`: 出口面编号
+- `entry`: Entry face number
+- `exit`: Exit face number
 
-**4. direction（方向）**
+**4. direction (Direction)**
 ```json
 {
   "id": 4,
@@ -311,11 +313,11 @@
   "action": "filter_out"
 }
 ```
-- `az`: 方位角（度）
-- `el`: 仰角（度）
-- `radii`: 半径（度）
+- `az`: Azimuth angle (degrees)
+- `el`: Elevation angle (degrees)
+- `radii`: Radius (degrees)
 
-**5. crystal（晶体）**
+**5. crystal (Crystal)**
 ```json
 {
   "id": 5,
@@ -323,9 +325,9 @@
   "crystal_id": 3
 }
 ```
-- `crystal_id`: 晶体ID
+- `crystal_id`: Crystal ID
 
-**6. complex（复合）**
+**6. complex (Composite)**
 ```json
 {
   "id": 6,
@@ -333,57 +335,57 @@
   "composition": [1, [2, 6], 5]
 }
 ```
-- `composition`: 过滤器组合表达式
+- `composition`: Filter composition expression
 
-### scene（场景配置）
+### scene (Scene Configuration)
 
-场景配置定义模拟场景，包括光源、晶体组合和光线数量。
+The scene configuration defines the simulation scene, including the light source, crystal combinations, and number of rays.
 
-#### 基本结构
+#### Basic Structure
 
 ```json
 {
-  "id": <唯一标识符>,
-  "light_source": <光源ID>,
-  "ray_num": <整数>,
-  "max_hits": <整数>,
+  "id": <unique identifier>,
+  "light_source": <light source ID>,
+  "ray_num": <integer>,
+  "max_hits": <integer>,
   "scattering": [ ... ]
 }
 ```
 
-#### 字段说明
+#### Field Descriptions
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `id` | 整数 | 是 | - | 唯一标识符 |
-| `light_source` | 整数 | 是 | - | 光源ID引用 |
-| `ray_num` | 整数 | 是 | - | 光线数量，-1表示自动计算 |
-| `max_hits` | 整数 | 是 | - | 最大碰撞次数 |
-| `scattering` | 数组 | 是 | - | 散射配置数组 |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `id` | integer | yes | - | Unique identifier |
+| `light_source` | integer | yes | - | Light source ID reference |
+| `ray_num` | integer | yes | - | Number of rays; -1 for automatic calculation |
+| `max_hits` | integer | yes | - | Maximum number of hits |
+| `scattering` | array | yes | - | Scattering configuration array |
 
-#### scattering（散射配置）
+#### scattering (Scattering Configuration)
 
-每个散射配置项结构：
+Each scattering configuration entry has the following structure:
 
 ```json
 {
-  "crystal": [<晶体ID数组>],
-  "proportion": [<比例数组>],
-  "prob": <概率>,
-  "filter": [<过滤器ID数组>]
+  "crystal": [<crystal ID array>],
+  "proportion": [<proportion array>],
+  "prob": <probability>,
+  "filter": [<filter ID array>]
 }
 ```
 
-**字段说明**：
+**Field descriptions**:
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `crystal` | 整数数组 | 是 | - | 晶体ID数组 |
-| `proportion` | 浮点数组 | 否 | 100.0 | 比例数组，长度必须等于 `crystal` 数组长度 |
-| `prob` | 浮点数 | 否 | 0.0 | 多散射概率 |
-| `filter` | 整数数组 | 否 | -1 | 过滤器ID数组，长度必须等于 `crystal` 数组长度，-1表示无过滤器 |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `crystal` | integer array | yes | - | Array of crystal IDs |
+| `proportion` | float array | no | 100.0 | Proportion array; length must equal the `crystal` array length |
+| `prob` | float | no | 0.0 | Multi-scattering probability |
+| `filter` | integer array | no | -1 | Array of filter IDs; length must equal the `crystal` array length; -1 means no filter |
 
-**示例**：
+**Example**:
 
 ```json
 {
@@ -405,135 +407,135 @@
 }
 ```
 
-### render（渲染配置）
+### render (Render Configuration)
 
-渲染配置定义渲染器的参数。
+The render configuration defines the renderer parameters.
 
-#### 基本结构
+#### Basic Structure
 
 ```json
 {
-  "id": <唯一标识符>,
+  "id": <unique identifier>,
   "lens": { ... },
-  "resolution": [<宽度>, <高度>],
-  "lens_shift": [<x偏移>, <y偏移>],
+  "resolution": [<width>, <height>],
+  "lens_shift": [<x offset>, <y offset>],
   "view": { ... },
   "visible": "upper" | "lower" | "full",
   "background": [<r>, <g>, <b>],
   "ray": [<r>, <g>, <b>],
-  "opacity": <浮点数>,
-  "intensity_factor": <浮点数>,
+  "opacity": <float>,
+  "intensity_factor": <float>,
   "grid": { ... },
-  "filter": [<过滤器ID数组>]
+  "filter": [<filter ID array>]
 }
 ```
 
-#### 字段说明
+#### Field Descriptions
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `id` | 整数 | 是 | - | 唯一标识符 |
-| `lens` | 对象 | 否 | 见下方 | 镜头配置 |
-| `resolution` | 整数数组 | 是 | - | 分辨率 [宽度, 高度] |
-| `lens_shift` | 整数数组 | 否 | [0, 0] | 镜头偏移 [x, y] |
-| `view` | 对象 | 否 | 见下方 | 视角配置 |
-| `visible` | 字符串 | 否 | "upper" | 可见半球："upper"、"lower"、"full" |
-| `background` | 浮点数组 | 否 | [0, 0, 0] | 背景颜色 RGB |
-| `ray` | 浮点数组 | 否 | [-1, -1, -1] | 光线颜色 RGB，-1表示使用真实颜色 |
-| `opacity` | 浮点数 | 否 | 1.0 | 透明度 |
-| `intensity_factor` | 浮点数 | 否 | 1.0 | 强度因子 |
-| `grid` | 对象 | 否 | 见下方 | 网格配置 |
-| `filter` | 整数数组 | 否 | [] | 多散射过滤器ID数组 |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `id` | integer | yes | - | Unique identifier |
+| `lens` | object | no | see below | Lens configuration |
+| `resolution` | integer array | yes | - | Resolution [width, height] |
+| `lens_shift` | integer array | no | [0, 0] | Lens shift [x, y] |
+| `view` | object | no | see below | View configuration |
+| `visible` | string | no | "upper" | Visible hemisphere: "upper", "lower", or "full" |
+| `background` | float array | no | [0, 0, 0] | Background color RGB |
+| `ray` | float array | no | [-1, -1, -1] | Ray color RGB; -1 means use true color |
+| `opacity` | float | no | 1.0 | Opacity |
+| `intensity_factor` | float | no | 1.0 | Intensity factor |
+| `grid` | object | no | see below | Grid configuration |
+| `filter` | integer array | no | [] | Multi-scattering filter ID array |
 
-#### lens（镜头配置）
+#### lens (Lens Configuration)
 
 ```json
 {
   "type": "linear" | "fisheye_equal_area" | "fisheye_equidistant" | "fisheye_stereographic" | "dual_fisheye_equal_area" | "dual_fisheye_equidistant" | "dual_fisheye_stereographic" | "rectangular",
-  "fov": <角度>  // 或 "f": <焦距>
+  "fov": <angle>  // or "f": <focal length>
 }
 ```
 
-**默认值**：
+**Defaults**:
 - `type`: "linear"
-- `fov`: 90.0（度）
+- `fov`: 90.0 (degrees)
 
-**注意**：可以使用 `fov`（视场角，度）或 `f`（焦距，mm），如果使用 `f`，程序会自动计算对应的 `fov`。
+**Note**: You can use either `fov` (field of view in degrees) or `f` (focal length in mm). If `f` is used, the program automatically calculates the corresponding `fov`.
 
-#### view（视角配置）
+#### view (View Configuration)
 
 ```json
 {
-  "azimuth": <角度>,
-  "elevation": <角度>,
-  "roll": <角度>,
-  "distance": <距离>
+  "azimuth": <angle>,
+  "elevation": <angle>,
+  "roll": <angle>,
+  "distance": <distance>
 }
 ```
 
-**默认值**：
+**Defaults**:
 - `azimuth`: 0.0
 - `elevation`: 0.0
 - `roll`: 0.0
-- `distance`: 未指定时使用默认值
+- `distance`: uses a default value when not specified
 
-#### grid（网格配置）
+#### grid (Grid Configuration)
 
 ```json
 {
   "central": [ ... ],
   "elevation": [ ... ],
-  "outline": <布尔值>
+  "outline": <boolean>
 }
 ```
 
-**字段说明**：
+**Field descriptions**:
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `central` | 对象数组 | 否 | [] | 中心网格线配置 |
-| `elevation` | 对象数组 | 否 | [] | 仰角网格线配置 |
-| `outline` | 布尔值 | 否 | true | 是否显示天球轮廓 |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `central` | object array | no | [] | Central grid line configuration |
+| `elevation` | object array | no | [] | Elevation grid line configuration |
+| `outline` | boolean | no | true | Whether to show the celestial sphere outline |
 
-**网格线配置**：
+**Grid line configuration**:
 
 ```json
 {
-  "value": <角度>,
+  "value": <angle>,
   "color": [<r>, <g>, <b>],
-  "opacity": <浮点数>,
-  "width": <浮点数>
+  "opacity": <float>,
+  "width": <float>
 }
 ```
 
-**默认值**：
-- `color`: [1.0, 1.0, 1.0]（白色）
+**Defaults**:
+- `color`: [1.0, 1.0, 1.0] (white)
 - `opacity`: 1.0
 - `width`: 1.0
 
-### project（项目配置）
+### project (Project Configuration)
 
-项目配置组合场景和渲染器。每个配置文件只能定义一个项目（单个对象，非数组）。
+The project configuration combines a scene with renderers. Each configuration file can define only one project (a single object, not an array).
 
-#### 基本结构
+#### Basic Structure
 
 ```json
 "project": {
-  "id": <唯一标识符>,
-  "scene": <场景ID>,
-  "render": [<渲染器ID数组>]
+  "id": <unique identifier>,
+  "scene": <scene ID>,
+  "render": [<renderer ID array>]
 }
 ```
 
-#### 字段说明
+#### Field Descriptions
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `id` | 整数 | 是 | - | 唯一标识符 |
-| `scene` | 整数 | 是 | - | 场景ID引用 |
-| `render` | 整数数组 | 是 | - | 渲染器ID数组 |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `id` | integer | yes | - | Unique identifier |
+| `scene` | integer | yes | - | Scene ID reference |
+| `render` | integer array | yes | - | Array of renderer IDs |
 
-#### 示例
+#### Example
 
 ```json
 "project": {
@@ -543,76 +545,76 @@
 }
 ```
 
-## 配置验证规则
+## Configuration Validation Rules
 
-### ID 唯一性验证
+### ID Uniqueness Validation
 
-- 所有配置节中的 `id` 必须在各自类型内唯一
-- `id` 必须大于 0
+- All `id` fields must be unique within their respective section
+- `id` must be greater than 0
 
-### ID 引用有效性验证
+### ID Reference Validity
 
-- `scene.light_source` 引用的光源ID必须存在于 `light_source` 数组中
-- `scene.scattering[].crystal` 引用的晶体ID必须存在于 `crystal` 数组中
-- `scene.scattering[].filter` 引用的过滤器ID必须存在于 `filter` 数组中（或为-1）
-- `project.scene` 引用的场景ID必须存在于 `scene` 数组中
-- `project.render` 引用的渲染器ID必须存在于 `render` 数组中
+- The light source ID referenced by `scene.light_source` must exist in the `light_source` array
+- Crystal IDs referenced by `scene.scattering[].crystal` must exist in the `crystal` array
+- Filter IDs referenced by `scene.scattering[].filter` must exist in the `filter` array (or be -1)
+- The scene ID referenced by `project.scene` must exist in the `scene` array
+- Renderer IDs referenced by `project.render` must exist in the `render` array
 
-**注意**：`project` 是单个对象，不是数组。
+**Note**: `project` is a single object, not an array.
 
-### 数组长度匹配验证
+### Array Length Validation
 
-- `light_source[].spectrum` 格式为字符串（标准光源名称）或对象数组（每个对象含 `wavelength` 和 `weight`）
-- `scene.scattering[].proportion` 数组长度必须等于 `crystal` 数组长度
-- `scene.scattering[].filter` 数组长度必须等于 `crystal` 数组长度（如果指定）
-- `crystal[].shape.face_distance` 数组长度必须为 6（如果指定）
-- `crystal[].shape.upper_indices` 数组长度必须为 3（如果指定）
-- `crystal[].shape.lower_indices` 数组长度必须为 3（如果指定）
-- `render[].resolution` 数组长度必须为 2
+- `light_source[].spectrum` must be either a string (standard illuminant name) or an object array (each object containing `wavelength` and `weight`)
+- `scene.scattering[].proportion` array length must equal the `crystal` array length
+- `scene.scattering[].filter` array length must equal the `crystal` array length (if specified)
+- `crystal[].shape.face_distance` array length must be 6 (if specified)
+- `crystal[].shape.upper_indices` array length must be 3 (if specified)
+- `crystal[].shape.lower_indices` array length must be 3 (if specified)
+- `render[].resolution` array length must be 2
 
-### 数值范围验证
+### Value Range Validation
 
-- 角度值通常在 -180 到 180 度之间（某些情况下可能超出）
-- `crystal[].shape.upper_h` 和 `lower_h` 应在 0.0 到 1.0 之间
-- `render[].opacity` 应在 0.0 到 1.0 之间
-- `render[].background` 和 `ray` 颜色值应在 0.0 到 1.0 之间
+- Angle values are typically between -180 and 180 degrees (may exceed in certain cases)
+- `crystal[].shape.upper_h` and `lower_h` should be between 0.0 and 1.0
+- `render[].opacity` should be between 0.0 and 1.0
+- `render[].background` and `ray` color values should be between 0.0 and 1.0
 
-### 必填字段验证
+### Required Field Validation
 
-- `light_source`: `id`, `type`, `altitude`, `spectrum` 必填
-- `crystal`: `id`, `type`, `shape` 必填
-- `filter`: `id`, `type` 必填
-- `scene`: `id`, `light_source`, `ray_num`, `max_hits`, `scattering` 必填
-- `render`: `id`, `resolution` 必填
-- `project`: `id`, `scene`, `render` 必填
+- `light_source`: `id`, `type`, `altitude`, `spectrum` are required
+- `crystal`: `id`, `type`, `shape` are required
+- `filter`: `id`, `type` are required
+- `scene`: `id`, `light_source`, `ray_num`, `max_hits`, `scattering` are required
+- `render`: `id`, `resolution` are required
+- `project`: `id`, `scene`, `render` are required
 
-### 类型验证
+### Type Validation
 
-- `crystal[].type` 必须是 "prism" 或 "pyramid"
-- `light_source[].type` 必须是 "sun" 或 "streetlight"
-- `filter[].type` 必须是 "none"、"raypath"、"entry_exit"、"direction"、"crystal" 或 "complex"
-- `render[].visible` 必须是 "upper"、"lower" 或 "full"
-- `render[].lens.type` 必须是 "linear"、"fisheye_equal_area"、"fisheye_equidistant"、"fisheye_stereographic"、"dual_fisheye_equal_area"、"dual_fisheye_equidistant"、"dual_fisheye_stereographic" 或 "rectangular"
+- `crystal[].type` must be "prism" or "pyramid"
+- `light_source[].type` must be "sun" or "streetlight"
+- `filter[].type` must be "none", "raypath", "entry_exit", "direction", "crystal", or "complex"
+- `render[].visible` must be "upper", "lower", or "full"
+- `render[].lens.type` must be "linear", "fisheye_equal_area", "fisheye_equidistant", "fisheye_stereographic", "dual_fisheye_equal_area", "dual_fisheye_equidistant", "dual_fisheye_stereographic", or "rectangular"
 
-## 常见配置错误
+## Common Configuration Errors
 
-### 1. ID 未定义错误
+### 1. Undefined ID Error
 
-**错误描述**：引用了不存在的ID
+**Description**: Referencing a non-existent ID
 
-**错误示例**：
+**Incorrect example**:
 ```json
 {
   "scene": [
     {
       "id": 1,
-      "light_source": 999  // 错误：光源ID 999 不存在
+      "light_source": 999  // Error: light source ID 999 does not exist
     }
   ]
 }
 ```
 
-**正确示例**：
+**Correct example**:
 ```json
 {
   "light_source": [
@@ -621,86 +623,86 @@
   "scene": [
     {
       "id": 1,
-      "light_source": 1  // 正确：引用已定义的光源
+      "light_source": 1  // Correct: references a defined light source
     }
   ]
 }
 ```
 
-### 2. 数组长度不匹配
+### 2. Array Length Mismatch
 
-**错误描述**：`proportion` 数组长度与 `crystal` 数组长度不一致
+**Description**: `proportion` array length does not match `crystal` array length
 
-**错误示例**：
+**Incorrect example**:
 ```json
 {
   "scattering": [
     {
       "crystal": [1, 2, 3],
-      "proportion": [10, 20]  // 错误：长度不匹配
+      "proportion": [10, 20]  // Error: length mismatch
     }
   ]
 }
 ```
 
-**正确示例**：
+**Correct example**:
 ```json
 {
   "scattering": [
     {
       "crystal": [1, 2, 3],
-      "proportion": [10, 20, 30]  // 正确：长度匹配
+      "proportion": [10, 20, 30]  // Correct: lengths match
     }
   ]
 }
 ```
 
-### 3. 类型错误
+### 3. Type Error
 
-**错误描述**：使用了错误的晶体类型名称
+**Description**: Using an incorrect crystal type name
 
-**错误示例**：
+**Incorrect example**:
 ```json
 {
   "crystal": [
     {
       "id": 1,
-      "type": "HexPrism"  // 错误：应使用 "prism"
+      "type": "HexPrism"  // Error: should use "prism"
     }
   ]
 }
 ```
 
-**正确示例**：
+**Correct example**:
 ```json
 {
   "crystal": [
     {
       "id": 1,
-      "type": "prism"  // 正确：使用 "prism"
+      "type": "prism"  // Correct: use "prism"
     }
   ]
 }
 ```
 
-### 4. 缺少必填字段
+### 4. Missing Required Field
 
-**错误描述**：缺少必填字段
+**Description**: A required field is missing
 
-**错误示例**：
+**Incorrect example**:
 ```json
 {
   "crystal": [
     {
       "id": 1,
       "type": "prism"
-      // 错误：缺少 "shape" 字段
+      // Error: missing "shape" field
     }
   ]
 }
 ```
 
-**正确示例**：
+**Correct example**:
 ```json
 {
   "crystal": [
@@ -715,24 +717,24 @@
 }
 ```
 
-### 5. 配置结构错误
+### 5. Incorrect Configuration Structure
 
-**错误描述**：配置结构不符合要求
+**Description**: The configuration structure does not meet requirements
 
-**错误示例**：
+**Incorrect example**:
 ```json
 {
   "crystal": {
-    "id": 1,  // 错误：crystal 应该是数组
+    "id": 1,  // Error: crystal should be an array
     "type": "prism"
   }
 }
 ```
 
-**正确示例**：
+**Correct example**:
 ```json
 {
-  "crystal": [  // 正确：crystal 是数组
+  "crystal": [  // Correct: crystal is an array
     {
       "id": 1,
       "type": "prism",
@@ -742,24 +744,24 @@
 }
 ```
 
-## 配置最佳实践
+## Configuration Best Practices
 
-### 性能优化建议
+### Performance Optimization Tips
 
-1. **光线数量设置**：
-   - 测试时使用较小的 `ray_num`（如 10000）
-   - 生产环境根据需求调整，通常 1000000 以上
+1. **Ray count settings**:
+   - Use a small `ray_num` (e.g., 10000) for testing
+   - Adjust according to requirements for production; typically 1000000 or more
 
-2. **配置复用**：
-   - 避免重复定义相同的晶体和光源，通过 ID 引用复用
+2. **Configuration reuse**:
+   - Avoid defining duplicate crystals and light sources; reuse them via ID references
 
-3. **过滤器使用**：
-   - 合理使用过滤器可以减少不必要的计算
-   - 在 `scene.scattering` 中使用 `filter` 字段
+3. **Filter usage**:
+   - Proper use of filters can reduce unnecessary computation
+   - Use the `filter` field in `scene.scattering`
 
-### 常见场景配置模板
+### Common Scene Configuration Templates
 
-#### 简单日晕模拟
+#### Simple Halo Simulation
 
 ```json
 {
@@ -805,7 +807,7 @@
 }
 ```
 
-#### 多晶散射模拟
+#### Multi-Crystal Scattering Simulation
 
 ```json
 {
@@ -831,18 +833,18 @@
 }
 ```
 
-### 调试配置建议
+### Debugging Tips
 
-1. **小规模测试配置**：
-   - `ray_num`: 100 或更小
-   - 使用单一波长（`"spectrum": [{"wavelength": 550, "weight": 1.0}]`）
-   - 减少晶体数量
+1. **Small-scale test configuration**:
+   - `ray_num`: 100 or less
+   - Use a single wavelength (`"spectrum": [{"wavelength": 550, "weight": 1.0}]`)
+   - Reduce the number of crystals
 
-2. **详细日志配置**：
-   - 查看配置解析日志以定位问题
+2. **Detailed logging**:
+   - Check configuration parsing logs to locate issues
 
-## 相关文档
+## Related Documentation
 
-- [README_zh.md](../README_zh.md): 用户文档
-- [architecture.md](architecture.md): 系统架构文档
-- [config_example.json](../config_example.json): 配置示例文件
+- [README](../README.md): User documentation
+- [System Architecture](architecture.md): System architecture documentation
+- [Example Configuration File](../config_example.json): Example configuration file
