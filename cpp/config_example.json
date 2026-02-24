@@ -6,8 +6,7 @@
       "altitude": 20.0,
       "azimuth": 0,
       "diameter": 0.5,
-      "wavelength": [ 550 ],
-      "wl_weight": [ 1.0 ]
+      "spectrum": [{"wavelength": 550, "weight": 1.0}]
     },
     {
       "id": 2,
@@ -15,8 +14,22 @@
       "altitude": 20.0,
       "azimuth": 0,
       "diameter": 0.5,
-      "wavelength": [ 420, 460, 500, 540, 580, 620 ],
-      "wl_weight": [ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 ]
+      "spectrum": [
+        {"wavelength": 420, "weight": 1.0},
+        {"wavelength": 460, "weight": 1.0},
+        {"wavelength": 500, "weight": 1.0},
+        {"wavelength": 540, "weight": 1.0},
+        {"wavelength": 580, "weight": 1.0},
+        {"wavelength": 620, "weight": 1.0}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "sun",
+      "altitude": 20.0,
+      "azimuth": 0,
+      "diameter": 0.5,
+      "spectrum": "D65"
     }
   ],
   "crystal": [

@@ -4,9 +4,11 @@
 #include <atomic>
 #include <cstddef>
 #include <memory>
+#include <vector>
 
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/crystal.hpp"
 #include "core/math.hpp"
 #include "util/logger.hpp"
 
@@ -20,6 +22,11 @@ using QueuePtrU = std::unique_ptr<Queue<T>>;
 template <class T>
 using QueuePtrS = std::shared_ptr<Queue<T>>;
 
+struct SimBatch {
+  size_t ray_num_ = 0;
+  const SceneConfig* scene_ = nullptr;
+};
+
 class Simulator {
  public:
   enum State {
@@ -27,7 +34,7 @@ class Simulator {
     kRunning,
   };
 
-  Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed = 0);
+  Simulator(QueuePtrS<SimBatch> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed = 0);
   Simulator(const Simulator& other) = delete;
   Simulator(Simulator&& other) noexcept;
   ~Simulator() = default;
@@ -41,11 +48,17 @@ class Simulator {
   void SetLogLevel(LogLevel level);
 
  private:
-  void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param);
+  using CrystalCache = std::vector<std::pair<const CrystalParam*, Crystal>>;
+  struct SimWorkspace {
+    RayBuffer buffer_data[2]{};
+    RayBuffer init_data[2]{};
+  };
+  void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
+                             CrystalCache& crystal_cache, SimWorkspace& workspace);
 
   static constexpr size_t kSmallBatchRayNum = 32;
 
-  QueuePtrS<SceneConfig> config_queue_;
+  QueuePtrS<SimBatch> config_queue_;
   QueuePtrS<SimData> data_queue_;
   std::atomic_bool stop_;
   std::atomic_bool idle_;

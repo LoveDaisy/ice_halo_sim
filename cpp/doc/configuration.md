@@ -34,8 +34,7 @@
   "altitude": <角度>,
   "azimuth": <角度>,
   "diameter": <角度>,
-  "wavelength": [<波长数组>],
-  "wl_weight": [<权重数组>]
+  "spectrum": <光谱配置>
 }
 ```
 
@@ -48,8 +47,25 @@
 | `altitude` | 浮点数 | 是 | - | 地平高度（度） |
 | `azimuth` | 浮点数 | 否 | 0.0 | 方位角（度） |
 | `diameter` | 浮点数 | 否 | 0.5 | 直径（度），真实太阳通常为0.5 |
-| `wavelength` | 浮点数组 | 是 | - | 波长数组（nm），必须与 `wl_weight` 长度相等 |
-| `wl_weight` | 浮点数组 | 是 | - | 权重数组，必须与 `wavelength` 长度相等 |
+| `spectrum` | 字符串或对象数组 | 是 | - | 光谱配置，见下方说明 |
+
+#### spectrum（光谱配置）
+
+`spectrum` 支持两种格式：
+
+**1. 标准光源模式**（字符串）——使用 CIE 标准光源的光谱功率分布（SPD）：
+```json
+"spectrum": "D65"
+```
+支持的标准光源：`"D50"`、`"D55"`、`"D65"`、`"D75"`、`"A"`、`"E"`
+
+**2. 离散波长模式**（对象数组）——手动指定波长和权重：
+```json
+"spectrum": [
+  {"wavelength": 420, "weight": 1.0},
+  {"wavelength": 550, "weight": 1.0}
+]
+```
 
 #### 示例
 
@@ -60,16 +76,32 @@
   "altitude": 20.0,
   "azimuth": 0,
   "diameter": 0.5,
-  "wavelength": [420, 460, 500, 540, 580, 620],
-  "wl_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  "spectrum": "D65"
+}
+```
+
+```json
+{
+  "id": 2,
+  "type": "sun",
+  "altitude": 20.0,
+  "diameter": 0.5,
+  "spectrum": [
+    {"wavelength": 420, "weight": 1.0},
+    {"wavelength": 460, "weight": 1.0},
+    {"wavelength": 500, "weight": 1.0},
+    {"wavelength": 540, "weight": 1.0},
+    {"wavelength": 580, "weight": 1.0},
+    {"wavelength": 620, "weight": 1.0}
+  ]
 }
 ```
 
 #### 注意事项
 
-- `wavelength` 和 `wl_weight` 数组长度必须相等
 - 波长决定折射率，数据来自 [Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice)
 - `azimuth` 和 `diameter` 是可选的，如果不指定会使用默认值
+- 标准光源模式下，模拟器从 [380, 780] nm 范围内均匀采样波长，按 SPD 加权
 
 ### crystal（晶体配置）
 
@@ -530,7 +562,7 @@
 
 ### 数组长度匹配验证
 
-- `light_source[].wavelength` 和 `wl_weight` 数组长度必须相等
+- `light_source[].spectrum` 格式为字符串（标准光源名称）或对象数组（每个对象含 `wavelength` 和 `weight`）
 - `scene.scattering[].proportion` 数组长度必须等于 `crystal` 数组长度
 - `scene.scattering[].filter` 数组长度必须等于 `crystal` 数组长度（如果指定）
 - `crystal[].shape.face_distance` 数组长度必须为 6（如果指定）
@@ -547,7 +579,7 @@
 
 ### 必填字段验证
 
-- `light_source`: `id`, `type`, `altitude`, `wavelength`, `wl_weight` 必填
+- `light_source`: `id`, `type`, `altitude`, `spectrum` 必填
 - `crystal`: `id`, `type`, `shape` 必填
 - `filter`: `id`, `type` 必填
 - `scene`: `id`, `light_source`, `ray_num`, `max_hits`, `scattering` 必填
@@ -737,8 +769,7 @@
       "type": "sun",
       "altitude": 20.0,
       "diameter": 0.5,
-      "wavelength": [550],
-      "wl_weight": [1.0]
+      "spectrum": "D65"
     }
   ],
   "crystal": [
@@ -804,7 +835,7 @@
 
 1. **小规模测试配置**：
    - `ray_num`: 100 或更小
-   - 使用单一波长（`wavelength: [550]`）
+   - 使用单一波长（`"spectrum": [{"wavelength": 550, "weight": 1.0}]`）
    - 减少晶体数量
 
 2. **详细日志配置**：

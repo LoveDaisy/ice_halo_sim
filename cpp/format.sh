@@ -32,4 +32,5 @@ fi
 
 format_dir "${base_dir}/src"
 format_dir "${base_dir}/test"
+format_dir "${base_dir}/bench"
 

@@ -18,9 +18,9 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_rng.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
 target_include_directories(unit_test
-  PRIVATE ${PROJ_TEST_DIR} ${PROJ_SRC_DIR})
+  PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_test
-  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice)
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice_obj)
 set_target_properties(unit_test PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 

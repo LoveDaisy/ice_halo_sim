@@ -15,6 +15,7 @@
 #include "core/filter.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
+#include "util/illuminant.hpp"
 #include "util/logger.hpp"
 #include "util/queue.hpp"
 
@@ -36,14 +37,21 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
   const auto* face_norm = curr_crystal.GetTriangleNormal();
   const auto* face_vtx = curr_crystal.GetTriangleVtx();
 
-  auto proj_prob = std::make_unique<float[]>(total_faces);
+  constexpr size_t kMaxTriangles = 64;
+  float proj_prob_buf[kMaxTriangles];
+  std::unique_ptr<float[]> proj_prob_heap;
+  float* proj_prob = proj_prob_buf;
+  if (total_faces > kMaxTriangles) {
+    proj_prob_heap = std::make_unique<float[]>(total_faces);
+    proj_prob = proj_prob_heap.get();
+  }
   for (auto& r : ray_buf) {
     const auto* d = r.d_;
     for (size_t j = 0; j < total_faces; j++) {
       proj_prob[j] = std::max(-Dot3(d, face_norm + j * 3) * face_area[j], 0.0f);
     }
     // fid
-    RandomSample(total_faces, proj_prob.get(), &r.fid_);
+    RandomSample(total_faces, proj_prob, &r.fid_);
     // p
     SampleTrianglePoint(face_vtx + r.fid_ * 9, r.p_);
   }
@@ -222,9 +230,25 @@ struct CrystalMaker {
 };
 
 
-RayBuffer AllocateAllData(const SceneConfig& config) {
-  size_t ray_num = config.ray_num_;
+bool IsDeterministic(const CrystalParam& param) {
+  auto all_no_random = [](const Distribution* d, size_t n) {
+    return !std::any_of(d, d + n, [](const auto& x) { return x.type != DistributionType::kNoRandom; });
+  };
+  return std::visit(
+      [&](const auto& p) {
+        if constexpr (std::is_same_v<std::decay_t<decltype(p)>, PrismCrystalParam>) {
+          return p.h_.type == DistributionType::kNoRandom && all_no_random(p.d_, 6);
+        } else {
+          return p.h_prs_.type == DistributionType::kNoRandom &&  //
+                 p.h_pyr_u_.type == DistributionType::kNoRandom && p.h_pyr_l_.type == DistributionType::kNoRandom &&
+                 all_no_random(p.d_, 6);
+        }
+      },
+      param);
+}
 
+
+RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num) {
   // Calculate total rays (expected value) used in the whole simulation.
   // total = n * (2 * k + 1) * (1 + k * p1 + k^2 * p1 * p2 + k^3 * p1 * p2 * p3 + ...)
   // where k = max_hits
@@ -371,7 +395,7 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
 }
 
 
-Simulator::Simulator(QueuePtrS<SceneConfig> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed)
+Simulator::Simulator(QueuePtrS<SimBatch> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed)
     : config_queue_(std::move(config_queue)), data_queue_(std::move(data_queue)), stop_(false), idle_(true),
       seed_(seed), rng_(seed != 0 ? seed :
                                     static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count() ^
@@ -408,41 +432,52 @@ void Simulator::Run() {
     RandomNumberGenerator::GetInstance()->SetSeed(seed_);
   }
 
+  CrystalCache crystal_cache;
+  SimWorkspace workspace;
+
   while (true) {
-    // Config in the config_queue is processed by frontend of simulator (NOT GUI) so that
-    // it has small ray_num and contains only one wavelength parameter of light source.
-    auto config = config_queue_->Get();  // Will block until get one
-    if (config.ray_num_ == 0 || stop_) {
+    auto batch = config_queue_->Get();  // Will block until get one
+    if (batch.ray_num_ == 0 || stop_) {
       break;
     }
 
+    const auto& config = *batch.scene_;
     idle_ = false;
-    for (const auto& wl_param : config.light_source_.wl_param_) {
-      if (stop_) {
-        break;
+
+    const auto& spectrum = config.light_source_.spectrum_;
+    if (auto* illuminant = std::get_if<IlluminantType>(&spectrum)) {
+      // Standard illuminant: uniform wavelength sampling + SPD weight
+      float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
+      float weight = GetIlluminantSpd(*illuminant, wl);
+      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_, crystal_cache, workspace);
+    } else {
+      // Discrete wavelength list
+      const auto& wl_params = std::get<std::vector<WlParam>>(spectrum);
+      for (const auto& wl_param : wl_params) {
+        if (stop_) {
+          break;
+        }
+        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace);
       }
-      SimulateOneWavelength(config, wl_param);
     }
+
     idle_ = true;
   }
 }
 
 
-void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param) {
+void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
+                                      CrystalCache& crystal_cache, SimWorkspace& workspace) {
   ILOG_DEBUG(logger_, "Run: get config({}): ray({}), wl({:.1f},{:.2f})",  //
-             config.id_, config.ray_num_, wl_param.wl_, wl_param.weight_);
+             config.id_, ray_num, wl_param.wl_, wl_param.weight_);
 
   float wl = wl_param.wl_;
 
-  // For memory saving, it's better to keep ray_num small.
-  // Actually, if ms_prob = 1.0, i.e. all outgoing rays will be sent to next crystal,
-  // then the final ray number for init_data will be (num0 * (max_hits + 1)^ms_num),
-  // which increase rapidily.
-  size_t ray_num = config.ray_num_;
-
-  RayBuffer all_data = AllocateAllData(config);
-  RayBuffer init_data[2]{ RayBuffer(), RayBuffer(ray_num * config.max_hits_) };
-  RayBuffer buffer_data[2]{};
+  RayBuffer all_data = AllocateAllData(config, ray_num);
+  auto& init_data = workspace.init_data;
+  auto& buffer_data = workspace.buffer_data;
+  init_data[0].size_ = 0;
+  init_data[1].Reset(ray_num * config.max_hits_);
 
   std::vector<Crystal> all_crystals;
   all_crystals.reserve(16);
@@ -462,12 +497,46 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
       const auto& s = m.setting_[ci];
       auto filter = Filter::Create(s.filter_);
 
+      bool deterministic = IsDeterministic(s.crystal_.param_);
+
+      // Look up cross-call cache for deterministic crystal params.
+      const CrystalParam* param_ptr = &s.crystal_.param_;
+      const Crystal* cached_crystal = nullptr;
+      if (deterministic) {
+        for (const auto& [key, val] : crystal_cache) {
+          if (key == param_ptr) {
+            cached_crystal = &val;
+            break;
+          }
+        }
+      }
+
+      // For deterministic params, create/copy crystal once per ci iteration.
+      size_t ci_crystal_id = kInfSize;
+
       for (size_t cn = 0; cn < crystal_ray_num[ci] && !stop_; cn += kSmallBatchRayNum) {  // for a same crystal
         size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - cn);
 
-        size_t curr_crystal_id = all_crystals.size();
-        all_crystals.emplace_back(std::visit(CrystalMaker{ rng_ }, s.crystal_.param_));
-        const auto& curr_crystal = all_crystals.back();  // **NO** rotation
+        size_t curr_crystal_id = 0;
+        if (deterministic && ci_crystal_id != kInfSize) {
+          // Reuse crystal from earlier batch in this ci loop
+          curr_crystal_id = ci_crystal_id;
+        } else if (cached_crystal != nullptr) {
+          // Copy from cross-call cache (deterministic, first batch of this ci)
+          curr_crystal_id = all_crystals.size();
+          all_crystals.emplace_back(*cached_crystal);
+          ci_crystal_id = curr_crystal_id;
+        } else {
+          // Create new crystal (random params, or first-ever deterministic creation)
+          curr_crystal_id = all_crystals.size();
+          all_crystals.emplace_back(std::visit(CrystalMaker{ rng_ }, s.crystal_.param_));
+          if (deterministic) {
+            crystal_cache.emplace_back(param_ptr, all_crystals.back());
+            cached_crystal = &crystal_cache.back().second;
+            ci_crystal_id = curr_crystal_id;
+          }
+        }
+        const auto& curr_crystal = all_crystals[curr_crystal_id];
         filter->InitCrystalSymmetry(curr_crystal);
 
         // 1. Initialize data
@@ -521,7 +590,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
 
   SimData sim_data;
   sim_data.curr_wl_ = wl;
-  sim_data.total_intensity_ = wl_param.weight_ * config.ray_num_;
+  sim_data.total_intensity_ = wl_param.weight_ * ray_num;
   sim_data.crystals_ = std::move(all_crystals);
   sim_data.rays_ = std::move(all_data);
   data_queue_->Emplace(std::move(sim_data));

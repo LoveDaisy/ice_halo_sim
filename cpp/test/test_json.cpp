@@ -14,6 +14,7 @@
 #include "config/proj_config.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
+#include "util/illuminant.hpp"
 
 extern std::string config_file_name;
 using namespace lumice;
@@ -36,13 +37,15 @@ TEST_F(V3TestJson, LightSource_Sun) {
   auto s = j_light.get<LightSourceConfig>();
 
   ASSERT_EQ(s.id_, 2);
-  ASSERT_EQ(s.wl_param_.size(), 6);
+  ASSERT_TRUE(std::holds_alternative<std::vector<WlParam>>(s.spectrum_));
+  const auto& wl_params = std::get<std::vector<WlParam>>(s.spectrum_);
+  ASSERT_EQ(wl_params.size(), 6);
 
-  std::vector<WlParam> wl_param = { { 420.0f, 1.0f }, { 460.0f, 1.0f }, { 500.0f, 1.0f },
+  std::vector<WlParam> expected = { { 420.0f, 1.0f }, { 460.0f, 1.0f }, { 500.0f, 1.0f },
                                     { 540.0f, 1.0f }, { 580.0f, 1.0f }, { 620.0f, 1.0f } };
-  for (size_t i = 0; i < wl_param.size(); i++) {
-    ASSERT_NEAR(s.wl_param_[i].wl_, wl_param[i].wl_, 1e-5);
-    ASSERT_NEAR(s.wl_param_[i].weight_, wl_param[i].weight_, 1e-5);
+  for (size_t i = 0; i < expected.size(); i++) {
+    ASSERT_NEAR(wl_params[i].wl_, expected[i].wl_, 1e-5);
+    ASSERT_NEAR(wl_params[i].weight_, expected[i].weight_, 1e-5);
   }
 
   ASSERT_TRUE(std::holds_alternative<SunParam>(s.param_));
@@ -51,6 +54,120 @@ TEST_F(V3TestJson, LightSource_Sun) {
   ASSERT_NEAR(p.azimuth_, 0.0f, 1e-5);
   ASSERT_NEAR(p.altitude_, 20.0f, 1e-5);
   ASSERT_NEAR(p.diameter_, 0.5f, 1e-5);
+}
+
+TEST_F(V3TestJson, LightSource_Illuminant) {
+  // config_example.json light_source[2] has "spectrum": "D65"
+  const auto& j_light = config_json_.at("light_source")[2];
+  auto s = j_light.get<LightSourceConfig>();
+
+  ASSERT_EQ(s.id_, 3);
+  ASSERT_TRUE(std::holds_alternative<IlluminantType>(s.spectrum_));
+  ASSERT_EQ(std::get<IlluminantType>(s.spectrum_), IlluminantType::kD65);
+}
+
+TEST(LightSourceSpectrum, IlluminantParsing) {
+  // Test all supported illuminant types
+  struct TestCase {
+    const char* name;
+    IlluminantType expected;
+  };
+  TestCase cases[] = {
+    { "D50", IlluminantType::kD50 }, { "D55", IlluminantType::kD55 }, { "D65", IlluminantType::kD65 },
+    { "D75", IlluminantType::kD75 }, { "A", IlluminantType::kA },     { "E", IlluminantType::kE },
+  };
+
+  for (const auto& tc : cases) {
+    nlohmann::json j = {
+      { "id", 1 },
+      { "type", "sun" },
+      { "altitude", 20.0 },
+      { "spectrum", tc.name },
+    };
+    auto s = j.get<LightSourceConfig>();
+    ASSERT_TRUE(std::holds_alternative<IlluminantType>(s.spectrum_)) << "Failed for: " << tc.name;
+    ASSERT_EQ(std::get<IlluminantType>(s.spectrum_), tc.expected) << "Failed for: " << tc.name;
+  }
+}
+
+TEST(LightSourceSpectrum, DiscreteRoundTrip) {
+  nlohmann::json j_in = {
+    { "id", 1 },
+    { "type", "sun" },
+    { "altitude", 20.0 },
+    { "spectrum", nlohmann::json::array(
+                      { { { "wavelength", 420 }, { "weight", 0.5 } }, { { "wavelength", 550 }, { "weight", 1.0 } } }) },
+  };
+  auto s = j_in.get<LightSourceConfig>();
+  nlohmann::json j_out;
+  to_json(j_out, s);
+
+  ASSERT_TRUE(j_out["spectrum"].is_array());
+  ASSERT_EQ(j_out["spectrum"].size(), 2);
+  ASSERT_NEAR(j_out["spectrum"][0]["wavelength"].get<float>(), 420.0f, 1e-5);
+  ASSERT_NEAR(j_out["spectrum"][0]["weight"].get<float>(), 0.5f, 1e-5);
+  ASSERT_NEAR(j_out["spectrum"][1]["wavelength"].get<float>(), 550.0f, 1e-5);
+  ASSERT_NEAR(j_out["spectrum"][1]["weight"].get<float>(), 1.0f, 1e-5);
+}
+
+TEST(LightSourceSpectrum, IlluminantRoundTrip) {
+  nlohmann::json j_in = {
+    { "id", 1 },
+    { "type", "sun" },
+    { "altitude", 20.0 },
+    { "spectrum", "D65" },
+  };
+  auto s = j_in.get<LightSourceConfig>();
+  nlohmann::json j_out;
+  to_json(j_out, s);
+
+  ASSERT_TRUE(j_out["spectrum"].is_string());
+  ASSERT_EQ(j_out["spectrum"].get<std::string>(), "D65");
+}
+
+
+// =============== SPD Query ===============
+TEST(IlluminantSpd, D65At560nm) {
+  // D65 is normalized to 100.0 at 560nm (S0[52]=100, S1[52]=0, S2[52]=0)
+  float spd = GetIlluminantSpd(IlluminantType::kD65, 560.0f);
+  ASSERT_NEAR(spd, 100.0f, 0.5f);
+}
+
+TEST(IlluminantSpd, D50At560nm) {
+  float spd = GetIlluminantSpd(IlluminantType::kD50, 560.0f);
+  // At 560nm, S0=100, S1=0, S2=0, so SPD = 100 regardless of M1, M2
+  ASSERT_NEAR(spd, 100.0f, 0.5f);
+}
+
+TEST(IlluminantSpd, AAt560nm) {
+  // Illuminant A is normalized to 100.0 at 560nm by formula
+  float spd = GetIlluminantSpd(IlluminantType::kA, 560.0f);
+  ASSERT_NEAR(spd, 100.0f, 0.1f);
+}
+
+TEST(IlluminantSpd, EConstant) {
+  // E illuminant has constant SPD = 1.0
+  ASSERT_NEAR(GetIlluminantSpd(IlluminantType::kE, 380.0f), 1.0f, 1e-5);
+  ASSERT_NEAR(GetIlluminantSpd(IlluminantType::kE, 550.0f), 1.0f, 1e-5);
+  ASSERT_NEAR(GetIlluminantSpd(IlluminantType::kE, 780.0f), 1.0f, 1e-5);
+}
+
+TEST(IlluminantSpd, OutOfRange) {
+  // Out of range wavelengths should return 0.0
+  ASSERT_NEAR(GetIlluminantSpd(IlluminantType::kD65, 200.0f), 0.0f, 1e-5);
+  ASSERT_NEAR(GetIlluminantSpd(IlluminantType::kD65, 900.0f), 0.0f, 1e-5);
+  ASSERT_NEAR(GetIlluminantSpd(IlluminantType::kA, 200.0f), 0.0f, 1e-5);
+  ASSERT_NEAR(GetIlluminantSpd(IlluminantType::kE, 200.0f), 0.0f, 1e-5);
+}
+
+TEST(IlluminantSpd, DSeriesPositive) {
+  // All D-series should produce positive SPD in visible range
+  IlluminantType types[] = { IlluminantType::kD50, IlluminantType::kD55, IlluminantType::kD65, IlluminantType::kD75 };
+  for (auto type : types) {
+    for (float wl = 380.0f; wl <= 780.0f; wl += 10.0f) {
+      ASSERT_GT(GetIlluminantSpd(type, wl), 0.0f) << "type=" << static_cast<int>(type) << " wl=" << wl;
+    }
+  }
 }
 
 

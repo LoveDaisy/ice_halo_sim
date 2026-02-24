@@ -129,12 +129,6 @@ class Crystal {
   const float* GetTriangleVtx() const;
 
   /**
-   * @brief Get triangle edge vectors
-   * @return Pointer to edge vector array (6 * triangle_cnt elements: 2 edges * 3 coordinates per triangle)
-   */
-  const float* GetTriangleEdgeVec() const;
-
-  /**
    * @brief Get triangle normal vectors
    * @return Pointer to normal vector array (3 * triangle_cnt elements: 3 coordinates per triangle)
    */
@@ -189,22 +183,34 @@ class Crystal {
    */
   float GetRefractiveIndex(float wl) const;
 
+  size_t PolygonFaceCount() const;
+  const float* GetPolygonFaceNormal() const;
+  const float* GetPolygonFaceDist() const;
+  const int* GetPolygonFaceTriId() const;
+
   IdType config_id_ = kInvalidId;
 
  private:
   void ComputeCacheData();
+  void BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt);
 
   Mesh mesh_;
 
   std::unique_ptr<float[]> cache_data_;
   float* face_v_;         // vertex coordinate of every face. 9 * face_cnt
-  float* face_ev_;        // edge vector [v0v1, v0v2]. 6 * face_cnt
   float* face_n_;         // normal of every face. 3 * face_cnt
   float* face_area_;      // area of every face. 1 * face_cnt
   float* face_coord_tf_;  // transform for barycentric coordinate. 12 * face_cnt
 
   std::unique_ptr<IdType[]> fn_map_;  // fid --> fn
   int fn_period_;                     // for raypath symmetry
+
+  // Polygon face data for per-plane intersection
+  size_t poly_face_cnt_ = 0;
+  std::unique_ptr<float[]> poly_face_data_;  // single allocation: n(3*cnt) + d(cnt) + tri_id(cnt as float)
+  float* poly_face_n_ = nullptr;             // unit normals, 3 * poly_face_cnt_
+  float* poly_face_d_ = nullptr;             // plane distances, poly_face_cnt_
+  int* poly_face_tri_id_ = nullptr;          // representative triangle ID, poly_face_cnt_
 };
 
 

@@ -120,8 +120,16 @@ void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num
     return;
   }
 
-  auto p = std::make_unique<float[]>(pop_size + 1);
-  std::memcpy(p.get() + 1, weight, pop_size * sizeof(float));
+  constexpr int kMaxStackPopSize = 64;
+  float p_stack[kMaxStackPopSize + 1];
+  std::unique_ptr<float[]> p_heap;
+  float* p = p_stack;
+  if (pop_size > kMaxStackPopSize) {
+    p_heap = std::make_unique<float[]>(pop_size + 1);
+    p = p_heap.get();
+  }
+  p[0] = 0;
+  std::memcpy(p + 1, weight, pop_size * sizeof(float));
   for (int i = 1; i < pop_size; i++) {
     p[i + 1] = std::max(p[i + 1], 0.0f) + p[i];
   }
@@ -303,298 +311,150 @@ int* Mesh::GetTrianglePtr(size_t idx) {
 }
 
 
-Mesh CreatePrismMesh(float h) {
-  using math::kSqrt3_4;
+// ====== Unified hex crystal plane equations ======
 
-  std::unique_ptr<float[]> vtx{ new float[kHexPrismVtxCnt * 3]{
-      kSqrt3_4,  -1.0f / 4.0f, h / 2.0f,   // upper: vtx1
-      kSqrt3_4,  1.0f / 4.0f,  h / 2.0f,   // upper: vtx2
-      0.0f,      1.0f / 2.0f,  h / 2.0f,   // upper: vtx3
-      -kSqrt3_4, 1.0f / 4.0f,  h / 2.0f,   // upper: vtx4
-      -kSqrt3_4, -1.0f / 4.0f, h / 2.0f,   // upper: vtx5
-      0.0f,      -1.0f / 2.0f, h / 2.0f,   // upper: vtx6
-      kSqrt3_4,  -1.0f / 4.0f, -h / 2.0f,  // lower: vtx1
-      kSqrt3_4,  1.0f / 4.0f,  -h / 2.0f,  // lower: vtx2
-      0.0f,      1.0f / 2.0f,  -h / 2.0f,  // lower: vtx3
-      -kSqrt3_4, 1.0f / 4.0f,  -h / 2.0f,  // lower: vtx4
-      -kSqrt3_4, -1.0f / 4.0f, -h / 2.0f,  // lower: vtx5
-      0.0f,      -1.0f / 2.0f, -h / 2.0f,  // lower: vtx6
-  } };
-  std::unique_ptr<int[]> triangle_idx{ new int[kHexPrismTriCnt * 3]{
-      0,  1,  2,   // upper: fn1
-      0,  2,  3,   // upper: fn1
-      3,  4,  5,   // upper: fn1
-      3,  5,  0,   // upper: fn1
-      0,  6,  1,   // side: fn3
-      6,  7,  1,   // side: fn3
-      1,  7,  2,   // side: fn4
-      7,  8,  2,   // side: fn4
-      2,  8,  3,   // side: fn5
-      8,  9,  3,   // side: fn5
-      3,  9,  4,   // side: fn6
-      9,  10, 4,   // side: fn6
-      4,  10, 5,   // side: fn7
-      10, 11, 5,   // side: fn7
-      5,  11, 0,   // side: fn8
-      11, 6,  0,   // side: fn8
-      6,  8,  7,   // lower: fn2
-      6,  9,  8,   // lower: fn2
-      9,  11, 10,  // lower: fn2
-      9,  6,  11,  // lower: fn2
-  } };
-  return Mesh(kHexPrismVtxCnt, std::move(vtx), kHexPrismTriCnt, std::move(triangle_idx));
-}
-
-
-Mesh CreatePrismMesh(float h, const float* dist) {
-  using math::kSqrt3_2;
-  using math::kSqrt3_4;
-
-  // a*x + b*y + c <= 0, (a, b, c)
-  const float kCoef[6 * 3]{
-    1.0f,  0.0f,      -dist[0] * kSqrt3_4,  //
-    0.5f,  kSqrt3_2,  -dist[1] * kSqrt3_4,  //
-    -0.5f, kSqrt3_2,  -dist[2] * kSqrt3_4,  //
-    -1.0f, 0.0f,      -dist[3] * kSqrt3_4,  //
-    -0.5f, -kSqrt3_2, -dist[4] * kSqrt3_4,  //
-    0.5f,  -kSqrt3_2, -dist[5] * kSqrt3_4,  //
-  };
-
-  // 1. Find out all candidate vertices
-  auto vtx = std::make_unique<float[]>(kHexPrismVtxCnt * 3);
-  for (int i = 0; i < 6; i++) {
-    // A vertex is the intersection of current and previous plane
-    int i1 = i;
-    int i2 = (i + 5) % 6;
-    SolveLines(kCoef + i1 * 3, kCoef + i2 * 3, vtx.get() + i * 3);
-    vtx[i * 3 + 2] = h / 2.0f;
-  }
-
-  // 2. Filter out invalid vertices
-  size_t vtx_cnt = 0;
-  for (size_t i = 0; i < 6; i++) {
-    // Check every plane
-    if (IsInPolygon2(6, kCoef, vtx.get() + i * 3)) {
-      if (vtx_cnt < i) {
-        std::memcpy(vtx.get() + vtx_cnt * 3, vtx.get() + i * 3, 3 * sizeof(float));
-      }
-    } else {
-      // If invalid, then new vertex must be the intersection of previous and next plane
-      int i1 = (i + 1) % 6;
-      int i2 = (i + 5) % 6;
-      SolveLines(kCoef + i1 * 3, kCoef + i2 * 3, vtx.get() + vtx_cnt * 3);
-      vtx[vtx_cnt * 3 + 2] = h / 2.0f;
-      i++;
-    }
-    vtx_cnt++;
-  }
-
-  // 3. Copy data to make another basal face
-  std::memcpy(vtx.get() + vtx_cnt * 3, vtx.get(), vtx_cnt * 3 * sizeof(float));
-  for (int i = 0; i < 6; i++) {
-    vtx[vtx_cnt * 3 + i * 3 + 2] = -h / 2.0f;
-  }
-
-  auto triangle_idx = std::make_unique<int[]>(kHexPrismTriCnt * 3);
-  size_t triangle_cnt = 0;
-  for (size_t i = 1; i + 1 < vtx_cnt; i++) {
-    // Basal face. Face number 1
-    triangle_idx[triangle_cnt * 3 + 0] = 0;
-    triangle_idx[triangle_cnt * 3 + 1] = i;
-    triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
-    triangle_cnt++;
-  }
-  for (size_t i = 0; i < vtx_cnt; i++) {
-    // Prism face first half
-    triangle_idx[triangle_cnt * 3 + 0] = i;
-    triangle_idx[triangle_cnt * 3 + 1] = i + vtx_cnt;
-    triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
-    triangle_cnt++;
-    // Prism face second half
-    triangle_idx[triangle_cnt * 3 + 0] = i + vtx_cnt;
-    triangle_idx[triangle_cnt * 3 + 1] = (i + 1) % vtx_cnt + vtx_cnt;
-    triangle_idx[triangle_cnt * 3 + 2] = (i + 1) % vtx_cnt;
-    triangle_cnt++;
-  }
-  for (size_t i = 1; i + 1 < vtx_cnt; i++) {
-    // Basal face. Face number 2
-    triangle_idx[triangle_cnt * 3 + 0] = vtx_cnt;
-    triangle_idx[triangle_cnt * 3 + 1] = (i + 1) % vtx_cnt + vtx_cnt;
-    triangle_idx[triangle_cnt * 3 + 2] = i + vtx_cnt;
-    triangle_cnt++;
-  }
-
-  return Mesh(vtx_cnt * 2, std::move(vtx), triangle_cnt, std::move(triangle_idx));
-}
-
-
-Mesh CreatePyramidMesh(float h1, float h2, float h3) {
-  using math::kSqrt3_4;
-
-  float h2_2 = h2 / 2.0f;
-  float z1 = h2_2 + kIceCrystalC / 2.0f * h1;
-  float z3 = -h2_2 - kIceCrystalC / 2.0f * h3;
-  float r1 = 1 - h1;
-  float r3 = 1 - h3;
-  std::unique_ptr<float[]> vtx{ new float[kHexPyramidVtxCnt * 3]{
-      r1 * kSqrt3_4,  r1 * -1.0f / 4.0f, z1,     // upper 0: vtx1
-      r1 * kSqrt3_4,  r1 * 1.0f / 4.0f,  z1,     // upper 0: vtx2
-      r1 * 0.0f,      r1 * 1.0f / 2.0f,  z1,     // upper 0: vtx3
-      r1 * -kSqrt3_4, r1 * 1.0f / 4.0f,  z1,     // upper 0: vtx4
-      r1 * -kSqrt3_4, r1 * -1.0f / 4.0f, z1,     // upper 0: vtx5
-      r1 * 0.0f,      r1 * -1.0f / 2.0f, z1,     // upper 0: vtx6
-      kSqrt3_4,       -1.0f / 4.0f,      h2_2,   // upper 1: vtx1
-      kSqrt3_4,       1.0f / 4.0f,       h2_2,   // upper 1: vtx2
-      0.0f,           1.0f / 2.0f,       h2_2,   // upper 1: vtx3
-      -kSqrt3_4,      1.0f / 4.0f,       h2_2,   // upper 1: vtx4
-      -kSqrt3_4,      -1.0f / 4.0f,      h2_2,   // upper 1: vtx5
-      0.0f,           -1.0f / 2.0f,      h2_2,   // upper 1: vtx6
-      kSqrt3_4,       -1.0f / 4.0f,      -h2_2,  // lower 2: vtx1
-      kSqrt3_4,       1.0f / 4.0f,       -h2_2,  // lower 2: vtx2
-      0.0f,           1.0f / 2.0f,       -h2_2,  // lower 2: vtx3
-      -kSqrt3_4,      1.0f / 4.0f,       -h2_2,  // lower 2: vtx4
-      -kSqrt3_4,      -1.0f / 4.0f,      -h2_2,  // lower 2: vtx5
-      0.0f,           -1.0f / 2.0f,      -h2_2,  // lower 2: vtx6
-      r3 * kSqrt3_4,  r3 * -1.0f / 4.0f, z3,     // lower 3: vtx1
-      r3 * kSqrt3_4,  r3 * 1.0f / 4.0f,  z3,     // lower 3: vtx2
-      r3 * 0.0f,      r3 * 1.0f / 2.0f,  z3,     // lower 3: vtx3
-      r3 * -kSqrt3_4, r3 * 1.0f / 4.0f,  z3,     // lower 3: vtx4
-      r3 * -kSqrt3_4, r3 * -1.0f / 4.0f, z3,     // lower 3: vtx5
-      r3 * 0.0f,      r3 * -1.0f / 2.0f, z3,     // lower 3: vtx6
-  } };
-
-  std::unique_ptr<int[]> tri{ new int[kHexPyramidTriCnt * 3]{
-      0,  1,  2,   // upper basal: fn1
-      0,  2,  3,   // upper basal: fn1
-      3,  4,  5,   // upper basal: fn1
-      3,  5,  0,   // upper basal: fn1
-      0,  6,  1,   // pyramid: fn13
-      6,  7,  1,   // pyramid: fn13
-      1,  7,  2,   // pyramid: fn14
-      7,  8,  2,   // pyramid: fn14
-      2,  8,  3,   // pyramid: fn15
-      8,  9,  3,   // pyramid: fn15
-      3,  9,  4,   // pyramid: fn16
-      9,  10, 4,   // pyramid: fn16
-      4,  10, 5,   // pyramid: fn17
-      10, 11, 5,   // pyramid: fn17
-      5,  11, 0,   // pyramid: fn18
-      11, 6,  0,   // pyramid: fn18
-      6,  12, 7,   // prism: fn3
-      12, 13, 7,   // prism: fn3
-      7,  13, 8,   // prism: fn4
-      13, 14, 8,   // prism: fn4
-      8,  14, 9,   // prism: fn5
-      14, 15, 9,   // prism: fn5
-      9,  15, 10,  // prism: fn6
-      15, 16, 10,  // prism: fn6
-      10, 16, 11,  // prism: fn7
-      16, 17, 11,  // prism: fn7
-      11, 17, 6,   // prism: fn8
-      17, 12, 6,   // prism: fn8
-      12, 18, 13,  // pyramid: fn23
-      18, 19, 13,  // pyramid: fn23
-      13, 19, 14,  // pyramid: fn24
-      19, 20, 14,  // pyramid: fn24
-      14, 20, 15,  // pyramid: fn25
-      20, 21, 15,  // pyramid: fn25
-      15, 21, 16,  // pyramid: fn26
-      21, 22, 16,  // pyramid: fn26
-      16, 22, 17,  // pyramid: fn27
-      22, 23, 17,  // pyramid: fn27
-      17, 23, 12,  // pyramid: fn28
-      23, 18, 12,  // pyramid: fn28
-      18, 20, 19,  // lower basal: fn2
-      18, 21, 20,  // lower basal: fn2
-      21, 18, 23,  // lower basal: fn2
-      21, 23, 22,  // lower basal: fn2
-  } };
-
-  return Mesh(kHexPyramidVtxCnt, std::move(vtx), kHexPyramidTriCnt, std::move(tri));
-}
-
-
-constexpr int kHexPyramidPlaneCnt = 20;
-constexpr int kUpperPyramidPlaneCnt = 6;
-constexpr int kLowerPyramidPlaneCnt = 6;
-constexpr int kMiddlePrismPlaneCnt = 6;
-
-
-std::array<float, kHexPyramidPlaneCnt * 4> FillGeneralPyramidCoef(float upper_alpha, float lower_alpha,  //
-                                                                  float h1, float h2, float h3,          //
-                                                                  const float* dist) {                   //
+size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float h2, float h3, const float* dist,
+                          float* out_coef) {
   using math::kPi_3;
   using math::kPi_6;
 
-  constexpr int kUpperPyrOffset = 2;
-  constexpr int kPriOffset = 8;
-  constexpr int kLowerPyrOffset = 14;
-
   float h2_2 = h2 / 2.0f;
-  float a1 = math::kSqrt3_4 / std::tan(upper_alpha * math::kDegreeToRad);
-  float a2 = math::kSqrt3_4 / std::tan(lower_alpha * math::kDegreeToRad);
+  size_t cnt = 0;
 
-  std::array<float, kHexPyramidPlaneCnt * 4> coef{};
+  // Upper basal: (0, 0, 1, d) — d filled later
+  out_coef[0] = 0;
+  out_coef[1] = 0;
+  out_coef[2] = 1.0f;
+  out_coef[3] = 0;
+  cnt++;
 
-  coef[2] = 1.0f;
-  coef[6] = -1.0f;
+  // Lower basal: (0, 0, -1, d) — d filled later
+  out_coef[4] = 0;
+  out_coef[5] = 0;
+  out_coef[6] = -1.0f;
+  out_coef[7] = 0;
+  cnt++;
 
-  // Step 1. Fill coefficients except basal surfaces.
+  // Prism faces (always 6)
   for (int i = 0; i < 6; i++) {
-    // upper pyramidal
     float x1 = 0.5f * std::cos(-kPi_6 + i * kPi_3);
     float x2 = 0.5f * std::cos(kPi_6 + i * kPi_3);
     float y1 = 0.5f * std::sin(-kPi_6 + i * kPi_3);
     float y2 = 0.5f * std::sin(kPi_6 + i * kPi_3);
     float det = x1 * y2 - x2 * y1;
-    coef[(i + kUpperPyrOffset) * 4 + 0] = a1 * (y2 - y1) * dist[i];
-    coef[(i + kUpperPyrOffset) * 4 + 1] = a1 * (x1 - x2) * dist[i];
-    coef[(i + kUpperPyrOffset) * 4 + 2] = det;
-    coef[(i + kUpperPyrOffset) * 4 + 3] = -(h2_2 + a1 * dist[i]) * det;
-    // prismatic
-    coef[(i + kPriOffset) * 4 + 0] = y2 - y1;
-    coef[(i + kPriOffset) * 4 + 1] = x1 - x2;
-    coef[(i + kPriOffset) * 4 + 2] = 0;
-    coef[(i + kPriOffset) * 4 + 3] = -dist[i] * det;
-    // lower pyramidal
-    coef[(i + kLowerPyrOffset) * 4 + 0] = a2 * (y2 - y1) * dist[i];
-    coef[(i + kLowerPyrOffset) * 4 + 1] = a2 * (x1 - x2) * dist[i];
-    coef[(i + kLowerPyrOffset) * 4 + 2] = -det;
-    coef[(i + kLowerPyrOffset) * 4 + 3] = -(h2_2 + a2 * dist[i]) * det;
+    out_coef[cnt * 4 + 0] = y2 - y1;
+    out_coef[cnt * 4 + 1] = x1 - x2;
+    out_coef[cnt * 4 + 2] = 0;
+    out_coef[cnt * 4 + 3] = -dist[i] * det;
+    cnt++;
   }
 
-  // Step 2. Find out min and max z value, and complete coefficient array.
-  float z_max = std::numeric_limits<float>::lowest();
-  float z_min = std::numeric_limits<float>::max();
-  const auto* coef_ptr = coef.data();
-  float xyz[3];
-  for (int i = 2; i < kHexPyramidPlaneCnt; i++) {
-    for (int j = i + 1; j < kHexPyramidPlaneCnt; j++) {
-      for (int k = j + 1; k < kHexPyramidPlaneCnt; k++) {
-        // Find an intersection point
-        if (!SolvePlanes(coef_ptr + i * 4, coef_ptr + j * 4, coef_ptr + k * 4, xyz)) {
-          continue;
-        }
-        // Check if it is inner point.
-        if (IsInPolyhedron3(kHexPyramidPlaneCnt - 2, coef_ptr + 8, xyz)) {
-          if (xyz[2] > z_max) {
-            z_max = xyz[2];
+  bool has_upper = h1 > math::kFloatEps;
+  bool has_lower = h3 > math::kFloatEps;
+
+  // Upper pyramidal faces (6, if h1 > 0)
+  if (has_upper) {
+    float a1 = math::kSqrt3_4 / std::tan(upper_alpha * math::kDegreeToRad);
+    for (int i = 0; i < 6; i++) {
+      float x1 = 0.5f * std::cos(-kPi_6 + i * kPi_3);
+      float x2 = 0.5f * std::cos(kPi_6 + i * kPi_3);
+      float y1 = 0.5f * std::sin(-kPi_6 + i * kPi_3);
+      float y2 = 0.5f * std::sin(kPi_6 + i * kPi_3);
+      float det = x1 * y2 - x2 * y1;
+      out_coef[cnt * 4 + 0] = a1 * (y2 - y1) * dist[i];
+      out_coef[cnt * 4 + 1] = a1 * (x1 - x2) * dist[i];
+      out_coef[cnt * 4 + 2] = det;
+      out_coef[cnt * 4 + 3] = -(h2_2 + a1 * dist[i]) * det;
+      cnt++;
+    }
+  }
+
+  // Lower pyramidal faces (6, if h3 > 0)
+  if (has_lower) {
+    float a2 = math::kSqrt3_4 / std::tan(lower_alpha * math::kDegreeToRad);
+    for (int i = 0; i < 6; i++) {
+      float x1 = 0.5f * std::cos(-kPi_6 + i * kPi_3);
+      float x2 = 0.5f * std::cos(kPi_6 + i * kPi_3);
+      float y1 = 0.5f * std::sin(-kPi_6 + i * kPi_3);
+      float y2 = 0.5f * std::sin(kPi_6 + i * kPi_3);
+      float det = x1 * y2 - x2 * y1;
+      out_coef[cnt * 4 + 0] = a2 * (y2 - y1) * dist[i];
+      out_coef[cnt * 4 + 1] = a2 * (x1 - x2) * dist[i];
+      out_coef[cnt * 4 + 2] = -det;
+      out_coef[cnt * 4 + 3] = -(h2_2 + a2 * dist[i]) * det;
+      cnt++;
+    }
+  }
+
+  // Set basal face d values
+  if (!has_upper && !has_lower) {
+    // Pure prism: d = -h2/2
+    out_coef[3] = -h2_2;
+    out_coef[7] = -h2_2;
+  } else {
+    // Pyramid: solve for z_max/z_min from non-basal planes
+    float z_max = std::numeric_limits<float>::lowest();
+    float z_min = std::numeric_limits<float>::max();
+    float xyz[3];
+    for (size_t i = 2; i < cnt; i++) {
+      for (size_t j = i + 1; j < cnt; j++) {
+        for (size_t k = j + 1; k < cnt; k++) {
+          if (!SolvePlanes(out_coef + i * 4, out_coef + j * 4, out_coef + k * 4, xyz)) {
+            continue;
           }
-          if (xyz[2] < z_min) {
-            z_min = xyz[2];
+          if (IsInPolyhedron3(static_cast<int>(cnt - 2), out_coef + 8, xyz)) {
+            z_max = std::max(z_max, xyz[2]);
+            z_min = std::min(z_min, xyz[2]);
           }
         }
       }
     }
+    out_coef[3] = (-z_max + h2_2) * h1 - h2_2;
+    out_coef[7] = (z_min + h2_2) * h3 - h2_2;
   }
-  coef[3] = (-z_max + h2_2) * h1 - h2_2;
-  coef[7] = (z_min + h2_2) * h3 - h2_2;
 
-  return coef;
+  return cnt;
 }
 
 
-// NOLINTNEXTLINE(readability-function-size)
+// ====== Unified convex polyhedron mesh creation ======
+
+Mesh CreateConvexPolyhedronMesh(int plane_cnt, const float* coef) {
+  auto [vtx, vtx_cnt] = SolveConvexPolyhedronVtx(plane_cnt, coef);
+  auto faces = CollectSurfaceVtx(vtx_cnt, vtx.get(), plane_cnt, coef);
+  auto [tri, tri_cnt] = Triangulate(vtx_cnt, vtx.get(), faces);
+  return Mesh(vtx_cnt, std::move(vtx), tri_cnt, std::move(tri));
+}
+
+
+// ====== Prism ======
+
+Mesh CreatePrismMesh(float h) {
+  float dist[6]{ 1, 1, 1, 1, 1, 1 };
+  float coef[kMaxHexCrystalPlanes * 4];
+  auto cnt = FillHexCrystalCoef(0, 0, 0, h, 0, dist, coef);
+  return CreateConvexPolyhedronMesh(static_cast<int>(cnt), coef);
+}
+
+
+Mesh CreatePrismMesh(float h, const float* dist) {
+  float coef[kMaxHexCrystalPlanes * 4];
+  auto cnt = FillHexCrystalCoef(0, 0, 0, h, 0, dist, coef);
+  return CreateConvexPolyhedronMesh(static_cast<int>(cnt), coef);
+}
+
+
+// ====== Pyramid ======
+
+Mesh CreatePyramidMesh(float h1, float h2, float h3) {
+  float dist[6]{ 1, 1, 1, 1, 1, 1 };
+  float alpha = std::atan(math::kSqrt3_2 / kIceCrystalC) * math::kRadToDegree;
+  float coef[kMaxHexCrystalPlanes * 4];
+  auto cnt = FillHexCrystalCoef(alpha, alpha, h1, h2, h3, dist, coef);
+  return CreateConvexPolyhedronMesh(static_cast<int>(cnt), coef);
+}
+
+
 Mesh CreatePyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
                        float h1, float h2, float h3,                                    // height
                        const float* dist) {                                             // face distance
@@ -607,20 +467,17 @@ Mesh CreatePyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower
 Mesh CreatePyramidMesh(float upper_alpha, float lower_alpha,  // wedge angle
                        float h1, float h2, float h3,          // height
                        const float* dist) {                   // face distance
-  // Step 1. Construct coefficients.
-  auto coef = FillGeneralPyramidCoef(upper_alpha, lower_alpha, h1, h2, h3, dist);
-
-  // Step 2. Find out all inner points.
-  auto [vtx, vtx_cnt] = SolveConvexPolyhedronVtx(kHexPyramidPlaneCnt, coef.data());
-
-  // Step 3. Find all plannar faces
-  auto plannar_faces = CollectSurfaceVtx(vtx_cnt, vtx.get(), kHexPyramidPlaneCnt, coef.data());
-
-  // Step 4. Triangulation
-  auto [tri, tri_cnt] = Triangulate(vtx_cnt, vtx.get(), plannar_faces);
-
-  return Mesh(vtx_cnt, std::move(vtx), tri_cnt, std::move(tri));
+  float coef[kMaxHexCrystalPlanes * 4];
+  auto cnt = FillHexCrystalCoef(upper_alpha, lower_alpha, h1, h2, h3, dist, coef);
+  return CreateConvexPolyhedronMesh(static_cast<int>(cnt), coef);
 }
+
+
+// ====== Constants for concave pyramid (kept for FillConcavePyramidCoef) ======
+constexpr int kHexPyramidPlaneCnt = 20;
+constexpr int kUpperPyramidPlaneCnt = 6;
+constexpr int kLowerPyramidPlaneCnt = 6;
+constexpr int kMiddlePrismPlaneCnt = 6;
 
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)

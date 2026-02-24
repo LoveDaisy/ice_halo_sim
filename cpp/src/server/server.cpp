@@ -1,5 +1,6 @@
 #include "server/server.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -39,7 +40,7 @@ class ServerImpl {
   bool IsIdle();
 
  private:
-  static constexpr int kDefaultSimulatorCnt = 4;
+  static const int kDefaultSimulatorCnt;  // runtime: max(1, hardware_concurrency - 2)
   static constexpr int kMaxSceneCnt = 128;
   static constexpr size_t kDefaultRayNum = 128;
 
@@ -48,7 +49,7 @@ class ServerImpl {
 
   ConfigManager config_manager_;
 
-  QueuePtrS<SceneConfig> scene_queue_;
+  QueuePtrS<SimBatch> scene_queue_;
   QueuePtrS<SimData> data_queue_;
 
   std::vector<Simulator> simulators_;
@@ -76,9 +77,11 @@ class ServerImpl {
   Logger& GetLogger() { return logger_; }
 };
 
+const int ServerImpl::kDefaultSimulatorCnt = std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 2);
+
 
 ServerImpl::ServerImpl()
-    : config_manager_{}, scene_queue_(std::make_shared<Queue<SceneConfig>>()),
+    : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
   for (int i = 0; i < kDefaultSimulatorCnt; i++) {
     simulators_.emplace_back(scene_queue_, data_queue_);
@@ -89,8 +92,11 @@ ServerImpl::ServerImpl()
 
 Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   ILOG_DEBUG(logger_, "CommitConfig: entry");
+
+  // Parse into a temporary first so that a parse failure leaves the running server untouched.
+  ConfigManager new_config;
   try {
-    config_manager_ = config_json.get<ConfigManager>();
+    new_config = config_json.get<ConfigManager>();
   } catch (const nlohmann::json::out_of_range& e) {
     ILOG_ERROR(logger_, "CommitConfig: Missing field: {}", e.what());
     {
@@ -121,7 +127,10 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     return Error::InvalidConfig("Unknown configuration error");
   }
 
+  // Stop all running threads before replacing config, so no simulator references stale data.
   Stop();
+
+  config_manager_ = std::move(new_config);
 
   // Setup consumers from project config.
   ILOG_DEBUG(logger_, "CommitConfig: setup consumers for proj {}", config_manager_.project_.id_);
@@ -237,9 +246,9 @@ void ServerImpl::Stop() {
     simulator_threads_.clear();
     ILOG_DEBUG(logger_, "Stop: unlock prod_mutex_");
   }
-  consumers_.clear();
 
-  // Stop main working thread & scene dispatch thread
+  // Stop main working thread & scene dispatch thread.
+  // Must join these BEFORE clearing consumers, since ConsumeData accesses consumers_.
   ILOG_DEBUG(logger_, "Stop: waiting main worker & dispatcher stop.");
   if (consume_data_thread_.joinable()) {
     consume_data_thread_.join();
@@ -247,6 +256,8 @@ void ServerImpl::Stop() {
   if (generate_scene_thread_.joinable()) {
     generate_scene_thread_.join();
   }
+
+  consumers_.clear();
 
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
@@ -337,12 +348,11 @@ void ServerImpl::GenerateScene() {
   auto ray_num = scene.ray_num_;
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
-    auto curr_scene = scene;
-    curr_scene.ray_num_ = std::min(kDefaultRayNum, ray_num - committed_num);
-    scene_queue_->Emplace(curr_scene);
+    size_t batch_ray_num = std::min(kDefaultRayNum, ray_num - committed_num);
+    scene_queue_->Emplace(SimBatch{ batch_ray_num, &scene });
     sim_scene_cnt_++;
 
-    ILOG_DEBUG(logger_, "GenerateScene: put a scene({}): ray({}/{}, {})", curr_scene.id_, curr_scene.ray_num_, ray_num,
+    ILOG_DEBUG(logger_, "GenerateScene: put a scene({}): ray({}/{}, {})", scene.id_, batch_ray_num, ray_num,
                committed_num);
     CHECK_STOP
 

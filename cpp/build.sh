@@ -11,7 +11,7 @@ build() {
   pushd "${BUILD_DIR}" > /dev/null
   cmake -S "${PROJ_DIR}" -B "${BUILD_DIR}" -G Ninja \
         -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TEST=$BUILD_TEST \
-        -DBUILD_SHARED_LIBS=$BUILD_SHARED \
+        -DBUILD_BENCH=$BUILD_BENCH -DBUILD_SHARED_LIBS=$BUILD_SHARED \
         -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}"
   cmake --build "${BUILD_DIR}" -j $MAKE_J_N
   ret=$?
@@ -31,10 +31,11 @@ build() {
 
 help() {
   echo "Usage:"
-  echo "  ./build.sh [-tjksxh] <debug|release|minsizerel>"
+  echo "  ./build.sh [-tbjksxh] <debug|release|minsizerel>"
   echo "    Executables will be installed at build/cmake_install"
   echo "OPTIONS:"
   echo "  -t:          Build test cases and run test on them."
+  echo "  -b:          Build benchmarks (Google Benchmark)."
   echo "  -j:          Build in parallel, i.e. use make -j"
   echo "  -k:          Clean build artifacts (keep dependency cache)."
   echo "  -x:          Clean everything including dependency cache."
@@ -56,6 +57,7 @@ clean_everything() {
 
 BUILD_TYPE=Debug
 BUILD_TEST=OFF
+BUILD_BENCH=OFF
 BUILD_SHARED=OFF
 INSTALL_FLAG=OFF
 MAKE_J_N=1
@@ -69,7 +71,7 @@ fi
 # A POSIX variable
 OPTIND=1         # Reset in case getopts has been used previously in the shell.
 
-while getopts "htjksx" opt; do
+while getopts "htbjksx" opt; do
   case "$opt" in
   h)
     help
@@ -77,6 +79,9 @@ while getopts "htjksx" opt; do
     ;;
   t)
     BUILD_TEST=ON
+    ;;
+  b)
+    BUILD_BENCH=ON
     ;;
   j)
     MAKE_J_N=$(nproc 2>/dev/null) || MAKE_J_N=$(sysctl -n hw.ncpu 2>/dev/null) || MAKE_J_N=8

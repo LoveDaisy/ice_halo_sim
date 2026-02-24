@@ -1,6 +1,5 @@
 #include "config/light_config.hpp"
 
-#include <cstddef>
 #include <nlohmann/json.hpp>
 #include <variant>
 #include <vector>
@@ -28,34 +27,46 @@ struct LightParamToJson {
   }
 };
 
+struct SpectrumToJson {
+  nlohmann::json& j_;
+
+  void operator()(const std::vector<WlParam>& wl_params) {
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto& w : wl_params) {
+      arr.push_back({ { "wavelength", w.wl_ }, { "weight", w.weight_ } });
+    }
+    j_["spectrum"] = std::move(arr);
+  }
+
+  void operator()(IlluminantType type) {
+    nlohmann::json type_json = type;  // uses NLOHMANN_JSON_SERIALIZE_ENUM
+    j_["spectrum"] = type_json;
+  }
+};
+
 void to_json(nlohmann::json& j, const LightSourceConfig& l) {
   j["id"] = l.id_;
-  std::vector<float> wl;
-  std::vector<float> weight;
-  for (const auto& w : l.wl_param_) {
-    wl.emplace_back(w.wl_);
-    weight.emplace_back(w.weight_);
-  }
-  j["wavelength"] = wl;
-  j["wl_weight"] = weight;
-
+  std::visit(SpectrumToJson{ j }, l.spectrum_);
   std::visit(LightParamToJson{ j }, l.param_);
 }
 
 void from_json(const nlohmann::json& j, LightSourceConfig& l) {
   j.at("id").get_to(l.id_);
 
-  size_t wi = 0;
-  const auto& j_weight = j.at("wl_weight");
-  for (const auto& j_wl : j.at("wavelength")) {
-    if (wi >= j_weight.size()) {
-      LOG_WARNING("wl_weight has more items than wavelength. Ignore extra items.");
-      break;
+  const auto& j_spectrum = j.at("spectrum");
+  if (j_spectrum.is_string()) {
+    l.spectrum_ = j_spectrum.get<IlluminantType>();
+  } else if (j_spectrum.is_array()) {
+    std::vector<WlParam> wl_params;
+    for (const auto& item : j_spectrum) {
+      WlParam w{};
+      item.at("wavelength").get_to(w.wl_);
+      item.at("weight").get_to(w.weight_);
+      wl_params.emplace_back(w);
     }
-    WlParam w{};
-    j_wl.get_to(w.wl_);
-    j_weight[wi].get_to(w.weight_);
-    l.wl_param_.emplace_back(w);
+    l.spectrum_ = std::move(wl_params);
+  } else {
+    LOG_ERROR("Invalid spectrum format: expected string or array");
   }
 
   const auto& j_type = j.at("type");

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/def.hpp"
+#include "util/illuminant_data.hpp"
 
 namespace lumice {
 
@@ -29,10 +30,12 @@ struct WlParam {
   float weight_;
 };
 
+using SpectrumConfig = std::variant<std::vector<WlParam>, IlluminantType>;
+
 struct LightSourceConfig {
   IdType id_;
   LightSourceParam param_;
-  std::vector<WlParam> wl_param_;
+  SpectrumConfig spectrum_;
 };
 
 // convert to/from json object
