@@ -247,7 +247,7 @@ Server::GetResults()
 
 **主要类**：
 - `Queue<T>`: 线程安全的阻塞队列模板，基于 `std::condition_variable`
-- `ThreadingPool`: 线程池，支持范围分片/分步任务提交
+- `ThreadingPool`: 线程池，支持范围分步（range-step）/ 范围分片（range-slice）任务提交
 - `log.hpp`: spdlog 薄封装，提供 `LOG_DEBUG` / `LOG_INFO` 等宏和 `GetLogger()` 命名 logger
 - `ArgParser`: 命令行参数解析器
 - `json_util.hpp`: JSON 辅助宏

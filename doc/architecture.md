@@ -247,7 +247,7 @@ The system uses a multi-threaded architecture:
 
 **Main Classes**:
 - `Queue<T>`: Thread-safe blocking queue template based on `std::condition_variable`
-- `ThreadingPool`: Thread pool with support for range-sharded / range-stepped task submission
+- `ThreadingPool`: Thread pool with support for range-step / range-slice task submission
 - `log.hpp`: Thin wrapper around spdlog, providing `LOG_DEBUG` / `LOG_INFO` macros and `GetLogger()` named loggers
 - `ArgParser`: Command-line argument parser
 - `json_util.hpp`: JSON helper macros

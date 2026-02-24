@@ -48,8 +48,10 @@ The project uses CMake for building and provides a `build.sh` script to simplify
 
 **Build options**:
 - `-t`: Compile and run tests
+- `-b`: Build benchmarks (Google Benchmark)
 - `-j`: Parallel compilation
-- `-k`: Clean build files
+- `-k`: Clean build artifacts (keep dependency cache)
+- `-x`: Clean everything including dependency cache
 - `-s`: Build shared libraries (static libraries by default)
 - `-h`: Show help information
 
