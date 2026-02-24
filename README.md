@@ -2,7 +2,7 @@
 
 [中文版 / Chinese version](README_zh.md)
 
-A simulation program for ice halo phenomena. It traces light rays interacting with ice crystals to reproduce various halo patterns. Fast and efficient, supporting natural color rendering, multiple scattering, and custom crystal models (.obj format).
+A simulation program for ice halo phenomena. It traces light rays interacting with ice crystals to reproduce various halo patterns. Fast and efficient, supporting natural color rendering and multiple scattering.
 
 Inspired by [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) and
 [HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm).
@@ -25,10 +25,10 @@ Inspired by [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/m
   is generated in 14 minutes with totally *72 million* starting rays traced.
   <img src="doc/figs/44-degree parhelia.jpg" width="400">
 
-* **Customized crystal model.**
-  This program has a built-in parser for [.obj file](https://en.wikipedia.org/wiki/Wavefront_.obj_file)
-  and users can simulate with any complex crystal models, e.g. hollow hex-cylinder,
-  created via 3D modeling software.
+* **Customized crystal model.** (not yet implemented)
+  Support for custom crystal models via [.obj file](https://en.wikipedia.org/wiki/Wavefront_.obj_file)
+  is planned but not yet re-implemented after the v3 rewrite. Currently only built-in
+  crystal types (`prism` and `pyramid`) are available.
 
 ## Quick start
 
@@ -74,12 +74,14 @@ With `-h` you will see help message:
 ~~~bash
 ./build.sh -h
 Usage:
-  ./build.sh [-tjksh] <debug|release|minsizerel>
+  ./build.sh [-tbjksxh] <debug|release|minsizerel>
     Executables will be installed at build/cmake_install
 OPTIONS:
   -t:          Build test cases and run test on them.
+  -b:          Build benchmarks (Google Benchmark).
   -j:          Build in parallel, i.e. use make -j
-  -k:          Clean temporary building files.
+  -k:          Clean build artifacts (keep dependency cache).
+  -x:          Clean everything including dependency cache.
   -s:          Build shared library (default: static).
   -h:          Show this message.
 ~~~
@@ -110,8 +112,14 @@ Here is an example for one element:
 "altitude": 20.0,
 "azimuth": 0,
 "diameter": 0.5,
-"wavelength": [ 420, 460, 500, 540, 580, 620 ],
-"wl_weight": [ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 ]
+"spectrum": [
+  {"wavelength": 420, "weight": 1.0},
+  {"wavelength": 460, "weight": 1.0},
+  {"wavelength": 500, "weight": 1.0},
+  {"wavelength": 540, "weight": 1.0},
+  {"wavelength": 580, "weight": 1.0},
+  {"wavelength": 620, "weight": 1.0}
+]
 ~~~
 
 A `light_source` section describes properties of light source. It may contain multiple elements corresponding to multiple light sources. They are referenced by `id`.
@@ -119,8 +127,7 @@ ID should be a unique number greater than 0. It is not necessary to keep IDs inc
 
 Fields `azimuth`, `altitude` describe position of the sun. They are in degrees, and so is `diameter`.
 
-`wavelength` and `wl_weight` describe spectrum of the light source.
-They are arrays containing all wavelengths you want to use in a simulation. Wavelength determines refractive index, whose data is from
+`spectrum` describes the spectrum of the light source. It can be either a standard illuminant name (e.g. `"D65"`) or an array of wavelength-weight objects. Wavelength determines refractive index, whose data is from
 [Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice).
 
 
