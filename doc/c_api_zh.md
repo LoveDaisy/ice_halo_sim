@@ -1,3 +1,5 @@
+[English version](c_api.md)
+
 # C接口使用文档
 
 本文档详细说明C接口API使用方法。
@@ -193,7 +195,7 @@ LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_s
 
 **注意**：
 - 提交配置后，服务器会立即开始处理
-- 配置格式参见 [配置文档](configuration.md)
+- 配置格式参见 [配置文档](configuration_zh.md)
 
 #### LUMICE_CommitConfigFromFile
 
@@ -619,7 +621,7 @@ extern "C" {
 
 ## 相关文档
 
-- [配置文档](configuration.md) - 配置格式详细说明
-- [系统架构文档](architecture.md) - 系统架构设计
-- [开发指南](developer-guide.md) - 开发指南
-- [文档索引](README.md) - 所有文档的导航
+- [配置文档](configuration_zh.md) - 配置格式详细说明
+- [系统架构文档](architecture_zh.md) - 系统架构设计
+- [开发指南](developer-guide_zh.md) - 开发指南
+- [文档索引](README_zh.md) - 所有文档的导航

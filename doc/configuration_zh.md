@@ -1,3 +1,5 @@
+[English version](configuration.md)
+
 # 配置文档
 
 本文档详细说明配置文件格式、各配置项的含义、默认值以及配置验证规则。
@@ -843,6 +845,6 @@
 
 ## 相关文档
 
-- [README_zh.md](../README_zh.md): 用户文档
-- [architecture.md](architecture.md): 系统架构文档
-- [config_example.json](../config_example.json): 配置示例文件
+- [README](../README_zh.md): 用户文档
+- [系统架构文档](architecture_zh.md): 系统架构文档
+- [配置示例文件](../config_example.json): 配置示例文件

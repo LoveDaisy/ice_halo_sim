@@ -1,3 +1,5 @@
+[English version](architecture.md)
+
 # 系统架构文档
 
 本文档描述 Lumice 项目的系统架构设计。
@@ -245,7 +247,7 @@ Server::GetResults()
 
 **主要类**：
 - `Queue<T>`: 线程安全的阻塞队列模板，基于 `std::condition_variable`
-- `ThreadingPool`: 线程池，支持范围分片/分步任务提交
+- `ThreadingPool`: 线程池，支持范围分步（range-step）/ 范围分片（range-slice）任务提交
 - `log.hpp`: spdlog 薄封装，提供 `LOG_DEBUG` / `LOG_INFO` 等宏和 `GetLogger()` 命名 logger
 - `ArgParser`: 命令行参数解析器
 - `json_util.hpp`: JSON 辅助宏
@@ -299,7 +301,7 @@ LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerSta
 void LUMICE_StopServer(LUMICE_Server* server);
 ```
 
-详细用法参见 [C 接口使用文档](c_api.md)。
+详细用法参见 [C 接口使用文档](c_api_zh.md)。
 
 ## 依赖关系
 
@@ -342,8 +344,8 @@ void LUMICE_StopServer(LUMICE_Server* server);
 
 ## 相关文档
 
-- [README](../README.md) - 用户文档
-- [配置文档](configuration.md) - 配置格式说明
-- [开发指南](developer-guide.md) - 开发指南
-- [C接口文档](c_api.md) - C接口使用说明
-- [文档索引](README.md) - 所有文档的导航
+- [README](../README_zh.md) - 用户文档
+- [配置文档](configuration_zh.md) - 配置格式说明
+- [开发指南](developer-guide_zh.md) - 开发指南
+- [C接口文档](c_api_zh.md) - C接口使用说明
+- [文档索引](README_zh.md) - 所有文档的导航

@@ -16,4 +16,21 @@ scratchpad/
 # Vide Codeing
 .claude/
 
-cpp/CMakeFiles/
+CMakeFiles/
+
+# Moved from cpp/.gitignore
+.idea
+cmake-build-debug
+cmake-build-release
+build-FastHalo-*
+
+doc/figs/*.nb
+doc/figs/*.pdf
+doc/html
+doc/latex
+doc/api/html
+doc/api/latex
+
+config.json
+test.json
+*.jpg

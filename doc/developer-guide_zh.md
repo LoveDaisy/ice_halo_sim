@@ -1,3 +1,5 @@
+[English version](developer-guide.md)
+
 # 开发指南
 
 本文档为项目开发者提供开发环境设置、代码风格、功能扩展、测试和调试等方面的指导。
@@ -40,15 +42,16 @@ sudo apt-get install cmake ninja-build
 项目使用CMake构建，提供了 `build.sh` 脚本简化构建过程：
 
 ```bash
-cd cpp
 ./build.sh -j release    # Release版本（推荐）
 ./build.sh -j debug      # Debug版本（用于调试）
 ```
 
 **构建选项**：
 - `-t`: 编译并运行测试
+- `-b`: 构建基准测试（Google Benchmark）
 - `-j`: 并行编译
-- `-k`: 清理构建文件
+- `-k`: 清理构建产物（保留依赖缓存）
+- `-x`: 清理全部（含依赖缓存）
 - `-s`: 构建共享库（默认为静态库）
 - `-h`: 显示帮助信息
 
@@ -64,7 +67,7 @@ cd cpp
 
 1. 安装C/C++扩展
 2. 安装CMake Tools扩展
-3. 打开 `cpp` 目录
+3. 打开项目根目录
 4. 配置CMake（按需）
 
 #### 其他IDE
@@ -77,7 +80,6 @@ cd cpp
 #### 使用LLDB (macOS)
 
 ```bash
-cd cpp
 ./build.sh debug
 lldb ./build/cmake_build/Lumice
 (lldb) run -f config_example.json
@@ -86,7 +88,6 @@ lldb ./build/cmake_build/Lumice
 #### 使用GDB (Linux)
 
 ```bash
-cd cpp
 ./build.sh debug
 gdb ./build/cmake_build/Lumice
 (gdb) run -f config_example.json
@@ -179,7 +180,6 @@ class Crystal {
 
 **格式化代码**：
 ```bash
-cd cpp
 ./format.sh
 ```
 
@@ -464,7 +464,6 @@ TEST_F(CrystalTest, GetTriangleVtx) {
 
 ```bash
 # 使用构建脚本
-cd cpp
 ./build.sh -t release
 
 # 或手动运行
@@ -667,7 +666,7 @@ instruments -t "Time Profiler" ./build/cmake_install/Lumice -f config_example.js
 
 ## 相关文档
 
-- [系统架构文档](architecture.md) - 了解系统设计
-- [配置文档](configuration.md) - 配置格式说明
-- [C接口文档](c_api.md) - C接口使用说明
-- [文档索引](README.md) - 所有文档的导航
+- [系统架构文档](architecture_zh.md) - 了解系统设计
+- [配置文档](configuration_zh.md) - 配置格式说明
+- [C接口文档](c_api_zh.md) - C接口使用说明
+- [文档索引](README_zh.md) - 所有文档的导航

@@ -1,15 +1,37 @@
-# C++ 代码
+# Lumice
 
 [English version](README.md)
 
-这是一个冰晕模拟程序，通过追踪光线与冰晶的交互来再现各种冰晕现象。速度快且高效，支持自然色彩渲染、多次散射以及自定义冰晶模型（.obj 格式）。
+这是一个冰晕模拟程序，通过追踪光线与冰晶的交互来再现各种冰晕现象。速度快且高效，支持自然色彩渲染和多次散射。
+
+受 [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) 和
+[HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm) 的启发。
+
+## 功能特点
+
+* **速度快**
+  本模拟程序追踪光线效率非常优秀，比 HaloPoint 快 50~100 倍。对于一般情况，模拟速度约为每秒 14~20 万光线，
+  在多晶的情况下约为 5~8 万每秒。
+
+* **自然而鲜艳的色彩表现**
+  基于 [Spectrum Renderer](https://github.com/LoveDaisy/spec_render) 项目，
+  本模拟程序可以渲染出非常自然和鲜艳的颜色。
+  <img src="doc/figs/sim05E_50M.jpg" width="400">
+
+* **对多晶模拟的完整支持**
+  本模拟程序可以完整地模拟多晶场景，允许用户自由模拟任意的多晶场景。
+  下图所示场景只需要不到 14 分钟即可模拟渲染完，总计追踪约 7200 万条初始光线。
+  <img src="doc/figs/44-degree parhelia.jpg" width="400">
+
+* **用户自定义的冰晶形状**（尚未实现）
+  计划支持通过 [.obj 文件](https://en.wikipedia.org/wiki/Wavefront_.obj_file) 自定义冰晶模型，
+  但该功能在 v3 重构后尚未重新接入。目前仅支持内置的 `prism`（六棱柱）和 `pyramid`（六棱锥）类型。
 
 ## 快速开始
 
 克隆项目后，可以运行构建脚本来构建和安装：
 
 ~~~bash
-cd cpp
 ./build.sh -j release
 ~~~
 
@@ -47,12 +69,14 @@ cd cpp
 ~~~bash
 ./build.sh -h
 Usage:
-  ./build.sh [-tjksh] <debug|release|minsizerel>
+  ./build.sh [-tbjksxh] <debug|release|minsizerel>
     Executables will be installed at build/cmake_install
 OPTIONS:
   -t:          Build test cases and run test on them.
+  -b:          Build benchmarks (Google Benchmark).
   -j:          Build in parallel, i.e. use make -j
-  -k:          Clean temporary building files.
+  -k:          Clean build artifacts (keep dependency cache).
+  -x:          Clean everything including dependency cache.
   -s:          Build shared library (default: static).
   -h:          Show this message.
 ~~~
@@ -68,7 +92,7 @@ OPTIONS:
 
 示例配置文件：`config_example.json`。
 
-完整配置参考请查看 [配置文档](doc/configuration.md)。以下是各节的简要概述。
+完整配置参考请查看 [配置文档](doc/configuration_zh.md)。以下是各节的简要概述。
 
 ### 光源
 
@@ -80,8 +104,14 @@ OPTIONS:
 "altitude": 20.0,
 "azimuth": 0,
 "diameter": 0.5,
-"wavelength": [ 420, 460, 500, 540, 580, 620 ],
-"wl_weight": [ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 ]
+"spectrum": [
+  {"wavelength": 420, "weight": 1.0},
+  {"wavelength": 460, "weight": 1.0},
+  {"wavelength": 500, "weight": 1.0},
+  {"wavelength": 540, "weight": 1.0},
+  {"wavelength": 580, "weight": 1.0},
+  {"wavelength": 620, "weight": 1.0}
+]
 ~~~
 
 `light_source` 节描述光源的属性。它可以包含多个元素，对应多个光源。它们通过 `id` 引用。
@@ -89,8 +119,7 @@ ID 应该是大于 0 的唯一数字。ID 不必连续递增。
 
 字段 `azimuth`、`altitude` 描述太阳的位置。它们以度为单位，`diameter` 也是如此。
 
-`wavelength` 和 `wl_weight` 描述光源的光谱。
-它们是数组，包含你想要在模拟中使用的所有波长。波长决定折射率，其数据来自
+`spectrum` 描述光源的光谱。可以是标准光源名称（如 `"D65"`）或波长-权重对象数组。波长决定折射率，其数据来自
 [Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice)。
 
 
@@ -242,9 +271,14 @@ ID 应该是大于 0 的唯一数字。ID 不必连续递增。
 
 ## 文档导航
 
-- [文档索引](doc/README.md) - 所有文档的导航和索引
-- [配置文档](doc/configuration.md) - 完整配置参考
-- [系统架构文档](doc/architecture.md) - 系统架构设计
-- [开发指南](doc/developer-guide.md) - 开发指南
-- [C 接口文档](doc/c_api.md) - C 接口使用说明
+- [文档索引](doc/README_zh.md) - 所有文档的导航和索引
+- [配置文档](doc/configuration_zh.md) - 完整配置参考
+- [系统架构文档](doc/architecture_zh.md) - 系统架构设计
+- [开发指南](doc/developer-guide_zh.md) - 开发指南
+- [C 接口文档](doc/c_api_zh.md) - C 接口使用说明
 - [API 文档](doc/api/html/) - 自动生成的 API 文档（需要本地生成：`doxygen .doxygen-config`）
+
+## 致谢
+
+1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) &
+   [HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)
