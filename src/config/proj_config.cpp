@@ -11,11 +11,17 @@ void to_json(nlohmann::json& j, const SceneConfig& s) {
   for (const auto& m : s.ms_) {
     nlohmann::json j_m;
     j_m["prob"] = m.prob_;
-    for (const auto& s : m.setting_) {
-      j_m["crystal"].emplace_back(s.crystal_.id_);
-      j_m["proportion"].emplace_back(s.crystal_proportion_);
-      j_m["filter"].emplace_back(s.filter_.id_);
+    nlohmann::json entries = nlohmann::json::array();
+    for (const auto& e : m.setting_) {
+      nlohmann::json j_entry;
+      j_entry["crystal"] = e.crystal_.id_;
+      j_entry["proportion"] = e.crystal_proportion_;
+      if (e.filter_.id_ != kInvalidId) {
+        j_entry["filter"] = e.filter_.id_;
+      }
+      entries.emplace_back(std::move(j_entry));
     }
+    j_m["entries"] = std::move(entries);
     j["scattering"].emplace_back(j_m);
   }
 }

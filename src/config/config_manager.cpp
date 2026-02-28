@@ -102,33 +102,19 @@ static MsInfo ParseScatteringInfo(const nlohmann::json& j_s, const ConfigManager
     j_s.at("prob").get_to(ms.prob_);
   }
 
-  for (const auto& j_c : j_s.at("crystal")) {
-    IdType id = j_c.get<IdType>();
-    ms.setting_.emplace_back(ScatteringSetting{ kDefaultNoneFilter, m.crystals_.at(id), 100.0 });
-  }
+  for (const auto& j_entry : j_s.at("entries")) {
+    IdType crystal_id = j_entry.at("crystal").get<IdType>();
+    ScatteringSetting setting{ kDefaultNoneFilter, m.crystals_.at(crystal_id), 100.0f };
 
-  if (j_s.contains("proportion")) {
-    size_t i = 0;
-    for (const auto& j_p : j_s.at("proportion")) {
-      if (i >= ms.setting_.size()) {
-        break;
-      }
-      j_p.get_to(ms.setting_[i].crystal_proportion_);
-      i++;
+    if (j_entry.contains("proportion")) {
+      j_entry.at("proportion").get_to(setting.crystal_proportion_);
     }
-  }
+    if (j_entry.contains("filter")) {
+      IdType filter_id = j_entry.at("filter").get<IdType>();
+      setting.filter_ = m.filters_.at(filter_id);
+    }
 
-  if (j_s.contains("filter")) {
-    size_t i = 0;
-    for (const auto& j_f : j_s.at("filter")) {
-      if (i >= ms.setting_.size()) {
-        break;
-      }
-      if (auto id = j_f.get<int>(); id >= 0) {
-        ms.setting_[i].filter_ = m.filters_.at(id);
-      }
-      i++;
-    }
+    ms.setting_.emplace_back(std::move(setting));
   }
 
   return ms;

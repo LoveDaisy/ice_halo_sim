@@ -36,9 +36,8 @@ const std::string kFixedConfigTemplate = R"({
     "ray_num": __RAY_NUM__,
     "max_hits": 7,
     "scattering": [{
-      "crystal": [1],
-      "proportion": [1],
-      "prob": 0.0
+      "prob": 0.0,
+      "entries": [{"crystal": 1, "proportion": 1}]
     }]
   },
   "render": [{
@@ -73,9 +72,8 @@ const std::string kRandomConfigTemplate = R"({
     "ray_num": __RAY_NUM__,
     "max_hits": 7,
     "scattering": [{
-      "crystal": [1],
-      "proportion": [1],
-      "prob": 0.0
+      "prob": 0.0,
+      "entries": [{"crystal": 1, "proportion": 1}]
     }]
   },
   "render": [{
