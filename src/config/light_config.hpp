@@ -16,15 +16,6 @@ struct SunParam {
   float diameter_;  // Degree
 };
 
-struct StreetLightParam {
-  float distace_;   // meter
-  float azimuth_;   // degree
-  float height_;    // meter
-  float diameter_;  // meter. Treat steet light as a sphere (NOT a ball)
-};
-
-using LightSourceParam = std::variant<SunParam, StreetLightParam>;
-
 struct WlParam {
   float wl_;
   float weight_;
@@ -34,7 +25,7 @@ using SpectrumConfig = std::variant<std::vector<WlParam>, IlluminantType>;
 
 struct LightSourceConfig {
   IdType id_;
-  LightSourceParam param_;
+  SunParam param_;
   SpectrumConfig spectrum_;
 };
 

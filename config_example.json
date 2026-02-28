@@ -286,8 +286,7 @@
       "view": {
         "azimuth": -50,
         "elevation": 30,
-        "roll": 0,
-        "distance": 8
+        "roll": 0
       },
       "visible": "upper",
       "background": [0, 0, 0],

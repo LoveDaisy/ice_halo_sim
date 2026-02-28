@@ -8,24 +8,12 @@
 
 namespace lumice {
 
-struct LightParamToJson {
-  nlohmann::json& j_;
-
-  void operator()(const SunParam& p) {
-    j_["type"] = "sun";
-    j_["altitude"] = p.altitude_;
-    j_["azimuth"] = p.azimuth_;
-    j_["diameter"] = p.diameter_;
-  }
-
-  void operator()(const StreetLightParam& p) {
-    j_["type"] = "streetlight";
-    j_["height"] = p.height_;
-    j_["azimuth"] = p.azimuth_;
-    j_["distance"] = p.distace_;
-    j_["diametre"] = p.diameter_;
-  }
-};
+static void LightParamToJson(nlohmann::json& j, const SunParam& p) {
+  j["type"] = "sun";
+  j["altitude"] = p.altitude_;
+  j["azimuth"] = p.azimuth_;
+  j["diameter"] = p.diameter_;
+}
 
 struct SpectrumToJson {
   nlohmann::json& j_;
@@ -47,7 +35,7 @@ struct SpectrumToJson {
 void to_json(nlohmann::json& j, const LightSourceConfig& l) {
   j["id"] = l.id_;
   std::visit(SpectrumToJson{ j }, l.spectrum_);
-  std::visit(LightParamToJson{ j }, l.param_);
+  LightParamToJson(j, l.param_);
 }
 
 void from_json(const nlohmann::json& j, LightSourceConfig& l) {
@@ -80,17 +68,8 @@ void from_json(const nlohmann::json& j, LightSourceConfig& l) {
       j.at("diameter").get_to(p.diameter_);
     }
     l.param_ = p;
-  } else if (j_type == "streetlight") {
-    StreetLightParam p{};
-    j.at("azimuth").get_to(p.azimuth_);
-    j.at("distance").get_to(p.distace_);
-    j.at("height").get_to(p.height_);
-    if (j.contains("diameter")) {
-      j.at("diameter").get_to(p.diameter_);
-    }
-    l.param_ = p;
   } else {
-    LOG_ERROR("Unknown light source type!");
+    LOG_ERROR("Unknown light source type: {}", j_type.get<std::string>());
   }
 }
 
