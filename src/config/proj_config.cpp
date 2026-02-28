@@ -33,10 +33,4 @@ void to_json(nlohmann::json& j, const SceneConfig& s) {
 }
 
 
-void to_json(nlohmann::json& j, const ProjConfig& p) {
-  for (const auto& r : p.renderers_) {
-    j["render"].emplace_back(r.id_);
-  }
-}
-
 }  // namespace lumice

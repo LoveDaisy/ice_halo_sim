@@ -257,8 +257,5 @@
         "elevation": 30
       }
     }
-  ],
-  "project": {
-    "render": [1, 2, 4]
-  }
+  ]
 }

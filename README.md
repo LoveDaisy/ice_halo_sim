@@ -281,17 +281,6 @@ Here is an example:
 
 You can use `fov` (field of view in degrees) or `f` (focal length in mm) to specify the lens. If `f` is used, the program automatically calculates the corresponding `fov`.
 
-### Project
-
-The `project` object specifies which renderers to use:
-
-~~~json
-"project": {
-  "render": [1, 2, 4]
-}
-~~~
-
-
 ## Documentation
 
 For detailed documentation, please refer to:

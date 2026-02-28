@@ -135,7 +135,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   // Setup consumers from project config.
   ILOG_DEBUG(logger_, "CommitConfig: setup consumers");
   consumers_.clear();
-  for (const auto& r : config_manager_.project_.renderers_) {
+  for (const auto& [_, r] : config_manager_.renderers_) {
     consumers_.emplace_back(std::make_unique<RenderConsumer>(r));
   }
   consumers_.emplace_back(std::make_unique<StatsConsumer>());

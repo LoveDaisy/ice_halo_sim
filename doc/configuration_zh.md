@@ -12,7 +12,6 @@
 - `filter`: 过滤器定义数组
 - `scene`: 场景定义（单个对象），内含光源配置
 - `render`: 渲染器定义数组
-- `project`: 项目定义（单个对象）
 
 **重要提示**：
 - 样例配置文件（`config_example.json`）并未穷举所有合法的配置写法
@@ -541,32 +540,6 @@
 - `opacity`: 1.0
 - `width`: 1.0
 
-### project（项目配置）
-
-项目配置指定使用哪些渲染器。每个配置文件只能定义一个项目（单个对象，非数组）。不含 `id` 字段，也不引用场景。
-
-#### 基本结构
-
-```json
-"project": {
-  "render": [<渲染器ID数组>]
-}
-```
-
-#### 字段说明
-
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `render` | 整数数组 | 是 | - | 渲染器ID数组 |
-
-#### 示例
-
-```json
-"project": {
-  "render": [1, 2, 4]
-}
-```
-
 ## 配置验证规则
 
 ### ID 唯一性验证
@@ -578,9 +551,7 @@
 
 - `scene.scattering[].entries[].crystal` 引用的晶体ID必须存在于 `crystal` 数组中
 - `scene.scattering[].entries[].filter` 引用的过滤器ID必须存在于 `filter` 数组中（如果指定）
-- `project.render` 引用的渲染器ID必须存在于 `render` 数组中
-
-**注意**：`scene` 和 `project` 都是单个对象，不是数组。`light_source` 是 `scene` 内的内联对象，不再需要 ID 引用。
+**注意**：`scene` 是单个对象，不是数组。`light_source` 是 `scene` 内的内联对象，不再需要 ID 引用。所有定义在 `render` 数组中的渲染器均自动生效。
 
 ### 数组长度匹配验证
 
@@ -605,8 +576,6 @@
 - `scene`: `light_source`, `ray_num`, `max_hits`, `scattering` 必填
 - `scene.scattering[].entries[]`: `crystal` 必填
 - `render`: `id`, `resolution` 必填
-- `project`: `render` 必填
-
 ### 类型验证
 
 - `crystal[].type` 必须是 "prism" 或 "pyramid"
@@ -859,10 +828,7 @@
       "resolution": [1920, 1080],
       "lens": { "type": "linear", "fov": 40 }
     }
-  ],
-  "project": {
-    "render": [1]
-  }
+  ]
 }
 ```
 
@@ -910,10 +876,7 @@
       "resolution": [1920, 1080],
       "lens": { "type": "linear", "fov": 40 }
     }
-  ],
-  "project": {
-    "render": [1]
-  }
+  ]
 }
 ```
 

@@ -12,8 +12,6 @@ The configuration file uses JSON format and contains the following main sections
 - `filter`: Array of filter definitions
 - `scene`: Scene definition (single object, includes inline light source)
 - `render`: Array of renderer definitions
-- `project`: Project definition (single object)
-
 **Important notes**:
 - The example configuration file (`config_example.json`) does not exhaustively cover all valid configuration patterns
 - Many configuration parameters have default values that will be used when not explicitly specified
@@ -521,32 +519,6 @@ The render configuration defines the renderer parameters.
 - `opacity`: 1.0
 - `width`: 1.0
 
-### project (Project Configuration)
-
-The project configuration specifies which renderers to use. Each configuration file can define only one project (a single object, not an array).
-
-#### Basic Structure
-
-```json
-"project": {
-  "render": [<renderer ID array>]
-}
-```
-
-#### Field Descriptions
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `render` | integer array | yes | - | Array of renderer IDs |
-
-#### Example
-
-```json
-"project": {
-  "render": [1, 2, 4]
-}
-```
-
 ## Configuration Validation Rules
 
 ### ID Uniqueness Validation
@@ -558,9 +530,7 @@ The project configuration specifies which renderers to use. Each configuration f
 
 - Crystal IDs referenced by `scene.scattering[].entries[].crystal` must exist in the `crystal` array
 - Filter IDs referenced by `scene.scattering[].entries[].filter` must exist in the `filter` array
-- Renderer IDs referenced by `project.render` must exist in the `render` array
-
-**Note**: Both `scene` and `project` are single objects, not arrays.
+**Note**: `scene` is a single object, not an array. All renderers defined in the `render` array are automatically active.
 
 ### Array Length Validation
 
@@ -585,8 +555,6 @@ The project configuration specifies which renderers to use. Each configuration f
 - `scene`: `light_source`, `ray_num`, `max_hits`, `scattering` are required
 - `scene.scattering[].entries[]`: `crystal` is required
 - `render`: `id`, `resolution` are required
-- `project`: `render` is required
-
 ### Type Validation
 
 - `crystal[].type` must be "prism" or "pyramid"
@@ -805,10 +773,7 @@ The project configuration specifies which renderers to use. Each configuration f
       "resolution": [1920, 1080],
       "lens": { "type": "linear", "fov": 40 }
     }
-  ],
-  "project": {
-    "render": [1]
-  }
+  ]
 }
 ```
 

@@ -29,9 +29,6 @@ void to_json(nlohmann::json& j, const ConfigManager& m) {
   for (const auto& [_, v] : m.renderers_) {
     j["render"].emplace_back(v);
   }
-
-  // Project
-  j["project"] = m.project_;
 }
 
 RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManager& m) {
@@ -187,17 +184,6 @@ void from_json(const nlohmann::json& j, ConfigManager& m) {
 
   // Scene (single object, light_source inlined)
   m.scene_ = ParseSceneConfig(j.at("scene"), m);
-
-  // Project
-  {
-    const auto& j_proj = j.at("project");
-    if (j_proj.contains("render")) {
-      for (const auto& j_render : j_proj.at("render")) {
-        IdType render_id = j_render.get<IdType>();
-        m.project_.renderers_.emplace_back(m.renderers_.at(render_id));
-      }
-    }
-  }
 }
 
 }  // namespace lumice

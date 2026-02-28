@@ -9,7 +9,6 @@
 #include "config/crystal_config.hpp"
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"
-#include "config/render_config.hpp"
 
 namespace lumice {
 
@@ -35,16 +34,6 @@ using SceneConfigPtrU = std::unique_ptr<SceneConfig>;
 using SceneConfigPtrS = std::shared_ptr<SceneConfig>;
 
 void to_json(nlohmann::json& j, const SceneConfig& s);
-
-// =============== Project configuration ===============
-struct ProjConfig {
-  std::vector<RenderConfig> renderers_;  // One project may have multiple renderers.
-};
-
-using ProjConfigPtrU = std::unique_ptr<ProjConfig>;
-using ProjConfigPtrS = std::shared_ptr<ProjConfig>;
-
-void to_json(nlohmann::json& j, const ProjConfig& p);
 
 }  // namespace lumice
 

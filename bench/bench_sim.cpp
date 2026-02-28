@@ -44,10 +44,7 @@ const std::string kFixedConfigTemplate = R"({
     "id": 1,
     "lens": { "type": "linear", "fov": 40 },
     "resolution": [320, 240]
-  }],
-  "project": {
-    "render": [1]
-  }
+  }]
 })";
 
 // Random crystal config: height with Gaussian distribution (no cache hit).
@@ -80,10 +77,7 @@ const std::string kRandomConfigTemplate = R"({
     "id": 1,
     "lens": { "type": "linear", "fov": 40 },
     "resolution": [320, 240]
-  }],
-  "project": {
-    "render": [1]
-  }
+  }]
 })";
 
 std::string MakeConfig(const std::string& tmpl, int64_t ray_num) {
