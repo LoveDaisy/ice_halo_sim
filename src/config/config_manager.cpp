@@ -62,8 +62,8 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   if (j_render.contains("background")) {
     j_render.at("background").get_to(render.background_);
   }
-  if (j_render.contains("ray")) {
-    j_render.at("ray").get_to(render.ray_color_);
+  if (j_render.contains("ray_color")) {
+    j_render.at("ray_color").get_to(render.ray_color_);
   }
   if (j_render.contains("opacity")) {
     j_render.at("opacity").get_to(render.opacity_);

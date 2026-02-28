@@ -12,7 +12,7 @@ namespace lumice {
 // ========== PrismCrystalParam ==========
 void to_json(nlohmann::json& j, const PrismCrystalParam& p) {
   j["height"] = p.h_;
-  j["distance"] = p.d_;
+  j["face_distance"] = p.d_;
 }
 
 void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
@@ -49,7 +49,7 @@ void to_json(nlohmann::json& j, const PyramidCrystalParam& p) {
   j["lower_h"] = p.h_pyr_l_;
   j["upper_indices"] = p.miller_indices_u_;
   j["lower_indices"] = p.miller_indices_l_;
-  j["distance"] = p.d_;
+  j["face_distance"] = p.d_;
 }
 
 void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
