@@ -96,26 +96,17 @@ OPTIONS:
 
 ### 光源
 
-以下是一个元素的示例：
+光源定义在 `scene` 对象内。以下是一个示例：
 
 ~~~json
-"id": 2,
-"type": "sun",
-"altitude": 20.0,
-"azimuth": 0,
-"diameter": 0.5,
-"spectrum": [
-  {"wavelength": 420, "weight": 1.0},
-  {"wavelength": 460, "weight": 1.0},
-  {"wavelength": 500, "weight": 1.0},
-  {"wavelength": 540, "weight": 1.0},
-  {"wavelength": 580, "weight": 1.0},
-  {"wavelength": 620, "weight": 1.0}
-]
+"light_source": {
+  "type": "sun",
+  "altitude": 20.0,
+  "azimuth": 0,
+  "diameter": 0.5,
+  "spectrum": "D65"
+}
 ~~~
-
-`light_source` 节描述光源的属性。它可以包含多个元素，对应多个光源。它们通过 `id` 引用。
-ID 应该是大于 0 的唯一数字。ID 不必连续递增。
 
 字段 `azimuth`、`altitude` 描述太阳的位置。它们以度为单位，`diameter` 也是如此。
 
@@ -204,25 +195,37 @@ ID 应该是大于 0 的唯一数字。ID 不必连续递增。
 
 ### 场景
 
-以下是一个示例：
+`scene` 是一个单独的对象（非数组），定义模拟参数。以下是一个示例：
 
 ~~~json
-"id": 3,
-"light_source": 2,
-"ray_num": 1000000,
-"max_hits": 7,
-"scattering": [
-  {
-    "crystal": [1, 2, 3],
-    "prob": 0.2
+"scene": {
+  "light_source": {
+    "type": "sun",
+    "altitude": 20.0,
+    "spectrum": "D65"
   },
-  {
-    "crystal": [2, 3],
-    "proportion": [20, 100],
-    "filter": [2, 1]
-  }
-]
+  "ray_num": 1000000,
+  "max_hits": 7,
+  "scattering": [
+    {
+      "prob": 0.2,
+      "entries": [
+        {"crystal": 1, "proportion": 100},
+        {"crystal": 2, "proportion": 30},
+        {"crystal": 3}
+      ]
+    },
+    {
+      "entries": [
+        {"crystal": 2, "proportion": 20, "filter": 2},
+        {"crystal": 3, "proportion": 100, "filter": 1}
+      ]
+    }
+  ]
+}
 ~~~
+
+`ray_num` 可以是整数或 `"infinite"` 表示无限光线。
 
 ### 渲染
 
@@ -238,12 +241,11 @@ ID 应该是大于 0 的唯一数字。ID 不必连续递增。
 "view": {
   "azimuth": -50,
   "elevation": 30,
-  "roll": 0,
-  "distance": 8
+  "roll": 0
 },
 "visible": "upper",
 "background": [0, 0, 0],
-"ray": [1, 1, 1],
+"ray_color": [1, 1, 1],
 "opacity": 0.8,
 "grid": {
   "central": [
@@ -267,7 +269,13 @@ ID 应该是大于 0 的唯一数字。ID 不必连续递增。
 
 ### 项目
 
-没什么复杂的。它只是保持对场景和渲染器的引用。
+`project` 对象指定使用哪些渲染器：
+
+~~~json
+"project": {
+  "render": [1, 2, 4]
+}
+~~~
 
 ## 文档导航
 

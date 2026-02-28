@@ -104,26 +104,17 @@ Below is a brief overview of each section.
 
 ### Light source
 
-Here is an example for one element:
+The light source is defined inline within the `scene` object. Here is an example:
 
 ~~~json
-"id": 2,
-"type": "sun",
-"altitude": 20.0,
-"azimuth": 0,
-"diameter": 0.5,
-"spectrum": [
-  {"wavelength": 420, "weight": 1.0},
-  {"wavelength": 460, "weight": 1.0},
-  {"wavelength": 500, "weight": 1.0},
-  {"wavelength": 540, "weight": 1.0},
-  {"wavelength": 580, "weight": 1.0},
-  {"wavelength": 620, "weight": 1.0}
-]
+"light_source": {
+  "type": "sun",
+  "altitude": 20.0,
+  "azimuth": 0,
+  "diameter": 0.5,
+  "spectrum": "D65"
+}
 ~~~
-
-A `light_source` section describes properties of light source. It may contain multiple elements corresponding to multiple light sources. They are referenced by `id`.
-ID should be a unique number greater than 0. It is not necessary to keep IDs increasing one by one.
 
 Fields `azimuth`, `altitude` describe position of the sun. They are in degrees, and so is `diameter`.
 
@@ -218,25 +209,37 @@ Here are two common examples:
 
 ### Scene
 
-Here is an example:
+The `scene` is a single object (not an array) that defines the simulation parameters. Here is an example:
 
 ~~~json
-"id": 3,
-"light_source": 2,
-"ray_num": 1000000,
-"max_hits": 7,
-"scattering": [
-  {
-    "crystal": [1, 2, 3],
-    "prob": 0.2
+"scene": {
+  "light_source": {
+    "type": "sun",
+    "altitude": 20.0,
+    "spectrum": "D65"
   },
-  {
-    "crystal": [2, 3],
-    "proportion": [20, 100],
-    "filter": [2, 1]
-  }
-]
+  "ray_num": 1000000,
+  "max_hits": 7,
+  "scattering": [
+    {
+      "prob": 0.2,
+      "entries": [
+        {"crystal": 1, "proportion": 100},
+        {"crystal": 2, "proportion": 30},
+        {"crystal": 3}
+      ]
+    },
+    {
+      "entries": [
+        {"crystal": 2, "proportion": 20, "filter": 2},
+        {"crystal": 3, "proportion": 100, "filter": 1}
+      ]
+    }
+  ]
+}
 ~~~
+
+`ray_num` can be an integer or `"infinite"` for unlimited rays.
 
 ### Render
 
@@ -252,12 +255,11 @@ Here is an example:
 "view": {
   "azimuth": -50,
   "elevation": 30,
-  "roll": 0,
-  "distance": 8
+  "roll": 0
 },
 "visible": "upper",
 "background": [0, 0, 0],
-"ray": [1, 1, 1],
+"ray_color": [1, 1, 1],
 "opacity": 0.8,
 "grid": {
   "central": [
@@ -281,7 +283,13 @@ You can use `fov` (field of view in degrees) or `f` (focal length in mm) to spec
 
 ### Project
 
-Nothing complicated. It just keeps references to scene and render.
+The `project` object specifies which renderers to use:
+
+~~~json
+"project": {
+  "render": [1, 2, 4]
+}
+~~~
 
 
 ## Documentation

@@ -8,10 +8,9 @@ This document provides a detailed description of the configuration file format, 
 
 The configuration file uses JSON format and contains the following main sections:
 
-- `light_source`: Array of light source definitions
 - `crystal`: Array of crystal definitions
 - `filter`: Array of filter definitions
-- `scene`: Array of scene definitions
+- `scene`: Scene definition (single object, includes inline light source)
 - `render`: Array of renderer definitions
 - `project`: Project definition (single object)
 
@@ -22,88 +21,6 @@ The configuration file uses JSON format and contains the following main sections
 - This document extracts all default value information based on the code implementation
 
 ## Configuration Fields
-
-### light_source (Light Source Configuration)
-
-The light source configuration defines the properties of the light sources used in the simulation.
-
-#### Basic Structure
-
-```json
-{
-  "id": <unique identifier>,
-  "type": "sun" | "streetlight",
-  "altitude": <angle>,
-  "azimuth": <angle>,
-  "diameter": <angle>,
-  "spectrum": <spectrum configuration>
-}
-```
-
-#### Field Descriptions
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `id` | integer | yes | - | Unique identifier, must be greater than 0 |
-| `type` | string | yes | - | Light source type: "sun" or "streetlight" |
-| `altitude` | float | yes | - | Altitude above the horizon (degrees) |
-| `azimuth` | float | no | 0.0 | Azimuth angle (degrees) |
-| `diameter` | float | no | 0.5 | Diameter (degrees), typically 0.5 for the real Sun |
-| `spectrum` | string or object array | yes | - | Spectrum configuration, see below |
-
-#### spectrum (Spectrum Configuration)
-
-`spectrum` supports two formats:
-
-**1. Standard illuminant mode** (string) -- uses the spectral power distribution (SPD) of a CIE standard illuminant:
-```json
-"spectrum": "D65"
-```
-Supported standard illuminants: `"D50"`, `"D55"`, `"D65"`, `"D75"`, `"A"`, `"E"`
-
-**2. Discrete wavelength mode** (object array) -- manually specifies wavelengths and weights:
-```json
-"spectrum": [
-  {"wavelength": 420, "weight": 1.0},
-  {"wavelength": 550, "weight": 1.0}
-]
-```
-
-#### Examples
-
-```json
-{
-  "id": 1,
-  "type": "sun",
-  "altitude": 20.0,
-  "azimuth": 0,
-  "diameter": 0.5,
-  "spectrum": "D65"
-}
-```
-
-```json
-{
-  "id": 2,
-  "type": "sun",
-  "altitude": 20.0,
-  "diameter": 0.5,
-  "spectrum": [
-    {"wavelength": 420, "weight": 1.0},
-    {"wavelength": 460, "weight": 1.0},
-    {"wavelength": 500, "weight": 1.0},
-    {"wavelength": 540, "weight": 1.0},
-    {"wavelength": 580, "weight": 1.0},
-    {"wavelength": 620, "weight": 1.0}
-  ]
-}
-```
-
-#### Notes
-
-- Wavelength determines the refractive index; data is sourced from [Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice)
-- `azimuth` and `diameter` are optional; default values are used when not specified
-- In standard illuminant mode, the simulator uniformly samples wavelengths from the [380, 780] nm range, weighted by SPD
 
 ### crystal (Crystal Configuration)
 
@@ -339,15 +256,14 @@ Filters are used to filter ray paths or directions.
 
 ### scene (Scene Configuration)
 
-The scene configuration defines the simulation scene, including the light source, crystal combinations, and number of rays.
+The scene configuration defines the simulation scene, including the light source, crystal combinations, and number of rays. It is a single object (not an array).
 
 #### Basic Structure
 
 ```json
 {
-  "id": <unique identifier>,
-  "light_source": <light source ID>,
-  "ray_num": <integer>,
+  "light_source": { ... },
+  "ray_num": <integer or "infinite">,
   "max_hits": <integer>,
   "scattering": [ ... ]
 }
@@ -357,22 +273,22 @@ The scene configuration defines the simulation scene, including the light source
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `id` | integer | yes | - | Unique identifier |
-| `light_source` | integer | yes | - | Light source ID reference |
-| `ray_num` | integer | yes | - | Number of rays; -1 for automatic calculation |
+| `light_source` | object | yes | - | Inline light source configuration (see below) |
+| `ray_num` | integer or string | yes | - | Number of rays; use `"infinite"` for continuous simulation |
 | `max_hits` | integer | yes | - | Maximum number of hits |
 | `scattering` | array | yes | - | Scattering configuration array |
 
-#### scattering (Scattering Configuration)
+#### light_source (Light Source Configuration)
 
-Each scattering configuration entry has the following structure:
+The light source is defined inline within the `scene` object.
 
 ```json
 {
-  "crystal": [<crystal ID array>],
-  "proportion": [<proportion array>],
-  "prob": <probability>,
-  "filter": [<filter ID array>]
+  "type": "sun",
+  "altitude": <angle>,
+  "azimuth": <angle>,
+  "diameter": <angle>,
+  "spectrum": <spectrum configuration>
 }
 ```
 
@@ -380,28 +296,122 @@ Each scattering configuration entry has the following structure:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `crystal` | integer array | yes | - | Array of crystal IDs |
-| `proportion` | float array | no | 100.0 | Proportion array; length must equal the `crystal` array length |
+| `type` | string | yes | - | Light source type: "sun" |
+| `altitude` | float | yes | - | Altitude above the horizon (degrees) |
+| `azimuth` | float | no | 0.0 | Azimuth angle (degrees) |
+| `diameter` | float | no | 0.5 | Diameter (degrees), typically 0.5 for the real Sun |
+| `spectrum` | string or object array | yes | - | Spectrum configuration, see below |
+
+##### spectrum (Spectrum Configuration)
+
+`spectrum` supports two formats:
+
+**1. Standard illuminant mode** (string) -- uses the spectral power distribution (SPD) of a CIE standard illuminant:
+```json
+"spectrum": "D65"
+```
+Supported standard illuminants: `"D50"`, `"D55"`, `"D65"`, `"D75"`, `"A"`, `"E"`
+
+**2. Discrete wavelength mode** (object array) -- manually specifies wavelengths and weights:
+```json
+"spectrum": [
+  {"wavelength": 420, "weight": 1.0},
+  {"wavelength": 550, "weight": 1.0}
+]
+```
+
+##### Light Source Notes
+
+- Wavelength determines the refractive index; data is sourced from [Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice)
+- `azimuth` and `diameter` are optional; default values are used when not specified
+- In standard illuminant mode, the simulator uniformly samples wavelengths from the [380, 780] nm range, weighted by SPD
+
+##### Light Source Examples
+
+```json
+"light_source": {
+  "type": "sun",
+  "altitude": 20.0,
+  "azimuth": 0,
+  "diameter": 0.5,
+  "spectrum": "D65"
+}
+```
+
+```json
+"light_source": {
+  "type": "sun",
+  "altitude": 20.0,
+  "diameter": 0.5,
+  "spectrum": [
+    {"wavelength": 420, "weight": 1.0},
+    {"wavelength": 460, "weight": 1.0},
+    {"wavelength": 500, "weight": 1.0},
+    {"wavelength": 540, "weight": 1.0},
+    {"wavelength": 580, "weight": 1.0},
+    {"wavelength": 620, "weight": 1.0}
+  ]
+}
+```
+
+#### scattering (Scattering Configuration)
+
+Each scattering configuration entry has the following structure:
+
+```json
+{
+  "prob": <probability>,
+  "entries": [
+    {
+      "crystal": <crystal ID>,
+      "proportion": <float>,
+      "filter": <filter ID>
+    },
+    ...
+  ]
+}
+```
+
+**Scattering entry fields**:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
 | `prob` | float | no | 0.0 | Multi-scattering probability |
-| `filter` | integer array | no | -1 | Array of filter IDs; length must equal the `crystal` array length; -1 means no filter |
+| `entries` | object array | yes | - | Array of crystal entries |
+
+**Entry object fields**:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `crystal` | integer | yes | - | Crystal ID reference |
+| `proportion` | float | no | 100.0 | Proportion weight |
+| `filter` | integer | no | (none) | Filter ID reference; omit for no filter |
 
 **Example**:
 
 ```json
-{
-  "id": 1,
-  "light_source": 2,
+"scene": {
+  "light_source": {
+    "type": "sun",
+    "altitude": 20.0,
+    "spectrum": "D65"
+  },
   "ray_num": 1000000,
   "max_hits": 7,
   "scattering": [
     {
-      "crystal": [1, 2, 3],
-      "prob": 0.2
+      "prob": 0.2,
+      "entries": [
+        {"crystal": 1, "proportion": 100},
+        {"crystal": 2, "proportion": 50},
+        {"crystal": 3, "proportion": 30}
+      ]
     },
     {
-      "crystal": [2, 3],
-      "proportion": [20, 100],
-      "filter": [2, 1]
+      "entries": [
+        {"crystal": 2, "proportion": 20, "filter": 2},
+        {"crystal": 3, "proportion": 100, "filter": 1}
+      ]
     }
   ]
 }
@@ -422,7 +432,7 @@ The render configuration defines the renderer parameters.
   "view": { ... },
   "visible": "upper" | "lower" | "full",
   "background": [<r>, <g>, <b>],
-  "ray": [<r>, <g>, <b>],
+  "ray_color": [<r>, <g>, <b>],
   "opacity": <float>,
   "intensity_factor": <float>,
   "grid": { ... },
@@ -441,7 +451,7 @@ The render configuration defines the renderer parameters.
 | `view` | object | no | see below | View configuration |
 | `visible` | string | no | "upper" | Visible hemisphere: "upper", "lower", or "full" |
 | `background` | float array | no | [0, 0, 0] | Background color RGB |
-| `ray` | float array | no | [-1, -1, -1] | Ray color RGB; -1 means use true color |
+| `ray_color` | float array | no | [-1, -1, -1] | Ray color RGB; -1 means use true color |
 | `opacity` | float | no | 1.0 | Opacity |
 | `intensity_factor` | float | no | 1.0 | Intensity factor |
 | `grid` | object | no | see below | Grid configuration |
@@ -468,8 +478,7 @@ The render configuration defines the renderer parameters.
 {
   "azimuth": <angle>,
   "elevation": <angle>,
-  "roll": <angle>,
-  "distance": <distance>
+  "roll": <angle>
 }
 ```
 
@@ -477,7 +486,6 @@ The render configuration defines the renderer parameters.
 - `azimuth`: 0.0
 - `elevation`: 0.0
 - `roll`: 0.0
-- `distance`: uses a default value when not specified
 
 #### grid (Grid Configuration)
 
@@ -515,14 +523,12 @@ The render configuration defines the renderer parameters.
 
 ### project (Project Configuration)
 
-The project configuration combines a scene with renderers. Each configuration file can define only one project (a single object, not an array).
+The project configuration specifies which renderers to use. Each configuration file can define only one project (a single object, not an array).
 
 #### Basic Structure
 
 ```json
 "project": {
-  "id": <unique identifier>,
-  "scene": <scene ID>,
   "render": [<renderer ID array>]
 }
 ```
@@ -531,16 +537,12 @@ The project configuration combines a scene with renderers. Each configuration fi
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `id` | integer | yes | - | Unique identifier |
-| `scene` | integer | yes | - | Scene ID reference |
 | `render` | integer array | yes | - | Array of renderer IDs |
 
 #### Example
 
 ```json
 "project": {
-  "id": 1,
-  "scene": 2,
   "render": [1, 2, 4]
 }
 ```
@@ -549,24 +551,20 @@ The project configuration combines a scene with renderers. Each configuration fi
 
 ### ID Uniqueness Validation
 
-- All `id` fields must be unique within their respective section
+- All `id` fields must be unique within their respective section (applies to `crystal`, `filter`, and `render` arrays)
 - `id` must be greater than 0
 
 ### ID Reference Validity
 
-- The light source ID referenced by `scene.light_source` must exist in the `light_source` array
-- Crystal IDs referenced by `scene.scattering[].crystal` must exist in the `crystal` array
-- Filter IDs referenced by `scene.scattering[].filter` must exist in the `filter` array (or be -1)
-- The scene ID referenced by `project.scene` must exist in the `scene` array
+- Crystal IDs referenced by `scene.scattering[].entries[].crystal` must exist in the `crystal` array
+- Filter IDs referenced by `scene.scattering[].entries[].filter` must exist in the `filter` array
 - Renderer IDs referenced by `project.render` must exist in the `render` array
 
-**Note**: `project` is a single object, not an array.
+**Note**: Both `scene` and `project` are single objects, not arrays.
 
 ### Array Length Validation
 
-- `light_source[].spectrum` must be either a string (standard illuminant name) or an object array (each object containing `wavelength` and `weight`)
-- `scene.scattering[].proportion` array length must equal the `crystal` array length
-- `scene.scattering[].filter` array length must equal the `crystal` array length (if specified)
+- `scene.light_source.spectrum` must be either a string (standard illuminant name) or an object array (each object containing `wavelength` and `weight`)
 - `crystal[].shape.face_distance` array length must be 6 (if specified)
 - `crystal[].shape.upper_indices` array length must be 3 (if specified)
 - `crystal[].shape.lower_indices` array length must be 3 (if specified)
@@ -577,21 +575,22 @@ The project configuration combines a scene with renderers. Each configuration fi
 - Angle values are typically between -180 and 180 degrees (may exceed in certain cases)
 - `crystal[].shape.upper_h` and `lower_h` should be between 0.0 and 1.0
 - `render[].opacity` should be between 0.0 and 1.0
-- `render[].background` and `ray` color values should be between 0.0 and 1.0
+- `render[].background` and `ray_color` color values should be between 0.0 and 1.0
 
 ### Required Field Validation
 
-- `light_source`: `id`, `type`, `altitude`, `spectrum` are required
+- `scene.light_source`: `type`, `altitude`, `spectrum` are required
 - `crystal`: `id`, `type`, `shape` are required
 - `filter`: `id`, `type` are required
-- `scene`: `id`, `light_source`, `ray_num`, `max_hits`, `scattering` are required
+- `scene`: `light_source`, `ray_num`, `max_hits`, `scattering` are required
+- `scene.scattering[].entries[]`: `crystal` is required
 - `render`: `id`, `resolution` are required
-- `project`: `id`, `scene`, `render` are required
+- `project`: `render` is required
 
 ### Type Validation
 
 - `crystal[].type` must be "prism" or "pyramid"
-- `light_source[].type` must be "sun" or "streetlight"
+- `scene.light_source.type` must be "sun"
 - `filter[].type` must be "none", "raypath", "entry_exit", "direction", "crystal", or "complex"
 - `render[].visible` must be "upper", "lower", or "full"
 - `render[].lens.type` must be "linear", "fisheye_equal_area", "fisheye_equidistant", "fisheye_stereographic", "dual_fisheye_equal_area", "dual_fisheye_equidistant", "dual_fisheye_stereographic", or "rectangular"
@@ -605,41 +604,48 @@ The project configuration combines a scene with renderers. Each configuration fi
 **Incorrect example**:
 ```json
 {
-  "scene": [
-    {
-      "id": 1,
-      "light_source": 999  // Error: light source ID 999 does not exist
-    }
-  ]
+  "scene": {
+    "scattering": [
+      {
+        "entries": [
+          {"crystal": 999}  // Error: crystal ID 999 does not exist
+        ]
+      }
+    ]
+  }
 }
 ```
 
 **Correct example**:
 ```json
 {
-  "light_source": [
+  "crystal": [
     { "id": 1, ... }
   ],
-  "scene": [
-    {
-      "id": 1,
-      "light_source": 1  // Correct: references a defined light source
-    }
-  ]
+  "scene": {
+    "scattering": [
+      {
+        "entries": [
+          {"crystal": 1}  // Correct: references a defined crystal
+        ]
+      }
+    ]
+  }
 }
 ```
 
-### 2. Array Length Mismatch
+### 2. Missing Crystal in Scattering Entry
 
-**Description**: `proportion` array length does not match `crystal` array length
+**Description**: A scattering entry is missing the required `crystal` field
 
 **Incorrect example**:
 ```json
 {
   "scattering": [
     {
-      "crystal": [1, 2, 3],
-      "proportion": [10, 20]  // Error: length mismatch
+      "entries": [
+        {"proportion": 50}  // Error: missing "crystal" field
+      ]
     }
   ]
 }
@@ -650,8 +656,9 @@ The project configuration combines a scene with renderers. Each configuration fi
 {
   "scattering": [
     {
-      "crystal": [1, 2, 3],
-      "proportion": [10, 20, 30]  // Correct: lengths match
+      "entries": [
+        {"crystal": 1, "proportion": 50}  // Correct: crystal ID specified
+      ]
     }
   ]
 }
@@ -724,23 +731,26 @@ The project configuration combines a scene with renderers. Each configuration fi
 **Incorrect example**:
 ```json
 {
-  "crystal": {
-    "id": 1,  // Error: crystal should be an array
-    "type": "prism"
-  }
+  "scene": [  // Error: scene should be a single object, not an array
+    {
+      "light_source": { "type": "sun", "altitude": 20.0, "spectrum": "D65" },
+      "ray_num": 1000000
+    }
+  ]
 }
 ```
 
 **Correct example**:
 ```json
 {
-  "crystal": [  // Correct: crystal is an array
-    {
-      "id": 1,
-      "type": "prism",
-      "shape": { "height": 1.3 }
-    }
-  ]
+  "scene": {  // Correct: scene is a single object
+    "light_source": { "type": "sun", "altitude": 20.0, "spectrum": "D65" },
+    "ray_num": 1000000,
+    "max_hits": 7,
+    "scattering": [
+      { "entries": [{"crystal": 1}] }
+    ]
+  }
 }
 ```
 
@@ -753,11 +763,11 @@ The project configuration combines a scene with renderers. Each configuration fi
    - Adjust according to requirements for production; typically 1000000 or more
 
 2. **Configuration reuse**:
-   - Avoid defining duplicate crystals and light sources; reuse them via ID references
+   - Avoid defining duplicate crystals; reuse them via ID references in scattering entries
 
 3. **Filter usage**:
    - Proper use of filters can reduce unnecessary computation
-   - Use the `filter` field in `scene.scattering`
+   - Use the `filter` field in `scene.scattering[].entries[]`
 
 ### Common Scene Configuration Templates
 
@@ -765,15 +775,6 @@ The project configuration combines a scene with renderers. Each configuration fi
 
 ```json
 {
-  "light_source": [
-    {
-      "id": 1,
-      "type": "sun",
-      "altitude": 20.0,
-      "diameter": 0.5,
-      "spectrum": "D65"
-    }
-  ],
   "crystal": [
     {
       "id": 1,
@@ -781,17 +782,23 @@ The project configuration combines a scene with renderers. Each configuration fi
       "shape": { "height": 1.2 }
     }
   ],
-  "scene": [
-    {
-      "id": 1,
-      "light_source": 1,
-      "ray_num": 1000000,
-      "max_hits": 7,
-      "scattering": [
-        { "crystal": [1] }
-      ]
-    }
-  ],
+  "scene": {
+    "light_source": {
+      "type": "sun",
+      "altitude": 20.0,
+      "diameter": 0.5,
+      "spectrum": "D65"
+    },
+    "ray_num": 1000000,
+    "max_hits": 7,
+    "scattering": [
+      {
+        "entries": [
+          {"crystal": 1}
+        ]
+      }
+    ]
+  },
   "render": [
     {
       "id": 1,
@@ -800,8 +807,6 @@ The project configuration combines a scene with renderers. Each configuration fi
     }
   ],
   "project": {
-    "id": 1,
-    "scene": 1,
     "render": [1]
   }
 }
@@ -811,25 +816,31 @@ The project configuration combines a scene with renderers. Each configuration fi
 
 ```json
 {
-  "scene": [
-    {
-      "id": 1,
-      "light_source": 1,
-      "ray_num": 1000000,
-      "max_hits": 7,
-      "scattering": [
-        {
-          "crystal": [1, 2, 3],
-          "prob": 0.2
-        },
-        {
-          "crystal": [2, 3],
-          "proportion": [20, 100],
-          "filter": [2, 1]
-        }
-      ]
-    }
-  ]
+  "scene": {
+    "light_source": {
+      "type": "sun",
+      "altitude": 20.0,
+      "spectrum": "D65"
+    },
+    "ray_num": 1000000,
+    "max_hits": 7,
+    "scattering": [
+      {
+        "prob": 0.2,
+        "entries": [
+          {"crystal": 1, "proportion": 100},
+          {"crystal": 2, "proportion": 50},
+          {"crystal": 3, "proportion": 30}
+        ]
+      },
+      {
+        "entries": [
+          {"crystal": 2, "proportion": 20, "filter": 2},
+          {"crystal": 3, "proportion": 100, "filter": 1}
+        ]
+      }
+    ]
+  }
 }
 ```
 
