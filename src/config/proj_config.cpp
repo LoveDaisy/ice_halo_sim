@@ -2,11 +2,17 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/def.hpp"
+
 namespace lumice {
 
 void to_json(nlohmann::json& j, const SceneConfig& s) {
   j["light_source"] = s.light_source_;
-  j["ray_num"] = s.ray_num_;
+  if (s.ray_num_ == kInfSize) {
+    j["ray_num"] = "infinite";
+  } else {
+    j["ray_num"] = s.ray_num_;
+  }
   j["max_hits"] = s.max_hits_;
   for (const auto& m : s.ms_) {
     nlohmann::json j_m;

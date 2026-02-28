@@ -123,10 +123,11 @@ static MsInfo ParseScatteringInfo(const nlohmann::json& j_s, const ConfigManager
 SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager& m) {
   SceneConfig scene{};
 
-  if (int n = j_scene.at("ray_num").get<int>(); n < 0) {
+  const auto& j_ray_num = j_scene.at("ray_num");
+  if (j_ray_num.is_string() && j_ray_num.get<std::string>() == "infinite") {
     scene.ray_num_ = kInfSize;
   } else {
-    scene.ray_num_ = static_cast<size_t>(n);
+    scene.ray_num_ = j_ray_num.get<size_t>();
   }
 
   j_scene.at("max_hits").get_to(scene.max_hits_);
