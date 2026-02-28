@@ -25,7 +25,6 @@ struct MsInfo {
 };
 
 struct SceneConfig {
-  IdType id_;
   size_t ray_num_;  // For every single wavelength.
   size_t max_hits_;
   LightSourceConfig light_source_;
@@ -39,9 +38,7 @@ void to_json(nlohmann::json& j, const SceneConfig& s);
 
 // =============== Project configuration ===============
 struct ProjConfig {
-  IdType id_;
-  SceneConfig scene_;                    // One scene for one project.
-  std::vector<RenderConfig> renderers_;  // One project may have multipile renderer.
+  std::vector<RenderConfig> renderers_;  // One project may have multiple renderers.
 };
 
 using ProjConfigPtrU = std::unique_ptr<ProjConfig>;

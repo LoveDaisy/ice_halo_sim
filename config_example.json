@@ -1,37 +1,4 @@
 {
-  "light_source": [
-    {
-      "id": 1,
-      "type": "sun",
-      "altitude": 20.0,
-      "azimuth": 0,
-      "diameter": 0.5,
-      "spectrum": [{"wavelength": 550, "weight": 1.0}]
-    },
-    {
-      "id": 2,
-      "type": "sun",
-      "altitude": 20.0,
-      "azimuth": 0,
-      "diameter": 0.5,
-      "spectrum": [
-        {"wavelength": 420, "weight": 1.0},
-        {"wavelength": 460, "weight": 1.0},
-        {"wavelength": 500, "weight": 1.0},
-        {"wavelength": 540, "weight": 1.0},
-        {"wavelength": 580, "weight": 1.0},
-        {"wavelength": 620, "weight": 1.0}
-      ]
-    },
-    {
-      "id": 3,
-      "type": "sun",
-      "altitude": 20.0,
-      "azimuth": 0,
-      "diameter": 0.5,
-      "spectrum": "D65"
-    }
-  ],
   "crystal": [
     {
       "id": 1,
@@ -205,51 +172,24 @@
       "composition": [1, [2, 6], 5]
     }
   ],
-  "scene": [
-    {
-      "id": 1,
-      "light_source": 1,
-      "ray_num": 2,
-      "max_hits": 7,
-      "scattering": [
-        {
-          "crystal": [ 1 ],
-          "proportion": [ 10 ],
-          "prob": 0.0
-        }
-      ]
+  "scene": {
+    "light_source": {
+      "type": "sun",
+      "altitude": 20.0,
+      "azimuth": 0,
+      "diameter": 0.5,
+      "spectrum": [{"wavelength": 550, "weight": 1.0}]
     },
-    {
-      "id": 2,
-      "light_source": 2,
-      "ray_num": -1,
-      "max_hits": 7,
-      "scattering": [
-        {
-          "crystal": [3, 4],
-          "proportion": [100, 30],
-          "filter": [-1, -1]
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "light_source": 2,
-      "ray_num": 1000000,
-      "max_hits": 7,
-      "scattering": [
-        {
-          "crystal": [1, 2, 3],
-          "prob": 0.2
-        },
-        {
-          "crystal": [2, 3],
-          "proportion": [20, 100],
-          "filter": [2, 1]
-        }
-      ]
-    }
-  ],
+    "ray_num": 2,
+    "max_hits": 7,
+    "scattering": [
+      {
+        "crystal": [1],
+        "proportion": [10],
+        "prob": 0.0
+      }
+    ]
+  },
   "render": [
     {
       "id": 1,
@@ -318,8 +258,6 @@
     }
   ],
   "project": {
-    "id": 1,
-    "scene": 2,
     "render": [1, 2, 4]
   }
 }

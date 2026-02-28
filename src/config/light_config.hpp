@@ -24,7 +24,6 @@ struct WlParam {
 using SpectrumConfig = std::variant<std::vector<WlParam>, IlluminantType>;
 
 struct LightSourceConfig {
-  IdType id_;
   SunParam param_;
   SpectrumConfig spectrum_;
 };

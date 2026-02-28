@@ -33,14 +33,11 @@ struct SpectrumToJson {
 };
 
 void to_json(nlohmann::json& j, const LightSourceConfig& l) {
-  j["id"] = l.id_;
   std::visit(SpectrumToJson{ j }, l.spectrum_);
   LightParamToJson(j, l.param_);
 }
 
 void from_json(const nlohmann::json& j, LightSourceConfig& l) {
-  j.at("id").get_to(l.id_);
-
   const auto& j_spectrum = j.at("spectrum");
   if (j_spectrum.is_string()) {
     l.spectrum_ = j_spectrum.get<IlluminantType>();

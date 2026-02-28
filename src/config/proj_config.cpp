@@ -5,8 +5,7 @@
 namespace lumice {
 
 void to_json(nlohmann::json& j, const SceneConfig& s) {
-  j["id"] = s.id_;
-  j["light_source"] = s.light_source_.id_;
+  j["light_source"] = s.light_source_;
   j["ray_num"] = s.ray_num_;
   j["max_hits"] = s.max_hits_;
   for (const auto& m : s.ms_) {
@@ -23,13 +22,9 @@ void to_json(nlohmann::json& j, const SceneConfig& s) {
 
 
 void to_json(nlohmann::json& j, const ProjConfig& p) {
-  j["id"] = p.id_;
-
   for (const auto& r : p.renderers_) {
     j["render"].emplace_back(r.id_);
   }
-
-  j["scene"] = p.scene_.id_;
 }
 
 }  // namespace lumice

@@ -33,36 +33,20 @@ class V3TestJson : public ::testing::Test {
 
 // =============== LightSource ===============
 TEST_F(V3TestJson, LightSource_Sun) {
-  const auto& j_light = config_json_.at("light_source")[1];
+  const auto& j_light = config_json_.at("scene").at("light_source");
   auto s = j_light.get<LightSourceConfig>();
 
-  ASSERT_EQ(s.id_, 2);
   ASSERT_TRUE(std::holds_alternative<std::vector<WlParam>>(s.spectrum_));
   const auto& wl_params = std::get<std::vector<WlParam>>(s.spectrum_);
-  ASSERT_EQ(wl_params.size(), 6);
-
-  std::vector<WlParam> expected = { { 420.0f, 1.0f }, { 460.0f, 1.0f }, { 500.0f, 1.0f },
-                                    { 540.0f, 1.0f }, { 580.0f, 1.0f }, { 620.0f, 1.0f } };
-  for (size_t i = 0; i < expected.size(); i++) {
-    ASSERT_NEAR(wl_params[i].wl_, expected[i].wl_, 1e-5);
-    ASSERT_NEAR(wl_params[i].weight_, expected[i].weight_, 1e-5);
-  }
+  ASSERT_EQ(wl_params.size(), 1);
+  ASSERT_NEAR(wl_params[0].wl_, 550.0f, 1e-5);
+  ASSERT_NEAR(wl_params[0].weight_, 1.0f, 1e-5);
 
   const auto& p = s.param_;
 
   ASSERT_NEAR(p.azimuth_, 0.0f, 1e-5);
   ASSERT_NEAR(p.altitude_, 20.0f, 1e-5);
   ASSERT_NEAR(p.diameter_, 0.5f, 1e-5);
-}
-
-TEST_F(V3TestJson, LightSource_Illuminant) {
-  // config_example.json light_source[2] has "spectrum": "D65"
-  const auto& j_light = config_json_.at("light_source")[2];
-  auto s = j_light.get<LightSourceConfig>();
-
-  ASSERT_EQ(s.id_, 3);
-  ASSERT_TRUE(std::holds_alternative<IlluminantType>(s.spectrum_));
-  ASSERT_EQ(std::get<IlluminantType>(s.spectrum_), IlluminantType::kD65);
 }
 
 TEST(LightSourceSpectrum, IlluminantParsing) {
@@ -78,7 +62,6 @@ TEST(LightSourceSpectrum, IlluminantParsing) {
 
   for (const auto& tc : cases) {
     nlohmann::json j = {
-      { "id", 1 },
       { "type", "sun" },
       { "altitude", 20.0 },
       { "spectrum", tc.name },
@@ -91,7 +74,6 @@ TEST(LightSourceSpectrum, IlluminantParsing) {
 
 TEST(LightSourceSpectrum, DiscreteRoundTrip) {
   nlohmann::json j_in = {
-    { "id", 1 },
     { "type", "sun" },
     { "altitude", 20.0 },
     { "spectrum", nlohmann::json::array(
@@ -111,7 +93,6 @@ TEST(LightSourceSpectrum, DiscreteRoundTrip) {
 
 TEST(LightSourceSpectrum, IlluminantRoundTrip) {
   nlohmann::json j_in = {
-    { "id", 1 },
     { "type", "sun" },
     { "altitude", 20.0 },
     { "spectrum", "D65" },
@@ -345,12 +326,10 @@ TEST_F(V3TestJson, Filter_Complex) {
 // =============== Scene ===============
 TEST_F(V3TestJson, Scene_SingleScattering) {
   auto manager = config_json_.get<ConfigManager>();
-  auto s = manager.scenes_.at(1);
+  const auto& s = manager.scene_;
 
-  ASSERT_EQ(s.id_, 1);
   ASSERT_EQ(s.max_hits_, 7);
   ASSERT_EQ(s.ray_num_, 2);
-  ASSERT_EQ(s.light_source_.id_, 1);
   ASSERT_EQ(s.ms_.size(), 1);
 
   ASSERT_NEAR(s.ms_[0].prob_, 0.0f, 1e-5);
