@@ -133,9 +133,9 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   config_manager_ = std::move(new_config);
 
   // Setup consumers from project config.
-  ILOG_DEBUG(logger_, "CommitConfig: setup consumers for proj {}", config_manager_.project_.id_);
+  ILOG_DEBUG(logger_, "CommitConfig: setup consumers");
   consumers_.clear();
-  for (const auto& r : config_manager_.project_.renderers_) {
+  for (const auto& [_, r] : config_manager_.renderers_) {
     consumers_.emplace_back(std::make_unique<RenderConsumer>(r));
   }
   consumers_.emplace_back(std::make_unique<StatsConsumer>());
@@ -344,7 +344,7 @@ void ServerImpl::GenerateScene() {
   ILOG_DEBUG(logger_, "GenerateScene entry");
   work_started_ = true;
 
-  const auto& scene = config_manager_.project_.scene_;
+  const auto& scene = config_manager_.scene_;
   auto ray_num = scene.ray_num_;
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
@@ -352,8 +352,7 @@ void ServerImpl::GenerateScene() {
     scene_queue_->Emplace(SimBatch{ batch_ray_num, &scene });
     sim_scene_cnt_++;
 
-    ILOG_DEBUG(logger_, "GenerateScene: put a scene({}): ray({}/{}, {})", scene.id_, batch_ray_num, ray_num,
-               committed_num);
+    ILOG_DEBUG(logger_, "GenerateScene: put a scene: ray({}/{}, {})", batch_ray_num, ray_num, committed_num);
     CHECK_STOP
 
     if (sim_scene_cnt_ >= kMaxSceneCnt) {

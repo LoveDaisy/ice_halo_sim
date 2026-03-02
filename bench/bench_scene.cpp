@@ -14,14 +14,6 @@ namespace {
 // Minimal config: single wavelength, single prism crystal, no multi-scattering.
 // ray_num is patched at runtime via string replacement.
 const std::string kBenchConfigTemplate = R"({
-  "light_source": [{
-    "id": 1,
-    "type": "sun",
-    "altitude": 20.0,
-    "azimuth": 0,
-    "diameter": 0.5,
-    "spectrum": [{"wavelength": 550, "weight": 1.0}]
-  }],
   "crystal": [{
     "id": 1,
     "type": "prism",
@@ -31,27 +23,26 @@ const std::string kBenchConfigTemplate = R"({
     "id": 1,
     "type": "none"
   }],
-  "scene": [{
-    "id": 1,
-    "light_source": 1,
+  "scene": {
+    "light_source": {
+      "type": "sun",
+      "altitude": 20.0,
+      "azimuth": 0,
+      "diameter": 0.5,
+      "spectrum": [{"wavelength": 550, "weight": 1.0}]
+    },
     "ray_num": __RAY_NUM__,
     "max_hits": 7,
     "scattering": [{
-      "crystal": [1],
-      "proportion": [1],
-      "prob": 0.0
+      "prob": 0.0,
+      "entries": [{"crystal": 1, "proportion": 1}]
     }]
-  }],
+  },
   "render": [{
     "id": 1,
     "lens": { "type": "linear", "fov": 40 },
     "resolution": [320, 240]
-  }],
-  "project": {
-    "id": 1,
-    "scene": 1,
-    "render": [1]
-  }
+  }]
 })";
 
 std::string MakeConfig(int64_t ray_num) {

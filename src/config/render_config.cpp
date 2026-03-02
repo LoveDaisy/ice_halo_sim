@@ -83,7 +83,7 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["view"] = r.view_;
   j["visible"] = r.visible_;
   j["background"] = r.background_;
-  j["ray"] = r.ray_color_;
+  j["ray_color"] = r.ray_color_;
   j["opacity"] = r.opacity_;
   j["intensity_factor"] = r.intensity_factor_;
 

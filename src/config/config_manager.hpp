@@ -13,12 +13,10 @@
 namespace lumice {
 
 struct ConfigManager {
-  std::map<IdType, LightSourceConfig> lights_;
   std::map<IdType, CrystalConfig> crystals_;
   std::map<IdType, FilterConfig> filters_;
   std::map<IdType, RenderConfig> renderers_;
-  std::map<IdType, SceneConfig> scenes_;
-  ProjConfig project_;
+  SceneConfig scene_;
 };
 
 // convert to/from json object

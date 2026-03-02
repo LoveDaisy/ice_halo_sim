@@ -16,14 +16,6 @@ namespace {
 
 // Fixed crystal config: deterministic prism (cache-friendly).
 const std::string kFixedConfigTemplate = R"({
-  "light_source": [{
-    "id": 1,
-    "type": "sun",
-    "altitude": 20.0,
-    "azimuth": 0,
-    "diameter": 0.5,
-    "spectrum": [{"wavelength": 550, "weight": 1.0}]
-  }],
   "crystal": [{
     "id": 1,
     "type": "prism",
@@ -33,39 +25,30 @@ const std::string kFixedConfigTemplate = R"({
     "id": 1,
     "type": "none"
   }],
-  "scene": [{
-    "id": 1,
-    "light_source": 1,
+  "scene": {
+    "light_source": {
+      "type": "sun",
+      "altitude": 20.0,
+      "azimuth": 0,
+      "diameter": 0.5,
+      "spectrum": [{"wavelength": 550, "weight": 1.0}]
+    },
     "ray_num": __RAY_NUM__,
     "max_hits": 7,
     "scattering": [{
-      "crystal": [1],
-      "proportion": [1],
-      "prob": 0.0
+      "prob": 0.0,
+      "entries": [{"crystal": 1, "proportion": 1}]
     }]
-  }],
+  },
   "render": [{
     "id": 1,
     "lens": { "type": "linear", "fov": 40 },
     "resolution": [320, 240]
-  }],
-  "project": {
-    "id": 1,
-    "scene": 1,
-    "render": [1]
-  }
+  }]
 })";
 
 // Random crystal config: height with Gaussian distribution (no cache hit).
 const std::string kRandomConfigTemplate = R"({
-  "light_source": [{
-    "id": 1,
-    "type": "sun",
-    "altitude": 20.0,
-    "azimuth": 0,
-    "diameter": 0.5,
-    "spectrum": [{"wavelength": 550, "weight": 1.0}]
-  }],
   "crystal": [{
     "id": 1,
     "type": "prism",
@@ -75,27 +58,26 @@ const std::string kRandomConfigTemplate = R"({
     "id": 1,
     "type": "none"
   }],
-  "scene": [{
-    "id": 1,
-    "light_source": 1,
+  "scene": {
+    "light_source": {
+      "type": "sun",
+      "altitude": 20.0,
+      "azimuth": 0,
+      "diameter": 0.5,
+      "spectrum": [{"wavelength": 550, "weight": 1.0}]
+    },
     "ray_num": __RAY_NUM__,
     "max_hits": 7,
     "scattering": [{
-      "crystal": [1],
-      "proportion": [1],
-      "prob": 0.0
+      "prob": 0.0,
+      "entries": [{"crystal": 1, "proportion": 1}]
     }]
-  }],
+  },
   "render": [{
     "id": 1,
     "lens": { "type": "linear", "fov": 40 },
     "resolution": [320, 240]
-  }],
-  "project": {
-    "id": 1,
-    "scene": 1,
-    "render": [1]
-  }
+  }]
 })";
 
 std::string MakeConfig(const std::string& tmpl, int64_t ray_num) {
@@ -121,7 +103,7 @@ class SimLoopFixtureBase : public benchmark::Fixture {
 
     auto config_json = nlohmann::json::parse(MakeConfig(config_template, ray_num));
     config_manager_ = config_json.get<ConfigManager>();
-    scene_ = &config_manager_.project_.scene_;
+    scene_ = &config_manager_.scene_;
   }
 
   void TearDown(benchmark::State& /*state*/) override {

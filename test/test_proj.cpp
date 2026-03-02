@@ -97,7 +97,7 @@ TEST_F(V3TestProj, SimpleProj) {
   std::thread prod_thread([&simulator]() { simulator.Run(); });
   std::thread cons_thread([&consumer]() { consumer.Run(); });
 
-  const auto& config = config_manager.scenes_.at(1);
+  const auto& config = config_manager.scene_;
   config_queue->Emplace(lumice::SimBatch{ config.ray_num_, &config });
 
   std::this_thread::sleep_for(500ms);

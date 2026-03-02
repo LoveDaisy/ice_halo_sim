@@ -57,26 +57,15 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
   }
 }
 
-struct RayDirSampler {
-  float* d_;
-  size_t num_;
-  size_t step_;
-
-  void operator()(const SunParam& p) {
-    SampleSphCapPoint(p.azimuth_ + 180.0f, -p.altitude_, p.diameter_ / 2.0f, d_, num_, step_);
-  }
-
-  void operator()(const StreetLightParam& /* p */) {
-    // NOTE: current we do **NOT** support street light source
-    LOG_WARNING("we will support street light later.");
-  }
-};
+static void SampleRayDir(const SunParam& p, float* d, size_t num, size_t step) {
+  SampleSphCapPoint(p.azimuth_ + 180.0f, -p.altitude_, p.diameter_ / 2.0f, d, num, step);
+}
 
 /**
  * @brief Set initial value of d & w (direction and intensity) for rays.
  */
-void InitRay_d_w_previdx(const LightSourceParam& light_param, const WlParam& wl_param, size_t ray_num,  // input
-                         RayBuffer* ray_buf_ptr) {                                                      // output
+void InitRay_d_w_previdx(const SunParam& light_param, const WlParam& wl_param, size_t ray_num,  // input
+                         RayBuffer* ray_buf_ptr) {                                              // output
   if (!ray_buf_ptr) {
     return;
   }
@@ -89,7 +78,7 @@ void InitRay_d_w_previdx(const LightSourceParam& light_param, const WlParam& wl_
   }
 
   // d: sample direction
-  std::visit(RayDirSampler{ ray_buf[0].d_, ray_num, sizeof(RaySeg) }, light_param);
+  SampleRayDir(light_param, ray_buf[0].d_, ray_num, sizeof(RaySeg));
 
   // Then rotate
   for (auto& r : ray_buf) {
@@ -133,7 +122,7 @@ void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, siz
 
 
 // NOLINTNEXTLINE(readability-function-size)
-void InitRayFirstMs(RandomNumberGenerator& rng, const LightSourceParam& light_param, const WlParam& wl_param,
+void InitRayFirstMs(RandomNumberGenerator& rng, const SunParam& light_param, const WlParam& wl_param,
                     size_t curr_ray_num,                                                                        // input
                     const Crystal& curr_crystal, size_t curr_crystal_id, const AxisDistribution& crystal_axis,  // input
                     RayBuffer buffer_data[2], RayBuffer& all_data) {  // output

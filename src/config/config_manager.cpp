@@ -12,11 +12,6 @@
 namespace lumice {
 
 void to_json(nlohmann::json& j, const ConfigManager& m) {
-  // Light sources
-  for (const auto& [_, v] : m.lights_) {
-    j["light_source"].emplace_back(v);
-  }
-
   // Crystals
   for (const auto& [_, v] : m.crystals_) {
     j["crystal"].emplace_back(v);
@@ -27,18 +22,13 @@ void to_json(nlohmann::json& j, const ConfigManager& m) {
     j["filter"].emplace_back(v);
   }
 
+  // Scene (single object, light_source inlined)
+  j["scene"] = m.scene_;
+
   // Renderers
   for (const auto& [_, v] : m.renderers_) {
     j["render"].emplace_back(v);
   }
-
-  // Scenes
-  for (const auto& [_, v] : m.scenes_) {
-    j["scene"].emplace_back(v);
-  }
-
-  // Project
-  j["project"] = m.project_;
 }
 
 RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManager& m) {
@@ -62,8 +52,8 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   if (j_render.contains("background")) {
     j_render.at("background").get_to(render.background_);
   }
-  if (j_render.contains("ray")) {
-    j_render.at("ray").get_to(render.ray_color_);
+  if (j_render.contains("ray_color")) {
+    j_render.at("ray_color").get_to(render.ray_color_);
   }
   if (j_render.contains("opacity")) {
     j_render.at("opacity").get_to(render.opacity_);
@@ -109,33 +99,19 @@ static MsInfo ParseScatteringInfo(const nlohmann::json& j_s, const ConfigManager
     j_s.at("prob").get_to(ms.prob_);
   }
 
-  for (const auto& j_c : j_s.at("crystal")) {
-    IdType id = j_c.get<IdType>();
-    ms.setting_.emplace_back(ScatteringSetting{ kDefaultNoneFilter, m.crystals_.at(id), 100.0 });
-  }
+  for (const auto& j_entry : j_s.at("entries")) {
+    IdType crystal_id = j_entry.at("crystal").get<IdType>();
+    ScatteringSetting setting{ kDefaultNoneFilter, m.crystals_.at(crystal_id), 100.0f };
 
-  if (j_s.contains("proportion")) {
-    size_t i = 0;
-    for (const auto& j_p : j_s.at("proportion")) {
-      if (i >= ms.setting_.size()) {
-        break;
-      }
-      j_p.get_to(ms.setting_[i].crystal_proportion_);
-      i++;
+    if (j_entry.contains("proportion")) {
+      j_entry.at("proportion").get_to(setting.crystal_proportion_);
     }
-  }
+    if (j_entry.contains("filter")) {
+      IdType filter_id = j_entry.at("filter").get<IdType>();
+      setting.filter_ = m.filters_.at(filter_id);
+    }
 
-  if (j_s.contains("filter")) {
-    size_t i = 0;
-    for (const auto& j_f : j_s.at("filter")) {
-      if (i >= ms.setting_.size()) {
-        break;
-      }
-      if (auto id = j_f.get<int>(); id >= 0) {
-        ms.setting_[i].filter_ = m.filters_.at(id);
-      }
-      i++;
-    }
+    ms.setting_.emplace_back(std::move(setting));
   }
 
   return ms;
@@ -143,22 +119,17 @@ static MsInfo ParseScatteringInfo(const nlohmann::json& j_s, const ConfigManager
 
 SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager& m) {
   SceneConfig scene{};
-  j_scene.at("id").get_to(scene.id_);
 
-  if (int n = j_scene.at("ray_num").get<int>(); n < 0) {
+  const auto& j_ray_num = j_scene.at("ray_num");
+  if (j_ray_num.is_string() && j_ray_num.get<std::string>() == "infinite") {
     scene.ray_num_ = kInfSize;
   } else {
-    scene.ray_num_ = static_cast<size_t>(n);
+    scene.ray_num_ = j_ray_num.get<size_t>();
   }
 
   j_scene.at("max_hits").get_to(scene.max_hits_);
 
-  if (IdType id = j_scene.at("light_source").get<IdType>(); m.lights_.count(id)) {
-    scene.light_source_ = m.lights_.at(id);
-  } else {
-    LOG_ERROR("Light source ID({}) cannot be found!", id);
-    scene.light_source_.id_ = kInvalidId;
-  }
+  scene.light_source_ = j_scene.at("light_source").get<LightSourceConfig>();
 
   for (const auto& j_s : j_scene.at("scattering")) {
     scene.ms_.emplace_back(ParseScatteringInfo(j_s, m));
@@ -169,19 +140,13 @@ SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager&
 
 
 void from_json(const nlohmann::json& j, ConfigManager& m) {
-  // Light sources
-  for (const auto& j_light : j.at("light_source")) {
-    IdType id = j_light.at("id").get<IdType>();
-    m.lights_.emplace(id, j_light.get<LightSourceConfig>());
-  }
-
   // Crystals
   for (const auto& j_crystal : j.at("crystal")) {
     IdType id = j_crystal.at("id").get<IdType>();
     m.crystals_.emplace(id, j_crystal.get<CrystalConfig>());
   }
 
-  // Filters
+  // Filters (two passes: simple first, then complex)
   for (const auto& j_filter : j.at("filter")) {
     if (j_filter.at("type") == "complex") {
       continue;
@@ -194,7 +159,7 @@ void from_json(const nlohmann::json& j, ConfigManager& m) {
       continue;
     }
     IdType id = j_filter.at("id").get<IdType>();
-    auto complex_filter = j_filter.get<FilterConfig>();  // incompleted
+    auto complex_filter = j_filter.get<FilterConfig>();
 
     const auto& cmp = j_filter.at("composition");
     ComplexFilterParam p;
@@ -217,27 +182,8 @@ void from_json(const nlohmann::json& j, ConfigManager& m) {
     m.renderers_.emplace(renderer.id_, renderer);
   }
 
-  // Scenes
-  for (const auto& j_scene : j.at("scene")) {
-    auto scene = ParseSceneConfig(j_scene, m);
-    m.scenes_.emplace(scene.id_, scene);
-  }
-
-  // Project
-  {
-    const auto& j_proj = j.at("project");
-    j_proj.at("id").get_to(m.project_.id_);
-
-    IdType scene_id = j_proj.at("scene").get<IdType>();
-    m.project_.scene_ = m.scenes_.at(scene_id);
-
-    if (j_proj.contains("render")) {
-      for (const auto& j_render : j_proj.at("render")) {
-        IdType render_id = j_render.get<IdType>();
-        m.project_.renderers_.emplace_back(m.renderers_.at(render_id));
-      }
-    }
-  }
+  // Scene (single object, light_source inlined)
+  m.scene_ = ParseSceneConfig(j.at("scene"), m);
 }
 
 }  // namespace lumice
