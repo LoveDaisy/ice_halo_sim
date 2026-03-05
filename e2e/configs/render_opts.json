@@ -1,0 +1,61 @@
+{
+  "crystal": [
+    {
+      "id": 1,
+      "type": "prism",
+      "shape": {
+        "height": 1.2
+      },
+      "axis": {
+        "zenith": {"type": "uniform", "mean": 90, "std": 90},
+        "azimuth": {"type": "uniform", "mean": 0, "std": 360}
+      }
+    }
+  ],
+  "filter": [],
+  "scene": {
+    "light_source": {
+      "type": "sun",
+      "altitude": 20.0,
+      "spectrum": [{"wavelength": 550, "weight": 1.0}]
+    },
+    "ray_num": 10000000,
+    "max_hits": 7,
+    "scattering": [
+      {
+        "prob": 0.0,
+        "entries": [
+          {"crystal": 1, "proportion": 10}
+        ]
+      }
+    ]
+  },
+  "render": [
+    {
+      "id": 1,
+      "lens": {
+        "type": "linear",
+        "fov": 40
+      },
+      "resolution": [256, 256],
+      "view": {
+        "elevation": 20
+      },
+      "visible": "upper",
+      "background": [0, 0, 0],
+      "ray_color": [1, 1, 1],
+      "opacity": 0.8,
+      "grid": {
+        "central": [
+          {
+            "value": 22,
+            "color": [1, 1, 1],
+            "opacity": 0.4,
+            "width": 1.2
+          }
+        ],
+        "outline": true
+      }
+    }
+  ]
+}
