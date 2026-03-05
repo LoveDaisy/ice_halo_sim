@@ -91,6 +91,21 @@ Note that debug version executables will not be installed, so they will be found
 [GoogleTest](https://github.com/google/googletest) is used for unit tests.
 If `-t` option is set, the test cases will be built and run.
 
+### End-to-end tests
+
+E2E tests run the built `Lumice` binary with test configurations and verify outputs.
+They are independent of the CMake/CTest build and use Python `unittest`:
+
+~~~bash
+# Install test dependency
+pip install Pillow
+
+# Run all E2E tests
+python -m unittest discover -s e2e -v
+~~~
+
+See [`e2e/README.md`](e2e/README.md) for details.
+
 
 ## Configuration file
 

@@ -1,1 +1,7 @@
-!*.jpg
+# Reference images are NOT tracked in git yet.
+# Known rendering issues (pixel (0,0) white artifact) need to be
+# investigated first. Once fixed, decide on storage strategy
+# (Git LFS / CI artifact / direct commit) before tracking.
+#
+# To track references, change this to: !*.jpg
+*.jpg
