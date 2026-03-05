@@ -21,7 +21,7 @@
       "id": 2,
       "type": "raypath",
       "raypath": [3, 5],
-      "symmetry": "P"
+      "symmetry": "PBD"
     },
     {
       "id": 3,
@@ -48,7 +48,7 @@
       {
         "prob": 0.0,
         "entries": [
-          {"crystal": 1, "proportion": 10, "filter": 4}
+          {"crystal": 1, "proportion": 10, "filter": 2}
         ]
       }
     ]

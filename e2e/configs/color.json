@@ -7,7 +7,7 @@
         "height": 1.2
       },
       "axis": {
-        "zenith": {"type": "uniform", "mean": 90, "std": 90},
+        "zenith": {"type": "gauss", "mean": 90, "std": 0.5},
         "azimuth": {"type": "uniform", "mean": 0, "std": 360}
       }
     }

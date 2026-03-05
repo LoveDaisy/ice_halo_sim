@@ -35,7 +35,7 @@
       "id": 1,
       "lens": {
         "type": "linear",
-        "fov": 40
+        "fov": 80
       },
       "resolution": [256, 256],
       "view": {
