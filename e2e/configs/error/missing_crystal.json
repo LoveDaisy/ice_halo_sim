@@ -1,0 +1,9 @@
+{
+  "filter": [],
+  "scene": {
+    "light_source": {"type": "sun", "altitude": 20.0, "spectrum": "E"},
+    "ray_num": 1000, "max_hits": 3,
+    "scattering": [{"prob": 0.0, "entries": [{"crystal": 1, "proportion": 1}]}]
+  },
+  "render": [{"id": 1, "lens": {"type": "linear", "fov": 80}, "resolution": [64, 64]}]
+}
