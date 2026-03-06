@@ -28,7 +28,7 @@ PSNR_THRESHOLDS = {
     "multi_lens_03": 38.5,
     "multi_scatter_01": 17.8,
     "parhelion_01": 25.7,
-    "pyramid_01": 18.5,
+    "pyramid_01": 18.9,
     "render_opts_01": 22.6,
 }
 
