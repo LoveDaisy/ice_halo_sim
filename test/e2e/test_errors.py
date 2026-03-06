@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from e2e.base import LumiceTestCase
+from test.e2e.base import LumiceTestCase
 
 ERROR_CONFIGS_DIR = Path(__file__).resolve().parent / "configs" / "error"
 

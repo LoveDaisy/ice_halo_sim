@@ -6,11 +6,11 @@ import os
 import unittest
 from pathlib import Path
 
-from e2e.base import LumiceTestCase
-from e2e.image_utils import HAS_PILLOW
+from test.e2e.base import LumiceTestCase
+from test.e2e.image_utils import HAS_PILLOW
 
 if HAS_PILLOW:
-    from e2e.image_utils import compute_mse, compute_psnr, get_dimensions
+    from test.e2e.image_utils import compute_mse, compute_psnr, get_dimensions
 
 CONFIGS_DIR = Path(__file__).resolve().parent / "configs"
 REFERENCES_DIR = Path(__file__).resolve().parent / "references"
@@ -44,7 +44,7 @@ class TestSmoke(LumiceTestCase):
     def test_all_configs_run_successfully(self):
         """Every config should exit 0, produce non-empty images of correct size."""
         configs = _discover_configs()
-        self.assertTrue(len(configs) > 0, "No configs found in e2e/configs/")
+        self.assertTrue(len(configs) > 0, "No configs found in test/e2e/configs/")
 
         for cfg_path in configs:
             with self.subTest(config=cfg_path.stem):

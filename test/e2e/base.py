@@ -4,7 +4,7 @@ import shutil
 import tempfile
 import unittest
 
-from e2e.runner import find_lumice_binary, run_lumice, DEFAULT_TIMEOUT
+from test.e2e.runner import find_lumice_binary, run_lumice, DEFAULT_TIMEOUT
 
 
 class LumiceTestCase(unittest.TestCase):

@@ -19,18 +19,18 @@ The tests expect the binary at `build/cmake_install/Lumice`. Override with `LUMI
 
 ```bash
 # All E2E tests
-python -m unittest discover -s e2e -v
+pytest test/e2e/ -v
 
 # Individual test modules
-python -m unittest e2e.test_cli -v       # CLI behavior
-python -m unittest e2e.test_smoke -v     # Smoke tests (all configs)
-python -m unittest e2e.test_errors -v    # Error handling
+pytest test/e2e/test_cli.py -v       # CLI behavior
+pytest test/e2e/test_smoke.py -v     # Smoke tests (all configs)
+pytest test/e2e/test_errors.py -v    # Error handling
 ```
 
 ## Test Structure
 
 ```
-e2e/
+test/e2e/
 ├── README.md           # This file
 ├── __init__.py
 ├── runner.py           # Binary discovery and execution
@@ -55,7 +55,7 @@ e2e/
 │       ├── missing_render.json
 │       └── missing_crystal.json
 └── references/         # Reference images for PSNR comparison
-    └── *.jpg           # (see note below)
+    └── *.jpg           # Tracked in git (~500KB total)
 ```
 
 ## Reference Images
@@ -63,26 +63,17 @@ e2e/
 Reference images are used by `test_image_psnr` to verify that simulation output
 is consistent with known-good baselines via PSNR (Peak Signal-to-Noise Ratio).
 
-**Current status: NOT tracked in git.**
-
-The reference images exist locally in `e2e/references/` but are intentionally
-excluded from version control because:
-
-1. There are known rendering issues to investigate (e.g., pixel (0,0) white artifact).
-   Once these are fixed, reference images will need to be regenerated.
-2. Binary image files bloat git history. A proper storage strategy (Git LFS, CI
-   artifact, or dynamic generation) should be decided before committing.
-
-### Generating reference images
+Reference images are tracked in git (`test/e2e/references/*.jpg`).
+To regenerate after rendering code changes:
 
 ```bash
-for cfg in e2e/configs/*.json; do
+for cfg in test/e2e/configs/*.json; do
     name=$(basename "$cfg" .json)
     tmpdir=$(mktemp -d)
     ./build/cmake_install/Lumice -f "$cfg" -o "$tmpdir"
     for img in "$tmpdir"/img_*.jpg; do
         rid=$(echo "$img" | grep -o '[0-9]*\.jpg' | sed 's/\.jpg//')
-        cp "$img" "e2e/references/${name}_$(printf '%02d' $rid).jpg"
+        cp "$img" "test/e2e/references/${name}_$(printf '%02d' $rid).jpg"
     done
     rm -rf "$tmpdir"
 done
@@ -104,14 +95,14 @@ runs, so the 3 dB margin provides a very stable test.
 
 | Output            | Min PSNR (dB) | Threshold (dB) |
 |-------------------|---------------|-----------------|
-| halo_22_01        | 20.95         | 17.9            |
-| parhelion_01      | 28.71         | 25.7            |
-| cza_01            | 37.99         | 35.0            |
-| pyramid_01        | 21.52         | 18.5            |
-| color_01          | 21.04         | 18.0            |
-| multi_lens_01     | 28.59         | 25.6            |
-| multi_lens_02     | 29.29         | 26.3            |
-| multi_lens_03     | 41.53         | 38.5            |
-| render_opts_01    | 25.54         | 22.5            |
-| filters_01        | 23.92         | 20.9            |
-| multi_scatter_01  | 20.86         | 17.9            |
+| halo_22_01        | 21.0          | 18.0            |
+| parhelion_01      | 28.7          | 25.7            |
+| cza_01            | 38.1          | 35.1            |
+| pyramid_01        | 21.5          | 18.5            |
+| color_01          | 21.4          | 18.4            |
+| multi_lens_01     | 28.6          | 25.6            |
+| multi_lens_02     | 29.3          | 26.3            |
+| multi_lens_03     | 41.5          | 38.5            |
+| render_opts_01    | 25.6          | 22.6            |
+| filters_01        | 24.0          | 21.0            |
+| multi_scatter_01  | 20.8          | 17.8            |

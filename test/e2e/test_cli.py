@@ -4,7 +4,7 @@ import glob
 import os
 from pathlib import Path
 
-from e2e.base import LumiceTestCase
+from test.e2e.base import LumiceTestCase
 
 CONFIGS_DIR = Path(__file__).resolve().parent / "configs"
 

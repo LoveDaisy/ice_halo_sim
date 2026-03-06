@@ -101,10 +101,10 @@ They are independent of the CMake/CTest build and use Python `unittest`:
 pip install Pillow
 
 # Run all E2E tests
-python -m unittest discover -s e2e -v
+pytest test/e2e/ -v
 ~~~
 
-See [`e2e/README.md`](e2e/README.md) for details.
+See [`test/e2e/README.md`](test/e2e/README.md) for details.
 
 
 ## Configuration file

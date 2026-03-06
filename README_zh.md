@@ -96,10 +96,10 @@ E2E 测试使用构建好的 `Lumice` 二进制文件运行测试配置并验证
 pip install Pillow
 
 # 运行所有 E2E 测试
-python -m unittest discover -s e2e -v
+pytest test/e2e/ -v
 ~~~
 
-详见 [`e2e/README.md`](e2e/README.md)。
+详见 [`test/e2e/README.md`](test/e2e/README.md)。
 
 ## 配置文件
 

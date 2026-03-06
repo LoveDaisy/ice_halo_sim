@@ -8,8 +8,8 @@ DEFAULT_TIMEOUT = 120  # seconds
 
 
 def get_project_root() -> Path:
-    """Return the project root directory (parent of e2e/)."""
-    return Path(__file__).resolve().parent.parent
+    """Return the project root directory (grandparent of test/e2e/)."""
+    return Path(__file__).resolve().parent.parent.parent
 
 
 def find_lumice_binary() -> Path:
