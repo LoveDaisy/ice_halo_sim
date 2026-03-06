@@ -34,3 +34,6 @@ doc/api/latex
 config.json
 test.json
 *.jpg
+
+__pycache__/
+*.pyc
