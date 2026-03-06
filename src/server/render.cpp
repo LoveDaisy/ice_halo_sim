@@ -79,8 +79,8 @@ void LinearProject(const LensProjParam& p, const float* d, int* xy, size_t num =
 
     d_cam[0] /= d_cam[2];
     d_cam[1] /= d_cam[2];
-    xy[0] = static_cast<int>(d_cam[0] * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]);
-    xy[1] = static_cast<int>(d_cam[1] * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]);
+    xy[0] = static_cast<int>(std::floor(d_cam[0] * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
+    xy[1] = static_cast<int>(std::floor(d_cam[1] * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
   }
 }
 
@@ -106,8 +106,8 @@ void FisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, si
     float az = std::atan2(d_cam[1], d_cam[0]);
     float theta = math::kPi_2 - std::asin(d_cam[2]);
     float r = scale * std::sin(theta / 2.0f);
-    xy[0] = static_cast<int>(r * std::cos(az) + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]);
-    xy[1] = static_cast<int>(r * std::sin(az) + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]);
+    xy[0] = static_cast<int>(std::floor(r * std::cos(az) + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
+    xy[1] = static_cast<int>(std::floor(r * std::sin(az) + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
   }
 }
 
@@ -124,12 +124,14 @@ void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy
     float r = scale * std::abs(std::sin(theta / 2.0f));
     if (d[2] > 0) {
       // Lower semisphere
-      xy[0] = static_cast<int>(r * std::cos(math::kPi_2 - az) + p.resolution_[0] / 2.0f + 0.5f + short_res / 2.0f);
-      xy[1] = static_cast<int>(r * std::sin(math::kPi_2 - az) + p.resolution_[1] / 2.0f + 0.5f);
+      xy[0] = static_cast<int>(
+          std::floor(r * std::cos(math::kPi_2 - az) + p.resolution_[0] / 2.0f + 0.5f + short_res / 2.0f));
+      xy[1] = static_cast<int>(std::floor(r * std::sin(math::kPi_2 - az) + p.resolution_[1] / 2.0f + 0.5f));
     } else {
       // Upper semisphere
-      xy[0] = static_cast<int>(r * std::cos(math::kPi_2 + az) + p.resolution_[0] / 2.0f + 0.5f - short_res / 2.0f);
-      xy[1] = static_cast<int>(r * std::sin(math::kPi_2 + az) + p.resolution_[1] / 2.0f + 0.5f);
+      xy[0] = static_cast<int>(
+          std::floor(r * std::cos(math::kPi_2 + az) + p.resolution_[0] / 2.0f + 0.5f - short_res / 2.0f));
+      xy[1] = static_cast<int>(std::floor(r * std::sin(math::kPi_2 + az) + p.resolution_[1] / 2.0f + 0.5f));
     }
   }
 }
@@ -161,8 +163,8 @@ void RectangularProject(const LensProjParam& p, const float* d, int* xy, size_t 
       lat = -math::kPi - lat;
     }
 
-    xy[0] = static_cast<int>(lon * scale + p.resolution_[0] / 2.0f + 0.5f);
-    xy[1] = static_cast<int>(-lat * scale + p.resolution_[1] / 2.0f + 0.5f);
+    xy[0] = static_cast<int>(std::floor(lon * scale + p.resolution_[0] / 2.0f + 0.5f));
+    xy[1] = static_cast<int>(std::floor(-lat * scale + p.resolution_[1] / 2.0f + 0.5f));
   }
 }
 
