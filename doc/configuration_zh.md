@@ -489,7 +489,14 @@
 - `type`: "linear"
 - `fov`: 90.0（度）
 
-**注意**：可以使用 `fov`（视场角，度）或 `f`（焦距，mm），如果使用 `f`，程序会自动计算对应的 `fov`。
+**注意**：
+- `fov` 为**全对角线视场角**（度）。`rectangular` 和 `dual_*` 类型会忽略 `fov`（始终为全天投影）。
+- 可以使用 `f`（焦距，mm，基于 35mm 胶片）代替 `fov`，程序会根据投影模型使用正确公式换算：
+  - Linear: `fov = 2·atan(d/f)`
+  - Equal area: `fov = 4·arcsin(d/(2f))`
+  - Equidistant: `fov = 2d/f`（弧度 → 度）
+  - Stereographic: `fov = 4·arctan(d/(2f))`
+  - Rectangular: `f` 被忽略（始终全天投影）
 
 #### view（视角配置）
 

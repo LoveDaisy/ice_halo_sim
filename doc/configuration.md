@@ -468,7 +468,14 @@ The render configuration defines the renderer parameters.
 - `type`: "linear"
 - `fov`: 90.0 (degrees)
 
-**Note**: You can use either `fov` (field of view in degrees) or `f` (focal length in mm). If `f` is used, the program automatically calculates the corresponding `fov`.
+**Note**:
+- `fov` is the **full diagonal field of view** in degrees. For `rectangular` and `dual_*` types, `fov` is ignored (these are always full-sky projections).
+- You can use `f` (focal length in mm, based on 35mm film) instead of `fov`. The program converts `f` to `fov` using the correct formula for each projection model:
+  - Linear: `fov = 2·atan(d/f)`
+  - Equal area: `fov = 4·arcsin(d/(2f))`
+  - Equidistant: `fov = 2d/f` (radians → degrees)
+  - Stereographic: `fov = 4·arctan(d/(2f))`
+  - Rectangular: `f` is ignored (always full-sky)
 
 #### view (View Configuration)
 
