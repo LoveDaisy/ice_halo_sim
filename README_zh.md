@@ -86,6 +86,21 @@ OPTIONS:
 使用 [GoogleTest](https://github.com/google/googletest) 框架进行单元测试。
 如果设置了 `-t` 选项，测试用例将被构建并运行。
 
+### 端到端测试
+
+E2E 测试使用构建好的 `Lumice` 二进制文件运行测试配置并验证输出结果。
+独立于 CMake/CTest 构建流程，使用 Python `unittest`：
+
+~~~bash
+# 安装测试依赖
+pip install Pillow
+
+# 运行所有 E2E 测试
+pytest test/e2e/ -v
+~~~
+
+详见 [`test/e2e/README.md`](test/e2e/README.md)。
+
 ## 配置文件
 
 配置文件包含模拟的所有设置。使用 JSON 格式编写，由 [nlohmann/json](https://github.com/nlohmann/json) 解析。

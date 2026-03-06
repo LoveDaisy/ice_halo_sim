@@ -457,10 +457,11 @@ void Simulator::Run() {
 
 void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
                                       CrystalCache& crystal_cache, SimWorkspace& workspace) {
-  ILOG_DEBUG(logger_, "Run: get config({}): ray({}), wl({:.1f},{:.2f})",  //
-             config.id_, ray_num, wl_param.wl_, wl_param.weight_);
+  ILOG_DEBUG(logger_, "Run: get config: ray({}), wl({:.1f},{:.2f})",  //
+             ray_num, wl_param.wl_, wl_param.weight_);
 
   float wl = wl_param.wl_;
+  size_t original_ray_num = ray_num;  // ray_num is overwritten in the ms loop; keep original for normalization.
 
   RayBuffer all_data = AllocateAllData(config, ray_num);
   auto& init_data = workspace.init_data;
@@ -579,7 +580,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
 
   SimData sim_data;
   sim_data.curr_wl_ = wl;
-  sim_data.total_intensity_ = wl_param.weight_ * ray_num;
+  sim_data.total_intensity_ = wl_param.weight_ * original_ray_num;
   sim_data.crystals_ = std::move(all_crystals);
   sim_data.rays_ = std::move(all_data);
   data_queue_->Emplace(std::move(sim_data));

@@ -1,0 +1,5 @@
+{
+  "crystal": [{"id": 1, "type": "prism", "shape": {"height": 1.2}}],
+  "filter": [],
+  "render": [{"id": 1, "lens": {"type": "linear", "fov": 80}, "resolution": [64, 64]}]
+}

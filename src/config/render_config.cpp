@@ -60,16 +60,47 @@ void to_json(nlohmann::json& j, const LensParam& l) {
 
 void from_json(const nlohmann::json& j, LensParam& l) {
   constexpr int kErrCodeMissingKey = 403;
-  constexpr float kHalfDiagLen = 21.63f;
+  constexpr int kErrCodeInvalidValue = 404;
+  constexpr float kHalfDiagLen = 21.63f;  // half diagonal of 35mm film (43.27mm / 2)
 
   j.at("type").get_to(l.type_);
   if (j.contains("fov")) {
     j.at("fov").get_to(l.fov_);
   } else if (j.contains("f")) {
     float f = j.at("f").get<float>();
-    l.fov_ = std::atan2(kHalfDiagLen, f) * 2 * math::kRadToDegree;  // atan2(y, x)
+    float d = kHalfDiagLen;
+    // NOTE: f→fov formula must match the scale formula in render.cpp for each projection model.
+    switch (l.type_) {
+      case LensParam::kLinear:
+        l.fov_ = std::atan2(d, f) * 2 * math::kRadToDegree;
+        break;
+      case LensParam::kFisheyeEqualArea:
+      case LensParam::kDualFisheyeEqualArea:
+        if (d / (2 * f) > 1.0f) {
+          throw nlohmann::detail::out_of_range::create(
+              kErrCodeInvalidValue, "focal length too short for equal area fisheye (f >= 10.815mm required)", j);
+        }
+        l.fov_ = std::asin(d / (2 * f)) * 4 * math::kRadToDegree;
+        break;
+      case LensParam::kFisheyeEquidistant:
+      case LensParam::kDualFisheyeEquidistant:
+        l.fov_ = (d / f) * math::kRadToDegree;
+        break;
+      case LensParam::kFisheyeStereographic:
+      case LensParam::kDualFisheyeStereographic:
+        l.fov_ = std::atan(d / (2 * f)) * 4 * math::kRadToDegree;
+        break;
+      case LensParam::kRectangular:
+        l.fov_ = 0;  // Rectangular is always full-sky; fov is ignored
+        break;
+    }
   } else {
     throw nlohmann::detail::out_of_range::create(kErrCodeMissingKey, "missing key [fov] or [f]", j);
+  }
+
+  // Validate fov range (skip Rectangular which uses fov=0 for full-sky)
+  if (l.type_ != LensParam::kRectangular && (l.fov_ <= 0 || l.fov_ > 360)) {
+    throw nlohmann::detail::out_of_range::create(kErrCodeInvalidValue, "fov must be in (0, 360] degrees", j);
   }
 }
 
