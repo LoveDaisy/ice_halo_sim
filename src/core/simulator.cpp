@@ -461,7 +461,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
              ray_num, wl_param.wl_, wl_param.weight_);
 
   float wl = wl_param.wl_;
-  size_t original_ray_num = ray_num;
+  size_t original_ray_num = ray_num;  // ray_num is overwritten in the ms loop; keep original for normalization.
 
   RayBuffer all_data = AllocateAllData(config, ray_num);
   auto& init_data = workspace.init_data;

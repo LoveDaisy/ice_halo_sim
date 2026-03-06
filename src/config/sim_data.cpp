@@ -56,7 +56,8 @@ SimData::SimData() : curr_wl_(0.0f) {}
 SimData::SimData(size_t capacity) : curr_wl_(0.0f), rays_(capacity) {}
 
 SimData::SimData(const SimData& other)
-    : curr_wl_(other.curr_wl_), total_intensity_(0), rays_(other.rays_.capacity_), crystals_(other.crystals_) {
+    : curr_wl_(other.curr_wl_), total_intensity_(other.total_intensity_), rays_(other.rays_.capacity_),
+      crystals_(other.crystals_) {
   rays_.size_ = other.rays_.size_;
   std::memcpy(rays_.rays_.get(), other.rays_.rays_.get(), sizeof(RaySeg) * other.rays_.capacity_);
 }
