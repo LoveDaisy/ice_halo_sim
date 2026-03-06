@@ -47,6 +47,8 @@ void SpectrumToXyz(float wl, const float* v, const int* xy, float* xyz, size_t n
 
 
 // =============== Lens projections ===============
+// All projection functions assume `d` is a unit-length direction vector (|d| = 1).
+// This is guaranteed by the ray tracing pipeline (normalized outgoing ray directions).
 struct LensProjParam {
   float fov_;
   float diag_pix_;
@@ -171,8 +173,10 @@ void FisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy
   }
 }
 
+// Dual equal area fisheye: full hemisphere per circle, fov ignored.
+// No visible_range or behind-camera early exit — by design, all directions are projected.
+// Out-of-bounds pixel coordinates are handled by the caller (SpectrumToXyz bounds check).
 void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  // visible_range is ignored here
   auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
   float scale = short_res / 2.0f / std::sin(math::kPi_4);
 
@@ -197,8 +201,8 @@ void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy
 }
 
 // Dual equidistant fisheye: full hemisphere per circle, fov ignored.
+// No visible_range or behind-camera early exit — by design, all directions are projected.
 void DualFisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  // visible_range is ignored here
   auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
   float scale = short_res / 2.0f / math::kPi_4;  // at θ=π/2: r = scale·π/2 = short_res/2
 
@@ -223,8 +227,8 @@ void DualFisheyeEquidistantProject(const LensProjParam& p, const float* d, int* 
 }
 
 // Dual stereographic fisheye: full hemisphere per circle, fov ignored.
+// No visible_range or behind-camera early exit — by design, all directions are projected.
 void DualFisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  // visible_range is ignored here
   auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
   float scale = short_res / 2.0f;  // tan(π/4) = 1, so scale = short_res/2
 
@@ -249,6 +253,8 @@ void DualFisheyeStereographicProject(const LensProjParam& p, const float* d, int
 }
 
 // Rectangular (equirectangular) projection: always full-sky, fov is ignored.
+// No visible_range or behind-camera early exit — by design, all directions are projected.
+// lens_shift_ is intentionally not applied — full-sky equirectangular has no meaningful shift.
 void RectangularProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
   float scale = short_res / math::kPi;
