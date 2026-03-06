@@ -1,5 +1,6 @@
 #include "server/render.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -108,7 +109,7 @@ void FisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, si
     }
 
     float az = std::atan2(d_cam[1], d_cam[0]);
-    float theta = math::kPi_2 - std::asin(d_cam[2]);
+    float theta = math::kPi_2 - std::asin(std::clamp(d_cam[2], -1.0f, 1.0f));
     float r = scale * std::sin(theta / 2.0f);
     xy[0] = static_cast<int>(std::floor(r * std::cos(az) + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(r * std::sin(az) + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
@@ -137,7 +138,7 @@ void FisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, 
     }
 
     float az = std::atan2(d_cam[1], d_cam[0]);
-    float theta = math::kPi_2 - std::asin(d_cam[2]);
+    float theta = math::kPi_2 - std::asin(std::clamp(d_cam[2], -1.0f, 1.0f));
     float r = scale * theta;
     xy[0] = static_cast<int>(std::floor(r * std::cos(az) + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(r * std::sin(az) + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
@@ -166,7 +167,7 @@ void FisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy
     }
 
     float az = std::atan2(d_cam[1], d_cam[0]);
-    float theta = math::kPi_2 - std::asin(d_cam[2]);
+    float theta = math::kPi_2 - std::asin(std::clamp(d_cam[2], -1.0f, 1.0f));
     float r = scale * std::tan(theta / 2.0f);
     xy[0] = static_cast<int>(std::floor(r * std::cos(az) + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(r * std::sin(az) + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
@@ -182,7 +183,7 @@ void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     float az = std::atan2(-d[1], -d[0]);
-    float theta = math::kPi_2 - std::abs(std::asin(-d[2]));
+    float theta = math::kPi_2 - std::abs(std::asin(std::clamp(-d[2], -1.0f, 1.0f)));
 
     // fov is ignored here
     float r = scale * std::abs(std::sin(theta / 2.0f));
@@ -208,7 +209,7 @@ void DualFisheyeEquidistantProject(const LensProjParam& p, const float* d, int* 
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     float az = std::atan2(-d[1], -d[0]);
-    float theta = math::kPi_2 - std::abs(std::asin(-d[2]));
+    float theta = math::kPi_2 - std::abs(std::asin(std::clamp(-d[2], -1.0f, 1.0f)));
 
     // fov is ignored here — dual fisheye is always full-hemisphere projection
     float r = scale * std::abs(theta);
@@ -234,7 +235,7 @@ void DualFisheyeStereographicProject(const LensProjParam& p, const float* d, int
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     float az = std::atan2(-d[1], -d[0]);
-    float theta = math::kPi_2 - std::abs(std::asin(-d[2]));
+    float theta = math::kPi_2 - std::abs(std::asin(std::clamp(-d[2], -1.0f, 1.0f)));
 
     // fov is ignored here — dual fisheye is always full-hemisphere projection
     float r = scale * std::abs(std::tan(theta / 2.0f));
@@ -270,7 +271,7 @@ void RectangularProject(const LensProjParam& p, const float* d, int* xy, size_t 
     while (lon > math::kPi) {
       lon -= 2 * math::kPi;
     }
-    float lat = std::asin(-d[2]);
+    float lat = std::asin(std::clamp(-d[2], -1.0f, 1.0f));
     if (lat > math::kPi_2) {
       lat = math::kPi - lat;
     }
