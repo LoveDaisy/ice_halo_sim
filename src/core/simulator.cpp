@@ -457,8 +457,8 @@ void Simulator::Run() {
 
 void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
                                       CrystalCache& crystal_cache, SimWorkspace& workspace) {
-  ILOG_DEBUG(logger_, "Run: get config({}): ray({}), wl({:.1f},{:.2f})",  //
-             config.id_, ray_num, wl_param.wl_, wl_param.weight_);
+  ILOG_DEBUG(logger_, "Run: get config: ray({}), wl({:.1f},{:.2f})",  //
+             ray_num, wl_param.wl_, wl_param.weight_);
 
   float wl = wl_param.wl_;
   size_t original_ray_num = ray_num;
