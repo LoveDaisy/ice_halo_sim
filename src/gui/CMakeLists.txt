@@ -16,6 +16,7 @@ set(IMGUI_SOURCES
 add_executable(LumiceGUI
     ${PROJ_SRC_DIR}/gui/main.cpp
     ${PROJ_SRC_DIR}/gui/panels.cpp
+    ${PROJ_SRC_DIR}/gui/file_io.cpp
     ${IMGUI_SOURCES})
 
 target_include_directories(LumiceGUI PRIVATE
