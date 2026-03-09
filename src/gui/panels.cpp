@@ -11,7 +11,7 @@ namespace {
 // Helper: wrap ImGui control and mark dirty on change
 #define DIRTY_IF(expr) \
   if (expr)            \
-  state.dirty = true
+  state.MarkDirty()
 
 void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
   ImGui::PushID(label);
@@ -23,7 +23,7 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
   ImGui::PushItemWidth(80);
   if (ImGui::Combo("##type", &dist_type, dist_names, 2)) {
     axis.type = static_cast<AxisDistType>(dist_type);
-    state.dirty = true;
+    state.MarkDirty();
   }
   ImGui::PopItemWidth();
 
@@ -52,7 +52,7 @@ void RenderCrystalTab(GuiState& state) {
     c.id = state.next_crystal_id++;
     state.crystals.push_back(c);
     state.selected_crystal = static_cast<int>(state.crystals.size()) - 1;
-    state.dirty = true;
+    state.MarkDirty();
   }
 
   if (ImGui::BeginListBox("##crystal_list", ImVec2(-1, 80))) {
@@ -75,7 +75,7 @@ void RenderCrystalTab(GuiState& state) {
       if (state.selected_crystal >= static_cast<int>(state.crystals.size())) {
         state.selected_crystal = static_cast<int>(state.crystals.size()) - 1;
       }
-      state.dirty = true;
+      state.MarkDirty();
     }
   }
 
@@ -93,7 +93,7 @@ void RenderCrystalTab(GuiState& state) {
   ImGui::PushItemWidth(-1);
   if (ImGui::Combo("Type##crystal", &type_idx, type_names, 2)) {
     cr.type = static_cast<CrystalType>(type_idx);
-    state.dirty = true;
+    state.MarkDirty();
   }
 
   if (ImGui::CollapsingHeader("Shape", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -155,7 +155,7 @@ void RenderSceneTab(GuiState& state) {
       ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20);
       if (ImGui::SmallButton("X##layer")) {
         state.scattering.erase(state.scattering.begin() + li);
-        state.dirty = true;
+        state.MarkDirty();
         ImGui::PopID();
         if (layer_open) {
           ImGui::TreePop();
@@ -187,7 +187,7 @@ void RenderSceneTab(GuiState& state) {
               snprintf(item_label, sizeof(item_label), "[%d] %s", c.id, t);
               if (ImGui::Selectable(item_label, entry.crystal_id == c.id)) {
                 entry.crystal_id = c.id;
-                state.dirty = true;
+                state.MarkDirty();
               }
             }
             ImGui::EndCombo();
@@ -211,14 +211,14 @@ void RenderSceneTab(GuiState& state) {
               }())) {
             if (ImGui::Selectable("None", entry.filter_id < 0)) {
               entry.filter_id = -1;
-              state.dirty = true;
+              state.MarkDirty();
             }
             for (auto& f : state.filters) {
               char item_label[32];
               snprintf(item_label, sizeof(item_label), "[%d] Raypath", f.id);
               if (ImGui::Selectable(item_label, entry.filter_id == f.id)) {
                 entry.filter_id = f.id;
-                state.dirty = true;
+                state.MarkDirty();
               }
             }
             ImGui::EndCombo();
@@ -227,7 +227,7 @@ void RenderSceneTab(GuiState& state) {
           ImGui::SameLine();
           if (ImGui::SmallButton("X##entry")) {
             layer.entries.erase(layer.entries.begin() + ei);
-            state.dirty = true;
+            state.MarkDirty();
             ImGui::PopID();
             break;
           }
@@ -242,7 +242,7 @@ void RenderSceneTab(GuiState& state) {
             e.crystal_id = state.crystals[0].id;
           }
           layer.entries.push_back(e);
-          state.dirty = true;
+          state.MarkDirty();
         }
 
         ImGui::TreePop();
@@ -255,7 +255,7 @@ void RenderSceneTab(GuiState& state) {
       ScatterLayer layer;
       layer.probability = 1.0f;
       state.scattering.push_back(layer);
-      state.dirty = true;
+      state.MarkDirty();
     }
   }
 
@@ -273,7 +273,7 @@ void RenderRenderTab(GuiState& state) {
     r.id = state.next_renderer_id++;
     state.renderers.push_back(r);
     state.selected_renderer = static_cast<int>(state.renderers.size()) - 1;
-    state.dirty = true;
+    state.MarkDirty();
   }
 
   if (ImGui::BeginListBox("##render_list", ImVec2(-1, 60))) {
@@ -295,7 +295,7 @@ void RenderRenderTab(GuiState& state) {
       if (state.selected_renderer >= static_cast<int>(state.renderers.size())) {
         state.selected_renderer = static_cast<int>(state.renderers.size()) - 1;
       }
-      state.dirty = true;
+      state.MarkDirty();
     }
   }
 
@@ -353,7 +353,7 @@ void RenderFilterTab(GuiState& state) {
     f.id = state.next_filter_id++;
     state.filters.push_back(f);
     state.selected_filter = static_cast<int>(state.filters.size()) - 1;
-    state.dirty = true;
+    state.MarkDirty();
   }
 
   if (ImGui::BeginListBox("##filter_list", ImVec2(-1, 60))) {
@@ -375,7 +375,7 @@ void RenderFilterTab(GuiState& state) {
       if (state.selected_filter >= static_cast<int>(state.filters.size())) {
         state.selected_filter = static_cast<int>(state.filters.size()) - 1;
       }
-      state.dirty = true;
+      state.MarkDirty();
     }
   }
 
@@ -395,7 +395,7 @@ void RenderFilterTab(GuiState& state) {
   snprintf(raypath_buf, sizeof(raypath_buf), "%s", f.raypath_text.c_str());
   if (ImGui::InputText("Raypath", raypath_buf, sizeof(raypath_buf))) {
     f.raypath_text = raypath_buf;
-    state.dirty = true;
+    state.MarkDirty();
   }
   ImGui::TextDisabled("Comma-separated face indices, e.g. 3,1,5,7,4");
 
