@@ -1,12 +1,16 @@
+#include <GLFW/glfw3.h>
+
 #include <cstdio>
 
+#include "gui/gui_state.hpp"
+#include "gui/panels.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
-#include <GLFW/glfw3.h>
-
 namespace {
+
+lumice::gui::GuiState g_state;
 
 constexpr int kInitWindowWidth = 1280;
 constexpr int kInitWindowHeight = 720;
@@ -49,25 +53,25 @@ void RenderLeftPanel(float window_height) {
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
   ImGui::SetNextWindowPos(ImVec2(0, kTopBarHeight));
   ImGui::SetNextWindowSize(ImVec2(kLeftPanelWidth, panel_height));
-  ImGui::Begin("##LeftPanel", nullptr,
-               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse);
+  ImGui::Begin(
+      "##LeftPanel", nullptr,
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
   if (ImGui::BeginTabBar("ConfigTabs")) {
     if (ImGui::BeginTabItem("Crystal")) {
-      ImGui::TextWrapped("Crystal settings will appear here.");
+      lumice::gui::RenderCrystalTab(g_state);
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Scene")) {
-      ImGui::TextWrapped("Scene settings will appear here.");
+      lumice::gui::RenderSceneTab(g_state);
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Render")) {
-      ImGui::TextWrapped("Render settings will appear here.");
+      lumice::gui::RenderRenderTab(g_state);
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Filter")) {
-      ImGui::TextWrapped("Filter settings will appear here.");
+      lumice::gui::RenderFilterTab(g_state);
       ImGui::EndTabItem();
     }
     ImGui::EndTabBar();
@@ -82,9 +86,9 @@ void RenderPreviewPanel(float window_width, float window_height) {
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
   ImGui::SetNextWindowPos(ImVec2(panel_x, kTopBarHeight));
   ImGui::SetNextWindowSize(ImVec2(panel_width, panel_height));
-  ImGui::Begin("##PreviewPanel", nullptr,
-               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse);
+  ImGui::Begin(
+      "##PreviewPanel", nullptr,
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
   ImVec2 avail = ImGui::GetContentRegionAvail();
   ImVec2 text_size = ImGui::CalcTextSize("Render Preview");
@@ -152,6 +156,8 @@ int main(int /*argc*/, char** /*argv*/) {
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
+
+  g_state = lumice::gui::InitDefaultState();
 
   // Main loop
   while (!glfwWindowShouldClose(window)) {
