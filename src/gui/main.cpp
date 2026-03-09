@@ -1,9 +1,13 @@
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
+#include "gui/crystal_renderer.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
@@ -19,8 +23,108 @@ using SimState = lumice::gui::GuiState::SimState;
 
 lumice::gui::GuiState g_state;
 lumice::gui::PreviewRenderer g_preview;
+lumice::gui::CrystalRenderer g_crystal_renderer;
 LUMICE_Server* g_server = nullptr;
 bool g_panel_collapsed = false;
+
+// Crystal preview trackball state
+float g_crystal_rotation[16] = {
+  1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+};
+float g_crystal_zoom = 2.5f;
+int g_crystal_mesh_id = -1;   // Crystal ID of cached mesh
+int g_crystal_mesh_hash = 0;  // Hash of crystal params for change detection
+
+int CrystalParamHash(const lumice::gui::CrystalConfig& c) {
+  // Simple hash to detect parameter changes
+  int h = static_cast<int>(c.type);
+  auto hash_float = [](float f) {
+    int i;
+    std::memcpy(&i, &f, sizeof(i));
+    return i;
+  };
+  h ^= hash_float(c.height) * 31;
+  h ^= hash_float(c.prism_h) * 37;
+  h ^= hash_float(c.upper_h) * 41;
+  h ^= hash_float(c.lower_h) * 43;
+  for (int i = 0; i < 3; i++) {
+    h ^= c.upper_indices[i] * (47 + i);
+    h ^= c.lower_indices[i] * (53 + i);
+  }
+  return h;
+}
+
+void ResetCrystalView() {
+  // Default 45-degree top-down view (rotate -30 deg around X)
+  constexpr float kAngle = -0.52f;  // ~30 degrees
+  float c = std::cos(kAngle);
+  float s = std::sin(kAngle);
+  // Rotation around X axis
+  g_crystal_rotation[0] = 1;
+  g_crystal_rotation[1] = 0;
+  g_crystal_rotation[2] = 0;
+  g_crystal_rotation[3] = 0;
+  g_crystal_rotation[4] = 0;
+  g_crystal_rotation[5] = c;
+  g_crystal_rotation[6] = s;
+  g_crystal_rotation[7] = 0;
+  g_crystal_rotation[8] = 0;
+  g_crystal_rotation[9] = -s;
+  g_crystal_rotation[10] = c;
+  g_crystal_rotation[11] = 0;
+  g_crystal_rotation[12] = 0;
+  g_crystal_rotation[13] = 0;
+  g_crystal_rotation[14] = 0;
+  g_crystal_rotation[15] = 1;
+  g_crystal_zoom = 2.5f;
+}
+
+// Apply incremental rotation around axis (dx, dy) from mouse drag
+void ApplyTrackballRotation(float dx, float dy) {
+  float angle = std::sqrt(dx * dx + dy * dy) * 0.01f;
+  if (angle < 1e-6f)
+    return;
+
+  // Rotation axis is perpendicular to drag direction (in screen space)
+  float ax = dy / (angle / 0.01f);
+  float ay = -dx / (angle / 0.01f);
+  float az = 0.0f;
+  float len = std::sqrt(ax * ax + ay * ay + az * az);
+  if (len < 1e-6f)
+    return;
+  ax /= len;
+  ay /= len;
+  az /= len;
+
+  float ca = std::cos(angle);
+  float sa = std::sin(angle);
+
+  // Rodrigues rotation matrix (column-major)
+  float r[16] = {};
+  r[0] = ca + ax * ax * (1 - ca);
+  r[1] = ay * ax * (1 - ca) + az * sa;
+  r[2] = az * ax * (1 - ca) - ay * sa;
+  r[4] = ax * ay * (1 - ca) - az * sa;
+  r[5] = ca + ay * ay * (1 - ca);
+  r[6] = az * ay * (1 - ca) + ax * sa;
+  r[8] = ax * az * (1 - ca) + ay * sa;
+  r[9] = ay * az * (1 - ca) - ax * sa;
+  r[10] = ca + az * az * (1 - ca);
+  r[15] = 1.0f;
+
+  // new_rotation = r * g_crystal_rotation
+  float tmp[16];
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      float sum = 0.0f;
+      for (int k = 0; k < 4; k++) {
+        sum += r[i + k * 4] * g_crystal_rotation[k + j * 4];
+      }
+      tmp[i + j * 4] = sum;
+    }
+  }
+  std::memcpy(g_crystal_rotation, tmp, sizeof(g_crystal_rotation));
+}
 bool g_show_unsaved_popup = false;
 enum class PendingAction { kNone, kNew, kOpen, kQuit };
 PendingAction g_pending_action = PendingAction::kNone;
@@ -229,6 +333,63 @@ void RenderLeftPanel(float window_height) {
   if (ImGui::BeginTabBar("ConfigTabs")) {
     if (ImGui::BeginTabItem("Crystal")) {
       lumice::gui::RenderCrystalTab(g_state);
+
+      // Crystal 3D preview
+      if (g_state.selected_crystal >= 0 && g_state.selected_crystal < static_cast<int>(g_state.crystals.size())) {
+        ImGui::Separator();
+        if (ImGui::CollapsingHeader("3D Preview", ImGuiTreeNodeFlags_DefaultOpen)) {
+          auto& cr = g_state.crystals[g_state.selected_crystal];
+
+          // Update mesh if crystal changed
+          int hash = CrystalParamHash(cr);
+          if (cr.id != g_crystal_mesh_id || hash != g_crystal_mesh_hash) {
+            // Build JSON for LUMICE_GetCrystalMesh
+            char json_buf[256];
+            if (cr.type == lumice::gui::CrystalType::kPrism) {
+              snprintf(json_buf, sizeof(json_buf), R"({"type":"prism","shape":{"height":%.4f}})", cr.height);
+            } else {
+              snprintf(json_buf, sizeof(json_buf),
+                       R"({"type":"pyramid","shape":{"prism_h":%.4f,"upper_h":%.4f,"lower_h":%.4f}})", cr.prism_h,
+                       cr.upper_h, cr.lower_h);
+            }
+
+            LUMICE_CrystalMesh mesh{};
+            if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) == LUMICE_OK) {
+              g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count);
+              g_crystal_mesh_id = cr.id;
+              g_crystal_mesh_hash = hash;
+            }
+          }
+
+          // Render to FBO
+          g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom);
+
+          // Display FBO texture
+          float avail_w = ImGui::GetContentRegionAvail().x;
+          float preview_size = std::min(avail_w, 200.0f);
+          auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
+          ImVec2 uv0(0, 1);  // Flip Y for OpenGL
+          ImVec2 uv1(1, 0);
+          ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
+
+          // Mouse interaction on the image
+          if (ImGui::IsItemHovered()) {
+            ImGuiIO& io = ImGui::GetIO();
+            if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+              ApplyTrackballRotation(io.MouseDelta.x, io.MouseDelta.y);
+            }
+            if (io.MouseWheel != 0.0f) {
+              g_crystal_zoom *= (1.0f - io.MouseWheel * 0.1f);
+              g_crystal_zoom = std::max(0.5f, std::min(10.0f, g_crystal_zoom));
+            }
+          }
+
+          if (ImGui::SmallButton("Reset View")) {
+            ResetCrystalView();
+          }
+        }
+      }
+
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Scene")) {
@@ -519,6 +680,13 @@ int main(int /*argc*/, char** /*argv*/) {
     return 1;
   }
 
+  // Initialize crystal renderer (256x256 FBO)
+  if (!g_crystal_renderer.Init(256, 256)) {
+    fprintf(stderr, "Failed to initialize crystal renderer\n");
+    return 1;
+  }
+  ResetCrystalView();
+
   // Create Lumice server
   g_server = LUMICE_CreateServer();
   LUMICE_InitLogger(g_server);
@@ -589,6 +757,7 @@ int main(int /*argc*/, char** /*argv*/) {
   }
 
   // Cleanup
+  g_crystal_renderer.Destroy();
   g_preview.Destroy();
   LUMICE_DestroyServer(g_server);
   g_server = nullptr;
