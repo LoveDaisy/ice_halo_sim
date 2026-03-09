@@ -1,5 +1,6 @@
 #include <GLFW/glfw3.h>
 
+#include <chrono>
 #include <cstdio>
 #include <string>
 
@@ -9,13 +10,18 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "include/lumice.h"
 
 namespace {
 
+using SimState = lumice::gui::GuiState::SimState;
+
 lumice::gui::GuiState g_state;
+LUMICE_Server* g_server = nullptr;
 bool g_show_unsaved_popup = false;
 enum class PendingAction { kNone, kNew, kOpen, kQuit };
 PendingAction g_pending_action = PendingAction::kNone;
+auto g_last_poll_time = std::chrono::steady_clock::now();
 
 constexpr int kInitWindowWidth = 1280;
 constexpr int kInitWindowHeight = 720;
@@ -70,6 +76,61 @@ void DoNew() {
   g_state = lumice::gui::InitDefaultState();
 }
 
+void DoRun() {
+  if (!g_server)
+    return;
+  auto json_str = lumice::gui::SerializeToJson(g_state);
+  g_state.last_committed_json = json_str;
+  auto err = LUMICE_CommitConfig(g_server, json_str.c_str());
+  if (err == LUMICE_OK) {
+    g_state.sim_state = SimState::kSimulating;
+    g_state.stats_ray_seg_num = 0;
+    g_state.stats_sim_ray_num = 0;
+  }
+}
+
+void DoStop() {
+  if (!g_server)
+    return;
+  LUMICE_StopServer(g_server);
+  g_state.sim_state = SimState::kDone;
+}
+
+void DoRevert() {
+  if (!g_state.last_committed_json.empty()) {
+    lumice::gui::DeserializeFromJson(g_state.last_committed_json, g_state);
+    g_state.sim_state = SimState::kDone;
+  }
+}
+
+void PollServerState() {
+  if (!g_server)
+    return;
+  if (g_state.sim_state != SimState::kSimulating)
+    return;
+
+  auto now = std::chrono::steady_clock::now();
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_last_poll_time).count();
+  if (elapsed < 1000)
+    return;
+  g_last_poll_time = now;
+
+  // Check server state
+  LUMICE_ServerState server_state{};
+  LUMICE_QueryServerState(g_server, &server_state);
+  if (server_state == LUMICE_SERVER_IDLE) {
+    g_state.sim_state = SimState::kDone;
+  }
+
+  // Get stats
+  LUMICE_StatsResult stats[2]{};
+  LUMICE_GetStatsResults(g_server, stats, 1);
+  if (stats[0].sim_ray_num > 0) {
+    g_state.stats_ray_seg_num = stats[0].ray_seg_num;
+    g_state.stats_sim_ray_num = stats[0].sim_ray_num;
+  }
+}
+
 void CheckUnsavedAndDo(PendingAction action) {
   if (g_state.dirty) {
     g_pending_action = action;
@@ -120,7 +181,23 @@ void RenderTopBar(float window_width) {
     DoSaveAs();
   }
   ImGui::SameLine();
-  ImGui::Button("Run");
+  if (g_state.sim_state == SimState::kSimulating) {
+    if (ImGui::Button("Stop")) {
+      DoStop();
+    }
+  } else {
+    if (ImGui::Button("Run")) {
+      DoRun();
+    }
+  }
+  if (g_state.sim_state == SimState::kModified) {
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "!");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Revert")) {
+      DoRevert();
+    }
+  }
 
   ImGui::End();
 }
@@ -181,7 +258,28 @@ void RenderStatusBar(float window_width, float window_height) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse);
 
-  ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "Ready");
+  // Status indicator
+  switch (g_state.sim_state) {
+    case SimState::kIdle:
+      ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "Ready");
+      break;
+    case SimState::kSimulating:
+      ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Simulating...");
+      break;
+    case SimState::kDone:
+      ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "Done");
+      break;
+    case SimState::kModified:
+      ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "Modified");
+      break;
+  }
+
+  // Stats
+  if (g_state.stats_sim_ray_num > 0) {
+    ImGui::SameLine();
+    ImGui::Text("| Rays: %lu", g_state.stats_sim_ray_num);
+  }
+
   ImGui::SameLine();
   ImGui::Text("|");
   ImGui::SameLine();
@@ -189,7 +287,6 @@ void RenderStatusBar(float window_width, float window_height) {
   if (g_state.current_file_path.empty()) {
     ImGui::Text("No file");
   } else {
-    // Show just filename
     auto pos = g_state.current_file_path.find_last_of("/\\");
     auto filename = (pos != std::string::npos) ? g_state.current_file_path.substr(pos + 1) : g_state.current_file_path;
     if (g_state.dirty) {
@@ -301,6 +398,10 @@ int main(int /*argc*/, char** /*argv*/) {
 
   g_state = lumice::gui::InitDefaultState();
 
+  // Create Lumice server
+  g_server = LUMICE_CreateServer();
+  LUMICE_InitLogger(g_server);
+
   // Window close callback: intercept to check for unsaved changes
   glfwSetWindowCloseCallback(window, [](GLFWwindow* w) {
     if (g_state.dirty) {
@@ -313,6 +414,9 @@ int main(int /*argc*/, char** /*argv*/) {
   // Main loop
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
+
+    // Poll server state periodically
+    PollServerState();
 
     // Keyboard shortcuts
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
@@ -354,6 +458,9 @@ int main(int /*argc*/, char** /*argv*/) {
   }
 
   // Cleanup
+  LUMICE_DestroyServer(g_server);
+  g_server = nullptr;
+
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();
