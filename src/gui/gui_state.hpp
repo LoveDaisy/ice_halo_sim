@@ -134,6 +134,10 @@ struct GuiState {
   int next_crystal_id = 1;
   int next_renderer_id = 1;
   int next_filter_id = 1;
+
+  // File management
+  std::string current_file_path;
+  bool dirty = false;
 };
 
 inline GuiState InitDefaultState() {

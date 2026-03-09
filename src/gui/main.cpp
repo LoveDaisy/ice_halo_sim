@@ -1,7 +1,9 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdio>
+#include <string>
 
+#include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
 #include "imgui.h"
@@ -11,6 +13,9 @@
 namespace {
 
 lumice::gui::GuiState g_state;
+bool g_show_unsaved_popup = false;
+enum class PendingAction { kNone, kNew, kOpen, kQuit };
+PendingAction g_pending_action = PendingAction::kNone;
 
 constexpr int kInitWindowWidth = 1280;
 constexpr int kInitWindowHeight = 720;
@@ -24,6 +29,65 @@ void GlfwErrorCallback(int error, const char* description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
 
+void DoSave() {
+  if (g_state.current_file_path.empty()) {
+    g_state.current_file_path = lumice::gui::ShowSaveDialog();
+    if (g_state.current_file_path.empty()) {
+      return;
+    }
+  }
+  auto json_str = lumice::gui::SerializeToJson(g_state);
+  if (lumice::gui::WriteStringToFile(g_state.current_file_path, json_str)) {
+    g_state.dirty = false;
+  }
+}
+
+void DoSaveAs() {
+  auto path = lumice::gui::ShowSaveDialog();
+  if (!path.empty()) {
+    g_state.current_file_path = path;
+    auto json_str = lumice::gui::SerializeToJson(g_state);
+    if (lumice::gui::WriteStringToFile(path, json_str)) {
+      g_state.dirty = false;
+    }
+  }
+}
+
+void DoOpen() {
+  auto path = lumice::gui::ShowOpenDialog();
+  if (!path.empty()) {
+    std::string content;
+    if (lumice::gui::ReadFileToString(path, content)) {
+      if (lumice::gui::DeserializeFromJson(content, g_state)) {
+        g_state.current_file_path = path;
+        g_state.dirty = false;
+      }
+    }
+  }
+}
+
+void DoNew() {
+  g_state = lumice::gui::InitDefaultState();
+}
+
+void CheckUnsavedAndDo(PendingAction action) {
+  if (g_state.dirty) {
+    g_pending_action = action;
+    g_show_unsaved_popup = true;
+  } else {
+    switch (action) {
+      case PendingAction::kNew:
+        DoNew();
+        break;
+      case PendingAction::kOpen:
+        DoOpen();
+        break;
+      default:
+        break;
+    }
+  }
+}
+
 void RenderTopBar(float window_width) {
   ImGui::SetNextWindowPos(ImVec2(0, 0));
   ImGui::SetNextWindowSize(ImVec2(window_width, kTopBarHeight));
@@ -35,14 +99,26 @@ void RenderTopBar(float window_width) {
   ImGui::SameLine();
 
   // Push buttons to the right side
-  float button_start_x = window_width - 280.0f;
+  float button_start_x = window_width - 380.0f;
   if (button_start_x > ImGui::GetCursorPosX()) {
     ImGui::SetCursorPosX(button_start_x);
   }
 
-  ImGui::Button("Open");
+  if (ImGui::Button("New")) {
+    CheckUnsavedAndDo(PendingAction::kNew);
+  }
   ImGui::SameLine();
-  ImGui::Button("Save");
+  if (ImGui::Button("Open")) {
+    CheckUnsavedAndDo(PendingAction::kOpen);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Save")) {
+    DoSave();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Save As")) {
+    DoSaveAs();
+  }
   ImGui::SameLine();
   ImGui::Button("Run");
 
@@ -105,15 +181,81 @@ void RenderStatusBar(float window_width, float window_height) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse);
 
-  ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "●");
-  ImGui::SameLine();
-  ImGui::Text("Ready");
+  ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "Ready");
   ImGui::SameLine();
   ImGui::Text("|");
   ImGui::SameLine();
-  ImGui::Text("No file");
+
+  if (g_state.current_file_path.empty()) {
+    ImGui::Text("No file");
+  } else {
+    // Show just filename
+    auto pos = g_state.current_file_path.find_last_of("/\\");
+    auto filename = (pos != std::string::npos) ? g_state.current_file_path.substr(pos + 1) : g_state.current_file_path;
+    if (g_state.dirty) {
+      ImGui::Text("%s *", filename.c_str());
+    } else {
+      ImGui::Text("%s", filename.c_str());
+    }
+  }
 
   ImGui::End();
+}
+
+void RenderUnsavedPopup(GLFWwindow* window) {
+  if (g_show_unsaved_popup) {
+    ImGui::OpenPopup("Unsaved Changes");
+    g_show_unsaved_popup = false;
+  }
+
+  if (ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::Text("You have unsaved changes. Save before continuing?");
+    ImGui::Separator();
+
+    if (ImGui::Button("Save", ImVec2(80, 0))) {
+      DoSave();
+      switch (g_pending_action) {
+        case PendingAction::kNew:
+          DoNew();
+          break;
+        case PendingAction::kOpen:
+          DoOpen();
+          break;
+        case PendingAction::kQuit:
+          glfwSetWindowShouldClose(window, GLFW_TRUE);
+          break;
+        default:
+          break;
+      }
+      g_pending_action = PendingAction::kNone;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Don't Save", ImVec2(100, 0))) {
+      switch (g_pending_action) {
+        case PendingAction::kNew:
+          DoNew();
+          break;
+        case PendingAction::kOpen:
+          DoOpen();
+          break;
+        case PendingAction::kQuit:
+          glfwSetWindowShouldClose(window, GLFW_TRUE);
+          break;
+        default:
+          break;
+      }
+      g_pending_action = PendingAction::kNone;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+      g_pending_action = PendingAction::kNone;
+      ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+  }
 }
 
 }  // namespace
@@ -159,9 +301,27 @@ int main(int /*argc*/, char** /*argv*/) {
 
   g_state = lumice::gui::InitDefaultState();
 
+  // Window close callback: intercept to check for unsaved changes
+  glfwSetWindowCloseCallback(window, [](GLFWwindow* w) {
+    if (g_state.dirty) {
+      glfwSetWindowShouldClose(w, GLFW_FALSE);
+      g_pending_action = PendingAction::kQuit;
+      g_show_unsaved_popup = true;
+    }
+  });
+
   // Main loop
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
+
+    // Keyboard shortcuts
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
+      if (io.KeyShift) {
+        DoSaveAs();
+      } else {
+        DoSave();
+      }
+    }
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
@@ -181,6 +341,7 @@ int main(int /*argc*/, char** /*argv*/) {
     RenderLeftPanel(layout_height);
     RenderPreviewPanel(layout_width, layout_height);
     RenderStatusBar(layout_width, layout_height);
+    RenderUnsavedPopup(window);
 
     // Rendering
     ImGui::Render();
