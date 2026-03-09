@@ -7,6 +7,7 @@
 #include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
+#include "gui/preview_renderer.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -17,7 +18,9 @@ namespace {
 using SimState = lumice::gui::GuiState::SimState;
 
 lumice::gui::GuiState g_state;
+lumice::gui::PreviewRenderer g_preview;
 LUMICE_Server* g_server = nullptr;
+bool g_panel_collapsed = false;
 bool g_show_unsaved_popup = false;
 enum class PendingAction { kNone, kNew, kOpen, kQuit };
 PendingAction g_pending_action = PendingAction::kNone;
@@ -129,6 +132,15 @@ void PollServerState() {
     g_state.stats_ray_seg_num = stats[0].ray_seg_num;
     g_state.stats_sim_ray_num = stats[0].sim_ray_num;
   }
+
+  // Get render results and upload texture
+  if (g_state.selected_renderer >= 0) {
+    LUMICE_RenderResult renders[2]{};
+    LUMICE_GetRenderResults(g_server, renders, 1);
+    if (renders[0].img_buffer != nullptr) {
+      g_preview.UploadTexture(renders[0].img_buffer, renders[0].img_width, renders[0].img_height);
+    }
+  }
 }
 
 void CheckUnsavedAndDo(PendingAction action) {
@@ -203,6 +215,10 @@ void RenderTopBar(float window_width) {
 }
 
 void RenderLeftPanel(float window_height) {
+  if (g_panel_collapsed) {
+    return;
+  }
+
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
   ImGui::SetNextWindowPos(ImVec2(0, kTopBarHeight));
   ImGui::SetNextWindowSize(ImVec2(kLeftPanelWidth, panel_height));
@@ -233,20 +249,119 @@ void RenderLeftPanel(float window_height) {
   ImGui::End();
 }
 
-void RenderPreviewPanel(float window_width, float window_height) {
-  float panel_x = kLeftPanelWidth;
-  float panel_width = window_width - kLeftPanelWidth;
+void RenderFloatingLensBar(float window_width) {
+  if (!g_panel_collapsed) {
+    return;
+  }
+  if (g_state.selected_renderer < 0 || g_state.selected_renderer >= static_cast<int>(g_state.renderers.size())) {
+    return;
+  }
+
+  auto& rc = g_state.renderers[g_state.selected_renderer];
+
+  constexpr float kBarHeight = 36.0f;
+  constexpr float kBarPadding = 10.0f;
+  float bar_width = std::min(600.0f, window_width - 2 * kBarPadding);
+  float bar_x = (window_width - bar_width) * 0.5f;
+  float bar_y = kTopBarHeight + kBarPadding;
+
+  ImGui::SetNextWindowPos(ImVec2(bar_x, bar_y));
+  ImGui::SetNextWindowSize(ImVec2(bar_width, kBarHeight));
+  ImGui::SetNextWindowBgAlpha(0.6f);
+  ImGui::Begin("##FloatingLens", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
+
+  ImGui::PushItemWidth(120.0f);
+  ImGui::Combo("##LensType", &rc.lens_type, lumice::gui::kLensTypeNames, lumice::gui::kLensTypeCount);
+  ImGui::SameLine();
+  ImGui::PushItemWidth(80.0f);
+  ImGui::SliderFloat("FOV", &rc.fov, 1.0f, 360.0f, "%.0f");
+  ImGui::PopItemWidth();
+  ImGui::SameLine();
+  ImGui::Text("El:%.0f Az:%.0f", rc.elevation, rc.azimuth);
+  ImGui::PopItemWidth();
+
+  ImGui::End();
+}
+
+// Stored preview viewport for deferred rendering (after ImGui::Render)
+struct PreviewViewport {
+  bool active = false;
+  int vp_x = 0;
+  int vp_y = 0;
+  int vp_w = 0;
+  int vp_h = 0;
+  lumice::gui::PreviewParams params;
+};
+PreviewViewport g_preview_vp;
+
+void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {
+  float panel_x = g_panel_collapsed ? 0.0f : kLeftPanelWidth;
+  float panel_width = window_width - panel_x;
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
   ImGui::SetNextWindowPos(ImVec2(panel_x, kTopBarHeight));
   ImGui::SetNextWindowSize(ImVec2(panel_width, panel_height));
-  ImGui::Begin(
-      "##PreviewPanel", nullptr,
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+  ImGui::Begin("##PreviewPanel", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground);
 
-  ImVec2 avail = ImGui::GetContentRegionAvail();
-  ImVec2 text_size = ImGui::CalcTextSize("Render Preview");
-  ImGui::SetCursorPos(ImVec2((avail.x - text_size.x) * 0.5f, (avail.y - text_size.y) * 0.5f));
-  ImGui::TextDisabled("Render Preview");
+  g_preview_vp.active = false;
+
+  if (g_preview.HasTexture() && g_state.selected_renderer >= 0 &&
+      g_state.selected_renderer < static_cast<int>(g_state.renderers.size())) {
+    // Compute viewport in framebuffer pixels (for HiDPI)
+    int fb_w = 0;
+    int fb_h = 0;
+    glfwGetFramebufferSize(window, &fb_w, &fb_h);
+    float scale_x = static_cast<float>(fb_w) / window_width;
+    float scale_y = static_cast<float>(fb_h) / window_height;
+
+    auto& rc = g_state.renderers[g_state.selected_renderer];
+
+    // Store viewport for deferred rendering
+    g_preview_vp.active = true;
+    g_preview_vp.vp_x = static_cast<int>(panel_x * scale_x);
+    g_preview_vp.vp_y = static_cast<int>(kStatusBarHeight * scale_y);  // OpenGL Y is bottom-up
+    g_preview_vp.vp_w = static_cast<int>(panel_width * scale_x);
+    g_preview_vp.vp_h = static_cast<int>(panel_height * scale_y);
+    g_preview_vp.params.lens_type = rc.lens_type;
+    g_preview_vp.params.fov = rc.fov;
+    g_preview_vp.params.elevation = rc.elevation;
+    g_preview_vp.params.azimuth = rc.azimuth;
+    g_preview_vp.params.roll = rc.roll;
+    g_preview_vp.params.visible = rc.visible;
+    std::copy(std::begin(rc.ray_color), std::end(rc.ray_color), std::begin(g_preview_vp.params.ray_color));
+    std::copy(std::begin(rc.background), std::end(rc.background), std::begin(g_preview_vp.params.background));
+    g_preview_vp.params.intensity_factor = rc.intensity_factor;
+
+    // Mouse interaction: orbit with left drag, FOV with scroll
+    ImGuiIO& io = ImGui::GetIO();
+    ImVec2 mouse_pos = io.MousePos;
+    bool in_preview = mouse_pos.x >= panel_x && mouse_pos.x < panel_x + panel_width && mouse_pos.y >= kTopBarHeight &&
+                      mouse_pos.y < kTopBarHeight + panel_height;
+
+    if (in_preview && !ImGui::IsAnyItemActive()) {
+      // Left drag: orbit
+      if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        ImVec2 delta = io.MouseDelta;
+        rc.azimuth -= delta.x * 0.3f;
+        rc.elevation += delta.y * 0.3f;
+        rc.elevation = std::max(-90.0f, std::min(90.0f, rc.elevation));
+      }
+
+      // Scroll: FOV
+      if (io.MouseWheel != 0.0f) {
+        rc.fov -= io.MouseWheel * 5.0f;
+        rc.fov = std::max(1.0f, std::min(360.0f, rc.fov));
+      }
+    }
+  } else {
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImVec2 text_size = ImGui::CalcTextSize("Render Preview");
+    ImGui::SetCursorPos(ImVec2((avail.x - text_size.x) * 0.5f, (avail.y - text_size.y) * 0.5f));
+    ImGui::TextDisabled("Render Preview");
+  }
 
   ImGui::End();
 }
@@ -398,6 +513,12 @@ int main(int /*argc*/, char** /*argv*/) {
 
   g_state = lumice::gui::InitDefaultState();
 
+  // Initialize preview renderer
+  if (!g_preview.Init()) {
+    fprintf(stderr, "Failed to initialize preview renderer\n");
+    return 1;
+  }
+
   // Create Lumice server
   g_server = LUMICE_CreateServer();
   LUMICE_InitLogger(g_server);
@@ -426,6 +547,9 @@ int main(int /*argc*/, char** /*argv*/) {
         DoSave();
       }
     }
+    if (ImGui::IsKeyPressed(ImGuiKey_Tab) && !io.WantCaptureKeyboard) {
+      g_panel_collapsed = !g_panel_collapsed;
+    }
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
@@ -443,7 +567,8 @@ int main(int /*argc*/, char** /*argv*/) {
 
     RenderTopBar(layout_width);
     RenderLeftPanel(layout_height);
-    RenderPreviewPanel(layout_width, layout_height);
+    RenderPreviewPanel(window, layout_width, layout_height);
+    RenderFloatingLensBar(layout_width);
     RenderStatusBar(layout_width, layout_height);
     RenderUnsavedPopup(window);
 
@@ -452,12 +577,19 @@ int main(int /*argc*/, char** /*argv*/) {
     glViewport(0, 0, display_w, display_h);
     glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+
+    // Render preview shader before ImGui overlay
+    if (g_preview_vp.active) {
+      g_preview.Render(g_preview_vp.vp_x, g_preview_vp.vp_y, g_preview_vp.vp_w, g_preview_vp.vp_h, g_preview_vp.params);
+    }
+
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(window);
   }
 
   // Cleanup
+  g_preview.Destroy();
   LUMICE_DestroyServer(g_server);
   g_server = nullptr;
 
