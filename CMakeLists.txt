@@ -37,6 +37,9 @@ set(PROJ_ROOT "${CMAKE_SOURCE_DIR}")
 # ==================================================================================================
 # Find modules
 find_package(Threads REQUIRED)  # GoogleTest needs it
+if(BUILD_GUI)
+  find_package(OpenGL REQUIRED)
+endif()
 
 # ==================================================================================================
 # CPM.cmake — lightweight dependency manager (wrapper around FetchContent)
@@ -85,6 +88,32 @@ CPMAddPackage(
   URL_HASH SHA256=a39b0f2d96d9b64171ac1fd73295b7c5866f904e653b379da886d050a6900db9
   DOWNLOAD_ONLY YES
 )
+
+# GUI dependencies (only when BUILD_GUI is ON)
+if(BUILD_GUI)
+  # GLFW: windowing and input
+  CPMAddPackage(
+    NAME glfw
+    GITHUB_REPOSITORY glfw/glfw
+    GIT_TAG 3.4
+    OPTIONS "GLFW_BUILD_DOCS OFF" "GLFW_BUILD_EXAMPLES OFF" "GLFW_BUILD_TESTS OFF"
+  )
+
+  # Dear ImGui: immediate-mode GUI (docking branch, no CMake support — download only)
+  CPMAddPackage(
+    NAME imgui
+    GITHUB_REPOSITORY ocornut/imgui
+    GIT_TAG v1.91.8-docking
+    DOWNLOAD_ONLY YES
+  )
+
+  # nativefiledialog-extended: native OS file dialogs
+  CPMAddPackage(
+    NAME nfd
+    GITHUB_REPOSITORY btzy/nativefiledialog-extended
+    GIT_TAG v1.2.1
+  )
+endif()
 
 # ==================================================================================================
 # Add some definitions
@@ -183,4 +212,8 @@ endif()
 
 if(BUILD_BENCH)
   add_subdirectory(bench)
+endif()
+
+if(BUILD_GUI)
+  add_subdirectory(src/gui)
 endif()

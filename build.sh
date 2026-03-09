@@ -11,7 +11,8 @@ build() {
   pushd "${BUILD_DIR}" > /dev/null
   cmake -S "${PROJ_DIR}" -B "${BUILD_DIR}" -G Ninja \
         -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TEST=$BUILD_TEST \
-        -DBUILD_BENCH=$BUILD_BENCH -DBUILD_SHARED_LIBS=$BUILD_SHARED \
+        -DBUILD_BENCH=$BUILD_BENCH -DBUILD_GUI=$BUILD_GUI \
+        -DBUILD_SHARED_LIBS=$BUILD_SHARED \
         -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}"
   cmake --build "${BUILD_DIR}" -j $MAKE_J_N
   ret=$?
@@ -31,10 +32,11 @@ build() {
 
 help() {
   echo "Usage:"
-  echo "  ./build.sh [-tbjksxh] <debug|release|minsizerel>"
+  echo "  ./build.sh [-tgbjksxh] <debug|release|minsizerel>"
   echo "    Executables will be installed at build/cmake_install"
   echo "OPTIONS:"
   echo "  -t:          Build test cases and run test on them."
+  echo "  -g:          Build GUI application (Dear ImGui + GLFW + OpenGL)."
   echo "  -b:          Build benchmarks (Google Benchmark)."
   echo "  -j:          Build in parallel, i.e. use make -j"
   echo "  -k:          Clean build artifacts (keep dependency cache)."
@@ -58,6 +60,7 @@ clean_everything() {
 BUILD_TYPE=Debug
 BUILD_TEST=OFF
 BUILD_BENCH=OFF
+BUILD_GUI=OFF
 BUILD_SHARED=OFF
 INSTALL_FLAG=OFF
 MAKE_J_N=1
@@ -71,7 +74,7 @@ fi
 # A POSIX variable
 OPTIND=1         # Reset in case getopts has been used previously in the shell.
 
-while getopts "htbjksx" opt; do
+while getopts "htgbjksx" opt; do
   case "$opt" in
   h)
     help
@@ -79,6 +82,9 @@ while getopts "htbjksx" opt; do
     ;;
   t)
     BUILD_TEST=ON
+    ;;
+  g)
+    BUILD_GUI=ON
     ;;
   b)
     BUILD_BENCH=ON
