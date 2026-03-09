@@ -90,6 +90,26 @@ LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResul
 LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out);
 void LUMICE_StopServer(LUMICE_Server* server);
 
+// =============== Crystal Mesh ===============
+// Get crystal wireframe mesh for 3D preview.
+// crystal_json is a single crystal config JSON string, e.g.:
+//   {"type": "prism", "shape": {"height": 1.0}}
+//   {"type": "pyramid", "shape": {"prism_h": 1.0, "upper_h": 0.5, "lower_h": 0.5}}
+// Caller allocates LUMICE_CrystalMesh on stack, Core fills vertex/edge data.
+// server may be NULL (not used, reserved for future).
+
+#define LUMICE_MAX_CRYSTAL_VERTICES 128
+#define LUMICE_MAX_CRYSTAL_EDGES 256
+
+typedef struct LUMICE_CrystalMesh_ {
+  float vertices[LUMICE_MAX_CRYSTAL_VERTICES * 3];  // [x0,y0,z0, x1,y1,z1, ...]
+  int vertex_count;
+  int edges[LUMICE_MAX_CRYSTAL_EDGES * 2];  // [v0,v1, v2,v3, ...] vertex index pairs
+  int edge_count;
+} LUMICE_CrystalMesh;
+
+LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* server, const char* crystal_json, LUMICE_CrystalMesh* out);
+
 #pragma GCC visibility pop
 
 #ifdef __cplusplus
