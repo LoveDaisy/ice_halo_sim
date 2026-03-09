@@ -19,16 +19,16 @@ REFERENCES_DIR = Path(__file__).resolve().parent / "references"
 # Calibrated by running each config 3 times and taking min_psnr - 3dB.
 # Set to None to skip PSNR check for that output.
 PSNR_THRESHOLDS = {
-    "color_01": 18.4,
+    "color_01": 18.5,
     "cza_01": 35.1,
     "filters_01": 21.0,
-    "halo_22_01": 18.0,
-    "multi_lens_01": 25.6,
+    "halo_22_01": 17.9,
+    "multi_lens_01": 25.5,
     "multi_lens_02": 26.3,
     "multi_lens_03": 38.5,
     "multi_scatter_01": 17.8,
     "parhelion_01": 25.7,
-    "pyramid_01": 18.5,
+    "pyramid_01": 18.9,
     "render_opts_01": 22.6,
 }
 

@@ -1,5 +1,6 @@
 #include "server/render.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -47,6 +48,8 @@ void SpectrumToXyz(float wl, const float* v, const int* xy, float* xyz, size_t n
 
 
 // =============== Lens projections ===============
+// All projection functions assume `d` is a unit-length direction vector (|d| = 1).
+// This is guaranteed by the ray tracing pipeline (normalized outgoing ray directions).
 struct LensProjParam {
   float fov_;
   float diag_pix_;
@@ -106,7 +109,7 @@ void FisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, si
     }
 
     float az = std::atan2(d_cam[1], d_cam[0]);
-    float theta = math::kPi_2 - std::asin(d_cam[2]);
+    float theta = math::kPi_2 - std::asin(std::clamp(d_cam[2], -1.0f, 1.0f));
     float r = scale * std::sin(theta / 2.0f);
     xy[0] = static_cast<int>(std::floor(r * std::cos(az) + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(r * std::sin(az) + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
@@ -135,7 +138,7 @@ void FisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, 
     }
 
     float az = std::atan2(d_cam[1], d_cam[0]);
-    float theta = math::kPi_2 - std::asin(d_cam[2]);
+    float theta = math::kPi_2 - std::asin(std::clamp(d_cam[2], -1.0f, 1.0f));
     float r = scale * theta;
     xy[0] = static_cast<int>(std::floor(r * std::cos(az) + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(r * std::sin(az) + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
@@ -164,21 +167,23 @@ void FisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy
     }
 
     float az = std::atan2(d_cam[1], d_cam[0]);
-    float theta = math::kPi_2 - std::asin(d_cam[2]);
+    float theta = math::kPi_2 - std::asin(std::clamp(d_cam[2], -1.0f, 1.0f));
     float r = scale * std::tan(theta / 2.0f);
     xy[0] = static_cast<int>(std::floor(r * std::cos(az) + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(r * std::sin(az) + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
   }
 }
 
+// Dual equal area fisheye: full hemisphere per circle, fov ignored.
+// No visible_range or behind-camera early exit — by design, all directions are projected.
+// Out-of-bounds pixel coordinates are handled by the caller (SpectrumToXyz bounds check).
 void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  // visible_range is ignored here
   auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
   float scale = short_res / 2.0f / std::sin(math::kPi_4);
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     float az = std::atan2(-d[1], -d[0]);
-    float theta = math::kPi_2 - std::abs(std::asin(-d[2]));
+    float theta = math::kPi_2 - std::abs(std::asin(std::clamp(-d[2], -1.0f, 1.0f)));
 
     // fov is ignored here
     float r = scale * std::abs(std::sin(theta / 2.0f));
@@ -197,14 +202,14 @@ void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy
 }
 
 // Dual equidistant fisheye: full hemisphere per circle, fov ignored.
+// No visible_range or behind-camera early exit — by design, all directions are projected.
 void DualFisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  // visible_range is ignored here
   auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
   float scale = short_res / 2.0f / math::kPi_4;  // at θ=π/2: r = scale·π/2 = short_res/2
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     float az = std::atan2(-d[1], -d[0]);
-    float theta = math::kPi_2 - std::abs(std::asin(-d[2]));
+    float theta = math::kPi_2 - std::abs(std::asin(std::clamp(-d[2], -1.0f, 1.0f)));
 
     // fov is ignored here — dual fisheye is always full-hemisphere projection
     float r = scale * std::abs(theta);
@@ -223,14 +228,14 @@ void DualFisheyeEquidistantProject(const LensProjParam& p, const float* d, int* 
 }
 
 // Dual stereographic fisheye: full hemisphere per circle, fov ignored.
+// No visible_range or behind-camera early exit — by design, all directions are projected.
 void DualFisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  // visible_range is ignored here
   auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
   float scale = short_res / 2.0f;  // tan(π/4) = 1, so scale = short_res/2
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     float az = std::atan2(-d[1], -d[0]);
-    float theta = math::kPi_2 - std::abs(std::asin(-d[2]));
+    float theta = math::kPi_2 - std::abs(std::asin(std::clamp(-d[2], -1.0f, 1.0f)));
 
     // fov is ignored here — dual fisheye is always full-hemisphere projection
     float r = scale * std::abs(std::tan(theta / 2.0f));
@@ -249,6 +254,8 @@ void DualFisheyeStereographicProject(const LensProjParam& p, const float* d, int
 }
 
 // Rectangular (equirectangular) projection: always full-sky, fov is ignored.
+// No visible_range or behind-camera early exit — by design, all directions are projected.
+// lens_shift_ is intentionally not applied — full-sky equirectangular has no meaningful shift.
 void RectangularProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
   float scale = short_res / math::kPi;
@@ -264,7 +271,7 @@ void RectangularProject(const LensProjParam& p, const float* d, int* xy, size_t 
     while (lon > math::kPi) {
       lon -= 2 * math::kPi;
     }
-    float lat = std::asin(-d[2]);
+    float lat = std::asin(std::clamp(-d[2], -1.0f, 1.0f));
     if (lat > math::kPi_2) {
       lat = math::kPi - lat;
     }
