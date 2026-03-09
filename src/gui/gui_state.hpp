@@ -1,0 +1,168 @@
+#ifndef LUMICE_GUI_STATE_HPP
+#define LUMICE_GUI_STATE_HPP
+
+#include <string>
+#include <vector>
+
+namespace lumice::gui {
+
+// Crystal type
+enum class CrystalType { kPrism, kPyramid };
+
+// Axis distribution type (matches PRD: Gauss or Uniform only for MVP)
+enum class AxisDistType { kGauss, kUniform };
+
+struct AxisDist {
+  AxisDistType type = AxisDistType::kUniform;
+  float mean = 0.0f;
+  float std = 0.0f;  // Gauss: standard deviation; Uniform: half-range
+};
+
+struct CrystalConfig {
+  int id = 0;
+  CrystalType type = CrystalType::kPrism;
+
+  // Prism
+  float height = 1.0f;
+
+  // Pyramid
+  float prism_h = 1.0f;
+  float upper_h = 0.0f;
+  float lower_h = 0.0f;
+  int upper_indices[3] = { 1, 0, 1 };
+  int lower_indices[3] = { 1, 0, 1 };
+
+  // Axis distribution
+  AxisDist zenith{ AxisDistType::kGauss, 90.0f, 90.0f };
+  AxisDist azimuth{ AxisDistType::kUniform, 0.0f, 360.0f };
+  AxisDist roll{ AxisDistType::kUniform, 0.0f, 360.0f };
+};
+
+struct SunConfig {
+  float altitude = 20.0f;
+  float azimuth = 0.0f;
+  float diameter = 0.5f;
+  int spectrum_index = 2;  // Index into kSpectrumNames: 0=D50,1=D55,2=D65,3=D75,4=A,5=E
+};
+
+struct SimConfig {
+  float ray_num_millions = 1.0f;
+  int max_hits = 8;
+  bool infinite = false;
+};
+
+struct ScatterEntry {
+  int crystal_id = -1;  // -1 = not selected
+  float proportion = 1.0f;
+  int filter_id = -1;  // -1 = None
+};
+
+struct ScatterLayer {
+  float probability = 1.0f;
+  std::vector<ScatterEntry> entries;
+};
+
+// Lens type names (order must match Core's LensParam::LensType enum)
+inline const char* const kLensTypeNames[] = {
+  "Linear",
+  "Fisheye Equal Area",
+  "Fisheye Equidistant",
+  "Fisheye Stereographic",
+  "Dual Fisheye Equal Area",
+  "Dual Fisheye Equidistant",
+  "Dual Fisheye Stereographic",
+  "Rectangular",
+};
+constexpr int kLensTypeCount = 8;
+
+inline const char* const kSpectrumNames[] = { "D50", "D55", "D65", "D75", "A", "E" };
+constexpr int kSpectrumCount = 6;
+
+inline const char* const kVisibleNames[] = { "Upper", "Lower", "Full" };
+constexpr int kVisibleCount = 3;
+
+inline const int kSimResolutions[] = { 512, 1024, 2048, 4096 };
+constexpr int kSimResolutionCount = 4;
+
+struct RenderConfig {
+  int id = 0;
+  int lens_type = 0;  // Index into kLensTypeNames
+  float fov = 90.0f;
+  float elevation = 0.0f;
+  float azimuth = 0.0f;
+  float roll = 0.0f;
+  int sim_resolution_index = 1;  // Index into kSimResolutions (default 1024)
+  int visible = 0;               // Index into kVisibleNames
+  float background[3] = { 0.0f, 0.0f, 0.0f };
+  float ray_color[3] = { 1.0f, 1.0f, 1.0f };
+  float opacity = 1.0f;
+  float intensity_factor = 1.0f;
+};
+
+// Filter action
+inline const char* const kFilterActionNames[] = { "Filter In", "Filter Out" };
+constexpr int kFilterActionCount = 2;
+
+struct FilterConfig {
+  int id = 0;
+  int action = 0;            // 0=filter_in, 1=filter_out
+  std::string raypath_text;  // Comma-separated int list, e.g. "3,1,5,7,4"
+  bool sym_p = false;
+  bool sym_b = false;
+  bool sym_d = false;
+};
+
+struct GuiState {
+  // Crystals
+  std::vector<CrystalConfig> crystals;
+  int selected_crystal = -1;
+
+  // Scene
+  SunConfig sun;
+  SimConfig sim;
+  std::vector<ScatterLayer> scattering;
+
+  // Renderers
+  std::vector<RenderConfig> renderers;
+  int selected_renderer = -1;
+
+  // Filters
+  std::vector<FilterConfig> filters;
+  int selected_filter = -1;
+
+  // ID counters
+  int next_crystal_id = 1;
+  int next_renderer_id = 1;
+  int next_filter_id = 1;
+};
+
+inline GuiState InitDefaultState() {
+  GuiState s;
+
+  // One default crystal (prism, random orientation)
+  CrystalConfig c;
+  c.id = s.next_crystal_id++;
+  s.crystals.push_back(c);
+  s.selected_crystal = 0;
+
+  // One default renderer
+  RenderConfig r;
+  r.id = s.next_renderer_id++;
+  s.renderers.push_back(r);
+  s.selected_renderer = 0;
+
+  // One default scattering layer with one entry
+  ScatterLayer layer;
+  layer.probability = 1.0f;
+  ScatterEntry entry;
+  entry.crystal_id = c.id;
+  entry.proportion = 1.0f;
+  layer.entries.push_back(entry);
+  s.scattering.push_back(layer);
+
+  return s;
+}
+
+}  // namespace lumice::gui
+
+#endif  // LUMICE_GUI_STATE_HPP
