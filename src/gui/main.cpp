@@ -374,13 +374,16 @@ void RenderLeftPanel(float window_height) {
           // Render to FBO
           g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom);
 
-          // Display FBO texture
-          float avail_w = ImGui::GetContentRegionAvail().x;
-          float preview_size = avail_w;
+          // Display FBO texture — use remaining height (leave room for Reset button)
+          ImVec2 avail = ImGui::GetContentRegionAvail();
+          float button_h = ImGui::GetFrameHeightWithSpacing();
+          float preview_w = avail.x;
+          float preview_h = std::max(avail.y - button_h, 40.0f);
+          preview_h = std::min(preview_h, preview_w);  // Don't exceed width (keep aspect)
           auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
           ImVec2 uv0(0, 1);  // Flip Y for OpenGL
           ImVec2 uv1(1, 0);
-          ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
+          ImGui::Image(tex_id, ImVec2(preview_w, preview_h), uv0, uv1);
 
           // Mouse interaction on the image
           if (ImGui::IsItemHovered()) {

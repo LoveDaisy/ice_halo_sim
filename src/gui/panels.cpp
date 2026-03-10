@@ -8,24 +8,48 @@
 
 namespace lumice::gui {
 
-// Slider + InputFloat side by side. Returns true if value changed.
+// Slider + InputFloat + label text, laid out as: [slider] [input] Label
+// The slider uses a hidden ID; the visible label is drawn to the right.
+// Returns true if value changed.
 static bool SliderWithInput(const char* label, float* value, float min_val, float max_val,
                             const char* fmt = "%.1f") {
+  // Strip ImGui ID suffix (e.g. "Azimuth##view" → display "Azimuth")
+  const char* display_label = label;
+  const char* hash_pos = strstr(label, "##");
+  char display_buf[64];
+  if (hash_pos) {
+    size_t len = static_cast<size_t>(hash_pos - label);
+    if (len >= sizeof(display_buf)) len = sizeof(display_buf) - 1;
+    memcpy(display_buf, label, len);
+    display_buf[len] = '\0';
+    display_label = display_buf;
+  }
+
+  float label_w = ImGui::CalcTextSize(display_label).x + ImGui::GetStyle().ItemSpacing.x;
   float input_w = 60.0f;
+  float spacing = ImGui::GetStyle().ItemSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x;
-  float slider_w = avail_w - input_w - ImGui::GetStyle().ItemSpacing.x;
+  float slider_w = avail_w - input_w - label_w - spacing * 2;
+  if (slider_w < 40.0f) slider_w = 40.0f;
 
   bool changed = false;
-  ImGui::PushItemWidth(slider_w);
-  changed |= ImGui::SliderFloat(label, value, min_val, max_val, fmt);
-  ImGui::PopItemWidth();
-  ImGui::SameLine();
 
+  char slider_id[64];
+  snprintf(slider_id, sizeof(slider_id), "##%s_slider", label);
+  ImGui::PushItemWidth(slider_w);
+  changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt);
+  ImGui::PopItemWidth();
+
+  ImGui::SameLine();
   char input_id[64];
   snprintf(input_id, sizeof(input_id), "##%s_input", label);
   ImGui::PushItemWidth(input_w);
   changed |= ImGui::InputFloat(input_id, value, 0, 0, fmt);
   ImGui::PopItemWidth();
+
+  ImGui::SameLine();
+  ImGui::TextUnformatted(display_label);
+
   return changed;
 }
 
@@ -148,16 +172,17 @@ void RenderCrystalTab(GuiState& state) {
 // ========== Scene Tab ==========
 
 void RenderSceneTab(GuiState& state) {
-  ImGui::PushItemWidth(-100);
-
   if (ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
     DIRTY_IF(SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f));
     DIRTY_IF(SliderWithInput("Azimuth##sun", &state.sun.azimuth, -180.0f, 180.0f));
     DIRTY_IF(SliderWithInput("Diameter", &state.sun.diameter, 0.1f, 5.0f));
+    ImGui::PushItemWidth(-100);
     DIRTY_IF(ImGui::Combo("Spectrum", &state.sun.spectrum_index, kSpectrumNames, kSpectrumCount));
+    ImGui::PopItemWidth();
   }
 
   if (ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::PushItemWidth(-100);
     DIRTY_IF(ImGui::Checkbox("Infinite rays", &state.sim.infinite));
     if (!state.sim.infinite) {
       DIRTY_IF(ImGui::SliderFloat("Ray num (M)", &state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f"));
@@ -167,9 +192,11 @@ void RenderSceneTab(GuiState& state) {
       ImGui::EndDisabled();
     }
     DIRTY_IF(ImGui::SliderInt("Max hits", &state.sim.max_hits, 1, 20));
+    ImGui::PopItemWidth();
   }
 
   if (ImGui::CollapsingHeader("Scattering", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::PushItemWidth(-100);
     for (int li = 0; li < static_cast<int>(state.scattering.size()); li++) {
       auto& layer = state.scattering[li];
       ImGui::PushID(li);
@@ -296,56 +323,24 @@ void RenderSceneTab(GuiState& state) {
       state.scattering.push_back(layer);
       state.MarkDirty();
     }
+    ImGui::PopItemWidth();
   }
-
-  ImGui::PopItemWidth();
 }
 
 
 // ========== Render Tab ==========
 
 void RenderRenderTab(GuiState& state) {
-  ImGui::Text("Renderers");
-  ImGui::SameLine(ImGui::GetContentRegionAvail().x - 50);
-  if (ImGui::SmallButton("Add##render")) {
+  // Ensure at least one renderer exists
+  if (state.renderers.empty()) {
     RenderConfig r;
     r.id = state.next_renderer_id++;
     state.renderers.push_back(r);
-    state.selected_renderer = static_cast<int>(state.renderers.size()) - 1;
-    state.MarkDirty();
+    state.selected_renderer = 0;
   }
+  state.selected_renderer = 0;
 
-  if (ImGui::BeginListBox("##render_list", ImVec2(-1, 60))) {
-    for (int i = 0; i < static_cast<int>(state.renderers.size()); i++) {
-      auto& r = state.renderers[i];
-      char label[64];
-      snprintf(label, sizeof(label), "[%d] %s, FOV %.0f", r.id, kLensTypeNames[r.lens_type], r.fov);
-      if (ImGui::Selectable(label, state.selected_renderer == i)) {
-        state.selected_renderer = i;
-      }
-    }
-    ImGui::EndListBox();
-  }
-
-  if (state.selected_renderer >= 0 && state.selected_renderer < static_cast<int>(state.renderers.size())) {
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Del##render")) {
-      state.renderers.erase(state.renderers.begin() + state.selected_renderer);
-      if (state.selected_renderer >= static_cast<int>(state.renderers.size())) {
-        state.selected_renderer = static_cast<int>(state.renderers.size()) - 1;
-      }
-      state.MarkDirty();
-    }
-  }
-
-  ImGui::Separator();
-
-  if (state.selected_renderer < 0 || state.selected_renderer >= static_cast<int>(state.renderers.size())) {
-    ImGui::TextDisabled("No renderer selected");
-    return;
-  }
-
-  auto& r = state.renderers[state.selected_renderer];
+  auto& r = state.renderers[0];
   ImGui::PushItemWidth(-100);
 
   {
