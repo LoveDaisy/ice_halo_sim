@@ -304,10 +304,23 @@ void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int he
 }
 
 // Build view-to-world rotation matrix from elevation, azimuth, roll (degrees).
-// Must match Core's rotation chain: rot = R_z(az) * R_y(90-el) * R_z(-90+roll)
-// where Chain() does left-multiplication (see geo3d.cpp).
-// The view matrix is M = -rot * diag(1,1,-1) to map shader view space (forward=-Z)
-// to the Core's camera space (forward=+Z) and then to world space.
+//
+// Convention: at (az=0, el=0, roll=0), the camera looks at the equirect center,
+// which is world direction (-1, 0, 0).  Increasing azimuth rotates the camera
+// rightward in the equirect (toward increasing longitude / -Y direction).
+// Increasing elevation tilts the camera upward (toward upper sky / -Z direction).
+//
+// Camera basis at (az=a, el=e, roll=0):
+//   forward = (-cos(e)*cos(a), -cos(e)*sin(a), -sin(e))   [equirect az=a, el=e]
+//   right   = (sin(a), -cos(a), 0)                         [horizontal, toward +lon]
+//   up      = (sin(e)*cos(a), sin(e)*sin(a), -cos(e))      [completes RH basis]
+//
+// Roll rotates right and up around the forward axis:
+//   col0' = cos(r)*right + sin(r)*up
+//   col1' = -sin(r)*right + cos(r)*up
+//   col2  = -forward  (unchanged by roll)
+//
+// OpenGL column-major: out[col*3 + row].
 static void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, float out[9]) {
   constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
   float a = azimuth_deg * kDeg2Rad;
@@ -318,30 +331,20 @@ static void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_d
   float ce = std::cos(e), se = std::sin(e);
   float cr = std::cos(r), sr = std::sin(r);
 
-  // rot = R_z(a) * R_y(90-e) * R_z(-90+r)
-  // With substitutions: cos(90-e)=sin(e), sin(90-e)=cos(e),
-  //                     cos(-90+r)=sin(r), sin(-90+r)=-cos(r)
-  // rot (row-major):
-  //   [ca*se*sr + sa*cr,  ca*se*cr - sa*sr,  ca*ce]
-  //   [sa*se*sr - ca*cr,  sa*se*cr + ca*sr,  sa*ce]
-  //   [-ce*sr,            -ce*cr,            se   ]
-  //
-  // View matrix M = rot * diag(1,1,-1): keep cols 0,1; negate col 2.
-  // Maps shader view-space (-Z forward) to world: M*(0,0,-1) = rot*(0,0,1) = camera forward.
-  // OpenGL column-major: out[col*3 + row]
+  // Column 0 = cos(r)*right + sin(r)*up
+  out[0] = cr * sa + sr * se * ca;
+  out[1] = -cr * ca + sr * se * sa;
+  out[2] = -sr * ce;
 
-  // Column 0 = +rot_col0
-  out[0] = ca * se * sr + sa * cr;
-  out[1] = sa * se * sr - ca * cr;
-  out[2] = -(ce * sr);
-  // Column 1 = +rot_col1
-  out[3] = ca * se * cr - sa * sr;
-  out[4] = sa * se * cr + ca * sr;
-  out[5] = -(ce * cr);
-  // Column 2 = -rot_col2
-  out[6] = -(ca * ce);
-  out[7] = -(sa * ce);
-  out[8] = -se;
+  // Column 1 = -sin(r)*right + cos(r)*up
+  out[3] = -sr * sa + cr * se * ca;
+  out[4] = sr * ca + cr * se * sa;
+  out[5] = -cr * ce;
+
+  // Column 2 = -forward = (cos(e)*cos(a), cos(e)*sin(a), sin(e))
+  out[6] = ce * ca;
+  out[7] = ce * sa;
+  out[8] = se;
 }
 
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {
