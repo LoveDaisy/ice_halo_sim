@@ -506,23 +506,28 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     std::copy(std::begin(rc.background), std::end(rc.background), std::begin(g_preview_vp.params.background));
     g_preview_vp.params.intensity_factor = rc.intensity_factor;
 
-    // Mouse interaction: use InvisibleButton to capture drag
+    // Mouse interaction: orbit with drag, FOV with scroll
+    // Disabled for full-sky lens types (dual fisheye, rectangular)
+    bool full_sky = (rc.lens_type >= 4);
     ImVec2 avail = ImGui::GetContentRegionAvail();
     ImGui::InvisibleButton("##preview_interact", avail);
-    bool is_hovered = ImGui::IsItemHovered();
-    bool is_active = ImGui::IsItemActive();
 
-    ImGuiIO& io = ImGui::GetIO();
-    if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-      ImVec2 delta = io.MouseDelta;
-      rc.azimuth -= delta.x * 0.3f;
-      rc.elevation += delta.y * 0.3f;
-      rc.elevation = std::max(-90.0f, std::min(90.0f, rc.elevation));
-    }
+    if (!full_sky) {
+      bool is_hovered = ImGui::IsItemHovered();
+      bool is_active = ImGui::IsItemActive();
 
-    if (is_hovered && io.MouseWheel != 0.0f) {
-      rc.fov -= io.MouseWheel * 5.0f;
-      rc.fov = std::max(1.0f, std::min(360.0f, rc.fov));
+      ImGuiIO& io = ImGui::GetIO();
+      if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        ImVec2 delta = io.MouseDelta;
+        rc.azimuth -= delta.x * 0.3f;
+        rc.elevation += delta.y * 0.3f;
+        rc.elevation = std::max(-90.0f, std::min(90.0f, rc.elevation));
+      }
+
+      if (is_hovered && io.MouseWheel != 0.0f) {
+        rc.fov -= io.MouseWheel * 5.0f;
+        rc.fov = std::max(1.0f, std::min(360.0f, rc.fov));
+      }
     }
   } else {
     ImVec2 avail = ImGui::GetContentRegionAvail();
