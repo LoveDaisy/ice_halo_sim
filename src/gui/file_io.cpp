@@ -126,9 +126,7 @@ std::string SerializeToJson(const GuiState& state) {
     jl["entries"] = json::array();
     for (auto& entry : layer.entries) {
       json je;
-      if (entry.crystal_id >= 0) {
-        je["crystal"] = entry.crystal_id;
-      }
+      je["crystal"] = entry.crystal_id >= 0 ? entry.crystal_id : 1;
       je["proportion"] = entry.proportion;
       if (entry.filter_id >= 0) {
         je["filter"] = entry.filter_id;
