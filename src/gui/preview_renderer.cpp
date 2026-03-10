@@ -57,7 +57,7 @@ vec4 linearInverse(vec2 pos, float half_fov) {
 // Compute view direction for fisheye projections
 // type: 0=equal_area, 1=equidistant, 2=stereographic
 vec4 fisheyeInverse(vec2 pos, float half_fov, int type) {
-  float img_radius = min(u_resolution.x, u_resolution.y) * 0.5;
+  float img_radius = length(u_resolution) * 0.5;  // diagonal/2 — matches Core's diag_pix_/2
   float r = length(pos) / img_radius;
   if (r > 1.0) return vec4(0.0, 0.0, 0.0, 0.0);
 
@@ -77,14 +77,15 @@ vec4 fisheyeInverse(vec2 pos, float half_fov, int type) {
 }
 
 // Dual fisheye: left circle = upper hemisphere, right circle = lower hemisphere
-vec4 dualFisheyeInverse(vec2 pos, float half_fov, int type) {
-  float circle_radius = min(u_resolution.x * 0.5, u_resolution.y) * 0.5;
-  float quarter_w = u_resolution.x * 0.25;
+// Returns world-space direction (no view matrix needed) — matches Core convention.
+// Core uses az = atan2(-d.y, -d.x) and pixel mapping with PI/2±az offset.
+vec4 dualFisheyeInverse(vec2 pos, int type) {
+  float short_res = min(u_resolution.x * 0.5, u_resolution.y);
+  float circle_radius = short_res * 0.5;
 
-  // Left circle center: (quarter_w, 0), Right circle center: (-quarter_w, 0)
-  // pos is already centered at viewport center
-  vec2 left_pos = pos - vec2(-quarter_w, 0.0);
-  vec2 right_pos = pos - vec2(quarter_w, 0.0);
+  // Left circle center at (-circle_radius, 0), right at (+circle_radius, 0)
+  vec2 left_pos = pos - vec2(-circle_radius, 0.0);
+  vec2 right_pos = pos - vec2(circle_radius, 0.0);
 
   float left_r = length(left_pos) / circle_radius;
   float right_r = length(right_pos) / circle_radius;
@@ -108,22 +109,29 @@ vec4 dualFisheyeInverse(vec2 pos, float half_fov, int type) {
     theta = 2.0 * atan(use_r * tan(half_pi * 0.5));
   }
 
+  // Inverse of Core's forward: pixel (x,y) uses cos(PI/2±az), sin(PI/2±az)
+  // so phi_pixel = PI/2 + az (upper) or PI/2 - az (lower)
   float phi = atan(use_pos.y, use_pos.x);
-  vec3 d = vec3(sin(theta) * cos(phi), sin(theta) * sin(phi), -cos(theta));
-
-  // Left = upper hemisphere (flip z for lower)
-  if (!in_left) {
-    d.z = -d.z;
+  float st = sin(theta);
+  vec3 d;
+  if (in_left) {
+    // Upper hemisphere: az = phi - PI/2
+    // d = (-st*cos(az), -st*sin(az), -cos(theta))
+    d = vec3(-st * sin(phi), st * cos(phi), -cos(theta));
+  } else {
+    // Lower hemisphere: az = PI/2 - phi
+    // d = (-st*cos(az), -st*sin(az), cos(theta))
+    d = vec3(-st * sin(phi), -st * cos(phi), cos(theta));
   }
 
   return vec4(d, 1.0);
 }
 
-// Rectangular (equirectangular crop)
-vec4 rectangularInverse(vec2 pos, float half_fov) {
-  // FOV is diagonal-based
-  float diag = length(u_resolution);
-  float scale = diag / (2.0 * half_fov);  // pixels per radian
+// Rectangular (equirectangular): always full-sky, returns world-space direction.
+// Matches Core: scale = min(width/2, height) / PI
+vec4 rectangularInverse(vec2 pos) {
+  float short_res = min(u_resolution.x * 0.5, u_resolution.y);
+  float scale = short_res / PI;  // pixels per radian
   float lon = pos.x / scale;
   float lat = -pos.y / scale;
   if (abs(lat) > PI * 0.5) return vec4(0.0, 0.0, 0.0, 0.0);
@@ -139,14 +147,17 @@ void main() {
   float half_fov = u_fov * 0.5 * PI / 180.0;
 
   vec4 result;
+  bool needs_view_transform = true;
   if (u_lens_type == 0) {
     result = linearInverse(pos, half_fov);
   } else if (u_lens_type >= 1 && u_lens_type <= 3) {
     result = fisheyeInverse(pos, half_fov, u_lens_type - 1);
   } else if (u_lens_type >= 4 && u_lens_type <= 6) {
-    result = dualFisheyeInverse(pos, half_fov, u_lens_type - 4);
+    result = dualFisheyeInverse(pos, u_lens_type - 4);
+    needs_view_transform = false;  // Core dual fisheye works in world space
   } else {
-    result = rectangularInverse(pos, half_fov);
+    result = rectangularInverse(pos);
+    needs_view_transform = false;  // Core rectangular works in world space
   }
 
   if (result.w < 0.5) {
@@ -154,8 +165,7 @@ void main() {
     return;
   }
 
-  vec3 view_dir = result.xyz;
-  vec3 world_dir = u_view_matrix * view_dir;
+  vec3 world_dir = needs_view_transform ? u_view_matrix * result.xyz : result.xyz;
 
   // Visible hemisphere check
   // In equirect convention: lat = asin(-dz), lat > 0 means upper sky
@@ -293,52 +303,44 @@ void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int he
   glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-// Build view-to-world rotation matrix from elevation, azimuth, roll (degrees)
-// Convention: default camera looks at direction (-1, 0, 0), up is (0, 0, -1)
-// Azimuth rotates around Z axis, elevation tilts up/down, roll around view axis
+// Build view-to-world rotation matrix from elevation, azimuth, roll (degrees).
+// Must match Core's rotation chain: rot = R_z(az) * R_y(90-el) * R_z(-90+roll)
+// where Chain() does left-multiplication (see geo3d.cpp).
+// The view matrix is M = -rot * diag(1,1,-1) to map shader view space (forward=-Z)
+// to the Core's camera space (forward=+Z) and then to world space.
 static void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, float out[9]) {
   constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
-  float e = elevation_deg * kDeg2Rad;
   float a = azimuth_deg * kDeg2Rad;
+  float e = elevation_deg * kDeg2Rad;
   float r = roll_deg * kDeg2Rad;
 
-  float ce = std::cos(e), se = std::sin(e);
   float ca = std::cos(a), sa = std::sin(a);
+  float ce = std::cos(e), se = std::sin(e);
   float cr = std::cos(r), sr = std::sin(r);
 
-  // Camera basis vectors (before roll):
-  // forward = (-cos(e)*cos(a), -cos(e)*sin(a), -sin(e))
-  // right   = (sin(a), -cos(a), 0)
-  // up      = (-sin(e)*cos(a), -sin(e)*sin(a), cos(e))
+  // rot = R_z(a) * R_y(90-e) * R_z(-90+r)
+  // With substitutions: cos(90-e)=sin(e), sin(90-e)=cos(e),
+  //                     cos(-90+r)=sin(r), sin(-90+r)=-cos(r)
+  // rot (row-major):
+  //   [ca*se*sr + sa*cr,  ca*se*cr - sa*sr,  ca*ce]
+  //   [sa*se*sr - ca*cr,  sa*se*cr + ca*sr,  sa*ce]
+  //   [-ce*sr,            -ce*cr,            se   ]
+  //
+  // View matrix M = -rot * diag(1,1,-1): negate cols 0,1; keep col 2.
+  // OpenGL column-major: out[col*3 + row]
 
-  float fx = -ce * ca, fy = -ce * sa, fz = -se;
-  float rx = sa, ry = -ca, rz = 0.0f;
-  float ux = -se * ca, uy = -se * sa, uz = ce;
-
-  // Apply roll: rotate right and up around forward axis
-  float rx2 = cr * rx + sr * ux;
-  float ry2 = cr * ry + sr * uy;
-  float rz2 = cr * rz + sr * uz;
-  float ux2 = -sr * rx + cr * ux;
-  float uy2 = -sr * ry + cr * uy;
-  float uz2 = -sr * rz + cr * uz;
-
-  // The view-to-world matrix maps shader view space to world space:
-  // In shader: forward=(0,0,-1), right=(1,0,0), up=(0,1,0)
-  // Column 0: where shader-X (right) goes in world
-  // Column 1: where shader-Y (up) goes in world
-  // Column 2: where shader-Z goes in world (shader forward is -Z, so col2 = -forward)
-
-  // OpenGL uniform mat3 is column-major
-  out[0] = rx2;
-  out[1] = ry2;
-  out[2] = rz2;  // column 0: right
-  out[3] = ux2;
-  out[4] = uy2;
-  out[5] = uz2;  // column 1: up
-  out[6] = -fx;
-  out[7] = -fy;
-  out[8] = -fz;  // column 2: -forward
+  // Column 0 = -rot_col0
+  out[0] = -(ca * se * sr + sa * cr);
+  out[1] = -(sa * se * sr - ca * cr);
+  out[2] = ce * sr;
+  // Column 1 = -rot_col1
+  out[3] = -(ca * se * cr - sa * sr);
+  out[4] = -(sa * se * cr + ca * sr);
+  out[5] = ce * cr;
+  // Column 2 = +rot_col2
+  out[6] = ca * ce;
+  out[7] = sa * ce;
+  out[8] = se;
 }
 
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {
