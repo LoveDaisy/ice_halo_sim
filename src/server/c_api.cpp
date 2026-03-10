@@ -1,6 +1,14 @@
+#include <cmath>
 #include <cstring>
+#include <map>
 #include <memory>
+#include <set>
+#include <utility>
+#include <vector>
 
+#include <nlohmann/json.hpp>
+
+#include "core/geo3d.hpp"
 #include "include/lumice.h"
 #include "server/server.hpp"
 #include "util/logger.hpp"
@@ -185,4 +193,120 @@ void LUMICE_StopServer(LUMICE_Server* server) {
   }
 
   server->server_->Stop();
+}
+
+
+// =============== Crystal Mesh ===============
+LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* crystal_json, LUMICE_CrystalMesh* out) {
+  if (!crystal_json || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  // Parse JSON
+  nlohmann::json j;
+  try {
+    j = nlohmann::json::parse(crystal_json);
+  } catch (...) {
+    return LUMICE_ERR_INVALID_JSON;
+  }
+
+  if (!j.contains("type") || !j.contains("shape")) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+
+  // Create mesh based on crystal type
+  auto type_str = j.at("type").get<std::string>();
+  const auto& shape = j.at("shape");
+  ns::Mesh mesh;
+
+  try {
+    if (type_str == "prism") {
+      float h = shape.value("height", 1.0f);
+      mesh = ns::CreatePrismMesh(h);
+    } else if (type_str == "pyramid") {
+      float prism_h = shape.value("prism_h", 1.0f);
+      float upper_h = shape.value("upper_h", 0.0f);
+      float lower_h = shape.value("lower_h", 0.0f);
+      mesh = ns::CreatePyramidMesh(upper_h, prism_h, lower_h);
+    } else {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+  } catch (...) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+
+  // Fill vertices
+  auto vtx_cnt = static_cast<int>(mesh.GetVtxCnt());
+  if (vtx_cnt > LUMICE_MAX_CRYSTAL_VERTICES) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  out->vertex_count = vtx_cnt;
+  std::memcpy(out->vertices, mesh.GetVtxPtr(0), vtx_cnt * 3 * sizeof(float));
+
+  // Extract wireframe edges: only edges shared by triangles with different normals.
+  // Internal diagonal edges within a coplanar face are excluded.
+  auto tri_cnt = mesh.GetTriangleCnt();
+  const int* tri = mesh.GetTrianglePtr(0);
+  const float* vtx = mesh.GetVtxPtr(0);
+
+  // Build edge → triangle list
+  using Edge = std::pair<int, int>;
+  std::map<Edge, std::vector<size_t>> edge_tris;
+  for (size_t i = 0; i < tri_cnt; i++) {
+    int v0 = tri[i * 3 + 0];
+    int v1 = tri[i * 3 + 1];
+    int v2 = tri[i * 3 + 2];
+    edge_tris[{std::min(v0, v1), std::max(v0, v1)}].push_back(i);
+    edge_tris[{std::min(v1, v2), std::max(v1, v2)}].push_back(i);
+    edge_tris[{std::min(v0, v2), std::max(v0, v2)}].push_back(i);
+  }
+
+  // Compute triangle normals and filter edges
+  auto ComputeTriNormal = [&](size_t t, float* n) {
+    const float* a = vtx + tri[t * 3 + 0] * 3;
+    const float* b = vtx + tri[t * 3 + 1] * 3;
+    const float* c = vtx + tri[t * 3 + 2] * 3;
+    float e1[3]{ b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+    float e2[3]{ c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+    n[0] = e1[1] * e2[2] - e1[2] * e2[1];
+    n[1] = e1[2] * e2[0] - e1[0] * e2[2];
+    n[2] = e1[0] * e2[1] - e1[1] * e2[0];
+    float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (len > 1e-6f) {
+      n[0] /= len;
+      n[1] /= len;
+      n[2] /= len;
+    }
+  };
+
+  std::set<Edge> edge_set;
+  for (const auto& [edge, tris] : edge_tris) {
+    if (tris.size() == 1) {
+      // Boundary edge — always include
+      edge_set.insert(edge);
+    } else if (tris.size() >= 2) {
+      // Include if adjacent triangles have different normals (dihedral edge)
+      float n0[3], n1[3];
+      ComputeTriNormal(tris[0], n0);
+      ComputeTriNormal(tris[1], n1);
+      float dot = n0[0] * n1[0] + n0[1] * n1[1] + n0[2] * n1[2];
+      if (dot < 1.0f - 1e-3f) {
+        edge_set.insert(edge);
+      }
+    }
+  }
+
+  auto edge_cnt = static_cast<int>(edge_set.size());
+  if (edge_cnt > LUMICE_MAX_CRYSTAL_EDGES) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  out->edge_count = edge_cnt;
+  int idx = 0;
+  for (const auto& [a, b] : edge_set) {
+    out->edges[idx * 2 + 0] = a;
+    out->edges[idx * 2 + 1] = b;
+    idx++;
+  }
+
+  return LUMICE_OK;
 }
