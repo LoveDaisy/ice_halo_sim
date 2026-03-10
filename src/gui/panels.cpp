@@ -7,6 +7,28 @@
 #include "imgui.h"
 
 namespace lumice::gui {
+
+// Slider + InputFloat side by side. Returns true if value changed.
+static bool SliderWithInput(const char* label, float* value, float min_val, float max_val,
+                            const char* fmt = "%.1f") {
+  float input_w = 60.0f;
+  float avail_w = ImGui::GetContentRegionAvail().x;
+  float slider_w = avail_w - input_w - ImGui::GetStyle().ItemSpacing.x;
+
+  bool changed = false;
+  ImGui::PushItemWidth(slider_w);
+  changed |= ImGui::SliderFloat(label, value, min_val, max_val, fmt);
+  ImGui::PopItemWidth();
+  ImGui::SameLine();
+
+  char input_id[64];
+  snprintf(input_id, sizeof(input_id), "##%s_input", label);
+  ImGui::PushItemWidth(input_w);
+  changed |= ImGui::InputFloat(input_id, value, 0, 0, fmt);
+  ImGui::PopItemWidth();
+  return changed;
+}
+
 namespace {
 
 // Helper: wrap ImGui control and mark dirty on change
@@ -28,35 +50,12 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
   }
   ImGui::PopItemWidth();
 
-  // Slider + input box for precise value entry
-  float input_w = 60.0f;
-  float avail_w = ImGui::GetContentRegionAvail().x;
-  float slider_w = avail_w - input_w - ImGui::GetStyle().ItemSpacing.x - 50.0f;  // 50 = label width
-
-  ImGui::PushItemWidth(slider_w);
-  DIRTY_IF(ImGui::SliderFloat("Mean", &axis.mean, -360.0f, 360.0f, "%.1f"));
-  ImGui::PopItemWidth();
-  ImGui::SameLine();
-  ImGui::PushItemWidth(input_w);
-  DIRTY_IF(ImGui::InputFloat("##mean_input", &axis.mean, 0, 0, "%.1f"));
-  ImGui::PopItemWidth();
+  DIRTY_IF(SliderWithInput("Mean", &axis.mean, -360.0f, 360.0f));
 
   if (axis.type == AxisDistType::kGauss) {
-    ImGui::PushItemWidth(slider_w);
-    DIRTY_IF(ImGui::SliderFloat("Std", &axis.std, 0.0f, 180.0f, "%.1f"));
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::PushItemWidth(input_w);
-    DIRTY_IF(ImGui::InputFloat("##std_input", &axis.std, 0, 0, "%.1f"));
-    ImGui::PopItemWidth();
+    DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f));
   } else {
-    ImGui::PushItemWidth(slider_w);
-    DIRTY_IF(ImGui::SliderFloat("Range", &axis.std, 0.0f, 360.0f, "%.1f"));
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::PushItemWidth(input_w);
-    DIRTY_IF(ImGui::InputFloat("##range_input", &axis.std, 0, 0, "%.1f"));
-    ImGui::PopItemWidth();
+    DIRTY_IF(SliderWithInput("Range", &axis.std, 0.0f, 360.0f));
   }
 
   ImGui::PopID();
@@ -152,9 +151,9 @@ void RenderSceneTab(GuiState& state) {
   ImGui::PushItemWidth(-100);
 
   if (ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
-    DIRTY_IF(ImGui::SliderFloat("Altitude", &state.sun.altitude, -90.0f, 90.0f, "%.1f"));
-    DIRTY_IF(ImGui::SliderFloat("Azimuth##sun", &state.sun.azimuth, -180.0f, 180.0f, "%.1f"));
-    DIRTY_IF(ImGui::SliderFloat("Diameter", &state.sun.diameter, 0.1f, 5.0f, "%.1f"));
+    DIRTY_IF(SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f));
+    DIRTY_IF(SliderWithInput("Azimuth##sun", &state.sun.azimuth, -180.0f, 180.0f));
+    DIRTY_IF(SliderWithInput("Diameter", &state.sun.diameter, 0.1f, 5.0f));
     DIRTY_IF(ImGui::Combo("Spectrum", &state.sun.spectrum_index, kSpectrumNames, kSpectrumCount));
   }
 
@@ -355,7 +354,8 @@ void RenderRenderTab(GuiState& state) {
   }
 
   if (ImGui::CollapsingHeader("Lens & View", ImGuiTreeNodeFlags_DefaultOpen)) {
-    DIRTY_IF(ImGui::Combo("Lens Type", &r.lens_type, kLensTypeNames, kLensTypeCount));
+    // Lens type and view params are frontend-only (shader); don't mark dirty.
+    ImGui::Combo("Lens Type", &r.lens_type, kLensTypeNames, kLensTypeCount);
 
     bool full_sky = (r.lens_type >= 4);  // dual fisheye (4-6) and rectangular (7)
     if (full_sky) {
@@ -365,19 +365,18 @@ void RenderRenderTab(GuiState& state) {
       r.roll = 0.0f;
       ImGui::BeginDisabled();
     }
-    DIRTY_IF(ImGui::SliderFloat("FOV", &r.fov, 1.0f, 360.0f, "%.0f"));
-    DIRTY_IF(ImGui::SliderFloat("Elevation", &r.elevation, -90.0f, 90.0f, "%.1f"));
-    DIRTY_IF(ImGui::SliderFloat("Azimuth##view", &r.azimuth, -180.0f, 180.0f, "%.1f"));
-    DIRTY_IF(ImGui::SliderFloat("Roll##view", &r.roll, -180.0f, 180.0f, "%.1f"));
+    SliderWithInput("FOV", &r.fov, 1.0f, 360.0f, "%.0f");
+    SliderWithInput("Elevation", &r.elevation, -90.0f, 90.0f);
+    SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f);
+    SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f);
     if (full_sky) {
       ImGui::EndDisabled();
     }
   }
 
   if (ImGui::CollapsingHeader("Appearance", ImGuiTreeNodeFlags_DefaultOpen)) {
-    DIRTY_IF(ImGui::Combo("Visible", &r.visible, kVisibleNames, kVisibleCount));
-    DIRTY_IF(ImGui::ColorEdit3("Background", r.background));
-    DIRTY_IF(ImGui::ColorEdit3("Ray Color", r.ray_color));
+    // Visible is frontend-only (shader hemisphere filtering); don't mark dirty.
+    ImGui::Combo("Visible", &r.visible, kVisibleNames, kVisibleCount);
     DIRTY_IF(ImGui::SliderFloat("Opacity", &r.opacity, 0.0f, 1.0f, "%.2f"));
     DIRTY_IF(ImGui::SliderFloat("Intensity", &r.intensity_factor, 0.1f, 10.0f, "%.1f"));
   }
