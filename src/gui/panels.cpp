@@ -293,12 +293,15 @@ void RenderSceneTab(GuiState& state) {
             ImGui::EndCombo();
           }
 
-          ImGui::SameLine();
-          if (ImGui::SmallButton("X##entry")) {
-            layer.entries.erase(layer.entries.begin() + ei);
-            state.MarkDirty();
-            ImGui::PopID();
-            break;
+          // Don't allow deleting the last entry (Core requires at least one per layer)
+          if (layer.entries.size() > 1) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("X##entry")) {
+              layer.entries.erase(layer.entries.begin() + ei);
+              state.MarkDirty();
+              ImGui::PopID();
+              break;
+            }
           }
 
           ImGui::PopID();

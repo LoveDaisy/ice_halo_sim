@@ -374,11 +374,24 @@ void RenderLeftPanel(float window_height) {
           // Render to FBO
           g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom);
 
-          // Display FBO texture — square aspect ratio using remaining space
+          // Display FBO texture — square, centered, with matching background fill
           ImVec2 avail = ImGui::GetContentRegionAvail();
           float button_h = ImGui::GetFrameHeightWithSpacing();
-          float max_h = std::max(avail.y - button_h, 40.0f);
-          float preview_size = std::min(avail.x, max_h);  // Square, fit in available space
+          float area_h = std::max(avail.y - button_h, 40.0f);
+          float preview_size = std::min(avail.x, area_h);
+
+          // Fill the entire available area with the same background as the FBO
+          ImVec2 area_start = ImGui::GetCursorScreenPos();
+          ImDrawList* draw_list = ImGui::GetWindowDrawList();
+          draw_list->AddRectFilled(area_start, ImVec2(area_start.x + avail.x, area_start.y + area_h),
+                                   IM_COL32(38, 38, 38, 255));  // Match FBO clear color (0.15)
+
+          // Center the image horizontally
+          float offset_x = (avail.x - preview_size) * 0.5f;
+          if (offset_x > 0.0f) {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset_x);
+          }
+
           auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
           ImVec2 uv0(0, 1);  // Flip Y for OpenGL
           ImVec2 uv1(1, 0);
@@ -396,6 +409,8 @@ void RenderLeftPanel(float window_height) {
             }
           }
 
+          // Advance cursor past the filled area, then draw button
+          ImGui::SetCursorScreenPos(ImVec2(area_start.x, area_start.y + area_h));
           if (ImGui::SmallButton("Reset View")) {
             ResetCrystalView();
           }
