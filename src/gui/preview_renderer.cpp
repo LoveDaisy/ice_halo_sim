@@ -326,21 +326,22 @@ static void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_d
   //   [sa*se*sr - ca*cr,  sa*se*cr + ca*sr,  sa*ce]
   //   [-ce*sr,            -ce*cr,            se   ]
   //
-  // View matrix M = -rot * diag(1,1,-1): negate cols 0,1; keep col 2.
+  // View matrix M = rot * diag(1,1,-1): keep cols 0,1; negate col 2.
+  // Maps shader view-space (-Z forward) to world: M*(0,0,-1) = rot*(0,0,1) = camera forward.
   // OpenGL column-major: out[col*3 + row]
 
-  // Column 0 = -rot_col0
-  out[0] = -(ca * se * sr + sa * cr);
-  out[1] = -(sa * se * sr - ca * cr);
-  out[2] = ce * sr;
-  // Column 1 = -rot_col1
-  out[3] = -(ca * se * cr - sa * sr);
-  out[4] = -(sa * se * cr + ca * sr);
-  out[5] = ce * cr;
-  // Column 2 = +rot_col2
-  out[6] = ca * ce;
-  out[7] = sa * ce;
-  out[8] = se;
+  // Column 0 = +rot_col0
+  out[0] = ca * se * sr + sa * cr;
+  out[1] = sa * se * sr - ca * cr;
+  out[2] = -(ce * sr);
+  // Column 1 = +rot_col1
+  out[3] = ca * se * cr - sa * sr;
+  out[4] = sa * se * cr + ca * sr;
+  out[5] = -(ce * cr);
+  // Column 2 = -rot_col2
+  out[6] = -(ca * ce);
+  out[7] = -(sa * ce);
+  out[8] = -se;
 }
 
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {
