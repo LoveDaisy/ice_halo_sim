@@ -9,7 +9,7 @@
 namespace lumice::gui {
 
 // Slider + InputFloat + label text, laid out as: [slider] [input] Label
-// The slider uses a hidden ID; the visible label is drawn to the right.
+// Uses a fixed label column width so vertically stacked sliders align.
 // Returns true if value changed.
 static bool SliderWithInput(const char* label, float* value, float min_val, float max_val,
                             const char* fmt = "%.1f") {
@@ -18,18 +18,18 @@ static bool SliderWithInput(const char* label, float* value, float min_val, floa
   const char* hash_pos = strstr(label, "##");
   char display_buf[64];
   if (hash_pos) {
-    size_t len = static_cast<size_t>(hash_pos - label);
+    auto len = static_cast<size_t>(hash_pos - label);
     if (len >= sizeof(display_buf)) len = sizeof(display_buf) - 1;
     memcpy(display_buf, label, len);
     display_buf[len] = '\0';
     display_label = display_buf;
   }
 
-  float label_w = ImGui::CalcTextSize(display_label).x + ImGui::GetStyle().ItemSpacing.x;
-  float input_w = 60.0f;
+  constexpr float kLabelColWidth = 70.0f;  // Fixed width for label column
+  constexpr float kInputWidth = 60.0f;
   float spacing = ImGui::GetStyle().ItemSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x;
-  float slider_w = avail_w - input_w - label_w - spacing * 2;
+  float slider_w = avail_w - kInputWidth - kLabelColWidth - spacing * 2;
   if (slider_w < 40.0f) slider_w = 40.0f;
 
   bool changed = false;
@@ -43,7 +43,7 @@ static bool SliderWithInput(const char* label, float* value, float min_val, floa
   ImGui::SameLine();
   char input_id[64];
   snprintf(input_id, sizeof(input_id), "##%s_input", label);
-  ImGui::PushItemWidth(input_w);
+  ImGui::PushItemWidth(kInputWidth);
   changed |= ImGui::InputFloat(input_id, value, 0, 0, fmt);
   ImGui::PopItemWidth();
 
@@ -205,15 +205,18 @@ void RenderSceneTab(GuiState& state) {
       snprintf(layer_label, sizeof(layer_label), "Layer %d", li + 1);
       bool layer_open = ImGui::TreeNodeEx(layer_label, ImGuiTreeNodeFlags_DefaultOpen);
 
-      ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20);
-      if (ImGui::SmallButton("X##layer")) {
-        state.scattering.erase(state.scattering.begin() + li);
-        state.MarkDirty();
-        ImGui::PopID();
-        if (layer_open) {
-          ImGui::TreePop();
+      // Don't allow deleting the last layer (Core requires at least one)
+      if (state.scattering.size() > 1) {
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20);
+        if (ImGui::SmallButton("X##layer")) {
+          state.scattering.erase(state.scattering.begin() + li);
+          state.MarkDirty();
+          ImGui::PopID();
+          if (layer_open) {
+            ImGui::TreePop();
+          }
+          break;
         }
-        break;
       }
 
       if (layer_open) {
