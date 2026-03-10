@@ -15,13 +15,17 @@ namespace lumice::gui {
 static const char* kVertexShader = R"glsl(
 #version 330 core
 layout(location = 0) in vec2 a_pos;
+out vec2 v_ndc;
 void main() {
   gl_Position = vec4(a_pos, 0.0, 1.0);
+  v_ndc = a_pos;  // Pass NDC [-1,1] to fragment shader
 }
 )glsl";
 
 static const char* kFragmentShader = R"glsl(
 #version 330 core
+
+in vec2 v_ndc;               // NDC position [-1, 1]
 
 uniform sampler2D u_texture;
 uniform vec2 u_resolution;   // viewport size in pixels
@@ -131,7 +135,7 @@ vec4 rectangularInverse(vec2 pos, float half_fov) {
 out vec4 frag_color;
 
 void main() {
-  vec2 pos = gl_FragCoord.xy - u_resolution * 0.5;
+  vec2 pos = v_ndc * u_resolution * 0.5;  // Convert NDC [-1,1] to pixel offset from center
   float half_fov = u_fov * 0.5 * PI / 180.0;
 
   vec4 result;

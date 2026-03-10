@@ -58,7 +58,7 @@ struct ScatterEntry {
 };
 
 struct ScatterLayer {
-  float probability = 1.0f;
+  float probability = 0.0f;  // Probability of multi-scatter continuation (0 = single scatter)
   std::vector<ScatterEntry> entries;
 };
 
@@ -92,7 +92,7 @@ struct RenderConfig {
   float azimuth = 0.0f;
   float roll = 0.0f;
   int sim_resolution_index = 1;  // Index into kSimResolutions (default 1024)
-  int visible = 0;               // Index into kVisibleNames
+  int visible = 2;               // Index into kVisibleNames (0=upper, 1=lower, 2=full)
   float background[3] = { 0.0f, 0.0f, 0.0f };
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float opacity = 1.0f;

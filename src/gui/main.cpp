@@ -187,12 +187,16 @@ void DoRun() {
   if (!g_server)
     return;
   auto json_str = lumice::gui::SerializeToJson(g_state);
+  fprintf(stderr, "[GUI] CommitConfig JSON:\n%s\n", json_str.c_str());
   g_state.last_committed_json = json_str;
   auto err = LUMICE_CommitConfig(g_server, json_str.c_str());
   if (err == LUMICE_OK) {
     g_state.sim_state = SimState::kSimulating;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
+    fprintf(stderr, "[GUI] Simulation started\n");
+  } else {
+    fprintf(stderr, "[GUI] CommitConfig FAILED with error code %d\n", err);
   }
 }
 
@@ -207,6 +211,17 @@ void DoRevert() {
   if (!g_state.last_committed_json.empty()) {
     lumice::gui::DeserializeFromJson(g_state.last_committed_json, g_state);
     g_state.sim_state = SimState::kDone;
+  }
+}
+
+void FetchRenderResults() {
+  if (!g_server || g_state.selected_renderer < 0)
+    return;
+  LUMICE_RenderResult renders[2]{};
+  LUMICE_GetRenderResults(g_server, renders, 1);
+  if (renders[0].img_buffer != nullptr) {
+    g_preview.UploadTexture(renders[0].img_buffer, renders[0].img_width, renders[0].img_height);
+    fprintf(stderr, "[GUI] Texture uploaded: %dx%d\n", renders[0].img_width, renders[0].img_height);
   }
 }
 
@@ -227,6 +242,7 @@ void PollServerState() {
   LUMICE_QueryServerState(g_server, &server_state);
   if (server_state == LUMICE_SERVER_IDLE) {
     g_state.sim_state = SimState::kDone;
+    fprintf(stderr, "[GUI] Simulation done\n");
   }
 
   // Get stats
@@ -238,13 +254,7 @@ void PollServerState() {
   }
 
   // Get render results and upload texture
-  if (g_state.selected_renderer >= 0) {
-    LUMICE_RenderResult renders[2]{};
-    LUMICE_GetRenderResults(g_server, renders, 1);
-    if (renders[0].img_buffer != nullptr) {
-      g_preview.UploadTexture(renders[0].img_buffer, renders[0].img_width, renders[0].img_height);
-    }
-  }
+  FetchRenderResults();
 }
 
 void CheckUnsavedAndDo(PendingAction action) {
