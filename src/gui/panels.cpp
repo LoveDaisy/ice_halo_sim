@@ -359,6 +359,10 @@ void RenderRenderTab(GuiState& state) {
 
     bool full_sky = (r.lens_type >= 4);  // dual fisheye (4-6) and rectangular (7)
     if (full_sky) {
+      // Reset camera pose to defaults when in full-sky mode
+      r.elevation = 0.0f;
+      r.azimuth = 0.0f;
+      r.roll = 0.0f;
       ImGui::BeginDisabled();
     }
     DIRTY_IF(ImGui::SliderFloat("FOV", &r.fov, 1.0f, 360.0f, "%.0f"));
