@@ -28,14 +28,36 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
   }
   ImGui::PopItemWidth();
 
-  ImGui::PushItemWidth(-50);
+  // Slider + input box for precise value entry
+  float input_w = 60.0f;
+  float avail_w = ImGui::GetContentRegionAvail().x;
+  float slider_w = avail_w - input_w - ImGui::GetStyle().ItemSpacing.x - 50.0f;  // 50 = label width
+
+  ImGui::PushItemWidth(slider_w);
   DIRTY_IF(ImGui::SliderFloat("Mean", &axis.mean, -360.0f, 360.0f, "%.1f"));
-  if (axis.type == AxisDistType::kGauss) {
-    DIRTY_IF(ImGui::SliderFloat("Std", &axis.std, 0.0f, 180.0f, "%.1f"));
-  } else {
-    DIRTY_IF(ImGui::SliderFloat("Range", &axis.std, 0.0f, 360.0f, "%.1f"));
-  }
   ImGui::PopItemWidth();
+  ImGui::SameLine();
+  ImGui::PushItemWidth(input_w);
+  DIRTY_IF(ImGui::InputFloat("##mean_input", &axis.mean, 0, 0, "%.1f"));
+  ImGui::PopItemWidth();
+
+  if (axis.type == AxisDistType::kGauss) {
+    ImGui::PushItemWidth(slider_w);
+    DIRTY_IF(ImGui::SliderFloat("Std", &axis.std, 0.0f, 180.0f, "%.1f"));
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    ImGui::PushItemWidth(input_w);
+    DIRTY_IF(ImGui::InputFloat("##std_input", &axis.std, 0, 0, "%.1f"));
+    ImGui::PopItemWidth();
+  } else {
+    ImGui::PushItemWidth(slider_w);
+    DIRTY_IF(ImGui::SliderFloat("Range", &axis.std, 0.0f, 360.0f, "%.1f"));
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    ImGui::PushItemWidth(input_w);
+    DIRTY_IF(ImGui::InputFloat("##range_input", &axis.std, 0, 0, "%.1f"));
+    ImGui::PopItemWidth();
+  }
 
   ImGui::PopID();
 }
@@ -335,18 +357,17 @@ void RenderRenderTab(GuiState& state) {
   if (ImGui::CollapsingHeader("Lens & View", ImGuiTreeNodeFlags_DefaultOpen)) {
     DIRTY_IF(ImGui::Combo("Lens Type", &r.lens_type, kLensTypeNames, kLensTypeCount));
 
-    bool fov_disabled = (r.lens_type >= 4);
-    if (fov_disabled) {
+    bool full_sky = (r.lens_type >= 4);  // dual fisheye (4-6) and rectangular (7)
+    if (full_sky) {
       ImGui::BeginDisabled();
     }
     DIRTY_IF(ImGui::SliderFloat("FOV", &r.fov, 1.0f, 360.0f, "%.0f"));
-    if (fov_disabled) {
-      ImGui::EndDisabled();
-    }
-
     DIRTY_IF(ImGui::SliderFloat("Elevation", &r.elevation, -90.0f, 90.0f, "%.1f"));
     DIRTY_IF(ImGui::SliderFloat("Azimuth##view", &r.azimuth, -180.0f, 180.0f, "%.1f"));
     DIRTY_IF(ImGui::SliderFloat("Roll##view", &r.roll, -180.0f, 180.0f, "%.1f"));
+    if (full_sky) {
+      ImGui::EndDisabled();
+    }
   }
 
   if (ImGui::CollapsingHeader("Appearance", ImGuiTreeNodeFlags_DefaultOpen)) {
