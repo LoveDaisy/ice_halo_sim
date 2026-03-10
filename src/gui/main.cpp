@@ -376,7 +376,7 @@ void RenderLeftPanel(float window_height) {
 
           // Display FBO texture
           float avail_w = ImGui::GetContentRegionAvail().x;
-          float preview_size = std::min(avail_w, 200.0f);
+          float preview_size = avail_w;
           auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
           ImVec2 uv0(0, 1);  // Flip Y for OpenGL
           ImVec2 uv1(1, 0);
@@ -506,26 +506,23 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     std::copy(std::begin(rc.background), std::end(rc.background), std::begin(g_preview_vp.params.background));
     g_preview_vp.params.intensity_factor = rc.intensity_factor;
 
-    // Mouse interaction: orbit with left drag, FOV with scroll
+    // Mouse interaction: use InvisibleButton to capture drag
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImGui::InvisibleButton("##preview_interact", avail);
+    bool is_hovered = ImGui::IsItemHovered();
+    bool is_active = ImGui::IsItemActive();
+
     ImGuiIO& io = ImGui::GetIO();
-    ImVec2 mouse_pos = io.MousePos;
-    bool in_preview = mouse_pos.x >= panel_x && mouse_pos.x < panel_x + panel_width && mouse_pos.y >= kTopBarHeight &&
-                      mouse_pos.y < kTopBarHeight + panel_height;
+    if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+      ImVec2 delta = io.MouseDelta;
+      rc.azimuth -= delta.x * 0.3f;
+      rc.elevation += delta.y * 0.3f;
+      rc.elevation = std::max(-90.0f, std::min(90.0f, rc.elevation));
+    }
 
-    if (in_preview && !ImGui::IsAnyItemActive()) {
-      // Left drag: orbit
-      if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        ImVec2 delta = io.MouseDelta;
-        rc.azimuth -= delta.x * 0.3f;
-        rc.elevation += delta.y * 0.3f;
-        rc.elevation = std::max(-90.0f, std::min(90.0f, rc.elevation));
-      }
-
-      // Scroll: FOV
-      if (io.MouseWheel != 0.0f) {
-        rc.fov -= io.MouseWheel * 5.0f;
-        rc.fov = std::max(1.0f, std::min(360.0f, rc.fov));
-      }
+    if (is_hovered && io.MouseWheel != 0.0f) {
+      rc.fov -= io.MouseWheel * 5.0f;
+      rc.fov = std::max(1.0f, std::min(360.0f, rc.fov));
     }
   } else {
     ImVec2 avail = ImGui::GetContentRegionAvail();

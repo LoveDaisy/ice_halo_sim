@@ -175,7 +175,7 @@ inline GuiState InitDefaultState() {
 
   // One default scattering layer with one entry
   ScatterLayer layer;
-  layer.probability = 1.0f;
+  layer.probability = 0.0f;
   ScatterEntry entry;
   entry.crystal_id = c.id;
   entry.proportion = 1.0f;
