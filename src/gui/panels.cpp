@@ -1,5 +1,6 @@
 #include "gui/panels.hpp"
 
+#include <algorithm>
 #include <cstdio>
 
 #include "gui/gui_state.hpp"
@@ -27,7 +28,7 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
   }
   ImGui::PopItemWidth();
 
-  ImGui::PushItemWidth(-1);
+  ImGui::PushItemWidth(-50);
   DIRTY_IF(ImGui::SliderFloat("Mean", &axis.mean, -360.0f, 360.0f, "%.1f"));
   if (axis.type == AxisDistType::kGauss) {
     DIRTY_IF(ImGui::SliderFloat("Std", &axis.std, 0.0f, 180.0f, "%.1f"));
@@ -55,7 +56,11 @@ void RenderCrystalTab(GuiState& state) {
     state.MarkDirty();
   }
 
-  if (ImGui::BeginListBox("##crystal_list", ImVec2(-1, 80))) {
+  int item_count = static_cast<int>(state.crystals.size());
+  float line_h = ImGui::GetTextLineHeightWithSpacing();
+  float list_h = std::min(line_h * std::max(item_count, 1) + ImGui::GetStyle().FramePadding.y * 2,
+                          line_h * 4 + ImGui::GetStyle().FramePadding.y * 2);
+  if (ImGui::BeginListBox("##crystal_list", ImVec2(-1, list_h))) {
     for (int i = 0; i < static_cast<int>(state.crystals.size()); i++) {
       auto& cr = state.crystals[i];
       char label[64];
@@ -90,7 +95,7 @@ void RenderCrystalTab(GuiState& state) {
 
   const char* type_names[] = { "Prism", "Pyramid" };
   int type_idx = static_cast<int>(cr.type);
-  ImGui::PushItemWidth(-1);
+  ImGui::PushItemWidth(-50);
   if (ImGui::Combo("Type##crystal", &type_idx, type_names, 2)) {
     cr.type = static_cast<CrystalType>(type_idx);
     state.MarkDirty();
@@ -122,7 +127,7 @@ void RenderCrystalTab(GuiState& state) {
 // ========== Scene Tab ==========
 
 void RenderSceneTab(GuiState& state) {
-  ImGui::PushItemWidth(-1);
+  ImGui::PushItemWidth(-100);
 
   if (ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
     DIRTY_IF(ImGui::SliderFloat("Altitude", &state.sun.altitude, -90.0f, 90.0f, "%.1f"));
@@ -164,7 +169,20 @@ void RenderSceneTab(GuiState& state) {
       }
 
       if (layer_open) {
-        DIRTY_IF(ImGui::SliderFloat("Probability", &layer.probability, 0.0f, 1.0f, "%.2f"));
+        bool single_layer = (state.scattering.size() == 1);
+        if (single_layer) {
+          layer.probability = 0.0f;
+          ImGui::BeginDisabled();
+          ImGui::SliderFloat("Probability", &layer.probability, 0.0f, 1.0f, "%.2f");
+          ImGui::EndDisabled();
+          ImGui::SameLine();
+          ImGui::TextDisabled("(?)");
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Single layer: probability is always 0 (no multi-scatter)");
+          }
+        } else {
+          DIRTY_IF(ImGui::SliderFloat("Probability", &layer.probability, 0.0f, 1.0f, "%.2f"));
+        }
 
         for (int ei = 0; ei < static_cast<int>(layer.entries.size()); ei++) {
           auto& entry = layer.entries[ei];
@@ -307,7 +325,7 @@ void RenderRenderTab(GuiState& state) {
   }
 
   auto& r = state.renderers[state.selected_renderer];
-  ImGui::PushItemWidth(-1);
+  ImGui::PushItemWidth(-100);
 
   {
     const char* res_labels[] = { "512", "1024", "2048", "4096" };
@@ -387,7 +405,7 @@ void RenderFilterTab(GuiState& state) {
   }
 
   auto& f = state.filters[state.selected_filter];
-  ImGui::PushItemWidth(-1);
+  ImGui::PushItemWidth(-80);
 
   DIRTY_IF(ImGui::Combo("Action", &f.action, kFilterActionNames, kFilterActionCount));
 
