@@ -380,7 +380,7 @@ void RenderRenderTab(GuiState& state) {
     ImGui::PushItemWidth(-100);
     const char* res_labels[] = { "512", "1024", "2048", "4096" };
     DIRTY_IF(ImGui::Combo("Sim Resolution", &r.sim_resolution_index, res_labels, kSimResolutionCount));
-    DIRTY_IF(SliderWithInput("Exposure", &r.exposure_offset, -5.0f, 5.0f, "%.1f"));
+    DIRTY_IF(SliderWithInput("Exposure", &r.exposure_offset, -2.0f, 8.0f, "%.1f"));
     ImGui::PopItemWidth();
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");

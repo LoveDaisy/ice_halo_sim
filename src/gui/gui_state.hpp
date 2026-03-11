@@ -107,9 +107,9 @@ struct FilterConfig {
   int id = 0;
   int action = 0;            // 0=filter_in, 1=filter_out
   std::string raypath_text;  // Comma-separated int list, e.g. "3,1,5,7,4"
-  bool sym_p = false;
-  bool sym_b = false;
-  bool sym_d = false;
+  bool sym_p = true;
+  bool sym_b = true;
+  bool sym_d = true;
 };
 
 struct GuiState {
