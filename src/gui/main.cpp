@@ -56,8 +56,8 @@ int CrystalParamHash(const lumice::gui::CrystalConfig& c) {
 }
 
 void ResetCrystalView() {
-  // Default slightly elevated view (rotate -20 deg around X)
-  constexpr float kAngle = -0.35f;  // ~20 degrees
+  // Default slightly elevated view (rotate +20 deg around X = tilt top away)
+  constexpr float kAngle = 0.35f;  // ~20 degrees
   float c = std::cos(kAngle);
   float s = std::sin(kAngle);
   // Rotation around X axis
