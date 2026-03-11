@@ -368,6 +368,23 @@ void RenderLeftPanel(float window_height) {
 
             LUMICE_CrystalMesh mesh{};
             if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) == LUMICE_OK) {
+              // Transform from Core coords (Z-up) to screen coords (Y-up):
+              // (x, y, z)_screen = (x, z, -y)_core
+              for (int vi = 0; vi < mesh.vertex_count; vi++) {
+                float y = mesh.vertices[vi * 3 + 1];
+                float z = mesh.vertices[vi * 3 + 2];
+                mesh.vertices[vi * 3 + 1] = z;
+                mesh.vertices[vi * 3 + 2] = -y;
+              }
+              for (int ei = 0; ei < mesh.edge_count; ei++) {
+                for (int side = 0; side < 2; side++) {
+                  float* n = &mesh.edge_face_normals[ei * 6 + side * 3];
+                  float ny = n[1];
+                  float nz = n[2];
+                  n[1] = nz;
+                  n[2] = -ny;
+                }
+              }
               g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count,
                                             mesh.triangles, mesh.triangle_count, mesh.edge_face_normals);
               g_crystal_mesh_id = cr.id;
