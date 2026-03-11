@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "gui/crystal_renderer.hpp"
 #include "gui/file_io.hpp"
@@ -32,7 +33,7 @@ float g_crystal_rotation[16] = {
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 };
 float g_crystal_zoom = 2.5f;
-int g_crystal_style = 1;  // Default: Hidden Line (index into kCrystalStyleNames)
+int g_crystal_style = 1;      // Default: Hidden Line (index into kCrystalStyleNames)
 int g_crystal_mesh_id = -1;   // Crystal ID of cached mesh
 int g_crystal_mesh_hash = 0;  // Hash of crystal params for change detection
 
@@ -152,8 +153,7 @@ void DoSave() {
       return;
     }
   }
-  auto json_str = lumice::gui::SerializeToJson(g_state);
-  if (lumice::gui::WriteStringToFile(g_state.current_file_path, json_str)) {
+  if (lumice::gui::SaveLmcFile(g_state.current_file_path, g_state, g_preview, g_state.save_texture)) {
     g_state.dirty = false;
   }
 }
@@ -162,8 +162,7 @@ void DoSaveAs() {
   auto path = lumice::gui::ShowSaveDialog();
   if (!path.empty()) {
     g_state.current_file_path = path;
-    auto json_str = lumice::gui::SerializeToJson(g_state);
-    if (lumice::gui::WriteStringToFile(path, json_str)) {
+    if (lumice::gui::SaveLmcFile(path, g_state, g_preview, g_state.save_texture)) {
       g_state.dirty = false;
     }
   }
@@ -172,11 +171,17 @@ void DoSaveAs() {
 void DoOpen() {
   auto path = lumice::gui::ShowOpenDialog();
   if (!path.empty()) {
-    std::string content;
-    if (lumice::gui::ReadFileToString(path, content)) {
-      if (lumice::gui::DeserializeFromJson(content, g_state)) {
-        g_state.current_file_path = path;
-        g_state.dirty = false;
+    std::vector<unsigned char> tex_data;
+    int tex_w = 0;
+    int tex_h = 0;
+    if (lumice::gui::LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
+      g_state.current_file_path = path;
+      g_state.dirty = false;
+      if (!tex_data.empty()) {
+        g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
+        g_state.sim_state = SimState::kDone;
+      } else {
+        g_state.sim_state = SimState::kIdle;
       }
     }
   }
@@ -189,7 +194,7 @@ void DoNew() {
 void DoRun() {
   if (!g_server)
     return;
-  auto json_str = lumice::gui::SerializeToJson(g_state);
+  auto json_str = lumice::gui::SerializeCoreConfig(g_state);
   fprintf(stderr, "[GUI] CommitConfig JSON:\n%s\n", json_str.c_str());
   g_state.last_committed_json = json_str;
   auto err = LUMICE_CommitConfig(g_server, json_str.c_str());
