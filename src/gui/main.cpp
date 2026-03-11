@@ -85,9 +85,10 @@ void ApplyTrackballRotation(float dx, float dy) {
   if (angle < 1e-6f)
     return;
 
-  // Rotation axis is perpendicular to drag direction (in screen space).
-  // Negate so drag-right rotates crystal right, drag-down tilts top away.
-  float ax = -dy / (angle / 0.01f);
+  // Rotation axis perpendicular to drag: "grab and move" model.
+  // Drag right (dx>0) → axis +Y (up) → crystal turns right.
+  // Drag down (dy>0) → axis +X (right) → crystal top comes toward viewer.
+  float ax = dy / (angle / 0.01f);
   float ay = dx / (angle / 0.01f);
   float az = 0.0f;
   float len = std::sqrt(ax * ax + ay * ay + az * az);
