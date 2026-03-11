@@ -852,24 +852,5 @@ std::string ShowSaveDialog() {
 }
 
 
-// ========== File I/O Utilities ==========
-
-bool ReadFileToString(const std::string& path, std::string& out) {
-  std::ifstream ifs(path);
-  if (!ifs.is_open())
-    return false;
-  std::ostringstream oss;
-  oss << ifs.rdbuf();
-  out = oss.str();
-  return true;
-}
-
-bool WriteStringToFile(const std::string& path, const std::string& content) {
-  std::ofstream ofs(path);
-  if (!ofs.is_open())
-    return false;
-  ofs << content;
-  return ofs.good();
-}
 
 }  // namespace lumice::gui

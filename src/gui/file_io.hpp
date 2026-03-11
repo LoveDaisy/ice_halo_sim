@@ -32,11 +32,6 @@ bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned 
 std::string ShowOpenDialog();
 std::string ShowSaveDialog();
 
-// Read entire file to string
-bool ReadFileToString(const std::string& path, std::string& out);
-
-// Write string to file
-bool WriteStringToFile(const std::string& path, const std::string& content);
 
 }  // namespace lumice::gui
 
