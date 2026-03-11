@@ -1,29 +1,44 @@
 #include "gui/file_io.hpp"
 
 #include <nfd.h>
+#include <stb_image.h>
+#include <stb_image_write.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <vector>
 
 #include "gui/gui_state.hpp"
+#include "gui/preview_renderer.hpp"
 
 namespace lumice::gui {
 
 using json = nlohmann::json;
 
-// ========== Serialization (GuiState → JSON) ==========
+// Lens type JSON names (shared by Core config and GuiState JSON)
+static const char* kLensTypeJsonNames[] = { "linear",
+                                            "fisheye_equal_area",
+                                            "fisheye_equidistant",
+                                            "fisheye_stereographic",
+                                            "dual_fisheye_equal_area",
+                                            "dual_fisheye_equidistant",
+                                            "dual_fisheye_stereographic",
+                                            "rectangular" };
+
+static const char* kVisibleJsonNames[] = { "upper", "lower", "full" };
+
+
+// ========== Shared helpers ==========
 
 static json SerializeAxisDist(const AxisDist& a) {
   json j;
-  if (a.type == AxisDistType::kGauss) {
-    j["type"] = "gauss";
-  } else {
-    j["type"] = "uniform";
-  }
+  j["type"] = (a.type == AxisDistType::kGauss) ? "gauss" : "uniform";
   j["mean"] = a.mean;
   j["std"] = a.std;
   return j;
@@ -52,13 +67,23 @@ static json SerializeCrystal(const CrystalConfig& c) {
   return j;
 }
 
-static json SerializeFilter(const FilterConfig& f) {
+static json SerializeFilterForGui(const FilterConfig& f) {
+  json j;
+  j["id"] = f.id;
+  j["action"] = f.action == 0 ? "filter_in" : "filter_out";
+  j["raypath_text"] = f.raypath_text;
+  j["sym_p"] = f.sym_p;
+  j["sym_b"] = f.sym_b;
+  j["sym_d"] = f.sym_d;
+  return j;
+}
+
+static json SerializeFilterForCore(const FilterConfig& f) {
   json j;
   j["id"] = f.id;
   j["type"] = "raypath";
   j["action"] = f.action == 0 ? "filter_in" : "filter_out";
 
-  // Parse raypath text to int array
   std::vector<int> raypath;
   std::istringstream iss(f.raypath_text);
   std::string token;
@@ -85,99 +110,9 @@ static json SerializeFilter(const FilterConfig& f) {
   return j;
 }
 
-std::string SerializeToJson(const GuiState& state) {
-  json root;
-
-  // Crystals
-  root["crystal"] = json::array();
-  for (auto& c : state.crystals) {
-    root["crystal"].push_back(SerializeCrystal(c));
-  }
-
-  // Filters
-  root["filter"] = json::array();
-  for (auto& f : state.filters) {
-    root["filter"].push_back(SerializeFilter(f));
-  }
-
-  // Scene
-  json scene;
-  scene["light_source"]["type"] = "sun";
-  scene["light_source"]["altitude"] = state.sun.altitude;
-  scene["light_source"]["azimuth"] = state.sun.azimuth;
-  scene["light_source"]["diameter"] = state.sun.diameter;
-  if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
-    scene["light_source"]["spectrum"] = kSpectrumNames[state.sun.spectrum_index];
-  } else {
-    scene["light_source"]["spectrum"] = "D65";
-  }
-
-  if (state.sim.infinite) {
-    scene["ray_num"] = "infinite";
-  } else {
-    auto ray_num = static_cast<size_t>(state.sim.ray_num_millions * 1e6f);
-    scene["ray_num"] = ray_num;
-  }
-  scene["max_hits"] = state.sim.max_hits;
-
-  scene["scattering"] = json::array();
-  for (auto& layer : state.scattering) {
-    json jl;
-    jl["prob"] = layer.probability;
-    jl["entries"] = json::array();
-    for (auto& entry : layer.entries) {
-      json je;
-      je["crystal"] = entry.crystal_id >= 0 ? entry.crystal_id : 1;
-      je["proportion"] = entry.proportion;
-      if (entry.filter_id >= 0) {
-        je["filter"] = entry.filter_id;
-      }
-      jl["entries"].push_back(je);
-    }
-    scene["scattering"].push_back(jl);
-  }
-  root["scene"] = scene;
-
-  // Render — Core always produces a full equirectangular texture.
-  // Lens type, FOV, view rotation, and visible are frontend-only (shader) parameters.
-  root["render"] = json::array();
-  for (auto& r : state.renderers) {
-    json jr;
-    jr["id"] = r.id;
-
-    // Always rectangular (equirectangular) for Core
-    jr["lens"]["type"] = "rectangular";
-    jr["lens"]["fov"] = 180.0f;  // ignored by rectangular but required by schema
-
-    int res = kSimResolutions[r.sim_resolution_index];
-    jr["resolution"] = { res * 2, res };  // equirectangular 2:1
-
-    // No view rotation — Core renders the full sky
-    jr["view"]["elevation"] = 0.0f;
-    jr["view"]["azimuth"] = 0.0f;
-    jr["view"]["roll"] = 0.0f;
-
-    // Always full visible — shader handles hemisphere filtering
-    jr["visible"] = "full";
-    jr["background"] = { 0.0f, 0.0f, 0.0f };
-    // Omit ray_color so Core uses true color (spectral rendering).
-    // Core treats ray_color[0] < 0 as true color; default is [-1,-1,-1].
-    jr["opacity"] = r.opacity;
-    jr["intensity_factor"] = std::pow(2.0f, r.exposure_offset);
-
-    root["render"].push_back(jr);
-  }
-
-  return root.dump(2);
-}
-
-
-// ========== Deserialization (JSON → GuiState) ==========
-
 static AxisDist ParseAxisDist(const json& j) {
   AxisDist a;
   if (j.is_number()) {
-    // Scalar means fixed value (Gauss with std=0)
     a.type = AxisDistType::kGauss;
     a.mean = j.get<float>();
     a.std = 0.0f;
@@ -235,32 +170,132 @@ static CrystalConfig ParseCrystal(const json& j) {
   return c;
 }
 
-static FilterConfig ParseFilter(const json& j) {
-  FilterConfig f;
-  f.id = j.value("id", 0);
+static int LensTypeFromString(const std::string& s) {
+  for (int i = 0; i < kLensTypeCount; i++) {
+    if (s == kLensTypeJsonNames[i])
+      return i;
+  }
+  return 0;  // default: linear
+}
 
-  auto action_str = j.value("action", "filter_in");
-  f.action = (action_str == "filter_out") ? 1 : 0;
+static int VisibleFromString(const std::string& s) {
+  for (int i = 0; i < kVisibleCount; i++) {
+    if (s == kVisibleJsonNames[i])
+      return i;
+  }
+  return 2;  // default: full
+}
 
-  // Raypath
-  if (j.contains("raypath") && j["raypath"].is_array()) {
-    std::string text;
-    for (size_t i = 0; i < j["raypath"].size(); i++) {
-      if (i > 0)
-        text += ",";
-      text += std::to_string(j["raypath"][i].get<int>());
-    }
-    f.raypath_text = text;
+static int SpectrumFromString(const std::string& s) {
+  for (int i = 0; i < kSpectrumCount; i++) {
+    if (s == kSpectrumNames[i])
+      return i;
+  }
+  return 2;  // default: D65
+}
+
+static int SimResolutionIndexFromValue(int value) {
+  for (int i = 0; i < kSimResolutionCount; i++) {
+    if (kSimResolutions[i] == value)
+      return i;
+  }
+  return 1;  // default: 1024
+}
+
+// Find index in a vector by ID, returns fallback if not found
+template <typename T>
+static int FindIndexById(const std::vector<T>& vec, int id, int fallback) {
+  for (size_t i = 0; i < vec.size(); i++) {
+    if (vec[i].id == id)
+      return static_cast<int>(i);
+  }
+  return fallback;
+}
+
+
+// ========== Core Config Serialization (for LUMICE_CommitConfig) ==========
+
+std::string SerializeCoreConfig(const GuiState& state) {
+  json root;
+
+  // Crystals
+  root["crystal"] = json::array();
+  for (auto& c : state.crystals) {
+    root["crystal"].push_back(SerializeCrystal(c));
   }
 
-  // Symmetry
-  auto sym = j.value("symmetry", "");
-  f.sym_p = (sym.find('P') != std::string::npos);
-  f.sym_b = (sym.find('B') != std::string::npos);
-  f.sym_d = (sym.find('D') != std::string::npos);
+  // Filters
+  root["filter"] = json::array();
+  for (auto& f : state.filters) {
+    root["filter"].push_back(SerializeFilterForCore(f));
+  }
 
-  return f;
+  // Scene
+  json scene;
+  scene["light_source"]["type"] = "sun";
+  scene["light_source"]["altitude"] = state.sun.altitude;
+  scene["light_source"]["azimuth"] = state.sun.azimuth;
+  scene["light_source"]["diameter"] = state.sun.diameter;
+  if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
+    scene["light_source"]["spectrum"] = kSpectrumNames[state.sun.spectrum_index];
+  } else {
+    scene["light_source"]["spectrum"] = "D65";
+  }
+
+  if (state.sim.infinite) {
+    scene["ray_num"] = "infinite";
+  } else {
+    auto ray_num = static_cast<size_t>(state.sim.ray_num_millions * 1e6f);
+    scene["ray_num"] = ray_num;
+  }
+  scene["max_hits"] = state.sim.max_hits;
+
+  scene["scattering"] = json::array();
+  for (auto& layer : state.scattering) {
+    json jl;
+    jl["prob"] = layer.probability;
+    jl["entries"] = json::array();
+    for (auto& entry : layer.entries) {
+      json je;
+      je["crystal"] = entry.crystal_id >= 0 ? entry.crystal_id : 1;
+      je["proportion"] = entry.proportion;
+      if (entry.filter_id >= 0) {
+        je["filter"] = entry.filter_id;
+      }
+      jl["entries"].push_back(je);
+    }
+    scene["scattering"].push_back(jl);
+  }
+  root["scene"] = scene;
+
+  // Render — Core always produces a full equirectangular texture.
+  root["render"] = json::array();
+  for (auto& r : state.renderers) {
+    json jr;
+    jr["id"] = r.id;
+    jr["lens"]["type"] = "rectangular";
+    jr["lens"]["fov"] = 180.0f;
+
+    int res = kSimResolutions[r.sim_resolution_index];
+    jr["resolution"] = { res * 2, res };
+
+    jr["view"]["elevation"] = 0.0f;
+    jr["view"]["azimuth"] = 0.0f;
+    jr["view"]["roll"] = 0.0f;
+
+    jr["visible"] = "full";
+    jr["background"] = { 0.0f, 0.0f, 0.0f };
+    jr["opacity"] = r.opacity;
+    jr["intensity_factor"] = std::pow(2.0f, r.exposure_offset);
+
+    root["render"].push_back(jr);
+  }
+
+  return root.dump(2);
 }
+
+
+// ========== Core JSON Deserialization (for DoRevert) ==========
 
 bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
   json root;
@@ -292,8 +327,24 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     for (auto& jf : root["filter"]) {
       auto type_str = jf.value("type", "");
       if (type_str != "raypath")
-        continue;  // MVP: only raypath
-      auto f = ParseFilter(jf);
+        continue;
+      FilterConfig f;
+      f.id = jf.value("id", 0);
+      auto action_str = jf.value("action", "filter_in");
+      f.action = (action_str == "filter_out") ? 1 : 0;
+      if (jf.contains("raypath") && jf["raypath"].is_array()) {
+        std::string text;
+        for (size_t i = 0; i < jf["raypath"].size(); i++) {
+          if (i > 0)
+            text += ",";
+          text += std::to_string(jf["raypath"][i].get<int>());
+        }
+        f.raypath_text = text;
+      }
+      auto sym = jf.value("symmetry", "");
+      f.sym_p = (sym.find('P') != std::string::npos);
+      f.sym_b = (sym.find('B') != std::string::npos);
+      f.sym_d = (sym.find('D') != std::string::npos);
       max_id = std::max(max_id, f.id);
       state.filters.push_back(f);
     }
@@ -307,25 +358,16 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
   if (root.contains("scene")) {
     auto& js = root["scene"];
 
-    // Light source
     if (js.contains("light_source")) {
       auto& jl = js["light_source"];
       state.sun.altitude = jl.value("altitude", 20.0f);
       state.sun.azimuth = jl.value("azimuth", 0.0f);
       state.sun.diameter = jl.value("diameter", 0.5f);
-
       if (jl.contains("spectrum") && jl["spectrum"].is_string()) {
-        auto sp = jl["spectrum"].get<std::string>();
-        for (int i = 0; i < kSpectrumCount; i++) {
-          if (sp == kSpectrumNames[i]) {
-            state.sun.spectrum_index = i;
-            break;
-          }
-        }
+        state.sun.spectrum_index = SpectrumFromString(jl["spectrum"].get<std::string>());
       }
     }
 
-    // Simulation
     if (js.contains("ray_num")) {
       if (js["ray_num"].is_string() && js["ray_num"].get<std::string>() == "infinite") {
         state.sim.infinite = true;
@@ -335,7 +377,6 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     }
     state.sim.max_hits = js.value("max_hits", 8);
 
-    // Scattering
     if (js.contains("scattering") && js["scattering"].is_array()) {
       for (auto& jlayer : js["scattering"]) {
         ScatterLayer layer;
@@ -356,14 +397,6 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
 
   // Render
   max_id = 0;
-  static const char* kLensTypeJsonNames[] = { "linear",
-                                              "fisheye_equal_area",
-                                              "fisheye_equidistant",
-                                              "fisheye_stereographic",
-                                              "dual_fisheye_equal_area",
-                                              "dual_fisheye_equidistant",
-                                              "dual_fisheye_stereographic",
-                                              "rectangular" };
   if (root.contains("render") && root["render"].is_array()) {
     for (auto& jr : root["render"]) {
       RenderConfig r;
@@ -371,19 +404,12 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       max_id = std::max(max_id, r.id);
 
       if (jr.contains("lens")) {
-        auto lens_str = jr["lens"].value("type", "linear");
-        for (int i = 0; i < kLensTypeCount; i++) {
-          if (lens_str == kLensTypeJsonNames[i]) {
-            r.lens_type = i;
-            break;
-          }
-        }
+        r.lens_type = LensTypeFromString(jr["lens"].value("type", "linear"));
         r.fov = jr["lens"].value("fov", 90.0f);
       }
 
       if (jr.contains("resolution") && jr["resolution"].is_array() && jr["resolution"].size() == 2) {
         int h = jr["resolution"][1].get<int>();
-        // Find closest sim_resolution_index
         for (int i = 0; i < kSimResolutionCount; i++) {
           if (kSimResolutions[i] >= h) {
             r.sim_resolution_index = i;
@@ -398,14 +424,7 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
         r.roll = jr["view"].value("roll", 0.0f);
       }
 
-      auto vis_str = jr.value("visible", "upper");
-      static const char* kVisibleJsonNames[] = { "upper", "lower", "full" };
-      for (int i = 0; i < kVisibleCount; i++) {
-        if (vis_str == kVisibleJsonNames[i]) {
-          r.visible = i;
-          break;
-        }
-      }
+      r.visible = VisibleFromString(jr.value("visible", "upper"));
 
       if (jr.contains("background") && jr["background"].is_array() && jr["background"].size() == 3) {
         for (int i = 0; i < 3; i++)
@@ -431,12 +450,383 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
 }
 
 
-// ========== File I/O ==========
+// ========== Full GuiState JSON Serialization (for .lmc file) ==========
+
+std::string SerializeGuiStateJson(const GuiState& state) {
+  json root;
+
+  // Crystals
+  root["crystals"] = json::array();
+  for (auto& c : state.crystals) {
+    root["crystals"].push_back(SerializeCrystal(c));
+  }
+
+  // Filters
+  root["filters"] = json::array();
+  for (auto& f : state.filters) {
+    root["filters"].push_back(SerializeFilterForGui(f));
+  }
+
+  // Sun
+  json sun;
+  sun["altitude"] = state.sun.altitude;
+  sun["azimuth"] = state.sun.azimuth;
+  sun["diameter"] = state.sun.diameter;
+  if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
+    sun["spectrum"] = kSpectrumNames[state.sun.spectrum_index];
+  } else {
+    sun["spectrum"] = "D65";
+  }
+  root["sun"] = sun;
+
+  // Sim
+  json sim;
+  sim["ray_num_millions"] = state.sim.ray_num_millions;
+  sim["max_hits"] = state.sim.max_hits;
+  sim["infinite"] = state.sim.infinite;
+  root["sim"] = sim;
+
+  // Scattering
+  root["scattering"] = json::array();
+  for (auto& layer : state.scattering) {
+    json jl;
+    jl["prob"] = layer.probability;
+    jl["entries"] = json::array();
+    for (auto& entry : layer.entries) {
+      json je;
+      je["crystal_id"] = entry.crystal_id;
+      je["proportion"] = entry.proportion;
+      je["filter_id"] = entry.filter_id;
+      jl["entries"].push_back(je);
+    }
+    root["scattering"].push_back(jl);
+  }
+
+  // Renderers
+  root["renderers"] = json::array();
+  for (auto& r : state.renderers) {
+    json jr;
+    jr["id"] = r.id;
+    jr["lens_type"] = kLensTypeJsonNames[r.lens_type];
+    jr["fov"] = r.fov;
+    jr["elevation"] = r.elevation;
+    jr["azimuth"] = r.azimuth;
+    jr["roll"] = r.roll;
+    jr["sim_resolution"] = kSimResolutions[r.sim_resolution_index];
+    jr["visible"] = kVisibleJsonNames[r.visible];
+    jr["background"] = { r.background[0], r.background[1], r.background[2] };
+    jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
+    jr["opacity"] = r.opacity;
+    jr["exposure_offset"] = r.exposure_offset;
+    root["renderers"].push_back(jr);
+  }
+
+  // Selected items (by ID, not index)
+  auto id_or_neg1 = [](const auto& vec, int idx) -> int {
+    if (idx >= 0 && idx < static_cast<int>(vec.size()))
+      return vec[idx].id;
+    return -1;
+  };
+  root["selected_crystal_id"] = id_or_neg1(state.crystals, state.selected_crystal);
+  root["selected_renderer_id"] = id_or_neg1(state.renderers, state.selected_renderer);
+  root["selected_filter_id"] = id_or_neg1(state.filters, state.selected_filter);
+
+  // ID counters
+  root["next_crystal_id"] = state.next_crystal_id;
+  root["next_renderer_id"] = state.next_renderer_id;
+  root["next_filter_id"] = state.next_filter_id;
+
+  return root.dump(2);
+}
+
+
+// ========== Full GuiState JSON Deserialization ==========
+
+bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
+  json root;
+  try {
+    root = json::parse(json_str);
+  } catch (...) {
+    return false;
+  }
+
+  state = GuiState{};
+
+  // Crystals
+  if (root.contains("crystals") && root["crystals"].is_array()) {
+    for (auto& jc : root["crystals"]) {
+      state.crystals.push_back(ParseCrystal(jc));
+    }
+  }
+
+  // Filters
+  if (root.contains("filters") && root["filters"].is_array()) {
+    for (auto& jf : root["filters"]) {
+      FilterConfig f;
+      f.id = jf.value("id", 0);
+      auto action_str = jf.value("action", "filter_in");
+      f.action = (action_str == "filter_out") ? 1 : 0;
+      f.raypath_text = jf.value("raypath_text", std::string{});
+      f.sym_p = jf.value("sym_p", true);
+      f.sym_b = jf.value("sym_b", true);
+      f.sym_d = jf.value("sym_d", true);
+      state.filters.push_back(f);
+    }
+  }
+
+  // Sun
+  if (root.contains("sun")) {
+    auto& js = root["sun"];
+    state.sun.altitude = js.value("altitude", 20.0f);
+    state.sun.azimuth = js.value("azimuth", 0.0f);
+    state.sun.diameter = js.value("diameter", 0.5f);
+    state.sun.spectrum_index = SpectrumFromString(js.value("spectrum", "D65"));
+  }
+
+  // Sim
+  if (root.contains("sim")) {
+    auto& js = root["sim"];
+    state.sim.ray_num_millions = js.value("ray_num_millions", 1.0f);
+    state.sim.max_hits = js.value("max_hits", 8);
+    state.sim.infinite = js.value("infinite", false);
+  }
+
+  // Scattering
+  if (root.contains("scattering") && root["scattering"].is_array()) {
+    for (auto& jl : root["scattering"]) {
+      ScatterLayer layer;
+      layer.probability = jl.value("prob", 0.0f);
+      if (jl.contains("entries") && jl["entries"].is_array()) {
+        for (auto& je : jl["entries"]) {
+          ScatterEntry entry;
+          entry.crystal_id = je.value("crystal_id", -1);
+          entry.proportion = je.value("proportion", 100.0f);
+          entry.filter_id = je.value("filter_id", -1);
+          layer.entries.push_back(entry);
+        }
+      }
+      state.scattering.push_back(layer);
+    }
+  }
+
+  // Renderers
+  if (root.contains("renderers") && root["renderers"].is_array()) {
+    for (auto& jr : root["renderers"]) {
+      RenderConfig r;
+      r.id = jr.value("id", 0);
+      r.lens_type = LensTypeFromString(jr.value("lens_type", "linear"));
+      r.fov = jr.value("fov", 90.0f);
+      r.elevation = jr.value("elevation", 0.0f);
+      r.azimuth = jr.value("azimuth", 0.0f);
+      r.roll = jr.value("roll", 0.0f);
+      r.sim_resolution_index = SimResolutionIndexFromValue(jr.value("sim_resolution", 1024));
+      r.visible = VisibleFromString(jr.value("visible", "full"));
+      if (jr.contains("background") && jr["background"].is_array() && jr["background"].size() == 3) {
+        for (int i = 0; i < 3; i++)
+          r.background[i] = jr["background"][i].get<float>();
+      }
+      if (jr.contains("ray_color") && jr["ray_color"].is_array() && jr["ray_color"].size() == 3) {
+        for (int i = 0; i < 3; i++)
+          r.ray_color[i] = jr["ray_color"][i].get<float>();
+      }
+      r.opacity = jr.value("opacity", 1.0f);
+      r.exposure_offset = jr.value("exposure_offset", 0.0f);
+      state.renderers.push_back(r);
+    }
+  }
+
+  // ID counters
+  state.next_crystal_id = root.value("next_crystal_id", 1);
+  state.next_renderer_id = root.value("next_renderer_id", 1);
+  state.next_filter_id = root.value("next_filter_id", 1);
+
+  // Selected items (by ID → find index)
+  int sel_crystal_id = root.value("selected_crystal_id", -1);
+  int sel_renderer_id = root.value("selected_renderer_id", -1);
+  int sel_filter_id = root.value("selected_filter_id", -1);
+
+  state.selected_crystal = FindIndexById(state.crystals, sel_crystal_id, state.crystals.empty() ? -1 : 0);
+  state.selected_renderer = FindIndexById(state.renderers, sel_renderer_id, state.renderers.empty() ? -1 : 0);
+  state.selected_filter = FindIndexById(state.filters, sel_filter_id, state.filters.empty() ? -1 : 0);
+
+  return true;
+}
+
+
+// ========== .lmc Binary File I/O ==========
+
+// Header: 44 bytes, little-endian
+// magic[4] = "LMC\0"
+// version: uint32 = 1
+// flags: uint32 (bit 0: has_texture)
+// json_offset: uint64
+// json_size: uint64
+// tex_offset: uint64
+// tex_size: uint64
+
+static constexpr uint32_t kLmcMagic = 0x00434D4C;  // "LMC\0" as little-endian uint32
+static constexpr uint32_t kLmcVersion = 1;
+static constexpr uint32_t kLmcHeaderSize = 44;
+static constexpr uint32_t kLmcFlagHasTexture = 0x1;
+
+static void WriteU32(std::ofstream& out, uint32_t val) {
+  out.write(reinterpret_cast<const char*>(&val), sizeof(val));
+}
+
+static void WriteU64(std::ofstream& out, uint64_t val) {
+  out.write(reinterpret_cast<const char*>(&val), sizeof(val));
+}
+
+static bool ReadU32(std::ifstream& in, uint32_t& val) {
+  return static_cast<bool>(in.read(reinterpret_cast<char*>(&val), sizeof(val)));
+}
+
+static bool ReadU64(std::ifstream& in, uint64_t& val) {
+  return static_cast<bool>(in.read(reinterpret_cast<char*>(&val), sizeof(val)));
+}
+
+// stb_image_write callback: appends to std::vector<unsigned char>
+static void StbWriteCallback(void* context, void* data, int size) {
+  auto* buf = static_cast<std::vector<unsigned char>*>(context);
+  auto* bytes = static_cast<unsigned char*>(data);
+  buf->insert(buf->end(), bytes, bytes + size);
+}
+
+bool SaveLmcFile(const std::string& path, const GuiState& state, const PreviewRenderer& preview, bool save_texture) {
+  std::string json_payload = SerializeGuiStateJson(state);
+
+  // Encode texture to PNG in memory if requested
+  std::vector<unsigned char> png_data;
+  bool has_texture = false;
+  if (save_texture && preview.HasTexture() && preview.GetTextureData() != nullptr) {
+    int w = preview.GetTextureWidth();
+    int h = preview.GetTextureHeight();
+    int result = stbi_write_png_to_func(StbWriteCallback, &png_data, w, h, 3, preview.GetTextureData(), w * 3);
+    if (result != 0) {
+      has_texture = true;
+    }
+  }
+
+  std::ofstream out(path, std::ios::binary);
+  if (!out.is_open()) {
+    return false;
+  }
+
+  // Compute offsets
+  uint64_t json_offset = kLmcHeaderSize;
+  auto json_size = static_cast<uint64_t>(json_payload.size());
+  uint64_t tex_offset = has_texture ? json_offset + json_size : 0;
+  auto tex_size = static_cast<uint64_t>(png_data.size());
+
+  // Write header
+  uint32_t flags = has_texture ? kLmcFlagHasTexture : 0;
+  WriteU32(out, kLmcMagic);
+  WriteU32(out, kLmcVersion);
+  WriteU32(out, flags);
+  WriteU64(out, json_offset);
+  WriteU64(out, json_size);
+  WriteU64(out, tex_offset);
+  WriteU64(out, tex_size);
+
+  // Write JSON payload
+  out.write(json_payload.data(), static_cast<std::streamsize>(json_payload.size()));
+
+  // Write texture PNG
+  if (has_texture) {
+    out.write(reinterpret_cast<const char*>(png_data.data()), static_cast<std::streamsize>(png_data.size()));
+  }
+
+  return out.good();
+}
+
+bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
+                 int& tex_h) {
+  tex_data.clear();
+  tex_w = 0;
+  tex_h = 0;
+
+  std::ifstream in(path, std::ios::binary);
+  if (!in.is_open()) {
+    fprintf(stderr, "[LMC] Cannot open file: %s\n", path.c_str());
+    return false;
+  }
+
+  // Read header
+  uint32_t magic = 0;
+  uint32_t version = 0;
+  uint32_t flags = 0;
+  uint64_t json_offset = 0;
+  uint64_t json_size = 0;
+  uint64_t tex_offset = 0;
+  uint64_t tex_size = 0;
+
+  if (!ReadU32(in, magic) || !ReadU32(in, version) || !ReadU32(in, flags) || !ReadU64(in, json_offset) ||
+      !ReadU64(in, json_size) || !ReadU64(in, tex_offset) || !ReadU64(in, tex_size)) {
+    fprintf(stderr, "[LMC] Failed to read header\n");
+    return false;
+  }
+
+  if (magic != kLmcMagic) {
+    fprintf(stderr, "[LMC] Invalid magic: 0x%08x\n", magic);
+    return false;
+  }
+
+  if (version != kLmcVersion) {
+    fprintf(stderr, "[LMC] Unsupported version: %u\n", version);
+    return false;
+  }
+
+  // Read JSON
+  std::string json_payload(json_size, '\0');
+  in.seekg(static_cast<std::streamoff>(json_offset));
+  in.read(json_payload.data(), static_cast<std::streamsize>(json_size));
+  if (!in) {
+    fprintf(stderr, "[LMC] Failed to read JSON section\n");
+    return false;
+  }
+
+  if (!DeserializeGuiStateJson(json_payload, state)) {
+    fprintf(stderr, "[LMC] Failed to parse JSON\n");
+    return false;
+  }
+
+  // Read texture if present
+  bool flag_has_tex = (flags & kLmcFlagHasTexture) != 0;
+  if (flag_has_tex) {
+    if (tex_size == 0) {
+      fprintf(stderr, "[LMC] Texture flag set but size is 0\n");
+      return false;
+    }
+    std::vector<unsigned char> png_buf(tex_size);
+    in.seekg(static_cast<std::streamoff>(tex_offset));
+    in.read(reinterpret_cast<char*>(png_buf.data()), static_cast<std::streamsize>(tex_size));
+    if (!in) {
+      fprintf(stderr, "[LMC] Failed to read texture section\n");
+      return false;
+    }
+
+    int channels = 0;
+    unsigned char* decoded =
+        stbi_load_from_memory(png_buf.data(), static_cast<int>(png_buf.size()), &tex_w, &tex_h, &channels, 3);
+    if (!decoded) {
+      fprintf(stderr, "[LMC] Failed to decode texture PNG\n");
+      return false;
+    }
+    size_t byte_count = static_cast<size_t>(tex_w) * tex_h * 3;
+    tex_data.assign(decoded, decoded + byte_count);
+    stbi_image_free(decoded);
+  }
+
+  return true;
+}
+
+
+// ========== File Dialogs ==========
 
 std::string ShowOpenDialog() {
   NFD_Init();
   nfdchar_t* out_path = nullptr;
-  nfdfilteritem_t filter_item[1] = { { "JSON", "json" } };
+  nfdfilteritem_t filter_item[1] = { { "Lumice", "lmc" } };
   nfdresult_t result = NFD_OpenDialog(&out_path, filter_item, 1, nullptr);
   std::string path;
   if (result == NFD_OKAY && out_path) {
@@ -450,8 +840,8 @@ std::string ShowOpenDialog() {
 std::string ShowSaveDialog() {
   NFD_Init();
   nfdchar_t* out_path = nullptr;
-  nfdfilteritem_t filter_item[1] = { { "JSON", "json" } };
-  nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "config.json");
+  nfdfilteritem_t filter_item[1] = { { "Lumice", "lmc" } };
+  nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "project.lmc");
   std::string path;
   if (result == NFD_OKAY && out_path) {
     path = out_path;
@@ -460,6 +850,9 @@ std::string ShowSaveDialog() {
   NFD_Quit();
   return path;
 }
+
+
+// ========== File I/O Utilities ==========
 
 bool ReadFileToString(const std::string& path, std::string& out) {
   std::ifstream ifs(path);
