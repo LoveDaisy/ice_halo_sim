@@ -178,7 +178,6 @@ inline GuiState InitDefaultState() {
   layer.probability = 0.0f;
   ScatterEntry entry;
   entry.crystal_id = c.id;
-  entry.proportion = 1.0f;
   layer.entries.push_back(entry);
   s.scattering.push_back(layer);
 
