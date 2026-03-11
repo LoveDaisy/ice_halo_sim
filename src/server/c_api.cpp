@@ -243,10 +243,15 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
   out->vertex_count = vtx_cnt;
   std::memcpy(out->vertices, mesh.GetVtxPtr(0), vtx_cnt * 3 * sizeof(float));
 
-  // Extract wireframe edges: only edges shared by triangles with different normals.
-  // Internal diagonal edges within a coplanar face are excluded.
+  // Fill triangles for surface rendering
   auto tri_cnt = mesh.GetTriangleCnt();
+  if (static_cast<int>(tri_cnt) > LUMICE_MAX_CRYSTAL_TRIANGLES) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
   const int* tri = mesh.GetTrianglePtr(0);
+  out->triangle_count = static_cast<int>(tri_cnt);
+  std::memcpy(out->triangles, tri, tri_cnt * 3 * sizeof(int));
+
   const float* vtx = mesh.GetVtxPtr(0);
 
   // Build edge → triangle list
@@ -279,11 +284,21 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
     }
   };
 
-  std::set<Edge> edge_set;
+  // Collect dihedral/boundary edges with their adjacent face normals
+  struct EdgeInfo {
+    Edge edge;
+    float n0[3];
+    float n1[3];
+  };
+  std::vector<EdgeInfo> edge_infos;
   for (const auto& [edge, tris] : edge_tris) {
     if (tris.size() == 1) {
-      // Boundary edge — always include
-      edge_set.insert(edge);
+      // Boundary edge — store same normal for both sides
+      EdgeInfo info;
+      info.edge = edge;
+      ComputeTriNormal(tris[0], info.n0);
+      std::memcpy(info.n1, info.n0, 3 * sizeof(float));
+      edge_infos.push_back(info);
     } else if (tris.size() >= 2) {
       // Include if adjacent triangles have different normals (dihedral edge)
       float n0[3], n1[3];
@@ -291,21 +306,25 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
       ComputeTriNormal(tris[1], n1);
       float dot = n0[0] * n1[0] + n0[1] * n1[1] + n0[2] * n1[2];
       if (dot < 1.0f - 1e-3f) {
-        edge_set.insert(edge);
+        EdgeInfo info;
+        info.edge = edge;
+        std::memcpy(info.n0, n0, 3 * sizeof(float));
+        std::memcpy(info.n1, n1, 3 * sizeof(float));
+        edge_infos.push_back(info);
       }
     }
   }
 
-  auto edge_cnt = static_cast<int>(edge_set.size());
+  auto edge_cnt = static_cast<int>(edge_infos.size());
   if (edge_cnt > LUMICE_MAX_CRYSTAL_EDGES) {
     return LUMICE_ERR_INVALID_VALUE;
   }
   out->edge_count = edge_cnt;
-  int idx = 0;
-  for (const auto& [a, b] : edge_set) {
-    out->edges[idx * 2 + 0] = a;
-    out->edges[idx * 2 + 1] = b;
-    idx++;
+  for (int i = 0; i < edge_cnt; i++) {
+    out->edges[i * 2 + 0] = edge_infos[i].edge.first;
+    out->edges[i * 2 + 1] = edge_infos[i].edge.second;
+    std::memcpy(&out->edge_face_normals[i * 6 + 0], edge_infos[i].n0, 3 * sizeof(float));
+    std::memcpy(&out->edge_face_normals[i * 6 + 3], edge_infos[i].n1, 3 * sizeof(float));
   }
 
   return LUMICE_OK;

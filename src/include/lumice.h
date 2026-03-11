@@ -100,12 +100,19 @@ void LUMICE_StopServer(LUMICE_Server* server);
 
 #define LUMICE_MAX_CRYSTAL_VERTICES 128
 #define LUMICE_MAX_CRYSTAL_EDGES 256
+#define LUMICE_MAX_CRYSTAL_TRIANGLES 128
 
 typedef struct LUMICE_CrystalMesh_ {
   float vertices[LUMICE_MAX_CRYSTAL_VERTICES * 3];  // [x0,y0,z0, x1,y1,z1, ...]
   int vertex_count;
   int edges[LUMICE_MAX_CRYSTAL_EDGES * 2];  // [v0,v1, v2,v3, ...] vertex index pairs
   int edge_count;
+  int triangles[LUMICE_MAX_CRYSTAL_TRIANGLES * 3];  // [v0,v1,v2, ...] for surface rendering
+  int triangle_count;
+  // Per-edge adjacent face normals for back-face culling.
+  // Edge i has two face normals: [i*6..i*6+2] and [i*6+3..i*6+5].
+  // Boundary edges store the same normal twice.
+  float edge_face_normals[LUMICE_MAX_CRYSTAL_EDGES * 6];
 } LUMICE_CrystalMesh;
 
 LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* server, const char* crystal_json, LUMICE_CrystalMesh* out);
