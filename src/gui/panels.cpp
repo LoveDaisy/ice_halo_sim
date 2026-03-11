@@ -349,20 +349,14 @@ void RenderRenderTab(GuiState& state) {
   state.selected_renderer = 0;
 
   auto& r = state.renderers[0];
-  ImGui::PushItemWidth(-100);
-
-  {
-    const char* res_labels[] = { "512", "1024", "2048", "4096" };
-    DIRTY_IF(ImGui::Combo("Sim Resolution", &r.sim_resolution_index, res_labels, kSimResolutionCount));
-  }
 
   if (ImGui::CollapsingHeader("Lens & View", ImGuiTreeNodeFlags_DefaultOpen)) {
-    // Lens type and view params are frontend-only (shader); don't mark dirty.
+    ImGui::PushItemWidth(-100);
     ImGui::Combo("Lens Type", &r.lens_type, kLensTypeNames, kLensTypeCount);
+    ImGui::PopItemWidth();
 
     bool full_sky = (r.lens_type >= 4);  // dual fisheye (4-6) and rectangular (7)
     if (full_sky) {
-      // Reset camera pose to defaults when in full-sky mode
       r.elevation = 0.0f;
       r.azimuth = 0.0f;
       r.roll = 0.0f;
@@ -375,16 +369,25 @@ void RenderRenderTab(GuiState& state) {
     if (full_sky) {
       ImGui::EndDisabled();
     }
-  }
 
-  if (ImGui::CollapsingHeader("Appearance", ImGuiTreeNodeFlags_DefaultOpen)) {
-    // Visible is frontend-only (shader hemisphere filtering); don't mark dirty.
+    ImGui::PushItemWidth(-100);
     ImGui::Combo("Visible", &r.visible, kVisibleNames, kVisibleCount);
-    DIRTY_IF(ImGui::SliderFloat("Opacity", &r.opacity, 0.0f, 1.0f, "%.2f"));
-    DIRTY_IF(ImGui::SliderFloat("Intensity", &r.intensity_factor, 0.1f, 10.0f, "%.1f"));
+    ImGui::SliderFloat("Opacity", &r.opacity, 0.0f, 1.0f, "%.2f");
+    ImGui::PopItemWidth();
   }
 
-  ImGui::PopItemWidth();
+  if (ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::PushItemWidth(-100);
+    const char* res_labels[] = { "512", "1024", "2048", "4096" };
+    DIRTY_IF(ImGui::Combo("Sim Resolution", &r.sim_resolution_index, res_labels, kSimResolutionCount));
+    DIRTY_IF(ImGui::SliderFloat("Intensity", &r.intensity_factor, 0.1f, 10.0f, "%.1f"));
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Changing these requires re-running the simulation");
+    }
+  }
 }
 
 
