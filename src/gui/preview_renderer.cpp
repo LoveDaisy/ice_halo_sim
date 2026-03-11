@@ -282,12 +282,17 @@ void PreviewRenderer::Destroy() {
   }
   tex_width_ = 0;
   tex_height_ = 0;
+  tex_data_.clear();
 }
 
 void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int height) {
   if (!texture_ || !data) {
     return;
   }
+
+  // Keep CPU-side copy for .lmc file save
+  size_t byte_count = static_cast<size_t>(width) * height * 3;
+  tex_data_.assign(data, data + byte_count);
 
   glBindTexture(GL_TEXTURE_2D, texture_);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);  // RGB data may not be 4-byte aligned

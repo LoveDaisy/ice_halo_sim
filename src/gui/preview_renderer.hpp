@@ -1,6 +1,8 @@
 #ifndef LUMICE_GUI_PREVIEW_RENDERER_HPP
 #define LUMICE_GUI_PREVIEW_RENDERER_HPP
 
+#include <vector>
+
 namespace lumice::gui {
 
 struct PreviewParams {
@@ -28,6 +30,11 @@ class PreviewRenderer {
 
   bool HasTexture() const { return tex_width_ > 0 && tex_height_ > 0; }
 
+  // CPU-side texture data access (for .lmc file save)
+  const unsigned char* GetTextureData() const { return tex_data_.empty() ? nullptr : tex_data_.data(); }
+  int GetTextureWidth() const { return tex_width_; }
+  int GetTextureHeight() const { return tex_height_; }
+
  private:
   unsigned int shader_program_ = 0;
   unsigned int vao_ = 0;
@@ -35,6 +42,7 @@ class PreviewRenderer {
   unsigned int texture_ = 0;
   int tex_width_ = 0;
   int tex_height_ = 0;
+  std::vector<unsigned char> tex_data_;  // CPU-side copy of texture (RGB uint8)
 };
 
 }  // namespace lumice::gui
