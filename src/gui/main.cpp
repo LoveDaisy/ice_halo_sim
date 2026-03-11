@@ -32,6 +32,7 @@ float g_crystal_rotation[16] = {
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 };
 float g_crystal_zoom = 2.5f;
+int g_crystal_style = 1;  // Default: Hidden Line (index into kCrystalStyleNames)
 int g_crystal_mesh_id = -1;   // Crystal ID of cached mesh
 int g_crystal_mesh_hash = 0;  // Hash of crystal params for change detection
 
@@ -55,8 +56,8 @@ int CrystalParamHash(const lumice::gui::CrystalConfig& c) {
 }
 
 void ResetCrystalView() {
-  // Default 45-degree top-down view (rotate -30 deg around X)
-  constexpr float kAngle = -0.52f;  // ~30 degrees
+  // Default slightly elevated view (rotate +20 deg around X = tilt top away)
+  constexpr float kAngle = 0.35f;  // ~20 degrees
   float c = std::cos(kAngle);
   float s = std::sin(kAngle);
   // Rotation around X axis
@@ -85,9 +86,11 @@ void ApplyTrackballRotation(float dx, float dy) {
   if (angle < 1e-6f)
     return;
 
-  // Rotation axis is perpendicular to drag direction (in screen space)
+  // Rotation axis perpendicular to drag: "grab and move" model.
+  // Drag right (dx>0) → axis +Y (up) → crystal turns right.
+  // Drag down (dy>0) → axis +X (right) → crystal top comes toward viewer.
   float ax = dy / (angle / 0.01f);
-  float ay = -dx / (angle / 0.01f);
+  float ay = dx / (angle / 0.01f);
   float az = 0.0f;
   float len = std::sqrt(ax * ax + ay * ay + az * az);
   if (len < 1e-6f)
@@ -187,12 +190,16 @@ void DoRun() {
   if (!g_server)
     return;
   auto json_str = lumice::gui::SerializeToJson(g_state);
+  fprintf(stderr, "[GUI] CommitConfig JSON:\n%s\n", json_str.c_str());
   g_state.last_committed_json = json_str;
   auto err = LUMICE_CommitConfig(g_server, json_str.c_str());
   if (err == LUMICE_OK) {
     g_state.sim_state = SimState::kSimulating;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
+    fprintf(stderr, "[GUI] Simulation started\n");
+  } else {
+    fprintf(stderr, "[GUI] CommitConfig FAILED with error code %d\n", err);
   }
 }
 
@@ -207,6 +214,17 @@ void DoRevert() {
   if (!g_state.last_committed_json.empty()) {
     lumice::gui::DeserializeFromJson(g_state.last_committed_json, g_state);
     g_state.sim_state = SimState::kDone;
+  }
+}
+
+void FetchRenderResults() {
+  if (!g_server || g_state.selected_renderer < 0)
+    return;
+  LUMICE_RenderResult renders[2]{};
+  LUMICE_GetRenderResults(g_server, renders, 1);
+  if (renders[0].img_buffer != nullptr) {
+    g_preview.UploadTexture(renders[0].img_buffer, renders[0].img_width, renders[0].img_height);
+    fprintf(stderr, "[GUI] Texture uploaded: %dx%d\n", renders[0].img_width, renders[0].img_height);
   }
 }
 
@@ -227,6 +245,7 @@ void PollServerState() {
   LUMICE_QueryServerState(g_server, &server_state);
   if (server_state == LUMICE_SERVER_IDLE) {
     g_state.sim_state = SimState::kDone;
+    fprintf(stderr, "[GUI] Simulation done\n");
   }
 
   // Get stats
@@ -238,13 +257,7 @@ void PollServerState() {
   }
 
   // Get render results and upload texture
-  if (g_state.selected_renderer >= 0) {
-    LUMICE_RenderResult renders[2]{};
-    LUMICE_GetRenderResults(g_server, renders, 1);
-    if (renders[0].img_buffer != nullptr) {
-      g_preview.UploadTexture(renders[0].img_buffer, renders[0].img_width, renders[0].img_height);
-    }
-  }
+  FetchRenderResults();
 }
 
 void CheckUnsavedAndDo(PendingAction action) {
@@ -355,18 +368,52 @@ void RenderLeftPanel(float window_height) {
 
             LUMICE_CrystalMesh mesh{};
             if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) == LUMICE_OK) {
-              g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count);
+              // Transform from Core coords (Z-up) to screen coords (Y-up):
+              // (x, y, z)_screen = (x, z, -y)_core
+              for (int vi = 0; vi < mesh.vertex_count; vi++) {
+                float y = mesh.vertices[vi * 3 + 1];
+                float z = mesh.vertices[vi * 3 + 2];
+                mesh.vertices[vi * 3 + 1] = z;
+                mesh.vertices[vi * 3 + 2] = -y;
+              }
+              for (int ei = 0; ei < mesh.edge_count; ei++) {
+                for (int side = 0; side < 2; side++) {
+                  float* n = &mesh.edge_face_normals[ei * 6 + side * 3];
+                  float ny = n[1];
+                  float nz = n[2];
+                  n[1] = nz;
+                  n[2] = -ny;
+                }
+              }
+              g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count,
+                                            mesh.triangles, mesh.triangle_count, mesh.edge_face_normals);
               g_crystal_mesh_id = cr.id;
               g_crystal_mesh_hash = hash;
             }
           }
 
           // Render to FBO
-          g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom);
+          auto crystal_style = static_cast<lumice::gui::CrystalStyle>(g_crystal_style);
+          g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
 
-          // Display FBO texture
-          float avail_w = ImGui::GetContentRegionAvail().x;
-          float preview_size = std::min(avail_w, 200.0f);
+          // Display FBO texture — square, centered, with matching background fill
+          ImVec2 avail = ImGui::GetContentRegionAvail();
+          float button_h = ImGui::GetFrameHeightWithSpacing();
+          float area_h = std::max(avail.y - button_h, 40.0f);
+          float preview_size = std::min(avail.x, area_h);
+
+          // Fill the entire available area with the same background as the FBO
+          ImVec2 area_start = ImGui::GetCursorScreenPos();
+          ImDrawList* draw_list = ImGui::GetWindowDrawList();
+          draw_list->AddRectFilled(area_start, ImVec2(area_start.x + avail.x, area_start.y + area_h),
+                                   IM_COL32(38, 38, 38, 255));  // Match FBO clear color (0.15)
+
+          // Center the image horizontally
+          float offset_x = (avail.x - preview_size) * 0.5f;
+          if (offset_x > 0.0f) {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset_x);
+          }
+
           auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
           ImVec2 uv0(0, 1);  // Flip Y for OpenGL
           ImVec2 uv1(1, 0);
@@ -384,6 +431,13 @@ void RenderLeftPanel(float window_height) {
             }
           }
 
+          // Advance cursor past the filled area, then draw controls
+          ImGui::SetCursorScreenPos(ImVec2(area_start.x, area_start.y + area_h));
+          ImGui::PushItemWidth(120.0f);
+          ImGui::Combo("##CrystalStyle", &g_crystal_style, lumice::gui::kCrystalStyleNames,
+                       lumice::gui::kCrystalStyleCount);
+          ImGui::PopItemWidth();
+          ImGui::SameLine();
           if (ImGui::SmallButton("Reset View")) {
             ResetCrystalView();
           }
@@ -494,25 +548,27 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.params.visible = rc.visible;
     std::copy(std::begin(rc.ray_color), std::end(rc.ray_color), std::begin(g_preview_vp.params.ray_color));
     std::copy(std::begin(rc.background), std::end(rc.background), std::begin(g_preview_vp.params.background));
-    g_preview_vp.params.intensity_factor = rc.intensity_factor;
+    g_preview_vp.params.intensity_factor = std::pow(2.0f, rc.exposure_offset);
 
-    // Mouse interaction: orbit with left drag, FOV with scroll
-    ImGuiIO& io = ImGui::GetIO();
-    ImVec2 mouse_pos = io.MousePos;
-    bool in_preview = mouse_pos.x >= panel_x && mouse_pos.x < panel_x + panel_width && mouse_pos.y >= kTopBarHeight &&
-                      mouse_pos.y < kTopBarHeight + panel_height;
+    // Mouse interaction: orbit with drag, FOV with scroll
+    // Disabled for full-sky lens types (dual fisheye, rectangular)
+    bool full_sky = (rc.lens_type >= 4);
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImGui::InvisibleButton("##preview_interact", avail);
 
-    if (in_preview && !ImGui::IsAnyItemActive()) {
-      // Left drag: orbit
-      if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+    if (!full_sky) {
+      bool is_hovered = ImGui::IsItemHovered();
+      bool is_active = ImGui::IsItemActive();
+
+      ImGuiIO& io = ImGui::GetIO();
+      if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         ImVec2 delta = io.MouseDelta;
         rc.azimuth -= delta.x * 0.3f;
         rc.elevation += delta.y * 0.3f;
         rc.elevation = std::max(-90.0f, std::min(90.0f, rc.elevation));
       }
 
-      // Scroll: FOV
-      if (io.MouseWheel != 0.0f) {
+      if (is_hovered && io.MouseWheel != 0.0f) {
         rc.fov -= io.MouseWheel * 5.0f;
         rc.fov = std::max(1.0f, std::min(360.0f, rc.fov));
       }

@@ -32,8 +32,8 @@ struct CrystalConfig {
   int upper_indices[3] = { 1, 0, 1 };
   int lower_indices[3] = { 1, 0, 1 };
 
-  // Axis distribution
-  AxisDist zenith{ AxisDistType::kGauss, 90.0f, 90.0f };
+  // Axis distribution (all default to uniform full rotation)
+  AxisDist zenith{ AxisDistType::kUniform, 0.0f, 360.0f };
   AxisDist azimuth{ AxisDistType::kUniform, 0.0f, 360.0f };
   AxisDist roll{ AxisDistType::kUniform, 0.0f, 360.0f };
 };
@@ -53,12 +53,12 @@ struct SimConfig {
 
 struct ScatterEntry {
   int crystal_id = -1;  // -1 = not selected
-  float proportion = 1.0f;
+  float proportion = 100.0f;
   int filter_id = -1;  // -1 = None
 };
 
 struct ScatterLayer {
-  float probability = 1.0f;
+  float probability = 0.0f;  // Probability of multi-scatter continuation (0 = single scatter)
   std::vector<ScatterEntry> entries;
 };
 
@@ -92,11 +92,11 @@ struct RenderConfig {
   float azimuth = 0.0f;
   float roll = 0.0f;
   int sim_resolution_index = 1;  // Index into kSimResolutions (default 1024)
-  int visible = 0;               // Index into kVisibleNames
+  int visible = 2;               // Index into kVisibleNames (0=upper, 1=lower, 2=full)
   float background[3] = { 0.0f, 0.0f, 0.0f };
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float opacity = 1.0f;
-  float intensity_factor = 1.0f;
+  float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
 };
 
 // Filter action
@@ -107,9 +107,9 @@ struct FilterConfig {
   int id = 0;
   int action = 0;            // 0=filter_in, 1=filter_out
   std::string raypath_text;  // Comma-separated int list, e.g. "3,1,5,7,4"
-  bool sym_p = false;
-  bool sym_b = false;
-  bool sym_d = false;
+  bool sym_p = true;
+  bool sym_b = true;
+  bool sym_d = true;
 };
 
 struct GuiState {
@@ -175,10 +175,9 @@ inline GuiState InitDefaultState() {
 
   // One default scattering layer with one entry
   ScatterLayer layer;
-  layer.probability = 1.0f;
+  layer.probability = 0.0f;
   ScatterEntry entry;
   entry.crystal_id = c.id;
-  entry.proportion = 1.0f;
   layer.entries.push_back(entry);
   s.scattering.push_back(layer);
 

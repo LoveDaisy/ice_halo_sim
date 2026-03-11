@@ -3,6 +3,7 @@
 #include <nfd.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -126,9 +127,7 @@ std::string SerializeToJson(const GuiState& state) {
     jl["entries"] = json::array();
     for (auto& entry : layer.entries) {
       json je;
-      if (entry.crystal_id >= 0) {
-        je["crystal"] = entry.crystal_id;
-      }
+      je["crystal"] = entry.crystal_id >= 0 ? entry.crystal_id : 1;
       je["proportion"] = entry.proportion;
       if (entry.filter_id >= 0) {
         je["filter"] = entry.filter_id;
@@ -139,36 +138,32 @@ std::string SerializeToJson(const GuiState& state) {
   }
   root["scene"] = scene;
 
-  // Render
+  // Render — Core always produces a full equirectangular texture.
+  // Lens type, FOV, view rotation, and visible are frontend-only (shader) parameters.
   root["render"] = json::array();
   for (auto& r : state.renderers) {
     json jr;
     jr["id"] = r.id;
 
-    static const char* kLensTypeJsonNames[] = { "linear",
-                                                "fisheye_equal_area",
-                                                "fisheye_equidistant",
-                                                "fisheye_stereographic",
-                                                "dual_fisheye_equal_area",
-                                                "dual_fisheye_equidistant",
-                                                "dual_fisheye_stereographic",
-                                                "rectangular" };
-    jr["lens"]["type"] = kLensTypeJsonNames[r.lens_type];
-    jr["lens"]["fov"] = r.fov;
+    // Always rectangular (equirectangular) for Core
+    jr["lens"]["type"] = "rectangular";
+    jr["lens"]["fov"] = 180.0f;  // ignored by rectangular but required by schema
 
     int res = kSimResolutions[r.sim_resolution_index];
     jr["resolution"] = { res * 2, res };  // equirectangular 2:1
 
-    jr["view"]["elevation"] = r.elevation;
-    jr["view"]["azimuth"] = r.azimuth;
-    jr["view"]["roll"] = r.roll;
+    // No view rotation — Core renders the full sky
+    jr["view"]["elevation"] = 0.0f;
+    jr["view"]["azimuth"] = 0.0f;
+    jr["view"]["roll"] = 0.0f;
 
-    static const char* kVisibleJsonNames[] = { "upper", "lower", "full" };
-    jr["visible"] = kVisibleJsonNames[r.visible];
-    jr["background"] = { r.background[0], r.background[1], r.background[2] };
-    jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
+    // Always full visible — shader handles hemisphere filtering
+    jr["visible"] = "full";
+    jr["background"] = { 0.0f, 0.0f, 0.0f };
+    // Omit ray_color so Core uses true color (spectral rendering).
+    // Core treats ray_color[0] < 0 as true color; default is [-1,-1,-1].
     jr["opacity"] = r.opacity;
-    jr["intensity_factor"] = r.intensity_factor;
+    jr["intensity_factor"] = std::pow(2.0f, r.exposure_offset);
 
     root["render"].push_back(jr);
   }
@@ -421,7 +416,8 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
           r.ray_color[i] = jr["ray_color"][i].get<float>();
       }
       r.opacity = jr.value("opacity", 1.0f);
-      r.intensity_factor = jr.value("intensity_factor", 1.0f);
+      float ifactor = jr.value("intensity_factor", 1.0f);
+      r.exposure_offset = std::log2(std::max(ifactor, 1e-6f));
 
       state.renderers.push_back(r);
     }
