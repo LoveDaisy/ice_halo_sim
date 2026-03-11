@@ -212,6 +212,10 @@ void RenderSceneTab(GuiState& state) {
         ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20);
         if (ImGui::SmallButton("X##layer")) {
           state.scattering.erase(state.scattering.begin() + li);
+          // If only one layer remains, force its probability to 0
+          if (state.scattering.size() == 1) {
+            state.scattering[0].probability = 0.0f;
+          }
           state.MarkDirty();
           ImGui::PopID();
           if (layer_open) {
@@ -222,20 +226,26 @@ void RenderSceneTab(GuiState& state) {
       }
 
       if (layer_open) {
+        // Probability — layer-level control, visually separated from entries
         bool single_layer = (state.scattering.size() == 1);
         if (single_layer) {
           layer.probability = 0.0f;
           ImGui::BeginDisabled();
           ImGui::SliderFloat("Probability", &layer.probability, 0.0f, 1.0f, "%.2f");
           ImGui::EndDisabled();
-          ImGui::SameLine();
-          ImGui::TextDisabled("(?)");
-          if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Single layer: probability is always 0 (no multi-scatter)");
-          }
         } else {
           DIRTY_IF(ImGui::SliderFloat("Probability", &layer.probability, 0.0f, 1.0f, "%.2f"));
         }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+          if (single_layer) {
+            ImGui::SetTooltip("Fraction of rays continuing to the next layer.\nAlways 0 for a single layer.");
+          } else {
+            ImGui::SetTooltip("Fraction of rays continuing to the next layer");
+          }
+        }
+        ImGui::Separator();
 
         for (int ei = 0; ei < static_cast<int>(layer.entries.size()); ei++) {
           auto& entry = layer.entries[ei];
@@ -326,9 +336,13 @@ void RenderSceneTab(GuiState& state) {
     }
 
     if (ImGui::SmallButton("+ Layer")) {
-      ScatterLayer layer;
-      layer.probability = 1.0f;
-      state.scattering.push_back(layer);
+      ScatterLayer new_layer;
+      ScatterEntry e;
+      if (!state.crystals.empty()) {
+        e.crystal_id = state.crystals[0].id;
+      }
+      new_layer.entries.push_back(e);
+      state.scattering.push_back(new_layer);
       state.MarkDirty();
     }
     ImGui::PopItemWidth();
