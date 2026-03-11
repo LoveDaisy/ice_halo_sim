@@ -145,16 +145,19 @@ void RenderCrystalTab(GuiState& state) {
     cr.type = static_cast<CrystalType>(type_idx);
     state.MarkDirty();
   }
+  ImGui::PopItemWidth();
 
   if (ImGui::CollapsingHeader("Shape", ImGuiTreeNodeFlags_DefaultOpen)) {
     if (cr.type == CrystalType::kPrism) {
-      DIRTY_IF(ImGui::SliderFloat("Height", &cr.height, 0.1f, 5.0f, "%.2f"));
+      DIRTY_IF(SliderWithInput("Height", &cr.height, 0.1f, 5.0f, "%.2f"));
     } else {
-      DIRTY_IF(ImGui::SliderFloat("Prism H", &cr.prism_h, 0.0f, 5.0f, "%.2f"));
-      DIRTY_IF(ImGui::SliderFloat("Upper H", &cr.upper_h, 0.0f, 1.0f, "%.2f"));
-      DIRTY_IF(ImGui::SliderFloat("Lower H", &cr.lower_h, 0.0f, 1.0f, "%.2f"));
-      DIRTY_IF(ImGui::InputInt3("Upper Indices", cr.upper_indices));
-      DIRTY_IF(ImGui::InputInt3("Lower Indices", cr.lower_indices));
+      DIRTY_IF(SliderWithInput("Prism H", &cr.prism_h, 0.0f, 5.0f, "%.2f"));
+      DIRTY_IF(SliderWithInput("Upper H", &cr.upper_h, 0.0f, 1.0f, "%.2f"));
+      DIRTY_IF(SliderWithInput("Lower H", &cr.lower_h, 0.0f, 1.0f, "%.2f"));
+      ImGui::PushItemWidth(-100);
+      DIRTY_IF(ImGui::InputInt3("Upper Idx", cr.upper_indices));
+      DIRTY_IF(ImGui::InputInt3("Lower Idx", cr.lower_indices));
+      ImGui::PopItemWidth();
     }
   }
 
@@ -165,7 +168,6 @@ void RenderCrystalTab(GuiState& state) {
     ImGui::Spacing();
     RenderAxisDist("Roll", cr.roll, state);
   }
-  ImGui::PopItemWidth();
 }
 
 

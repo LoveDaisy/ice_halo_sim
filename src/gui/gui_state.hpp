@@ -32,8 +32,8 @@ struct CrystalConfig {
   int upper_indices[3] = { 1, 0, 1 };
   int lower_indices[3] = { 1, 0, 1 };
 
-  // Axis distribution
-  AxisDist zenith{ AxisDistType::kGauss, 90.0f, 90.0f };
+  // Axis distribution (all default to uniform full rotation)
+  AxisDist zenith{ AxisDistType::kUniform, 0.0f, 360.0f };
   AxisDist azimuth{ AxisDistType::kUniform, 0.0f, 360.0f };
   AxisDist roll{ AxisDistType::kUniform, 0.0f, 360.0f };
 };
@@ -53,7 +53,7 @@ struct SimConfig {
 
 struct ScatterEntry {
   int crystal_id = -1;  // -1 = not selected
-  float proportion = 1.0f;
+  float proportion = 100.0f;
   int filter_id = -1;  // -1 = None
 };
 
