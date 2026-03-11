@@ -294,6 +294,10 @@ void RenderTopBar(float window_width) {
     ImGui::SetCursorPosX(button_start_x);
   }
 
+  bool simulating = (g_state.sim_state == SimState::kSimulating);
+  if (simulating) {
+    ImGui::BeginDisabled();
+  }
   if (ImGui::Button("New")) {
     CheckUnsavedAndDo(PendingAction::kNew);
   }
@@ -309,8 +313,11 @@ void RenderTopBar(float window_width) {
   if (ImGui::Button("Save As")) {
     DoSaveAs();
   }
+  if (simulating) {
+    ImGui::EndDisabled();
+  }
   ImGui::SameLine();
-  if (g_state.sim_state == SimState::kSimulating) {
+  if (simulating) {
     if (ImGui::Button("Stop")) {
       DoStop();
     }
@@ -610,6 +617,14 @@ void RenderStatusBar(float window_width, float window_height) {
   if (g_state.stats_sim_ray_num > 0) {
     ImGui::SameLine();
     ImGui::Text("| Rays: %lu", g_state.stats_sim_ray_num);
+  }
+
+  // Sim resolution + lens info
+  if (g_state.selected_renderer >= 0 && g_state.selected_renderer < static_cast<int>(g_state.renderers.size())) {
+    auto& rc = g_state.renderers[g_state.selected_renderer];
+    int res = lumice::gui::kSimResolutions[rc.sim_resolution_index];
+    ImGui::SameLine();
+    ImGui::Text("| %dx%d  %s  FOV:%.0f", res, res / 2, lumice::gui::kLensTypeNames[rc.lens_type], rc.fov);
   }
 
   ImGui::SameLine();
