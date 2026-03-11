@@ -74,11 +74,31 @@ bool CrystalRenderer::Init(int width, int height) {
   glDeleteShader(vs);
   glDeleteShader(fs);
 
-  // Create FBO
+  constexpr int kMsaaSamples = 4;
+
+  // Multisample FBO (render target)
   glGenFramebuffers(1, &fbo_);
   glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
 
-  // Color texture
+  glGenRenderbuffers(1, &ms_color_rb_);
+  glBindRenderbuffer(GL_RENDERBUFFER, ms_color_rb_);
+  glRenderbufferStorageMultisample(GL_RENDERBUFFER, kMsaaSamples, GL_RGBA8, width, height);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, ms_color_rb_);
+
+  glGenRenderbuffers(1, &ms_depth_rb_);
+  glBindRenderbuffer(GL_RENDERBUFFER, ms_depth_rb_);
+  glRenderbufferStorageMultisample(GL_RENDERBUFFER, kMsaaSamples, GL_DEPTH_COMPONENT24, width, height);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, ms_depth_rb_);
+
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    fprintf(stderr, "Crystal MSAA FBO incomplete\n");
+    return false;
+  }
+
+  // Resolve FBO (non-multisample, for ImGui display)
+  glGenFramebuffers(1, &resolve_fbo_);
+  glBindFramebuffer(GL_FRAMEBUFFER, resolve_fbo_);
+
   glGenTextures(1, &color_tex_);
   glBindTexture(GL_TEXTURE_2D, color_tex_);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -86,14 +106,8 @@ bool CrystalRenderer::Init(int width, int height) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_tex_, 0);
 
-  // Depth renderbuffer
-  glGenRenderbuffers(1, &depth_rb_);
-  glBindRenderbuffer(GL_RENDERBUFFER, depth_rb_);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_rb_);
-
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-    fprintf(stderr, "Crystal FBO incomplete\n");
+    fprintf(stderr, "Crystal resolve FBO incomplete\n");
     return false;
   }
 
@@ -120,15 +134,19 @@ void CrystalRenderer::Destroy() {
     glDeleteBuffers(1, &vbo_);
   if (vao_)
     glDeleteVertexArrays(1, &vao_);
-  if (depth_rb_)
-    glDeleteRenderbuffers(1, &depth_rb_);
+  if (ms_depth_rb_)
+    glDeleteRenderbuffers(1, &ms_depth_rb_);
+  if (ms_color_rb_)
+    glDeleteRenderbuffers(1, &ms_color_rb_);
   if (color_tex_)
     glDeleteTextures(1, &color_tex_);
+  if (resolve_fbo_)
+    glDeleteFramebuffers(1, &resolve_fbo_);
   if (fbo_)
     glDeleteFramebuffers(1, &fbo_);
   if (shader_)
     glDeleteProgram(shader_);
-  ebo_ = vbo_ = vao_ = depth_rb_ = color_tex_ = fbo_ = shader_ = 0;
+  ebo_ = vbo_ = vao_ = ms_depth_rb_ = ms_color_rb_ = color_tex_ = resolve_fbo_ = fbo_ = shader_ = 0;
   edge_count_ = 0;
 }
 
@@ -201,6 +219,11 @@ void CrystalRenderer::Render(const float rotation[16], float zoom) {
   glBindVertexArray(vao_);
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_);
   glDrawElements(GL_LINES, edge_count_ * 2, GL_UNSIGNED_INT, nullptr);
+
+  // Resolve MSAA: blit from multisample FBO to resolve FBO
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolve_fbo_);
+  glBlitFramebuffer(0, 0, width_, height_, 0, 0, width_, height_, GL_COLOR_BUFFER_BIT, GL_LINEAR);
 
   // Restore state
   glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prev_fbo));

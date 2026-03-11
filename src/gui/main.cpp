@@ -85,9 +85,10 @@ void ApplyTrackballRotation(float dx, float dy) {
   if (angle < 1e-6f)
     return;
 
-  // Rotation axis is perpendicular to drag direction (in screen space)
-  float ax = dy / (angle / 0.01f);
-  float ay = -dx / (angle / 0.01f);
+  // Rotation axis is perpendicular to drag direction (in screen space).
+  // Negate so drag-right rotates crystal right, drag-down tilts top away.
+  float ax = -dy / (angle / 0.01f);
+  float ay = dx / (angle / 0.01f);
   float az = 0.0f;
   float len = std::sqrt(ax * ax + ay * ay + az * az);
   if (len < 1e-6f)

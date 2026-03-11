@@ -26,9 +26,11 @@ class CrystalRenderer {
  private:
   int width_ = 0;
   int height_ = 0;
-  unsigned int fbo_ = 0;
-  unsigned int color_tex_ = 0;
-  unsigned int depth_rb_ = 0;
+  unsigned int fbo_ = 0;          // Multisample render target
+  unsigned int ms_color_rb_ = 0;  // Multisample color renderbuffer
+  unsigned int ms_depth_rb_ = 0;  // Multisample depth renderbuffer
+  unsigned int resolve_fbo_ = 0;  // Resolve target (non-multisample)
+  unsigned int color_tex_ = 0;    // Resolved texture for ImGui display
   unsigned int shader_ = 0;
   unsigned int vao_ = 0;
   unsigned int vbo_ = 0;
