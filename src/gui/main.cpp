@@ -548,7 +548,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.params.visible = rc.visible;
     std::copy(std::begin(rc.ray_color), std::end(rc.ray_color), std::begin(g_preview_vp.params.ray_color));
     std::copy(std::begin(rc.background), std::end(rc.background), std::begin(g_preview_vp.params.background));
-    g_preview_vp.params.intensity_factor = rc.intensity_factor;
+    g_preview_vp.params.intensity_factor = std::pow(2.0f, rc.exposure_offset);
 
     // Mouse interaction: orbit with drag, FOV with scroll
     // Disabled for full-sky lens types (dual fisheye, rectangular)
