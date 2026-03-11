@@ -32,6 +32,7 @@ float g_crystal_rotation[16] = {
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 };
 float g_crystal_zoom = 2.5f;
+int g_crystal_style = 1;  // Default: Hidden Line (index into kCrystalStyleNames)
 int g_crystal_mesh_id = -1;   // Crystal ID of cached mesh
 int g_crystal_mesh_hash = 0;  // Hash of crystal params for change detection
 
@@ -55,8 +56,8 @@ int CrystalParamHash(const lumice::gui::CrystalConfig& c) {
 }
 
 void ResetCrystalView() {
-  // Default 45-degree top-down view (rotate -30 deg around X)
-  constexpr float kAngle = -0.52f;  // ~30 degrees
+  // Default slightly elevated view (rotate -20 deg around X)
+  constexpr float kAngle = -0.35f;  // ~20 degrees
   float c = std::cos(kAngle);
   float s = std::sin(kAngle);
   // Rotation around X axis
@@ -367,14 +368,16 @@ void RenderLeftPanel(float window_height) {
 
             LUMICE_CrystalMesh mesh{};
             if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) == LUMICE_OK) {
-              g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count);
+              g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count,
+                                            mesh.triangles, mesh.triangle_count, mesh.edge_face_normals);
               g_crystal_mesh_id = cr.id;
               g_crystal_mesh_hash = hash;
             }
           }
 
           // Render to FBO
-          g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom);
+          auto crystal_style = static_cast<lumice::gui::CrystalStyle>(g_crystal_style);
+          g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
 
           // Display FBO texture — square, centered, with matching background fill
           ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -411,8 +414,13 @@ void RenderLeftPanel(float window_height) {
             }
           }
 
-          // Advance cursor past the filled area, then draw button
+          // Advance cursor past the filled area, then draw controls
           ImGui::SetCursorScreenPos(ImVec2(area_start.x, area_start.y + area_h));
+          ImGui::PushItemWidth(120.0f);
+          ImGui::Combo("##CrystalStyle", &g_crystal_style, lumice::gui::kCrystalStyleNames,
+                       lumice::gui::kCrystalStyleCount);
+          ImGui::PopItemWidth();
+          ImGui::SameLine();
           if (ImGui::SmallButton("Reset View")) {
             ResetCrystalView();
           }
