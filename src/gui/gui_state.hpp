@@ -96,7 +96,7 @@ struct RenderConfig {
   float background[3] = { 0.0f, 0.0f, 0.0f };
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float opacity = 1.0f;
-  float intensity_factor = 1.0f;
+  float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
 };
 
 // Filter action

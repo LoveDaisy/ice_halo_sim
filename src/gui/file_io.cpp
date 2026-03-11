@@ -3,6 +3,7 @@
 #include <nfd.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -158,10 +159,11 @@ std::string SerializeToJson(const GuiState& state) {
 
     // Always full visible — shader handles hemisphere filtering
     jr["visible"] = "full";
-    jr["background"] = { 0.0f, 0.0f, 0.0f };  // black background for texture
-    jr["ray_color"] = { 1.0f, 1.0f, 1.0f };   // white rays for texture
+    jr["background"] = { 0.0f, 0.0f, 0.0f };
+    // Omit ray_color so Core uses true color (spectral rendering).
+    // Core treats ray_color[0] < 0 as true color; default is [-1,-1,-1].
     jr["opacity"] = r.opacity;
-    jr["intensity_factor"] = r.intensity_factor;
+    jr["intensity_factor"] = std::pow(2.0f, r.exposure_offset);
 
     root["render"].push_back(jr);
   }
@@ -414,7 +416,8 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
           r.ray_color[i] = jr["ray_color"][i].get<float>();
       }
       r.opacity = jr.value("opacity", 1.0f);
-      r.intensity_factor = jr.value("intensity_factor", 1.0f);
+      float ifactor = jr.value("intensity_factor", 1.0f);
+      r.exposure_offset = std::log2(std::max(ifactor, 1e-6f));
 
       state.renderers.push_back(r);
     }
