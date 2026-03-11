@@ -397,6 +397,34 @@ void RenderLeftPanel(float window_height) {
                   n[2] = -ny;
                 }
               }
+
+              // Normalize by AABB longest axis so all crystals display at similar size
+              if (mesh.vertex_count > 0) {
+                float min_x = mesh.vertices[0], max_x = mesh.vertices[0];
+                float min_y = mesh.vertices[1], max_y = mesh.vertices[1];
+                float min_z = mesh.vertices[2], max_z = mesh.vertices[2];
+                for (int vi = 1; vi < mesh.vertex_count; vi++) {
+                  float x = mesh.vertices[vi * 3];
+                  float y = mesh.vertices[vi * 3 + 1];
+                  float z = mesh.vertices[vi * 3 + 2];
+                  min_x = std::min(min_x, x);
+                  max_x = std::max(max_x, x);
+                  min_y = std::min(min_y, y);
+                  max_y = std::max(max_y, y);
+                  min_z = std::min(min_z, z);
+                  max_z = std::max(max_z, z);
+                }
+                float extent = std::max({ max_x - min_x, max_y - min_y, max_z - min_z });
+                if (extent > 1e-6f) {
+                  float scale = 1.0f / extent;
+                  for (int vi = 0; vi < mesh.vertex_count; vi++) {
+                    mesh.vertices[vi * 3] *= scale;
+                    mesh.vertices[vi * 3 + 1] *= scale;
+                    mesh.vertices[vi * 3 + 2] *= scale;
+                  }
+                }
+              }
+
               g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count,
                                             mesh.triangles, mesh.triangle_count, mesh.edge_face_normals);
               g_crystal_mesh_id = cr.id;
