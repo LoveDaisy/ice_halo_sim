@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CPM_SOURCE_CACHE: ${{ github.workspace }}/cpm_cache
+
+jobs:
+  build-ubuntu:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: cpm_cache
+          key: cpm-ubuntu-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-ubuntu-
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TEST=ON
+          -DBUILD_GUI=OFF
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  build-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: cpm_cache
+          key: cpm-macos-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-macos-
+
+      - name: Configure
+        # BUILD_GUI=ON: compile GUI to verify it builds; GUI tests excluded below (no display)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TEST=ON
+          -DBUILD_GUI=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Unit Test
+        # -R LumiceUnitTest: run only unit tests, skip GUI tests (headless runner cannot create GL context)
+        run: ctest --test-dir build --output-on-failure -R LumiceUnitTest
