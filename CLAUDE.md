@@ -8,6 +8,7 @@ Lumice 是一个冰晕 (Ice Halo) 光线追踪模拟程序，C++17 实现。
 # 构建
 ./build.sh -j release             # 并行构建 release
 ./build.sh -tj release            # 构建 + 单元测试
+./build.sh -gtj release           # 构建 GUI + 全部测试（含 GUI 测试）
 ./build.sh -k release             # 清理构建产物后重新构建（保留依赖缓存）
 
 # 运行
@@ -16,6 +17,7 @@ Lumice 是一个冰晕 (Ice Halo) 光线追踪模拟程序，C++17 实现。
 
 # 测试
 ./build.sh -tj release            # 单元测试（GoogleTest via CTest）
+./build.sh -gtj release           # GUI 测试（ImGui Test Engine，需 display server）
 pytest test/e2e/ -v               # E2E 测试（Python，需 Pillow）
 
 # 格式化
@@ -68,6 +70,7 @@ test/          # test_*.cpp（单元测试）+ e2e/（端到端测试）
 - **构建**: CMake 3.14+ / Ninja
 - **依赖管理**: CPM.cmake（依赖缓存在 `build/cpm_cache/`）
 - **依赖**: nlohmann/json v3.10.5, spdlog v1.15.0, tl-expected v1.1.0, stb (图像读写), GoogleTest v1.15.2
+- **GUI 依赖**: Dear ImGui v1.91.8-docking, GLFW 3.4, nfd v1.2.1, imgui_test_engine v1.91.8
 
 ## 文档语言策略
 
