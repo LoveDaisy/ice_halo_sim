@@ -4,11 +4,7 @@
 #include <cstdio>
 #include <cstring>
 
-#ifdef __APPLE__
-#include <OpenGL/gl3.h>
-#else
-#error "GUI requires OpenGL (macOS only). Build without -g flag for core + CLI on other platforms."
-#endif
+#include "gui/gl_common.h"
 
 namespace lumice::gui {
 
