@@ -14,6 +14,7 @@
 #include "imgui_te_context.h"
 #include "imgui_te_engine.h"
 #include "imgui_te_exporters.h"
+#include "test_screenshot.hpp"
 
 namespace gui = lumice::gui;
 
@@ -291,6 +292,85 @@ static void RegisterP2Tests(ImGuiTestEngine* engine) {
   }
 }
 
+// Shared state for screenshot tests: GL calls must happen on main thread (GuiFunc),
+// verification happens on test thread (TestFunc).
+struct ScreenshotCapture {
+  std::vector<unsigned char> pixels;
+  int width = 0;
+  int height = 0;
+  bool capture_requested = false;
+  bool capture_done = false;
+};
+static ScreenshotCapture g_capture;
+
+// GuiFunc that renders GUI and captures crystal texture when requested
+static void ScreenshotGuiFunc(ImGuiTestContext* /*ctx*/) {
+  // Normal GUI rendering is handled by the main loop.
+  // Capture crystal texture on main thread when requested.
+  if (g_capture.capture_requested && !g_capture.capture_done) {
+    int w = gui::g_crystal_renderer.Width();
+    int h = gui::g_crystal_renderer.Height();
+    auto tex_id = static_cast<unsigned int>(gui::g_crystal_renderer.GetTextureId());
+    g_capture.pixels = lumice::test::ReadTexturePixels(tex_id, w, h);
+    g_capture.width = w;
+    g_capture.height = h;
+    g_capture.capture_done = true;
+  }
+}
+
+// Screenshot tests
+static void RegisterScreenshotTests(ImGuiTestEngine* engine) {
+  // Smoke: capture crystal preview, verify non-black
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "screenshot", "smoke");
+    t->GuiFunc = ScreenshotGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_capture = {};
+
+      // Crystal tab is the default first tab — no need to switch.
+      // Yield 2 frames: frame 1 triggers UpdateMesh (g_crystal_mesh_id == -1) + FBO render,
+      // frame 2 ensures resolve is complete.
+      ctx->Yield(2);
+
+      // Request capture on main thread
+      g_capture.capture_requested = true;
+      // Yield to let GuiFunc run and perform the capture
+      ctx->Yield(2);
+
+      IM_CHECK(g_capture.capture_done);
+      IM_CHECK_EQ(static_cast<int>(g_capture.pixels.size()), g_capture.width * g_capture.height * 4);
+
+      // Save to temp file
+      const char* tmp_path = "/tmp/lumice_crystal_test.png";
+      bool saved = lumice::test::SavePng(tmp_path, g_capture.pixels.data(), g_capture.width, g_capture.height, 4);
+      IM_CHECK(saved);
+
+      // Verify not all black: at least some non-zero pixels
+      bool has_nonzero = false;
+      for (size_t i = 0; i < g_capture.pixels.size() && !has_nonzero; ++i) {
+        if (g_capture.pixels[i] != 0) {
+          has_nonzero = true;
+        }
+      }
+      IM_CHECK(has_nonzero);
+
+      // Verify file is non-empty
+      FILE* f = fopen(tmp_path, "rb");
+      IM_CHECK(f != nullptr);
+      if (f) {
+        fseek(f, 0, SEEK_END);
+        long file_size = ftell(f);
+        fclose(f);
+        IM_CHECK(file_size > 0);
+      }
+
+      // Cleanup
+      std::remove(tmp_path);
+    };
+  }
+}
+
 int main(int /*argc*/, char** /*argv*/) {
   // GLFW init
   glfwSetErrorCallback(gui::GlfwErrorCallback);
@@ -358,6 +438,7 @@ int main(int /*argc*/, char** /*argv*/) {
   RegisterP0Tests(engine);
   RegisterP1Tests(engine);
   RegisterP2Tests(engine);
+  RegisterScreenshotTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests);
 
   // Main loop — runs until all tests complete
