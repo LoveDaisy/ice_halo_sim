@@ -82,6 +82,7 @@ jobs:
         run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build/cmake_install
           -DBUILD_TEST=OFF
           -DBUILD_GUI=OFF
           -DLUMICE_NATIVE_ARCH=OFF
@@ -90,7 +91,7 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Install
-        run: cmake --install build --prefix build/cmake_install
+        run: cmake --install build
 
       - name: Setup Python
         uses: actions/setup-python@v5
