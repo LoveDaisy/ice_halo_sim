@@ -64,6 +64,12 @@ All other dependencies are automatically downloaded and managed via [CPM.cmake](
 - [tl-expected](https://github.com/TartanLlama/expected) v1.1.0 — `expected<T,E>` for C++17 (header-only)
 - [GoogleTest](https://github.com/google/googletest) v1.15.2 — Unit testing (downloaded when `-t` is enabled)
 
+**GUI additional dependencies** (downloaded when `-g` is enabled):
+- [Dear ImGui](https://github.com/ocornut/imgui) v1.91.8-docking — Immediate-mode GUI
+- [GLFW](https://www.glfw.org/) 3.4 — Window and input
+- [nfd](https://github.com/btzy/nativefiledialog-extended) v1.2.1 — Native file dialogs
+- [imgui_test_engine](https://github.com/ocornut/imgui_test_engine) v1.91.8 — GUI automated testing (downloaded when `-g` and `-t` are both enabled)
+
 > **Note on Ninja**: If Ninja is not installed, you can remove `-G Ninja` from `build.sh` to fall back to the system default generator (usually Unix Makefiles).
 
 ### Build project
@@ -74,10 +80,11 @@ With `-h` you will see help message:
 ~~~bash
 ./build.sh -h
 Usage:
-  ./build.sh [-tbjksxh] <debug|release|minsizerel>
+  ./build.sh [-tgbjksxh] <debug|release|minsizerel>
     Executables will be installed at build/cmake_install
 OPTIONS:
   -t:          Build test cases and run test on them.
+  -g:          Build GUI application (Dear ImGui + GLFW + OpenGL).
   -b:          Build benchmarks (Google Benchmark).
   -j:          Build in parallel, i.e. use make -j
   -k:          Clean build artifacts (keep dependency cache).
@@ -105,6 +112,31 @@ pytest test/e2e/ -v
 ~~~
 
 See [`test/e2e/README.md`](test/e2e/README.md) for details.
+
+### GUI application
+
+A graphical interface is available for interactive simulation configuration and preview:
+
+~~~bash
+# Build the GUI application
+./build.sh -gj release
+
+# Run the GUI
+./build/cmake_install/LumiceGUI
+~~~
+
+The GUI provides:
+- Crystal parameter editing with real-time 3D preview
+- Render settings with lens projection preview
+- Filter and scene configuration
+- Save/load project files (`.lmc` format)
+- Run simulation and view results interactively
+
+To build and run GUI automated tests (requires display server):
+
+~~~bash
+./build.sh -gtj release
+~~~
 
 
 ## Configuration file
@@ -303,6 +335,7 @@ For detailed documentation, please refer to:
 - [Configuration Guide](doc/configuration.md) - Complete configuration reference
 - [Architecture Document](doc/architecture.md) - System architecture
 - [Developer Guide](doc/developer-guide.md) - Developer guide
+- [GUI Guide](doc/gui-guide.md) - GUI application usage
 - [C API Documentation](doc/c_api.md) - C interface usage
 - [API Documentation](doc/api/html/) - Auto-generated API docs (generate locally with `doxygen .doxygen-config`)
 

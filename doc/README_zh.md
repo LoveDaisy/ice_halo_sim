@@ -13,6 +13,7 @@ doc/
 ├── configuration.md / _zh.md      # 配置文档
 ├── c_api.md / _zh.md              # C接口使用文档
 ├── developer-guide.md / _zh.md    # 开发指南
+├── gui-guide.md / _zh.md         # GUI 使用指南
 ├── api/                           # API文档（Doxygen生成）
 └── figs/                          # 图片资源
 ```
@@ -31,6 +32,12 @@ doc/
   - 模块职责和依赖关系
   - 数据流和处理流程
   - 程序入口说明
+
+- **[GUI 使用指南](gui-guide_zh.md)**: GUI 应用使用说明
+  - 应用功能和界面布局
+  - 晶体预览和渲染预览
+  - 项目文件格式（`.lmc`）
+  - 构建和运行 GUI
 
 ## 开发者文档
 

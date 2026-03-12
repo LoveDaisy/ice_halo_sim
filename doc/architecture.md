@@ -253,27 +253,60 @@ The system uses a multi-threaded architecture:
 - `json_util.hpp`: JSON helper macros
 - `color_data.hpp`: CIE color matching function data
 
+### gui Module
+
+**Responsibility**: Graphical user interface application
+
+**Main Components**:
+- `app.cpp/hpp`: Main application loop, panel rendering, global state management (extracted from `main.cpp` for testability)
+- `gui_state.hpp`: `GuiState` struct defining the complete GUI state model (crystals, filters, renderers, scene settings)
+- `panels.cpp/hpp`: ImGui panel implementations (Crystal, Render, Filter, Scene tabs)
+- `crystal_renderer.cpp/hpp`: OpenGL FBO-based crystal 3D preview (wireframe, hidden-line, shaded styles)
+- `preview_renderer.cpp/hpp`: Equirectangular texture preview with lens projection shaders
+- `file_io.cpp/hpp`: `.lmc` project file format read/write (binary header + JSON + optional PNG texture)
+- `main.cpp`: GUI entry point, GLFW/OpenGL initialization
+
+**Key Design Decisions**:
+- GUI logic lives in `lumice::gui` namespace with global state (`g_state`, `g_preview`, etc.)
+- Communicates with the simulation core via `lumice.h` C API (same interface as the CLI)
+- `lumice_gui_obj` OBJECT library shares compiled GUI + ImGui code between `LumiceGUI` and `LumiceGUITests`
+
+**Dependencies**:
+- Dear ImGui v1.91.8-docking (immediate-mode GUI)
+- GLFW 3.4 (window management)
+- nfd v1.2.1 (native file dialogs)
+- OpenGL 3.2 Core Profile
+- stb (PNG read/write for `.lmc` textures)
+
 ### include Module
 
 **Responsibility**: Public C API header files
 
 - `lumice.h`: Public C interface header using an opaque pointer pattern
 
-## Program Entry Point
+## Program Entry Points
 
-The currently sole program entry point:
-
-**`main.c` → `Lumice`**
-- Purpose: C interface main program
+**`main.c` → `Lumice`** (CLI)
+- Purpose: Command-line simulation program
 - Interacts with the core library through the `lumice.h` public API
 - Usage:
   ```bash
   ./build/cmake_install/Lumice -f config_example.json
   ```
 
+**`src/gui/main.cpp` → `LumiceGUI`** (GUI, requires `-g` build flag)
+- Purpose: Graphical interface for interactive simulation configuration and preview
+- Provides crystal 3D preview, render preview, parameter editing, and `.lmc` file management
+- Usage:
+  ```bash
+  ./build/cmake_install/LumiceGUI
+  ```
+
 Build targets:
 - `lumice`: Core static/shared library (static by default; use `-DBUILD_SHARED_LIBS=ON` to build as a shared library)
-- `Lumice`: Executable, linked against the `lumice` library
+- `Lumice`: CLI executable, linked against the `lumice` library
+- `LumiceGUI`: GUI executable (built when `-DBUILD_GUI=ON`), linked against `lumice_gui_obj` and `lumice`
+- `LumiceGUITests`: GUI test executable (built when both `-DBUILD_GUI=ON` and `-DBUILD_TESTING=ON`)
 
 ## C API
 
@@ -313,6 +346,10 @@ All dependencies are managed automatically via [CPM.cmake](https://github.com/cp
 | [spdlog](https://github.com/gabime/spdlog) | v1.15.0 | Logging system |
 | [tl-expected](https://github.com/TartanLlama/expected) | v1.1.0 | C++17 `expected<T,E>` |
 | [GoogleTest](https://github.com/google/googletest) | v1.15.2 | Unit testing |
+| [Dear ImGui](https://github.com/ocornut/imgui) | v1.91.8-docking | GUI (when `-g` enabled) |
+| [GLFW](https://www.glfw.org/) | 3.4 | Window management (when `-g` enabled) |
+| [nfd](https://github.com/btzy/nativefiledialog-extended) | v1.2.1 | Native file dialogs (when `-g` enabled) |
+| [imgui_test_engine](https://github.com/ocornut/imgui_test_engine) | v1.91.8 | GUI testing (when `-g` + `-t` enabled) |
 
 ## Extension Points
 
