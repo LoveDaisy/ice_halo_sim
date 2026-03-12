@@ -35,6 +35,8 @@ target_link_libraries(lumice_gui_obj PUBLIC
     nfd
     OpenGL::GL)
 
+target_compile_definitions(lumice_gui_obj PUBLIC IMGUI_ENABLE_TEST_ENGINE)
+
 if(APPLE)
   target_compile_definitions(lumice_gui_obj PRIVATE GL_SILENCE_DEPRECATION)
 endif()
@@ -43,8 +45,10 @@ if(NOT MSVC)
   target_compile_options(lumice_gui_obj PRIVATE -Wall -Wextra)
 endif()
 
-# Main executable
-add_executable(LumiceGUI ${PROJ_SRC_DIR}/gui/main.cpp)
+# Main executable (links stubs for test engine hooks — no-ops in production)
+add_executable(LumiceGUI
+    ${PROJ_SRC_DIR}/gui/main.cpp
+    ${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp)
 target_link_libraries(LumiceGUI PRIVATE lumice_gui_obj)
 
 # macOS frameworks required by GLFW
