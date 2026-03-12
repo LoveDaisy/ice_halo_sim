@@ -2,11 +2,10 @@
 #include <cstring>
 #include <map>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <set>
 #include <utility>
 #include <vector>
-
-#include <nlohmann/json.hpp>
 
 #include "core/geo3d.hpp"
 #include "include/lumice.h"
@@ -261,9 +260,9 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
     int v0 = tri[i * 3 + 0];
     int v1 = tri[i * 3 + 1];
     int v2 = tri[i * 3 + 2];
-    edge_tris[{std::min(v0, v1), std::max(v0, v1)}].push_back(i);
-    edge_tris[{std::min(v1, v2), std::max(v1, v2)}].push_back(i);
-    edge_tris[{std::min(v0, v2), std::max(v0, v2)}].push_back(i);
+    edge_tris[{ std::min(v0, v1), std::max(v0, v1) }].push_back(i);
+    edge_tris[{ std::min(v1, v2), std::max(v1, v2) }].push_back(i);
+    edge_tris[{ std::min(v0, v2), std::max(v0, v2) }].push_back(i);
   }
 
   // Compute triangle normals and filter edges

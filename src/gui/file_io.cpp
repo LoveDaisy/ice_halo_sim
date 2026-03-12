@@ -852,5 +852,4 @@ std::string ShowSaveDialog() {
 }
 
 
-
 }  // namespace lumice::gui

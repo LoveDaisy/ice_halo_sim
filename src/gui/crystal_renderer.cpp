@@ -220,18 +220,30 @@ bool CrystalRenderer::Init(int width, int height) {
 }
 
 void CrystalRenderer::Destroy() {
-  if (tri_ebo_) glDeleteBuffers(1, &tri_ebo_);
-  if (back_ebo_) glDeleteBuffers(1, &back_ebo_);
-  if (front_ebo_) glDeleteBuffers(1, &front_ebo_);
-  if (vbo_) glDeleteBuffers(1, &vbo_);
-  if (vao_) glDeleteVertexArrays(1, &vao_);
-  if (ms_depth_rb_) glDeleteRenderbuffers(1, &ms_depth_rb_);
-  if (ms_color_rb_) glDeleteRenderbuffers(1, &ms_color_rb_);
-  if (color_tex_) glDeleteTextures(1, &color_tex_);
-  if (resolve_fbo_) glDeleteFramebuffers(1, &resolve_fbo_);
-  if (fbo_) glDeleteFramebuffers(1, &fbo_);
-  if (face_shader_) glDeleteProgram(face_shader_);
-  if (edge_shader_) glDeleteProgram(edge_shader_);
+  if (tri_ebo_)
+    glDeleteBuffers(1, &tri_ebo_);
+  if (back_ebo_)
+    glDeleteBuffers(1, &back_ebo_);
+  if (front_ebo_)
+    glDeleteBuffers(1, &front_ebo_);
+  if (vbo_)
+    glDeleteBuffers(1, &vbo_);
+  if (vao_)
+    glDeleteVertexArrays(1, &vao_);
+  if (ms_depth_rb_)
+    glDeleteRenderbuffers(1, &ms_depth_rb_);
+  if (ms_color_rb_)
+    glDeleteRenderbuffers(1, &ms_color_rb_);
+  if (color_tex_)
+    glDeleteTextures(1, &color_tex_);
+  if (resolve_fbo_)
+    glDeleteFramebuffers(1, &resolve_fbo_);
+  if (fbo_)
+    glDeleteFramebuffers(1, &fbo_);
+  if (face_shader_)
+    glDeleteProgram(face_shader_);
+  if (edge_shader_)
+    glDeleteProgram(edge_shader_);
   tri_ebo_ = back_ebo_ = front_ebo_ = vbo_ = vao_ = 0;
   ms_depth_rb_ = ms_color_rb_ = color_tex_ = resolve_fbo_ = fbo_ = 0;
   face_shader_ = edge_shader_ = 0;
