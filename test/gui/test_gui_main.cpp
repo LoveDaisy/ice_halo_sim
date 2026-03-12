@@ -425,6 +425,299 @@ static void RegisterScreenshotTests(ImGuiTestEngine* engine) {
   }
 }
 
+// Visual tests: crystal preview + render preview data correctness
+static void RegisterVisualTests(ImGuiTestEngine* engine) {
+  // Crystal preview: Pyramid (HiddenLine, default style after ResetTestState)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "crystal_pyramid");
+    t->GuiFunc = ScreenshotGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Ensure Crystal tab is active (previous tests may have switched to Render tab)
+      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
+      ctx->Yield();
+
+      // Switch to Pyramid type
+      gui::g_state.crystals[0].type = gui::CrystalType::kPyramid;
+      // upper_h/lower_h default to 0.2 after Step 1 change
+      gui::g_crystal_mesh_id = -1;  // Force mesh rebuild
+
+      // Yield 3 frames: state change → mesh rebuild → FBO render
+      ctx->Yield(3);
+
+      // Capture
+      g_capture = {};
+      g_capture.capture_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_capture.capture_done);
+
+      // Save to /tmp for reference image generation
+      const char* tmp_path = "/tmp/lumice_visual_crystal_pyramid.png";
+      // Strip alpha: RGBA → RGB for PNG
+      std::vector<unsigned char> rgb(static_cast<size_t>(g_capture.width) * g_capture.height * 3);
+      for (int i = 0; i < g_capture.width * g_capture.height; ++i) {
+        rgb[i * 3 + 0] = g_capture.pixels[i * 4 + 0];
+        rgb[i * 3 + 1] = g_capture.pixels[i * 4 + 1];
+        rgb[i * 3 + 2] = g_capture.pixels[i * 4 + 2];
+      }
+      lumice::test::SavePng(tmp_path, rgb.data(), g_capture.width, g_capture.height, 3);
+
+      // Load reference and compare
+      const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_pyramid_default.png";
+      std::vector<unsigned char> ref_data;
+      int ref_w = 0, ref_h = 0, ref_ch = 0;
+      bool loaded = lumice::test::LoadPng(ref_path, ref_data, ref_w, ref_h, ref_ch);
+      if (!loaded) {
+        fprintf(stderr, "[visual] crystal_pyramid: reference not found at %s\n", ref_path);
+        fprintf(stderr, "[visual] Run test once, then copy %s to %s\n", tmp_path, ref_path);
+        IM_CHECK(loaded);
+        return;
+      }
+      IM_CHECK_EQ(ref_w, g_capture.width);
+      IM_CHECK_EQ(ref_h, g_capture.height);
+
+      constexpr double kPsnrThreshold = 40.0;
+      double psnr = lumice::test::ComputePsnr(rgb.data(), ref_data.data(), ref_w, ref_h, ref_ch);
+      fprintf(stderr, "[visual] crystal_pyramid: PSNR = %.2f dB\n", psnr);
+      IM_CHECK(psnr > kPsnrThreshold);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // Crystal preview: Wireframe style
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "crystal_wireframe");
+    t->GuiFunc = ScreenshotGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Ensure Crystal tab is active
+      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
+      ctx->Yield();
+
+      gui::g_crystal_style = 0;  // Wireframe
+      ctx->Yield(3);
+
+      g_capture = {};
+      g_capture.capture_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_capture.capture_done);
+
+      const char* tmp_path = "/tmp/lumice_visual_crystal_wireframe.png";
+      std::vector<unsigned char> rgb(static_cast<size_t>(g_capture.width) * g_capture.height * 3);
+      for (int i = 0; i < g_capture.width * g_capture.height; ++i) {
+        rgb[i * 3 + 0] = g_capture.pixels[i * 4 + 0];
+        rgb[i * 3 + 1] = g_capture.pixels[i * 4 + 1];
+        rgb[i * 3 + 2] = g_capture.pixels[i * 4 + 2];
+      }
+      lumice::test::SavePng(tmp_path, rgb.data(), g_capture.width, g_capture.height, 3);
+
+      const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_wireframe.png";
+      std::vector<unsigned char> ref_data;
+      int ref_w = 0, ref_h = 0, ref_ch = 0;
+      bool loaded = lumice::test::LoadPng(ref_path, ref_data, ref_w, ref_h, ref_ch);
+      if (!loaded) {
+        fprintf(stderr, "[visual] crystal_wireframe: reference not found at %s\n", ref_path);
+        IM_CHECK(loaded);
+        return;
+      }
+      IM_CHECK_EQ(ref_w, g_capture.width);
+      IM_CHECK_EQ(ref_h, g_capture.height);
+
+      constexpr double kPsnrThreshold = 40.0;
+      double psnr = lumice::test::ComputePsnr(rgb.data(), ref_data.data(), ref_w, ref_h, ref_ch);
+      fprintf(stderr, "[visual] crystal_wireframe: PSNR = %.2f dB\n", psnr);
+      IM_CHECK(psnr > kPsnrThreshold);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // Crystal preview: Shaded style
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "crystal_shaded");
+    t->GuiFunc = ScreenshotGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Ensure Crystal tab is active
+      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
+      ctx->Yield();
+
+      gui::g_crystal_style = 3;  // Shaded
+      ctx->Yield(3);
+
+      g_capture = {};
+      g_capture.capture_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_capture.capture_done);
+
+      const char* tmp_path = "/tmp/lumice_visual_crystal_shaded.png";
+      std::vector<unsigned char> rgb(static_cast<size_t>(g_capture.width) * g_capture.height * 3);
+      for (int i = 0; i < g_capture.width * g_capture.height; ++i) {
+        rgb[i * 3 + 0] = g_capture.pixels[i * 4 + 0];
+        rgb[i * 3 + 1] = g_capture.pixels[i * 4 + 1];
+        rgb[i * 3 + 2] = g_capture.pixels[i * 4 + 2];
+      }
+      lumice::test::SavePng(tmp_path, rgb.data(), g_capture.width, g_capture.height, 3);
+
+      const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_shaded.png";
+      std::vector<unsigned char> ref_data;
+      int ref_w = 0, ref_h = 0, ref_ch = 0;
+      bool loaded = lumice::test::LoadPng(ref_path, ref_data, ref_w, ref_h, ref_ch);
+      if (!loaded) {
+        fprintf(stderr, "[visual] crystal_shaded: reference not found at %s\n", ref_path);
+        IM_CHECK(loaded);
+        return;
+      }
+      IM_CHECK_EQ(ref_w, g_capture.width);
+      IM_CHECK_EQ(ref_h, g_capture.height);
+
+      constexpr double kPsnrThreshold = 40.0;
+      double psnr = lumice::test::ComputePsnr(rgb.data(), ref_data.data(), ref_w, ref_h, ref_ch);
+      fprintf(stderr, "[visual] crystal_shaded: PSNR = %.2f dB\n", psnr);
+      IM_CHECK(psnr > kPsnrThreshold);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // Render preview: texture upload/readback data correctness
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "preview_load");
+    t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
+      // Upload texture on main thread when requested
+      if (g_capture.capture_requested && !g_capture.capture_done) {
+        gui::g_preview.UploadTexture(g_capture.pixels.data(), g_capture.width, g_capture.height);
+        g_capture.capture_done = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Create synthetic 256x256 RGB gradient
+      constexpr int kTexW = 256;
+      constexpr int kTexH = 256;
+      std::vector<unsigned char> tex_data(kTexW * kTexH * 3);
+      for (int y = 0; y < kTexH; ++y) {
+        for (int x = 0; x < kTexW; ++x) {
+          int idx = (y * kTexW + x) * 3;
+          tex_data[idx + 0] = static_cast<unsigned char>(x);      // R = x
+          tex_data[idx + 1] = static_cast<unsigned char>(y);      // G = y
+          tex_data[idx + 2] = static_cast<unsigned char>(x ^ y);  // B = x XOR y
+        }
+      }
+
+      // Request upload via GuiFunc (GL call on main thread)
+      g_capture = {};
+      g_capture.pixels = tex_data;
+      g_capture.width = kTexW;
+      g_capture.height = kTexH;
+      g_capture.capture_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_capture.capture_done);
+
+      // Verify state
+      IM_CHECK(gui::g_preview.HasTexture());
+      const unsigned char* readback = gui::g_preview.GetTextureData();
+      IM_CHECK(readback != nullptr);
+
+      // Exact byte comparison (UploadTexture stores CPU copy directly)
+      bool match = (memcmp(readback, tex_data.data(), tex_data.size()) == 0);
+      if (!match) {
+        // Fallback: compute PSNR
+        double psnr = lumice::test::ComputePsnr(readback, tex_data.data(), kTexW, kTexH, 3);
+        fprintf(stderr, "[visual] preview_load: data mismatch, PSNR = %.2f dB\n", psnr);
+      }
+      IM_CHECK(match);
+    };
+  }
+
+  // Render preview: .lmc roundtrip with texture
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "preview_lmc_roundtrip");
+    t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
+      if (g_capture.capture_requested && !g_capture.capture_done) {
+        gui::g_preview.UploadTexture(g_capture.pixels.data(), g_capture.width, g_capture.height);
+        g_capture.capture_done = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Create synthetic texture
+      constexpr int kTexW = 256;
+      constexpr int kTexH = 256;
+      std::vector<unsigned char> original(kTexW * kTexH * 3);
+      for (int y = 0; y < kTexH; ++y) {
+        for (int x = 0; x < kTexW; ++x) {
+          int idx = (y * kTexW + x) * 3;
+          original[idx + 0] = static_cast<unsigned char>((x + y) % 256);
+          original[idx + 1] = static_cast<unsigned char>((x * 2) % 256);
+          original[idx + 2] = static_cast<unsigned char>((y * 3) % 256);
+        }
+      }
+
+      // Upload via GuiFunc
+      g_capture = {};
+      g_capture.pixels = original;
+      g_capture.width = kTexW;
+      g_capture.height = kTexH;
+      g_capture.capture_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_capture.capture_done);
+      IM_CHECK(gui::g_preview.HasTexture());
+
+      // Save with texture
+      const char* tmp_path = "/tmp/lumice_visual_roundtrip.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, true);
+      IM_CHECK(save_ok);
+
+      // Clear
+      gui::DoNew();
+      IM_CHECK(!gui::g_preview.HasTexture());
+
+      // Load
+      std::vector<unsigned char> loaded_tex;
+      int loaded_w = 0, loaded_h = 0;
+      bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, loaded_tex, loaded_w, loaded_h);
+      IM_CHECK(load_ok);
+      IM_CHECK_EQ(loaded_w, kTexW);
+      IM_CHECK_EQ(loaded_h, kTexH);
+      IM_CHECK(!loaded_tex.empty());
+
+      // Re-upload loaded texture via GuiFunc
+      g_capture = {};
+      g_capture.pixels = loaded_tex;
+      g_capture.width = loaded_w;
+      g_capture.height = loaded_h;
+      g_capture.capture_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_capture.capture_done);
+      IM_CHECK(gui::g_preview.HasTexture());
+
+      // Exact comparison: PNG is lossless, roundtrip should be identical
+      const unsigned char* readback = gui::g_preview.GetTextureData();
+      IM_CHECK(readback != nullptr);
+      size_t data_size = static_cast<size_t>(kTexW) * kTexH * 3;
+      bool match = (memcmp(readback, original.data(), data_size) == 0);
+      if (!match) {
+        double psnr = lumice::test::ComputePsnr(readback, original.data(), kTexW, kTexH, 3);
+        fprintf(stderr, "[visual] preview_lmc_roundtrip: mismatch, PSNR = %.2f dB\n", psnr);
+        IM_CHECK(psnr >= 60.0);  // Fallback threshold
+      } else {
+        fprintf(stderr, "[visual] preview_lmc_roundtrip: exact match\n");
+      }
+      IM_CHECK(match);
+
+      // Cleanup
+      std::remove(tmp_path);
+    };
+  }
+}
+
 int main(int /*argc*/, char** /*argv*/) {
   // GLFW init
   glfwSetErrorCallback(gui::GlfwErrorCallback);
@@ -493,6 +786,7 @@ int main(int /*argc*/, char** /*argv*/) {
   RegisterP1Tests(engine);
   RegisterP2Tests(engine);
   RegisterScreenshotTests(engine);
+  RegisterVisualTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests);
 
   // Main loop — runs until all tests complete
