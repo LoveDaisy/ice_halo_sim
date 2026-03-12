@@ -186,7 +186,7 @@ target_link_libraries(lumice_obj PUBLIC nlohmann_json::nlohmann_json spdlog::spd
 
 if(NOT MSVC)
   target_compile_options(lumice_obj PRIVATE
-    -Wall -Wextra -fexceptions -fpermissive -frtti)
+    -Wall -Wextra -fexceptions -frtti)
   target_compile_definitions(lumice_obj PRIVATE __STDC_FORMAT_MACROS SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
   # -fvisibility=hidden: Release/MinSizeRel 下隐藏所有符号，仅导出 lumice.h 中
   # 由 #pragma GCC visibility push(default) 标记的 C API 函数。
