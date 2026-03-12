@@ -180,6 +180,8 @@ void DoOpen() {
 void DoNew() {
   g_state = InitDefaultState();
   g_preview.ClearTexture();
+  g_crystal_mesh_id = -1;
+  g_crystal_mesh_hash = 0;
 }
 
 void DoRun() {
