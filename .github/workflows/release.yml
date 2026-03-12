@@ -16,22 +16,14 @@ jobs:
           - name: linux-x64
             os: ubuntu-24.04
             build_gui: ON
-            artifact_ext: tar.gz
 
           - name: linux-arm64
             os: ubuntu-24.04-arm
             build_gui: OFF
-            artifact_ext: tar.gz
 
           - name: macos-arm64
             os: macos-15
             build_gui: ON
-            artifact_ext: tar.gz
-
-          - name: windows-x64
-            os: windows-2025
-            build_gui: OFF
-            artifact_ext: zip
 
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.name }}
@@ -58,7 +50,6 @@ jobs:
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
-          -DBUILD_SHARED_LIBS=ON
           -DBUILD_TEST=OFF
           -DBUILD_GUI=${{ matrix.build_gui }}
           -DLUMICE_NATIVE_ARCH=OFF
@@ -69,24 +60,16 @@ jobs:
       - name: Install
         run: cmake --install build
 
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
+      - name: Package
         run: |
           cd install
-          tar czf ${{ github.workspace }}/lumice-${{ github.ref_name }}-${{ matrix.name }}.${{ matrix.artifact_ext }} *
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          cd install
-          Compress-Archive -Path * -DestinationPath ${{ github.workspace }}/lumice-${{ github.ref_name }}-${{ matrix.name }}.${{ matrix.artifact_ext }}
+          tar czf ${{ github.workspace }}/lumice-${{ github.ref_name }}-${{ matrix.name }}.tar.gz *
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: lumice-${{ matrix.name }}
-          path: lumice-${{ github.ref_name }}-${{ matrix.name }}.${{ matrix.artifact_ext }}
+          path: lumice-${{ github.ref_name }}-${{ matrix.name }}.tar.gz
 
   release:
     needs: build

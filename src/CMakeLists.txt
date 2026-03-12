@@ -4,9 +4,6 @@ message(STATUS "[src] CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 # ==================================================================================================
 # Add targets
 
-install(TARGETS lumice
-    DESTINATION "${CMAKE_INSTALL_PREFIX}")
-
 if(NOT WIN32)
   add_executable(Lumice
       "${PROJ_SRC_DIR}/main.c")
