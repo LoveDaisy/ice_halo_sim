@@ -78,6 +78,17 @@ test/          # test_*.cpp（单元测试）+ e2e/（端到端测试）
 - 代码注释使用英文
 - 详细配置说明见 `doc/configuration.md`
 
+## GUI 测试参考图片
+
+GUI 截图测试的参考图片位于 `test/gui/references/`。更新流程：
+
+1. 临时注释掉 `test_gui_main.cpp` 中 smoke 测试的 `std::remove(tmp_path)` 行
+2. 运行 `./build.sh -gtj release` 生成截图到 `/tmp/lumice_crystal_test.png`
+3. 拷贝到 `test/gui/references/crystal_prism_default.png`
+4. 恢复 `std::remove` 行并重新构建验证
+
+参考图片仅在 macOS + Apple Silicon 上生成，PSNR 阈值 40 dB。
+
 ## 注意事项
 
 - `config.json`, `test.json` 已在 `.gitignore`，用 `config_example.json` 作模板

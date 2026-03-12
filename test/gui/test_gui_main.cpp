@@ -369,6 +369,60 @@ static void RegisterScreenshotTests(ImGuiTestEngine* engine) {
       std::remove(tmp_path);
     };
   }
+
+  // PSNR: capture crystal preview and compare against reference image
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "screenshot", "crystal_psnr");
+    t->GuiFunc = ScreenshotGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_capture = {};
+
+      // Crystal tab is default — yield 2 frames for mesh update + FBO render
+      ctx->Yield(2);
+
+      // Request capture on main thread
+      g_capture.capture_requested = true;
+      ctx->Yield(2);
+
+      IM_CHECK(g_capture.capture_done);
+
+      // Load reference image
+      const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_prism_default.png";
+      std::vector<unsigned char> ref_data;
+      int ref_w = 0;
+      int ref_h = 0;
+      int ref_ch = 0;
+      bool loaded = lumice::test::LoadPng(ref_path, ref_data, ref_w, ref_h, ref_ch);
+      IM_CHECK(loaded);
+      IM_CHECK_EQ(ref_w, g_capture.width);
+      IM_CHECK_EQ(ref_h, g_capture.height);
+
+      // Convert capture to match reference channels if needed (RGBA→RGB or vice versa)
+      const unsigned char* cmp_data = g_capture.pixels.data();
+      std::vector<unsigned char> converted;
+      int cmp_channels = 4;  // capture is always RGBA
+      if (ref_ch == 4) {
+        cmp_channels = 4;
+      } else if (ref_ch == 3) {
+        // Strip alpha channel for comparison
+        converted.resize(static_cast<size_t>(g_capture.width) * g_capture.height * 3);
+        for (int i = 0; i < g_capture.width * g_capture.height; ++i) {
+          converted[i * 3 + 0] = g_capture.pixels[i * 4 + 0];
+          converted[i * 3 + 1] = g_capture.pixels[i * 4 + 1];
+          converted[i * 3 + 2] = g_capture.pixels[i * 4 + 2];
+        }
+        cmp_data = converted.data();
+        cmp_channels = 3;
+      }
+
+      // Same-platform same-hardware should produce near-identical results
+      constexpr double kPsnrThreshold = 40.0;  // dB; deterministic GL render should be >50 dB
+      double psnr = lumice::test::ComputePsnr(cmp_data, ref_data.data(), ref_w, ref_h, cmp_channels);
+      fprintf(stderr, "[screenshot] crystal_psnr: PSNR = %.2f dB (threshold = %.1f dB)\n", psnr, kPsnrThreshold);
+      IM_CHECK(psnr > kPsnrThreshold);
+    };
+  }
 }
 
 int main(int /*argc*/, char** /*argv*/) {

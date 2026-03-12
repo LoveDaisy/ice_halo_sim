@@ -22,7 +22,8 @@ target_link_libraries(LumiceGUITests PRIVATE lumice_gui_obj)
 
 target_compile_definitions(LumiceGUITests PRIVATE
     IMGUI_ENABLE_TEST_ENGINE
-    IMGUI_TEST_ENGINE_ENABLE_COROUTINE_STDTHREAD_IMPL=1)
+    IMGUI_TEST_ENGINE_ENABLE_COROUTINE_STDTHREAD_IMPL=1
+    LUMICE_TEST_REF_DIR="${CMAKE_CURRENT_SOURCE_DIR}/references")
 
 # macOS frameworks required by GLFW
 if(APPLE)
