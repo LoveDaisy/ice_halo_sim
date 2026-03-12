@@ -1,15 +1,10 @@
 #include "test_screenshot.hpp"
 
-#ifdef __APPLE__
-#define GL_SILENCE_DEPRECATION
-#include <OpenGL/gl3.h>
-#else
-#error "GUI tests require OpenGL (macOS only). Build without -g flag for core + CLI on other platforms."
-#endif
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
+
+#include "gui/gl_common.h"
 
 // Only include stb headers for declarations — implementations are provided by lumice_gui_obj (stb_impl.cpp).
 #include <stb_image.h>
