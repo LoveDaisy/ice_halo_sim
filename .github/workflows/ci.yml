@@ -33,11 +33,6 @@ jobs:
             build_gui: ON
             cache_key: macos-arm64
 
-          - name: macOS Intel
-            os: macos-13
-            build_gui: ON
-            cache_key: macos-x64
-
           - name: Windows x86_64
             os: windows-2025
             build_gui: OFF
