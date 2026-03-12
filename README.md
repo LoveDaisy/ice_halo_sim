@@ -138,6 +138,11 @@ To build and run GUI automated tests (requires display server):
 ./build.sh -gtj release
 ~~~
 
+> **Cross-platform note:** Core, CLI, and unit tests (`./build.sh -tj release`) contain no
+> platform-specific code and should compile on any platform with a C++17 compiler. The GUI and
+> GUI tests (`-g` / `-gt` flags) are currently verified on macOS (Apple Silicon) only. If you
+> encounter GUI build issues on other platforms, try building without the `-g` flag.
+
 
 ## Configuration file
 

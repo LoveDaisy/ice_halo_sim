@@ -133,6 +133,10 @@ GUI 提供以下功能：
 ./build.sh -gtj release
 ~~~
 
+> **跨平台说明：** Core、CLI 和单元测试（`./build.sh -tj release`）不包含任何平台特定代码，
+> 应可在任何支持 C++17 的平台上编译通过。GUI 和 GUI 测试（`-g` / `-gt` 选项）目前仅在
+> macOS（Apple Silicon）上验证。如果在其他平台遇到 GUI 编译问题，可先不带 `-g` 编译核心功能。
+
 
 ## 配置文件
 
