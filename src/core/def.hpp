@@ -2,6 +2,7 @@
 #define SRC_CORE_DEF_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 
 namespace lumice {
