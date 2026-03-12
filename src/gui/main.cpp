@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "gui/crystal_renderer.hpp"
 #include "gui/file_io.hpp"
@@ -32,7 +33,7 @@ float g_crystal_rotation[16] = {
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 };
 float g_crystal_zoom = 2.5f;
-int g_crystal_style = 1;  // Default: Hidden Line (index into kCrystalStyleNames)
+int g_crystal_style = 1;      // Default: Hidden Line (index into kCrystalStyleNames)
 int g_crystal_mesh_id = -1;   // Crystal ID of cached mesh
 int g_crystal_mesh_hash = 0;  // Hash of crystal params for change detection
 
@@ -152,8 +153,7 @@ void DoSave() {
       return;
     }
   }
-  auto json_str = lumice::gui::SerializeToJson(g_state);
-  if (lumice::gui::WriteStringToFile(g_state.current_file_path, json_str)) {
+  if (lumice::gui::SaveLmcFile(g_state.current_file_path, g_state, g_preview, g_state.save_texture)) {
     g_state.dirty = false;
   }
 }
@@ -162,8 +162,7 @@ void DoSaveAs() {
   auto path = lumice::gui::ShowSaveDialog();
   if (!path.empty()) {
     g_state.current_file_path = path;
-    auto json_str = lumice::gui::SerializeToJson(g_state);
-    if (lumice::gui::WriteStringToFile(path, json_str)) {
+    if (lumice::gui::SaveLmcFile(path, g_state, g_preview, g_state.save_texture)) {
       g_state.dirty = false;
     }
   }
@@ -172,11 +171,17 @@ void DoSaveAs() {
 void DoOpen() {
   auto path = lumice::gui::ShowOpenDialog();
   if (!path.empty()) {
-    std::string content;
-    if (lumice::gui::ReadFileToString(path, content)) {
-      if (lumice::gui::DeserializeFromJson(content, g_state)) {
-        g_state.current_file_path = path;
-        g_state.dirty = false;
+    std::vector<unsigned char> tex_data;
+    int tex_w = 0;
+    int tex_h = 0;
+    if (lumice::gui::LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
+      g_state.current_file_path = path;
+      g_state.dirty = false;
+      if (!tex_data.empty()) {
+        g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
+        g_state.sim_state = SimState::kDone;
+      } else {
+        g_state.sim_state = SimState::kIdle;
       }
     }
   }
@@ -184,12 +189,13 @@ void DoOpen() {
 
 void DoNew() {
   g_state = lumice::gui::InitDefaultState();
+  g_preview.ClearTexture();
 }
 
 void DoRun() {
   if (!g_server)
     return;
-  auto json_str = lumice::gui::SerializeToJson(g_state);
+  auto json_str = lumice::gui::SerializeCoreConfig(g_state);
   fprintf(stderr, "[GUI] CommitConfig JSON:\n%s\n", json_str.c_str());
   g_state.last_committed_json = json_str;
   auto err = LUMICE_CommitConfig(g_server, json_str.c_str());
@@ -294,6 +300,10 @@ void RenderTopBar(float window_width) {
     ImGui::SetCursorPosX(button_start_x);
   }
 
+  bool simulating = (g_state.sim_state == SimState::kSimulating);
+  if (simulating) {
+    ImGui::BeginDisabled();
+  }
   if (ImGui::Button("New")) {
     CheckUnsavedAndDo(PendingAction::kNew);
   }
@@ -309,8 +319,11 @@ void RenderTopBar(float window_width) {
   if (ImGui::Button("Save As")) {
     DoSaveAs();
   }
+  if (simulating) {
+    ImGui::EndDisabled();
+  }
   ImGui::SameLine();
-  if (g_state.sim_state == SimState::kSimulating) {
+  if (simulating) {
     if (ImGui::Button("Stop")) {
       DoStop();
     }
@@ -385,6 +398,34 @@ void RenderLeftPanel(float window_height) {
                   n[2] = -ny;
                 }
               }
+
+              // Normalize by AABB longest axis so all crystals display at similar size
+              if (mesh.vertex_count > 0) {
+                float min_x = mesh.vertices[0], max_x = mesh.vertices[0];
+                float min_y = mesh.vertices[1], max_y = mesh.vertices[1];
+                float min_z = mesh.vertices[2], max_z = mesh.vertices[2];
+                for (int vi = 1; vi < mesh.vertex_count; vi++) {
+                  float x = mesh.vertices[vi * 3];
+                  float y = mesh.vertices[vi * 3 + 1];
+                  float z = mesh.vertices[vi * 3 + 2];
+                  min_x = std::min(min_x, x);
+                  max_x = std::max(max_x, x);
+                  min_y = std::min(min_y, y);
+                  max_y = std::max(max_y, y);
+                  min_z = std::min(min_z, z);
+                  max_z = std::max(max_z, z);
+                }
+                float extent = std::max({ max_x - min_x, max_y - min_y, max_z - min_z });
+                if (extent > 1e-6f) {
+                  float scale = 1.0f / extent;
+                  for (int vi = 0; vi < mesh.vertex_count; vi++) {
+                    mesh.vertices[vi * 3] *= scale;
+                    mesh.vertices[vi * 3 + 1] *= scale;
+                    mesh.vertices[vi * 3 + 2] *= scale;
+                  }
+                }
+              }
+
               g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count,
                                             mesh.triangles, mesh.triangle_count, mesh.edge_face_normals);
               g_crystal_mesh_id = cr.id;
@@ -610,6 +651,14 @@ void RenderStatusBar(float window_width, float window_height) {
   if (g_state.stats_sim_ray_num > 0) {
     ImGui::SameLine();
     ImGui::Text("| Rays: %lu", g_state.stats_sim_ray_num);
+  }
+
+  // Sim resolution + lens info
+  if (g_state.selected_renderer >= 0 && g_state.selected_renderer < static_cast<int>(g_state.renderers.size())) {
+    auto& rc = g_state.renderers[g_state.selected_renderer];
+    int res = lumice::gui::kSimResolutions[rc.sim_resolution_index];
+    ImGui::SameLine();
+    ImGui::Text("| %dx%d  %s  FOV:%.0f", res, res / 2, lumice::gui::kLensTypeNames[rc.lens_type], rc.fov);
   }
 
   ImGui::SameLine();

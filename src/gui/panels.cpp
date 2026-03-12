@@ -11,15 +11,15 @@ namespace lumice::gui {
 // Slider + InputFloat + label text, laid out as: [slider] [input] Label
 // Uses a fixed label column width so vertically stacked sliders align.
 // Returns true if value changed.
-static bool SliderWithInput(const char* label, float* value, float min_val, float max_val,
-                            const char* fmt = "%.1f") {
+static bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f") {
   // Strip ImGui ID suffix (e.g. "Azimuth##view" → display "Azimuth")
   const char* display_label = label;
   const char* hash_pos = strstr(label, "##");
   char display_buf[64];
   if (hash_pos) {
     auto len = static_cast<size_t>(hash_pos - label);
-    if (len >= sizeof(display_buf)) len = sizeof(display_buf) - 1;
+    if (len >= sizeof(display_buf))
+      len = sizeof(display_buf) - 1;
     memcpy(display_buf, label, len);
     display_buf[len] = '\0';
     display_label = display_buf;
@@ -30,7 +30,8 @@ static bool SliderWithInput(const char* label, float* value, float min_val, floa
   float spacing = ImGui::GetStyle().ItemSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x;
   float slider_w = avail_w - kInputWidth - kLabelColWidth - spacing * 2;
-  if (slider_w < 40.0f) slider_w = 40.0f;
+  if (slider_w < 40.0f)
+    slider_w = 40.0f;
 
   bool changed = false;
 
@@ -54,6 +55,93 @@ static bool SliderWithInput(const char* label, float* value, float min_val, floa
 }
 
 namespace {
+
+// Pending delete state for reference-warning popups
+int g_pending_delete_crystal_idx = -1;
+int g_pending_delete_filter_idx = -1;
+
+// Check if a crystal ID is referenced by any scattering entry
+bool IsCrystalReferenced(const GuiState& state, int crystal_id) {
+  for (auto& layer : state.scattering) {
+    for (auto& entry : layer.entries) {
+      if (entry.crystal_id == crystal_id)
+        return true;
+    }
+  }
+  return false;
+}
+
+// Check if a filter ID is referenced by any scattering entry
+bool IsFilterReferenced(const GuiState& state, int filter_id) {
+  for (auto& layer : state.scattering) {
+    for (auto& entry : layer.entries) {
+      if (entry.filter_id == filter_id)
+        return true;
+    }
+  }
+  return false;
+}
+
+// Clear references to a crystal ID in all scattering entries
+// Handle scattering references after deleting a crystal:
+// - Multi-entry layer: remove the entry referencing deleted crystal
+// - Single-entry layer: reassign to first available crystal
+void HandleDeletedCrystalRefs(GuiState& state, int deleted_id) {
+  // Find first crystal that is NOT the one being deleted
+  int fallback_id = -1;
+  for (auto& c : state.crystals) {
+    if (c.id != deleted_id) {
+      fallback_id = c.id;
+      break;
+    }
+  }
+  for (auto& layer : state.scattering) {
+    if (layer.entries.size() > 1) {
+      layer.entries.erase(std::remove_if(layer.entries.begin(), layer.entries.end(),
+                                         [deleted_id](const ScatterEntry& e) { return e.crystal_id == deleted_id; }),
+                          layer.entries.end());
+    } else {
+      for (auto& entry : layer.entries) {
+        if (entry.crystal_id == deleted_id) {
+          entry.crystal_id = fallback_id;
+        }
+      }
+    }
+  }
+}
+
+// Describe what will happen when deleting a referenced crystal.
+enum class CrystalRefAction { kRemoveOnly, kReassignOnly, kMixed };
+CrystalRefAction ClassifyCrystalRefAction(const GuiState& state, int crystal_id) {
+  bool has_remove = false;
+  bool has_reassign = false;
+  for (auto& layer : state.scattering) {
+    for (auto& entry : layer.entries) {
+      if (entry.crystal_id == crystal_id) {
+        if (layer.entries.size() > 1) {
+          has_remove = true;
+        } else {
+          has_reassign = true;
+        }
+      }
+    }
+  }
+  if (has_remove && has_reassign)
+    return CrystalRefAction::kMixed;
+  if (has_reassign)
+    return CrystalRefAction::kReassignOnly;
+  return CrystalRefAction::kRemoveOnly;
+}
+
+// Clear references to a filter ID in all scattering entries
+void ClearFilterReferences(GuiState& state, int filter_id) {
+  for (auto& layer : state.scattering) {
+    for (auto& entry : layer.entries) {
+      if (entry.filter_id == filter_id)
+        entry.filter_id = -1;
+    }
+  }
+}
 
 // Helper: wrap ImGui control and mark dirty on change
 #define DIRTY_IF(expr) \
@@ -91,14 +179,39 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
 // ========== Crystal Tab ==========
 
 void RenderCrystalTab(GuiState& state) {
+  bool simulating = (state.sim_state == GuiState::SimState::kSimulating);
+  if (simulating)
+    ImGui::BeginDisabled();
+
   ImGui::Text("Crystals");
-  ImGui::SameLine(ImGui::GetContentRegionAvail().x - 50);
+  ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
   if (ImGui::SmallButton("Add##crystal")) {
     CrystalConfig c;
     c.id = state.next_crystal_id++;
     state.crystals.push_back(c);
     state.selected_crystal = static_cast<int>(state.crystals.size()) - 1;
     state.MarkDirty();
+  }
+  ImGui::SameLine();
+  if (state.selected_crystal >= 0 && state.selected_crystal < static_cast<int>(state.crystals.size()) &&
+      state.crystals.size() > 1) {
+    if (ImGui::SmallButton("Del##crystal")) {
+      auto& cr_del = state.crystals[state.selected_crystal];
+      if (IsCrystalReferenced(state, cr_del.id)) {
+        g_pending_delete_crystal_idx = state.selected_crystal;
+        ImGui::OpenPopup("Delete Crystal?");
+      } else {
+        state.crystals.erase(state.crystals.begin() + state.selected_crystal);
+        if (state.selected_crystal >= static_cast<int>(state.crystals.size())) {
+          state.selected_crystal = static_cast<int>(state.crystals.size()) - 1;
+        }
+        state.MarkDirty();
+      }
+    }
+  } else {
+    ImGui::BeginDisabled();
+    ImGui::SmallButton("Del##crystal");
+    ImGui::EndDisabled();
   }
 
   int item_count = static_cast<int>(state.crystals.size());
@@ -118,21 +231,52 @@ void RenderCrystalTab(GuiState& state) {
     ImGui::EndListBox();
   }
 
-  if (state.selected_crystal >= 0 && state.selected_crystal < static_cast<int>(state.crystals.size())) {
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Del##crystal")) {
-      state.crystals.erase(state.crystals.begin() + state.selected_crystal);
-      if (state.selected_crystal >= static_cast<int>(state.crystals.size())) {
-        state.selected_crystal = static_cast<int>(state.crystals.size()) - 1;
+  // Confirmation popup for deleting a referenced crystal
+  if (ImGui::BeginPopupModal("Delete Crystal?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::Text("This crystal is referenced by scattering entries.");
+    if (g_pending_delete_crystal_idx >= 0 && g_pending_delete_crystal_idx < static_cast<int>(state.crystals.size())) {
+      auto action = ClassifyCrystalRefAction(state, state.crystals[g_pending_delete_crystal_idx].id);
+      switch (action) {
+        case CrystalRefAction::kRemoveOnly:
+          ImGui::Text("Those entries will be removed.");
+          break;
+        case CrystalRefAction::kReassignOnly:
+          ImGui::Text("Those entries will be reassigned to another crystal.");
+          break;
+        case CrystalRefAction::kMixed:
+          ImGui::Text("Entries in multi-entry layers will be removed;");
+          ImGui::Text("sole entries will be reassigned to another crystal.");
+          break;
       }
-      state.MarkDirty();
     }
+    ImGui::Separator();
+    if (ImGui::Button("Delete", ImVec2(80, 0))) {
+      if (g_pending_delete_crystal_idx >= 0 && g_pending_delete_crystal_idx < static_cast<int>(state.crystals.size())) {
+        int del_id = state.crystals[g_pending_delete_crystal_idx].id;
+        HandleDeletedCrystalRefs(state, del_id);
+        state.crystals.erase(state.crystals.begin() + g_pending_delete_crystal_idx);
+        if (state.selected_crystal >= static_cast<int>(state.crystals.size())) {
+          state.selected_crystal = static_cast<int>(state.crystals.size()) - 1;
+        }
+        state.MarkDirty();
+      }
+      g_pending_delete_crystal_idx = -1;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+      g_pending_delete_crystal_idx = -1;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
   }
 
   ImGui::Separator();
 
   if (state.selected_crystal < 0 || state.selected_crystal >= static_cast<int>(state.crystals.size())) {
     ImGui::TextDisabled("No crystal selected");
+    if (simulating)
+      ImGui::EndDisabled();
     return;
   }
 
@@ -168,23 +312,30 @@ void RenderCrystalTab(GuiState& state) {
     ImGui::Spacing();
     RenderAxisDist("Roll", cr.roll, state);
   }
+
+  if (simulating)
+    ImGui::EndDisabled();
 }
 
 
 // ========== Scene Tab ==========
 
 void RenderSceneTab(GuiState& state) {
+  bool simulating = (state.sim_state == GuiState::SimState::kSimulating);
+  if (simulating)
+    ImGui::BeginDisabled();
+
   if (ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
     DIRTY_IF(SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f));
     DIRTY_IF(SliderWithInput("Azimuth##sun", &state.sun.azimuth, -180.0f, 180.0f));
     DIRTY_IF(SliderWithInput("Diameter", &state.sun.diameter, 0.1f, 5.0f));
-    ImGui::PushItemWidth(-100);
+    ImGui::PushItemWidth(-130);
     DIRTY_IF(ImGui::Combo("Spectrum", &state.sun.spectrum_index, kSpectrumNames, kSpectrumCount));
     ImGui::PopItemWidth();
   }
 
   if (ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-100);
+    ImGui::PushItemWidth(-130);
     DIRTY_IF(ImGui::Checkbox("Infinite rays", &state.sim.infinite));
     if (!state.sim.infinite) {
       DIRTY_IF(ImGui::SliderFloat("Ray num (M)", &state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f"));
@@ -198,7 +349,7 @@ void RenderSceneTab(GuiState& state) {
   }
 
   if (ImGui::CollapsingHeader("Scattering", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-100);
+    ImGui::PushItemWidth(-130);
     for (int li = 0; li < static_cast<int>(state.scattering.size()); li++) {
       auto& layer = state.scattering[li];
       ImGui::PushID(li);
@@ -347,6 +498,9 @@ void RenderSceneTab(GuiState& state) {
     }
     ImGui::PopItemWidth();
   }
+
+  if (simulating)
+    ImGui::EndDisabled();
 }
 
 
@@ -365,7 +519,7 @@ void RenderRenderTab(GuiState& state) {
   auto& r = state.renderers[0];
 
   if (ImGui::CollapsingHeader("Lens & View", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-100);
+    ImGui::PushItemWidth(-130);
     ImGui::Combo("Lens Type", &r.lens_type, kLensTypeNames, kLensTypeCount);
     ImGui::PopItemWidth();
 
@@ -384,22 +538,34 @@ void RenderRenderTab(GuiState& state) {
       ImGui::EndDisabled();
     }
 
-    ImGui::PushItemWidth(-100);
+    ImGui::PushItemWidth(-130);
     ImGui::Combo("Visible", &r.visible, kVisibleNames, kVisibleCount);
     ImGui::SliderFloat("Opacity", &r.opacity, 0.0f, 1.0f, "%.2f");
     ImGui::PopItemWidth();
   }
 
   if (ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-100);
-    const char* res_labels[] = { "512", "1024", "2048", "4096" };
-    DIRTY_IF(ImGui::Combo("Sim Resolution", &r.sim_resolution_index, res_labels, kSimResolutionCount));
-    DIRTY_IF(SliderWithInput("Exposure", &r.exposure_offset, -2.0f, 8.0f, "%.1f"));
-    ImGui::PopItemWidth();
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Changing these requires re-running the simulation");
+    }
+    ImGui::PushItemWidth(-130);
+    bool simulating = (state.sim_state == GuiState::SimState::kSimulating);
+    const char* res_labels[] = { "512", "1024", "2048", "4096" };
+    if (simulating)
+      ImGui::BeginDisabled();
+    DIRTY_IF(ImGui::Combo("Sim Resolution", &r.sim_resolution_index, res_labels, kSimResolutionCount));
+    if (simulating)
+      ImGui::EndDisabled();
+    DIRTY_IF(SliderWithInput("EV", &r.exposure_offset, -2.0f, 8.0f, "%.1f"));
+    ImGui::PopItemWidth();
+  }
+
+  if (ImGui::CollapsingHeader("File", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::Checkbox("Save Texture", &state.save_texture);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Include render texture in .lmc file (larger file, instant preview on open)");
     }
   }
 }
@@ -408,14 +574,38 @@ void RenderRenderTab(GuiState& state) {
 // ========== Filter Tab ==========
 
 void RenderFilterTab(GuiState& state) {
+  bool simulating = (state.sim_state == GuiState::SimState::kSimulating);
+  if (simulating)
+    ImGui::BeginDisabled();
+
   ImGui::Text("Filters");
-  ImGui::SameLine(ImGui::GetContentRegionAvail().x - 50);
+  ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
   if (ImGui::SmallButton("Add##filter")) {
     FilterConfig f;
     f.id = state.next_filter_id++;
     state.filters.push_back(f);
     state.selected_filter = static_cast<int>(state.filters.size()) - 1;
     state.MarkDirty();
+  }
+  ImGui::SameLine();
+  if (state.selected_filter >= 0 && state.selected_filter < static_cast<int>(state.filters.size())) {
+    if (ImGui::SmallButton("Del##filter")) {
+      auto& f_del = state.filters[state.selected_filter];
+      if (IsFilterReferenced(state, f_del.id)) {
+        g_pending_delete_filter_idx = state.selected_filter;
+        ImGui::OpenPopup("Delete Filter?");
+      } else {
+        state.filters.erase(state.filters.begin() + state.selected_filter);
+        if (state.selected_filter >= static_cast<int>(state.filters.size())) {
+          state.selected_filter = static_cast<int>(state.filters.size()) - 1;
+        }
+        state.MarkDirty();
+      }
+    }
+  } else {
+    ImGui::BeginDisabled();
+    ImGui::SmallButton("Del##filter");
+    ImGui::EndDisabled();
   }
 
   if (ImGui::BeginListBox("##filter_list", ImVec2(-1, 60))) {
@@ -430,21 +620,38 @@ void RenderFilterTab(GuiState& state) {
     ImGui::EndListBox();
   }
 
-  if (state.selected_filter >= 0 && state.selected_filter < static_cast<int>(state.filters.size())) {
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Del##filter")) {
-      state.filters.erase(state.filters.begin() + state.selected_filter);
-      if (state.selected_filter >= static_cast<int>(state.filters.size())) {
-        state.selected_filter = static_cast<int>(state.filters.size()) - 1;
+  // Confirmation popup for deleting a referenced filter
+  if (ImGui::BeginPopupModal("Delete Filter?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::Text("This filter is referenced by scattering entries.");
+    ImGui::Text("Delete it and clear those references?");
+    ImGui::Separator();
+    if (ImGui::Button("Delete", ImVec2(80, 0))) {
+      if (g_pending_delete_filter_idx >= 0 && g_pending_delete_filter_idx < static_cast<int>(state.filters.size())) {
+        int del_id = state.filters[g_pending_delete_filter_idx].id;
+        ClearFilterReferences(state, del_id);
+        state.filters.erase(state.filters.begin() + g_pending_delete_filter_idx);
+        if (state.selected_filter >= static_cast<int>(state.filters.size())) {
+          state.selected_filter = static_cast<int>(state.filters.size()) - 1;
+        }
+        state.MarkDirty();
       }
-      state.MarkDirty();
+      g_pending_delete_filter_idx = -1;
+      ImGui::CloseCurrentPopup();
     }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+      g_pending_delete_filter_idx = -1;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
   }
 
   ImGui::Separator();
 
   if (state.selected_filter < 0 || state.selected_filter >= static_cast<int>(state.filters.size())) {
     ImGui::TextDisabled("No filter selected");
+    if (simulating)
+      ImGui::EndDisabled();
     return;
   }
 
@@ -470,6 +677,9 @@ void RenderFilterTab(GuiState& state) {
   DIRTY_IF(ImGui::Checkbox("D", &f.sym_d));
 
   ImGui::PopItemWidth();
+
+  if (simulating)
+    ImGui::EndDisabled();
 }
 
 #undef DIRTY_IF

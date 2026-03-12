@@ -138,6 +138,7 @@ struct GuiState {
   // File management
   std::string current_file_path;
   bool dirty = false;
+  bool save_texture = true;  // Whether to include texture in .lmc save (UI-only, not serialized)
 
   void MarkDirty() {
     dirty = true;

@@ -19,12 +19,14 @@ add_executable(LumiceGUI
     ${PROJ_SRC_DIR}/gui/file_io.cpp
     ${PROJ_SRC_DIR}/gui/preview_renderer.cpp
     ${PROJ_SRC_DIR}/gui/crystal_renderer.cpp
+    ${PROJ_SRC_DIR}/gui/stb_impl.cpp
     ${IMGUI_SOURCES})
 
 target_include_directories(LumiceGUI PRIVATE
     ${PROJ_SRC_DIR}
     ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends)
+    ${IMGUI_DIR}/backends
+    ${stb_SOURCE_DIR})
 
 target_link_libraries(LumiceGUI PRIVATE
     lumice
