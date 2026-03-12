@@ -48,12 +48,18 @@ The project uses CMake for building and provides a `build.sh` script to simplify
 
 **Build options**:
 - `-t`: Compile and run tests
+- `-g`: Build GUI application (Dear ImGui + GLFW + OpenGL)
 - `-b`: Build benchmarks (Google Benchmark)
 - `-j`: Parallel compilation
 - `-k`: Clean build artifacts (keep dependency cache)
 - `-x`: Clean everything including dependency cache
 - `-s`: Build shared libraries (static libraries by default)
 - `-h`: Show help information
+
+**Common flag combinations**:
+- `./build.sh -gj release`: Build GUI without tests
+- `./build.sh -gtj release`: Build GUI + run all tests (unit + GUI)
+- `./build.sh -tj release`: Build core + run unit tests only (no GUI)
 
 ### IDE Configuration
 
@@ -470,6 +476,53 @@ TEST_F(CrystalTest, GetTriangleVtx) {
 cd build/cmake_build
 ctest
 ```
+
+### GUI Testing
+
+The project uses [ImGui Test Engine](https://github.com/ocornut/imgui_test_engine) for GUI automated testing. Tests run in a hidden-window mode and cover widget interactions and visual regression.
+
+#### Running GUI Tests
+
+```bash
+# Build and run all tests (unit + GUI)
+./build.sh -gtj release
+```
+
+#### Test Structure
+
+GUI tests are located in `test/gui/` and organized by priority:
+
+- **Smoke tests**: Basic application state verification
+- **P0 (File operations)**: New, Save/Open roundtrip, Run/Stop UI
+- **P1 (CRUD)**: Crystal/Filter add/delete with confirmation popups
+- **P2 (Parameters)**: Lens switching, mark-dirty detection
+- **Screenshot tests**: FBO capture and PSNR comparison
+- **Visual regression tests**: Crystal preview (Prism/Pyramid, Wireframe/HiddenLine/Shaded) and render preview data correctness
+
+#### Writing GUI Tests
+
+GUI tests use the GuiFunc (main thread) + TestFunc (test thread) pattern:
+
+```cpp
+ImGuiTest* t = IM_REGISTER_TEST(engine, "category", "test_name");
+t->GuiFunc = [](ImGuiTestContext* ctx) {
+  // Runs on main thread — safe for GL calls
+};
+t->TestFunc = [](ImGuiTestContext* ctx) {
+  // Runs on test thread — drive UI interactions
+  ctx->ItemClick("##TopBar/New");
+  IM_CHECK(gui::g_state.is_dirty == false);
+};
+```
+
+#### Visual Regression Reference Images
+
+Reference images are in `test/gui/references/`. To update:
+1. Run `./build.sh -gtj release` to generate new screenshots
+2. Copy updated images to `test/gui/references/`
+3. Rebuild and verify PSNR = inf (pixel-identical)
+
+> **Note**: Reference images are generated on macOS + Apple Silicon. Cross-platform PSNR may differ.
 
 #### Testing Best Practices
 

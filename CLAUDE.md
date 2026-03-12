@@ -32,10 +32,11 @@ pytest test/e2e/ -v               # E2E 测试（Python，需 Pillow）
 src/
 ├── config/    # 配置解析：config_manager, crystal/light/filter/render/proj_config, sim_data
 ├── core/      # 核心：crystal, geo3d, math, optics, simulator, filter, raypath, buffer, def
+├── gui/       # GUI 应用：app, panels, crystal_renderer, preview_renderer, file_io（Dear ImGui + GLFW + OpenGL）
 ├── server/    # 服务层：server, consumer, render, stats, show_rays, c_api
 ├── util/      # 工具：logger, threading_pool, arg_parser, queue, illuminant, color_data
 └── include/   # 公共 C API 头文件（lumice.h）
-test/          # test_*.cpp（单元测试）+ e2e/（端到端测试）
+test/          # test_*.cpp（单元测试）+ e2e/（端到端测试）+ gui/（GUI 自动化测试）
 ```
 
 - 命名空间: `lumice`

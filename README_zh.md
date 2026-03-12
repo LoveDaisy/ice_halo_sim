@@ -59,6 +59,12 @@
 - [tl-expected](https://github.com/TartanLlama/expected) v1.1.0 — C++17 `expected<T,E>`（header-only）
 - [GoogleTest](https://github.com/google/googletest) v1.15.2 — 单元测试（启用 `-t` 时下载）
 
+**GUI 额外依赖**（启用 `-g` 时下载）：
+- [Dear ImGui](https://github.com/ocornut/imgui) v1.91.8-docking — 即时模式 GUI
+- [GLFW](https://www.glfw.org/) 3.4 — 窗口和输入管理
+- [nfd](https://github.com/btzy/nativefiledialog-extended) v1.2.1 — 原生文件对话框
+- [imgui_test_engine](https://github.com/ocornut/imgui_test_engine) v1.91.8 — GUI 自动化测试（同时启用 `-g` 和 `-t` 时下载）
+
 > **关于 Ninja**: 若未安装 Ninja，可将 `build.sh` 中的 `-G Ninja` 删除，CMake 将回退到系统默认生成器（通常为 Unix Makefiles）。
 
 ### 构建项目
@@ -69,10 +75,11 @@
 ~~~bash
 ./build.sh -h
 Usage:
-  ./build.sh [-tbjksxh] <debug|release|minsizerel>
+  ./build.sh [-tgbjksxh] <debug|release|minsizerel>
     Executables will be installed at build/cmake_install
 OPTIONS:
   -t:          Build test cases and run test on them.
+  -g:          Build GUI application (Dear ImGui + GLFW + OpenGL).
   -b:          Build benchmarks (Google Benchmark).
   -j:          Build in parallel, i.e. use make -j
   -k:          Clean build artifacts (keep dependency cache).
@@ -100,6 +107,32 @@ pytest test/e2e/ -v
 ~~~
 
 详见 [`test/e2e/README.md`](test/e2e/README.md)。
+
+### GUI 图形界面
+
+提供图形界面用于交互式模拟配置和预览：
+
+~~~bash
+# 构建 GUI 应用
+./build.sh -gj release
+
+# 运行 GUI
+./build/cmake_install/LumiceGUI
+~~~
+
+GUI 提供以下功能：
+- 晶体参数编辑与实时 3D 预览
+- 渲染设置与镜头投影预览
+- 过滤器和场景配置
+- 保存/加载项目文件（`.lmc` 格式）
+- 运行模拟并交互式查看结果
+
+构建并运行 GUI 自动化测试（需要 display server）：
+
+~~~bash
+./build.sh -gtj release
+~~~
+
 
 ## 配置文件
 
@@ -288,6 +321,7 @@ pytest test/e2e/ -v
 - [配置文档](doc/configuration_zh.md) - 完整配置参考
 - [系统架构文档](doc/architecture_zh.md) - 系统架构设计
 - [开发指南](doc/developer-guide_zh.md) - 开发指南
+- [GUI 使用指南](doc/gui-guide_zh.md) - GUI 应用使用说明
 - [C 接口文档](doc/c_api_zh.md) - C 接口使用说明
 - [API 文档](doc/api/html/) - 自动生成的 API 文档（需要本地生成：`doxygen .doxygen-config`）
 

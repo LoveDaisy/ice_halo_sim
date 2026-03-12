@@ -13,6 +13,7 @@ doc/
 ├── configuration.md / _zh.md      # Configuration guide
 ├── c_api.md / _zh.md              # C API reference
 ├── developer-guide.md / _zh.md    # Developer guide
+├── gui-guide.md / _zh.md         # GUI application guide
 ├── api/                           # API docs (Doxygen-generated)
 └── figs/                          # Image resources
 ```
@@ -31,6 +32,12 @@ For users of this project:
   - Module responsibilities and dependencies
   - Data flow and processing pipeline
   - Program entry points
+
+- **[GUI Guide](gui-guide.md)**: GUI application usage
+  - Application features and UI layout
+  - Crystal preview and render preview
+  - Project file format (`.lmc`)
+  - Building and running the GUI
 
 ## Developer Documentation
 
