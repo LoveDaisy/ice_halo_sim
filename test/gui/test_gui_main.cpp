@@ -32,8 +32,8 @@ struct ScreenshotCapture {
     pixels.clear();
     width = 0;
     height = 0;
-    capture_requested.store(false, std::memory_order_relaxed);
-    capture_done.store(false, std::memory_order_relaxed);
+    capture_requested = false;
+    capture_done = false;
   }
 };
 static ScreenshotCapture g_capture;
