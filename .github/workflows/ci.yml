@@ -13,8 +13,39 @@ env:
   CPM_SOURCE_CACHE: ${{ github.workspace }}/cpm_cache
 
 jobs:
-  build-ubuntu:
-    runs-on: ubuntu-24.04
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu x86_64
+            os: ubuntu-24.04
+            build_gui: OFF
+            cache_key: ubuntu-x64
+
+          - name: Ubuntu ARM64
+            os: ubuntu-24.04-arm
+            build_gui: OFF
+            cache_key: ubuntu-arm64
+
+          - name: macOS ARM64
+            os: macos-15
+            build_gui: ON
+            cache_key: macos-arm64
+
+          - name: macOS Intel
+            os: macos-13
+            build_gui: ON
+            cache_key: macos-x64
+
+          - name: Windows x86_64
+            os: windows-2025
+            build_gui: OFF
+            cache_key: windows-x64
+
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -22,45 +53,19 @@ jobs:
         uses: actions/cache@v4
         with:
           path: cpm_cache
-          key: cpm-ubuntu-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: cpm-ubuntu-
+          key: cpm-${{ matrix.cache_key }}-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-${{ matrix.cache_key }}-
 
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DBUILD_TEST=ON
-          -DBUILD_GUI=OFF
+          -DBUILD_GUI=${{ matrix.build_gui }}
+          -DLUMICE_NATIVE_ARCH=OFF
 
       - name: Build
         run: cmake --build build --parallel
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
-
-  build-macos:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache CPM dependencies
-        uses: actions/cache@v4
-        with:
-          path: cpm_cache
-          key: cpm-macos-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: cpm-macos-
-
-      - name: Configure
-        # BUILD_GUI=ON: compile GUI to verify it builds; GUI tests excluded below (no display)
-        run: >
-          cmake -S . -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DBUILD_TEST=ON
-          -DBUILD_GUI=ON
-
-      - name: Build
-        run: cmake --build build --parallel
-
-      - name: Unit Test
-        # -R LumiceUnitTest: run only unit tests, skip GUI tests (headless runner cannot create GL context)
         run: ctest --test-dir build --output-on-failure -R LumiceUnitTest
