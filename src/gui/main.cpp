@@ -189,6 +189,7 @@ void DoOpen() {
 
 void DoNew() {
   g_state = lumice::gui::InitDefaultState();
+  g_preview.ClearTexture();
 }
 
 void DoRun() {

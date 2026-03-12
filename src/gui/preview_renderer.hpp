@@ -29,6 +29,7 @@ class PreviewRenderer {
   void Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params);
 
   bool HasTexture() const { return tex_width_ > 0 && tex_height_ > 0; }
+  void ClearTexture();
 
   // CPU-side texture data access (for .lmc file save)
   const unsigned char* GetTextureData() const { return tex_data_.empty() ? nullptr : tex_data_.data(); }

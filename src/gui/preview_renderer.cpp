@@ -285,6 +285,12 @@ void PreviewRenderer::Destroy() {
   tex_data_.clear();
 }
 
+void PreviewRenderer::ClearTexture() {
+  tex_width_ = 0;
+  tex_height_ = 0;
+  tex_data_.clear();
+}
+
 void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int height) {
   if (!texture_ || !data) {
     return;

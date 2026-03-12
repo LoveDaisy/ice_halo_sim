@@ -54,8 +54,8 @@ class CrystalRenderer {
   unsigned int tri_ebo_ = 0;
 
   // CPU mesh data for per-frame edge classification
-  std::vector<int> all_edges_;             // edge vertex pairs
-  std::vector<float> edge_face_normals_;   // 6 floats per edge
+  std::vector<int> all_edges_;            // edge vertex pairs
+  std::vector<float> edge_face_normals_;  // 6 floats per edge
   int total_edge_count_ = 0;
   int tri_count_ = 0;
 };
