@@ -10,6 +10,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)   #...is required...
 set(CMAKE_CXX_EXTENSIONS OFF)         #...without compiler extensions like gnu++11
 set(CMAKE_C_STANDARD 11)              # C11...
 
+option(LUMICE_NATIVE_ARCH "Enable -march=native for release builds (GCC/Clang)" ON)
+
 if(MSVC)
   add_definitions(-DNOMINMAX)
   set(CMAKE_DEBUG_POSTFIX "d")
@@ -195,7 +197,7 @@ if(NOT MSVC)
   # LUMICE_API 宏（__declspec(dllexport/dllimport)），参见 lumice.h 中的注释。
   target_compile_options(lumice_obj PRIVATE
     $<$<CONFIG:Debug>:-O0 -g -ggdb>
-    $<$<CONFIG:Release>:-march=native -ffunction-sections -fdata-sections -fvisibility=hidden>
+    $<$<CONFIG:Release>:$<$<BOOL:${LUMICE_NATIVE_ARCH}>:-march=native> -ffunction-sections -fdata-sections -fvisibility=hidden>
     $<$<CONFIG:MinSizeRel>:-ffunction-sections -fdata-sections -fvisibility=hidden>)
 endif()
 
