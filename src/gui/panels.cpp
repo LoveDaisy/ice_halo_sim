@@ -175,6 +175,11 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
 
 }  // namespace
 
+void ResetPendingDeleteState() {
+  g_pending_delete_crystal_idx = -1;
+  g_pending_delete_filter_idx = -1;
+}
+
 
 // ========== Crystal Tab ==========
 

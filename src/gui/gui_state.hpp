@@ -27,8 +27,8 @@ struct CrystalConfig {
 
   // Pyramid
   float prism_h = 1.0f;
-  float upper_h = 0.0f;
-  float lower_h = 0.0f;
+  float upper_h = 0.2f;
+  float lower_h = 0.2f;
   int upper_indices[3] = { 1, 0, 1 };
   int lower_indices[3] = { 1, 0, 1 };
 

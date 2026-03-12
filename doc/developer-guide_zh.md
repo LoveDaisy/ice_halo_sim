@@ -48,12 +48,18 @@ sudo apt-get install cmake ninja-build
 
 **构建选项**：
 - `-t`: 编译并运行测试
+- `-g`: 构建 GUI 应用（Dear ImGui + GLFW + OpenGL）
 - `-b`: 构建基准测试（Google Benchmark）
 - `-j`: 并行编译
 - `-k`: 清理构建产物（保留依赖缓存）
 - `-x`: 清理全部（含依赖缓存）
 - `-s`: 构建共享库（默认为静态库）
 - `-h`: 显示帮助信息
+
+**常用选项组合**：
+- `./build.sh -gj release`：构建 GUI（不运行测试）
+- `./build.sh -gtj release`：构建 GUI + 运行所有测试（单元测试 + GUI 测试）
+- `./build.sh -tj release`：仅构建核心 + 运行单元测试（不含 GUI）
 
 ### IDE配置
 
@@ -470,6 +476,53 @@ TEST_F(CrystalTest, GetTriangleVtx) {
 cd build/cmake_build
 ctest
 ```
+
+### GUI 测试
+
+项目使用 [ImGui Test Engine](https://github.com/ocornut/imgui_test_engine) 进行 GUI 自动化测试。测试在隐藏窗口模式下运行，覆盖控件交互和视觉回归。
+
+#### 运行 GUI 测试
+
+```bash
+# 构建并运行所有测试（单元测试 + GUI 测试）
+./build.sh -gtj release
+```
+
+#### 测试结构
+
+GUI 测试位于 `test/gui/`，按优先级组织：
+
+- **Smoke 测试**：基本应用状态验证
+- **P0（文件操作）**：New、Save/Open 往返、Run/Stop UI
+- **P1（CRUD）**：晶体/过滤器增删（含确认弹窗）
+- **P2（参数）**：镜头切换、dirty 状态检测
+- **截图测试**：FBO 截图捕获 + PSNR 比对
+- **视觉回归测试**：Crystal preview（Prism/Pyramid、线框/隐藏线/着色）和 Render preview 数据正确性
+
+#### 编写 GUI 测试
+
+GUI 测试采用 GuiFunc（主线程）+ TestFunc（测试线程）模式：
+
+```cpp
+ImGuiTest* t = IM_REGISTER_TEST(engine, "category", "test_name");
+t->GuiFunc = [](ImGuiTestContext* ctx) {
+  // 在主线程运行 — 可安全执行 GL 调用
+};
+t->TestFunc = [](ImGuiTestContext* ctx) {
+  // 在测试线程运行 — 驱动 UI 交互
+  ctx->ItemClick("##TopBar/New");
+  IM_CHECK(gui::g_state.is_dirty == false);
+};
+```
+
+#### 视觉回归参考图片
+
+参考图片位于 `test/gui/references/`。更新流程：
+1. 运行 `./build.sh -gtj release` 生成新截图
+2. 将更新后的图片拷贝到 `test/gui/references/`
+3. 重新构建并验证 PSNR = inf（像素一致）
+
+> **注意**：参考图片在 macOS + Apple Silicon 上生成，跨平台 PSNR 可能有差异。
 
 #### 测试最佳实践
 

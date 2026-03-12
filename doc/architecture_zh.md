@@ -253,6 +253,31 @@ Server::GetResults()
 - `json_util.hpp`: JSON 辅助宏
 - `color_data.hpp`: CIE 色彩匹配函数数据
 
+### gui 模块
+
+**职责**：图形用户界面应用
+
+**主要组件**：
+- `app.cpp/hpp`：主应用循环、面板渲染、全局状态管理（从 `main.cpp` 提取以支持测试）
+- `gui_state.hpp`：`GuiState` 结构体，定义完整的 GUI 状态模型（晶体、过滤器、渲染器、场景设置）
+- `panels.cpp/hpp`：ImGui 面板实现（Crystal、Render、Filter、Scene 四个标签页）
+- `crystal_renderer.cpp/hpp`：基于 OpenGL FBO 的晶体 3D 预览（线框、隐藏线、着色三种风格）
+- `preview_renderer.cpp/hpp`：等距圆柱投影纹理预览，带镜头投影 shader
+- `file_io.cpp/hpp`：`.lmc` 项目文件格式读写（二进制头 + JSON + 可选 PNG 纹理）
+- `main.cpp`：GUI 入口，GLFW/OpenGL 初始化
+
+**关键设计决策**：
+- GUI 逻辑位于 `lumice::gui` 命名空间，使用全局状态（`g_state`、`g_preview` 等）
+- 通过 `lumice.h` C API 与模拟核心通信（与 CLI 使用相同接口）
+- `lumice_gui_obj` OBJECT library 在 `LumiceGUI` 和 `LumiceGUITests` 间共享编译产物
+
+**依赖**：
+- Dear ImGui v1.91.8-docking（即时模式 GUI）
+- GLFW 3.4（窗口管理）
+- nfd v1.2.1（原生文件对话框）
+- OpenGL 3.2 Core Profile
+- stb（`.lmc` 纹理的 PNG 读写）
+
 ### include 模块
 
 **职责**：公共 C API 头文件
@@ -261,19 +286,27 @@ Server::GetResults()
 
 ## 程序入口
 
-当前唯一的程序入口：
-
-**`main.c` → `Lumice`**
-- 功能：C 接口主程序
+**`main.c` → `Lumice`**（CLI）
+- 功能：命令行模拟程序
 - 通过 `lumice.h` 公共 API 与核心库交互
 - 使用方式：
   ```bash
   ./build/cmake_install/Lumice -f config_example.json
   ```
 
+**`src/gui/main.cpp` → `LumiceGUI`**（GUI，需要 `-g` 构建选项）
+- 功能：图形界面，用于交互式模拟配置和预览
+- 提供晶体 3D 预览、渲染预览、参数编辑和 `.lmc` 文件管理
+- 使用方式：
+  ```bash
+  ./build/cmake_install/LumiceGUI
+  ```
+
 构建目标：
 - `lumice`: 核心静态/共享库（默认静态，`-DBUILD_SHARED_LIBS=ON` 编译为共享库）
-- `Lumice`: 可执行文件，链接 `lumice` 库
+- `Lumice`: CLI 可执行文件，链接 `lumice` 库
+- `LumiceGUI`: GUI 可执行文件（`-DBUILD_GUI=ON` 时构建），链接 `lumice_gui_obj` 和 `lumice`
+- `LumiceGUITests`: GUI 测试可执行文件（同时 `-DBUILD_GUI=ON` 和 `-DBUILD_TESTING=ON` 时构建）
 
 ## C API
 
@@ -313,6 +346,10 @@ void LUMICE_StopServer(LUMICE_Server* server);
 | [spdlog](https://github.com/gabime/spdlog) | v1.15.0 | 日志系统 |
 | [tl-expected](https://github.com/TartanLlama/expected) | v1.1.0 | C++17 `expected<T,E>` |
 | [GoogleTest](https://github.com/google/googletest) | v1.15.2 | 单元测试 |
+| [Dear ImGui](https://github.com/ocornut/imgui) | v1.91.8-docking | GUI（启用 `-g` 时）|
+| [GLFW](https://www.glfw.org/) | 3.4 | 窗口管理（启用 `-g` 时）|
+| [nfd](https://github.com/btzy/nativefiledialog-extended) | v1.2.1 | 原生文件对话框（启用 `-g` 时）|
+| [imgui_test_engine](https://github.com/ocornut/imgui_test_engine) | v1.91.8 | GUI 测试（同时启用 `-g` + `-t` 时）|
 
 ## 扩展点
 

@@ -7,7 +7,7 @@
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
 #else
-#include <GL/gl.h>
+#error "GUI requires OpenGL (macOS only). Build without -g flag for core + CLI on other platforms."
 #endif
 
 namespace lumice::gui {

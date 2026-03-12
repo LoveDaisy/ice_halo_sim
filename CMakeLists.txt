@@ -113,6 +113,14 @@ if(BUILD_GUI)
     GITHUB_REPOSITORY btzy/nativefiledialog-extended
     GIT_TAG v1.2.1
   )
+
+  # Dear ImGui Test Engine (no CMake support — download only)
+  CPMAddPackage(
+    NAME imgui_test_engine
+    GITHUB_REPOSITORY ocornut/imgui_test_engine
+    GIT_TAG v1.91.8
+    DOWNLOAD_ONLY YES
+  )
 endif()
 
 # ==================================================================================================
@@ -216,4 +224,8 @@ endif()
 
 if(BUILD_GUI)
   add_subdirectory(src/gui)
+endif()
+
+if(BUILD_GUI AND BUILD_TEST)
+  add_subdirectory(test/gui)
 endif()

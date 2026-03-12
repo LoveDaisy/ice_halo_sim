@@ -8,6 +8,7 @@ Lumice 是一个冰晕 (Ice Halo) 光线追踪模拟程序，C++17 实现。
 # 构建
 ./build.sh -j release             # 并行构建 release
 ./build.sh -tj release            # 构建 + 单元测试
+./build.sh -gtj release           # 构建 GUI + 全部测试（含 GUI 测试）
 ./build.sh -k release             # 清理构建产物后重新构建（保留依赖缓存）
 
 # 运行
@@ -16,6 +17,7 @@ Lumice 是一个冰晕 (Ice Halo) 光线追踪模拟程序，C++17 实现。
 
 # 测试
 ./build.sh -tj release            # 单元测试（GoogleTest via CTest）
+./build.sh -gtj release           # GUI 测试（ImGui Test Engine，需 display server）
 pytest test/e2e/ -v               # E2E 测试（Python，需 Pillow）
 
 # 格式化
@@ -30,10 +32,11 @@ pytest test/e2e/ -v               # E2E 测试（Python，需 Pillow）
 src/
 ├── config/    # 配置解析：config_manager, crystal/light/filter/render/proj_config, sim_data
 ├── core/      # 核心：crystal, geo3d, math, optics, simulator, filter, raypath, buffer, def
+├── gui/       # GUI 应用：app, panels, crystal_renderer, preview_renderer, file_io（Dear ImGui + GLFW + OpenGL）
 ├── server/    # 服务层：server, consumer, render, stats, show_rays, c_api
 ├── util/      # 工具：logger, threading_pool, arg_parser, queue, illuminant, color_data
 └── include/   # 公共 C API 头文件（lumice.h）
-test/          # test_*.cpp（单元测试）+ e2e/（端到端测试）
+test/          # test_*.cpp（单元测试）+ e2e/（端到端测试）+ gui/（GUI 自动化测试）
 ```
 
 - 命名空间: `lumice`
@@ -68,12 +71,24 @@ test/          # test_*.cpp（单元测试）+ e2e/（端到端测试）
 - **构建**: CMake 3.14+ / Ninja
 - **依赖管理**: CPM.cmake（依赖缓存在 `build/cpm_cache/`）
 - **依赖**: nlohmann/json v3.10.5, spdlog v1.15.0, tl-expected v1.1.0, stb (图像读写), GoogleTest v1.15.2
+- **GUI 依赖**: Dear ImGui v1.91.8-docking, GLFW 3.4, nfd v1.2.1, imgui_test_engine v1.91.8
 
 ## 文档语言策略
 
 - 英文版为默认，中文版加 `_zh` 后缀（如 `configuration.md` / `configuration_zh.md`）
 - 代码注释使用英文
 - 详细配置说明见 `doc/configuration.md`
+
+## GUI 测试参考图片
+
+GUI 截图测试的参考图片位于 `test/gui/references/`。更新流程：
+
+1. 临时注释掉 `test_gui_main.cpp` 中 smoke 测试的 `std::remove(tmp_path)` 行
+2. 运行 `./build.sh -gtj release` 生成截图到 `/tmp/lumice_crystal_test.png`
+3. 拷贝到 `test/gui/references/crystal_prism_default.png`
+4. 恢复 `std::remove` 行并重新构建验证
+
+参考图片仅在 macOS + Apple Silicon 上生成，PSNR 阈值 40 dB。
 
 ## 注意事项
 
