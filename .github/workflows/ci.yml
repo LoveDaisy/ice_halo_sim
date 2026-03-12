@@ -64,3 +64,52 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure -R LumiceUnitTest
+
+  e2e-test:
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: cpm_cache
+          key: cpm-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-ubuntu-x64-
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TEST=OFF
+          -DBUILD_GUI=OFF
+          -DLUMICE_NATIVE_ARCH=OFF
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Install
+        run: cmake --install build --prefix build/cmake_install
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: pip install Pillow pytest
+
+      - name: Run E2E tests
+        run: pytest test/e2e/ -v
+        timeout-minutes: 10
+
+  format-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check clang-format
+        run: |
+          find src test bench -name '*.cpp' -o -name '*.hpp' -o -name '*.h' -o -name '*.cc' -o -name '*.inl' | \
+            xargs clang-format --dry-run --Werror 2>&1
