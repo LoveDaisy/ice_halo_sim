@@ -1,0 +1,86 @@
+#ifndef LUMICE_GUI_APP_HPP
+#define LUMICE_GUI_APP_HPP
+
+#include <chrono>
+
+#include "gui/crystal_renderer.hpp"
+#include "gui/gui_state.hpp"
+#include "gui/preview_renderer.hpp"
+#include "include/lumice.h"
+
+struct GLFWwindow;
+
+namespace lumice::gui {
+
+// Layout constants
+constexpr int kInitWindowWidth = 1280;
+constexpr int kInitWindowHeight = 720;
+constexpr int kMinWindowWidth = 800;
+constexpr int kMinWindowHeight = 600;
+constexpr float kLeftPanelWidth = 380.0f;
+constexpr float kTopBarHeight = 40.0f;
+constexpr float kStatusBarHeight = 28.0f;
+
+// Stored preview viewport for deferred rendering (after ImGui::Render)
+struct PreviewViewport {
+  bool active = false;
+  int vp_x = 0;
+  int vp_y = 0;
+  int vp_w = 0;
+  int vp_h = 0;
+  PreviewParams params;
+};
+
+enum class PendingAction { kNone, kNew, kOpen, kQuit };
+
+// Global state — accessible for test engine
+extern GuiState g_state;
+extern PreviewRenderer g_preview;
+extern CrystalRenderer g_crystal_renderer;
+extern LUMICE_Server* g_server;
+extern bool g_panel_collapsed;
+extern PreviewViewport g_preview_vp;
+
+// Crystal preview trackball state
+extern float g_crystal_rotation[16];
+extern float g_crystal_zoom;
+extern int g_crystal_style;
+extern int g_crystal_mesh_id;
+extern int g_crystal_mesh_hash;
+
+// Unsaved changes popup state
+extern bool g_show_unsaved_popup;
+extern PendingAction g_pending_action;
+extern std::chrono::steady_clock::time_point g_last_poll_time;
+
+// GLFW callback
+void GlfwErrorCallback(int error, const char* description);
+
+// Crystal preview helpers
+int CrystalParamHash(const CrystalConfig& c);
+void ResetCrystalView();
+void ApplyTrackballRotation(float dx, float dy);
+
+// Business operations
+void DoSave();
+void DoSaveAs();
+void DoOpen();
+void DoNew();
+void DoRun();
+void DoStop();
+void DoRevert();
+void FetchRenderResults();
+void PollServerState();
+void CheckUnsavedAndDo(PendingAction action);
+
+// Panel rendering
+void RenderTopBar(float window_width);
+void RenderLeftPanel(float window_height);
+void RenderFloatingLensBar(float window_width);
+void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height);
+void RenderStatusBar(float window_width, float window_height);
+void RenderUnsavedPopup(GLFWwindow* window);
+
+}  // namespace lumice::gui
+
+#endif  // LUMICE_GUI_APP_HPP
