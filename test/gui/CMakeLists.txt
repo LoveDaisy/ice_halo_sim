@@ -6,6 +6,7 @@ set(IMGUI_TE_DIR ${imgui_test_engine_SOURCE_DIR}/imgui_test_engine)
 
 add_executable(LumiceGUITests
     test_gui_main.cpp
+    test_screenshot.cpp
     ${IMGUI_TE_DIR}/imgui_te_engine.cpp
     ${IMGUI_TE_DIR}/imgui_te_context.cpp
     ${IMGUI_TE_DIR}/imgui_te_coroutine.cpp
