@@ -1,5 +1,6 @@
 #include <GLFW/glfw3.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 
@@ -18,21 +19,45 @@
 
 namespace gui = lumice::gui;
 
+// Shared state for screenshot tests: GL calls must happen on main thread (GuiFunc),
+// verification happens on test thread (TestFunc).
+struct ScreenshotCapture {
+  std::vector<unsigned char> pixels;
+  int width = 0;
+  int height = 0;
+  std::atomic<bool> capture_requested{ false };
+  std::atomic<bool> capture_done{ false };
+
+  void Reset() {
+    pixels.clear();
+    width = 0;
+    height = 0;
+    capture_requested.store(false, std::memory_order_relaxed);
+    capture_done.store(false, std::memory_order_relaxed);
+  }
+};
+static ScreenshotCapture g_capture;
+
 // Reset all global state for test isolation
 static void ResetTestState() {
-  gui::g_state = gui::InitDefaultState();
-  gui::g_preview.ClearTexture();
+  // Document state (delegates to DoNew: g_state, g_preview, g_crystal_mesh_id/hash)
+  gui::DoNew();
+
+  // UI view state
   gui::ResetCrystalView();
   gui::g_crystal_style = 1;
-  gui::g_crystal_mesh_id = -1;
-  gui::g_crystal_mesh_hash = 0;
-  gui::g_show_unsaved_popup = false;
-  gui::g_pending_action = gui::PendingAction::kNone;
   gui::g_panel_collapsed = false;
   gui::g_preview_vp.active = false;
+
+  // Runtime state
+  gui::g_show_unsaved_popup = false;
+  gui::g_pending_action = gui::PendingAction::kNone;
   gui::g_server = nullptr;
   gui::g_last_poll_time = std::chrono::steady_clock::now();
   gui::ResetPendingDeleteState();
+
+  // Test state
+  g_capture.Reset();
 }
 
 // Register smoke tests
@@ -292,17 +317,6 @@ static void RegisterP2Tests(ImGuiTestEngine* engine) {
   }
 }
 
-// Shared state for screenshot tests: GL calls must happen on main thread (GuiFunc),
-// verification happens on test thread (TestFunc).
-struct ScreenshotCapture {
-  std::vector<unsigned char> pixels;
-  int width = 0;
-  int height = 0;
-  bool capture_requested = false;
-  bool capture_done = false;
-};
-static ScreenshotCapture g_capture;
-
 // GuiFunc that renders GUI and captures crystal texture when requested
 static void ScreenshotGuiFunc(ImGuiTestContext* /*ctx*/) {
   // Normal GUI rendering is handled by the main loop.
@@ -326,7 +340,7 @@ static void RegisterScreenshotTests(ImGuiTestEngine* engine) {
     t->GuiFunc = ScreenshotGuiFunc;
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
-      g_capture = {};
+      g_capture.Reset();
 
       // Crystal tab is the default first tab — no need to switch.
       // Yield 2 frames: frame 1 triggers UpdateMesh (g_crystal_mesh_id == -1) + FBO render,
@@ -376,7 +390,7 @@ static void RegisterScreenshotTests(ImGuiTestEngine* engine) {
     t->GuiFunc = ScreenshotGuiFunc;
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
-      g_capture = {};
+      g_capture.Reset();
 
       // Crystal tab is default — yield 2 frames for mesh update + FBO render
       ctx->Yield(2);
@@ -406,12 +420,7 @@ static void RegisterScreenshotTests(ImGuiTestEngine* engine) {
         cmp_channels = 4;
       } else if (ref_ch == 3) {
         // Strip alpha channel for comparison
-        converted.resize(static_cast<size_t>(g_capture.width) * g_capture.height * 3);
-        for (int i = 0; i < g_capture.width * g_capture.height; ++i) {
-          converted[i * 3 + 0] = g_capture.pixels[i * 4 + 0];
-          converted[i * 3 + 1] = g_capture.pixels[i * 4 + 1];
-          converted[i * 3 + 2] = g_capture.pixels[i * 4 + 2];
-        }
+        converted = lumice::test::StripAlpha(g_capture.pixels.data(), g_capture.width, g_capture.height);
         cmp_data = converted.data();
         cmp_channels = 3;
       }
@@ -419,6 +428,7 @@ static void RegisterScreenshotTests(ImGuiTestEngine* engine) {
       // Same-platform same-hardware should produce near-identical results
       constexpr double kPsnrThreshold = 40.0;  // dB; deterministic GL render should be >50 dB
       double psnr = lumice::test::ComputePsnr(cmp_data, ref_data.data(), ref_w, ref_h, cmp_channels);
+      IM_CHECK(psnr >= 0.0);
       fprintf(stderr, "[screenshot] crystal_psnr: PSNR = %.2f dB (threshold = %.1f dB)\n", psnr, kPsnrThreshold);
       IM_CHECK(psnr > kPsnrThreshold);
     };
@@ -447,20 +457,14 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       // Capture
-      g_capture = {};
+      g_capture.Reset();
       g_capture.capture_requested = true;
       ctx->Yield(2);
       IM_CHECK(g_capture.capture_done);
 
       // Save to /tmp for reference image generation
       const char* tmp_path = "/tmp/lumice_visual_crystal_pyramid.png";
-      // Strip alpha: RGBA → RGB for PNG
-      std::vector<unsigned char> rgb(static_cast<size_t>(g_capture.width) * g_capture.height * 3);
-      for (int i = 0; i < g_capture.width * g_capture.height; ++i) {
-        rgb[i * 3 + 0] = g_capture.pixels[i * 4 + 0];
-        rgb[i * 3 + 1] = g_capture.pixels[i * 4 + 1];
-        rgb[i * 3 + 2] = g_capture.pixels[i * 4 + 2];
-      }
+      auto rgb = lumice::test::StripAlpha(g_capture.pixels.data(), g_capture.width, g_capture.height);
       lumice::test::SavePng(tmp_path, rgb.data(), g_capture.width, g_capture.height, 3);
 
       // Load reference and compare
@@ -479,6 +483,7 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
 
       constexpr double kPsnrThreshold = 40.0;
       double psnr = lumice::test::ComputePsnr(rgb.data(), ref_data.data(), ref_w, ref_h, ref_ch);
+      IM_CHECK(psnr >= 0.0);
       fprintf(stderr, "[visual] crystal_pyramid: PSNR = %.2f dB\n", psnr);
       IM_CHECK(psnr > kPsnrThreshold);
 
@@ -500,18 +505,13 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
       gui::g_crystal_style = 0;  // Wireframe
       ctx->Yield(3);
 
-      g_capture = {};
+      g_capture.Reset();
       g_capture.capture_requested = true;
       ctx->Yield(2);
       IM_CHECK(g_capture.capture_done);
 
       const char* tmp_path = "/tmp/lumice_visual_crystal_wireframe.png";
-      std::vector<unsigned char> rgb(static_cast<size_t>(g_capture.width) * g_capture.height * 3);
-      for (int i = 0; i < g_capture.width * g_capture.height; ++i) {
-        rgb[i * 3 + 0] = g_capture.pixels[i * 4 + 0];
-        rgb[i * 3 + 1] = g_capture.pixels[i * 4 + 1];
-        rgb[i * 3 + 2] = g_capture.pixels[i * 4 + 2];
-      }
+      auto rgb = lumice::test::StripAlpha(g_capture.pixels.data(), g_capture.width, g_capture.height);
       lumice::test::SavePng(tmp_path, rgb.data(), g_capture.width, g_capture.height, 3);
 
       const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_wireframe.png";
@@ -528,6 +528,7 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
 
       constexpr double kPsnrThreshold = 40.0;
       double psnr = lumice::test::ComputePsnr(rgb.data(), ref_data.data(), ref_w, ref_h, ref_ch);
+      IM_CHECK(psnr >= 0.0);
       fprintf(stderr, "[visual] crystal_wireframe: PSNR = %.2f dB\n", psnr);
       IM_CHECK(psnr > kPsnrThreshold);
 
@@ -549,18 +550,13 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
       gui::g_crystal_style = 3;  // Shaded
       ctx->Yield(3);
 
-      g_capture = {};
+      g_capture.Reset();
       g_capture.capture_requested = true;
       ctx->Yield(2);
       IM_CHECK(g_capture.capture_done);
 
       const char* tmp_path = "/tmp/lumice_visual_crystal_shaded.png";
-      std::vector<unsigned char> rgb(static_cast<size_t>(g_capture.width) * g_capture.height * 3);
-      for (int i = 0; i < g_capture.width * g_capture.height; ++i) {
-        rgb[i * 3 + 0] = g_capture.pixels[i * 4 + 0];
-        rgb[i * 3 + 1] = g_capture.pixels[i * 4 + 1];
-        rgb[i * 3 + 2] = g_capture.pixels[i * 4 + 2];
-      }
+      auto rgb = lumice::test::StripAlpha(g_capture.pixels.data(), g_capture.width, g_capture.height);
       lumice::test::SavePng(tmp_path, rgb.data(), g_capture.width, g_capture.height, 3);
 
       const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_shaded.png";
@@ -577,6 +573,7 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
 
       constexpr double kPsnrThreshold = 40.0;
       double psnr = lumice::test::ComputePsnr(rgb.data(), ref_data.data(), ref_w, ref_h, ref_ch);
+      IM_CHECK(psnr >= 0.0);
       fprintf(stderr, "[visual] crystal_shaded: PSNR = %.2f dB\n", psnr);
       IM_CHECK(psnr > kPsnrThreshold);
 
@@ -611,7 +608,7 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
       }
 
       // Request upload via GuiFunc (GL call on main thread)
-      g_capture = {};
+      g_capture.Reset();
       g_capture.pixels = tex_data;
       g_capture.width = kTexW;
       g_capture.height = kTexH;
@@ -629,6 +626,7 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
       if (!match) {
         // Fallback: compute PSNR
         double psnr = lumice::test::ComputePsnr(readback, tex_data.data(), kTexW, kTexH, 3);
+        IM_CHECK(psnr >= 0.0);
         fprintf(stderr, "[visual] preview_load: data mismatch, PSNR = %.2f dB\n", psnr);
       }
       IM_CHECK(match);
@@ -661,7 +659,7 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
       }
 
       // Upload via GuiFunc
-      g_capture = {};
+      g_capture.Reset();
       g_capture.pixels = original;
       g_capture.width = kTexW;
       g_capture.height = kTexH;
@@ -689,7 +687,7 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
       IM_CHECK(!loaded_tex.empty());
 
       // Re-upload loaded texture via GuiFunc
-      g_capture = {};
+      g_capture.Reset();
       g_capture.pixels = loaded_tex;
       g_capture.width = loaded_w;
       g_capture.height = loaded_h;
@@ -705,12 +703,12 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
       bool match = (memcmp(readback, original.data(), data_size) == 0);
       if (!match) {
         double psnr = lumice::test::ComputePsnr(readback, original.data(), kTexW, kTexH, 3);
+        IM_CHECK(psnr >= 0.0);
         fprintf(stderr, "[visual] preview_lmc_roundtrip: mismatch, PSNR = %.2f dB\n", psnr);
         IM_CHECK(psnr >= 60.0);  // Fallback threshold
       } else {
         fprintf(stderr, "[visual] preview_lmc_roundtrip: exact match\n");
       }
-      IM_CHECK(match);
 
       // Cleanup
       std::remove(tmp_path);
@@ -856,8 +854,8 @@ int main(int /*argc*/, char** /*argv*/) {
 
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
-  ImGui::DestroyContext();
   ImGuiTestEngine_DestroyContext(engine);
+  ImGui::DestroyContext();
 
   glfwDestroyWindow(window);
   glfwTerminate();

@@ -2,8 +2,10 @@
 
 #ifdef __APPLE__
 #define GL_SILENCE_DEPRECATION
-#endif
 #include <OpenGL/gl3.h>
+#else
+#error "GUI tests require OpenGL (macOS only). Build without -g flag for core + CLI on other platforms."
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -89,6 +91,20 @@ double ComputePsnr(const unsigned char* img1, const unsigned char* img2, int w, 
   }
 
   return 10.0 * std::log10(255.0 * 255.0 / mse);
+}
+
+std::vector<unsigned char> StripAlpha(const unsigned char* rgba, int width, int height) {
+  if (!rgba || width <= 0 || height <= 0) {
+    return {};
+  }
+  const size_t kPixelCount = static_cast<size_t>(width) * height;
+  std::vector<unsigned char> rgb(kPixelCount * 3);
+  for (size_t i = 0; i < kPixelCount; ++i) {
+    rgb[i * 3 + 0] = rgba[i * 4 + 0];
+    rgb[i * 3 + 1] = rgba[i * 4 + 1];
+    rgb[i * 3 + 2] = rgba[i * 4 + 2];
+  }
+  return rgb;
 }
 
 }  // namespace lumice::test

@@ -28,6 +28,9 @@ bool LoadPng(const char* path, std::vector<unsigned char>& data, int& w, int& h,
 // Returns -1.0 if dimensions don't match or data is null.
 double ComputePsnr(const unsigned char* img1, const unsigned char* img2, int w, int h, int channels);
 
+// Strip alpha channel from RGBA pixel data, returning RGB.
+std::vector<unsigned char> StripAlpha(const unsigned char* rgba, int width, int height);
+
 }  // namespace lumice::test
 
 #endif  // LUMICE_TEST_GUI_SCREENSHOT_HPP
