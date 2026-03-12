@@ -1,9 +1,7 @@
 """Smoke tests for Lumice — run all configs and verify outputs."""
 
 import glob
-import json
 import os
-import unittest
 from pathlib import Path
 
 from test.e2e.base import LumiceTestCase
@@ -42,19 +40,20 @@ class TestSmoke(LumiceTestCase):
     """Smoke tests: run every config and verify basic outputs."""
 
     def test_all_configs_run_successfully(self):
-        """Every config should exit 0, produce non-empty images of correct size."""
+        """Every config should exit 0, produce non-empty images of correct size and PSNR."""
         configs = _discover_configs()
         self.assertTrue(len(configs) > 0, "No configs found in test/e2e/configs/")
 
         for cfg_path in configs:
-            with self.subTest(config=cfg_path.stem):
+            config_name = cfg_path.stem
+            with self.subTest(config=config_name):
                 result = self.run_lumice(
                     ["-f", str(cfg_path), "-o", self.output_dir]
                 )
                 self.assertEqual(
                     result.returncode,
                     0,
-                    f"{cfg_path.stem} failed:\n{result.stderr}",
+                    f"{config_name} failed:\n{result.stderr}",
                 )
 
                 # Check output files exist and are non-empty
@@ -63,7 +62,7 @@ class TestSmoke(LumiceTestCase):
                 )
                 self.assertTrue(
                     len(output_imgs) > 0,
-                    f"{cfg_path.stem}: no output images in {self.output_dir}",
+                    f"{config_name}: no output images in {self.output_dir}",
                 )
 
                 for img_path in output_imgs:
@@ -72,68 +71,34 @@ class TestSmoke(LumiceTestCase):
                         size, 0, f"{img_path} is empty"
                     )
 
-                    # Check dimensions if Pillow available
                     if HAS_PILLOW:
+                        # Check dimensions
                         w, h = get_dimensions(img_path)
                         self.assertEqual(
                             (w, h), (256, 256),
                             f"{img_path} dimensions {w}x{h} != 256x256",
                         )
 
+                        # Check PSNR against reference image
+                        renderer_id = Path(img_path).stem.split("_")[-1]
+                        ref_name = f"{config_name}_{renderer_id}.jpg"
+                        ref_path = REFERENCES_DIR / ref_name
+                        threshold_key = f"{config_name}_{renderer_id}"
+
+                        if ref_path.exists() and threshold_key in PSNR_THRESHOLDS:
+                            threshold = PSNR_THRESHOLDS[threshold_key]
+                            if threshold is not None:
+                                mse = compute_mse(img_path, str(ref_path))
+                                psnr = compute_psnr(mse)
+                                self.assertGreaterEqual(
+                                    psnr,
+                                    threshold,
+                                    f"{ref_name}: PSNR {psnr:.1f} dB < threshold {threshold} dB",
+                                )
+
                 # Clean output_dir for next config
                 for f in glob.glob(os.path.join(self.output_dir, "*")):
                     os.remove(f)
-
-    @unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
-    def test_image_psnr(self):
-        """Output images should be similar to reference images (PSNR check)."""
-        if not PSNR_THRESHOLDS:
-            self.skipTest("PSNR thresholds not yet calibrated")
-
-        configs = _discover_configs()
-        for cfg_path in configs:
-            config_name = cfg_path.stem
-
-            result = self.run_lumice(
-                ["-f", str(cfg_path), "-o", self.output_dir]
-            )
-            if result.returncode != 0:
-                # Don't PSNR-check failed runs; test_all_configs covers this
-                continue
-
-            output_imgs = sorted(
-                glob.glob(os.path.join(self.output_dir, "img_*.jpg"))
-            )
-
-            for img_path in output_imgs:
-                # Extract renderer id: img_01.jpg -> 01
-                renderer_id = Path(img_path).stem.split("_")[-1]
-                ref_name = f"{config_name}_{renderer_id}.jpg"
-                ref_path = REFERENCES_DIR / ref_name
-                threshold_key = f"{config_name}_{renderer_id}"
-
-                if not ref_path.exists():
-                    continue  # No reference for this output
-
-                if threshold_key not in PSNR_THRESHOLDS:
-                    continue  # No threshold calibrated
-
-                threshold = PSNR_THRESHOLDS[threshold_key]
-                if threshold is None:
-                    continue  # Explicitly skipped
-
-                with self.subTest(reference=ref_name):
-                    mse = compute_mse(img_path, str(ref_path))
-                    psnr = compute_psnr(mse)
-                    self.assertGreaterEqual(
-                        psnr,
-                        threshold,
-                        f"{ref_name}: PSNR {psnr:.1f} dB < threshold {threshold} dB",
-                    )
-
-            # Clean for next config
-            for f in glob.glob(os.path.join(self.output_dir, "*")):
-                os.remove(f)
 
     def test_stdout_contains_stats(self):
         """Lumice stdout should contain Stats: and Saved: lines."""
