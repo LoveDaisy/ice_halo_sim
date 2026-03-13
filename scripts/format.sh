@@ -23,7 +23,7 @@ function format_dir_recursive() {
 }
 
 
-base_dir=$(cd `dirname $0`; pwd)
+base_dir=$(cd "$(dirname "$0")/.."; pwd)
 
 if [ -z "$(which clang-format)" ]; then
   echo "No clang-format found! Do nothing."

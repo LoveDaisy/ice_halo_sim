@@ -14,7 +14,7 @@
 - `render`: 渲染器定义数组
 
 **重要提示**：
-- 样例配置文件（`config_example.json`）并未穷举所有合法的配置写法
+- 样例配置文件（`examples/config_example.json`）并未穷举所有合法的配置写法
 - 大量配置参数具有默认值，如果不写会使用默认值
 - **必须参考代码实现**来了解完整的配置逻辑和默认值
 - 本文档基于代码实现提取了所有默认值信息
@@ -901,4 +901,4 @@
 
 - [README](../README_zh.md): 用户文档
 - [系统架构文档](architecture_zh.md): 系统架构文档
-- [配置示例文件](../config_example.json): 配置示例文件
+- [配置示例文件](../examples/config_example.json): 配置示例文件

@@ -67,7 +67,7 @@ doc/
 
 - [项目 README](../README.md)
 - [项目中文 README](../README_zh.md)
-- [配置示例文件](../config_example.json)
+- [配置示例文件](../examples/config_example.json)
 
 ## 文档语言策略
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-ROOT_DIR=$(cd "$(dirname "$0")"; pwd)
+ROOT_DIR=$(cd "$(dirname "$0")/.."; pwd)
 BUILD_DIR="${ROOT_DIR}/build/cmake_build"
 INSTALL_DIR="${ROOT_DIR}/build/cmake_install"
 PROJ_DIR=${ROOT_DIR}

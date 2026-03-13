@@ -7,7 +7,7 @@ They run the built `Lumice` binary with test configurations and check results.
 
 ```bash
 # Build Lumice (release)
-./build.sh -j release
+./scripts/build.sh -j release
 
 # Install Python test dependency
 pip install Pillow

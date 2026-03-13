@@ -291,7 +291,7 @@ Server::GetResults()
 - 通过 `lumice.h` 公共 API 与核心库交互
 - 使用方式：
   ```bash
-  ./build/cmake_install/Lumice -f config_example.json
+  ./build/cmake_install/Lumice -f examples/config_example.json
   ```
 
 **`src/gui/main.cpp` → `LumiceGUI`**（GUI，需要 `-g` 构建选项）
