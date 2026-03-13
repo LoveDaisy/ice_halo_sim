@@ -54,6 +54,7 @@ jobs:
         run: |
           python -m pip install jinja2
           echo "Python_ROOT_DIR=$(cygpath -w "$(dirname "$(which python)")")" >> "$GITHUB_ENV"
+          echo "LUMICE_PYTHON_ARGS=-DPython_EXECUTABLE=$(cygpath -w "$(which python)")" >> "$GITHUB_ENV"
 
       - name: Version check
         run: python scripts/version.py check --tag "${{ github.ref_name }}"
@@ -80,6 +81,7 @@ jobs:
           -DBUILD_TEST=OFF
           -DBUILD_GUI=${{ matrix.build_gui }}
           -DLUMICE_NATIVE_ARCH=OFF
+          ${{ env.LUMICE_PYTHON_ARGS }}
 
       - name: Build
         run: cmake --build build --parallel
