@@ -46,10 +46,14 @@ jobs:
         with:
           fetch-tags: true
 
-      # GLAD2 runs the Python code generator at CMake configure time (needs Jinja2)
+      # GLAD2 runs the Python code generator at CMake configure time (needs Jinja2).
+      # Set Python_ROOT_DIR so CMake's find_package(Python) uses the same Python.
       - name: Install GLAD2 Python dependencies
         if: runner.os == 'Windows' && matrix.build_gui == 'ON'
-        run: python -m pip install jinja2
+        shell: bash
+        run: |
+          python -m pip install jinja2
+          echo "Python_ROOT_DIR=$(dirname "$(which python)")" >> "$GITHUB_ENV"
 
       - name: Version check
         run: python scripts/version.py check --tag "${{ github.ref_name }}"
