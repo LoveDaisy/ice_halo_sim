@@ -15,6 +15,8 @@
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
 #include <GL/glext.h>
+#elif defined(_WIN32)
+#include <glad/gl.h>
 #else
 #error "Unsupported platform for GUI OpenGL. Build with -DBUILD_GUI=OFF."
 #endif

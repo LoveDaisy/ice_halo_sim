@@ -20,6 +20,7 @@ add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/file_io.cpp
     ${PROJ_SRC_DIR}/gui/preview_renderer.cpp
     ${PROJ_SRC_DIR}/gui/crystal_renderer.cpp
+    ${PROJ_SRC_DIR}/gui/gl_init.cpp
     ${PROJ_SRC_DIR}/gui/stb_impl.cpp
     ${IMGUI_SOURCES})
 
@@ -29,11 +30,24 @@ target_include_directories(lumice_gui_obj PUBLIC
     ${IMGUI_DIR}/backends
     ${stb_SOURCE_DIR})
 
-target_link_libraries(lumice_gui_obj PUBLIC
-    lumice
-    glfw
-    nfd
-    OpenGL::GL)
+if(WIN32)
+  target_link_libraries(lumice_gui_obj PUBLIC
+      lumice
+      glfw
+      nfd
+      glad_gl)
+  # ImGui auto-detects GLAD2 via __has_include(<glad/gl.h>) — no loader definition needed.
+else()
+  target_link_libraries(lumice_gui_obj PUBLIC
+      lumice
+      glfw
+      nfd
+      OpenGL::GL)
+endif()
+
+# GLFW_INCLUDE_NONE: prevent GLFW from including GL headers — gl_common.h provides them
+# per platform (macOS: gl3.h, Linux: GL/gl.h+glext.h, Windows: glad/gl.h)
+target_compile_definitions(lumice_gui_obj PUBLIC GLFW_INCLUDE_NONE)
 
 target_compile_definitions(lumice_gui_obj PUBLIC IMGUI_ENABLE_TEST_ENGINE)
 

@@ -3,6 +3,8 @@
 #include <cstdio>
 
 #include "gui/app.hpp"
+#include "gui/gl_common.h"
+#include "gui/gl_init.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -34,6 +36,12 @@ int main(int /*argc*/, char** /*argv*/) {
   glfwSetWindowSizeLimits(window, gui::kMinWindowWidth, gui::kMinWindowHeight, GLFW_DONT_CARE, GLFW_DONT_CARE);
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);  // VSync
+
+  if (!gui::InitGLLoader()) {
+    glfwDestroyWindow(window);
+    glfwTerminate();
+    return 1;
+  }
 
   // imgui setup
   IMGUI_CHECKVERSION();

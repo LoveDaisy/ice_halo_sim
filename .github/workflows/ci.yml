@@ -35,7 +35,7 @@ jobs:
 
           - name: Windows x86_64
             os: windows-2025
-            build_gui: OFF
+            build_gui: ON
             cache_key: windows-x64
 
     runs-on: ${{ matrix.os }}
@@ -43,6 +43,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      # GLAD2 runs the Python code generator at CMake configure time (needs Jinja2).
+      # Set Python_ROOT_DIR so CMake's find_package(Python) uses the same Python.
+      - name: Install GLAD2 Python dependencies
+        if: runner.os == 'Windows' && matrix.build_gui == 'ON'
+        shell: bash
+        run: |
+          python -m pip install jinja2
+          echo "Python_ROOT_DIR=$(cygpath -w "$(dirname "$(which python)")")" >> "$GITHUB_ENV"
+          echo "LUMICE_PYTHON_ARGS=-DPython_EXECUTABLE=$(cygpath -w "$(which python)")" >> "$GITHUB_ENV"
 
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux' && matrix.build_gui == 'ON'
@@ -65,6 +75,7 @@ jobs:
           -DBUILD_TEST=ON
           -DBUILD_GUI=${{ matrix.build_gui }}
           -DLUMICE_NATIVE_ARCH=OFF
+          ${{ env.LUMICE_PYTHON_ARGS }}
 
       - name: Build
         run: cmake --build build --parallel

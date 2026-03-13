@@ -10,7 +10,6 @@ env:
   # Platform support decisions (2026-03):
   #   - Only CLI and GUI executables are published; shared library publishing is deferred.
   #   - linux-arm64: GUI OFF — ARM runner GPU/display support not verified.
-  #   - Windows: excluded — CLI requires POSIX (main.c), GUI not yet ported to MSVC/MinGW.
   #   - macOS Intel: excluded — GitHub Actions dropped macos-13 runners (2025).
 
 jobs:
@@ -22,14 +21,22 @@ jobs:
           - name: linux-x64
             os: ubuntu-24.04
             build_gui: ON
+            ext: tar.gz
 
           - name: linux-arm64
             os: ubuntu-24.04-arm
             build_gui: OFF  # ARM runner GPU/display support not verified
+            ext: tar.gz
 
           - name: macos-arm64
             os: macos-15
             build_gui: ON
+            ext: tar.gz
+
+          - name: windows-x64
+            os: windows-2025
+            build_gui: ON
+            ext: zip
 
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.name }}
@@ -38,6 +45,16 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-tags: true
+
+      # GLAD2 runs the Python code generator at CMake configure time (needs Jinja2).
+      # Set Python_ROOT_DIR so CMake's find_package(Python) uses the same Python.
+      - name: Install GLAD2 Python dependencies
+        if: runner.os == 'Windows' && matrix.build_gui == 'ON'
+        shell: bash
+        run: |
+          python -m pip install jinja2
+          echo "Python_ROOT_DIR=$(cygpath -w "$(dirname "$(which python)")")" >> "$GITHUB_ENV"
+          echo "LUMICE_PYTHON_ARGS=-DPython_EXECUTABLE=$(cygpath -w "$(which python)")" >> "$GITHUB_ENV"
 
       - name: Version check
         run: python scripts/version.py check --tag "${{ github.ref_name }}"
@@ -64,6 +81,7 @@ jobs:
           -DBUILD_TEST=OFF
           -DBUILD_GUI=${{ matrix.build_gui }}
           -DLUMICE_NATIVE_ARCH=OFF
+          ${{ env.LUMICE_PYTHON_ARGS }}
 
       - name: Build
         run: cmake --build build --parallel
@@ -72,15 +90,23 @@ jobs:
         run: cmake --install build
 
       - name: Package
+        if: runner.os != 'Windows'
         run: |
           cd install
           tar czf ${{ github.workspace }}/lumice-${{ github.ref_name }}-${{ matrix.name }}.tar.gz *
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd install
+          Compress-Archive -Path * -DestinationPath ${{ github.workspace }}/lumice-${{ github.ref_name }}-${{ matrix.name }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: lumice-${{ matrix.name }}
-          path: lumice-${{ github.ref_name }}-${{ matrix.name }}.tar.gz
+          path: lumice-${{ github.ref_name }}-${{ matrix.name }}.${{ matrix.ext }}
 
   release:
     needs: build

@@ -4,9 +4,12 @@
 #include <chrono>
 #include <cstdio>
 
+#include "gui/gl_common.h"
+
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "gui/app.hpp"
 #include "gui/file_io.hpp"
+#include "gui/gl_init.h"
 #include "gui/panels.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -742,6 +745,12 @@ int main(int /*argc*/, char** /*argv*/) {
 
   glfwMakeContextCurrent(window);
   glfwSwapInterval(0);  // No VSync for tests
+
+  if (!gui::InitGLLoader()) {
+    glfwDestroyWindow(window);
+    glfwTerminate();
+    return 1;
+  }
 
   // ImGui setup
   IMGUI_CHECKVERSION();
