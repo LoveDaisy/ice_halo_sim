@@ -35,7 +35,7 @@ jobs:
 
           - name: Windows x86_64
             os: windows-2025
-            build_gui: OFF
+            build_gui: ON
             cache_key: windows-x64
 
     runs-on: ${{ matrix.os }}
