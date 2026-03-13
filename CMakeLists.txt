@@ -125,11 +125,14 @@ if(BUILD_GUI)
   )
 
   # GLAD2: OpenGL loader for Windows (macOS/Linux use native GL headers)
+  # GLAD2 v2.0.8 has its CMakeLists.txt in cmake/ subdirectory (root is a Python package).
+  # SOURCE_SUBDIR tells CPM to run add_subdirectory on cmake/ instead of root.
   if(WIN32)
     CPMAddPackage(
       NAME glad
       GITHUB_REPOSITORY Dav1dde/glad
       GIT_TAG v2.0.8
+      SOURCE_SUBDIR cmake
     )
     glad_add_library(glad_gl REPRODUCIBLE API gl:core=3.3)
   endif()

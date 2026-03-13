@@ -46,6 +46,17 @@ jobs:
         with:
           fetch-tags: true
 
+      # GLAD2 runs the Python generator at CMake configure time
+      - name: Setup Python
+        if: runner.os == 'Windows'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install GLAD2 Python dependencies
+        if: runner.os == 'Windows' && matrix.build_gui == 'ON'
+        run: pip install jinja2
+
       - name: Version check
         run: python scripts/version.py check --tag "${{ github.ref_name }}"
 

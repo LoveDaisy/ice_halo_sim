@@ -44,6 +44,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # GLAD2 runs the Python generator at CMake configure time
+      - name: Setup Python (for GLAD2 code generation)
+        if: runner.os == 'Windows' && matrix.build_gui == 'ON'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install GLAD2 Python dependencies
+        if: runner.os == 'Windows' && matrix.build_gui == 'ON'
+        run: pip install jinja2
+
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux' && matrix.build_gui == 'ON'
         run: >
