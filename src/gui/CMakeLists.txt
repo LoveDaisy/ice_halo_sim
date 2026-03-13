@@ -36,8 +36,7 @@ if(WIN32)
       glfw
       nfd
       glad_gl)
-  # IMGUI_IMPL_OPENGL_LOADER_CUSTOM: skip ImGui's built-in imgl3w loader, use GLAD instead
-  target_compile_definitions(lumice_gui_obj PUBLIC IMGUI_IMPL_OPENGL_LOADER_CUSTOM)
+  # ImGui auto-detects GLAD2 via __has_include(<glad/gl.h>) — no loader definition needed.
 else()
   target_link_libraries(lumice_gui_obj PUBLIC
       lumice
