@@ -32,7 +32,7 @@ def read_cmake_version() -> str:
 def write_cmake_version(version: str) -> None:
     """Write version to CMakeLists.txt. Exits if replacement count != 1."""
     text = CMAKELISTS.read_text()
-    new_text, count = CMAKE_VERSION_RE.subn(rf"\g<1>{version}\3", text)
+    new_text, count = CMAKE_VERSION_RE.subn(rf"\g<1>{version}\g<3>", text)
     if count != 1:
         print(f"Error: expected exactly 1 replacement, got {count}", file=sys.stderr)
         sys.exit(1)
@@ -40,7 +40,12 @@ def write_cmake_version(version: str) -> None:
 
 
 def read_git_tag_version() -> str:
-    """Read version from the latest git tag (strips 'v' prefix)."""
+    """Read version from the latest reachable git tag (strips 'v' prefix).
+
+    Uses ``git describe --tags --abbrev=0``, which returns the most recent tag
+    reachable from HEAD. This may differ from the chronologically newest tag
+    if the current branch has diverged.
+    """
     try:
         tag = subprocess.check_output(
             ["git", "describe", "--tags", "--abbrev=0"],
@@ -50,12 +55,12 @@ def read_git_tag_version() -> str:
     except subprocess.CalledProcessError:
         print("Error: no git tags found", file=sys.stderr)
         sys.exit(1)
-    return tag.lstrip("v")
+    return tag.removeprefix("v")
 
 
 def strip_tag_prefix(tag: str) -> str:
     """Strip 'v' prefix from a tag string."""
-    return tag.lstrip("v")
+    return tag.removeprefix("v")
 
 
 def cmd_check(args: argparse.Namespace) -> None:
