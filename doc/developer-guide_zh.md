@@ -19,7 +19,7 @@
 - [tl-expected](https://github.com/TartanLlama/expected) v1.1.0 — C++17 `expected<T,E>`（header-only）
 - [GoogleTest](https://github.com/google/googletest) v1.15.2 — 单元测试（启用 `-t` 时下载）
 
-> **关于 Ninja**: 若未安装 Ninja，可将 `build.sh` 中的 `-G Ninja` 删除，CMake 将回退到系统默认生成器（通常为 Unix Makefiles）。
+> **关于 Ninja**: 若未安装 Ninja，可将 `scripts/build.sh` 中的 `-G Ninja` 删除，CMake 将回退到系统默认生成器（通常为 Unix Makefiles）。
 
 ### 依赖安装
 
@@ -39,11 +39,11 @@ sudo apt-get install cmake ninja-build
 
 ### 构建配置
 
-项目使用CMake构建，提供了 `build.sh` 脚本简化构建过程：
+项目使用CMake构建，提供了 `scripts/build.sh` 脚本简化构建过程：
 
 ```bash
-./build.sh -j release    # Release版本（推荐）
-./build.sh -j debug      # Debug版本（用于调试）
+./scripts/build.sh -j release    # Release版本（推荐）
+./scripts/build.sh -j debug      # Debug版本（用于调试）
 ```
 
 **构建选项**：
@@ -57,9 +57,9 @@ sudo apt-get install cmake ninja-build
 - `-h`: 显示帮助信息
 
 **常用选项组合**：
-- `./build.sh -gj release`：构建 GUI（不运行测试）
-- `./build.sh -gtj release`：构建 GUI + 运行所有测试（单元测试 + GUI 测试）
-- `./build.sh -tj release`：仅构建核心 + 运行单元测试（不含 GUI）
+- `./scripts/build.sh -gj release`：构建 GUI（不运行测试）
+- `./scripts/build.sh -gtj release`：构建 GUI + 运行所有测试（单元测试 + GUI 测试）
+- `./scripts/build.sh -tj release`：仅构建核心 + 运行单元测试（不含 GUI）
 
 ### IDE配置
 
@@ -86,17 +86,17 @@ sudo apt-get install cmake ninja-build
 #### 使用LLDB (macOS)
 
 ```bash
-./build.sh debug
+./scripts/build.sh debug
 lldb ./build/cmake_build/Lumice
-(lldb) run -f config_example.json
+(lldb) run -f examples/config_example.json
 ```
 
 #### 使用GDB (Linux)
 
 ```bash
-./build.sh debug
+./scripts/build.sh debug
 gdb ./build/cmake_build/Lumice
-(gdb) run -f config_example.json
+(gdb) run -f examples/config_example.json
 ```
 
 ## 代码风格指南
@@ -186,7 +186,7 @@ class Crystal {
 
 **格式化代码**：
 ```bash
-./format.sh
+./scripts/format.sh
 ```
 
 ### 文件组织
@@ -470,7 +470,7 @@ TEST_F(CrystalTest, GetTriangleVtx) {
 
 ```bash
 # 使用构建脚本
-./build.sh -t release
+./scripts/build.sh -t release
 
 # 或手动运行
 cd build/cmake_build
@@ -485,7 +485,7 @@ ctest
 
 ```bash
 # 构建并运行所有测试（单元测试 + GUI 测试）
-./build.sh -gtj release
+./scripts/build.sh -gtj release
 ```
 
 #### 测试结构
@@ -518,7 +518,7 @@ t->TestFunc = [](ImGuiTestContext* ctx) {
 #### 视觉回归参考图片
 
 参考图片位于 `test/gui/references/`。更新流程：
-1. 运行 `./build.sh -gtj release` 生成新截图
+1. 运行 `./scripts/build.sh -gtj release` 生成新截图
 2. 将更新后的图片拷贝到 `test/gui/references/`
 3. 重新构建并验证 PSNR = inf（像素一致）
 
@@ -603,7 +603,7 @@ lldb ./build/cmake_build/Lumice
 (lldb) b crystal.cpp:100
 
 # 运行程序
-(lldb) run -f config_example.json
+(lldb) run -f examples/config_example.json
 
 # 查看变量
 (lldb) print variable_name
@@ -621,18 +621,18 @@ lldb ./build/cmake_build/Lumice
 #### Valgrind内存检查（Linux）
 
 ```bash
-valgrind --leak-check=full ./build/cmake_build/Lumice -f config_example.json
+valgrind --leak-check=full ./build/cmake_build/Lumice -f examples/config_example.json
 ```
 
 #### 性能分析
 
 ```bash
 # 使用 perf (Linux)
-perf record ./build/cmake_install/Lumice -f config_example.json
+perf record ./build/cmake_install/Lumice -f examples/config_example.json
 perf report
 
 # 使用 Instruments (macOS)
-instruments -t "Time Profiler" ./build/cmake_install/Lumice -f config_example.json
+instruments -t "Time Profiler" ./build/cmake_install/Lumice -f examples/config_example.json
 ```
 
 ### 常见问题排查

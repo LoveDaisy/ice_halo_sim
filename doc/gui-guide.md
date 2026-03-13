@@ -8,7 +8,7 @@ This document describes the Lumice GUI application — an interactive graphical 
 
 ```bash
 # Build the GUI application
-./build.sh -gj release
+./scripts/build.sh -gj release
 
 # Run
 ./build/cmake_install/LumiceGUI

@@ -13,7 +13,7 @@ The configuration file uses JSON format and contains the following main sections
 - `scene`: Scene definition (single object, includes inline light source)
 - `render`: Array of renderer definitions
 **Important notes**:
-- The example configuration file (`config_example.json`) does not exhaustively cover all valid configuration patterns
+- The example configuration file (`examples/config_example.json`) does not exhaustively cover all valid configuration patterns
 - Many configuration parameters have default values that will be used when not explicitly specified
 - **You should refer to the source code** for the complete configuration logic and default values
 - This document extracts all default value information based on the code implementation
@@ -830,4 +830,4 @@ The render configuration defines the renderer parameters.
 
 - [README](../README.md): User documentation
 - [System Architecture](architecture.md): System architecture documentation
-- [Example Configuration File](../config_example.json): Example configuration file
+- [Example Configuration File](../examples/config_example.json): Example configuration file

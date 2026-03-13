@@ -35,7 +35,7 @@ def find_lumice_binary() -> Path:
 
     raise FileNotFoundError(
         f"Lumice binary not found at {candidate}. "
-        "Build it first: ./build.sh -j release"
+        "Build it first: ./scripts/build.sh -j release"
     )
 
 

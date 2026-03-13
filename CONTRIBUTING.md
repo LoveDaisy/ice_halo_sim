@@ -14,10 +14,10 @@ Thank you for your interest in contributing to Lumice! This guide covers the dev
 ### Building
 
 ```bash
-./build.sh -j release             # Parallel release build
-./build.sh -tj release            # Build + run unit tests
-./build.sh -gtj release           # Build with GUI + all tests
-./build.sh -k release             # Clean rebuild (preserves dependency cache)
+./scripts/build.sh -j release             # Parallel release build
+./scripts/build.sh -tj release            # Build + run unit tests
+./scripts/build.sh -gtj release           # Build with GUI + all tests
+./scripts/build.sh -k release             # Clean rebuild (preserves dependency cache)
 ```
 
 Build output: `build/cmake_install/` (Release), `build/cmake_build/` (Debug)
@@ -25,8 +25,8 @@ Build output: `build/cmake_install/` (Release), `build/cmake_build/` (Debug)
 ### Running Tests
 
 ```bash
-./build.sh -tj release            # Unit tests (GoogleTest via CTest)
-./build.sh -gtj release           # GUI tests (requires display server)
+./scripts/build.sh -tj release            # Unit tests (GoogleTest via CTest)
+./scripts/build.sh -gtj release           # GUI tests (requires display server)
 pytest test/e2e/ -v               # E2E tests (requires Pillow)
 ```
 
@@ -45,8 +45,8 @@ Use lowercase with hyphens. Keep branch names short and descriptive.
 
 1. **Create a branch** from `main` using the naming conventions above
 2. **Make changes** — keep commits focused and atomic
-3. **Run tests locally** — at minimum `./build.sh -tj release`
-4. **Format code** — run `./format.sh` before committing
+3. **Run tests locally** — at minimum `./scripts/build.sh -tj release`
+4. **Format code** — run `./scripts/format.sh` before committing
 5. **Open a pull request** — fill in the PR template (summary, test plan, checklist)
 6. **CI checks** — ensure all checks pass (build, tests, format)
 7. **Merge** — squash or rebase merge to keep history clean
@@ -67,14 +67,14 @@ Follow the conventional commit format:
 
 - **C++**: Google C++ Style, enforced by `.clang-format` and `.clang-tidy`
 - **Editor settings**: `.editorconfig` — 2-space indent, UTF-8, LF line endings
-- **Formatting**: Run `./format.sh` to format all C++ source files
+- **Formatting**: Run `./scripts/format.sh` to format all C++ source files
 
 See `CLAUDE.md` for detailed naming conventions and coding guidelines.
 
 ## Release Process
 
-1. **Update version**: `python version.py set X.Y.Z`
-2. **Verify**: `python version.py check` (should exit 0)
+1. **Update version**: `python scripts/version.py set X.Y.Z`
+2. **Verify**: `python scripts/version.py check` (should exit 0)
 3. **Commit** the version change
 4. **Tag**: `git tag vX.Y.Z`
 5. **Push**: `git push origin main --tags`
@@ -83,4 +83,4 @@ The release workflow (`.github/workflows/release.yml`) triggers automatically on
 
 ### Before tagging
 
-Always run `python version.py check` locally to verify version consistency before creating a tag. The CI check is a safety net, not a substitute for local verification.
+Always run `python scripts/version.py check` locally to verify version consistency before creating a tag. The CI check is a safety net, not a substitute for local verification.

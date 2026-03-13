@@ -35,14 +35,14 @@ Inspired by [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/m
 After cloning, you can run the build script to build and install it.
 
 ~~~bash
-./build.sh -j release
+./scripts/build.sh -j release
 ~~~
 
 If everything goes well, the executable will be installed into `build/cmake_install`. And
 you can run it like:
 
 ~~~bash
-./build/cmake_install/Lumice -f config_example.json
+./build/cmake_install/Lumice -f examples/config_example.json
 ~~~
 
 It will output some information, as well as several rendered picture files.
@@ -70,7 +70,7 @@ All other dependencies are automatically downloaded and managed via [CPM.cmake](
 - [nfd](https://github.com/btzy/nativefiledialog-extended) v1.2.1 — Native file dialogs
 - [imgui_test_engine](https://github.com/ocornut/imgui_test_engine) v1.91.8 — GUI automated testing (downloaded when `-g` and `-t` are both enabled)
 
-> **Note on Ninja**: If Ninja is not installed, you can remove `-G Ninja` from `build.sh` to fall back to the system default generator (usually Unix Makefiles).
+> **Note on Ninja**: If Ninja is not installed, you can remove `-G Ninja` from `scripts/build.sh` to fall back to the system default generator (usually Unix Makefiles).
 
 ### Build project
 
@@ -78,9 +78,9 @@ A build script is provided to simplify the process.
 With `-h` you will see help message:
 
 ~~~bash
-./build.sh -h
+./scripts/build.sh -h
 Usage:
-  ./build.sh [-tgbjksxh] <debug|release|minsizerel>
+  ./scripts/build.sh [-tgbjksxh] <debug|release|minsizerel>
     Executables will be installed at build/cmake_install
 OPTIONS:
   -t:          Build test cases and run test on them.
@@ -119,7 +119,7 @@ A graphical interface is available for interactive simulation configuration and 
 
 ~~~bash
 # Build the GUI application
-./build.sh -gj release
+./scripts/build.sh -gj release
 
 # Run the GUI
 ./build/cmake_install/LumiceGUI
@@ -135,10 +135,10 @@ The GUI provides:
 To build and run GUI automated tests (requires display server):
 
 ~~~bash
-./build.sh -gtj release
+./scripts/build.sh -gtj release
 ~~~
 
-> **Cross-platform note:** Core, CLI, and unit tests (`./build.sh -tj release`) contain no
+> **Cross-platform note:** Core, CLI, and unit tests (`./scripts/build.sh -tj release`) contain no
 > platform-specific code and should compile on any platform with a C++17 compiler. The GUI and
 > GUI tests (`-g` / `-gt` flags) are currently verified on macOS (Apple Silicon) only. If you
 > encounter GUI build issues on other platforms, try building without the `-g` flag.
@@ -149,7 +149,7 @@ To build and run GUI automated tests (requires display server):
 Configuration file contains all settings for a simulation. It is written in JSON format,
 parsed with [nlohmann/json](https://github.com/nlohmann/json).
 
-An example configuration file is provided: `config_example.json`.
+An example configuration file is provided: `examples/config_example.json`.
 
 For the complete configuration reference, see [Configuration Guide](doc/configuration.md).
 Below is a brief overview of each section.

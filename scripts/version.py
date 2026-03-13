@@ -2,9 +2,9 @@
 """Version management script for Lumice.
 
 Usage:
-    python version.py check              # Compare CMakeLists.txt version with latest git tag
-    python version.py check --tag v4.0.0 # Compare CMakeLists.txt version with specified tag (CI mode)
-    python version.py set 4.1.0          # Update CMakeLists.txt version
+    python scripts/version.py check              # Compare CMakeLists.txt version with latest git tag
+    python scripts/version.py check --tag v4.0.0 # Compare CMakeLists.txt version with specified tag (CI mode)
+    python scripts/version.py set 4.1.0          # Update CMakeLists.txt version
 """
 
 import argparse
@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-CMAKELISTS = Path(__file__).resolve().parent / "CMakeLists.txt"
+CMAKELISTS = Path(__file__).resolve().parent.parent / "CMakeLists.txt"
 CMAKE_VERSION_RE = re.compile(r"(project\s*\(\s*Lumice\s+VERSION\s+)(\d+\.\d+\.\d+)(\s*\))")
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 

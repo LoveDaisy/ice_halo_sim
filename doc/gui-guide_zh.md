@@ -8,7 +8,7 @@
 
 ```bash
 # 构建 GUI 应用
-./build.sh -gj release
+./scripts/build.sh -gj release
 
 # 运行
 ./build/cmake_install/LumiceGUI

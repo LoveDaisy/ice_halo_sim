@@ -8,6 +8,6 @@
 
 ## Checklist
 
-- [ ] Tests pass (`./build.sh -tj release`)
-- [ ] Code formatted (`./format.sh`)
+- [ ] Tests pass (`./scripts/build.sh -tj release`)
+- [ ] Code formatted (`./scripts/format.sh`)
 - [ ] Documentation updated (if applicable)

@@ -67,7 +67,7 @@ For project developers and contributors:
 
 - [Project README](../README.md)
 - [Project Chinese README](../README_zh.md)
-- [Configuration Example](../config_example.json)
+- [Configuration Example](../examples/config_example.json)
 
 ## Documentation Language Policy
 

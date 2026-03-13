@@ -32,13 +32,13 @@
 克隆项目后，可以运行构建脚本来构建和安装：
 
 ~~~bash
-./build.sh -j release
+./scripts/build.sh -j release
 ~~~
 
 如果一切顺利，可执行文件将安装到 `build/cmake_install`。然后可以这样运行：
 
 ~~~bash
-./build/cmake_install/Lumice -f config_example.json
+./build/cmake_install/Lumice -f examples/config_example.json
 ~~~
 
 程序将输出一些信息，以及几张渲染的图片文件。
@@ -65,7 +65,7 @@
 - [nfd](https://github.com/btzy/nativefiledialog-extended) v1.2.1 — 原生文件对话框
 - [imgui_test_engine](https://github.com/ocornut/imgui_test_engine) v1.91.8 — GUI 自动化测试（同时启用 `-g` 和 `-t` 时下载）
 
-> **关于 Ninja**: 若未安装 Ninja，可将 `build.sh` 中的 `-G Ninja` 删除，CMake 将回退到系统默认生成器（通常为 Unix Makefiles）。
+> **关于 Ninja**: 若未安装 Ninja，可将 `scripts/build.sh` 中的 `-G Ninja` 删除，CMake 将回退到系统默认生成器（通常为 Unix Makefiles）。
 
 ### 构建项目
 
@@ -73,9 +73,9 @@
 使用 `-h` 可以看到帮助信息：
 
 ~~~bash
-./build.sh -h
+./scripts/build.sh -h
 Usage:
-  ./build.sh [-tgbjksxh] <debug|release|minsizerel>
+  ./scripts/build.sh [-tgbjksxh] <debug|release|minsizerel>
     Executables will be installed at build/cmake_install
 OPTIONS:
   -t:          Build test cases and run test on them.
@@ -114,7 +114,7 @@ pytest test/e2e/ -v
 
 ~~~bash
 # 构建 GUI 应用
-./build.sh -gj release
+./scripts/build.sh -gj release
 
 # 运行 GUI
 ./build/cmake_install/LumiceGUI
@@ -130,10 +130,10 @@ GUI 提供以下功能：
 构建并运行 GUI 自动化测试（需要 display server）：
 
 ~~~bash
-./build.sh -gtj release
+./scripts/build.sh -gtj release
 ~~~
 
-> **跨平台说明：** Core、CLI 和单元测试（`./build.sh -tj release`）不包含任何平台特定代码，
+> **跨平台说明：** Core、CLI 和单元测试（`./scripts/build.sh -tj release`）不包含任何平台特定代码，
 > 应可在任何支持 C++17 的平台上编译通过。GUI 和 GUI 测试（`-g` / `-gt` 选项）目前仅在
 > macOS（Apple Silicon）上验证。如果在其他平台遇到 GUI 编译问题，可先不带 `-g` 编译核心功能。
 
@@ -142,7 +142,7 @@ GUI 提供以下功能：
 
 配置文件包含模拟的所有设置。使用 JSON 格式编写，由 [nlohmann/json](https://github.com/nlohmann/json) 解析。
 
-示例配置文件：`config_example.json`。
+示例配置文件：`examples/config_example.json`。
 
 完整配置参考请查看 [配置文档](doc/configuration_zh.md)。以下是各节的简要概述。
 

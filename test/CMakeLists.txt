@@ -26,5 +26,5 @@ set_target_properties(unit_test PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
 add_test(NAME "LumiceUnitTest" COMMAND unit_test
-  "${PROJ_ROOT}/config_example.json"
+  "${PROJ_ROOT}/examples/config_example.json"
   "${CMAKE_CURRENT_BINARY_DIR}")

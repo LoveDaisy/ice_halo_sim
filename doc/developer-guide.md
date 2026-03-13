@@ -19,7 +19,7 @@ All other dependencies are automatically downloaded and managed via [CPM.cmake](
 - [tl-expected](https://github.com/TartanLlama/expected) v1.1.0 — C++17 `expected<T,E>` (header-only)
 - [GoogleTest](https://github.com/google/googletest) v1.15.2 — Unit testing (downloaded when `-t` is enabled)
 
-> **About Ninja**: If Ninja is not installed, you can remove `-G Ninja` from `build.sh`, and CMake will fall back to the system default generator (typically Unix Makefiles).
+> **About Ninja**: If Ninja is not installed, you can remove `-G Ninja` from `scripts/build.sh`, and CMake will fall back to the system default generator (typically Unix Makefiles).
 
 ### Installing Dependencies
 
@@ -39,11 +39,11 @@ sudo apt-get install cmake ninja-build
 
 ### Build Configuration
 
-The project uses CMake for building and provides a `build.sh` script to simplify the build process:
+The project uses CMake for building and provides a `scripts/build.sh` script to simplify the build process:
 
 ```bash
-./build.sh -j release    # Release build (recommended)
-./build.sh -j debug      # Debug build (for debugging)
+./scripts/build.sh -j release    # Release build (recommended)
+./scripts/build.sh -j debug      # Debug build (for debugging)
 ```
 
 **Build options**:
@@ -57,9 +57,9 @@ The project uses CMake for building and provides a `build.sh` script to simplify
 - `-h`: Show help information
 
 **Common flag combinations**:
-- `./build.sh -gj release`: Build GUI without tests
-- `./build.sh -gtj release`: Build GUI + run all tests (unit + GUI)
-- `./build.sh -tj release`: Build core + run unit tests only (no GUI)
+- `./scripts/build.sh -gj release`: Build GUI without tests
+- `./scripts/build.sh -gtj release`: Build GUI + run all tests (unit + GUI)
+- `./scripts/build.sh -tj release`: Build core + run unit tests only (no GUI)
 
 ### IDE Configuration
 
@@ -86,17 +86,17 @@ The project uses CMake for building and provides a `build.sh` script to simplify
 #### Using LLDB (macOS)
 
 ```bash
-./build.sh debug
+./scripts/build.sh debug
 lldb ./build/cmake_build/Lumice
-(lldb) run -f config_example.json
+(lldb) run -f examples/config_example.json
 ```
 
 #### Using GDB (Linux)
 
 ```bash
-./build.sh debug
+./scripts/build.sh debug
 gdb ./build/cmake_build/Lumice
-(gdb) run -f config_example.json
+(gdb) run -f examples/config_example.json
 ```
 
 ## Code Style Guide
@@ -186,7 +186,7 @@ The project uses a `.clang-format` configuration file. Key rules:
 
 **Format code**:
 ```bash
-./format.sh
+./scripts/format.sh
 ```
 
 ### File Organization
@@ -470,7 +470,7 @@ TEST_F(CrystalTest, GetTriangleVtx) {
 
 ```bash
 # Using the build script
-./build.sh -t release
+./scripts/build.sh -t release
 
 # Or run manually
 cd build/cmake_build
@@ -485,7 +485,7 @@ The project uses [ImGui Test Engine](https://github.com/ocornut/imgui_test_engin
 
 ```bash
 # Build and run all tests (unit + GUI)
-./build.sh -gtj release
+./scripts/build.sh -gtj release
 ```
 
 #### Test Structure
@@ -518,7 +518,7 @@ t->TestFunc = [](ImGuiTestContext* ctx) {
 #### Visual Regression Reference Images
 
 Reference images are in `test/gui/references/`. To update:
-1. Run `./build.sh -gtj release` to generate new screenshots
+1. Run `./scripts/build.sh -gtj release` to generate new screenshots
 2. Copy updated images to `test/gui/references/`
 3. Rebuild and verify PSNR = inf (pixel-identical)
 
@@ -603,7 +603,7 @@ lldb ./build/cmake_build/Lumice
 (lldb) b crystal.cpp:100
 
 # Run the program
-(lldb) run -f config_example.json
+(lldb) run -f examples/config_example.json
 
 # Inspect variables
 (lldb) print variable_name
@@ -621,18 +621,18 @@ lldb ./build/cmake_build/Lumice
 #### Valgrind Memory Check (Linux)
 
 ```bash
-valgrind --leak-check=full ./build/cmake_build/Lumice -f config_example.json
+valgrind --leak-check=full ./build/cmake_build/Lumice -f examples/config_example.json
 ```
 
 #### Performance Profiling
 
 ```bash
 # Using perf (Linux)
-perf record ./build/cmake_install/Lumice -f config_example.json
+perf record ./build/cmake_install/Lumice -f examples/config_example.json
 perf report
 
 # Using Instruments (macOS)
-instruments -t "Time Profiler" ./build/cmake_install/Lumice -f config_example.json
+instruments -t "Time Profiler" ./build/cmake_install/Lumice -f examples/config_example.json
 ```
 
 ### Common Troubleshooting
