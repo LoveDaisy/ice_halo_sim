@@ -42,7 +42,7 @@ jobs:
     name: ${{ matrix.name }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux' && matrix.build_gui == 'ON'
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Cache CPM dependencies
         uses: actions/cache@v4
@@ -115,7 +115,7 @@ jobs:
   format-check:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check clang-format
         run: |
