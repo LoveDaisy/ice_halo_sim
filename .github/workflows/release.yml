@@ -7,6 +7,12 @@ on:
 env:
   CPM_SOURCE_CACHE: ${{ github.workspace }}/cpm_cache
 
+  # Platform support decisions (2026-03):
+  #   - Only CLI and GUI executables are published; shared library publishing is deferred.
+  #   - linux-arm64: GUI OFF — ARM runner GPU/display support not verified.
+  #   - Windows: excluded — CLI requires POSIX (main.c), GUI not yet ported to MSVC/MinGW.
+  #   - macOS Intel: excluded — GitHub Actions dropped macos-13 runners (2025).
+
 jobs:
   build:
     strategy:
@@ -19,7 +25,7 @@ jobs:
 
           - name: linux-arm64
             os: ubuntu-24.04-arm
-            build_gui: OFF
+            build_gui: OFF  # ARM runner GPU/display support not verified
 
           - name: macos-arm64
             os: macos-15
@@ -30,6 +36,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+
+      - name: Version check
+        run: python version.py check --tag ${{ github.ref_name }}
 
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux' && matrix.build_gui == 'ON'
