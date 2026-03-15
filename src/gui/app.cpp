@@ -35,7 +35,8 @@ int g_crystal_style = 1;      // Default: Hidden Line (index into kCrystalStyleN
 int g_crystal_mesh_id = -1;   // Crystal ID of cached mesh
 int g_crystal_mesh_hash = 0;  // Hash of crystal params for change detection
 
-bool g_programmatic_resize = false;
+int g_programmatic_resize = 0;
+float g_aspect_bar_height = 30.0f;  // Updated each frame by RenderPreviewPanel
 
 bool g_show_unsaved_popup = false;
 PendingAction g_pending_action = PendingAction::kNone;
@@ -63,8 +64,8 @@ float GetAspectRatio(AspectPreset preset) {
 }
 
 void WindowSizeCallback(GLFWwindow* /*window*/, int /*width*/, int /*height*/) {
-  if (g_programmatic_resize) {
-    g_programmatic_resize = false;
+  if (g_programmatic_resize > 0) {
+    g_programmatic_resize--;
     return;
   }
   if (g_state.aspect_preset != AspectPreset::kFree) {
@@ -85,10 +86,10 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait) {
   int win_h = 0;
   glfwGetWindowSize(window, &win_w, &win_h);
 
-  constexpr float kAspectBarHeight = 30.0f;
-  float preview_w = static_cast<float>(win_w) - kLeftPanelWidth;
+  float bar_h = g_aspect_bar_height;
+  float preview_w = std::max(1.0f, static_cast<float>(win_w) - kLeftPanelWidth);
   float preview_h = preview_w / ratio;
-  auto target_h = static_cast<int>(preview_h + kTopBarHeight + kStatusBarHeight + kAspectBarHeight);
+  auto target_h = static_cast<int>(preview_h + kTopBarHeight + kStatusBarHeight + bar_h);
   int target_w = win_w;
 
   int work_x = 0;
@@ -101,7 +102,7 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait) {
   target_h = std::clamp(target_h, kMinWindowHeight, work_h);
 
   // If height was clamped, recalculate width to maintain ratio
-  float actual_preview_h = static_cast<float>(target_h) - kTopBarHeight - kStatusBarHeight - kAspectBarHeight;
+  float actual_preview_h = static_cast<float>(target_h) - kTopBarHeight - kStatusBarHeight - bar_h;
   if (actual_preview_h > 0.0f) {
     float actual_preview_w = actual_preview_h * ratio;
     int recalc_w = static_cast<int>(actual_preview_w + kLeftPanelWidth);
@@ -110,7 +111,7 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait) {
     }
   }
 
-  g_programmatic_resize = true;
+  g_programmatic_resize = 2;  // Expect up to 2 callbacks (some platforms fire intermediate + final)
   glfwSetWindowSize(window, target_w, target_h);
 
   // Clamp window position to stay within screen
@@ -644,7 +645,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     ImGui::SameLine();
     ImGui::PushItemWidth(150.0f);
     int preset_idx = static_cast<int>(g_state.aspect_preset);
-    if (ImGui::Combo("##AspectPreset", &preset_idx, kAspectPresetNames, kAspectPresetCount)) {
+    // Exclude Match Background from selectable items (not yet implemented)
+    constexpr int kSelectablePresetCount = kAspectPresetCount - 1;
+    if (ImGui::Combo("##AspectPreset", &preset_idx, kAspectPresetNames, kSelectablePresetCount)) {
       g_state.aspect_preset = static_cast<AspectPreset>(preset_idx);
       ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
     }
@@ -652,8 +655,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
 
     // Portrait/landscape toggle button
     ImGui::SameLine();
-    bool disable_flip = (g_state.aspect_preset == AspectPreset::kFree || g_state.aspect_preset == AspectPreset::k1x1 ||
-                         g_state.aspect_preset == AspectPreset::kMatchBg);
+    bool disable_flip = (g_state.aspect_preset == AspectPreset::kFree || g_state.aspect_preset == AspectPreset::k1x1);
     ImGui::BeginDisabled(disable_flip);
     const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
     if (ImGui::Button(flip_label)) {
@@ -663,8 +665,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     ImGui::EndDisabled();
   }
 
-  float aspect_bar_height = ImGui::GetCursorPosY();
-  float preview_height = panel_height - aspect_bar_height;
+  float aspect_bar_h = ImGui::GetCursorPosY();
+  g_aspect_bar_height = aspect_bar_h;
+  float preview_height = panel_height - aspect_bar_h;
 
   g_preview_vp.active = false;
 

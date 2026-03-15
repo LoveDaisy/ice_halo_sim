@@ -52,7 +52,7 @@ static void ResetTestState() {
   gui::g_crystal_style = 1;
   gui::g_panel_collapsed = false;
   gui::g_preview_vp.active = false;
-  gui::g_programmatic_resize = false;
+  gui::g_programmatic_resize = 0;
 
   // Runtime state
   gui::g_show_unsaved_popup = false;

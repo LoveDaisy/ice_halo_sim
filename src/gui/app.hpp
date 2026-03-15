@@ -48,8 +48,9 @@ extern int g_crystal_style;
 extern int g_crystal_mesh_id;
 extern int g_crystal_mesh_hash;
 
-// Aspect ratio resize state
-extern bool g_programmatic_resize;
+// Aspect ratio state
+extern int g_programmatic_resize;  // Counter: decremented by WindowSizeCallback, set by ApplyAspectRatio
+extern float g_aspect_bar_height;  // Cached actual height from ImGui layout
 
 // Unsaved changes popup state
 extern bool g_show_unsaved_popup;
