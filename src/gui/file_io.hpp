@@ -36,6 +36,7 @@ bool ExportPreviewPng(const char* path, PreviewRenderer& renderer, const Preview
 std::string ShowOpenDialog();
 std::string ShowSaveDialog();
 std::string ShowExportPngDialog();
+std::string ShowOpenImageDialog();
 
 
 }  // namespace lumice::gui

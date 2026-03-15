@@ -1,6 +1,8 @@
 #include "gui/app.hpp"
 
 #include <GLFW/glfw3.h>
+#include <spdlog/spdlog.h>
+#include <stb_image.h>
 
 #include <algorithm>
 #include <chrono>
@@ -73,8 +75,16 @@ void WindowSizeCallback(GLFWwindow* /*window*/, int /*width*/, int /*height*/) {
   }
 }
 
-void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait) {
-  float ratio = GetAspectRatio(preset);
+void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, float override_ratio) {
+  float ratio = 0.0f;
+  if (preset == AspectPreset::kMatchBg) {
+    ratio = override_ratio > 0.0f ? override_ratio : g_preview.GetBgAspect();
+    if (!g_preview.HasBackground()) {
+      return;
+    }
+  } else {
+    ratio = GetAspectRatio(preset);
+  }
   if (portrait && ratio > 0.0f) {
     ratio = 1.0f / ratio;
   }
@@ -262,6 +272,45 @@ void DoExportPreviewPng() {
   }
 }
 
+// Helper: load image from path, downsample if needed, upload to bg texture.
+// Returns true on success.
+static bool LoadAndUploadBgImage(const std::string& path) {
+  int w = 0;
+  int h = 0;
+  int channels = 0;
+  unsigned char* raw = stbi_load(path.c_str(), &w, &h, &channels, 3);  // Force 3 channels (RGB)
+  if (!raw) {
+    spdlog::warn("Failed to load background image: {}", path);
+    return false;
+  }
+
+  // Copy to vector, then free stbi allocation
+  size_t byte_count = static_cast<size_t>(w) * h * 3;
+  std::vector<unsigned char> data(raw, raw + byte_count);
+  stbi_image_free(raw);
+
+  // Box downsample while max dimension > 4096
+  while (std::max(w, h) > 4096) {
+    int new_w = w / 2;
+    int new_h = h / 2;
+    for (int y = 0; y < new_h; y++) {
+      for (int x = 0; x < new_w; x++) {
+        for (int c = 0; c < 3; c++) {
+          int sum = data[(y * 2 * w + x * 2) * 3 + c] + data[(y * 2 * w + x * 2 + 1) * 3 + c] +
+                    data[((y * 2 + 1) * w + x * 2) * 3 + c] + data[((y * 2 + 1) * w + x * 2 + 1) * 3 + c];
+          data[(y * new_w + x) * 3 + c] = static_cast<unsigned char>(sum / 4);
+        }
+      }
+    }
+    w = new_w;
+    h = new_h;
+    data.resize(static_cast<size_t>(w) * h * 3);
+  }
+
+  g_preview.UploadBgTexture(data.data(), w, h);
+  return true;
+}
+
 void DoOpen() {
   auto path = ShowOpenDialog();
   if (!path.empty()) {
@@ -277,6 +326,20 @@ void DoOpen() {
       } else {
         g_state.sim_state = SimState::kIdle;
       }
+
+      // Restore background image from saved path (uses deserialized alpha, not reset to 0.5)
+      g_preview.ClearBackground();
+      if (!g_state.bg_path.empty()) {
+        if (LoadAndUploadBgImage(g_state.bg_path)) {
+          // bg_show and bg_alpha already restored from deserialization
+        } else {
+          // Degradation: bg image not found — clear show, reset kMatchBg→kFree
+          g_state.bg_show = false;
+          if (g_state.aspect_preset == AspectPreset::kMatchBg) {
+            g_state.aspect_preset = AspectPreset::kFree;
+          }
+        }
+      }
     }
   }
 }
@@ -284,8 +347,35 @@ void DoOpen() {
 void DoNew() {
   g_state = InitDefaultState();
   g_preview.ClearTexture();
+  g_preview.ClearBackground();
   g_crystal_mesh_id = -1;
   g_crystal_mesh_hash = 0;
+}
+
+void DoLoadBackground(GLFWwindow* window) {
+  auto path = ShowOpenImageDialog();
+  if (path.empty()) {
+    return;
+  }
+
+  if (!LoadAndUploadBgImage(path)) {
+    return;
+  }
+
+  g_state.bg_path = path;
+  g_state.bg_show = true;
+  g_state.bg_alpha = 0.5f;  // Start at 50% to immediately show overlay effect
+  g_state.aspect_preset = AspectPreset::kMatchBg;
+  ApplyAspectRatio(window, AspectPreset::kMatchBg, false, g_preview.GetBgAspect());
+}
+
+void DoClearBackground() {
+  g_preview.ClearBackground();
+  g_state.bg_path.clear();
+  g_state.bg_show = false;
+  if (g_state.aspect_preset == AspectPreset::kMatchBg) {
+    g_state.aspect_preset = AspectPreset::kFree;
+  }
 }
 
 void DoRun() {
@@ -665,11 +755,27 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     ImGui::SameLine();
     ImGui::PushItemWidth(150.0f);
     int preset_idx = static_cast<int>(g_state.aspect_preset);
-    // Exclude Match Background from selectable items (not yet implemented)
-    constexpr int kSelectablePresetCount = kAspectPresetCount - 1;
-    if (ImGui::Combo("##AspectPreset", &preset_idx, kAspectPresetNames, kSelectablePresetCount)) {
-      g_state.aspect_preset = static_cast<AspectPreset>(preset_idx);
-      ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+    const char* preview_label = kAspectPresetNames[preset_idx];
+    if (ImGui::BeginCombo("##AspectPreset", preview_label)) {
+      for (int i = 0; i < kAspectPresetCount; i++) {
+        bool is_match_bg = (static_cast<AspectPreset>(i) == AspectPreset::kMatchBg);
+        bool disabled = is_match_bg && !g_preview.HasBackground();
+        if (disabled) {
+          ImGui::BeginDisabled();
+        }
+        bool selected = (i == preset_idx);
+        if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
+          g_state.aspect_preset = static_cast<AspectPreset>(i);
+          ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
+        if (disabled) {
+          ImGui::EndDisabled();
+        }
+      }
+      ImGui::EndCombo();
     }
     ImGui::PopItemWidth();
 
@@ -681,6 +787,28 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     if (ImGui::Button(flip_label)) {
       g_state.aspect_portrait = !g_state.aspect_portrait;
       ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+    }
+    ImGui::EndDisabled();
+  }
+
+  // Background image controls
+  {
+    if (ImGui::Button("Load Bg")) {
+      DoLoadBackground(window);
+    }
+    ImGui::SameLine();
+    bool no_bg = !g_preview.HasBackground();
+    ImGui::BeginDisabled(no_bg);
+    ImGui::Checkbox("Show", &g_state.bg_show);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!g_state.bg_show);
+    ImGui::PushItemWidth(120.0f);
+    ImGui::SliderFloat("Alpha", &g_state.bg_alpha, 0.0f, 1.0f, "%.2f");
+    ImGui::PopItemWidth();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Clear")) {
+      DoClearBackground();
     }
     ImGui::EndDisabled();
   }
@@ -717,6 +845,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     std::copy(std::begin(rc.ray_color), std::end(rc.ray_color), std::begin(g_preview_vp.params.ray_color));
     std::copy(std::begin(rc.background), std::end(rc.background), std::begin(g_preview_vp.params.background));
     g_preview_vp.params.intensity_factor = std::pow(2.0f, rc.exposure_offset);
+    g_preview_vp.params.bg_enabled = g_state.bg_show && g_preview.HasBackground();
+    g_preview_vp.params.bg_alpha = g_state.bg_alpha;
+    g_preview_vp.params.bg_aspect = g_preview.GetBgAspect();
 
     // Mouse interaction: orbit with drag, FOV with scroll
     // Disabled for full-sky lens types (dual fisheye, rectangular)

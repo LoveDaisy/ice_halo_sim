@@ -146,6 +146,11 @@ struct GuiState {
   AspectPreset aspect_preset = AspectPreset::kFree;
   bool aspect_portrait = false;
 
+  // Background image overlay (view preference — does not call MarkDirty)
+  std::string bg_path;
+  bool bg_show = false;
+  float bg_alpha = 1.0f;
+
   // File management
   std::string current_file_path;
   bool dirty = false;

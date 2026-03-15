@@ -63,7 +63,7 @@ void WindowSizeCallback(GLFWwindow* window, int width, int height);
 
 // Aspect ratio helpers
 float GetAspectRatio(AspectPreset preset);
-void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait);
+void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, float override_ratio = 0.0f);
 
 // Crystal preview helpers
 int CrystalParamHash(const CrystalConfig& c);
@@ -79,6 +79,8 @@ void DoNew();
 void DoRun();
 void DoStop();
 void DoRevert();
+void DoLoadBackground(GLFWwindow* window);
+void DoClearBackground();
 void FetchRenderResults();
 void PollServerState();
 void CheckUnsavedAndDo(PendingAction action);

@@ -555,6 +555,11 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["aspect_ratio"] = kAspectPresetJsonNames[preset_idx];
   root["aspect_portrait"] = state.aspect_portrait;
 
+  // Background image overlay
+  root["bg_path"] = state.bg_path;
+  root["bg_show"] = state.bg_show;
+  root["bg_alpha"] = state.bg_alpha;
+
   return root.dump(2);
 }
 
@@ -671,6 +676,11 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   // Aspect ratio (view preference, defaults to Free for old files)
   state.aspect_preset = AspectPresetFromString(root.value("aspect_ratio", "free"));
   state.aspect_portrait = root.value("aspect_portrait", false);
+
+  // Background image overlay (backward compatible: missing fields use defaults)
+  state.bg_path = root.value("bg_path", std::string{});
+  state.bg_show = root.value("bg_show", false);
+  state.bg_alpha = root.value("bg_alpha", 1.0f);
 
   return true;
 }
@@ -948,5 +958,19 @@ std::string ShowExportPngDialog() {
   return path;
 }
 
+
+std::string ShowOpenImageDialog() {
+  NFD_Init();
+  nfdchar_t* out_path = nullptr;
+  nfdfilteritem_t filter_items[1] = { { "Images", "png,jpg,jpeg,bmp" } };
+  nfdresult_t result = NFD_OpenDialog(&out_path, filter_items, 1, nullptr);
+  std::string path;
+  if (result == NFD_OKAY && out_path) {
+    path = out_path;
+    NFD_FreePath(out_path);
+  }
+  NFD_Quit();
+  return path;
+}
 
 }  // namespace lumice::gui
