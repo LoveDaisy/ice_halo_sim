@@ -65,6 +65,18 @@ add_executable(LumiceGUI
     ${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp)
 target_link_libraries(LumiceGUI PRIVATE lumice_gui_obj)
 
+# Windows: GUI subsystem (hide console) + embed icon via .rc resource
+if(WIN32)
+  set(LUMICE_ICO_PATH "${CMAKE_SOURCE_DIR}/resources/lumice.ico")
+  configure_file(
+      "${PROJ_SRC_DIR}/gui/lumice.rc.in"
+      "${CMAKE_CURRENT_BINARY_DIR}/lumice.rc"
+      @ONLY)
+  target_sources(LumiceGUI PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/lumice.rc")
+
+  set_target_properties(LumiceGUI PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
+
 # macOS: .app bundle with icon and Info.plist
 if(APPLE)
   set(LUMICE_ICNS "${CMAKE_SOURCE_DIR}/resources/lumice.icns")
