@@ -73,6 +73,7 @@ void ApplyTrackballRotation(float dx, float dy);
 // Business operations
 void DoSave();
 void DoSaveAs();
+void DoExportPreviewPng();
 void DoOpen();
 void DoNew();
 void DoRun();

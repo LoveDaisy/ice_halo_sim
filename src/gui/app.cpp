@@ -255,6 +255,13 @@ void DoSaveAs() {
   }
 }
 
+void DoExportPreviewPng() {
+  auto path = ShowExportPngDialog();
+  if (!path.empty()) {
+    ExportPreviewPng(path.c_str(), g_preview, g_preview_vp);
+  }
+}
+
 void DoOpen() {
   auto path = ShowOpenDialog();
   if (!path.empty()) {
@@ -384,7 +391,7 @@ void RenderTopBar(float window_width) {
   ImGui::SameLine();
 
   // Push buttons to the right side
-  float button_start_x = window_width - 380.0f;
+  float button_start_x = window_width - 440.0f;
   if (button_start_x > ImGui::GetCursorPosX()) {
     ImGui::SetCursorPosX(button_start_x);
   }
@@ -410,6 +417,19 @@ void RenderTopBar(float window_width) {
   }
   if (simulating) {
     ImGui::EndDisabled();
+  }
+  ImGui::SameLine();
+  {
+    bool no_texture = !g_preview.HasTexture();
+    if (no_texture) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Export")) {
+      DoExportPreviewPng();
+    }
+    if (no_texture) {
+      ImGui::EndDisabled();
+    }
   }
   ImGui::SameLine();
   if (simulating) {

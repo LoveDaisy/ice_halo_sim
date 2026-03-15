@@ -7,6 +7,7 @@
 namespace lumice::gui {
 
 struct GuiState;
+struct PreviewViewport;
 class PreviewRenderer;
 
 // Serialize GuiState to Core JSON format (for LUMICE_CommitConfig)
@@ -28,9 +29,13 @@ bool SaveLmcFile(const std::string& path, const GuiState& state, const PreviewRe
 bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
                  int& tex_h);
 
+// Export preview as PNG (renders via FBO, must be called on GL thread)
+bool ExportPreviewPng(const char* path, PreviewRenderer& renderer, const PreviewViewport& vp);
+
 // File dialog wrappers (return empty string on cancel)
 std::string ShowOpenDialog();
 std::string ShowSaveDialog();
+std::string ShowExportPngDialog();
 
 
 }  // namespace lumice::gui

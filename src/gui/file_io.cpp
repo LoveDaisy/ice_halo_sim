@@ -14,6 +14,8 @@
 #include <sstream>
 #include <vector>
 
+#include "gui/app.hpp"
+#include "gui/gl_common.h"
 #include "gui/gui_state.hpp"
 #include "gui/preview_renderer.hpp"
 
@@ -842,6 +844,65 @@ bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned 
 }
 
 
+// ========== Export Preview ==========
+
+bool ExportPreviewPng(const char* path, PreviewRenderer& renderer, const PreviewViewport& vp) {
+  int w = vp.vp_w;
+  int h = vp.vp_h;
+  if (w <= 0 || h <= 0 || !renderer.HasTexture()) {
+    return false;
+  }
+
+  // Save current FBO binding
+  GLint prev_fbo = 0;
+  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+
+  // Create temporary FBO + renderbuffer
+  GLuint fbo = 0;
+  GLuint rbo = 0;
+  glGenFramebuffers(1, &fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+  glGenRenderbuffers(1, &rbo);
+  glBindRenderbuffer(GL_RENDERBUFFER, rbo);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rbo);
+
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
+    glDeleteRenderbuffers(1, &rbo);
+    glDeleteFramebuffers(1, &fbo);
+    return false;
+  }
+
+  // Render preview into FBO
+  renderer.Render(0, 0, w, h, vp.params);
+
+  // Read pixels
+  std::vector<unsigned char> pixels(w * h * 4);
+  glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+
+  // Cleanup GL resources
+  glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
+  glDeleteRenderbuffers(1, &rbo);
+  glDeleteFramebuffers(1, &fbo);
+
+  // Flip Y axis (OpenGL bottom-up → image top-down)
+  int row_bytes = w * 4;
+  std::vector<unsigned char> row(row_bytes);
+  for (int y = 0; y < h / 2; y++) {
+    unsigned char* top = pixels.data() + y * row_bytes;
+    unsigned char* bottom = pixels.data() + (h - 1 - y) * row_bytes;
+    std::memcpy(row.data(), top, row_bytes);
+    std::memcpy(top, bottom, row_bytes);
+    std::memcpy(bottom, row.data(), row_bytes);
+  }
+
+  // Save as RGBA PNG
+  int result = stbi_write_png(path, w, h, 4, pixels.data(), w * 4);
+  return result != 0;
+}
+
+
 // ========== File Dialogs ==========
 
 std::string ShowOpenDialog() {
@@ -863,6 +924,21 @@ std::string ShowSaveDialog() {
   nfdchar_t* out_path = nullptr;
   nfdfilteritem_t filter_item[1] = { { "Lumice", "lmc" } };
   nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "project.lmc");
+  std::string path;
+  if (result == NFD_OKAY && out_path) {
+    path = out_path;
+    NFD_FreePath(out_path);
+  }
+  NFD_Quit();
+  return path;
+}
+
+
+std::string ShowExportPngDialog() {
+  NFD_Init();
+  nfdchar_t* out_path = nullptr;
+  nfdfilteritem_t filter_item[1] = { { "PNG Image", "png" } };
+  nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "preview.png");
   std::string path;
   if (result == NFD_OKAY && out_path) {
     path = out_path;
