@@ -45,6 +45,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-tags: true
+          lfs: ${{ matrix.build_gui == 'ON' }}  # GUI builds need LFS for icon resources
 
       # GLAD2 runs the Python code generator at CMake configure time (needs Jinja2).
       # Set Python_ROOT_DIR so CMake's find_package(Python) uses the same Python.
