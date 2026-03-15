@@ -81,6 +81,11 @@ See `CLAUDE.md` for detailed naming conventions and coding guidelines.
 
 The release workflow (`.github/workflows/release.yml`) triggers automatically on `v*` tag pushes. It runs a version consistency check before building — if `CMakeLists.txt` version doesn't match the tag, the release is blocked.
 
+The release produces platform-specific packages:
+- **Linux x64/ARM64**: `.tar.gz` with CLI executable (ARM64 excludes GUI due to runner GPU limitations)
+- **macOS ARM64**: `.tar.gz` with CLI executable and `LumiceGUI.app` bundle
+- **Windows x64**: `.zip` with CLI and GUI executables (`.exe` with embedded icon)
+
 ### Before tagging
 
 Always run `python scripts/version.py check` locally to verify version consistency before creating a tag. The CI check is a safety net, not a substitute for local verification.

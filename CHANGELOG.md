@@ -7,13 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Application icon for macOS and Windows (generated from source PNG)
+- macOS `.app` bundle with `Info.plist` and icon (Finder-friendly)
+- Windows GUI subsystem (hidden console) with embedded icon resource
+- Icon generation script (`scripts/generate_icons.sh`)
+- Windows CI and Release support (GitHub Actions)
+- Preview aspect ratio presets, image export, background overlay, ray number formatting
+
 ## [4.0.0] - 2026-03-12
 
 ### Added
 - GUI application (Dear ImGui + GLFW + OpenGL) with crystal preview, simulation control, and render preview
 - `.lmc` binary file format for GUI project save/load
 - GUI automated tests (ImGui Test Engine) with visual regression
-- GitHub Actions CI pipeline (Ubuntu x64/ARM64, macOS ARM64)
+- GitHub Actions CI pipeline (Ubuntu x64/ARM64, macOS ARM64, Windows x64)
 - Release workflow with automated packaging on tag push
 - Linux OpenGL support for GUI build
 - `version.py` script for version consistency checking and management
