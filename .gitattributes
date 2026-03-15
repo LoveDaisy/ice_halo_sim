@@ -1,2 +1,5 @@
 test/**/*.png filter=lfs diff=lfs merge=lfs -text
 test/**/*.jpg filter=lfs diff=lfs merge=lfs -text
+resources/*.png filter=lfs diff=lfs merge=lfs -text
+resources/*.icns filter=lfs diff=lfs merge=lfs -text
+resources/*.ico filter=lfs diff=lfs merge=lfs -text
