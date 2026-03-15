@@ -908,7 +908,16 @@ void RenderStatusBar(float window_width, float window_height) {
   // Stats
   if (g_state.stats_sim_ray_num > 0) {
     ImGui::SameLine();
-    ImGui::Text("| Rays: %lu", g_state.stats_sim_ray_num);
+    unsigned long n = g_state.stats_sim_ray_num;
+    char buf[64];
+    if (n >= 1'000'000'000UL) {
+      snprintf(buf, sizeof(buf), "| Rays: %.1f ×10⁹", n / 1e9);
+    } else if (n >= 1'000'000UL) {
+      snprintf(buf, sizeof(buf), "| Rays: %.1f ×10⁶", n / 1e6);
+    } else {
+      snprintf(buf, sizeof(buf), "| Rays: %.1f ×10³", n / 1e3);
+    }
+    ImGui::Text("%s", buf);
   }
 
   // Sim resolution + lens info
