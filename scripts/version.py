@@ -20,7 +20,7 @@ SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 def read_cmake_version() -> str:
     """Read version from CMakeLists.txt."""
-    text = CMAKELISTS.read_text()
+    text = CMAKELISTS.read_text(encoding="utf-8")
     m = CMAKE_VERSION_RE.search(text)
     if not m:
         print(f"Error: cannot extract version from {CMAKELISTS}", file=sys.stderr)
@@ -31,12 +31,12 @@ def read_cmake_version() -> str:
 
 def write_cmake_version(version: str) -> None:
     """Write version to CMakeLists.txt. Exits if replacement count != 1."""
-    text = CMAKELISTS.read_text()
+    text = CMAKELISTS.read_text(encoding="utf-8")
     new_text, count = CMAKE_VERSION_RE.subn(rf"\g<1>{version}\g<3>", text)
     if count != 1:
         print(f"Error: expected exactly 1 replacement, got {count}", file=sys.stderr)
         sys.exit(1)
-    CMAKELISTS.write_text(new_text)
+    CMAKELISTS.write_text(new_text, encoding="utf-8")
 
 
 def read_git_tag_version() -> str:
