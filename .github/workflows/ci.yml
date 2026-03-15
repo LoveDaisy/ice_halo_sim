@@ -90,6 +90,8 @@ jobs:
     needs: build
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true  # E2E reference images are stored in LFS
 
       - name: Cache CPM dependencies
         uses: actions/cache@v5
