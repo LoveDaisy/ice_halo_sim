@@ -911,11 +911,11 @@ void RenderStatusBar(float window_width, float window_height) {
     unsigned long n = g_state.stats_sim_ray_num;
     char buf[64];
     if (n >= 1'000'000'000UL) {
-      snprintf(buf, sizeof(buf), "| Rays: %.1f ×10⁹", n / 1e9);
+      snprintf(buf, sizeof(buf), "| Rays: %.1f x10^9", n / 1e9);
     } else if (n >= 1'000'000UL) {
-      snprintf(buf, sizeof(buf), "| Rays: %.1f ×10⁶", n / 1e6);
+      snprintf(buf, sizeof(buf), "| Rays: %.1f x10^6", n / 1e6);
     } else {
-      snprintf(buf, sizeof(buf), "| Rays: %.1f ×10³", n / 1e3);
+      snprintf(buf, sizeof(buf), "| Rays: %.1f x10^3", n / 1e3);
     }
     ImGui::Text("%s", buf);
   }

@@ -343,10 +343,10 @@ void RenderSceneTab(GuiState& state) {
     ImGui::PushItemWidth(-130);
     DIRTY_IF(ImGui::Checkbox("Infinite rays", &state.sim.infinite));
     if (!state.sim.infinite) {
-      DIRTY_IF(ImGui::SliderFloat("Ray num (×10⁶)", &state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f"));
+      DIRTY_IF(ImGui::SliderFloat("Ray num (x10^6)", &state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f"));
     } else {
       ImGui::BeginDisabled();
-      ImGui::SliderFloat("Ray num (×10⁶)", &state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f");
+      ImGui::SliderFloat("Ray num (x10^6)", &state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f");
       ImGui::EndDisabled();
     }
     DIRTY_IF(ImGui::SliderInt("Max hits", &state.sim.max_hits, 1, 20));
