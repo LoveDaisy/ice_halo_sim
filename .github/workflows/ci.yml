@@ -43,6 +43,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: ${{ matrix.build_gui == 'ON' }}  # GUI builds need LFS for icon resources
 
       # GLAD2 runs the Python code generator at CMake configure time (needs Jinja2).
       # Set Python_ROOT_DIR so CMake's find_package(Python) uses the same Python.
@@ -88,6 +90,8 @@ jobs:
     needs: build
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true  # E2E reference images are stored in LFS
 
       - name: Cache CPM dependencies
         uses: actions/cache@v5

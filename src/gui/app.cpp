@@ -1,6 +1,8 @@
 #include "gui/app.hpp"
 
 #include <GLFW/glfw3.h>
+#include <spdlog/spdlog.h>
+#include <stb_image.h>
 
 #include <algorithm>
 #include <chrono>
@@ -35,12 +37,117 @@ int g_crystal_style = 1;      // Default: Hidden Line (index into kCrystalStyleN
 int g_crystal_mesh_id = -1;   // Crystal ID of cached mesh
 int g_crystal_mesh_hash = 0;  // Hash of crystal params for change detection
 
+int g_programmatic_resize = 0;
+float g_aspect_bar_height = 30.0f;  // Updated each frame by RenderPreviewPanel
+
 bool g_show_unsaved_popup = false;
 PendingAction g_pending_action = PendingAction::kNone;
 std::chrono::steady_clock::time_point g_last_poll_time = std::chrono::steady_clock::now();
 
 void GlfwErrorCallback(int error, const char* description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
+}
+
+float GetAspectRatio(AspectPreset preset) {
+  switch (preset) {
+    case AspectPreset::k16x9:
+      return 16.0f / 9.0f;
+    case AspectPreset::k3x2:
+      return 3.0f / 2.0f;
+    case AspectPreset::k4x3:
+      return 4.0f / 3.0f;
+    case AspectPreset::k1x1:
+      return 1.0f;
+    case AspectPreset::kFree:
+    case AspectPreset::kMatchBg:
+    default:
+      return 0.0f;
+  }
+}
+
+void WindowSizeCallback(GLFWwindow* /*window*/, int /*width*/, int /*height*/) {
+  if (g_programmatic_resize > 0) {
+    g_programmatic_resize--;
+    return;
+  }
+  if (g_state.aspect_preset != AspectPreset::kFree) {
+    g_state.aspect_preset = AspectPreset::kFree;
+  }
+}
+
+void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, float override_ratio) {
+  float ratio = 0.0f;
+  if (preset == AspectPreset::kMatchBg) {
+    ratio = override_ratio > 0.0f ? override_ratio : g_preview.GetBgAspect();
+    if (!g_preview.HasBackground()) {
+      return;
+    }
+  } else {
+    ratio = GetAspectRatio(preset);
+  }
+  if (portrait && ratio > 0.0f) {
+    ratio = 1.0f / ratio;
+  }
+  if (ratio <= 0.0f) {
+    return;
+  }
+
+  int win_w = 0;
+  int win_h = 0;
+  glfwGetWindowSize(window, &win_w, &win_h);
+
+  float bar_h = g_aspect_bar_height;
+  float preview_w = std::max(1.0f, static_cast<float>(win_w) - kLeftPanelWidth);
+  float preview_h = preview_w / ratio;
+  auto target_h = static_cast<int>(preview_h + kTopBarHeight + kStatusBarHeight + bar_h);
+  int target_w = win_w;
+
+  int work_x = 0;
+  int work_y = 0;
+  int work_w = 0;
+  int work_h = 0;
+  glfwGetMonitorWorkarea(glfwGetPrimaryMonitor(), &work_x, &work_y, &work_w, &work_h);
+
+  target_w = std::clamp(target_w, kMinWindowWidth, work_w);
+  target_h = std::clamp(target_h, kMinWindowHeight, work_h);
+
+  // If height was clamped, recalculate width to maintain ratio
+  float actual_preview_h = static_cast<float>(target_h) - kTopBarHeight - kStatusBarHeight - bar_h;
+  if (actual_preview_h > 0.0f) {
+    float actual_preview_w = actual_preview_h * ratio;
+    int recalc_w = static_cast<int>(actual_preview_w + kLeftPanelWidth);
+    if (recalc_w >= kMinWindowWidth && recalc_w <= work_w) {
+      target_w = recalc_w;
+    }
+  }
+
+  g_programmatic_resize = 2;  // Expect up to 2 callbacks (some platforms fire intermediate + final)
+  glfwSetWindowSize(window, target_w, target_h);
+
+  // Clamp window position to stay within screen
+  int pos_x = 0;
+  int pos_y = 0;
+  glfwGetWindowPos(window, &pos_x, &pos_y);
+  bool moved = false;
+  if (pos_x + target_w > work_x + work_w) {
+    pos_x = work_x + work_w - target_w;
+    moved = true;
+  }
+  if (pos_y + target_h > work_y + work_h) {
+    pos_y = work_y + work_h - target_h;
+    moved = true;
+  }
+  if (pos_x < work_x) {
+    pos_x = work_x;
+    moved = true;
+  }
+  if (pos_y < work_y) {
+    pos_y = work_y;
+    moved = true;
+  }
+  if (moved) {
+    glfwSetWindowPos(window, pos_x, pos_y);
+  }
 }
 
 int CrystalParamHash(const CrystalConfig& c) {
@@ -158,6 +265,52 @@ void DoSaveAs() {
   }
 }
 
+void DoExportPreviewPng() {
+  auto path = ShowExportPngDialog();
+  if (!path.empty()) {
+    ExportPreviewPng(path.c_str(), g_preview, g_preview_vp);
+  }
+}
+
+// Helper: load image from path, downsample if needed, upload to bg texture.
+// Returns true on success.
+static bool LoadAndUploadBgImage(const std::string& path) {
+  int w = 0;
+  int h = 0;
+  int channels = 0;
+  unsigned char* raw = stbi_load(path.c_str(), &w, &h, &channels, 3);  // Force 3 channels (RGB)
+  if (!raw) {
+    spdlog::warn("Failed to load background image: {}", path);
+    return false;
+  }
+
+  // Copy to vector, then free stbi allocation
+  size_t byte_count = static_cast<size_t>(w) * h * 3;
+  std::vector<unsigned char> data(raw, raw + byte_count);
+  stbi_image_free(raw);
+
+  // Box downsample while max dimension > 4096
+  while (std::max(w, h) > 4096) {
+    int new_w = w / 2;
+    int new_h = h / 2;
+    for (int y = 0; y < new_h; y++) {
+      for (int x = 0; x < new_w; x++) {
+        for (int c = 0; c < 3; c++) {
+          int sum = data[(y * 2 * w + x * 2) * 3 + c] + data[(y * 2 * w + x * 2 + 1) * 3 + c] +
+                    data[((y * 2 + 1) * w + x * 2) * 3 + c] + data[((y * 2 + 1) * w + x * 2 + 1) * 3 + c];
+          data[(y * new_w + x) * 3 + c] = static_cast<unsigned char>(sum / 4);
+        }
+      }
+    }
+    w = new_w;
+    h = new_h;
+    data.resize(static_cast<size_t>(w) * h * 3);
+  }
+
+  g_preview.UploadBgTexture(data.data(), w, h);
+  return true;
+}
+
 void DoOpen() {
   auto path = ShowOpenDialog();
   if (!path.empty()) {
@@ -173,6 +326,20 @@ void DoOpen() {
       } else {
         g_state.sim_state = SimState::kIdle;
       }
+
+      // Restore background image from saved path (uses deserialized alpha, not reset to 0.5)
+      g_preview.ClearBackground();
+      if (!g_state.bg_path.empty()) {
+        if (LoadAndUploadBgImage(g_state.bg_path)) {
+          // bg_show and bg_alpha already restored from deserialization
+        } else {
+          // Degradation: bg image not found — clear show, reset kMatchBg→kFree
+          g_state.bg_show = false;
+          if (g_state.aspect_preset == AspectPreset::kMatchBg) {
+            g_state.aspect_preset = AspectPreset::kFree;
+          }
+        }
+      }
     }
   }
 }
@@ -180,8 +347,35 @@ void DoOpen() {
 void DoNew() {
   g_state = InitDefaultState();
   g_preview.ClearTexture();
+  g_preview.ClearBackground();
   g_crystal_mesh_id = -1;
   g_crystal_mesh_hash = 0;
+}
+
+void DoLoadBackground(GLFWwindow* window) {
+  auto path = ShowOpenImageDialog();
+  if (path.empty()) {
+    return;
+  }
+
+  if (!LoadAndUploadBgImage(path)) {
+    return;
+  }
+
+  g_state.bg_path = path;
+  g_state.bg_show = true;
+  g_state.bg_alpha = 0.5f;  // Start at 50% to immediately show overlay effect
+  g_state.aspect_preset = AspectPreset::kMatchBg;
+  ApplyAspectRatio(window, AspectPreset::kMatchBg, false, g_preview.GetBgAspect());
+}
+
+void DoClearBackground() {
+  g_preview.ClearBackground();
+  g_state.bg_path.clear();
+  g_state.bg_show = false;
+  if (g_state.aspect_preset == AspectPreset::kMatchBg) {
+    g_state.aspect_preset = AspectPreset::kFree;
+  }
 }
 
 void DoRun() {
@@ -287,7 +481,7 @@ void RenderTopBar(float window_width) {
   ImGui::SameLine();
 
   // Push buttons to the right side
-  float button_start_x = window_width - 380.0f;
+  float button_start_x = window_width - 440.0f;
   if (button_start_x > ImGui::GetCursorPosX()) {
     ImGui::SetCursorPosX(button_start_x);
   }
@@ -313,6 +507,19 @@ void RenderTopBar(float window_width) {
   }
   if (simulating) {
     ImGui::EndDisabled();
+  }
+  ImGui::SameLine();
+  {
+    bool no_texture = !g_preview.HasTexture();
+    if (no_texture) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Export")) {
+      DoExportPreviewPng();
+    }
+    if (no_texture) {
+      ImGui::EndDisabled();
+    }
   }
   ImGui::SameLine();
   if (simulating) {
@@ -542,6 +749,74 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground);
 
+  // Aspect ratio bar
+  {
+    ImGui::Text("Aspect:");
+    ImGui::SameLine();
+    ImGui::PushItemWidth(150.0f);
+    int preset_idx = static_cast<int>(g_state.aspect_preset);
+    const char* preview_label = kAspectPresetNames[preset_idx];
+    if (ImGui::BeginCombo("##AspectPreset", preview_label)) {
+      for (int i = 0; i < kAspectPresetCount; i++) {
+        bool is_match_bg = (static_cast<AspectPreset>(i) == AspectPreset::kMatchBg);
+        bool disabled = is_match_bg && !g_preview.HasBackground();
+        if (disabled) {
+          ImGui::BeginDisabled();
+        }
+        bool selected = (i == preset_idx);
+        if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
+          g_state.aspect_preset = static_cast<AspectPreset>(i);
+          ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
+        if (disabled) {
+          ImGui::EndDisabled();
+        }
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::PopItemWidth();
+
+    // Portrait/landscape toggle button
+    ImGui::SameLine();
+    bool disable_flip = (g_state.aspect_preset == AspectPreset::kFree || g_state.aspect_preset == AspectPreset::k1x1);
+    ImGui::BeginDisabled(disable_flip);
+    const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
+    if (ImGui::Button(flip_label)) {
+      g_state.aspect_portrait = !g_state.aspect_portrait;
+      ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+    }
+    ImGui::EndDisabled();
+  }
+
+  // Background image controls
+  {
+    if (ImGui::Button("Load Bg")) {
+      DoLoadBackground(window);
+    }
+    ImGui::SameLine();
+    bool no_bg = !g_preview.HasBackground();
+    ImGui::BeginDisabled(no_bg);
+    ImGui::Checkbox("Show", &g_state.bg_show);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!g_state.bg_show);
+    ImGui::PushItemWidth(120.0f);
+    ImGui::SliderFloat("Alpha", &g_state.bg_alpha, 0.0f, 1.0f, "%.2f");
+    ImGui::PopItemWidth();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Clear")) {
+      DoClearBackground();
+    }
+    ImGui::EndDisabled();
+  }
+
+  float aspect_bar_h = ImGui::GetCursorPosY();
+  g_aspect_bar_height = aspect_bar_h;
+  float preview_height = panel_height - aspect_bar_h;
+
   g_preview_vp.active = false;
 
   if (g_preview.HasTexture() && g_state.selected_renderer >= 0 &&
@@ -555,12 +830,12 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
 
     auto& rc = g_state.renderers[g_state.selected_renderer];
 
-    // Store viewport for deferred rendering
+    // Store viewport for deferred rendering (subtract aspect bar height)
     g_preview_vp.active = true;
     g_preview_vp.vp_x = static_cast<int>(panel_x * scale_x);
     g_preview_vp.vp_y = static_cast<int>(kStatusBarHeight * scale_y);  // OpenGL Y is bottom-up
     g_preview_vp.vp_w = static_cast<int>(panel_width * scale_x);
-    g_preview_vp.vp_h = static_cast<int>(panel_height * scale_y);
+    g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
     g_preview_vp.params.lens_type = rc.lens_type;
     g_preview_vp.params.fov = rc.fov;
     g_preview_vp.params.elevation = rc.elevation;
@@ -570,6 +845,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     std::copy(std::begin(rc.ray_color), std::end(rc.ray_color), std::begin(g_preview_vp.params.ray_color));
     std::copy(std::begin(rc.background), std::end(rc.background), std::begin(g_preview_vp.params.background));
     g_preview_vp.params.intensity_factor = std::pow(2.0f, rc.exposure_offset);
+    g_preview_vp.params.bg_enabled = g_state.bg_show && g_preview.HasBackground();
+    g_preview_vp.params.bg_alpha = g_state.bg_alpha;
+    g_preview_vp.params.bg_aspect = g_preview.GetBgAspect();
 
     // Mouse interaction: orbit with drag, FOV with scroll
     // Disabled for full-sky lens types (dual fisheye, rectangular)
@@ -630,7 +908,16 @@ void RenderStatusBar(float window_width, float window_height) {
   // Stats
   if (g_state.stats_sim_ray_num > 0) {
     ImGui::SameLine();
-    ImGui::Text("| Rays: %lu", g_state.stats_sim_ray_num);
+    unsigned long n = g_state.stats_sim_ray_num;
+    char buf[64];
+    if (n >= 1'000'000'000UL) {
+      snprintf(buf, sizeof(buf), "| Rays: %.1f ×10⁹", n / 1e9);
+    } else if (n >= 1'000'000UL) {
+      snprintf(buf, sizeof(buf), "| Rays: %.1f ×10⁶", n / 1e6);
+    } else {
+      snprintf(buf, sizeof(buf), "| Rays: %.1f ×10³", n / 1e3);
+    }
+    ImGui::Text("%s", buf);
   }
 
   // Sim resolution + lens info

@@ -31,6 +31,11 @@ uniform mat3 u_view_matrix;  // view-to-world rotation (inverse view)
 uniform int u_visible;       // 0=upper, 1=lower, 2=full
 uniform vec3 u_ray_color;
 uniform vec3 u_background;
+uniform sampler2D u_bg_texture;
+uniform int u_bg_enabled;
+uniform float u_overlay_alpha;
+uniform vec2 u_bg_uv_scale;
+uniform vec2 u_bg_uv_offset;
 
 const float PI = 3.14159265358979323846;
 
@@ -156,28 +161,36 @@ void main() {
     needs_view_transform = false;  // Core rectangular works in world space
   }
 
-  if (result.w < 0.5) {
-    frag_color = vec4(u_background, 1.0);
-    return;
+  // Eliminated early returns so bg mixing can always execute at the end.
+  vec3 final_color = u_background;
+
+  if (result.w >= 0.5) {
+    vec3 world_dir = needs_view_transform ? u_view_matrix * result.xyz : result.xyz;
+
+    // Visible hemisphere check
+    // In equirect convention: lat = asin(-dz), lat > 0 means upper sky
+    float lat = asin(clamp(-world_dir.z, -1.0, 1.0));
+    bool visible = true;
+    if (u_visible == 0 && lat < 0.0) visible = false;
+    if (u_visible == 1 && lat > 0.0) visible = false;
+
+    if (visible) {
+      vec2 uv = dirToEquirect(world_dir);
+      vec3 tex_color = texture(u_texture, uv).rgb;
+      final_color = tex_color * u_ray_color + u_background * (1.0 - tex_color);
+    }
   }
 
-  vec3 world_dir = needs_view_transform ? u_view_matrix * result.xyz : result.xyz;
-
-  // Visible hemisphere check
-  // In equirect convention: lat = asin(-dz), lat > 0 means upper sky
-  float lat = asin(clamp(-world_dir.z, -1.0, 1.0));
-  if (u_visible == 0 && lat < 0.0) {
-    frag_color = vec4(u_background, 1.0);
-    return;
-  }
-  if (u_visible == 1 && lat > 0.0) {
-    frag_color = vec4(u_background, 1.0);
-    return;
+  // Background image overlay (contain mode with letterbox)
+  if (u_bg_enabled != 0) {
+    vec2 bg_uv = v_ndc * u_bg_uv_scale + u_bg_uv_offset;
+    vec3 bg_color = vec3(0.0);  // Black letterbox for out-of-bounds UV
+    if (bg_uv.x >= 0.0 && bg_uv.x <= 1.0 && bg_uv.y >= 0.0 && bg_uv.y <= 1.0) {
+      bg_color = texture(u_bg_texture, bg_uv).rgb;
+    }
+    final_color = bg_color * (1.0 - u_overlay_alpha) + final_color * u_overlay_alpha;
   }
 
-  vec2 uv = dirToEquirect(world_dir);
-  vec3 tex_color = texture(u_texture, uv).rgb;
-  vec3 final_color = tex_color * u_ray_color + u_background * (1.0 - tex_color);
   frag_color = vec4(final_color, 1.0);
 }
 )glsl";
@@ -247,12 +260,21 @@ bool PreviewRenderer::Init() {
   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
   glBindVertexArray(0);
 
-  // Create texture
+  // Create equirect texture
   glGenTextures(1, &texture_);
   glBindTexture(GL_TEXTURE_2D, texture_);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glBindTexture(GL_TEXTURE_2D, 0);
+
+  // Create background texture
+  glGenTextures(1, &bg_texture_);
+  glBindTexture(GL_TEXTURE_2D, bg_texture_);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glBindTexture(GL_TEXTURE_2D, 0);
 
@@ -263,6 +285,10 @@ void PreviewRenderer::Destroy() {
   if (texture_) {
     glDeleteTextures(1, &texture_);
     texture_ = 0;
+  }
+  if (bg_texture_) {
+    glDeleteTextures(1, &bg_texture_);
+    bg_texture_ = 0;
   }
   if (vbo_) {
     glDeleteBuffers(1, &vbo_);
@@ -279,6 +305,9 @@ void PreviewRenderer::Destroy() {
   tex_width_ = 0;
   tex_height_ = 0;
   tex_data_.clear();
+  bg_width_ = 0;
+  bg_height_ = 0;
+  bg_aspect_ = 1.0f;
 }
 
 void PreviewRenderer::ClearTexture() {
@@ -308,6 +337,32 @@ void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int he
   }
 
   glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void PreviewRenderer::UploadBgTexture(const unsigned char* data, int width, int height) {
+  if (!bg_texture_ || !data || width <= 0 || height <= 0) {
+    return;
+  }
+
+  glBindTexture(GL_TEXTURE_2D, bg_texture_);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);  // RGB data may not be 4-byte aligned
+
+  if (width != bg_width_ || height != bg_height_) {
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+    bg_width_ = width;
+    bg_height_ = height;
+  } else {
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, data);
+  }
+
+  bg_aspect_ = static_cast<float>(width) / static_cast<float>(height);
+  glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void PreviewRenderer::ClearBackground() {
+  bg_width_ = 0;
+  bg_height_ = 0;
+  bg_aspect_ = 1.0f;
 }
 
 // Build view-to-world rotation matrix from elevation, azimuth, roll (degrees).
@@ -355,7 +410,7 @@ static void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_d
 }
 
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {
-  if (!shader_program_ || !texture_) {
+  if (!shader_program_ || !texture_ || vp_w <= 0 || vp_h <= 0) {
     return;
   }
 
@@ -385,10 +440,39 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   BuildViewMatrix(params.elevation, params.azimuth, params.roll, view_matrix);
   glUniformMatrix3fv(glGetUniformLocation(shader_program_, "u_view_matrix"), 1, GL_FALSE, view_matrix);
 
-  // Bind texture
+  // Bind equirect texture to unit 0
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, texture_);
   glUniform1i(glGetUniformLocation(shader_program_, "u_texture"), 0);
+
+  // Background image uniforms
+  glUniform1i(glGetUniformLocation(shader_program_, "u_bg_enabled"), params.bg_enabled ? 1 : 0);
+  if (params.bg_enabled) {
+    glUniform1f(glGetUniformLocation(shader_program_, "u_overlay_alpha"), params.bg_alpha);
+
+    // CPU-side contain mode UV calculation
+    // bg_uv = v_ndc * scale + offset maps NDC [-1,1] to texture UV [0,1]
+    // with contain fit (letterbox for aspect mismatch)
+    float vp_aspect = static_cast<float>(vp_w) / static_cast<float>(vp_h);
+    float sx = 1.0f;
+    float sy = 1.0f;
+    if (vp_aspect > params.bg_aspect) {
+      sx = params.bg_aspect / vp_aspect;
+    } else {
+      sy = vp_aspect / params.bg_aspect;
+    }
+    float scale_x = 0.5f / sx;
+    // Y flip: stbi loads top-down, GL texture origin is bottom-left
+    float scale_y = -0.5f / sy;
+    glUniform2f(glGetUniformLocation(shader_program_, "u_bg_uv_scale"), scale_x, scale_y);
+    glUniform2f(glGetUniformLocation(shader_program_, "u_bg_uv_offset"), 0.5f, 0.5f);
+
+    // Bind bg texture to unit 1
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, bg_texture_);
+    glUniform1i(glGetUniformLocation(shader_program_, "u_bg_texture"), 1);
+    glActiveTexture(GL_TEXTURE0);
+  }
 
   // Draw fullscreen quad
   glBindVertexArray(vao_);

@@ -15,6 +15,9 @@ struct PreviewParams {
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float background[3] = { 0.0f, 0.0f, 0.0f };
   float intensity_factor = 1.0f;
+  bool bg_enabled = false;
+  float bg_alpha = 1.0f;
+  float bg_aspect = 1.0f;
 };
 
 class PreviewRenderer {
@@ -36,6 +39,12 @@ class PreviewRenderer {
   int GetTextureWidth() const { return tex_width_; }
   int GetTextureHeight() const { return tex_height_; }
 
+  // Background image texture management (GL upload only, no file I/O)
+  void UploadBgTexture(const unsigned char* data, int width, int height);
+  void ClearBackground();
+  bool HasBackground() const { return bg_width_ > 0 && bg_height_ > 0; }
+  float GetBgAspect() const { return bg_aspect_; }
+
  private:
   unsigned int shader_program_ = 0;
   unsigned int vao_ = 0;
@@ -44,6 +53,12 @@ class PreviewRenderer {
   int tex_width_ = 0;
   int tex_height_ = 0;
   std::vector<unsigned char> tex_data_;  // CPU-side copy of texture (RGB uint8)
+
+  // Background image texture (no CPU-side copy — loaded from file path)
+  unsigned int bg_texture_ = 0;
+  int bg_width_ = 0;
+  int bg_height_ = 0;
+  float bg_aspect_ = 1.0f;
 };
 
 }  // namespace lumice::gui

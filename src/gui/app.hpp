@@ -48,13 +48,22 @@ extern int g_crystal_style;
 extern int g_crystal_mesh_id;
 extern int g_crystal_mesh_hash;
 
+// Aspect ratio state
+extern int g_programmatic_resize;  // Counter: decremented by WindowSizeCallback, set by ApplyAspectRatio
+extern float g_aspect_bar_height;  // Cached actual height from ImGui layout
+
 // Unsaved changes popup state
 extern bool g_show_unsaved_popup;
 extern PendingAction g_pending_action;
 extern std::chrono::steady_clock::time_point g_last_poll_time;
 
-// GLFW callback
+// GLFW callbacks
 void GlfwErrorCallback(int error, const char* description);
+void WindowSizeCallback(GLFWwindow* window, int width, int height);
+
+// Aspect ratio helpers
+float GetAspectRatio(AspectPreset preset);
+void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, float override_ratio = 0.0f);
 
 // Crystal preview helpers
 int CrystalParamHash(const CrystalConfig& c);
@@ -64,11 +73,14 @@ void ApplyTrackballRotation(float dx, float dy);
 // Business operations
 void DoSave();
 void DoSaveAs();
+void DoExportPreviewPng();
 void DoOpen();
 void DoNew();
 void DoRun();
 void DoStop();
 void DoRevert();
+void DoLoadBackground(GLFWwindow* window);
+void DoClearBackground();
 void FetchRenderResults();
 void PollServerState();
 void CheckUnsavedAndDo(PendingAction action);

@@ -12,6 +12,13 @@ enum class CrystalType { kPrism, kPyramid };
 // Axis distribution type (matches PRD: Gauss or Uniform only for MVP)
 enum class AxisDistType { kGauss, kUniform };
 
+// Aspect ratio presets for preview window
+enum class AspectPreset { kFree, k16x9, k3x2, k4x3, k1x1, kMatchBg };
+inline const char* const kAspectPresetNames[] = { "Free", "16:9", "3:2", "4:3", "1:1", "Match Background" };
+constexpr int kAspectPresetCount = 6;
+static_assert(sizeof(kAspectPresetNames) / sizeof(kAspectPresetNames[0]) == kAspectPresetCount,
+              "kAspectPresetNames must match kAspectPresetCount");
+
 struct AxisDist {
   AxisDistType type = AxisDistType::kUniform;
   float mean = 0.0f;
@@ -134,6 +141,15 @@ struct GuiState {
   int next_crystal_id = 1;
   int next_renderer_id = 1;
   int next_filter_id = 1;
+
+  // Aspect ratio (view preference, not simulation parameter — does not call MarkDirty)
+  AspectPreset aspect_preset = AspectPreset::kFree;
+  bool aspect_portrait = false;
+
+  // Background image overlay (view preference — does not call MarkDirty)
+  std::string bg_path;
+  bool bg_show = false;
+  float bg_alpha = 1.0f;
 
   // File management
   std::string current_file_path;

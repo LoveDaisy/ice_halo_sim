@@ -139,9 +139,10 @@ To build and run GUI automated tests (requires display server):
 ~~~
 
 > **Cross-platform note:** Core, CLI, and unit tests (`./scripts/build.sh -tj release`) contain no
-> platform-specific code and should compile on any platform with a C++17 compiler. The GUI and
-> GUI tests (`-g` / `-gt` flags) are currently verified on macOS (Apple Silicon) only. If you
-> encounter GUI build issues on other platforms, try building without the `-g` flag.
+> platform-specific code and should compile on any platform with a C++17 compiler. The GUI is
+> built and tested on macOS, Linux, and Windows via CI. On macOS, the GUI is packaged as a native
+> `.app` bundle with icon; on Windows, it runs as a standard `.exe` with embedded icon and no
+> console window.
 
 
 ## Configuration file

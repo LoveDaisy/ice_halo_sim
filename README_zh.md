@@ -134,8 +134,8 @@ GUI 提供以下功能：
 ~~~
 
 > **跨平台说明：** Core、CLI 和单元测试（`./scripts/build.sh -tj release`）不包含任何平台特定代码，
-> 应可在任何支持 C++17 的平台上编译通过。GUI 和 GUI 测试（`-g` / `-gt` 选项）目前仅在
-> macOS（Apple Silicon）上验证。如果在其他平台遇到 GUI 编译问题，可先不带 `-g` 编译核心功能。
+> 应可在任何支持 C++17 的平台上编译通过。GUI 已在 macOS、Linux 和 Windows 上通过 CI 构建和测试。
+> macOS 上 GUI 打包为原生 `.app` bundle 并附带图标；Windows 上为标准 `.exe`，内嵌图标且无控制台窗口。
 
 
 ## 配置文件

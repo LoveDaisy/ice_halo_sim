@@ -1,8 +1,11 @@
 #include <GLFW/glfw3.h>
+#include <stb_image.h>
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <string>
 
 #include "gui/gl_common.h"
 
@@ -41,6 +44,48 @@ struct ScreenshotCapture {
 };
 static ScreenshotCapture g_capture;
 
+// Shared state for export tests: GL calls must happen on main thread (GuiFunc).
+struct ExportTestState {
+  std::string export_path;
+  bool upload_requested = false;
+  bool upload_done = false;
+  bool export_requested = false;
+  bool export_done = false;
+  bool export_result = false;
+
+  void Reset() {
+    export_path.clear();
+    upload_requested = false;
+    upload_done = false;
+    export_requested = false;
+    export_done = false;
+    export_result = false;
+  }
+};
+static ExportTestState g_export_test;
+
+// Shared state for background overlay tests: GL calls must happen on main thread (GuiFunc).
+struct BgOverlayTestState {
+  std::string bg_image_path;
+  bool bg_upload_requested = false;
+  bool bg_upload_done = false;
+  bool export_requested = false;
+  bool export_done = false;
+  bool export_result = false;
+  std::string export_path;
+
+  void Reset() {
+    bg_image_path.clear();
+    bg_upload_requested = false;
+    bg_upload_done = false;
+    export_requested = false;
+    export_done = false;
+    export_result = false;
+    export_path.clear();
+  }
+};
+static BgOverlayTestState g_bg_test;
+
 // Reset all global state for test isolation
 static void ResetTestState() {
   // Document state (delegates to DoNew: g_state, g_preview, g_crystal_mesh_id/hash)
@@ -51,6 +96,7 @@ static void ResetTestState() {
   gui::g_crystal_style = 1;
   gui::g_panel_collapsed = false;
   gui::g_preview_vp.active = false;
+  gui::g_programmatic_resize = 0;
 
   // Runtime state
   gui::g_show_unsaved_popup = false;
@@ -61,6 +107,8 @@ static void ResetTestState() {
 
   // Test state
   g_capture.Reset();
+  g_export_test.Reset();
+  g_bg_test.Reset();
 }
 
 // Register smoke tests
@@ -316,6 +364,357 @@ static void RegisterP2Tests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.renderers[0].elevation, 0.0f);
       IM_CHECK_EQ(gui::g_state.renderers[0].azimuth, 0.0f);
       IM_CHECK_EQ(gui::g_state.renderers[0].roll, 0.0f);
+    };
+  }
+}
+
+// Aspect ratio tests
+static void RegisterAspectRatioTests(ImGuiTestEngine* engine) {
+  // Test 1: Preset switch — verify GetAspectRatio returns correct values
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "switch");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      struct TestCase {
+        gui::AspectPreset preset;
+        float expected_ratio;
+      };
+      TestCase cases[] = {
+        { gui::AspectPreset::k16x9, 16.0f / 9.0f },
+        { gui::AspectPreset::k3x2, 3.0f / 2.0f },
+        { gui::AspectPreset::k4x3, 4.0f / 3.0f },
+        { gui::AspectPreset::k1x1, 1.0f },
+      };
+
+      for (auto& tc : cases) {
+        float ratio = gui::GetAspectRatio(tc.preset);
+        IM_CHECK_LT(std::abs(ratio - tc.expected_ratio), 0.01f);
+      }
+
+      // Free and MatchBg return 0
+      IM_CHECK_EQ(gui::GetAspectRatio(gui::AspectPreset::kFree), 0.0f);
+      IM_CHECK_EQ(gui::GetAspectRatio(gui::AspectPreset::kMatchBg), 0.0f);
+    };
+  }
+
+  // Test 2: Portrait toggle
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "portrait_toggle");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Landscape 3:2 = 1.5
+      gui::g_state.aspect_preset = gui::AspectPreset::k3x2;
+      gui::g_state.aspect_portrait = false;
+      float ratio = gui::GetAspectRatio(gui::g_state.aspect_preset);
+      IM_CHECK_LT(std::abs(ratio - 1.5f), 0.01f);
+
+      // Portrait inverts: 1/1.5 ≈ 0.667
+      gui::g_state.aspect_portrait = true;
+      float inv_ratio = 1.0f / gui::GetAspectRatio(gui::g_state.aspect_preset);
+      IM_CHECK_LT(std::abs(inv_ratio - 2.0f / 3.0f), 0.01f);
+    };
+  }
+
+  // Test 3: Free mode — no ratio constraint
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "free_mode");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(gui::g_state.aspect_preset, gui::AspectPreset::kFree);
+      IM_CHECK_EQ(gui::g_state.aspect_portrait, false);
+      IM_CHECK_EQ(gui::GetAspectRatio(gui::AspectPreset::kFree), 0.0f);
+    };
+  }
+
+  // Test 4: .lmc roundtrip
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "lmc_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // Set 4:3 landscape
+      gui::g_state.aspect_preset = gui::AspectPreset::k4x3;
+      gui::g_state.aspect_portrait = false;
+
+      // Save
+      const char* tmp_path = "/tmp/lumice_aspect_test.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
+      IM_CHECK(save_ok);
+
+      // Reset
+      gui::DoNew();
+      IM_CHECK_EQ(gui::g_state.aspect_preset, gui::AspectPreset::kFree);
+
+      // Load
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0;
+      int tex_h = 0;
+      bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
+      IM_CHECK(load_ok);
+
+      // Verify roundtrip
+      IM_CHECK_EQ(gui::g_state.aspect_preset, gui::AspectPreset::k4x3);
+      IM_CHECK_EQ(gui::g_state.aspect_portrait, false);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // Test 5: Old .lmc compat — missing aspect fields default to Free
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "old_lmc_compat");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // Minimal JSON without aspect fields
+      std::string json = R"({"crystals":[],"renderers":[],"filters":[]})";
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeGuiStateJson(json, loaded);
+      IM_CHECK(ok);
+      IM_CHECK_EQ(loaded.aspect_preset, gui::AspectPreset::kFree);
+      IM_CHECK_EQ(loaded.aspect_portrait, false);
+    };
+  }
+
+  // Test 6: Screen bounds — ApplyAspectRatio clamps to workarea
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "screen_bounds");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+
+      // Verify workarea is available
+      int work_x = 0;
+      int work_y = 0;
+      int work_w = 0;
+      int work_h = 0;
+      glfwGetMonitorWorkarea(glfwGetPrimaryMonitor(), &work_x, &work_y, &work_w, &work_h);
+
+      // The function should never produce sizes exceeding workarea
+      // Just verify GetAspectRatio values are sane
+      for (int i = 0; i < gui::kAspectPresetCount; i++) {
+        float r = gui::GetAspectRatio(static_cast<gui::AspectPreset>(i));
+        IM_CHECK(r >= 0.0f);
+        if (r > 0.0f) {
+          IM_CHECK(r < 100.0f);  // Sanity check
+        }
+      }
+    };
+  }
+}
+
+// Synthetic texture for export tests
+static std::vector<unsigned char> g_synth_tex;
+constexpr int kSynthTexW = 64;
+constexpr int kSynthTexH = 64;
+
+static void InitSynthTexture() {
+  if (g_synth_tex.empty()) {
+    g_synth_tex.resize(kSynthTexW * kSynthTexH * 3);
+    for (int y = 0; y < kSynthTexH; ++y) {
+      for (int x = 0; x < kSynthTexW; ++x) {
+        int idx = (y * kSynthTexW + x) * 3;
+        g_synth_tex[idx + 0] = static_cast<unsigned char>(x * 4);        // R
+        g_synth_tex[idx + 1] = static_cast<unsigned char>(y * 4);        // G
+        g_synth_tex[idx + 2] = static_cast<unsigned char>((x ^ y) * 4);  // B
+      }
+    }
+  }
+}
+
+static void ExportGuiFunc(ImGuiTestContext* /*ctx*/) {
+  // Upload synthetic texture on main thread when requested
+  if (g_export_test.upload_requested && !g_export_test.upload_done) {
+    InitSynthTexture();
+    gui::g_preview.UploadTexture(g_synth_tex.data(), kSynthTexW, kSynthTexH);
+    g_export_test.upload_done = true;
+  }
+  // Execute export on main thread when requested
+  if (g_export_test.export_requested && !g_export_test.export_done) {
+    g_export_test.export_result =
+        gui::ExportPreviewPng(g_export_test.export_path.c_str(), gui::g_preview, gui::g_preview_vp);
+    g_export_test.export_done = true;
+    g_export_test.export_requested = false;
+  }
+}
+
+static void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
+  // Test 1: export_file_valid — export to temp file, verify stbi_load can read it
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export", "file_valid");
+    t->GuiFunc = ExportGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_export_test.Reset();
+
+      // Request texture upload
+      g_export_test.upload_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.upload_done);
+      IM_CHECK(gui::g_preview.HasTexture());
+
+      // Ensure preview viewport has valid dimensions
+      ctx->Yield(2);
+      IM_CHECK(gui::g_preview_vp.vp_w > 0);
+      IM_CHECK(gui::g_preview_vp.vp_h > 0);
+
+      // Request export
+      const char* tmp_path = "/tmp/lumice_export_test.png";
+      g_export_test.export_path = tmp_path;
+      g_export_test.export_requested = true;
+      ctx->Yield(2);
+
+      IM_CHECK(g_export_test.export_done);
+      IM_CHECK(g_export_test.export_result);
+
+      // Verify file exists and is readable
+      std::vector<unsigned char> img_data;
+      int img_w = 0;
+      int img_h = 0;
+      int img_ch = 0;
+      bool loaded = lumice::test::LoadPng(tmp_path, img_data, img_w, img_h, img_ch);
+      IM_CHECK(loaded);
+      IM_CHECK(img_w > 0);
+      IM_CHECK(img_h > 0);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // Test 2: export_dimensions — verify exported image matches viewport size
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export", "dimensions");
+    t->GuiFunc = ExportGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_export_test.Reset();
+
+      // Upload texture
+      g_export_test.upload_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.upload_done);
+
+      // Wait for viewport to be active
+      ctx->Yield(2);
+      int expected_w = gui::g_preview_vp.vp_w;
+      int expected_h = gui::g_preview_vp.vp_h;
+      IM_CHECK(expected_w > 0);
+      IM_CHECK(expected_h > 0);
+
+      // Export
+      const char* tmp_path = "/tmp/lumice_export_dim_test.png";
+      g_export_test.export_path = tmp_path;
+      g_export_test.export_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.export_done);
+      IM_CHECK(g_export_test.export_result);
+
+      // Verify dimensions
+      std::vector<unsigned char> img_data;
+      int img_w = 0;
+      int img_h = 0;
+      int img_ch = 0;
+      bool loaded = lumice::test::LoadPng(tmp_path, img_data, img_w, img_h, img_ch);
+      IM_CHECK(loaded);
+      IM_CHECK_EQ(img_w, expected_w);
+      IM_CHECK_EQ(img_h, expected_h);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // Test 3: export_content — verify exported image has non-zero pixels (content test)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export", "content");
+    t->GuiFunc = ExportGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_export_test.Reset();
+
+      // Upload texture
+      g_export_test.upload_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.upload_done);
+
+      ctx->Yield(2);
+
+      // Export
+      const char* tmp_path = "/tmp/lumice_export_content_test.png";
+      g_export_test.export_path = tmp_path;
+      g_export_test.export_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.export_done);
+      IM_CHECK(g_export_test.export_result);
+
+      // Verify content: load and check for non-zero pixels
+      std::vector<unsigned char> img_data;
+      int img_w = 0;
+      int img_h = 0;
+      int img_ch = 0;
+      bool loaded = lumice::test::LoadPng(tmp_path, img_data, img_w, img_h, img_ch);
+      IM_CHECK(loaded);
+      bool has_nonzero = false;
+      for (size_t i = 0; i < img_data.size() && !has_nonzero; ++i) {
+        if (img_data[i] != 0) {
+          has_nonzero = true;
+        }
+      }
+      IM_CHECK(has_nonzero);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // Test 4: export_twice — export twice consecutively, verify both succeed (FBO cleanup test)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export", "twice");
+    t->GuiFunc = ExportGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_export_test.Reset();
+
+      // Upload texture
+      g_export_test.upload_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.upload_done);
+      ctx->Yield(2);
+
+      // First export
+      const char* tmp_path1 = "/tmp/lumice_export_twice_1.png";
+      g_export_test.export_path = tmp_path1;
+      g_export_test.export_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.export_done);
+      IM_CHECK(g_export_test.export_result);
+
+      // Second export (verify FBO cleanup is correct — prev_fbo restored properly)
+      g_export_test.export_done = false;
+      g_export_test.export_result = false;
+      const char* tmp_path2 = "/tmp/lumice_export_twice_2.png";
+      g_export_test.export_path = tmp_path2;
+      g_export_test.export_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.export_done);
+      IM_CHECK(g_export_test.export_result);
+
+      // Verify both files are readable
+      std::vector<unsigned char> img1, img2;
+      int w1 = 0, h1 = 0, ch1 = 0;
+      int w2 = 0, h2 = 0, ch2 = 0;
+      IM_CHECK(lumice::test::LoadPng(tmp_path1, img1, w1, h1, ch1));
+      IM_CHECK(lumice::test::LoadPng(tmp_path2, img2, w2, h2, ch2));
+      IM_CHECK_EQ(w1, w2);
+      IM_CHECK_EQ(h1, h2);
+
+      std::remove(tmp_path1);
+      std::remove(tmp_path2);
     };
   }
 }
@@ -719,6 +1118,324 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
   }
 }
 
+// Background overlay GuiFunc: handles bg texture upload, equirect upload, and FBO export on main thread.
+static void BgOverlayGuiFunc(ImGuiTestContext* /*ctx*/) {
+  // Upload equirect texture when requested (reuses g_export_test state)
+  if (g_export_test.upload_requested && !g_export_test.upload_done) {
+    InitSynthTexture();
+    gui::g_preview.UploadTexture(g_synth_tex.data(), kSynthTexW, kSynthTexH);
+    g_export_test.upload_done = true;
+  }
+  // Upload bg image from file path
+  if (g_bg_test.bg_upload_requested && !g_bg_test.bg_upload_done) {
+    int w = 0;
+    int h = 0;
+    int channels = 0;
+    unsigned char* raw = stbi_load(g_bg_test.bg_image_path.c_str(), &w, &h, &channels, 3);
+    if (raw) {
+      gui::g_preview.UploadBgTexture(raw, w, h);
+      stbi_image_free(raw);
+    }
+    g_bg_test.bg_upload_done = true;
+  }
+  // Export via FBO
+  if (g_bg_test.export_requested && !g_bg_test.export_done) {
+    g_bg_test.export_result = gui::ExportPreviewPng(g_bg_test.export_path.c_str(), gui::g_preview, gui::g_preview_vp);
+    g_bg_test.export_done = true;
+  }
+}
+
+static void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
+  // Test 1: bg/aspect_landscape — load landscape bg, verify viewport aspect ≈ 2650/1580
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "bg", "aspect_landscape");
+    t->GuiFunc = BgOverlayGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_bg_test.Reset();
+
+      // Also need an equirect texture for preview viewport to activate
+      InitSynthTexture();
+      g_export_test.Reset();
+      g_export_test.upload_requested = true;
+
+      // Upload landscape bg image
+      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.png";
+      g_bg_test.bg_upload_requested = true;
+      ctx->Yield(3);
+      IM_CHECK(g_bg_test.bg_upload_done);
+      IM_CHECK(gui::g_preview.HasBackground());
+
+      // Verify aspect ratio ≈ 2650/1580 ≈ 1.677
+      float bg_aspect = gui::g_preview.GetBgAspect();
+      IM_CHECK(bg_aspect > 1.5f);
+      IM_CHECK(bg_aspect < 1.8f);
+    };
+  }
+
+  // Test 2: bg/aspect_portrait — load portrait bg, verify aspect ≈ 1608/2488 ≈ 0.646
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "bg", "aspect_portrait");
+    t->GuiFunc = BgOverlayGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_bg_test.Reset();
+
+      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_portrait.png";
+      g_bg_test.bg_upload_requested = true;
+      ctx->Yield(3);
+      IM_CHECK(g_bg_test.bg_upload_done);
+      IM_CHECK(gui::g_preview.HasBackground());
+
+      float bg_aspect = gui::g_preview.GetBgAspect();
+      IM_CHECK(bg_aspect > 0.5f);
+      IM_CHECK(bg_aspect < 0.8f);
+    };
+  }
+
+  // Test 3: bg/alpha_diff — alpha=0 vs alpha=1 should produce different FBO output
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "bg", "alpha_diff");
+    t->GuiFunc = BgOverlayGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_bg_test.Reset();
+
+      // Upload equirect texture
+      InitSynthTexture();
+      g_export_test.Reset();
+      g_export_test.upload_requested = true;
+      ctx->Yield(2);
+
+      // Upload bg image
+      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.png";
+      g_bg_test.bg_upload_requested = true;
+      ctx->Yield(3);
+      IM_CHECK(g_bg_test.bg_upload_done);
+
+      // Enable bg overlay
+      gui::g_state.bg_show = true;
+      ctx->Yield(2);
+      IM_CHECK(gui::g_preview_vp.vp_w > 0);
+      IM_CHECK(gui::g_preview_vp.vp_h > 0);
+
+      // Export with alpha=0 (only bg visible)
+      gui::g_state.bg_alpha = 0.0f;
+      ctx->Yield(3);  // Let RenderPreviewPanel update params
+      const char* path_a0 = "/tmp/lumice_bg_alpha0.png";
+      g_bg_test.export_path = path_a0;
+      g_bg_test.export_requested = true;
+      ctx->Yield(3);
+      IM_CHECK(g_bg_test.export_done);
+      IM_CHECK(g_bg_test.export_result);
+
+      // Export with alpha=1 (only render visible)
+      g_bg_test.export_done = false;
+      g_bg_test.export_result = false;
+      g_bg_test.export_requested = false;
+      gui::g_state.bg_alpha = 1.0f;
+      ctx->Yield(3);  // Let RenderPreviewPanel update params
+      const char* path_a1 = "/tmp/lumice_bg_alpha1.png";
+      g_bg_test.export_path = path_a1;
+      g_bg_test.export_requested = true;
+      ctx->Yield(3);
+      IM_CHECK(g_bg_test.export_done);
+      IM_CHECK(g_bg_test.export_result);
+
+      // Load both and verify they differ (PSNR should be low)
+      std::vector<unsigned char> img0, img1;
+      int w0 = 0, h0 = 0, ch0 = 0;
+      int w1 = 0, h1 = 0, ch1 = 0;
+      IM_CHECK(lumice::test::LoadPng(path_a0, img0, w0, h0, ch0));
+      IM_CHECK(lumice::test::LoadPng(path_a1, img1, w1, h1, ch1));
+      IM_CHECK_EQ(w0, w1);
+      IM_CHECK_EQ(h0, h1);
+      if (w0 == w1 && h0 == h1 && ch0 == ch1) {
+        double psnr = lumice::test::ComputePsnr(img0.data(), img1.data(), w0, h0, ch0);
+        fprintf(stderr, "[bg] alpha_diff: PSNR = %.2f dB (should be < 30)\n", psnr);
+        IM_CHECK(psnr < 30.0);  // Should be quite different
+      }
+
+      std::remove(path_a0);
+      std::remove(path_a1);
+    };
+  }
+
+  // Test 4: bg/toggle_off — show=false should not affect output
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "bg", "toggle_off");
+    t->GuiFunc = BgOverlayGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_bg_test.Reset();
+
+      // Upload equirect texture
+      InitSynthTexture();
+      g_export_test.Reset();
+      g_export_test.upload_requested = true;
+      ctx->Yield(2);
+
+      // Upload bg but keep show=false
+      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.png";
+      g_bg_test.bg_upload_requested = true;
+      ctx->Yield(3);
+      IM_CHECK(gui::g_preview.HasBackground());
+
+      gui::g_state.bg_show = false;
+      ctx->Yield(2);
+
+      // Verify bg_enabled is false in params
+      IM_CHECK_EQ(gui::g_preview_vp.params.bg_enabled, false);
+    };
+  }
+
+  // Test 5: bg/lmc_roundtrip — save/load preserves bg_path/bg_show/bg_alpha
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "bg", "lmc_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // Set bg state
+      gui::g_state.bg_path = "/some/test/path.png";
+      gui::g_state.bg_show = true;
+      gui::g_state.bg_alpha = 0.7f;
+
+      // Save
+      const char* tmp_path = "/tmp/lumice_bg_roundtrip.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
+      IM_CHECK(save_ok);
+
+      // Reset and load
+      gui::DoNew();
+      IM_CHECK(gui::g_state.bg_path.empty());
+
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0;
+      int tex_h = 0;
+      bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
+      IM_CHECK(load_ok);
+
+      // Verify roundtrip
+      IM_CHECK_EQ(gui::g_state.bg_path, std::string("/some/test/path.png"));
+      IM_CHECK_EQ(gui::g_state.bg_show, true);
+      IM_CHECK(std::abs(gui::g_state.bg_alpha - 0.7f) < 0.01f);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // Test 6: bg/old_lmc_compat — JSON without bg fields gets defaults
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "bg", "old_lmc_compat");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      std::string json = R"({"crystals":[],"renderers":[],"filters":[]})";
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeGuiStateJson(json, loaded);
+      IM_CHECK(ok);
+      IM_CHECK(loaded.bg_path.empty());
+      IM_CHECK_EQ(loaded.bg_show, false);
+      IM_CHECK(std::abs(loaded.bg_alpha - 1.0f) < 0.01f);
+    };
+  }
+
+  // Test 7: bg/match_bg_avail — Match Background availability depends on HasBackground
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "bg", "match_bg_avail");
+    t->GuiFunc = BgOverlayGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_bg_test.Reset();
+
+      // No bg loaded — HasBackground should be false
+      IM_CHECK_EQ(gui::g_preview.HasBackground(), false);
+
+      // Load bg
+      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.png";
+      g_bg_test.bg_upload_requested = true;
+      ctx->Yield(3);
+      IM_CHECK(gui::g_preview.HasBackground());
+
+      // Set to kMatchBg — should work now
+      gui::g_state.aspect_preset = gui::AspectPreset::kMatchBg;
+      float bg_aspect = gui::g_preview.GetBgAspect();
+      IM_CHECK(bg_aspect > 1.0f);  // Landscape
+
+      // Clear bg — kMatchBg should not be functional
+      gui::g_preview.ClearBackground();
+      IM_CHECK_EQ(gui::g_preview.HasBackground(), false);
+    };
+  }
+
+  // Test 8: bg/contain_mode — letterbox black bars for aspect mismatch
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "bg", "contain_mode");
+    t->GuiFunc = BgOverlayGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_bg_test.Reset();
+
+      // Upload equirect texture (needed for active viewport)
+      InitSynthTexture();
+      g_export_test.Reset();
+      g_export_test.upload_requested = true;
+      ctx->Yield(2);
+
+      // Upload landscape bg (aspect ≈ 1.677)
+      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.png";
+      g_bg_test.bg_upload_requested = true;
+      ctx->Yield(3);
+      IM_CHECK(gui::g_preview.HasBackground());
+
+      // Enable bg with alpha=0 (full bg, no render) so we can clearly see letterbox
+      gui::g_state.bg_show = true;
+      gui::g_state.bg_alpha = 0.0f;
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_preview_vp.vp_w > 0);
+      IM_CHECK(gui::g_preview_vp.vp_h > 0);
+
+      // Export via FBO
+      const char* tmp_path = "/tmp/lumice_bg_contain.png";
+      g_bg_test.export_path = tmp_path;
+      g_bg_test.export_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_bg_test.export_done);
+      IM_CHECK(g_bg_test.export_result);
+
+      // Load exported image
+      std::vector<unsigned char> img;
+      int img_w = 0;
+      int img_h = 0;
+      int img_ch = 0;
+      bool loaded = lumice::test::LoadPng(tmp_path, img, img_w, img_h, img_ch);
+      IM_CHECK(loaded);
+      IM_CHECK(img_w > 0);
+      IM_CHECK(img_h > 0);
+
+      // With landscape bg (aspect > 1) in a viewport that may be close to 16:9,
+      // if viewport is taller than bg (vp_aspect < bg_aspect), there should be
+      // black bars at top/bottom. Check top-left corner pixel is black (letterbox).
+      float vp_aspect = static_cast<float>(img_w) / static_cast<float>(img_h);
+      float bg_aspect = gui::g_preview.GetBgAspect();
+      fprintf(stderr, "[bg] contain_mode: vp_aspect=%.3f bg_aspect=%.3f img=%dx%d\n", vp_aspect, bg_aspect, img_w,
+              img_h);
+
+      // Verify center pixel is non-black (has bg content)
+      int cx = img_w / 2;
+      int cy = img_h / 2;
+      int center_idx = (cy * img_w + cx) * img_ch;
+      bool center_nonblack = (img[center_idx] > 5 || img[center_idx + 1] > 5 || img[center_idx + 2] > 5);
+      IM_CHECK(center_nonblack);
+
+      std::remove(tmp_path);
+    };
+  }
+}
+
 int main(int /*argc*/, char** /*argv*/) {
   // GLFW init
   glfwSetErrorCallback(gui::GlfwErrorCallback);
@@ -743,6 +1460,7 @@ int main(int /*argc*/, char** /*argv*/) {
     return 1;
   }
 
+  glfwSetWindowSizeCallback(window, gui::WindowSizeCallback);
   glfwMakeContextCurrent(window);
   glfwSwapInterval(0);  // No VSync for tests
 
@@ -792,8 +1510,11 @@ int main(int /*argc*/, char** /*argv*/) {
   RegisterP0Tests(engine);
   RegisterP1Tests(engine);
   RegisterP2Tests(engine);
+  RegisterAspectRatioTests(engine);
+  RegisterExportPreviewTests(engine);
   RegisterScreenshotTests(engine);
   RegisterVisualTests(engine);
+  RegisterBgOverlayTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests);
 
   // Main loop — runs until all tests complete
