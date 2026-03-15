@@ -48,13 +48,21 @@ extern int g_crystal_style;
 extern int g_crystal_mesh_id;
 extern int g_crystal_mesh_hash;
 
+// Aspect ratio resize state
+extern bool g_programmatic_resize;
+
 // Unsaved changes popup state
 extern bool g_show_unsaved_popup;
 extern PendingAction g_pending_action;
 extern std::chrono::steady_clock::time_point g_last_poll_time;
 
-// GLFW callback
+// GLFW callbacks
 void GlfwErrorCallback(int error, const char* description);
+void WindowSizeCallback(GLFWwindow* window, int width, int height);
+
+// Aspect ratio helpers
+float GetAspectRatio(AspectPreset preset);
+void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait);
 
 // Crystal preview helpers
 int CrystalParamHash(const CrystalConfig& c);

@@ -74,6 +74,9 @@ int main(int /*argc*/, char** /*argv*/) {
   gui::g_server = LUMICE_CreateServer();
   LUMICE_InitLogger(gui::g_server);
 
+  // Window size callback: detect user manual resize vs programmatic resize
+  glfwSetWindowSizeCallback(window, gui::WindowSizeCallback);
+
   // Window close callback: intercept to check for unsaved changes
   glfwSetWindowCloseCallback(window, [](GLFWwindow* w) {
     if (gui::g_state.dirty) {

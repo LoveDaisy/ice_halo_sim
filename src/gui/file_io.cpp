@@ -32,6 +32,7 @@ static const char* kLensTypeJsonNames[] = { "linear",
                                             "rectangular" };
 
 static const char* kVisibleJsonNames[] = { "upper", "lower", "full" };
+static const char* kAspectPresetJsonNames[] = { "free", "16:9", "3:2", "4:3", "1:1", "match_background" };
 
 
 // ========== Shared helpers ==========
@@ -192,6 +193,15 @@ static int SpectrumFromString(const std::string& s) {
       return i;
   }
   return 2;  // default: D65
+}
+
+static AspectPreset AspectPresetFromString(const std::string& s) {
+  for (int i = 0; i < kAspectPresetCount; i++) {
+    if (s == kAspectPresetJsonNames[i]) {
+      return static_cast<AspectPreset>(i);
+    }
+  }
+  return AspectPreset::kFree;  // default: free
 }
 
 static int SimResolutionIndexFromValue(int value) {
@@ -536,6 +546,11 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["next_renderer_id"] = state.next_renderer_id;
   root["next_filter_id"] = state.next_filter_id;
 
+  // Aspect ratio (view preference)
+  auto preset_idx = static_cast<int>(state.aspect_preset);
+  root["aspect_ratio"] = kAspectPresetJsonNames[preset_idx];
+  root["aspect_portrait"] = state.aspect_portrait;
+
   return root.dump(2);
 }
 
@@ -648,6 +663,10 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.selected_crystal = FindIndexById(state.crystals, sel_crystal_id, state.crystals.empty() ? -1 : 0);
   state.selected_renderer = FindIndexById(state.renderers, sel_renderer_id, state.renderers.empty() ? -1 : 0);
   state.selected_filter = FindIndexById(state.filters, sel_filter_id, state.filters.empty() ? -1 : 0);
+
+  // Aspect ratio (view preference, defaults to Free for old files)
+  state.aspect_preset = AspectPresetFromString(root.value("aspect_ratio", "free"));
+  state.aspect_portrait = root.value("aspect_portrait", false);
 
   return true;
 }
