@@ -65,13 +65,26 @@ add_executable(LumiceGUI
     ${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp)
 target_link_libraries(LumiceGUI PRIVATE lumice_gui_obj)
 
-# macOS frameworks required by GLFW
+# macOS: .app bundle with icon and Info.plist
 if(APPLE)
+  set(LUMICE_ICNS "${CMAKE_SOURCE_DIR}/resources/lumice.icns")
+  set_source_files_properties(${LUMICE_ICNS} PROPERTIES
+      MACOSX_PACKAGE_LOCATION Resources)
+  target_sources(LumiceGUI PRIVATE ${LUMICE_ICNS})
+
+  set_target_properties(LumiceGUI PROPERTIES
+      MACOSX_BUNDLE TRUE
+      MACOSX_BUNDLE_INFO_PLIST "${PROJ_SRC_DIR}/gui/Info.plist.in"
+      MACOSX_BUNDLE_ICON_FILE "lumice.icns")
+
   target_link_libraries(LumiceGUI PRIVATE
       "-framework Cocoa"
       "-framework IOKit"
       "-framework CoreVideo")
 endif()
 
-install(TARGETS LumiceGUI
-    DESTINATION "${CMAKE_INSTALL_PREFIX}")
+if(APPLE)
+  install(TARGETS LumiceGUI BUNDLE DESTINATION .)
+else()
+  install(TARGETS LumiceGUI DESTINATION "${CMAKE_INSTALL_PREFIX}")
+endif()
