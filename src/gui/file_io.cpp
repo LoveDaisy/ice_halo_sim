@@ -878,7 +878,7 @@ bool ExportPreviewPng(const char* path, PreviewRenderer& renderer, const Preview
   renderer.Render(0, 0, w, h, vp.params);
 
   // Read pixels
-  std::vector<unsigned char> pixels(w * h * 4);
+  std::vector<unsigned char> pixels(static_cast<size_t>(w) * h * 4);
   glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
 
   // Cleanup GL resources
