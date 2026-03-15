@@ -340,7 +340,7 @@ void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int he
 }
 
 void PreviewRenderer::UploadBgTexture(const unsigned char* data, int width, int height) {
-  if (!bg_texture_ || !data) {
+  if (!bg_texture_ || !data || width <= 0 || height <= 0) {
     return;
   }
 
@@ -410,7 +410,7 @@ static void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_d
 }
 
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {
-  if (!shader_program_ || !texture_) {
+  if (!shader_program_ || !texture_ || vp_w <= 0 || vp_h <= 0) {
     return;
   }
 
