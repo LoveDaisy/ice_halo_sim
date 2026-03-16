@@ -82,6 +82,27 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
+      - name: Verify Windows exe has no MinGW runtime dependencies
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "=== DLL imports for Lumice.exe ==="
+          objdump -p build/src/Lumice.exe | grep "DLL Name" || true
+          if objdump -p build/src/Lumice.exe | grep -qi "libgcc\|libstdc++\|libwinpthread"; then
+            echo "ERROR: MinGW runtime DLLs found in imports!"
+            exit 1
+          fi
+          echo "OK: no MinGW runtime DLLs"
+          if [ "${{ matrix.build_gui }}" = "ON" ]; then
+            echo "=== DLL imports for LumiceGUI.exe ==="
+            objdump -p build/src/gui/LumiceGUI.exe | grep "DLL Name" || true
+            if objdump -p build/src/gui/LumiceGUI.exe | grep -qi "libgcc\|libstdc++\|libwinpthread"; then
+              echo "ERROR: MinGW runtime DLLs found in imports!"
+              exit 1
+            fi
+            echo "OK: no MinGW runtime DLLs"
+          fi
+
       - name: Test
         run: ctest --test-dir build --output-on-failure -R LumiceUnitTest
 
