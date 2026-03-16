@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- macOS deployment target set to 13.0 (was defaulting to runner OS version 15.0)
+- macOS release binaries now code-signed and notarized (Developer ID + Apple notarization)
+
 ## [4.1.0] - 2026-03-15
 
 ### Added
