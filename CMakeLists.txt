@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.14)
-project(Lumice VERSION 4.1.0)
+
+# macOS: minimum deployment target (Ventura).
+# Must be set before project() so the compiler detection picks it up.
+if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS version")
+endif()
+
+project(Lumice VERSION 4.1.1)
 
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 

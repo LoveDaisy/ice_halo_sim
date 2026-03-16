@@ -133,9 +133,12 @@ GUI 提供以下功能：
 ./scripts/build.sh -gtj release
 ~~~
 
+> **系统要求：** GUI 应用需要 macOS 13 (Ventura) 或更高版本、Windows 10 或 Linux（X11/Wayland）。
+> macOS 发布版本已进行代码签名和公证（notarization），下载后可直接运行 `.app` bundle。
+> Windows 上 `.exe` 内嵌图标且无控制台窗口。
+>
 > **跨平台说明：** Core、CLI 和单元测试（`./scripts/build.sh -tj release`）不包含任何平台特定代码，
 > 应可在任何支持 C++17 的平台上编译通过。GUI 已在 macOS、Linux 和 Windows 上通过 CI 构建和测试。
-> macOS 上 GUI 打包为原生 `.app` bundle 并附带图标；Windows 上为标准 `.exe`，内嵌图标且无控制台窗口。
 
 
 ## 配置文件

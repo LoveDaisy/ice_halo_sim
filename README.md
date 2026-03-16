@@ -138,11 +138,14 @@ To build and run GUI automated tests (requires display server):
 ./scripts/build.sh -gtj release
 ~~~
 
+> **System requirements:** The GUI application requires macOS 13 (Ventura) or later, Windows 10,
+> or Linux with X11/Wayland. macOS releases are code-signed and notarized — you can run the `.app`
+> bundle directly after downloading. On Windows, the `.exe` includes an embedded icon and runs
+> without a console window.
+>
 > **Cross-platform note:** Core, CLI, and unit tests (`./scripts/build.sh -tj release`) contain no
 > platform-specific code and should compile on any platform with a C++17 compiler. The GUI is
-> built and tested on macOS, Linux, and Windows via CI. On macOS, the GUI is packaged as a native
-> `.app` bundle with icon; on Windows, it runs as a standard `.exe` with embedded icon and no
-> console window.
+> built and tested on macOS, Linux, and Windows via CI.
 
 
 ## Configuration file
