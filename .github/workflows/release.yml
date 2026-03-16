@@ -90,6 +90,66 @@ jobs:
       - name: Install
         run: cmake --install build
 
+      # macOS code signing + notarization (Developer ID Application certificate).
+      # Runs only on macOS and only when signing secrets are configured.
+      - name: Import Apple certificate
+        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_P12 != ''
+        env:
+          P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
+          echo "$P12_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$KEYCHAIN_PATH"
+          # Prepend build keychain to search list (preserve existing keychains)
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+      - name: Sign and notarize macOS binaries
+        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_P12 != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          IDENTITY="Developer ID Application: Jiajie Zhang ($APPLE_TEAM_ID)"
+
+          # Sign CLI binary and .app bundle (no --deep: single binary, no nested frameworks)
+          codesign --sign "$IDENTITY" --options runtime --force --timestamp install/Lumice
+          codesign --sign "$IDENTITY" --options runtime --force --timestamp install/LumiceGUI.app
+
+          # Verify signatures
+          codesign --verify --strict install/Lumice
+          codesign --verify --strict install/LumiceGUI.app
+
+          # Package both binaries for notarization (single submission covers all)
+          ditto -c -k --keepParent install/LumiceGUI.app /tmp/notarize-gui.zip
+          ditto -c -k install/Lumice /tmp/notarize-cli.zip
+
+          # Submit for notarization and wait (timeout 15 min)
+          xcrun notarytool submit /tmp/notarize-gui.zip \
+            --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait --timeout 15m
+          xcrun notarytool submit /tmp/notarize-cli.zip \
+            --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait --timeout 15m
+
+          # Staple ticket to .app (CLI cannot be stapled but ticket exists server-side)
+          xcrun stapler staple install/LumiceGUI.app
+
+          # Final verification
+          spctl --assess --verbose --type exec install/LumiceGUI.app
+
+      - name: Cleanup Apple certificate
+        if: runner.os == 'macOS' && always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/build.keychain-db 2>/dev/null || true
+          rm -f $RUNNER_TEMP/certificate.p12
+
       - name: Package
         if: runner.os != 'Windows'
         run: |
