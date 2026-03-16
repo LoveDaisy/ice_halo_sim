@@ -24,6 +24,12 @@ if(MSVC)
   set(CMAKE_DEBUG_POSTFIX "d")
 endif()
 
+# MinGW: statically link GCC runtime (libgcc, libstdc++, libwinpthread) so the
+# distributed .exe is self-contained and doesn't require MinGW DLLs on the target machine.
+if(MINGW)
+  add_link_options(-static)
+endif()
+
 include(CheckIPOSupported)
 check_ipo_supported(RESULT result OUTPUT output)
 
