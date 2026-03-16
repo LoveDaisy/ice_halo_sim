@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-03-16
+
+### Fixed
+- Windows exe now statically links GCC runtime (no more `libgcc_s_seh-1.dll` / `libwinpthread-1.dll` missing errors)
+- Release workflow `if` conditions fixed for macOS signing secrets
+
 ## [4.1.1] - 2026-03-16
 
 ### Fixed

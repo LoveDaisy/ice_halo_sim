@@ -6,7 +6,7 @@ if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS version")
 endif()
 
-project(Lumice VERSION 4.1.1)
+project(Lumice VERSION 4.1.2)
 
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 
@@ -22,6 +22,12 @@ option(LUMICE_NATIVE_ARCH "Enable -march=native for release builds (GCC/Clang)" 
 if(MSVC)
   add_definitions(-DNOMINMAX)
   set(CMAKE_DEBUG_POSTFIX "d")
+endif()
+
+# MinGW: statically link GCC runtime (libgcc, libstdc++, libwinpthread) so the
+# distributed .exe is self-contained and doesn't require MinGW DLLs on the target machine.
+if(MINGW)
+  add_link_options(-static)
 endif()
 
 include(CheckIPOSupported)
