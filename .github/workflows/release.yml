@@ -93,7 +93,7 @@ jobs:
       # macOS code signing + notarization (Developer ID Application certificate).
       # Runs only on macOS and only when signing secrets are configured.
       - name: Import Apple certificate
-        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_P12 != ''
+        if: runner.os == 'macOS' && env.P12_BASE64 != ''
         env:
           P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -110,7 +110,7 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
 
       - name: Sign and notarize macOS binaries
-        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_P12 != ''
+        if: runner.os == 'macOS' && env.APPLE_TEAM_ID != ''
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
