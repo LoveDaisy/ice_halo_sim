@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.3] - 2026-03-17
+
+### Fixed
+- GUI no longer stutters during long simulations (moved server polling to background thread)
+- Unicode superscript characters replaced with ASCII in ray number display
+
 ## [4.1.2] - 2026-03-16
 
 ### Fixed
