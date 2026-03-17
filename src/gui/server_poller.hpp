@@ -12,6 +12,7 @@ namespace lumice::gui {
 
 // Data produced by the background polling thread, consumed by the main thread.
 struct PollerData {
+  bool valid = false;  // Set to true by worker after first successful poll
   LUMICE_ServerState server_state = LUMICE_SERVER_IDLE;
   unsigned long stats_ray_seg_num = 0;
   unsigned long stats_sim_ray_num = 0;

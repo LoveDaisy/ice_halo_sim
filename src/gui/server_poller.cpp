@@ -50,6 +50,7 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
     // Stage all results under lock
     {
       std::lock_guard<std::mutex> lock(data_mutex_);
+      staged_.valid = true;
       staged_.server_state = server_state;
       if (stats[0].sim_ray_num > 0) {
         staged_.stats_ray_seg_num = stats[0].ray_seg_num;

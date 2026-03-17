@@ -419,6 +419,9 @@ void SyncFromPoller() {
   if (!g_server_poller.TrySyncData(data)) {
     return;  // Poller busy writing — skip this frame
   }
+  if (!data.valid) {
+    return;  // Worker hasn't produced data yet
+  }
 
   // Update simulation state
   if (data.server_state == LUMICE_SERVER_IDLE) {
