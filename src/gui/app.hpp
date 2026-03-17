@@ -1,11 +1,10 @@
 #ifndef LUMICE_GUI_APP_HPP
 #define LUMICE_GUI_APP_HPP
 
-#include <chrono>
-
 #include "gui/crystal_renderer.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/preview_renderer.hpp"
+#include "gui/server_poller.hpp"
 #include "include/lumice.h"
 
 struct GLFWwindow;
@@ -38,6 +37,7 @@ extern GuiState g_state;
 extern PreviewRenderer g_preview;
 extern CrystalRenderer g_crystal_renderer;
 extern LUMICE_Server* g_server;
+extern ServerPoller g_server_poller;
 extern bool g_panel_collapsed;
 extern PreviewViewport g_preview_vp;
 
@@ -55,7 +55,6 @@ extern float g_aspect_bar_height;  // Cached actual height from ImGui layout
 // Unsaved changes popup state
 extern bool g_show_unsaved_popup;
 extern PendingAction g_pending_action;
-extern std::chrono::steady_clock::time_point g_last_poll_time;
 
 // GLFW callbacks
 void GlfwErrorCallback(int error, const char* description);
@@ -81,8 +80,7 @@ void DoStop();
 void DoRevert();
 void DoLoadBackground(GLFWwindow* window);
 void DoClearBackground();
-void FetchRenderResults();
-void PollServerState();
+void SyncFromPoller();
 void CheckUnsavedAndDo(PendingAction action);
 
 // Panel rendering

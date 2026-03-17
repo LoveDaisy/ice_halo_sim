@@ -101,8 +101,8 @@ static void ResetTestState() {
   // Runtime state
   gui::g_show_unsaved_popup = false;
   gui::g_pending_action = gui::PendingAction::kNone;
+  gui::g_server_poller.Stop();  // Stop poller before nulling server
   gui::g_server = nullptr;
-  gui::g_last_poll_time = std::chrono::steady_clock::now();
   gui::ResetPendingDeleteState();
 
   // Test state
