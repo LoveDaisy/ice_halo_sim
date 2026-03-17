@@ -147,7 +147,7 @@ struct RawRenderResult {
 };
 
 using Result = std::variant<NoneResult, RenderResult, StatsResult>;
-using RawResult = std::variant<NoneResult, RawRenderResult>;
+
 
 
 // =============== Server Status ===============
@@ -208,9 +208,16 @@ class Server {
   Error CommitConfigFromFile(const std::string& filename);
 
   /**
+   * @brief Prepare snapshots for all consumers
+   * @note Must be called before GetRenderResults(), GetRawRenderResults(), or GetStatsResult().
+   *       Snapshots all consumer data under lock so subsequent reads are consistent and lock-free.
+   */
+  void PrepareAllSnapshots() const;
+
+  /**
    * @brief Get all render results
    * @return Vector of RenderResult objects. Returns empty vector if no render results available.
-   * @note This is a non-blocking call. It returns immediately even if processing is ongoing.
+   * @note Requires a prior call to PrepareAllSnapshots(). This is a non-blocking, lock-free read.
    * @note Only returns RenderResult entries, filters out other result types
    */
   std::vector<RenderResult> GetRenderResults() const;

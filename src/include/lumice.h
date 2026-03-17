@@ -63,7 +63,9 @@ typedef struct LUMICE_RawRenderResult_ {
   int renderer_id;
   int img_width;
   int img_height;
-  const float* xyz_buffer;       // XYZ float data, 3 floats/pixel. Same lifetime as LUMICE_RenderResult.
+  const float* xyz_buffer;       // XYZ float data, 3 floats/pixel.
+                                 // Valid until next LUMICE_PrepareAllSnapshots(),
+                                 // LUMICE_Get*Results(), or LUMICE_CommitConfig() call.
   float total_intensity;         // Normalization factor for tone mapping
 } LUMICE_RawRenderResult;
 
@@ -89,6 +91,10 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 // =============== Results ===============
 // Unified pattern: (server, out, max_count) -> LUMICE_ErrorCode, sentinel-terminated.
 // out array size must be at least max_count + 1 (for sentinel slot).
+// Callers must call LUMICE_PrepareAllSnapshots() before any Get*Results() calls.
+
+// Snapshot all consumer data under lock. Must be called once before reading results.
+LUMICE_ErrorCode LUMICE_PrepareAllSnapshots(LUMICE_Server* server);
 
 // Fill render results into out array, sentinel-terminated (img_buffer == NULL).
 LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);

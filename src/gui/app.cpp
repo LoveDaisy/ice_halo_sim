@@ -378,7 +378,6 @@ void DoRun() {
   if (!g_server)
     return;
   auto json_str = SerializeCoreConfig(g_state);
-  fprintf(stderr, "[GUI] CommitConfig JSON:\n%s\n", json_str.c_str());
   g_state.last_committed_json = json_str;
   auto err = LUMICE_CommitConfig(g_server, json_str.c_str());
   if (err == LUMICE_OK) {
@@ -386,7 +385,6 @@ void DoRun() {
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
     g_server_poller.Start(g_server);
-    fprintf(stderr, "[GUI] Simulation started\n");
   } else {
     fprintf(stderr, "[GUI] CommitConfig FAILED with error code %d\n", err);
   }
@@ -423,7 +421,6 @@ void SyncFromPoller() {
   // Update simulation state
   if (data.server_state == LUMICE_SERVER_IDLE) {
     g_state.sim_state = SimState::kDone;
-    fprintf(stderr, "[GUI] Simulation done\n");
   }
 
   // Update stats
@@ -436,7 +433,6 @@ void SyncFromPoller() {
   if (data.has_new_texture && g_state.selected_renderer >= 0) {
     g_preview.UploadTexture(data.texture_data.data(), data.texture_width, data.texture_height);
     g_state.last_intensity = data.texture_intensity;
-    fprintf(stderr, "[GUI] Texture uploaded: %dx%d\n", data.texture_width, data.texture_height);
   }
 }
 

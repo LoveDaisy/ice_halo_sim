@@ -31,6 +31,7 @@ class ServerImpl {
   ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json);
+  void PrepareAllSnapshots() const;
   std::vector<RenderResult> GetRenderResults() const;
   std::vector<RawRenderResult> GetRawRenderResults() const;
   std::optional<StatsResult> GetStatsResult() const;
@@ -61,6 +62,7 @@ class ServerImpl {
 
   std::atomic_bool stop_{ true };
   std::atomic_bool work_started_{ false };
+  std::atomic_bool generation_started_{ false };  // True after GenerateScene's first Emplace
   std::atomic_int sim_scene_cnt_;
   std::mutex scene_mutex_;
   std::condition_variable scene_cv_;
@@ -147,34 +149,32 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
 }
 
 
-std::vector<RenderResult> ServerImpl::GetRenderResults() const {
-  // Phase 1: snapshot under lock
-  {
-    std::lock_guard<std::mutex> lock(consumer_mutex_);
-    for (const auto& c : consumers_) {
-      c->PrepareSnapshot();
-    }
+void ServerImpl::PrepareAllSnapshots() const {
+  std::lock_guard<std::mutex> lock(consumer_mutex_);
+  for (const auto& c : consumers_) {
+    c->PrepareSnapshot();
   }
-  // Phase 2: GetResult without lock
+}
+
+
+std::vector<RenderResult> ServerImpl::GetRenderResults() const {
+  // Read results from the last PrepareAllSnapshots() call.
+  // Use dynamic_cast to avoid calling GetResult() on non-render consumers.
+  // RenderConsumer::GetResult() is destructive (overwrites snapshot_xyz_).
   std::vector<RenderResult> results;
   for (const auto& c : consumers_) {
-    auto result = c->GetResult();
-    if (auto* render = std::get_if<RenderResult>(&result)) {
-      results.push_back(*render);
+    if (auto* rc = dynamic_cast<const RenderConsumer*>(c.get())) {
+      auto result = rc->GetResult();
+      if (auto* render = std::get_if<RenderResult>(&result)) {
+        results.push_back(*render);
+      }
     }
   }
   return results;
 }
 
 std::vector<RawRenderResult> ServerImpl::GetRawRenderResults() const {
-  // Phase 1: snapshot under lock
-  {
-    std::lock_guard<std::mutex> lock(consumer_mutex_);
-    for (const auto& c : consumers_) {
-      c->PrepareSnapshot();
-    }
-  }
-  // Phase 2: GetRawResult without lock (only RenderConsumer has this method)
+  // Read results from the last PrepareAllSnapshots() call.
   std::vector<RawRenderResult> results;
   for (const auto& c : consumers_) {
     if (auto* rc = dynamic_cast<const RenderConsumer*>(c.get())) {
@@ -185,18 +185,15 @@ std::vector<RawRenderResult> ServerImpl::GetRawRenderResults() const {
 }
 
 std::optional<StatsResult> ServerImpl::GetStatsResult() const {
-  // Phase 1: snapshot under lock
-  {
-    std::lock_guard<std::mutex> lock(consumer_mutex_);
-    for (const auto& c : consumers_) {
-      c->PrepareSnapshot();
-    }
-  }
-  // Phase 2: GetResult without lock
+  // Read results from the last PrepareAllSnapshots() call.
+  // Use dynamic_cast to avoid calling GetResult() on RenderConsumer,
+  // which destructively overwrites snapshot_xyz_ (in-place tone mapping).
   for (const auto& c : consumers_) {
-    auto result = c->GetResult();
-    if (auto* stats = std::get_if<StatsResult>(&result)) {
-      return *stats;
+    if (auto* sc = dynamic_cast<const StatsConsumer*>(c.get())) {
+      auto result = sc->GetResult();
+      if (auto* stats = std::get_if<StatsResult>(&result)) {
+        return *stats;
+      }
     }
   }
   return std::nullopt;
@@ -211,10 +208,8 @@ void ServerImpl::Start() {
 
   stop_ = false;
   work_started_ = false;
-  // Sentinel value 1: prevents GetStatus() from reporting kIdle during the startup
-  // race window between GenerateScene setting work_started_=true and its first Emplace.
-  // GenerateScene increments this further; ConsumeData decrements it per batch.
-  sim_scene_cnt_ = 1;
+  generation_started_ = false;
+  sim_scene_cnt_ = 0;
 
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
@@ -296,10 +291,11 @@ ServerStatus ServerImpl::GetStatus() const {
     }
   }
 
-  // status_ == kRunning: check if work is actually complete.
-  // During the startup window (threads spawned but GenerateScene hasn't started yet),
-  // work_started_ is false — report kRunning to avoid false idle.
-  if (!work_started_) {
+  // During the startup window:
+  // - work_started_ is false until GenerateScene thread starts
+  // - generation_started_ is false until first scene batch is enqueued
+  // Both must be true before we check sim_scene_cnt_ for completion.
+  if (!work_started_ || !generation_started_) {
     return ServerStatus::kRunning;
   }
 
@@ -369,14 +365,14 @@ void ServerImpl::GenerateScene() {
   const auto& scene = config_manager_.scene_;
   auto ray_num = scene.ray_num_;
   size_t committed_num = 0;
-  bool sentinel_consumed = false;
+  bool generation_signaled = false;
   while (ray_num == kInfSize || committed_num < ray_num) {
     size_t batch_ray_num = std::min(kDefaultRayNum, ray_num - committed_num);
     scene_queue_->Emplace(SimBatch{ batch_ray_num, &scene });
     sim_scene_cnt_++;
-    if (!sentinel_consumed) {
-      sim_scene_cnt_--;  // Consume the sentinel set in Start() after first real enqueue
-      sentinel_consumed = true;
+    if (!generation_signaled) {
+      generation_started_ = true;  // Signal that first batch is enqueued
+      generation_signaled = true;
     }
 
     ILOG_DEBUG(logger_, "GenerateScene: put a scene: ray({}/{}, {})", batch_ray_num, ray_num, committed_num);
@@ -444,6 +440,13 @@ Error Server::CommitConfigFromFile(const std::string& filename) {
     ILOG_ERROR(impl_->GetLogger(), "CommitConfigFromFile: Unknown error");
     return Error::InvalidJson("Unknown JSON parsing error");
   }
+}
+
+void Server::PrepareAllSnapshots() const {
+  if (!impl_) {
+    return;
+  }
+  impl_->PrepareAllSnapshots();
 }
 
 std::vector<RenderResult> Server::GetRenderResults() const {

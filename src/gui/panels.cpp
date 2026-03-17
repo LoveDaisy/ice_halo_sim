@@ -184,7 +184,6 @@ void ResetPendingDeleteState() {
 // ========== Crystal Tab ==========
 
 void RenderCrystalTab(GuiState& state) {
-
   ImGui::Text("Crystals");
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
   if (ImGui::SmallButton("Add##crystal")) {
@@ -319,7 +318,6 @@ void RenderCrystalTab(GuiState& state) {
 // ========== Scene Tab ==========
 
 void RenderSceneTab(GuiState& state) {
-
   if (ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
     DIRTY_IF(SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f));
     DIRTY_IF(SliderWithInput("Azimuth##sun", &state.sun.azimuth, -180.0f, 180.0f));
@@ -493,8 +491,6 @@ void RenderSceneTab(GuiState& state) {
     }
     ImGui::PopItemWidth();
   }
-
-
 }
 
 
@@ -568,7 +564,6 @@ void RenderRenderTab(GuiState& state) {
 // ========== Filter Tab ==========
 
 void RenderFilterTab(GuiState& state) {
-
   ImGui::Text("Filters");
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
   if (ImGui::SmallButton("Add##filter")) {

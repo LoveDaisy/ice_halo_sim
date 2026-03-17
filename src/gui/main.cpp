@@ -94,9 +94,9 @@ int main(int /*argc*/, char** /*argv*/) {
     gui::SyncFromPoller();
 
     // Live parameter adjustment: restart simulation on config change.
-    // Always DoStop() first to join the poller thread — it may still be accessing
-    // server internals even after the server reported IDLE.
-    if (gui::g_state.dirty) {
+    // Debounce: only restart when no widget is being interacted with (slider released).
+    // Also handle kDone/kModified — transient states during rapid restarts.
+    if (gui::g_state.dirty && !ImGui::IsAnyItemActive()) {
       auto ss = gui::g_state.sim_state;
       if (ss == gui::GuiState::SimState::kSimulating ||
           ss == gui::GuiState::SimState::kDone ||

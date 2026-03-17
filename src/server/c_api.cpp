@@ -122,6 +122,14 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 
 
 // =============== Results ===============
+LUMICE_ErrorCode LUMICE_PrepareAllSnapshots(LUMICE_Server* server) {
+  if (!server) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  server->server_->PrepareAllSnapshots();
+  return LUMICE_OK;
+}
+
 LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count) {
   if (!server || !out) {
     return LUMICE_ERR_NULL_ARG;

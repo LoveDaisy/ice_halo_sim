@@ -35,17 +35,21 @@ bool ServerPoller::TrySyncData(PollerData& out) {
 
 void ServerPoller::WorkerLoop(LUMICE_Server* server) {
   while (running_) {
+    // Snapshot all consumer data once (avoids redundant PrepareSnapshot per Get*Results call)
+    LUMICE_PrepareAllSnapshots(server);
+
     // Query server state
     LUMICE_ServerState server_state{};
     LUMICE_QueryServerState(server, &server_state);
 
-    // Get stats
-    LUMICE_StatsResult stats[2]{};
-    LUMICE_GetStatsResults(server, stats, 1);
-
-    // Get render results (raw XYZ float data for GPU tone mapping)
+    // Read raw render results FIRST — GetStatsResults() calls GetResult() on all
+    // consumers, which destructively modifies RenderConsumer's snapshot_xyz_ buffer.
     LUMICE_RawRenderResult renders[2]{};
     LUMICE_GetRawRenderResults(server, renders, 1);
+
+    // Read stats (may destructively modify render snapshot — that's OK, we already read it)
+    LUMICE_StatsResult stats[2]{};
+    LUMICE_GetStatsResults(server, stats, 1);
 
     // Stage all results under lock
     {
