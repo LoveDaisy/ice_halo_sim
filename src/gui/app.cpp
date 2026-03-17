@@ -5,7 +5,6 @@
 #include <stb_image.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -25,6 +24,7 @@ GuiState g_state;
 PreviewRenderer g_preview;
 CrystalRenderer g_crystal_renderer;
 LUMICE_Server* g_server = nullptr;
+ServerPoller g_server_poller;
 bool g_panel_collapsed = false;
 PreviewViewport g_preview_vp;
 
@@ -42,7 +42,6 @@ float g_aspect_bar_height = 30.0f;  // Updated each frame by RenderPreviewPanel
 
 bool g_show_unsaved_popup = false;
 PendingAction g_pending_action = PendingAction::kNone;
-std::chrono::steady_clock::time_point g_last_poll_time = std::chrono::steady_clock::now();
 
 void GlfwErrorCallback(int error, const char* description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
@@ -389,6 +388,7 @@ void DoRun() {
     g_state.sim_state = SimState::kSimulating;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
+    g_server_poller.Start(g_server);
     fprintf(stderr, "[GUI] Simulation started\n");
   } else {
     fprintf(stderr, "[GUI] CommitConfig FAILED with error code %d\n", err);
@@ -398,6 +398,7 @@ void DoRun() {
 void DoStop() {
   if (!g_server)
     return;
+  g_server_poller.Stop();  // Must stop poller before server to avoid dangling access
   LUMICE_StopServer(g_server);
   g_state.sim_state = SimState::kDone;
 }
@@ -409,47 +410,33 @@ void DoRevert() {
   }
 }
 
-void FetchRenderResults() {
-  if (!g_server || g_state.selected_renderer < 0)
+void SyncFromPoller() {
+  if (g_state.sim_state != SimState::kSimulating) {
     return;
-  LUMICE_RenderResult renders[2]{};
-  LUMICE_GetRenderResults(g_server, renders, 1);
-  if (renders[0].img_buffer != nullptr) {
-    g_preview.UploadTexture(renders[0].img_buffer, renders[0].img_width, renders[0].img_height);
-    fprintf(stderr, "[GUI] Texture uploaded: %dx%d\n", renders[0].img_width, renders[0].img_height);
   }
-}
 
-void PollServerState() {
-  if (!g_server)
-    return;
-  if (g_state.sim_state != SimState::kSimulating)
-    return;
+  PollerData data;
+  if (!g_server_poller.TrySyncData(data)) {
+    return;  // Poller busy writing — skip this frame
+  }
 
-  auto now = std::chrono::steady_clock::now();
-  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_last_poll_time).count();
-  if (elapsed < 1000)
-    return;
-  g_last_poll_time = now;
-
-  // Check server state
-  LUMICE_ServerState server_state{};
-  LUMICE_QueryServerState(g_server, &server_state);
-  if (server_state == LUMICE_SERVER_IDLE) {
+  // Update simulation state
+  if (data.server_state == LUMICE_SERVER_IDLE) {
     g_state.sim_state = SimState::kDone;
     fprintf(stderr, "[GUI] Simulation done\n");
   }
 
-  // Get stats
-  LUMICE_StatsResult stats[2]{};
-  LUMICE_GetStatsResults(g_server, stats, 1);
-  if (stats[0].sim_ray_num > 0) {
-    g_state.stats_ray_seg_num = stats[0].ray_seg_num;
-    g_state.stats_sim_ray_num = stats[0].sim_ray_num;
+  // Update stats
+  if (data.stats_sim_ray_num > 0) {
+    g_state.stats_ray_seg_num = data.stats_ray_seg_num;
+    g_state.stats_sim_ray_num = data.stats_sim_ray_num;
   }
 
-  // Get render results and upload texture
-  FetchRenderResults();
+  // Upload texture (GL call — must be on main thread)
+  if (data.has_new_texture && g_state.selected_renderer >= 0) {
+    g_preview.UploadTexture(data.texture_data.data(), data.texture_width, data.texture_height);
+    fprintf(stderr, "[GUI] Texture uploaded: %dx%d\n", data.texture_width, data.texture_height);
+  }
 }
 
 void CheckUnsavedAndDo(PendingAction action) {

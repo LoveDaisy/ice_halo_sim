@@ -90,8 +90,8 @@ int main(int /*argc*/, char** /*argv*/) {
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
 
-    // Poll server state periodically
-    gui::PollServerState();
+    // Sync data from background server poller (non-blocking)
+    gui::SyncFromPoller();
 
     // Keyboard shortcuts
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
@@ -146,6 +146,7 @@ int main(int /*argc*/, char** /*argv*/) {
   }
 
   // Cleanup
+  gui::g_server_poller.Stop();  // Stop poller before destroying server
   gui::g_crystal_renderer.Destroy();
   gui::g_preview.Destroy();
   LUMICE_DestroyServer(gui::g_server);
