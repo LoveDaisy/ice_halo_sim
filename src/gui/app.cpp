@@ -319,12 +319,9 @@ void DoOpen() {
     if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
       g_state.current_file_path = path;
       g_state.dirty = false;
-      if (!tex_data.empty()) {
-        g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
-        g_state.sim_state = SimState::kDone;
-      } else {
-        g_state.sim_state = SimState::kIdle;
-      }
+      // Note: old .lmc files may contain uint8 texture data, but UploadTexture now expects
+      // float XYZ data. Texture is not restored from .lmc — re-run the simulation to regenerate.
+      g_state.sim_state = tex_data.empty() ? SimState::kIdle : SimState::kDone;
 
       // Restore background image from saved path (uses deserialized alpha, not reset to 0.5)
       g_preview.ClearBackground();
@@ -438,6 +435,7 @@ void SyncFromPoller() {
   // Upload texture (GL call — must be on main thread)
   if (data.has_new_texture && g_state.selected_renderer >= 0) {
     g_preview.UploadTexture(data.texture_data.data(), data.texture_width, data.texture_height);
+    g_state.last_intensity = data.texture_intensity;
     fprintf(stderr, "[GUI] Texture uploaded: %dx%d\n", data.texture_width, data.texture_height);
   }
 }
@@ -835,6 +833,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     std::copy(std::begin(rc.ray_color), std::end(rc.ray_color), std::begin(g_preview_vp.params.ray_color));
     std::copy(std::begin(rc.background), std::end(rc.background), std::begin(g_preview_vp.params.background));
     g_preview_vp.params.intensity_factor = std::pow(2.0f, rc.exposure_offset);
+    g_preview_vp.params.total_intensity = g_state.last_intensity;
     g_preview_vp.params.bg_enabled = g_state.bg_show && g_preview.HasBackground();
     g_preview_vp.params.bg_alpha = g_state.bg_alpha;
     g_preview_vp.params.bg_aspect = g_preview.GetBgAspect();

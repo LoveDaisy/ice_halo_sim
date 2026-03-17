@@ -20,6 +20,7 @@ class RenderConsumer : public IConsume {
   void Consume(const SimData& data) override;
   void PrepareSnapshot() override;
   Result GetResult() const override;
+  RawRenderResult GetRawResult() const;
 
  private:
   RenderConfig config_;

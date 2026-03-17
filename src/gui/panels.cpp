@@ -184,9 +184,6 @@ void ResetPendingDeleteState() {
 // ========== Crystal Tab ==========
 
 void RenderCrystalTab(GuiState& state) {
-  bool simulating = (state.sim_state == GuiState::SimState::kSimulating);
-  if (simulating)
-    ImGui::BeginDisabled();
 
   ImGui::Text("Crystals");
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
@@ -280,8 +277,6 @@ void RenderCrystalTab(GuiState& state) {
 
   if (state.selected_crystal < 0 || state.selected_crystal >= static_cast<int>(state.crystals.size())) {
     ImGui::TextDisabled("No crystal selected");
-    if (simulating)
-      ImGui::EndDisabled();
     return;
   }
 
@@ -318,17 +313,12 @@ void RenderCrystalTab(GuiState& state) {
     RenderAxisDist("Roll", cr.roll, state);
   }
 
-  if (simulating)
-    ImGui::EndDisabled();
 }
 
 
 // ========== Scene Tab ==========
 
 void RenderSceneTab(GuiState& state) {
-  bool simulating = (state.sim_state == GuiState::SimState::kSimulating);
-  if (simulating)
-    ImGui::BeginDisabled();
 
   if (ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
     DIRTY_IF(SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f));
@@ -504,8 +494,7 @@ void RenderSceneTab(GuiState& state) {
     ImGui::PopItemWidth();
   }
 
-  if (simulating)
-    ImGui::EndDisabled();
+
 }
 
 
@@ -579,9 +568,6 @@ void RenderRenderTab(GuiState& state) {
 // ========== Filter Tab ==========
 
 void RenderFilterTab(GuiState& state) {
-  bool simulating = (state.sim_state == GuiState::SimState::kSimulating);
-  if (simulating)
-    ImGui::BeginDisabled();
 
   ImGui::Text("Filters");
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
@@ -655,8 +641,6 @@ void RenderFilterTab(GuiState& state) {
 
   if (state.selected_filter < 0 || state.selected_filter >= static_cast<int>(state.filters.size())) {
     ImGui::TextDisabled("No filter selected");
-    if (simulating)
-      ImGui::EndDisabled();
     return;
   }
 
@@ -683,8 +667,6 @@ void RenderFilterTab(GuiState& state) {
 
   ImGui::PopItemWidth();
 
-  if (simulating)
-    ImGui::EndDisabled();
 }
 
 #undef DIRTY_IF

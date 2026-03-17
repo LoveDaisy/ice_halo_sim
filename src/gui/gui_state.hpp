@@ -171,6 +171,9 @@ struct GuiState {
   unsigned long stats_ray_seg_num = 0;
   unsigned long stats_sim_ray_num = 0;
 
+  // Total intensity from simulation (for GPU tone mapping normalization)
+  float last_intensity = 1.0f;
+
   // Last committed config JSON (for Revert)
   std::string last_committed_json;
 };

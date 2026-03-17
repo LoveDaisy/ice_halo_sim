@@ -15,6 +15,7 @@ struct PreviewParams {
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float background[3] = { 0.0f, 0.0f, 0.0f };
   float intensity_factor = 1.0f;
+  float total_intensity = 1.0f;  // From simulation, for GPU tone mapping normalization
   bool bg_enabled = false;
   float bg_alpha = 1.0f;
   float bg_aspect = 1.0f;
@@ -25,8 +26,8 @@ class PreviewRenderer {
   bool Init();
   void Destroy();
 
-  // Upload equirectangular image (RGB, uint8, row-major)
-  void UploadTexture(const unsigned char* data, int width, int height);
+  // Upload equirectangular XYZ data (float, 3 components, row-major)
+  void UploadTexture(const float* data, int width, int height);
 
   // Render preview into the given viewport region (in framebuffer pixels)
   void Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params);
@@ -34,8 +35,8 @@ class PreviewRenderer {
   bool HasTexture() const { return tex_width_ > 0 && tex_height_ > 0; }
   void ClearTexture();
 
-  // CPU-side texture data access (for .lmc file save)
-  const unsigned char* GetTextureData() const { return tex_data_.empty() ? nullptr : tex_data_.data(); }
+  // CPU-side texture data access (for .lmc file save — raw XYZ float data)
+  const float* GetTextureData() const { return tex_data_.empty() ? nullptr : tex_data_.data(); }
   int GetTextureWidth() const { return tex_width_; }
   int GetTextureHeight() const { return tex_height_; }
 
@@ -52,7 +53,7 @@ class PreviewRenderer {
   unsigned int texture_ = 0;
   int tex_width_ = 0;
   int tex_height_ = 0;
-  std::vector<unsigned char> tex_data_;  // CPU-side copy of texture (RGB uint8)
+  std::vector<float> tex_data_;  // CPU-side copy of texture (XYZ float)
 
   // Background image texture (no CPU-side copy — loaded from file path)
   unsigned int bg_texture_ = 0;

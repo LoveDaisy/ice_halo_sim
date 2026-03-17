@@ -32,6 +32,7 @@ class ServerImpl {
 
   Error CommitConfig(const nlohmann::json& config_json);
   std::vector<RenderResult> GetRenderResults() const;
+  std::vector<RawRenderResult> GetRawRenderResults() const;
   std::optional<StatsResult> GetStatsResult() const;
 
   void Stop();
@@ -165,6 +166,24 @@ std::vector<RenderResult> ServerImpl::GetRenderResults() const {
   return results;
 }
 
+std::vector<RawRenderResult> ServerImpl::GetRawRenderResults() const {
+  // Phase 1: snapshot under lock
+  {
+    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    for (const auto& c : consumers_) {
+      c->PrepareSnapshot();
+    }
+  }
+  // Phase 2: GetRawResult without lock (only RenderConsumer has this method)
+  std::vector<RawRenderResult> results;
+  for (const auto& c : consumers_) {
+    if (auto* rc = dynamic_cast<const RenderConsumer*>(c.get())) {
+      results.push_back(rc->GetRawResult());
+    }
+  }
+  return results;
+}
+
 std::optional<StatsResult> ServerImpl::GetStatsResult() const {
   // Phase 1: snapshot under lock
   {
@@ -192,7 +211,10 @@ void ServerImpl::Start() {
 
   stop_ = false;
   work_started_ = false;
-  sim_scene_cnt_ = 0;
+  // Sentinel value 1: prevents GetStatus() from reporting kIdle during the startup
+  // race window between GenerateScene setting work_started_=true and its first Emplace.
+  // GenerateScene increments this further; ConsumeData decrements it per batch.
+  sim_scene_cnt_ = 1;
 
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
@@ -347,10 +369,15 @@ void ServerImpl::GenerateScene() {
   const auto& scene = config_manager_.scene_;
   auto ray_num = scene.ray_num_;
   size_t committed_num = 0;
+  bool sentinel_consumed = false;
   while (ray_num == kInfSize || committed_num < ray_num) {
     size_t batch_ray_num = std::min(kDefaultRayNum, ray_num - committed_num);
     scene_queue_->Emplace(SimBatch{ batch_ray_num, &scene });
     sim_scene_cnt_++;
+    if (!sentinel_consumed) {
+      sim_scene_cnt_--;  // Consume the sentinel set in Start() after first real enqueue
+      sentinel_consumed = true;
+    }
 
     ILOG_DEBUG(logger_, "GenerateScene: put a scene: ray({}/{}, {})", batch_ray_num, ray_num, committed_num);
     CHECK_STOP
@@ -425,6 +452,14 @@ std::vector<RenderResult> Server::GetRenderResults() const {
     return {};
   }
   return impl_->GetRenderResults();
+}
+
+std::vector<RawRenderResult> Server::GetRawRenderResults() const {
+  if (!impl_) {
+    LOG_WARNING("Server is terminated!");
+    return {};
+  }
+  return impl_->GetRawRenderResults();
 }
 
 std::optional<StatsResult> Server::GetStatsResult() const {

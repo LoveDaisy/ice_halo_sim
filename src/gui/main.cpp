@@ -93,6 +93,20 @@ int main(int /*argc*/, char** /*argv*/) {
     // Sync data from background server poller (non-blocking)
     gui::SyncFromPoller();
 
+    // Live parameter adjustment: restart simulation on config change.
+    // Always DoStop() first to join the poller thread — it may still be accessing
+    // server internals even after the server reported IDLE.
+    if (gui::g_state.dirty) {
+      auto ss = gui::g_state.sim_state;
+      if (ss == gui::GuiState::SimState::kSimulating ||
+          ss == gui::GuiState::SimState::kDone ||
+          ss == gui::GuiState::SimState::kModified) {
+        gui::g_state.dirty = false;
+        gui::DoStop();
+        gui::DoRun();
+      }
+    }
+
     // Keyboard shortcuts
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
       if (io.KeyShift) {

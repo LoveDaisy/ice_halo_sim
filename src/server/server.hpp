@@ -134,7 +134,20 @@ struct StatsResult {
   size_t crystal_num_;
 };
 
+/**
+ * @brief Raw render result containing XYZ float data (no color conversion)
+ * @details Used by the GUI to upload raw simulation data to the GPU for shader-side tone mapping
+ */
+struct RawRenderResult {
+  int renderer_id_;
+  int img_width_;
+  int img_height_;
+  const float* xyz_buffer_;   ///< XYZ float data, 3 floats per pixel. Same lifetime as RenderResult::img_buffer_.
+  float total_intensity_;     ///< Normalization factor for tone mapping
+};
+
 using Result = std::variant<NoneResult, RenderResult, StatsResult>;
+using RawResult = std::variant<NoneResult, RawRenderResult>;
 
 
 // =============== Server Status ===============
@@ -201,6 +214,14 @@ class Server {
    * @note Only returns RenderResult entries, filters out other result types
    */
   std::vector<RenderResult> GetRenderResults() const;
+
+  /**
+   * @brief Get raw render results (XYZ float data, no color conversion)
+   * @return Vector of RawRenderResult objects. Returns empty vector if no results available.
+   * @note Used by the GUI for GPU-side tone mapping. The returned float pointers have the
+   *       same lifetime rules as RenderResult::img_buffer_.
+   */
+  std::vector<RawRenderResult> GetRawRenderResults() const;
 
   /**
    * @brief Get statistics result

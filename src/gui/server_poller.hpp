@@ -16,9 +16,10 @@ struct PollerData {
   LUMICE_ServerState server_state = LUMICE_SERVER_IDLE;
   unsigned long stats_ray_seg_num = 0;
   unsigned long stats_sim_ray_num = 0;
-  std::vector<unsigned char> texture_data;
+  std::vector<float> texture_data;
   int texture_width = 0;
   int texture_height = 0;
+  float texture_intensity = 0;
   bool has_new_texture = false;
 };
 

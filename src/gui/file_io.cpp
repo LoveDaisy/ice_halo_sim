@@ -728,17 +728,11 @@ static void StbWriteCallback(void* context, void* data, int size) {
 bool SaveLmcFile(const std::string& path, const GuiState& state, const PreviewRenderer& preview, bool save_texture) {
   std::string json_payload = SerializeGuiStateJson(state);
 
-  // Encode texture to PNG in memory if requested
+  // Texture embedding is disabled with GPU tone-mapping:
+  // CPU-side data is raw XYZ floats, not renderable as PNG.
+  // Re-run the simulation to regenerate the preview.
   std::vector<unsigned char> png_data;
   bool has_texture = false;
-  if (save_texture && preview.HasTexture() && preview.GetTextureData() != nullptr) {
-    int w = preview.GetTextureWidth();
-    int h = preview.GetTextureHeight();
-    int result = stbi_write_png_to_func(StbWriteCallback, &png_data, w, h, 3, preview.GetTextureData(), w * 3);
-    if (result != 0) {
-      has_texture = true;
-    }
-  }
 
   std::ofstream out(path, std::ios::binary);
   if (!out.is_open()) {

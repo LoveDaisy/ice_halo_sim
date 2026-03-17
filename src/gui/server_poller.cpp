@@ -43,9 +43,9 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
     LUMICE_StatsResult stats[2]{};
     LUMICE_GetStatsResults(server, stats, 1);
 
-    // Get render results and immediately deep-copy img_buffer
-    LUMICE_RenderResult renders[2]{};
-    LUMICE_GetRenderResults(server, renders, 1);
+    // Get render results (raw XYZ float data for GPU tone mapping)
+    LUMICE_RawRenderResult renders[2]{};
+    LUMICE_GetRawRenderResults(server, renders, 1);
 
     // Stage all results under lock
     {
@@ -56,12 +56,13 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
         staged_.stats_ray_seg_num = stats[0].ray_seg_num;
         staged_.stats_sim_ray_num = stats[0].sim_ray_num;
       }
-      if (renders[0].img_buffer != nullptr) {
-        size_t byte_count = static_cast<size_t>(renders[0].img_width) * renders[0].img_height * 3;
-        staged_.texture_data.resize(byte_count);
-        std::memcpy(staged_.texture_data.data(), renders[0].img_buffer, byte_count);
+      if (renders[0].xyz_buffer != nullptr) {
+        size_t float_count = static_cast<size_t>(renders[0].img_width) * renders[0].img_height * 3;
+        staged_.texture_data.resize(float_count);
+        std::memcpy(staged_.texture_data.data(), renders[0].xyz_buffer, float_count * sizeof(float));
         staged_.texture_width = renders[0].img_width;
         staged_.texture_height = renders[0].img_height;
+        staged_.texture_intensity = renders[0].total_intensity;
         staged_.has_new_texture = true;
       }
     }
@@ -72,9 +73,9 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
       break;
     }
 
-    // Sleep ~1 second between polls (check running_ every 100ms for responsive shutdown)
-    for (int i = 0; i < 10 && running_; i++) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // Sleep ~33ms between polls (~30fps target, check running_ every 11ms for responsive shutdown)
+    for (int i = 0; i < 3 && running_; i++) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(11));
     }
   }
 }

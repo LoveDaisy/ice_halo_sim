@@ -23,7 +23,7 @@ static const char* kFragmentShader = R"glsl(
 
 in vec2 v_ndc;               // NDC position [-1, 1]
 
-uniform sampler2D u_texture;
+uniform sampler2D u_texture;   // raw XYZ float texture
 uniform vec2 u_resolution;   // viewport size in pixels
 uniform int u_lens_type;     // 0=linear, 1-3=fisheye, 4-6=dual fisheye, 7=rectangular
 uniform float u_fov;         // full FOV in degrees
@@ -31,6 +31,8 @@ uniform mat3 u_view_matrix;  // view-to-world rotation (inverse view)
 uniform int u_visible;       // 0=upper, 1=lower, 2=full
 uniform vec3 u_ray_color;
 uniform vec3 u_background;
+uniform float u_intensity_factor;  // exposure / intensity scaling
+uniform float u_total_intensity;   // simulation total intensity (normalization)
 uniform sampler2D u_bg_texture;
 uniform int u_bg_enabled;
 uniform float u_overlay_alpha;
@@ -39,11 +41,62 @@ uniform vec2 u_bg_uv_offset;
 
 const float PI = 3.14159265358979323846;
 
+// D65 white point
+const vec3 kWhitePointD65 = vec3(0.95047, 1.00000, 1.08883);
+
+// XYZ→linear sRGB matrix (row-major in C++, column-major in GLSL)
+// GLSL mat3 constructor takes columns: mat3(col0, col1, col2)
+// C++ row0 = ( 3.2405, -1.5371, -0.4985) → GLSL col0.x, col1.x, col2.x
+// C++ row1 = (-0.9693,  1.8760,  0.0416) → GLSL col0.y, col1.y, col2.y
+// C++ row2 = ( 0.0556, -0.2040,  1.0572) → GLSL col0.z, col1.z, col2.z
+const mat3 kXyzToRgb = mat3(
+   3.2405, -0.9693,  0.0556,   // column 0
+  -1.5371,  1.8760, -0.2040,   // column 1
+  -0.4985,  0.0416,  1.0572    // column 2
+);
+
+// sRGB gamma transfer function
+vec3 srgbGamma(vec3 c) {
+  return mix(c * 12.92, 1.055 * pow(c, vec3(1.0/2.4)) - 0.055, step(0.0031308, c));
+}
+
 // Convert world direction to equirectangular UV
 vec2 dirToEquirect(vec3 d) {
   float lon = atan(-d.y, -d.x);
   float lat = asin(clamp(-d.z, -1.0, 1.0));
   return vec2(lon / (2.0 * PI) + 0.5, 0.5 - lat / PI);
+}
+
+// GPU tone mapping: XYZ → sRGB (matches CPU RenderConsumer::GetResult() logic)
+// The Core always produces spectral (real-color) XYZ data, so we always do
+// gamut mapping. The GUI's ray_color is applied as a post-conversion tint.
+vec3 toneMapXyzToSrgb(vec3 xyz) {
+  // Normalize by total intensity
+  xyz *= u_intensity_factor / u_total_intensity * 1e5;
+
+  // Gamut mapping via D65 white point: desaturate toward gray to bring into sRGB gamut
+  float Y = xyz.y;
+  vec3 gray = kWhitePointD65 * Y;
+
+  float r = 1.0;
+  vec3 a_val = kXyzToRgb * (-gray);
+  vec3 b_val = kXyzToRgb * (xyz - gray);
+  for (int j = 0; j < 3; j++) {
+    if (a_val[j] * b_val[j] > 0.0 && a_val[j] / b_val[j] < r) {
+      r = a_val[j] / b_val[j];
+    }
+  }
+  xyz = (xyz - gray) * r + gray;
+
+  // XYZ → linear RGB
+  vec3 rgb = kXyzToRgb * xyz;
+
+  // Apply ray_color tint (GUI parameter, not Core's real-color flag)
+  rgb *= u_ray_color;
+
+  rgb += u_background;
+  rgb = clamp(rgb, 0.0, 1.0);
+  return srgbGamma(rgb);
 }
 
 // Compute view direction from pixel for linear projection
@@ -176,8 +229,8 @@ void main() {
 
     if (visible) {
       vec2 uv = dirToEquirect(world_dir);
-      vec3 tex_color = texture(u_texture, uv).rgb;
-      final_color = tex_color * u_ray_color + u_background * (1.0 - tex_color);
+      vec3 xyz = texture(u_texture, uv).rgb;
+      final_color = toneMapXyzToSrgb(xyz);
     }
   }
 
@@ -316,24 +369,24 @@ void PreviewRenderer::ClearTexture() {
   tex_data_.clear();
 }
 
-void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int height) {
+void PreviewRenderer::UploadTexture(const float* data, int width, int height) {
   if (!texture_ || !data) {
     return;
   }
 
-  // Keep CPU-side copy for .lmc file save
-  size_t byte_count = static_cast<size_t>(width) * height * 3;
-  tex_data_.assign(data, data + byte_count);
+  // Keep CPU-side copy (raw XYZ float data)
+  size_t float_count = static_cast<size_t>(width) * height * 3;
+  tex_data_.assign(data, data + float_count);
 
   glBindTexture(GL_TEXTURE_2D, texture_);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);  // RGB data may not be 4-byte aligned
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);  // float data is 4-byte aligned
 
   if (width != tex_width_ || height != tex_height_) {
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGB, GL_FLOAT, data);
     tex_width_ = width;
     tex_height_ = height;
   } else {
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, data);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_FLOAT, data);
   }
 
   glBindTexture(GL_TEXTURE_2D, 0);
@@ -435,6 +488,9 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
               params.ray_color[2]);
   glUniform3f(glGetUniformLocation(shader_program_, "u_background"), params.background[0], params.background[1],
               params.background[2]);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_intensity_factor"), params.intensity_factor);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_total_intensity"),
+              params.total_intensity > 0.0f ? params.total_intensity : 1.0f);
 
   float view_matrix[9];
   BuildViewMatrix(params.elevation, params.azimuth, params.roll, view_matrix);

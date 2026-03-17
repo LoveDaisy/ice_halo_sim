@@ -475,4 +475,14 @@ Result RenderConsumer::GetResult() const {
   return RenderResult{ config_.id_, config_.resolution_[0], config_.resolution_[1], image_buffer_.get() };
 }
 
+RawRenderResult RenderConsumer::GetRawResult() const {
+  return RawRenderResult{
+    config_.id_,
+    config_.resolution_[0],
+    config_.resolution_[1],
+    snapshot_xyz_.get(),
+    snapshot_intensity_
+  };
+}
+
 }  // namespace lumice

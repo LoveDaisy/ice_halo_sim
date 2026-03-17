@@ -59,6 +59,14 @@ typedef struct LUMICE_RenderResult_ {
                                     // Sentinel: img_buffer == NULL
 } LUMICE_RenderResult;
 
+typedef struct LUMICE_RawRenderResult_ {
+  int renderer_id;
+  int img_width;
+  int img_height;
+  const float* xyz_buffer;       // XYZ float data, 3 floats/pixel. Same lifetime as LUMICE_RenderResult.
+  float total_intensity;         // Normalization factor for tone mapping
+} LUMICE_RawRenderResult;
+
 typedef struct LUMICE_StatsResult_ {
   unsigned long ray_seg_num;
   unsigned long sim_ray_num;
@@ -84,6 +92,10 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 
 // Fill render results into out array, sentinel-terminated (img_buffer == NULL).
 LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
+
+// Fill raw (XYZ float) render results into out array, sentinel-terminated (xyz_buffer == NULL).
+// Used by the GUI for GPU-side tone mapping — skips the CPU XYZ→sRGB conversion.
+LUMICE_ErrorCode LUMICE_GetRawRenderResults(LUMICE_Server* server, LUMICE_RawRenderResult* out, int max_count);
 
 // Fill stats results into out array, sentinel-terminated (sim_ray_num == 0).
 LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
