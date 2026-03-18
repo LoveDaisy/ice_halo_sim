@@ -20,6 +20,12 @@ class RenderConsumer : public IConsume {
   void Consume(const SimData& data) override;
   void ResetAccumulation() override;
   void PrepareSnapshot() override;
+
+  // Perform XYZ→RGB conversion on snapshot data, writing to snapshot_image_buffer_.
+  // Called outside consumer_mutex_, under snapshot_mutex_.
+  void RenderSnapshot();
+
+  // Non-destructive: returns pre-computed snapshot_image_buffer_.
   Result GetResult() const override;
 
  private:
@@ -31,7 +37,8 @@ class RenderConsumer : public IConsume {
   float snapshot_intensity_ = 0;
   std::unique_ptr<float[]> internal_xyz_;
   std::unique_ptr<float[]> snapshot_xyz_;
-  std::unique_ptr<uint8_t[]> image_buffer_;
+  std::unique_ptr<uint8_t[]> image_buffer_;           // used by old GetResult path (kept for CLI)
+  std::unique_ptr<uint8_t[]> snapshot_image_buffer_;  // produced by RenderSnapshot()
 
   // Pre-allocated Consume() buffers (grow-only)
   std::unique_ptr<float[]> d_buf_;

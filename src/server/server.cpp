@@ -32,8 +32,8 @@ class ServerImpl {
   ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json);
-  std::vector<RenderResult> GetRenderResults() const;
-  std::optional<StatsResult> GetStatsResult() const;
+  std::vector<RenderResult> GetRenderResults();
+  std::optional<StatsResult> GetStatsResult();
 
   void Stop();
   void Start();
@@ -47,6 +47,7 @@ class ServerImpl {
 
   void ConsumeData();
   void GenerateScene();
+  void DoSnapshot();
 
   ConfigManager config_manager_;
 
@@ -55,7 +56,9 @@ class ServerImpl {
 
   std::vector<Simulator> simulators_;
   std::vector<ConsumerPtrU> consumers_;
-  mutable std::mutex consumer_mutex_;
+  mutable std::mutex consumer_mutex_;  // Lock ordering: consumer_mutex_ < snapshot_mutex_
+  mutable std::mutex snapshot_mutex_;  // Protects snapshot/rendered results
+  bool snapshot_dirty_{ false };       // Set by ConsumeData, cleared by DoSnapshot
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex_;
 
@@ -157,15 +160,32 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
 }
 
 
-std::vector<RenderResult> ServerImpl::GetRenderResults() const {
-  // Phase 1: snapshot under lock
+void ServerImpl::DoSnapshot() {
+  // Phase 1: memcpy snapshot under consumer_mutex_ (short hold)
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
+    if (!snapshot_dirty_) {
+      return;
+    }
     for (const auto& c : consumers_) {
       c->PrepareSnapshot();
     }
+    snapshot_dirty_ = false;
   }
-  // Phase 2: GetResult without lock
+  // Phase 2: XYZ→RGB conversion under snapshot_mutex_ (no consumer_mutex_)
+  {
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    for (const auto& c : consumers_) {
+      if (auto* render = dynamic_cast<RenderConsumer*>(c.get())) {
+        render->RenderSnapshot();
+      }
+    }
+  }
+}
+
+std::vector<RenderResult> ServerImpl::GetRenderResults() {
+  DoSnapshot();
+  std::lock_guard<std::mutex> lock(snapshot_mutex_);
   std::vector<RenderResult> results;
   for (const auto& c : consumers_) {
     auto result = c->GetResult();
@@ -176,15 +196,9 @@ std::vector<RenderResult> ServerImpl::GetRenderResults() const {
   return results;
 }
 
-std::optional<StatsResult> ServerImpl::GetStatsResult() const {
-  // Phase 1: snapshot under lock
-  {
-    std::lock_guard<std::mutex> lock(consumer_mutex_);
-    for (const auto& c : consumers_) {
-      c->PrepareSnapshot();
-    }
-  }
-  // Phase 2: GetResult without lock
+std::optional<StatsResult> ServerImpl::GetStatsResult() {
+  DoSnapshot();
+  std::lock_guard<std::mutex> lock(snapshot_mutex_);
   for (const auto& c : consumers_) {
     auto result = c->GetResult();
     if (auto* stats = std::get_if<StatsResult>(&result)) {
@@ -341,6 +355,7 @@ void ServerImpl::ConsumeData() {
       for (auto& c : consumers_) {
         c->Consume(sim_data);
       }
+      snapshot_dirty_ = true;
       if (!first_consume_logged) {
         ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
         first_consume_logged = true;
@@ -442,7 +457,7 @@ Error Server::CommitConfigFromFile(const std::string& filename) {
   }
 }
 
-std::vector<RenderResult> Server::GetRenderResults() const {
+std::vector<RenderResult> Server::GetRenderResults() {
   if (!impl_) {
     LOG_WARNING("Server is terminated!");
     return {};
@@ -450,7 +465,7 @@ std::vector<RenderResult> Server::GetRenderResults() const {
   return impl_->GetRenderResults();
 }
 
-std::optional<StatsResult> Server::GetStatsResult() const {
+std::optional<StatsResult> Server::GetStatsResult() {
   if (!impl_) {
     LOG_WARNING("Server is terminated!");
     return std::nullopt;

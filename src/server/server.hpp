@@ -200,7 +200,7 @@ class Server {
    * @note This is a non-blocking call. It returns immediately even if processing is ongoing.
    * @note Only returns RenderResult entries, filters out other result types
    */
-  std::vector<RenderResult> GetRenderResults() const;
+  std::vector<RenderResult> GetRenderResults();
 
   /**
    * @brief Get statistics result
@@ -208,7 +208,7 @@ class Server {
    * @note This is a non-blocking call. It returns immediately even if processing is ongoing.
    * @note Only returns StatsResult if available, otherwise returns std::nullopt
    */
-  std::optional<StatsResult> GetStatsResult() const;
+  std::optional<StatsResult> GetStatsResult();
 
   /**
    * @brief Stop the server
