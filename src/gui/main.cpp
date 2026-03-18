@@ -1,5 +1,6 @@
 #include <GLFW/glfw3.h>
 
+#include <chrono>
 #include <cstdio>
 
 #include "gui/app.hpp"
@@ -92,6 +93,25 @@ int main(int /*argc*/, char** /*argv*/) {
 
     // Sync data from background server poller (non-blocking)
     gui::SyncFromPoller();
+
+    // Live-edit: auto-restart simulation when parameters change.
+    // Throttled to at most once per kCommitIntervalMs to limit restart overhead.
+    {
+      static auto last_commit = std::chrono::steady_clock::now();
+      if (gui::g_state.dirty) {
+        auto ss = gui::g_state.sim_state;
+        if (ss == gui::GuiState::SimState::kSimulating || ss == gui::GuiState::SimState::kDone) {
+          auto now = std::chrono::steady_clock::now();
+          auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
+          if (elapsed >= gui::kCommitIntervalMs) {
+            gui::g_state.dirty = false;
+            gui::DoStop();
+            gui::DoRun();
+            last_commit = now;
+          }
+        }
+      }
+    }
 
     // Keyboard shortcuts
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {

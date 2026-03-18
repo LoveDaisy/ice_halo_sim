@@ -184,10 +184,6 @@ void ResetPendingDeleteState() {
 // ========== Crystal Tab ==========
 
 void RenderCrystalTab(GuiState& state) {
-  bool simulating = (state.sim_state == GuiState::SimState::kSimulating);
-  if (simulating)
-    ImGui::BeginDisabled();
-
   ImGui::Text("Crystals");
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
   if (ImGui::SmallButton("Add##crystal")) {
@@ -280,8 +276,6 @@ void RenderCrystalTab(GuiState& state) {
 
   if (state.selected_crystal < 0 || state.selected_crystal >= static_cast<int>(state.crystals.size())) {
     ImGui::TextDisabled("No crystal selected");
-    if (simulating)
-      ImGui::EndDisabled();
     return;
   }
 
@@ -317,19 +311,12 @@ void RenderCrystalTab(GuiState& state) {
     ImGui::Spacing();
     RenderAxisDist("Roll", cr.roll, state);
   }
-
-  if (simulating)
-    ImGui::EndDisabled();
 }
 
 
 // ========== Scene Tab ==========
 
 void RenderSceneTab(GuiState& state) {
-  bool simulating = (state.sim_state == GuiState::SimState::kSimulating);
-  if (simulating)
-    ImGui::BeginDisabled();
-
   if (ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
     DIRTY_IF(SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f));
     DIRTY_IF(SliderWithInput("Azimuth##sun", &state.sun.azimuth, -180.0f, 180.0f));
@@ -503,9 +490,6 @@ void RenderSceneTab(GuiState& state) {
     }
     ImGui::PopItemWidth();
   }
-
-  if (simulating)
-    ImGui::EndDisabled();
 }
 
 
@@ -556,13 +540,8 @@ void RenderRenderTab(GuiState& state) {
       ImGui::SetTooltip("Changing these requires re-running the simulation");
     }
     ImGui::PushItemWidth(-130);
-    bool simulating = (state.sim_state == GuiState::SimState::kSimulating);
     const char* res_labels[] = { "512", "1024", "2048", "4096" };
-    if (simulating)
-      ImGui::BeginDisabled();
     DIRTY_IF(ImGui::Combo("Sim Resolution", &r.sim_resolution_index, res_labels, kSimResolutionCount));
-    if (simulating)
-      ImGui::EndDisabled();
     DIRTY_IF(SliderWithInput("EV", &r.exposure_offset, -2.0f, 8.0f, "%.1f"));
     ImGui::PopItemWidth();
   }
@@ -579,10 +558,6 @@ void RenderRenderTab(GuiState& state) {
 // ========== Filter Tab ==========
 
 void RenderFilterTab(GuiState& state) {
-  bool simulating = (state.sim_state == GuiState::SimState::kSimulating);
-  if (simulating)
-    ImGui::BeginDisabled();
-
   ImGui::Text("Filters");
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
   if (ImGui::SmallButton("Add##filter")) {
@@ -655,8 +630,6 @@ void RenderFilterTab(GuiState& state) {
 
   if (state.selected_filter < 0 || state.selected_filter >= static_cast<int>(state.filters.size())) {
     ImGui::TextDisabled("No filter selected");
-    if (simulating)
-      ImGui::EndDisabled();
     return;
   }
 
@@ -682,9 +655,6 @@ void RenderFilterTab(GuiState& state) {
   DIRTY_IF(ImGui::Checkbox("D", &f.sym_d));
 
   ImGui::PopItemWidth();
-
-  if (simulating)
-    ImGui::EndDisabled();
 }
 
 #undef DIRTY_IF

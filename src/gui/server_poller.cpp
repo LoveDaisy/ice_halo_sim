@@ -72,8 +72,8 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
       break;
     }
 
-    // Sleep ~1 second between polls (check running_ every 100ms for responsive shutdown)
-    for (int i = 0; i < 10 && running_; i++) {
+    // Sleep ~200ms between polls (check running_ every 100ms for responsive shutdown)
+    for (int i = 0; i < 2 && running_; i++) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
   }
