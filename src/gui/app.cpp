@@ -370,12 +370,12 @@ void SyncFromPoller() {
     g_state.stats_sim_ray_num = data.stats_sim_ray_num;
   }
 
-  // Upload XYZ float texture (GL call — must be on main thread)
-  if (data.has_new_texture && g_state.selected_renderer >= 0) {
+  // Upload XYZ float texture (GL call — must be on main thread).
+  // Skip when snapshot_intensity <= 0 (no rays accumulated yet after restart) to avoid
+  // feeding zero-intensity data to the shader, which would cause a black frame flash.
+  if (data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0) {
     g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
-    // Store intensity values for shader uniforms (set in RenderPreviewPanel)
     g_state.snapshot_intensity = data.snapshot_intensity;
-    fprintf(stderr, "[GUI] XYZ texture uploaded: %dx%d\n", data.texture_width, data.texture_height);
   }
 }
 
