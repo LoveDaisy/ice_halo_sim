@@ -1576,6 +1576,13 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         gui::g_state.dirty = true;
         iteration++;
 
+        // Yield a few frames then check commit. Yield count is small (2 frames)
+        // so the commit check runs frequently, letting kTimingIntervalMs control
+        // the actual commit rate rather than the yield loop duration.
+        for (int i = 0; i < 2; i++) {
+          ctx->Yield();
+        }
+
         // Throttled commit: same logic as main.cpp auto-commit.
         // CommitConfig internally routes to hot-update for sun param changes.
         auto now = std::chrono::steady_clock::now();
@@ -1586,13 +1593,6 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
           gui::DoRun();  // CommitConfig decides hot-update vs restart
           last_commit = now;
           restart_count++;
-        }
-
-        // Yield several frames between changes
-        for (int i = 0; i < 30; i++) {
-          ctx->Yield();
-          if (std::chrono::steady_clock::now() >= end_time)
-            break;
         }
       }
       // Add rays from the final (non-restarted) segment
