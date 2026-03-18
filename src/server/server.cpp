@@ -48,6 +48,7 @@ class ServerImpl {
   void ConsumeData();
   void GenerateScene();
   void DoSnapshot();
+  static bool IsLightweightChange(const ConfigManager& old_cfg, const ConfigManager& new_cfg);
 
   ConfigManager config_manager_;
 
@@ -61,6 +62,10 @@ class ServerImpl {
   bool snapshot_dirty_{ false };       // Set by ConsumeData, cleared by DoSnapshot
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex_;
+
+  // Hot config: active scene and generation counter
+  std::shared_ptr<const SceneConfig> active_scene_;  // Protected by scene_mutex_ (reuse existing)
+  std::atomic<uint64_t> scene_generation_{ 0 };
 
   std::atomic_bool stop_{ true };
   std::atomic_bool work_started_{ false };
@@ -82,6 +87,50 @@ class ServerImpl {
 };
 
 const int ServerImpl::kDefaultSimulatorCnt = std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 2);
+
+
+// Whitelist approach: only these fields can be hot-updated.
+// Everything else forces a full restart.
+bool ServerImpl::IsLightweightChange(const ConfigManager& old_cfg, const ConfigManager& new_cfg) {
+  // Structural checks: any difference in these → restart
+  if (old_cfg.crystals_.size() != new_cfg.crystals_.size())
+    return false;
+  if (old_cfg.renderers_.size() != new_cfg.renderers_.size())
+    return false;
+  if (old_cfg.filters_.size() != new_cfg.filters_.size())
+    return false;
+
+  // Compare crystal/renderer/filter maps by serializing to JSON for deep equality
+  // (simpler than implementing operator== for all nested types)
+  {
+    nlohmann::json old_j;
+    nlohmann::json new_j;
+    to_json(old_j, old_cfg);
+    to_json(new_j, new_cfg);
+
+    // Remove the fields that ARE allowed to differ (whitelist)
+    auto strip_lightweight = [](nlohmann::json& j) {
+      if (j.contains("sun")) {
+        j["sun"].erase("altitude");
+        j["sun"].erase("azimuth");
+        j["sun"].erase("diameter");
+      }
+      if (j.contains("multi_scatter")) {
+        for (auto& ms : j["multi_scatter"]) {
+          ms.erase("prob");
+        }
+      }
+    };
+    strip_lightweight(old_j);
+    strip_lightweight(new_j);
+
+    if (old_j != new_j)
+      return false;
+  }
+
+  // If we get here, only lightweight fields differ (or configs are identical)
+  return true;
+}
 
 
 ServerImpl::ServerImpl()
@@ -132,29 +181,63 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     return Error::InvalidConfig("Unknown configuration error");
   }
 
-  // Stop all running threads before replacing config, so no simulator references stale data.
-  auto stop_start = std::chrono::steady_clock::now();
-  Stop();
-  auto stop_end = std::chrono::steady_clock::now();
-  ILOG_INFO(logger_, "CommitConfig: Stop took {:.1f}ms",
-            std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
+  // Check if this is a lightweight change that can be hot-updated without Stop/Start
+  bool is_running = !stop_;
+  bool lightweight = is_running && IsLightweightChange(config_manager_, new_config);
 
-  config_manager_ = std::move(new_config);
+  if (lightweight) {
+    // Hot update path: no Stop/Start, just reset consumers and swap config
+    ILOG_INFO(logger_, "CommitConfig: hot update (lightweight change)");
+    {
+      std::lock_guard<std::mutex> lock(consumer_mutex_);
+      for (auto& c : consumers_) {
+        c->ResetAccumulation();
+      }
+      snapshot_dirty_ = true;  // Push cleared state to snapshot
+    }
+    config_manager_ = std::move(new_config);
+    auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
+    {
+      std::lock_guard<std::mutex> lock(scene_mutex_);
+      active_scene_ = std::move(new_scene);
+    }
+    scene_generation_.fetch_add(1);
 
-  // Setup consumers from project config.
-  ILOG_DEBUG(logger_, "CommitConfig: setup consumers");
-  consumers_.clear();
-  for (const auto& [_, r] : config_manager_.renderers_) {
-    consumers_.emplace_back(std::make_unique<RenderConsumer>(r));
+    auto commit_end = std::chrono::steady_clock::now();
+    ILOG_INFO(logger_, "CommitConfig: hot update took {:.1f}ms",
+              std::chrono::duration<double, std::milli>(commit_end - commit_start).count());
+  } else {
+    // Full restart path: Stop → rebuild consumers → Start
+    auto stop_start = std::chrono::steady_clock::now();
+    Stop();
+    auto stop_end = std::chrono::steady_clock::now();
+    ILOG_INFO(logger_, "CommitConfig: Stop took {:.1f}ms",
+              std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
+
+    config_manager_ = std::move(new_config);
+
+    // Setup consumers from project config.
+    ILOG_DEBUG(logger_, "CommitConfig: setup consumers");
+    consumers_.clear();
+    for (const auto& [_, r] : config_manager_.renderers_) {
+      consumers_.emplace_back(std::make_unique<RenderConsumer>(r));
+    }
+    consumers_.emplace_back(std::make_unique<StatsConsumer>());
+
+    auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
+    {
+      std::lock_guard<std::mutex> lock(scene_mutex_);
+      active_scene_ = std::move(new_scene);
+    }
+    scene_generation_.fetch_add(1);
+
+    Start();
+
+    auto commit_end = std::chrono::steady_clock::now();
+    ILOG_INFO(logger_, "CommitConfig: restart took {:.1f}ms (Stop {:.1f}ms + rebuild + Start)",
+              std::chrono::duration<double, std::milli>(commit_end - commit_start).count(),
+              std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
   }
-  consumers_.emplace_back(std::make_unique<StatsConsumer>());
-
-  Start();
-
-  auto commit_end = std::chrono::steady_clock::now();
-  ILOG_INFO(logger_, "CommitConfig: total {:.1f}ms (Stop {:.1f}ms + rebuild + Start)",
-            std::chrono::duration<double, std::milli>(commit_end - commit_start).count(),
-            std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
 
   return Error::Success();
 }
@@ -230,6 +313,8 @@ void ServerImpl::Start() {
   {
     std::lock_guard<std::mutex> lock(prod_mutex_);
     ILOG_DEBUG(logger_, "Start: lock on prod_mutex_");
+    fprintf(stderr, "[SERVER] Creating %zu simulator threads\n", simulators_.size());
+    fflush(stderr);
     for (auto& s : simulators_) {
       simulator_threads_.emplace_back(&Simulator::Run, &s);
     }
@@ -351,14 +436,20 @@ void ServerImpl::ConsumeData() {
     ILOG_DEBUG(logger_, "ConsumeData: get data: {}", fmt::ptr(&sim_data));
 
     if (sim_scene_cnt_ > 0) {
-      std::lock_guard<std::mutex> lock(consumer_mutex_);
-      for (auto& c : consumers_) {
-        c->Consume(sim_data);
-      }
-      snapshot_dirty_ = true;
-      if (!first_consume_logged) {
-        ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
-        first_consume_logged = true;
+      // Generation check: discard batches from outdated configs
+      if (sim_data.generation_ != scene_generation_.load()) {
+        ILOG_DEBUG(logger_, "ConsumeData: discarding batch (generation {} != {})", sim_data.generation_,
+                   scene_generation_.load());
+      } else {
+        std::lock_guard<std::mutex> lock(consumer_mutex_);
+        for (auto& c : consumers_) {
+          c->Consume(sim_data);
+        }
+        snapshot_dirty_ = true;
+        if (!first_consume_logged) {
+          ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
+          first_consume_logged = true;
+        }
       }
     }
     sim_scene_cnt_--;
@@ -377,12 +468,23 @@ void ServerImpl::GenerateScene() {
   work_started_ = true;
   bool first_batch_logged = false;
 
-  const auto& scene = config_manager_.scene_;
-  auto ray_num = scene.ray_num_;
+  std::shared_ptr<const SceneConfig> scene;
+  {
+    std::lock_guard<std::mutex> lock(scene_mutex_);
+    scene = active_scene_;
+  }
+  auto ray_num = scene->ray_num_;
+  auto generation = scene_generation_.load();
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
+    // Read latest scene each iteration (hot config may have updated it)
+    {
+      std::lock_guard<std::mutex> lock(scene_mutex_);
+      scene = active_scene_;
+    }
+    generation = scene_generation_.load();
     size_t batch_ray_num = std::min(kDefaultRayNum, ray_num - committed_num);
-    scene_queue_->Emplace(SimBatch{ batch_ray_num, &scene });
+    scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation });
     sim_scene_cnt_++;
     if (!first_batch_logged) {
       ILOG_INFO(logger_, "GenerateScene: first batch enqueued at {:.1f}ms after start",

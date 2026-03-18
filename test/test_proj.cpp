@@ -98,7 +98,8 @@ TEST_F(V3TestProj, SimpleProj) {
   std::thread cons_thread([&consumer]() { consumer.Run(); });
 
   const auto& config = config_manager.scene_;
-  config_queue->Emplace(lumice::SimBatch{ config.ray_num_, &config });
+  auto scene_ptr = std::make_shared<const lumice::SceneConfig>(config);
+  config_queue->Emplace(lumice::SimBatch{ config.ray_num_, scene_ptr, 0 });
 
   std::this_thread::sleep_for(500ms);
   simulator.Stop();
