@@ -35,6 +35,15 @@ class IConsume {
   virtual void Consume(const SimData& data) = 0;
 
   /**
+   * @brief Reset accumulated data to zero.
+   * @details Called under consumer_mutex_ during hot config updates.
+   *          Implementations must clear all accumulated simulation data (e.g., internal_xyz_,
+   *          total_intensity_, ray counters) so that subsequent Consume() calls start fresh.
+   *          Default implementation is empty (no-op), suitable for stateless consumers.
+   */
+  virtual void ResetAccumulation() {}
+
+  /**
    * @brief Prepare a snapshot of the current state for lock-free reading.
    * @details Called under consumer_mutex_ to create a consistent snapshot. After calling
    *          PrepareSnapshot(), the caller may invoke GetResult() without holding the lock.

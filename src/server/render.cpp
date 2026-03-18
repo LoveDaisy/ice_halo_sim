@@ -406,6 +406,12 @@ void RenderConsumer::Consume(const SimData& data) {
   total_intensity_ += data.total_intensity_;
 }
 
+void RenderConsumer::ResetAccumulation() {
+  int total_pix = config_.resolution_[0] * config_.resolution_[1];
+  std::memset(internal_xyz_.get(), 0, total_pix * 3 * sizeof(float));
+  total_intensity_ = 0;
+}
+
 void RenderConsumer::PrepareSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));

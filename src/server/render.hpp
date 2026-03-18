@@ -18,6 +18,7 @@ class RenderConsumer : public IConsume {
   explicit RenderConsumer(RenderConfig config);
 
   void Consume(const SimData& data) override;
+  void ResetAccumulation() override;
   void PrepareSnapshot() override;
   Result GetResult() const override;
 
