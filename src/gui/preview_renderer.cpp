@@ -29,8 +29,8 @@ uniform int u_lens_type;     // 0=linear, 1-3=fisheye, 4-6=dual fisheye, 7=recta
 uniform float u_fov;         // full FOV in degrees
 uniform mat3 u_view_matrix;  // view-to-world rotation (inverse view)
 uniform int u_visible;       // 0=upper, 1=lower, 2=full
-const vec3 kRayColor = vec3(1.0);
-const vec3 kBackground = vec3(0.0);
+uniform float u_intensity_scale;  // = intensity_factor / snapshot_intensity * 1e5 (0 = RGB mode)
+uniform int u_xyz_mode;           // 1 = XYZ float texture, 0 = sRGB uint8 texture
 uniform sampler2D u_bg_texture;
 uniform int u_bg_enabled;
 uniform float u_overlay_alpha;
@@ -38,6 +38,37 @@ uniform vec2 u_bg_uv_scale;
 uniform vec2 u_bg_uv_offset;
 
 const float PI = 3.14159265358979323846;
+
+// XYZ→sRGB transformation matrix (GLSL column-major).
+// C++ kXyzToRgb rows: R=[3.2405,-1.5371,-0.4985], G=[-0.9693,1.8760,0.0416], B=[0.0556,-0.2040,1.0572]
+// GLSL mat3(a,b,c) uses a,b,c as columns → transposed from C++ row-major automatically.
+const mat3 kXyzToRgb = mat3(
+     3.2405, -0.9693,  0.0556,   // column 0
+    -1.5371,  1.8760, -0.2040,   // column 1
+    -0.4985,  0.0416,  1.0572    // column 2
+);
+const vec3 kWhitePointD65 = vec3(0.95047, 1.00000, 1.08883);
+
+// Convert XYZ color to sRGB with gamut clipping
+vec3 xyzToSrgb(vec3 xyz) {
+    // Normalize by accumulated intensity
+    xyz *= u_intensity_scale;
+    // Gray point (D65 white scaled by luminance Y)
+    vec3 gray = kWhitePointD65 * xyz.y;
+    // Gamut clipping: scale color toward gray to keep RGB in [0,1]
+    float s = 1.0;
+    vec3 diff = xyz - gray;
+    for (int j = 0; j < 3; j++) {
+        float a = dot(-gray, kXyzToRgb[j]);
+        float b = dot(diff, kXyzToRgb[j]);
+        if (a * b > 0.0 && a / b < s) s = a / b;
+    }
+    xyz = diff * s + gray;
+    // XYZ→RGB matrix multiply + clamp
+    vec3 rgb = clamp(kXyzToRgb * xyz, 0.0, 1.0);
+    // sRGB gamma (branchless via mix+step)
+    return mix(rgb * 12.92, 1.055 * pow(rgb, vec3(1.0/2.4)) - 0.055, step(0.0031308, rgb));
+}
 
 // Convert world direction to equirectangular UV
 vec2 dirToEquirect(vec3 d) {
@@ -162,7 +193,7 @@ void main() {
   }
 
   // Eliminated early returns so bg mixing can always execute at the end.
-  vec3 final_color = kBackground;
+  vec3 final_color = vec3(0.0);
 
   if (result.w >= 0.5) {
     vec3 world_dir = needs_view_transform ? u_view_matrix * result.xyz : result.xyz;
@@ -177,7 +208,10 @@ void main() {
     if (visible) {
       vec2 uv = dirToEquirect(world_dir);
       vec3 tex_color = texture(u_texture, uv).rgb;
-      final_color = tex_color * kRayColor + kBackground * (1.0 - tex_color);
+      if (u_xyz_mode == 1) {
+        tex_color = xyzToSrgb(tex_color);
+      }
+      final_color = tex_color;
     }
   }
 
@@ -328,7 +362,8 @@ void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int he
   glBindTexture(GL_TEXTURE_2D, texture_);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);  // RGB data may not be 4-byte aligned
 
-  if (width != tex_width_ || height != tex_height_) {
+  if (width != tex_width_ || height != tex_height_ || xyz_mode_) {
+    // Re-allocate texture when switching from float to uint8 or size changed
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
     tex_width_ = width;
     tex_height_ = height;
@@ -336,6 +371,31 @@ void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int he
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, data);
   }
 
+  xyz_mode_ = false;
+  glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height) {
+  if (!texture_ || !data || width <= 0 || height <= 0) {
+    return;
+  }
+
+  // Do NOT update tex_data_ (CPU copy) — XYZ float data is not suitable for .lmc save.
+  // For .lmc save, call LUMICE_GetRenderResults() to get sRGB uint8.
+
+  glBindTexture(GL_TEXTURE_2D, texture_);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);  // float data is 4-byte aligned
+
+  if (width != tex_width_ || height != tex_height_ || !xyz_mode_) {
+    // Re-allocate texture when switching from uint8 to float or size changed
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGB, GL_FLOAT, data);
+    tex_width_ = width;
+    tex_height_ = height;
+  } else {
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_FLOAT, data);
+  }
+
+  xyz_mode_ = true;
   glBindTexture(GL_TEXTURE_2D, 0);
 }
 
@@ -431,6 +491,8 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1i(glGetUniformLocation(shader_program_, "u_lens_type"), params.lens_type);
   glUniform1f(glGetUniformLocation(shader_program_, "u_fov"), params.fov);
   glUniform1i(glGetUniformLocation(shader_program_, "u_visible"), params.visible);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_xyz_mode"), xyz_mode_ ? 1 : 0);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_intensity_scale"), params.intensity_scale);
 
   float view_matrix[9];
   BuildViewMatrix(params.elevation, params.azimuth, params.roll, view_matrix);

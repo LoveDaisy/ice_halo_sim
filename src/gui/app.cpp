@@ -328,10 +328,12 @@ void SyncFromPoller() {
     g_state.stats_sim_ray_num = data.stats_sim_ray_num;
   }
 
-  // Upload texture (GL call — must be on main thread)
+  // Upload XYZ float texture (GL call — must be on main thread)
   if (data.has_new_texture && g_state.selected_renderer >= 0) {
-    g_preview.UploadTexture(data.texture_data.data(), data.texture_width, data.texture_height);
-    fprintf(stderr, "[GUI] Texture uploaded: %dx%d\n", data.texture_width, data.texture_height);
+    g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
+    // Store intensity values for shader uniforms (set in RenderPreviewPanel)
+    g_state.snapshot_intensity = data.snapshot_intensity;
+    fprintf(stderr, "[GUI] XYZ texture uploaded: %dx%d\n", data.texture_width, data.texture_height);
   }
 }
 
