@@ -128,6 +128,15 @@ struct RenderResult {
   }
 };
 
+struct RawXyzResult {
+  int renderer_id_;
+  int img_width_;
+  int img_height_;
+  const float* xyz_buffer_;  // Points to snapshot_xyz_ (not color-converted)
+  float snapshot_intensity_;
+  float intensity_factor_;
+};
+
 struct StatsResult {
   size_t ray_seg_num_;
   size_t sim_ray_num_;
@@ -201,6 +210,12 @@ class Server {
    * @note Only returns RenderResult entries, filters out other result types
    */
   std::vector<RenderResult> GetRenderResults();
+
+  /**
+   * @brief Get raw XYZ results (unconverted float data for GPU-side processing)
+   * @return Vector of RawXyzResult. Empty if no render consumers.
+   */
+  std::vector<RawXyzResult> GetRawXyzResults();
 
   /**
    * @brief Get statistics result

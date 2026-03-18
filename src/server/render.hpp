@@ -22,6 +22,7 @@ class RenderConsumer : public IConsume {
   void PrepareSnapshot() override;
   void PostSnapshot() override;
   Result GetResult() const override;
+  RawXyzResult GetRawXyzResult() const;
 
  private:
   RenderConfig config_;

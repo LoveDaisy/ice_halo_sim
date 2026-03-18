@@ -147,6 +147,33 @@ LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderRes
 }
 
 
+LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count) {
+  if (!server || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  auto results = server->server_->GetRawXyzResults();
+  int count = static_cast<int>(results.size());
+  if (count > max_count) {
+    count = max_count;
+  }
+
+  for (int i = 0; i < count; i++) {
+    out[i].renderer_id = results[i].renderer_id_;
+    out[i].img_width = results[i].img_width_;
+    out[i].img_height = results[i].img_height_;
+    out[i].xyz_buffer = results[i].xyz_buffer_;
+    out[i].snapshot_intensity = results[i].snapshot_intensity_;
+    out[i].intensity_factor = results[i].intensity_factor_;
+  }
+
+  // Sentinel
+  std::memset(&out[count], 0, sizeof(LUMICE_RawXyzResult));
+
+  return LUMICE_OK;
+}
+
+
 LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count) {
   if (!server || !out) {
     return LUMICE_ERR_NULL_ARG;

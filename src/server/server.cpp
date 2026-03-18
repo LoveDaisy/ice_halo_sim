@@ -34,6 +34,7 @@ class ServerImpl {
 
   Error CommitConfig(const nlohmann::json& config_json);
   std::vector<RenderResult> GetRenderResults();
+  std::vector<RawXyzResult> GetRawXyzResults();
   std::optional<StatsResult> GetStatsResult();
 
   void Stop();
@@ -262,6 +263,36 @@ std::vector<RenderResult> ServerImpl::GetRenderResults() {
   DoSnapshot();
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
   return cached_render_results_;
+}
+
+std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
+  // Only do Phase 1 (PrepareSnapshot memcpy), skip Phase 2 (PostSnapshot XYZ→RGB).
+  // The consumer_mutex_ protects PrepareSnapshot; we collect raw XYZ under snapshot_mutex_.
+  {
+    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    if (snapshot_dirty_) {
+      for (const auto& c : consumers_) {
+        c->PrepareSnapshot();
+      }
+      snapshot_dirty_ = false;
+    }
+  }
+  std::vector<RawXyzResult> results;
+  std::lock_guard<std::mutex> lock(snapshot_mutex_);
+  for (const auto& c : consumers_) {
+    auto* render_consumer = dynamic_cast<RenderConsumer*>(c.get());
+    if (render_consumer) {
+      results.push_back(render_consumer->GetRawXyzResult());
+    }
+  }
+  // Also update cached_stats_result_ for stats queries
+  for (const auto& c : consumers_) {
+    auto result = c->GetResult();
+    if (auto* s = std::get_if<StatsResult>(&result)) {
+      cached_stats_result_ = *s;
+    }
+  }
+  return results;
 }
 
 std::optional<StatsResult> ServerImpl::GetStatsResult() {
@@ -545,6 +576,14 @@ std::vector<RenderResult> Server::GetRenderResults() {
     return {};
   }
   return impl_->GetRenderResults();
+}
+
+std::vector<RawXyzResult> Server::GetRawXyzResults() {
+  if (!impl_) {
+    LOG_WARNING("Server is terminated!");
+    return {};
+  }
+  return impl_->GetRawXyzResults();
 }
 
 std::optional<StatsResult> Server::GetStatsResult() {

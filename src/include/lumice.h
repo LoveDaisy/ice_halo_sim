@@ -59,6 +59,17 @@ typedef struct LUMICE_RenderResult_ {
                                     // Sentinel: img_buffer == NULL
 } LUMICE_RenderResult;
 
+typedef struct LUMICE_RawXyzResult_ {
+  int renderer_id;
+  int img_width;
+  int img_height;
+  const float* xyz_buffer;   // Read-only XYZ float data, 3 floats per pixel.
+                             // Valid until next LUMICE_GetRawXyzResults() or LUMICE_CommitConfig().
+                             // Sentinel: xyz_buffer == NULL
+  float snapshot_intensity;  // Accumulated intensity scalar for normalization
+  float intensity_factor;    // Per-renderer intensity factor (2^EV)
+} LUMICE_RawXyzResult;
+
 typedef struct LUMICE_StatsResult_ {
   unsigned long ray_seg_num;
   unsigned long sim_ray_num;
@@ -83,7 +94,12 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 // out array size must be at least max_count + 1 (for sentinel slot).
 
 // Fill render results into out array, sentinel-terminated (img_buffer == NULL).
+// Returns sRGB uint8 image data (CPU-converted from XYZ).
 LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
+
+// Fill raw XYZ results into out array, sentinel-terminated (xyz_buffer == NULL).
+// Returns unconverted XYZ float data + intensity scalars for GPU-side conversion.
+LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count);
 
 // Fill stats results into out array, sentinel-terminated (sim_ray_num == 0).
 LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
