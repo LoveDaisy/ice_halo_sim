@@ -1,6 +1,7 @@
 #ifndef LUMICE_GUI_APP_HPP
 #define LUMICE_GUI_APP_HPP
 
+#include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
@@ -33,13 +34,6 @@ extern ServerPoller g_server_poller;
 extern bool g_panel_collapsed;
 extern PreviewViewport g_preview_vp;
 
-// Crystal preview trackball state
-extern float g_crystal_rotation[16];
-extern float g_crystal_zoom;
-extern int g_crystal_style;
-extern int g_crystal_mesh_id;
-extern int g_crystal_mesh_hash;
-
 // Aspect ratio state
 extern int g_programmatic_resize;  // Counter: decremented by WindowSizeCallback, set by ApplyAspectRatio
 extern float g_aspect_bar_height;  // Cached actual height from ImGui layout
@@ -55,11 +49,6 @@ void WindowSizeCallback(GLFWwindow* window, int width, int height);
 // Aspect ratio helpers
 float GetAspectRatio(AspectPreset preset);
 void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, float override_ratio = 0.0f);
-
-// Crystal preview helpers
-int CrystalParamHash(const CrystalConfig& c);
-void ResetCrystalView();
-void ApplyTrackballRotation(float dx, float dy);
 
 // Business operations
 void DoSave();
