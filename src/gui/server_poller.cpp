@@ -3,6 +3,8 @@
 #include <chrono>
 #include <cstring>
 
+#include "gui/app.hpp"
+
 namespace lumice::gui {
 
 void ServerPoller::Start(LUMICE_Server* server) {
@@ -72,10 +74,9 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
       break;
     }
 
-    // Sleep ~200ms between polls (check running_ every 100ms for responsive shutdown)
-    for (int i = 0; i < 2 && running_; i++) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+    // Sleep kTimingIntervalMs between polls.
+    // Max shutdown delay equals kTimingIntervalMs (acceptable for values <= 200ms).
+    std::this_thread::sleep_for(std::chrono::milliseconds(gui::kTimingIntervalMs));
   }
 }
 

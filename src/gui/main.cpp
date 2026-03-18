@@ -105,7 +105,7 @@ int main(int /*argc*/, char** /*argv*/) {
         if (ss == gui::GuiState::SimState::kSimulating || ss == gui::GuiState::SimState::kDone) {
           auto now = std::chrono::steady_clock::now();
           auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
-          if (elapsed >= gui::kCommitIntervalMs) {
+          if (elapsed >= gui::kTimingIntervalMs) {
             gui::g_state.dirty = false;
             gui::DoRun();  // CommitConfig decides hot-update vs restart internally
             last_commit = now;

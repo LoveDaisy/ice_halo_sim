@@ -21,7 +21,7 @@ constexpr float kTopBarHeight = 40.0f;
 constexpr float kStatusBarHeight = 28.0f;
 
 // Live-edit timing constants
-constexpr int kCommitIntervalMs = 200;  // Min interval between auto-restarts (T_commit)
+constexpr int kTimingIntervalMs = 200;  // Shared interval for T_commit and T_poll (ms)
 
 // Stored preview viewport for deferred rendering (after ImGui::Render)
 struct PreviewViewport {
