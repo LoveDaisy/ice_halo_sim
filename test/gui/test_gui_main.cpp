@@ -1436,6 +1436,141 @@ static void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
   }
 }
 
+// ========== Performance Tests ==========
+
+static const char* CreatePerfConfig() {
+  // Minimal config: single prism crystal, sun at 20°, infinite rays, 1024x512 resolution
+  return R"({
+    "crystal": [{"id": 1, "type": "Prism", "height": 1.0, "ratio": {"upper": 1.0, "lower": 1.0}}],
+    "filter": [],
+    "scene": {
+      "light_source": {"type": "sun", "altitude": 20.0, "azimuth": 0, "diameter": 0.5, "spectrum": "D65"},
+      "ray_num": "infinite",
+      "max_hits": 8,
+      "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]
+    },
+    "render": [{"id": 1, "lens": {"type": "rectangular", "fov": 180.0},
+                "resolution": [1024, 512], "view": {"elevation": 0, "azimuth": 0, "roll": 0},
+                "visible": "full", "background": [0, 0, 0], "opacity": 1.0, "intensity_factor": 1.0}]
+  })";
+}
+
+static void StartPerfSimulation() {
+  gui::g_server = LUMICE_CreateServer();
+  LUMICE_InitLogger(gui::g_server);
+  auto err = LUMICE_CommitConfig(gui::g_server, CreatePerfConfig());
+  if (err != LUMICE_OK) {
+    fprintf(stderr, "[PERF] ERROR: CommitConfig failed with code %d\n", err);
+    return;
+  }
+  gui::g_state.sim_state = gui::GuiState::SimState::kSimulating;
+  gui::g_server_poller.Start(gui::g_server);
+}
+
+static void StopPerfSimulation() {
+  gui::g_server_poller.Stop();
+  if (gui::g_server) {
+    LUMICE_StopServer(gui::g_server);
+    LUMICE_DestroyServer(gui::g_server);
+    gui::g_server = nullptr;
+  }
+  gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+}
+
+static void ReportPerf(const char* label, unsigned long start_rays, unsigned long end_rays, double elapsed_sec) {
+  unsigned long delta = end_rays - start_rays;
+  double rays_per_sec = elapsed_sec > 0 ? static_cast<double>(delta) / elapsed_sec : 0;
+  fprintf(stderr, "[PERF] %s: %.1f rays/sec (%lu rays in %.1fs)\n", label, rays_per_sec, delta, elapsed_sec);
+}
+
+static void RegisterPerfTests(ImGuiTestEngine* engine) {
+  // Scenario 1: Steady-state simulation (baseline)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "perf_test", "steady_state");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      StartPerfSimulation();
+
+      // Wait for first batch of data
+      auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      while (gui::g_state.stats_sim_ray_num == 0) {
+        ctx->Yield();
+        if (std::chrono::steady_clock::now() > timeout) {
+          fprintf(stderr, "[PERF] ERROR: No simulation data after 10s\n");
+          break;
+        }
+      }
+
+      // Measure for 2 seconds (short enough for test engine timeout)
+      unsigned long start_rays = gui::g_state.stats_sim_ray_num;
+      auto start_time = std::chrono::steady_clock::now();
+      auto end_time = start_time + std::chrono::seconds(2);
+
+      while (std::chrono::steady_clock::now() < end_time) {
+        ctx->Yield();
+      }
+
+      unsigned long end_rays = gui::g_state.stats_sim_ray_num;
+      double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+
+      ReportPerf("steady_state", start_rays, end_rays, elapsed);
+      double rays_per_sec = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
+      IM_CHECK_GT(rays_per_sec, 0.0);
+
+      StopPerfSimulation();
+    };
+  }
+
+  // Scenario 2: Parameter drag (slider interaction during simulation)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "perf_test", "slider_drag");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      StartPerfSimulation();
+
+      // Wait for first batch of data
+      auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      while (gui::g_state.stats_sim_ray_num == 0) {
+        ctx->Yield();
+        if (std::chrono::steady_clock::now() > timeout) {
+          fprintf(stderr, "[PERF] ERROR: No simulation data after 10s\n");
+          break;
+        }
+      }
+
+      // Measure: alternate sun altitude between 10 and 30 over 5 seconds
+      // (directly modify g_state — no need to interact with UI widgets)
+      unsigned long start_rays = gui::g_state.stats_sim_ray_num;
+      auto start_time = std::chrono::steady_clock::now();
+      auto end_time = start_time + std::chrono::seconds(5);
+      int iteration = 0;
+
+      while (std::chrono::steady_clock::now() < end_time) {
+        float target = (iteration % 2 == 0) ? 10.0f : 30.0f;
+        gui::g_state.sun.altitude = target;
+        gui::g_state.dirty = true;
+        iteration++;
+        // Yield several frames between changes to let the system process
+        for (int i = 0; i < 30; i++) {
+          ctx->Yield();
+          if (std::chrono::steady_clock::now() >= end_time)
+            break;
+        }
+      }
+
+      unsigned long end_rays = gui::g_state.stats_sim_ray_num;
+      double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+
+      ReportPerf("slider_drag", start_rays, end_rays, elapsed);
+      fprintf(stderr, "[PERF] slider_drag: %d parameter changes in %.1fs\n", iteration, elapsed);
+      double rays_per_sec = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
+      IM_CHECK_GT(rays_per_sec, 0.0);
+
+      StopPerfSimulation();
+    };
+  }
+}
+
 int main(int /*argc*/, char** /*argv*/) {
   // GLFW init
   glfwSetErrorCallback(gui::GlfwErrorCallback);
@@ -1515,11 +1650,13 @@ int main(int /*argc*/, char** /*argv*/) {
   RegisterScreenshotTests(engine);
   RegisterVisualTests(engine);
   RegisterBgOverlayTests(engine);
+  RegisterPerfTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests);
 
   // Main loop — runs until all tests complete
   while (true) {
     glfwPollEvents();
+    gui::SyncFromPoller();  // Sync server data for perf tests (no-op when g_server is null)
 
     if (glfwWindowShouldClose(window)) {
       if (ImGuiTestEngine_TryAbortEngine(engine)) {
