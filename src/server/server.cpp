@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <fstream>
@@ -91,6 +92,7 @@ ServerImpl::ServerImpl()
 
 
 Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
+  auto commit_start = std::chrono::steady_clock::now();
   ILOG_DEBUG(logger_, "CommitConfig: entry");
 
   // Parse into a temporary first so that a parse failure leaves the running server untouched.
@@ -128,7 +130,11 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   }
 
   // Stop all running threads before replacing config, so no simulator references stale data.
+  auto stop_start = std::chrono::steady_clock::now();
   Stop();
+  auto stop_end = std::chrono::steady_clock::now();
+  ILOG_INFO(logger_, "CommitConfig: Stop took {:.1f}ms",
+            std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
 
   config_manager_ = std::move(new_config);
 
@@ -141,6 +147,11 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   consumers_.emplace_back(std::make_unique<StatsConsumer>());
 
   Start();
+
+  auto commit_end = std::chrono::steady_clock::now();
+  ILOG_INFO(logger_, "CommitConfig: total {:.1f}ms (Stop {:.1f}ms + rebuild + Start)",
+            std::chrono::duration<double, std::milli>(commit_end - commit_start).count(),
+            std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
 
   return Error::Success();
 }
@@ -313,6 +324,7 @@ bool ServerImpl::IsIdle() {
 
 void ServerImpl::ConsumeData() {
   ILOG_DEBUG(logger_, "ConsumeData: entry");
+  bool first_consume_logged = false;
   while (true) {
     CHECK_STOP
     auto sim_data = data_queue_->Get();
@@ -329,6 +341,10 @@ void ServerImpl::ConsumeData() {
       for (auto& c : consumers_) {
         c->Consume(sim_data);
       }
+      if (!first_consume_logged) {
+        ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
+        first_consume_logged = true;
+      }
     }
     sim_scene_cnt_--;
     if (sim_scene_cnt_ < kMaxSceneCnt / 2) {
@@ -342,7 +358,9 @@ void ServerImpl::ConsumeData() {
 
 void ServerImpl::GenerateScene() {
   ILOG_DEBUG(logger_, "GenerateScene entry");
+  auto gen_start = std::chrono::steady_clock::now();
   work_started_ = true;
+  bool first_batch_logged = false;
 
   const auto& scene = config_manager_.scene_;
   auto ray_num = scene.ray_num_;
@@ -351,6 +369,11 @@ void ServerImpl::GenerateScene() {
     size_t batch_ray_num = std::min(kDefaultRayNum, ray_num - committed_num);
     scene_queue_->Emplace(SimBatch{ batch_ray_num, &scene });
     sim_scene_cnt_++;
+    if (!first_batch_logged) {
+      ILOG_INFO(logger_, "GenerateScene: first batch enqueued at {:.1f}ms after start",
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gen_start).count());
+      first_batch_logged = true;
+    }
 
     ILOG_DEBUG(logger_, "GenerateScene: put a scene: ray({}/{}, {})", batch_ray_num, ray_num, committed_num);
     CHECK_STOP

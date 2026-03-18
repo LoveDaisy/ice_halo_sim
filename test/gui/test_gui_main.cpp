@@ -1540,14 +1540,22 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
 
       // Measure: alternate sun altitude between 10 and 30 over 5 seconds.
       // Simulate the auto-restart logic from main.cpp (test main loop doesn't include it).
-      // Track cumulative rays across restarts (DoStop+DoRun resets stats to 0).
+      // Track cumulative rays across restarts via direct C API (not SyncFromPoller which has delay).
       auto start_time = std::chrono::steady_clock::now();
       auto end_time = start_time + std::chrono::seconds(5);
       auto last_commit = start_time;
       unsigned long cumulative_rays = 0;
-      unsigned long last_snapshot_rays = gui::g_state.stats_sim_ray_num;
       int iteration = 0;
       int restart_count = 0;
+
+      // Helper: read stats directly from server (bypasses SyncFromPoller delay)
+      auto read_server_rays = [&]() -> unsigned long {
+        if (!gui::g_server)
+          return 0;
+        LUMICE_StatsResult stats[2]{};
+        LUMICE_GetStatsResults(gui::g_server, stats, 1);
+        return stats[0].sim_ray_num;
+      };
 
       while (std::chrono::steady_clock::now() < end_time) {
         float target = (iteration % 2 == 0) ? 10.0f : 30.0f;
@@ -1559,13 +1567,12 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         auto now = std::chrono::steady_clock::now();
         auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
         if (commit_elapsed >= gui::kCommitIntervalMs) {
-          // Accumulate rays before restart resets stats
-          cumulative_rays += gui::g_state.stats_sim_ray_num - last_snapshot_rays;
+          // Read rays directly from server before restart clears them
+          cumulative_rays += read_server_rays();
           gui::g_state.dirty = false;
           gui::DoStop();
           gui::DoRun();
           last_commit = now;
-          last_snapshot_rays = 0;  // stats reset to 0 after restart
           restart_count++;
         }
 
@@ -1577,7 +1584,7 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         }
       }
       // Add rays from the final (non-restarted) segment
-      cumulative_rays += gui::g_state.stats_sim_ray_num - last_snapshot_rays;
+      cumulative_rays += read_server_rays();
 
       double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
 
