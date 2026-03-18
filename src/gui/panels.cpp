@@ -529,7 +529,6 @@ void RenderRenderTab(GuiState& state) {
 
     ImGui::PushItemWidth(-130);
     ImGui::Combo("Visible", &r.visible, kVisibleNames, kVisibleCount);
-    ImGui::SliderFloat("Opacity", &r.opacity, 0.0f, 1.0f, "%.2f");
     ImGui::PopItemWidth();
   }
 

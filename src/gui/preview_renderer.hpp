@@ -12,8 +12,6 @@ struct PreviewParams {
   float azimuth = 0.0f;    // Degrees
   float roll = 0.0f;       // Degrees
   int visible = 2;         // 0=upper, 1=lower, 2=full
-  float ray_color[3] = { 1.0f, 1.0f, 1.0f };
-  float background[3] = { 0.0f, 0.0f, 0.0f };
   float intensity_factor = 1.0f;
   bool bg_enabled = false;
   float bg_alpha = 1.0f;

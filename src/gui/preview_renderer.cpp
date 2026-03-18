@@ -29,8 +29,8 @@ uniform int u_lens_type;     // 0=linear, 1-3=fisheye, 4-6=dual fisheye, 7=recta
 uniform float u_fov;         // full FOV in degrees
 uniform mat3 u_view_matrix;  // view-to-world rotation (inverse view)
 uniform int u_visible;       // 0=upper, 1=lower, 2=full
-uniform vec3 u_ray_color;
-uniform vec3 u_background;
+const vec3 kRayColor = vec3(1.0);
+const vec3 kBackground = vec3(0.0);
 uniform sampler2D u_bg_texture;
 uniform int u_bg_enabled;
 uniform float u_overlay_alpha;
@@ -162,7 +162,7 @@ void main() {
   }
 
   // Eliminated early returns so bg mixing can always execute at the end.
-  vec3 final_color = u_background;
+  vec3 final_color = kBackground;
 
   if (result.w >= 0.5) {
     vec3 world_dir = needs_view_transform ? u_view_matrix * result.xyz : result.xyz;
@@ -177,7 +177,7 @@ void main() {
     if (visible) {
       vec2 uv = dirToEquirect(world_dir);
       vec3 tex_color = texture(u_texture, uv).rgb;
-      final_color = tex_color * u_ray_color + u_background * (1.0 - tex_color);
+      final_color = tex_color * kRayColor + kBackground * (1.0 - tex_color);
     }
   }
 
@@ -431,10 +431,6 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1i(glGetUniformLocation(shader_program_, "u_lens_type"), params.lens_type);
   glUniform1f(glGetUniformLocation(shader_program_, "u_fov"), params.fov);
   glUniform1i(glGetUniformLocation(shader_program_, "u_visible"), params.visible);
-  glUniform3f(glGetUniformLocation(shader_program_, "u_ray_color"), params.ray_color[0], params.ray_color[1],
-              params.ray_color[2]);
-  glUniform3f(glGetUniformLocation(shader_program_, "u_background"), params.background[0], params.background[1],
-              params.background[2]);
 
   float view_matrix[9];
   BuildViewMatrix(params.elevation, params.azimuth, params.roll, view_matrix);
