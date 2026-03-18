@@ -1472,7 +1472,7 @@ static void StartPerfSimulation() {
     auto& r = gui::g_state.renderers[0];
     r.lens_type = 7;  // Rectangular
     r.fov = 180.0f;
-    r.sim_resolution_index = 1;  // 1024
+    r.sim_resolution_index = 0;  // 512 → Core resolution [1024, 512], matching CreatePerfConfig
     r.visible = 2;               // Full
     r.background[0] = r.background[1] = r.background[2] = 0.0f;
     r.exposure_offset = 0.0f;
