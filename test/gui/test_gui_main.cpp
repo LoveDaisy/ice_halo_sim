@@ -1563,15 +1563,14 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         gui::g_state.dirty = true;
         iteration++;
 
-        // Throttled restart: same logic as main.cpp auto-restart
+        // Throttled commit: same logic as main.cpp auto-commit.
+        // CommitConfig internally routes to hot-update for sun param changes.
         auto now = std::chrono::steady_clock::now();
         auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
         if (commit_elapsed >= gui::kCommitIntervalMs) {
-          // Read rays directly from server before restart clears them
           cumulative_rays += read_server_rays();
           gui::g_state.dirty = false;
-          gui::DoStop();
-          gui::DoRun();
+          gui::DoRun();  // CommitConfig decides hot-update vs restart
           last_commit = now;
           restart_count++;
         }

@@ -58,8 +58,12 @@ class ServerImpl {
   std::vector<Simulator> simulators_;
   std::vector<ConsumerPtrU> consumers_;
   mutable std::mutex consumer_mutex_;  // Lock ordering: consumer_mutex_ < snapshot_mutex_
-  mutable std::mutex snapshot_mutex_;  // Protects snapshot/rendered results
+  mutable std::mutex snapshot_mutex_;  // Protects cached results
   bool snapshot_dirty_{ false };       // Set by ConsumeData, cleared by DoSnapshot
+
+  // Cached results under snapshot_mutex_ — populated by DoSnapshot, read by Get*Results
+  std::vector<RenderResult> cached_render_results_;
+  std::optional<StatsResult> cached_stats_result_;
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex_;
 
@@ -89,47 +93,53 @@ class ServerImpl {
 const int ServerImpl::kDefaultSimulatorCnt = std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 2);
 
 
-// Whitelist approach: only these fields can be hot-updated.
+// Whitelist approach: only sun params and scatter probabilities can be hot-updated.
 // Everything else forces a full restart.
+// Uses JSON serialization to compare structural fields (strips whitelist fields before comparison).
+// Both configs must come from the same parsing path for reliable comparison.
 bool ServerImpl::IsLightweightChange(const ConfigManager& old_cfg, const ConfigManager& new_cfg) {
-  // Structural checks: any difference in these → restart
-  if (old_cfg.crystals_.size() != new_cfg.crystals_.size())
+  // Quick structural size checks
+  if (old_cfg.crystals_.size() != new_cfg.crystals_.size()) {
     return false;
-  if (old_cfg.renderers_.size() != new_cfg.renderers_.size())
+  }
+  if (old_cfg.renderers_.size() != new_cfg.renderers_.size()) {
     return false;
-  if (old_cfg.filters_.size() != new_cfg.filters_.size())
+  }
+  if (old_cfg.filters_.size() != new_cfg.filters_.size()) {
     return false;
-
-  // Compare crystal/renderer/filter maps by serializing to JSON for deep equality
-  // (simpler than implementing operator== for all nested types)
-  {
-    nlohmann::json old_j;
-    nlohmann::json new_j;
-    to_json(old_j, old_cfg);
-    to_json(new_j, new_cfg);
-
-    // Remove the fields that ARE allowed to differ (whitelist)
-    auto strip_lightweight = [](nlohmann::json& j) {
-      if (j.contains("sun")) {
-        j["sun"].erase("altitude");
-        j["sun"].erase("azimuth");
-        j["sun"].erase("diameter");
-      }
-      if (j.contains("multi_scatter")) {
-        for (auto& ms : j["multi_scatter"]) {
-          ms.erase("prob");
-        }
-      }
-    };
-    strip_lightweight(old_j);
-    strip_lightweight(new_j);
-
-    if (old_j != new_j)
-      return false;
+  }
+  const auto& old_s = old_cfg.scene_;
+  const auto& new_s = new_cfg.scene_;
+  if (old_s.ms_.size() != new_s.ms_.size()) {
+    return false;
+  }
+  if (old_s.ray_num_ != new_s.ray_num_ || old_s.max_hits_ != new_s.max_hits_) {
+    return false;
   }
 
-  // If we get here, only lightweight fields differ (or configs are identical)
-  return true;
+  // Compare full configs via JSON, stripping lightweight fields.
+  // Both configs were parsed by the same from_json path, so serialization is consistent.
+  nlohmann::json old_j;
+  nlohmann::json new_j;
+  to_json(old_j, old_cfg);
+  to_json(new_j, new_cfg);
+
+  auto strip_lightweight = [](nlohmann::json& j) {
+    if (j.contains("sun")) {
+      j["sun"].erase("altitude");
+      j["sun"].erase("azimuth");
+      j["sun"].erase("diameter");
+    }
+    if (j.contains("multi_scatter")) {
+      for (auto& ms : j["multi_scatter"]) {
+        ms.erase("prob");
+      }
+    }
+  };
+  strip_lightweight(old_j);
+  strip_lightweight(new_j);
+
+  return old_j == new_j;
 }
 
 
@@ -183,7 +193,16 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
 
   // Check if this is a lightweight change that can be hot-updated without Stop/Start
   bool is_running = !stop_;
-  bool lightweight = is_running && IsLightweightChange(config_manager_, new_config);
+  bool lightweight = false;
+  if (is_running) {
+    try {
+      lightweight = IsLightweightChange(config_manager_, new_config);
+    } catch (const std::exception& e) {
+      ILOG_DEBUG(logger_, "CommitConfig: IsLightweightChange failed ({}), using restart path", e.what());
+    } catch (...) {
+      ILOG_DEBUG(logger_, "CommitConfig: IsLightweightChange failed, using restart path");
+    }
+  }
 
   if (lightweight) {
     // Hot update path: no Stop/Start, just reset consumers and swap config
@@ -244,7 +263,11 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
 
 
 void ServerImpl::DoSnapshot() {
-  // Phase 1: memcpy snapshot under consumer_mutex_ (short hold)
+  // All consumer access under consumer_mutex_ to prevent use-after-free
+  // (poller thread calls DoSnapshot while GUI thread may clear consumers_ in Stop()).
+  // Then cache results under snapshot_mutex_ for lock-free reading.
+  std::vector<RenderResult> render_results;
+  std::optional<StatsResult> stats_result;
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
     if (!snapshot_dirty_) {
@@ -253,42 +276,39 @@ void ServerImpl::DoSnapshot() {
     for (const auto& c : consumers_) {
       c->PrepareSnapshot();
     }
-    snapshot_dirty_ = false;
-  }
-  // Phase 2: XYZ→RGB conversion under snapshot_mutex_ (no consumer_mutex_)
-  {
-    std::lock_guard<std::mutex> lock(snapshot_mutex_);
     for (const auto& c : consumers_) {
       if (auto* render = dynamic_cast<RenderConsumer*>(c.get())) {
         render->RenderSnapshot();
       }
     }
+    for (const auto& c : consumers_) {
+      auto result = c->GetResult();
+      if (auto* r = std::get_if<RenderResult>(&result)) {
+        render_results.push_back(*r);
+      } else if (auto* s = std::get_if<StatsResult>(&result)) {
+        stats_result = *s;
+      }
+    }
+    snapshot_dirty_ = false;
+  }
+  // Publish results under snapshot_mutex_
+  {
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    cached_render_results_ = std::move(render_results);
+    cached_stats_result_ = stats_result;
   }
 }
 
 std::vector<RenderResult> ServerImpl::GetRenderResults() {
   DoSnapshot();
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
-  std::vector<RenderResult> results;
-  for (const auto& c : consumers_) {
-    auto result = c->GetResult();
-    if (auto* render = std::get_if<RenderResult>(&result)) {
-      results.push_back(*render);
-    }
-  }
-  return results;
+  return cached_render_results_;
 }
 
 std::optional<StatsResult> ServerImpl::GetStatsResult() {
   DoSnapshot();
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
-  for (const auto& c : consumers_) {
-    auto result = c->GetResult();
-    if (auto* stats = std::get_if<StatsResult>(&result)) {
-      return *stats;
-    }
-  }
-  return std::nullopt;
+  return cached_stats_result_;
 }
 
 
@@ -313,8 +333,6 @@ void ServerImpl::Start() {
   {
     std::lock_guard<std::mutex> lock(prod_mutex_);
     ILOG_DEBUG(logger_, "Start: lock on prod_mutex_");
-    fprintf(stderr, "[SERVER] Creating %zu simulator threads\n", simulators_.size());
-    fflush(stderr);
     for (auto& s : simulators_) {
       simulator_threads_.emplace_back(&Simulator::Run, &s);
     }
@@ -358,7 +376,6 @@ void ServerImpl::Stop() {
   }
 
   // Stop main working thread & scene dispatch thread.
-  // Must join these BEFORE clearing consumers, since ConsumeData accesses consumers_.
   ILOG_DEBUG(logger_, "Stop: waiting main worker & dispatcher stop.");
   if (consume_data_thread_.joinable()) {
     consume_data_thread_.join();
@@ -367,8 +384,11 @@ void ServerImpl::Stop() {
     generate_scene_thread_.join();
   }
 
-  consumers_.clear();
-
+  {
+    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    consumers_.clear();
+    snapshot_dirty_ = false;
+  }
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
     status_ = ServerStatus::kIdle;
