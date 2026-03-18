@@ -3,7 +3,7 @@
 #include <chrono>
 #include <cstring>
 
-#include "gui/app.hpp"
+#include "gui/gui_constants.hpp"
 
 namespace lumice::gui {
 

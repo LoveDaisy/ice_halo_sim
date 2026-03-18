@@ -2,6 +2,7 @@
 #define LUMICE_GUI_APP_HPP
 
 #include "gui/crystal_renderer.hpp"
+#include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/preview_renderer.hpp"
 #include "gui/server_poller.hpp"
@@ -10,20 +11,6 @@
 struct GLFWwindow;
 
 namespace lumice::gui {
-
-// Layout constants
-constexpr int kInitWindowWidth = 1280;
-constexpr int kInitWindowHeight = 720;
-constexpr int kMinWindowWidth = 800;
-constexpr int kMinWindowHeight = 600;
-constexpr float kLeftPanelWidth = 380.0f;
-constexpr float kTopBarHeight = 40.0f;
-constexpr float kStatusBarHeight = 28.0f;
-
-// Live-edit timing constants
-constexpr int kTimingIntervalMs = 100;                // Base interval for commit and poll (ms)
-constexpr int kCommitIntervalMs = kTimingIntervalMs;  // Min interval between auto-commits (T_commit)
-constexpr int kPollIntervalMs = kTimingIntervalMs;    // Server poll interval (T_poll)
 
 // Stored preview viewport for deferred rendering (after ImGui::Render)
 struct PreviewViewport {
