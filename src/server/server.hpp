@@ -2,6 +2,7 @@
 #define INCLUDE_SERVER_H_
 
 #include <memory>
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <string>
 #include <variant>
@@ -187,6 +188,13 @@ class Server {
    *   }
    */
   Error CommitConfig(const std::string& config_str);
+
+  /**
+   * @brief Commit configuration from parsed JSON object (skips string parse overhead)
+   * @param config_json Parsed JSON object
+   * @return Error object indicating success or failure
+   */
+  Error CommitConfig(const nlohmann::json& config_json);
 
   /**
    * @brief Commit configuration from file

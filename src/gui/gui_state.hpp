@@ -1,6 +1,7 @@
 #ifndef LUMICE_GUI_STATE_HPP
 #define LUMICE_GUI_STATE_HPP
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -172,8 +173,22 @@ struct GuiState {
   unsigned long stats_sim_ray_num = 0;
   float snapshot_intensity = 0;  // Accumulated intensity for XYZ→RGB normalization
 
-  // Last committed config JSON (for Revert)
-  std::string last_committed_json;
+  // Last committed config snapshot (for Revert — config fields only, no runtime state)
+  struct ConfigSnapshot {
+    std::vector<CrystalConfig> crystals;
+    int selected_crystal = -1;
+    SunConfig sun;
+    SimConfig sim;
+    std::vector<ScatterLayer> scattering;
+    std::vector<RenderConfig> renderers;
+    int selected_renderer = -1;
+    std::vector<FilterConfig> filters;
+    int selected_filter = -1;
+    int next_crystal_id = 1;
+    int next_renderer_id = 1;
+    int next_filter_id = 1;
+  };
+  std::optional<ConfigSnapshot> last_committed_state;
 };
 
 inline GuiState InitDefaultState() {

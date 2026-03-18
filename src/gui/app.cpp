@@ -290,10 +290,24 @@ void DoRun() {
   if (!g_server) {
     return;
   }
-  auto json_str = SerializeCoreConfig(g_state);
-  g_state.last_committed_json = json_str;
-  auto err = LUMICE_CommitConfig(g_server, json_str.c_str());
+  LUMICE_Config config{};
+  FillLumiceConfig(g_state, &config);
+  auto err = LUMICE_CommitConfigStruct(g_server, &config);
   if (err == LUMICE_OK) {
+    g_state.last_committed_state = GuiState::ConfigSnapshot{
+      g_state.crystals,
+      g_state.selected_crystal,
+      g_state.sun,
+      g_state.sim,
+      g_state.scattering,
+      g_state.renderers,
+      g_state.selected_renderer,
+      g_state.filters,
+      g_state.selected_filter,
+      g_state.next_crystal_id,
+      g_state.next_renderer_id,
+      g_state.next_filter_id,
+    };
     g_state.sim_state = SimState::kSimulating;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
@@ -312,8 +326,21 @@ void DoStop() {
 }
 
 void DoRevert() {
-  if (!g_state.last_committed_json.empty()) {
-    DeserializeFromJson(g_state.last_committed_json, g_state);
+  if (g_state.last_committed_state) {
+    const auto& snapshot = *g_state.last_committed_state;
+    // Restore configuration fields only, preserve runtime state
+    g_state.crystals = snapshot.crystals;
+    g_state.selected_crystal = snapshot.selected_crystal;
+    g_state.sun = snapshot.sun;
+    g_state.sim = snapshot.sim;
+    g_state.scattering = snapshot.scattering;
+    g_state.renderers = snapshot.renderers;
+    g_state.selected_renderer = snapshot.selected_renderer;
+    g_state.filters = snapshot.filters;
+    g_state.selected_filter = snapshot.selected_filter;
+    g_state.next_crystal_id = snapshot.next_crystal_id;
+    g_state.next_renderer_id = snapshot.next_renderer_id;
+    g_state.next_filter_id = snapshot.next_filter_id;
     g_state.sim_state = SimState::kDone;
   }
 }

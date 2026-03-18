@@ -95,9 +95,8 @@ int main(int /*argc*/, char** /*argv*/) {
     gui::SyncFromPoller();
 
     // Live-edit: auto-commit config when parameters change during simulation.
-    // CommitConfig internally routes to hot-update (no Stop/Start) for lightweight
-    // changes (sun params, scatter prob), or full restart for structural changes.
-    // Throttled to at most once per kCommitIntervalMs (100ms).
+    // DoRun fills LUMICE_Config struct and calls LUMICE_CommitConfigStruct (no JSON string roundtrip).
+    // Throttled to at most once per kCommitIntervalMs.
     {
       static auto last_commit = std::chrono::steady_clock::now();
       if (gui::g_state.dirty) {
@@ -107,7 +106,7 @@ int main(int /*argc*/, char** /*argv*/) {
           auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
           if (elapsed >= gui::kCommitIntervalMs) {
             gui::g_state.dirty = false;
-            gui::DoRun();  // CommitConfig decides hot-update vs restart internally
+            gui::DoRun();
             last_commit = now;
           }
         }

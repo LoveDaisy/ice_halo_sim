@@ -481,13 +481,20 @@ void ServerImpl::SetLogLevel(LogLevel level) {
 // =============== Server ===============
 Server::Server() : impl_(std::make_shared<ServerImpl>()) {}
 
+Error Server::CommitConfig(const nlohmann::json& config_json) {
+  if (!impl_) {
+    return Error::ServerNotReady("Server is terminated");
+  }
+  return impl_->CommitConfig(config_json);
+}
+
 Error Server::CommitConfig(const std::string& config_str) {
   if (!impl_) {
     return Error::ServerNotReady("Server is terminated");
   }
   try {
     auto config_json = nlohmann::json::parse(config_str);
-    return impl_->CommitConfig(config_json);
+    return CommitConfig(config_json);
   } catch (const nlohmann::json::parse_error& e) {
     ILOG_ERROR(impl_->GetLogger(), "CommitConfig: JSON parse error: {}", e.what());
     return Error::InvalidJson(e.what());

@@ -309,6 +309,104 @@ std::string SerializeCoreConfig(const GuiState& state) {
 }
 
 
+// ========== Fill LUMICE_Config C struct (for LUMICE_CommitConfigStruct) ==========
+
+static void FillAxisDist(const AxisDist& src, LUMICE_AxisDist* dst) {
+  dst->type = src.type == AxisDistType::kGauss ? 0 : 1;
+  dst->mean = src.mean;
+  dst->std = src.std;
+}
+
+void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
+  std::memset(out, 0, sizeof(LUMICE_Config));
+
+  // Crystals
+  out->crystal_count =
+      static_cast<int>(std::min(state.crystals.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_CRYSTALS)));
+  for (int i = 0; i < out->crystal_count; i++) {
+    const auto& c = state.crystals[i];
+    auto& dst = out->crystals[i];
+    dst.id = c.id;
+    dst.type = c.type == CrystalType::kPrism ? 0 : 1;
+    dst.height = c.height;
+    dst.prism_h = c.prism_h;
+    dst.upper_h = c.upper_h;
+    dst.lower_h = c.lower_h;
+    std::copy(std::begin(c.upper_indices), std::end(c.upper_indices), dst.upper_indices);
+    std::copy(std::begin(c.lower_indices), std::end(c.lower_indices), dst.lower_indices);
+    FillAxisDist(c.zenith, &dst.zenith);
+    FillAxisDist(c.azimuth, &dst.azimuth);
+    FillAxisDist(c.roll, &dst.roll);
+  }
+
+  // Filters
+  out->filter_count = static_cast<int>(std::min(state.filters.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_FILTERS)));
+  for (int i = 0; i < out->filter_count; i++) {
+    const auto& f = state.filters[i];
+    auto& dst = out->filters[i];
+    dst.id = f.id;
+    dst.action = f.action;
+    dst.symmetry = (f.sym_p ? 1 : 0) | (f.sym_b ? 2 : 0) | (f.sym_d ? 4 : 0);
+    // Parse raypath_text
+    std::istringstream iss(f.raypath_text);
+    std::string token;
+    dst.raypath_count = 0;
+    while (std::getline(iss, token, ',') && dst.raypath_count < LUMICE_MAX_CONFIG_RAYPATH_LEN) {
+      try {
+        dst.raypath[dst.raypath_count++] = std::stoi(token);
+      } catch (...) {
+      }
+    }
+  }
+
+  // Renderers
+  out->renderer_count =
+      static_cast<int>(std::min(state.renderers.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RENDERERS)));
+  for (int i = 0; i < out->renderer_count; i++) {
+    const auto& r = state.renderers[i];
+    auto& dst = out->renderers[i];
+    dst.id = r.id;
+    int res = kSimResolutions[r.sim_resolution_index];
+    dst.resolution_w = res * 2;
+    dst.resolution_h = res;
+    dst.opacity = r.opacity;
+    dst.intensity_factor = std::pow(2.0f, r.exposure_offset);
+  }
+
+  // Scene: light source
+  out->sun_altitude = state.sun.altitude;
+  out->sun_azimuth = state.sun.azimuth;
+  out->sun_diameter = state.sun.diameter;
+  if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
+    out->spectrum = kSpectrumNames[state.sun.spectrum_index];
+  } else {
+    out->spectrum = "D65";
+  }
+
+  // Scene: simulation
+  out->infinite = state.sim.infinite ? 1 : 0;
+  out->ray_num = static_cast<unsigned long>(state.sim.ray_num_millions * 1e6f);
+  out->max_hits = state.sim.max_hits;
+
+  // Scene: scattering
+  out->scatter_count =
+      static_cast<int>(std::min(state.scattering.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_SCATTER_LAYERS)));
+  for (int i = 0; i < out->scatter_count; i++) {
+    const auto& layer = state.scattering[i];
+    auto& dst = out->scattering[i];
+    dst.probability = layer.probability;
+    dst.entry_count =
+        static_cast<int>(std::min(layer.entries.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_SCATTER_ENTRIES)));
+    for (int k = 0; k < dst.entry_count; k++) {
+      const auto& e = layer.entries[k];
+      dst.entries[k].crystal_id = e.crystal_id;
+      dst.entries[k].proportion = e.proportion;
+      dst.entries[k].filter_id = e.filter_id;
+    }
+  }
+}
+
+
 // ========== Core JSON Deserialization (for DoRevert) ==========
 
 bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
