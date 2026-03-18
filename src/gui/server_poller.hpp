@@ -16,13 +16,15 @@ struct PollerData {
   LUMICE_ServerState server_state = LUMICE_SERVER_IDLE;
   unsigned long stats_ray_seg_num = 0;
   unsigned long stats_sim_ray_num = 0;
-  std::vector<unsigned char> texture_data;
+  std::vector<float> xyz_data;  // XYZ float texture data (for GPU conversion)
   int texture_width = 0;
   int texture_height = 0;
+  float snapshot_intensity = 0;
+  float intensity_factor = 1.0f;
   bool has_new_texture = false;
 };
 
-// Polls the LUMICE server on a background thread (every ~1 second) and stages
+// Polls the LUMICE server on a background thread (every kPollIntervalMs) and stages
 // results for the main thread to pick up without blocking the UI.
 class ServerPoller {
  public:

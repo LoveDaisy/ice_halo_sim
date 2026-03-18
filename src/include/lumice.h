@@ -59,6 +59,17 @@ typedef struct LUMICE_RenderResult_ {
                                     // Sentinel: img_buffer == NULL
 } LUMICE_RenderResult;
 
+typedef struct LUMICE_RawXyzResult_ {
+  int renderer_id;
+  int img_width;
+  int img_height;
+  const float* xyz_buffer;   // Read-only XYZ float data, 3 floats per pixel.
+                             // Valid until next LUMICE_GetRawXyzResults() or LUMICE_CommitConfig().
+                             // Sentinel: xyz_buffer == NULL
+  float snapshot_intensity;  // Accumulated intensity scalar for normalization
+  float intensity_factor;    // Per-renderer intensity factor (2^EV)
+} LUMICE_RawXyzResult;
+
 typedef struct LUMICE_StatsResult_ {
   unsigned long ray_seg_num;
   unsigned long sim_ray_num;
@@ -74,16 +85,117 @@ void LUMICE_DestroyServer(LUMICE_Server* server);
 void LUMICE_InitLogger(LUMICE_Server* server);
 void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level);
 
-// =============== Configuration ===============
+// =============== Configuration (JSON string) ===============
 LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_str);
 LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename);
+
+// =============== Configuration (C struct — bypasses JSON string serialization) ===============
+// GUI fills this struct directly from UI state, avoiding JSON dump/parse overhead.
+// Cross-references use integer IDs (crystal_id, filter_id), resolved internally by Core.
+
+#define LUMICE_MAX_CONFIG_CRYSTALS 16
+#define LUMICE_MAX_CONFIG_FILTERS 16
+#define LUMICE_MAX_CONFIG_RENDERERS 4
+#define LUMICE_MAX_CONFIG_SCATTER_LAYERS 8
+#define LUMICE_MAX_CONFIG_SCATTER_ENTRIES 16
+#define LUMICE_MAX_CONFIG_RAYPATH_LEN 32
+
+typedef struct LUMICE_AxisDist_ {
+  int type;    // 0=gauss, 1=uniform
+  float mean;  // degrees
+  float std;   // gauss: standard deviation; uniform: half-range (degrees)
+} LUMICE_AxisDist;
+
+typedef struct LUMICE_CrystalParam_ {
+  int id;
+  int type;  // 0=prism, 1=pyramid
+
+  // Prism
+  float height;
+
+  // Pyramid
+  float prism_h;
+  float upper_h;
+  float lower_h;
+  int upper_indices[3];
+  int lower_indices[3];
+
+  // Axis distributions
+  LUMICE_AxisDist zenith;
+  LUMICE_AxisDist azimuth;
+  LUMICE_AxisDist roll;
+} LUMICE_CrystalParam;
+
+typedef struct LUMICE_FilterParam_ {
+  int id;
+  int action;    // 0=filter_in, 1=filter_out
+  int symmetry;  // bitmask: 1=P, 2=B, 4=D
+  int raypath[LUMICE_MAX_CONFIG_RAYPATH_LEN];
+  int raypath_count;
+} LUMICE_FilterParam;
+
+typedef struct LUMICE_ScatterEntry_ {
+  int crystal_id;
+  float proportion;
+  int filter_id;  // -1 = none
+} LUMICE_ScatterEntry;
+
+typedef struct LUMICE_ScatterLayer_ {
+  float probability;
+  LUMICE_ScatterEntry entries[LUMICE_MAX_CONFIG_SCATTER_ENTRIES];
+  int entry_count;
+} LUMICE_ScatterLayer;
+
+typedef struct LUMICE_RenderParam_ {
+  int id;
+  int resolution_w;
+  int resolution_h;
+  float opacity;
+  float intensity_factor;
+} LUMICE_RenderParam;
+
+typedef struct LUMICE_Config_ {
+  // Crystals
+  LUMICE_CrystalParam crystals[LUMICE_MAX_CONFIG_CRYSTALS];
+  int crystal_count;
+
+  // Filters
+  LUMICE_FilterParam filters[LUMICE_MAX_CONFIG_FILTERS];
+  int filter_count;
+
+  // Renderers
+  LUMICE_RenderParam renderers[LUMICE_MAX_CONFIG_RENDERERS];
+  int renderer_count;
+
+  // Scene: light source
+  float sun_altitude;
+  float sun_azimuth;
+  float sun_diameter;
+  const char* spectrum;  // e.g. "D65", "D50", "A", "E"
+
+  // Scene: simulation
+  int infinite;           // 1=infinite rays, 0=finite
+  unsigned long ray_num;  // only used when infinite==0
+  int max_hits;
+
+  // Scene: scattering
+  LUMICE_ScatterLayer scattering[LUMICE_MAX_CONFIG_SCATTER_LAYERS];
+  int scatter_count;
+} LUMICE_Config;
+
+LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config);
 
 // =============== Results ===============
 // Unified pattern: (server, out, max_count) -> LUMICE_ErrorCode, sentinel-terminated.
 // out array size must be at least max_count + 1 (for sentinel slot).
 
 // Fill render results into out array, sentinel-terminated (img_buffer == NULL).
+// Returns sRGB uint8 image data (CPU-converted from XYZ).
 LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
+
+// Fill raw XYZ results into out array, sentinel-terminated (xyz_buffer == NULL).
+// Returns unconverted XYZ float data + intensity scalars for GPU-side conversion.
+LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count);
 
 // Fill stats results into out array, sentinel-terminated (sim_ray_num == 0).
 LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);

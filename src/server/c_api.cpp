@@ -92,7 +92,7 @@ LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_s
     return LUMICE_ERR_NULL_ARG;
   }
 
-  auto err = server->server_->CommitConfig(config_str);
+  auto err = server->server_->CommitConfig(std::string(config_str));
   if (err) {
     LOG_ERROR("Failed to commit configuration: {}", err.message);
     if (!err.field.empty()) {
@@ -121,6 +121,148 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 }
 
 
+// =============== Configuration (C struct) ===============
+static nlohmann::json AxisDistToJson(const LUMICE_AxisDist& d) {
+  nlohmann::json j;
+  j["type"] = d.type == 0 ? "gauss" : "uniform";
+  j["mean"] = d.mean;
+  j["std"] = d.std;
+  return j;
+}
+
+static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
+  using json = nlohmann::json;
+  json root;
+
+  // Crystals
+  root["crystal"] = json::array();
+  for (int i = 0; i < c.crystal_count; i++) {
+    const auto& cr = c.crystals[i];
+    json j;
+    j["id"] = cr.id;
+    if (cr.type == 0) {
+      j["type"] = "prism";
+      j["shape"]["height"] = cr.height;
+    } else {
+      j["type"] = "pyramid";
+      j["shape"]["prism_h"] = cr.prism_h;
+      j["shape"]["upper_h"] = cr.upper_h;
+      j["shape"]["lower_h"] = cr.lower_h;
+      j["shape"]["upper_indices"] = { cr.upper_indices[0], cr.upper_indices[1], cr.upper_indices[2] };
+      j["shape"]["lower_indices"] = { cr.lower_indices[0], cr.lower_indices[1], cr.lower_indices[2] };
+    }
+    j["axis"]["zenith"] = AxisDistToJson(cr.zenith);
+    j["axis"]["azimuth"] = AxisDistToJson(cr.azimuth);
+    j["axis"]["roll"] = AxisDistToJson(cr.roll);
+    root["crystal"].push_back(j);
+  }
+
+  // Filters
+  root["filter"] = json::array();
+  for (int i = 0; i < c.filter_count; i++) {
+    const auto& f = c.filters[i];
+    json j;
+    j["id"] = f.id;
+    j["type"] = "raypath";
+    j["action"] = f.action == 0 ? "filter_in" : "filter_out";
+    json rp = json::array();
+    for (int k = 0; k < f.raypath_count; k++) {
+      rp.push_back(f.raypath[k]);
+    }
+    j["raypath"] = rp;
+    std::string sym;
+    if (f.symmetry & 1)
+      sym += "P";
+    if (f.symmetry & 2)
+      sym += "B";
+    if (f.symmetry & 4)
+      sym += "D";
+    if (!sym.empty()) {
+      j["symmetry"] = sym;
+    }
+    root["filter"].push_back(j);
+  }
+
+  // Scene
+  json scene;
+  scene["light_source"]["type"] = "sun";
+  scene["light_source"]["altitude"] = c.sun_altitude;
+  scene["light_source"]["azimuth"] = c.sun_azimuth;
+  scene["light_source"]["diameter"] = c.sun_diameter;
+  scene["light_source"]["spectrum"] = c.spectrum ? c.spectrum : "D65";
+
+  if (c.infinite) {
+    scene["ray_num"] = "infinite";
+  } else {
+    scene["ray_num"] = c.ray_num;
+  }
+  scene["max_hits"] = c.max_hits;
+
+  scene["scattering"] = json::array();
+  for (int i = 0; i < c.scatter_count; i++) {
+    const auto& layer = c.scattering[i];
+    json jl;
+    jl["prob"] = layer.probability;
+    jl["entries"] = json::array();
+    for (int k = 0; k < layer.entry_count; k++) {
+      const auto& e = layer.entries[k];
+      json je;
+      je["crystal"] = e.crystal_id >= 0 ? e.crystal_id : 1;
+      je["proportion"] = e.proportion;
+      if (e.filter_id >= 0) {
+        je["filter"] = e.filter_id;
+      }
+      jl["entries"].push_back(je);
+    }
+    scene["scattering"].push_back(jl);
+  }
+  root["scene"] = scene;
+
+  // Renderers — Core always produces full equirectangular texture.
+  // GUI-variable fields come from the struct; fixed fields are hardcoded here.
+  root["render"] = json::array();
+  for (int i = 0; i < c.renderer_count; i++) {
+    const auto& r = c.renderers[i];
+    json jr;
+    jr["id"] = r.id;
+    jr["lens"]["type"] = "rectangular";
+    jr["lens"]["fov"] = 180.0f;
+    jr["resolution"] = { r.resolution_w, r.resolution_h };
+    jr["view"]["elevation"] = 0.0f;
+    jr["view"]["azimuth"] = 0.0f;
+    jr["view"]["roll"] = 0.0f;
+    jr["visible"] = "full";
+    jr["background"] = { 0.0f, 0.0f, 0.0f };
+    jr["opacity"] = r.opacity;
+    jr["intensity_factor"] = r.intensity_factor;
+    root["render"].push_back(jr);
+  }
+
+  return root;
+}
+
+LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config) {
+  if (!server || !config) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  // Bounds check
+  if (config->crystal_count > LUMICE_MAX_CONFIG_CRYSTALS || config->filter_count > LUMICE_MAX_CONFIG_FILTERS ||
+      config->renderer_count > LUMICE_MAX_CONFIG_RENDERERS ||
+      config->scatter_count > LUMICE_MAX_CONFIG_SCATTER_LAYERS) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+
+  auto config_json = ConfigToJson(*config);
+  auto err = server->server_->CommitConfig(config_json);
+  if (err) {
+    LOG_ERROR("Failed to commit configuration (struct): {}", err.message);
+    return MapErrorCode(err.code);
+  }
+  return LUMICE_OK;
+}
+
+
 // =============== Results ===============
 LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count) {
   if (!server || !out) {
@@ -142,6 +284,33 @@ LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderRes
 
   // Sentinel
   std::memset(&out[count], 0, sizeof(LUMICE_RenderResult));
+
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count) {
+  if (!server || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  auto results = server->server_->GetRawXyzResults();
+  int count = static_cast<int>(results.size());
+  if (count > max_count) {
+    count = max_count;
+  }
+
+  for (int i = 0; i < count; i++) {
+    out[i].renderer_id = results[i].renderer_id_;
+    out[i].img_width = results[i].img_width_;
+    out[i].img_height = results[i].img_height_;
+    out[i].xyz_buffer = results[i].xyz_buffer_;
+    out[i].snapshot_intensity = results[i].snapshot_intensity_;
+    out[i].intensity_factor = results[i].intensity_factor_;
+  }
+
+  // Sentinel
+  std::memset(&out[count], 0, sizeof(LUMICE_RawXyzResult));
 
   return LUMICE_OK;
 }

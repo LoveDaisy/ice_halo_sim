@@ -1436,6 +1436,251 @@ static void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
   }
 }
 
+// ========== Performance Tests ==========
+
+static const char* CreatePerfConfig() {
+  // Minimal config: single prism crystal, sun at 20°, infinite rays, 1024x512 resolution
+  return R"({
+    "crystal": [{"id": 1, "type": "Prism", "height": 1.0, "ratio": {"upper": 1.0, "lower": 1.0}}],
+    "filter": [],
+    "scene": {
+      "light_source": {"type": "sun", "altitude": 20.0, "azimuth": 0, "diameter": 0.5, "spectrum": "D65"},
+      "ray_num": "infinite",
+      "max_hits": 8,
+      "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]
+    },
+    "render": [{"id": 1, "lens": {"type": "rectangular", "fov": 180.0},
+                "resolution": [1024, 512], "view": {"elevation": 0, "azimuth": 0, "roll": 0},
+                "visible": "full", "background": [0, 0, 0], "opacity": 1.0, "intensity_factor": 1.0}]
+  })";
+}
+
+static void StartPerfSimulation() {
+  gui::g_server = LUMICE_CreateServer();
+  LUMICE_InitLogger(gui::g_server);
+
+  // Set up g_state to match perf config, then use DoRun() so the server's
+  // config_manager_ is populated from the same SerializeCoreConfig path.
+  gui::g_state.sun.altitude = 20.0f;
+  gui::g_state.sun.azimuth = 0.0f;
+  gui::g_state.sun.diameter = 0.5f;
+  gui::g_state.sun.spectrum_index = 2;  // D65
+  gui::g_state.sim.infinite = true;
+  gui::g_state.sim.max_hits = 8;
+  if (!gui::g_state.renderers.empty()) {
+    auto& r = gui::g_state.renderers[0];
+    r.lens_type = 7;  // Rectangular
+    r.fov = 180.0f;
+    r.sim_resolution_index = 0;  // 512 → Core resolution [1024, 512], matching CreatePerfConfig
+    r.visible = 2;               // Full
+    r.background[0] = r.background[1] = r.background[2] = 0.0f;
+    r.exposure_offset = 0.0f;
+  }
+  gui::DoRun();
+}
+
+static void StopPerfSimulation() {
+  gui::g_server_poller.Stop();
+  if (gui::g_server) {
+    LUMICE_StopServer(gui::g_server);
+    LUMICE_DestroyServer(gui::g_server);
+    gui::g_server = nullptr;
+  }
+  gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+}
+
+static void ReportPerf(const char* label, unsigned long start_rays, unsigned long end_rays, double elapsed_sec) {
+  unsigned long delta = end_rays - start_rays;
+  double rays_per_sec = elapsed_sec > 0 ? static_cast<double>(delta) / elapsed_sec : 0;
+  fprintf(stderr, "[PERF] %s: %.1f rays/sec (%lu rays in %.1fs)\n", label, rays_per_sec, delta, elapsed_sec);
+}
+
+static void RegisterPerfTests(ImGuiTestEngine* engine) {
+  // Scenario 1: Steady-state simulation (baseline)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "perf_test", "steady_state");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      StartPerfSimulation();
+
+      // Wait for first batch of data
+      auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      while (gui::g_state.stats_sim_ray_num == 0) {
+        ctx->Yield();
+        if (std::chrono::steady_clock::now() > timeout) {
+          fprintf(stderr, "[PERF] ERROR: No simulation data after 10s\n");
+          break;
+        }
+      }
+
+      // Measure for 2 seconds (short enough for test engine timeout)
+      unsigned long start_rays = gui::g_state.stats_sim_ray_num;
+      auto start_time = std::chrono::steady_clock::now();
+      auto end_time = start_time + std::chrono::seconds(2);
+
+      while (std::chrono::steady_clock::now() < end_time) {
+        ctx->Yield();
+      }
+
+      unsigned long end_rays = gui::g_state.stats_sim_ray_num;
+      double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+
+      ReportPerf("steady_state", start_rays, end_rays, elapsed);
+      double rays_per_sec = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
+      IM_CHECK_GT(rays_per_sec, 0.0);
+
+      StopPerfSimulation();
+    };
+  }
+
+  // Scenario 2: Parameter drag (slider interaction during simulation)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "perf_test", "slider_drag");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      StartPerfSimulation();
+
+      // Wait for first batch of data
+      auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      while (gui::g_state.stats_sim_ray_num == 0) {
+        ctx->Yield();
+        if (std::chrono::steady_clock::now() > timeout) {
+          fprintf(stderr, "[PERF] ERROR: No simulation data after 10s\n");
+          break;
+        }
+      }
+
+      // Measure: alternate sun altitude between 10 and 30 over 5 seconds.
+      // Simulate the auto-restart logic from main.cpp (test main loop doesn't include it).
+      // Track cumulative rays across restarts via direct C API (not SyncFromPoller which has delay).
+      auto start_time = std::chrono::steady_clock::now();
+      auto end_time = start_time + std::chrono::seconds(5);
+      auto last_commit = start_time;
+      unsigned long cumulative_rays = 0;
+      int iteration = 0;
+      int restart_count = 0;
+
+      // Helper: read stats directly from server (bypasses SyncFromPoller delay)
+      auto read_server_rays = [&]() -> unsigned long {
+        if (!gui::g_server)
+          return 0;
+        LUMICE_StatsResult stats[2]{};
+        LUMICE_GetStatsResults(gui::g_server, stats, 1);
+        return stats[0].sim_ray_num;
+      };
+
+      while (std::chrono::steady_clock::now() < end_time) {
+        float target = (iteration % 2 == 0) ? 10.0f : 30.0f;
+        gui::g_state.sun.altitude = target;
+        gui::g_state.dirty = true;
+        iteration++;
+
+        // Yield a few frames then check commit. Yield count is small (2 frames)
+        // so the commit check runs frequently, letting kTimingIntervalMs control
+        // the actual commit rate rather than the yield loop duration.
+        for (int i = 0; i < 2; i++) {
+          ctx->Yield();
+        }
+
+        // Throttled commit: same logic as main.cpp auto-commit.
+        // CommitConfig internally routes to hot-update for sun param changes.
+        auto now = std::chrono::steady_clock::now();
+        auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
+        if (commit_elapsed >= gui::kCommitIntervalMs) {
+          cumulative_rays += read_server_rays();
+          gui::g_state.dirty = false;
+          gui::DoRun();  // CommitConfig decides hot-update vs restart
+          last_commit = now;
+          restart_count++;
+        }
+      }
+      // Add rays from the final (non-restarted) segment
+      cumulative_rays += read_server_rays();
+
+      double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+
+      double rays_per_sec = elapsed > 0 ? static_cast<double>(cumulative_rays) / elapsed : 0;
+      fprintf(stderr, "[PERF] slider_drag: %.1f rays/sec (%lu rays in %.1fs)\n", rays_per_sec, cumulative_rays,
+              elapsed);
+      fprintf(stderr, "[PERF] slider_drag: %d param changes, %d restarts in %.1fs\n", iteration, restart_count,
+              elapsed);
+      IM_CHECK_GT(rays_per_sec, 0.0);
+
+      StopPerfSimulation();
+    };
+  }
+
+  // Scenario 3: Parameter drag that triggers full restart (non-lightweight change)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "perf_test", "slider_drag_restart");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      StartPerfSimulation();
+
+      // Wait for first batch of data
+      auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      while (gui::g_state.stats_sim_ray_num == 0) {
+        ctx->Yield();
+        if (std::chrono::steady_clock::now() > timeout) {
+          fprintf(stderr, "[PERF] ERROR: No simulation data after 10s\n");
+          break;
+        }
+      }
+
+      // Measure: alternate crystal height between 0.8 and 1.2 over 5 seconds.
+      // Crystal geometry change triggers full Stop/Start restart (not hot-update).
+      auto start_time = std::chrono::steady_clock::now();
+      auto end_time = start_time + std::chrono::seconds(5);
+      auto last_commit = start_time;
+      unsigned long cumulative_rays = 0;
+      int iteration = 0;
+      int restart_count = 0;
+
+      auto read_server_rays = [&]() -> unsigned long {
+        if (!gui::g_server)
+          return 0;
+        LUMICE_StatsResult stats[2]{};
+        LUMICE_GetStatsResults(gui::g_server, stats, 1);
+        return stats[0].sim_ray_num;
+      };
+
+      while (std::chrono::steady_clock::now() < end_time) {
+        if (!gui::g_state.crystals.empty()) {
+          gui::g_state.crystals[0].height = (iteration % 2 == 0) ? 0.8f : 1.2f;
+        }
+        gui::g_state.dirty = true;
+        iteration++;
+
+        for (int i = 0; i < 2; i++) {
+          ctx->Yield();
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
+        if (commit_elapsed >= gui::kCommitIntervalMs) {
+          cumulative_rays += read_server_rays();
+          gui::g_state.dirty = false;
+          gui::DoRun();  // Will trigger full restart (crystal geometry change)
+          last_commit = now;
+          restart_count++;
+        }
+      }
+      cumulative_rays += read_server_rays();
+
+      double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+
+      double rays_per_sec = elapsed > 0 ? static_cast<double>(cumulative_rays) / elapsed : 0;
+      fprintf(stderr, "[PERF] slider_drag_restart: %.1f rays/sec (%lu rays in %.1fs)\n", rays_per_sec, cumulative_rays,
+              elapsed);
+      fprintf(stderr, "[PERF] slider_drag_restart: %d param changes, %d restarts in %.1fs\n", iteration, restart_count,
+              elapsed);
+      IM_CHECK_GT(rays_per_sec, 0.0);
+
+      StopPerfSimulation();
+    };
+  }
+}
+
 int main(int /*argc*/, char** /*argv*/) {
   // GLFW init
   glfwSetErrorCallback(gui::GlfwErrorCallback);
@@ -1515,11 +1760,13 @@ int main(int /*argc*/, char** /*argv*/) {
   RegisterScreenshotTests(engine);
   RegisterVisualTests(engine);
   RegisterBgOverlayTests(engine);
+  RegisterPerfTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests);
 
   // Main loop — runs until all tests complete
   while (true) {
     glfwPollEvents();
+    gui::SyncFromPoller();  // Sync server data for perf tests (no-op when g_server is null)
 
     if (glfwWindowShouldClose(window)) {
       if (ImGuiTestEngine_TryAbortEngine(engine)) {

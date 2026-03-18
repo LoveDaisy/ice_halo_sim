@@ -19,7 +19,9 @@ class RenderConsumer : public IConsume {
 
   void Consume(const SimData& data) override;
   void PrepareSnapshot() override;
+  void PostSnapshot() override;
   Result GetResult() const override;
+  RawXyzResult GetRawXyzResult() const;
 
  private:
   RenderConfig config_;
@@ -30,7 +32,7 @@ class RenderConsumer : public IConsume {
   float snapshot_intensity_ = 0;
   std::unique_ptr<float[]> internal_xyz_;
   std::unique_ptr<float[]> snapshot_xyz_;
-  std::unique_ptr<uint8_t[]> image_buffer_;
+  std::unique_ptr<uint8_t[]> snapshot_image_buffer_;  // produced by PostSnapshot()
 
   // Pre-allocated Consume() buffers (grow-only)
   std::unique_ptr<float[]> d_buf_;

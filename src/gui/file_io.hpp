@@ -4,13 +4,18 @@
 #include <string>
 #include <vector>
 
+#include "include/lumice.h"
+
 namespace lumice::gui {
 
 struct GuiState;
 struct PreviewViewport;
 class PreviewRenderer;
 
-// Serialize GuiState to Core JSON format (for LUMICE_CommitConfig)
+// Fill LUMICE_Config C struct from GuiState (for LUMICE_CommitConfigStruct, bypasses JSON serialization)
+void FillLumiceConfig(const GuiState& state, LUMICE_Config* out);
+
+// Serialize GuiState to Core JSON string (for .lmc save and CLI compatibility)
 std::string SerializeCoreConfig(const GuiState& state);
 
 // Deserialize Core JSON string to GuiState, returns true on success

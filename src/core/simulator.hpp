@@ -24,7 +24,8 @@ using QueuePtrS = std::shared_ptr<Queue<T>>;
 
 struct SimBatch {
   size_t ray_num_ = 0;
-  const SceneConfig* scene_ = nullptr;
+  std::shared_ptr<const SceneConfig> scene_;
+  uint64_t generation_ = 0;
 };
 
 class Simulator {
@@ -54,7 +55,7 @@ class Simulator {
     RayBuffer init_data[2]{};
   };
   void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
-                             CrystalCache& crystal_cache, SimWorkspace& workspace);
+                             CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation);
 
   static constexpr size_t kSmallBatchRayNum = 32;
 

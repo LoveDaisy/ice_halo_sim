@@ -44,6 +44,7 @@ struct SimData {
   // ----- Data -----
   float curr_wl_;
   float total_intensity_;
+  uint64_t generation_ = 0;
   RayBuffer rays_;
   std::vector<Crystal> crystals_;
 };

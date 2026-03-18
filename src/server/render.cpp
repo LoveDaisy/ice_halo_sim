@@ -306,7 +306,7 @@ RenderConsumer::RenderConsumer(RenderConfig config)
                                                       config_.resolution_[1] * config_.resolution_[1])),
       internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
-      image_buffer_(std::make_unique<uint8_t[]>(config_.resolution_[0] * config_.resolution_[1] * 3)) {
+      snapshot_image_buffer_(std::make_unique<uint8_t[]>(config_.resolution_[0] * config_.resolution_[1] * 3)) {
   float ax_z[3]{ 0, 0, 1 };
   float ax_y[3]{ 0, 1, 0 };
   rot_.Chain({ ax_z, (-90.0f + config_.view_.ro_) * math::kDegreeToRad })
@@ -413,10 +413,15 @@ void RenderConsumer::PrepareSnapshot() {
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-Result RenderConsumer::GetResult() const {
+void RenderConsumer::PostSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
+  if (total_pix <= 0 || snapshot_intensity_ <= 0) {
+    std::memset(snapshot_image_buffer_.get(), 0, total_pix * 3);
+    return;
+  }
 
-  // Operate on snapshot_xyz_ in-place (destructive — see PrepareSnapshot contract).
+  // Work on snapshot_xyz_ in-place (destructive to snapshot_xyz_, but that's fine —
+  // PrepareSnapshot will overwrite it next time).
   float* float_data = snapshot_xyz_.get();
   for (int i = 0; i < total_pix * 3; i++) {
     float_data[i] *= config_.intensity_factor_ / snapshot_intensity_ * 1e5;
@@ -425,7 +430,6 @@ Result RenderConsumer::GetResult() const {
   bool use_real_color = config_.ray_color_[0] < 0;
   float gray[3];
   for (int i = 0; i < total_pix; i++) {
-    // Step 2. XYZ to linear RGB
     float* xyz = float_data + i * 3;
     for (int j = 0; j < 3; j++) {
       gray[j] = kWhitePointD65[j] * xyz[1];
@@ -466,13 +470,20 @@ Result RenderConsumer::GetResult() const {
     std::memcpy(float_data + i * 3, rgb, 3 * sizeof(float));
   }
 
-  // Step 3. Convert linear sRGB to sRGB
   SrgbGamma(float_data, 3 * total_pix);
 
   for (int i = 0; i < total_pix * 3; i++) {
-    image_buffer_[i] = static_cast<uint8_t>(float_data[i] * 255);
+    snapshot_image_buffer_[i] = static_cast<uint8_t>(float_data[i] * 255);
   }
-  return RenderResult{ config_.id_, config_.resolution_[0], config_.resolution_[1], image_buffer_.get() };
+}
+
+Result RenderConsumer::GetResult() const {
+  return RenderResult{ config_.id_, config_.resolution_[0], config_.resolution_[1], snapshot_image_buffer_.get() };
+}
+
+RawXyzResult RenderConsumer::GetRawXyzResult() const {
+  return { config_.id_,         config_.resolution_[0], config_.resolution_[1],
+           snapshot_xyz_.get(), snapshot_intensity_,    config_.intensity_factor_ };
 }
 
 }  // namespace lumice

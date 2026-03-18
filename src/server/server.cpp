@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <fstream>
@@ -31,8 +32,9 @@ class ServerImpl {
   ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json);
-  std::vector<RenderResult> GetRenderResults() const;
-  std::optional<StatsResult> GetStatsResult() const;
+  std::vector<RenderResult> GetRenderResults();
+  std::vector<RawXyzResult> GetRawXyzResults();
+  std::optional<StatsResult> GetStatsResult();
 
   void Stop();
   void Start();
@@ -46,6 +48,7 @@ class ServerImpl {
 
   void ConsumeData();
   void GenerateScene();
+  void DoSnapshot();
 
   ConfigManager config_manager_;
 
@@ -53,10 +56,20 @@ class ServerImpl {
   QueuePtrS<SimData> data_queue_;
 
   std::vector<Simulator> simulators_;
-  std::vector<ConsumerPtrU> consumers_;
-  mutable std::mutex consumer_mutex_;
+  std::vector<ConsumerPtrS> consumers_;
+  mutable std::mutex consumer_mutex_;  // Lock ordering: consumer_mutex_ < snapshot_mutex_
+  mutable std::mutex snapshot_mutex_;  // Protects cached results
+  bool snapshot_dirty_{ false };       // Set by ConsumeData, cleared by DoSnapshot
+
+  // Cached results under snapshot_mutex_ — populated by DoSnapshot, read by Get*Results
+  std::vector<RenderResult> cached_render_results_;
+  std::optional<StatsResult> cached_stats_result_;
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex_;
+
+  // Active scene and generation counter for batch staleness detection
+  std::shared_ptr<const SceneConfig> active_scene_;
+  std::atomic<uint64_t> scene_generation_{ 0 };
 
   std::atomic_bool stop_{ true };
   std::atomic_bool work_started_{ false };
@@ -91,6 +104,7 @@ ServerImpl::ServerImpl()
 
 
 Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
+  auto commit_start = std::chrono::steady_clock::now();
   ILOG_DEBUG(logger_, "CommitConfig: entry");
 
   // Parse into a temporary first so that a parse failure leaves the running server untouched.
@@ -127,8 +141,12 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     return Error::InvalidConfig("Unknown configuration error");
   }
 
-  // Stop all running threads before replacing config, so no simulator references stale data.
+  // Stop → rebuild consumers → Start
+  auto stop_start = std::chrono::steady_clock::now();
   Stop();
+  auto stop_end = std::chrono::steady_clock::now();
+  ILOG_INFO(logger_, "CommitConfig: Stop took {:.1f}ms",
+            std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
 
   config_manager_ = std::move(new_config);
 
@@ -136,51 +154,105 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   ILOG_DEBUG(logger_, "CommitConfig: setup consumers");
   consumers_.clear();
   for (const auto& [_, r] : config_manager_.renderers_) {
-    consumers_.emplace_back(std::make_unique<RenderConsumer>(r));
+    consumers_.emplace_back(std::make_shared<RenderConsumer>(r));
   }
-  consumers_.emplace_back(std::make_unique<StatsConsumer>());
+  consumers_.emplace_back(std::make_shared<StatsConsumer>());
+
+  auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
+  {
+    std::lock_guard<std::mutex> lock(scene_mutex_);
+    active_scene_ = std::move(new_scene);
+    scene_generation_.fetch_add(1);
+  }
 
   Start();
+
+  auto commit_end = std::chrono::steady_clock::now();
+  ILOG_INFO(logger_, "CommitConfig: restart took {:.1f}ms (Stop {:.1f}ms + rebuild + Start)",
+            std::chrono::duration<double, std::milli>(commit_end - commit_start).count(),
+            std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
 
   return Error::Success();
 }
 
 
-std::vector<RenderResult> ServerImpl::GetRenderResults() const {
-  // Phase 1: snapshot under lock
+void ServerImpl::DoSnapshot() {
+  // Phase 1: memcpy under consumer_mutex_ (short hold).
+  // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
+  std::vector<ConsumerPtrS> snapshot_consumers;
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
+    if (!snapshot_dirty_) {
+      return;
+    }
     for (const auto& c : consumers_) {
       c->PrepareSnapshot();
     }
+    snapshot_consumers = consumers_;  // shared_ptr copy keeps consumers alive
+    snapshot_dirty_ = false;
   }
-  // Phase 2: GetResult without lock
-  std::vector<RenderResult> results;
+  // Phase 2: XYZ→RGB + cache results under snapshot_mutex_ (no consumer_mutex_).
+  // Safe: snapshot_consumers holds shared_ptrs, objects won't be freed.
+  std::vector<RenderResult> render_results;
+  std::optional<StatsResult> stats_result;
+  {
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    for (const auto& c : snapshot_consumers) {
+      c->PostSnapshot();
+    }
+    for (const auto& c : snapshot_consumers) {
+      auto result = c->GetResult();
+      if (auto* r = std::get_if<RenderResult>(&result)) {
+        render_results.push_back(*r);
+      } else if (auto* s = std::get_if<StatsResult>(&result)) {
+        stats_result = *s;
+      }
+    }
+    cached_render_results_ = std::move(render_results);
+    cached_stats_result_ = stats_result;
+  }
+}
+
+std::vector<RenderResult> ServerImpl::GetRenderResults() {
+  DoSnapshot();
+  std::lock_guard<std::mutex> lock(snapshot_mutex_);
+  return cached_render_results_;
+}
+
+std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
+  // Only do Phase 1 (PrepareSnapshot memcpy), skip Phase 2 (PostSnapshot XYZ→RGB).
+  // The consumer_mutex_ protects PrepareSnapshot; we collect raw XYZ under snapshot_mutex_.
+  {
+    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    if (snapshot_dirty_) {
+      for (const auto& c : consumers_) {
+        c->PrepareSnapshot();
+      }
+      snapshot_dirty_ = false;
+    }
+  }
+  std::vector<RawXyzResult> results;
+  std::lock_guard<std::mutex> lock(snapshot_mutex_);
+  for (const auto& c : consumers_) {
+    auto* render_consumer = dynamic_cast<RenderConsumer*>(c.get());
+    if (render_consumer) {
+      results.push_back(render_consumer->GetRawXyzResult());
+    }
+  }
+  // Also update cached_stats_result_ for stats queries
   for (const auto& c : consumers_) {
     auto result = c->GetResult();
-    if (auto* render = std::get_if<RenderResult>(&result)) {
-      results.push_back(*render);
+    if (auto* s = std::get_if<StatsResult>(&result)) {
+      cached_stats_result_ = *s;
     }
   }
   return results;
 }
 
-std::optional<StatsResult> ServerImpl::GetStatsResult() const {
-  // Phase 1: snapshot under lock
-  {
-    std::lock_guard<std::mutex> lock(consumer_mutex_);
-    for (const auto& c : consumers_) {
-      c->PrepareSnapshot();
-    }
-  }
-  // Phase 2: GetResult without lock
-  for (const auto& c : consumers_) {
-    auto result = c->GetResult();
-    if (auto* stats = std::get_if<StatsResult>(&result)) {
-      return *stats;
-    }
-  }
-  return std::nullopt;
+std::optional<StatsResult> ServerImpl::GetStatsResult() {
+  DoSnapshot();
+  std::lock_guard<std::mutex> lock(snapshot_mutex_);
+  return cached_stats_result_;
 }
 
 
@@ -248,7 +320,6 @@ void ServerImpl::Stop() {
   }
 
   // Stop main working thread & scene dispatch thread.
-  // Must join these BEFORE clearing consumers, since ConsumeData accesses consumers_.
   ILOG_DEBUG(logger_, "Stop: waiting main worker & dispatcher stop.");
   if (consume_data_thread_.joinable()) {
     consume_data_thread_.join();
@@ -257,8 +328,11 @@ void ServerImpl::Stop() {
     generate_scene_thread_.join();
   }
 
-  consumers_.clear();
-
+  {
+    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    consumers_.clear();
+    snapshot_dirty_ = false;
+  }
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
     status_ = ServerStatus::kIdle;
@@ -313,6 +387,7 @@ bool ServerImpl::IsIdle() {
 
 void ServerImpl::ConsumeData() {
   ILOG_DEBUG(logger_, "ConsumeData: entry");
+  bool first_consume_logged = false;
   while (true) {
     CHECK_STOP
     auto sim_data = data_queue_->Get();
@@ -325,9 +400,20 @@ void ServerImpl::ConsumeData() {
     ILOG_DEBUG(logger_, "ConsumeData: get data: {}", fmt::ptr(&sim_data));
 
     if (sim_scene_cnt_ > 0) {
-      std::lock_guard<std::mutex> lock(consumer_mutex_);
-      for (auto& c : consumers_) {
-        c->Consume(sim_data);
+      // Generation check: discard batches from outdated configs
+      if (sim_data.generation_ != scene_generation_.load()) {
+        ILOG_DEBUG(logger_, "ConsumeData: discarding batch (generation {} != {})", sim_data.generation_,
+                   scene_generation_.load());
+      } else {
+        std::lock_guard<std::mutex> lock(consumer_mutex_);
+        for (auto& c : consumers_) {
+          c->Consume(sim_data);
+        }
+        snapshot_dirty_ = true;
+        if (!first_consume_logged) {
+          ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
+          first_consume_logged = true;
+        }
       }
     }
     sim_scene_cnt_--;
@@ -342,15 +428,28 @@ void ServerImpl::ConsumeData() {
 
 void ServerImpl::GenerateScene() {
   ILOG_DEBUG(logger_, "GenerateScene entry");
+  auto gen_start = std::chrono::steady_clock::now();
   work_started_ = true;
+  bool first_batch_logged = false;
 
-  const auto& scene = config_manager_.scene_;
-  auto ray_num = scene.ray_num_;
+  std::shared_ptr<const SceneConfig> scene;
+  uint64_t generation = 0;
+  {
+    std::lock_guard<std::mutex> lock(scene_mutex_);
+    scene = active_scene_;
+    generation = scene_generation_.load();
+  }
+  auto ray_num = scene->ray_num_;
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
     size_t batch_ray_num = std::min(kDefaultRayNum, ray_num - committed_num);
-    scene_queue_->Emplace(SimBatch{ batch_ray_num, &scene });
+    scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation });
     sim_scene_cnt_++;
+    if (!first_batch_logged) {
+      ILOG_INFO(logger_, "GenerateScene: first batch enqueued at {:.1f}ms after start",
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gen_start).count());
+      first_batch_logged = true;
+    }
 
     ILOG_DEBUG(logger_, "GenerateScene: put a scene: ray({}/{}, {})", batch_ray_num, ray_num, committed_num);
     CHECK_STOP
@@ -382,13 +481,20 @@ void ServerImpl::SetLogLevel(LogLevel level) {
 // =============== Server ===============
 Server::Server() : impl_(std::make_shared<ServerImpl>()) {}
 
+Error Server::CommitConfig(const nlohmann::json& config_json) {
+  if (!impl_) {
+    return Error::ServerNotReady("Server is terminated");
+  }
+  return impl_->CommitConfig(config_json);
+}
+
 Error Server::CommitConfig(const std::string& config_str) {
   if (!impl_) {
     return Error::ServerNotReady("Server is terminated");
   }
   try {
     auto config_json = nlohmann::json::parse(config_str);
-    return impl_->CommitConfig(config_json);
+    return CommitConfig(config_json);
   } catch (const nlohmann::json::parse_error& e) {
     ILOG_ERROR(impl_->GetLogger(), "CommitConfig: JSON parse error: {}", e.what());
     return Error::InvalidJson(e.what());
@@ -419,7 +525,7 @@ Error Server::CommitConfigFromFile(const std::string& filename) {
   }
 }
 
-std::vector<RenderResult> Server::GetRenderResults() const {
+std::vector<RenderResult> Server::GetRenderResults() {
   if (!impl_) {
     LOG_WARNING("Server is terminated!");
     return {};
@@ -427,7 +533,15 @@ std::vector<RenderResult> Server::GetRenderResults() const {
   return impl_->GetRenderResults();
 }
 
-std::optional<StatsResult> Server::GetStatsResult() const {
+std::vector<RawXyzResult> Server::GetRawXyzResults() {
+  if (!impl_) {
+    LOG_WARNING("Server is terminated!");
+    return {};
+  }
+  return impl_->GetRawXyzResults();
+}
+
+std::optional<StatsResult> Server::GetStatsResult() {
   if (!impl_) {
     LOG_WARNING("Server is terminated!");
     return std::nullopt;

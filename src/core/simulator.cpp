@@ -430,7 +430,11 @@ void Simulator::Run() {
       break;
     }
 
+    if (!batch.scene_) {
+      break;
+    }
     const auto& config = *batch.scene_;
+    auto generation = batch.generation_;
     idle_ = false;
 
     const auto& spectrum = config.light_source_.spectrum_;
@@ -438,7 +442,7 @@ void Simulator::Run() {
       // Standard illuminant: uniform wavelength sampling + SPD weight
       float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
       float weight = GetIlluminantSpd(*illuminant, wl);
-      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_, crystal_cache, workspace);
+      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_, crystal_cache, workspace, generation);
     } else {
       // Discrete wavelength list
       const auto& wl_params = std::get<std::vector<WlParam>>(spectrum);
@@ -446,7 +450,7 @@ void Simulator::Run() {
         if (stop_) {
           break;
         }
-        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace);
+        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation);
       }
     }
 
@@ -456,7 +460,7 @@ void Simulator::Run() {
 
 
 void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
-                                      CrystalCache& crystal_cache, SimWorkspace& workspace) {
+                                      CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation) {
   ILOG_DEBUG(logger_, "Run: get config: ray({}), wl({:.1f},{:.2f})",  //
              ray_num, wl_param.wl_, wl_param.weight_);
 
@@ -581,6 +585,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   SimData sim_data;
   sim_data.curr_wl_ = wl;
   sim_data.total_intensity_ = wl_param.weight_ * original_ray_num;
+  sim_data.generation_ = generation;
   sim_data.crystals_ = std::move(all_crystals);
   sim_data.rays_ = std::move(all_data);
   data_queue_->Emplace(std::move(sim_data));

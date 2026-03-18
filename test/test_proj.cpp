@@ -52,7 +52,7 @@ class Consumer {
  public:
   Consumer(lumice::QueuePtrS<lumice::SimData> data_queue) : data_queue_(data_queue), stop_(false) {}
 
-  void RegisterConsumer(lumice::ConsumerPtrU consumer) { consumers_.emplace_back(std::move(consumer)); }
+  void RegisterConsumer(lumice::ConsumerPtrS consumer) { consumers_.emplace_back(std::move(consumer)); }
 
   void Run() {
     while (true) {
@@ -73,7 +73,7 @@ class Consumer {
   void Stop() { stop_ = true; }
 
  private:
-  std::vector<lumice::ConsumerPtrU> consumers_;
+  std::vector<lumice::ConsumerPtrS> consumers_;
   lumice::QueuePtrS<lumice::SimData> data_queue_;
   std::atomic_bool stop_;
 };
@@ -98,7 +98,8 @@ TEST_F(V3TestProj, SimpleProj) {
   std::thread cons_thread([&consumer]() { consumer.Run(); });
 
   const auto& config = config_manager.scene_;
-  config_queue->Emplace(lumice::SimBatch{ config.ray_num_, &config });
+  auto scene_ptr = std::make_shared<const lumice::SceneConfig>(config);
+  config_queue->Emplace(lumice::SimBatch{ config.ray_num_, scene_ptr, 0 });
 
   std::this_thread::sleep_for(500ms);
   simulator.Stop();

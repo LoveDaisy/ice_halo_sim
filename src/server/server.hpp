@@ -2,6 +2,7 @@
 #define INCLUDE_SERVER_H_
 
 #include <memory>
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <string>
 #include <variant>
@@ -128,6 +129,15 @@ struct RenderResult {
   }
 };
 
+struct RawXyzResult {
+  int renderer_id_;
+  int img_width_;
+  int img_height_;
+  const float* xyz_buffer_;  // Points to snapshot_xyz_ (not color-converted)
+  float snapshot_intensity_;
+  float intensity_factor_;
+};
+
 struct StatsResult {
   size_t ray_seg_num_;
   size_t sim_ray_num_;
@@ -180,6 +190,13 @@ class Server {
   Error CommitConfig(const std::string& config_str);
 
   /**
+   * @brief Commit configuration from parsed JSON object (skips string parse overhead)
+   * @param config_json Parsed JSON object
+   * @return Error object indicating success or failure
+   */
+  Error CommitConfig(const nlohmann::json& config_json);
+
+  /**
    * @brief Commit configuration from file
    * @param filename Path to JSON configuration file
    * @return Error object indicating success or failure
@@ -200,7 +217,13 @@ class Server {
    * @note This is a non-blocking call. It returns immediately even if processing is ongoing.
    * @note Only returns RenderResult entries, filters out other result types
    */
-  std::vector<RenderResult> GetRenderResults() const;
+  std::vector<RenderResult> GetRenderResults();
+
+  /**
+   * @brief Get raw XYZ results (unconverted float data for GPU-side processing)
+   * @return Vector of RawXyzResult. Empty if no render consumers.
+   */
+  std::vector<RawXyzResult> GetRawXyzResults();
 
   /**
    * @brief Get statistics result
@@ -208,7 +231,7 @@ class Server {
    * @note This is a non-blocking call. It returns immediately even if processing is ongoing.
    * @note Only returns StatsResult if available, otherwise returns std::nullopt
    */
-  std::optional<StatsResult> GetStatsResult() const;
+  std::optional<StatsResult> GetStatsResult();
 
   /**
    * @brief Stop the server

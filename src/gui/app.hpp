@@ -1,7 +1,9 @@
 #ifndef LUMICE_GUI_APP_HPP
 #define LUMICE_GUI_APP_HPP
 
+#include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
+#include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/preview_renderer.hpp"
 #include "gui/server_poller.hpp"
@@ -10,15 +12,6 @@
 struct GLFWwindow;
 
 namespace lumice::gui {
-
-// Layout constants
-constexpr int kInitWindowWidth = 1280;
-constexpr int kInitWindowHeight = 720;
-constexpr int kMinWindowWidth = 800;
-constexpr int kMinWindowHeight = 600;
-constexpr float kLeftPanelWidth = 380.0f;
-constexpr float kTopBarHeight = 40.0f;
-constexpr float kStatusBarHeight = 28.0f;
 
 // Stored preview viewport for deferred rendering (after ImGui::Render)
 struct PreviewViewport {
@@ -41,13 +34,6 @@ extern ServerPoller g_server_poller;
 extern bool g_panel_collapsed;
 extern PreviewViewport g_preview_vp;
 
-// Crystal preview trackball state
-extern float g_crystal_rotation[16];
-extern float g_crystal_zoom;
-extern int g_crystal_style;
-extern int g_crystal_mesh_id;
-extern int g_crystal_mesh_hash;
-
 // Aspect ratio state
 extern int g_programmatic_resize;  // Counter: decremented by WindowSizeCallback, set by ApplyAspectRatio
 extern float g_aspect_bar_height;  // Cached actual height from ImGui layout
@@ -63,11 +49,6 @@ void WindowSizeCallback(GLFWwindow* window, int width, int height);
 // Aspect ratio helpers
 float GetAspectRatio(AspectPreset preset);
 void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, float override_ratio = 0.0f);
-
-// Crystal preview helpers
-int CrystalParamHash(const CrystalConfig& c);
-void ResetCrystalView();
-void ApplyTrackballRotation(float dx, float dy);
 
 // Business operations
 void DoSave();

@@ -1,9 +1,7 @@
 #ifndef CONSUMER_CONSUMER_H_
 #define CONSUMER_CONSUMER_H_
 
-#include <atomic>
 #include <memory>
-#include <vector>
 
 #include "config/sim_data.hpp"
 #include "server/server.hpp"
@@ -35,17 +33,18 @@ class IConsume {
   virtual void Consume(const SimData& data) = 0;
 
   /**
-   * @brief Prepare a snapshot of the current state for lock-free reading.
-   * @details Called under consumer_mutex_ to create a consistent snapshot. After calling
-   *          PrepareSnapshot(), the caller may invoke GetResult() without holding the lock.
-   *
-   * Contract:
-   * - PrepareSnapshot() must be called before GetResult() to ensure correct data.
-   * - After each PrepareSnapshot(), GetResult() may only be called once, as it may
-   *   destructively modify the snapshot data.
-   * - Default implementation is empty (no-op), suitable for consumers that don't need snapshotting.
+   * @brief Prepare a snapshot of the current state.
+   * @details Called under consumer_mutex_ to create a consistent snapshot (memcpy).
+   *          Default implementation is empty (no-op), suitable for consumers that don't need snapshotting.
    */
   virtual void PrepareSnapshot() {}
+
+  /**
+   * @brief Post-process snapshot data (e.g., XYZ→RGB conversion).
+   * @details Called under snapshot_mutex_ (NOT consumer_mutex_) after PrepareSnapshot().
+   *          Default implementation is empty (no-op).
+   */
+  virtual void PostSnapshot() {}
 
   /**
    * @brief Get processing result
@@ -56,7 +55,6 @@ class IConsume {
   virtual Result GetResult() const { return NoneResult{}; }
 };
 
-using ConsumerPtrU = std::unique_ptr<IConsume>;
 using ConsumerPtrS = std::shared_ptr<IConsume>;
 
 }  // namespace lumice
