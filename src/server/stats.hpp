@@ -11,7 +11,6 @@ namespace lumice {
 class StatsConsumer : public IConsume {
  public:
   void Consume(const SimData& data) override;
-  void ResetAccumulation() override;
   void PrepareSnapshot() override;
   Result GetResult() const override;
 

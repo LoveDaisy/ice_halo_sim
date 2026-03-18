@@ -13,7 +13,6 @@
 #include <thread>
 #include <vector>
 
-#include "config/config_compare.hpp"
 #include "config/config_manager.hpp"
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
@@ -50,7 +49,6 @@ class ServerImpl {
   void ConsumeData();
   void GenerateScene();
   void DoSnapshot();
-  static bool IsLightweightChange(const ConfigManager& old_cfg, const ConfigManager& new_cfg);
 
   ConfigManager config_manager_;
 
@@ -69,8 +67,8 @@ class ServerImpl {
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex_;
 
-  // Hot config: active scene and generation counter
-  std::shared_ptr<const SceneConfig> active_scene_;  // Protected by scene_mutex_ (reuse existing)
+  // Active scene and generation counter for batch staleness detection
+  std::shared_ptr<const SceneConfig> active_scene_;
   std::atomic<uint64_t> scene_generation_{ 0 };
 
   std::atomic_bool stop_{ true };
@@ -93,14 +91,6 @@ class ServerImpl {
 };
 
 const int ServerImpl::kDefaultSimulatorCnt = std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 2);
-
-
-// Whitelist approach: only sun params and scatter probabilities can be hot-updated.
-// Everything else forces a full restart.
-// Compares non-lightweight fields directly (no JSON serialization overhead).
-bool ServerImpl::IsLightweightChange(const ConfigManager& old_cfg, const ConfigManager& new_cfg) {
-  return ConfigEqualExceptLightweight(old_cfg, new_cfg);
-}
 
 
 ServerImpl::ServerImpl()
@@ -151,72 +141,36 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     return Error::InvalidConfig("Unknown configuration error");
   }
 
-  // Check if this is a lightweight change that can be hot-updated without Stop/Start
-  bool is_running = !stop_;
-  bool lightweight = false;
-  if (is_running) {
-    try {
-      lightweight = IsLightweightChange(config_manager_, new_config);
-    } catch (const std::exception& e) {
-      ILOG_DEBUG(logger_, "CommitConfig: IsLightweightChange failed ({}), using restart path", e.what());
-    } catch (...) {
-      ILOG_DEBUG(logger_, "CommitConfig: IsLightweightChange failed, using restart path");
-    }
+  // Stop → rebuild consumers → Start
+  auto stop_start = std::chrono::steady_clock::now();
+  Stop();
+  auto stop_end = std::chrono::steady_clock::now();
+  ILOG_INFO(logger_, "CommitConfig: Stop took {:.1f}ms",
+            std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
+
+  config_manager_ = std::move(new_config);
+
+  // Setup consumers from project config.
+  ILOG_DEBUG(logger_, "CommitConfig: setup consumers");
+  consumers_.clear();
+  for (const auto& [_, r] : config_manager_.renderers_) {
+    consumers_.emplace_back(std::make_shared<RenderConsumer>(r));
+  }
+  consumers_.emplace_back(std::make_shared<StatsConsumer>());
+
+  auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
+  {
+    std::lock_guard<std::mutex> lock(scene_mutex_);
+    active_scene_ = std::move(new_scene);
+    scene_generation_.fetch_add(1);
   }
 
-  if (lightweight) {
-    // Hot update path: no Stop/Start, just reset consumers and swap config
-    ILOG_INFO(logger_, "CommitConfig: hot update (lightweight change)");
-    {
-      std::lock_guard<std::mutex> lock(consumer_mutex_);
-      for (auto& c : consumers_) {
-        c->ResetAccumulation();
-      }
-      snapshot_dirty_ = true;  // Push cleared state to snapshot
-    }
-    config_manager_ = std::move(new_config);
-    auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
-    {
-      std::lock_guard<std::mutex> lock(scene_mutex_);
-      active_scene_ = std::move(new_scene);
-      scene_generation_.fetch_add(1);
-    }
+  Start();
 
-    auto commit_end = std::chrono::steady_clock::now();
-    ILOG_INFO(logger_, "CommitConfig: hot update took {:.1f}ms",
-              std::chrono::duration<double, std::milli>(commit_end - commit_start).count());
-  } else {
-    // Full restart path: Stop → rebuild consumers → Start
-    auto stop_start = std::chrono::steady_clock::now();
-    Stop();
-    auto stop_end = std::chrono::steady_clock::now();
-    ILOG_INFO(logger_, "CommitConfig: Stop took {:.1f}ms",
-              std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
-
-    config_manager_ = std::move(new_config);
-
-    // Setup consumers from project config.
-    ILOG_DEBUG(logger_, "CommitConfig: setup consumers");
-    consumers_.clear();
-    for (const auto& [_, r] : config_manager_.renderers_) {
-      consumers_.emplace_back(std::make_shared<RenderConsumer>(r));
-    }
-    consumers_.emplace_back(std::make_shared<StatsConsumer>());
-
-    auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
-    {
-      std::lock_guard<std::mutex> lock(scene_mutex_);
-      active_scene_ = std::move(new_scene);
-      scene_generation_.fetch_add(1);
-    }
-
-    Start();
-
-    auto commit_end = std::chrono::steady_clock::now();
-    ILOG_INFO(logger_, "CommitConfig: restart took {:.1f}ms (Stop {:.1f}ms + rebuild + Start)",
-              std::chrono::duration<double, std::milli>(commit_end - commit_start).count(),
-              std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
-  }
+  auto commit_end = std::chrono::steady_clock::now();
+  ILOG_INFO(logger_, "CommitConfig: restart took {:.1f}ms (Stop {:.1f}ms + rebuild + Start)",
+            std::chrono::duration<double, std::milli>(commit_end - commit_start).count(),
+            std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
 
   return Error::Success();
 }
@@ -488,12 +442,6 @@ void ServerImpl::GenerateScene() {
   auto ray_num = scene->ray_num_;
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
-    // Read latest scene + generation atomically (hot config may update both)
-    {
-      std::lock_guard<std::mutex> lock(scene_mutex_);
-      scene = active_scene_;
-      generation = scene_generation_.load();
-    }
     size_t batch_ray_num = std::min(kDefaultRayNum, ray_num - committed_num);
     scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation });
     sim_scene_cnt_++;

@@ -127,44 +127,6 @@ inline bool operator==(const ConfigManager& a, const ConfigManager& b) {
   return a.crystals_ == b.crystals_ && a.filters_ == b.filters_ && a.renderers_ == b.renderers_ && a.scene_ == b.scene_;
 }
 
-// ---- Lightweight comparison (for hot-update detection) ----
-// Compares everything EXCEPT lightweight fields:
-//   - SunParam (altitude, azimuth, diameter)
-//   - MsInfo::prob_
-
-inline bool LightSourceEqualExceptSun(const LightSourceConfig& a, const LightSourceConfig& b) {
-  // Only compare spectrum (sun params are lightweight)
-  return a.spectrum_ == b.spectrum_;
-}
-
-inline bool MsInfoEqualExceptProb(const MsInfo& a, const MsInfo& b) {
-  // Skip prob_ (lightweight), compare settings
-  return a.setting_ == b.setting_;
-}
-
-inline bool SceneEqualExceptLightweight(const SceneConfig& a, const SceneConfig& b) {
-  if (a.ray_num_ != b.ray_num_ || a.max_hits_ != b.max_hits_) {
-    return false;
-  }
-  if (!LightSourceEqualExceptSun(a.light_source_, b.light_source_)) {
-    return false;
-  }
-  if (a.ms_.size() != b.ms_.size()) {
-    return false;
-  }
-  for (size_t i = 0; i < a.ms_.size(); ++i) {
-    if (!MsInfoEqualExceptProb(a.ms_[i], b.ms_[i])) {
-      return false;
-    }
-  }
-  return true;
-}
-
-inline bool ConfigEqualExceptLightweight(const ConfigManager& a, const ConfigManager& b) {
-  return a.crystals_ == b.crystals_ && a.filters_ == b.filters_ && a.renderers_ == b.renderers_ &&
-         SceneEqualExceptLightweight(a.scene_, b.scene_);
-}
-
 }  // namespace lumice
 
 #endif  // CONFIG_CONFIG_COMPARE_H_

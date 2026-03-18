@@ -1,9 +1,7 @@
 #ifndef CONSUMER_CONSUMER_H_
 #define CONSUMER_CONSUMER_H_
 
-#include <atomic>
 #include <memory>
-#include <vector>
 
 #include "config/sim_data.hpp"
 #include "server/server.hpp"
@@ -33,15 +31,6 @@ class IConsume {
    * @note This method is called by the server for each simulation data batch
    */
   virtual void Consume(const SimData& data) = 0;
-
-  /**
-   * @brief Reset accumulated data to zero.
-   * @details Called under consumer_mutex_ during hot config updates.
-   *          Implementations must clear all accumulated simulation data (e.g., internal_xyz_,
-   *          total_intensity_, ray counters) so that subsequent Consume() calls start fresh.
-   *          Default implementation is empty (no-op), suitable for stateless consumers.
-   */
-  virtual void ResetAccumulation() {}
 
   /**
    * @brief Prepare a snapshot of the current state.

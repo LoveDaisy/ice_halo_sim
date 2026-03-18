@@ -14,12 +14,6 @@ void StatsConsumer::Consume(const SimData& data) {
   crystals_ += data.crystals_.size();
 }
 
-void StatsConsumer::ResetAccumulation() {
-  total_rays_ = 0;
-  sim_rays_ = 0;
-  crystals_ = 0;
-}
-
 void StatsConsumer::PrepareSnapshot() {
   snapshot_total_rays_ = total_rays_;
   snapshot_sim_rays_ = sim_rays_;
