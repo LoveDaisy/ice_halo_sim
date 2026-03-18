@@ -52,7 +52,7 @@ class Consumer {
  public:
   Consumer(lumice::QueuePtrS<lumice::SimData> data_queue) : data_queue_(data_queue), stop_(false) {}
 
-  void RegisterConsumer(lumice::ConsumerPtrU consumer) { consumers_.emplace_back(std::move(consumer)); }
+  void RegisterConsumer(lumice::ConsumerPtrS consumer) { consumers_.emplace_back(std::move(consumer)); }
 
   void Run() {
     while (true) {
@@ -73,7 +73,7 @@ class Consumer {
   void Stop() { stop_ = true; }
 
  private:
-  std::vector<lumice::ConsumerPtrU> consumers_;
+  std::vector<lumice::ConsumerPtrS> consumers_;
   lumice::QueuePtrS<lumice::SimData> data_queue_;
   std::atomic_bool stop_;
 };

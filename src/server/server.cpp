@@ -220,8 +220,8 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     {
       std::lock_guard<std::mutex> lock(scene_mutex_);
       active_scene_ = std::move(new_scene);
+      scene_generation_.fetch_add(1);
     }
-    scene_generation_.fetch_add(1);
 
     auto commit_end = std::chrono::steady_clock::now();
     ILOG_INFO(logger_, "CommitConfig: hot update took {:.1f}ms",
@@ -248,8 +248,8 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     {
       std::lock_guard<std::mutex> lock(scene_mutex_);
       active_scene_ = std::move(new_scene);
+      scene_generation_.fetch_add(1);
     }
-    scene_generation_.fetch_add(1);
 
     Start();
 
@@ -285,9 +285,7 @@ void ServerImpl::DoSnapshot() {
   {
     std::lock_guard<std::mutex> lock(snapshot_mutex_);
     for (const auto& c : snapshot_consumers) {
-      if (auto* render = dynamic_cast<RenderConsumer*>(c.get())) {
-        render->RenderSnapshot();
-      }
+      c->PostSnapshot();
     }
     for (const auto& c : snapshot_consumers) {
       auto result = c->GetResult();
@@ -492,20 +490,21 @@ void ServerImpl::GenerateScene() {
   bool first_batch_logged = false;
 
   std::shared_ptr<const SceneConfig> scene;
+  uint64_t generation = 0;
   {
     std::lock_guard<std::mutex> lock(scene_mutex_);
     scene = active_scene_;
+    generation = scene_generation_.load();
   }
   auto ray_num = scene->ray_num_;
-  auto generation = scene_generation_.load();
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
-    // Read latest scene each iteration (hot config may have updated it)
+    // Read latest scene + generation atomically (hot config may update both)
     {
       std::lock_guard<std::mutex> lock(scene_mutex_);
       scene = active_scene_;
+      generation = scene_generation_.load();
     }
-    generation = scene_generation_.load();
     size_t batch_ray_num = std::min(kDefaultRayNum, ray_num - committed_num);
     scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation });
     sim_scene_cnt_++;

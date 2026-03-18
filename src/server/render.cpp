@@ -306,7 +306,6 @@ RenderConsumer::RenderConsumer(RenderConfig config)
                                                       config_.resolution_[1] * config_.resolution_[1])),
       internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
-      image_buffer_(std::make_unique<uint8_t[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_image_buffer_(std::make_unique<uint8_t[]>(config_.resolution_[0] * config_.resolution_[1] * 3)) {
   float ax_z[3]{ 0, 0, 1 };
   float ax_y[3]{ 0, 1, 0 };
@@ -420,7 +419,7 @@ void RenderConsumer::PrepareSnapshot() {
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void RenderConsumer::RenderSnapshot() {
+void RenderConsumer::PostSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   if (total_pix <= 0 || snapshot_intensity_ <= 0) {
     std::memset(snapshot_image_buffer_.get(), 0, total_pix * 3);
