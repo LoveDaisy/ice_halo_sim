@@ -383,18 +383,12 @@ void DoRun() {
   }
   auto json_str = SerializeCoreConfig(g_state);
   g_state.last_committed_json = json_str;
-  // Check if server was idle before commit (determines whether poller needs restart)
-  LUMICE_ServerState pre_state{};
-  LUMICE_QueryServerState(g_server, &pre_state);
   auto err = LUMICE_CommitConfig(g_server, json_str.c_str());
   if (err == LUMICE_OK) {
     g_state.sim_state = SimState::kSimulating;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
-    // Only restart poller if it wasn't already running (hot update keeps it alive)
-    if (pre_state != LUMICE_SERVER_RUNNING) {
-      g_server_poller.Start(g_server);
-    }
+    g_server_poller.Start(g_server);  // Always restart: restart path stops server briefly
   } else {
     fprintf(stderr, "[GUI] CommitConfig FAILED with error code %d\n", err);
   }

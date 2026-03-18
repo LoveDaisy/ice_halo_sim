@@ -125,14 +125,15 @@ bool ServerImpl::IsLightweightChange(const ConfigManager& old_cfg, const ConfigM
   to_json(new_j, new_cfg);
 
   auto strip_lightweight = [](nlohmann::json& j) {
-    if (j.contains("sun")) {
-      j["sun"].erase("altitude");
-      j["sun"].erase("azimuth");
-      j["sun"].erase("diameter");
+    if (j.contains("scene") && j["scene"].contains("light_source")) {
+      auto& ls = j["scene"]["light_source"];
+      ls.erase("altitude");
+      ls.erase("azimuth");
+      ls.erase("diameter");
     }
-    if (j.contains("multi_scatter")) {
-      for (auto& ms : j["multi_scatter"]) {
-        ms.erase("prob");
+    if (j.contains("scene") && j["scene"].contains("scattering")) {
+      for (auto& layer : j["scene"]["scattering"]) {
+        layer.erase("prob");
       }
     }
   };

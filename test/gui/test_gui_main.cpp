@@ -1458,13 +1458,26 @@ static const char* CreatePerfConfig() {
 static void StartPerfSimulation() {
   gui::g_server = LUMICE_CreateServer();
   LUMICE_InitLogger(gui::g_server);
-  auto err = LUMICE_CommitConfig(gui::g_server, CreatePerfConfig());
-  if (err != LUMICE_OK) {
-    fprintf(stderr, "[PERF] ERROR: CommitConfig failed with code %d\n", err);
-    return;
+
+  // Set up g_state to match perf config, then use DoRun() so the server's
+  // config_manager_ is populated from the same SerializeCoreConfig path.
+  // This ensures IsLightweightChange compares same-format JSONs.
+  gui::g_state.sun.altitude = 20.0f;
+  gui::g_state.sun.azimuth = 0.0f;
+  gui::g_state.sun.diameter = 0.5f;
+  gui::g_state.sun.spectrum_index = 2;  // D65
+  gui::g_state.sim.infinite = true;
+  gui::g_state.sim.max_hits = 8;
+  if (!gui::g_state.renderers.empty()) {
+    auto& r = gui::g_state.renderers[0];
+    r.lens_type = 7;  // Rectangular
+    r.fov = 180.0f;
+    r.sim_resolution_index = 1;  // 1024
+    r.visible = 2;               // Full
+    r.background[0] = r.background[1] = r.background[2] = 0.0f;
+    r.exposure_offset = 0.0f;
   }
-  gui::g_state.sim_state = gui::GuiState::SimState::kSimulating;
-  gui::g_server_poller.Start(gui::g_server);
+  gui::DoRun();
 }
 
 static void StopPerfSimulation() {
