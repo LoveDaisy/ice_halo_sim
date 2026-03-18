@@ -56,7 +56,7 @@ class ServerImpl {
   QueuePtrS<SimData> data_queue_;
 
   std::vector<Simulator> simulators_;
-  std::vector<ConsumerPtrU> consumers_;
+  std::vector<ConsumerPtrS> consumers_;
   mutable std::mutex consumer_mutex_;  // Lock ordering: consumer_mutex_ < snapshot_mutex_
   mutable std::mutex snapshot_mutex_;  // Protects cached results
   bool snapshot_dirty_{ false };       // Set by ConsumeData, cleared by DoSnapshot
@@ -240,9 +240,9 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     ILOG_DEBUG(logger_, "CommitConfig: setup consumers");
     consumers_.clear();
     for (const auto& [_, r] : config_manager_.renderers_) {
-      consumers_.emplace_back(std::make_unique<RenderConsumer>(r));
+      consumers_.emplace_back(std::make_shared<RenderConsumer>(r));
     }
-    consumers_.emplace_back(std::make_unique<StatsConsumer>());
+    consumers_.emplace_back(std::make_shared<StatsConsumer>());
 
     auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
     {
@@ -264,11 +264,9 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
 
 
 void ServerImpl::DoSnapshot() {
-  // All consumer access under consumer_mutex_ to prevent use-after-free
-  // (poller thread calls DoSnapshot while GUI thread may clear consumers_ in Stop()).
-  // Then cache results under snapshot_mutex_ for lock-free reading.
-  std::vector<RenderResult> render_results;
-  std::optional<StatsResult> stats_result;
+  // Phase 1: memcpy under consumer_mutex_ (short hold).
+  // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
+  std::vector<ConsumerPtrS> snapshot_consumers;
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
     if (!snapshot_dirty_) {
@@ -277,12 +275,21 @@ void ServerImpl::DoSnapshot() {
     for (const auto& c : consumers_) {
       c->PrepareSnapshot();
     }
-    for (const auto& c : consumers_) {
+    snapshot_consumers = consumers_;  // shared_ptr copy keeps consumers alive
+    snapshot_dirty_ = false;
+  }
+  // Phase 2: XYZ→RGB + cache results under snapshot_mutex_ (no consumer_mutex_).
+  // Safe: snapshot_consumers holds shared_ptrs, objects won't be freed.
+  std::vector<RenderResult> render_results;
+  std::optional<StatsResult> stats_result;
+  {
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    for (const auto& c : snapshot_consumers) {
       if (auto* render = dynamic_cast<RenderConsumer*>(c.get())) {
         render->RenderSnapshot();
       }
     }
-    for (const auto& c : consumers_) {
+    for (const auto& c : snapshot_consumers) {
       auto result = c->GetResult();
       if (auto* r = std::get_if<RenderResult>(&result)) {
         render_results.push_back(*r);
@@ -290,11 +297,6 @@ void ServerImpl::DoSnapshot() {
         stats_result = *s;
       }
     }
-    snapshot_dirty_ = false;
-  }
-  // Publish results under snapshot_mutex_
-  {
-    std::lock_guard<std::mutex> lock(snapshot_mutex_);
     cached_render_results_ = std::move(render_results);
     cached_stats_result_ = stats_result;
   }
