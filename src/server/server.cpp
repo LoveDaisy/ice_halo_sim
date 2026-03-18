@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include "config/config_compare.hpp"
 #include "config/config_manager.hpp"
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
@@ -95,52 +96,9 @@ const int ServerImpl::kDefaultSimulatorCnt = std::max(1, static_cast<int>(std::t
 
 // Whitelist approach: only sun params and scatter probabilities can be hot-updated.
 // Everything else forces a full restart.
-// Uses JSON serialization to compare structural fields (strips whitelist fields before comparison).
-// Both configs must come from the same parsing path for reliable comparison.
+// Compares non-lightweight fields directly (no JSON serialization overhead).
 bool ServerImpl::IsLightweightChange(const ConfigManager& old_cfg, const ConfigManager& new_cfg) {
-  // Quick structural size checks
-  if (old_cfg.crystals_.size() != new_cfg.crystals_.size()) {
-    return false;
-  }
-  if (old_cfg.renderers_.size() != new_cfg.renderers_.size()) {
-    return false;
-  }
-  if (old_cfg.filters_.size() != new_cfg.filters_.size()) {
-    return false;
-  }
-  const auto& old_s = old_cfg.scene_;
-  const auto& new_s = new_cfg.scene_;
-  if (old_s.ms_.size() != new_s.ms_.size()) {
-    return false;
-  }
-  if (old_s.ray_num_ != new_s.ray_num_ || old_s.max_hits_ != new_s.max_hits_) {
-    return false;
-  }
-
-  // Compare full configs via JSON, stripping lightweight fields.
-  // Both configs were parsed by the same from_json path, so serialization is consistent.
-  nlohmann::json old_j;
-  nlohmann::json new_j;
-  to_json(old_j, old_cfg);
-  to_json(new_j, new_cfg);
-
-  auto strip_lightweight = [](nlohmann::json& j) {
-    if (j.contains("scene") && j["scene"].contains("light_source")) {
-      auto& ls = j["scene"]["light_source"];
-      ls.erase("altitude");
-      ls.erase("azimuth");
-      ls.erase("diameter");
-    }
-    if (j.contains("scene") && j["scene"].contains("scattering")) {
-      for (auto& layer : j["scene"]["scattering"]) {
-        layer.erase("prob");
-      }
-    }
-  };
-  strip_lightweight(old_j);
-  strip_lightweight(new_j);
-
-  return old_j == new_j;
+  return ConfigEqualExceptLightweight(old_cfg, new_cfg);
 }
 
 
