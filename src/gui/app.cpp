@@ -136,6 +136,19 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   }
 }
 
+// Ensure CPU-side sRGB uint8 texture is available for .lmc save.
+// When in XYZ mode, tex_data_ is stale — refresh via old CPU-conversion API.
+static void RefreshCpuTextureForSave() {
+  if (!g_server || g_state.sim_state == SimState::kIdle) {
+    return;  // No simulation data to refresh
+  }
+  LUMICE_RenderResult renders[2]{};
+  LUMICE_GetRenderResults(g_server, renders, 1);
+  if (renders[0].img_buffer != nullptr) {
+    g_preview.UploadTexture(renders[0].img_buffer, renders[0].img_width, renders[0].img_height);
+  }
+}
+
 void DoSave() {
   if (g_state.current_file_path.empty()) {
     g_state.current_file_path = ShowSaveDialog();
@@ -143,6 +156,7 @@ void DoSave() {
       return;
     }
   }
+  RefreshCpuTextureForSave();
   if (SaveLmcFile(g_state.current_file_path, g_state, g_preview, g_state.save_texture)) {
     g_state.dirty = false;
   }
@@ -152,6 +166,7 @@ void DoSaveAs() {
   auto path = ShowSaveDialog();
   if (!path.empty()) {
     g_state.current_file_path = path;
+    RefreshCpuTextureForSave();
     if (SaveLmcFile(path, g_state, g_preview, g_state.save_texture)) {
       g_state.dirty = false;
     }
