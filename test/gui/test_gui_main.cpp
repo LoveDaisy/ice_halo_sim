@@ -1587,7 +1587,7 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         // CommitConfig internally routes to hot-update for sun param changes.
         auto now = std::chrono::steady_clock::now();
         auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
-        if (commit_elapsed >= gui::kTimingIntervalMs) {
+        if (commit_elapsed >= gui::kCommitIntervalMs) {
           cumulative_rays += read_server_rays();
           gui::g_state.dirty = false;
           gui::DoRun();  // CommitConfig decides hot-update vs restart

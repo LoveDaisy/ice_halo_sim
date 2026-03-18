@@ -74,9 +74,9 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
       break;
     }
 
-    // Sleep kTimingIntervalMs between polls.
-    // Max shutdown delay equals kTimingIntervalMs (acceptable for values <= 200ms).
-    std::this_thread::sleep_for(std::chrono::milliseconds(gui::kTimingIntervalMs));
+    // Sleep kPollIntervalMs between polls.
+    // Max shutdown delay equals kPollIntervalMs (acceptable for values <= 200ms).
+    std::this_thread::sleep_for(std::chrono::milliseconds(gui::kPollIntervalMs));
   }
 }
 

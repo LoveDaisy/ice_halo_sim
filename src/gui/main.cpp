@@ -97,7 +97,7 @@ int main(int /*argc*/, char** /*argv*/) {
     // Live-edit: auto-commit config when parameters change during simulation.
     // CommitConfig internally routes to hot-update (no Stop/Start) for lightweight
     // changes (sun params, scatter prob), or full restart for structural changes.
-    // Throttled to at most once per kCommitIntervalMs.
+    // Throttled to at most once per kCommitIntervalMs (100ms).
     {
       static auto last_commit = std::chrono::steady_clock::now();
       if (gui::g_state.dirty) {
@@ -105,7 +105,7 @@ int main(int /*argc*/, char** /*argv*/) {
         if (ss == gui::GuiState::SimState::kSimulating || ss == gui::GuiState::SimState::kDone) {
           auto now = std::chrono::steady_clock::now();
           auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
-          if (elapsed >= gui::kTimingIntervalMs) {
+          if (elapsed >= gui::kCommitIntervalMs) {
             gui::g_state.dirty = false;
             gui::DoRun();  // CommitConfig decides hot-update vs restart internally
             last_commit = now;

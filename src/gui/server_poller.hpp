@@ -22,7 +22,7 @@ struct PollerData {
   bool has_new_texture = false;
 };
 
-// Polls the LUMICE server on a background thread (every ~1 second) and stages
+// Polls the LUMICE server on a background thread (every kPollIntervalMs) and stages
 // results for the main thread to pick up without blocking the UI.
 class ServerPoller {
  public:
