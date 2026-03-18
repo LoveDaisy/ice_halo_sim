@@ -1538,32 +1538,54 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         }
       }
 
-      // Measure: alternate sun altitude between 10 and 30 over 5 seconds
-      // (directly modify g_state — no need to interact with UI widgets)
-      unsigned long start_rays = gui::g_state.stats_sim_ray_num;
+      // Measure: alternate sun altitude between 10 and 30 over 5 seconds.
+      // Simulate the auto-restart logic from main.cpp (test main loop doesn't include it).
+      // Track cumulative rays across restarts (DoStop+DoRun resets stats to 0).
       auto start_time = std::chrono::steady_clock::now();
       auto end_time = start_time + std::chrono::seconds(5);
+      auto last_commit = start_time;
+      unsigned long cumulative_rays = 0;
+      unsigned long last_snapshot_rays = gui::g_state.stats_sim_ray_num;
       int iteration = 0;
+      int restart_count = 0;
 
       while (std::chrono::steady_clock::now() < end_time) {
         float target = (iteration % 2 == 0) ? 10.0f : 30.0f;
         gui::g_state.sun.altitude = target;
         gui::g_state.dirty = true;
         iteration++;
-        // Yield several frames between changes to let the system process
+
+        // Throttled restart: same logic as main.cpp auto-restart
+        auto now = std::chrono::steady_clock::now();
+        auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
+        if (commit_elapsed >= gui::kCommitIntervalMs) {
+          // Accumulate rays before restart resets stats
+          cumulative_rays += gui::g_state.stats_sim_ray_num - last_snapshot_rays;
+          gui::g_state.dirty = false;
+          gui::DoStop();
+          gui::DoRun();
+          last_commit = now;
+          last_snapshot_rays = 0;  // stats reset to 0 after restart
+          restart_count++;
+        }
+
+        // Yield several frames between changes
         for (int i = 0; i < 30; i++) {
           ctx->Yield();
           if (std::chrono::steady_clock::now() >= end_time)
             break;
         }
       }
+      // Add rays from the final (non-restarted) segment
+      cumulative_rays += gui::g_state.stats_sim_ray_num - last_snapshot_rays;
 
-      unsigned long end_rays = gui::g_state.stats_sim_ray_num;
       double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
 
-      ReportPerf("slider_drag", start_rays, end_rays, elapsed);
-      fprintf(stderr, "[PERF] slider_drag: %d parameter changes in %.1fs\n", iteration, elapsed);
-      double rays_per_sec = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
+      double rays_per_sec = elapsed > 0 ? static_cast<double>(cumulative_rays) / elapsed : 0;
+      fprintf(stderr, "[PERF] slider_drag: %.1f rays/sec (%lu rays in %.1fs)\n", rays_per_sec, cumulative_rays,
+              elapsed);
+      fprintf(stderr, "[PERF] slider_drag: %d param changes, %d restarts in %.1fs\n", iteration, restart_count,
+              elapsed);
       IM_CHECK_GT(rays_per_sec, 0.0);
 
       StopPerfSimulation();
