@@ -1040,8 +1040,8 @@ bool ExportConfigJson(const char* path, const std::string& json_str) {
 std::string ShowOpenDialog() {
   NFD_Init();
   nfdchar_t* out_path = nullptr;
-  nfdfilteritem_t filter_item[1] = { { "Lumice", "lmc" } };
-  nfdresult_t result = NFD_OpenDialog(&out_path, filter_item, 1, nullptr);
+  nfdfilteritem_t filter_items[2] = { { "Lumice", "lmc" }, { "JSON Config", "json" } };
+  nfdresult_t result = NFD_OpenDialog(&out_path, filter_items, 2, nullptr);
   std::string path;
   if (result == NFD_OKAY && out_path) {
     path = out_path;
