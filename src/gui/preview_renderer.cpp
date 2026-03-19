@@ -58,9 +58,10 @@ vec3 xyzToSrgb(vec3 xyz) {
     // Gamut clipping: scale color toward gray to keep RGB in [0,1]
     float s = 1.0;
     vec3 diff = xyz - gray;
+    mat3 kXyzToRgbT = transpose(kXyzToRgb);
     for (int j = 0; j < 3; j++) {
-        float a = dot(-gray, kXyzToRgb[j]);
-        float b = dot(diff, kXyzToRgb[j]);
+        float a = dot(-gray, kXyzToRgbT[j]);
+        float b = dot(diff, kXyzToRgbT[j]);
         if (a * b > 0.0 && a / b < s) s = a / b;
     }
     xyz = diff * s + gray;

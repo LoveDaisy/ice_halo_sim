@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -180,6 +181,34 @@ void DoExportPreviewPng() {
   }
 }
 
+void DoExportEquirectPng() {
+  if (!g_server) {
+    return;
+  }
+  auto path = ShowExportEquirectDialog();
+  if (path.empty()) {
+    return;
+  }
+  // Get CPU-side sRGB render result (triggers DoSnapshot + PostSnapshot)
+  LUMICE_RenderResult renders[2]{};
+  LUMICE_GetRenderResults(g_server, renders, 1);
+  if (renders[0].img_buffer == nullptr || renders[0].img_width <= 0 || renders[0].img_height <= 0) {
+    return;
+  }
+  // Copy buffer (pointer valid only until next GetRenderResults/CommitConfig)
+  size_t size = static_cast<size_t>(renders[0].img_width) * renders[0].img_height * 3;
+  std::vector<unsigned char> buffer(renders[0].img_buffer, renders[0].img_buffer + size);
+  ExportEquirectPng(path.c_str(), buffer.data(), renders[0].img_width, renders[0].img_height);
+}
+
+void DoExportConfigJson() {
+  auto path = ShowExportJsonDialog();
+  if (!path.empty()) {
+    auto json_str = SerializeCoreConfig(g_state);
+    ExportConfigJson(path.c_str(), json_str);
+  }
+}
+
 // Helper: load image from path, downsample if needed, upload to bg texture.
 // Returns true on success.
 static bool LoadAndUploadBgImage(const std::string& path) {
@@ -221,31 +250,56 @@ static bool LoadAndUploadBgImage(const std::string& path) {
 
 void DoOpen() {
   auto path = ShowOpenDialog();
-  if (!path.empty()) {
-    std::vector<unsigned char> tex_data;
-    int tex_w = 0;
-    int tex_h = 0;
-    if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
-      g_state.current_file_path = path;
-      g_state.dirty = false;
-      if (!tex_data.empty()) {
-        g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
-        g_state.sim_state = SimState::kDone;
-      } else {
-        g_state.sim_state = SimState::kIdle;
-      }
+  if (path.empty()) {
+    return;
+  }
 
-      // Restore background image from saved path (uses deserialized alpha, not reset to 0.5)
+  // Check extension to determine file format
+  bool is_json = path.size() >= 5 && path.substr(path.size() - 5) == ".json";
+
+  if (is_json) {
+    // Import CLI JSON config
+    std::ifstream in(path);
+    if (!in.is_open()) {
+      return;
+    }
+    std::string json_str((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    GuiState new_state = InitDefaultState();
+    if (DeserializeFromJson(json_str, new_state)) {
+      g_state = new_state;
+      g_state.current_file_path.clear();  // Don't set .json path as save target
+      g_state.dirty = true;               // Unsaved new project
+      g_state.sim_state = SimState::kIdle;
+      g_preview.ClearTexture();
       g_preview.ClearBackground();
-      if (!g_state.bg_path.empty()) {
-        if (LoadAndUploadBgImage(g_state.bg_path)) {
-          // bg_show and bg_alpha already restored from deserialization
-        } else {
-          // Degradation: bg image not found — clear show, reset kMatchBg→kFree
-          g_state.bg_show = false;
-          if (g_state.aspect_preset == AspectPreset::kMatchBg) {
-            g_state.aspect_preset = AspectPreset::kFree;
-          }
+    }
+    return;
+  }
+
+  // Load .lmc binary file
+  std::vector<unsigned char> tex_data;
+  int tex_w = 0;
+  int tex_h = 0;
+  if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
+    g_state.current_file_path = path;
+    g_state.dirty = false;
+    if (!tex_data.empty()) {
+      g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
+      g_state.sim_state = SimState::kDone;
+    } else {
+      g_state.sim_state = SimState::kIdle;
+    }
+
+    // Restore background image from saved path (uses deserialized alpha, not reset to 0.5)
+    g_preview.ClearBackground();
+    if (!g_state.bg_path.empty()) {
+      if (LoadAndUploadBgImage(g_state.bg_path)) {
+        // bg_show and bg_alpha already restored from deserialization
+      } else {
+        // Degradation: bg image not found — clear show, reset kMatchBg→kFree
+        g_state.bg_show = false;
+        if (g_state.aspect_preset == AspectPreset::kMatchBg) {
+          g_state.aspect_preset = AspectPreset::kFree;
         }
       }
     }

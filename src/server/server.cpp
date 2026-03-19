@@ -151,12 +151,16 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   config_manager_ = std::move(new_config);
 
   // Setup consumers from project config.
+  // Lock consumer_mutex_ to prevent race with ServerPoller's GetRawXyzResults().
   ILOG_DEBUG(logger_, "CommitConfig: setup consumers");
-  consumers_.clear();
-  for (const auto& [_, r] : config_manager_.renderers_) {
-    consumers_.emplace_back(std::make_shared<RenderConsumer>(r));
+  {
+    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    consumers_.clear();
+    for (const auto& [_, r] : config_manager_.renderers_) {
+      consumers_.emplace_back(std::make_shared<RenderConsumer>(r));
+    }
+    consumers_.emplace_back(std::make_shared<StatsConsumer>());
   }
-  consumers_.emplace_back(std::make_shared<StatsConsumer>());
 
   auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
   {
@@ -221,7 +225,8 @@ std::vector<RenderResult> ServerImpl::GetRenderResults() {
 
 std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
   // Only do Phase 1 (PrepareSnapshot memcpy), skip Phase 2 (PostSnapshot XYZ→RGB).
-  // The consumer_mutex_ protects PrepareSnapshot; we collect raw XYZ under snapshot_mutex_.
+  // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
+  std::vector<ConsumerPtrS> snapshot_consumers;
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
     if (snapshot_dirty_) {
@@ -230,17 +235,18 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
       }
       snapshot_dirty_ = false;
     }
+    snapshot_consumers = consumers_;  // shared_ptr copy keeps consumers alive
   }
   std::vector<RawXyzResult> results;
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
-  for (const auto& c : consumers_) {
+  for (const auto& c : snapshot_consumers) {
     auto* render_consumer = dynamic_cast<RenderConsumer*>(c.get());
     if (render_consumer) {
       results.push_back(render_consumer->GetRawXyzResult());
     }
   }
   // Also update cached_stats_result_ for stats queries
-  for (const auto& c : consumers_) {
+  for (const auto& c : snapshot_consumers) {
     auto result = c->GetResult();
     if (auto* s = std::get_if<StatsResult>(&result)) {
       cached_stats_result_ = *s;
