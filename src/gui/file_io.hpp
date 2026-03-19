@@ -37,10 +37,18 @@ bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned 
 // Export preview as PNG (renders via FBO, must be called on GL thread)
 bool ExportPreviewPng(const char* path, PreviewRenderer& renderer, const PreviewViewport& vp);
 
+// Export equirect panorama as PNG (pure I/O, accepts pre-converted RGB data)
+bool ExportEquirectPng(const char* path, const unsigned char* data, int width, int height);
+
+// Export configuration as JSON (CLI-compatible format)
+bool ExportConfigJson(const char* path, const std::string& json_str);
+
 // File dialog wrappers (return empty string on cancel)
 std::string ShowOpenDialog();
 std::string ShowSaveDialog();
 std::string ShowExportPngDialog();
+std::string ShowExportEquirectDialog();
+std::string ShowExportJsonDialog();
 std::string ShowOpenImageDialog();
 
 

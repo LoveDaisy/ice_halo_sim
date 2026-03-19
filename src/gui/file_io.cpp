@@ -1011,6 +1011,30 @@ bool ExportPreviewPng(const char* path, PreviewRenderer& renderer, const Preview
 }
 
 
+// ========== Export Equirect ==========
+
+bool ExportEquirectPng(const char* path, const unsigned char* data, int width, int height) {
+  if (!path || !data || width <= 0 || height <= 0) {
+    return false;
+  }
+  int result = stbi_write_png(path, width, height, 3, data, width * 3);
+  return result != 0;
+}
+
+// ========== Export Config JSON ==========
+
+bool ExportConfigJson(const char* path, const std::string& json_str) {
+  if (!path) {
+    return false;
+  }
+  std::ofstream out(path);
+  if (!out.is_open()) {
+    return false;
+  }
+  out << json_str;
+  return out.good();
+}
+
 // ========== File Dialogs ==========
 
 std::string ShowOpenDialog() {
@@ -1047,6 +1071,35 @@ std::string ShowExportPngDialog() {
   nfdchar_t* out_path = nullptr;
   nfdfilteritem_t filter_item[1] = { { "PNG Image", "png" } };
   nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "preview.png");
+  std::string path;
+  if (result == NFD_OKAY && out_path) {
+    path = out_path;
+    NFD_FreePath(out_path);
+  }
+  NFD_Quit();
+  return path;
+}
+
+
+std::string ShowExportEquirectDialog() {
+  NFD_Init();
+  nfdchar_t* out_path = nullptr;
+  nfdfilteritem_t filter_item[1] = { { "PNG Image", "png" } };
+  nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "equirect.png");
+  std::string path;
+  if (result == NFD_OKAY && out_path) {
+    path = out_path;
+    NFD_FreePath(out_path);
+  }
+  NFD_Quit();
+  return path;
+}
+
+std::string ShowExportJsonDialog() {
+  NFD_Init();
+  nfdchar_t* out_path = nullptr;
+  nfdfilteritem_t filter_item[1] = { { "JSON Config", "json" } };
+  nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "config.json");
   std::string path;
   if (result == NFD_OKAY && out_path) {
     path = out_path;

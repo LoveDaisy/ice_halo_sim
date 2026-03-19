@@ -58,10 +58,23 @@ void RenderTopBar(float window_width) {
       ImGui::BeginDisabled();
     }
     if (ImGui::Button("Export")) {
-      DoExportPreviewPng();
+      ImGui::OpenPopup("ExportMenu");
     }
     if (no_texture) {
       ImGui::EndDisabled();
+    }
+    if (ImGui::BeginPopup("ExportMenu")) {
+      if (ImGui::MenuItem("Screenshot...")) {
+        DoExportPreviewPng();
+      }
+      bool has_server = g_server != nullptr && g_state.sim_state != GuiState::SimState::kIdle;
+      if (ImGui::MenuItem("Panorama...", nullptr, false, has_server)) {
+        DoExportEquirectPng();
+      }
+      if (ImGui::MenuItem("Config JSON...")) {
+        DoExportConfigJson();
+      }
+      ImGui::EndPopup();
     }
   }
   ImGui::SameLine();

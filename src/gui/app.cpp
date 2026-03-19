@@ -180,6 +180,34 @@ void DoExportPreviewPng() {
   }
 }
 
+void DoExportEquirectPng() {
+  if (!g_server) {
+    return;
+  }
+  auto path = ShowExportEquirectDialog();
+  if (path.empty()) {
+    return;
+  }
+  // Get CPU-side sRGB render result (triggers DoSnapshot + PostSnapshot)
+  LUMICE_RenderResult renders[2]{};
+  LUMICE_GetRenderResults(g_server, renders, 1);
+  if (renders[0].img_buffer == nullptr || renders[0].img_width <= 0 || renders[0].img_height <= 0) {
+    return;
+  }
+  // Copy buffer (pointer valid only until next GetRenderResults/CommitConfig)
+  size_t size = static_cast<size_t>(renders[0].img_width) * renders[0].img_height * 3;
+  std::vector<unsigned char> buffer(renders[0].img_buffer, renders[0].img_buffer + size);
+  ExportEquirectPng(path.c_str(), buffer.data(), renders[0].img_width, renders[0].img_height);
+}
+
+void DoExportConfigJson() {
+  auto path = ShowExportJsonDialog();
+  if (!path.empty()) {
+    auto json_str = SerializeCoreConfig(g_state);
+    ExportConfigJson(path.c_str(), json_str);
+  }
+}
+
 // Helper: load image from path, downsample if needed, upload to bg texture.
 // Returns true on success.
 static bool LoadAndUploadBgImage(const std::string& path) {
