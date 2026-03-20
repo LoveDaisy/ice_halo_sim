@@ -60,8 +60,10 @@ class ServerImpl {
   mutable std::mutex consumer_mutex_;  // Lock ordering: consumer_mutex_ < snapshot_mutex_
   mutable std::mutex snapshot_mutex_;  // Protects cached results
   bool snapshot_dirty_{ false };       // Set by ConsumeData, cleared by DoSnapshot
-  bool has_ever_consumed_{ false };    // Monotonic: once true, never cleared (even across Stop/Start)
-  uint64_t snapshot_generation_{ 0 };  // Increments on each PrepareSnapshot; monotonically increasing
+  bool has_ever_consumed_{ false };    // True after first ConsumeData; reset on Stop (new consumers have no data)
+  uint64_t snapshot_generation_{
+    0
+  };  // Increments on each PrepareSnapshot; NOT reset on Stop (poller resets its own tracker)
 
   // Cached results under snapshot_mutex_ — populated by DoSnapshot, read by Get*Results
   std::vector<RenderResult> cached_render_results_;
@@ -230,6 +232,9 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
   // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
   std::vector<ConsumerPtrS> snapshot_consumers;
   bool did_snapshot = false;
+  // Capture these under consumer_mutex_ to avoid reading them under a different lock (snapshot_mutex_).
+  bool valid_data = false;
+  uint64_t generation = 0;
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
     if (snapshot_dirty_) {
@@ -240,6 +245,8 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
       snapshot_generation_++;
       did_snapshot = true;
     }
+    valid_data = has_ever_consumed_;
+    generation = snapshot_generation_;
     snapshot_consumers = consumers_;  // shared_ptr copy keeps consumers alive
   }
   std::vector<RawXyzResult> results;
@@ -248,8 +255,8 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
     auto* render_consumer = dynamic_cast<RenderConsumer*>(c.get());
     if (render_consumer) {
       auto r = render_consumer->GetRawXyzResult();
-      r.has_valid_data_ = has_ever_consumed_;
-      r.snapshot_generation_ = snapshot_generation_;
+      r.has_valid_data_ = valid_data;
+      r.snapshot_generation_ = generation;
       results.push_back(r);
     }
   }
@@ -438,7 +445,7 @@ void ServerImpl::ConsumeData() {
           c->Consume(sim_data);
         }
         snapshot_dirty_ = true;
-        has_ever_consumed_ = true;  // Monotonic: once set, never cleared
+        has_ever_consumed_ = true;
         if (!first_consume_logged) {
           ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
           first_consume_logged = true;

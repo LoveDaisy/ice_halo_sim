@@ -63,15 +63,15 @@ typedef struct LUMICE_RawXyzResult_ {
   int renderer_id;
   int img_width;
   int img_height;
-  const float* xyz_buffer;   // Read-only XYZ float data, 3 floats per pixel.
-                             // Valid until next LUMICE_GetRawXyzResults() or LUMICE_CommitConfig().
-                             // Sentinel: xyz_buffer == NULL
-  float snapshot_intensity;  // Accumulated intensity scalar for normalization
-  float intensity_factor;    // Per-renderer intensity factor (2^EV)
-  int has_valid_data;  // Non-zero once simulation has produced at least one batch (monotonic: once set, never cleared)
+  const float* xyz_buffer;                 // Read-only XYZ float data, 3 floats per pixel.
+                                           // Valid until next LUMICE_GetRawXyzResults() or LUMICE_CommitConfig().
+                                           // Sentinel: xyz_buffer == NULL
+  float snapshot_intensity;                // Accumulated intensity scalar for normalization
+  float intensity_factor;                  // Per-renderer intensity factor (2^EV)
+  int has_valid_data;                      // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
-  unsigned long stats_ray_seg_num;         // Cached stats: avoids separate LUMICE_GetStatsResults call
-  unsigned long stats_sim_ray_num;
+  unsigned long long stats_ray_seg_num;    // Cached stats: avoids separate LUMICE_GetStatsResults call
+  unsigned long long stats_sim_ray_num;
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {
