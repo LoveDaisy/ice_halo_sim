@@ -136,6 +136,8 @@ struct RawXyzResult {
   const float* xyz_buffer_;  // Points to snapshot_xyz_ (not color-converted)
   float snapshot_intensity_;
   float intensity_factor_;
+  bool has_valid_data_ = false;       // True once at least one batch has been consumed
+  uint64_t snapshot_generation_ = 0;  // Increments on each new snapshot
 };
 
 struct StatsResult {

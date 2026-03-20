@@ -68,6 +68,8 @@ typedef struct LUMICE_RawXyzResult_ {
                              // Sentinel: xyz_buffer == NULL
   float snapshot_intensity;  // Accumulated intensity scalar for normalization
   float intensity_factor;    // Per-renderer intensity factor (2^EV)
+  int has_valid_data;  // Non-zero once simulation has produced at least one batch (monotonic: once set, never cleared)
+  unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {

@@ -52,6 +52,7 @@ class ServerPoller {
   std::atomic<bool> running_{ false };
   std::mutex data_mutex_;
   PollerData staged_;
+  uint64_t last_generation_{ 0 };  // Tracks snapshot generation to detect new data
 };
 
 }  // namespace lumice::gui

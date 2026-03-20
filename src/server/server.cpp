@@ -60,6 +60,8 @@ class ServerImpl {
   mutable std::mutex consumer_mutex_;  // Lock ordering: consumer_mutex_ < snapshot_mutex_
   mutable std::mutex snapshot_mutex_;  // Protects cached results
   bool snapshot_dirty_{ false };       // Set by ConsumeData, cleared by DoSnapshot
+  bool has_ever_consumed_{ false };    // Monotonic: once true, never cleared (even across Stop/Start)
+  uint64_t snapshot_generation_{ 0 };  // Increments on each PrepareSnapshot; monotonically increasing
 
   // Cached results under snapshot_mutex_ — populated by DoSnapshot, read by Get*Results
   std::vector<RenderResult> cached_render_results_;
@@ -227,6 +229,7 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
   // Only do Phase 1 (PrepareSnapshot memcpy), skip Phase 2 (PostSnapshot XYZ→RGB).
   // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
   std::vector<ConsumerPtrS> snapshot_consumers;
+  bool did_snapshot = false;
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
     if (snapshot_dirty_) {
@@ -234,6 +237,8 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
         c->PrepareSnapshot();
       }
       snapshot_dirty_ = false;
+      snapshot_generation_++;
+      did_snapshot = true;
     }
     snapshot_consumers = consumers_;  // shared_ptr copy keeps consumers alive
   }
@@ -242,14 +247,20 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
   for (const auto& c : snapshot_consumers) {
     auto* render_consumer = dynamic_cast<RenderConsumer*>(c.get());
     if (render_consumer) {
-      results.push_back(render_consumer->GetRawXyzResult());
+      auto r = render_consumer->GetRawXyzResult();
+      r.has_valid_data_ = has_ever_consumed_;
+      r.snapshot_generation_ = snapshot_generation_;
+      results.push_back(r);
     }
   }
   // Also update cached_stats_result_ for stats queries
-  for (const auto& c : snapshot_consumers) {
-    auto result = c->GetResult();
-    if (auto* s = std::get_if<StatsResult>(&result)) {
-      cached_stats_result_ = *s;
+  // Only call GetResult() if we took a new snapshot (or for stats consumers that are always safe)
+  if (did_snapshot) {
+    for (const auto& c : snapshot_consumers) {
+      auto result = c->GetResult();
+      if (auto* s = std::get_if<StatsResult>(&result)) {
+        cached_stats_result_ = *s;
+      }
     }
   }
   return results;
@@ -338,6 +349,7 @@ void ServerImpl::Stop() {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
     consumers_.clear();
     snapshot_dirty_ = false;
+    has_ever_consumed_ = false;  // New consumers have no data yet
   }
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
@@ -416,6 +428,7 @@ void ServerImpl::ConsumeData() {
           c->Consume(sim_data);
         }
         snapshot_dirty_ = true;
+        has_ever_consumed_ = true;  // Monotonic: once set, never cleared
         if (!first_consume_logged) {
           ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
           first_consume_logged = true;

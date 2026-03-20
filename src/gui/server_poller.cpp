@@ -25,6 +25,10 @@ void ServerPoller::Start(LUMICE_Server* server) {
     staged_.server_state = LUMICE_SERVER_IDLE;
     staged_.has_new_texture = false;
   }
+  // Reset generation tracking so the new worker detects the first snapshot as new data.
+  // This is outside the data_mutex_ because only the Start() caller writes it before
+  // spawning the worker thread.
+  last_generation_ = 0;
 
   running_ = true;
   worker_ = std::thread(&ServerPoller::WorkerLoop, this, server);
@@ -57,12 +61,16 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
     LUMICE_RawXyzResult xyz_results[2]{};
     LUMICE_GetRawXyzResults(server, xyz_results, 1);
 
+    // Check if this is genuinely new snapshot data (generation changed)
+    bool has_new_snapshot =
+        xyz_results[0].xyz_buffer != nullptr && xyz_results[0].snapshot_generation != last_generation_;
+
     // Stage all results under lock
     {
       std::lock_guard<std::mutex> lock(data_mutex_);
       staged_.valid = true;
       staged_.server_state = server_state;
-      if (xyz_results[0].xyz_buffer != nullptr) {
+      if (has_new_snapshot) {
         // Copy XYZ data BEFORE calling GetStatsResults — GetStatsResults triggers DoSnapshot
         // which calls PostSnapshot, destructively modifying snapshot_xyz_ in-place (XYZ→RGB conversion).
         // The raw pointer xyz_buffer would then point to already-converted data, causing double
@@ -75,6 +83,7 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
         staged_.snapshot_intensity = xyz_results[0].snapshot_intensity;
         staged_.intensity_factor = xyz_results[0].intensity_factor;
         staged_.has_new_texture = true;
+        last_generation_ = xyz_results[0].snapshot_generation;
 
         LUMICE_StatsResult stats[2]{};
         LUMICE_GetStatsResults(server, stats, 1);
@@ -92,11 +101,11 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
     }
 
     // After a restart, the server needs a few ms to accumulate rays before the first snapshot
-    // has data. Use a short sleep (5ms) when no texture data is available yet, to avoid the
-    // race where the next DoRun() fires before the worker's second poll.
-    // Once texture data is available, switch to normal poll interval.
+    // has data. Use a short sleep (5ms) when no valid data has been produced yet (has_valid_data
+    // is false until ConsumeData processes the first batch), to catch the first texture quickly.
+    // Once valid data is available, switch to normal poll interval.
     // Sleep in 1ms increments so Stop() can join quickly (max 1ms delay vs full sleep).
-    int sleep_ms = (xyz_results[0].xyz_buffer != nullptr) ? gui::kPollIntervalMs : 5;
+    int sleep_ms = xyz_results[0].has_valid_data ? gui::kPollIntervalMs : 5;
     for (int i = 0; i < sleep_ms && running_; i++) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
