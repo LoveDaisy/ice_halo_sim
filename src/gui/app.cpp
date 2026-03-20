@@ -5,7 +5,6 @@
 #include <stb_image.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -28,9 +27,6 @@ PreviewViewport g_preview_vp;
 
 int g_programmatic_resize = 0;
 
-// Timestamp of last texture upload in SyncFromPoller — used for the intensity hold timeout.
-// Promoted from static local to file-scope so DoNew()/test reset can clear it.
-auto g_last_texture_upload = std::chrono::steady_clock::now();
 float g_aspect_bar_height = 30.0f;  // Updated each frame by RenderPreviewPanel
 
 bool g_show_unsaved_popup = false;
@@ -317,7 +313,6 @@ void DoNew() {
   g_preview.ClearBackground();
   g_crystal_mesh_id = -1;
   g_crystal_mesh_hash = 0;
-  g_last_texture_upload = std::chrono::steady_clock::now();
 }
 
 void DoLoadBackground(GLFWwindow* window) {
@@ -431,24 +426,16 @@ void SyncFromPoller() {
   }
 
   // Upload XYZ float texture (GL call — must be on main thread).
-  // After a simulation restart, the first few snapshots have very low intensity (few rays),
-  // producing sparse/dark frames that appear as black screen flashes. To prevent this:
-  // - Require new intensity to reach kMinIntensityRatio (5%) of current displayed intensity
-  // - Unconditionally allow upload after kMaxTextureHoldMs (500ms) for extreme param changes
-  // NOTE: g_state.snapshot_intensity is intentionally NOT reset in DoRun() — the old value
-  // serves as the threshold baseline. It is only updated here on successful upload.
-  // DoNew()/DoOpen() may reset it to 0 (entering a fresh state where any >0 value is accepted).
-  bool intensity_ok = data.snapshot_intensity > 0;
-  if (intensity_ok && g_state.snapshot_intensity > 0) {
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_last_texture_upload).count();
-    intensity_ok =
-        data.snapshot_intensity >= g_state.snapshot_intensity * kMinIntensityRatio || elapsed_ms >= kMaxTextureHoldMs;
+  // After a simulation restart, the first few snapshots have very few rays, producing sparse/dark
+  // frames that appear as black screen flashes. Require a minimum ray count before replacing the
+  // displayed texture. For the initial display (no previous image), any positive intensity suffices.
+  bool upload_ok = data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0;
+  if (upload_ok && g_state.snapshot_intensity > 0) {
+    upload_ok = data.stats_sim_ray_num >= kMinRaysForDisplay;
   }
-  if (data.has_new_texture && g_state.selected_renderer >= 0 && intensity_ok) {
+  if (upload_ok) {
     g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
     g_state.snapshot_intensity = data.snapshot_intensity;
-    g_last_texture_upload = std::chrono::steady_clock::now();
   }
 }
 

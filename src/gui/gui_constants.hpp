@@ -17,11 +17,11 @@ constexpr int kTimingIntervalMs = 50;                 // Base interval for commi
 constexpr int kCommitIntervalMs = kTimingIntervalMs;  // Min interval between auto-commits (T_commit)
 constexpr int kPollIntervalMs = kTimingIntervalMs;    // Server poll interval (T_poll)
 
-// Texture upload hold constants (prevent black frame flash after simulation restart)
-// After a restart, the first few snapshots have very low intensity (few rays), producing sparse/dark frames.
-// Hold the old texture until the new one reaches a meaningful level OR the hold timeout expires.
-constexpr float kMinIntensityRatio = 0.05f;  // New data must reach 5% of current displayed intensity
-constexpr int kMaxTextureHoldMs = 500;       // Unconditional upload after 500ms (extreme param change fallback)
+// Texture upload hold: prevent black frame flash after simulation restart.
+// The first few snapshots have very few rays, producing sparse/dark frames.
+// Require a minimum ray count before replacing the displayed texture.
+// At ~3M rays/sec and 50ms commit interval, ~150k rays accumulate per cycle; 100k is reachable in ~33ms.
+constexpr unsigned long kMinRaysForDisplay = 100000;
 
 }  // namespace lumice::gui
 
