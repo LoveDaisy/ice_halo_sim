@@ -224,7 +224,7 @@ static bool LoadAndUploadBgImage(const std::string& path) {
   int channels = 0;
   unsigned char* raw = stbi_load(path.c_str(), &w, &h, &channels, 3);  // Force 3 channels (RGB)
   if (!raw) {
-    spdlog::warn("Failed to load background image: {}", path);
+    LOG_WARNING("Failed to load background image: {}", path);
     return false;
   }
 
