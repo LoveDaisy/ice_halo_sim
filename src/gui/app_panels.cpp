@@ -48,9 +48,6 @@ void RenderTopBar(float window_width) {
   if (ImGui::Button("Save As")) {
     DoSaveAs();
   }
-  if (simulating) {
-    ImGui::EndDisabled();
-  }
   ImGui::SameLine();
   {
     bool no_texture = !g_preview.HasTexture();
@@ -76,6 +73,9 @@ void RenderTopBar(float window_width) {
       }
       ImGui::EndPopup();
     }
+  }
+  if (simulating) {
+    ImGui::EndDisabled();
   }
   ImGui::SameLine();
   if (simulating) {

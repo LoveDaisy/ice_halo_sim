@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "gui/gl_common.h"
+#include "util/logger.hpp"
 
 namespace lumice::gui {
 
@@ -241,7 +242,7 @@ static unsigned int CompileShader(unsigned int type, const char* source) {
   if (!success) {
     char log[512];
     glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-    fprintf(stderr, "Shader compile error: %s\n", log);
+    LOG_ERROR("Shader compile error: {}", log);
     glDeleteShader(shader);
     return 0;
   }
@@ -266,7 +267,7 @@ bool PreviewRenderer::Init() {
   if (!success) {
     char log[512];
     glGetProgramInfoLog(shader_program_, sizeof(log), nullptr, log);
-    fprintf(stderr, "Shader link error: %s\n", log);
+    LOG_ERROR("Shader link error: {}", log);
     return false;
   }
 

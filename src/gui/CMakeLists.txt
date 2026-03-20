@@ -53,6 +53,7 @@ endif()
 target_compile_definitions(lumice_gui_obj PUBLIC GLFW_INCLUDE_NONE)
 
 target_compile_definitions(lumice_gui_obj PUBLIC IMGUI_ENABLE_TEST_ENGINE)
+target_compile_definitions(lumice_gui_obj PRIVATE SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG)
 
 if(APPLE)
   target_compile_definitions(lumice_gui_obj PRIVATE GL_SILENCE_DEPRECATION)

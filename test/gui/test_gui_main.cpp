@@ -1622,6 +1622,7 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
   }
 
   // Scenario 2: Parameter drag (slider interaction during simulation)
+  // All parameter changes trigger full restart (hot-update was removed in task-52.1).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "perf_test", "slider_drag");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -1638,8 +1639,8 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         }
       }
 
-      // Measure: alternate sun altitude between 10 and 30 over 5 seconds.
-      // Simulate the auto-restart logic from main.cpp (test main loop doesn't include it).
+      // Measure: alternate crystal height between 0.8 and 1.2 over 5 seconds.
+      // Each change triggers a full Stop/Start restart via DoRun().
       // Track cumulative rays across restarts via direct C API (not SyncFromPoller which has delay).
       auto start_time = std::chrono::steady_clock::now();
       auto end_time = start_time + std::chrono::seconds(5);
@@ -1647,82 +1648,7 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       unsigned long cumulative_rays = 0;
       int iteration = 0;
       int restart_count = 0;
-
-      // Helper: read stats directly from server (bypasses SyncFromPoller delay)
-      auto read_server_rays = [&]() -> unsigned long {
-        if (!gui::g_server)
-          return 0;
-        LUMICE_StatsResult stats[2]{};
-        LUMICE_GetStatsResults(gui::g_server, stats, 1);
-        return stats[0].sim_ray_num;
-      };
-
-      while (std::chrono::steady_clock::now() < end_time) {
-        float target = (iteration % 2 == 0) ? 10.0f : 30.0f;
-        gui::g_state.sun.altitude = target;
-        gui::g_state.dirty = true;
-        iteration++;
-
-        // Yield a few frames then check commit. Yield count is small (2 frames)
-        // so the commit check runs frequently, letting kTimingIntervalMs control
-        // the actual commit rate rather than the yield loop duration.
-        for (int i = 0; i < 2; i++) {
-          ctx->Yield();
-        }
-
-        // Throttled commit: same logic as main.cpp auto-commit.
-        // CommitConfig internally routes to hot-update for sun param changes.
-        auto now = std::chrono::steady_clock::now();
-        auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
-        if (commit_elapsed >= gui::kCommitIntervalMs) {
-          cumulative_rays += read_server_rays();
-          gui::g_state.dirty = false;
-          gui::DoRun();  // CommitConfig decides hot-update vs restart
-          last_commit = now;
-          restart_count++;
-        }
-      }
-      // Add rays from the final (non-restarted) segment
-      cumulative_rays += read_server_rays();
-
-      double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
-
-      double rays_per_sec = elapsed > 0 ? static_cast<double>(cumulative_rays) / elapsed : 0;
-      fprintf(stderr, "[PERF] slider_drag: %.1f rays/sec (%lu rays in %.1fs)\n", rays_per_sec, cumulative_rays,
-              elapsed);
-      fprintf(stderr, "[PERF] slider_drag: %d param changes, %d restarts in %.1fs\n", iteration, restart_count,
-              elapsed);
-      IM_CHECK_GT(rays_per_sec, 0.0);
-
-      StopPerfSimulation();
-    };
-  }
-
-  // Scenario 3: Parameter drag that triggers full restart (non-lightweight change)
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "perf_test", "slider_drag_restart");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      StartPerfSimulation();
-
-      // Wait for first batch of data
-      auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-      while (gui::g_state.stats_sim_ray_num == 0) {
-        ctx->Yield();
-        if (std::chrono::steady_clock::now() > timeout) {
-          fprintf(stderr, "[PERF] ERROR: No simulation data after 10s\n");
-          break;
-        }
-      }
-
-      // Measure: alternate crystal height between 0.8 and 1.2 over 5 seconds.
-      // Crystal geometry change triggers full Stop/Start restart (not hot-update).
-      auto start_time = std::chrono::steady_clock::now();
-      auto end_time = start_time + std::chrono::seconds(5);
-      auto last_commit = start_time;
-      unsigned long cumulative_rays = 0;
-      int iteration = 0;
-      int restart_count = 0;
+      auto upload_before = gui::g_state.texture_upload_count;
 
       auto read_server_rays = [&]() -> unsigned long {
         if (!gui::g_server)
@@ -1739,16 +1665,20 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         gui::g_state.dirty = true;
         iteration++;
 
+        // Yield a few frames then check commit. Yield count is small (2 frames)
+        // so the commit check runs frequently, letting kTimingIntervalMs control
+        // the actual commit rate rather than the yield loop duration.
         for (int i = 0; i < 2; i++) {
           ctx->Yield();
         }
 
+        // Throttled commit: same logic as main.cpp auto-commit.
         auto now = std::chrono::steady_clock::now();
         auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
         if (commit_elapsed >= gui::kCommitIntervalMs) {
           cumulative_rays += read_server_rays();
           gui::g_state.dirty = false;
-          gui::DoRun();  // Will trigger full restart (crystal geometry change)
+          gui::DoRun();
           last_commit = now;
           restart_count++;
         }
@@ -1758,11 +1688,18 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
 
       double rays_per_sec = elapsed > 0 ? static_cast<double>(cumulative_rays) / elapsed : 0;
-      fprintf(stderr, "[PERF] slider_drag_restart: %.1f rays/sec (%lu rays in %.1fs)\n", rays_per_sec, cumulative_rays,
+      fprintf(stderr, "[PERF] slider_drag: %.1f rays/sec (%lu rays in %.1fs)\n", rays_per_sec, cumulative_rays,
               elapsed);
-      fprintf(stderr, "[PERF] slider_drag_restart: %d param changes, %d restarts in %.1fs\n", iteration, restart_count,
+      fprintf(stderr, "[PERF] slider_drag: %d param changes, %d restarts in %.1fs\n", iteration, restart_count,
               elapsed);
+
+      auto texture_uploads = gui::g_state.texture_upload_count - upload_before;
+      double upload_ratio = restart_count > 0 ? static_cast<double>(texture_uploads) / restart_count : 0;
+      fprintf(stderr, "[PERF] slider_drag: %lu texture uploads / %d restarts (ratio: %.2f)\n", texture_uploads,
+              restart_count, upload_ratio);
+
       IM_CHECK_GT(rays_per_sec, 0.0);
+      IM_CHECK_GE(upload_ratio, 0.5);
 
       StopPerfSimulation();
     };

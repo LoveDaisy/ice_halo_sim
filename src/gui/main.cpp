@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <string_view>
 
 #include "gui/app.hpp"
 #include "gui/gl_common.h"
@@ -9,10 +10,11 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "util/logger.hpp"
 
 namespace gui = lumice::gui;
 
-int main(int /*argc*/, char** /*argv*/) {
+int main(int argc, char** argv) {
   glfwSetErrorCallback(gui::GlfwErrorCallback);
   if (!glfwInit()) {
     fprintf(stderr, "Failed to initialize GLFW\n");
@@ -58,22 +60,64 @@ int main(int /*argc*/, char** /*argv*/) {
 
   gui::g_state = gui::InitDefaultState();
 
+  // Create Lumice server and initialize logger BEFORE renderer init,
+  // so shader compile/link/FBO errors can use LOG_ERROR instead of fprintf.
+  gui::g_server = LUMICE_CreateServer();
+  LUMICE_InitLogger(gui::g_server);
+
+  // Parse CLI arguments for log level.
+  // --log-level / -v / -d control GUI log level (global logger, LOG_* macros).
+  // --core-log-level controls Core log level (server logger, ILOG_* macros).
+  // Default: both warn. -v sets GUI to info, -d sets GUI to debug.
+  {
+    auto parse_level = [](std::string_view s) -> LUMICE_LogLevel {
+      if (s == "trace")
+        return LUMICE_LOG_TRACE;
+      if (s == "debug")
+        return LUMICE_LOG_DEBUG;
+      if (s == "info")
+        return LUMICE_LOG_INFO;
+      if (s == "warn")
+        return LUMICE_LOG_WARNING;
+      if (s == "error")
+        return LUMICE_LOG_ERROR;
+      if (s == "off")
+        return LUMICE_LOG_OFF;
+      return LUMICE_LOG_WARNING;
+    };
+
+    LUMICE_LogLevel gui_level = LUMICE_LOG_WARNING;
+    LUMICE_LogLevel core_level = LUMICE_LOG_WARNING;
+    for (int i = 1; i < argc; ++i) {
+      std::string_view arg(argv[i]);
+      if (arg == "-v") {
+        gui_level = LUMICE_LOG_INFO;
+      } else if (arg == "-d") {
+        gui_level = LUMICE_LOG_DEBUG;
+      } else if (arg == "--log-level" && i + 1 < argc) {
+        gui_level = parse_level(argv[++i]);
+      } else if (arg == "--core-log-level" && i + 1 < argc) {
+        core_level = parse_level(argv[++i]);
+      }
+    }
+    // Set core level first (LUMICE_SetLogLevel sets both server + global logger),
+    // then override global logger to GUI level.
+    LUMICE_SetLogLevel(gui::g_server, core_level);
+    lumice::GetGlobalLogger().SetLevel(static_cast<lumice::LogLevel>(gui_level));
+  }
+
   // Initialize preview renderer
   if (!gui::g_preview.Init()) {
-    fprintf(stderr, "Failed to initialize preview renderer\n");
+    LOG_ERROR("Failed to initialize preview renderer");
     return 1;
   }
 
   // Initialize crystal renderer (256x256 FBO)
   if (!gui::g_crystal_renderer.Init(256, 256)) {
-    fprintf(stderr, "Failed to initialize crystal renderer\n");
+    LOG_ERROR("Failed to initialize crystal renderer");
     return 1;
   }
   gui::ResetCrystalView();
-
-  // Create Lumice server
-  gui::g_server = LUMICE_CreateServer();
-  LUMICE_InitLogger(gui::g_server);
 
   // Window size callback: detect user manual resize vs programmatic resize
   glfwSetWindowSizeCallback(window, gui::WindowSizeCallback);

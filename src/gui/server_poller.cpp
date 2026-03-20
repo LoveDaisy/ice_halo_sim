@@ -14,6 +14,18 @@ void ServerPoller::Start(LUMICE_Server* server) {
   // Re-entrant safety: stop existing thread first
   Stop();
 
+  // Selective reset: clear validity flags to prevent stale IDLE (see task-gui-interaction-fix),
+  // but preserve xyz_data buffer to avoid reallocation churn during rapid restarts.
+  // During CommitConfig (Stop→Start), the old poller may have observed a transient IDLE state
+  // and staged it. Setting valid=false prevents SyncFromPoller() from acting on stale data.
+  // Worker thread will overwrite these fields within ~2ms of starting.
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    staged_.valid = false;
+    staged_.server_state = LUMICE_SERVER_IDLE;
+    staged_.has_new_texture = false;
+  }
+
   running_ = true;
   worker_ = std::thread(&ServerPoller::WorkerLoop, this, server);
 }
@@ -79,9 +91,15 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
       break;
     }
 
-    // Sleep kPollIntervalMs between polls.
-    // Max shutdown delay equals kPollIntervalMs (acceptable for values <= 200ms).
-    std::this_thread::sleep_for(std::chrono::milliseconds(gui::kPollIntervalMs));
+    // After a restart, the server needs a few ms to accumulate rays before the first snapshot
+    // has data. Use a short sleep (5ms) when no texture data is available yet, to avoid the
+    // race where the next DoRun() fires before the worker's second poll.
+    // Once texture data is available, switch to normal poll interval.
+    // Sleep in 1ms increments so Stop() can join quickly (max 1ms delay vs full sleep).
+    int sleep_ms = (xyz_results[0].xyz_buffer != nullptr) ? gui::kPollIntervalMs : 5;
+    for (int i = 0; i < sleep_ms && running_; i++) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
   }
 }
 
