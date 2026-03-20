@@ -20,8 +20,8 @@ constexpr int kPollIntervalMs = kTimingIntervalMs;    // Server poll interval (T
 // Texture upload hold: prevent black frame flash after simulation restart.
 // The first few snapshots have very few rays, producing sparse/dark frames.
 // Require a minimum ray count before replacing the displayed texture.
-// At ~3M rays/sec and 50ms commit interval, ~150k rays accumulate per cycle; 100k is reachable in ~33ms.
-constexpr unsigned long kMinRaysForDisplay = 100000;
+// At ~3M rays/sec and 50ms commit interval, ~150k rays accumulate per cycle; 50k is reachable in ~17ms.
+constexpr unsigned long kMinRaysForDisplay = 50000;
 
 }  // namespace lumice::gui
 
