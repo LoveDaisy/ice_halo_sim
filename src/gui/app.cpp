@@ -5,6 +5,7 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -425,11 +426,25 @@ void SyncFromPoller() {
   }
 
   // Upload XYZ float texture (GL call — must be on main thread).
-  // Skip when snapshot_intensity <= 0 (no rays accumulated yet after restart) to avoid
-  // feeding zero-intensity data to the shader, which would cause a black frame flash.
-  if (data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0) {
+  // After a simulation restart, the first few snapshots have very low intensity (few rays),
+  // producing sparse/dark frames that appear as black screen flashes. To prevent this:
+  // - Require new intensity to reach kMinIntensityRatio (5%) of current displayed intensity
+  // - Unconditionally allow upload after kMaxTextureHoldMs (500ms) for extreme param changes
+  // NOTE: g_state.snapshot_intensity is intentionally NOT reset in DoRun() — the old value
+  // serves as the threshold baseline. It is only updated here on successful upload.
+  // DoNew()/DoOpen() may reset it to 0 (entering a fresh state where any >0 value is accepted).
+  static auto last_texture_upload = std::chrono::steady_clock::now();
+  bool intensity_ok = data.snapshot_intensity > 0;
+  if (intensity_ok && g_state.snapshot_intensity > 0) {
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_texture_upload).count();
+    intensity_ok =
+        data.snapshot_intensity >= g_state.snapshot_intensity * kMinIntensityRatio || elapsed_ms >= kMaxTextureHoldMs;
+  }
+  if (data.has_new_texture && g_state.selected_renderer >= 0 && intensity_ok) {
     g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
     g_state.snapshot_intensity = data.snapshot_intensity;
+    last_texture_upload = std::chrono::steady_clock::now();
   }
 }
 
