@@ -71,10 +71,10 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
       staged_.valid = true;
       staged_.server_state = server_state;
       if (has_new_snapshot) {
-        // Copy XYZ data BEFORE calling GetStatsResults — GetStatsResults triggers DoSnapshot
-        // which calls PostSnapshot, destructively modifying snapshot_xyz_ in-place (XYZ→RGB conversion).
-        // The raw pointer xyz_buffer would then point to already-converted data, causing double
-        // normalization in the GPU shader → black frame flash.
+        // Copy XYZ data from the snapshot. Stats are included in xyz_results (populated by
+        // GetRawXyzResults server-side) so we don't need a separate GetStatsResults call.
+        // This avoids triggering DoSnapshot → PostSnapshot (heavy CPU XYZ→RGB conversion)
+        // that the GPU rendering path doesn't need.
         size_t float_count = static_cast<size_t>(xyz_results[0].img_width) * xyz_results[0].img_height * 3;
         staged_.xyz_data.resize(float_count);
         std::memcpy(staged_.xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
@@ -85,11 +85,9 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
         staged_.has_new_texture = true;
         last_generation_ = xyz_results[0].snapshot_generation;
 
-        LUMICE_StatsResult stats[2]{};
-        LUMICE_GetStatsResults(server, stats, 1);
-        if (stats[0].sim_ray_num > 0) {
-          staged_.stats_ray_seg_num = stats[0].ray_seg_num;
-          staged_.stats_sim_ray_num = stats[0].sim_ray_num;
+        if (xyz_results[0].stats_sim_ray_num > 0) {
+          staged_.stats_ray_seg_num = xyz_results[0].stats_ray_seg_num;
+          staged_.stats_sim_ray_num = xyz_results[0].stats_sim_ray_num;
         }
       }
     }

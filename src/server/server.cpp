@@ -253,14 +253,24 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
       results.push_back(r);
     }
   }
-  // Also update cached_stats_result_ for stats queries
-  // Only call GetResult() if we took a new snapshot (or for stats consumers that are always safe)
+  // Update cached stats from StatsConsumer only (skip RenderConsumer to avoid triggering
+  // the heavy PostSnapshot XYZ→RGB conversion that the GPU path doesn't need).
   if (did_snapshot) {
     for (const auto& c : snapshot_consumers) {
+      if (dynamic_cast<RenderConsumer*>(c.get()) != nullptr) {
+        continue;  // Skip: RenderConsumer::GetResult() calls PostSnapshot()
+      }
       auto result = c->GetResult();
       if (auto* s = std::get_if<StatsResult>(&result)) {
         cached_stats_result_ = *s;
       }
+    }
+  }
+  // Attach cached stats to results so callers don't need a separate GetStatsResults call
+  if (cached_stats_result_) {
+    for (auto& r : results) {
+      r.stats_ray_seg_num_ = cached_stats_result_->ray_seg_num_;
+      r.stats_sim_ray_num_ = cached_stats_result_->sim_ray_num_;
     }
   }
   return results;

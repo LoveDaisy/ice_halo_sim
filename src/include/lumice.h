@@ -70,6 +70,8 @@ typedef struct LUMICE_RawXyzResult_ {
   float intensity_factor;    // Per-renderer intensity factor (2^EV)
   int has_valid_data;  // Non-zero once simulation has produced at least one batch (monotonic: once set, never cleared)
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
+  unsigned long stats_ray_seg_num;         // Cached stats: avoids separate LUMICE_GetStatsResults call
+  unsigned long stats_sim_ray_num;
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {
