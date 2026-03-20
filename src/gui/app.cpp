@@ -437,18 +437,13 @@ void SyncFromPoller() {
   }
 
   // Upload XYZ float texture (GL call — must be on main thread).
-  // After a simulation restart, the first few snapshots have very few rays, producing sparse/dark
-  // frames that appear as black screen flashes. Require a minimum ray count before replacing the
-  // displayed texture. For the initial display (no previous image), any positive intensity suffices.
   bool upload_ok = data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0;
-  if (upload_ok && g_state.snapshot_intensity > 0) {
-    upload_ok = data.stats_sim_ray_num >= kMinRaysForDisplay;
-  }
   if (upload_ok) {
     LOG_DEBUG("[GUI] SyncFromPoller: texture {}x{}, rays={}, intensity={}", data.texture_width, data.texture_height,
               data.stats_sim_ray_num, data.snapshot_intensity);
     g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
     g_state.snapshot_intensity = data.snapshot_intensity;
+    g_state.texture_upload_count++;
   }
 }
 

@@ -171,7 +171,8 @@ struct GuiState {
   // Stats from last poll
   unsigned long stats_ray_seg_num = 0;
   unsigned long stats_sim_ray_num = 0;
-  float snapshot_intensity = 0;  // Accumulated intensity for XYZ→RGB normalization
+  float snapshot_intensity = 0;            // Accumulated intensity for XYZ→RGB normalization
+  unsigned long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)
 
   // Last committed config snapshot (for Revert — config fields only, no runtime state)
   struct ConfigSnapshot {
