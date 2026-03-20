@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "gui/gl_common.h"
+#include "util/logger.hpp"
 
 namespace lumice::gui {
 
@@ -101,7 +102,7 @@ static unsigned int CompileShader(unsigned int type, const char* source) {
   if (!success) {
     char log[512];
     glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-    fprintf(stderr, "Crystal shader compile error: %s\n", log);
+    LOG_ERROR("Crystal shader compile error: {}", log);
     glDeleteShader(shader);
     return 0;
   }
@@ -121,7 +122,7 @@ static unsigned int LinkProgram(unsigned int vs, unsigned int gs, unsigned int f
   if (!success) {
     char log[512];
     glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
-    fprintf(stderr, "Crystal shader link error: %s\n", log);
+    LOG_ERROR("Crystal shader link error: {}", log);
     glDeleteProgram(prog);
     return 0;
   }
@@ -177,7 +178,7 @@ bool CrystalRenderer::Init(int width, int height) {
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, ms_depth_rb_);
 
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-    fprintf(stderr, "Crystal MSAA FBO incomplete\n");
+    LOG_ERROR("Crystal MSAA FBO incomplete");
     return false;
   }
 
@@ -193,7 +194,7 @@ bool CrystalRenderer::Init(int width, int height) {
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_tex_, 0);
 
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-    fprintf(stderr, "Crystal resolve FBO incomplete\n");
+    LOG_ERROR("Crystal resolve FBO incomplete");
     return false;
   }
 
