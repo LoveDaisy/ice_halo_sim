@@ -65,34 +65,45 @@ int main(int argc, char** argv) {
   gui::g_server = LUMICE_CreateServer();
   LUMICE_InitLogger(gui::g_server);
 
-  // Parse CLI arguments for log level (default: warn for minimal output).
-  // -v = info, -d = debug, --log-level <level> for explicit control.
+  // Parse CLI arguments for log level.
+  // --log-level / -v / -d control GUI log level (global logger, LOG_* macros).
+  // --core-log-level controls Core log level (server logger, ILOG_* macros).
+  // Default: both warn. -v sets GUI to info, -d sets GUI to debug.
   {
-    LUMICE_LogLevel log_level = LUMICE_LOG_WARNING;
+    auto parse_level = [](std::string_view s) -> LUMICE_LogLevel {
+      if (s == "trace")
+        return LUMICE_LOG_TRACE;
+      if (s == "debug")
+        return LUMICE_LOG_DEBUG;
+      if (s == "info")
+        return LUMICE_LOG_INFO;
+      if (s == "warn")
+        return LUMICE_LOG_WARNING;
+      if (s == "error")
+        return LUMICE_LOG_ERROR;
+      if (s == "off")
+        return LUMICE_LOG_OFF;
+      return LUMICE_LOG_WARNING;
+    };
+
+    LUMICE_LogLevel gui_level = LUMICE_LOG_WARNING;
+    LUMICE_LogLevel core_level = LUMICE_LOG_WARNING;
     for (int i = 1; i < argc; ++i) {
       std::string_view arg(argv[i]);
       if (arg == "-v") {
-        log_level = LUMICE_LOG_INFO;
+        gui_level = LUMICE_LOG_INFO;
       } else if (arg == "-d") {
-        log_level = LUMICE_LOG_DEBUG;
+        gui_level = LUMICE_LOG_DEBUG;
       } else if (arg == "--log-level" && i + 1 < argc) {
-        std::string_view level(argv[++i]);
-        if (level == "trace") {
-          log_level = LUMICE_LOG_TRACE;
-        } else if (level == "debug") {
-          log_level = LUMICE_LOG_DEBUG;
-        } else if (level == "info") {
-          log_level = LUMICE_LOG_INFO;
-        } else if (level == "warn") {
-          log_level = LUMICE_LOG_WARNING;
-        } else if (level == "error") {
-          log_level = LUMICE_LOG_ERROR;
-        } else if (level == "off") {
-          log_level = LUMICE_LOG_OFF;
-        }
+        gui_level = parse_level(argv[++i]);
+      } else if (arg == "--core-log-level" && i + 1 < argc) {
+        core_level = parse_level(argv[++i]);
       }
     }
-    LUMICE_SetLogLevel(gui::g_server, log_level);
+    // Set core level first (LUMICE_SetLogLevel sets both server + global logger),
+    // then override global logger to GUI level.
+    LUMICE_SetLogLevel(gui::g_server, core_level);
+    lumice::GetGlobalLogger().SetLevel(static_cast<lumice::LogLevel>(gui_level));
   }
 
   // Initialize preview renderer

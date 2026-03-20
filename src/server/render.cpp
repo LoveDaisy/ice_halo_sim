@@ -16,7 +16,7 @@
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 #include "util/color_data.hpp"
-#include "util/logger.hpp"
+
 
 namespace lumice {
 
@@ -377,7 +377,6 @@ void RenderConsumer::Consume(const SimData& data) {
     }
 
     // Do rendering
-    ILOG_DEBUG(logger_, "render ray: {:.4f},{:.4f},{:.4f},{:.4f}", r.d_[0], r.d_[1], r.d_[2], r.w_);
     std::memcpy(d_buf_.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
     w_buf_[filtered_ray_num] = r.w_;
     filtered_ray_num++;

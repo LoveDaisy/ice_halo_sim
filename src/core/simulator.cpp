@@ -114,9 +114,6 @@ void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, siz
     r.state_ = RaySeg::kNormal;
     r.rp_.Clear();
     r.rp_ << curr_crystal.GetFn(r.fid_);
-
-    LOG_DEBUG("init ray d: {:.6f},{:.6f},{:.6f}", r.d_[0], r.d_[1], r.d_[2]);
-    LOG_DEBUG("init ray p: {:.6f},{:.6f},{:.6f}", r.p_[0], r.p_[1], r.p_[2]);
   }
 }
 
@@ -341,9 +338,6 @@ void FillRayOtherInfo(size_t curr_ray_num, size_t i,                           /
     r.crystal_config_id_ = all_data[r.prev_ray_idx_].crystal_config_id_;
     r.crystal_rot_ = all_data[r.prev_ray_idx_].crystal_rot_;
     r.root_ray_idx_ = all_data[r.prev_ray_idx_].root_ray_idx_;
-
-    LOG_DEBUG("hit loop ray p: {:.6f},{:.6f},{:.6f},{}", r.p_[0], r.p_[1], r.p_[2], i);
-    LOG_DEBUG("hit loop ray d: {:.6f},{:.6f},{:.6f},{}", r.d_[0], r.d_[1], r.d_[2], i);
   }
 }
 
