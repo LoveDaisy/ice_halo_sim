@@ -17,7 +17,6 @@ constexpr int kTimingIntervalMs = 50;                 // Base interval for commi
 constexpr int kCommitIntervalMs = kTimingIntervalMs;  // Min interval between auto-commits (T_commit)
 constexpr int kPollIntervalMs = kTimingIntervalMs;    // Server poll interval (T_poll)
 
-
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_CONSTANTS_HPP
