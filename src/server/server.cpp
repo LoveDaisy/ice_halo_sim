@@ -35,6 +35,7 @@ class ServerImpl {
   std::vector<RenderResult> GetRenderResults();
   std::vector<RawXyzResult> GetRawXyzResults();
   std::optional<StatsResult> GetStatsResult();
+  std::optional<StatsResult> GetCachedStatsResult();
 
   void Stop();
   void Start();
@@ -274,18 +275,16 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
       }
     }
   }
-  // Attach cached stats to results so callers don't need a separate GetStatsResults call
-  if (cached_stats_result_) {
-    for (auto& r : results) {
-      r.stats_ray_seg_num_ = cached_stats_result_->ray_seg_num_;
-      r.stats_sim_ray_num_ = cached_stats_result_->sim_ray_num_;
-    }
-  }
   return results;
 }
 
 std::optional<StatsResult> ServerImpl::GetStatsResult() {
   DoSnapshot();
+  std::lock_guard<std::mutex> lock(snapshot_mutex_);
+  return cached_stats_result_;
+}
+
+std::optional<StatsResult> ServerImpl::GetCachedStatsResult() {
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
   return cached_stats_result_;
 }
@@ -586,6 +585,13 @@ std::optional<StatsResult> Server::GetStatsResult() {
     return std::nullopt;
   }
   return impl_->GetStatsResult();
+}
+
+std::optional<StatsResult> Server::GetCachedStatsResult() {
+  if (!impl_) {
+    return std::nullopt;
+  }
+  return impl_->GetCachedStatsResult();
 }
 
 void Server::Stop() {

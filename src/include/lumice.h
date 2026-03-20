@@ -70,8 +70,6 @@ typedef struct LUMICE_RawXyzResult_ {
   float intensity_factor;                  // Per-renderer intensity factor (2^EV)
   int has_valid_data;                      // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
-  unsigned long long stats_ray_seg_num;    // Cached stats: avoids separate LUMICE_GetStatsResults call
-  unsigned long long stats_sim_ray_num;
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {
@@ -202,7 +200,13 @@ LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderRes
 LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count);
 
 // Fill stats results into out array, sentinel-terminated (sim_ray_num == 0).
+// Note: triggers DoSnapshot internally (includes PostSnapshot XYZ→RGB conversion).
 LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
+
+// Get cached stats without triggering DoSnapshot/PostSnapshot.
+// Returns the stats from the most recent snapshot (updated by LUMICE_GetRawXyzResults).
+// Returns all-zero struct if no snapshot has been taken yet.
+LUMICE_ErrorCode LUMICE_GetCachedStats(LUMICE_Server* server, LUMICE_StatsResult* out);
 
 // =============== State & Control ===============
 LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out);

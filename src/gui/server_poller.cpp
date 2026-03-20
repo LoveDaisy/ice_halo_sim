@@ -85,9 +85,12 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
         staged_.has_new_texture = true;
         last_generation_ = xyz_results[0].snapshot_generation;
 
-        if (xyz_results[0].stats_sim_ray_num > 0) {
-          staged_.stats_ray_seg_num = xyz_results[0].stats_ray_seg_num;
-          staged_.stats_sim_ray_num = xyz_results[0].stats_sim_ray_num;
+        // Get stats from lightweight cached API (updated by GetRawXyzResults above)
+        LUMICE_StatsResult cached_stats{};
+        LUMICE_GetCachedStats(server, &cached_stats);
+        if (cached_stats.sim_ray_num > 0) {
+          staged_.stats_ray_seg_num = cached_stats.ray_seg_num;
+          staged_.stats_sim_ray_num = cached_stats.sim_ray_num;
         }
       }
     }

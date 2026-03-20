@@ -138,8 +138,6 @@ struct RawXyzResult {
   float intensity_factor_;
   bool has_valid_data_ = false;       // True after first ConsumeData; reset on Stop
   uint64_t snapshot_generation_ = 0;  // Increments on each new snapshot
-  size_t stats_ray_seg_num_ = 0;      // Cached stats: avoids separate GetStatsResults call
-  size_t stats_sim_ray_num_ = 0;
 };
 
 struct StatsResult {
@@ -236,6 +234,14 @@ class Server {
    * @note Only returns StatsResult if available, otherwise returns std::nullopt
    */
   std::optional<StatsResult> GetStatsResult();
+
+  /**
+   * @brief Get cached statistics without triggering DoSnapshot
+   * @return Optional StatsResult from the most recent snapshot. Returns std::nullopt if no data yet.
+   * @note Unlike GetStatsResult(), this does NOT call DoSnapshot/PostSnapshot.
+   *       The cache is updated by GetRawXyzResults() when snapshot_dirty_ is true.
+   */
+  std::optional<StatsResult> GetCachedStatsResult();
 
   /**
    * @brief Stop the server
