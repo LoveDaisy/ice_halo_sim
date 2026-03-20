@@ -14,6 +14,14 @@ void ServerPoller::Start(LUMICE_Server* server) {
   // Re-entrant safety: stop existing thread first
   Stop();
 
+  // Clear stale data from the old poller thread. During CommitConfig (Stop→Start),
+  // the old poller may have observed a transient IDLE state and staged it. Without
+  // clearing, SyncFromPoller() would read this stale IDLE and prematurely end the simulation.
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    staged_ = PollerData{};
+  }
+
   running_ = true;
   worker_ = std::thread(&ServerPoller::WorkerLoop, this, server);
 }
