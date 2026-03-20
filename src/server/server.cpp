@@ -77,6 +77,7 @@ class ServerImpl {
 
   std::atomic_bool stop_{ true };
   std::atomic_bool work_started_{ false };
+  std::atomic_bool scene_gen_active_{ false };  // True while GenerateScene is actively producing batches
   std::atomic_int sim_scene_cnt_;
   std::mutex scene_mutex_;
   std::condition_variable scene_cv_;
@@ -402,7 +403,7 @@ ServerStatus ServerImpl::GetStatus() const {
     }
   }
 
-  if (any_busy || sim_scene_cnt_ > 0) {
+  if (any_busy || sim_scene_cnt_ > 0 || scene_gen_active_) {
     return ServerStatus::kRunning;
   }
 
@@ -465,6 +466,7 @@ void ServerImpl::ConsumeData() {
 void ServerImpl::GenerateScene() {
   ILOG_DEBUG(logger_, "GenerateScene entry");
   auto gen_start = std::chrono::steady_clock::now();
+  scene_gen_active_ = true;  // Must be set before work_started_ to close the ordering window
   work_started_ = true;
   bool first_batch_logged = false;
 
@@ -500,6 +502,7 @@ void ServerImpl::GenerateScene() {
     committed_num += kDefaultRayNum;
     ILOG_DEBUG(logger_, "GenerateScene: finish wl");
   }
+  scene_gen_active_ = false;  // All exit paths (normal + CHECK_STOP break) converge here
   ILOG_DEBUG(logger_, "GenerateScene exit");
 }
 
