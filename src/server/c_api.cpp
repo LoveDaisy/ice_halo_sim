@@ -415,7 +415,18 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
       float prism_h = shape.value("prism_h", 1.0f);
       float upper_h = shape.value("upper_h", 0.0f);
       float lower_h = shape.value("lower_h", 0.0f);
-      mesh = ns::CreatePyramidMesh(upper_h, prism_h, lower_h);
+      if (shape.contains("upper_indices") && shape.contains("lower_indices")) {
+        auto ui = shape["upper_indices"];
+        auto li = shape["lower_indices"];
+        int upper_idx1 = ui[0].get<int>();
+        int upper_idx4 = ui[2].get<int>();
+        int lower_idx1 = li[0].get<int>();
+        int lower_idx4 = li[2].get<int>();
+        float dist[6]{ 1, 1, 1, 1, 1, 1 };
+        mesh = ns::CreatePyramidMesh(upper_idx1, upper_idx4, lower_idx1, lower_idx4, upper_h, prism_h, lower_h, dist);
+      } else {
+        mesh = ns::CreatePyramidMesh(upper_h, prism_h, lower_h);
+      }
     } else {
       return LUMICE_ERR_INVALID_VALUE;
     }
