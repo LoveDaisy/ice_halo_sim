@@ -71,7 +71,18 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
     // before the first texture upload of each restart cycle.
     auto since_restart =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - restart_time_).count();
-    bool in_hold_window = since_restart < gui::kTextureHoldMs;
+    bool hold_by_time = since_restart < gui::kTextureHoldMs;
+
+    // Threshold-based gating: skip snapshots with too few rays (alternative/complement to time-based).
+    // Check cached stats for the current ray count.
+    bool hold_by_threshold = false;
+    if (gui::kMinRaysForUpload > 0 && has_new_snapshot) {
+      LUMICE_StatsResult threshold_stats{};
+      LUMICE_GetCachedStats(server, &threshold_stats);
+      hold_by_threshold = threshold_stats.sim_ray_num < static_cast<unsigned long>(gui::kMinRaysForUpload);
+    }
+
+    bool in_hold_window = hold_by_time || hold_by_threshold;
 
     // Stage all results under lock
     {

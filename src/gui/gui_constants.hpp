@@ -19,7 +19,9 @@ constexpr int kPollIntervalMs = 20;    // Server poll interval (T_poll, ms). Sho
                                        // to ensure each frame has fresh data available via TrySyncData().
 constexpr int kTextureHoldMs = 30;     // After restart, hold old texture for this long before uploading new data.
                                        // Skips the earliest sparse snapshots (~5ms, very few rays) while allowing
-                                    // subsequent polls through. Ensures consistent responsiveness across all devices.
+                                       // subsequent polls through. Set to 0 to disable time-based gating.
+constexpr int kMinRaysForUpload = 0;   // Threshold-based gating: skip snapshots with fewer rays than this.
+                                       // Alternative/complement to time-based gating. Set to 0 to disable.
 
 }  // namespace lumice::gui
 
