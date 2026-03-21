@@ -1,6 +1,7 @@
 #include "gui/panels.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 #include "gui/gui_state.hpp"
@@ -11,7 +12,8 @@ namespace lumice::gui {
 // Slider + InputFloat + label text, laid out as: [slider] [input] Label
 // Uses a fixed label column width so vertically stacked sliders align.
 // Returns true if value changed.
-static bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f") {
+static bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
+                            bool sqrt_scale = false) {
   // Strip ImGui ID suffix (e.g. "Azimuth##view" → display "Azimuth")
   const char* display_label = label;
   const char* hash_pos = strstr(label, "##");
@@ -38,7 +40,19 @@ static bool SliderWithInput(const char* label, float* value, float min_val, floa
   char slider_id[64];
   snprintf(slider_id, sizeof(slider_id), "##%s_slider", label);
   ImGui::PushItemWidth(slider_w);
-  changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt);
+  if (sqrt_scale && min_val >= 0.0f) {
+    // Sqrt-scale slider: more resolution at small values.
+    // Slider operates on sqrt(value); actual value = slider_val^2.
+    float sqrt_val = std::sqrt(std::max(*value, 0.0f));
+    float sqrt_max = std::sqrt(max_val);
+    // Use empty format to hide the slider's own text (InputFloat shows the actual value)
+    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "")) {
+      *value = sqrt_val * sqrt_val;
+      changed = true;
+    }
+  } else {
+    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt);
+  }
   ImGui::PopItemWidth();
 
   ImGui::SameLine();
@@ -47,6 +61,9 @@ static bool SliderWithInput(const char* label, float* value, float min_val, floa
   ImGui::PushItemWidth(kInputWidth);
   changed |= ImGui::InputFloat(input_id, value, 0, 0, fmt);
   ImGui::PopItemWidth();
+
+  // Clamp after all inputs
+  *value = std::clamp(*value, min_val, max_val);
 
   ImGui::SameLine();
   ImGui::TextUnformatted(display_label);
@@ -165,9 +182,9 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
   DIRTY_IF(SliderWithInput("Mean", &axis.mean, -360.0f, 360.0f));
 
   if (axis.type == AxisDistType::kGauss) {
-    DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f));
+    DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", true));
   } else {
-    DIRTY_IF(SliderWithInput("Range", &axis.std, 0.0f, 360.0f));
+    DIRTY_IF(SliderWithInput("Range", &axis.std, 0.0f, 360.0f, "%.1f", true));
   }
 
   ImGui::PopID();
