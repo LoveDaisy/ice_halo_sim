@@ -63,11 +63,13 @@ typedef struct LUMICE_RawXyzResult_ {
   int renderer_id;
   int img_width;
   int img_height;
-  const float* xyz_buffer;   // Read-only XYZ float data, 3 floats per pixel.
-                             // Valid until next LUMICE_GetRawXyzResults() or LUMICE_CommitConfig().
-                             // Sentinel: xyz_buffer == NULL
-  float snapshot_intensity;  // Accumulated intensity scalar for normalization
-  float intensity_factor;    // Per-renderer intensity factor (2^EV)
+  const float* xyz_buffer;                 // Read-only XYZ float data, 3 floats per pixel.
+                                           // Valid until next LUMICE_GetRawXyzResults() or LUMICE_CommitConfig().
+                                           // Sentinel: xyz_buffer == NULL
+  float snapshot_intensity;                // Accumulated intensity scalar for normalization
+  float intensity_factor;                  // Per-renderer intensity factor (2^EV)
+  int has_valid_data;                      // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
+  unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {
@@ -198,7 +200,13 @@ LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderRes
 LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count);
 
 // Fill stats results into out array, sentinel-terminated (sim_ray_num == 0).
+// Note: triggers DoSnapshot internally (includes PostSnapshot XYZ→RGB conversion).
 LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
+
+// Get cached stats without triggering DoSnapshot/PostSnapshot.
+// Returns the stats from the most recent snapshot (updated by LUMICE_GetRawXyzResults).
+// Returns all-zero struct if no snapshot has been taken yet.
+LUMICE_ErrorCode LUMICE_GetCachedStats(LUMICE_Server* server, LUMICE_StatsResult* out);
 
 // =============== State & Control ===============
 LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out);

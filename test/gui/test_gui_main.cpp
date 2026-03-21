@@ -1,6 +1,7 @@
 #include <GLFW/glfw3.h>
 #include <stb_image.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -1585,6 +1586,7 @@ static void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
 static void RegisterPerfTests(ImGuiTestEngine* engine) {
   // Scenario 1: Steady-state simulation (baseline)
+  // Measures: rays/sec, texture update interval (avg/min/max), texture FPS
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "perf_test", "steady_state");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -1603,11 +1605,25 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
 
       // Measure for 2 seconds (short enough for test engine timeout)
       unsigned long start_rays = gui::g_state.stats_sim_ray_num;
+      auto upload_before = gui::g_state.texture_upload_count;
       auto start_time = std::chrono::steady_clock::now();
       auto end_time = start_time + std::chrono::seconds(2);
 
+      // Track texture update intervals
+      auto last_upload_count = upload_before;
+      auto last_upload_time = start_time;
+      std::vector<double> texture_intervals_ms;
+
       while (std::chrono::steady_clock::now() < end_time) {
         ctx->Yield();
+        // Detect new texture upload
+        if (gui::g_state.texture_upload_count != last_upload_count) {
+          auto now = std::chrono::steady_clock::now();
+          double interval = std::chrono::duration<double, std::milli>(now - last_upload_time).count();
+          texture_intervals_ms.push_back(interval);
+          last_upload_count = gui::g_state.texture_upload_count;
+          last_upload_time = now;
+        }
       }
 
       unsigned long end_rays = gui::g_state.stats_sim_ray_num;
@@ -1617,12 +1633,31 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       double rays_per_sec = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
       IM_CHECK_GT(rays_per_sec, 0.0);
 
+      // Report texture update frequency
+      auto texture_uploads = gui::g_state.texture_upload_count - upload_before;
+      if (!texture_intervals_ms.empty()) {
+        std::sort(texture_intervals_ms.begin(), texture_intervals_ms.end());
+        double sum = 0;
+        for (auto v : texture_intervals_ms) {
+          sum += v;
+        }
+        double avg = sum / texture_intervals_ms.size();
+        double median = texture_intervals_ms[texture_intervals_ms.size() / 2];
+        double min_val = texture_intervals_ms.front();
+        double max_val = texture_intervals_ms.back();
+        fprintf(stderr, "[PERF] steady_state: %lu texture updates in %.1fs (%.1f FPS)\n", texture_uploads, elapsed,
+                texture_uploads / elapsed);
+        fprintf(stderr, "[PERF] steady_state: texture interval avg=%.0fms median=%.0fms min=%.0fms max=%.0fms\n", avg,
+                median, min_val, max_val);
+      }
+
       StopPerfSimulation();
     };
   }
 
   // Scenario 2: Parameter drag (slider interaction during simulation)
   // All parameter changes trigger full restart (hot-update was removed in task-52.1).
+  // Measures: rays/sec, restarts, upload ratio, per-restart ray count distribution
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "perf_test", "slider_drag");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -1649,10 +1684,14 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       int iteration = 0;
       int restart_count = 0;
       auto upload_before = gui::g_state.texture_upload_count;
+      std::vector<unsigned long> per_restart_rays;  // Ray count per restart cycle
+      std::vector<unsigned long> per_upload_rays;   // Ray count at each texture upload (measures flicker)
+      auto last_upload_count = upload_before;       // Independent tracker for upload detection
 
       auto read_server_rays = [&]() -> unsigned long {
-        if (!gui::g_server)
+        if (!gui::g_server) {
           return 0;
+        }
         LUMICE_StatsResult stats[2]{};
         LUMICE_GetStatsResults(gui::g_server, stats, 1);
         return stats[0].sim_ray_num;
@@ -1666,24 +1705,33 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         iteration++;
 
         // Yield a few frames then check commit. Yield count is small (2 frames)
-        // so the commit check runs frequently, letting kTimingIntervalMs control
+        // so the commit check runs frequently, letting kCommitIntervalMs control
         // the actual commit rate rather than the yield loop duration.
         for (int i = 0; i < 2; i++) {
           ctx->Yield();
+          // Track per-upload ray counts (measures what the user actually sees on screen)
+          if (gui::g_state.texture_upload_count != last_upload_count) {
+            per_upload_rays.push_back(gui::g_state.stats_sim_ray_num);
+            last_upload_count = gui::g_state.texture_upload_count;
+          }
         }
 
         // Throttled commit: same logic as main.cpp auto-commit.
         auto now = std::chrono::steady_clock::now();
         auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
         if (commit_elapsed >= gui::kCommitIntervalMs) {
-          cumulative_rays += read_server_rays();
+          auto rays_this_cycle = read_server_rays();
+          per_restart_rays.push_back(rays_this_cycle);
+          cumulative_rays += rays_this_cycle;
           gui::g_state.dirty = false;
           gui::DoRun();
           last_commit = now;
           restart_count++;
         }
       }
-      cumulative_rays += read_server_rays();
+      auto final_rays = read_server_rays();
+      per_restart_rays.push_back(final_rays);
+      cumulative_rays += final_rays;
 
       double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
 
@@ -1698,8 +1746,51 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       fprintf(stderr, "[PERF] slider_drag: %lu texture uploads / %d restarts (ratio: %.2f)\n", texture_uploads,
               restart_count, upload_ratio);
 
+      // Report per-restart ray count distribution
+      if (!per_restart_rays.empty()) {
+        std::sort(per_restart_rays.begin(), per_restart_rays.end());
+        unsigned long sum = 0;
+        for (auto v : per_restart_rays) {
+          sum += v;
+        }
+        double avg = static_cast<double>(sum) / per_restart_rays.size();
+        auto median = per_restart_rays[per_restart_rays.size() / 2];
+        auto min_val = per_restart_rays.front();
+        auto max_val = per_restart_rays.back();
+        fprintf(stderr, "[PERF] slider_drag: rays/restart avg=%.0f median=%lu min=%lu max=%lu (n=%zu)\n", avg, median,
+                min_val, max_val, per_restart_rays.size());
+      }
+
+      // Report per-upload ray count distribution and CV (measures actual texture flicker)
+      if (!per_upload_rays.empty()) {
+        std::sort(per_upload_rays.begin(), per_upload_rays.end());
+        double usum = 0;
+        for (auto v : per_upload_rays) {
+          usum += v;
+        }
+        double uavg = usum / per_upload_rays.size();
+        auto umedian = per_upload_rays[per_upload_rays.size() / 2];
+        auto umin = per_upload_rays.front();
+        auto umax = per_upload_rays.back();
+
+        // Compute CV (coefficient of variation) = stddev / mean
+        double sq_diff_sum = 0;
+        for (auto v : per_upload_rays) {
+          double diff = v - uavg;
+          sq_diff_sum += diff * diff;
+        }
+        double stddev = std::sqrt(sq_diff_sum / per_upload_rays.size());
+        double cv = uavg > 0 ? stddev / uavg * 100.0 : 0;
+
+        fprintf(stderr, "[PERF] slider_drag: upload_rays avg=%.0f median=%lu min=%lu max=%lu (n=%zu)\n", uavg, umedian,
+                umin, umax, per_upload_rays.size());
+        fprintf(stderr, "[PERF] slider_drag: upload_rays CV=%.1f%%\n", cv);
+      }
+
       IM_CHECK_GT(rays_per_sec, 0.0);
-      IM_CHECK_GE(upload_ratio, 0.5);
+      // With texture hold delay (kTextureHoldMs), the first ~30ms of each 50ms commit cycle
+      // is intentionally skipped, reducing the upload ratio to ~0.3-0.4.
+      IM_CHECK_GE(upload_ratio, 0.25);
 
       StopPerfSimulation();
     };

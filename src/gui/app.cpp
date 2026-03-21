@@ -424,8 +424,10 @@ void SyncFromPoller() {
     return;  // Worker hasn't produced data yet
   }
 
-  // Update simulation state
-  if (data.server_state == LUMICE_SERVER_IDLE) {
+  // Only transition to kDone when the simulation has actually processed rays and then stopped.
+  // A transient IDLE during restart (before any rays are consumed) has stats_sim_ray_num == 0,
+  // so it's safely ignored here.
+  if (data.server_state == LUMICE_SERVER_IDLE && data.stats_sim_ray_num > 0) {
     g_state.sim_state = SimState::kDone;
     LOG_INFO("[GUI] Simulation done");
   }

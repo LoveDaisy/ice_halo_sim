@@ -307,6 +307,8 @@ LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzRes
     out[i].xyz_buffer = results[i].xyz_buffer_;
     out[i].snapshot_intensity = results[i].snapshot_intensity_;
     out[i].intensity_factor = results[i].intensity_factor_;
+    out[i].has_valid_data = results[i].has_valid_data_ ? 1 : 0;
+    out[i].snapshot_generation = results[i].snapshot_generation_;
   }
 
   // Sentinel
@@ -334,6 +336,24 @@ LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResul
 
   // Sentinel
   std::memset(&out[count], 0, sizeof(LUMICE_StatsResult));
+
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_GetCachedStats(LUMICE_Server* server, LUMICE_StatsResult* out) {
+  if (!server || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  auto result = server->server_->GetCachedStatsResult();
+  if (result.has_value()) {
+    out->ray_seg_num = result->ray_seg_num_;
+    out->sim_ray_num = result->sim_ray_num_;
+    out->crystal_num = result->crystal_num_;
+  } else {
+    std::memset(out, 0, sizeof(LUMICE_StatsResult));
+  }
 
   return LUMICE_OK;
 }

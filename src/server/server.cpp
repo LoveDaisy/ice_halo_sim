@@ -35,6 +35,7 @@ class ServerImpl {
   std::vector<RenderResult> GetRenderResults();
   std::vector<RawXyzResult> GetRawXyzResults();
   std::optional<StatsResult> GetStatsResult();
+  std::optional<StatsResult> GetCachedStatsResult();
 
   void Stop();
   void Start();
@@ -60,6 +61,10 @@ class ServerImpl {
   mutable std::mutex consumer_mutex_;  // Lock ordering: consumer_mutex_ < snapshot_mutex_
   mutable std::mutex snapshot_mutex_;  // Protects cached results
   bool snapshot_dirty_{ false };       // Set by ConsumeData, cleared by DoSnapshot
+  bool has_ever_consumed_{ false };    // True after first ConsumeData; reset on Stop (new consumers have no data)
+  uint64_t snapshot_generation_{
+    0
+  };  // Increments on each PrepareSnapshot; NOT reset on Stop (poller resets its own tracker)
 
   // Cached results under snapshot_mutex_ — populated by DoSnapshot, read by Get*Results
   std::vector<RenderResult> cached_render_results_;
@@ -73,6 +78,7 @@ class ServerImpl {
 
   std::atomic_bool stop_{ true };
   std::atomic_bool work_started_{ false };
+  std::atomic_bool scene_gen_active_{ false };  // True while GenerateScene is actively producing batches
   std::atomic_int sim_scene_cnt_;
   std::mutex scene_mutex_;
   std::condition_variable scene_cv_;
@@ -227,6 +233,10 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
   // Only do Phase 1 (PrepareSnapshot memcpy), skip Phase 2 (PostSnapshot XYZ→RGB).
   // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
   std::vector<ConsumerPtrS> snapshot_consumers;
+  bool did_snapshot = false;
+  // Capture these under consumer_mutex_ to avoid reading them under a different lock (snapshot_mutex_).
+  bool valid_data = false;
+  uint64_t generation = 0;
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
     if (snapshot_dirty_) {
@@ -234,7 +244,11 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
         c->PrepareSnapshot();
       }
       snapshot_dirty_ = false;
+      snapshot_generation_++;
+      did_snapshot = true;
     }
+    valid_data = has_ever_consumed_;
+    generation = snapshot_generation_;
     snapshot_consumers = consumers_;  // shared_ptr copy keeps consumers alive
   }
   std::vector<RawXyzResult> results;
@@ -242,14 +256,23 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
   for (const auto& c : snapshot_consumers) {
     auto* render_consumer = dynamic_cast<RenderConsumer*>(c.get());
     if (render_consumer) {
-      results.push_back(render_consumer->GetRawXyzResult());
+      auto r = render_consumer->GetRawXyzResult();
+      r.has_valid_data_ = valid_data;
+      r.snapshot_generation_ = generation;
+      results.push_back(r);
     }
   }
-  // Also update cached_stats_result_ for stats queries
-  for (const auto& c : snapshot_consumers) {
-    auto result = c->GetResult();
-    if (auto* s = std::get_if<StatsResult>(&result)) {
-      cached_stats_result_ = *s;
+  // Update cached stats from StatsConsumer only (skip RenderConsumer to avoid triggering
+  // the heavy PostSnapshot XYZ→RGB conversion that the GPU path doesn't need).
+  if (did_snapshot) {
+    for (const auto& c : snapshot_consumers) {
+      if (dynamic_cast<RenderConsumer*>(c.get()) != nullptr) {
+        continue;  // Skip: RenderConsumer::GetResult() calls PostSnapshot()
+      }
+      auto result = c->GetResult();
+      if (auto* s = std::get_if<StatsResult>(&result)) {
+        cached_stats_result_ = *s;
+      }
     }
   }
   return results;
@@ -257,6 +280,11 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
 
 std::optional<StatsResult> ServerImpl::GetStatsResult() {
   DoSnapshot();
+  std::lock_guard<std::mutex> lock(snapshot_mutex_);
+  return cached_stats_result_;
+}
+
+std::optional<StatsResult> ServerImpl::GetCachedStatsResult() {
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
   return cached_stats_result_;
 }
@@ -338,6 +366,7 @@ void ServerImpl::Stop() {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
     consumers_.clear();
     snapshot_dirty_ = false;
+    has_ever_consumed_ = false;  // New consumers have no data yet
   }
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
@@ -373,7 +402,7 @@ ServerStatus ServerImpl::GetStatus() const {
     }
   }
 
-  if (any_busy || sim_scene_cnt_ > 0) {
+  if (any_busy || sim_scene_cnt_ > 0 || scene_gen_active_) {
     return ServerStatus::kRunning;
   }
 
@@ -416,6 +445,7 @@ void ServerImpl::ConsumeData() {
           c->Consume(sim_data);
         }
         snapshot_dirty_ = true;
+        has_ever_consumed_ = true;
         if (!first_consume_logged) {
           ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
           first_consume_logged = true;
@@ -435,6 +465,7 @@ void ServerImpl::ConsumeData() {
 void ServerImpl::GenerateScene() {
   ILOG_DEBUG(logger_, "GenerateScene entry");
   auto gen_start = std::chrono::steady_clock::now();
+  scene_gen_active_ = true;  // Must be set before work_started_ to close the ordering window
   work_started_ = true;
   bool first_batch_logged = false;
 
@@ -470,6 +501,7 @@ void ServerImpl::GenerateScene() {
     committed_num += kDefaultRayNum;
     ILOG_DEBUG(logger_, "GenerateScene: finish wl");
   }
+  scene_gen_active_ = false;  // All exit paths (normal + CHECK_STOP break) converge here
   ILOG_DEBUG(logger_, "GenerateScene exit");
 }
 
@@ -553,6 +585,13 @@ std::optional<StatsResult> Server::GetStatsResult() {
     return std::nullopt;
   }
   return impl_->GetStatsResult();
+}
+
+std::optional<StatsResult> Server::GetCachedStatsResult() {
+  if (!impl_) {
+    return std::nullopt;
+  }
+  return impl_->GetCachedStatsResult();
 }
 
 void Server::Stop() {
