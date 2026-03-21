@@ -102,7 +102,6 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
         staged_.snapshot_intensity = xyz_results[0].snapshot_intensity;
         staged_.intensity_factor = xyz_results[0].intensity_factor;
         staged_.has_new_texture = true;
-        last_generation_ = xyz_results[0].snapshot_generation;
 
         // Get stats from lightweight cached API (updated by GetRawXyzResults above)
         LUMICE_StatsResult cached_stats{};
@@ -113,9 +112,11 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
         }
       }
     }
-    // Update generation tracking even during hold window so that when the window ends,
-    // the next genuinely new snapshot (with fresh accumulated rays) triggers the upload.
-    if (has_new_snapshot && in_hold_window) {
+    // Update generation tracking outside the lock — last_generation_ is only accessed by the
+    // worker thread (Start() writes it before spawning the thread, establishing happens-before).
+    // Updated unconditionally on new snapshot: during hold window this ensures the first post-hold
+    // snapshot with fresh accumulated rays triggers the upload.
+    if (has_new_snapshot) {
       last_generation_ = xyz_results[0].snapshot_generation;
     }
 

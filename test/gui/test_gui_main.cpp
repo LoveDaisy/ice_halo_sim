@@ -1685,6 +1685,7 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       auto upload_before = gui::g_state.texture_upload_count;
       std::vector<unsigned long> per_restart_rays;  // Ray count per restart cycle
       std::vector<unsigned long> per_upload_rays;   // Ray count at each texture upload (measures flicker)
+      auto last_upload_count = upload_before;       // Independent tracker for upload detection
 
       auto read_server_rays = [&]() -> unsigned long {
         if (!gui::g_server) {
@@ -1708,8 +1709,9 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         for (int i = 0; i < 2; i++) {
           ctx->Yield();
           // Track per-upload ray counts (measures what the user actually sees on screen)
-          if (gui::g_state.texture_upload_count != upload_before + per_upload_rays.size()) {
+          if (gui::g_state.texture_upload_count != last_upload_count) {
             per_upload_rays.push_back(gui::g_state.stats_sim_ray_num);
+            last_upload_count = gui::g_state.texture_upload_count;
           }
         }
 
