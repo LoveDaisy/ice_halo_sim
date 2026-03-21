@@ -1684,6 +1684,7 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       int restart_count = 0;
       auto upload_before = gui::g_state.texture_upload_count;
       std::vector<unsigned long> per_restart_rays;  // Ray count per restart cycle
+      std::vector<unsigned long> per_upload_rays;   // Ray count at each texture upload (measures flicker)
 
       auto read_server_rays = [&]() -> unsigned long {
         if (!gui::g_server) {
@@ -1706,6 +1707,10 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         // the actual commit rate rather than the yield loop duration.
         for (int i = 0; i < 2; i++) {
           ctx->Yield();
+          // Track per-upload ray counts (measures what the user actually sees on screen)
+          if (gui::g_state.texture_upload_count != upload_before + per_upload_rays.size()) {
+            per_upload_rays.push_back(gui::g_state.stats_sim_ray_num);
+          }
         }
 
         // Throttled commit: same logic as main.cpp auto-commit.
@@ -1753,8 +1758,36 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
                 min_val, max_val, per_restart_rays.size());
       }
 
+      // Report per-upload ray count distribution and CV (measures actual texture flicker)
+      if (!per_upload_rays.empty()) {
+        std::sort(per_upload_rays.begin(), per_upload_rays.end());
+        double usum = 0;
+        for (auto v : per_upload_rays) {
+          usum += v;
+        }
+        double uavg = usum / per_upload_rays.size();
+        auto umedian = per_upload_rays[per_upload_rays.size() / 2];
+        auto umin = per_upload_rays.front();
+        auto umax = per_upload_rays.back();
+
+        // Compute CV (coefficient of variation) = stddev / mean
+        double sq_diff_sum = 0;
+        for (auto v : per_upload_rays) {
+          double diff = v - uavg;
+          sq_diff_sum += diff * diff;
+        }
+        double stddev = std::sqrt(sq_diff_sum / per_upload_rays.size());
+        double cv = uavg > 0 ? stddev / uavg * 100.0 : 0;
+
+        fprintf(stderr, "[PERF] slider_drag: upload_rays avg=%.0f median=%lu min=%lu max=%lu (n=%zu)\n", uavg, umedian,
+                umin, umax, per_upload_rays.size());
+        fprintf(stderr, "[PERF] slider_drag: upload_rays CV=%.1f%%\n", cv);
+      }
+
       IM_CHECK_GT(rays_per_sec, 0.0);
-      IM_CHECK_GE(upload_ratio, 0.5);
+      // With texture hold delay (kTextureHoldMs), the first ~30ms of each 50ms commit cycle
+      // is intentionally skipped, reducing the upload ratio to ~0.3-0.4.
+      IM_CHECK_GE(upload_ratio, 0.25);
 
       StopPerfSimulation();
     };

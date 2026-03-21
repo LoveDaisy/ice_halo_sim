@@ -2,6 +2,7 @@
 #define LUMICE_GUI_SERVER_POLLER_HPP
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -52,7 +53,8 @@ class ServerPoller {
   std::atomic<bool> running_{ false };
   std::mutex data_mutex_;
   PollerData staged_;
-  uint64_t last_generation_{ 0 };  // Tracks snapshot generation to detect new data
+  uint64_t last_generation_{ 0 };                         // Tracks snapshot generation to detect new data
+  std::chrono::steady_clock::time_point restart_time_{};  // For texture hold delay: skip early sparse snapshots
 };
 
 }  // namespace lumice::gui

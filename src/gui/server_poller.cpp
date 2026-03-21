@@ -14,21 +14,21 @@ void ServerPoller::Start(LUMICE_Server* server) {
   // Re-entrant safety: stop existing thread first
   Stop();
 
-  // Selective reset: clear validity flags to prevent stale IDLE (see task-gui-interaction-fix),
-  // but preserve xyz_data buffer to avoid reallocation churn during rapid restarts.
-  // During CommitConfig (Stop→Start), the old poller may have observed a transient IDLE state
-  // and staged it. Setting valid=false prevents SyncFromPoller() from acting on stale data.
-  // Worker thread will overwrite these fields within ~2ms of starting.
+  // Selective reset: clear validity and server_state to prevent SyncFromPoller() from acting
+  // on a stale IDLE state from the previous poller run. Crucially, do NOT clear has_new_texture —
+  // preserving the last good texture data keeps the preview on screen during the gap between
+  // restart and first new snapshot, preventing visible flicker during slider scrubbing.
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
     staged_.valid = false;
     staged_.server_state = LUMICE_SERVER_IDLE;
-    staged_.has_new_texture = false;
   }
   // Reset generation tracking so the new worker detects the first snapshot as new data.
-  // This is outside the data_mutex_ because only the Start() caller writes it before
+  // Record restart time for texture hold delay (see WorkerLoop).
+  // Both are outside data_mutex_ because only the Start() caller writes them before
   // spawning the worker thread.
   last_generation_ = 0;
+  restart_time_ = std::chrono::steady_clock::now();
 
   running_ = true;
   worker_ = std::thread(&ServerPoller::WorkerLoop, this, server);
@@ -65,12 +65,20 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
     bool has_new_snapshot =
         xyz_results[0].xyz_buffer != nullptr && xyz_results[0].snapshot_generation != last_generation_;
 
+    // Texture hold delay: after restart, skip early sparse snapshots for kTextureHoldMs.
+    // The earliest snapshots contain very few rays (only ~5ms of accumulation), which would
+    // cause visible brightness flicker if displayed. By holding off, we let rays accumulate
+    // before the first texture upload of each restart cycle.
+    auto since_restart =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - restart_time_).count();
+    bool in_hold_window = since_restart < gui::kTextureHoldMs;
+
     // Stage all results under lock
     {
       std::lock_guard<std::mutex> lock(data_mutex_);
       staged_.valid = true;
       staged_.server_state = server_state;
-      if (has_new_snapshot) {
+      if (has_new_snapshot && !in_hold_window) {
         // Copy XYZ data from the snapshot. Stats are included in xyz_results (populated by
         // GetRawXyzResults server-side) so we don't need a separate GetStatsResults call.
         // This avoids triggering DoSnapshot → PostSnapshot (heavy CPU XYZ→RGB conversion)
@@ -94,9 +102,16 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
         }
       }
     }
+    // Update generation tracking even during hold window so that when the window ends,
+    // the next genuinely new snapshot (with fresh accumulated rays) triggers the upload.
+    if (has_new_snapshot && in_hold_window) {
+      last_generation_ = xyz_results[0].snapshot_generation;
+    }
 
-    // If server is idle, simulation is done — exit the polling loop
-    if (server_state == LUMICE_SERVER_IDLE) {
+    // If server is idle and has produced valid data, simulation is done — exit the polling loop.
+    // During restart, the server may briefly report IDLE before GenerateScene starts producing
+    // batches. Requiring has_valid_data prevents premature exit in that transient window.
+    if (server_state == LUMICE_SERVER_IDLE && xyz_results[0].has_valid_data) {
       running_ = false;
       break;
     }
