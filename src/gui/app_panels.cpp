@@ -130,8 +130,10 @@ void RenderLeftPanel(float window_height) {
               snprintf(json_buf, sizeof(json_buf), R"({"type":"prism","shape":{"height":%.4f}})", cr.height);
             } else {
               snprintf(json_buf, sizeof(json_buf),
-                       R"({"type":"pyramid","shape":{"prism_h":%.4f,"upper_h":%.4f,"lower_h":%.4f}})", cr.prism_h,
-                       cr.upper_h, cr.lower_h);
+                       R"({"type":"pyramid","shape":{"prism_h":%.4f,"upper_h":%.4f,"lower_h":%.4f,)"
+                       R"("upper_indices":[%d,%d,%d],"lower_indices":[%d,%d,%d]}})",
+                       cr.prism_h, cr.upper_h, cr.lower_h, cr.upper_indices[0], cr.upper_indices[1],
+                       cr.upper_indices[2], cr.lower_indices[0], cr.lower_indices[1], cr.lower_indices[2]);
             }
 
             LUMICE_CrystalMesh mesh{};
