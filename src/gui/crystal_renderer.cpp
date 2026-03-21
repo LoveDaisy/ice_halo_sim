@@ -244,6 +244,8 @@ void CrystalRenderer::Destroy() {
   tri_ebo_ = back_ebo_ = front_ebo_ = vbo_ = vao_ = 0;
   ms_depth_rb_ = ms_color_rb_ = color_tex_ = resolve_fbo_ = fbo_ = 0;
   face_shader_ = edge_shader_ = 0;
+  vertices_.clear();
+  vertex_count_ = 0;
   total_edge_count_ = 0;
   tri_count_ = 0;
 }
@@ -253,7 +255,9 @@ void CrystalRenderer::UpdateMesh(const float* vertices, int vertex_count, const 
   glBindBuffer(GL_ARRAY_BUFFER, vbo_);
   glBufferData(GL_ARRAY_BUFFER, vertex_count * 3 * sizeof(float), vertices, GL_DYNAMIC_DRAW);
 
-  // Store edge data for CPU-side classification
+  // Store vertex and edge data for CPU-side classification
+  vertex_count_ = vertex_count;
+  vertices_.assign(vertices, vertices + vertex_count * 3);
   total_edge_count_ = edge_count;
   all_edges_.assign(edges, edges + edge_count * 2);
   edge_face_normals_.assign(edge_face_normals, edge_face_normals + edge_count * 6);
@@ -325,26 +329,42 @@ void CrystalRenderer::Render(const float rotation[16], float zoom, CrystalStyle 
     }
   }
 
-  // Classify edges: front vs back based on face normals and rotation
-  // In eye space, camera looks along -Z, so a face is front-facing if its rotated normal has Z > 0.
+  // Classify edges: front vs back using perspective-correct face normal test.
+  // In eye space, camera is at origin. A face is front-facing if dot(n_eye, -p_eye) > 0,
+  // where p_eye is the edge midpoint in eye space and n_eye is the rotated face normal.
   std::vector<int> front_edges;
   std::vector<int> back_edges;
   front_edges.reserve(total_edge_count_ * 2);
   back_edges.reserve(total_edge_count_ * 2);
 
   for (int i = 0; i < total_edge_count_; i++) {
+    int v0 = all_edges_[i * 2 + 0];
+    int v1 = all_edges_[i * 2 + 1];
+
+    // Compute edge midpoint in object space
+    float mx = (vertices_[v0 * 3 + 0] + vertices_[v1 * 3 + 0]) * 0.5f;
+    float my = (vertices_[v0 * 3 + 1] + vertices_[v1 * 3 + 1]) * 0.5f;
+    float mz = (vertices_[v0 * 3 + 2] + vertices_[v1 * 3 + 2]) * 0.5f;
+
+    // Transform midpoint to eye space using view_rot (4x4, includes translation (0,0,-dist))
+    float px = view_rot[0] * mx + view_rot[4] * my + view_rot[8] * mz + view_rot[12];
+    float py = view_rot[1] * mx + view_rot[5] * my + view_rot[9] * mz + view_rot[13];
+    float pz = view_rot[2] * mx + view_rot[6] * my + view_rot[10] * mz + view_rot[14];
+
     const float* n0 = &edge_face_normals_[i * 6 + 0];
     const float* n1 = &edge_face_normals_[i * 6 + 3];
 
-    // Rotate normals to eye space (use 3x3 part of rotation matrix, column-major)
+    // Rotate normals to eye space (3x3 part of rotation, no translation for direction vectors)
+    float rn0x = rotation[0] * n0[0] + rotation[4] * n0[1] + rotation[8] * n0[2];
+    float rn0y = rotation[1] * n0[0] + rotation[5] * n0[1] + rotation[9] * n0[2];
     float rn0z = rotation[2] * n0[0] + rotation[6] * n0[1] + rotation[10] * n0[2];
+    float rn1x = rotation[0] * n1[0] + rotation[4] * n1[1] + rotation[8] * n1[2];
+    float rn1y = rotation[1] * n1[0] + rotation[5] * n1[1] + rotation[9] * n1[2];
     float rn1z = rotation[2] * n1[0] + rotation[6] * n1[1] + rotation[10] * n1[2];
 
-    bool face0_front = rn0z > 0.0f;
-    bool face1_front = rn1z > 0.0f;
-
-    int v0 = all_edges_[i * 2 + 0];
-    int v1 = all_edges_[i * 2 + 1];
+    // Front-facing test: dot(n_eye, -p_eye) > 0, i.e. dot(n_eye, p_eye) < 0
+    bool face0_front = (rn0x * px + rn0y * py + rn0z * pz) < 0.0f;
+    bool face1_front = (rn1x * px + rn1y * py + rn1z * pz) < 0.0f;
 
     if (face0_front || face1_front) {
       front_edges.push_back(v0);
