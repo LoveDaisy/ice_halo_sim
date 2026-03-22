@@ -87,6 +87,15 @@ void LUMICE_DestroyServer(LUMICE_Server* server);
 void LUMICE_InitLogger(LUMICE_Server* server);
 void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level);
 
+// Log callback: receives all Core log messages. Called from Core logging threads.
+// Parameters: level, logger name (e.g. "Server", "Simulator"), pre-formatted message.
+// The callback must be thread-safe.
+typedef void (*LUMICE_LogCallback)(LUMICE_LogLevel level, const char* logger_name, const char* message);
+
+// Register a log callback. Pass NULL to disable. Must be called BEFORE LUMICE_CreateServer()
+// for full coverage, but can also be called later (subsequent log messages will be forwarded).
+void LUMICE_SetLogCallback(LUMICE_LogCallback callback);
+
 // =============== Configuration (JSON string) ===============
 LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_str);
 LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename);
