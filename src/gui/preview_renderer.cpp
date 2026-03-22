@@ -318,6 +318,10 @@ bool PreviewRenderer::Init() {
 }
 
 void PreviewRenderer::Destroy() {
+  if (upload_fence_) {
+    glDeleteSync(upload_fence_);
+    upload_fence_ = nullptr;
+  }
   if (texture_) {
     glDeleteTextures(1, &texture_);
     texture_ = 0;
@@ -388,8 +392,13 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
   glBindTexture(GL_TEXTURE_2D, texture_);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 4);  // float data is 4-byte aligned
 
-  if (width != tex_width_ || height != tex_height_ || !xyz_mode_) {
-    // Re-allocate texture when switching from uint8 to float or size changed
+  // Set xyz_mode_ BEFORE upload to avoid mode-mismatch window where shader
+  // could render with wrong conversion path during the upload.
+  bool need_realloc = (width != tex_width_ || height != tex_height_ || !xyz_mode_);
+  xyz_mode_ = true;
+
+  if (need_realloc) {
+    // Re-allocate texture when size changed, or switching from uint8 to float format
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGB, GL_FLOAT, data);
     tex_width_ = width;
     tex_height_ = height;
@@ -397,8 +406,14 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_FLOAT, data);
   }
 
-  xyz_mode_ = true;
-  glFinish();  // Ensure texture upload completes before shader reads it this frame
+  // Fence sync: ensure texture upload completes before shader reads it.
+  // More precise than glFinish() — only waits for this specific upload command,
+  // not the entire GL pipeline. Important for macOS Metal compatibility layer.
+  if (upload_fence_) {
+    glDeleteSync(upload_fence_);
+  }
+  upload_fence_ = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+
   glBindTexture(GL_TEXTURE_2D, 0);
 }
 
@@ -475,6 +490,14 @@ static void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_d
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {
   if (!shader_program_ || !texture_ || vp_w <= 0 || vp_h <= 0) {
     return;
+  }
+
+  // Wait for texture upload fence before reading the texture.
+  // This ensures the GPU has finished writing texture data from UploadXyzTexture().
+  if (upload_fence_) {
+    glClientWaitSync(upload_fence_, GL_SYNC_FLUSH_COMMANDS_BIT, 100000000);  // 100ms timeout
+    glDeleteSync(upload_fence_);
+    upload_fence_ = nullptr;
   }
 
   // Save/restore GL state that ImGui might depend on
