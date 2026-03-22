@@ -1,12 +1,17 @@
 #include <GLFW/glfw3.h>
+#include <spdlog/sinks/dist_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <string_view>
 
 #include "gui/app.hpp"
 #include "gui/gl_common.h"
 #include "gui/gl_init.h"
+#include "gui/log_sink.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -64,6 +69,38 @@ int main(int argc, char** argv) {
   // so shader compile/link/FBO errors can use LOG_ERROR instead of fprintf.
   gui::g_server = LUMICE_CreateServer();
   LUMICE_InitLogger(gui::g_server);
+
+  // Set up GUI log sinks: ImGui ring buffer + file sink (default off).
+  // Uses dist_sink_mt as the sole sink on each logger for thread-safe fan-out.
+  {
+    auto dist_sink = std::make_shared<spdlog::sinks::dist_sink_mt>();
+
+    // Keep existing stdout sink
+    auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    stdout_sink->set_pattern(lumice::kLogPattern);
+    dist_sink->add_sink(stdout_sink);
+
+    // ImGui ring buffer sink
+    gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
+    gui::g_imgui_log_sink->set_pattern(lumice::kLogPattern);
+    dist_sink->add_sink(gui::g_imgui_log_sink);
+
+    // File sink (default level=off, enabled via GUI checkbox)
+    std::string log_path;
+    if (const char* home = std::getenv("HOME")) {
+      log_path = std::string(home) + "/lumice.log";
+    } else {
+      log_path = "lumice.log";
+    }
+    gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path, true);
+    gui::g_file_log_sink->set_pattern(lumice::kLogPattern);
+    gui::g_file_log_sink->set_level(spdlog::level::off);
+    dist_sink->add_sink(gui::g_file_log_sink);
+
+    // Replace sinks on all loggers (single-threaded at this point, safe)
+    spdlog::default_logger()->sinks() = { dist_sink };
+    lumice::GetGlobalLogger().GetSpdLogger()->sinks() = { dist_sink };
+  }
 
   // Parse CLI arguments for log level.
   // --log-level / -v / -d control GUI log level (global logger, LOG_* macros).
@@ -189,6 +226,7 @@ int main(int argc, char** argv) {
     gui::RenderLeftPanel(layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     gui::RenderFloatingLensBar(layout_width);
+    gui::RenderLogPanel(layout_width, layout_height);
     gui::RenderStatusBar(layout_width, layout_height);
     gui::RenderUnsavedPopup(window);
 

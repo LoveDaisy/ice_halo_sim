@@ -33,6 +33,9 @@ float g_aspect_bar_height = 30.0f;  // Updated each frame by RenderPreviewPanel
 bool g_show_unsaved_popup = false;
 PendingAction g_pending_action = PendingAction::kNone;
 
+std::shared_ptr<ImGuiLogSink> g_imgui_log_sink;
+std::shared_ptr<spdlog::sinks::basic_file_sink_mt> g_file_log_sink;
+
 void GlfwErrorCallback(int error, const char* description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }

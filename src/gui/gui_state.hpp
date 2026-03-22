@@ -164,6 +164,12 @@ struct GuiState {
     }
   }
 
+  // Log panel state (view preference — does not call MarkDirty)
+  int gui_log_level = 2;   // Index into log level names: 0=trace,1=debug,2=info,3=warning,4=error,5=off
+  int core_log_level = 2;  // Same mapping
+  bool log_to_file = false;
+  bool log_panel_open = false;
+
   // Simulation state
   enum class SimState { kIdle, kSimulating, kDone, kModified };
   SimState sim_state = SimState::kIdle;

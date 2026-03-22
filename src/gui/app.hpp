@@ -1,10 +1,15 @@
 #ifndef LUMICE_GUI_APP_HPP
 #define LUMICE_GUI_APP_HPP
 
+#include <spdlog/sinks/basic_file_sink.h>
+
+#include <memory>
+
 #include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
+#include "gui/log_sink.hpp"
 #include "gui/preview_renderer.hpp"
 #include "gui/server_poller.hpp"
 #include "include/lumice.h"
@@ -42,6 +47,10 @@ extern float g_aspect_bar_height;  // Cached actual height from ImGui layout
 extern bool g_show_unsaved_popup;
 extern PendingAction g_pending_action;
 
+// Log sinks for GUI log panel
+extern std::shared_ptr<ImGuiLogSink> g_imgui_log_sink;
+extern std::shared_ptr<spdlog::sinks::basic_file_sink_mt> g_file_log_sink;
+
 // GLFW callbacks
 void GlfwErrorCallback(int error, const char* description);
 void WindowSizeCallback(GLFWwindow* window, int width, int height);
@@ -73,6 +82,7 @@ void RenderFloatingLensBar(float window_width);
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height);
 void RenderStatusBar(float window_width, float window_height);
 void RenderUnsavedPopup(GLFWwindow* window);
+void RenderLogPanel(float window_width, float window_height);
 
 }  // namespace lumice::gui
 
