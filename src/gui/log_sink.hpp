@@ -2,7 +2,6 @@
 #define LUMICE_GUI_LOG_SINK_HPP
 
 #include <spdlog/sinks/base_sink.h>
-#include <spdlog/sinks/dist_sink.h>
 
 #include <deque>
 #include <functional>
@@ -39,6 +38,21 @@ class ImGuiLogSink : public spdlog::sinks::base_sink<std::mutex> {
   void Clear() {
     std::lock_guard<std::mutex> lock(this->mutex_);
     entries_.clear();
+  }
+
+  // Inject an external log entry (e.g., from C API callback).
+  // Thread-safe: can be called from any thread.
+  void ReceiveExternal(spdlog::level::level_enum level, const char* message) {
+    std::lock_guard<std::mutex> lock(this->mutex_);
+    std::string msg(message);
+    // Remove trailing newline if present
+    if (!msg.empty() && msg.back() == '\n') {
+      msg.pop_back();
+    }
+    entries_.push_back({ level, std::move(msg) });
+    if (entries_.size() > kMaxEntries) {
+      entries_.pop_front();
+    }
   }
 
  protected:

@@ -1,5 +1,4 @@
 #include <GLFW/glfw3.h>
-#include <spdlog/sinks/dist_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <chrono>
@@ -11,11 +10,11 @@
 #include "gui/app.hpp"
 #include "gui/gl_common.h"
 #include "gui/gl_init.h"
+#include "gui/gui_logger.hpp"
 #include "gui/log_sink.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
-#include "util/logger.hpp"
 
 namespace gui = lumice::gui;
 
@@ -65,21 +64,16 @@ int main(int argc, char** argv) {
 
   gui::g_state = gui::InitDefaultState();
 
-  // Set up GUI log sinks BEFORE creating the server, so that Server/Simulator loggers
-  // (created via spdlog::default_logger()->clone()) inherit the dist_sink with ImGui + file sinks.
-  // Uses dist_sink_mt as the sole sink on default_logger for thread-safe fan-out.
+  // Create Lumice server and initialize Core logger.
+  gui::g_server = LUMICE_CreateServer();
+  LUMICE_InitLogger(gui::g_server);
+
+  // Set up GUI-side log sinks (independent from Core's spdlog).
+  // GUI logs go through GUI's own spdlog logger; Core logs arrive via C API callback.
   {
-    auto dist_sink = std::make_shared<spdlog::sinks::dist_sink_mt>();
-
-    // stdout sink (replaces spdlog's default)
-    auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    stdout_sink->set_pattern(lumice::kLogPattern);
-    dist_sink->add_sink(stdout_sink);
-
-    // ImGui ring buffer sink
+    // ImGui ring buffer sink (shared between GUI logger and Core callback)
     gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
-    gui::g_imgui_log_sink->set_pattern(lumice::kLogPattern);
-    dist_sink->add_sink(gui::g_imgui_log_sink);
+    gui::g_imgui_log_sink->set_pattern(gui::kGuiLogPattern);
 
     // File sink (default level=off, enabled via GUI checkbox)
     std::string log_path;
@@ -89,18 +83,22 @@ int main(int argc, char** argv) {
       log_path = "lumice.log";
     }
     gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path, true);
-    gui::g_file_log_sink->set_pattern(lumice::kLogPattern);
+    gui::g_file_log_sink->set_pattern(gui::kGuiLogPattern);
     gui::g_file_log_sink->set_level(spdlog::level::off);
-    dist_sink->add_sink(gui::g_file_log_sink);
 
-    // Set dist_sink on default_logger so all subsequent clone() calls inherit it.
-    spdlog::default_logger()->sinks() = { dist_sink };
+    // Set GUI logger sinks: stdout + ImGui + file
+    auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    stdout_sink->set_pattern(gui::kGuiLogPattern);
+    gui::SetGuiLoggerSinks({ stdout_sink, gui::g_imgui_log_sink, gui::g_file_log_sink });
+
+    // Register C API callback to receive Core logs → pipe into ImGui ring buffer
+    LUMICE_SetLogCallback([](LUMICE_LogLevel level, const char* /*name*/, const char* message) {
+      if (gui::g_imgui_log_sink) {
+        auto spd_level = static_cast<spdlog::level::level_enum>(level);
+        gui::g_imgui_log_sink->ReceiveExternal(spd_level, message);
+      }
+    });
   }
-
-  // Create Lumice server AFTER sink setup — Server/Simulator loggers clone default_logger's
-  // sinks and automatically inherit the dist_sink (ImGui + file + stdout).
-  gui::g_server = LUMICE_CreateServer();
-  LUMICE_InitLogger(gui::g_server);
 
   // Parse CLI arguments for log level.
   // --log-level / -v / -d control GUI log level (global logger, LOG_* macros).
@@ -137,21 +135,20 @@ int main(int argc, char** argv) {
         core_level = parse_level(argv[++i]);
       }
     }
-    // Set core level first (LUMICE_SetLogLevel sets both server + global logger),
-    // then override global logger to GUI level.
+    // Set core level via C API, GUI level via GUI logger
     LUMICE_SetLogLevel(gui::g_server, core_level);
-    lumice::GetGlobalLogger().SetLevel(static_cast<lumice::LogLevel>(gui_level));
+    gui::SetGuiLogLevel(static_cast<spdlog::level::level_enum>(gui_level));
   }
 
   // Initialize preview renderer
   if (!gui::g_preview.Init()) {
-    LOG_ERROR("Failed to initialize preview renderer");
+    GUI_LOG_ERROR("Failed to initialize preview renderer");
     return 1;
   }
 
   // Initialize crystal renderer (256x256 FBO)
   if (!gui::g_crystal_renderer.Init(256, 256)) {
-    LOG_ERROR("Failed to initialize crystal renderer");
+    GUI_LOG_ERROR("Failed to initialize crystal renderer");
     return 1;
   }
   gui::ResetCrystalView();

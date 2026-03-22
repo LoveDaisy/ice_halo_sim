@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "gui/file_io.hpp"
-#include "util/logger.hpp"
+#include "gui/gui_logger.hpp"
 
 namespace lumice::gui {
 
@@ -165,7 +165,7 @@ void DoSave() {
   RefreshCpuTextureForSave();
   if (SaveLmcFile(g_state.current_file_path, g_state, g_preview, g_state.save_texture)) {
     g_state.dirty = false;
-    LOG_INFO("[GUI] DoSave: {}", g_state.current_file_path);
+    GUI_LOG_INFO("[GUI] DoSave: {}", g_state.current_file_path);
   }
 }
 
@@ -176,7 +176,7 @@ void DoSaveAs() {
     RefreshCpuTextureForSave();
     if (SaveLmcFile(path, g_state, g_preview, g_state.save_texture)) {
       g_state.dirty = false;
-      LOG_INFO("[GUI] DoSaveAs: {}", path);
+      GUI_LOG_INFO("[GUI] DoSaveAs: {}", path);
     }
   }
 }
@@ -185,7 +185,7 @@ void DoExportPreviewPng() {
   auto path = ShowExportPngDialog();
   if (!path.empty()) {
     ExportPreviewPng(path.c_str(), g_preview, g_preview_vp);
-    LOG_INFO("[GUI] Export screenshot: {}", path);
+    GUI_LOG_INFO("[GUI] Export screenshot: {}", path);
   }
 }
 
@@ -207,7 +207,7 @@ void DoExportEquirectPng() {
   size_t size = static_cast<size_t>(renders[0].img_width) * renders[0].img_height * 3;
   std::vector<unsigned char> buffer(renders[0].img_buffer, renders[0].img_buffer + size);
   ExportEquirectPng(path.c_str(), buffer.data(), renders[0].img_width, renders[0].img_height);
-  LOG_INFO("[GUI] Export panorama: {}", path);
+  GUI_LOG_INFO("[GUI] Export panorama: {}", path);
 }
 
 void DoExportConfigJson() {
@@ -215,7 +215,7 @@ void DoExportConfigJson() {
   if (!path.empty()) {
     auto json_str = SerializeCoreConfig(g_state);
     ExportConfigJson(path.c_str(), json_str);
-    LOG_INFO("[GUI] Export config JSON: {}", path);
+    GUI_LOG_INFO("[GUI] Export config JSON: {}", path);
   }
 }
 
@@ -227,7 +227,7 @@ static bool LoadAndUploadBgImage(const std::string& path) {
   int channels = 0;
   unsigned char* raw = stbi_load(path.c_str(), &w, &h, &channels, 3);  // Force 3 channels (RGB)
   if (!raw) {
-    LOG_WARNING("Failed to load background image: {}", path);
+    GUI_LOG_WARNING("Failed to load background image: {}", path);
     return false;
   }
 
@@ -282,7 +282,7 @@ void DoOpen() {
       g_state.sim_state = SimState::kIdle;
       g_preview.ClearTexture();
       g_preview.ClearBackground();
-      LOG_INFO("[GUI] DoOpen (JSON import): {}", path);
+      GUI_LOG_INFO("[GUI] DoOpen (JSON import): {}", path);
     }
     return;
   }
@@ -294,7 +294,7 @@ void DoOpen() {
   if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
     g_state.current_file_path = path;
     g_state.dirty = false;
-    LOG_INFO("[GUI] DoOpen: {}", path);
+    GUI_LOG_INFO("[GUI] DoOpen: {}", path);
     if (!tex_data.empty()) {
       g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
       g_state.sim_state = SimState::kDone;
@@ -324,7 +324,7 @@ void DoNew() {
   g_preview.ClearBackground();
   g_crystal_mesh_id = -1;
   g_crystal_mesh_hash = 0;
-  LOG_INFO("[GUI] DoNew");
+  GUI_LOG_INFO("[GUI] DoNew");
 }
 
 void DoLoadBackground(GLFWwindow* window) {
@@ -379,9 +379,9 @@ void DoRun() {
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
     g_server_poller.Start(g_server);  // Always restart: restart path stops server briefly
-    LOG_INFO("[GUI] DoRun: config committed");
+    GUI_LOG_INFO("[GUI] DoRun: config committed");
   } else {
-    LOG_WARNING("[GUI] CommitConfig FAILED with error code {}", static_cast<int>(err));
+    GUI_LOG_WARNING("[GUI] CommitConfig FAILED with error code {}", static_cast<int>(err));
   }
 }
 
@@ -391,7 +391,7 @@ void DoStop() {
   g_server_poller.Stop();  // Must stop poller before server to avoid dangling access
   LUMICE_StopServer(g_server);
   g_state.sim_state = SimState::kDone;
-  LOG_INFO("[GUI] DoStop");
+  GUI_LOG_INFO("[GUI] DoStop");
 }
 
 void DoRevert() {
@@ -421,7 +421,8 @@ void SyncFromPoller() {
 
   PollerData data;
   if (!g_server_poller.TrySyncData(data)) {
-    return;  // Poller busy writing — skip this frame
+    GUI_LOG_DEBUG("[GUI] SyncFromPoller: skipped (poller busy)");
+    return;
   }
   if (!data.valid) {
     return;  // Worker hasn't produced data yet
@@ -432,7 +433,7 @@ void SyncFromPoller() {
   // so it's safely ignored here.
   if (data.server_state == LUMICE_SERVER_IDLE && data.stats_sim_ray_num > 0) {
     g_state.sim_state = SimState::kDone;
-    LOG_INFO("[GUI] Simulation done");
+    GUI_LOG_INFO("[GUI] Simulation done");
   }
 
   // Update stats
@@ -443,9 +444,13 @@ void SyncFromPoller() {
 
   // Upload XYZ float texture (GL call — must be on main thread).
   bool upload_ok = data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0;
+  if (data.has_new_texture && !upload_ok) {
+    GUI_LOG_DEBUG("[GUI] SyncFromPoller: skipped upload (renderer={}, intensity={})", g_state.selected_renderer,
+                  data.snapshot_intensity);
+  }
   if (upload_ok) {
-    LOG_DEBUG("[GUI] SyncFromPoller: texture {}x{}, rays={}, intensity={}", data.texture_width, data.texture_height,
-              data.stats_sim_ray_num, data.snapshot_intensity);
+    GUI_LOG_DEBUG("[GUI] SyncFromPoller: texture {}x{}, rays={}, intensity={}, factor={:.6f}", data.texture_width,
+                  data.texture_height, data.stats_sim_ray_num, data.snapshot_intensity, data.intensity_factor);
     g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
     g_state.snapshot_intensity = data.snapshot_intensity;
     g_state.texture_upload_count++;

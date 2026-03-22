@@ -16,9 +16,9 @@
 
 #include "gui/app.hpp"
 #include "gui/gl_common.h"
+#include "gui/gui_logger.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/preview_renderer.hpp"
-#include "util/logger.hpp"
 
 namespace lumice::gui {
 
@@ -879,7 +879,7 @@ bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned 
 
   std::ifstream in(path, std::ios::binary);
   if (!in.is_open()) {
-    LOG_ERROR("[LMC] Cannot open file: {}", path);
+    GUI_LOG_ERROR("[LMC] Cannot open file: {}", path);
     return false;
   }
 
@@ -894,17 +894,17 @@ bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned 
 
   if (!ReadU32(in, magic) || !ReadU32(in, version) || !ReadU32(in, flags) || !ReadU64(in, json_offset) ||
       !ReadU64(in, json_size) || !ReadU64(in, tex_offset) || !ReadU64(in, tex_size)) {
-    LOG_ERROR("[LMC] Failed to read header");
+    GUI_LOG_ERROR("[LMC] Failed to read header");
     return false;
   }
 
   if (magic != kLmcMagic) {
-    LOG_ERROR("[LMC] Invalid magic: 0x{:08x}", magic);
+    GUI_LOG_ERROR("[LMC] Invalid magic: 0x{:08x}", magic);
     return false;
   }
 
   if (version != kLmcVersion) {
-    LOG_ERROR("[LMC] Unsupported version: {}", version);
+    GUI_LOG_ERROR("[LMC] Unsupported version: {}", version);
     return false;
   }
 
@@ -913,12 +913,12 @@ bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned 
   in.seekg(static_cast<std::streamoff>(json_offset));
   in.read(json_payload.data(), static_cast<std::streamsize>(json_size));
   if (!in) {
-    LOG_ERROR("[LMC] Failed to read JSON section");
+    GUI_LOG_ERROR("[LMC] Failed to read JSON section");
     return false;
   }
 
   if (!DeserializeGuiStateJson(json_payload, state)) {
-    LOG_ERROR("[LMC] Failed to parse JSON");
+    GUI_LOG_ERROR("[LMC] Failed to parse JSON");
     return false;
   }
 
@@ -926,14 +926,14 @@ bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned 
   bool flag_has_tex = (flags & kLmcFlagHasTexture) != 0;
   if (flag_has_tex) {
     if (tex_size == 0) {
-      LOG_ERROR("[LMC] Texture flag set but size is 0");
+      GUI_LOG_ERROR("[LMC] Texture flag set but size is 0");
       return false;
     }
     std::vector<unsigned char> png_buf(tex_size);
     in.seekg(static_cast<std::streamoff>(tex_offset));
     in.read(reinterpret_cast<char*>(png_buf.data()), static_cast<std::streamsize>(tex_size));
     if (!in) {
-      LOG_ERROR("[LMC] Failed to read texture section");
+      GUI_LOG_ERROR("[LMC] Failed to read texture section");
       return false;
     }
 
@@ -941,7 +941,7 @@ bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned 
     unsigned char* decoded =
         stbi_load_from_memory(png_buf.data(), static_cast<int>(png_buf.size()), &tex_w, &tex_h, &channels, 3);
     if (!decoded) {
-      LOG_ERROR("[LMC] Failed to decode texture PNG");
+      GUI_LOG_ERROR("[LMC] Failed to decode texture PNG");
       return false;
     }
     size_t byte_count = static_cast<size_t>(tex_w) * tex_h * 3;

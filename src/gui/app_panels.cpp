@@ -6,9 +6,9 @@
 #include <string>
 
 #include "gui/app.hpp"
+#include "gui/gui_logger.hpp"
 #include "gui/panels.hpp"
 #include "imgui.h"
-#include "util/logger.hpp"
 
 namespace lumice::gui {
 
@@ -598,7 +598,7 @@ void RenderLogPanel(float window_width, float window_height) {
   ImGui::SameLine();
   ImGui::PushItemWidth(80);
   if (ImGui::Combo("##GuiLevel", &g_state.gui_log_level, kLevelNames, 6)) {
-    lumice::GetGlobalLogger().SetLevel(static_cast<lumice::LogLevel>(g_state.gui_log_level));
+    SetGuiLogLevel(static_cast<spdlog::level::level_enum>(g_state.gui_log_level));
   }
   ImGui::PopItemWidth();
 

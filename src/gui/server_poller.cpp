@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "gui/gui_constants.hpp"
+#include "gui/gui_logger.hpp"
 
 namespace lumice::gui {
 
@@ -83,6 +84,12 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
     }
 
     bool in_hold_window = hold_by_time || hold_by_threshold;
+    if (has_new_snapshot && in_hold_window) {
+      LUMICE_StatsResult hold_stats{};
+      LUMICE_GetCachedStats(server, &hold_stats);
+      GUI_LOG_DEBUG("[Poller] hold: time={}ms threshold={} rays={}", since_restart, hold_by_threshold,
+                    hold_stats.sim_ray_num);
+    }
 
     // Stage all results under lock
     {
@@ -110,6 +117,8 @@ void ServerPoller::WorkerLoop(LUMICE_Server* server) {
           staged_.stats_ray_seg_num = cached_stats.ray_seg_num;
           staged_.stats_sim_ray_num = cached_stats.sim_ray_num;
         }
+        GUI_LOG_DEBUG("[Poller] staged: since_restart={}ms rays={} intensity={} gen={}", since_restart,
+                      cached_stats.sim_ray_num, xyz_results[0].snapshot_intensity, xyz_results[0].snapshot_generation);
       }
     }
     // Update generation tracking outside the lock — last_generation_ is only accessed by the
