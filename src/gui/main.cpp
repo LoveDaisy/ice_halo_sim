@@ -65,17 +65,13 @@ int main(int argc, char** argv) {
 
   gui::g_state = gui::InitDefaultState();
 
-  // Create Lumice server and initialize logger BEFORE renderer init,
-  // so shader compile/link/FBO errors can use LOG_ERROR instead of fprintf.
-  gui::g_server = LUMICE_CreateServer();
-  LUMICE_InitLogger(gui::g_server);
-
-  // Set up GUI log sinks: ImGui ring buffer + file sink (default off).
-  // Uses dist_sink_mt as the sole sink on each logger for thread-safe fan-out.
+  // Set up GUI log sinks BEFORE creating the server, so that Server/Simulator loggers
+  // (created via spdlog::default_logger()->clone()) inherit the dist_sink with ImGui + file sinks.
+  // Uses dist_sink_mt as the sole sink on default_logger for thread-safe fan-out.
   {
     auto dist_sink = std::make_shared<spdlog::sinks::dist_sink_mt>();
 
-    // Keep existing stdout sink
+    // stdout sink (replaces spdlog's default)
     auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
     stdout_sink->set_pattern(lumice::kLogPattern);
     dist_sink->add_sink(stdout_sink);
@@ -97,10 +93,14 @@ int main(int argc, char** argv) {
     gui::g_file_log_sink->set_level(spdlog::level::off);
     dist_sink->add_sink(gui::g_file_log_sink);
 
-    // Replace sinks on all loggers (single-threaded at this point, safe)
+    // Set dist_sink on default_logger so all subsequent clone() calls inherit it.
     spdlog::default_logger()->sinks() = { dist_sink };
-    lumice::GetGlobalLogger().GetSpdLogger()->sinks() = { dist_sink };
   }
+
+  // Create Lumice server AFTER sink setup — Server/Simulator loggers clone default_logger's
+  // sinks and automatically inherit the dist_sink (ImGui + file + stdout).
+  gui::g_server = LUMICE_CreateServer();
+  LUMICE_InitLogger(gui::g_server);
 
   // Parse CLI arguments for log level.
   // --log-level / -v / -d control GUI log level (global logger, LOG_* macros).
