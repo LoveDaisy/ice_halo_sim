@@ -398,6 +398,7 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
   }
 
   xyz_mode_ = true;
+  glFinish();  // Ensure texture upload completes before shader reads it this frame
   glBindTexture(GL_TEXTURE_2D, 0);
 }
 
