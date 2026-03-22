@@ -3,8 +3,6 @@
 
 #include <vector>
 
-#include "gui/gl_common.h"
-
 namespace lumice::gui {
 
 struct PreviewParams {
@@ -58,7 +56,6 @@ class PreviewRenderer {
   int tex_height_ = 0;
   std::vector<unsigned char> tex_data_;  // CPU-side copy of texture (RGB uint8, for .lmc save)
   bool xyz_mode_ = false;                // true when texture contains XYZ float data
-  GLsync upload_fence_ = nullptr;        // Fence for texture upload synchronization
 
   // Background image texture (no CPU-side copy — loaded from file path)
   unsigned int bg_texture_ = 0;

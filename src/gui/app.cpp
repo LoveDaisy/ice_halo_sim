@@ -5,6 +5,7 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -378,6 +379,7 @@ void DoRun() {
     g_state.sim_state = SimState::kSimulating;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
+    g_state.last_restart_time = std::chrono::steady_clock::now();
     g_server_poller.Start(g_server);  // Always restart: restart path stops server briefly
     GUI_LOG_INFO("[GUI] DoRun: config committed");
   } else {
@@ -443,11 +445,13 @@ void SyncFromPoller() {
   }
 
   // Upload XYZ float texture (GL call — must be on main thread).
-  bool upload_ok = data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0;
-  if (data.has_new_texture && !upload_ok) {
-    GUI_LOG_DEBUG("[GUI] SyncFromPoller: skipped upload (renderer={}, intensity={})", g_state.selected_renderer,
-                  data.snapshot_intensity);
-  }
+  // Hold old texture for kTextureHoldMs after restart to skip the earliest sparse snapshots.
+  // This gives the simulation enough time to accumulate rays for a visually decent first frame.
+  auto since_restart = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                             g_state.last_restart_time)
+                           .count();
+  bool upload_ok = data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0 &&
+                   since_restart >= kTextureHoldMs;
   if (upload_ok) {
     GUI_LOG_DEBUG("[GUI] SyncFromPoller: texture {}x{}, rays={}, intensity={}, factor={:.6f}", data.texture_width,
                   data.texture_height, data.stats_sim_ray_num, data.snapshot_intensity, data.intensity_factor);
