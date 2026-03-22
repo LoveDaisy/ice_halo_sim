@@ -6,6 +6,7 @@
 #include <string>
 
 #include "gui/app.hpp"
+#include "gui/gui_logger.hpp"
 #include "gui/panels.hpp"
 #include "imgui.h"
 
@@ -503,6 +504,16 @@ void RenderStatusBar(float window_width, float window_height) {
     }
   }
 
+  // Log panel toggle button (right-aligned)
+  {
+    const char* log_label = g_state.log_panel_open ? "Log [v]" : "Log [>]";
+    float button_w = ImGui::CalcTextSize(log_label).x + ImGui::GetStyle().FramePadding.x * 2;
+    ImGui::SameLine(ImGui::GetWindowWidth() - button_w - ImGui::GetStyle().WindowPadding.x);
+    if (ImGui::SmallButton(log_label)) {
+      g_state.log_panel_open = !g_state.log_panel_open;
+    }
+  }
+
   ImGui::End();
 }
 
@@ -560,6 +571,118 @@ void RenderUnsavedPopup(GLFWwindow* window) {
 
     ImGui::EndPopup();
   }
+}
+
+void RenderLogPanel(float window_width, float window_height) {
+  if (!g_imgui_log_sink) {
+    return;
+  }
+
+  constexpr float kLogPanelHeight = 250.0f;
+
+  if (!g_state.log_panel_open) {
+    return;
+  }
+
+  ImGui::SetNextWindowPos(ImVec2(0, window_height - kLogPanelHeight - kStatusBarHeight));
+  ImGui::SetNextWindowSize(ImVec2(window_width, kLogPanelHeight));
+  ImGui::Begin("##LogPanel", &g_state.log_panel_open,
+               ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+
+  // Config controls row
+  static const char* const kLevelNames[] = { "Trace", "Debug", "Info", "Warning", "Error", "Off" };
+  static const LUMICE_LogLevel kLevelMap[] = { LUMICE_LOG_TRACE,   LUMICE_LOG_DEBUG, LUMICE_LOG_INFO,
+                                               LUMICE_LOG_WARNING, LUMICE_LOG_ERROR, LUMICE_LOG_OFF };
+
+  ImGui::Text("GUI");
+  ImGui::SameLine();
+  ImGui::PushItemWidth(80);
+  if (ImGui::Combo("##GuiLevel", &g_state.gui_log_level, kLevelNames, 6)) {
+    SetGuiLogLevel(static_cast<spdlog::level::level_enum>(g_state.gui_log_level));
+  }
+  ImGui::PopItemWidth();
+
+  ImGui::SameLine();
+  ImGui::Text("Core");
+  ImGui::SameLine();
+  ImGui::PushItemWidth(80);
+  if (ImGui::Combo("##CoreLevel", &g_state.core_log_level, kLevelNames, 6)) {
+    if (g_server) {
+      LUMICE_SetLogLevel(g_server, kLevelMap[g_state.core_log_level]);
+    }
+  }
+  ImGui::PopItemWidth();
+
+  ImGui::SameLine();
+  if (ImGui::Checkbox("File", &g_state.log_to_file)) {
+    if (g_file_log_sink) {
+      g_file_log_sink->set_level(g_state.log_to_file ? spdlog::level::trace : spdlog::level::off);
+    }
+  }
+  if (g_state.log_to_file) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("~/lumice.log");
+  }
+
+  ImGui::SameLine(ImGui::GetWindowWidth() - 60);
+  if (ImGui::Button("Clear")) {
+    g_imgui_log_sink->Clear();
+  }
+
+  ImGui::Separator();
+
+  // Log content area with auto-scroll
+  ImGui::BeginChild("LogContent", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+
+  auto entry_count = g_imgui_log_sink->Size();
+  ImGuiListClipper clipper;
+  clipper.Begin(static_cast<int>(entry_count));
+
+  // We need random access — collect visible entries via ForEachEntry with index filtering.
+  // For simplicity and correctness with clipper, read all entries once per frame into a local cache.
+  // This is acceptable because the deque is bounded to 4096 entries.
+  struct CachedEntry {
+    spdlog::level::level_enum level;
+    const char* text;
+  };
+  static std::vector<LogEntry> frame_cache;
+  frame_cache.clear();
+  frame_cache.reserve(entry_count);
+  g_imgui_log_sink->ForEachEntry([](size_t /*idx*/, const LogEntry& e) { frame_cache.push_back(e); });
+
+  while (clipper.Step()) {
+    for (int i = clipper.DisplayStart; i < clipper.DisplayEnd && i < static_cast<int>(frame_cache.size()); i++) {
+      const auto& entry = frame_cache[i];
+      ImVec4 color;
+      switch (entry.level) {
+        case spdlog::level::trace:
+        case spdlog::level::debug:
+          color = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+          break;
+        case spdlog::level::warn:
+          color = ImVec4(1.0f, 0.85f, 0.3f, 1.0f);
+          break;
+        case spdlog::level::err:
+        case spdlog::level::critical:
+          color = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+          break;
+        default:
+          color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+          break;
+      }
+      ImGui::PushStyleColor(ImGuiCol_Text, color);
+      ImGui::TextUnformatted(entry.message.c_str());
+      ImGui::PopStyleColor();
+    }
+  }
+
+  // Auto-scroll to bottom when new entries arrive
+  if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20.0f) {
+    ImGui::SetScrollHereY(1.0f);
+  }
+
+  ImGui::EndChild();
+  ImGui::End();
 }
 
 }  // namespace lumice::gui

@@ -59,8 +59,13 @@ def read_git_tag_version() -> str:
 
 
 def strip_tag_prefix(tag: str) -> str:
-    """Strip 'v' prefix from a tag string."""
-    return tag.removeprefix("v")
+    """Strip 'v' prefix and pre-release suffix (e.g. '-alpha', '-rc1') from a tag string."""
+    ver = tag.removeprefix("v")
+    # Strip pre-release suffix: "4.1.7-alpha" → "4.1.7"
+    dash = ver.find("-")
+    if dash >= 0:
+        ver = ver[:dash]
+    return ver
 
 
 def cmd_check(args: argparse.Namespace) -> None:

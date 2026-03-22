@@ -1,6 +1,7 @@
 #ifndef LUMICE_GUI_STATE_HPP
 #define LUMICE_GUI_STATE_HPP
 
+#include <chrono>
 #include <optional>
 #include <string>
 #include <vector>
@@ -164,6 +165,12 @@ struct GuiState {
     }
   }
 
+  // Log panel state (view preference — does not call MarkDirty)
+  int gui_log_level = 2;   // Index into log level names: 0=trace,1=debug,2=info,3=warning,4=error,5=off
+  int core_log_level = 2;  // Same mapping
+  bool log_to_file = false;
+  bool log_panel_open = false;
+
   // Simulation state
   enum class SimState { kIdle, kSimulating, kDone, kModified };
   SimState sim_state = SimState::kIdle;
@@ -171,8 +178,9 @@ struct GuiState {
   // Stats from last poll
   unsigned long stats_ray_seg_num = 0;
   unsigned long stats_sim_ray_num = 0;
-  float snapshot_intensity = 0;            // Accumulated intensity for XYZ→RGB normalization
-  unsigned long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)
+  float snapshot_intensity = 0;                               // Accumulated intensity for XYZ→RGB normalization
+  unsigned long texture_upload_count = 0;                     // Cumulative texture uploads (diagnostic counter)
+  std::chrono::steady_clock::time_point last_restart_time{};  // For texture hold: skip early sparse snapshots
 
   // Last committed config snapshot (for Revert — config fields only, no runtime state)
   struct ConfigSnapshot {

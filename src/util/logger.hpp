@@ -1,6 +1,8 @@
 #ifndef SRC_UTIL_LOGGER_H_
 #define SRC_UTIL_LOGGER_H_
 
+#include <spdlog/sinks/dist_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
 #include <memory>
@@ -22,9 +24,24 @@ enum class LogLevel {
 };
 
 
+// Shared dist_sink singleton. All Logger instances use this as their sole sink,
+// so adding a sink here (e.g., callback sink, file sink) is immediately visible
+// to all loggers. No initialization order dependency.
+inline std::shared_ptr<spdlog::sinks::dist_sink_mt>& GetSharedSink() {
+  static auto sink = []() {
+    auto s = std::make_shared<spdlog::sinks::dist_sink_mt>();
+    auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    stdout_sink->set_pattern(kLogPattern);
+    s->add_sink(stdout_sink);
+    return s;
+  }();
+  return sink;
+}
+
+
 class Logger {
  public:
-  explicit Logger(const std::string& name) : impl_(spdlog::default_logger()->clone(name)) {
+  explicit Logger(const std::string& name) : impl_(std::make_shared<spdlog::logger>(name, GetSharedSink())) {
     impl_->set_pattern(kLogPattern);
   }
 
@@ -65,8 +82,6 @@ inline Logger& GetGlobalLogger() {
 // Initialize the global logger and spdlog default logger pattern.
 // Call once at program startup.
 inline void InitGlobalLogger() {
-  spdlog::set_pattern(kLogPattern);
-  spdlog::set_level(spdlog::level::info);
   GetGlobalLogger().SetLevel(LogLevel::kInfo);
 }
 

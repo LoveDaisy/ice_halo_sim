@@ -1,16 +1,20 @@
 #include <GLFW/glfw3.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <string_view>
 
 #include "gui/app.hpp"
 #include "gui/gl_common.h"
 #include "gui/gl_init.h"
+#include "gui/gui_logger.hpp"
+#include "gui/log_sink.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
-#include "util/logger.hpp"
 
 namespace gui = lumice::gui;
 
@@ -60,10 +64,41 @@ int main(int argc, char** argv) {
 
   gui::g_state = gui::InitDefaultState();
 
-  // Create Lumice server and initialize logger BEFORE renderer init,
-  // so shader compile/link/FBO errors can use LOG_ERROR instead of fprintf.
+  // Create Lumice server and initialize Core logger.
   gui::g_server = LUMICE_CreateServer();
   LUMICE_InitLogger(gui::g_server);
+
+  // Set up GUI-side log sinks (independent from Core's spdlog).
+  // GUI logs go through GUI's own spdlog logger; Core logs arrive via C API callback.
+  {
+    // ImGui ring buffer sink (shared between GUI logger and Core callback)
+    gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
+    gui::g_imgui_log_sink->set_pattern(gui::kGuiLogPattern);
+
+    // File sink (default level=off, enabled via GUI checkbox)
+    std::string log_path;
+    if (const char* home = std::getenv("HOME")) {
+      log_path = std::string(home) + "/lumice.log";
+    } else {
+      log_path = "lumice.log";
+    }
+    gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path, true);
+    gui::g_file_log_sink->set_pattern(gui::kGuiLogPattern);
+    gui::g_file_log_sink->set_level(spdlog::level::off);
+
+    // Set GUI logger sinks: stdout + ImGui + file
+    auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    stdout_sink->set_pattern(gui::kGuiLogPattern);
+    gui::SetGuiLoggerSinks({ stdout_sink, gui::g_imgui_log_sink, gui::g_file_log_sink });
+
+    // Register C API callback to receive Core logs → pipe into ImGui ring buffer
+    LUMICE_SetLogCallback([](LUMICE_LogLevel level, const char* /*name*/, const char* message) {
+      if (gui::g_imgui_log_sink) {
+        auto spd_level = static_cast<spdlog::level::level_enum>(level);
+        gui::g_imgui_log_sink->ReceiveExternal(spd_level, message);
+      }
+    });
+  }
 
   // Parse CLI arguments for log level.
   // --log-level / -v / -d control GUI log level (global logger, LOG_* macros).
@@ -100,21 +135,20 @@ int main(int argc, char** argv) {
         core_level = parse_level(argv[++i]);
       }
     }
-    // Set core level first (LUMICE_SetLogLevel sets both server + global logger),
-    // then override global logger to GUI level.
+    // Set core level via C API, GUI level via GUI logger
     LUMICE_SetLogLevel(gui::g_server, core_level);
-    lumice::GetGlobalLogger().SetLevel(static_cast<lumice::LogLevel>(gui_level));
+    gui::SetGuiLogLevel(static_cast<spdlog::level::level_enum>(gui_level));
   }
 
   // Initialize preview renderer
   if (!gui::g_preview.Init()) {
-    LOG_ERROR("Failed to initialize preview renderer");
+    GUI_LOG_ERROR("Failed to initialize preview renderer");
     return 1;
   }
 
   // Initialize crystal renderer (256x256 FBO)
   if (!gui::g_crystal_renderer.Init(256, 256)) {
-    LOG_ERROR("Failed to initialize crystal renderer");
+    GUI_LOG_ERROR("Failed to initialize crystal renderer");
     return 1;
   }
   gui::ResetCrystalView();
@@ -189,6 +223,7 @@ int main(int argc, char** argv) {
     gui::RenderLeftPanel(layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     gui::RenderFloatingLensBar(layout_width);
+    gui::RenderLogPanel(layout_width, layout_height);
     gui::RenderStatusBar(layout_width, layout_height);
     gui::RenderUnsavedPopup(window);
 

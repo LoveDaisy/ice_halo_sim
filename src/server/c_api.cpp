@@ -10,6 +10,7 @@
 #include "core/geo3d.hpp"
 #include "include/lumice.h"
 #include "server/server.hpp"
+#include "util/callback_sink.hpp"
 #include "util/logger.hpp"
 
 namespace ns = lumice;
@@ -82,6 +83,19 @@ void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level) {
     auto mapped = kLevelMap[level];
     server->server_->SetLogLevel(mapped);
     ns::GetGlobalLogger().SetLevel(mapped);
+  }
+}
+
+
+void LUMICE_SetLogCallback(LUMICE_LogCallback callback) {
+  auto& sink = ns::GetCallbackSink();
+  sink->SetCallback(callback);
+
+  // Add callback sink to shared dist_sink on first call (idempotent check via static flag)
+  static bool registered = false;
+  if (!registered) {
+    ns::GetSharedSink()->add_sink(sink);
+    registered = true;
   }
 }
 

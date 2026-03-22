@@ -4,7 +4,7 @@
 #include <cstdio>
 
 #include "gui/gl_common.h"
-#include "util/logger.hpp"
+#include "gui/gui_logger.hpp"
 
 namespace lumice::gui {
 
@@ -242,7 +242,7 @@ static unsigned int CompileShader(unsigned int type, const char* source) {
   if (!success) {
     char log[512];
     glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-    LOG_ERROR("Shader compile error: {}", log);
+    GUI_LOG_ERROR("Shader compile error: {}", log);
     glDeleteShader(shader);
     return 0;
   }
@@ -267,7 +267,7 @@ bool PreviewRenderer::Init() {
   if (!success) {
     char log[512];
     glGetProgramInfoLog(shader_program_, sizeof(log), nullptr, log);
-    LOG_ERROR("Shader link error: {}", log);
+    GUI_LOG_ERROR("Shader link error: {}", log);
     return false;
   }
 
@@ -398,6 +398,7 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
   }
 
   xyz_mode_ = true;
+  glFinish();  // Ensure texture upload completes before shader reads it this frame
   glBindTexture(GL_TEXTURE_2D, 0);
 }
 
