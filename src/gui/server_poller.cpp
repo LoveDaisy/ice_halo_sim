@@ -12,8 +12,10 @@ void ServerPoller::Start(LUMICE_Server* server) {
   if (!server) {
     return;
   }
+  GUI_LOG_DEBUG("[Poller] Start: stopping old worker");
   // Re-entrant safety: stop existing thread first
   Stop();
+  GUI_LOG_DEBUG("[Poller] Start: old worker stopped, spawning new");
 
   // Minimal reset: only clear the valid flag to prevent SyncFromPoller() from acting on
   // stale data. Do NOT clear has_new_texture or server_state — preserving the last good
@@ -35,7 +37,9 @@ void ServerPoller::Start(LUMICE_Server* server) {
 void ServerPoller::Stop() {
   running_ = false;
   if (worker_.joinable()) {
+    GUI_LOG_DEBUG("[Poller] Stop: joining worker thread");
     worker_.join();
+    GUI_LOG_DEBUG("[Poller] Stop: worker joined");
   }
 }
 
