@@ -621,7 +621,7 @@ void RenderLogPanel(float window_width, float window_height) {
   }
   if (g_state.log_to_file) {
     ImGui::SameLine();
-    ImGui::TextDisabled("~/lumice.log");
+    ImGui::TextDisabled("%s", g_log_file_path.c_str());
   }
 
   ImGui::SameLine(ImGui::GetWindowWidth() - 60);
