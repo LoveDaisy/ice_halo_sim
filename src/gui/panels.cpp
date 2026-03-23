@@ -9,36 +9,56 @@
 
 namespace lumice::gui {
 
-// Slider + InputFloat + label text, laid out as: [slider] [input] Label
-// Uses a fixed label column width so vertically stacked sliders align.
-// Returns true if value changed.
-static bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
-                            bool sqrt_scale = false) {
+// Common layout constants for SliderWithInput / SliderIntWithInput
+constexpr float kLabelColWidth = 70.0f;
+constexpr float kInputWidth = 60.0f;
+
+// Compute slider width and prepare IDs for the [slider] [input] Label layout.
+// Writes slider_id and input_id buffers, returns the computed slider width.
+static float PrepareSliderLayout(const char* label, char* display_label_out, size_t display_buf_size,
+                                 char* slider_id, size_t slider_id_size, char* input_id, size_t input_id_size) {
   // Strip ImGui ID suffix (e.g. "Azimuth##view" → display "Azimuth")
-  const char* display_label = label;
   const char* hash_pos = strstr(label, "##");
-  char display_buf[64];
   if (hash_pos) {
     auto len = static_cast<size_t>(hash_pos - label);
-    if (len >= sizeof(display_buf))
-      len = sizeof(display_buf) - 1;
-    memcpy(display_buf, label, len);
-    display_buf[len] = '\0';
-    display_label = display_buf;
+    if (len >= display_buf_size)
+      len = display_buf_size - 1;
+    memcpy(display_label_out, label, len);
+    display_label_out[len] = '\0';
+  } else {
+    snprintf(display_label_out, display_buf_size, "%s", label);
   }
 
-  constexpr float kLabelColWidth = 70.0f;  // Fixed width for label column
-  constexpr float kInputWidth = 60.0f;
+  snprintf(slider_id, slider_id_size, "##%s_slider", label);
+  snprintf(input_id, input_id_size, "##%s_input", label);
+
   float spacing = ImGui::GetStyle().ItemSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x;
   float slider_w = avail_w - kInputWidth - kLabelColWidth - spacing * 2;
   if (slider_w < 40.0f)
     slider_w = 40.0f;
+  return slider_w;
+}
+
+// Render the label text after slider + input.
+static void FinishSliderLayout(const char* display_label) {
+  ImGui::SameLine();
+  ImGui::TextUnformatted(display_label);
+}
+
+// Slider + InputFloat + label text, laid out as: [slider] [input] Label
+// Uses a fixed label column width so vertically stacked sliders align.
+// Returns true if value changed.
+static bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
+                            bool sqrt_scale = false) {
+  char display_buf[64];
+  char slider_id[64];
+  char input_id[64];
+  float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id),
+                                       input_id, sizeof(input_id));
 
   bool changed = false;
 
-  char slider_id[64];
-  snprintf(slider_id, sizeof(slider_id), "##%s_slider", label);
   ImGui::PushItemWidth(slider_w);
   if (sqrt_scale && min_val >= 0.0f) {
     // Sqrt-scale slider: more resolution at small values.
@@ -56,18 +76,39 @@ static bool SliderWithInput(const char* label, float* value, float min_val, floa
   ImGui::PopItemWidth();
 
   ImGui::SameLine();
-  char input_id[64];
-  snprintf(input_id, sizeof(input_id), "##%s_input", label);
   ImGui::PushItemWidth(kInputWidth);
   changed |= ImGui::InputFloat(input_id, value, 0, 0, fmt);
   ImGui::PopItemWidth();
 
-  // Clamp after all inputs
   *value = std::clamp(*value, min_val, max_val);
 
-  ImGui::SameLine();
-  ImGui::TextUnformatted(display_label);
+  FinishSliderLayout(display_buf);
+  return changed;
+}
 
+// SliderInt + InputInt + label text, same layout as SliderWithInput.
+// Returns true if value changed.
+static bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val) {
+  char display_buf[64];
+  char slider_id[64];
+  char input_id[64];
+  float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id),
+                                       input_id, sizeof(input_id));
+
+  bool changed = false;
+
+  ImGui::PushItemWidth(slider_w);
+  changed |= ImGui::SliderInt(slider_id, value, min_val, max_val);
+  ImGui::PopItemWidth();
+
+  ImGui::SameLine();
+  ImGui::PushItemWidth(kInputWidth);
+  changed |= ImGui::InputInt(input_id, value, 0, 0);
+  ImGui::PopItemWidth();
+
+  *value = std::clamp(*value, min_val, max_val);
+
+  FinishSliderLayout(display_buf);
   return changed;
 }
 
@@ -346,19 +387,20 @@ void RenderSceneTab(GuiState& state) {
   if (ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushItemWidth(-130);
     DIRTY_IF(ImGui::Checkbox("Infinite rays", &state.sim.infinite));
+    ImGui::PopItemWidth();
     if (!state.sim.infinite) {
-      DIRTY_IF(ImGui::SliderFloat("Ray num (x10^6)", &state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f"));
+      DIRTY_IF(SliderWithInput("Rays(M)", &state.sim.ray_num_millions, 0.1f, 100.0f));
     } else {
       ImGui::BeginDisabled();
-      ImGui::SliderFloat("Ray num (x10^6)", &state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f");
+      SliderWithInput("Rays(M)", &state.sim.ray_num_millions, 0.1f, 100.0f);
       ImGui::EndDisabled();
     }
-    DIRTY_IF(ImGui::SliderInt("Max hits", &state.sim.max_hits, 1, 20));
-    ImGui::PopItemWidth();
+    DIRTY_IF(SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 20));
   }
 
   if (ImGui::CollapsingHeader("Scattering", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-130);
+    // Align combo right edge with SliderWithInput's input right edge
+    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     for (int li = 0; li < static_cast<int>(state.scattering.size()); li++) {
       auto& layer = state.scattering[li];
       ImGui::PushID(li);
@@ -391,10 +433,10 @@ void RenderSceneTab(GuiState& state) {
         if (single_layer) {
           layer.probability = 0.0f;
           ImGui::BeginDisabled();
-          ImGui::SliderFloat("Probability", &layer.probability, 0.0f, 1.0f, "%.2f");
+          SliderWithInput("Prob.", &layer.probability, 0.0f, 1.0f, "%.2f");
           ImGui::EndDisabled();
         } else {
-          DIRTY_IF(ImGui::SliderFloat("Probability", &layer.probability, 0.0f, 1.0f, "%.2f"));
+          DIRTY_IF(SliderWithInput("Prob.", &layer.probability, 0.0f, 1.0f, "%.2f"));
         }
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
@@ -434,7 +476,7 @@ void RenderSceneTab(GuiState& state) {
             ImGui::EndCombo();
           }
 
-          DIRTY_IF(ImGui::SliderFloat("Proportion", &entry.proportion, 0.0f, 100.0f, "%.1f"));
+          DIRTY_IF(SliderWithInput("Prop.", &entry.proportion, 0.0f, 100.0f));
 
           // Filter combo
           if (ImGui::BeginCombo("Filter", [&]() -> const char* {
