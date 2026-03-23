@@ -15,8 +15,8 @@ constexpr float kInputWidth = 60.0f;
 
 // Compute slider width and prepare IDs for the [slider] [input] Label layout.
 // Writes slider_id and input_id buffers, returns the computed slider width.
-static float PrepareSliderLayout(const char* label, char* display_label_out, size_t display_buf_size,
-                                 char* slider_id, size_t slider_id_size, char* input_id, size_t input_id_size) {
+static float PrepareSliderLayout(const char* label, char* display_label_out, size_t display_buf_size, char* slider_id,
+                                 size_t slider_id_size, char* input_id, size_t input_id_size) {
   // Strip ImGui ID suffix (e.g. "Azimuth##view" → display "Azimuth")
   const char* hash_pos = strstr(label, "##");
   if (hash_pos) {
@@ -54,8 +54,8 @@ static bool SliderWithInput(const char* label, float* value, float min_val, floa
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
-  float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id),
-                                       input_id, sizeof(input_id));
+  float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id), input_id,
+                                       sizeof(input_id));
 
   bool changed = false;
 
@@ -92,8 +92,8 @@ static bool SliderIntWithInput(const char* label, int* value, int min_val, int m
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
-  float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id),
-                                       input_id, sizeof(input_id));
+  float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id), input_id,
+                                       sizeof(input_id));
 
   bool changed = false;
 
