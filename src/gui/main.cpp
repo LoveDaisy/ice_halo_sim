@@ -1,5 +1,6 @@
 #include <GLFW/glfw3.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/spdlog.h>
 
 #include <chrono>
 #include <cstdio>
@@ -93,6 +94,10 @@ int main(int argc, char** argv) {
     auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
     stdout_sink->set_pattern(gui::kGuiLogPattern);
     gui::SetGuiLoggerSinks({ stdout_sink, gui::g_imgui_log_sink, gui::g_file_log_sink });
+
+    // Flush strategy: warn+ immediately, all levels every 1s
+    gui::GetGuiLogger().flush_on(spdlog::level::warn);
+    spdlog::flush_every(std::chrono::seconds(1));
 
     // Register C API callback to receive Core logs → pipe into ImGui ring buffer
     LUMICE_SetLogCallback([](LUMICE_LogLevel level, const char* /*name*/, const char* message) {
