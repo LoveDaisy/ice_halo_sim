@@ -379,13 +379,13 @@ void RenderSceneTab(GuiState& state) {
     DIRTY_IF(SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f));
     DIRTY_IF(SliderWithInput("Azimuth##sun", &state.sun.azimuth, -180.0f, 180.0f));
     DIRTY_IF(SliderWithInput("Diameter", &state.sun.diameter, 0.1f, 5.0f));
-    ImGui::PushItemWidth(-130);
+    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     DIRTY_IF(ImGui::Combo("Spectrum", &state.sun.spectrum_index, kSpectrumNames, kSpectrumCount));
     ImGui::PopItemWidth();
   }
 
   if (ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-130);
+    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     DIRTY_IF(ImGui::Checkbox("Infinite rays", &state.sim.infinite));
     ImGui::PopItemWidth();
     if (!state.sim.infinite) {
@@ -567,7 +567,7 @@ void RenderRenderTab(GuiState& state) {
   auto& r = state.renderers[0];
 
   if (ImGui::CollapsingHeader("Lens & View", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-130);
+    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     ImGui::Combo("Lens Type", &r.lens_type, kLensTypeNames, kLensTypeCount);
     ImGui::PopItemWidth();
 
@@ -586,7 +586,7 @@ void RenderRenderTab(GuiState& state) {
       ImGui::EndDisabled();
     }
 
-    ImGui::PushItemWidth(-130);
+    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     ImGui::Combo("Visible", &r.visible, kVisibleNames, kVisibleCount);
     ImGui::PopItemWidth();
   }
@@ -597,11 +597,11 @@ void RenderRenderTab(GuiState& state) {
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Changing these requires re-running the simulation");
     }
-    ImGui::PushItemWidth(-130);
+    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     const char* res_labels[] = { "512", "1024", "2048", "4096" };
     DIRTY_IF(ImGui::Combo("Sim Resolution", &r.sim_resolution_index, res_labels, kSimResolutionCount));
-    DIRTY_IF(SliderWithInput("EV", &r.exposure_offset, -2.0f, 8.0f, "%.1f"));
     ImGui::PopItemWidth();
+    DIRTY_IF(SliderWithInput("EV", &r.exposure_offset, -2.0f, 8.0f, "%.1f"));
   }
 
   if (ImGui::CollapsingHeader("File", ImGuiTreeNodeFlags_DefaultOpen)) {
