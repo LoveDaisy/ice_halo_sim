@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include "gui/app.hpp"
 #include "gui/gl_common.h"
@@ -175,6 +176,7 @@ int main(int argc, char** argv) {
 
   // Main loop
   while (!glfwWindowShouldClose(window)) {
+    auto frame_start = std::chrono::steady_clock::now();
     glfwPollEvents();
 
     // Sync data from background server poller (non-blocking)
@@ -250,6 +252,15 @@ int main(int argc, char** argv) {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(window);
+
+    // Fallback frame rate limit: prevents busy-wait when VSync fails
+    // (known issue on Windows+NVIDIA, GLFW #1559/#2049).
+    // When VSync works, SwapBuffers already blocks ~16ms so this sleep is skipped.
+    auto frame_end = std::chrono::steady_clock::now();
+    auto frame_ms = std::chrono::duration_cast<std::chrono::milliseconds>(frame_end - frame_start).count();
+    if (frame_ms < gui::kTargetFrameTimeMs) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(gui::kTargetFrameTimeMs - frame_ms));
+    }
   }
 
   // Cleanup
