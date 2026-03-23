@@ -36,6 +36,7 @@ PendingAction g_pending_action = PendingAction::kNone;
 
 std::shared_ptr<ImGuiLogSink> g_imgui_log_sink;
 std::shared_ptr<spdlog::sinks::basic_file_sink_mt> g_file_log_sink;
+std::string g_log_file_path;
 
 void GlfwErrorCallback(int error, const char* description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);

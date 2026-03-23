@@ -50,6 +50,7 @@ extern PendingAction g_pending_action;
 // Log sinks for GUI log panel
 extern std::shared_ptr<ImGuiLogSink> g_imgui_log_sink;
 extern std::shared_ptr<spdlog::sinks::basic_file_sink_mt> g_file_log_sink;
+extern std::string g_log_file_path;
 
 // GLFW callbacks
 void GlfwErrorCallback(int error, const char* description);

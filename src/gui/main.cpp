@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -82,6 +83,8 @@ int main(int argc, char** argv) {
     } else {
       log_path = "lumice.log";
     }
+    log_path = std::filesystem::absolute(log_path).string();
+    gui::g_log_file_path = log_path;
     gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path, true);
     gui::g_file_log_sink->set_pattern(gui::kGuiLogPattern);
     gui::g_file_log_sink->set_level(spdlog::level::off);
