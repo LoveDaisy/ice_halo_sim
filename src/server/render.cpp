@@ -485,4 +485,26 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
            snapshot_xyz_.get(), snapshot_intensity_,    config_.intensity_factor_ };
 }
 
+void RenderConsumer::Reset() {
+  total_intensity_ = 0;
+  snapshot_intensity_ = 0;
+  auto buf_size = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3;
+  std::memset(internal_xyz_.get(), 0, buf_size * sizeof(float));
+  // snapshot_xyz_ not zeroed: PrepareSnapshot will memcpy over it.
+  // has_ever_consumed_ = false (set in Stop) ensures GetRawXyzResults returns has_valid_data_=false
+  // until new data arrives, preventing stale snapshot reads.
+}
+
+void RenderConsumer::ResetWith(const RenderConfig& new_config) {
+  // Update appearance fields (buffer/rot_/filters_ unchanged since layout is identical)
+  std::copy(std::begin(new_config.background_), std::end(new_config.background_), std::begin(config_.background_));
+  std::copy(std::begin(new_config.ray_color_), std::end(new_config.ray_color_), std::begin(config_.ray_color_));
+  config_.opacity_ = new_config.opacity_;
+  config_.intensity_factor_ = new_config.intensity_factor_;
+  config_.central_grid_ = new_config.central_grid_;
+  config_.elevation_grid_ = new_config.elevation_grid_;
+  config_.celestial_outline_ = new_config.celestial_outline_;
+  Reset();
+}
+
 }  // namespace lumice

@@ -1,9 +1,11 @@
 #include "config/render_config.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <nlohmann/json.hpp>
 #include <variant>
 
+#include "config/config_compare.hpp"
 #include "config/filter_config.hpp"
 #include "core/math.hpp"
 
@@ -130,6 +132,17 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
       j["filter"].emplace_back(f.id_);
     }
   }
+}
+
+
+bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
+  // Compare layout-affecting fields only. Appearance fields (background, ray_color, opacity,
+  // intensity_factor, grids) are handled by ResetWith() without rebuild.
+  // id_ is excluded: map key matching guarantees id agreement on the reuse path.
+  return !std::equal(std::begin(a.resolution_), std::end(a.resolution_), std::begin(b.resolution_)) ||
+         !(a.lens_ == b.lens_) ||
+         !std::equal(std::begin(a.lens_shift_), std::end(a.lens_shift_), std::begin(b.lens_shift_)) ||
+         !(a.view_ == b.view_) || a.visible_ != b.visible_ || a.ms_filter_ != b.ms_filter_;
 }
 
 }  // namespace lumice

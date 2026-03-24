@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "config/config_manager.hpp"
+#include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
 #include "core/simulator.hpp"
@@ -234,21 +235,48 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   auto stop_end = std::chrono::steady_clock::now();
   auto stop_ms = std::chrono::duration<double, std::milli>(stop_end - stop_start).count();
 
+  // Check if consumers can be reused (same renderer key set, no layout changes).
+  auto old_renderers = config_manager_.renderers_;
   config_manager_ = std::move(new_config);
 
-  // Setup consumers from project config.
-  // Lock consumer_mutex_ to prevent race with ServerPoller's GetRawXyzResults().
+  bool can_reuse = !consumers_.empty() && (old_renderers.size() == config_manager_.renderers_.size());
+  if (can_reuse) {
+    auto old_it = old_renderers.begin();
+    auto new_it = config_manager_.renderers_.begin();
+    for (; old_it != old_renderers.end(); ++old_it, ++new_it) {
+      if (old_it->first != new_it->first || NeedsRebuild(old_it->second, new_it->second)) {
+        can_reuse = false;
+        break;
+      }
+    }
+  }
+
   auto rebuild_start = std::chrono::steady_clock::now();
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
-    consumers_.clear();
-    for (const auto& [_, r] : config_manager_.renderers_) {
-      consumers_.emplace_back(std::make_shared<RenderConsumer>(r));
+    if (can_reuse) {
+      // Reuse path: reset accumulators + update appearance fields
+      auto it = config_manager_.renderers_.begin();
+      for (auto& c : consumers_) {
+        if (auto* rc = dynamic_cast<RenderConsumer*>(c.get())) {
+          rc->ResetWith(it->second);
+          ++it;
+        } else {
+          c->Reset();  // StatsConsumer
+        }
+      }
+    } else {
+      // Full rebuild path
+      consumers_.clear();
+      for (const auto& [_, r] : config_manager_.renderers_) {
+        consumers_.emplace_back(std::make_shared<RenderConsumer>(r));
+      }
+      consumers_.emplace_back(std::make_shared<StatsConsumer>());
     }
-    consumers_.emplace_back(std::make_shared<StatsConsumer>());
   }
   auto rebuild_end = std::chrono::steady_clock::now();
   auto rebuild_ms = std::chrono::duration<double, std::milli>(rebuild_end - rebuild_start).count();
+  ILOG_DEBUG(logger_, "CommitConfig: consumers {} ({:.1f}ms)", can_reuse ? "reused" : "rebuilt", rebuild_ms);
 
   auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
   {
@@ -439,7 +467,8 @@ void ServerImpl::Stop() {
 
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
-    consumers_.clear();
+    // Don't clear consumers_ here — CommitConfig decides whether to rebuild or reuse.
+    // Consumers are destroyed either by CommitConfig (rebuild path) or ~ServerImpl().
     snapshot_dirty_ = false;
     has_ever_consumed_ = false;  // New consumers have no data yet
   }

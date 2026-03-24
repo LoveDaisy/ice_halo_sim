@@ -13,6 +13,7 @@ class StatsConsumer : public IConsume {
   void Consume(const SimData& data) override;
   void PrepareSnapshot() override;
   Result GetResult() const override;
+  void Reset() override;
 
  private:
   size_t total_rays_ = 0;
