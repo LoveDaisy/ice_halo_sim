@@ -136,6 +136,8 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
 
 
 bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
+  // Bump this when adding fields to RenderConfig — then classify as layout or appearance.
+  static_assert(sizeof(RenderConfig) == 160, "Update NeedsRebuild when RenderConfig fields change");
   // Compare layout-affecting fields only. Appearance fields (background, ray_color, opacity,
   // intensity_factor, grids) are handled by ResetWith() without rebuild.
   // id_ is excluded: map key matching guarantees id agreement on the reuse path.
