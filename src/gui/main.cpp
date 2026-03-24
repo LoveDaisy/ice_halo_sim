@@ -160,6 +160,9 @@ int main(int argc, char** argv) {
     // Set core level via C API, GUI level via GUI logger
     LUMICE_SetLogLevel(gui::g_server, core_level);
     gui::SetGuiLogLevel(static_cast<spdlog::level::level_enum>(gui_level));
+    // Sync panel dropdowns with CLI-set levels
+    gui::g_state.gui_log_level = static_cast<int>(gui_level);
+    gui::g_state.core_log_level = static_cast<int>(core_level);
   }
 
   // Initialize preview renderer
