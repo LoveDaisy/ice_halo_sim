@@ -344,9 +344,11 @@ void ServerImpl::Stop() {
     for (auto& s : simulators_) {
       s.Stop();
     }
-    for (auto& t : simulator_threads_) {
-      if (t.joinable()) {
-        t.join();
+    for (size_t i = 0; i < simulator_threads_.size(); i++) {
+      if (simulator_threads_[i].joinable()) {
+        ILOG_DEBUG(logger_, "Stop: joining simulator thread {}/{}", i + 1, simulator_threads_.size());
+        simulator_threads_[i].join();
+        ILOG_DEBUG(logger_, "Stop: simulator thread {}/{} joined", i + 1, simulator_threads_.size());
       }
     }
     simulator_threads_.clear();
@@ -432,7 +434,7 @@ void ServerImpl::ConsumeData() {
     }
     CHECK_STOP
 
-    ILOG_DEBUG(logger_, "ConsumeData: get data: {}", fmt::ptr(&sim_data));
+    ILOG_TRACE(logger_, "ConsumeData: get data: {}", fmt::ptr(&sim_data));
 
     if (sim_scene_cnt_ > 0) {
       // Generation check: discard batches from outdated configs
@@ -488,7 +490,7 @@ void ServerImpl::GenerateScene() {
       first_batch_logged = true;
     }
 
-    ILOG_DEBUG(logger_, "GenerateScene: put a scene: ray({}/{}, {})", batch_ray_num, ray_num, committed_num);
+    ILOG_TRACE(logger_, "GenerateScene: put a scene: ray({}/{}, {})", batch_ray_num, ray_num, committed_num);
     CHECK_STOP
 
     if (sim_scene_cnt_ >= kMaxSceneCnt) {
@@ -499,7 +501,7 @@ void ServerImpl::GenerateScene() {
     }
     CHECK_STOP
     committed_num += kDefaultRayNum;
-    ILOG_DEBUG(logger_, "GenerateScene: finish wl");
+    ILOG_TRACE(logger_, "GenerateScene: finish wl");
   }
   scene_gen_active_ = false;  // All exit paths (normal + CHECK_STOP break) converge here
   ILOG_DEBUG(logger_, "GenerateScene exit");
