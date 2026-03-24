@@ -413,7 +413,7 @@ void Simulator::Run() {
   // used by sampling functions (RandomSample, SampleTrianglePoint, SampleSphCapPoint, etc.)
   // to ensure fully deterministic behavior.
   if (seed_ != 0) {
-    RandomNumberGenerator::GetInstance()->SetSeed(seed_);
+    RandomNumberGenerator::GetInstance().SetSeed(seed_);
   }
 
   CrystalCache crystal_cache;

@@ -345,11 +345,11 @@ RandomNumberGenerator::RandomNumberGenerator(uint32_t seed)
     : seed_(seed), generator_{ static_cast<std::mt19937::result_type>(seed) } {}
 
 
-RandomNumberGenerator* RandomNumberGenerator::GetInstance() {
-  static thread_local auto instance_ =  // NOLINT(readability-identifier-naming)
-      std::make_unique<RandomNumberGenerator>(
-          static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count()));
-  return instance_.get();
+RandomNumberGenerator& RandomNumberGenerator::GetInstance() {
+  static thread_local RandomNumberGenerator instance_{  // NOLINT(readability-identifier-naming)
+    static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count())
+  };
+  return instance_;
 }
 
 
@@ -389,10 +389,10 @@ void RandomNumberGenerator::SetSeed(uint32_t seed) {
 
 
 void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t step) {
-  auto* rng = RandomNumberGenerator::GetInstance();
+  auto& rng = RandomNumberGenerator::GetInstance();
   for (size_t i = 0; i < num; i++) {
-    float u = rng->GetUniform() * 2 - 1;
-    float lambda = rng->GetUniform() * 2 * math::kPi;
+    float u = rng.GetUniform() * 2 - 1;
+    float lambda = rng.GetUniform() * 2 * math::kPi;
 
     data[i * step + 0] = lambda;
     data[i * step + 1] = std::asin(u);
@@ -401,9 +401,9 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t ste
 
 
 void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num) {
-  auto* rng = RandomNumberGenerator::GetInstance();
+  auto& rng = RandomNumberGenerator::GetInstance();
   for (size_t i = 0; i < num; i++) {
-    float phi = rng->Get(axis_dist.latitude_dist) * math::kDegreeToRad;
+    float phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
     if (phi > math::kPi_2) {
       phi = math::kPi - phi;
     }
@@ -412,9 +412,9 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     }
     float lambda = 0;
     if (axis_dist.azimuth_dist.type == DistributionType::kUniform) {
-      lambda = rng->GetUniform() * 2 * math::kPi;
+      lambda = rng.GetUniform() * 2 * math::kPi;
     } else {
-      lambda = rng->Get(axis_dist.azimuth_dist) * math::kDegreeToRad;
+      lambda = rng.Get(axis_dist.azimuth_dist) * math::kDegreeToRad;
     }
 
     data[i * 2 + 0] = lambda;
