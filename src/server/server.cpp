@@ -30,6 +30,7 @@ namespace lumice {
 class ServerImpl {
  public:
   ServerImpl();
+  ~ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json);
   std::vector<RenderResult> GetRenderResults();
@@ -76,7 +77,14 @@ class ServerImpl {
   std::shared_ptr<const SceneConfig> active_scene_;
   std::atomic<uint64_t> scene_generation_{ 0 };
 
-  std::atomic_bool stop_{ true };
+  // Persistent thread state machine: threads wait on start_cv_ when kStopped,
+  // work when kRunning, and exit when kTerminating.
+  enum class ServerState { kStopped, kRunning, kTerminating };
+  std::atomic<ServerState> state_{ ServerState::kStopped };
+  std::mutex start_mutex_;
+  std::condition_variable start_cv_;
+  std::atomic<int> active_workers_{ 0 };
+
   std::atomic_bool work_started_{ false };
   std::atomic_bool scene_gen_active_{ false };  // True while GenerateScene is actively producing batches
   std::atomic_int sim_scene_cnt_;
@@ -105,7 +113,85 @@ ServerImpl::ServerImpl()
   for (int i = 0; i < kDefaultSimulatorCnt; i++) {
     simulators_.emplace_back(scene_queue_, data_queue_);
   }
-  // Don't Start() here — wait for CommitConfig to provide a valid project.
+
+  // Spawn persistent threads — they start in cv.wait(), not working.
+  for (auto& s : simulators_) {
+    simulator_threads_.emplace_back([this, &s]() {
+      while (true) {
+        {
+          std::unique_lock<std::mutex> lk(start_mutex_);
+          start_cv_.wait(lk, [this] { return state_.load() != ServerState::kStopped; });
+          if (state_.load() == ServerState::kTerminating) {
+            return;
+          }
+          active_workers_.fetch_add(1);
+        }
+        s.Run();
+        active_workers_.fetch_sub(1);
+      }
+    });
+  }
+  consume_data_thread_ = std::thread([this]() {
+    while (true) {
+      {
+        std::unique_lock<std::mutex> lk(start_mutex_);
+        start_cv_.wait(lk, [this] { return state_.load() != ServerState::kStopped; });
+        if (state_.load() == ServerState::kTerminating) {
+          return;
+        }
+        active_workers_.fetch_add(1);
+      }
+      ConsumeData();
+      active_workers_.fetch_sub(1);
+    }
+  });
+  generate_scene_thread_ = std::thread([this]() {
+    while (true) {
+      {
+        std::unique_lock<std::mutex> lk(start_mutex_);
+        start_cv_.wait(lk, [this] { return state_.load() != ServerState::kStopped; });
+        if (state_.load() == ServerState::kTerminating) {
+          return;
+        }
+        active_workers_.fetch_add(1);
+      }
+      GenerateScene();
+      active_workers_.fetch_sub(1);
+    }
+  });
+}
+
+
+ServerImpl::~ServerImpl() {
+  // Shutdown queues to unblock any blocking Get() calls
+  scene_queue_->Shutdown();
+  data_queue_->Shutdown();
+
+  // Signal all threads to terminate
+  {
+    std::lock_guard<std::mutex> lk(start_mutex_);
+    state_.store(ServerState::kTerminating);
+  }
+  start_cv_.notify_all();
+  scene_cv_.notify_one();
+
+  // Stop simulators to break their inner Run() loops
+  for (auto& s : simulators_) {
+    s.Stop();
+  }
+
+  // Join all persistent threads
+  for (auto& t : simulator_threads_) {
+    if (t.joinable()) {
+      t.join();
+    }
+  }
+  if (consume_data_thread_.joinable()) {
+    consume_data_thread_.join();
+  }
+  if (generate_scene_thread_.joinable()) {
+    generate_scene_thread_.join();
+  }
 }
 
 
@@ -296,88 +382,66 @@ std::optional<StatsResult> ServerImpl::GetCachedStatsResult() {
 
 void ServerImpl::Start() {
   ILOG_DEBUG(logger_, "Start: entry");
-  if (!stop_) {
-    return;
-  }
-
   auto t0 = std::chrono::steady_clock::now();
-  stop_ = false;
-  work_started_ = false;
-  sim_scene_cnt_ = 0;
 
   {
-    std::lock_guard<std::mutex> lock(status_mutex_);
-    status_ = ServerStatus::kRunning;
-  }
-
-  // Start queues & jobs
-  data_queue_->Start();
-  scene_queue_->Start();
-  auto t1 = std::chrono::steady_clock::now();
-  {
-    std::lock_guard<std::mutex> lock(prod_mutex_);
-    for (auto& s : simulators_) {
-      simulator_threads_.emplace_back(&Simulator::Run, &s);
+    std::lock_guard<std::mutex> lk(start_mutex_);
+    if (state_.load() != ServerState::kStopped) {
+      return;
     }
+
+    work_started_ = false;
+    sim_scene_cnt_ = 0;
+
+    {
+      std::lock_guard<std::mutex> lock(status_mutex_);
+      status_ = ServerStatus::kRunning;
+    }
+
+    // Start queues BEFORE waking threads to avoid Get() on shutdown queues
+    data_queue_->Start();
+    scene_queue_->Start();
+
+    state_.store(ServerState::kRunning);
   }
-  auto t2 = std::chrono::steady_clock::now();
+  start_cv_.notify_all();
 
-  // Start main working thread & scene dispatch thread
-  consume_data_thread_ = std::thread(&ServerImpl::ConsumeData, this);
-  generate_scene_thread_ = std::thread(&ServerImpl::GenerateScene, this);
-
-  auto t3 = std::chrono::steady_clock::now();
-  ILOG_DEBUG(logger_, "Start: done ({:.1f}ms total: queue {:.1f}ms, sim_spawn {:.1f}ms, worker_spawn {:.1f}ms)",
-             std::chrono::duration<double, std::milli>(t3 - t0).count(),
-             std::chrono::duration<double, std::milli>(t1 - t0).count(),
-             std::chrono::duration<double, std::milli>(t2 - t1).count(),
-             std::chrono::duration<double, std::milli>(t3 - t2).count());
+  auto t1 = std::chrono::steady_clock::now();
+  ILOG_DEBUG(logger_, "Start: done ({:.1f}ms)", std::chrono::duration<double, std::milli>(t1 - t0).count());
 }
 
 
 void ServerImpl::Stop() {
   ILOG_DEBUG(logger_, "Stop: entry");
-  if (stop_) {
-    return;
+  auto t0 = std::chrono::steady_clock::now();
+
+  {
+    std::lock_guard<std::mutex> lk(start_mutex_);
+    if (state_.load() != ServerState::kRunning) {
+      return;
+    }
+    state_.store(ServerState::kStopped);
   }
 
-  auto t0 = std::chrono::steady_clock::now();
-  stop_ = true;
-
-  // Stop queues
+  // Break work loops: shutdown queues so blocking Get() calls return immediately
   scene_queue_->Shutdown();
   data_queue_->Shutdown();
-
   scene_cv_.notify_one();
 
-  // Stop running jobs
-  {
-    std::lock_guard<std::mutex> lock(prod_mutex_);
-    ILOG_DEBUG(logger_, "Stop: lock on prod_mutex_. stop simulators. clear simulator threads.");
-    for (auto& s : simulators_) {
-      s.Stop();
-    }
-    auto t1 = std::chrono::steady_clock::now();
-    for (size_t i = 0; i < simulator_threads_.size(); i++) {
-      if (simulator_threads_[i].joinable()) {
-        simulator_threads_[i].join();
-      }
-    }
-    auto t2 = std::chrono::steady_clock::now();
-    ILOG_DEBUG(logger_, "Stop: simulators joined ({} threads, {:.1f}ms)", simulator_threads_.size(),
-               std::chrono::duration<double, std::milli>(t2 - t1).count());
-    simulator_threads_.clear();
+  // Stop simulators to break their inner Run() loops
+  for (auto& s : simulators_) {
+    s.Stop();
   }
 
-  // Stop main working thread & scene dispatch thread.
-  auto t3 = std::chrono::steady_clock::now();
-  if (consume_data_thread_.joinable()) {
-    consume_data_thread_.join();
+  // Barrier: acquire+release start_mutex_ to ensure all threads that were woken
+  // have either incremented active_workers_ or gone back to cv.wait().
+  { std::lock_guard<std::mutex> lk(start_mutex_); }
+
+  // Wait for all workers to finish their current work cycle
+  while (active_workers_.load() > 0) {
+    std::this_thread::yield();
   }
-  if (generate_scene_thread_.joinable()) {
-    generate_scene_thread_.join();
-  }
-  auto t4 = std::chrono::steady_clock::now();
+  auto t1 = std::chrono::steady_clock::now();
 
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
@@ -390,12 +454,11 @@ void ServerImpl::Stop() {
     status_ = ServerStatus::kIdle;
   }
 
-  auto t5 = std::chrono::steady_clock::now();
-  ILOG_DEBUG(logger_, "Stop: done ({:.1f}ms total: sim_join {:.1f}ms, worker_join {:.1f}ms, cleanup {:.1f}ms)",
-             std::chrono::duration<double, std::milli>(t5 - t0).count(),
-             std::chrono::duration<double, std::milli>(t3 - t0).count(),
-             std::chrono::duration<double, std::milli>(t4 - t3).count(),
-             std::chrono::duration<double, std::milli>(t5 - t4).count());
+  auto t2 = std::chrono::steady_clock::now();
+  ILOG_DEBUG(logger_, "Stop: done ({:.1f}ms total: drain {:.1f}ms, cleanup {:.1f}ms)",
+             std::chrono::duration<double, std::milli>(t2 - t0).count(),
+             std::chrono::duration<double, std::milli>(t1 - t0).count(),
+             std::chrono::duration<double, std::milli>(t2 - t1).count());
 }
 
 ServerStatus ServerImpl::GetStatus() const {
@@ -438,9 +501,9 @@ bool ServerImpl::IsIdle() {
 }
 
 
-#define CHECK_STOP \
-  if (stop_) {     \
-    break;         \
+#define CHECK_STOP                                           \
+  if (state_.load() != ServerState::kRunning) { /* NOLINT */ \
+    break;                                                   \
   }
 
 
@@ -518,7 +581,8 @@ void ServerImpl::GenerateScene() {
     if (sim_scene_cnt_ >= kMaxSceneCnt) {
       ILOG_DEBUG(logger_, "GenerateScene: too many scenes generated. wait for consumer");
       std::unique_lock<std::mutex> lock(scene_mutex_);
-      scene_cv_.wait(lock, [=]() { return stop_ || sim_scene_cnt_ < kMaxSceneCnt; });
+      scene_cv_.wait(lock,
+                     [this]() { return state_.load() != ServerState::kRunning || sim_scene_cnt_ < kMaxSceneCnt; });
       ILOG_DEBUG(logger_, "GenerateScene: continue to generate scenes.");
     }
     CHECK_STOP
@@ -630,8 +694,7 @@ void Server::Terminate() {
     return;
   }
   ILOG_DEBUG(impl_->GetLogger(), "Terminate: entry");
-  impl_->Stop();
-  impl_ = nullptr;
+  impl_.reset();  // ~ServerImpl() handles Stop + thread join via RAII
 }
 
 void Server::InitLogger() {
