@@ -52,6 +52,10 @@ class ServerImpl {
   void GenerateScene();
   void DoSnapshot();
 
+  // Persistent thread loop: wait for Start(), run work_fn, repeat until kTerminating.
+  template <typename F>
+  void RunPersistentLoop(F work_fn);
+
   ConfigManager config_manager_;
 
   QueuePtrS<SimBatch> scene_queue_;
@@ -108,6 +112,31 @@ class ServerImpl {
 const int ServerImpl::kDefaultSimulatorCnt = std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 2);
 
 
+template <typename F>
+void ServerImpl::RunPersistentLoop(F work_fn) {
+  uint64_t my_gen = 0;
+  while (true) {
+    {
+      std::unique_lock<std::mutex> lk(start_mutex_);
+      start_cv_.wait(lk, [this, &my_gen] {
+        return state_.load() == ServerState::kTerminating ||
+               (state_.load() == ServerState::kRunning && start_generation_.load() != my_gen);
+      });
+      if (state_.load() == ServerState::kTerminating) {
+        return;
+      }
+      my_gen = start_generation_.load();
+      active_workers_.fetch_add(1);
+    }
+    work_fn();
+    if (active_workers_.fetch_sub(1) == 1) {
+      // Last active worker — notify Stop() if it's waiting
+      start_cv_.notify_all();
+    }
+  }
+}
+
+
 ServerImpl::ServerImpl()
     : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
@@ -118,68 +147,17 @@ ServerImpl::ServerImpl()
   // Spawn persistent threads — they start in cv.wait(), not working.
   // Each thread tracks start_generation_ to avoid re-entering work after natural completion.
   for (auto& s : simulators_) {
-    simulator_threads_.emplace_back([this, &s]() {
-      uint64_t my_gen = 0;
-      while (true) {
-        {
-          std::unique_lock<std::mutex> lk(start_mutex_);
-          start_cv_.wait(lk, [this, &my_gen] {
-            return state_.load() == ServerState::kTerminating ||
-                   (state_.load() == ServerState::kRunning && start_generation_.load() != my_gen);
-          });
-          if (state_.load() == ServerState::kTerminating) {
-            return;
-          }
-          my_gen = start_generation_.load();
-          active_workers_.fetch_add(1);
-        }
-        s.Run();
-        active_workers_.fetch_sub(1);
-      }
-    });
+    simulator_threads_.emplace_back([this, &s]() { RunPersistentLoop([&s] { s.Run(); }); });
   }
-  consume_data_thread_ = std::thread([this]() {
-    uint64_t my_gen = 0;
-    while (true) {
-      {
-        std::unique_lock<std::mutex> lk(start_mutex_);
-        start_cv_.wait(lk, [this, &my_gen] {
-          return state_.load() == ServerState::kTerminating ||
-                 (state_.load() == ServerState::kRunning && start_generation_.load() != my_gen);
-        });
-        if (state_.load() == ServerState::kTerminating) {
-          return;
-        }
-        my_gen = start_generation_.load();
-        active_workers_.fetch_add(1);
-      }
-      ConsumeData();
-      active_workers_.fetch_sub(1);
-    }
-  });
-  generate_scene_thread_ = std::thread([this]() {
-    uint64_t my_gen = 0;
-    while (true) {
-      {
-        std::unique_lock<std::mutex> lk(start_mutex_);
-        start_cv_.wait(lk, [this, &my_gen] {
-          return state_.load() == ServerState::kTerminating ||
-                 (state_.load() == ServerState::kRunning && start_generation_.load() != my_gen);
-        });
-        if (state_.load() == ServerState::kTerminating) {
-          return;
-        }
-        my_gen = start_generation_.load();
-        active_workers_.fetch_add(1);
-      }
-      GenerateScene();
-      active_workers_.fetch_sub(1);
-    }
-  });
+  consume_data_thread_ = std::thread([this]() { RunPersistentLoop([this]() { ConsumeData(); }); });
+  generate_scene_thread_ = std::thread([this]() { RunPersistentLoop([this]() { GenerateScene(); }); });
 }
 
 
 ServerImpl::~ServerImpl() {
+  // Stop first to drain workers and clean up consumers (if still running)
+  Stop();
+
   // Shutdown queues to unblock any blocking Get() calls
   scene_queue_->Shutdown();
   data_queue_->Shutdown();
@@ -451,13 +429,11 @@ void ServerImpl::Stop() {
     s.Stop();
   }
 
-  // Barrier: acquire+release start_mutex_ to ensure all threads that were woken
-  // have either incremented active_workers_ or gone back to cv.wait().
-  { std::lock_guard<std::mutex> lk(start_mutex_); }
-
-  // Wait for all workers to finish their current work cycle
-  while (active_workers_.load() > 0) {
-    std::this_thread::yield();
+  // Wait for all workers to finish their current work cycle.
+  // Workers notify start_cv_ when active_workers_ reaches 0.
+  {
+    std::unique_lock<std::mutex> lk(start_mutex_);
+    start_cv_.wait(lk, [this] { return active_workers_.load() == 0; });
   }
   auto t1 = std::chrono::steady_clock::now();
 
