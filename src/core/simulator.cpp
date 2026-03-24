@@ -407,12 +407,13 @@ Simulator& Simulator::operator=(Simulator&& other) noexcept {
 
 void Simulator::Run() {
   stop_ = false;
+  ILOG_DEBUG(logger_, "Simulator::Run: entry");
 
   // When a fixed seed is provided, also seed the thread-local global RNG singleton
   // used by sampling functions (RandomSample, SampleTrianglePoint, SampleSphCapPoint, etc.)
   // to ensure fully deterministic behavior.
   if (seed_ != 0) {
-    RandomNumberGenerator::GetInstance()->SetSeed(seed_);
+    RandomNumberGenerator::GetInstance().SetSeed(seed_);
   }
 
   CrystalCache crystal_cache;
@@ -421,10 +422,12 @@ void Simulator::Run() {
   while (true) {
     auto batch = config_queue_->Get();  // Will block until get one
     if (batch.ray_num_ == 0 || stop_) {
+      ILOG_DEBUG(logger_, "Simulator::Run: exit (ray_num={}, stop={})", batch.ray_num_, stop_.load());
       break;
     }
 
     if (!batch.scene_) {
+      ILOG_DEBUG(logger_, "Simulator::Run: exit (null scene)");
       break;
     }
     const auto& config = *batch.scene_;
@@ -455,7 +458,7 @@ void Simulator::Run() {
 
 void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
                                       CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation) {
-  ILOG_DEBUG(logger_, "Run: get config: ray({}), wl({:.1f},{:.2f})",  //
+  ILOG_TRACE(logger_, "Run: get config: ray({}), wl({:.1f},{:.2f})",  //
              ray_num, wl_param.wl_, wl_param.weight_);
 
   float wl = wl_param.wl_;

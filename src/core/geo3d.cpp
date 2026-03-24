@@ -137,9 +137,9 @@ void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num
     p[i + 1] /= p[pop_size];
   }
 
-  auto* rng = RandomNumberGenerator::GetInstance();
+  auto& rng = RandomNumberGenerator::GetInstance();
   for (size_t i = 0; i < sample_num; i++) {
-    auto curr_p = rng->GetUniform();
+    auto curr_p = rng.GetUniform();
     for (int j = 0; j < pop_size; j++) {
       if (p[j] < curr_p && curr_p <= p[j + 1]) {
         out[i] = j;
@@ -151,12 +151,12 @@ void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num
 
 
 void SampleTrianglePoint(const float* vertices, float* out_pt, size_t sample_num) {
-  auto* rng = RandomNumberGenerator::GetInstance();
+  auto& rng = RandomNumberGenerator::GetInstance();
   float e1[3]{ vertices[3] - vertices[0], vertices[4] - vertices[1], vertices[5] - vertices[2] };
   float e2[3]{ vertices[6] - vertices[0], vertices[7] - vertices[1], vertices[8] - vertices[2] };
   for (size_t i = 0; i < sample_num; i++) {
-    auto u = rng->GetUniform();
-    auto v = rng->GetUniform();
+    auto u = rng.GetUniform();
+    auto v = rng.GetUniform();
     if (u + v > 1.0f) {
       u = 1.0f - u;
       v = 1.0f - v;
@@ -177,7 +177,7 @@ void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt,  //
     cap_radii *= math::kDegreeToRad;
   }
 
-  auto* rng = RandomNumberGenerator::GetInstance();
+  auto& rng = RandomNumberGenerator::GetInstance();
   float c_cap = std::cos(cap_radii);
   float c_lon = std::cos(lon);
   float s_lon = std::sin(lon);
@@ -185,11 +185,11 @@ void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt,  //
   float s_lat = std::sin(lat);
   for (size_t i = 0; i < sample_num; i++) {
     // 1. Sample arount x-axis
-    float x = rng->GetUniform();
+    float x = rng.GetUniform();
     x += (1 - x) * c_cap;
     float r = std::sqrt(1.0f - x * x);
 
-    float u = rng->GetUniform() * 2 * math::kPi;
+    float u = rng.GetUniform() * 2 * math::kPi;
     float y = std::cos(u) * r;
     float z = std::sin(u) * r;
 
@@ -206,11 +206,11 @@ void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt,  //
 }
 
 void SampleSph(float radii, float* out_pt, size_t sample_num) {
-  auto* rng = RandomNumberGenerator::GetInstance();
+  auto& rng = RandomNumberGenerator::GetInstance();
   for (size_t i = 0; i < sample_num; i++) {
-    auto z = rng->GetUniform() * 2 - 1;
+    auto z = rng.GetUniform() * 2 - 1;
     float r = std::sqrt(1.0f - z * z);
-    float q = rng->GetUniform() * 2 * math::kPi;
+    float q = rng.GetUniform() * 2 * math::kPi;
     out_pt[i * 3 + 0] = std::cos(q) * r;
     out_pt[i * 3 + 1] = std::sin(q) * r;
     out_pt[i * 3 + 2] = z;
@@ -221,13 +221,13 @@ void SampleSph(float radii, float* out_pt, size_t sample_num) {
 }
 
 void SampleBall(float radii, float* out_pt, size_t sample_num) {
-  auto* rng = RandomNumberGenerator::GetInstance();
+  auto& rng = RandomNumberGenerator::GetInstance();
   for (size_t i = 0; i < sample_num; i++) {
-    float u = rng->GetUniform();
+    float u = rng.GetUniform();
     float r = std::cbrt(u) * radii;
-    float z = (rng->GetUniform() * 2 - 1.0f) * r;
+    float z = (rng.GetUniform() * 2 - 1.0f) * r;
     float rr = std::sqrt(r * r - z * z);
-    float q = rng->GetUniform() * 2 * math::kPi;
+    float q = rng.GetUniform() * 2 * math::kPi;
     float x = std::cos(q) * rr;
     float y = std::sin(q) * rr;
     out_pt[i * 3 + 0] = x;

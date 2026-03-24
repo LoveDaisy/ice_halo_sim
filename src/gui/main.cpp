@@ -2,12 +2,17 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include "gui/app.hpp"
 #include "gui/gl_common.h"
@@ -21,6 +26,15 @@
 namespace gui = lumice::gui;
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+  // Reattach stdout/stderr when launched from a console (cmd/PowerShell).
+  // WIN32 subsystem detaches the console; this reconnects it for log output.
+  if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+    freopen("CONOUT$", "w", stdout);
+    freopen("CONOUT$", "w", stderr);
+  }
+#endif
+
   glfwSetErrorCallback(gui::GlfwErrorCallback);
   if (!glfwInit()) {
     fprintf(stderr, "Failed to initialize GLFW\n");
@@ -146,6 +160,9 @@ int main(int argc, char** argv) {
     // Set core level via C API, GUI level via GUI logger
     LUMICE_SetLogLevel(gui::g_server, core_level);
     gui::SetGuiLogLevel(static_cast<spdlog::level::level_enum>(gui_level));
+    // Sync panel dropdowns with CLI-set levels
+    gui::g_state.gui_log_level = static_cast<int>(gui_level);
+    gui::g_state.core_log_level = static_cast<int>(core_level);
   }
 
   // Initialize preview renderer
@@ -175,6 +192,7 @@ int main(int argc, char** argv) {
 
   // Main loop
   while (!glfwWindowShouldClose(window)) {
+    auto frame_start = std::chrono::steady_clock::now();
     glfwPollEvents();
 
     // Sync data from background server poller (non-blocking)
@@ -250,6 +268,15 @@ int main(int argc, char** argv) {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(window);
+
+    // Fallback frame rate limit: prevents busy-wait when VSync fails
+    // (known issue on Windows+NVIDIA, GLFW #1559/#2049).
+    // When VSync works, SwapBuffers already blocks ~16ms so this sleep is skipped.
+    auto frame_end = std::chrono::steady_clock::now();
+    auto frame_ms = std::chrono::duration_cast<std::chrono::milliseconds>(frame_end - frame_start).count();
+    if (frame_ms < gui::kTargetFrameTimeMs) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(gui::kTargetFrameTimeMs - frame_ms));
+    }
   }
 
   // Cleanup

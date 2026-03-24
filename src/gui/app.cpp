@@ -359,6 +359,14 @@ void DoRun() {
   if (!g_server) {
     return;
   }
+  auto run_start = std::chrono::steady_clock::now();
+
+  // Stop the old poller worker BEFORE CommitConfig to prevent use-after-free:
+  // CommitConfig internally destroys consumers (freeing snapshot_xyz_), but the old
+  // poller worker may still hold a raw pointer from LUMICE_GetRawXyzResults().
+  // Stop() is idempotent — if no worker is running, this is a no-op.
+  g_server_poller.Stop();
+
   LUMICE_Config config{};
   FillLumiceConfig(g_state, &config);
   auto err = LUMICE_CommitConfigStruct(g_server, &config);
@@ -382,7 +390,9 @@ void DoRun() {
     g_state.stats_sim_ray_num = 0;
     g_state.last_restart_time = std::chrono::steady_clock::now();
     g_server_poller.Start(g_server);  // Always restart: restart path stops server briefly
-    GUI_LOG_INFO("[GUI] DoRun: config committed");
+    auto run_end = std::chrono::steady_clock::now();
+    GUI_LOG_INFO("[GUI] DoRun: config committed ({:.1f}ms)",
+                 std::chrono::duration<double, std::milli>(run_end - run_start).count());
   } else {
     GUI_LOG_WARNING("[GUI] CommitConfig FAILED with error code {}", static_cast<int>(err));
   }

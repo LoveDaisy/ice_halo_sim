@@ -144,7 +144,7 @@ class RandomNumberGenerator {
   void Reset();
   void SetSeed(uint32_t seed);
 
-  static RandomNumberGenerator* GetInstance();
+  static RandomNumberGenerator& GetInstance();
 
  private:
   uint32_t seed_;

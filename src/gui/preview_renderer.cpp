@@ -397,8 +397,15 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_FLOAT, data);
   }
 
+  GLenum err = glGetError();
+  if (err != GL_NO_ERROR) {
+    GUI_LOG_WARNING("[GL] UploadXyzTexture: glGetError={} after {}x{} upload", err, width, height);
+  }
+
   xyz_mode_ = true;
-  glFinish();  // Ensure texture upload completes before shader reads it this frame
+  // No glFinish() needed: glTexSubImage2D copies data to driver memory synchronously,
+  // and subsequent draw calls implicitly synchronize. glFinish() was overly aggressive
+  // and could cause GPU command queue stalls leading to TDR on Windows.
   glBindTexture(GL_TEXTURE_2D, 0);
 }
 

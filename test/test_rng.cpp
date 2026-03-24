@@ -21,21 +21,21 @@ TEST_F(RngTest, GaussianTest) {
   auto values1 = std::make_unique<float[]>(kCheckSize);
   auto values2 = std::make_unique<float[]>(kCheckSize);
 
-  auto* rng = lumice::RandomNumberGenerator::GetInstance();
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
 
   // Fill the buffer with Gaussian-distributed random values.
-  rng->Reset();
+  rng.Reset();
   for (size_t i = 0; i < kCheckSize; i++) {
-    values1[i] = rng->GetGaussian();
+    values1[i] = rng.GetGaussian();
   }
 
   // Fill the buffer using a single-worker thread pool.
   // RNG is thread_local, so with pool size 1 the worker thread has its own RNG
   // seeded identically, producing the same sequence in the same order.
-  rng->Reset();
+  rng.Reset();
   auto thread_pool = lumice::ThreadingPool::CreatePool(1);
   thread_pool->CommitRangeStepJobsAndWait(
-      0, kCheckSize, [&values2, &rng](int /* thread_id */, int i) { values2[i] = rng->GetGaussian(); });
+      0, kCheckSize, [&values2, &rng](int /* thread_id */, int i) { values2[i] = rng.GetGaussian(); });
 
   // Compare the two buffers. They should be the same after sorting.
   std::sort(values1.get(), values1.get() + kCheckSize);
@@ -51,19 +51,19 @@ TEST_F(RngTest, UniformTest) {
   auto values1 = std::make_unique<float[]>(kCheckSize);
   auto values2 = std::make_unique<float[]>(kCheckSize);
 
-  auto* rng = lumice::RandomNumberGenerator::GetInstance();
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
 
   // Fill the buffer with uniform-distributed random values.
-  rng->Reset();
+  rng.Reset();
   for (size_t i = 0; i < kCheckSize; i++) {
-    values1[i] = rng->GetUniform();
+    values1[i] = rng.GetUniform();
   }
 
   // Fill the buffer using a single-worker thread pool.
-  rng->Reset();
+  rng.Reset();
   auto thread_pool = lumice::ThreadingPool::CreatePool(1);
   thread_pool->CommitRangeStepJobsAndWait(
-      0, kCheckSize, [&values2, &rng](int /* thread_id */, int i) { values2[i] = rng->GetUniform(); });
+      0, kCheckSize, [&values2, &rng](int /* thread_id */, int i) { values2[i] = rng.GetUniform(); });
 
   // Compare the two buffers. They should be the same after sorting.
   std::sort(values1.get(), values1.get() + kCheckSize);

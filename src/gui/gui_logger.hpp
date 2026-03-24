@@ -18,6 +18,8 @@ inline spdlog::logger& GetGuiLogger() {
     auto l = spdlog::default_logger()->clone("GUI");
     l->set_pattern(kGuiLogPattern);
     l->set_level(spdlog::level::info);
+    // Register so spdlog::flush_every() can flush this logger's file sink.
+    spdlog::register_logger(l);
     return l;
   }();
   return *logger;
