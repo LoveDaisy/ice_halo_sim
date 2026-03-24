@@ -151,14 +151,13 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   auto stop_start = std::chrono::steady_clock::now();
   Stop();
   auto stop_end = std::chrono::steady_clock::now();
-  ILOG_INFO(logger_, "CommitConfig: Stop took {:.1f}ms",
-            std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
+  auto stop_ms = std::chrono::duration<double, std::milli>(stop_end - stop_start).count();
 
   config_manager_ = std::move(new_config);
 
   // Setup consumers from project config.
   // Lock consumer_mutex_ to prevent race with ServerPoller's GetRawXyzResults().
-  ILOG_DEBUG(logger_, "CommitConfig: setup consumers");
+  auto rebuild_start = std::chrono::steady_clock::now();
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
     consumers_.clear();
@@ -167,6 +166,8 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     }
     consumers_.emplace_back(std::make_shared<StatsConsumer>());
   }
+  auto rebuild_end = std::chrono::steady_clock::now();
+  auto rebuild_ms = std::chrono::duration<double, std::milli>(rebuild_end - rebuild_start).count();
 
   auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
   {
@@ -175,12 +176,15 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     scene_generation_.fetch_add(1);
   }
 
+  auto start_start = std::chrono::steady_clock::now();
   Start();
+  auto start_end = std::chrono::steady_clock::now();
+  auto start_ms = std::chrono::duration<double, std::milli>(start_end - start_start).count();
 
   auto commit_end = std::chrono::steady_clock::now();
-  ILOG_INFO(logger_, "CommitConfig: restart took {:.1f}ms (Stop {:.1f}ms + rebuild + Start)",
-            std::chrono::duration<double, std::milli>(commit_end - commit_start).count(),
-            std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
+  ILOG_INFO(logger_, "CommitConfig: restart took {:.1f}ms (Stop {:.1f}ms + rebuild {:.1f}ms + Start {:.1f}ms)",
+            std::chrono::duration<double, std::milli>(commit_end - commit_start).count(), stop_ms, rebuild_ms,
+            start_ms);
 
   return Error::Success();
 }
@@ -296,6 +300,7 @@ void ServerImpl::Start() {
     return;
   }
 
+  auto t0 = std::chrono::steady_clock::now();
   stop_ = false;
   work_started_ = false;
   sim_scene_cnt_ = 0;
@@ -308,18 +313,25 @@ void ServerImpl::Start() {
   // Start queues & jobs
   data_queue_->Start();
   scene_queue_->Start();
+  auto t1 = std::chrono::steady_clock::now();
   {
     std::lock_guard<std::mutex> lock(prod_mutex_);
-    ILOG_DEBUG(logger_, "Start: lock on prod_mutex_");
     for (auto& s : simulators_) {
       simulator_threads_.emplace_back(&Simulator::Run, &s);
     }
-    ILOG_DEBUG(logger_, "Start: unlock prod_mutex_");
   }
+  auto t2 = std::chrono::steady_clock::now();
 
   // Start main working thread & scene dispatch thread
   consume_data_thread_ = std::thread(&ServerImpl::ConsumeData, this);
   generate_scene_thread_ = std::thread(&ServerImpl::GenerateScene, this);
+
+  auto t3 = std::chrono::steady_clock::now();
+  ILOG_DEBUG(logger_, "Start: done ({:.1f}ms total: queue {:.1f}ms, sim_spawn {:.1f}ms, worker_spawn {:.1f}ms)",
+             std::chrono::duration<double, std::milli>(t3 - t0).count(),
+             std::chrono::duration<double, std::milli>(t1 - t0).count(),
+             std::chrono::duration<double, std::milli>(t2 - t1).count(),
+             std::chrono::duration<double, std::milli>(t3 - t2).count());
 }
 
 
@@ -329,6 +341,7 @@ void ServerImpl::Stop() {
     return;
   }
 
+  auto t0 = std::chrono::steady_clock::now();
   stop_ = true;
 
   // Stop queues
@@ -344,25 +357,27 @@ void ServerImpl::Stop() {
     for (auto& s : simulators_) {
       s.Stop();
     }
+    auto t1 = std::chrono::steady_clock::now();
     for (size_t i = 0; i < simulator_threads_.size(); i++) {
       if (simulator_threads_[i].joinable()) {
-        ILOG_DEBUG(logger_, "Stop: joining simulator thread {}/{}", i + 1, simulator_threads_.size());
         simulator_threads_[i].join();
-        ILOG_DEBUG(logger_, "Stop: simulator thread {}/{} joined", i + 1, simulator_threads_.size());
       }
     }
+    auto t2 = std::chrono::steady_clock::now();
+    ILOG_DEBUG(logger_, "Stop: simulators joined ({} threads, {:.1f}ms)", simulator_threads_.size(),
+               std::chrono::duration<double, std::milli>(t2 - t1).count());
     simulator_threads_.clear();
-    ILOG_DEBUG(logger_, "Stop: unlock prod_mutex_");
   }
 
   // Stop main working thread & scene dispatch thread.
-  ILOG_DEBUG(logger_, "Stop: waiting main worker & dispatcher stop.");
+  auto t3 = std::chrono::steady_clock::now();
   if (consume_data_thread_.joinable()) {
     consume_data_thread_.join();
   }
   if (generate_scene_thread_.joinable()) {
     generate_scene_thread_.join();
   }
+  auto t4 = std::chrono::steady_clock::now();
 
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
@@ -374,6 +389,13 @@ void ServerImpl::Stop() {
     std::lock_guard<std::mutex> lock(status_mutex_);
     status_ = ServerStatus::kIdle;
   }
+
+  auto t5 = std::chrono::steady_clock::now();
+  ILOG_DEBUG(logger_, "Stop: done ({:.1f}ms total: sim_join {:.1f}ms, worker_join {:.1f}ms, cleanup {:.1f}ms)",
+             std::chrono::duration<double, std::milli>(t5 - t0).count(),
+             std::chrono::duration<double, std::milli>(t3 - t0).count(),
+             std::chrono::duration<double, std::milli>(t4 - t3).count(),
+             std::chrono::duration<double, std::milli>(t5 - t4).count());
 }
 
 ServerStatus ServerImpl::GetStatus() const {
