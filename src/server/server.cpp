@@ -84,6 +84,7 @@ class ServerImpl {
   std::mutex start_mutex_;
   std::condition_variable start_cv_;
   std::atomic<int> active_workers_{ 0 };
+  std::atomic<uint64_t> start_generation_{ 0 };  // Incremented by Start(); prevents re-entry after natural completion
 
   std::atomic_bool work_started_{ false };
   std::atomic_bool scene_gen_active_{ false };  // True while GenerateScene is actively producing batches
@@ -115,15 +116,21 @@ ServerImpl::ServerImpl()
   }
 
   // Spawn persistent threads — they start in cv.wait(), not working.
+  // Each thread tracks start_generation_ to avoid re-entering work after natural completion.
   for (auto& s : simulators_) {
     simulator_threads_.emplace_back([this, &s]() {
+      uint64_t my_gen = 0;
       while (true) {
         {
           std::unique_lock<std::mutex> lk(start_mutex_);
-          start_cv_.wait(lk, [this] { return state_.load() != ServerState::kStopped; });
+          start_cv_.wait(lk, [this, &my_gen] {
+            return state_.load() == ServerState::kTerminating ||
+                   (state_.load() == ServerState::kRunning && start_generation_.load() != my_gen);
+          });
           if (state_.load() == ServerState::kTerminating) {
             return;
           }
+          my_gen = start_generation_.load();
           active_workers_.fetch_add(1);
         }
         s.Run();
@@ -132,13 +139,18 @@ ServerImpl::ServerImpl()
     });
   }
   consume_data_thread_ = std::thread([this]() {
+    uint64_t my_gen = 0;
     while (true) {
       {
         std::unique_lock<std::mutex> lk(start_mutex_);
-        start_cv_.wait(lk, [this] { return state_.load() != ServerState::kStopped; });
+        start_cv_.wait(lk, [this, &my_gen] {
+          return state_.load() == ServerState::kTerminating ||
+                 (state_.load() == ServerState::kRunning && start_generation_.load() != my_gen);
+        });
         if (state_.load() == ServerState::kTerminating) {
           return;
         }
+        my_gen = start_generation_.load();
         active_workers_.fetch_add(1);
       }
       ConsumeData();
@@ -146,13 +158,18 @@ ServerImpl::ServerImpl()
     }
   });
   generate_scene_thread_ = std::thread([this]() {
+    uint64_t my_gen = 0;
     while (true) {
       {
         std::unique_lock<std::mutex> lk(start_mutex_);
-        start_cv_.wait(lk, [this] { return state_.load() != ServerState::kStopped; });
+        start_cv_.wait(lk, [this, &my_gen] {
+          return state_.load() == ServerState::kTerminating ||
+                 (state_.load() == ServerState::kRunning && start_generation_.load() != my_gen);
+        });
         if (state_.load() == ServerState::kTerminating) {
           return;
         }
+        my_gen = start_generation_.load();
         active_workers_.fetch_add(1);
       }
       GenerateScene();
@@ -402,6 +419,7 @@ void ServerImpl::Start() {
     data_queue_->Start();
     scene_queue_->Start();
 
+    start_generation_.fetch_add(1);
     state_.store(ServerState::kRunning);
   }
   start_cv_.notify_all();
