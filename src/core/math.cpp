@@ -346,10 +346,9 @@ RandomNumberGenerator::RandomNumberGenerator(uint32_t seed)
 
 
 RandomNumberGenerator& RandomNumberGenerator::GetInstance() {
-  static thread_local RandomNumberGenerator instance_{  // NOLINT(readability-identifier-naming)
-    static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count())
-  };
-  return instance_;
+  static thread_local RandomNumberGenerator instance{ static_cast<uint32_t>(
+      std::chrono::system_clock::now().time_since_epoch().count()) };
+  return instance;
 }
 
 
