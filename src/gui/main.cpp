@@ -2,6 +2,10 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -22,6 +26,15 @@
 namespace gui = lumice::gui;
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+  // Reattach stdout/stderr when launched from a console (cmd/PowerShell).
+  // WIN32 subsystem detaches the console; this reconnects it for log output.
+  if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+    freopen("CONOUT$", "w", stdout);
+    freopen("CONOUT$", "w", stderr);
+  }
+#endif
+
   glfwSetErrorCallback(gui::GlfwErrorCallback);
   if (!glfwInit()) {
     fprintf(stderr, "Failed to initialize GLFW\n");
