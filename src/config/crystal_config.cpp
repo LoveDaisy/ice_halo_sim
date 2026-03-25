@@ -1,6 +1,7 @@
 #include "config/crystal_config.hpp"
 
 #include <nlohmann/json.hpp>
+#include <numeric>
 #include <variant>
 
 #include "core/math.hpp"
@@ -20,7 +21,7 @@ void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
     j.at("height").get_to(p.h_);
   }
 
-  // Face distance: default mean=1.0, then scale by √3/4
+  // Face distance: default mean=1.0 (1.0 = regular hexagon in FillHexCrystalCoef)
   for (auto& x : p.d_) {
     x.type = DistributionType::kNoRandom;
     x.mean = 1.0f;
@@ -34,10 +35,6 @@ void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
       elem.get_to(p.d_[i]);
       i++;
     }
-  }
-  for (auto& x : p.d_) {
-    x.mean *= math::kSqrt3_4;
-    x.std *= math::kSqrt3_4;
   }
 }
 
@@ -70,7 +67,7 @@ void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
     j.at("lower_indices").get_to(p.miller_indices_l_);
   }
 
-  // Face distance: default mean=1.0, then scale by √3/4
+  // Face distance: default mean=1.0 (1.0 = regular hexagon in FillHexCrystalCoef)
   for (auto& x : p.d_) {
     x.type = DistributionType::kNoRandom;
     x.mean = 1.0f;
@@ -85,10 +82,18 @@ void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
       i++;
     }
   }
-  for (auto& x : p.d_) {
-    x.mean *= math::kSqrt3_4;
-    x.std *= math::kSqrt3_4;
-  }
+
+  // Normalize Miller indices by GCD so that e.g. [2,0,2] becomes [1,0,1]
+  auto normalize_miller = [](int(&idx)[3]) {
+    int g = std::gcd(std::abs(idx[0]), std::gcd(std::abs(idx[1]), std::abs(idx[2])));
+    if (g > 1) {
+      idx[0] /= g;
+      idx[1] /= g;
+      idx[2] /= g;
+    }
+  };
+  normalize_miller(p.miller_indices_u_);
+  normalize_miller(p.miller_indices_l_);
 }
 
 

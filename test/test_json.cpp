@@ -176,7 +176,7 @@ TEST_F(V3TestJson, Crystal_PrismSimple) {
   const auto& p = std::get<PrismCrystalParam>(c.param_);
   CHECK_DISTRIBUTION(p.h_, DistributionType::kGaussian, 1.3, 0.2);
   for (const auto& x : p.d_) {
-    CHECK_DISTRIBUTION(x, DistributionType::kNoRandom, 1.0f * math::kSqrt3_4, 0.0f);
+    CHECK_DISTRIBUTION(x, DistributionType::kNoRandom, 1.0f, 0.0f);
   }
 }
 
@@ -190,7 +190,7 @@ TEST_F(V3TestJson, Crystal_PrismFull) {
   const auto& p = std::get<PrismCrystalParam>(c.param_);
   CHECK_DISTRIBUTION(p.h_, DistributionType::kUniform, 0.5f, 0.4f);
   for (const auto& x : p.d_) {
-    CHECK_DISTRIBUTION(x, DistributionType::kGaussian, 1.0f * math::kSqrt3_4, 0.2f * math::kSqrt3_4);
+    CHECK_DISTRIBUTION(x, DistributionType::kGaussian, 1.0f, 0.2f);
   }
 
   const auto& axis = c.axis_;
@@ -220,13 +220,86 @@ TEST_F(V3TestJson, Crystal_PyramidSimple) {
   ASSERT_EQ(p.miller_indices_l_[2], 1);
 
   for (const auto& x : p.d_) {
-    CHECK_DISTRIBUTION(x, DistributionType::kNoRandom, 1.0f * math::kSqrt3_4, 0.0f);
+    CHECK_DISTRIBUTION(x, DistributionType::kNoRandom, 1.0f, 0.0f);
   }
 
   const auto& axis = c.axis_;
   CHECK_DISTRIBUTION(axis.azimuth_dist, DistributionType::kUniform, 0, 360);
   CHECK_DISTRIBUTION(axis.latitude_dist, DistributionType::kNoRandom, 90, 0);
   CHECK_DISTRIBUTION(axis.azimuth_dist, DistributionType::kUniform, 0, 360);
+}
+
+
+// Helper to create a minimal pyramid CrystalConfig JSON
+nlohmann::json MakePyramidJson(int id, std::array<int, 3> upper_idx, std::array<int, 3> lower_idx) {
+  return {
+    { "id", id },
+    { "type", "pyramid" },
+    { "shape",
+      { { "prism_h", 1.0 },
+        { "upper_h", 0.3 },
+        { "lower_h", 0.3 },
+        { "upper_indices", upper_idx },
+        { "lower_indices", lower_idx } } },
+  };
+}
+
+TEST(MillerIndexNormalization, GcdReducesEquivalentIndices) {
+  auto j = MakePyramidJson(1, { 2, 0, 2 }, { 4, 0, 2 });
+  auto c = j.get<CrystalConfig>();
+  const auto& p = std::get<PyramidCrystalParam>(c.param_);
+
+  EXPECT_EQ(p.miller_indices_u_[0], 1);
+  EXPECT_EQ(p.miller_indices_u_[1], 0);
+  EXPECT_EQ(p.miller_indices_u_[2], 1);
+
+  EXPECT_EQ(p.miller_indices_l_[0], 2);
+  EXPECT_EQ(p.miller_indices_l_[1], 0);
+  EXPECT_EQ(p.miller_indices_l_[2], 1);
+}
+
+TEST(MillerIndexNormalization, IrreducibleIndicesUnchanged) {
+  auto j = MakePyramidJson(1, { 2, 0, 3 }, { 1, 0, 1 });
+  auto c = j.get<CrystalConfig>();
+  const auto& p = std::get<PyramidCrystalParam>(c.param_);
+
+  EXPECT_EQ(p.miller_indices_u_[0], 2);
+  EXPECT_EQ(p.miller_indices_u_[1], 0);
+  EXPECT_EQ(p.miller_indices_u_[2], 3);
+}
+
+TEST(FaceDistanceRoundTrip, NoScalingApplied) {
+  // Parse once: face_distance values should stay unchanged (no kSqrt3_4 scaling)
+  auto j1 = MakePyramidJson(1, { 2, 0, 2 }, { 1, 0, 1 });
+  j1["shape"]["face_distance"] = { 1.0, 0.8, 1.0, 1.2, 1.0, 0.9 };
+
+  auto c1 = j1.get<CrystalConfig>();
+  const auto& p1 = std::get<PyramidCrystalParam>(c1.param_);
+
+  // Verify no scaling applied
+  EXPECT_NEAR(p1.d_[0].mean, 1.0f, 1e-5f);
+  EXPECT_NEAR(p1.d_[1].mean, 0.8f, 1e-5f);
+  EXPECT_NEAR(p1.d_[3].mean, 1.2f, 1e-5f);
+  EXPECT_NEAR(p1.d_[5].mean, 0.9f, 1e-5f);
+
+  // Verify GCD normalization happened: [2,0,2] -> [1,0,1]
+  EXPECT_EQ(p1.miller_indices_u_[0], 1);
+  EXPECT_EQ(p1.miller_indices_u_[2], 1);
+
+  // Round-trip: parse same config again — should get identical values
+  auto j2 = MakePyramidJson(1, { 1, 0, 1 }, { 1, 0, 1 });
+  j2["shape"]["face_distance"] = { 1.0, 0.8, 1.0, 1.2, 1.0, 0.9 };
+
+  auto c2 = j2.get<CrystalConfig>();
+  const auto& p2 = std::get<PyramidCrystalParam>(c2.param_);
+
+  for (int i = 0; i < 6; i++) {
+    EXPECT_NEAR(p2.d_[i].mean, p1.d_[i].mean, 1e-5f);
+  }
+  for (int i = 0; i < 3; i++) {
+    EXPECT_EQ(p2.miller_indices_u_[i], p1.miller_indices_u_[i]);
+    EXPECT_EQ(p2.miller_indices_l_[i], p1.miller_indices_l_[i]);
+  }
 }
 
 
