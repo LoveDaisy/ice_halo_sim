@@ -788,8 +788,8 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.bg_show = root.value("bg_show", false);
   state.bg_alpha = root.value("bg_alpha", 1.0f);
 
-  // Normalization mode (display preference, default adaptive)
-  state.norm_mode = root.value("norm_mode", 1);
+  // Normalization mode (display preference, default absolute for backward compat with old .lmc files)
+  state.norm_mode = root.value("norm_mode", 0);
 
   return true;
 }
