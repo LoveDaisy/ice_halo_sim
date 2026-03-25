@@ -285,7 +285,8 @@ void RectangularProject(const LensProjParam& p, const float* d, int* xy, size_t 
       lat = -math::kPi - lat;
     }
 
-    xy[0] = static_cast<int>(std::floor(lon * scale + p.resolution_[0] / 2.0f + 0.5f));
+    int raw_x = static_cast<int>(std::floor(lon * scale + p.resolution_[0] / 2.0f + 0.5f));
+    xy[0] = ((raw_x % p.resolution_[0]) + p.resolution_[0]) % p.resolution_[0];
     xy[1] = static_cast<int>(std::floor(-lat * scale + p.resolution_[1] / 2.0f + 0.5f));
   }
 }
