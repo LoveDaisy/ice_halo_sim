@@ -611,11 +611,12 @@ void RenderRenderTab(GuiState& state) {
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
-    SliderWithInput("EV", &r.exposure_offset, -2.0f, 8.0f, "%.1f");
-    const char* norm_mode_names[] = { "Absolute", "Adaptive" };
-    ImGui::Combo("Brightness", &state.norm_mode, norm_mode_names, 2);
+    SliderWithInput("EV", &r.exposure_offset, -3.0f, 7.0f, "%.1f");
+    ImGui::RadioButton("Absolute", &state.norm_mode, 0);
+    ImGui::SameLine();
+    ImGui::RadioButton("Adaptive", &state.norm_mode, 1);
     if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Absolute: total pixels; Adaptive: non-zero pixels (fixes fisheye)");
+      ImGui::SetTooltip("Adaptive: normalize by non-zero pixels (fixes fisheye)");
     }
   }
 

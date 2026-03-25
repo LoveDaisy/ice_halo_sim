@@ -24,7 +24,7 @@ namespace lumice {
 // reasonable [0,1] range at EV=0. The average illuminated pixel appears at ~5% brightness,
 // so bright halo features (~20× average) approach full white. This constant is independent
 // of resolution and FOV — use EV (intensity_factor) for user-controlled brightness adjustment.
-constexpr float kNormScale = 0.16f;
+constexpr float kNormScale = 0.08f;
 
 // =============== Color transforms ===============
 // Convert linear rgb to sRGB
