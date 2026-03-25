@@ -13,7 +13,7 @@ struct PreviewParams {
   float roll = 0.0f;       // Degrees
   int visible = 2;         // 0=upper, 1=lower, 2=full
   float intensity_factor = 1.0f;
-  float intensity_scale = 0.0f;  // = intensity_factor / snapshot_intensity * 1e5 (0 = not in XYZ mode)
+  float intensity_scale = 0.0f;  // = intensity_factor / per_pixel_intensity (0 = not in XYZ mode)
   bool bg_enabled = false;
   float bg_alpha = 1.0f;
   float bg_aspect = 1.0f;
