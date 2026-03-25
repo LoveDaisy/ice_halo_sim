@@ -406,7 +406,10 @@ void DoRun() {
     if (expect_rebuild || !reused) {
       g_server_poller.Start(g_server);  // Rebuild: new consumers, reset server pointer
     }
-    // Reuse path: poller was never stopped, continues polling naturally
+    // Unconditionally ensure poller is running — covers all edge cases:
+    // DoStop→DoRun (poller was paused), PollOnce self-pause (finite rays done), etc.
+    // If already kRunning, this is a no-op (zero overhead).
+    g_server_poller.EnsureRunning(g_server);
     auto run_end = std::chrono::steady_clock::now();
     GUI_LOG_INFO("[GUI] DoRun: config committed ({:.1f}ms)",
                  std::chrono::duration<double, std::milli>(run_end - run_start).count());

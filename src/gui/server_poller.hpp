@@ -47,6 +47,11 @@ class ServerPoller {
   // it is no longer accessing the server. Safe to call multiple times.
   void Stop();
 
+  // Idempotent: ensure the worker is in kRunning state.
+  // If already kRunning, this is a no-op (zero overhead for the hot slider path).
+  // If kPaused (after Stop/DoStop/self-pause), resumes polling with the given server.
+  void EnsureRunning(LUMICE_Server* server);
+
   // Main thread: try to consume staged data. Returns true if new data was swapped in.
   // Uses try_lock so it never blocks the main thread.
   bool TrySyncData(PollerData& out);

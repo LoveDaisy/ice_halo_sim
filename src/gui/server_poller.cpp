@@ -70,6 +70,31 @@ void ServerPoller::Stop() {
   GUI_LOG_DEBUG("[Poller] Stop: worker paused");
 }
 
+void ServerPoller::EnsureRunning(LUMICE_Server* server) {
+  if (!server) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (state_.load() == State::kRunning) {
+      return;  // Already running — zero overhead
+    }
+    if (state_.load() == State::kTerminating) {
+      return;
+    }
+    // kPaused → resume polling
+    server_ = server;
+    last_generation_ = 0;
+    {
+      std::lock_guard<std::mutex> lock(data_mutex_);
+      staged_.valid = false;
+    }
+    state_.store(State::kRunning);
+  }
+  cv_.notify_all();
+  GUI_LOG_DEBUG("[Poller] EnsureRunning: resumed from paused");
+}
+
 bool ServerPoller::TrySyncData(PollerData& out) {
   std::unique_lock<std::mutex> lock(data_mutex_, std::try_to_lock);
   if (!lock.owns_lock()) {
