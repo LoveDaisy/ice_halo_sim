@@ -63,12 +63,12 @@ typedef struct LUMICE_RawXyzResult_ {
   int renderer_id;
   int img_width;
   int img_height;
-  const float* xyz_buffer;                 // Read-only XYZ float data, 3 floats per pixel.
-                                           // Valid until next LUMICE_GetRawXyzResults() or LUMICE_CommitConfig().
-                                           // Sentinel: xyz_buffer == NULL
-  float snapshot_intensity;                // Accumulated intensity scalar for normalization
-  float intensity_factor;                  // Per-renderer intensity factor (2^EV)
-  int has_valid_data;                      // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
+  const float* xyz_buffer;   // Read-only XYZ float data, 3 floats per pixel.
+                             // Valid until next LUMICE_GetRawXyzResults() or LUMICE_CommitConfig().
+                             // Sentinel: xyz_buffer == NULL
+  float snapshot_intensity;  // Per-pixel landed intensity (landed_ray_weights / (kNormScale * total_pixels))
+  float intensity_factor;    // Per-renderer intensity factor (2^EV)
+  int has_valid_data;        // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
 } LUMICE_RawXyzResult;
 

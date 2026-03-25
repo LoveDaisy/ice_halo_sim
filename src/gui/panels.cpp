@@ -566,22 +566,17 @@ void RenderRenderTab(GuiState& state) {
 
   auto& r = state.renderers[0];
 
-  if (ImGui::CollapsingHeader("Lens & View", ImGuiTreeNodeFlags_DefaultOpen)) {
+  bool full_sky = (r.lens_type >= 4);  // dual fisheye (4-6) and rectangular (7)
+
+  if (ImGui::CollapsingHeader("Projection", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     ImGui::Combo("Lens Type", &r.lens_type, kLensTypeNames, kLensTypeCount);
     ImGui::PopItemWidth();
 
-    bool full_sky = (r.lens_type >= 4);  // dual fisheye (4-6) and rectangular (7)
     if (full_sky) {
-      r.elevation = 0.0f;
-      r.azimuth = 0.0f;
-      r.roll = 0.0f;
       ImGui::BeginDisabled();
     }
     SliderWithInput("FOV", &r.fov, 1.0f, 360.0f, "%.0f");
-    SliderWithInput("Elevation", &r.elevation, -90.0f, 90.0f);
-    SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f);
-    SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f);
     if (full_sky) {
       ImGui::EndDisabled();
     }
@@ -591,17 +586,32 @@ void RenderRenderTab(GuiState& state) {
     ImGui::PopItemWidth();
   }
 
-  if (ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Changing these requires re-running the simulation");
+  if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (full_sky) {
+      r.elevation = 0.0f;
+      r.azimuth = 0.0f;
+      r.roll = 0.0f;
+      ImGui::BeginDisabled();
     }
+    SliderWithInput("Elevation", &r.elevation, -90.0f, 90.0f);
+    SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f);
+    SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f);
+    if (full_sky) {
+      ImGui::EndDisabled();
+    }
+  }
+
+  if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     const char* res_labels[] = { "512", "1024", "2048", "4096" };
-    DIRTY_IF(ImGui::Combo("Sim Resolution", &r.sim_resolution_index, res_labels, kSimResolutionCount));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.28f, 0.12f, 0.6f));
+    DIRTY_IF(ImGui::Combo("Resolution", &r.sim_resolution_index, res_labels, kSimResolutionCount));
+    ImGui::PopStyleColor();
     ImGui::PopItemWidth();
-    DIRTY_IF(SliderWithInput("EV", &r.exposure_offset, -2.0f, 8.0f, "%.1f"));
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
+    }
+    SliderWithInput("EV", &r.exposure_offset, -2.0f, 8.0f, "%.1f");
   }
 
   if (ImGui::CollapsingHeader("File", ImGuiTreeNodeFlags_DefaultOpen)) {

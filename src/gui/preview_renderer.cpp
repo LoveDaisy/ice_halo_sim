@@ -30,7 +30,7 @@ uniform int u_lens_type;     // 0=linear, 1-3=fisheye, 4-6=dual fisheye, 7=recta
 uniform float u_fov;         // full FOV in degrees
 uniform mat3 u_view_matrix;  // view-to-world rotation (inverse view)
 uniform int u_visible;       // 0=upper, 1=lower, 2=full
-uniform float u_intensity_scale;  // = intensity_factor / snapshot_intensity * 1e5 (0 = RGB mode)
+uniform float u_intensity_scale;  // = intensity_factor / per_pixel_intensity (0 = RGB mode)
 uniform int u_xyz_mode;           // 1 = XYZ float texture, 0 = sRGB uint8 texture
 uniform sampler2D u_bg_texture;
 uniform int u_bg_enabled;

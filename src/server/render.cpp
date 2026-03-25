@@ -20,6 +20,12 @@
 
 namespace lumice {
 
+// Display brightness baseline: maps the physically-derived per-pixel radiance to a visually
+// reasonable [0,1] range at EV=0. The average illuminated pixel appears at ~5% brightness,
+// so bright halo features (~20× average) approach full white. This constant is independent
+// of resolution and FOV — use EV (intensity_factor) for user-controlled brightness adjustment.
+constexpr float kNormScale = 0.16f;
+
 // =============== Color transforms ===============
 // Convert linear rgb to sRGB
 void SrgbGamma(float* rgb, size_t num) {
@@ -279,7 +285,8 @@ void RectangularProject(const LensProjParam& p, const float* d, int* xy, size_t 
       lat = -math::kPi - lat;
     }
 
-    xy[0] = static_cast<int>(std::floor(lon * scale + p.resolution_[0] / 2.0f + 0.5f));
+    int raw_x = static_cast<int>(std::floor(lon * scale + p.resolution_[0] / 2.0f + 0.5f));
+    xy[0] = ((raw_x % p.resolution_[0]) + p.resolution_[0]) % p.resolution_[0];
     xy[1] = static_cast<int>(std::floor(-lat * scale + p.resolution_[1] / 2.0f + 0.5f));
   }
 }
@@ -392,6 +399,7 @@ void RenderConsumer::Consume(const SimData& data) {
   lens_proj(proj_param, d_buf_.get(), xy_buf_.get(), filtered_ray_num);
 
   size_t final_ray_num = 0;
+  float landed_weight = 0;
   for (size_t i = 0; i < filtered_ray_num; i++) {
     if (xy_buf_[i * 2 + 0] < 0 || xy_buf_[i * 2 + 0] >= config_.resolution_[0] ||  //
         xy_buf_[i * 2 + 1] < 0 || xy_buf_[i * 2 + 1] >= config_.resolution_[1]) {
@@ -399,10 +407,11 @@ void RenderConsumer::Consume(const SimData& data) {
     }
     xy_buf_[final_ray_num] = xy_buf_[i * 2 + 1] * config_.resolution_[0] + xy_buf_[i * 2 + 0];
     w_buf_[final_ray_num] = w_buf_[i];
+    landed_weight += w_buf_[i];
     final_ray_num++;
   }
   SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), final_ray_num);
-  total_intensity_ += data.total_intensity_;
+  total_intensity_ += landed_weight;
 }
 
 void RenderConsumer::PrepareSnapshot() {
@@ -423,7 +432,7 @@ void RenderConsumer::PostSnapshot() {
   // PrepareSnapshot will overwrite it next time).
   float* float_data = snapshot_xyz_.get();
   for (int i = 0; i < total_pix * 3; i++) {
-    float_data[i] *= config_.intensity_factor_ / snapshot_intensity_ * 1e5;
+    float_data[i] *= config_.intensity_factor_ * kNormScale * total_pix / snapshot_intensity_;
   }
 
   bool use_real_color = config_.ray_color_[0] < 0;
@@ -481,8 +490,10 @@ Result RenderConsumer::GetResult() const {
 }
 
 RawXyzResult RenderConsumer::GetRawXyzResult() const {
+  int total_pix = config_.resolution_[0] * config_.resolution_[1];
+  float per_pixel_intensity = total_pix > 0 ? snapshot_intensity_ / (kNormScale * total_pix) : 0.0f;
   return { config_.id_,         config_.resolution_[0], config_.resolution_[1],
-           snapshot_xyz_.get(), snapshot_intensity_,    config_.intensity_factor_ };
+           snapshot_xyz_.get(), per_pixel_intensity,    config_.intensity_factor_ };
 }
 
 void RenderConsumer::Reset() {
