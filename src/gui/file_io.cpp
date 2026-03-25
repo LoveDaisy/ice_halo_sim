@@ -304,6 +304,7 @@ std::string SerializeCoreConfig(const GuiState& state) {
     jr["background"] = { 0.0f, 0.0f, 0.0f };
     jr["opacity"] = r.opacity;
     jr["intensity_factor"] = std::pow(2.0f, r.exposure_offset);
+    jr["norm_mode"] = state.norm_mode;
 
     root["render"].push_back(jr);
   }
@@ -374,6 +375,7 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
     dst.resolution_h = res;
     dst.opacity = r.opacity;
     dst.intensity_factor = std::pow(2.0f, r.exposure_offset);
+    dst.norm_mode = state.norm_mode;
   }
 
   // Scene: light source
@@ -661,6 +663,9 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["bg_show"] = state.bg_show;
   root["bg_alpha"] = state.bg_alpha;
 
+  // Normalization mode (display preference)
+  root["norm_mode"] = state.norm_mode;
+
   return root.dump(2);
 }
 
@@ -782,6 +787,9 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.bg_path = PathFromU8(root.value("bg_path", std::string{}));
   state.bg_show = root.value("bg_show", false);
   state.bg_alpha = root.value("bg_alpha", 1.0f);
+
+  // Normalization mode (display preference, default adaptive)
+  state.norm_mode = root.value("norm_mode", 1);
 
   return true;
 }

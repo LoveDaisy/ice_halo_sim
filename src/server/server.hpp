@@ -139,6 +139,7 @@ struct RawXyzResult {
   float intensity_factor_;
   bool has_valid_data_ = false;       // True after first ConsumeData; reset on Stop
   uint64_t snapshot_generation_ = 0;  // Increments on each new snapshot
+  int effective_pixels_ = 0;          // Non-zero pixel count for adaptive normalization
 };
 
 struct StatsResult {

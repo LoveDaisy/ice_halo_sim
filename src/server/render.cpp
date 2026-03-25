@@ -418,6 +418,16 @@ void RenderConsumer::PrepareSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
   snapshot_intensity_ = total_intensity_;
+
+  // Count non-zero pixels (any XYZ channel > 0)
+  int count = 0;
+  const float* xyz = snapshot_xyz_.get();
+  for (int i = 0; i < total_pix; i++) {
+    if (xyz[i * 3] != 0 || xyz[i * 3 + 1] != 0 || xyz[i * 3 + 2] != 0) {
+      count++;
+    }
+  }
+  effective_pix_ = std::max(count, 1);
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -431,8 +441,9 @@ void RenderConsumer::PostSnapshot() {
   // Work on snapshot_xyz_ in-place (destructive to snapshot_xyz_, but that's fine —
   // PrepareSnapshot will overwrite it next time).
   float* float_data = snapshot_xyz_.get();
+  int pix = config_.norm_mode_ == 1 ? effective_pix_ : total_pix;
   for (int i = 0; i < total_pix * 3; i++) {
-    float_data[i] *= config_.intensity_factor_ * kNormScale * total_pix / snapshot_intensity_;
+    float_data[i] *= config_.intensity_factor_ * kNormScale * pix / snapshot_intensity_;
   }
 
   bool use_real_color = config_.ray_color_[0] < 0;
@@ -492,13 +503,21 @@ Result RenderConsumer::GetResult() const {
 RawXyzResult RenderConsumer::GetRawXyzResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   float per_pixel_intensity = total_pix > 0 ? snapshot_intensity_ / (kNormScale * total_pix) : 0.0f;
-  return { config_.id_,         config_.resolution_[0], config_.resolution_[1],
-           snapshot_xyz_.get(), per_pixel_intensity,    config_.intensity_factor_ };
+  return { config_.id_,
+           config_.resolution_[0],
+           config_.resolution_[1],
+           snapshot_xyz_.get(),
+           per_pixel_intensity,
+           config_.intensity_factor_,
+           {},
+           {},
+           effective_pix_ };
 }
 
 void RenderConsumer::Reset() {
   total_intensity_ = 0;
   snapshot_intensity_ = 0;
+  effective_pix_ = 0;
   auto buf_size = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3;
   std::memset(internal_xyz_.get(), 0, buf_size * sizeof(float));
   // snapshot_xyz_ not zeroed: PrepareSnapshot will memcpy over it.

@@ -402,8 +402,16 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.params.roll = rc.roll;
     g_preview_vp.params.visible = rc.visible;
     g_preview_vp.params.intensity_factor = std::pow(2.0f, rc.exposure_offset);
-    g_preview_vp.params.intensity_scale =
-        g_state.snapshot_intensity > 0 ? g_preview_vp.params.intensity_factor / g_state.snapshot_intensity : 0.0f;
+    {
+      float scale =
+          g_state.snapshot_intensity > 0 ? g_preview_vp.params.intensity_factor / g_state.snapshot_intensity : 0.0f;
+      int res = kSimResolutions[rc.sim_resolution_index];
+      int total_pix = res * 2 * res;  // width = 2*res, height = res
+      if (g_state.norm_mode == 1 && g_state.effective_pixels > 0 && total_pix > 0) {
+        scale *= static_cast<float>(g_state.effective_pixels) / static_cast<float>(total_pix);
+      }
+      g_preview_vp.params.intensity_scale = scale;
+    }
     g_preview_vp.params.bg_enabled = g_state.bg_show && g_preview.HasBackground();
     g_preview_vp.params.bg_alpha = g_state.bg_alpha;
     g_preview_vp.params.bg_aspect = g_preview.GetBgAspect();

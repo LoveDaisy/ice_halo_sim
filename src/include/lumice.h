@@ -70,6 +70,7 @@ typedef struct LUMICE_RawXyzResult_ {
   float intensity_factor;    // Per-renderer intensity factor (2^EV)
   int has_valid_data;        // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
+  int effective_pixels;                    // Non-zero pixel count (for adaptive normalization)
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {
@@ -163,6 +164,7 @@ typedef struct LUMICE_RenderParam_ {
   int resolution_h;
   float opacity;
   float intensity_factor;
+  int norm_mode;  // 0=absolute (W*H), 1=adaptive (non-zero pixels)
 } LUMICE_RenderParam;
 
 typedef struct LUMICE_Config_ {

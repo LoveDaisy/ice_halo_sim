@@ -78,6 +78,7 @@ struct RenderConfig {
   float ray_color_[3]{ -1.0f, -1.0f, -1.0f };  // r, g, b
   float opacity_ = 1.0f;
   float intensity_factor_ = 1.0f;
+  int norm_mode_ = 0;  // 0=absolute (W*H), 1=adaptive (non-zero pixel count). GUI defaults to 1.
 
   std::vector<GridLineParam> central_grid_;
   std::vector<GridLineParam> elevation_grid_;

@@ -164,6 +164,7 @@ void ServerPoller::PollOnce() {
       staged_.texture_height = xyz_results[0].img_height;
       staged_.snapshot_intensity = xyz_results[0].snapshot_intensity;
       staged_.intensity_factor = xyz_results[0].intensity_factor;
+      staged_.effective_pixels = xyz_results[0].effective_pixels;
       staged_.has_new_texture = true;
       last_generation_ = xyz_results[0].snapshot_generation;
 

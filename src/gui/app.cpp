@@ -494,6 +494,7 @@ void SyncFromPoller() {
                   data.texture_height, data.stats_sim_ray_num, data.snapshot_intensity, data.intensity_factor);
     g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
     g_state.snapshot_intensity = data.snapshot_intensity;
+    g_state.effective_pixels = data.effective_pixels;
     g_state.texture_upload_count++;
   }
 }
