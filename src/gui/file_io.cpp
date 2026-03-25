@@ -657,7 +657,7 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["aspect_portrait"] = state.aspect_portrait;
 
   // Background image overlay
-  root["bg_path"] = state.bg_path;
+  root["bg_path"] = PathToU8(state.bg_path);
   root["bg_show"] = state.bg_show;
   root["bg_alpha"] = state.bg_alpha;
 
@@ -779,7 +779,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.aspect_portrait = root.value("aspect_portrait", false);
 
   // Background image overlay (backward compatible: missing fields use defaults)
-  state.bg_path = root.value("bg_path", std::string{});
+  state.bg_path = PathFromU8(root.value("bg_path", std::string{}));
   state.bg_show = root.value("bg_show", false);
   state.bg_alpha = root.value("bg_alpha", 1.0f);
 

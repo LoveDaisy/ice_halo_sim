@@ -141,7 +141,7 @@ int main(int argc, char** argv) {
   }
 
   if (!std::filesystem::is_directory(output_dir)) {
-    std::cerr << "Error: output directory does not exist: " << output_dir.string() << "\n";
+    std::cerr << "Error: output directory does not exist: " << output_dir.u8string() << "\n";
     return 1;
   }
 

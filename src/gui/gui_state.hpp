@@ -159,7 +159,7 @@ struct GuiState {
   bool aspect_portrait = false;
 
   // Background image overlay (view preference — does not call MarkDirty)
-  std::string bg_path;
+  std::filesystem::path bg_path;
   bool bg_show = false;
   float bg_alpha = 1.0f;
 
