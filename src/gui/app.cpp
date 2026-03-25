@@ -415,6 +415,10 @@ void DoRun() {
                  std::chrono::duration<double, std::milli>(run_end - run_start).count());
   } else {
     GUI_LOG_WARNING("[GUI] CommitConfig FAILED with error code {}", static_cast<int>(err));
+    // Restore poller if it was stopped for rebuild but CommitConfig failed
+    if (expect_rebuild) {
+      g_server_poller.EnsureRunning(g_server);
+    }
   }
 }
 
