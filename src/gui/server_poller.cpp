@@ -51,20 +51,6 @@ void ServerPoller::Start(LUMICE_Server* server) {
   cv_.notify_all();
 }
 
-void ServerPoller::Resume() {
-  GUI_LOG_DEBUG("[Poller] Resume");
-  {
-    std::lock_guard<std::mutex> lk(mutex_);
-    // Reset generation so worker picks up new data after server restart
-    last_generation_ = 0;
-    {
-      std::lock_guard<std::mutex> lock(data_mutex_);
-      staged_.valid = false;
-    }
-    state_.store(State::kRunning);
-  }
-  cv_.notify_all();
-}
 
 void ServerPoller::Stop() {
   {
@@ -171,6 +157,7 @@ void ServerPoller::PollOnce() {
   // Only stop on IDLE if the server has actually produced valid data.
   // During restart, the server may transiently report IDLE before simulation threads spin up.
   if (server_state == LUMICE_SERVER_IDLE && xyz_results[0].has_valid_data) {
+    std::lock_guard<std::mutex> lk(mutex_);
     state_.store(State::kPaused);
   }
 }

@@ -43,9 +43,6 @@ class ServerPoller {
   // Start polling with the given server. Sets server pointer and wakes worker.
   void Start(LUMICE_Server* server);
 
-  // Resume polling (after Stop) without changing the server pointer.
-  void Resume();
-
   // Synchronously pause the worker. Returns only after the worker has confirmed
   // it is no longer accessing the server. Safe to call multiple times.
   void Stop();

@@ -394,7 +394,16 @@ void DoRun() {
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
     g_state.last_restart_time = std::chrono::steady_clock::now();
-    if (expect_rebuild) {
+    // Safety check: if GUI predicted reuse but server rebuilt consumers, the poller
+    // was not stopped and may hold dangling pointers. This should never happen because
+    // the GUI comparison is a superset of the server's NeedsRebuild check.
+    if (!expect_rebuild && !reused) {
+      GUI_LOG_WARNING(
+          "[GUI] DoRun: predict/actual mismatch! GUI predicted reuse but server rebuilt. "
+          "Stopping poller to prevent dangling pointer.");
+      g_server_poller.Stop();
+    }
+    if (expect_rebuild || !reused) {
       g_server_poller.Start(g_server);  // Rebuild: new consumers, reset server pointer
     }
     // Reuse path: poller was never stopped, continues polling naturally
