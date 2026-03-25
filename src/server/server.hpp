@@ -196,7 +196,7 @@ class Server {
    * @param config_json Parsed JSON object
    * @return Error object indicating success or failure
    */
-  Error CommitConfig(const nlohmann::json& config_json);
+  Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
 
   /**
    * @brief Commit configuration from file

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "config/config_manager.hpp"
+#include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
 #include "core/simulator.hpp"
@@ -30,8 +31,9 @@ namespace lumice {
 class ServerImpl {
  public:
   ServerImpl();
+  ~ServerImpl();
 
-  Error CommitConfig(const nlohmann::json& config_json);
+  Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
   std::vector<RenderResult> GetRenderResults();
   std::vector<RawXyzResult> GetRawXyzResults();
   std::optional<StatsResult> GetStatsResult();
@@ -50,6 +52,10 @@ class ServerImpl {
   void ConsumeData();
   void GenerateScene();
   void DoSnapshot();
+
+  // Persistent thread loop: wait for Start(), run work_fn, repeat until kTerminating.
+  template <typename F>
+  void RunPersistentLoop(F work_fn);
 
   ConfigManager config_manager_;
 
@@ -76,7 +82,15 @@ class ServerImpl {
   std::shared_ptr<const SceneConfig> active_scene_;
   std::atomic<uint64_t> scene_generation_{ 0 };
 
-  std::atomic_bool stop_{ true };
+  // Persistent thread state machine: threads wait on start_cv_ when kStopped,
+  // work when kRunning, and exit when kTerminating.
+  enum class ServerState { kStopped, kRunning, kTerminating };
+  std::atomic<ServerState> state_{ ServerState::kStopped };
+  std::mutex start_mutex_;
+  std::condition_variable start_cv_;
+  std::atomic<int> active_workers_{ 0 };
+  std::atomic<uint64_t> start_generation_{ 0 };  // Incremented by Start(); prevents re-entry after natural completion
+
   std::atomic_bool work_started_{ false };
   std::atomic_bool scene_gen_active_{ false };  // True while GenerateScene is actively producing batches
   std::atomic_int sim_scene_cnt_;
@@ -99,17 +113,86 @@ class ServerImpl {
 const int ServerImpl::kDefaultSimulatorCnt = std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 2);
 
 
+template <typename F>
+void ServerImpl::RunPersistentLoop(F work_fn) {
+  uint64_t my_gen = 0;
+  while (true) {
+    {
+      std::unique_lock<std::mutex> lk(start_mutex_);
+      start_cv_.wait(lk, [this, &my_gen] {
+        return state_.load() == ServerState::kTerminating ||
+               (state_.load() == ServerState::kRunning && start_generation_.load() != my_gen);
+      });
+      if (state_.load() == ServerState::kTerminating) {
+        return;
+      }
+      my_gen = start_generation_.load();
+      active_workers_.fetch_add(1);
+    }
+    work_fn();
+    if (active_workers_.fetch_sub(1) == 1) {
+      // Last active worker — notify Stop() if it's waiting
+      start_cv_.notify_all();
+    }
+  }
+}
+
+
 ServerImpl::ServerImpl()
     : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
   for (int i = 0; i < kDefaultSimulatorCnt; i++) {
     simulators_.emplace_back(scene_queue_, data_queue_);
   }
-  // Don't Start() here — wait for CommitConfig to provide a valid project.
+
+  // Spawn persistent threads — they start in cv.wait(), not working.
+  // Each thread tracks start_generation_ to avoid re-entering work after natural completion.
+  for (auto& s : simulators_) {
+    simulator_threads_.emplace_back([this, &s]() { RunPersistentLoop([&s] { s.Run(); }); });
+  }
+  consume_data_thread_ = std::thread([this]() { RunPersistentLoop([this]() { ConsumeData(); }); });
+  generate_scene_thread_ = std::thread([this]() { RunPersistentLoop([this]() { GenerateScene(); }); });
 }
 
 
-Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
+ServerImpl::~ServerImpl() {
+  // Stop first to drain workers and clean up consumers (if still running)
+  Stop();
+
+  // Shutdown queues to unblock any blocking Get() calls
+  scene_queue_->Shutdown();
+  data_queue_->Shutdown();
+
+  // Signal all threads to terminate
+  {
+    std::lock_guard<std::mutex> lk(start_mutex_);
+    state_.store(ServerState::kTerminating);
+  }
+  start_cv_.notify_all();
+  scene_cv_.notify_one();
+
+  // Stop simulators to break their inner Run() loops
+  for (auto& s : simulators_) {
+    s.Stop();
+  }
+
+  // Join all persistent threads
+  for (auto& t : simulator_threads_) {
+    if (t.joinable()) {
+      t.join();
+    }
+  }
+  if (consume_data_thread_.joinable()) {
+    consume_data_thread_.join();
+  }
+  if (generate_scene_thread_.joinable()) {
+    generate_scene_thread_.join();
+  }
+}
+
+
+// NOLINTNEXTLINE(readability-function-size)
+Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   auto commit_start = std::chrono::steady_clock::now();
   ILOG_DEBUG(logger_, "CommitConfig: entry");
 
@@ -151,21 +234,52 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   auto stop_start = std::chrono::steady_clock::now();
   Stop();
   auto stop_end = std::chrono::steady_clock::now();
-  ILOG_INFO(logger_, "CommitConfig: Stop took {:.1f}ms",
-            std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
+  auto stop_ms = std::chrono::duration<double, std::milli>(stop_end - stop_start).count();
 
+  // Check if consumers can be reused (same renderer key set, no layout changes).
+  auto old_renderers = config_manager_.renderers_;
   config_manager_ = std::move(new_config);
 
-  // Setup consumers from project config.
-  // Lock consumer_mutex_ to prevent race with ServerPoller's GetRawXyzResults().
-  ILOG_DEBUG(logger_, "CommitConfig: setup consumers");
+  bool can_reuse = !consumers_.empty() && (old_renderers.size() == config_manager_.renderers_.size());
+  if (can_reuse) {
+    auto old_it = old_renderers.begin();
+    auto new_it = config_manager_.renderers_.begin();
+    for (; old_it != old_renderers.end(); ++old_it, ++new_it) {
+      if (old_it->first != new_it->first || NeedsRebuild(old_it->second, new_it->second)) {
+        can_reuse = false;
+        break;
+      }
+    }
+  }
+
+  auto rebuild_start = std::chrono::steady_clock::now();
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
-    consumers_.clear();
-    for (const auto& [_, r] : config_manager_.renderers_) {
-      consumers_.emplace_back(std::make_shared<RenderConsumer>(r));
+    if (can_reuse) {
+      // Reuse path: reset accumulators + update appearance fields
+      auto it = config_manager_.renderers_.begin();
+      for (auto& c : consumers_) {
+        if (auto* rc = dynamic_cast<RenderConsumer*>(c.get())) {
+          rc->ResetWith(it->second);
+          ++it;
+        } else {
+          c->Reset();  // StatsConsumer
+        }
+      }
+    } else {
+      // Full rebuild path
+      consumers_.clear();
+      for (const auto& [_, r] : config_manager_.renderers_) {
+        consumers_.emplace_back(std::make_shared<RenderConsumer>(r));
+      }
+      consumers_.emplace_back(std::make_shared<StatsConsumer>());
     }
-    consumers_.emplace_back(std::make_shared<StatsConsumer>());
+  }
+  auto rebuild_end = std::chrono::steady_clock::now();
+  auto rebuild_ms = std::chrono::duration<double, std::milli>(rebuild_end - rebuild_start).count();
+  ILOG_DEBUG(logger_, "CommitConfig: consumers {} ({:.1f}ms)", can_reuse ? "reused" : "rebuilt", rebuild_ms);
+  if (out_reused) {
+    *out_reused = can_reuse;
   }
 
   auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
@@ -175,12 +289,15 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
     scene_generation_.fetch_add(1);
   }
 
+  auto start_start = std::chrono::steady_clock::now();
   Start();
+  auto start_end = std::chrono::steady_clock::now();
+  auto start_ms = std::chrono::duration<double, std::milli>(start_end - start_start).count();
 
   auto commit_end = std::chrono::steady_clock::now();
-  ILOG_INFO(logger_, "CommitConfig: restart took {:.1f}ms (Stop {:.1f}ms + rebuild + Start)",
-            std::chrono::duration<double, std::milli>(commit_end - commit_start).count(),
-            std::chrono::duration<double, std::milli>(stop_end - stop_start).count());
+  ILOG_INFO(logger_, "CommitConfig: restart took {:.1f}ms (Stop {:.1f}ms + rebuild {:.1f}ms + Start {:.1f}ms)",
+            std::chrono::duration<double, std::milli>(commit_end - commit_start).count(), stop_ms, rebuild_ms,
+            start_ms);
 
   return Error::Success();
 }
@@ -292,81 +409,70 @@ std::optional<StatsResult> ServerImpl::GetCachedStatsResult() {
 
 void ServerImpl::Start() {
   ILOG_DEBUG(logger_, "Start: entry");
-  if (!stop_) {
-    return;
-  }
-
-  stop_ = false;
-  work_started_ = false;
-  sim_scene_cnt_ = 0;
+  auto t0 = std::chrono::steady_clock::now();
 
   {
-    std::lock_guard<std::mutex> lock(status_mutex_);
-    status_ = ServerStatus::kRunning;
-  }
-
-  // Start queues & jobs
-  data_queue_->Start();
-  scene_queue_->Start();
-  {
-    std::lock_guard<std::mutex> lock(prod_mutex_);
-    ILOG_DEBUG(logger_, "Start: lock on prod_mutex_");
-    for (auto& s : simulators_) {
-      simulator_threads_.emplace_back(&Simulator::Run, &s);
+    std::lock_guard<std::mutex> lk(start_mutex_);
+    if (state_.load() != ServerState::kStopped) {
+      return;
     }
-    ILOG_DEBUG(logger_, "Start: unlock prod_mutex_");
-  }
 
-  // Start main working thread & scene dispatch thread
-  consume_data_thread_ = std::thread(&ServerImpl::ConsumeData, this);
-  generate_scene_thread_ = std::thread(&ServerImpl::GenerateScene, this);
+    work_started_ = false;
+    sim_scene_cnt_ = 0;
+
+    {
+      std::lock_guard<std::mutex> lock(status_mutex_);
+      status_ = ServerStatus::kRunning;
+    }
+
+    // Start queues BEFORE waking threads to avoid Get() on shutdown queues
+    data_queue_->Start();
+    scene_queue_->Start();
+
+    start_generation_.fetch_add(1);
+    state_.store(ServerState::kRunning);
+  }
+  start_cv_.notify_all();
+
+  auto t1 = std::chrono::steady_clock::now();
+  ILOG_DEBUG(logger_, "Start: done ({:.1f}ms)", std::chrono::duration<double, std::milli>(t1 - t0).count());
 }
 
 
 void ServerImpl::Stop() {
   ILOG_DEBUG(logger_, "Stop: entry");
-  if (stop_) {
-    return;
+  auto t0 = std::chrono::steady_clock::now();
+
+  {
+    std::lock_guard<std::mutex> lk(start_mutex_);
+    if (state_.load() != ServerState::kRunning) {
+      return;
+    }
+    state_.store(ServerState::kStopped);
   }
 
-  stop_ = true;
-
-  // Stop queues
+  // Break work loops: shutdown queues so blocking Get() calls return immediately
   scene_queue_->Shutdown();
   data_queue_->Shutdown();
-
   scene_cv_.notify_one();
 
-  // Stop running jobs
-  {
-    std::lock_guard<std::mutex> lock(prod_mutex_);
-    ILOG_DEBUG(logger_, "Stop: lock on prod_mutex_. stop simulators. clear simulator threads.");
-    for (auto& s : simulators_) {
-      s.Stop();
-    }
-    for (size_t i = 0; i < simulator_threads_.size(); i++) {
-      if (simulator_threads_[i].joinable()) {
-        ILOG_DEBUG(logger_, "Stop: joining simulator thread {}/{}", i + 1, simulator_threads_.size());
-        simulator_threads_[i].join();
-        ILOG_DEBUG(logger_, "Stop: simulator thread {}/{} joined", i + 1, simulator_threads_.size());
-      }
-    }
-    simulator_threads_.clear();
-    ILOG_DEBUG(logger_, "Stop: unlock prod_mutex_");
+  // Stop simulators to break their inner Run() loops
+  for (auto& s : simulators_) {
+    s.Stop();
   }
 
-  // Stop main working thread & scene dispatch thread.
-  ILOG_DEBUG(logger_, "Stop: waiting main worker & dispatcher stop.");
-  if (consume_data_thread_.joinable()) {
-    consume_data_thread_.join();
+  // Wait for all workers to finish their current work cycle.
+  // Workers notify start_cv_ when active_workers_ reaches 0.
+  {
+    std::unique_lock<std::mutex> lk(start_mutex_);
+    start_cv_.wait(lk, [this] { return active_workers_.load() == 0; });
   }
-  if (generate_scene_thread_.joinable()) {
-    generate_scene_thread_.join();
-  }
+  auto t1 = std::chrono::steady_clock::now();
 
   {
     std::lock_guard<std::mutex> lock(consumer_mutex_);
-    consumers_.clear();
+    // Don't clear consumers_ here — CommitConfig decides whether to rebuild or reuse.
+    // Consumers are destroyed either by CommitConfig (rebuild path) or ~ServerImpl().
     snapshot_dirty_ = false;
     has_ever_consumed_ = false;  // New consumers have no data yet
   }
@@ -374,6 +480,12 @@ void ServerImpl::Stop() {
     std::lock_guard<std::mutex> lock(status_mutex_);
     status_ = ServerStatus::kIdle;
   }
+
+  auto t2 = std::chrono::steady_clock::now();
+  ILOG_DEBUG(logger_, "Stop: done ({:.1f}ms total: drain {:.1f}ms, cleanup {:.1f}ms)",
+             std::chrono::duration<double, std::milli>(t2 - t0).count(),
+             std::chrono::duration<double, std::milli>(t1 - t0).count(),
+             std::chrono::duration<double, std::milli>(t2 - t1).count());
 }
 
 ServerStatus ServerImpl::GetStatus() const {
@@ -416,9 +528,9 @@ bool ServerImpl::IsIdle() {
 }
 
 
-#define CHECK_STOP \
-  if (stop_) {     \
-    break;         \
+#define CHECK_STOP                                           \
+  if (state_.load() != ServerState::kRunning) { /* NOLINT */ \
+    break;                                                   \
   }
 
 
@@ -496,7 +608,8 @@ void ServerImpl::GenerateScene() {
     if (sim_scene_cnt_ >= kMaxSceneCnt) {
       ILOG_DEBUG(logger_, "GenerateScene: too many scenes generated. wait for consumer");
       std::unique_lock<std::mutex> lock(scene_mutex_);
-      scene_cv_.wait(lock, [=]() { return stop_ || sim_scene_cnt_ < kMaxSceneCnt; });
+      scene_cv_.wait(lock,
+                     [this]() { return state_.load() != ServerState::kRunning || sim_scene_cnt_ < kMaxSceneCnt; });
       ILOG_DEBUG(logger_, "GenerateScene: continue to generate scenes.");
     }
     CHECK_STOP
@@ -521,11 +634,11 @@ void ServerImpl::SetLogLevel(LogLevel level) {
 // =============== Server ===============
 Server::Server() : impl_(std::make_shared<ServerImpl>()) {}
 
-Error Server::CommitConfig(const nlohmann::json& config_json) {
+Error Server::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   if (!impl_) {
     return Error::ServerNotReady("Server is terminated");
   }
-  return impl_->CommitConfig(config_json);
+  return impl_->CommitConfig(config_json, out_reused);
 }
 
 Error Server::CommitConfig(const std::string& config_str) {
@@ -608,8 +721,7 @@ void Server::Terminate() {
     return;
   }
   ILOG_DEBUG(impl_->GetLogger(), "Terminate: entry");
-  impl_->Stop();
-  impl_ = nullptr;
+  impl_.reset();  // ~ServerImpl() handles Stop + thread join via RAII
 }
 
 void Server::InitLogger() {

@@ -53,6 +53,13 @@ class IConsume {
    * @note Override this method to return custom results (e.g., RenderResult, StatsResult)
    */
   virtual Result GetResult() const { return NoneResult{}; }
+
+  /**
+   * @brief Reset accumulated state for consumer reuse.
+   * @details Called when the consumer's layout config hasn't changed (e.g., high-frequency slider drags).
+   *          Clears accumulated data without releasing/reallocating buffers.
+   */
+  virtual void Reset() {}
 };
 
 using ConsumerPtrS = std::shared_ptr<IConsume>;

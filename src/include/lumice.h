@@ -194,7 +194,8 @@ typedef struct LUMICE_Config_ {
   int scatter_count;
 } LUMICE_Config;
 
-LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config);
+// out_reused: if non-NULL, set to 1 if consumers were reused (no buffer realloc), 0 if rebuilt.
+LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused);
 
 // =============== Results ===============
 // Unified pattern: (server, out, max_count) -> LUMICE_ErrorCode, sentinel-terminated.

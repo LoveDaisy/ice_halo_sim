@@ -485,4 +485,21 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
            snapshot_xyz_.get(), snapshot_intensity_,    config_.intensity_factor_ };
 }
 
+void RenderConsumer::Reset() {
+  total_intensity_ = 0;
+  snapshot_intensity_ = 0;
+  auto buf_size = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3;
+  std::memset(internal_xyz_.get(), 0, buf_size * sizeof(float));
+  // snapshot_xyz_ not zeroed: PrepareSnapshot will memcpy over it.
+  // has_ever_consumed_ = false (set in Stop) ensures GetRawXyzResults returns has_valid_data_=false
+  // until new data arrives, preventing stale snapshot reads.
+}
+
+void RenderConsumer::ResetWith(const RenderConfig& new_config) {
+  // NeedsRebuild guarantees layout fields (resolution, lens, view, visible, filter) are identical,
+  // so assigning the full config is safe — layout-derived state (rot_, filters_, buffers) stays valid.
+  config_ = new_config;
+  Reset();
+}
+
 }  // namespace lumice

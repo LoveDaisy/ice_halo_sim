@@ -361,15 +361,20 @@ void DoRun() {
   }
   auto run_start = std::chrono::steady_clock::now();
 
-  // Stop the old poller worker BEFORE CommitConfig to prevent use-after-free:
-  // CommitConfig internally destroys consumers (freeing snapshot_xyz_), but the old
-  // poller worker may still hold a raw pointer from LUMICE_GetRawXyzResults().
-  // Stop() is idempotent — if no worker is running, this is a no-op.
-  g_server_poller.Stop();
+  // Pre-check: will CommitConfig rebuild consumers (destroying old buffers)?
+  // Only renderer layout changes (resolution/lens/view/visible/filter) trigger rebuild.
+  // High-frequency slider changes (crystal/sun/scattering) always reuse consumers.
+  // If reuse is expected, skip Poller Stop — the poller's raw pointers remain valid.
+  bool expect_rebuild =
+      !g_state.last_committed_state.has_value() || g_state.renderers != g_state.last_committed_state->renderers;
+  if (expect_rebuild) {
+    g_server_poller.Stop();  // Must pause before consumer destruction
+  }
 
   LUMICE_Config config{};
   FillLumiceConfig(g_state, &config);
-  auto err = LUMICE_CommitConfigStruct(g_server, &config);
+  int reused = 0;
+  auto err = LUMICE_CommitConfigStruct(g_server, &config, &reused);
   if (err == LUMICE_OK) {
     g_state.last_committed_state = GuiState::ConfigSnapshot{
       g_state.crystals,
@@ -389,12 +394,31 @@ void DoRun() {
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
     g_state.last_restart_time = std::chrono::steady_clock::now();
-    g_server_poller.Start(g_server);  // Always restart: restart path stops server briefly
+    // Safety check: if GUI predicted reuse but server rebuilt consumers, the poller
+    // was not stopped and may hold dangling pointers. This should never happen because
+    // the GUI comparison is a superset of the server's NeedsRebuild check.
+    if (!expect_rebuild && !reused) {
+      GUI_LOG_WARNING(
+          "[GUI] DoRun: predict/actual mismatch! GUI predicted reuse but server rebuilt. "
+          "Stopping poller to prevent dangling pointer.");
+      g_server_poller.Stop();
+    }
+    if (expect_rebuild || !reused) {
+      g_server_poller.Start(g_server);  // Rebuild: new consumers, reset server pointer
+    }
+    // Unconditionally ensure poller is running — covers all edge cases:
+    // DoStop→DoRun (poller was paused), PollOnce self-pause (finite rays done), etc.
+    // If already kRunning, this is a no-op (zero overhead).
+    g_server_poller.EnsureRunning(g_server);
     auto run_end = std::chrono::steady_clock::now();
     GUI_LOG_INFO("[GUI] DoRun: config committed ({:.1f}ms)",
                  std::chrono::duration<double, std::milli>(run_end - run_start).count());
   } else {
     GUI_LOG_WARNING("[GUI] CommitConfig FAILED with error code {}", static_cast<int>(err));
+    // Restore poller if it was stopped for rebuild but CommitConfig failed
+    if (expect_rebuild) {
+      g_server_poller.EnsureRunning(g_server);
+    }
   }
 }
 

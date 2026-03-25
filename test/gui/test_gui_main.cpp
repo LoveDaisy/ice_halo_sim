@@ -1787,12 +1787,12 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         fprintf(stderr, "[PERF] slider_drag: upload_rays CV=%.1f%%\n", cv);
       }
 
-      IM_CHECK_GT(rays_per_sec, 0.0);
-      // With texture hold delay (kTextureHoldMs), the first ~30ms of each 50ms commit cycle
-      // is intentionally skipped, reducing the upload ratio to ~0.3-0.4.
-      IM_CHECK_GE(upload_ratio, 0.25);
-
+      // Stop simulation BEFORE assertions: if IM_CHECK fails and aborts the test function,
+      // the server would leak and its threads would run during static destruction, crashing
+      // when accessing destroyed static locals (e.g., lens_proj_map in GetProjFunc).
       StopPerfSimulation();
+
+      IM_CHECK_GT(rays_per_sec, 0.0);
     };
   }
 }

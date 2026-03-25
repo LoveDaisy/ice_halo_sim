@@ -2,6 +2,7 @@
 #define LUMICE_GUI_SERVER_POLLER_HPP
 
 #include <atomic>
+#include <condition_variable>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -26,30 +27,49 @@ struct PollerData {
 
 // Polls the LUMICE server on a background thread (every kPollIntervalMs) and stages
 // results for the main thread to pick up without blocking the UI.
+//
+// Uses a persistent thread model: the worker thread is spawned once in the constructor
+// and joined in the destructor. Start()/Stop() signal the thread via condition variable,
+// avoiding the ~14ms join/spawn overhead on Windows.
 class ServerPoller {
  public:
-  ServerPoller() = default;
-  ~ServerPoller() { Stop(); }
+  ServerPoller();
+  ~ServerPoller();
 
   // Non-copyable, non-movable
   ServerPoller(const ServerPoller&) = delete;
   ServerPoller& operator=(const ServerPoller&) = delete;
 
-  // Start polling. If already running, stops first. No-op if server is null.
+  // Start polling with the given server. Sets server pointer and wakes worker.
   void Start(LUMICE_Server* server);
 
-  // Stop polling and join the background thread. Safe to call multiple times.
+  // Synchronously pause the worker. Returns only after the worker has confirmed
+  // it is no longer accessing the server. Safe to call multiple times.
   void Stop();
+
+  // Idempotent: ensure the worker is in kRunning state.
+  // If already kRunning, this is a no-op (zero overhead for the hot slider path).
+  // If kPaused (after Stop/DoStop/self-pause), resumes polling with the given server.
+  void EnsureRunning(LUMICE_Server* server);
 
   // Main thread: try to consume staged data. Returns true if new data was swapped in.
   // Uses try_lock so it never blocks the main thread.
   bool TrySyncData(PollerData& out);
 
  private:
-  void WorkerLoop(LUMICE_Server* server);
+  enum class State { kPaused, kRunning, kTerminating };
+
+  void WorkerLoop();
+  void PollOnce();
 
   std::thread worker_;
-  std::atomic<bool> running_{ false };
+  // state_ is atomic for lock-free reads in the poll loop; all writes are under mutex_.
+  std::atomic<State> state_{ State::kPaused };
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  bool active_{ false };  // True while worker is in the poll loop (not in cv.wait)
+
+  LUMICE_Server* server_{ nullptr };
   std::mutex data_mutex_;
   PollerData staged_;
   uint64_t last_generation_{ 0 };  // Tracks snapshot generation to detect new data
