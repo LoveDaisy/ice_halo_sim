@@ -20,6 +20,12 @@
 
 namespace lumice {
 
+// Display brightness baseline: maps the physically-derived per-pixel radiance to a visually
+// reasonable [0,1] range at EV=0. The average illuminated pixel appears at ~5% brightness,
+// so bright halo features (~20× average) approach full white. This constant is independent
+// of resolution and FOV — use EV (intensity_factor) for user-controlled brightness adjustment.
+constexpr float kNormScale = 0.16f;
+
 // =============== Color transforms ===============
 // Convert linear rgb to sRGB
 void SrgbGamma(float* rgb, size_t num) {
@@ -425,7 +431,7 @@ void RenderConsumer::PostSnapshot() {
   // PrepareSnapshot will overwrite it next time).
   float* float_data = snapshot_xyz_.get();
   for (int i = 0; i < total_pix * 3; i++) {
-    float_data[i] *= config_.intensity_factor_ * total_pix / snapshot_intensity_;
+    float_data[i] *= config_.intensity_factor_ * kNormScale * total_pix / snapshot_intensity_;
   }
 
   bool use_real_color = config_.ray_color_[0] < 0;
@@ -484,7 +490,7 @@ Result RenderConsumer::GetResult() const {
 
 RawXyzResult RenderConsumer::GetRawXyzResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
-  float per_pixel_intensity = total_pix > 0 ? snapshot_intensity_ / total_pix : 0.0f;
+  float per_pixel_intensity = total_pix > 0 ? snapshot_intensity_ / (kNormScale * total_pix) : 0.0f;
   return { config_.id_,         config_.resolution_[0], config_.resolution_[1],
            snapshot_xyz_.get(), per_pixel_intensity,    config_.intensity_factor_ };
 }

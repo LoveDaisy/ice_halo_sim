@@ -66,7 +66,7 @@ typedef struct LUMICE_RawXyzResult_ {
   const float* xyz_buffer;                 // Read-only XYZ float data, 3 floats per pixel.
                                            // Valid until next LUMICE_GetRawXyzResults() or LUMICE_CommitConfig().
                                            // Sentinel: xyz_buffer == NULL
-  float snapshot_intensity;                // Per-pixel landed intensity (= landed_ray_weights / total_pixels)
+  float snapshot_intensity;                // Per-pixel landed intensity for normalization (use as: xyz * factor / this)
   float intensity_factor;                  // Per-renderer intensity factor (2^EV)
   int has_valid_data;                      // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
