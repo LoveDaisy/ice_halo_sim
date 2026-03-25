@@ -601,7 +601,7 @@ void RenderRenderTab(GuiState& state) {
     const char* res_labels[] = { "512", "1024", "2048", "4096" };
     DIRTY_IF(ImGui::Combo("Sim Resolution", &r.sim_resolution_index, res_labels, kSimResolutionCount));
     ImGui::PopItemWidth();
-    DIRTY_IF(SliderWithInput("EV", &r.exposure_offset, -2.0f, 8.0f, "%.1f"));
+    SliderWithInput("EV", &r.exposure_offset, -2.0f, 8.0f, "%.1f");
   }
 
   if (ImGui::CollapsingHeader("File", ImGuiTreeNodeFlags_DefaultOpen)) {
