@@ -494,8 +494,7 @@ void RenderStatusBar(float window_width, float window_height) {
   if (g_state.current_file_path.empty()) {
     ImGui::Text("No file");
   } else {
-    auto pos = g_state.current_file_path.find_last_of("/\\");
-    auto filename = (pos != std::string::npos) ? g_state.current_file_path.substr(pos + 1) : g_state.current_file_path;
+    auto filename = g_state.current_file_path.filename().u8string();
     if (g_state.dirty) {
       ImGui::Text("%s *", filename.c_str());
     } else {

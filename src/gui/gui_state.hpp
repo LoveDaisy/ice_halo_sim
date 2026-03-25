@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -163,7 +164,7 @@ struct GuiState {
   float bg_alpha = 1.0f;
 
   // File management
-  std::string current_file_path;
+  std::filesystem::path current_file_path;
   bool dirty = false;
   bool save_texture = true;  // Whether to include texture in .lmc save (UI-only, not serialized)
 

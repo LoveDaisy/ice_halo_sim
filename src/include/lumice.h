@@ -98,7 +98,7 @@ void LUMICE_SetLogCallback(LUMICE_LogCallback callback);
 
 // =============== Configuration (JSON string) ===============
 LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_str);
-LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename);
+LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename);  // filename must be UTF-8
 
 // =============== Configuration (C struct — bypasses JSON string serialization) ===============
 // GUI fills this struct directly from UI state, avoiding JSON dump/parse overhead.

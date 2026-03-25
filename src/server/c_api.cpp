@@ -12,6 +12,7 @@
 #include "server/server.hpp"
 #include "util/callback_sink.hpp"
 #include "util/logger.hpp"
+#include "util/path_utils.hpp"
 
 namespace ns = lumice;
 
@@ -123,7 +124,7 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
     return LUMICE_ERR_NULL_ARG;
   }
 
-  auto err = server->server_->CommitConfigFromFile(filename);
+  auto err = server->server_->CommitConfigFromFile(lumice::PathFromU8(filename));
   if (err) {
     LOG_ERROR("Failed to load configuration from file '{}': {}", filename, err.message);
     if (!err.field.empty()) {

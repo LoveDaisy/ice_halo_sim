@@ -657,13 +657,13 @@ Error Server::CommitConfig(const std::string& config_str) {
   }
 }
 
-Error Server::CommitConfigFromFile(const std::string& filename) {
+Error Server::CommitConfigFromFile(const std::filesystem::path& filename) {
   if (!impl_) {
     return Error::ServerNotReady("Server is terminated");
   }
   std::ifstream f(filename);
   if (!f.is_open()) {
-    return Error::InvalidConfig("Cannot open file: " + filename);
+    return Error::InvalidConfig("Cannot open file: " + filename.u8string());
   }
   try {
     nlohmann::json config_json;

@@ -1,6 +1,7 @@
 #ifndef INCLUDE_SERVER_H_
 #define INCLUDE_SERVER_H_
 
+#include <filesystem>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
@@ -211,7 +212,7 @@ class Server {
    *     return;
    *   }
    */
-  Error CommitConfigFromFile(const std::string& filename);
+  Error CommitConfigFromFile(const std::filesystem::path& filename);
 
   /**
    * @brief Get all render results
