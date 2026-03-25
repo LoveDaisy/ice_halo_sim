@@ -1,6 +1,7 @@
 #ifndef LUMICE_GUI_STATE_HPP
 #define LUMICE_GUI_STATE_HPP
 
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <string>
@@ -106,6 +107,14 @@ struct RenderConfig {
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float opacity = 1.0f;
   float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
+
+  bool operator==(const RenderConfig& o) const {
+    return id == o.id && lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
+           roll == o.roll && sim_resolution_index == o.sim_resolution_index && visible == o.visible &&
+           std::equal(background, background + 3, o.background) && std::equal(ray_color, ray_color + 3, o.ray_color) &&
+           opacity == o.opacity && exposure_offset == o.exposure_offset;
+  }
+  bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
 
 // Filter action

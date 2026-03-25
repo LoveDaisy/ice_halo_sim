@@ -361,10 +361,15 @@ void DoRun() {
   }
   auto run_start = std::chrono::steady_clock::now();
 
-  // Synchronously pause the poller worker before CommitConfig.
-  // On the rebuild path, consumers are destroyed (freeing snapshot_xyz_), so the poller
-  // must not hold raw pointers. On the reuse path, pause is still safe and <1ms.
-  g_server_poller.Stop();
+  // Pre-check: will CommitConfig rebuild consumers (destroying old buffers)?
+  // Only renderer layout changes (resolution/lens/view/visible/filter) trigger rebuild.
+  // High-frequency slider changes (crystal/sun/scattering) always reuse consumers.
+  // If reuse is expected, skip Poller Stop — the poller's raw pointers remain valid.
+  bool expect_rebuild =
+      !g_state.last_committed_state.has_value() || g_state.renderers != g_state.last_committed_state->renderers;
+  if (expect_rebuild) {
+    g_server_poller.Stop();  // Must pause before consumer destruction
+  }
 
   LUMICE_Config config{};
   FillLumiceConfig(g_state, &config);
@@ -389,11 +394,10 @@ void DoRun() {
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
     g_state.last_restart_time = std::chrono::steady_clock::now();
-    if (reused) {
-      g_server_poller.Resume();  // Reuse path: server_ unchanged, just resume polling
-    } else {
-      g_server_poller.Start(g_server);  // Rebuild path: new consumers, reset server pointer
+    if (expect_rebuild) {
+      g_server_poller.Start(g_server);  // Rebuild: new consumers, reset server pointer
     }
+    // Reuse path: poller was never stopped, continues polling naturally
     auto run_end = std::chrono::steady_clock::now();
     GUI_LOG_INFO("[GUI] DoRun: config committed ({:.1f}ms)",
                  std::chrono::duration<double, std::milli>(run_end - run_start).count());
