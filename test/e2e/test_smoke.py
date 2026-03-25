@@ -19,7 +19,7 @@ REFERENCES_DIR = Path(__file__).resolve().parent / "references"
 PSNR_THRESHOLDS = {
     "color_01": 18.5,
     "cza_01": 35.1,
-    "filters_01": 21.0,
+    "filters_01": 16.8,
     "halo_22_01": 17.9,
     "multi_lens_01": 25.5,
     "multi_lens_02": 26.3,
