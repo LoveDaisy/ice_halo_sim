@@ -255,7 +255,7 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
   return root;
 }
 
-LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config) {
+LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused) {
   if (!server || !config) {
     return LUMICE_ERR_NULL_ARG;
   }
@@ -268,10 +268,14 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
   }
 
   auto config_json = ConfigToJson(*config);
-  auto err = server->server_->CommitConfig(config_json);
+  bool reused = false;
+  auto err = server->server_->CommitConfig(config_json, &reused);
   if (err) {
     LOG_ERROR("Failed to commit configuration (struct): {}", err.message);
     return MapErrorCode(err.code);
+  }
+  if (out_reused) {
+    *out_reused = reused ? 1 : 0;
   }
   return LUMICE_OK;
 }

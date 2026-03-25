@@ -33,7 +33,7 @@ class ServerImpl {
   ServerImpl();
   ~ServerImpl();
 
-  Error CommitConfig(const nlohmann::json& config_json);
+  Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
   std::vector<RenderResult> GetRenderResults();
   std::vector<RawXyzResult> GetRawXyzResults();
   std::optional<StatsResult> GetStatsResult();
@@ -191,7 +191,8 @@ ServerImpl::~ServerImpl() {
 }
 
 
-Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
+// NOLINTNEXTLINE(readability-function-size)
+Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   auto commit_start = std::chrono::steady_clock::now();
   ILOG_DEBUG(logger_, "CommitConfig: entry");
 
@@ -277,6 +278,9 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json) {
   auto rebuild_end = std::chrono::steady_clock::now();
   auto rebuild_ms = std::chrono::duration<double, std::milli>(rebuild_end - rebuild_start).count();
   ILOG_DEBUG(logger_, "CommitConfig: consumers {} ({:.1f}ms)", can_reuse ? "reused" : "rebuilt", rebuild_ms);
+  if (out_reused) {
+    *out_reused = can_reuse;
+  }
 
   auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
   {
@@ -630,11 +634,11 @@ void ServerImpl::SetLogLevel(LogLevel level) {
 // =============== Server ===============
 Server::Server() : impl_(std::make_shared<ServerImpl>()) {}
 
-Error Server::CommitConfig(const nlohmann::json& config_json) {
+Error Server::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   if (!impl_) {
     return Error::ServerNotReady("Server is terminated");
   }
-  return impl_->CommitConfig(config_json);
+  return impl_->CommitConfig(config_json, out_reused);
 }
 
 Error Server::CommitConfig(const std::string& config_str) {
