@@ -211,14 +211,16 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
   ImGui::Text("%s", label);
   ImGui::SameLine(100);
 
-  const char* dist_names[] = { "Gauss", "Uniform" };
   int dist_type = static_cast<int>(axis.type);
-  ImGui::PushItemWidth(80);
-  if (ImGui::Combo("##type", &dist_type, dist_names, 2)) {
+  if (ImGui::RadioButton("Gauss##rb", &dist_type, 0)) {
     axis.type = static_cast<AxisDistType>(dist_type);
     state.MarkDirty();
   }
-  ImGui::PopItemWidth();
+  ImGui::SameLine();
+  if (ImGui::RadioButton("Uniform##rb", &dist_type, 1)) {
+    axis.type = static_cast<AxisDistType>(dist_type);
+    state.MarkDirty();
+  }
 
   DIRTY_IF(SliderWithInput("Mean", &axis.mean, -360.0f, 360.0f));
 
