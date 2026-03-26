@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 env:
   CPM_SOURCE_CACHE: ${{ github.workspace }}/cpm_cache
@@ -13,7 +14,32 @@ env:
   #   - macOS Intel: excluded — GitHub Actions dropped macos-13 runners (2025).
 
 jobs:
+  # Compute version string once, used by all jobs
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      is_release: ${{ steps.ver.outputs.is_release }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Determine version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            SHORT_SHA=$(echo "${{ github.sha }}" | head -c 7)
+            BRANCH=$(echo "${{ github.ref_name }}" | sed 's/[^a-zA-Z0-9._-]/-/g')
+            echo "version=dev-${BRANCH}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Version check (tag releases only)
+        if: github.event_name == 'push'
+        run: python scripts/version.py check --tag "${{ github.ref_name }}"
+
   build:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -56,9 +82,6 @@ jobs:
           python -m pip install jinja2
           echo "Python_ROOT_DIR=$(cygpath -w "$(dirname "$(which python)")")" >> "$GITHUB_ENV"
           echo "LUMICE_PYTHON_ARGS=-DPython_EXECUTABLE=$(cygpath -w "$(which python)")" >> "$GITHUB_ENV"
-
-      - name: Version check
-        run: python scripts/version.py check --tag "${{ github.ref_name }}"
 
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux' && matrix.build_gui == 'ON'
@@ -154,23 +177,25 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd install
-          tar czf ${{ github.workspace }}/lumice-${{ github.ref_name }}-${{ matrix.name }}.tar.gz *
+          tar czf ${{ github.workspace }}/lumice-${{ needs.prepare.outputs.version }}-${{ matrix.name }}.tar.gz *
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           cd install
-          Compress-Archive -Path * -DestinationPath ${{ github.workspace }}/lumice-${{ github.ref_name }}-${{ matrix.name }}.zip
+          Compress-Archive -Path * -DestinationPath ${{ github.workspace }}/lumice-${{ needs.prepare.outputs.version }}-${{ matrix.name }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: lumice-${{ matrix.name }}
-          path: lumice-${{ github.ref_name }}-${{ matrix.name }}.${{ matrix.ext }}
+          path: lumice-${{ needs.prepare.outputs.version }}-${{ matrix.name }}.${{ matrix.ext }}
+          retention-days: ${{ needs.prepare.outputs.is_release == 'true' && 90 || 7 }}
 
   release:
-    needs: build
+    needs: [prepare, build]
+    if: needs.prepare.outputs.is_release == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write

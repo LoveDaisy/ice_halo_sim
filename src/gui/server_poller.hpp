@@ -22,6 +22,7 @@ struct PollerData {
   int texture_height = 0;
   float snapshot_intensity = 0;
   float intensity_factor = 1.0f;
+  int effective_pixels = 0;
   bool has_new_texture = false;
 };
 

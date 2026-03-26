@@ -92,15 +92,15 @@ int main(int argc, char** argv) {
     gui::g_imgui_log_sink->set_pattern(gui::kGuiLogPattern);
 
     // File sink (default level=off, enabled via GUI checkbox)
-    std::string log_path;
+    std::filesystem::path log_path;
     if (const char* home = std::getenv("HOME")) {
-      log_path = std::string(home) + "/lumice.log";
+      log_path = std::filesystem::path(home) / "lumice.log";
     } else {
       log_path = "lumice.log";
     }
-    log_path = std::filesystem::absolute(log_path).string();
-    gui::g_log_file_path = log_path;
-    gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path, true);
+    log_path = std::filesystem::absolute(log_path);
+    gui::g_log_file_path = log_path.u8string();
+    gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path.string(), true);
     gui::g_file_log_sink->set_pattern(gui::kGuiLogPattern);
     gui::g_file_log_sink->set_level(spdlog::level::off);
 

@@ -457,8 +457,16 @@ void from_json(const nlohmann::json& obj, Distribution& dist) {
 }
 
 void to_json(nlohmann::json& obj, const AxisDistribution& axis) {
-  obj["zenith"] = axis.latitude_dist;
-  obj["zenith"]["mean"] = 90.0f - axis.latitude_dist.mean;
+  // Zenith: internal latitude → external zenith (mean = 90 - lat).
+  // Must handle kNoRandom (serialized as number) vs others (serialized as object).
+  nlohmann::json zenith;
+  to_json(zenith, axis.latitude_dist);
+  if (zenith.is_number()) {
+    zenith = 90.0f - axis.latitude_dist.mean;
+  } else {
+    zenith["mean"] = 90.0f - axis.latitude_dist.mean;
+  }
+  obj["zenith"] = zenith;
   obj["azimuth"] = axis.azimuth_dist;
   obj["roll"] = axis.roll_dist;
 }

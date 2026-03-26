@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -158,12 +159,12 @@ struct GuiState {
   bool aspect_portrait = false;
 
   // Background image overlay (view preference — does not call MarkDirty)
-  std::string bg_path;
+  std::filesystem::path bg_path;
   bool bg_show = false;
   float bg_alpha = 1.0f;
 
   // File management
-  std::string current_file_path;
+  std::filesystem::path current_file_path;
   bool dirty = false;
   bool save_texture = true;  // Whether to include texture in .lmc save (UI-only, not serialized)
 
@@ -188,6 +189,8 @@ struct GuiState {
   unsigned long stats_ray_seg_num = 0;
   unsigned long stats_sim_ray_num = 0;
   float snapshot_intensity = 0;                               // Per-pixel landed intensity for XYZ→RGB normalization
+  int effective_pixels = 0;                                   // Non-zero pixel count for adaptive normalization
+  int norm_mode = 0;                                          // 0=absolute, 1=adaptive (not exposed in UI)
   unsigned long texture_upload_count = 0;                     // Cumulative texture uploads (diagnostic counter)
   std::chrono::steady_clock::time_point last_restart_time{};  // For texture hold: skip early sparse snapshots
 

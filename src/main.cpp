@@ -6,9 +6,18 @@
 #include <string>
 #include <string_view>
 #include <thread>
+// clang-format off
+#ifdef _WIN32
+#include <windows.h>   // Must come before shellapi.h (defines EXTERN_C etc.)
+#include <shellapi.h>  // CommandLineToArgvW
+#endif
+// clang-format on
 
 #include "lumice.h"
 
+#ifdef _WIN32
+#define STBIW_WINDOWS_UTF8
+#endif
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
@@ -35,10 +44,10 @@ void PrintUsage(const char* prog_name) {
             << "  " << prog_name << " -f config.json -v\n";
 }
 
-std::string FormatImagePath(const std::filesystem::path& output_dir, int renderer_id) {
+std::filesystem::path FormatImagePath(const std::filesystem::path& output_dir, int renderer_id) {
   std::ostringstream oss;
   oss << "img_" << std::setfill('0') << std::setw(2) << renderer_id << ".jpg";
-  return (output_dir / oss.str()).string();
+  return output_dir / oss.str();
 }
 
 void SaveRenderResults(LUMICE_Server* server, const std::filesystem::path& output_dir) {
@@ -48,10 +57,11 @@ void SaveRenderResults(LUMICE_Server* server, const std::filesystem::path& outpu
   }
   for (int i = 0; renders[i].img_buffer != nullptr; i++) {
     auto filepath = FormatImagePath(output_dir, renders[i].renderer_id);
-    int ok = stbi_write_jpg(filepath.c_str(), renders[i].img_width, renders[i].img_height, 3, renders[i].img_buffer,
+    auto filepath_u8 = filepath.u8string();
+    int ok = stbi_write_jpg(filepath_u8.c_str(), renders[i].img_width, renders[i].img_height, 3, renders[i].img_buffer,
                             kJpegQuality);
     if (ok) {
-      std::cout << "Saved: " << filepath << " (" << renders[i].img_width << "x" << renders[i].img_height << ")\n";
+      std::cout << "Saved: " << filepath_u8 << " (" << renders[i].img_width << "x" << renders[i].img_height << ")\n";
     } else {
       std::cerr << "Error: failed to write " << filepath << "\n";
     }
@@ -72,7 +82,7 @@ void PrintStats(LUMICE_Server* server) {
 
 
 int main(int argc, char** argv) {
-  std::string config_filename;
+  std::filesystem::path config_filename;
   std::filesystem::path output_dir = ".";
   auto log_level = LUMICE_LOG_INFO;
 
@@ -106,6 +116,26 @@ int main(int argc, char** argv) {
     }
   }
 
+#ifdef _WIN32
+  // Re-parse file paths from wide-char command line for full Unicode support.
+  // argv[i] on Windows uses ANSI codepage, which loses non-ASCII characters.
+  {
+    int wargc = 0;
+    wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    if (wargv) {
+      for (int i = 1; i < wargc; i++) {
+        std::wstring_view warg = wargv[i];
+        if (warg == L"-f" && i + 1 < wargc) {
+          config_filename = wargv[++i];
+        } else if (warg == L"-o" && i + 1 < wargc) {
+          output_dir = wargv[++i];
+        }
+      }
+      LocalFree(wargv);
+    }
+  }
+#endif
+
   if (config_filename.empty()) {
     std::cerr << "Error: configuration file is required (-f <file>)\n\n";
     PrintUsage(argv[0]);
@@ -113,7 +143,7 @@ int main(int argc, char** argv) {
   }
 
   if (!std::filesystem::is_directory(output_dir)) {
-    std::cerr << "Error: output directory does not exist: " << output_dir.string() << "\n";
+    std::cerr << "Error: output directory does not exist: " << output_dir.u8string() << "\n";
     return 1;
   }
 
@@ -121,7 +151,7 @@ int main(int argc, char** argv) {
   LUMICE_InitLogger(server);
   LUMICE_SetLogLevel(server, log_level);
 
-  if (LUMICE_CommitConfigFromFile(server, config_filename.c_str()) != LUMICE_OK) {
+  if (LUMICE_CommitConfigFromFile(server, config_filename.u8string().c_str()) != LUMICE_OK) {
     LUMICE_DestroyServer(server);
     return 1;
   }

@@ -1,6 +1,7 @@
 #ifndef INCLUDE_SERVER_H_
 #define INCLUDE_SERVER_H_
 
+#include <filesystem>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
@@ -138,6 +139,7 @@ struct RawXyzResult {
   float intensity_factor_;
   bool has_valid_data_ = false;       // True after first ConsumeData; reset on Stop
   uint64_t snapshot_generation_ = 0;  // Increments on each new snapshot
+  int effective_pixels_ = 0;          // Non-zero pixel count for adaptive normalization
 };
 
 struct StatsResult {
@@ -211,7 +213,7 @@ class Server {
    *     return;
    *   }
    */
-  Error CommitConfigFromFile(const std::string& filename);
+  Error CommitConfigFromFile(const std::filesystem::path& filename);
 
   /**
    * @brief Get all render results

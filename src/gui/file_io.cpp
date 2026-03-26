@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -19,6 +20,7 @@
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/preview_renderer.hpp"
+#include "util/path_utils.hpp"
 
 namespace lumice::gui {
 
@@ -302,6 +304,7 @@ std::string SerializeCoreConfig(const GuiState& state) {
     jr["background"] = { 0.0f, 0.0f, 0.0f };
     jr["opacity"] = r.opacity;
     jr["intensity_factor"] = std::pow(2.0f, r.exposure_offset);
+    jr["norm_mode"] = state.norm_mode;
 
     root["render"].push_back(jr);
   }
@@ -372,6 +375,7 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
     dst.resolution_h = res;
     dst.opacity = r.opacity;
     dst.intensity_factor = std::pow(2.0f, r.exposure_offset);
+    dst.norm_mode = state.norm_mode;
   }
 
   // Scene: light source
@@ -655,9 +659,12 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["aspect_portrait"] = state.aspect_portrait;
 
   // Background image overlay
-  root["bg_path"] = state.bg_path;
+  root["bg_path"] = PathToU8(state.bg_path);
   root["bg_show"] = state.bg_show;
   root["bg_alpha"] = state.bg_alpha;
+
+  // Normalization mode (display preference)
+  root["norm_mode"] = state.norm_mode;
 
   return root.dump(2);
 }
@@ -777,9 +784,12 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.aspect_portrait = root.value("aspect_portrait", false);
 
   // Background image overlay (backward compatible: missing fields use defaults)
-  state.bg_path = root.value("bg_path", std::string{});
+  state.bg_path = PathFromU8(root.value("bg_path", std::string{}));
   state.bg_show = root.value("bg_show", false);
   state.bg_alpha = root.value("bg_alpha", 1.0f);
+
+  // Normalization mode (display preference, default absolute for backward compat with old .lmc files)
+  state.norm_mode = root.value("norm_mode", 0);
 
   return true;
 }
@@ -824,7 +834,8 @@ static void StbWriteCallback(void* context, void* data, int size) {
   buf->insert(buf->end(), bytes, bytes + size);
 }
 
-bool SaveLmcFile(const std::string& path, const GuiState& state, const PreviewRenderer& preview, bool save_texture) {
+bool SaveLmcFile(const std::filesystem::path& path, const GuiState& state, const PreviewRenderer& preview,
+                 bool save_texture) {
   std::string json_payload = SerializeGuiStateJson(state);
 
   // Encode texture to PNG in memory if requested
@@ -871,7 +882,7 @@ bool SaveLmcFile(const std::string& path, const GuiState& state, const PreviewRe
   return out.good();
 }
 
-bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
+bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
                  int& tex_h) {
   tex_data.clear();
   tex_w = 0;
@@ -879,7 +890,7 @@ bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned 
 
   std::ifstream in(path, std::ios::binary);
   if (!in.is_open()) {
-    GUI_LOG_ERROR("[LMC] Cannot open file: {}", path);
+    GUI_LOG_ERROR("[LMC] Cannot open file: {}", PathToU8(path));
     return false;
   }
 
@@ -955,7 +966,7 @@ bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned 
 
 // ========== Export Preview ==========
 
-bool ExportPreviewPng(const char* path, PreviewRenderer& renderer, const PreviewViewport& vp) {
+bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp) {
   int w = vp.vp_w;
   int h = vp.vp_h;
   if (w <= 0 || h <= 0 || !renderer.HasTexture()) {
@@ -1007,25 +1018,27 @@ bool ExportPreviewPng(const char* path, PreviewRenderer& renderer, const Preview
   }
 
   // Save as RGBA PNG
-  int result = stbi_write_png(path, w, h, 4, pixels.data(), w * 4);
+  auto u8path = path.u8string();
+  int result = stbi_write_png(u8path.c_str(), w, h, 4, pixels.data(), w * 4);
   return result != 0;
 }
 
 
 // ========== Export Equirect ==========
 
-bool ExportEquirectPng(const char* path, const unsigned char* data, int width, int height) {
-  if (!path || !data || width <= 0 || height <= 0) {
+bool ExportEquirectPng(const std::filesystem::path& path, const unsigned char* data, int width, int height) {
+  if (path.empty() || !data || width <= 0 || height <= 0) {
     return false;
   }
-  int result = stbi_write_png(path, width, height, 3, data, width * 3);
+  auto u8path = path.u8string();
+  int result = stbi_write_png(u8path.c_str(), width, height, 3, data, width * 3);
   return result != 0;
 }
 
 // ========== Export Config JSON ==========
 
-bool ExportConfigJson(const char* path, const std::string& json_str) {
-  if (!path) {
+bool ExportConfigJson(const std::filesystem::path& path, const std::string& json_str) {
+  if (path.empty()) {
     return false;
   }
   std::ofstream out(path);
@@ -1038,87 +1051,84 @@ bool ExportConfigJson(const char* path, const std::string& json_str) {
 
 // ========== File Dialogs ==========
 
-std::string ShowOpenDialog() {
+std::filesystem::path ShowOpenDialog() {
   NFD_Init();
   nfdchar_t* out_path = nullptr;
   nfdfilteritem_t filter_items[2] = { { "Lumice", "lmc" }, { "JSON Config", "json" } };
   nfdresult_t result = NFD_OpenDialog(&out_path, filter_items, 2, nullptr);
-  std::string path;
+  std::filesystem::path path;
   if (result == NFD_OKAY && out_path) {
-    path = out_path;
+    path = PathFromU8(out_path);
     NFD_FreePath(out_path);
   }
   NFD_Quit();
   return path;
 }
 
-std::string ShowSaveDialog() {
+std::filesystem::path ShowSaveDialog() {
   NFD_Init();
   nfdchar_t* out_path = nullptr;
   nfdfilteritem_t filter_item[1] = { { "Lumice", "lmc" } };
   nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "project.lmc");
-  std::string path;
+  std::filesystem::path path;
   if (result == NFD_OKAY && out_path) {
-    path = out_path;
+    path = PathFromU8(out_path);
     NFD_FreePath(out_path);
   }
   NFD_Quit();
   return path;
 }
 
-
-std::string ShowExportPngDialog() {
+std::filesystem::path ShowExportPngDialog() {
   NFD_Init();
   nfdchar_t* out_path = nullptr;
   nfdfilteritem_t filter_item[1] = { { "PNG Image", "png" } };
   nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "preview.png");
-  std::string path;
+  std::filesystem::path path;
   if (result == NFD_OKAY && out_path) {
-    path = out_path;
+    path = PathFromU8(out_path);
     NFD_FreePath(out_path);
   }
   NFD_Quit();
   return path;
 }
 
-
-std::string ShowExportEquirectDialog() {
+std::filesystem::path ShowExportEquirectDialog() {
   NFD_Init();
   nfdchar_t* out_path = nullptr;
   nfdfilteritem_t filter_item[1] = { { "PNG Image", "png" } };
   nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "equirect.png");
-  std::string path;
+  std::filesystem::path path;
   if (result == NFD_OKAY && out_path) {
-    path = out_path;
+    path = PathFromU8(out_path);
     NFD_FreePath(out_path);
   }
   NFD_Quit();
   return path;
 }
 
-std::string ShowExportJsonDialog() {
+std::filesystem::path ShowExportJsonDialog() {
   NFD_Init();
   nfdchar_t* out_path = nullptr;
   nfdfilteritem_t filter_item[1] = { { "JSON Config", "json" } };
   nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "config.json");
-  std::string path;
+  std::filesystem::path path;
   if (result == NFD_OKAY && out_path) {
-    path = out_path;
+    path = PathFromU8(out_path);
     NFD_FreePath(out_path);
   }
   NFD_Quit();
   return path;
 }
 
-
-std::string ShowOpenImageDialog() {
+std::filesystem::path ShowOpenImageDialog() {
   NFD_Init();
   nfdchar_t* out_path = nullptr;
   nfdfilteritem_t filter_items[1] = { { "Images", "png,jpg,jpeg,bmp" } };
   nfdresult_t result = NFD_OpenDialog(&out_path, filter_items, 1, nullptr);
-  std::string path;
+  std::filesystem::path path;
   if (result == NFD_OKAY && out_path) {
-    path = out_path;
+    path = PathFromU8(out_path);
     NFD_FreePath(out_path);
   }
   NFD_Quit();

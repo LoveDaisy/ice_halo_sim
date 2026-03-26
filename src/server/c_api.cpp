@@ -12,6 +12,7 @@
 #include "server/server.hpp"
 #include "util/callback_sink.hpp"
 #include "util/logger.hpp"
+#include "util/path_utils.hpp"
 
 namespace ns = lumice;
 
@@ -123,7 +124,7 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
     return LUMICE_ERR_NULL_ARG;
   }
 
-  auto err = server->server_->CommitConfigFromFile(filename);
+  auto err = server->server_->CommitConfigFromFile(lumice::PathFromU8(filename));
   if (err) {
     LOG_ERROR("Failed to load configuration from file '{}': {}", filename, err.message);
     if (!err.field.empty()) {
@@ -249,6 +250,7 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
     jr["background"] = { 0.0f, 0.0f, 0.0f };
     jr["opacity"] = r.opacity;
     jr["intensity_factor"] = r.intensity_factor;
+    jr["norm_mode"] = r.norm_mode;
     root["render"].push_back(jr);
   }
 
@@ -327,6 +329,7 @@ LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzRes
     out[i].intensity_factor = results[i].intensity_factor_;
     out[i].has_valid_data = results[i].has_valid_data_ ? 1 : 0;
     out[i].snapshot_generation = results[i].snapshot_generation_;
+    out[i].effective_pixels = results[i].effective_pixels_;
   }
 
   // Sentinel

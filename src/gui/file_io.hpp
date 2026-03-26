@@ -1,6 +1,7 @@
 #ifndef LUMICE_GUI_FILE_IO_HPP
 #define LUMICE_GUI_FILE_IO_HPP
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -28,28 +29,29 @@ std::string SerializeGuiStateJson(const GuiState& state);
 bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state);
 
 // Save .lmc binary file
-bool SaveLmcFile(const std::string& path, const GuiState& state, const PreviewRenderer& preview, bool save_texture);
+bool SaveLmcFile(const std::filesystem::path& path, const GuiState& state, const PreviewRenderer& preview,
+                 bool save_texture);
 
 // Load .lmc binary file. If texture data is present, returns it via tex_data/tex_w/tex_h.
-bool LoadLmcFile(const std::string& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
+bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
                  int& tex_h);
 
 // Export preview as PNG (renders via FBO, must be called on GL thread)
-bool ExportPreviewPng(const char* path, PreviewRenderer& renderer, const PreviewViewport& vp);
+bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp);
 
 // Export equirect panorama as PNG (pure I/O, accepts pre-converted RGB data)
-bool ExportEquirectPng(const char* path, const unsigned char* data, int width, int height);
+bool ExportEquirectPng(const std::filesystem::path& path, const unsigned char* data, int width, int height);
 
 // Export configuration as JSON (CLI-compatible format)
-bool ExportConfigJson(const char* path, const std::string& json_str);
+bool ExportConfigJson(const std::filesystem::path& path, const std::string& json_str);
 
-// File dialog wrappers (return empty string on cancel)
-std::string ShowOpenDialog();
-std::string ShowSaveDialog();
-std::string ShowExportPngDialog();
-std::string ShowExportEquirectDialog();
-std::string ShowExportJsonDialog();
-std::string ShowOpenImageDialog();
+// File dialog wrappers (return empty path on cancel)
+std::filesystem::path ShowOpenDialog();
+std::filesystem::path ShowSaveDialog();
+std::filesystem::path ShowExportPngDialog();
+std::filesystem::path ShowExportEquirectDialog();
+std::filesystem::path ShowExportJsonDialog();
+std::filesystem::path ShowOpenImageDialog();
 
 
 }  // namespace lumice::gui

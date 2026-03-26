@@ -13,6 +13,7 @@
 
 #include "gui/file_io.hpp"
 #include "gui/gui_logger.hpp"
+#include "util/path_utils.hpp"
 
 namespace lumice::gui {
 
@@ -167,7 +168,7 @@ void DoSave() {
   RefreshCpuTextureForSave();
   if (SaveLmcFile(g_state.current_file_path, g_state, g_preview, g_state.save_texture)) {
     g_state.dirty = false;
-    GUI_LOG_INFO("[GUI] DoSave: {}", g_state.current_file_path);
+    GUI_LOG_INFO("[GUI] DoSave: {}", PathToU8(g_state.current_file_path));
   }
 }
 
@@ -178,7 +179,7 @@ void DoSaveAs() {
     RefreshCpuTextureForSave();
     if (SaveLmcFile(path, g_state, g_preview, g_state.save_texture)) {
       g_state.dirty = false;
-      GUI_LOG_INFO("[GUI] DoSaveAs: {}", path);
+      GUI_LOG_INFO("[GUI] DoSaveAs: {}", PathToU8(path));
     }
   }
 }
@@ -186,8 +187,8 @@ void DoSaveAs() {
 void DoExportPreviewPng() {
   auto path = ShowExportPngDialog();
   if (!path.empty()) {
-    ExportPreviewPng(path.c_str(), g_preview, g_preview_vp);
-    GUI_LOG_INFO("[GUI] Export screenshot: {}", path);
+    ExportPreviewPng(path, g_preview, g_preview_vp);
+    GUI_LOG_INFO("[GUI] Export screenshot: {}", PathToU8(path));
   }
 }
 
@@ -208,28 +209,29 @@ void DoExportEquirectPng() {
   // Copy buffer (pointer valid only until next GetRenderResults/CommitConfig)
   size_t size = static_cast<size_t>(renders[0].img_width) * renders[0].img_height * 3;
   std::vector<unsigned char> buffer(renders[0].img_buffer, renders[0].img_buffer + size);
-  ExportEquirectPng(path.c_str(), buffer.data(), renders[0].img_width, renders[0].img_height);
-  GUI_LOG_INFO("[GUI] Export panorama: {}", path);
+  ExportEquirectPng(path, buffer.data(), renders[0].img_width, renders[0].img_height);
+  GUI_LOG_INFO("[GUI] Export panorama: {}", PathToU8(path));
 }
 
 void DoExportConfigJson() {
   auto path = ShowExportJsonDialog();
   if (!path.empty()) {
     auto json_str = SerializeCoreConfig(g_state);
-    ExportConfigJson(path.c_str(), json_str);
-    GUI_LOG_INFO("[GUI] Export config JSON: {}", path);
+    ExportConfigJson(path, json_str);
+    GUI_LOG_INFO("[GUI] Export config JSON: {}", PathToU8(path));
   }
 }
 
 // Helper: load image from path, downsample if needed, upload to bg texture.
 // Returns true on success.
-static bool LoadAndUploadBgImage(const std::string& path) {
+static bool LoadAndUploadBgImage(const std::filesystem::path& path) {
   int w = 0;
   int h = 0;
   int channels = 0;
-  unsigned char* raw = stbi_load(path.c_str(), &w, &h, &channels, 3);  // Force 3 channels (RGB)
+  auto u8path = PathToU8(path);
+  unsigned char* raw = stbi_load(u8path.c_str(), &w, &h, &channels, 3);  // Force 3 channels (RGB)
   if (!raw) {
-    GUI_LOG_WARNING("Failed to load background image: {}", path);
+    GUI_LOG_WARNING("Failed to load background image: {}", u8path);
     return false;
   }
 
@@ -267,7 +269,7 @@ void DoOpen() {
   }
 
   // Check extension to determine file format
-  bool is_json = path.size() >= 5 && path.substr(path.size() - 5) == ".json";
+  bool is_json = path.extension() == ".json";
 
   if (is_json) {
     // Import CLI JSON config
@@ -284,7 +286,7 @@ void DoOpen() {
       g_state.sim_state = SimState::kIdle;
       g_preview.ClearTexture();
       g_preview.ClearBackground();
-      GUI_LOG_INFO("[GUI] DoOpen (JSON import): {}", path);
+      GUI_LOG_INFO("[GUI] DoOpen (JSON import): {}", PathToU8(path));
     }
     return;
   }
@@ -296,7 +298,7 @@ void DoOpen() {
   if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
     g_state.current_file_path = path;
     g_state.dirty = false;
-    GUI_LOG_INFO("[GUI] DoOpen: {}", path);
+    GUI_LOG_INFO("[GUI] DoOpen: {}", PathToU8(path));
     if (!tex_data.empty()) {
       g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
       g_state.sim_state = SimState::kDone;
@@ -492,6 +494,7 @@ void SyncFromPoller() {
                   data.texture_height, data.stats_sim_ray_num, data.snapshot_intensity, data.intensity_factor);
     g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
     g_state.snapshot_intensity = data.snapshot_intensity;
+    g_state.effective_pixels = data.effective_pixels;
     g_state.texture_upload_count++;
   }
 }

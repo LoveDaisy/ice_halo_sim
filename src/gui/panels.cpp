@@ -211,14 +211,16 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
   ImGui::Text("%s", label);
   ImGui::SameLine(100);
 
-  const char* dist_names[] = { "Gauss", "Uniform" };
   int dist_type = static_cast<int>(axis.type);
-  ImGui::PushItemWidth(80);
-  if (ImGui::Combo("##type", &dist_type, dist_names, 2)) {
+  if (ImGui::RadioButton("Gauss##rb", &dist_type, 0)) {
     axis.type = static_cast<AxisDistType>(dist_type);
     state.MarkDirty();
   }
-  ImGui::PopItemWidth();
+  ImGui::SameLine();
+  if (ImGui::RadioButton("Uniform##rb", &dist_type, 1)) {
+    axis.type = static_cast<AxisDistType>(dist_type);
+    state.MarkDirty();
+  }
 
   DIRTY_IF(SliderWithInput("Mean", &axis.mean, -360.0f, 360.0f));
 
@@ -611,7 +613,7 @@ void RenderRenderTab(GuiState& state) {
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
-    SliderWithInput("EV", &r.exposure_offset, -2.0f, 8.0f, "%.1f");
+    SliderWithInput("EV", &r.exposure_offset, -3.0f, 7.0f, "%.1f");
   }
 
   if (ImGui::CollapsingHeader("File", ImGuiTreeNodeFlags_DefaultOpen)) {
