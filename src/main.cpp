@@ -6,10 +6,12 @@
 #include <string>
 #include <string_view>
 #include <thread>
+// clang-format off
 #ifdef _WIN32
+#include <windows.h>   // Must come before shellapi.h (defines EXTERN_C etc.)
 #include <shellapi.h>  // CommandLineToArgvW
-#include <windows.h>   // GetCommandLineW, CommandLineToArgvW
 #endif
+// clang-format on
 
 #include "lumice.h"
 
