@@ -614,12 +614,6 @@ void RenderRenderTab(GuiState& state) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
     SliderWithInput("EV", &r.exposure_offset, -3.0f, 7.0f, "%.1f");
-    ImGui::RadioButton("Absolute", &state.norm_mode, 0);
-    ImGui::SameLine();
-    ImGui::RadioButton("Adaptive", &state.norm_mode, 1);
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Adaptive: normalize by non-zero pixels (fixes fisheye)");
-    }
   }
 
   if (ImGui::CollapsingHeader("File", ImGuiTreeNodeFlags_DefaultOpen)) {
