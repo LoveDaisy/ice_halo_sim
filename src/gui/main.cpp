@@ -100,11 +100,7 @@ int main(int argc, char** argv) {
     }
     log_path = std::filesystem::absolute(log_path);
     gui::g_log_file_path = log_path.u8string();
-#ifdef _WIN32
-    gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path.wstring(), true);
-#else
     gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path.string(), true);
-#endif
     gui::g_file_log_sink->set_pattern(gui::kGuiLogPattern);
     gui::g_file_log_sink->set_level(spdlog::level::off);
 
