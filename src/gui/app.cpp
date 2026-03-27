@@ -460,7 +460,7 @@ void SyncFromPoller() {
 
   PollerData data;
   if (!g_server_poller.TrySyncData(data)) {
-    GUI_LOG_DEBUG("[GUI] SyncFromPoller: skipped (poller busy)");
+    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: skipped (poller busy)");
     return;
   }
   if (!data.valid) {
@@ -490,7 +490,7 @@ void SyncFromPoller() {
   bool upload_ok = data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0 &&
                    since_restart >= kTextureHoldMs;
   if (upload_ok) {
-    GUI_LOG_DEBUG("[GUI] SyncFromPoller: texture {}x{}, rays={}, intensity={}, factor={:.6f}", data.texture_width,
+    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: texture {}x{}, rays={}, intensity={}, factor={:.6f}", data.texture_width,
                   data.texture_height, data.stats_sim_ray_num, data.snapshot_intensity, data.intensity_factor);
     g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
     g_state.snapshot_intensity = data.snapshot_intensity;
