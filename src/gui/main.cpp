@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
       return LUMICE_LOG_WARNING;
     };
 
-    LUMICE_LogLevel gui_level = LUMICE_LOG_WARNING;
+    LUMICE_LogLevel gui_level = LUMICE_LOG_INFO;
     LUMICE_LogLevel core_level = LUMICE_LOG_WARNING;
     for (int i = 1; i < argc; ++i) {
       std::string_view arg(argv[i]);
@@ -182,6 +182,10 @@ int main(int argc, char** argv) {
     return 1;
   }
   gui::ResetCrystalView();
+
+  // Calibrate quality gate threshold by running a short simulation with default config.
+  // Must happen after server creation but before the main loop.
+  gui::CalibrateQualityThreshold();
 
   // Window size callback: detect user manual resize vs programmatic resize
   glfwSetWindowSizeCallback(window, gui::WindowSizeCallback);

@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "gui/file_io.hpp"
@@ -357,6 +358,69 @@ void DoClearBackground() {
   }
 }
 
+// Run a short simulation with the current default config to measure platform throughput,
+// then set the quality gate threshold to max(kMinRaysFloor, measured_rate * 10%).
+// Called once at startup before the main loop. Typically completes in < 200ms.
+void CalibrateQualityThreshold() {
+  if (!g_server) {
+    return;
+  }
+  constexpr int kCalibrationRays = 100000;
+  constexpr double kCalibrationFraction = 0.4;  // Accept frames >= 40% of typical ray count per window
+
+  // Use current default state to build a calibration config
+  LUMICE_Config config{};
+  FillLumiceConfig(g_state, &config);
+  config.infinite = 0;
+  config.ray_num = kCalibrationRays;
+
+  auto t0 = std::chrono::steady_clock::now();
+  auto err = LUMICE_CommitConfigStruct(g_server, &config, nullptr);
+  if (err != LUMICE_OK) {
+    GUI_LOG_WARNING("[Calibration] CommitConfig failed ({}), using default threshold", static_cast<int>(err));
+    return;
+  }
+
+  // Wait for simulation to complete (server returns to IDLE)
+  constexpr int kMaxWaitMs = 2000;
+  int waited_ms = 0;
+  while (waited_ms < kMaxWaitMs) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    waited_ms += 10;
+    LUMICE_ServerState state{};
+    LUMICE_QueryServerState(g_server, &state);
+    if (state == LUMICE_SERVER_IDLE) {
+      break;
+    }
+  }
+
+  auto t1 = std::chrono::steady_clock::now();
+  double elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+  // Read stats to get actual rays simulated
+  LUMICE_StatsResult stats{};
+  LUMICE_GetStatsResults(g_server, &stats, 1);
+
+  if (stats.sim_ray_num == 0 || elapsed_ms <= 0) {
+    GUI_LOG_WARNING("[Calibration] no data produced in {:.0f}ms, using default threshold", elapsed_ms);
+    return;
+  }
+
+  // Compute: how many rays would be produced in the calibration window?
+  // Uses kCalibrationWindowMs (fixed) instead of kCommitIntervalMs so that changing
+  // the commit interval doesn't accidentally tighten/loosen the quality gate.
+  double rays_per_window = static_cast<double>(stats.sim_ray_num) * kCalibrationWindowMs / elapsed_ms;
+  auto threshold = std::max(kMinRaysFloor, static_cast<unsigned long>(rays_per_window * kCalibrationFraction));
+
+  g_server_poller.SetCalibratedThreshold(threshold);
+  GUI_LOG_INFO("[Calibration] done in {:.0f}ms: {} rays, {:.0f} rays/window({}ms), threshold={}", elapsed_ms,
+               stats.sim_ray_num, rays_per_window, kCalibrationWindowMs, threshold);
+
+  // Stop the server — ready for user's first actual Run
+  LUMICE_StopServer(g_server);
+}
+
+
 void DoRun() {
   if (!g_server) {
     return;
@@ -395,7 +459,6 @@ void DoRun() {
     g_state.sim_state = SimState::kSimulating;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
-    g_state.last_restart_time = std::chrono::steady_clock::now();
     // Safety check: if GUI predicted reuse but server rebuilt consumers, the poller
     // was not stopped and may hold dangling pointers. This should never happen because
     // the GUI comparison is a superset of the server's NeedsRebuild check.
@@ -482,16 +545,11 @@ void SyncFromPoller() {
   }
 
   // Upload XYZ float texture (GL call — must be on main thread).
-  // Hold old texture for kTextureHoldMs after restart to skip the earliest sparse snapshots.
-  // This gives the simulation enough time to accumulate rays for a visually decent first frame.
-  auto since_restart = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                                             g_state.last_restart_time)
-                           .count();
-  bool upload_ok = data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0 &&
-                   since_restart >= kTextureHoldMs;
+  // Quality gate is in ServerPoller::PollOnce — staged data is always worth displaying.
+  bool upload_ok = data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0;
   if (upload_ok) {
-    GUI_LOG_DEBUG("[GUI] SyncFromPoller: texture {}x{}, rays={}, intensity={}, factor={:.6f}", data.texture_width,
-                  data.texture_height, data.stats_sim_ray_num, data.snapshot_intensity, data.intensity_factor);
+    GUI_LOG_DEBUG("[GUI] SyncFromPoller: upload tex_rays={}, intensity={:.6f}, eff_pixels={}, factor={:.6f}",
+                  data.texture_ray_count, data.snapshot_intensity, data.effective_pixels, data.intensity_factor);
     g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
     g_state.snapshot_intensity = data.snapshot_intensity;
     g_state.effective_pixels = data.effective_pixels;
