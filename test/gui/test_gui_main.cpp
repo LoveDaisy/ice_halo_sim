@@ -91,6 +91,10 @@ struct BgOverlayTestState {
 static BgOverlayTestState g_bg_test;
 static int g_core_log_level = LUMICE_LOG_INFO;
 static int g_gui_log_level = LUMICE_LOG_INFO;
+static bool g_enable_visible = false;      // --visible: show window (enables DWM compositing path)
+static bool g_enable_vsync = false;       // --vsync: enable VSync (implies --visible)
+static bool g_enable_frame_limit = true;  // Default on: matches real app's kTargetFrameTimeMs fallback.
+                                          // Use --no-frame-limit to disable for raw throughput comparison.
 
 // Reset all global state for test isolation
 static void ResetTestState() {
@@ -1477,8 +1481,8 @@ static void StartPerfSimulation() {
   gui::g_state.sim.max_hits = 8;
   if (!gui::g_state.renderers.empty()) {
     auto& r = gui::g_state.renderers[0];
-    r.lens_type = 7;  // Rectangular
-    r.fov = 180.0f;
+    r.lens_type = 1;  // Fisheye Equal Area (matches typical manual testing)
+    r.fov = 360.0f;
     r.sim_resolution_index = 0;  // 512 → Core resolution [1024, 512], matching CreatePerfConfig
     r.visible = 2;               // Full
     r.background[0] = r.background[1] = r.background[2] = 0.0f;
@@ -1680,9 +1684,10 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         }
       }
 
-      // Measure: alternate crystal height between 0.8 and 1.2 over 5 seconds.
-      // Each change triggers a full Stop/Start restart via DoRun().
-      // Track cumulative rays across restarts via direct C API (not SyncFromPoller which has delay).
+      // Measure: sweep sun altitude over 5 seconds, matching real manual slider drag.
+      // Each frame: update altitude (continuous sweep) + set dirty.
+      // Commit logic mirrors main.cpp: check dirty + kCommitIntervalMs throttle per frame.
+      // Track cumulative rays across restarts via direct C API.
       auto start_time = std::chrono::steady_clock::now();
       auto end_time = start_time + std::chrono::seconds(5);
       auto last_commit = start_time;
@@ -1692,7 +1697,10 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       auto upload_before = gui::g_state.texture_upload_count;
       std::vector<unsigned long> per_restart_rays;  // Ray count per restart cycle
       std::vector<unsigned long> per_upload_rays;   // Ray count at each texture upload (measures flicker)
+      std::vector<double> first_upload_ms;          // Commit → first upload delay per restart (responsiveness)
       auto last_upload_count = upload_before;       // Independent tracker for upload detection
+      auto last_dorun_time = start_time;            // Timestamp of most recent DoRun
+      bool waiting_first_upload = false;            // True between DoRun and first upload
 
       auto read_server_rays = [&]() -> unsigned long {
         if (!gui::g_server) {
@@ -1703,26 +1711,35 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         return stats[0].sim_ray_num;
       };
 
+      // Sweep sun altitude between 10° and 30° (typical manual drag range)
+      constexpr float kAltMin = 10.0f;
+      constexpr float kAltMax = 30.0f;
+
       while (std::chrono::steady_clock::now() < end_time) {
-        if (!gui::g_state.crystals.empty()) {
-          gui::g_state.crystals[0].height = (iteration % 2 == 0) ? 0.8f : 1.2f;
-        }
+        // Continuous triangle wave: sweep up then down, matching smooth slider drag
+        double elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+        double phase = std::fmod(elapsed_sec, 2.0);  // 2s period (1s up + 1s down)
+        float t = (phase < 1.0) ? static_cast<float>(phase) : static_cast<float>(2.0 - phase);
+        gui::g_state.sun.altitude = kAltMin + t * (kAltMax - kAltMin);
         gui::g_state.dirty = true;
         iteration++;
 
-        // Yield a few frames then check commit. Yield count is small (2 frames)
-        // so the commit check runs frequently, letting kCommitIntervalMs control
-        // the actual commit rate rather than the yield loop duration.
-        for (int i = 0; i < 2; i++) {
-          ctx->Yield();
-          // Track per-upload ray counts (measures what the user actually sees on screen)
-          if (gui::g_state.texture_upload_count != last_upload_count) {
-            per_upload_rays.push_back(gui::g_state.stats_sim_ray_num);
-            last_upload_count = gui::g_state.texture_upload_count;
+        // One yield per iteration = one frame, matching real app's per-frame commit check
+        ctx->Yield();
+
+        // Track per-upload ray counts
+        if (gui::g_state.texture_upload_count != last_upload_count) {
+          per_upload_rays.push_back(gui::g_state.stats_sim_ray_num);
+          if (waiting_first_upload) {
+            auto delay =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - last_dorun_time);
+            first_upload_ms.push_back(delay.count());
+            waiting_first_upload = false;
           }
+          last_upload_count = gui::g_state.texture_upload_count;
         }
 
-        // Throttled commit: same logic as main.cpp auto-commit.
+        // Throttled commit: same logic as main.cpp auto-commit
         auto now = std::chrono::steady_clock::now();
         auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
         if (commit_elapsed >= gui::kCommitIntervalMs) {
@@ -1732,6 +1749,8 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
           gui::g_state.dirty = false;
           gui::DoRun();
           last_commit = now;
+          last_dorun_time = now;
+          waiting_first_upload = true;
           restart_count++;
         }
       }
@@ -1751,6 +1770,23 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       double upload_ratio = restart_count > 0 ? static_cast<double>(texture_uploads) / restart_count : 0;
       fprintf(stderr, "[PERF] slider_drag: %lu texture uploads / %d restarts (ratio: %.2f)\n", texture_uploads,
               restart_count, upload_ratio);
+
+      // Report commit → first upload delay (responsiveness)
+      if (!first_upload_ms.empty()) {
+        std::sort(first_upload_ms.begin(), first_upload_ms.end());
+        double fsum = 0;
+        for (auto v : first_upload_ms) {
+          fsum += v;
+        }
+        double favg = fsum / first_upload_ms.size();
+        double fmedian = first_upload_ms[first_upload_ms.size() / 2];
+        double fmin = first_upload_ms.front();
+        double fmax = first_upload_ms.back();
+        int n_miss = restart_count - static_cast<int>(first_upload_ms.size());
+        fprintf(stderr,
+                "[PERF] slider_drag: first_upload avg=%.0fms median=%.0fms min=%.0fms max=%.0fms (n=%zu, %d missed)\n",
+                favg, fmedian, fmin, fmax, first_upload_ms.size(), n_miss);
+      }
 
       // Report per-restart ray count distribution
       if (!per_restart_rays.empty()) {
@@ -1811,6 +1847,15 @@ int main(int argc, char** argv) {
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--filter") == 0 && i + 1 < argc) {
       test_filter = argv[++i];
+    } else if (strcmp(argv[i], "--visible") == 0) {
+      g_enable_visible = true;
+    } else if (strcmp(argv[i], "--vsync") == 0) {
+      g_enable_vsync = true;
+      g_enable_visible = true;  // VSync requires visible window
+    } else if (strcmp(argv[i], "--frame-limit") == 0) {
+      g_enable_frame_limit = true;
+    } else if (strcmp(argv[i], "--no-frame-limit") == 0) {
+      g_enable_frame_limit = false;
     } else if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
       // Set both core and GUI log level: trace/debug/info/warning/error/off
       const char* level = argv[++i];
@@ -1849,7 +1894,9 @@ int main(int argc, char** argv) {
 #ifdef __APPLE__
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
-  glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);  // Hidden window mode
+  if (!g_enable_visible) {
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);  // Hidden window mode
+  }
 
   GLFWwindow* window =
       glfwCreateWindow(gui::kInitWindowWidth, gui::kInitWindowHeight, "LumiceGUITests", nullptr, nullptr);
@@ -1861,7 +1908,17 @@ int main(int argc, char** argv) {
 
   glfwSetWindowSizeCallback(window, gui::WindowSizeCallback);
   glfwMakeContextCurrent(window);
-  glfwSwapInterval(0);  // No VSync for tests
+  glfwSwapInterval(g_enable_vsync ? 1 : 0);
+  if (g_enable_visible) {
+    fprintf(stderr, "[DIAG] Visible window mode enabled\n");
+  }
+  if (g_enable_vsync) {
+    fprintf(stderr, "[DIAG] VSync mode enabled: swapInterval(1)\n");
+  }
+  if (g_enable_frame_limit) {
+    fprintf(stderr, "[DIAG] Frame limit mode enabled: %dms target frame time (simulates VSync)\n",
+            gui::kTargetFrameTimeMs);
+  }
 
   if (!gui::InitGLLoader()) {
     glfwDestroyWindow(window);
@@ -1957,10 +2014,27 @@ int main(int argc, char** argv) {
     glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
+    // Render preview shader before ImGui overlay (matches real app's main.cpp)
+    if (gui::g_preview_vp.active) {
+      gui::g_preview.Render(gui::g_preview_vp.vp_x, gui::g_preview_vp.vp_y, gui::g_preview_vp.vp_w,
+                            gui::g_preview_vp.vp_h, gui::g_preview_vp.params);
+    }
+
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     glfwSwapBuffers(window);
 
     ImGuiTestEngine_PostSwap(engine);
+
+    // Fallback frame rate limit (same as main.cpp) — simulates VSync timing without needing a real display
+    if (g_enable_frame_limit) {
+      static auto frame_start = std::chrono::steady_clock::now();
+      auto frame_end = std::chrono::steady_clock::now();
+      auto frame_ms = std::chrono::duration_cast<std::chrono::milliseconds>(frame_end - frame_start).count();
+      if (frame_ms < gui::kTargetFrameTimeMs) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(gui::kTargetFrameTimeMs - frame_ms));
+      }
+      frame_start = std::chrono::steady_clock::now();
+    }
 
     // Exit when all tests are done
     if (!ImGuiTestEngine_IsTestQueueEmpty(engine)) {
