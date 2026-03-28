@@ -364,29 +364,38 @@ void RenderConsumer::Consume(const SimData& data) {
   auto t0 = std::chrono::steady_clock::now();
   const auto& crystals = data.crystals_;
 
-  // Resize pre-allocated buffers if needed (grow-only)
-  if (data.rays_.size_ > buf_capacity_) {
-    buf_capacity_ = data.rays_.size_;
+  // Resize pre-allocated buffers if needed (grow-only).
+  // Use outgoing count for capacity — it's the upper bound for filtered rays.
+  size_t outgoing_count = data.outgoing_indices_.size();
+  size_t needed = std::max(data.rays_.size_, outgoing_count);
+  if (needed > buf_capacity_) {
+    buf_capacity_ = needed;
     d_buf_ = std::make_unique<float[]>(buf_capacity_ * 3);
     w_buf_ = std::make_unique<float[]>(buf_capacity_);
     xy_buf_ = std::make_unique<int[]>(buf_capacity_ * 2);
   }
 
-  // Use pre-collected outgoing indices to skip full-scan of all ray segments.
+  // Filter + copy outgoing rays into contiguous buffers.
   assert(!data.outgoing_indices_.empty() || data.rays_.Empty());
   size_t filtered_ray_num = 0;
-  for (size_t i : data.outgoing_indices_) {
-    const auto& r = data.rays_[i];
 
-    // Check every filter for every scattering
-    if (!FilterRay(data.rays_, i, filters_, crystals)) {
-      continue;
+  if (filters_.empty() && !data.outgoing_d_.empty()) {
+    // Fast path: no filter — bulk memcpy from pre-packed contiguous arrays.
+    // Avoids random access into 112-byte RaySeg structs (cache utilization 14% → 100%).
+    filtered_ray_num = outgoing_count;
+    std::memcpy(d_buf_.get(), data.outgoing_d_.data(), filtered_ray_num * 3 * sizeof(float));
+    std::memcpy(w_buf_.get(), data.outgoing_w_.data(), filtered_ray_num * sizeof(float));
+  } else {
+    // Slow path: filter present — must call FilterRay per ray (chain walk through rays buffer).
+    for (size_t i : data.outgoing_indices_) {
+      const auto& r = data.rays_[i];
+      if (!FilterRay(data.rays_, i, filters_, crystals)) {
+        continue;
+      }
+      std::memcpy(d_buf_.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
+      w_buf_[filtered_ray_num] = r.w_;
+      filtered_ray_num++;
     }
-
-    // Do rendering
-    std::memcpy(d_buf_.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
-    w_buf_[filtered_ray_num] = r.w_;
-    filtered_ray_num++;
   }
   auto t1 = std::chrono::steady_clock::now();
 
