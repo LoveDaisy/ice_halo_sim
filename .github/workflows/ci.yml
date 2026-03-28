@@ -2,7 +2,6 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 concurrency:
@@ -77,7 +76,6 @@ jobs:
           -DBUILD_TEST=ON
           -DBUILD_GUI=${{ matrix.build_gui }}
           -DLUMICE_NATIVE_ARCH=OFF
-          -DLUMICE_CONSOLE_GUI=ON
           ${{ env.LUMICE_PYTHON_ARGS }}
 
       - name: Build
@@ -117,9 +115,10 @@ jobs:
             build/Release/bin/LumiceGUI.exe
             build/Release/bin/Lumice.exe
             build/Release/lib/lumice.lib
-          retention-days: 3
+          retention-days: 7
 
   e2e-test:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     needs: build
     steps:

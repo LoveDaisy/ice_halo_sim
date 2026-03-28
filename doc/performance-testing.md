@@ -13,6 +13,7 @@ Both CLI benchmark and GUI perf test support log level options.
 | Level | Purpose | Overhead | Extra output |
 |-------|---------|----------|-------------|
 | **info** (default) | Accurate throughput numbers | Negligible | PERF summary + Consume profile |
+| **verbose** | GUI/Poller cycle details | Low (~2-5%) | Per-cycle staging, upload, quality gate decisions |
 | **debug** | Consume per-batch breakdown | macOS ~8%, **Windows ~54-62%** | ConsumeData per-batch lock/consume timing |
 
 **Important**: Windows debug logging overhead is significant (2-3x throughput drop).
@@ -100,6 +101,20 @@ Two scenarios:
 - **slider_drag**: 5 seconds of alternating parameter changes — measures rays/sec + upload ratio +
   first_upload delay + per-upload rays CV
 
+### Diagnostic Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--visible` | off | Show the GLFW window (for display/DWM testing) |
+| `--vsync` | off | Enable VSync (implies `--visible`) |
+| `--frame-limit` | on | Apply 16ms sleep-based frame rate limit |
+| `--no-frame-limit` | — | Disable frame rate limit for raw throughput |
+| `--main-loop-commit` | off | Call `CommitConfig` in the main loop (faithful to real app) |
+| `--log-panel` | off | Show the log panel during test |
+| `--dorun-delay <ms>` | 0 | Add artificial delay to `DoRun` (simulate slow environment) |
+| `--skip-calibration` | off | Skip startup quality threshold calibration |
+| `--perf-bench` | off | Run `--perf-bench` mode: standalone throughput measurement |
+
 ### macOS
 
 ```bash
@@ -160,15 +175,41 @@ Reflects real user experience. Requires a display environment with a visible win
 5. Enable file logging (GUI Log panel → Enable File Log)
 6. Analyze the log file with the analysis script
 
-### Comparison with GUI Perf Test
+### Automated --perf-bench Mode
 
-| Condition | GUI Perf Test | Manual Test |
-|-----------|--------------|-------------|
-| Window | hidden (`GLFW_VISIBLE=FALSE`) | visible |
-| VSync | off (`swapInterval(0)`) | on (system default) |
-| Input | automated (fixed-frequency param changes) | manual (slider drag) |
-| Reproducibility | high | low (human variance) |
-| Reflects real UX | no | yes |
+The `--perf-bench` flag provides a standalone throughput measurement that runs for a
+fixed duration and reports average rays/sec. Useful for apples-to-apples comparisons
+between builds or platforms without GUI interaction.
+
+```bash
+# macOS
+./build/cmake_install/LumiceGUI --perf-bench
+
+# Windows (via remote watcher, see doc/windows-remote-testing.md)
+./scripts/win_remote_test.sh ./LumiceGUI.exe --perf-bench
+```
+
+### Remote Windows Testing
+
+For Windows testing without physical access, use the watcher-based remote workflow.
+See [Windows Remote Testing Guide](windows-remote-testing.md) for setup instructions.
+
+```bash
+# Run GUI perf test on Windows with VSync
+./scripts/win_remote_test.sh /tmp/ci-win/bin/LumiceGUITests.exe \
+  --filter perf_test --vsync --log-level verbose
+```
+
+### Comparison
+
+| Condition | GUI Perf Test | Manual Test | --perf-bench |
+|-----------|--------------|-------------|--------------|
+| Window | hidden (default) / visible (`--visible`) | visible | visible |
+| VSync | off (default) / on (`--vsync`) | on (system default) | on (system default) |
+| Frame limit | on (default) / off (`--no-frame-limit`) | on | on |
+| Input | automated (ImGui Test Engine) | manual (slider drag) | none (steady-state only) |
+| Reproducibility | high | low (human variance) | high |
+| Reflects real UX | partially (with `--visible --vsync`) | yes | partially |
 
 ## 4. Log Analysis Script
 
