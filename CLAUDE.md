@@ -90,6 +90,45 @@ GUI 截图测试的参考图片位于 `test/gui/references/`。更新流程：
 
 参考图片仅在 macOS + Apple Silicon 上生成，PSNR 阈值 40 dB。
 
+## 性能测试
+
+详细指南见 `doc/performance-testing.md`（中文版 `_zh.md`）。
+
+三个层次：
+1. **CLI 基准测试**：`./build/cmake_install/Lumice -f examples/bench_config.json -o /tmp`
+2. **GUI 自动化测试**：`./build/Release/bin/LumiceGUITests --filter perf_test`（隐藏窗口，ImGui Test Engine 驱动）
+3. **手动/远程测试**：`--perf-bench` 或 watcher 远程执行（真实显示器+VSync）
+
+GUI 测试常用诊断标志：`--visible`、`--vsync`、`--no-frame-limit`、`--log-level verbose`
+
+日志分析：`python scripts/analyze_perf_log.py <log-file>`
+
+## Windows 远程测试
+
+详细指南见 `doc/windows-remote-testing.md`（中文版 `_zh.md`）。
+
+通过 watcher 在 Windows 物理桌面会话中执行测试（真实 VSync/DWM）：
+
+```bash
+# 远程运行 GUI 性能测试
+./scripts/win_remote_test.sh /tmp/ci-win/bin/LumiceGUITests.exe \
+  --filter perf_test --vsync --log-level verbose
+```
+
+前提：Windows 机器上运行 `scripts/win_test_watcher.ps1`，SSH 通过 `win-builder` 访问。
+
+## 日志级别
+
+项目定义了自定义 VERBOSE 级别（介于 DEBUG 和 INFO 之间），用于性能诊断：
+
+| 级别 | 用途 |
+|------|------|
+| INFO | 默认，精确吞吐量数据 |
+| VERBOSE | GUI/Poller 周期细节（staging、upload、质量门控） |
+| DEBUG | Consume 每批次分解（Windows 开销大，~54-62%） |
+
+CLI: `-v` 或 `--log-level verbose`；C API: `LUMICE_LOG_VERBOSE`
+
 ## 排查偶现问题的规范
 
 排查偶现/间歇性 bug（如 GUI 闪烁、黑屏、竞态条件）时，必须遵循以下步骤：
@@ -106,3 +145,5 @@ GUI 截图测试的参考图片位于 `test/gui/references/`。更新流程：
 - `*.jpg` 已在 `.gitignore`，`test/e2e/references/*.jpg` 通过 `!` 规则排除
 - `scratchpad/` 已在 `.gitignore`，仅本地任务管理用
 - **禁止使用 `git add -f` 强制追踪被 `.gitignore` 忽略的文件**。`.gitignore` 中忽略的文件都是有理由的, 遇到不确定的情况, 先询问用户
+- CI 对所有分支 push 触发 build+unit test；E2E 测试仅在 PR 和 main 上运行
+- `win_stdout.txt`、`win_stderr.txt` 已在 `.gitignore`（远程测试输出文件）
