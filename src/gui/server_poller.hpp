@@ -24,6 +24,7 @@ struct PollerData {
   float intensity_factor = 1.0f;
   int effective_pixels = 0;
   bool has_new_texture = false;
+  unsigned long texture_ray_count = 0;  // Ray count at the time texture data was captured (not global stats)
 };
 
 // Polls the LUMICE server on a background thread (every kPollIntervalMs) and stages
@@ -57,6 +58,10 @@ class ServerPoller {
   // Uses try_lock so it never blocks the main thread.
   bool TrySyncData(PollerData& out);
 
+  // Set calibrated quality gate threshold (called once at startup after calibration run).
+  // Thread-safe: only called from main thread before any Start().
+  void SetCalibratedThreshold(unsigned long threshold);
+
  private:
   enum class State { kPaused, kRunning, kTerminating };
 
@@ -74,6 +79,11 @@ class ServerPoller {
   std::mutex data_mutex_;
   PollerData staged_;
   uint64_t last_generation_{ 0 };  // Tracks snapshot generation to detect new data
+
+  // Adaptive quality gate: calibrated threshold set once at startup via SetCalibratedThreshold().
+  // If not set (calibrated_ == false), falls back to gui::kMinRaysFloor.
+  bool calibrated_{ false };
+  unsigned long calibrated_min_rays_{ 0 };
 };
 
 }  // namespace lumice::gui

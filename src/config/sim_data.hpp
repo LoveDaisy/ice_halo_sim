@@ -47,6 +47,15 @@ struct SimData {
   uint64_t generation_ = 0;
   RayBuffer rays_;
   std::vector<Crystal> crystals_;
+  std::vector<size_t> outgoing_indices_;  // Indices of kOutgoing rays in rays_ (filled by Simulator)
+
+  // Pre-packed outgoing ray data for cache-friendly access in Consume().
+  // Tightly packed by outgoing order: outgoing_d_[k*3..k*3+2] and outgoing_w_[k]
+  // correspond to outgoing_indices_[k]. Filled by Simulator alongside outgoing_indices_.
+  std::vector<float> outgoing_d_;  // direction (3 floats per outgoing ray)
+  std::vector<float> outgoing_w_;  // weight (1 float per outgoing ray)
+
+  size_t root_ray_count_ = 0;  // Count of root rays (prev_ray_idx_ == kInfSize)
 };
 
 using SimDataPtrS = std::shared_ptr<SimData>;

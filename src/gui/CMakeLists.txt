@@ -38,7 +38,8 @@ if(WIN32)
       lumice
       glfw
       nfd
-      glad_gl)
+      glad_gl
+      winmm)
   # ImGui auto-detects GLAD2 via __has_include(<glad/gl.h>) — no loader definition needed.
 else()
   target_link_libraries(lumice_gui_obj PUBLIC
@@ -78,7 +79,11 @@ if(WIN32)
       @ONLY)
   target_sources(LumiceGUI PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/lumice.rc")
 
-  set_target_properties(LumiceGUI PROPERTIES WIN32_EXECUTABLE TRUE)
+  # WIN32_EXECUTABLE can be disabled via LUMICE_CONSOLE_GUI for diagnostics.
+  # WIN32 subsystem hides the console window but may affect thread scheduling.
+  if(NOT LUMICE_CONSOLE_GUI)
+    set_target_properties(LumiceGUI PROPERTIES WIN32_EXECUTABLE TRUE)
+  endif()
 endif()
 
 # macOS: .app bundle with icon and Info.plist

@@ -38,3 +38,7 @@ test.json
 
 __pycache__/
 *.pyc
+
+# Windows remote test output
+win_stdout.txt
+win_stderr.txt

@@ -95,6 +95,12 @@ void ServerPoller::EnsureRunning(LUMICE_Server* server) {
   GUI_LOG_DEBUG("[Poller] EnsureRunning: resumed from paused");
 }
 
+void ServerPoller::SetCalibratedThreshold(unsigned long threshold) {
+  calibrated_min_rays_ = threshold;
+  calibrated_ = true;
+  GUI_LOG_INFO("[Poller] calibration set: threshold={}", threshold);
+}
+
 bool ServerPoller::TrySyncData(PollerData& out) {
   std::unique_lock<std::mutex> lock(data_mutex_, std::try_to_lock);
   if (!lock.owns_lock()) {
@@ -149,34 +155,46 @@ void ServerPoller::PollOnce() {
   bool has_new_snapshot =
       xyz_results[0].xyz_buffer != nullptr && xyz_results[0].snapshot_generation != last_generation_;
 
-  // Stage all results under lock. No hold filtering here — the main thread (SyncFromPoller)
-  // decides whether to upload based on time-since-restart. This ensures last_generation_ is
-  // only updated when data is actually staged, avoiding the "consumed but not staged" gap.
+  // Stage results under lock. Quality gate: only overwrite texture data when the snapshot
+  // has enough rays to avoid visible flicker. Stats and server_state are always updated.
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
     staged_.valid = true;
     staged_.server_state = server_state;
     if (has_new_snapshot) {
-      size_t float_count = static_cast<size_t>(xyz_results[0].img_width) * xyz_results[0].img_height * 3;
-      staged_.xyz_data.resize(float_count);
-      std::memcpy(staged_.xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
-      staged_.texture_width = xyz_results[0].img_width;
-      staged_.texture_height = xyz_results[0].img_height;
-      staged_.snapshot_intensity = xyz_results[0].snapshot_intensity;
-      staged_.intensity_factor = xyz_results[0].intensity_factor;
-      staged_.effective_pixels = xyz_results[0].effective_pixels;
-      staged_.has_new_texture = true;
+      // Always consume this generation (same generation data won't improve by waiting)
       last_generation_ = xyz_results[0].snapshot_generation;
 
-      // Get stats from lightweight cached API (updated by GetRawXyzResults above)
+      // Get stats (always update — stats are used independently for status bar display)
       LUMICE_StatsResult cached_stats{};
       LUMICE_GetCachedStats(server, &cached_stats);
       if (cached_stats.sim_ray_num > 0) {
         staged_.stats_ray_seg_num = cached_stats.ray_seg_num;
         staged_.stats_sim_ray_num = cached_stats.sim_ray_num;
       }
-      GUI_LOG_DEBUG("[Poller] staged: rays={} intensity={} gen={}", cached_stats.sim_ray_num,
-                    xyz_results[0].snapshot_intensity, xyz_results[0].snapshot_generation);
+
+      // Quality gate: skip texture overwrite for sparse snapshots (too few rays = visible flicker).
+      // Cold start (sim_ray_num == 0) is allowed through — no "old good texture" to preserve.
+      unsigned long min_rays = calibrated_ ? calibrated_min_rays_ : gui::kMinRaysFloor;
+      bool quality_ok = cached_stats.sim_ray_num == 0 || cached_stats.sim_ray_num >= min_rays;
+
+      if (quality_ok) {
+        size_t float_count = static_cast<size_t>(xyz_results[0].img_width) * xyz_results[0].img_height * 3;
+        staged_.xyz_data.resize(float_count);
+        std::memcpy(staged_.xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
+        staged_.texture_width = xyz_results[0].img_width;
+        staged_.texture_height = xyz_results[0].img_height;
+        staged_.snapshot_intensity = xyz_results[0].snapshot_intensity;
+        staged_.intensity_factor = xyz_results[0].intensity_factor;
+        staged_.effective_pixels = xyz_results[0].effective_pixels;
+        staged_.has_new_texture = true;
+        staged_.texture_ray_count = cached_stats.sim_ray_num;
+        GUI_LOG_VERBOSE("[Poller] staged: rays={} intensity={} gen={}", cached_stats.sim_ray_num,
+                        xyz_results[0].snapshot_intensity, xyz_results[0].snapshot_generation);
+      } else {
+        GUI_LOG_VERBOSE("[Poller] quality gate: skipped rays={} (min={}) gen={}", cached_stats.sim_ray_num, min_rays,
+                        xyz_results[0].snapshot_generation);
+      }
     }
   }
 

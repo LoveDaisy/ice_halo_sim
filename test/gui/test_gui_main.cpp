@@ -1,11 +1,19 @@
 #include <GLFW/glfw3.h>
 #include <stb_image.h>
 
+// clang-format off
+#ifdef _WIN32
+#include <windows.h>  // Must precede timeapi.h (provides UINT, DWORD, etc.)
+#include <timeapi.h>
+#endif
+// clang-format on
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <string>
 
@@ -15,6 +23,7 @@
 #include "gui/app.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gl_init.h"
+#include "gui/gui_logger.hpp"
 #include "gui/panels.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -87,6 +96,19 @@ struct BgOverlayTestState {
   }
 };
 static BgOverlayTestState g_bg_test;
+static int g_core_log_level = LUMICE_LOG_INFO;
+static int g_gui_log_level = LUMICE_LOG_INFO;
+static bool g_enable_visible = false;           // --visible: show window (enables DWM compositing path)
+static bool g_enable_vsync = false;             // --vsync: enable VSync (implies --visible)
+static bool g_enable_frame_limit = true;        // Default on: matches real app's kTargetFrameTimeMs fallback.
+                                                // Use --no-frame-limit to disable for raw throughput comparison.
+static bool g_enable_main_loop_commit = false;  // --main-loop-commit: DoRun on main thread (matches real app)
+static bool g_enable_log_panel = false;         // --log-panel: render LogPanel in main loop (matches real app)
+static int g_dorun_delay_ms = 0;                // --dorun-delay N: inject sleep after DoRun to simulate environment lag
+
+// Shared counters for main-loop-commit mode (written by main thread, read by test thread after measurement)
+static int g_main_loop_restart_count = 0;
+static unsigned long g_main_loop_cumulative_rays = 0;
 
 // Reset all global state for test isolation
 static void ResetTestState() {
@@ -1460,6 +1482,8 @@ static const char* CreatePerfConfig() {
 static void StartPerfSimulation() {
   gui::g_server = LUMICE_CreateServer();
   LUMICE_InitLogger(gui::g_server);
+  LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
+  gui::SetGuiLogLevel(static_cast<spdlog::level::level_enum>(g_gui_log_level));
 
   // Set up g_state to match perf config, then use DoRun() so the server's
   // config_manager_ is populated from the same SerializeCoreConfig path.
@@ -1471,8 +1495,8 @@ static void StartPerfSimulation() {
   gui::g_state.sim.max_hits = 8;
   if (!gui::g_state.renderers.empty()) {
     auto& r = gui::g_state.renderers[0];
-    r.lens_type = 7;  // Rectangular
-    r.fov = 180.0f;
+    r.lens_type = 1;  // Fisheye Equal Area (matches typical manual testing)
+    r.fov = 360.0f;
     r.sim_resolution_index = 0;  // 512 → Core resolution [1024, 512], matching CreatePerfConfig
     r.visible = 2;               // Full
     r.background[0] = r.background[1] = r.background[2] = 0.0f;
@@ -1614,8 +1638,10 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       auto last_upload_time = start_time;
       std::vector<double> texture_intervals_ms;
 
+      int frame_count = 0;
       while (std::chrono::steady_clock::now() < end_time) {
         ctx->Yield();
+        frame_count++;
         // Detect new texture upload
         if (gui::g_state.texture_upload_count != last_upload_count) {
           auto now = std::chrono::steady_clock::now();
@@ -1629,6 +1655,8 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       unsigned long end_rays = gui::g_state.stats_sim_ray_num;
       double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
 
+      fprintf(stderr, "[PERF] steady_state: %d frames in %.1fs (%.1f main_loop_FPS)\n", frame_count, elapsed,
+              frame_count / elapsed);
       ReportPerf("steady_state", start_rays, end_rays, elapsed);
       double rays_per_sec = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
       IM_CHECK_GT(rays_per_sec, 0.0);
@@ -1674,9 +1702,14 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         }
       }
 
-      // Measure: alternate crystal height between 0.8 and 1.2 over 5 seconds.
-      // Each change triggers a full Stop/Start restart via DoRun().
-      // Track cumulative rays across restarts via direct C API (not SyncFromPoller which has delay).
+      // Reset main-loop-commit counters for this measurement window
+      g_main_loop_cumulative_rays = 0;
+      g_main_loop_restart_count = 0;
+
+      // Measure: sweep sun altitude over 5 seconds, matching real manual slider drag.
+      // Each frame: update altitude (continuous sweep) + set dirty.
+      // When --main-loop-commit: DoRun fires on main thread (same as real app).
+      // Otherwise: DoRun fires here on test thread (original behavior).
       auto start_time = std::chrono::steady_clock::now();
       auto end_time = start_time + std::chrono::seconds(5);
       auto last_commit = start_time;
@@ -1686,7 +1719,10 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       auto upload_before = gui::g_state.texture_upload_count;
       std::vector<unsigned long> per_restart_rays;  // Ray count per restart cycle
       std::vector<unsigned long> per_upload_rays;   // Ray count at each texture upload (measures flicker)
+      std::vector<double> first_upload_ms;          // Commit → first upload delay per restart (responsiveness)
       auto last_upload_count = upload_before;       // Independent tracker for upload detection
+      auto last_dorun_time = start_time;            // Timestamp of most recent DoRun
+      bool waiting_first_upload = false;            // True between DoRun and first upload
 
       auto read_server_rays = [&]() -> unsigned long {
         if (!gui::g_server) {
@@ -1697,41 +1733,65 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         return stats[0].sim_ray_num;
       };
 
+      // Sweep sun altitude between 10° and 30° (typical manual drag range)
+      constexpr float kAltMin = 10.0f;
+      constexpr float kAltMax = 30.0f;
+
       while (std::chrono::steady_clock::now() < end_time) {
-        if (!gui::g_state.crystals.empty()) {
-          gui::g_state.crystals[0].height = (iteration % 2 == 0) ? 0.8f : 1.2f;
-        }
+        // Continuous triangle wave: sweep up then down, matching smooth slider drag
+        double elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+        double phase = std::fmod(elapsed_sec, 2.0);  // 2s period (1s up + 1s down)
+        float t = (phase < 1.0) ? static_cast<float>(phase) : static_cast<float>(2.0 - phase);
+        gui::g_state.sun.altitude = kAltMin + t * (kAltMax - kAltMin);
         gui::g_state.dirty = true;
         iteration++;
 
-        // Yield a few frames then check commit. Yield count is small (2 frames)
-        // so the commit check runs frequently, letting kCommitIntervalMs control
-        // the actual commit rate rather than the yield loop duration.
-        for (int i = 0; i < 2; i++) {
-          ctx->Yield();
-          // Track per-upload ray counts (measures what the user actually sees on screen)
-          if (gui::g_state.texture_upload_count != last_upload_count) {
-            per_upload_rays.push_back(gui::g_state.stats_sim_ray_num);
-            last_upload_count = gui::g_state.texture_upload_count;
+        // One yield per iteration = one frame, matching real app's per-frame commit check
+        ctx->Yield();
+
+        // Track per-upload ray counts
+        if (gui::g_state.texture_upload_count != last_upload_count) {
+          per_upload_rays.push_back(gui::g_state.stats_sim_ray_num);
+          if (waiting_first_upload) {
+            auto delay = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - last_dorun_time);
+            first_upload_ms.push_back(delay.count());
+            waiting_first_upload = false;
           }
+          last_upload_count = gui::g_state.texture_upload_count;
         }
 
-        // Throttled commit: same logic as main.cpp auto-commit.
-        auto now = std::chrono::steady_clock::now();
-        auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
-        if (commit_elapsed >= gui::kCommitIntervalMs) {
-          auto rays_this_cycle = read_server_rays();
-          per_restart_rays.push_back(rays_this_cycle);
-          cumulative_rays += rays_this_cycle;
-          gui::g_state.dirty = false;
-          gui::DoRun();
-          last_commit = now;
-          restart_count++;
+        // Throttled commit: when --main-loop-commit, the main loop handles DoRun on the main thread
+        // (matching real app behavior). Otherwise, DoRun fires here on the test thread.
+        if (!g_enable_main_loop_commit) {
+          auto now = std::chrono::steady_clock::now();
+          auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
+          if (commit_elapsed >= gui::kCommitIntervalMs) {
+            auto rays_this_cycle = read_server_rays();
+            per_restart_rays.push_back(rays_this_cycle);
+            cumulative_rays += rays_this_cycle;
+            gui::g_state.dirty = false;
+            gui::DoRun();
+            if (g_dorun_delay_ms > 0) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(g_dorun_delay_ms));
+            }
+            last_commit = now;
+            last_dorun_time = now;
+            waiting_first_upload = true;
+            restart_count++;
+          }
         }
       }
-      auto final_rays = read_server_rays();
-      per_restart_rays.push_back(final_rays);
-      cumulative_rays += final_rays;
+
+      if (g_enable_main_loop_commit) {
+        // Main loop tracked rays and restarts; read final cycle and combine
+        auto final_rays = read_server_rays();
+        cumulative_rays = g_main_loop_cumulative_rays + final_rays;
+        restart_count = g_main_loop_restart_count;
+      } else {
+        auto final_rays = read_server_rays();
+        per_restart_rays.push_back(final_rays);
+        cumulative_rays += final_rays;
+      }
 
       double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
 
@@ -1745,6 +1805,23 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       double upload_ratio = restart_count > 0 ? static_cast<double>(texture_uploads) / restart_count : 0;
       fprintf(stderr, "[PERF] slider_drag: %lu texture uploads / %d restarts (ratio: %.2f)\n", texture_uploads,
               restart_count, upload_ratio);
+
+      // Report commit → first upload delay (responsiveness)
+      if (!first_upload_ms.empty()) {
+        std::sort(first_upload_ms.begin(), first_upload_ms.end());
+        double fsum = 0;
+        for (auto v : first_upload_ms) {
+          fsum += v;
+        }
+        double favg = fsum / first_upload_ms.size();
+        double fmedian = first_upload_ms[first_upload_ms.size() / 2];
+        double fmin = first_upload_ms.front();
+        double fmax = first_upload_ms.back();
+        int n_miss = restart_count - static_cast<int>(first_upload_ms.size());
+        fprintf(stderr,
+                "[PERF] slider_drag: first_upload avg=%.0fms median=%.0fms min=%.0fms max=%.0fms (n=%zu, %d missed)\n",
+                favg, fmedian, fmin, fmax, first_upload_ms.size(), n_miss);
+      }
 
       // Report per-restart ray count distribution
       if (!per_restart_rays.empty()) {
@@ -1797,7 +1874,60 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
   }
 }
 
-int main(int /*argc*/, char** /*argv*/) {
+int main(int argc, char** argv) {
+  // Parse CLI arguments
+  const char* test_filter = nullptr;
+  int core_log_level = LUMICE_LOG_INFO;  // Default: INFO
+  int gui_log_level = LUMICE_LOG_INFO;
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--filter") == 0 && i + 1 < argc) {
+      test_filter = argv[++i];
+    } else if (strcmp(argv[i], "--visible") == 0) {
+      g_enable_visible = true;
+    } else if (strcmp(argv[i], "--vsync") == 0) {
+      g_enable_vsync = true;
+      g_enable_visible = true;  // VSync requires visible window
+    } else if (strcmp(argv[i], "--frame-limit") == 0) {
+      g_enable_frame_limit = true;
+    } else if (strcmp(argv[i], "--no-frame-limit") == 0) {
+      g_enable_frame_limit = false;
+    } else if (strcmp(argv[i], "--main-loop-commit") == 0) {
+      g_enable_main_loop_commit = true;
+    } else if (strcmp(argv[i], "--log-panel") == 0) {
+      g_enable_log_panel = true;
+    } else if (strcmp(argv[i], "--dorun-delay") == 0 && i + 1 < argc) {
+      g_dorun_delay_ms = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
+      // Set both core and GUI log level: trace/debug/info/warning/error/off
+      const char* level = argv[++i];
+      int lvl = LUMICE_LOG_INFO;
+      if (strcmp(level, "trace") == 0)
+        lvl = LUMICE_LOG_TRACE;
+      else if (strcmp(level, "debug") == 0)
+        lvl = LUMICE_LOG_DEBUG;
+      else if (strcmp(level, "verbose") == 0)
+        lvl = LUMICE_LOG_VERBOSE;
+      else if (strcmp(level, "info") == 0)
+        lvl = LUMICE_LOG_INFO;
+      else if (strcmp(level, "warning") == 0)
+        lvl = LUMICE_LOG_WARNING;
+      else if (strcmp(level, "error") == 0)
+        lvl = LUMICE_LOG_ERROR;
+      else if (strcmp(level, "off") == 0)
+        lvl = LUMICE_LOG_OFF;
+      core_log_level = lvl;
+      gui_log_level = lvl;
+    }
+  }
+  g_core_log_level = core_log_level;
+  g_gui_log_level = gui_log_level;
+
+#ifdef _WIN32
+  // Match real app's timer resolution (main.cpp:40).
+  // Without this, cv_.wait_for() rounds up to 15.6ms ticks.
+  timeBeginPeriod(1);
+#endif
+
   // GLFW init
   glfwSetErrorCallback(gui::GlfwErrorCallback);
   if (!glfwInit()) {
@@ -1811,7 +1941,9 @@ int main(int /*argc*/, char** /*argv*/) {
 #ifdef __APPLE__
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
-  glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);  // Hidden window mode
+  if (!g_enable_visible) {
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);  // Hidden window mode
+  }
 
   GLFWwindow* window =
       glfwCreateWindow(gui::kInitWindowWidth, gui::kInitWindowHeight, "LumiceGUITests", nullptr, nullptr);
@@ -1823,7 +1955,17 @@ int main(int /*argc*/, char** /*argv*/) {
 
   glfwSetWindowSizeCallback(window, gui::WindowSizeCallback);
   glfwMakeContextCurrent(window);
-  glfwSwapInterval(0);  // No VSync for tests
+  glfwSwapInterval(g_enable_vsync ? 1 : 0);
+  if (g_enable_visible) {
+    fprintf(stderr, "[DIAG] Visible window mode enabled\n");
+  }
+  if (g_enable_vsync) {
+    fprintf(stderr, "[DIAG] VSync mode enabled: swapInterval(1)\n");
+  }
+  if (g_enable_frame_limit) {
+    fprintf(stderr, "[DIAG] Frame limit mode enabled: %dms target frame time (simulates VSync)\n",
+            gui::kTargetFrameTimeMs);
+  }
 
   if (!gui::InitGLLoader()) {
     glfwDestroyWindow(window);
@@ -1855,6 +1997,28 @@ int main(int /*argc*/, char** /*argv*/) {
   }
   gui::ResetCrystalView();
 
+  // Initialize ImGui log sink for --log-panel and set up core log callback.
+  // Matches real app's main.cpp log initialization so RenderLogPanel has data to render.
+  if (g_enable_log_panel) {
+    gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
+    LUMICE_SetLogCallback([](LUMICE_LogLevel level, const char* /*name*/, const char* message) {
+      if (gui::g_imgui_log_sink) {
+        auto spd_level = static_cast<spdlog::level::level_enum>(level);
+        gui::g_imgui_log_sink->ReceiveExternal(spd_level, message);
+      }
+    });
+    fprintf(stderr, "[DIAG] Log panel enabled with ImGui sink\n");
+  }
+
+  if (g_dorun_delay_ms > 0) {
+    fprintf(stderr, "[DIAG] DoRun delay: %dms injected after each DoRun (simulates environment lag)\n",
+            g_dorun_delay_ms);
+  }
+
+  if (g_enable_main_loop_commit) {
+    fprintf(stderr, "[DIAG] Main-loop-commit enabled: DoRun on main thread (matches real app)\n");
+  }
+
   // Setup test engine
   ImGuiTestEngine* engine = ImGuiTestEngine_CreateContext();
   ImGuiTestEngineIO& test_io = ImGuiTestEngine_GetIO(engine);
@@ -1878,12 +2042,40 @@ int main(int /*argc*/, char** /*argv*/) {
   RegisterBgOverlayTests(engine);
   RegisterImportExportTests(engine);
   RegisterPerfTests(engine);
-  ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests);
+  ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete
   while (true) {
     glfwPollEvents();
     gui::SyncFromPoller();  // Sync server data for perf tests (no-op when g_server is null)
+
+    // Auto-commit on main thread (matches real app's main.cpp:214-228).
+    // When enabled, DoRun() blocks the main loop just like in the real app,
+    // so VSync frame budget effects are faithfully reproduced.
+    if (g_enable_main_loop_commit && gui::g_server) {
+      static auto last_commit = std::chrono::steady_clock::now();
+      if (gui::g_state.dirty) {
+        auto ss = gui::g_state.sim_state;
+        if (ss == gui::GuiState::SimState::kSimulating || ss == gui::GuiState::SimState::kDone) {
+          auto now = std::chrono::steady_clock::now();
+          auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
+          if (elapsed >= gui::kCommitIntervalMs) {
+            // Record rays from current cycle before restart
+            LUMICE_StatsResult stats[2]{};
+            LUMICE_GetStatsResults(gui::g_server, stats, 1);
+            g_main_loop_cumulative_rays += stats[0].sim_ray_num;
+            g_main_loop_restart_count++;
+
+            gui::g_state.dirty = false;
+            gui::DoRun();
+            if (g_dorun_delay_ms > 0) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(g_dorun_delay_ms));
+            }
+            last_commit = now;
+          }
+        }
+      }
+    }
 
     if (glfwWindowShouldClose(window)) {
       if (ImGuiTestEngine_TryAbortEngine(engine)) {
@@ -1907,6 +2099,9 @@ int main(int /*argc*/, char** /*argv*/) {
     gui::RenderLeftPanel(layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     gui::RenderFloatingLensBar(layout_width);
+    if (g_enable_log_panel) {
+      gui::RenderLogPanel(layout_width, layout_height);
+    }
     gui::RenderStatusBar(layout_width, layout_height);
     gui::RenderUnsavedPopup(window);
 
@@ -1919,10 +2114,27 @@ int main(int /*argc*/, char** /*argv*/) {
     glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
+    // Render preview shader before ImGui overlay (matches real app's main.cpp)
+    if (gui::g_preview_vp.active) {
+      gui::g_preview.Render(gui::g_preview_vp.vp_x, gui::g_preview_vp.vp_y, gui::g_preview_vp.vp_w,
+                            gui::g_preview_vp.vp_h, gui::g_preview_vp.params);
+    }
+
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     glfwSwapBuffers(window);
 
     ImGuiTestEngine_PostSwap(engine);
+
+    // Fallback frame rate limit (same as main.cpp) — simulates VSync timing without needing a real display
+    if (g_enable_frame_limit) {
+      static auto frame_start = std::chrono::steady_clock::now();
+      auto frame_end = std::chrono::steady_clock::now();
+      auto frame_ms = std::chrono::duration_cast<std::chrono::milliseconds>(frame_end - frame_start).count();
+      if (frame_ms < gui::kTargetFrameTimeMs) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(gui::kTargetFrameTimeMs - frame_ms));
+      }
+      frame_start = std::chrono::steady_clock::now();
+    }
 
     // Exit when all tests are done
     if (!ImGuiTestEngine_IsTestQueueEmpty(engine)) {
@@ -1954,5 +2166,8 @@ int main(int /*argc*/, char** /*argv*/) {
   glfwDestroyWindow(window);
   glfwTerminate();
 
+#ifdef _WIN32
+  timeEndPeriod(1);
+#endif
   return (count_tested == count_success) ? 0 : 1;
 }

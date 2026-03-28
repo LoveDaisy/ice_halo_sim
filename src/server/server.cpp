@@ -27,6 +27,29 @@
 
 namespace lumice {
 
+// =============== TicketMutex ===============
+// A fair (FIFO) mutex that prevents starvation. On Windows, std::mutex uses SRWLOCK
+// which doesn't guarantee fairness — a high-frequency locker (ConsumeData) can starve
+// a low-frequency waiter (Poller) indefinitely. TicketMutex guarantees FIFO ordering:
+// each waiter gets a ticket and is served in order.
+class TicketMutex {
+ public:
+  void lock() {  // NOLINT(readability-identifier-naming) — C++ Lockable requires lowercase
+    auto ticket = next_ticket_.fetch_add(1, std::memory_order_relaxed);
+    while (now_serving_.load(std::memory_order_acquire) != ticket) {
+      std::this_thread::yield();
+    }
+  }
+
+  void unlock() {  // NOLINT(readability-identifier-naming)
+    now_serving_.fetch_add(1, std::memory_order_release);
+  }
+
+ private:
+  std::atomic<uint32_t> next_ticket_{ 0 };
+  std::atomic<uint32_t> now_serving_{ 0 };
+};
+
 // =============== ServerImpl ===============
 class ServerImpl {
  public:
@@ -64,10 +87,10 @@ class ServerImpl {
 
   std::vector<Simulator> simulators_;
   std::vector<ConsumerPtrS> consumers_;
-  mutable std::mutex consumer_mutex_;  // Lock ordering: consumer_mutex_ < snapshot_mutex_
-  mutable std::mutex snapshot_mutex_;  // Protects cached results
-  bool snapshot_dirty_{ false };       // Set by ConsumeData, cleared by DoSnapshot
-  bool has_ever_consumed_{ false };    // True after first ConsumeData; reset on Stop (new consumers have no data)
+  mutable TicketMutex consumer_mutex_;  // FIFO lock: prevents Poller starvation on Windows
+  mutable std::mutex snapshot_mutex_;   // Protects cached results
+  bool snapshot_dirty_{ false };        // Set by ConsumeData, cleared by DoSnapshot
+  bool has_ever_consumed_{ false };     // True after first ConsumeData; reset on Stop (new consumers have no data)
   uint64_t snapshot_generation_{
     0
   };  // Increments on each PrepareSnapshot; NOT reset on Stop (poller resets its own tracker)
@@ -93,6 +116,7 @@ class ServerImpl {
 
   std::atomic_bool work_started_{ false };
   std::atomic_bool scene_gen_active_{ false };  // True while GenerateScene is actively producing batches
+
   std::atomic_int sim_scene_cnt_;
   std::mutex scene_mutex_;
   std::condition_variable scene_cv_;
@@ -254,7 +278,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 
   auto rebuild_start = std::chrono::steady_clock::now();
   {
-    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    std::lock_guard<TicketMutex> lock(consumer_mutex_);
     if (can_reuse) {
       // Reuse path: reset accumulators + update appearance fields
       auto it = config_manager_.renderers_.begin();
@@ -308,7 +332,7 @@ void ServerImpl::DoSnapshot() {
   // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
   std::vector<ConsumerPtrS> snapshot_consumers;
   {
-    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    std::lock_guard<TicketMutex> lock(consumer_mutex_);
     if (!snapshot_dirty_) {
       return;
     }
@@ -317,6 +341,12 @@ void ServerImpl::DoSnapshot() {
     }
     snapshot_consumers = consumers_;  // shared_ptr copy keeps consumers alive
     snapshot_dirty_ = false;
+  }
+  // Phase 1.5: pixel counting outside consumer_mutex_ (snapshot_xyz_ is stable here).
+  for (const auto& c : snapshot_consumers) {
+    if (auto* rc = dynamic_cast<RenderConsumer*>(c.get())) {
+      rc->CountEffectivePixels();
+    }
   }
   // Phase 2: XYZ→RGB + cache results under snapshot_mutex_ (no consumer_mutex_).
   // Safe: snapshot_consumers holds shared_ptrs, objects won't be freed.
@@ -347,15 +377,13 @@ std::vector<RenderResult> ServerImpl::GetRenderResults() {
 }
 
 std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
-  // Only do Phase 1 (PrepareSnapshot memcpy), skip Phase 2 (PostSnapshot XYZ→RGB).
-  // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
+  // Phase 1: PrepareSnapshot under consumer_mutex_ (TicketMutex guarantees FIFO — no starvation).
   std::vector<ConsumerPtrS> snapshot_consumers;
   bool did_snapshot = false;
-  // Capture these under consumer_mutex_ to avoid reading them under a different lock (snapshot_mutex_).
   bool valid_data = false;
   uint64_t generation = 0;
   {
-    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    std::lock_guard<TicketMutex> lock(consumer_mutex_);
     if (snapshot_dirty_) {
       for (const auto& c : consumers_) {
         c->PrepareSnapshot();
@@ -366,7 +394,15 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
     }
     valid_data = has_ever_consumed_;
     generation = snapshot_generation_;
-    snapshot_consumers = consumers_;  // shared_ptr copy keeps consumers alive
+    snapshot_consumers = consumers_;
+  }
+  // Pixel counting outside consumer_mutex_ (snapshot_xyz_ is stable here).
+  if (did_snapshot) {
+    for (const auto& c : snapshot_consumers) {
+      if (auto* rc = dynamic_cast<RenderConsumer*>(c.get())) {
+        rc->CountEffectivePixels();
+      }
+    }
   }
   std::vector<RawXyzResult> results;
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
@@ -379,12 +415,10 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
       results.push_back(r);
     }
   }
-  // Update cached stats from StatsConsumer only (skip RenderConsumer to avoid triggering
-  // the heavy PostSnapshot XYZ→RGB conversion that the GPU path doesn't need).
   if (did_snapshot) {
     for (const auto& c : snapshot_consumers) {
       if (dynamic_cast<RenderConsumer*>(c.get()) != nullptr) {
-        continue;  // Skip: RenderConsumer::GetResult() calls PostSnapshot()
+        continue;
       }
       auto result = c->GetResult();
       if (auto* s = std::get_if<StatsResult>(&result)) {
@@ -470,7 +504,13 @@ void ServerImpl::Stop() {
   auto t1 = std::chrono::steady_clock::now();
 
   {
-    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    std::lock_guard<TicketMutex> lock(consumer_mutex_);
+    // Log profiling stats before clearing
+    for (auto& c : consumers_) {
+      if (auto* rc = dynamic_cast<RenderConsumer*>(c.get())) {
+        rc->LogConsumeProfile();
+      }
+    }
     // Don't clear consumers_ here — CommitConfig decides whether to rebuild or reuse.
     // Consumers are destroyed either by CommitConfig (rebuild path) or ~ServerImpl().
     snapshot_dirty_ = false;
@@ -534,6 +574,7 @@ bool ServerImpl::IsIdle() {
   }
 
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void ServerImpl::ConsumeData() {
   ILOG_DEBUG(logger_, "ConsumeData: entry");
   bool first_consume_logged = false;
@@ -554,12 +595,19 @@ void ServerImpl::ConsumeData() {
         ILOG_DEBUG(logger_, "ConsumeData: discarding batch (generation {} != {})", sim_data.generation_,
                    scene_generation_.load());
       } else {
-        std::lock_guard<std::mutex> lock(consumer_mutex_);
+        auto t_lock0 = std::chrono::steady_clock::now();
+        std::lock_guard<TicketMutex> lock(consumer_mutex_);
+        auto t_lock1 = std::chrono::steady_clock::now();
         for (auto& c : consumers_) {
           c->Consume(sim_data);
         }
+        auto t_consume = std::chrono::steady_clock::now();
         snapshot_dirty_ = true;
         has_ever_consumed_ = true;
+        auto lock_us = std::chrono::duration<double, std::micro>(t_lock1 - t_lock0).count();
+        auto consume_us = std::chrono::duration<double, std::micro>(t_consume - t_lock1).count();
+        ILOG_DEBUG(logger_, "ConsumeData: batch rays={} outgoing={} lock={:.0f}us consume={:.0f}us",
+                   sim_data.rays_.size_, sim_data.outgoing_indices_.size(), lock_us, consume_us);
         if (!first_consume_logged) {
           ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
           first_consume_logged = true;
@@ -570,6 +618,7 @@ void ServerImpl::ConsumeData() {
     if (sim_scene_cnt_ < kMaxSceneCnt / 2) {
       scene_cv_.notify_one();
     }
+
     CHECK_STOP
   }
   ILOG_DEBUG(logger_, "ConsumeData exit");

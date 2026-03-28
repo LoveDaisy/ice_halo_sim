@@ -3,6 +3,7 @@
 #include <spdlog/spdlog.h>
 
 #ifdef _WIN32
+#include <timeapi.h>
 #include <windows.h>
 #endif
 
@@ -33,6 +34,10 @@ int main(int argc, char** argv) {
     freopen("CONOUT$", "w", stdout);
     freopen("CONOUT$", "w", stderr);
   }
+  // Raise timer resolution from 15.6ms to ~1ms so that cv_.wait_for() and Sleep()
+  // are precise enough for our 20ms poll interval. Without this, SleepConditionVariableSRW
+  // rounds up to 3 timer ticks (~47ms), causing a timing race with the 50ms commit interval.
+  timeBeginPeriod(1);
 #endif
 
   glfwSetErrorCallback(gui::GlfwErrorCallback);
@@ -80,6 +85,18 @@ int main(int argc, char** argv) {
 
   gui::g_state = gui::InitDefaultState();
 
+  // Parse diagnostic flags early (before the CLI block that needs them)
+  bool skip_calibration = false;
+  bool perf_bench = false;
+  for (int i = 1; i < argc; ++i) {
+    if (std::string_view(argv[i]) == "--skip-calibration") {
+      skip_calibration = true;
+    } else if (std::string_view(argv[i]) == "--perf-bench") {
+      perf_bench = true;
+      skip_calibration = true;  // bench mode skips calibration too
+    }
+  }
+
   // Create Lumice server and initialize Core logger.
   gui::g_server = LUMICE_CreateServer();
   LUMICE_InitLogger(gui::g_server);
@@ -89,7 +106,6 @@ int main(int argc, char** argv) {
   {
     // ImGui ring buffer sink (shared between GUI logger and Core callback)
     gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
-    gui::g_imgui_log_sink->set_pattern(gui::kGuiLogPattern);
 
     // File sink (default level=off, enabled via GUI checkbox)
     std::filesystem::path log_path;
@@ -101,16 +117,16 @@ int main(int argc, char** argv) {
     log_path = std::filesystem::absolute(log_path);
     gui::g_log_file_path = log_path.u8string();
     gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path.string(), true);
-    gui::g_file_log_sink->set_pattern(gui::kGuiLogPattern);
     gui::g_file_log_sink->set_level(spdlog::level::off);
 
-    // Set GUI logger sinks: stdout + ImGui + file
+    // Set GUI logger sinks: stdout + ImGui + file, then apply our custom formatter to all.
     auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    stdout_sink->set_pattern(gui::kGuiLogPattern);
     gui::SetGuiLoggerSinks({ stdout_sink, gui::g_imgui_log_sink, gui::g_file_log_sink });
+    gui::GetGuiLogger().set_formatter(lumice::CreateLumiceFormatter(gui::kGuiLogPattern));
 
-    // Flush strategy: warn+ immediately, all levels every 1s
-    gui::GetGuiLogger().flush_on(spdlog::level::warn);
+    // Flush strategy: warning+ immediately, all levels every 1s
+    // spdlog::err = our warning level (see spdlog_levels.hpp)
+    gui::GetGuiLogger().flush_on(spdlog::level::err);
     spdlog::flush_every(std::chrono::seconds(1));
 
     // Register C API callback to receive Core logs → pipe into ImGui ring buffer
@@ -132,9 +148,11 @@ int main(int argc, char** argv) {
         return LUMICE_LOG_TRACE;
       if (s == "debug")
         return LUMICE_LOG_DEBUG;
+      if (s == "verbose")
+        return LUMICE_LOG_VERBOSE;
       if (s == "info")
         return LUMICE_LOG_INFO;
-      if (s == "warn")
+      if (s == "warn" || s == "warning")
         return LUMICE_LOG_WARNING;
       if (s == "error")
         return LUMICE_LOG_ERROR;
@@ -143,12 +161,12 @@ int main(int argc, char** argv) {
       return LUMICE_LOG_WARNING;
     };
 
-    LUMICE_LogLevel gui_level = LUMICE_LOG_WARNING;
+    LUMICE_LogLevel gui_level = LUMICE_LOG_INFO;
     LUMICE_LogLevel core_level = LUMICE_LOG_WARNING;
     for (int i = 1; i < argc; ++i) {
       std::string_view arg(argv[i]);
       if (arg == "-v") {
-        gui_level = LUMICE_LOG_INFO;
+        gui_level = LUMICE_LOG_VERBOSE;
       } else if (arg == "-d") {
         gui_level = LUMICE_LOG_DEBUG;
       } else if (arg == "--log-level" && i + 1 < argc) {
@@ -177,6 +195,102 @@ int main(int argc, char** argv) {
     return 1;
   }
   gui::ResetCrystalView();
+
+  // Calibrate quality gate threshold by running a short simulation with default config.
+  // Must happen after server creation but before the main loop.
+  if (!skip_calibration) {
+    gui::CalibrateQualityThreshold();
+  }
+
+  // --perf-bench: use EXACTLY the same startup path as test_gui_main.cpp's StartPerfSimulation,
+  // measure steady-state throughput for 2 seconds, print result, and exit.
+  // This allows apples-to-apples comparison with LumiceGUITests --filter perf_test.
+  if (perf_bench) {
+    // Same config as StartPerfSimulation in test_gui_main.cpp
+    gui::g_state.sun.altitude = 20.0f;
+    gui::g_state.sun.azimuth = 0.0f;
+    gui::g_state.sun.diameter = 0.5f;
+    gui::g_state.sun.spectrum_index = 2;
+    gui::g_state.sim.infinite = true;
+    gui::g_state.sim.max_hits = 8;
+    if (!gui::g_state.renderers.empty()) {
+      auto& r = gui::g_state.renderers[0];
+      r.lens_type = 1;
+      r.fov = 360.0f;
+      r.sim_resolution_index = 0;  // 512
+      r.visible = 2;
+      r.background[0] = r.background[1] = r.background[2] = 0.0f;
+      r.exposure_offset = 0.0f;
+    }
+    gui::DoRun();
+
+    // Wait for first data
+    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (gui::g_state.stats_sim_ray_num == 0 && std::chrono::steady_clock::now() < timeout) {
+      glfwPollEvents();
+      gui::SyncFromPoller();
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // Measure for 2 seconds
+    auto start_rays = gui::g_state.stats_sim_ray_num;
+    auto start_time = std::chrono::steady_clock::now();
+    auto end_time = start_time + std::chrono::seconds(2);
+    int frames = 0;
+    while (std::chrono::steady_clock::now() < end_time) {
+      glfwPollEvents();
+      gui::SyncFromPoller();
+
+      ImGui_ImplOpenGL3_NewFrame();
+      ImGui_ImplGlfw_NewFrame();
+      ImGui::NewFrame();
+
+      int win_w = 0, win_h = 0;
+      glfwGetWindowSize(window, &win_w, &win_h);
+      auto lw = static_cast<float>(win_w);
+      auto lh = static_cast<float>(win_h);
+      gui::RenderTopBar(lw);
+      gui::RenderLeftPanel(lh);
+      gui::RenderPreviewPanel(window, lw, lh);
+      gui::RenderFloatingLensBar(lw);
+      gui::RenderStatusBar(lw, lh);
+
+      ImGui::Render();
+      int dw = 0, dh = 0;
+      glfwGetFramebufferSize(window, &dw, &dh);
+      glViewport(0, 0, dw, dh);
+      glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+      glClear(GL_COLOR_BUFFER_BIT);
+      if (gui::g_preview_vp.active) {
+        gui::g_preview.Render(gui::g_preview_vp.vp_x, gui::g_preview_vp.vp_y, gui::g_preview_vp.vp_w,
+                              gui::g_preview_vp.vp_h, gui::g_preview_vp.params);
+      }
+      ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+      glfwSwapBuffers(window);
+      frames++;
+    }
+
+    auto end_rays = gui::g_state.stats_sim_ray_num;
+    double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+    double rps = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
+    fprintf(stderr, "[PERF-BENCH] steady_state: %.1f rays/sec (%lu rays in %.1fs, %d frames, %.1f FPS)\n", rps,
+            end_rays - start_rays, elapsed, frames, frames / elapsed);
+
+    // Cleanup and exit
+    gui::g_server_poller.Stop();
+    gui::g_crystal_renderer.Destroy();
+    gui::g_preview.Destroy();
+    LUMICE_DestroyServer(gui::g_server);
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    glfwDestroyWindow(window);
+    glfwTerminate();
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
+    return 0;
+  }
 
   // Window size callback: detect user manual resize vs programmatic resize
   glfwSetWindowSizeCallback(window, gui::WindowSizeCallback);
@@ -292,5 +406,9 @@ int main(int argc, char** argv) {
 
   glfwDestroyWindow(window);
   glfwTerminate();
+
+#ifdef _WIN32
+  timeEndPeriod(1);
+#endif
   return 0;
 }

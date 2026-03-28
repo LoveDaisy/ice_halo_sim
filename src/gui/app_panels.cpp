@@ -588,14 +588,15 @@ void RenderLogPanel(float window_width, float window_height) {
                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
 
   // Config controls row
-  static const char* const kLevelNames[] = { "Trace", "Debug", "Info", "Warning", "Error", "Off" };
-  static const LUMICE_LogLevel kLevelMap[] = { LUMICE_LOG_TRACE,   LUMICE_LOG_DEBUG, LUMICE_LOG_INFO,
-                                               LUMICE_LOG_WARNING, LUMICE_LOG_ERROR, LUMICE_LOG_OFF };
+  static const char* const kLevelNames[] = { "Trace", "Debug", "Verbose", "Info", "Warning", "Error", "Off" };
+  static const LUMICE_LogLevel kLevelMap[] = { LUMICE_LOG_TRACE, LUMICE_LOG_DEBUG,   LUMICE_LOG_VERBOSE,
+                                               LUMICE_LOG_INFO,  LUMICE_LOG_WARNING, LUMICE_LOG_ERROR,
+                                               LUMICE_LOG_OFF };
 
   ImGui::Text("GUI");
   ImGui::SameLine();
   ImGui::PushItemWidth(80);
-  if (ImGui::Combo("##GuiLevel", &g_state.gui_log_level, kLevelNames, 6)) {
+  if (ImGui::Combo("##GuiLevel", &g_state.gui_log_level, kLevelNames, 7)) {
     SetGuiLogLevel(static_cast<spdlog::level::level_enum>(g_state.gui_log_level));
   }
   ImGui::PopItemWidth();
@@ -604,7 +605,7 @@ void RenderLogPanel(float window_width, float window_height) {
   ImGui::Text("Core");
   ImGui::SameLine();
   ImGui::PushItemWidth(80);
-  if (ImGui::Combo("##CoreLevel", &g_state.core_log_level, kLevelNames, 6)) {
+  if (ImGui::Combo("##CoreLevel", &g_state.core_log_level, kLevelNames, 7)) {
     if (g_server) {
       LUMICE_SetLogLevel(g_server, kLevelMap[g_state.core_log_level]);
     }

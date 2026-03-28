@@ -1,6 +1,8 @@
 #include "server/render.hpp"
 
 #include <algorithm>
+#include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -359,35 +361,43 @@ bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& f
 
 
 void RenderConsumer::Consume(const SimData& data) {
+  auto t0 = std::chrono::steady_clock::now();
   const auto& crystals = data.crystals_;
 
-  // Resize pre-allocated buffers if needed (grow-only)
-  if (data.rays_.size_ > buf_capacity_) {
-    buf_capacity_ = data.rays_.size_;
+  // Resize pre-allocated buffers if needed (grow-only).
+  // Use outgoing count for capacity — it's the upper bound for filtered rays.
+  size_t outgoing_count = data.outgoing_indices_.size();
+  size_t needed = std::max(data.rays_.size_, outgoing_count);
+  if (needed > buf_capacity_) {
+    buf_capacity_ = needed;
     d_buf_ = std::make_unique<float[]>(buf_capacity_ * 3);
     w_buf_ = std::make_unique<float[]>(buf_capacity_);
     xy_buf_ = std::make_unique<int[]>(buf_capacity_ * 2);
   }
 
+  // Filter + copy outgoing rays into contiguous buffers.
+  assert(!data.outgoing_indices_.empty() || data.rays_.Empty());
   size_t filtered_ray_num = 0;
-  for (size_t i = 0; i < data.rays_.size_; i++) {
-    const auto& r = data.rays_[i];
-    // Filter current ray
-    // 1. ray state must be kOutgoing
-    if (r.state_ != RaySeg::kOutgoing) {
-      continue;
-    }
 
-    // 2. then check every filter for every scattering
-    if (!FilterRay(data.rays_, i, filters_, crystals)) {
-      continue;
+  if (filters_.empty() && !data.outgoing_d_.empty()) {
+    // Fast path: no filter — bulk memcpy from pre-packed contiguous arrays.
+    // Avoids random access into 112-byte RaySeg structs (cache utilization 14% → 100%).
+    filtered_ray_num = outgoing_count;
+    std::memcpy(d_buf_.get(), data.outgoing_d_.data(), filtered_ray_num * 3 * sizeof(float));
+    std::memcpy(w_buf_.get(), data.outgoing_w_.data(), filtered_ray_num * sizeof(float));
+  } else {
+    // Slow path: filter present — must call FilterRay per ray (chain walk through rays buffer).
+    for (size_t i : data.outgoing_indices_) {
+      const auto& r = data.rays_[i];
+      if (!FilterRay(data.rays_, i, filters_, crystals)) {
+        continue;
+      }
+      std::memcpy(d_buf_.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
+      w_buf_[filtered_ray_num] = r.w_;
+      filtered_ray_num++;
     }
-
-    // Do rendering
-    std::memcpy(d_buf_.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
-    w_buf_[filtered_ray_num] = r.w_;
-    filtered_ray_num++;
   }
+  auto t1 = std::chrono::steady_clock::now();
 
   auto lens_proj = GetProjFunc(config_.lens_.type_);
   LensProjParam proj_param{ config_.lens_.fov_,
@@ -397,6 +407,7 @@ void RenderConsumer::Consume(const SimData& data) {
                             { config_.resolution_[0], config_.resolution_[1] },
                             { config_.lens_shift_[0], config_.lens_shift_[1] } };
   lens_proj(proj_param, d_buf_.get(), xy_buf_.get(), filtered_ray_num);
+  auto t2 = std::chrono::steady_clock::now();
 
   size_t final_ray_num = 0;
   float landed_weight = 0;
@@ -412,14 +423,37 @@ void RenderConsumer::Consume(const SimData& data) {
   }
   SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), final_ray_num);
   total_intensity_ += landed_weight;
+  auto t3 = std::chrono::steady_clock::now();
+
+  consume_count_++;
+  consume_filter_us_ += std::chrono::duration<double, std::micro>(t1 - t0).count();
+  consume_proj_us_ += std::chrono::duration<double, std::micro>(t2 - t1).count();
+  consume_accum_us_ += std::chrono::duration<double, std::micro>(t3 - t2).count();
+}
+
+void RenderConsumer::LogConsumeProfile() const {
+  if (consume_count_ == 0) {
+    return;
+  }
+  double avg_filter = consume_filter_us_ / static_cast<double>(consume_count_);
+  double avg_proj = consume_proj_us_ / static_cast<double>(consume_count_);
+  double avg_accum = consume_accum_us_ / static_cast<double>(consume_count_);
+  double avg_total = avg_filter + avg_proj + avg_accum;
+  ILOG_INFO(logger_,
+            "Consume profile: {} batches, avg {:.1f}us (filter {:.1f}us {:.0f}% + proj {:.1f}us {:.0f}% + "
+            "accum {:.1f}us {:.0f}%)",
+            consume_count_, avg_total, avg_filter, avg_filter / avg_total * 100, avg_proj, avg_proj / avg_total * 100,
+            avg_accum, avg_accum / avg_total * 100);
 }
 
 void RenderConsumer::PrepareSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
   snapshot_intensity_ = total_intensity_;
+}
 
-  // Count non-zero pixels (any XYZ channel > 0)
+void RenderConsumer::CountEffectivePixels() {
+  int total_pix = config_.resolution_[0] * config_.resolution_[1];
   int count = 0;
   const float* xyz = snapshot_xyz_.get();
   for (int i = 0; i < total_pix; i++) {

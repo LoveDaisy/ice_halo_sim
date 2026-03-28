@@ -75,6 +75,7 @@ void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level) {
   static constexpr ns::LogLevel kLevelMap[] = {
     ns::LogLevel::kTrace,    // LUMICE_LOG_TRACE
     ns::LogLevel::kDebug,    // LUMICE_LOG_DEBUG
+    ns::LogLevel::kVerbose,  // LUMICE_LOG_VERBOSE
     ns::LogLevel::kInfo,     // LUMICE_LOG_INFO
     ns::LogLevel::kWarning,  // LUMICE_LOG_WARNING
     ns::LogLevel::kError,    // LUMICE_LOG_ERROR
@@ -92,9 +93,11 @@ void LUMICE_SetLogCallback(LUMICE_LogCallback callback) {
   auto& sink = ns::GetCallbackSink();
   sink->SetCallback(callback);
 
-  // Add callback sink to shared dist_sink on first call (idempotent check via static flag)
+  // Add callback sink to shared dist_sink on first call (idempotent check via static flag).
+  // Set our custom formatter since sinks added after Logger::set_formatter don't inherit it.
   static bool registered = false;
   if (!registered) {
+    sink->set_formatter(ns::CreateLumiceFormatter(ns::kLogPattern));
     ns::GetSharedSink()->add_sink(sink);
     registered = true;
   }

@@ -68,6 +68,7 @@ void DoExportEquirectPng();
 void DoExportConfigJson();
 void DoOpen();
 void DoNew();
+void CalibrateQualityThreshold();
 void DoRun();
 void DoStop();
 void DoRevert();
