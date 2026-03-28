@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <string>
 
@@ -15,6 +16,7 @@
 #include "gui/app.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gl_init.h"
+#include "gui/gui_logger.hpp"
 #include "gui/panels.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -87,6 +89,8 @@ struct BgOverlayTestState {
   }
 };
 static BgOverlayTestState g_bg_test;
+static int g_core_log_level = LUMICE_LOG_INFO;
+static int g_gui_log_level = LUMICE_LOG_INFO;
 
 // Reset all global state for test isolation
 static void ResetTestState() {
@@ -1460,6 +1464,8 @@ static const char* CreatePerfConfig() {
 static void StartPerfSimulation() {
   gui::g_server = LUMICE_CreateServer();
   LUMICE_InitLogger(gui::g_server);
+  LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
+  gui::SetGuiLogLevel(static_cast<spdlog::level::level_enum>(g_gui_log_level));
 
   // Set up g_state to match perf config, then use DoRun() so the server's
   // config_manager_ is populated from the same SerializeCoreConfig path.
@@ -1797,7 +1803,37 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
   }
 }
 
-int main(int /*argc*/, char** /*argv*/) {
+int main(int argc, char** argv) {
+  // Parse CLI arguments
+  const char* test_filter = nullptr;
+  int core_log_level = LUMICE_LOG_INFO;  // Default: INFO
+  int gui_log_level = LUMICE_LOG_INFO;
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--filter") == 0 && i + 1 < argc) {
+      test_filter = argv[++i];
+    } else if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
+      // Set both core and GUI log level: trace/debug/info/warning/error/off
+      const char* level = argv[++i];
+      int lvl = LUMICE_LOG_INFO;
+      if (strcmp(level, "trace") == 0)
+        lvl = LUMICE_LOG_TRACE;
+      else if (strcmp(level, "debug") == 0)
+        lvl = LUMICE_LOG_DEBUG;
+      else if (strcmp(level, "info") == 0)
+        lvl = LUMICE_LOG_INFO;
+      else if (strcmp(level, "warning") == 0)
+        lvl = LUMICE_LOG_WARNING;
+      else if (strcmp(level, "error") == 0)
+        lvl = LUMICE_LOG_ERROR;
+      else if (strcmp(level, "off") == 0)
+        lvl = LUMICE_LOG_OFF;
+      core_log_level = lvl;
+      gui_log_level = lvl;
+    }
+  }
+  g_core_log_level = core_log_level;
+  g_gui_log_level = gui_log_level;
+
   // GLFW init
   glfwSetErrorCallback(gui::GlfwErrorCallback);
   if (!glfwInit()) {
@@ -1878,7 +1914,7 @@ int main(int /*argc*/, char** /*argv*/) {
   RegisterBgOverlayTests(engine);
   RegisterImportExportTests(engine);
   RegisterPerfTests(engine);
-  ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests);
+  ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete
   while (true) {

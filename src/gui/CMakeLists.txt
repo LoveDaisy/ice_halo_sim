@@ -38,7 +38,8 @@ if(WIN32)
       lumice
       glfw
       nfd
-      glad_gl)
+      glad_gl
+      winmm)
   # ImGui auto-detects GLAD2 via __has_include(<glad/gl.h>) — no loader definition needed.
 else()
   target_link_libraries(lumice_gui_obj PUBLIC

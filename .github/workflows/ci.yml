@@ -106,6 +106,18 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure -R LumiceUnitTest
 
+      - name: Upload GUI test binary
+        if: matrix.os == 'windows-2025' && matrix.build_gui == 'ON'
+        uses: actions/upload-artifact@v4
+        with:
+          name: LumiceGUITests-windows
+          path: |
+            build/Release/bin/LumiceGUITests.exe
+            build/Release/bin/LumiceGUI.exe
+            build/Release/bin/Lumice.exe
+            build/Release/lib/lumice.lib
+          retention-days: 3
+
   e2e-test:
     runs-on: ubuntu-24.04
     needs: build

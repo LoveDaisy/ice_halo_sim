@@ -3,6 +3,7 @@
 #include <spdlog/spdlog.h>
 
 #ifdef _WIN32
+#include <timeapi.h>
 #include <windows.h>
 #endif
 
@@ -33,6 +34,10 @@ int main(int argc, char** argv) {
     freopen("CONOUT$", "w", stdout);
     freopen("CONOUT$", "w", stderr);
   }
+  // Raise timer resolution from 15.6ms to ~1ms so that cv_.wait_for() and Sleep()
+  // are precise enough for our 20ms poll interval. Without this, SleepConditionVariableSRW
+  // rounds up to 3 timer ticks (~47ms), causing a timing race with the 50ms commit interval.
+  timeBeginPeriod(1);
 #endif
 
   glfwSetErrorCallback(gui::GlfwErrorCallback);
@@ -292,5 +297,9 @@ int main(int argc, char** argv) {
 
   glfwDestroyWindow(window);
   glfwTerminate();
+
+#ifdef _WIN32
+  timeEndPeriod(1);
+#endif
   return 0;
 }

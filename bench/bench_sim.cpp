@@ -103,7 +103,7 @@ class SimLoopFixtureBase : public benchmark::Fixture {
 
     auto config_json = nlohmann::json::parse(MakeConfig(config_template, ray_num));
     config_manager_ = config_json.get<ConfigManager>();
-    scene_ = &config_manager_.scene_;
+    scene_ = std::make_shared<const SceneConfig>(config_manager_.scene_);
   }
 
   void TearDown(benchmark::State& /*state*/) override {
@@ -141,7 +141,7 @@ class SimLoopFixtureBase : public benchmark::Fixture {
   QueuePtrS<SimData> data_queue_;
   std::unique_ptr<Simulator> simulator_;
   ConfigManager config_manager_;
-  const SceneConfig* scene_ = nullptr;
+  std::shared_ptr<const SceneConfig> scene_;
 };
 
 
