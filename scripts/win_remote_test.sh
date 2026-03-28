@@ -116,4 +116,9 @@ scp -q "${SSH_HOST}:${REMOTE_DIR}/stdout.txt" "${LOCAL_OUT_DIR}/win_stdout.txt" 
 scp -q "${SSH_HOST}:${REMOTE_DIR}/stderr.txt" "${LOCAL_OUT_DIR}/win_stderr.txt" 2>/dev/null || true
 
 echo ""
-echo "=== Done ==="
+
+# Propagate remote exit code
+REMOTE_EXIT=$(ssh_cmd "Get-Content '${REMOTE_DIR}/done.txt'" 2>/dev/null \
+  | grep '^exit_code=' | sed 's/exit_code=//' | tr -d '[:space:]')
+echo "=== Done (remote exit code: ${REMOTE_EXIT:-unknown}) ==="
+exit "${REMOTE_EXIT:-1}"

@@ -49,12 +49,12 @@ while ($true) {
         # Supports: "path\to\exe.exe --arg1 --arg2" or just "exe.exe"
         $parts = $cmd -split ' ', 2
         $exe = $parts[0]
-        $args = if ($parts.Length -gt 1) { $parts[1] } else { "" }
+        $procArgs = if ($parts.Length -gt 1) { $parts[1] } else { "" }
 
         # Execute in this (interactive) session
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         try {
-            $proc = Start-Process -FilePath $exe -ArgumentList $args `
+            $proc = Start-Process -FilePath $exe -ArgumentList $procArgs `
                 -RedirectStandardOutput $stdoutFile `
                 -RedirectStandardError $stderrFile `
                 -PassThru -Wait -NoNewWindow
