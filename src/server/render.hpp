@@ -19,6 +19,7 @@ class RenderConsumer : public IConsume {
 
   void Consume(const SimData& data) override;
   void PrepareSnapshot() override;
+  void CountEffectivePixels();
   void PostSnapshot() override;
   Result GetResult() const override;
   RawXyzResult GetRawXyzResult() const;

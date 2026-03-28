@@ -418,8 +418,10 @@ void RenderConsumer::PrepareSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
   snapshot_intensity_ = total_intensity_;
+}
 
-  // Count non-zero pixels (any XYZ channel > 0)
+void RenderConsumer::CountEffectivePixels() {
+  int total_pix = config_.resolution_[0] * config_.resolution_[1];
   int count = 0;
   const float* xyz = snapshot_xyz_.get();
   for (int i = 0; i < total_pix; i++) {
