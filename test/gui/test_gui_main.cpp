@@ -1480,8 +1480,8 @@ static void StartPerfSimulation() {
   gui::g_state.sim.max_hits = 8;
   if (!gui::g_state.renderers.empty()) {
     auto& r = gui::g_state.renderers[0];
-    r.lens_type = 7;  // Rectangular
-    r.fov = 180.0f;
+    r.lens_type = 1;  // Fisheye Equal Area (matches typical manual testing)
+    r.fov = 360.0f;
     r.sim_resolution_index = 0;  // 512 → Core resolution [1024, 512], matching CreatePerfConfig
     r.visible = 2;               // Full
     r.background[0] = r.background[1] = r.background[2] = 0.0f;
@@ -1971,6 +1971,12 @@ int main(int argc, char** argv) {
     glViewport(0, 0, display_w, display_h);
     glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+
+    // Render preview shader before ImGui overlay (matches real app's main.cpp)
+    if (gui::g_preview_vp.active) {
+      gui::g_preview.Render(gui::g_preview_vp.vp_x, gui::g_preview_vp.vp_y, gui::g_preview_vp.vp_w,
+                            gui::g_preview_vp.vp_h, gui::g_preview_vp.params);
+    }
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     glfwSwapBuffers(window);
