@@ -1683,9 +1683,10 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         }
       }
 
-      // Measure: alternate crystal height between 0.8 and 1.2 over 5 seconds.
-      // Each change triggers a full Stop/Start restart via DoRun().
-      // Track cumulative rays across restarts via direct C API (not SyncFromPoller which has delay).
+      // Measure: sweep sun altitude over 5 seconds, matching real manual slider drag.
+      // Each frame: update altitude (continuous sweep) + set dirty.
+      // Commit logic mirrors main.cpp: check dirty + kCommitIntervalMs throttle per frame.
+      // Track cumulative rays across restarts via direct C API.
       auto start_time = std::chrono::steady_clock::now();
       auto end_time = start_time + std::chrono::seconds(5);
       auto last_commit = start_time;
@@ -1706,26 +1707,29 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         return stats[0].sim_ray_num;
       };
 
+      // Sweep sun altitude between 10° and 30° (typical manual drag range)
+      constexpr float kAltMin = 10.0f;
+      constexpr float kAltMax = 30.0f;
+
       while (std::chrono::steady_clock::now() < end_time) {
-        if (!gui::g_state.crystals.empty()) {
-          gui::g_state.crystals[0].height = (iteration % 2 == 0) ? 0.8f : 1.2f;
-        }
+        // Continuous triangle wave: sweep up then down, matching smooth slider drag
+        double elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+        double phase = std::fmod(elapsed_sec, 2.0);  // 2s period (1s up + 1s down)
+        float t = (phase < 1.0) ? static_cast<float>(phase) : static_cast<float>(2.0 - phase);
+        gui::g_state.sun.altitude = kAltMin + t * (kAltMax - kAltMin);
         gui::g_state.dirty = true;
         iteration++;
 
-        // Yield a few frames then check commit. Yield count is small (2 frames)
-        // so the commit check runs frequently, letting kCommitIntervalMs control
-        // the actual commit rate rather than the yield loop duration.
-        for (int i = 0; i < 2; i++) {
-          ctx->Yield();
-          // Track per-upload ray counts (measures what the user actually sees on screen)
-          if (gui::g_state.texture_upload_count != last_upload_count) {
-            per_upload_rays.push_back(gui::g_state.stats_sim_ray_num);
-            last_upload_count = gui::g_state.texture_upload_count;
-          }
+        // One yield per iteration = one frame, matching real app's per-frame commit check
+        ctx->Yield();
+
+        // Track per-upload ray counts
+        if (gui::g_state.texture_upload_count != last_upload_count) {
+          per_upload_rays.push_back(gui::g_state.stats_sim_ray_num);
+          last_upload_count = gui::g_state.texture_upload_count;
         }
 
-        // Throttled commit: same logic as main.cpp auto-commit.
+        // Throttled commit: same logic as main.cpp auto-commit
         auto now = std::chrono::steady_clock::now();
         auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
         if (commit_elapsed >= gui::kCommitIntervalMs) {
