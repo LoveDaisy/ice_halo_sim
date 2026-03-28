@@ -10,6 +10,7 @@
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/beam_tracer.hpp"
 #include "core/buffer.hpp"
 #include "core/crystal.hpp"
 #include "core/filter.hpp"
@@ -59,6 +60,33 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
 
 static void SampleRayDir(const SunParam& p, float* d, size_t num, size_t step) {
   SampleSphCapPoint(p.azimuth_ + 180.0f, -p.altitude_, p.diameter_ / 2.0f, d, num, step);
+}
+
+// Compute sun center direction (point source, no diameter sampling).
+// Shares the same azimuth+180 / -altitude convention as SampleRayDir / SampleSphCapPoint.
+// Output: unit vector pointing from sun toward crystal origin (light propagation direction).
+static void ComputeSunCenterDir(const SunParam& p, float* d) {
+  float az_rad = (p.azimuth_ + 180.0f) * math::kDegreeToRad;
+  float alt_rad = -p.altitude_ * math::kDegreeToRad;
+  d[0] = std::cos(alt_rad) * std::cos(az_rad);
+  d[1] = std::cos(alt_rad) * std::sin(az_rad);
+  d[2] = std::sin(alt_rad);
+}
+
+// Sample a single crystal rotation from the axis distribution.
+// Extracted from InitRay_rot (which operates on an entire RayBuffer).
+static Rotation SampleOneRotation(RandomNumberGenerator& rng, const AxisDistribution& crystal_axis) {
+  float lon_lat[2]{};
+  if (crystal_axis.azimuth_dist.type != DistributionType::kUniform ||
+      crystal_axis.latitude_dist.type != DistributionType::kUniform) {
+    RandomSampler::SampleSphericalPointsSph(crystal_axis, lon_lat);
+  } else {
+    RandomSampler::SampleSphericalPointsSph(lon_lat, 1, 2);
+  }
+  float roll = rng.Get(crystal_axis.roll_dist) * math::kDegreeToRad;
+  constexpr float kZ[3]{ 0, 0, 1 };
+  constexpr float kY[3]{ 0, 1, 0 };
+  return Rotation(kZ, roll).Chain(kY, math::kPi_2 - lon_lat[1]).Chain(kZ, lon_lat[0]);
 }
 
 /**
@@ -477,6 +505,10 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   all_crystals.reserve(16);
 
   bool first_ms = true;
+  bool use_bt = config.use_beam_tracing_;  // beam tracing only applies to first scattering
+  size_t bt_orientation_total = 0;
+  float bt_total_intensity = 0.0f;
+
   for (size_t mi = 0; mi < config.ms_.size() && !stop_; mi++) {
     const auto& m = config.ms_[mi];
     auto ms_crystal_cnt = m.setting_.size();
@@ -508,73 +540,151 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
       // For deterministic params, create/copy crystal once per ci iteration.
       size_t ci_crystal_id = kInfSize;
 
-      for (size_t cn = 0; cn < crystal_ray_num[ci] && !stop_; cn += kSmallBatchRayNum) {  // for a same crystal
-        size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - cn);
-
-        size_t curr_crystal_id = 0;
-        if (deterministic && ci_crystal_id != kInfSize) {
-          // Reuse crystal from earlier batch in this ci loop
-          curr_crystal_id = ci_crystal_id;
-        } else if (cached_crystal != nullptr) {
-          // Copy from cross-call cache (deterministic, first batch of this ci)
-          curr_crystal_id = all_crystals.size();
-          all_crystals.emplace_back(*cached_crystal);
-          ci_crystal_id = curr_crystal_id;
-        } else {
-          // Create new crystal (random params, or first-ever deterministic creation)
-          curr_crystal_id = all_crystals.size();
-          all_crystals.emplace_back(std::visit(CrystalMaker{ rng_ }, s.crystal_.param_));
-          if (deterministic) {
-            crystal_cache.emplace_back(param_ptr, all_crystals.back());
-            cached_crystal = &crystal_cache.back().second;
-            ci_crystal_id = curr_crystal_id;
+      // --- Beam tracing path (first scattering only) ---
+      bool bt_handled = false;
+      if (use_bt && first_ms) {
+        // Create one crystal for beam tracing
+        Crystal bt_crystal = [&]() -> Crystal {
+          if (cached_crystal != nullptr) {
+            return *cached_crystal;
           }
-        }
-        const auto& curr_crystal = all_crystals[curr_crystal_id];
-        filter->InitCrystalSymmetry(curr_crystal);
+          Crystal c = std::visit(CrystalMaker{ rng_ }, s.crystal_.param_);
+          if (deterministic) {
+            crystal_cache.emplace_back(param_ptr, c);
+            cached_crystal = &crystal_cache.back().second;
+          }
+          return c;
+        }();
 
-        // 1. Initialize data
-        if (first_ms) {
-          InitRayFirstMs(rng_, config.light_source_.param_, wl_param, curr_ray_num,  // input
-                         curr_crystal, curr_crystal_id, s.crystal_.axis_,            // input
-                         buffer_data, all_data);                                     // output
-        } else {
-          InitRayOtherMs(rng_, init_data, curr_ray_num,                    // input
-                         curr_crystal, curr_crystal_id, s.crystal_.axis_,  // input
-                         buffer_data, all_data, init_ray_offset);          // output
-        }
+        if (bt_crystal.PolygonFaceCount() > 0) {
+          filter->InitCrystalSymmetry(bt_crystal);
 
-        // 2. Start tracing
-        float refractive_index = curr_crystal.GetRefractiveIndex(wl);
-        for (size_t i = 0; i < config.max_hits_ && !stop_; i++) {
-          // 2.1 Trace rays. Deal with d, p, w, fid
-          TraceRayBasicInfo(curr_crystal, refractive_index, curr_ray_num,  // input
-                            buffer_data);                                  // output
-          // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
+          const auto& sun_param = config.light_source_.param_;
+          if (sun_param.diameter_ > 0) {
+            ILOG_INFO(logger_, "Beam tracing treats sun as point source, diameter {:.2f}° ignored",
+                      sun_param.diameter_);
+          }
 
-          // 2.2 Fill other information: all but (d, p, w, fid)
-          FillRayOtherInfo(curr_ray_num, i, curr_crystal, all_data,  // input
-                           buffer_data);                             // output
+          float light_dir[3];
+          ComputeSunCenterDir(sun_param, light_dir);
 
-          // 2.3 Collect data. And set ray properties: state
-          CollectData(rng_, m, filter.get(),    // input
-                      buffer_data, init_data);  // output
+          float ri = bt_crystal.GetRefractiveIndex(wl);
+          size_t orientation_num = crystal_ray_num[ci];
 
-          // 2.4 Copy to all_data + collect outgoing indices
-          size_t base_index = all_data.size_;
-          all_data.EmplaceBack(buffer_data[1]);
-          for (size_t j = 0; j < buffer_data[1].size_; j++) {
-            if (buffer_data[1][j].state_ == RaySeg::kOutgoing) {
-              outgoing_indices.push_back(base_index + j);
-              const auto& r = buffer_data[1][j];
-              outgoing_d.push_back(r.d_[0]);
-              outgoing_d.push_back(r.d_[1]);
-              outgoing_d.push_back(r.d_[2]);
-              outgoing_w.push_back(r.w_);
+          for (size_t oi = 0; oi < orientation_num && !stop_; oi++) {
+            Rotation rot = SampleOneRotation(rng_, s.crystal_.axis_);
+            auto bt_result = BeamTrace(bt_crystal, rot, light_dir, ri, config.max_hits_);
+
+            // Skip orientations with negligible entry area (numerical stability)
+            if (bt_result.total_entry_area < kMinBeamArea) {
+              continue;
+            }
+
+            for (size_t k = 0; k < bt_result.outgoing_w.size(); k++) {
+              // Build temporary RaySeg for filter
+              RaySeg tmp{};
+              tmp.state_ = RaySeg::kOutgoing;
+              tmp.d_[0] = bt_result.outgoing_d[3 * k];
+              tmp.d_[1] = bt_result.outgoing_d[3 * k + 1];
+              tmp.d_[2] = bt_result.outgoing_d[3 * k + 2];
+              tmp.crystal_config_id_ = bt_crystal.config_id_;
+              for (size_t fi = 0; fi < std::min(bt_result.outgoing_raypath[k].size(), static_cast<size_t>(kMaxHits));
+                   fi++) {
+                tmp.rp_ << static_cast<IdType>(bt_result.outgoing_raypath[k][fi]);
+              }
+
+              if (!filter->Check(tmp)) {
+                continue;
+              }
+
+              // Scale weight: w_scaled = w_bt * wl_weight / total_entry_area
+              float w_scaled = bt_result.outgoing_w[k] * wl_param.weight_ / bt_result.total_entry_area;
+
+              outgoing_indices.push_back(outgoing_indices.size());
+              outgoing_d.push_back(bt_result.outgoing_d[3 * k]);
+              outgoing_d.push_back(bt_result.outgoing_d[3 * k + 1]);
+              outgoing_d.push_back(bt_result.outgoing_d[3 * k + 2]);
+              outgoing_w.push_back(w_scaled);
             }
           }
-        }  // hit loop
-      }  // small batch loop
+
+          bt_orientation_total += orientation_num;
+          bt_total_intensity += wl_param.weight_ * static_cast<float>(orientation_num);
+          bt_handled = true;
+        } else {
+          ILOG_WARN(logger_, "Beam tracing: crystal has no polygon faces, falling back to MC");
+        }
+      }
+
+      if (!bt_handled) {
+        for (size_t cn = 0; cn < crystal_ray_num[ci] && !stop_; cn += kSmallBatchRayNum) {  // for a same crystal
+          size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - cn);
+
+          size_t curr_crystal_id = 0;
+          if (deterministic && ci_crystal_id != kInfSize) {
+            // Reuse crystal from earlier batch in this ci loop
+            curr_crystal_id = ci_crystal_id;
+          } else if (cached_crystal != nullptr) {
+            // Copy from cross-call cache (deterministic, first batch of this ci)
+            curr_crystal_id = all_crystals.size();
+            all_crystals.emplace_back(*cached_crystal);
+            ci_crystal_id = curr_crystal_id;
+          } else {
+            // Create new crystal (random params, or first-ever deterministic creation)
+            curr_crystal_id = all_crystals.size();
+            all_crystals.emplace_back(std::visit(CrystalMaker{ rng_ }, s.crystal_.param_));
+            if (deterministic) {
+              crystal_cache.emplace_back(param_ptr, all_crystals.back());
+              cached_crystal = &crystal_cache.back().second;
+              ci_crystal_id = curr_crystal_id;
+            }
+          }
+          const auto& curr_crystal = all_crystals[curr_crystal_id];
+          filter->InitCrystalSymmetry(curr_crystal);
+
+          // 1. Initialize data
+          if (first_ms) {
+            InitRayFirstMs(rng_, config.light_source_.param_, wl_param, curr_ray_num,  // input
+                           curr_crystal, curr_crystal_id, s.crystal_.axis_,            // input
+                           buffer_data, all_data);                                     // output
+          } else {
+            InitRayOtherMs(rng_, init_data, curr_ray_num,                    // input
+                           curr_crystal, curr_crystal_id, s.crystal_.axis_,  // input
+                           buffer_data, all_data, init_ray_offset);          // output
+          }
+
+          // 2. Start tracing
+          float refractive_index = curr_crystal.GetRefractiveIndex(wl);
+          for (size_t i = 0; i < config.max_hits_ && !stop_; i++) {
+            // 2.1 Trace rays. Deal with d, p, w, fid
+            TraceRayBasicInfo(curr_crystal, refractive_index, curr_ray_num,  // input
+                              buffer_data);                                  // output
+            // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
+
+            // 2.2 Fill other information: all but (d, p, w, fid)
+            FillRayOtherInfo(curr_ray_num, i, curr_crystal, all_data,  // input
+                             buffer_data);                             // output
+
+            // 2.3 Collect data. And set ray properties: state
+            CollectData(rng_, m, filter.get(),    // input
+                        buffer_data, init_data);  // output
+
+            // 2.4 Copy to all_data + collect outgoing indices
+            size_t base_index = all_data.size_;
+            all_data.EmplaceBack(buffer_data[1]);
+            for (size_t j = 0; j < buffer_data[1].size_; j++) {
+              if (buffer_data[1][j].state_ == RaySeg::kOutgoing) {
+                outgoing_indices.push_back(base_index + j);
+                const auto& r = buffer_data[1][j];
+                outgoing_d.push_back(r.d_[0]);
+                outgoing_d.push_back(r.d_[1]);
+                outgoing_d.push_back(r.d_[2]);
+                outgoing_w.push_back(r.w_);
+              }
+            }
+          }  // hit loop
+        }  // small batch loop
+      }  // if (!bt_handled)
     }  // crystal loop
 
     ray_num = init_data[1].size_;
@@ -595,14 +705,21 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
 
   SimData sim_data;
   sim_data.curr_wl_ = wl;
-  sim_data.total_intensity_ = wl_param.weight_ * original_ray_num;
   sim_data.generation_ = generation;
-  sim_data.crystals_ = std::move(all_crystals);
-  sim_data.rays_ = std::move(all_data);
+  if (use_bt) {
+    sim_data.total_intensity_ = bt_total_intensity;
+    sim_data.root_ray_count_ = bt_orientation_total;
+    // rays_ and crystals_ intentionally left empty for beam tracing path.
+    // outgoing_indices_ filled with trivial {0,1,...,N-1} to satisfy RenderConsumer contract.
+  } else {
+    sim_data.total_intensity_ = wl_param.weight_ * original_ray_num;
+    sim_data.root_ray_count_ = original_ray_num;
+    sim_data.crystals_ = std::move(all_crystals);
+    sim_data.rays_ = std::move(all_data);
+  }
   sim_data.outgoing_indices_ = std::move(outgoing_indices);
   sim_data.outgoing_d_ = std::move(outgoing_d);
   sim_data.outgoing_w_ = std::move(outgoing_w);
-  sim_data.root_ray_count_ = original_ray_num;
   data_queue_->Emplace(std::move(sim_data));
 }
 

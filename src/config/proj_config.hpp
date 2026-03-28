@@ -27,7 +27,8 @@ struct SceneConfig {
   size_t ray_num_;  // For every single wavelength.
   size_t max_hits_;
   LightSourceConfig light_source_;
-  std::vector<MsInfo> ms_;  // (prob, [scattering_info, ...])
+  std::vector<MsInfo> ms_;         // (prob, [scattering_info, ...])
+  bool use_beam_tracing_ = false;  // Use beam tracing instead of MC ray sampling (first scattering only).
 };
 
 using SceneConfigPtrU = std::unique_ptr<SceneConfig>;

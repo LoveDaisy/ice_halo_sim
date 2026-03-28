@@ -404,3 +404,144 @@ TEST(BeamTracerTest, BeamTraceObliqueIncidence) {
 
 
 }  // namespace lumice
+
+// ============================================================================
+// Simulator integration tests (beam tracing path)
+// These are outside the lumice namespace to avoid include conflicts.
+// ============================================================================
+
+#include <thread>
+
+#include "config/proj_config.hpp"
+#include "config/sim_data.hpp"
+#include "core/simulator.hpp"
+#include "util/queue.hpp"
+
+namespace {
+
+// Helper: build a minimal SceneConfig with a hexagonal prism and beam tracing enabled.
+lumice::SceneConfig MakeBeamTracingConfig(size_t ray_num, bool use_bt) {
+  lumice::SceneConfig config{};
+  config.ray_num_ = ray_num;
+  config.max_hits_ = 8;
+  config.use_beam_tracing_ = use_bt;
+
+  // Sun: altitude 30°, azimuth 0°, point source (diameter 0)
+  config.light_source_.param_ = { 30.0f, 0.0f, 0.0f };
+  config.light_source_.spectrum_ = std::vector<lumice::WlParam>{ { 550.0f, 1.0f } };
+
+  // Single scattering, single crystal type: regular hexagonal prism
+  lumice::MsInfo ms{};
+  ms.prob_ = 1.0f;
+  lumice::ScatteringSetting ss{};
+  ss.crystal_proportion_ = 1.0f;
+  ss.crystal_.id_ = 0;
+  lumice::PrismCrystalParam prism{};
+  prism.h_ = { lumice::DistributionType::kNoRandom, 1.0f, 0.0f };
+  for (auto& d : prism.d_) {
+    d = { lumice::DistributionType::kNoRandom, 1.0f, 0.0f };
+  }
+  ss.crystal_.param_ = prism;
+  // Default axis distribution (uniform random orientation)
+  ss.filter_.id_ = 0;
+  ss.filter_.symmetry_ = 0;
+  ss.filter_.action_ = lumice::FilterConfig::kFilterIn;
+  ss.filter_.param_ = lumice::SimpleFilterParam{ lumice::NoneFilterParam{} };
+  ms.setting_.push_back(std::move(ss));
+  config.ms_.push_back(std::move(ms));
+
+  return config;
+}
+
+// Run simulator with given config and collect the first SimData output.
+lumice::SimData RunSimulator(const lumice::SceneConfig& config) {
+  auto config_queue = std::make_shared<lumice::Queue<lumice::SimBatch>>();
+  auto data_queue = std::make_shared<lumice::Queue<lumice::SimData>>();
+
+  constexpr uint32_t kSeed = 12345;
+  lumice::Simulator sim(config_queue, data_queue, kSeed);
+
+  std::thread t([&sim]() { sim.Run(); });
+
+  // Enqueue AFTER thread starts to avoid race where thread reads shutdown state
+  auto scene_ptr = std::make_shared<const lumice::SceneConfig>(config);
+  config_queue->Emplace(lumice::SimBatch{ config.ray_num_, scene_ptr, 0 });
+
+  // Wait for one result (blocks until SimulateOneWavelength finishes and emplaces)
+  auto result = data_queue->Get();
+
+  sim.Stop();
+  t.join();
+  return result;
+}
+
+
+TEST(BeamTracerIntegration, BeamTracingProducesOutput) {
+  auto config = MakeBeamTracingConfig(100, true);
+  auto data = RunSimulator(config);
+
+  // Beam tracing should produce outgoing data
+  EXPECT_GT(data.outgoing_d_.size(), 0u);
+  EXPECT_GT(data.outgoing_w_.size(), 0u);
+  EXPECT_EQ(data.outgoing_d_.size(), data.outgoing_w_.size() * 3);
+
+  // outgoing_indices_ should match outgoing count
+  EXPECT_EQ(data.outgoing_indices_.size(), data.outgoing_w_.size());
+
+  // rays_ should be empty (beam tracing doesn't produce ray tree)
+  EXPECT_TRUE(data.rays_.Empty());
+
+  // total_intensity should be positive
+  EXPECT_GT(data.total_intensity_, 0.0f);
+
+  // All directions should be unit vectors
+  for (size_t i = 0; i < data.outgoing_w_.size(); i++) {
+    float dx = data.outgoing_d_[3 * i];
+    float dy = data.outgoing_d_[3 * i + 1];
+    float dz = data.outgoing_d_[3 * i + 2];
+    float len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    EXPECT_NEAR(len, 1.0f, 1e-4f);
+  }
+
+  // All weights should be positive
+  for (float w : data.outgoing_w_) {
+    EXPECT_GT(w, 0.0f);
+  }
+}
+
+
+TEST(BeamTracerIntegration, McPathUnchangedWhenBtDisabled) {
+  // With use_beam_tracing_ = false, MC path should produce valid SimData with ray tree
+  auto config = MakeBeamTracingConfig(1000, false);
+  auto data = RunSimulator(config);
+
+  // MC path should have valid metadata
+  EXPECT_GT(data.root_ray_count_, 0u);
+  EXPECT_GT(data.total_intensity_, 0.0f);
+  // MC path fills rays_ (beam tracing does not)
+  EXPECT_FALSE(data.rays_.Empty());
+}
+
+
+TEST(BeamTracerIntegration, NormalizationMagnitudeComparable) {
+  // BT total_intensity should equal wl_weight * orientation_num
+  constexpr size_t kRayNum = 500;
+  auto bt_config = MakeBeamTracingConfig(kRayNum, true);
+  auto bt_data = RunSimulator(bt_config);
+
+  // total_intensity should be wl_weight(1.0) * orientation_num(500) = 500.0
+  EXPECT_GT(bt_data.total_intensity_, 0.0f);
+  EXPECT_NEAR(bt_data.total_intensity_, 1.0f * kRayNum, 1.0f);
+
+  // Sum of outgoing weights should be positive and less than total_intensity
+  // (because not all light exits; some is absorbed/reflected back)
+  float bt_total_w = 0.0f;
+  for (float w : bt_data.outgoing_w_) {
+    bt_total_w += w;
+  }
+  EXPECT_GT(bt_total_w, 0.0f);
+  EXPECT_LT(bt_total_w, bt_data.total_intensity_ * 1.01f);
+}
+
+
+}  // namespace
