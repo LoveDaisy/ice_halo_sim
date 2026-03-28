@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -360,6 +361,7 @@ bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& f
 
 
 void RenderConsumer::Consume(const SimData& data) {
+  auto t0 = std::chrono::steady_clock::now();
   const auto& crystals = data.crystals_;
 
   // Resize pre-allocated buffers if needed (grow-only)
@@ -386,6 +388,7 @@ void RenderConsumer::Consume(const SimData& data) {
     w_buf_[filtered_ray_num] = r.w_;
     filtered_ray_num++;
   }
+  auto t1 = std::chrono::steady_clock::now();
 
   auto lens_proj = GetProjFunc(config_.lens_.type_);
   LensProjParam proj_param{ config_.lens_.fov_,
@@ -395,6 +398,7 @@ void RenderConsumer::Consume(const SimData& data) {
                             { config_.resolution_[0], config_.resolution_[1] },
                             { config_.lens_shift_[0], config_.lens_shift_[1] } };
   lens_proj(proj_param, d_buf_.get(), xy_buf_.get(), filtered_ray_num);
+  auto t2 = std::chrono::steady_clock::now();
 
   size_t final_ray_num = 0;
   float landed_weight = 0;
@@ -410,6 +414,27 @@ void RenderConsumer::Consume(const SimData& data) {
   }
   SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), final_ray_num);
   total_intensity_ += landed_weight;
+  auto t3 = std::chrono::steady_clock::now();
+
+  consume_count_++;
+  consume_filter_us_ += std::chrono::duration<double, std::micro>(t1 - t0).count();
+  consume_proj_us_ += std::chrono::duration<double, std::micro>(t2 - t1).count();
+  consume_accum_us_ += std::chrono::duration<double, std::micro>(t3 - t2).count();
+}
+
+void RenderConsumer::LogConsumeProfile() const {
+  if (consume_count_ == 0) {
+    return;
+  }
+  double avg_filter = consume_filter_us_ / static_cast<double>(consume_count_);
+  double avg_proj = consume_proj_us_ / static_cast<double>(consume_count_);
+  double avg_accum = consume_accum_us_ / static_cast<double>(consume_count_);
+  double avg_total = avg_filter + avg_proj + avg_accum;
+  ILOG_INFO(logger_,
+            "Consume profile: {} batches, avg {:.1f}us (filter {:.1f}us {:.0f}% + proj {:.1f}us {:.0f}% + "
+            "accum {:.1f}us {:.0f}%)",
+            consume_count_, avg_total, avg_filter, avg_filter / avg_total * 100, avg_proj, avg_proj / avg_total * 100,
+            avg_accum, avg_accum / avg_total * 100);
 }
 
 void RenderConsumer::PrepareSnapshot() {

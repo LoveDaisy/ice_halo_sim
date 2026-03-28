@@ -25,6 +25,7 @@ class RenderConsumer : public IConsume {
   RawXyzResult GetRawXyzResult() const;
   void Reset() override;
   void ResetWith(const RenderConfig& new_config);
+  void LogConsumeProfile() const;  // Dump accumulated profiling stats
 
  private:
   RenderConfig config_;
@@ -43,6 +44,12 @@ class RenderConsumer : public IConsume {
   std::unique_ptr<float[]> w_buf_;
   std::unique_ptr<int[]> xy_buf_;
   size_t buf_capacity_ = 0;
+
+  // Profiling counters (accumulated across Consume calls, for benchmark analysis)
+  size_t consume_count_ = 0;
+  double consume_filter_us_ = 0;  // FilterRay + copy to buffers
+  double consume_proj_us_ = 0;    // lens projection
+  double consume_accum_us_ = 0;   // SpectrumToXyz scatter writes
 
   Logger logger_{ "Render" };
 };

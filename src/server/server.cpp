@@ -505,6 +505,12 @@ void ServerImpl::Stop() {
 
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
+    // Log profiling stats before clearing
+    for (auto& c : consumers_) {
+      if (auto* rc = dynamic_cast<RenderConsumer*>(c.get())) {
+        rc->LogConsumeProfile();
+      }
+    }
     // Don't clear consumers_ here — CommitConfig decides whether to rebuild or reuse.
     // Consumers are destroyed either by CommitConfig (rebuild path) or ~ServerImpl().
     snapshot_dirty_ = false;
@@ -589,12 +595,19 @@ void ServerImpl::ConsumeData() {
         ILOG_DEBUG(logger_, "ConsumeData: discarding batch (generation {} != {})", sim_data.generation_,
                    scene_generation_.load());
       } else {
+        auto t_lock0 = std::chrono::steady_clock::now();
         std::lock_guard<TicketMutex> lock(consumer_mutex_);
+        auto t_lock1 = std::chrono::steady_clock::now();
         for (auto& c : consumers_) {
           c->Consume(sim_data);
         }
+        auto t_consume = std::chrono::steady_clock::now();
         snapshot_dirty_ = true;
         has_ever_consumed_ = true;
+        auto lock_us = std::chrono::duration<double, std::micro>(t_lock1 - t_lock0).count();
+        auto consume_us = std::chrono::duration<double, std::micro>(t_consume - t_lock1).count();
+        ILOG_DEBUG(logger_, "ConsumeData: batch rays={} outgoing={} lock={:.0f}us consume={:.0f}us",
+                   sim_data.rays_.size_, sim_data.outgoing_indices_.size(), lock_us, consume_us);
         if (!first_consume_logged) {
           ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
           first_consume_logged = true;
