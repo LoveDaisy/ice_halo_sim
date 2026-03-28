@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <thread>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -87,6 +88,13 @@ struct BgOverlayTestState {
   }
 };
 static BgOverlayTestState g_bg_test;
+
+// CLI flags for perf testing
+static bool g_enable_visible = false;
+static bool g_enable_vsync = false;
+static bool g_enable_frame_limit = false;
+static int g_core_log_level = LUMICE_LOG_INFO;
+static int g_gui_log_level = LUMICE_LOG_INFO;
 
 // Reset all global state for test isolation
 static void ResetTestState() {
@@ -1460,6 +1468,7 @@ static const char* CreatePerfConfig() {
 static void StartPerfSimulation() {
   gui::g_server = LUMICE_CreateServer();
   LUMICE_InitLogger(gui::g_server);
+  LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
 
   // Set up g_state to match perf config, then use DoRun() so the server's
   // config_manager_ is populated from the same SerializeCoreConfig path.
@@ -1797,7 +1806,36 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
   }
 }
 
-int main(int /*argc*/, char** /*argv*/) {
+int main(int argc, char** argv) {
+  // Parse CLI arguments
+  const char* test_filter = nullptr;
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--filter") == 0 && i + 1 < argc) {
+      test_filter = argv[++i];
+    } else if (strcmp(argv[i], "--visible") == 0) {
+      g_enable_visible = true;
+    } else if (strcmp(argv[i], "--vsync") == 0) {
+      g_enable_vsync = true;
+      g_enable_visible = true;
+    } else if (strcmp(argv[i], "--frame-limit") == 0) {
+      g_enable_frame_limit = true;
+    } else if (strcmp(argv[i], "--no-frame-limit") == 0) {
+      g_enable_frame_limit = false;
+    } else if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
+      const char* level = argv[++i];
+      int lvl = LUMICE_LOG_INFO;
+      if (strcmp(level, "trace") == 0) lvl = LUMICE_LOG_TRACE;
+      else if (strcmp(level, "debug") == 0) lvl = LUMICE_LOG_DEBUG;
+      else if (strcmp(level, "verbose") == 0) lvl = LUMICE_LOG_VERBOSE;
+      else if (strcmp(level, "info") == 0) lvl = LUMICE_LOG_INFO;
+      else if (strcmp(level, "warning") == 0) lvl = LUMICE_LOG_WARNING;
+      else if (strcmp(level, "error") == 0) lvl = LUMICE_LOG_ERROR;
+      else if (strcmp(level, "off") == 0) lvl = LUMICE_LOG_OFF;
+      g_core_log_level = lvl;
+      g_gui_log_level = lvl;
+    }
+  }
+
   // GLFW init
   glfwSetErrorCallback(gui::GlfwErrorCallback);
   if (!glfwInit()) {
@@ -1811,7 +1849,9 @@ int main(int /*argc*/, char** /*argv*/) {
 #ifdef __APPLE__
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
-  glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);  // Hidden window mode
+  if (!g_enable_visible) {
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);  // Hidden window mode
+  }
 
   GLFWwindow* window =
       glfwCreateWindow(gui::kInitWindowWidth, gui::kInitWindowHeight, "LumiceGUITests", nullptr, nullptr);
@@ -1823,7 +1863,16 @@ int main(int /*argc*/, char** /*argv*/) {
 
   glfwSetWindowSizeCallback(window, gui::WindowSizeCallback);
   glfwMakeContextCurrent(window);
-  glfwSwapInterval(0);  // No VSync for tests
+  glfwSwapInterval(g_enable_vsync ? 1 : 0);
+  if (g_enable_visible) {
+    fprintf(stderr, "[DIAG] Visible window mode enabled\n");
+  }
+  if (g_enable_vsync) {
+    fprintf(stderr, "[DIAG] VSync mode enabled: swapInterval(1)\n");
+  }
+  if (g_enable_frame_limit) {
+    fprintf(stderr, "[DIAG] Frame limit mode enabled\n");
+  }
 
   if (!gui::InitGLLoader()) {
     glfwDestroyWindow(window);
@@ -1878,7 +1927,11 @@ int main(int /*argc*/, char** /*argv*/) {
   RegisterBgOverlayTests(engine);
   RegisterImportExportTests(engine);
   RegisterPerfTests(engine);
-  ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests);
+  if (test_filter) {
+    ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
+  } else {
+    ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests);
+  }
 
   // Main loop — runs until all tests complete
   while (true) {
@@ -1923,6 +1976,10 @@ int main(int /*argc*/, char** /*argv*/) {
     glfwSwapBuffers(window);
 
     ImGuiTestEngine_PostSwap(engine);
+
+    if (g_enable_frame_limit) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(gui::kTargetFrameTimeMs));
+    }
 
     // Exit when all tests are done
     if (!ImGuiTestEngine_IsTestQueueEmpty(engine)) {
