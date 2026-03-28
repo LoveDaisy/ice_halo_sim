@@ -1819,6 +1819,8 @@ int main(int argc, char** argv) {
         lvl = LUMICE_LOG_TRACE;
       else if (strcmp(level, "debug") == 0)
         lvl = LUMICE_LOG_DEBUG;
+      else if (strcmp(level, "verbose") == 0)
+        lvl = LUMICE_LOG_VERBOSE;
       else if (strcmp(level, "info") == 0)
         lvl = LUMICE_LOG_INFO;
       else if (strcmp(level, "warning") == 0)

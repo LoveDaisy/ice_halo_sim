@@ -94,7 +94,6 @@ int main(int argc, char** argv) {
   {
     // ImGui ring buffer sink (shared between GUI logger and Core callback)
     gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
-    gui::g_imgui_log_sink->set_pattern(gui::kGuiLogPattern);
 
     // File sink (default level=off, enabled via GUI checkbox)
     std::filesystem::path log_path;
@@ -106,16 +105,16 @@ int main(int argc, char** argv) {
     log_path = std::filesystem::absolute(log_path);
     gui::g_log_file_path = log_path.u8string();
     gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path.string(), true);
-    gui::g_file_log_sink->set_pattern(gui::kGuiLogPattern);
     gui::g_file_log_sink->set_level(spdlog::level::off);
 
-    // Set GUI logger sinks: stdout + ImGui + file
+    // Set GUI logger sinks: stdout + ImGui + file, then apply our custom formatter to all.
     auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    stdout_sink->set_pattern(gui::kGuiLogPattern);
     gui::SetGuiLoggerSinks({ stdout_sink, gui::g_imgui_log_sink, gui::g_file_log_sink });
+    gui::GetGuiLogger().set_formatter(lumice::CreateLumiceFormatter(gui::kGuiLogPattern));
 
-    // Flush strategy: warn+ immediately, all levels every 1s
-    gui::GetGuiLogger().flush_on(spdlog::level::warn);
+    // Flush strategy: warning+ immediately, all levels every 1s
+    // spdlog::err = our warning level (see spdlog_levels.hpp)
+    gui::GetGuiLogger().flush_on(spdlog::level::err);
     spdlog::flush_every(std::chrono::seconds(1));
 
     // Register C API callback to receive Core logs → pipe into ImGui ring buffer
@@ -137,9 +136,11 @@ int main(int argc, char** argv) {
         return LUMICE_LOG_TRACE;
       if (s == "debug")
         return LUMICE_LOG_DEBUG;
+      if (s == "verbose")
+        return LUMICE_LOG_VERBOSE;
       if (s == "info")
         return LUMICE_LOG_INFO;
-      if (s == "warn")
+      if (s == "warn" || s == "warning")
         return LUMICE_LOG_WARNING;
       if (s == "error")
         return LUMICE_LOG_ERROR;
@@ -153,7 +154,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
       std::string_view arg(argv[i]);
       if (arg == "-v") {
-        gui_level = LUMICE_LOG_INFO;
+        gui_level = LUMICE_LOG_VERBOSE;
       } else if (arg == "-d") {
         gui_level = LUMICE_LOG_DEBUG;
       } else if (arg == "--log-level" && i + 1 < argc) {

@@ -523,7 +523,7 @@ void SyncFromPoller() {
 
   PollerData data;
   if (!g_server_poller.TrySyncData(data)) {
-    GUI_LOG_DEBUG("[GUI] SyncFromPoller: skipped (poller busy)");
+    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: skipped (poller busy)");
     return;
   }
   if (!data.valid) {
@@ -548,7 +548,7 @@ void SyncFromPoller() {
   // Quality gate is in ServerPoller::PollOnce — staged data is always worth displaying.
   bool upload_ok = data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0;
   if (upload_ok) {
-    GUI_LOG_DEBUG("[GUI] SyncFromPoller: upload tex_rays={}, intensity={:.6f}, eff_pixels={}, factor={:.6f}",
+    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: upload tex_rays={}, intensity={:.6f}, eff_pixels={}, factor={:.6f}",
                   data.texture_ray_count, data.snapshot_intensity, data.effective_pixels, data.intensity_factor);
     g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
     g_state.snapshot_intensity = data.snapshot_intensity;

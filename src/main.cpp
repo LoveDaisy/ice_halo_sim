@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
       }
       output_dir = argv[i];
     } else if (arg == "-v") {
-      log_level = LUMICE_LOG_TRACE;
+      log_level = LUMICE_LOG_VERBOSE;
     } else if (arg == "-d") {
       log_level = LUMICE_LOG_DEBUG;
     } else if (arg == "-h") {
