@@ -589,8 +589,8 @@ void RenderLogPanel(float window_width, float window_height) {
 
   // Config controls row
   static const char* const kLevelNames[] = { "Trace", "Debug", "Verbose", "Info", "Warning", "Error", "Off" };
-  static const LUMICE_LogLevel kLevelMap[] = { LUMICE_LOG_TRACE,   LUMICE_LOG_DEBUG,   LUMICE_LOG_VERBOSE,
-                                               LUMICE_LOG_INFO,    LUMICE_LOG_WARNING, LUMICE_LOG_ERROR,
+  static const LUMICE_LogLevel kLevelMap[] = { LUMICE_LOG_TRACE, LUMICE_LOG_DEBUG,   LUMICE_LOG_VERBOSE,
+                                               LUMICE_LOG_INFO,  LUMICE_LOG_WARNING, LUMICE_LOG_ERROR,
                                                LUMICE_LOG_OFF };
 
   ImGui::Text("GUI");

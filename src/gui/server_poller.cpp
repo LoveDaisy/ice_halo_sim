@@ -190,10 +190,10 @@ void ServerPoller::PollOnce() {
         staged_.has_new_texture = true;
         staged_.texture_ray_count = cached_stats.sim_ray_num;
         GUI_LOG_VERBOSE("[Poller] staged: rays={} intensity={} gen={}", cached_stats.sim_ray_num,
-                      xyz_results[0].snapshot_intensity, xyz_results[0].snapshot_generation);
+                        xyz_results[0].snapshot_intensity, xyz_results[0].snapshot_generation);
       } else {
         GUI_LOG_VERBOSE("[Poller] quality gate: skipped rays={} (min={}) gen={}", cached_stats.sim_ray_num, min_rays,
-                      xyz_results[0].snapshot_generation);
+                        xyz_results[0].snapshot_generation);
       }
     }
   }

@@ -1,6 +1,13 @@
 #include <GLFW/glfw3.h>
 #include <stb_image.h>
 
+// clang-format off
+#ifdef _WIN32
+#include <windows.h>  // Must precede timeapi.h (provides UINT, DWORD, etc.)
+#include <timeapi.h>
+#endif
+// clang-format on
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -91,10 +98,17 @@ struct BgOverlayTestState {
 static BgOverlayTestState g_bg_test;
 static int g_core_log_level = LUMICE_LOG_INFO;
 static int g_gui_log_level = LUMICE_LOG_INFO;
-static bool g_enable_visible = false;      // --visible: show window (enables DWM compositing path)
-static bool g_enable_vsync = false;       // --vsync: enable VSync (implies --visible)
-static bool g_enable_frame_limit = true;  // Default on: matches real app's kTargetFrameTimeMs fallback.
-                                          // Use --no-frame-limit to disable for raw throughput comparison.
+static bool g_enable_visible = false;           // --visible: show window (enables DWM compositing path)
+static bool g_enable_vsync = false;             // --vsync: enable VSync (implies --visible)
+static bool g_enable_frame_limit = true;        // Default on: matches real app's kTargetFrameTimeMs fallback.
+                                                // Use --no-frame-limit to disable for raw throughput comparison.
+static bool g_enable_main_loop_commit = false;  // --main-loop-commit: DoRun on main thread (matches real app)
+static bool g_enable_log_panel = false;         // --log-panel: render LogPanel in main loop (matches real app)
+static int g_dorun_delay_ms = 0;                // --dorun-delay N: inject sleep after DoRun to simulate environment lag
+
+// Shared counters for main-loop-commit mode (written by main thread, read by test thread after measurement)
+static int g_main_loop_restart_count = 0;
+static unsigned long g_main_loop_cumulative_rays = 0;
 
 // Reset all global state for test isolation
 static void ResetTestState() {
@@ -1624,8 +1638,10 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       auto last_upload_time = start_time;
       std::vector<double> texture_intervals_ms;
 
+      int frame_count = 0;
       while (std::chrono::steady_clock::now() < end_time) {
         ctx->Yield();
+        frame_count++;
         // Detect new texture upload
         if (gui::g_state.texture_upload_count != last_upload_count) {
           auto now = std::chrono::steady_clock::now();
@@ -1639,6 +1655,8 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
       unsigned long end_rays = gui::g_state.stats_sim_ray_num;
       double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
 
+      fprintf(stderr, "[PERF] steady_state: %d frames in %.1fs (%.1f main_loop_FPS)\n", frame_count, elapsed,
+              frame_count / elapsed);
       ReportPerf("steady_state", start_rays, end_rays, elapsed);
       double rays_per_sec = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
       IM_CHECK_GT(rays_per_sec, 0.0);
@@ -1684,10 +1702,14 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         }
       }
 
+      // Reset main-loop-commit counters for this measurement window
+      g_main_loop_cumulative_rays = 0;
+      g_main_loop_restart_count = 0;
+
       // Measure: sweep sun altitude over 5 seconds, matching real manual slider drag.
       // Each frame: update altitude (continuous sweep) + set dirty.
-      // Commit logic mirrors main.cpp: check dirty + kCommitIntervalMs throttle per frame.
-      // Track cumulative rays across restarts via direct C API.
+      // When --main-loop-commit: DoRun fires on main thread (same as real app).
+      // Otherwise: DoRun fires here on test thread (original behavior).
       auto start_time = std::chrono::steady_clock::now();
       auto end_time = start_time + std::chrono::seconds(5);
       auto last_commit = start_time;
@@ -1731,32 +1753,45 @@ static void RegisterPerfTests(ImGuiTestEngine* engine) {
         if (gui::g_state.texture_upload_count != last_upload_count) {
           per_upload_rays.push_back(gui::g_state.stats_sim_ray_num);
           if (waiting_first_upload) {
-            auto delay =
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - last_dorun_time);
+            auto delay = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - last_dorun_time);
             first_upload_ms.push_back(delay.count());
             waiting_first_upload = false;
           }
           last_upload_count = gui::g_state.texture_upload_count;
         }
 
-        // Throttled commit: same logic as main.cpp auto-commit
-        auto now = std::chrono::steady_clock::now();
-        auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
-        if (commit_elapsed >= gui::kCommitIntervalMs) {
-          auto rays_this_cycle = read_server_rays();
-          per_restart_rays.push_back(rays_this_cycle);
-          cumulative_rays += rays_this_cycle;
-          gui::g_state.dirty = false;
-          gui::DoRun();
-          last_commit = now;
-          last_dorun_time = now;
-          waiting_first_upload = true;
-          restart_count++;
+        // Throttled commit: when --main-loop-commit, the main loop handles DoRun on the main thread
+        // (matching real app behavior). Otherwise, DoRun fires here on the test thread.
+        if (!g_enable_main_loop_commit) {
+          auto now = std::chrono::steady_clock::now();
+          auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
+          if (commit_elapsed >= gui::kCommitIntervalMs) {
+            auto rays_this_cycle = read_server_rays();
+            per_restart_rays.push_back(rays_this_cycle);
+            cumulative_rays += rays_this_cycle;
+            gui::g_state.dirty = false;
+            gui::DoRun();
+            if (g_dorun_delay_ms > 0) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(g_dorun_delay_ms));
+            }
+            last_commit = now;
+            last_dorun_time = now;
+            waiting_first_upload = true;
+            restart_count++;
+          }
         }
       }
-      auto final_rays = read_server_rays();
-      per_restart_rays.push_back(final_rays);
-      cumulative_rays += final_rays;
+
+      if (g_enable_main_loop_commit) {
+        // Main loop tracked rays and restarts; read final cycle and combine
+        auto final_rays = read_server_rays();
+        cumulative_rays = g_main_loop_cumulative_rays + final_rays;
+        restart_count = g_main_loop_restart_count;
+      } else {
+        auto final_rays = read_server_rays();
+        per_restart_rays.push_back(final_rays);
+        cumulative_rays += final_rays;
+      }
 
       double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
 
@@ -1856,6 +1891,12 @@ int main(int argc, char** argv) {
       g_enable_frame_limit = true;
     } else if (strcmp(argv[i], "--no-frame-limit") == 0) {
       g_enable_frame_limit = false;
+    } else if (strcmp(argv[i], "--main-loop-commit") == 0) {
+      g_enable_main_loop_commit = true;
+    } else if (strcmp(argv[i], "--log-panel") == 0) {
+      g_enable_log_panel = true;
+    } else if (strcmp(argv[i], "--dorun-delay") == 0 && i + 1 < argc) {
+      g_dorun_delay_ms = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
       // Set both core and GUI log level: trace/debug/info/warning/error/off
       const char* level = argv[++i];
@@ -1880,6 +1921,12 @@ int main(int argc, char** argv) {
   }
   g_core_log_level = core_log_level;
   g_gui_log_level = gui_log_level;
+
+#ifdef _WIN32
+  // Match real app's timer resolution (main.cpp:40).
+  // Without this, cv_.wait_for() rounds up to 15.6ms ticks.
+  timeBeginPeriod(1);
+#endif
 
   // GLFW init
   glfwSetErrorCallback(gui::GlfwErrorCallback);
@@ -1950,6 +1997,28 @@ int main(int argc, char** argv) {
   }
   gui::ResetCrystalView();
 
+  // Initialize ImGui log sink for --log-panel and set up core log callback.
+  // Matches real app's main.cpp log initialization so RenderLogPanel has data to render.
+  if (g_enable_log_panel) {
+    gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
+    LUMICE_SetLogCallback([](LUMICE_LogLevel level, const char* /*name*/, const char* message) {
+      if (gui::g_imgui_log_sink) {
+        auto spd_level = static_cast<spdlog::level::level_enum>(level);
+        gui::g_imgui_log_sink->ReceiveExternal(spd_level, message);
+      }
+    });
+    fprintf(stderr, "[DIAG] Log panel enabled with ImGui sink\n");
+  }
+
+  if (g_dorun_delay_ms > 0) {
+    fprintf(stderr, "[DIAG] DoRun delay: %dms injected after each DoRun (simulates environment lag)\n",
+            g_dorun_delay_ms);
+  }
+
+  if (g_enable_main_loop_commit) {
+    fprintf(stderr, "[DIAG] Main-loop-commit enabled: DoRun on main thread (matches real app)\n");
+  }
+
   // Setup test engine
   ImGuiTestEngine* engine = ImGuiTestEngine_CreateContext();
   ImGuiTestEngineIO& test_io = ImGuiTestEngine_GetIO(engine);
@@ -1980,6 +2049,34 @@ int main(int argc, char** argv) {
     glfwPollEvents();
     gui::SyncFromPoller();  // Sync server data for perf tests (no-op when g_server is null)
 
+    // Auto-commit on main thread (matches real app's main.cpp:214-228).
+    // When enabled, DoRun() blocks the main loop just like in the real app,
+    // so VSync frame budget effects are faithfully reproduced.
+    if (g_enable_main_loop_commit && gui::g_server) {
+      static auto last_commit = std::chrono::steady_clock::now();
+      if (gui::g_state.dirty) {
+        auto ss = gui::g_state.sim_state;
+        if (ss == gui::GuiState::SimState::kSimulating || ss == gui::GuiState::SimState::kDone) {
+          auto now = std::chrono::steady_clock::now();
+          auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
+          if (elapsed >= gui::kCommitIntervalMs) {
+            // Record rays from current cycle before restart
+            LUMICE_StatsResult stats[2]{};
+            LUMICE_GetStatsResults(gui::g_server, stats, 1);
+            g_main_loop_cumulative_rays += stats[0].sim_ray_num;
+            g_main_loop_restart_count++;
+
+            gui::g_state.dirty = false;
+            gui::DoRun();
+            if (g_dorun_delay_ms > 0) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(g_dorun_delay_ms));
+            }
+            last_commit = now;
+          }
+        }
+      }
+    }
+
     if (glfwWindowShouldClose(window)) {
       if (ImGuiTestEngine_TryAbortEngine(engine)) {
         break;
@@ -2002,6 +2099,9 @@ int main(int argc, char** argv) {
     gui::RenderLeftPanel(layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     gui::RenderFloatingLensBar(layout_width);
+    if (g_enable_log_panel) {
+      gui::RenderLogPanel(layout_width, layout_height);
+    }
     gui::RenderStatusBar(layout_width, layout_height);
     gui::RenderUnsavedPopup(window);
 
@@ -2066,5 +2166,8 @@ int main(int argc, char** argv) {
   glfwDestroyWindow(window);
   glfwTerminate();
 
+#ifdef _WIN32
+  timeEndPeriod(1);
+#endif
   return (count_tested == count_success) ? 0 : 1;
 }

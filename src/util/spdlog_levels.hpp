@@ -17,13 +17,11 @@ namespace lumice {
 class LumiceLevelFlag : public spdlog::custom_flag_formatter {
  public:
   void format(const spdlog::details::log_msg& msg, const std::tm&, spdlog::memory_buf_t& dest) override {
-    static constexpr char kShort[] = {'T', 'D', 'V', 'I', 'W', 'E', 'O'};
+    static constexpr char kShort[] = { 'T', 'D', 'V', 'I', 'W', 'E', 'O' };
     dest.push_back(kShort[static_cast<int>(msg.level)]);
   }
 
-  std::unique_ptr<custom_flag_formatter> clone() const override {
-    return std::make_unique<LumiceLevelFlag>();
-  }
+  std::unique_ptr<custom_flag_formatter> clone() const override { return std::make_unique<LumiceLevelFlag>(); }
 };
 
 // Create a spdlog formatter with our custom '%*' flag registered.
