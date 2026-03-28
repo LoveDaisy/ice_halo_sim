@@ -32,6 +32,21 @@ class IceRefractiveIndex {
 };
 
 
+// Fresnel reflection ratio for unpolarized light.
+// delta = (1 - rr^2) / cos_theta^2 + rr^2, rr = relative refractive index.
+// When delta <= 0, total internal reflection occurs.
+float GetReflectRatio(float delta, float rr);
+
+// Compute reflected direction: out = dir - 2*(dir·normal)*normal
+void ComputeReflectedDir(const float* dir, const float* normal, float* out);
+
+// Compute refracted direction using Snell's law.
+// rr = n_incident / n_transmitted (caller determines from cos_theta sign and refractive index n).
+// cos_theta = dot(dir, normal). Normal points outward.
+// Returns false if total internal reflection (delta <= 0).
+bool ComputeRefractedDir(const float* dir, const float* normal, float rr, float cos_theta, float* out);
+
+
 void HitSurface(const Crystal& crystal, float n, size_t num,                          // input
                 const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
                 float_bf_t d_out, float_bf_t w_out);                                  // output

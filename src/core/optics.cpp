@@ -20,6 +20,26 @@ float GetReflectRatio(float delta, float rr) {
   return (Rs + Rp) / 2;
 }
 
+void ComputeReflectedDir(const float* dir, const float* normal, float* out) {
+  float cos_theta = Dot3(dir, normal);
+  for (int j = 0; j < 3; j++) {
+    out[j] = dir[j] - 2 * cos_theta * normal[j];
+  }
+}
+
+
+bool ComputeRefractedDir(const float* dir, const float* normal, float rr, float cos_theta, float* out) {
+  float d = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
+  if (d <= 0.0f) {
+    return false;
+  }
+  for (int j = 0; j < 3; j++) {
+    out[j] = rr * dir[j] - (rr - std::sqrt(d)) * cos_theta * normal[j];
+  }
+  return true;
+}
+
+
 // NOLINTNEXTLINE(readability-function-size)
 void HitSurface(const Crystal& crystal, float n, size_t num,                          // input
                 const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
