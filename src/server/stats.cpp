@@ -5,11 +5,7 @@
 namespace lumice {
 
 void StatsConsumer::Consume(const SimData& data) {
-  for (const auto& r : data.rays_) {
-    if (r.prev_ray_idx_ == kInfSize) {
-      sim_rays_++;
-    }
-  }
+  sim_rays_ += data.root_ray_count_;
   total_rays_ += data.rays_.size_;
   crystals_ += data.crystals_.size();
 }

@@ -465,6 +465,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   size_t original_ray_num = ray_num;  // ray_num is overwritten in the ms loop; keep original for normalization.
 
   RayBuffer all_data = AllocateAllData(config, ray_num);
+  std::vector<size_t> outgoing_indices;
   auto& init_data = workspace.init_data;
   auto& buffer_data = workspace.buffer_data;
   init_data[0].size_ = 0;
@@ -557,8 +558,14 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           CollectData(rng_, m, filter.get(),    // input
                       buffer_data, init_data);  // output
 
-          // 2.4 Copy to all_data
+          // 2.4 Copy to all_data + collect outgoing indices
+          size_t base_index = all_data.size_;
           all_data.EmplaceBack(buffer_data[1]);
+          for (size_t j = 0; j < buffer_data[1].size_; j++) {
+            if (buffer_data[1][j].state_ == RaySeg::kOutgoing) {
+              outgoing_indices.push_back(base_index + j);
+            }
+          }
         }  // hit loop
       }  // small batch loop
     }  // crystal loop
@@ -585,6 +592,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   sim_data.generation_ = generation;
   sim_data.crystals_ = std::move(all_crystals);
   sim_data.rays_ = std::move(all_data);
+  sim_data.outgoing_indices_ = std::move(outgoing_indices);
+  sim_data.root_ray_count_ = original_ray_num;
   data_queue_->Emplace(std::move(sim_data));
 }
 

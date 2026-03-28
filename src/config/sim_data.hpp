@@ -47,6 +47,8 @@ struct SimData {
   uint64_t generation_ = 0;
   RayBuffer rays_;
   std::vector<Crystal> crystals_;
+  std::vector<size_t> outgoing_indices_;  // Indices of kOutgoing rays in rays_ (filled by Simulator)
+  size_t root_ray_count_ = 0;             // Count of root rays (prev_ray_idx_ == kInfSize)
 };
 
 using SimDataPtrS = std::shared_ptr<SimData>;

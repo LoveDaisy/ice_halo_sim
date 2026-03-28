@@ -57,14 +57,16 @@ SimData::SimData(size_t capacity) : curr_wl_(0.0f), rays_(capacity) {}
 
 SimData::SimData(const SimData& other)
     : curr_wl_(other.curr_wl_), total_intensity_(other.total_intensity_), generation_(other.generation_),
-      rays_(other.rays_.capacity_), crystals_(other.crystals_) {
+      rays_(other.rays_.capacity_), crystals_(other.crystals_), outgoing_indices_(other.outgoing_indices_),
+      root_ray_count_(other.root_ray_count_) {
   rays_.size_ = other.rays_.size_;
   std::memcpy(rays_.rays_.get(), other.rays_.rays_.get(), sizeof(RaySeg) * other.rays_.capacity_);
 }
 
 SimData::SimData(SimData&& other) noexcept
     : curr_wl_(other.curr_wl_), total_intensity_(other.total_intensity_), generation_(other.generation_),
-      crystals_(std::move(other.crystals_)) {
+      crystals_(std::move(other.crystals_)), outgoing_indices_(std::move(other.outgoing_indices_)),
+      root_ray_count_(other.root_ray_count_) {
   rays_.size_ = other.rays_.size_;
   rays_.capacity_ = other.rays_.capacity_;
   rays_.rays_ = std::move(other.rays_.rays_);
@@ -87,6 +89,8 @@ SimData& SimData::operator=(const SimData& other) {
   rays_.rays_ = std::make_unique<RaySeg[]>(rays_.capacity_);
   std::memcpy(rays_.rays_.get(), other.rays_.rays_.get(), sizeof(RaySeg) * rays_.capacity_);
   crystals_ = other.crystals_;
+  outgoing_indices_ = other.outgoing_indices_;
+  root_ray_count_ = other.root_ray_count_;
   return *this;
 }
 
@@ -102,6 +106,8 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   rays_.capacity_ = other.rays_.capacity_;
   rays_.rays_ = std::move(other.rays_.rays_);
   crystals_ = std::move(other.crystals_);
+  outgoing_indices_ = std::move(other.outgoing_indices_);
+  root_ray_count_ = other.root_ray_count_;
 
   other.rays_.capacity_ = 0;
   other.rays_.size_ = 0;

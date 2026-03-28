@@ -1,6 +1,7 @@
 #include "server/render.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -369,16 +370,13 @@ void RenderConsumer::Consume(const SimData& data) {
     xy_buf_ = std::make_unique<int[]>(buf_capacity_ * 2);
   }
 
+  // Use pre-collected outgoing indices to skip full-scan of all ray segments.
+  assert(!data.outgoing_indices_.empty() || data.rays_.Empty());
   size_t filtered_ray_num = 0;
-  for (size_t i = 0; i < data.rays_.size_; i++) {
+  for (size_t i : data.outgoing_indices_) {
     const auto& r = data.rays_[i];
-    // Filter current ray
-    // 1. ray state must be kOutgoing
-    if (r.state_ != RaySeg::kOutgoing) {
-      continue;
-    }
 
-    // 2. then check every filter for every scattering
+    // Check every filter for every scattering
     if (!FilterRay(data.rays_, i, filters_, crystals)) {
       continue;
     }
