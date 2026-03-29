@@ -539,10 +539,15 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
         if (bt_crystal.PolygonFaceCount() > 0) {
           filter->InitCrystalSymmetry(bt_crystal);
 
+          // Store BT crystal in all_crystals (once per ci) for RenderConsumer chain walk.
+          size_t bt_crystal_idx = all_crystals.size();
+          all_crystals.emplace_back(bt_crystal);
+
           const auto& sun_param = config.light_source_.param_;
 
           float ri = bt_crystal.GetRefractiveIndex(wl);
           size_t orientation_num = crystal_ray_num[ci];
+
 
           for (size_t oi = 0; oi < orientation_num && !stop_; oi++) {
             float light_dir[3];
@@ -556,29 +561,53 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
             }
 
             for (size_t k = 0; k < bt_result.outgoing_w.size(); k++) {
-              // Build temporary RaySeg for filter
-              RaySeg tmp{};
-              tmp.state_ = RaySeg::kOutgoing;
-              tmp.d_[0] = bt_result.outgoing_d[3 * k];
-              tmp.d_[1] = bt_result.outgoing_d[3 * k + 1];
-              tmp.d_[2] = bt_result.outgoing_d[3 * k + 2];
-              tmp.crystal_config_id_ = bt_crystal.config_id_;
+              // Build outgoing RaySeg for Simulator-level filter + RenderConsumer chain walk.
+              RaySeg outgoing_ray{};
+              outgoing_ray.state_ = RaySeg::kOutgoing;
+              outgoing_ray.d_[0] = bt_result.outgoing_d[3 * k];
+              outgoing_ray.d_[1] = bt_result.outgoing_d[3 * k + 1];
+              outgoing_ray.d_[2] = bt_result.outgoing_d[3 * k + 2];
+              outgoing_ray.crystal_config_id_ = bt_crystal.config_id_;
+              outgoing_ray.crystal_idx_ = bt_crystal_idx;
               for (size_t fi = 0; fi < std::min(bt_result.outgoing_raypath[k].size(), static_cast<size_t>(kMaxHits));
                    fi++) {
-                tmp.rp_ << static_cast<IdType>(bt_result.outgoing_raypath[k][fi]);
+                outgoing_ray.rp_ << static_cast<IdType>(bt_result.outgoing_raypath[k][fi]);
               }
 
-              if (!filter->Check(tmp)) {
+              if (!filter->Check(outgoing_ray)) {
                 continue;
               }
 
               // Scale weight: w_scaled = w_bt * wl_weight / total_entry_area
               float w_scaled = bt_result.outgoing_w[k] * wl_param.weight_ / bt_result.total_entry_area;
+              outgoing_ray.w_ = w_scaled;
 
-              outgoing_indices.push_back(outgoing_indices.size());
-              outgoing_d.push_back(bt_result.outgoing_d[3 * k]);
-              outgoing_d.push_back(bt_result.outgoing_d[3 * k + 1]);
-              outgoing_d.push_back(bt_result.outgoing_d[3 * k + 2]);
+              // Workaround: construct a minimal 2-node RaySeg chain (entry + outgoing) so that
+              // RenderConsumer's FilterRay chain walk can work. BT has no per-bounce intermediate
+              // ray state, so prev_ray_idx_ on the outgoing ray points directly to the entry ray
+              // (not a literal "previous ray in the trace"). The chain satisfies FilterRay's
+              // termination condition (root.prev == kInfSize) for single-scattering filters.
+              // Limitation: supports at most 1 render-level ms_filter (chain depth = 2 nodes).
+              RaySeg entry_ray{};
+              entry_ray.prev_ray_idx_ = kInfSize;
+              size_t entry_idx = all_data.size_;
+              entry_ray.root_ray_idx_ = entry_idx;
+              entry_ray.crystal_idx_ = bt_crystal_idx;
+              entry_ray.crystal_config_id_ = bt_crystal.config_id_;
+              entry_ray.state_ = RaySeg::kNormal;
+              std::memcpy(entry_ray.d_, light_dir, sizeof(float) * 3);
+              entry_ray.w_ = wl_param.weight_;
+              all_data.EmplaceBack(entry_ray);
+
+              outgoing_ray.prev_ray_idx_ = entry_idx;
+              outgoing_ray.root_ray_idx_ = entry_idx;
+              size_t outgoing_idx = all_data.size_;
+              all_data.EmplaceBack(outgoing_ray);
+
+              outgoing_indices.push_back(outgoing_idx);
+              outgoing_d.push_back(outgoing_ray.d_[0]);
+              outgoing_d.push_back(outgoing_ray.d_[1]);
+              outgoing_d.push_back(outgoing_ray.d_[2]);
               outgoing_w.push_back(w_scaled);
             }
           }
@@ -681,17 +710,10 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   SimData sim_data;
   sim_data.curr_wl_ = wl;
   sim_data.generation_ = generation;
-  if (use_bt) {
-    sim_data.total_intensity_ = bt_total_intensity;
-    sim_data.root_ray_count_ = bt_orientation_count;
-    // rays_ and crystals_ intentionally left empty for beam tracing path.
-    // outgoing_indices_ filled with trivial {0,1,...,N-1} to satisfy RenderConsumer contract.
-  } else {
-    sim_data.total_intensity_ = wl_param.weight_ * original_ray_num;
-    sim_data.root_ray_count_ = original_ray_num;
-    sim_data.crystals_ = std::move(all_crystals);
-    sim_data.rays_ = std::move(all_data);
-  }
+  sim_data.total_intensity_ = use_bt ? bt_total_intensity : wl_param.weight_ * original_ray_num;
+  sim_data.root_ray_count_ = use_bt ? bt_orientation_count : original_ray_num;
+  sim_data.crystals_ = std::move(all_crystals);
+  sim_data.rays_ = std::move(all_data);
   sim_data.outgoing_indices_ = std::move(outgoing_indices);
   sim_data.outgoing_d_ = std::move(outgoing_d);
   sim_data.outgoing_w_ = std::move(outgoing_w);

@@ -30,16 +30,32 @@ bool RayBuffer::Empty() const {
 }
 
 void RayBuffer::EmplaceBack(RaySeg r) {
-  if (size_ + 1 < capacity_) {
-    rays_[size_++] = r;
+  if (size_ + 1 >= capacity_) {
+    size_t new_capacity = std::max(capacity_ * 2, size_ + 16);
+    auto new_rays = std::make_unique<RaySeg[]>(new_capacity);
+    if (rays_) {
+      std::memcpy(new_rays.get(), rays_.get(), sizeof(RaySeg) * size_);
+    }
+    rays_ = std::move(new_rays);
+    capacity_ = new_capacity;
   }
+  rays_[size_++] = r;
 }
 
 void RayBuffer::EmplaceBack(const RayBuffer& buffer, size_t start, size_t len) {
-  size_t end = std::min({ start + len, capacity_, buffer.size_ });
-  for (size_t i = start; i < end; i++) {
-    rays_[size_++] = buffer.rays_[i];
+  size_t end = std::min(start + len, buffer.size_);
+  size_t count = end > start ? end - start : 0;
+  if (size_ + count >= capacity_) {
+    size_t new_capacity = std::max(capacity_ * 2, size_ + count + 16);
+    auto new_rays = std::make_unique<RaySeg[]>(new_capacity);
+    if (rays_) {
+      std::memcpy(new_rays.get(), rays_.get(), sizeof(RaySeg) * size_);
+    }
+    rays_ = std::move(new_rays);
+    capacity_ = new_capacity;
   }
+  std::memcpy(rays_.get() + size_, buffer.rays_.get() + start, sizeof(RaySeg) * count);
+  size_ += count;
 }
 
 RaySeg* RayBuffer::rays() const {

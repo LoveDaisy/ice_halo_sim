@@ -488,8 +488,10 @@ TEST(BeamTracerIntegration, BeamTracingProducesOutput) {
   // outgoing_indices_ should match outgoing count
   EXPECT_EQ(data.outgoing_indices_.size(), data.outgoing_w_.size());
 
-  // rays_ should be empty (beam tracing doesn't produce ray tree)
-  EXPECT_TRUE(data.rays_.Empty());
+  // rays_ should be non-empty (BT now produces 2-node RaySeg chains for RenderConsumer compatibility)
+  EXPECT_FALSE(data.rays_.Empty());
+  // Each outgoing beam has an entry + outgoing pair
+  EXPECT_EQ(data.rays_.size_, data.outgoing_w_.size() * 2);
 
   // total_intensity should be positive
   EXPECT_GT(data.total_intensity_, 0.0f);
@@ -518,7 +520,7 @@ TEST(BeamTracerIntegration, McPathUnchangedWhenBtDisabled) {
   // MC path should have valid metadata
   EXPECT_GT(data.root_ray_count_, 0u);
   EXPECT_GT(data.total_intensity_, 0.0f);
-  // MC path fills rays_ (beam tracing does not)
+  // MC path fills rays_
   EXPECT_FALSE(data.rays_.Empty());
 }
 

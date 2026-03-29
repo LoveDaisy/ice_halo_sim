@@ -379,10 +379,7 @@ void RenderConsumer::Consume(const SimData& data) {
   assert(!data.outgoing_indices_.empty() || data.rays_.Empty());
   size_t filtered_ray_num = 0;
 
-  // Beam tracing data has empty rays_ — the slow path (chain walk) cannot work.
-  // Force fast path for BT data even if render-level filters are configured.
-  bool force_fast = data.rays_.Empty() && !data.outgoing_d_.empty();
-  if ((filters_.empty() || force_fast) && !data.outgoing_d_.empty()) {
+  if (filters_.empty() && !data.outgoing_d_.empty()) {
     // Fast path: bulk memcpy from pre-packed contiguous arrays.
     filtered_ray_num = outgoing_count;
     std::memcpy(d_buf_.get(), data.outgoing_d_.data(), filtered_ray_num * 3 * sizeof(float));
