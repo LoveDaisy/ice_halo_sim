@@ -115,6 +115,10 @@ BeamTraceResult BeamTrace(const Crystal& crystal, const Rotation& rot, const flo
                           size_t max_hits) {
   BeamTraceResult result{};
 
+  if (max_hits == 0) {
+    return result;
+  }
+
   size_t poly_cnt = crystal.PolygonFaceCount();
   if (poly_cnt == 0) {
     return result;
@@ -218,8 +222,8 @@ BeamTraceResult BeamTrace(const Crystal& crystal, const Rotation& rot, const flo
       BeamSegment beam = std::move(queue.front());
       queue.pop_front();
 
-      if (beam.depth >= max_hits) {
-        continue;  // Exceeded maximum bounce depth.
+      if (beam.depth >= max_hits - 1) {
+        continue;  // Exceeded maximum bounce depth (entry face counts as 1, matching MC's iteration count).
       }
 
       // Build basis for this beam's direction.
@@ -279,15 +283,28 @@ BeamTraceResult BeamTrace(const Crystal& crystal, const Rotation& rot, const flo
           float rbv[3]{};
           BuildOrthonormalBasis(refl_dir, rbu, rbv);
 
-          // The partition polygon is in the old beam's 2D space. Convert to 3D then re-project.
-          // 3D point = u2d * bu + v2d * bv (in crystal frame, relative to some origin on the beam axis).
+          // Re-project partition polygon from old beam's 2D space to reflected beam's 2D space.
+          // Must reconstruct actual 3D points on the hit face (not just the perpendicular projection),
+          // because dropping the along-beam component creates a coordinate mismatch with absolute
+          // face projections in subsequent PartitionBeam calls.
+          //
+          // For each 2D vertex (u, v), the flat projection is p_flat = u*bu + v*bv. The actual 3D
+          // point on the hit face is p_flat + t*beam_dir, where t places the point on the face plane.
+          const float* face_vtx0 = crystal.GetTriangleVtx() + crystal.GetPolygonFaceTriId()[part.target_face_id] * 9;
+          float face_d = Dot3(hit_normal, face_vtx0);
+
           ConvexPolygon2D cont_poly{};
           for (size_t vi = 0; vi < part.polygon.count; vi++) {
             float u2d = part.polygon.vertices[2 * vi];
             float v2d = part.polygon.vertices[2 * vi + 1];
+            float p_flat[3]{};
+            for (int j = 0; j < 3; j++) {
+              p_flat[j] = u2d * bu[j] + v2d * bv[j];
+            }
+            float t = (face_d - Dot3(p_flat, hit_normal)) / hit_cos;
             float p3d[3]{};
             for (int j = 0; j < 3; j++) {
-              p3d[j] = u2d * bu[j] + v2d * bv[j];
+              p3d[j] = p_flat[j] + t * beam.direction[j];
             }
             cont_poly.vertices[2 * vi] = Dot3(p3d, rbu);
             cont_poly.vertices[2 * vi + 1] = Dot3(p3d, rbv);

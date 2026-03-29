@@ -724,4 +724,141 @@ TEST(BeamTracerIntegration, McVsBtHaloDistribution) {
 }
 
 
+TEST(BeamTracerIntegration, FixedOrientationMcVsBt) {
+  // Per-beam matching at FIXED crystal orientation.
+  //
+  // Key insight: for planar crystal faces + fixed orientation + point source, the exit direction
+  // depends only on the face sequence (raypath), NOT on the entry point. So both MC and BT produce
+  // a finite set of discrete exit directions. Each direction corresponds to a unique raypath.
+  // MC weight per direction = fraction of rays that followed that raypath (Fresnel probability).
+  // BT weight per direction = area fraction * exact Fresnel transmission.
+  // With enough MC samples, these should converge.
+  //
+  // Validation: for each BT beam, find the matching MC cluster (same direction within tolerance),
+  // and compare normalized weights. Unmatched beams in either direction indicate algorithm bugs.
+
+  auto set_fixed_axis = [](lumice::AxisDistribution& axis) {
+    axis.azimuth_dist = { lumice::DistributionType::kNoRandom, 45.0f, 0.0f };
+    axis.latitude_dist = { lumice::DistributionType::kNoRandom, 60.0f, 0.0f };  // zen=30 -> lat=60
+    axis.roll_dist = { lumice::DistributionType::kNoRandom, 15.0f, 0.0f };
+  };
+
+  // MC: 500k rays -- enough for stable per-beam weight estimates
+  constexpr size_t kMcRays = 500000;
+  auto mc_config = MakeBeamTracingConfig(kMcRays, false);
+  mc_config.light_source_.param_ = { 0.0f, 0.0f, 0.0f };
+  mc_config.ms_[0].prob_ = 0.0f;
+  set_fixed_axis(mc_config.ms_[0].setting_[0].crystal_.axis_);
+  auto mc_data = RunSimulator(mc_config);
+
+  // BT: 1 orientation (deterministic)
+  auto bt_config = MakeBeamTracingConfig(1, true);
+  bt_config.light_source_.param_ = { 0.0f, 0.0f, 0.0f };
+  set_fixed_axis(bt_config.ms_[0].setting_[0].crystal_.axis_);
+  auto bt_data = RunSimulator(bt_config);
+
+  ASSERT_GT(mc_data.outgoing_w_.size(), 0u);
+  ASSERT_GT(bt_data.outgoing_w_.size(), 0u);
+
+  // Normalize both to probability distributions.
+  float mc_total_w = 0;
+  for (float w : mc_data.outgoing_w_) {
+    mc_total_w += w;
+  }
+  float bt_total_w = 0;
+  for (float w : bt_data.outgoing_w_) {
+    bt_total_w += w;
+  }
+  ASSERT_GT(mc_total_w, 0.0f);
+  ASSERT_GT(bt_total_w, 0.0f);
+
+  // Cluster both MC and BT by direction, then match clusters.
+  // For planar faces + fixed orientation + point source, each unique raypath produces
+  // exactly one exit direction. BT may produce multiple beams for the same raypath
+  // (from PartitionBeam subdivisions at different depths), which need to be aggregated.
+  constexpr float kClusterCosThreshold = 0.99999f;  // < 0.26 degrees
+  struct DirCluster {
+    float d[3];
+    double total_w;
+  };
+
+  auto cluster_directions = [&](const std::vector<float>& dirs, const std::vector<float>& weights) {
+    std::vector<DirCluster> clusters;
+    for (size_t i = 0; i < weights.size(); i++) {
+      const float* d = dirs.data() + 3 * i;
+      bool found = false;
+      for (auto& c : clusters) {
+        float cos_a = c.d[0] * d[0] + c.d[1] * d[1] + c.d[2] * d[2];
+        if (cos_a > kClusterCosThreshold) {
+          c.total_w += weights[i];
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        clusters.push_back({ { d[0], d[1], d[2] }, weights[i] });
+      }
+    }
+    return clusters;
+  };
+
+  auto mc_clusters = cluster_directions(mc_data.outgoing_d_, mc_data.outgoing_w_);
+  auto bt_clusters = cluster_directions(bt_data.outgoing_d_, bt_data.outgoing_w_);
+
+  // Match BT clusters to MC clusters and compare normalized weights.
+  float bt_unmatched_w = 0;
+  for (const auto& bt_c : bt_clusters) {
+    float bt_w = static_cast<float>(bt_c.total_w / bt_total_w);
+
+    int best_mc = -1;
+    float best_cos = -1;
+    for (size_t j = 0; j < mc_clusters.size(); j++) {
+      float cos_a = mc_clusters[j].d[0] * bt_c.d[0] + mc_clusters[j].d[1] * bt_c.d[1] + mc_clusters[j].d[2] * bt_c.d[2];
+      if (cos_a > best_cos) {
+        best_cos = cos_a;
+        best_mc = static_cast<int>(j);
+      }
+    }
+
+    if (best_cos < kClusterCosThreshold) {
+      bt_unmatched_w += bt_w;
+      continue;
+    }
+
+    float mc_w = static_cast<float>(mc_clusters[best_mc].total_w / mc_total_w);
+
+    // Skip negligible clusters (both < 0.1%)
+    if (bt_w < 0.001f && mc_w < 0.001f) {
+      continue;
+    }
+    float ref_w = std::max(bt_w, mc_w);
+    float rel_diff = std::abs(bt_w - mc_w) / ref_w;
+
+    EXPECT_LT(rel_diff, 0.15f) << "Direction (" << bt_c.d[0] << "," << bt_c.d[1] << "," << bt_c.d[2]
+                               << "): BT_w=" << bt_w << " MC_w=" << mc_w << " rel_diff=" << rel_diff;
+  }
+
+  // Check for MC clusters with no matching BT cluster (BT missing a raypath)
+  float mc_unmatched_w = 0;
+  for (const auto& mc_c : mc_clusters) {
+    float mc_w = static_cast<float>(mc_c.total_w / mc_total_w);
+    bool matched = false;
+    for (const auto& bt_c : bt_clusters) {
+      float cos_a = mc_c.d[0] * bt_c.d[0] + mc_c.d[1] * bt_c.d[1] + mc_c.d[2] * bt_c.d[2];
+      if (cos_a > kClusterCosThreshold) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched && mc_w > 0.001f) {
+      mc_unmatched_w += mc_w;
+    }
+  }
+
+  // Coverage: vast majority of significant weight should be matched
+  EXPECT_LT(bt_unmatched_w, 0.02f) << "BT unmatched weight: " << bt_unmatched_w * 100 << "%";
+  EXPECT_LT(mc_unmatched_w, 0.01f) << "MC unmatched weight: " << mc_unmatched_w * 100 << "%";
+}
+
+
 }  // namespace
