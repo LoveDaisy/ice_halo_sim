@@ -231,6 +231,35 @@ ConvexPolygon2D ClipByHalfPlane(const ConvexPolygon2D& poly, float nx, float ny,
 
 namespace {
 
+// Compute the intersection of two convex polygons using S-H clipping.
+// Clips polygon `a` by each edge of polygon `b`.
+// Both polygons must have CCW vertex order.
+// Temporary location: will be moved to geo3d in task-refactor-sim.
+ConvexPolygon2D IntersectConvexPolygons(const ConvexPolygon2D& a, const ConvexPolygon2D& b) {
+  if (a.count < 3 || b.count < 3) {
+    return {};
+  }
+
+  ConvexPolygon2D result = a;
+  for (size_t i = 0; i < b.count; i++) {
+    size_t j = (i + 1) % b.count;
+    float ex = b.vertices[2 * j] - b.vertices[2 * i];
+    float ey = b.vertices[2 * j + 1] - b.vertices[2 * i + 1];
+
+    // Inward-pointing normal of edge (left side for CCW polygon): (-ey, ex)
+    float nx = -ey;
+    float ny = ex;
+    // Half-plane: nx*(x - bx) + ny*(y - by) >= 0  =>  nx*x + ny*y + d >= 0
+    float d = -(nx * b.vertices[2 * i] + ny * b.vertices[2 * i + 1]);
+
+    result = ClipByHalfPlane(result, nx, ny, d);
+    if (result.count < 3) {
+      return {};
+    }
+  }
+  return result;
+}
+
 struct PartitionResult {
   int target_face_id;
   ConvexPolygon2D polygon;
@@ -239,27 +268,23 @@ struct PartitionResult {
 
 // For the beam traveling in direction `beam_dir`, find which polygon faces it can hit
 // and partition the 2D cross-section accordingly.
+// Uses face-plane projection: project each candidate face onto the beam's 2D cross-section,
+// then intersect with the beam polygon. Convexity of the crystal guarantees non-overlapping partitions.
 std::vector<PartitionResult> PartitionBeam(const BeamSegment& beam, const float* basis_u, const float* basis_v,
                                            const Crystal& crystal) {
   size_t poly_cnt = crystal.PolygonFaceCount();
   const float* poly_n = crystal.GetPolygonFaceNormal();
-  const float* poly_d = crystal.GetPolygonFaceDist();
 
   // Find candidate faces: those where the beam is heading toward (dot(beam_dir, face_normal) > eps).
   // Exclude the current face.
-  struct CandidateFace {
-    int face_id;
-    float dot_dn;  // dot(beam_dir, face_normal) — positive means beam exits through this face
-  };
-  std::vector<CandidateFace> candidates;
-
+  std::vector<int> candidates;
   for (size_t fi = 0; fi < poly_cnt; fi++) {
     if (static_cast<int>(fi) == beam.face_id) {
       continue;
     }
     float dot_dn = Dot3(beam.direction, poly_n + fi * 3);
     if (dot_dn > math::kFloatEps) {
-      candidates.push_back({ static_cast<int>(fi), dot_dn });
+      candidates.push_back(static_cast<int>(fi));
     }
   }
 
@@ -269,151 +294,51 @@ std::vector<PartitionResult> PartitionBeam(const BeamSegment& beam, const float*
 
   // If only one candidate, the entire beam hits that face.
   if (candidates.size() == 1) {
-    return { { candidates[0].face_id, beam.cross_section } };
+    return { { candidates[0], beam.cross_section } };
   }
 
-  // Multiple candidates: need to partition.
-  // For each candidate face, compute the slab exit parameter t for a representative point
-  // and assign faces by minimum t (nearest exit).
-  //
-  // Strategy: iterate candidates by increasing "priority" (nearest exit).
-  // For each face, clip the remaining beam polygon to the half-space where this face is nearest.
-  // The half-space boundary between face A and face B is where t_A = t_B.
-  //
-  // For face fi: t = -(p · n_fi + d_fi) / (dir · n_fi)
-  // For two faces A and B, t_A < t_B defines the region where A is nearer.
-  //
-  // Since we work in 2D (beam cross-section), we parameterize:
-  //   p_3d(u2d, v2d) is a point in the cross-section plane.
-  //   t_fi(u2d, v2d) = -(p_3d · n_fi + d_fi) / dot_dn_fi
-  //
-  // The boundary t_A = t_B is a line in 2D.
-
-  // Sort candidates by average t (heuristic for priority).
-  // Use the centroid of the cross-section as representative point.
-  float cx_2d = 0.0f;
-  float cy_2d = 0.0f;
-  for (size_t i = 0; i < beam.cross_section.count; i++) {
-    cx_2d += beam.cross_section.vertices[2 * i];
-    cy_2d += beam.cross_section.vertices[2 * i + 1];
-  }
-  if (beam.cross_section.count > 0) {
-    cx_2d /= static_cast<float>(beam.cross_section.count);
-    cy_2d /= static_cast<float>(beam.cross_section.count);
-  }
-
-  // Reconstruct 3D centroid from 2D.
-  float centroid_3d[3]{};
-  for (int j = 0; j < 3; j++) {
-    centroid_3d[j] = cx_2d * basis_u[j] + cy_2d * basis_v[j];
-  }
-
-  // Compute t at centroid for sorting.
-  std::vector<float> t_vals(candidates.size());
-  for (size_t i = 0; i < candidates.size(); i++) {
-    float np = Dot3(centroid_3d, poly_n + candidates[i].face_id * 3) + poly_d[candidates[i].face_id];
-    float dot_dn = Dot3(beam.direction, poly_n + candidates[i].face_id * 3);
-    t_vals[i] = -np / dot_dn;
-  }
-  std::vector<size_t> order(candidates.size());
-  for (size_t i = 0; i < order.size(); i++) {
-    order[i] = i;
-  }
-  std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return t_vals[a] < t_vals[b]; });
-
-  // Partition: for the highest-priority face, clip the beam to the region where it's nearest.
-  // For each subsequent face, clip the remainder.
+  // Multiple candidates: project each face onto the beam's 2D cross-section and intersect.
   std::vector<PartitionResult> results;
-  ConvexPolygon2D remaining = beam.cross_section;
 
-  // Precompute per-face projections for half-plane construction.
-  std::vector<float> u_proj(candidates.size());  // basis_u · n_fi
-  std::vector<float> v_proj(candidates.size());  // basis_v · n_fi
-  for (size_t i = 0; i < candidates.size(); i++) {
-    const float* ni = poly_n + candidates[i].face_id * 3;
-    u_proj[i] = Dot3(basis_u, ni);
-    v_proj[i] = Dot3(basis_v, ni);
-  }
-
-  for (size_t oi = 0; oi < order.size(); oi++) {
-    size_t ci = order[oi];
-    int fi = candidates[ci].face_id;
-
-    if (oi == order.size() - 1) {
-      // Last face gets whatever remains.
-      if (remaining.Area() > kMinBeamArea) {
-        results.push_back({ fi, remaining });
-      }
-      break;
+  for (int fi : candidates) {
+    // Extract 3D vertices of candidate face.
+    float face_vtx_3d[3 * kMaxPolyVertices]{};
+    size_t vtx_count = ExtractPolygonFaceVertices(crystal, fi, face_vtx_3d);
+    if (vtx_count < 3) {
+      continue;
     }
 
-    // Face fi's region: clip remaining by {t_fi < t_fj} for ALL subsequent faces j.
-    // This produces the correct Voronoi-like partition where fi is the nearest exit face.
-    //
-    // t_fi = -(p · n_fi + d_fi) / (dir · n_fi), and t_fi < t_fj defines a half-plane in 2D.
-    // See derivation below for half-plane coefficients.
-    ConvexPolygon2D face_region = remaining;
+    // Project 3D vertices to beam's 2D space: u2d = v·bu, v2d = v·bv.
+    // This is a parallel projection along the beam direction — the d-component is discarded.
+    ConvexPolygon2D projected_poly{};
+    projected_poly.count = vtx_count;
+    for (size_t vi = 0; vi < vtx_count; vi++) {
+      const float* v = face_vtx_3d + vi * 3;
+      projected_poly.vertices[2 * vi] = Dot3(v, basis_u);
+      projected_poly.vertices[2 * vi + 1] = Dot3(v, basis_v);
+    }
 
-    for (size_t oj = oi + 1; oj < order.size(); oj++) {
-      size_t cj = order[oj];
-      int fj = candidates[cj].face_id;
-
-      float dot_di = candidates[ci].dot_dn;
-      float dot_dj = candidates[cj].dot_dn;
-
-      // Half-plane: t_fi <= t_fj, i.e., face fi is nearer than fj.
-      // Derivation:
-      //   t_fi = -(p·ni + di) / dot_di
-      //   t_fi <= t_fj ⟺ (p·ni + di)/dot_di >= (p·nj + dj)/dot_dj
-      //   Multiply by dot_di * dot_dj (both > 0):
-      //   dot_dj*(p·ni + di) >= dot_di*(p·nj + dj)
-      //   In 2D: A*u + B*v + C >= 0
-      float hp_a = dot_dj * u_proj[ci] - dot_di * u_proj[cj];
-      float hp_b = dot_dj * v_proj[ci] - dot_di * v_proj[cj];
-      float hp_c = dot_dj * poly_d[fi] - dot_di * poly_d[fj];
-
-      float hp_len = std::sqrt(hp_a * hp_a + hp_b * hp_b);
-      if (hp_len > math::kFloatEps) {
-        hp_a /= hp_len;
-        hp_b /= hp_len;
-        hp_c /= hp_len;
-      }
-
-      face_region = ClipByHalfPlane(face_region, hp_a, hp_b, hp_c);
-      if (face_region.Area() <= kMinBeamArea) {
-        break;
+    // Check winding order: ExtractPolygonFaceVertices produces CCW in face-normal view,
+    // but projection to bu/bv may flip it. Compute signed area (shoelace without abs)
+    // to detect CW winding (negative = CW) and reverse if needed.
+    // Note: cannot use Area() here — it returns std::abs, always >= 0.
+    float signed_area = 0.0f;
+    for (size_t si = 0; si < vtx_count; si++) {
+      size_t sj = (si + 1) % vtx_count;
+      signed_area += projected_poly.vertices[2 * si] * projected_poly.vertices[2 * sj + 1] -
+                     projected_poly.vertices[2 * sj] * projected_poly.vertices[2 * si + 1];
+    }
+    if (signed_area < 0) {
+      for (size_t lo = 0, hi = vtx_count - 1; lo < hi; lo++, hi--) {
+        std::swap(projected_poly.vertices[2 * lo], projected_poly.vertices[2 * hi]);
+        std::swap(projected_poly.vertices[2 * lo + 1], projected_poly.vertices[2 * hi + 1]);
       }
     }
 
-    bool face_assigned = face_region.Area() > kMinBeamArea;
-    if (face_assigned) {
-      results.push_back({ fi, face_region });
-    }
-
-    // Update remaining: clip by {t_{next} <= t_fi} to remove fi's Voronoi cell from remaining.
-    // Only update remaining when face_region is non-empty. If face_region is empty (fi's exact
-    // region was clipped away by a more distant face fk), removing {t_fi < t_{next}} from remaining
-    // would discard area not assigned to any face, breaking area conservation.
-    if (face_assigned) {
-      size_t next_ci = order[oi + 1];
-      float dot_di = candidates[ci].dot_dn;
-      float dot_dj = candidates[next_ci].dot_dn;
-
-      float hp_a = dot_dj * u_proj[ci] - dot_di * u_proj[next_ci];
-      float hp_b = dot_dj * v_proj[ci] - dot_di * v_proj[next_ci];
-      float hp_c = dot_dj * poly_d[fi] - dot_di * poly_d[candidates[next_ci].face_id];
-
-      float hp_len = std::sqrt(hp_a * hp_a + hp_b * hp_b);
-      if (hp_len > math::kFloatEps) {
-        hp_a /= hp_len;
-        hp_b /= hp_len;
-        hp_c /= hp_len;
-      }
-
-      remaining = ClipByHalfPlane(remaining, -hp_a, -hp_b, -hp_c);
-      if (remaining.Area() <= kMinBeamArea) {
-        break;
-      }
+    // Intersect beam cross-section with projected face polygon.
+    ConvexPolygon2D intersection = IntersectConvexPolygons(beam.cross_section, projected_poly);
+    if (intersection.Area() > kMinBeamArea) {
+      results.push_back({ fi, intersection });
     }
   }
 
