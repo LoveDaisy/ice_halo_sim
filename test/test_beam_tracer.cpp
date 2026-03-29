@@ -578,29 +578,25 @@ TEST(BeamTracerIntegration, ScatteringAngleDistribution22Halo) {
     }
   }
 
-  // The 22° halo peak should be in [20°, 25°] range (bin 4)
-  float max_weight = 0.0f;
-  int max_bin = -1;
-  for (int b = 3; b <= 5; b++) {  // 15°-30° range
-    if (bins[b] > max_weight) {
-      max_weight = bins[b];
-      max_bin = b;
-    }
-  }
-
-  // The [20°, 25°] bin should have non-negligible weight (the 22° halo)
+  // The [20°, 25°] bin (bin 4) should have non-negligible weight (the 22° halo).
+  // Note: bin 4 may not be the global peak — other halo types contribute weight at larger angles.
+  // We verify the 22° halo signal exists, not that it dominates.
   float halo_bin_weight = bins[4];  // 20°-25°
   EXPECT_GT(halo_bin_weight, 0.0f) << "No weight in 22° halo region [20-25°]";
 
-  // Compute total weight across all bins
-  float total_weight = 0.0f;
-  for (int b = 0; b < kNumBins; b++) {
-    total_weight += bins[b];
+  // Compute total weight across halo feature region [15°, 90°], excluding 0° direct transmission
+  float feature_weight = 0.0f;
+  for (int b = 3; b <= 17; b++) {
+    feature_weight += bins[b];
   }
+  ASSERT_GT(feature_weight, 0.0f);
 
-  // The 22° halo bin should carry at least 0.1% of total weight
-  // (with random orientations it's a broad distribution, but 22° should be present)
-  EXPECT_GT(halo_bin_weight / total_weight, 0.001f) << "22° halo bin has negligible fraction of total weight";
+  // The 22° halo bin should carry at least 0.1% of feature region weight
+  EXPECT_GT(halo_bin_weight / feature_weight, 0.001f) << "22° halo bin has negligible fraction of feature weight";
+
+  // The 22° halo bin should be a local maximum: higher than adjacent bins
+  // (the halo caustic creates a sharp peak near the minimum deviation angle)
+  EXPECT_GE(bins[4], bins[3]) << "22° bin should be >= bin at [15-20°]";
 }
 
 

@@ -30,6 +30,9 @@ void to_json(nlohmann::json& j, const SceneConfig& s) {
     j_m["entries"] = std::move(entries);
     j["scattering"].emplace_back(j_m);
   }
+  if (s.use_beam_tracing_) {
+    j["use_beam_tracing"] = true;
+  }
 }
 
 

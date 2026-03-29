@@ -138,6 +138,8 @@ SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager&
     scene.ms_.emplace_back(ParseScatteringInfo(j_s, m));
   }
 
+  scene.use_beam_tracing_ = j_scene.value("use_beam_tracing", false);
+
   return scene;
 }
 
