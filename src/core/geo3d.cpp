@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -9,7 +10,9 @@
 #include <memory>
 #include <tuple>
 #include <utility>
+#include <vector>
 
+#include "core/crystal.hpp"
 #include "core/math.hpp"
 
 namespace lumice {
@@ -632,5 +635,210 @@ Mesh CreateConcavePyramidMesh(float upper_alpha, float lower_alpha,  // wedge an
 
   return Mesh(upper_vtx_cnt + lower_vtx_cnt, std::move(vtx), tri_cnt, std::move(tri));
 }
+
+// ============================================================================
+// 2D Convex Polygon Geometry (moved from beam_tracer.cpp)
+// ============================================================================
+
+float ConvexPolygon2D::Area() const {
+  if (count < 3) {
+    return 0.0f;
+  }
+  float area = 0.0f;
+  for (size_t i = 0; i < count; i++) {
+    size_t j = (i + 1) % count;
+    float xi = vertices[2 * i];
+    float yi = vertices[2 * i + 1];
+    float xj = vertices[2 * j];
+    float yj = vertices[2 * j + 1];
+    area += xi * yj - xj * yi;
+  }
+  return std::abs(area) * 0.5f;
+}
+
+
+void BuildOrthonormalBasis(const float* d, float* u, float* v) {
+  float ax = std::abs(d[0]);
+  float ay = std::abs(d[1]);
+  float az = std::abs(d[2]);
+
+  float helper[3]{};
+  if (ax <= ay && ax <= az) {
+    helper[0] = 1.0f;
+  } else if (ay <= ax && ay <= az) {
+    helper[1] = 1.0f;
+  } else {
+    helper[2] = 1.0f;
+  }
+
+  Cross3(helper, d, u);
+  Normalize3(u);
+  Cross3(d, u, v);
+}
+
+
+void ProjectTo2D(const float* basis_u, const float* basis_v, const float* pts_3d, size_t n, float* pts_2d) {
+  for (size_t i = 0; i < n; i++) {
+    const float* p = pts_3d + i * 3;
+    pts_2d[2 * i] = Dot3(p, basis_u);
+    pts_2d[2 * i + 1] = Dot3(p, basis_v);
+  }
+}
+
+
+ConvexPolygon2D ClipByHalfPlane(const ConvexPolygon2D& poly, float nx, float ny, float d) {
+  if (poly.count == 0) {
+    return poly;
+  }
+
+  assert(poly.count <= kMaxPolyVertices && "Input polygon exceeds kMaxPolyVertices");
+
+  ConvexPolygon2D result{};
+
+  for (size_t i = 0; i < poly.count; i++) {
+    size_t j = (i + 1) % poly.count;
+    float xi = poly.vertices[2 * i];
+    float yi = poly.vertices[2 * i + 1];
+    float xj = poly.vertices[2 * j];
+    float yj = poly.vertices[2 * j + 1];
+
+    float di = nx * xi + ny * yi + d;
+    float dj = nx * xj + ny * yj + d;
+
+    bool i_inside = di >= -math::kFloatEps;
+    bool j_inside = dj >= -math::kFloatEps;
+
+    if (i_inside && j_inside) {
+      if (result.count < kMaxPolyVertices) {
+        result.vertices[2 * result.count] = xj;
+        result.vertices[2 * result.count + 1] = yj;
+        result.count++;
+      }
+    } else if (i_inside && !j_inside) {
+      float t = di / (di - dj);
+      if (result.count < kMaxPolyVertices) {
+        result.vertices[2 * result.count] = xi + t * (xj - xi);
+        result.vertices[2 * result.count + 1] = yi + t * (yj - yi);
+        result.count++;
+      }
+    } else if (!i_inside && j_inside) {
+      float t = di / (di - dj);
+      if (result.count < kMaxPolyVertices) {
+        result.vertices[2 * result.count] = xi + t * (xj - xi);
+        result.vertices[2 * result.count + 1] = yi + t * (yj - yi);
+        result.count++;
+      }
+      if (result.count < kMaxPolyVertices) {
+        result.vertices[2 * result.count] = xj;
+        result.vertices[2 * result.count + 1] = yj;
+        result.count++;
+      }
+    }
+  }
+
+  return result;
+}
+
+
+ConvexPolygon2D IntersectConvexPolygons(const ConvexPolygon2D& a, const ConvexPolygon2D& b) {
+  if (a.count < 3 || b.count < 3) {
+    return {};
+  }
+
+  ConvexPolygon2D result = a;
+  for (size_t i = 0; i < b.count; i++) {
+    size_t j = (i + 1) % b.count;
+    float ex = b.vertices[2 * j] - b.vertices[2 * i];
+    float ey = b.vertices[2 * j + 1] - b.vertices[2 * i + 1];
+
+    float nx = -ey;
+    float ny = ex;
+    float d = -(nx * b.vertices[2 * i] + ny * b.vertices[2 * i + 1]);
+
+    result = ClipByHalfPlane(result, nx, ny, d);
+    if (result.count < 3) {
+      return {};
+    }
+  }
+  return result;
+}
+
+
+size_t ExtractPolygonFaceVertices(const Crystal& crystal, int poly_face_id, float* out_vertices_3d) {
+  const float* poly_n = crystal.GetPolygonFaceNormal();
+  const float* tri_n = crystal.GetTriangleNormal();
+  const float* tri_vtx = crystal.GetTriangleVtx();
+  size_t tri_cnt = crystal.TotalTriangles();
+
+  const float* target_n = poly_n + poly_face_id * 3;
+
+  float collected[3 * kMaxPolyVertices]{};
+  size_t vtx_count = 0;
+
+  for (size_t t = 0; t < tri_cnt; t++) {
+    float dot = Dot3(target_n, tri_n + t * 3);
+    if (dot < 1.0f - 1e-3f) {
+      continue;
+    }
+    for (int vi = 0; vi < 3; vi++) {
+      const float* v = tri_vtx + t * 9 + vi * 3;
+      bool dup = false;
+      for (size_t k = 0; k < vtx_count; k++) {
+        float dx = collected[k * 3] - v[0];
+        float dy = collected[k * 3 + 1] - v[1];
+        float dz = collected[k * 3 + 2] - v[2];
+        if (dx * dx + dy * dy + dz * dz < math::kFloatEps * math::kFloatEps) {
+          dup = true;
+          break;
+        }
+      }
+      if (!dup && vtx_count < kMaxPolyVertices) {
+        collected[vtx_count * 3] = v[0];
+        collected[vtx_count * 3 + 1] = v[1];
+        collected[vtx_count * 3 + 2] = v[2];
+        vtx_count++;
+      }
+    }
+  }
+
+  if (vtx_count < 3) {
+    return 0;
+  }
+
+  float basis_u[3]{};
+  float basis_v[3]{};
+  BuildOrthonormalBasis(target_n, basis_u, basis_v);
+
+  float pts_2d[2 * kMaxPolyVertices]{};
+  ProjectTo2D(basis_u, basis_v, collected, vtx_count, pts_2d);
+
+  float cx = 0.0f;
+  float cy = 0.0f;
+  for (size_t i = 0; i < vtx_count; i++) {
+    cx += pts_2d[2 * i];
+    cy += pts_2d[2 * i + 1];
+  }
+  cx /= static_cast<float>(vtx_count);
+  cy /= static_cast<float>(vtx_count);
+
+  std::vector<size_t> idx(vtx_count);
+  for (size_t i = 0; i < vtx_count; i++) {
+    idx[i] = i;
+  }
+  std::sort(idx.begin(), idx.end(), [&](size_t a, size_t b) {
+    float angle_a = std::atan2(pts_2d[2 * a + 1] - cy, pts_2d[2 * a] - cx);
+    float angle_b = std::atan2(pts_2d[2 * b + 1] - cy, pts_2d[2 * b] - cx);
+    return angle_a < angle_b;
+  });
+
+  for (size_t i = 0; i < vtx_count; i++) {
+    out_vertices_3d[i * 3] = collected[idx[i] * 3];
+    out_vertices_3d[i * 3 + 1] = collected[idx[i] * 3 + 1];
+    out_vertices_3d[i * 3 + 2] = collected[idx[i] * 3 + 2];
+  }
+
+  return vtx_count;
+}
+
 
 }  // namespace lumice

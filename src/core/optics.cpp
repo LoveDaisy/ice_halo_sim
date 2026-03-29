@@ -61,11 +61,11 @@ void HitSurface(const Crystal& crystal, float n, size_t num,                    
 
     float* tmp_dir_reflection = d_out.Ptr(i * 2 + 0);
     float* tmp_dir_refraction = d_out.Ptr(i * 2 + 1);
-    for (int j = 0; j < 3; j++) {
-      tmp_dir_reflection[j] = tmp_dir[j] - 2 * cos_theta * tmp_norm[j];  // Reflection
-      tmp_dir_refraction[j] = is_total_reflected ?
-                                  tmp_dir_reflection[j] :
-                                  rr * tmp_dir[j] - (rr - std::sqrt(d)) * cos_theta * tmp_norm[j];  // Refraction
+    ComputeReflectedDir(tmp_dir, tmp_norm, tmp_dir_reflection);
+    if (is_total_reflected) {
+      std::memcpy(tmp_dir_refraction, tmp_dir_reflection, 3 * sizeof(float));
+    } else {
+      ComputeRefractedDir(tmp_dir, tmp_norm, rr, cos_theta, tmp_dir_refraction);
     }
   }
 }

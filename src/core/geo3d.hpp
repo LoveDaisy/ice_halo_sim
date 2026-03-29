@@ -8,6 +8,8 @@
 
 namespace lumice {
 
+class Crystal;
+
 class Rotation {
  public:
   Rotation();
@@ -110,6 +112,44 @@ Mesh CreateConcavePyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, in
 Mesh CreateConcavePyramidMesh(float upper_alpha, float lower_alpha,  // wedge angle
                               float h1, float h2, float h3,          // height
                               const float* dist);                    // face distance
+
+// ====== 2D Convex Polygon Geometry ======
+
+// Maximum vertices for a 2D convex polygon (beam cross-sections, face projections).
+constexpr size_t kMaxPolyVertices = 24;
+
+// Minimum polygon area threshold (below this, polygons are considered degenerate).
+constexpr float kMinBeamArea = 1e-8f;
+
+// 2D convex polygon with fixed-capacity vertex storage.
+// Vertices are stored as [x0,y0, x1,y1, ...] in counter-clockwise order.
+struct ConvexPolygon2D {
+  float vertices[2 * kMaxPolyVertices]{};
+  size_t count = 0;
+
+  size_t VertexCount() const { return count; }
+  float Area() const;  // Shoelace formula (returns absolute value)
+};
+
+// Build an orthonormal basis (u, v) perpendicular to direction d.
+// d must be a unit vector. u and v are output as 3-float arrays.
+void BuildOrthonormalBasis(const float* d, float* u, float* v);
+
+// Project 3D points onto 2D plane defined by orthonormal basis (u, v).
+// pts_3d: n points as [x0,y0,z0, x1,y1,z1, ...], pts_2d: output [u0,v0, u1,v1, ...]
+void ProjectTo2D(const float* basis_u, const float* basis_v, const float* pts_3d, size_t n, float* pts_2d);
+
+// Clip a 2D convex polygon by a half-plane: nx*x + ny*y + d >= 0.
+// Returns the clipped polygon (may have 0 vertices if fully clipped).
+ConvexPolygon2D ClipByHalfPlane(const ConvexPolygon2D& poly, float nx, float ny, float d);
+
+// Compute the intersection of two convex polygons using Sutherland-Hodgman clipping.
+// Both polygons must have CCW vertex order.
+ConvexPolygon2D IntersectConvexPolygons(const ConvexPolygon2D& a, const ConvexPolygon2D& b);
+
+// Extract ordered polygon face vertices from Crystal's triangle mesh.
+// Returns vertex count. out_vertices_3d must have space for 3*kMaxPolyVertices floats.
+size_t ExtractPolygonFaceVertices(const Crystal& crystal, int poly_face_id, float* out_vertices_3d);
 
 }  // namespace lumice
 

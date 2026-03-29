@@ -64,7 +64,7 @@ static void SampleRayDir(const SunParam& p, float* d, size_t num, size_t step) {
 
 
 // Sample a single crystal rotation from the axis distribution.
-// Extracted from InitRay_rot (which operates on an entire RayBuffer).
+// Shared by InitRay_rot (MC path, entire RayBuffer) and BT path (single orientation).
 static Rotation SampleOneRotation(RandomNumberGenerator& rng, const AxisDistribution& crystal_axis) {
   float lon_lat[2]{};
   if (crystal_axis.azimuth_dist.type != DistributionType::kUniform ||
@@ -107,18 +107,8 @@ void InitRay_d_w_previdx(const SunParam& light_param, const WlParam& wl_param, s
 
 void InitRay_rot(RandomNumberGenerator& rng, const AxisDistribution& crystal_axis,  // input
                  RayBuffer buffer_data[2]) {                                        // output
-  float axis[9]{ 1, 0, 0, 0, 1, 0, 0, 0, 1 };
-  float lon_lat[2]{};
   for (auto& r : buffer_data[0]) {
-    if (crystal_axis.azimuth_dist.type != DistributionType::kUniform ||
-        crystal_axis.latitude_dist.type != DistributionType::kUniform) {
-      RandomSampler::SampleSphericalPointsSph(crystal_axis, lon_lat);
-    } else {
-      // Randomly sample on sphere
-      RandomSampler::SampleSphericalPointsSph(lon_lat);
-    }
-    float roll = rng.Get(crystal_axis.roll_dist) * math::kDegreeToRad;
-    r.crystal_rot_ = Rotation(axis + 6, roll).Chain(axis + 3, math::kPi_2 - lon_lat[1]).Chain(axis + 6, lon_lat[0]);
+    r.crystal_rot_ = SampleOneRotation(rng, crystal_axis);
   }
 }
 
