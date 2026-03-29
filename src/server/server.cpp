@@ -581,8 +581,7 @@ void ServerImpl::ConsumeData() {
   while (true) {
     CHECK_STOP
     auto sim_data = data_queue_->Get();
-    if (sim_data.rays_.Empty()) {
-      // Simulation is interrupted.
+    if (sim_data.IsShutdownSentinel()) {
       break;
     }
     CHECK_STOP
@@ -609,7 +608,8 @@ void ServerImpl::ConsumeData() {
         ILOG_DEBUG(logger_, "ConsumeData: batch rays={} outgoing={} lock={:.0f}us consume={:.0f}us",
                    sim_data.rays_.size_, sim_data.outgoing_indices_.size(), lock_us, consume_us);
         if (!first_consume_logged) {
-          ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
+          ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments, {} outgoing)", sim_data.rays_.size_,
+                    sim_data.outgoing_indices_.size());
           first_consume_logged = true;
         }
       }

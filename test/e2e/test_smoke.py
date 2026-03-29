@@ -21,6 +21,7 @@ PSNR_THRESHOLDS = {
     "cza_01": 39.4,
     "filters_01": 23.0,
     "halo_22_01": 23.3,
+    "halo_22_bt_01": 25.0,
     "multi_lens_01": 30.3,
     "multi_lens_02": 31.4,
     "multi_lens_03": 37.7,

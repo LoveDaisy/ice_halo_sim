@@ -57,7 +57,7 @@ class Consumer {
   void Run() {
     while (true) {
       auto data = data_queue_->Get();
-      if (stop_ || data.rays_.Empty()) {
+      if (stop_ || data.IsShutdownSentinel()) {
         break;
       }
 

@@ -41,6 +41,10 @@ struct SimData {
   SimData& operator=(const SimData& other);
   SimData& operator=(SimData&& other) noexcept;
 
+  // Queue::Get() returns a default-constructed SimData on shutdown (curr_wl_ == 0).
+  // Real simulation data always has curr_wl_ in [380, 780] nm.
+  bool IsShutdownSentinel() const { return curr_wl_ == 0.0f; }
+
   // ----- Data -----
   float curr_wl_;
   float total_intensity_;
