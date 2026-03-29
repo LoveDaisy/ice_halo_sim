@@ -544,4 +544,188 @@ TEST(BeamTracerIntegration, NormalizationMagnitudeComparable) {
 }
 
 
+TEST(BeamTracerIntegration, ScatteringAngleDistribution22Halo) {
+  // Beam tracing of a hex prism with random orientations should produce
+  // a 22° halo peak. We bin outgoing directions by scattering angle and verify.
+  constexpr size_t kOrientations = 2000;
+  auto config = MakeBeamTracingConfig(kOrientations, true);
+  // Use altitude=0 so sun direction is horizontal
+  config.light_source_.param_ = { 0.0f, 0.0f, 0.0f };
+  auto data = RunSimulator(config);
+
+  ASSERT_GT(data.outgoing_w_.size(), 0u);
+
+  // Sun center direction: altitude=0, azimuth=0 → az_rad=π, alt_rad=0 → d=(-1,0,0)
+  float sun_dir[3] = { -1.0f, 0.0f, 0.0f };
+
+  // Bin by scattering angle (degrees): 5° bins
+  constexpr int kNumBins = 36;
+  constexpr float kBinWidth = 5.0f;
+  float bins[kNumBins]{};
+
+  for (size_t i = 0; i < data.outgoing_w_.size(); i++) {
+    float dx = data.outgoing_d_[3 * i];
+    float dy = data.outgoing_d_[3 * i + 1];
+    float dz = data.outgoing_d_[3 * i + 2];
+    // Scattering angle: angle between outgoing and -sun_dir (forward = 0°)
+    float cos_angle = -(dx * sun_dir[0] + dy * sun_dir[1] + dz * sun_dir[2]);
+    cos_angle = std::max(-1.0f, std::min(1.0f, cos_angle));
+    float angle_deg = std::acos(cos_angle) * 180.0f / 3.14159265f;
+
+    int bin = static_cast<int>(angle_deg / kBinWidth);
+    if (bin >= 0 && bin < kNumBins) {
+      bins[bin] += data.outgoing_w_[i];
+    }
+  }
+
+  // The 22° halo peak should be in [20°, 25°] range (bin 4)
+  float max_weight = 0.0f;
+  int max_bin = -1;
+  for (int b = 3; b <= 5; b++) {  // 15°-30° range
+    if (bins[b] > max_weight) {
+      max_weight = bins[b];
+      max_bin = b;
+    }
+  }
+
+  // The [20°, 25°] bin should have non-negligible weight (the 22° halo)
+  float halo_bin_weight = bins[4];  // 20°-25°
+  EXPECT_GT(halo_bin_weight, 0.0f) << "No weight in 22° halo region [20-25°]";
+
+  // Compute total weight across all bins
+  float total_weight = 0.0f;
+  for (int b = 0; b < kNumBins; b++) {
+    total_weight += bins[b];
+  }
+
+  // The 22° halo bin should carry at least 0.1% of total weight
+  // (with random orientations it's a broad distribution, but 22° should be present)
+  EXPECT_GT(halo_bin_weight / total_weight, 0.001f) << "22° halo bin has negligible fraction of total weight";
+}
+
+
+TEST(BeamTracerIntegration, RootRayCountMatchesOrientationCount) {
+  constexpr size_t kOrientations = 100;
+  auto config = MakeBeamTracingConfig(kOrientations, true);
+  auto data = RunSimulator(config);
+  EXPECT_EQ(data.root_ray_count_, kOrientations);
+}
+
+
+TEST(BeamTracerIntegration, McVsBtHaloDistribution) {
+  // Compare MC and BT scattering angle distributions with random orientations.
+  // Both paths sample random crystal orientations; with enough samples,
+  // the binned weight distributions should converge to the same shape.
+  // This validates BT correctness at the distribution level.
+
+  // Use horizontal sun (altitude=0) for simpler scattering angle geometry.
+  // Use uniform random orientations (default in MakeBeamTracingConfig).
+
+  constexpr size_t kMcRays = 50000;
+  auto mc_config = MakeBeamTracingConfig(kMcRays, false);
+  mc_config.light_source_.param_ = { 0.0f, 0.0f, 0.0f };  // altitude=0, azimuth=0, diameter=0
+  mc_config.ms_[0].prob_ = 0.0f;                          // No multi-scattering forwarding
+  // Use uniform random axis (override delta distribution)
+  auto& mc_axis = mc_config.ms_[0].setting_[0].crystal_.axis_;
+  mc_axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+  mc_axis.latitude_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+  mc_axis.roll_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+  auto mc_data = RunSimulator(mc_config);
+
+  constexpr size_t kBtOrientations = 5000;
+  auto bt_config = MakeBeamTracingConfig(kBtOrientations, true);
+  bt_config.light_source_.param_ = { 0.0f, 0.0f, 0.0f };
+  auto& bt_axis = bt_config.ms_[0].setting_[0].crystal_.axis_;
+  bt_axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+  bt_axis.latitude_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+  bt_axis.roll_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+  auto bt_data = RunSimulator(bt_config);
+
+  ASSERT_GT(bt_data.outgoing_w_.size(), 0u) << "BT produced no outgoing beams";
+  ASSERT_GT(mc_data.outgoing_w_.size(), 0u) << "MC produced no outgoing rays";
+
+  // Sun direction for altitude=0, azimuth=0: (-1, 0, 0)
+  float sun_dir[3] = { -1.0f, 0.0f, 0.0f };
+
+  // Bin by scattering angle: 5° bins, focus on halo region [15°, 90°]
+  constexpr int kNumBins = 36;
+  constexpr float kBinWidth = 5.0f;
+  float mc_bins[kNumBins]{};
+  float bt_bins[kNumBins]{};
+
+  auto bin_data = [&](const std::vector<float>& dirs, const std::vector<float>& weights, float* bins) {
+    float total_w = 0.0f;
+    for (size_t i = 0; i < weights.size(); i++) {
+      float cos_angle = -(dirs[3 * i] * sun_dir[0] + dirs[3 * i + 1] * sun_dir[1] + dirs[3 * i + 2] * sun_dir[2]);
+      cos_angle = std::max(-1.0f, std::min(1.0f, cos_angle));
+      float angle_deg = std::acos(cos_angle) * 180.0f / 3.14159265f;
+      int bin = static_cast<int>(angle_deg / kBinWidth);
+      if (bin >= 0 && bin < kNumBins) {
+        bins[bin] += weights[i];
+      }
+      total_w += weights[i];
+    }
+    if (total_w > 0.0f) {
+      for (int b = 0; b < kNumBins; b++) {
+        bins[b] /= total_w;
+      }
+    }
+  };
+
+  bin_data(mc_data.outgoing_d_, mc_data.outgoing_w_, mc_bins);
+  bin_data(bt_data.outgoing_d_, bt_data.outgoing_w_, bt_bins);
+
+  // Both MC and BT should show the 22° halo peak in [20°, 25°] (bin 4)
+  float mc_halo = mc_bins[4];
+  float bt_halo = bt_bins[4];
+  EXPECT_GT(mc_halo, 0.0f) << "MC has no weight in 22° halo region";
+  EXPECT_GT(bt_halo, 0.0f) << "BT has no weight in 22° halo region";
+
+  // Compare shape: for bins with significant weight (> 0.5% of total),
+  // the MC/BT ratio should be roughly consistent.
+  // We check that the peak bin (highest weight) is the same in both distributions,
+  // and that the overall shape correlation is positive.
+  int mc_peak_bin = -1;
+  int bt_peak_bin = -1;
+  float mc_peak = 0.0f;
+  float bt_peak = 0.0f;
+  constexpr int kStartBin = 3;  // 15°
+  constexpr int kEndBin = 18;   // 90°
+
+  for (int b = kStartBin; b < kEndBin; b++) {
+    if (mc_bins[b] > mc_peak) {
+      mc_peak = mc_bins[b];
+      mc_peak_bin = b;
+    }
+    if (bt_bins[b] > bt_peak) {
+      bt_peak = bt_bins[b];
+      bt_peak_bin = b;
+    }
+  }
+
+  // Peak bins should be within 1 bin of each other (5° tolerance)
+  EXPECT_NEAR(mc_peak_bin, bt_peak_bin, 1) << "MC and BT peaks differ by more than 5°";
+
+  // Check shape correlation: Pearson correlation of bin weights in [15°, 90°]
+  float sum_mc = 0, sum_bt = 0, sum_mc2 = 0, sum_bt2 = 0, sum_mcbt = 0;
+  int n = 0;
+  for (int b = kStartBin; b < kEndBin; b++) {
+    sum_mc += mc_bins[b];
+    sum_bt += bt_bins[b];
+    sum_mc2 += mc_bins[b] * mc_bins[b];
+    sum_bt2 += bt_bins[b] * bt_bins[b];
+    sum_mcbt += mc_bins[b] * bt_bins[b];
+    n++;
+  }
+  float nf = static_cast<float>(n);
+  float cov = sum_mcbt / nf - (sum_mc / nf) * (sum_bt / nf);
+  float var_mc = sum_mc2 / nf - (sum_mc / nf) * (sum_mc / nf);
+  float var_bt = sum_bt2 / nf - (sum_bt / nf) * (sum_bt / nf);
+  float correlation = (var_mc > 0 && var_bt > 0) ? cov / std::sqrt(var_mc * var_bt) : 0.0f;
+
+  // MC and BT distributions should be strongly correlated (> 0.9)
+  EXPECT_GT(correlation, 0.9f) << "MC/BT distribution correlation too low: " << correlation;
+}
+
+
 }  // namespace

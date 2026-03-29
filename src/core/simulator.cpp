@@ -62,16 +62,6 @@ static void SampleRayDir(const SunParam& p, float* d, size_t num, size_t step) {
   SampleSphCapPoint(p.azimuth_ + 180.0f, -p.altitude_, p.diameter_ / 2.0f, d, num, step);
 }
 
-// Compute sun center direction (point source, no diameter sampling).
-// Shares the same azimuth+180 / -altitude convention as SampleRayDir / SampleSphCapPoint.
-// Output: unit vector pointing from sun toward crystal origin (light propagation direction).
-static void ComputeSunCenterDir(const SunParam& p, float* d) {
-  float az_rad = (p.azimuth_ + 180.0f) * math::kDegreeToRad;
-  float alt_rad = -p.altitude_ * math::kDegreeToRad;
-  d[0] = std::cos(alt_rad) * std::cos(az_rad);
-  d[1] = std::cos(alt_rad) * std::sin(az_rad);
-  d[2] = std::sin(alt_rad);
-}
 
 // Sample a single crystal rotation from the axis distribution.
 // Extracted from InitRay_rot (which operates on an entire RayBuffer).
@@ -505,9 +495,9 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   all_crystals.reserve(16);
 
   bool first_ms = true;
-  bool use_bt = config.use_beam_tracing_;  // beam tracing only applies to first scattering
-  size_t bt_orientation_total = 0;
+  bool use_bt = config.use_beam_tracing_;  // BT currently used for first scattering only (performance trade-off)
   float bt_total_intensity = 0.0f;
+  size_t bt_orientation_count = 0;
 
   for (size_t mi = 0; mi < config.ms_.size() && !stop_; mi++) {
     const auto& m = config.ms_[mi];
@@ -540,7 +530,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
       // For deterministic params, create/copy crystal once per ci iteration.
       size_t ci_crystal_id = kInfSize;
 
-      // --- Beam tracing path (first scattering only) ---
+      // --- Beam tracing path (first scattering only, performance trade-off: beam count grows exponentially) ---
       bool bt_handled = false;
       if (use_bt && first_ms) {
         // Create one crystal for beam tracing
@@ -560,18 +550,13 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           filter->InitCrystalSymmetry(bt_crystal);
 
           const auto& sun_param = config.light_source_.param_;
-          if (sun_param.diameter_ > 0) {
-            ILOG_INFO(logger_, "Beam tracing treats sun as point source, diameter {:.2f}° ignored",
-                      sun_param.diameter_);
-          }
-
-          float light_dir[3];
-          ComputeSunCenterDir(sun_param, light_dir);
 
           float ri = bt_crystal.GetRefractiveIndex(wl);
           size_t orientation_num = crystal_ray_num[ci];
 
           for (size_t oi = 0; oi < orientation_num && !stop_; oi++) {
+            float light_dir[3];
+            SampleRayDir(sun_param, light_dir, 1, sizeof(light_dir));
             Rotation rot = SampleOneRotation(rng_, s.crystal_.axis_);
             auto bt_result = BeamTrace(bt_crystal, rot, light_dir, ri, config.max_hits_);
 
@@ -608,8 +593,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
             }
           }
 
-          bt_orientation_total += orientation_num;
           bt_total_intensity += wl_param.weight_ * static_cast<float>(orientation_num);
+          bt_orientation_count += orientation_num;
           bt_handled = true;
         } else {
           ILOG_WARN(logger_, "Beam tracing: crystal has no polygon faces, falling back to MC");
@@ -708,7 +693,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   sim_data.generation_ = generation;
   if (use_bt) {
     sim_data.total_intensity_ = bt_total_intensity;
-    sim_data.root_ray_count_ = bt_orientation_total;
+    sim_data.root_ray_count_ = bt_orientation_count;
     // rays_ and crystals_ intentionally left empty for beam tracing path.
     // outgoing_indices_ filled with trivial {0,1,...,N-1} to satisfy RenderConsumer contract.
   } else {
