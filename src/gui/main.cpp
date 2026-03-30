@@ -36,7 +36,8 @@ int main(int argc, char** argv) {
     bool keep_console = false;
     for (int i = 1; i < argc; ++i) {
       std::string_view arg(argv[i]);
-      if (arg == "--perf-bench" || arg == "-v" || arg == "-d" || arg == "--log-level" || arg == "--core-log-level") {
+      if (arg == "--perf-bench" || arg == "--perf-bench-lean" || arg == "-v" || arg == "-d" || arg == "--log-level" ||
+          arg == "--core-log-level") {
         keep_console = true;
         break;
       }
@@ -54,11 +55,15 @@ int main(int argc, char** argv) {
 
   // Parse perf-bench flag early — needed before glfwSwapInterval.
   bool perf_bench = false;
+  bool perf_bench_lean = false;
   bool skip_calibration = false;
   for (int i = 1; i < argc; ++i) {
     std::string_view arg(argv[i]);
     if (arg == "--perf-bench") {
       perf_bench = true;
+      skip_calibration = true;
+    } else if (arg == "--perf-bench-lean") {
+      perf_bench_lean = true;
       skip_calibration = true;
     } else if (arg == "--skip-calibration") {
       skip_calibration = true;
@@ -88,7 +93,7 @@ int main(int argc, char** argv) {
 
   glfwSetWindowSizeLimits(window, gui::kMinWindowWidth, gui::kMinWindowHeight, GLFW_DONT_CARE, GLFW_DONT_CARE);
   glfwMakeContextCurrent(window);
-  glfwSwapInterval(perf_bench ? 0 : 1);  // VSync off for perf-bench to match test binary
+  glfwSwapInterval((perf_bench || perf_bench_lean) ? 0 : 1);  // VSync off for perf-bench to match test binary
 
   if (!gui::InitGLLoader()) {
     glfwDestroyWindow(window);
@@ -109,6 +114,68 @@ int main(int argc, char** argv) {
   ImGui_ImplOpenGL3_Init("#version 330");
 
   gui::g_state = gui::InitDefaultState();
+
+  // --perf-bench-lean: measure throughput BEFORE any app-specific init (server, logging,
+  // renderers). This isolates whether those init steps cause Windows throughput degradation
+  // compared to the test binary which has the same GLFW+ImGui init but no early server/logging.
+  if (perf_bench_lean) {
+    gui::g_server = LUMICE_CreateServer();
+    LUMICE_InitLogger(gui::g_server);
+    LUMICE_SetLogLevel(gui::g_server, LUMICE_LOG_INFO);
+
+    gui::g_state.sun.altitude = 20.0f;
+    gui::g_state.sun.azimuth = 0.0f;
+    gui::g_state.sun.diameter = 0.5f;
+    gui::g_state.sun.spectrum_index = 2;
+    gui::g_state.sim.infinite = true;
+    gui::g_state.sim.max_hits = 8;
+    if (!gui::g_state.renderers.empty()) {
+      auto& r = gui::g_state.renderers[0];
+      r.lens_type = 1;
+      r.fov = 360.0f;
+      r.sim_resolution_index = 0;
+      r.visible = 2;
+      r.background[0] = r.background[1] = r.background[2] = 0.0f;
+      r.exposure_offset = 0.0f;
+    }
+    gui::DoRun();
+
+    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (gui::g_state.stats_sim_ray_num == 0 && std::chrono::steady_clock::now() < timeout) {
+      glfwPollEvents();
+      gui::SyncFromPoller();
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    auto start_rays = gui::g_state.stats_sim_ray_num;
+    auto start_time = std::chrono::steady_clock::now();
+    auto end_time = start_time + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < end_time) {
+      glfwPollEvents();
+      gui::SyncFromPoller();
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    auto end_rays = gui::g_state.stats_sim_ray_num;
+    double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+    double rps = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
+    fprintf(stderr, "[PERF-BENCH] lean: %.1f rays/sec (%lu rays in %.1fs)\n", rps, end_rays - start_rays, elapsed);
+
+    gui::g_server_poller.Stop();
+    if (gui::g_server) {
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+    }
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    glfwDestroyWindow(window);
+    glfwTerminate();
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
+    return 0;
+  }
 
   // perf_bench and skip_calibration already parsed above (before glfwSwapInterval).
 

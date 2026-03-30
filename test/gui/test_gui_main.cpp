@@ -105,6 +105,7 @@ static bool g_enable_frame_limit = true;        // Default on: matches real app'
 static bool g_enable_main_loop_commit = false;  // --main-loop-commit: DoRun on main thread (matches real app)
 static bool g_enable_log_panel = false;         // --log-panel: render LogPanel in main loop (matches real app)
 static int g_dorun_delay_ms = 0;                // --dorun-delay N: inject sleep after DoRun to simulate environment lag
+static bool g_pre_engine_perf = false;          // --pre-engine-perf: run perf measurement BEFORE test engine starts
 
 // Shared counters for main-loop-commit mode (written by main thread, read by test thread after measurement)
 static int g_main_loop_restart_count = 0;
@@ -1897,6 +1898,8 @@ int main(int argc, char** argv) {
       g_enable_log_panel = true;
     } else if (strcmp(argv[i], "--dorun-delay") == 0 && i + 1 < argc) {
       g_dorun_delay_ms = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--pre-engine-perf") == 0) {
+      g_pre_engine_perf = true;
     } else if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
       // Set both core and GUI log level: trace/debug/info/warning/error/off
       const char* level = argv[++i];
@@ -2017,6 +2020,36 @@ int main(int argc, char** argv) {
 
   if (g_enable_main_loop_commit) {
     fprintf(stderr, "[DIAG] Main-loop-commit enabled: DoRun on main thread (matches real app)\n");
+  }
+
+  // --pre-engine-perf: measure throughput BEFORE test engine starts.
+  // This isolates whether the test engine's coroutine thread affects Windows scheduling.
+  if (g_pre_engine_perf) {
+    fprintf(stderr, "[DIAG] Pre-engine perf measurement (before ImGuiTestEngine_Start)...\n");
+    StartPerfSimulation();
+
+    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (gui::g_state.stats_sim_ray_num == 0 && std::chrono::steady_clock::now() < timeout) {
+      glfwPollEvents();
+      gui::SyncFromPoller();
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    auto start_rays = gui::g_state.stats_sim_ray_num;
+    auto t0 = std::chrono::steady_clock::now();
+    auto t_end = t0 + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < t_end) {
+      glfwPollEvents();
+      gui::SyncFromPoller();
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    auto end_rays = gui::g_state.stats_sim_ray_num;
+    double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    double rps = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
+    fprintf(stderr, "[PERF] pre-engine: %.1f rays/sec (%lu rays in %.1fs)\n", rps, end_rays - start_rays, elapsed);
+
+    StopPerfSimulation();
   }
 
   // Setup test engine
