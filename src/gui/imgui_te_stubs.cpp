@@ -10,3 +10,6 @@
 void ImGuiTestEngineHook_ItemAdd(ImGuiContext*, ImGuiID, const ImRect&, const ImGuiLastItemData*) {}
 void ImGuiTestEngineHook_ItemInfo(ImGuiContext*, ImGuiID, const char*, ImGuiItemStatusFlags) {}
 void ImGuiTestEngineHook_Log(ImGuiContext*, const char*, ...) {}
+const char* ImGuiTestEngine_FindItemDebugLabel(ImGuiContext*, ImGuiID) {
+  return nullptr;
+}
