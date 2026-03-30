@@ -76,11 +76,19 @@ target_link_libraries(LumiceGUI PRIVATE lumice_gui_obj)
 # The console window is released via FreeConsole() at startup in main.cpp.
 if(WIN32)
   set(LUMICE_ICO_PATH "${CMAKE_SOURCE_DIR}/resources/lumice.ico")
-  configure_file(
-      "${PROJ_SRC_DIR}/gui/lumice.rc.in"
-      "${CMAKE_CURRENT_BINARY_DIR}/lumice.rc"
-      @ONLY)
-  target_sources(LumiceGUI PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/lumice.rc")
+  # Check both existence and minimum size (LFS pointer stubs are ~130 bytes)
+  if(EXISTS "${LUMICE_ICO_PATH}")
+    file(SIZE "${LUMICE_ICO_PATH}" _ico_size)
+  endif()
+  if(EXISTS "${LUMICE_ICO_PATH}" AND _ico_size GREATER 1000)
+    configure_file(
+        "${PROJ_SRC_DIR}/gui/lumice.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/lumice.rc"
+        @ONLY)
+    target_sources(LumiceGUI PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/lumice.rc")
+  else()
+    message(STATUS "[gui] Icon resource skipped (LFS file not fetched)")
+  endif()
 endif()
 
 # macOS: .app bundle with icon and Info.plist
