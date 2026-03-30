@@ -48,8 +48,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-        with:
-          lfs: ${{ matrix.build_gui == 'ON' }}  # GUI builds need LFS for icon resources
+
+      # GUI builds need icon resources from LFS, but NOT test reference images.
+      # Selective fetch saves ~16MB bandwidth per run vs `lfs: true`.
+      - name: Fetch LFS icon resources
+        if: matrix.build_gui == 'ON'
+        run: git lfs pull --include="resources/*"
 
       # MSVC: set up Visual Studio environment before configure/build
       - name: Set up MSVC
