@@ -38,6 +38,17 @@ int main(int argc, char** argv) {
   // are precise enough for our 20ms poll interval. Without this, SleepConditionVariableSRW
   // rounds up to 3 timer ticks (~47ms), causing a timing race with the 50ms commit interval.
   timeBeginPeriod(1);
+
+  // Windows assigns shorter thread time slices to GUI-subsystem processes
+  // (IMAGE_SUBSYSTEM_WINDOWS_GUI, set by WIN32_EXECUTABLE TRUE in CMake).
+  // This causes frequent context switches for the 18+ Simulator compute threads,
+  // dropping throughput to ~29% of an equivalent console process.
+  // ABOVE_NORMAL_PRIORITY_CLASS restores longer time slices without affecting other
+  // desktop apps. Process-level priority is used (rather than per-thread) because
+  // Simulator threads are created later by the thread pool and inherit the process class.
+  if (!SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS)) {
+    fprintf(stderr, "Warning: SetPriorityClass failed (error %lu)\n", GetLastError());
+  }
 #endif
 
   glfwSetErrorCallback(gui::GlfwErrorCallback);
