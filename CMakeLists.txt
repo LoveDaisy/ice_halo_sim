@@ -30,6 +30,11 @@ if(MINGW)
   add_link_options(-static)
 endif()
 
+# MSVC: use static CRT (/MT) so distributed .exe doesn't require vcruntime DLLs.
+if(MSVC)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 include(CheckIPOSupported)
 check_ipo_supported(RESULT result OUTPUT output)
 
