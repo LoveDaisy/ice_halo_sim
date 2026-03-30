@@ -35,10 +35,10 @@ P1000(3)
 P1000(4)
 P1000(5)
 
-// Reference all functions so they survive LTO/gc-sections
+// Force LTO to keep all padding functions: store array pointer to volatile global,
+// then call one function at startup via constructor. LTO cannot prove these are dead.
 using PadFn = void (*)();
-extern "C" {
-NOINLINE PadFn g_pad_fns[] = {
+static PadFn g_pad_fns[] = {
 #define REF(n) &pad_##n,
 #define R10(b) REF(b##0) REF(b##1) REF(b##2) REF(b##3) REF(b##4) REF(b##5) REF(b##6) REF(b##7) REF(b##8) REF(b##9)
 #define R100(b) R10(b##0) R10(b##1) R10(b##2) R10(b##3) R10(b##4) R10(b##5) R10(b##6) R10(b##7) R10(b##8) R10(b##9)
@@ -46,4 +46,20 @@ NOINLINE PadFn g_pad_fns[] = {
   R100(b##0) R100(b##1) R100(b##2) R100(b##3) R100(b##4) R100(b##5) R100(b##6) R100(b##7) R100(b##8) R100(b##9)
   R1000(1) R1000(2) R1000(3) R1000(4) R1000(5)
 };
+
+// Volatile pointer defeats LTO constant-folding
+volatile PadFn* g_pad_anchor = g_pad_fns;
+
+#ifdef _MSC_VER
+// MSVC: use CRT initializer section
+#pragma section(".CRT$XCZ", read)
+static void pad_init() {
+  g_pad_anchor[0]();
 }
+__declspec(allocate(".CRT$XCZ")) static void (*p_init)() = pad_init;
+#else
+// GCC/Clang: constructor runs before main
+__attribute__((constructor)) static void pad_init() {
+  g_pad_anchor[0]();
+}
+#endif
