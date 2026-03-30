@@ -65,7 +65,9 @@ if(NOT MSVC)
 endif()
 
 # Main executable (links stubs for test engine hooks — no-ops in production)
+# link_padding.cpp: experiment to shift code layout and test cache alignment hypothesis
 add_executable(LumiceGUI
+    ${PROJ_SRC_DIR}/gui/link_padding.cpp
     ${PROJ_SRC_DIR}/gui/main.cpp
     ${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp)
 target_link_libraries(LumiceGUI PRIVATE lumice_gui_obj)
