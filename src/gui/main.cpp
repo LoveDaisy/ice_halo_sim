@@ -28,27 +28,28 @@ namespace gui = lumice::gui;
 
 int main(int argc, char** argv) {
 #ifdef _WIN32
-  // Reattach stdout/stderr when launched from a console (cmd/PowerShell).
-  // WIN32 subsystem detaches the console; this reconnects it for log output.
-  if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-    freopen("CONOUT$", "w", stdout);
-    freopen("CONOUT$", "w", stderr);
+  // Console subsystem (IMAGE_SUBSYSTEM_WINDOWS_CUI) gives longer thread time slices
+  // than GUI subsystem, critical for the 18+ Simulator compute threads (~3.4x throughput
+  // difference). For normal GUI launch, release the console so no window is visible.
+  // Keep it for diagnostic modes that need stdout/stderr output.
+  {
+    bool keep_console = false;
+    for (int i = 1; i < argc; ++i) {
+      std::string_view arg(argv[i]);
+      if (arg == "--perf-bench" || arg == "-v" || arg == "-d" || arg == "--log-level" || arg == "--core-log-level") {
+        keep_console = true;
+        break;
+      }
+    }
+    if (!keep_console) {
+      FreeConsole();
+    }
   }
+
   // Raise timer resolution from 15.6ms to ~1ms so that cv_.wait_for() and Sleep()
   // are precise enough for our 20ms poll interval. Without this, SleepConditionVariableSRW
   // rounds up to 3 timer ticks (~47ms), causing a timing race with the 50ms commit interval.
   timeBeginPeriod(1);
-
-  // Windows assigns shorter thread time slices to GUI-subsystem processes
-  // (IMAGE_SUBSYSTEM_WINDOWS_GUI, set by WIN32_EXECUTABLE TRUE in CMake).
-  // This causes frequent context switches for the 18+ Simulator compute threads,
-  // dropping throughput to ~29% of an equivalent console process.
-  // ABOVE_NORMAL_PRIORITY_CLASS restores longer time slices without affecting other
-  // desktop apps. Process-level priority is used (rather than per-thread) because
-  // Simulator threads are created later by the thread pool and inherit the process class.
-  if (!SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS)) {
-    fprintf(stderr, "Warning: SetPriorityClass failed (error %lu)\n", GetLastError());
-  }
 #endif
 
   glfwSetErrorCallback(gui::GlfwErrorCallback);
@@ -286,19 +287,6 @@ int main(int argc, char** argv) {
     double rps = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
     fprintf(stderr, "[PERF-BENCH] steady_state: %.1f rays/sec (%lu rays in %.1fs, %d frames, %.1f FPS)\n", rps,
             end_rays - start_rays, elapsed, frames, frames / elapsed);
-
-    // Also write to file next to the executable — WIN32 GUI subsystem's
-    // AttachConsole+freopen("CONOUT$") redirects stderr away from pipes,
-    // and the working directory may differ from the exe location.
-    {
-      auto exe_dir = std::filesystem::path(argv[0]).parent_path();
-      auto result_path = exe_dir / "perf_bench_result.txt";
-      if (FILE* result_file = fopen(result_path.string().c_str(), "w")) {
-        fprintf(result_file, "[PERF-BENCH] steady_state: %.1f rays/sec (%lu rays in %.1fs, %d frames, %.1f FPS)\n", rps,
-                end_rays - start_rays, elapsed, frames, frames / elapsed);
-        fclose(result_file);
-      }
-    }
 
     // Cleanup and exit
     gui::g_server_poller.Stop();
