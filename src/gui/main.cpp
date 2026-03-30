@@ -287,6 +287,19 @@ int main(int argc, char** argv) {
     fprintf(stderr, "[PERF-BENCH] steady_state: %.1f rays/sec (%lu rays in %.1fs, %d frames, %.1f FPS)\n", rps,
             end_rays - start_rays, elapsed, frames, frames / elapsed);
 
+    // Also write to file next to the executable — WIN32 GUI subsystem's
+    // AttachConsole+freopen("CONOUT$") redirects stderr away from pipes,
+    // and the working directory may differ from the exe location.
+    {
+      auto exe_dir = std::filesystem::path(argv[0]).parent_path();
+      auto result_path = exe_dir / "perf_bench_result.txt";
+      if (FILE* result_file = fopen(result_path.string().c_str(), "w")) {
+        fprintf(result_file, "[PERF-BENCH] steady_state: %.1f rays/sec (%lu rays in %.1fs, %d frames, %.1f FPS)\n", rps,
+                end_rays - start_rays, elapsed, frames, frames / elapsed);
+        fclose(result_file);
+      }
+    }
+
     // Cleanup and exit
     gui::g_server_poller.Stop();
     gui::g_crystal_renderer.Destroy();
