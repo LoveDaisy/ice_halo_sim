@@ -28,12 +28,24 @@ namespace gui = lumice::gui;
 
 int main(int argc, char** argv) {
 #ifdef _WIN32
-  // Reattach stdout/stderr when launched from a console (cmd/PowerShell).
-  // WIN32 subsystem detaches the console; this reconnects it for log output.
-  if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-    freopen("CONOUT$", "w", stdout);
-    freopen("CONOUT$", "w", stderr);
+  // Console subsystem (IMAGE_SUBSYSTEM_WINDOWS_CUI) gives longer thread time slices
+  // than GUI subsystem, critical for the 18+ Simulator compute threads (~3.4x throughput
+  // difference). For normal GUI launch, release the console so no window is visible.
+  // Keep it for diagnostic modes that need stdout/stderr output.
+  {
+    bool keep_console = false;
+    for (int i = 1; i < argc; ++i) {
+      std::string_view arg(argv[i]);
+      if (arg == "--perf-bench" || arg == "-v" || arg == "-d" || arg == "--log-level" || arg == "--core-log-level") {
+        keep_console = true;
+        break;
+      }
+    }
+    if (!keep_console) {
+      FreeConsole();
+    }
   }
+
   // Raise timer resolution from 15.6ms to ~1ms so that cv_.wait_for() and Sleep()
   // are precise enough for our 20ms poll interval. Without this, SleepConditionVariableSRW
   // rounds up to 3 timer ticks (~47ms), causing a timing race with the 50ms commit interval.
