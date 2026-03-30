@@ -68,8 +68,11 @@ jobs:
 
       - name: Install GLAD2 Python dependencies (MSVC)
         if: matrix.msvc && matrix.build_gui == 'ON'
+        shell: pwsh
         run: |
           python -m pip install jinja2
+          $pythonDir = Split-Path (Get-Command python).Source
+          echo "LUMICE_PYTHON_ARGS=-DPython_EXECUTABLE=$(Get-Command python | Select-Object -ExpandProperty Source)" >> $env:GITHUB_ENV
 
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux' && matrix.build_gui == 'ON'
@@ -92,7 +95,7 @@ jobs:
           -DBUILD_TEST=ON
           -DBUILD_GUI=${{ matrix.build_gui }}
           -DLUMICE_NATIVE_ARCH=OFF
-          ${{ !matrix.msvc && env.LUMICE_PYTHON_ARGS || '' }}
+          ${{ env.LUMICE_PYTHON_ARGS }}
 
       - name: Build
         run: cmake --build build --parallel
