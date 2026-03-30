@@ -4,6 +4,7 @@
 // clang-format off
 #ifdef _WIN32
 #include <windows.h>  // Must precede timeapi.h (provides UINT, DWORD, etc.)
+#include <psapi.h>
 #include <timeapi.h>
 #endif
 // clang-format on
@@ -2048,6 +2049,27 @@ int main(int argc, char** argv) {
     double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     double rps = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
     fprintf(stderr, "[PERF] pre-engine: %.1f rays/sec (%lu rays in %.1fs)\n", rps, end_rays - start_rays, elapsed);
+
+#ifdef _WIN32
+    {
+      FILETIME create_t, exit_t, kernel_t, user_t;
+      if (GetProcessTimes(GetCurrentProcess(), &create_t, &exit_t, &kernel_t, &user_t)) {
+        auto to_ms = [](FILETIME ft) -> double {
+          ULARGE_INTEGER li;
+          li.LowPart = ft.dwLowDateTime;
+          li.HighPart = ft.dwHighDateTime;
+          return static_cast<double>(li.QuadPart) / 10000.0;
+        };
+        fprintf(stderr, "[DIAG] kernel_time=%.1fms user_time=%.1fms\n", to_ms(kernel_t), to_ms(user_t));
+      }
+      PROCESS_MEMORY_COUNTERS pmc{};
+      pmc.cb = sizeof(pmc);
+      if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+        fprintf(stderr, "[DIAG] page_faults=%lu working_set=%luKB\n", pmc.PageFaultCount, pmc.WorkingSetSize / 1024);
+      }
+      fprintf(stderr, "[DIAG] priority_class=0x%lx\n", GetPriorityClass(GetCurrentProcess()));
+    }
+#endif
 
     StopPerfSimulation();
   }

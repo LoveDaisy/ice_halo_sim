@@ -3,6 +3,7 @@
 #include <spdlog/spdlog.h>
 
 #ifdef _WIN32
+#include <psapi.h>
 #include <timeapi.h>
 #include <windows.h>
 #endif
@@ -160,6 +161,29 @@ int main(int argc, char** argv) {
     double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
     double rps = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
     fprintf(stderr, "[PERF-BENCH] lean: %.1f rays/sec (%lu rays in %.1fs)\n", rps, end_rays - start_rays, elapsed);
+
+#ifdef _WIN32
+    // Process diagnostics: kernel/user time, thread count, page faults
+    {
+      FILETIME create_t, exit_t, kernel_t, user_t;
+      if (GetProcessTimes(GetCurrentProcess(), &create_t, &exit_t, &kernel_t, &user_t)) {
+        auto to_ms = [](FILETIME ft) -> double {
+          ULARGE_INTEGER li;
+          li.LowPart = ft.dwLowDateTime;
+          li.HighPart = ft.dwHighDateTime;
+          return static_cast<double>(li.QuadPart) / 10000.0;  // 100ns → ms
+        };
+        fprintf(stderr, "[DIAG] kernel_time=%.1fms user_time=%.1fms\n", to_ms(kernel_t), to_ms(user_t));
+      }
+      PROCESS_MEMORY_COUNTERS pmc{};
+      pmc.cb = sizeof(pmc);
+      if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+        fprintf(stderr, "[DIAG] page_faults=%lu working_set=%luKB\n", pmc.PageFaultCount, pmc.WorkingSetSize / 1024);
+      }
+      DWORD priority = GetPriorityClass(GetCurrentProcess());
+      fprintf(stderr, "[DIAG] priority_class=0x%lx\n", priority);
+    }
+#endif
 
     gui::g_server_poller.Stop();
     if (gui::g_server) {
