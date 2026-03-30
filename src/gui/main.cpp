@@ -52,6 +52,19 @@ int main(int argc, char** argv) {
   timeBeginPeriod(1);
 #endif
 
+  // Parse perf-bench flag early — needed before glfwSwapInterval.
+  bool perf_bench = false;
+  bool skip_calibration = false;
+  for (int i = 1; i < argc; ++i) {
+    std::string_view arg(argv[i]);
+    if (arg == "--perf-bench") {
+      perf_bench = true;
+      skip_calibration = true;
+    } else if (arg == "--skip-calibration") {
+      skip_calibration = true;
+    }
+  }
+
   glfwSetErrorCallback(gui::GlfwErrorCallback);
   if (!glfwInit()) {
     fprintf(stderr, "Failed to initialize GLFW\n");
@@ -75,7 +88,7 @@ int main(int argc, char** argv) {
 
   glfwSetWindowSizeLimits(window, gui::kMinWindowWidth, gui::kMinWindowHeight, GLFW_DONT_CARE, GLFW_DONT_CARE);
   glfwMakeContextCurrent(window);
-  glfwSwapInterval(1);  // VSync
+  glfwSwapInterval(perf_bench ? 0 : 1);  // VSync off for perf-bench to match test binary
 
   if (!gui::InitGLLoader()) {
     glfwDestroyWindow(window);
@@ -97,17 +110,7 @@ int main(int argc, char** argv) {
 
   gui::g_state = gui::InitDefaultState();
 
-  // Parse diagnostic flags early (before the CLI block that needs them)
-  bool skip_calibration = false;
-  bool perf_bench = false;
-  for (int i = 1; i < argc; ++i) {
-    if (std::string_view(argv[i]) == "--skip-calibration") {
-      skip_calibration = true;
-    } else if (std::string_view(argv[i]) == "--perf-bench") {
-      perf_bench = true;
-      skip_calibration = true;  // bench mode skips calibration too
-    }
-  }
+  // perf_bench and skip_calibration already parsed above (before glfwSwapInterval).
 
   // Create Lumice server and initialize Core logger.
   gui::g_server = LUMICE_CreateServer();
