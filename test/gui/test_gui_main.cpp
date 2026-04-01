@@ -1140,6 +1140,86 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
       std::remove(tmp_path);
     };
   }
+
+  // Test: UpdateCpuTextureData → Save → Load preserves correct data and dimensions.
+  // Regression test for bug where UpdateCpuTextureData did not update tex_width_/tex_height_,
+  // causing SaveLmcFile to use stale dimensions from a previous UploadTexture/UploadXyzTexture call.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "save_texture_dimension_consistency");
+    t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
+      if (g_capture.capture_requested && !g_capture.capture_done) {
+        gui::g_preview.UploadTexture(g_capture.pixels.data(), g_capture.width, g_capture.height);
+        g_capture.capture_done = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Step 1: Upload a 256x256 texture via UploadTexture (simulates normal XYZ upload setting tex_width_/tex_height_)
+      constexpr int kOldW = 256;
+      constexpr int kOldH = 256;
+      std::vector<unsigned char> old_tex(kOldW * kOldH * 3, 0);
+      g_capture.Reset();
+      g_capture.pixels = old_tex;
+      g_capture.width = kOldW;
+      g_capture.height = kOldH;
+      g_capture.capture_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_capture.capture_done);
+      IM_CHECK_EQ(gui::g_preview.GetTextureWidth(), kOldW);
+      IM_CHECK_EQ(gui::g_preview.GetTextureHeight(), kOldH);
+
+      // Step 2: Call UpdateCpuTextureData with DIFFERENT dimensions (simulates RefreshCpuTextureForSave)
+      constexpr int kNewW = 128;
+      constexpr int kNewH = 128;
+      std::vector<unsigned char> new_tex(kNewW * kNewH * 3);
+      for (int y = 0; y < kNewH; ++y) {
+        for (int x = 0; x < kNewW; ++x) {
+          int idx = (y * kNewW + x) * 3;
+          new_tex[idx + 0] = static_cast<unsigned char>((x * 7 + y * 3) % 256);
+          new_tex[idx + 1] = static_cast<unsigned char>((x * 11 + y * 5) % 256);
+          new_tex[idx + 2] = static_cast<unsigned char>((x * 13 + y * 17) % 256);
+        }
+      }
+      gui::g_preview.UpdateCpuTextureData(new_tex.data(), kNewW, kNewH);
+
+      // Verify dimensions were updated
+      IM_CHECK_EQ(gui::g_preview.GetTextureWidth(), kNewW);
+      IM_CHECK_EQ(gui::g_preview.GetTextureHeight(), kNewH);
+
+      // Step 3: Save with texture
+      const char* tmp_path = "/tmp/lumice_save_dim_test.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, true);
+      IM_CHECK(save_ok);
+
+      // Step 4: Load back
+      gui::GuiState loaded_state;
+      std::vector<unsigned char> loaded_tex;
+      int loaded_w = 0, loaded_h = 0;
+      bool load_ok = gui::LoadLmcFile(tmp_path, loaded_state, loaded_tex, loaded_w, loaded_h);
+      IM_CHECK(load_ok);
+
+      // Step 5: Verify loaded texture matches UpdateCpuTextureData input (not the old UploadTexture data)
+      IM_CHECK_EQ(loaded_w, kNewW);
+      IM_CHECK_EQ(loaded_h, kNewH);
+      IM_CHECK(!loaded_tex.empty());
+
+      size_t expected_size = static_cast<size_t>(kNewW) * kNewH * 3;
+      IM_CHECK_EQ(loaded_tex.size(), expected_size);
+
+      bool match = (memcmp(loaded_tex.data(), new_tex.data(), expected_size) == 0);
+      if (!match) {
+        double psnr = lumice::test::ComputePsnr(loaded_tex.data(), new_tex.data(), kNewW, kNewH, 3);
+        fprintf(stderr, "[visual] save_texture_dimension_consistency: mismatch, PSNR = %.2f dB\n", psnr);
+        IM_CHECK(psnr >= 60.0);
+      } else {
+        fprintf(stderr, "[visual] save_texture_dimension_consistency: exact match\n");
+      }
+
+      // Cleanup
+      std::remove(tmp_path);
+    };
+  }
 }
 
 // Background overlay GuiFunc: handles bg texture upload, equirect upload, and FBO export on main thread.
