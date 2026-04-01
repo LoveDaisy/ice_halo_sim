@@ -201,8 +201,7 @@ Dir3 RectangularInverse(float lon, float lat) {
 
 // =============== Dual fisheye layout utilities ===============
 
-void DualFisheyeToPixel(float x_norm, float y_norm, bool is_upper, int width, int height,
-                        float* fx, float* fy) {
+void DualFisheyeToPixel(float x_norm, float y_norm, bool is_upper, int width, int height, float* fx, float* fy) {
   int short_res = std::min(width / 2, height);
   float r = short_res / 2.0f;
   float cy = height / 2.0f;
@@ -220,8 +219,7 @@ void DualFisheyeToPixel(float x_norm, float y_norm, bool is_upper, int width, in
   }
 }
 
-bool PixelToDualFisheye(float fx, float fy, int width, int height,
-                        float* x_norm, float* y_norm, bool* is_upper) {
+bool PixelToDualFisheye(float fx, float fy, int width, int height, float* x_norm, float* y_norm, bool* is_upper) {
   int short_res = std::min(width / 2, height);
   float r = short_res / 2.0f;
   float cy = height / 2.0f;

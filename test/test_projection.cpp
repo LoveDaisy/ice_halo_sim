@@ -46,7 +46,9 @@ TEST(Projection, LinearRoundTrip) {
   for (int i = 0; i < 1000; i++) {
     float dx = dist(rng), dy = dist(rng), dz = std::abs(dist(rng)) + 0.01f;
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
-    dx /= len; dy /= len; dz /= len;
+    dx /= len;
+    dy /= len;
+    dz /= len;
     auto fwd = LinearForward(dx, dy, dz);
     ASSERT_TRUE(fwd.valid);
     auto inv = LinearInverse(fwd.x, fwd.y);
@@ -87,7 +89,9 @@ TEST(Projection, FisheyeEqualAreaRoundTrip) {
   for (int i = 0; i < 1000; i++) {
     float dx = dist(rng), dy = dist(rng), dz = std::abs(dist(rng)) + 0.01f;
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
-    dx /= len; dy /= len; dz /= len;
+    dx /= len;
+    dy /= len;
+    dz /= len;
     auto fwd = FisheyeEqualAreaForward(dx, dy, dz);
     ASSERT_TRUE(fwd.valid);
     auto inv = FisheyeEqualAreaInverse(fwd.x, fwd.y);
@@ -107,7 +111,9 @@ TEST(Projection, FisheyeEquidistantRoundTrip) {
   for (int i = 0; i < 1000; i++) {
     float dx = dist(rng), dy = dist(rng), dz = std::abs(dist(rng)) + 0.01f;
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
-    dx /= len; dy /= len; dz /= len;
+    dx /= len;
+    dy /= len;
+    dz /= len;
     auto fwd = FisheyeEquidistantForward(dx, dy, dz);
     ASSERT_TRUE(fwd.valid);
     auto inv = FisheyeEquidistantInverse(fwd.x, fwd.y);
@@ -127,7 +133,9 @@ TEST(Projection, FisheyeStereographicRoundTrip) {
   for (int i = 0; i < 1000; i++) {
     float dx = dist(rng), dy = dist(rng), dz = std::abs(dist(rng)) + 0.01f;
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
-    dx /= len; dy /= len; dz /= len;
+    dx /= len;
+    dy /= len;
+    dz /= len;
     auto fwd = FisheyeStereographicForward(dx, dy, dz);
     ASSERT_TRUE(fwd.valid);
     auto inv = FisheyeStereographicInverse(fwd.x, fwd.y);
@@ -170,8 +178,11 @@ TEST(Projection, DualFisheyeEARoundTrip) {
   for (int i = 0; i < 2000; i++) {
     float dx = dist(rng), dy = dist(rng), dz = dist(rng);
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
-    if (len < 1e-6f) continue;
-    dx /= len; dy /= len; dz /= len;
+    if (len < 1e-6f)
+      continue;
+    dx /= len;
+    dy /= len;
+    dz /= len;
     auto fwd = DualFisheyeEqualAreaForward(dx, dy, dz);
     auto inv = DualFisheyeEqualAreaInverse(fwd.x, fwd.y, fwd.is_upper);
     ASSERT_TRUE(inv.valid);
@@ -229,8 +240,11 @@ TEST(Projection, DualFisheyeEDRoundTrip) {
   for (int i = 0; i < 2000; i++) {
     float dx = dist(rng), dy = dist(rng), dz = dist(rng);
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
-    if (len < 1e-6f) continue;
-    dx /= len; dy /= len; dz /= len;
+    if (len < 1e-6f)
+      continue;
+    dx /= len;
+    dy /= len;
+    dz /= len;
     auto fwd = DualFisheyeEquidistantForward(dx, dy, dz);
     auto inv = DualFisheyeEquidistantInverse(fwd.x, fwd.y, fwd.is_upper);
     ASSERT_TRUE(inv.valid);
@@ -256,8 +270,11 @@ TEST(Projection, DualFisheyeSTRoundTrip) {
   for (int i = 0; i < 2000; i++) {
     float dx = dist(rng), dy = dist(rng), dz = dist(rng);
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
-    if (len < 1e-6f) continue;
-    dx /= len; dy /= len; dz /= len;
+    if (len < 1e-6f)
+      continue;
+    dx /= len;
+    dy /= len;
+    dz /= len;
     auto fwd = DualFisheyeStereographicForward(dx, dy, dz);
     auto inv = DualFisheyeStereographicInverse(fwd.x, fwd.y, fwd.is_upper);
     ASSERT_TRUE(inv.valid);
@@ -297,8 +314,11 @@ TEST(Projection, RectangularRoundTrip) {
   for (int i = 0; i < 2000; i++) {
     float dx = dist(rng), dy = dist(rng), dz = dist(rng);
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
-    if (len < 1e-6f) continue;
-    dx /= len; dy /= len; dz /= len;
+    if (len < 1e-6f)
+      continue;
+    dx /= len;
+    dy /= len;
+    dz /= len;
     auto fwd = RectangularForward(dx, dy, dz);
     ASSERT_TRUE(fwd.valid);
     auto inv = RectangularInverse(fwd.x, fwd.y);
