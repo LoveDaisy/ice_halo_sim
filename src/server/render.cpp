@@ -18,6 +18,7 @@
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 #include "util/color_data.hpp"
+#include "util/color_space.hpp"
 
 
 namespace lumice {
@@ -29,16 +30,6 @@ namespace lumice {
 constexpr float kNormScale = 0.08f;
 
 // =============== Color transforms ===============
-// Convert linear rgb to sRGB
-void SrgbGamma(float* rgb, size_t num) {
-  for (size_t i = 0; i < num; i++) {
-    if (rgb[i] < 0.0031308) {
-      rgb[i] *= 12.92f;
-    } else {
-      rgb[i] = 1.055f * std::pow(rgb[i], 1.0f / 2.4f) - 0.055f;
-    }
-  }
-}
 
 void SpectrumToXyz(float wl, const float* v, const int* xy, float* xyz, size_t num = 1) {
   int wl_key = static_cast<int>(wl + 0.5f);
@@ -315,6 +306,7 @@ RenderConsumer::RenderConsumer(RenderConfig config)
                                                       config_.resolution_[1] * config_.resolution_[1])),
       internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
+      snapshot_work_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_image_buffer_(std::make_unique<uint8_t[]>(config_.resolution_[0] * config_.resolution_[1] * 3)) {
   float ax_z[3]{ 0, 0, 1 };
   float ax_y[3]{ 0, 1, 0 };
@@ -472,58 +464,54 @@ void RenderConsumer::PostSnapshot() {
     return;
   }
 
-  // Work on snapshot_xyz_ in-place (destructive to snapshot_xyz_, but that's fine —
-  // PrepareSnapshot will overwrite it next time).
-  float* float_data = snapshot_xyz_.get();
+  // Copy to work buffer — preserve snapshot_xyz_ for GetRawXyzResult().
+  auto buf_size = static_cast<size_t>(total_pix) * 3;
+  std::memcpy(snapshot_work_.get(), snapshot_xyz_.get(), buf_size * sizeof(float));
+  float* float_data = snapshot_work_.get();
+
+  // Intensity scaling uses config_.intensity_factor_ (from CLI JSON / CommitConfig snapshot).
+  // GUI rendering uses a separate path: exposure_offset → shader uniform (see app_panels.cpp).
   int pix = config_.norm_mode_ == 1 ? effective_pix_ : total_pix;
-  for (int i = 0; i < total_pix * 3; i++) {
-    float_data[i] *= config_.intensity_factor_ * kNormScale * pix / snapshot_intensity_;
+  float scale = config_.intensity_factor_ * kNormScale * pix / snapshot_intensity_;
+  for (size_t i = 0; i < buf_size; i++) {
+    float_data[i] *= scale;
   }
 
   bool use_real_color = config_.ray_color_[0] < 0;
-  float gray[3];
   for (int i = 0; i < total_pix; i++) {
     float* xyz = float_data + i * 3;
-    for (int j = 0; j < 3; j++) {
-      gray[j] = kWhitePointD65[j] * xyz[1];
-    }
+    float rgb[3];
 
     if (use_real_color) {
-      float r = 1.0f;
-      for (int j = 0; j < 3; j++) {
-        float a = 0;
-        float b = 0;
-        for (int k = 0; k < 3; k++) {
-          a += -gray[k] * kXyzToRgb[j * 3 + k];
-          b += (xyz[k] - gray[k]) * kXyzToRgb[j * 3 + k];
-        }
-        if (a * b > 0 && a / b < r) {
-          r = a / b;
-        }
-      }
-
-      for (int j = 0; j < 3; j++) {
-        xyz[j] = (xyz[j] - gray[j]) * r + gray[j];
-      }
+      // Gamut clip → matrix multiply
+      float clipped[3];
+      GamutClipXyz(xyz, clipped);
+      XyzToLinearRgb(clipped, rgb);
     } else {
-      std::memcpy(xyz, gray, 3 * sizeof(float));
+      // Skip gamut clip; use D65 gray (luminance-only) → matrix multiply → ray_color tint.
+      // Inline matrix multiply (no clamp before ray_color — clamp after bg blending below).
+      float gray[3];
+      for (int j = 0; j < 3; j++) {
+        gray[j] = kWhitePointD65[j] * xyz[1];
+      }
+      for (int j = 0; j < 3; j++) {
+        float v = 0;
+        for (int k = 0; k < 3; k++) {
+          v += gray[k] * kXyzToRgb[j * 3 + k];
+        }
+        rgb[j] = v * config_.ray_color_[j];
+      }
     }
 
-    float rgb[3]{};
+    // Background blending + clamp
     for (int j = 0; j < 3; j++) {
-      for (int k = 0; k < 3; k++) {
-        rgb[j] += xyz[k] * kXyzToRgb[j * 3 + k];
-      }
-      if (!use_real_color) {
-        rgb[j] *= config_.ray_color_[j];
-      }
       rgb[j] += config_.background_[j];
       rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
     }
     std::memcpy(float_data + i * 3, rgb, 3 * sizeof(float));
   }
 
-  SrgbGamma(float_data, 3 * total_pix);
+  LinearToSrgbBatch(float_data, 3 * total_pix);
 
   for (int i = 0; i < total_pix * 3; i++) {
     snapshot_image_buffer_[i] = static_cast<uint8_t>(float_data[i] * 255);

@@ -77,6 +77,9 @@ struct RenderConfig {
   float background_[3]{};                      // r, g, b
   float ray_color_[3]{ -1.0f, -1.0f, -1.0f };  // r, g, b
   float opacity_ = 1.0f;
+  // Brightness scaling for CLI output (PostSnapshot). GUI uses exposure_offset (EV stops) in
+  // gui_state.hpp directly; the two are related by intensity_factor = 2^exposure_offset but serve
+  // different paths and may differ at runtime (GUI updates EV without re-committing config).
   float intensity_factor_ = 1.0f;
   int norm_mode_ = 0;  // 0=absolute (W*H), 1=adaptive (non-zero pixel count). GUI defaults to 1.
 

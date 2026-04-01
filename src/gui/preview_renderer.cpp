@@ -40,17 +40,16 @@ uniform vec2 u_bg_uv_offset;
 
 const float PI = 3.14159265358979323846;
 
-// XYZ→sRGB transformation matrix (GLSL column-major).
-// C++ kXyzToRgb rows: R=[3.2405,-1.5371,-0.4985], G=[-0.9693,1.8760,0.0416], B=[0.0556,-0.2040,1.0572]
-// GLSL mat3(a,b,c) uses a,b,c as columns → transposed from C++ row-major automatically.
+// Algorithm synced with CPU: src/util/color_space.hpp (GamutClipXyz + XyzToLinearRgb + LinearToSrgb)
+// Matrix values from src/util/color_data.hpp kXyzToRgb (C++ row-major → GLSL column-major)
 const mat3 kXyzToRgb = mat3(
-     3.2405, -0.9693,  0.0556,   // column 0
-    -1.5371,  1.8760, -0.2040,   // column 1
-    -0.4985,  0.0416,  1.0572    // column 2
+     3.2404542, -0.9692660,  0.0556434,   // column 0
+    -1.5371385,  1.8760108, -0.2040259,   // column 1
+    -0.4985314,  0.0415560,  1.0572252    // column 2
 );
 const vec3 kWhitePointD65 = vec3(0.95047, 1.00000, 1.08883);
 
-// Convert XYZ color to sRGB with gamut clipping
+// CPU equivalent: lumice::XyzToSrgb() in src/util/color_space.hpp
 vec3 xyzToSrgb(vec3 xyz) {
     // Normalize by accumulated intensity
     xyz *= u_intensity_scale;
