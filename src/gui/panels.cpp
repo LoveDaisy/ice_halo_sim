@@ -366,7 +366,7 @@ void RenderCrystalTab(GuiState& state) {
     if (cr.type == CrystalType::kPrism) {
       DIRTY_IF(SliderWithInput("Height", &cr.height, 0.01f, 100.0f, "%.3f", SliderScale::kLog));
     } else {
-      DIRTY_IF(SliderWithInput("Prism H", &cr.prism_h, 0.0f, 5.0f, "%.2f"));
+      DIRTY_IF(SliderWithInput("Prism H", &cr.prism_h, 0.01f, 100.0f, "%.3f", SliderScale::kLog));
       DIRTY_IF(SliderWithInput("Upper H", &cr.upper_h, 0.0f, 1.0f, "%.2f"));
       DIRTY_IF(SliderWithInput("Lower H", &cr.lower_h, 0.0f, 1.0f, "%.2f"));
       ImGui::PushItemWidth(-100);
