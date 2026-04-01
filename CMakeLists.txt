@@ -186,6 +186,7 @@ set(lumice_core_src
   "${PROJ_SRC_DIR}/core/geo3d.cpp"
   "${PROJ_SRC_DIR}/core/math.cpp"
   "${PROJ_SRC_DIR}/core/optics.cpp"
+  "${PROJ_SRC_DIR}/core/projection.cpp"
   "${PROJ_SRC_DIR}/core/raypath.cpp"
   "${PROJ_SRC_DIR}/core/simulator.cpp")
 
