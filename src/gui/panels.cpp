@@ -9,6 +9,8 @@
 
 namespace lumice::gui {
 
+enum class SliderScale { kLinear, kSqrt, kLog };
+
 // Common layout constants for SliderWithInput / SliderIntWithInput
 constexpr float kLabelColWidth = 70.0f;
 constexpr float kInputWidth = 60.0f;
@@ -50,7 +52,7 @@ static void FinishSliderLayout(const char* display_label) {
 // Uses a fixed label column width so vertically stacked sliders align.
 // Returns true if value changed.
 static bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
-                            bool sqrt_scale = false) {
+                            SliderScale scale = SliderScale::kLinear) {
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
@@ -60,14 +62,24 @@ static bool SliderWithInput(const char* label, float* value, float min_val, floa
   bool changed = false;
 
   ImGui::PushItemWidth(slider_w);
-  if (sqrt_scale && min_val >= 0.0f) {
+  if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
     // Sqrt-scale slider: more resolution at small values.
     // Slider operates on sqrt(value); actual value = slider_val^2.
     float sqrt_val = std::sqrt(std::max(*value, 0.0f));
     float sqrt_max = std::sqrt(max_val);
-    // Use empty format to hide the slider's own text (InputFloat shows the actual value)
     if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "")) {
       *value = sqrt_val * sqrt_val;
+      changed = true;
+    }
+  } else if (scale == SliderScale::kLog && min_val > 0.0f) {
+    // Log-scale slider: uniform resolution across orders of magnitude.
+    // Slider operates on normalized [0,1] position; actual value = min * exp(norm * log(max/min)).
+    *value = std::max(*value, min_val);  // Defend against 0/negative from InputFloat
+    float log_ratio = std::log(max_val / min_val);
+    float norm = std::log(*value / min_val) / log_ratio;
+    norm = std::clamp(norm, 0.0f, 1.0f);
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
+      *value = min_val * std::exp(norm * log_ratio);
       changed = true;
     }
   } else {
@@ -225,9 +237,9 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
   DIRTY_IF(SliderWithInput("Mean", &axis.mean, -360.0f, 360.0f));
 
   if (axis.type == AxisDistType::kGauss) {
-    DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", true));
+    DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt));
   } else {
-    DIRTY_IF(SliderWithInput("Range", &axis.std, 0.0f, 360.0f, "%.1f", true));
+    DIRTY_IF(SliderWithInput("Range", &axis.std, 0.0f, 360.0f, "%.1f", SliderScale::kSqrt));
   }
 
   ImGui::PopID();
@@ -352,9 +364,9 @@ void RenderCrystalTab(GuiState& state) {
 
   if (ImGui::CollapsingHeader("Shape", ImGuiTreeNodeFlags_DefaultOpen)) {
     if (cr.type == CrystalType::kPrism) {
-      DIRTY_IF(SliderWithInput("Height", &cr.height, 0.1f, 5.0f, "%.2f"));
+      DIRTY_IF(SliderWithInput("Height", &cr.height, 0.01f, 100.0f, "%.3f", SliderScale::kLog));
     } else {
-      DIRTY_IF(SliderWithInput("Prism H", &cr.prism_h, 0.0f, 5.0f, "%.2f"));
+      DIRTY_IF(SliderWithInput("Prism H", &cr.prism_h, 0.01f, 100.0f, "%.3f", SliderScale::kLog));
       DIRTY_IF(SliderWithInput("Upper H", &cr.upper_h, 0.0f, 1.0f, "%.2f"));
       DIRTY_IF(SliderWithInput("Lower H", &cr.lower_h, 0.0f, 1.0f, "%.2f"));
       ImGui::PushItemWidth(-100);
@@ -714,7 +726,7 @@ void RenderFilterTab(GuiState& state) {
     f.raypath_text = raypath_buf;
     state.MarkDirty();
   }
-  ImGui::TextDisabled("Comma-separated face indices, e.g. 3,1,5,7,4");
+  ImGui::TextDisabled("Face indices separated by '-', e.g. 3-1-5-7-4 (comma also accepted)");
 
   ImGui::Text("Symmetry:");
   ImGui::SameLine();

@@ -352,6 +352,16 @@ void PreviewRenderer::ClearTexture() {
   tex_data_.clear();
 }
 
+void PreviewRenderer::UpdateCpuTextureData(const unsigned char* data, int width, int height) {
+  if (!data || width <= 0 || height <= 0) {
+    return;
+  }
+  size_t byte_count = static_cast<size_t>(width) * height * 3;
+  tex_data_.assign(data, data + byte_count);
+  tex_width_ = width;
+  tex_height_ = height;
+}
+
 void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int height) {
   if (!texture_ || !data) {
     return;

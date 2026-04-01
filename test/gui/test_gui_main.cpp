@@ -1140,6 +1140,222 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
       std::remove(tmp_path);
     };
   }
+
+  // Test: UpdateCpuTextureData → Save → Load preserves correct data and dimensions.
+  // Regression test for bug where UpdateCpuTextureData did not update tex_width_/tex_height_,
+  // causing SaveLmcFile to use stale dimensions from a previous UploadTexture/UploadXyzTexture call.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "save_texture_dimension_consistency");
+    t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
+      if (g_capture.capture_requested && !g_capture.capture_done) {
+        gui::g_preview.UploadTexture(g_capture.pixels.data(), g_capture.width, g_capture.height);
+        g_capture.capture_done = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Step 1: Upload a 256x256 texture via UploadTexture (simulates normal XYZ upload setting tex_width_/tex_height_)
+      constexpr int kOldW = 256;
+      constexpr int kOldH = 256;
+      std::vector<unsigned char> old_tex(kOldW * kOldH * 3, 0);
+      g_capture.Reset();
+      g_capture.pixels = old_tex;
+      g_capture.width = kOldW;
+      g_capture.height = kOldH;
+      g_capture.capture_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_capture.capture_done);
+      IM_CHECK_EQ(gui::g_preview.GetTextureWidth(), kOldW);
+      IM_CHECK_EQ(gui::g_preview.GetTextureHeight(), kOldH);
+
+      // Step 2: Call UpdateCpuTextureData with DIFFERENT dimensions (simulates RefreshCpuTextureForSave)
+      constexpr int kNewW = 128;
+      constexpr int kNewH = 128;
+      std::vector<unsigned char> new_tex(kNewW * kNewH * 3);
+      for (int y = 0; y < kNewH; ++y) {
+        for (int x = 0; x < kNewW; ++x) {
+          int idx = (y * kNewW + x) * 3;
+          new_tex[idx + 0] = static_cast<unsigned char>((x * 7 + y * 3) % 256);
+          new_tex[idx + 1] = static_cast<unsigned char>((x * 11 + y * 5) % 256);
+          new_tex[idx + 2] = static_cast<unsigned char>((x * 13 + y * 17) % 256);
+        }
+      }
+      gui::g_preview.UpdateCpuTextureData(new_tex.data(), kNewW, kNewH);
+
+      // Verify dimensions were updated
+      IM_CHECK_EQ(gui::g_preview.GetTextureWidth(), kNewW);
+      IM_CHECK_EQ(gui::g_preview.GetTextureHeight(), kNewH);
+
+      // Step 3: Save with texture
+      const char* tmp_path = "/tmp/lumice_save_dim_test.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, true);
+      IM_CHECK(save_ok);
+
+      // Step 4: Load back
+      gui::GuiState loaded_state;
+      std::vector<unsigned char> loaded_tex;
+      int loaded_w = 0, loaded_h = 0;
+      bool load_ok = gui::LoadLmcFile(tmp_path, loaded_state, loaded_tex, loaded_w, loaded_h);
+      IM_CHECK(load_ok);
+
+      // Step 5: Verify loaded texture matches UpdateCpuTextureData input (not the old UploadTexture data)
+      IM_CHECK_EQ(loaded_w, kNewW);
+      IM_CHECK_EQ(loaded_h, kNewH);
+      IM_CHECK(!loaded_tex.empty());
+
+      size_t expected_size = static_cast<size_t>(kNewW) * kNewH * 3;
+      IM_CHECK_EQ(loaded_tex.size(), expected_size);
+
+      bool match = (memcmp(loaded_tex.data(), new_tex.data(), expected_size) == 0);
+      if (!match) {
+        double psnr = lumice::test::ComputePsnr(loaded_tex.data(), new_tex.data(), kNewW, kNewH, 3);
+        fprintf(stderr, "[visual] save_texture_dimension_consistency: mismatch, PSNR = %.2f dB\n", psnr);
+        IM_CHECK(psnr >= 60.0);
+      } else {
+        fprintf(stderr, "[visual] save_texture_dimension_consistency: exact match\n");
+      }
+
+      // Cleanup
+      std::remove(tmp_path);
+    };
+  }
+
+  // End-to-end: Run simulation → Save → Open → verify visual consistency.
+  // Tests the actual user workflow: the reopened file should look the same as the live display.
+  // Regression test for PostSnapshot using stale CommitConfig-time EV instead of current GUI EV.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "save_open_visual_consistency");
+    t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
+      // Upload texture on main thread when requested
+      if (g_capture.capture_requested && !g_capture.capture_done) {
+        gui::g_preview.UploadTexture(g_capture.pixels.data(), g_capture.width, g_capture.height);
+        g_capture.capture_done = true;
+      }
+      // FBO export on main thread when requested
+      if (g_export_test.export_requested && !g_export_test.export_done) {
+        g_export_test.export_result =
+            gui::ExportPreviewPng(g_export_test.export_path, gui::g_preview, gui::g_preview_vp);
+        g_export_test.export_done = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // --- Phase 1: Start simulation and wait for texture data ---
+      gui::g_server = LUMICE_CreateServer();
+      LUMICE_InitLogger(gui::g_server);
+      gui::g_state.sim.infinite = true;
+      gui::g_state.sim.max_hits = 8;
+      if (!gui::g_state.renderers.empty()) {
+        auto& r = gui::g_state.renderers[0];
+        r.lens_type = 0;  // Linear
+        r.fov = 120.0f;
+        r.sim_resolution_index = 0;
+        r.visible = 2;
+        r.exposure_offset = 0.0f;
+      }
+      gui::DoRun();
+
+      // Wait for first texture upload (up to 10s)
+      auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      while (gui::g_state.texture_upload_count == 0) {
+        ctx->Yield();
+        IM_CHECK(std::chrono::steady_clock::now() < timeout);
+      }
+      // Let a few more frames accumulate for stable data
+      for (int i = 0; i < 30; i++) {
+        ctx->Yield();
+      }
+      IM_CHECK(gui::g_preview.HasTexture());
+      IM_CHECK(gui::g_preview_vp.vp_w > 0);
+      IM_CHECK(gui::g_preview_vp.vp_h > 0);
+
+      // --- Phase 2: Stop simulation, then capture (so Save uses same data as display) ---
+      gui::DoStop();
+      ctx->Yield(5);  // Let the final poller sync complete
+
+      const char* path_a = "/tmp/lumice_save_visual_A.png";
+      g_export_test.Reset();
+      g_export_test.export_path = path_a;
+      g_export_test.export_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.export_done);
+      IM_CHECK(g_export_test.export_result);
+
+      // --- Phase 3: Save ---
+      const char* lmc_path = "/tmp/lumice_save_visual_test.lmc";
+      gui::g_state.current_file_path = lmc_path;
+      gui::DoSave();
+
+      // --- Phase 4: Destroy server and Open the saved file ---
+      gui::g_server_poller.Stop();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0, tex_h = 0;
+      bool load_ok = gui::LoadLmcFile(lmc_path, gui::g_state, tex_data, tex_w, tex_h);
+      IM_CHECK(load_ok);
+      IM_CHECK(!tex_data.empty());
+
+      // Upload loaded texture (GuiFunc will handle GL)
+      g_capture.Reset();
+      g_capture.pixels = tex_data;
+      g_capture.width = tex_w;
+      g_capture.height = tex_h;
+      g_capture.capture_requested = true;
+      ctx->Yield(2);
+
+      // --- Phase 5: Capture loaded preview (screenshot B) ---
+      const char* path_b = "/tmp/lumice_save_visual_B.png";
+      g_export_test.Reset();
+      g_export_test.export_path = path_b;
+      g_export_test.export_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.export_done);
+      IM_CHECK(g_export_test.export_result);
+
+      // --- Phase 6: Compare screenshots A and B ---
+      std::vector<unsigned char> img_a, img_b;
+      int wa = 0, ha = 0, ca = 0;
+      int wb = 0, hb = 0, cb = 0;
+      IM_CHECK(lumice::test::LoadPng(path_a, img_a, wa, ha, ca));
+      IM_CHECK(lumice::test::LoadPng(path_b, img_b, wb, hb, cb));
+      IM_CHECK_EQ(wa, wb);
+      IM_CHECK_EQ(ha, hb);
+
+      // Compare in RGB (strip alpha if needed)
+      std::vector<unsigned char> rgb_a, rgb_b;
+      int ch = std::min(ca, cb);
+      if (ca == 4) {
+        rgb_a = lumice::test::StripAlpha(img_a.data(), wa, ha);
+      } else {
+        rgb_a = img_a;
+      }
+      if (cb == 4) {
+        rgb_b = lumice::test::StripAlpha(img_b.data(), wb, hb);
+      } else {
+        rgb_b = img_b;
+      }
+
+      // PSNR threshold: the save path gets a fresh snapshot from the server (slightly more accumulated
+      // data than the poller's last upload), plus float→uint8 quantization (~48 dB theoretical max).
+      // 28 dB catches major conversion errors (wrong EV, wrong matrix) while allowing for timing noise.
+      constexpr double kPsnrThreshold = 28.0;
+      double psnr = lumice::test::ComputePsnr(rgb_a.data(), rgb_b.data(), wa, ha, 3);
+      fprintf(stderr, "[visual] save_open_visual_consistency: PSNR = %.2f dB (threshold = %.1f dB)\n", psnr,
+              kPsnrThreshold);
+      IM_CHECK(psnr > kPsnrThreshold);
+
+      // Cleanup
+      std::remove(path_a);
+      std::remove(path_b);
+      std::remove(lmc_path);
+    };
+  }
 }
 
 // Background overlay GuiFunc: handles bg texture upload, equirect upload, and FBO export on main thread.

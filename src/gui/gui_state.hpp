@@ -121,10 +121,13 @@ struct RenderConfig {
 inline const char* const kFilterActionNames[] = { "Filter In", "Filter Out" };
 constexpr int kFilterActionCount = 2;
 
+constexpr char kRaypathSep = '-';
+constexpr const char* kRaypathSepStr = "-";
+
 struct FilterConfig {
   int id = 0;
   int action = 0;            // 0=filter_in, 1=filter_out
-  std::string raypath_text;  // Comma-separated int list, e.g. "3,1,5,7,4"
+  std::string raypath_text;  // Dash-separated int list, e.g. "3-1-5-7-4"; comma also accepted for back-compat
   bool sym_p = true;
   bool sym_b = true;
   bool sym_d = true;

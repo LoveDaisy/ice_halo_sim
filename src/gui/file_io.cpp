@@ -44,6 +44,30 @@ static_assert(sizeof(kAspectPresetJsonNames) / sizeof(kAspectPresetJsonNames[0])
 
 // ========== Shared helpers ==========
 
+static std::vector<int> ParseRaypathText(const std::string& text) {
+  std::vector<int> result;
+  // Normalize: replace ',' with '-' so both separators are accepted
+  std::string normalized = text;
+  for (auto& c : normalized) {
+    if (c == ',')
+      c = '-';
+  }
+  std::istringstream iss(normalized);
+  std::string token;
+  while (std::getline(iss, token, '-')) {
+    if (token.empty())
+      continue;
+    try {
+      int val = std::stoi(token);
+      if (val < 0)
+        continue;
+      result.push_back(val);
+    } catch (...) {
+    }
+  }
+  return result;
+}
+
 static json SerializeAxisDist(const AxisDist& a) {
   json j;
   j["type"] = (a.type == AxisDistType::kGauss) ? "gauss" : "uniform";
@@ -92,17 +116,7 @@ static json SerializeFilterForCore(const FilterConfig& f) {
   j["type"] = "raypath";
   j["action"] = f.action == 0 ? "filter_in" : "filter_out";
 
-  std::vector<int> raypath;
-  std::istringstream iss(f.raypath_text);
-  std::string token;
-  while (std::getline(iss, token, ',')) {
-    try {
-      int val = std::stoi(token);
-      raypath.push_back(val);
-    } catch (...) {
-    }
-  }
-  j["raypath"] = raypath;
+  j["raypath"] = ParseRaypathText(f.raypath_text);
 
   std::string sym;
   if (f.sym_p)
@@ -352,14 +366,10 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
     dst.action = f.action;
     dst.symmetry = (f.sym_p ? 1 : 0) | (f.sym_b ? 2 : 0) | (f.sym_d ? 4 : 0);
     // Parse raypath_text
-    std::istringstream iss(f.raypath_text);
-    std::string token;
-    dst.raypath_count = 0;
-    while (std::getline(iss, token, ',') && dst.raypath_count < LUMICE_MAX_CONFIG_RAYPATH_LEN) {
-      try {
-        dst.raypath[dst.raypath_count++] = std::stoi(token);
-      } catch (...) {
-      }
+    auto rp = ParseRaypathText(f.raypath_text);
+    dst.raypath_count = static_cast<int>(std::min(rp.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RAYPATH_LEN)));
+    for (int k = 0; k < dst.raypath_count; k++) {
+      dst.raypath[k] = rp[k];
     }
   }
 
@@ -453,7 +463,7 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
         std::string text;
         for (size_t i = 0; i < jf["raypath"].size(); i++) {
           if (i > 0)
-            text += ",";
+            text += kRaypathSepStr;
           text += std::to_string(jf["raypath"][i].get<int>());
         }
         f.raypath_text = text;
