@@ -155,7 +155,7 @@ static void RefreshCpuTextureForSave() {
   LUMICE_RenderResult renders[2]{};
   LUMICE_GetRenderResults(g_server, renders, 1);
   if (renders[0].img_buffer != nullptr) {
-    g_preview.UploadTexture(renders[0].img_buffer, renders[0].img_width, renders[0].img_height);
+    g_preview.UpdateCpuTextureData(renders[0].img_buffer, renders[0].img_width, renders[0].img_height);
   }
 }
 

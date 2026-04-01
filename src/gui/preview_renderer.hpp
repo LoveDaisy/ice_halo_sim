@@ -36,6 +36,10 @@ class PreviewRenderer {
   bool HasTexture() const { return tex_width_ > 0 && tex_height_ > 0; }
   void ClearTexture();
 
+  // Update CPU-side texture data only (no GL upload, no xyz_mode_ change).
+  // Used by Save to refresh tex_data_ without disturbing the GPU texture.
+  void UpdateCpuTextureData(const unsigned char* data, int width, int height);
+
   // CPU-side texture data access (for .lmc file save)
   const unsigned char* GetTextureData() const { return tex_data_.empty() ? nullptr : tex_data_.data(); }
   int GetTextureWidth() const { return tex_width_; }
