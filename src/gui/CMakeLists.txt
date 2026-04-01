@@ -70,19 +70,24 @@ add_executable(LumiceGUI
     ${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp)
 target_link_libraries(LumiceGUI PRIVATE lumice_gui_obj)
 
-# Windows: GUI subsystem (hide console) + embed icon via .rc resource
+# Windows: embed icon via .rc resource.
+# Console subsystem (no WIN32_EXECUTABLE) is used intentionally — GUI subsystem
+# assigns shorter thread time slices, dropping compute throughput by ~3.4x.
+# The console window is released via FreeConsole() at startup in main.cpp.
 if(WIN32)
   set(LUMICE_ICO_PATH "${CMAKE_SOURCE_DIR}/resources/lumice.ico")
-  configure_file(
-      "${PROJ_SRC_DIR}/gui/lumice.rc.in"
-      "${CMAKE_CURRENT_BINARY_DIR}/lumice.rc"
-      @ONLY)
-  target_sources(LumiceGUI PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/lumice.rc")
-
-  # WIN32_EXECUTABLE can be disabled via LUMICE_CONSOLE_GUI for diagnostics.
-  # WIN32 subsystem hides the console window but may affect thread scheduling.
-  if(NOT LUMICE_CONSOLE_GUI)
-    set_target_properties(LumiceGUI PROPERTIES WIN32_EXECUTABLE TRUE)
+  # Check both existence and minimum size (LFS pointer stubs are ~130 bytes)
+  if(EXISTS "${LUMICE_ICO_PATH}")
+    file(SIZE "${LUMICE_ICO_PATH}" _ico_size)
+  endif()
+  if(EXISTS "${LUMICE_ICO_PATH}" AND _ico_size GREATER 1000)
+    configure_file(
+        "${PROJ_SRC_DIR}/gui/lumice.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/lumice.rc"
+        @ONLY)
+    target_sources(LumiceGUI PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/lumice.rc")
+  else()
+    message(STATUS "[gui] Icon resource skipped (LFS file not fetched)")
   endif()
 endif()
 

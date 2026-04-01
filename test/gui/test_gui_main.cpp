@@ -1184,7 +1184,7 @@ static void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       g_export_test.upload_requested = true;
 
       // Upload landscape bg image
-      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.png";
+      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.jpg";
       g_bg_test.bg_upload_requested = true;
       ctx->Yield(3);
       IM_CHECK(g_bg_test.bg_upload_done);
@@ -1205,7 +1205,7 @@ static void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       ResetTestState();
       g_bg_test.Reset();
 
-      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_portrait.png";
+      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_portrait.jpg";
       g_bg_test.bg_upload_requested = true;
       ctx->Yield(3);
       IM_CHECK(g_bg_test.bg_upload_done);
@@ -1232,7 +1232,7 @@ static void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Upload bg image
-      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.png";
+      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.jpg";
       g_bg_test.bg_upload_requested = true;
       ctx->Yield(3);
       IM_CHECK(g_bg_test.bg_upload_done);
@@ -1300,7 +1300,7 @@ static void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Upload bg but keep show=false
-      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.png";
+      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.jpg";
       g_bg_test.bg_upload_requested = true;
       ctx->Yield(3);
       IM_CHECK(gui::g_preview.HasBackground());
@@ -1378,7 +1378,7 @@ static void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_preview.HasBackground(), false);
 
       // Load bg
-      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.png";
+      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.jpg";
       g_bg_test.bg_upload_requested = true;
       ctx->Yield(3);
       IM_CHECK(gui::g_preview.HasBackground());
@@ -1409,7 +1409,7 @@ static void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Upload landscape bg (aspect ≈ 1.677)
-      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.png";
+      g_bg_test.bg_image_path = LUMICE_TEST_REF_DIR "/bg_test_landscape.jpg";
       g_bg_test.bg_upload_requested = true;
       ctx->Yield(3);
       IM_CHECK(gui::g_preview.HasBackground());
