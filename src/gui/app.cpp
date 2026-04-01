@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -146,17 +147,97 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   }
 }
 
+// XYZ→sRGB conversion matching the GPU shader's xyzToSrgb() function.
+// Uses the current GUI intensity_scale so saved texture matches what the user sees.
+// CIE XYZ→sRGB matrix (same as GPU shader, high-precision for CPU-side conversion).
+// clang-format off
+static const float kXyzToRgb[9] = {
+   3.2404542f, -1.5371385f, -0.4985314f,
+  -0.9692660f,  1.8760108f,  0.0415560f,
+   0.0556434f, -0.2040259f,  1.0572252f,
+};
+static const float kWhitePointD65[3] = { 0.95047f, 1.00000f, 1.08883f };
+// clang-format on
+
+static void ConvertXyzToSrgbUint8(const float* xyz_in, unsigned char* out, int width, int height,
+                                  float intensity_scale) {
+  for (int i = 0; i < width * height; i++) {
+    float xyz[3];
+    for (int j = 0; j < 3; j++) {
+      xyz[j] = xyz_in[i * 3 + j] * intensity_scale;
+    }
+
+    // Gray point (D65 white scaled by luminance Y)
+    float gray[3];
+    for (int j = 0; j < 3; j++) {
+      gray[j] = kWhitePointD65[j] * xyz[1];
+    }
+
+    // Gamut clipping: scale color toward gray to keep RGB in [0,1]
+    float s = 1.0f;
+    float diff[3];
+    for (int j = 0; j < 3; j++) {
+      diff[j] = xyz[j] - gray[j];
+    }
+    for (int j = 0; j < 3; j++) {
+      float a = 0;
+      float b = 0;
+      for (int k = 0; k < 3; k++) {
+        a += -gray[k] * kXyzToRgb[j * 3 + k];
+        b += diff[k] * kXyzToRgb[j * 3 + k];
+      }
+      if (a * b > 0 && a / b < s) {
+        s = a / b;
+      }
+    }
+    for (int j = 0; j < 3; j++) {
+      xyz[j] = diff[j] * s + gray[j];
+    }
+
+    // XYZ→RGB matrix multiply + clamp
+    float rgb[3]{};
+    for (int j = 0; j < 3; j++) {
+      for (int k = 0; k < 3; k++) {
+        rgb[j] += xyz[k] * kXyzToRgb[j * 3 + k];
+      }
+      rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
+    }
+
+    // sRGB gamma + uint8
+    for (int j = 0; j < 3; j++) {
+      float v = rgb[j] < 0.0031308f ? rgb[j] * 12.92f : 1.055f * std::pow(rgb[j], 1.0f / 2.4f) - 0.055f;
+      out[i * 3 + j] = static_cast<unsigned char>(std::clamp(v, 0.0f, 1.0f) * 255.0f);
+    }
+  }
+}
+
 // Ensure CPU-side sRGB uint8 texture is available for .lmc save.
-// When in XYZ mode, tex_data_ is stale — refresh via old CPU-conversion API.
+// Uses raw XYZ data + current GUI intensity_scale to match the shader's rendering,
+// rather than the old PostSnapshot path which used stale CommitConfig-time EV.
 static void RefreshCpuTextureForSave() {
   if (!g_server || g_state.sim_state == SimState::kIdle) {
     return;  // No simulation data to refresh
   }
-  LUMICE_RenderResult renders[2]{};
-  LUMICE_GetRenderResults(g_server, renders, 1);
-  if (renders[0].img_buffer != nullptr) {
-    g_preview.UpdateCpuTextureData(renders[0].img_buffer, renders[0].img_width, renders[0].img_height);
+
+  LUMICE_RawXyzResult xyz_results[2]{};
+  LUMICE_GetRawXyzResults(g_server, xyz_results, 1);
+  if (xyz_results[0].xyz_buffer == nullptr || xyz_results[0].img_width <= 0 || xyz_results[0].img_height <= 0) {
+    return;
   }
+
+  int w = xyz_results[0].img_width;
+  int h = xyz_results[0].img_height;
+
+  // Compute intensity_scale using the CURRENT GUI exposure_offset, matching the shader.
+  float intensity_factor = std::pow(2.0f, g_state.renderers[0].exposure_offset);
+  float per_pixel_intensity = xyz_results[0].snapshot_intensity;
+  float intensity_scale = per_pixel_intensity > 0 ? intensity_factor / per_pixel_intensity : 0.0f;
+
+  // Convert XYZ→sRGB on CPU using the same algorithm as the shader
+  std::vector<unsigned char> srgb(static_cast<size_t>(w) * h * 3);
+  ConvertXyzToSrgbUint8(xyz_results[0].xyz_buffer, srgb.data(), w, h, intensity_scale);
+
+  g_preview.UpdateCpuTextureData(srgb.data(), w, h);
 }
 
 void DoSave() {
