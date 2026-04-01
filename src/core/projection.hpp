@@ -16,8 +16,8 @@ struct ProjXY {
 // Forward projection result for dual fisheye projections (Type B).
 // Coordinates are normalized: r = 1 at the equator (theta = pi/2).
 struct DualProjXY {
-  float x, y;      // normalized disc coordinates
-  bool is_upper;   // true = upper hemisphere (sky direction dz >= 0)
+  float x, y;     // normalized disc coordinates
+  bool is_upper;  // true = upper hemisphere (sky direction dz >= 0)
 };
 
 // Inverse projection result: a 3D unit direction.
@@ -92,11 +92,8 @@ DualProjXY DualFisheyeStereographicForward(float dx, float dy, float dz);
 //     float r2 = dot(p, p);
 //     if (r2 > 1.0) return vec3(0.0);  // invalid
 //     float z_abs = 1.0 - r2;
-//     float factor = sqrt(2.0 - r2 * 2.0);  // = sqrt(2*(1-r2)) = sqrt(2*z_abs)
-//     // Correction: factor = sqrt(1.0 + z_abs) for normalized coords
-//     float factor2 = sqrt(1.0 + z_abs);
-//     vec3 d = vec3(factor2 * p.x, factor2 * p.y, isUpper ? z_abs : -z_abs);
-//     return d;
+//     float factor = sqrt(1.0 + z_abs);
+//     return vec3(factor * p.x, factor * p.y, isUpper ? z_abs : -z_abs);
 //   }
 
 Dir3 DualFisheyeEqualAreaInverse(float x, float y, bool is_upper);
@@ -130,14 +127,12 @@ Dir3 RectangularInverse(float lon, float lat);
 
 // Normalized disc coords → continuous pixel coordinates.
 // Caller uses floor(fx + 0.5), floor(fy + 0.5) for integer scatter indices.
-void DualFisheyeToPixel(float x_norm, float y_norm, bool is_upper, int width, int height,
-                        float* fx, float* fy);
+void DualFisheyeToPixel(float x_norm, float y_norm, bool is_upper, int width, int height, float* fx, float* fy);
 
 // Continuous pixel coordinates → normalized disc coords + hemisphere.
 // Returns false if the pixel is outside both circles.
 // For gather: pass (px + 0.5f, py + 0.5f) to convert integer pixel to continuous center.
-bool PixelToDualFisheye(float fx, float fy, int width, int height,
-                        float* x_norm, float* y_norm, bool* is_upper);
+bool PixelToDualFisheye(float fx, float fy, int width, int height, float* x_norm, float* y_norm, bool* is_upper);
 
 }  // namespace projection
 }  // namespace lumice
