@@ -714,7 +714,7 @@ void RenderFilterTab(GuiState& state) {
     f.raypath_text = raypath_buf;
     state.MarkDirty();
   }
-  ImGui::TextDisabled("Comma-separated face indices, e.g. 3,1,5,7,4");
+  ImGui::TextDisabled("Face indices separated by '-', e.g. 3-1-5-7-4 (comma also accepted)");
 
   ImGui::Text("Symmetry:");
   ImGui::SameLine();
