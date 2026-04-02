@@ -31,7 +31,7 @@ class RenderConsumer : public IConsume {
   RenderConfig config_;
   std::vector<FilterPtrU> filters_;
   Rotation rot_;  // camera pose rotation
-  float diag_pix_ = 0;
+  float short_pix_ = 0;
   float total_intensity_ = 0;
   float snapshot_intensity_ = 0;
   int effective_pix_ = 0;  // Non-zero pixel count from last PrepareSnapshot

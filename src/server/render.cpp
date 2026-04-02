@@ -52,7 +52,7 @@ void SpectrumToXyz(float wl, const float* v, const int* xy, float* xyz, size_t n
 // This is guaranteed by the ray tracing pipeline (normalized outgoing ray directions).
 struct LensProjParam {
   float fov_;
-  float diag_pix_;
+  float short_pix_;
   Rotation rot_;
   RenderConfig::VisibleRange visible_range_;
   int resolution_[2];  // x, y
@@ -63,7 +63,7 @@ struct LensProjParam {
 using ProjFunc = std::function<void(const LensProjParam&, const float*, int*, size_t)>;
 
 void LinearProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.diag_pix_ / 2.0f / std::tan(p.fov_ / 2.0f * math::kDegreeToRad);
+  float scale = p.short_pix_ / 2.0f / std::tan(p.fov_ / 2.0f * math::kDegreeToRad);
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
         (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
@@ -89,7 +89,7 @@ void LinearProject(const LensProjParam& p, const float* d, int* xy, size_t num =
 // Equal area fisheye: r = 2f·sin(θ/2)
 // NOTE: scale formula must match f→fov conversion in render_config.cpp (equal area model).
 void FisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.diag_pix_ / 2.0f / std::sin(p.fov_ / 4.0f * math::kDegreeToRad);
+  float scale = p.short_pix_ / 2.0f / std::sin(p.fov_ / 4.0f * math::kDegreeToRad);
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
@@ -116,7 +116,7 @@ void FisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, si
 // Equidistant fisheye: r = f·θ
 // NOTE: scale formula must match f→fov conversion in render_config.cpp (equidistant model).
 void FisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.diag_pix_ / (p.fov_ * math::kDegreeToRad);
+  float scale = p.short_pix_ / (p.fov_ * math::kDegreeToRad);
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
@@ -143,7 +143,7 @@ void FisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, 
 // Stereographic fisheye: r = 2f·tan(θ/2)
 // NOTE: scale formula must match f→fov conversion in render_config.cpp (stereographic model).
 void FisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.diag_pix_ / 2.0f / std::tan(p.fov_ / 4.0f * math::kDegreeToRad);
+  float scale = p.short_pix_ / 2.0f / std::tan(p.fov_ / 4.0f * math::kDegreeToRad);
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
@@ -248,8 +248,8 @@ ProjFunc GetProjFunc(LensParam::LensType type) {
 
 // =============== Renderer ===============
 RenderConsumer::RenderConsumer(RenderConfig config)
-    : config_(std::move(config)), diag_pix_(std::sqrt(config_.resolution_[0] * config_.resolution_[0] +
-                                                      config_.resolution_[1] * config_.resolution_[1])),
+    : config_(std::move(config)),
+      short_pix_(static_cast<float>(std::min(config_.resolution_[0], config_.resolution_[1]))),
       internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_work_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
@@ -339,7 +339,7 @@ void RenderConsumer::Consume(const SimData& data) {
 
   auto lens_proj = GetProjFunc(config_.lens_.type_);
   LensProjParam proj_param{ config_.lens_.fov_,
-                            diag_pix_,
+                            short_pix_,
                             rot_,
                             config_.visible_,
                             { config_.resolution_[0], config_.resolution_[1] },

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "config/render_config.hpp"
 #include "gui/gui_state.hpp"
 #include "imgui.h"
 
@@ -587,10 +588,13 @@ void RenderRenderTab(GuiState& state) {
     ImGui::Combo("Lens Type", &r.lens_type, kLensTypeNames, kLensTypeCount);
     ImGui::PopItemWidth();
 
+    float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
+    r.fov = std::min(r.fov, max_fov);
+
     if (full_sky) {
       ImGui::BeginDisabled();
     }
-    SliderWithInput("FOV", &r.fov, 1.0f, 360.0f, "%.0f");
+    SliderWithInput("FOV", &r.fov, 1.0f, max_fov, "%.0f");
     if (full_sky) {
       ImGui::EndDisabled();
     }

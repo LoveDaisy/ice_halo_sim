@@ -109,8 +109,8 @@ vec2 dirToDualFisheye(vec3 d) {
 // Compute view direction from pixel for linear projection
 // Returns false (via w component) if outside valid range
 vec4 linearInverse(vec2 pos, float half_fov) {
-  float diag = length(u_resolution);
-  float focal = diag * 0.5 / tan(half_fov);
+  float short_edge = min(u_resolution.x, u_resolution.y);
+  float focal = short_edge * 0.5 / tan(half_fov);
   vec3 d = normalize(vec3(pos, -focal));
   return vec4(d, 1.0);
 }
@@ -118,7 +118,7 @@ vec4 linearInverse(vec2 pos, float half_fov) {
 // Compute view direction for fisheye projections
 // type: 0=equal_area, 1=equidistant, 2=stereographic
 vec4 fisheyeInverse(vec2 pos, float half_fov, int type) {
-  float img_radius = length(u_resolution) * 0.5;  // diagonal/2 — matches Core's diag_pix_/2
+  float img_radius = min(u_resolution.x, u_resolution.y) * 0.5;  // short_edge/2 — matches Core's short_pix_/2
   float r = length(pos) / img_radius;
   if (r > 1.0) return vec4(0.0, 0.0, 0.0, 0.0);
 

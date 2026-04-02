@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <string>
 
+#include "config/render_config.hpp"
 #include "gui/app.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/panels.hpp"
@@ -289,7 +290,8 @@ void RenderFloatingLensBar(float window_width) {
   ImGui::Combo("##LensType", &rc.lens_type, kLensTypeNames, kLensTypeCount);
   ImGui::SameLine();
   ImGui::PushItemWidth(80.0f);
-  ImGui::SliderFloat("FOV", &rc.fov, 1.0f, 360.0f, "%.0f");
+  float max_fov = MaxFov(static_cast<LensParam::LensType>(rc.lens_type));
+  ImGui::SliderFloat("FOV", &rc.fov, 1.0f, max_fov, "%.0f");
   ImGui::PopItemWidth();
   ImGui::SameLine();
   ImGui::Text("El:%.0f Az:%.0f", rc.elevation, rc.azimuth);
@@ -427,8 +429,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       }
 
       if (is_hovered && io.MouseWheel != 0.0f) {
+        float fov_max = MaxFov(static_cast<LensParam::LensType>(rc.lens_type));
         rc.fov -= io.MouseWheel * 5.0f;
-        rc.fov = std::max(1.0f, std::min(360.0f, rc.fov));
+        rc.fov = std::max(1.0f, std::min(fov_max, rc.fov));
       }
     }
   } else {
