@@ -236,14 +236,14 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
   }
   root["scene"] = scene;
 
-  // Renderers — Core always produces full equirectangular texture.
-  // GUI-variable fields come from the struct; fixed fields are hardcoded here.
+  // Renderers — Core always produces dual equal-area fisheye texture (full-globe, equal-area).
+  // GUI shader reprojects from this format to the user's display projection.
   root["render"] = json::array();
   for (int i = 0; i < c.renderer_count; i++) {
     const auto& r = c.renderers[i];
     json jr;
     jr["id"] = r.id;
-    jr["lens"]["type"] = "rectangular";
+    jr["lens"]["type"] = "dual_fisheye_equal_area";
     jr["lens"]["fov"] = 180.0f;
     jr["resolution"] = { r.resolution_w, r.resolution_h };
     jr["view"]["elevation"] = 0.0f;

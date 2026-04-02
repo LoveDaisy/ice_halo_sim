@@ -12,10 +12,12 @@ CPMAddPackage(
 # ==================================================================================================
 add_executable(unit_test
   "${PROJ_TEST_DIR}/test_c_api.cpp"
+  "${PROJ_TEST_DIR}/test_color_space.cpp"
   "${PROJ_TEST_DIR}/test_crystal.cpp"
   "${PROJ_TEST_DIR}/test_json.cpp"
   "${PROJ_TEST_DIR}/test_math.cpp"
   "${PROJ_TEST_DIR}/test_proj.cpp"
+  "${PROJ_TEST_DIR}/test_projection.cpp"
   "${PROJ_TEST_DIR}/test_rng.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
 target_include_directories(unit_test

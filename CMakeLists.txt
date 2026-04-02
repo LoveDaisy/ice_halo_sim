@@ -6,7 +6,7 @@ if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS version")
 endif()
 
-project(Lumice VERSION 4.1.11)
+project(Lumice VERSION 4.2.0)
 
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 
@@ -186,6 +186,7 @@ set(lumice_core_src
   "${PROJ_SRC_DIR}/core/geo3d.cpp"
   "${PROJ_SRC_DIR}/core/math.cpp"
   "${PROJ_SRC_DIR}/core/optics.cpp"
+  "${PROJ_SRC_DIR}/core/projection.cpp"
   "${PROJ_SRC_DIR}/core/raypath.cpp"
   "${PROJ_SRC_DIR}/core/simulator.cpp")
 
@@ -198,6 +199,7 @@ set(lumice_server_src
 
 set(lumice_util_src
   "${PROJ_SRC_DIR}/util/arg_parser.cpp"
+  "${PROJ_SRC_DIR}/util/color_space.cpp"
   "${PROJ_SRC_DIR}/util/illuminant.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
 

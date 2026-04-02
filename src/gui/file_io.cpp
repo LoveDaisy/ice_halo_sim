@@ -299,12 +299,12 @@ std::string SerializeCoreConfig(const GuiState& state) {
   }
   root["scene"] = scene;
 
-  // Render — Core always produces a full equirectangular texture.
+  // Render — Core always produces dual equal-area fisheye texture (full-globe, equal-area).
   root["render"] = json::array();
   for (auto& r : state.renderers) {
     json jr;
     jr["id"] = r.id;
-    jr["lens"]["type"] = "rectangular";
+    jr["lens"]["type"] = "dual_fisheye_equal_area";
     jr["lens"]["fov"] = 180.0f;
 
     int res = kSimResolutions[r.sim_resolution_index];
