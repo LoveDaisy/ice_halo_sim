@@ -12,27 +12,10 @@ env:
   CPM_SOURCE_CACHE: ${{ github.workspace }}/cpm_cache
 
 jobs:
-  # When a push lands on a branch that already has an open PR, skip the
-  # push-triggered run and let the pull_request event handle it instead.
-  should-run:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    outputs:
-      skip: ${{ steps.check.outputs.skip }}
-    steps:
-      - id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          pr_count=$(gh pr list --repo "${{ github.repository }}" \
-            --head "${{ github.ref_name }}" --state open --json number --jq length)
-          echo "skip=$( [ "$pr_count" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-
+  # Build + unit tests run on every push (all branches).
+  # E2E tests run separately on pull_request and push to main (see e2e-test job).
   build:
-    needs: should-run
-    if: >-
-      always() &&
-      (github.event_name == 'pull_request' || needs.should-run.outputs.skip != 'true')
+    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -174,7 +157,6 @@ jobs:
   e2e-test:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    needs: build
     steps:
       - uses: actions/checkout@v6
         with:
@@ -215,10 +197,7 @@ jobs:
         timeout-minutes: 10
 
   format-check:
-    needs: should-run
-    if: >-
-      always() &&
-      (github.event_name == 'pull_request' || needs.should-run.outputs.skip != 'true')
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
