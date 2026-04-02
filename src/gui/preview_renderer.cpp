@@ -87,20 +87,23 @@ vec2 dirToDualFisheye(vec3 d) {
   float x_norm = k * sky.x;
   float y_norm = k * sky.y;
 
-  float short_res = min(u_resolution.x * 0.5, u_resolution.y);
+  // Use actual texture size, NOT viewport size (u_resolution).
+  // The circle layout is determined by the texture dimensions.
+  vec2 tex_res = vec2(textureSize(u_texture, 0));
+  float short_res = min(tex_res.x * 0.5, tex_res.y);
   float R = short_res * 0.5;
 
   vec2 pixel;
   if (sky.z >= 0.0) {
     // Upper hemisphere (left circle): 90 deg CW rotation
-    pixel = vec2(-y_norm * R + u_resolution.x * 0.5 - R,
-                  x_norm * R + u_resolution.y * 0.5);
+    pixel = vec2(-y_norm * R + tex_res.x * 0.5 - R,
+                  x_norm * R + tex_res.y * 0.5);
   } else {
     // Lower hemisphere (right circle): 90 deg CCW + X mirror
-    pixel = vec2( y_norm * R + u_resolution.x * 0.5 + R,
-                  x_norm * R + u_resolution.y * 0.5);
+    pixel = vec2( y_norm * R + tex_res.x * 0.5 + R,
+                  x_norm * R + tex_res.y * 0.5);
   }
-  return pixel / u_resolution;
+  return pixel / tex_res;
 }
 
 // Compute view direction from pixel for linear projection
