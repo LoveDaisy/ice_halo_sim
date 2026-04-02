@@ -71,11 +71,30 @@ vec3 xyzToSrgb(vec3 xyz) {
     return mix(rgb * 12.92, 1.055 * pow(rgb, vec3(1.0/2.4)) - 0.055, step(0.0031308, rgb));
 }
 
-// Convert world direction to equirectangular UV
-vec2 dirToEquirect(vec3 d) {
-  float lon = atan(-d.y, -d.x);
-  float lat = asin(clamp(-d.z, -1.0, 1.0));
-  return vec2(lon / (2.0 * PI) + 0.5, 0.5 - lat / PI);
+// Convert world direction to dual equal-area fisheye UV.
+// Layout: left circle = upper hemisphere (dz >= 0), right circle = lower (dz < 0).
+// Uses Lambert azimuthal equal-area projection (normalized: r=1 at equator).
+// 90-degree rotation + hemisphere mirroring matches C++ DualFisheyeToPixel convention.
+vec2 dirToDualFisheye(vec3 d) {
+  float z_abs = abs(d.z);
+  float k = 1.0 / sqrt(1.0 + z_abs);
+  float x_norm = k * d.x;
+  float y_norm = k * d.y;
+
+  float short_res = min(u_resolution.x * 0.5, u_resolution.y);
+  float R = short_res * 0.5;
+
+  vec2 pixel;
+  if (d.z >= 0.0) {
+    // Upper hemisphere (left circle): 90 deg CW rotation
+    pixel = vec2(-y_norm * R + u_resolution.x * 0.5 - R,
+                  x_norm * R + u_resolution.y * 0.5);
+  } else {
+    // Lower hemisphere (right circle): 90 deg CCW + X mirror
+    pixel = vec2( y_norm * R + u_resolution.x * 0.5 + R,
+                  x_norm * R + u_resolution.y * 0.5);
+  }
+  return pixel / u_resolution;
 }
 
 // Compute view direction from pixel for linear projection
@@ -207,7 +226,7 @@ void main() {
     if (u_visible == 1 && lat > 0.0) visible = false;
 
     if (visible) {
-      vec2 uv = dirToEquirect(world_dir);
+      vec2 uv = dirToDualFisheye(world_dir);
       vec3 tex_color = texture(u_texture, uv).rgb;
       if (u_xyz_mode == 1) {
         tex_color = xyzToSrgb(tex_color);
