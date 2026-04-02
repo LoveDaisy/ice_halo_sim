@@ -23,7 +23,7 @@
 
 namespace {
 
-constexpr int kJpegQuality = 95;
+constexpr int kDefaultJpegQuality = 95;
 constexpr auto kPollInterval = std::chrono::seconds(1);
 
 void PrintUsage(const char* prog_name) {
@@ -32,34 +32,47 @@ void PrintUsage(const char* prog_name) {
             << "Lumice — simulate ice halos by tracing rays through ice crystals.\n"
             << "\n"
             << "Options:\n"
-            << "  -f <file>    Specify the configuration file (required)\n"
-            << "  -o <dir>     Output directory for rendered images (default: current directory)\n"
-            << "  -v           Verbose output (trace level logging)\n"
-            << "  -d           Debug output (debug level logging)\n"
-            << "  -h           Show this help message and exit\n"
+            << "  -f <file>          Specify the configuration file (required)\n"
+            << "  -o <dir>           Output directory for rendered images (default: current directory)\n"
+            << "  --format <fmt>     Output image format: jpg or png (default: jpg)\n"
+            << "  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)\n"
+            << "  -v                 Verbose output (trace level logging)\n"
+            << "  -d                 Debug output (debug level logging)\n"
+            << "  -h                 Show this help message and exit\n"
             << "\n"
             << "Examples:\n"
             << "  " << prog_name << " -f config.json\n"
             << "  " << prog_name << " -f config.json -o /tmp/output\n"
+            << "  " << prog_name << " -f config.json --format png\n"
+            << "  " << prog_name << " -f config.json --quality 80\n"
             << "  " << prog_name << " -f config.json -v\n";
 }
 
-std::filesystem::path FormatImagePath(const std::filesystem::path& output_dir, int renderer_id) {
+std::filesystem::path FormatImagePath(const std::filesystem::path& output_dir, int renderer_id,
+                                      std::string_view format) {
   std::ostringstream oss;
-  oss << "img_" << std::setfill('0') << std::setw(2) << renderer_id << ".jpg";
+  oss << "img_" << std::setfill('0') << std::setw(2) << renderer_id << "." << format;
   return output_dir / oss.str();
 }
 
-void SaveRenderResults(LUMICE_Server* server, const std::filesystem::path& output_dir) {
+void SaveRenderResults(LUMICE_Server* server, const std::filesystem::path& output_dir, std::string_view image_format,
+                       int jpeg_quality) {
   LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
   if (LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) != LUMICE_OK) {
     return;
   }
   for (int i = 0; renders[i].img_buffer != nullptr; i++) {
-    auto filepath = FormatImagePath(output_dir, renders[i].renderer_id);
+    auto filepath = FormatImagePath(output_dir, renders[i].renderer_id, image_format);
     auto filepath_u8 = filepath.u8string();
-    int ok = stbi_write_jpg(filepath_u8.c_str(), renders[i].img_width, renders[i].img_height, 3, renders[i].img_buffer,
-                            kJpegQuality);
+    int ok = 0;
+    if (image_format == "png") {
+      int stride = renders[i].img_width * 3;
+      ok = stbi_write_png(filepath_u8.c_str(), renders[i].img_width, renders[i].img_height, 3, renders[i].img_buffer,
+                          stride);
+    } else {
+      ok = stbi_write_jpg(filepath_u8.c_str(), renders[i].img_width, renders[i].img_height, 3, renders[i].img_buffer,
+                          jpeg_quality);
+    }
     if (ok) {
       std::cout << "Saved: " << filepath_u8 << " (" << renders[i].img_width << "x" << renders[i].img_height << ")\n";
     } else {
@@ -84,6 +97,8 @@ void PrintStats(LUMICE_Server* server) {
 int main(int argc, char** argv) {
   std::filesystem::path config_filename;
   std::filesystem::path output_dir = ".";
+  std::string image_format = "jpg";
+  int jpeg_quality = kDefaultJpegQuality;
   auto log_level = LUMICE_LOG_INFO;
 
   for (int i = 1; i < argc; i++) {
@@ -102,6 +117,36 @@ int main(int argc, char** argv) {
         return 1;
       }
       output_dir = argv[i];
+    } else if (arg == "--format") {
+      if (++i >= argc) {
+        std::cerr << "Error: --format requires an argument\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+      image_format = argv[i];
+      if (image_format != "jpg" && image_format != "png") {
+        std::cerr << "Error: --format must be 'jpg' or 'png', got '" << image_format << "'\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+    } else if (arg == "--quality") {
+      if (++i >= argc) {
+        std::cerr << "Error: --quality requires an argument\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+      try {
+        jpeg_quality = std::stoi(argv[i]);
+      } catch (const std::exception&) {
+        std::cerr << "Error: --quality requires a numeric value, got '" << argv[i] << "'\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+      if (jpeg_quality < 1 || jpeg_quality > 100) {
+        std::cerr << "Error: --quality must be between 1 and 100, got " << jpeg_quality << "\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
     } else if (arg == "-v") {
       log_level = LUMICE_LOG_VERBOSE;
     } else if (arg == "-d") {
@@ -119,6 +164,8 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
   // Re-parse file paths from wide-char command line for full Unicode support.
   // argv[i] on Windows uses ANSI codepage, which loses non-ASCII characters.
+  // Only path arguments (-f, -o) need wide-char re-parsing; ASCII-only args
+  // (--format, --quality) are safe as-is.
   {
     int wargc = 0;
     wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
@@ -159,7 +206,7 @@ int main(int argc, char** argv) {
   while (true) {
     std::this_thread::sleep_for(kPollInterval);
 
-    SaveRenderResults(server, output_dir);
+    SaveRenderResults(server, output_dir, image_format, jpeg_quality);
     PrintStats(server);
 
     LUMICE_ServerState state{};
@@ -169,7 +216,7 @@ int main(int argc, char** argv) {
   }
 
   // Final fetch after loop exit
-  SaveRenderResults(server, output_dir);
+  SaveRenderResults(server, output_dir, image_format, jpeg_quality);
   PrintStats(server);
 
   LUMICE_DestroyServer(server);
