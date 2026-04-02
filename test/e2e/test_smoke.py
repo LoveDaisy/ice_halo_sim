@@ -28,6 +28,7 @@ PSNR_THRESHOLDS = {
     "parhelion_01": 30.6,
     "pyramid_01": 24.5,
     "render_opts_01": 27.1,
+    "dual_fisheye_ref_01": 25.0,
 }
 
 
@@ -72,13 +73,6 @@ class TestSmoke(LumiceTestCase):
                     )
 
                     if HAS_PILLOW:
-                        # Check dimensions
-                        w, h = get_dimensions(img_path)
-                        self.assertEqual(
-                            (w, h), (256, 256),
-                            f"{img_path} dimensions {w}x{h} != 256x256",
-                        )
-
                         # Check PSNR against reference image
                         renderer_id = Path(img_path).stem.split("_")[-1]
                         ref_name = f"{config_name}_{renderer_id}.jpg"

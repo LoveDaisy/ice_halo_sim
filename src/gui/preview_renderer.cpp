@@ -72,20 +72,26 @@ vec3 xyzToSrgb(vec3 xyz) {
 }
 
 // Convert world direction to dual equal-area fisheye UV.
-// Layout: left circle = upper hemisphere (dz >= 0), right circle = lower (dz < 0).
+// Input d is the raw ray direction (same convention as dirToEquirect received);
+// negate to get sky direction before projection, matching C++ scatter which does
+// DualFisheyeEqualAreaForward(-d[0], -d[1], -d[2]).
+// Layout: left circle = upper hemisphere (sky_z >= 0), right circle = lower (sky_z < 0).
 // Uses Lambert azimuthal equal-area projection (normalized: r=1 at equator).
 // 90-degree rotation + hemisphere mirroring matches C++ DualFisheyeToPixel convention.
 vec2 dirToDualFisheye(vec3 d) {
-  float z_abs = abs(d.z);
+  // Negate to convert raw ray direction to sky direction (same as C++ scatter negation).
+  vec3 sky = -d;
+
+  float z_abs = abs(sky.z);
   float k = 1.0 / sqrt(1.0 + z_abs);
-  float x_norm = k * d.x;
-  float y_norm = k * d.y;
+  float x_norm = k * sky.x;
+  float y_norm = k * sky.y;
 
   float short_res = min(u_resolution.x * 0.5, u_resolution.y);
   float R = short_res * 0.5;
 
   vec2 pixel;
-  if (d.z >= 0.0) {
+  if (sky.z >= 0.0) {
     // Upper hemisphere (left circle): 90 deg CW rotation
     pixel = vec2(-y_norm * R + u_resolution.x * 0.5 - R,
                   x_norm * R + u_resolution.y * 0.5);
