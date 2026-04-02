@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 
 #include "util/color_data.hpp"
