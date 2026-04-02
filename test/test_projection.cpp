@@ -3,6 +3,7 @@
 #include <cmath>
 #include <random>
 
+#include "config/render_config.hpp"
 #include "core/math.hpp"
 #include "core/projection.hpp"
 
@@ -406,6 +407,78 @@ TEST(Projection, DualFisheyeForwardAtPoles) {
   auto st = DualFisheyeStereographicForward(0, 0, 1);
   EXPECT_NEAR(st.x, 0, kEps);
   EXPECT_NEAR(st.y, 0, kEps);
+}
+
+// =============== MaxFov Verification ===============
+
+TEST(MaxFov, ReturnsCorrectLimits) {
+  EXPECT_FLOAT_EQ(lumice::MaxFov(lumice::LensParam::kLinear), 179.0f);
+  EXPECT_FLOAT_EQ(lumice::MaxFov(lumice::LensParam::kFisheyeEqualArea), 360.0f);
+  EXPECT_FLOAT_EQ(lumice::MaxFov(lumice::LensParam::kFisheyeEquidistant), 360.0f);
+  EXPECT_FLOAT_EQ(lumice::MaxFov(lumice::LensParam::kFisheyeStereographic), 359.0f);
+  EXPECT_FLOAT_EQ(lumice::MaxFov(lumice::LensParam::kDualFisheyeEqualArea), 360.0f);
+  EXPECT_FLOAT_EQ(lumice::MaxFov(lumice::LensParam::kRectangular), 360.0f);
+}
+
+// =============== FOV Scale Verification ===============
+// Verify that the short-edge-based FOV semantics produce correct pixel coordinates.
+// These tests compute pixel positions using the same scale formulas as render.cpp,
+// serving as mathematical anchors independent of reference images.
+
+TEST(FovScale, LinearScaleShortEdge) {
+  // For linear projection: scale = short_pix / 2 / tan(fov/2)
+  // A ray at angle fov/2 from center should project to exactly short_pix/2 from center.
+  constexpr int kWidth = 400;
+  constexpr int kHeight = 300;
+  constexpr float kFov = 90.0f;
+  float short_pix = static_cast<float>(std::min(kWidth, kHeight));  // 300
+  float scale = short_pix / 2.0f / std::tan(kFov / 2.0f * math::kDegreeToRad);
+
+  // Direction at 45° from optical axis (fov/2 = 45°): (1, 0, 1) normalized
+  float d_norm = 1.0f / std::sqrt(2.0f);
+  auto proj = LinearForward(d_norm, 0, d_norm);
+  ASSERT_TRUE(proj.valid);
+
+  // proj.x = dx/dz = 1, proj.y = 0
+  float px = proj.x * scale;
+  // px should equal short_pix/2 = 150
+  EXPECT_NEAR(px, short_pix / 2.0f, 1e-4f);
+}
+
+TEST(FovScale, EqualAreaScaleShortEdge) {
+  // For equal area: scale = short_pix / 2 / sin(fov/4)
+  // A ray at angle fov/2 from center should project to r = sin(fov/4) (in projection space),
+  // which maps to exactly short_pix/2 pixels.
+  constexpr int kWidth = 400;
+  constexpr int kHeight = 300;
+  constexpr float kFov = 180.0f;  // full hemisphere
+  float short_pix = static_cast<float>(std::min(kWidth, kHeight));
+  float scale = short_pix / 2.0f / std::sin(kFov / 4.0f * math::kDegreeToRad);
+
+  // Direction at horizon (theta = 90° from optical axis): (1, 0, 0+epsilon) normalized
+  // For equal area: r = sin(theta/2). At theta=90°: r = sin(45°) = sqrt(2)/2
+  auto proj = FisheyeEqualAreaForward(1.0f, 0, 1e-6f);
+  ASSERT_TRUE(proj.valid);
+
+  float r_pix = std::sqrt(proj.x * proj.x + proj.y * proj.y) * scale;
+  // r_pix should equal short_pix/2 = 150 (horizon maps to edge of circle)
+  EXPECT_NEAR(r_pix, short_pix / 2.0f, 0.1f);
+}
+
+TEST(FovScale, EquidistantScaleShortEdge) {
+  // For equidistant: scale = short_pix / (fov * deg2rad)
+  // A ray at angle fov/2 from center should project to r = fov/2 (in radians),
+  // which maps to exactly short_pix/2 pixels.
+  constexpr float kFov = 180.0f;
+  constexpr int kShort = 300;
+  float scale = static_cast<float>(kShort) / (kFov * math::kDegreeToRad);
+
+  // Direction at horizon (theta = pi/2): r = theta = pi/2
+  auto proj = FisheyeEquidistantForward(1.0f, 0, 1e-6f);
+  ASSERT_TRUE(proj.valid);
+
+  float r_pix = std::sqrt(proj.x * proj.x + proj.y * proj.y) * scale;
+  EXPECT_NEAR(r_pix, static_cast<float>(kShort) / 2.0f, 0.1f);
 }
 
 }  // namespace
