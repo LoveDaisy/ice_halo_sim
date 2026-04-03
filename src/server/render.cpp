@@ -337,6 +337,7 @@ void RenderConsumer::Consume(const SimData& data) {
     d_buf_ = std::make_unique<float[]>(buf_capacity_ * 3);
     w_buf_ = std::make_unique<float[]>(buf_capacity_);
     xy_buf_ = std::make_unique<int[]>(buf_capacity_ * 2);
+    overlap_w_buf_ = std::make_unique<float[]>(buf_capacity_);
   }
 
   // Filter + copy outgoing rays into contiguous buffers.
@@ -396,6 +397,12 @@ void RenderConsumer::Consume(const SimData& data) {
   lens_proj(proj_param, d_buf_.get(), xy_buf_.get(), filtered_ray_num);
   auto t2 = std::chrono::steady_clock::now();
 
+  // Save w_buf_ before compaction (compaction overwrites w_buf_ in-place).
+  // overlap_w_buf_ is needed by pass 2 to read original weights by ray index.
+  if (proj_param.max_abs_dz_ > 0) {
+    std::memcpy(overlap_w_buf_.get(), w_buf_.get(), filtered_ray_num * sizeof(float));
+  }
+
   size_t final_ray_num = 0;
   float landed_weight = 0;
   for (size_t i = 0; i < filtered_ray_num; i++) {
@@ -410,6 +417,61 @@ void RenderConsumer::Consume(const SimData& data) {
   }
   SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), final_ray_num);
   total_intensity_ += landed_weight;
+
+  // === Pass 2: Overlap dual-write (only for dual fisheye with max_abs_dz > 0) ===
+  // Project overlap-zone rays to the opposite hemisphere, filling the ring r ∈ (r_scale, 1].
+  // d_buf_ is immutable (projection receives const float*). w_buf_ was compacted in pass 1,
+  // so we use overlap_w_buf_ (copied before compaction... see below).
+  // xy_buf_ and w_buf_ are safe to reuse — pass 1 data already consumed by SpectrumToXyz.
+  if (proj_param.max_abs_dz_ > 0) {
+    // overlap_w_buf_ was copied from w_buf_ before pass 1 compaction (see copy above).
+    // For each overlap ray, project to the opposite hemisphere with z_hemi < 0.
+    auto overlap_fwd = [&](float sky_x, float sky_y, float z_hemi, float r_s) {
+      switch (config_.lens_.type_) {
+        case LensParam::kDualFisheyeEqualArea:
+          return projection::FisheyeEqualAreaForward(sky_x, sky_y, z_hemi, r_s);
+        case LensParam::kDualFisheyeEquidistant:
+          return projection::FisheyeEquidistantForward(sky_x, sky_y, z_hemi, r_s);
+        case LensParam::kDualFisheyeStereographic:
+          return projection::FisheyeStereographicForward(sky_x, sky_y, z_hemi, r_s);
+        default:
+          return projection::ProjXY{ 0, 0, false };
+      }
+    };
+
+    size_t overlap_count = 0;
+    int w = config_.resolution_[0];
+    int h = config_.resolution_[1];
+    for (size_t i = 0; i < filtered_ray_num; i++) {
+      float sky_x = -d_buf_[i * 3 + 0];
+      float sky_y = -d_buf_[i * 3 + 1];
+      float sky_z = -d_buf_[i * 3 + 2];
+      if (std::abs(sky_z) >= proj_param.max_abs_dz_) {
+        continue;  // not in overlap zone
+      }
+
+      // Opposite hemisphere: z_hemi is negative (past equator)
+      bool primary_upper = (sky_z >= 0);
+      float z_hemi_opp = primary_upper ? -sky_z : sky_z;  // = -|sky_z| < 0
+      auto proj = overlap_fwd(sky_x, sky_y, z_hemi_opp, proj_param.r_scale_);
+      float fx = 0;
+      float fy = 0;
+      projection::DualFisheyeToPixel(proj.x, proj.y, !primary_upper, w, h, &fx, &fy);
+      int px = static_cast<int>(std::floor(fx + 0.5f));
+      int py = static_cast<int>(std::floor(fy + 0.5f));
+      if (px < 0 || px >= w || py < 0 || py >= h) {
+        continue;
+      }
+      xy_buf_[overlap_count] = py * w + px;
+      w_buf_[overlap_count] = overlap_w_buf_[i];
+      overlap_count++;
+    }
+    if (overlap_count > 0) {
+      // Pass 2 does NOT update total_intensity_ — preserves normalization.
+      SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), overlap_count);
+    }
+  }
+
   auto t3 = std::chrono::steady_clock::now();
 
   consume_count_++;

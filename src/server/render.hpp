@@ -44,6 +44,7 @@ class RenderConsumer : public IConsume {
   std::unique_ptr<float[]> d_buf_;
   std::unique_ptr<float[]> w_buf_;
   std::unique_ptr<int[]> xy_buf_;
+  std::unique_ptr<float[]> overlap_w_buf_;  // weight copy for overlap dual-write pass
   size_t buf_capacity_ = 0;
 
   // Profiling counters (accumulated across Consume calls, for benchmark analysis)
