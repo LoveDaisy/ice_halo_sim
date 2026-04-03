@@ -33,6 +33,8 @@ uniform int u_visible;       // 0=upper, 1=lower, 2=full
 uniform float u_intensity_scale;  // = intensity_factor / per_pixel_intensity (0 = RGB mode)
 uniform int u_xyz_mode;           // 1 = XYZ float texture, 0 = sRGB uint8 texture
 uniform sampler2D u_bg_texture;
+uniform float u_max_abs_dz;      // overlap zone |sky.z| threshold (0 = no blend)
+uniform float u_r_scale;         // projection r_scale for overlap normalization
 uniform int u_bg_enabled;
 uniform float u_overlay_alpha;
 uniform vec2 u_bg_uv_scale;
@@ -94,17 +96,47 @@ vec2 dualFisheyeToUV(vec2 xy_norm, bool is_upper) {
     pixel = vec2( xy_norm.y * R + tex_res.x * 0.5 + R,
                   xy_norm.x * R + tex_res.y * 0.5);
   }
-  return pixel / tex_res;
+  return (pixel + 0.5) / tex_res;  // +0.5: align with OpenGL texel center convention
 }
 
-// Convert world direction to dual equal-area fisheye UV.
-// Composition of: sky direction → z flip → projection → layout → UV.
+// Convert world direction to dual equal-area fisheye UV (single hemisphere, no blend).
 vec2 dirToDualFisheye(vec3 d) {
   vec3 sky = -d;
   bool is_upper = (sky.z >= 0.0);
   float z_hemi = is_upper ? sky.z : -sky.z;
-  vec2 xy_norm = fisheyeEAProject(sky.x, sky.y, z_hemi, 1.0);
+  vec2 xy_norm = fisheyeEAProject(sky.x, sky.y, z_hemi, u_r_scale);
   return dualFisheyeToUV(xy_norm, is_upper);
+}
+
+// Sample dual fisheye texture with overlap blending in the equator zone.
+vec3 sampleDualFisheye(vec3 world_dir) {
+  vec3 sky = -world_dir;
+  float z_abs = abs(sky.z);
+  bool is_upper = (sky.z >= 0.0);
+
+  if (u_max_abs_dz > 0.0 && z_abs < u_max_abs_dz) {
+    // Overlap zone: blend primary and secondary hemispheres.
+    // Tent weight: t=0.5 at equator (z_abs=0), t=0 at boundary (z_abs=max_abs_dz).
+    // primary weight = 1-t, secondary weight = t.
+    float t = (u_max_abs_dz - z_abs) / (2.0 * u_max_abs_dz);
+
+    // Primary: same hemisphere, z_hemi >= 0
+    float z_hemi_pri = is_upper ? sky.z : -sky.z;
+    vec2 xy_pri = fisheyeEAProject(sky.x, sky.y, z_hemi_pri, u_r_scale);
+    vec2 uv_pri = dualFisheyeToUV(xy_pri, is_upper);
+    // Secondary: opposite hemisphere, z_hemi < 0 (past equator)
+    float z_hemi_opp = is_upper ? -sky.z : sky.z;  // = -|sky.z| < 0
+    vec2 xy_sec = fisheyeEAProject(sky.x, sky.y, z_hemi_opp, u_r_scale);
+    vec2 uv_sec = dualFisheyeToUV(xy_sec, !is_upper);
+
+    vec3 c1 = texture(u_texture, uv_pri).rgb;
+    vec3 c2 = texture(u_texture, uv_sec).rgb;
+    return mix(c1, c2, t);
+  }
+
+  // Non-overlap: single hemisphere
+  vec2 uv = dirToDualFisheye(world_dir);
+  return texture(u_texture, uv).rgb;
 }
 
 // Compute view direction from pixel for linear projection
@@ -236,8 +268,7 @@ void main() {
     if (u_visible == 1 && lat > 0.0) visible = false;
 
     if (visible) {
-      vec2 uv = dirToDualFisheye(world_dir);
-      vec3 tex_color = texture(u_texture, uv).rgb;
+      vec3 tex_color = sampleDualFisheye(world_dir);
       if (u_xyz_mode == 1) {
         tex_color = xyzToSrgb(tex_color);
       }
@@ -329,7 +360,7 @@ bool PreviewRenderer::Init() {
   glBindTexture(GL_TEXTURE_2D, texture_);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);  // dual fisheye: no horizontal wrap
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glBindTexture(GL_TEXTURE_2D, 0);
 
@@ -541,6 +572,8 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1i(glGetUniformLocation(shader_program_, "u_visible"), params.visible);
   glUniform1i(glGetUniformLocation(shader_program_, "u_xyz_mode"), xyz_mode_ ? 1 : 0);
   glUniform1f(glGetUniformLocation(shader_program_, "u_intensity_scale"), params.intensity_scale);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_max_abs_dz"), params.max_abs_dz);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_r_scale"), params.r_scale);
 
   float view_matrix[9];
   BuildViewMatrix(params.elevation, params.azimuth, params.roll, view_matrix);

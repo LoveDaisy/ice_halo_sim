@@ -406,6 +406,20 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.params.intensity_factor = std::pow(2.0f, rc.exposure_offset);
     g_preview_vp.params.intensity_scale =
         g_state.snapshot_intensity > 0 ? g_preview_vp.params.intensity_factor / g_state.snapshot_intensity : 0.0f;
+    // Overlap parameters for dual fisheye lens types.
+    // Keep in sync with render.cpp overlap r_scale computation (same formula, same constant).
+    bool is_dual =
+        (rc.lens_type == LensParam::kDualFisheyeEqualArea || rc.lens_type == LensParam::kDualFisheyeEquidistant ||
+         rc.lens_type == LensParam::kDualFisheyeStereographic);
+    if (is_dual) {
+      g_preview_vp.params.max_abs_dz = kDualFisheyeOverlap;
+      // GUI always uses EA texture format (file_io.cpp hardcodes dual_fisheye_equal_area),
+      // so r_scale is always computed with the EA formula regardless of viewing lens type.
+      g_preview_vp.params.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
+    } else {
+      g_preview_vp.params.max_abs_dz = 0.0f;
+      g_preview_vp.params.r_scale = 1.0f;
+    }
     g_preview_vp.params.bg_enabled = g_state.bg_show && g_preview.HasBackground();
     g_preview_vp.params.bg_alpha = g_state.bg_alpha;
     g_preview_vp.params.bg_aspect = g_preview.GetBgAspect();
