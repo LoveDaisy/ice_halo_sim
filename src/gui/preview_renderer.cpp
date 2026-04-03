@@ -153,15 +153,15 @@ vec4 linearInverse(vec2 pos, float half_fov) {
 vec4 fisheyeInverse(vec2 pos, float half_fov, int type) {
   float img_radius = min(u_resolution.x, u_resolution.y) * 0.5;  // short_edge/2 — matches Core's short_pix_/2
   float r = length(pos) / img_radius;
-  if (r > 1.0) return vec4(0.0, 0.0, 0.0, 0.0);
 
   float theta;
   if (type == 0) {        // equal area: r_norm = sin(θ/2) / sin(fov/4)
     float s = r * sin(half_fov * 0.5);
-    if (s > 1.0) return vec4(0.0, 0.0, 0.0, 0.0);
+    if (s > 1.0) return vec4(0.0, 0.0, 0.0, 0.0);  // asin domain guard
     theta = 2.0 * asin(s);
   } else if (type == 1) { // equidistant: r_norm = θ / half_fov
     theta = r * half_fov;
+    if (theta >= PI) return vec4(0.0, 0.0, 0.0, 0.0);
   } else {                // stereographic: r_norm = tan(θ/2) / tan(fov/4)
     theta = 2.0 * atan(r * tan(half_fov * 0.5));
   }
