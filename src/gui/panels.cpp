@@ -356,14 +356,18 @@ void RenderCrystalTab(GuiState& state) {
 
   auto& cr = state.crystals[state.selected_crystal];
 
-  const char* type_names[] = { "Prism", "Pyramid" };
   int type_idx = static_cast<int>(cr.type);
-  ImGui::PushItemWidth(-50);
-  if (ImGui::Combo("Type##crystal", &type_idx, type_names, 2)) {
+  ImGui::Text("Type");
+  ImGui::SameLine();
+  if (ImGui::RadioButton("Prism##type", &type_idx, 0)) {
     cr.type = static_cast<CrystalType>(type_idx);
     state.MarkDirty();
   }
-  ImGui::PopItemWidth();
+  ImGui::SameLine();
+  if (ImGui::RadioButton("Pyramid##type", &type_idx, 1)) {
+    cr.type = static_cast<CrystalType>(type_idx);
+    state.MarkDirty();
+  }
 
   if (ImGui::CollapsingHeader("Shape", ImGuiTreeNodeFlags_DefaultOpen)) {
     if (cr.type == CrystalType::kPrism) {
