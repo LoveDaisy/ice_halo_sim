@@ -361,8 +361,10 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
       float y1 = 0.5f * std::sin(-kPi_6 + i * kPi_3);
       float y2 = 0.5f * std::sin(kPi_6 + i * kPi_3);
       float det = x1 * y2 - x2 * y1;
-      out_coef[cnt * 4 + 0] = a1 * (y2 - y1) * dist[i];
-      out_coef[cnt * 4 + 1] = a1 * (x1 - x2) * dist[i];
+      // Normal direction is fixed by Miller index (alpha), independent of face distance.
+      // dist[i] only shifts the plane position via the constant term d.
+      out_coef[cnt * 4 + 0] = a1 * (y2 - y1);
+      out_coef[cnt * 4 + 1] = a1 * (x1 - x2);
       out_coef[cnt * 4 + 2] = det;
       out_coef[cnt * 4 + 3] = -(h2_2 + a1 * dist[i]) * det;
       cnt++;
@@ -378,8 +380,8 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
       float y1 = 0.5f * std::sin(-kPi_6 + i * kPi_3);
       float y2 = 0.5f * std::sin(kPi_6 + i * kPi_3);
       float det = x1 * y2 - x2 * y1;
-      out_coef[cnt * 4 + 0] = a2 * (y2 - y1) * dist[i];
-      out_coef[cnt * 4 + 1] = a2 * (x1 - x2) * dist[i];
+      out_coef[cnt * 4 + 0] = a2 * (y2 - y1);
+      out_coef[cnt * 4 + 1] = a2 * (x1 - x2);
       out_coef[cnt * 4 + 2] = -det;
       out_coef[cnt * 4 + 3] = -(h2_2 + a2 * dist[i]) * det;
       cnt++;
@@ -509,8 +511,8 @@ std::array<float, kHexPyramidPlaneCnt * 4> FillConcavePyramidCoef(float upper_al
     float y1 = 0.5f * std::sin(-kPi_6 + i * kPi_3);
     float y2 = 0.5f * std::sin(kPi_6 + i * kPi_3);
     float det = x1 * y2 - x2 * y1;
-    coef[(i + kUpperPyrOffset) * 4 + 0] = -a1 * (y2 - y1) * dist[i];    // negative polyhedron
-    coef[(i + kUpperPyrOffset) * 4 + 1] = -a1 * (x1 - x2) * dist[i];    // negative polyhedron
+    coef[(i + kUpperPyrOffset) * 4 + 0] = -a1 * (y2 - y1);              // negative polyhedron
+    coef[(i + kUpperPyrOffset) * 4 + 1] = -a1 * (x1 - x2);              // negative polyhedron
     coef[(i + kUpperPyrOffset) * 4 + 2] = -det;                         // negative polyhedron
     coef[(i + kUpperPyrOffset) * 4 + 3] = (h2_2 + a1 * dist[i]) * det;  // negative polyhedron
     // prismatic
@@ -519,8 +521,8 @@ std::array<float, kHexPyramidPlaneCnt * 4> FillConcavePyramidCoef(float upper_al
     coef[(i + kPriOffset) * 4 + 2] = 0;
     coef[(i + kPriOffset) * 4 + 3] = -dist[i] * det;
     // lower pyramidal
-    coef[(i + kLowerPyrOffset) * 4 + 0] = -a2 * (y2 - y1) * dist[i];    // negative polyhedron
-    coef[(i + kLowerPyrOffset) * 4 + 1] = -a2 * (x1 - x2) * dist[i];    // negative polyhedron
+    coef[(i + kLowerPyrOffset) * 4 + 0] = -a2 * (y2 - y1);              // negative polyhedron
+    coef[(i + kLowerPyrOffset) * 4 + 1] = -a2 * (x1 - x2);              // negative polyhedron
     coef[(i + kLowerPyrOffset) * 4 + 2] = det;                          // negative polyhedron
     coef[(i + kLowerPyrOffset) * 4 + 3] = (h2_2 + a2 * dist[i]) * det;  // negative polyhedron
   }
