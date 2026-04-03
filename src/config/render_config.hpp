@@ -60,6 +60,9 @@ NLOHMANN_JSON_SERIALIZE_ENUM(  // declear
 void to_json(nlohmann::json& j, const LensParam& l);
 void from_json(const nlohmann::json& j, LensParam& l);
 
+// Returns the maximum valid FOV (in degrees) for the given lens type.
+float MaxFov(LensParam::LensType type);
+
 struct RenderConfig {
   enum VisibleRange {
     kUpper,

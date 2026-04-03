@@ -31,7 +31,7 @@ class RenderConsumer : public IConsume {
   RenderConfig config_;
   std::vector<FilterPtrU> filters_;
   Rotation rot_;  // camera pose rotation
-  float diag_pix_ = 0;
+  float short_pix_ = 0;
   float total_intensity_ = 0;
   float snapshot_intensity_ = 0;
   int effective_pix_ = 0;  // Non-zero pixel count from last PrepareSnapshot
@@ -44,6 +44,7 @@ class RenderConsumer : public IConsume {
   std::unique_ptr<float[]> d_buf_;
   std::unique_ptr<float[]> w_buf_;
   std::unique_ptr<int[]> xy_buf_;
+  std::unique_ptr<float[]> overlap_w_buf_;  // weight copy for overlap dual-write pass
   size_t buf_capacity_ = 0;
 
   // Profiling counters (accumulated across Consume calls, for benchmark analysis)

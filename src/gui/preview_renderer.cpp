@@ -33,6 +33,8 @@ uniform int u_visible;       // 0=upper, 1=lower, 2=full
 uniform float u_intensity_scale;  // = intensity_factor / per_pixel_intensity (0 = RGB mode)
 uniform int u_xyz_mode;           // 1 = XYZ float texture, 0 = sRGB uint8 texture
 uniform sampler2D u_bg_texture;
+uniform float u_max_abs_dz;      // overlap zone |sky.z| threshold (0 = no blend)
+uniform float u_r_scale;         // projection r_scale for overlap normalization
 uniform int u_bg_enabled;
 uniform float u_overlay_alpha;
 uniform vec2 u_bg_uv_scale;
@@ -71,46 +73,77 @@ vec3 xyzToSrgb(vec3 xyz) {
     return mix(rgb * 12.92, 1.055 * pow(rgb, vec3(1.0/2.4)) - 0.055, step(0.0031308, rgb));
 }
 
-// Convert world direction to dual equal-area fisheye UV.
-// Input d is the raw ray direction (same convention as dirToEquirect received);
-// negate to get sky direction before projection, matching C++ scatter which does
-// DualFisheyeEqualAreaForward(-d[0], -d[1], -d[2]).
-// Layout: left circle = upper hemisphere (sky_z >= 0), right circle = lower (sky_z < 0).
-// Uses Lambert azimuthal equal-area projection (normalized: r=1 at equator).
-// 90-degree rotation + hemisphere mirroring matches C++ DualFisheyeToPixel convention.
-vec2 dirToDualFisheye(vec3 d) {
-  // Negate to convert raw ray direction to sky direction (same as C++ scatter negation).
-  vec3 sky = -d;
+// Pure math: equal-area fisheye projection (matches C++ FisheyeEqualAreaForward).
+// Input: direction components (dx, dy, dz) where dz is along pole axis.
+// Output: normalized disc coordinates, r=1 at equator (r_scale=1.0).
+vec2 fisheyeEAProject(float dx, float dy, float dz, float r_scale) {
+  float k = r_scale / sqrt(1.0 + dz);
+  return vec2(k * dx, k * dy);
+}
 
-  float z_abs = abs(sky.z);
-  float k = 1.0 / sqrt(1.0 + z_abs);
-  float x_norm = k * sky.x;
-  float y_norm = k * sky.y;
-
-  // Use actual texture size, NOT viewport size (u_resolution).
-  // The circle layout is determined by the texture dimensions.
+// Layout + UV: convert normalized disc coords to texture UV.
+// Matches C++ DualFisheyeToPixel convention (90-deg rotation + hemisphere mirroring).
+vec2 dualFisheyeToUV(vec2 xy_norm, bool is_upper) {
   vec2 tex_res = vec2(textureSize(u_texture, 0));
   float short_res = min(tex_res.x * 0.5, tex_res.y);
   float R = short_res * 0.5;
 
   vec2 pixel;
-  if (sky.z >= 0.0) {
-    // Upper hemisphere (left circle): 90 deg CW rotation
-    pixel = vec2(-y_norm * R + tex_res.x * 0.5 - R,
-                  x_norm * R + tex_res.y * 0.5);
+  if (is_upper) {
+    pixel = vec2(-xy_norm.y * R + tex_res.x * 0.5 - R,
+                  xy_norm.x * R + tex_res.y * 0.5);
   } else {
-    // Lower hemisphere (right circle): 90 deg CCW + X mirror
-    pixel = vec2( y_norm * R + tex_res.x * 0.5 + R,
-                  x_norm * R + tex_res.y * 0.5);
+    pixel = vec2( xy_norm.y * R + tex_res.x * 0.5 + R,
+                  xy_norm.x * R + tex_res.y * 0.5);
   }
-  return pixel / tex_res;
+  return (pixel + 0.5) / tex_res;  // +0.5: align with OpenGL texel center convention
+}
+
+// Convert world direction to dual equal-area fisheye UV (single hemisphere, no blend).
+vec2 dirToDualFisheye(vec3 d) {
+  vec3 sky = -d;
+  bool is_upper = (sky.z >= 0.0);
+  float z_hemi = is_upper ? sky.z : -sky.z;
+  vec2 xy_norm = fisheyeEAProject(sky.x, sky.y, z_hemi, u_r_scale);
+  return dualFisheyeToUV(xy_norm, is_upper);
+}
+
+// Sample dual fisheye texture with overlap blending in the equator zone.
+vec3 sampleDualFisheye(vec3 world_dir) {
+  vec3 sky = -world_dir;
+  float z_abs = abs(sky.z);
+  bool is_upper = (sky.z >= 0.0);
+
+  if (u_max_abs_dz > 0.0 && z_abs < u_max_abs_dz) {
+    // Overlap zone: blend primary and secondary hemispheres.
+    // Tent weight: t=0.5 at equator (z_abs=0), t=0 at boundary (z_abs=max_abs_dz).
+    // primary weight = 1-t, secondary weight = t.
+    float t = (u_max_abs_dz - z_abs) / (2.0 * u_max_abs_dz);
+
+    // Primary: same hemisphere, z_hemi >= 0
+    float z_hemi_pri = is_upper ? sky.z : -sky.z;
+    vec2 xy_pri = fisheyeEAProject(sky.x, sky.y, z_hemi_pri, u_r_scale);
+    vec2 uv_pri = dualFisheyeToUV(xy_pri, is_upper);
+    // Secondary: opposite hemisphere, z_hemi < 0 (past equator)
+    float z_hemi_opp = is_upper ? -sky.z : sky.z;  // = -|sky.z| < 0
+    vec2 xy_sec = fisheyeEAProject(sky.x, sky.y, z_hemi_opp, u_r_scale);
+    vec2 uv_sec = dualFisheyeToUV(xy_sec, !is_upper);
+
+    vec3 c1 = texture(u_texture, uv_pri).rgb;
+    vec3 c2 = texture(u_texture, uv_sec).rgb;
+    return mix(c1, c2, t);
+  }
+
+  // Non-overlap: single hemisphere
+  vec2 uv = dirToDualFisheye(world_dir);
+  return texture(u_texture, uv).rgb;
 }
 
 // Compute view direction from pixel for linear projection
 // Returns false (via w component) if outside valid range
 vec4 linearInverse(vec2 pos, float half_fov) {
-  float diag = length(u_resolution);
-  float focal = diag * 0.5 / tan(half_fov);
+  float short_edge = min(u_resolution.x, u_resolution.y);
+  float focal = short_edge * 0.5 / tan(half_fov);
   vec3 d = normalize(vec3(pos, -focal));
   return vec4(d, 1.0);
 }
@@ -118,17 +151,17 @@ vec4 linearInverse(vec2 pos, float half_fov) {
 // Compute view direction for fisheye projections
 // type: 0=equal_area, 1=equidistant, 2=stereographic
 vec4 fisheyeInverse(vec2 pos, float half_fov, int type) {
-  float img_radius = length(u_resolution) * 0.5;  // diagonal/2 — matches Core's diag_pix_/2
+  float img_radius = min(u_resolution.x, u_resolution.y) * 0.5;  // short_edge/2 — matches Core's short_pix_/2
   float r = length(pos) / img_radius;
-  if (r > 1.0) return vec4(0.0, 0.0, 0.0, 0.0);
 
   float theta;
   if (type == 0) {        // equal area: r_norm = sin(θ/2) / sin(fov/4)
     float s = r * sin(half_fov * 0.5);
-    if (s > 1.0) return vec4(0.0, 0.0, 0.0, 0.0);
+    if (s > 1.0) return vec4(0.0, 0.0, 0.0, 0.0);  // asin domain guard
     theta = 2.0 * asin(s);
   } else if (type == 1) { // equidistant: r_norm = θ / half_fov
     theta = r * half_fov;
+    if (theta >= PI) return vec4(0.0, 0.0, 0.0, 0.0);
   } else {                // stereographic: r_norm = tan(θ/2) / tan(fov/4)
     theta = 2.0 * atan(r * tan(half_fov * 0.5));
   }
@@ -235,8 +268,7 @@ void main() {
     if (u_visible == 1 && lat > 0.0) visible = false;
 
     if (visible) {
-      vec2 uv = dirToDualFisheye(world_dir);
-      vec3 tex_color = texture(u_texture, uv).rgb;
+      vec3 tex_color = sampleDualFisheye(world_dir);
       if (u_xyz_mode == 1) {
         tex_color = xyzToSrgb(tex_color);
       }
@@ -328,7 +360,7 @@ bool PreviewRenderer::Init() {
   glBindTexture(GL_TEXTURE_2D, texture_);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);  // dual fisheye: no horizontal wrap
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glBindTexture(GL_TEXTURE_2D, 0);
 
@@ -540,6 +572,8 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1i(glGetUniformLocation(shader_program_, "u_visible"), params.visible);
   glUniform1i(glGetUniformLocation(shader_program_, "u_xyz_mode"), xyz_mode_ ? 1 : 0);
   glUniform1f(glGetUniformLocation(shader_program_, "u_intensity_scale"), params.intensity_scale);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_max_abs_dz"), params.max_abs_dz);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_r_scale"), params.r_scale);
 
   float view_matrix[9];
   BuildViewMatrix(params.elevation, params.azimuth, params.roll, view_matrix);

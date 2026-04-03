@@ -6,102 +6,67 @@ namespace projection {
 
 // =============== Return types ===============
 
-// Forward projection result for single-hemisphere projections (Type A: Linear, Fisheye)
-// and equirectangular (Type C: Rectangular).
+// Forward projection result: (x, y) coordinates + validity flag.
+// For fisheye projections, valid is always true (pure math, no rejection).
+// For LinearForward, valid = false when direction is behind camera (dz <= 0).
 struct ProjXY {
   float x, y;
-  bool valid;  // false if direction is behind camera (Type A) or out of range
-};
-
-// Forward projection result for dual fisheye projections (Type B).
-// Coordinates are normalized: r = 1 at the equator (theta = pi/2).
-struct DualProjXY {
-  float x, y;     // normalized disc coordinates
-  bool is_upper;  // true = upper hemisphere (sky direction dz >= 0)
+  bool valid;
 };
 
 // Inverse projection result: a 3D unit direction.
 struct Dir3 {
   float x, y, z;
-  bool valid;  // false if input is outside the projection domain (e.g., beyond circle edge)
+  bool valid;  // false if input is outside the projection domain
 };
 
 
-// =============== Type A: Single-hemisphere forward projections ===============
-// Input: camera-space unit direction (dz > 0 = in front of camera).
-// Output: raw (x, y) in projection-specific units (NOT pixel coordinates).
-// The caller (render.cpp glue) handles: visible_range check, world-to-camera rotation,
-// FOV-dependent scaling, pixel center offset, and lens_shift.
-//
-// Precondition: |d| = 1. Internal clamp(-1, 1) on trig inputs for NaN defense.
+// =============== Linear (perspective) projection ===============
+// The only projection with built-in validity rejection (dz <= 0 = behind camera).
 
-// Linear (perspective): x = dx/dz, y = dy/dz
 ProjXY LinearForward(float dx, float dy, float dz);
-
-// Equal-area fisheye: r = sin(theta/2), theta = pi/2 - asin(dz)
-ProjXY FisheyeEqualAreaForward(float dx, float dy, float dz);
-
-// Equidistant fisheye: r = theta, theta = pi/2 - asin(dz)
-ProjXY FisheyeEquidistantForward(float dx, float dy, float dz);
-
-// Stereographic fisheye: r = tan(theta/2), theta = pi/2 - asin(dz)
-ProjXY FisheyeStereographicForward(float dx, float dy, float dz);
-
-
-// =============== Type A: Single-hemisphere inverse projections ===============
-// Input: raw (x, y) in the same space as forward output.
-// Output: camera-space unit direction (dz > 0).
-
 Dir3 LinearInverse(float x, float y);
-Dir3 FisheyeEqualAreaInverse(float x, float y);
-Dir3 FisheyeEquidistantInverse(float x, float y);
-Dir3 FisheyeStereographicInverse(float x, float y);
 
 
-// =============== Type B: Dual fisheye forward projections ===============
-// Input: sky-space unit direction (NO camera rotation applied).
-//   is_upper is determined by dz: dz >= 0 → upper hemisphere, dz < 0 → lower.
-// Output: normalized disc coordinates where r = 1 at the equator (theta = pi/2).
-//   Always valid (full-globe coverage).
+// =============== Fisheye projections (pure math) ===============
+// Input: unit direction vector (dx, dy, dz) where dz is the component along the pole axis.
+//   dz > 0: same hemisphere as the pole (normal range)
+//   dz < 0: past the equator (used for overlap extension)
+//   dz = -1: antipodal singularity (clamped internally for EA; acos-safe for ED/ST)
+//   Precondition: |(dx, dy, dz)| = 1
 //
-// GLSL equivalent for DualFisheyeEqualArea (for shader porting):
-//   vec2 dualFisheyeEAForward(vec3 d) {
-//     float z_abs = abs(d.z);
-//     float k = 1.0 / sqrt(1.0 + z_abs);   // normalized: r=1 at equator
-//     return vec2(k * d.x, k * d.y);
-//     // is_upper = (d.z >= 0.0)
-//   }
-
-DualProjXY DualFisheyeEqualAreaForward(float dx, float dy, float dz);
-DualProjXY DualFisheyeEquidistantForward(float dx, float dy, float dz);
-DualProjXY DualFisheyeStereographicForward(float dx, float dy, float dz);
-
-
-// =============== Type B: Dual fisheye inverse projections ===============
-// Input: normalized disc coordinates + hemisphere flag.
-// Output: sky-space unit direction.
-//   valid = false if (x, y) is outside the projection domain.
+// r_scale: projection scaling factor (default 1.0).
+//   r = 1 in output space represents the "coverage boundary", not a fixed physical angle.
+//   r_scale = 1.0: r=1 at equator (theta=pi/2), standard hemisphere coverage.
+//   r_scale < 1.0: r=1 beyond equator, extended coverage (e.g. overlap).
 //
-// Domain constraints (normalized):
-//   EA: r^2 <= 1   (equator at r=1)
-//   ED: r <= 1     (equator at r=1)
-//   ST: r <= 1     (equator at r=1, theta in [0, pi/2])
+// The function does NOT know what the pole axis represents physically:
+//   - For dual fisheye: pole = zenith/nadir, caller flips z per hemisphere
+//   - For single fisheye lens: pole = camera optical axis, caller does world-to-camera rotation
 //
-// GLSL equivalent for DualFisheyeEqualArea inverse:
-//   vec3 dualFisheyeEAInverse(vec2 p, bool isUpper) {
-//     float r2 = dot(p, p);
-//     if (r2 > 1.0) return vec3(0.0);  // invalid
-//     float z_abs = 1.0 - r2;
-//     float factor = sqrt(1.0 + z_abs);
-//     return vec3(factor * p.x, factor * p.y, isUpper ? z_abs : -z_abs);
-//   }
+// Output: normalized projection coordinates. r=1 at the coverage boundary defined by r_scale.
+//   Always valid (no dz <= 0 rejection — caller handles validity).
 
-Dir3 DualFisheyeEqualAreaInverse(float x, float y, bool is_upper);
-Dir3 DualFisheyeEquidistantInverse(float x, float y, bool is_upper);
-Dir3 DualFisheyeStereographicInverse(float x, float y, bool is_upper);
+ProjXY FisheyeEqualAreaForward(float dx, float dy, float dz, float r_scale = 1.0f);
+ProjXY FisheyeEquidistantForward(float dx, float dy, float dz, float r_scale = 1.0f);
+ProjXY FisheyeStereographicForward(float dx, float dy, float dz, float r_scale = 1.0f);
 
 
-// =============== Type C: Rectangular (equirectangular) projection ===============
+// =============== Fisheye inverse projections (pure math) ===============
+// Input: normalized projection coordinates (x, y) + r_scale.
+//   Domain: r = sqrt(x^2 + y^2) <= 1 (in r_scale-normalized space).
+//   r > 1 returns valid = false (beyond coverage boundary).
+//
+// Output: unit direction vector (dx, dy, dz).
+//   z may be negative when r_scale < 1 (past-equator direction) — this is correct behavior.
+//   Caller flips z for lower hemisphere if needed.
+
+Dir3 FisheyeEqualAreaInverse(float x, float y, float r_scale = 1.0f);
+Dir3 FisheyeEquidistantInverse(float x, float y, float r_scale = 1.0f);
+Dir3 FisheyeStereographicInverse(float x, float y, float r_scale = 1.0f);
+
+
+// =============== Rectangular (equirectangular) projection ===============
 // Input: sky-space unit direction (NO camera rotation).
 // Output: (lon, lat) where lon in [-pi, pi], lat in [-pi/2, pi/2].
 //   Always valid (full-globe coverage).

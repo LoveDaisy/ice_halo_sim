@@ -8,7 +8,7 @@
 namespace lumice {
 namespace projection {
 
-// =============== Type A: Single-hemisphere forward ===============
+// =============== Linear (perspective) ===============
 
 ProjXY LinearForward(float dx, float dy, float dz) {
   if (dz <= 0) {
@@ -17,175 +17,98 @@ ProjXY LinearForward(float dx, float dy, float dz) {
   return { dx / dz, dy / dz, true };
 }
 
-ProjXY FisheyeEqualAreaForward(float dx, float dy, float dz) {
-  if (dz <= 0) {
-    return { 0, 0, false };
-  }
-  float az = std::atan2(dy, dx);
-  float theta = math::kPi_2 - std::asin(std::clamp(dz, -1.0f, 1.0f));
-  float r = std::sin(theta / 2.0f);
-  return { r * std::cos(az), r * std::sin(az), true };
-}
-
-ProjXY FisheyeEquidistantForward(float dx, float dy, float dz) {
-  if (dz <= 0) {
-    return { 0, 0, false };
-  }
-  float az = std::atan2(dy, dx);
-  float theta = math::kPi_2 - std::asin(std::clamp(dz, -1.0f, 1.0f));
-  float r = theta;
-  return { r * std::cos(az), r * std::sin(az), true };
-}
-
-ProjXY FisheyeStereographicForward(float dx, float dy, float dz) {
-  if (dz <= 0) {
-    return { 0, 0, false };
-  }
-  float az = std::atan2(dy, dx);
-  float theta = math::kPi_2 - std::asin(std::clamp(dz, -1.0f, 1.0f));
-  float r = std::tan(theta / 2.0f);
-  return { r * std::cos(az), r * std::sin(az), true };
-}
-
-
-// =============== Type A: Single-hemisphere inverse ===============
-
 Dir3 LinearInverse(float x, float y) {
   float inv_len = 1.0f / std::sqrt(x * x + y * y + 1.0f);
   return { x * inv_len, y * inv_len, inv_len, true };
 }
 
-Dir3 FisheyeEqualAreaInverse(float x, float y) {
-  float r = std::sqrt(x * x + y * y);
-  if (r > 1.0f) {
-    return { 0, 0, 0, false };
-  }
-  if (r < 1e-10f) {
-    return { 0, 0, 1, true };  // on-axis
-  }
-  float theta = 2.0f * std::asin(std::clamp(r, 0.0f, 1.0f));
-  float st = std::sin(theta);
-  float ct = std::cos(theta);
-  float inv_r = 1.0f / r;
-  return { st * x * inv_r, st * y * inv_r, ct, true };
+
+// =============== Fisheye forward projections (pure math) ===============
+// All three use Cartesian form: output = (scale * dx, scale * dy).
+// No atan2/cos(az)/sin(az) polar decomposition — Cartesian is equivalent and faster.
+// r_scale multiplies the projection core to control coverage boundary (r=1).
+
+// Equal-area: k = r_scale / sqrt(1 + dz). No trig, 1 sqrt.
+ProjXY FisheyeEqualAreaForward(float dx, float dy, float dz, float r_scale) {
+  float k = r_scale / std::sqrt(1.0f + std::clamp(dz, -1.0f + 1e-6f, 1.0f));
+  return { k * dx, k * dy, true };
 }
 
-Dir3 FisheyeEquidistantInverse(float x, float y) {
-  float r = std::sqrt(x * x + y * y);
-  if (r > math::kPi_2) {
-    return { 0, 0, 0, false };
-  }
-  if (r < 1e-10f) {
-    return { 0, 0, 1, true };
-  }
-  float theta = r;
-  float st = std::sin(theta);
-  float ct = std::cos(theta);
-  float inv_r = 1.0f / r;
-  return { st * x * inv_r, st * y * inv_r, ct, true };
-}
-
-Dir3 FisheyeStereographicInverse(float x, float y) {
-  float r = std::sqrt(x * x + y * y);
-  if (r < 1e-10f) {
-    return { 0, 0, 1, true };
-  }
-  float theta = 2.0f * std::atan(r);
-  if (theta > math::kPi_2) {
-    return { 0, 0, 0, false };
-  }
-  float st = std::sin(theta);
-  float ct = std::cos(theta);
-  float inv_r = 1.0f / r;
-  return { st * x * inv_r, st * y * inv_r, ct, true };
-}
-
-
-// =============== Type B: Dual fisheye forward ===============
-
-// Equal-area: direct Cartesian formula (1 sqrt, no trig).
-// Normalized so r = 1 at the equator (theta = pi/2).
-DualProjXY DualFisheyeEqualAreaForward(float dx, float dy, float dz) {
-  float z_abs = std::abs(dz);
-  // k = 1/sqrt(1 + |z|): normalized Lambert azimuthal equal-area
-  float k = 1.0f / std::sqrt(1.0f + z_abs);
-  return { k * dx, k * dy, dz >= 0 };
-}
-
-// Equidistant: r = theta / (pi/2), normalized to r = 1 at equator.
-DualProjXY DualFisheyeEquidistantForward(float dx, float dy, float dz) {
-  float z_abs = std::abs(dz);
-  float theta = math::kPi_2 - std::asin(std::clamp(z_abs, -1.0f, 1.0f));
-  float r_norm = theta / math::kPi_2;  // normalized: r=1 at equator (theta=pi/2)
+// Equidistant: scale = r_scale * theta / (pi/2 * rho). theta = acos(dz).
+ProjXY FisheyeEquidistantForward(float dx, float dy, float dz, float r_scale) {
   float rho = std::sqrt(dx * dx + dy * dy);
   if (rho < 1e-10f) {
-    return { 0, 0, dz >= 0 };  // at pole
+    return { 0, 0, true };  // pole
   }
-  float scale = r_norm / rho;
-  return { scale * dx, scale * dy, dz >= 0 };
+  float theta = std::acos(std::clamp(dz, -1.0f, 1.0f));
+  float scale = r_scale * theta / (math::kPi_2 * rho);
+  return { scale * dx, scale * dy, true };
 }
 
-// Stereographic: r = tan(theta/2), already r=1 at equator (tan(pi/4)=1).
-DualProjXY DualFisheyeStereographicForward(float dx, float dy, float dz) {
-  float z_abs = std::abs(dz);
-  float theta = math::kPi_2 - std::asin(std::clamp(z_abs, -1.0f, 1.0f));
-  float r_norm = std::tan(theta / 2.0f);  // already normalized: tan(pi/4) = 1
+// Stereographic: scale = r_scale * tan(theta/2) / rho. theta = acos(dz).
+ProjXY FisheyeStereographicForward(float dx, float dy, float dz, float r_scale) {
   float rho = std::sqrt(dx * dx + dy * dy);
   if (rho < 1e-10f) {
-    return { 0, 0, dz >= 0 };  // at pole
+    return { 0, 0, true };  // pole
   }
-  float scale = r_norm / rho;
-  return { scale * dx, scale * dy, dz >= 0 };
+  float theta = std::acos(std::clamp(dz, -1.0f, 1.0f));
+  float scale = r_scale * std::tan(theta / 2.0f) / rho;
+  return { scale * dx, scale * dy, true };
 }
 
 
-// =============== Type B: Dual fisheye inverse ===============
+// =============== Fisheye inverse projections (pure math) ===============
+// Domain check: r > 1 in the r_scale-normalized space = beyond coverage boundary.
+// When r_scale < 1, inverse may return z < 0 (past-equator direction) — this is correct.
 
-// Equal-area: direct Cartesian formula (1 sqrt, no trig).
-Dir3 DualFisheyeEqualAreaInverse(float x, float y, bool is_upper) {
+// Equal-area inverse: direct Cartesian formula (1 sqrt, no trig).
+Dir3 FisheyeEqualAreaInverse(float x, float y, float r_scale) {
   float r2 = x * x + y * y;
   if (r2 > 1.0f) {
     return { 0, 0, 0, false };
   }
-  float z_abs = 1.0f - r2;
-  float factor = std::sqrt(1.0f + z_abs);  // = sqrt(2 - r2)
-  return { factor * x, factor * y, is_upper ? z_abs : -z_abs, true };
+  float inv_s = 1.0f / r_scale;
+  float xr = x * inv_s;
+  float yr = y * inv_s;
+  float z = 1.0f - xr * xr - yr * yr;
+  float factor = std::sqrt(1.0f + z);
+  return { factor * xr, factor * yr, z, true };
 }
 
-// Equidistant: theta = r * (pi/2)
-Dir3 DualFisheyeEquidistantInverse(float x, float y, bool is_upper) {
+// Equidistant inverse: theta = r / r_scale * pi/2.
+Dir3 FisheyeEquidistantInverse(float x, float y, float r_scale) {
   float r = std::sqrt(x * x + y * y);
   if (r > 1.0f) {
     return { 0, 0, 0, false };
   }
   if (r < 1e-10f) {
-    return { 0, 0, is_upper ? 1.0f : -1.0f, true };  // at pole
+    return { 0, 0, 1, true };  // pole
   }
-  float theta = r * math::kPi_2;
+  float theta = r / r_scale * math::kPi_2;
   float st = std::sin(theta);
   float ct = std::cos(theta);
-  float scale = st / r;
-  return { scale * x, scale * y, is_upper ? ct : -ct, true };
+  float inv_r = 1.0f / r;
+  return { st * x * inv_r, st * y * inv_r, ct, true };
 }
 
-// Stereographic: theta = 2 * atan(r)
-Dir3 DualFisheyeStereographicInverse(float x, float y, bool is_upper) {
+// Stereographic inverse: theta = 2 * atan(r / r_scale).
+Dir3 FisheyeStereographicInverse(float x, float y, float r_scale) {
   float r = std::sqrt(x * x + y * y);
   if (r > 1.0f) {
     return { 0, 0, 0, false };
   }
   if (r < 1e-10f) {
-    return { 0, 0, is_upper ? 1.0f : -1.0f, true };
+    return { 0, 0, 1, true };  // pole
   }
-  float theta = 2.0f * std::atan(r);
+  float theta = 2.0f * std::atan(r / r_scale);
   float st = std::sin(theta);
   float ct = std::cos(theta);
-  float scale = st / r;
-  return { scale * x, scale * y, is_upper ? ct : -ct, true };
+  float inv_r = 1.0f / r;
+  return { st * x * inv_r, st * y * inv_r, ct, true };
 }
 
 
-// =============== Type C: Rectangular ===============
+// =============== Rectangular ===============
 
 ProjXY RectangularForward(float dx, float dy, float dz) {
   float lon = std::atan2(dy, dx);

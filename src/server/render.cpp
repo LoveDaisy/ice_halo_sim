@@ -52,18 +52,20 @@ void SpectrumToXyz(float wl, const float* v, const int* xy, float* xyz, size_t n
 // This is guaranteed by the ray tracing pipeline (normalized outgoing ray directions).
 struct LensProjParam {
   float fov_;
-  float diag_pix_;
+  float short_pix_;
   Rotation rot_;
   RenderConfig::VisibleRange visible_range_;
-  int resolution_[2];  // x, y
-  int lens_shift_[2];  // dx, dy
+  int resolution_[2];        // x, y
+  int lens_shift_[2];        // dx, dy
+  float max_abs_dz_ = 0.0f;  // overlap zone |sky.z| threshold (0 = no overlap)
+  float r_scale_ = 1.0f;     // projection r_scale for overlap normalization
 };
 
 
 using ProjFunc = std::function<void(const LensProjParam&, const float*, int*, size_t)>;
 
 void LinearProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.diag_pix_ / 2.0f / std::tan(p.fov_ / 2.0f * math::kDegreeToRad);
+  float scale = p.short_pix_ / 2.0f / std::tan(p.fov_ / 2.0f * math::kDegreeToRad);
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
         (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
@@ -86,10 +88,11 @@ void LinearProject(const LensProjParam& p, const float* d, int* xy, size_t num =
   }
 }
 
-// Equal area fisheye: r = 2f·sin(θ/2)
+// Equal area fisheye: unified projection with r=1 at equator normalization.
+// Scale formula absorbs sqrt(2) factor: Type B normalization r = sqrt(2) * sin(theta/2).
 // NOTE: scale formula must match f→fov conversion in render_config.cpp (equal area model).
 void FisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.diag_pix_ / 2.0f / std::sin(p.fov_ / 4.0f * math::kDegreeToRad);
+  float scale = p.short_pix_ / 2.0f / std::sqrt(2.0f) / std::sin(p.fov_ / 4.0f * math::kDegreeToRad);
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
@@ -101,22 +104,23 @@ void FisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, si
 
     float d_cam[3]{ -d[0], -d[1], -d[2] };
     p.rot_.ApplyInverse(d_cam);
-    auto proj = projection::FisheyeEqualAreaForward(d_cam[0], d_cam[1], d_cam[2]);
-    if (!proj.valid) {
+    if (d_cam[2] <= 0) {
       xy[0] = -1;
       xy[1] = -1;
       continue;
     }
+    auto proj = projection::FisheyeEqualAreaForward(d_cam[0], d_cam[1], d_cam[2]);
 
     xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
   }
 }
 
-// Equidistant fisheye: r = f·θ
+// Equidistant fisheye: unified projection with r=1 at equator normalization.
+// Scale formula absorbs pi/2 factor: Type B normalization r = theta / (pi/2).
 // NOTE: scale formula must match f→fov conversion in render_config.cpp (equidistant model).
 void FisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.diag_pix_ / (p.fov_ * math::kDegreeToRad);
+  float scale = p.short_pix_ * math::kPi_2 / (p.fov_ * math::kDegreeToRad);
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
@@ -128,22 +132,23 @@ void FisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, 
 
     float d_cam[3]{ -d[0], -d[1], -d[2] };
     p.rot_.ApplyInverse(d_cam);
-    auto proj = projection::FisheyeEquidistantForward(d_cam[0], d_cam[1], d_cam[2]);
-    if (!proj.valid) {
+    if (d_cam[2] <= 0) {
       xy[0] = -1;
       xy[1] = -1;
       continue;
     }
+    auto proj = projection::FisheyeEquidistantForward(d_cam[0], d_cam[1], d_cam[2]);
 
     xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
   }
 }
 
-// Stereographic fisheye: r = 2f·tan(θ/2)
+// Stereographic fisheye: unified projection with r=1 at equator normalization.
+// Scale formula unchanged: Type B normalization r = tan(theta/2) is already r=1 at equator.
 // NOTE: scale formula must match f→fov conversion in render_config.cpp (stereographic model).
 void FisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.diag_pix_ / 2.0f / std::tan(p.fov_ / 4.0f * math::kDegreeToRad);
+  float scale = p.short_pix_ / 2.0f / std::tan(p.fov_ / 4.0f * math::kDegreeToRad);
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
@@ -155,50 +160,71 @@ void FisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy
 
     float d_cam[3]{ -d[0], -d[1], -d[2] };
     p.rot_.ApplyInverse(d_cam);
-    auto proj = projection::FisheyeStereographicForward(d_cam[0], d_cam[1], d_cam[2]);
-    if (!proj.valid) {
+    if (d_cam[2] <= 0) {
       xy[0] = -1;
       xy[1] = -1;
       continue;
     }
+    auto proj = projection::FisheyeStereographicForward(d_cam[0], d_cam[1], d_cam[2]);
 
     xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
   }
+}
+
+// Overlap r_scale computation for dual fisheye projections.
+// r_scale shrinks the primary projection so r=1 at the overlap boundary instead of the equator.
+// Keep in sync with app_panels.cpp overlap parameter computation.
+float ComputeEARScale(float max_abs_dz) {
+  return (max_abs_dz <= 0) ? 1.0f : 1.0f / std::sqrt(1.0f + max_abs_dz);
+}
+float ComputeEDRScale(float max_abs_dz) {
+  return (max_abs_dz <= 0) ? 1.0f : math::kPi_2 / (math::kPi_2 + std::asin(max_abs_dz));
+}
+float ComputeSTRScale(float max_abs_dz) {
+  return (max_abs_dz <= 0) ? 1.0f : 1.0f / std::tan((math::kPi_2 + std::asin(max_abs_dz)) / 2.0f);
 }
 
 // Dual equal area fisheye: full hemisphere per circle, fov ignored.
 // No visible_range or behind-camera early exit — by design, all directions are projected.
 // Out-of-bounds pixel coordinates are handled by the caller (SpectrumToXyz bounds check).
+// Caller handles hemisphere selection: z flip + is_upper flag for DualFisheyeToPixel layout.
 void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    auto proj = projection::DualFisheyeEqualAreaForward(-d[0], -d[1], -d[2]);
+    float sky_x = -d[0], sky_y = -d[1], sky_z = -d[2];
+    bool is_upper = (sky_z >= 0);
+    float z_hemi = is_upper ? sky_z : -sky_z;
+    auto proj = projection::FisheyeEqualAreaForward(sky_x, sky_y, z_hemi, p.r_scale_);
     float fx, fy;
-    projection::DualFisheyeToPixel(proj.x, proj.y, proj.is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
+    projection::DualFisheyeToPixel(proj.x, proj.y, is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
     xy[0] = static_cast<int>(std::floor(fx + 0.5f));
     xy[1] = static_cast<int>(std::floor(fy + 0.5f));
   }
 }
 
 // Dual equidistant fisheye: full hemisphere per circle, fov ignored.
-// No visible_range or behind-camera early exit — by design, all directions are projected.
 void DualFisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    auto proj = projection::DualFisheyeEquidistantForward(-d[0], -d[1], -d[2]);
+    float sky_x = -d[0], sky_y = -d[1], sky_z = -d[2];
+    bool is_upper = (sky_z >= 0);
+    float z_hemi = is_upper ? sky_z : -sky_z;
+    auto proj = projection::FisheyeEquidistantForward(sky_x, sky_y, z_hemi, p.r_scale_);
     float fx, fy;
-    projection::DualFisheyeToPixel(proj.x, proj.y, proj.is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
+    projection::DualFisheyeToPixel(proj.x, proj.y, is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
     xy[0] = static_cast<int>(std::floor(fx + 0.5f));
     xy[1] = static_cast<int>(std::floor(fy + 0.5f));
   }
 }
 
 // Dual stereographic fisheye: full hemisphere per circle, fov ignored.
-// No visible_range or behind-camera early exit — by design, all directions are projected.
 void DualFisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    auto proj = projection::DualFisheyeStereographicForward(-d[0], -d[1], -d[2]);
+    float sky_x = -d[0], sky_y = -d[1], sky_z = -d[2];
+    bool is_upper = (sky_z >= 0);
+    float z_hemi = is_upper ? sky_z : -sky_z;
+    auto proj = projection::FisheyeStereographicForward(sky_x, sky_y, z_hemi, p.r_scale_);
     float fx, fy;
-    projection::DualFisheyeToPixel(proj.x, proj.y, proj.is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
+    projection::DualFisheyeToPixel(proj.x, proj.y, is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
     xy[0] = static_cast<int>(std::floor(fx + 0.5f));
     xy[1] = static_cast<int>(std::floor(fy + 0.5f));
   }
@@ -248,8 +274,8 @@ ProjFunc GetProjFunc(LensParam::LensType type) {
 
 // =============== Renderer ===============
 RenderConsumer::RenderConsumer(RenderConfig config)
-    : config_(std::move(config)), diag_pix_(std::sqrt(config_.resolution_[0] * config_.resolution_[0] +
-                                                      config_.resolution_[1] * config_.resolution_[1])),
+    : config_(std::move(config)),
+      short_pix_(static_cast<float>(std::min(config_.resolution_[0], config_.resolution_[1]))),
       internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_work_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
@@ -311,6 +337,7 @@ void RenderConsumer::Consume(const SimData& data) {
     d_buf_ = std::make_unique<float[]>(buf_capacity_ * 3);
     w_buf_ = std::make_unique<float[]>(buf_capacity_);
     xy_buf_ = std::make_unique<int[]>(buf_capacity_ * 2);
+    overlap_w_buf_ = std::make_unique<float[]>(buf_capacity_);
   }
 
   // Filter + copy outgoing rays into contiguous buffers.
@@ -339,13 +366,42 @@ void RenderConsumer::Consume(const SimData& data) {
 
   auto lens_proj = GetProjFunc(config_.lens_.type_);
   LensProjParam proj_param{ config_.lens_.fov_,
-                            diag_pix_,
+                            short_pix_,
                             rot_,
                             config_.visible_,
                             { config_.resolution_[0], config_.resolution_[1] },
-                            { config_.lens_shift_[0], config_.lens_shift_[1] } };
+                            { config_.lens_shift_[0], config_.lens_shift_[1] },
+                            0.0f,
+                            1.0f };
+
+  // Compute overlap r_scale for dual fisheye lens types.
+  // Keep in sync with app_panels.cpp overlap parameter computation.
+  constexpr float kOverlapDz = 0.0872f;  // = gui::kDualFisheyeOverlap = sin(5°)
+  switch (config_.lens_.type_) {
+    case LensParam::kDualFisheyeEqualArea:
+      proj_param.max_abs_dz_ = kOverlapDz;
+      proj_param.r_scale_ = ComputeEARScale(kOverlapDz);
+      break;
+    case LensParam::kDualFisheyeEquidistant:
+      proj_param.max_abs_dz_ = kOverlapDz;
+      proj_param.r_scale_ = ComputeEDRScale(kOverlapDz);
+      break;
+    case LensParam::kDualFisheyeStereographic:
+      proj_param.max_abs_dz_ = kOverlapDz;
+      proj_param.r_scale_ = ComputeSTRScale(kOverlapDz);
+      break;
+    default:
+      break;  // Non-dual-fisheye: max_abs_dz=0, r_scale=1.0 (no overlap)
+  }
+
   lens_proj(proj_param, d_buf_.get(), xy_buf_.get(), filtered_ray_num);
   auto t2 = std::chrono::steady_clock::now();
+
+  // Save w_buf_ before compaction (compaction overwrites w_buf_ in-place).
+  // overlap_w_buf_ is needed by pass 2 to read original weights by ray index.
+  if (proj_param.max_abs_dz_ > 0) {
+    std::memcpy(overlap_w_buf_.get(), w_buf_.get(), filtered_ray_num * sizeof(float));
+  }
 
   size_t final_ray_num = 0;
   float landed_weight = 0;
@@ -361,6 +417,61 @@ void RenderConsumer::Consume(const SimData& data) {
   }
   SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), final_ray_num);
   total_intensity_ += landed_weight;
+
+  // === Pass 2: Overlap dual-write (only for dual fisheye with max_abs_dz > 0) ===
+  // Project overlap-zone rays to the opposite hemisphere, filling the ring r ∈ (r_scale, 1].
+  // d_buf_ is immutable (projection receives const float*). w_buf_ was compacted in pass 1,
+  // so we use overlap_w_buf_ (copied before compaction... see below).
+  // xy_buf_ and w_buf_ are safe to reuse — pass 1 data already consumed by SpectrumToXyz.
+  if (proj_param.max_abs_dz_ > 0) {
+    // overlap_w_buf_ was copied from w_buf_ before pass 1 compaction (see copy above).
+    // For each overlap ray, project to the opposite hemisphere with z_hemi < 0.
+    auto overlap_fwd = [&](float sky_x, float sky_y, float z_hemi, float r_s) {
+      switch (config_.lens_.type_) {
+        case LensParam::kDualFisheyeEqualArea:
+          return projection::FisheyeEqualAreaForward(sky_x, sky_y, z_hemi, r_s);
+        case LensParam::kDualFisheyeEquidistant:
+          return projection::FisheyeEquidistantForward(sky_x, sky_y, z_hemi, r_s);
+        case LensParam::kDualFisheyeStereographic:
+          return projection::FisheyeStereographicForward(sky_x, sky_y, z_hemi, r_s);
+        default:
+          return projection::ProjXY{ 0, 0, false };
+      }
+    };
+
+    size_t overlap_count = 0;
+    int w = config_.resolution_[0];
+    int h = config_.resolution_[1];
+    for (size_t i = 0; i < filtered_ray_num; i++) {
+      float sky_x = -d_buf_[i * 3 + 0];
+      float sky_y = -d_buf_[i * 3 + 1];
+      float sky_z = -d_buf_[i * 3 + 2];
+      if (std::abs(sky_z) >= proj_param.max_abs_dz_) {
+        continue;  // not in overlap zone
+      }
+
+      // Opposite hemisphere: z_hemi is negative (past equator)
+      bool primary_upper = (sky_z >= 0);
+      float z_hemi_opp = primary_upper ? -sky_z : sky_z;  // = -|sky_z| < 0
+      auto proj = overlap_fwd(sky_x, sky_y, z_hemi_opp, proj_param.r_scale_);
+      float fx = 0;
+      float fy = 0;
+      projection::DualFisheyeToPixel(proj.x, proj.y, !primary_upper, w, h, &fx, &fy);
+      int px = static_cast<int>(std::floor(fx + 0.5f));
+      int py = static_cast<int>(std::floor(fy + 0.5f));
+      if (px < 0 || px >= w || py < 0 || py >= h) {
+        continue;
+      }
+      xy_buf_[overlap_count] = py * w + px;
+      w_buf_[overlap_count] = overlap_w_buf_[i];
+      overlap_count++;
+    }
+    if (overlap_count > 0) {
+      // Pass 2 does NOT update total_intensity_ — preserves normalization.
+      SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), overlap_count);
+    }
+  }
+
   auto t3 = std::chrono::steady_clock::now();
 
   consume_count_++;

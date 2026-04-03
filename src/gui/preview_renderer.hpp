@@ -14,6 +14,8 @@ struct PreviewParams {
   int visible = 2;         // 0=upper, 1=lower, 2=full
   float intensity_factor = 1.0f;
   float intensity_scale = 0.0f;  // = intensity_factor / per_pixel_intensity (0 = not in XYZ mode)
+  float max_abs_dz = 0.0f;       // overlap zone threshold (0 = no blend)
+  float r_scale = 1.0f;          // projection r_scale for overlap normalization
   bool bg_enabled = false;
   float bg_alpha = 1.0f;
   float bg_aspect = 1.0f;

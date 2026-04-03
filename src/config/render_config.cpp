@@ -63,14 +63,14 @@ void to_json(nlohmann::json& j, const LensParam& l) {
 void from_json(const nlohmann::json& j, LensParam& l) {
   constexpr int kErrCodeMissingKey = 403;
   constexpr int kErrCodeInvalidValue = 404;
-  constexpr float kHalfDiagLen = 21.63f;  // half diagonal of 35mm film (43.27mm / 2)
+  constexpr float kHalfShortEdge = 12.0f;  // half short edge of 35mm film (24mm / 2)
 
   j.at("type").get_to(l.type_);
   if (j.contains("fov")) {
     j.at("fov").get_to(l.fov_);
   } else if (j.contains("f")) {
     float f = j.at("f").get<float>();
-    float d = kHalfDiagLen;
+    float d = kHalfShortEdge;
     // NOTE: f→fov formula must match the scale formula in render.cpp for each projection model.
     switch (l.type_) {
       case LensParam::kLinear:
@@ -80,7 +80,7 @@ void from_json(const nlohmann::json& j, LensParam& l) {
       case LensParam::kDualFisheyeEqualArea:
         if (d / (2 * f) > 1.0f) {
           throw nlohmann::detail::out_of_range::create(
-              kErrCodeInvalidValue, "focal length too short for equal area fisheye (f >= 10.815mm required)", j);
+              kErrCodeInvalidValue, "focal length too short for equal area fisheye (f >= 6mm required)", j);
         }
         l.fov_ = std::asin(d / (2 * f)) * 4 * math::kRadToDegree;
         break;
@@ -101,8 +101,22 @@ void from_json(const nlohmann::json& j, LensParam& l) {
   }
 
   // Validate fov range (skip Rectangular which uses fov=0 for full-sky)
-  if (l.type_ != LensParam::kRectangular && (l.fov_ <= 0 || l.fov_ > 360)) {
-    throw nlohmann::detail::out_of_range::create(kErrCodeInvalidValue, "fov must be in (0, 360] degrees", j);
+  if (l.type_ != LensParam::kRectangular && (l.fov_ <= 0 || l.fov_ > MaxFov(l.type_))) {
+    throw nlohmann::detail::out_of_range::create(
+        kErrCodeInvalidValue,
+        "fov must be in (0, " + std::to_string(static_cast<int>(MaxFov(l.type_))) + "] degrees for this lens type", j);
+  }
+}
+
+
+float MaxFov(LensParam::LensType type) {
+  switch (type) {
+    case LensParam::kLinear:
+      return 179.0f;  // tan(fov/2) singular at 180
+    case LensParam::kFisheyeStereographic:
+      return 359.0f;  // tan(fov/4) singular at 360
+    default:
+      return 360.0f;  // equal area, equidistant, dual fisheye, rectangular
   }
 }
 
