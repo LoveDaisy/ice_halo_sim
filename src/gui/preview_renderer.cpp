@@ -71,39 +71,40 @@ vec3 xyzToSrgb(vec3 xyz) {
     return mix(rgb * 12.92, 1.055 * pow(rgb, vec3(1.0/2.4)) - 0.055, step(0.0031308, rgb));
 }
 
-// Convert world direction to dual equal-area fisheye UV.
-// Input d is the raw ray direction (same convention as dirToEquirect received);
-// negate to get sky direction before projection, matching C++ scatter which does
-// DualFisheyeEqualAreaForward(-d[0], -d[1], -d[2]).
-// Layout: left circle = upper hemisphere (sky_z >= 0), right circle = lower (sky_z < 0).
-// Uses Lambert azimuthal equal-area projection (normalized: r=1 at equator).
-// 90-degree rotation + hemisphere mirroring matches C++ DualFisheyeToPixel convention.
-vec2 dirToDualFisheye(vec3 d) {
-  // Negate to convert raw ray direction to sky direction (same as C++ scatter negation).
-  vec3 sky = -d;
+// Pure math: equal-area fisheye projection (matches C++ FisheyeEqualAreaForward).
+// Input: direction components (dx, dy, dz) where dz is along pole axis.
+// Output: normalized disc coordinates, r=1 at equator (r_scale=1.0).
+vec2 fisheyeEAProject(float dx, float dy, float dz, float r_scale) {
+  float k = r_scale / sqrt(1.0 + dz);
+  return vec2(k * dx, k * dy);
+}
 
-  float z_abs = abs(sky.z);
-  float k = 1.0 / sqrt(1.0 + z_abs);
-  float x_norm = k * sky.x;
-  float y_norm = k * sky.y;
-
-  // Use actual texture size, NOT viewport size (u_resolution).
-  // The circle layout is determined by the texture dimensions.
+// Layout + UV: convert normalized disc coords to texture UV.
+// Matches C++ DualFisheyeToPixel convention (90-deg rotation + hemisphere mirroring).
+vec2 dualFisheyeToUV(vec2 xy_norm, bool is_upper) {
   vec2 tex_res = vec2(textureSize(u_texture, 0));
   float short_res = min(tex_res.x * 0.5, tex_res.y);
   float R = short_res * 0.5;
 
   vec2 pixel;
-  if (sky.z >= 0.0) {
-    // Upper hemisphere (left circle): 90 deg CW rotation
-    pixel = vec2(-y_norm * R + tex_res.x * 0.5 - R,
-                  x_norm * R + tex_res.y * 0.5);
+  if (is_upper) {
+    pixel = vec2(-xy_norm.y * R + tex_res.x * 0.5 - R,
+                  xy_norm.x * R + tex_res.y * 0.5);
   } else {
-    // Lower hemisphere (right circle): 90 deg CCW + X mirror
-    pixel = vec2( y_norm * R + tex_res.x * 0.5 + R,
-                  x_norm * R + tex_res.y * 0.5);
+    pixel = vec2( xy_norm.y * R + tex_res.x * 0.5 + R,
+                  xy_norm.x * R + tex_res.y * 0.5);
   }
   return pixel / tex_res;
+}
+
+// Convert world direction to dual equal-area fisheye UV.
+// Composition of: sky direction → z flip → projection → layout → UV.
+vec2 dirToDualFisheye(vec3 d) {
+  vec3 sky = -d;
+  bool is_upper = (sky.z >= 0.0);
+  float z_hemi = is_upper ? sky.z : -sky.z;
+  vec2 xy_norm = fisheyeEAProject(sky.x, sky.y, z_hemi, 1.0);
+  return dualFisheyeToUV(xy_norm, is_upper);
 }
 
 // Compute view direction from pixel for linear projection
