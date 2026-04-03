@@ -42,6 +42,9 @@ struct CrystalConfig {
   int upper_indices[3] = { 1, 0, 1 };
   int lower_indices[3] = { 1, 0, 1 };
 
+  // Face distance (common to Prism and Pyramid — distance from center to each of the 6 prism faces)
+  float face_distance[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+
   // Axis distribution (all default to uniform full rotation)
   AxisDist zenith{ AxisDistType::kUniform, 0.0f, 360.0f };
   AxisDist azimuth{ AxisDistType::kUniform, 0.0f, 360.0f };

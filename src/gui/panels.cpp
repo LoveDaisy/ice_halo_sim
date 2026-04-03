@@ -130,6 +130,7 @@ namespace {
 // Pending delete state for reference-warning popups
 int g_pending_delete_crystal_idx = -1;
 int g_pending_delete_filter_idx = -1;
+bool g_show_face_distance_editor = false;
 
 // Check if a crystal ID is referenced by any scattering entry
 bool IsCrystalReferenced(const GuiState& state, int crystal_id) {
@@ -251,6 +252,7 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
 void ResetPendingDeleteState() {
   g_pending_delete_crystal_idx = -1;
   g_pending_delete_filter_idx = -1;
+  g_show_face_distance_editor = false;
 }
 
 
@@ -375,6 +377,20 @@ void RenderCrystalTab(GuiState& state) {
       DIRTY_IF(ImGui::InputInt3("Lower Idx", cr.lower_indices));
       ImGui::PopItemWidth();
     }
+
+    // Face Distance summary + popup editor
+    bool is_default_fd = true;
+    for (int i = 0; i < 6; i++) {
+      if (std::abs(cr.face_distance[i] - 1.0f) > 1e-6f) {
+        is_default_fd = false;
+        break;
+      }
+    }
+    ImGui::Text("Face Dist: %s", is_default_fd ? "Default" : "Custom");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Edit...##face_dist")) {
+      g_show_face_distance_editor = true;
+    }
   }
 
   if (ImGui::CollapsingHeader("Axis Distribution", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -383,6 +399,36 @@ void RenderCrystalTab(GuiState& state) {
     RenderAxisDist("Azimuth", cr.azimuth, state);
     ImGui::Spacing();
     RenderAxisDist("Roll", cr.roll, state);
+  }
+
+  // Floating face distance editor window
+  if (g_show_face_distance_editor) {
+    ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Face Distance", &g_show_face_distance_editor)) {
+      ImGui::Text("Distance from center to each prism face:");
+      ImGui::Spacing();
+      for (int i = 0; i < 6; i++) {
+        char label[16];
+        snprintf(label, sizeof(label), "Face %d", i + 1);
+        DIRTY_IF(SliderWithInput(label, &cr.face_distance[i], 0.0f, 2.0f, "%.3f"));
+      }
+      ImGui::Spacing();
+      ImGui::Separator();
+      ImGui::Spacing();
+      if (ImGui::Button("Reset to Default")) {
+        bool any_changed = false;
+        for (int i = 0; i < 6; i++) {
+          if (std::abs(cr.face_distance[i] - 1.0f) > 1e-6f) {
+            any_changed = true;
+          }
+          cr.face_distance[i] = 1.0f;
+        }
+        if (any_changed) {
+          state.MarkDirty();
+        }
+      }
+    }
+    ImGui::End();
   }
 }
 

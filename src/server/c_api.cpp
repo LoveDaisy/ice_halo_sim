@@ -169,6 +169,18 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
       j["shape"]["upper_indices"] = { cr.upper_indices[0], cr.upper_indices[1], cr.upper_indices[2] };
       j["shape"]["lower_indices"] = { cr.lower_indices[0], cr.lower_indices[1], cr.lower_indices[2] };
     }
+    // face_distance: only write when non-default
+    bool is_default_fd = true;
+    for (int fi = 0; fi < 6; fi++) {
+      if (std::abs(cr.face_distance[fi] - 1.0f) > 1e-6f) {
+        is_default_fd = false;
+        break;
+      }
+    }
+    if (!is_default_fd) {
+      j["shape"]["face_distance"] = { cr.face_distance[0], cr.face_distance[1], cr.face_distance[2],
+                                      cr.face_distance[3], cr.face_distance[4], cr.face_distance[5] };
+    }
     j["axis"]["zenith"] = AxisDistToJson(cr.zenith);
     j["axis"]["azimuth"] = AxisDistToJson(cr.azimuth);
     j["axis"]["roll"] = AxisDistToJson(cr.roll);
@@ -431,10 +443,21 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
   const auto& shape = j.at("shape");
   ns::Mesh mesh;
 
+  // Parse face_distance if present (common to both prism and pyramid)
+  float dist[6]{ 1, 1, 1, 1, 1, 1 };
+  if (shape.contains("face_distance") && shape["face_distance"].is_array()) {
+    size_t n = std::min(shape["face_distance"].size(), static_cast<size_t>(6));
+    for (size_t i = 0; i < n; i++) {
+      if (shape["face_distance"][i].is_number()) {
+        dist[i] = shape["face_distance"][i].get<float>();
+      }
+    }
+  }
+
   try {
     if (type_str == "prism") {
       float h = shape.value("height", 1.0f);
-      mesh = ns::CreatePrismMesh(h);
+      mesh = ns::CreatePrismMesh(h, dist);
     } else if (type_str == "pyramid") {
       float prism_h = shape.value("prism_h", 1.0f);
       float upper_h = shape.value("upper_h", 0.0f);
@@ -446,7 +469,6 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
         int upper_idx4 = ui[2].get<int>();
         int lower_idx1 = li[0].get<int>();
         int lower_idx4 = li[2].get<int>();
-        float dist[6]{ 1, 1, 1, 1, 1, 1 };
         mesh = ns::CreatePyramidMesh(upper_idx1, upper_idx4, lower_idx1, lower_idx4, upper_h, prism_h, lower_h, dist);
       } else {
         mesh = ns::CreatePyramidMesh(upper_h, prism_h, lower_h);
