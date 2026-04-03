@@ -130,6 +130,7 @@ namespace {
 // Pending delete state for reference-warning popups
 int g_pending_delete_crystal_idx = -1;
 int g_pending_delete_filter_idx = -1;
+bool g_show_face_distance_editor = false;
 
 // Check if a crystal ID is referenced by any scattering entry
 bool IsCrystalReferenced(const GuiState& state, int crystal_id) {
@@ -251,6 +252,7 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
 void ResetPendingDeleteState() {
   g_pending_delete_crystal_idx = -1;
   g_pending_delete_filter_idx = -1;
+  g_show_face_distance_editor = false;
 }
 
 
@@ -387,10 +389,22 @@ void RenderCrystalTab(GuiState& state) {
     ImGui::Text("Face Dist: %s", is_default_fd ? "Default" : "Custom");
     ImGui::SameLine();
     if (ImGui::SmallButton("Edit...##face_dist")) {
-      ImGui::OpenPopup("Face Distance");
+      g_show_face_distance_editor = true;
     }
+  }
 
-    if (ImGui::BeginPopupModal("Face Distance", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+  if (ImGui::CollapsingHeader("Axis Distribution", ImGuiTreeNodeFlags_DefaultOpen)) {
+    RenderAxisDist("Zenith", cr.zenith, state);
+    ImGui::Spacing();
+    RenderAxisDist("Azimuth", cr.azimuth, state);
+    ImGui::Spacing();
+    RenderAxisDist("Roll", cr.roll, state);
+  }
+
+  // Floating face distance editor window
+  if (g_show_face_distance_editor) {
+    ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Face Distance", &g_show_face_distance_editor)) {
       ImGui::Text("Distance from center to each prism face:");
       ImGui::Spacing();
       for (int i = 0; i < 6; i++) {
@@ -402,25 +416,19 @@ void RenderCrystalTab(GuiState& state) {
       ImGui::Separator();
       ImGui::Spacing();
       if (ImGui::Button("Reset to Default")) {
+        bool any_changed = false;
         for (int i = 0; i < 6; i++) {
+          if (std::abs(cr.face_distance[i] - 1.0f) > 1e-6f) {
+            any_changed = true;
+          }
           cr.face_distance[i] = 1.0f;
         }
-        state.MarkDirty();
+        if (any_changed) {
+          state.MarkDirty();
+        }
       }
-      ImGui::SameLine();
-      if (ImGui::Button("Close")) {
-        ImGui::CloseCurrentPopup();
-      }
-      ImGui::EndPopup();
     }
-  }
-
-  if (ImGui::CollapsingHeader("Axis Distribution", ImGuiTreeNodeFlags_DefaultOpen)) {
-    RenderAxisDist("Zenith", cr.zenith, state);
-    ImGui::Spacing();
-    RenderAxisDist("Azimuth", cr.azimuth, state);
-    ImGui::Spacing();
-    RenderAxisDist("Roll", cr.roll, state);
+    ImGui::End();
   }
 }
 
