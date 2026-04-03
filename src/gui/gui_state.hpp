@@ -85,6 +85,10 @@ inline const char* const kLensTypeNames[] = {
 };
 constexpr int kLensTypeCount = 8;
 
+// Dual fisheye overlap: max |sky.z| for the overlap zone.
+// = sin(5°) ≈ 0.0872. Each hemisphere extends 5° past the equator.
+constexpr float kDualFisheyeOverlap = 0.0872f;
+
 inline const char* const kSpectrumNames[] = { "D50", "D55", "D65", "D75", "A", "E" };
 constexpr int kSpectrumCount = 6;
 

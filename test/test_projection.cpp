@@ -322,6 +322,64 @@ TEST(Projection, FisheyeForwardAtPoles) {
   EXPECT_NEAR(st.y, 0, kEps);
 }
 
+// =============== r_scale round-trip (overlap support) ===============
+
+TEST(Projection, FisheyeEARScaleRoundTrip) {
+  // With r_scale < 1, projection covers past the equator (z_hemi < 0).
+  // Verify forward→inverse round-trip for the overlap zone.
+  constexpr float kOverlap = 0.0872f;  // sin(5°)
+  float r_scale = 1.0f / std::sqrt(1.0f + kOverlap);
+
+  std::mt19937 rng(60);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  for (int i = 0; i < 2000; i++) {
+    float dx = dist(rng), dy = dist(rng), dz = dist(rng);
+    float len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (len < 1e-6f)
+      continue;
+    dx /= len;
+    dy /= len;
+    dz /= len;
+
+    bool is_upper = (dz >= 0);
+    float z_hemi = is_upper ? dz : -dz;
+    auto fwd = FisheyeEqualAreaForward(dx, dy, z_hemi, r_scale);
+
+    // With r_scale < 1, some directions near the equator will have r > 1 (beyond coverage)
+    float r2 = fwd.x * fwd.x + fwd.y * fwd.y;
+    if (r2 > 1.0f)
+      continue;  // skip out-of-coverage directions
+
+    auto inv = FisheyeEqualAreaInverse(fwd.x, fwd.y, r_scale);
+    ASSERT_TRUE(inv.valid);
+    ExpectUnitVector(inv);
+    float recovered_z = is_upper ? inv.z : -inv.z;
+    EXPECT_NEAR(inv.x, dx, kEps);
+    EXPECT_NEAR(inv.y, dy, kEps);
+    EXPECT_NEAR(recovered_z, dz, kEps);
+  }
+}
+
+TEST(Projection, FisheyeEARScaleEquatorInside) {
+  // With r_scale < 1, the equator (z_hemi=0) maps to r = r_scale < 1 (inside disc).
+  constexpr float kOverlap = 0.0872f;
+  float r_scale = 1.0f / std::sqrt(1.0f + kOverlap);
+  auto fwd = FisheyeEqualAreaForward(1, 0, 0, r_scale);
+  float r = std::sqrt(fwd.x * fwd.x + fwd.y * fwd.y);
+  EXPECT_NEAR(r, r_scale, kEps);
+}
+
+TEST(Projection, FisheyeEARScaleOverlapBoundary) {
+  // At the overlap boundary (z_hemi = -max_abs_dz), r should be ~1.0.
+  constexpr float kOverlap = 0.0872f;
+  float r_scale = 1.0f / std::sqrt(1.0f + kOverlap);
+  // Direction at overlap boundary: z = -kOverlap, rho = sqrt(1 - kOverlap^2)
+  float rho = std::sqrt(1.0f - kOverlap * kOverlap);
+  auto fwd = FisheyeEqualAreaForward(rho, 0, -kOverlap, r_scale);
+  float r = std::sqrt(fwd.x * fwd.x + fwd.y * fwd.y);
+  EXPECT_NEAR(r, 1.0f, 1e-4f);
+}
+
 // =============== MaxFov Verification ===============
 
 TEST(MaxFov, ReturnsCorrectLimits) {
