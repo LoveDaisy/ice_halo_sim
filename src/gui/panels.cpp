@@ -375,6 +375,44 @@ void RenderCrystalTab(GuiState& state) {
       DIRTY_IF(ImGui::InputInt3("Lower Idx", cr.lower_indices));
       ImGui::PopItemWidth();
     }
+
+    // Face Distance summary + popup editor
+    bool is_default_fd = true;
+    for (int i = 0; i < 6; i++) {
+      if (std::abs(cr.face_distance[i] - 1.0f) > 1e-6f) {
+        is_default_fd = false;
+        break;
+      }
+    }
+    ImGui::Text("Face Dist: %s", is_default_fd ? "Default" : "Custom");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Edit...##face_dist")) {
+      ImGui::OpenPopup("Face Distance");
+    }
+
+    if (ImGui::BeginPopupModal("Face Distance", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::Text("Distance from center to each prism face:");
+      ImGui::Spacing();
+      for (int i = 0; i < 6; i++) {
+        char label[16];
+        snprintf(label, sizeof(label), "Face %d", i + 1);
+        DIRTY_IF(SliderWithInput(label, &cr.face_distance[i], 0.01f, 5.0f, "%.3f", SliderScale::kLog));
+      }
+      ImGui::Spacing();
+      ImGui::Separator();
+      ImGui::Spacing();
+      if (ImGui::Button("Reset to Default")) {
+        for (int i = 0; i < 6; i++) {
+          cr.face_distance[i] = 1.0f;
+        }
+        state.MarkDirty();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Close")) {
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    }
   }
 
   if (ImGui::CollapsingHeader("Axis Distribution", ImGuiTreeNodeFlags_DefaultOpen)) {

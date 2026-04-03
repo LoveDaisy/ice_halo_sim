@@ -92,6 +92,19 @@ static json SerializeCrystal(const CrystalConfig& c) {
     j["shape"]["lower_indices"] = { c.lower_indices[0], c.lower_indices[1], c.lower_indices[2] };
   }
 
+  // face_distance: only write when non-default (not all 1.0)
+  bool is_default_fd = true;
+  for (int i = 0; i < 6; i++) {
+    if (std::abs(c.face_distance[i] - 1.0f) > 1e-6f) {
+      is_default_fd = false;
+      break;
+    }
+  }
+  if (!is_default_fd) {
+    j["shape"]["face_distance"] = { c.face_distance[0], c.face_distance[1], c.face_distance[2],
+                                    c.face_distance[3], c.face_distance[4], c.face_distance[5] };
+  }
+
   j["axis"]["zenith"] = SerializeAxisDist(c.zenith);
   j["axis"]["azimuth"] = SerializeAxisDist(c.azimuth);
   j["axis"]["roll"] = SerializeAxisDist(c.roll);
@@ -175,6 +188,18 @@ static CrystalConfig ParseCrystal(const json& j) {
       if (s.contains("lower_indices") && s["lower_indices"].is_array() && s["lower_indices"].size() == 3) {
         for (int i = 0; i < 3; i++)
           c.lower_indices[i] = s["lower_indices"][i].get<int>();
+      }
+    }
+    // face_distance: common to both Prism and Pyramid
+    if (s.contains("face_distance") && s["face_distance"].is_array()) {
+      size_t n = std::min(s["face_distance"].size(), static_cast<size_t>(6));
+      for (size_t i = 0; i < n; i++) {
+        auto& elem = s["face_distance"][i];
+        if (elem.is_number()) {
+          c.face_distance[i] = elem.get<float>();
+        } else if (elem.is_object()) {
+          c.face_distance[i] = elem.value("mean", 1.0f);
+        }
       }
     }
   }
@@ -352,6 +377,7 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
     dst.lower_h = c.lower_h;
     std::copy(std::begin(c.upper_indices), std::end(c.upper_indices), dst.upper_indices);
     std::copy(std::begin(c.lower_indices), std::end(c.lower_indices), dst.lower_indices);
+    std::copy(std::begin(c.face_distance), std::end(c.face_distance), dst.face_distance);
     FillAxisDist(c.zenith, &dst.zenith);
     FillAxisDist(c.azimuth, &dst.azimuth);
     FillAxisDist(c.roll, &dst.roll);

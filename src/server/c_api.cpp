@@ -169,6 +169,18 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
       j["shape"]["upper_indices"] = { cr.upper_indices[0], cr.upper_indices[1], cr.upper_indices[2] };
       j["shape"]["lower_indices"] = { cr.lower_indices[0], cr.lower_indices[1], cr.lower_indices[2] };
     }
+    // face_distance: only write when non-default
+    bool is_default_fd = true;
+    for (int fi = 0; fi < 6; fi++) {
+      if (std::abs(cr.face_distance[fi] - 1.0f) > 1e-6f) {
+        is_default_fd = false;
+        break;
+      }
+    }
+    if (!is_default_fd) {
+      j["shape"]["face_distance"] = { cr.face_distance[0], cr.face_distance[1], cr.face_distance[2],
+                                      cr.face_distance[3], cr.face_distance[4], cr.face_distance[5] };
+    }
     j["axis"]["zenith"] = AxisDistToJson(cr.zenith);
     j["axis"]["azimuth"] = AxisDistToJson(cr.azimuth);
     j["axis"]["roll"] = AxisDistToJson(cr.roll);
