@@ -133,7 +133,8 @@ typedef struct LUMICE_CrystalParam_ {
   int upper_indices[3];
   int lower_indices[3];
 
-  // Face distance (distance from center to each of the 6 prism faces)
+  // Face distance (distance from center to each of the 6 prism faces).
+  // Default: all 1.0f (regular hexagonal prism). Caller must initialize; memset(0) gives invalid geometry.
   float face_distance[6];
 
   // Axis distributions

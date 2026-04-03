@@ -443,10 +443,21 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
   const auto& shape = j.at("shape");
   ns::Mesh mesh;
 
+  // Parse face_distance if present (common to both prism and pyramid)
+  float dist[6]{ 1, 1, 1, 1, 1, 1 };
+  if (shape.contains("face_distance") && shape["face_distance"].is_array()) {
+    size_t n = std::min(shape["face_distance"].size(), static_cast<size_t>(6));
+    for (size_t i = 0; i < n; i++) {
+      if (shape["face_distance"][i].is_number()) {
+        dist[i] = shape["face_distance"][i].get<float>();
+      }
+    }
+  }
+
   try {
     if (type_str == "prism") {
       float h = shape.value("height", 1.0f);
-      mesh = ns::CreatePrismMesh(h);
+      mesh = ns::CreatePrismMesh(h, dist);
     } else if (type_str == "pyramid") {
       float prism_h = shape.value("prism_h", 1.0f);
       float upper_h = shape.value("upper_h", 0.0f);
@@ -458,7 +469,6 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
         int upper_idx4 = ui[2].get<int>();
         int lower_idx1 = li[0].get<int>();
         int lower_idx4 = li[2].get<int>();
-        float dist[6]{ 1, 1, 1, 1, 1, 1 };
         mesh = ns::CreatePyramidMesh(upper_idx1, upper_idx4, lower_idx1, lower_idx4, upper_h, prism_h, lower_h, dist);
       } else {
         mesh = ns::CreatePyramidMesh(upper_h, prism_h, lower_h);
