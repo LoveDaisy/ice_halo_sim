@@ -86,10 +86,11 @@ void LinearProject(const LensProjParam& p, const float* d, int* xy, size_t num =
   }
 }
 
-// Equal area fisheye: r = 2f·sin(θ/2)
+// Equal area fisheye: unified projection with r=1 at equator normalization.
+// Scale formula absorbs sqrt(2) factor: Type B normalization r = sqrt(2) * sin(theta/2).
 // NOTE: scale formula must match f→fov conversion in render_config.cpp (equal area model).
 void FisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.short_pix_ / 2.0f / std::sin(p.fov_ / 4.0f * math::kDegreeToRad);
+  float scale = p.short_pix_ / 2.0f / std::sqrt(2.0f) / std::sin(p.fov_ / 4.0f * math::kDegreeToRad);
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
@@ -101,22 +102,23 @@ void FisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, si
 
     float d_cam[3]{ -d[0], -d[1], -d[2] };
     p.rot_.ApplyInverse(d_cam);
-    auto proj = projection::FisheyeEqualAreaForward(d_cam[0], d_cam[1], d_cam[2]);
-    if (!proj.valid) {
+    if (d_cam[2] <= 0) {
       xy[0] = -1;
       xy[1] = -1;
       continue;
     }
+    auto proj = projection::FisheyeEqualAreaForward(d_cam[0], d_cam[1], d_cam[2]);
 
     xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
   }
 }
 
-// Equidistant fisheye: r = f·θ
+// Equidistant fisheye: unified projection with r=1 at equator normalization.
+// Scale formula absorbs pi/2 factor: Type B normalization r = theta / (pi/2).
 // NOTE: scale formula must match f→fov conversion in render_config.cpp (equidistant model).
 void FisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.short_pix_ / (p.fov_ * math::kDegreeToRad);
+  float scale = p.short_pix_ * math::kPi_2 / (p.fov_ * math::kDegreeToRad);
 
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
@@ -128,19 +130,20 @@ void FisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, 
 
     float d_cam[3]{ -d[0], -d[1], -d[2] };
     p.rot_.ApplyInverse(d_cam);
-    auto proj = projection::FisheyeEquidistantForward(d_cam[0], d_cam[1], d_cam[2]);
-    if (!proj.valid) {
+    if (d_cam[2] <= 0) {
       xy[0] = -1;
       xy[1] = -1;
       continue;
     }
+    auto proj = projection::FisheyeEquidistantForward(d_cam[0], d_cam[1], d_cam[2]);
 
     xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
   }
 }
 
-// Stereographic fisheye: r = 2f·tan(θ/2)
+// Stereographic fisheye: unified projection with r=1 at equator normalization.
+// Scale formula unchanged: Type B normalization r = tan(theta/2) is already r=1 at equator.
 // NOTE: scale formula must match f→fov conversion in render_config.cpp (stereographic model).
 void FisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   float scale = p.short_pix_ / 2.0f / std::tan(p.fov_ / 4.0f * math::kDegreeToRad);
@@ -155,12 +158,12 @@ void FisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy
 
     float d_cam[3]{ -d[0], -d[1], -d[2] };
     p.rot_.ApplyInverse(d_cam);
-    auto proj = projection::FisheyeStereographicForward(d_cam[0], d_cam[1], d_cam[2]);
-    if (!proj.valid) {
+    if (d_cam[2] <= 0) {
       xy[0] = -1;
       xy[1] = -1;
       continue;
     }
+    auto proj = projection::FisheyeStereographicForward(d_cam[0], d_cam[1], d_cam[2]);
 
     xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
@@ -170,35 +173,43 @@ void FisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy
 // Dual equal area fisheye: full hemisphere per circle, fov ignored.
 // No visible_range or behind-camera early exit — by design, all directions are projected.
 // Out-of-bounds pixel coordinates are handled by the caller (SpectrumToXyz bounds check).
+// Caller handles hemisphere selection: z flip + is_upper flag for DualFisheyeToPixel layout.
 void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    auto proj = projection::DualFisheyeEqualAreaForward(-d[0], -d[1], -d[2]);
+    float sky_x = -d[0], sky_y = -d[1], sky_z = -d[2];
+    bool is_upper = (sky_z >= 0);
+    float z_hemi = is_upper ? sky_z : -sky_z;
+    auto proj = projection::FisheyeEqualAreaForward(sky_x, sky_y, z_hemi);
     float fx, fy;
-    projection::DualFisheyeToPixel(proj.x, proj.y, proj.is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
+    projection::DualFisheyeToPixel(proj.x, proj.y, is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
     xy[0] = static_cast<int>(std::floor(fx + 0.5f));
     xy[1] = static_cast<int>(std::floor(fy + 0.5f));
   }
 }
 
 // Dual equidistant fisheye: full hemisphere per circle, fov ignored.
-// No visible_range or behind-camera early exit — by design, all directions are projected.
 void DualFisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    auto proj = projection::DualFisheyeEquidistantForward(-d[0], -d[1], -d[2]);
+    float sky_x = -d[0], sky_y = -d[1], sky_z = -d[2];
+    bool is_upper = (sky_z >= 0);
+    float z_hemi = is_upper ? sky_z : -sky_z;
+    auto proj = projection::FisheyeEquidistantForward(sky_x, sky_y, z_hemi);
     float fx, fy;
-    projection::DualFisheyeToPixel(proj.x, proj.y, proj.is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
+    projection::DualFisheyeToPixel(proj.x, proj.y, is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
     xy[0] = static_cast<int>(std::floor(fx + 0.5f));
     xy[1] = static_cast<int>(std::floor(fy + 0.5f));
   }
 }
 
 // Dual stereographic fisheye: full hemisphere per circle, fov ignored.
-// No visible_range or behind-camera early exit — by design, all directions are projected.
 void DualFisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    auto proj = projection::DualFisheyeStereographicForward(-d[0], -d[1], -d[2]);
+    float sky_x = -d[0], sky_y = -d[1], sky_z = -d[2];
+    bool is_upper = (sky_z >= 0);
+    float z_hemi = is_upper ? sky_z : -sky_z;
+    auto proj = projection::FisheyeStereographicForward(sky_x, sky_y, z_hemi);
     float fx, fy;
-    projection::DualFisheyeToPixel(proj.x, proj.y, proj.is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
+    projection::DualFisheyeToPixel(proj.x, proj.y, is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
     xy[0] = static_cast<int>(std::floor(fx + 0.5f));
     xy[1] = static_cast<int>(std::floor(fy + 0.5f));
   }
