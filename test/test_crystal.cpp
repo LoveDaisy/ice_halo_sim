@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstddef>
 #include <fstream>
+#include <limits>
+#include <utility>
 
 #include "config/config_manager.hpp"
 #include "core/crystal.hpp"
@@ -191,6 +194,108 @@ TEST_F(V3TestCrystal, PyramidMesh) {
     }
     ASSERT_TRUE(match);
   }
+}
+
+TEST_F(V3TestCrystal, PyramidFaceDistanceNormalDirection) {
+  // Pyramidal face normal direction should be independent of face distance.
+  // After the fix, polygon face normals for pyramidal faces must be identical
+  // between default dist and custom dist (the plane equation normal is determined
+  // solely by Miller index / alpha, not by dist).
+  float dist_default[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  float dist_custom[6]{ 0.5f, 1.0f, 1.5f, 0.8f, 1.2f, 0.7f };
+
+  auto c_default = Crystal::CreatePyramid(1, 1, 1, 1, 0.3f, 1.0f, 0.3f, dist_default);
+  auto c_custom = Crystal::CreatePyramid(1, 1, 1, 1, 0.3f, 1.0f, 0.3f, dist_custom);
+
+  auto pf_cnt_default = c_default.PolygonFaceCount();
+  auto pf_cnt_custom = c_custom.PolygonFaceCount();
+  ASSERT_EQ(pf_cnt_default, 20u);  // 2 basal + 6 prism + 6 upper pyr + 6 lower pyr
+  ASSERT_EQ(pf_cnt_custom, 20u);
+
+  const auto* pn_default = c_default.GetPolygonFaceNormal();
+  const auto* pn_custom = c_custom.GetPolygonFaceNormal();
+
+  // Polygon faces are ordered by plane equation index: 2 basal, 6 prism, 6 upper pyr, 6 lower pyr.
+  // Pyramidal faces are indices 8..19. Their normals must be identical between the two crystals.
+  for (size_t i = 8; i < 20; i++) {
+    float dot = Dot3(pn_default + i * 3, pn_custom + i * 3);
+    EXPECT_NEAR(dot, 1.0f, 1e-5f) << "Pyramidal polygon face " << i << ": normal direction changed with face distance";
+  }
+}
+
+TEST_F(V3TestCrystal, PyramidNonDefaultFaceDistanceMeshValid) {
+  // Pyramid with asymmetric face distances should produce a valid mesh.
+  float dist[6]{ 0.5f, 1.0f, 1.5f, 0.8f, 1.2f, 0.7f };
+  auto crystal = Crystal::CreatePyramid(1, 1, 1, 1, 0.3f, 1.0f, 0.3f, dist);
+
+  EXPECT_GT(crystal.TotalTriangles(), 0u);
+  EXPECT_GT(crystal.TotalVertices(), 0u);
+
+  // All normals should be unit vectors
+  const auto* face_n = crystal.GetTriangleNormal();
+  for (size_t i = 0; i < crystal.TotalTriangles(); i++) {
+    float len = Norm3(face_n + i * 3);
+    EXPECT_NEAR(len, 1.0f, 1e-4f) << "triangle " << i;
+  }
+
+  // All areas should be positive
+  const auto* face_area = crystal.GetTirangleArea();
+  for (size_t i = 0; i < crystal.TotalTriangles(); i++) {
+    EXPECT_GT(face_area[i], 0.0f) << "triangle " << i;
+  }
+
+  // Vertices should differ from default dist
+  float dist_default[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  auto c_default = Crystal::CreatePyramid(1, 1, 1, 1, 0.3f, 1.0f, 0.3f, dist_default);
+  bool any_different = false;
+  const auto* vtx = crystal.GetTriangleVtx();
+  const auto* vtx_default = c_default.GetTriangleVtx();
+  for (size_t i = 0; i < crystal.TotalTriangles() * 9 && !any_different; i++) {
+    if (std::abs(vtx[i] - vtx_default[i]) > 1e-5f) {
+      any_different = true;
+    }
+  }
+  EXPECT_TRUE(any_different) << "Non-default face distance should produce different vertices";
+}
+
+TEST_F(V3TestCrystal, PyramidZeroFaceDistanceBoundary) {
+  // dist=0 for one face should not crash, producing a valid (possibly degenerate) mesh.
+  float dist[6]{ 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  auto crystal = Crystal::CreatePyramid(1, 1, 1, 1, 0.3f, 1.0f, 0.3f, dist);
+
+  // Should not crash; mesh may be degenerate but must have vertices
+  EXPECT_GT(crystal.TotalVertices(), 0u);
+}
+
+TEST_F(V3TestCrystal, PyramidFaceDistanceZRange) {
+  // Verify that the z range (basal positions) is reasonable for non-default face distance.
+  float dist[6]{ 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f };
+  auto crystal = Crystal::CreatePyramid(1, 1, 1, 1, 0.5f, 1.0f, 0.5f, dist);
+
+  float dist_default[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  auto c_default = Crystal::CreatePyramid(1, 1, 1, 1, 0.5f, 1.0f, 0.5f, dist_default);
+
+  // Find z range for both crystals
+  auto find_z_range = [](const Crystal& c) -> std::pair<float, float> {
+    float z_min = std::numeric_limits<float>::max();
+    float z_max = std::numeric_limits<float>::lowest();
+    const auto* vtx = c.GetTriangleVtx();
+    for (size_t i = 0; i < c.TotalTriangles() * 3; i++) {
+      float z = vtx[i * 3 + 2];
+      z_min = std::min(z_min, z);
+      z_max = std::max(z_max, z);
+    }
+    return { z_min, z_max };
+  };
+
+  auto [z_min, z_max] = find_z_range(crystal);
+  auto [z_min_d, z_max_d] = find_z_range(c_default);
+
+  // Smaller face distance → smaller crystal → smaller z range
+  EXPECT_LT(z_max, z_max_d + 1e-5f);
+  EXPECT_GT(z_min, z_min_d - 1e-5f);
+  // z range should be positive (crystal has height)
+  EXPECT_GT(z_max - z_min, 0.1f);
 }
 
 }  // namespace
