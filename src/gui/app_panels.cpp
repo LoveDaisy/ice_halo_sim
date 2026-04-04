@@ -205,8 +205,8 @@ void RenderLeftPanel(float window_height) {
           // Display FBO texture — square, centered, with matching background fill
           ImVec2 avail = ImGui::GetContentRegionAvail();
           float button_h = ImGui::GetFrameHeightWithSpacing();
-          float area_h = std::max(avail.y - button_h, 150.0f);
-          float preview_size = std::min(avail.x, area_h);
+          float preview_size = avail.x;
+          float area_h = preview_size;
 
           // Fill the entire available area with the same background as the FBO
           ImVec2 area_start = ImGui::GetCursorScreenPos();
