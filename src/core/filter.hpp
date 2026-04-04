@@ -25,13 +25,12 @@ class Filter {
   Filter& operator=(const Filter& other) = default;
 
   bool Check(const RaySeg& ray) const;  // Put action logic here, and detail logic in InternalCheck()
-  virtual void InitCrystalSymmetry(const Crystal& /* crystal */) {};
+  virtual void InitCrystalSymmetry(const Crystal& /* crystal */, uint8_t /* symmetry */) {};
 
  protected:
   virtual bool InternalCheck(const RaySeg& ray) const = 0;
 
-  uint8_t symmetry_;
-  FilterConfig::Action action_;
+  FilterConfig::Action action_ = FilterConfig::kFilterIn;
 };
 
 }  // namespace lumice

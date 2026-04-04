@@ -362,7 +362,7 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
   }
 
   std::vector<IdType> reduced_rp = rp;
-  if (symmetry | FilterConfig::kSymP) {
+  if (symmetry & FilterConfig::kSymP) {
     IdType first_pri = kInvalidId;
     for (auto& x : reduced_rp) {
       if (x < 3) {
@@ -380,7 +380,7 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
     }
   }
 
-  if (symmetry | FilterConfig::kSymD) {
+  if (symmetry & FilterConfig::kSymD) {
     IdType pri1 = kInvalidId;
     IdType pri2 = kInvalidId;
     for (auto& x : reduced_rp) {
@@ -410,7 +410,7 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
     }
   }
 
-  if (symmetry | FilterConfig::kSymB) {
+  if (symmetry & FilterConfig::kSymB) {
     IdType b1 = kInvalidId;
     for (auto& x : reduced_rp) {
       if (x > 2) {

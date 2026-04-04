@@ -72,13 +72,13 @@ void to_json(nlohmann::json& j, const FilterConfig& f) {
   }
 
   std::string sym;
-  if (f.symmetry_ | FilterConfig::kSymP) {
+  if (f.symmetry_ & FilterConfig::kSymP) {
     sym += "P";
   }
-  if (f.symmetry_ | FilterConfig::kSymB) {
+  if (f.symmetry_ & FilterConfig::kSymB) {
     sym += "B";
   }
-  if (f.symmetry_ | FilterConfig::kSymD) {
+  if (f.symmetry_ & FilterConfig::kSymD) {
     sym += "D";
   }
   j["symmetry"] = sym;
