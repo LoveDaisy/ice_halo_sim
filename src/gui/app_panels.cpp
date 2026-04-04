@@ -204,29 +204,25 @@ void RenderLeftPanel(float window_height) {
 
           // Display FBO texture — square, centered, with matching background fill
           ImVec2 avail = ImGui::GetContentRegionAvail();
-          float button_h = ImGui::GetFrameHeightWithSpacing();
-          float area_h = std::max(avail.y - button_h, 40.0f);
-          float preview_size = std::min(avail.x, area_h);
+          float preview_size = avail.x;
 
-          // Fill the entire available area with the same background as the FBO
           ImVec2 area_start = ImGui::GetCursorScreenPos();
           ImDrawList* draw_list = ImGui::GetWindowDrawList();
-          draw_list->AddRectFilled(area_start, ImVec2(area_start.x + avail.x, area_start.y + area_h),
+          draw_list->AddRectFilled(area_start, ImVec2(area_start.x + preview_size, area_start.y + preview_size),
                                    IM_COL32(38, 38, 38, 255));  // Match FBO clear color (0.15)
-
-          // Center the image horizontally
-          float offset_x = (avail.x - preview_size) * 0.5f;
-          if (offset_x > 0.0f) {
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset_x);
-          }
 
           auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
           ImVec2 uv0(0, 1);  // Flip Y for OpenGL
           ImVec2 uv1(1, 0);
           ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
 
-          // Mouse interaction on the image
+          // Overlay an InvisibleButton on the image for mouse interaction.
+          // ImGui::Image has no item ID, so SetItemKeyOwner wouldn't work on it.
+          // InvisibleButton creates a proper interactive item with an ID.
+          ImGui::SetCursorScreenPos(area_start);
+          ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(preview_size, preview_size));
           if (ImGui::IsItemHovered()) {
+            ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
             ImGuiIO& io = ImGui::GetIO();
             if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
               ApplyTrackballRotation(io.MouseDelta.x, io.MouseDelta.y);
@@ -236,9 +232,6 @@ void RenderLeftPanel(float window_height) {
               g_crystal_zoom = std::max(0.5f, std::min(10.0f, g_crystal_zoom));
             }
           }
-
-          // Advance cursor past the filled area, then draw controls
-          ImGui::SetCursorScreenPos(ImVec2(area_start.x, area_start.y + area_h));
           ImGui::PushItemWidth(120.0f);
           ImGui::Combo("##CrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
           ImGui::PopItemWidth();
