@@ -360,8 +360,8 @@ static void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Default state: scroll at top (0). Panel should have scrollable content.
       float scroll_max = panel->ScrollMax.y;
       if (diag) {
-        fprintf(diag, "scroll_max=%.1f content=%.1f panel_h=%.1f scroll=%.1f\n",
-                scroll_max, panel->ContentSize.y, panel->Size.y, panel->Scroll.y);
+        fprintf(diag, "scroll_max=%.1f content=%.1f panel_h=%.1f scroll=%.1f\n", scroll_max, panel->ContentSize.y,
+                panel->Size.y, panel->Scroll.y);
       }
       IM_CHECK(scroll_max > 0.0f);  // Panel content must overflow for this test
 
@@ -377,11 +377,10 @@ static void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Use 85% of visible panel height to target the preview area.
       ImVec2 panel_pos = panel->Pos;
       float panel_w = panel->Size.x;
-      ImVec2 preview_center(panel_pos.x + panel_w * 0.5f,
-                            panel_pos.y + panel->Size.y * 0.85f);
+      ImVec2 preview_center(panel_pos.x + panel_w * 0.5f, panel_pos.y + panel->Size.y * 0.85f);
       if (diag) {
-        fprintf(diag, "mouse=(%.1f,%.1f) scroll_before=%.1f zoom_before=%.3f\n",
-                preview_center.x, preview_center.y, scroll_before, zoom_before);
+        fprintf(diag, "mouse=(%.1f,%.1f) scroll_before=%.1f zoom_before=%.3f\n", preview_center.x, preview_center.y,
+                scroll_before, zoom_before);
       }
 
       ctx->MouseMoveToPos(preview_center);
@@ -394,8 +393,8 @@ static void RegisterP1Tests(ImGuiTestEngine* engine) {
       float scroll_after = panel->Scroll.y;
       float zoom_after = gui::g_crystal_zoom;
       if (diag) {
-        fprintf(diag, "scroll: %.1f -> %.1f, zoom: %.3f -> %.3f\n",
-                scroll_before, scroll_after, zoom_before, zoom_after);
+        fprintf(diag, "scroll: %.1f -> %.1f, zoom: %.3f -> %.3f\n", scroll_before, scroll_after, zoom_before,
+                zoom_after);
         fclose(diag);
       }
 
