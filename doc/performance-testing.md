@@ -139,6 +139,36 @@ The summary table includes hardware context and dual-mode results:
 naturally factors in IPC, cache hierarchy, and memory bandwidth without requiring GHz
 normalization. `Efficiency` reveals scaling bottlenecks specific to each platform.
 
+### Historical Trend
+
+Benchmark results from pushes to `main` are automatically stored to the `gh-pages` branch
+using [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark).
+A Chart.js dashboard is available at:
+
+**https://lovedaisy.github.io/ice_halo_sim/bench/**
+
+The dashboard tracks 12 time-series (4 platforms × 3 metrics):
+
+| Metric | Unit | Description |
+|--------|------|-------------|
+| `<Platform> / Single` | rays/sec | Single-worker throughput (per-core efficiency) |
+| `<Platform> / Multi` | rays/sec | Multi-worker throughput (parallel pipeline) |
+| `<Platform> / Efficiency` | % | `multi_rps / (single_rps × workers) × 100` — self-referential parallel scaling |
+
+**How to read the charts**:
+- **Sudden drops** in Single/Multi rps may indicate code regression OR CI runner hardware change
+  (check the tooltip for CPU model)
+- **Efficiency** is immune to runner hardware changes — a drop in Efficiency reliably indicates
+  a parallel scaling regression (e.g., increased lock contention)
+- Alert threshold is set at 200% (performance must drop by >50% to trigger a commit comment)
+
+**Known limitations**:
+- History is only stored for `main` branch pushes; feature branch benchmarks appear in the
+  per-run summary table but are not tracked historically
+- CI runner hardware may change without notice, causing step changes in absolute rps metrics
+- The alert threshold is global (same 200% for all metrics); Efficiency regressions below the
+  threshold require manual inspection of the chart
+
 ## 2. GUI Perf Test (Hidden Window, No VSync)
 
 Automated GUI test driven by ImGui Test Engine. Uses a hidden window with `swapInterval(0)`,
