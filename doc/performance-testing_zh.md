@@ -129,7 +129,33 @@ summary 表包含硬件上下文和双模式结果：
 | Efficiency | `multi_rps / (single_rps × workers)`——并行扩展效率 |
 
 **注意**：`Single rps` 是跨平台比较最有意义的指标，因为它自然包含了 IPC、
-缓存层次和内存带��差异，无需 GHz 归一化。`Efficiency` 揭示各平台特有的扩展瓶颈。
+缓存层次和内存带宽差异，无需 GHz 归一化。`Efficiency` 揭示各平台特有的扩展瓶颈。
+
+### 历史趋势
+
+push 到 `main` 的 benchmark 结果会通过
+[github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark)
+自动存储到 `gh-pages` 分支。Chart.js 仪表盘地址：
+
+**https://lovedaisy.github.io/ice_halo_sim/bench/**
+
+仪表盘追踪 12 条时间序列（4 平台 × 3 指标）：
+
+| 指标 | 单位 | 说明 |
+|------|------|------|
+| `<Platform> / Single` | rays/sec | 单 worker 吞吐量（单核效率） |
+| `<Platform> / Multi` | rays/sec | 多 worker 吞吐量（并行管线） |
+| `<Platform> / Efficiency` | % | `multi_rps / (single_rps × workers) × 100`——自参照并行扩展指标 |
+
+**如何解读图表**：
+- Single/Multi rps **突然下降**可能是代码回归，也可能是 CI runner 硬件变更（查看 tooltip 中的 CPU 型号）
+- **Efficiency** 对 runner 硬件变化免疫——Efficiency 下降可靠地表示并行扩展回归（如锁竞争加剧）
+- 告警阈值设为 200%（性能下降超过 50% 才触发 commit 评论）
+
+**已知限制**：
+- 仅存储 `main` 分支 push 的历史；功能分支 benchmark 仅在 per-run summary 表中显示
+- CI runner 硬件可能不经通知就更换，导致绝对 rps 指标出现阶跃变化
+- 告警阈值是全局的（所有指标共享 200%）；Efficiency 回归低于阈值时需人工巡检图表
 
 ## 2. GUI 性能测试（隐藏窗口，无 VSync）
 
