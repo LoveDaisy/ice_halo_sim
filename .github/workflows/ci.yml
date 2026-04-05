@@ -207,8 +207,8 @@ jobs:
               RAYS=$(echo "$LINE" | jq -r '.rays')
               WALL=$(echo "$LINE" | jq -r '.wall_sec')
               RPS=$(echo "$LINE" | jq -r '.rays_per_sec')
-              RAYS_FMT=$(printf "%'d" "$RAYS" 2>/dev/null || echo "$RAYS")
-              RPS_FMT=$(printf "%'.0f" "$RPS" 2>/dev/null || echo "$RPS")
+              RAYS_FMT=$(echo "$RAYS" | rev | sed 's/[0-9]\{3\}/&,/g' | rev | sed 's/^,//')
+              RPS_FMT=$(printf "%.0f" "$RPS" | rev | sed 's/[0-9]\{3\}/&,/g' | rev | sed 's/^,//')
               echo "| $PLATFORM | $RAYS_FMT | $WALL | $RPS_FMT | OK |" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "| (unknown) | - | - | - | N/A (parse error) |" >> "$GITHUB_STEP_SUMMARY"
