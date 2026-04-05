@@ -584,10 +584,10 @@ class MyClass {
 The log level can be set programmatically via `lumice::SetLogLevel()`:
 
 ```cpp
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
-lumice::InitLogger();                              // Initialize (call once at program startup)
-lumice::SetLogLevel(spdlog::level::debug);         // Set to debug level
+// Global logger auto-initializes at kInfo level on first use; no explicit init needed.
+lumice::GetGlobalLogger().SetLevel(lumice::LogLevel::kDebug);  // Set to debug level
 ```
 
 ### Debugging Tools
