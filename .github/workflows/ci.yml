@@ -138,7 +138,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bench_out"
           echo "=== CLI Benchmark: ${{ matrix.name }} ==="
           SECONDS=0
-          build/src/Lumice.exe -f examples/bench_config.json -o "$RUNNER_TEMP/bench_out"
+          build/Release/bin/Lumice.exe -f examples/bench_config.json -o "$RUNNER_TEMP/bench_out"
           elapsed=$SECONDS
           echo "=== Wall time: ${elapsed}s ==="
 
