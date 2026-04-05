@@ -209,6 +209,32 @@ typedef struct LUMICE_Config_ {
 // out_reused: if non-NULL, set to 1 if consumers were reused (no buffer realloc), 0 if rebuilt.
 LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused);
 
+// =============== Configuration Parsing (JSON -> LUMICE_Config) ===============
+// Parse JSON into LUMICE_Config struct, enabling load-modify-commit workflows.
+//
+// Input format: accepts JSON in the format produced by LUMICE_CommitConfigStruct round-trip
+// (i.e., the subset of the full config format that LUMICE_Config can represent).
+// Specifically:
+//   - crystal: height/face_distance as scalars/arrays, axis as {type, mean, std} objects
+//   - filter: only type="raypath" supported; other types return LUMICE_ERR_INVALID_VALUE
+//   - render: lens/view/visible/background fields are ignored; only id/resolution/opacity/
+//     intensity_factor/norm_mode are parsed
+//   - spectrum: only string enumerations ("D65","D50","A","E"); arrays return LUMICE_ERR_INVALID_VALUE
+//
+// The spectrum field in the output struct points to static storage; the caller must not free it.
+// If the caller replaces spectrum with a custom string for CommitConfigStruct, the caller
+// manages that string's lifetime.
+//
+// For full-format JSON (user-written configs with distribution parameters, complex filters, etc.),
+// use LUMICE_CommitConfig() or LUMICE_CommitConfigFromFile() instead.
+
+// Parse a JSON string into LUMICE_Config. Returns LUMICE_ERR_INVALID_JSON on parse failure.
+LUMICE_ErrorCode LUMICE_ParseConfigString(const char* json_str, LUMICE_Config* out);
+
+// Parse a JSON file into LUMICE_Config. filename must be UTF-8 encoded.
+// Returns LUMICE_ERR_FILE_NOT_FOUND if the file cannot be opened.
+LUMICE_ErrorCode LUMICE_ParseConfigFile(const char* filename, LUMICE_Config* out);
+
 // =============== Results ===============
 // Unified pattern: (server, out, max_count) -> LUMICE_ErrorCode, sentinel-terminated.
 // out array size must be at least max_count + 1 (for sentinel slot).
