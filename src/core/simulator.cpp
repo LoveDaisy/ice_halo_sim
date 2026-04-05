@@ -327,7 +327,11 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       // 0. Total reflection.
       r.state_ = RaySeg::kStopped;
     } else if (r.fid_ < 0) {
-      // 1. Outgoing rays.
+      // 1. Outgoing candidates. Apply rotation first so filter operates in world-space.
+      // (w_ < 0 is already handled above, so fid_ < 0 implies w_ >= 0 — no double-rotation risk.)
+      r.crystal_rot_.Apply(r.d_);
+      r.crystal_rot_.Apply(r.p_);
+
       if (!filter->Check(r)) {
         // 1.1 Filter out. Marked as stopped.
         r.state_ = RaySeg::kStopped;
@@ -343,10 +347,14 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.state_ = RaySeg::kNormal;
     }
 
-    if (r.state_ != RaySeg::kNormal) {
+    // Tail rotation: only for total reflection (w_ < 0). Outgoing candidates (fid_ < 0) are
+    // already rotated above; normal rays (fid_ >= 0) stay in crystal-local coordinates.
+    if (r.w_ < 0) {
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
-    } else {
+    }
+
+    if (r.state_ == RaySeg::kNormal) {
       buffer_data[0].EmplaceBack(r);
     }
     if (r.state_ == RaySeg::kContinue) {
@@ -485,6 +493,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
 
       // For deterministic params, create/copy crystal once per ci iteration.
       size_t ci_crystal_id = kInfSize;
+      bool symmetry_initialized = false;
 
       for (size_t cn = 0; cn < crystal_ray_num[ci] && !stop_; cn += kSmallBatchRayNum) {  // for a same crystal
         size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - cn);
@@ -509,7 +518,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           }
         }
         const auto& curr_crystal = all_crystals[curr_crystal_id];
-        filter->InitCrystalSymmetry(curr_crystal, s.filter_.symmetry_);
+        // Skip redundant InitCrystalSymmetry for deterministic crystals: crystal is invariant
+        // across cn batches (same ci_crystal_id), so symmetry only needs initialization once.
+        if (!symmetry_initialized || !deterministic) {
+          filter->InitCrystalSymmetry(curr_crystal, s.filter_.symmetry_);
+          symmetry_initialized = true;
+        }
 
         // 1. Initialize data
         if (first_ms) {

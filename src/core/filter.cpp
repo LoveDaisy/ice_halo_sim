@@ -1,7 +1,7 @@
 #include "core/filter.hpp"
 
 #include <cmath>
-#include <set>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -41,7 +41,7 @@ class RaypathFilter : public Filter {
   }
 
  private:
-  std::set<size_t> candidate_hash_;
+  std::unordered_set<size_t> candidate_hash_;
   std::vector<IdType> rp_;
 };
 
@@ -72,7 +72,7 @@ class EntryExitFilter : public Filter {
   }
 
  private:
-  std::set<size_t> candidate_hash_;
+  std::unordered_set<size_t> candidate_hash_;
   IdType entry_;
   IdType exit_;
 };
@@ -88,10 +88,6 @@ class DirectionFilter : public Filter {
 
  protected:
   bool InternalCheck(const RaySeg& ray) const override {
-    if (ray.state_ != RaySeg::kOutgoing) {
-      return false;
-    }
-
     auto c = Dot3(d_, ray.d_);
     return c > radii_c_;
   }

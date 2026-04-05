@@ -196,6 +196,110 @@ TEST_F(FilterTest, HashConsistency) {
 }
 
 
+// DirectionFilter: basic direction matching
+TEST_F(FilterTest, DirectionFilter_BasicMatch) {
+  // Target direction: azimuth=0, elevation=0 → d_ = (1, 0, 0), radii=10°
+  DirectionFilterParam dp{};
+  dp.lon_ = 0.0f;
+  dp.lat_ = 0.0f;
+  dp.radii_ = 10.0f;
+
+  FilterConfig config{};
+  config.id_ = 1;
+  config.action_ = FilterConfig::kFilterIn;
+  config.param_ = SimpleFilterParam{ dp };
+
+  auto filter = Filter::Create(config);
+
+  // Ray along (1, 0, 0) — exactly matching
+  RaySeg r1{};
+  r1.d_[0] = 1.0f;
+  r1.d_[1] = 0.0f;
+  r1.d_[2] = 0.0f;
+  r1.state_ = RaySeg::kOutgoing;
+  EXPECT_TRUE(filter->Check(r1));
+
+  // Ray along (0, 1, 0) — 90° away, should fail
+  RaySeg r2{};
+  r2.d_[0] = 0.0f;
+  r2.d_[1] = 1.0f;
+  r2.d_[2] = 0.0f;
+  r2.state_ = RaySeg::kOutgoing;
+  EXPECT_FALSE(filter->Check(r2));
+}
+
+
+// DirectionFilter: no state guard — works regardless of state_
+TEST_F(FilterTest, DirectionFilter_NoStateGuard) {
+  DirectionFilterParam dp{};
+  dp.lon_ = 0.0f;
+  dp.lat_ = 0.0f;
+  dp.radii_ = 10.0f;
+
+  FilterConfig config{};
+  config.id_ = 1;
+  config.action_ = FilterConfig::kFilterIn;
+  config.param_ = SimpleFilterParam{ dp };
+
+  auto filter = Filter::Create(config);
+
+  // Matching direction with various non-kOutgoing states
+  RaySeg r{};
+  r.d_[0] = 1.0f;
+  r.d_[1] = 0.0f;
+  r.d_[2] = 0.0f;
+
+  r.state_ = RaySeg::kNormal;
+  EXPECT_TRUE(filter->Check(r));
+
+  r.state_ = RaySeg::kContinue;
+  EXPECT_TRUE(filter->Check(r));
+
+  r.state_ = RaySeg::kStopped;
+  EXPECT_TRUE(filter->Check(r));
+}
+
+
+// DirectionFilter: kFilterOut mode correctly excludes matching directions
+TEST_F(FilterTest, DirectionFilter_FilterOut) {
+  DirectionFilterParam dp{};
+  dp.lon_ = 0.0f;
+  dp.lat_ = 0.0f;
+  dp.radii_ = 10.0f;
+
+  FilterConfig config{};
+  config.id_ = 1;
+  config.action_ = FilterConfig::kFilterOut;
+  config.param_ = SimpleFilterParam{ dp };
+
+  auto filter = Filter::Create(config);
+
+  // Matching direction → should be excluded (Check returns false)
+  RaySeg r1{};
+  r1.d_[0] = 1.0f;
+  r1.d_[1] = 0.0f;
+  r1.d_[2] = 0.0f;
+  r1.state_ = RaySeg::kOutgoing;
+  EXPECT_FALSE(filter->Check(r1));
+
+  // Non-matching direction → should pass (Check returns true)
+  RaySeg r2{};
+  r2.d_[0] = 0.0f;
+  r2.d_[1] = 1.0f;
+  r2.d_[2] = 0.0f;
+  r2.state_ = RaySeg::kOutgoing;
+  EXPECT_TRUE(filter->Check(r2));
+
+  // kFilterOut + non-kOutgoing state + matching direction → should be excluded
+  RaySeg r3{};
+  r3.d_[0] = 1.0f;
+  r3.d_[1] = 0.0f;
+  r3.d_[2] = 0.0f;
+  r3.state_ = RaySeg::kContinue;
+  EXPECT_FALSE(filter->Check(r3));
+}
+
+
 // ComplexFilter: InitCrystalSymmetry propagation
 TEST_F(FilterTest, ComplexFilter_Propagation) {
   // Create a ComplexFilter with one OR group containing a single RaypathFilter
