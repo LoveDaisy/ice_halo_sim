@@ -493,6 +493,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
 
       // For deterministic params, create/copy crystal once per ci iteration.
       size_t ci_crystal_id = kInfSize;
+      bool symmetry_initialized = false;
 
       for (size_t cn = 0; cn < crystal_ray_num[ci] && !stop_; cn += kSmallBatchRayNum) {  // for a same crystal
         size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - cn);
@@ -517,7 +518,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           }
         }
         const auto& curr_crystal = all_crystals[curr_crystal_id];
-        filter->InitCrystalSymmetry(curr_crystal, s.filter_.symmetry_);
+        // Skip redundant InitCrystalSymmetry for deterministic crystals: crystal is invariant
+        // across cn batches (same ci_crystal_id), so symmetry only needs initialization once.
+        if (!symmetry_initialized || !deterministic) {
+          filter->InitCrystalSymmetry(curr_crystal, s.filter_.symmetry_);
+          symmetry_initialized = true;
+        }
 
         // 1. Initialize data
         if (first_ms) {
