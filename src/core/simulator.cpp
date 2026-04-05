@@ -327,7 +327,11 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       // 0. Total reflection.
       r.state_ = RaySeg::kStopped;
     } else if (r.fid_ < 0) {
-      // 1. Outgoing rays.
+      // 1. Outgoing candidates. Apply rotation first so filter operates in world-space.
+      // (w_ < 0 is already handled above, so fid_ < 0 implies w_ >= 0 — no double-rotation risk.)
+      r.crystal_rot_.Apply(r.d_);
+      r.crystal_rot_.Apply(r.p_);
+
       if (!filter->Check(r)) {
         // 1.1 Filter out. Marked as stopped.
         r.state_ = RaySeg::kStopped;
@@ -343,10 +347,14 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.state_ = RaySeg::kNormal;
     }
 
-    if (r.state_ != RaySeg::kNormal) {
+    // Tail rotation: only for total reflection (w_ < 0). Outgoing candidates (fid_ < 0) are
+    // already rotated above; normal rays (fid_ >= 0) stay in crystal-local coordinates.
+    if (r.w_ < 0) {
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
-    } else {
+    }
+
+    if (r.state_ == RaySeg::kNormal) {
       buffer_data[0].EmplaceBack(r);
     }
     if (r.state_ == RaySeg::kContinue) {

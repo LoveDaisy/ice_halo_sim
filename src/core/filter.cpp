@@ -88,10 +88,6 @@ class DirectionFilter : public Filter {
 
  protected:
   bool InternalCheck(const RaySeg& ray) const override {
-    if (ray.state_ != RaySeg::kOutgoing) {
-      return false;
-    }
-
     auto c = Dot3(d_, ray.d_);
     return c > radii_c_;
   }
