@@ -1,7 +1,9 @@
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -26,6 +28,7 @@ namespace {
 constexpr int kDefaultJpegQuality = 95;
 constexpr auto kPollInterval = std::chrono::seconds(1);
 constexpr auto kBenchmarkPollInterval = std::chrono::milliseconds(100);
+constexpr int kBenchmarkSingleRays = 2'000'000;
 
 void PrintUsage(const char* prog_name) {
   std::cout << "Usage: " << prog_name << " -f <config_file> [options]\n"
@@ -37,8 +40,8 @@ void PrintUsage(const char* prog_name) {
             << "  -o <dir>           Output directory for rendered images (default: current directory)\n"
             << "  --format <fmt>     Output image format: jpg or png (default: jpg)\n"
             << "  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)\n"
-            << "  --benchmark        Output a machine-readable [BENCHMARK] JSON line after simulation\n"
-            << "                     (skips image I/O, uses 100ms poll interval for timing precision)\n"
+            << "  --benchmark        Run dual-mode benchmark (single-worker + multi-worker) and output\n"
+            << "                     two [BENCHMARK] JSON lines with per-core and parallel efficiency data\n"
             << "  -v                 Verbose output (trace level logging)\n"
             << "  -d                 Debug output (debug level logging)\n"
             << "  -h                 Show this help message and exit\n"
@@ -93,6 +96,41 @@ void PrintStats(LUMICE_Server* server) {
   for (int i = 0; stats[i].sim_ray_num != 0; i++) {
     std::cout << "Stats: sim_rays=" << stats[i].sim_ray_num << ", crystals=" << stats[i].crystal_num << "\n";
   }
+}
+
+void RunBenchmarkPass(const std::string& config_str, int num_workers, const char* mode, int cores,
+                      LUMICE_LogLevel log_level) {
+  LUMICE_ServerConfig server_config{};
+  server_config.num_workers = num_workers;
+  auto* server = LUMICE_CreateServerEx(&server_config);
+  LUMICE_InitLogger(server);
+  LUMICE_SetLogLevel(server, log_level);
+
+  if (LUMICE_CommitConfig(server, config_str.c_str()) != LUMICE_OK) {
+    std::cerr << "Error: failed to commit config for " << mode << " benchmark pass\n";
+    LUMICE_DestroyServer(server);
+    return;
+  }
+
+  auto t_start = std::chrono::steady_clock::now();
+  while (true) {
+    std::this_thread::sleep_for(kBenchmarkPollInterval);
+    LUMICE_ServerState state{};
+    LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
+    if (LUMICE_QueryServerState(server, &state) == LUMICE_OK && state == LUMICE_SERVER_IDLE) {
+      if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK && stats[0].sim_ray_num > 0) {
+        auto t_end = std::chrono::steady_clock::now();
+        double wall_sec = std::chrono::duration<double>(t_end - t_start).count();
+        double rays_per_sec = static_cast<double>(stats[0].sim_ray_num) / wall_sec;
+        std::cout << "[BENCHMARK] {\"mode\": \"" << mode << "\", \"workers\": " << num_workers << ", \"cores\": " << cores
+                  << ", \"rays\": " << stats[0].sim_ray_num << ", \"wall_sec\": " << std::fixed << std::setprecision(2)
+                  << wall_sec << ", \"rays_per_sec\": " << std::fixed << std::setprecision(1) << rays_per_sec << "}\n";
+        break;
+      }
+    }
+  }
+
+  LUMICE_DestroyServer(server);
 }
 
 }  // namespace
@@ -196,6 +234,35 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // Benchmark mode: dual-pass (single-worker + multi-worker)
+  if (benchmark_mode) {
+    std::ifstream config_file(config_filename);
+    if (!config_file.is_open()) {
+      std::cerr << "Error: cannot open config file: " << config_filename.u8string() << "\n";
+      return 1;
+    }
+    nlohmann::json config_json;
+    try {
+      config_file >> config_json;
+    } catch (const nlohmann::json::parse_error& e) {
+      std::cerr << "Error: invalid JSON in config file: " << e.what() << "\n";
+      return 1;
+    }
+
+    auto cores = static_cast<int>(std::thread::hardware_concurrency());
+    int multi_workers = cores > 0 ? cores : 1;
+
+    // Pass 1: single worker, reduced rays
+    auto single_config = config_json;
+    single_config["scene"]["ray_num"] = kBenchmarkSingleRays;
+    RunBenchmarkPass(single_config.dump(), 1, "single", cores, log_level);
+
+    // Pass 2: multi worker, original ray count
+    RunBenchmarkPass(config_json.dump(), multi_workers, "multi", cores, log_level);
+
+    return 0;
+  }
+
   if (!std::filesystem::is_directory(output_dir)) {
     std::cerr << "Error: output directory does not exist: " << output_dir.u8string() << "\n";
     return 1;
@@ -211,39 +278,24 @@ int main(int argc, char** argv) {
   }
 
   auto t_start = std::chrono::steady_clock::now();
-  auto poll_interval = benchmark_mode ? kBenchmarkPollInterval : kPollInterval;
 
   while (true) {
-    std::this_thread::sleep_for(poll_interval);
-
-    if (!benchmark_mode) {
-      SaveRenderResults(server, output_dir, image_format, jpeg_quality);
-      PrintStats(server);
-    }
+    std::this_thread::sleep_for(kPollInterval);
+    SaveRenderResults(server, output_dir, image_format, jpeg_quality);
+    PrintStats(server);
 
     LUMICE_ServerState state{};
     LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
     if (LUMICE_QueryServerState(server, &state) == LUMICE_OK && state == LUMICE_SERVER_IDLE) {
-      // Guard against detecting initial IDLE before server starts (100ms poll window).
       if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK && stats[0].sim_ray_num > 0) {
-        auto t_end = std::chrono::steady_clock::now();
-        if (benchmark_mode) {
-          double wall_sec = std::chrono::duration<double>(t_end - t_start).count();
-          double rays_per_sec = static_cast<double>(stats[0].sim_ray_num) / wall_sec;
-          std::cout << "[BENCHMARK] {\"rays\": " << stats[0].sim_ray_num << ", \"wall_sec\": " << std::fixed
-                    << std::setprecision(2) << wall_sec << ", \"rays_per_sec\": " << std::fixed << std::setprecision(1)
-                    << rays_per_sec << "}\n";
-        }
         break;
       }
     }
   }
 
   // Final fetch after loop exit
-  if (!benchmark_mode) {
-    SaveRenderResults(server, output_dir, image_format, jpeg_quality);
-    PrintStats(server);
-  }
+  SaveRenderResults(server, output_dir, image_format, jpeg_quality);
+  PrintStats(server);
 
   LUMICE_DestroyServer(server);
   return 0;
