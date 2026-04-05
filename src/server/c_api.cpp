@@ -355,12 +355,14 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
     cr->prism_h = shape.at("prism_h").get<float>();
     cr->upper_h = shape.at("upper_h").get<float>();
     cr->lower_h = shape.at("lower_h").get<float>();
-    if (shape.contains("upper_indices")) {
+    if (shape.contains("upper_indices") && shape.at("upper_indices").is_array() &&
+        shape.at("upper_indices").size() == 3) {
       for (int k = 0; k < 3; k++) {
         cr->upper_indices[k] = shape.at("upper_indices")[k].get<int>();
       }
     }
-    if (shape.contains("lower_indices")) {
+    if (shape.contains("lower_indices") && shape.at("lower_indices").is_array() &&
+        shape.at("lower_indices").size() == 3) {
       for (int k = 0; k < 3; k++) {
         cr->lower_indices[k] = shape.at("lower_indices")[k].get<int>();
       }
@@ -562,6 +564,7 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE
 
 static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* out) {
   std::memset(out, 0, sizeof(LUMICE_Config));
+  out->spectrum = "D65";  // Safe default (memset leaves nullptr)
 
   // Crystals (required)
   if (!root.contains("crystal") || !root.at("crystal").is_array()) {
@@ -620,14 +623,14 @@ LUMICE_ErrorCode LUMICE_ParseConfigString(const char* json_str, LUMICE_Config* o
     return LUMICE_ERR_NULL_ARG;
   }
 
-  nlohmann::json root;
   try {
-    root = nlohmann::json::parse(json_str);
+    auto root = nlohmann::json::parse(json_str);
+    return JsonToConfig(root, out);
   } catch (const nlohmann::json::parse_error&) {
     return LUMICE_ERR_INVALID_JSON;
+  } catch (const nlohmann::json::exception&) {
+    return LUMICE_ERR_INVALID_VALUE;
   }
-
-  return JsonToConfig(root, out);
 }
 
 
@@ -641,14 +644,14 @@ LUMICE_ErrorCode LUMICE_ParseConfigFile(const char* filename, LUMICE_Config* out
     return LUMICE_ERR_FILE_NOT_FOUND;
   }
 
-  nlohmann::json root;
   try {
-    root = nlohmann::json::parse(file);
+    auto root = nlohmann::json::parse(file);
+    return JsonToConfig(root, out);
   } catch (const nlohmann::json::parse_error&) {
     return LUMICE_ERR_INVALID_JSON;
+  } catch (const nlohmann::json::exception&) {
+    return LUMICE_ERR_INVALID_VALUE;
   }
-
-  return JsonToConfig(root, out);
 }
 
 
