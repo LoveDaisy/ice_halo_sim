@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -122,9 +123,14 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
         auto t_end = std::chrono::steady_clock::now();
         double wall_sec = std::chrono::duration<double>(t_end - t_start).count();
         double rays_per_sec = static_cast<double>(stats[0].sim_ray_num) / wall_sec;
-        std::cout << "[BENCHMARK] {\"mode\": \"" << mode << "\", \"workers\": " << num_workers << ", \"cores\": " << cores
-                  << ", \"rays\": " << stats[0].sim_ray_num << ", \"wall_sec\": " << std::fixed << std::setprecision(2)
-                  << wall_sec << ", \"rays_per_sec\": " << std::fixed << std::setprecision(1) << rays_per_sec << "}\n";
+        nlohmann::json result;
+        result["mode"] = mode;
+        result["workers"] = num_workers;
+        result["cores"] = cores;
+        result["rays"] = stats[0].sim_ray_num;
+        result["wall_sec"] = std::round(wall_sec * 100.0) / 100.0;
+        result["rays_per_sec"] = std::round(rays_per_sec * 10.0) / 10.0;
+        std::cout << "[BENCHMARK] " << result.dump() << "\n";
         break;
       }
     }
