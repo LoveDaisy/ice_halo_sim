@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775391191772,
+  "lastUpdate": 1775407654832,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -16,137 +16,41 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "5c59b2323ab2654e0089f76c3a44e1b91d1c8ead",
-          "message": "Merge pull request #47 from LoveDaisy/fix/bench-charts\n\nfix(ci): split benchmark dashboard into 3 charts",
-          "timestamp": "2026-04-05T20:09:22+08:00",
-          "tree_id": "b137be20ec00adfbcc2e5e22e874dd8f21775313",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5c59b2323ab2654e0089f76c3a44e1b91d1c8ead"
+          "id": "8d7f4e2fda303a7cc2a7af7f40b3b510ee6c1c9f",
+          "message": "Merge pull request #48 from LoveDaisy/feat/refactor_logger\n\nrefactor(core): remove LUMICE_InitLogger, decouple logger from server lifecycle",
+          "timestamp": "2026-04-06T00:41:43+08:00",
+          "tree_id": "b7ee785ca4ba9c280432d5769395837a5f16a3df",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/8d7f4e2fda303a7cc2a7af7f40b3b510ee6c1c9f"
         },
-        "date": 1775391189124,
+        "date": 1775407654505,
         "tool": "customBiggerIsBetter",
         "benches": [
           {
             "name": "macOS ARM64",
-            "value": 430528.8,
+            "value": 355272.5,
             "unit": "rays/sec",
             "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
           },
           {
             "name": "Ubuntu ARM64",
-            "value": 627331.7,
+            "value": 608484.4,
             "unit": "rays/sec",
             "extra": "CPU: Neoverse-N2\\nCores: 4"
           },
           {
             "name": "Ubuntu x86_64",
-            "value": 423546.4,
+            "value": 432815.4,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
           },
           {
             "name": "Windows MSVC x86_64",
-            "value": 379433.6,
+            "value": 379474.8,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      }
-    ],
-    "Multi-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "5c59b2323ab2654e0089f76c3a44e1b91d1c8ead",
-          "message": "Merge pull request #47 from LoveDaisy/fix/bench-charts\n\nfix(ci): split benchmark dashboard into 3 charts",
-          "timestamp": "2026-04-05T20:09:22+08:00",
-          "tree_id": "b137be20ec00adfbcc2e5e22e874dd8f21775313",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5c59b2323ab2654e0089f76c3a44e1b91d1c8ead"
-        },
-        "date": 1775391190539,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 1128257.6,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1997043.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 1226654.8,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 1068849.6,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      }
-    ],
-    "Parallel Efficiency": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "5c59b2323ab2654e0089f76c3a44e1b91d1c8ead",
-          "message": "Merge pull request #47 from LoveDaisy/fix/bench-charts\n\nfix(ci): split benchmark dashboard into 3 charts",
-          "timestamp": "2026-04-05T20:09:22+08:00",
-          "tree_id": "b137be20ec00adfbcc2e5e22e874dd8f21775313",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5c59b2323ab2654e0089f76c3a44e1b91d1c8ead"
-        },
-        "date": 1775391191510,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 87.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 79.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 72.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 70.4,
-            "unit": "%"
           }
         ]
       }
     ]
   }
-};
+}
