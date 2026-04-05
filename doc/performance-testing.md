@@ -110,6 +110,20 @@ Every push triggers a CLI benchmark on all 4 CI platforms (Ubuntu x64/ARM, macOS
 Windows MSVC). Results are collected into a summary table visible on the workflow run page
 (`$GITHUB_STEP_SUMMARY`). See `.github/workflows/ci.yml` for details.
 
+The summary table includes hardware context:
+
+| Column | Description |
+|--------|-------------|
+| CPU | CPU model (auto-detected at runtime) |
+| Cores | Logical core count |
+| GHz | Max CPU frequency (`-` on macOS Apple Silicon — no CLI API available) |
+| Rays/sec | Raw throughput |
+| Rays/s/core | Normalized throughput per core — useful for same-architecture trend tracking |
+
+**Note**: `Rays/s/core` is meaningful for comparing runs on the same platform across commits.
+Cross-architecture comparison (e.g., ARM vs x86) requires considering IPC differences
+alongside the CPU model and GHz columns.
+
 ## 2. GUI Perf Test (Hidden Window, No VSync)
 
 Automated GUI test driven by ImGui Test Engine. Uses a hidden window with `swapInterval(0)`,

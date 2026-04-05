@@ -107,6 +107,19 @@ Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Sel
 benchmark。结果汇总到 workflow run 页面的 summary 表格（`$GITHUB_STEP_SUMMARY`）。
 详见 `.github/workflows/ci.yml`。
 
+summary 表包含硬件上下文：
+
+| 列 | 说明 |
+|----|------|
+| CPU | CPU 型号（运行时自动检测） |
+| Cores | 逻辑核心数 |
+| GHz | CPU 最大主频（macOS Apple Silicon 无命令行 API，显示 `-`） |
+| Rays/sec | 原始吞吐量 |
+| Rays/s/core | 每核心归一化吞吐量——适用于同架构跨提交趋势跟踪 |
+
+**注意**：`Rays/s/core` 适用于同平台不同提交的纵向比较。跨架构比较（如 ARM vs x86）
+需结合 CPU 型号和 GHz 列综合判断（不同架构的 IPC 差异显著）。
+
 ## 2. GUI 性能测试（隐藏窗口，无 VSync）
 
 由 ImGui Test Engine 驱动的自动化 GUI 测试。使用隐藏窗口和 `swapInterval(0)`，

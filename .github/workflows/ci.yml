@@ -105,13 +105,45 @@ jobs:
         timeout-minutes: 5
         shell: bash
         run: |
+          # Collect hardware info
+          CPU_MODEL="" ; CORES="" ; CPU_GHZ=""
+          case "$(uname -s)" in
+            Linux)
+              CPU_MODEL=$(lscpu | grep "Model name" | sed 's/.*: *//' | head -1) || true
+              CORES=$(nproc) || true
+              CPU_GHZ=$(lscpu | grep "CPU max MHz" | sed 's/.*: *//' | awk '{printf "%.2f", $1/1000}') || true
+              if [ -z "$CPU_GHZ" ]; then
+                CPU_GHZ=$(lscpu | grep "^CPU MHz" | sed 's/.*: *//' | awk '{printf "%.2f", $1/1000}') || true
+              fi
+              if [ -z "$CPU_GHZ" ]; then
+                CPU_GHZ=$(echo "$CPU_MODEL" | grep -oP '@ \K[\d.]+(?=GHz)') || true
+              fi
+              ;;
+            Darwin)
+              CPU_MODEL=$(sysctl -n machdep.cpu.brand_string) || true
+              CORES=$(sysctl -n hw.ncpu) || true
+              CPU_GHZ=""  # Apple Silicon: no CLI way to get frequency
+              ;;
+            *)  # Windows (MINGW/MSYS)
+              CPU_MODEL=$(powershell.exe -NoProfile -Command "(Get-CimInstance Win32_Processor).Name" | tr -d '\r') || true
+              CORES=$(powershell.exe -NoProfile -Command "(Get-CimInstance Win32_Processor).NumberOfLogicalProcessors" | tr -d '\r') || true
+              CPU_GHZ=$(powershell.exe -NoProfile -Command "'{0:F2}' -f ((Get-CimInstance Win32_Processor).MaxClockSpeed / 1000)" | tr -d '\r') || true
+              ;;
+          esac
+
+          # Run benchmark
           EXIT_CODE=0
           ${{ matrix.benchmark_bin }} --benchmark -f examples/bench_config.json -o /tmp > benchmark_stdout.txt 2>&1 || EXIT_CODE=$?
           if [ $EXIT_CODE -ne 0 ]; then
-            echo "[BENCHMARK] {\"error\": \"exit_code=$EXIT_CODE\"}" > benchmark-result.txt
+            echo '{"error": "exit_code='"$EXIT_CODE"'"}' > benchmark-result.txt
           else
-            grep '\[BENCHMARK\]' benchmark_stdout.txt | head -1 | \
-              sed 's/}$/, "platform": "${{ matrix.name }}"}/' > benchmark-result.txt
+            grep '\[BENCHMARK\]' benchmark_stdout.txt | head -1 | sed 's/^\[BENCHMARK\] //' | \
+              jq --arg p "${{ matrix.name }}" \
+                 --arg cpu "${CPU_MODEL:-unknown}" \
+                 --arg cores "${CORES:-0}" \
+                 --arg ghz "$CPU_GHZ" \
+                 '. + {platform: $p, cpu_model: $cpu, cores: ($cores|tonumber), cpu_ghz: (if $ghz == "" then null else ($ghz|tonumber) end)}' \
+              > benchmark-result.txt
           fi
           cat benchmark-result.txt
 
@@ -189,29 +221,41 @@ jobs:
 
       - name: Generate summary
         run: |
+          FMT_NUM() { echo "$1" | rev | sed 's/[0-9]\{3\}/&,/g' | rev | sed 's/^,//'; }
+
           echo "## CLI Benchmark Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Platform | Rays | Wall Time (s) | Rays/sec | Status |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|------|---------------|----------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Platform | CPU | Cores | GHz | Rays/sec | Rays/s/core | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|-----|-------|-----|----------|-------------|--------|" >> "$GITHUB_STEP_SUMMARY"
 
           for f in benchmarks/benchmark-*/benchmark-result.txt; do
             if [ ! -f "$f" ]; then
               continue
             fi
-            LINE=$(cat "$f" | sed 's/^\[BENCHMARK\] //')
+            LINE=$(cat "$f")
             if echo "$LINE" | jq -e '.error' > /dev/null 2>&1; then
               ERROR=$(echo "$LINE" | jq -r '.error')
-              echo "| (unknown) | - | - | - | CRASHED ($ERROR) |" >> "$GITHUB_STEP_SUMMARY"
+              echo "| (unknown) | - | - | - | - | - | CRASHED ($ERROR) |" >> "$GITHUB_STEP_SUMMARY"
             elif echo "$LINE" | jq -e '.rays' > /dev/null 2>&1; then
               PLATFORM=$(echo "$LINE" | jq -r '.platform // "unknown"')
-              RAYS=$(echo "$LINE" | jq -r '.rays')
-              WALL=$(echo "$LINE" | jq -r '.wall_sec')
+              CPU_MODEL=$(echo "$LINE" | jq -r '.cpu_model // "-"' | cut -c1-35)
+              CORES=$(echo "$LINE" | jq -r '.cores // "-"')
+              GHZ=$(echo "$LINE" | jq -r 'if .cpu_ghz then (.cpu_ghz | tostring) else "-" end')
               RPS=$(echo "$LINE" | jq -r '.rays_per_sec')
-              RAYS_FMT=$(echo "$RAYS" | rev | sed 's/[0-9]\{3\}/&,/g' | rev | sed 's/^,//')
-              RPS_FMT=$(printf "%.0f" "$RPS" | rev | sed 's/[0-9]\{3\}/&,/g' | rev | sed 's/^,//')
-              echo "| $PLATFORM | $RAYS_FMT | $WALL | $RPS_FMT | OK |" >> "$GITHUB_STEP_SUMMARY"
+
+              RPS_FMT=$(FMT_NUM "$(printf '%.0f' "$RPS")")
+
+              # Normalized: rays/sec/core
+              if [ "$CORES" != "-" ] && [ "$CORES" != "0" ] && [ "$CORES" != "null" ]; then
+                NORM=$(awk "BEGIN {printf \"%.0f\", $RPS / $CORES}")
+                NORM_FMT=$(FMT_NUM "$NORM")
+              else
+                NORM_FMT="-"
+              fi
+
+              echo "| $PLATFORM | $CPU_MODEL | $CORES | $GHZ | $RPS_FMT | $NORM_FMT | OK |" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "| (unknown) | - | - | - | N/A (parse error) |" >> "$GITHUB_STEP_SUMMARY"
+              echo "| (unknown) | - | - | - | - | - | N/A (parse error) |" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
 
