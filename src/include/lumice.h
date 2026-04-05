@@ -81,8 +81,14 @@ typedef struct LUMICE_StatsResult_ {
   // Sentinel: all zeros (sim_ray_num == 0)
 } LUMICE_StatsResult;
 
+// =============== Server Configuration ===============
+typedef struct LUMICE_ServerConfig_ {
+  int num_workers;  // Number of simulator worker threads. 0 = default (hardware_concurrency - 2)
+} LUMICE_ServerConfig;
+
 // =============== Server Lifecycle ===============
 LUMICE_Server* LUMICE_CreateServer(void);
+LUMICE_Server* LUMICE_CreateServerEx(const LUMICE_ServerConfig* config);
 void LUMICE_DestroyServer(LUMICE_Server* server);
 
 // =============== Logging ===============
