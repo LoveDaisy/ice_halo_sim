@@ -25,6 +25,7 @@ namespace {
 
 constexpr int kDefaultJpegQuality = 95;
 constexpr auto kPollInterval = std::chrono::seconds(1);
+constexpr auto kBenchmarkPollInterval = std::chrono::milliseconds(100);
 
 void PrintUsage(const char* prog_name) {
   std::cout << "Usage: " << prog_name << " -f <config_file> [options]\n"
@@ -36,6 +37,8 @@ void PrintUsage(const char* prog_name) {
             << "  -o <dir>           Output directory for rendered images (default: current directory)\n"
             << "  --format <fmt>     Output image format: jpg or png (default: jpg)\n"
             << "  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)\n"
+            << "  --benchmark        Output a machine-readable [BENCHMARK] JSON line after simulation\n"
+            << "                     (skips image I/O, uses 100ms poll interval for timing precision)\n"
             << "  -v                 Verbose output (trace level logging)\n"
             << "  -d                 Debug output (debug level logging)\n"
             << "  -h                 Show this help message and exit\n"
@@ -45,6 +48,7 @@ void PrintUsage(const char* prog_name) {
             << "  " << prog_name << " -f config.json -o /tmp/output\n"
             << "  " << prog_name << " -f config.json --format png\n"
             << "  " << prog_name << " -f config.json --quality 80\n"
+            << "  " << prog_name << " -f config.json --benchmark\n"
             << "  " << prog_name << " -f config.json -v\n";
 }
 
@@ -99,6 +103,7 @@ int main(int argc, char** argv) {
   std::filesystem::path output_dir = ".";
   std::string image_format = "jpg";
   int jpeg_quality = kDefaultJpegQuality;
+  bool benchmark_mode = false;
   auto log_level = LUMICE_LOG_INFO;
 
   for (int i = 1; i < argc; i++) {
@@ -147,6 +152,8 @@ int main(int argc, char** argv) {
         PrintUsage(argv[0]);
         return 1;
       }
+    } else if (arg == "--benchmark") {
+      benchmark_mode = true;
     } else if (arg == "-v") {
       log_level = LUMICE_LOG_VERBOSE;
     } else if (arg == "-d") {
@@ -203,21 +210,40 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  while (true) {
-    std::this_thread::sleep_for(kPollInterval);
+  auto t_start = std::chrono::steady_clock::now();
+  auto poll_interval = benchmark_mode ? kBenchmarkPollInterval : kPollInterval;
 
-    SaveRenderResults(server, output_dir, image_format, jpeg_quality);
-    PrintStats(server);
+  while (true) {
+    std::this_thread::sleep_for(poll_interval);
+
+    if (!benchmark_mode) {
+      SaveRenderResults(server, output_dir, image_format, jpeg_quality);
+      PrintStats(server);
+    }
 
     LUMICE_ServerState state{};
+    LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
     if (LUMICE_QueryServerState(server, &state) == LUMICE_OK && state == LUMICE_SERVER_IDLE) {
-      break;
+      // Guard against detecting initial IDLE before server starts (100ms poll window).
+      if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK && stats[0].sim_ray_num > 0) {
+        auto t_end = std::chrono::steady_clock::now();
+        if (benchmark_mode) {
+          double wall_sec = std::chrono::duration<double>(t_end - t_start).count();
+          double rays_per_sec = static_cast<double>(stats[0].sim_ray_num) / wall_sec;
+          std::cout << "[BENCHMARK] {\"rays\": " << stats[0].sim_ray_num << ", \"wall_sec\": " << std::fixed
+                    << std::setprecision(2) << wall_sec << ", \"rays_per_sec\": " << std::fixed << std::setprecision(1)
+                    << rays_per_sec << "}\n";
+        }
+        break;
+      }
     }
   }
 
   // Final fetch after loop exit
-  SaveRenderResults(server, output_dir, image_format, jpeg_quality);
-  PrintStats(server);
+  if (!benchmark_mode) {
+    SaveRenderResults(server, output_dir, image_format, jpeg_quality);
+    PrintStats(server);
+  }
 
   LUMICE_DestroyServer(server);
   return 0;

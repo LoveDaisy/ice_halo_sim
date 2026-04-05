@@ -47,24 +47,40 @@ CLI 基准测试和 GUI 性能测试均支持日志级别选项。
 
 使用 `examples/bench_config.json`：1 晶体，1 渲染器，D65 光谱，10M 光线，max_hits=8。
 
+### `--benchmark` 标志
+
+`--benchmark` 标志在模拟完成后输出一行机器可解析的 JSON：
+
+```
+[BENCHMARK] {"rays": 10000000, "wall_sec": 12.34, "rays_per_sec": 810372.8}
+```
+
+benchmark 模式的行为差异：
+- **不写图片**：跳过 `SaveRenderResults`，`wall_sec` 纯反映模拟耗时
+- **100ms 轮询间隔**（默认 1s）：将计时量化误差降至 ~0.1s
+- **IDLE 守卫**：等待 `sim_ray_num > 0` 后才接受 server IDLE，防止在快速轮询下提前退出
+
 ### macOS
 
 ```bash
 # 构建
 ./scripts/build.sh -j release
 
-# 运行（info 级别——精确吞吐量）
+# benchmark 模式（推荐——结构化输出，不写图片）
+./build/cmake_install/Lumice --benchmark -f examples/bench_config.json -o /tmp
+
+# 手动模式（info 级别——带图片输出）
 time ./build/cmake_install/Lumice -f examples/bench_config.json -o /tmp 2>&1 \
   | grep -E "Consume profile|Stats:"
 
-# 运行（debug 级别——Consume 分解）
+# 手动模式（debug 级别——Consume 分解）
 time ./build/cmake_install/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 \
   | grep -E "Consume profile|Stats:"
 ```
 
 关键输出：
-- `Consume profile` 行：每批次平均值及 filter/proj/accum 分解
-- `time` 墙钟时间 → 吞吐量 = 10M / 墙钟秒数
+- `--benchmark`：`[BENCHMARK]` JSON 行，含 rays/sec 和墙钟时间
+- 手动模式：`Consume profile` 行 + `time` 墙钟时间 → 吞吐量 = 10M / 墙钟秒数
 
 ### Windows
 
@@ -72,18 +88,24 @@ time ./build/cmake_install/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 
 
 ```bash
 # 下载 CI 产物
-gh run download <RUN_ID> --name LumiceGUITests-windows --dir /tmp/ci-win
+gh run download <RUN_ID> --name LumiceGUITests-windows-msvc --dir /tmp/ci-win
 
 # 传输二进制和配置到 Windows 机器
 scp /tmp/ci-win/bin/Lumice.exe <windows-host>:<path>/
 scp examples/bench_config.json <windows-host>:<path>/
 
-# 运行（SSH / PowerShell）
-.\Lumice.exe -f bench_config.json -o .
+# benchmark 模式（SSH / PowerShell）
+.\Lumice.exe --benchmark -f bench_config.json -o .
 
-# 测量墙钟时间（PowerShell）
+# 手动模式（PowerShell 墙钟时间）
 Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Select-Object TotalSeconds
 ```
+
+### CI 自动化基准测试
+
+每次 push 会在所有 4 个 CI 平台（Ubuntu x64/ARM、macOS ARM、Windows MSVC）上运行 CLI
+benchmark。结果汇总到 workflow run 页面的 summary 表格（`$GITHUB_STEP_SUMMARY`）。
+详见 `.github/workflows/ci.yml`。
 
 ## 2. GUI 性能测试（隐藏窗口，无 VSync）
 

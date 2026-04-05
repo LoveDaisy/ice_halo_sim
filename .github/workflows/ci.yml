@@ -24,22 +24,26 @@ jobs:
             os: ubuntu-24.04
             build_gui: ON
             cache_key: ubuntu-x64
+            benchmark_bin: build/Release/bin/Lumice
 
           - name: Ubuntu ARM64
             os: ubuntu-24.04-arm
             build_gui: OFF
             cache_key: ubuntu-arm64
+            benchmark_bin: build/Release/bin/Lumice
 
           - name: macOS ARM64
             os: macos-15
             build_gui: ON
             cache_key: macos-arm64
+            benchmark_bin: build/Release/bin/Lumice
 
           - name: Windows MSVC x86_64
             os: windows-2025
             build_gui: ON
             cache_key: windows-msvc-x64
             msvc: true
+            benchmark_bin: build/Release/bin/Lumice.exe
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }}
@@ -96,6 +100,29 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure -R LumiceUnitTest
 
+      - name: Benchmark
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          EXIT_CODE=0
+          ${{ matrix.benchmark_bin }} --benchmark -f examples/bench_config.json -o /tmp > benchmark_stdout.txt 2>&1 || EXIT_CODE=$?
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "[BENCHMARK] {\"error\": \"exit_code=$EXIT_CODE\"}" > benchmark-result.txt
+          else
+            grep '\[BENCHMARK\]' benchmark_stdout.txt | head -1 | \
+              sed 's/}$/, "platform": "${{ matrix.name }}"}/' > benchmark-result.txt
+          fi
+          cat benchmark-result.txt
+
+      - name: Upload benchmark result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-${{ matrix.cache_key }}
+          path: benchmark-result.txt
+          retention-days: 30
+
       - name: Upload GUI test binary (MSVC)
         if: matrix.msvc && matrix.build_gui == 'ON'
         uses: actions/upload-artifact@v7
@@ -148,6 +175,45 @@ jobs:
       - name: Run E2E tests
         run: pytest test/e2e/ -v
         timeout-minutes: 10
+
+  benchmark-summary:
+    if: always() && github.event_name == 'push'
+    needs: [build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download benchmark artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: benchmark-*
+          path: benchmarks
+
+      - name: Generate summary
+        run: |
+          echo "## CLI Benchmark Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Platform | Rays | Wall Time (s) | Rays/sec | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|------|---------------|----------|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+          for f in benchmarks/benchmark-*/benchmark-result.txt; do
+            if [ ! -f "$f" ]; then
+              continue
+            fi
+            LINE=$(cat "$f")
+            if echo "$LINE" | jq -e '.error' > /dev/null 2>&1; then
+              ERROR=$(echo "$LINE" | jq -r '.error')
+              echo "| (unknown) | - | - | - | CRASHED ($ERROR) |" >> "$GITHUB_STEP_SUMMARY"
+            elif echo "$LINE" | jq -e '.rays' > /dev/null 2>&1; then
+              PLATFORM=$(echo "$LINE" | jq -r '.platform // "unknown"')
+              RAYS=$(echo "$LINE" | jq -r '.rays')
+              WALL=$(echo "$LINE" | jq -r '.wall_sec')
+              RPS=$(echo "$LINE" | jq -r '.rays_per_sec')
+              RAYS_FMT=$(printf "%'d" "$RAYS" 2>/dev/null || echo "$RAYS")
+              RPS_FMT=$(printf "%'.0f" "$RPS" 2>/dev/null || echo "$RPS")
+              echo "| $PLATFORM | $RAYS_FMT | $WALL | $RPS_FMT | OK |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| (unknown) | - | - | - | N/A (parse error) |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
 
   format-check:
     if: github.event_name == 'push'

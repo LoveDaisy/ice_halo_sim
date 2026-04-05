@@ -49,24 +49,41 @@ Pure pipeline throughput test without GUI, VSync, or display overhead.
 
 Use `examples/bench_config.json`: 1 crystal, 1 render, D65 spectrum, 10M rays, max_hits=8.
 
+### `--benchmark` flag
+
+The `--benchmark` flag outputs a machine-readable JSON line after simulation completes:
+
+```
+[BENCHMARK] {"rays": 10000000, "wall_sec": 12.34, "rays_per_sec": 810372.8}
+```
+
+Behavior differences in benchmark mode:
+- **No image I/O**: `SaveRenderResults` is skipped, so `wall_sec` reflects pure simulation time
+- **100ms poll interval** (vs default 1s): reduces timing quantization error to ~0.1s
+- **IDLE guard**: waits for `sim_ray_num > 0` before accepting server IDLE, preventing
+  premature exit on fast poll
+
 ### macOS
 
 ```bash
 # Build
 ./scripts/build.sh -j release
 
-# Run (info level — accurate throughput)
+# Benchmark mode (recommended — structured output, no image I/O)
+./build/cmake_install/Lumice --benchmark -f examples/bench_config.json -o /tmp
+
+# Manual mode (info level — with image output)
 time ./build/cmake_install/Lumice -f examples/bench_config.json -o /tmp 2>&1 \
   | grep -E "Consume profile|Stats:"
 
-# Run (debug level — Consume breakdown)
+# Manual mode (debug level — Consume breakdown)
 time ./build/cmake_install/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 \
   | grep -E "Consume profile|Stats:"
 ```
 
 Key output:
-- `Consume profile` line: per-batch average with filter/proj/accum breakdown
-- `time` wall time → throughput = 10M / wall_seconds
+- `--benchmark`: `[BENCHMARK]` JSON line with rays/sec and wall time
+- Manual mode: `Consume profile` line + `time` wall time → throughput = 10M / wall_seconds
 
 ### Windows
 
@@ -74,18 +91,24 @@ Build via CI, then transfer the binary:
 
 ```bash
 # Download CI artifact
-gh run download <RUN_ID> --name LumiceGUITests-windows --dir /tmp/ci-win
+gh run download <RUN_ID> --name LumiceGUITests-windows-msvc --dir /tmp/ci-win
 
 # Transfer binary + config to Windows machine
 scp /tmp/ci-win/bin/Lumice.exe <windows-host>:<path>/
 scp examples/bench_config.json <windows-host>:<path>/
 
-# Run (via SSH / PowerShell)
-.\Lumice.exe -f bench_config.json -o .
+# Benchmark mode (via SSH / PowerShell)
+.\Lumice.exe --benchmark -f bench_config.json -o .
 
-# Measure wall time (PowerShell)
+# Manual mode (PowerShell wall time)
 Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Select-Object TotalSeconds
 ```
+
+### CI Automated Benchmark
+
+Every push triggers a CLI benchmark on all 4 CI platforms (Ubuntu x64/ARM, macOS ARM,
+Windows MSVC). Results are collected into a summary table visible on the workflow run page
+(`$GITHUB_STEP_SUMMARY`). See `.github/workflows/ci.yml` for details.
 
 ## 2. GUI Perf Test (Hidden Window, No VSync)
 
