@@ -89,4 +89,175 @@ TEST_F(RngTest, TriangleSample) {
   EXPECT_NEAR(dot, 0.0f, kFloatEps);
 }
 
+
+// ============================================================================
+// Jacobian-corrected spherical sampling tests
+// ============================================================================
+
+class SphericalSamplingTest : public ::testing::Test {
+ protected:
+  static constexpr size_t kSampleCount = 500000;
+  static constexpr float kDeg2Rad = lumice::math::kDegreeToRad;
+
+  // Compute the theoretical density for the Jacobian-corrected distribution:
+  //   p(theta) ∝ G(theta - theta0, sigma) × sin(theta)
+  // where theta = colatitude = pi/2 - latitude.
+  // Returns normalized density values at bin centers.
+  static std::vector<double> TheoreticalDensity(const std::vector<double>& bin_centers_deg, double zen_mean_deg,
+                                                double sigma_deg) {
+    double theta0 = zen_mean_deg * lumice::math::kDegreeToRad;
+    double sigma = sigma_deg * lumice::math::kDegreeToRad;
+    double bin_width_rad = (bin_centers_deg[1] - bin_centers_deg[0]) * lumice::math::kDegreeToRad;
+
+    std::vector<double> density(bin_centers_deg.size());
+    double total = 0;
+    for (size_t i = 0; i < bin_centers_deg.size(); i++) {
+      double theta = bin_centers_deg[i] * lumice::math::kDegreeToRad;
+      // Account for latitude wrap/fold at theta=0 (latitude=90°) and theta=pi (latitude=-90°).
+      // Samples with theta < 0 get reflected to -theta; samples with theta > pi get reflected to 2*pi-theta.
+      double g_direct = std::exp(-0.5 * (theta - theta0) * (theta - theta0) / (sigma * sigma));
+      double g_fold0 = std::exp(-0.5 * (-theta - theta0) * (-theta - theta0) / (sigma * sigma));
+      double g_fold_pi = std::exp(-0.5 * (2 * M_PI - theta - theta0) * (2 * M_PI - theta - theta0) / (sigma * sigma));
+      density[i] = (g_direct + g_fold0 + g_fold_pi) * std::sin(theta);
+      total += density[i] * bin_width_rad;
+    }
+    for (auto& d : density) {
+      d /= total;
+    }
+    return density;
+  }
+
+  // Sample N points and return colatitude distribution as bin counts.
+  static std::vector<int> SampleAndBin(double zen_mean_deg, double sigma_deg, const std::vector<double>& bin_edges_deg,
+                                       size_t n) {
+    lumice::AxisDistribution axis;
+    axis.latitude_dist.type = lumice::DistributionType::kGaussian;
+    axis.latitude_dist.mean = static_cast<float>(90.0 - zen_mean_deg);  // zenith → latitude
+    axis.latitude_dist.std = static_cast<float>(sigma_deg);
+    axis.azimuth_dist.type = lumice::DistributionType::kUniform;
+
+    std::vector<int> counts(bin_edges_deg.size() - 1, 0);
+    float lon_lat[2];
+    for (size_t i = 0; i < n; i++) {
+      lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+      double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
+      // Find bin.
+      for (size_t b = 0; b < counts.size(); b++) {
+        if (colatitude_deg >= bin_edges_deg[b] && colatitude_deg < bin_edges_deg[b + 1]) {
+          counts[b]++;
+          break;
+        }
+      }
+    }
+    return counts;
+  }
+};
+
+
+TEST_F(SphericalSamplingTest, JacobianCorrectedDistribution) {
+  // Test configurations: (zenith_mean_deg, sigma_deg)
+  struct Config {
+    double zen;
+    double sigma;
+    const char* label;
+  };
+  Config configs[] = {
+    { 0, 5, "polar (Rayleigh)" }, { 1, 2, "near-polar boundary" }, { 10, 5, "near-polar rejection" },
+    { 45, 5, "mid-latitude" },    { 90, 5, "equatorial" },
+  };
+
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(42);
+
+  for (const auto& cfg : configs) {
+    SCOPED_TRACE(cfg.label);
+
+    // Build bins in colatitude (zenith angle) space, centered around zen_mean.
+    double lo = std::max(0.0, cfg.zen - 4 * cfg.sigma);
+    double hi = std::min(180.0, cfg.zen + 4 * cfg.sigma);
+    constexpr int kNumBins = 20;
+    double bin_width = (hi - lo) / kNumBins;
+    std::vector<double> bin_edges;
+    std::vector<double> bin_centers;
+    for (int b = 0; b <= kNumBins; b++) {
+      bin_edges.push_back(lo + b * bin_width);
+    }
+    for (int b = 0; b < kNumBins; b++) {
+      bin_centers.push_back(lo + (b + 0.5) * bin_width);
+    }
+
+    auto counts = SampleAndBin(cfg.zen, cfg.sigma, bin_edges, kSampleCount);
+    auto theo = TheoreticalDensity(bin_centers, cfg.zen, cfg.sigma);
+
+    // Compare observed density vs theoretical within 2-sigma range.
+    double bin_width_rad = bin_width * kDeg2Rad;
+    for (int b = 0; b < kNumBins; b++) {
+      double dist_from_mean = std::abs(bin_centers[b] - cfg.zen);
+      if (dist_from_mean > 2 * cfg.sigma) {
+        continue;  // Skip tails — low sample count makes relative deviation noisy.
+      }
+      double observed_density = static_cast<double>(counts[b]) / (kSampleCount * bin_width_rad);
+      if (theo[b] < 1e-6) {
+        continue;  // Skip near-zero theoretical density.
+      }
+      double relative_dev = std::abs(observed_density - theo[b]) / theo[b];
+      EXPECT_LT(relative_dev, 0.05) << "bin center=" << bin_centers[b] << "° for " << cfg.label;
+    }
+  }
+}
+
+
+TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
+  // For each config, check that the sample mean of colatitude matches the theoretical expectation.
+  // For G(theta-theta0, sigma) × sin(theta), the mean is slightly shifted from theta0
+  // due to the sin(theta) weighting. We verify by comparing against a numerically computed expectation.
+  struct Config {
+    double zen;
+    double sigma;
+  };
+  Config configs[] = { { 0, 5 }, { 45, 5 }, { 90, 5 } };
+
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(123);
+
+  for (const auto& cfg : configs) {
+    lumice::AxisDistribution axis;
+    axis.latitude_dist.type = lumice::DistributionType::kGaussian;
+    axis.latitude_dist.mean = static_cast<float>(90.0 - cfg.zen);
+    axis.latitude_dist.std = static_cast<float>(cfg.sigma);
+    axis.azimuth_dist.type = lumice::DistributionType::kUniform;
+
+    // Numerically compute E[theta] for p(theta) ∝ [G(theta-theta0) + G(-theta-theta0)] × sin(theta),
+    // accounting for the latitude wrap/fold at theta=0.
+    double theta0 = cfg.zen * kDeg2Rad;
+    double sigma = cfg.sigma * kDeg2Rad;
+    double sum_theta = 0;
+    double sum_weight = 0;
+    constexpr int kIntegrationSteps = 10000;
+    for (int k = 0; k < kIntegrationSteps; k++) {
+      double theta = (0.001 + k * lumice::math::kPi / kIntegrationSteps);
+      double g_direct = std::exp(-0.5 * (theta - theta0) * (theta - theta0) / (sigma * sigma));
+      double g_fold = std::exp(-0.5 * (-theta - theta0) * (-theta - theta0) / (sigma * sigma));
+      double w = (g_direct + g_fold) * std::sin(theta);
+      sum_theta += theta * w;
+      sum_weight += w;
+    }
+    double expected_theta = sum_theta / sum_weight;
+
+    // Sample and compute mean colatitude.
+    double sample_sum = 0;
+    float lon_lat[2];
+    for (size_t i = 0; i < kSampleCount; i++) {
+      lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+      double colatitude = lumice::math::kPi_2 - lon_lat[1];
+      sample_sum += colatitude;
+    }
+    double sample_mean = sample_sum / kSampleCount;
+
+    // Allow 0.1° tolerance.
+    EXPECT_NEAR(sample_mean / kDeg2Rad, expected_theta / kDeg2Rad, 0.1)
+        << "zenith=" << cfg.zen << "° sigma=" << cfg.sigma << "°";
+  }
+}
+
 }  // namespace

@@ -416,7 +416,7 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
   //
   // kUniform latitude with non-uniform azimuth has the same Jacobian issue but is
   // extremely rare in practice. TODO: fix if needed in the future.
-  constexpr float kPolarThresholdRad = 10.0f * math::kDegreeToRad;
+  constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;  // Rayleigh only for colatitude < 0.5°
   constexpr int kMaxRejectionAttempts = 1000;
 
   bool need_jacobian = axis_dist.latitude_dist.type == DistributionType::kGaussian;
@@ -430,7 +430,7 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     latitude_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
     sigma_rad = axis_dist.latitude_dist.std * math::kDegreeToRad;
     colatitude_center = math::kPi_2 - std::abs(latitude_mean_rad);
-    use_rayleigh = (colatitude_center + 3.0f * sigma_rad) < kPolarThresholdRad;
+    use_rayleigh = colatitude_center < kPolarThresholdRad;
     if (!use_rayleigh) {
       rejection_m = std::cos(std::max(std::abs(latitude_mean_rad) - 3.0f * sigma_rad, 0.0f));
     }
