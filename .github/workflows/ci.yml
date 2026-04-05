@@ -192,7 +192,12 @@ jobs:
     if: always() && github.event_name == 'push'
     needs: [build]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
     steps:
+      - uses: actions/checkout@v6
+
       - name: Download benchmark artifacts
         uses: actions/download-artifact@v7
         with:
@@ -258,6 +263,75 @@ jobs:
 
             echo "| $PLATFORM | $CPU_MODEL | $CORES | $WORKERS | $SINGLE_RPS | $MULTI_RPS | $EFFICIENCY | OK |" >> "$GITHUB_STEP_SUMMARY"
           done
+
+      - name: Transform benchmark data
+        run: |
+          # benchmark-result.txt format:
+          # - Normal: 2-line NDJSON (mode=single + mode=multi)
+          # - Error:  1-line JSON with .error field
+          > bench-entries.ndjson
+          for f in benchmarks/benchmark-*/benchmark-result.txt; do
+            [ ! -f "$f" ] && continue
+            head -1 "$f" | jq -e '.error' > /dev/null 2>&1 && continue
+
+            SINGLE=$(jq -c 'select(.mode == "single")' "$f" 2>/dev/null | head -1)
+            MULTI=$(jq -c 'select(.mode == "multi")' "$f" 2>/dev/null | head -1)
+
+            S_RPS="" ; M_RPS=""
+            for LINE in "$SINGLE" "$MULTI"; do
+              [ -z "$LINE" ] && continue
+              PLATFORM=$(echo "$LINE" | jq -r '.platform')
+              MODE=$(echo "$LINE" | jq -r '.mode')
+              RPS=$(echo "$LINE" | jq -r '.rays_per_sec')
+              if [ "$RPS" = "null" ] || [ -z "$RPS" ]; then
+                echo "::warning::Skipping ${PLATFORM}/${MODE}: RPS is null"
+                continue
+              fi
+              CPU=$(echo "$LINE" | jq -r '.cpu_model // ""')
+              CORES=$(echo "$LINE" | jq -r '.cores // 0')
+              MODE_LABEL=$(echo "$MODE" | sed 's/single/Single/;s/multi/Multi/')
+              [ "$MODE" = "single" ] && S_RPS="$RPS"
+              [ "$MODE" = "multi" ] && M_RPS="$RPS"
+              jq -n --arg name "${PLATFORM} / ${MODE_LABEL}" \
+                    --arg unit "rays/sec" --argjson value "$RPS" \
+                    --arg extra "CPU: ${CPU}\nCores: ${CORES}" \
+                    '{name: $name, unit: $unit, value: $value, extra: $extra}' \
+                >> bench-entries.ndjson
+            done
+
+            # Efficiency: self-referential metric, immune to runner hardware changes
+            if [ -n "$S_RPS" ] && [ -n "$M_RPS" ] && [ -n "$MULTI" ]; then
+              WORKERS=$(echo "$MULTI" | jq -r '.workers')
+              PLATFORM=$(echo "$MULTI" | jq -r '.platform')
+              if [ "$WORKERS" != "0" ] && [ "$S_RPS" != "0" ]; then
+                EFF=$(awk "BEGIN {printf \"%.1f\", ($M_RPS / ($S_RPS * $WORKERS)) * 100}")
+                jq -n --arg name "${PLATFORM} / Efficiency" \
+                      --arg unit "%" --argjson value "$EFF" \
+                      '{name: $name, unit: $unit, value: $value}' \
+                  >> bench-entries.ndjson
+              fi
+            fi
+          done
+          jq -s '.' bench-entries.ndjson > bench-output.json
+          echo "Benchmark entries: $(jq length bench-output.json)"
+          cat bench-output.json
+          # Remove if empty — prevents Store step from running on no data
+          jq -e 'length > 0' bench-output.json > /dev/null 2>&1 || rm -f bench-output.json
+
+      - name: Store benchmark result
+        if: github.ref == 'refs/heads/main' && hashFiles('bench-output.json') != ''
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: customBiggerIsBetter
+          output-file-path: bench-output.json
+          benchmark-data-dir-path: bench
+          gh-pages-branch: gh-pages
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: "200%"
+          comment-on-alert: true
+          summary-always: true
+          max-items-in-chart: 100
 
   format-check:
     if: github.event_name == 'push'
