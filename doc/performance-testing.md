@@ -51,17 +51,30 @@ Use `examples/bench_config.json`: 1 crystal, 1 render, D65 spectrum, 10M rays, m
 
 ### `--benchmark` flag
 
-The `--benchmark` flag outputs a machine-readable JSON line after simulation completes:
+The `--benchmark` flag runs a dual-mode benchmark: a single-worker pass for per-core
+efficiency, followed by a multi-worker pass for parallel throughput. Two JSON lines are
+output:
 
 ```
-[BENCHMARK] {"rays": 10000000, "wall_sec": 12.34, "rays_per_sec": 810372.8}
+[BENCHMARK] {"mode": "single", "workers": 1, "cores": 8, "rays": 2000000, "wall_sec": 8.5, "rays_per_sec": 235294.1}
+[BENCHMARK] {"mode": "multi", "workers": 8, "cores": 8, "rays": 10000000, "wall_sec": 2.4, "rays_per_sec": 4166666.7}
 ```
+
+**Terminology**: "workers" refers to simulator threads (the threads performing ray tracing).
+Each server instance also has 2 internal threads (scene generation + data consumption), so
+total thread count = workers + 2.
+
+**Parallel efficiency** = `multi_rps / (single_rps × workers)`. A value near 1.0 indicates
+good scaling; lower values suggest lock contention, memory bandwidth saturation, or
+scheduling overhead.
 
 Behavior differences in benchmark mode:
+- **Dual-pass**: Two independent server instances are created sequentially, each with a
+  specific worker count (1 for single, `hardware_concurrency()` for multi)
+- **Reduced rays for single pass**: 2M rays (vs the config's original value) to limit CI
+  runtime, since single-worker execution is slower
 - **No image I/O**: `SaveRenderResults` is skipped, so `wall_sec` reflects pure simulation time
 - **100ms poll interval** (vs default 1s): reduces timing quantization error to ~0.1s
-- **IDLE guard**: waits for `sim_ray_num > 0` before accepting server IDLE, preventing
-  premature exit on fast poll
 
 ### macOS
 
@@ -82,7 +95,8 @@ time ./build/cmake_install/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 
 ```
 
 Key output:
-- `--benchmark`: `[BENCHMARK]` JSON line with rays/sec and wall time
+- `--benchmark`: Two `[BENCHMARK]` JSON lines (single-worker + multi-worker) with per-core
+  and parallel throughput data
 - Manual mode: `Consume profile` line + `time` wall time → throughput = 10M / wall_seconds
 
 ### Windows
@@ -110,19 +124,20 @@ Every push triggers a CLI benchmark on all 4 CI platforms (Ubuntu x64/ARM, macOS
 Windows MSVC). Results are collected into a summary table visible on the workflow run page
 (`$GITHUB_STEP_SUMMARY`). See `.github/workflows/ci.yml` for details.
 
-The summary table includes hardware context:
+The summary table includes hardware context and dual-mode results:
 
 | Column | Description |
 |--------|-------------|
 | CPU | CPU model (auto-detected at runtime) |
-| Cores | Logical core count |
-| GHz | Max CPU frequency (`-` on macOS Apple Silicon — no CLI API available) |
-| Rays/sec | Raw throughput |
-| Rays/s/core | Normalized throughput per core — useful for same-architecture trend tracking |
+| Cores | Logical core count (`hardware_concurrency()`) |
+| Workers | Simulator worker threads used for multi-worker pass |
+| Single rps | Single-worker rays/sec (per-core efficiency) |
+| Multi rps | Multi-worker rays/sec (parallel throughput) |
+| Efficiency | `multi_rps / (single_rps × workers)` — parallel scaling efficiency |
 
-**Note**: `Rays/s/core` is meaningful for comparing runs on the same platform across commits.
-Cross-architecture comparison (e.g., ARM vs x86) requires considering IPC differences
-alongside the CPU model and GHz columns.
+**Note**: `Single rps` is the most meaningful metric for cross-platform comparison, as it
+naturally factors in IPC, cache hierarchy, and memory bandwidth without requiring GHz
+normalization. `Efficiency` reveals scaling bottlenecks specific to each platform.
 
 ## 2. GUI Perf Test (Hidden Window, No VSync)
 

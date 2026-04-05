@@ -49,16 +49,26 @@ CLI 基准测试和 GUI 性能测试均支持日志级别选项。
 
 ### `--benchmark` 标志
 
-`--benchmark` 标志在模拟完成后输出一行机器可解析的 JSON：
+`--benchmark` 标志运行双模式基准测试：先用单 worker 测量单核效率，再用全 worker 测量
+并行吞吐量。输出两行 JSON：
 
 ```
-[BENCHMARK] {"rays": 10000000, "wall_sec": 12.34, "rays_per_sec": 810372.8}
+[BENCHMARK] {"mode": "single", "workers": 1, "cores": 8, "rays": 2000000, "wall_sec": 8.5, "rays_per_sec": 235294.1}
+[BENCHMARK] {"mode": "multi", "workers": 8, "cores": 8, "rays": 10000000, "wall_sec": 2.4, "rays_per_sec": 4166666.7}
 ```
+
+**术语**："workers"指 simulator 线程（执行光线追踪的线程）。每个 server 实例还有 2 个
+内部线程（场景生成 + 数据消费），总线程数 = workers + 2。
+
+**并行扩展效率** = `multi_rps / (single_rps × workers)`。接近 1.0 表示良好扩展；
+偏低说明存在锁竞争、内存带宽饱和或调度开销。
 
 benchmark 模式的行为差异：
+- **双趟运行**：依次创建两个独立 server 实例，指定不同 worker 数
+  （单 worker pass 为 1，多 worker pass 为 `hardware_concurrency()`）
+- **单 worker pass 光线数减少**：2M（而非配置原始值），以限制 CI 耗时
 - **不写图片**：跳过 `SaveRenderResults`，`wall_sec` 纯反映模拟耗时
 - **100ms 轮询间隔**（默认 1s）：将计时量化误差降至 ~0.1s
-- **IDLE 守卫**：等待 `sim_ray_num > 0` 后才接受 server IDLE，防止在快速轮询下提前退出
 
 ### macOS
 
@@ -79,7 +89,7 @@ time ./build/cmake_install/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 
 ```
 
 关键输出：
-- `--benchmark`：`[BENCHMARK]` JSON 行，含 rays/sec 和墙钟时间
+- `--benchmark`：两行 `[BENCHMARK]` JSON（单 worker + 多 worker），含单核和并行吞吐量数据
 - 手动模式：`Consume profile` 行 + `time` 墙钟时间 → 吞吐量 = 10M / 墙钟秒数
 
 ### Windows
@@ -107,18 +117,19 @@ Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Sel
 benchmark。结果汇总到 workflow run 页面的 summary 表格（`$GITHUB_STEP_SUMMARY`）。
 详见 `.github/workflows/ci.yml`。
 
-summary 表包含硬件上下文：
+summary 表包含硬件上下文和双模式结果：
 
 | 列 | 说明 |
 |----|------|
 | CPU | CPU 型号（运行时自动检测） |
-| Cores | 逻辑核心数 |
-| GHz | CPU 最大主频（macOS Apple Silicon 无命令行 API，显示 `-`） |
-| Rays/sec | 原始吞吐量 |
-| Rays/s/core | 每核心归一化吞吐量——适用于同架构跨提交趋势跟踪 |
+| Cores | 逻辑核心数（`hardware_concurrency()`） |
+| Workers | 多 worker pass 使用的 simulator 线程数 |
+| Single rps | 单 worker rays/sec（单核效率） |
+| Multi rps | 多 worker rays/sec（并行吞吐���） |
+| Efficiency | `multi_rps / (single_rps × workers)`——并行扩展效率 |
 
-**注意**：`Rays/s/core` 适用于同平台不同提交的纵向比较。跨架构比较（如 ARM vs x86）
-需结合 CPU 型号和 GHz 列综合判断（不同架构的 IPC 差异显著）。
+**注意**：`Single rps` 是跨平台比较最有意义的指标，因为它自然包含了 IPC、
+缓存层次和内存带��差异，无需 GHz 归一化。`Efficiency` 揭示各平台特有的扩展瓶颈。
 
 ## 2. GUI 性能测试（隐藏窗口，无 VSync）
 
