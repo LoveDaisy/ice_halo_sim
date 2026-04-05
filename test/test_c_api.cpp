@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -276,19 +277,19 @@ TEST(ParseConfigApi, ParseModifyCommit) {
 TEST(ParseConfigApi, ParseConfigFile) {
   auto json = MakeMinimalConfigJson();
 
-  // Write to temp file
-  const char* tmp_path = "/tmp/lumice_test_config.json";
+  // Write to temp file (cross-platform: use std::filesystem::temp_directory_path)
+  auto tmp_path = std::filesystem::temp_directory_path() / "lumice_test_config.json";
   {
     std::ofstream f(tmp_path);
     f << json;
   }
 
   LUMICE_Config config{};
-  EXPECT_EQ(LUMICE_ParseConfigFile(tmp_path, &config), LUMICE_OK);
+  EXPECT_EQ(LUMICE_ParseConfigFile(tmp_path.u8string().c_str(), &config), LUMICE_OK);
   EXPECT_EQ(config.crystal_count, 1);
   EXPECT_FLOAT_EQ(config.crystals[0].height, 1.5f);
 
-  std::remove(tmp_path);
+  std::filesystem::remove(tmp_path);
 }
 
 
