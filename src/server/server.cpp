@@ -53,7 +53,7 @@ class TicketMutex {
 // =============== ServerImpl ===============
 class ServerImpl {
  public:
-  ServerImpl();
+  explicit ServerImpl(int num_workers = 0);
   ~ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
@@ -162,10 +162,11 @@ void ServerImpl::RunPersistentLoop(F work_fn) {
 }
 
 
-ServerImpl::ServerImpl()
+ServerImpl::ServerImpl(int num_workers)
     : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
-  for (int i = 0; i < kDefaultSimulatorCnt; i++) {
+  int worker_count = num_workers > 0 ? num_workers : kDefaultSimulatorCnt;
+  for (int i = 0; i < worker_count; i++) {
     simulators_.emplace_back(scene_queue_, data_queue_);
   }
 
@@ -682,6 +683,8 @@ void ServerImpl::SetLogLevel(LogLevel level) {
 
 // =============== Server ===============
 Server::Server() : impl_(std::make_shared<ServerImpl>()) {}
+
+Server::Server(int num_workers) : impl_(std::make_shared<ServerImpl>(num_workers)) {}
 
 Error Server::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   if (!impl_) {

@@ -173,10 +173,17 @@ class ServerImpl;
 class Server {
  public:
   /**
-   * @brief Construct a new Server
+   * @brief Construct a new Server with default worker count
    * @note The server starts running immediately after construction
    */
   Server();
+
+  /**
+   * @brief Construct a new Server with specified worker count
+   * @param num_workers Number of simulator worker threads. 0 = default (hardware_concurrency - 2)
+   * @note The server starts running immediately after construction
+   */
+  explicit Server(int num_workers);
 
   /**
    * @brief Commit configuration from string

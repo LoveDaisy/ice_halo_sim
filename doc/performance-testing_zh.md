@@ -47,24 +47,50 @@ CLI 基准测试和 GUI 性能测试均支持日志级别选项。
 
 使用 `examples/bench_config.json`：1 晶体，1 渲染器，D65 光谱，10M 光线，max_hits=8。
 
+### `--benchmark` 标志
+
+`--benchmark` 标志运行双模式基准测试：先用单 worker 测量单核效率，再用全 worker 测量
+并行吞吐量。输出两行 JSON：
+
+```
+[BENCHMARK] {"mode": "single", "workers": 1, "cores": 8, "rays": 2000000, "wall_sec": 8.5, "rays_per_sec": 235294.1}
+[BENCHMARK] {"mode": "multi", "workers": 8, "cores": 8, "rays": 10000000, "wall_sec": 2.4, "rays_per_sec": 4166666.7}
+```
+
+**术语**："workers"指 simulator 线程（执行光线追踪的线程）。每个 server 实例还有 2 个
+内部线程（场景生成 + 数据消费），总线程数 = workers + 2。
+
+**并行扩展效率** = `multi_rps / (single_rps × workers)`。接近 1.0 表示良好扩展；
+偏低说明存在锁竞争、内存带宽饱和或调度开销。
+
+benchmark 模式的行为差异：
+- **双趟运行**：依次创建两个独立 server 实例，指定不同 worker 数
+  （单 worker pass 为 1，多 worker pass 为 `hardware_concurrency()`）
+- **单 worker pass 光线数减少**：2M（而非配置原始值），以限制 CI 耗时
+- **不写图片**：跳过 `SaveRenderResults`，`wall_sec` 纯反映模拟耗时
+- **100ms 轮询间隔**（默认 1s）：将计时量化误差降至 ~0.1s
+
 ### macOS
 
 ```bash
 # 构建
 ./scripts/build.sh -j release
 
-# 运行（info 级别——精确吞吐量）
+# benchmark 模式（推荐——结构化输出，不写图片）
+./build/cmake_install/Lumice --benchmark -f examples/bench_config.json -o /tmp
+
+# 手动模式（info 级别——带图片输出）
 time ./build/cmake_install/Lumice -f examples/bench_config.json -o /tmp 2>&1 \
   | grep -E "Consume profile|Stats:"
 
-# 运行（debug 级别——Consume 分解）
+# 手动模式（debug 级别——Consume 分解）
 time ./build/cmake_install/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 \
   | grep -E "Consume profile|Stats:"
 ```
 
 关键输出：
-- `Consume profile` 行：每批次平均值及 filter/proj/accum 分解
-- `time` 墙钟时间 → 吞吐量 = 10M / 墙钟秒数
+- `--benchmark`：两行 `[BENCHMARK]` JSON（单 worker + 多 worker），含单核和并行吞吐量数据
+- 手动模式：`Consume profile` 行 + `time` 墙钟时间 → 吞吐量 = 10M / 墙钟秒数
 
 ### Windows
 
@@ -72,18 +98,38 @@ time ./build/cmake_install/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 
 
 ```bash
 # 下载 CI 产物
-gh run download <RUN_ID> --name LumiceGUITests-windows --dir /tmp/ci-win
+gh run download <RUN_ID> --name LumiceGUITests-windows-msvc --dir /tmp/ci-win
 
 # 传输二进制和配置到 Windows 机器
 scp /tmp/ci-win/bin/Lumice.exe <windows-host>:<path>/
 scp examples/bench_config.json <windows-host>:<path>/
 
-# 运行（SSH / PowerShell）
-.\Lumice.exe -f bench_config.json -o .
+# benchmark 模式（SSH / PowerShell）
+.\Lumice.exe --benchmark -f bench_config.json -o .
 
-# 测量墙钟时间（PowerShell）
+# 手动模式（PowerShell 墙钟时间）
 Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Select-Object TotalSeconds
 ```
+
+### CI 自动化基准测试
+
+每次 push 会在所有 4 个 CI 平台（Ubuntu x64/ARM、macOS ARM、Windows MSVC）上运行 CLI
+benchmark。结果汇总到 workflow run 页面的 summary 表格（`$GITHUB_STEP_SUMMARY`）。
+详见 `.github/workflows/ci.yml`。
+
+summary 表包含硬件上下文和双模式结果：
+
+| 列 | 说明 |
+|----|------|
+| CPU | CPU 型号（运行时自动检测） |
+| Cores | 逻辑核心数（`hardware_concurrency()`） |
+| Workers | 多 worker pass 使用的 simulator 线程数 |
+| Single rps | 单 worker rays/sec（单核效率） |
+| Multi rps | 多 worker rays/sec（并行吞吐���） |
+| Efficiency | `multi_rps / (single_rps × workers)`——并行扩展效率 |
+
+**注意**：`Single rps` 是跨平台比较最有意义的指标，因为它自然包含了 IPC、
+缓存层次和内存带��差异，无需 GHz 归一化。`Efficiency` 揭示各平台特有的扩展瓶颈。
 
 ## 2. GUI 性能测试（隐藏窗口，无 VSync）
 

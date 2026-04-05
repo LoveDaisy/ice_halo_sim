@@ -49,24 +49,55 @@ Pure pipeline throughput test without GUI, VSync, or display overhead.
 
 Use `examples/bench_config.json`: 1 crystal, 1 render, D65 spectrum, 10M rays, max_hits=8.
 
+### `--benchmark` flag
+
+The `--benchmark` flag runs a dual-mode benchmark: a single-worker pass for per-core
+efficiency, followed by a multi-worker pass for parallel throughput. Two JSON lines are
+output:
+
+```
+[BENCHMARK] {"mode": "single", "workers": 1, "cores": 8, "rays": 2000000, "wall_sec": 8.5, "rays_per_sec": 235294.1}
+[BENCHMARK] {"mode": "multi", "workers": 8, "cores": 8, "rays": 10000000, "wall_sec": 2.4, "rays_per_sec": 4166666.7}
+```
+
+**Terminology**: "workers" refers to simulator threads (the threads performing ray tracing).
+Each server instance also has 2 internal threads (scene generation + data consumption), so
+total thread count = workers + 2.
+
+**Parallel efficiency** = `multi_rps / (single_rps × workers)`. A value near 1.0 indicates
+good scaling; lower values suggest lock contention, memory bandwidth saturation, or
+scheduling overhead.
+
+Behavior differences in benchmark mode:
+- **Dual-pass**: Two independent server instances are created sequentially, each with a
+  specific worker count (1 for single, `hardware_concurrency()` for multi)
+- **Reduced rays for single pass**: 2M rays (vs the config's original value) to limit CI
+  runtime, since single-worker execution is slower
+- **No image I/O**: `SaveRenderResults` is skipped, so `wall_sec` reflects pure simulation time
+- **100ms poll interval** (vs default 1s): reduces timing quantization error to ~0.1s
+
 ### macOS
 
 ```bash
 # Build
 ./scripts/build.sh -j release
 
-# Run (info level — accurate throughput)
+# Benchmark mode (recommended — structured output, no image I/O)
+./build/cmake_install/Lumice --benchmark -f examples/bench_config.json -o /tmp
+
+# Manual mode (info level — with image output)
 time ./build/cmake_install/Lumice -f examples/bench_config.json -o /tmp 2>&1 \
   | grep -E "Consume profile|Stats:"
 
-# Run (debug level — Consume breakdown)
+# Manual mode (debug level — Consume breakdown)
 time ./build/cmake_install/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 \
   | grep -E "Consume profile|Stats:"
 ```
 
 Key output:
-- `Consume profile` line: per-batch average with filter/proj/accum breakdown
-- `time` wall time → throughput = 10M / wall_seconds
+- `--benchmark`: Two `[BENCHMARK]` JSON lines (single-worker + multi-worker) with per-core
+  and parallel throughput data
+- Manual mode: `Consume profile` line + `time` wall time → throughput = 10M / wall_seconds
 
 ### Windows
 
@@ -74,18 +105,39 @@ Build via CI, then transfer the binary:
 
 ```bash
 # Download CI artifact
-gh run download <RUN_ID> --name LumiceGUITests-windows --dir /tmp/ci-win
+gh run download <RUN_ID> --name LumiceGUITests-windows-msvc --dir /tmp/ci-win
 
 # Transfer binary + config to Windows machine
 scp /tmp/ci-win/bin/Lumice.exe <windows-host>:<path>/
 scp examples/bench_config.json <windows-host>:<path>/
 
-# Run (via SSH / PowerShell)
-.\Lumice.exe -f bench_config.json -o .
+# Benchmark mode (via SSH / PowerShell)
+.\Lumice.exe --benchmark -f bench_config.json -o .
 
-# Measure wall time (PowerShell)
+# Manual mode (PowerShell wall time)
 Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Select-Object TotalSeconds
 ```
+
+### CI Automated Benchmark
+
+Every push triggers a CLI benchmark on all 4 CI platforms (Ubuntu x64/ARM, macOS ARM,
+Windows MSVC). Results are collected into a summary table visible on the workflow run page
+(`$GITHUB_STEP_SUMMARY`). See `.github/workflows/ci.yml` for details.
+
+The summary table includes hardware context and dual-mode results:
+
+| Column | Description |
+|--------|-------------|
+| CPU | CPU model (auto-detected at runtime) |
+| Cores | Logical core count (`hardware_concurrency()`) |
+| Workers | Simulator worker threads used for multi-worker pass |
+| Single rps | Single-worker rays/sec (per-core efficiency) |
+| Multi rps | Multi-worker rays/sec (parallel throughput) |
+| Efficiency | `multi_rps / (single_rps × workers)` — parallel scaling efficiency |
+
+**Note**: `Single rps` is the most meaningful metric for cross-platform comparison, as it
+naturally factors in IPC, cache hierarchy, and memory bandwidth without requiring GHz
+normalization. `Efficiency` reveals scaling bottlenecks specific to each platform.
 
 ## 2. GUI Perf Test (Hidden Window, No VSync)
 

@@ -24,27 +24,26 @@ jobs:
             os: ubuntu-24.04
             build_gui: ON
             cache_key: ubuntu-x64
+            benchmark_bin: build/Release/bin/Lumice
 
           - name: Ubuntu ARM64
             os: ubuntu-24.04-arm
             build_gui: OFF
             cache_key: ubuntu-arm64
+            benchmark_bin: build/Release/bin/Lumice
 
           - name: macOS ARM64
             os: macos-15
             build_gui: ON
             cache_key: macos-arm64
-
-          - name: Windows MinGW x86_64
-            os: windows-2025
-            build_gui: ON
-            cache_key: windows-x64
+            benchmark_bin: build/Release/bin/Lumice
 
           - name: Windows MSVC x86_64
             os: windows-2025
             build_gui: ON
             cache_key: windows-msvc-x64
             msvc: true
+            benchmark_bin: build/Release/bin/Lumice.exe
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }}
@@ -64,15 +63,6 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       # GLAD2 runs the Python code generator at CMake configure time (needs Jinja2).
-      # Set Python_ROOT_DIR so CMake's find_package(Python) uses the same Python.
-      - name: Install GLAD2 Python dependencies
-        if: runner.os == 'Windows' && matrix.build_gui == 'ON' && !matrix.msvc
-        shell: bash
-        run: |
-          python -m pip install jinja2
-          echo "Python_ROOT_DIR=$(cygpath -w "$(dirname "$(which python)")")" >> "$GITHUB_ENV"
-          echo "LUMICE_PYTHON_ARGS=-DPython_EXECUTABLE=$(cygpath -w "$(which python)")" >> "$GITHUB_ENV"
-
       - name: Install GLAD2 Python dependencies (MSVC)
         if: matrix.msvc && matrix.build_gui == 'ON'
         shell: pwsh
@@ -107,41 +97,43 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Verify Windows exe has no MinGW runtime dependencies
-        if: runner.os == 'Windows' && !matrix.msvc
-        shell: bash
-        run: |
-          echo "=== DLL imports for Lumice.exe ==="
-          objdump -p build/src/Lumice.exe | grep "DLL Name" || true
-          if objdump -p build/src/Lumice.exe | grep -qi "libgcc\|libstdc++\|libwinpthread"; then
-            echo "ERROR: MinGW runtime DLLs found in imports!"
-            exit 1
-          fi
-          echo "OK: no MinGW runtime DLLs"
-          if [ "${{ matrix.build_gui }}" = "ON" ]; then
-            echo "=== DLL imports for LumiceGUI.exe ==="
-            objdump -p build/src/gui/LumiceGUI.exe | grep "DLL Name" || true
-            if objdump -p build/src/gui/LumiceGUI.exe | grep -qi "libgcc\|libstdc++\|libwinpthread"; then
-              echo "ERROR: MinGW runtime DLLs found in imports!"
-              exit 1
-            fi
-            echo "OK: no MinGW runtime DLLs"
-          fi
-
       - name: Test
         run: ctest --test-dir build --output-on-failure -R LumiceUnitTest
 
-      - name: Upload GUI test binary (MinGW)
-        if: matrix.os == 'windows-2025' && matrix.build_gui == 'ON' && !matrix.msvc
+      - name: Benchmark
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          # Collect CPU model for reference
+          CPU_MODEL=""
+          case "$(uname -s)" in
+            Linux)  CPU_MODEL=$(lscpu | grep "Model name" | sed 's/.*: *//' | head -1) || true ;;
+            Darwin) CPU_MODEL=$(sysctl -n machdep.cpu.brand_string) || true ;;
+            *)      CPU_MODEL=$(powershell.exe -NoProfile -Command "(Get-CimInstance Win32_Processor).Name" | tr -d '\r') || true ;;
+          esac
+
+          # Run dual-mode benchmark (outputs two [BENCHMARK] JSON lines)
+          EXIT_CODE=0
+          ${{ matrix.benchmark_bin }} --benchmark -f examples/bench_config.json -o /tmp > benchmark_stdout.txt 2>&1 || EXIT_CODE=$?
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo '{"error": "exit_code='"$EXIT_CODE"'"}' > benchmark-result.txt
+          else
+            # Extract both benchmark lines, inject platform and cpu_model into each
+            grep '\[BENCHMARK\]' benchmark_stdout.txt | sed 's/^\[BENCHMARK\] //' | \
+              jq --arg p "${{ matrix.name }}" --arg cpu "${CPU_MODEL:-unknown}" \
+                 '. + {platform: $p, cpu_model: $cpu}' \
+              > benchmark-result.txt
+          fi
+          cat benchmark-result.txt
+
+      - name: Upload benchmark result
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: LumiceGUITests-windows
-          path: |
-            build/Release/bin/LumiceGUITests.exe
-            build/Release/bin/LumiceGUI.exe
-            build/Release/bin/Lumice.exe
-            build/Release/lib/lumice.lib
-          retention-days: 7
+          name: benchmark-${{ matrix.cache_key }}
+          path: benchmark-result.txt
+          retention-days: 30
 
       - name: Upload GUI test binary (MSVC)
         if: matrix.msvc && matrix.build_gui == 'ON'
@@ -195,6 +187,77 @@ jobs:
       - name: Run E2E tests
         run: pytest test/e2e/ -v
         timeout-minutes: 10
+
+  benchmark-summary:
+    if: always() && github.event_name == 'push'
+    needs: [build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download benchmark artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: benchmark-*
+          path: benchmarks
+
+      - name: Generate summary
+        run: |
+          FMT_NUM() { echo "$1" | rev | sed 's/[0-9]\{3\}/&,/g' | rev | sed 's/^,//'; }
+
+          echo "## CLI Benchmark Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Platform | CPU | Cores | Workers | Single rps | Multi rps | Efficiency | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|-----|-------|---------|------------|-----------|------------|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+          for f in benchmarks/benchmark-*/benchmark-result.txt; do
+            if [ ! -f "$f" ]; then
+              continue
+            fi
+
+            # Check for error (first line)
+            FIRST_LINE=$(head -1 "$f")
+            if echo "$FIRST_LINE" | jq -e '.error' > /dev/null 2>&1; then
+              ERROR=$(echo "$FIRST_LINE" | jq -r '.error')
+              echo "| (unknown) | - | - | - | - | - | - | CRASHED ($ERROR) |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            # Parse single and multi mode lines
+            SINGLE_LINE=$(jq -c 'select(.mode == "single")' "$f" 2>/dev/null | head -1)
+            MULTI_LINE=$(jq -c 'select(.mode == "multi")' "$f" 2>/dev/null | head -1)
+
+            if [ -z "$SINGLE_LINE" ] && [ -z "$MULTI_LINE" ]; then
+              echo "| (unknown) | - | - | - | - | - | - | N/A (parse error) |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            # Extract fields from whichever line is available
+            REF_LINE="${MULTI_LINE:-$SINGLE_LINE}"
+            PLATFORM=$(echo "$REF_LINE" | jq -r '.platform // "unknown"')
+            CPU_MODEL=$(echo "$REF_LINE" | jq -r '.cpu_model // "-"' | cut -c1-35)
+            CORES=$(echo "$REF_LINE" | jq -r '.cores // "-"')
+            WORKERS=$(echo "$REF_LINE" | jq -r '.workers // "-"')
+
+            SINGLE_RPS="-" ; MULTI_RPS="-" ; EFFICIENCY="-"
+            if [ -n "$SINGLE_LINE" ]; then
+              S_RPS=$(echo "$SINGLE_LINE" | jq -r '.rays_per_sec')
+              SINGLE_RPS=$(FMT_NUM "$(printf '%.0f' "$S_RPS")")
+            fi
+            if [ -n "$MULTI_LINE" ]; then
+              M_RPS=$(echo "$MULTI_LINE" | jq -r '.rays_per_sec')
+              MULTI_RPS=$(FMT_NUM "$(printf '%.0f' "$M_RPS")")
+            fi
+
+            # Compute parallel efficiency: multi_rps / (single_rps × workers)
+            if [ -n "$SINGLE_LINE" ] && [ -n "$MULTI_LINE" ]; then
+              EFFICIENCY=$(awk "BEGIN {
+                w = $(echo "$MULTI_LINE" | jq -r '.workers');
+                if (w > 0 && $S_RPS > 0) printf \"%.0f%%\", ($M_RPS / ($S_RPS * w)) * 100;
+                else print \"N/A\"
+              }")
+            fi
+
+            echo "| $PLATFORM | $CPU_MODEL | $CORES | $WORKERS | $SINGLE_RPS | $MULTI_RPS | $EFFICIENCY | OK |" >> "$GITHUB_STEP_SUMMARY"
+          done
 
   format-check:
     if: github.event_name == 'push'
