@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -295,6 +296,362 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
     *out_reused = reused ? 1 : 0;
   }
   return LUMICE_OK;
+}
+
+
+// =============== Configuration Parsing (JSON -> LUMICE_Config) ===============
+// Symmetric inverse of ConfigToJson. Decomposed into per-section helpers.
+
+static LUMICE_ErrorCode JsonToAxisDist(const nlohmann::json& j, LUMICE_AxisDist* out) {
+  if (!j.is_object() || !j.contains("type") || !j.contains("mean") || !j.contains("std")) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  auto type_str = j.at("type").get<std::string>();
+  if (type_str == "gauss") {
+    out->type = 0;
+  } else if (type_str == "uniform") {
+    out->type = 1;
+  } else {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  out->mean = j.at("mean").get<float>();
+  out->std = j.at("std").get<float>();
+  return LUMICE_OK;
+}
+
+static const char* MapSpectrumString(const std::string& s) {
+  static const std::map<std::string, const char*> kSpectrumMap = {
+    { "D65", "D65" },
+    { "D50", "D50" },
+    { "A", "A" },
+    { "E", "E" },
+  };
+  auto it = kSpectrumMap.find(s);
+  return it != kSpectrumMap.end() ? it->second : nullptr;
+}
+
+static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalParam* cr) {
+  if (!cj.contains("id") || !cj.contains("type")) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  cr->id = cj.at("id").get<int>();
+
+  auto type_str = cj.at("type").get<std::string>();
+  if (type_str == "prism") {
+    cr->type = 0;
+    if (!cj.contains("shape") || !cj.at("shape").contains("height")) {
+      return LUMICE_ERR_MISSING_FIELD;
+    }
+    cr->height = cj.at("shape").at("height").get<float>();
+  } else if (type_str == "pyramid") {
+    cr->type = 1;
+    if (!cj.contains("shape")) {
+      return LUMICE_ERR_MISSING_FIELD;
+    }
+    const auto& shape = cj.at("shape");
+    if (!shape.contains("prism_h") || !shape.contains("upper_h") || !shape.contains("lower_h")) {
+      return LUMICE_ERR_MISSING_FIELD;
+    }
+    cr->prism_h = shape.at("prism_h").get<float>();
+    cr->upper_h = shape.at("upper_h").get<float>();
+    cr->lower_h = shape.at("lower_h").get<float>();
+    if (shape.contains("upper_indices") && shape.at("upper_indices").is_array() &&
+        shape.at("upper_indices").size() == 3) {
+      for (int k = 0; k < 3; k++) {
+        cr->upper_indices[k] = shape.at("upper_indices")[k].get<int>();
+      }
+    }
+    if (shape.contains("lower_indices") && shape.at("lower_indices").is_array() &&
+        shape.at("lower_indices").size() == 3) {
+      for (int k = 0; k < 3; k++) {
+        cr->lower_indices[k] = shape.at("lower_indices")[k].get<int>();
+      }
+    }
+  } else {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+
+  // face_distance: array of 6 or absent (default all 1.0f)
+  if (cj.contains("shape") && cj.at("shape").contains("face_distance")) {
+    const auto& fd = cj.at("shape").at("face_distance");
+    if (!fd.is_array() || fd.size() != 6) {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+    for (int k = 0; k < 6; k++) {
+      cr->face_distance[k] = fd[k].get<float>();
+    }
+  } else {
+    for (int k = 0; k < 6; k++) {
+      cr->face_distance[k] = 1.0f;
+    }
+  }
+
+  // Axis distributions
+  if (!cj.contains("axis")) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  const auto& axis = cj.at("axis");
+  for (const auto& [name, dest] : std::vector<std::pair<const char*, LUMICE_AxisDist*>>{
+           { "zenith", &cr->zenith }, { "azimuth", &cr->azimuth }, { "roll", &cr->roll } }) {
+    if (!axis.contains(name)) {
+      return LUMICE_ERR_MISSING_FIELD;
+    }
+    auto err = JsonToAxisDist(axis.at(name), dest);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+  }
+  return LUMICE_OK;
+}
+
+static LUMICE_ErrorCode JsonToFilter(const nlohmann::json& fj, LUMICE_FilterParam* f) {
+  if (!fj.contains("id") || !fj.contains("type") || !fj.contains("action")) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  f->id = fj.at("id").get<int>();
+
+  if (fj.at("type").get<std::string>() != "raypath") {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+
+  auto action_str = fj.at("action").get<std::string>();
+  if (action_str == "filter_in") {
+    f->action = 0;
+  } else if (action_str == "filter_out") {
+    f->action = 1;
+  } else {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+
+  if (fj.contains("raypath") && fj.at("raypath").is_array()) {
+    const auto& rp = fj.at("raypath");
+    f->raypath_count = static_cast<int>(rp.size());
+    if (f->raypath_count > LUMICE_MAX_CONFIG_RAYPATH_LEN) {
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
+    for (int k = 0; k < f->raypath_count; k++) {
+      f->raypath[k] = rp[k].get<int>();
+    }
+  }
+
+  // Symmetry: string "PBD" -> bitmask
+  f->symmetry = 0;
+  if (fj.contains("symmetry")) {
+    for (char ch : fj.at("symmetry").get<std::string>()) {
+      if (ch == 'P') {
+        f->symmetry |= 1;
+      } else if (ch == 'B') {
+        f->symmetry |= 2;
+      } else if (ch == 'D') {
+        f->symmetry |= 4;
+      }
+    }
+  }
+  return LUMICE_OK;
+}
+
+static LUMICE_ErrorCode JsonToScene(const nlohmann::json& scene, LUMICE_Config* out) {
+  // Light source
+  if (scene.contains("light_source")) {
+    const auto& ls = scene.at("light_source");
+    if (ls.contains("altitude")) {
+      out->sun_altitude = ls.at("altitude").get<float>();
+    }
+    if (ls.contains("azimuth")) {
+      out->sun_azimuth = ls.at("azimuth").get<float>();
+    }
+    if (ls.contains("diameter")) {
+      out->sun_diameter = ls.at("diameter").get<float>();
+    }
+    if (ls.contains("spectrum")) {
+      const auto& sp = ls.at("spectrum");
+      if (!sp.is_string()) {
+        return LUMICE_ERR_INVALID_VALUE;  // Array-form spectrum not supported by LUMICE_Config
+      }
+      out->spectrum = MapSpectrumString(sp.get<std::string>());
+      if (!out->spectrum) {
+        return LUMICE_ERR_INVALID_VALUE;
+      }
+    } else {
+      out->spectrum = "D65";
+    }
+  } else {
+    out->spectrum = "D65";
+  }
+
+  // Ray num
+  if (scene.contains("ray_num")) {
+    const auto& rn = scene.at("ray_num");
+    if (rn.is_string() && rn.get<std::string>() == "infinite") {
+      out->infinite = 1;
+      out->ray_num = 0;
+    } else if (rn.is_number()) {
+      out->infinite = 0;
+      out->ray_num = rn.get<unsigned long>();
+    } else {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+  }
+
+  if (scene.contains("max_hits")) {
+    out->max_hits = scene.at("max_hits").get<int>();
+  }
+
+  // Scattering
+  if (scene.contains("scattering") && scene.at("scattering").is_array()) {
+    const auto& scat = scene.at("scattering");
+    if (static_cast<int>(scat.size()) > LUMICE_MAX_CONFIG_SCATTER_LAYERS) {
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
+    out->scatter_count = static_cast<int>(scat.size());
+    for (int i = 0; i < out->scatter_count; i++) {
+      const auto& lj = scat[i];
+      auto& layer = out->scattering[i];
+      if (lj.contains("prob")) {
+        layer.probability = lj.at("prob").get<float>();
+      }
+      if (lj.contains("entries") && lj.at("entries").is_array()) {
+        const auto& entries = lj.at("entries");
+        if (static_cast<int>(entries.size()) > LUMICE_MAX_CONFIG_SCATTER_ENTRIES) {
+          return LUMICE_ERR_INVALID_CONFIG;
+        }
+        layer.entry_count = static_cast<int>(entries.size());
+        for (int k = 0; k < layer.entry_count; k++) {
+          const auto& ej = entries[k];
+          auto& e = layer.entries[k];
+          if (ej.contains("crystal")) {
+            e.crystal_id = ej.at("crystal").get<int>();
+          }
+          if (ej.contains("proportion")) {
+            e.proportion = ej.at("proportion").get<float>();
+          }
+          e.filter_id = ej.contains("filter") ? ej.at("filter").get<int>() : -1;
+        }
+      }
+    }
+  }
+  return LUMICE_OK;
+}
+
+static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE_Config* out) {
+  if (static_cast<int>(render_arr.size()) > LUMICE_MAX_CONFIG_RENDERERS) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  out->renderer_count = static_cast<int>(render_arr.size());
+  for (int i = 0; i < out->renderer_count; i++) {
+    const auto& rj = render_arr[i];
+    auto& r = out->renderers[i];
+    if (rj.contains("id")) {
+      r.id = rj.at("id").get<int>();
+    }
+    if (rj.contains("resolution") && rj.at("resolution").is_array() && rj.at("resolution").size() == 2) {
+      r.resolution_w = rj.at("resolution")[0].get<int>();
+      r.resolution_h = rj.at("resolution")[1].get<int>();
+    }
+    if (rj.contains("opacity")) {
+      r.opacity = rj.at("opacity").get<float>();
+    }
+    if (rj.contains("intensity_factor")) {
+      r.intensity_factor = rj.at("intensity_factor").get<float>();
+    }
+    if (rj.contains("norm_mode")) {
+      r.norm_mode = rj.at("norm_mode").get<int>();
+    }
+    // lens, view, visible, background fields are ignored (not representable in LUMICE_Config)
+  }
+  return LUMICE_OK;
+}
+
+static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* out) {
+  std::memset(out, 0, sizeof(LUMICE_Config));
+  out->spectrum = "D65";  // Safe default (memset leaves nullptr)
+
+  // Crystals (required)
+  if (!root.contains("crystal") || !root.at("crystal").is_array()) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  const auto& crystals = root.at("crystal");
+  if (static_cast<int>(crystals.size()) > LUMICE_MAX_CONFIG_CRYSTALS) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  out->crystal_count = static_cast<int>(crystals.size());
+  for (int i = 0; i < out->crystal_count; i++) {
+    auto err = JsonToCrystal(crystals[i], &out->crystals[i]);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+  }
+
+  // Filters (optional)
+  if (root.contains("filter") && root.at("filter").is_array()) {
+    const auto& filters = root.at("filter");
+    if (static_cast<int>(filters.size()) > LUMICE_MAX_CONFIG_FILTERS) {
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
+    out->filter_count = static_cast<int>(filters.size());
+    for (int i = 0; i < out->filter_count; i++) {
+      auto err = JsonToFilter(filters[i], &out->filters[i]);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+  }
+
+  // Scene (required)
+  if (!root.contains("scene")) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  auto err = JsonToScene(root.at("scene"), out);
+  if (err != LUMICE_OK) {
+    return err;
+  }
+
+  // Renderers (optional)
+  if (root.contains("render") && root.at("render").is_array()) {
+    err = JsonToRenderers(root.at("render"), out);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+  }
+
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_ParseConfigString(const char* json_str, LUMICE_Config* out) {
+  if (!json_str || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  try {
+    auto root = nlohmann::json::parse(json_str);
+    return JsonToConfig(root, out);
+  } catch (const nlohmann::json::parse_error&) {
+    return LUMICE_ERR_INVALID_JSON;
+  } catch (const nlohmann::json::exception&) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+}
+
+
+LUMICE_ErrorCode LUMICE_ParseConfigFile(const char* filename, LUMICE_Config* out) {
+  if (!filename || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  std::ifstream file(lumice::PathFromU8(filename));
+  if (!file.is_open()) {
+    return LUMICE_ERR_FILE_NOT_FOUND;
+  }
+
+  try {
+    auto root = nlohmann::json::parse(file);
+    return JsonToConfig(root, out);
+  } catch (const nlohmann::json::parse_error&) {
+    return LUMICE_ERR_INVALID_JSON;
+  } catch (const nlohmann::json::exception&) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
 }
 
 
