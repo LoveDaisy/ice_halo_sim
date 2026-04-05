@@ -92,7 +92,6 @@ LUMICE_Server* LUMICE_CreateServerEx(const LUMICE_ServerConfig* config);
 void LUMICE_DestroyServer(LUMICE_Server* server);
 
 // =============== Logging ===============
-void LUMICE_InitLogger(LUMICE_Server* server);
 void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level);
 
 // Log callback: receives all Core log messages. Called from Core logging threads.

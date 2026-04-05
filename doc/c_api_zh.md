@@ -157,14 +157,6 @@ void LUMICE_DestroyServer(LUMICE_Server* server);
 
 ### 日志
 
-#### LUMICE_InitLogger
-
-初始化日志系统。
-
-```c
-void LUMICE_InitLogger(LUMICE_Server* server);
-```
-
 #### LUMICE_SetLogLevel
 
 设置日志级别。
@@ -310,10 +302,7 @@ int main() {
         return 1;
     }
 
-    // 2. 初始化日志
-    LUMICE_InitLogger(server);
-
-    // 3. 从文件加载配置
+    // 2. 从文件加载配置
     if (LUMICE_CommitConfigFromFile(server, "config.json") != LUMICE_OK) {
         LUMICE_DestroyServer(server);
         return 1;
@@ -375,8 +364,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // 2. 初始化日志
-    LUMICE_InitLogger(server);
+    // 2. 设置日志级别（可选，默认 INFO）
     LUMICE_SetLogLevel(server, LUMICE_LOG_INFO);
 
     // 3. 加载配置

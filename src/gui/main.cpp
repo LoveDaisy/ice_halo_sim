@@ -112,9 +112,8 @@ int main(int argc, char** argv) {
 
   // perf_bench and skip_calibration already parsed above (before glfwSwapInterval).
 
-  // Create Lumice server and initialize Core logger.
+  // Create Lumice server.
   gui::g_server = LUMICE_CreateServer();
-  LUMICE_InitLogger(gui::g_server);
 
   // Set up GUI-side log sinks (independent from Core's spdlog).
   // GUI logs go through GUI's own spdlog logger; Core logs arrive via C API callback.

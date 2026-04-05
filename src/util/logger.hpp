@@ -85,15 +85,14 @@ class Logger {
 
 
 // Global Logger singleton (used by LOG_* macros).
+// Default level is kInfo (set at construction time, no explicit init call needed).
 inline Logger& GetGlobalLogger() {
-  static Logger instance("global");
+  static Logger instance = [] {
+    Logger l("global");
+    l.SetLevel(LogLevel::kInfo);
+    return l;
+  }();
   return instance;
-}
-
-// Initialize the global logger and spdlog default logger pattern.
-// Call once at program startup.
-inline void InitGlobalLogger() {
-  GetGlobalLogger().SetLevel(LogLevel::kInfo);
 }
 
 }  // namespace lumice
