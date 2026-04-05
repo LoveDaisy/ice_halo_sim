@@ -24,9 +24,9 @@ class RaypathFilter : public Filter {
  public:
   explicit RaypathFilter(const std::vector<IdType>& rp) : rp_(rp) {}
 
-  void InitCrystalSymmetry(const Crystal& crystal) override {
+  void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry) override {
     candidate_hash_.clear();
-    auto expand_rp = crystal.ExpandRaypath(rp_, symmetry_);
+    auto expand_rp = crystal.ExpandRaypath(rp_, symmetry);
     RaypathHash h;
     for (const auto& rp : expand_rp) {
       candidate_hash_.emplace(h(rp));
@@ -50,9 +50,9 @@ class EntryExitFilter : public Filter {
  public:
   EntryExitFilter(IdType entry, IdType exit) : entry_(entry), exit_(exit) {}
 
-  void InitCrystalSymmetry(const Crystal& crystal) override {
+  void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry) override {
     std::vector<IdType> ee_rp{ entry_, exit_ };
-    auto expand_ee_rp = crystal.ExpandRaypath(ee_rp, symmetry_);
+    auto expand_ee_rp = crystal.ExpandRaypath(ee_rp, symmetry);
     RaypathHash h;
     for (const auto& rp : expand_ee_rp) {
       candidate_hash_.emplace(h(rp));
@@ -155,6 +155,14 @@ class ComplexFilter : public Filter {
     }
   }
 
+  void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry) override {
+    for (auto& or_f : filters_) {
+      for (auto& and_f : or_f) {
+        and_f->InitCrystalSymmetry(crystal, symmetry);
+      }
+    }
+  }
+
  protected:
   bool InternalCheck(const RaySeg& ray) const override {
     for (const auto& or_f : filters_) {
@@ -194,7 +202,6 @@ struct FilterCreator {
 FilterPtrU Filter::Create(const FilterConfig& config) {
   auto filter = std::visit(FilterCreator{}, config.param_);
   filter->action_ = config.action_;
-  filter->symmetry_ = config.symmetry_;
   return filter;
 }
 

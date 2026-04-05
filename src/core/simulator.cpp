@@ -300,7 +300,7 @@ void FillRayOtherInfo(size_t curr_ray_num, size_t i,                           /
   size_t ray_id_offset = all_data.size_;
   for (size_t j = 0; j < buffer_data[1].size_; j++) {
     auto& r = buffer_data[1][j];
-    if (r.fid_ > 0) {
+    if (r.fid_ >= 0) {
       r.rp_ << curr_crystal.GetFn(r.fid_);
     }
 
@@ -509,7 +509,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           }
         }
         const auto& curr_crystal = all_crystals[curr_crystal_id];
-        filter->InitCrystalSymmetry(curr_crystal);
+        filter->InitCrystalSymmetry(curr_crystal, s.filter_.symmetry_);
 
         // 1. Initialize data
         if (first_ms) {

@@ -293,7 +293,7 @@ RenderConsumer::RenderConsumer(RenderConfig config)
 
 
 bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& filters,
-               const std::vector<Crystal>& crystals) {
+               const std::vector<FilterConfig>& filter_configs, const std::vector<Crystal>& crystals) {
   if (filters.empty()) {
     return true;
   }
@@ -302,6 +302,7 @@ bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& f
   bool filter_checked = true;
   size_t curr_idx = i;
   size_t root_idx = r.root_ray_idx_;
+  size_t fi = filters.size();
   for (auto fit = filters.rbegin(); fit != filters.rend(); /* increament see below */) {
     if (curr_idx != kInvalidId) {
       root_idx = rays[curr_idx].root_ray_idx_;
@@ -310,7 +311,8 @@ bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& f
       break;
     }
 
-    (*fit)->InitCrystalSymmetry(crystals.at(r.crystal_idx_));
+    --fi;
+    (*fit)->InitCrystalSymmetry(crystals.at(r.crystal_idx_), filter_configs[fi].symmetry_);
     if (!(*fit)->Check(rays[curr_idx])) {
       filter_checked = false;
       break;
@@ -354,7 +356,7 @@ void RenderConsumer::Consume(const SimData& data) {
     // Slow path: filter present — must call FilterRay per ray (chain walk through rays buffer).
     for (size_t i : data.outgoing_indices_) {
       const auto& r = data.rays_[i];
-      if (!FilterRay(data.rays_, i, filters_, crystals)) {
+      if (!FilterRay(data.rays_, i, filters_, config_.ms_filter_, crystals)) {
         continue;
       }
       std::memcpy(d_buf_.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
