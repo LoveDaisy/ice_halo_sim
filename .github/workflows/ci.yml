@@ -131,6 +131,17 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure -R LumiceUnitTest
 
+      - name: CLI benchmark (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/bench_out"
+          echo "=== CLI Benchmark: ${{ matrix.name }} ==="
+          SECONDS=0
+          build/src/Lumice.exe -f examples/bench_config.json -o "$RUNNER_TEMP/bench_out"
+          elapsed=$SECONDS
+          echo "=== Wall time: ${elapsed}s ==="
+
       - name: Upload GUI test binary (MinGW)
         if: matrix.os == 'windows-2025' && matrix.build_gui == 'ON' && !matrix.msvc
         uses: actions/upload-artifact@v7
