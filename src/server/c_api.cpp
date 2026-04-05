@@ -68,14 +68,6 @@ void LUMICE_DestroyServer(LUMICE_Server* server) {
 
 
 // =============== Logging ===============
-void LUMICE_InitLogger(LUMICE_Server* server) {
-  if (!server) {
-    return;
-  }
-  ns::InitGlobalLogger();
-}
-
-
 void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level) {
   if (!server) {
     return;

@@ -318,7 +318,6 @@ LUMICE_Server* LUMICE_CreateServer(void);
 void LUMICE_DestroyServer(LUMICE_Server* server);
 
 // 日志
-void LUMICE_InitLogger(LUMICE_Server* server);
 void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level);
 
 // 配置（返回 LUMICE_ErrorCode）

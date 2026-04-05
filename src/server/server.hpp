@@ -265,7 +265,6 @@ class Server {
    */
   void Terminate();
 
-  void InitLogger();
   void SetLogLevel(LogLevel level);
 
   /**

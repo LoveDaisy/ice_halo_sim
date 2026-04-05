@@ -157,14 +157,6 @@ void LUMICE_DestroyServer(LUMICE_Server* server);
 
 ### Logging
 
-#### LUMICE_InitLogger
-
-Initializes the logging system.
-
-```c
-void LUMICE_InitLogger(LUMICE_Server* server);
-```
-
 #### LUMICE_SetLogLevel
 
 Sets the log level.
@@ -310,10 +302,7 @@ int main() {
         return 1;
     }
 
-    // 2. Initialize logging
-    LUMICE_InitLogger(server);
-
-    // 3. Load configuration from file
+    // 2. Load configuration from file
     if (LUMICE_CommitConfigFromFile(server, "config.json") != LUMICE_OK) {
         LUMICE_DestroyServer(server);
         return 1;
@@ -375,8 +364,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // 2. Initialize logging
-    LUMICE_InitLogger(server);
+    // 2. Set log level (optional, default is INFO)
     LUMICE_SetLogLevel(server, LUMICE_LOG_INFO);
 
     // 3. Load configuration

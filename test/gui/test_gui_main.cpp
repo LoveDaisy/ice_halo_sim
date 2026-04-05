@@ -1308,7 +1308,6 @@ static void RegisterVisualTests(ImGuiTestEngine* engine) {
 
       // --- Phase 1: Start simulation and wait for texture data ---
       gui::g_server = LUMICE_CreateServer();
-      LUMICE_InitLogger(gui::g_server);
       gui::g_state.sim.infinite = true;
       gui::g_state.sim.max_hits = 8;
       if (!gui::g_state.renderers.empty()) {
@@ -1761,7 +1760,6 @@ static const char* CreatePerfConfig() {
 
 static void StartPerfSimulation() {
   gui::g_server = LUMICE_CreateServer();
-  LUMICE_InitLogger(gui::g_server);
   LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
   gui::SetGuiLogLevel(static_cast<spdlog::level::level_enum>(g_gui_log_level));
 

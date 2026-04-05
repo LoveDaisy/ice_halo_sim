@@ -584,10 +584,10 @@ class MyClass {
 日志级别可通过 `lumice::SetLogLevel()` 在程序中设置：
 
 ```cpp
-#include "util/log.hpp"
+#include "util/logger.hpp"
 
-lumice::InitLogger();                              // 初始化（程序启动时调用一次）
-lumice::SetLogLevel(spdlog::level::debug);         // 设置为 debug 级别
+// 全局 logger 首次访问时自动以 kInfo 级别初始化，无需显式调用。
+lumice::GetGlobalLogger().SetLevel(lumice::LogLevel::kDebug);  // 设置为 debug 级别
 ```
 
 ### 调试工具

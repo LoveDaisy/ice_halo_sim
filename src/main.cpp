@@ -104,7 +104,6 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
   LUMICE_ServerConfig server_config{};
   server_config.num_workers = num_workers;
   auto* server = LUMICE_CreateServerEx(&server_config);
-  LUMICE_InitLogger(server);
   LUMICE_SetLogLevel(server, log_level);
 
   if (LUMICE_CommitConfig(server, config_str.c_str()) != LUMICE_OK) {
@@ -275,7 +274,6 @@ int main(int argc, char** argv) {
   }
 
   auto* server = LUMICE_CreateServer();
-  LUMICE_InitLogger(server);
   LUMICE_SetLogLevel(server, log_level);
 
   if (LUMICE_CommitConfigFromFile(server, config_filename.u8string().c_str()) != LUMICE_OK) {

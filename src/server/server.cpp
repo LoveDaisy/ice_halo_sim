@@ -776,10 +776,6 @@ void Server::Terminate() {
   impl_.reset();  // ~ServerImpl() handles Stop + thread join via RAII
 }
 
-void Server::InitLogger() {
-  InitGlobalLogger();
-}
-
 void Server::SetLogLevel(LogLevel level) {
   if (impl_) {
     impl_->SetLogLevel(level);
