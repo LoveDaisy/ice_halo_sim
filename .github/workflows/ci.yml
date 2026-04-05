@@ -269,7 +269,12 @@ jobs:
           # benchmark-result.txt format:
           # - Normal: 2-line NDJSON (mode=single + mode=multi)
           # - Error:  1-line JSON with .error field
-          > bench-entries.ndjson
+          #
+          # Output: 3 JSON files (one per metric), each containing entries keyed by platform.
+          # This produces 3 charts with 4 lines each instead of 12 single-line charts.
+          > bench-single-entries.ndjson
+          > bench-multi-entries.ndjson
+          > bench-efficiency-entries.ndjson
           for f in benchmarks/benchmark-*/benchmark-result.txt; do
             [ ! -f "$f" ] && continue
             head -1 "$f" | jq -e '.error' > /dev/null 2>&1 && continue
@@ -278,26 +283,39 @@ jobs:
             MULTI=$(jq -c 'select(.mode == "multi")' "$f" 2>/dev/null | head -1)
 
             S_RPS="" ; M_RPS=""
-            for LINE in "$SINGLE" "$MULTI"; do
-              [ -z "$LINE" ] && continue
-              PLATFORM=$(echo "$LINE" | jq -r '.platform')
-              MODE=$(echo "$LINE" | jq -r '.mode')
-              RPS=$(echo "$LINE" | jq -r '.rays_per_sec')
-              if [ "$RPS" = "null" ] || [ -z "$RPS" ]; then
-                echo "::warning::Skipping ${PLATFORM}/${MODE}: RPS is null"
-                continue
+            if [ -n "$SINGLE" ]; then
+              PLATFORM=$(echo "$SINGLE" | jq -r '.platform')
+              RPS=$(echo "$SINGLE" | jq -r '.rays_per_sec')
+              if [ "$RPS" != "null" ] && [ -n "$RPS" ]; then
+                S_RPS="$RPS"
+                CPU=$(echo "$SINGLE" | jq -r '.cpu_model // ""')
+                CORES=$(echo "$SINGLE" | jq -r '.cores // 0')
+                jq -n --arg name "$PLATFORM" \
+                      --arg unit "rays/sec" --argjson value "$RPS" \
+                      --arg extra "CPU: ${CPU}\nCores: ${CORES}" \
+                      '{name: $name, unit: $unit, value: $value, extra: $extra}' \
+                  >> bench-single-entries.ndjson
+              else
+                echo "::warning::Skipping ${PLATFORM}/single: RPS is null"
               fi
-              CPU=$(echo "$LINE" | jq -r '.cpu_model // ""')
-              CORES=$(echo "$LINE" | jq -r '.cores // 0')
-              MODE_LABEL=$(echo "$MODE" | sed 's/single/Single/;s/multi/Multi/')
-              [ "$MODE" = "single" ] && S_RPS="$RPS"
-              [ "$MODE" = "multi" ] && M_RPS="$RPS"
-              jq -n --arg name "${PLATFORM} / ${MODE_LABEL}" \
-                    --arg unit "rays/sec" --argjson value "$RPS" \
-                    --arg extra "CPU: ${CPU}\nCores: ${CORES}" \
-                    '{name: $name, unit: $unit, value: $value, extra: $extra}' \
-                >> bench-entries.ndjson
-            done
+            fi
+
+            if [ -n "$MULTI" ]; then
+              PLATFORM=$(echo "$MULTI" | jq -r '.platform')
+              RPS=$(echo "$MULTI" | jq -r '.rays_per_sec')
+              if [ "$RPS" != "null" ] && [ -n "$RPS" ]; then
+                M_RPS="$RPS"
+                CPU=$(echo "$MULTI" | jq -r '.cpu_model // ""')
+                CORES=$(echo "$MULTI" | jq -r '.cores // 0')
+                jq -n --arg name "$PLATFORM" \
+                      --arg unit "rays/sec" --argjson value "$RPS" \
+                      --arg extra "CPU: ${CPU}\nCores: ${CORES}" \
+                      '{name: $name, unit: $unit, value: $value, extra: $extra}' \
+                  >> bench-multi-entries.ndjson
+              else
+                echo "::warning::Skipping ${PLATFORM}/multi: RPS is null"
+              fi
+            fi
 
             # Efficiency: self-referential metric, immune to runner hardware changes
             if [ -n "$S_RPS" ] && [ -n "$M_RPS" ] && [ -n "$MULTI" ]; then
@@ -305,25 +323,61 @@ jobs:
               PLATFORM=$(echo "$MULTI" | jq -r '.platform')
               if [ "$WORKERS" != "0" ] && [ "$S_RPS" != "0" ]; then
                 EFF=$(awk "BEGIN {printf \"%.1f\", ($M_RPS / ($S_RPS * $WORKERS)) * 100}")
-                jq -n --arg name "${PLATFORM} / Efficiency" \
+                jq -n --arg name "$PLATFORM" \
                       --arg unit "%" --argjson value "$EFF" \
                       '{name: $name, unit: $unit, value: $value}' \
-                  >> bench-entries.ndjson
+                  >> bench-efficiency-entries.ndjson
               fi
             fi
           done
-          jq -s '.' bench-entries.ndjson > bench-output.json
-          echo "Benchmark entries: $(jq length bench-output.json)"
-          cat bench-output.json
-          # Remove if empty — prevents Store step from running on no data
-          jq -e 'length > 0' bench-output.json > /dev/null 2>&1 || rm -f bench-output.json
 
-      - name: Store benchmark result
-        if: github.ref == 'refs/heads/main' && hashFiles('bench-output.json') != ''
+          # Convert NDJSON to JSON arrays; remove empty files to prevent Store steps from running
+          for suffix in single multi efficiency; do
+            jq -s '.' "bench-${suffix}-entries.ndjson" > "bench-${suffix}.json"
+            echo "bench-${suffix}.json entries: $(jq length "bench-${suffix}.json")"
+            cat "bench-${suffix}.json"
+            jq -e 'length > 0' "bench-${suffix}.json" > /dev/null 2>&1 || rm -f "bench-${suffix}.json"
+          done
+
+      - name: Store benchmark result (single-worker)
+        if: github.ref == 'refs/heads/main' && hashFiles('bench-single.json') != ''
         uses: benchmark-action/github-action-benchmark@v1
         with:
+          name: "Single-worker Throughput"
           tool: customBiggerIsBetter
-          output-file-path: bench-output.json
+          output-file-path: bench-single.json
+          benchmark-data-dir-path: bench
+          gh-pages-branch: gh-pages
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: "200%"
+          comment-on-alert: true
+          summary-always: true
+          max-items-in-chart: 100
+
+      - name: Store benchmark result (multi-worker)
+        if: github.ref == 'refs/heads/main' && hashFiles('bench-multi.json') != ''
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: "Multi-worker Throughput"
+          tool: customBiggerIsBetter
+          output-file-path: bench-multi.json
+          benchmark-data-dir-path: bench
+          gh-pages-branch: gh-pages
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: "200%"
+          comment-on-alert: true
+          summary-always: true
+          max-items-in-chart: 100
+
+      - name: Store benchmark result (efficiency)
+        if: github.ref == 'refs/heads/main' && hashFiles('bench-efficiency.json') != ''
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: "Parallel Efficiency"
+          tool: customBiggerIsBetter
+          output-file-path: bench-efficiency.json
           benchmark-data-dir-path: bench
           gh-pages-branch: gh-pages
           github-token: ${{ secrets.GITHUB_TOKEN }}
