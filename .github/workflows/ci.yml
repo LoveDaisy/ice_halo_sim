@@ -198,7 +198,7 @@ jobs:
             if [ ! -f "$f" ]; then
               continue
             fi
-            LINE=$(cat "$f")
+            LINE=$(cat "$f" | sed 's/^\[BENCHMARK\] //')
             if echo "$LINE" | jq -e '.error' > /dev/null 2>&1; then
               ERROR=$(echo "$LINE" | jq -r '.error')
               echo "| (unknown) | - | - | - | CRASHED ($ERROR) |" >> "$GITHUB_STEP_SUMMARY"
