@@ -402,9 +402,12 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t ste
 }
 
 
+namespace {
 // Compute the Jacobian rejection envelope constant M for a given latitude distribution.
 // M = max(cos(phi)) over the proposal's support, used in acceptance probability cos(phi)/M.
 // Tighter M → higher acceptance rate. All inputs in degrees.
+// NOTE: For extreme configs where |mean| + std > 90, NormalizeLatitude folding may produce
+// latitudes near ±90° where cos(phi) → 0, causing low acceptance rates but not incorrectness.
 float ComputeJacobianEnvelope(const Distribution& dist) {
   switch (dist.type) {
     case DistributionType::kGaussian:
@@ -420,6 +423,7 @@ float ComputeJacobianEnvelope(const Distribution& dist) {
       return 1.0f;
   }
 }
+}  // namespace
 
 
 void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num) {

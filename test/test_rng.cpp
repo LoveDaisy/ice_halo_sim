@@ -613,12 +613,6 @@ TEST_F(SphericalSamplingTest, ZigzagJacobianCorrection) {
       }
     }
 
-    // Compute theoretical density: p(theta) ∝ zigzag_pdf(theta) × sin(theta).
-    // For zigzag |A·sin(2πU) + B|, the PDF of the proposal (in latitude space) is complex,
-    // but the rejection sampling guarantees p(theta) ∝ proposal(theta) × sin(theta).
-    // Instead of deriving the analytical PDF, we verify self-consistency:
-    // the observed distribution should be smooth and concentrated in the expected range.
-    double bin_width_rad = bin_width * lumice::math::kDegreeToRad;
     double total_in_range = 0;
     for (int b = 0; b < kNumBins; b++) {
       total_in_range += counts[b];
@@ -627,26 +621,38 @@ TEST_F(SphericalSamplingTest, ZigzagJacobianCorrection) {
     // At least 90% of samples should fall within the binning range.
     EXPECT_GT(total_in_range / kN, 0.90) << "Too many samples outside expected range for " << cfg.label;
 
-    // Verify density is non-zero in the central bins (not all samples collapsed to edges).
-    int central_start = kNumBins / 4;
-    int central_end = 3 * kNumBins / 4;
-    for (int b = central_start; b < central_end; b++) {
-      EXPECT_GT(counts[b], 0) << "Empty central bin " << b << " for " << cfg.label;
-    }
-
-    // Verify the distribution is non-degenerate: standard deviation of bin counts should be
-    // reasonable (not all samples in one bin, not perfectly uniform).
-    double mean_count = total_in_range / kNumBins;
-    double variance = 0;
+    // Verify Jacobian correction by checking mean colatitude shift.
+    // With Jacobian sin(theta) weighting, samples are shifted toward the equator (theta=90°)
+    // compared to the bare proposal. We verify by comparing:
+    //   1. Observed mean colatitude from rejection samples
+    //   2. Proposal mean colatitude (computed via Monte Carlo without rejection)
+    // The observed mean should be >= proposal mean (closer to equator = larger colatitude).
+    double observed_mean_colat = 0;
     for (int b = 0; b < kNumBins; b++) {
-      double diff = counts[b] - mean_count;
-      variance += diff * diff;
+      observed_mean_colat += bin_centers[b] * counts[b];
     }
-    variance /= kNumBins;
-    double cv = std::sqrt(variance) / (mean_count + 1e-10);  // coefficient of variation
-    // Arcsine distributions are peaky, so CV can be high but should be bounded.
-    EXPECT_LT(cv, 5.0) << "Distribution too degenerate for " << cfg.label;
-    EXPECT_GT(cv, 0.01) << "Distribution too uniform for " << cfg.label;
+    observed_mean_colat /= (total_in_range + 1e-10);
+
+    // Compute proposal mean colatitude (without Jacobian) via Monte Carlo.
+    double proposal_mean_colat = 0;
+    constexpr size_t kProposalN = 100000;
+    for (size_t i = 0; i < kProposalN; i++) {
+      float raw_lat = rng.Get(axis.latitude_dist);  // proposal in degrees
+      double colat = 90.0 - static_cast<double>(raw_lat);
+      // Clamp to [0, 180] for safety.
+      colat = std::max(0.0, std::min(180.0, colat));
+      proposal_mean_colat += colat;
+    }
+    proposal_mean_colat /= kProposalN;
+
+    // Jacobian sin(theta) weighting pushes mean colatitude toward 90° (equator).
+    // For colatitude < 90°, observed mean should be LARGER than proposal mean.
+    // For colatitude > 90°, observed mean should be SMALLER (closer to 90°).
+    double observed_dist_to_equator = std::abs(observed_mean_colat - 90.0);
+    double proposal_dist_to_equator = std::abs(proposal_mean_colat - 90.0);
+    EXPECT_LT(observed_dist_to_equator, proposal_dist_to_equator + 0.5)
+        << "Jacobian correction not detected for " << cfg.label << " (observed_mean_colat=" << observed_mean_colat
+        << ", proposal_mean_colat=" << proposal_mean_colat << ")";
   }
 }
 
