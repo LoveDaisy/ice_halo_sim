@@ -92,11 +92,10 @@ void InitRay_rot(RandomNumberGenerator& rng, const AxisDistribution& crystal_axi
   float axis[9]{ 1, 0, 0, 0, 1, 0, 0, 0, 1 };
   float lon_lat[2]{};
   for (auto& r : buffer_data[0]) {
-    if (crystal_axis.azimuth_dist.type != DistributionType::kUniform ||
-        crystal_axis.latitude_dist.type != DistributionType::kUniform) {
+    if (!crystal_axis.IsFullSphereUniform()) {
       RandomSampler::SampleSphericalPointsSph(crystal_axis, lon_lat);
     } else {
-      // Randomly sample on sphere
+      // Randomly sample on sphere (with asin(u) Jacobian correction)
       RandomSampler::SampleSphericalPointsSph(lon_lat);
     }
     float roll = rng.Get(crystal_axis.roll_dist) * math::kDegreeToRad;

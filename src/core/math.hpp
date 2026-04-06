@@ -191,6 +191,12 @@ void TriangleNormal(const float* p1, const float* p2, const float* p3, float* no
 struct AxisDistribution {
   AxisDistribution();
 
+  //! @brief Check if this distribution represents full-sphere uniform sampling.
+  //! @details Only checks azimuth and latitude — roll does not participate in sphere sampling dispatch.
+  //! @warning The parameterized SampleSphericalPointsSph does NOT include the asin(u) Jacobian correction.
+  //!   For full-sphere uniform, the caller must use the parameter-less overload instead.
+  bool IsFullSphereUniform() const;
+
   Distribution azimuth_dist;
   Distribution latitude_dist;
   Distribution roll_dist;

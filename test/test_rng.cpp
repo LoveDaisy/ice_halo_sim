@@ -74,6 +74,90 @@ TEST_F(RngTest, UniformTest) {
 }
 
 
+TEST_F(RngTest, IsFullSphereUniform) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+
+  // Default full-sphere: azimuth={kUniform,0,360}, latitude={kUniform,90,360}
+  AxisDistribution full_sphere;
+  full_sphere.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  full_sphere.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  EXPECT_TRUE(full_sphere.IsFullSphereUniform());
+
+  // Custom azimuth range -> false
+  AxisDistribution custom_az;
+  custom_az.azimuth_dist = { DistributionType::kUniform, 45.0f, 90.0f };
+  custom_az.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  EXPECT_FALSE(custom_az.IsFullSphereUniform());
+
+  // Custom latitude range -> false
+  AxisDistribution custom_lat;
+  custom_lat.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  custom_lat.latitude_dist = { DistributionType::kUniform, 60.0f, 60.0f };
+  EXPECT_FALSE(custom_lat.IsFullSphereUniform());
+
+  // Gaussian type -> false
+  AxisDistribution gauss;
+  gauss.azimuth_dist = { DistributionType::kGaussian, 0.0f, 10.0f };
+  gauss.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  EXPECT_FALSE(gauss.IsFullSphereUniform());
+
+  // Default constructor (kNoRandom) -> false
+  AxisDistribution default_ctor;
+  EXPECT_FALSE(default_ctor.IsFullSphereUniform());
+}
+
+
+TEST_F(RngTest, SampleSphericalWithCustomAzimuth) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomSampler;
+
+  // azimuth: uniform [60°, 120°] (mean=90, std=60)
+  // latitude: kNoRandom at 0° (equator, i.e. zenith=90 -> latitude_mean=0)
+  AxisDistribution axis;
+  axis.azimuth_dist = { DistributionType::kUniform, 90.0f, 60.0f };
+  axis.latitude_dist = { DistributionType::kNoRandom, 0.0f, 0.0f };
+
+  constexpr size_t kN = 2048;
+  auto data = std::make_unique<float[]>(kN * 2);
+  RandomSampler::SampleSphericalPointsSph(axis, data.get(), kN);
+
+  const float kAzMin = 60.0f * lumice::math::kDegreeToRad;
+  const float kAzMax = 120.0f * lumice::math::kDegreeToRad;
+  for (size_t i = 0; i < kN; i++) {
+    float az = data[i * 2 + 0];
+    EXPECT_GE(az, kAzMin - 1e-5f) << "Sample " << i << " azimuth too low: " << az;
+    EXPECT_LE(az, kAzMax + 1e-5f) << "Sample " << i << " azimuth too high: " << az;
+  }
+}
+
+
+TEST_F(RngTest, SampleSphericalWithCustomLatitude) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomSampler;
+
+  // azimuth: kNoRandom at 0°
+  // latitude: uniform around 45° with range 30° -> [30°, 60°]
+  AxisDistribution axis;
+  axis.azimuth_dist = { DistributionType::kNoRandom, 0.0f, 0.0f };
+  axis.latitude_dist = { DistributionType::kUniform, 45.0f, 30.0f };
+
+  constexpr size_t kN = 2048;
+  auto data = std::make_unique<float[]>(kN * 2);
+  RandomSampler::SampleSphericalPointsSph(axis, data.get(), kN);
+
+  const float kLatMin = 30.0f * lumice::math::kDegreeToRad;
+  const float kLatMax = 60.0f * lumice::math::kDegreeToRad;
+  for (size_t i = 0; i < kN; i++) {
+    float lat = data[i * 2 + 1];
+    EXPECT_GE(lat, kLatMin - 1e-5f) << "Sample " << i << " latitude too low: " << lat;
+    EXPECT_LE(lat, kLatMax + 1e-5f) << "Sample " << i << " latitude too high: " << lat;
+  }
+}
+
+
 TEST_F(RngTest, TriangleSample) {
   auto crystal = lumice::Crystal::CreatePrism(0.2f);
 

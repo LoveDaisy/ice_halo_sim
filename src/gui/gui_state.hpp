@@ -25,7 +25,7 @@ static_assert(sizeof(kAspectPresetNames) / sizeof(kAspectPresetNames[0]) == kAsp
 struct AxisDist {
   AxisDistType type = AxisDistType::kUniform;
   float mean = 0.0f;
-  float std = 0.0f;  // Gauss: standard deviation; Uniform: half-range
+  float std = 0.0f;  // Gauss: standard deviation; Uniform: full range
 };
 
 struct CrystalConfig {

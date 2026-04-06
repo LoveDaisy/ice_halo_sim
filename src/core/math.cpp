@@ -503,6 +503,13 @@ std::pair<float, bool> detail::NormalizeLatitude(float latitude_rad) {
 }
 
 
+bool AxisDistribution::IsFullSphereUniform() const {
+  return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.mean, 0.0f) &&
+         FloatEqual(azimuth_dist.std, 360.0f) && latitude_dist.type == DistributionType::kUniform &&
+         FloatEqual(latitude_dist.mean, 90.0f) && FloatEqual(latitude_dist.std, 360.0f);
+}
+
+
 void to_json(nlohmann::json& obj, const Distribution& dist) {
   if (dist.type == DistributionType::kNoRandom) {
     obj = dist.mean;

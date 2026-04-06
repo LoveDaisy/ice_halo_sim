@@ -121,7 +121,7 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 typedef struct LUMICE_AxisDist_ {
   int type;    // 0=gauss, 1=uniform
   float mean;  // degrees
-  float std;   // gauss: standard deviation; uniform: half-range (degrees)
+  float std;   // gauss: standard deviation; uniform: full range (degrees)
 } LUMICE_AxisDist;
 
 typedef struct LUMICE_CrystalParam_ {
