@@ -156,7 +156,7 @@ Many parameters support distribution types, which can be:
 
 **Distribution type descriptions**:
 - `gauss`: Gaussian distribution, where `mean` is the mean and `std` is the standard deviation
-- `uniform`: Uniform distribution, where `mean` is the center value and `std` is half the range
+- `uniform`: Uniform distribution, where `mean` is the center value and `std` is the full range
 
 ### filter (Filter Configuration)
 

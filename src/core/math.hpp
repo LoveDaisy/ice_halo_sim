@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 #include <random>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "core/def.hpp"
@@ -190,10 +191,25 @@ void TriangleNormal(const float* p1, const float* p2, const float* p3, float* no
 struct AxisDistribution {
   AxisDistribution();
 
+  //! @brief Check if this distribution represents full-sphere uniform sampling.
+  //! @details Only checks azimuth and latitude — roll does not participate in sphere sampling dispatch.
+  //! @warning The parameterized SampleSphericalPointsSph does NOT include the asin(u) Jacobian correction.
+  //!   For full-sphere uniform, the caller must use the parameter-less overload instead.
+  bool IsFullSphereUniform() const;
+
   Distribution azimuth_dist;
   Distribution latitude_dist;
   Distribution roll_dist;
 };
+
+
+namespace detail {
+// Internal — not part of public API.
+// Normalize an arbitrary latitude (radians) to [-π/2, π/2] using spherical folding.
+// Returns {normalized_latitude, flip} where flip=true means an odd number of pole
+// reflections occurred (azimuth should be shifted by π).
+std::pair<float, bool> NormalizeLatitude(float latitude_rad);
+}  // namespace detail
 
 
 /**

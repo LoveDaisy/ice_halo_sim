@@ -401,19 +401,74 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t ste
 
 void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num) {
   auto& rng = RandomNumberGenerator::GetInstance();
+
+  // Jacobian correction for latitude sampling.
+  // Target distribution: p(phi) ∝ proposal(phi) × cos(phi)
+  // where cos(phi) = sin(colatitude) is the spherical area element Jacobian.
+  //
+  // Applies to both Gaussian and Uniform latitude distributions.
+  // For Gaussian, two paths:
+  //   1. Rayleigh (polar): when colatitude_center + 3*sigma < kPolarThreshold,
+  //      use 2D Gaussian → Rayleigh, exact for small colatitudes (sin(θ)≈θ).
+  //   2. Optimized rejection: propose from Gaussian, accept with prob cos(phi)/M,
+  //      where M = cos(max(|mean| - 3*sigma, 0)) to maximize acceptance rate.
+  // For Uniform: rejection with M=1, acceptance rate ≥ 2/π ≈ 64%.
+  constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;  // Rayleigh only for colatitude < 0.5°
+  constexpr int kMaxRejectionAttempts = 1000;
+
+  bool is_gaussian = axis_dist.latitude_dist.type == DistributionType::kGaussian;
+  bool need_jacobian = is_gaussian || axis_dist.latitude_dist.type == DistributionType::kUniform;
+  float latitude_mean_rad = 0;
+  float sigma_rad = 0;
+  bool use_rayleigh = false;
+  float rejection_m = 1.0f;  // default M=1, safe for all distributions
+
+  if (is_gaussian) {
+    latitude_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
+    sigma_rad = axis_dist.latitude_dist.std * math::kDegreeToRad;
+    float colatitude_center = math::kPi_2 - std::abs(latitude_mean_rad);
+    use_rayleigh = (colatitude_center + 3.0f * sigma_rad) < kPolarThresholdRad;
+    if (!use_rayleigh) {
+      rejection_m = std::cos(std::max(std::abs(latitude_mean_rad) - 3.0f * sigma_rad, 0.0f));
+    }
+  }
+
   for (size_t i = 0; i < num; i++) {
-    float phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
-    if (phi > math::kPi_2) {
-      phi = math::kPi - phi;
-    }
-    if (phi < -math::kPi_2) {
-      phi = -math::kPi - phi;
-    }
-    float lambda = 0;
-    if (axis_dist.azimuth_dist.type == DistributionType::kUniform) {
-      lambda = rng.GetUniform() * 2 * math::kPi;
+    float phi = 0;
+    bool flip = false;
+
+    if (is_gaussian && use_rayleigh) {
+      // Rayleigh path: 2D Gaussian in tangent plane at pole → Rayleigh angular distance.
+      // Guard ensures colatitude_center + 3σ < 0.5°, so colatitude rarely exceeds valid range.
+      float dx = rng.GetGaussian() * sigma_rad;
+      float dy = rng.GetGaussian() * sigma_rad;
+      float colatitude = std::sqrt(dx * dx + dy * dy);
+      phi = std::copysign(math::kPi_2 - colatitude, latitude_mean_rad);
+      phi = std::max(-math::kPi_2, std::min(math::kPi_2, phi));
+      // flip stays false — Rayleigh path only fires for tiny σ near poles.
+    } else if (need_jacobian) {
+      // Optimized rejection path.
+      int attempts = 0;
+      do {
+        phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
+        auto [norm_phi, norm_flip] = detail::NormalizeLatitude(phi);
+        phi = norm_phi;
+        flip = norm_flip;
+        ++attempts;
+        if (attempts >= kMaxRejectionAttempts) {
+          LOG_WARNING("SampleSphericalPointsSph: rejection safety valve triggered (mean={}, std={})",
+                      axis_dist.latitude_dist.mean, axis_dist.latitude_dist.std);
+          break;
+        }
+      } while (rng.GetUniform() >= std::cos(phi) / rejection_m);
     } else {
-      lambda = rng.Get(axis_dist.azimuth_dist) * math::kDegreeToRad;
+      // kNoRandom: no Jacobian needed (single deterministic orientation).
+      phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
+    }
+
+    float lambda = rng.Get(axis_dist.azimuth_dist) * math::kDegreeToRad;
+    if (flip) {
+      lambda += math::kPi;
     }
 
     data[i * 2 + 0] = lambda;
@@ -425,6 +480,27 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
 AxisDistribution::AxisDistribution()
     : azimuth_dist{ DistributionType::kNoRandom, 0, 0 }, latitude_dist{ DistributionType::kNoRandom, 90.0f, 0 },
       roll_dist{ DistributionType::kNoRandom, 0, 0 } {}
+
+
+std::pair<float, bool> detail::NormalizeLatitude(float latitude_rad) {
+  float theta = math::kPi_2 - latitude_rad;    // latitude → colatitude
+  theta = std::fmod(theta, 2.0f * math::kPi);  // periodic normalization
+  if (theta < 0) {
+    theta += 2.0f * math::kPi;  // ensure [0, 2π)
+  }
+  bool flip = theta > math::kPi;
+  if (flip) {
+    theta = 2.0f * math::kPi - theta;  // reflect to [0, π]
+  }
+  return { math::kPi_2 - theta, flip };  // colatitude → latitude
+}
+
+
+bool AxisDistribution::IsFullSphereUniform() const {
+  return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.mean, 0.0f) &&
+         FloatEqual(azimuth_dist.std, 360.0f) && latitude_dist.type == DistributionType::kUniform &&
+         FloatEqual(latitude_dist.mean, 90.0f) && FloatEqual(latitude_dist.std, 360.0f);
+}
 
 
 void to_json(nlohmann::json& obj, const Distribution& dist) {
