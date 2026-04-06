@@ -201,7 +201,8 @@ class SphericalSamplingTest : public ::testing::Test {
       // Samples with theta < 0 get reflected to -theta; samples with theta > pi get reflected to 2*pi-theta.
       double g_direct = std::exp(-0.5 * (theta - theta0) * (theta - theta0) / (sigma * sigma));
       double g_fold0 = std::exp(-0.5 * (-theta - theta0) * (-theta - theta0) / (sigma * sigma));
-      double g_fold_pi = std::exp(-0.5 * (2 * lumice::math::kPi - theta - theta0) * (2 * lumice::math::kPi - theta - theta0) / (sigma * sigma));
+      double g_fold_pi = std::exp(-0.5 * (2 * lumice::math::kPi - theta - theta0) *
+                                  (2 * lumice::math::kPi - theta - theta0) / (sigma * sigma));
       density[i] = (g_direct + g_fold0 + g_fold_pi) * std::sin(theta);
       total += density[i] * bin_width_rad;
     }
