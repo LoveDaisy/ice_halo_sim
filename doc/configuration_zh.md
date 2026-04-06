@@ -156,8 +156,26 @@
    ```
 
 **分布类型说明**：
-- `gauss`: 高斯分布，`mean` 为均值，`std` 为标准差
-- `uniform`: 均匀分布，`mean` 为中心值，`std` 为完整范围
+
+| 类型 | `mean` | `std` | 说明 |
+|------|--------|-------|------|
+| `gauss` | 中心值（度） | 标准差（度） | 高斯分布，用于稳定晶体取向 |
+| `uniform` | 中心值（度） | 全范围宽度（度） | 均匀分布，用于随机取向或自转角 |
+| `zigzag` | 倾斜偏移（度） | 幅度（度） | 折叠反正弦分布，用于大晶体之字形振荡 |
+| `laplacian` | 中心值（度） | 尺度参数（度） | 拉普拉斯分布，用于尺寸聚合倾斜 |
+
+**说明：**
+- `gauss` 和 `uniform` 是冰晕模拟中最常用的类型
+- `zigzag` 模拟高雷诺数下大晶体的振荡运动
+- `laplacian` 简化混合尺寸晶体群体的配置（物理背景见 [crystal-orientation-sampling_zh.md](crystal-orientation-sampling_zh.md)）
+
+**示例：**
+```json
+"zenith": { "type": "zigzag", "mean": 5, "std": 30 }
+```
+```json
+"zenith": { "type": "laplacian", "mean": 90, "std": 2.0 }
+```
 
 ### filter（过滤器配置）
 
