@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775489755797,
+  "lastUpdate": 1775489757729,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -659,6 +659,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 67.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9fd5b962e42b671f21ccf7e61bf19d462902708f",
+          "message": "Merge pull request #52 from LoveDaisy/feat/axis_dist\n\nfeat: add zigzag and laplacian axis distribution types",
+          "timestamp": "2026-04-06T23:31:58+08:00",
+          "tree_id": "866611c6d3effac07c263c82c88d0f61c5625a57",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/9fd5b962e42b671f21ccf7e61bf19d462902708f"
+        },
+        "date": 1775489756969,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 77.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 76.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 71.7,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 70.9,
             "unit": "%"
           }
         ]
