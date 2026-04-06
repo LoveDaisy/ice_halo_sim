@@ -677,4 +677,166 @@ TEST_F(RngTest, ZigzagJsonRoundTrip) {
 }
 
 
+// ============================================================================
+// Laplacian distribution tests
+// ============================================================================
+
+TEST_F(RngTest, IsFullSphereUniformLaplacian) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+
+  AxisDistribution lap;
+  lap.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  lap.latitude_dist = { DistributionType::kLaplacian, 0.0f, 2.0f };
+  EXPECT_FALSE(lap.IsFullSphereUniform());
+}
+
+
+TEST_F(SphericalSamplingTest, LaplacianBasicSampling) {
+  // Laplacian with mean=0, std=5 (scale b=5°).
+  lumice::AxisDistribution axis;
+  axis.latitude_dist = { lumice::DistributionType::kLaplacian, 0.0f, 5.0f };
+  axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(42);
+
+  float lon_lat[2];
+  double sum_lat = 0;
+  constexpr int kN = 50000;
+  for (int i = 0; i < kN; i++) {
+    lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+    float lat_deg = lon_lat[1] / kDeg2Rad;
+    sum_lat += lat_deg;
+    // Laplace can produce wide tails, but most samples should be within [-40, 40].
+    ASSERT_GE(lat_deg, -90.0f) << "latitude out of range at sample " << i;
+    ASSERT_LE(lat_deg, 90.0f) << "latitude out of range at sample " << i;
+  }
+  // Mean latitude should be close to 0 (equatorial center).
+  double mean_lat = sum_lat / kN;
+  EXPECT_NEAR(mean_lat, 0.0, 1.0) << "Mean latitude deviates too much from center";
+}
+
+
+TEST_F(SphericalSamplingTest, LaplacianJacobianCorrection) {
+  // Verify Jacobian correction using the mean-shift method (same as zigzag).
+  struct Config {
+    float mean;
+    float std;
+    const char* label;
+  };
+  Config configs[] = {
+    { 0.0f, 5.0f, "equatorial" },
+    { 45.0f, 3.0f, "mid-latitude" },
+    { 80.0f, 2.0f, "near-pole" },
+  };
+
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(999);
+
+  for (const auto& cfg : configs) {
+    SCOPED_TRACE(cfg.label);
+
+    lumice::AxisDistribution axis;
+    axis.latitude_dist = { lumice::DistributionType::kLaplacian, cfg.mean, cfg.std };
+    axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+    // Sample with Jacobian (rejection sampling).
+    constexpr size_t kN = 500000;
+    double observed_mean_colat = 0;
+    float lon_lat[2];
+    for (size_t i = 0; i < kN; i++) {
+      lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+      double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
+      observed_mean_colat += colatitude_deg;
+    }
+    observed_mean_colat /= kN;
+
+    // Compute proposal mean colatitude (without Jacobian).
+    double proposal_mean_colat = 0;
+    constexpr size_t kProposalN = 100000;
+    for (size_t i = 0; i < kProposalN; i++) {
+      float raw_lat = rng.Get(axis.latitude_dist);
+      double colat = 90.0 - static_cast<double>(raw_lat);
+      colat = std::max(0.0, std::min(180.0, colat));
+      proposal_mean_colat += colat;
+    }
+    proposal_mean_colat /= kProposalN;
+
+    // Jacobian pushes mean closer to equator (colatitude 90°).
+    double observed_dist = std::abs(observed_mean_colat - 90.0);
+    double proposal_dist = std::abs(proposal_mean_colat - 90.0);
+    EXPECT_LT(observed_dist, proposal_dist + 0.5)
+        << "Jacobian correction not detected for " << cfg.label << " (observed=" << observed_mean_colat
+        << ", proposal=" << proposal_mean_colat << ")";
+  }
+}
+
+
+TEST_F(SphericalSamplingTest, LaplacianHeavierTailThanGaussian) {
+  // Same mean and scale: Laplacian should have more samples far from mean than Gaussian.
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(777);
+
+  constexpr float kMean = 0.0f;
+  constexpr float kScale = 5.0f;
+  constexpr size_t kN = 200000;
+  constexpr float kThreshold = 3.0f * kScale;  // 15 degrees from mean
+
+  // Count Laplacian samples beyond threshold.
+  lumice::AxisDistribution lap_axis;
+  lap_axis.latitude_dist = { lumice::DistributionType::kLaplacian, kMean, kScale };
+  lap_axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+  int lap_far = 0;
+  float lon_lat[2];
+  for (size_t i = 0; i < kN; i++) {
+    lumice::RandomSampler::SampleSphericalPointsSph(lap_axis, lon_lat);
+    float lat_deg = lon_lat[1] / kDeg2Rad;
+    if (std::abs(lat_deg - kMean) > kThreshold) {
+      lap_far++;
+    }
+  }
+
+  // Count Gaussian samples beyond threshold.
+  lumice::AxisDistribution gauss_axis;
+  gauss_axis.latitude_dist = { lumice::DistributionType::kGaussian, kMean, kScale };
+  gauss_axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+  int gauss_far = 0;
+  for (size_t i = 0; i < kN; i++) {
+    lumice::RandomSampler::SampleSphericalPointsSph(gauss_axis, lon_lat);
+    float lat_deg = lon_lat[1] / kDeg2Rad;
+    if (std::abs(lat_deg - kMean) > kThreshold) {
+      gauss_far++;
+    }
+  }
+
+  // Laplacian should have MORE far-tail samples than Gaussian.
+  // At 3σ: Gaussian tail ~ 0.27%, Laplace tail ~ exp(-3) ≈ 5%.
+  EXPECT_GT(lap_far, gauss_far) << "Laplacian should have heavier tails than Gaussian" << " (lap_far=" << lap_far
+                                << ", gauss_far=" << gauss_far << ")";
+}
+
+
+TEST_F(RngTest, LaplacianJsonRoundTrip) {
+  using lumice::Distribution;
+  using lumice::DistributionType;
+
+  Distribution orig{ DistributionType::kLaplacian, 45.0f, 3.0f };
+  nlohmann::json j;
+  lumice::to_json(j, orig);
+
+  EXPECT_EQ(j["type"], "laplacian");
+  EXPECT_FLOAT_EQ(j["mean"], 45.0f);
+  EXPECT_FLOAT_EQ(j["std"], 3.0f);
+
+  Distribution parsed{};
+  lumice::from_json(j, parsed);
+  EXPECT_EQ(parsed.type, DistributionType::kLaplacian);
+  EXPECT_FLOAT_EQ(parsed.mean, 45.0f);
+  EXPECT_FLOAT_EQ(parsed.std, 3.0f);
+}
+
+
 }  // namespace

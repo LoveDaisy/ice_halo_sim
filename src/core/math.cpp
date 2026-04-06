@@ -371,6 +371,14 @@ float RandomNumberGenerator::Get(Distribution dist) {
     case DistributionType::kZigzag:
       // Rectified arcsine: |A·sin(2πU) + B| where A=std (amplitude), B=mean (tilt offset).
       return std::abs(dist.std * std::sin(GetUniform() * 2.0f * math::kPi) + dist.mean);
+    case DistributionType::kLaplacian: {
+      // Laplace inverse CDF: μ - b·sign(U-0.5)·ln(1-2|U-0.5|), returns degrees.
+      float u = GetUniform();
+      float sign = (u < 0.5f) ? -1.0f : 1.0f;
+      float arg = 1.0f - 2.0f * std::abs(u - 0.5f);
+      arg = std::max(arg, std::numeric_limits<float>::min());  // Clamp to avoid ln(0).
+      return dist.mean - dist.std * sign * std::log(arg);
+    }
     case DistributionType::kNoRandom:
       return dist.mean;
     default:
@@ -418,6 +426,10 @@ float ComputeJacobianEnvelope(const Distribution& dist) {
       // When |mean| >= std: [|mean|-std, |mean|+std], M = cos((|mean|-std)°).
       // When |mean| < std: [0, |mean|+std], M = cos(0) = 1.
       return std::cos(std::max(std::abs(dist.mean) - dist.std, 0.0f) * math::kDegreeToRad);
+    case DistributionType::kLaplacian:
+      // Laplace tails heavier than Gaussian; use 5b instead of 3σ (covers 99.3% of mass).
+      // Samples beyond 5b are rare and handled correctly by NormalizeLatitude + rejection.
+      return std::cos(std::max(std::abs(dist.mean) - 5.0f * dist.std, 0.0f) * math::kDegreeToRad);
     case DistributionType::kUniform:
     default:
       return 1.0f;
