@@ -68,9 +68,25 @@ static std::vector<int> ParseRaypathText(const std::string& text) {
   return result;
 }
 
+static const char* AxisDistTypeToString(AxisDistType t) {
+  switch (t) {
+    case AxisDistType::kGauss:
+      return "gauss";
+    case AxisDistType::kUniform:
+      return "uniform";
+    case AxisDistType::kZigzag:
+      return "zigzag";
+    case AxisDistType::kLaplacian:
+      return "laplacian";
+    default:
+      GUI_LOG_ERROR("[FileIO] Unknown AxisDistType: {}", static_cast<int>(t));
+      return "gauss";
+  }
+}
+
 static json SerializeAxisDist(const AxisDist& a) {
   json j;
-  j["type"] = (a.type == AxisDistType::kGauss) ? "gauss" : "uniform";
+  j["type"] = AxisDistTypeToString(a.type);
   j["mean"] = a.mean;
   j["std"] = a.std;
   return j;
@@ -145,6 +161,19 @@ static json SerializeFilterForCore(const FilterConfig& f) {
   return j;
 }
 
+static AxisDistType ParseAxisDistType(const std::string& t) {
+  if (t == "gauss")
+    return AxisDistType::kGauss;
+  if (t == "uniform")
+    return AxisDistType::kUniform;
+  if (t == "zigzag")
+    return AxisDistType::kZigzag;
+  if (t == "laplacian")
+    return AxisDistType::kLaplacian;
+  GUI_LOG_ERROR("[FileIO] Unknown axis dist type '{}', falling back to gauss", t);
+  return AxisDistType::kGauss;
+}
+
 static AxisDist ParseAxisDist(const json& j) {
   AxisDist a;
   if (j.is_number()) {
@@ -153,7 +182,7 @@ static AxisDist ParseAxisDist(const json& j) {
     a.std = 0.0f;
   } else if (j.is_object()) {
     auto t = j.value("type", "gauss");
-    a.type = (t == "uniform") ? AxisDistType::kUniform : AxisDistType::kGauss;
+    a.type = ParseAxisDistType(t);
     a.mean = j.value("mean", 0.0f);
     a.std = j.value("std", 0.0f);
   }
@@ -355,7 +384,24 @@ std::string SerializeCoreConfig(const GuiState& state) {
 // ========== Fill LUMICE_Config C struct (for LUMICE_CommitConfigStruct) ==========
 
 static void FillAxisDist(const AxisDist& src, LUMICE_AxisDist* dst) {
-  dst->type = src.type == AxisDistType::kGauss ? 0 : 1;
+  static_assert(static_cast<int>(AxisDistType::kCount) == 4, "Update FillAxisDist when adding new AxisDistType");
+  switch (src.type) {
+    case AxisDistType::kGauss:
+      dst->type = LUMICE_AXIS_DIST_GAUSS;
+      break;
+    case AxisDistType::kUniform:
+      dst->type = LUMICE_AXIS_DIST_UNIFORM;
+      break;
+    case AxisDistType::kZigzag:
+      dst->type = LUMICE_AXIS_DIST_ZIGZAG;
+      break;
+    case AxisDistType::kLaplacian:
+      dst->type = LUMICE_AXIS_DIST_LAPLACIAN;
+      break;
+    default:
+      dst->type = LUMICE_AXIS_DIST_GAUSS;
+      break;
+  }
   dst->mean = src.mean;
   dst->std = src.std;
 }

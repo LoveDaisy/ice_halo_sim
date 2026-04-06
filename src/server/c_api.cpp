@@ -143,7 +143,24 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 // =============== Configuration (C struct) ===============
 static nlohmann::json AxisDistToJson(const LUMICE_AxisDist& d) {
   nlohmann::json j;
-  j["type"] = d.type == 0 ? "gauss" : "uniform";
+  switch (d.type) {
+    case LUMICE_AXIS_DIST_GAUSS:
+      j["type"] = "gauss";
+      break;
+    case LUMICE_AXIS_DIST_UNIFORM:
+      j["type"] = "uniform";
+      break;
+    case LUMICE_AXIS_DIST_ZIGZAG:
+      j["type"] = "zigzag";
+      break;
+    case LUMICE_AXIS_DIST_LAPLACIAN:
+      j["type"] = "laplacian";
+      break;
+    default:
+      LOG_ERROR("Unknown LUMICE_AxisDist.type: {}", d.type);
+      j["type"] = "gauss";
+      break;
+  }
   j["mean"] = d.mean;
   j["std"] = d.std;
   return j;
@@ -308,9 +325,13 @@ static LUMICE_ErrorCode JsonToAxisDist(const nlohmann::json& j, LUMICE_AxisDist*
   }
   auto type_str = j.at("type").get<std::string>();
   if (type_str == "gauss") {
-    out->type = 0;
+    out->type = LUMICE_AXIS_DIST_GAUSS;
   } else if (type_str == "uniform") {
-    out->type = 1;
+    out->type = LUMICE_AXIS_DIST_UNIFORM;
+  } else if (type_str == "zigzag") {
+    out->type = LUMICE_AXIS_DIST_ZIGZAG;
+  } else if (type_str == "laplacian") {
+    out->type = LUMICE_AXIS_DIST_LAPLACIAN;
   } else {
     return LUMICE_ERR_INVALID_VALUE;
   }

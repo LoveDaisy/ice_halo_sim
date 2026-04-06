@@ -118,10 +118,16 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 #define LUMICE_MAX_CONFIG_SCATTER_ENTRIES 16
 #define LUMICE_MAX_CONFIG_RAYPATH_LEN 32
 
+// Axis distribution type constants for LUMICE_AxisDist.type
+#define LUMICE_AXIS_DIST_GAUSS 0
+#define LUMICE_AXIS_DIST_UNIFORM 1
+#define LUMICE_AXIS_DIST_ZIGZAG 2
+#define LUMICE_AXIS_DIST_LAPLACIAN 3
+
 typedef struct LUMICE_AxisDist_ {
-  int type;    // 0=gauss, 1=uniform
+  int type;    // LUMICE_AXIS_DIST_GAUSS / UNIFORM / ZIGZAG / LAPLACIAN
   float mean;  // degrees
-  float std;   // gauss: standard deviation; uniform: full range (degrees)
+  float std;   // gauss: std dev; uniform: full range; zigzag: amplitude; laplacian: scale (degrees)
 } LUMICE_AxisDist;
 
 typedef struct LUMICE_CrystalParam_ {
