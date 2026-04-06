@@ -236,7 +236,7 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
     axis.type = static_cast<AxisDistType>(dist_type);
     state.MarkDirty();
   }
-  ImGui::SameLine(100);
+  ImGui::SetCursorPosX(100);
   if (ImGui::RadioButton("Zigzag##rb", &dist_type, 2)) {
     axis.type = static_cast<AxisDistType>(dist_type);
     state.MarkDirty();
