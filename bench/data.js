@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775448151252,
+  "lastUpdate": 1775448152568,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -379,6 +379,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 70.1,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5548e8acc740ce89034441662cae0cb19c816a29",
+          "message": "Merge pull request #50 from LoveDaisy/feat/improve_filter\n\nfix(filter): DirectionFilter correctness fix and filter subsystem improvements",
+          "timestamp": "2026-04-06T11:58:35+08:00",
+          "tree_id": "8e6aad4814519815f04ee9170aa02e23067e2d32",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5548e8acc740ce89034441662cae0cb19c816a29"
+        },
+        "date": 1775448152122,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 97.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 81.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 71.7,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 68.2,
             "unit": "%"
           }
         ]
