@@ -340,6 +340,61 @@ TEST_F(SphericalSamplingTest, LargeSigmaUniformDistribution) {
 }
 
 
+TEST_F(SphericalSamplingTest, UniformLatitudeJacobianCorrection) {
+  // Verify that kUniform latitude also gets Jacobian correction: p(theta) ∝ sin(theta).
+  // Full-range uniform latitude should produce the same distribution as uniform-on-sphere.
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(77);
+
+  lumice::AxisDistribution axis;
+  axis.latitude_dist.type = lumice::DistributionType::kUniform;
+  axis.latitude_dist.mean = 90.0f;  // zenith=0° → latitude=90° (centered at pole)
+  axis.latitude_dist.std = 360.0f;  // full range
+  axis.azimuth_dist.type = lumice::DistributionType::kUniform;
+  axis.azimuth_dist.mean = 0.0f;
+  axis.azimuth_dist.std = 360.0f;
+
+  // Bin over full colatitude [0°, 180°].
+  constexpr int kNumBins = 18;
+  constexpr double kBinWidth = 180.0 / kNumBins;
+  std::vector<double> bin_edges;
+  std::vector<double> bin_centers;
+  for (int b = 0; b <= kNumBins; b++) {
+    bin_edges.push_back(b * kBinWidth);
+  }
+  for (int b = 0; b < kNumBins; b++) {
+    bin_centers.push_back((b + 0.5) * kBinWidth);
+  }
+
+  // Sample using the parameterized path (NOT IsFullSphereUniform dispatch).
+  std::vector<int> counts(kNumBins, 0);
+  float lon_lat[2];
+  for (size_t i = 0; i < kSampleCount; i++) {
+    lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+    double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
+    for (int b = 0; b < kNumBins; b++) {
+      if (colatitude_deg >= bin_edges[b] && colatitude_deg < bin_edges[b + 1]) {
+        counts[b]++;
+        break;
+      }
+    }
+  }
+
+  // Should match uniform-on-sphere: p(theta) = sin(theta)/2.
+  double bin_width_rad = kBinWidth * kDeg2Rad;
+  for (int b = 0; b < kNumBins; b++) {
+    double theta_rad = bin_centers[b] * kDeg2Rad;
+    double theo_density = std::sin(theta_rad) / 2.0;
+    if (theo_density < 1e-6) {
+      continue;
+    }
+    double observed_density = static_cast<double>(counts[b]) / (kSampleCount * bin_width_rad);
+    double relative_dev = std::abs(observed_density - theo_density) / theo_density;
+    EXPECT_LT(relative_dev, 0.05) << "bin center=" << bin_centers[b] << "°";
+  }
+}
+
+
 TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
   // For each config, check that the sample mean of colatitude matches the theoretical expectation.
   // For G(theta-theta0, sigma) × sin(theta), the mean is slightly shifted from theta0

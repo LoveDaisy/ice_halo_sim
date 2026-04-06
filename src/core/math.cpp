@@ -402,34 +402,31 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t ste
 void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num) {
   auto& rng = RandomNumberGenerator::GetInstance();
 
-  // Jacobian correction for Gaussian latitude sampling.
-  // Target distribution: p(phi) ∝ G(phi; mean, sigma) × cos(phi)
+  // Jacobian correction for latitude sampling.
+  // Target distribution: p(phi) ∝ proposal(phi) × cos(phi)
   // where cos(phi) = sin(colatitude) is the spherical area element Jacobian.
   //
-  // Two paths:
+  // Applies to both Gaussian and Uniform latitude distributions.
+  // For Gaussian, two paths:
   //   1. Rayleigh (polar): when colatitude_center + 3*sigma < kPolarThreshold,
   //      use 2D Gaussian → Rayleigh, exact for small colatitudes (sin(θ)≈θ).
   //   2. Optimized rejection: propose from Gaussian, accept with prob cos(phi)/M,
   //      where M = cos(max(|mean| - 3*sigma, 0)) to maximize acceptance rate.
-  //      Derivation: explore verified M = sin(min(θ₀+3σ, π/2)) in colatitude;
-  //      sin(π/2-x) = cos(x) gives the latitude equivalent.
-  //
-  // kUniform latitude with non-uniform azimuth has the same Jacobian issue but is
-  // extremely rare in practice. TODO: fix if needed in the future.
+  // For Uniform: rejection with M=1, acceptance rate ≥ 2/π ≈ 64%.
   constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;  // Rayleigh only for colatitude < 0.5°
   constexpr int kMaxRejectionAttempts = 1000;
 
-  bool need_jacobian = axis_dist.latitude_dist.type == DistributionType::kGaussian;
+  bool is_gaussian = axis_dist.latitude_dist.type == DistributionType::kGaussian;
+  bool need_jacobian = is_gaussian || axis_dist.latitude_dist.type == DistributionType::kUniform;
   float latitude_mean_rad = 0;
   float sigma_rad = 0;
-  float colatitude_center = 0;
   bool use_rayleigh = false;
-  float rejection_m = 1.0f;
+  float rejection_m = 1.0f;  // default M=1, safe for all distributions
 
-  if (need_jacobian) {
+  if (is_gaussian) {
     latitude_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
     sigma_rad = axis_dist.latitude_dist.std * math::kDegreeToRad;
-    colatitude_center = math::kPi_2 - std::abs(latitude_mean_rad);
+    float colatitude_center = math::kPi_2 - std::abs(latitude_mean_rad);
     use_rayleigh = (colatitude_center + 3.0f * sigma_rad) < kPolarThresholdRad;
     if (!use_rayleigh) {
       rejection_m = std::cos(std::max(std::abs(latitude_mean_rad) - 3.0f * sigma_rad, 0.0f));
@@ -440,7 +437,7 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     float phi = 0;
     bool flip = false;
 
-    if (need_jacobian && use_rayleigh) {
+    if (is_gaussian && use_rayleigh) {
       // Rayleigh path: 2D Gaussian in tangent plane at pole → Rayleigh angular distance.
       // Guard ensures colatitude_center + 3σ < 0.5°, so colatitude rarely exceeds valid range.
       float dx = rng.GetGaussian() * sigma_rad;
@@ -465,12 +462,8 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
         }
       } while (rng.GetUniform() >= std::cos(phi) / rejection_m);
     } else {
-      // kNoRandom / kUniform: no Jacobian correction.
-      // NormalizeLatitude is a no-op for kNoRandom (std=0), but handles kUniform with large std.
+      // kNoRandom: no Jacobian needed (single deterministic orientation).
       phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
-      auto [norm_phi, norm_flip] = detail::NormalizeLatitude(phi);
-      phi = norm_phi;
-      flip = norm_flip;
     }
 
     float lambda = rng.Get(axis_dist.azimuth_dist) * math::kDegreeToRad;
