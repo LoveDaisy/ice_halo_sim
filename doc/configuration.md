@@ -155,8 +155,26 @@ Many parameters support distribution types, which can be:
    ```
 
 **Distribution type descriptions**:
-- `gauss`: Gaussian distribution, where `mean` is the mean and `std` is the standard deviation
-- `uniform`: Uniform distribution, where `mean` is the center value and `std` is the full range
+
+| Type | `mean` | `std` | Description |
+|------|--------|-------|-------------|
+| `gauss` | center (deg) | standard deviation (deg) | Gaussian distribution for stable crystal orientation |
+| `uniform` | center (deg) | full range width (deg) | Uniform distribution for random orientation or roll |
+| `zigzag` | tilt offset (deg) | amplitude (deg) | Folded arcsine distribution for large-crystal zigzag oscillation |
+| `laplacian` | center (deg) | scale parameter (deg) | Laplace distribution for size-aggregated tilt |
+
+**Notes:**
+- `gauss` and `uniform` are the most commonly used types for halo simulation
+- `zigzag` models the oscillatory motion of large crystals at high Reynolds numbers
+- `laplacian` simplifies configuration for mixed-size crystal populations (see [crystal-orientation-sampling.md](crystal-orientation-sampling.md) for physical background)
+
+**Examples:**
+```json
+"zenith": { "type": "zigzag", "mean": 5, "std": 30 }
+```
+```json
+"zenith": { "type": "laplacian", "mean": 90, "std": 2.0 }
+```
 
 ### filter (Filter Configuration)
 

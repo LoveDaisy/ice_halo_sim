@@ -12,8 +12,9 @@ namespace lumice::gui {
 // Crystal type
 enum class CrystalType { kPrism, kPyramid };
 
-// Axis distribution type (matches PRD: Gauss or Uniform only for MVP)
-enum class AxisDistType { kGauss, kUniform };
+// Axis distribution type for crystal orientation.
+// Values must stay contiguous 0..N-1 — ImGui RadioButton relies on static_cast<int>.
+enum class AxisDistType { kGauss, kUniform, kZigzag, kLaplacian, kCount };
 
 // Aspect ratio presets for preview window
 enum class AspectPreset { kFree, k16x9, k3x2, k4x3, k1x1, kMatchBg };
@@ -25,7 +26,7 @@ static_assert(sizeof(kAspectPresetNames) / sizeof(kAspectPresetNames[0]) == kAsp
 struct AxisDist {
   AxisDistType type = AxisDistType::kUniform;
   float mean = 0.0f;
-  float std = 0.0f;  // Gauss: standard deviation; Uniform: full range
+  float std = 0.0f;  // Gauss: standard deviation; Uniform: full range; Zigzag: amplitude; Laplacian: scale
 };
 
 struct CrystalConfig {

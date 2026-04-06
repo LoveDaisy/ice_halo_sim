@@ -127,6 +127,44 @@
           "std": 0.8
         }
       }
+    },
+    {
+      "id": 7,
+      "type": "prism",
+      "shape": {
+        "height": 3.0
+      },
+      "axis": {
+        "zenith": {
+          "type": "zigzag",
+          "mean": 5,
+          "std": 30
+        },
+        "roll": {
+          "type": "uniform",
+          "mean": 0,
+          "std": 360
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "prism",
+      "shape": {
+        "height": 0.5
+      },
+      "axis": {
+        "zenith": {
+          "type": "laplacian",
+          "mean": 90,
+          "std": 2.0
+        },
+        "roll": {
+          "type": "uniform",
+          "mean": 0,
+          "std": 360
+        }
+      }
     }
   ],
   "filter": [

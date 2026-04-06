@@ -517,4 +517,326 @@ TEST_F(NormalizeLatitudeTest, MultipleFolds) {
 }
 
 
+// ============================================================================
+// Zigzag distribution tests
+// ============================================================================
+
+TEST_F(RngTest, IsFullSphereUniformZigzag) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+
+  AxisDistribution zigzag;
+  zigzag.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  zigzag.latitude_dist = { DistributionType::kZigzag, 0.0f, 30.0f };
+  EXPECT_FALSE(zigzag.IsFullSphereUniform());
+}
+
+
+TEST_F(SphericalSamplingTest, ZigzagBasicSampling) {
+  // Zigzag with mean=0 (tilt_offset), std=30 (amplitude): |30·sin(2πU) + 0|
+  // All samples should produce colatitude in [60°, 120°] (zenith 60-120 = latitude -30 to +30).
+  lumice::AxisDistribution axis;
+  axis.latitude_dist = { lumice::DistributionType::kZigzag, 0.0f, 30.0f };
+  axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(42);
+
+  float lon_lat[2];
+  for (int i = 0; i < 10000; i++) {
+    lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+    float lat_deg = lon_lat[1] / kDeg2Rad;
+    // |0 + 30·sin(...)| produces latitude in [0, 30], but Jacobian rejection + NormalizeLatitude
+    // may shift slightly. Latitude should be in [-30, 30] range (generous margin).
+    ASSERT_GE(lat_deg, -35.0f) << "latitude out of range at sample " << i;
+    ASSERT_LE(lat_deg, 35.0f) << "latitude out of range at sample " << i;
+  }
+}
+
+
+TEST_F(SphericalSamplingTest, ZigzagJacobianCorrection) {
+  // Verify that zigzag sampling with Jacobian correction produces the correct density.
+  // Target: p(theta) ∝ zigzag_proposal_pdf(theta) × sin(theta)
+  // where zigzag_proposal_pdf is the rectified arcsine distribution.
+  struct Config {
+    float mean;  // tilt_offset (latitude degrees)
+    float std;   // amplitude (degrees)
+    const char* label;
+  };
+  Config configs[] = {
+    { 0.0f, 30.0f, "equatorial, mean<std" },
+    { 45.0f, 10.0f, "mid-latitude, mean>std" },
+    { 80.0f, 5.0f, "near-pole, mean>>std" },
+  };
+
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(123);
+
+  for (const auto& cfg : configs) {
+    SCOPED_TRACE(cfg.label);
+
+    lumice::AxisDistribution axis;
+    axis.latitude_dist = { lumice::DistributionType::kZigzag, cfg.mean, cfg.std };
+    axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+    // Determine colatitude range from the zigzag proposal range.
+    // Zigzag |A·sin(2πU) + B| produces latitude in [max(|B|-A, 0), |B|+A].
+    float lat_lo = std::max(std::abs(cfg.mean) - cfg.std, 0.0f);
+    float lat_hi = std::abs(cfg.mean) + cfg.std;
+    // Convert latitude range to colatitude range (colatitude = 90 - latitude).
+    float lo = std::max(0.0f, 90.0f - lat_hi - 3.0f);
+    float hi = std::min(180.0f, 90.0f - lat_lo + 3.0f);
+    constexpr int kNumBins = 20;
+    float bin_width = (hi - lo) / kNumBins;
+
+    std::vector<double> bin_edges;
+    std::vector<double> bin_centers;
+    for (int b = 0; b <= kNumBins; b++) {
+      bin_edges.push_back(lo + b * bin_width);
+    }
+    for (int b = 0; b < kNumBins; b++) {
+      bin_centers.push_back(lo + (b + 0.5) * bin_width);
+    }
+
+    // Sample and bin.
+    constexpr size_t kN = 1000000;
+    std::vector<int> counts(kNumBins, 0);
+    float lon_lat[2];
+    for (size_t i = 0; i < kN; i++) {
+      lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+      double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
+      for (int b = 0; b < kNumBins; b++) {
+        if (colatitude_deg >= bin_edges[b] && colatitude_deg < bin_edges[b + 1]) {
+          counts[b]++;
+          break;
+        }
+      }
+    }
+
+    double total_in_range = 0;
+    for (int b = 0; b < kNumBins; b++) {
+      total_in_range += counts[b];
+    }
+
+    // At least 90% of samples should fall within the binning range.
+    EXPECT_GT(total_in_range / kN, 0.90) << "Too many samples outside expected range for " << cfg.label;
+
+    // Verify Jacobian correction by checking mean colatitude shift.
+    // With Jacobian sin(theta) weighting, samples are shifted toward the equator (theta=90°)
+    // compared to the bare proposal. We verify by comparing:
+    //   1. Observed mean colatitude from rejection samples
+    //   2. Proposal mean colatitude (computed via Monte Carlo without rejection)
+    // The observed mean should be >= proposal mean (closer to equator = larger colatitude).
+    double observed_mean_colat = 0;
+    for (int b = 0; b < kNumBins; b++) {
+      observed_mean_colat += bin_centers[b] * counts[b];
+    }
+    observed_mean_colat /= (total_in_range + 1e-10);
+
+    // Compute proposal mean colatitude (without Jacobian) via Monte Carlo.
+    double proposal_mean_colat = 0;
+    constexpr size_t kProposalN = 100000;
+    for (size_t i = 0; i < kProposalN; i++) {
+      float raw_lat = rng.Get(axis.latitude_dist);  // proposal in degrees
+      double colat = 90.0 - static_cast<double>(raw_lat);
+      // Clamp to [0, 180] for safety.
+      colat = std::max(0.0, std::min(180.0, colat));
+      proposal_mean_colat += colat;
+    }
+    proposal_mean_colat /= kProposalN;
+
+    // Jacobian sin(theta) weighting pushes mean colatitude toward 90° (equator).
+    // For colatitude < 90°, observed mean should be LARGER than proposal mean.
+    // For colatitude > 90°, observed mean should be SMALLER (closer to 90°).
+    double observed_dist_to_equator = std::abs(observed_mean_colat - 90.0);
+    double proposal_dist_to_equator = std::abs(proposal_mean_colat - 90.0);
+    EXPECT_LT(observed_dist_to_equator, proposal_dist_to_equator + 0.5)
+        << "Jacobian correction not detected for " << cfg.label << " (observed_mean_colat=" << observed_mean_colat
+        << ", proposal_mean_colat=" << proposal_mean_colat << ")";
+  }
+}
+
+
+TEST_F(RngTest, ZigzagJsonRoundTrip) {
+  using lumice::Distribution;
+  using lumice::DistributionType;
+
+  Distribution orig{ DistributionType::kZigzag, 10.0f, 25.0f };
+  nlohmann::json j;
+  lumice::to_json(j, orig);
+
+  EXPECT_EQ(j["type"], "zigzag");
+  EXPECT_FLOAT_EQ(j["mean"], 10.0f);
+  EXPECT_FLOAT_EQ(j["std"], 25.0f);
+
+  Distribution parsed{};
+  lumice::from_json(j, parsed);
+  EXPECT_EQ(parsed.type, DistributionType::kZigzag);
+  EXPECT_FLOAT_EQ(parsed.mean, 10.0f);
+  EXPECT_FLOAT_EQ(parsed.std, 25.0f);
+}
+
+
+// ============================================================================
+// Laplacian distribution tests
+// ============================================================================
+
+TEST_F(RngTest, IsFullSphereUniformLaplacian) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+
+  AxisDistribution lap;
+  lap.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  lap.latitude_dist = { DistributionType::kLaplacian, 0.0f, 2.0f };
+  EXPECT_FALSE(lap.IsFullSphereUniform());
+}
+
+
+TEST_F(SphericalSamplingTest, LaplacianBasicSampling) {
+  // Laplacian with mean=0, std=5 (scale b=5°).
+  lumice::AxisDistribution axis;
+  axis.latitude_dist = { lumice::DistributionType::kLaplacian, 0.0f, 5.0f };
+  axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(42);
+
+  float lon_lat[2];
+  double sum_lat = 0;
+  constexpr int kN = 50000;
+  for (int i = 0; i < kN; i++) {
+    lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+    float lat_deg = lon_lat[1] / kDeg2Rad;
+    sum_lat += lat_deg;
+    // Laplace can produce wide tails, but most samples should be within [-40, 40].
+    ASSERT_GE(lat_deg, -90.0f) << "latitude out of range at sample " << i;
+    ASSERT_LE(lat_deg, 90.0f) << "latitude out of range at sample " << i;
+  }
+  // Mean latitude should be close to 0 (equatorial center).
+  double mean_lat = sum_lat / kN;
+  EXPECT_NEAR(mean_lat, 0.0, 1.0) << "Mean latitude deviates too much from center";
+}
+
+
+TEST_F(SphericalSamplingTest, LaplacianJacobianCorrection) {
+  // Verify Jacobian correction using the mean-shift method (same as zigzag).
+  struct Config {
+    float mean;
+    float std;
+    const char* label;
+  };
+  Config configs[] = {
+    { 0.0f, 5.0f, "equatorial" },
+    { 45.0f, 3.0f, "mid-latitude" },
+    { 80.0f, 2.0f, "near-pole" },
+  };
+
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(999);
+
+  for (const auto& cfg : configs) {
+    SCOPED_TRACE(cfg.label);
+
+    lumice::AxisDistribution axis;
+    axis.latitude_dist = { lumice::DistributionType::kLaplacian, cfg.mean, cfg.std };
+    axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+    // Sample with Jacobian (rejection sampling).
+    constexpr size_t kN = 500000;
+    double observed_mean_colat = 0;
+    float lon_lat[2];
+    for (size_t i = 0; i < kN; i++) {
+      lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+      double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
+      observed_mean_colat += colatitude_deg;
+    }
+    observed_mean_colat /= kN;
+
+    // Compute proposal mean colatitude (without Jacobian).
+    double proposal_mean_colat = 0;
+    constexpr size_t kProposalN = 100000;
+    for (size_t i = 0; i < kProposalN; i++) {
+      float raw_lat = rng.Get(axis.latitude_dist);
+      double colat = 90.0 - static_cast<double>(raw_lat);
+      colat = std::max(0.0, std::min(180.0, colat));
+      proposal_mean_colat += colat;
+    }
+    proposal_mean_colat /= kProposalN;
+
+    // Jacobian pushes mean closer to equator (colatitude 90°).
+    double observed_dist = std::abs(observed_mean_colat - 90.0);
+    double proposal_dist = std::abs(proposal_mean_colat - 90.0);
+    EXPECT_LT(observed_dist, proposal_dist + 0.5)
+        << "Jacobian correction not detected for " << cfg.label << " (observed=" << observed_mean_colat
+        << ", proposal=" << proposal_mean_colat << ")";
+  }
+}
+
+
+TEST_F(SphericalSamplingTest, LaplacianHeavierTailThanGaussian) {
+  // Same mean and scale: Laplacian should have more samples far from mean than Gaussian.
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(777);
+
+  constexpr float kMean = 0.0f;
+  constexpr float kScale = 5.0f;
+  constexpr size_t kN = 200000;
+  constexpr float kThreshold = 3.0f * kScale;  // 15 degrees from mean
+
+  // Count Laplacian samples beyond threshold.
+  lumice::AxisDistribution lap_axis;
+  lap_axis.latitude_dist = { lumice::DistributionType::kLaplacian, kMean, kScale };
+  lap_axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+  int lap_far = 0;
+  float lon_lat[2];
+  for (size_t i = 0; i < kN; i++) {
+    lumice::RandomSampler::SampleSphericalPointsSph(lap_axis, lon_lat);
+    float lat_deg = lon_lat[1] / kDeg2Rad;
+    if (std::abs(lat_deg - kMean) > kThreshold) {
+      lap_far++;
+    }
+  }
+
+  // Count Gaussian samples beyond threshold.
+  lumice::AxisDistribution gauss_axis;
+  gauss_axis.latitude_dist = { lumice::DistributionType::kGaussian, kMean, kScale };
+  gauss_axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+  int gauss_far = 0;
+  for (size_t i = 0; i < kN; i++) {
+    lumice::RandomSampler::SampleSphericalPointsSph(gauss_axis, lon_lat);
+    float lat_deg = lon_lat[1] / kDeg2Rad;
+    if (std::abs(lat_deg - kMean) > kThreshold) {
+      gauss_far++;
+    }
+  }
+
+  // Laplacian should have MORE far-tail samples than Gaussian.
+  // At 3σ: Gaussian tail ~ 0.27%, Laplace tail ~ exp(-3) ≈ 5%.
+  EXPECT_GT(lap_far, gauss_far) << "Laplacian should have heavier tails than Gaussian" << " (lap_far=" << lap_far
+                                << ", gauss_far=" << gauss_far << ")";
+}
+
+
+TEST_F(RngTest, LaplacianJsonRoundTrip) {
+  using lumice::Distribution;
+  using lumice::DistributionType;
+
+  Distribution orig{ DistributionType::kLaplacian, 45.0f, 3.0f };
+  nlohmann::json j;
+  lumice::to_json(j, orig);
+
+  EXPECT_EQ(j["type"], "laplacian");
+  EXPECT_FLOAT_EQ(j["mean"], 45.0f);
+  EXPECT_FLOAT_EQ(j["std"], 3.0f);
+
+  Distribution parsed{};
+  lumice::from_json(j, parsed);
+  EXPECT_EQ(parsed.type, DistributionType::kLaplacian);
+  EXPECT_FLOAT_EQ(parsed.mean, 45.0f);
+  EXPECT_FLOAT_EQ(parsed.std, 3.0f);
+}
+
+
 }  // namespace

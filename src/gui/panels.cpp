@@ -225,6 +225,8 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
   ImGui::SameLine(100);
 
   int dist_type = static_cast<int>(axis.type);
+  auto prev_type = axis.type;
+
   if (ImGui::RadioButton("Gauss##rb", &dist_type, 0)) {
     axis.type = static_cast<AxisDistType>(dist_type);
     state.MarkDirty();
@@ -234,13 +236,58 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
     axis.type = static_cast<AxisDistType>(dist_type);
     state.MarkDirty();
   }
+  ImGui::SetCursorPosX(100);
+  if (ImGui::RadioButton("Zigzag##rb", &dist_type, 2)) {
+    axis.type = static_cast<AxisDistType>(dist_type);
+    state.MarkDirty();
+  }
+  ImGui::SameLine();
+  if (ImGui::RadioButton("Laplacian##rb", &dist_type, 3)) {
+    axis.type = static_cast<AxisDistType>(dist_type);
+    state.MarkDirty();
+  }
+
+  // Clamp std to new range when switching type.
+  if (axis.type != prev_type) {
+    float max_std = 0.0f;
+    switch (axis.type) {
+      case AxisDistType::kGauss:
+        max_std = 180.0f;
+        break;
+      case AxisDistType::kUniform:
+        max_std = 360.0f;
+        break;
+      case AxisDistType::kZigzag:
+        max_std = 90.0f;
+        break;
+      case AxisDistType::kLaplacian:
+        max_std = 90.0f;
+        break;
+      default:
+        max_std = 180.0f;
+        break;
+    }
+    axis.std = std::min(axis.std, max_std);
+  }
 
   DIRTY_IF(SliderWithInput("Mean", &axis.mean, -360.0f, 360.0f));
 
-  if (axis.type == AxisDistType::kGauss) {
-    DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt));
-  } else {
-    DIRTY_IF(SliderWithInput("Range", &axis.std, 0.0f, 360.0f, "%.1f", SliderScale::kSqrt));
+  switch (axis.type) {
+    case AxisDistType::kGauss:
+      DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt));
+      break;
+    case AxisDistType::kUniform:
+      DIRTY_IF(SliderWithInput("Range", &axis.std, 0.0f, 360.0f, "%.1f", SliderScale::kSqrt));
+      break;
+    case AxisDistType::kZigzag:
+      DIRTY_IF(SliderWithInput("Amplitude", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt));
+      break;
+    case AxisDistType::kLaplacian:
+      DIRTY_IF(SliderWithInput("Scale", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt));
+      break;
+    default:
+      DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt));
+      break;
   }
 
   ImGui::PopID();
