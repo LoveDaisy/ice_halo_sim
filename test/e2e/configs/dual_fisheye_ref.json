@@ -7,8 +7,16 @@
         "height": 1.2
       },
       "axis": {
-        "zenith": {"type": "uniform", "mean": 90, "std": 90},
-        "azimuth": {"type": "uniform", "mean": 0, "std": 360}
+        "zenith": {
+          "type": "uniform",
+          "mean": 90,
+          "std": 360
+        },
+        "azimuth": {
+          "type": "uniform",
+          "mean": 0,
+          "std": 360
+        }
       }
     }
   ],
@@ -25,7 +33,10 @@
       {
         "prob": 0.0,
         "entries": [
-          {"crystal": 1, "proportion": 10}
+          {
+            "crystal": 1,
+            "proportion": 10
+          }
         ]
       }
     ]
@@ -37,7 +48,10 @@
         "type": "dual_fisheye_equal_area",
         "fov": 180
       },
-      "resolution": [512, 256],
+      "resolution": [
+        512,
+        256
+      ],
       "view": {
         "elevation": 0
       },
