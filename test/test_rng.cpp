@@ -201,7 +201,7 @@ class SphericalSamplingTest : public ::testing::Test {
       // Samples with theta < 0 get reflected to -theta; samples with theta > pi get reflected to 2*pi-theta.
       double g_direct = std::exp(-0.5 * (theta - theta0) * (theta - theta0) / (sigma * sigma));
       double g_fold0 = std::exp(-0.5 * (-theta - theta0) * (-theta - theta0) / (sigma * sigma));
-      double g_fold_pi = std::exp(-0.5 * (2 * M_PI - theta - theta0) * (2 * M_PI - theta - theta0) / (sigma * sigma));
+      double g_fold_pi = std::exp(-0.5 * (2 * lumice::math::kPi - theta - theta0) * (2 * lumice::math::kPi - theta - theta0) / (sigma * sigma));
       density[i] = (g_direct + g_fold0 + g_fold_pi) * std::sin(theta);
       total += density[i] * bin_width_rad;
     }
@@ -427,7 +427,7 @@ TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
       double theta = (0.001 + k * lumice::math::kPi / kIntegrationSteps);
       double g = 0;
       for (int n = -3; n <= 3; n++) {
-        double shift = 2.0 * n * M_PI;
+        double shift = 2.0 * n * lumice::math::kPi;
         double d1 = theta - theta0 - shift;
         double d2 = theta + theta0 - shift;
         g += std::exp(-0.5 * d1 * d1 / (sigma * sigma));
