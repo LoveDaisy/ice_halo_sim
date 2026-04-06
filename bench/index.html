@@ -218,6 +218,16 @@
               }
             }
 
+            // Scale throughput charts: raw rays/sec → ×10³ rays/sec
+            const isThroughput = suiteName.toLowerCase().includes('throughput');
+            const scaleFactor = isThroughput ? 1000 : 1;
+            if (isThroughput) {
+              unit = '×10³ rays/sec';
+              for (const ds of datasets) {
+                ds.data = ds.data.map(v => v != null ? v / scaleFactor : null);
+              }
+            }
+
             const options = {
               scales: {
                 xAxes: [{
@@ -242,7 +252,9 @@
                     const ds = datasets[item.datasetIndex];
                     const raw = ds._rawData[item.index];
                     if (!raw) return ds.label + ': N/A';
-                    let label = ds.label + ': ' + item.value + ' ' + raw.bench.unit;
+                    const displayUnit = isThroughput ? unit : raw.bench.unit;
+                    const displayValue = isThroughput ? parseFloat(item.value).toFixed(1) : item.value;
+                    let label = ds.label + ': ' + displayValue + ' ' + displayUnit;
                     if (raw.bench.range) label += ' (' + raw.bench.range + ')';
                     return label;
                   },
