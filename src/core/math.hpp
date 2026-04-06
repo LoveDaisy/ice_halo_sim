@@ -125,6 +125,7 @@ enum class DistributionType {
   kNoRandom,
   kUniform,
   kGaussian,
+  kZigzag,
 };
 
 
@@ -313,6 +314,7 @@ NLOHMANN_JSON_SERIALIZE_ENUM(  // declear macro
     {
         { DistributionType::kUniform, "uniform" },
         { DistributionType::kGaussian, "gauss" },
+        { DistributionType::kZigzag, "zigzag" },
     })
 
 void to_json(nlohmann::json& obj, const Distribution& dist);

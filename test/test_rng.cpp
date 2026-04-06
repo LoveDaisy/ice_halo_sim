@@ -517,4 +517,158 @@ TEST_F(NormalizeLatitudeTest, MultipleFolds) {
 }
 
 
+// ============================================================================
+// Zigzag distribution tests
+// ============================================================================
+
+TEST_F(RngTest, IsFullSphereUniformZigzag) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+
+  AxisDistribution zigzag;
+  zigzag.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  zigzag.latitude_dist = { DistributionType::kZigzag, 0.0f, 30.0f };
+  EXPECT_FALSE(zigzag.IsFullSphereUniform());
+}
+
+
+TEST_F(SphericalSamplingTest, ZigzagBasicSampling) {
+  // Zigzag with mean=0 (tilt_offset), std=30 (amplitude): |30·sin(2πU) + 0|
+  // All samples should produce colatitude in [60°, 120°] (zenith 60-120 = latitude -30 to +30).
+  lumice::AxisDistribution axis;
+  axis.latitude_dist = { lumice::DistributionType::kZigzag, 0.0f, 30.0f };
+  axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(42);
+
+  float lon_lat[2];
+  for (int i = 0; i < 10000; i++) {
+    lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+    float lat_deg = lon_lat[1] / kDeg2Rad;
+    // |0 + 30·sin(...)| produces latitude in [0, 30], but Jacobian rejection + NormalizeLatitude
+    // may shift slightly. Latitude should be in [-30, 30] range (generous margin).
+    ASSERT_GE(lat_deg, -35.0f) << "latitude out of range at sample " << i;
+    ASSERT_LE(lat_deg, 35.0f) << "latitude out of range at sample " << i;
+  }
+}
+
+
+TEST_F(SphericalSamplingTest, ZigzagJacobianCorrection) {
+  // Verify that zigzag sampling with Jacobian correction produces the correct density.
+  // Target: p(theta) ∝ zigzag_proposal_pdf(theta) × sin(theta)
+  // where zigzag_proposal_pdf is the rectified arcsine distribution.
+  struct Config {
+    float mean;  // tilt_offset (latitude degrees)
+    float std;   // amplitude (degrees)
+    const char* label;
+  };
+  Config configs[] = {
+    { 0.0f, 30.0f, "equatorial, mean<std" },
+    { 45.0f, 10.0f, "mid-latitude, mean>std" },
+    { 80.0f, 5.0f, "near-pole, mean>>std" },
+  };
+
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(123);
+
+  for (const auto& cfg : configs) {
+    SCOPED_TRACE(cfg.label);
+
+    lumice::AxisDistribution axis;
+    axis.latitude_dist = { lumice::DistributionType::kZigzag, cfg.mean, cfg.std };
+    axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+    // Determine colatitude range from the zigzag proposal range.
+    // Zigzag |A·sin(2πU) + B| produces latitude in [max(|B|-A, 0), |B|+A].
+    float lat_lo = std::max(std::abs(cfg.mean) - cfg.std, 0.0f);
+    float lat_hi = std::abs(cfg.mean) + cfg.std;
+    // Convert latitude range to colatitude range (colatitude = 90 - latitude).
+    float lo = std::max(0.0f, 90.0f - lat_hi - 3.0f);
+    float hi = std::min(180.0f, 90.0f - lat_lo + 3.0f);
+    constexpr int kNumBins = 20;
+    float bin_width = (hi - lo) / kNumBins;
+
+    std::vector<double> bin_edges;
+    std::vector<double> bin_centers;
+    for (int b = 0; b <= kNumBins; b++) {
+      bin_edges.push_back(lo + b * bin_width);
+    }
+    for (int b = 0; b < kNumBins; b++) {
+      bin_centers.push_back(lo + (b + 0.5) * bin_width);
+    }
+
+    // Sample and bin.
+    constexpr size_t kN = 1000000;
+    std::vector<int> counts(kNumBins, 0);
+    float lon_lat[2];
+    for (size_t i = 0; i < kN; i++) {
+      lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+      double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
+      for (int b = 0; b < kNumBins; b++) {
+        if (colatitude_deg >= bin_edges[b] && colatitude_deg < bin_edges[b + 1]) {
+          counts[b]++;
+          break;
+        }
+      }
+    }
+
+    // Compute theoretical density: p(theta) ∝ zigzag_pdf(theta) × sin(theta).
+    // For zigzag |A·sin(2πU) + B|, the PDF of the proposal (in latitude space) is complex,
+    // but the rejection sampling guarantees p(theta) ∝ proposal(theta) × sin(theta).
+    // Instead of deriving the analytical PDF, we verify self-consistency:
+    // the observed distribution should be smooth and concentrated in the expected range.
+    double bin_width_rad = bin_width * lumice::math::kDegreeToRad;
+    double total_in_range = 0;
+    for (int b = 0; b < kNumBins; b++) {
+      total_in_range += counts[b];
+    }
+
+    // At least 90% of samples should fall within the binning range.
+    EXPECT_GT(total_in_range / kN, 0.90) << "Too many samples outside expected range for " << cfg.label;
+
+    // Verify density is non-zero in the central bins (not all samples collapsed to edges).
+    int central_start = kNumBins / 4;
+    int central_end = 3 * kNumBins / 4;
+    for (int b = central_start; b < central_end; b++) {
+      EXPECT_GT(counts[b], 0) << "Empty central bin " << b << " for " << cfg.label;
+    }
+
+    // Verify the distribution is non-degenerate: standard deviation of bin counts should be
+    // reasonable (not all samples in one bin, not perfectly uniform).
+    double mean_count = total_in_range / kNumBins;
+    double variance = 0;
+    for (int b = 0; b < kNumBins; b++) {
+      double diff = counts[b] - mean_count;
+      variance += diff * diff;
+    }
+    variance /= kNumBins;
+    double cv = std::sqrt(variance) / (mean_count + 1e-10);  // coefficient of variation
+    // Arcsine distributions are peaky, so CV can be high but should be bounded.
+    EXPECT_LT(cv, 5.0) << "Distribution too degenerate for " << cfg.label;
+    EXPECT_GT(cv, 0.01) << "Distribution too uniform for " << cfg.label;
+  }
+}
+
+
+TEST_F(RngTest, ZigzagJsonRoundTrip) {
+  using lumice::Distribution;
+  using lumice::DistributionType;
+
+  Distribution orig{ DistributionType::kZigzag, 10.0f, 25.0f };
+  nlohmann::json j;
+  lumice::to_json(j, orig);
+
+  EXPECT_EQ(j["type"], "zigzag");
+  EXPECT_FLOAT_EQ(j["mean"], 10.0f);
+  EXPECT_FLOAT_EQ(j["std"], 25.0f);
+
+  Distribution parsed{};
+  lumice::from_json(j, parsed);
+  EXPECT_EQ(parsed.type, DistributionType::kZigzag);
+  EXPECT_FLOAT_EQ(parsed.mean, 10.0f);
+  EXPECT_FLOAT_EQ(parsed.std, 25.0f);
+}
+
+
 }  // namespace

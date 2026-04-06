@@ -368,6 +368,9 @@ float RandomNumberGenerator::Get(Distribution dist) {
       return (GetUniform() - 0.5f) * dist.std + dist.mean;
     case DistributionType::kGaussian:
       return GetGaussian() * dist.std + dist.mean;
+    case DistributionType::kZigzag:
+      // Rectified arcsine: |A·sin(2πU) + B| where A=std (amplitude), B=mean (tilt offset).
+      return std::abs(dist.std * std::sin(GetUniform() * 2.0f * math::kPi) + dist.mean);
     case DistributionType::kNoRandom:
       return dist.mean;
     default:
@@ -399,6 +402,26 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t ste
 }
 
 
+// Compute the Jacobian rejection envelope constant M for a given latitude distribution.
+// M = max(cos(phi)) over the proposal's support, used in acceptance probability cos(phi)/M.
+// Tighter M → higher acceptance rate. All inputs in degrees.
+float ComputeJacobianEnvelope(const Distribution& dist) {
+  switch (dist.type) {
+    case DistributionType::kGaussian:
+      // Proposal range ~ [mean - 3σ, mean + 3σ]; cos is maximized at latitude closest to equator.
+      return std::cos(std::max(std::abs(dist.mean) - 3.0f * dist.std, 0.0f) * math::kDegreeToRad);
+    case DistributionType::kZigzag:
+      // Proposal range: |std·sin(2πU) + mean|.
+      // When |mean| >= std: [|mean|-std, |mean|+std], M = cos((|mean|-std)°).
+      // When |mean| < std: [0, |mean|+std], M = cos(0) = 1.
+      return std::cos(std::max(std::abs(dist.mean) - dist.std, 0.0f) * math::kDegreeToRad);
+    case DistributionType::kUniform:
+    default:
+      return 1.0f;
+  }
+}
+
+
 void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num) {
   auto& rng = RandomNumberGenerator::GetInstance();
 
@@ -406,38 +429,37 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
   // Target distribution: p(phi) ∝ proposal(phi) × cos(phi)
   // where cos(phi) = sin(colatitude) is the spherical area element Jacobian.
   //
-  // Applies to both Gaussian and Uniform latitude distributions.
-  // For Gaussian, two paths:
-  //   1. Rayleigh (polar): when colatitude_center + 3*sigma < kPolarThreshold,
-  //      use 2D Gaussian → Rayleigh, exact for small colatitudes (sin(θ)≈θ).
-  //   2. Optimized rejection: propose from Gaussian, accept with prob cos(phi)/M,
-  //      where M = cos(max(|mean| - 3*sigma, 0)) to maximize acceptance rate.
-  // For Uniform: rejection with M=1, acceptance rate ≥ 2/π ≈ 64%.
+  // Three paths:
+  //   1. Rayleigh (Gaussian near-pole only): 2D Gaussian → Rayleigh, exact for sin(θ)≈θ.
+  //   2. Generic rejection: propose from distribution, accept with prob cos(phi)/M.
+  //      Covers kGaussian (non-Rayleigh), kUniform, kZigzag, and future types.
+  //   3. kNoRandom: single deterministic orientation, no Jacobian needed.
   constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;  // Rayleigh only for colatitude < 0.5°
   constexpr int kMaxRejectionAttempts = 1000;
 
-  bool is_gaussian = axis_dist.latitude_dist.type == DistributionType::kGaussian;
-  bool need_jacobian = is_gaussian || axis_dist.latitude_dist.type == DistributionType::kUniform;
+  auto lat_type = axis_dist.latitude_dist.type;
+
+  // Rayleigh path: Gaussian-only optimization for near-pole distributions.
+  bool use_rayleigh = false;
   float latitude_mean_rad = 0;
   float sigma_rad = 0;
-  bool use_rayleigh = false;
-  float rejection_m = 1.0f;  // default M=1, safe for all distributions
-
-  if (is_gaussian) {
+  if (lat_type == DistributionType::kGaussian) {
     latitude_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
     sigma_rad = axis_dist.latitude_dist.std * math::kDegreeToRad;
     float colatitude_center = math::kPi_2 - std::abs(latitude_mean_rad);
     use_rayleigh = (colatitude_center + 3.0f * sigma_rad) < kPolarThresholdRad;
-    if (!use_rayleigh) {
-      rejection_m = std::cos(std::max(std::abs(latitude_mean_rad) - 3.0f * sigma_rad, 0.0f));
-    }
   }
+
+  // Precompute rejection envelope for all non-Rayleigh, non-kNoRandom types.
+  float rejection_m = (lat_type != DistributionType::kNoRandom && !use_rayleigh) ?
+                          ComputeJacobianEnvelope(axis_dist.latitude_dist) :
+                          1.0f;
 
   for (size_t i = 0; i < num; i++) {
     float phi = 0;
     bool flip = false;
 
-    if (is_gaussian && use_rayleigh) {
+    if (lat_type == DistributionType::kGaussian && use_rayleigh) {
       // Rayleigh path: 2D Gaussian in tangent plane at pole → Rayleigh angular distance.
       // Guard ensures colatitude_center + 3σ < 0.5°, so colatitude rarely exceeds valid range.
       float dx = rng.GetGaussian() * sigma_rad;
@@ -446,8 +468,8 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
       phi = std::copysign(math::kPi_2 - colatitude, latitude_mean_rad);
       phi = std::max(-math::kPi_2, std::min(math::kPi_2, phi));
       // flip stays false — Rayleigh path only fires for tiny σ near poles.
-    } else if (need_jacobian) {
-      // Optimized rejection path.
+    } else if (lat_type != DistributionType::kNoRandom) {
+      // Generic Jacobian rejection path (kGaussian non-Rayleigh, kUniform, kZigzag, etc.).
       int attempts = 0;
       do {
         phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
