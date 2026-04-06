@@ -207,6 +207,55 @@ TEST_F(SphericalSamplingTest, JacobianCorrectedDistribution) {
 }
 
 
+TEST_F(SphericalSamplingTest, LargeSigmaUniformDistribution) {
+  // When sigma >> 90°, the Gaussian is nearly flat and the Jacobian-corrected
+  // distribution approaches uniform on sphere: p(theta) = sin(theta)/2.
+  struct Config {
+    double zen;
+    double sigma;
+    const char* label;
+  };
+  Config configs[] = {
+    { 0, 180, "polar large-sigma" },
+    { 90, 180, "equatorial large-sigma" },
+  };
+
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(99);
+
+  for (const auto& cfg : configs) {
+    SCOPED_TRACE(cfg.label);
+
+    // Bins covering full colatitude range [0°, 180°].
+    constexpr int kNumBins = 18;
+    constexpr double kBinWidth = 180.0 / kNumBins;  // 10° bins
+    std::vector<double> bin_edges;
+    std::vector<double> bin_centers;
+    for (int b = 0; b <= kNumBins; b++) {
+      bin_edges.push_back(b * kBinWidth);
+    }
+    for (int b = 0; b < kNumBins; b++) {
+      bin_centers.push_back((b + 0.5) * kBinWidth);
+    }
+
+    auto counts = SampleAndBin(cfg.zen, cfg.sigma, bin_edges, kSampleCount);
+
+    // Theoretical density: p(theta) = sin(theta) / 2 (uniform on sphere).
+    double bin_width_rad = kBinWidth * kDeg2Rad;
+    for (int b = 0; b < kNumBins; b++) {
+      double theta_rad = bin_centers[b] * kDeg2Rad;
+      double theo_density = std::sin(theta_rad) / 2.0;
+      if (theo_density < 1e-6) {
+        continue;
+      }
+      double observed_density = static_cast<double>(counts[b]) / (kSampleCount * bin_width_rad);
+      double relative_dev = std::abs(observed_density - theo_density) / theo_density;
+      EXPECT_LT(relative_dev, 0.05) << "bin center=" << bin_centers[b] << "° for " << cfg.label;
+    }
+  }
+}
+
+
 TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
   // For each config, check that the sample mean of colatitude matches the theoretical expectation.
   // For G(theta-theta0, sigma) × sin(theta), the mean is slightly shifted from theta0
@@ -215,7 +264,7 @@ TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
     double zen;
     double sigma;
   };
-  Config configs[] = { { 0, 5 }, { 45, 5 }, { 90, 5 } };
+  Config configs[] = { { 0, 5 }, { 45, 5 }, { 90, 5 }, { 0, 30 }, { 0, 180 }, { 90, 180 } };
 
   auto& rng = lumice::RandomNumberGenerator::GetInstance();
   rng.SetSeed(123);
@@ -227,8 +276,9 @@ TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
     axis.latitude_dist.std = static_cast<float>(cfg.sigma);
     axis.azimuth_dist.type = lumice::DistributionType::kUniform;
 
-    // Numerically compute E[theta] for p(theta) ∝ [G(theta-theta0) + G(-theta-theta0)] × sin(theta),
-    // accounting for the latitude wrap/fold at theta=0.
+    // Numerically compute E[theta] for p(theta) ∝ G_folded(theta) × sin(theta).
+    // G_folded sums Gaussian images under reflections at 0 and π: images at θ₀+2kπ and -θ₀+2kπ.
+    // For large sigma this converges to uniform sphere: p(theta) ∝ sin(theta), E[theta] = π/2 ≈ 90°.
     double theta0 = cfg.zen * kDeg2Rad;
     double sigma = cfg.sigma * kDeg2Rad;
     double sum_theta = 0;
@@ -236,13 +286,20 @@ TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
     constexpr int kIntegrationSteps = 10000;
     for (int k = 0; k < kIntegrationSteps; k++) {
       double theta = (0.001 + k * lumice::math::kPi / kIntegrationSteps);
-      double g_direct = std::exp(-0.5 * (theta - theta0) * (theta - theta0) / (sigma * sigma));
-      double g_fold = std::exp(-0.5 * (-theta - theta0) * (-theta - theta0) / (sigma * sigma));
-      double w = (g_direct + g_fold) * std::sin(theta);
+      double g = 0;
+      for (int n = -3; n <= 3; n++) {
+        double shift = 2.0 * n * M_PI;
+        double d1 = theta - theta0 - shift;
+        double d2 = theta + theta0 - shift;
+        g += std::exp(-0.5 * d1 * d1 / (sigma * sigma));
+        g += std::exp(-0.5 * d2 * d2 / (sigma * sigma));
+      }
+      double w = g * std::sin(theta);
       sum_theta += theta * w;
       sum_weight += w;
     }
     double expected_theta = sum_theta / sum_weight;
+    bool is_large_sigma = cfg.sigma >= 90;
 
     // Sample and compute mean colatitude.
     double sample_sum = 0;
@@ -254,8 +311,9 @@ TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
     }
     double sample_mean = sample_sum / kSampleCount;
 
-    // Allow 0.1° tolerance.
-    EXPECT_NEAR(sample_mean / kDeg2Rad, expected_theta / kDeg2Rad, 0.1)
+    // Large sigma tolerance: 0.5°; small sigma: 0.1°.
+    double tolerance = is_large_sigma ? 0.5 : 0.1;
+    EXPECT_NEAR(sample_mean / kDeg2Rad, expected_theta / kDeg2Rad, tolerance)
         << "zenith=" << cfg.zen << "° sigma=" << cfg.sigma << "°";
   }
 }
