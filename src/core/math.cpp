@@ -430,7 +430,7 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     latitude_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
     sigma_rad = axis_dist.latitude_dist.std * math::kDegreeToRad;
     colatitude_center = math::kPi_2 - std::abs(latitude_mean_rad);
-    use_rayleigh = colatitude_center < kPolarThresholdRad;
+    use_rayleigh = (colatitude_center + 3.0f * sigma_rad) < kPolarThresholdRad;
     if (!use_rayleigh) {
       rejection_m = std::cos(std::max(std::abs(latitude_mean_rad) - 3.0f * sigma_rad, 0.0f));
     }
@@ -438,26 +438,25 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
 
   for (size_t i = 0; i < num; i++) {
     float phi = 0;
+    bool flip = false;
 
     if (need_jacobian && use_rayleigh) {
       // Rayleigh path: 2D Gaussian in tangent plane at pole → Rayleigh angular distance.
+      // Guard ensures colatitude_center + 3σ < 0.5°, so colatitude rarely exceeds valid range.
       float dx = rng.GetGaussian() * sigma_rad;
       float dy = rng.GetGaussian() * sigma_rad;
       float colatitude = std::sqrt(dx * dx + dy * dy);
       phi = std::copysign(math::kPi_2 - colatitude, latitude_mean_rad);
-      // Clamp to valid latitude range.
       phi = std::max(-math::kPi_2, std::min(math::kPi_2, phi));
+      // flip stays false — Rayleigh path only fires for tiny σ near poles.
     } else if (need_jacobian) {
       // Optimized rejection path.
       int attempts = 0;
       do {
         phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
-        if (phi > math::kPi_2) {
-          phi = math::kPi - phi;
-        }
-        if (phi < -math::kPi_2) {
-          phi = -math::kPi - phi;
-        }
+        auto [norm_phi, norm_flip] = detail::NormalizeLatitude(phi);
+        phi = norm_phi;
+        flip = norm_flip;
         ++attempts;
         if (attempts >= kMaxRejectionAttempts) {
           LOG_WARNING("SampleSphericalPointsSph: rejection safety valve triggered (mean={}, std={})",
@@ -466,21 +465,17 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
         }
       } while (rng.GetUniform() >= std::cos(phi) / rejection_m);
     } else {
-      // kNoRandom / kUniform: original logic, no Jacobian correction.
+      // kNoRandom / kUniform: no Jacobian correction.
+      // NormalizeLatitude is a no-op for kNoRandom (std=0), but handles kUniform with large std.
       phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
-      if (phi > math::kPi_2) {
-        phi = math::kPi - phi;
-      }
-      if (phi < -math::kPi_2) {
-        phi = -math::kPi - phi;
-      }
+      auto [norm_phi, norm_flip] = detail::NormalizeLatitude(phi);
+      phi = norm_phi;
+      flip = norm_flip;
     }
 
-    float lambda = 0;
-    if (axis_dist.azimuth_dist.type == DistributionType::kUniform) {
-      lambda = rng.GetUniform() * 2 * math::kPi;
-    } else {
-      lambda = rng.Get(axis_dist.azimuth_dist) * math::kDegreeToRad;
+    float lambda = rng.Get(axis_dist.azimuth_dist) * math::kDegreeToRad;
+    if (flip) {
+      lambda += math::kPi;
     }
 
     data[i * 2 + 0] = lambda;
