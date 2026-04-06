@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 #include <random>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "core/def.hpp"
@@ -194,6 +195,15 @@ struct AxisDistribution {
   Distribution latitude_dist;
   Distribution roll_dist;
 };
+
+
+namespace detail {
+// Internal — not part of public API.
+// Normalize an arbitrary latitude (radians) to [-π/2, π/2] using spherical folding.
+// Returns {normalized_latitude, flip} where flip=true means an odd number of pole
+// reflections occurred (azimuth should be shifted by π).
+std::pair<float, bool> NormalizeLatitude(float latitude_rad);
+}  // namespace detail
 
 
 /**

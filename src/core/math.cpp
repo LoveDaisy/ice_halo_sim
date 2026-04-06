@@ -494,6 +494,20 @@ AxisDistribution::AxisDistribution()
       roll_dist{ DistributionType::kNoRandom, 0, 0 } {}
 
 
+std::pair<float, bool> detail::NormalizeLatitude(float latitude_rad) {
+  float theta = math::kPi_2 - latitude_rad;    // latitude → colatitude
+  theta = std::fmod(theta, 2.0f * math::kPi);  // periodic normalization
+  if (theta < 0) {
+    theta += 2.0f * math::kPi;  // ensure [0, 2π)
+  }
+  bool flip = theta > math::kPi;
+  if (flip) {
+    theta = 2.0f * math::kPi - theta;  // reflect to [0, π]
+  }
+  return { math::kPi_2 - theta, flip };  // colatitude → latitude
+}
+
+
 void to_json(nlohmann::json& obj, const Distribution& dist) {
   if (dist.type == DistributionType::kNoRandom) {
     obj = dist.mean;

@@ -260,4 +260,63 @@ TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
   }
 }
 
+// ============================================================================
+// NormalizeLatitude tests
+// ============================================================================
+
+class NormalizeLatitudeTest : public ::testing::Test {
+ protected:
+  static constexpr float kPi = lumice::math::kPi;
+  static constexpr float kPi_2 = lumice::math::kPi_2;
+  static constexpr float kEps = 1e-5f;
+
+  void ExpectNormalized(float input, float expected_lat, bool expected_flip, const char* label) {
+    auto [lat, flip] = lumice::detail::NormalizeLatitude(input);
+    EXPECT_NEAR(lat, expected_lat, kEps) << label << " (latitude)";
+    EXPECT_EQ(flip, expected_flip) << label << " (flip)";
+  }
+};
+
+
+TEST_F(NormalizeLatitudeTest, InRangeUnchanged) {
+  ExpectNormalized(0.0f, 0.0f, false, "phi=0");
+  ExpectNormalized(kPi / 4, kPi / 4, false, "phi=pi/4");
+  ExpectNormalized(-kPi / 4, -kPi / 4, false, "phi=-pi/4");
+}
+
+
+TEST_F(NormalizeLatitudeTest, PoleExact) {
+  ExpectNormalized(kPi_2, kPi_2, false, "phi=pi/2 (north pole)");
+  ExpectNormalized(-kPi_2, -kPi_2, false, "phi=-pi/2 (south pole)");
+}
+
+
+TEST_F(NormalizeLatitudeTest, SingleFoldForward) {
+  // phi=π: past north pole by π/2 → equator, flip=true
+  ExpectNormalized(kPi, 0.0f, true, "phi=pi");
+  // phi=3π/4: past north pole by π/4 → π/4, flip=true
+  ExpectNormalized(3 * kPi / 4, kPi / 4, true, "phi=3pi/4");
+}
+
+
+TEST_F(NormalizeLatitudeTest, SingleFoldBackward) {
+  // phi=-π: past south pole by π/2 → equator, flip=true
+  ExpectNormalized(-kPi, 0.0f, true, "phi=-pi");
+  // phi=-3π/4: past south pole by π/4 → -π/4, flip=true
+  ExpectNormalized(-3 * kPi / 4, -kPi / 4, true, "phi=-3pi/4");
+}
+
+
+TEST_F(NormalizeLatitudeTest, MultipleFolds) {
+  // phi=3π: three pole reflections → equator, flip=true (odd reflections)
+  ExpectNormalized(3 * kPi, 0.0f, true, "phi=3pi");
+  // phi=2π: two pole reflections → equator, flip=false (even reflections)
+  ExpectNormalized(2 * kPi, 0.0f, false, "phi=2pi");
+  // phi=5π/2: two pole reflections → north pole, flip=false
+  ExpectNormalized(5 * kPi_2, kPi_2, false, "phi=5pi/2");
+  // phi=-5π/2: two pole reflections → south pole, flip=false
+  ExpectNormalized(-5 * kPi_2, -kPi_2, false, "phi=-5pi/2");
+}
+
+
 }  // namespace
