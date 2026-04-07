@@ -178,6 +178,9 @@ struct GuiState {
   bool show_grid = false;
   bool show_sun_circles = false;
   std::vector<float> sun_circle_angles = { 22.0f, 46.0f };
+  float horizon_color[3] = { 0.8f, 0.2f, 0.2f };
+  float grid_color[3] = { 1.0f, 1.0f, 1.0f };
+  float sun_circles_color[3] = { 1.0f, 0.9f, 0.3f };
 
   // File management
   std::filesystem::path current_file_path;

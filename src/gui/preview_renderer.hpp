@@ -29,6 +29,9 @@ struct PreviewParams {
   float sun_dir[3] = {};  // precomputed world-space unit vector
   int sun_circle_count = 0;
   float sun_circle_angles[kMaxSunCircles] = {};  // degrees
+  float horizon_color[3] = { 0.8f, 0.2f, 0.2f };
+  float grid_color[3] = { 1.0f, 1.0f, 1.0f };
+  float sun_circles_color[3] = { 1.0f, 0.9f, 0.3f };
 };
 
 class PreviewRenderer {
