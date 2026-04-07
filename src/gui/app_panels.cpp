@@ -22,10 +22,7 @@ void RenderTopBar(float window_width) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse);
 
-  ImGui::Text("Lumice");
-  ImGui::SameLine();
-
-  // Run/Stop + Revert on the left (near config panels)
+  // Run/Stop + Revert
   bool simulating = (g_state.sim_state == SimState::kSimulating);
   if (simulating) {
     if (ImGui::Button("Stop")) {
@@ -49,12 +46,7 @@ void RenderTopBar(float window_width) {
   ImGui::TextDisabled("|");
   ImGui::SameLine();
 
-  // File operations on the right side
-  float button_start_x = window_width - 380.0f;
-  if (button_start_x > ImGui::GetCursorPosX()) {
-    ImGui::SetCursorPosX(button_start_x);
-  }
-
+  // File operations
   if (simulating) {
     ImGui::BeginDisabled();
   }
@@ -76,6 +68,8 @@ void RenderTopBar(float window_width) {
   if (simulating) {
     ImGui::EndDisabled();
   }
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
   ImGui::SameLine();
   {
     if (ImGui::Button("Export")) {
