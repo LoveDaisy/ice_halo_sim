@@ -156,125 +156,123 @@ void RenderLeftPanel(float window_height) {
 
       // Crystal 3D preview
       if (g_state.selected_crystal >= 0 && g_state.selected_crystal < static_cast<int>(g_state.crystals.size())) {
-        ImGui::Separator();
-        if (ImGui::CollapsingHeader("3D Preview", ImGuiTreeNodeFlags_DefaultOpen)) {
-          auto& cr = g_state.crystals[g_state.selected_crystal];
+        ImGui::SeparatorText("3D Preview");
+        auto& cr = g_state.crystals[g_state.selected_crystal];
 
-          // Update mesh if crystal changed
-          int hash = CrystalParamHash(cr);
-          if (cr.id != g_crystal_mesh_id || hash != g_crystal_mesh_hash) {
-            // Build JSON for LUMICE_GetCrystalMesh
-            char json_buf[512];
-            auto* fd = cr.face_distance;
-            if (cr.type == CrystalType::kPrism) {
-              snprintf(json_buf, sizeof(json_buf),
-                       R"({"type":"prism","shape":{"height":%.4f,)"
-                       R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
-                       cr.height, fd[0], fd[1], fd[2], fd[3], fd[4], fd[5]);
-            } else {
-              snprintf(json_buf, sizeof(json_buf),
-                       R"({"type":"pyramid","shape":{"prism_h":%.4f,"upper_h":%.4f,"lower_h":%.4f,)"
-                       R"("upper_wedge_angle":%.4f,"lower_wedge_angle":%.4f,)"
-                       R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
-                       cr.prism_h, cr.upper_h, cr.lower_h, cr.upper_alpha, cr.lower_alpha, fd[0], fd[1], fd[2], fd[3],
-                       fd[4], fd[5]);
+        // Update mesh if crystal changed
+        int hash = CrystalParamHash(cr);
+        if (cr.id != g_crystal_mesh_id || hash != g_crystal_mesh_hash) {
+          // Build JSON for LUMICE_GetCrystalMesh
+          char json_buf[512];
+          auto* fd = cr.face_distance;
+          if (cr.type == CrystalType::kPrism) {
+            snprintf(json_buf, sizeof(json_buf),
+                     R"({"type":"prism","shape":{"height":%.4f,)"
+                     R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
+                     cr.height, fd[0], fd[1], fd[2], fd[3], fd[4], fd[5]);
+          } else {
+            snprintf(json_buf, sizeof(json_buf),
+                     R"({"type":"pyramid","shape":{"prism_h":%.4f,"upper_h":%.4f,"lower_h":%.4f,)"
+                     R"("upper_wedge_angle":%.4f,"lower_wedge_angle":%.4f,)"
+                     R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
+                     cr.prism_h, cr.upper_h, cr.lower_h, cr.upper_alpha, cr.lower_alpha, fd[0], fd[1], fd[2], fd[3],
+                     fd[4], fd[5]);
+          }
+
+          LUMICE_CrystalMesh mesh{};
+          if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) == LUMICE_OK) {
+            // Transform from Core coords (Z-up) to screen coords (Y-up):
+            // (x, y, z)_screen = (x, z, -y)_core
+            for (int vi = 0; vi < mesh.vertex_count; vi++) {
+              float y = mesh.vertices[vi * 3 + 1];
+              float z = mesh.vertices[vi * 3 + 2];
+              mesh.vertices[vi * 3 + 1] = z;
+              mesh.vertices[vi * 3 + 2] = -y;
+            }
+            for (int ei = 0; ei < mesh.edge_count; ei++) {
+              for (int side = 0; side < 2; side++) {
+                float* n = &mesh.edge_face_normals[ei * 6 + side * 3];
+                float ny = n[1];
+                float nz = n[2];
+                n[1] = nz;
+                n[2] = -ny;
+              }
             }
 
-            LUMICE_CrystalMesh mesh{};
-            if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) == LUMICE_OK) {
-              // Transform from Core coords (Z-up) to screen coords (Y-up):
-              // (x, y, z)_screen = (x, z, -y)_core
-              for (int vi = 0; vi < mesh.vertex_count; vi++) {
+            // Normalize by AABB longest axis so all crystals display at similar size
+            if (mesh.vertex_count > 0) {
+              float min_x = mesh.vertices[0], max_x = mesh.vertices[0];
+              float min_y = mesh.vertices[1], max_y = mesh.vertices[1];
+              float min_z = mesh.vertices[2], max_z = mesh.vertices[2];
+              for (int vi = 1; vi < mesh.vertex_count; vi++) {
+                float x = mesh.vertices[vi * 3];
                 float y = mesh.vertices[vi * 3 + 1];
                 float z = mesh.vertices[vi * 3 + 2];
-                mesh.vertices[vi * 3 + 1] = z;
-                mesh.vertices[vi * 3 + 2] = -y;
+                min_x = std::min(min_x, x);
+                max_x = std::max(max_x, x);
+                min_y = std::min(min_y, y);
+                max_y = std::max(max_y, y);
+                min_z = std::min(min_z, z);
+                max_z = std::max(max_z, z);
               }
-              for (int ei = 0; ei < mesh.edge_count; ei++) {
-                for (int side = 0; side < 2; side++) {
-                  float* n = &mesh.edge_face_normals[ei * 6 + side * 3];
-                  float ny = n[1];
-                  float nz = n[2];
-                  n[1] = nz;
-                  n[2] = -ny;
+              float extent = std::max({ max_x - min_x, max_y - min_y, max_z - min_z });
+              if (extent > 1e-6f) {
+                float scale = 1.0f / extent;
+                for (int vi = 0; vi < mesh.vertex_count; vi++) {
+                  mesh.vertices[vi * 3] *= scale;
+                  mesh.vertices[vi * 3 + 1] *= scale;
+                  mesh.vertices[vi * 3 + 2] *= scale;
                 }
               }
-
-              // Normalize by AABB longest axis so all crystals display at similar size
-              if (mesh.vertex_count > 0) {
-                float min_x = mesh.vertices[0], max_x = mesh.vertices[0];
-                float min_y = mesh.vertices[1], max_y = mesh.vertices[1];
-                float min_z = mesh.vertices[2], max_z = mesh.vertices[2];
-                for (int vi = 1; vi < mesh.vertex_count; vi++) {
-                  float x = mesh.vertices[vi * 3];
-                  float y = mesh.vertices[vi * 3 + 1];
-                  float z = mesh.vertices[vi * 3 + 2];
-                  min_x = std::min(min_x, x);
-                  max_x = std::max(max_x, x);
-                  min_y = std::min(min_y, y);
-                  max_y = std::max(max_y, y);
-                  min_z = std::min(min_z, z);
-                  max_z = std::max(max_z, z);
-                }
-                float extent = std::max({ max_x - min_x, max_y - min_y, max_z - min_z });
-                if (extent > 1e-6f) {
-                  float scale = 1.0f / extent;
-                  for (int vi = 0; vi < mesh.vertex_count; vi++) {
-                    mesh.vertices[vi * 3] *= scale;
-                    mesh.vertices[vi * 3 + 1] *= scale;
-                    mesh.vertices[vi * 3 + 2] *= scale;
-                  }
-                }
-              }
-
-              g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count,
-                                            mesh.triangles, mesh.triangle_count, mesh.edge_face_normals);
-              g_crystal_mesh_id = cr.id;
-              g_crystal_mesh_hash = hash;
             }
+
+            g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count, mesh.triangles,
+                                          mesh.triangle_count, mesh.edge_face_normals);
+            g_crystal_mesh_id = cr.id;
+            g_crystal_mesh_hash = hash;
           }
+        }
 
-          // Render to FBO
-          auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
-          g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
+        // Render to FBO
+        auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
+        g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
 
-          // Display FBO texture — square, centered, with matching background fill
-          ImVec2 avail = ImGui::GetContentRegionAvail();
-          float preview_size = avail.x;
+        // Display FBO texture — square, centered, with matching background fill
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        float preview_size = avail.x;
 
-          ImVec2 area_start = ImGui::GetCursorScreenPos();
-          ImDrawList* draw_list = ImGui::GetWindowDrawList();
-          draw_list->AddRectFilled(area_start, ImVec2(area_start.x + preview_size, area_start.y + preview_size),
-                                   IM_COL32(38, 38, 38, 255));  // Match FBO clear color (0.15)
+        ImVec2 area_start = ImGui::GetCursorScreenPos();
+        ImDrawList* draw_list = ImGui::GetWindowDrawList();
+        draw_list->AddRectFilled(area_start, ImVec2(area_start.x + preview_size, area_start.y + preview_size),
+                                 IM_COL32(38, 38, 38, 255));  // Match FBO clear color (0.15)
 
-          auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
-          ImVec2 uv0(0, 1);  // Flip Y for OpenGL
-          ImVec2 uv1(1, 0);
-          ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
+        auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
+        ImVec2 uv0(0, 1);  // Flip Y for OpenGL
+        ImVec2 uv1(1, 0);
+        ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
 
-          // Overlay an InvisibleButton on the image for mouse interaction.
-          // ImGui::Image has no item ID, so SetItemKeyOwner wouldn't work on it.
-          // InvisibleButton creates a proper interactive item with an ID.
-          ImGui::SetCursorScreenPos(area_start);
-          ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(preview_size, preview_size));
-          if (ImGui::IsItemHovered()) {
-            ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
-            ImGuiIO& io = ImGui::GetIO();
-            if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-              ApplyTrackballRotation(io.MouseDelta.x, io.MouseDelta.y);
-            }
-            if (io.MouseWheel != 0.0f) {
-              g_crystal_zoom *= (1.0f - io.MouseWheel * 0.1f);
-              g_crystal_zoom = std::max(0.5f, std::min(10.0f, g_crystal_zoom));
-            }
+        // Overlay an InvisibleButton on the image for mouse interaction.
+        // ImGui::Image has no item ID, so SetItemKeyOwner wouldn't work on it.
+        // InvisibleButton creates a proper interactive item with an ID.
+        ImGui::SetCursorScreenPos(area_start);
+        ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(preview_size, preview_size));
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+          ImGuiIO& io = ImGui::GetIO();
+          if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            ApplyTrackballRotation(io.MouseDelta.x, io.MouseDelta.y);
           }
-          ImGui::PushItemWidth(120.0f);
-          ImGui::Combo("##CrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
-          ImGui::PopItemWidth();
-          ImGui::SameLine();
-          if (ImGui::SmallButton("Reset View")) {
-            ResetCrystalView();
+          if (io.MouseWheel != 0.0f) {
+            g_crystal_zoom *= (1.0f - io.MouseWheel * 0.1f);
+            g_crystal_zoom = std::max(0.5f, std::min(10.0f, g_crystal_zoom));
           }
+        }
+        ImGui::PushItemWidth(120.0f);
+        ImGui::Combo("##CrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
+        ImGui::PopItemWidth();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset View")) {
+          ResetCrystalView();
         }
       }
 
