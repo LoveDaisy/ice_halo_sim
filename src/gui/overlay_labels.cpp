@@ -222,11 +222,14 @@ ImU32 ColorToImU32(const float c[3], int alpha) {
   return IM_COL32(static_cast<int>(c[0] * 255), static_cast<int>(c[1] * 255), static_cast<int>(c[2] * 255), alpha);
 }
 
+constexpr int kGroupGrid = 0;
+constexpr int kGroupSunCircles = 1;
+
 void AddLabel(std::vector<OverlayLabel>& out, float sx0, float sy0, float sx1, float sy1, float t, const char* fmt,
-              float value, ImU32 color) {
+              float value, ImU32 color, int group = kGroupGrid) {
   char buf[32];
   std::snprintf(buf, sizeof(buf), fmt, value);
-  out.push_back({ sx0 + t * (sx1 - sx0), sy0 + t * (sy1 - sy0), std::string(buf), color });
+  out.push_back({ sx0 + t * (sx1 - sx0), sy0 + t * (sy1 - sy0), std::string(buf), color, false, group });
 }
 
 }  // namespace
@@ -348,7 +351,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
             float target = input.sun_circle_angles[ci];
             if (Crosses(prev.sun_dist, cur.sun_dist, target, &t)) {
               AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target,
-                       sun_col);
+                       sun_col, kGroupSunCircles);
             }
           }
         }
@@ -430,7 +433,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
 
         char buf[32];
         std::snprintf(buf, sizeof(buf), "%.0f\xC2\xB0", angle_deg);
-        out.push_back({ scr_x, scr_y, std::string(buf), sun_col, true });
+        out.push_back({ scr_x, scr_y, std::string(buf), sun_col, true, kGroupSunCircles });
       }
     }
   }
@@ -442,9 +445,10 @@ void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
 
   ImDrawList* fg = ImGui::GetForegroundDrawList();
 
-  // Collect bboxes for collision avoidance
+  // Collect bboxes for collision avoidance (only within same group)
   struct PlacedLabel {
     ImVec2 min, max;
+    int group;
   };
   std::vector<PlacedLabel> placed;
   placed.reserve(labels.size());
@@ -455,10 +459,11 @@ void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
     ImVec2 bbox_min(pos.x - kLabelPadding, pos.y - kLabelPadding);
     ImVec2 bbox_max(pos.x + text_size.x + kLabelPadding, pos.y + text_size.y + kLabelPadding);
 
-    // Check overlap with already placed labels
+    // Check overlap only with same-group labels
     bool overlaps = false;
     for (const auto& p : placed) {
-      if (bbox_min.x < p.max.x && bbox_max.x > p.min.x && bbox_min.y < p.max.y && bbox_max.y > p.min.y) {
+      if (p.group == label.group && bbox_min.x < p.max.x && bbox_max.x > p.min.x && bbox_min.y < p.max.y &&
+          bbox_max.y > p.min.y) {
         overlaps = true;
         break;
       }
@@ -476,7 +481,7 @@ void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
       const char* text = label.text.c_str();
       fg->AddText(pos, label.color, text);
       fg->AddText(ImVec2(pos.x + 1.0f, pos.y), label.color, text);
-      placed.push_back({ bbox_min, bbox_max });
+      placed.push_back({ bbox_min, bbox_max, label.group });
     }
   }
 }

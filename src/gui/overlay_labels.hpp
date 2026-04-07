@@ -13,6 +13,7 @@ struct OverlayLabel {
   std::string text;
   ImU32 color;
   bool has_bg = false;  // draw semi-transparent black background behind text
+  int group = 0;        // collision avoidance only within same group (0=grid, 1=sun circles)
 };
 
 struct OverlayLabelInput {
