@@ -211,13 +211,9 @@ TEST_F(V3TestJson, Crystal_PyramidSimple) {
   CHECK_DISTRIBUTION(p.h_pyr_l_, DistributionType::kNoRandom, 0.5, 0);
   CHECK_DISTRIBUTION(p.h_prs_, DistributionType::kNoRandom, 1.2, 0);
 
-  ASSERT_EQ(p.miller_indices_u_[0], 2);
-  ASSERT_EQ(p.miller_indices_u_[1], 0);
-  ASSERT_EQ(p.miller_indices_u_[2], 3);
-
-  ASSERT_EQ(p.miller_indices_l_[0], 1);
-  ASSERT_EQ(p.miller_indices_l_[1], 0);
-  ASSERT_EQ(p.miller_indices_l_[2], 1);
+  // {2,0,3} → alpha ≈ 38.57°; {1,0,1} → alpha ≈ 28.00°
+  EXPECT_NEAR(p.wedge_angle_u_, 38.57f, 0.01f);
+  EXPECT_NEAR(p.wedge_angle_l_, 28.00f, 0.01f);
 
   for (const auto& x : p.d_) {
     CHECK_DISTRIBUTION(x, DistributionType::kNoRandom, 1.0f, 0.0f);
@@ -244,28 +240,27 @@ nlohmann::json MakePyramidJson(int id, std::array<int, 3> upper_idx, std::array<
   };
 }
 
-TEST(MillerIndexNormalization, GcdReducesEquivalentIndices) {
-  auto j = MakePyramidJson(1, { 2, 0, 2 }, { 4, 0, 2 });
-  auto c = j.get<CrystalConfig>();
-  const auto& p = std::get<PyramidCrystalParam>(c.param_);
+TEST(MillerIndexFallback, EquivalentIndicesProduceSameAngle) {
+  // {2,0,2} and {1,0,1} should produce the same wedge angle via Miller→alpha conversion
+  auto j1 = MakePyramidJson(1, { 2, 0, 2 }, { 4, 0, 2 });
+  auto c1 = j1.get<CrystalConfig>();
+  const auto& p1 = std::get<PyramidCrystalParam>(c1.param_);
 
-  EXPECT_EQ(p.miller_indices_u_[0], 1);
-  EXPECT_EQ(p.miller_indices_u_[1], 0);
-  EXPECT_EQ(p.miller_indices_u_[2], 1);
+  auto j2 = MakePyramidJson(1, { 1, 0, 1 }, { 2, 0, 1 });
+  auto c2 = j2.get<CrystalConfig>();
+  const auto& p2 = std::get<PyramidCrystalParam>(c2.param_);
 
-  EXPECT_EQ(p.miller_indices_l_[0], 2);
-  EXPECT_EQ(p.miller_indices_l_[1], 0);
-  EXPECT_EQ(p.miller_indices_l_[2], 1);
+  EXPECT_NEAR(p1.wedge_angle_u_, p2.wedge_angle_u_, 0.01f);  // Both → {1,0,1} → 28.0°
+  EXPECT_NEAR(p1.wedge_angle_l_, p2.wedge_angle_l_, 0.01f);  // {4,0,2}→{2,0,1}→14.9°, {2,0,1}→14.9°
 }
 
-TEST(MillerIndexNormalization, IrreducibleIndicesUnchanged) {
+TEST(MillerIndexFallback, IrreducibleIndicesConvertCorrectly) {
   auto j = MakePyramidJson(1, { 2, 0, 3 }, { 1, 0, 1 });
   auto c = j.get<CrystalConfig>();
   const auto& p = std::get<PyramidCrystalParam>(c.param_);
 
-  EXPECT_EQ(p.miller_indices_u_[0], 2);
-  EXPECT_EQ(p.miller_indices_u_[1], 0);
-  EXPECT_EQ(p.miller_indices_u_[2], 3);
+  EXPECT_NEAR(p.wedge_angle_u_, 38.57f, 0.01f);  // {2,0,3} → 38.57°
+  EXPECT_NEAR(p.wedge_angle_l_, 28.00f, 0.01f);  // {1,0,1} → 28.00°
 }
 
 TEST(FaceDistanceRoundTrip, NoScalingApplied) {
@@ -282,9 +277,8 @@ TEST(FaceDistanceRoundTrip, NoScalingApplied) {
   EXPECT_NEAR(p1.d_[3].mean, 1.2f, 1e-5f);
   EXPECT_NEAR(p1.d_[5].mean, 0.9f, 1e-5f);
 
-  // Verify GCD normalization happened: [2,0,2] -> [1,0,1]
-  EXPECT_EQ(p1.miller_indices_u_[0], 1);
-  EXPECT_EQ(p1.miller_indices_u_[2], 1);
+  // Verify wedge angle: {2,0,2} → same as {1,0,1} → 28.00°
+  EXPECT_NEAR(p1.wedge_angle_u_, 28.00f, 0.01f);
 
   // Round-trip: parse same config again — should get identical values
   auto j2 = MakePyramidJson(1, { 1, 0, 1 }, { 1, 0, 1 });
@@ -296,10 +290,8 @@ TEST(FaceDistanceRoundTrip, NoScalingApplied) {
   for (int i = 0; i < 6; i++) {
     EXPECT_NEAR(p2.d_[i].mean, p1.d_[i].mean, 1e-5f);
   }
-  for (int i = 0; i < 3; i++) {
-    EXPECT_EQ(p2.miller_indices_u_[i], p1.miller_indices_u_[i]);
-    EXPECT_EQ(p2.miller_indices_l_[i], p1.miller_indices_l_[i]);
-  }
+  EXPECT_NEAR(p2.wedge_angle_u_, p1.wedge_angle_u_, 1e-5f);
+  EXPECT_NEAR(p2.wedge_angle_l_, p1.wedge_angle_l_, 1e-5f);
 }
 
 

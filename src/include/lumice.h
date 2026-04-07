@@ -141,8 +141,8 @@ typedef struct LUMICE_CrystalParam_ {
   float prism_h;
   float upper_h;
   float lower_h;
-  int upper_indices[3];
-  int lower_indices[3];
+  float upper_wedge_angle;  // degrees, angle between pyramidal face and c-axis
+  float lower_wedge_angle;  // degrees
 
   // Face distance (distance from center to each of the 6 prism faces).
   // Default: all 1.0f (regular hexagonal prism). Caller must initialize; memset(0) gives invalid geometry.

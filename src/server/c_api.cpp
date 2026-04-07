@@ -17,6 +17,16 @@
 
 namespace ns = lumice;
 
+// Convert Miller index (i1, i4) to wedge angle in degrees. Returns 28.0 (default) if i1 == 0.
+static float MillerToAlpha(int i1, int i4) {
+  constexpr float kSqrt3_2 = 0.866025403784f;
+  constexpr float kIceCrystalC = 1.629f;
+  constexpr float kRadToDeg = 57.2957795131f;
+  if (i1 == 0)
+    return 28.0f;
+  return std::atan(kSqrt3_2 * i4 / i1 / kIceCrystalC) * kRadToDeg;
+}
+
 // =============== Internal Helpers ===============
 struct LUMICE_Server_ {
   std::unique_ptr<ns::Server> server_;
@@ -184,8 +194,8 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
       j["shape"]["prism_h"] = cr.prism_h;
       j["shape"]["upper_h"] = cr.upper_h;
       j["shape"]["lower_h"] = cr.lower_h;
-      j["shape"]["upper_indices"] = { cr.upper_indices[0], cr.upper_indices[1], cr.upper_indices[2] };
-      j["shape"]["lower_indices"] = { cr.lower_indices[0], cr.lower_indices[1], cr.lower_indices[2] };
+      j["shape"]["upper_wedge_angle"] = cr.upper_wedge_angle;
+      j["shape"]["lower_wedge_angle"] = cr.lower_wedge_angle;
     }
     // face_distance: only write when non-default
     bool is_default_fd = true;
@@ -376,17 +386,20 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
     cr->prism_h = shape.at("prism_h").get<float>();
     cr->upper_h = shape.at("upper_h").get<float>();
     cr->lower_h = shape.at("lower_h").get<float>();
-    if (shape.contains("upper_indices") && shape.at("upper_indices").is_array() &&
-        shape.at("upper_indices").size() == 3) {
-      for (int k = 0; k < 3; k++) {
-        cr->upper_indices[k] = shape.at("upper_indices")[k].get<int>();
-      }
+    // Wedge angle: prefer "upper_wedge_angle", fallback to "upper_indices" conversion
+    if (shape.contains("upper_wedge_angle") && shape.at("upper_wedge_angle").is_number()) {
+      cr->upper_wedge_angle = shape.at("upper_wedge_angle").get<float>();
+    } else if (shape.contains("upper_indices") && shape.at("upper_indices").is_array() &&
+               shape.at("upper_indices").size() == 3) {
+      cr->upper_wedge_angle =
+          MillerToAlpha(shape.at("upper_indices")[0].get<int>(), shape.at("upper_indices")[2].get<int>());
     }
-    if (shape.contains("lower_indices") && shape.at("lower_indices").is_array() &&
-        shape.at("lower_indices").size() == 3) {
-      for (int k = 0; k < 3; k++) {
-        cr->lower_indices[k] = shape.at("lower_indices")[k].get<int>();
-      }
+    if (shape.contains("lower_wedge_angle") && shape.at("lower_wedge_angle").is_number()) {
+      cr->lower_wedge_angle = shape.at("lower_wedge_angle").get<float>();
+    } else if (shape.contains("lower_indices") && shape.at("lower_indices").is_array() &&
+               shape.at("lower_indices").size() == 3) {
+      cr->lower_wedge_angle =
+          MillerToAlpha(shape.at("lower_indices")[0].get<int>(), shape.at("lower_indices")[2].get<int>());
     }
   } else {
     return LUMICE_ERR_INVALID_VALUE;
@@ -840,14 +853,15 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
       float prism_h = shape.value("prism_h", 1.0f);
       float upper_h = shape.value("upper_h", 0.0f);
       float lower_h = shape.value("lower_h", 0.0f);
-      if (shape.contains("upper_indices") && shape.contains("lower_indices")) {
-        auto ui = shape["upper_indices"];
-        auto li = shape["lower_indices"];
-        int upper_idx1 = ui[0].get<int>();
-        int upper_idx4 = ui[2].get<int>();
-        int lower_idx1 = li[0].get<int>();
-        int lower_idx4 = li[2].get<int>();
-        mesh = ns::CreatePyramidMesh(upper_idx1, upper_idx4, lower_idx1, lower_idx4, upper_h, prism_h, lower_h, dist);
+      // Prefer wedge_angle, fallback to upper_indices, then default
+      if (shape.contains("upper_wedge_angle") && shape.contains("lower_wedge_angle")) {
+        float ua = shape["upper_wedge_angle"].get<float>();
+        float la = shape["lower_wedge_angle"].get<float>();
+        mesh = ns::CreatePyramidMesh(ua, la, upper_h, prism_h, lower_h, dist);
+      } else if (shape.contains("upper_indices") && shape.contains("lower_indices")) {
+        float ua = MillerToAlpha(shape["upper_indices"][0].get<int>(), shape["upper_indices"][2].get<int>());
+        float la = MillerToAlpha(shape["lower_indices"][0].get<int>(), shape["lower_indices"][2].get<int>());
+        mesh = ns::CreatePyramidMesh(ua, la, upper_h, prism_h, lower_h, dist);
       } else {
         mesh = ns::CreatePyramidMesh(upper_h, prism_h, lower_h);
       }

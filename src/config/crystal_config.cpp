@@ -39,13 +39,24 @@ void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
 }
 
 
+// Convert Miller index (i1, i4) to wedge angle in degrees. Returns 28.0 (default) if i1 == 0.
+static float MillerToAlpha(int i1, int i4) {
+  constexpr float kSqrt3_2 = 0.866025403784f;
+  constexpr float kIceCrystalC = 1.629f;
+  constexpr float kRadToDeg = 57.2957795131f;
+  if (i1 == 0) {
+    return 28.0f;
+  }
+  return std::atan(kSqrt3_2 * i4 / i1 / kIceCrystalC) * kRadToDeg;
+}
+
 // ========== PyramidCrystalParam ==========
 void to_json(nlohmann::json& j, const PyramidCrystalParam& p) {
   j["prism_h"] = p.h_prs_;
   j["upper_h"] = p.h_pyr_u_;
   j["lower_h"] = p.h_pyr_l_;
-  j["upper_indices"] = p.miller_indices_u_;
-  j["lower_indices"] = p.miller_indices_l_;
+  j["upper_wedge_angle"] = p.wedge_angle_u_;
+  j["lower_wedge_angle"] = p.wedge_angle_l_;
   j["face_distance"] = p.d_;
 }
 
@@ -59,12 +70,18 @@ void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
     j.at("lower_h").get_to(p.h_pyr_l_);
   }
 
-  // Miller indices
-  if (j.contains("upper_indices")) {
-    j.at("upper_indices").get_to(p.miller_indices_u_);
+  // Wedge angle: prefer "upper_wedge_angle", fallback to "upper_indices" conversion
+  if (j.contains("upper_wedge_angle")) {
+    p.wedge_angle_u_ = j.at("upper_wedge_angle").get<float>();
+  } else if (j.contains("upper_indices") && j.at("upper_indices").is_array() && j.at("upper_indices").size() == 3) {
+    auto& ui = j.at("upper_indices");
+    p.wedge_angle_u_ = MillerToAlpha(ui[0].get<int>(), ui[2].get<int>());
   }
-  if (j.contains("lower_indices")) {
-    j.at("lower_indices").get_to(p.miller_indices_l_);
+  if (j.contains("lower_wedge_angle")) {
+    p.wedge_angle_l_ = j.at("lower_wedge_angle").get<float>();
+  } else if (j.contains("lower_indices") && j.at("lower_indices").is_array() && j.at("lower_indices").size() == 3) {
+    auto& li = j.at("lower_indices");
+    p.wedge_angle_l_ = MillerToAlpha(li[0].get<int>(), li[2].get<int>());
   }
 
   // Face distance: default mean=1.0 (1.0 = regular hexagon in FillHexCrystalCoef)
@@ -82,18 +99,6 @@ void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
       i++;
     }
   }
-
-  // Normalize Miller indices by GCD so that e.g. [2,0,2] becomes [1,0,1]
-  auto normalize_miller = [](int(&idx)[3]) {
-    int g = std::gcd(std::abs(idx[0]), std::gcd(std::abs(idx[1]), std::abs(idx[2])));
-    if (g > 1) {
-      idx[0] /= g;
-      idx[1] /= g;
-      idx[2] /= g;
-    }
-  };
-  normalize_miller(p.miller_indices_u_);
-  normalize_miller(p.miller_indices_l_);
 }
 
 

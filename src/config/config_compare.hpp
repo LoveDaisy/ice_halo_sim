@@ -27,9 +27,8 @@ inline bool operator==(const PrismCrystalParam& a, const PrismCrystalParam& b) {
 
 inline bool operator==(const PyramidCrystalParam& a, const PyramidCrystalParam& b) {
   return a.h_prs_ == b.h_prs_ && a.h_pyr_u_ == b.h_pyr_u_ && a.h_pyr_l_ == b.h_pyr_l_ &&
-         std::equal(std::begin(a.d_), std::end(a.d_), std::begin(b.d_)) &&
-         std::equal(std::begin(a.miller_indices_u_), std::end(a.miller_indices_u_), std::begin(b.miller_indices_u_)) &&
-         std::equal(std::begin(a.miller_indices_l_), std::end(a.miller_indices_l_), std::begin(b.miller_indices_l_));
+         std::equal(std::begin(a.d_), std::end(a.d_), std::begin(b.d_)) && a.wedge_angle_u_ == b.wedge_angle_u_ &&
+         a.wedge_angle_l_ == b.wedge_angle_l_;
 }
 
 inline bool operator==(const CrystalConfig& a, const CrystalConfig& b) {

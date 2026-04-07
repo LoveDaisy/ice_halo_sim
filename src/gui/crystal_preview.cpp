@@ -28,10 +28,8 @@ int CrystalParamHash(const CrystalConfig& c) {
   h ^= hash_float(c.prism_h) * 37;
   h ^= hash_float(c.upper_h) * 41;
   h ^= hash_float(c.lower_h) * 43;
-  for (int i = 0; i < 3; i++) {
-    h ^= c.upper_indices[i] * (47 + i);
-    h ^= c.lower_indices[i] * (53 + i);
-  }
+  h ^= hash_float(c.upper_alpha) * 47;
+  h ^= hash_float(c.lower_alpha) * 53;
   for (int i = 0; i < 6; i++) {
     h ^= hash_float(c.face_distance[i]) * (59 + i);
   }

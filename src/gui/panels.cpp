@@ -425,10 +425,42 @@ void RenderCrystalTab(GuiState& state) {
 
     if (ImGui::TreeNode("Advanced")) {
       if (cr.type == CrystalType::kPyramid) {
-        ImGui::PushItemWidth(-100);
-        DIRTY_IF(ImGui::InputInt3("Upper Idx", cr.upper_indices));
-        DIRTY_IF(ImGui::InputInt3("Lower Idx", cr.lower_indices));
-        ImGui::PopItemWidth();
+        // Wedge angle presets (common Miller indices for ice crystals)
+        struct WedgePreset {
+          const char* label;
+          float alpha;
+        };
+        static constexpr WedgePreset kPresets[] = {
+          { "{1,0,-1,1}  28.0\xC2\xB0", 28.0f },  // atan(sqrt3/2 * 1/1 / 1.629)
+          { "{2,0,-2,1}  14.7\xC2\xB0", 14.7f },  // atan(sqrt3/2 * 1/2 / 1.629)
+          { "{3,0,-3,2}  19.9\xC2\xB0", 19.9f },  // atan(sqrt3/2 * 2/3 / 1.629)
+        };
+        static constexpr int kPresetCount = sizeof(kPresets) / sizeof(kPresets[0]);
+
+        auto RenderAngleCombo = [&](const char* combo_label, float* alpha) {
+          int sel = -1;
+          for (int i = 0; i < kPresetCount; i++) {
+            if (std::abs(*alpha - kPresets[i].alpha) < 0.05f) {
+              sel = i;
+              break;
+            }
+          }
+          const char* preview = sel >= 0 ? kPresets[sel].label : "Custom";
+          if (ImGui::BeginCombo(combo_label, preview)) {
+            for (int i = 0; i < kPresetCount; i++) {
+              if (ImGui::Selectable(kPresets[i].label, sel == i)) {
+                *alpha = kPresets[i].alpha;
+                state.MarkDirty();
+              }
+            }
+            ImGui::EndCombo();
+          }
+        };
+
+        RenderAngleCombo("Upper##preset", &cr.upper_alpha);
+        DIRTY_IF(SliderWithInput("Upper Angle", &cr.upper_alpha, 0.1f, 89.9f, "%.1f", SliderScale::kSqrt));
+        RenderAngleCombo("Lower##preset", &cr.lower_alpha);
+        DIRTY_IF(SliderWithInput("Lower Angle", &cr.lower_alpha, 0.1f, 89.9f, "%.1f", SliderScale::kSqrt));
       }
 
       for (int i = 0; i < 6; i++) {
