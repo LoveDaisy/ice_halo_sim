@@ -74,7 +74,7 @@ class Crystal {
    * @param h3 Lower pyramid segment relative height (h3/H3)
    * @param dist Face distance array [d1, d2, d3, d4, d5, d6], must not be nullptr
    * @return A Crystal object representing the pyramid
-   * @note Wedge angles outside [1°, 179°] cause the corresponding pyramid segment to be skipped
+   * @note Wedge angles outside [0.1°, 89.9°] cause the corresponding pyramid segment to be skipped
    */
   static Crystal CreatePyramid(float upper_alpha, float lower_alpha,  // wedge angle (degrees)
                                float h1, float h2, float h3,          // height

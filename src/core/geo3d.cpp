@@ -467,7 +467,8 @@ Mesh CreatePyramidMesh(float h1, float h2, float h3) {
 Mesh CreatePyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
                        float h1, float h2, float h3,                                    // height
                        const float* dist) {                                             // face distance
-  // Guard against integer division by zero (UB). i1=0 → alpha=0 → skipped by FillHexCrystalCoef.
+  // Guard against i1=0: float division yields inf, atan(inf)=90° which is outside valid range.
+  // Explicit guard avoids relying on IEEE 754 edge behavior.
   float upper_alpha =
       upper_idx1 != 0 ? std::atan(math::kSqrt3_2 * upper_idx4 / upper_idx1 / kIceCrystalC) * math::kRadToDegree : 0.0f;
   float lower_alpha =
@@ -595,7 +596,8 @@ Mesh CreateConcavePyramidMesh(float h1, float h2, float h3) {
 Mesh CreateConcavePyramidMesh(int upper_idx1, int upper_idx4, int lower_idx1, int lower_idx4,  // Miller index
                               float h1, float h2, float h3,                                    // height
                               const float* dist) {                                             // face distance
-  // Guard against integer division by zero (UB). i1=0 → alpha=0 → skipped by FillHexCrystalCoef.
+  // Guard against i1=0: float division yields inf, atan(inf)=90° which is outside valid range.
+  // Explicit guard avoids relying on IEEE 754 edge behavior.
   float upper_alpha =
       upper_idx1 != 0 ? std::atan(math::kSqrt3_2 * upper_idx4 / upper_idx1 / kIceCrystalC) * math::kRadToDegree : 0.0f;
   float lower_alpha =

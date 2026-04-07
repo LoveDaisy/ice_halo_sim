@@ -106,7 +106,8 @@ Crystal Crystal::CreatePyramid(float upper_alpha, float lower_alpha, float h1, f
 Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int lower_i4,  // Miller index
                                float h1, float h2, float h3,                            // height
                                const float* dist) {                                     // face distance
-  // Guard against integer division by zero (UB). i1=0 is invalid; skip the corresponding pyramid segment.
+  // Guard against i1=0: although float division yields inf (not UB), we prefer an explicit guard
+  // over relying on atan(inf)=90° being filtered by the alpha range check in FillHexCrystalCoef.
   float upper_alpha =
       upper_i1 != 0 ? std::atan(math::kSqrt3_2 * upper_i4 / upper_i1 / kIceCrystalC) * math::kRadToDegree : 0.0f;
   float lower_alpha =
