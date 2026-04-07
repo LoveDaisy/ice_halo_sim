@@ -252,7 +252,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
 
         // Horizon: altitude crosses 0
         if (input.show_horizon && Crosses(prev.altitude, cur.altitude, 0.0f, &t)) {
-          AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "0%c", 0xB0, horizon_col);
+          AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "0\xC2\xB0", 0.0f, horizon_col);
         }
 
         // Grid: altitude crosses multiples of 10
@@ -287,7 +287,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
                 float label_val = target;
                 if (label_val > 180.0f)
                   label_val -= 360.0f;
-                if (label_val < -180.0f)
+                if (label_val <= -180.0f)
                   label_val += 360.0f;
                 AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", label_val,
                          grid_col);
