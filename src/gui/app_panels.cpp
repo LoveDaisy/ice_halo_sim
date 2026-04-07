@@ -8,6 +8,7 @@
 #include "config/render_config.hpp"
 #include "gui/app.hpp"
 #include "gui/gui_logger.hpp"
+#include "gui/overlay_labels.hpp"
 #include "gui/panels.hpp"
 #include "imgui.h"
 
@@ -605,6 +606,38 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.params.sun_circle_count = std::min(static_cast<int>(g_state.sun_circle_angles.size()), kMaxSunCircles);
     for (int i = 0; i < g_preview_vp.params.sun_circle_count; i++) {
       g_preview_vp.params.sun_circle_angles[i] = g_state.sun_circle_angles[i];
+    }
+
+    // Overlay labels at viewport edges (drawn via ImGui foreground draw list)
+    if (g_state.show_horizon || g_state.show_grid || g_state.show_sun_circles) {
+      OverlayLabelInput label_input{};
+      label_input.lens_type = rc.lens_type;
+      label_input.fov = rc.fov;
+      label_input.elevation = rc.elevation;
+      label_input.azimuth = rc.azimuth;
+      label_input.roll = rc.roll;
+      label_input.show_horizon = g_state.show_horizon;
+      label_input.show_grid = g_state.show_grid;
+      label_input.show_sun_circles = g_state.show_sun_circles;
+      std::copy(std::begin(g_preview_vp.params.sun_dir), std::end(g_preview_vp.params.sun_dir),
+                std::begin(label_input.sun_dir));
+      label_input.sun_circle_count = g_preview_vp.params.sun_circle_count;
+      label_input.sun_circle_angles = g_preview_vp.params.sun_circle_angles;
+      std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color),
+                std::begin(label_input.horizon_color));
+      std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(label_input.grid_color));
+      std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
+                std::begin(label_input.sun_circles_color));
+
+      // Convert viewport from framebuffer pixels to ImGui logical screen coordinates
+      float vp_sx = panel_x;
+      float vp_sy = kTopBarHeight;
+      float vp_sw = panel_width;
+      float vp_sh = preview_height;
+
+      static std::vector<OverlayLabel> labels;
+      ComputeOverlayLabels(label_input, vp_sx, vp_sy, vp_sw, vp_sh, labels);
+      DrawOverlayLabels(labels);
     }
 
     // Mouse interaction: orbit with drag, FOV with scroll

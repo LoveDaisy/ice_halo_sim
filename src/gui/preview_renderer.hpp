@@ -86,6 +86,11 @@ class PreviewRenderer {
   float bg_aspect_ = 1.0f;
 };
 
+// Build view-to-world 3x3 rotation matrix from camera orientation (degrees).
+// OpenGL column-major layout: out[col*3 + row].
+// Synced with shader u_view_matrix usage (preview_renderer.cpp).
+void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, float out[9]);
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_PREVIEW_RENDERER_HPP

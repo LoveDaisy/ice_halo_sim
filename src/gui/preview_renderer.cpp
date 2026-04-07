@@ -597,7 +597,7 @@ void PreviewRenderer::ClearBackground() {
 //   col2  = -forward  (unchanged by roll)
 //
 // OpenGL column-major: out[col*3 + row].
-static void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, float out[9]) {
+void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, float out[9]) {
   constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
   float a = azimuth_deg * kDeg2Rad;
   float e = elevation_deg * kDeg2Rad;
