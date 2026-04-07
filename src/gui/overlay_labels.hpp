@@ -22,6 +22,7 @@ struct OverlayLabelInput {
   int sun_circle_count;
   const float* sun_circle_angles;
   float horizon_color[3], grid_color[3], sun_circles_color[3];
+  float grid_alpha, sun_circles_alpha;
 };
 
 // Compute labels at viewport edges where overlay lines cross.

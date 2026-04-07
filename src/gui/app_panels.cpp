@@ -628,6 +628,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(label_input.grid_color));
       std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
                 std::begin(label_input.sun_circles_color));
+      label_input.grid_alpha = g_state.grid_alpha;
+      label_input.sun_circles_alpha = g_state.sun_circles_alpha;
 
       // Convert viewport from framebuffer pixels to ImGui logical screen coordinates
       float vp_sx = panel_x;

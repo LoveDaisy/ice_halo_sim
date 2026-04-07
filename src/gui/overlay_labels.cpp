@@ -148,6 +148,58 @@ InvResult PixelToWorldDir(float px, float py, float res_x, float res_y, int lens
   return r;
 }
 
+// Forward projection: world direction → pixel offset from viewport center.
+// Inverse of PixelToWorldDir. For types 0-3, applies inverse view matrix first.
+// Returns valid=false if direction is behind camera or outside projection domain.
+struct FwdResult {
+  float px, py;
+  bool valid;
+};
+
+FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y, int lens_type, float fov,
+                          const float view_matrix[9]) {
+  // For types 0-3: transform world→view by multiplying with transpose of view matrix
+  float dx = wx, dy = wy, dz = wz;
+  bool needs_view = (lens_type >= 0 && lens_type <= 3);
+  if (needs_view) {
+    // view_matrix is column-major: M[col*3+row]. Transpose = rows become columns.
+    dx = view_matrix[0] * wx + view_matrix[1] * wy + view_matrix[2] * wz;
+    dy = view_matrix[3] * wx + view_matrix[4] * wy + view_matrix[5] * wz;
+    dz = view_matrix[6] * wx + view_matrix[7] * wy + view_matrix[8] * wz;
+  }
+
+  float half_fov = fov * 0.5f * kDeg2Rad;
+  float short_edge = std::min(res_x, res_y);
+
+  if (lens_type == 0) {  // Linear
+    if (dz >= 0)
+      return { 0, 0, false };  // behind camera (shader convention: camera looks -z)
+    float focal = short_edge * 0.5f / std::tan(half_fov);
+    return { dx / (-dz) * focal, dy / (-dz) * focal, true };
+  } else if (lens_type >= 1 && lens_type <= 3) {  // Fisheye
+    float img_radius = short_edge * 0.5f;
+    float theta = std::acos(std::clamp(-dz, -1.0f, 1.0f));  // angle from -z axis
+    float rho = std::sqrt(dx * dx + dy * dy);
+    if (rho < 1e-8f)
+      return { 0, 0, true };  // on optical axis
+
+    float r_norm;
+    int type = lens_type - 1;
+    if (type == 0) {
+      r_norm = std::sin(theta * 0.5f) / std::sin(half_fov * 0.5f);
+    } else if (type == 1) {
+      r_norm = theta / half_fov;
+    } else {
+      r_norm = std::tan(theta * 0.5f) / std::tan(half_fov * 0.5f);
+    }
+    float scale = r_norm * img_radius / rho;
+    return { dx * scale, dy * scale, true };
+  }
+  // Types 4-7: not needed for sun circle interior labels (they use world space directly,
+  // and the full sky is always visible, so sun circles always intersect viewport edges).
+  return { 0, 0, false };
+}
+
 // Angle values computed for each edge sample point.
 struct SampleAngles {
   float altitude;            // degrees
@@ -193,9 +245,10 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   float res_x = vp_screen_w;
   float res_y = vp_screen_h;
 
-  ImU32 horizon_col = ColorToImU32(input.horizon_color, 200);
-  ImU32 grid_col = ColorToImU32(input.grid_color, 200);
-  ImU32 sun_col = ColorToImU32(input.sun_circles_color, 200);
+  int grid_a = static_cast<int>(input.grid_alpha * 255);
+  int sun_a = static_cast<int>(input.sun_circles_alpha * 255);
+  ImU32 grid_col = ColorToImU32(input.grid_color, grid_a);
+  ImU32 sun_col = ColorToImU32(input.sun_circles_color, sun_a);
 
   // Compute sun direction dot product for angular distance
   auto dot3 = [](float a0, float a1, float a2, float b0, float b1, float b2) { return a0 * b0 + a1 * b1 + a2 * b2; };
@@ -209,13 +262,15 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
     float end_sx, end_sy;      // screen coords at t=1
   };
 
+  // NDC y=+1 (pos.y=+hh) is OpenGL top = ImGui screen top (vp_screen_y).
+  // NDC y=-1 (pos.y=-hh) is OpenGL bottom = ImGui screen bottom (vp_screen_y + vp_screen_h).
   float hw = res_x * 0.5f, hh = res_y * 0.5f;
   Edge edges[4] = {
-    { -hw, -hh, hw, -hh, vp_screen_x, vp_screen_y, vp_screen_x + vp_screen_w, vp_screen_y },  // top
-    { -hw, hh, hw, hh, vp_screen_x, vp_screen_y + vp_screen_h, vp_screen_x + vp_screen_w,
+    { -hw, hh, hw, hh, vp_screen_x, vp_screen_y, vp_screen_x + vp_screen_w, vp_screen_y },  // top
+    { -hw, -hh, hw, -hh, vp_screen_x, vp_screen_y + vp_screen_h, vp_screen_x + vp_screen_w,
       vp_screen_y + vp_screen_h },                                                            // bottom
-    { -hw, -hh, -hw, hh, vp_screen_x, vp_screen_y, vp_screen_x, vp_screen_y + vp_screen_h },  // left
-    { hw, -hh, hw, hh, vp_screen_x + vp_screen_w, vp_screen_y, vp_screen_x + vp_screen_w,
+    { -hw, hh, -hw, -hh, vp_screen_x, vp_screen_y, vp_screen_x, vp_screen_y + vp_screen_h },  // left
+    { hw, hh, hw, -hh, vp_screen_x + vp_screen_w, vp_screen_y, vp_screen_x + vp_screen_w,
       vp_screen_y + vp_screen_h },  // right
   };
 
@@ -250,20 +305,11 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       if (prev.valid && cur.valid) {
         float t;
 
-        // Horizon: altitude crosses 0
-        if (input.show_horizon && Crosses(prev.altitude, cur.altitude, 0.0f, &t)) {
-          AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "0\xC2\xB0", 0.0f, horizon_col);
-        }
-
         // Grid: altitude crosses multiples of 10
         if (input.show_grid) {
-          float alt_min = std::min(prev.altitude, cur.altitude);
-          float alt_max = std::max(prev.altitude, cur.altitude);
-          if (alt_max - alt_min < 20.0f) {  // skip if jump too large (invalid transition)
-            for (int g = -8; g <= 8; g++) {
+          if (std::abs(prev.altitude - cur.altitude) < 20.0f) {
+            for (int g = -9; g <= 9; g++) {
               float target = g * 10.0f;
-              if (target == 0.0f)
-                continue;  // horizon already handles 0
               if (Crosses(prev.altitude, cur.altitude, target, &t)) {
                 AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target,
                          grid_col);
@@ -280,7 +326,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
           if (delta_az < -180.0f)
             az1 += 360.0f;
 
-          if (std::abs(az1 - az0) < 20.0f) {  // skip if jump too large
+          if (std::abs(az1 - az0) < 20.0f) {
             for (int g = -18; g <= 18; g++) {
               float target = g * 10.0f;
               if (Crosses(az0, az1, target, &t)) {
@@ -296,7 +342,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
           }
         }
 
-        // Sun circles: angular distance crosses specified angles
+        // Sun circles: angular distance crosses specified angles (edge crossings)
         if (input.show_sun_circles) {
           for (int ci = 0; ci < input.sun_circle_count; ci++) {
             float target = input.sun_circle_angles[ci];
@@ -309,6 +355,83 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       }
 
       prev = cur;
+    }
+  }
+
+  // Sun circles: add interior labels when circles don't intersect viewport edges.
+  // Place 4 labels evenly around each sun circle using forward projection.
+  if (input.show_sun_circles && input.lens_type >= 0 && input.lens_type <= 3) {
+    for (int ci = 0; ci < input.sun_circle_count; ci++) {
+      float angle_deg = input.sun_circle_angles[ci];
+      // Check if this circle already has edge labels
+      bool has_edge_label = false;
+      for (const auto& label : out) {
+        char expected[32];
+        std::snprintf(expected, sizeof(expected), "%.0f\xC2\xB0", angle_deg);
+        if (label.text == expected && label.color == sun_col) {
+          has_edge_label = true;
+          break;
+        }
+      }
+      if (has_edge_label)
+        continue;
+
+      // Generate 4 directions on the sun circle at 90° intervals around the sun direction
+      float sun_dist_rad = angle_deg * kDeg2Rad;
+      // Build an orthonormal frame around sun_dir
+      float sx = input.sun_dir[0], sy = input.sun_dir[1], sz = input.sun_dir[2];
+      // Find a vector not parallel to sun_dir
+      float ux, uy, uz;
+      if (std::abs(sz) < 0.9f) {
+        // Cross with (0,0,1)
+        ux = sy;
+        uy = -sx;
+        uz = 0;
+      } else {
+        // Cross with (1,0,0)
+        ux = 0;
+        uy = sz;
+        uz = -sy;
+      }
+      float u_len = std::sqrt(ux * ux + uy * uy + uz * uz);
+      ux /= u_len;
+      uy /= u_len;
+      uz /= u_len;
+      // v = sun_dir × u
+      float vx = sy * uz - sz * uy;
+      float vy = sz * ux - sx * uz;
+      float vz = sx * uy - sy * ux;
+
+      float cos_sd = std::cos(sun_dist_rad);
+      float sin_sd = std::sin(sun_dist_rad);
+
+      constexpr int kNumInteriorLabels = 4;
+      for (int li = 0; li < kNumInteriorLabels; li++) {
+        float phi = li * kPi * 0.5f;  // 0, 90, 180, 270 degrees
+        float cp = std::cos(phi), sp = std::sin(phi);
+        // Point on the sun circle: cos(sd)*sun_dir + sin(sd)*(cos(phi)*u + sin(phi)*v)
+        float wx = cos_sd * sx + sin_sd * (cp * ux + sp * vx);
+        float wy = cos_sd * sy + sin_sd * (cp * uy + sp * vy);
+        float wz = cos_sd * sz + sin_sd * (cp * uz + sp * vz);
+
+        FwdResult fp = WorldDirToPixel(wx, wy, wz, res_x, res_y, input.lens_type, input.fov, view_matrix);
+        if (!fp.valid)
+          continue;
+
+        // Check if pixel is within viewport bounds (with margin)
+        if (std::abs(fp.px) > hw - 10.0f || std::abs(fp.py) > hh - 10.0f)
+          continue;
+
+        // Convert pixel offset to ImGui screen coordinates
+        // px goes [-hw, hw] → screen_x goes [vp_screen_x, vp_screen_x + vp_screen_w]
+        // py goes [+hh, -hh] → screen_y goes [vp_screen_y, vp_screen_y + vp_screen_h] (y inverted)
+        float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
+        float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
+
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.0f\xC2\xB0", angle_deg);
+        out.push_back({ scr_x, scr_y, std::string(buf), sun_col });
+      }
     }
   }
 }
