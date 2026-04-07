@@ -12,6 +12,7 @@ struct OverlayLabel {
   float screen_x, screen_y;  // ImGui logical screen coordinates
   std::string text;
   ImU32 color;
+  bool has_bg = false;  // draw semi-transparent black background behind text
 };
 
 struct OverlayLabelInput {

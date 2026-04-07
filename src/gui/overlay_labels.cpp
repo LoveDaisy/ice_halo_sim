@@ -430,7 +430,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
 
         char buf[32];
         std::snprintf(buf, sizeof(buf), "%.0f\xC2\xB0", angle_deg);
-        out.push_back({ scr_x, scr_y, std::string(buf), sun_col });
+        out.push_back({ scr_x, scr_y, std::string(buf), sun_col, true });
       }
     }
   }
@@ -465,6 +465,9 @@ void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
     }
 
     if (!overlaps) {
+      if (label.has_bg) {
+        fg->AddRectFilled(bbox_min, bbox_max, IM_COL32(0, 0, 0, 120), 2.0f);
+      }
       fg->AddText(pos, label.color, label.text.c_str());
       placed.push_back({ bbox_min, bbox_max });
     }

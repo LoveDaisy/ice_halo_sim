@@ -259,14 +259,7 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color) {
   float fw_alt = clamp(fwidth(altitude_deg), 0.1, 2.0);
   float fw_az = clamp(fwidth(azimuth_deg), 0.1, 5.0);
 
-  // Horizon line (altitude = 0)
-  if (u_show_horizon != 0) {
-    float d = abs(altitude_deg);
-    float t = 1.0 - smoothstep(0.0, fw_alt * 1.5, d);
-    color = mix(color, u_horizon_color, t * u_horizon_alpha);
-  }
-
-  // Coordinate grid (10 degree intervals)
+  // Coordinate grid (10 degree intervals) — drawn first so other lines overlay on top
   if (u_show_grid != 0) {
     // Altitude grid lines
     float d_alt = mod(abs(altitude_deg) + 5.0, 10.0) - 5.0;
@@ -292,6 +285,13 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color) {
       float t = 1.0 - smoothstep(0.0, fw_ang * 1.5, d);
       color = mix(color, u_sun_circles_color, t * u_sun_circles_alpha);
     }
+  }
+
+  // Horizon line (altitude = 0) — drawn last so it's most visible
+  if (u_show_horizon != 0) {
+    float d = abs(altitude_deg);
+    float t = 1.0 - smoothstep(0.0, fw_alt * 1.5, d);
+    color = mix(color, u_horizon_color, t * u_horizon_alpha);
   }
 
   return color;
