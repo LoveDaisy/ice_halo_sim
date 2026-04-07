@@ -214,7 +214,7 @@ void ClearFilterReferences(GuiState& state, int filter_id) {
   if (expr)            \
   state.MarkDirty()
 
-void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
+void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state, float mean_min, float mean_max) {
   ImGui::PushID(label);
   ImGui::Text("%s", label);
   ImGui::SameLine(100);
@@ -265,7 +265,7 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state) {
     axis.std = std::min(axis.std, max_std);
   }
 
-  DIRTY_IF(SliderWithInput("Mean", &axis.mean, -360.0f, 360.0f));
+  DIRTY_IF(SliderWithInput("Mean", &axis.mean, mean_min, mean_max));
 
   switch (axis.type) {
     case AxisDistType::kGauss:
@@ -480,11 +480,11 @@ void RenderCrystalTab(GuiState& state) {
   }
 
   ImGui::SeparatorText("Axis Distribution");
-  RenderAxisDist("Zenith", cr.zenith, state);
+  RenderAxisDist("Zenith", cr.zenith, state, 0.0f, 180.0f);
   ImGui::Spacing();
-  RenderAxisDist("Azimuth", cr.azimuth, state);
+  RenderAxisDist("Azimuth", cr.azimuth, state, 0.0f, 360.0f);
   ImGui::Spacing();
-  RenderAxisDist("Roll", cr.roll, state);
+  RenderAxisDist("Roll", cr.roll, state, 0.0f, 360.0f);
 }
 
 
