@@ -50,6 +50,9 @@ uniform int u_sun_circle_count;
 uniform vec3 u_horizon_color;
 uniform vec3 u_grid_color;
 uniform vec3 u_sun_circles_color;
+uniform float u_horizon_alpha;
+uniform float u_grid_alpha;
+uniform float u_sun_circles_alpha;
 
 const float PI = 3.14159265358979323846;
 
@@ -260,7 +263,7 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color) {
   if (u_show_horizon != 0) {
     float d = abs(altitude_deg);
     float t = 1.0 - smoothstep(0.0, fw_alt * 1.5, d);
-    color = mix(color, u_horizon_color, t * 0.6);
+    color = mix(color, u_horizon_color, t * u_horizon_alpha);
   }
 
   // Coordinate grid (10 degree intervals)
@@ -277,7 +280,7 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color) {
     }
 
     float t = max(t_alt, t_az);
-    color = mix(color, u_grid_color, t * 0.3);
+    color = mix(color, u_grid_color, t * u_grid_alpha);
   }
 
   // Sun angular distance circles
@@ -287,7 +290,7 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color) {
     for (int i = 0; i < u_sun_circle_count; i++) {
       float d = abs(ang_dist_deg - u_sun_circle_angles[i]);
       float t = 1.0 - smoothstep(0.0, fw_ang * 1.5, d);
-      color = mix(color, u_sun_circles_color, t * 0.5);
+      color = mix(color, u_sun_circles_color, t * u_sun_circles_alpha);
     }
   }
 
@@ -703,6 +706,9 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
               params.grid_color[2]);
   glUniform3f(glGetUniformLocation(shader_program_, "u_sun_circles_color"), params.sun_circles_color[0],
               params.sun_circles_color[1], params.sun_circles_color[2]);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_horizon_alpha"), params.horizon_alpha);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_grid_alpha"), params.grid_alpha);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_sun_circles_alpha"), params.sun_circles_alpha);
 
   // Draw fullscreen quad
   glBindVertexArray(vao_);

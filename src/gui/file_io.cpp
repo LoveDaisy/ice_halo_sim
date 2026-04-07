@@ -768,6 +768,9 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["overlay_grid_color"] = { state.grid_color[0], state.grid_color[1], state.grid_color[2] };
   root["overlay_sun_circles_color"] = { state.sun_circles_color[0], state.sun_circles_color[1],
                                         state.sun_circles_color[2] };
+  root["overlay_horizon_alpha"] = state.horizon_alpha;
+  root["overlay_grid_alpha"] = state.grid_alpha;
+  root["overlay_sun_circles_alpha"] = state.sun_circles_alpha;
 
   // Panel state
   root["right_panel_collapsed"] = state.right_panel_collapsed;
@@ -921,6 +924,9 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   read_color3("overlay_horizon_color", state.horizon_color);
   read_color3("overlay_grid_color", state.grid_color);
   read_color3("overlay_sun_circles_color", state.sun_circles_color);
+  state.horizon_alpha = root.value("overlay_horizon_alpha", 0.6f);
+  state.grid_alpha = root.value("overlay_grid_alpha", 0.3f);
+  state.sun_circles_alpha = root.value("overlay_sun_circles_alpha", 0.5f);
 
   // Panel state
   state.right_panel_collapsed = root.value("right_panel_collapsed", false);

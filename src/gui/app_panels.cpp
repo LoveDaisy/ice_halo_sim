@@ -418,12 +418,15 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       ImGui::Checkbox("Horizon##overlay", &g_state.show_horizon);
       ImGui::SameLine();
       ImGui::ColorEdit3("##horizon_color", g_state.horizon_color, ImGuiColorEditFlags_NoInputs);
+      SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, 0.0f, 1.0f, "%.2f");
       ImGui::Checkbox("Grid##overlay", &g_state.show_grid);
       ImGui::SameLine();
       ImGui::ColorEdit3("##grid_color", g_state.grid_color, ImGuiColorEditFlags_NoInputs);
+      SliderWithInput("Alpha##grid", &g_state.grid_alpha, 0.0f, 1.0f, "%.2f");
       ImGui::Checkbox("Sun Circles##overlay", &g_state.show_sun_circles);
       ImGui::SameLine();
       ImGui::ColorEdit3("##sun_circles_color", g_state.sun_circles_color, ImGuiColorEditFlags_NoInputs);
+      SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, 0.0f, 1.0f, "%.2f");
 
       if (g_state.show_sun_circles) {
         if (ImGui::Button("Edit Circles...##overlay")) {
@@ -589,6 +592,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(g_preview_vp.params.grid_color));
     std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
               std::begin(g_preview_vp.params.sun_circles_color));
+    g_preview_vp.params.horizon_alpha = g_state.horizon_alpha;
+    g_preview_vp.params.grid_alpha = g_state.grid_alpha;
+    g_preview_vp.params.sun_circles_alpha = g_state.sun_circles_alpha;
     // Precompute sun direction in world space (same convention as BuildViewMatrix forward vector)
     constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
     float sa = g_state.sun.altitude * kDeg2Rad;
