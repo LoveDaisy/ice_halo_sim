@@ -84,22 +84,11 @@ Crystal Crystal::CreatePrism(float h, const float* fd) {
 }
 
 Crystal Crystal::CreatePyramid(float h1, float h2, float h3) {
-  float dist[6]{ 1, 1, 1, 1, 1, 1 };
   float alpha = std::atan(math::kSqrt3_2 / kIceCrystalC) * math::kRadToDegree;
-  float coef[kMaxHexCrystalPlanes * 4];
-  auto plane_cnt = FillHexCrystalCoef(alpha, alpha, h1, h2, h3, dist, coef);
-  auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
-  c.fn_period_ = 6;
-  FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
-  c.BuildPolygonFaceData(coef, plane_cnt);
-  return c;
+  return CreatePyramid(alpha, alpha, h1, h2, h3);
 }
 
-Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int lower_i4,  // Miller index
-                               float h1, float h2, float h3,                            // height
-                               const float* dist) {                                     // face distance
-  float upper_alpha = std::atan(math::kSqrt3_2 * upper_i4 / upper_i1 / kIceCrystalC) * math::kRadToDegree;
-  float lower_alpha = std::atan(math::kSqrt3_2 * lower_i4 / lower_i1 / kIceCrystalC) * math::kRadToDegree;
+Crystal Crystal::CreatePyramid(float upper_alpha, float lower_alpha, float h1, float h2, float h3, const float* dist) {
   float coef[kMaxHexCrystalPlanes * 4];
   auto plane_cnt = FillHexCrystalCoef(upper_alpha, lower_alpha, h1, h2, h3, dist, coef);
   auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
@@ -107,6 +96,22 @@ Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int low
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
   c.BuildPolygonFaceData(coef, plane_cnt);
   return c;
+}
+
+Crystal Crystal::CreatePyramid(float upper_alpha, float lower_alpha, float h1, float h2, float h3) {
+  float dist[6]{ 1, 1, 1, 1, 1, 1 };
+  return CreatePyramid(upper_alpha, lower_alpha, h1, h2, h3, dist);
+}
+
+Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int lower_i4,  // Miller index
+                               float h1, float h2, float h3,                            // height
+                               const float* dist) {                                     // face distance
+  // Guard against integer division by zero (UB). i1=0 is invalid; skip the corresponding pyramid segment.
+  float upper_alpha =
+      upper_i1 != 0 ? std::atan(math::kSqrt3_2 * upper_i4 / upper_i1 / kIceCrystalC) * math::kRadToDegree : 0.0f;
+  float lower_alpha =
+      lower_i1 != 0 ? std::atan(math::kSqrt3_2 * lower_i4 / lower_i1 / kIceCrystalC) * math::kRadToDegree : 0.0f;
+  return CreatePyramid(upper_alpha, lower_alpha, h1, h2, h3, dist);
 }
 
 
@@ -531,6 +536,10 @@ const int* Crystal::GetPolygonFaceTriId() const {
   return poly_face_tri_id_;
 }
 
+// Safety note: this function matches plane equations to triangle normals via dot product (> 1.0 - 1e-3).
+// Planes that are geometrically absent (e.g., faces eliminated by non-uniform face distances) will have no
+// matching triangles and are naturally skipped. The safety of handling "phantom planes" depends on this
+// normal-matching mechanism.
 void Crystal::BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt) {
   static_assert(sizeof(int) == sizeof(float), "BuildPolygonFaceData requires sizeof(int)==sizeof(float)");
 
