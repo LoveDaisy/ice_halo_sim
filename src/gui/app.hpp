@@ -40,8 +40,8 @@ extern bool g_panel_collapsed;
 extern PreviewViewport g_preview_vp;
 
 // Aspect ratio state
-extern int g_programmatic_resize;  // Counter: decremented by WindowSizeCallback, set by ApplyAspectRatio
-extern float g_aspect_bar_height;  // Cached actual height from ImGui layout
+extern int g_programmatic_resize;   // Counter: decremented by WindowSizeCallback, set by ApplyAspectRatio
+extern float g_options_bar_height;  // Cached actual height from ImGui layout (View Bar + Display Bar)
 
 // Unsaved changes popup state
 extern bool g_show_unsaved_popup;
@@ -80,7 +80,8 @@ void CheckUnsavedAndDo(PendingAction action);
 // Panel rendering
 void RenderTopBar(float window_width);
 void RenderLeftPanel(float window_height);
-void RenderFloatingLensBar(float window_width);
+void RenderViewBar();
+void RenderDisplayBar(GLFWwindow* window);
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height);
 void RenderStatusBar(float window_width, float window_height);
 void RenderUnsavedPopup(GLFWwindow* window);

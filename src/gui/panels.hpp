@@ -7,7 +7,6 @@ struct GuiState;
 
 void RenderCrystalTab(GuiState& state);
 void RenderSceneTab(GuiState& state);
-void RenderRenderTab(GuiState& state);
 void RenderFilterTab(GuiState& state);
 
 // Reset pending-delete state (for test isolation)

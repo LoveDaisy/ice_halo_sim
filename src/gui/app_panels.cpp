@@ -25,13 +25,36 @@ void RenderTopBar(float window_width) {
   ImGui::Text("Lumice");
   ImGui::SameLine();
 
-  // Push buttons to the right side
-  float button_start_x = window_width - 440.0f;
+  // Run/Stop + Revert on the left (near config panels)
+  bool simulating = (g_state.sim_state == SimState::kSimulating);
+  if (simulating) {
+    if (ImGui::Button("Stop")) {
+      DoStop();
+    }
+  } else {
+    if (ImGui::Button("Run")) {
+      DoRun();
+    }
+  }
+  if (g_state.sim_state == SimState::kModified) {
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "!");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Revert")) {
+      DoRevert();
+    }
+  }
+
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
+  ImGui::SameLine();
+
+  // File operations on the right side
+  float button_start_x = window_width - 380.0f;
   if (button_start_x > ImGui::GetCursorPosX()) {
     ImGui::SetCursorPosX(button_start_x);
   }
 
-  bool simulating = (g_state.sim_state == SimState::kSimulating);
   if (simulating) {
     ImGui::BeginDisabled();
   }
@@ -50,51 +73,29 @@ void RenderTopBar(float window_width) {
   if (ImGui::Button("Save As")) {
     DoSaveAs();
   }
+  if (simulating) {
+    ImGui::EndDisabled();
+  }
   ImGui::SameLine();
   {
-    bool no_texture = !g_preview.HasTexture();
-    if (no_texture) {
-      ImGui::BeginDisabled();
-    }
     if (ImGui::Button("Export")) {
       ImGui::OpenPopup("ExportMenu");
     }
-    if (no_texture) {
-      ImGui::EndDisabled();
-    }
     if (ImGui::BeginPopup("ExportMenu")) {
-      if (ImGui::MenuItem("Screenshot...")) {
+      bool no_texture = !g_preview.HasTexture();
+      bool has_server = g_server != nullptr && g_state.sim_state != GuiState::SimState::kIdle;
+      if (ImGui::MenuItem("Screenshot...", nullptr, false, !no_texture)) {
         DoExportPreviewPng();
       }
-      bool has_server = g_server != nullptr && g_state.sim_state != GuiState::SimState::kIdle;
       if (ImGui::MenuItem("Panorama...", nullptr, false, has_server)) {
         DoExportEquirectPng();
       }
       if (ImGui::MenuItem("Config JSON...")) {
         DoExportConfigJson();
       }
+      ImGui::Separator();
+      ImGui::MenuItem("Include Texture in .lmc", nullptr, &g_state.save_texture);
       ImGui::EndPopup();
-    }
-  }
-  if (simulating) {
-    ImGui::EndDisabled();
-  }
-  ImGui::SameLine();
-  if (simulating) {
-    if (ImGui::Button("Stop")) {
-      DoStop();
-    }
-  } else {
-    if (ImGui::Button("Run")) {
-      DoRun();
-    }
-  }
-  if (g_state.sim_state == SimState::kModified) {
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "!");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Revert")) {
-      DoRevert();
     }
   }
 
@@ -247,10 +248,6 @@ void RenderLeftPanel(float window_height) {
       RenderSceneTab(g_state);
       ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem("Render")) {
-      RenderRenderTab(g_state);
-      ImGui::EndTabItem();
-    }
     if (ImGui::BeginTabItem("Filter")) {
       RenderFilterTab(g_state);
       ImGui::EndTabItem();
@@ -261,41 +258,157 @@ void RenderLeftPanel(float window_height) {
   ImGui::End();
 }
 
-void RenderFloatingLensBar(float window_width) {
-  if (!g_panel_collapsed) {
-    return;
+void RenderViewBar() {
+  // Ensure at least one renderer exists
+  if (g_state.renderers.empty()) {
+    RenderConfig r;
+    r.id = g_state.next_renderer_id++;
+    g_state.renderers.push_back(r);
+    g_state.selected_renderer = 0;
   }
+  g_state.selected_renderer = 0;
+
   if (g_state.selected_renderer < 0 || g_state.selected_renderer >= static_cast<int>(g_state.renderers.size())) {
     return;
   }
 
-  auto& rc = g_state.renderers[g_state.selected_renderer];
+  auto& r = g_state.renderers[g_state.selected_renderer];
+  bool full_sky = (r.lens_type >= 4);
 
-  constexpr float kBarHeight = 36.0f;
-  constexpr float kBarPadding = 10.0f;
-  float bar_width = std::min(600.0f, window_width - 2 * kBarPadding);
-  float bar_x = (window_width - bar_width) * 0.5f;
-  float bar_y = kTopBarHeight + kBarPadding;
+  // Clamp FOV to max for current lens type
+  float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
+  r.fov = std::min(r.fov, max_fov);
 
-  ImGui::SetNextWindowPos(ImVec2(bar_x, bar_y));
-  ImGui::SetNextWindowSize(ImVec2(bar_width, kBarHeight));
-  ImGui::SetNextWindowBgAlpha(0.6f);
-  ImGui::Begin("##FloatingLens", nullptr,
-               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
+  // Full-sky lenses: force view angles to zero every frame
+  if (full_sky) {
+    r.elevation = 0.0f;
+    r.azimuth = 0.0f;
+    r.roll = 0.0f;
+  }
 
+  // Projection group: Lens Type, FOV, Visible
   ImGui::PushItemWidth(120.0f);
-  ImGui::Combo("##LensType", &rc.lens_type, kLensTypeNames, kLensTypeCount);
+  ImGui::Combo("##view_lens_type", &r.lens_type, kLensTypeNames, kLensTypeCount);
+  ImGui::PopItemWidth();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(full_sky);
+  ImGui::PushItemWidth(80.0f);
+  ImGui::SliderFloat("FOV##view", &r.fov, 1.0f, max_fov, "%.0f");
+  ImGui::PopItemWidth();
+  ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::PushItemWidth(80.0f);
-  float max_fov = MaxFov(static_cast<LensParam::LensType>(rc.lens_type));
-  ImGui::SliderFloat("FOV", &rc.fov, 1.0f, max_fov, "%.0f");
-  ImGui::PopItemWidth();
-  ImGui::SameLine();
-  ImGui::Text("El:%.0f Az:%.0f", rc.elevation, rc.azimuth);
+  ImGui::Combo("##view_visible", &r.visible, kVisibleNames, kVisibleCount);
   ImGui::PopItemWidth();
 
-  ImGui::End();
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
+  ImGui::SameLine();
+
+  // View group: Elevation, Azimuth, Roll (disabled for full-sky)
+  ImGui::BeginDisabled(full_sky);
+  ImGui::PushItemWidth(80.0f);
+  ImGui::SliderFloat("El##view", &r.elevation, -90.0f, 90.0f, "%.0f");
+  ImGui::PopItemWidth();
+  ImGui::SameLine();
+  ImGui::PushItemWidth(80.0f);
+  ImGui::SliderFloat("Az##view", &r.azimuth, -180.0f, 180.0f, "%.0f");
+  ImGui::PopItemWidth();
+  ImGui::SameLine();
+  ImGui::PushItemWidth(80.0f);
+  ImGui::SliderFloat("Roll##view", &r.roll, -180.0f, 180.0f, "%.0f");
+  ImGui::PopItemWidth();
+  ImGui::EndDisabled();
+}
+
+void RenderDisplayBar(GLFWwindow* window) {
+  if (g_state.selected_renderer < 0 || g_state.selected_renderer >= static_cast<int>(g_state.renderers.size())) {
+    return;
+  }
+
+  auto& r = g_state.renderers[g_state.selected_renderer];
+
+  // Aspect ratio
+  ImGui::PushItemWidth(120.0f);
+  int preset_idx = static_cast<int>(g_state.aspect_preset);
+  const char* preview_label = kAspectPresetNames[preset_idx];
+  if (ImGui::BeginCombo("##display_aspect", preview_label)) {
+    for (int i = 0; i < kAspectPresetCount; i++) {
+      bool is_match_bg = (static_cast<AspectPreset>(i) == AspectPreset::kMatchBg);
+      bool disabled = is_match_bg && !g_preview.HasBackground();
+      if (disabled) {
+        ImGui::BeginDisabled();
+      }
+      bool selected = (i == preset_idx);
+      if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
+        g_state.aspect_preset = static_cast<AspectPreset>(i);
+        ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+      }
+      if (selected) {
+        ImGui::SetItemDefaultFocus();
+      }
+      if (disabled) {
+        ImGui::EndDisabled();
+      }
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::PopItemWidth();
+
+  // Portrait/landscape toggle
+  ImGui::SameLine();
+  bool disable_flip = (g_state.aspect_preset == AspectPreset::kFree || g_state.aspect_preset == AspectPreset::k1x1);
+  ImGui::BeginDisabled(disable_flip);
+  const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
+  if (ImGui::Button(flip_label)) {
+    g_state.aspect_portrait = !g_state.aspect_portrait;
+    ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+  }
+  ImGui::EndDisabled();
+
+  // EV
+  ImGui::SameLine();
+  ImGui::PushItemWidth(80.0f);
+  ImGui::SliderFloat("EV##display", &r.exposure_offset, -3.0f, 7.0f, "%.1f");
+  ImGui::PopItemWidth();
+
+  // Resolution (triggers simulation rebuild — highlighted)
+  ImGui::SameLine();
+  ImGui::PushItemWidth(80.0f);
+  const char* res_labels[] = { "512", "1024", "2048", "4096" };
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.28f, 0.12f, 0.6f));
+  if (ImGui::Combo("Res##display", &r.sim_resolution_index, res_labels, kSimResolutionCount)) {
+    g_state.MarkDirty();
+  }
+  ImGui::PopStyleColor();
+  ImGui::PopItemWidth();
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
+  }
+
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
+  ImGui::SameLine();
+
+  // Background controls
+  if (ImGui::Button("Load Bg")) {
+    DoLoadBackground(window);
+  }
+  ImGui::SameLine();
+  bool no_bg = !g_preview.HasBackground();
+  ImGui::BeginDisabled(no_bg);
+  ImGui::Checkbox("Show##display_bg", &g_state.bg_show);
+  ImGui::SameLine();
+  ImGui::BeginDisabled(!g_state.bg_show);
+  ImGui::PushItemWidth(80.0f);
+  ImGui::SliderFloat("Alpha##display", &g_state.bg_alpha, 0.0f, 1.0f, "%.2f");
+  ImGui::PopItemWidth();
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Clear##display_bg")) {
+    DoClearBackground();
+  }
+  ImGui::EndDisabled();
 }
 
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {
@@ -308,73 +421,15 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground);
 
-  // Aspect ratio bar
-  {
-    ImGui::Text("Aspect:");
-    ImGui::SameLine();
-    ImGui::PushItemWidth(150.0f);
-    int preset_idx = static_cast<int>(g_state.aspect_preset);
-    const char* preview_label = kAspectPresetNames[preset_idx];
-    if (ImGui::BeginCombo("##AspectPreset", preview_label)) {
-      for (int i = 0; i < kAspectPresetCount; i++) {
-        bool is_match_bg = (static_cast<AspectPreset>(i) == AspectPreset::kMatchBg);
-        bool disabled = is_match_bg && !g_preview.HasBackground();
-        if (disabled) {
-          ImGui::BeginDisabled();
-        }
-        bool selected = (i == preset_idx);
-        if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
-          g_state.aspect_preset = static_cast<AspectPreset>(i);
-          ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
-        }
-        if (selected) {
-          ImGui::SetItemDefaultFocus();
-        }
-        if (disabled) {
-          ImGui::EndDisabled();
-        }
-      }
-      ImGui::EndCombo();
-    }
-    ImGui::PopItemWidth();
+  // View Bar (row 1): projection + view angle controls
+  RenderViewBar();
 
-    // Portrait/landscape toggle button
-    ImGui::SameLine();
-    bool disable_flip = (g_state.aspect_preset == AspectPreset::kFree || g_state.aspect_preset == AspectPreset::k1x1);
-    ImGui::BeginDisabled(disable_flip);
-    const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
-    if (ImGui::Button(flip_label)) {
-      g_state.aspect_portrait = !g_state.aspect_portrait;
-      ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
-    }
-    ImGui::EndDisabled();
-  }
+  // Display Bar (row 2): aspect + EV + resolution + background
+  RenderDisplayBar(window);
 
-  // Background image controls
-  {
-    if (ImGui::Button("Load Bg")) {
-      DoLoadBackground(window);
-    }
-    ImGui::SameLine();
-    bool no_bg = !g_preview.HasBackground();
-    ImGui::BeginDisabled(no_bg);
-    ImGui::Checkbox("Show", &g_state.bg_show);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!g_state.bg_show);
-    ImGui::PushItemWidth(120.0f);
-    ImGui::SliderFloat("Alpha", &g_state.bg_alpha, 0.0f, 1.0f, "%.2f");
-    ImGui::PopItemWidth();
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (ImGui::Button("Clear")) {
-      DoClearBackground();
-    }
-    ImGui::EndDisabled();
-  }
-
-  float aspect_bar_h = ImGui::GetCursorPosY();
-  g_aspect_bar_height = aspect_bar_h;
-  float preview_height = panel_height - aspect_bar_h;
+  float options_bar_h = ImGui::GetCursorPosY();
+  g_options_bar_height = options_bar_h;
+  float preview_height = panel_height - options_bar_h;
 
   g_preview_vp.active = false;
 
@@ -389,7 +444,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
 
     auto& rc = g_state.renderers[g_state.selected_renderer];
 
-    // Store viewport for deferred rendering (subtract aspect bar height)
+    // Store viewport for deferred rendering
     g_preview_vp.active = true;
     g_preview_vp.vp_x = static_cast<int>(panel_x * scale_x);
     g_preview_vp.vp_y = static_cast<int>(kStatusBarHeight * scale_y);  // OpenGL Y is bottom-up
@@ -405,9 +460,6 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.params.intensity_scale =
         g_state.snapshot_intensity > 0 ? g_preview_vp.params.intensity_factor / g_state.snapshot_intensity : 0.0f;
     // Overlap parameters for dual fisheye texture sampling.
-    // The texture is ALWAYS dual fisheye EA (file_io.cpp hardcodes dual_fisheye_equal_area),
-    // so r_scale is always set regardless of the viewing lens type (Linear, Fisheye, etc.).
-    // Keep in sync with render.cpp overlap r_scale computation (same formula, same constant).
     g_preview_vp.params.max_abs_dz = kDualFisheyeOverlap;
     g_preview_vp.params.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
     g_preview_vp.params.bg_enabled = g_state.bg_show && g_preview.HasBackground();

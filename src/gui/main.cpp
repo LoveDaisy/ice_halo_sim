@@ -266,7 +266,6 @@ int main(int argc, char** argv) {
       gui::RenderTopBar(lw);
       gui::RenderLeftPanel(lh);
       gui::RenderPreviewPanel(window, lw, lh);
-      gui::RenderFloatingLensBar(lw);
       gui::RenderStatusBar(lw, lh);
 
       ImGui::Render();
@@ -376,7 +375,6 @@ int main(int argc, char** argv) {
     gui::RenderTopBar(layout_width);
     gui::RenderLeftPanel(layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
-    gui::RenderFloatingLensBar(layout_width);
     gui::RenderLogPanel(layout_width, layout_height);
     gui::RenderStatusBar(layout_width, layout_height);
     gui::RenderUnsavedPopup(window);

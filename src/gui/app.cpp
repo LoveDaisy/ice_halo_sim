@@ -33,7 +33,7 @@ PreviewViewport g_preview_vp;
 
 int g_programmatic_resize = 0;
 
-float g_aspect_bar_height = 30.0f;  // Updated each frame by RenderPreviewPanel
+float g_options_bar_height = 50.0f;  // Updated each frame by RenderPreviewPanel (View Bar + Display Bar)
 
 bool g_show_unsaved_popup = false;
 PendingAction g_pending_action = PendingAction::kNone;
@@ -94,7 +94,7 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   int win_h = 0;
   glfwGetWindowSize(window, &win_w, &win_h);
 
-  float bar_h = g_aspect_bar_height;
+  float bar_h = g_options_bar_height;
   float preview_w = std::max(1.0f, static_cast<float>(win_w) - kLeftPanelWidth);
   float preview_h = preview_w / ratio;
   auto target_h = static_cast<int>(preview_h + kTopBarHeight + kStatusBarHeight + bar_h);
