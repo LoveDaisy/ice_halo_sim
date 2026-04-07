@@ -295,6 +295,8 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
     if (input.show_grid) {
       if (std::abs(prev.altitude - cur.altitude) < 20.0f) {
         for (int g = -9; g <= 9; g++) {
+          if (g == 0)
+            continue;  // skip 0° altitude (horizon) — low value, avoids equator edge clutter
           float target = g * 10.0f;
           if (Crosses(prev.altitude, cur.altitude, target, &t) && is_visible(target)) {
             AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target,
