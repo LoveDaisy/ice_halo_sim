@@ -426,6 +426,11 @@ bool PreviewRenderer::Init() {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);  // dual fisheye: no horizontal wrap
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  // Initialize with 1x1 black pixel so the texture has valid GL storage.
+  // This allows the shader to sample black (transparent) when no simulation data exists,
+  // enabling background-only rendering before the simulation is started.
+  static const unsigned char kBlack[3] = { 0, 0, 0 };
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, kBlack);
   glBindTexture(GL_TEXTURE_2D, 0);
 
   // Create background texture

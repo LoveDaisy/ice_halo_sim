@@ -541,7 +541,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
 
   g_preview_vp.active = false;
 
-  if (g_preview.HasTexture() && g_state.selected_renderer >= 0 &&
+  if ((g_preview.HasTexture() || g_preview.HasBackground()) && g_state.selected_renderer >= 0 &&
       g_state.selected_renderer < static_cast<int>(g_state.renderers.size())) {
     // Compute viewport in framebuffer pixels (for HiDPI)
     int fb_w = 0;
