@@ -382,7 +382,9 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         }
         ImGui::EndCombo();
       }
-      bool disable_flip = (g_state.aspect_preset == AspectPreset::kFree || g_state.aspect_preset == AspectPreset::k1x1);
+      bool disable_flip =
+          (g_state.aspect_preset == AspectPreset::kFree || g_state.aspect_preset == AspectPreset::k1x1 ||
+           g_state.aspect_preset == AspectPreset::kMatchBg);
       ImGui::BeginDisabled(disable_flip);
       const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
       if (ImGui::Button(flip_label)) {

@@ -353,6 +353,10 @@ int main(int argc, char** argv) {
         gui::DoSave();
       }
     }
+    // Save panel collapse state before any mutations (keyboard shortcuts + button clicks during rendering).
+    bool prev_left_collapsed = gui::g_panel_collapsed;
+    bool prev_right_collapsed = gui::g_state.right_panel_collapsed;
+
     // Panel collapse shortcuts: [ for left panel, ] for right panel
     if (!io.WantCaptureKeyboard) {
       if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket)) {
@@ -386,6 +390,11 @@ int main(int argc, char** argv) {
     gui::RenderLogPanel(layout_width, layout_height);
     gui::RenderStatusBar(layout_width, layout_height);
     gui::RenderUnsavedPopup(window);
+
+    // Reset aspect ratio to Free when panel collapse state changes (window size doesn't adjust automatically).
+    if (gui::g_panel_collapsed != prev_left_collapsed || gui::g_state.right_panel_collapsed != prev_right_collapsed) {
+      gui::g_state.aspect_preset = gui::AspectPreset::kFree;
+    }
 
     // Rendering
     ImGui::Render();
