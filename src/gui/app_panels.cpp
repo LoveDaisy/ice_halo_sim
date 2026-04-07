@@ -411,6 +411,88 @@ void RenderDisplayBar(GLFWwindow* window) {
   ImGui::EndDisabled();
 }
 
+void RenderOverlayBar() {
+  ImGui::Checkbox("Horizon##overlay", &g_state.show_horizon);
+  ImGui::SameLine();
+  ImGui::Checkbox("Grid##overlay", &g_state.show_grid);
+  ImGui::SameLine();
+  ImGui::Checkbox("Sun Circles##overlay", &g_state.show_sun_circles);
+
+  if (g_state.show_sun_circles) {
+    ImGui::SameLine();
+    if (ImGui::Button("Edit...##circles")) {
+      ImGui::OpenPopup("SunCirclesEdit");
+    }
+    if (ImGui::BeginPopup("SunCirclesEdit")) {
+      // Preset buttons
+      const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
+      for (float p : presets) {
+        bool already = false;
+        for (float a : g_state.sun_circle_angles) {
+          if (std::abs(a - p) < 0.01f) {
+            already = true;
+            break;
+          }
+        }
+        char label[16];
+        std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);  // degree sign UTF-8
+        if (already) {
+          ImGui::BeginDisabled();
+        }
+        if (ImGui::Button(label)) {
+          if (static_cast<int>(g_state.sun_circle_angles.size()) < kMaxSunCircles) {
+            g_state.sun_circle_angles.push_back(p);
+            std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+          }
+        }
+        if (already) {
+          ImGui::EndDisabled();
+        }
+        ImGui::SameLine();
+      }
+      ImGui::NewLine();
+
+      // Current list with delete buttons
+      ImGui::Separator();
+      int remove_idx = -1;
+      for (int i = 0; i < static_cast<int>(g_state.sun_circle_angles.size()); i++) {
+        ImGui::Text("%.1f\xc2\xb0", g_state.sun_circle_angles[i]);
+        ImGui::SameLine();
+        char del_label[32];
+        std::snprintf(del_label, sizeof(del_label), "x##del_%d", i);
+        if (ImGui::SmallButton(del_label)) {
+          remove_idx = i;
+        }
+      }
+      if (remove_idx >= 0) {
+        g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
+      }
+
+      // Custom angle input
+      ImGui::Separator();
+      static float custom_angle = 22.0f;
+      ImGui::PushItemWidth(60.0f);
+      ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
+      ImGui::PopItemWidth();
+      ImGui::SameLine();
+      bool at_limit = static_cast<int>(g_state.sun_circle_angles.size()) >= kMaxSunCircles;
+      if (at_limit) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::Button("+##add_circle")) {
+        custom_angle = std::max(0.1f, std::min(180.0f, custom_angle));
+        g_state.sun_circle_angles.push_back(custom_angle);
+        std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+      }
+      if (at_limit) {
+        ImGui::EndDisabled();
+      }
+
+      ImGui::EndPopup();
+    }
+  }
+}
+
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {
   float panel_x = g_panel_collapsed ? 0.0f : kLeftPanelWidth;
   float panel_width = window_width - panel_x;
@@ -426,6 +508,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
 
   // Display Bar (row 2): aspect + EV + resolution + background
   RenderDisplayBar(window);
+
+  // Overlay Bar (row 3): auxiliary line toggles
+  RenderOverlayBar();
 
   float options_bar_h = ImGui::GetCursorPosY();
   g_options_bar_height = options_bar_h;
@@ -465,6 +550,22 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.params.bg_enabled = g_state.bg_show && g_preview.HasBackground();
     g_preview_vp.params.bg_alpha = g_state.bg_alpha;
     g_preview_vp.params.bg_aspect = g_preview.GetBgAspect();
+
+    // Auxiliary line overlay parameters
+    g_preview_vp.params.show_horizon = g_state.show_horizon;
+    g_preview_vp.params.show_grid = g_state.show_grid;
+    g_preview_vp.params.show_sun_circles = g_state.show_sun_circles;
+    // Precompute sun direction in world space (same convention as BuildViewMatrix forward vector)
+    constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+    float sa = g_state.sun.altitude * kDeg2Rad;
+    float sz = g_state.sun.azimuth * kDeg2Rad;
+    g_preview_vp.params.sun_dir[0] = -std::cos(sa) * std::cos(sz);
+    g_preview_vp.params.sun_dir[1] = -std::cos(sa) * std::sin(sz);
+    g_preview_vp.params.sun_dir[2] = -std::sin(sa);
+    g_preview_vp.params.sun_circle_count = std::min(static_cast<int>(g_state.sun_circle_angles.size()), kMaxSunCircles);
+    for (int i = 0; i < g_preview_vp.params.sun_circle_count; i++) {
+      g_preview_vp.params.sun_circle_angles[i] = g_state.sun_circle_angles[i];
+    }
 
     // Mouse interaction: orbit with drag, FOV with scroll
     // Disabled for full-sky lens types (dual fisheye, rectangular)

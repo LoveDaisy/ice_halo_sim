@@ -31,6 +31,9 @@ constexpr int kCalibrationWindowMs = 50;
 // This floor ensures Windows (lower throughput) never drops below a safe minimum.
 constexpr unsigned long kMinRaysFloor = 5000;
 
+// Auxiliary line overlay
+constexpr int kMaxSunCircles = 16;
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_CONSTANTS_HPP

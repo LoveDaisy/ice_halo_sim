@@ -82,6 +82,7 @@ void RenderTopBar(float window_width);
 void RenderLeftPanel(float window_height);
 void RenderViewBar();
 void RenderDisplayBar(GLFWwindow* window);
+void RenderOverlayBar();
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height);
 void RenderStatusBar(float window_width, float window_height);
 void RenderUnsavedPopup(GLFWwindow* window);

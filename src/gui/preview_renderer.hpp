@@ -3,6 +3,8 @@
 
 #include <vector>
 
+#include "gui/gui_constants.hpp"
+
 namespace lumice::gui {
 
 struct PreviewParams {
@@ -19,6 +21,14 @@ struct PreviewParams {
   bool bg_enabled = false;
   float bg_alpha = 1.0f;
   float bg_aspect = 1.0f;
+
+  // Auxiliary lines (sun_dir is precomputed on CPU from GuiState::sun.altitude/azimuth)
+  bool show_horizon = false;
+  bool show_grid = false;
+  bool show_sun_circles = false;
+  float sun_dir[3] = {};  // precomputed world-space unit vector
+  int sun_circle_count = 0;
+  float sun_circle_angles[kMaxSunCircles] = {};  // degrees
 };
 
 class PreviewRenderer {

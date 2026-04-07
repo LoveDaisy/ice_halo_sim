@@ -40,6 +40,14 @@ uniform float u_overlay_alpha;
 uniform vec2 u_bg_uv_scale;
 uniform vec2 u_bg_uv_offset;
 
+// Auxiliary line overlay uniforms
+uniform int u_show_horizon;
+uniform int u_show_grid;
+uniform int u_show_sun_circles;
+uniform vec3 u_sun_dir;
+uniform float u_sun_circle_angles[16];
+uniform int u_sun_circle_count;
+
 const float PI = 3.14159265358979323846;
 
 // Algorithm synced with CPU: src/util/color_space.hpp (GamutClipXyz + XyzToLinearRgb + LinearToSrgb)
@@ -234,6 +242,55 @@ vec4 rectangularInverse(vec2 pos) {
   return vec4(d, 1.0);
 }
 
+// Overlay auxiliary lines on top of final_color.
+// world_dir must be a valid world-space direction.
+vec3 overlayAuxLines(vec3 world_dir, vec3 color) {
+  float DEG = 180.0 / PI;
+  float altitude_deg = asin(clamp(-world_dir.z, -1.0, 1.0)) * DEG;
+  float azimuth_deg = atan(-world_dir.y, -world_dir.x) * DEG;  // [-180, 180]
+
+  // Adaptive line width via screen-space derivatives, clamped to avoid singularities
+  float fw_alt = clamp(fwidth(altitude_deg), 0.1, 2.0);
+  float fw_az = clamp(fwidth(azimuth_deg), 0.1, 5.0);
+
+  // Horizon line (altitude = 0)
+  if (u_show_horizon != 0) {
+    float d = abs(altitude_deg);
+    float t = 1.0 - smoothstep(0.0, fw_alt * 1.5, d);
+    color = mix(color, vec3(0.8, 0.2, 0.2), t * 0.6);
+  }
+
+  // Coordinate grid (10 degree intervals)
+  if (u_show_grid != 0) {
+    // Altitude grid lines
+    float d_alt = mod(abs(altitude_deg) + 5.0, 10.0) - 5.0;
+    float t_alt = 1.0 - smoothstep(0.0, fw_alt * 1.5, abs(d_alt));
+
+    // Azimuth grid lines — suppress near poles to avoid fwidth divergence
+    float t_az = 0.0;
+    if (abs(altitude_deg) < 85.0) {
+      float d_az = mod(azimuth_deg + 185.0, 10.0) - 5.0;  // +185 = +180 offset + 5 centering
+      t_az = 1.0 - smoothstep(0.0, fw_az * 1.5, abs(d_az));
+    }
+
+    float t = max(t_alt, t_az);
+    color = mix(color, vec3(1.0), t * 0.3);
+  }
+
+  // Sun angular distance circles
+  if (u_show_sun_circles != 0) {
+    float ang_dist_deg = acos(clamp(dot(world_dir, u_sun_dir), -1.0, 1.0)) * DEG;
+    float fw_ang = clamp(fwidth(ang_dist_deg), 0.1, 2.0);
+    for (int i = 0; i < u_sun_circle_count; i++) {
+      float d = abs(ang_dist_deg - u_sun_circle_angles[i]);
+      float t = 1.0 - smoothstep(0.0, fw_ang * 1.5, d);
+      color = mix(color, vec3(1.0, 0.9, 0.3), t * 0.5);
+    }
+  }
+
+  return color;
+}
+
 out vec4 frag_color;
 
 void main() {
@@ -256,18 +313,20 @@ void main() {
 
   // Eliminated early returns so bg mixing can always execute at the end.
   vec3 final_color = vec3(0.0);
+  vec3 world_dir = vec3(0.0);
+  bool pixel_visible = false;
 
   if (result.w >= 0.5) {
-    vec3 world_dir = needs_view_transform ? u_view_matrix * result.xyz : result.xyz;
+    world_dir = needs_view_transform ? u_view_matrix * result.xyz : result.xyz;
 
     // Visible hemisphere check
     // In equirect convention: lat = asin(-dz), lat > 0 means upper sky
     float lat = asin(clamp(-world_dir.z, -1.0, 1.0));
-    bool visible = true;
-    if (u_visible == 0 && lat < 0.0) visible = false;
-    if (u_visible == 1 && lat > 0.0) visible = false;
+    pixel_visible = true;
+    if (u_visible == 0 && lat < 0.0) pixel_visible = false;
+    if (u_visible == 1 && lat > 0.0) pixel_visible = false;
 
-    if (visible) {
+    if (pixel_visible) {
       vec3 tex_color = sampleDualFisheye(world_dir);
       if (u_xyz_mode == 1) {
         tex_color = xyzToSrgb(tex_color);
@@ -284,6 +343,11 @@ void main() {
       bg_color = texture(u_bg_texture, bg_uv).rgb;
     }
     final_color = bg_color * (1.0 - u_overlay_alpha) + final_color * u_overlay_alpha;
+  }
+
+  // Auxiliary line overlay (on top of everything, only in visible region)
+  if (result.w >= 0.5 && pixel_visible) {
+    final_color = overlayAuxLines(world_dir, final_color);
   }
 
   frag_color = vec4(final_color, 1.0);
@@ -611,6 +675,18 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
     glBindTexture(GL_TEXTURE_2D, bg_texture_);
     glUniform1i(glGetUniformLocation(shader_program_, "u_bg_texture"), 1);
     glActiveTexture(GL_TEXTURE0);
+  }
+
+  // Auxiliary line overlay uniforms
+  glUniform1i(glGetUniformLocation(shader_program_, "u_show_horizon"), params.show_horizon ? 1 : 0);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_show_grid"), params.show_grid ? 1 : 0);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_show_sun_circles"), params.show_sun_circles ? 1 : 0);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_sun_dir"), params.sun_dir[0], params.sun_dir[1],
+              params.sun_dir[2]);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_sun_circle_count"), params.sun_circle_count);
+  if (params.sun_circle_count > 0) {
+    glUniform1fv(glGetUniformLocation(shader_program_, "u_sun_circle_angles"), params.sun_circle_count,
+                 params.sun_circle_angles);
   }
 
   // Draw fullscreen quad

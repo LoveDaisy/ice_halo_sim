@@ -173,6 +173,12 @@ struct GuiState {
   bool bg_show = false;
   float bg_alpha = 1.0f;
 
+  // Auxiliary line overlay (view preference — does not call MarkDirty, not in ConfigSnapshot)
+  bool show_horizon = false;
+  bool show_grid = false;
+  bool show_sun_circles = false;
+  std::vector<float> sun_circle_angles = { 22.0f, 46.0f };
+
   // File management
   std::filesystem::path current_file_path;
   bool dirty = false;
