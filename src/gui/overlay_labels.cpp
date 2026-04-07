@@ -466,9 +466,16 @@ void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
 
     if (!overlaps) {
       if (label.has_bg) {
-        fg->AddRectFilled(bbox_min, bbox_max, IM_COL32(0, 0, 0, 120), 2.0f);
+        // Background alpha scales with label alpha (controlled by overlay slider)
+        constexpr int kMaxBgAlpha = 120;
+        int label_alpha = (label.color >> IM_COL32_A_SHIFT) & 0xFF;
+        int bg_alpha = kMaxBgAlpha * label_alpha / 255;
+        fg->AddRectFilled(bbox_min, bbox_max, IM_COL32(0, 0, 0, bg_alpha), 2.0f);
       }
-      fg->AddText(pos, label.color, label.text.c_str());
+      // Draw text twice with 1px horizontal offset to simulate bold
+      const char* text = label.text.c_str();
+      fg->AddText(pos, label.color, text);
+      fg->AddText(ImVec2(pos.x + 1.0f, pos.y), label.color, text);
       placed.push_back({ bbox_min, bbox_max });
     }
   }
