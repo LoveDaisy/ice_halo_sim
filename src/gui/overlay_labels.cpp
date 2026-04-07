@@ -412,18 +412,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
       float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
 
-      // Compute angles directly from the known equator direction — avoid inverse projection
-      // round-trip which loses precision at fisheye disc edge (r ≈ 1).
-      SampleAngles cur{};
-      cur.screen_x = scr_x;
-      cur.screen_y = scr_y;
-      cur.valid = true;
-      cur.altitude = 0.0f;  // equator by definition
-      cur.azimuth = az_rad * kRad2Deg;
-      cur.sun_dist =
-          std::acos(std::clamp(dot3(wx, wy, wz, input.sun_dir[0], input.sun_dir[1], input.sun_dir[2]), -1.0f, 1.0f)) *
-          kRad2Deg;
-
+      SampleAngles cur = make_sample(fp.px, fp.py, scr_x, scr_y);
       if (prev.valid && cur.valid)
         detect_crossings(prev, cur);
       prev = cur;
