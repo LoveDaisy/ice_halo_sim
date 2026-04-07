@@ -897,10 +897,12 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   if (root.contains("overlay_sun_circle_angles") && root["overlay_sun_circle_angles"].is_array()) {
     state.sun_circle_angles.clear();
     for (const auto& v : root["overlay_sun_circle_angles"]) {
-      if (v.is_number()) {
-        state.sun_circle_angles.push_back(v.get<float>());
+      if (v.is_number() && static_cast<int>(state.sun_circle_angles.size()) < kMaxSunCircles) {
+        float angle = std::clamp(v.get<float>(), 0.1f, 180.0f);
+        state.sun_circle_angles.push_back(angle);
       }
     }
+    std::sort(state.sun_circle_angles.begin(), state.sun_circle_angles.end());
   }
 
   // Normalization mode (display preference, default absolute for backward compat with old .lmc files)

@@ -678,6 +678,7 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   }
 
   // Auxiliary line overlay uniforms
+  static_assert(kMaxSunCircles == 16, "Update shader u_sun_circle_angles[N] to match kMaxSunCircles");
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_horizon"), params.show_horizon ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_grid"), params.show_grid ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_sun_circles"), params.show_sun_circles ? 1 : 0);
