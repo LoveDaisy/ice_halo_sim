@@ -277,6 +277,16 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       vp_screen_y + vp_screen_h },  // right
   };
 
+  // Hemisphere visibility check: returns true if the given altitude is in the visible hemisphere.
+  // visible: 0=upper (alt>=0), 1=lower (alt<=0), 2=full (always visible).
+  auto is_visible = [&](float alt) -> bool {
+    if (input.visible == 0)
+      return alt >= -0.5f;  // small tolerance for edge labels
+    if (input.visible == 1)
+      return alt <= 0.5f;
+    return true;
+  };
+
   // Crossing detection helper: given two adjacent valid sample points, detect and add labels.
   auto detect_crossings = [&](const SampleAngles& prev, const SampleAngles& cur) {
     float t;
@@ -286,7 +296,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       if (std::abs(prev.altitude - cur.altitude) < 20.0f) {
         for (int g = -9; g <= 9; g++) {
           float target = g * 10.0f;
-          if (Crosses(prev.altitude, cur.altitude, target, &t)) {
+          if (Crosses(prev.altitude, cur.altitude, target, &t) && is_visible(target)) {
             AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target,
                      grid_col);
           }
@@ -306,6 +316,9 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
         for (int g = -18; g <= 18; g++) {
           float target = g * 10.0f;
           if (Crosses(az0, az1, target, &t)) {
+            float alt_at_crossing = prev.altitude + t * (cur.altitude - prev.altitude);
+            if (!is_visible(alt_at_crossing))
+              continue;
             float label_val = target;
             if (label_val > 180.0f)
               label_val -= 360.0f;
@@ -323,6 +336,9 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       for (int ci = 0; ci < input.sun_circle_count; ci++) {
         float target = input.sun_circle_angles[ci];
         if (Crosses(prev.sun_dist, cur.sun_dist, target, &t)) {
+          float alt_at_crossing = prev.altitude + t * (cur.altitude - prev.altitude);
+          if (!is_visible(alt_at_crossing))
+            continue;
           AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target, sun_col,
                    kGroupSunCircles);
         }
