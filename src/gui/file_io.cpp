@@ -26,6 +26,17 @@ namespace lumice::gui {
 
 using json = nlohmann::json;
 
+// Convert Miller index (i1, i4) to wedge angle in degrees. Returns default (28.0) if i1 == 0.
+static float MillerToAlpha(int i1, int i4) {
+  constexpr float kSqrt3_2 = 0.866025403784f;
+  constexpr float kIceCrystalC = 1.629f;
+  constexpr float kRadToDeg = 57.2957795131f;
+  if (i1 == 0) {
+    return 28.0f;
+  }
+  return std::atan(kSqrt3_2 * i4 / i1 / kIceCrystalC) * kRadToDeg;
+}
+
 // Lens type JSON names (shared by Core config and GuiState JSON)
 static const char* kLensTypeJsonNames[] = { "linear",
                                             "fisheye_equal_area",
@@ -104,8 +115,8 @@ static json SerializeCrystal(const CrystalConfig& c) {
     j["shape"]["prism_h"] = c.prism_h;
     j["shape"]["upper_h"] = c.upper_h;
     j["shape"]["lower_h"] = c.lower_h;
-    j["shape"]["upper_indices"] = { c.upper_indices[0], c.upper_indices[1], c.upper_indices[2] };
-    j["shape"]["lower_indices"] = { c.lower_indices[0], c.lower_indices[1], c.lower_indices[2] };
+    j["shape"]["upper_wedge_angle"] = c.upper_alpha;
+    j["shape"]["lower_wedge_angle"] = c.lower_alpha;
   }
 
   // face_distance: only write when non-default (not all 1.0)
@@ -210,13 +221,16 @@ static CrystalConfig ParseCrystal(const json& j) {
       c.prism_h = s.value("prism_h", 1.0f);
       c.upper_h = s.value("upper_h", 0.0f);
       c.lower_h = s.value("lower_h", 0.0f);
-      if (s.contains("upper_indices") && s["upper_indices"].is_array() && s["upper_indices"].size() == 3) {
-        for (int i = 0; i < 3; i++)
-          c.upper_indices[i] = s["upper_indices"][i].get<int>();
+      // Wedge angle: prefer "upper_wedge_angle", fallback to "upper_indices" conversion
+      if (s.contains("upper_wedge_angle") && s["upper_wedge_angle"].is_number()) {
+        c.upper_alpha = s["upper_wedge_angle"].get<float>();
+      } else if (s.contains("upper_indices") && s["upper_indices"].is_array() && s["upper_indices"].size() == 3) {
+        c.upper_alpha = MillerToAlpha(s["upper_indices"][0].get<int>(), s["upper_indices"][2].get<int>());
       }
-      if (s.contains("lower_indices") && s["lower_indices"].is_array() && s["lower_indices"].size() == 3) {
-        for (int i = 0; i < 3; i++)
-          c.lower_indices[i] = s["lower_indices"][i].get<int>();
+      if (s.contains("lower_wedge_angle") && s["lower_wedge_angle"].is_number()) {
+        c.lower_alpha = s["lower_wedge_angle"].get<float>();
+      } else if (s.contains("lower_indices") && s["lower_indices"].is_array() && s["lower_indices"].size() == 3) {
+        c.lower_alpha = MillerToAlpha(s["lower_indices"][0].get<int>(), s["lower_indices"][2].get<int>());
       }
     }
     // face_distance: common to both Prism and Pyramid
@@ -421,8 +435,8 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
     dst.prism_h = c.prism_h;
     dst.upper_h = c.upper_h;
     dst.lower_h = c.lower_h;
-    std::copy(std::begin(c.upper_indices), std::end(c.upper_indices), dst.upper_indices);
-    std::copy(std::begin(c.lower_indices), std::end(c.lower_indices), dst.lower_indices);
+    dst.upper_wedge_angle = c.upper_alpha;
+    dst.lower_wedge_angle = c.lower_alpha;
     std::copy(std::begin(c.face_distance), std::end(c.face_distance), dst.face_distance);
     FillAxisDist(c.zenith, &dst.zenith);
     FillAxisDist(c.azimuth, &dst.azimuth);

@@ -227,7 +227,7 @@ TEST(ParseConfigApi, FullConfigWithPyramidAndFilter) {
   EXPECT_EQ(config.crystals[1].type, 1);
   EXPECT_FLOAT_EQ(config.crystals[1].prism_h, 1.0f);
   EXPECT_FLOAT_EQ(config.crystals[1].upper_h, 0.5f);
-  EXPECT_EQ(config.crystals[1].upper_indices[0], 1);
+  EXPECT_NEAR(config.crystals[1].upper_wedge_angle, 28.0f, 0.1f);
 
   // Filter
   EXPECT_EQ(config.filter_count, 1);

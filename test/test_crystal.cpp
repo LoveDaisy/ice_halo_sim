@@ -298,4 +298,123 @@ TEST_F(V3TestCrystal, PyramidFaceDistanceZRange) {
   EXPECT_GT(z_max - z_min, 0.1f);
 }
 
+// ====== Wedge angle API tests ======
+
+TEST_F(V3TestCrystal, WedgeAngleVsMillerIndexConsistency) {
+  // For common Miller indices, the wedge angle overload should produce identical results.
+  struct TestCase {
+    int i1, i4;
+    const char* label;
+  };
+  TestCase cases[] = {
+    { 1, 1, "{1,0,-1,1}" },
+    { 2, 1, "{2,0,-2,1}" },
+    { 3, 2, "{3,0,-3,2}" },
+  };
+
+  float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  for (const auto& tc : cases) {
+    float alpha = std::atan(math::kSqrt3_2 * tc.i4 / tc.i1 / kIceCrystalC) * math::kRadToDegree;
+
+    auto c_miller = Crystal::CreatePyramid(tc.i1, tc.i4, tc.i1, tc.i4, 0.3f, 1.0f, 0.3f, dist);
+    auto c_angle = Crystal::CreatePyramid(alpha, alpha, 0.3f, 1.0f, 0.3f, dist);
+
+    EXPECT_EQ(c_miller.TotalTriangles(), c_angle.TotalTriangles()) << tc.label;
+    EXPECT_EQ(c_miller.TotalVertices(), c_angle.TotalVertices()) << tc.label;
+
+    // Verify vertex-level bit-exact consistency
+    const auto* vtx_m = c_miller.GetTriangleVtx();
+    const auto* vtx_a = c_angle.GetTriangleVtx();
+    for (size_t i = 0; i < c_miller.TotalTriangles() * 9; i++) {
+      EXPECT_EQ(vtx_m[i], vtx_a[i]) << tc.label << " vtx[" << i << "]";
+    }
+  }
+}
+
+TEST_F(V3TestCrystal, WedgeAngleConvenienceOverload) {
+  // Convenience overload (no dist) should match explicit default dist.
+  float alpha = std::atan(math::kSqrt3_2 / kIceCrystalC) * math::kRadToDegree;
+  float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+
+  auto c1 = Crystal::CreatePyramid(alpha, alpha, 0.3f, 1.0f, 0.3f);
+  auto c2 = Crystal::CreatePyramid(alpha, alpha, 0.3f, 1.0f, 0.3f, dist);
+
+  EXPECT_EQ(c1.TotalTriangles(), c2.TotalTriangles());
+  EXPECT_EQ(c1.TotalVertices(), c2.TotalVertices());
+}
+
+TEST_F(V3TestCrystal, WedgeAngleNormal) {
+  // alpha=45 degrees: a typical case, crystal should be valid.
+  auto crystal = Crystal::CreatePyramid(45.0f, 45.0f, 0.3f, 1.0f, 0.3f);
+  EXPECT_GT(crystal.TotalTriangles(), 0u);
+  EXPECT_GT(crystal.TotalVertices(), 0u);
+  // Full pyramid: 20 polygon faces
+  EXPECT_EQ(crystal.PolygonFaceCount(), 20u);
+}
+
+TEST_F(V3TestCrystal, WedgeAngleDegenerateSmall) {
+  // alpha < 0.1 degree: pyramid segment should be skipped, degenerating to prism.
+  auto c_degenerate = Crystal::CreatePyramid(0.05f, 0.05f, 0.3f, 1.0f, 0.3f);
+  auto c_prism = Crystal::CreatePrism(1.0f);
+
+  // Should degenerate to prism (8 polygon faces: 2 basal + 6 prism)
+  EXPECT_EQ(c_degenerate.TotalTriangles(), c_prism.TotalTriangles());
+  EXPECT_EQ(c_degenerate.TotalVertices(), c_prism.TotalVertices());
+  EXPECT_EQ(c_degenerate.PolygonFaceCount(), 8u);
+}
+
+TEST_F(V3TestCrystal, WedgeAngleDegenerateLarge) {
+  // alpha > 89.9 degrees: pyramid segment should be skipped (face degenerates to basal).
+  auto c_degenerate = Crystal::CreatePyramid(90.0f, 90.0f, 0.3f, 1.0f, 0.3f);
+  auto c_prism = Crystal::CreatePrism(1.0f);
+
+  EXPECT_EQ(c_degenerate.TotalTriangles(), c_prism.TotalTriangles());
+  EXPECT_EQ(c_degenerate.TotalVertices(), c_prism.TotalVertices());
+  EXPECT_EQ(c_degenerate.PolygonFaceCount(), 8u);
+}
+
+TEST_F(V3TestCrystal, WedgeAngleDegenerateNegative) {
+  // Negative alpha or alpha >= 180: should also degenerate.
+  auto c1 = Crystal::CreatePyramid(-5.0f, -5.0f, 0.3f, 1.0f, 0.3f);
+  auto c2 = Crystal::CreatePyramid(180.0f, 180.0f, 0.3f, 1.0f, 0.3f);
+  auto c_prism = Crystal::CreatePrism(1.0f);
+
+  EXPECT_EQ(c1.TotalTriangles(), c_prism.TotalTriangles());
+  EXPECT_EQ(c2.TotalTriangles(), c_prism.TotalTriangles());
+}
+
+TEST_F(V3TestCrystal, MillerIndexI1ZeroDegenerateToPrism) {
+  // i1=0 is invalid (would cause integer division by zero). Should degenerate to prism.
+  float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  auto c_degenerate = Crystal::CreatePyramid(0, 1, 0, 1, 0.3f, 1.0f, 0.3f, dist);
+  auto c_prism = Crystal::CreatePrism(1.0f);
+
+  EXPECT_EQ(c_degenerate.TotalTriangles(), c_prism.TotalTriangles());
+  EXPECT_EQ(c_degenerate.TotalVertices(), c_prism.TotalVertices());
+  EXPECT_EQ(c_degenerate.PolygonFaceCount(), 8u);
+}
+
+TEST_F(V3TestCrystal, WedgeAngleBoundaryValid) {
+  // alpha=1 and alpha=80 are near the boundary, should produce valid 20-face pyramid meshes.
+  auto c1 = Crystal::CreatePyramid(1.0f, 1.0f, 0.3f, 1.0f, 0.3f);
+  EXPECT_GT(c1.TotalTriangles(), 0u);
+  EXPECT_GT(c1.TotalVertices(), 0u);
+  EXPECT_EQ(c1.PolygonFaceCount(), 20u);
+
+  auto c2 = Crystal::CreatePyramid(80.0f, 80.0f, 0.3f, 1.0f, 0.3f);
+  EXPECT_GT(c2.TotalTriangles(), 0u);
+  EXPECT_GT(c2.TotalVertices(), 0u);
+  EXPECT_EQ(c2.PolygonFaceCount(), 20u);
+
+  // All triangle areas should be positive (no degenerate triangles)
+  const auto* area1 = c1.GetTirangleArea();
+  for (size_t i = 0; i < c1.TotalTriangles(); i++) {
+    EXPECT_GT(area1[i], 0.0f) << "alpha=1 triangle " << i;
+  }
+  const auto* area2 = c2.GetTirangleArea();
+  for (size_t i = 0; i < c2.TotalTriangles(); i++) {
+    EXPECT_GT(area2[i], 0.0f) << "alpha=80 triangle " << i;
+  }
+}
+
 }  // namespace

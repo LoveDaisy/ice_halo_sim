@@ -187,8 +187,7 @@ struct CrystalMaker {
     for (int i = 0; i < 6; i++) {
       dist[i] = std::abs(rng_.Get(p.d_[i]));
     }
-    return Crystal::CreatePyramid(p.miller_indices_u_[0], p.miller_indices_u_[2], p.miller_indices_l_[0],
-                                  p.miller_indices_l_[2], h1, h2, h3, dist);
+    return Crystal::CreatePyramid(p.wedge_angle_u_, p.wedge_angle_l_, h1, h2, h3, dist);
   }
 };
 

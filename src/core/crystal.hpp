@@ -66,6 +66,33 @@ class Crystal {
   static Crystal CreatePyramid(float h1, float h2, float h3);
 
   /**
+   * @brief Create a hexagonal pyramid crystal with wedge angles
+   * @param upper_alpha Upper pyramid wedge angle in degrees (angle between pyramidal face and c-axis)
+   * @param lower_alpha Lower pyramid wedge angle in degrees
+   * @param h1 Upper pyramid segment relative height (h1/H1)
+   * @param h2 Prism segment height ratio (h2/a)
+   * @param h3 Lower pyramid segment relative height (h3/H3)
+   * @param dist Face distance array [d1, d2, d3, d4, d5, d6], must not be nullptr
+   * @return A Crystal object representing the pyramid
+   * @note Wedge angles outside [0.1°, 89.9°] cause the corresponding pyramid segment to be skipped
+   */
+  static Crystal CreatePyramid(float upper_alpha, float lower_alpha,  // wedge angle (degrees)
+                               float h1, float h2, float h3,          // height
+                               const float* dist);                    // face distance
+
+  /**
+   * @brief Create a hexagonal pyramid crystal with wedge angles (default face distances)
+   * @param upper_alpha Upper pyramid wedge angle in degrees
+   * @param lower_alpha Lower pyramid wedge angle in degrees
+   * @param h1 Upper pyramid segment relative height (h1/H1)
+   * @param h2 Prism segment height ratio (h2/a)
+   * @param h3 Lower pyramid segment relative height (h3/H3)
+   * @return A Crystal object representing the pyramid
+   */
+  static Crystal CreatePyramid(float upper_alpha, float lower_alpha,  // wedge angle (degrees)
+                               float h1, float h2, float h3);         // height
+
+  /**
    * @brief Create a hexagonal pyramid crystal with custom Miller indices
    * @param upper_i1 Upper pyramid Miller index i1
    * @param upper_i4 Upper pyramid Miller index i4
@@ -74,9 +101,9 @@ class Crystal {
    * @param h1 Upper pyramid segment relative height (h1/H1)
    * @param h2 Prism segment height ratio (h2/a)
    * @param h3 Lower pyramid segment relative height (h3/H3)
-   * @param dist Face distance array [d1, d2, d3, d4, d5, d6], optional. If nullptr, uses default [1,1,1,1,1,1]
+   * @param dist Face distance array [d1, d2, d3, d4, d5, d6], must not be nullptr
    * @return A Crystal object representing the pyramid
-   * @note Miller indices represent (i1, 0, -i1, i4) for the pyramidal face orientation
+   * @note Miller indices represent (i1, 0, -i1, i4). If i1 == 0, the corresponding pyramid segment is skipped.
    */
   static Crystal CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int lower_i4,  // Miller index
                                float h1, float h2, float h3,                            // height

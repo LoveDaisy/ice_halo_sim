@@ -19,10 +19,8 @@ struct PyramidCrystalParam {
   Distribution h_pyr_u_{ DistributionType::kNoRandom, 0.0f, 0.0f };  // Upper pyramidal relative height, from 0.0 to 1.0
   Distribution h_pyr_l_{ DistributionType::kNoRandom, 0.0f, 0.0f };  // Lower pyramidal relative height, from 0.0 to 1.0
   Distribution d_[6]{};                                              // Distance to center for prism faces
-  int miller_indices_u_[3]{ 1, 0, 1 };  // Miller indices, c1: -30 dgree, c2: 90 degree, c3: -150 degree
-  int miller_indices_l_[3]{ 1, 0, 1 };  // Miller indices, c1: -30 dgree, c2: 90 degree, c3: -150 degree
-  // Miller indices (i1, i2, -(i1+i2), i3)
-  // c1: -30 dgree, c2: 90 degree, c3: -150 degree
+  float wedge_angle_u_ = 28.0f;  // Upper wedge angle (degrees). Default ≈ atan(√3/2 / 1.629), i.e. Miller {1,0,-1,1}
+  float wedge_angle_l_ = 28.0f;  // Lower wedge angle (degrees)
 };
 
 using CrystalParam = std::variant<PrismCrystalParam, PyramidCrystalParam>;
