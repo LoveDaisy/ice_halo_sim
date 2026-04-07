@@ -10,8 +10,6 @@
 
 namespace lumice::gui {
 
-enum class SliderScale { kLinear, kSqrt, kLog };
-
 // Common layout constants for SliderWithInput / SliderIntWithInput
 constexpr float kLabelColWidth = 70.0f;
 constexpr float kInputWidth = 60.0f;
@@ -49,11 +47,8 @@ static void FinishSliderLayout(const char* display_label) {
   ImGui::TextUnformatted(display_label);
 }
 
-// Slider + InputFloat + label text, laid out as: [slider] [input] Label
-// Uses a fixed label column width so vertically stacked sliders align.
-// Returns true if value changed.
-static bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
-                            SliderScale scale = SliderScale::kLinear) {
+bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt,
+                     SliderScale scale) {
   char display_buf[64];
   char slider_id[64];
   char input_id[64];

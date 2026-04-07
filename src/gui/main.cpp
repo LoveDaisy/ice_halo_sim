@@ -265,6 +265,7 @@ int main(int argc, char** argv) {
       auto lh = static_cast<float>(win_h);
       gui::RenderTopBar(lw);
       gui::RenderLeftPanel(lh);
+      gui::RenderRightPanel(window, lw, lh);
       gui::RenderPreviewPanel(window, lw, lh);
       gui::RenderStatusBar(lw, lh);
 
@@ -352,8 +353,14 @@ int main(int argc, char** argv) {
         gui::DoSave();
       }
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_Tab) && !io.WantCaptureKeyboard) {
-      gui::g_panel_collapsed = !gui::g_panel_collapsed;
+    // Panel collapse shortcuts: [ for left panel, ] for right panel
+    if (!io.WantCaptureKeyboard) {
+      if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket)) {
+        gui::g_panel_collapsed = !gui::g_panel_collapsed;
+      }
+      if (ImGui::IsKeyPressed(ImGuiKey_RightBracket)) {
+        gui::g_state.right_panel_collapsed = !gui::g_state.right_panel_collapsed;
+      }
     }
 
     ImGui_ImplOpenGL3_NewFrame();
@@ -374,6 +381,7 @@ int main(int argc, char** argv) {
 
     gui::RenderTopBar(layout_width);
     gui::RenderLeftPanel(layout_height);
+    gui::RenderRightPanel(window, layout_width, layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     gui::RenderLogPanel(layout_width, layout_height);
     gui::RenderStatusBar(layout_width, layout_height);
