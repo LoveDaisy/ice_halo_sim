@@ -616,6 +616,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       label_input.elevation = rc.elevation;
       label_input.azimuth = rc.azimuth;
       label_input.roll = rc.roll;
+      label_input.visible = rc.visible;
       label_input.show_horizon = g_state.show_horizon;
       label_input.show_grid = g_state.show_grid;
       label_input.show_sun_circles = g_state.show_sun_circles;

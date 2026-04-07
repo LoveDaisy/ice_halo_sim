@@ -19,6 +19,7 @@ struct OverlayLabel {
 struct OverlayLabelInput {
   int lens_type;
   float fov, elevation, azimuth, roll;
+  int visible;  // 0=upper, 1=lower, 2=full
   bool show_horizon, show_grid, show_sun_circles;
   float sun_dir[3];
   int sun_circle_count;

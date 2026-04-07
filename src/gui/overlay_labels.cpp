@@ -277,6 +277,77 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       vp_screen_y + vp_screen_h },  // right
   };
 
+  // Crossing detection helper: given two adjacent valid sample points, detect and add labels.
+  auto detect_crossings = [&](const SampleAngles& prev, const SampleAngles& cur) {
+    float t;
+
+    // Grid: altitude crosses multiples of 10
+    if (input.show_grid) {
+      if (std::abs(prev.altitude - cur.altitude) < 20.0f) {
+        for (int g = -9; g <= 9; g++) {
+          float target = g * 10.0f;
+          if (Crosses(prev.altitude, cur.altitude, target, &t)) {
+            AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target,
+                     grid_col);
+          }
+        }
+      }
+
+      // Grid: azimuth crosses multiples of 10 (with wrap-around handling)
+      float az0 = prev.azimuth;
+      float az1 = cur.azimuth;
+      float delta_az = az1 - az0;
+      if (delta_az > 180.0f)
+        az1 -= 360.0f;
+      if (delta_az < -180.0f)
+        az1 += 360.0f;
+
+      if (std::abs(az1 - az0) < 20.0f) {
+        for (int g = -18; g <= 18; g++) {
+          float target = g * 10.0f;
+          if (Crosses(az0, az1, target, &t)) {
+            float label_val = target;
+            if (label_val > 180.0f)
+              label_val -= 360.0f;
+            if (label_val <= -180.0f)
+              label_val += 360.0f;
+            AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", label_val,
+                     grid_col);
+          }
+        }
+      }
+    }
+
+    // Sun circles: angular distance crosses specified angles
+    if (input.show_sun_circles) {
+      for (int ci = 0; ci < input.sun_circle_count; ci++) {
+        float target = input.sun_circle_angles[ci];
+        if (Crosses(prev.sun_dist, cur.sun_dist, target, &t)) {
+          AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target, sun_col,
+                   kGroupSunCircles);
+        }
+      }
+    }
+  };
+
+  // Helper: compute SampleAngles from a pixel offset and screen position.
+  auto make_sample = [&](float px, float py, float sx, float sy) -> SampleAngles {
+    InvResult r = PixelToWorldDir(px, py, res_x, res_y, input.lens_type, input.fov, view_matrix);
+    SampleAngles s{};
+    s.screen_x = sx;
+    s.screen_y = sy;
+    s.valid = r.valid;
+    if (r.valid) {
+      s.altitude = std::asin(std::clamp(-r.z, -1.0f, 1.0f)) * kRad2Deg;
+      s.azimuth = std::atan2(-r.y, -r.x) * kRad2Deg;
+      s.sun_dist = std::acos(std::clamp(dot3(r.x, r.y, r.z, input.sun_dir[0], input.sun_dir[1], input.sun_dir[2]),
+                                        -1.0f, 1.0f)) *
+                   kRad2Deg;
+    }
+    return s;
+  };
+
+  // Sample along viewport edges
   for (const auto& edge : edges) {
     float edge_len = std::sqrt((edge.end_px - edge.start_px) * (edge.end_px - edge.start_px) +
                                (edge.end_py - edge.start_py) * (edge.end_py - edge.start_py));
@@ -289,74 +360,43 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       float frac = static_cast<float>(i) / num_samples;
       float px = edge.start_px + frac * (edge.end_px - edge.start_px);
       float py = edge.start_py + frac * (edge.end_py - edge.start_py);
+      float sx = edge.start_sx + frac * (edge.end_sx - edge.start_sx);
+      float sy = edge.start_sy + frac * (edge.end_sy - edge.start_sy);
 
-      InvResult r = PixelToWorldDir(px, py, res_x, res_y, input.lens_type, input.fov, view_matrix);
+      SampleAngles cur = make_sample(px, py, sx, sy);
+      if (prev.valid && cur.valid)
+        detect_crossings(prev, cur);
+      prev = cur;
+    }
+  }
 
-      SampleAngles cur{};
-      cur.screen_x = edge.start_sx + frac * (edge.end_sx - edge.start_sx);
-      cur.screen_y = edge.start_sy + frac * (edge.end_sy - edge.start_sy);
-      cur.valid = r.valid;
+  // When visible = upper(0) or lower(1), add the hemisphere boundary (equator) as an extra edge.
+  // The equator is defined by altitude = 0 (world_dir.z = 0). Sample it in world space
+  // and forward-project to pixel coordinates.
+  if (input.visible != 2 && input.lens_type >= 0 && input.lens_type <= 3) {
+    constexpr int kEquatorSamples = 360;
+    SampleAngles prev{};
+    prev.valid = false;
 
-      if (r.valid) {
-        cur.altitude = std::asin(std::clamp(-r.z, -1.0f, 1.0f)) * kRad2Deg;
-        cur.azimuth = std::atan2(-r.y, -r.x) * kRad2Deg;
-        cur.sun_dist = std::acos(std::clamp(dot3(r.x, r.y, r.z, input.sun_dir[0], input.sun_dir[1], input.sun_dir[2]),
-                                            -1.0f, 1.0f)) *
-                       kRad2Deg;
+    for (int i = 0; i <= kEquatorSamples; i++) {
+      float az_rad = -kPi + i * (2.0f * kPi / kEquatorSamples);
+      // Equator direction: altitude=0, world_dir.z=0
+      float wx = -std::cos(az_rad);
+      float wy = -std::sin(az_rad);
+      float wz = 0.0f;
+
+      FwdResult fp = WorldDirToPixel(wx, wy, wz, res_x, res_y, input.lens_type, input.fov, view_matrix);
+      if (!fp.valid || std::abs(fp.px) > hw || std::abs(fp.py) > hh) {
+        prev.valid = false;
+        continue;
       }
 
-      if (prev.valid && cur.valid) {
-        float t;
+      float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
+      float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
 
-        // Grid: altitude crosses multiples of 10
-        if (input.show_grid) {
-          if (std::abs(prev.altitude - cur.altitude) < 20.0f) {
-            for (int g = -9; g <= 9; g++) {
-              float target = g * 10.0f;
-              if (Crosses(prev.altitude, cur.altitude, target, &t)) {
-                AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target,
-                         grid_col);
-              }
-            }
-          }
-
-          // Grid: azimuth crosses multiples of 10 (with wrap-around handling)
-          float az0 = prev.azimuth;
-          float az1 = cur.azimuth;
-          float delta_az = az1 - az0;
-          if (delta_az > 180.0f)
-            az1 -= 360.0f;
-          if (delta_az < -180.0f)
-            az1 += 360.0f;
-
-          if (std::abs(az1 - az0) < 20.0f) {
-            for (int g = -18; g <= 18; g++) {
-              float target = g * 10.0f;
-              if (Crosses(az0, az1, target, &t)) {
-                float label_val = target;
-                if (label_val > 180.0f)
-                  label_val -= 360.0f;
-                if (label_val <= -180.0f)
-                  label_val += 360.0f;
-                AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", label_val,
-                         grid_col);
-              }
-            }
-          }
-        }
-
-        // Sun circles: angular distance crosses specified angles (edge crossings)
-        if (input.show_sun_circles) {
-          for (int ci = 0; ci < input.sun_circle_count; ci++) {
-            float target = input.sun_circle_angles[ci];
-            if (Crosses(prev.sun_dist, cur.sun_dist, target, &t)) {
-              AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target,
-                       sun_col, kGroupSunCircles);
-            }
-          }
-        }
-      }
-
+      SampleAngles cur = make_sample(fp.px, fp.py, scr_x, scr_y);
+      if (prev.valid && cur.valid)
+        detect_crossings(prev, cur);
       prev = cur;
     }
   }
