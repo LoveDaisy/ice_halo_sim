@@ -39,7 +39,9 @@ void RenderTopBar(float window_width) {
     }
   }
 
-  // Revert area — always rendered for stable layout, hidden when not modified
+  // Revert area — always rendered for stable layout, hidden when not modified.
+  // Alpha=0 + BeginDisabled: invisible and non-interactive, but still occupies layout space.
+  // The hidden area intercepts clicks, which is harmless in this horizontal toolbar context.
   bool modified = (g_state.sim_state == SimState::kModified);
   if (!modified) {
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.0f);
@@ -48,7 +50,7 @@ void RenderTopBar(float window_width) {
   ImGui::SameLine();
   ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "!");
   ImGui::SameLine();
-  if (ImGui::SmallButton("Revert") && modified) {
+  if (ImGui::SmallButton("Revert") && modified) {  // `&& modified`: redundant safety guard over BeginDisabled
     DoRevert();
   }
   if (!modified) {
