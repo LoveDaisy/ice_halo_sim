@@ -434,6 +434,8 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
           ImGui::OpenPopup("SunCirclesEdit");
         }
         if (ImGui::BeginPopup("SunCirclesEdit")) {
+          bool at_limit = static_cast<int>(g_state.sun_circle_angles.size()) >= kMaxSunCircles;
+
           // Preset buttons
           const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
           for (float p : presets) {
@@ -446,21 +448,37 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
             }
             char label[16];
             std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
-            if (already) {
+            if (already || at_limit) {
               ImGui::BeginDisabled();
             }
             if (ImGui::Button(label)) {
-              if (static_cast<int>(g_state.sun_circle_angles.size()) < kMaxSunCircles) {
-                g_state.sun_circle_angles.push_back(p);
-                std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
-              }
+              g_state.sun_circle_angles.push_back(p);
+              std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
             }
-            if (already) {
+            if (already || at_limit) {
               ImGui::EndDisabled();
             }
             ImGui::SameLine();
           }
           ImGui::NewLine();
+
+          // Custom angle input
+          static float custom_angle = 22.0f;
+          ImGui::PushItemWidth(60.0f);
+          ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
+          ImGui::PopItemWidth();
+          ImGui::SameLine();
+          if (at_limit) {
+            ImGui::BeginDisabled();
+          }
+          if (ImGui::Button("+##add_circle")) {
+            custom_angle = std::max(0.1f, std::min(180.0f, custom_angle));
+            g_state.sun_circle_angles.push_back(custom_angle);
+            std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+          }
+          if (at_limit) {
+            ImGui::EndDisabled();
+          }
 
           // Current list with delete buttons
           ImGui::Separator();
@@ -476,26 +494,6 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
           }
           if (remove_idx >= 0) {
             g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
-          }
-
-          // Custom angle input
-          ImGui::Separator();
-          static float custom_angle = 22.0f;
-          ImGui::PushItemWidth(60.0f);
-          ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
-          ImGui::PopItemWidth();
-          ImGui::SameLine();
-          bool at_limit = static_cast<int>(g_state.sun_circle_angles.size()) >= kMaxSunCircles;
-          if (at_limit) {
-            ImGui::BeginDisabled();
-          }
-          if (ImGui::Button("+##add_circle")) {
-            custom_angle = std::max(0.1f, std::min(180.0f, custom_angle));
-            g_state.sun_circle_angles.push_back(custom_angle);
-            std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
-          }
-          if (at_limit) {
-            ImGui::EndDisabled();
           }
 
           ImGui::EndPopup();
