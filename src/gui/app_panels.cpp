@@ -147,9 +147,9 @@ void RenderLeftPanel(float window_height) {
 
   ImGui::SetNextWindowPos(ImVec2(0, kTopBarHeight));
   ImGui::SetNextWindowSize(ImVec2(kLeftPanelWidth, panel_height));
-  ImGui::Begin(
-      "##LeftPanel", nullptr,
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+  ImGui::Begin("##LeftPanel", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
 
   if (ImGui::BeginTabBar("ConfigTabs")) {
     if (ImGui::BeginTabItem("Crystal")) {
@@ -157,18 +157,14 @@ void RenderLeftPanel(float window_height) {
           g_state.selected_crystal >= 0 && g_state.selected_crystal < static_cast<int>(g_state.crystals.size());
 
       if (has_crystal) {
-        // Split available height between scrollable params (upper) and fixed preview (lower).
-        // Preview is square (width = content width), but shrinks if panel is too short.
+        // Split: scrollable params (upper) + fixed preview (lower).
+        // Preview is square (side = panel content width). Params get the remainder.
         float content_w = ImGui::GetContentRegionAvail().x;
         float avail_h = ImGui::GetContentRegionAvail().y;
         float separator_h = ImGui::GetTextLineHeight() + ImGui::GetStyle().ItemSpacing.y * 2;
         float controls_h = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
-        float overhead = separator_h + controls_h;
-
-        constexpr float kMinParamsHeight = 150.0f;
-        float max_preview_size = avail_h - kMinParamsHeight - overhead;
-        float preview_size = std::max(0.0f, std::min(content_w, max_preview_size));
-        float params_h = avail_h - preview_size - overhead;
+        float preview_size = content_w;
+        float params_h = avail_h - preview_size - separator_h - controls_h;
 
         // Parameters scroll region (upper part)
         ImGui::BeginChild("##CrystalParams", ImVec2(0, params_h), ImGuiChildFlags_None);
@@ -286,17 +282,23 @@ void RenderLeftPanel(float window_height) {
         }
       } else {
         // No crystal selected — full space for parameters
+        ImGui::BeginChild("##CrystalParamsOnly", ImVec2(0, 0), ImGuiChildFlags_None);
         RenderCrystalTab(g_state);
+        ImGui::EndChild();
       }
 
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Scene")) {
+      ImGui::BeginChild("##SceneParams", ImVec2(0, 0), ImGuiChildFlags_None);
       RenderSceneTab(g_state);
+      ImGui::EndChild();
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Filter")) {
+      ImGui::BeginChild("##FilterParams", ImVec2(0, 0), ImGuiChildFlags_None);
       RenderFilterTab(g_state);
+      ImGui::EndChild();
       ImGui::EndTabItem();
     }
     ImGui::EndTabBar();
