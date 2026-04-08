@@ -20,6 +20,7 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_projection.cpp"
   "${PROJ_TEST_DIR}/test_rng.cpp"
   "${PROJ_TEST_DIR}/test_filter.cpp"
+  "${PROJ_TEST_DIR}/test_simulator.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
 target_include_directories(unit_test
   PRIVATE ${PROJ_TEST_DIR})
