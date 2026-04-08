@@ -29,6 +29,12 @@ struct PreviewParams {
   float sun_dir[3] = {};  // precomputed world-space unit vector
   int sun_circle_count = 0;
   float sun_circle_angles[kMaxSunCircles] = {};  // degrees
+  float horizon_color[3] = { 0.8f, 0.2f, 0.2f };
+  float grid_color[3] = { 1.0f, 1.0f, 1.0f };
+  float sun_circles_color[3] = { 1.0f, 0.9f, 0.3f };
+  float horizon_alpha = 0.6f;
+  float grid_alpha = 0.3f;
+  float sun_circles_alpha = 0.5f;
 };
 
 class PreviewRenderer {
@@ -79,6 +85,11 @@ class PreviewRenderer {
   int bg_height_ = 0;
   float bg_aspect_ = 1.0f;
 };
+
+// Build view-to-world 3x3 rotation matrix from camera orientation (degrees).
+// OpenGL column-major layout: out[col*3 + row].
+// Synced with shader u_view_matrix usage (preview_renderer.cpp).
+void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, float out[9]);
 
 }  // namespace lumice::gui
 

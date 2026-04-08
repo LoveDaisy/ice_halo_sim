@@ -8,6 +8,7 @@
 #include "config/render_config.hpp"
 #include "gui/app.hpp"
 #include "gui/gui_logger.hpp"
+#include "gui/overlay_labels.hpp"
 #include "gui/panels.hpp"
 #include "imgui.h"
 
@@ -416,8 +417,17 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     if (ImGui::BeginTabItem("Overlay")) {
       ImGui::SeparatorText("Auxiliary Lines");
       ImGui::Checkbox("Horizon##overlay", &g_state.show_horizon);
+      ImGui::SameLine();
+      ImGui::ColorEdit3("##horizon_color", g_state.horizon_color, ImGuiColorEditFlags_NoInputs);
+      SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, 0.0f, 1.0f, "%.2f");
       ImGui::Checkbox("Grid##overlay", &g_state.show_grid);
+      ImGui::SameLine();
+      ImGui::ColorEdit3("##grid_color", g_state.grid_color, ImGuiColorEditFlags_NoInputs);
+      SliderWithInput("Alpha##grid", &g_state.grid_alpha, 0.0f, 1.0f, "%.2f");
       ImGui::Checkbox("Sun Circles##overlay", &g_state.show_sun_circles);
+      ImGui::SameLine();
+      ImGui::ColorEdit3("##sun_circles_color", g_state.sun_circles_color, ImGuiColorEditFlags_NoInputs);
+      SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, 0.0f, 1.0f, "%.2f");
 
       if (g_state.show_sun_circles) {
         if (ImGui::Button("Edit Circles...##overlay")) {
@@ -578,6 +588,14 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.params.show_horizon = g_state.show_horizon;
     g_preview_vp.params.show_grid = g_state.show_grid;
     g_preview_vp.params.show_sun_circles = g_state.show_sun_circles;
+    std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color),
+              std::begin(g_preview_vp.params.horizon_color));
+    std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(g_preview_vp.params.grid_color));
+    std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
+              std::begin(g_preview_vp.params.sun_circles_color));
+    g_preview_vp.params.horizon_alpha = g_state.horizon_alpha;
+    g_preview_vp.params.grid_alpha = g_state.grid_alpha;
+    g_preview_vp.params.sun_circles_alpha = g_state.sun_circles_alpha;
     // Precompute sun direction in world space (same convention as BuildViewMatrix forward vector)
     constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
     float sa = g_state.sun.altitude * kDeg2Rad;
@@ -588,6 +606,41 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.params.sun_circle_count = std::min(static_cast<int>(g_state.sun_circle_angles.size()), kMaxSunCircles);
     for (int i = 0; i < g_preview_vp.params.sun_circle_count; i++) {
       g_preview_vp.params.sun_circle_angles[i] = g_state.sun_circle_angles[i];
+    }
+
+    // Overlay labels at viewport edges (drawn via ImGui foreground draw list)
+    if (g_state.show_horizon || g_state.show_grid || g_state.show_sun_circles) {
+      OverlayLabelInput label_input{};
+      label_input.lens_type = rc.lens_type;
+      label_input.fov = rc.fov;
+      label_input.elevation = rc.elevation;
+      label_input.azimuth = rc.azimuth;
+      label_input.roll = rc.roll;
+      label_input.visible = rc.visible;
+      label_input.show_horizon = g_state.show_horizon;
+      label_input.show_grid = g_state.show_grid;
+      label_input.show_sun_circles = g_state.show_sun_circles;
+      std::copy(std::begin(g_preview_vp.params.sun_dir), std::end(g_preview_vp.params.sun_dir),
+                std::begin(label_input.sun_dir));
+      label_input.sun_circle_count = g_preview_vp.params.sun_circle_count;
+      label_input.sun_circle_angles = g_preview_vp.params.sun_circle_angles;
+      std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color),
+                std::begin(label_input.horizon_color));
+      std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(label_input.grid_color));
+      std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
+                std::begin(label_input.sun_circles_color));
+      label_input.grid_alpha = g_state.grid_alpha;
+      label_input.sun_circles_alpha = g_state.sun_circles_alpha;
+
+      // Convert viewport from framebuffer pixels to ImGui logical screen coordinates
+      float vp_sx = panel_x;
+      float vp_sy = kTopBarHeight;
+      float vp_sw = panel_width;
+      float vp_sh = preview_height;
+
+      static std::vector<OverlayLabel> labels;
+      ComputeOverlayLabels(label_input, vp_sx, vp_sy, vp_sw, vp_sh, labels);
+      DrawOverlayLabels(labels);
     }
 
     // Mouse interaction: orbit with drag, FOV with scroll

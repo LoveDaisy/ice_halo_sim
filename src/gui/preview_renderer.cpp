@@ -47,6 +47,12 @@ uniform int u_show_sun_circles;
 uniform vec3 u_sun_dir;
 uniform float u_sun_circle_angles[16];
 uniform int u_sun_circle_count;
+uniform vec3 u_horizon_color;
+uniform vec3 u_grid_color;
+uniform vec3 u_sun_circles_color;
+uniform float u_horizon_alpha;
+uniform float u_grid_alpha;
+uniform float u_sun_circles_alpha;
 
 const float PI = 3.14159265358979323846;
 
@@ -253,14 +259,7 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color) {
   float fw_alt = clamp(fwidth(altitude_deg), 0.1, 2.0);
   float fw_az = clamp(fwidth(azimuth_deg), 0.1, 5.0);
 
-  // Horizon line (altitude = 0)
-  if (u_show_horizon != 0) {
-    float d = abs(altitude_deg);
-    float t = 1.0 - smoothstep(0.0, fw_alt * 1.5, d);
-    color = mix(color, vec3(0.8, 0.2, 0.2), t * 0.6);
-  }
-
-  // Coordinate grid (10 degree intervals)
+  // Coordinate grid (10 degree intervals) — drawn first so other lines overlay on top
   if (u_show_grid != 0) {
     // Altitude grid lines
     float d_alt = mod(abs(altitude_deg) + 5.0, 10.0) - 5.0;
@@ -274,7 +273,7 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color) {
     }
 
     float t = max(t_alt, t_az);
-    color = mix(color, vec3(1.0), t * 0.3);
+    color = mix(color, u_grid_color, t * u_grid_alpha);
   }
 
   // Sun angular distance circles
@@ -284,8 +283,15 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color) {
     for (int i = 0; i < u_sun_circle_count; i++) {
       float d = abs(ang_dist_deg - u_sun_circle_angles[i]);
       float t = 1.0 - smoothstep(0.0, fw_ang * 1.5, d);
-      color = mix(color, vec3(1.0, 0.9, 0.3), t * 0.5);
+      color = mix(color, u_sun_circles_color, t * u_sun_circles_alpha);
     }
+  }
+
+  // Horizon line (altitude = 0) — drawn last so it's most visible
+  if (u_show_horizon != 0) {
+    float d = abs(altitude_deg);
+    float t = 1.0 - smoothstep(0.0, fw_alt * 1.5, d);
+    color = mix(color, u_horizon_color, t * u_horizon_alpha);
   }
 
   return color;
@@ -591,7 +597,7 @@ void PreviewRenderer::ClearBackground() {
 //   col2  = -forward  (unchanged by roll)
 //
 // OpenGL column-major: out[col*3 + row].
-static void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, float out[9]) {
+void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, float out[9]) {
   constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
   float a = azimuth_deg * kDeg2Rad;
   float e = elevation_deg * kDeg2Rad;
@@ -694,6 +700,15 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
     glUniform1fv(glGetUniformLocation(shader_program_, "u_sun_circle_angles"), params.sun_circle_count,
                  params.sun_circle_angles);
   }
+  glUniform3f(glGetUniformLocation(shader_program_, "u_horizon_color"), params.horizon_color[0],
+              params.horizon_color[1], params.horizon_color[2]);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_grid_color"), params.grid_color[0], params.grid_color[1],
+              params.grid_color[2]);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_sun_circles_color"), params.sun_circles_color[0],
+              params.sun_circles_color[1], params.sun_circles_color[2]);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_horizon_alpha"), params.horizon_alpha);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_grid_alpha"), params.grid_alpha);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_sun_circles_alpha"), params.sun_circles_alpha);
 
   // Draw fullscreen quad
   glBindVertexArray(vao_);
