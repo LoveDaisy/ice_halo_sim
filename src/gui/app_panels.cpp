@@ -30,13 +30,21 @@ void RenderTopBar(float window_width) {
   float run_stop_width =
       std::max(ImGui::CalcTextSize("Run").x, ImGui::CalcTextSize("Stop").x) + style.FramePadding.x * 2;
   if (simulating) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f, 0.05f, 0.05f, 1.0f));
     if (ImGui::Button("Stop", ImVec2(run_stop_width, 0))) {
       DoStop();
     }
+    ImGui::PopStyleColor(3);
   } else {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.15f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.55f, 0.2f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.35f, 0.1f, 1.0f));
     if (ImGui::Button("Run", ImVec2(run_stop_width, 0))) {
       DoRun();
     }
+    ImGui::PopStyleColor(3);
   }
 
   // Revert area — always rendered for stable layout, hidden when not modified.
