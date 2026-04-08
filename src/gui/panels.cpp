@@ -755,7 +755,11 @@ void RenderFilterTab(GuiState& state) {
     ImGui::EndDisabled();
   }
 
-  if (ImGui::BeginListBox("##filter_list", ImVec2(-1, 60))) {
+  int filter_count = static_cast<int>(state.filters.size());
+  float filter_line_h = ImGui::GetTextLineHeightWithSpacing();
+  float filter_list_h = std::min(filter_line_h * std::max(filter_count, 1) + ImGui::GetStyle().FramePadding.y * 2,
+                                 filter_line_h * 8 + ImGui::GetStyle().FramePadding.y * 2);
+  if (ImGui::BeginListBox("##filter_list", ImVec2(-1, filter_list_h))) {
     for (int i = 0; i < static_cast<int>(state.filters.size()); i++) {
       auto& f = state.filters[i];
       char label[32];
