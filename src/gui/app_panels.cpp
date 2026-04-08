@@ -153,17 +153,32 @@ void RenderLeftPanel(float window_height) {
 
   if (ImGui::BeginTabBar("ConfigTabs")) {
     if (ImGui::BeginTabItem("Crystal")) {
-      RenderCrystalTab(g_state);
+      bool has_crystal =
+          g_state.selected_crystal >= 0 && g_state.selected_crystal < static_cast<int>(g_state.crystals.size());
 
-      // Crystal 3D preview
-      if (g_state.selected_crystal >= 0 && g_state.selected_crystal < static_cast<int>(g_state.crystals.size())) {
+      if (has_crystal) {
+        // Calculate fixed preview section height: separator + square image + controls row
+        float content_w = ImGui::GetContentRegionAvail().x;
+        float preview_size = content_w;
+        float separator_h = ImGui::GetTextLineHeight() + ImGui::GetStyle().ItemSpacing.y * 2;
+        float controls_h = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
+        float preview_section_h = separator_h + preview_size + controls_h;
+
+        // Parameters scroll region (upper part)
+        float avail_h = ImGui::GetContentRegionAvail().y;
+        constexpr float kMinParamsHeight = 150.0f;
+        float params_h = std::max(kMinParamsHeight, avail_h - preview_section_h);
+        ImGui::BeginChild("##CrystalParams", ImVec2(0, params_h), ImGuiChildFlags_None);
+        RenderCrystalTab(g_state);
+        ImGui::EndChild();
+
+        // Fixed crystal 3D preview (bottom)
         ImGui::SeparatorText("3D Preview");
         auto& cr = g_state.crystals[g_state.selected_crystal];
 
         // Update mesh if crystal changed
         int hash = CrystalParamHash(cr);
         if (cr.id != g_crystal_mesh_id || hash != g_crystal_mesh_hash) {
-          // Build JSON for LUMICE_GetCrystalMesh
           char json_buf[512];
           auto* fd = cr.face_distance;
           if (cr.type == CrystalType::kPrism) {
@@ -182,8 +197,6 @@ void RenderLeftPanel(float window_height) {
 
           LUMICE_CrystalMesh mesh{};
           if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) == LUMICE_OK) {
-            // Transform from Core coords (Z-up) to screen coords (Y-up):
-            // (x, y, z)_screen = (x, z, -y)_core
             for (int vi = 0; vi < mesh.vertex_count; vi++) {
               float y = mesh.vertices[vi * 3 + 1];
               float z = mesh.vertices[vi * 3 + 2];
@@ -200,7 +213,6 @@ void RenderLeftPanel(float window_height) {
               }
             }
 
-            // Normalize by AABB longest axis so all crystals display at similar size
             if (mesh.vertex_count > 0) {
               float min_x = mesh.vertices[0], max_x = mesh.vertices[0];
               float min_y = mesh.vertices[1], max_y = mesh.vertices[1];
@@ -238,25 +250,22 @@ void RenderLeftPanel(float window_height) {
         auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
         g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
 
-        // Display FBO texture — square, centered, with matching background fill
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-        float preview_size = avail.x;
+        // Display FBO texture — use remaining width, may be smaller than full panel if params_h was clamped
+        float actual_preview_size = ImGui::GetContentRegionAvail().x;
 
         ImVec2 area_start = ImGui::GetCursorScreenPos();
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
-        draw_list->AddRectFilled(area_start, ImVec2(area_start.x + preview_size, area_start.y + preview_size),
-                                 IM_COL32(38, 38, 38, 255));  // Match FBO clear color (0.15)
+        draw_list->AddRectFilled(area_start,
+                                 ImVec2(area_start.x + actual_preview_size, area_start.y + actual_preview_size),
+                                 IM_COL32(38, 38, 38, 255));
 
         auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
-        ImVec2 uv0(0, 1);  // Flip Y for OpenGL
+        ImVec2 uv0(0, 1);
         ImVec2 uv1(1, 0);
-        ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
+        ImGui::Image(tex_id, ImVec2(actual_preview_size, actual_preview_size), uv0, uv1);
 
-        // Overlay an InvisibleButton on the image for mouse interaction.
-        // ImGui::Image has no item ID, so SetItemKeyOwner wouldn't work on it.
-        // InvisibleButton creates a proper interactive item with an ID.
         ImGui::SetCursorScreenPos(area_start);
-        ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(preview_size, preview_size));
+        ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(actual_preview_size, actual_preview_size));
         if (ImGui::IsItemHovered()) {
           ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
           ImGuiIO& io = ImGui::GetIO();
@@ -275,6 +284,9 @@ void RenderLeftPanel(float window_height) {
         if (ImGui::SmallButton("Reset View")) {
           ResetCrystalView();
         }
+      } else {
+        // No crystal selected — full space for parameters
+        RenderCrystalTab(g_state);
       }
 
       ImGui::EndTabItem();
