@@ -265,8 +265,8 @@ int main(int argc, char** argv) {
       auto lh = static_cast<float>(win_h);
       gui::RenderTopBar(lw);
       gui::RenderLeftPanel(lh);
+      gui::RenderRightPanel(window, lw, lh);
       gui::RenderPreviewPanel(window, lw, lh);
-      gui::RenderFloatingLensBar(lw);
       gui::RenderStatusBar(lw, lh);
 
       ImGui::Render();
@@ -353,8 +353,18 @@ int main(int argc, char** argv) {
         gui::DoSave();
       }
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_Tab) && !io.WantCaptureKeyboard) {
-      gui::g_panel_collapsed = !gui::g_panel_collapsed;
+    // Save panel collapse state before any mutations (keyboard shortcuts + button clicks during rendering).
+    bool prev_left_collapsed = gui::g_panel_collapsed;
+    bool prev_right_collapsed = gui::g_state.right_panel_collapsed;
+
+    // Panel collapse shortcuts: [ for left panel, ] for right panel
+    if (!io.WantCaptureKeyboard) {
+      if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket)) {
+        gui::g_panel_collapsed = !gui::g_panel_collapsed;
+      }
+      if (ImGui::IsKeyPressed(ImGuiKey_RightBracket)) {
+        gui::g_state.right_panel_collapsed = !gui::g_state.right_panel_collapsed;
+      }
     }
 
     ImGui_ImplOpenGL3_NewFrame();
@@ -375,11 +385,16 @@ int main(int argc, char** argv) {
 
     gui::RenderTopBar(layout_width);
     gui::RenderLeftPanel(layout_height);
+    gui::RenderRightPanel(window, layout_width, layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
-    gui::RenderFloatingLensBar(layout_width);
     gui::RenderLogPanel(layout_width, layout_height);
     gui::RenderStatusBar(layout_width, layout_height);
     gui::RenderUnsavedPopup(window);
+
+    // Reset aspect ratio to Free when panel collapse state changes (window size doesn't adjust automatically).
+    if (gui::g_panel_collapsed != prev_left_collapsed || gui::g_state.right_panel_collapsed != prev_right_collapsed) {
+      gui::g_state.aspect_preset = gui::AspectPreset::kFree;
+    }
 
     // Rendering
     ImGui::Render();

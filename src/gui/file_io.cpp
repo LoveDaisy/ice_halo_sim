@@ -759,6 +759,15 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["bg_show"] = state.bg_show;
   root["bg_alpha"] = state.bg_alpha;
 
+  // Auxiliary line overlay
+  root["overlay_horizon"] = state.show_horizon;
+  root["overlay_grid"] = state.show_grid;
+  root["overlay_sun_circles"] = state.show_sun_circles;
+  root["overlay_sun_circle_angles"] = state.sun_circle_angles;
+
+  // Panel state
+  root["right_panel_collapsed"] = state.right_panel_collapsed;
+
   // Normalization mode (display preference)
   root["norm_mode"] = state.norm_mode;
 
@@ -883,6 +892,24 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.bg_path = PathFromU8(root.value("bg_path", std::string{}));
   state.bg_show = root.value("bg_show", false);
   state.bg_alpha = root.value("bg_alpha", 1.0f);
+
+  // Auxiliary line overlay (backward compatible: missing fields use defaults)
+  state.show_horizon = root.value("overlay_horizon", false);
+  state.show_grid = root.value("overlay_grid", false);
+  state.show_sun_circles = root.value("overlay_sun_circles", false);
+  if (root.contains("overlay_sun_circle_angles") && root["overlay_sun_circle_angles"].is_array()) {
+    state.sun_circle_angles.clear();
+    for (const auto& v : root["overlay_sun_circle_angles"]) {
+      if (v.is_number() && static_cast<int>(state.sun_circle_angles.size()) < kMaxSunCircles) {
+        float angle = std::clamp(v.get<float>(), 0.1f, 180.0f);
+        state.sun_circle_angles.push_back(angle);
+      }
+    }
+    std::sort(state.sun_circle_angles.begin(), state.sun_circle_angles.end());
+  }
+
+  // Panel state
+  state.right_panel_collapsed = root.value("right_panel_collapsed", false);
 
   // Normalization mode (display preference, default absolute for backward compat with old .lmc files)
   state.norm_mode = root.value("norm_mode", 0);

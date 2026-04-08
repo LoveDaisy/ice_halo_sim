@@ -173,6 +173,12 @@ struct GuiState {
   bool bg_show = false;
   float bg_alpha = 1.0f;
 
+  // Auxiliary line overlay (view preference — does not call MarkDirty, not in ConfigSnapshot)
+  bool show_horizon = false;
+  bool show_grid = false;
+  bool show_sun_circles = false;
+  std::vector<float> sun_circle_angles = { 22.0f, 46.0f };
+
   // File management
   std::filesystem::path current_file_path;
   bool dirty = false;
@@ -184,6 +190,9 @@ struct GuiState {
       sim_state = SimState::kModified;
     }
   }
+
+  // Panel state (view preference — does not call MarkDirty)
+  bool right_panel_collapsed = false;
 
   // Log panel state (view preference — does not call MarkDirty)
   int gui_log_level = 3;   // Index into log level names: 0=trace,1=debug,2=verbose,3=info,4=warning,5=error,6=off

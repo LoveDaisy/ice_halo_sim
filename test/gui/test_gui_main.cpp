@@ -119,6 +119,7 @@ static void ResetTestState() {
   gui::ResetCrystalView();
   gui::g_crystal_style = 1;
   gui::g_panel_collapsed = false;
+  gui::g_state.right_panel_collapsed = false;
   gui::g_preview_vp.active = false;
   gui::g_programmatic_resize = 0;
 
@@ -428,15 +429,12 @@ static void RegisterP2Tests(ImGuiTestEngine* engine) {
   }
 
   // P2: Lens switch — full-sky resets elevation/azimuth/roll
+  // Renderer invariants run every frame in RenderPreviewPanel
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_switch");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-
-      // Switch to Render tab so RenderRenderTab() runs
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Render");
-      ctx->Yield();
 
       // Set non-zero view params
       gui::g_state.renderers[0].elevation = 45.0f;
@@ -446,7 +444,7 @@ static void RegisterP2Tests(ImGuiTestEngine* engine) {
       // Switch to full-sky lens type (index 4 = Dual Fisheye Equal Area)
       gui::g_state.renderers[0].lens_type = 4;
 
-      // Need frame renders to trigger RenderRenderTab's full-sky reset
+      // Renderer invariants in RenderPreviewPanel reset view angles for full-sky lenses
       ctx->Yield(3);
 
       IM_CHECK_EQ(gui::g_state.renderers[0].elevation, 0.0f);
@@ -2376,7 +2374,6 @@ int main(int argc, char** argv) {
     gui::RenderTopBar(layout_width);
     gui::RenderLeftPanel(layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
-    gui::RenderFloatingLensBar(layout_width);
     if (g_enable_log_panel) {
       gui::RenderLogPanel(layout_width, layout_height);
     }

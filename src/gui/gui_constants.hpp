@@ -4,11 +4,12 @@
 namespace lumice::gui {
 
 // Layout constants
-constexpr int kInitWindowWidth = 1280;
-constexpr int kInitWindowHeight = 720;
-constexpr int kMinWindowWidth = 800;
-constexpr int kMinWindowHeight = 600;
-constexpr float kLeftPanelWidth = 380.0f;
+constexpr int kInitWindowWidth = 1600;
+constexpr int kInitWindowHeight = 900;
+constexpr int kMinWindowWidth = 1024;
+constexpr int kMinWindowHeight = 640;
+constexpr float kLeftPanelWidth = 360.0f;
+constexpr float kRightPanelWidth = 300.0f;
 constexpr float kTopBarHeight = 40.0f;
 constexpr float kStatusBarHeight = 28.0f;
 
@@ -30,6 +31,9 @@ constexpr int kCalibrationWindowMs = 50;
 // After calibration, the actual threshold may be higher (adapted to platform throughput).
 // This floor ensures Windows (lower throughput) never drops below a safe minimum.
 constexpr unsigned long kMinRaysFloor = 5000;
+
+// Auxiliary line overlay
+constexpr int kMaxSunCircles = 16;
 
 }  // namespace lumice::gui
 

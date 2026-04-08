@@ -33,7 +33,6 @@ PreviewViewport g_preview_vp;
 
 int g_programmatic_resize = 0;
 
-float g_aspect_bar_height = 30.0f;  // Updated each frame by RenderPreviewPanel
 
 bool g_show_unsaved_popup = false;
 PendingAction g_pending_action = PendingAction::kNone;
@@ -94,10 +93,12 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   int win_h = 0;
   glfwGetWindowSize(window, &win_w, &win_h);
 
-  float bar_h = g_aspect_bar_height;
-  float preview_w = std::max(1.0f, static_cast<float>(win_w) - kLeftPanelWidth);
+  constexpr float kCollapsedStripWidth = 20.0f;  // Must match kCollapseBtnSize in app_panels.cpp
+  float left_w = g_panel_collapsed ? kCollapsedStripWidth : kLeftPanelWidth;
+  float right_w = g_state.right_panel_collapsed ? kCollapsedStripWidth : kRightPanelWidth;
+  float preview_w = std::max(1.0f, static_cast<float>(win_w) - left_w - right_w);
   float preview_h = preview_w / ratio;
-  auto target_h = static_cast<int>(preview_h + kTopBarHeight + kStatusBarHeight + bar_h);
+  auto target_h = static_cast<int>(preview_h + kTopBarHeight + kStatusBarHeight);
   int target_w = win_w;
 
   int work_x = 0;
@@ -110,10 +111,10 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   target_h = std::clamp(target_h, kMinWindowHeight, work_h);
 
   // If height was clamped, recalculate width to maintain ratio
-  float actual_preview_h = static_cast<float>(target_h) - kTopBarHeight - kStatusBarHeight - bar_h;
+  float actual_preview_h = static_cast<float>(target_h) - kTopBarHeight - kStatusBarHeight;
   if (actual_preview_h > 0.0f) {
     float actual_preview_w = actual_preview_h * ratio;
-    int recalc_w = static_cast<int>(actual_preview_w + kLeftPanelWidth);
+    int recalc_w = static_cast<int>(actual_preview_w + left_w + right_w);
     if (recalc_w >= kMinWindowWidth && recalc_w <= work_w) {
       target_w = recalc_w;
     }
