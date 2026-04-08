@@ -333,7 +333,6 @@ std::string SerializeCoreConfig(const GuiState& state) {
   json scene;
   scene["light_source"]["type"] = "sun";
   scene["light_source"]["altitude"] = state.sun.altitude;
-  scene["light_source"]["azimuth"] = state.sun.azimuth;
   scene["light_source"]["diameter"] = state.sun.diameter;
   if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
     scene["light_source"]["spectrum"] = kSpectrumNames[state.sun.spectrum_index];
@@ -476,7 +475,7 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
 
   // Scene: light source
   out->sun_altitude = state.sun.altitude;
-  out->sun_azimuth = state.sun.azimuth;
+  out->sun_azimuth = 0.0f;
   out->sun_diameter = state.sun.diameter;
   if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
     out->spectrum = kSpectrumNames[state.sun.spectrum_index];
@@ -574,7 +573,6 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     if (js.contains("light_source")) {
       auto& jl = js["light_source"];
       state.sun.altitude = jl.value("altitude", 20.0f);
-      state.sun.azimuth = jl.value("azimuth", 0.0f);
       state.sun.diameter = jl.value("diameter", 0.5f);
       if (jl.contains("spectrum") && jl["spectrum"].is_string()) {
         state.sun.spectrum_index = SpectrumFromString(jl["spectrum"].get<std::string>());
@@ -683,7 +681,6 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   // Sun
   json sun;
   sun["altitude"] = state.sun.altitude;
-  sun["azimuth"] = state.sun.azimuth;
   sun["diameter"] = state.sun.diameter;
   if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
     sun["spectrum"] = kSpectrumNames[state.sun.spectrum_index];
@@ -820,7 +817,6 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   if (root.contains("sun")) {
     auto& js = root["sun"];
     state.sun.altitude = js.value("altitude", 20.0f);
-    state.sun.azimuth = js.value("azimuth", 0.0f);
     state.sun.diameter = js.value("diameter", 0.5f);
     state.sun.spectrum_index = SpectrumFromString(js.value("spectrum", "D65"));
   }

@@ -222,7 +222,6 @@ int main(int argc, char** argv) {
   if (perf_bench) {
     // Same config as StartPerfSimulation in test_gui_main.cpp
     gui::g_state.sun.altitude = 20.0f;
-    gui::g_state.sun.azimuth = 0.0f;
     gui::g_state.sun.diameter = 0.5f;
     gui::g_state.sun.spectrum_index = 2;
     gui::g_state.sim.infinite = true;

@@ -599,9 +599,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // Precompute sun direction in world space (same convention as BuildViewMatrix forward vector)
     constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
     float sa = g_state.sun.altitude * kDeg2Rad;
-    float sz = g_state.sun.azimuth * kDeg2Rad;
-    g_preview_vp.params.sun_dir[0] = -std::cos(sa) * std::cos(sz);
-    g_preview_vp.params.sun_dir[1] = -std::cos(sa) * std::sin(sz);
+    g_preview_vp.params.sun_dir[0] = -std::cos(sa);
+    g_preview_vp.params.sun_dir[1] = 0.0f;
     g_preview_vp.params.sun_dir[2] = -std::sin(sa);
     g_preview_vp.params.sun_circle_count = std::min(static_cast<int>(g_state.sun_circle_angles.size()), kMaxSunCircles);
     for (int i = 0; i < g_preview_vp.params.sun_circle_count; i++) {
