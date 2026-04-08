@@ -8,8 +8,8 @@ This document provides guidance for project developers on development environmen
 
 ### System Requirements
 
-- **Operating System**: macOS 10.14+ or Linux (Ubuntu 18.04+)
-- **Compiler**: C++17-compatible compiler (GCC 7+, Clang 5+)
+- **Operating System**: macOS 13.0+ (Ventura), Linux (Ubuntu 24.04+), or Windows 10+
+- **Compiler**: C++17-compatible compiler (GCC, Clang, or MSVC)
 - **CMake**: >= 3.14
 - **Ninja** (recommended): Default build generator, provides faster incremental builds with automatic parallelism
 
@@ -532,6 +532,47 @@ Reference images are in `test/gui/references/`. To update:
 - **Assertion choice**:
   - `EXPECT_*`: Test continues execution on failure
   - `ASSERT_*`: Test stops immediately on failure
+
+### E2E Testing
+
+End-to-end tests verify the complete CLI simulation pipeline, from configuration parsing to image output.
+
+#### Framework
+
+- **Python**: pytest + Pillow (for image comparison)
+- **Location**: `test/e2e/`
+
+#### Test Structure
+
+```
+test/e2e/
+├── conftest.py              # pytest fixtures (binary path, temp dirs)
+├── test_smoke.py            # Smoke tests with PSNR image verification
+├── test_error_handling.py   # Error scenario tests (exit code verification)
+├── configs/                 # Test configuration JSON files
+└── references/              # Reference output images (*.jpg)
+```
+
+#### Running E2E Tests
+
+```bash
+# Requires a built binary at build/cmake_install/Lumice
+pytest test/e2e/ -v
+```
+
+#### Image Verification
+
+E2E smoke tests compare output images against reference images using PSNR (Peak Signal-to-Noise Ratio):
+- Reference images are stored in `test/e2e/references/*.jpg`
+- PSNR threshold: tests pass if PSNR exceeds a defined minimum (typically 40 dB)
+- To update reference images: run the simulation with the test config and replace the reference file
+
+#### Adding New E2E Tests
+
+1. Create a configuration JSON in `test/e2e/configs/`
+2. Generate the reference image by running the CLI with the new config
+3. Save the reference to `test/e2e/references/`
+4. Add a test case in `test_smoke.py` or a new test file
 
 ## Debugging Tips
 
