@@ -17,8 +17,9 @@ doc/
 ├── performance-testing.md / _zh.md                  # 性能测试指南
 ├── windows-remote-testing.md / _zh.md               # Windows 远程测试指南
 ├── crystal-orientation-sampling.md / _zh.md         # 晶体取向采样（研究）
-├── beam-tracing.md / _zh.md                         # 光束追踪算法（研究）
-├── inverse-rendering.md / _zh.md                    # 逆渲染（研究）
+├── research/                                        # 研究文档（未在生产中实现）
+│   ├── beam-tracing.md / _zh.md                     # 光束追踪算法
+│   └── inverse-rendering.md / _zh.md                # 逆渲染
 ├── api/                                             # API文档（Doxygen生成）
 └── figs/                                            # 图片资源
 ```
@@ -80,14 +81,14 @@ doc/
 
 实验性和理论性探索（未在生产代码中实现）：
 
-- **[光束追踪](beam-tracing_zh.md)**: 光束追踪算法研究
+- **[光束追踪](research/beam-tracing_zh.md)**: 光束追踪算法研究
   - 理论分析与实验结果
   - 与蒙特卡罗光线追踪的对比
 
 - **[晶体取向采样](crystal-orientation-sampling_zh.md)**: 晶体取向采样方法
   - SO(3) 采样策略与收敛性分析
 
-- **[逆渲染](inverse-rendering_zh.md)**: 逆渲染研究
+- **[逆渲染](research/inverse-rendering_zh.md)**: 逆渲染研究
   - 从观测到的冰晕图像估计参数
 
 ## 快速链接

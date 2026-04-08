@@ -17,8 +17,9 @@ doc/
 ├── performance-testing.md / _zh.md                  # Performance testing guide
 ├── windows-remote-testing.md / _zh.md               # Windows remote testing guide
 ├── crystal-orientation-sampling.md / _zh.md         # Crystal orientation sampling (research)
-├── beam-tracing.md / _zh.md                         # Beam tracing algorithm (research)
-├── inverse-rendering.md / _zh.md                    # Inverse rendering (research)
+├── research/                                        # Research documents (not in production)
+│   ├── beam-tracing.md / _zh.md                     # Beam tracing algorithm
+│   └── inverse-rendering.md / _zh.md                # Inverse rendering
 ├── api/                                             # API docs (Doxygen-generated)
 └── figs/                                            # Image resources
 ```
@@ -80,14 +81,14 @@ For project developers and contributors:
 
 Experimental and theoretical explorations (not implemented in production):
 
-- **[Beam Tracing](beam-tracing.md)**: Beam tracing algorithm research
+- **[Beam Tracing](research/beam-tracing.md)**: Beam tracing algorithm research
   - Theoretical analysis and experimental results
   - Comparison with Monte Carlo ray tracing
 
 - **[Crystal Orientation Sampling](crystal-orientation-sampling.md)**: Crystal orientation sampling methods
   - SO(3) sampling strategies and convergence analysis
 
-- **[Inverse Rendering](inverse-rendering.md)**: Inverse rendering research
+- **[Inverse Rendering](research/inverse-rendering.md)**: Inverse rendering research
   - Parameter estimation from observed halo images
 
 ## Quick Links
