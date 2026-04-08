@@ -24,24 +24,46 @@ void RenderTopBar(float window_width) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse);
 
-  // Run/Stop + Revert
+  // Run/Stop — fixed width to prevent layout shift
   bool simulating = (g_state.sim_state == SimState::kSimulating);
+  const auto& style = ImGui::GetStyle();
+  float run_stop_width =
+      std::max(ImGui::CalcTextSize("Run").x, ImGui::CalcTextSize("Stop").x) + style.FramePadding.x * 2;
   if (simulating) {
-    if (ImGui::Button("Stop")) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f, 0.05f, 0.05f, 1.0f));
+    if (ImGui::Button("Stop", ImVec2(run_stop_width, 0))) {
       DoStop();
     }
+    ImGui::PopStyleColor(3);
   } else {
-    if (ImGui::Button("Run")) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.15f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.55f, 0.2f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.35f, 0.1f, 1.0f));
+    if (ImGui::Button("Run", ImVec2(run_stop_width, 0))) {
       DoRun();
     }
+    ImGui::PopStyleColor(3);
   }
-  if (g_state.sim_state == SimState::kModified) {
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "!");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Revert")) {
-      DoRevert();
-    }
+
+  // Revert area — always rendered for stable layout, hidden when not modified.
+  // Alpha=0 + BeginDisabled: invisible and non-interactive, but still occupies layout space.
+  // The hidden area intercepts clicks, which is harmless in this horizontal toolbar context.
+  bool modified = (g_state.sim_state == SimState::kModified);
+  if (!modified) {
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.0f);
+    ImGui::BeginDisabled();
+  }
+  ImGui::SameLine();
+  ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "!");
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Revert") && modified) {  // `&& modified`: redundant safety guard over BeginDisabled
+    DoRevert();
+  }
+  if (!modified) {
+    ImGui::EndDisabled();
+    ImGui::PopStyleVar();
   }
 
   ImGui::SameLine();
@@ -93,6 +115,32 @@ void RenderTopBar(float window_width) {
       ImGui::MenuItem("Include Texture in .lmc", nullptr, &g_state.save_texture);
       ImGui::EndPopup();
     }
+  }
+
+  // Ray count shortcut
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
+  ImGui::SameLine();
+
+  if (simulating) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::Checkbox("Infinite##topbar", &g_state.sim.infinite)) {
+    g_state.MarkDirty();
+  }
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(120);
+  if (!g_state.sim.infinite) {
+    if (ImGui::SliderFloat("Rays(M)##topbar", &g_state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f")) {
+      g_state.MarkDirty();
+    }
+  } else {
+    ImGui::BeginDisabled();
+    ImGui::SliderFloat("Rays(M)##topbar", &g_state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f");
+    ImGui::EndDisabled();
+  }
+  if (simulating) {
+    ImGui::EndDisabled();
   }
 
   ImGui::End();
