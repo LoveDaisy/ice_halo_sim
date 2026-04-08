@@ -482,9 +482,11 @@ void RenderCrystalTab(GuiState& state) {
   ImGui::SeparatorText("Axis Distribution");
   RenderAxisDist("Zenith", cr.zenith, state, 0.0f, 180.0f);
   ImGui::Spacing();
-  RenderAxisDist("Azimuth", cr.azimuth, state, 0.0f, 360.0f);
-  ImGui::Spacing();
   RenderAxisDist("Roll", cr.roll, state, 0.0f, 360.0f);
+  if (ImGui::TreeNode("Advanced##axis")) {
+    RenderAxisDist("Azimuth", cr.azimuth, state, 0.0f, 360.0f);
+    ImGui::TreePop();
+  }
 }
 
 
