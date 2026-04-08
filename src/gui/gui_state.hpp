@@ -31,6 +31,7 @@ struct AxisDist {
 
 struct CrystalConfig {
   int id = 0;
+  std::string name;
   CrystalType type = CrystalType::kPrism;
 
   // Prism
@@ -133,6 +134,7 @@ constexpr const char* kRaypathSepStr = "-";
 
 struct FilterConfig {
   int id = 0;
+  std::string name;
   int action = 0;            // 0=filter_in, 1=filter_out
   std::string raypath_text;  // Dash-separated int list, e.g. "3-1-5-7-4"; comma also accepted for back-compat
   bool sym_p = true;

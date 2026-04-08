@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include "config/render_config.hpp"
 #include "gui/gui_constants.hpp"
@@ -206,6 +207,29 @@ namespace {
 int g_pending_delete_crystal_idx = -1;
 int g_pending_delete_filter_idx = -1;
 
+// Inline editing state for double-click rename
+int g_editing_crystal_idx = -1;
+int g_editing_filter_idx = -1;
+char g_editing_name_buf[64] = {};
+bool g_editing_focus_needed = false;
+
+void FormatCrystalLabel(char* buf, size_t size, int id, CrystalType type, const std::string& name) {
+  if (name.empty()) {
+    const char* t = type == CrystalType::kPrism ? "Prism" : "Pyramid";
+    snprintf(buf, size, "[%d] %s", id, t);
+  } else {
+    snprintf(buf, size, "[%d] %s", id, name.c_str());
+  }
+}
+
+void FormatFilterLabel(char* buf, size_t size, int id, const std::string& name) {
+  if (name.empty()) {
+    snprintf(buf, size, "[%d] Raypath", id);
+  } else {
+    snprintf(buf, size, "[%d] %s", id, name.c_str());
+  }
+}
+
 // Check if a crystal ID is referenced by any scattering entry
 bool IsCrystalReferenced(const GuiState& state, int crystal_id) {
   for (auto& layer : state.scattering) {
@@ -373,6 +397,8 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state, float me
 void ResetPendingDeleteState() {
   g_pending_delete_crystal_idx = -1;
   g_pending_delete_filter_idx = -1;
+  g_editing_crystal_idx = -1;
+  g_editing_filter_idx = -1;
 }
 
 
@@ -397,6 +423,7 @@ void RenderCrystalTab(GuiState& state) {
         g_pending_delete_crystal_idx = state.selected_crystal;
         ImGui::OpenPopup("Delete Crystal?");
       } else {
+        g_editing_crystal_idx = -1;
         state.crystals.erase(state.crystals.begin() + state.selected_crystal);
         if (state.selected_crystal >= static_cast<int>(state.crystals.size())) {
           state.selected_crystal = static_cast<int>(state.crystals.size()) - 1;
@@ -417,12 +444,38 @@ void RenderCrystalTab(GuiState& state) {
   if (ImGui::BeginListBox("##crystal_list", ImVec2(-1, list_h))) {
     for (int i = 0; i < static_cast<int>(state.crystals.size()); i++) {
       auto& cr = state.crystals[i];
-      char label[64];
-      const char* type_str = cr.type == CrystalType::kPrism ? "Prism" : "Pyramid";
-      snprintf(label, sizeof(label), "[%d] %s", cr.id, type_str);
-      if (ImGui::Selectable(label, state.selected_crystal == i)) {
-        state.selected_crystal = i;
+      ImGui::PushID(i);
+      if (g_editing_crystal_idx == i) {
+        if (g_editing_focus_needed) {
+          ImGui::SetKeyboardFocusHere();
+          g_editing_focus_needed = false;
+        }
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputText("##edit_name", g_editing_name_buf, sizeof(g_editing_name_buf),
+                             ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
+          cr.name = g_editing_name_buf;
+          g_editing_crystal_idx = -1;
+        } else if (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+          g_editing_crystal_idx = -1;
+        } else if (ImGui::IsItemDeactivatedAfterEdit()) {
+          cr.name = g_editing_name_buf;
+          g_editing_crystal_idx = -1;
+        }
+      } else {
+        char label[64];
+        FormatCrystalLabel(label, sizeof(label), cr.id, cr.type, cr.name);
+        if (ImGui::Selectable(label, state.selected_crystal == i)) {
+          state.selected_crystal = i;
+          if (ImGui::IsMouseDoubleClicked(0)) {
+            g_editing_crystal_idx = i;
+            g_editing_filter_idx = -1;
+            g_editing_focus_needed = true;
+            strncpy(g_editing_name_buf, cr.name.c_str(), sizeof(g_editing_name_buf) - 1);
+            g_editing_name_buf[sizeof(g_editing_name_buf) - 1] = '\0';
+          }
+        }
       }
+      ImGui::PopID();
     }
     ImGui::EndListBox();
   }
@@ -628,8 +681,7 @@ void RenderSceneTab(GuiState& state) {
               for (auto& c : state.crystals) {
                 if (c.id == entry.crystal_id) {
                   static char buf[64];
-                  const char* t = c.type == CrystalType::kPrism ? "Prism" : "Pyramid";
-                  snprintf(buf, sizeof(buf), "[%d] %s", c.id, t);
+                  FormatCrystalLabel(buf, sizeof(buf), c.id, c.type, c.name);
                   return buf;
                 }
               }
@@ -637,8 +689,7 @@ void RenderSceneTab(GuiState& state) {
             }())) {
           for (auto& c : state.crystals) {
             char item_label[64];
-            const char* t = c.type == CrystalType::kPrism ? "Prism" : "Pyramid";
-            snprintf(item_label, sizeof(item_label), "[%d] %s", c.id, t);
+            FormatCrystalLabel(item_label, sizeof(item_label), c.id, c.type, c.name);
             if (ImGui::Selectable(item_label, entry.crystal_id == c.id)) {
               entry.crystal_id = c.id;
               state.MarkDirty();
@@ -657,7 +708,7 @@ void RenderSceneTab(GuiState& state) {
               for (auto& f : state.filters) {
                 if (f.id == entry.filter_id) {
                   static char buf[64];
-                  snprintf(buf, sizeof(buf), "[%d] Raypath", f.id);
+                  FormatFilterLabel(buf, sizeof(buf), f.id, f.name);
                   return buf;
                 }
               }
@@ -668,8 +719,8 @@ void RenderSceneTab(GuiState& state) {
             state.MarkDirty();
           }
           for (auto& f : state.filters) {
-            char item_label[32];
-            snprintf(item_label, sizeof(item_label), "[%d] Raypath", f.id);
+            char item_label[64];
+            FormatFilterLabel(item_label, sizeof(item_label), f.id, f.name);
             if (ImGui::Selectable(item_label, entry.filter_id == f.id)) {
               entry.filter_id = f.id;
               state.MarkDirty();
@@ -742,6 +793,7 @@ void RenderFilterTab(GuiState& state) {
         g_pending_delete_filter_idx = state.selected_filter;
         ImGui::OpenPopup("Delete Filter?");
       } else {
+        g_editing_filter_idx = -1;
         state.filters.erase(state.filters.begin() + state.selected_filter);
         if (state.selected_filter >= static_cast<int>(state.filters.size())) {
           state.selected_filter = static_cast<int>(state.filters.size()) - 1;
@@ -762,11 +814,38 @@ void RenderFilterTab(GuiState& state) {
   if (ImGui::BeginListBox("##filter_list", ImVec2(-1, filter_list_h))) {
     for (int i = 0; i < static_cast<int>(state.filters.size()); i++) {
       auto& f = state.filters[i];
-      char label[32];
-      snprintf(label, sizeof(label), "[%d] Raypath", f.id);
-      if (ImGui::Selectable(label, state.selected_filter == i)) {
-        state.selected_filter = i;
+      ImGui::PushID(i);
+      if (g_editing_filter_idx == i) {
+        if (g_editing_focus_needed) {
+          ImGui::SetKeyboardFocusHere();
+          g_editing_focus_needed = false;
+        }
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputText("##edit_name", g_editing_name_buf, sizeof(g_editing_name_buf),
+                             ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
+          f.name = g_editing_name_buf;
+          g_editing_filter_idx = -1;
+        } else if (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+          g_editing_filter_idx = -1;
+        } else if (ImGui::IsItemDeactivatedAfterEdit()) {
+          f.name = g_editing_name_buf;
+          g_editing_filter_idx = -1;
+        }
+      } else {
+        char label[64];
+        FormatFilterLabel(label, sizeof(label), f.id, f.name);
+        if (ImGui::Selectable(label, state.selected_filter == i)) {
+          state.selected_filter = i;
+          if (ImGui::IsMouseDoubleClicked(0)) {
+            g_editing_filter_idx = i;
+            g_editing_crystal_idx = -1;
+            g_editing_focus_needed = true;
+            strncpy(g_editing_name_buf, f.name.c_str(), sizeof(g_editing_name_buf) - 1);
+            g_editing_name_buf[sizeof(g_editing_name_buf) - 1] = '\0';
+          }
+        }
       }
+      ImGui::PopID();
     }
     ImGui::EndListBox();
   }

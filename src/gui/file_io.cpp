@@ -106,6 +106,9 @@ static json SerializeAxisDist(const AxisDist& a) {
 static json SerializeCrystal(const CrystalConfig& c) {
   json j;
   j["id"] = c.id;
+  if (!c.name.empty()) {
+    j["name"] = c.name;
+  }
 
   if (c.type == CrystalType::kPrism) {
     j["type"] = "prism";
@@ -142,6 +145,9 @@ static json SerializeCrystal(const CrystalConfig& c) {
 static json SerializeFilterForGui(const FilterConfig& f) {
   json j;
   j["id"] = f.id;
+  if (!f.name.empty()) {
+    j["name"] = f.name;
+  }
   j["action"] = f.action == 0 ? "filter_in" : "filter_out";
   j["raypath_text"] = f.raypath_text;
   j["sym_p"] = f.sym_p;
@@ -203,6 +209,7 @@ static AxisDist ParseAxisDist(const json& j) {
 static CrystalConfig ParseCrystal(const json& j) {
   CrystalConfig c;
   c.id = j.value("id", 0);
+  c.name = j.value("name", std::string{});
 
   auto type_str = j.value("type", "prism");
   c.type = (type_str == "pyramid") ? CrystalType::kPyramid : CrystalType::kPrism;
@@ -542,6 +549,7 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
         continue;
       FilterConfig f;
       f.id = jf.value("id", 0);
+      f.name = jf.value("name", std::string{});
       auto action_str = jf.value("action", "filter_in");
       f.action = (action_str == "filter_out") ? 1 : 0;
       if (jf.contains("raypath") && jf["raypath"].is_array()) {
@@ -803,6 +811,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
     for (auto& jf : root["filters"]) {
       FilterConfig f;
       f.id = jf.value("id", 0);
+      f.name = jf.value("name", std::string{});
       auto action_str = jf.value("action", "filter_in");
       f.action = (action_str == "filter_out") ? 1 : 0;
       f.raypath_text = jf.value("raypath_text", std::string{});
