@@ -149,7 +149,7 @@ void RenderLeftPanel(float window_height) {
   ImGui::SetNextWindowSize(ImVec2(kLeftPanelWidth, panel_height));
   ImGui::Begin("##LeftPanel", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
   if (ImGui::BeginTabBar("ConfigTabs")) {
     if (ImGui::BeginTabItem("Crystal")) {
@@ -161,8 +161,9 @@ void RenderLeftPanel(float window_height) {
         // Preview is square (side = panel content width). Params get the remainder.
         float content_w = ImGui::GetContentRegionAvail().x;
         float avail_h = ImGui::GetContentRegionAvail().y;
-        float separator_h = ImGui::GetTextLineHeight() + ImGui::GetStyle().ItemSpacing.y * 2;
-        float controls_h = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
+        auto& style = ImGui::GetStyle();
+        float separator_h = ImGui::GetTextLineHeight() + style.SeparatorTextPadding.y * 2 + style.ItemSpacing.y;
+        float controls_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
         float preview_size = content_w;
         float params_h = avail_h - preview_size - separator_h - controls_h;
 
