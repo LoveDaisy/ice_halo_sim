@@ -515,7 +515,7 @@ void RenderCrystalTab(GuiState& state) {
 
     for (int i = 0; i < 6; i++) {
       char label[16];
-      snprintf(label, sizeof(label), "Face %d", i + 1);
+      snprintf(label, sizeof(label), "Face %d", i + 3);
       DIRTY_IF(SliderWithInput(label, &cr.face_distance[i], 0.0f, 2.0f, "%.3f"));
     }
     ImGui::Spacing();
