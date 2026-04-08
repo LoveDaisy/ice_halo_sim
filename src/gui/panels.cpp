@@ -630,8 +630,9 @@ void RenderSceneTab(GuiState& state) {
         if (ImGui::BeginCombo("Crystal", [&]() -> const char* {
               for (auto& c : state.crystals) {
                 if (c.id == entry.crystal_id) {
-                  static char buf[32];
-                  snprintf(buf, sizeof(buf), "[%d]", c.id);
+                  static char buf[64];
+                  const char* t = c.type == CrystalType::kPrism ? "Prism" : "Pyramid";
+                  snprintf(buf, sizeof(buf), "[%d] %s", c.id, t);
                   return buf;
                 }
               }
@@ -658,8 +659,8 @@ void RenderSceneTab(GuiState& state) {
               }
               for (auto& f : state.filters) {
                 if (f.id == entry.filter_id) {
-                  static char buf[32];
-                  snprintf(buf, sizeof(buf), "[%d]", f.id);
+                  static char buf[64];
+                  snprintf(buf, sizeof(buf), "[%d] Raypath", f.id);
                   return buf;
                 }
               }
