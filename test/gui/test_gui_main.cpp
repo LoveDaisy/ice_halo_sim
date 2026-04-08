@@ -1764,7 +1764,6 @@ static void StartPerfSimulation() {
   // Set up g_state to match perf config, then use DoRun() so the server's
   // config_manager_ is populated from the same SerializeCoreConfig path.
   gui::g_state.sun.altitude = 20.0f;
-  gui::g_state.sun.azimuth = 0.0f;
   gui::g_state.sun.diameter = 0.5f;
   gui::g_state.sun.spectrum_index = 2;  // D65
   gui::g_state.sim.infinite = true;

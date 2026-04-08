@@ -5,14 +5,11 @@
 #include <cstdio>
 
 #include "config/render_config.hpp"
+#include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "imgui.h"
 
 namespace lumice::gui {
-
-// Common layout constants for SliderWithInput / SliderIntWithInput
-constexpr float kLabelColWidth = 70.0f;
-constexpr float kInputWidth = 60.0f;
 
 // Compute slider width and prepare IDs for the [slider] [input] Label layout.
 // Writes slider_id and input_id buffers, returns the computed slider width.
@@ -113,6 +110,89 @@ static bool SliderIntWithInput(const char* label, int* value, int min_val, int m
   ImGui::PushItemWidth(kInputWidth);
   changed |= ImGui::InputInt(input_id, value, 0, 0);
   ImGui::PopItemWidth();
+
+  *value = std::clamp(*value, min_val, max_val);
+
+  FinishSliderLayout(display_buf);
+  return changed;
+}
+
+struct ValuePreset {
+  const char* label;
+  float value;
+};
+
+// Slider + InputFloat with dropdown arrow for presets, laid out as: [slider] [input▼] Label
+// Returns true if value changed.
+static bool SliderWithPreset(const char* label, float* value, float min_val, float max_val, const char* fmt,
+                             SliderScale scale, const ValuePreset* presets, int preset_count) {
+  char display_buf[64];
+  char slider_id[64];
+  char input_id[64];
+  constexpr float kArrowBtnWidth = 20.0f;
+  float input_w = kInputWidth - kArrowBtnWidth;
+
+  // Prepare layout (manually, since input area is split into input + arrow)
+  const char* hash_pos = strstr(label, "##");
+  if (hash_pos) {
+    auto len = static_cast<size_t>(hash_pos - label);
+    if (len >= sizeof(display_buf))
+      len = sizeof(display_buf) - 1;
+    memcpy(display_buf, label, len);
+    display_buf[len] = '\0';
+  } else {
+    snprintf(display_buf, sizeof(display_buf), "%s", label);
+  }
+  snprintf(slider_id, sizeof(slider_id), "##%s_slider", label);
+  snprintf(input_id, sizeof(input_id), "##%s_input", label);
+
+  float spacing = ImGui::GetStyle().ItemSpacing.x;
+  float avail_w = ImGui::GetContentRegionAvail().x;
+  float slider_w = avail_w - kInputWidth - kArrowBtnWidth - kLabelColWidth - spacing * 3;
+  if (slider_w < 40.0f)
+    slider_w = 40.0f;
+
+  bool changed = false;
+
+  // Slider (sqrt scale)
+  ImGui::PushItemWidth(slider_w);
+  if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
+    float sqrt_val = std::sqrt(std::max(*value, 0.0f));
+    float sqrt_max = std::sqrt(max_val);
+    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "")) {
+      *value = sqrt_val * sqrt_val;
+      changed = true;
+    }
+  } else {
+    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt);
+  }
+  ImGui::PopItemWidth();
+
+  // Input
+  ImGui::SameLine();
+  ImGui::PushItemWidth(input_w);
+  changed |= ImGui::InputFloat(input_id, value, 0, 0, fmt);
+  ImGui::PopItemWidth();
+
+  // Arrow button + preset popup
+  char popup_id[64];
+  snprintf(popup_id, sizeof(popup_id), "##%s_presets", label);
+  ImGui::SameLine(0, 0);
+  char arrow_id[64];
+  snprintf(arrow_id, sizeof(arrow_id), "##%s_arrow", label);
+  if (ImGui::ArrowButton(arrow_id, ImGuiDir_Down)) {
+    ImGui::OpenPopup(popup_id);
+  }
+  if (ImGui::BeginPopup(popup_id)) {
+    for (int i = 0; i < preset_count; i++) {
+      bool selected = std::abs(*value - presets[i].value) < 0.05f;
+      if (ImGui::Selectable(presets[i].label, selected)) {
+        *value = presets[i].value;
+        changed = true;
+      }
+    }
+    ImGui::EndPopup();
+  }
 
   *value = std::clamp(*value, min_val, max_val);
 
@@ -421,41 +501,16 @@ void RenderCrystalTab(GuiState& state) {
   if (ImGui::TreeNode("Advanced")) {
     if (cr.type == CrystalType::kPyramid) {
       // Wedge angle presets (common Miller indices for ice crystals)
-      struct WedgePreset {
-        const char* label;
-        float alpha;
-      };
-      static constexpr WedgePreset kPresets[] = {
+      static constexpr ValuePreset kWedgePresets[] = {
         { "{1,0,-1,1}  28.0\xC2\xB0", 28.0f },  // atan(sqrt3/2 * 1/1 / 1.629)
         { "{2,0,-2,1}  14.7\xC2\xB0", 14.7f },  // atan(sqrt3/2 * 1/2 / 1.629)
         { "{3,0,-3,2}  19.9\xC2\xB0", 19.9f },  // atan(sqrt3/2 * 2/3 / 1.629)
       };
-      static constexpr int kPresetCount = sizeof(kPresets) / sizeof(kPresets[0]);
-
-      auto RenderAngleCombo = [&](const char* combo_label, float* alpha) {
-        int sel = -1;
-        for (int i = 0; i < kPresetCount; i++) {
-          if (std::abs(*alpha - kPresets[i].alpha) < 0.05f) {
-            sel = i;
-            break;
-          }
-        }
-        const char* preview = sel >= 0 ? kPresets[sel].label : "Custom";
-        if (ImGui::BeginCombo(combo_label, preview)) {
-          for (int i = 0; i < kPresetCount; i++) {
-            if (ImGui::Selectable(kPresets[i].label, sel == i)) {
-              *alpha = kPresets[i].alpha;
-              state.MarkDirty();
-            }
-          }
-          ImGui::EndCombo();
-        }
-      };
-
-      RenderAngleCombo("Upper##preset", &cr.upper_alpha);
-      DIRTY_IF(SliderWithInput("Upper Angle", &cr.upper_alpha, 0.1f, 89.9f, "%.1f", SliderScale::kSqrt));
-      RenderAngleCombo("Lower##preset", &cr.lower_alpha);
-      DIRTY_IF(SliderWithInput("Lower Angle", &cr.lower_alpha, 0.1f, 89.9f, "%.1f", SliderScale::kSqrt));
+      static constexpr int kWedgePresetCount = sizeof(kWedgePresets) / sizeof(kWedgePresets[0]);
+      DIRTY_IF(SliderWithPreset("Upper Wedge", &cr.upper_alpha, 0.1f, 89.9f, "%.1f", SliderScale::kSqrt, kWedgePresets,
+                                kWedgePresetCount));
+      DIRTY_IF(SliderWithPreset("Lower Wedge", &cr.lower_alpha, 0.1f, 89.9f, "%.1f", SliderScale::kSqrt, kWedgePresets,
+                                kWedgePresetCount));
     }
 
     for (int i = 0; i < 6; i++) {
@@ -482,9 +537,11 @@ void RenderCrystalTab(GuiState& state) {
   ImGui::SeparatorText("Axis Distribution");
   RenderAxisDist("Zenith", cr.zenith, state, 0.0f, 180.0f);
   ImGui::Spacing();
-  RenderAxisDist("Azimuth", cr.azimuth, state, 0.0f, 360.0f);
-  ImGui::Spacing();
   RenderAxisDist("Roll", cr.roll, state, 0.0f, 360.0f);
+  if (ImGui::TreeNode("Advanced##axis")) {
+    RenderAxisDist("Azimuth", cr.azimuth, state, 0.0f, 360.0f);
+    ImGui::TreePop();
+  }
 }
 
 
@@ -493,7 +550,6 @@ void RenderCrystalTab(GuiState& state) {
 void RenderSceneTab(GuiState& state) {
   ImGui::SeparatorText("Sun");
   DIRTY_IF(SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f));
-  DIRTY_IF(SliderWithInput("Azimuth##sun", &state.sun.azimuth, -180.0f, 180.0f));
   DIRTY_IF(SliderWithInput("Diameter", &state.sun.diameter, 0.1f, 5.0f));
   ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
   DIRTY_IF(ImGui::Combo("Spectrum", &state.sun.spectrum_index, kSpectrumNames, kSpectrumCount));
@@ -571,8 +627,9 @@ void RenderSceneTab(GuiState& state) {
         if (ImGui::BeginCombo("Crystal", [&]() -> const char* {
               for (auto& c : state.crystals) {
                 if (c.id == entry.crystal_id) {
-                  static char buf[32];
-                  snprintf(buf, sizeof(buf), "[%d]", c.id);
+                  static char buf[64];
+                  const char* t = c.type == CrystalType::kPrism ? "Prism" : "Pyramid";
+                  snprintf(buf, sizeof(buf), "[%d] %s", c.id, t);
                   return buf;
                 }
               }
@@ -599,8 +656,8 @@ void RenderSceneTab(GuiState& state) {
               }
               for (auto& f : state.filters) {
                 if (f.id == entry.filter_id) {
-                  static char buf[32];
-                  snprintf(buf, sizeof(buf), "[%d]", f.id);
+                  static char buf[64];
+                  snprintf(buf, sizeof(buf), "[%d] Raypath", f.id);
                   return buf;
                 }
               }

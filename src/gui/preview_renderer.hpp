@@ -22,7 +22,7 @@ struct PreviewParams {
   float bg_alpha = 1.0f;
   float bg_aspect = 1.0f;
 
-  // Auxiliary lines (sun_dir is precomputed on CPU from GuiState::sun.altitude/azimuth)
+  // Auxiliary lines (sun_dir is precomputed on CPU from GuiState::sun.altitude)
   bool show_horizon = false;
   bool show_grid = false;
   bool show_sun_circles = false;

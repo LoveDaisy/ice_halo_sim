@@ -210,15 +210,18 @@ struct SampleAngles {
 };
 
 // Check if value crosses a target between two samples. Returns interpolated crossing position.
-// Uses a small epsilon tolerance to handle floating-point precision loss (e.g., at fisheye disc edge).
+// Uses a small epsilon tolerance to handle floating-point precision loss at fisheye disc edges (r≈1).
+// kEps=0.01 is small enough to avoid false-positive clusters at near-tangent points (where the
+// original kEps=0.1 caused spurious label groups), yet large enough to catch genuine crossings
+// that precision loss at projection boundaries can flip to same-side.
 bool Crosses(float v0, float v1, float target, float* t_out) {
   float d0 = v0 - target;
   float d1 = v1 - target;
-  constexpr float kEps = 0.1f;
+  constexpr float kEps = 0.01f;
   if (d0 * d1 < kEps) {
     float denom = v1 - v0;
     if (std::abs(denom) < 1e-6f)
-      return false;  // both samples at nearly the same value
+      return false;
     *t_out = std::clamp(-d0 / denom, 0.0f, 1.0f);
     return true;
   }

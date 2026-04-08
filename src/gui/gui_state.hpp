@@ -54,7 +54,6 @@ struct CrystalConfig {
 
 struct SunConfig {
   float altitude = 20.0f;
-  float azimuth = 0.0f;
   float diameter = 0.5f;
   int spectrum_index = 2;  // Index into kSpectrumNames: 0=D50,1=D55,2=D65,3=D75,4=A,5=E
 };

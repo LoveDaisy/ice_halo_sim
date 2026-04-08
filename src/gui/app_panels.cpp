@@ -7,6 +7,7 @@
 
 #include "config/render_config.hpp"
 #include "gui/app.hpp"
+#include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/panels.hpp"
@@ -147,23 +148,38 @@ void RenderLeftPanel(float window_height) {
 
   ImGui::SetNextWindowPos(ImVec2(0, kTopBarHeight));
   ImGui::SetNextWindowSize(ImVec2(kLeftPanelWidth, panel_height));
-  ImGui::Begin(
-      "##LeftPanel", nullptr,
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+  ImGui::Begin("##LeftPanel", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
   if (ImGui::BeginTabBar("ConfigTabs")) {
     if (ImGui::BeginTabItem("Crystal")) {
-      RenderCrystalTab(g_state);
+      bool has_crystal =
+          g_state.selected_crystal >= 0 && g_state.selected_crystal < static_cast<int>(g_state.crystals.size());
 
-      // Crystal 3D preview
-      if (g_state.selected_crystal >= 0 && g_state.selected_crystal < static_cast<int>(g_state.crystals.size())) {
+      if (has_crystal) {
+        // Split: scrollable params (upper) + fixed preview (lower).
+        // Preview is square (side = panel content width). Params get the remainder.
+        float content_w = ImGui::GetContentRegionAvail().x;
+        float avail_h = ImGui::GetContentRegionAvail().y;
+        auto& style = ImGui::GetStyle();
+        float separator_h = ImGui::GetTextLineHeight() + style.SeparatorTextPadding.y * 2 + style.ItemSpacing.y;
+        float controls_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
+        float preview_size = content_w;
+        float params_h = avail_h - preview_size - separator_h - controls_h;
+
+        // Parameters scroll region (upper part)
+        ImGui::BeginChild("##CrystalParams", ImVec2(0, params_h), ImGuiChildFlags_None);
+        RenderCrystalTab(g_state);
+        ImGui::EndChild();
+
+        // Fixed crystal 3D preview (bottom)
         ImGui::SeparatorText("3D Preview");
         auto& cr = g_state.crystals[g_state.selected_crystal];
 
         // Update mesh if crystal changed
         int hash = CrystalParamHash(cr);
         if (cr.id != g_crystal_mesh_id || hash != g_crystal_mesh_hash) {
-          // Build JSON for LUMICE_GetCrystalMesh
           char json_buf[512];
           auto* fd = cr.face_distance;
           if (cr.type == CrystalType::kPrism) {
@@ -182,8 +198,6 @@ void RenderLeftPanel(float window_height) {
 
           LUMICE_CrystalMesh mesh{};
           if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) == LUMICE_OK) {
-            // Transform from Core coords (Z-up) to screen coords (Y-up):
-            // (x, y, z)_screen = (x, z, -y)_core
             for (int vi = 0; vi < mesh.vertex_count; vi++) {
               float y = mesh.vertices[vi * 3 + 1];
               float z = mesh.vertices[vi * 3 + 2];
@@ -200,7 +214,6 @@ void RenderLeftPanel(float window_height) {
               }
             }
 
-            // Normalize by AABB longest axis so all crystals display at similar size
             if (mesh.vertex_count > 0) {
               float min_x = mesh.vertices[0], max_x = mesh.vertices[0];
               float min_y = mesh.vertices[1], max_y = mesh.vertices[1];
@@ -238,23 +251,17 @@ void RenderLeftPanel(float window_height) {
         auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
         g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
 
-        // Display FBO texture — square, centered, with matching background fill
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-        float preview_size = avail.x;
-
+        // Display FBO texture
         ImVec2 area_start = ImGui::GetCursorScreenPos();
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
         draw_list->AddRectFilled(area_start, ImVec2(area_start.x + preview_size, area_start.y + preview_size),
-                                 IM_COL32(38, 38, 38, 255));  // Match FBO clear color (0.15)
+                                 IM_COL32(38, 38, 38, 255));
 
         auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
-        ImVec2 uv0(0, 1);  // Flip Y for OpenGL
+        ImVec2 uv0(0, 1);
         ImVec2 uv1(1, 0);
         ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
 
-        // Overlay an InvisibleButton on the image for mouse interaction.
-        // ImGui::Image has no item ID, so SetItemKeyOwner wouldn't work on it.
-        // InvisibleButton creates a proper interactive item with an ID.
         ImGui::SetCursorScreenPos(area_start);
         ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(preview_size, preview_size));
         if (ImGui::IsItemHovered()) {
@@ -275,16 +282,25 @@ void RenderLeftPanel(float window_height) {
         if (ImGui::SmallButton("Reset View")) {
           ResetCrystalView();
         }
+      } else {
+        // No crystal selected — full space for parameters
+        ImGui::BeginChild("##CrystalParamsOnly", ImVec2(0, 0), ImGuiChildFlags_None);
+        RenderCrystalTab(g_state);
+        ImGui::EndChild();
       }
 
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Scene")) {
+      ImGui::BeginChild("##SceneParams", ImVec2(0, 0), ImGuiChildFlags_None);
       RenderSceneTab(g_state);
+      ImGui::EndChild();
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Filter")) {
+      ImGui::BeginChild("##FilterParams", ImVec2(0, 0), ImGuiChildFlags_None);
       RenderFilterTab(g_state);
+      ImGui::EndChild();
       ImGui::EndTabItem();
     }
     ImGui::EndTabBar();
@@ -325,6 +341,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   if (ImGui::BeginTabBar("ViewTabs")) {
     // ---- View Tab ----
     if (ImGui::BeginTabItem("View")) {
+      ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
       ImGui::SeparatorText("Projection");
       ImGui::Combo("Lens Type##view", &r.lens_type, kLensTypeNames, kLensTypeCount);
       float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
@@ -340,11 +357,13 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f, "%.1f");
       ImGui::EndDisabled();
 
+      ImGui::PopItemWidth();
       ImGui::EndTabItem();
     }
 
     // ---- Display Tab ----
     if (ImGui::BeginTabItem("Display")) {
+      ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
       ImGui::SeparatorText("Rendering");
       const char* res_labels[] = { "512", "1024", "2048", "4096" };
       ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.28f, 0.12f, 0.6f));
@@ -403,6 +422,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         DoClearBackground();
       }
       ImGui::EndDisabled();
+      ImGui::SameLine();
       ImGui::BeginDisabled(no_bg);
       ImGui::Checkbox("Show##display_bg", &g_state.bg_show);
       ImGui::BeginDisabled(!g_state.bg_show);
@@ -410,11 +430,13 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       ImGui::EndDisabled();
       ImGui::EndDisabled();
 
+      ImGui::PopItemWidth();
       ImGui::EndTabItem();
     }
 
     // ---- Overlay Tab ----
     if (ImGui::BeginTabItem("Overlay")) {
+      ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
       ImGui::SeparatorText("Auxiliary Lines");
       ImGui::Checkbox("Horizon##overlay", &g_state.show_horizon);
       ImGui::SameLine();
@@ -434,6 +456,8 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
           ImGui::OpenPopup("SunCirclesEdit");
         }
         if (ImGui::BeginPopup("SunCirclesEdit")) {
+          bool at_limit = static_cast<int>(g_state.sun_circle_angles.size()) >= kMaxSunCircles;
+
           // Preset buttons
           const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
           for (float p : presets) {
@@ -446,21 +470,37 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
             }
             char label[16];
             std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
-            if (already) {
+            if (already || at_limit) {
               ImGui::BeginDisabled();
             }
             if (ImGui::Button(label)) {
-              if (static_cast<int>(g_state.sun_circle_angles.size()) < kMaxSunCircles) {
-                g_state.sun_circle_angles.push_back(p);
-                std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
-              }
+              g_state.sun_circle_angles.push_back(p);
+              std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
             }
-            if (already) {
+            if (already || at_limit) {
               ImGui::EndDisabled();
             }
             ImGui::SameLine();
           }
           ImGui::NewLine();
+
+          // Custom angle input
+          static float custom_angle = 22.0f;
+          ImGui::PushItemWidth(60.0f);
+          ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
+          ImGui::PopItemWidth();
+          ImGui::SameLine();
+          if (at_limit) {
+            ImGui::BeginDisabled();
+          }
+          if (ImGui::Button("+##add_circle")) {
+            custom_angle = std::max(0.1f, std::min(180.0f, custom_angle));
+            g_state.sun_circle_angles.push_back(custom_angle);
+            std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+          }
+          if (at_limit) {
+            ImGui::EndDisabled();
+          }
 
           // Current list with delete buttons
           ImGui::Separator();
@@ -478,30 +518,11 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
             g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
           }
 
-          // Custom angle input
-          ImGui::Separator();
-          static float custom_angle = 22.0f;
-          ImGui::PushItemWidth(60.0f);
-          ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
-          ImGui::PopItemWidth();
-          ImGui::SameLine();
-          bool at_limit = static_cast<int>(g_state.sun_circle_angles.size()) >= kMaxSunCircles;
-          if (at_limit) {
-            ImGui::BeginDisabled();
-          }
-          if (ImGui::Button("+##add_circle")) {
-            custom_angle = std::max(0.1f, std::min(180.0f, custom_angle));
-            g_state.sun_circle_angles.push_back(custom_angle);
-            std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
-          }
-          if (at_limit) {
-            ImGui::EndDisabled();
-          }
-
           ImGui::EndPopup();
         }
       }
 
+      ImGui::PopItemWidth();
       ImGui::EndTabItem();
     }
 
@@ -596,12 +617,11 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.params.horizon_alpha = g_state.horizon_alpha;
     g_preview_vp.params.grid_alpha = g_state.grid_alpha;
     g_preview_vp.params.sun_circles_alpha = g_state.sun_circles_alpha;
-    // Precompute sun direction in world space (same convention as BuildViewMatrix forward vector)
+    // Precompute sun direction in world space (azimuth fixed at 0, only altitude matters)
     constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
     float sa = g_state.sun.altitude * kDeg2Rad;
-    float sz = g_state.sun.azimuth * kDeg2Rad;
-    g_preview_vp.params.sun_dir[0] = -std::cos(sa) * std::cos(sz);
-    g_preview_vp.params.sun_dir[1] = -std::cos(sa) * std::sin(sz);
+    g_preview_vp.params.sun_dir[0] = -std::cos(sa);
+    g_preview_vp.params.sun_dir[1] = 0.0f;
     g_preview_vp.params.sun_dir[2] = -std::sin(sa);
     g_preview_vp.params.sun_circle_count = std::min(static_cast<int>(g_state.sun_circle_angles.size()), kMaxSunCircles);
     for (int i = 0; i < g_preview_vp.params.sun_circle_count; i++) {
