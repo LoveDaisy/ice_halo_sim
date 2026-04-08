@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775631619431,
+  "lastUpdate": 1775631620502,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -1219,6 +1219,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 69.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "37e473a268869d7c47912cd6488c48d17d3cc090",
+          "message": "Merge pull request #56 from LoveDaisy/feat/gui_misc\n\nGUI misc polish: layout, controls, overlay labels",
+          "timestamp": "2026-04-08T14:56:40+08:00",
+          "tree_id": "d6c4dcba4e00d8eeaef1a15e4179e88fd1095ec0",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/37e473a268869d7c47912cd6488c48d17d3cc090"
+        },
+        "date": 1775631620193,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 88.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 78.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 72.6,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 74.3,
             "unit": "%"
           }
         ]
