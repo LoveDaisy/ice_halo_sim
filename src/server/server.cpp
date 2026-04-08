@@ -335,6 +335,7 @@ void ServerImpl::DoSnapshot() {
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
     if (!snapshot_dirty_) {
+      ILOG_DEBUG(logger_, "DoSnapshot: skip (snapshot_dirty_=false)");
       return;
     }
     for (const auto& c : consumers_) {
@@ -614,6 +615,8 @@ void ServerImpl::ConsumeData() {
           first_consume_logged = true;
         }
       }
+    } else {
+      ILOG_DEBUG(logger_, "ConsumeData: skip consume (sim_scene_cnt_={})", sim_scene_cnt_.load());
     }
     sim_scene_cnt_--;
     if (sim_scene_cnt_ < kMaxSceneCnt / 2) {
