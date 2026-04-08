@@ -8,14 +8,19 @@ Welcome to the Lumice project documentation. This page provides navigation and i
 
 ```
 doc/
-├── README.md / README_zh.md       # Documentation index (English/Chinese)
-├── architecture.md / _zh.md       # System architecture
-├── configuration.md / _zh.md      # Configuration guide
-├── c_api.md / _zh.md              # C API reference
-├── developer-guide.md / _zh.md    # Developer guide
-├── gui-guide.md / _zh.md         # GUI application guide
-├── api/                           # API docs (Doxygen-generated)
-└── figs/                          # Image resources
+├── README.md / README_zh.md                         # Documentation index (English/Chinese)
+├── architecture.md / _zh.md                         # System architecture
+├── configuration.md / _zh.md                        # Configuration guide
+├── c_api.md / _zh.md                                # C API reference
+├── developer-guide.md / _zh.md                      # Developer guide
+├── gui-guide.md / _zh.md                            # GUI application guide
+├── performance-testing.md / _zh.md                  # Performance testing guide
+├── windows-remote-testing.md / _zh.md               # Windows remote testing guide
+├── crystal-orientation-sampling.md / _zh.md         # Crystal orientation sampling (research)
+├── beam-tracing.md / _zh.md                         # Beam tracing algorithm (research)
+├── inverse-rendering.md / _zh.md                    # Inverse rendering (research)
+├── api/                                             # API docs (Doxygen-generated)
+└── figs/                                            # Image resources
 ```
 
 ## User Documentation
@@ -57,11 +62,33 @@ For project developers and contributors:
   - Thread safety notes
   - Integration with other languages
 
+- **[Performance Testing](performance-testing.md)**: Performance testing guide
+  - CLI benchmarks, GUI automated tests, manual/remote testing
+  - Log analysis with `scripts/analyze_perf_log.py`
+
+- **[Windows Remote Testing](windows-remote-testing.md)**: Windows remote testing guide
+  - Running tests on Windows via watcher and SSH
+  - VSync/DWM real-display testing
+
 - **[API Documentation](api/html/)**: Auto-generated API docs
   - Generated with Doxygen
   - Complete reference for all public APIs
   - **Generate locally**: run `doxygen .doxygen-config` (from project root)
   - Generated docs are located at `doc/api/html/`
+
+## Research Documentation
+
+Experimental and theoretical explorations (not implemented in production):
+
+- **[Beam Tracing](beam-tracing.md)**: Beam tracing algorithm research
+  - Theoretical analysis and experimental results
+  - Comparison with Monte Carlo ray tracing
+
+- **[Crystal Orientation Sampling](crystal-orientation-sampling.md)**: Crystal orientation sampling methods
+  - SO(3) sampling strategies and convergence analysis
+
+- **[Inverse Rendering](inverse-rendering.md)**: Inverse rendering research
+  - Parameter estimation from observed halo images
 
 ## Quick Links
 

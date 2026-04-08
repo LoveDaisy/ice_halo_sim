@@ -142,7 +142,7 @@ CLI: `-v` 或 `--log-level verbose`；C API: `LUMICE_LOG_VERBOSE`
 ## 注意事项
 
 - `config.json`, `test.json` 已在 `.gitignore`，用 `examples/config_example.json` 作模板
-- `*.jpg` 已在 `.gitignore`，`test/e2e/references/*.jpg` 通过 `!` 规则排除
+- `*.jpg` 已在 `.gitignore`，`test/e2e/references/*.jpg` 和 `test/gui/references/*.jpg` 通过 `!` 规则排除
 - `scratchpad/` 已在 `.gitignore`，仅本地任务管理用
 - **禁止使用 `git add -f` 强制追踪被 `.gitignore` 忽略的文件**。`.gitignore` 中忽略的文件都是有理由的, 遇到不确定的情况, 先询问用户
 - CI 对所有分支 push 触发 build+unit test；E2E 测试仅在 PR 和 main 上运行

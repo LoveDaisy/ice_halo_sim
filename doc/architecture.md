@@ -18,7 +18,7 @@ The project adopts a Server-Consumer architecture pattern, supporting multi-thre
 ### Architecture Highlights
 
 - **Server-Consumer Pattern**: Uses a producer-consumer pattern to decouple simulation from rendering
-- **Multi-threaded Parallelism**: Uses 4 simulator threads in parallel by default
+- **Multi-threaded Parallelism**: Uses `max(1, hardware_concurrency - 2)` simulator threads in parallel by default
 - **Queue System**: Uses thread-safe queues for data transfer
 - **Single-Project Mode**: One project configuration (containing one scene and multiple renderers) is submitted at a time
 
@@ -80,7 +80,7 @@ The `Simulator` is responsible for ray tracing simulation:
 - Puts simulation results into the data queue
 
 **Characteristics**:
-- Multiple parallel instances: 4 `Simulator` instances are created by default
+- Multiple parallel instances: `max(1, hardware_concurrency - 2)` `Simulator` instances are created by default
 - Independent threads: each `Simulator` runs in its own thread
 - Independent RNG: each instance uses a different random seed
 
@@ -162,7 +162,7 @@ Create Consumers (Render/Stats)
   ↓
 Start() → GenerateScene() (generate scenes)
   ↓
-scene_queue_ (scene queue) ──→ Simulator × 4 (parallel)
+scene_queue_ (scene queue) ──→ Simulator × N (parallel, N = max(1, hardware_concurrency - 2))
   ↓                                    ↓
 data_queue_ (data queue) ←──────────────┘
   ↓
@@ -180,7 +180,7 @@ Server::GetResults()
 The system uses a multi-threaded architecture:
 
 1. **Main thread**: Runs `main()`, calls `Server::CommitConfig()` and result retrieval APIs
-2. **Simulator threads**: 4 threads by default, each running a `Simulator::Run()`
+2. **Simulator threads**: `max(1, hardware_concurrency - 2)` threads by default, each running a `Simulator::Run()`
 3. **Scene generation thread**: The `GenerateScene()` thread generates scenes from the project configuration and enqueues them into `scene_queue_`
 4. **Data consumption thread**: The `ConsumeData()` thread dequeues data and dispatches it to consumers
 
@@ -286,7 +286,7 @@ The system uses a multi-threaded architecture:
 
 ## Program Entry Points
 
-**`main.c` → `Lumice`** (CLI)
+**`main.cpp` → `Lumice`** (CLI)
 - Purpose: Command-line simulation program
 - Interacts with the core library through the `lumice.h` public API
 - Usage:
@@ -376,7 +376,7 @@ All dependencies are managed automatically via [CPM.cmake](https://github.com/cp
 1. **Thread Safety**: All shared resources require appropriate synchronization mechanisms
 2. **Memory Management**: Pay attention to the lifecycle of data in queues
 3. **Error Handling**: Configuration parsing errors must be handled properly
-4. **Performance Tuning**: The number of simulator threads can be adjusted based on hardware
+4. **Performance Tuning**: The number of simulator threads defaults to `max(1, hardware_concurrency - 2)` and scales automatically with hardware
 
 ## Related Documentation
 
