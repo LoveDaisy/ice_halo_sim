@@ -24,24 +24,36 @@ void RenderTopBar(float window_width) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse);
 
-  // Run/Stop + Revert
+  // Run/Stop — fixed width to prevent layout shift
   bool simulating = (g_state.sim_state == SimState::kSimulating);
+  const auto& style = ImGui::GetStyle();
+  float run_stop_width =
+      std::max(ImGui::CalcTextSize("Run").x, ImGui::CalcTextSize("Stop").x) + style.FramePadding.x * 2;
   if (simulating) {
-    if (ImGui::Button("Stop")) {
+    if (ImGui::Button("Stop", ImVec2(run_stop_width, 0))) {
       DoStop();
     }
   } else {
-    if (ImGui::Button("Run")) {
+    if (ImGui::Button("Run", ImVec2(run_stop_width, 0))) {
       DoRun();
     }
   }
-  if (g_state.sim_state == SimState::kModified) {
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "!");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Revert")) {
-      DoRevert();
-    }
+
+  // Revert area — always rendered for stable layout, hidden when not modified
+  bool modified = (g_state.sim_state == SimState::kModified);
+  if (!modified) {
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.0f);
+    ImGui::BeginDisabled();
+  }
+  ImGui::SameLine();
+  ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "!");
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Revert") && modified) {
+    DoRevert();
+  }
+  if (!modified) {
+    ImGui::EndDisabled();
+    ImGui::PopStyleVar();
   }
 
   ImGui::SameLine();
