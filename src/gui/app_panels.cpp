@@ -107,14 +107,14 @@ void RenderTopBar(float window_width) {
     g_state.MarkDirty();
   }
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(120);
+  ImGui::SetNextItemWidth(80);
   if (!g_state.sim.infinite) {
-    if (SliderWithInput("Rays(M)##topbar", &g_state.sim.ray_num_millions, 0.1f, 100.0f)) {
+    if (ImGui::DragFloat("Rays(M)##topbar", &g_state.sim.ray_num_millions, 0.1f, 0.1f, 100.0f, "%.1f")) {
       g_state.MarkDirty();
     }
   } else {
     ImGui::BeginDisabled();
-    SliderWithInput("Rays(M)##topbar", &g_state.sim.ray_num_millions, 0.1f, 100.0f);
+    ImGui::DragFloat("Rays(M)##topbar", &g_state.sim.ray_num_millions, 0.1f, 0.1f, 100.0f, "%.1f");
     ImGui::EndDisabled();
   }
   if (simulating) {

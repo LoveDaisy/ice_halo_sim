@@ -464,7 +464,7 @@ void RenderCrystalTab(GuiState& state) {
       } else {
         char label[64];
         FormatCrystalLabel(label, sizeof(label), cr.id, cr.type, cr.name);
-        if (ImGui::Selectable(label, state.selected_crystal == i)) {
+        if (ImGui::Selectable(label, state.selected_crystal == i, ImGuiSelectableFlags_AllowDoubleClick)) {
           state.selected_crystal = i;
           if (ImGui::IsMouseDoubleClicked(0)) {
             g_editing_crystal_idx = i;
@@ -834,7 +834,7 @@ void RenderFilterTab(GuiState& state) {
       } else {
         char label[64];
         FormatFilterLabel(label, sizeof(label), f.id, f.name);
-        if (ImGui::Selectable(label, state.selected_filter == i)) {
+        if (ImGui::Selectable(label, state.selected_filter == i, ImGuiSelectableFlags_AllowDoubleClick)) {
           state.selected_filter = i;
           if (ImGui::IsMouseDoubleClicked(0)) {
             g_editing_filter_idx = i;
