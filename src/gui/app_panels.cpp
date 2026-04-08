@@ -7,6 +7,7 @@
 
 #include "config/render_config.hpp"
 #include "gui/app.hpp"
+#include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/panels.hpp"
@@ -340,6 +341,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   if (ImGui::BeginTabBar("ViewTabs")) {
     // ---- View Tab ----
     if (ImGui::BeginTabItem("View")) {
+      ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
       ImGui::SeparatorText("Projection");
       ImGui::Combo("Lens Type##view", &r.lens_type, kLensTypeNames, kLensTypeCount);
       float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
@@ -355,11 +357,13 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f, "%.1f");
       ImGui::EndDisabled();
 
+      ImGui::PopItemWidth();
       ImGui::EndTabItem();
     }
 
     // ---- Display Tab ----
     if (ImGui::BeginTabItem("Display")) {
+      ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
       ImGui::SeparatorText("Rendering");
       const char* res_labels[] = { "512", "1024", "2048", "4096" };
       ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.28f, 0.12f, 0.6f));
@@ -426,11 +430,13 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       ImGui::EndDisabled();
       ImGui::EndDisabled();
 
+      ImGui::PopItemWidth();
       ImGui::EndTabItem();
     }
 
     // ---- Overlay Tab ----
     if (ImGui::BeginTabItem("Overlay")) {
+      ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
       ImGui::SeparatorText("Auxiliary Lines");
       ImGui::Checkbox("Horizon##overlay", &g_state.show_horizon);
       ImGui::SameLine();
@@ -516,6 +522,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         }
       }
 
+      ImGui::PopItemWidth();
       ImGui::EndTabItem();
     }
 

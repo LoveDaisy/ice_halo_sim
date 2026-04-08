@@ -5,14 +5,11 @@
 #include <cstdio>
 
 #include "config/render_config.hpp"
+#include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "imgui.h"
 
 namespace lumice::gui {
-
-// Common layout constants for SliderWithInput / SliderIntWithInput
-constexpr float kLabelColWidth = 70.0f;
-constexpr float kInputWidth = 60.0f;
 
 // Compute slider width and prepare IDs for the [slider] [input] Label layout.
 // Writes slider_id and input_id buffers, returns the computed slider width.

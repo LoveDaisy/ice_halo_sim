@@ -32,6 +32,10 @@ constexpr int kCalibrationWindowMs = 50;
 // This floor ensures Windows (lower throughput) never drops below a safe minimum.
 constexpr unsigned long kMinRaysFloor = 5000;
 
+// SliderWithInput / control alignment layout constants
+constexpr float kLabelColWidth = 70.0f;
+constexpr float kInputWidth = 60.0f;
+
 // Auxiliary line overlay
 constexpr int kMaxSunCircles = 16;
 
