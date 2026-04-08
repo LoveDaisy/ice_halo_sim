@@ -95,6 +95,32 @@ void RenderTopBar(float window_width) {
     }
   }
 
+  // Ray count shortcut
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
+  ImGui::SameLine();
+
+  if (simulating) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::Checkbox("Infinite##topbar", &g_state.sim.infinite)) {
+    g_state.MarkDirty();
+  }
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(120);
+  if (!g_state.sim.infinite) {
+    if (SliderWithInput("Rays(M)##topbar", &g_state.sim.ray_num_millions, 0.1f, 100.0f)) {
+      g_state.MarkDirty();
+    }
+  } else {
+    ImGui::BeginDisabled();
+    SliderWithInput("Rays(M)##topbar", &g_state.sim.ray_num_millions, 0.1f, 100.0f);
+    ImGui::EndDisabled();
+  }
+  if (simulating) {
+    ImGui::EndDisabled();
+  }
+
   ImGui::End();
 }
 
