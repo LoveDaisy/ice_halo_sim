@@ -18,7 +18,7 @@
 ### 架构特点
 
 - **服务器-消费者模式**：采用生产者-消费者模式，实现模拟和渲染的解耦
-- **多线程并行**：默认使用 4 个模拟器线程并行处理
+- **多线程并行**：默认使用 `max(1, hardware_concurrency - 2)` 个模拟器线程并行处理
 - **队列系统**：使用线程安全的队列进行数据传递
 - **单项目模式**：每次提交一个项目配置（包含一个场景和多个渲染器）
 
@@ -80,7 +80,7 @@ struct Error {
 - 将模拟结果放入数据队列
 
 **特点**：
-- 多实例并行：默认创建 4 个 Simulator 实例
+- 多实例并行：默认创建 `max(1, hardware_concurrency - 2)` 个 Simulator 实例
 - 独立线程：每个 Simulator 运行在独立线程中
 - 独立随机数生成器：每个实例使用不同的种子
 
@@ -162,7 +162,7 @@ ConfigManager (解析配置)
   ↓
 Start() → GenerateScene() (生成场景)
   ↓
-scene_queue_ (场景队列) ──→ Simulator × 4 (并行)
+scene_queue_ (场景队列) ──→ Simulator × N (并行, N = max(1, hardware_concurrency - 2))
   ↓                                    ↓
 data_queue_ (数据队列) ←──────────────┘
   ↓
@@ -180,7 +180,7 @@ Server::GetResults()
 使用多线程架构：
 
 1. **主线程**：运行 `main()` 函数，调用 `Server::CommitConfig()` 和结果获取接口
-2. **模拟器线程**：默认 4 个线程，每个运行一个 `Simulator::Run()`
+2. **模拟器线程**：默认 `max(1, hardware_concurrency - 2)` 个线程，每个运行一个 `Simulator::Run()`
 3. **场景生成线程**：`GenerateScene()` 线程，从项目配置生成场景并放入 `scene_queue_`
 4. **数据消费线程**：`ConsumeData()` 线程，从数据队列分发数据到消费者
 
@@ -286,7 +286,7 @@ Server::GetResults()
 
 ## 程序入口
 
-**`main.c` → `Lumice`**（CLI）
+**`main.cpp` → `Lumice`**（CLI）
 - 功能：命令行模拟程序
 - 通过 `lumice.h` 公共 API 与核心库交互
 - 使用方式：
@@ -376,7 +376,7 @@ void LUMICE_StopServer(LUMICE_Server* server);
 1. **线程安全**：所有共享资源都需要适当的同步机制
 2. **内存管理**：注意队列中数据的生命周期
 3. **错误处理**：配置解析错误需要适当处理
-4. **性能调优**：模拟器线程数可以根据硬件调整
+4. **性能调优**：模拟器线程数默认为 `max(1, hardware_concurrency - 2)`，自动随硬件扩展
 
 ## 相关文档
 

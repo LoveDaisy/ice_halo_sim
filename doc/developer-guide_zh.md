@@ -8,8 +8,8 @@
 
 ### 系统要求
 
-- **操作系统**: macOS 10.14+ 或 Linux (Ubuntu 18.04+)
-- **编译器**: 支持C++17的编译器（GCC 7+, Clang 5+）
+- **操作系统**: macOS 13.0+（Ventura）、Linux（Ubuntu 24.04+）或 Windows 10+
+- **编译器**: 支持 C++17 的编译器（GCC、Clang 或 MSVC）
 - **CMake**: >= 3.14
 - **Ninja**（推荐）: 默认构建生成器，增量构建更快且自动并行
 
@@ -532,6 +532,47 @@ t->TestFunc = [](ImGuiTestContext* ctx) {
 - **断言选择**：
   - `EXPECT_*`: 测试失败继续执行
   - `ASSERT_*`: 测试失败立即停止
+
+### E2E 测试
+
+端到端测试验证完整的 CLI 模拟管线，从配置解析到图像输出。
+
+#### 框架
+
+- **Python**：pytest + Pillow（图像比较）
+- **位置**：`test/e2e/`
+
+#### 测试结构
+
+```
+test/e2e/
+├── conftest.py              # pytest fixtures（二进制路径、临时目录）
+├── test_smoke.py            # 冒烟测试（PSNR 图像验证）
+├── test_error_handling.py   # 错误场景测试（退出码验证）
+├── configs/                 # 测试配置 JSON 文件
+└── references/              # 参考输出图片（*.jpg）
+```
+
+#### 运行 E2E 测试
+
+```bash
+# 需要已构建的二进制文件 build/cmake_install/Lumice
+pytest test/e2e/ -v
+```
+
+#### 图像验证
+
+E2E 冒烟测试使用 PSNR（峰值信噪比）将输出图像与参考图像进行比较：
+- 参考图片存放在 `test/e2e/references/*.jpg`
+- PSNR 阈值：通常为 40 dB，超过即通过
+- 更新参考图片：使用测试配置运行 CLI 模拟，替换参考文件
+
+#### 添加新的 E2E 测试
+
+1. 在 `test/e2e/configs/` 中创建配置 JSON
+2. 使用新配置运行 CLI 生成参考图像
+3. 将参考图像保存到 `test/e2e/references/`
+4. 在 `test_smoke.py` 或新测试文件中添加测试用例
 
 ## 调试技巧
 

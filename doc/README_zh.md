@@ -8,14 +8,20 @@
 
 ```
 doc/
-├── README.md / README_zh.md       # 文档索引（英文/中文）
-├── architecture.md / _zh.md       # 系统架构文档
-├── configuration.md / _zh.md      # 配置文档
-├── c_api.md / _zh.md              # C接口使用文档
-├── developer-guide.md / _zh.md    # 开发指南
-├── gui-guide.md / _zh.md         # GUI 使用指南
-├── api/                           # API文档（Doxygen生成）
-└── figs/                          # 图片资源
+├── README.md / README_zh.md                         # 文档索引（英文/中文）
+├── architecture.md / _zh.md                         # 系统架构文档
+├── configuration.md / _zh.md                        # 配置文档
+├── c_api.md / _zh.md                                # C接口使用文档
+├── developer-guide.md / _zh.md                      # 开发指南
+├── gui-guide.md / _zh.md                            # GUI 使用指南
+├── performance-testing.md / _zh.md                  # 性能测试指南
+├── windows-remote-testing.md / _zh.md               # Windows 远程测试指南
+├── crystal-orientation-sampling.md / _zh.md         # 晶体取向采样（研究）
+├── research/                                        # 研究文档（未在生产中实现）
+│   ├── beam-tracing.md / _zh.md                     # 光束追踪算法
+│   └── inverse-rendering.md / _zh.md                # 逆渲染
+├── api/                                             # API文档（Doxygen生成）
+└── figs/                                            # 图片资源
 ```
 
 ## 用户文档
@@ -57,11 +63,33 @@ doc/
   - 线程安全性说明
   - 与其他语言集成示例
 
+- **[性能测试指南](performance-testing_zh.md)**: 性能测试指南
+  - CLI 基准测试、GUI 自动化测试、手动/远程测试
+  - 使用 `scripts/analyze_perf_log.py` 分析日志
+
+- **[Windows 远程测试指南](windows-remote-testing_zh.md)**: Windows 远程测试指南
+  - 通过 watcher 和 SSH 在 Windows 上执行测试
+  - VSync/DWM 真实显示器测试
+
 - **[API文档](api/html/)**: 自动生成的API文档
   - 使用Doxygen生成
   - 包含所有公共API的详细说明
   - **本地生成**：运行 `doxygen .doxygen-config`（在项目根目录下）
   - 生成的文档位于 `doc/api/html/`
+
+## 研究文档
+
+实验性和理论性探索（未在生产代码中实现）：
+
+- **[光束追踪](research/beam-tracing_zh.md)**: 光束追踪算法研究
+  - 理论分析与实验结果
+  - 与蒙特卡罗光线追踪的对比
+
+- **[晶体取向采样](crystal-orientation-sampling_zh.md)**: 晶体取向采样方法
+  - SO(3) 采样策略与收敛性分析
+
+- **[逆渲染](research/inverse-rendering_zh.md)**: 逆渲染研究
+  - 从观测到的冰晕图像估计参数
 
 ## 快速链接
 
