@@ -400,7 +400,9 @@ void CalibrateQualityThreshold() {
     return;
   }
 
-  // Wait for simulation to complete (server returns to IDLE)
+  // Wait for simulation to complete (server returns to IDLE with data).
+  // The server may transiently report IDLE during startup before simulation threads spin up,
+  // so we also require sim_ray_num > 0 to confirm actual data was produced.
   constexpr int kMaxWaitMs = 2000;
   int waited_ms = 0;
   while (waited_ms < kMaxWaitMs) {
@@ -409,7 +411,11 @@ void CalibrateQualityThreshold() {
     LUMICE_ServerState state{};
     LUMICE_QueryServerState(g_server, &state);
     if (state == LUMICE_SERVER_IDLE) {
-      break;
+      LUMICE_StatsResult check{};
+      LUMICE_GetStatsResults(g_server, &check, 1);
+      if (check.sim_ray_num > 0) {
+        break;
+      }
     }
   }
 
