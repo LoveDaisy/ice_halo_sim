@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775659851224,
+  "lastUpdate": 1775659853260,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -1499,6 +1499,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 58.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "51a7c57890eafc5c0773329a1d52f0fb1a64d6d3",
+          "message": "Merge pull request #58 from LoveDaisy/feat/toolbar_ux\n\nGUI panel UX improvements and toolbar polish",
+          "timestamp": "2026-04-08T22:47:18+08:00",
+          "tree_id": "6b94a3971124f54864e7b09e50f91de9ff6ebdd0",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/51a7c57890eafc5c0773329a1d52f0fb1a64d6d3"
+        },
+        "date": 1775659852564,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 93.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 78,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 75.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 68.7,
             "unit": "%"
           }
         ]
