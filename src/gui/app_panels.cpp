@@ -418,6 +418,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         DoClearBackground();
       }
       ImGui::EndDisabled();
+      ImGui::SameLine();
       ImGui::BeginDisabled(no_bg);
       ImGui::Checkbox("Show##display_bg", &g_state.bg_show);
       ImGui::BeginDisabled(!g_state.bg_show);
