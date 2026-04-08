@@ -500,6 +500,13 @@ void DoRun() {
     // DoStop→DoRun (poller was paused), PollOnce self-pause (finite rays done), etc.
     // If already kRunning, this is a no-op (zero overhead).
     g_server_poller.EnsureRunning(g_server);
+    // Discard old staged texture before unlocking to prevent stale data from being
+    // uploaded in the next SyncFromPoller (filter change may not trigger rebuild,
+    // so Start() may not have been called to reset staged data).
+    if (g_state.intensity_locked) {
+      g_server_poller.InvalidateStagedTexture();
+    }
+    g_state.intensity_locked = false;
     auto run_end = std::chrono::steady_clock::now();
     GUI_LOG_INFO("[GUI] DoRun: config committed ({:.1f}ms)",
                  std::chrono::duration<double, std::milli>(run_end - run_start).count());
@@ -571,7 +578,11 @@ void SyncFromPoller() {
 
   // Upload XYZ float texture (GL call — must be on main thread).
   // Quality gate is in ServerPoller::PollOnce — staged data is always worth displaying.
-  bool upload_ok = data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0;
+  // The intensity > 0 guard prevents black-frame flicker during slider scrubbing (restart
+  // transiently produces 0-intensity snapshots). Filter changes set intensity_locked via
+  // MarkFilterDirty() to block old data from overwriting the cleared display.
+  bool upload_ok = data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0 &&
+                   !g_state.intensity_locked;
   if (upload_ok) {
     GUI_LOG_VERBOSE("[GUI] SyncFromPoller: upload tex_rays={}, intensity={:.6f}, eff_pixels={}, factor={:.6f}",
                     data.texture_ray_count, data.snapshot_intensity, data.effective_pixels, data.intensity_factor);

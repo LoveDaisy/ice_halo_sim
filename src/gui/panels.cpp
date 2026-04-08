@@ -716,14 +716,14 @@ void RenderSceneTab(GuiState& state) {
             }())) {
           if (ImGui::Selectable("None", entry.filter_id < 0)) {
             entry.filter_id = -1;
-            state.MarkDirty();
+            state.MarkFilterDirty();
           }
           for (auto& f : state.filters) {
             char item_label[64];
             FormatFilterLabel(item_label, sizeof(item_label), f.id, f.name);
             if (ImGui::Selectable(item_label, entry.filter_id == f.id)) {
               entry.filter_id = f.id;
-              state.MarkDirty();
+              state.MarkFilterDirty();
             }
           }
           ImGui::EndCombo();
@@ -798,7 +798,7 @@ void RenderFilterTab(GuiState& state) {
         if (state.selected_filter >= static_cast<int>(state.filters.size())) {
           state.selected_filter = static_cast<int>(state.filters.size()) - 1;
         }
-        state.MarkDirty();
+        state.MarkFilterDirty();
       }
     }
   } else {
@@ -863,7 +863,7 @@ void RenderFilterTab(GuiState& state) {
         if (state.selected_filter >= static_cast<int>(state.filters.size())) {
           state.selected_filter = static_cast<int>(state.filters.size()) - 1;
         }
-        state.MarkDirty();
+        state.MarkFilterDirty();
       }
       g_pending_delete_filter_idx = -1;
       ImGui::CloseCurrentPopup();
@@ -886,23 +886,31 @@ void RenderFilterTab(GuiState& state) {
   auto& f = state.filters[state.selected_filter];
   ImGui::PushItemWidth(-80);
 
-  DIRTY_IF(ImGui::Combo("Action", &f.action, kFilterActionNames, kFilterActionCount));
+  if (ImGui::Combo("Action", &f.action, kFilterActionNames, kFilterActionCount)) {
+    state.MarkFilterDirty();
+  }
 
   char raypath_buf[256];
   snprintf(raypath_buf, sizeof(raypath_buf), "%s", f.raypath_text.c_str());
   if (ImGui::InputText("Raypath", raypath_buf, sizeof(raypath_buf))) {
     f.raypath_text = raypath_buf;
-    state.MarkDirty();
+    state.MarkFilterDirty();
   }
   ImGui::TextDisabled("Face indices separated by '-', e.g. 3-1-5-7-4 (comma also accepted)");
 
   ImGui::Text("Symmetry:");
   ImGui::SameLine();
-  DIRTY_IF(ImGui::Checkbox("P", &f.sym_p));
+  if (ImGui::Checkbox("P", &f.sym_p)) {
+    state.MarkFilterDirty();
+  }
   ImGui::SameLine();
-  DIRTY_IF(ImGui::Checkbox("B", &f.sym_b));
+  if (ImGui::Checkbox("B", &f.sym_b)) {
+    state.MarkFilterDirty();
+  }
   ImGui::SameLine();
-  DIRTY_IF(ImGui::Checkbox("D", &f.sym_d));
+  if (ImGui::Checkbox("D", &f.sym_d)) {
+    state.MarkFilterDirty();
+  }
 
   ImGui::PopItemWidth();
 }

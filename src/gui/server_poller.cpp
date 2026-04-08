@@ -42,6 +42,8 @@ void ServerPoller::Start(LUMICE_Server* server) {
   }
   // Reset generation tracking so the worker detects the first snapshot as new data.
   last_generation_ = 0;
+  // Reset quality gate timeout so fallback doesn't fire prematurely after restart.
+  last_quality_pass_time_ = std::chrono::steady_clock::now();
 
   {
     std::lock_guard<std::mutex> lk(mutex_);
@@ -85,6 +87,7 @@ void ServerPoller::EnsureRunning(LUMICE_Server* server) {
     // kPaused → resume polling
     server_ = server;
     last_generation_ = 0;
+    last_quality_pass_time_ = std::chrono::steady_clock::now();
     {
       std::lock_guard<std::mutex> lock(data_mutex_);
       staged_.valid = false;
@@ -93,6 +96,11 @@ void ServerPoller::EnsureRunning(LUMICE_Server* server) {
   }
   cv_.notify_all();
   GUI_LOG_DEBUG("[Poller] EnsureRunning: resumed from paused");
+}
+
+void ServerPoller::InvalidateStagedTexture() {
+  std::lock_guard<std::mutex> lk(data_mutex_);
+  staged_.has_new_texture = false;
 }
 
 void ServerPoller::SetCalibratedThreshold(unsigned long threshold) {
@@ -178,7 +186,20 @@ void ServerPoller::PollOnce() {
       unsigned long min_rays = calibrated_ ? calibrated_min_rays_ : gui::kMinRaysFloor;
       bool quality_ok = cached_stats.sim_ray_num == 0 || cached_stats.sim_ray_num >= min_rays;
 
+      // Timeout fallback: if quality gate has been rejecting for too long (e.g. empty filter),
+      // force upload so stale textures don't persist indefinitely.
+      auto now = std::chrono::steady_clock::now();
+      if (!quality_ok) {
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_quality_pass_time_).count();
+        if (elapsed_ms > gui::kQualityGateTimeoutMs) {
+          quality_ok = true;
+          GUI_LOG_VERBOSE("[Poller] quality gate timeout: forcing upload after {}ms (rays={}, min={})", elapsed_ms,
+                          cached_stats.sim_ray_num, min_rays);
+        }
+      }
+
       if (quality_ok) {
+        last_quality_pass_time_ = now;
         size_t float_count = static_cast<size_t>(xyz_results[0].img_width) * xyz_results[0].img_height * 3;
         staged_.xyz_data.resize(float_count);
         std::memcpy(staged_.xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
