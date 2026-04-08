@@ -157,17 +157,20 @@ void RenderLeftPanel(float window_height) {
           g_state.selected_crystal >= 0 && g_state.selected_crystal < static_cast<int>(g_state.crystals.size());
 
       if (has_crystal) {
-        // Calculate fixed preview section height: separator + square image + controls row
+        // Split available height between scrollable params (upper) and fixed preview (lower).
+        // Preview is square (width = content width), but shrinks if panel is too short.
         float content_w = ImGui::GetContentRegionAvail().x;
-        float preview_size = content_w;
+        float avail_h = ImGui::GetContentRegionAvail().y;
         float separator_h = ImGui::GetTextLineHeight() + ImGui::GetStyle().ItemSpacing.y * 2;
         float controls_h = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
-        float preview_section_h = separator_h + preview_size + controls_h;
+        float overhead = separator_h + controls_h;
+
+        constexpr float kMinParamsHeight = 150.0f;
+        float max_preview_size = avail_h - kMinParamsHeight - overhead;
+        float preview_size = std::max(0.0f, std::min(content_w, max_preview_size));
+        float params_h = avail_h - preview_size - overhead;
 
         // Parameters scroll region (upper part)
-        float avail_h = ImGui::GetContentRegionAvail().y;
-        constexpr float kMinParamsHeight = 150.0f;
-        float params_h = std::max(kMinParamsHeight, avail_h - preview_section_h);
         ImGui::BeginChild("##CrystalParams", ImVec2(0, params_h), ImGuiChildFlags_None);
         RenderCrystalTab(g_state);
         ImGui::EndChild();
@@ -250,22 +253,19 @@ void RenderLeftPanel(float window_height) {
         auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
         g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
 
-        // Display FBO texture — use remaining width, may be smaller than full panel if params_h was clamped
-        float actual_preview_size = ImGui::GetContentRegionAvail().x;
-
+        // Display FBO texture
         ImVec2 area_start = ImGui::GetCursorScreenPos();
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
-        draw_list->AddRectFilled(area_start,
-                                 ImVec2(area_start.x + actual_preview_size, area_start.y + actual_preview_size),
+        draw_list->AddRectFilled(area_start, ImVec2(area_start.x + preview_size, area_start.y + preview_size),
                                  IM_COL32(38, 38, 38, 255));
 
         auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
         ImVec2 uv0(0, 1);
         ImVec2 uv1(1, 0);
-        ImGui::Image(tex_id, ImVec2(actual_preview_size, actual_preview_size), uv0, uv1);
+        ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
 
         ImGui::SetCursorScreenPos(area_start);
-        ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(actual_preview_size, actual_preview_size));
+        ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(preview_size, preview_size));
         if (ImGui::IsItemHovered()) {
           ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
           ImGuiIO& io = ImGui::GetIO();
