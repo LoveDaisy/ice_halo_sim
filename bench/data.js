@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775715689987,
+  "lastUpdate": 1775715691834,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -1919,6 +1919,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 68.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1f75c3ab8ea1beb25a0388b63e801e66ef298674",
+          "message": "Merge pull request #61 from LoveDaisy/feat/legacy_axis_dist\n\nfeat(core): add legacy Gaussian distribution type",
+          "timestamp": "2026-04-09T14:17:22+08:00",
+          "tree_id": "3100700029c59b35185531fcee8ac4da29d06826",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/1f75c3ab8ea1beb25a0388b63e801e66ef298674"
+        },
+        "date": 1775715691149,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 96.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 75.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 73.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 68,
             "unit": "%"
           }
         ]
