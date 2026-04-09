@@ -198,6 +198,19 @@ struct GuiState {
     }
   }
 
+  // Mark a filter-related change. Immediately clears the display (shader renders black
+  // via intensity_scale=0) and locks uploads until the next CommitConfig restart, preventing
+  // stale data from the old simulation from overwriting the cleared state.
+  void MarkFilterDirty() {
+    MarkDirty();
+    snapshot_intensity = 0;
+    intensity_locked = true;
+  }
+
+  // When true, SyncFromPoller skips texture upload to prevent old simulation data from
+  // overwriting a filter-change-triggered display clear. Unlocked by CommitConfig restart.
+  bool intensity_locked = false;
+
   // Panel state (view preference — does not call MarkDirty)
   bool right_panel_collapsed = false;
 

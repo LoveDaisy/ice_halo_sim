@@ -27,6 +27,13 @@ constexpr int kTargetFrameTimeMs = 16;  // Fallback frame time limit (ms). Preve
 // accidentally tighten/loosen the quality gate.
 constexpr int kCalibrationWindowMs = 50;
 
+// Timeout for quality gate fallback (ms). If the quality gate continuously rejects uploads
+// for this duration, force-upload the current buffer (may be empty → black screen).
+// This handles edge cases where sim_ray_num grows very slowly (e.g. very few simulation threads).
+// The main stale-texture fix is the filter_changed flag in GuiState; this timeout is defense-in-depth.
+// Rationale: normal first upload takes 100-200ms; 500ms is 2.5-5x margin.
+constexpr int kQualityGateTimeoutMs = 500;
+
 // Floor for the adaptive quality gate threshold (min sim_ray_num for texture upload).
 // After calibration, the actual threshold may be higher (adapted to platform throughput).
 // This floor ensures Windows (lower throughput) never drops below a safe minimum.

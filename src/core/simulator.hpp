@@ -69,6 +69,10 @@ class Simulator {
   Logger logger_{ "Simulator" };
 };
 
+// Distributes ray_num rays across crystals proportionally using cumulative rounding.
+// Returns array of size proportions.size() with exact sum == ray_num.
+std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& proportions, size_t ray_num);
+
 }  // namespace lumice
 
 #endif  // CORE_SIMULATOR_H_

@@ -231,26 +231,33 @@ RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num) {
 }
 
 
-std::unique_ptr<size_t[]> PartitionCrystalRayNum(RandomNumberGenerator& rng, const MsInfo& ms_info, int ray_num) {
-  auto crystal_cnt = ms_info.setting_.size();
+std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& proportions, size_t ray_num) {
+  auto crystal_cnt = proportions.size();
   auto c_num = std::make_unique<size_t[]>(crystal_cnt);
-  auto prob = std::make_unique<float[]>(crystal_cnt + 1);
-  for (size_t ci = 0; ci < crystal_cnt; ci++) {
-    prob[ci + 1] = ms_info.setting_[ci].crystal_proportion_ + prob[ci];
-  }
-  for (size_t ci = 0; ci < crystal_cnt; ci++) {
-    prob[ci] /= prob[crystal_cnt];
+  if (crystal_cnt == 0 || ray_num == 0) {
+    return c_num;
   }
 
-  for (int i = 0; i < ray_num; i++) {
-    auto u = rng.GetUniform();
-    for (size_t ci = 0; ci < crystal_cnt; ci++) {
-      if (prob[ci] <= u && u < prob[ci + 1]) {
-        c_num[ci]++;
-        break;
-      }
-    }
+  // Normalize proportions
+  float total_prop = 0.0f;
+  for (size_t ci = 0; ci < crystal_cnt; ci++) {
+    total_prop += std::max(0.0f, proportions[ci]);
   }
+  if (total_prop <= 0.0f) {
+    return c_num;
+  }
+
+  // Cumulative rounding (Bresenham-style)
+  double accum = 0.0;
+  size_t assigned = 0;
+  for (size_t ci = 0; ci < crystal_cnt - 1; ci++) {
+    accum += (static_cast<double>(std::max(0.0f, proportions[ci])) / total_prop) * ray_num;
+    auto target = static_cast<size_t>(accum);
+    c_num[ci] = target - assigned;
+    assigned = target;
+  }
+  // Last crystal gets the remainder for exact total
+  c_num[crystal_cnt - 1] = ray_num - assigned;
 
   return c_num;
 }
@@ -464,7 +471,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   for (size_t mi = 0; mi < config.ms_.size() && !stop_; mi++) {
     const auto& m = config.ms_[mi];
     auto ms_crystal_cnt = m.setting_.size();
-    auto crystal_ray_num = PartitionCrystalRayNum(rng_, m, ray_num);
+    std::vector<float> proportions;
+    proportions.reserve(ms_crystal_cnt);
+    for (size_t ci = 0; ci < ms_crystal_cnt; ci++) {
+      proportions.push_back(m.setting_[ci].crystal_proportion_);
+    }
+    auto crystal_ray_num = PartitionCrystalRayNum(proportions, ray_num);
 
     // NOTE: ray_num will change between scatterings.
     buffer_data[0].Reset(ray_num * 2);

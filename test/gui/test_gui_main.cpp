@@ -24,6 +24,7 @@
 #include "gui/file_io.hpp"
 #include "gui/gl_init.h"
 #include "gui/gui_logger.hpp"
+#include "gui/log_sink.hpp"
 #include "gui/panels.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -266,17 +267,17 @@ static void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
 
       // Scenario A: Add a crystal, then delete the new (unreferenced) one
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal/Add##crystal");
+      ctx->ItemClick("**/Add##crystal");
       IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
       IM_CHECK_EQ(gui::g_state.selected_crystal, 1);
 
       // Delete the new crystal (not referenced by scattering) — should delete directly
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal/Del##crystal");
+      ctx->ItemClick("**/Del##crystal");
       IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
 
       // Scenario B: Try to delete the referenced crystal
       // Need at least 2 crystals for Del to be enabled
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal/Add##crystal");
+      ctx->ItemClick("**/Add##crystal");
       IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
 
       // Select the first crystal (referenced by scattering)
@@ -284,7 +285,7 @@ static void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield();
 
       // Click Del — should open confirmation popup
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal/Del##crystal");
+      ctx->ItemClick("**/Del##crystal");
       ctx->Yield(2);
 
       // Click Delete in the popup to confirm
@@ -308,12 +309,12 @@ static void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield();
 
       // Add a filter
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Filter/Add##filter");
+      ctx->ItemClick("**/Add##filter");
       IM_CHECK_EQ(static_cast<int>(gui::g_state.filters.size()), 1);
       IM_CHECK_EQ(gui::g_state.selected_filter, 0);
 
       // Delete the filter (unreferenced) — direct delete
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Filter/Del##filter");
+      ctx->ItemClick("**/Del##filter");
       IM_CHECK_EQ(static_cast<int>(gui::g_state.filters.size()), 0);
     };
   }
@@ -1883,6 +1884,61 @@ static void RegisterImportExportTests(ImGuiTestEngine* engine) {
 }
 
 
+// ========== Calibration Tests ==========
+
+static void RegisterCalibrationTests(ImGuiTestEngine* engine) {
+  ImGuiTest* t = IM_REGISTER_TEST(engine, "calibration", "no_warning_on_startup");
+  t->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    ResetTestState();
+    gui::g_state = gui::InitDefaultState();
+
+    // Create server with DEBUG log level for diagnostics
+    gui::g_server = LUMICE_CreateServer();
+    IM_CHECK(gui::g_server != nullptr);
+    LUMICE_SetLogLevel(gui::g_server, LUMICE_LOG_DEBUG);
+    gui::SetGuiLogLevel(spdlog::level::debug);
+
+    // Set up log capture: create sink and bridge Core logs
+    auto log_sink = std::make_shared<gui::ImGuiLogSink>();
+    gui::GetGuiLogger().sinks().push_back(log_sink);
+    gui::g_imgui_log_sink = log_sink;
+    LUMICE_SetLogCallback([](LUMICE_LogLevel level, const char* /*name*/, const char* message) {
+      if (gui::g_imgui_log_sink) {
+        auto spd_level = static_cast<spdlog::level::level_enum>(level);
+        gui::g_imgui_log_sink->ReceiveExternal(spd_level, message);
+      }
+    });
+
+    // Run calibration (blocks up to 2s)
+    gui::CalibrateQualityThreshold();
+
+    // Positive assertion: stats must have data
+    LUMICE_StatsResult stats[2]{};
+    LUMICE_GetStatsResults(gui::g_server, stats, 1);
+    IM_CHECK_GT(stats[0].sim_ray_num, 0UL);
+
+    // Negative assertion: no calibration warning
+    bool found_warning = false;
+    log_sink->ForEachEntry([&](size_t, const gui::LogEntry& entry) {
+      if (entry.message.find("no data produced") != std::string::npos) {
+        found_warning = true;
+      }
+    });
+    IM_CHECK(!found_warning);
+
+    // Cleanup: destroy server BEFORE removing sink (avoid dangling writes during join)
+    LUMICE_StopServer(gui::g_server);
+    LUMICE_DestroyServer(gui::g_server);
+    gui::g_server = nullptr;
+    LUMICE_SetLogCallback(nullptr);
+    gui::g_imgui_log_sink = nullptr;
+    gui::GetGuiLogger().sinks().pop_back();
+    gui::SetGuiLogLevel(spdlog::level::warn);  // Restore default level
+  };
+}
+
+
 static void RegisterPerfTests(ImGuiTestEngine* engine) {
   // Scenario 1: Steady-state simulation (baseline)
   // Measures: rays/sec, texture update interval (avg/min/max), texture FPS
@@ -2316,6 +2372,7 @@ int main(int argc, char** argv) {
   RegisterVisualTests(engine);
   RegisterBgOverlayTests(engine);
   RegisterImportExportTests(engine);
+  RegisterCalibrationTests(engine);
   RegisterPerfTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 

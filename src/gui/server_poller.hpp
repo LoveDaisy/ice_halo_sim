@@ -2,6 +2,7 @@
 #define LUMICE_GUI_SERVER_POLLER_HPP
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -58,6 +59,10 @@ class ServerPoller {
   // Uses try_lock so it never blocks the main thread.
   bool TrySyncData(PollerData& out);
 
+  // Discard any staged texture data. Called before unlocking intensity_locked to prevent
+  // old simulation data from being uploaded after a filter change.
+  void InvalidateStagedTexture();
+
   // Set calibrated quality gate threshold (called once at startup after calibration run).
   // Thread-safe: only called from main thread before any Start().
   void SetCalibratedThreshold(unsigned long threshold);
@@ -84,6 +89,10 @@ class ServerPoller {
   // If not set (calibrated_ == false), falls back to gui::kMinRaysFloor.
   bool calibrated_{ false };
   unsigned long calibrated_min_rays_{ 0 };
+
+  // Timeout fallback: force upload if quality gate has been rejecting for too long.
+  // Reset in Start(), updated in PollOnce() on each quality_ok pass.
+  std::chrono::steady_clock::time_point last_quality_pass_time_{ std::chrono::steady_clock::now() };
 };
 
 }  // namespace lumice::gui
