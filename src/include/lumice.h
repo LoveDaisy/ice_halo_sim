@@ -111,11 +111,11 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 // GUI fills this struct directly from UI state, avoiding JSON dump/parse overhead.
 // Cross-references use integer IDs (crystal_id, filter_id), resolved internally by Core.
 
-#define LUMICE_MAX_CONFIG_CRYSTALS 16
-#define LUMICE_MAX_CONFIG_FILTERS 16
+#define LUMICE_MAX_CONFIG_CRYSTALS 256
+#define LUMICE_MAX_CONFIG_FILTERS 256
 #define LUMICE_MAX_CONFIG_RENDERERS 4
 #define LUMICE_MAX_CONFIG_SCATTER_LAYERS 8
-#define LUMICE_MAX_CONFIG_SCATTER_ENTRIES 16
+#define LUMICE_MAX_CONFIG_SCATTER_ENTRIES 256
 #define LUMICE_MAX_CONFIG_RAYPATH_LEN 32
 
 // Axis distribution type constants for LUMICE_AxisDist.type

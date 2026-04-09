@@ -9,6 +9,7 @@
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "imgui.h"
+#include "lumice.h"
 
 namespace lumice::gui {
 
@@ -397,6 +398,7 @@ void ResetPendingDeleteState() {
 void RenderCrystalTab(GuiState& state) {
   ImGui::Text("Crystals");
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
+  ImGui::BeginDisabled(static_cast<int>(state.crystals.size()) >= LUMICE_MAX_CONFIG_CRYSTALS);
   if (ImGui::SmallButton("Add##crystal")) {
     CrystalConfig c;
     c.id = state.next_crystal_id++;
@@ -404,6 +406,7 @@ void RenderCrystalTab(GuiState& state) {
     state.selected_crystal = static_cast<int>(state.crystals.size()) - 1;
     state.MarkDirty();
   }
+  ImGui::EndDisabled();
   ImGui::SameLine();
   if (state.selected_crystal >= 0 && state.selected_crystal < static_cast<int>(state.crystals.size()) &&
       state.crystals.size() > 1) {
@@ -734,6 +737,7 @@ void RenderSceneTab(GuiState& state) {
         ImGui::Separator();
       }
 
+      ImGui::BeginDisabled(static_cast<int>(layer.entries.size()) >= LUMICE_MAX_CONFIG_SCATTER_ENTRIES);
       if (ImGui::SmallButton("+ Entry")) {
         ScatterEntry e;
         if (!state.crystals.empty()) {
@@ -742,6 +746,7 @@ void RenderSceneTab(GuiState& state) {
         layer.entries.push_back(e);
         state.MarkDirty();
       }
+      ImGui::EndDisabled();
 
       ImGui::TreePop();
     }
@@ -749,6 +754,7 @@ void RenderSceneTab(GuiState& state) {
     ImGui::PopID();
   }
 
+  ImGui::BeginDisabled(static_cast<int>(state.scattering.size()) >= LUMICE_MAX_CONFIG_SCATTER_LAYERS);
   if (ImGui::SmallButton("+ Layer")) {
     ScatterLayer new_layer;
     ScatterEntry e;
@@ -759,6 +765,7 @@ void RenderSceneTab(GuiState& state) {
     state.scattering.push_back(new_layer);
     state.MarkDirty();
   }
+  ImGui::EndDisabled();
   ImGui::PopItemWidth();
 }
 
@@ -768,6 +775,7 @@ void RenderSceneTab(GuiState& state) {
 void RenderFilterTab(GuiState& state) {
   ImGui::Text("Filters");
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
+  ImGui::BeginDisabled(static_cast<int>(state.filters.size()) >= LUMICE_MAX_CONFIG_FILTERS);
   if (ImGui::SmallButton("Add##filter")) {
     FilterConfig f;
     f.id = state.next_filter_id++;
@@ -775,6 +783,7 @@ void RenderFilterTab(GuiState& state) {
     state.selected_filter = static_cast<int>(state.filters.size()) - 1;
     state.MarkDirty();
   }
+  ImGui::EndDisabled();
   ImGui::SameLine();
   if (state.selected_filter >= 0 && state.selected_filter < static_cast<int>(state.filters.size())) {
     if (ImGui::SmallButton("Del##filter")) {

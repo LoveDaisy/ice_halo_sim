@@ -55,7 +55,8 @@ class Simulator {
     RayBuffer init_data[2]{};
   };
   void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
-                             CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation);
+                             CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation,
+                             std::vector<std::vector<double>>& ray_alloc_carry);
 
   static constexpr size_t kSmallBatchRayNum = 32;
 
@@ -69,9 +70,12 @@ class Simulator {
   Logger logger_{ "Simulator" };
 };
 
-// Distributes ray_num rays across crystals proportionally using cumulative rounding.
-// Returns array of size proportions.size() with exact sum == ray_num.
-std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& proportions, size_t ray_num);
+// Distributes ray_num rays across crystals proportionally using per-crystal carry with
+// largest-remainder correction. carry[ci] accumulates fractional remainders across calls,
+// enabling fair allocation for crystals with proportion * ray_num < 1.
+// Caller must ensure carry.size() == proportions.size(). Returns array with exact sum == ray_num.
+std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& proportions, size_t ray_num,
+                                                 std::vector<double>& carry);
 
 }  // namespace lumice
 
