@@ -128,7 +128,7 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 typedef struct LUMICE_AxisDist_ {
   int type;    // LUMICE_AXIS_DIST_GAUSS / UNIFORM / ZIGZAG / LAPLACIAN / GAUSS_LEGACY
   float mean;  // degrees
-  float std;   // gauss: std dev; uniform: full range; zigzag: amplitude; laplacian: scale (degrees)
+  float std;   // gauss/gauss_legacy: std dev; uniform: full range; zigzag: amplitude; laplacian: scale (degrees)
 } LUMICE_AxisDist;
 
 typedef struct LUMICE_CrystalParam_ {
