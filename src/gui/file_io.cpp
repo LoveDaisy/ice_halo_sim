@@ -393,6 +393,7 @@ std::string SerializeCoreConfig(const GuiState& state) {
     jr["opacity"] = r.opacity;
     jr["intensity_factor"] = std::pow(2.0f, r.exposure_offset);
     jr["norm_mode"] = state.norm_mode;
+    jr["overlap"] = kDualFisheyeOverlap;
 
     root["render"].push_back(jr);
   }
@@ -478,6 +479,7 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
     dst.opacity = r.opacity;
     dst.intensity_factor = std::pow(2.0f, r.exposure_offset);
     dst.norm_mode = state.norm_mode;
+    dst.overlap = kDualFisheyeOverlap;
   }
 
   // Scene: light source

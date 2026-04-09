@@ -134,6 +134,7 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["opacity"] = r.opacity_;
   j["intensity_factor"] = r.intensity_factor_;
   j["norm_mode"] = r.norm_mode_;
+  j["overlap"] = r.overlap_;
 
   j["grid"].emplace("central", r.central_grid_);
   j["grid"].emplace("elevation", r.elevation_grid_);
@@ -152,14 +153,14 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
 
 bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // Bump this when adding fields to RenderConfig — then classify as layout or appearance.
-  static_assert(sizeof(RenderConfig) == 160, "Update NeedsRebuild when RenderConfig fields change");
+  static_assert(sizeof(RenderConfig) == 168, "Update NeedsRebuild when RenderConfig fields change");
   // Compare layout-affecting fields only. Appearance fields (background, ray_color, opacity,
   // intensity_factor, norm_mode, grids) are handled by ResetWith() without rebuild.
   // id_ is excluded: map key matching guarantees id agreement on the reuse path.
   return !std::equal(std::begin(a.resolution_), std::end(a.resolution_), std::begin(b.resolution_)) ||
          !(a.lens_ == b.lens_) ||
          !std::equal(std::begin(a.lens_shift_), std::end(a.lens_shift_), std::begin(b.lens_shift_)) ||
-         !(a.view_ == b.view_) || a.visible_ != b.visible_ || a.ms_filter_ != b.ms_filter_;
+         !(a.view_ == b.view_) || a.visible_ != b.visible_ || a.overlap_ != b.overlap_ || a.ms_filter_ != b.ms_filter_;
 }
 
 }  // namespace lumice

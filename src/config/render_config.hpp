@@ -84,7 +84,8 @@ struct RenderConfig {
   // gui_state.hpp directly; the two are related by intensity_factor = 2^exposure_offset but serve
   // different paths and may differ at runtime (GUI updates EV without re-committing config).
   float intensity_factor_ = 1.0f;
-  int norm_mode_ = 0;  // 0=absolute (W*H), 1=adaptive (non-zero pixel count). GUI defaults to 1.
+  int norm_mode_ = 0;     // 0=absolute (W*H), 1=adaptive (non-zero pixel count). GUI defaults to 1.
+  float overlap_ = 0.0f;  // Dual fisheye overlap zone |sky.z| threshold (sin value). 0 = no overlap.
 
   std::vector<GridLineParam> central_grid_;
   std::vector<GridLineParam> elevation_grid_;

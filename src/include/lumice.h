@@ -181,6 +181,7 @@ typedef struct LUMICE_RenderParam_ {
   float opacity;
   float intensity_factor;
   int norm_mode;  // 0=absolute (W*H), 1=adaptive (non-zero pixels)
+  float overlap;  // Dual fisheye overlap zone |sky.z| threshold (sin value). 0 = no overlap.
 } LUMICE_RenderParam;
 
 typedef struct LUMICE_Config_ {
