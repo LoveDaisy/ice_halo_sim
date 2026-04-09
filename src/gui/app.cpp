@@ -401,7 +401,7 @@ void CalibrateQualityThreshold() {
   }
   auto t_commit = std::chrono::steady_clock::now();
   GUI_LOG_DEBUG("[Calibration] CommitConfig took {:.1f}ms",
-               std::chrono::duration<double, std::milli>(t_commit - t0).count());
+                std::chrono::duration<double, std::milli>(t_commit - t0).count());
 
   // Wait for simulation to complete (server returns to IDLE)
   constexpr int kMaxWaitMs = 2000;
@@ -423,7 +423,7 @@ void CalibrateQualityThreshold() {
   LUMICE_StatsResult stats[2]{};
   LUMICE_GetStatsResults(g_server, stats, 1);
   GUI_LOG_DEBUG("[Calibration] waited {}ms, state={}, sim_ray_num={}", waited_ms,
-               final_state == LUMICE_SERVER_IDLE ? "IDLE" : "RUNNING", stats[0].sim_ray_num);
+                final_state == LUMICE_SERVER_IDLE ? "IDLE" : "RUNNING", stats[0].sim_ray_num);
 
   if (stats[0].sim_ray_num == 0 || elapsed_ms <= 0) {
     GUI_LOG_WARNING("[Calibration] no data produced in {:.0f}ms, using default threshold", elapsed_ms);
