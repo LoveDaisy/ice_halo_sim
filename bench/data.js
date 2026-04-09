@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775734442869,
+  "lastUpdate": 1775734444803,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -2059,6 +2059,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 68,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8a3f0bc88f188c376f4274fef6055b64c6500561",
+          "message": "Merge pull request #62 from LoveDaisy/fix/ray_alloc\n\nFix ray allocation starvation and C API config limits",
+          "timestamp": "2026-04-09T19:30:20+08:00",
+          "tree_id": "18ba2e31c99ba6aebf53957871f90c6f0d305fed",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/8a3f0bc88f188c376f4274fef6055b64c6500561"
+        },
+        "date": 1775734444068,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 91.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 75.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 75.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 57.8,
             "unit": "%"
           }
         ]
