@@ -89,8 +89,8 @@ inline bool operator==(const RenderConfig& a, const RenderConfig& b) {
          a.view_ == b.view_ && a.visible_ == b.visible_ &&
          std::equal(std::begin(a.background_), std::end(a.background_), std::begin(b.background_)) &&
          std::equal(std::begin(a.ray_color_), std::end(a.ray_color_), std::begin(b.ray_color_)) &&
-         a.opacity_ == b.opacity_ && a.intensity_factor_ == b.intensity_factor_ && a.overlap_ == b.overlap_ &&
-         a.central_grid_ == b.central_grid_ && a.elevation_grid_ == b.elevation_grid_ &&
+         a.opacity_ == b.opacity_ && a.intensity_factor_ == b.intensity_factor_ && a.norm_mode_ == b.norm_mode_ &&
+         a.overlap_ == b.overlap_ && a.central_grid_ == b.central_grid_ && a.elevation_grid_ == b.elevation_grid_ &&
          a.celestial_outline_ == b.celestial_outline_ && a.ms_filter_ == b.ms_filter_;
 }
 

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -593,7 +594,7 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE
       r.norm_mode = rj.at("norm_mode").get<int>();
     }
     if (rj.contains("overlap")) {
-      r.overlap = rj.at("overlap").get<float>();
+      r.overlap = std::max(0.0f, rj.at("overlap").get<float>());
     }
     // lens, view, visible, background fields are ignored (not representable in LUMICE_Config)
   }

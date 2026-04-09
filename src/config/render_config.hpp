@@ -104,8 +104,8 @@ NLOHMANN_JSON_SERIALIZE_ENUM(    // declear
 
 void to_json(nlohmann::json& j, const RenderConfig& r);
 
-// Returns true if layout-affecting fields differ (resolution, lens, view, visible, filter).
-// Appearance-only changes (background, ray_color, opacity, intensity_factor, grids) return false.
+// Returns true if layout-affecting fields differ (resolution, lens, view, visible, overlap, filter).
+// Appearance-only changes (background, ray_color, opacity, intensity_factor, norm_mode, grids) return false.
 bool NeedsRebuild(const RenderConfig& old_cfg, const RenderConfig& new_cfg);
 
 }  // namespace lumice
