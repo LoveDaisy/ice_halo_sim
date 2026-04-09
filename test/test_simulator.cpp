@@ -137,7 +137,9 @@ TEST(PartitionCrystalRayNum, CarryOutputValues) {
 
   EXPECT_EQ(SumAlloc(result.get(), 3), 100u);
 
-  // All carry values must be in [0, 1)
+  // After a single call with fresh carry and no correction needed,
+  // carry values should be in [0, 1). After deficit/surplus correction,
+  // carry can temporarily be outside this range (self-correcting over batches).
   for (size_t i = 0; i < 3; i++) {
     EXPECT_GE(carry[i], 0.0) << "carry[" << i << "] is negative";
     EXPECT_LT(carry[i], 1.0) << "carry[" << i << "] >= 1.0";

@@ -256,38 +256,43 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
   // Each crystal independently accumulates its fractional remainder in carry[ci].
   // All crystals use floor(ideal) first, then the difference (ray_num - assigned)
   // is distributed by largest-remainder to guarantee exact total.
+  // Note: carry[ci] can be negative after deficit correction (a "debt" that is repaid
+  // in subsequent batches). We clamp ideal to 0 before casting to size_t to avoid UB.
   size_t assigned = 0;
   for (size_t ci = 0; ci < crystal_cnt; ci++) {
     double ideal = carry[ci] + (static_cast<double>(std::max(0.0f, proportions[ci])) / total_prop) * ray_num;
-    auto alloc = static_cast<size_t>(ideal);
-    carry[ci] = ideal - alloc;
+    auto alloc = static_cast<size_t>(std::max(0.0, ideal));  // Clamp: negative ideal → 0 alloc
+    carry[ci] = ideal - static_cast<double>(alloc);
     c_num[ci] = alloc;
     assigned += alloc;
   }
 
   // Largest-remainder correction: distribute deficit or surplus.
-  if (assigned < ray_num) {
-    // Deficit: give extra rays to crystals with largest carry (they were closest to rounding up).
-    size_t deficit = ray_num - assigned;
-    // Build index array sorted by carry descending.
+  if (assigned != ray_num) {
     std::vector<size_t> idx(crystal_cnt);
     std::iota(idx.begin(), idx.end(), 0);
-    std::partial_sort(idx.begin(), idx.begin() + deficit, idx.end(),
-                      [&carry](size_t a, size_t b) { return carry[a] > carry[b]; });
-    for (size_t i = 0; i < deficit; i++) {
-      c_num[idx[i]]++;
-      carry[idx[i]] -= 1.0;
-    }
-  } else if (assigned > ray_num) {
-    // Surplus: reclaim rays from crystals with smallest carry (they benefited most from carry).
-    size_t surplus = assigned - ray_num;
-    std::vector<size_t> idx(crystal_cnt);
-    std::iota(idx.begin(), idx.end(), 0);
-    std::partial_sort(idx.begin(), idx.begin() + surplus, idx.end(),
-                      [&carry](size_t a, size_t b) { return carry[a] < carry[b]; });
-    for (size_t i = 0; i < surplus; i++) {
-      c_num[idx[i]]--;
-      carry[idx[i]] += 1.0;
+
+    if (assigned < ray_num) {
+      // Deficit: give extra rays to crystals with largest carry (closest to rounding up).
+      size_t deficit = ray_num - assigned;
+      std::partial_sort(idx.begin(), idx.begin() + deficit, idx.end(),
+                        [&carry](size_t a, size_t b) { return carry[a] > carry[b]; });
+      for (size_t i = 0; i < deficit; i++) {
+        c_num[idx[i]]++;
+        carry[idx[i]] -= 1.0;
+      }
+    } else {
+      // Surplus: reclaim rays from crystals with smallest carry that have alloc > 0.
+      size_t surplus = assigned - ray_num;
+      // Partition: crystals with alloc > 0 first, then sort by carry ascending.
+      auto reclaimable_end = std::partition(idx.begin(), idx.end(), [&c_num](size_t i) { return c_num[i] > 0; });
+      std::partial_sort(idx.begin(),
+                        idx.begin() + std::min(surplus, static_cast<size_t>(reclaimable_end - idx.begin())),
+                        reclaimable_end, [&carry](size_t a, size_t b) { return carry[a] < carry[b]; });
+      for (size_t i = 0; i < surplus && idx.begin() + i < reclaimable_end; i++) {
+        c_num[idx[i]]--;
+        carry[idx[i]] += 1.0;
+      }
     }
   }
 
