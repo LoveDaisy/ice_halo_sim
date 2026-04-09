@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -294,6 +295,7 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
     jr["opacity"] = r.opacity;
     jr["intensity_factor"] = r.intensity_factor;
     jr["norm_mode"] = r.norm_mode;
+    jr["overlap"] = r.overlap;
     root["render"].push_back(jr);
   }
 
@@ -590,6 +592,9 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE
     }
     if (rj.contains("norm_mode")) {
       r.norm_mode = rj.at("norm_mode").get<int>();
+    }
+    if (rj.contains("overlap")) {
+      r.overlap = std::max(0.0f, rj.at("overlap").get<float>());
     }
     // lens, view, visible, background fields are ignored (not representable in LUMICE_Config)
   }

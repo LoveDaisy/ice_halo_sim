@@ -181,6 +181,7 @@ typedef struct LUMICE_RenderParam_ {
   float opacity;
   float intensity_factor;
   int norm_mode;  // 0=absolute (W*H), 1=adaptive (non-zero pixels)
+  float overlap;  // Dual fisheye overlap zone |sky.z| threshold (sin value). 0 = no overlap.
 } LUMICE_RenderParam;
 
 typedef struct LUMICE_Config_ {
@@ -224,7 +225,7 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
 //   - crystal: height/face_distance as scalars/arrays, axis as {type, mean, std} objects
 //   - filter: only type="raypath" supported; other types return LUMICE_ERR_INVALID_VALUE
 //   - render: lens/view/visible/background fields are ignored; only id/resolution/opacity/
-//     intensity_factor/norm_mode are parsed
+//     intensity_factor/norm_mode/overlap are parsed
 //   - spectrum: only string enumerations ("D65","D50","A","E"); arrays return LUMICE_ERR_INVALID_VALUE
 //
 // The spectrum field in the output struct points to static storage; the caller must not free it.

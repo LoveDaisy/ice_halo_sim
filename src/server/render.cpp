@@ -174,7 +174,6 @@ void FisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy
 
 // Overlap r_scale computation for dual fisheye projections.
 // r_scale shrinks the primary projection so r=1 at the overlap boundary instead of the equator.
-// Keep in sync with app_panels.cpp overlap parameter computation.
 float ComputeEARScale(float max_abs_dz) {
   return (max_abs_dz <= 0) ? 1.0f : 1.0f / std::sqrt(1.0f + max_abs_dz);
 }
@@ -377,23 +376,24 @@ void RenderConsumer::Consume(const SimData& data) {
                             1.0f };
 
   // Compute overlap r_scale for dual fisheye lens types.
-  // Keep in sync with app_panels.cpp overlap parameter computation.
-  constexpr float kOverlapDz = 0.0872f;  // = gui::kDualFisheyeOverlap = sin(5°)
-  switch (config_.lens_.type_) {
-    case LensParam::kDualFisheyeEqualArea:
-      proj_param.max_abs_dz_ = kOverlapDz;
-      proj_param.r_scale_ = ComputeEARScale(kOverlapDz);
-      break;
-    case LensParam::kDualFisheyeEquidistant:
-      proj_param.max_abs_dz_ = kOverlapDz;
-      proj_param.r_scale_ = ComputeEDRScale(kOverlapDz);
-      break;
-    case LensParam::kDualFisheyeStereographic:
-      proj_param.max_abs_dz_ = kOverlapDz;
-      proj_param.r_scale_ = ComputeSTRScale(kOverlapDz);
-      break;
-    default:
-      break;  // Non-dual-fisheye: max_abs_dz=0, r_scale=1.0 (no overlap)
+  // overlap_ comes from RenderConfig (GUI sets sin(5°), CLI defaults to 0).
+  if (config_.overlap_ > 0) {
+    switch (config_.lens_.type_) {
+      case LensParam::kDualFisheyeEqualArea:
+        proj_param.max_abs_dz_ = config_.overlap_;
+        proj_param.r_scale_ = ComputeEARScale(config_.overlap_);
+        break;
+      case LensParam::kDualFisheyeEquidistant:
+        proj_param.max_abs_dz_ = config_.overlap_;
+        proj_param.r_scale_ = ComputeEDRScale(config_.overlap_);
+        break;
+      case LensParam::kDualFisheyeStereographic:
+        proj_param.max_abs_dz_ = config_.overlap_;
+        proj_param.r_scale_ = ComputeSTRScale(config_.overlap_);
+        break;
+      default:
+        break;  // Non-dual-fisheye: overlap is ignored
+    }
   }
 
   lens_proj(proj_param, d_buf_.get(), xy_buf_.get(), filtered_ray_num);

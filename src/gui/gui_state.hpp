@@ -91,6 +91,8 @@ constexpr int kLensTypeCount = 8;
 
 // Dual fisheye overlap: max |sky.z| for the overlap zone.
 // = sin(5°) ≈ 0.0872. Each hemisphere extends 5° past the equator.
+// This constant defines the GUI's internal texture format overlap. It is passed to core via
+// FillLumiceConfig/SerializeCoreConfig; core reads overlap from RenderConfig (no hardcoded value).
 constexpr float kDualFisheyeOverlap = 0.0872f;
 
 inline const char* const kSpectrumNames[] = { "D50", "D55", "D65", "D75", "A", "E" };
