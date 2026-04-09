@@ -1,9 +1,12 @@
 #include "core/simulator.hpp"
 
+#include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <memory>
+#include <numeric>
 #include <thread>
 
 #include "config/crystal_config.hpp"
@@ -231,9 +234,11 @@ RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num) {
 }
 
 
-std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& proportions, size_t ray_num) {
+std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& proportions, size_t ray_num,
+                                                 std::vector<double>& carry) {
   auto crystal_cnt = proportions.size();
   auto c_num = std::make_unique<size_t[]>(crystal_cnt);
+  assert(carry.size() == crystal_cnt);
   if (crystal_cnt == 0 || ray_num == 0) {
     return c_num;
   }
@@ -247,17 +252,44 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
     return c_num;
   }
 
-  // Cumulative rounding (Bresenham-style)
-  double accum = 0.0;
+  // Per-crystal carry with largest-remainder correction.
+  // Each crystal independently accumulates its fractional remainder in carry[ci].
+  // All crystals use floor(ideal) first, then the difference (ray_num - assigned)
+  // is distributed by largest-remainder to guarantee exact total.
   size_t assigned = 0;
-  for (size_t ci = 0; ci < crystal_cnt - 1; ci++) {
-    accum += (static_cast<double>(std::max(0.0f, proportions[ci])) / total_prop) * ray_num;
-    auto target = static_cast<size_t>(accum);
-    c_num[ci] = target - assigned;
-    assigned = target;
+  for (size_t ci = 0; ci < crystal_cnt; ci++) {
+    double ideal = carry[ci] + (static_cast<double>(std::max(0.0f, proportions[ci])) / total_prop) * ray_num;
+    auto alloc = static_cast<size_t>(ideal);
+    carry[ci] = ideal - alloc;
+    c_num[ci] = alloc;
+    assigned += alloc;
   }
-  // Last crystal gets the remainder for exact total
-  c_num[crystal_cnt - 1] = ray_num - assigned;
+
+  // Largest-remainder correction: distribute deficit or surplus.
+  if (assigned < ray_num) {
+    // Deficit: give extra rays to crystals with largest carry (they were closest to rounding up).
+    size_t deficit = ray_num - assigned;
+    // Build index array sorted by carry descending.
+    std::vector<size_t> idx(crystal_cnt);
+    std::iota(idx.begin(), idx.end(), 0);
+    std::partial_sort(idx.begin(), idx.begin() + deficit, idx.end(),
+                      [&carry](size_t a, size_t b) { return carry[a] > carry[b]; });
+    for (size_t i = 0; i < deficit; i++) {
+      c_num[idx[i]]++;
+      carry[idx[i]] -= 1.0;
+    }
+  } else if (assigned > ray_num) {
+    // Surplus: reclaim rays from crystals with smallest carry (they benefited most from carry).
+    size_t surplus = assigned - ray_num;
+    std::vector<size_t> idx(crystal_cnt);
+    std::iota(idx.begin(), idx.end(), 0);
+    std::partial_sort(idx.begin(), idx.begin() + surplus, idx.end(),
+                      [&carry](size_t a, size_t b) { return carry[a] < carry[b]; });
+    for (size_t i = 0; i < surplus; i++) {
+      c_num[idx[i]]--;
+      carry[idx[i]] += 1.0;
+    }
+  }
 
   return c_num;
 }
@@ -409,6 +441,8 @@ void Simulator::Run() {
 
   CrystalCache crystal_cache;
   SimWorkspace workspace;
+  std::vector<std::vector<double>> ray_alloc_carry;
+  uint64_t prev_generation = 0;
 
   while (true) {
     auto batch = config_queue_->Get();  // Will block until get one
@@ -425,12 +459,19 @@ void Simulator::Run() {
     auto generation = batch.generation_;
     idle_ = false;
 
+    // Reset carry when config changes (new generation = new proportions).
+    if (generation != prev_generation) {
+      ray_alloc_carry.clear();
+      prev_generation = generation;
+    }
+
     const auto& spectrum = config.light_source_.spectrum_;
     if (auto* illuminant = std::get_if<IlluminantType>(&spectrum)) {
       // Standard illuminant: uniform wavelength sampling + SPD weight
       float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
       float weight = GetIlluminantSpd(*illuminant, wl);
-      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_, crystal_cache, workspace, generation);
+      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_, crystal_cache, workspace, generation,
+                            ray_alloc_carry);
     } else {
       // Discrete wavelength list
       const auto& wl_params = std::get<std::vector<WlParam>>(spectrum);
@@ -438,7 +479,7 @@ void Simulator::Run() {
         if (stop_) {
           break;
         }
-        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation);
+        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation, ray_alloc_carry);
       }
     }
 
@@ -448,7 +489,8 @@ void Simulator::Run() {
 
 
 void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
-                                      CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation) {
+                                      CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation,
+                                      std::vector<std::vector<double>>& ray_alloc_carry) {
   ILOG_TRACE(logger_, "Run: get config: ray({}), wl({:.1f},{:.2f})",  //
              ray_num, wl_param.wl_, wl_param.weight_);
 
@@ -476,7 +518,16 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
     for (size_t ci = 0; ci < ms_crystal_cnt; ci++) {
       proportions.push_back(m.setting_[ci].crystal_proportion_);
     }
-    auto crystal_ray_num = PartitionCrystalRayNum(proportions, ray_num);
+
+    // Lazy-initialize carry for this scattering layer.
+    if (ray_alloc_carry.size() <= mi) {
+      ray_alloc_carry.resize(config.ms_.size());
+    }
+    if (ray_alloc_carry[mi].size() != ms_crystal_cnt) {
+      ray_alloc_carry[mi].assign(ms_crystal_cnt, 0.0);
+    }
+
+    auto crystal_ray_num = PartitionCrystalRayNum(proportions, ray_num, ray_alloc_carry[mi]);
 
     // NOTE: ray_num will change between scatterings.
     buffer_data[0].Reset(ray_num * 2);
