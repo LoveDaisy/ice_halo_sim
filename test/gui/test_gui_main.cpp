@@ -267,17 +267,17 @@ static void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
 
       // Scenario A: Add a crystal, then delete the new (unreferenced) one
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal/Add##crystal");
+      ctx->ItemClick("**/Add##crystal");
       IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
       IM_CHECK_EQ(gui::g_state.selected_crystal, 1);
 
       // Delete the new crystal (not referenced by scattering) — should delete directly
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal/Del##crystal");
+      ctx->ItemClick("**/Del##crystal");
       IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
 
       // Scenario B: Try to delete the referenced crystal
       // Need at least 2 crystals for Del to be enabled
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal/Add##crystal");
+      ctx->ItemClick("**/Add##crystal");
       IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
 
       // Select the first crystal (referenced by scattering)
@@ -285,7 +285,7 @@ static void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield();
 
       // Click Del — should open confirmation popup
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal/Del##crystal");
+      ctx->ItemClick("**/Del##crystal");
       ctx->Yield(2);
 
       // Click Delete in the popup to confirm
@@ -309,12 +309,12 @@ static void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield();
 
       // Add a filter
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Filter/Add##filter");
+      ctx->ItemClick("**/Add##filter");
       IM_CHECK_EQ(static_cast<int>(gui::g_state.filters.size()), 1);
       IM_CHECK_EQ(gui::g_state.selected_filter, 0);
 
       // Delete the filter (unreferenced) — direct delete
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Filter/Del##filter");
+      ctx->ItemClick("**/Del##filter");
       IM_CHECK_EQ(static_cast<int>(gui::g_state.filters.size()), 0);
     };
   }
