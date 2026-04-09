@@ -127,6 +127,7 @@ enum class DistributionType {
   kGaussian,
   kZigzag,
   kLaplacian,
+  kGaussianLegacy,  // Gaussian without Jacobian correction (for reproducing legacy simulation results)
 };
 
 
@@ -317,6 +318,7 @@ NLOHMANN_JSON_SERIALIZE_ENUM(  // declear macro
         { DistributionType::kGaussian, "gauss" },
         { DistributionType::kZigzag, "zigzag" },
         { DistributionType::kLaplacian, "laplacian" },
+        { DistributionType::kGaussianLegacy, "gauss_legacy" },
     })
 
 void to_json(nlohmann::json& obj, const Distribution& dist);

@@ -123,9 +123,10 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 #define LUMICE_AXIS_DIST_UNIFORM 1
 #define LUMICE_AXIS_DIST_ZIGZAG 2
 #define LUMICE_AXIS_DIST_LAPLACIAN 3
+#define LUMICE_AXIS_DIST_GAUSS_LEGACY 4
 
 typedef struct LUMICE_AxisDist_ {
-  int type;    // LUMICE_AXIS_DIST_GAUSS / UNIFORM / ZIGZAG / LAPLACIAN
+  int type;    // LUMICE_AXIS_DIST_GAUSS / UNIFORM / ZIGZAG / LAPLACIAN / GAUSS_LEGACY
   float mean;  // degrees
   float std;   // gauss: std dev; uniform: full range; zigzag: amplitude; laplacian: scale (degrees)
 } LUMICE_AxisDist;

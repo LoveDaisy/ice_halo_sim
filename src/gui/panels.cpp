@@ -326,22 +326,8 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state, float me
   int dist_type = static_cast<int>(axis.type);
   auto prev_type = axis.type;
 
-  if (ImGui::RadioButton("Gauss##rb", &dist_type, 0)) {
-    axis.type = static_cast<AxisDistType>(dist_type);
-    state.MarkDirty();
-  }
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Uniform##rb", &dist_type, 1)) {
-    axis.type = static_cast<AxisDistType>(dist_type);
-    state.MarkDirty();
-  }
-  ImGui::SetCursorPosX(100);
-  if (ImGui::RadioButton("Zigzag##rb", &dist_type, 2)) {
-    axis.type = static_cast<AxisDistType>(dist_type);
-    state.MarkDirty();
-  }
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Laplacian##rb", &dist_type, 3)) {
+  static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update combo items when adding new AxisDistType");
+  if (ImGui::Combo("##dist", &dist_type, "Gauss\0Uniform\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
     axis.type = static_cast<AxisDistType>(dist_type);
     state.MarkDirty();
   }
@@ -362,6 +348,9 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state, float me
       case AxisDistType::kLaplacian:
         max_std = 90.0f;
         break;
+      case AxisDistType::kGaussLegacy:
+        max_std = 180.0f;
+        break;
       default:
         max_std = 180.0f;
         break;
@@ -373,6 +362,7 @@ void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state, float me
 
   switch (axis.type) {
     case AxisDistType::kGauss:
+    case AxisDistType::kGaussLegacy:
       DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt));
       break;
     case AxisDistType::kUniform:

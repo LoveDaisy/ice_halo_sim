@@ -14,7 +14,7 @@ enum class CrystalType { kPrism, kPyramid };
 
 // Axis distribution type for crystal orientation.
 // Values must stay contiguous 0..N-1 — ImGui RadioButton relies on static_cast<int>.
-enum class AxisDistType { kGauss, kUniform, kZigzag, kLaplacian, kCount };
+enum class AxisDistType { kGauss, kUniform, kZigzag, kLaplacian, kGaussLegacy, kCount };
 
 // Aspect ratio presets for preview window
 enum class AspectPreset { kFree, k16x9, k3x2, k4x3, k1x1, kMatchBg };
