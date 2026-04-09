@@ -163,11 +163,13 @@
 | `uniform` | 中心值（度） | 全范围宽度（度） | 均匀分布，用于随机取向或自转角 |
 | `zigzag` | 倾斜偏移（度） | 幅度（度） | 折叠反正弦分布，用于大晶体之字形振荡 |
 | `laplacian` | 中心值（度） | 尺度参数（度） | 拉普拉斯分布，用于尺寸聚合倾斜 |
+| `gauss_legacy` | 中心值（度） | 标准差（度） | 无 Jacobian 修正的高斯分布（用于复现旧版模拟结果） |
 
 **说明：**
 - `gauss` 和 `uniform` 是冰晕模拟中最常用的类型
 - `zigzag` 模拟高雷诺数下大晶体的振荡运动
 - `laplacian` 简化混合尺寸晶体群体的配置（物理背景见 [crystal-orientation-sampling_zh.md](crystal-orientation-sampling_zh.md)）
+- `gauss_legacy` 复现早期程序版本的采样行为（未包含球面面积元 Jacobian 修正），仅在对比旧版模拟输出时使用
 
 **示例：**
 ```json

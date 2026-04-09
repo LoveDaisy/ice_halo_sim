@@ -367,6 +367,7 @@ float RandomNumberGenerator::Get(Distribution dist) {
     case DistributionType::kUniform:
       return (GetUniform() - 0.5f) * dist.std + dist.mean;
     case DistributionType::kGaussian:
+    case DistributionType::kGaussianLegacy:
       return GetGaussian() * dist.std + dist.mean;
     case DistributionType::kZigzag:
       // Rectified arcsine: |A·sin(2πU) + B| where A=std (amplitude), B=mean (tilt offset).
@@ -466,10 +467,10 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     use_rayleigh = (colatitude_center + 3.0f * sigma_rad) < kPolarThresholdRad;
   }
 
-  // Precompute rejection envelope for all non-Rayleigh, non-kNoRandom types.
-  float rejection_m = (lat_type != DistributionType::kNoRandom && !use_rayleigh) ?
-                          ComputeJacobianEnvelope(axis_dist.latitude_dist) :
-                          1.0f;
+  // Precompute rejection envelope for types that use Jacobian rejection.
+  // kGaussianLegacy and kNoRandom skip rejection entirely.
+  bool skip_jacobian = (lat_type == DistributionType::kNoRandom || lat_type == DistributionType::kGaussianLegacy);
+  float rejection_m = (!skip_jacobian && !use_rayleigh) ? ComputeJacobianEnvelope(axis_dist.latitude_dist) : 1.0f;
 
   for (size_t i = 0; i < num; i++) {
     float phi = 0;
@@ -484,6 +485,12 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
       phi = std::copysign(math::kPi_2 - colatitude, latitude_mean_rad);
       phi = std::max(-math::kPi_2, std::min(math::kPi_2, phi));
       // flip stays false — Rayleigh path only fires for tiny σ near poles.
+    } else if (lat_type == DistributionType::kGaussianLegacy) {
+      // Legacy Gaussian: sample without Jacobian rejection (reproduces old behavior).
+      phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
+      auto [norm_phi, norm_flip] = detail::NormalizeLatitude(phi);
+      phi = norm_phi;
+      flip = norm_flip;
     } else if (lat_type != DistributionType::kNoRandom) {
       // Generic Jacobian rejection path (kGaussian non-Rayleigh, kUniform, kZigzag, etc.).
       int attempts = 0;

@@ -89,6 +89,8 @@ static const char* AxisDistTypeToString(AxisDistType t) {
       return "zigzag";
     case AxisDistType::kLaplacian:
       return "laplacian";
+    case AxisDistType::kGaussLegacy:
+      return "gauss_legacy";
     default:
       GUI_LOG_ERROR("[FileIO] Unknown AxisDistType: {}", static_cast<int>(t));
       return "gauss";
@@ -187,6 +189,8 @@ static AxisDistType ParseAxisDistType(const std::string& t) {
     return AxisDistType::kZigzag;
   if (t == "laplacian")
     return AxisDistType::kLaplacian;
+  if (t == "gauss_legacy")
+    return AxisDistType::kGaussLegacy;
   GUI_LOG_ERROR("[FileIO] Unknown axis dist type '{}', falling back to gauss", t);
   return AxisDistType::kGauss;
 }
@@ -405,7 +409,7 @@ std::string SerializeCoreConfig(const GuiState& state) {
 // ========== Fill LUMICE_Config C struct (for LUMICE_CommitConfigStruct) ==========
 
 static void FillAxisDist(const AxisDist& src, LUMICE_AxisDist* dst) {
-  static_assert(static_cast<int>(AxisDistType::kCount) == 4, "Update FillAxisDist when adding new AxisDistType");
+  static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update FillAxisDist when adding new AxisDistType");
   switch (src.type) {
     case AxisDistType::kGauss:
       dst->type = LUMICE_AXIS_DIST_GAUSS;
@@ -418,6 +422,9 @@ static void FillAxisDist(const AxisDist& src, LUMICE_AxisDist* dst) {
       break;
     case AxisDistType::kLaplacian:
       dst->type = LUMICE_AXIS_DIST_LAPLACIAN;
+      break;
+    case AxisDistType::kGaussLegacy:
+      dst->type = LUMICE_AXIS_DIST_GAUSS_LEGACY;
       break;
     default:
       dst->type = LUMICE_AXIS_DIST_GAUSS;

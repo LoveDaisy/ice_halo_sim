@@ -167,6 +167,9 @@ static nlohmann::json AxisDistToJson(const LUMICE_AxisDist& d) {
     case LUMICE_AXIS_DIST_LAPLACIAN:
       j["type"] = "laplacian";
       break;
+    case LUMICE_AXIS_DIST_GAUSS_LEGACY:
+      j["type"] = "gauss_legacy";
+      break;
     default:
       LOG_ERROR("Unknown LUMICE_AxisDist.type: {}", d.type);
       j["type"] = "gauss";
@@ -344,6 +347,8 @@ static LUMICE_ErrorCode JsonToAxisDist(const nlohmann::json& j, LUMICE_AxisDist*
     out->type = LUMICE_AXIS_DIST_ZIGZAG;
   } else if (type_str == "laplacian") {
     out->type = LUMICE_AXIS_DIST_LAPLACIAN;
+  } else if (type_str == "gauss_legacy") {
+    out->type = LUMICE_AXIS_DIST_GAUSS_LEGACY;
   } else {
     return LUMICE_ERR_INVALID_VALUE;
   }

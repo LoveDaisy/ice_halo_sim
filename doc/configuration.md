@@ -162,11 +162,13 @@ Many parameters support distribution types, which can be:
 | `uniform` | center (deg) | full range width (deg) | Uniform distribution for random orientation or roll |
 | `zigzag` | tilt offset (deg) | amplitude (deg) | Folded arcsine distribution for large-crystal zigzag oscillation |
 | `laplacian` | center (deg) | scale parameter (deg) | Laplace distribution for size-aggregated tilt |
+| `gauss_legacy` | center (deg) | standard deviation (deg) | Gaussian without Jacobian correction (for reproducing legacy results) |
 
 **Notes:**
 - `gauss` and `uniform` are the most commonly used types for halo simulation
 - `zigzag` models the oscillatory motion of large crystals at high Reynolds numbers
 - `laplacian` simplifies configuration for mixed-size crystal populations (see [crystal-orientation-sampling.md](crystal-orientation-sampling.md) for physical background)
+- `gauss_legacy` reproduces the sampling behavior of earlier program versions that did not apply the spherical area Jacobian correction; use only when comparing against legacy simulation outputs
 
 **Examples:**
 ```json
