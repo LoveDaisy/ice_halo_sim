@@ -546,9 +546,8 @@ t->TestFunc = [](ImGuiTestContext* ctx) {
 
 ```
 test/e2e/
-├── conftest.py              # pytest fixtures（二进制路径、临时目录）
 ├── test_smoke.py            # 冒烟测试（PSNR 图像验证）
-├── test_error_handling.py   # 错误场景测试（退出码验证）
+├── test_errors.py           # 错误场景测试（退出码验证）
 ├── configs/                 # 测试配置 JSON 文件
 └── references/              # 参考输出图片（*.jpg）
 ```
