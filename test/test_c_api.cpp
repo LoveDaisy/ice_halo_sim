@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <thread>
 
 #include "include/lumice.h"
 
@@ -370,4 +372,247 @@ TEST(ParseConfigApi, SpectrumEnumerations) {
 
   LUMICE_Config config{};
   EXPECT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_VALUE);
+}
+
+
+// =============== Server Lifecycle / Results API Tests ===============
+
+// Helper: build a small finite-ray-count config with non-empty scattering.
+// - Based on MakeMinimalConfigJson() (parse-modify-dump pattern, like SpectrumEnumerations)
+// - ray_num set to 1000 for fast completion
+// - scattering layer added with prob=0.0 (single-pass: rays exit after one crystal interaction).
+//   Without a non-empty scattering, the simulator processes no crystals, leaving crystal_num == 0.
+static std::string MakeSmallSimConfigJson() {
+  auto base = nlohmann::json::parse(MakeMinimalConfigJson());
+  base["scene"]["ray_num"] = 1000ul;
+
+  // crystal id 1 matches the single crystal in MakeMinimalConfigJson()
+  nlohmann::json entry;
+  entry["crystal"] = 1;
+  entry["proportion"] = 1.0f;
+  nlohmann::json layer;
+  layer["prob"] = 0.0f;  // single-pass: rays terminate after this scattering layer
+  layer["entries"] = nlohmann::json::array({ entry });
+  base["scene"]["scattering"] = nlohmann::json::array({ layer });
+  return base.dump();
+}
+
+// Helper: poll the server until it transitions to LUMICE_SERVER_IDLE or timeout.
+// Returns true if idle was reached within timeout_ms; false on timeout.
+static bool WaitForIdle(LUMICE_Server* server, int timeout_ms) {
+  using clock = std::chrono::steady_clock;
+  auto deadline = clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (clock::now() < deadline) {
+    LUMICE_ServerState state{};
+    if (LUMICE_QueryServerState(server, &state) == LUMICE_OK && state == LUMICE_SERVER_IDLE) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+// Lightweight fixture: only creates and destroys a server with num_workers=1.
+// Tests explicitly call CommitAndWaitForIdle() to advance the lifecycle as needed,
+// keeping each test self-documenting and avoiding hidden coupling on simulator success.
+class ServerLifecycleApi : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    LUMICE_ServerConfig server_config{};
+    server_config.num_workers = 1;  // Predictable single-worker behavior on CI
+    server_ = LUMICE_CreateServerEx(&server_config);
+    ASSERT_NE(server_, nullptr);
+  }
+
+  void TearDown() override {
+    if (server_ != nullptr) {
+      LUMICE_StopServer(server_);
+      LUMICE_DestroyServer(server_);
+      server_ = nullptr;
+    }
+  }
+
+  // Commit a small finite simulation and wait for it to complete.
+  // After this returns, the server is in IDLE with stats/render results available.
+  void CommitAndWaitForIdle() {
+    auto json = MakeSmallSimConfigJson();
+    ASSERT_EQ(LUMICE_CommitConfig(server_, json.c_str()), LUMICE_OK);
+    ASSERT_TRUE(WaitForIdle(server_, 10000)) << "Server did not reach IDLE within 10 seconds";
+  }
+
+  LUMICE_Server* server_ = nullptr;
+};
+
+
+TEST_F(ServerLifecycleApi, FullLifecycle) {
+  // Initial state after creation: IDLE.
+  // Note: only IDLE and RUNNING are observable; LUMICE_SERVER_NOT_READY is unreachable
+  // through the public API in the current implementation (intentional — covered in
+  // GetBeforeCommit test below).
+  LUMICE_ServerState state{};
+  ASSERT_EQ(LUMICE_QueryServerState(server_, &state), LUMICE_OK);
+  EXPECT_EQ(state, LUMICE_SERVER_IDLE);
+
+  // Commit config and wait for completion.
+  auto json = MakeSmallSimConfigJson();
+  ASSERT_EQ(LUMICE_CommitConfig(server_, json.c_str()), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(server_, 10000)) << "Server did not reach IDLE within 10 seconds";
+
+  // Final state: IDLE.
+  ASSERT_EQ(LUMICE_QueryServerState(server_, &state), LUMICE_OK);
+  EXPECT_EQ(state, LUMICE_SERVER_IDLE);
+}
+
+
+TEST_F(ServerLifecycleApi, GetRenderResults) {
+  CommitAndWaitForIdle();
+
+  // out array size = LUMICE_MAX_RENDER_RESULTS + 1 (sentinel slot)
+  LUMICE_RenderResult out[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetRenderResults(server_, out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+
+  // First (and only) renderer matches MakeMinimalConfigJson() resolution 800x400, id=1
+  EXPECT_EQ(out[0].renderer_id, 1);
+  EXPECT_EQ(out[0].img_width, 800);
+  EXPECT_EQ(out[0].img_height, 400);
+  EXPECT_NE(out[0].img_buffer, nullptr);
+
+  // Sentinel: img_buffer == NULL marks end of array
+  EXPECT_EQ(out[1].img_buffer, nullptr);
+}
+
+
+TEST_F(ServerLifecycleApi, GetRawXyzResults) {
+  CommitAndWaitForIdle();
+
+  LUMICE_RawXyzResult out[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetRawXyzResults(server_, out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+
+  EXPECT_EQ(out[0].renderer_id, 1);
+  EXPECT_EQ(out[0].img_width, 800);
+  EXPECT_EQ(out[0].img_height, 400);
+
+  // Sentinel: xyz_buffer == NULL marks end of array
+  EXPECT_EQ(out[1].xyz_buffer, nullptr);
+}
+
+
+TEST_F(ServerLifecycleApi, GetStatsResults) {
+  CommitAndWaitForIdle();
+
+  LUMICE_StatsResult out[LUMICE_MAX_STATS_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetStatsResults(server_, out, LUMICE_MAX_STATS_RESULTS), LUMICE_OK);
+
+  // After running 1000 rays through one crystal with single-pass scattering:
+  EXPECT_GT(out[0].sim_ray_num, 0u);
+  EXPECT_GT(out[0].crystal_num, 0u);
+
+  // Sentinel: sim_ray_num == 0 marks end of array
+  EXPECT_EQ(out[1].sim_ray_num, 0u);
+}
+
+
+TEST_F(ServerLifecycleApi, GetCachedStatsConsistency) {
+  CommitAndWaitForIdle();
+  // Precondition: simulation has completed; no new data is being produced.
+  // This guarantees DoSnapshot results are stable across calls.
+
+  // Trigger DoSnapshot (which updates cached_stats_result_) by calling GetStatsResults.
+  // Note: any Get function that triggers DoSnapshot updates the cache, not just GetStatsResults.
+  LUMICE_StatsResult fresh[LUMICE_MAX_STATS_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetStatsResults(server_, fresh, LUMICE_MAX_STATS_RESULTS), LUMICE_OK);
+  ASSERT_GT(fresh[0].sim_ray_num, 0u);
+
+  // Cached stats should now match the fresh ones.
+  LUMICE_StatsResult cached{};
+  ASSERT_EQ(LUMICE_GetCachedStats(server_, &cached), LUMICE_OK);
+  EXPECT_EQ(cached.sim_ray_num, fresh[0].sim_ray_num);
+  EXPECT_EQ(cached.crystal_num, fresh[0].crystal_num);
+  EXPECT_EQ(cached.ray_seg_num, fresh[0].ray_seg_num);
+
+  // Cache stability: a second GetCachedStats call without any intervening Get*Results
+  // call must return the same values (no new snapshot).
+  LUMICE_StatsResult cached_again{};
+  ASSERT_EQ(LUMICE_GetCachedStats(server_, &cached_again), LUMICE_OK);
+  EXPECT_EQ(cached_again.sim_ray_num, cached.sim_ray_num);
+  EXPECT_EQ(cached_again.crystal_num, cached.crystal_num);
+}
+
+
+// NULL-arg checks for the four Get* result functions.
+TEST(ResultsApi, NullArgsGetters) {
+  auto* server = LUMICE_CreateServer();
+  ASSERT_NE(server, nullptr);
+
+  LUMICE_RenderResult render_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  EXPECT_EQ(LUMICE_GetRenderResults(nullptr, render_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_GetRenderResults(server, nullptr, LUMICE_MAX_RENDER_RESULTS), LUMICE_ERR_NULL_ARG);
+
+  LUMICE_RawXyzResult xyz_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  EXPECT_EQ(LUMICE_GetRawXyzResults(nullptr, xyz_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_GetRawXyzResults(server, nullptr, LUMICE_MAX_RENDER_RESULTS), LUMICE_ERR_NULL_ARG);
+
+  LUMICE_StatsResult stats_out[LUMICE_MAX_STATS_RESULTS + 1]{};
+  EXPECT_EQ(LUMICE_GetStatsResults(nullptr, stats_out, LUMICE_MAX_STATS_RESULTS), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_GetStatsResults(server, nullptr, LUMICE_MAX_STATS_RESULTS), LUMICE_ERR_NULL_ARG);
+
+  LUMICE_StatsResult cached{};
+  EXPECT_EQ(LUMICE_GetCachedStats(nullptr, &cached), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_GetCachedStats(server, nullptr), LUMICE_ERR_NULL_ARG);
+
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
+}
+
+
+TEST(ResultsApi, NullArgsQueryState) {
+  auto* server = LUMICE_CreateServer();
+  ASSERT_NE(server, nullptr);
+
+  LUMICE_ServerState state{};
+  EXPECT_EQ(LUMICE_QueryServerState(nullptr, &state), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_QueryServerState(server, nullptr), LUMICE_ERR_NULL_ARG);
+
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
+}
+
+
+// "No-data" path: a freshly created server with no committed config should return
+// LUMICE_OK + sentinel/empty results from all Get functions, not error codes.
+// This is intentional — there is no public API path that returns LUMICE_SERVER_NOT_READY,
+// because callers are expected to treat "no data yet" as a normal state.
+TEST(ResultsApi, GetBeforeCommit) {
+  auto* server = LUMICE_CreateServer();
+  ASSERT_NE(server, nullptr);
+
+  // Render results: empty count, sentinel at index 0
+  LUMICE_RenderResult render_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  EXPECT_EQ(LUMICE_GetRenderResults(server, render_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  EXPECT_EQ(render_out[0].img_buffer, nullptr);
+
+  // Raw XYZ results: empty count, sentinel at index 0
+  LUMICE_RawXyzResult xyz_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  EXPECT_EQ(LUMICE_GetRawXyzResults(server, xyz_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  EXPECT_EQ(xyz_out[0].xyz_buffer, nullptr);
+
+  // Stats results: empty count, sentinel at index 0
+  LUMICE_StatsResult stats_out[LUMICE_MAX_STATS_RESULTS + 1]{};
+  EXPECT_EQ(LUMICE_GetStatsResults(server, stats_out, LUMICE_MAX_STATS_RESULTS), LUMICE_OK);
+  EXPECT_EQ(stats_out[0].sim_ray_num, 0u);
+
+  // Cached stats: all-zero struct
+  LUMICE_StatsResult cached{};
+  EXPECT_EQ(LUMICE_GetCachedStats(server, &cached), LUMICE_OK);
+  EXPECT_EQ(cached.sim_ray_num, 0u);
+  EXPECT_EQ(cached.crystal_num, 0u);
+  EXPECT_EQ(cached.ray_seg_num, 0u);
+
+  // Server state: IDLE (no commit, no work running)
+  LUMICE_ServerState state = LUMICE_SERVER_RUNNING;  // Initialize to non-IDLE to detect change
+  EXPECT_EQ(LUMICE_QueryServerState(server, &state), LUMICE_OK);
+  EXPECT_EQ(state, LUMICE_SERVER_IDLE);
+
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
 }
