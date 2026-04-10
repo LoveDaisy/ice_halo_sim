@@ -546,9 +546,8 @@ End-to-end tests verify the complete CLI simulation pipeline, from configuration
 
 ```
 test/e2e/
-├── conftest.py              # pytest fixtures (binary path, temp dirs)
 ├── test_smoke.py            # Smoke tests with PSNR image verification
-├── test_error_handling.py   # Error scenario tests (exit code verification)
+├── test_errors.py           # Error scenario tests (exit code verification)
 ├── configs/                 # Test configuration JSON files
 └── references/              # Reference output images (*.jpg)
 ```

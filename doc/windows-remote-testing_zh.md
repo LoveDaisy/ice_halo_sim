@@ -43,7 +43,7 @@ watcher 监控 `C:\lumice-test` 中的触发文件，并在交互会话中执行
 
 ```bash
 # 下载 CI 产物
-gh run download <RUN_ID> --name LumiceGUITests-windows --dir /tmp/ci-win
+gh run download <RUN_ID> --name LumiceGUITests-windows-msvc --dir /tmp/ci-win
 
 # 运行 VSync 下的性能测试（真实显示器）
 ./scripts/win_remote_test.sh /tmp/ci-win/bin/LumiceGUITests.exe \
