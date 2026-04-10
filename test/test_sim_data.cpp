@@ -6,8 +6,10 @@
 //   1. sim_data.cpp's static_assert(sizeof(SimData) == ...) — already exists
 //   2. The 4 special member functions in sim_data.cpp
 //   3. CopyConstructDeepCopy / CopyAssignmentDeepCopy / MoveConstruct* tests below
-// The sizeof static_assert at the top of this file is a mirror of (1),
-// forming a double safeguard so that sizeof drift is detected from both sides.
+// The sizeof static_assert at the top of this file is a redundant mirror of
+// (1), gated to the platform where the value was authored. This is NOT a true
+// double-safeguard on other platforms — the source-side assert in sim_data.cpp
+// is unconditional and remains the primary guarantee.
 
 #include <gtest/gtest.h>
 
@@ -24,9 +26,11 @@ using lumice::RayBuffer;
 using lumice::RaySeg;
 using lumice::SimData;
 
-// Mirror of sim_data.cpp's static_assert. Only enabled on the platform where
-// the original assert was authored (macOS Apple Silicon, 64-bit). Other
-// 64-bit ABIs may differ; we keep the assertion narrow to avoid CI noise.
+// Redundant mirror of sim_data.cpp's static_assert, gated to the platform
+// where the original assert was authored (macOS Apple Silicon, 64-bit).
+// Other 64-bit ABIs may differ; the unconditional assert in sim_data.cpp is
+// the primary guarantee — this mirror just adds an extra reminder on the
+// authoring platform that this test file's per-field assertions need updating.
 #if defined(__APPLE__) && defined(__aarch64__)
 static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 static_assert(sizeof(SimData) == 144,
@@ -154,12 +158,35 @@ TEST(RayBufferTest, EmplaceBackBatchOnEmptyDst) {
 TEST(RayBufferTest, DISABLED_EmplaceBackBatchOnNonEmptyDstQuirk) {
   // Intentionally not executed by default. To run manually:
   //   ./unit_test --gtest_also_run_disabled_tests --gtest_filter='*Quirk*'
+  //
   // TODO: when sim_data.cpp's batch EmplaceBack is fixed to use
-  //       `capacity_ - size_` as the upper bound, enable this test by
-  //       removing the DISABLED_ prefix and replace the FAIL with the
-  //       fixed-behavior assertions.
+  //       `capacity_ - size_` as the upper bound, remove the DISABLED_ prefix
+  //       and replace the FAIL with the assertions sketched below.
+  //
+  // Target post-fix scenario:
+  //   RayBuffer src(10);
+  //   for (int i = 0; i < 10; i++) src.EmplaceBack(MakeRay(i));
+  //   // src can hold 9 (strict-less-than guard); src.size_ == 9.
+  //
+  //   RayBuffer dst(10);
+  //   for (int i = 0; i < 6; i++) dst.EmplaceBack(MakeRay(100 + i));
+  //   // dst.size_ == 6 (also constrained to capacity-1 = 9).
+  //
+  //   dst.EmplaceBack(src, 0, /*len=*/kInfSize);
+  //   // After fix, end = min(start+len, capacity_-size_, src.size_) = min(_, 4, 9) = 4
+  //   // i.e. only 4 elements are copied (filling dst to capacity-1 = 9 minus 1 reserved slot).
+  //
+  // Target assertions (uncomment when fix lands and DISABLED_ is removed):
+  //   EXPECT_EQ(dst.size_, 9u);  // pre-existing 6 + 3 new (or whatever the
+  //                              //   fixed bound permits without overflow)
+  //   EXPECT_FLOAT_EQ(dst[5].w_, 105.0f);  // last pre-existing element intact
+  //   EXPECT_FLOAT_EQ(dst[6].w_, 0.0f);    // first appended element from src
+  //
+  // Until the fix lands, this test fails loudly when run manually so nobody
+  // mistakes the DISABLED state for "passing".
   FAIL() << "Quirk anchor: batch EmplaceBack on non-empty dst writes past "
-            "capacity. Awaiting fix in a future task.";
+            "capacity. Awaiting fix in a future task. See target assertions "
+            "in the comment block above.";
 }
 
 
