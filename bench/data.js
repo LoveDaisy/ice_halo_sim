@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775734444803,
+  "lastUpdate": 1775810084338,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -720,6 +720,54 @@ window.BENCHMARK_DATA = {
             "value": 443741.2,
             "unit": "rays/sec",
             "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7e14e2262bc6720b96deb8ac82df7ff23de37c90",
+          "message": "Merge pull request #63 from LoveDaisy/feat/test_coverage\n\ntest: close zero-coverage gaps in optics, c_api, sim_data + fix doc errors",
+          "timestamp": "2026-04-10T16:30:44+08:00",
+          "tree_id": "be592e1fb54dc3f40eb93d1f98d64bcd28e8a26a",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7e14e2262bc6720b96deb8ac82df7ff23de37c90"
+        },
+        "date": 1775810083958,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 364216,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 627357.5,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 423569.4,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 351915.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
