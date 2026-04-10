@@ -448,7 +448,9 @@ TEST_F(ServerLifecycleApi, FullLifecycle) {
   // Initial state after creation: IDLE.
   // Note: only IDLE and RUNNING are observable; LUMICE_SERVER_NOT_READY is unreachable
   // through the public API in the current implementation (intentional — covered in
-  // GetBeforeCommit test below).
+  // GetBeforeCommit test below). RUNNING is also racy to observe at this scale
+  // (1000 rays + 1 worker complete in <20ms), so this test asserts only the
+  // before/after IDLE states, not the intermediate RUNNING state.
   LUMICE_ServerState state{};
   ASSERT_EQ(LUMICE_QueryServerState(server_, &state), LUMICE_OK);
   EXPECT_EQ(state, LUMICE_SERVER_IDLE);
@@ -491,6 +493,8 @@ TEST_F(ServerLifecycleApi, GetRawXyzResults) {
   EXPECT_EQ(out[0].renderer_id, 1);
   EXPECT_EQ(out[0].img_width, 800);
   EXPECT_EQ(out[0].img_height, 400);
+  EXPECT_NE(out[0].xyz_buffer, nullptr);
+  EXPECT_NE(out[0].has_valid_data, 0);
 
   // Sentinel: xyz_buffer == NULL marks end of array
   EXPECT_EQ(out[1].xyz_buffer, nullptr);
