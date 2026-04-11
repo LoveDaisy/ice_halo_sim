@@ -182,8 +182,9 @@ TEST(QueueTest, MpmcAllItemsDelivered) {
     });
   }
 
-  // Producers — encode payload > 0 as (producer_id + 1) * 100000 + offset so 0 is never a
-  // legitimate value. Range: 100000..400999.
+  // Producers — encode payload as (producer_id + 1) * 100000 + offset, producing 4 disjoint
+  // bands: {100000..100999, 200000..200999, 300000..300999, 400000..400999}. Zero is never a
+  // legitimate value, so it can be used as the shutdown sentinel in the consumer loop.
   std::vector<std::thread> producers;
   for (int p = 0; p < kProducers; ++p) {
     producers.emplace_back([&, p] {

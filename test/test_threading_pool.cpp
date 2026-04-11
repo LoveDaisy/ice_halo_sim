@@ -25,6 +25,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -41,7 +42,6 @@
 namespace {
 
 using lumice::ThreadingPool;
-using lumice::ThreadingPoolPtrU;
 
 // ---------------------------------------------------------------------------
 // Correctness tests — 16 cases
