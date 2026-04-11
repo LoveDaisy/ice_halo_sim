@@ -18,6 +18,7 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_math.cpp"
   "${PROJ_TEST_DIR}/test_proj.cpp"
   "${PROJ_TEST_DIR}/test_projection.cpp"
+  "${PROJ_TEST_DIR}/test_queue.cpp"
   "${PROJ_TEST_DIR}/test_rng.cpp"
   "${PROJ_TEST_DIR}/test_filter.cpp"
   "${PROJ_TEST_DIR}/test_optics.cpp"
