@@ -1,12 +1,11 @@
+#include <GLFW/glfw3.h>
+
 #include <fstream>
 #include <memory>
-
-#include <GLFW/glfw3.h>
 
 #include "gui/gl_common.h"
 #include "gui/gui_logger.hpp"
 #include "gui/log_sink.hpp"
-
 #include "test_gui_shared.hpp"
 
 // Aspect ratio tests

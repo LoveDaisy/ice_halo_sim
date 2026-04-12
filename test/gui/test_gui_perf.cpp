@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "gui/gui_logger.hpp"
-
 #include "test_gui_shared.hpp"
 
 // ========== Performance Tests ==========

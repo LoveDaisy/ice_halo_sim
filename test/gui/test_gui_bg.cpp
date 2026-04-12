@@ -1,6 +1,6 @@
-#include <cstdio>
-
 #include <stb_image.h>
+
+#include <cstdio>
 
 #include "test_gui_shared.hpp"
 
