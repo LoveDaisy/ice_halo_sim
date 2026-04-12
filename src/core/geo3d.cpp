@@ -200,7 +200,7 @@ void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt,  //
     //     | sin(lat),          0,         cos(lat)         |
     auto* p = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(out_pt) + i * step);
     p[0] = c_lon * c_lat * x - s_lon * y - c_lon * s_lat * z;
-    p[1] = s_lon * c_lat * x - c_lon * y - s_lon * s_lat * z;
+    p[1] = s_lon * c_lat * x + c_lon * y - s_lon * s_lat * z;
     p[2] = s_lat * x + c_lat * z;
   }
 }
