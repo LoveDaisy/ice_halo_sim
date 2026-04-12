@@ -5,7 +5,7 @@
 #include "test_gui_shared.hpp"
 
 // Background overlay GuiFunc: handles bg texture upload, equirect upload, and FBO export on main thread.
-void BgOverlayGuiFunc(ImGuiTestContext* /*ctx*/) {
+static void BgOverlayGuiFunc(ImGuiTestContext* /*ctx*/) {
   // Upload equirect texture when requested (reuses g_export_test state)
   if (g_export_test.upload_requested && !g_export_test.upload_done) {
     InitSynthTexture();

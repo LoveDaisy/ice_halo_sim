@@ -11,7 +11,7 @@
 
 // ========== Performance Tests ==========
 
-const char* CreatePerfConfig() {
+static const char* CreatePerfConfig() {
   // Minimal config: single prism crystal, sun at 20°, infinite rays, 1024x512 resolution
   return R"({
     "crystal": [{"id": 1, "type": "Prism", "height": 1.0, "ratio": {"upper": 1.0, "lower": 1.0}}],
@@ -62,7 +62,7 @@ void StopPerfSimulation() {
   gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
 }
 
-void ReportPerf(const char* label, unsigned long start_rays, unsigned long end_rays, double elapsed_sec) {
+static void ReportPerf(const char* label, unsigned long start_rays, unsigned long end_rays, double elapsed_sec) {
   unsigned long delta = end_rays - start_rays;
   double rays_per_sec = elapsed_sec > 0 ? static_cast<double>(delta) / elapsed_sec : 0;
   fprintf(stderr, "[PERF] %s: %.1f rays/sec (%lu rays in %.1fs)\n", label, rays_per_sec, delta, elapsed_sec);

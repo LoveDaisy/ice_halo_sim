@@ -3,7 +3,7 @@
 
 #include "test_gui_shared.hpp"
 
-void ExportGuiFunc(ImGuiTestContext* /*ctx*/) {
+static void ExportGuiFunc(ImGuiTestContext* /*ctx*/) {
   // Upload synthetic texture on main thread when requested
   if (g_export_test.upload_requested && !g_export_test.upload_done) {
     InitSynthTexture();

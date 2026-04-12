@@ -20,7 +20,7 @@
 // checks, giving robust detection on both macOS (1ms timer) and Windows (1ms with
 // timeBeginPeriod, which the test main() sets). If a third call site appears, migrate to
 // test_helpers.hpp.
-bool WaitForSimRestartAtLeast(ImGuiTestContext* ctx, unsigned long baseline_upload_count,
+static bool WaitForSimRestartAtLeast(ImGuiTestContext* ctx, unsigned long baseline_upload_count,
                                      int timeout_ms = 1500) {
   auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   while (std::chrono::steady_clock::now() < deadline) {
@@ -35,7 +35,7 @@ bool WaitForSimRestartAtLeast(ImGuiTestContext* ctx, unsigned long baseline_uplo
 
 // Triggers the two-stage delete for a referenced crystal via the Delete Crystal? modal.
 // Caller must have set state.selected_crystal to the target crystal index.
-void ClickDeleteCrystalViaModal(ImGuiTestContext* ctx) {
+static void ClickDeleteCrystalViaModal(ImGuiTestContext* ctx) {
   ctx->ItemClick("**/Del##crystal");
   ctx->Yield(2);
   ctx->ItemClick("Delete Crystal?/Delete");
@@ -43,7 +43,7 @@ void ClickDeleteCrystalViaModal(ImGuiTestContext* ctx) {
 }
 
 // Opens the Delete Crystal? modal and clicks Cancel, leaving state unchanged.
-void ClickDeleteCrystalCancelModal(ImGuiTestContext* ctx) {
+static void ClickDeleteCrystalCancelModal(ImGuiTestContext* ctx) {
   ctx->ItemClick("**/Del##crystal");
   ctx->Yield(2);
   ctx->ItemClick("Delete Crystal?/Cancel");
@@ -52,7 +52,7 @@ void ClickDeleteCrystalCancelModal(ImGuiTestContext* ctx) {
 
 // Triggers the two-stage delete for a referenced filter via the Delete Filter? modal.
 // Caller must have set state.selected_filter to the target filter index.
-void ClickDeleteFilterViaModal(ImGuiTestContext* ctx) {
+static void ClickDeleteFilterViaModal(ImGuiTestContext* ctx) {
   ctx->ItemClick("**/Del##filter");
   ctx->Yield(2);
   ctx->ItemClick("Delete Filter?/Delete");

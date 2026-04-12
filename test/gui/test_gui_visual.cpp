@@ -5,7 +5,7 @@
 #include "test_gui_shared.hpp"
 
 // GuiFunc that renders GUI and captures crystal texture when requested
-void ScreenshotGuiFunc(ImGuiTestContext* /*ctx*/) {
+static void ScreenshotGuiFunc(ImGuiTestContext* /*ctx*/) {
   // Normal GUI rendering is handled by the main loop.
   // Capture crystal texture on main thread when requested.
   if (g_capture.capture_requested && !g_capture.capture_done) {
