@@ -14,6 +14,7 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_c_api.cpp"
   "${PROJ_TEST_DIR}/test_color_space.cpp"
   "${PROJ_TEST_DIR}/test_crystal.cpp"
+  "${PROJ_TEST_DIR}/test_geo3d.cpp"
   "${PROJ_TEST_DIR}/test_json.cpp"
   "${PROJ_TEST_DIR}/test_math.cpp"
   "${PROJ_TEST_DIR}/test_proj.cpp"
