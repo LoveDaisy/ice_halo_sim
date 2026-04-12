@@ -225,10 +225,7 @@ TEST_F(Geo3dTest, SampleSphCapPoint_SamplesInsideCap_LonZeroLatZero) {
   }
 }
 
-// DISABLED: SampleSphCapPoint has a rotation bug (geo3d.cpp:203, sign flip in y-component).
-// Samples fall outside cap when lon!=0. Mean direction is correct (symmetric flip).
-// Bug fix tracked in task-fix-geo3d-sampler-rotation.
-TEST_F(Geo3dTest, DISABLED_SampleSphCapPoint_SamplesInsideCap_Rotated) {
+TEST_F(Geo3dTest, SampleSphCapPoint_SamplesInsideCap_Rotated) {
   // Cap at (lon=45, lat=30) deg, half-angle 5 deg.
   // Center direction: c = (cos(30)*cos(45), cos(30)*sin(45), sin(30))
   constexpr float kLon = 45.0f, kLat = 30.0f, kCap = 5.0f;
