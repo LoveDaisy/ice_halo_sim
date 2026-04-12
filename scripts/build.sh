@@ -18,7 +18,7 @@ build() {
   ret=$?
   if [[ $ret == 0 && $BUILD_TEST == ON ]]; then
     echo "Testing..."
-    ctest
+    ctest -L unit --output-on-failure
     ret=$?
   fi
   if [[ $ret == 0 && $INSTALL_FLAG == ON ]]; then
