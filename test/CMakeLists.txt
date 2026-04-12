@@ -10,6 +10,8 @@ CPMAddPackage(
 )
 
 # ==================================================================================================
+# ==================================================================================================
+# Unit tests
 add_executable(unit_test
   "${PROJ_TEST_DIR}/test_c_api.cpp"
   "${PROJ_TEST_DIR}/test_color_space.cpp"
@@ -17,7 +19,6 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_geo3d.cpp"
   "${PROJ_TEST_DIR}/test_json.cpp"
   "${PROJ_TEST_DIR}/test_math.cpp"
-  "${PROJ_TEST_DIR}/test_proj.cpp"
   "${PROJ_TEST_DIR}/test_projection.cpp"
   "${PROJ_TEST_DIR}/test_queue.cpp"
   "${PROJ_TEST_DIR}/test_render_config.cpp"
@@ -38,3 +39,20 @@ set_target_properties(unit_test PROPERTIES
 add_test(NAME "LumiceUnitTest" COMMAND unit_test
   "${PROJ_ROOT}/examples/config_example.json"
   "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties("LumiceUnitTest" PROPERTIES LABELS "unit")
+
+# ==================================================================================================
+# Integration tests
+add_executable(integration_test
+  "${PROJ_TEST_DIR}/test_proj.cpp"
+  "${PROJ_TEST_DIR}/test_integration_main.cpp")
+target_include_directories(integration_test
+  PRIVATE ${PROJ_TEST_DIR})
+target_link_libraries(integration_test
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice_obj)
+set_target_properties(integration_test PROPERTIES
+  BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
+
+add_test(NAME "LumiceIntegrationTest" COMMAND integration_test
+  "${PROJ_ROOT}/examples/config_example.json")
+set_tests_properties("LumiceIntegrationTest" PROPERTIES LABELS "integration")
