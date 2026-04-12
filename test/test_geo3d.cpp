@@ -1,8 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
-#include <cstring>
-#include <numeric>
+#include <memory>
 
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
@@ -11,9 +10,9 @@ namespace {
 
 class Geo3dTest : public ::testing::Test {
  protected:
-  void SetUp() override { lumice::RandomNumberGenerator::GetInstance().SetSeed(kFixedSeed_); }
+  void SetUp() override { lumice::RandomNumberGenerator::GetInstance().SetSeed(kFixedSeed); }
 
-  static constexpr uint32_t kFixedSeed_ = 20260412u;
+  static constexpr uint32_t kFixedSeed = 20260412u;
 };
 
 
@@ -38,7 +37,6 @@ TEST_F(Geo3dTest, SampleTrianglePoint_InsideTriangleBarycentric) {
     EXPECT_GE(x, -1e-5f) << "Sample " << i << " x < 0";
     EXPECT_GE(y, -1e-5f) << "Sample " << i << " y < 0";
     EXPECT_GE(1.0f - x - y, -1e-5f) << "Sample " << i << " gamma < 0";
-    EXPECT_NEAR(x + y + (1.0f - x - y), 1.0f, 1e-4f) << "Sample " << i << " bary sum != 1";
     EXPECT_NEAR(z, 0.0f, 1e-6f) << "Sample " << i << " z != 0 (not in plane)";
   }
 }
@@ -48,8 +46,8 @@ TEST_F(Geo3dTest, SampleTrianglePoint_BarycentricMeanApproxCentroid) {
   // Precision: sigma_mean ~ 7.4e-4, 3sigma ~ 2.2e-3, tolerance 0.01 (~4.5 sigma).
   constexpr float kVertices[9] = { 0, 0, 0, 1, 0, 0, 0, 1, 0 };
   constexpr size_t kN = 100000;
-  float pts[kN * 3];
-  lumice::SampleTrianglePoint(kVertices, pts, kN);
+  auto pts = std::make_unique<float[]>(kN * 3);
+  lumice::SampleTrianglePoint(kVertices, pts.get(), kN);
 
   double sum_x = 0, sum_y = 0, sum_z = 0;
   for (size_t i = 0; i < kN; i++) {
@@ -100,8 +98,8 @@ TEST_F(Geo3dTest, SampleSph_UnitRadiusLength) {
 
   // Test with radii = 1.0
   {
-    float pts[kN * 3];
-    lumice::SampleSph(1.0f, pts, kN);
+    auto pts = std::make_unique<float[]>(kN * 3);
+    lumice::SampleSph(1.0f, pts.get(), kN);
     for (size_t i = 0; i < kN; i++) {
       float x = pts[i * 3 + 0], y = pts[i * 3 + 1], z = pts[i * 3 + 2];
       float len = std::sqrt(x * x + y * y + z * z);
@@ -111,8 +109,8 @@ TEST_F(Geo3dTest, SampleSph_UnitRadiusLength) {
 
   // Test with radii = 3.5 (delta/radii = 2.9e-5, still well above float eps)
   {
-    float pts[kN * 3];
-    lumice::SampleSph(3.5f, pts, kN);
+    auto pts = std::make_unique<float[]>(kN * 3);
+    lumice::SampleSph(3.5f, pts.get(), kN);
     for (size_t i = 0; i < kN; i++) {
       float x = pts[i * 3 + 0], y = pts[i * 3 + 1], z = pts[i * 3 + 2];
       float len = std::sqrt(x * x + y * y + z * z);
@@ -124,8 +122,8 @@ TEST_F(Geo3dTest, SampleSph_UnitRadiusLength) {
 TEST_F(Geo3dTest, SampleSph_OctantUniformity) {
   // 8 octants should each get ~N/8 samples. 3sigma/mu = 2.5%, tolerance +-5% (~4.8 sigma).
   constexpr size_t kN = 100000;
-  float pts[kN * 3];
-  lumice::SampleSph(1.0f, pts, kN);
+  auto pts = std::make_unique<float[]>(kN * 3);
+  lumice::SampleSph(1.0f, pts.get(), kN);
 
   int octant_count[8] = {};
   for (size_t i = 0; i < kN; i++) {
@@ -152,8 +150,8 @@ TEST_F(Geo3dTest, SampleBall_InsideBallCDF) {
   // Check at r in {0.4, 0.6, 0.8} with per-point tolerance derived from binomial 3sigma + 1.5x margin.
   // r=0.2 excluded (3sigma/mu = 7.5%, insufficient signal/noise).
   constexpr size_t kN = 200000;
-  float pts[kN * 3];
-  lumice::SampleBall(1.0f, pts, kN);
+  auto pts = std::make_unique<float[]>(kN * 3);
+  lumice::SampleBall(1.0f, pts.get(), kN);
 
   struct CheckPoint {
     float r;
@@ -187,8 +185,8 @@ TEST_F(Geo3dTest, SampleBall_InsideBallCDF) {
 TEST_F(Geo3dTest, SampleBall_DirectionUniformity) {
   // Direction octant uniformity, same tolerance as SampleSph: +-5%.
   constexpr size_t kN = 200000;
-  float pts[kN * 3];
-  lumice::SampleBall(1.0f, pts, kN);
+  auto pts = std::make_unique<float[]>(kN * 3);
+  lumice::SampleBall(1.0f, pts.get(), kN);
 
   int octant_count[8] = {};
   for (size_t i = 0; i < kN; i++) {
