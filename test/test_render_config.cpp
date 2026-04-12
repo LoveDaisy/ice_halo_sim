@@ -73,6 +73,11 @@ TEST(RenderConfigTest, EachLayoutField_ReturnsTrue) {
     mod.lens_shift_[0] = 99;
     EXPECT_TRUE(lumice::NeedsRebuild(base, mod)) << "lens_shift[0]";
   }
+  {
+    auto mod = base;
+    mod.lens_shift_[1] = 99;
+    EXPECT_TRUE(lumice::NeedsRebuild(base, mod)) << "lens_shift[1]";
+  }
 
   // view (azimuth)
   {
