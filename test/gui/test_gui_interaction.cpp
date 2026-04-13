@@ -658,8 +658,8 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       // Write small value in linear region → should preserve exactly
       ctx->ItemInputValue("**/##Prism H_input", 0.005f);
       ctx->Yield();
-      IM_CHECK_GE(gui::g_state.crystals[0].prism_h, 0.004f);
-      IM_CHECK_LE(gui::g_state.crystals[0].prism_h, 0.006f);
+      IM_CHECK_GE(gui::g_state.crystals[0].prism_h, 0.0049f);
+      IM_CHECK_LE(gui::g_state.crystals[0].prism_h, 0.0051f);
     };
   }
 
