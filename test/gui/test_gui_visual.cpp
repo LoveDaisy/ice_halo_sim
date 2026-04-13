@@ -186,8 +186,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
 
-      // Ensure Crystal tab is active
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
+      // Left panel now renders cards directly (no tabs)
       ctx->Yield();
 
       gui::g_crystal_style = 0;  // Wireframe
@@ -231,8 +230,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
 
-      // Ensure Crystal tab is active
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
+      // Left panel now renders cards directly (no tabs)
       ctx->Yield();
 
       gui::g_crystal_style = 3;  // Shaded
@@ -615,6 +613,40 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       std::remove(path_a);
       std::remove(path_b);
       std::remove(lmc_path);
+    };
+  }
+
+  // Thumbnail: default entry produces a non-zero texture after a few frames
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "thumbnail_default_entry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      // Let ProcessUpdateQueue run for several frames to render the default entry thumbnail
+      ctx->Yield(10);
+
+      auto tex = gui::g_thumbnail_cache.GetTexture(0, 0);
+      // Thumbnail should be rendered for the default entry (non-zero texture ID)
+      IM_CHECK(tex != 0);
+    };
+  }
+
+  // Thumbnail: adding an entry triggers thumbnail generation
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "thumbnail_new_entry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(5);
+
+      // Add a new entry
+      gui::g_state.layers[0].entries.emplace_back();
+      gui::g_thumbnail_cache.OnLayerStructureChanged();
+      ctx->Yield(10);
+
+      // Both entries should have thumbnails
+      auto tex0 = gui::g_thumbnail_cache.GetTexture(0, 0);
+      auto tex1 = gui::g_thumbnail_cache.GetTexture(0, 1);
+      IM_CHECK(tex0 != 0);
+      IM_CHECK(tex1 != 0);
     };
   }
 }
