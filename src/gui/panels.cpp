@@ -58,6 +58,36 @@ static float LogLinearNormToValue(float norm, float max_val) {
   float t_log = (norm - kLogLinearTSwitch) / (1.0f - kLogLinearTSwitch);
   return kLogLinearX0 * std::exp(t_log * log_ratio);
 }
+// Render a slider with nonlinear scale mapping (sqrt/log/loglinear/linear).
+// Must be called between PushItemWidth/PopItemWidth. Does NOT clamp — caller must clamp after.
+static bool RenderNonlinearSlider(const char* slider_id, float* value, float min_val, float max_val, const char* fmt,
+                                  SliderScale scale) {
+  bool changed = false;
+  if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
+    float sqrt_val = std::sqrt(std::max(*value, 0.0f));
+    float sqrt_max = std::sqrt(max_val);
+    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "")) {
+      *value = sqrt_val * sqrt_val;
+      changed = true;
+    }
+  } else if (scale == SliderScale::kLog && min_val > 0.0f) {
+    float norm = LogValueToNorm(*value, min_val, max_val);
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
+      *value = LogNormToValue(norm, min_val, max_val);
+      changed = true;
+    }
+  } else if (scale == SliderScale::kLogLinear && min_val == 0.0f) {
+    float norm = LogLinearValueToNorm(*value, max_val);
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
+      *value = LogLinearNormToValue(norm, max_val);
+      changed = true;
+    }
+  } else {
+    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt);
+  }
+  return changed;
+}
+
 }  // namespace
 
 // Compute slider width and prepare IDs for the [slider] [input] Label layout.
@@ -104,32 +134,7 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
   bool changed = false;
 
   ImGui::PushItemWidth(slider_w);
-  if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
-    // Sqrt-scale slider: more resolution at small values.
-    // Slider operates on sqrt(value); actual value = slider_val^2.
-    float sqrt_val = std::sqrt(std::max(*value, 0.0f));
-    float sqrt_max = std::sqrt(max_val);
-    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "")) {
-      *value = sqrt_val * sqrt_val;
-      changed = true;
-    }
-  } else if (scale == SliderScale::kLog && min_val > 0.0f) {
-    // Log-scale slider: uniform resolution across orders of magnitude.
-    float norm = LogValueToNorm(*value, min_val, max_val);
-    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
-      *value = LogNormToValue(norm, min_val, max_val);
-      changed = true;
-    }
-  } else if (scale == SliderScale::kLogLinear && min_val == 0.0f) {
-    // LogLinear hybrid: linear near zero, log above x0. Allows reaching zero.
-    float norm = LogLinearValueToNorm(*value, max_val);
-    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
-      *value = LogLinearNormToValue(norm, max_val);
-      changed = true;
-    }
-  } else {
-    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt);
-  }
+  changed |= RenderNonlinearSlider(slider_id, value, min_val, max_val, fmt, scale);
   ImGui::PopItemWidth();
 
   ImGui::SameLine();
@@ -208,28 +213,7 @@ static bool SliderWithPreset(const char* label, float* value, float min_val, flo
 
   // Slider (nonlinear scale support)
   ImGui::PushItemWidth(slider_w);
-  if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
-    float sqrt_val = std::sqrt(std::max(*value, 0.0f));
-    float sqrt_max = std::sqrt(max_val);
-    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "")) {
-      *value = sqrt_val * sqrt_val;
-      changed = true;
-    }
-  } else if (scale == SliderScale::kLog && min_val > 0.0f) {
-    float norm = LogValueToNorm(*value, min_val, max_val);
-    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
-      *value = LogNormToValue(norm, min_val, max_val);
-      changed = true;
-    }
-  } else if (scale == SliderScale::kLogLinear && min_val == 0.0f) {
-    float norm = LogLinearValueToNorm(*value, max_val);
-    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
-      *value = LogLinearNormToValue(norm, max_val);
-      changed = true;
-    }
-  } else {
-    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt);
-  }
+  changed |= RenderNonlinearSlider(slider_id, value, min_val, max_val, fmt, scale);
   ImGui::PopItemWidth();
 
   // Input
