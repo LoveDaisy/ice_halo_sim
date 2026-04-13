@@ -48,6 +48,8 @@ static const char* kLensTypeJsonNames[] = { "linear",
                                             "rectangular" };
 
 static const char* kVisibleJsonNames[] = { "upper", "lower", "full", "front" };
+static_assert(sizeof(kVisibleJsonNames) / sizeof(kVisibleJsonNames[0]) == kVisibleCount,
+              "kVisibleJsonNames must match kVisibleCount");
 static const char* kAspectPresetJsonNames[] = { "free", "16:9", "3:2", "4:3", "1:1", "match_background" };
 static_assert(sizeof(kAspectPresetJsonNames) / sizeof(kAspectPresetJsonNames[0]) == kAspectPresetCount,
               "kAspectPresetJsonNames must match kAspectPresetCount");
