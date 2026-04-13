@@ -369,14 +369,15 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // p1_card/proportion_slider — modify entry proportion
+  // p1_card/proportion_direct_write — modify entry proportion programmatically
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "proportion_slider");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "proportion_direct_write");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
 
-      float before = gui::g_state.layers[0].entries[0].proportion;
+      // Default proportion is 100.0; change to 42.0
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].proportion, 100.0f);
       gui::g_state.layers[0].entries[0].proportion = 42.0f;
       gui::g_state.MarkDirty();
       ctx->Yield();
@@ -439,74 +440,65 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // Crystal slider boundary tests — programmatic validation via copy model.
-  // Crystal parameters are now in layers[].entries[].crystal (copy model).
-  // These tests validate boundary behavior by direct field manipulation.
+  // Crystal slider boundary tests — via SliderWithInput in Edit Crystal modal.
+  // Open modal, use ctx->ItemInputValue to write boundary values through the widget,
+  // click OK, then verify the clamped values in g_state.
+  //
+  // SliderWithInput("Height##modal_cr", ..., 0.01f, 100.0f, kLogLinear) — height ≥ 0.01
+  // SliderWithInput("Upper H##modal_cr", ..., 0.0f, 100.0f, kLogLinear) — allows 0
+  // SliderWithInput("Lower H##modal_cr", ..., 0.0f, 100.0f, kLogLinear) — allows 0
+  // SliderWithInput("Prism H##modal_cr", ..., 0.0f, 100.0f, kLogLinear) — allows 0
 
-  // p1_slider/crystal_height_boundary — height must be > 0 (prism default)
+  // p1_slider/height_clamp_via_modal — kLogLinear clamps height to [0.01, 100]
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "crystal_height_boundary");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "height_clamp_via_modal");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
 
-      auto& cr = gui::g_state.layers[0].entries[0].crystal;
-      IM_CHECK_EQ(cr.type, gui::CrystalType::kPrism);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
 
-      // Set height to a valid value
-      cr.height = 2.0f;
-      IM_CHECK_EQ(cr.height, 2.0f);
+      // Open crystal modal
+      ctx->ItemClick("**/E##cr");
+      ctx->Yield(3);
 
-      // Height field allows positive values
-      cr.height = 0.01f;
-      IM_CHECK_GE(cr.height, 0.01f - 1e-6f);
-    };
-  }
-
-  // p1_slider/pyramid_upper_lower_allow_zero — Upper/Lower H are 0-1, 0 is legal
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "pyramid_upper_lower_allow_zero");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      auto& cr = gui::g_state.layers[0].entries[0].crystal;
-      cr.type = gui::CrystalType::kPyramid;
+      // Write 0 via the input widget — should be clamped to min (0.01)
+      ctx->ItemInputValue("Edit Crystal/##Height##modal_cr_input", 0.0f);
       ctx->Yield();
 
-      cr.upper_h = 0.0f;
-      IM_CHECK_EQ(cr.upper_h, 0.0f);
+      // Click OK to commit
+      ctx->ItemClick("Edit Crystal/OK##crystal");
+      ctx->Yield(2);
 
-      cr.lower_h = 0.0f;
-      IM_CHECK_EQ(cr.lower_h, 0.0f);
-
-      // Verify non-zero values also work
-      cr.upper_h = 0.5f;
-      cr.lower_h = 0.3f;
-      IM_CHECK_EQ(cr.upper_h, 0.5f);
-      IM_CHECK_EQ(cr.lower_h, 0.3f);
+      // Height should be clamped to >= 0.01 (kLogLinear with min=0.01)
+      IM_CHECK_GE(gui::g_state.layers[0].entries[0].crystal.height, 0.01f - 1e-6f);
     };
   }
 
-  // p1_slider/pyramid_prism_h_allows_zero — prism_h can be exactly 0
+  // p1_slider/pyramid_h_allows_zero_via_modal — Upper H and Lower H allow 0
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "pyramid_prism_h_allows_zero");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "pyramid_h_allows_zero_via_modal");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
 
-      auto& cr = gui::g_state.layers[0].entries[0].crystal;
-      cr.type = gui::CrystalType::kPyramid;
+      // Switch to Pyramid type programmatically
+      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+      ctx->Yield();
 
-      cr.prism_h = 0.0f;
-      IM_CHECK_EQ(cr.prism_h, 0.0f);
+      // Open crystal modal
+      ctx->ItemClick("**/E##cr");
+      ctx->Yield(3);
 
-      cr.prism_h = 100.0f;
-      IM_CHECK_EQ(cr.prism_h, 100.0f);
+      // Write 0 to Upper H — should be allowed (min=0.0 for kLogLinear)
+      ctx->ItemInputValue("Edit Crystal/##Upper H##modal_cr_input", 0.0f);
+      ctx->Yield();
 
-      cr.prism_h = 0.005f;
-      IM_CHECK_GE(cr.prism_h, 0.0049f);
-      IM_CHECK_LE(cr.prism_h, 0.0051f);
+      // Click OK
+      ctx->ItemClick("Edit Crystal/OK##crystal");
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 0.0f);
     };
   }
 
@@ -835,52 +827,53 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // p2_modal/crystal_modal_edit_confirm — edit crystal params, click OK, verify state updated
+  // p2_modal/crystal_modal_edit_confirm — edit crystal height, click OK, verify state updated
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_edit_confirm");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
 
-      // Verify initial state is Prism
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
+      // Verify initial height
+      float initial_height = gui::g_state.layers[0].entries[0].crystal.height;
 
       // Open crystal modal
       ctx->ItemClick("**/E##cr");
       ctx->Yield(3);
 
-      // The modal edits a buffer copy. Click OK to commit.
+      // Modify height via the input widget in the modal
+      ctx->ItemInputValue("Edit Crystal/##Height##modal_cr_input", 5.0f);
+      ctx->Yield();
+
+      // Click OK to commit buffer to state
       ctx->ItemClick("Edit Crystal/OK##crystal");
       ctx->Yield(2);
 
-      // Crystal should still be valid (OK commits buffer to state)
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
+      // Height should be updated to 5.0
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, 5.0f);
     };
   }
 
-  // p2_modal/filter_modal_set_and_clear — set filter via modal, then clear it
+  // p2_modal/filter_modal_ok_sets_filter — open filter modal on empty entry, click OK to set filter
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "filter_modal_set_and_clear");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "filter_modal_ok_sets_filter");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
 
-      // Pre-set a filter so we can test clearing
-      gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
-      gui::g_state.layers[0].entries[0].filter = f;
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      // Entry starts with no filter
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
 
       // Open filter modal
       ctx->ItemClick("**/E##fi");
       ctx->Yield(3);
 
-      // Click Remove Filter to clear
-      ctx->ItemClick("Edit Filter/Remove Filter##filter");
+      // Click OK to set the default filter on the entry
+      ctx->ItemClick("Edit Filter/OK##filter");
       ctx->Yield(2);
 
-      // Filter should be cleared
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      // Filter should now be set (modal OK commits filter buffer to state)
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
     };
   }
 }

@@ -506,6 +506,8 @@ void ResetModalState() {
   g_axis_buf[2] = {};
   g_filter_buf = {};
   g_raypath_buf[0] = '\0';
+  std::memset(g_saved_rotation, 0, sizeof(g_saved_rotation));
+  g_saved_zoom = 1.0f;
   g_pending_open = false;
   g_modal_mesh_hash = 0;
 }

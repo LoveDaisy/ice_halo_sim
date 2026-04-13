@@ -138,8 +138,10 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded0.crystal.type, gui::CrystalType::kPyramid);
       IM_CHECK_EQ(loaded0.crystal.prism_h, 2.0f);
       IM_CHECK_EQ(loaded0.crystal.upper_h, 0.3f);
+      IM_CHECK_EQ(loaded0.crystal.lower_h, 0.4f);
       IM_CHECK_EQ(loaded0.proportion, 75.0f);
       IM_CHECK(loaded0.filter.has_value());
+      IM_CHECK_EQ(loaded0.filter->raypath_text, std::string("3-1-5"));
 
       auto& loaded1 = gui::g_state.layers[0].entries[1];
       IM_CHECK_EQ(loaded1.crystal.type, gui::CrystalType::kPrism);
