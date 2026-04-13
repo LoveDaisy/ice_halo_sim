@@ -579,7 +579,7 @@ void RenderCrystalTab(GuiState& state) {
 #endif  // Old RenderCrystalTab dead code
 
 
-// ========== Scene Controls (shared between left Scene tab and right panel Scene group) ==========
+// ========== Scene Controls (rendered in the right panel Scene group) ==========
 
 void RenderSceneControls(GuiState& state) {
   ImGui::SeparatorText("Sun");
@@ -609,6 +609,8 @@ void RenderSceneControls(GuiState& state) {
 void RenderSceneTab(GuiState& state) {
   (void)state;
   // Sun and Simulation controls have been migrated to the right panel Scene group.
+  ImGui::TextDisabled("Sun & Simulation controls are now in the right panel.");
+
   // TODO(card-layout): stub - implement card-based scattering/layer rendering
   ImGui::SeparatorText("Scattering");
   ImGui::TextDisabled("Scattering editing moved to card layout (pending implementation)");

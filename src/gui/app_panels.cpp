@@ -378,6 +378,9 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
   // ---- Scene Group ----
+  // Scene controls (Sun/Simulation) do not depend on selected_renderer, so they are rendered
+  // before the renderer validity check. This ensures Scene is always visible even when no
+  // renderer is selected.
   if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
     RenderSceneControls(g_state);
   }

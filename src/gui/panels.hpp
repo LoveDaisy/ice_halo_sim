@@ -18,7 +18,7 @@ void RenderCrystalTab(GuiState& state);
 void RenderSceneTab(GuiState& state);
 void RenderFilterTab(GuiState& state);
 
-// Scene controls (Sun + Simulation) shared between left Scene tab and right panel Scene group.
+// Scene controls (Sun + Simulation) rendered in the right panel Scene group.
 void RenderSceneControls(GuiState& state);
 
 // Reset pending-delete state (for test isolation)
