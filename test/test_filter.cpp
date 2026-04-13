@@ -413,3 +413,12 @@ TEST(ValidateRaypathTextTest, TokenWithSpace_IsInvalid) {
 TEST(ValidateRaypathTextTest, SpecialChars_IsInvalid) {
   EXPECT_EQ(ValidateRaypathText("3-(-1)-5"), RaypathValidation::kInvalid);
 }
+
+TEST(ValidateRaypathTextTest, MultiDigitNumbers_IsValid) {
+  EXPECT_EQ(ValidateRaypathText("12-345-6"), RaypathValidation::kValid);
+}
+
+TEST(ValidateRaypathTextTest, DoubleLeadingSeparator_IsInvalid) {
+  // "--3": second '-' creates an empty interior token → kInvalid (not kIncomplete)
+  EXPECT_EQ(ValidateRaypathText("--3"), RaypathValidation::kInvalid);
+}

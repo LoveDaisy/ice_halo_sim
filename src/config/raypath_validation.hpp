@@ -15,12 +15,12 @@ enum class RaypathValidation {
 
 /// Validate a raypath text string (dash- or comma-separated face indices).
 ///
-/// Rules:
+/// Rules (evaluated in priority order):
 ///   - Empty string → kValid (means "no raypath filter").
+///   - Consecutive separators anywhere (e.g. "3--5", "--3") → kInvalid.
+///   - Any token that is not a non-negative integer → kInvalid.
 ///   - Trailing separator (e.g. "3-5-") → kIncomplete.
 ///   - Leading separator (e.g. "-3") → kIncomplete.
-///   - Consecutive separators in the middle (e.g. "3--5") → kInvalid.
-///   - Any token that is not a non-negative integer → kInvalid.
 ///   - All tokens are non-negative integers → kValid.
 ///
 /// This function is pure-stdlib (no GUI dependency) and suitable for unit testing.
@@ -66,7 +66,8 @@ inline RaypathValidation ValidateRaypathText(const std::string& text) {
       if (in_token) {
         // Validate the token [token_start, i)
         std::string token = text.substr(token_start, i - token_start);
-        // Check: all characters must be digits
+        // Check: all characters must be digits.
+        // Note: token is guaranteed non-empty because in_token is only set when a non-separator char is seen.
         bool all_digits = true;
         for (char c : token) {
           if (!std::isdigit(static_cast<unsigned char>(c))) {
@@ -74,7 +75,7 @@ inline RaypathValidation ValidateRaypathText(const std::string& text) {
             break;
           }
         }
-        if (!all_digits || token.empty()) {
+        if (!all_digits) {
           found_bad_token = true;
         }
         token_count++;

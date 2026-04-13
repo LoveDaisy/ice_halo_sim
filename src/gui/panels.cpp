@@ -890,8 +890,21 @@ void RenderFilterTab(GuiState& state) {
     state.MarkFilterDirty();
   }
 
-  // Validate current raypath text; background color reflects previous-frame value (normal for ImGui immediate mode).
-  auto validation = ValidateRaypathText(f.raypath_text);
+  // Persistent edit buffer: tracks what the user is typing, independent of f.raypath_text
+  // (which only holds the last validated value sent to server). Resyncs when:
+  //   - selected filter changes (user clicks a different filter)
+  //   - f.raypath_text changes externally (e.g. config file load)
+  static char raypath_edit_buf[256] = {};
+  static int raypath_edit_filter_idx = -1;
+  static std::string raypath_edit_committed;
+  if (raypath_edit_filter_idx != state.selected_filter || raypath_edit_committed != f.raypath_text) {
+    raypath_edit_filter_idx = state.selected_filter;
+    raypath_edit_committed = f.raypath_text;
+    snprintf(raypath_edit_buf, sizeof(raypath_edit_buf), "%s", f.raypath_text.c_str());
+  }
+
+  // Validate the edit buffer for visual feedback.
+  auto validation = ValidateRaypathText(raypath_edit_buf);
   int style_pushes = 0;
   if (validation == RaypathValidation::kIncomplete) {
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.6f, 0.4f, 0.1f, 0.6f));  // Orange
@@ -901,13 +914,14 @@ void RenderFilterTab(GuiState& state) {
     style_pushes = 1;
   }
 
-  char raypath_buf[256];
-  snprintf(raypath_buf, sizeof(raypath_buf), "%s", f.raypath_text.c_str());
-  if (ImGui::InputText("Raypath", raypath_buf, sizeof(raypath_buf))) {
-    f.raypath_text = raypath_buf;
-    // Update validation to current-frame value so hint text is accurate this frame.
-    validation = ValidateRaypathText(f.raypath_text);
+  if (ImGui::InputText("Raypath", raypath_edit_buf, sizeof(raypath_edit_buf))) {
+    // Revalidate after edit; only commit to model state on kValid.
+    // f.raypath_text always holds the last valid value, preventing other dirty triggers
+    // (e.g. symmetry checkbox) from submitting invalid text via FillLumiceConfig.
+    validation = ValidateRaypathText(raypath_edit_buf);
     if (validation == RaypathValidation::kValid) {
+      f.raypath_text = raypath_edit_buf;
+      raypath_edit_committed = f.raypath_text;
       state.MarkFilterDirty();
     }
   }
