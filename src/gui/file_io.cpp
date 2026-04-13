@@ -108,6 +108,7 @@ static json SerializeAxisDist(const AxisDist& a) {
   return j;
 }
 
+// TECH_DEBT(crystal-field-sync): SerializeCrystal and FillCrystalParam must be kept in sync manually.
 static json SerializeCrystal(const CrystalConfig& c, int id) {
   json j;
   j["id"] = id;
@@ -326,7 +327,6 @@ static int FindIndexById(const std::vector<T>& vec, int id, int fallback) {
 
 // ========== GUI JSON Renderer Helpers ==========
 // Shared between SerializeGuiStateJson and DeserializeGuiStateJson.
-// TECH_DEBT(crystal-field-sync): SerializeCrystal/FillCrystalParam must be kept in sync manually.
 
 static json SerializeRendererForGui(const RenderConfig& r) {
   json jr;

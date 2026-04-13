@@ -60,6 +60,7 @@ static float LogLinearNormToValue(float norm, float max_val) {
 }
 // Render a slider with nonlinear scale mapping (sqrt/log/loglinear/linear).
 // Must be called between PushItemWidth/PopItemWidth. Does NOT clamp — caller must clamp after.
+// Note: `fmt` is only used for kLinear mode; nonlinear modes display a blank slider label.
 static bool RenderNonlinearSlider(const char* slider_id, float* value, float min_val, float max_val, const char* fmt,
                                   SliderScale scale) {
   bool changed = false;
