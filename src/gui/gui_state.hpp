@@ -98,8 +98,8 @@ constexpr float kDualFisheyeOverlap = 0.0872f;
 inline const char* const kSpectrumNames[] = { "D50", "D55", "D65", "D75", "A", "E" };
 constexpr int kSpectrumCount = 6;
 
-inline const char* const kVisibleNames[] = { "Upper", "Lower", "Full" };
-constexpr int kVisibleCount = 3;
+inline const char* const kVisibleNames[] = { "Upper", "Lower", "Full", "Front" };
+constexpr int kVisibleCount = 4;  // must stay in sync with fragment shader u_visible range
 
 inline const int kSimResolutions[] = { 512, 1024, 2048, 4096 };
 constexpr int kSimResolutionCount = 4;
@@ -112,7 +112,7 @@ struct RenderConfig {
   float azimuth = 0.0f;
   float roll = 0.0f;
   int sim_resolution_index = 1;  // Index into kSimResolutions (default 1024)
-  int visible = 2;               // Index into kVisibleNames (0=upper, 1=lower, 2=full)
+  int visible = 2;               // Index into kVisibleNames (0=upper, 1=lower, 2=full, 3=front)
   float background[3] = { 0.0f, 0.0f, 0.0f };
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float opacity = 1.0f;

@@ -288,13 +288,15 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   };
 
   // Hemisphere visibility check: returns true if the given altitude is in the visible hemisphere.
-  // visible: 0=upper (alt>=0), 1=lower (alt<=0), 2=full (always visible).
+  // visible: 0=upper (alt>=0), 1=lower (alt<=0), 2=full (always visible), 3=front (always visible).
+  // Note: front mode visibility depends on 3D view direction (dot product with camera forward),
+  // which cannot be determined from altitude alone. All labels are shown as a known limitation.
   auto is_visible = [&](float alt) -> bool {
     if (input.visible == 0)
       return alt >= -0.5f;  // small tolerance for edge labels
     if (input.visible == 1)
       return alt <= 0.5f;
-    return true;
+    return true;  // full(2) and front(3): show all labels
   };
 
   // Crossing detection helper: given two adjacent valid sample points, detect and add labels.
@@ -401,7 +403,9 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   // When visible = upper(0) or lower(1), add the hemisphere boundary (equator) as an extra edge.
   // The equator is defined by altitude = 0 (world_dir.z = 0). Sample it in world space
   // and forward-project to pixel coordinates.
-  if (input.visible != 2 && input.lens_type >= 0 && input.lens_type <= 3) {
+  // Note: front(3) hemisphere boundary is a view-dependent great circle, not drawn here.
+  // Was: input.visible != 2 (excluded only full mode)
+  if ((input.visible == 0 || input.visible == 1) && input.lens_type >= 0 && input.lens_type <= 3) {
     constexpr int kEquatorSamples = 360;
     SampleAngles prev{};
     prev.valid = false;
