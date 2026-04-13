@@ -201,10 +201,10 @@ void RenderLeftPanel(float window_height) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-  // ---- 3D Crystal Preview (top, fixed) ----
+  // ---- Layout: cards (scroll) + 3D preview (fixed) + toolbar ----
   int sel_layer = GetSelectedLayerIdx();
   int sel_entry = GetSelectedEntryIdx();
-  bool has_crystal = sel_layer < static_cast<int>(g_state.layers.size()) &&
+  bool has_crystal = sel_layer >= 0 && sel_entry >= 0 && sel_layer < static_cast<int>(g_state.layers.size()) &&
                      sel_entry < static_cast<int>(g_state.layers[sel_layer].entries.size());
 
   float content_w = ImGui::GetContentRegionAvail().x;
@@ -214,7 +214,7 @@ void RenderLeftPanel(float window_height) {
   float controls_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
   float toolbar_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
   float preview_size = content_w;
-  float cards_h = avail_h - preview_size - separator_h - controls_h - toolbar_h;
+  float cards_h = std::max(0.0f, avail_h - preview_size - separator_h - controls_h - toolbar_h);
 
   if (has_crystal) {
     auto& cr = g_state.layers[sel_layer].entries[sel_entry].crystal;

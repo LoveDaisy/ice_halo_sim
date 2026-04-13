@@ -8,6 +8,7 @@
 
 #include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
+#include "gui/crystal_preview.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "imgui.h"
@@ -116,33 +117,33 @@ std::string AxisPresetName(const CrystalConfig& c) {
   auto at = c.azimuth.type;
 
   bool z_gauss = IsGaussType(zt);
-  bool az_uniform = (at == AxisDistType::kUniform);
+  bool az_full_uniform = (at == AxisDistType::kUniform) && FloatNear(c.azimuth.std, 360.0f);
   bool roll_locked = (rt == AxisDistType::kGauss || rt == AxisDistType::kGaussLegacy || rt == AxisDistType::kUniform) &&
                      FloatNear(c.roll.mean, 0.0f) && c.roll.std < 5.0f;
 
-  // Parry: zenith≈90, std<30, roll locked, azimuth uniform
-  if (z_gauss && FloatNear(c.zenith.mean, 90.0f) && c.zenith.std < 30.0f && roll_locked && az_uniform) {
+  // Parry: zenith≈90, std<30, roll locked, azimuth full uniform
+  if (z_gauss && FloatNear(c.zenith.mean, 90.0f) && c.zenith.std < 30.0f && roll_locked && az_full_uniform) {
     return "Parry";
   }
 
-  // Column: zenith≈90, std<30, azimuth uniform (roll NOT locked)
-  if (z_gauss && FloatNear(c.zenith.mean, 90.0f) && c.zenith.std < 30.0f && az_uniform) {
+  // Column: zenith≈90, std<30, azimuth full uniform (roll NOT locked)
+  if (z_gauss && FloatNear(c.zenith.mean, 90.0f) && c.zenith.std < 30.0f && az_full_uniform) {
     return "Column";
   }
 
-  // Lowitz: zenith≈0, std>30, roll locked, azimuth uniform
-  if (z_gauss && FloatNear(c.zenith.mean, 0.0f) && c.zenith.std > 30.0f && roll_locked && az_uniform) {
+  // Lowitz: zenith≈0, std>30, roll locked, azimuth full uniform
+  if (z_gauss && FloatNear(c.zenith.mean, 0.0f) && c.zenith.std > 30.0f && roll_locked && az_full_uniform) {
     return "Lowitz";
   }
 
-  // Plate: zenith≈0, std<30, azimuth uniform
-  if (z_gauss && FloatNear(c.zenith.mean, 0.0f) && c.zenith.std < 30.0f && az_uniform) {
+  // Plate: zenith≈0, std<30, azimuth full uniform
+  if (z_gauss && FloatNear(c.zenith.mean, 0.0f) && c.zenith.std < 30.0f && az_full_uniform) {
     return "Plate";
   }
 
   // Random: all three axes uniform with full range (std≈360)
   if (zt == AxisDistType::kUniform && FloatNear(c.zenith.std, 360.0f) && rt == AxisDistType::kUniform &&
-      FloatNear(c.roll.std, 360.0f) && az_uniform && FloatNear(c.azimuth.std, 360.0f)) {
+      FloatNear(c.roll.std, 360.0f) && az_full_uniform) {
     return "Random";
   }
 
@@ -465,6 +466,9 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
 
   // Click anywhere in card to select
   if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (!is_selected) {
+      g_crystal_mesh_hash = -1;  // Force 3D preview refresh on selection change
+    }
     g_selected_layer = layer_idx;
     g_selected_entry = entry_idx;
   }

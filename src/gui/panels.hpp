@@ -1,8 +1,6 @@
 #ifndef LUMICE_GUI_PANELS_HPP
 #define LUMICE_GUI_PANELS_HPP
 
-#include <string>
-
 namespace lumice::gui {
 
 struct GuiState;
@@ -48,7 +46,8 @@ void RenderScatteringSection(GuiState& state);
 // Scene controls (Sun + Simulation) rendered in the right panel Scene group.
 void RenderSceneControls(GuiState& state);
 
-// Reset pending-delete state (for test isolation)
+// Reset all panel editing state: edit request, selection indices.
+// Name kept for GUI test teardown compatibility (was pending-delete only, now broader).
 void ResetPendingDeleteState();
 
 }  // namespace lumice::gui
