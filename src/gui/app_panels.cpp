@@ -202,6 +202,7 @@ void RenderLeftPanel(float window_height) {
 
   if (ImGui::BeginTabBar("ConfigTabs")) {
     if (ImGui::BeginTabItem("Crystal")) {
+      // Temporary: preview always shows layers[0].entries[0] until card layout is implemented
       bool has_crystal = !g_state.layers.empty() && !g_state.layers[0].entries.empty();
 
       if (has_crystal) {

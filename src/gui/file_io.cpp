@@ -488,20 +488,20 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
     for (int k = 0; k < dst_layer.entry_count; k++) {
       const auto& entry = layer.entries[k];
 
-      // Assign crystal
-      int cid = next_crystal_id++;
-      if (crystal_idx < LUMICE_MAX_CONFIG_CRYSTALS) {
-        FillCrystalParam(entry.crystal, cid, &out->crystals[crystal_idx++]);
+      // Assign crystal (truncate entries if crystal array is full)
+      if (crystal_idx >= LUMICE_MAX_CONFIG_CRYSTALS) {
+        dst_layer.entry_count = k;
+        break;
       }
+      int cid = next_crystal_id++;
+      FillCrystalParam(entry.crystal, cid, &out->crystals[crystal_idx++]);
       dst_layer.entries[k].crystal_id = cid;
       dst_layer.entries[k].proportion = entry.proportion;
 
-      // Assign filter (if present)
-      if (entry.filter) {
+      // Assign filter (if present; omit if filter array is full)
+      if (entry.filter && filter_idx < LUMICE_MAX_CONFIG_FILTERS) {
         int fid = next_filter_id++;
-        if (filter_idx < LUMICE_MAX_CONFIG_FILTERS) {
-          FillFilterParam(*entry.filter, fid, &out->filters[filter_idx++]);
-        }
+        FillFilterParam(*entry.filter, fid, &out->filters[filter_idx++]);
         dst_layer.entries[k].filter_id = fid;
       } else {
         dst_layer.entries[k].filter_id = -1;
@@ -544,7 +544,12 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
 }
 
 
-// ========== Core JSON Deserialization (for DoRevert) ==========
+// ========== Core JSON Deserialization (for JSON import) ==========
+// Handles Core config JSON format: root has "crystal"/"filter"/"scene"/"render" keys.
+// Crystal/filter are referenced by ID in scene.scattering entries; this function converts
+// the ID references into the copy-model (EntryCard/Layer) by looking up each scatter entry's
+// crystal/filter ID in the parsed maps.
+// NOTE: This is NOT the .lmc GUI state format — see DeserializeGuiStateJson for that.
 
 bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
   json root;
