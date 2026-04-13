@@ -54,6 +54,9 @@ std::filesystem::path ShowExportJsonDialog();
 std::filesystem::path ShowOpenImageDialog();
 
 
+// Parse dash/comma-separated raypath text into face indices (tolerant: skips invalid tokens).
+std::vector<int> ParseRaypathText(const std::string& text);
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_FILE_IO_HPP

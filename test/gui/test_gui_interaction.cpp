@@ -630,6 +630,39 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p1_slider/pyramid_prism_h_loglinear_zero — kLogLinear scale allows prism_h to reach 0
+  // SliderWithInput("Prism H", ..., kLogLinear) → "##Prism H_input".
+  // kLogLinear hybrid mapping: linear near zero, log above x0=0.01.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "pyramid_prism_h_loglinear_zero");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
+      ctx->Yield(2);
+
+      // Switch to pyramid type
+      gui::g_state.crystals[0].type = gui::CrystalType::kPyramid;
+      ctx->Yield(3);
+
+      // Write 0 → kLogLinear allows reaching exactly 0
+      ctx->ItemInputValue("**/##Prism H_input", 0.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.crystals[0].prism_h, 0.0f);
+
+      // Write max value → should clamp to 100
+      ctx->ItemInputValue("**/##Prism H_input", 100.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.crystals[0].prism_h, 100.0f);
+
+      // Write small value in linear region → should preserve exactly
+      ctx->ItemInputValue("**/##Prism H_input", 0.005f);
+      ctx->Yield();
+      IM_CHECK_GE(gui::g_state.crystals[0].prism_h, 0.0049f);
+      IM_CHECK_LE(gui::g_state.crystals[0].prism_h, 0.0051f);
+    };
+  }
+
   // p1_slider/altitude_negative_boundaries — sun altitude ±90°
   // SliderWithInput("Altitude", ...) is also in RenderSceneTab (panels.cpp:598)
   {

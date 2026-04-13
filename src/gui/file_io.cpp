@@ -47,7 +47,9 @@ static const char* kLensTypeJsonNames[] = { "linear",
                                             "dual_fisheye_stereographic",
                                             "rectangular" };
 
-static const char* kVisibleJsonNames[] = { "upper", "lower", "full" };
+static const char* kVisibleJsonNames[] = { "upper", "lower", "full", "front" };
+static_assert(sizeof(kVisibleJsonNames) / sizeof(kVisibleJsonNames[0]) == kVisibleCount,
+              "kVisibleJsonNames must match kVisibleCount");
 static const char* kAspectPresetJsonNames[] = { "free", "16:9", "3:2", "4:3", "1:1", "match_background" };
 static_assert(sizeof(kAspectPresetJsonNames) / sizeof(kAspectPresetJsonNames[0]) == kAspectPresetCount,
               "kAspectPresetJsonNames must match kAspectPresetCount");
@@ -55,7 +57,7 @@ static_assert(sizeof(kAspectPresetJsonNames) / sizeof(kAspectPresetJsonNames[0])
 
 // ========== Shared helpers ==========
 
-static std::vector<int> ParseRaypathText(const std::string& text) {
+std::vector<int> ParseRaypathText(const std::string& text) {
   std::vector<int> result;
   // Normalize: replace ',' with '-' so both separators are accepted
   std::string normalized = text;
@@ -842,9 +844,9 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   // Sim
   if (root.contains("sim")) {
     auto& js = root["sim"];
-    state.sim.ray_num_millions = js.value("ray_num_millions", 1.0f);
-    state.sim.max_hits = js.value("max_hits", 8);
-    state.sim.infinite = js.value("infinite", false);
+    state.sim.ray_num_millions = js.value("ray_num_millions", SimConfig{}.ray_num_millions);
+    state.sim.max_hits = js.value("max_hits", SimConfig{}.max_hits);
+    state.sim.infinite = js.value("infinite", SimConfig{}.infinite);
   }
 
   // Scattering

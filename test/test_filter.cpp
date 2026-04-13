@@ -1,4 +1,5 @@
-// Unit tests for filter subsystem: RaypathFilter, ComplexFilter, symmetry, hash consistency.
+// Unit tests for filter subsystem: RaypathFilter, ComplexFilter, symmetry, hash consistency,
+// and raypath text validation.
 #include <gtest/gtest.h>
 
 #include <nlohmann/json.hpp>
@@ -6,6 +7,7 @@
 #include <vector>
 
 #include "config/filter_config.hpp"
+#include "config/raypath_validation.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "core/filter.hpp"
@@ -327,4 +329,96 @@ TEST_F(FilterTest, ComplexFilter_Propagation) {
   // Should NOT match non-P variants or different paths
   EXPECT_FALSE(filter->Check(MakeRay({ 3, 7 })));
   EXPECT_FALSE(filter->Check(MakeRay({ 3, 1 })));
+}
+
+
+// ========== ValidateRaypathText Tests ==========
+
+TEST(ValidateRaypathTextTest, EmptyString_IsValid) {
+  EXPECT_EQ(ValidateRaypathText(""), RaypathValidation::kValid);
+}
+
+TEST(ValidateRaypathTextTest, SingleDigit_IsValid) {
+  EXPECT_EQ(ValidateRaypathText("3"), RaypathValidation::kValid);
+}
+
+TEST(ValidateRaypathTextTest, MultipleDashSeparated_IsValid) {
+  EXPECT_EQ(ValidateRaypathText("3-1-5"), RaypathValidation::kValid);
+}
+
+TEST(ValidateRaypathTextTest, CommaSeparated_IsValid) {
+  EXPECT_EQ(ValidateRaypathText("3,1,5"), RaypathValidation::kValid);
+}
+
+TEST(ValidateRaypathTextTest, MixedSeparators_IsValid) {
+  EXPECT_EQ(ValidateRaypathText("3-1,5"), RaypathValidation::kValid);
+}
+
+TEST(ValidateRaypathTextTest, Zero_IsValid) {
+  EXPECT_EQ(ValidateRaypathText("0"), RaypathValidation::kValid);
+}
+
+TEST(ValidateRaypathTextTest, LongPath_IsValid) {
+  EXPECT_EQ(ValidateRaypathText("3-1-5-7-4"), RaypathValidation::kValid);
+}
+
+TEST(ValidateRaypathTextTest, TrailingDash_IsIncomplete) {
+  EXPECT_EQ(ValidateRaypathText("3-5-"), RaypathValidation::kIncomplete);
+}
+
+TEST(ValidateRaypathTextTest, SingleTrailingDash_IsIncomplete) {
+  EXPECT_EQ(ValidateRaypathText("3-"), RaypathValidation::kIncomplete);
+}
+
+TEST(ValidateRaypathTextTest, TrailingComma_IsIncomplete) {
+  EXPECT_EQ(ValidateRaypathText("3,"), RaypathValidation::kIncomplete);
+}
+
+TEST(ValidateRaypathTextTest, SingleDash_IsIncomplete) {
+  EXPECT_EQ(ValidateRaypathText("-"), RaypathValidation::kIncomplete);
+}
+
+TEST(ValidateRaypathTextTest, SingleComma_IsIncomplete) {
+  EXPECT_EQ(ValidateRaypathText(","), RaypathValidation::kIncomplete);
+}
+
+TEST(ValidateRaypathTextTest, LeadingDashSingle_IsIncomplete) {
+  EXPECT_EQ(ValidateRaypathText("-3"), RaypathValidation::kIncomplete);
+}
+
+TEST(ValidateRaypathTextTest, LeadingDashMultiple_IsIncomplete) {
+  EXPECT_EQ(ValidateRaypathText("-3-5"), RaypathValidation::kIncomplete);
+}
+
+TEST(ValidateRaypathTextTest, NonNumericToken_IsInvalid) {
+  EXPECT_EQ(ValidateRaypathText("3-abc-5"), RaypathValidation::kInvalid);
+}
+
+TEST(ValidateRaypathTextTest, PureNonNumeric_IsInvalid) {
+  EXPECT_EQ(ValidateRaypathText("abc"), RaypathValidation::kInvalid);
+}
+
+TEST(ValidateRaypathTextTest, ConsecutiveDashes_IsInvalid) {
+  EXPECT_EQ(ValidateRaypathText("3--5"), RaypathValidation::kInvalid);
+}
+
+TEST(ValidateRaypathTextTest, ConsecutiveCommas_IsInvalid) {
+  EXPECT_EQ(ValidateRaypathText("3,,5"), RaypathValidation::kInvalid);
+}
+
+TEST(ValidateRaypathTextTest, TokenWithSpace_IsInvalid) {
+  EXPECT_EQ(ValidateRaypathText("3- -5"), RaypathValidation::kInvalid);
+}
+
+TEST(ValidateRaypathTextTest, SpecialChars_IsInvalid) {
+  EXPECT_EQ(ValidateRaypathText("3-(-1)-5"), RaypathValidation::kInvalid);
+}
+
+TEST(ValidateRaypathTextTest, MultiDigitNumbers_IsValid) {
+  EXPECT_EQ(ValidateRaypathText("12-345-6"), RaypathValidation::kValid);
+}
+
+TEST(ValidateRaypathTextTest, DoubleLeadingSeparator_IsInvalid) {
+  // "--3": second '-' creates an empty interior token → kInvalid (not kIncomplete)
+  EXPECT_EQ(ValidateRaypathText("--3"), RaypathValidation::kInvalid);
 }

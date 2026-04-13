@@ -329,8 +329,11 @@ void main() {
     // In equirect convention: lat = asin(-dz), lat > 0 means upper sky
     float lat = asin(clamp(-world_dir.z, -1.0, 1.0));
     pixel_visible = true;
-    if (u_visible == 0 && lat < 0.0) pixel_visible = false;
-    if (u_visible == 1 && lat > 0.0) pixel_visible = false;
+    if (u_visible == 0 && lat < 0.0) pixel_visible = false;   // upper: discard lower hemisphere
+    if (u_visible == 1 && lat > 0.0) pixel_visible = false;   // lower: discard upper hemisphere
+    // 3=front: discard back hemisphere. u_view_matrix[2] = -forward (see BuildViewMatrix),
+    // so dot(world_dir, u_view_matrix[2]) > 0 means world_dir is behind the camera.
+    if (u_visible == 3 && dot(world_dir, u_view_matrix[2]) > 0.0) pixel_visible = false;
 
     if (pixel_visible) {
       vec3 tex_color = sampleDualFisheye(world_dir);

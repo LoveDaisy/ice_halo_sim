@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
@@ -12,6 +13,52 @@
 #include "lumice.h"
 
 namespace lumice::gui {
+
+namespace {
+// LogLinear hybrid mapping constants.
+// Tuned for prism_h [0, 100] range. Re-validate before reusing for other ranges.
+// REQUIRES: min_val == 0, max_val > kLogLinearX0 at call site.
+constexpr float kLogLinearX0 = 0.01f;       // Value threshold: linear below, log above
+constexpr float kLogLinearTSwitch = 0.15f;  // Slider position threshold (fraction of [0,1])
+
+// Log-scale: compute normalized [0,1] position from value in [min_val, max_val].
+static float LogValueToNorm(float value, float min_val, float max_val) {
+  value = std::max(value, min_val);
+  float log_ratio = std::log(max_val / min_val);
+  float norm = std::log(value / min_val) / log_ratio;
+  return std::clamp(norm, 0.0f, 1.0f);
+}
+
+// Log-scale: compute value from normalized [0,1] position.
+static float LogNormToValue(float norm, float min_val, float max_val) {
+  float log_ratio = std::log(max_val / min_val);
+  return min_val * std::exp(norm * log_ratio);
+}
+
+// LogLinear hybrid: compute normalized [0,1] position from value in [0, max_val].
+// Linear in [0, x0], log in [x0, max_val], C0 continuous at x0.
+static float LogLinearValueToNorm(float value, float max_val) {
+  value = std::clamp(value, 0.0f, max_val);
+  float log_ratio = std::log(max_val / kLogLinearX0);
+  float norm;
+  if (value <= kLogLinearX0) {
+    norm = kLogLinearTSwitch * value / kLogLinearX0;
+  } else {
+    norm = kLogLinearTSwitch + (1.0f - kLogLinearTSwitch) * std::log(value / kLogLinearX0) / log_ratio;
+  }
+  return std::clamp(norm, 0.0f, 1.0f);
+}
+
+// LogLinear hybrid: compute value from normalized [0,1] position.
+static float LogLinearNormToValue(float norm, float max_val) {
+  float log_ratio = std::log(max_val / kLogLinearX0);
+  if (norm <= kLogLinearTSwitch) {
+    return kLogLinearX0 * norm / kLogLinearTSwitch;
+  }
+  float t_log = (norm - kLogLinearTSwitch) / (1.0f - kLogLinearTSwitch);
+  return kLogLinearX0 * std::exp(t_log * log_ratio);
+}
+}  // namespace
 
 // Compute slider width and prepare IDs for the [slider] [input] Label layout.
 // Writes slider_id and input_id buffers, returns the computed slider width.
@@ -68,13 +115,16 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
     }
   } else if (scale == SliderScale::kLog && min_val > 0.0f) {
     // Log-scale slider: uniform resolution across orders of magnitude.
-    // Slider operates on normalized [0,1] position; actual value = min * exp(norm * log(max/min)).
-    *value = std::max(*value, min_val);  // Defend against 0/negative from InputFloat
-    float log_ratio = std::log(max_val / min_val);
-    float norm = std::log(*value / min_val) / log_ratio;
-    norm = std::clamp(norm, 0.0f, 1.0f);
+    float norm = LogValueToNorm(*value, min_val, max_val);
     if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
-      *value = min_val * std::exp(norm * log_ratio);
+      *value = LogNormToValue(norm, min_val, max_val);
+      changed = true;
+    }
+  } else if (scale == SliderScale::kLogLinear && min_val == 0.0f) {
+    // LogLinear hybrid: linear near zero, log above x0. Allows reaching zero.
+    float norm = LogLinearValueToNorm(*value, max_val);
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
+      *value = LogLinearNormToValue(norm, max_val);
       changed = true;
     }
   } else {
@@ -156,13 +206,25 @@ static bool SliderWithPreset(const char* label, float* value, float min_val, flo
 
   bool changed = false;
 
-  // Slider (sqrt scale)
+  // Slider (nonlinear scale support)
   ImGui::PushItemWidth(slider_w);
   if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
     float sqrt_val = std::sqrt(std::max(*value, 0.0f));
     float sqrt_max = std::sqrt(max_val);
     if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "")) {
       *value = sqrt_val * sqrt_val;
+      changed = true;
+    }
+  } else if (scale == SliderScale::kLog && min_val > 0.0f) {
+    float norm = LogValueToNorm(*value, min_val, max_val);
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
+      *value = LogNormToValue(norm, min_val, max_val);
+      changed = true;
+    }
+  } else if (scale == SliderScale::kLogLinear && min_val == 0.0f) {
+    float norm = LogLinearValueToNorm(*value, max_val);
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
+      *value = LogLinearNormToValue(norm, max_val);
       changed = true;
     }
   } else {
@@ -539,7 +601,7 @@ void RenderCrystalTab(GuiState& state) {
   if (cr.type == CrystalType::kPrism) {
     DIRTY_IF(SliderWithInput("Height", &cr.height, 0.01f, 100.0f, "%.3f", SliderScale::kLog));
   } else {
-    DIRTY_IF(SliderWithInput("Prism H", &cr.prism_h, 0.0f, 100.0f, "%.3f", SliderScale::kSqrt));
+    DIRTY_IF(SliderWithInput("Prism H", &cr.prism_h, 0.0f, 100.0f, "%.3f", SliderScale::kLogLinear));
     DIRTY_IF(SliderWithInput("Upper H", &cr.upper_h, 0.0f, 1.0f, "%.2f"));
     DIRTY_IF(SliderWithInput("Lower H", &cr.lower_h, 0.0f, 1.0f, "%.2f"));
   }
@@ -889,13 +951,50 @@ void RenderFilterTab(GuiState& state) {
     state.MarkFilterDirty();
   }
 
-  char raypath_buf[256];
-  snprintf(raypath_buf, sizeof(raypath_buf), "%s", f.raypath_text.c_str());
-  if (ImGui::InputText("Raypath", raypath_buf, sizeof(raypath_buf))) {
-    f.raypath_text = raypath_buf;
-    state.MarkFilterDirty();
+  // Persistent edit buffer: tracks what the user is typing, independent of f.raypath_text
+  // (which only holds the last validated value sent to server). Resyncs when:
+  //   - selected filter changes (user clicks a different filter)
+  //   - f.raypath_text changes externally (e.g. config file load)
+  static char raypath_edit_buf[256] = {};
+  static int raypath_edit_filter_idx = -1;
+  static std::string raypath_edit_committed;
+  if (raypath_edit_filter_idx != state.selected_filter || raypath_edit_committed != f.raypath_text) {
+    raypath_edit_filter_idx = state.selected_filter;
+    raypath_edit_committed = f.raypath_text;
+    snprintf(raypath_edit_buf, sizeof(raypath_edit_buf), "%s", f.raypath_text.c_str());
   }
-  ImGui::TextDisabled("Face indices separated by '-', e.g. 3-1-5-7-4 (comma also accepted)");
+
+  // Validate the edit buffer for visual feedback.
+  auto validation = ValidateRaypathText(raypath_edit_buf);
+  int style_pushes = 0;
+  if (validation == RaypathValidation::kIncomplete) {
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.6f, 0.4f, 0.1f, 0.6f));  // Orange
+    style_pushes = 1;
+  } else if (validation == RaypathValidation::kInvalid) {
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.7f, 0.15f, 0.15f, 0.6f));  // Red
+    style_pushes = 1;
+  }
+
+  if (ImGui::InputText("Raypath", raypath_edit_buf, sizeof(raypath_edit_buf))) {
+    // Revalidate after edit; only commit to model state on kValid.
+    // f.raypath_text always holds the last valid value, preventing other dirty triggers
+    // (e.g. symmetry checkbox) from submitting invalid text via FillLumiceConfig.
+    validation = ValidateRaypathText(raypath_edit_buf);
+    if (validation == RaypathValidation::kValid) {
+      f.raypath_text = raypath_edit_buf;
+      raypath_edit_committed = f.raypath_text;
+      state.MarkFilterDirty();
+    }
+  }
+  ImGui::PopStyleColor(style_pushes);
+
+  if (validation == RaypathValidation::kIncomplete) {
+    ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.0f), "Incomplete input");
+  } else if (validation == RaypathValidation::kInvalid) {
+    ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "Invalid input");
+  } else {
+    ImGui::TextDisabled("Face indices separated by '-', e.g. 3-1-5-7-4 (comma also accepted)");
+  }
 
   ImGui::Text("Symmetry:");
   ImGui::SameLine();
