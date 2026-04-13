@@ -324,6 +324,66 @@ static int FindIndexById(const std::vector<T>& vec, int id, int fallback) {
   return fallback;
 }
 
+// ========== GUI JSON Renderer Helpers ==========
+// Shared between SerializeGuiStateJson and DeserializeGuiStateJson.
+// TECH_DEBT(crystal-field-sync): SerializeCrystal/FillCrystalParam must be kept in sync manually.
+
+static json SerializeRendererForGui(const RenderConfig& r) {
+  json jr;
+  jr["id"] = r.id;
+  jr["lens_type"] = kLensTypeJsonNames[r.lens_type];
+  jr["fov"] = r.fov;
+  jr["elevation"] = r.elevation;
+  jr["azimuth"] = r.azimuth;
+  jr["roll"] = r.roll;
+  jr["sim_resolution"] = kSimResolutions[r.sim_resolution_index];
+  jr["visible"] = kVisibleJsonNames[r.visible];
+  jr["background"] = { r.background[0], r.background[1], r.background[2] };
+  jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
+  jr["opacity"] = r.opacity;
+  jr["exposure_offset"] = r.exposure_offset;
+  return jr;
+}
+
+static RenderConfig ParseRendererFromGuiJson(const json& jr) {
+  RenderConfig r;
+  r.id = jr.value("id", RenderConfig{}.id);
+  r.lens_type = LensTypeFromString(jr.value("lens_type", "linear"));
+  r.fov = jr.value("fov", RenderConfig{}.fov);
+  r.elevation = jr.value("elevation", RenderConfig{}.elevation);
+  r.azimuth = jr.value("azimuth", RenderConfig{}.azimuth);
+  r.roll = jr.value("roll", RenderConfig{}.roll);
+  r.sim_resolution_index = SimResolutionIndexFromValue(jr.value("sim_resolution", 1024));
+  r.visible = VisibleFromString(jr.value("visible", "full"));
+  if (jr.contains("background") && jr["background"].is_array() && jr["background"].size() == 3) {
+    for (int i = 0; i < 3; i++)
+      r.background[i] = jr["background"][i].get<float>();
+  }
+  if (jr.contains("ray_color") && jr["ray_color"].is_array() && jr["ray_color"].size() == 3) {
+    for (int i = 0; i < 3; i++)
+      r.ray_color[i] = jr["ray_color"][i].get<float>();
+  }
+  r.opacity = jr.value("opacity", RenderConfig{}.opacity);
+  r.exposure_offset = jr.value("exposure_offset", RenderConfig{}.exposure_offset);
+  return r;
+}
+
+// ========== GUI JSON Filter Helper ==========
+// Shared between new-format and old-format .lmc deserialization paths.
+// Both paths use identical JSON keys: name, action, raypath_text, sym_p, sym_b, sym_d.
+
+static FilterConfig ParseFilterFromGuiJson(const json& jf) {
+  FilterConfig f;
+  f.name = jf.value("name", std::string{});
+  auto action_str = jf.value("action", "filter_in");
+  f.action = (action_str == "filter_out") ? 1 : 0;
+  f.raypath_text = jf.value("raypath_text", FilterConfig{}.raypath_text);
+  f.sym_p = jf.value("sym_p", FilterConfig{}.sym_p);
+  f.sym_b = jf.value("sym_b", FilterConfig{}.sym_b);
+  f.sym_d = jf.value("sym_d", FilterConfig{}.sym_d);
+  return f;
+}
+
 
 // ========== Core Config Serialization (for LUMICE_CommitConfig) ==========
 
@@ -705,11 +765,6 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
 std::string SerializeGuiStateJson(const GuiState& state) {
   json root;
 
-  // Crystals
-  // TODO(serialization): full .lmc serialization format migration — this is a minimal
-  // implementation using the copy-model layer structure. Old .lmc files use ID-referenced
-  // crystals/filters/scattering; new format embeds crystal/filter in each entry.
-
   // Layers (copy model: each entry embeds its crystal/filter)
   root["layers"] = json::array();
   int ser_crystal_id = 1;
@@ -751,20 +806,7 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   // Renderers
   root["renderers"] = json::array();
   for (auto& r : state.renderers) {
-    json jr;
-    jr["id"] = r.id;
-    jr["lens_type"] = kLensTypeJsonNames[r.lens_type];
-    jr["fov"] = r.fov;
-    jr["elevation"] = r.elevation;
-    jr["azimuth"] = r.azimuth;
-    jr["roll"] = r.roll;
-    jr["sim_resolution"] = kSimResolutions[r.sim_resolution_index];
-    jr["visible"] = kVisibleJsonNames[r.visible];
-    jr["background"] = { r.background[0], r.background[1], r.background[2] };
-    jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
-    jr["opacity"] = r.opacity;
-    jr["exposure_offset"] = r.exposure_offset;
-    root["renderers"].push_back(jr);
+    root["renderers"].push_back(SerializeRendererForGui(r));
   }
 
   // Selected renderer (by ID)
@@ -821,10 +863,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
 
   state = GuiState{};
 
-  // TODO(serialization): backward compat with old .lmc format (crystals/filters/scattering with IDs).
-  // New format uses "layers" key with embedded crystal/filter per entry.
-
-  // Layers (new copy-model format)
+  // Layers: new copy-model format ("layers" key) with backward compat for old ID-referenced format
   if (root.contains("layers") && root["layers"].is_array()) {
     for (auto& jl : root["layers"]) {
       Layer layer;
@@ -837,16 +876,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
           }
           entry.proportion = je.value("proportion", 100.0f);
           if (je.contains("filter") && !je["filter"].is_null()) {
-            FilterConfig f;
-            auto& jf = je["filter"];
-            f.name = jf.value("name", std::string{});
-            auto action_str = jf.value("action", "filter_in");
-            f.action = (action_str == "filter_out") ? 1 : 0;
-            f.raypath_text = jf.value("raypath_text", std::string{});
-            f.sym_p = jf.value("sym_p", true);
-            f.sym_b = jf.value("sym_b", true);
-            f.sym_d = jf.value("sym_d", true);
-            entry.filter = f;
+            entry.filter = ParseFilterFromGuiJson(je["filter"]);
           }
           layer.entries.push_back(entry);
         }
@@ -865,16 +895,8 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
     std::map<int, FilterConfig> filter_map;
     if (root.contains("filters") && root["filters"].is_array()) {
       for (auto& jf : root["filters"]) {
-        FilterConfig f;
         int id = jf.value("id", 0);
-        f.name = jf.value("name", std::string{});
-        auto action_str = jf.value("action", "filter_in");
-        f.action = (action_str == "filter_out") ? 1 : 0;
-        f.raypath_text = jf.value("raypath_text", std::string{});
-        f.sym_p = jf.value("sym_p", true);
-        f.sym_b = jf.value("sym_b", true);
-        f.sym_d = jf.value("sym_d", true);
-        filter_map[id] = f;
+        filter_map[id] = ParseFilterFromGuiJson(jf);
       }
     }
     if (root["scattering"].is_array()) {
@@ -920,26 +942,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   // Renderers
   if (root.contains("renderers") && root["renderers"].is_array()) {
     for (auto& jr : root["renderers"]) {
-      RenderConfig r;
-      r.id = jr.value("id", 0);
-      r.lens_type = LensTypeFromString(jr.value("lens_type", "linear"));
-      r.fov = jr.value("fov", 90.0f);
-      r.elevation = jr.value("elevation", 0.0f);
-      r.azimuth = jr.value("azimuth", 0.0f);
-      r.roll = jr.value("roll", 0.0f);
-      r.sim_resolution_index = SimResolutionIndexFromValue(jr.value("sim_resolution", 1024));
-      r.visible = VisibleFromString(jr.value("visible", "full"));
-      if (jr.contains("background") && jr["background"].is_array() && jr["background"].size() == 3) {
-        for (int i = 0; i < 3; i++)
-          r.background[i] = jr["background"][i].get<float>();
-      }
-      if (jr.contains("ray_color") && jr["ray_color"].is_array() && jr["ray_color"].size() == 3) {
-        for (int i = 0; i < 3; i++)
-          r.ray_color[i] = jr["ray_color"][i].get<float>();
-      }
-      r.opacity = jr.value("opacity", 1.0f);
-      r.exposure_offset = jr.value("exposure_offset", 0.0f);
-      state.renderers.push_back(r);
+      state.renderers.push_back(ParseRendererFromGuiJson(jr));
     }
   }
 
