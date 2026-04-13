@@ -264,9 +264,8 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      // Ensure Crystal tab is selected (previous tests may have switched tabs)
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
-      ctx->Yield(3);  // Let layout settle: tab switch → mesh rebuild → FBO render
+      // Left panel now renders cards directly (no tabs) — just let layout settle
+      ctx->Yield(3);  // Let layout settle: mesh rebuild → FBO render
 
       ImGuiWindow* panel = ctx->GetWindowByRef("##LeftPanel");
       IM_CHECK(panel != nullptr);
@@ -547,15 +546,14 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
 
 void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
   // p1_slider/ray_count_min_max — linear scale, exact boundary values expected.
-  // SliderWithInput("Rays(M)", ...) lives in RenderSceneTab (panels.cpp:609), so we must
-  // switch to the Scene tab first. Internal widget ID is "##Rays(M)_input" via
-  // PrepareSliderLayout (panels.cpp:33).
+  // SliderWithInput("Rays(M)", ...) now lives in RenderSceneControls (right panel Scene group).
+  // Internal widget ID is "##Rays(M)_input" via PrepareSliderLayout.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "ray_count_min_max");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Scene");
+      // Scene is now a CollapsingHeader in the right panel, open by default
       ctx->Yield(2);
 
       IM_CHECK_EQ(gui::g_state.sim.infinite, false);  // slider active when not infinite
@@ -576,7 +574,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Scene");
+      // Scene is now a CollapsingHeader in the right panel, open by default
       ctx->Yield(2);
 
       ctx->ItemInputValue("**/##Rays(M)_input", 5.0f);
@@ -680,13 +678,13 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
 #endif  // disabled crystal slider boundary tests
 
   // p1_slider/altitude_negative_boundaries — sun altitude ±90°
-  // SliderWithInput("Altitude", ...) is also in RenderSceneTab (panels.cpp:598)
+  // SliderWithInput("Altitude", ...) now in RenderSceneControls (right panel Scene group)
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "altitude_negative_boundaries");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Scene");
+      // Scene is now a CollapsingHeader in the right panel, open by default
       ctx->Yield(2);
 
       ctx->ItemInputValue("**/##Altitude_input", -90.0f);
@@ -915,8 +913,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
-      ctx->Yield(2);
+      // Left panel now renders cards directly (no tabs)
 
       // Add an entry so state differs from default
       gui::g_state.layers[0].entries.push_back(gui::EntryCard{});

@@ -131,8 +131,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
 
-      // Ensure Crystal tab is active (previous tests may have switched to Render tab)
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
+      // Left panel now renders cards directly (no tabs)
       ctx->Yield();
 
       // Switch to Pyramid type
