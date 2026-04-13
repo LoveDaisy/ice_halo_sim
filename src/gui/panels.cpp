@@ -14,6 +14,14 @@
 
 namespace lumice::gui {
 
+namespace {
+// LogLinear hybrid mapping constants.
+// Tuned for prism_h [0, 100] range. Re-validate before reusing for other ranges.
+// REQUIRES: min_val == 0 at call site.
+constexpr float kLogLinearX0 = 0.01f;       // Value threshold: linear below, log above
+constexpr float kLogLinearTSwitch = 0.15f;  // Slider position threshold (fraction of [0,1])
+}  // namespace
+
 // Compute slider width and prepare IDs for the [slider] [input] Label layout.
 // Writes slider_id and input_id buffers, returns the computed slider width.
 static float PrepareSliderLayout(const char* label, char* display_label_out, size_t display_buf_size, char* slider_id,
@@ -76,6 +84,27 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
     norm = std::clamp(norm, 0.0f, 1.0f);
     if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
       *value = min_val * std::exp(norm * log_ratio);
+      changed = true;
+    }
+  } else if (scale == SliderScale::kLogLinear && min_val == 0.0f) {
+    // LogLinear hybrid: linear [0, x0] for t in [0, t_switch], log [x0, max] for t in [t_switch, 1].
+    // Allows reaching zero while keeping log-scale feel for larger values.
+    *value = std::clamp(*value, 0.0f, max_val);
+    float log_ratio = std::log(max_val / kLogLinearX0);
+    float norm;
+    if (*value <= kLogLinearX0) {
+      norm = kLogLinearTSwitch * *value / kLogLinearX0;
+    } else {
+      norm = kLogLinearTSwitch + (1.0f - kLogLinearTSwitch) * std::log(*value / kLogLinearX0) / log_ratio;
+    }
+    norm = std::clamp(norm, 0.0f, 1.0f);
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
+      if (norm <= kLogLinearTSwitch) {
+        *value = kLogLinearX0 * norm / kLogLinearTSwitch;
+      } else {
+        float t_log = (norm - kLogLinearTSwitch) / (1.0f - kLogLinearTSwitch);
+        *value = kLogLinearX0 * std::exp(t_log * log_ratio);
+      }
       changed = true;
     }
   } else {
@@ -157,13 +186,41 @@ static bool SliderWithPreset(const char* label, float* value, float min_val, flo
 
   bool changed = false;
 
-  // Slider (sqrt scale)
+  // Slider (nonlinear scale support)
   ImGui::PushItemWidth(slider_w);
   if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
     float sqrt_val = std::sqrt(std::max(*value, 0.0f));
     float sqrt_max = std::sqrt(max_val);
     if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "")) {
       *value = sqrt_val * sqrt_val;
+      changed = true;
+    }
+  } else if (scale == SliderScale::kLog && min_val > 0.0f) {
+    *value = std::max(*value, min_val);
+    float log_ratio = std::log(max_val / min_val);
+    float norm = std::log(*value / min_val) / log_ratio;
+    norm = std::clamp(norm, 0.0f, 1.0f);
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
+      *value = min_val * std::exp(norm * log_ratio);
+      changed = true;
+    }
+  } else if (scale == SliderScale::kLogLinear && min_val == 0.0f) {
+    *value = std::clamp(*value, 0.0f, max_val);
+    float log_ratio = std::log(max_val / kLogLinearX0);
+    float norm;
+    if (*value <= kLogLinearX0) {
+      norm = kLogLinearTSwitch * *value / kLogLinearX0;
+    } else {
+      norm = kLogLinearTSwitch + (1.0f - kLogLinearTSwitch) * std::log(*value / kLogLinearX0) / log_ratio;
+    }
+    norm = std::clamp(norm, 0.0f, 1.0f);
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
+      if (norm <= kLogLinearTSwitch) {
+        *value = kLogLinearX0 * norm / kLogLinearTSwitch;
+      } else {
+        float t_log = (norm - kLogLinearTSwitch) / (1.0f - kLogLinearTSwitch);
+        *value = kLogLinearX0 * std::exp(t_log * log_ratio);
+      }
       changed = true;
     }
   } else {
@@ -540,7 +597,7 @@ void RenderCrystalTab(GuiState& state) {
   if (cr.type == CrystalType::kPrism) {
     DIRTY_IF(SliderWithInput("Height", &cr.height, 0.01f, 100.0f, "%.3f", SliderScale::kLog));
   } else {
-    DIRTY_IF(SliderWithInput("Prism H", &cr.prism_h, 0.0f, 100.0f, "%.3f", SliderScale::kSqrt));
+    DIRTY_IF(SliderWithInput("Prism H", &cr.prism_h, 0.0f, 100.0f, "%.3f", SliderScale::kLogLinear));
     DIRTY_IF(SliderWithInput("Upper H", &cr.upper_h, 0.0f, 1.0f, "%.2f"));
     DIRTY_IF(SliderWithInput("Lower H", &cr.lower_h, 0.0f, 1.0f, "%.2f"));
   }

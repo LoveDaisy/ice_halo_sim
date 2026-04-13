@@ -6,7 +6,7 @@ namespace lumice::gui {
 struct GuiState;
 
 // Slider scale modes for SliderWithInput
-enum class SliderScale { kLinear, kSqrt, kLog };
+enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
 
 // Slider + InputFloat + label text, laid out as: [slider] [input] Label
 // Uses a fixed label column width so vertically stacked sliders align.
