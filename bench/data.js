@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776047574977,
+  "lastUpdate": 1776047576703,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -2759,6 +2759,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 69.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "25c74ca230184e57181e36fa4fab523e0623dc7e",
+          "message": "Merge pull request #67 from LoveDaisy/feat/ux_tweak\n\nfeat(gui): four UX interaction improvements",
+          "timestamp": "2026-04-13T10:27:55+08:00",
+          "tree_id": "2f82826d00b92f5318caad5d530ba688bc406bf3",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/25c74ca230184e57181e36fa4fab523e0623dc7e"
+        },
+        "date": 1776047576023,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 92.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 75.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 60.2,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 71.3,
             "unit": "%"
           }
         ]
