@@ -9,7 +9,6 @@ struct CrystalConfig;
 extern float g_crystal_rotation[16];
 extern float g_crystal_zoom;
 extern int g_crystal_style;
-extern int g_crystal_mesh_id;
 extern int g_crystal_mesh_hash;
 
 // Crystal preview helpers

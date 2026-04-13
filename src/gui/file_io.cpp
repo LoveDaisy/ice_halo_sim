@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <vector>
@@ -107,9 +108,9 @@ static json SerializeAxisDist(const AxisDist& a) {
   return j;
 }
 
-static json SerializeCrystal(const CrystalConfig& c) {
+static json SerializeCrystal(const CrystalConfig& c, int id) {
   json j;
-  j["id"] = c.id;
+  j["id"] = id;
   if (!c.name.empty()) {
     j["name"] = c.name;
   }
@@ -146,9 +147,9 @@ static json SerializeCrystal(const CrystalConfig& c) {
   return j;
 }
 
-static json SerializeFilterForGui(const FilterConfig& f) {
+static json SerializeFilterForGui(const FilterConfig& f, int id) {
   json j;
-  j["id"] = f.id;
+  j["id"] = id;
   if (!f.name.empty()) {
     j["name"] = f.name;
   }
@@ -160,9 +161,9 @@ static json SerializeFilterForGui(const FilterConfig& f) {
   return j;
 }
 
-static json SerializeFilterForCore(const FilterConfig& f) {
+static json SerializeFilterForCore(const FilterConfig& f, int id) {
   json j;
-  j["id"] = f.id;
+  j["id"] = id;
   j["type"] = "raypath";
   j["action"] = f.action == 0 ? "filter_in" : "filter_out";
 
@@ -214,7 +215,6 @@ static AxisDist ParseAxisDist(const json& j) {
 
 static CrystalConfig ParseCrystal(const json& j) {
   CrystalConfig c;
-  c.id = j.value("id", 0);
   c.name = j.value("name", std::string{});
 
   auto type_str = j.value("type", "prism");
@@ -330,19 +330,12 @@ static int FindIndexById(const std::vector<T>& vec, int id, int fallback) {
 std::string SerializeCoreConfig(const GuiState& state) {
   json root;
 
-  // Crystals
+  // Flatten layers into crystal/filter/scattering arrays with dynamically assigned IDs
+  int next_crystal_id = 1;
+  int next_filter_id = 1;
   root["crystal"] = json::array();
-  for (auto& c : state.crystals) {
-    root["crystal"].push_back(SerializeCrystal(c));
-  }
-
-  // Filters
   root["filter"] = json::array();
-  for (auto& f : state.filters) {
-    root["filter"].push_back(SerializeFilterForCore(f));
-  }
 
-  // Scene
   json scene;
   scene["light_source"]["type"] = "sun";
   scene["light_source"]["altitude"] = state.sun.altitude;
@@ -362,17 +355,28 @@ std::string SerializeCoreConfig(const GuiState& state) {
   scene["max_hits"] = state.sim.max_hits;
 
   scene["scattering"] = json::array();
-  for (auto& layer : state.scattering) {
+  for (auto& layer : state.layers) {
     json jl;
     jl["prob"] = layer.probability;
     jl["entries"] = json::array();
     for (auto& entry : layer.entries) {
+      // Assign temporary crystal ID and serialize
+      int cid = next_crystal_id++;
+      auto jc = SerializeCrystal(entry.crystal, cid);
+      root["crystal"].push_back(jc);
+
       json je;
-      je["crystal"] = entry.crystal_id >= 0 ? entry.crystal_id : 1;
+      je["crystal"] = cid;
       je["proportion"] = entry.proportion;
-      if (entry.filter_id >= 0) {
-        je["filter"] = entry.filter_id;
+
+      // Filter: only if present
+      if (entry.filter) {
+        int fid = next_filter_id++;
+        auto jf = SerializeFilterForCore(*entry.filter, fid);
+        root["filter"].push_back(jf);
+        je["filter"] = fid;
       }
+
       jl["entries"].push_back(je);
     }
     scene["scattering"].push_back(jl);
@@ -436,44 +440,76 @@ static void FillAxisDist(const AxisDist& src, LUMICE_AxisDist* dst) {
   dst->std = src.std;
 }
 
+// Helper: fill a LUMICE_CrystalParam from GUI CrystalConfig with a given ID
+static void FillCrystalParam(const CrystalConfig& c, int id, LUMICE_CrystalParam* dst) {
+  dst->id = id;
+  dst->type = c.type == CrystalType::kPrism ? 0 : 1;
+  dst->height = c.height;
+  dst->prism_h = c.prism_h;
+  dst->upper_h = c.upper_h;
+  dst->lower_h = c.lower_h;
+  dst->upper_wedge_angle = c.upper_alpha;
+  dst->lower_wedge_angle = c.lower_alpha;
+  std::copy(std::begin(c.face_distance), std::end(c.face_distance), dst->face_distance);
+  FillAxisDist(c.zenith, &dst->zenith);
+  FillAxisDist(c.azimuth, &dst->azimuth);
+  FillAxisDist(c.roll, &dst->roll);
+}
+
+// Helper: fill a LUMICE_FilterParam from GUI FilterConfig with a given ID
+static void FillFilterParam(const FilterConfig& f, int id, LUMICE_FilterParam* dst) {
+  dst->id = id;
+  dst->action = f.action;
+  dst->symmetry = (f.sym_p ? 1 : 0) | (f.sym_b ? 2 : 0) | (f.sym_d ? 4 : 0);
+  auto rp = ParseRaypathText(f.raypath_text);
+  dst->raypath_count = static_cast<int>(std::min(rp.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RAYPATH_LEN)));
+  for (int k = 0; k < dst->raypath_count; k++) {
+    dst->raypath[k] = rp[k];
+  }
+}
+
 void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
   std::memset(out, 0, sizeof(LUMICE_Config));
 
-  // Crystals
-  out->crystal_count =
-      static_cast<int>(std::min(state.crystals.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_CRYSTALS)));
-  for (int i = 0; i < out->crystal_count; i++) {
-    const auto& c = state.crystals[i];
-    auto& dst = out->crystals[i];
-    dst.id = c.id;
-    dst.type = c.type == CrystalType::kPrism ? 0 : 1;
-    dst.height = c.height;
-    dst.prism_h = c.prism_h;
-    dst.upper_h = c.upper_h;
-    dst.lower_h = c.lower_h;
-    dst.upper_wedge_angle = c.upper_alpha;
-    dst.lower_wedge_angle = c.lower_alpha;
-    std::copy(std::begin(c.face_distance), std::end(c.face_distance), dst.face_distance);
-    FillAxisDist(c.zenith, &dst.zenith);
-    FillAxisDist(c.azimuth, &dst.azimuth);
-    FillAxisDist(c.roll, &dst.roll);
-  }
+  // Flatten layers into crystals/filters/scattering with dynamically assigned IDs
+  int next_crystal_id = 1;
+  int next_filter_id = 1;
+  int crystal_idx = 0;
+  int filter_idx = 0;
 
-  // Filters
-  out->filter_count = static_cast<int>(std::min(state.filters.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_FILTERS)));
-  for (int i = 0; i < out->filter_count; i++) {
-    const auto& f = state.filters[i];
-    auto& dst = out->filters[i];
-    dst.id = f.id;
-    dst.action = f.action;
-    dst.symmetry = (f.sym_p ? 1 : 0) | (f.sym_b ? 2 : 0) | (f.sym_d ? 4 : 0);
-    // Parse raypath_text
-    auto rp = ParseRaypathText(f.raypath_text);
-    dst.raypath_count = static_cast<int>(std::min(rp.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RAYPATH_LEN)));
-    for (int k = 0; k < dst.raypath_count; k++) {
-      dst.raypath[k] = rp[k];
+  out->scatter_count =
+      static_cast<int>(std::min(state.layers.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_SCATTER_LAYERS)));
+  for (int i = 0; i < out->scatter_count; i++) {
+    const auto& layer = state.layers[i];
+    auto& dst_layer = out->scattering[i];
+    dst_layer.probability = layer.probability;
+    dst_layer.entry_count =
+        static_cast<int>(std::min(layer.entries.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_SCATTER_ENTRIES)));
+    for (int k = 0; k < dst_layer.entry_count; k++) {
+      const auto& entry = layer.entries[k];
+
+      // Assign crystal
+      int cid = next_crystal_id++;
+      if (crystal_idx < LUMICE_MAX_CONFIG_CRYSTALS) {
+        FillCrystalParam(entry.crystal, cid, &out->crystals[crystal_idx++]);
+      }
+      dst_layer.entries[k].crystal_id = cid;
+      dst_layer.entries[k].proportion = entry.proportion;
+
+      // Assign filter (if present)
+      if (entry.filter) {
+        int fid = next_filter_id++;
+        if (filter_idx < LUMICE_MAX_CONFIG_FILTERS) {
+          FillFilterParam(*entry.filter, fid, &out->filters[filter_idx++]);
+        }
+        dst_layer.entries[k].filter_id = fid;
+      } else {
+        dst_layer.entries[k].filter_id = -1;
+      }
     }
   }
+  out->crystal_count = crystal_idx;
+  out->filter_count = filter_idx;
 
   // Renderers
   out->renderer_count =
@@ -505,23 +541,6 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
   out->infinite = state.sim.infinite ? 1 : 0;
   out->ray_num = static_cast<unsigned long>(state.sim.ray_num_millions * 1e6f);
   out->max_hits = state.sim.max_hits;
-
-  // Scene: scattering
-  out->scatter_count =
-      static_cast<int>(std::min(state.scattering.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_SCATTER_LAYERS)));
-  for (int i = 0; i < out->scatter_count; i++) {
-    const auto& layer = state.scattering[i];
-    auto& dst = out->scattering[i];
-    dst.probability = layer.probability;
-    dst.entry_count =
-        static_cast<int>(std::min(layer.entries.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_SCATTER_ENTRIES)));
-    for (int k = 0; k < dst.entry_count; k++) {
-      const auto& e = layer.entries[k];
-      dst.entries[k].crystal_id = e.crystal_id;
-      dst.entries[k].proportion = e.proportion;
-      dst.entries[k].filter_id = e.filter_id;
-    }
-  }
 }
 
 
@@ -536,30 +555,24 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
   }
 
   state = GuiState{};
-  int max_id = 0;
 
-  // Crystals
+  // Parse crystals and filters into temporary ID-indexed maps for scatter entry lookup
+  std::map<int, CrystalConfig> crystal_map;
   if (root.contains("crystal") && root["crystal"].is_array()) {
     for (auto& jc : root["crystal"]) {
-      auto c = ParseCrystal(jc);
-      max_id = std::max(max_id, c.id);
-      state.crystals.push_back(c);
+      int id = jc.value("id", 0);
+      crystal_map[id] = ParseCrystal(jc);
     }
   }
-  state.next_crystal_id = max_id + 1;
-  if (!state.crystals.empty()) {
-    state.selected_crystal = 0;
-  }
 
-  // Filters (only raypath for MVP, skip others)
-  max_id = 0;
+  std::map<int, FilterConfig> filter_map;
   if (root.contains("filter") && root["filter"].is_array()) {
     for (auto& jf : root["filter"]) {
       auto type_str = jf.value("type", "");
       if (type_str != "raypath")
         continue;
       FilterConfig f;
-      f.id = jf.value("id", 0);
+      int id = jf.value("id", 0);
       f.name = jf.value("name", std::string{});
       auto action_str = jf.value("action", "filter_in");
       f.action = (action_str == "filter_out") ? 1 : 0;
@@ -576,13 +589,8 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       f.sym_p = (sym.find('P') != std::string::npos);
       f.sym_b = (sym.find('B') != std::string::npos);
       f.sym_d = (sym.find('D') != std::string::npos);
-      max_id = std::max(max_id, f.id);
-      state.filters.push_back(f);
+      filter_map[id] = f;
     }
-  }
-  state.next_filter_id = max_id + 1;
-  if (!state.filters.empty()) {
-    state.selected_filter = 0;
   }
 
   // Scene
@@ -607,26 +615,33 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     }
     state.sim.max_hits = js.value("max_hits", 8);
 
+    // Convert ID-referenced scattering to copy-model layers
     if (js.contains("scattering") && js["scattering"].is_array()) {
       for (auto& jlayer : js["scattering"]) {
-        ScatterLayer layer;
+        Layer layer;
         layer.probability = jlayer.value("prob", 1.0f);
         if (jlayer.contains("entries") && jlayer["entries"].is_array()) {
           for (auto& je : jlayer["entries"]) {
-            ScatterEntry entry;
-            entry.crystal_id = je.value("crystal", -1);
+            EntryCard entry;
+            int crystal_id = je.value("crystal", -1);
+            if (crystal_map.count(crystal_id)) {
+              entry.crystal = crystal_map[crystal_id];
+            }
             entry.proportion = je.value("proportion", 1.0f);
-            entry.filter_id = je.value("filter", -1);
+            int filter_id = je.value("filter", -1);
+            if (filter_id >= 0 && filter_map.count(filter_id)) {
+              entry.filter = filter_map[filter_id];
+            }
             layer.entries.push_back(entry);
           }
         }
-        state.scattering.push_back(layer);
+        state.layers.push_back(layer);
       }
     }
   }
 
   // Render
-  max_id = 0;
+  int max_id = 0;
   if (root.contains("render") && root["render"].is_array()) {
     for (auto& jr : root["render"]) {
       RenderConfig r;
@@ -686,15 +701,28 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   json root;
 
   // Crystals
-  root["crystals"] = json::array();
-  for (auto& c : state.crystals) {
-    root["crystals"].push_back(SerializeCrystal(c));
-  }
+  // TODO(serialization): full .lmc serialization format migration — this is a minimal
+  // implementation using the copy-model layer structure. Old .lmc files use ID-referenced
+  // crystals/filters/scattering; new format embeds crystal/filter in each entry.
 
-  // Filters
-  root["filters"] = json::array();
-  for (auto& f : state.filters) {
-    root["filters"].push_back(SerializeFilterForGui(f));
+  // Layers (copy model: each entry embeds its crystal/filter)
+  root["layers"] = json::array();
+  int ser_crystal_id = 1;
+  int ser_filter_id = 1;
+  for (auto& layer : state.layers) {
+    json jl;
+    jl["prob"] = layer.probability;
+    jl["entries"] = json::array();
+    for (auto& entry : layer.entries) {
+      json je;
+      je["crystal"] = SerializeCrystal(entry.crystal, ser_crystal_id++);
+      je["proportion"] = entry.proportion;
+      if (entry.filter) {
+        je["filter"] = SerializeFilterForGui(*entry.filter, ser_filter_id++);
+      }
+      jl["entries"].push_back(je);
+    }
+    root["layers"].push_back(jl);
   }
 
   // Sun
@@ -715,22 +743,6 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   sim["infinite"] = state.sim.infinite;
   root["sim"] = sim;
 
-  // Scattering
-  root["scattering"] = json::array();
-  for (auto& layer : state.scattering) {
-    json jl;
-    jl["prob"] = layer.probability;
-    jl["entries"] = json::array();
-    for (auto& entry : layer.entries) {
-      json je;
-      je["crystal_id"] = entry.crystal_id;
-      je["proportion"] = entry.proportion;
-      je["filter_id"] = entry.filter_id;
-      jl["entries"].push_back(je);
-    }
-    root["scattering"].push_back(jl);
-  }
-
   // Renderers
   root["renderers"] = json::array();
   for (auto& r : state.renderers) {
@@ -750,20 +762,14 @@ std::string SerializeGuiStateJson(const GuiState& state) {
     root["renderers"].push_back(jr);
   }
 
-  // Selected items (by ID, not index)
-  auto id_or_neg1 = [](const auto& vec, int idx) -> int {
+  // Selected renderer (by ID)
+  auto renderer_id_or_neg1 = [](const auto& vec, int idx) -> int {
     if (idx >= 0 && idx < static_cast<int>(vec.size()))
       return vec[idx].id;
     return -1;
   };
-  root["selected_crystal_id"] = id_or_neg1(state.crystals, state.selected_crystal);
-  root["selected_renderer_id"] = id_or_neg1(state.renderers, state.selected_renderer);
-  root["selected_filter_id"] = id_or_neg1(state.filters, state.selected_filter);
-
-  // ID counters
-  root["next_crystal_id"] = state.next_crystal_id;
+  root["selected_renderer_id"] = renderer_id_or_neg1(state.renderers, state.selected_renderer);
   root["next_renderer_id"] = state.next_renderer_id;
-  root["next_filter_id"] = state.next_filter_id;
 
   // Aspect ratio (view preference)
   auto preset_idx = static_cast<int>(state.aspect_preset);
@@ -810,26 +816,83 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
 
   state = GuiState{};
 
-  // Crystals
-  if (root.contains("crystals") && root["crystals"].is_array()) {
-    for (auto& jc : root["crystals"]) {
-      state.crystals.push_back(ParseCrystal(jc));
-    }
-  }
+  // TODO(serialization): backward compat with old .lmc format (crystals/filters/scattering with IDs).
+  // New format uses "layers" key with embedded crystal/filter per entry.
 
-  // Filters
-  if (root.contains("filters") && root["filters"].is_array()) {
-    for (auto& jf : root["filters"]) {
-      FilterConfig f;
-      f.id = jf.value("id", 0);
-      f.name = jf.value("name", std::string{});
-      auto action_str = jf.value("action", "filter_in");
-      f.action = (action_str == "filter_out") ? 1 : 0;
-      f.raypath_text = jf.value("raypath_text", std::string{});
-      f.sym_p = jf.value("sym_p", true);
-      f.sym_b = jf.value("sym_b", true);
-      f.sym_d = jf.value("sym_d", true);
-      state.filters.push_back(f);
+  // Layers (new copy-model format)
+  if (root.contains("layers") && root["layers"].is_array()) {
+    for (auto& jl : root["layers"]) {
+      Layer layer;
+      layer.probability = jl.value("prob", 0.0f);
+      if (jl.contains("entries") && jl["entries"].is_array()) {
+        for (auto& je : jl["entries"]) {
+          EntryCard entry;
+          if (je.contains("crystal")) {
+            entry.crystal = ParseCrystal(je["crystal"]);
+          }
+          entry.proportion = je.value("proportion", 100.0f);
+          if (je.contains("filter") && !je["filter"].is_null()) {
+            FilterConfig f;
+            auto& jf = je["filter"];
+            f.name = jf.value("name", std::string{});
+            auto action_str = jf.value("action", "filter_in");
+            f.action = (action_str == "filter_out") ? 1 : 0;
+            f.raypath_text = jf.value("raypath_text", std::string{});
+            f.sym_p = jf.value("sym_p", true);
+            f.sym_b = jf.value("sym_b", true);
+            f.sym_d = jf.value("sym_d", true);
+            entry.filter = f;
+          }
+          layer.entries.push_back(entry);
+        }
+      }
+      state.layers.push_back(layer);
+    }
+  } else if (root.contains("crystals") && root.contains("scattering")) {
+    // Backward compat: old .lmc format with ID-referenced crystals/filters/scattering
+    std::map<int, CrystalConfig> crystal_map;
+    if (root["crystals"].is_array()) {
+      for (auto& jc : root["crystals"]) {
+        int id = jc.value("id", 0);
+        crystal_map[id] = ParseCrystal(jc);
+      }
+    }
+    std::map<int, FilterConfig> filter_map;
+    if (root.contains("filters") && root["filters"].is_array()) {
+      for (auto& jf : root["filters"]) {
+        FilterConfig f;
+        int id = jf.value("id", 0);
+        f.name = jf.value("name", std::string{});
+        auto action_str = jf.value("action", "filter_in");
+        f.action = (action_str == "filter_out") ? 1 : 0;
+        f.raypath_text = jf.value("raypath_text", std::string{});
+        f.sym_p = jf.value("sym_p", true);
+        f.sym_b = jf.value("sym_b", true);
+        f.sym_d = jf.value("sym_d", true);
+        filter_map[id] = f;
+      }
+    }
+    if (root["scattering"].is_array()) {
+      for (auto& jl : root["scattering"]) {
+        Layer layer;
+        layer.probability = jl.value("prob", 0.0f);
+        if (jl.contains("entries") && jl["entries"].is_array()) {
+          for (auto& je : jl["entries"]) {
+            EntryCard entry;
+            int crystal_id = je.value("crystal_id", -1);
+            if (crystal_map.count(crystal_id)) {
+              entry.crystal = crystal_map[crystal_id];
+            }
+            entry.proportion = je.value("proportion", 100.0f);
+            int filter_id = je.value("filter_id", -1);
+            if (filter_id >= 0 && filter_map.count(filter_id)) {
+              entry.filter = filter_map[filter_id];
+            }
+            layer.entries.push_back(entry);
+          }
+        }
+        state.layers.push_back(layer);
+      }
     }
   }
 
@@ -847,24 +910,6 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
     state.sim.ray_num_millions = js.value("ray_num_millions", SimConfig{}.ray_num_millions);
     state.sim.max_hits = js.value("max_hits", SimConfig{}.max_hits);
     state.sim.infinite = js.value("infinite", SimConfig{}.infinite);
-  }
-
-  // Scattering
-  if (root.contains("scattering") && root["scattering"].is_array()) {
-    for (auto& jl : root["scattering"]) {
-      ScatterLayer layer;
-      layer.probability = jl.value("prob", 0.0f);
-      if (jl.contains("entries") && jl["entries"].is_array()) {
-        for (auto& je : jl["entries"]) {
-          ScatterEntry entry;
-          entry.crystal_id = je.value("crystal_id", -1);
-          entry.proportion = je.value("proportion", 100.0f);
-          entry.filter_id = je.value("filter_id", -1);
-          layer.entries.push_back(entry);
-        }
-      }
-      state.scattering.push_back(layer);
-    }
   }
 
   // Renderers
@@ -893,19 +938,12 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
     }
   }
 
-  // ID counters
-  state.next_crystal_id = root.value("next_crystal_id", 1);
+  // ID counters (renderer only in new model)
   state.next_renderer_id = root.value("next_renderer_id", 1);
-  state.next_filter_id = root.value("next_filter_id", 1);
 
-  // Selected items (by ID → find index)
-  int sel_crystal_id = root.value("selected_crystal_id", -1);
+  // Selected renderer (by ID → find index)
   int sel_renderer_id = root.value("selected_renderer_id", -1);
-  int sel_filter_id = root.value("selected_filter_id", -1);
-
-  state.selected_crystal = FindIndexById(state.crystals, sel_crystal_id, state.crystals.empty() ? -1 : 0);
   state.selected_renderer = FindIndexById(state.renderers, sel_renderer_id, state.renderers.empty() ? -1 : 0);
-  state.selected_filter = FindIndexById(state.filters, sel_filter_id, state.filters.empty() ? -1 : 0);
 
   // Aspect ratio (view preference, defaults to Free for old files)
   state.aspect_preset = AspectPresetFromString(root.value("aspect_ratio", "free"));

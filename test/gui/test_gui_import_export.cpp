@@ -25,8 +25,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // Verify key fields survived round-trip
       IM_CHECK(std::abs(loaded.sim.ray_num_millions - gui::g_state.sim.ray_num_millions) < 0.01f);
-      IM_CHECK_EQ(static_cast<int>(loaded.crystals.size()), static_cast<int>(gui::g_state.crystals.size()));
-      IM_CHECK_EQ(static_cast<int>(loaded.filters.size()), static_cast<int>(gui::g_state.filters.size()));
+      IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), static_cast<int>(gui::g_state.layers.size()));
       IM_CHECK_EQ(static_cast<int>(loaded.renderers.size()), static_cast<int>(gui::g_state.renderers.size()));
     };
   }

@@ -293,88 +293,7 @@ void FormatFilterLabel(char* buf, size_t size, int id, const std::string& name) 
   }
 }
 
-// Check if a crystal ID is referenced by any scattering entry
-bool IsCrystalReferenced(const GuiState& state, int crystal_id) {
-  for (auto& layer : state.scattering) {
-    for (auto& entry : layer.entries) {
-      if (entry.crystal_id == crystal_id)
-        return true;
-    }
-  }
-  return false;
-}
-
-// Check if a filter ID is referenced by any scattering entry
-bool IsFilterReferenced(const GuiState& state, int filter_id) {
-  for (auto& layer : state.scattering) {
-    for (auto& entry : layer.entries) {
-      if (entry.filter_id == filter_id)
-        return true;
-    }
-  }
-  return false;
-}
-
-// Clear references to a crystal ID in all scattering entries
-// Handle scattering references after deleting a crystal:
-// - Multi-entry layer: remove the entry referencing deleted crystal
-// - Single-entry layer: reassign to first available crystal
-void HandleDeletedCrystalRefs(GuiState& state, int deleted_id) {
-  // Find first crystal that is NOT the one being deleted
-  int fallback_id = -1;
-  for (auto& c : state.crystals) {
-    if (c.id != deleted_id) {
-      fallback_id = c.id;
-      break;
-    }
-  }
-  for (auto& layer : state.scattering) {
-    if (layer.entries.size() > 1) {
-      layer.entries.erase(std::remove_if(layer.entries.begin(), layer.entries.end(),
-                                         [deleted_id](const ScatterEntry& e) { return e.crystal_id == deleted_id; }),
-                          layer.entries.end());
-    } else {
-      for (auto& entry : layer.entries) {
-        if (entry.crystal_id == deleted_id) {
-          entry.crystal_id = fallback_id;
-        }
-      }
-    }
-  }
-}
-
-// Describe what will happen when deleting a referenced crystal.
-enum class CrystalRefAction { kRemoveOnly, kReassignOnly, kMixed };
-CrystalRefAction ClassifyCrystalRefAction(const GuiState& state, int crystal_id) {
-  bool has_remove = false;
-  bool has_reassign = false;
-  for (auto& layer : state.scattering) {
-    for (auto& entry : layer.entries) {
-      if (entry.crystal_id == crystal_id) {
-        if (layer.entries.size() > 1) {
-          has_remove = true;
-        } else {
-          has_reassign = true;
-        }
-      }
-    }
-  }
-  if (has_remove && has_reassign)
-    return CrystalRefAction::kMixed;
-  if (has_reassign)
-    return CrystalRefAction::kReassignOnly;
-  return CrystalRefAction::kRemoveOnly;
-}
-
-// Clear references to a filter ID in all scattering entries
-void ClearFilterReferences(GuiState& state, int filter_id) {
-  for (auto& layer : state.scattering) {
-    for (auto& entry : layer.entries) {
-      if (entry.filter_id == filter_id)
-        entry.filter_id = -1;
-    }
-  }
-}
+// ID reference management functions removed — copy-model (EntryCard/Layer) eliminates the need.
 
 // Helper: wrap ImGui control and mark dirty on change
 #define DIRTY_IF(expr) \
@@ -458,9 +377,15 @@ void ResetPendingDeleteState() {
 // ========== Crystal Tab ==========
 
 void RenderCrystalTab(GuiState& state) {
-  ImGui::Text("Crystals");
-  ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
-  ImGui::BeginDisabled(static_cast<int>(state.crystals.size()) >= LUMICE_MAX_CONFIG_CRYSTALS);
+  // TODO(card-layout): stub - implement card-based rendering
+  (void)state;
+  ImGui::TextDisabled("Crystal editing moved to card layout (pending implementation)");
+}
+
+// ========== Scene Tab ==========
+#if 0   // Old RenderCrystalTab code removed — see git history
+[[maybe_unused]] static void DEAD_CODE_PLACEHOLDER_crystaltab() {
+  ImGui::BeginDisabled(false);
   if (ImGui::SmallButton("Add##crystal")) {
     CrystalConfig c;
     c.id = state.next_crystal_id++;
@@ -651,6 +576,7 @@ void RenderCrystalTab(GuiState& state) {
     ImGui::TreePop();
   }
 }
+#endif  // Old RenderCrystalTab dead code
 
 
 // ========== Scene Tab ==========
@@ -676,11 +602,32 @@ void RenderSceneTab(GuiState& state) {
   }
   DIRTY_IF(SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 20));
 
+  // TODO(card-layout): stub - implement card-based scattering/layer rendering
   ImGui::SeparatorText("Scattering");
-  // Align combo right edge with SliderWithInput's input right edge
-  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-  for (int li = 0; li < static_cast<int>(state.scattering.size()); li++) {
-    auto& layer = state.scattering[li];
+  ImGui::TextDisabled("Scattering editing moved to card layout (pending implementation)");
+}
+
+
+// ========== Filter Tab ==========
+
+void RenderFilterTab(GuiState& state) {
+  // TODO(card-layout): stub - implement card-based filter editing
+  (void)state;
+  ImGui::TextDisabled("Filter editing moved to card layout (pending implementation)");
+}
+
+#undef DIRTY_IF
+
+}  // namespace lumice::gui
+
+// === OLD CODE REMOVED (see git history) ===
+// RenderSceneTab scattering section (~150 lines), RenderFilterTab (~185 lines)
+// All referenced state.scattering, state.crystals, state.filters, ScatterEntry, ScatterLayer,
+// crystal_id, filter_id, IsCrystalReferenced, IsFilterReferenced, ClearFilterReferences.
+#if 0
+  // Dead code anchor for git history reference only
+  ImGui::PushItemWidth(-(0));
+  Layer layer;
     ImGui::PushID(li);
 
     char layer_label[32];
@@ -1016,3 +963,4 @@ void RenderFilterTab(GuiState& state) {
 #undef DIRTY_IF
 
 }  // namespace lumice::gui
+#endif

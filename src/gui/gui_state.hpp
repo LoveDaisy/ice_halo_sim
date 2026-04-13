@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace lumice::gui {
@@ -29,8 +30,8 @@ struct AxisDist {
   float std = 0.0f;  // Gauss: standard deviation; Uniform: full range; Zigzag: amplitude; Laplacian: scale
 };
 
+// GUI-only data structure: crystal geometry + axis distribution.
 struct CrystalConfig {
-  int id = 0;
   std::string name;
   CrystalType type = CrystalType::kPrism;
 
@@ -63,17 +64,6 @@ struct SimConfig {
   float ray_num_millions = 5.0f;
   int max_hits = 8;
   bool infinite = false;
-};
-
-struct ScatterEntry {
-  int crystal_id = -1;  // -1 = not selected
-  float proportion = 100.0f;
-  int filter_id = -1;  // -1 = None
-};
-
-struct ScatterLayer {
-  float probability = 0.0f;  // Probability of multi-scatter continuation (0 = single scatter)
-  std::vector<ScatterEntry> entries;
 };
 
 // Lens type names (order must match Core's LensParam::LensType enum)
@@ -134,8 +124,8 @@ constexpr int kFilterActionCount = 2;
 constexpr char kRaypathSep = '-';
 constexpr const char* kRaypathSepStr = "-";
 
+// GUI-only data structure: raypath filter configuration.
 struct FilterConfig {
-  int id = 0;
   std::string name;
   int action = 0;            // 0=filter_in, 1=filter_out
   std::string raypath_text;  // Dash-separated int list, e.g. "3-1-5-7-4"; comma also accepted for back-compat
@@ -144,28 +134,30 @@ struct FilterConfig {
   bool sym_d = true;
 };
 
+// GUI-only data structure: one crystal+filter entry card in the layer model.
+struct EntryCard {
+  CrystalConfig crystal;
+  std::optional<FilterConfig> filter;
+  float proportion = 100.0f;
+};
+
+struct Layer {
+  float probability = 0.0f;  // Probability of multi-scatter continuation (0 = single scatter), range [0,1]
+  std::vector<EntryCard> entries;
+};
+
 struct GuiState {
-  // Crystals
-  std::vector<CrystalConfig> crystals;
-  int selected_crystal = -1;
+  // Layers (copy-model: each entry owns its crystal/filter definition)
+  std::vector<Layer> layers;
 
   // Scene
   SunConfig sun;
   SimConfig sim;
-  std::vector<ScatterLayer> scattering;
 
-  // Renderers
+  // Renderers (still ID-based; TECH_DEBT(renderer-id-model): migrate when needed)
   std::vector<RenderConfig> renderers;
   int selected_renderer = -1;
-
-  // Filters
-  std::vector<FilterConfig> filters;
-  int selected_filter = -1;
-
-  // ID counters
-  int next_crystal_id = 1;
   int next_renderer_id = 1;
-  int next_filter_id = 1;
 
   // Aspect ratio (view preference, not simulation parameter — does not call MarkDirty)
   AspectPreset aspect_preset = AspectPreset::kFree;
@@ -236,44 +228,33 @@ struct GuiState {
 
   // Last committed config snapshot (for Revert — config fields only, no runtime state)
   struct ConfigSnapshot {
-    std::vector<CrystalConfig> crystals;
-    int selected_crystal = -1;
+    std::vector<Layer> layers;
     SunConfig sun;
     SimConfig sim;
-    std::vector<ScatterLayer> scattering;
     std::vector<RenderConfig> renderers;
     int selected_renderer = -1;
-    std::vector<FilterConfig> filters;
-    int selected_filter = -1;
-    int next_crystal_id = 1;
-    int next_renderer_id = 1;
-    int next_filter_id = 1;
+    int next_renderer_id = 1;  // TECH_DEBT(renderer-id-model): remove when renderers migrate to copy model
   };
+  static_assert(std::is_copy_constructible_v<ConfigSnapshot>, "ConfigSnapshot must be copyable");
+  static_assert(std::is_copy_assignable_v<ConfigSnapshot>, "ConfigSnapshot must be copy-assignable");
   std::optional<ConfigSnapshot> last_committed_state;
 };
 
 inline GuiState InitDefaultState() {
   GuiState s;
 
-  // One default crystal (prism, random orientation)
-  CrystalConfig c;
-  c.id = s.next_crystal_id++;
-  s.crystals.push_back(c);
-  s.selected_crystal = 0;
+  // One default layer with one entry (prism, random orientation, no filter)
+  Layer layer;
+  EntryCard entry;
+  // CrystalConfig defaults: prism, height=1, uniform random orientation
+  layer.entries.push_back(entry);
+  s.layers.push_back(layer);
 
   // One default renderer
   RenderConfig r;
   r.id = s.next_renderer_id++;
   s.renderers.push_back(r);
   s.selected_renderer = 0;
-
-  // One default scattering layer with one entry
-  ScatterLayer layer;
-  layer.probability = 0.0f;
-  ScatterEntry entry;
-  entry.crystal_id = c.id;
-  layer.entries.push_back(entry);
-  s.scattering.push_back(layer);
 
   return s;
 }

@@ -346,7 +346,6 @@ void DoNew() {
   g_state = InitDefaultState();
   g_preview.ClearTexture();
   g_preview.ClearBackground();
-  g_crystal_mesh_id = -1;
   g_crystal_mesh_hash = 0;
   GUI_LOG_INFO("[GUI] DoNew");
 }
@@ -467,18 +466,7 @@ void DoRun() {
   auto err = LUMICE_CommitConfigStruct(g_server, &config, &reused);
   if (err == LUMICE_OK) {
     g_state.last_committed_state = GuiState::ConfigSnapshot{
-      g_state.crystals,
-      g_state.selected_crystal,
-      g_state.sun,
-      g_state.sim,
-      g_state.scattering,
-      g_state.renderers,
-      g_state.selected_renderer,
-      g_state.filters,
-      g_state.selected_filter,
-      g_state.next_crystal_id,
-      g_state.next_renderer_id,
-      g_state.next_filter_id,
+      g_state.layers, g_state.sun, g_state.sim, g_state.renderers, g_state.selected_renderer, g_state.next_renderer_id,
     };
     g_state.sim_state = SimState::kSimulating;
     g_state.stats_ray_seg_num = 0;
@@ -531,18 +519,12 @@ void DoRevert() {
   if (g_state.last_committed_state) {
     const auto& snapshot = *g_state.last_committed_state;
     // Restore configuration fields only, preserve runtime state
-    g_state.crystals = snapshot.crystals;
-    g_state.selected_crystal = snapshot.selected_crystal;
+    g_state.layers = snapshot.layers;
     g_state.sun = snapshot.sun;
     g_state.sim = snapshot.sim;
-    g_state.scattering = snapshot.scattering;
     g_state.renderers = snapshot.renderers;
     g_state.selected_renderer = snapshot.selected_renderer;
-    g_state.filters = snapshot.filters;
-    g_state.selected_filter = snapshot.selected_filter;
-    g_state.next_crystal_id = snapshot.next_crystal_id;
     g_state.next_renderer_id = snapshot.next_renderer_id;
-    g_state.next_filter_id = snapshot.next_filter_id;
     g_state.sim_state = SimState::kDone;
   }
 }

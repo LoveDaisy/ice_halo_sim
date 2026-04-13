@@ -136,9 +136,11 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       ctx->Yield();
 
       // Switch to Pyramid type
-      gui::g_state.crystals[0].type = gui::CrystalType::kPyramid;
+      if (!gui::g_state.layers.empty() && !gui::g_state.layers[0].entries.empty()) {
+        gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+      }
       // upper_h/lower_h default to 0.2 after Step 1 change
-      gui::g_crystal_mesh_id = -1;  // Force mesh rebuild
+      gui::g_crystal_mesh_hash = -1;  // Force mesh rebuild
 
       // Yield 3 frames: state change → mesh rebuild → FBO render
       ctx->Yield(3);

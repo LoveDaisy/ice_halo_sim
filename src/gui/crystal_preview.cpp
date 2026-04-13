@@ -13,7 +13,6 @@ float g_crystal_rotation[16] = {
 };
 float g_crystal_zoom = 2.5f;
 int g_crystal_style = 1;      // Default: Hidden Line (index into kCrystalStyleNames)
-int g_crystal_mesh_id = -1;   // Crystal ID of cached mesh
 int g_crystal_mesh_hash = 0;  // Hash of crystal params for change detection
 
 int CrystalParamHash(const CrystalConfig& c) {

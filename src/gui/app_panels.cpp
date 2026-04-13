@@ -202,8 +202,7 @@ void RenderLeftPanel(float window_height) {
 
   if (ImGui::BeginTabBar("ConfigTabs")) {
     if (ImGui::BeginTabItem("Crystal")) {
-      bool has_crystal =
-          g_state.selected_crystal >= 0 && g_state.selected_crystal < static_cast<int>(g_state.crystals.size());
+      bool has_crystal = !g_state.layers.empty() && !g_state.layers[0].entries.empty();
 
       if (has_crystal) {
         // Split: scrollable params (upper) + fixed preview (lower).
@@ -223,11 +222,11 @@ void RenderLeftPanel(float window_height) {
 
         // Fixed crystal 3D preview (bottom)
         ImGui::SeparatorText("3D Preview");
-        auto& cr = g_state.crystals[g_state.selected_crystal];
+        auto& cr = g_state.layers[0].entries[0].crystal;
 
         // Update mesh if crystal changed
         int hash = CrystalParamHash(cr);
-        if (cr.id != g_crystal_mesh_id || hash != g_crystal_mesh_hash) {
+        if (hash != g_crystal_mesh_hash) {
           char json_buf[512];
           auto* fd = cr.face_distance;
           if (cr.type == CrystalType::kPrism) {
@@ -290,7 +289,6 @@ void RenderLeftPanel(float window_height) {
 
             g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count, mesh.triangles,
                                           mesh.triangle_count, mesh.edge_face_normals);
-            g_crystal_mesh_id = cr.id;
             g_crystal_mesh_hash = hash;
           }
         }
