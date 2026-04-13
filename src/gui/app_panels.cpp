@@ -8,6 +8,7 @@
 #include "config/render_config.hpp"
 #include "gui/app.hpp"
 #include "gui/crystal_preview.hpp"
+#include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/overlay_labels.hpp"
@@ -219,9 +220,14 @@ void RenderLeftPanel(float window_height) {
   if (has_crystal) {
     auto& cr = g_state.layers[sel_layer].entries[sel_entry].crystal;
 
+    // When the crystal edit modal is open, it drives g_crystal_renderer exclusively.
+    // Skip UpdateMesh+Render here so the modal's edit buffer content is the last FBO write
+    // (ImGui::Image() defers GPU sampling to RenderDrawData at frame end).
+    bool modal_owns_renderer = IsCrystalModalOpen();
+
     // Update mesh if crystal changed or selection changed
     int hash = CrystalParamHash(cr);
-    if (hash != g_crystal_mesh_hash) {
+    if (!modal_owns_renderer && hash != g_crystal_mesh_hash) {
       char json_buf[512];
       auto* fd = cr.face_distance;
       if (cr.type == CrystalType::kPrism) {
@@ -288,9 +294,11 @@ void RenderLeftPanel(float window_height) {
       }
     }
 
-    // Render to FBO
-    auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
-    g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
+    // Render to FBO (skip when crystal modal owns the renderer)
+    if (!modal_owns_renderer) {
+      auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
+      g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
+    }
   }
 
   // ---- Card scroll area (middle) ----
@@ -369,8 +377,11 @@ void RenderLeftPanel(float window_height) {
     ImGui::EndDisabled();
   }
 
-  // Check and reset edit request (no-op for now, modal will be in task-edit-modals)
-  ResetEditRequest();
+  // Process edit request: open modal if an edit button was clicked
+  if (GetEditRequest().target != EditTarget::kNone) {
+    OpenEditModal(GetEditRequest(), g_state);
+    ResetEditRequest();
+  }
 
   ImGui::End();
 

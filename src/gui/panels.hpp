@@ -1,9 +1,9 @@
 #ifndef LUMICE_GUI_PANELS_HPP
 #define LUMICE_GUI_PANELS_HPP
 
-namespace lumice::gui {
+#include "gui/gui_state.hpp"
 
-struct GuiState;
+namespace lumice::gui {
 
 // Slider scale modes for SliderWithInput
 enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
@@ -31,6 +31,12 @@ int GetSelectedLayerIdx();
 int GetSelectedEntryIdx();
 void SetSelectedLayerIdx(int idx);
 void SetSelectedEntryIdx(int idx);
+
+// ---- Axis distribution controls (shared between panels and edit modals) ----
+
+// Render axis distribution controls (combo + mean + std sliders).
+// Returns true if any value changed. Does NOT call MarkDirty() — caller is responsible.
+bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mean_max);
 
 // ---- Panel rendering ----
 

@@ -18,6 +18,7 @@ add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/app.cpp
     ${PROJ_SRC_DIR}/gui/app_panels.cpp
     ${PROJ_SRC_DIR}/gui/crystal_preview.cpp
+    ${PROJ_SRC_DIR}/gui/edit_modals.cpp
     ${PROJ_SRC_DIR}/gui/panels.cpp
     ${PROJ_SRC_DIR}/gui/file_io.cpp
     ${PROJ_SRC_DIR}/gui/preview_renderer.cpp

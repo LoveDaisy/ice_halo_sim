@@ -185,70 +185,6 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
   if (expr)            \
   state.MarkDirty()
 
-void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state, float mean_min, float mean_max) {
-  ImGui::PushID(label);
-  ImGui::Text("%s", label);
-  ImGui::SameLine(100);
-
-  int dist_type = static_cast<int>(axis.type);
-  auto prev_type = axis.type;
-
-  static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update combo items when adding new AxisDistType");
-  if (ImGui::Combo("##dist", &dist_type, "Gauss\0Uniform\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
-    axis.type = static_cast<AxisDistType>(dist_type);
-    state.MarkDirty();
-  }
-
-  // Clamp std to new range when switching type.
-  if (axis.type != prev_type) {
-    float max_std = 0.0f;
-    switch (axis.type) {
-      case AxisDistType::kGauss:
-        max_std = 180.0f;
-        break;
-      case AxisDistType::kUniform:
-        max_std = 360.0f;
-        break;
-      case AxisDistType::kZigzag:
-        max_std = 90.0f;
-        break;
-      case AxisDistType::kLaplacian:
-        max_std = 90.0f;
-        break;
-      case AxisDistType::kGaussLegacy:
-        max_std = 180.0f;
-        break;
-      default:
-        max_std = 180.0f;
-        break;
-    }
-    axis.std = std::min(axis.std, max_std);
-  }
-
-  DIRTY_IF(SliderWithInput("Mean", &axis.mean, mean_min, mean_max));
-
-  switch (axis.type) {
-    case AxisDistType::kGauss:
-    case AxisDistType::kGaussLegacy:
-      DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt));
-      break;
-    case AxisDistType::kUniform:
-      DIRTY_IF(SliderWithInput("Range", &axis.std, 0.0f, 360.0f, "%.1f", SliderScale::kSqrt));
-      break;
-    case AxisDistType::kZigzag:
-      DIRTY_IF(SliderWithInput("Amplitude", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt));
-      break;
-    case AxisDistType::kLaplacian:
-      DIRTY_IF(SliderWithInput("Scale", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt));
-      break;
-    default:
-      DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt));
-      break;
-  }
-
-  ImGui::PopID();
-}
-
 // Card layout constants
 constexpr float kThumbnailSize = 64.0f;
 constexpr float kCardHeight = 84.0f;
@@ -412,6 +348,75 @@ static bool SliderWithPreset(const char* label, float* value, float min_val, flo
   *value = std::clamp(*value, min_val, max_val);
 
   FinishSliderLayout(display_buf);
+  return changed;
+}
+
+
+// ---- Axis distribution controls (shared with edit modals) ----
+
+bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mean_max) {
+  bool changed = false;
+  ImGui::PushID(label);
+  ImGui::Text("%s", label);
+  ImGui::SameLine(100);
+
+  int dist_type = static_cast<int>(axis.type);
+  auto prev_type = axis.type;
+
+  static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update combo items when adding new AxisDistType");
+  if (ImGui::Combo("##dist", &dist_type, "Gauss\0Uniform\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
+    axis.type = static_cast<AxisDistType>(dist_type);
+    changed = true;
+  }
+
+  // Clamp std to new range when switching type.
+  if (axis.type != prev_type) {
+    float max_std = 0.0f;
+    switch (axis.type) {
+      case AxisDistType::kGauss:
+        max_std = 180.0f;
+        break;
+      case AxisDistType::kUniform:
+        max_std = 360.0f;
+        break;
+      case AxisDistType::kZigzag:
+        max_std = 90.0f;
+        break;
+      case AxisDistType::kLaplacian:
+        max_std = 90.0f;
+        break;
+      case AxisDistType::kGaussLegacy:
+        max_std = 180.0f;
+        break;
+      default:
+        max_std = 180.0f;
+        break;
+    }
+    axis.std = std::min(axis.std, max_std);
+  }
+
+  changed |= SliderWithInput("Mean", &axis.mean, mean_min, mean_max);
+
+  switch (axis.type) {
+    case AxisDistType::kGauss:
+    case AxisDistType::kGaussLegacy:
+      changed |= SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt);
+      break;
+    case AxisDistType::kUniform:
+      changed |= SliderWithInput("Range", &axis.std, 0.0f, 360.0f, "%.1f", SliderScale::kSqrt);
+      break;
+    case AxisDistType::kZigzag:
+      changed |= SliderWithInput("Amplitude", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt);
+      break;
+    case AxisDistType::kLaplacian:
+      changed |= SliderWithInput("Scale", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt);
+      break;
+    default:
+      changed |= SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt);
+      break;
+  }
+
+  ImGui::PopID();
   return changed;
 }
 
