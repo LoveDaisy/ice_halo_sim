@@ -60,7 +60,7 @@ struct SunConfig {
 };
 
 struct SimConfig {
-  float ray_num_millions = 1.0f;
+  float ray_num_millions = 5.0f;
   int max_hits = 8;
   bool infinite = false;
 };
