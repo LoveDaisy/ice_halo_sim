@@ -185,8 +185,7 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
   if (expr)            \
   state.MarkDirty()
 
-// Card layout constants
-constexpr float kThumbnailSize = 64.0f;
+// Card layout constants (kThumbnailSize is in gui_constants.hpp)
 constexpr float kCardHeight = 84.0f;
 constexpr float kCardSpacing = 4.0f;
 

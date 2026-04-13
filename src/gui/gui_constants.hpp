@@ -43,6 +43,12 @@ constexpr unsigned long kMinRaysFloor = 5000;
 constexpr float kLabelColWidth = 70.0f;
 constexpr float kInputWidth = 60.0f;
 
+// Card thumbnail (offscreen crystal rendering)
+// Currently used for both FBO render resolution and UI display size.
+// If HiDPI support is needed later, split into separate render/display constants.
+constexpr int kThumbnailSize = 64;
+constexpr int kMaxThumbnailUpdatesPerFrame = 2;
+
 // Auxiliary line overlay
 constexpr int kMaxSunCircles = 16;
 
