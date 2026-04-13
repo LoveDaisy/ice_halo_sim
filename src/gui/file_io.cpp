@@ -845,8 +845,8 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   if (root.contains("sim")) {
     auto& js = root["sim"];
     state.sim.ray_num_millions = js.value("ray_num_millions", SimConfig{}.ray_num_millions);
-    state.sim.max_hits = js.value("max_hits", 8);
-    state.sim.infinite = js.value("infinite", false);
+    state.sim.max_hits = js.value("max_hits", SimConfig{}.max_hits);
+    state.sim.infinite = js.value("infinite", SimConfig{}.infinite);
   }
 
   // Scattering
