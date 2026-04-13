@@ -57,7 +57,7 @@ static_assert(sizeof(kAspectPresetJsonNames) / sizeof(kAspectPresetJsonNames[0])
 
 // ========== Shared helpers ==========
 
-static std::vector<int> ParseRaypathText(const std::string& text) {
+std::vector<int> ParseRaypathText(const std::string& text) {
   std::vector<int> result;
   // Normalize: replace ',' with '-' so both separators are accepted
   std::string normalized = text;

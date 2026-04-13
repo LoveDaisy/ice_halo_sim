@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
@@ -889,13 +890,36 @@ void RenderFilterTab(GuiState& state) {
     state.MarkFilterDirty();
   }
 
+  // Validate current raypath text; background color reflects previous-frame value (normal for ImGui immediate mode).
+  auto validation = ValidateRaypathText(f.raypath_text);
+  int style_pushes = 0;
+  if (validation == RaypathValidation::kIncomplete) {
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.6f, 0.4f, 0.1f, 0.6f));  // Orange
+    style_pushes = 1;
+  } else if (validation == RaypathValidation::kInvalid) {
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.7f, 0.15f, 0.15f, 0.6f));  // Red
+    style_pushes = 1;
+  }
+
   char raypath_buf[256];
   snprintf(raypath_buf, sizeof(raypath_buf), "%s", f.raypath_text.c_str());
   if (ImGui::InputText("Raypath", raypath_buf, sizeof(raypath_buf))) {
     f.raypath_text = raypath_buf;
-    state.MarkFilterDirty();
+    // Update validation to current-frame value so hint text is accurate this frame.
+    validation = ValidateRaypathText(f.raypath_text);
+    if (validation == RaypathValidation::kValid) {
+      state.MarkFilterDirty();
+    }
   }
-  ImGui::TextDisabled("Face indices separated by '-', e.g. 3-1-5-7-4 (comma also accepted)");
+  ImGui::PopStyleColor(style_pushes);
+
+  if (validation == RaypathValidation::kIncomplete) {
+    ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.0f), "Incomplete input");
+  } else if (validation == RaypathValidation::kInvalid) {
+    ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "Invalid input");
+  } else {
+    ImGui::TextDisabled("Face indices separated by '-', e.g. 3-1-5-7-4 (comma also accepted)");
+  }
 
   ImGui::Text("Symmetry:");
   ImGui::SameLine();
