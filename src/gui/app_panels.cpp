@@ -377,6 +377,11 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       "##RightPanel", nullptr,
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
+  // ---- Scene Group ----
+  if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
+    RenderSceneControls(g_state);
+  }
+
   if (g_state.selected_renderer < 0 || g_state.selected_renderer >= static_cast<int>(g_state.renderers.size())) {
     ImGui::End();
     return;
@@ -385,195 +390,187 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   auto& r = g_state.renderers[g_state.selected_renderer];
   bool full_sky = (r.lens_type >= 4);
 
-  if (ImGui::BeginTabBar("ViewTabs")) {
-    // ---- View Tab ----
-    if (ImGui::BeginTabItem("View")) {
-      ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-      ImGui::SeparatorText("Projection");
-      ImGui::Combo("Lens Type##view", &r.lens_type, kLensTypeNames, kLensTypeCount);
-      float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
-      ImGui::BeginDisabled(full_sky);
-      SliderWithInput("FOV##view", &r.fov, 1.0f, max_fov, "%.0f");
-      ImGui::EndDisabled();
-      ImGui::Combo("Visible##view", &r.visible, kVisibleNames, kVisibleCount);
+  // ---- View Group ----
+  if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+    ImGui::SeparatorText("Projection");
+    ImGui::Combo("Lens Type##view", &r.lens_type, kLensTypeNames, kLensTypeCount);
+    float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
+    ImGui::BeginDisabled(full_sky);
+    SliderWithInput("FOV##view", &r.fov, 1.0f, max_fov, "%.0f");
+    ImGui::EndDisabled();
+    ImGui::Combo("Visible##view", &r.visible, kVisibleNames, kVisibleCount);
 
-      ImGui::SeparatorText("Camera");
-      ImGui::BeginDisabled(full_sky);
-      SliderWithInput("Elevation##view", &r.elevation, -90.0f, 90.0f, "%.1f");
-      SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f, "%.1f");
-      SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f, "%.1f");
-      ImGui::EndDisabled();
+    ImGui::SeparatorText("Camera");
+    ImGui::BeginDisabled(full_sky);
+    SliderWithInput("Elevation##view", &r.elevation, -90.0f, 90.0f, "%.1f");
+    SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f, "%.1f");
+    SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f, "%.1f");
+    ImGui::EndDisabled();
 
-      ImGui::PopItemWidth();
-      ImGui::EndTabItem();
+    ImGui::PopItemWidth();
+  }
+
+  // ---- Display Group ----
+  if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+    ImGui::SeparatorText("Rendering");
+    const char* res_labels[] = { "512", "1024", "2048", "4096" };
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.28f, 0.12f, 0.6f));
+    if (ImGui::Combo("Resolution##display", &r.sim_resolution_index, res_labels, kSimResolutionCount)) {
+      g_state.MarkDirty();
     }
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
+    }
+    SliderWithInput("EV##display", &r.exposure_offset, -3.0f, 7.0f, "%.1f");
 
-    // ---- Display Tab ----
-    if (ImGui::BeginTabItem("Display")) {
-      ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-      ImGui::SeparatorText("Rendering");
-      const char* res_labels[] = { "512", "1024", "2048", "4096" };
-      ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.28f, 0.12f, 0.6f));
-      if (ImGui::Combo("Resolution##display", &r.sim_resolution_index, res_labels, kSimResolutionCount)) {
-        g_state.MarkDirty();
+    ImGui::SeparatorText("Aspect Ratio");
+    int preset_idx = static_cast<int>(g_state.aspect_preset);
+    const char* preview_label = kAspectPresetNames[preset_idx];
+    if (ImGui::BeginCombo("Preset##display_aspect", preview_label)) {
+      for (int i = 0; i < kAspectPresetCount; i++) {
+        bool is_match_bg = (static_cast<AspectPreset>(i) == AspectPreset::kMatchBg);
+        bool disabled = is_match_bg && !g_preview.HasBackground();
+        if (disabled) {
+          ImGui::BeginDisabled();
+        }
+        bool selected = (i == preset_idx);
+        if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
+          g_state.aspect_preset = static_cast<AspectPreset>(i);
+          ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
+        if (disabled) {
+          ImGui::EndDisabled();
+        }
       }
-      ImGui::PopStyleColor();
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
-      }
-      SliderWithInput("EV##display", &r.exposure_offset, -3.0f, 7.0f, "%.1f");
+      ImGui::EndCombo();
+    }
+    bool disable_flip = (g_state.aspect_preset == AspectPreset::kFree || g_state.aspect_preset == AspectPreset::k1x1 ||
+                         g_state.aspect_preset == AspectPreset::kMatchBg);
+    ImGui::BeginDisabled(disable_flip);
+    const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
+    if (ImGui::Button(flip_label)) {
+      g_state.aspect_portrait = !g_state.aspect_portrait;
+      ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+    }
+    ImGui::EndDisabled();
 
-      ImGui::SeparatorText("Aspect Ratio");
-      int preset_idx = static_cast<int>(g_state.aspect_preset);
-      const char* preview_label = kAspectPresetNames[preset_idx];
-      if (ImGui::BeginCombo("Preset##display_aspect", preview_label)) {
-        for (int i = 0; i < kAspectPresetCount; i++) {
-          bool is_match_bg = (static_cast<AspectPreset>(i) == AspectPreset::kMatchBg);
-          bool disabled = is_match_bg && !g_preview.HasBackground();
-          if (disabled) {
+    ImGui::SeparatorText("Background");
+    if (ImGui::Button("Load Bg##display")) {
+      DoLoadBackground(window);
+    }
+    ImGui::SameLine();
+    bool no_bg = !g_preview.HasBackground();
+    ImGui::BeginDisabled(no_bg);
+    if (ImGui::Button("Clear##display_bg")) {
+      DoClearBackground();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(no_bg);
+    ImGui::Checkbox("Show##display_bg", &g_state.bg_show);
+    ImGui::BeginDisabled(!g_state.bg_show);
+    SliderWithInput("Alpha##display", &g_state.bg_alpha, 0.0f, 1.0f, "%.2f");
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+
+    ImGui::PopItemWidth();
+  }
+
+  // ---- Overlay Group ----
+  if (ImGui::CollapsingHeader("Overlay", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+    ImGui::SeparatorText("Auxiliary Lines");
+    ImGui::Checkbox("Horizon##overlay", &g_state.show_horizon);
+    ImGui::SameLine();
+    ImGui::ColorEdit3("##horizon_color", g_state.horizon_color, ImGuiColorEditFlags_NoInputs);
+    SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, 0.0f, 1.0f, "%.2f");
+    ImGui::Checkbox("Grid##overlay", &g_state.show_grid);
+    ImGui::SameLine();
+    ImGui::ColorEdit3("##grid_color", g_state.grid_color, ImGuiColorEditFlags_NoInputs);
+    SliderWithInput("Alpha##grid", &g_state.grid_alpha, 0.0f, 1.0f, "%.2f");
+    ImGui::Checkbox("Sun Circles##overlay", &g_state.show_sun_circles);
+    ImGui::SameLine();
+    ImGui::ColorEdit3("##sun_circles_color", g_state.sun_circles_color, ImGuiColorEditFlags_NoInputs);
+    SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, 0.0f, 1.0f, "%.2f");
+
+    if (g_state.show_sun_circles) {
+      if (ImGui::Button("Edit Circles...##overlay")) {
+        ImGui::OpenPopup("SunCirclesEdit");
+      }
+      if (ImGui::BeginPopup("SunCirclesEdit")) {
+        bool at_limit = static_cast<int>(g_state.sun_circle_angles.size()) >= kMaxSunCircles;
+
+        // Preset buttons
+        const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
+        for (float p : presets) {
+          bool already = false;
+          for (float a : g_state.sun_circle_angles) {
+            if (std::abs(a - p) < 0.01f) {
+              already = true;
+              break;
+            }
+          }
+          char label[16];
+          std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
+          if (already || at_limit) {
             ImGui::BeginDisabled();
           }
-          bool selected = (i == preset_idx);
-          if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
-            g_state.aspect_preset = static_cast<AspectPreset>(i);
-            ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
-          }
-          if (selected) {
-            ImGui::SetItemDefaultFocus();
-          }
-          if (disabled) {
-            ImGui::EndDisabled();
-          }
-        }
-        ImGui::EndCombo();
-      }
-      bool disable_flip =
-          (g_state.aspect_preset == AspectPreset::kFree || g_state.aspect_preset == AspectPreset::k1x1 ||
-           g_state.aspect_preset == AspectPreset::kMatchBg);
-      ImGui::BeginDisabled(disable_flip);
-      const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
-      if (ImGui::Button(flip_label)) {
-        g_state.aspect_portrait = !g_state.aspect_portrait;
-        ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
-      }
-      ImGui::EndDisabled();
-
-      ImGui::SeparatorText("Background");
-      if (ImGui::Button("Load Bg##display")) {
-        DoLoadBackground(window);
-      }
-      ImGui::SameLine();
-      bool no_bg = !g_preview.HasBackground();
-      ImGui::BeginDisabled(no_bg);
-      if (ImGui::Button("Clear##display_bg")) {
-        DoClearBackground();
-      }
-      ImGui::EndDisabled();
-      ImGui::SameLine();
-      ImGui::BeginDisabled(no_bg);
-      ImGui::Checkbox("Show##display_bg", &g_state.bg_show);
-      ImGui::BeginDisabled(!g_state.bg_show);
-      SliderWithInput("Alpha##display", &g_state.bg_alpha, 0.0f, 1.0f, "%.2f");
-      ImGui::EndDisabled();
-      ImGui::EndDisabled();
-
-      ImGui::PopItemWidth();
-      ImGui::EndTabItem();
-    }
-
-    // ---- Overlay Tab ----
-    if (ImGui::BeginTabItem("Overlay")) {
-      ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-      ImGui::SeparatorText("Auxiliary Lines");
-      ImGui::Checkbox("Horizon##overlay", &g_state.show_horizon);
-      ImGui::SameLine();
-      ImGui::ColorEdit3("##horizon_color", g_state.horizon_color, ImGuiColorEditFlags_NoInputs);
-      SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, 0.0f, 1.0f, "%.2f");
-      ImGui::Checkbox("Grid##overlay", &g_state.show_grid);
-      ImGui::SameLine();
-      ImGui::ColorEdit3("##grid_color", g_state.grid_color, ImGuiColorEditFlags_NoInputs);
-      SliderWithInput("Alpha##grid", &g_state.grid_alpha, 0.0f, 1.0f, "%.2f");
-      ImGui::Checkbox("Sun Circles##overlay", &g_state.show_sun_circles);
-      ImGui::SameLine();
-      ImGui::ColorEdit3("##sun_circles_color", g_state.sun_circles_color, ImGuiColorEditFlags_NoInputs);
-      SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, 0.0f, 1.0f, "%.2f");
-
-      if (g_state.show_sun_circles) {
-        if (ImGui::Button("Edit Circles...##overlay")) {
-          ImGui::OpenPopup("SunCirclesEdit");
-        }
-        if (ImGui::BeginPopup("SunCirclesEdit")) {
-          bool at_limit = static_cast<int>(g_state.sun_circle_angles.size()) >= kMaxSunCircles;
-
-          // Preset buttons
-          const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
-          for (float p : presets) {
-            bool already = false;
-            for (float a : g_state.sun_circle_angles) {
-              if (std::abs(a - p) < 0.01f) {
-                already = true;
-                break;
-              }
-            }
-            char label[16];
-            std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
-            if (already || at_limit) {
-              ImGui::BeginDisabled();
-            }
-            if (ImGui::Button(label)) {
-              g_state.sun_circle_angles.push_back(p);
-              std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
-            }
-            if (already || at_limit) {
-              ImGui::EndDisabled();
-            }
-            ImGui::SameLine();
-          }
-          ImGui::NewLine();
-
-          // Custom angle input
-          static float custom_angle = 22.0f;
-          ImGui::PushItemWidth(60.0f);
-          ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
-          ImGui::PopItemWidth();
-          ImGui::SameLine();
-          if (at_limit) {
-            ImGui::BeginDisabled();
-          }
-          if (ImGui::Button("+##add_circle")) {
-            custom_angle = std::max(0.1f, std::min(180.0f, custom_angle));
-            g_state.sun_circle_angles.push_back(custom_angle);
+          if (ImGui::Button(label)) {
+            g_state.sun_circle_angles.push_back(p);
             std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
           }
-          if (at_limit) {
+          if (already || at_limit) {
             ImGui::EndDisabled();
           }
-
-          // Current list with delete buttons
-          ImGui::Separator();
-          int remove_idx = -1;
-          for (int i = 0; i < static_cast<int>(g_state.sun_circle_angles.size()); i++) {
-            ImGui::Text("%.1f\xc2\xb0", g_state.sun_circle_angles[i]);
-            ImGui::SameLine();
-            char del_label[32];
-            std::snprintf(del_label, sizeof(del_label), "x##del_%d", i);
-            if (ImGui::SmallButton(del_label)) {
-              remove_idx = i;
-            }
-          }
-          if (remove_idx >= 0) {
-            g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
-          }
-
-          ImGui::EndPopup();
+          ImGui::SameLine();
         }
-      }
+        ImGui::NewLine();
 
-      ImGui::PopItemWidth();
-      ImGui::EndTabItem();
+        // Custom angle input
+        static float custom_angle = 22.0f;
+        ImGui::PushItemWidth(60.0f);
+        ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
+        ImGui::PopItemWidth();
+        ImGui::SameLine();
+        if (at_limit) {
+          ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("+##add_circle")) {
+          custom_angle = std::max(0.1f, std::min(180.0f, custom_angle));
+          g_state.sun_circle_angles.push_back(custom_angle);
+          std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+        }
+        if (at_limit) {
+          ImGui::EndDisabled();
+        }
+
+        // Current list with delete buttons
+        ImGui::Separator();
+        int remove_idx = -1;
+        for (int i = 0; i < static_cast<int>(g_state.sun_circle_angles.size()); i++) {
+          ImGui::Text("%.1f\xc2\xb0", g_state.sun_circle_angles[i]);
+          ImGui::SameLine();
+          char del_label[32];
+          std::snprintf(del_label, sizeof(del_label), "x##del_%d", i);
+          if (ImGui::SmallButton(del_label)) {
+            remove_idx = i;
+          }
+        }
+        if (remove_idx >= 0) {
+          g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
+        }
+
+        ImGui::EndPopup();
+      }
     }
 
-    ImGui::EndTabBar();
+    ImGui::PopItemWidth();
   }
 
   ImGui::End();

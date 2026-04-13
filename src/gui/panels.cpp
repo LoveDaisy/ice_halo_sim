@@ -579,9 +579,9 @@ void RenderCrystalTab(GuiState& state) {
 #endif  // Old RenderCrystalTab dead code
 
 
-// ========== Scene Tab ==========
+// ========== Scene Controls (shared between left Scene tab and right panel Scene group) ==========
 
-void RenderSceneTab(GuiState& state) {
+void RenderSceneControls(GuiState& state) {
   ImGui::SeparatorText("Sun");
   DIRTY_IF(SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f));
   DIRTY_IF(SliderWithInput("Diameter", &state.sun.diameter, 0.1f, 5.0f));
@@ -601,7 +601,14 @@ void RenderSceneTab(GuiState& state) {
     ImGui::EndDisabled();
   }
   DIRTY_IF(SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 20));
+}
 
+
+// ========== Scene Tab ==========
+
+void RenderSceneTab(GuiState& state) {
+  (void)state;
+  // Sun and Simulation controls have been migrated to the right panel Scene group.
   // TODO(card-layout): stub - implement card-based scattering/layer rendering
   ImGui::SeparatorText("Scattering");
   ImGui::TextDisabled("Scattering editing moved to card layout (pending implementation)");
