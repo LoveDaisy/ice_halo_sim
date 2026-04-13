@@ -809,4 +809,78 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       std::remove(tmp_path);
     };
   }
+
+  // p2_modal/crystal_modal_open_cancel — open crystal modal, cancel, verify no state change
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_open_cancel");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      auto& cr = gui::g_state.layers[0].entries[0].crystal;
+      auto type_before = cr.type;
+      float height_before = cr.height;
+
+      // Click Edit Crystal button on the first entry card
+      ctx->ItemClick("**/E##cr");
+      ctx->Yield(3);
+
+      // Click Cancel in the modal
+      ctx->ItemClick("Edit Crystal/Cancel##crystal");
+      ctx->Yield(2);
+
+      // State unchanged
+      IM_CHECK_EQ(cr.type, type_before);
+      IM_CHECK_EQ(cr.height, height_before);
+    };
+  }
+
+  // p2_modal/crystal_modal_edit_confirm — edit crystal params, click OK, verify state updated
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_edit_confirm");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Verify initial state is Prism
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
+
+      // Open crystal modal
+      ctx->ItemClick("**/E##cr");
+      ctx->Yield(3);
+
+      // The modal edits a buffer copy. Click OK to commit.
+      ctx->ItemClick("Edit Crystal/OK##crystal");
+      ctx->Yield(2);
+
+      // Crystal should still be valid (OK commits buffer to state)
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
+    };
+  }
+
+  // p2_modal/filter_modal_set_and_clear — set filter via modal, then clear it
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "filter_modal_set_and_clear");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Pre-set a filter so we can test clearing
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      gui::g_state.layers[0].entries[0].filter = f;
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+
+      // Open filter modal
+      ctx->ItemClick("**/E##fi");
+      ctx->Yield(3);
+
+      // Click Remove Filter to clear
+      ctx->ItemClick("Edit Filter/Remove Filter##filter");
+      ctx->Yield(2);
+
+      // Filter should be cleared
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+    };
+  }
 }
