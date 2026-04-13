@@ -1,9 +1,13 @@
 #include "gui/crystal_preview.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
+#include "gui/app.hpp"
 #include "gui/gui_state.hpp"
+#include "lumice.h"
 
 namespace lumice::gui {
 
@@ -107,6 +111,77 @@ void ApplyTrackballRotation(float dx, float dy) {
     }
   }
   std::memcpy(g_crystal_rotation, tmp, sizeof(g_crystal_rotation));
+}
+
+int BuildAndUploadCrystalMesh(const CrystalConfig& cr) {
+  char json_buf[512];
+  auto* fd = cr.face_distance;
+  if (cr.type == CrystalType::kPrism) {
+    snprintf(json_buf, sizeof(json_buf),
+             R"({"type":"prism","shape":{"height":%.4f,)"
+             R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
+             cr.height, fd[0], fd[1], fd[2], fd[3], fd[4], fd[5]);
+  } else {
+    snprintf(json_buf, sizeof(json_buf),
+             R"({"type":"pyramid","shape":{"prism_h":%.4f,"upper_h":%.4f,"lower_h":%.4f,)"
+             R"("upper_wedge_angle":%.4f,"lower_wedge_angle":%.4f,)"
+             R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
+             cr.prism_h, cr.upper_h, cr.lower_h, cr.upper_alpha, cr.lower_alpha, fd[0], fd[1], fd[2], fd[3], fd[4],
+             fd[5]);
+  }
+
+  LUMICE_CrystalMesh mesh{};
+  if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) != LUMICE_OK) {
+    return 0;
+  }
+
+  // Y-Z swap: convert from core coordinate system to OpenGL view
+  for (int vi = 0; vi < mesh.vertex_count; vi++) {
+    float y = mesh.vertices[vi * 3 + 1];
+    float z = mesh.vertices[vi * 3 + 2];
+    mesh.vertices[vi * 3 + 1] = z;
+    mesh.vertices[vi * 3 + 2] = -y;
+  }
+  for (int ei = 0; ei < mesh.edge_count; ei++) {
+    for (int side = 0; side < 2; side++) {
+      float* n = &mesh.edge_face_normals[ei * 6 + side * 3];
+      float ny = n[1];
+      float nz = n[2];
+      n[1] = nz;
+      n[2] = -ny;
+    }
+  }
+
+  // AABB normalization: scale to fit unit cube
+  if (mesh.vertex_count > 0) {
+    float min_x = mesh.vertices[0], max_x = mesh.vertices[0];
+    float min_y = mesh.vertices[1], max_y = mesh.vertices[1];
+    float min_z = mesh.vertices[2], max_z = mesh.vertices[2];
+    for (int vi = 1; vi < mesh.vertex_count; vi++) {
+      float x = mesh.vertices[vi * 3];
+      float y = mesh.vertices[vi * 3 + 1];
+      float z = mesh.vertices[vi * 3 + 2];
+      min_x = std::min(min_x, x);
+      max_x = std::max(max_x, x);
+      min_y = std::min(min_y, y);
+      max_y = std::max(max_y, y);
+      min_z = std::min(min_z, z);
+      max_z = std::max(max_z, z);
+    }
+    float extent = std::max({ max_x - min_x, max_y - min_y, max_z - min_z });
+    if (extent > 1e-6f) {
+      float scale = 1.0f / extent;
+      for (int vi = 0; vi < mesh.vertex_count; vi++) {
+        mesh.vertices[vi * 3] *= scale;
+        mesh.vertices[vi * 3 + 1] *= scale;
+        mesh.vertices[vi * 3 + 2] *= scale;
+      }
+    }
+  }
+
+  g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count, mesh.triangles,
+                                mesh.triangle_count, mesh.edge_face_normals);
+  return CrystalParamHash(cr);
 }
 
 }  // namespace lumice::gui

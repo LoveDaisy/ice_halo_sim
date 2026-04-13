@@ -10,12 +10,10 @@
 #include "config/raypath_validation.hpp"
 #include "gui/app.hpp"
 #include "gui/crystal_preview.hpp"
-#include "gui/crystal_renderer.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
 #include "imgui.h"
-#include "lumice.h"
 
 namespace lumice::gui {
 
@@ -65,80 +63,9 @@ constexpr ValuePreset kWedgePresets[] = {
 };
 constexpr int kWedgePresetCount = 4;
 
-// Update g_crystal_renderer mesh from the crystal edit buffer.
-// Returns the computed hash.
-int UpdateModalMesh(const CrystalConfig& cr) {
-  char json_buf[512];
-  auto* fd = cr.face_distance;
-  if (cr.type == CrystalType::kPrism) {
-    snprintf(json_buf, sizeof(json_buf),
-             R"({"type":"prism","shape":{"height":%.4f,)"
-             R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
-             cr.height, fd[0], fd[1], fd[2], fd[3], fd[4], fd[5]);
-  } else {
-    snprintf(json_buf, sizeof(json_buf),
-             R"({"type":"pyramid","shape":{"prism_h":%.4f,"upper_h":%.4f,"lower_h":%.4f,)"
-             R"("upper_wedge_angle":%.4f,"lower_wedge_angle":%.4f,)"
-             R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
-             cr.prism_h, cr.upper_h, cr.lower_h, cr.upper_alpha, cr.lower_alpha, fd[0], fd[1], fd[2], fd[3], fd[4],
-             fd[5]);
-  }
-
-  LUMICE_CrystalMesh mesh{};
-  if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) == LUMICE_OK) {
-    // Y-Z swap (same transform as app_panels.cpp)
-    for (int vi = 0; vi < mesh.vertex_count; vi++) {
-      float y = mesh.vertices[vi * 3 + 1];
-      float z = mesh.vertices[vi * 3 + 2];
-      mesh.vertices[vi * 3 + 1] = z;
-      mesh.vertices[vi * 3 + 2] = -y;
-    }
-    for (int ei = 0; ei < mesh.edge_count; ei++) {
-      for (int side = 0; side < 2; side++) {
-        float* n = &mesh.edge_face_normals[ei * 6 + side * 3];
-        float ny = n[1];
-        float nz = n[2];
-        n[1] = nz;
-        n[2] = -ny;
-      }
-    }
-
-    // AABB normalization
-    if (mesh.vertex_count > 0) {
-      float min_x = mesh.vertices[0], max_x = mesh.vertices[0];
-      float min_y = mesh.vertices[1], max_y = mesh.vertices[1];
-      float min_z = mesh.vertices[2], max_z = mesh.vertices[2];
-      for (int vi = 1; vi < mesh.vertex_count; vi++) {
-        float x = mesh.vertices[vi * 3];
-        float y = mesh.vertices[vi * 3 + 1];
-        float z = mesh.vertices[vi * 3 + 2];
-        min_x = std::min(min_x, x);
-        max_x = std::max(max_x, x);
-        min_y = std::min(min_y, y);
-        max_y = std::max(max_y, y);
-        min_z = std::min(min_z, z);
-        max_z = std::max(max_z, z);
-      }
-      float extent = std::max({ max_x - min_x, max_y - min_y, max_z - min_z });
-      if (extent > 1e-6f) {
-        float scale = 1.0f / extent;
-        for (int vi = 0; vi < mesh.vertex_count; vi++) {
-          mesh.vertices[vi * 3] *= scale;
-          mesh.vertices[vi * 3 + 1] *= scale;
-          mesh.vertices[vi * 3 + 2] *= scale;
-        }
-      }
-    }
-
-    g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count, mesh.triangles,
-                                  mesh.triangle_count, mesh.edge_face_normals);
-  }
-
-  return CrystalParamHash(cr);
-}
-
 // Render a slider + input + preset dropdown for wedge angle.
-// Simplified version from panels.cpp SliderWithPreset, operating on edit buffer (no MarkDirty).
+// Local copy for modal use — panels.cpp::SliderWithPreset calls MarkDirty internally
+// and cannot be reused in edit-buffer context. Both share the same visual layout.
 bool SliderWithPresetEdit(const char* label, float* value, float min_val, float max_val, const char* fmt,
                           SliderScale scale, const ValuePreset* presets, int preset_count) {
   char display_buf[64];
@@ -279,14 +206,17 @@ static void RenderCrystalModal(GuiState& state) {
   // Update mesh if crystal params changed
   int hash = CrystalParamHash(cr);
   if (hash != g_modal_mesh_hash) {
-    g_modal_mesh_hash = UpdateModalMesh(cr);
+    int result = BuildAndUploadCrystalMesh(cr);
+    if (result != 0) {
+      g_modal_mesh_hash = result;
+    }
   }
 
   // Render to FBO
   auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
   g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
 
-  // Layout: controls on left, 3D preview on right
+  // Layout: 3D preview on top, crystal parameters below
   constexpr float kPreviewSize = 200.0f;
 
   // -- 3D Preview --
@@ -426,7 +356,9 @@ static void RenderAxisModal(GuiState& state) {
 
   ImGui::Separator();
 
-  // Axis distribution controls (zenith: 0-180, azimuth: 0-360, roll: 0-360)
+  // Axis distribution controls (zenith: 0-180, azimuth: 0-360, roll: 0-360).
+  // Return values intentionally ignored: modal operates on edit buffer, dirty state
+  // is only committed on OK button press (not on each slider change).
   RenderAxisDist("Zenith", g_axis_buf[0], 0.0f, 180.0f);
   RenderAxisDist("Azimuth", g_axis_buf[1], 0.0f, 360.0f);
   RenderAxisDist("Roll", g_axis_buf[2], 0.0f, 360.0f);
@@ -592,21 +524,33 @@ void RenderEditModals(GuiState& state) {
     }
   }
 
-  // Crystal modal
+  // Crystal modal — guard ensures popup closes if entry was deleted externally
   if (ImGui::BeginPopupModal("Edit Crystal", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    RenderCrystalModal(state);
+    if (g_active_modal != ActiveModal::kCrystal) {
+      ImGui::CloseCurrentPopup();
+    } else {
+      RenderCrystalModal(state);
+    }
     ImGui::EndPopup();
   }
 
   // Axis modal
   if (ImGui::BeginPopupModal("Edit Axis", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    RenderAxisModal(state);
+    if (g_active_modal != ActiveModal::kAxis) {
+      ImGui::CloseCurrentPopup();
+    } else {
+      RenderAxisModal(state);
+    }
     ImGui::EndPopup();
   }
 
   // Filter modal
   if (ImGui::BeginPopupModal("Edit Filter", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    RenderFilterModal(state);
+    if (g_active_modal != ActiveModal::kFilter) {
+      ImGui::CloseCurrentPopup();
+    } else {
+      RenderFilterModal(state);
+    }
     ImGui::EndPopup();
   }
 }

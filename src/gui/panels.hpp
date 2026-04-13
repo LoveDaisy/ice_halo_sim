@@ -1,6 +1,8 @@
 #ifndef LUMICE_GUI_PANELS_HPP
 #define LUMICE_GUI_PANELS_HPP
 
+// Full include (not forward declaration) because RenderAxisDist takes AxisDist by reference,
+// requiring the complete type definition. This propagates gui_state.hpp to all includers.
 #include "gui/gui_state.hpp"
 
 namespace lumice::gui {

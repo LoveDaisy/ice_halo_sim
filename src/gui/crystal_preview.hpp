@@ -16,6 +16,10 @@ int CrystalParamHash(const CrystalConfig& c);
 void ResetCrystalView();
 void ApplyTrackballRotation(float dx, float dy);
 
+// Build crystal mesh from config JSON, apply Y-Z swap and AABB normalization,
+// then upload to g_crystal_renderer. Returns the computed param hash, or 0 on failure.
+int BuildAndUploadCrystalMesh(const CrystalConfig& cr);
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_CRYSTAL_PREVIEW_HPP
