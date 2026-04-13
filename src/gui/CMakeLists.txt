@@ -23,6 +23,7 @@ add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/file_io.cpp
     ${PROJ_SRC_DIR}/gui/preview_renderer.cpp
     ${PROJ_SRC_DIR}/gui/crystal_renderer.cpp
+    ${PROJ_SRC_DIR}/gui/thumbnail_cache.cpp
     ${PROJ_SRC_DIR}/gui/gl_init.cpp
     ${PROJ_SRC_DIR}/gui/overlay_labels.cpp
     ${PROJ_SRC_DIR}/gui/server_poller.cpp

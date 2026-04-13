@@ -40,6 +40,11 @@ void SetSelectedEntryIdx(int idx);
 // Returns true if any value changed. Does NOT call MarkDirty() — caller is responsible.
 bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mean_max);
 
+// ---- Axis preset classification ----
+
+// Classify crystal axis configuration into a named preset (Parry/Column/Lowitz/Plate/Random/Custom).
+std::string AxisPresetName(const CrystalConfig& c);
+
 // ---- Panel rendering ----
 
 // Render a single entry card within a layer. Returns true if the delete button was clicked.

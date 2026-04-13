@@ -98,7 +98,10 @@ int g_selected_entry = 0;
 // ---- Edit request state ----
 EditRequest g_edit_request;
 
+}  // namespace
+
 // ---- Epsilon for axis preset name matching (degrees) ----
+namespace {
 constexpr float kPresetEpsilon = 1.0f;
 
 bool FloatNear(float a, float b) {
@@ -108,6 +111,7 @@ bool FloatNear(float a, float b) {
 bool IsGaussType(AxisDistType t) {
   return t == AxisDistType::kGauss || t == AxisDistType::kGaussLegacy;
 }
+}  // namespace
 
 // Infer axis orientation preset name from crystal config.
 // Match order: Parry -> Column -> Lowitz -> Plate -> Random -> Custom
@@ -150,6 +154,7 @@ std::string AxisPresetName(const CrystalConfig& c) {
   return "Custom";
 }
 
+namespace {
 // Generate filter summary text from filter config.
 std::string FilterSummary(const std::optional<FilterConfig>& f) {
   if (!f.has_value()) {
