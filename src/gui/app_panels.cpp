@@ -7,6 +7,7 @@
 
 #include "config/render_config.hpp"
 #include "gui/app.hpp"
+#include "gui/crystal_preview.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/overlay_labels.hpp"
@@ -200,158 +201,176 @@ void RenderLeftPanel(float window_height) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-  if (ImGui::BeginTabBar("ConfigTabs")) {
-    if (ImGui::BeginTabItem("Crystal")) {
-      // Temporary: preview always shows layers[0].entries[0] until card layout is implemented
-      bool has_crystal = !g_state.layers.empty() && !g_state.layers[0].entries.empty();
+  // ---- 3D Crystal Preview (top, fixed) ----
+  int sel_layer = GetSelectedLayerIdx();
+  int sel_entry = GetSelectedEntryIdx();
+  bool has_crystal = sel_layer < static_cast<int>(g_state.layers.size()) &&
+                     sel_entry < static_cast<int>(g_state.layers[sel_layer].entries.size());
 
-      if (has_crystal) {
-        // Split: scrollable params (upper) + fixed preview (lower).
-        // Preview is square (side = panel content width). Params get the remainder.
-        float content_w = ImGui::GetContentRegionAvail().x;
-        float avail_h = ImGui::GetContentRegionAvail().y;
-        auto& style = ImGui::GetStyle();
-        float separator_h = ImGui::GetTextLineHeight() + style.SeparatorTextPadding.y * 2 + style.ItemSpacing.y;
-        float controls_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
-        float preview_size = content_w;
-        float params_h = avail_h - preview_size - separator_h - controls_h;
+  float content_w = ImGui::GetContentRegionAvail().x;
+  float avail_h = ImGui::GetContentRegionAvail().y;
+  auto& style = ImGui::GetStyle();
+  float separator_h = ImGui::GetTextLineHeight() + style.SeparatorTextPadding.y * 2 + style.ItemSpacing.y;
+  float controls_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
+  float toolbar_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
+  float preview_size = content_w;
+  float cards_h = avail_h - preview_size - separator_h - controls_h - toolbar_h;
 
-        // Parameters scroll region (upper part)
-        ImGui::BeginChild("##CrystalParams", ImVec2(0, params_h), ImGuiChildFlags_None);
-        RenderCrystalTab(g_state);
-        ImGui::EndChild();
+  if (has_crystal) {
+    auto& cr = g_state.layers[sel_layer].entries[sel_entry].crystal;
 
-        // Fixed crystal 3D preview (bottom)
-        ImGui::SeparatorText("3D Preview");
-        auto& cr = g_state.layers[0].entries[0].crystal;
-
-        // Update mesh if crystal changed
-        int hash = CrystalParamHash(cr);
-        if (hash != g_crystal_mesh_hash) {
-          char json_buf[512];
-          auto* fd = cr.face_distance;
-          if (cr.type == CrystalType::kPrism) {
-            snprintf(json_buf, sizeof(json_buf),
-                     R"({"type":"prism","shape":{"height":%.4f,)"
-                     R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
-                     cr.height, fd[0], fd[1], fd[2], fd[3], fd[4], fd[5]);
-          } else {
-            snprintf(json_buf, sizeof(json_buf),
-                     R"({"type":"pyramid","shape":{"prism_h":%.4f,"upper_h":%.4f,"lower_h":%.4f,)"
-                     R"("upper_wedge_angle":%.4f,"lower_wedge_angle":%.4f,)"
-                     R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
-                     cr.prism_h, cr.upper_h, cr.lower_h, cr.upper_alpha, cr.lower_alpha, fd[0], fd[1], fd[2], fd[3],
-                     fd[4], fd[5]);
-          }
-
-          LUMICE_CrystalMesh mesh{};
-          if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) == LUMICE_OK) {
-            for (int vi = 0; vi < mesh.vertex_count; vi++) {
-              float y = mesh.vertices[vi * 3 + 1];
-              float z = mesh.vertices[vi * 3 + 2];
-              mesh.vertices[vi * 3 + 1] = z;
-              mesh.vertices[vi * 3 + 2] = -y;
-            }
-            for (int ei = 0; ei < mesh.edge_count; ei++) {
-              for (int side = 0; side < 2; side++) {
-                float* n = &mesh.edge_face_normals[ei * 6 + side * 3];
-                float ny = n[1];
-                float nz = n[2];
-                n[1] = nz;
-                n[2] = -ny;
-              }
-            }
-
-            if (mesh.vertex_count > 0) {
-              float min_x = mesh.vertices[0], max_x = mesh.vertices[0];
-              float min_y = mesh.vertices[1], max_y = mesh.vertices[1];
-              float min_z = mesh.vertices[2], max_z = mesh.vertices[2];
-              for (int vi = 1; vi < mesh.vertex_count; vi++) {
-                float x = mesh.vertices[vi * 3];
-                float y = mesh.vertices[vi * 3 + 1];
-                float z = mesh.vertices[vi * 3 + 2];
-                min_x = std::min(min_x, x);
-                max_x = std::max(max_x, x);
-                min_y = std::min(min_y, y);
-                max_y = std::max(max_y, y);
-                min_z = std::min(min_z, z);
-                max_z = std::max(max_z, z);
-              }
-              float extent = std::max({ max_x - min_x, max_y - min_y, max_z - min_z });
-              if (extent > 1e-6f) {
-                float scale = 1.0f / extent;
-                for (int vi = 0; vi < mesh.vertex_count; vi++) {
-                  mesh.vertices[vi * 3] *= scale;
-                  mesh.vertices[vi * 3 + 1] *= scale;
-                  mesh.vertices[vi * 3 + 2] *= scale;
-                }
-              }
-            }
-
-            g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count, mesh.triangles,
-                                          mesh.triangle_count, mesh.edge_face_normals);
-            g_crystal_mesh_hash = hash;
-          }
-        }
-
-        // Render to FBO
-        auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
-        g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
-
-        // Display FBO texture
-        ImVec2 area_start = ImGui::GetCursorScreenPos();
-        ImDrawList* draw_list = ImGui::GetWindowDrawList();
-        draw_list->AddRectFilled(area_start, ImVec2(area_start.x + preview_size, area_start.y + preview_size),
-                                 IM_COL32(38, 38, 38, 255));
-
-        auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
-        ImVec2 uv0(0, 1);
-        ImVec2 uv1(1, 0);
-        ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
-
-        ImGui::SetCursorScreenPos(area_start);
-        ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(preview_size, preview_size));
-        if (ImGui::IsItemHovered()) {
-          ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
-          ImGuiIO& io = ImGui::GetIO();
-          if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-            ApplyTrackballRotation(io.MouseDelta.x, io.MouseDelta.y);
-          }
-          if (io.MouseWheel != 0.0f) {
-            g_crystal_zoom *= (1.0f - io.MouseWheel * 0.1f);
-            g_crystal_zoom = std::max(0.5f, std::min(10.0f, g_crystal_zoom));
-          }
-        }
-        ImGui::PushItemWidth(120.0f);
-        ImGui::Combo("##CrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Reset View")) {
-          ResetCrystalView();
-        }
+    // Update mesh if crystal changed or selection changed
+    int hash = CrystalParamHash(cr);
+    if (hash != g_crystal_mesh_hash) {
+      char json_buf[512];
+      auto* fd = cr.face_distance;
+      if (cr.type == CrystalType::kPrism) {
+        snprintf(json_buf, sizeof(json_buf),
+                 R"({"type":"prism","shape":{"height":%.4f,)"
+                 R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
+                 cr.height, fd[0], fd[1], fd[2], fd[3], fd[4], fd[5]);
       } else {
-        // No crystal selected — full space for parameters
-        ImGui::BeginChild("##CrystalParamsOnly", ImVec2(0, 0), ImGuiChildFlags_None);
-        RenderCrystalTab(g_state);
-        ImGui::EndChild();
+        snprintf(json_buf, sizeof(json_buf),
+                 R"({"type":"pyramid","shape":{"prism_h":%.4f,"upper_h":%.4f,"lower_h":%.4f,)"
+                 R"("upper_wedge_angle":%.4f,"lower_wedge_angle":%.4f,)"
+                 R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
+                 cr.prism_h, cr.upper_h, cr.lower_h, cr.upper_alpha, cr.lower_alpha, fd[0], fd[1], fd[2], fd[3], fd[4],
+                 fd[5]);
       }
 
-      ImGui::EndTabItem();
+      LUMICE_CrystalMesh mesh{};
+      if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) == LUMICE_OK) {
+        for (int vi = 0; vi < mesh.vertex_count; vi++) {
+          float y = mesh.vertices[vi * 3 + 1];
+          float z = mesh.vertices[vi * 3 + 2];
+          mesh.vertices[vi * 3 + 1] = z;
+          mesh.vertices[vi * 3 + 2] = -y;
+        }
+        for (int ei = 0; ei < mesh.edge_count; ei++) {
+          for (int side = 0; side < 2; side++) {
+            float* n = &mesh.edge_face_normals[ei * 6 + side * 3];
+            float ny = n[1];
+            float nz = n[2];
+            n[1] = nz;
+            n[2] = -ny;
+          }
+        }
+
+        if (mesh.vertex_count > 0) {
+          float min_x = mesh.vertices[0], max_x = mesh.vertices[0];
+          float min_y = mesh.vertices[1], max_y = mesh.vertices[1];
+          float min_z = mesh.vertices[2], max_z = mesh.vertices[2];
+          for (int vi = 1; vi < mesh.vertex_count; vi++) {
+            float x = mesh.vertices[vi * 3];
+            float y = mesh.vertices[vi * 3 + 1];
+            float z = mesh.vertices[vi * 3 + 2];
+            min_x = std::min(min_x, x);
+            max_x = std::max(max_x, x);
+            min_y = std::min(min_y, y);
+            max_y = std::max(max_y, y);
+            min_z = std::min(min_z, z);
+            max_z = std::max(max_z, z);
+          }
+          float extent = std::max({ max_x - min_x, max_y - min_y, max_z - min_z });
+          if (extent > 1e-6f) {
+            float scale = 1.0f / extent;
+            for (int vi = 0; vi < mesh.vertex_count; vi++) {
+              mesh.vertices[vi * 3] *= scale;
+              mesh.vertices[vi * 3 + 1] *= scale;
+              mesh.vertices[vi * 3 + 2] *= scale;
+            }
+          }
+        }
+
+        g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count, mesh.triangles,
+                                      mesh.triangle_count, mesh.edge_face_normals);
+        g_crystal_mesh_hash = hash;
+      }
     }
-    if (ImGui::BeginTabItem("Scene")) {
-      ImGui::BeginChild("##SceneParams", ImVec2(0, 0), ImGuiChildFlags_None);
-      RenderSceneTab(g_state);
-      ImGui::EndChild();
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Filter")) {
-      ImGui::BeginChild("##FilterParams", ImVec2(0, 0), ImGuiChildFlags_None);
-      RenderFilterTab(g_state);
-      ImGui::EndChild();
-      ImGui::EndTabItem();
-    }
-    ImGui::EndTabBar();
+
+    // Render to FBO
+    auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
+    g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
   }
+
+  // ---- Card scroll area (middle) ----
+  ImGui::BeginChild("##CardScroll", ImVec2(0, cards_h), ImGuiChildFlags_None);
+  RenderScatteringSection(g_state);
+  ImGui::EndChild();
+
+  // ---- 3D Preview (bottom, fixed) ----
+  ImGui::SeparatorText("3D Preview");
+
+  if (has_crystal) {
+    ImVec2 area_start = ImGui::GetCursorScreenPos();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    draw_list->AddRectFilled(area_start, ImVec2(area_start.x + preview_size, area_start.y + preview_size),
+                             IM_COL32(38, 38, 38, 255));
+
+    auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
+    ImVec2 uv0(0, 1);
+    ImVec2 uv1(1, 0);
+    ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
+
+    ImGui::SetCursorScreenPos(area_start);
+    ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(preview_size, preview_size));
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+      ImGuiIO& io = ImGui::GetIO();
+      if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        ApplyTrackballRotation(io.MouseDelta.x, io.MouseDelta.y);
+      }
+      if (io.MouseWheel != 0.0f) {
+        g_crystal_zoom *= (1.0f - io.MouseWheel * 0.1f);
+        g_crystal_zoom = std::max(0.5f, std::min(10.0f, g_crystal_zoom));
+      }
+    }
+    ImGui::PushItemWidth(120.0f);
+    ImGui::Combo("##CrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset View")) {
+      ResetCrystalView();
+    }
+  } else {
+    ImGui::TextDisabled("No crystal selected");
+  }
+
+  // ---- Bottom toolbar: layer add/delete ----
+  ImGui::Spacing();
+  if (ImGui::SmallButton("+ Layer")) {
+    Layer new_layer;
+    new_layer.entries.emplace_back();
+    g_state.layers.push_back(std::move(new_layer));
+    g_state.MarkDirty();
+  }
+  ImGui::SameLine();
+  bool can_delete_layer = g_state.layers.size() > 1;
+  if (!can_delete_layer) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::SmallButton("- Layer")) {
+    int del_idx = GetSelectedLayerIdx();
+    if (del_idx >= 0 && del_idx < static_cast<int>(g_state.layers.size()) && g_state.layers.size() > 1) {
+      g_state.layers.erase(g_state.layers.begin() + del_idx);
+      if (GetSelectedLayerIdx() >= static_cast<int>(g_state.layers.size())) {
+        SetSelectedLayerIdx(static_cast<int>(g_state.layers.size()) - 1);
+      }
+      // Clamp entry index for new selected layer
+      auto& new_entries = g_state.layers[GetSelectedLayerIdx()].entries;
+      if (GetSelectedEntryIdx() >= static_cast<int>(new_entries.size())) {
+        SetSelectedEntryIdx(static_cast<int>(new_entries.size()) - 1);
+      }
+      g_crystal_mesh_hash = -1;  // Force preview refresh
+      g_state.MarkDirty();
+    }
+  }
+  if (!can_delete_layer) {
+    ImGui::EndDisabled();
+  }
+
+  // Check and reset edit request (no-op for now, modal will be in task-edit-modals)
+  ResetEditRequest();
 
   ImGui::End();
 

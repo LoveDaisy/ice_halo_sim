@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
@@ -89,7 +90,171 @@ static bool RenderNonlinearSlider(const char* slider_id, float* value, float min
   return changed;
 }
 
+// ---- Selection state ----
+int g_selected_layer = 0;
+int g_selected_entry = 0;
+
+// ---- Edit request state ----
+EditRequest g_edit_request;
+
+// ---- Epsilon for axis preset name matching (degrees) ----
+constexpr float kPresetEpsilon = 1.0f;
+
+bool FloatNear(float a, float b) {
+  return std::abs(a - b) <= kPresetEpsilon;
+}
+
+bool IsGaussType(AxisDistType t) {
+  return t == AxisDistType::kGauss || t == AxisDistType::kGaussLegacy;
+}
+
+// Infer axis orientation preset name from crystal config.
+// Match order: Parry -> Column -> Lowitz -> Plate -> Random -> Custom
+std::string AxisPresetName(const CrystalConfig& c) {
+  auto zt = c.zenith.type;
+  auto rt = c.roll.type;
+  auto at = c.azimuth.type;
+
+  bool z_gauss = IsGaussType(zt);
+  bool az_uniform = (at == AxisDistType::kUniform);
+  bool roll_locked = (rt == AxisDistType::kGauss || rt == AxisDistType::kGaussLegacy || rt == AxisDistType::kUniform) &&
+                     FloatNear(c.roll.mean, 0.0f) && c.roll.std < 5.0f;
+
+  // Parry: zenith≈90, std<30, roll locked, azimuth uniform
+  if (z_gauss && FloatNear(c.zenith.mean, 90.0f) && c.zenith.std < 30.0f && roll_locked && az_uniform) {
+    return "Parry";
+  }
+
+  // Column: zenith≈90, std<30, azimuth uniform (roll NOT locked)
+  if (z_gauss && FloatNear(c.zenith.mean, 90.0f) && c.zenith.std < 30.0f && az_uniform) {
+    return "Column";
+  }
+
+  // Lowitz: zenith≈0, std>30, roll locked, azimuth uniform
+  if (z_gauss && FloatNear(c.zenith.mean, 0.0f) && c.zenith.std > 30.0f && roll_locked && az_uniform) {
+    return "Lowitz";
+  }
+
+  // Plate: zenith≈0, std<30, azimuth uniform
+  if (z_gauss && FloatNear(c.zenith.mean, 0.0f) && c.zenith.std < 30.0f && az_uniform) {
+    return "Plate";
+  }
+
+  // Random: all three axes uniform with full range (std≈360)
+  if (zt == AxisDistType::kUniform && FloatNear(c.zenith.std, 360.0f) && rt == AxisDistType::kUniform &&
+      FloatNear(c.roll.std, 360.0f) && az_uniform && FloatNear(c.azimuth.std, 360.0f)) {
+    return "Random";
+  }
+
+  return "Custom";
+}
+
+// Generate filter summary text from filter config.
+std::string FilterSummary(const std::optional<FilterConfig>& f) {
+  if (!f.has_value()) {
+    return "None";
+  }
+  const auto& fc = f.value();
+  std::string result;
+  result += (fc.action == 0) ? "In " : "Out ";
+
+  if (fc.raypath_text.size() > 12) {
+    result += fc.raypath_text.substr(0, 12) + "...";
+  } else if (!fc.raypath_text.empty()) {
+    result += fc.raypath_text;
+  } else {
+    result += "*";
+  }
+
+  std::string sym;
+  if (fc.sym_p)
+    sym += "P";
+  if (fc.sym_b)
+    sym += "B";
+  if (fc.sym_d)
+    sym += "D";
+  if (!sym.empty()) {
+    result += " " + sym;
+  }
+  return result;
+}
+
+// Helper: wrap ImGui control and mark dirty on change
+#define DIRTY_IF(expr) \
+  if (expr)            \
+  state.MarkDirty()
+
+void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state, float mean_min, float mean_max) {
+  ImGui::PushID(label);
+  ImGui::Text("%s", label);
+  ImGui::SameLine(100);
+
+  int dist_type = static_cast<int>(axis.type);
+  auto prev_type = axis.type;
+
+  static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update combo items when adding new AxisDistType");
+  if (ImGui::Combo("##dist", &dist_type, "Gauss\0Uniform\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
+    axis.type = static_cast<AxisDistType>(dist_type);
+    state.MarkDirty();
+  }
+
+  // Clamp std to new range when switching type.
+  if (axis.type != prev_type) {
+    float max_std = 0.0f;
+    switch (axis.type) {
+      case AxisDistType::kGauss:
+        max_std = 180.0f;
+        break;
+      case AxisDistType::kUniform:
+        max_std = 360.0f;
+        break;
+      case AxisDistType::kZigzag:
+        max_std = 90.0f;
+        break;
+      case AxisDistType::kLaplacian:
+        max_std = 90.0f;
+        break;
+      case AxisDistType::kGaussLegacy:
+        max_std = 180.0f;
+        break;
+      default:
+        max_std = 180.0f;
+        break;
+    }
+    axis.std = std::min(axis.std, max_std);
+  }
+
+  DIRTY_IF(SliderWithInput("Mean", &axis.mean, mean_min, mean_max));
+
+  switch (axis.type) {
+    case AxisDistType::kGauss:
+    case AxisDistType::kGaussLegacy:
+      DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt));
+      break;
+    case AxisDistType::kUniform:
+      DIRTY_IF(SliderWithInput("Range", &axis.std, 0.0f, 360.0f, "%.1f", SliderScale::kSqrt));
+      break;
+    case AxisDistType::kZigzag:
+      DIRTY_IF(SliderWithInput("Amplitude", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt));
+      break;
+    case AxisDistType::kLaplacian:
+      DIRTY_IF(SliderWithInput("Scale", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt));
+      break;
+    default:
+      DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt));
+      break;
+  }
+
+  ImGui::PopID();
+}
+
+// Card layout constants
+constexpr float kThumbnailSize = 64.0f;
+constexpr float kCardHeight = 84.0f;
+constexpr float kCardSpacing = 4.0f;
+
 }  // namespace
+
 
 // Compute slider width and prepare IDs for the [slider] [input] Label layout.
 // Writes slider_id and input_id buffers, returns the computed slider width.
@@ -249,319 +414,197 @@ static bool SliderWithPreset(const char* label, float* value, float min_val, flo
   return changed;
 }
 
-namespace {
 
-// Pending delete state for reference-warning popups
-int g_pending_delete_crystal_idx = -1;
-int g_pending_delete_filter_idx = -1;
+// ---- Selection and edit accessors ----
 
-// Inline editing state for double-click rename
-int g_editing_crystal_idx = -1;
-int g_editing_filter_idx = -1;
-char g_editing_name_buf[64] = {};
-bool g_editing_focus_needed = false;
-
-void FormatCrystalLabel(char* buf, size_t size, int id, CrystalType type, const std::string& name) {
-  if (name.empty()) {
-    const char* t = type == CrystalType::kPrism ? "Prism" : "Pyramid";
-    snprintf(buf, size, "[%d] %s", id, t);
-  } else {
-    snprintf(buf, size, "[%d] %s", id, name.c_str());
-  }
+const EditRequest& GetEditRequest() {
+  return g_edit_request;
 }
 
-void FormatFilterLabel(char* buf, size_t size, int id, const std::string& name) {
-  if (name.empty()) {
-    snprintf(buf, size, "[%d] Raypath", id);
-  } else {
-    snprintf(buf, size, "[%d] %s", id, name.c_str());
-  }
+void ResetEditRequest() {
+  g_edit_request = EditRequest{};
 }
 
-// ID reference management functions removed — copy-model (EntryCard/Layer) eliminates the need.
+int GetSelectedLayerIdx() {
+  return g_selected_layer;
+}
 
-// Helper: wrap ImGui control and mark dirty on change
-#define DIRTY_IF(expr) \
-  if (expr)            \
-  state.MarkDirty()
+int GetSelectedEntryIdx() {
+  return g_selected_entry;
+}
 
-void RenderAxisDist(const char* label, AxisDist& axis, GuiState& state, float mean_min, float mean_max) {
-  ImGui::PushID(label);
-  ImGui::Text("%s", label);
-  ImGui::SameLine(100);
+void SetSelectedLayerIdx(int idx) {
+  g_selected_layer = idx;
+}
 
-  int dist_type = static_cast<int>(axis.type);
-  auto prev_type = axis.type;
+void SetSelectedEntryIdx(int idx) {
+  g_selected_entry = idx;
+}
 
-  static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update combo items when adding new AxisDistType");
-  if (ImGui::Combo("##dist", &dist_type, "Gauss\0Uniform\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
-    axis.type = static_cast<AxisDistType>(dist_type);
+void ResetPendingDeleteState() {
+  g_edit_request = EditRequest{};
+  g_selected_layer = 0;
+  g_selected_entry = 0;
+}
+
+
+// ========== Entry Card ==========
+
+bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
+  auto& entry = state.layers[layer_idx].entries[entry_idx];
+  bool is_selected = (g_selected_layer == layer_idx && g_selected_entry == entry_idx);
+
+  ImGui::PushID(entry_idx);
+
+  // Highlight selected card
+  if (is_selected) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.25f, 0.35f, 0.55f, 0.4f));
+  }
+
+  ImGui::BeginChild("##card", ImVec2(0, kCardHeight), ImGuiChildFlags_Borders);
+
+  // Click anywhere in card to select
+  if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    g_selected_layer = layer_idx;
+    g_selected_entry = entry_idx;
+  }
+
+  // Left column: thumbnail placeholder
+  ImVec2 thumb_pos = ImGui::GetCursorScreenPos();
+  ImDrawList* draw_list = ImGui::GetWindowDrawList();
+  draw_list->AddRectFilled(thumb_pos, ImVec2(thumb_pos.x + kThumbnailSize, thumb_pos.y + kThumbnailSize),
+                           IM_COL32(60, 60, 60, 255));
+  draw_list->AddRect(thumb_pos, ImVec2(thumb_pos.x + kThumbnailSize, thumb_pos.y + kThumbnailSize),
+                     IM_COL32(100, 100, 100, 255));
+
+  // Right column
+  float right_x = thumb_pos.x + kThumbnailSize + ImGui::GetStyle().ItemSpacing.x;
+  float right_w = ImGui::GetContentRegionAvail().x - kThumbnailSize - ImGui::GetStyle().ItemSpacing.x;
+
+  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y));
+
+  // Row 1: Crystal type + Edit
+  const char* type_name = (entry.crystal.type == CrystalType::kPrism) ? "Prism" : "Pyramid";
+  ImGui::Text("%s", type_name);
+  ImGui::SameLine(right_w - 30);
+  if (ImGui::SmallButton("E##cr")) {
+    g_edit_request = { EditTarget::kCrystal, layer_idx, entry_idx };
+  }
+
+  // Row 2: Axis preset + Edit
+  std::string preset = AxisPresetName(entry.crystal);
+  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + ImGui::GetTextLineHeightWithSpacing()));
+  ImGui::Text("%s", preset.c_str());
+  ImGui::SameLine(right_w - 30);
+  if (ImGui::SmallButton("E##ax")) {
+    g_edit_request = { EditTarget::kAxis, layer_idx, entry_idx };
+  }
+
+  // Row 3: Filter summary + Edit
+  std::string filter_text = FilterSummary(entry.filter);
+  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + ImGui::GetTextLineHeightWithSpacing() * 2));
+  ImGui::Text("%s", filter_text.c_str());
+  ImGui::SameLine(right_w - 30);
+  if (ImGui::SmallButton("E##fi")) {
+    g_edit_request = { EditTarget::kFilter, layer_idx, entry_idx };
+  }
+
+  // Row 4: Proportion slider (compact)
+  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + ImGui::GetTextLineHeightWithSpacing() * 3));
+  ImGui::PushItemWidth(right_w - 50);
+  char prop_id[32];
+  snprintf(prop_id, sizeof(prop_id), "##prop_%d_%d", layer_idx, entry_idx);
+  if (ImGui::SliderFloat(prop_id, &entry.proportion, 0.0f, 100.0f, "%.1f")) {
+    state.MarkDirty();
+  }
+  ImGui::PopItemWidth();
+
+  ImGui::EndChild();  // ##card — must be unconditional
+
+  if (is_selected) {
+    ImGui::PopStyleColor();
+  }
+
+  // Buttons after the card (on same line or next line)
+  // Copy button
+  char copy_id[32];
+  snprintf(copy_id, sizeof(copy_id), "Copy##%d_%d", layer_idx, entry_idx);
+  if (ImGui::SmallButton(copy_id)) {
+    // Deep copy this entry and append to the same layer
+    auto& entries = state.layers[layer_idx].entries;
+    entries.push_back(entry);  // copy
     state.MarkDirty();
   }
 
-  // Clamp std to new range when switching type.
-  if (axis.type != prev_type) {
-    float max_std = 0.0f;
-    switch (axis.type) {
-      case AxisDistType::kGauss:
-        max_std = 180.0f;
-        break;
-      case AxisDistType::kUniform:
-        max_std = 360.0f;
-        break;
-      case AxisDistType::kZigzag:
-        max_std = 90.0f;
-        break;
-      case AxisDistType::kLaplacian:
-        max_std = 90.0f;
-        break;
-      case AxisDistType::kGaussLegacy:
-        max_std = 180.0f;
-        break;
-      default:
-        max_std = 180.0f;
-        break;
+  // Delete button (returns whether clicked)
+  ImGui::SameLine();
+  char del_id[32];
+  snprintf(del_id, sizeof(del_id), "x##%d_%d", layer_idx, entry_idx);
+  bool delete_clicked = ImGui::SmallButton(del_id);
+
+  ImGui::PopID();
+  return delete_clicked;
+}
+
+
+// ========== Layer ==========
+
+void RenderLayer(GuiState& state, int layer_idx) {
+  auto& layer = state.layers[layer_idx];
+
+  ImGui::PushID(layer_idx);
+
+  char header_label[32];
+  snprintf(header_label, sizeof(header_label), "Layer %d", layer_idx + 1);
+
+  if (ImGui::CollapsingHeader(header_label, ImGuiTreeNodeFlags_DefaultOpen)) {
+    // Multi-scatter probability slider
+    char prob_id[32];
+    snprintf(prob_id, sizeof(prob_id), "Prob.##layer_%d", layer_idx);
+    DIRTY_IF(SliderWithInput(prob_id, &layer.probability, 0.0f, 1.0f, "%.2f"));
+
+    // Render entry cards with deferred deletion
+    int pending_delete_entry = -1;
+    for (int i = 0; i < static_cast<int>(layer.entries.size()); i++) {
+      ImGui::Spacing();
+      bool del = RenderEntryCard(state, layer_idx, i);
+      if (del) {
+        pending_delete_entry = i;
+      }
     }
-    axis.std = std::min(axis.std, max_std);
-  }
 
-  DIRTY_IF(SliderWithInput("Mean", &axis.mean, mean_min, mean_max));
+    // Deferred delete
+    if (pending_delete_entry >= 0 && layer.entries.size() > 1) {
+      layer.entries.erase(layer.entries.begin() + pending_delete_entry);
+      // Clamp selected entry if needed
+      if (g_selected_layer == layer_idx && g_selected_entry >= static_cast<int>(layer.entries.size())) {
+        g_selected_entry = static_cast<int>(layer.entries.size()) - 1;
+      }
+      state.MarkDirty();
+    }
 
-  switch (axis.type) {
-    case AxisDistType::kGauss:
-    case AxisDistType::kGaussLegacy:
-      DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt));
-      break;
-    case AxisDistType::kUniform:
-      DIRTY_IF(SliderWithInput("Range", &axis.std, 0.0f, 360.0f, "%.1f", SliderScale::kSqrt));
-      break;
-    case AxisDistType::kZigzag:
-      DIRTY_IF(SliderWithInput("Amplitude", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt));
-      break;
-    case AxisDistType::kLaplacian:
-      DIRTY_IF(SliderWithInput("Scale", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt));
-      break;
-    default:
-      DIRTY_IF(SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt));
-      break;
+    // Add entry button
+    ImGui::Spacing();
+    char add_id[32];
+    snprintf(add_id, sizeof(add_id), "+ Entry##layer_%d", layer_idx);
+    if (ImGui::SmallButton(add_id)) {
+      layer.entries.emplace_back();
+      state.MarkDirty();
+    }
   }
 
   ImGui::PopID();
 }
 
-}  // namespace
 
-void ResetPendingDeleteState() {
-  g_pending_delete_crystal_idx = -1;
-  g_pending_delete_filter_idx = -1;
-  g_editing_crystal_idx = -1;
-  g_editing_filter_idx = -1;
-}
+// ========== Scattering Section (layer management) ==========
 
-
-// ========== Crystal Tab ==========
-
-void RenderCrystalTab(GuiState& state) {
-  // TODO(card-layout): stub - implement card-based rendering
-  (void)state;
-  ImGui::TextDisabled("Crystal editing moved to card layout (pending implementation)");
-}
-
-// ========== Scene Tab ==========
-#if 0   // Old RenderCrystalTab code removed — see git history
-[[maybe_unused]] static void DEAD_CODE_PLACEHOLDER_crystaltab() {
-  ImGui::BeginDisabled(false);
-  if (ImGui::SmallButton("Add##crystal")) {
-    CrystalConfig c;
-    c.id = state.next_crystal_id++;
-    state.crystals.push_back(c);
-    state.selected_crystal = static_cast<int>(state.crystals.size()) - 1;
-    state.MarkDirty();
-  }
-  ImGui::EndDisabled();
-  ImGui::SameLine();
-  if (state.selected_crystal >= 0 && state.selected_crystal < static_cast<int>(state.crystals.size()) &&
-      state.crystals.size() > 1) {
-    if (ImGui::SmallButton("Del##crystal")) {
-      auto& cr_del = state.crystals[state.selected_crystal];
-      if (IsCrystalReferenced(state, cr_del.id)) {
-        g_pending_delete_crystal_idx = state.selected_crystal;
-        ImGui::OpenPopup("Delete Crystal?");
-      } else {
-        g_editing_crystal_idx = -1;
-        state.crystals.erase(state.crystals.begin() + state.selected_crystal);
-        if (state.selected_crystal >= static_cast<int>(state.crystals.size())) {
-          state.selected_crystal = static_cast<int>(state.crystals.size()) - 1;
-        }
-        state.MarkDirty();
-      }
-    }
-  } else {
-    ImGui::BeginDisabled();
-    ImGui::SmallButton("Del##crystal");
-    ImGui::EndDisabled();
-  }
-
-  int item_count = static_cast<int>(state.crystals.size());
-  float line_h = ImGui::GetTextLineHeightWithSpacing();
-  float list_h = std::min(line_h * std::max(item_count, 1) + ImGui::GetStyle().FramePadding.y * 2,
-                          line_h * 4 + ImGui::GetStyle().FramePadding.y * 2);
-  if (ImGui::BeginListBox("##crystal_list", ImVec2(-1, list_h))) {
-    for (int i = 0; i < static_cast<int>(state.crystals.size()); i++) {
-      auto& cr = state.crystals[i];
-      ImGui::PushID(i);
-      if (g_editing_crystal_idx == i) {
-        if (g_editing_focus_needed) {
-          ImGui::SetKeyboardFocusHere();
-          g_editing_focus_needed = false;
-        }
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputText("##edit_name", g_editing_name_buf, sizeof(g_editing_name_buf),
-                             ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
-          cr.name = g_editing_name_buf;
-          g_editing_crystal_idx = -1;
-        } else if (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-          g_editing_crystal_idx = -1;
-        } else if (ImGui::IsItemDeactivatedAfterEdit()) {
-          cr.name = g_editing_name_buf;
-          g_editing_crystal_idx = -1;
-        }
-      } else {
-        char label[64];
-        FormatCrystalLabel(label, sizeof(label), cr.id, cr.type, cr.name);
-        if (ImGui::Selectable(label, state.selected_crystal == i, ImGuiSelectableFlags_AllowDoubleClick)) {
-          state.selected_crystal = i;
-          if (ImGui::IsMouseDoubleClicked(0)) {
-            g_editing_crystal_idx = i;
-            g_editing_filter_idx = -1;
-            g_editing_focus_needed = true;
-            strncpy(g_editing_name_buf, cr.name.c_str(), sizeof(g_editing_name_buf) - 1);
-            g_editing_name_buf[sizeof(g_editing_name_buf) - 1] = '\0';
-          }
-        }
-      }
-      ImGui::PopID();
-    }
-    ImGui::EndListBox();
-  }
-
-  // Confirmation popup for deleting a referenced crystal
-  if (ImGui::BeginPopupModal("Delete Crystal?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::Text("This crystal is referenced by scattering entries.");
-    if (g_pending_delete_crystal_idx >= 0 && g_pending_delete_crystal_idx < static_cast<int>(state.crystals.size())) {
-      auto action = ClassifyCrystalRefAction(state, state.crystals[g_pending_delete_crystal_idx].id);
-      switch (action) {
-        case CrystalRefAction::kRemoveOnly:
-          ImGui::Text("Those entries will be removed.");
-          break;
-        case CrystalRefAction::kReassignOnly:
-          ImGui::Text("Those entries will be reassigned to another crystal.");
-          break;
-        case CrystalRefAction::kMixed:
-          ImGui::Text("Entries in multi-entry layers will be removed;");
-          ImGui::Text("sole entries will be reassigned to another crystal.");
-          break;
-      }
-    }
-    ImGui::Separator();
-    if (ImGui::Button("Delete", ImVec2(80, 0))) {
-      if (g_pending_delete_crystal_idx >= 0 && g_pending_delete_crystal_idx < static_cast<int>(state.crystals.size())) {
-        int del_id = state.crystals[g_pending_delete_crystal_idx].id;
-        HandleDeletedCrystalRefs(state, del_id);
-        state.crystals.erase(state.crystals.begin() + g_pending_delete_crystal_idx);
-        if (state.selected_crystal >= static_cast<int>(state.crystals.size())) {
-          state.selected_crystal = static_cast<int>(state.crystals.size()) - 1;
-        }
-        state.MarkDirty();
-      }
-      g_pending_delete_crystal_idx = -1;
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(80, 0))) {
-      g_pending_delete_crystal_idx = -1;
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-
-  ImGui::Separator();
-
-  if (state.selected_crystal < 0 || state.selected_crystal >= static_cast<int>(state.crystals.size())) {
-    ImGui::TextDisabled("No crystal selected");
-    return;
-  }
-
-  auto& cr = state.crystals[state.selected_crystal];
-
-  int type_idx = static_cast<int>(cr.type);
-  ImGui::Text("Type");
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Prism##type", &type_idx, 0)) {
-    cr.type = static_cast<CrystalType>(type_idx);
-    state.MarkDirty();
-  }
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Pyramid##type", &type_idx, 1)) {
-    cr.type = static_cast<CrystalType>(type_idx);
-    state.MarkDirty();
-  }
-
-  ImGui::SeparatorText("Shape");
-  if (cr.type == CrystalType::kPrism) {
-    DIRTY_IF(SliderWithInput("Height", &cr.height, 0.01f, 100.0f, "%.3f", SliderScale::kLog));
-  } else {
-    DIRTY_IF(SliderWithInput("Prism H", &cr.prism_h, 0.0f, 100.0f, "%.3f", SliderScale::kLogLinear));
-    DIRTY_IF(SliderWithInput("Upper H", &cr.upper_h, 0.0f, 1.0f, "%.2f"));
-    DIRTY_IF(SliderWithInput("Lower H", &cr.lower_h, 0.0f, 1.0f, "%.2f"));
-  }
-
-  if (ImGui::TreeNode("Advanced")) {
-    if (cr.type == CrystalType::kPyramid) {
-      // Wedge angle presets (common Miller indices for ice crystals)
-      static constexpr ValuePreset kWedgePresets[] = {
-        { "{1,0,-1,1}  28.0\xC2\xB0", 28.0f },  // atan(sqrt3/2 * 1/1 / 1.629)
-        { "{2,0,-2,1}  14.7\xC2\xB0", 14.7f },  // atan(sqrt3/2 * 1/2 / 1.629)
-        { "{3,0,-3,2}  19.9\xC2\xB0", 19.9f },  // atan(sqrt3/2 * 2/3 / 1.629)
-      };
-      static constexpr int kWedgePresetCount = sizeof(kWedgePresets) / sizeof(kWedgePresets[0]);
-      DIRTY_IF(SliderWithPreset("Upper Wedge", &cr.upper_alpha, 0.1f, 89.9f, "%.1f", SliderScale::kSqrt, kWedgePresets,
-                                kWedgePresetCount));
-      DIRTY_IF(SliderWithPreset("Lower Wedge", &cr.lower_alpha, 0.1f, 89.9f, "%.1f", SliderScale::kSqrt, kWedgePresets,
-                                kWedgePresetCount));
-    }
-
-    for (int i = 0; i < 6; i++) {
-      char label[16];
-      snprintf(label, sizeof(label), "Face %d", i + 3);
-      DIRTY_IF(SliderWithInput(label, &cr.face_distance[i], 0.0f, 2.0f, "%.3f"));
-    }
+void RenderScatteringSection(GuiState& state) {
+  for (int i = 0; i < static_cast<int>(state.layers.size()); i++) {
+    RenderLayer(state, i);
     ImGui::Spacing();
-    if (ImGui::Button("Reset to Default##face_dist")) {
-      bool any_changed = false;
-      for (int i = 0; i < 6; i++) {
-        if (std::abs(cr.face_distance[i] - 1.0f) > 1e-6f) {
-          any_changed = true;
-        }
-        cr.face_distance[i] = 1.0f;
-      }
-      if (any_changed) {
-        state.MarkDirty();
-      }
-    }
-    ImGui::TreePop();
-  }
-
-  ImGui::SeparatorText("Axis Distribution");
-  RenderAxisDist("Zenith", cr.zenith, state, 0.0f, 180.0f);
-  ImGui::Spacing();
-  RenderAxisDist("Roll", cr.roll, state, 0.0f, 360.0f);
-  if (ImGui::TreeNode("Advanced##axis")) {
-    RenderAxisDist("Azimuth", cr.azimuth, state, 0.0f, 360.0f);
-    ImGui::TreePop();
   }
 }
-#endif  // Old RenderCrystalTab dead code
 
 
 // ========== Scene Controls (rendered in the right panel Scene group) ==========
@@ -586,28 +629,6 @@ void RenderSceneControls(GuiState& state) {
     ImGui::EndDisabled();
   }
   DIRTY_IF(SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 20));
-}
-
-
-// ========== Scene Tab ==========
-
-void RenderSceneTab(GuiState& state) {
-  (void)state;
-  // Sun and Simulation controls have been migrated to the right panel Scene group.
-  ImGui::TextDisabled("Sun & Simulation controls are now in the right panel.");
-
-  // TODO(card-layout): stub - implement card-based scattering/layer rendering
-  ImGui::SeparatorText("Scattering");
-  ImGui::TextDisabled("Scattering editing moved to card layout (pending implementation)");
-}
-
-
-// ========== Filter Tab ==========
-
-void RenderFilterTab(GuiState& state) {
-  // TODO(card-layout): stub - implement card-based filter editing
-  (void)state;
-  ImGui::TextDisabled("Filter editing moved to card layout (pending implementation)");
 }
 
 #undef DIRTY_IF

@@ -1,6 +1,8 @@
 #ifndef LUMICE_GUI_PANELS_HPP
 #define LUMICE_GUI_PANELS_HPP
 
+#include <string>
+
 namespace lumice::gui {
 
 struct GuiState;
@@ -14,9 +16,34 @@ enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
                      SliderScale scale = SliderScale::kLinear);
 
-void RenderCrystalTab(GuiState& state);
-void RenderSceneTab(GuiState& state);
-void RenderFilterTab(GuiState& state);
+// ---- Edit request (shared between panels.cpp and app_panels.cpp) ----
+enum class EditTarget { kNone, kCrystal, kAxis, kFilter };
+
+struct EditRequest {
+  EditTarget target = EditTarget::kNone;
+  int layer_idx = -1;
+  int entry_idx = -1;
+};
+
+const EditRequest& GetEditRequest();
+void ResetEditRequest();
+
+// ---- Selection state accessors ----
+int GetSelectedLayerIdx();
+int GetSelectedEntryIdx();
+void SetSelectedLayerIdx(int idx);
+void SetSelectedEntryIdx(int idx);
+
+// ---- Panel rendering ----
+
+// Render a single entry card within a layer. Returns true if the delete button was clicked.
+bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx);
+
+// Render a full layer (collapsing header + entry cards + controls).
+void RenderLayer(GuiState& state, int layer_idx);
+
+// Scattering section (layer management, rendered inside left panel scroll area).
+void RenderScatteringSection(GuiState& state);
 
 // Scene controls (Sun + Simulation) rendered in the right panel Scene group.
 void RenderSceneControls(GuiState& state);
