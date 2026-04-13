@@ -8,6 +8,7 @@
 
 #include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
+#include "gui/app.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
@@ -482,12 +483,20 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     g_selected_entry = entry_idx;
   }
 
-  // Left column: thumbnail placeholder
+  // Left column: crystal thumbnail (or grey placeholder if not yet rendered)
   ImVec2 thumb_pos = ImGui::GetCursorScreenPos();
   ImDrawList* draw_list = ImGui::GetWindowDrawList();
-  draw_list->AddRectFilled(thumb_pos, ImVec2(thumb_pos.x + kThumbnailSize, thumb_pos.y + kThumbnailSize),
-                           IM_COL32(60, 60, 60, 255));
-  draw_list->AddRect(thumb_pos, ImVec2(thumb_pos.x + kThumbnailSize, thumb_pos.y + kThumbnailSize),
+  auto thumb_tex = g_thumbnail_cache.GetTexture(layer_idx, entry_idx);
+  constexpr float kThumbSize = static_cast<float>(kThumbnailSize);
+  if (thumb_tex != 0) {
+    // OpenGL texture Y-axis is flipped relative to ImGui: uv0=(0,1) uv1=(1,0)
+    draw_list->AddImage(static_cast<ImTextureID>(thumb_tex), thumb_pos,
+                        ImVec2(thumb_pos.x + kThumbSize, thumb_pos.y + kThumbSize), ImVec2(0, 1), ImVec2(1, 0));
+  } else {
+    draw_list->AddRectFilled(thumb_pos, ImVec2(thumb_pos.x + kThumbSize, thumb_pos.y + kThumbSize),
+                             IM_COL32(60, 60, 60, 255));
+  }
+  draw_list->AddRect(thumb_pos, ImVec2(thumb_pos.x + kThumbSize, thumb_pos.y + kThumbSize),
                      IM_COL32(100, 100, 100, 255));
 
   // Right column
@@ -546,6 +555,7 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     // Deep copy this entry and append to the same layer
     auto& entries = state.layers[layer_idx].entries;
     entries.push_back(entry);  // copy
+    g_thumbnail_cache.OnLayerStructureChanged();
     state.MarkDirty();
   }
 
@@ -589,6 +599,7 @@ void RenderLayer(GuiState& state, int layer_idx) {
     // Deferred delete
     if (pending_delete_entry >= 0 && layer.entries.size() > 1) {
       layer.entries.erase(layer.entries.begin() + pending_delete_entry);
+      g_thumbnail_cache.OnLayerStructureChanged();
       // Clamp selected entry if needed
       if (g_selected_layer == layer_idx && g_selected_entry >= static_cast<int>(layer.entries.size())) {
         g_selected_entry = static_cast<int>(layer.entries.size()) - 1;
@@ -602,6 +613,7 @@ void RenderLayer(GuiState& state, int layer_idx) {
     snprintf(add_id, sizeof(add_id), "+ Entry##layer_%d", layer_idx);
     if (ImGui::SmallButton(add_id)) {
       layer.entries.emplace_back();
+      g_thumbnail_cache.OnLayerStructureChanged();
       state.MarkDirty();
     }
   }

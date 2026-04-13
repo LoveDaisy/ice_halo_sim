@@ -298,6 +298,7 @@ static void RenderCrystalModal(GuiState& state) {
     if (ly >= 0 && ly < static_cast<int>(state.layers.size()) && en >= 0 &&
         en < static_cast<int>(state.layers[ly].entries.size())) {
       state.layers[ly].entries[en].crystal = cr;
+      g_thumbnail_cache.Invalidate(ly, en);
       state.MarkDirty();
       g_crystal_mesh_hash = -1;  // Force left panel preview refresh
     }
@@ -375,6 +376,7 @@ static void RenderAxisModal(GuiState& state) {
       crystal.zenith = g_axis_buf[0];
       crystal.azimuth = g_axis_buf[1];
       crystal.roll = g_axis_buf[2];
+      g_thumbnail_cache.Invalidate(ly, en);
       state.MarkDirty();
     }
     g_active_modal = ActiveModal::kNone;

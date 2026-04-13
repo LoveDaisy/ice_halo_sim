@@ -241,6 +241,9 @@ void RenderLeftPanel(float window_height) {
     }
   }
 
+  // Process thumbnail update queue before rendering cards
+  g_thumbnail_cache.ProcessUpdateQueue(g_state, kMaxThumbnailUpdatesPerFrame);
+
   // ---- Card scroll area (middle) ----
   ImGui::BeginChild("##CardScroll", ImVec2(0, cards_h), ImGuiChildFlags_None);
   RenderScatteringSection(g_state);
@@ -290,6 +293,7 @@ void RenderLeftPanel(float window_height) {
     Layer new_layer;
     new_layer.entries.emplace_back();
     g_state.layers.push_back(std::move(new_layer));
+    g_thumbnail_cache.OnLayerStructureChanged();
     g_state.MarkDirty();
   }
   ImGui::SameLine();
@@ -309,6 +313,7 @@ void RenderLeftPanel(float window_height) {
       if (GetSelectedEntryIdx() >= static_cast<int>(new_entries.size())) {
         SetSelectedEntryIdx(static_cast<int>(new_entries.size()) - 1);
       }
+      g_thumbnail_cache.OnLayerStructureChanged();
       g_crystal_mesh_hash = -1;  // Force preview refresh
       g_state.MarkDirty();
     }
