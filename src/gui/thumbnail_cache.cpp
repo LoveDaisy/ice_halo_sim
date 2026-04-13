@@ -13,6 +13,7 @@
 namespace lumice::gui {
 
 namespace {
+constexpr float kPi = 3.14159265358979323846f;
 
 // Compute a column-major 4x4 rotation matrix for the given axis preset name.
 // Convention matches CrystalRenderer::Render() rotation parameter:
@@ -27,7 +28,7 @@ void GetThumbnailRotation(const std::string& preset_name, float rotation[16]) {
 
   if (preset_name == "Column" || preset_name == "Parry") {
     // Side view: rotate +80° around X axis (nearly horizontal placement)
-    constexpr float kAngle = 80.0f * 3.14159265f / 180.0f;
+    constexpr float kAngle = 80.0f * kPi / 180.0f;
     float c = std::cos(kAngle);
     float s = std::sin(kAngle);
     // Rx(angle) column-major:
@@ -41,7 +42,7 @@ void GetThumbnailRotation(const std::string& preset_name, float rotation[16]) {
     rotation[10] = c;
   } else if (preset_name == "Plate") {
     // Top-down view: rotate -10° around X axis (slight tilt to see hexagonal outline)
-    constexpr float kAngle = -10.0f * 3.14159265f / 180.0f;
+    constexpr float kAngle = -10.0f * kPi / 180.0f;
     float c = std::cos(kAngle);
     float s = std::sin(kAngle);
     rotation[5] = c;
@@ -50,7 +51,7 @@ void GetThumbnailRotation(const std::string& preset_name, float rotation[16]) {
     rotation[10] = c;
   } else if (preset_name == "Lowitz") {
     // Slightly tilted side view: rotate +60° around X axis
-    constexpr float kAngle = 60.0f * 3.14159265f / 180.0f;
+    constexpr float kAngle = 60.0f * kPi / 180.0f;
     float c = std::cos(kAngle);
     float s = std::sin(kAngle);
     rotation[5] = c;
@@ -62,8 +63,8 @@ void GetThumbnailRotation(const std::string& preset_name, float rotation[16]) {
     if (preset_name != "Random" && preset_name != "Custom") {
       GUI_LOG_WARNING("Unknown axis preset for thumbnail: {}", preset_name);
     }
-    constexpr float kAngleX = 35.0f * 3.14159265f / 180.0f;
-    constexpr float kAngleY = 25.0f * 3.14159265f / 180.0f;
+    constexpr float kAngleX = 35.0f * kPi / 180.0f;
+    constexpr float kAngleY = 25.0f * kPi / 180.0f;
     float cx = std::cos(kAngleX);
     float sx = std::sin(kAngleX);
     float cy = std::cos(kAngleY);
@@ -93,6 +94,11 @@ bool ThumbnailCache::Init() {
     valid_ = false;
     return false;
   }
+
+  // Pre-allocate persistent FBOs for blit operations
+  glGenFramebuffers(1, &blit_write_fbo_);
+  glGenFramebuffers(1, &blit_read_fbo_);
+
   valid_ = true;
   return true;
 }
@@ -106,6 +112,17 @@ void ThumbnailCache::Destroy() {
   }
   cache_.clear();
   update_queue_.clear();
+
+  // Release persistent blit FBOs
+  if (blit_read_fbo_) {
+    glDeleteFramebuffers(1, &blit_read_fbo_);
+    blit_read_fbo_ = 0;
+  }
+  if (blit_write_fbo_) {
+    glDeleteFramebuffers(1, &blit_write_fbo_);
+    blit_write_fbo_ = 0;
+  }
+
   renderer_.Destroy();
   valid_ = false;
 }
@@ -139,7 +156,7 @@ void ThumbnailCache::ProcessUpdateQueue(const GuiState& state, int max_updates) 
   int processed = 0;
   while (!update_queue_.empty() && processed < max_updates) {
     uint64_t key = update_queue_.front();
-    update_queue_.erase(update_queue_.begin());
+    update_queue_.pop_front();
 
     int layer_idx = static_cast<int>(key >> 32);
     int entry_idx = static_cast<int>(key & 0xFFFFFFFF);
@@ -241,28 +258,25 @@ void ThumbnailCache::RenderThumbnail(int layer_idx, int entry_idx, const GuiStat
   GLint prev_fbo = 0;
   glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
 
-  // Create a temporary FBO to attach the entry texture as color target
-  unsigned int tmp_fbo = 0;
-  glGenFramebuffers(1, &tmp_fbo);
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, tmp_fbo);
+  // Attach entry texture to persistent write FBO
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blit_write_fbo_);
   glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, entry.texture, 0);
 
-  // Bind the renderer's resolve FBO as read source
-  // CrystalRenderer stores resolve_fbo_ as private; we use its known texture via glCopyImageSubData
-  // Alternative: bind renderer's resolve_fbo as READ. Since it's private, we'll read from the
-  // renderer's texture directly using a read FBO.
-  unsigned int read_fbo = 0;
-  glGenFramebuffers(1, &read_fbo);
-  glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo);
+  // Attach renderer's resolve texture to persistent read FBO
   auto renderer_tex = static_cast<unsigned int>(renderer_.GetTextureId());
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, blit_read_fbo_);
   glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, renderer_tex, 0);
 
+  // GL_NEAREST: source and target are same size, no filtering needed.
+  // GL_LINEAR would also trigger GL_INVALID_OPERATION if MSAA is enabled in future.
   glBlitFramebuffer(0, 0, kThumbnailSize, kThumbnailSize, 0, 0, kThumbnailSize, kThumbnailSize, GL_COLOR_BUFFER_BIT,
-                    GL_LINEAR);
+                    GL_NEAREST);
 
-  // Cleanup temporary FBOs
-  glDeleteFramebuffers(1, &read_fbo);
-  glDeleteFramebuffers(1, &tmp_fbo);
+  // Detach textures to avoid dangling references
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blit_write_fbo_);
+  glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, blit_read_fbo_);
+  glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
 
   // Restore previous framebuffer
   glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prev_fbo));

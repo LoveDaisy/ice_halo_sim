@@ -2,9 +2,9 @@
 #define LUMICE_GUI_THUMBNAIL_CACHE_HPP
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 #include "gui/crystal_renderer.hpp"
 
@@ -63,7 +63,11 @@ class ThumbnailCache {
   CrystalRenderer renderer_;
   bool valid_ = false;
   std::unordered_map<uint64_t, ThumbnailEntry> cache_;
-  std::vector<uint64_t> update_queue_;
+  std::deque<uint64_t> update_queue_;
+
+  // Persistent FBOs for blit operations (avoid per-frame alloc/dealloc)
+  unsigned int blit_write_fbo_ = 0;
+  unsigned int blit_read_fbo_ = 0;
 };
 
 }  // namespace lumice::gui
