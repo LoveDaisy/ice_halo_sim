@@ -19,6 +19,10 @@ void RenderEditModals(GuiState& state);
 // (the modal drives the shared FBO renderer exclusively).
 bool IsCrystalModalOpen();
 
+// Reset all modal-internal static state (active modal, edit buffers, pending flags).
+// Called by test teardown (ResetTestState) to prevent state leakage between tests.
+void ResetModalState();
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_EDIT_MODALS_HPP

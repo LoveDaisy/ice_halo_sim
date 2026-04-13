@@ -18,6 +18,7 @@
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "gui/app.hpp"
+#include "gui/edit_modals.hpp"
 #include "gui/gl_init.h"
 #include "gui/gui_logger.hpp"
 #include "gui/log_sink.hpp"
@@ -69,6 +70,9 @@ void ResetTestState() {
   gui::g_server_poller.Stop();  // Stop poller before nulling server
   gui::g_server = nullptr;
   gui::ResetPendingDeleteState();
+
+  // Modal state (edit_modals.cpp file-scope statics)
+  gui::ResetModalState();
 
   // Test state
   g_capture.Reset();
@@ -213,6 +217,10 @@ int main(int argc, char** argv) {
     fprintf(stderr, "Failed to initialize crystal renderer\n");
     return 1;
   }
+  if (!gui::g_thumbnail_cache.Init()) {
+    fprintf(stderr, "Failed to initialize thumbnail cache\n");
+    return 1;
+  }
   gui::ResetCrystalView();
 
   // Initialize ImGui log sink for --log-panel and set up core log callback.
@@ -322,11 +330,13 @@ int main(int argc, char** argv) {
 
     gui::RenderTopBar(layout_width);
     gui::RenderLeftPanel(layout_height);
+    gui::RenderRightPanel(window, layout_width, layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     if (g_enable_log_panel) {
       gui::RenderLogPanel(layout_width, layout_height);
     }
     gui::RenderStatusBar(layout_width, layout_height);
+    gui::RenderEditModals(gui::g_state);
     gui::RenderUnsavedPopup(window);
 
     ImGui::Render();
@@ -379,6 +389,7 @@ int main(int argc, char** argv) {
   // Cleanup
   ImGuiTestEngine_Stop(engine);
 
+  gui::g_thumbnail_cache.Destroy();
   gui::g_crystal_renderer.Destroy();
   gui::g_preview.Destroy();
 

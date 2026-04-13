@@ -496,6 +496,20 @@ bool IsCrystalModalOpen() {
   return g_active_modal == ActiveModal::kCrystal;
 }
 
+void ResetModalState() {
+  g_active_modal = ActiveModal::kNone;
+  g_modal_layer_idx = -1;
+  g_modal_entry_idx = -1;
+  g_crystal_buf = {};
+  g_axis_buf[0] = {};
+  g_axis_buf[1] = {};
+  g_axis_buf[2] = {};
+  g_filter_buf = {};
+  g_raypath_buf[0] = '\0';
+  g_pending_open = false;
+  g_modal_mesh_hash = 0;
+}
+
 void RenderEditModals(GuiState& state) {
   // Deferred OpenPopup: must happen outside BeginPopupModal
   if (g_pending_open && g_active_modal != ActiveModal::kNone) {
