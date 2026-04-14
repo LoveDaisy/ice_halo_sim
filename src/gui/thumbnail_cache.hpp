@@ -5,6 +5,7 @@
 #include <deque>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "gui/crystal_renderer.hpp"
 
@@ -64,6 +65,13 @@ class ThumbnailCache {
   bool valid_ = false;
   std::unordered_map<uint64_t, ThumbnailEntry> cache_;
   std::deque<uint64_t> update_queue_;
+
+  // Textures detached by OnLayerStructureChanged(). Deletion is deferred to the
+  // next ProcessUpdateQueue() / Destroy() on the main thread, because
+  // OnLayerStructureChanged() runs from any thread (e.g. ImGui Test Engine's
+  // coroutine worker via DoNew()) where the GL context is not current — calling
+  // glDeleteTextures there crashes on macOS.
+  std::vector<unsigned int> pending_deletes_;
 
   // Persistent FBOs for blit operations (avoid per-frame alloc/dealloc)
   unsigned int blit_write_fbo_ = 0;

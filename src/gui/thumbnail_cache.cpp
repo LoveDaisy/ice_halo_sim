@@ -104,6 +104,12 @@ bool ThumbnailCache::Init() {
 }
 
 void ThumbnailCache::Destroy() {
+  // Drain any textures parked by OnLayerStructureChanged()
+  if (!pending_deletes_.empty()) {
+    glDeleteTextures(static_cast<int>(pending_deletes_.size()), pending_deletes_.data());
+    pending_deletes_.clear();
+  }
+
   // Release all per-entry textures
   for (auto& [key, entry] : cache_) {
     if (entry.texture) {
@@ -149,7 +155,17 @@ uintptr_t ThumbnailCache::GetTexture(int layer_idx, int entry_idx) {
 }
 
 void ThumbnailCache::ProcessUpdateQueue(const GuiState& state, int max_updates) {
-  if (!valid_ || update_queue_.empty()) {
+  if (!valid_) {
+    return;
+  }
+
+  // Drain textures parked by OnLayerStructureChanged() on non-main threads
+  if (!pending_deletes_.empty()) {
+    glDeleteTextures(static_cast<int>(pending_deletes_.size()), pending_deletes_.data());
+    pending_deletes_.clear();
+  }
+
+  if (update_queue_.empty()) {
     return;
   }
 
@@ -202,9 +218,12 @@ void ThumbnailCache::InvalidateAll() {
 }
 
 void ThumbnailCache::OnLayerStructureChanged() {
+  // NOTE: may run on any thread (e.g. ImGui Test Engine coroutine via DoNew()),
+  // so GL calls are forbidden here. Park textures for the main thread to delete
+  // on the next ProcessUpdateQueue()/Destroy() tick.
   for (auto& [key, entry] : cache_) {
     if (entry.texture) {
-      glDeleteTextures(1, &entry.texture);
+      pending_deletes_.push_back(entry.texture);
     }
   }
   cache_.clear();
