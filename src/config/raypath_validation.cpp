@@ -1,6 +1,8 @@
 #include "config/raypath_validation.hpp"
 
+#include <cassert>
 #include <cctype>
+#include <climits>
 #include <string>
 
 #include "core/crystal.hpp"
@@ -10,18 +12,14 @@ namespace lumice {
 namespace {
 
 // Global union of legal face numbers across every supported CrystalKind.
-// Currently equal to the pyramid legal set; if new kinds extend the set,
-// both this function and IsLegalFace (in crystal.cpp) must be updated.
+// By delegating to IsLegalFace(kPyramid, ...) we keep the canonical legal
+// set definition in one place (core/crystal.cpp). This relies on the
+// invariant — enforced by the IsLegalFaceGlobalMatchesPyramid test — that
+// the union of all kinds currently equals the pyramid legal set. If a
+// future CrystalKind introduces faces outside that set, the global
+// function must be generalised to OR-combine every kind.
 bool IsLegalFaceGlobal(int face) {
-  if (face == 1 || face == 2)
-    return true;
-  if (face >= 3 && face <= 8)
-    return true;
-  if (face >= 13 && face <= 18)
-    return true;
-  if (face >= 23 && face <= 28)
-    return true;
-  return false;
+  return IsLegalFace(CrystalKind::kPyramid, face);
 }
 
 const char* CrystalKindLabel(CrystalKind kind) {
@@ -31,15 +29,27 @@ const char* CrystalKindLabel(CrystalKind kind) {
     case CrystalKind::kPyramid:
       return "Pyramid";
   }
+  // Unreachable — new enum values must extend the switch above.
+  assert(false && "CrystalKindLabel: unhandled CrystalKind");
   return "Unknown";
 }
+
+// Maximum digits permitted in a face-number token. Legal face numbers are
+// at most two digits (up to 28), so three digits is already far above any
+// valid input. Capping digit counts keeps the int accumulator safe from
+// overflow for pathological inputs like "9999999999" that pass the
+// syntax-only validator.
+constexpr int kMaxFaceDigits = 3;
 
 // Parse the next numeric token starting at `pos`, advancing `pos` past the
 // token and any following separator. Returns true and writes `face` on
 // success; returns false if the token is not a non-negative integer.
 // The caller has already verified via the syntax-only overload that every
 // token is a well-formed non-negative integer, so this helper mainly
-// recovers the integer value.
+// recovers the integer value. If the token has more than kMaxFaceDigits
+// digits, the remaining digits are consumed and `face` is set to INT_MAX,
+// which guarantees IsLegalFaceGlobal returns false (avoiding int overflow
+// UB while still reporting the token as illegal).
 bool ExtractNextFace(const std::string& text, size_t& pos, int& face) {
   // Skip any separators.
   while (pos < text.size() && (text[pos] == '-' || text[pos] == ',')) {
@@ -48,15 +58,20 @@ bool ExtractNextFace(const std::string& text, size_t& pos, int& face) {
   if (pos >= text.size())
     return false;
   int value = 0;
-  bool has_digit = false;
+  int digit_count = 0;
+  bool overflow = false;
   while (pos < text.size() && std::isdigit(static_cast<unsigned char>(text[pos]))) {
-    value = value * 10 + (text[pos] - '0');
-    has_digit = true;
+    if (digit_count < kMaxFaceDigits) {
+      value = value * 10 + (text[pos] - '0');
+    } else {
+      overflow = true;
+    }
+    ++digit_count;
     ++pos;
   }
-  if (!has_digit)
+  if (digit_count == 0)
     return false;
-  face = value;
+  face = overflow ? INT_MAX : value;
   return true;
 }
 

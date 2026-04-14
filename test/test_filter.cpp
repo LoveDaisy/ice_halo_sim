@@ -598,3 +598,47 @@ TEST(ValidateRaypathTextWithKindTest, EmptyText_IsValid) {
   EXPECT_EQ(r.state, RaypathValidation::kValid);
   EXPECT_TRUE(r.message.empty());
 }
+
+TEST(ValidateRaypathTextWithKindTest, OverlongDigitToken_IsInvalid) {
+  // A pathological 10-digit token passes the syntax-only validator (single
+  // argument) — there is no length cap there. The two-argument overload
+  // must still reject it without invoking int overflow UB in the tokenizer.
+  // Values include patterns that, under two's-complement wrap, would map to
+  // otherwise-legal face numbers (e.g. 4294967299 ≡ 3 mod 2^32).
+  EXPECT_EQ(ValidateRaypathText("9999999999", CrystalKind::kPrism).state, RaypathValidation::kInvalid);
+  EXPECT_EQ(ValidateRaypathText("9999999999", CrystalKind::kPyramid).state, RaypathValidation::kInvalid);
+  EXPECT_EQ(ValidateRaypathText("4294967299", CrystalKind::kPrism).state, RaypathValidation::kInvalid);
+  EXPECT_EQ(ValidateRaypathText("123456", CrystalKind::kPyramid).state, RaypathValidation::kInvalid);
+  // 4 digits already exceeds the max-3-digit cap and is outside the legal
+  // union on both kinds.
+  EXPECT_EQ(ValidateRaypathText("1000", CrystalKind::kPrism).state, RaypathValidation::kInvalid);
+  EXPECT_EQ(ValidateRaypathText("1000", CrystalKind::kPyramid).state, RaypathValidation::kInvalid);
+}
+
+TEST(ValidateRaypathTextWithKindTest, OverlongTokenMessageMentionsOutside) {
+  const auto r = ValidateRaypathText("9999999999", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  EXPECT_NE(r.message.find("outside"), std::string::npos);
+}
+
+
+// Contract test: after wiring IsLegalFaceGlobal to delegate to
+// IsLegalFace(kPyramid, ...), the validator's "global union" stage should
+// accept exactly the pyramid-legal faces. If a future CrystalKind extends
+// the union beyond the pyramid set, this test will flag the divergence so
+// IsLegalFaceGlobal can be generalised to OR-combine every kind.
+TEST(IsLegalFaceTest, PyramidSetEqualsValidatorGlobalStage) {
+  for (int f = 0; f <= 30; ++f) {
+    const bool pyramid_ok = IsLegalFace(CrystalKind::kPyramid, f);
+    const auto r = ValidateRaypathText(std::to_string(f), CrystalKind::kPyramid);
+    if (pyramid_ok) {
+      EXPECT_EQ(r.state, RaypathValidation::kValid) << "face=" << f;
+    } else {
+      EXPECT_EQ(r.state, RaypathValidation::kInvalid) << "face=" << f;
+      // Because IsLegalFaceGlobal == IsLegalFace(kPyramid, ...), any illegal
+      // face on pyramid triggers the "outside the legal range" message
+      // (never the type-specific branch).
+      EXPECT_NE(r.message.find("outside"), std::string::npos) << "face=" << f;
+    }
+  }
+}

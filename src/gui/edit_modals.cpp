@@ -407,9 +407,13 @@ static void RenderFilterModal(GuiState& state) {
     return;
   }
   const auto& entry_for_kind = state.layers[ly].entries[en];
-  const ::lumice::CrystalKind kind = (entry_for_kind.crystal.type == CrystalType::kPrism) ?
-                                         ::lumice::CrystalKind::kPrism :
-                                         ::lumice::CrystalKind::kPyramid;
+  // Map the GUI-only `gui::CrystalType` (which currently exposes only kPrism
+  // and kPyramid) to the coarser `lumice::CrystalKind` accepted by the
+  // validator. If new CrystalType values are added to the GUI in the future,
+  // extend this mapping (and lumice::CrystalKind) explicitly — do not rely on
+  // the ternary falling through to kPyramid.
+  const lumice::CrystalKind kind = (entry_for_kind.crystal.type == CrystalType::kPrism) ? lumice::CrystalKind::kPrism :
+                                                                                          lumice::CrystalKind::kPyramid;
 
   // Action combo
   ImGui::Combo("Action##filter_modal", &g_filter_buf.action, kFilterActionNames, kFilterActionCount);

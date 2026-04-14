@@ -1,5 +1,5 @@
-#ifndef SRC_CORE_CRYSTAL_KIND_H_
-#define SRC_CORE_CRYSTAL_KIND_H_
+#ifndef SRC_CORE_CRYSTAL_KIND_HPP_
+#define SRC_CORE_CRYSTAL_KIND_HPP_
 
 // Minimal zero-dependency header exposing a GUI-facing crystal-kind enum.
 //
@@ -28,4 +28,4 @@ enum class CrystalKind {
 
 }  // namespace lumice
 
-#endif  // SRC_CORE_CRYSTAL_KIND_H_
+#endif  // SRC_CORE_CRYSTAL_KIND_HPP_
