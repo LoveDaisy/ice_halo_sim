@@ -469,9 +469,7 @@ void DoRun() {
   int reused = 0;
   auto err = LUMICE_CommitConfigStruct(g_server, &config, &reused);
   if (err == LUMICE_OK) {
-    g_state.last_committed_state = GuiState::ConfigSnapshot{
-      g_state.layers, g_state.sun, g_state.sim, g_state.renderers, g_state.selected_renderer, g_state.next_renderer_id,
-    };
+    g_state.last_committed_state = GuiState::ConfigSnapshot::From(g_state);
     g_state.sim_state = SimState::kSimulating;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
@@ -522,14 +520,16 @@ void DoStop() {
 void DoRevert() {
   if (g_state.last_committed_state) {
     const auto& snapshot = *g_state.last_committed_state;
-    // Restore configuration fields only, preserve runtime state
-    g_state.layers = snapshot.layers;
+    // Restore configuration fields atomically, then fire GUI side effects.
+    // Order rationale: ApplyTo() is pure field assignment. OnLayerStructureChanged()
+    // currently only touches the thumbnail cache (see thumbnail_cache.cpp) and does
+    // not read other g_state fields, so invoking it after full assignment is
+    // equivalent to the previous order (layers assigned -> callback -> other fields).
+    // If OnLayerStructureChanged ever starts reading g_state.sun/sim/renderers, this
+    // order remains correct (callback sees fully restored state). Runtime state (dirty,
+    // sim_state, poller counters, etc.) is intentionally preserved by ApplyTo.
+    snapshot.ApplyTo(g_state);
     g_thumbnail_cache.OnLayerStructureChanged();
-    g_state.sun = snapshot.sun;
-    g_state.sim = snapshot.sim;
-    g_state.renderers = snapshot.renderers;
-    g_state.selected_renderer = snapshot.selected_renderer;
-    g_state.next_renderer_id = snapshot.next_renderer_id;
     g_state.sim_state = SimState::kDone;
   }
 }

@@ -108,7 +108,21 @@ static json SerializeAxisDist(const AxisDist& a) {
   return j;
 }
 
-// TECH_DEBT(crystal-field-sync): SerializeCrystal and FillCrystalParam must be kept in sync manually.
+// Field-sync guard for SerializeCrystal.
+// If CrystalConfig gains/loses a field, sizeof changes and this fires. Developer must then
+// audit BOTH SerializeCrystal (below) and FillCrystalParam (further down this file) for
+// same-file sync. Platform-gated because std::string size varies across C++ stdlib impls;
+// this mirror is a "Apple Silicon + libc++ reminder", not a cross-platform contract.
+//
+// Audited fields (2026-04 snapshot):
+//   name (serialize: yes, c-api: no), type (yes/yes), height (prism-only/yes),
+//   prism_h, upper_h, lower_h (pyramid-only/yes),
+//   upper_alpha, lower_alpha (pyramid-only/yes),
+//   face_distance[6] (conditional/yes), zenith, azimuth, roll (yes/yes).
+#if defined(__APPLE__) && defined(__aarch64__)
+static_assert(sizeof(CrystalConfig) == 112,
+              "CrystalConfig size changed; audit SerializeCrystal and FillCrystalParam for new/renamed fields");
+#endif
 static json SerializeCrystal(const CrystalConfig& c, int id) {
   json j;
   j["id"] = id;
@@ -500,7 +514,10 @@ static void FillAxisDist(const AxisDist& src, LUMICE_AxisDist* dst) {
   dst->std = src.std;
 }
 
-// Helper: fill a LUMICE_CrystalParam from GUI CrystalConfig with a given ID
+// Helper: fill a LUMICE_CrystalParam from GUI CrystalConfig with a given ID.
+// Field-sync guard: see the static_assert(sizeof(CrystalConfig) == 112) near
+// SerializeCrystal above. One copy guards both functions (same TU, identical
+// condition); this comment keeps the pairing obvious to readers.
 static void FillCrystalParam(const CrystalConfig& c, int id, LUMICE_CrystalParam* dst) {
   dst->id = id;
   dst->type = c.type == CrystalType::kPrism ? 0 : 1;

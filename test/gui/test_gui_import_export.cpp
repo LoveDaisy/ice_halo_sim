@@ -107,6 +107,15 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       entry0.crystal.prism_h = 2.0f;
       entry0.crystal.upper_h = 0.3f;
       entry0.crystal.lower_h = 0.4f;
+      // Non-default face_distance to exercise the conditional-write branch in SerializeCrystal.
+      entry0.crystal.face_distance[0] = 1.2f;
+      entry0.crystal.face_distance[3] = 0.9f;
+      // Non-default axis distributions to verify axis round-trip on all three axes.
+      // All three use the same SerializeAxisDist/FillAxisDist path, but covering each
+      // individually guards against future per-axis special-casing (e.g. roll default-omission).
+      entry0.crystal.zenith = gui::AxisDist{ gui::AxisDistType::kGauss, 25.0f, 3.0f };
+      entry0.crystal.azimuth = gui::AxisDist{ gui::AxisDistType::kUniform, 10.0f, 20.0f };
+      entry0.crystal.roll = gui::AxisDist{ gui::AxisDistType::kLaplacian, 5.0f, 2.0f };
       entry0.proportion = 75.0f;
       gui::FilterConfig f;
       f.raypath_text = "3-1-5";
@@ -139,6 +148,17 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded0.crystal.prism_h, 2.0f);
       IM_CHECK_EQ(loaded0.crystal.upper_h, 0.3f);
       IM_CHECK_EQ(loaded0.crystal.lower_h, 0.4f);
+      IM_CHECK_EQ(loaded0.crystal.face_distance[0], 1.2f);
+      IM_CHECK_EQ(loaded0.crystal.face_distance[3], 0.9f);
+      IM_CHECK_EQ(loaded0.crystal.zenith.type, gui::AxisDistType::kGauss);
+      IM_CHECK_EQ(loaded0.crystal.zenith.mean, 25.0f);
+      IM_CHECK_EQ(loaded0.crystal.zenith.std, 3.0f);
+      IM_CHECK_EQ(loaded0.crystal.azimuth.type, gui::AxisDistType::kUniform);
+      IM_CHECK_EQ(loaded0.crystal.azimuth.mean, 10.0f);
+      IM_CHECK_EQ(loaded0.crystal.azimuth.std, 20.0f);
+      IM_CHECK_EQ(loaded0.crystal.roll.type, gui::AxisDistType::kLaplacian);
+      IM_CHECK_EQ(loaded0.crystal.roll.mean, 5.0f);
+      IM_CHECK_EQ(loaded0.crystal.roll.std, 2.0f);
       IM_CHECK_EQ(loaded0.proportion, 75.0f);
       IM_CHECK(loaded0.filter.has_value());
       IM_CHECK_EQ(loaded0.filter->raypath_text, std::string("3-1-5"));
