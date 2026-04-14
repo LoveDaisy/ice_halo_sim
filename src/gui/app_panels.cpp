@@ -7,6 +7,8 @@
 
 #include "config/render_config.hpp"
 #include "gui/app.hpp"
+#include "gui/crystal_preview.hpp"
+#include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/overlay_labels.hpp"
@@ -200,158 +202,130 @@ void RenderLeftPanel(float window_height) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-  if (ImGui::BeginTabBar("ConfigTabs")) {
-    if (ImGui::BeginTabItem("Crystal")) {
-      bool has_crystal =
-          g_state.selected_crystal >= 0 && g_state.selected_crystal < static_cast<int>(g_state.crystals.size());
+  // ---- Layout: cards (scroll) + 3D preview (fixed) + toolbar ----
+  int sel_layer = GetSelectedLayerIdx();
+  int sel_entry = GetSelectedEntryIdx();
+  bool has_crystal = sel_layer >= 0 && sel_entry >= 0 && sel_layer < static_cast<int>(g_state.layers.size()) &&
+                     sel_entry < static_cast<int>(g_state.layers[sel_layer].entries.size());
 
-      if (has_crystal) {
-        // Split: scrollable params (upper) + fixed preview (lower).
-        // Preview is square (side = panel content width). Params get the remainder.
-        float content_w = ImGui::GetContentRegionAvail().x;
-        float avail_h = ImGui::GetContentRegionAvail().y;
-        auto& style = ImGui::GetStyle();
-        float separator_h = ImGui::GetTextLineHeight() + style.SeparatorTextPadding.y * 2 + style.ItemSpacing.y;
-        float controls_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
-        float preview_size = content_w;
-        float params_h = avail_h - preview_size - separator_h - controls_h;
+  float content_w = ImGui::GetContentRegionAvail().x;
+  float avail_h = ImGui::GetContentRegionAvail().y;
+  auto& style = ImGui::GetStyle();
+  float separator_h = ImGui::GetTextLineHeight() + style.SeparatorTextPadding.y * 2 + style.ItemSpacing.y;
+  float controls_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
+  float toolbar_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
+  float preview_size = content_w;
+  float cards_h = std::max(0.0f, avail_h - preview_size - separator_h - controls_h - toolbar_h);
 
-        // Parameters scroll region (upper part)
-        ImGui::BeginChild("##CrystalParams", ImVec2(0, params_h), ImGuiChildFlags_None);
-        RenderCrystalTab(g_state);
-        ImGui::EndChild();
+  if (has_crystal) {
+    auto& cr = g_state.layers[sel_layer].entries[sel_entry].crystal;
 
-        // Fixed crystal 3D preview (bottom)
-        ImGui::SeparatorText("3D Preview");
-        auto& cr = g_state.crystals[g_state.selected_crystal];
+    // When the crystal edit modal is open, it drives g_crystal_renderer exclusively.
+    // Skip UpdateMesh+Render here so the modal's edit buffer content is the last FBO write
+    // (ImGui::Image() defers GPU sampling to RenderDrawData at frame end).
+    bool modal_owns_renderer = IsCrystalModalOpen();
 
-        // Update mesh if crystal changed
-        int hash = CrystalParamHash(cr);
-        if (cr.id != g_crystal_mesh_id || hash != g_crystal_mesh_hash) {
-          char json_buf[512];
-          auto* fd = cr.face_distance;
-          if (cr.type == CrystalType::kPrism) {
-            snprintf(json_buf, sizeof(json_buf),
-                     R"({"type":"prism","shape":{"height":%.4f,)"
-                     R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
-                     cr.height, fd[0], fd[1], fd[2], fd[3], fd[4], fd[5]);
-          } else {
-            snprintf(json_buf, sizeof(json_buf),
-                     R"({"type":"pyramid","shape":{"prism_h":%.4f,"upper_h":%.4f,"lower_h":%.4f,)"
-                     R"("upper_wedge_angle":%.4f,"lower_wedge_angle":%.4f,)"
-                     R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
-                     cr.prism_h, cr.upper_h, cr.lower_h, cr.upper_alpha, cr.lower_alpha, fd[0], fd[1], fd[2], fd[3],
-                     fd[4], fd[5]);
-          }
-
-          LUMICE_CrystalMesh mesh{};
-          if (LUMICE_GetCrystalMesh(nullptr, json_buf, &mesh) == LUMICE_OK) {
-            for (int vi = 0; vi < mesh.vertex_count; vi++) {
-              float y = mesh.vertices[vi * 3 + 1];
-              float z = mesh.vertices[vi * 3 + 2];
-              mesh.vertices[vi * 3 + 1] = z;
-              mesh.vertices[vi * 3 + 2] = -y;
-            }
-            for (int ei = 0; ei < mesh.edge_count; ei++) {
-              for (int side = 0; side < 2; side++) {
-                float* n = &mesh.edge_face_normals[ei * 6 + side * 3];
-                float ny = n[1];
-                float nz = n[2];
-                n[1] = nz;
-                n[2] = -ny;
-              }
-            }
-
-            if (mesh.vertex_count > 0) {
-              float min_x = mesh.vertices[0], max_x = mesh.vertices[0];
-              float min_y = mesh.vertices[1], max_y = mesh.vertices[1];
-              float min_z = mesh.vertices[2], max_z = mesh.vertices[2];
-              for (int vi = 1; vi < mesh.vertex_count; vi++) {
-                float x = mesh.vertices[vi * 3];
-                float y = mesh.vertices[vi * 3 + 1];
-                float z = mesh.vertices[vi * 3 + 2];
-                min_x = std::min(min_x, x);
-                max_x = std::max(max_x, x);
-                min_y = std::min(min_y, y);
-                max_y = std::max(max_y, y);
-                min_z = std::min(min_z, z);
-                max_z = std::max(max_z, z);
-              }
-              float extent = std::max({ max_x - min_x, max_y - min_y, max_z - min_z });
-              if (extent > 1e-6f) {
-                float scale = 1.0f / extent;
-                for (int vi = 0; vi < mesh.vertex_count; vi++) {
-                  mesh.vertices[vi * 3] *= scale;
-                  mesh.vertices[vi * 3 + 1] *= scale;
-                  mesh.vertices[vi * 3 + 2] *= scale;
-                }
-              }
-            }
-
-            g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count, mesh.triangles,
-                                          mesh.triangle_count, mesh.edge_face_normals);
-            g_crystal_mesh_id = cr.id;
-            g_crystal_mesh_hash = hash;
-          }
-        }
-
-        // Render to FBO
-        auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
-        g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
-
-        // Display FBO texture
-        ImVec2 area_start = ImGui::GetCursorScreenPos();
-        ImDrawList* draw_list = ImGui::GetWindowDrawList();
-        draw_list->AddRectFilled(area_start, ImVec2(area_start.x + preview_size, area_start.y + preview_size),
-                                 IM_COL32(38, 38, 38, 255));
-
-        auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
-        ImVec2 uv0(0, 1);
-        ImVec2 uv1(1, 0);
-        ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
-
-        ImGui::SetCursorScreenPos(area_start);
-        ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(preview_size, preview_size));
-        if (ImGui::IsItemHovered()) {
-          ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
-          ImGuiIO& io = ImGui::GetIO();
-          if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-            ApplyTrackballRotation(io.MouseDelta.x, io.MouseDelta.y);
-          }
-          if (io.MouseWheel != 0.0f) {
-            g_crystal_zoom *= (1.0f - io.MouseWheel * 0.1f);
-            g_crystal_zoom = std::max(0.5f, std::min(10.0f, g_crystal_zoom));
-          }
-        }
-        ImGui::PushItemWidth(120.0f);
-        ImGui::Combo("##CrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Reset View")) {
-          ResetCrystalView();
-        }
-      } else {
-        // No crystal selected — full space for parameters
-        ImGui::BeginChild("##CrystalParamsOnly", ImVec2(0, 0), ImGuiChildFlags_None);
-        RenderCrystalTab(g_state);
-        ImGui::EndChild();
+    // Update mesh if crystal changed or selection changed
+    int hash = CrystalParamHash(cr);
+    if (!modal_owns_renderer && hash != g_crystal_mesh_hash) {
+      int result = BuildAndUploadCrystalMesh(cr);
+      if (result != 0) {
+        g_crystal_mesh_hash = hash;
       }
+    }
 
-      ImGui::EndTabItem();
+    // Render to FBO (skip when crystal modal owns the renderer)
+    if (!modal_owns_renderer) {
+      auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
+      g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
     }
-    if (ImGui::BeginTabItem("Scene")) {
-      ImGui::BeginChild("##SceneParams", ImVec2(0, 0), ImGuiChildFlags_None);
-      RenderSceneTab(g_state);
-      ImGui::EndChild();
-      ImGui::EndTabItem();
+  }
+
+  // Process thumbnail update queue before rendering cards
+  g_thumbnail_cache.ProcessUpdateQueue(g_state, kMaxThumbnailUpdatesPerFrame);
+
+  // ---- Card scroll area (middle) ----
+  ImGui::BeginChild("##CardScroll", ImVec2(0, cards_h), ImGuiChildFlags_None);
+  RenderScatteringSection(g_state);
+  ImGui::EndChild();
+
+  // ---- 3D Preview (bottom, fixed) ----
+  ImGui::SeparatorText("3D Preview");
+
+  if (has_crystal) {
+    ImVec2 area_start = ImGui::GetCursorScreenPos();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    draw_list->AddRectFilled(area_start, ImVec2(area_start.x + preview_size, area_start.y + preview_size),
+                             IM_COL32(38, 38, 38, 255));
+
+    auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
+    ImVec2 uv0(0, 1);
+    ImVec2 uv1(1, 0);
+    ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
+
+    ImGui::SetCursorScreenPos(area_start);
+    ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(preview_size, preview_size));
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+      ImGuiIO& io = ImGui::GetIO();
+      if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        ApplyTrackballRotation(io.MouseDelta.x, io.MouseDelta.y);
+      }
+      if (io.MouseWheel != 0.0f) {
+        g_crystal_zoom *= (1.0f - io.MouseWheel * 0.1f);
+        g_crystal_zoom = std::max(0.5f, std::min(10.0f, g_crystal_zoom));
+      }
     }
-    if (ImGui::BeginTabItem("Filter")) {
-      ImGui::BeginChild("##FilterParams", ImVec2(0, 0), ImGuiChildFlags_None);
-      RenderFilterTab(g_state);
-      ImGui::EndChild();
-      ImGui::EndTabItem();
+    ImGui::PushItemWidth(120.0f);
+    ImGui::Combo("##CrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset View")) {
+      ResetCrystalView();
     }
-    ImGui::EndTabBar();
+  } else {
+    ImGui::TextDisabled("No crystal selected");
+  }
+
+  // ---- Bottom toolbar: layer add/delete ----
+  ImGui::Spacing();
+  if (ImGui::SmallButton("+ Layer")) {
+    Layer new_layer;
+    new_layer.entries.emplace_back();
+    g_state.layers.push_back(std::move(new_layer));
+    g_thumbnail_cache.OnLayerStructureChanged();
+    g_state.MarkDirty();
+  }
+  ImGui::SameLine();
+  bool can_delete_layer = g_state.layers.size() > 1;
+  if (!can_delete_layer) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::SmallButton("- Layer")) {
+    int del_idx = GetSelectedLayerIdx();
+    if (del_idx >= 0 && del_idx < static_cast<int>(g_state.layers.size()) && g_state.layers.size() > 1) {
+      g_state.layers.erase(g_state.layers.begin() + del_idx);
+      if (GetSelectedLayerIdx() >= static_cast<int>(g_state.layers.size())) {
+        SetSelectedLayerIdx(static_cast<int>(g_state.layers.size()) - 1);
+      }
+      // Clamp entry index for new selected layer
+      auto& new_entries = g_state.layers[GetSelectedLayerIdx()].entries;
+      if (GetSelectedEntryIdx() >= static_cast<int>(new_entries.size())) {
+        SetSelectedEntryIdx(static_cast<int>(new_entries.size()) - 1);
+      }
+      g_thumbnail_cache.OnLayerStructureChanged();
+      g_crystal_mesh_hash = -1;  // Force preview refresh
+      g_state.MarkDirty();
+    }
+  }
+  if (!can_delete_layer) {
+    ImGui::EndDisabled();
+  }
+
+  // Process edit request: open modal if an edit button was clicked
+  if (GetEditRequest().target != EditTarget::kNone) {
+    OpenEditModal(GetEditRequest(), g_state);
+    ResetEditRequest();
   }
 
   ImGui::End();
@@ -378,6 +352,14 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       "##RightPanel", nullptr,
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
+  // ---- Scene Group ----
+  // Scene controls (Sun/Simulation) do not depend on selected_renderer, so they are rendered
+  // before the renderer validity check. This ensures Scene is always visible even when no
+  // renderer is selected.
+  if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
+    RenderSceneControls(g_state);
+  }
+
   if (g_state.selected_renderer < 0 || g_state.selected_renderer >= static_cast<int>(g_state.renderers.size())) {
     ImGui::End();
     return;
@@ -386,195 +368,187 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   auto& r = g_state.renderers[g_state.selected_renderer];
   bool full_sky = (r.lens_type >= 4);
 
-  if (ImGui::BeginTabBar("ViewTabs")) {
-    // ---- View Tab ----
-    if (ImGui::BeginTabItem("View")) {
-      ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-      ImGui::SeparatorText("Projection");
-      ImGui::Combo("Lens Type##view", &r.lens_type, kLensTypeNames, kLensTypeCount);
-      float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
-      ImGui::BeginDisabled(full_sky);
-      SliderWithInput("FOV##view", &r.fov, 1.0f, max_fov, "%.0f");
-      ImGui::EndDisabled();
-      ImGui::Combo("Visible##view", &r.visible, kVisibleNames, kVisibleCount);
+  // ---- View Group ----
+  if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+    ImGui::SeparatorText("Projection");
+    ImGui::Combo("Lens Type##view", &r.lens_type, kLensTypeNames, kLensTypeCount);
+    float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
+    ImGui::BeginDisabled(full_sky);
+    SliderWithInput("FOV##view", &r.fov, 1.0f, max_fov, "%.0f");
+    ImGui::EndDisabled();
+    ImGui::Combo("Visible##view", &r.visible, kVisibleNames, kVisibleCount);
 
-      ImGui::SeparatorText("Camera");
-      ImGui::BeginDisabled(full_sky);
-      SliderWithInput("Elevation##view", &r.elevation, -90.0f, 90.0f, "%.1f");
-      SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f, "%.1f");
-      SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f, "%.1f");
-      ImGui::EndDisabled();
+    ImGui::SeparatorText("Camera");
+    ImGui::BeginDisabled(full_sky);
+    SliderWithInput("Elevation##view", &r.elevation, -90.0f, 90.0f, "%.1f");
+    SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f, "%.1f");
+    SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f, "%.1f");
+    ImGui::EndDisabled();
 
-      ImGui::PopItemWidth();
-      ImGui::EndTabItem();
+    ImGui::PopItemWidth();
+  }
+
+  // ---- Display Group ----
+  if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+    ImGui::SeparatorText("Rendering");
+    const char* res_labels[] = { "512", "1024", "2048", "4096" };
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.28f, 0.12f, 0.6f));
+    if (ImGui::Combo("Resolution##display", &r.sim_resolution_index, res_labels, kSimResolutionCount)) {
+      g_state.MarkDirty();
     }
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
+    }
+    SliderWithInput("EV##display", &r.exposure_offset, -3.0f, 7.0f, "%.1f");
 
-    // ---- Display Tab ----
-    if (ImGui::BeginTabItem("Display")) {
-      ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-      ImGui::SeparatorText("Rendering");
-      const char* res_labels[] = { "512", "1024", "2048", "4096" };
-      ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.28f, 0.12f, 0.6f));
-      if (ImGui::Combo("Resolution##display", &r.sim_resolution_index, res_labels, kSimResolutionCount)) {
-        g_state.MarkDirty();
+    ImGui::SeparatorText("Aspect Ratio");
+    int preset_idx = static_cast<int>(g_state.aspect_preset);
+    const char* preview_label = kAspectPresetNames[preset_idx];
+    if (ImGui::BeginCombo("Preset##display_aspect", preview_label)) {
+      for (int i = 0; i < kAspectPresetCount; i++) {
+        bool is_match_bg = (static_cast<AspectPreset>(i) == AspectPreset::kMatchBg);
+        bool disabled = is_match_bg && !g_preview.HasBackground();
+        if (disabled) {
+          ImGui::BeginDisabled();
+        }
+        bool selected = (i == preset_idx);
+        if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
+          g_state.aspect_preset = static_cast<AspectPreset>(i);
+          ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
+        if (disabled) {
+          ImGui::EndDisabled();
+        }
       }
-      ImGui::PopStyleColor();
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
-      }
-      SliderWithInput("EV##display", &r.exposure_offset, -3.0f, 7.0f, "%.1f");
+      ImGui::EndCombo();
+    }
+    bool disable_flip = (g_state.aspect_preset == AspectPreset::kFree || g_state.aspect_preset == AspectPreset::k1x1 ||
+                         g_state.aspect_preset == AspectPreset::kMatchBg);
+    ImGui::BeginDisabled(disable_flip);
+    const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
+    if (ImGui::Button(flip_label)) {
+      g_state.aspect_portrait = !g_state.aspect_portrait;
+      ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+    }
+    ImGui::EndDisabled();
 
-      ImGui::SeparatorText("Aspect Ratio");
-      int preset_idx = static_cast<int>(g_state.aspect_preset);
-      const char* preview_label = kAspectPresetNames[preset_idx];
-      if (ImGui::BeginCombo("Preset##display_aspect", preview_label)) {
-        for (int i = 0; i < kAspectPresetCount; i++) {
-          bool is_match_bg = (static_cast<AspectPreset>(i) == AspectPreset::kMatchBg);
-          bool disabled = is_match_bg && !g_preview.HasBackground();
-          if (disabled) {
+    ImGui::SeparatorText("Background");
+    if (ImGui::Button("Load Bg##display")) {
+      DoLoadBackground(window);
+    }
+    ImGui::SameLine();
+    bool no_bg = !g_preview.HasBackground();
+    ImGui::BeginDisabled(no_bg);
+    if (ImGui::Button("Clear##display_bg")) {
+      DoClearBackground();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(no_bg);
+    ImGui::Checkbox("Show##display_bg", &g_state.bg_show);
+    ImGui::BeginDisabled(!g_state.bg_show);
+    SliderWithInput("Alpha##display", &g_state.bg_alpha, 0.0f, 1.0f, "%.2f");
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+
+    ImGui::PopItemWidth();
+  }
+
+  // ---- Overlay Group ----
+  if (ImGui::CollapsingHeader("Overlay", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+    ImGui::SeparatorText("Auxiliary Lines");
+    ImGui::Checkbox("Horizon##overlay", &g_state.show_horizon);
+    ImGui::SameLine();
+    ImGui::ColorEdit3("##horizon_color", g_state.horizon_color, ImGuiColorEditFlags_NoInputs);
+    SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, 0.0f, 1.0f, "%.2f");
+    ImGui::Checkbox("Grid##overlay", &g_state.show_grid);
+    ImGui::SameLine();
+    ImGui::ColorEdit3("##grid_color", g_state.grid_color, ImGuiColorEditFlags_NoInputs);
+    SliderWithInput("Alpha##grid", &g_state.grid_alpha, 0.0f, 1.0f, "%.2f");
+    ImGui::Checkbox("Sun Circles##overlay", &g_state.show_sun_circles);
+    ImGui::SameLine();
+    ImGui::ColorEdit3("##sun_circles_color", g_state.sun_circles_color, ImGuiColorEditFlags_NoInputs);
+    SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, 0.0f, 1.0f, "%.2f");
+
+    if (g_state.show_sun_circles) {
+      if (ImGui::Button("Edit Circles...##overlay")) {
+        ImGui::OpenPopup("SunCirclesEdit");
+      }
+      if (ImGui::BeginPopup("SunCirclesEdit")) {
+        bool at_limit = static_cast<int>(g_state.sun_circle_angles.size()) >= kMaxSunCircles;
+
+        // Preset buttons
+        const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
+        for (float p : presets) {
+          bool already = false;
+          for (float a : g_state.sun_circle_angles) {
+            if (std::abs(a - p) < 0.01f) {
+              already = true;
+              break;
+            }
+          }
+          char label[16];
+          std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
+          if (already || at_limit) {
             ImGui::BeginDisabled();
           }
-          bool selected = (i == preset_idx);
-          if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
-            g_state.aspect_preset = static_cast<AspectPreset>(i);
-            ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
-          }
-          if (selected) {
-            ImGui::SetItemDefaultFocus();
-          }
-          if (disabled) {
-            ImGui::EndDisabled();
-          }
-        }
-        ImGui::EndCombo();
-      }
-      bool disable_flip =
-          (g_state.aspect_preset == AspectPreset::kFree || g_state.aspect_preset == AspectPreset::k1x1 ||
-           g_state.aspect_preset == AspectPreset::kMatchBg);
-      ImGui::BeginDisabled(disable_flip);
-      const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
-      if (ImGui::Button(flip_label)) {
-        g_state.aspect_portrait = !g_state.aspect_portrait;
-        ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
-      }
-      ImGui::EndDisabled();
-
-      ImGui::SeparatorText("Background");
-      if (ImGui::Button("Load Bg##display")) {
-        DoLoadBackground(window);
-      }
-      ImGui::SameLine();
-      bool no_bg = !g_preview.HasBackground();
-      ImGui::BeginDisabled(no_bg);
-      if (ImGui::Button("Clear##display_bg")) {
-        DoClearBackground();
-      }
-      ImGui::EndDisabled();
-      ImGui::SameLine();
-      ImGui::BeginDisabled(no_bg);
-      ImGui::Checkbox("Show##display_bg", &g_state.bg_show);
-      ImGui::BeginDisabled(!g_state.bg_show);
-      SliderWithInput("Alpha##display", &g_state.bg_alpha, 0.0f, 1.0f, "%.2f");
-      ImGui::EndDisabled();
-      ImGui::EndDisabled();
-
-      ImGui::PopItemWidth();
-      ImGui::EndTabItem();
-    }
-
-    // ---- Overlay Tab ----
-    if (ImGui::BeginTabItem("Overlay")) {
-      ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-      ImGui::SeparatorText("Auxiliary Lines");
-      ImGui::Checkbox("Horizon##overlay", &g_state.show_horizon);
-      ImGui::SameLine();
-      ImGui::ColorEdit3("##horizon_color", g_state.horizon_color, ImGuiColorEditFlags_NoInputs);
-      SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, 0.0f, 1.0f, "%.2f");
-      ImGui::Checkbox("Grid##overlay", &g_state.show_grid);
-      ImGui::SameLine();
-      ImGui::ColorEdit3("##grid_color", g_state.grid_color, ImGuiColorEditFlags_NoInputs);
-      SliderWithInput("Alpha##grid", &g_state.grid_alpha, 0.0f, 1.0f, "%.2f");
-      ImGui::Checkbox("Sun Circles##overlay", &g_state.show_sun_circles);
-      ImGui::SameLine();
-      ImGui::ColorEdit3("##sun_circles_color", g_state.sun_circles_color, ImGuiColorEditFlags_NoInputs);
-      SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, 0.0f, 1.0f, "%.2f");
-
-      if (g_state.show_sun_circles) {
-        if (ImGui::Button("Edit Circles...##overlay")) {
-          ImGui::OpenPopup("SunCirclesEdit");
-        }
-        if (ImGui::BeginPopup("SunCirclesEdit")) {
-          bool at_limit = static_cast<int>(g_state.sun_circle_angles.size()) >= kMaxSunCircles;
-
-          // Preset buttons
-          const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
-          for (float p : presets) {
-            bool already = false;
-            for (float a : g_state.sun_circle_angles) {
-              if (std::abs(a - p) < 0.01f) {
-                already = true;
-                break;
-              }
-            }
-            char label[16];
-            std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
-            if (already || at_limit) {
-              ImGui::BeginDisabled();
-            }
-            if (ImGui::Button(label)) {
-              g_state.sun_circle_angles.push_back(p);
-              std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
-            }
-            if (already || at_limit) {
-              ImGui::EndDisabled();
-            }
-            ImGui::SameLine();
-          }
-          ImGui::NewLine();
-
-          // Custom angle input
-          static float custom_angle = 22.0f;
-          ImGui::PushItemWidth(60.0f);
-          ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
-          ImGui::PopItemWidth();
-          ImGui::SameLine();
-          if (at_limit) {
-            ImGui::BeginDisabled();
-          }
-          if (ImGui::Button("+##add_circle")) {
-            custom_angle = std::max(0.1f, std::min(180.0f, custom_angle));
-            g_state.sun_circle_angles.push_back(custom_angle);
+          if (ImGui::Button(label)) {
+            g_state.sun_circle_angles.push_back(p);
             std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
           }
-          if (at_limit) {
+          if (already || at_limit) {
             ImGui::EndDisabled();
           }
-
-          // Current list with delete buttons
-          ImGui::Separator();
-          int remove_idx = -1;
-          for (int i = 0; i < static_cast<int>(g_state.sun_circle_angles.size()); i++) {
-            ImGui::Text("%.1f\xc2\xb0", g_state.sun_circle_angles[i]);
-            ImGui::SameLine();
-            char del_label[32];
-            std::snprintf(del_label, sizeof(del_label), "x##del_%d", i);
-            if (ImGui::SmallButton(del_label)) {
-              remove_idx = i;
-            }
-          }
-          if (remove_idx >= 0) {
-            g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
-          }
-
-          ImGui::EndPopup();
+          ImGui::SameLine();
         }
-      }
+        ImGui::NewLine();
 
-      ImGui::PopItemWidth();
-      ImGui::EndTabItem();
+        // Custom angle input
+        static float custom_angle = 22.0f;
+        ImGui::PushItemWidth(60.0f);
+        ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
+        ImGui::PopItemWidth();
+        ImGui::SameLine();
+        if (at_limit) {
+          ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("+##add_circle")) {
+          custom_angle = std::max(0.1f, std::min(180.0f, custom_angle));
+          g_state.sun_circle_angles.push_back(custom_angle);
+          std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+        }
+        if (at_limit) {
+          ImGui::EndDisabled();
+        }
+
+        // Current list with delete buttons
+        ImGui::Separator();
+        int remove_idx = -1;
+        for (int i = 0; i < static_cast<int>(g_state.sun_circle_angles.size()); i++) {
+          ImGui::Text("%.1f\xc2\xb0", g_state.sun_circle_angles[i]);
+          ImGui::SameLine();
+          char del_label[32];
+          std::snprintf(del_label, sizeof(del_label), "x##del_%d", i);
+          if (ImGui::SmallButton(del_label)) {
+            remove_idx = i;
+          }
+        }
+        if (remove_idx >= 0) {
+          g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
+        }
+
+        ImGui::EndPopup();
+      }
     }
 
-    ImGui::EndTabBar();
+    ImGui::PopItemWidth();
   }
 
   ImGui::End();

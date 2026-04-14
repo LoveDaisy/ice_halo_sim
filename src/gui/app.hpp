@@ -12,6 +12,7 @@
 #include "gui/log_sink.hpp"
 #include "gui/preview_renderer.hpp"
 #include "gui/server_poller.hpp"
+#include "gui/thumbnail_cache.hpp"
 #include "include/lumice.h"
 
 struct GLFWwindow;
@@ -34,6 +35,7 @@ enum class PendingAction { kNone, kNew, kOpen, kQuit };
 extern GuiState g_state;
 extern PreviewRenderer g_preview;
 extern CrystalRenderer g_crystal_renderer;
+extern ThumbnailCache g_thumbnail_cache;
 extern LUMICE_Server* g_server;
 extern ServerPoller g_server_poller;
 extern bool g_panel_collapsed;

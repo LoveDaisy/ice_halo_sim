@@ -25,8 +25,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // Verify key fields survived round-trip
       IM_CHECK(std::abs(loaded.sim.ray_num_millions - gui::g_state.sim.ray_num_millions) < 0.01f);
-      IM_CHECK_EQ(static_cast<int>(loaded.crystals.size()), static_cast<int>(gui::g_state.crystals.size()));
-      IM_CHECK_EQ(static_cast<int>(loaded.filters.size()), static_cast<int>(gui::g_state.filters.size()));
+      IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), static_cast<int>(gui::g_state.layers.size()));
       IM_CHECK_EQ(static_cast<int>(loaded.renderers.size()), static_cast<int>(gui::g_state.renderers.size()));
     };
   }
@@ -59,7 +58,101 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // Test 3: Equirect PNG export — write synthetic data, verify file is readable
+  // Test 3: Old format backward compat — ID-referenced crystals/scattering → layers/entries
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "old_format_compat");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Old format: crystals[] + scattering[] with ID references
+      std::string json = R"({
+        "crystals": [
+          {"id": 1, "type": "Prism", "height": 2.0},
+          {"id": 2, "type": "Pyramid", "height": 1.5, "upper_h": 0.3, "lower_h": 0.4, "prism_h": 1.0}
+        ],
+        "scattering": [
+          {"prob": 0.8, "entries": [
+            {"crystal_id": 1, "proportion": 60.0},
+            {"crystal_id": 2, "proportion": 40.0, "filter_id": -1}
+          ]}
+        ],
+        "sun": {"altitude": 25.0}
+      })";
+
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeGuiStateJson(json, loaded);
+      IM_CHECK(ok);
+
+      // Verify migration to copy model
+      IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
+      IM_CHECK_EQ(static_cast<int>(loaded.layers[0].entries.size()), 2);
+      IM_CHECK_EQ(loaded.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
+      IM_CHECK_EQ(loaded.layers[0].entries[0].crystal.height, 2.0f);
+      IM_CHECK_EQ(loaded.layers[0].entries[0].proportion, 60.0f);
+      IM_CHECK_EQ(loaded.layers[0].entries[1].crystal.type, gui::CrystalType::kPyramid);
+      IM_CHECK(!loaded.layers[0].entries[1].filter.has_value());
+      IM_CHECK_EQ(loaded.sun.altitude, 25.0f);
+    };
+  }
+
+  // Test 4: Full .lmc roundtrip with all EntryCard fields
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "lmc_full_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Set up a state with multiple entries, filter, and pyramid crystal
+      auto& entry0 = gui::g_state.layers[0].entries[0];
+      entry0.crystal.type = gui::CrystalType::kPyramid;
+      entry0.crystal.prism_h = 2.0f;
+      entry0.crystal.upper_h = 0.3f;
+      entry0.crystal.lower_h = 0.4f;
+      entry0.proportion = 75.0f;
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      entry0.filter = f;
+
+      // Add a second entry
+      gui::EntryCard extra;
+      extra.crystal.type = gui::CrystalType::kPrism;
+      extra.crystal.height = 3.0f;
+      extra.proportion = 25.0f;
+      gui::g_state.layers[0].entries.push_back(extra);
+
+      // Save
+      const char* tmp_path = "/tmp/lumice_full_roundtrip.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
+      IM_CHECK(save_ok);
+
+      // Reset and load
+      gui::DoNew();
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0;
+      int tex_h = 0;
+      bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
+      IM_CHECK(load_ok);
+
+      // Verify all fields survived round-trip
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+      auto& loaded0 = gui::g_state.layers[0].entries[0];
+      IM_CHECK_EQ(loaded0.crystal.type, gui::CrystalType::kPyramid);
+      IM_CHECK_EQ(loaded0.crystal.prism_h, 2.0f);
+      IM_CHECK_EQ(loaded0.crystal.upper_h, 0.3f);
+      IM_CHECK_EQ(loaded0.crystal.lower_h, 0.4f);
+      IM_CHECK_EQ(loaded0.proportion, 75.0f);
+      IM_CHECK(loaded0.filter.has_value());
+      IM_CHECK_EQ(loaded0.filter->raypath_text, std::string("3-1-5"));
+
+      auto& loaded1 = gui::g_state.layers[0].entries[1];
+      IM_CHECK_EQ(loaded1.crystal.type, gui::CrystalType::kPrism);
+      IM_CHECK_EQ(loaded1.crystal.height, 3.0f);
+      IM_CHECK_EQ(loaded1.proportion, 25.0f);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // Test 5: Equirect PNG export — write synthetic data, verify file is readable
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "equirect_export");
     t->TestFunc = [](ImGuiTestContext* ctx) {

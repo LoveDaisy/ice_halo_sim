@@ -16,6 +16,7 @@
 #include <thread>
 
 #include "gui/app.hpp"
+#include "gui/edit_modals.hpp"
 #include "gui/gl_common.h"
 #include "gui/gl_init.h"
 #include "gui/gui_logger.hpp"
@@ -210,6 +211,12 @@ int main(int argc, char** argv) {
   }
   gui::ResetCrystalView();
 
+  // Initialize thumbnail cache (must be after GL context is ready)
+  if (!gui::g_thumbnail_cache.Init()) {
+    GUI_LOG_ERROR("Failed to initialize thumbnail cache");
+    return 1;
+  }
+
   // Calibrate quality gate threshold by running a short simulation with default config.
   // Must happen after server creation but before the main loop.
   if (!skip_calibration) {
@@ -267,6 +274,7 @@ int main(int argc, char** argv) {
       gui::RenderRightPanel(window, lw, lh);
       gui::RenderPreviewPanel(window, lw, lh);
       gui::RenderStatusBar(lw, lh);
+      gui::RenderEditModals(gui::g_state);
 
       ImGui::Render();
       int dw = 0, dh = 0;
@@ -291,6 +299,7 @@ int main(int argc, char** argv) {
 
     // Cleanup and exit
     gui::g_server_poller.Stop();
+    gui::g_thumbnail_cache.Destroy();
     gui::g_crystal_renderer.Destroy();
     gui::g_preview.Destroy();
     LUMICE_DestroyServer(gui::g_server);
@@ -388,6 +397,7 @@ int main(int argc, char** argv) {
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     gui::RenderLogPanel(layout_width, layout_height);
     gui::RenderStatusBar(layout_width, layout_height);
+    gui::RenderEditModals(gui::g_state);
     gui::RenderUnsavedPopup(window);
 
     // Reset aspect ratio to Free when panel collapse state changes (window size doesn't adjust automatically).

@@ -6,20 +6,8 @@
 
 // ========== Helpers for interaction tests ==========
 
-// ========== Helpers for task-test-gui-interaction ==========
-
 // Polls gui::g_state.texture_upload_count until it reaches baseline + 1 (or higher).
 // Returns true on success, false on timeout.
-//
-// IMPORTANT: caller must NOT call ctx->Yield() between reading baseline and calling this
-// helper; otherwise pending SyncFromPoller updates may be consumed concurrently, invalidating
-// the baseline. Keep the Arrange → baseline capture → Act (dirty + DoRun) → wait sequence
-// tight within a single test body.
-//
-// Uses ctx->Yield() (frame-rate limited, typically 16ms/frame) + 10ms explicit sleep between
-// checks, giving robust detection on both macOS (1ms timer) and Windows (1ms with
-// timeBeginPeriod, which the test main() sets). If a third call site appears, migrate to
-// test_helpers.hpp.
 static bool WaitForSimRestartAtLeast(ImGuiTestContext* ctx, unsigned long baseline_upload_count,
                                      int timeout_ms = 1500) {
   auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
@@ -33,32 +21,6 @@ static bool WaitForSimRestartAtLeast(ImGuiTestContext* ctx, unsigned long baseli
   return false;
 }
 
-// Triggers the two-stage delete for a referenced crystal via the Delete Crystal? modal.
-// Caller must have set state.selected_crystal to the target crystal index.
-static void ClickDeleteCrystalViaModal(ImGuiTestContext* ctx) {
-  ctx->ItemClick("**/Del##crystal");
-  ctx->Yield(2);
-  ctx->ItemClick("Delete Crystal?/Delete");
-  ctx->Yield();
-}
-
-// Opens the Delete Crystal? modal and clicks Cancel, leaving state unchanged.
-static void ClickDeleteCrystalCancelModal(ImGuiTestContext* ctx) {
-  ctx->ItemClick("**/Del##crystal");
-  ctx->Yield(2);
-  ctx->ItemClick("Delete Crystal?/Cancel");
-  ctx->Yield();
-}
-
-// Triggers the two-stage delete for a referenced filter via the Delete Filter? modal.
-// Caller must have set state.selected_filter to the target filter index.
-static void ClickDeleteFilterViaModal(ImGuiTestContext* ctx) {
-  ctx->ItemClick("**/Del##filter");
-  ctx->Yield(2);
-  ctx->ItemClick("Delete Filter?/Delete");
-  ctx->Yield();
-}
-
 // P0 tests
 void RegisterP0Tests(ImGuiTestEngine* engine) {
   // P0: New
@@ -68,21 +30,20 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
       IM_UNUSED(ctx);
       ResetTestState();
 
-      // Modify state: add crystal, set dirty
-      gui::CrystalConfig c;
-      c.id = gui::g_state.next_crystal_id++;
-      gui::g_state.crystals.push_back(c);
+      // Modify state: add an extra entry to first layer, set dirty
+      gui::EntryCard extra;
+      gui::g_state.layers[0].entries.push_back(extra);
       gui::g_state.dirty = true;
 
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
       IM_CHECK_EQ(gui::g_state.dirty, true);
 
       // DoNew resets
       gui::DoNew();
 
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
       IM_CHECK_EQ(gui::g_state.dirty, false);
-      IM_CHECK_EQ(gui::g_state.selected_crystal, 0);
       IM_CHECK_EQ(gui::g_preview.HasTexture(), false);
     };
   }
@@ -94,11 +55,12 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
       IM_UNUSED(ctx);
       ResetTestState();
 
-      // Modify state
-      gui::g_state.crystals[0].type = gui::CrystalType::kPyramid;
-      gui::g_state.crystals[0].prism_h = 2.0f;
-      gui::g_state.crystals[0].upper_h = 0.3f;
-      gui::g_state.crystals[0].lower_h = 0.4f;
+      // Modify state via layers model
+      auto& entry0 = gui::g_state.layers[0].entries[0];
+      entry0.crystal.type = gui::CrystalType::kPyramid;
+      entry0.crystal.prism_h = 2.0f;
+      entry0.crystal.upper_h = 0.3f;
+      entry0.crystal.lower_h = 0.4f;
       gui::g_state.sun.altitude = 30.0f;
       gui::g_state.sim.max_hits = 12;
 
@@ -109,7 +71,7 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
 
       // Reset
       gui::DoNew();
-      IM_CHECK_EQ(gui::g_state.crystals[0].type, gui::CrystalType::kPrism);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
 
       // Load
       std::vector<unsigned char> tex_data;
@@ -119,10 +81,11 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
       IM_CHECK(load_ok);
 
       // Verify roundtrip
-      IM_CHECK_EQ(gui::g_state.crystals[0].type, gui::CrystalType::kPyramid);
-      IM_CHECK_EQ(gui::g_state.crystals[0].prism_h, 2.0f);
-      IM_CHECK_EQ(gui::g_state.crystals[0].upper_h, 0.3f);
-      IM_CHECK_EQ(gui::g_state.crystals[0].lower_h, 0.4f);
+      auto& loaded_entry = gui::g_state.layers[0].entries[0];
+      IM_CHECK_EQ(loaded_entry.crystal.type, gui::CrystalType::kPyramid);
+      IM_CHECK_EQ(loaded_entry.crystal.prism_h, 2.0f);
+      IM_CHECK_EQ(loaded_entry.crystal.upper_h, 0.3f);
+      IM_CHECK_EQ(loaded_entry.crystal.lower_h, 0.4f);
       IM_CHECK_EQ(gui::g_state.sun.altitude, 30.0f);
       IM_CHECK_EQ(gui::g_state.sim.max_hits, 12);
       IM_CHECK(tex_data.empty());  // save_texture=false
@@ -163,66 +126,56 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
 
 // P1 tests
 void RegisterP1Tests(ImGuiTestEngine* engine) {
-  // P1: Crystal Add/Delete
+  // P1: Entry Add/Delete (card-based UI, copy model)
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_crystal", "add_delete");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_entry", "add_delete");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
-      ctx->Yield(2);  // Let GUI render
-
-      // Verify initial state: 1 crystal
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
-
-      // Scenario A: Add a crystal, then delete the new (unreferenced) one
-      ctx->ItemClick("**/Add##crystal");
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
-      IM_CHECK_EQ(gui::g_state.selected_crystal, 1);
-
-      // Delete the new crystal (not referenced by scattering) — should delete directly
-      ctx->ItemClick("**/Del##crystal");
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
-
-      // Scenario B: Try to delete the referenced crystal
-      // Need at least 2 crystals for Del to be enabled
-      ctx->ItemClick("**/Add##crystal");
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
-
-      // Select the first crystal (referenced by scattering)
-      gui::g_state.selected_crystal = 0;
-      ctx->Yield();
-
-      // Click Del — should open confirmation popup
-      ctx->ItemClick("**/Del##crystal");
       ctx->Yield(2);
 
-      // Click Delete in the popup to confirm
-      ctx->ItemClick("Delete Crystal?/Delete");
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
+      // Verify initial state: 1 layer with 1 entry
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
+
+      // Add an entry via the "+ Entry" button in layer 0
+      ctx->ItemClick("**/+ Entry##layer_0");
+      ctx->Yield();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+
+      // Delete the new entry (x##0_1 for layer 0, entry 1)
+      // Entries can only be deleted when layer has >1 entries
+      ctx->ItemClick("**/x##0_1");
+      ctx->Yield();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
     };
   }
 
-  // P1: Filter Add/Delete
+  // P1: Filter via modal (copy model — filter is optional per entry)
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "add_delete");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "modal_set_clear");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
 
-      // Verify initial: no filters
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.filters.size()), 0);
+      // Verify initial: entry has no filter
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
 
-      // Switch to Filter tab
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Filter");
-      ctx->Yield();
+      // Programmatically set a filter so we can test clearing it
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      gui::g_state.layers[0].entries[0].filter = f;
 
-      // Add a filter
-      ctx->ItemClick("**/Add##filter");
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.filters.size()), 1);
-      IM_CHECK_EQ(gui::g_state.selected_filter, 0);
+      // Verify filter is set
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
 
-      // Delete the filter (unreferenced) — direct delete
-      ctx->ItemClick("**/Del##filter");
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.filters.size()), 0);
+      // Open filter modal, click Remove to clear
+      ctx->ItemClick("**/E##fi");
+      ctx->Yield(2);
+      ctx->ItemClick("Edit Filter/Remove Filter##filter");
+      ctx->Yield(2);
+
+      // Verify filter is cleared
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
     };
   }
 
@@ -246,7 +199,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Verify state was reset
       IM_CHECK_EQ(gui::g_state.dirty, false);
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
     };
   }
 
@@ -257,9 +210,8 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      // Ensure Crystal tab is selected (previous tests may have switched tabs)
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
-      ctx->Yield(3);  // Let layout settle: tab switch → mesh rebuild → FBO render
+      // Left panel now renders cards directly (no tabs) — just let layout settle
+      ctx->Yield(3);  // Let layout settle: mesh rebuild → FBO render
 
       ImGuiWindow* panel = ctx->GetWindowByRef("##LeftPanel");
       IM_CHECK(panel != nullptr);
@@ -365,167 +317,73 @@ void RegisterP2Tests(ImGuiTestEngine* engine) {
 // ========== task-test-gui-interaction: P1 Crystal/Filter CRUD + reference handling ==========
 
 void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
-  // p1_crystal/delete_referenced_reassigns_sole_entry
-  // Contract: deleting a crystal referenced by a sole-entry scatter layer reassigns the
-  // entry's crystal_id to the first non-deleted crystal's id (HandleDeletedCrystalRefs in
-  // panels.cpp:260-282, kReassignOnly branch).
-  // NOTE: ImGui tab selection is not in g_state; click Crystal tab explicitly because
-  // earlier tests may have switched tabs.
+  // Copy model: crystal/axis/filter are embedded in each entry — no ID references.
+  // Old "delete crystal reassigns scatter entry" tests are no longer applicable.
+
+  // p1_card/layer_add_delete — add and remove a layer
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_crystal", "delete_referenced_reassigns_sole_entry");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "layer_add_delete");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
-      ctx->Yield(2);
 
-      // Arrange: default has 1 crystal (id=1), 1 scatter layer with sole entry → id=1
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
-      IM_CHECK_EQ(gui::g_state.crystals[0].id, 1);
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.scattering[0].entries.size()), 1);
-      IM_CHECK_EQ(gui::g_state.scattering[0].entries[0].crystal_id, 1);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
 
-      // Add a second crystal (id=2), unreferenced
-      ctx->ItemClick("**/Add##crystal");
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
-      IM_CHECK_EQ(gui::g_state.crystals[1].id, 2);
-
-      // Act: select the first (referenced) crystal and delete via modal
-      gui::g_state.selected_crystal = 0;
+      // Add a layer
+      ctx->ItemClick("**/+ Layer");
       ctx->Yield();
-      ClickDeleteCrystalViaModal(ctx);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 2);
 
-      // Assert: sole-entry layer reassigned to fallback (id=2)
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
-      IM_CHECK_EQ(gui::g_state.crystals[0].id, 2);
-      IM_CHECK_EQ(gui::g_state.scattering[0].entries[0].crystal_id, 2);
+      // Select the new layer (idx 1) then delete it
+      gui::SetSelectedLayerIdx(1);
+      ctx->Yield();
+      ctx->ItemClick("**/- Layer");
+      ctx->Yield();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
     };
   }
 
-  // p1_crystal/delete_referenced_removes_multi_entry
-  // Contract: in a multi-entry scatter layer, deleting a referenced crystal erases matching
-  // entries (HandleDeletedCrystalRefs kRemoveOnly branch), leaving the layer's other entries
-  // intact.
+  // p1_card/entry_copy — copy an entry card
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_crystal", "delete_referenced_removes_multi_entry");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "entry_copy");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
-      ctx->Yield(2);
 
-      // Add second crystal (id=2)
-      ctx->ItemClick("**/Add##crystal");
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
-      IM_CHECK_EQ(gui::g_state.crystals[1].id, 2);
-
-      // Programmatically append a second entry to the default layer referencing crystal id=2
-      gui::ScatterEntry extra;
-      extra.crystal_id = gui::g_state.crystals[1].id;  // id=2
-      extra.proportion = 50.0f;
-      gui::g_state.scattering[0].entries.push_back(extra);
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.scattering[0].entries.size()), 2);
-
-      // Act: select crystal[1] (id=2) and delete — multi-entry layer → kRemoveOnly
-      gui::g_state.selected_crystal = 1;
+      // Modify the default entry's crystal type
+      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+      gui::g_state.layers[0].entries[0].crystal.prism_h = 2.5f;
       ctx->Yield();
-      ClickDeleteCrystalViaModal(ctx);
 
-      // Assert: crystal[1] removed, layer now has only the original entry (crystal_id=1)
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
-      IM_CHECK_EQ(gui::g_state.crystals[0].id, 1);
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.scattering[0].entries.size()), 1);
-      IM_CHECK_EQ(gui::g_state.scattering[0].entries[0].crystal_id, 1);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
+
+      // Copy the entry
+      ctx->ItemClick("**/Copy##0_0");
+      ctx->Yield();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+
+      // Verify the copy has same crystal params
+      auto& copy = gui::g_state.layers[0].entries[1];
+      IM_CHECK_EQ(copy.crystal.type, gui::CrystalType::kPyramid);
+      IM_CHECK_EQ(copy.crystal.prism_h, 2.5f);
     };
   }
 
-  // p1_crystal/delete_modal_cancel_preserves_state
-  // Contract: clicking Cancel in Delete Crystal? modal leaves state unchanged and clears
-  // g_pending_delete_crystal_idx (panels.cpp:509-511).
+  // p1_card/proportion_direct_write — modify entry proportion programmatically
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_crystal", "delete_modal_cancel_preserves_state");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
-      ctx->Yield(2);
-
-      // Need 2 crystals so Del button is enabled
-      ctx->ItemClick("**/Add##crystal");
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
-
-      // Act: select referenced crystal, open modal, cancel
-      gui::g_state.selected_crystal = 0;
-      ctx->Yield();
-      ClickDeleteCrystalCancelModal(ctx);
-
-      // Assert: both crystals preserved
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
-    };
-  }
-
-  // p1_crystal/delete_all_then_add_new_id
-  // Contract: next_crystal_id is monotonically increasing and never reuses deleted ids
-  // (gui_state.hpp:166, InitDefaultState starts at 1).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_crystal", "delete_all_then_add_new_id");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
-      ctx->Yield(2);
-
-      // Default: crystals[0].id=1, next_crystal_id=2 (after InitDefaultState)
-      IM_CHECK_EQ(gui::g_state.crystals[0].id, 1);
-      IM_CHECK_EQ(gui::g_state.next_crystal_id, 2);
-
-      // Add crystal (id=2)
-      ctx->ItemClick("**/Add##crystal");
-      IM_CHECK_EQ(gui::g_state.crystals[1].id, 2);
-      IM_CHECK_EQ(gui::g_state.next_crystal_id, 3);
-
-      // Delete the first (referenced) via modal → sole entry reassigned to id=2
-      gui::g_state.selected_crystal = 0;
-      ctx->Yield();
-      ClickDeleteCrystalViaModal(ctx);
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 1);
-      IM_CHECK_EQ(gui::g_state.crystals[0].id, 2);
-
-      // Add a new crystal — must get id=3, not reuse id=1
-      ctx->ItemClick("**/Add##crystal");
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
-      IM_CHECK_EQ(gui::g_state.crystals[1].id, 3);
-      IM_CHECK_EQ(gui::g_state.next_crystal_id, 4);
-    };
-  }
-
-  // p1_filter/delete_referenced_clears_scatter_filter_id
-  // Contract: deleting a filter referenced by scatter entries clears those entries'
-  // filter_id to -1 (ClearFilterReferences in panels.cpp:308-315, called from
-  // Delete Filter? modal confirm path).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "delete_referenced_clears_scatter_filter_id");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "proportion_direct_write");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
 
-      // Add a filter via the UI
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Filter");
-      ctx->Yield();
-      ctx->ItemClick("**/Add##filter");
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.filters.size()), 1);
-      const int filter_id = gui::g_state.filters[0].id;
-
-      // Programmatically reference this filter from the default scatter entry
-      gui::g_state.scattering[0].entries[0].filter_id = filter_id;
+      // Default proportion is 100.0; change to 42.0
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].proportion, 100.0f);
+      gui::g_state.layers[0].entries[0].proportion = 42.0f;
+      gui::g_state.MarkDirty();
       ctx->Yield();
 
-      // Act: delete via modal (referenced filter → modal path)
-      ClickDeleteFilterViaModal(ctx);
-
-      // Assert: filter removed, scatter entry's filter_id cleared
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.filters.size()), 0);
-      IM_CHECK_EQ(gui::g_state.scattering[0].entries[0].filter_id, -1);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].proportion, 42.0f);
+      IM_CHECK_EQ(gui::g_state.dirty, true);
     };
   }
 }
@@ -535,15 +393,14 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
 
 void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
   // p1_slider/ray_count_min_max — linear scale, exact boundary values expected.
-  // SliderWithInput("Rays(M)", ...) lives in RenderSceneTab (panels.cpp:609), so we must
-  // switch to the Scene tab first. Internal widget ID is "##Rays(M)_input" via
-  // PrepareSliderLayout (panels.cpp:33).
+  // SliderWithInput("Rays(M)", ...) now lives in RenderSceneControls (right panel Scene group).
+  // Internal widget ID is "##Rays(M)_input" via PrepareSliderLayout.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "ray_count_min_max");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Scene");
+      // Scene is now a CollapsingHeader in the right panel, open by default
       ctx->Yield(2);
 
       IM_CHECK_EQ(gui::g_state.sim.infinite, false);  // slider active when not infinite
@@ -564,7 +421,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Scene");
+      // Scene is now a CollapsingHeader in the right panel, open by default
       ctx->Yield(2);
 
       ctx->ItemInputValue("**/##Rays(M)_input", 5.0f);
@@ -583,94 +440,76 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // p1_slider/height_min_clamped_to_0_01 — kLog scale clamps write(0) to min
-  // SliderWithInput("Height", ..., kLog) → "##Height_slider" / "##Height_input".
-  // kLog branch uses *value = std::max(*value, min_val) to defend against 0/negative
-  // from InputFloat (panels.cpp:72).
-  // NOTE: ImGui tab selection is not part of g_state — previous tests may have switched
-  // tabs, so we must explicitly click Crystal tab here.
+  // Crystal slider boundary tests — via SliderWithInput in Edit Crystal modal.
+  // Open modal, use ctx->ItemInputValue to write boundary values through the widget,
+  // click OK, then verify the clamped values in g_state.
+  //
+  // SliderWithInput("Height##modal_cr", ..., 0.01f, 100.0f, kLogLinear) — height ≥ 0.01
+  // SliderWithInput("Upper H##modal_cr", ..., 0.0f, 100.0f, kLogLinear) — allows 0
+  // SliderWithInput("Lower H##modal_cr", ..., 0.0f, 100.0f, kLogLinear) — allows 0
+  // SliderWithInput("Prism H##modal_cr", ..., 0.0f, 100.0f, kLogLinear) — allows 0
+
+  // p1_slider/height_clamp_via_modal — kLogLinear clamps height to [0.01, 100]
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "height_min_clamped_to_0_01");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "height_clamp_via_modal");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
+
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
+
+      // Open crystal modal
+      ctx->ItemClick("**/E##cr");
+      ctx->Yield(3);
+
+      // Write 0 via the input widget — should be clamped to min (0.01)
+      ctx->ItemInputValue("Edit Crystal/##Height##modal_cr_input", 0.0f);
+      ctx->Yield();
+
+      // Click OK to commit
+      ctx->ItemClick("Edit Crystal/OK##crystal");
       ctx->Yield(2);
 
-      IM_CHECK_EQ(gui::g_state.crystals[0].type, gui::CrystalType::kPrism);
-
-      // Write 0 → expected clamp to 0.01 (slider min, kLog scale cannot reach 0)
-      ctx->ItemInputValue("**/##Height_input", 0.0f);
-      ctx->Yield();
-      IM_CHECK_GE(gui::g_state.crystals[0].height, 0.01f - 1e-6f);
-      IM_CHECK_LT(gui::g_state.crystals[0].height, 0.02f);
+      // Height should be clamped to >= 0.01 (kLogLinear with min=0.01)
+      IM_CHECK_GE(gui::g_state.layers[0].entries[0].crystal.height, 0.01f - 1e-6f);
     };
   }
 
-  // p1_slider/pyramid_h1_h3_allow_zero — Upper/Lower H linear 0-1, 0 is a legal value
+  // p1_slider/pyramid_h_allows_zero_via_modal — Upper H and Lower H allow 0
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "pyramid_h1_h3_allow_zero");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "pyramid_h_allows_zero_via_modal");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
-      ctx->Yield(2);
 
-      // Switch crystal type to pyramid (Upper H / Lower H sliders appear)
-      gui::g_state.crystals[0].type = gui::CrystalType::kPyramid;
+      // Switch to Pyramid type programmatically
+      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+      ctx->Yield();
+
+      // Open crystal modal
+      ctx->ItemClick("**/E##cr");
       ctx->Yield(3);
 
-      ctx->ItemInputValue("**/##Upper H_input", 0.0f);
+      // Write 0 to Upper H — should be allowed (min=0.0 for kLogLinear)
+      ctx->ItemInputValue("Edit Crystal/##Upper H##modal_cr_input", 0.0f);
       ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.crystals[0].upper_h, 0.0f);
 
-      ctx->ItemInputValue("**/##Lower H_input", 0.0f);
-      ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.crystals[0].lower_h, 0.0f);
-    };
-  }
-
-  // p1_slider/pyramid_prism_h_loglinear_zero — kLogLinear scale allows prism_h to reach 0
-  // SliderWithInput("Prism H", ..., kLogLinear) → "##Prism H_input".
-  // kLogLinear hybrid mapping: linear near zero, log above x0=0.01.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "pyramid_prism_h_loglinear_zero");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
+      // Click OK
+      ctx->ItemClick("Edit Crystal/OK##crystal");
       ctx->Yield(2);
 
-      // Switch to pyramid type
-      gui::g_state.crystals[0].type = gui::CrystalType::kPyramid;
-      ctx->Yield(3);
-
-      // Write 0 → kLogLinear allows reaching exactly 0
-      ctx->ItemInputValue("**/##Prism H_input", 0.0f);
-      ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.crystals[0].prism_h, 0.0f);
-
-      // Write max value → should clamp to 100
-      ctx->ItemInputValue("**/##Prism H_input", 100.0f);
-      ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.crystals[0].prism_h, 100.0f);
-
-      // Write small value in linear region → should preserve exactly
-      ctx->ItemInputValue("**/##Prism H_input", 0.005f);
-      ctx->Yield();
-      IM_CHECK_GE(gui::g_state.crystals[0].prism_h, 0.0049f);
-      IM_CHECK_LE(gui::g_state.crystals[0].prism_h, 0.0051f);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 0.0f);
     };
   }
 
   // p1_slider/altitude_negative_boundaries — sun altitude ±90°
-  // SliderWithInput("Altitude", ...) is also in RenderSceneTab (panels.cpp:598)
+  // SliderWithInput("Altitude", ...) now in RenderSceneControls (right panel Scene group)
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "altitude_negative_boundaries");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Scene");
+      // Scene is now a CollapsingHeader in the right panel, open by default
       ctx->Yield(2);
 
       ctx->ItemInputValue("**/##Altitude_input", -90.0f);
@@ -778,7 +617,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       auto baseline = gui::g_state.texture_upload_count;
 
       // Act: change a crystal parameter, mark dirty, commit on test thread
-      gui::g_state.crystals[0].height = 2.5f;
+      gui::g_state.layers[0].entries[0].crystal.height = 2.5f;
       gui::g_state.dirty = true;
       gui::DoRun();
 
@@ -798,12 +637,10 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
 
-      // Pre-register a filter on g_state so StartPerfSimulation's DoRun commits with it
+      // Pre-register a filter on the first entry so StartPerfSimulation's DoRun commits with it
       gui::FilterConfig f;
-      f.id = gui::g_state.next_filter_id++;
       f.raypath_text = "3-1-5";
-      gui::g_state.filters.push_back(f);
-      gui::g_state.selected_filter = 0;
+      gui::g_state.layers[0].entries[0].filter = f;
 
       StartPerfSimulation();
 
@@ -831,7 +668,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       auto baseline = gui::g_state.texture_upload_count;
 
       // Act: change filter raypath, mark filter dirty, commit
-      gui::g_state.filters[0].raypath_text = "3-1-5-7";
+      gui::g_state.layers[0].entries[0].filter->raypath_text = "3-1-5-7";
       gui::g_state.MarkFilterDirty();
       gui::DoRun();
 
@@ -901,12 +738,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
-      ctx->ItemClick("##LeftPanel/ConfigTabs/Crystal");
-      ctx->Yield(2);
+      // Left panel now renders cards directly (no tabs)
 
-      // Add a crystal so state differs from default
-      ctx->ItemClick("**/Add##crystal");
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
+      // Add an entry so state differs from default
+      gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
       gui::g_state.dirty = true;
       ctx->Yield();
 
@@ -918,9 +754,9 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("Unsaved Changes/Cancel");
       ctx->Yield();
 
-      // State preserved: still 2 crystals, still dirty, pending action cleared
+      // State preserved: still 2 entries, still dirty, pending action cleared
       IM_CHECK_EQ(gui::g_state.dirty, true);
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.crystals.size()), 2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
       IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
     };
   }
@@ -937,8 +773,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       std::remove(tmp_path);  // clean up any stale file from a previous failed run
       gui::g_state.current_file_path = tmp_path;
       // Modify state in a verifiable way
-      gui::g_state.crystals[0].type = gui::CrystalType::kPyramid;
-      gui::g_state.crystals[0].prism_h = 3.5f;
+      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+      gui::g_state.layers[0].entries[0].crystal.prism_h = 3.5f;
       gui::g_state.dirty = true;
       ctx->Yield();
 
@@ -959,10 +795,85 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       int th = 0;
       bool load_ok = gui::LoadLmcFile(tmp_path, loaded, tex, tw, th);
       IM_CHECK(load_ok);
-      IM_CHECK_EQ(loaded.crystals[0].type, gui::CrystalType::kPyramid);
-      IM_CHECK_EQ(loaded.crystals[0].prism_h, 3.5f);
+      IM_CHECK_EQ(loaded.layers[0].entries[0].crystal.type, gui::CrystalType::kPyramid);
+      IM_CHECK_EQ(loaded.layers[0].entries[0].crystal.prism_h, 3.5f);
 
       std::remove(tmp_path);
+    };
+  }
+
+  // p2_modal/crystal_modal_open_cancel — open crystal modal, cancel, verify no state change
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_open_cancel");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      auto& cr = gui::g_state.layers[0].entries[0].crystal;
+      auto type_before = cr.type;
+      float height_before = cr.height;
+
+      // Click Edit Crystal button on the first entry card
+      ctx->ItemClick("**/E##cr");
+      ctx->Yield(3);
+
+      // Click Cancel in the modal
+      ctx->ItemClick("Edit Crystal/Cancel##crystal");
+      ctx->Yield(2);
+
+      // State unchanged
+      IM_CHECK_EQ(cr.type, type_before);
+      IM_CHECK_EQ(cr.height, height_before);
+    };
+  }
+
+  // p2_modal/crystal_modal_edit_confirm — edit crystal height, click OK, verify state updated
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_edit_confirm");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Verify initial height
+      float initial_height = gui::g_state.layers[0].entries[0].crystal.height;
+
+      // Open crystal modal
+      ctx->ItemClick("**/E##cr");
+      ctx->Yield(3);
+
+      // Modify height via the input widget in the modal
+      ctx->ItemInputValue("Edit Crystal/##Height##modal_cr_input", 5.0f);
+      ctx->Yield();
+
+      // Click OK to commit buffer to state
+      ctx->ItemClick("Edit Crystal/OK##crystal");
+      ctx->Yield(2);
+
+      // Height should be updated to 5.0
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, 5.0f);
+    };
+  }
+
+  // p2_modal/filter_modal_ok_sets_filter — open filter modal on empty entry, click OK to set filter
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "filter_modal_ok_sets_filter");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Entry starts with no filter
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      // Open filter modal
+      ctx->ItemClick("**/E##fi");
+      ctx->Yield(3);
+
+      // Click OK to set the default filter on the entry
+      ctx->ItemClick("Edit Filter/OK##filter");
+      ctx->Yield(2);
+
+      // Filter should now be set (modal OK commits filter buffer to state)
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
     };
   }
 }

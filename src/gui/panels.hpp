@@ -1,9 +1,11 @@
 #ifndef LUMICE_GUI_PANELS_HPP
 #define LUMICE_GUI_PANELS_HPP
 
-namespace lumice::gui {
+// Full include (not forward declaration) because RenderAxisDist takes AxisDist by reference,
+// requiring the complete type definition. This propagates gui_state.hpp to all includers.
+#include "gui/gui_state.hpp"
 
-struct GuiState;
+namespace lumice::gui {
 
 // Slider scale modes for SliderWithInput
 enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
@@ -14,11 +16,51 @@ enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
                      SliderScale scale = SliderScale::kLinear);
 
-void RenderCrystalTab(GuiState& state);
-void RenderSceneTab(GuiState& state);
-void RenderFilterTab(GuiState& state);
+// ---- Edit request (shared between panels.cpp and app_panels.cpp) ----
+enum class EditTarget { kNone, kCrystal, kAxis, kFilter };
 
-// Reset pending-delete state (for test isolation)
+struct EditRequest {
+  EditTarget target = EditTarget::kNone;
+  int layer_idx = -1;
+  int entry_idx = -1;
+};
+
+const EditRequest& GetEditRequest();
+void ResetEditRequest();
+
+// ---- Selection state accessors ----
+int GetSelectedLayerIdx();
+int GetSelectedEntryIdx();
+void SetSelectedLayerIdx(int idx);
+void SetSelectedEntryIdx(int idx);
+
+// ---- Axis distribution controls (shared between panels and edit modals) ----
+
+// Render axis distribution controls (combo + mean + std sliders).
+// Returns true if any value changed. Does NOT call MarkDirty() — caller is responsible.
+bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mean_max);
+
+// ---- Axis preset classification ----
+
+// Classify crystal axis configuration into a named preset (Parry/Column/Lowitz/Plate/Random/Custom).
+std::string AxisPresetName(const CrystalConfig& c);
+
+// ---- Panel rendering ----
+
+// Render a single entry card within a layer. Returns true if the delete button was clicked.
+bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx);
+
+// Render a full layer (collapsing header + entry cards + controls).
+void RenderLayer(GuiState& state, int layer_idx);
+
+// Scattering section (layer management, rendered inside left panel scroll area).
+void RenderScatteringSection(GuiState& state);
+
+// Scene controls (Sun + Simulation) rendered in the right panel Scene group.
+void RenderSceneControls(GuiState& state);
+
+// Reset all panel editing state: edit request, selection indices.
+// Name kept for GUI test teardown compatibility (was pending-delete only, now broader).
 void ResetPendingDeleteState();
 
 }  // namespace lumice::gui
