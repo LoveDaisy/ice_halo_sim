@@ -21,6 +21,16 @@ build() {
     ctest -L unit --output-on-failure
     ret=$?
   fi
+  if [[ $ret == 0 && $BUILD_TEST == ON && $BUILD_GUI == ON ]]; then
+    GUI_TEST_BIN="${ROOT_DIR}/build/${BUILD_TYPE}/bin/LumiceGUITests"
+    if [[ -x "$GUI_TEST_BIN" ]]; then
+      echo "Running GUI tests..."
+      "$GUI_TEST_BIN"
+      ret=$?
+    else
+      echo "Warning: $GUI_TEST_BIN not found, skipping GUI tests"
+    fi
+  fi
   if [[ $ret == 0 && $INSTALL_FLAG == ON ]]; then
     echo "Installing..."
     cmake --build "${BUILD_DIR}" --target install
@@ -35,7 +45,8 @@ help() {
   echo "  ./build.sh [-tgbjksxh] <debug|release|minsizerel>"
   echo "    Executables will be installed at build/cmake_install"
   echo "OPTIONS:"
-  echo "  -t:          Build test cases and run test on them."
+  echo "  -t:          Build test cases and run unit tests (CTest -L unit)."
+  echo "               Combined with -g, also runs LumiceGUITests (requires a display)."
   echo "  -g:          Build GUI application (Dear ImGui + GLFW + OpenGL)."
   echo "  -b:          Build benchmarks (Google Benchmark)."
   echo "  -j:          Build in parallel, i.e. use make -j"
