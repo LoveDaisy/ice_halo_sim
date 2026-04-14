@@ -95,7 +95,6 @@ inline const int kSimResolutions[] = { 512, 1024, 2048, 4096 };
 constexpr int kSimResolutionCount = 4;
 
 struct RenderConfig {
-  int id = 0;
   int lens_type = 0;  // Index into kLensTypeNames
   float fov = 90.0f;
   float elevation = 0.0f;
@@ -109,7 +108,7 @@ struct RenderConfig {
   float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
 
   bool operator==(const RenderConfig& o) const {
-    return id == o.id && lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
+    return lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
            roll == o.roll && sim_resolution_index == o.sim_resolution_index && visible == o.visible &&
            std::equal(background, background + 3, o.background) && std::equal(ray_color, ray_color + 3, o.ray_color) &&
            opacity == o.opacity && exposure_offset == o.exposure_offset;
@@ -154,10 +153,9 @@ struct GuiState {
   SunConfig sun;
   SimConfig sim;
 
-  // Renderers (still ID-based; TECH_DEBT(renderer-id-model): migrate when needed)
-  std::vector<RenderConfig> renderers;
-  int selected_renderer = -1;
-  int next_renderer_id = 1;
+  // Renderer (copy model: GuiState owns a single renderer directly).
+  // Single-renderer enforced by the GUI; if multi-renderer is ever needed, revisit.
+  RenderConfig renderer;
 
   // Aspect ratio (view preference, not simulation parameter — does not call MarkDirty)
   AspectPreset aspect_preset = AspectPreset::kFree;
@@ -246,9 +244,7 @@ struct GuiState {
     std::vector<Layer> layers;
     SunConfig sun;
     SimConfig sim;
-    std::vector<RenderConfig> renderers;
-    int selected_renderer = -1;
-    int next_renderer_id = 1;  // TECH_DEBT(renderer-id-model): remove when renderers migrate to copy model
+    RenderConfig renderer;
 
     // Build a snapshot from the configuration fields of `state`. Implementation is
     // out-of-class (after GuiState is complete) because GuiState is incomplete here.
@@ -269,7 +265,9 @@ struct GuiState {
 // be audited for matching changes. Apple Silicon + libc++ only (std::vector size varies
 // across stdlib implementations).
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(GuiState::ConfigSnapshot) == 80,
+// Size updated after renderer copy-model migration (task-renderer-inline): previous size (80)
+// referenced vector<RenderConfig>+2 ints; new layout embeds a single RenderConfig inline.
+static_assert(sizeof(GuiState::ConfigSnapshot) == 112,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif
 
@@ -281,9 +279,7 @@ inline GuiState::ConfigSnapshot GuiState::ConfigSnapshot::From(const GuiState& s
   s.layers = state.layers;
   s.sun = state.sun;
   s.sim = state.sim;
-  s.renderers = state.renderers;
-  s.selected_renderer = state.selected_renderer;
-  s.next_renderer_id = state.next_renderer_id;
+  s.renderer = state.renderer;
   return s;
 }
 
@@ -291,9 +287,7 @@ inline void GuiState::ConfigSnapshot::ApplyTo(GuiState& state) const {
   state.layers = layers;
   state.sun = sun;
   state.sim = sim;
-  state.renderers = renderers;
-  state.selected_renderer = selected_renderer;
-  state.next_renderer_id = next_renderer_id;
+  state.renderer = renderer;
 }
 
 inline GuiState InitDefaultState() {
@@ -306,11 +300,7 @@ inline GuiState InitDefaultState() {
   layer.entries.push_back(entry);
   s.layers.push_back(layer);
 
-  // One default renderer
-  RenderConfig r;
-  r.id = s.next_renderer_id++;
-  s.renderers.push_back(r);
-  s.selected_renderer = 0;
+  // Default renderer is the default-constructed GuiState::renderer; no ID or index needed.
 
   return s;
 }

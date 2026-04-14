@@ -329,22 +329,11 @@ static int SimResolutionIndexFromValue(int value) {
   return 1;  // default: 1024
 }
 
-// Find index in a vector by ID, returns fallback if not found
-template <typename T>
-static int FindIndexById(const std::vector<T>& vec, int id, int fallback) {
-  for (size_t i = 0; i < vec.size(); i++) {
-    if (vec[i].id == id)
-      return static_cast<int>(i);
-  }
-  return fallback;
-}
-
 // ========== GUI JSON Renderer Helpers ==========
 // Shared between SerializeGuiStateJson and DeserializeGuiStateJson.
 
 static json SerializeRendererForGui(const RenderConfig& r) {
   json jr;
-  jr["id"] = r.id;
   jr["lens_type"] = kLensTypeJsonNames[r.lens_type];
   jr["fov"] = r.fov;
   jr["elevation"] = r.elevation;
@@ -361,7 +350,6 @@ static json SerializeRendererForGui(const RenderConfig& r) {
 
 static RenderConfig ParseRendererFromGuiJson(const json& jr) {
   RenderConfig r;
-  r.id = jr.value("id", RenderConfig{}.id);
   r.lens_type = LensTypeFromString(jr.value("lens_type", "linear"));
   r.fov = jr.value("fov", RenderConfig{}.fov);
   r.elevation = jr.value("elevation", RenderConfig{}.elevation);
@@ -458,10 +446,13 @@ std::string SerializeCoreConfig(const GuiState& state) {
   root["scene"] = scene;
 
   // Render — Core always produces dual equal-area fisheye texture (full-globe, equal-area).
+  // NOTE: GUI enforces single renderer; if multi-renderer support is added, revisit this
+  // fixed id and loop-of-one structure.
   root["render"] = json::array();
-  for (auto& r : state.renderers) {
+  {
+    const auto& r = state.renderer;
     json jr;
-    jr["id"] = r.id;
+    jr["id"] = 1;
     jr["lens"]["type"] = "dual_fisheye_equal_area";
     jr["lens"]["fov"] = 180.0f;
 
@@ -588,13 +579,14 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
   out->crystal_count = crystal_idx;
   out->filter_count = filter_idx;
 
-  // Renderers
-  out->renderer_count =
-      static_cast<int>(std::min(state.renderers.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RENDERERS)));
-  for (int i = 0; i < out->renderer_count; i++) {
-    const auto& r = state.renderers[i];
-    auto& dst = out->renderers[i];
-    dst.id = r.id;
+  // Renderer — single renderer always emitted with fixed id=1.
+  // NOTE: GUI enforces single renderer; if multi-renderer support is added, revisit this
+  // fixed id and count=1.
+  out->renderer_count = 1;
+  {
+    const auto& r = state.renderer;
+    auto& dst = out->renderers[0];
+    dst.id = 1;
     int res = kSimResolutions[r.sim_resolution_index];
     dst.resolution_w = res * 2;
     dst.resolution_h = res;
@@ -722,55 +714,50 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     }
   }
 
-  // Render
-  int max_id = 0;
-  if (root.contains("render") && root["render"].is_array()) {
-    for (auto& jr : root["render"]) {
-      RenderConfig r;
-      r.id = jr.value("id", 0);
-      max_id = std::max(max_id, r.id);
+  // Render — GUI uses single renderer; ignore additional array entries and malformed keys.
+  // If root["render"] is missing, not an array, or empty, keep state.renderer at defaults.
+  if (root.contains("render") && root["render"].is_array() && !root["render"].empty()) {
+    const auto& jr = root["render"][0];
+    RenderConfig r;
 
-      if (jr.contains("lens")) {
-        r.lens_type = LensTypeFromString(jr["lens"].value("type", "linear"));
-        r.fov = jr["lens"].value("fov", 90.0f);
-      }
+    if (jr.contains("lens")) {
+      r.lens_type = LensTypeFromString(jr["lens"].value("type", "linear"));
+      r.fov = jr["lens"].value("fov", 90.0f);
+    }
 
-      if (jr.contains("resolution") && jr["resolution"].is_array() && jr["resolution"].size() == 2) {
-        int h = jr["resolution"][1].get<int>();
-        for (int i = 0; i < kSimResolutionCount; i++) {
-          if (kSimResolutions[i] >= h) {
-            r.sim_resolution_index = i;
-            break;
-          }
+    if (jr.contains("resolution") && jr["resolution"].is_array() && jr["resolution"].size() == 2) {
+      int h = jr["resolution"][1].get<int>();
+      for (int i = 0; i < kSimResolutionCount; i++) {
+        if (kSimResolutions[i] >= h) {
+          r.sim_resolution_index = i;
+          break;
         }
       }
-
-      if (jr.contains("view")) {
-        r.elevation = jr["view"].value("elevation", 0.0f);
-        r.azimuth = jr["view"].value("azimuth", 0.0f);
-        r.roll = jr["view"].value("roll", 0.0f);
-      }
-
-      r.visible = VisibleFromString(jr.value("visible", "upper"));
-
-      if (jr.contains("background") && jr["background"].is_array() && jr["background"].size() == 3) {
-        for (int i = 0; i < 3; i++)
-          r.background[i] = jr["background"][i].get<float>();
-      }
-      if (jr.contains("ray_color") && jr["ray_color"].is_array() && jr["ray_color"].size() == 3) {
-        for (int i = 0; i < 3; i++)
-          r.ray_color[i] = jr["ray_color"][i].get<float>();
-      }
-      r.opacity = jr.value("opacity", 1.0f);
-      float ifactor = jr.value("intensity_factor", 1.0f);
-      r.exposure_offset = std::log2(std::max(ifactor, 1e-6f));
-
-      state.renderers.push_back(r);
     }
-  }
-  state.next_renderer_id = max_id + 1;
-  if (!state.renderers.empty()) {
-    state.selected_renderer = 0;
+
+    if (jr.contains("view")) {
+      r.elevation = jr["view"].value("elevation", 0.0f);
+      r.azimuth = jr["view"].value("azimuth", 0.0f);
+      r.roll = jr["view"].value("roll", 0.0f);
+    }
+
+    r.visible = VisibleFromString(jr.value("visible", "upper"));
+
+    if (jr.contains("background") && jr["background"].is_array() && jr["background"].size() == 3) {
+      for (int i = 0; i < 3; i++)
+        r.background[i] = jr["background"][i].get<float>();
+    }
+    if (jr.contains("ray_color") && jr["ray_color"].is_array() && jr["ray_color"].size() == 3) {
+      for (int i = 0; i < 3; i++)
+        r.ray_color[i] = jr["ray_color"][i].get<float>();
+    }
+    r.opacity = jr.value("opacity", 1.0f);
+    float ifactor = jr.value("intensity_factor", 1.0f);
+    r.exposure_offset = std::log2(std::max(ifactor, 1e-6f));
+
+    state.renderer = r;
+  } else {
+    GUI_LOG_WARNING("[GUI] DeserializeFromJson: no render entries; using default renderer");
   }
 
   return true;
@@ -820,20 +807,8 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   sim["infinite"] = state.sim.infinite;
   root["sim"] = sim;
 
-  // Renderers
-  root["renderers"] = json::array();
-  for (auto& r : state.renderers) {
-    root["renderers"].push_back(SerializeRendererForGui(r));
-  }
-
-  // Selected renderer (by ID)
-  auto renderer_id_or_neg1 = [](const auto& vec, int idx) -> int {
-    if (idx >= 0 && idx < static_cast<int>(vec.size()))
-      return vec[idx].id;
-    return -1;
-  };
-  root["selected_renderer_id"] = renderer_id_or_neg1(state.renderers, state.selected_renderer);
-  root["next_renderer_id"] = state.next_renderer_id;
+  // Renderer (copy model: single renderer embedded directly)
+  root["renderer"] = SerializeRendererForGui(state.renderer);
 
   // Aspect ratio (view preference)
   auto preset_idx = static_cast<int>(state.aspect_preset);
@@ -956,19 +931,20 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
     state.sim.infinite = js.value("infinite", SimConfig{}.infinite);
   }
 
-  // Renderers
-  if (root.contains("renderers") && root["renderers"].is_array()) {
-    for (auto& jr : root["renderers"]) {
-      state.renderers.push_back(ParseRendererFromGuiJson(jr));
-    }
+  // Renderer (copy model).
+  // New format: root["renderer"] is a single object.
+  // Legacy format: root["renderers"] is an array; take first element; ignore
+  // selected_renderer_id/next_renderer_id (no longer meaningful).
+  if (root.contains("renderer") && root["renderer"].is_object()) {
+    state.renderer = ParseRendererFromGuiJson(root["renderer"]);
+  } else if (root.contains("renderers") && root["renderers"].is_array() && !root["renderers"].empty()) {
+    state.renderer = ParseRendererFromGuiJson(root["renderers"][0]);
+  } else {
+    // Neither new-format "renderer" object nor legacy "renderers" array with data found.
+    // Symmetric with DeserializeFromJson's empty-render-array branch, so that malformed or
+    // legacy files leave an observable trace for debugging.
+    GUI_LOG_WARNING("[GUI] DeserializeGuiStateJson: no renderer key found; using default renderer");
   }
-
-  // ID counters (renderer only in new model)
-  state.next_renderer_id = root.value("next_renderer_id", 1);
-
-  // Selected renderer (by ID → find index)
-  int sel_renderer_id = root.value("selected_renderer_id", -1);
-  state.selected_renderer = FindIndexById(state.renderers, sel_renderer_id, state.renderers.empty() ? -1 : 0);
 
   // Aspect ratio (view preference, defaults to Free for old files)
   state.aspect_preset = AspectPresetFromString(root.value("aspect_ratio", "free"));

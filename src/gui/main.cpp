@@ -233,8 +233,8 @@ int main(int argc, char** argv) {
     gui::g_state.sun.spectrum_index = 2;
     gui::g_state.sim.infinite = true;
     gui::g_state.sim.max_hits = 8;
-    if (!gui::g_state.renderers.empty()) {
-      auto& r = gui::g_state.renderers[0];
+    {
+      auto& r = gui::g_state.renderer;
       r.lens_type = 1;
       r.fov = 360.0f;
       r.sim_resolution_index = 0;  // 512

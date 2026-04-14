@@ -26,7 +26,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // Verify key fields survived round-trip
       IM_CHECK(std::abs(loaded.sim.ray_num_millions - gui::g_state.sim.ray_num_millions) < 0.01f);
       IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), static_cast<int>(gui::g_state.layers.size()));
-      IM_CHECK_EQ(static_cast<int>(loaded.renderers.size()), static_cast<int>(gui::g_state.renderers.size()));
+      IM_CHECK_EQ(loaded.renderer.lens_type, gui::g_state.renderer.lens_type);
+      IM_CHECK_EQ(loaded.renderer.fov, gui::g_state.renderer.fov);
     };
   }
 
@@ -169,6 +170,167 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded1.proportion, 25.0f);
 
       std::remove(tmp_path);
+    };
+  }
+
+  // Test 4a: renderer copy-model new-format round-trip.
+  // Fields covered (per RenderConfig in gui_state.hpp):
+  //   lens_type, fov, elevation, azimuth, roll, sim_resolution_index, visible,
+  //   background[3], ray_color[3], opacity, exposure_offset
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "renderer_new_format_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // Populate every RenderConfig field with a non-default value.
+      auto& r = gui::g_state.renderer;
+      r.lens_type = 3;
+      r.fov = 115.0f;
+      r.elevation = 12.0f;
+      r.azimuth = -24.0f;
+      r.roll = 7.5f;
+      r.sim_resolution_index = 2;
+      r.visible = 1;
+      r.background[0] = 0.1f;
+      r.background[1] = 0.2f;
+      r.background[2] = 0.3f;
+      r.ray_color[0] = 0.8f;
+      r.ray_color[1] = 0.6f;
+      r.ray_color[2] = 0.4f;
+      r.opacity = 0.75f;
+      r.exposure_offset = 1.5f;
+
+      std::string json = gui::SerializeGuiStateJson(gui::g_state);
+      IM_CHECK(!json.empty());
+
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeGuiStateJson(json, loaded);
+      IM_CHECK(ok);
+
+      IM_CHECK_EQ(loaded.renderer.lens_type, 3);
+      IM_CHECK_EQ(loaded.renderer.fov, 115.0f);
+      IM_CHECK_EQ(loaded.renderer.elevation, 12.0f);
+      IM_CHECK_EQ(loaded.renderer.azimuth, -24.0f);
+      IM_CHECK_EQ(loaded.renderer.roll, 7.5f);
+      IM_CHECK_EQ(loaded.renderer.sim_resolution_index, 2);
+      IM_CHECK_EQ(loaded.renderer.visible, 1);
+      IM_CHECK_EQ(loaded.renderer.background[0], 0.1f);
+      IM_CHECK_EQ(loaded.renderer.background[1], 0.2f);
+      IM_CHECK_EQ(loaded.renderer.background[2], 0.3f);
+      IM_CHECK_EQ(loaded.renderer.ray_color[0], 0.8f);
+      IM_CHECK_EQ(loaded.renderer.ray_color[1], 0.6f);
+      IM_CHECK_EQ(loaded.renderer.ray_color[2], 0.4f);
+      IM_CHECK_EQ(loaded.renderer.opacity, 0.75f);
+      IM_CHECK_EQ(loaded.renderer.exposure_offset, 1.5f);
+    };
+  }
+
+  // Test 4b: legacy .lmc renderer format (vector + selected_renderer_id + next_renderer_id)
+  // must still load correctly into the new copy-model renderer field.
+  // Fields covered: all RenderConfig fields (same list as Test 4a).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "renderer_legacy_format_compat");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // Historical .lmc GUI-state format: renderers: [ { id, ... } ]
+      // Simulates pre-task-renderer-inline output; all renderer fields non-default.
+      std::string json = R"({
+        "layers": [],
+        "renderers": [
+          {
+            "id": 7,
+            "lens_type": "fisheye_stereographic",
+            "fov": 135.0,
+            "elevation": 11.0,
+            "azimuth": -21.0,
+            "roll": 3.5,
+            "sim_resolution": 2048,
+            "visible": "lower",
+            "background": [0.11, 0.22, 0.33],
+            "ray_color": [0.9, 0.7, 0.5],
+            "opacity": 0.8,
+            "exposure_offset": -1.25
+          }
+        ],
+        "selected_renderer_id": 7,
+        "next_renderer_id": 8
+      })";
+
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeGuiStateJson(json, loaded);
+      IM_CHECK(ok);
+
+      // Values must equal the first (and only) element of the legacy renderers array.
+      IM_CHECK_EQ(loaded.renderer.lens_type, 3);  // index of "fisheye_stereographic"
+      IM_CHECK_EQ(loaded.renderer.fov, 135.0f);
+      IM_CHECK_EQ(loaded.renderer.elevation, 11.0f);
+      IM_CHECK_EQ(loaded.renderer.azimuth, -21.0f);
+      IM_CHECK_EQ(loaded.renderer.roll, 3.5f);
+      IM_CHECK_EQ(loaded.renderer.sim_resolution_index, 3);  // 2048 → index 3
+      IM_CHECK_EQ(loaded.renderer.visible, 1);               // "lower" → 1
+      IM_CHECK(std::abs(loaded.renderer.background[0] - 0.11f) < 1e-5f);
+      IM_CHECK(std::abs(loaded.renderer.background[1] - 0.22f) < 1e-5f);
+      IM_CHECK(std::abs(loaded.renderer.background[2] - 0.33f) < 1e-5f);
+      IM_CHECK(std::abs(loaded.renderer.ray_color[0] - 0.9f) < 1e-5f);
+      IM_CHECK(std::abs(loaded.renderer.ray_color[1] - 0.7f) < 1e-5f);
+      IM_CHECK(std::abs(loaded.renderer.ray_color[2] - 0.5f) < 1e-5f);
+      IM_CHECK(std::abs(loaded.renderer.opacity - 0.8f) < 1e-5f);
+      IM_CHECK_EQ(loaded.renderer.exposure_offset, -1.25f);
+    };
+  }
+
+  // Test 4c: Core JSON with empty render array — must not crash; renderer keeps defaults.
+  // Covers the boundary added during task-renderer-inline DeserializeFromJson migration.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "core_json_empty_render");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      std::string json = R"({
+        "crystal": [],
+        "filter": [],
+        "scene": {"scattering": [], "ray_num": 1000, "max_hits": 4,
+                   "light_source": {"altitude": 20.0, "diameter": 0.5, "spectrum": "D65"}},
+        "render": []
+      })";
+
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeFromJson(json, loaded);
+      IM_CHECK(ok);
+      // Default RenderConfig field values (from gui_state.hpp).
+      // Warning log path exists but is not asserted automatically; observe via logs manually.
+      IM_CHECK_EQ(loaded.renderer.lens_type, 0);
+      IM_CHECK_EQ(loaded.renderer.fov, 90.0f);
+      IM_CHECK_EQ(loaded.renderer.sim_resolution_index, 1);
+      IM_CHECK_EQ(loaded.renderer.visible, 2);
+      IM_CHECK_EQ(loaded.renderer.opacity, 1.0f);
+    };
+  }
+
+  // Test 4d: legacy format with multiple renderers — GUI now single-renderer, take first.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "renderer_legacy_multi_takes_first");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      std::string json = R"({
+        "layers": [],
+        "renderers": [
+          {"id": 1, "lens_type": "linear", "fov": 90.0},
+          {"id": 2, "lens_type": "fisheye_equal_area", "fov": 180.0}
+        ]
+      })";
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeGuiStateJson(json, loaded);
+      IM_CHECK(ok);
+      // Must equal the first entry, not the second.
+      IM_CHECK_EQ(loaded.renderer.lens_type, 0);  // "linear" → 0
+      IM_CHECK_EQ(loaded.renderer.fov, 90.0f);
     };
   }
 

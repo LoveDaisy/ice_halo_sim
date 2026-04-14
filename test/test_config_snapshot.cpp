@@ -40,21 +40,15 @@ GuiState MakeModifiedState() {
   layer.entries.push_back(e1);
   s.layers.push_back(layer);
 
-  // Mutate sun, sim, renderers, and id counters.
+  // Mutate sun, sim, renderer (copy model: single renderer embedded directly).
   s.sun = SunConfig{ 35.0f, 0.6f, 4 };
   s.sim = SimConfig{ 7.5f, 12, true };
 
-  s.renderers.clear();
-  RenderConfig r;
-  r.id = 7;
-  r.lens_type = 3;
-  r.fov = 110.0f;
-  r.elevation = 15.0f;
-  r.azimuth = -20.0f;
-  r.exposure_offset = 0.5f;
-  s.renderers.push_back(r);
-  s.selected_renderer = 0;
-  s.next_renderer_id = 8;
+  s.renderer.lens_type = 3;
+  s.renderer.fov = 110.0f;
+  s.renderer.elevation = 15.0f;
+  s.renderer.azimuth = -20.0f;
+  s.renderer.exposure_offset = 0.5f;
 
   return s;
 }
@@ -79,12 +73,11 @@ TEST(ConfigSnapshot, FromCapturesAllConfigFields) {
   EXPECT_EQ(snap.sim.max_hits, 12);
   EXPECT_TRUE(snap.sim.infinite);
 
-  ASSERT_EQ(snap.renderers.size(), 1u);
-  EXPECT_EQ(snap.renderers[0].id, 7);
-  EXPECT_EQ(snap.renderers[0].lens_type, 3);
-  EXPECT_FLOAT_EQ(snap.renderers[0].fov, 110.0f);
-  EXPECT_EQ(snap.selected_renderer, 0);
-  EXPECT_EQ(snap.next_renderer_id, 8);
+  EXPECT_EQ(snap.renderer.lens_type, 3);
+  EXPECT_FLOAT_EQ(snap.renderer.fov, 110.0f);
+  EXPECT_FLOAT_EQ(snap.renderer.elevation, 15.0f);
+  EXPECT_FLOAT_EQ(snap.renderer.azimuth, -20.0f);
+  EXPECT_FLOAT_EQ(snap.renderer.exposure_offset, 0.5f);
 }
 
 // Spot-check (not exhaustive): this verifies a representative whitelist of runtime /
@@ -126,10 +119,9 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   ASSERT_EQ(target.layers.size(), source.layers.size());
   EXPECT_FLOAT_EQ(target.sun.altitude, source.sun.altitude);
   EXPECT_FLOAT_EQ(target.sim.ray_num_millions, source.sim.ray_num_millions);
-  ASSERT_EQ(target.renderers.size(), source.renderers.size());
-  EXPECT_EQ(target.renderers[0].id, source.renderers[0].id);
-  EXPECT_EQ(target.selected_renderer, source.selected_renderer);
-  EXPECT_EQ(target.next_renderer_id, source.next_renderer_id);
+  EXPECT_EQ(target.renderer.lens_type, source.renderer.lens_type);
+  EXPECT_FLOAT_EQ(target.renderer.fov, source.renderer.fov);
+  EXPECT_FLOAT_EQ(target.renderer.exposure_offset, source.renderer.exposure_offset);
 
   // Runtime / view fields: unchanged.
   EXPECT_TRUE(target.dirty);
@@ -169,7 +161,8 @@ TEST(ConfigSnapshot, RoundTripFromThenApplyRestoresConfig) {
   EXPECT_FALSE(restored.layers[0].entries[1].filter->sym_p);
   EXPECT_FLOAT_EQ(restored.sun.altitude, original.sun.altitude);
   EXPECT_EQ(restored.sim.infinite, original.sim.infinite);
-  EXPECT_EQ(restored.renderers[0].id, original.renderers[0].id);
+  EXPECT_EQ(restored.renderer.lens_type, original.renderer.lens_type);
+  EXPECT_FLOAT_EQ(restored.renderer.fov, original.renderer.fov);
   // Nested crystal/axis fields also survive the From → ApplyTo cycle.
   EXPECT_FLOAT_EQ(restored.layers[0].entries[0].crystal.face_distance[0], 1.3f);
   EXPECT_EQ(restored.layers[0].entries[0].crystal.zenith.type, AxisDistType::kGauss);
@@ -179,7 +172,7 @@ TEST(ConfigSnapshot, RoundTripFromThenApplyRestoresConfig) {
 // Mirror the production sizeof() guard at test scope as an extra reminder on the
 // baseline platform. Platform-gated because std::vector size varies across stdlibs.
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(GuiState::ConfigSnapshot) == 80,
+static_assert(sizeof(GuiState::ConfigSnapshot) == 112,
               "Test mirror: ConfigSnapshot size changed; update From/ApplyTo in gui_state.hpp");
 #endif
 
