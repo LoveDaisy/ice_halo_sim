@@ -14,10 +14,10 @@ namespace {
 // Global union of legal face numbers across every supported CrystalKind.
 // By delegating to IsLegalFace(kPyramid, ...) we keep the canonical legal
 // set definition in one place (core/crystal.cpp). This relies on the
-// invariant — enforced by the IsLegalFaceGlobalMatchesPyramid test — that
-// the union of all kinds currently equals the pyramid legal set. If a
-// future CrystalKind introduces faces outside that set, the global
-// function must be generalised to OR-combine every kind.
+// invariant — enforced by the IsLegalFaceTest.PyramidSetEqualsValidatorGlobalStage
+// contract test — that the union of all kinds currently equals the pyramid
+// legal set. If a future CrystalKind introduces faces outside that set, the
+// global function must be generalised to OR-combine every kind.
 bool IsLegalFaceGlobal(int face) {
   return IsLegalFace(CrystalKind::kPyramid, face);
 }
