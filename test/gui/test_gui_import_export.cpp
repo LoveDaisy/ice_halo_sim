@@ -6,7 +6,13 @@
 // ========== Import/Export Tests ==========
 
 void RegisterImportExportTests(ImGuiTestEngine* engine) {
-  // Test 1: JSON round-trip — serialize then deserialize, verify key fields match
+  // Test 1: Core JSON path invariants — SerializeCoreConfig → DeserializeFromJson.
+  // NOTE: This is NOT a GUI-state round-trip. SerializeCoreConfig always emits a
+  // fixed full-sphere renderer (lens="dual_fisheye_equal_area", fov=180, visible="full",
+  // background=[0,0,0]) regardless of GUI state — Core only consumes this shape.
+  // GUI-state round-trip is covered by renderer_new_format_roundtrip / lmc_full_roundtrip.
+  // exposure_offset / opacity are not asserted: exposure_offset's 2^x → log2 round-trip
+  // introduces floating-point precision drift.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "json_roundtrip");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -23,11 +29,15 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       bool ok = gui::DeserializeFromJson(json, loaded);
       IM_CHECK(ok);
 
-      // Verify key fields survived round-trip
+      // State-derived fields survive the round-trip.
       IM_CHECK(std::abs(loaded.sim.ray_num_millions - gui::g_state.sim.ray_num_millions) < 0.01f);
       IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), static_cast<int>(gui::g_state.layers.size()));
-      IM_CHECK_EQ(loaded.renderer.lens_type, gui::g_state.renderer.lens_type);
-      IM_CHECK_EQ(loaded.renderer.fov, gui::g_state.renderer.fov);
+
+      // Renderer fields that Core hardcodes: lens is always dual_fisheye_equal_area
+      // (index 4 in kLensTypeNames = {Linear, FEA, FED, FES, DFEA=4, DFED, DFES, Rect})
+      // and fov is always 180. These assertions lock the Core-path contract itself.
+      IM_CHECK_EQ(loaded.renderer.lens_type, 4);
+      IM_CHECK_EQ(loaded.renderer.fov, 180.0f);
     };
   }
 
@@ -65,11 +75,16 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
 
-      // Old format: crystals[] + scattering[] with ID references
+      // Pre-copy-model .lmc GUI-state format (verified via `git show ade8fc2^`):
+      // lowercase "type", nested "shape" block, scattering entries reference crystals
+      // by crystal_id. DeserializeGuiStateJson legacy branch at file_io.cpp:878-916
+      // reads exactly this shape. Optional fields (wedge angles, indices, axis) are
+      // omitted here because this test only asserts crystal type / height / proportion.
       std::string json = R"({
         "crystals": [
-          {"id": 1, "type": "Prism", "height": 2.0},
-          {"id": 2, "type": "Pyramid", "height": 1.5, "upper_h": 0.3, "lower_h": 0.4, "prism_h": 1.0}
+          {"id": 1, "type": "prism", "shape": {"height": 2.0}},
+          {"id": 2, "type": "pyramid",
+           "shape": {"prism_h": 1.0, "upper_h": 0.3, "lower_h": 0.4}}
         ],
         "scattering": [
           {"prob": 0.8, "entries": [
@@ -269,7 +284,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded.renderer.elevation, 11.0f);
       IM_CHECK_EQ(loaded.renderer.azimuth, -21.0f);
       IM_CHECK_EQ(loaded.renderer.roll, 3.5f);
-      IM_CHECK_EQ(loaded.renderer.sim_resolution_index, 3);  // 2048 → index 3
+      IM_CHECK_EQ(loaded.renderer.sim_resolution_index, 2);  // 2048 → index 2 in kSimResolutions={512,1024,2048,4096}
       IM_CHECK_EQ(loaded.renderer.visible, 1);               // "lower" → 1
       IM_CHECK(std::abs(loaded.renderer.background[0] - 0.11f) < 1e-5f);
       IM_CHECK(std::abs(loaded.renderer.background[1] - 0.22f) < 1e-5f);
