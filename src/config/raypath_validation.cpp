@@ -11,6 +11,82 @@ namespace lumice {
 
 namespace {
 
+bool IsSeparator(char c) {
+  return c == '-' || c == ',';
+}
+
+bool AllSeparators(const std::string& text) {
+  for (char c : text) {
+    if (!IsSeparator(c)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool TokenAllDigits(const std::string& text, int begin, int end) {
+  for (int i = begin; i < end; ++i) {
+    if (!std::isdigit(static_cast<unsigned char>(text[i]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Walk `text`, detect bad (non-numeric) tokens and interior-empty tokens.
+void ScanTokens(const std::string& text, bool& found_bad_token, bool& found_interior_empty) {
+  bool prev_was_sep = false;
+  bool in_token = false;
+  int token_start = 0;
+  int n = static_cast<int>(text.size());
+  for (int i = 0; i <= n; ++i) {
+    bool is_end = (i == n);
+    bool is_sep = !is_end && IsSeparator(text[i]);
+    if (is_sep || is_end) {
+      if (in_token) {
+        if (!TokenAllDigits(text, token_start, i)) {
+          found_bad_token = true;
+        }
+        in_token = false;
+      } else if (is_sep && prev_was_sep) {
+        found_interior_empty = true;
+      }
+      prev_was_sep = is_sep;
+    } else {
+      if (!in_token) {
+        token_start = i;
+        in_token = true;
+      }
+      prev_was_sep = false;
+    }
+  }
+}
+
+}  // namespace
+
+RaypathValidation ValidateRaypathText(const std::string& text) {
+  if (text.empty()) {
+    return RaypathValidation::kValid;
+  }
+  bool has_leading_sep = IsSeparator(text.front());
+  bool has_trailing_sep = IsSeparator(text.back());
+  if ((has_leading_sep || has_trailing_sep) && AllSeparators(text)) {
+    return RaypathValidation::kIncomplete;
+  }
+  bool found_bad_token = false;
+  bool found_interior_empty = false;
+  ScanTokens(text, found_bad_token, found_interior_empty);
+  if (found_bad_token || found_interior_empty) {
+    return RaypathValidation::kInvalid;
+  }
+  if (has_leading_sep || has_trailing_sep) {
+    return RaypathValidation::kIncomplete;
+  }
+  return RaypathValidation::kValid;
+}
+
+namespace {
+
 // Global union of legal face numbers across every supported CrystalKind.
 // By delegating to IsLegalFace(kPyramid, ...) we keep the canonical legal
 // set definition in one place (core/crystal.cpp). This relies on the
@@ -55,8 +131,9 @@ bool ExtractNextFace(const std::string& text, size_t& pos, int& face) {
   while (pos < text.size() && (text[pos] == '-' || text[pos] == ',')) {
     ++pos;
   }
-  if (pos >= text.size())
+  if (pos >= text.size()) {
     return false;
+  }
   int value = 0;
   int digit_count = 0;
   bool overflow = false;
@@ -69,8 +146,9 @@ bool ExtractNextFace(const std::string& text, size_t& pos, int& face) {
     ++digit_count;
     ++pos;
   }
-  if (digit_count == 0)
+  if (digit_count == 0) {
     return false;
+  }
   face = overflow ? INT_MAX : value;
   return true;
 }
@@ -78,7 +156,7 @@ bool ExtractNextFace(const std::string& text, size_t& pos, int& face) {
 }  // namespace
 
 RaypathValidationResult ValidateRaypathText(const std::string& text, CrystalKind kind) {
-  const auto syntax_state = ValidateRaypathText(text);
+  auto syntax_state = ValidateRaypathText(text);
   if (syntax_state != RaypathValidation::kValid) {
     RaypathValidationResult r;
     r.state = syntax_state;

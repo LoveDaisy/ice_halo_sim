@@ -520,31 +520,31 @@ TEST(ValidateRaypathTextWithKindTest, Pyramid_BasicLegal) {
 
 TEST(ValidateRaypathTextWithKindTest, SyntaxInvalid_PropagatesInvalid) {
   // "3,,5" is a syntax error (empty interior token) → kInvalid, "Invalid raypath".
-  const auto r = ValidateRaypathText("3,,5", CrystalKind::kPrism);
+  auto r = ValidateRaypathText("3,,5", CrystalKind::kPrism);
   EXPECT_EQ(r.state, RaypathValidation::kInvalid);
   EXPECT_EQ(r.message, "Invalid raypath");
 }
 
 TEST(ValidateRaypathTextWithKindTest, SyntaxIncomplete_TakesPriorityOverFaceCheck) {
   // Trailing dash → kIncomplete; message should be empty even if face would be illegal.
-  const auto r = ValidateRaypathText("3-", CrystalKind::kPrism);
+  auto r = ValidateRaypathText("3-", CrystalKind::kPrism);
   EXPECT_EQ(r.state, RaypathValidation::kIncomplete);
   EXPECT_EQ(r.message, "");
 }
 
 TEST(ValidateRaypathTextWithKindTest, GlobalInvalid_OutsideUnion) {
   // 51 is outside every legal band; message mentions "outside" and the face number.
-  const auto r51 = ValidateRaypathText("51", CrystalKind::kPrism);
+  auto r51 = ValidateRaypathText("51", CrystalKind::kPrism);
   EXPECT_EQ(r51.state, RaypathValidation::kInvalid);
   EXPECT_NE(r51.message.find("outside"), std::string::npos);
   EXPECT_NE(r51.message.find("51"), std::string::npos);
 
   // 0 is in the gap (not in {1,2} ∪ {3..8} ∪ ...). Even on pyramid it's outside.
-  const auto r0_prism = ValidateRaypathText("0", CrystalKind::kPrism);
+  auto r0_prism = ValidateRaypathText("0", CrystalKind::kPrism);
   EXPECT_EQ(r0_prism.state, RaypathValidation::kInvalid);
   EXPECT_NE(r0_prism.message.find("outside"), std::string::npos);
 
-  const auto r0_pyr = ValidateRaypathText("0", CrystalKind::kPyramid);
+  auto r0_pyr = ValidateRaypathText("0", CrystalKind::kPyramid);
   EXPECT_EQ(r0_pyr.state, RaypathValidation::kInvalid);
   EXPECT_NE(r0_pyr.message.find("outside"), std::string::npos);
 
@@ -556,7 +556,7 @@ TEST(ValidateRaypathTextWithKindTest, GlobalInvalid_OutsideUnion) {
 
 TEST(ValidateRaypathTextWithKindTest, TypeSpecificInvalid_OnPrism) {
   // 13 is in the global union but illegal on a prism.
-  const auto r13 = ValidateRaypathText("13", CrystalKind::kPrism);
+  auto r13 = ValidateRaypathText("13", CrystalKind::kPrism);
   EXPECT_EQ(r13.state, RaypathValidation::kInvalid);
   EXPECT_NE(r13.message.find("Prism"), std::string::npos);
   EXPECT_NE(r13.message.find("13"), std::string::npos);
@@ -571,7 +571,7 @@ TEST(ValidateRaypathTextWithKindTest, TypeSpecificInvalid_OnPrism) {
 
 TEST(ValidateRaypathTextWithKindTest, FirstInvalidTokenDeterminesMessage) {
   // Sequence "9,13" on pyramid: 9 is outside-union → message references 9, not 13.
-  const auto r = ValidateRaypathText("9,13", CrystalKind::kPyramid);
+  auto r = ValidateRaypathText("9,13", CrystalKind::kPyramid);
   EXPECT_EQ(r.state, RaypathValidation::kInvalid);
   EXPECT_NE(r.message.find("9"), std::string::npos);
   EXPECT_NE(r.message.find("outside"), std::string::npos);
@@ -588,13 +588,13 @@ TEST(ValidateRaypathTextWithKindTest, SingleArg_Untouched) {
 }
 
 TEST(ValidateRaypathTextWithKindTest, KValidMessageIsEmpty) {
-  const auto r = ValidateRaypathText("3-5,1", CrystalKind::kPrism);
+  auto r = ValidateRaypathText("3-5,1", CrystalKind::kPrism);
   EXPECT_EQ(r.state, RaypathValidation::kValid);
   EXPECT_TRUE(r.message.empty());
 }
 
 TEST(ValidateRaypathTextWithKindTest, EmptyText_IsValid) {
-  const auto r = ValidateRaypathText("", CrystalKind::kPrism);
+  auto r = ValidateRaypathText("", CrystalKind::kPrism);
   EXPECT_EQ(r.state, RaypathValidation::kValid);
   EXPECT_TRUE(r.message.empty());
 }
@@ -616,7 +616,7 @@ TEST(ValidateRaypathTextWithKindTest, OverlongDigitToken_IsInvalid) {
 }
 
 TEST(ValidateRaypathTextWithKindTest, OverlongTokenMessageMentionsOutside) {
-  const auto r = ValidateRaypathText("9999999999", CrystalKind::kPrism);
+  auto r = ValidateRaypathText("9999999999", CrystalKind::kPrism);
   EXPECT_EQ(r.state, RaypathValidation::kInvalid);
   EXPECT_NE(r.message.find("outside"), std::string::npos);
 }
@@ -629,8 +629,8 @@ TEST(ValidateRaypathTextWithKindTest, OverlongTokenMessageMentionsOutside) {
 // IsLegalFaceGlobal can be generalised to OR-combine every kind.
 TEST(IsLegalFaceTest, PyramidSetEqualsValidatorGlobalStage) {
   for (int f = 0; f <= 30; ++f) {
-    const bool pyramid_ok = IsLegalFace(CrystalKind::kPyramid, f);
-    const auto r = ValidateRaypathText(std::to_string(f), CrystalKind::kPyramid);
+    bool pyramid_ok = IsLegalFace(CrystalKind::kPyramid, f);
+    auto r = ValidateRaypathText(std::to_string(f), CrystalKind::kPyramid);
     if (pyramid_ok) {
       EXPECT_EQ(r.state, RaypathValidation::kValid) << "face=" << f;
     } else {
