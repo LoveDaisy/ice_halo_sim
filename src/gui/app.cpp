@@ -168,7 +168,7 @@ static void RefreshCpuTextureForSave() {
   int h = xyz_results[0].img_height;
 
   // Compute intensity_scale using the CURRENT GUI exposure_offset, matching the shader.
-  float intensity_factor = std::pow(2.0f, g_state.renderers[0].exposure_offset);
+  float intensity_factor = std::pow(2.0f, g_state.renderer.exposure_offset);
   float per_pixel_intensity = xyz_results[0].snapshot_intensity;
   float intensity_scale = per_pixel_intensity > 0 ? intensity_factor / per_pixel_intensity : 0.0f;
 
@@ -458,8 +458,11 @@ void DoRun() {
   // Only renderer layout changes (resolution/lens/view/visible/filter) trigger rebuild.
   // High-frequency slider changes (crystal/sun/scattering) always reuse consumers.
   // If reuse is expected, skip Poller Stop — the poller's raw pointers remain valid.
+  // NeedsRebuild comparison: RenderConfig::id was removed during the renderer copy-model
+  // migration; since `id` was always 1 pre-migration, operator== behavior is strictly looser
+  // and cannot produce new false-positive reuse paths.
   bool expect_rebuild =
-      !g_state.last_committed_state.has_value() || g_state.renderers != g_state.last_committed_state->renderers;
+      !g_state.last_committed_state.has_value() || g_state.renderer != g_state.last_committed_state->renderer;
   if (expect_rebuild) {
     g_server_poller.Stop();  // Must pause before consumer destruction
   }
@@ -469,9 +472,7 @@ void DoRun() {
   int reused = 0;
   auto err = LUMICE_CommitConfigStruct(g_server, &config, &reused);
   if (err == LUMICE_OK) {
-    g_state.last_committed_state = GuiState::ConfigSnapshot{
-      g_state.layers, g_state.sun, g_state.sim, g_state.renderers, g_state.selected_renderer, g_state.next_renderer_id,
-    };
+    g_state.last_committed_state = GuiState::ConfigSnapshot::From(g_state);
     g_state.sim_state = SimState::kSimulating;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
@@ -522,14 +523,16 @@ void DoStop() {
 void DoRevert() {
   if (g_state.last_committed_state) {
     const auto& snapshot = *g_state.last_committed_state;
-    // Restore configuration fields only, preserve runtime state
-    g_state.layers = snapshot.layers;
+    // Restore configuration fields atomically, then fire GUI side effects.
+    // Order rationale: ApplyTo() is pure field assignment. OnLayerStructureChanged()
+    // currently only touches the thumbnail cache (see thumbnail_cache.cpp) and does
+    // not read other g_state fields, so invoking it after full assignment is
+    // equivalent to the previous order (layers assigned -> callback -> other fields).
+    // If OnLayerStructureChanged ever starts reading g_state.sun/sim/renderers, this
+    // order remains correct (callback sees fully restored state). Runtime state (dirty,
+    // sim_state, poller counters, etc.) is intentionally preserved by ApplyTo.
+    snapshot.ApplyTo(g_state);
     g_thumbnail_cache.OnLayerStructureChanged();
-    g_state.sun = snapshot.sun;
-    g_state.sim = snapshot.sim;
-    g_state.renderers = snapshot.renderers;
-    g_state.selected_renderer = snapshot.selected_renderer;
-    g_state.next_renderer_id = snapshot.next_renderer_id;
     g_state.sim_state = SimState::kDone;
   }
 }
@@ -567,8 +570,10 @@ void SyncFromPoller() {
   // The intensity > 0 guard prevents black-frame flicker during slider scrubbing (restart
   // transiently produces 0-intensity snapshots). Filter changes set intensity_locked via
   // MarkFilterDirty() to block old data from overwriting the cleared display.
-  bool upload_ok = data.has_new_texture && g_state.selected_renderer >= 0 && data.snapshot_intensity > 0 &&
-                   !g_state.intensity_locked;
+  // NOTE: original guard `g_state.selected_renderer >= 0` was an artifact of the ID/vector
+  // model; with the copy-model renderer embedded directly, GuiState always owns a valid
+  // renderer by default construction, so the guard is replaced by value-semantics.
+  bool upload_ok = data.has_new_texture && data.snapshot_intensity > 0 && !g_state.intensity_locked;
   if (upload_ok) {
     GUI_LOG_VERBOSE("[GUI] SyncFromPoller: upload tex_rays={}, intensity={:.6f}, eff_pixels={}, factor={:.6f}",
                     data.texture_ray_count, data.snapshot_intensity, data.effective_pixels, data.intensity_factor);

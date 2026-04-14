@@ -5,10 +5,27 @@
 #include <memory>
 #include <vector>
 
+#include "core/crystal_kind.hpp"
 #include "core/def.hpp"
 #include "core/geo3d.hpp"
 
 namespace lumice {
+
+/**
+ * @brief Test whether @p face is a legal face number on the given crystal kind.
+ *
+ * Legal sets (matching FillHexFnMap in crystal.cpp):
+ *   - kPrism:   {1, 2, 3, 4, 5, 6, 7, 8}
+ *   - kPyramid: {1, 2, 3..8, 13..18, 23..28}
+ *
+ * Used by config/raypath_validation.cpp to enforce type-specific face-number
+ * bounds before a raypath filter text is committed.
+ *
+ * @note The implementation deliberately enumerates all CrystalKind values and
+ *       uses an unreachable/assert guard for unhandled kinds; new enum values
+ *       must be added to the switch to avoid silent relaxation of validation.
+ */
+bool IsLegalFace(CrystalKind kind, int face);
 
 enum class CrystalType {
   kUnknown,

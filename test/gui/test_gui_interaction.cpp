@@ -297,19 +297,19 @@ void RegisterP2Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Set non-zero view params
-      gui::g_state.renderers[0].elevation = 45.0f;
-      gui::g_state.renderers[0].azimuth = -30.0f;
-      gui::g_state.renderers[0].roll = 10.0f;
+      gui::g_state.renderer.elevation = 45.0f;
+      gui::g_state.renderer.azimuth = -30.0f;
+      gui::g_state.renderer.roll = 10.0f;
 
       // Switch to full-sky lens type (index 4 = Dual Fisheye Equal Area)
-      gui::g_state.renderers[0].lens_type = 4;
+      gui::g_state.renderer.lens_type = 4;
 
       // Renderer invariants in RenderPreviewPanel reset view angles for full-sky lenses
       ctx->Yield(3);
 
-      IM_CHECK_EQ(gui::g_state.renderers[0].elevation, 0.0f);
-      IM_CHECK_EQ(gui::g_state.renderers[0].azimuth, 0.0f);
-      IM_CHECK_EQ(gui::g_state.renderers[0].roll, 0.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 0.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 0.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.roll, 0.0f);
     };
   }
 }
@@ -536,17 +536,17 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Set up a full-sky lens (lens_type=4 Dual Fisheye EA) with max fov 360
-      gui::g_state.renderers[0].lens_type = 4;
-      gui::g_state.renderers[0].fov = 360.0f;
+      gui::g_state.renderer.lens_type = 4;
+      gui::g_state.renderer.fov = 360.0f;
       ctx->Yield(3);
-      IM_CHECK_EQ(gui::g_state.renderers[0].fov, 360.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.fov, 360.0f);
 
       // Switch to Linear (lens_type=0) — its MaxFov is typically much smaller
-      gui::g_state.renderers[0].lens_type = 0;
+      gui::g_state.renderer.lens_type = 0;
       ctx->Yield(3);
 
       // fov should be clamped to Linear's max (some value < 360)
-      IM_CHECK_LT(gui::g_state.renderers[0].fov, 360.0f);
+      IM_CHECK_LT(gui::g_state.renderer.fov, 360.0f);
     };
   }
 
@@ -562,13 +562,13 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       gui::g_state.show_sun_circles = true;
       ctx->Yield();
 
-      gui::g_state.renderers[0].lens_type = 4;  // Dual Fisheye EA (full-sky)
+      gui::g_state.renderer.lens_type = 4;  // Dual Fisheye EA (full-sky)
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.show_horizon, true);
       IM_CHECK_EQ(gui::g_state.show_grid, true);
       IM_CHECK_EQ(gui::g_state.show_sun_circles, true);
 
-      gui::g_state.renderers[0].lens_type = 0;  // Linear
+      gui::g_state.renderer.lens_type = 0;  // Linear
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.show_horizon, true);
       IM_CHECK_EQ(gui::g_state.show_grid, true);

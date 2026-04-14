@@ -114,7 +114,9 @@ void RegisterAspectRatioTests(ImGuiTestEngine* engine) {
       IM_UNUSED(ctx);
       ResetTestState();
 
-      // Minimal JSON without aspect fields
+      // Minimal JSON without aspect fields. Uses legacy renderers=[] shape; legacy branch
+      // finds an empty array and leaves loaded.renderer at default values. This test only
+      // asserts aspect_* fields.
       std::string json = R"({"crystals":[],"renderers":[],"filters":[]})";
       gui::GuiState loaded;
       bool ok = gui::DeserializeGuiStateJson(json, loaded);

@@ -95,7 +95,6 @@ inline const int kSimResolutions[] = { 512, 1024, 2048, 4096 };
 constexpr int kSimResolutionCount = 4;
 
 struct RenderConfig {
-  int id = 0;
   int lens_type = 0;  // Index into kLensTypeNames
   float fov = 90.0f;
   float elevation = 0.0f;
@@ -109,7 +108,7 @@ struct RenderConfig {
   float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
 
   bool operator==(const RenderConfig& o) const {
-    return id == o.id && lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
+    return lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
            roll == o.roll && sim_resolution_index == o.sim_resolution_index && visible == o.visible &&
            std::equal(background, background + 3, o.background) && std::equal(ray_color, ray_color + 3, o.ray_color) &&
            opacity == o.opacity && exposure_offset == o.exposure_offset;
@@ -154,10 +153,9 @@ struct GuiState {
   SunConfig sun;
   SimConfig sim;
 
-  // Renderers (still ID-based; TECH_DEBT(renderer-id-model): migrate when needed)
-  std::vector<RenderConfig> renderers;
-  int selected_renderer = -1;
-  int next_renderer_id = 1;
+  // Renderer (copy model: GuiState owns a single renderer directly).
+  // Single-renderer enforced by the GUI; if multi-renderer is ever needed, revisit.
+  RenderConfig renderer;
 
   // Aspect ratio (view preference, not simulation parameter — does not call MarkDirty)
   AspectPreset aspect_preset = AspectPreset::kFree;
@@ -226,19 +224,71 @@ struct GuiState {
   int norm_mode = 0;                       // 0=absolute, 1=adaptive (not exposed in UI)
   unsigned long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)
 
-  // Last committed config snapshot (for Revert — config fields only, no runtime state)
+  // Last committed config snapshot (for Revert — config fields only, no runtime state).
+  //
+  // Field-sync scope (audited 2026-04):
+  //   Fields mirrored here must be the subset of GuiState classified as "configuration"
+  //   (i.e. those reached by MarkDirty, contributing to the dirty/Revert lifecycle).
+  //   View preferences (aspect_preset, bg_*, horizon/grid/sun circles, log levels,
+  //   right_panel_collapsed), runtime state (sim_state, stats_*, snapshot_intensity,
+  //   intensity_locked, texture_upload_count), and file management (current_file_path,
+  //   dirty, save_texture) are intentionally excluded.
+  //
+  // Protection model (plan.md S1):
+  //   - sizeof(ConfigSnapshot) guard below fires when THIS struct's fields change,
+  //     forcing the developer to update From()/ApplyTo() bodies below.
+  //   - It does NOT fire when GuiState gains a new configuration field — that requires
+  //     discipline (code review + the field-sync audit comment above). Stronger
+  //     protection was deferred (see plan.md S5b) as disproportionate to risk.
   struct ConfigSnapshot {
     std::vector<Layer> layers;
     SunConfig sun;
     SimConfig sim;
-    std::vector<RenderConfig> renderers;
-    int selected_renderer = -1;
-    int next_renderer_id = 1;  // TECH_DEBT(renderer-id-model): remove when renderers migrate to copy model
+    RenderConfig renderer;
+
+    // Build a snapshot from the configuration fields of `state`. Implementation is
+    // out-of-class (after GuiState is complete) because GuiState is incomplete here.
+    static ConfigSnapshot From(const GuiState& state);
+
+    // Restore configuration fields of `state` from this snapshot.
+    // IMPORTANT: pure field assignment, no GUI side effects. Callers that need
+    // OnLayerStructureChanged(), MarkDirty(), sim_state transitions, etc. must
+    // invoke them AFTER ApplyTo() returns.
+    void ApplyTo(GuiState& state) const;
   };
   static_assert(std::is_copy_constructible_v<ConfigSnapshot>, "ConfigSnapshot must be copyable");
   static_assert(std::is_copy_assignable_v<ConfigSnapshot>, "ConfigSnapshot must be copy-assignable");
   std::optional<ConfigSnapshot> last_committed_state;
 };
+
+// Size guard for ConfigSnapshot. If any field changes here, From/ApplyTo below must
+// be audited for matching changes. Apple Silicon + libc++ only (std::vector size varies
+// across stdlib implementations).
+#if defined(__APPLE__) && defined(__aarch64__)
+// Size updated after renderer copy-model migration (task-renderer-inline): previous size (80)
+// referenced vector<RenderConfig>+2 ints; new layout embeds a single RenderConfig inline.
+static_assert(sizeof(GuiState::ConfigSnapshot) == 112,
+              "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
+#endif
+
+inline GuiState::ConfigSnapshot GuiState::ConfigSnapshot::From(const GuiState& state) {
+  // Explicit per-field assignment (symmetric with ApplyTo). Avoids aggregate
+  // initialization so that when ConfigSnapshot gains a field, the sizeof guard
+  // above fires AND reviewers see the obvious gap between From and ApplyTo.
+  ConfigSnapshot s;
+  s.layers = state.layers;
+  s.sun = state.sun;
+  s.sim = state.sim;
+  s.renderer = state.renderer;
+  return s;
+}
+
+inline void GuiState::ConfigSnapshot::ApplyTo(GuiState& state) const {
+  state.layers = layers;
+  state.sun = sun;
+  state.sim = sim;
+  state.renderer = renderer;
+}
 
 inline GuiState InitDefaultState() {
   GuiState s;
@@ -250,11 +300,7 @@ inline GuiState InitDefaultState() {
   layer.entries.push_back(entry);
   s.layers.push_back(layer);
 
-  // One default renderer
-  RenderConfig r;
-  r.id = s.next_renderer_id++;
-  s.renderers.push_back(r);
-  s.selected_renderer = 0;
+  // Default renderer is the default-constructed GuiState::renderer; no ID or index needed.
 
   return s;
 }

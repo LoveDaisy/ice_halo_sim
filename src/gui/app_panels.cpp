@@ -353,19 +353,12 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
   // ---- Scene Group ----
-  // Scene controls (Sun/Simulation) do not depend on selected_renderer, so they are rendered
-  // before the renderer validity check. This ensures Scene is always visible even when no
-  // renderer is selected.
   if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
     RenderSceneControls(g_state);
   }
 
-  if (g_state.selected_renderer < 0 || g_state.selected_renderer >= static_cast<int>(g_state.renderers.size())) {
-    ImGui::End();
-    return;
-  }
-
-  auto& r = g_state.renderers[g_state.selected_renderer];
+  // Copy-model renderer: GuiState always owns a valid renderer by default construction.
+  auto& r = g_state.renderer;
   bool full_sky = (r.lens_type >= 4);
 
   // ---- View Group ----
@@ -571,16 +564,10 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground);
 
-  // Renderer invariants (previously in RenderViewBar, runs every frame)
-  if (g_state.renderers.empty()) {
-    RenderConfig r;
-    r.id = g_state.next_renderer_id++;
-    g_state.renderers.push_back(r);
-    g_state.selected_renderer = 0;
-  }
-  g_state.selected_renderer = 0;
-  if (g_state.selected_renderer >= 0 && g_state.selected_renderer < static_cast<int>(g_state.renderers.size())) {
-    auto& r = g_state.renderers[g_state.selected_renderer];
+  // Renderer invariants (previously in RenderViewBar, runs every frame).
+  // Copy-model: GuiState always owns a single renderer, no vector/index bookkeeping needed.
+  {
+    auto& r = g_state.renderer;
     float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
     r.fov = std::min(r.fov, max_fov);
     if (r.lens_type >= 4) {  // Full-sky lenses: force view angles to zero
@@ -594,8 +581,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
 
   g_preview_vp.active = false;
 
-  if ((g_preview.HasTexture() || g_preview.HasBackground()) && g_state.selected_renderer >= 0 &&
-      g_state.selected_renderer < static_cast<int>(g_state.renderers.size())) {
+  if (g_preview.HasTexture() || g_preview.HasBackground()) {
     // Compute viewport in framebuffer pixels (for HiDPI)
     int fb_w = 0;
     int fb_h = 0;
@@ -603,7 +589,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     float scale_x = static_cast<float>(fb_w) / window_width;
     float scale_y = static_cast<float>(fb_h) / window_height;
 
-    auto& rc = g_state.renderers[g_state.selected_renderer];
+    auto& rc = g_state.renderer;
 
     // Store viewport for deferred rendering
     g_preview_vp.active = true;
@@ -757,9 +743,9 @@ void RenderStatusBar(float window_width, float window_height) {
     ImGui::Text("%s", buf);
   }
 
-  // Sim resolution + lens info
-  if (g_state.selected_renderer >= 0 && g_state.selected_renderer < static_cast<int>(g_state.renderers.size())) {
-    auto& rc = g_state.renderers[g_state.selected_renderer];
+  // Sim resolution + lens info (renderer is always embedded in GuiState).
+  {
+    auto& rc = g_state.renderer;
     int res = kSimResolutions[rc.sim_resolution_index];
     ImGui::SameLine();
     ImGui::Text("| %dx%d  %s  FOV:%.0f", res, res / 2, kLensTypeNames[rc.lens_type], rc.fov);

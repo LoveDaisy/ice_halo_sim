@@ -218,6 +218,11 @@ void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       IM_UNUSED(ctx);
       ResetTestState();
 
+      // Empty legacy-format JSON: exercises DeserializeGuiStateJson fallback paths
+      // (crystals/renderers/filters as ID-arrays). With renderers=[], the legacy branch
+      // finds an empty vector and leaves loaded.renderer at default-constructed values;
+      // this test only asserts bg_* fields, so the renderer branch is exercised but not
+      // asserted against.
       std::string json = R"({"crystals":[],"renderers":[],"filters":[]})";
       gui::GuiState loaded;
       bool ok = gui::DeserializeGuiStateJson(json, loaded);

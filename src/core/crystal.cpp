@@ -1,6 +1,7 @@
 #include "core/crystal.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -16,6 +17,30 @@
 #include "util/logger.hpp"
 
 namespace lumice {
+
+// Legal face-number sets mirror FillHexFnMap below:
+//   basal:         1, 2
+//   prism lateral: 3..8
+//   upper pyramid: 13..18
+//   lower pyramid: 23..28
+// See crystal_kind.hpp for rationale on why this GUI-facing coarse enum is
+// intentionally distinct from the core CrystalType.
+bool IsLegalFace(CrystalKind kind, int face) {
+  auto is_basal = [](int f) { return f == 1 || f == 2; };
+  auto is_prism_lateral = [](int f) { return f >= 3 && f <= 8; };
+  auto is_upper_pyramid = [](int f) { return f >= 13 && f <= 18; };
+  auto is_lower_pyramid = [](int f) { return f >= 23 && f <= 28; };
+
+  switch (kind) {
+    case CrystalKind::kPrism:
+      return is_basal(face) || is_prism_lateral(face);
+    case CrystalKind::kPyramid:
+      return is_basal(face) || is_prism_lateral(face) || is_upper_pyramid(face) || is_lower_pyramid(face);
+  }
+  // Unhandled CrystalKind — new enum values must extend the switch above.
+  assert(false && "IsLegalFace: unhandled CrystalKind");
+  return false;
+}
 
 void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map) {
   using math::kSqrt3_2;

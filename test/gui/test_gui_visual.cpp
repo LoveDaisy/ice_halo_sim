@@ -506,8 +506,8 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       gui::g_server = LUMICE_CreateServer();
       gui::g_state.sim.infinite = true;
       gui::g_state.sim.max_hits = 8;
-      if (!gui::g_state.renderers.empty()) {
-        auto& r = gui::g_state.renderers[0];
+      {
+        auto& r = gui::g_state.renderer;
         r.lens_type = 0;  // Linear
         r.fov = 120.0f;
         r.sim_resolution_index = 0;
