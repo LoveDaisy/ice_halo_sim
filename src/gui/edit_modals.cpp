@@ -395,12 +395,32 @@ static void RenderAxisModal(GuiState& state) {
 // ============================================================
 
 static void RenderFilterModal(GuiState& state) {
+  // Resolve the parent entry so we can use its crystal kind for face-number
+  // validation. If the entry was destroyed while the modal is open, close
+  // and bail out instead of reading out-of-range data.
+  const int ly = g_modal_layer_idx;
+  const int en = g_modal_entry_idx;
+  if (ly < 0 || ly >= static_cast<int>(state.layers.size()) || en < 0 ||
+      en >= static_cast<int>(state.layers[ly].entries.size())) {
+    g_active_modal = ActiveModal::kNone;
+    ImGui::CloseCurrentPopup();
+    return;
+  }
+  const auto& entry_for_kind = state.layers[ly].entries[en];
+  const ::lumice::CrystalKind kind = (entry_for_kind.crystal.type == CrystalType::kPrism) ?
+                                         ::lumice::CrystalKind::kPrism :
+                                         ::lumice::CrystalKind::kPyramid;
+
   // Action combo
   ImGui::Combo("Action##filter_modal", &g_filter_buf.action, kFilterActionNames, kFilterActionCount);
 
-  // Raypath text input with validation color feedback
+  // Raypath text input with validation color feedback.
+  // g_filter_buf is a detached copy of the filter; it is only written back to
+  // the entry on OK (see below), so non-kValid input cannot leak into the
+  // model via sibling dirty triggers.
   g_filter_buf.raypath_text = g_raypath_buf;
-  auto validation = ValidateRaypathText(g_filter_buf.raypath_text);
+  const auto result = ValidateRaypathText(g_filter_buf.raypath_text, kind);
+  const auto validation = result.state;
 
   ImVec4 border_color;
   switch (validation) {
@@ -432,9 +452,11 @@ static void RenderFilterModal(GuiState& state) {
     case RaypathValidation::kIncomplete:
       ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.1f, 1.0f), "Incomplete (still typing?)");
       break;
-    case RaypathValidation::kInvalid:
-      ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "Invalid raypath");
+    case RaypathValidation::kInvalid: {
+      const char* msg = result.message.empty() ? "Invalid raypath" : result.message.c_str();
+      ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "%s", msg);
       break;
+    }
   }
 
   // Symmetry checkboxes
@@ -452,10 +474,9 @@ static void RenderFilterModal(GuiState& state) {
     ImGui::BeginDisabled();
   }
   if (ImGui::Button("OK##filter", ImVec2(80, 0))) {
-    int ly = g_modal_layer_idx;
-    int en = g_modal_entry_idx;
-    if (ly >= 0 && ly < static_cast<int>(state.layers.size()) && en >= 0 &&
-        en < static_cast<int>(state.layers[ly].entries.size())) {
+    // Commit only when the buffer is fully valid. The top-of-function guard
+    // already validated ly/en, so we can reuse them directly.
+    if (validation == RaypathValidation::kValid) {
       g_filter_buf.raypath_text = g_raypath_buf;
       state.layers[ly].entries[en].filter = g_filter_buf;
       state.MarkFilterDirty();
@@ -475,13 +496,9 @@ static void RenderFilterModal(GuiState& state) {
 
   ImGui::SameLine();
   if (ImGui::Button("Remove Filter##filter", ImVec2(120, 0))) {
-    int ly = g_modal_layer_idx;
-    int en = g_modal_entry_idx;
-    if (ly >= 0 && ly < static_cast<int>(state.layers.size()) && en >= 0 &&
-        en < static_cast<int>(state.layers[ly].entries.size())) {
-      state.layers[ly].entries[en].filter = std::nullopt;
-      state.MarkFilterDirty();
-    }
+    // Indices were validated at the top of this frame.
+    state.layers[ly].entries[en].filter = std::nullopt;
+    state.MarkFilterDirty();
     g_active_modal = ActiveModal::kNone;
     ImGui::CloseCurrentPopup();
   }

@@ -6,7 +6,6 @@
 #include <cstring>
 #include <string>
 
-#include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
 #include "gui/app.hpp"
 #include "gui/crystal_preview.hpp"
