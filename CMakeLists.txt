@@ -177,6 +177,7 @@ set(lumice_config_src
   "${PROJ_SRC_DIR}/config/filter_config.cpp"
   "${PROJ_SRC_DIR}/config/light_config.cpp"
   "${PROJ_SRC_DIR}/config/proj_config.cpp"
+  "${PROJ_SRC_DIR}/config/raypath_validation.cpp"
   "${PROJ_SRC_DIR}/config/render_config.cpp"
   "${PROJ_SRC_DIR}/config/sim_data.cpp")
 

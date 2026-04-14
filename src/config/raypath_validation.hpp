@@ -4,6 +4,8 @@
 #include <cctype>
 #include <string>
 
+#include "core/crystal_kind.hpp"
+
 namespace lumice {
 
 /// Validation state for raypath text input.
@@ -11,6 +13,17 @@ enum class RaypathValidation {
   kValid,       ///< All tokens are non-negative integers; safe to submit.
   kIncomplete,  ///< Trailing/leading separator; user is still typing.
   kInvalid,     ///< Contains non-numeric tokens or empty interior tokens.
+};
+
+/// Richer validation result carrying an optional human-readable message.
+///
+/// Used by the two-argument `ValidateRaypathText` overload so the GUI can read
+/// both the state (for border colour / OK-button gating) and a specific error
+/// description (e.g. "Face 13 is not legal on this crystal type (Prism)") in a
+/// single call. `message` is empty when `state == kValid`.
+struct RaypathValidationResult {
+  RaypathValidation state;
+  std::string message;
 };
 
 /// Validate a raypath text string (dash- or comma-separated face indices).
@@ -104,6 +117,25 @@ inline RaypathValidation ValidateRaypathText(const std::string& text) {
 
   return RaypathValidation::kValid;
 }
+
+/// Validate a raypath text string against both syntax rules and face-number
+/// legality for the given crystal kind.
+///
+/// Semantics:
+///   - Syntax is checked first by delegating to the single-argument overload.
+///     If the syntax state is not kValid, the result is returned immediately
+///     (message = "Invalid raypath" for kInvalid, empty for kIncomplete).
+///   - Otherwise every numeric token is checked against the global union of
+///     legal face numbers ({1,2,3..8,13..18,23..28}); the first token outside
+///     that union yields a "Face N is outside the legal range of any crystal"
+///     message.
+///   - Finally each token is checked against the kind-specific legal set via
+///     `IsLegalFace(kind, face)`; the first token that fails yields a
+///     "Face N is not legal on this crystal type (Prism/Pyramid)" message.
+///
+/// The single-argument `ValidateRaypathText(text)` overload remains unchanged
+/// and performs syntax-only validation (so e.g. `"51"` is still kValid).
+RaypathValidationResult ValidateRaypathText(const std::string& text, CrystalKind kind);
 
 }  // namespace lumice
 
