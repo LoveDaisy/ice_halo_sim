@@ -34,8 +34,9 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), static_cast<int>(gui::g_state.layers.size()));
 
       // Renderer fields that Core hardcodes: lens is always dual_fisheye_equal_area
-      // (index 4 in kLensTypeNames = {Linear, FEA, FED, FES, DFEA=4, DFED, DFES, Rect})
-      // and fov is always 180. These assertions lock the Core-path contract itself.
+      // (kLensTypeNames[4] == "Dual Fisheye Equal Area"; keep this index in sync
+      // if kLensTypeNames is reordered) and fov is always 180. These assertions lock
+      // the Core-path contract itself.
       IM_CHECK_EQ(loaded.renderer.lens_type, 4);
       IM_CHECK_EQ(loaded.renderer.fov, 180.0f);
     };
@@ -77,9 +78,12 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // Pre-copy-model .lmc GUI-state format (verified via `git show ade8fc2^`):
       // lowercase "type", nested "shape" block, scattering entries reference crystals
-      // by crystal_id. DeserializeGuiStateJson legacy branch at file_io.cpp:878-916
-      // reads exactly this shape. Optional fields (wedge angles, indices, axis) are
-      // omitted here because this test only asserts crystal type / height / proportion.
+      // by crystal_id. DeserializeGuiStateJson's legacy branch (the
+      // root.contains("crystals") && root.contains("scattering") path) reads exactly
+      // this shape. Optional fields (wedge angles, indices, axis) are omitted because
+      // this test only asserts crystal type, the primary shape dimensions (height for
+      // prism; prism_h/upper_h/lower_h for pyramid), proportion, filter absence and
+      // sun altitude.
       std::string json = R"({
         "crystals": [
           {"id": 1, "type": "prism", "shape": {"height": 2.0}},
