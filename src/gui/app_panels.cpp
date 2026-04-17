@@ -26,6 +26,18 @@ void RenderTopBar(float window_width) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse);
 
+  // Left-panel collapse toggle (placed before Run/Stop; owns the leftmost slot of the top bar
+  // so it can never overlap with panel-internal headers).
+  {
+    const char* left_toggle_label = g_panel_collapsed ? ">##left_panel_toggle" : "<##left_panel_toggle";
+    if (ImGui::Button(left_toggle_label)) {
+      g_panel_collapsed = !g_panel_collapsed;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+  }
+
   // Run/Stop — fixed width to prevent layout shift
   bool simulating = (g_state.sim_state == SimState::kSimulating);
   const auto& style = ImGui::GetStyle();
@@ -143,6 +155,18 @@ void RenderTopBar(float window_width) {
   }
   if (simulating) {
     ImGui::EndDisabled();
+  }
+
+  // Right-panel collapse toggle — right-aligned so it sits flush with the right panel's outer edge.
+  {
+    const char* right_toggle_label = g_state.right_panel_collapsed ? "<##right_panel_toggle" : ">##right_panel_toggle";
+    float btn_w = ImGui::CalcTextSize(right_toggle_label, nullptr, true).x + style.FramePadding.x * 2.0f;
+    float right_edge = ImGui::GetWindowContentRegionMax().x;
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(right_edge - btn_w);
+    if (ImGui::Button(right_toggle_label)) {
+      g_state.right_panel_collapsed = !g_state.right_panel_collapsed;
+    }
   }
 
   ImGui::End();
@@ -329,11 +353,6 @@ void RenderLeftPanel(float window_height) {
   }
 
   ImGui::End();
-
-  // Collapse button overlay at top-right of left panel (offset inward to avoid scrollbar)
-  if (OverlayButton("<", kLeftPanelWidth - kCollapseBtnSize - 20, kTopBarHeight + 4)) {
-    g_panel_collapsed = true;
-  }
 }
 
 void RenderRightPanel(GLFWwindow* window, float window_width, float window_height) {
@@ -545,11 +564,6 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   }
 
   ImGui::End();
-
-  // Collapse button overlay at top-right of right panel (symmetric with left panel)
-  if (OverlayButton(">", panel_x + kRightPanelWidth - kCollapseBtnSize - 4, kTopBarHeight + 4)) {
-    g_state.right_panel_collapsed = true;
-  }
 }
 
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {
