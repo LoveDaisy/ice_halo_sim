@@ -169,7 +169,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
 
       // Open filter modal, click Remove to clear
-      ctx->ItemClick("**/E##fi");
+      ctx->ItemClick("**/Edit##fi");
       ctx->Yield(2);
       ctx->ItemClick("Edit Filter/Remove Filter##filter");
       ctx->Yield(2);
@@ -396,7 +396,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
 
       // Open crystal modal
-      ctx->ItemClick("**/E##cr");
+      ctx->ItemClick("**/Edit##cr");
       ctx->Yield(3);
 
       // Write 0 via the input widget — should be clamped to min (0.01)
@@ -424,7 +424,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->Yield();
 
       // Open crystal modal
-      ctx->ItemClick("**/E##cr");
+      ctx->ItemClick("**/Edit##cr");
       ctx->Yield(3);
 
       // Write 0 to Upper H — should be allowed (min=0.0 for kLogLinear)
@@ -751,7 +751,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       float height_before = cr.height;
 
       // Click Edit Crystal button on the first entry card
-      ctx->ItemClick("**/E##cr");
+      ctx->ItemClick("**/Edit##cr");
       ctx->Yield(3);
 
       // Click Cancel in the modal
@@ -775,7 +775,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       float initial_height = gui::g_state.layers[0].entries[0].crystal.height;
 
       // Open crystal modal
-      ctx->ItemClick("**/E##cr");
+      ctx->ItemClick("**/Edit##cr");
       ctx->Yield(3);
 
       // Modify height via the input widget in the modal
@@ -802,7 +802,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
 
       // Open filter modal
-      ctx->ItemClick("**/E##fi");
+      ctx->ItemClick("**/Edit##fi");
       ctx->Yield(3);
 
       // Click OK to set the default filter on the entry

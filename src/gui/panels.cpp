@@ -161,7 +161,10 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
     return "None";
   }
   const auto& fc = f.value();
-  std::string result;
+  // NOTE: the "raypath " prefix is hardcoded because FilterConfig currently supports only
+  // raypath-type filters. When a second filter type is added, introduce FilterConfig::type
+  // and map the type enum to the prefix string here.
+  std::string result = "raypath ";
   result += (fc.action == 0) ? "In " : "Out ";
 
   if (fc.raypath_text.size() > 12) {
@@ -497,47 +500,56 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   draw_list->AddRect(thumb_pos, ImVec2(thumb_pos.x + kThumbSize, thumb_pos.y + kThumbSize),
                      IM_COL32(100, 100, 100, 255));
 
-  // Right column
+  // Right column — layout matches SliderWithInput's three-column model:
+  //   [text / slider (text_w)] [Edit button / input (kInputWidth)] [row label (kLabelColWidth)]
+  // so Row 1-3 align column boundaries with Row 4 automatically.
   float right_x = thumb_pos.x + kThumbnailSize + ImGui::GetStyle().ItemSpacing.x;
-  float right_w = ImGui::GetContentRegionAvail().x - kThumbnailSize - ImGui::GetStyle().ItemSpacing.x;
+  float spacing_x = ImGui::GetStyle().ItemSpacing.x;
+  float avail_w = ImGui::GetContentRegionAvail().x - kThumbnailSize - spacing_x;
+  float text_w = std::max(40.0f, avail_w - kInputWidth - kLabelColWidth - spacing_x * 2);
+  float line_h = ImGui::GetTextLineHeightWithSpacing();
 
-  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y));
+  auto emit_row = [&](int row_idx, const char* text_content, const char* btn_id, EditTarget target,
+                      const char* row_label, bool clip_text) {
+    ImVec2 line_start(right_x, thumb_pos.y + line_h * static_cast<float>(row_idx));
+    ImGui::SetCursorScreenPos(line_start);
+    if (clip_text) {
+      ImVec2 clip_min = line_start;
+      ImVec2 clip_max(line_start.x + text_w, line_start.y + ImGui::GetTextLineHeight() + 2.0f);
+      ImGui::PushClipRect(clip_min, clip_max, true);
+      ImGui::TextUnformatted(text_content);
+      ImGui::PopClipRect();
+    } else {
+      ImGui::TextUnformatted(text_content);
+    }
+    ImGui::SameLine();
+    ImGui::SetCursorScreenPos(ImVec2(line_start.x + text_w + spacing_x, line_start.y));
+    if (ImGui::Button(btn_id, ImVec2(kInputWidth, 0))) {
+      g_edit_request = { target, layer_idx, entry_idx };
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted(row_label);
+  };
 
-  // Row 1: Crystal type + Edit
+  // Row 1: Crystal type
   const char* type_name = (entry.crystal.type == CrystalType::kPrism) ? "Prism" : "Pyramid";
-  ImGui::Text("%s", type_name);
-  ImGui::SameLine(right_w - 30);
-  if (ImGui::SmallButton("E##cr")) {
-    g_edit_request = { EditTarget::kCrystal, layer_idx, entry_idx };
-  }
+  emit_row(0, type_name, "Edit##cr", EditTarget::kCrystal, "crystal", false);
 
-  // Row 2: Axis preset + Edit
+  // Row 2: Axis preset
   std::string preset = AxisPresetName(entry.crystal);
-  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + ImGui::GetTextLineHeightWithSpacing()));
-  ImGui::Text("%s", preset.c_str());
-  ImGui::SameLine(right_w - 30);
-  if (ImGui::SmallButton("E##ax")) {
-    g_edit_request = { EditTarget::kAxis, layer_idx, entry_idx };
-  }
+  emit_row(1, preset.c_str(), "Edit##ax", EditTarget::kAxis, "axis", false);
 
-  // Row 3: Filter summary + Edit
+  // Row 3: Filter summary (may exceed text_w — clip so it doesn't overlap the Edit button)
   std::string filter_text = FilterSummary(entry.filter);
-  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + ImGui::GetTextLineHeightWithSpacing() * 2));
-  ImGui::Text("%s", filter_text.c_str());
-  ImGui::SameLine(right_w - 30);
-  if (ImGui::SmallButton("E##fi")) {
-    g_edit_request = { EditTarget::kFilter, layer_idx, entry_idx };
-  }
+  emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "filter", true);
 
-  // Row 4: Proportion slider (compact)
-  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + ImGui::GetTextLineHeightWithSpacing() * 3));
-  ImGui::PushItemWidth(right_w - 50);
-  char prop_id[32];
-  snprintf(prop_id, sizeof(prop_id), "##prop_%d_%d", layer_idx, entry_idx);
-  if (ImGui::SliderFloat(prop_id, &entry.proportion, 0.0f, 100.0f, "%.1f")) {
+  // Row 4: Proportion — reuse SliderWithInput for [slider][input] "prop." layout
+  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + line_h * 3.0f));
+  char prop_label[32];
+  snprintf(prop_label, sizeof(prop_label), "prop.##prop_%d_%d", layer_idx, entry_idx);
+  if (SliderWithInput(prop_label, &entry.proportion, 0.0f, 100.0f, "%.1f")) {
     state.MarkDirty();
   }
-  ImGui::PopItemWidth();
 
   ImGui::EndChild();  // ##card — must be unconditional
 
