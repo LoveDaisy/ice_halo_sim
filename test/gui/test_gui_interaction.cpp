@@ -202,69 +202,6 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
     };
   }
-
-  // P1: Mouse wheel over crystal preview should zoom only, not scroll parent panel
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_crystal", "preview_scroll_isolation");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      // Left panel now renders cards directly (no tabs) — just let layout settle
-      ctx->Yield(3);  // Let layout settle: mesh rebuild → FBO render
-
-      ImGuiWindow* panel = ctx->GetWindowByRef("##LeftPanel");
-      IM_CHECK(panel != nullptr);
-
-      FILE* diag = fopen("/tmp/lumice_scroll_test.log", "w");
-
-      // Default state: scroll at top (0). Panel should have scrollable content.
-      float scroll_max = panel->ScrollMax.y;
-      if (diag) {
-        fprintf(diag, "scroll_max=%.1f content=%.1f panel_h=%.1f scroll=%.1f\n", scroll_max, panel->ContentSize.y,
-                panel->Size.y, panel->Scroll.y);
-      }
-      IM_CHECK(scroll_max > 0.0f);  // Panel content must overflow for this test
-
-      // Panel scroll is at 0 (top), so scrolling DOWN is possible.
-      // The 3D Preview is partially visible near the bottom of the visible area.
-      float scroll_before = panel->Scroll.y;
-      float zoom_before = gui::g_crystal_zoom;
-
-      // Move mouse into the visible portion of the crystal preview.
-      // Preview starts at ~(content_h - preview_size) from content top.
-      // At scroll=0, visible range is [0, panel_h]. Preview top is at
-      // content_h - scroll_max - preview_size, approximately.
-      // Use 85% of visible panel height to target the preview area.
-      ImVec2 panel_pos = panel->Pos;
-      float panel_w = panel->Size.x;
-      ImVec2 preview_center(panel_pos.x + panel_w * 0.5f, panel_pos.y + panel->Size.y * 0.85f);
-      if (diag) {
-        fprintf(diag, "mouse=(%.1f,%.1f) scroll_before=%.1f zoom_before=%.3f\n", preview_center.x, preview_center.y,
-                scroll_before, zoom_before);
-      }
-
-      ctx->MouseMoveToPos(preview_center);
-      ctx->Yield();
-
-      // Scroll DOWN (negative delta = scroll content down in ImGui)
-      ctx->MouseWheelY(-3.0f);
-      ctx->Yield(2);
-
-      float scroll_after = panel->Scroll.y;
-      float zoom_after = gui::g_crystal_zoom;
-      if (diag) {
-        fprintf(diag, "scroll: %.1f -> %.1f, zoom: %.3f -> %.3f\n", scroll_before, scroll_after, zoom_before,
-                zoom_after);
-        fclose(diag);
-      }
-
-      // Zoom should have changed (mouse was over preview)
-      IM_CHECK(zoom_after != zoom_before);
-      // Panel scroll should NOT have changed
-      IM_CHECK_EQ(scroll_after, scroll_before);
-    };
-  }
 }
 
 // P2 tests

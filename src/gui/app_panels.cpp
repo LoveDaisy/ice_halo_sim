@@ -161,8 +161,7 @@ void RenderTopBar(float window_width) {
   // Also note: when the right panel is already collapsed, RenderCollapsedStrip's internal button
   // still expands it; this top-bar toggle simply offers a symmetric alternate entry point.
   {
-    const char* right_toggle_label =
-        g_state.right_panel_collapsed ? "<##right_panel_toggle" : ">##right_panel_toggle";
+    const char* right_toggle_label = g_state.right_panel_collapsed ? "<##right_panel_toggle" : ">##right_panel_toggle";
     // Use the max width of both label states so the button's left edge doesn't jitter when toggled.
     float w_expanded = ImGui::CalcTextSize(">##right_panel_toggle", nullptr, true).x;
     float w_collapsed = ImGui::CalcTextSize("<##right_panel_toggle", nullptr, true).x;
@@ -232,30 +231,26 @@ void RenderLeftPanel(float window_height) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-  // ---- Layout: cards (scroll) + 3D preview (fixed) + toolbar ----
+  // ---- Layout: cards (scroll) + toolbar ----
   int sel_layer = GetSelectedLayerIdx();
   int sel_entry = GetSelectedEntryIdx();
   bool has_crystal = sel_layer >= 0 && sel_entry >= 0 && sel_layer < static_cast<int>(g_state.layers.size()) &&
                      sel_entry < static_cast<int>(g_state.layers[sel_layer].entries.size());
 
-  float content_w = ImGui::GetContentRegionAvail().x;
   float avail_h = ImGui::GetContentRegionAvail().y;
   auto& style = ImGui::GetStyle();
-  float separator_h = ImGui::GetTextLineHeight() + style.SeparatorTextPadding.y * 2 + style.ItemSpacing.y;
-  float controls_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
   float toolbar_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
-  float preview_size = content_w;
-  float cards_h = std::max(0.0f, avail_h - preview_size - separator_h - controls_h - toolbar_h);
+  float cards_h = std::max(0.0f, avail_h - toolbar_h);
 
+  // The inline 3D preview was removed in task-remove-bottom-preview, but GUI visual
+  // tests still capture from g_crystal_renderer's FBO. Keep the FBO update path so
+  // screenshot/smoke, screenshot/crystal_psnr and the visual/crystal_* tests observe
+  // a populated texture. The modal edit path owns the renderer when open, in which
+  // case we skip here to preserve its last write (ImGui::Image defers GPU sampling).
   if (has_crystal) {
     auto& cr = g_state.layers[sel_layer].entries[sel_entry].crystal;
-
-    // When the crystal edit modal is open, it drives g_crystal_renderer exclusively.
-    // Skip UpdateMesh+Render here so the modal's edit buffer content is the last FBO write
-    // (ImGui::Image() defers GPU sampling to RenderDrawData at frame end).
     bool modal_owns_renderer = IsCrystalModalOpen();
 
-    // Update mesh if crystal changed or selection changed
     int hash = CrystalParamHash(cr);
     if (!modal_owns_renderer && hash != g_crystal_mesh_hash) {
       int result = BuildAndUploadCrystalMesh(cr);
@@ -263,8 +258,6 @@ void RenderLeftPanel(float window_height) {
         g_crystal_mesh_hash = hash;
       }
     }
-
-    // Render to FBO (skip when crystal modal owns the renderer)
     if (!modal_owns_renderer) {
       auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
       g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
@@ -274,48 +267,10 @@ void RenderLeftPanel(float window_height) {
   // Process thumbnail update queue before rendering cards
   g_thumbnail_cache.ProcessUpdateQueue(g_state, kMaxThumbnailUpdatesPerFrame);
 
-  // ---- Card scroll area (middle) ----
+  // ---- Card scroll area (fills panel above the toolbar) ----
   ImGui::BeginChild("##CardScroll", ImVec2(0, cards_h), ImGuiChildFlags_None);
   RenderScatteringSection(g_state);
   ImGui::EndChild();
-
-  // ---- 3D Preview (bottom, fixed) ----
-  ImGui::SeparatorText("3D Preview");
-
-  if (has_crystal) {
-    ImVec2 area_start = ImGui::GetCursorScreenPos();
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    draw_list->AddRectFilled(area_start, ImVec2(area_start.x + preview_size, area_start.y + preview_size),
-                             IM_COL32(38, 38, 38, 255));
-
-    auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
-    ImVec2 uv0(0, 1);
-    ImVec2 uv1(1, 0);
-    ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
-
-    ImGui::SetCursorScreenPos(area_start);
-    ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(preview_size, preview_size));
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
-      ImGuiIO& io = ImGui::GetIO();
-      if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        ApplyTrackballRotation(io.MouseDelta.x, io.MouseDelta.y);
-      }
-      if (io.MouseWheel != 0.0f) {
-        g_crystal_zoom *= (1.0f - io.MouseWheel * 0.1f);
-        g_crystal_zoom = std::max(0.5f, std::min(10.0f, g_crystal_zoom));
-      }
-    }
-    ImGui::PushItemWidth(120.0f);
-    ImGui::Combo("##CrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Reset View")) {
-      ResetCrystalView();
-    }
-  } else {
-    ImGui::TextDisabled("No crystal selected");
-  }
 
   // ---- Bottom toolbar: layer add/delete ----
   ImGui::Spacing();
