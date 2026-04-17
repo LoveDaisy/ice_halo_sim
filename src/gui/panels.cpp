@@ -190,9 +190,8 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
   if (expr)            \
   state.MarkDirty()
 
-// Card layout constants (kThumbnailSize is in gui_constants.hpp)
-constexpr float kCardHeight = 84.0f;
-constexpr float kCardSpacing = 4.0f;
+// Card layout: height is driven by ImGuiChildFlags_AutoResizeY so font/theme
+// changes adapt automatically (kThumbnailSize lives in gui_constants.hpp).
 
 }  // namespace
 
@@ -471,7 +470,7 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.25f, 0.35f, 0.55f, 0.4f));
   }
 
-  ImGui::BeginChild("##card", ImVec2(0, kCardHeight), ImGuiChildFlags_Borders);
+  ImGui::BeginChild("##card", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
 
   // Click anywhere in card to select
   if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
