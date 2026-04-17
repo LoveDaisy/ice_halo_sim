@@ -158,9 +158,15 @@ void RenderTopBar(float window_width) {
   }
 
   // Right-panel collapse toggle — right-aligned so it sits flush with the right panel's outer edge.
+  // Also note: when the right panel is already collapsed, RenderCollapsedStrip's internal button
+  // still expands it; this top-bar toggle simply offers a symmetric alternate entry point.
   {
-    const char* right_toggle_label = g_state.right_panel_collapsed ? "<##right_panel_toggle" : ">##right_panel_toggle";
-    float btn_w = ImGui::CalcTextSize(right_toggle_label, nullptr, true).x + style.FramePadding.x * 2.0f;
+    const char* right_toggle_label =
+        g_state.right_panel_collapsed ? "<##right_panel_toggle" : ">##right_panel_toggle";
+    // Use the max width of both label states so the button's left edge doesn't jitter when toggled.
+    float w_expanded = ImGui::CalcTextSize(">##right_panel_toggle", nullptr, true).x;
+    float w_collapsed = ImGui::CalcTextSize("<##right_panel_toggle", nullptr, true).x;
+    float btn_w = std::max(w_expanded, w_collapsed) + style.FramePadding.x * 2.0f;
     float right_edge = ImGui::GetWindowContentRegionMax().x;
     ImGui::SameLine();
     ImGui::SetCursorPosX(right_edge - btn_w);
