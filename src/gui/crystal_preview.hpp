@@ -26,6 +26,12 @@ bool BuildCrystalMeshData(const CrystalConfig& cr, LUMICE_CrystalMesh* out);
 // then upload to g_crystal_renderer. Returns the computed param hash, or 0 on failure.
 int BuildAndUploadCrystalMesh(const CrystalConfig& cr);
 
+// Rebuild the crystal mesh (if params changed since last upload) and render it into
+// g_crystal_renderer's FBO using the shared rotation/zoom/style state. Intended for
+// callers that need to drive the FBO explicitly (e.g. GUI visual tests that capture
+// from g_crystal_renderer.GetTextureId()).
+void UpdateCrystalPreviewRenderer(const CrystalConfig& cr);
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_CRYSTAL_PREVIEW_HPP

@@ -4,11 +4,17 @@
 
 #include "test_gui_shared.hpp"
 
-// GuiFunc that renders GUI and captures crystal texture when requested
+// GuiFunc that renders GUI and captures crystal texture when requested.
+//
+// Note: the left panel no longer updates g_crystal_renderer's FBO every frame
+// (task-remove-bottom-preview). Tests that want to capture the crystal must
+// arrange the FBO explicitly — this GuiFunc drives UpdateCrystalPreviewRenderer
+// on the selected entry's crystal before sampling the texture.
 static void ScreenshotGuiFunc(ImGuiTestContext* /*ctx*/) {
-  // Normal GUI rendering is handled by the main loop.
-  // Capture crystal texture on main thread when requested.
   if (g_capture.capture_requested && !g_capture.capture_done) {
+    if (!gui::g_state.layers.empty() && !gui::g_state.layers[0].entries.empty()) {
+      gui::UpdateCrystalPreviewRenderer(gui::g_state.layers[0].entries[0].crystal);
+    }
     int w = gui::g_crystal_renderer.Width();
     int h = gui::g_crystal_renderer.Height();
     auto tex_id = static_cast<unsigned int>(gui::g_crystal_renderer.GetTextureId());

@@ -232,37 +232,10 @@ void RenderLeftPanel(float window_height) {
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
   // ---- Layout: cards (scroll) + toolbar ----
-  int sel_layer = GetSelectedLayerIdx();
-  int sel_entry = GetSelectedEntryIdx();
-  bool has_crystal = sel_layer >= 0 && sel_entry >= 0 && sel_layer < static_cast<int>(g_state.layers.size()) &&
-                     sel_entry < static_cast<int>(g_state.layers[sel_layer].entries.size());
-
   float avail_h = ImGui::GetContentRegionAvail().y;
   auto& style = ImGui::GetStyle();
   float toolbar_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
   float cards_h = std::max(0.0f, avail_h - toolbar_h);
-
-  // The inline 3D preview was removed in task-remove-bottom-preview, but GUI visual
-  // tests still capture from g_crystal_renderer's FBO. Keep the FBO update path so
-  // screenshot/smoke, screenshot/crystal_psnr and the visual/crystal_* tests observe
-  // a populated texture. The modal edit path owns the renderer when open, in which
-  // case we skip here to preserve its last write (ImGui::Image defers GPU sampling).
-  if (has_crystal) {
-    auto& cr = g_state.layers[sel_layer].entries[sel_entry].crystal;
-    bool modal_owns_renderer = IsCrystalModalOpen();
-
-    int hash = CrystalParamHash(cr);
-    if (!modal_owns_renderer && hash != g_crystal_mesh_hash) {
-      int result = BuildAndUploadCrystalMesh(cr);
-      if (result != 0) {
-        g_crystal_mesh_hash = hash;
-      }
-    }
-    if (!modal_owns_renderer) {
-      auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
-      g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
-    }
-  }
 
   // Process thumbnail update queue before rendering cards
   g_thumbnail_cache.ProcessUpdateQueue(g_state, kMaxThumbnailUpdatesPerFrame);

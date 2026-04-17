@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "gui/app.hpp"
+#include "gui/crystal_preview.hpp"
 #include "gui/file_io.hpp"
 #include "gui/panels.hpp"
 #include "imgui.h"
