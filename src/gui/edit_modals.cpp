@@ -1,6 +1,7 @@
 #include "gui/edit_modals.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -22,6 +23,11 @@ namespace lumice::gui {
 // ============================================================
 
 enum class ActiveModal { kNone, kCrystal, kAxis, kFilter };
+
+// Minimum width applied to the three edit popups (Crystal/Axis/Filter) so inner
+// SliderWithInput controls have a usable drag range. AlwaysAutoResize still
+// governs height; SetNextWindowSizeConstraints adds the width floor.
+constexpr float kEditModalMinWidth = 560.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
@@ -564,6 +570,7 @@ void RenderEditModals(GuiState& state) {
   }
 
   // Crystal modal — guard ensures popup closes if entry was deleted externally
+  ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
   if (ImGui::BeginPopupModal("Edit Crystal", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     if (g_active_modal != ActiveModal::kCrystal) {
       ImGui::CloseCurrentPopup();
@@ -574,6 +581,7 @@ void RenderEditModals(GuiState& state) {
   }
 
   // Axis modal
+  ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
   if (ImGui::BeginPopupModal("Edit Axis", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     if (g_active_modal != ActiveModal::kAxis) {
       ImGui::CloseCurrentPopup();
@@ -584,6 +592,7 @@ void RenderEditModals(GuiState& state) {
   }
 
   // Filter modal
+  ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
   if (ImGui::BeginPopupModal("Edit Filter", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     if (g_active_modal != ActiveModal::kFilter) {
       ImGui::CloseCurrentPopup();
