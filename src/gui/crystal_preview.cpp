@@ -193,16 +193,4 @@ int BuildAndUploadCrystalMesh(const CrystalConfig& cr) {
   return CrystalParamHash(cr);
 }
 
-void UpdateCrystalPreviewRenderer(const CrystalConfig& cr) {
-  int hash = CrystalParamHash(cr);
-  if (hash != g_crystal_mesh_hash) {
-    int result = BuildAndUploadCrystalMesh(cr);
-    if (result != 0) {
-      g_crystal_mesh_hash = hash;
-    }
-  }
-  auto style = static_cast<CrystalStyle>(g_crystal_style);
-  g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, style);
-}
-
 }  // namespace lumice::gui

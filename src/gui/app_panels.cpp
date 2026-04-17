@@ -7,7 +7,6 @@
 
 #include "config/render_config.hpp"
 #include "gui/app.hpp"
-#include "gui/crystal_preview.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
@@ -272,7 +271,6 @@ void RenderLeftPanel(float window_height) {
         SetSelectedEntryIdx(static_cast<int>(new_entries.size()) - 1);
       }
       g_thumbnail_cache.OnLayerStructureChanged();
-      g_crystal_mesh_hash = -1;  // Force preview refresh
       g_state.MarkDirty();
     }
   }

@@ -4,17 +4,39 @@
 
 #include "test_gui_shared.hpp"
 
+// Rebuild the crystal mesh (if changed) and render it into g_crystal_renderer's
+// FBO so tests can capture from it. Test-only helper; the modal guard mirrors
+// the previous in-panel logic so the edit modal's FBO content is not overwritten.
+static void DriveCrystalPreviewFboForTest() {
+  if (gui::IsCrystalModalOpen()) {
+    return;
+  }
+  int sel_layer = gui::GetSelectedLayerIdx();
+  int sel_entry = gui::GetSelectedEntryIdx();
+  if (sel_layer < 0 || sel_entry < 0 || sel_layer >= static_cast<int>(gui::g_state.layers.size()) ||
+      sel_entry >= static_cast<int>(gui::g_state.layers[sel_layer].entries.size())) {
+    return;
+  }
+  const auto& cr = gui::g_state.layers[sel_layer].entries[sel_entry].crystal;
+  int hash = gui::CrystalParamHash(cr);
+  if (hash != gui::g_crystal_mesh_hash) {
+    int result = gui::BuildAndUploadCrystalMesh(cr);
+    if (result != 0) {
+      gui::g_crystal_mesh_hash = hash;
+    }
+  }
+  auto style = static_cast<gui::CrystalStyle>(gui::g_crystal_style);
+  gui::g_crystal_renderer.Render(gui::g_crystal_rotation, gui::g_crystal_zoom, style);
+}
+
 // GuiFunc that renders GUI and captures crystal texture when requested.
 //
 // Note: the left panel no longer updates g_crystal_renderer's FBO every frame
-// (task-remove-bottom-preview). Tests that want to capture the crystal must
-// arrange the FBO explicitly — this GuiFunc drives UpdateCrystalPreviewRenderer
+// (task-remove-bottom-preview). Tests using this GuiFunc drive the FBO here
 // on the selected entry's crystal before sampling the texture.
 static void ScreenshotGuiFunc(ImGuiTestContext* /*ctx*/) {
   if (g_capture.capture_requested && !g_capture.capture_done) {
-    if (!gui::g_state.layers.empty() && !gui::g_state.layers[0].entries.empty()) {
-      gui::UpdateCrystalPreviewRenderer(gui::g_state.layers[0].entries[0].crystal);
-    }
+    DriveCrystalPreviewFboForTest();
     int w = gui::g_crystal_renderer.Width();
     int h = gui::g_crystal_renderer.Height();
     auto tex_id = static_cast<unsigned int>(gui::g_crystal_renderer.GetTextureId());
