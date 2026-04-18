@@ -49,6 +49,12 @@ constexpr float kInputWidth = 60.0f;
 constexpr int kThumbnailSize = 64;
 constexpr int kMaxThumbnailUpdatesPerFrame = 2;
 
+// Default camera zoom for the crystal renderer. Lower value → crystal fills
+// more of the canvas (screen coverage ≈ 1/zoom). Must stay in sync between
+// the thumbnail cache and the edit-modal preview so the crystal does not
+// visually jump when opening the modal.
+constexpr float kDefaultCrystalZoom = 1.4f;
+
 // Auxiliary line overlay
 constexpr int kMaxSunCircles = 16;
 

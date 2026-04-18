@@ -196,6 +196,22 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
 // Card layout: height is driven by ImGuiChildFlags_AutoResizeY so font/theme
 // changes adapt automatically (kThumbnailSize lives in gui_constants.hpp).
 
+// Destructive action button palette (delete/remove). Shared by entry-card and
+// layer-header "x" buttons so the visual language stays consistent.
+constexpr ImVec4 kBtnDestructiveNormal{ 0.70f, 0.22f, 0.22f, 1.0f };
+constexpr ImVec4 kBtnDestructiveHovered{ 0.85f, 0.30f, 0.30f, 1.0f };
+constexpr ImVec4 kBtnDestructiveActive{ 0.60f, 0.15f, 0.15f, 1.0f };
+
+void PushDestructiveStyle() {
+  ImGui::PushStyleColor(ImGuiCol_Button, kBtnDestructiveNormal);
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kBtnDestructiveHovered);
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, kBtnDestructiveActive);
+}
+
+void PopDestructiveStyle() {
+  ImGui::PopStyleColor(3);
+}
+
 }  // namespace
 
 
@@ -573,15 +589,13 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   // disabled (only one entry in layer — cannot remove last entry).
   bool can_delete_entry = state.layers[layer_idx].entries.size() > 1;
   if (can_delete_entry) {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.30f, 0.30f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.15f, 0.15f, 1.0f));
+    PushDestructiveStyle();
   } else {
     ImGui::BeginDisabled();
   }
   bool delete_clicked = ImGui::SmallButton(del_id);
   if (can_delete_entry) {
-    ImGui::PopStyleColor(3);
+    PopDestructiveStyle();
   } else {
     ImGui::EndDisabled();
   }
@@ -642,15 +656,13 @@ void RenderLayer(GuiState& state, int layer_idx) {
   float layer_del_w = ImGui::CalcTextSize("x").x + ImGui::GetStyle().FramePadding.x * 2.0f;
   ImGui::SameLine(ImGui::GetContentRegionMax().x - layer_del_w);
   if (can_delete_layer) {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.30f, 0.30f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.15f, 0.15f, 1.0f));
+    PushDestructiveStyle();
   } else {
     ImGui::BeginDisabled();
   }
   bool layer_delete_clicked = ImGui::SmallButton(layer_del_id);
   if (can_delete_layer) {
-    ImGui::PopStyleColor(3);
+    PopDestructiveStyle();
   } else {
     ImGui::EndDisabled();
   }
