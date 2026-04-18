@@ -204,8 +204,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Initialize crystal renderer (256x256 FBO)
-  if (!gui::g_crystal_renderer.Init(256, 256)) {
+  // Initialize crystal renderer (512x512 FBO — supersamples the 320px modal preview)
+  if (!gui::g_crystal_renderer.Init(512, 512)) {
     GUI_LOG_ERROR("Failed to initialize crystal renderer");
     return 1;
   }

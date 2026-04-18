@@ -27,7 +27,7 @@ enum class ActiveModal { kNone, kCrystal, kAxis, kFilter };
 // Minimum width applied to the three edit popups (Crystal/Axis/Filter) so inner
 // SliderWithInput controls have a usable drag range. AlwaysAutoResize still
 // governs height; SetNextWindowSizeConstraints adds the width floor.
-constexpr float kEditModalMinWidth = 560.0f;
+constexpr float kEditModalMinWidth = 432.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
@@ -237,10 +237,15 @@ static void RenderCrystalModal(GuiState& state) {
   g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
 
   // Layout: 3D preview on top, crystal parameters below
-  constexpr float kPreviewSize = 200.0f;
+  constexpr float kPreviewSize = 320.0f;
 
-  // -- 3D Preview --
+  // -- 3D Preview (horizontally centered) --
   auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
+  float avail_w = ImGui::GetContentRegionAvail().x;
+  float offset_x = (avail_w - kPreviewSize) * 0.5f;
+  if (offset_x > 0.0f) {
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset_x);
+  }
   ImVec2 preview_pos = ImGui::GetCursorScreenPos();
   ImGui::Image(tex_id, ImVec2(kPreviewSize, kPreviewSize), ImVec2(0, 1), ImVec2(1, 0));
 
