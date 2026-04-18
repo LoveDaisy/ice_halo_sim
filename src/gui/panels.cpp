@@ -475,14 +475,10 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
 
   ImGui::BeginChild("##card", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
 
-  // Click anywhere in card to select
-  if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-    if (!is_selected) {
-      g_crystal_mesh_hash = -1;  // Force 3D preview refresh on selection change
-    }
-    g_selected_layer = layer_idx;
-    g_selected_entry = entry_idx;
-  }
+  // Previous-frame hover state controls the alpha of the hover-action buttons
+  // (always-render + alpha transition to keep click paths stable).
+  ImGuiID hover_persist_id = ImGui::GetID("##card_hover_persist");
+  bool hover_prev = ImGui::GetStateStorage()->GetBool(hover_persist_id, false);
 
   // Left column: crystal thumbnail (or grey placeholder if not yet rendered)
   ImVec2 thumb_pos = ImGui::GetCursorScreenPos();
@@ -551,29 +547,74 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     state.MarkDirty();
   }
 
+  // Hover action buttons: render at top-right of card (inside child) with alpha
+  // driven by previous-frame hover state. They are always in the ImGui tree so
+  // click paths remain stable; only visibility transitions.
+  char dup_id[32];
+  char del_id[32];
+  snprintf(dup_id, sizeof(dup_id), "Duplicate##%d_%d", layer_idx, entry_idx);
+  snprintf(del_id, sizeof(del_id), "x##%d_%d", layer_idx, entry_idx);
+
+  float frame_pad_x = ImGui::GetStyle().FramePadding.x;
+  float btn_spacing = ImGui::GetStyle().ItemSpacing.x;
+  float dup_w = ImGui::CalcTextSize("Duplicate").x + frame_pad_x * 2.0f;
+  float del_w = ImGui::CalcTextSize("x").x + frame_pad_x * 2.0f;
+  float hover_row_w = dup_w + btn_spacing + del_w;
+  constexpr float kHoverBtnPad = 2.0f;
+  ImVec2 card_win_pos = ImGui::GetWindowPos();
+  ImVec2 card_win_sz = ImGui::GetWindowSize();
+  ImGui::SetCursorScreenPos(
+      ImVec2(card_win_pos.x + card_win_sz.x - hover_row_w - kHoverBtnPad, card_win_pos.y + kHoverBtnPad));
+
+  ImGui::PushStyleVar(ImGuiStyleVar_Alpha, hover_prev ? 1.0f : 0.0f);
+  bool dup_clicked = ImGui::SmallButton(dup_id);
+  ImGui::SameLine();
+  // Delete button: red when enabled (destructive action); auto-greyed when
+  // disabled (only one entry in layer — cannot remove last entry).
+  bool can_delete_entry = state.layers[layer_idx].entries.size() > 1;
+  if (can_delete_entry) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.30f, 0.30f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.15f, 0.15f, 1.0f));
+  } else {
+    ImGui::BeginDisabled();
+  }
+  bool delete_clicked = ImGui::SmallButton(del_id);
+  if (can_delete_entry) {
+    ImGui::PopStyleColor(3);
+  } else {
+    ImGui::EndDisabled();
+  }
+  ImGui::PopStyleVar();
+
+  if (dup_clicked) {
+    auto& entries = state.layers[layer_idx].entries;
+    entries.push_back(entry);  // deep copy
+    g_thumbnail_cache.OnLayerStructureChanged();
+    state.MarkDirty();
+  }
+
+  // Click-to-select: anywhere on the card that is NOT a widget (edit buttons,
+  // hover action buttons, or the proportion slider).
+  if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+      !ImGui::IsAnyItemHovered()) {
+    if (!is_selected) {
+      g_crystal_mesh_hash = -1;  // Force 3D preview refresh on selection change
+    }
+    g_selected_layer = layer_idx;
+    g_selected_entry = entry_idx;
+  }
+
+  // Persist hover state for next frame (computed while still inside the child
+  // window so widget hover does not disqualify it).
+  bool hover_now = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+  ImGui::GetStateStorage()->SetBool(hover_persist_id, hover_now);
+
   ImGui::EndChild();  // ##card — must be unconditional
 
   if (is_selected) {
     ImGui::PopStyleColor();
   }
-
-  // Buttons after the card (on same line or next line)
-  // Copy button
-  char copy_id[32];
-  snprintf(copy_id, sizeof(copy_id), "Copy##%d_%d", layer_idx, entry_idx);
-  if (ImGui::SmallButton(copy_id)) {
-    // Deep copy this entry and append to the same layer
-    auto& entries = state.layers[layer_idx].entries;
-    entries.push_back(entry);  // copy
-    g_thumbnail_cache.OnLayerStructureChanged();
-    state.MarkDirty();
-  }
-
-  // Delete button (returns whether clicked)
-  ImGui::SameLine();
-  char del_id[32];
-  snprintf(del_id, sizeof(del_id), "x##%d_%d", layer_idx, entry_idx);
-  bool delete_clicked = ImGui::SmallButton(del_id);
 
   ImGui::PopID();
   return delete_clicked;
@@ -590,7 +631,47 @@ void RenderLayer(GuiState& state, int layer_idx) {
   char header_label[32];
   snprintf(header_label, sizeof(header_label), "Layer %d", layer_idx + 1);
 
-  if (ImGui::CollapsingHeader(header_label, ImGuiTreeNodeFlags_DefaultOpen)) {
+  bool header_open =
+      ImGui::CollapsingHeader(header_label, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowItemOverlap);
+
+  // Right-aligned delete button on the header row. Only enabled when more than
+  // one layer exists (the scattering model requires at least one layer).
+  char layer_del_id[32];
+  snprintf(layer_del_id, sizeof(layer_del_id), "x##layer_%d", layer_idx);
+  bool can_delete_layer = state.layers.size() > 1;
+  float layer_del_w = ImGui::CalcTextSize("x").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+  ImGui::SameLine(ImGui::GetContentRegionMax().x - layer_del_w);
+  if (can_delete_layer) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.30f, 0.30f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.15f, 0.15f, 1.0f));
+  } else {
+    ImGui::BeginDisabled();
+  }
+  bool layer_delete_clicked = ImGui::SmallButton(layer_del_id);
+  if (can_delete_layer) {
+    ImGui::PopStyleColor(3);
+  } else {
+    ImGui::EndDisabled();
+  }
+  if (layer_delete_clicked && can_delete_layer) {
+    state.layers.erase(state.layers.begin() + layer_idx);
+    if (g_selected_layer >= static_cast<int>(state.layers.size())) {
+      g_selected_layer = static_cast<int>(state.layers.size()) - 1;
+    }
+    if (g_selected_layer >= 0) {
+      auto& sel_entries = state.layers[g_selected_layer].entries;
+      if (g_selected_entry >= static_cast<int>(sel_entries.size())) {
+        g_selected_entry = static_cast<int>(sel_entries.size()) - 1;
+      }
+    }
+    g_thumbnail_cache.OnLayerStructureChanged();
+    state.MarkDirty();
+    ImGui::PopID();
+    return;  // Skip rendering the rest; layer has been erased.
+  }
+
+  if (header_open) {
     // Multi-scatter probability slider
     char prob_id[32];
     snprintf(prob_id, sizeof(prob_id), "Prob.##layer_%d", layer_idx);
@@ -620,7 +701,7 @@ void RenderLayer(GuiState& state, int layer_idx) {
     // Add entry button
     ImGui::Spacing();
     char add_id[32];
-    snprintf(add_id, sizeof(add_id), "+ Entry##layer_%d", layer_idx);
+    snprintf(add_id, sizeof(add_id), "+ Crystal##layer_%d", layer_idx);
     if (ImGui::SmallButton(add_id)) {
       layer.entries.emplace_back();
       g_thumbnail_cache.OnLayerStructureChanged();

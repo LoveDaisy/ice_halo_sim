@@ -244,7 +244,7 @@ void RenderLeftPanel(float window_height) {
   RenderScatteringSection(g_state);
   ImGui::EndChild();
 
-  // ---- Bottom toolbar: layer add/delete ----
+  // ---- Bottom toolbar: add layer only (per-layer delete lives on the header row) ----
   ImGui::Spacing();
   if (ImGui::SmallButton("+ Layer")) {
     Layer new_layer;
@@ -252,30 +252,6 @@ void RenderLeftPanel(float window_height) {
     g_state.layers.push_back(std::move(new_layer));
     g_thumbnail_cache.OnLayerStructureChanged();
     g_state.MarkDirty();
-  }
-  ImGui::SameLine();
-  bool can_delete_layer = g_state.layers.size() > 1;
-  if (!can_delete_layer) {
-    ImGui::BeginDisabled();
-  }
-  if (ImGui::SmallButton("- Layer")) {
-    int del_idx = GetSelectedLayerIdx();
-    if (del_idx >= 0 && del_idx < static_cast<int>(g_state.layers.size()) && g_state.layers.size() > 1) {
-      g_state.layers.erase(g_state.layers.begin() + del_idx);
-      if (GetSelectedLayerIdx() >= static_cast<int>(g_state.layers.size())) {
-        SetSelectedLayerIdx(static_cast<int>(g_state.layers.size()) - 1);
-      }
-      // Clamp entry index for new selected layer
-      auto& new_entries = g_state.layers[GetSelectedLayerIdx()].entries;
-      if (GetSelectedEntryIdx() >= static_cast<int>(new_entries.size())) {
-        SetSelectedEntryIdx(static_cast<int>(new_entries.size()) - 1);
-      }
-      g_thumbnail_cache.OnLayerStructureChanged();
-      g_state.MarkDirty();
-    }
-  }
-  if (!can_delete_layer) {
-    ImGui::EndDisabled();
   }
 
   // Process edit request: open modal if an edit button was clicked

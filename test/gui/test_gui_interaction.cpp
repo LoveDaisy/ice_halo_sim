@@ -137,8 +137,8 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
 
-      // Add an entry via the "+ Entry" button in layer 0
-      ctx->ItemClick("**/+ Entry##layer_0");
+      // Add an entry via the "+ Crystal" button in layer 0
+      ctx->ItemClick("**/+ Crystal##layer_0");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
 
@@ -271,10 +271,10 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 2);
 
-      // Select the new layer (idx 1) then delete it
+      // Delete layer 1 via its per-layer header "x" button
       gui::SetSelectedLayerIdx(1);
       ctx->Yield();
-      ctx->ItemClick("**/- Layer");
+      ctx->ItemClick("**/x##layer_1");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
     };
@@ -294,8 +294,8 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
 
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
 
-      // Copy the entry
-      ctx->ItemClick("**/Copy##0_0");
+      // Duplicate the entry (hover button; test engine locates by ID even when alpha=0)
+      ctx->ItemClick("**/Duplicate##0_0");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
 

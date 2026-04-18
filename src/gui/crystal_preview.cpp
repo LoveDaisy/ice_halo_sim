@@ -15,7 +15,7 @@ namespace lumice::gui {
 float g_crystal_rotation[16] = {
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 };
-float g_crystal_zoom = 2.5f;
+float g_crystal_zoom = 1.4f;
 int g_crystal_style = 1;      // Default: Hidden Line (index into kCrystalStyleNames)
 int g_crystal_mesh_hash = 0;  // Hash of crystal params for change detection
 
@@ -61,7 +61,7 @@ void ResetCrystalView() {
   g_crystal_rotation[13] = 0;
   g_crystal_rotation[14] = 0;
   g_crystal_rotation[15] = 1;
-  g_crystal_zoom = 2.5f;
+  g_crystal_zoom = 1.4f;
 }
 
 // Apply incremental rotation around axis (dx, dy) from mouse drag
