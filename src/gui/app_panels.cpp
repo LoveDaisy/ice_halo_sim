@@ -325,9 +325,9 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 
     ImGui::SeparatorText("Camera");
     ImGui::BeginDisabled(full_sky);
-    SliderWithInput("Elevation##view", &r.elevation, -90.0f, 90.0f, "%.1f");
-    SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f, "%.1f");
-    SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f, "%.1f");
+    SliderWithInput("Elevation##view", &r.elevation, -90.0f, 90.0f, "%.2f");
+    SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f, "%.2f");
+    SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f, "%.2f");
     ImGui::EndDisabled();
 
     ImGui::PopItemWidth();

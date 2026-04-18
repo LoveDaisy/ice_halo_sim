@@ -279,11 +279,11 @@ static void RenderCrystalModal(GuiState& state) {
 
   // -- Parameters --
   if (cr.type == CrystalType::kPrism) {
-    SliderWithInput("Height##modal_cr", &cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLogLinear);
+    SliderWithInput("Height##modal_cr", &cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLog);
   } else {
-    SliderWithInput("Prism H##modal_cr", &cr.prism_h, 0.0f, 100.0f, "%.2f", SliderScale::kLogLinear);
-    SliderWithInput("Upper H##modal_cr", &cr.upper_h, 0.0f, 100.0f, "%.2f", SliderScale::kLogLinear);
-    SliderWithInput("Lower H##modal_cr", &cr.lower_h, 0.0f, 100.0f, "%.2f", SliderScale::kLogLinear);
+    SliderWithInput("Prism H##modal_cr", &cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
+    SliderWithInput("Upper H##modal_cr", &cr.upper_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
+    SliderWithInput("Lower H##modal_cr", &cr.lower_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
     SliderWithPresetEdit("Upper A##modal_cr", &cr.upper_alpha, 0.1f, 90.0f, "%.1f", SliderScale::kLinear, kWedgePresets,
                          kWedgePresetCount);
     SliderWithPresetEdit("Lower A##modal_cr", &cr.lower_alpha, 0.1f, 90.0f, "%.1f", SliderScale::kLinear, kWedgePresets,
