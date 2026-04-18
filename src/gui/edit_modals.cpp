@@ -206,6 +206,20 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
 // Crystal Modal
 // ============================================================
 
+static void HandleCrystalPreviewInteraction(bool hovered, bool active) {
+  ImGuiIO& io = ImGui::GetIO();
+  if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+    ApplyTrackballRotation(io.MouseDelta.x, io.MouseDelta.y);
+  }
+  if (hovered) {
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+    if (io.MouseWheel != 0.0f) {
+      g_crystal_zoom *= (1.0f - io.MouseWheel * 0.1f);
+      g_crystal_zoom = std::max(0.5f, std::min(10.0f, g_crystal_zoom));
+    }
+  }
+}
+
 static void RenderCrystalModal(GuiState& state) {
   auto& cr = g_crystal_buf;
 
@@ -227,22 +241,13 @@ static void RenderCrystalModal(GuiState& state) {
 
   // -- 3D Preview --
   auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
+  ImVec2 preview_pos = ImGui::GetCursorScreenPos();
   ImGui::Image(tex_id, ImVec2(kPreviewSize, kPreviewSize), ImVec2(0, 1), ImVec2(1, 0));
 
-  // Trackball interaction on preview
-  ImVec2 preview_min = ImGui::GetItemRectMin();
-  ImVec2 preview_max = ImGui::GetItemRectMax();
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
-    ImGuiIO& io = ImGui::GetIO();
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-      ApplyTrackballRotation(io.MouseDelta.x, io.MouseDelta.y);
-    }
-    if (io.MouseWheel != 0.0f) {
-      g_crystal_zoom *= (1.0f - io.MouseWheel * 0.1f);
-      g_crystal_zoom = std::max(0.5f, std::min(10.0f, g_crystal_zoom));
-    }
-  }
+  // Overlay InvisibleButton to consume mouse clicks and prevent modal window drag.
+  ImGui::SetCursorScreenPos(preview_pos);
+  ImGui::InvisibleButton("##modal_preview_interact", ImVec2(kPreviewSize, kPreviewSize));
+  HandleCrystalPreviewInteraction(ImGui::IsItemHovered(), ImGui::IsItemActive());
 
   // Style combo + Reset View
   ImGui::PushItemWidth(120.0f);
