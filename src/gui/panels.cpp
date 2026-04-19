@@ -493,32 +493,37 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   ImGuiID hover_persist_id = ImGui::GetID("##card_hover_persist");
   bool hover_prev = ImGui::GetStateStorage()->GetBool(hover_persist_id, false);
 
+  // Use frame-height spacing so each row reserves room for the Edit button (taller than text);
+  // otherwise Row 0-2 buttons would overlap the prop. slider in Row 3.
+  float row_h = ImGui::GetFrameHeightWithSpacing();
+  float spacing_x = ImGui::GetStyle().ItemSpacing.x;
+  float spacing_y = ImGui::GetStyle().ItemSpacing.y;
+
+  // Thumbnail display size matches the right column's content height:
+  // top of Row 0 (= thumb_pos.y) to bottom of Row 3 (= row_h*4 - spacing_y).
+  // Square (W=H) so the crystal aspect is preserved. kThumbnailSize is the FBO
+  // render resolution; ImGui scales the texture to thumb_display_size on draw.
+  float thumb_display_size = row_h * 4.0f - spacing_y;
+
   // Left column: crystal thumbnail (or grey placeholder if not yet rendered)
   ImVec2 thumb_pos = ImGui::GetCursorScreenPos();
   ImDrawList* draw_list = ImGui::GetWindowDrawList();
   auto thumb_tex = g_thumbnail_cache.GetTexture(layer_idx, entry_idx);
-  constexpr float kThumbSize = static_cast<float>(kThumbnailSize);
+  ImVec2 thumb_br(thumb_pos.x + thumb_display_size, thumb_pos.y + thumb_display_size);
   if (thumb_tex != 0) {
     // OpenGL texture Y-axis is flipped relative to ImGui: uv0=(0,1) uv1=(1,0)
-    draw_list->AddImage(static_cast<ImTextureID>(thumb_tex), thumb_pos,
-                        ImVec2(thumb_pos.x + kThumbSize, thumb_pos.y + kThumbSize), ImVec2(0, 1), ImVec2(1, 0));
+    draw_list->AddImage(static_cast<ImTextureID>(thumb_tex), thumb_pos, thumb_br, ImVec2(0, 1), ImVec2(1, 0));
   } else {
-    draw_list->AddRectFilled(thumb_pos, ImVec2(thumb_pos.x + kThumbSize, thumb_pos.y + kThumbSize),
-                             IM_COL32(60, 60, 60, 255));
+    draw_list->AddRectFilled(thumb_pos, thumb_br, IM_COL32(60, 60, 60, 255));
   }
-  draw_list->AddRect(thumb_pos, ImVec2(thumb_pos.x + kThumbSize, thumb_pos.y + kThumbSize),
-                     IM_COL32(100, 100, 100, 255));
+  draw_list->AddRect(thumb_pos, thumb_br, IM_COL32(100, 100, 100, 255));
 
   // Right column — layout matches SliderWithInput's three-column model:
   //   [text / slider (text_w)] [Edit button / input (kInputWidth)] [row label (kLabelColWidth)]
   // so Row 1-3 align column boundaries with Row 4 automatically.
-  float right_x = thumb_pos.x + kThumbnailSize + ImGui::GetStyle().ItemSpacing.x;
-  float spacing_x = ImGui::GetStyle().ItemSpacing.x;
-  float avail_w = ImGui::GetContentRegionAvail().x - kThumbnailSize - spacing_x;
+  float right_x = thumb_pos.x + thumb_display_size + spacing_x;
+  float avail_w = ImGui::GetContentRegionAvail().x - thumb_display_size - spacing_x;
   float text_w = std::max(40.0f, avail_w - kInputWidth - kLabelColWidth - spacing_x * 2);
-  // Use frame-height spacing so each row reserves room for the Edit button (taller than text);
-  // otherwise Row 0-2 buttons would overlap the prop. slider in Row 3.
-  float row_h = ImGui::GetFrameHeightWithSpacing();
 
   auto emit_row = [&](int row_idx, const char* text_content, const char* btn_id, EditTarget target,
                       const char* row_label, bool clip_text) {
@@ -572,13 +577,15 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   //   duplicate y: delete_y + btn_h + kHoverBtnGap
   char dup_id[32];
   char del_id[32];
-  // "\xC3\x97" is U+00D7 MULTIPLICATION SIGN (×) in UTF-8; Latin-1 range is
-  // covered by ImGui's default Proggy Clean font.
-  snprintf(dup_id, sizeof(dup_id), "+##dup_%d_%d", layer_idx, entry_idx);
+  // Glyphs: "D" for Duplicate (less ambiguous than "+", which reads as "Add"),
+  // "\xC3\x97" (U+00D7 ×) for Delete. Both ASCII / Latin-1 — covered by ImGui's
+  // default Proggy Clean font; replacing them with proper SVG icons is tracked
+  // in backlog as "GUI icon font integration (FontAwesome)".
+  snprintf(dup_id, sizeof(dup_id), "D##dup_%d_%d", layer_idx, entry_idx);
   snprintf(del_id, sizeof(del_id), "\xC3\x97##del_%d_%d", layer_idx, entry_idx);
 
   float frame_pad_x = ImGui::GetStyle().FramePadding.x;
-  float dup_glyph_w = ImGui::CalcTextSize("+").x;
+  float dup_glyph_w = ImGui::CalcTextSize("D").x;
   float del_glyph_w = ImGui::CalcTextSize("\xC3\x97").x;
   float btn_w = std::max(dup_glyph_w, del_glyph_w) + frame_pad_x * 2.0f;
   float btn_h = ImGui::GetFrameHeight();

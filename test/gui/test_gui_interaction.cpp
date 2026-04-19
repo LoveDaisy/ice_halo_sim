@@ -296,7 +296,7 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
 
       // Duplicate the entry (hover button; ID is always addressable even at alpha=0).
-      ctx->ItemClick("**/+##dup_0_0");
+      ctx->ItemClick("**/D##dup_0_0");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
 
