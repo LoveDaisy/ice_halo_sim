@@ -208,13 +208,50 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Render-invalidation must not have fired:
       //   - sim_state still kDone (no kModified ⇒ Revert button stays hidden)
-      //   - snapshot_intensity preserved (no display clear)
+      //   - snapshot_intensity preserved (>0 rather than ==0.5 so future
+      //     normalization changes don't break the semantic assertion)
       //   - intensity_locked still false (no upload lock armed)
       //   - dirty still false (no spurious unsaved-changes flag)
       IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
-      IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.5f);
+      IM_CHECK_GT(gui::g_state.snapshot_intensity, 0.0f);
       IM_CHECK(!gui::g_state.intensity_locked);
       IM_CHECK(!gui::g_state.dirty);
+    };
+  }
+
+  // P1: Positive-path counterpart of ok_no_change_preserves_state — when the
+  // OK actually changes the entry (here: Remove Filter on an entry that has
+  // one), render-invalidation MUST fire. Guards against a regressed diff-gate
+  // where operator== wrongly returns true.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit", "ok_with_change_invalidates");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Stage a filter on the entry so Remove Filter is a real change.
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      gui::g_state.layers[0].entries[0].filter = f;
+      // "finite rays just finished" snapshot state.
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.snapshot_intensity = 0.5f;
+      gui::g_state.intensity_locked = false;
+      gui::g_state.dirty = false;
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      // Render-invalidation MUST have fired (all four effects):
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.0f);
+      IM_CHECK(gui::g_state.intensity_locked);
+      IM_CHECK(gui::g_state.dirty);
     };
   }
 

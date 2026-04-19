@@ -177,7 +177,8 @@ struct EntryCard {
   }
   friend bool operator!=(const EntryCard& a, const EntryCard& b) { return !(a == b); }
 };
-static_assert(sizeof(EntryCard) == 192, "EntryCard fields changed; update operator== and this size");
+static_assert(sizeof(EntryCard) == 192,
+              "EntryCard size changed (check CrystalConfig/AxisDist/EntryCard operator== for new fields)");
 
 struct Layer {
   float probability = 0.0f;  // Probability of multi-scatter continuation (0 = single scatter), range [0,1]
