@@ -630,8 +630,7 @@ void RenderEditModals(GuiState& state) {
     const bool crystal_dirty = g_crystal_buf != g_crystal_buf_snapshot;
     const bool axis_dirty = g_axis_buf[0] != g_axis_buf_snapshot[0] || g_axis_buf[1] != g_axis_buf_snapshot[1] ||
                             g_axis_buf[2] != g_axis_buf_snapshot[2];
-    const bool filter_dirty =
-        g_filter_buf_removed ? g_filter_initial_present : (filter_cmp != g_filter_buf_snapshot);
+    const bool filter_dirty = g_filter_buf_removed ? g_filter_initial_present : (filter_cmp != g_filter_buf_snapshot);
     const char* crystal_label = crystal_dirty ? "Crystal *###crystal_tab" : "Crystal###crystal_tab";
     const char* axis_label = axis_dirty ? "Axis *###axis_tab" : "Axis###axis_tab";
     const char* filter_label = filter_dirty ? "Filter *###filter_tab" : "Filter###filter_tab";

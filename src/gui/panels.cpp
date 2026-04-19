@@ -670,9 +670,9 @@ void RenderLayer(GuiState& state, int layer_idx) {
     ImGui::EndGroup();
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      const char* prob_tip = single_layer
-                                 ? "Fraction of rays continuing to the next layer.\nAlways 0 for a single layer."
-                                 : "Fraction of rays continuing to the next layer";
+      const char* prob_tip = single_layer ?
+                                 "Fraction of rays continuing to the next layer.\nAlways 0 for a single layer." :
+                                 "Fraction of rays continuing to the next layer";
       ImGui::SetTooltip("%s", prob_tip);
     }
 
