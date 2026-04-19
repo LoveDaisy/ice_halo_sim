@@ -48,6 +48,14 @@ static FilterConfig g_filter_buf;
 static char g_raypath_buf[256];
 // Buffered "Remove Filter" intent: applied on modal-level OK, undone by Cancel.
 static bool g_filter_buf_removed = false;
+// Snapshot of g_filter_buf at modal open + initial presence flag. Used by
+// CommitAllBuffers to decide whether to write entry.filter at all: when the
+// entry had no filter originally AND the user did not touch any field, OK
+// must leave entry.filter as nullopt (otherwise default-constructed values
+// like sym_p=b=d=true would silently turn into a "* In PBD" filter that
+// blocks all rays).
+static FilterConfig g_filter_buf_snapshot;
+static bool g_filter_initial_present = false;
 
 // Crystal modal: trackball state saved on open, restored on Cancel
 static float g_saved_rotation[16];
@@ -190,6 +198,8 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_filter_buf = entry.filter.value_or(FilterConfig{});
   snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_filter_buf.raypath_text.c_str());
   g_filter_buf_removed = false;
+  g_filter_buf_snapshot = g_filter_buf;
+  g_filter_initial_present = entry.filter.has_value();
 
   // Save trackball state for Cancel restoration
   std::memcpy(g_saved_rotation, g_crystal_rotation, sizeof(g_saved_rotation));
@@ -480,6 +490,8 @@ void ResetModalState() {
   g_axis_buf[2] = {};
   g_filter_buf = {};
   g_filter_buf_removed = false;
+  g_filter_buf_snapshot = {};
+  g_filter_initial_present = false;
   g_raypath_buf[0] = '\0';
   std::memset(g_saved_rotation, 0, sizeof(g_saved_rotation));
   g_saved_zoom = 1.0f;
@@ -514,7 +526,16 @@ void CommitAllBuffers(GuiState& state) {
     entry.filter = std::nullopt;
   } else {
     g_filter_buf.raypath_text = g_raypath_buf;
-    entry.filter = g_filter_buf;
+    // Preserve the no-filter state for entries that had no filter and the user
+    // didn't touch any filter field — committing the default-constructed buffer
+    // would silently create an "* In PBD" filter that blocks all rays.
+    const FilterConfig& s = g_filter_buf_snapshot;
+    const bool buf_changed = g_filter_buf.action != s.action || g_filter_buf.raypath_text != s.raypath_text ||
+                             g_filter_buf.sym_p != s.sym_p || g_filter_buf.sym_b != s.sym_b ||
+                             g_filter_buf.sym_d != s.sym_d || g_filter_buf.name != s.name;
+    if (g_filter_initial_present || buf_changed) {
+      entry.filter = g_filter_buf;
+    }
   }
   g_thumbnail_cache.Invalidate(ly, en);
   state.MarkDirty();

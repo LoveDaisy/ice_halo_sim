@@ -792,26 +792,26 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // p2_modal/filter_modal_ok_sets_filter — open filter modal on empty entry, click OK to set filter
+  // p2_modal/filter_modal_ok_no_change_keeps_nullopt — open filter modal on empty
+  // entry, click OK without touching anything: entry must stay nullopt (otherwise
+  // a default-constructed filter "* In PBD" silently blocks all rays).
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "filter_modal_ok_sets_filter");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "filter_modal_ok_no_change_keeps_nullopt");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
 
-      // Entry starts with no filter
+      // Entry starts with no filter.
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
 
-      // Open filter modal
+      // Open filter modal, click OK immediately without modifying anything.
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(3);
-
-      // Click OK to set the default filter on the entry
       ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
-      // Filter should now be set (modal OK commits filter buffer to state)
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      // Filter must still be nullopt.
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
     };
   }
 }
