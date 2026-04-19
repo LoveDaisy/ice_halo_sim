@@ -5,7 +5,7 @@ namespace lumice::gui {
 
 // Layout constants
 constexpr int kInitWindowWidth = 1600;
-constexpr int kInitWindowHeight = 900;
+constexpr int kInitWindowHeight = 980;
 constexpr int kMinWindowWidth = 1024;
 constexpr int kMinWindowHeight = 640;
 constexpr float kLeftPanelWidth = 360.0f;

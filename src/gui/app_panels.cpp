@@ -130,32 +130,6 @@ void RenderTopBar(float window_width) {
     }
   }
 
-  // Ray count shortcut
-  ImGui::SameLine();
-  ImGui::TextDisabled("|");
-  ImGui::SameLine();
-
-  if (simulating) {
-    ImGui::BeginDisabled();
-  }
-  if (ImGui::Checkbox("Infinite##topbar", &g_state.sim.infinite)) {
-    g_state.MarkDirty();
-  }
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(120);
-  if (!g_state.sim.infinite) {
-    if (ImGui::SliderFloat("Rays(M)##topbar", &g_state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f")) {
-      g_state.MarkDirty();
-    }
-  } else {
-    ImGui::BeginDisabled();
-    ImGui::SliderFloat("Rays(M)##topbar", &g_state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f");
-    ImGui::EndDisabled();
-  }
-  if (simulating) {
-    ImGui::EndDisabled();
-  }
-
   // Right-panel collapse toggle — right-aligned so it sits flush with the right panel's outer edge.
   // Also note: when the right panel is already collapsed, RenderCollapsedStrip's internal button
   // still expands it; this top-bar toggle simply offers a symmetric alternate entry point.
