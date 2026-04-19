@@ -4,11 +4,38 @@
 
 #include "test_gui_shared.hpp"
 
-// GuiFunc that renders GUI and captures crystal texture when requested
+// Rebuild the crystal mesh (if changed) and render it into g_crystal_renderer's
+// FBO so tests can capture from it. Test-only helper; the modal guard mirrors
+// the previous in-panel logic so the edit modal's FBO content is not overwritten.
+static void DriveCrystalPreviewFboForTest() {
+  if (gui::IsEditModalCrystalTabActive()) {
+    return;
+  }
+  // Visual smoke tests configure entry [0][0] only. If a multi-entry visual test
+  // is later added, change this helper to accept layer/entry indices.
+  if (gui::g_state.layers.empty() || gui::g_state.layers[0].entries.empty()) {
+    return;
+  }
+  const auto& cr = gui::g_state.layers[0].entries[0].crystal;
+  int hash = gui::CrystalParamHash(cr);
+  if (hash != gui::g_crystal_mesh_hash) {
+    int result = gui::BuildAndUploadCrystalMesh(cr);
+    if (result != 0) {
+      gui::g_crystal_mesh_hash = hash;
+    }
+  }
+  auto style = static_cast<gui::CrystalStyle>(gui::g_crystal_style);
+  gui::g_crystal_renderer.Render(gui::g_crystal_rotation, gui::g_crystal_zoom, style);
+}
+
+// GuiFunc that renders GUI and captures crystal texture when requested.
+//
+// Note: the left panel no longer updates g_crystal_renderer's FBO every frame
+// (task-remove-bottom-preview). Tests using this GuiFunc drive the FBO here
+// on the selected entry's crystal before sampling the texture.
 static void ScreenshotGuiFunc(ImGuiTestContext* /*ctx*/) {
-  // Normal GUI rendering is handled by the main loop.
-  // Capture crystal texture on main thread when requested.
   if (g_capture.capture_requested && !g_capture.capture_done) {
+    DriveCrystalPreviewFboForTest();
     int w = gui::g_crystal_renderer.Width();
     int h = gui::g_crystal_renderer.Height();
     auto tex_id = static_cast<unsigned int>(gui::g_crystal_renderer.GetTextureId());

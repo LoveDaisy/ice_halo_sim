@@ -257,8 +257,7 @@ void ThumbnailCache::RenderThumbnail(int layer_idx, int entry_idx, const GuiStat
   GetThumbnailRotation(preset, rotation);
 
   // Render to the shared renderer's FBO
-  constexpr float kThumbnailZoom = 2.5f;
-  renderer_.Render(rotation, kThumbnailZoom, CrystalStyle::kHiddenLine);
+  renderer_.Render(rotation, kDefaultCrystalZoom, CrystalStyle::kHiddenLine);
 
   // Ensure per-entry texture exists
   uint64_t key = MakeKey(layer_idx, entry_idx);

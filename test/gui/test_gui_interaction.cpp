@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <thread>
 
 #include "test_gui_shared.hpp"
@@ -137,14 +138,15 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
 
-      // Add an entry via the "+ Entry" button in layer 0
-      ctx->ItemClick("**/+ Entry##layer_0");
+      // Add an entry via the "+ Crystal" button in layer 0
+      ctx->ItemClick("**/+ Crystal##layer_0");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
 
-      // Delete the new entry (x##0_1 for layer 0, entry 1)
-      // Entries can only be deleted when layer has >1 entries
-      ctx->ItemClick("**/x##0_1");
+      // Delete the new entry (×##del_0_1 for layer 0, entry 1). The hover button
+      // is always in the ImGui tree (alpha=0 when not hovered) so test engine
+      // can click it by ID even if the card is not hovered.
+      ctx->ItemClick("**/\xC3\x97##del_0_1");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
     };
@@ -168,14 +170,209 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Verify filter is set
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
 
-      // Open filter modal, click Remove to clear
-      ctx->ItemClick("**/E##fi");
+      // Open filter modal, click Remove (buffered) then OK to commit removal.
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);  // popup open + Filter tab activation (SetSelected first-frame)
+      ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
-      ctx->ItemClick("Edit Filter/Remove Filter##filter");
+      ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
       // Verify filter is cleared
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+    };
+  }
+
+  // P1: scrum-gui-polish-v7 152.5 — Remove Filter marks the edit controls as
+  // disabled (Raypath InputText) so the "will be removed on OK" banner is
+  // consistent with the rest of the Filter tab.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_disables_controls");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      gui::g_state.layers[0].entries[0].filter = f;
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      // Before Remove: Raypath control is enabled.
+      auto info_before = ctx->ItemInfo("**/Raypath##filter_modal");
+      IM_CHECK((info_before.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      // After Remove: Raypath control is disabled.
+      auto info_after = ctx->ItemInfo("**/Raypath##filter_modal");
+      IM_CHECK((info_after.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // Cancel so we don't leave state polluted for later tests.
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // P1: scrum-gui-polish-v7 152.5 — Undo Remove restores editability and
+  // committing OK keeps the filter present (the buffered Remove intent was
+  // reverted before commit).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "undo_remove_restores_controls");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      gui::g_state.layers[0].entries[0].filter = f;
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Undo Remove##filter_undo");
+      ctx->Yield(2);
+
+      // Controls restored to enabled state.
+      auto info = ctx->ItemInfo("**/Raypath##filter_modal");
+      IM_CHECK((info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+      // Filter must survive the round-trip since Remove was undone.
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+    };
+  }
+
+  // P1: scrum-gui-polish-v7 152.6 — Edit modal tab titles carry a trailing
+  // " *" marker when the in-flight buffer diverges from its open-time
+  // snapshot. Tab IDs are anchored to stable "###<slug>_tab" suffixes so the
+  // label change does not reset SelectedTabId; the test reads the truncated
+  // display string from ItemInfo().DebugLabel. Covers AC #1 / #2 / #3 / #4 / #5.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "tab_dirty_mark");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      auto is_dirty = [&](const char* tab_ref) -> bool {
+        auto info = ctx->ItemInfo(tab_ref);
+        return info.ID != 0 && std::strstr(info.DebugLabel, "*") != nullptr;
+      };
+
+      ResetTestState();
+      ctx->Yield(2);
+      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+
+      // AC #1: on modal open, no tab carries a dirty marker.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK(!is_dirty("**/###crystal_tab"));
+      IM_CHECK(!is_dirty("**/###axis_tab"));
+      IM_CHECK(!is_dirty("**/###filter_tab"));
+
+      // AC #2: editing Crystal's Height only dirties the Crystal tab.
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 1.0f);
+      ctx->Yield(2);
+      IM_CHECK(is_dirty("**/###crystal_tab"));
+      IM_CHECK(!is_dirty("**/###axis_tab"));
+      IM_CHECK(!is_dirty("**/###filter_tab"));
+
+      // AC #3: restoring the original value clears the dirty marker.
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h);
+      ctx->Yield(2);
+      IM_CHECK(!is_dirty("**/###crystal_tab"));
+
+      // AC #5: Cancel discards buffer; reopening shows no marker.
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 2.0f);
+      ctx->Yield(2);
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK(!is_dirty("**/###crystal_tab"));
+
+      // AC #4: OK commits new baseline; reopening shows no marker.
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 3.0f);
+      ctx->Yield(2);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK(!is_dirty("**/###crystal_tab"));
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // P1: Edit modal OK without any change must NOT clear the rendered preview
+  // or arm Revert. Regression guard for scrum-gui-polish-v7 152.2: previously
+  // CommitAllBuffers unconditionally MarkFilterDirty()'d after any OK,
+  // wiping snapshot_intensity + flipping sim_state to kModified.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit", "ok_no_change_preserves_state");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Simulate "finite rays just finished": sim_state == kDone with a
+      // non-zero snapshot intensity that the diff-gate must preserve.
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.snapshot_intensity = 0.5f;
+      gui::g_state.intensity_locked = false;
+      gui::g_state.dirty = false;
+      ctx->Yield();
+
+      // Open Edit Entry modal and immediately click OK (no field touched).
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      // Render-invalidation must not have fired:
+      //   - sim_state still kDone (no kModified ⇒ Revert button stays hidden)
+      //   - snapshot_intensity preserved (>0 rather than ==0.5 so future
+      //     normalization changes don't break the semantic assertion)
+      //   - intensity_locked still false (no upload lock armed)
+      //   - dirty still false (no spurious unsaved-changes flag)
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
+      IM_CHECK_GT(gui::g_state.snapshot_intensity, 0.0f);
+      IM_CHECK(!gui::g_state.intensity_locked);
+      IM_CHECK(!gui::g_state.dirty);
+    };
+  }
+
+  // P1: Positive-path counterpart of ok_no_change_preserves_state — when the
+  // OK actually changes the entry (here: Remove Filter on an entry that has
+  // one), render-invalidation MUST fire. Guards against a regressed diff-gate
+  // where operator== wrongly returns true.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit", "ok_with_change_invalidates");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Stage a filter on the entry so Remove Filter is a real change.
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      gui::g_state.layers[0].entries[0].filter = f;
+      // "finite rays just finished" snapshot state.
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.snapshot_intensity = 0.5f;
+      gui::g_state.intensity_locked = false;
+      gui::g_state.dirty = false;
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      // Render-invalidation MUST have fired (all four effects):
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.0f);
+      IM_CHECK(gui::g_state.intensity_locked);
+      IM_CHECK(gui::g_state.dirty);
     };
   }
 
@@ -200,69 +397,6 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Verify state was reset
       IM_CHECK_EQ(gui::g_state.dirty, false);
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
-    };
-  }
-
-  // P1: Mouse wheel over crystal preview should zoom only, not scroll parent panel
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_crystal", "preview_scroll_isolation");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      // Left panel now renders cards directly (no tabs) — just let layout settle
-      ctx->Yield(3);  // Let layout settle: mesh rebuild → FBO render
-
-      ImGuiWindow* panel = ctx->GetWindowByRef("##LeftPanel");
-      IM_CHECK(panel != nullptr);
-
-      FILE* diag = fopen("/tmp/lumice_scroll_test.log", "w");
-
-      // Default state: scroll at top (0). Panel should have scrollable content.
-      float scroll_max = panel->ScrollMax.y;
-      if (diag) {
-        fprintf(diag, "scroll_max=%.1f content=%.1f panel_h=%.1f scroll=%.1f\n", scroll_max, panel->ContentSize.y,
-                panel->Size.y, panel->Scroll.y);
-      }
-      IM_CHECK(scroll_max > 0.0f);  // Panel content must overflow for this test
-
-      // Panel scroll is at 0 (top), so scrolling DOWN is possible.
-      // The 3D Preview is partially visible near the bottom of the visible area.
-      float scroll_before = panel->Scroll.y;
-      float zoom_before = gui::g_crystal_zoom;
-
-      // Move mouse into the visible portion of the crystal preview.
-      // Preview starts at ~(content_h - preview_size) from content top.
-      // At scroll=0, visible range is [0, panel_h]. Preview top is at
-      // content_h - scroll_max - preview_size, approximately.
-      // Use 85% of visible panel height to target the preview area.
-      ImVec2 panel_pos = panel->Pos;
-      float panel_w = panel->Size.x;
-      ImVec2 preview_center(panel_pos.x + panel_w * 0.5f, panel_pos.y + panel->Size.y * 0.85f);
-      if (diag) {
-        fprintf(diag, "mouse=(%.1f,%.1f) scroll_before=%.1f zoom_before=%.3f\n", preview_center.x, preview_center.y,
-                scroll_before, zoom_before);
-      }
-
-      ctx->MouseMoveToPos(preview_center);
-      ctx->Yield();
-
-      // Scroll DOWN (negative delta = scroll content down in ImGui)
-      ctx->MouseWheelY(-3.0f);
-      ctx->Yield(2);
-
-      float scroll_after = panel->Scroll.y;
-      float zoom_after = gui::g_crystal_zoom;
-      if (diag) {
-        fprintf(diag, "scroll: %.1f -> %.1f, zoom: %.3f -> %.3f\n", scroll_before, scroll_after, zoom_before,
-                zoom_after);
-        fclose(diag);
-      }
-
-      // Zoom should have changed (mouse was over preview)
-      IM_CHECK(zoom_after != zoom_before);
-      // Panel scroll should NOT have changed
-      IM_CHECK_EQ(scroll_after, scroll_before);
     };
   }
 }
@@ -334,10 +468,8 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 2);
 
-      // Select the new layer (idx 1) then delete it
-      gui::SetSelectedLayerIdx(1);
-      ctx->Yield();
-      ctx->ItemClick("**/- Layer");
+      // Delete layer 1 via its per-layer header "x" button
+      ctx->ItemClick("**/x##layer_1");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
     };
@@ -357,8 +489,8 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
 
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
 
-      // Copy the entry
-      ctx->ItemClick("**/Copy##0_0");
+      // Duplicate the entry (hover button; ID is always addressable even at alpha=0).
+      ctx->ItemClick("**/D##dup_0_0");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
 
@@ -459,15 +591,15 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
 
       // Open crystal modal
-      ctx->ItemClick("**/E##cr");
+      ctx->ItemClick("**/Edit##cr");
       ctx->Yield(3);
 
       // Write 0 via the input widget — should be clamped to min (0.01)
-      ctx->ItemInputValue("Edit Crystal/##Height##modal_cr_input", 0.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 0.0f);
       ctx->Yield();
 
       // Click OK to commit
-      ctx->ItemClick("Edit Crystal/OK##crystal");
+      ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
       // Height should be clamped to >= 0.01 (kLogLinear with min=0.01)
@@ -487,15 +619,15 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->Yield();
 
       // Open crystal modal
-      ctx->ItemClick("**/E##cr");
+      ctx->ItemClick("**/Edit##cr");
       ctx->Yield(3);
 
       // Write 0 to Upper H — should be allowed (min=0.0 for kLogLinear)
-      ctx->ItemInputValue("Edit Crystal/##Upper H##modal_cr_input", 0.0f);
+      ctx->ItemInputValue("**/##Upper H##modal_cr_input", 0.0f);
       ctx->Yield();
 
       // Click OK
-      ctx->ItemClick("Edit Crystal/OK##crystal");
+      ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 0.0f);
@@ -814,11 +946,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       float height_before = cr.height;
 
       // Click Edit Crystal button on the first entry card
-      ctx->ItemClick("**/E##cr");
+      ctx->ItemClick("**/Edit##cr");
       ctx->Yield(3);
 
       // Click Cancel in the modal
-      ctx->ItemClick("Edit Crystal/Cancel##crystal");
+      ctx->ItemClick("**/Cancel##edit_modal");
       ctx->Yield(2);
 
       // State unchanged
@@ -838,15 +970,15 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       float initial_height = gui::g_state.layers[0].entries[0].crystal.height;
 
       // Open crystal modal
-      ctx->ItemClick("**/E##cr");
+      ctx->ItemClick("**/Edit##cr");
       ctx->Yield(3);
 
       // Modify height via the input widget in the modal
-      ctx->ItemInputValue("Edit Crystal/##Height##modal_cr_input", 5.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 5.0f);
       ctx->Yield();
 
       // Click OK to commit buffer to state
-      ctx->ItemClick("Edit Crystal/OK##crystal");
+      ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
       // Height should be updated to 5.0
@@ -854,26 +986,53 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // p2_modal/filter_modal_ok_sets_filter — open filter modal on empty entry, click OK to set filter
+  // p2_modal/filter_modal_ok_no_change_keeps_nullopt — open filter modal on empty
+  // entry, click OK without touching anything: entry must stay nullopt (otherwise
+  // a default-constructed filter "* In PBD" silently blocks all rays).
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "filter_modal_ok_sets_filter");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "filter_modal_ok_no_change_keeps_nullopt");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
 
-      // Entry starts with no filter
+      // Entry starts with no filter.
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
 
-      // Open filter modal
-      ctx->ItemClick("**/E##fi");
+      // Open filter modal, click OK immediately without modifying anything.
+      ctx->ItemClick("**/Edit##fi");
       ctx->Yield(3);
-
-      // Click OK to set the default filter on the entry
-      ctx->ItemClick("Edit Filter/OK##filter");
+      ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
-      // Filter should now be set (modal OK commits filter buffer to state)
+      // Filter must still be nullopt.
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+    };
+  }
+
+  // p2_modal/filter_modal_ok_change_creates_filter — open filter modal on empty
+  // entry, modify a field (action), click OK: entry.filter must be created.
+  // Covers the buf_changed=true && !initial_present branch of CommitAllBuffers.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "filter_modal_ok_change_creates_filter");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Entry starts with no filter.
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      // Open filter modal, type a raypath (touches g_filter_buf via g_raypath_buf
+      // sync in CommitAllBuffers), click OK.
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(3);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "1-3");
+      ctx->Yield();
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      // Filter must now exist with the typed raypath.
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text, std::string("1-3"));
     };
   }
 }

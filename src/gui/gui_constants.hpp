@@ -4,11 +4,23 @@
 namespace lumice::gui {
 
 // Layout constants
+// Initial window size. Height is bound to the right-panel content footprint:
+// when adding new control groups / expanding existing groups, re-evaluate this
+// constant to avoid spawning a scrollbar on fresh install. On constrained
+// displays (e.g. 1080p + large Dock, Windows 125% scaling), main.cpp clamps
+// the actual creation size via glfwGetMonitorWorkarea — see
+// ClampInitWindowSize() in main.cpp / ClampWindowSizeToWorkarea() in
+// window_sizing.hpp.
 constexpr int kInitWindowWidth = 1600;
-constexpr int kInitWindowHeight = 900;
+constexpr int kInitWindowHeight = 980;
 constexpr int kMinWindowWidth = 1024;
 constexpr int kMinWindowHeight = 640;
-constexpr float kLeftPanelWidth = 360.0f;
+// Safe margin for OS window decorations (title bar + borders). Deducted from
+// the monitor work area (which already excludes menubar/Dock/taskbar) to
+// compute the usable creation size. 50 px covers the typical 28-32 px
+// decoration on macOS/Windows/Linux with ~1.5x buffer.
+constexpr int kWindowDecorationMargin = 50;
+constexpr float kLeftPanelWidth = 400.0f;
 constexpr float kRightPanelWidth = 300.0f;
 constexpr float kTopBarHeight = 40.0f;
 constexpr float kStatusBarHeight = 28.0f;
@@ -46,8 +58,17 @@ constexpr float kInputWidth = 60.0f;
 // Card thumbnail (offscreen crystal rendering)
 // Currently used for both FBO render resolution and UI display size.
 // If HiDPI support is needed later, split into separate render/display constants.
-constexpr int kThumbnailSize = 64;
+constexpr int kThumbnailSize = 96;
 constexpr int kMaxThumbnailUpdatesPerFrame = 2;
+
+// Vertical gap between stacked hover-action buttons (Delete on top, Duplicate below).
+constexpr float kHoverBtnGap = 4.0f;
+
+// Default camera zoom for the crystal renderer. Lower value → crystal fills
+// more of the canvas (screen coverage ≈ 1/zoom). Must stay in sync between
+// the thumbnail cache and the edit-modal preview so the crystal does not
+// visually jump when opening the modal.
+constexpr float kDefaultCrystalZoom = 1.4f;
 
 // Auxiliary line overlay
 constexpr int kMaxSunCircles = 16;

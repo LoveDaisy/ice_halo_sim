@@ -28,12 +28,6 @@ struct EditRequest {
 const EditRequest& GetEditRequest();
 void ResetEditRequest();
 
-// ---- Selection state accessors ----
-int GetSelectedLayerIdx();
-int GetSelectedEntryIdx();
-void SetSelectedLayerIdx(int idx);
-void SetSelectedEntryIdx(int idx);
-
 // ---- Axis distribution controls (shared between panels and edit modals) ----
 
 // Render axis distribution controls (combo + mean + std sliders).

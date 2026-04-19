@@ -91,10 +91,6 @@ static bool RenderNonlinearSlider(const char* slider_id, float* value, float min
   return changed;
 }
 
-// ---- Selection state ----
-int g_selected_layer = 0;
-int g_selected_entry = 0;
-
 // ---- Edit request state ----
 EditRequest g_edit_request;
 
@@ -161,16 +157,16 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
     return "None";
   }
   const auto& fc = f.value();
+  // Format: "<raypath_text or *> <In|Out>[ <sym>]". Example: "1-3 In PBD".
   std::string result;
-  result += (fc.action == 0) ? "In " : "Out ";
-
   if (fc.raypath_text.size() > 12) {
-    result += fc.raypath_text.substr(0, 12) + "...";
+    result = fc.raypath_text.substr(0, 12) + "...";
   } else if (!fc.raypath_text.empty()) {
-    result += fc.raypath_text;
+    result = fc.raypath_text;
   } else {
-    result += "*";
+    result = "*";
   }
+  result += (fc.action == 0) ? " In" : " Out";
 
   std::string sym;
   if (fc.sym_p)
@@ -190,9 +186,24 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
   if (expr)            \
   state.MarkDirty()
 
-// Card layout constants (kThumbnailSize is in gui_constants.hpp)
-constexpr float kCardHeight = 84.0f;
-constexpr float kCardSpacing = 4.0f;
+// Card layout: height is driven by ImGuiChildFlags_AutoResizeY so font/theme
+// changes adapt automatically (kThumbnailSize lives in gui_constants.hpp).
+
+// Destructive action button palette (delete/remove). Shared by entry-card and
+// layer-header "x" buttons so the visual language stays consistent.
+constexpr ImVec4 kBtnDestructiveNormal{ 0.70f, 0.22f, 0.22f, 1.0f };
+constexpr ImVec4 kBtnDestructiveHovered{ 0.85f, 0.30f, 0.30f, 1.0f };
+constexpr ImVec4 kBtnDestructiveActive{ 0.60f, 0.15f, 0.15f, 1.0f };
+
+void PushDestructiveStyle() {
+  ImGui::PushStyleColor(ImGuiCol_Button, kBtnDestructiveNormal);
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kBtnDestructiveHovered);
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, kBtnDestructiveActive);
+}
+
+void PopDestructiveStyle() {
+  ImGui::PopStyleColor(3);
+}
 
 }  // namespace
 
@@ -435,26 +446,8 @@ void ResetEditRequest() {
   g_edit_request = EditRequest{};
 }
 
-int GetSelectedLayerIdx() {
-  return g_selected_layer;
-}
-
-int GetSelectedEntryIdx() {
-  return g_selected_entry;
-}
-
-void SetSelectedLayerIdx(int idx) {
-  g_selected_layer = idx;
-}
-
-void SetSelectedEntryIdx(int idx) {
-  g_selected_entry = idx;
-}
-
 void ResetPendingDeleteState() {
   g_edit_request = EditRequest{};
-  g_selected_layer = 0;
-  g_selected_entry = 0;
 }
 
 
@@ -462,107 +455,165 @@ void ResetPendingDeleteState() {
 
 bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   auto& entry = state.layers[layer_idx].entries[entry_idx];
-  bool is_selected = (g_selected_layer == layer_idx && g_selected_entry == entry_idx);
 
   ImGui::PushID(entry_idx);
 
-  // Highlight selected card
-  if (is_selected) {
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.25f, 0.35f, 0.55f, 0.4f));
-  }
+  ImGui::BeginChild("##card", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
 
-  ImGui::BeginChild("##card", ImVec2(0, kCardHeight), ImGuiChildFlags_Borders);
+  // Previous-frame hover state controls the alpha of the hover-action buttons
+  // (always-render + alpha transition to keep click paths stable).
+  ImGuiID hover_persist_id = ImGui::GetID("##card_hover_persist");
+  bool hover_prev = ImGui::GetStateStorage()->GetBool(hover_persist_id, false);
 
-  // Click anywhere in card to select
-  if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-    if (!is_selected) {
-      g_crystal_mesh_hash = -1;  // Force 3D preview refresh on selection change
-    }
-    g_selected_layer = layer_idx;
-    g_selected_entry = entry_idx;
-  }
+  // Use frame-height spacing so each row reserves room for the Edit button (taller than text);
+  // otherwise Row 0-2 buttons would overlap the prop. slider in Row 3.
+  float row_h = ImGui::GetFrameHeightWithSpacing();
+  float spacing_x = ImGui::GetStyle().ItemSpacing.x;
+  float spacing_y = ImGui::GetStyle().ItemSpacing.y;
+
+  // Thumbnail display size matches the right column's content height:
+  // top of Row 0 (= thumb_pos.y) to bottom of Row 3 (= row_h*4 - spacing_y).
+  // Square (W=H) so the crystal aspect is preserved. kThumbnailSize is the FBO
+  // render resolution; ImGui scales the texture to thumb_display_size on draw.
+  float thumb_display_size = row_h * 4.0f - spacing_y;
 
   // Left column: crystal thumbnail (or grey placeholder if not yet rendered)
   ImVec2 thumb_pos = ImGui::GetCursorScreenPos();
   ImDrawList* draw_list = ImGui::GetWindowDrawList();
   auto thumb_tex = g_thumbnail_cache.GetTexture(layer_idx, entry_idx);
-  constexpr float kThumbSize = static_cast<float>(kThumbnailSize);
+  ImVec2 thumb_br(thumb_pos.x + thumb_display_size, thumb_pos.y + thumb_display_size);
   if (thumb_tex != 0) {
     // OpenGL texture Y-axis is flipped relative to ImGui: uv0=(0,1) uv1=(1,0)
-    draw_list->AddImage(static_cast<ImTextureID>(thumb_tex), thumb_pos,
-                        ImVec2(thumb_pos.x + kThumbSize, thumb_pos.y + kThumbSize), ImVec2(0, 1), ImVec2(1, 0));
+    draw_list->AddImage(static_cast<ImTextureID>(thumb_tex), thumb_pos, thumb_br, ImVec2(0, 1), ImVec2(1, 0));
   } else {
-    draw_list->AddRectFilled(thumb_pos, ImVec2(thumb_pos.x + kThumbSize, thumb_pos.y + kThumbSize),
-                             IM_COL32(60, 60, 60, 255));
+    draw_list->AddRectFilled(thumb_pos, thumb_br, IM_COL32(60, 60, 60, 255));
   }
-  draw_list->AddRect(thumb_pos, ImVec2(thumb_pos.x + kThumbSize, thumb_pos.y + kThumbSize),
-                     IM_COL32(100, 100, 100, 255));
+  draw_list->AddRect(thumb_pos, thumb_br, IM_COL32(100, 100, 100, 255));
 
-  // Right column
-  float right_x = thumb_pos.x + kThumbnailSize + ImGui::GetStyle().ItemSpacing.x;
-  float right_w = ImGui::GetContentRegionAvail().x - kThumbnailSize - ImGui::GetStyle().ItemSpacing.x;
+  // Right column — layout matches SliderWithInput's three-column model:
+  //   [text / slider (text_w)] [Edit button / input (kInputWidth)] [row label (kLabelColWidth)]
+  // so Row 1-3 align column boundaries with Row 4 automatically.
+  float right_x = thumb_pos.x + thumb_display_size + spacing_x;
+  float avail_w = ImGui::GetContentRegionAvail().x - thumb_display_size - spacing_x;
+  float text_w = std::max(40.0f, avail_w - kInputWidth - kLabelColWidth - spacing_x * 2);
 
-  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y));
+  auto emit_row = [&](int row_idx, const char* text_content, const char* btn_id, EditTarget target,
+                      const char* row_label, bool clip_text) {
+    ImVec2 line_start(right_x, thumb_pos.y + row_h * static_cast<float>(row_idx));
+    ImGui::SetCursorScreenPos(line_start);
+    if (clip_text) {
+      ImVec2 clip_min = line_start;
+      ImVec2 clip_max(line_start.x + text_w, line_start.y + ImGui::GetTextLineHeight() + 2.0f);
+      ImGui::PushClipRect(clip_min, clip_max, true);
+      ImGui::TextUnformatted(text_content);
+      ImGui::PopClipRect();
+    } else {
+      ImGui::TextUnformatted(text_content);
+    }
+    ImGui::SameLine();
+    ImGui::SetCursorScreenPos(ImVec2(line_start.x + text_w + spacing_x, line_start.y));
+    if (ImGui::Button(btn_id, ImVec2(kInputWidth, 0))) {
+      g_edit_request = { target, layer_idx, entry_idx };
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted(row_label);
+  };
 
-  // Row 1: Crystal type + Edit
+  // Row 1: Crystal type
   const char* type_name = (entry.crystal.type == CrystalType::kPrism) ? "Prism" : "Pyramid";
-  ImGui::Text("%s", type_name);
-  ImGui::SameLine(right_w - 30);
-  if (ImGui::SmallButton("E##cr")) {
-    g_edit_request = { EditTarget::kCrystal, layer_idx, entry_idx };
-  }
+  emit_row(0, type_name, "Edit##cr", EditTarget::kCrystal, "Crystal", false);
 
-  // Row 2: Axis preset + Edit
+  // Row 2: Axis preset
   std::string preset = AxisPresetName(entry.crystal);
-  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + ImGui::GetTextLineHeightWithSpacing()));
-  ImGui::Text("%s", preset.c_str());
-  ImGui::SameLine(right_w - 30);
-  if (ImGui::SmallButton("E##ax")) {
-    g_edit_request = { EditTarget::kAxis, layer_idx, entry_idx };
-  }
+  emit_row(1, preset.c_str(), "Edit##ax", EditTarget::kAxis, "Axis", false);
 
-  // Row 3: Filter summary + Edit
+  // Row 3: Filter summary (may exceed text_w — clip so it doesn't overlap the Edit button)
   std::string filter_text = FilterSummary(entry.filter);
-  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + ImGui::GetTextLineHeightWithSpacing() * 2));
-  ImGui::Text("%s", filter_text.c_str());
-  ImGui::SameLine(right_w - 30);
-  if (ImGui::SmallButton("E##fi")) {
-    g_edit_request = { EditTarget::kFilter, layer_idx, entry_idx };
-  }
+  emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "Filter", true);
 
-  // Row 4: Proportion slider (compact)
-  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + ImGui::GetTextLineHeightWithSpacing() * 3));
-  ImGui::PushItemWidth(right_w - 50);
-  char prop_id[32];
-  snprintf(prop_id, sizeof(prop_id), "##prop_%d_%d", layer_idx, entry_idx);
-  if (ImGui::SliderFloat(prop_id, &entry.proportion, 0.0f, 100.0f, "%.1f")) {
+  // Row 4: Proportion — reuse SliderWithInput for [slider][input] "prop." layout
+  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + row_h * 3.0f));
+  char prop_label[32];
+  snprintf(prop_label, sizeof(prop_label), "prop.##prop_%d_%d", layer_idx, entry_idx);
+  if (SliderWithInput(prop_label, &entry.proportion, 0.0f, 100.0f, "%.1f")) {
     state.MarkDirty();
   }
-  ImGui::PopItemWidth();
 
-  ImGui::EndChild();  // ##card — must be unconditional
+  // Hover action buttons: stacked vertically at the right edge of the card —
+  // Delete (×) on top, Duplicate (D) below, separated by kHoverBtnGap. Alpha is
+  // driven by previous-frame hover state; buttons are always in the ImGui tree
+  // so click paths remain stable, only visibility transitions.
+  //
+  // Fast-swipe mitigation: vertical stacking (v6/card-layout-v2) prevents a
+  // single horizontal swipe from crossing the always-hit-tested Delete button,
+  // which was the original backlog concern. Confirm dialog / undo intentionally
+  // avoided — v5 verified that BeginDisabled(!hover_prev) and clicked+hover_prev
+  // both break imgui_test_engine MouseMove+Yield+ItemClick timing.
+  //
+  // AutoResizeY first-frame drift (backlog Minor 3): ImGuiChildFlags_AutoResizeY
+  // only auto-fits the Y dimension; X is driven by the parent layout and stable
+  // on the first frame. The Y coordinates (del_y/dup_y) anchor to card_top, not
+  // WindowSize.y, so they are also frame-stable. No positional fix needed.
+  //
+  // Coordinate strategy:
+  //   x: card_right - btn_w - kHoverBtnPad
+  //   delete y: card_top + kHoverBtnPad
+  //   duplicate y: delete_y + btn_h + kHoverBtnGap
+  char dup_id[32];
+  char del_id[32];
+  // Glyphs: "D" for Duplicate (less ambiguous than "+", which reads as "Add"),
+  // "\xC3\x97" (U+00D7 ×) for Delete. Both ASCII / Latin-1 — covered by ImGui's
+  // default Proggy Clean font; replacing them with proper SVG icons is tracked
+  // in backlog as "GUI icon font integration (FontAwesome)".
+  snprintf(dup_id, sizeof(dup_id), "D##dup_%d_%d", layer_idx, entry_idx);
+  snprintf(del_id, sizeof(del_id), "\xC3\x97##del_%d_%d", layer_idx, entry_idx);
 
-  if (is_selected) {
-    ImGui::PopStyleColor();
+  float frame_pad_x = ImGui::GetStyle().FramePadding.x;
+  float dup_glyph_w = ImGui::CalcTextSize("D").x;
+  float del_glyph_w = ImGui::CalcTextSize("\xC3\x97").x;
+  float btn_w = std::max(dup_glyph_w, del_glyph_w) + frame_pad_x * 2.0f;
+  float btn_h = ImGui::GetFrameHeight();
+  constexpr float kHoverBtnPad = 2.0f;
+  ImVec2 card_win_pos = ImGui::GetWindowPos();
+  ImVec2 card_win_sz = ImGui::GetWindowSize();
+  float btn_x = card_win_pos.x + card_win_sz.x - btn_w - kHoverBtnPad;
+  float del_y = card_win_pos.y + kHoverBtnPad;
+  float dup_y = del_y + btn_h + kHoverBtnGap;
+
+  ImGui::PushStyleVar(ImGuiStyleVar_Alpha, hover_prev ? 1.0f : 0.0f);
+  // Delete button (top): red when enabled (destructive action); auto-greyed when
+  // disabled (only one entry in layer — cannot remove last entry).
+  ImGui::SetCursorScreenPos(ImVec2(btn_x, del_y));
+  bool can_delete_entry = state.layers[layer_idx].entries.size() > 1;
+  if (can_delete_entry) {
+    PushDestructiveStyle();
+  } else {
+    ImGui::BeginDisabled();
   }
+  bool delete_clicked = ImGui::SmallButton(del_id);
+  if (can_delete_entry) {
+    PopDestructiveStyle();
+  } else {
+    ImGui::EndDisabled();
+  }
+  // Duplicate button (below)
+  ImGui::SetCursorScreenPos(ImVec2(btn_x, dup_y));
+  bool dup_clicked = ImGui::SmallButton(dup_id);
+  ImGui::PopStyleVar();
 
-  // Buttons after the card (on same line or next line)
-  // Copy button
-  char copy_id[32];
-  snprintf(copy_id, sizeof(copy_id), "Copy##%d_%d", layer_idx, entry_idx);
-  if (ImGui::SmallButton(copy_id)) {
-    // Deep copy this entry and append to the same layer
+  if (dup_clicked) {
     auto& entries = state.layers[layer_idx].entries;
-    entries.push_back(entry);  // copy
+    entries.push_back(entry);  // deep copy
     g_thumbnail_cache.OnLayerStructureChanged();
     state.MarkDirty();
   }
 
-  // Delete button (returns whether clicked)
-  ImGui::SameLine();
-  char del_id[32];
-  snprintf(del_id, sizeof(del_id), "x##%d_%d", layer_idx, entry_idx);
-  bool delete_clicked = ImGui::SmallButton(del_id);
+  // Persist hover state for next frame (computed while still inside the child
+  // window so widget hover does not disqualify it).
+  bool hover_now = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+  ImGui::GetStateStorage()->SetBool(hover_persist_id, hover_now);
+
+  ImGui::EndChild();  // ##card — must be unconditional
 
   ImGui::PopID();
   return delete_clicked;
@@ -579,11 +630,51 @@ void RenderLayer(GuiState& state, int layer_idx) {
   char header_label[32];
   snprintf(header_label, sizeof(header_label), "Layer %d", layer_idx + 1);
 
-  if (ImGui::CollapsingHeader(header_label, ImGuiTreeNodeFlags_DefaultOpen)) {
+  bool header_open =
+      ImGui::CollapsingHeader(header_label, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowItemOverlap);
+
+  // Right-aligned delete button on the header row. Only enabled when more than
+  // one layer exists (the scattering model requires at least one layer).
+  char layer_del_id[32];
+  snprintf(layer_del_id, sizeof(layer_del_id), "x##layer_%d", layer_idx);
+  bool can_delete_layer = state.layers.size() > 1;
+  float layer_del_w = ImGui::CalcTextSize("x").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+  ImGui::SameLine(ImGui::GetContentRegionMax().x - layer_del_w);
+  if (can_delete_layer) {
+    PushDestructiveStyle();
+  } else {
+    ImGui::BeginDisabled();
+  }
+  bool layer_delete_clicked = ImGui::SmallButton(layer_del_id);
+  if (can_delete_layer) {
+    PopDestructiveStyle();
+  } else {
+    ImGui::EndDisabled();
+  }
+  if (layer_delete_clicked && can_delete_layer) {
+    state.layers.erase(state.layers.begin() + layer_idx);
+    g_thumbnail_cache.OnLayerStructureChanged();
+    state.MarkDirty();
+    ImGui::PopID();
+    return;  // Skip rendering the rest; layer has been erased.
+  }
+
+  if (header_open) {
     // Multi-scatter probability slider
     char prob_id[32];
     snprintf(prob_id, sizeof(prob_id), "Prob.##layer_%d", layer_idx);
+    bool single_layer = state.layers.size() <= 1;
+    ImGui::BeginDisabled(single_layer);
+    ImGui::BeginGroup();
     DIRTY_IF(SliderWithInput(prob_id, &layer.probability, 0.0f, 1.0f, "%.2f"));
+    ImGui::EndGroup();
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      const char* prob_tip = single_layer ?
+                                 "Fraction of rays continuing to the next layer.\nAlways 0 for a single layer." :
+                                 "Fraction of rays continuing to the next layer";
+      ImGui::SetTooltip("%s", prob_tip);
+    }
 
     // Render entry cards with deferred deletion
     int pending_delete_entry = -1;
@@ -599,17 +690,13 @@ void RenderLayer(GuiState& state, int layer_idx) {
     if (pending_delete_entry >= 0 && layer.entries.size() > 1) {
       layer.entries.erase(layer.entries.begin() + pending_delete_entry);
       g_thumbnail_cache.OnLayerStructureChanged();
-      // Clamp selected entry if needed
-      if (g_selected_layer == layer_idx && g_selected_entry >= static_cast<int>(layer.entries.size())) {
-        g_selected_entry = static_cast<int>(layer.entries.size()) - 1;
-      }
       state.MarkDirty();
     }
 
     // Add entry button
     ImGui::Spacing();
     char add_id[32];
-    snprintf(add_id, sizeof(add_id), "+ Entry##layer_%d", layer_idx);
+    snprintf(add_id, sizeof(add_id), "+ Crystal##layer_%d", layer_idx);
     if (ImGui::SmallButton(add_id)) {
       layer.entries.emplace_back();
       g_thumbnail_cache.OnLayerStructureChanged();

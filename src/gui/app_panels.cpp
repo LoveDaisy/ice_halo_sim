@@ -7,7 +7,6 @@
 
 #include "config/render_config.hpp"
 #include "gui/app.hpp"
-#include "gui/crystal_preview.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
@@ -25,6 +24,18 @@ void RenderTopBar(float window_width) {
   ImGui::Begin("##TopBar", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse);
+
+  // Left-panel collapse toggle (placed before Run/Stop; owns the leftmost slot of the top bar
+  // so it can never overlap with panel-internal headers).
+  {
+    const char* left_toggle_label = g_panel_collapsed ? ">##left_panel_toggle" : "<##left_panel_toggle";
+    if (ImGui::Button(left_toggle_label)) {
+      g_panel_collapsed = !g_panel_collapsed;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+  }
 
   // Run/Stop — fixed width to prevent layout shift
   bool simulating = (g_state.sim_state == SimState::kSimulating);
@@ -119,30 +130,21 @@ void RenderTopBar(float window_width) {
     }
   }
 
-  // Ray count shortcut
-  ImGui::SameLine();
-  ImGui::TextDisabled("|");
-  ImGui::SameLine();
-
-  if (simulating) {
-    ImGui::BeginDisabled();
-  }
-  if (ImGui::Checkbox("Infinite##topbar", &g_state.sim.infinite)) {
-    g_state.MarkDirty();
-  }
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(120);
-  if (!g_state.sim.infinite) {
-    if (ImGui::SliderFloat("Rays(M)##topbar", &g_state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f")) {
-      g_state.MarkDirty();
+  // Right-panel collapse toggle — right-aligned so it sits flush with the right panel's outer edge.
+  // Also note: when the right panel is already collapsed, RenderCollapsedStrip's internal button
+  // still expands it; this top-bar toggle simply offers a symmetric alternate entry point.
+  {
+    const char* right_toggle_label = g_state.right_panel_collapsed ? "<##right_panel_toggle" : ">##right_panel_toggle";
+    // Use the max width of both label states so the button's left edge doesn't jitter when toggled.
+    float w_expanded = ImGui::CalcTextSize(">##right_panel_toggle", nullptr, true).x;
+    float w_collapsed = ImGui::CalcTextSize("<##right_panel_toggle", nullptr, true).x;
+    float btn_w = std::max(w_expanded, w_collapsed) + style.FramePadding.x * 2.0f;
+    float right_edge = ImGui::GetWindowContentRegionMax().x;
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(right_edge - btn_w);
+    if (ImGui::Button(right_toggle_label)) {
+      g_state.right_panel_collapsed = !g_state.right_panel_collapsed;
     }
-  } else {
-    ImGui::BeginDisabled();
-    ImGui::SliderFloat("Rays(M)##topbar", &g_state.sim.ray_num_millions, 0.1f, 100.0f, "%.1f");
-    ImGui::EndDisabled();
-  }
-  if (simulating) {
-    ImGui::EndDisabled();
   }
 
   ImGui::End();
@@ -202,92 +204,21 @@ void RenderLeftPanel(float window_height) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-  // ---- Layout: cards (scroll) + 3D preview (fixed) + toolbar ----
-  int sel_layer = GetSelectedLayerIdx();
-  int sel_entry = GetSelectedEntryIdx();
-  bool has_crystal = sel_layer >= 0 && sel_entry >= 0 && sel_layer < static_cast<int>(g_state.layers.size()) &&
-                     sel_entry < static_cast<int>(g_state.layers[sel_layer].entries.size());
-
-  float content_w = ImGui::GetContentRegionAvail().x;
+  // ---- Layout: cards (scroll) + toolbar ----
   float avail_h = ImGui::GetContentRegionAvail().y;
   auto& style = ImGui::GetStyle();
-  float separator_h = ImGui::GetTextLineHeight() + style.SeparatorTextPadding.y * 2 + style.ItemSpacing.y;
-  float controls_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
   float toolbar_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
-  float preview_size = content_w;
-  float cards_h = std::max(0.0f, avail_h - preview_size - separator_h - controls_h - toolbar_h);
-
-  if (has_crystal) {
-    auto& cr = g_state.layers[sel_layer].entries[sel_entry].crystal;
-
-    // When the crystal edit modal is open, it drives g_crystal_renderer exclusively.
-    // Skip UpdateMesh+Render here so the modal's edit buffer content is the last FBO write
-    // (ImGui::Image() defers GPU sampling to RenderDrawData at frame end).
-    bool modal_owns_renderer = IsCrystalModalOpen();
-
-    // Update mesh if crystal changed or selection changed
-    int hash = CrystalParamHash(cr);
-    if (!modal_owns_renderer && hash != g_crystal_mesh_hash) {
-      int result = BuildAndUploadCrystalMesh(cr);
-      if (result != 0) {
-        g_crystal_mesh_hash = hash;
-      }
-    }
-
-    // Render to FBO (skip when crystal modal owns the renderer)
-    if (!modal_owns_renderer) {
-      auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
-      g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
-    }
-  }
+  float cards_h = std::max(0.0f, avail_h - toolbar_h);
 
   // Process thumbnail update queue before rendering cards
   g_thumbnail_cache.ProcessUpdateQueue(g_state, kMaxThumbnailUpdatesPerFrame);
 
-  // ---- Card scroll area (middle) ----
+  // ---- Card scroll area (fills panel above the toolbar) ----
   ImGui::BeginChild("##CardScroll", ImVec2(0, cards_h), ImGuiChildFlags_None);
   RenderScatteringSection(g_state);
   ImGui::EndChild();
 
-  // ---- 3D Preview (bottom, fixed) ----
-  ImGui::SeparatorText("3D Preview");
-
-  if (has_crystal) {
-    ImVec2 area_start = ImGui::GetCursorScreenPos();
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    draw_list->AddRectFilled(area_start, ImVec2(area_start.x + preview_size, area_start.y + preview_size),
-                             IM_COL32(38, 38, 38, 255));
-
-    auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
-    ImVec2 uv0(0, 1);
-    ImVec2 uv1(1, 0);
-    ImGui::Image(tex_id, ImVec2(preview_size, preview_size), uv0, uv1);
-
-    ImGui::SetCursorScreenPos(area_start);
-    ImGui::InvisibleButton("##CrystalPreviewBtn", ImVec2(preview_size, preview_size));
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
-      ImGuiIO& io = ImGui::GetIO();
-      if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        ApplyTrackballRotation(io.MouseDelta.x, io.MouseDelta.y);
-      }
-      if (io.MouseWheel != 0.0f) {
-        g_crystal_zoom *= (1.0f - io.MouseWheel * 0.1f);
-        g_crystal_zoom = std::max(0.5f, std::min(10.0f, g_crystal_zoom));
-      }
-    }
-    ImGui::PushItemWidth(120.0f);
-    ImGui::Combo("##CrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Reset View")) {
-      ResetCrystalView();
-    }
-  } else {
-    ImGui::TextDisabled("No crystal selected");
-  }
-
-  // ---- Bottom toolbar: layer add/delete ----
+  // ---- Bottom toolbar: add layer only (per-layer delete lives on the header row) ----
   ImGui::Spacing();
   if (ImGui::SmallButton("+ Layer")) {
     Layer new_layer;
@@ -295,31 +226,6 @@ void RenderLeftPanel(float window_height) {
     g_state.layers.push_back(std::move(new_layer));
     g_thumbnail_cache.OnLayerStructureChanged();
     g_state.MarkDirty();
-  }
-  ImGui::SameLine();
-  bool can_delete_layer = g_state.layers.size() > 1;
-  if (!can_delete_layer) {
-    ImGui::BeginDisabled();
-  }
-  if (ImGui::SmallButton("- Layer")) {
-    int del_idx = GetSelectedLayerIdx();
-    if (del_idx >= 0 && del_idx < static_cast<int>(g_state.layers.size()) && g_state.layers.size() > 1) {
-      g_state.layers.erase(g_state.layers.begin() + del_idx);
-      if (GetSelectedLayerIdx() >= static_cast<int>(g_state.layers.size())) {
-        SetSelectedLayerIdx(static_cast<int>(g_state.layers.size()) - 1);
-      }
-      // Clamp entry index for new selected layer
-      auto& new_entries = g_state.layers[GetSelectedLayerIdx()].entries;
-      if (GetSelectedEntryIdx() >= static_cast<int>(new_entries.size())) {
-        SetSelectedEntryIdx(static_cast<int>(new_entries.size()) - 1);
-      }
-      g_thumbnail_cache.OnLayerStructureChanged();
-      g_crystal_mesh_hash = -1;  // Force preview refresh
-      g_state.MarkDirty();
-    }
-  }
-  if (!can_delete_layer) {
-    ImGui::EndDisabled();
   }
 
   // Process edit request: open modal if an edit button was clicked
@@ -329,11 +235,6 @@ void RenderLeftPanel(float window_height) {
   }
 
   ImGui::End();
-
-  // Collapse button overlay at top-right of left panel (offset inward to avoid scrollbar)
-  if (OverlayButton("<", kLeftPanelWidth - kCollapseBtnSize - 20, kTopBarHeight + 4)) {
-    g_panel_collapsed = true;
-  }
 }
 
 void RenderRightPanel(GLFWwindow* window, float window_width, float window_height) {
@@ -374,9 +275,9 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 
     ImGui::SeparatorText("Camera");
     ImGui::BeginDisabled(full_sky);
-    SliderWithInput("Elevation##view", &r.elevation, -90.0f, 90.0f, "%.1f");
-    SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f, "%.1f");
-    SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f, "%.1f");
+    SliderWithInput("Elevation##view", &r.elevation, -90.0f, 90.0f, "%.2f");
+    SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f, "%.2f");
+    SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f, "%.2f");
     ImGui::EndDisabled();
 
     ImGui::PopItemWidth();
@@ -395,7 +296,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
-    SliderWithInput("EV##display", &r.exposure_offset, -3.0f, 7.0f, "%.1f");
+    SliderWithInput("EV##display", &r.exposure_offset, -6.0f, 6.0f, "%.1f");
 
     ImGui::SeparatorText("Aspect Ratio");
     int preset_idx = static_cast<int>(g_state.aspect_preset);
@@ -545,11 +446,6 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   }
 
   ImGui::End();
-
-  // Collapse button overlay at top-right of right panel (symmetric with left panel)
-  if (OverlayButton(">", panel_x + kRightPanelWidth - kCollapseBtnSize - 4, kTopBarHeight + 4)) {
-    g_state.right_panel_collapsed = true;
-  }
 }
 
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {

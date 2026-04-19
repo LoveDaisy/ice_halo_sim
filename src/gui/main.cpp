@@ -21,6 +21,7 @@
 #include "gui/gl_init.h"
 #include "gui/gui_logger.hpp"
 #include "gui/log_sink.hpp"
+#include "gui/window_sizing.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -80,7 +81,27 @@ int main(int argc, char** argv) {
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-  GLFWwindow* window = glfwCreateWindow(gui::kInitWindowWidth, gui::kInitWindowHeight, "Lumice", nullptr, nullptr);
+  // Clamp the requested initial size to what the current monitor can actually
+  // display — workarea already excludes OS bars (menubar/Dock/taskbar); we
+  // deduct kWindowDecorationMargin for title bar + borders. Without this,
+  // kInitWindowHeight=980 can be silently shrunk by the OS on 1080p displays
+  // with a large Dock or 125% DPI scaling, spawning a scrollbar on the right
+  // panel. Falls through to defaults on headless / nullptr-monitor environments.
+  int init_w = gui::kInitWindowWidth;
+  int init_h = gui::kInitWindowHeight;
+  if (GLFWmonitor* primary = glfwGetPrimaryMonitor()) {
+    int wx = 0;
+    int wy = 0;
+    int ww = 0;
+    int wh = 0;
+    glfwGetMonitorWorkarea(primary, &wx, &wy, &ww, &wh);
+    if (ww > 0 && wh > 0) {
+      auto [w, h] = gui::ClampWindowSizeToWorkarea(init_w, init_h, ww, wh);
+      init_w = w;
+      init_h = h;
+    }
+  }
+  GLFWwindow* window = glfwCreateWindow(init_w, init_h, "Lumice", nullptr, nullptr);
   if (!window) {
     fprintf(stderr, "Failed to create GLFW window\n");
     glfwTerminate();
@@ -204,8 +225,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Initialize crystal renderer (256x256 FBO)
-  if (!gui::g_crystal_renderer.Init(256, 256)) {
+  // Initialize crystal renderer (512x512 FBO — supersamples the 320px modal preview)
+  if (!gui::g_crystal_renderer.Init(512, 512)) {
     GUI_LOG_ERROR("Failed to initialize crystal renderer");
     return 1;
   }

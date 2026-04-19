@@ -28,6 +28,11 @@ struct AxisDist {
   AxisDistType type = AxisDistType::kUniform;
   float mean = 0.0f;
   float std = 0.0f;  // Gauss: standard deviation; Uniform: full range; Zigzag: amplitude; Laplacian: scale
+
+  friend bool operator==(const AxisDist& a, const AxisDist& b) {
+    return a.type == b.type && a.mean == b.mean && a.std == b.std;
+  }
+  friend bool operator!=(const AxisDist& a, const AxisDist& b) { return !(a == b); }
 };
 
 // GUI-only data structure: crystal geometry + axis distribution.
@@ -52,6 +57,15 @@ struct CrystalConfig {
   AxisDist zenith{ AxisDistType::kUniform, 0.0f, 360.0f };
   AxisDist azimuth{ AxisDistType::kUniform, 0.0f, 360.0f };
   AxisDist roll{ AxisDistType::kUniform, 0.0f, 360.0f };
+
+  friend bool operator==(const CrystalConfig& a, const CrystalConfig& b) {
+    return a.name == b.name && a.type == b.type && a.height == b.height && a.prism_h == b.prism_h &&
+           a.upper_h == b.upper_h && a.lower_h == b.lower_h && a.upper_alpha == b.upper_alpha &&
+           a.lower_alpha == b.lower_alpha &&
+           std::equal(std::begin(a.face_distance), std::end(a.face_distance), std::begin(b.face_distance)) &&
+           a.zenith == b.zenith && a.azimuth == b.azimuth && a.roll == b.roll;
+  }
+  friend bool operator!=(const CrystalConfig& a, const CrystalConfig& b) { return !(a == b); }
 };
 
 struct SunConfig {
@@ -131,14 +145,46 @@ struct FilterConfig {
   bool sym_p = true;
   bool sym_b = true;
   bool sym_d = true;
+
+  // Used by edit_modals.cpp to detect whether the user actually modified the
+  // filter buffer (so an untouched OK on a previously-empty filter doesn't
+  // silently materialize a default-constructed filter into entry.filter).
+  //
+  // ⚠️ When adding a new field above, also:
+  //   1. Compare it here in operator==
+  //   2. Update file_io.cpp serialization (Serialize/ParseFilterFromGuiJson)
+  //   3. Update edit_modals.cpp Filter tab UI to expose it
+  friend bool operator==(const FilterConfig& a, const FilterConfig& b) {
+    return a.name == b.name && a.action == b.action && a.raypath_text == b.raypath_text && a.sym_p == b.sym_p &&
+           a.sym_b == b.sym_b && a.sym_d == b.sym_d;
+  }
+  friend bool operator!=(const FilterConfig& a, const FilterConfig& b) { return !(a == b); }
 };
 
 // GUI-only data structure: one crystal+filter entry card in the layer model.
+//
+// operator== exists so CommitAllBuffers (edit_modals.cpp) can skip render-invalidation
+// when the OK button doesn't actually change the entry. Adding a field here without
+// updating operator== would silently break that gate; the static_assert below catches
+// such omissions at compile time (update both together).
 struct EntryCard {
   CrystalConfig crystal;
   std::optional<FilterConfig> filter;
   float proportion = 100.0f;
+
+  friend bool operator==(const EntryCard& a, const EntryCard& b) {
+    return a.crystal == b.crystal && a.filter == b.filter && a.proportion == b.proportion;
+  }
+  friend bool operator!=(const EntryCard& a, const EntryCard& b) { return !(a == b); }
 };
+// Apple Silicon + libc++ only — std::string SSO buffer differs between libc++
+// (24 bytes) and libstdc++ (32 bytes), so the absolute sizeof differs per
+// platform. Pinning the Apple build is enough to catch an accidental field
+// addition during local dev; Linux/Windows CI still compiles the struct.
+#if defined(__APPLE__) && defined(__aarch64__)
+static_assert(sizeof(EntryCard) == 192,
+              "EntryCard size changed (check CrystalConfig/AxisDist/EntryCard operator== for new fields)");
+#endif
 
 struct Layer {
   float probability = 0.0f;  // Probability of multi-scatter continuation (0 = single scatter), range [0,1]

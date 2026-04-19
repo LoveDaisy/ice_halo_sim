@@ -14,10 +14,10 @@ void OpenEditModal(const EditRequest& req, GuiState& state);
 // outside any Begin/End block, in the same scope as RenderUnsavedPopup.
 void RenderEditModals(GuiState& state);
 
-// Returns true if the Crystal edit modal is currently open.
-// Used by RenderLeftPanel to skip 3D preview UpdateMesh+Render
-// (the modal drives the shared FBO renderer exclusively).
-bool IsCrystalModalOpen();
+// Returns true when the unified edit modal is open AND the Crystal tab is the
+// active one. Used by visual-smoke tests to detect FBO contention with the
+// modal's per-frame g_crystal_renderer.Render() call.
+bool IsEditModalCrystalTabActive();
 
 // Reset all modal-internal static state (active modal, edit buffers, pending flags).
 // Called by test teardown (ResetTestState) to prevent state leakage between tests.
