@@ -182,6 +182,68 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: scrum-gui-polish-v7 152.5 — Remove Filter marks the edit controls as
+  // disabled (Raypath InputText) so the "will be removed on OK" banner is
+  // consistent with the rest of the Filter tab.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_disables_controls");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      gui::g_state.layers[0].entries[0].filter = f;
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      // Before Remove: Raypath control is enabled.
+      auto info_before = ctx->ItemInfo("**/Raypath##filter_modal");
+      IM_CHECK((info_before.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      // After Remove: Raypath control is disabled.
+      auto info_after = ctx->ItemInfo("**/Raypath##filter_modal");
+      IM_CHECK((info_after.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // Cancel so we don't leave state polluted for later tests.
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // P1: scrum-gui-polish-v7 152.5 — Undo Remove restores editability and
+  // committing OK keeps the filter present (the buffered Remove intent was
+  // reverted before commit).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "undo_remove_restores_controls");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      gui::g_state.layers[0].entries[0].filter = f;
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Undo Remove##filter_undo");
+      ctx->Yield(2);
+
+      // Controls restored to enabled state.
+      auto info = ctx->ItemInfo("**/Raypath##filter_modal");
+      IM_CHECK((info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+      // Filter must survive the round-trip since Remove was undone.
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+    };
+  }
+
   // P1: Edit modal OK without any change must NOT clear the rendered preview
   // or arm Revert. Regression guard for scrum-gui-polish-v7 152.2: previously
   // CommitAllBuffers unconditionally MarkFilterDirty()'d after any OK,
