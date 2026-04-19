@@ -814,4 +814,31 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
     };
   }
+
+  // p2_modal/filter_modal_ok_change_creates_filter — open filter modal on empty
+  // entry, modify a field (action), click OK: entry.filter must be created.
+  // Covers the buf_changed=true && !initial_present branch of CommitAllBuffers.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "filter_modal_ok_change_creates_filter");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Entry starts with no filter.
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      // Open filter modal, type a raypath (touches g_filter_buf via g_raypath_buf
+      // sync in CommitAllBuffers), click OK.
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(3);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "1-3");
+      ctx->Yield();
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      // Filter must now exist with the typed raypath.
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text, std::string("1-3"));
+    };
+  }
 }

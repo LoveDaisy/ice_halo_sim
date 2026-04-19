@@ -131,6 +131,20 @@ struct FilterConfig {
   bool sym_p = true;
   bool sym_b = true;
   bool sym_d = true;
+
+  // Used by edit_modals.cpp to detect whether the user actually modified the
+  // filter buffer (so an untouched OK on a previously-empty filter doesn't
+  // silently materialize a default-constructed filter into entry.filter).
+  //
+  // ⚠️ When adding a new field above, also:
+  //   1. Compare it here in operator==
+  //   2. Update file_io.cpp serialization (Serialize/ParseFilterFromGuiJson)
+  //   3. Update edit_modals.cpp Filter tab UI to expose it
+  friend bool operator==(const FilterConfig& a, const FilterConfig& b) {
+    return a.name == b.name && a.action == b.action && a.raypath_text == b.raypath_text && a.sym_p == b.sym_p &&
+           a.sym_b == b.sym_b && a.sym_d == b.sym_d;
+  }
+  friend bool operator!=(const FilterConfig& a, const FilterConfig& b) { return !(a == b); }
 };
 
 // GUI-only data structure: one crystal+filter entry card in the layer model.

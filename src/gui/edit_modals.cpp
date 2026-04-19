@@ -529,11 +529,7 @@ void CommitAllBuffers(GuiState& state) {
     // Preserve the no-filter state for entries that had no filter and the user
     // didn't touch any filter field — committing the default-constructed buffer
     // would silently create an "* In PBD" filter that blocks all rays.
-    const FilterConfig& s = g_filter_buf_snapshot;
-    const bool buf_changed = g_filter_buf.action != s.action || g_filter_buf.raypath_text != s.raypath_text ||
-                             g_filter_buf.sym_p != s.sym_p || g_filter_buf.sym_b != s.sym_b ||
-                             g_filter_buf.sym_d != s.sym_d || g_filter_buf.name != s.name;
-    if (g_filter_initial_present || buf_changed) {
+    if (g_filter_initial_present || g_filter_buf != g_filter_buf_snapshot) {
       entry.filter = g_filter_buf;
     }
   }
