@@ -28,6 +28,7 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_sim_data.cpp"
   "${PROJ_TEST_DIR}/test_simulator.cpp"
   "${PROJ_TEST_DIR}/test_threading_pool.cpp"
+  "${PROJ_TEST_DIR}/test_window_sizing.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
 target_include_directories(unit_test
   PRIVATE ${PROJ_TEST_DIR})
