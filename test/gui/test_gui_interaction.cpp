@@ -273,8 +273,6 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 2);
 
       // Delete layer 1 via its per-layer header "x" button
-      gui::SetSelectedLayerIdx(1);
-      ctx->Yield();
       ctx->ItemClick("**/x##layer_1");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);

@@ -11,13 +11,12 @@ static void DriveCrystalPreviewFboForTest() {
   if (gui::IsCrystalModalOpen()) {
     return;
   }
-  int sel_layer = gui::GetSelectedLayerIdx();
-  int sel_entry = gui::GetSelectedEntryIdx();
-  if (sel_layer < 0 || sel_entry < 0 || sel_layer >= static_cast<int>(gui::g_state.layers.size()) ||
-      sel_entry >= static_cast<int>(gui::g_state.layers[sel_layer].entries.size())) {
+  // Visual smoke tests configure entry [0][0] only. If a multi-entry visual test
+  // is later added, change this helper to accept layer/entry indices.
+  if (gui::g_state.layers.empty() || gui::g_state.layers[0].entries.empty()) {
     return;
   }
-  const auto& cr = gui::g_state.layers[sel_layer].entries[sel_entry].crystal;
+  const auto& cr = gui::g_state.layers[0].entries[0].crystal;
   int hash = gui::CrystalParamHash(cr);
   if (hash != gui::g_crystal_mesh_hash) {
     int result = gui::BuildAndUploadCrystalMesh(cr);

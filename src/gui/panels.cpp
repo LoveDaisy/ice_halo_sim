@@ -91,10 +91,6 @@ static bool RenderNonlinearSlider(const char* slider_id, float* value, float min
   return changed;
 }
 
-// ---- Selection state ----
-int g_selected_layer = 0;
-int g_selected_entry = 0;
-
 // ---- Edit request state ----
 EditRequest g_edit_request;
 
@@ -450,26 +446,8 @@ void ResetEditRequest() {
   g_edit_request = EditRequest{};
 }
 
-int GetSelectedLayerIdx() {
-  return g_selected_layer;
-}
-
-int GetSelectedEntryIdx() {
-  return g_selected_entry;
-}
-
-void SetSelectedLayerIdx(int idx) {
-  g_selected_layer = idx;
-}
-
-void SetSelectedEntryIdx(int idx) {
-  g_selected_entry = idx;
-}
-
 void ResetPendingDeleteState() {
   g_edit_request = EditRequest{};
-  g_selected_layer = 0;
-  g_selected_entry = 0;
 }
 
 
@@ -477,14 +455,8 @@ void ResetPendingDeleteState() {
 
 bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   auto& entry = state.layers[layer_idx].entries[entry_idx];
-  bool is_selected = (g_selected_layer == layer_idx && g_selected_entry == entry_idx);
 
   ImGui::PushID(entry_idx);
-
-  // Highlight selected card
-  if (is_selected) {
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.25f, 0.35f, 0.55f, 0.4f));
-  }
 
   ImGui::BeginChild("##card", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
 
@@ -624,27 +596,12 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     state.MarkDirty();
   }
 
-  // Click-to-select: anywhere on the card that is NOT a widget (edit buttons,
-  // hover action buttons, or the proportion slider).
-  if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-      !ImGui::IsAnyItemHovered()) {
-    if (!is_selected) {
-      g_crystal_mesh_hash = -1;  // Force 3D preview refresh on selection change
-    }
-    g_selected_layer = layer_idx;
-    g_selected_entry = entry_idx;
-  }
-
   // Persist hover state for next frame (computed while still inside the child
   // window so widget hover does not disqualify it).
   bool hover_now = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
   ImGui::GetStateStorage()->SetBool(hover_persist_id, hover_now);
 
   ImGui::EndChild();  // ##card — must be unconditional
-
-  if (is_selected) {
-    ImGui::PopStyleColor();
-  }
 
   ImGui::PopID();
   return delete_clicked;
@@ -684,15 +641,6 @@ void RenderLayer(GuiState& state, int layer_idx) {
   }
   if (layer_delete_clicked && can_delete_layer) {
     state.layers.erase(state.layers.begin() + layer_idx);
-    if (g_selected_layer >= static_cast<int>(state.layers.size())) {
-      g_selected_layer = static_cast<int>(state.layers.size()) - 1;
-    }
-    if (g_selected_layer >= 0) {
-      auto& sel_entries = state.layers[g_selected_layer].entries;
-      if (g_selected_entry >= static_cast<int>(sel_entries.size())) {
-        g_selected_entry = static_cast<int>(sel_entries.size()) - 1;
-      }
-    }
     g_thumbnail_cache.OnLayerStructureChanged();
     state.MarkDirty();
     ImGui::PopID();
@@ -719,10 +667,6 @@ void RenderLayer(GuiState& state, int layer_idx) {
     if (pending_delete_entry >= 0 && layer.entries.size() > 1) {
       layer.entries.erase(layer.entries.begin() + pending_delete_entry);
       g_thumbnail_cache.OnLayerStructureChanged();
-      // Clamp selected entry if needed
-      if (g_selected_layer == layer_idx && g_selected_entry >= static_cast<int>(layer.entries.size())) {
-        g_selected_entry = static_cast<int>(layer.entries.size()) - 1;
-      }
       state.MarkDirty();
     }
 
