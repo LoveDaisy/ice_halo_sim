@@ -401,6 +401,12 @@ static void RenderFilterModal(GuiState& /*state*/) {
     ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.1f, 1.0f), "Filter will be removed on OK.");
   }
 
+  // Filter tab edit controls are disabled while a Remove intent is pending.
+  // The raw field values remain in-buffer so that Undo Remove can restore
+  // them; CommitAllBuffers honors g_filter_buf_removed by writing nullopt
+  // without reading the buffer values.
+  ImGui::BeginDisabled(g_filter_buf_removed);
+
   // Action combo
   ImGui::Combo("Action##filter_modal", &g_filter_buf.action, kFilterActionNames, kFilterActionCount);
 
@@ -456,11 +462,22 @@ static void RenderFilterModal(GuiState& /*state*/) {
   ImGui::SameLine();
   ImGui::Checkbox("D##filter_modal", &g_filter_buf.sym_d);
 
+  ImGui::EndDisabled();
+
   ImGui::Spacing();
   // Remove Filter — buffers the intent; modal-level OK will write nullopt.
   // Cancel still discards (since g_filter_buf_removed is reset on next open).
-  if (ImGui::Button("Remove Filter##filter", ImVec2(120, 0))) {
-    g_filter_buf_removed = true;
+  // While the Remove intent is pending, this button toggles to "Undo Remove"
+  // to restore editability. Use distinct ImGui IDs so the two states have
+  // independent button hashes and existing test selectors keep resolving.
+  if (g_filter_buf_removed) {
+    if (ImGui::Button("Undo Remove##filter_undo", ImVec2(120, 0))) {
+      g_filter_buf_removed = false;
+    }
+  } else {
+    if (ImGui::Button("Remove Filter##filter", ImVec2(120, 0))) {
+      g_filter_buf_removed = true;
+    }
   }
 
   // OK / Cancel handled at modal level (RenderEditModals).
