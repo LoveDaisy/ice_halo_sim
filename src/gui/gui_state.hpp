@@ -177,8 +177,14 @@ struct EntryCard {
   }
   friend bool operator!=(const EntryCard& a, const EntryCard& b) { return !(a == b); }
 };
+// Apple Silicon + libc++ only — std::string SSO buffer differs between libc++
+// (24 bytes) and libstdc++ (32 bytes), so the absolute sizeof differs per
+// platform. Pinning the Apple build is enough to catch an accidental field
+// addition during local dev; Linux/Windows CI still compiles the struct.
+#if defined(__APPLE__) && defined(__aarch64__)
 static_assert(sizeof(EntryCard) == 192,
               "EntryCard size changed (check CrystalConfig/AxisDist/EntryCard operator== for new fields)");
+#endif
 
 struct Layer {
   float probability = 0.0f;  // Probability of multi-scatter continuation (0 = single scatter), range [0,1]
