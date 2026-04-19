@@ -250,6 +250,9 @@ int main(int argc, char** argv) {
   ImGuiTestEngineIO& test_io = ImGuiTestEngine_GetIO(engine);
   test_io.ConfigVerboseLevel = ImGuiTestVerboseLevel_Info;
   test_io.ConfigVerboseLevelOnError = ImGuiTestVerboseLevel_Debug;
+  // Stream test engine diagnostics to stderr so failing tests surface their
+  // IM_CHECK errors on the build log (default discards them).
+  test_io.ConfigLogToTTY = true;
   test_io.ConfigRunSpeed = ImGuiTestRunSpeed_Fast;
   test_io.ConfigNoThrottle = true;
 

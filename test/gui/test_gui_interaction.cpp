@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <thread>
 
 #include "test_gui_shared.hpp"
@@ -241,6 +242,64 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       // Filter must survive the round-trip since Remove was undone.
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+    };
+  }
+
+  // P1: scrum-gui-polish-v7 152.6 — Edit modal tab titles carry a trailing
+  // " *" marker when the in-flight buffer diverges from its open-time
+  // snapshot. Tab IDs are anchored to stable "###<slug>_tab" suffixes so the
+  // label change does not reset SelectedTabId; the test reads the truncated
+  // display string from ItemInfo().DebugLabel. Covers AC #1 / #2 / #3 / #4 / #5.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "tab_dirty_mark");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      auto is_dirty = [&](const char* tab_ref) -> bool {
+        auto info = ctx->ItemInfo(tab_ref);
+        return info.ID != 0 && std::strstr(info.DebugLabel, "*") != nullptr;
+      };
+
+      ResetTestState();
+      ctx->Yield(2);
+      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+
+      // AC #1: on modal open, no tab carries a dirty marker.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK(!is_dirty("**/###crystal_tab"));
+      IM_CHECK(!is_dirty("**/###axis_tab"));
+      IM_CHECK(!is_dirty("**/###filter_tab"));
+
+      // AC #2: editing Crystal's Height only dirties the Crystal tab.
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 1.0f);
+      ctx->Yield(2);
+      IM_CHECK(is_dirty("**/###crystal_tab"));
+      IM_CHECK(!is_dirty("**/###axis_tab"));
+      IM_CHECK(!is_dirty("**/###filter_tab"));
+
+      // AC #3: restoring the original value clears the dirty marker.
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h);
+      ctx->Yield(2);
+      IM_CHECK(!is_dirty("**/###crystal_tab"));
+
+      // AC #5: Cancel discards buffer; reopening shows no marker.
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 2.0f);
+      ctx->Yield(2);
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK(!is_dirty("**/###crystal_tab"));
+
+      // AC #4: OK commits new baseline; reopening shows no marker.
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 3.0f);
+      ctx->Yield(2);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK(!is_dirty("**/###crystal_tab"));
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
     };
   }
 

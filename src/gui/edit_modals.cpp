@@ -57,6 +57,14 @@ static bool g_filter_buf_removed = false;
 static FilterConfig g_filter_buf_snapshot;
 static bool g_filter_initial_present = false;
 
+// Snapshots captured on OpenEditModal for per-tab dirty-mark computation.
+// Filter already has its own snapshot above (used for a separate purpose in
+// CommitAllBuffers). Crystal / Axis were previously not snapshotted; they are
+// now needed so the tab label can append " *" when the in-flight buffer
+// diverges from the value at modal-open time.
+static CrystalConfig g_crystal_buf_snapshot;
+static AxisDist g_axis_buf_snapshot[3];
+
 // Crystal modal: trackball state saved on open, restored on Cancel
 static float g_saved_rotation[16];
 static float g_saved_zoom;
@@ -200,6 +208,10 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_filter_buf_removed = false;
   g_filter_buf_snapshot = g_filter_buf;
   g_filter_initial_present = entry.filter.has_value();
+  g_crystal_buf_snapshot = g_crystal_buf;
+  g_axis_buf_snapshot[0] = g_axis_buf[0];
+  g_axis_buf_snapshot[1] = g_axis_buf[1];
+  g_axis_buf_snapshot[2] = g_axis_buf[2];
 
   // Save trackball state for Cancel restoration
   std::memcpy(g_saved_rotation, g_crystal_rotation, sizeof(g_saved_rotation));
@@ -602,18 +614,40 @@ void RenderEditModals(GuiState& state) {
                                                ImGuiTabItemFlags_SetSelected :
                                                ImGuiTabItemFlags_None;
 
+    // Per-tab dirty detection. The label picks up a trailing " *" when the
+    // in-flight buffer differs from the snapshot taken at modal-open. All
+    // labels share a fixed `###` suffix — with three hashes ImGui derives the
+    // internal ID purely from the `###suffix` portion, so the display string
+    // can vary ("Crystal" vs "Crystal *") without changing the tab's hash
+    // (otherwise the tab would lose its SelectedTabId the moment dirty flips,
+    // falling back to the first tab and hiding the user's work-in-progress).
+    FilterConfig filter_cmp = g_filter_buf;
+    filter_cmp.raypath_text = g_raypath_buf;
+    // Note: g_filter_buf_removed may be true while g_filter_initial_present is
+    // false — the user can click Remove on an entry that had no filter (a
+    // no-op for committed state). filter_dirty resolves to false in that case
+    // via the ternary below.
+    const bool crystal_dirty = g_crystal_buf != g_crystal_buf_snapshot;
+    const bool axis_dirty = g_axis_buf[0] != g_axis_buf_snapshot[0] || g_axis_buf[1] != g_axis_buf_snapshot[1] ||
+                            g_axis_buf[2] != g_axis_buf_snapshot[2];
+    const bool filter_dirty =
+        g_filter_buf_removed ? g_filter_initial_present : (filter_cmp != g_filter_buf_snapshot);
+    const char* crystal_label = crystal_dirty ? "Crystal *###crystal_tab" : "Crystal###crystal_tab";
+    const char* axis_label = axis_dirty ? "Axis *###axis_tab" : "Axis###axis_tab";
+    const char* filter_label = filter_dirty ? "Filter *###filter_tab" : "Filter###filter_tab";
+
     if (ImGui::BeginTabBar("##edit_modal_tabs")) {
-      if (ImGui::BeginTabItem("Crystal", nullptr, crystal_flags)) {
+      if (ImGui::BeginTabItem(crystal_label, nullptr, crystal_flags)) {
         g_active_tab = ActiveTab::kCrystal;
         RenderCrystalModal(state);
         ImGui::EndTabItem();
       }
-      if (ImGui::BeginTabItem("Axis", nullptr, axis_flags)) {
+      if (ImGui::BeginTabItem(axis_label, nullptr, axis_flags)) {
         g_active_tab = ActiveTab::kAxis;
         RenderAxisModal(state);
         ImGui::EndTabItem();
       }
-      if (ImGui::BeginTabItem("Filter", nullptr, filter_flags)) {
+      if (ImGui::BeginTabItem(filter_label, nullptr, filter_flags)) {
         g_active_tab = ActiveTab::kFilter;
         RenderFilterModal(state);
         ImGui::EndTabItem();
