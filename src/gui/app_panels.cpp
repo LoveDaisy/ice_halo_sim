@@ -296,7 +296,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
-    SliderWithInput("EV##display", &r.exposure_offset, -3.0f, 7.0f, "%.1f");
+    SliderWithInput("EV##display", &r.exposure_offset, -6.0f, 6.0f, "%.1f");
 
     ImGui::SeparatorText("Aspect Ratio");
     int preset_idx = static_cast<int>(g_state.aspect_preset);
