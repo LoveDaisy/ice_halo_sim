@@ -28,6 +28,11 @@ struct AxisDist {
   AxisDistType type = AxisDistType::kUniform;
   float mean = 0.0f;
   float std = 0.0f;  // Gauss: standard deviation; Uniform: full range; Zigzag: amplitude; Laplacian: scale
+
+  friend bool operator==(const AxisDist& a, const AxisDist& b) {
+    return a.type == b.type && a.mean == b.mean && a.std == b.std;
+  }
+  friend bool operator!=(const AxisDist& a, const AxisDist& b) { return !(a == b); }
 };
 
 // GUI-only data structure: crystal geometry + axis distribution.
@@ -52,6 +57,15 @@ struct CrystalConfig {
   AxisDist zenith{ AxisDistType::kUniform, 0.0f, 360.0f };
   AxisDist azimuth{ AxisDistType::kUniform, 0.0f, 360.0f };
   AxisDist roll{ AxisDistType::kUniform, 0.0f, 360.0f };
+
+  friend bool operator==(const CrystalConfig& a, const CrystalConfig& b) {
+    return a.name == b.name && a.type == b.type && a.height == b.height && a.prism_h == b.prism_h &&
+           a.upper_h == b.upper_h && a.lower_h == b.lower_h && a.upper_alpha == b.upper_alpha &&
+           a.lower_alpha == b.lower_alpha &&
+           std::equal(std::begin(a.face_distance), std::end(a.face_distance), std::begin(b.face_distance)) &&
+           a.zenith == b.zenith && a.azimuth == b.azimuth && a.roll == b.roll;
+  }
+  friend bool operator!=(const CrystalConfig& a, const CrystalConfig& b) { return !(a == b); }
 };
 
 struct SunConfig {
@@ -148,11 +162,22 @@ struct FilterConfig {
 };
 
 // GUI-only data structure: one crystal+filter entry card in the layer model.
+//
+// operator== exists so CommitAllBuffers (edit_modals.cpp) can skip render-invalidation
+// when the OK button doesn't actually change the entry. Adding a field here without
+// updating operator== would silently break that gate; the static_assert below catches
+// such omissions at compile time (update both together).
 struct EntryCard {
   CrystalConfig crystal;
   std::optional<FilterConfig> filter;
   float proportion = 100.0f;
+
+  friend bool operator==(const EntryCard& a, const EntryCard& b) {
+    return a.crystal == b.crystal && a.filter == b.filter && a.proportion == b.proportion;
+  }
+  friend bool operator!=(const EntryCard& a, const EntryCard& b) { return !(a == b); }
 };
+static_assert(sizeof(EntryCard) == 192, "EntryCard fields changed; update operator== and this size");
 
 struct Layer {
   float probability = 0.0f;  // Probability of multi-scatter continuation (0 = single scatter), range [0,1]
