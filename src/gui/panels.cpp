@@ -540,10 +540,22 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   }
 
   // Hover action buttons: stacked vertically at the right edge of the card —
-  // Delete (×) on top, Duplicate (+) below, separated by kHoverBtnGap. Alpha is
+  // Delete (×) on top, Duplicate (D) below, separated by kHoverBtnGap. Alpha is
   // driven by previous-frame hover state; buttons are always in the ImGui tree
   // so click paths remain stable, only visibility transitions.
-  // Coordinate strategy (recorded for task-hover-btn-debt):
+  //
+  // Fast-swipe mitigation: vertical stacking (v6/card-layout-v2) prevents a
+  // single horizontal swipe from crossing the always-hit-tested Delete button,
+  // which was the original backlog concern. Confirm dialog / undo intentionally
+  // avoided — v5 verified that BeginDisabled(!hover_prev) and clicked+hover_prev
+  // both break imgui_test_engine MouseMove+Yield+ItemClick timing.
+  //
+  // AutoResizeY first-frame drift (backlog Minor 3): ImGuiChildFlags_AutoResizeY
+  // only auto-fits the Y dimension; X is driven by the parent layout and stable
+  // on the first frame. The Y coordinates (del_y/dup_y) anchor to card_top, not
+  // WindowSize.y, so they are also frame-stable. No positional fix needed.
+  //
+  // Coordinate strategy:
   //   x: card_right - btn_w - kHoverBtnPad
   //   delete y: card_top + kHoverBtnPad
   //   duplicate y: delete_y + btn_h + kHoverBtnGap
