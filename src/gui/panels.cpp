@@ -664,16 +664,16 @@ void RenderLayer(GuiState& state, int layer_idx) {
     char prob_id[32];
     snprintf(prob_id, sizeof(prob_id), "Prob.##layer_%d", layer_idx);
     bool single_layer = state.layers.size() <= 1;
-    if (single_layer) {
-      ImGui::BeginDisabled();
-    }
+    ImGui::BeginDisabled(single_layer);
+    ImGui::BeginGroup();
     DIRTY_IF(SliderWithInput(prob_id, &layer.probability, 0.0f, 1.0f, "%.2f"));
-    if (single_layer) {
-      ImGui::EndDisabled();
-    }
+    ImGui::EndGroup();
+    ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      ImGui::SetTooltip(single_layer ? "Fraction of rays continuing to the next layer.\nAlways 0 for a single layer." :
-                                       "Fraction of rays continuing to the next layer");
+      const char* prob_tip = single_layer
+                                 ? "Fraction of rays continuing to the next layer.\nAlways 0 for a single layer."
+                                 : "Fraction of rays continuing to the next layer";
+      ImGui::SetTooltip("%s", prob_tip);
     }
 
     // Render entry cards with deferred deletion
