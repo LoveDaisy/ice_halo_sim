@@ -169,10 +169,12 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Verify filter is set
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
 
-      // Open filter modal, click Remove to clear
+      // Open filter modal, click Remove (buffered) then OK to commit removal.
       ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);  // popup open + Filter tab activation (SetSelected first-frame)
+      ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
-      ctx->ItemClick("Edit Filter/Remove Filter##filter");
+      ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
       // Verify filter is cleared
@@ -399,11 +401,11 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       // Write 0 via the input widget — should be clamped to min (0.01)
-      ctx->ItemInputValue("Edit Crystal/##Height##modal_cr_input", 0.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 0.0f);
       ctx->Yield();
 
       // Click OK to commit
-      ctx->ItemClick("Edit Crystal/OK##crystal");
+      ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
       // Height should be clamped to >= 0.01 (kLogLinear with min=0.01)
@@ -427,11 +429,11 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       // Write 0 to Upper H — should be allowed (min=0.0 for kLogLinear)
-      ctx->ItemInputValue("Edit Crystal/##Upper H##modal_cr_input", 0.0f);
+      ctx->ItemInputValue("**/##Upper H##modal_cr_input", 0.0f);
       ctx->Yield();
 
       // Click OK
-      ctx->ItemClick("Edit Crystal/OK##crystal");
+      ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 0.0f);
@@ -754,7 +756,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       // Click Cancel in the modal
-      ctx->ItemClick("Edit Crystal/Cancel##crystal");
+      ctx->ItemClick("**/Cancel##edit_modal");
       ctx->Yield(2);
 
       // State unchanged
@@ -778,11 +780,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       // Modify height via the input widget in the modal
-      ctx->ItemInputValue("Edit Crystal/##Height##modal_cr_input", 5.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 5.0f);
       ctx->Yield();
 
       // Click OK to commit buffer to state
-      ctx->ItemClick("Edit Crystal/OK##crystal");
+      ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
       // Height should be updated to 5.0
@@ -805,7 +807,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       // Click OK to set the default filter on the entry
-      ctx->ItemClick("Edit Filter/OK##filter");
+      ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
       // Filter should now be set (modal OK commits filter buffer to state)

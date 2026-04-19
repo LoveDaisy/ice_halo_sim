@@ -8,7 +8,7 @@
 // FBO so tests can capture from it. Test-only helper; the modal guard mirrors
 // the previous in-panel logic so the edit modal's FBO content is not overwritten.
 static void DriveCrystalPreviewFboForTest() {
-  if (gui::IsCrystalModalOpen()) {
+  if (gui::IsEditModalCrystalTabActive()) {
     return;
   }
   // Visual smoke tests configure entry [0][0] only. If a multi-entry visual test

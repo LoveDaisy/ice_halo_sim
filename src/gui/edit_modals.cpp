@@ -22,22 +22,32 @@ namespace lumice::gui {
 // Modal state (file scope — not shared via gui_state.hpp)
 // ============================================================
 
-enum class ActiveModal { kNone, kCrystal, kAxis, kFilter };
+enum class ActiveModal { kNone, kOpen };
+enum class ActiveTab { kCrystal, kAxis, kFilter };
 
-// Minimum width applied to the three edit popups (Crystal/Axis/Filter) so inner
-// SliderWithInput controls have a usable drag range. AlwaysAutoResize still
-// governs height; SetNextWindowSizeConstraints adds the width floor.
+// Minimum width applied to the unified edit popup so inner SliderWithInput
+// controls have a usable drag range. AlwaysAutoResize still governs height;
+// SetNextWindowSizeConstraints adds the width floor.
 constexpr float kEditModalMinWidth = 432.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
 static int g_modal_entry_idx = -1;
 
+// Active tab is updated each frame inside the corresponding BeginTabItem true-branch
+// (ImGui doesn't auto-write user state). The OpenEditModal path always sets it
+// explicitly together with g_pending_tab_select=true to drive first-frame selection;
+// at other times its value reflects the ImGui TabBar's currently active tab.
+static ActiveTab g_active_tab = ActiveTab::kCrystal;
+static bool g_pending_tab_select = false;
+
 // Edit buffers
 static CrystalConfig g_crystal_buf;
 static AxisDist g_axis_buf[3];  // zenith, azimuth, roll
 static FilterConfig g_filter_buf;
 static char g_raypath_buf[256];
+// Buffered "Remove Filter" intent: applied on modal-level OK, undone by Cancel.
+static bool g_filter_buf_removed = false;
 
 // Crystal modal: trackball state saved on open, restored on Cancel
 static float g_saved_rotation[16];
@@ -170,35 +180,39 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_modal_layer_idx = ly;
   g_modal_entry_idx = en;
 
+  // Initialize all three buffers (regardless of req.target) so any tab the user
+  // switches to shows the entry's current values. Modal-level OK commits all
+  // three atomically; Cancel discards all.
+  g_crystal_buf = entry.crystal;
+  g_axis_buf[0] = entry.crystal.zenith;
+  g_axis_buf[1] = entry.crystal.azimuth;
+  g_axis_buf[2] = entry.crystal.roll;
+  g_filter_buf = entry.filter.value_or(FilterConfig{});
+  snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_filter_buf.raypath_text.c_str());
+  g_filter_buf_removed = false;
+
+  // Save trackball state for Cancel restoration
+  std::memcpy(g_saved_rotation, g_crystal_rotation, sizeof(g_saved_rotation));
+  g_saved_zoom = g_crystal_zoom;
+  g_modal_mesh_hash = 0;  // Force mesh update on first frame
+
   switch (req.target) {
     case EditTarget::kCrystal:
-      g_active_modal = ActiveModal::kCrystal;
-      g_crystal_buf = entry.crystal;
-      // Save trackball state for Cancel restoration
-      std::memcpy(g_saved_rotation, g_crystal_rotation, sizeof(g_saved_rotation));
-      g_saved_zoom = g_crystal_zoom;
-      g_modal_mesh_hash = 0;  // Force mesh update on first frame
+      g_active_tab = ActiveTab::kCrystal;
       break;
     case EditTarget::kAxis:
-      g_active_modal = ActiveModal::kAxis;
-      g_axis_buf[0] = entry.crystal.zenith;
-      g_axis_buf[1] = entry.crystal.azimuth;
-      g_axis_buf[2] = entry.crystal.roll;
+      g_active_tab = ActiveTab::kAxis;
       break;
     case EditTarget::kFilter:
-      g_active_modal = ActiveModal::kFilter;
-      if (entry.filter.has_value()) {
-        g_filter_buf = entry.filter.value();
-      } else {
-        g_filter_buf = FilterConfig{};
-      }
-      snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_filter_buf.raypath_text.c_str());
+      g_active_tab = ActiveTab::kFilter;
       break;
     default:
       return;
   }
 
+  g_active_modal = ActiveModal::kOpen;
   g_pending_open = true;
+  g_pending_tab_select = true;
 }
 
 
@@ -220,7 +234,7 @@ static void HandleCrystalPreviewInteraction(bool hovered, bool active) {
   }
 }
 
-static void RenderCrystalModal(GuiState& state) {
+static void RenderCrystalModal(GuiState& /*state*/) {
   auto& cr = g_crystal_buf;
 
   // Update mesh if crystal params changed
@@ -305,31 +319,7 @@ static void RenderCrystalModal(GuiState& state) {
     ImGui::TreePop();
   }
 
-  ImGui::Separator();
-
-  // -- OK / Cancel --
-  if (ImGui::Button("OK##crystal", ImVec2(80, 0))) {
-    int ly = g_modal_layer_idx;
-    int en = g_modal_entry_idx;
-    if (ly >= 0 && ly < static_cast<int>(state.layers.size()) && en >= 0 &&
-        en < static_cast<int>(state.layers[ly].entries.size())) {
-      state.layers[ly].entries[en].crystal = cr;
-      g_thumbnail_cache.Invalidate(ly, en);
-      state.MarkDirty();
-      g_crystal_mesh_hash = -1;  // Force left panel preview refresh
-    }
-    g_active_modal = ActiveModal::kNone;
-    ImGui::CloseCurrentPopup();
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Cancel##crystal", ImVec2(80, 0))) {
-    // Restore trackball state
-    std::memcpy(g_crystal_rotation, g_saved_rotation, sizeof(g_crystal_rotation));
-    g_crystal_zoom = g_saved_zoom;
-    g_crystal_mesh_hash = -1;  // Force left panel to re-render model crystal
-    g_active_modal = ActiveModal::kNone;
-    ImGui::CloseCurrentPopup();
-  }
+  // OK / Cancel handled at modal level (RenderEditModals).
 }
 
 
@@ -337,7 +327,7 @@ static void RenderCrystalModal(GuiState& state) {
 // Axis Modal
 // ============================================================
 
-static void RenderAxisModal(GuiState& state) {
+static void RenderAxisModal(GuiState& /*state*/) {
   // Preset buttons
   ImGui::Text("Presets:");
   ImGui::SameLine();
@@ -380,29 +370,7 @@ static void RenderAxisModal(GuiState& state) {
   RenderAxisDist("Azimuth", g_axis_buf[1], 0.0f, 360.0f);
   RenderAxisDist("Roll", g_axis_buf[2], 0.0f, 360.0f);
 
-  ImGui::Separator();
-
-  // OK / Cancel
-  if (ImGui::Button("OK##axis", ImVec2(80, 0))) {
-    int ly = g_modal_layer_idx;
-    int en = g_modal_entry_idx;
-    if (ly >= 0 && ly < static_cast<int>(state.layers.size()) && en >= 0 &&
-        en < static_cast<int>(state.layers[ly].entries.size())) {
-      auto& crystal = state.layers[ly].entries[en].crystal;
-      crystal.zenith = g_axis_buf[0];
-      crystal.azimuth = g_axis_buf[1];
-      crystal.roll = g_axis_buf[2];
-      g_thumbnail_cache.Invalidate(ly, en);
-      state.MarkDirty();
-    }
-    g_active_modal = ActiveModal::kNone;
-    ImGui::CloseCurrentPopup();
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Cancel##axis", ImVec2(80, 0))) {
-    g_active_modal = ActiveModal::kNone;
-    ImGui::CloseCurrentPopup();
-  }
+  // OK / Cancel handled at modal level (RenderEditModals).
 }
 
 
@@ -410,26 +378,18 @@ static void RenderAxisModal(GuiState& state) {
 // Filter Modal
 // ============================================================
 
-static void RenderFilterModal(GuiState& state) {
-  // Resolve the parent entry so we can use its crystal kind for face-number
-  // validation. If the entry was destroyed while the modal is open, close
-  // and bail out instead of reading out-of-range data.
-  const int ly = g_modal_layer_idx;
-  const int en = g_modal_entry_idx;
-  if (ly < 0 || ly >= static_cast<int>(state.layers.size()) || en < 0 ||
-      en >= static_cast<int>(state.layers[ly].entries.size())) {
-    g_active_modal = ActiveModal::kNone;
-    ImGui::CloseCurrentPopup();
-    return;
+static void RenderFilterModal(GuiState& /*state*/) {
+  // Validation kind is derived from g_crystal_buf (the in-flight buffer of the
+  // Crystal tab) rather than the entry, because the user may switch the type
+  // in the Crystal tab before committing — the validator should match what
+  // will actually be written on OK.
+  const lumice::CrystalKind kind =
+      (g_crystal_buf.type == CrystalType::kPrism) ? lumice::CrystalKind::kPrism : lumice::CrystalKind::kPyramid;
+
+  // "Remove Filter" intent — buffered, applied on modal-level OK.
+  if (g_filter_buf_removed) {
+    ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.1f, 1.0f), "Filter will be removed on OK.");
   }
-  const auto& entry_for_kind = state.layers[ly].entries[en];
-  // Map the GUI-only `gui::CrystalType` (which currently exposes only kPrism
-  // and kPyramid) to the coarser `lumice::CrystalKind` accepted by the
-  // validator. If new CrystalType values are added to the GUI in the future,
-  // extend this mapping (and lumice::CrystalKind) explicitly — do not rely on
-  // the ternary falling through to kPyramid.
-  const lumice::CrystalKind kind = (entry_for_kind.crystal.type == CrystalType::kPrism) ? lumice::CrystalKind::kPrism :
-                                                                                          lumice::CrystalKind::kPyramid;
 
   // Action combo
   ImGui::Combo("Action##filter_modal", &g_filter_buf.action, kFilterActionNames, kFilterActionCount);
@@ -486,42 +446,14 @@ static void RenderFilterModal(GuiState& state) {
   ImGui::SameLine();
   ImGui::Checkbox("D##filter_modal", &g_filter_buf.sym_d);
 
-  ImGui::Separator();
-
-  // OK / Cancel / Remove Filter
-  bool ok_disabled = (validation != RaypathValidation::kValid);
-  if (ok_disabled) {
-    ImGui::BeginDisabled();
-  }
-  if (ImGui::Button("OK##filter", ImVec2(80, 0))) {
-    // Commit only when the buffer is fully valid. The top-of-function guard
-    // already validated ly/en, so we can reuse them directly.
-    if (validation == RaypathValidation::kValid) {
-      g_filter_buf.raypath_text = g_raypath_buf;
-      state.layers[ly].entries[en].filter = g_filter_buf;
-      state.MarkFilterDirty();
-    }
-    g_active_modal = ActiveModal::kNone;
-    ImGui::CloseCurrentPopup();
-  }
-  if (ok_disabled) {
-    ImGui::EndDisabled();
-  }
-
-  ImGui::SameLine();
-  if (ImGui::Button("Cancel##filter", ImVec2(80, 0))) {
-    g_active_modal = ActiveModal::kNone;
-    ImGui::CloseCurrentPopup();
-  }
-
-  ImGui::SameLine();
+  ImGui::Spacing();
+  // Remove Filter — buffers the intent; modal-level OK will write nullopt.
+  // Cancel still discards (since g_filter_buf_removed is reset on next open).
   if (ImGui::Button("Remove Filter##filter", ImVec2(120, 0))) {
-    // Indices were validated at the top of this frame.
-    state.layers[ly].entries[en].filter = std::nullopt;
-    state.MarkFilterDirty();
-    g_active_modal = ActiveModal::kNone;
-    ImGui::CloseCurrentPopup();
+    g_filter_buf_removed = true;
   }
+
+  // OK / Cancel handled at modal level (RenderEditModals).
 }
 
 
@@ -529,12 +461,17 @@ static void RenderFilterModal(GuiState& state) {
 // Public API
 // ============================================================
 
-bool IsCrystalModalOpen() {
-  return g_active_modal == ActiveModal::kCrystal;
+// True only when the unified edit modal is open AND the Crystal tab is the
+// active one. Used by visual-smoke tests to detect FBO contention with the
+// modal's per-frame g_crystal_renderer.Render() call.
+bool IsEditModalCrystalTabActive() {
+  return g_active_modal == ActiveModal::kOpen && g_active_tab == ActiveTab::kCrystal;
 }
 
 void ResetModalState() {
   g_active_modal = ActiveModal::kNone;
+  g_active_tab = ActiveTab::kCrystal;
+  g_pending_tab_select = false;
   g_modal_layer_idx = -1;
   g_modal_entry_idx = -1;
   g_crystal_buf = {};
@@ -542,6 +479,7 @@ void ResetModalState() {
   g_axis_buf[1] = {};
   g_axis_buf[2] = {};
   g_filter_buf = {};
+  g_filter_buf_removed = false;
   g_raypath_buf[0] = '\0';
   std::memset(g_saved_rotation, 0, sizeof(g_saved_rotation));
   g_saved_zoom = 1.0f;
@@ -549,66 +487,142 @@ void ResetModalState() {
   g_modal_mesh_hash = 0;
 }
 
+namespace {
+
+// Validation kind based on the in-flight Crystal-tab buffer (not the entry),
+// because the user may switch crystal type before committing.
+lumice::CrystalKind CurrentValidationKind() {
+  return (g_crystal_buf.type == CrystalType::kPrism) ? lumice::CrystalKind::kPrism : lumice::CrystalKind::kPyramid;
+}
+
+// Apply all three buffers atomically to the entry; called by modal-level OK.
+void CommitAllBuffers(GuiState& state) {
+  const int ly = g_modal_layer_idx;
+  const int en = g_modal_entry_idx;
+  if (ly < 0 || ly >= static_cast<int>(state.layers.size()) || en < 0 ||
+      en >= static_cast<int>(state.layers[ly].entries.size())) {
+    return;
+  }
+  auto& entry = state.layers[ly].entries[en];
+  // g_crystal_buf carries the Crystal-tab edits; overlay axis edits from the
+  // Axis tab so the unified commit reflects both.
+  entry.crystal = g_crystal_buf;
+  entry.crystal.zenith = g_axis_buf[0];
+  entry.crystal.azimuth = g_axis_buf[1];
+  entry.crystal.roll = g_axis_buf[2];
+  if (g_filter_buf_removed) {
+    entry.filter = std::nullopt;
+  } else {
+    g_filter_buf.raypath_text = g_raypath_buf;
+    entry.filter = g_filter_buf;
+  }
+  g_thumbnail_cache.Invalidate(ly, en);
+  state.MarkDirty();
+  state.MarkFilterDirty();
+  g_crystal_mesh_hash = -1;
+}
+
+}  // namespace
+
 void RenderEditModals(GuiState& state) {
-  // Deferred OpenPopup: must happen outside BeginPopupModal
-  if (g_pending_open && g_active_modal != ActiveModal::kNone) {
-    switch (g_active_modal) {
-      case ActiveModal::kCrystal:
-        ImGui::OpenPopup("Edit Crystal");
-        break;
-      case ActiveModal::kAxis:
-        ImGui::OpenPopup("Edit Axis");
-        break;
-      case ActiveModal::kFilter:
-        ImGui::OpenPopup("Edit Filter");
-        break;
-      default:
-        break;
-    }
+  // Deferred OpenPopup: must happen outside BeginPopupModal.
+  if (g_pending_open && g_active_modal == ActiveModal::kOpen) {
+    ImGui::OpenPopup("Edit Entry");
     g_pending_open = false;
   }
 
-  // Index validity guard: if the target entry was deleted while modal is open, close it
-  if (g_active_modal != ActiveModal::kNone) {
+  // Index validity guard: if the target entry was deleted while modal is open, close it.
+  if (g_active_modal == ActiveModal::kOpen) {
     bool valid = g_modal_layer_idx >= 0 && g_modal_layer_idx < static_cast<int>(state.layers.size()) &&
                  g_modal_entry_idx >= 0 &&
                  g_modal_entry_idx < static_cast<int>(state.layers[g_modal_layer_idx].entries.size());
     if (!valid) {
       g_active_modal = ActiveModal::kNone;
-      // If a popup was open, it will simply not render this frame
     }
   }
 
-  // Crystal modal — guard ensures popup closes if entry was deleted externally
   ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
-  if (ImGui::BeginPopupModal("Edit Crystal", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    if (g_active_modal != ActiveModal::kCrystal) {
+  if (ImGui::BeginPopupModal("Edit Entry", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (g_active_modal != ActiveModal::kOpen) {
       ImGui::CloseCurrentPopup();
-    } else {
-      RenderCrystalModal(state);
+      ImGui::EndPopup();
+      return;
     }
-    ImGui::EndPopup();
-  }
 
-  // Axis modal
-  ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
-  if (ImGui::BeginPopupModal("Edit Axis", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    if (g_active_modal != ActiveModal::kAxis) {
-      ImGui::CloseCurrentPopup();
-    } else {
-      RenderAxisModal(state);
-    }
-    ImGui::EndPopup();
-  }
+    // Snapshot the SetSelected flags BEFORE any BeginTabItem body runs —
+    // each body writes g_active_tab, which would otherwise overwrite the
+    // pending selection before later tabs (e.g. Filter) read it.
+    const ImGuiTabItemFlags crystal_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kCrystal) ?
+                                                ImGuiTabItemFlags_SetSelected :
+                                                ImGuiTabItemFlags_None;
+    const ImGuiTabItemFlags axis_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kAxis) ?
+                                             ImGuiTabItemFlags_SetSelected :
+                                             ImGuiTabItemFlags_None;
+    const ImGuiTabItemFlags filter_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kFilter) ?
+                                               ImGuiTabItemFlags_SetSelected :
+                                               ImGuiTabItemFlags_None;
 
-  // Filter modal
-  ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
-  if (ImGui::BeginPopupModal("Edit Filter", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    if (g_active_modal != ActiveModal::kFilter) {
-      ImGui::CloseCurrentPopup();
-    } else {
-      RenderFilterModal(state);
+    if (ImGui::BeginTabBar("##edit_modal_tabs")) {
+      if (ImGui::BeginTabItem("Crystal", nullptr, crystal_flags)) {
+        g_active_tab = ActiveTab::kCrystal;
+        RenderCrystalModal(state);
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Axis", nullptr, axis_flags)) {
+        g_active_tab = ActiveTab::kAxis;
+        RenderAxisModal(state);
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Filter", nullptr, filter_flags)) {
+        g_active_tab = ActiveTab::kFilter;
+        RenderFilterModal(state);
+        ImGui::EndTabItem();
+      }
+      ImGui::EndTabBar();
+      // Consumed pending selection after BeginTabItem reads the flag.
+      g_pending_tab_select = false;
     }
+
+    ImGui::Separator();
+    // Modal-level OK / Cancel.
+    // OK gate: when the user has buffered a Remove Filter intent, raypath
+    // validation is irrelevant (we won't write the buffer); otherwise validate
+    // the in-flight raypath against the Crystal-tab buffer's type.
+    bool ok_disabled = false;
+    const char* ok_tooltip = nullptr;
+    if (!g_filter_buf_removed) {
+      g_filter_buf.raypath_text = g_raypath_buf;
+      const auto v = ValidateRaypathText(g_filter_buf.raypath_text, CurrentValidationKind());
+      if (v.state != RaypathValidation::kValid) {
+        ok_disabled = true;
+        ok_tooltip = "Filter raypath invalid — fix it in the Filter tab";
+      }
+    }
+
+    if (ok_disabled) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("OK##edit_modal", ImVec2(80, 0))) {
+      CommitAllBuffers(state);
+      g_active_modal = ActiveModal::kNone;
+      ImGui::CloseCurrentPopup();
+    }
+    if (ok_disabled) {
+      ImGui::EndDisabled();
+    }
+    if (ok_disabled && ok_tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("%s", ok_tooltip);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel##edit_modal", ImVec2(80, 0))) {
+      // Restore trackball state (Crystal tab's only side-effect that survives Cancel).
+      std::memcpy(g_crystal_rotation, g_saved_rotation, sizeof(g_crystal_rotation));
+      g_crystal_zoom = g_saved_zoom;
+      g_crystal_mesh_hash = -1;
+      g_active_modal = ActiveModal::kNone;
+      ImGui::CloseCurrentPopup();
+    }
+
     ImGui::EndPopup();
   }
 }
