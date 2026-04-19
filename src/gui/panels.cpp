@@ -161,19 +161,16 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
     return "None";
   }
   const auto& fc = f.value();
-  // NOTE: the "raypath " prefix is hardcoded because FilterConfig currently supports only
-  // raypath-type filters. When a second filter type is added, introduce FilterConfig::type
-  // and map the type enum to the prefix string here.
-  std::string result = "raypath ";
-  result += (fc.action == 0) ? "In " : "Out ";
-
+  // Format: "<raypath_text or *> <In|Out>[ <sym>]". Example: "1-3 In PBD".
+  std::string result;
   if (fc.raypath_text.size() > 12) {
-    result += fc.raypath_text.substr(0, 12) + "...";
+    result = fc.raypath_text.substr(0, 12) + "...";
   } else if (!fc.raypath_text.empty()) {
-    result += fc.raypath_text;
+    result = fc.raypath_text;
   } else {
-    result += "*";
+    result = "*";
   }
+  result += (fc.action == 0) ? " In" : " Out";
 
   std::string sym;
   if (fc.sym_p)
@@ -519,11 +516,13 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   float spacing_x = ImGui::GetStyle().ItemSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x - kThumbnailSize - spacing_x;
   float text_w = std::max(40.0f, avail_w - kInputWidth - kLabelColWidth - spacing_x * 2);
-  float line_h = ImGui::GetTextLineHeightWithSpacing();
+  // Use frame-height spacing so each row reserves room for the Edit button (taller than text);
+  // otherwise Row 0-2 buttons would overlap the prop. slider in Row 3.
+  float row_h = ImGui::GetFrameHeightWithSpacing();
 
   auto emit_row = [&](int row_idx, const char* text_content, const char* btn_id, EditTarget target,
                       const char* row_label, bool clip_text) {
-    ImVec2 line_start(right_x, thumb_pos.y + line_h * static_cast<float>(row_idx));
+    ImVec2 line_start(right_x, thumb_pos.y + row_h * static_cast<float>(row_idx));
     ImGui::SetCursorScreenPos(line_start);
     if (clip_text) {
       ImVec2 clip_min = line_start;
@@ -545,48 +544,55 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
 
   // Row 1: Crystal type
   const char* type_name = (entry.crystal.type == CrystalType::kPrism) ? "Prism" : "Pyramid";
-  emit_row(0, type_name, "Edit##cr", EditTarget::kCrystal, "crystal", false);
+  emit_row(0, type_name, "Edit##cr", EditTarget::kCrystal, "Crystal", false);
 
   // Row 2: Axis preset
   std::string preset = AxisPresetName(entry.crystal);
-  emit_row(1, preset.c_str(), "Edit##ax", EditTarget::kAxis, "axis", false);
+  emit_row(1, preset.c_str(), "Edit##ax", EditTarget::kAxis, "Axis", false);
 
   // Row 3: Filter summary (may exceed text_w — clip so it doesn't overlap the Edit button)
   std::string filter_text = FilterSummary(entry.filter);
-  emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "filter", true);
+  emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "Filter", true);
 
   // Row 4: Proportion — reuse SliderWithInput for [slider][input] "prop." layout
-  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + line_h * 3.0f));
+  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + row_h * 3.0f));
   char prop_label[32];
   snprintf(prop_label, sizeof(prop_label), "prop.##prop_%d_%d", layer_idx, entry_idx);
   if (SliderWithInput(prop_label, &entry.proportion, 0.0f, 100.0f, "%.1f")) {
     state.MarkDirty();
   }
 
-  // Hover action buttons: render at top-right of card (inside child) with alpha
-  // driven by previous-frame hover state. They are always in the ImGui tree so
-  // click paths remain stable; only visibility transitions.
+  // Hover action buttons: stacked vertically at the right edge of the card —
+  // Delete (×) on top, Duplicate (+) below, separated by kHoverBtnGap. Alpha is
+  // driven by previous-frame hover state; buttons are always in the ImGui tree
+  // so click paths remain stable, only visibility transitions.
+  // Coordinate strategy (recorded for task-hover-btn-debt):
+  //   x: card_right - btn_w - kHoverBtnPad
+  //   delete y: card_top + kHoverBtnPad
+  //   duplicate y: delete_y + btn_h + kHoverBtnGap
   char dup_id[32];
   char del_id[32];
-  snprintf(dup_id, sizeof(dup_id), "Duplicate##%d_%d", layer_idx, entry_idx);
-  snprintf(del_id, sizeof(del_id), "x##%d_%d", layer_idx, entry_idx);
+  // "\xC3\x97" is U+00D7 MULTIPLICATION SIGN (×) in UTF-8; Latin-1 range is
+  // covered by ImGui's default Proggy Clean font.
+  snprintf(dup_id, sizeof(dup_id), "+##dup_%d_%d", layer_idx, entry_idx);
+  snprintf(del_id, sizeof(del_id), "\xC3\x97##del_%d_%d", layer_idx, entry_idx);
 
   float frame_pad_x = ImGui::GetStyle().FramePadding.x;
-  float btn_spacing = ImGui::GetStyle().ItemSpacing.x;
-  float dup_w = ImGui::CalcTextSize("Duplicate").x + frame_pad_x * 2.0f;
-  float del_w = ImGui::CalcTextSize("x").x + frame_pad_x * 2.0f;
-  float hover_row_w = dup_w + btn_spacing + del_w;
+  float dup_glyph_w = ImGui::CalcTextSize("+").x;
+  float del_glyph_w = ImGui::CalcTextSize("\xC3\x97").x;
+  float btn_w = std::max(dup_glyph_w, del_glyph_w) + frame_pad_x * 2.0f;
+  float btn_h = ImGui::GetFrameHeight();
   constexpr float kHoverBtnPad = 2.0f;
   ImVec2 card_win_pos = ImGui::GetWindowPos();
   ImVec2 card_win_sz = ImGui::GetWindowSize();
-  ImGui::SetCursorScreenPos(
-      ImVec2(card_win_pos.x + card_win_sz.x - hover_row_w - kHoverBtnPad, card_win_pos.y + kHoverBtnPad));
+  float btn_x = card_win_pos.x + card_win_sz.x - btn_w - kHoverBtnPad;
+  float del_y = card_win_pos.y + kHoverBtnPad;
+  float dup_y = del_y + btn_h + kHoverBtnGap;
 
   ImGui::PushStyleVar(ImGuiStyleVar_Alpha, hover_prev ? 1.0f : 0.0f);
-  bool dup_clicked = ImGui::SmallButton(dup_id);
-  ImGui::SameLine();
-  // Delete button: red when enabled (destructive action); auto-greyed when
+  // Delete button (top): red when enabled (destructive action); auto-greyed when
   // disabled (only one entry in layer — cannot remove last entry).
+  ImGui::SetCursorScreenPos(ImVec2(btn_x, del_y));
   bool can_delete_entry = state.layers[layer_idx].entries.size() > 1;
   if (can_delete_entry) {
     PushDestructiveStyle();
@@ -599,6 +605,9 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   } else {
     ImGui::EndDisabled();
   }
+  // Duplicate button (below)
+  ImGui::SetCursorScreenPos(ImVec2(btn_x, dup_y));
+  bool dup_clicked = ImGui::SmallButton(dup_id);
   ImGui::PopStyleVar();
 
   if (dup_clicked) {

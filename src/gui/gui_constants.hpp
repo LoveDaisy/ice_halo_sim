@@ -8,7 +8,7 @@ constexpr int kInitWindowWidth = 1600;
 constexpr int kInitWindowHeight = 980;
 constexpr int kMinWindowWidth = 1024;
 constexpr int kMinWindowHeight = 640;
-constexpr float kLeftPanelWidth = 360.0f;
+constexpr float kLeftPanelWidth = 400.0f;
 constexpr float kRightPanelWidth = 300.0f;
 constexpr float kTopBarHeight = 40.0f;
 constexpr float kStatusBarHeight = 28.0f;
@@ -46,8 +46,11 @@ constexpr float kInputWidth = 60.0f;
 // Card thumbnail (offscreen crystal rendering)
 // Currently used for both FBO render resolution and UI display size.
 // If HiDPI support is needed later, split into separate render/display constants.
-constexpr int kThumbnailSize = 64;
+constexpr int kThumbnailSize = 96;
 constexpr int kMaxThumbnailUpdatesPerFrame = 2;
+
+// Vertical gap between stacked hover-action buttons (Delete on top, Duplicate below).
+constexpr float kHoverBtnGap = 4.0f;
 
 // Default camera zoom for the crystal renderer. Lower value → crystal fills
 // more of the canvas (screen coverage ≈ 1/zoom). Must stay in sync between

@@ -142,10 +142,10 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
 
-      // Delete the new entry (x##0_1 for layer 0, entry 1). The hover button
+      // Delete the new entry (×##del_0_1 for layer 0, entry 1). The hover button
       // is always in the ImGui tree (alpha=0 when not hovered) so test engine
       // can click it by ID even if the card is not hovered.
-      ctx->ItemClick("**/x##0_1");
+      ctx->ItemClick("**/\xC3\x97##del_0_1");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
     };
@@ -296,7 +296,7 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
 
       // Duplicate the entry (hover button; ID is always addressable even at alpha=0).
-      ctx->ItemClick("**/Duplicate##0_0");
+      ctx->ItemClick("**/+##dup_0_0");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
 
