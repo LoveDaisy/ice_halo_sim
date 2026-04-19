@@ -516,6 +516,10 @@ void CommitAllBuffers(GuiState& state) {
     return;
   }
   auto& entry = state.layers[ly].entries[en];
+  // Diff-gate: snapshot before applying buffers so we can skip render-invalidation
+  // when OK is pressed without any actual change (e.g. open Edit, click OK on
+  // finite-rays preview — must not clear the rendered image or arm Revert).
+  const EntryCard old_entry = entry;
   // g_crystal_buf carries the Crystal-tab edits; overlay axis edits from the
   // Axis tab so the unified commit reflects both.
   entry.crystal = g_crystal_buf;
@@ -533,10 +537,12 @@ void CommitAllBuffers(GuiState& state) {
       entry.filter = g_filter_buf;
     }
   }
-  g_thumbnail_cache.Invalidate(ly, en);
-  state.MarkDirty();
-  state.MarkFilterDirty();
-  g_crystal_mesh_hash = -1;
+  if (entry != old_entry) {
+    g_thumbnail_cache.Invalidate(ly, en);
+    state.MarkDirty();
+    state.MarkFilterDirty();
+    g_crystal_mesh_hash = -1;
+  }
 }
 
 }  // namespace

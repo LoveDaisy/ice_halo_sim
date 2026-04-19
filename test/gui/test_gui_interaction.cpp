@@ -182,6 +182,42 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: Edit modal OK without any change must NOT clear the rendered preview
+  // or arm Revert. Regression guard for scrum-gui-polish-v7 152.2: previously
+  // CommitAllBuffers unconditionally MarkFilterDirty()'d after any OK,
+  // wiping snapshot_intensity + flipping sim_state to kModified.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit", "ok_no_change_preserves_state");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Simulate "finite rays just finished": sim_state == kDone with a
+      // non-zero snapshot intensity that the diff-gate must preserve.
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.snapshot_intensity = 0.5f;
+      gui::g_state.intensity_locked = false;
+      gui::g_state.dirty = false;
+      ctx->Yield();
+
+      // Open Edit Entry modal and immediately click OK (no field touched).
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      // Render-invalidation must not have fired:
+      //   - sim_state still kDone (no kModified ⇒ Revert button stays hidden)
+      //   - snapshot_intensity preserved (no display clear)
+      //   - intensity_locked still false (no upload lock armed)
+      //   - dirty still false (no spurious unsaved-changes flag)
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
+      IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.5f);
+      IM_CHECK(!gui::g_state.intensity_locked);
+      IM_CHECK(!gui::g_state.dirty);
+    };
+  }
+
   // P1: Unsaved Changes Popup
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "unsaved_popup");
