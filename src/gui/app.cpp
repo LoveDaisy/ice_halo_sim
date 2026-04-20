@@ -29,7 +29,6 @@ CrystalRenderer g_crystal_renderer;
 ThumbnailCache g_thumbnail_cache;
 LUMICE_Server* g_server = nullptr;
 ServerPoller g_server_poller;
-bool g_panel_collapsed = false;
 PreviewViewport g_preview_vp;
 
 int g_programmatic_resize = 0;
@@ -95,7 +94,7 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   glfwGetWindowSize(window, &win_w, &win_h);
 
   constexpr float kCollapsedStripWidth = 20.0f;  // Must match kCollapseBtnSize in app_panels.cpp
-  float left_w = g_panel_collapsed ? kCollapsedStripWidth : kLeftPanelWidth;
+  float left_w = g_state.left_panel_collapsed ? kCollapsedStripWidth : kLeftPanelWidth;
   float right_w = g_state.right_panel_collapsed ? kCollapsedStripWidth : kRightPanelWidth;
   float preview_w = std::max(1.0f, static_cast<float>(win_w) - left_w - right_w);
   float preview_h = preview_w / ratio;

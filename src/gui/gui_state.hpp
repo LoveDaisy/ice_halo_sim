@@ -250,6 +250,8 @@ struct GuiState {
   bool intensity_locked = false;
 
   // Panel state (view preference — does not call MarkDirty)
+  // not persisted to .lmc (unlike right_panel_collapsed)
+  bool left_panel_collapsed = false;
   bool right_panel_collapsed = false;
 
   // Log panel state (view preference — does not call MarkDirty)
@@ -276,7 +278,7 @@ struct GuiState {
   //   Fields mirrored here must be the subset of GuiState classified as "configuration"
   //   (i.e. those reached by MarkDirty, contributing to the dirty/Revert lifecycle).
   //   View preferences (aspect_preset, bg_*, horizon/grid/sun circles, log levels,
-  //   right_panel_collapsed), runtime state (sim_state, stats_*, snapshot_intensity,
+  //   left_panel_collapsed, right_panel_collapsed), runtime state (sim_state, stats_*, snapshot_intensity,
   //   intensity_locked, texture_upload_count), and file management (current_file_path,
   //   dirty, save_texture) are intentionally excluded.
   //

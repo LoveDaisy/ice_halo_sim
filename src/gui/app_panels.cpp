@@ -28,9 +28,9 @@ void RenderTopBar(float window_width) {
   // Left-panel collapse toggle (placed before Run/Stop; owns the leftmost slot of the top bar
   // so it can never overlap with panel-internal headers).
   {
-    const char* left_toggle_label = g_panel_collapsed ? ">##left_panel_toggle" : "<##left_panel_toggle";
+    const char* left_toggle_label = g_state.left_panel_collapsed ? ">##left_panel_toggle" : "<##left_panel_toggle";
     if (ImGui::Button(left_toggle_label)) {
-      g_panel_collapsed = !g_panel_collapsed;
+      g_state.left_panel_collapsed = !g_state.left_panel_collapsed;
     }
     ImGui::SameLine();
     ImGui::TextDisabled("|");
@@ -193,8 +193,8 @@ void RenderCollapsedStrip(const char* btn_label, float strip_x, float strip_y, f
 void RenderLeftPanel(float window_height) {
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
 
-  if (g_panel_collapsed) {
-    RenderCollapsedStrip(">", 0, kTopBarHeight, panel_height, &g_panel_collapsed);
+  if (g_state.left_panel_collapsed) {
+    RenderCollapsedStrip(">", 0, kTopBarHeight, panel_height, &g_state.left_panel_collapsed);
     return;
   }
 
@@ -449,7 +449,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 }
 
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {
-  float left_w = g_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
+  float left_w = g_state.left_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
   float right_w = g_state.right_panel_collapsed ? kCollapseBtnSize : kRightPanelWidth;
   float panel_x = left_w;
   float panel_width = window_width - left_w - right_w;

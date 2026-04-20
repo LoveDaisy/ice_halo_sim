@@ -38,7 +38,6 @@ extern CrystalRenderer g_crystal_renderer;
 extern ThumbnailCache g_thumbnail_cache;
 extern LUMICE_Server* g_server;
 extern ServerPoller g_server_poller;
-extern bool g_panel_collapsed;
 extern PreviewViewport g_preview_vp;
 
 // Aspect ratio state

@@ -59,7 +59,7 @@ void ResetTestState() {
   // UI view state
   gui::ResetCrystalView();
   gui::g_crystal_style = 1;
-  gui::g_panel_collapsed = false;
+  gui::g_state.left_panel_collapsed = false;
   gui::g_state.right_panel_collapsed = false;
   gui::g_preview_vp.active = false;
   gui::g_programmatic_resize = 0;
