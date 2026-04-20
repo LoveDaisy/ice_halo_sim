@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "gui/app.hpp"
+#include "gui/gl_capture.hpp"
 #include "gui/gl_common.h"
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state.hpp"
@@ -1195,25 +1196,15 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
   // Render preview into FBO
   renderer.Render(0, 0, w, h, vp.params);
 
-  // Read pixels
-  std::vector<unsigned char> pixels(static_cast<size_t>(w) * h * 4);
-  glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+  // Read pixels (RGBA8, Y-flipped top-down). Readback happens before FBO unbind
+  // so the helper reads from the just-rendered FBO.
+  std::vector<unsigned char> pixels;
+  ReadbackGlRegionToRgba(0, 0, w, h, pixels);
 
   // Cleanup GL resources
   glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
   glDeleteRenderbuffers(1, &rbo);
   glDeleteFramebuffers(1, &fbo);
-
-  // Flip Y axis (OpenGL bottom-up → image top-down)
-  int row_bytes = w * 4;
-  std::vector<unsigned char> row(row_bytes);
-  for (int y = 0; y < h / 2; y++) {
-    unsigned char* top = pixels.data() + y * row_bytes;
-    unsigned char* bottom = pixels.data() + (h - 1 - y) * row_bytes;
-    std::memcpy(row.data(), top, row_bytes);
-    std::memcpy(top, bottom, row_bytes);
-    std::memcpy(bottom, row.data(), row_bytes);
-  }
 
   // Save as RGBA PNG
   auto u8path = path.u8string();
