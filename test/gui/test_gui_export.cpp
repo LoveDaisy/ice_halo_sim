@@ -196,6 +196,7 @@ static void RunAcExport() {
   int h = g_ac_state.dst_h > 0 ? g_ac_state.dst_h : gui::g_preview_vp.vp_h;
 
   gui::PreviewParams params = BuildAcExportParams(g_ac_state.exposure_offset);
+  // 4 = Dual Fisheye Equal Area (see gui_state.hpp::kLensTypeNames).
   if (g_ac_state.lens_type_override == 4) {
     ApplyDualFisheyeOverride(params);
   }
@@ -673,6 +674,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       g_ac_state.exposure_offset = 0.0f;
       g_ac_state.requested = true;
       ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
       IM_CHECK(g_ac_state.ok);
       double mean_a = ComputeMeanLuma(g_ac_state.rgba);
 
@@ -681,6 +683,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       g_ac_state.exposure_offset = 2.0f;
       g_ac_state.requested = true;
       ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
       IM_CHECK(g_ac_state.ok);
       double mean_b = ComputeMeanLuma(g_ac_state.rgba);
 
@@ -795,6 +798,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       g_ac_state.exposure_offset = 0.0f;
       g_ac_state.requested = true;
       ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
       IM_CHECK(g_ac_state.ok);
       double mean_a = ComputeMeanLuma(g_ac_state.rgba);
 
@@ -806,6 +810,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       g_ac_state.exposure_offset = 2.0f;
       g_ac_state.requested = true;
       ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
       IM_CHECK(g_ac_state.ok);
       double mean_b = ComputeMeanLuma(g_ac_state.rgba);
 
