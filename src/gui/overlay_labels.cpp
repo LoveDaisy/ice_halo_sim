@@ -450,36 +450,65 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
     }
   }
 
-  // When visible = upper(0) or lower(1), add the hemisphere boundary (equator) as an extra edge.
-  // The equator is defined by altitude = 0 (world_dir.z = 0). Sample it in world space
-  // and forward-project to pixel coordinates.
-  // Note: front(3) hemisphere boundary is a view-dependent great circle, not drawn here.
-  // Was: input.visible != 2 (excluded only full mode)
-  if ((input.visible == 0 || input.visible == 1) && input.lens_type >= 0 && input.lens_type <= 3) {
-    constexpr int kEquatorSamples = 360;
-    SampleAngles prev{};
-    prev.valid = false;
+  // Hemisphere-boundary sampling: grid labels should appear at the edge of the visible sky,
+  // not just at viewport edges. There are three distinct "edges" a grid line can cross:
+  //   (1) the viewport rectangle — handled by edges[4] loop above;
+  //   (2) the equator (altitude=0) — visible in upper/lower modes as the horizon cutoff;
+  //   (3) the front-half great circle (dot(world_dir, forward)=0) — visible in front mode.
+  // Below we sample each applicable hemisphere boundary in world space, forward-project to
+  // pixels, and feed adjacent sample pairs into detect_crossings, reusing the same crossing
+  // logic as viewport edges.
+  // Restricted to lens_type 0-3 because WorldDirToPixel only implements forward projection
+  // for those (overlay_labels.cpp:198-200). Dual fisheye / rectangular lens boundaries are
+  // correctly handled by the viewport-edge path because those projections already show the
+  // full sphere and the boundary coincides with the pixel cull.
+  if (input.lens_type >= 0 && input.lens_type <= 3) {
+    constexpr int kBoundarySamples = 360;
 
-    for (int i = 0; i <= kEquatorSamples; i++) {
-      float az_rad = -kPi + i * (2.0f * kPi / kEquatorSamples);
-      // Equator direction: altitude=0, world_dir.z=0
-      float wx = -std::cos(az_rad);
-      float wy = -std::sin(az_rad);
-      float wz = 0.0f;
+    auto sample_curve = [&](auto curve_fn) {
+      SampleAngles prev{};
+      prev.valid = false;
+      for (int i = 0; i <= kBoundarySamples; i++) {
+        float t = i * (2.0f * kPi / kBoundarySamples);
+        float wx_b = 0, wy_b = 0, wz_b = 0;
+        curve_fn(t, wx_b, wy_b, wz_b);
 
-      FwdResult fp = WorldDirToPixel(wx, wy, wz, res_x, res_y, input.lens_type, input.fov, view_matrix);
-      if (!fp.valid || std::abs(fp.px) > hw || std::abs(fp.py) > hh) {
-        prev.valid = false;
-        continue;
+        FwdResult fp = WorldDirToPixel(wx_b, wy_b, wz_b, res_x, res_y, input.lens_type, input.fov, view_matrix);
+        if (!fp.valid || std::abs(fp.px) > hw || std::abs(fp.py) > hh) {
+          prev.valid = false;
+          continue;
+        }
+
+        float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
+        float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
+
+        SampleAngles cur = make_sample(fp.px, fp.py, scr_x, scr_y);
+        if (prev.valid && cur.valid)
+          detect_crossings(prev, cur);
+        prev = cur;
       }
+    };
 
-      float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
-      float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
-
-      SampleAngles cur = make_sample(fp.px, fp.py, scr_x, scr_y);
-      if (prev.valid && cur.valid)
-        detect_crossings(prev, cur);
-      prev = cur;
+    if (input.visible == 0 || input.visible == 1) {
+      // Equator: {(cos az, sin az, 0)} in world space, parameterized to match the prior loop's
+      // az_rad = -π + t convention so label positions are stable across refactor.
+      sample_curve([](float t, float& wx, float& wy, float& wz) {
+        float az = -kPi + t;
+        wx = -std::cos(az);
+        wy = -std::sin(az);
+        wz = 0.0f;
+      });
+    } else if (input.visible == 3) {
+      // Front hemisphere boundary: great circle perpendicular to forward. In view space this
+      // is z_view = 0 (the xy-plane); map to world via view_matrix (column-major: col0/col1 are
+      // the first two columns, i.e. view-space x and y basis expressed in world coordinates).
+      // Points: world = cos(t) * col0 + sin(t) * col1.
+      sample_curve([&](float t, float& wx, float& wy, float& wz) {
+        float c = std::cos(t), s = std::sin(t);
+        wx = c * view_matrix[0] + s * view_matrix[3];
+        wy = c * view_matrix[1] + s * view_matrix[4];
+        wz = c * view_matrix[2] + s * view_matrix[5];
+      });
     }
   }
 

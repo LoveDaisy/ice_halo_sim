@@ -134,6 +134,37 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // Test E: Front mode + Fisheye Equidistant fov=280° must label the hemisphere boundary.
+  // Regression guard for scrum-gui-polish-v8 patch: the front-half great circle
+  // (dot(world_dir, forward)=0) was previously not sampled, leaving the visible hemisphere edge
+  // without any angle labels (while Upper/Lower horizons had them).
+  // Lens choice: Fisheye Equidistant shows back-facing dirs unfiltered; fov=280° puts the
+  // boundary circle at r_norm = 90°/140° ≈ 0.64 (well inside the disc) AND leaves enough of
+  // the back hemisphere on viewport edges to produce a non-zero Full-mode baseline.
+  // Linear / Fisheye<180° cannot show this boundary (it's at infinity in gnomonic projection,
+  // or outside the unit disc in narrow fisheye).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "front_fisheye_boundary_labels");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in_front = MakeGridOnly(/*visible=*/3, /*lens=Fisheye Equidistant*/ 2, /*elev*/ 0.0f, /*az*/ 0.0f);
+      auto in_full = MakeGridOnly(/*visible=*/2, /*lens=Fisheye Equidistant*/ 2, /*elev*/ 0.0f, /*az*/ 0.0f);
+      in_front.fov = 280.0f;
+      in_full.fov = 280.0f;
+
+      std::vector<lumice::gui::OverlayLabel> labels_front;
+      std::vector<lumice::gui::OverlayLabel> labels_full;
+      lumice::gui::ComputeOverlayLabels(in_front, 0.0f, 0.0f, 800.0f, 600.0f, labels_front);
+      lumice::gui::ComputeOverlayLabels(in_full, 0.0f, 0.0f, 800.0f, 600.0f, labels_full);
+
+      int n_front = CountGridLabels(labels_front);
+      int n_full = CountGridLabels(labels_full);
+
+      IM_CHECK_GT(n_full, 0);        // baseline sanity (viewport-edge grid labels in Full mode)
+      IM_CHECK_GT(n_front, n_full);  // boundary sampler adds labels at the hemisphere edge in Front
+    };
+  }
+
   // Test D: Full mode + back sun must NOT cull (is_visible_front no-op outside Front).
   // Critical pairing with Test B: same sun_back scenario, but Full mode keeps labels while
   // Test B's Front mode drops them. The asymmetry (Full > 0, Front == 0) is the regression
