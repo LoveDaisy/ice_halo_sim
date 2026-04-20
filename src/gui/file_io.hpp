@@ -42,7 +42,8 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
 
 // Write an already-rendered RGBA8 top-down buffer to disk as a PNG.
 // Shared by ExportPreviewPng and DoExportPreviewPng so PNG I/O lives in one place.
-bool WriteRgbaBufferToPng(const std::filesystem::path& path, int w, int h, const std::vector<unsigned char>& rgba);
+[[nodiscard]] bool WriteRgbaBufferToPng(const std::filesystem::path& path, int w, int h,
+                                        const std::vector<unsigned char>& rgba);
 
 // Capture an (x,y,w,h) region of the currently bound framebuffer and write it as a PNG.
 // Contract (MUST hold at call site):

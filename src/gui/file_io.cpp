@@ -1169,7 +1169,8 @@ bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector
 // Shared PNG writer: takes an RGBA8 top-down buffer and writes it as a PNG file.
 // Centralizes stbi_write_png so callers (this module, app.cpp DoExportPreviewPng)
 // share one error-handling convention.
-bool WriteRgbaBufferToPng(const std::filesystem::path& path, int w, int h, const std::vector<unsigned char>& rgba) {
+[[nodiscard]] bool WriteRgbaBufferToPng(const std::filesystem::path& path, int w, int h,
+                                        const std::vector<unsigned char>& rgba) {
   if (path.empty() || w <= 0 || h <= 0 ||
       rgba.size() != static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
     return false;
