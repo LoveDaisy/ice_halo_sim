@@ -325,6 +325,10 @@ void DoExportEquirectangularPng() {
   }
   // Preserve 155.4 约定：short_res = min(tex_w/2, tex_h) for strict 2:1 output.
   int short_res = std::min(tex_w / 2, tex_h);
+  if (short_res <= 0) {
+    GUI_LOG_ERROR("[GUI] Export equirect: texture too small (tex={}x{})", tex_w, tex_h);
+    return;
+  }
   int dst_w = 2 * short_res;
   int dst_h = short_res;
 
