@@ -22,13 +22,21 @@ build() {
     ret=$?
   fi
   if [[ $ret == 0 && $BUILD_TEST == ON && $BUILD_GUI == ON ]]; then
-    GUI_TEST_BIN="${ROOT_DIR}/build/${BUILD_TYPE}/bin/LumiceGUITests"
-    if [[ -x "$GUI_TEST_BIN" ]]; then
-      echo "Running GUI tests..."
-      "$GUI_TEST_BIN"
-      ret=$?
+    if [[ -n "${LUMICE_SKIP_GUI_TESTS:-}" || -n "${CI:-}" ]]; then
+      skip_reason="LUMICE_SKIP_GUI_TESTS set"
+      if [[ -n "${CI:-}" && -z "${LUMICE_SKIP_GUI_TESTS:-}" ]]; then
+        skip_reason="CI environment detected"
+      fi
+      echo "Skipping GUI tests ($skip_reason)"
     else
-      echo "Warning: $GUI_TEST_BIN not found, skipping GUI tests"
+      GUI_TEST_BIN="${ROOT_DIR}/build/${BUILD_TYPE}/bin/LumiceGUITests"
+      if [[ -x "$GUI_TEST_BIN" ]]; then
+        echo "Running GUI tests..."
+        "$GUI_TEST_BIN"
+        ret=$?
+      else
+        echo "Warning: $GUI_TEST_BIN not found, skipping GUI tests"
+      fi
     fi
   fi
   if [[ $ret == 0 && $INSTALL_FLAG == ON ]]; then
@@ -47,6 +55,7 @@ help() {
   echo "OPTIONS:"
   echo "  -t:          Build test cases and run unit tests (CTest -L unit)."
   echo "               Combined with -g, also runs LumiceGUITests (requires a display)."
+  echo "               Set CI=1 or LUMICE_SKIP_GUI_TESTS=1 to skip LumiceGUITests."
   echo "  -g:          Build GUI application (Dear ImGui + GLFW + OpenGL)."
   echo "  -b:          Build benchmarks (Google Benchmark)."
   echo "  -j:          Build in parallel, i.e. use make -j"

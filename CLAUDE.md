@@ -18,6 +18,8 @@ Lumice 是一个冰晕 (Ice Halo) 光线追踪模拟程序，C++17 实现。
 # 测试
 ./scripts/build.sh -tj release            # 单元测试（GoogleTest via CTest）
 ./scripts/build.sh -gtj release           # GUI 测试（ImGui Test Engine，需 display server）
+# 跳过 GUI 测试（headless / 调试场景；CI 环境自动跳过）
+LUMICE_SKIP_GUI_TESTS=1 ./scripts/build.sh -gtj release
 pytest test/e2e/ -v               # E2E 测试（Python，需 Pillow）
 
 # 格式化
