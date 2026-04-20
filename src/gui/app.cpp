@@ -303,23 +303,52 @@ static std::vector<unsigned char> FetchRenderSnapshot(int* out_w, int* out_h) {
   return std::vector<unsigned char>(renders[0].img_buffer, renders[0].img_buffer + size);
 }
 
+// Partial-override pattern: BuildExportParams() provides the viewport base plus live
+// EV-synced intensity; this function then overwrites the 11 dual-fisheye-specific
+// fields enumerated in plan F13. If PreviewParams gains new fields, re-audit the
+// override completeness here (and in DoExportPreviewPng) to avoid silent dirty-value
+// leaks from g_preview_vp.params into the exported PNG.
 void DoExportDualFisheyeEqualAreaPng() {
   auto path = ShowExportDualFisheyeEqualAreaDialog();
   if (path.empty()) {
     return;
   }
-  int w = 0;
-  int h = 0;
-  auto buffer = FetchRenderSnapshot(&w, &h);
-  if (buffer.empty()) {
+
+  int w = g_preview.GetTextureWidth();
+  int h = g_preview.GetTextureHeight();
+  if (w <= 0 || h <= 0) {
+    GUI_LOG_ERROR("[GUI] Export dual fisheye: no texture loaded");
     return;
   }
-  // Mask the overlap ring to black so the exported image represents a "clean" dual
-  // fisheye equal-area projection. This is a known breaking change relative to the
-  // prior "Panorama" export behaviour (documented in task SUMMARY).
-  float r_scale = lumice::projection::ComputeEARScale(kDualFisheyeOverlap);
-  lumice::projection::MaskDualFisheyeOverlap(buffer.data(), w, h, r_scale);
-  ExportDualFisheyeEqualAreaPng(path, buffer.data(), w, h);
+
+  PreviewParams params = BuildExportParams();
+  // NOTE: lens_type / visible use literal indices (4 = Dual Fisheye Equal Area, 2 = Full).
+  // Project has no kLensTypeDualFisheyeEqualArea / kVisibleFull named constants today
+  // (kLensTypeNames / kVisibleNames are the only definitions). If those enumerations are
+  // reordered, this literal will silently break — keep in sync with shader u_lens_type
+  // dispatch in preview_renderer.cpp and with gui_state.hpp::kLensTypeNames.
+  params.lens_type = 4;     // Dual Fisheye Equal Area
+  params.fov = 180.0f;      // dual fisheye ignores fov, keep canonical value
+  params.elevation = 0.0f;  // dual fisheye: world-space projection, view angles must be 0
+  params.azimuth = 0.0f;
+  params.roll = 0.0f;
+  params.visible = 2;  // Full sphere (no hemisphere discard)
+  params.max_abs_dz = kDualFisheyeOverlap;
+  params.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
+  params.bg_enabled = false;
+  params.show_horizon = false;
+  params.show_grid = false;
+  params.show_sun_circles = false;
+
+  auto rgba = RenderExportToRgba(g_preview, params, w, h, std::nullopt);
+  if (rgba.empty()) {
+    GUI_LOG_ERROR("[GUI] Export dual fisheye: RenderExportToRgba empty (size={}x{})", w, h);
+    return;
+  }
+  if (!WriteRgbaBufferToPng(path, w, h, rgba)) {
+    GUI_LOG_ERROR("[GUI] Export dual fisheye: PNG write failed path={}", PathToU8(path));
+    return;
+  }
   GUI_LOG_INFO("[GUI] Export dual fisheye equal-area: {}", PathToU8(path));
 }
 

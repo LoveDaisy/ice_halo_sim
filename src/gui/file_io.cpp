@@ -1171,8 +1171,7 @@ bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector
 // share one error-handling convention.
 [[nodiscard]] bool WriteRgbaBufferToPng(const std::filesystem::path& path, int w, int h,
                                         const std::vector<unsigned char>& rgba) {
-  if (path.empty() || w <= 0 || h <= 0 ||
-      rgba.size() != static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
+  if (path.empty() || w <= 0 || h <= 0 || rgba.size() != static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
     return false;
   }
   auto u8path = path.u8string();
@@ -1207,18 +1206,6 @@ bool ExportDefaultFramebufferRegionPng(const std::filesystem::path& path, int x,
   return stbi_write_png(u8path.c_str(), w, h, 4, pixels.data(), w * 4) != 0;
 }
 
-
-// ========== Export Dual Fisheye Equal Area ==========
-
-bool ExportDualFisheyeEqualAreaPng(const std::filesystem::path& path, const unsigned char* data, int width,
-                                   int height) {
-  if (path.empty() || !data || width <= 0 || height <= 0) {
-    return false;
-  }
-  auto u8path = path.u8string();
-  int result = stbi_write_png(u8path.c_str(), width, height, 3, data, width * 3);
-  return result != 0;
-}
 
 // ========== Export Equirectangular ==========
 

@@ -55,9 +55,6 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
 // Coordinates are framebuffer pixels with origin at the bottom-left (OpenGL convention).
 [[nodiscard]] bool ExportDefaultFramebufferRegionPng(const std::filesystem::path& path, int x, int y, int w, int h);
 
-// Export the Core dual fisheye equal-area render buffer as PNG (pure I/O).
-bool ExportDualFisheyeEqualAreaPng(const std::filesystem::path& path, const unsigned char* data, int width, int height);
-
 // Export a true equirectangular (2:1 lon/lat) panorama as PNG. `data` is RGB row-major.
 bool ExportEquirectangularPng(const std::filesystem::path& path, const unsigned char* data, int width, int height);
 
