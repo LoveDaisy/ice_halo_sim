@@ -206,7 +206,16 @@ void DoSaveAs() {
 
 void DoExportPreviewPng() {
   auto path = ShowExportPngDialog();
-  if (!path.empty()) {
+  if (path.empty()) {
+    return;
+  }
+  if (g_state.screenshot_include_overlay) {
+    // Defer to main render loop: the overlay (ImGui foreground draw list) is only present
+    // in the default framebuffer after ImGui_ImplOpenGL3_RenderDrawData().
+    g_state.pending_screenshot.path = path;
+    g_state.pending_screenshot.active = true;
+    GUI_LOG_INFO("[GUI] Queue screenshot (overlay): {}", PathToU8(path));
+  } else {
     ExportPreviewPng(path, g_preview, g_preview_vp);
     GUI_LOG_INFO("[GUI] Export screenshot: {}", PathToU8(path));
   }

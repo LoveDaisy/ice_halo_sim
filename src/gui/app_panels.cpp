@@ -130,6 +130,7 @@ void RenderTopBar(float window_width) {
       }
       ImGui::Separator();
       ImGui::MenuItem("Include Texture in .lmc", nullptr, &g_state.save_texture);
+      ImGui::MenuItem("Include Overlay in Screenshot", nullptr, &g_state.screenshot_include_overlay);
       ImGui::EndPopup();
     }
   }

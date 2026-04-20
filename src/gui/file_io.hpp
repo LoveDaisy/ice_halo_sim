@@ -39,6 +39,16 @@ bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector
 // Export preview as PNG (renders via FBO, must be called on GL thread)
 bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp);
 
+// Capture an (x,y,w,h) region of the currently bound framebuffer and write it as a PNG.
+// Contract (MUST hold at call site):
+//   - Called on the GL thread (main render thread).
+//   - Called AFTER ImGui_ImplOpenGL3_RenderDrawData(...) so foreground overlay labels are
+//     already composited into the default framebuffer.
+//   - Called BEFORE glfwSwapBuffers(...); otherwise glReadPixels returns a previous frame.
+//   - Caller leaves the default framebuffer bound (this helper does not bind any FBO).
+// Coordinates are framebuffer pixels with origin at the bottom-left (OpenGL convention).
+[[nodiscard]] bool ExportDefaultFramebufferRegionPng(const std::filesystem::path& path, int x, int y, int w, int h);
+
 // Export equirect panorama as PNG (pure I/O, accepts pre-converted RGB data)
 bool ExportEquirectPng(const std::filesystem::path& path, const unsigned char* data, int width, int height);
 

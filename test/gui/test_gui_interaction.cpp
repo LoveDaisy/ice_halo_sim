@@ -447,6 +447,36 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield();
     };
   }
+
+  // P1: scrum-gui-polish-v9 155.3 — screenshot_include_overlay toggle and default value.
+  // Does NOT exercise the actual PNG write — that requires driving the main loop between
+  // ImGui_ImplOpenGL3_RenderDrawData and glfwSwapBuffers, which the Test Engine's Yield
+  // timing does not cleanly expose. Pixel-level verification is covered by the manual
+  // smoke documented in plan.md M2.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "screenshot_overlay_toggle");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Default is false (keeps current behaviour: no overlay in Screenshot).
+      IM_CHECK_EQ(gui::g_state.screenshot_include_overlay, false);
+
+      // Open Save menu → toggle Include Overlay on.
+      ctx->ItemClick("##TopBar/Save");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Include Overlay in Screenshot");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.screenshot_include_overlay, true);
+
+      // Reopen and toggle back off.
+      ctx->ItemClick("##TopBar/Save");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Include Overlay in Screenshot");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.screenshot_include_overlay, false);
+    };
+  }
 }
 
 // P2 tests

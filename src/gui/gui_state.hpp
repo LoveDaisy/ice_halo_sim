@@ -229,6 +229,19 @@ struct GuiState {
   bool dirty = false;
   bool save_texture = true;  // Whether to include texture in .lmc save (UI-only, not serialized)
 
+  // Screenshot overlay toggle — when true, Screenshot export captures the default
+  // framebuffer region (which includes ImGui foreground overlay labels) instead of
+  // re-rendering just the preview FBO. UI-only, not serialized.
+  bool screenshot_include_overlay = false;
+
+  // Pending screenshot request consumed by the main render loop between
+  // ImGui_ImplOpenGL3_RenderDrawData(...) and glfwSwapBuffers(...). Set by
+  // DoExportPreviewPng when screenshot_include_overlay is true.
+  struct PendingScreenshot {
+    std::filesystem::path path;
+    bool active = false;
+  } pending_screenshot;
+
   void MarkDirty() {
     dirty = true;
     if (sim_state == SimState::kDone) {
