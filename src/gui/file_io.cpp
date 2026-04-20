@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "gui/app.hpp"
+#include "gui/export_fbo_renderer.hpp"
 #include "gui/gl_capture.hpp"
 #include "gui/gl_common.h"
 #include "gui/gui_logger.hpp"
@@ -1165,55 +1166,31 @@ bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector
 
 // ========== Export Preview ==========
 
-bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp) {
-  int w = vp.vp_w;
-  int h = vp.vp_h;
-  if (w <= 0 || h <= 0 || !renderer.HasTexture()) {
+// Shared PNG writer: takes an RGBA8 top-down buffer and writes it as a PNG file.
+// Centralizes stbi_write_png so callers (this module, app.cpp DoExportPreviewPng)
+// share one error-handling convention.
+bool WriteRgbaBufferToPng(const std::filesystem::path& path, int w, int h, const std::vector<unsigned char>& rgba) {
+  if (path.empty() || w <= 0 || h <= 0 ||
+      rgba.size() != static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
     return false;
   }
-
-  // Save current FBO binding
-  GLint prev_fbo = 0;
-  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-
-  // Create temporary FBO + renderbuffer
-  GLuint fbo = 0;
-  GLuint rbo = 0;
-  glGenFramebuffers(1, &fbo);
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-  glGenRenderbuffers(1, &rbo);
-  glBindRenderbuffer(GL_RENDERBUFFER, rbo);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rbo);
-
-  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-    glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
-    glDeleteRenderbuffers(1, &rbo);
-    glDeleteFramebuffers(1, &fbo);
-    return false;
-  }
-
-  // Render preview into FBO
-  renderer.Render(0, 0, w, h, vp.params);
-
-  // Read pixels (RGBA8, Y-flipped top-down). Readback happens before FBO unbind
-  // so the helper reads from the just-rendered FBO.
-  std::vector<unsigned char> pixels;
-  const bool readback_ok = lumice::gui::ReadbackGlRegionToRgba(0, 0, w, h, pixels);
-
-  // Cleanup GL resources (run regardless of readback success)
-  glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
-  glDeleteRenderbuffers(1, &rbo);
-  glDeleteFramebuffers(1, &fbo);
-
-  if (!readback_ok) {
-    return false;
-  }
-
-  // Save as RGBA PNG
   auto u8path = path.u8string();
-  int result = stbi_write_png(u8path.c_str(), w, h, 4, pixels.data(), w * 4);
-  return result != 0;
+  return stbi_write_png(u8path.c_str(), w, h, 4, rgba.data(), w * 4) != 0;
+}
+
+// Thin wrapper over RenderExportToRgba: kept for binary-compatible callers in
+// test/gui/ (test_gui_export, test_gui_visual, test_gui_bg). Consolidated with
+// the overlay path in DoExportPreviewPng — the FBO+renderer logic lives once, in
+// export_fbo_renderer.cpp.
+bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp) {
+  if (vp.vp_w <= 0 || vp.vp_h <= 0 || !renderer.HasTexture()) {
+    return false;
+  }
+  auto rgba = RenderExportToRgba(renderer, vp.params, vp.vp_w, vp.vp_h, std::nullopt);
+  if (rgba.empty()) {
+    return false;
+  }
+  return WriteRgbaBufferToPng(path, vp.vp_w, vp.vp_h, rgba);
 }
 
 

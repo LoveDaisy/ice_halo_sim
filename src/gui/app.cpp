@@ -20,9 +20,6 @@
 #include "util/color_space.hpp"
 #include "util/path_utils.hpp"
 
-// stb_image_write is already linked via gui/file_io.cpp + gui/stb_impl.cpp; reuse API.
-#include "stb_image_write.h"
-
 namespace lumice::gui {
 
 using SimState = GuiState::SimState;
@@ -54,8 +51,12 @@ OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConf
   input.show_grid = state.show_grid;
   input.show_sun_circles = state.show_sun_circles;
 
-  // Sun direction in world space (azimuth fixed at 0, only altitude matters) —
-  // mirrors RenderPreviewPanel/app_panels.cpp to keep both input paths bitwise identical.
+  // Sun direction in world space (azimuth fixed at 0, only altitude matters).
+  // Formula is byte-identical to RenderPreviewPanel's assignment into
+  // g_preview_vp.params.sun_dir (see src/gui/app_panels.cpp ~L534-538):
+  //   sa = altitude * deg2rad
+  //   sun_dir = (-cos(sa), 0, -sin(sa))
+  // Both callers share this helper so a future formula change only has to land here.
   constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
   float sa = state.sun.altitude * kDeg2Rad;
   input.sun_dir[0] = -std::cos(sa);
@@ -276,13 +277,11 @@ void DoExportPreviewPng() {
     return;
   }
 
-  auto u8 = PathToU8(path);
-  int written = stbi_write_png(u8.c_str(), w, h, 4, rgba.data(), w * 4);
-  if (written == 0) {
-    GUI_LOG_ERROR("[GUI] Export screenshot failed: stbi_write_png error path={}", u8);
+  if (!WriteRgbaBufferToPng(path, w, h, rgba)) {
+    GUI_LOG_ERROR("[GUI] Export screenshot failed: PNG write error path={}", PathToU8(path));
     return;
   }
-  GUI_LOG_INFO("[GUI] Export screenshot{}: {}", overlay.has_value() ? " (overlay)" : "", u8);
+  GUI_LOG_INFO("[GUI] Export screenshot{}: {}", overlay.has_value() ? " (overlay)" : "", PathToU8(path));
 }
 
 // Fetch the current Core render snapshot as a CPU-side RGB buffer.

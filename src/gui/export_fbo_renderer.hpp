@@ -23,8 +23,10 @@ namespace lumice::gui {
 //
 // Contract:
 //   - Must be called from the thread that owns the GL context (main render thread).
-//   - Preserves the caller's FBO binding and viewport.
-//   - dst_w/dst_h must satisfy 0 < dst_{w,h} <= GL_MAX_FRAMEBUFFER_{WIDTH,HEIGHT}.
+//   - Preserves the caller's FBO binding, viewport, and glClearColor.
+//   - dst_w/dst_h must satisfy 0 < dst_{w,h} <= GL_MAX_RENDERBUFFER_SIZE.
+//     (GL_MAX_FRAMEBUFFER_{WIDTH,HEIGHT} would be tighter but requires GL 4.3;
+//      macOS OpenGL 3.3 Core exposes only GL_MAX_RENDERBUFFER_SIZE.)
 std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const PreviewParams& params, int dst_w,
                                               int dst_h, const std::optional<OverlayLabelInput>& overlay_input);
 

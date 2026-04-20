@@ -92,9 +92,17 @@ std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const P
     return {};
   }
 
+  // Save caller GL state that we mutate, per header contract.
+  GLint prev_viewport[4] = { 0, 0, 0, 0 };
+  glGetIntegerv(GL_VIEWPORT, prev_viewport);
+  GLfloat prev_clear_color[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+  glGetFloatv(GL_COLOR_CLEAR_VALUE, prev_clear_color);
+
   ScopedFbo s = CreateRgba8Fbo(dst_w, dst_h);
   if (!s.complete) {
     DestroyFbo(s);
+    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+    glClearColor(prev_clear_color[0], prev_clear_color[1], prev_clear_color[2], prev_clear_color[3]);
     return {};
   }
 
@@ -112,6 +120,8 @@ std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const P
   bool ok = ReadbackGlRegionToRgba(0, 0, dst_w, dst_h, rgba);
 
   DestroyFbo(s);
+  glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+  glClearColor(prev_clear_color[0], prev_clear_color[1], prev_clear_color[2], prev_clear_color[3]);
 
   if (!ok) {
     return {};

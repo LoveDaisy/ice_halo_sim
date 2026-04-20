@@ -36,8 +36,13 @@ bool SaveLmcFile(const std::filesystem::path& path, const GuiState& state, const
 bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
                  int& tex_h);
 
-// Export preview as PNG (renders via FBO, must be called on GL thread)
+// Export preview as PNG (renders via FBO, must be called on GL thread).
+// Thin wrapper over RenderExportToRgba + WriteRgbaBufferToPng.
 bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp);
+
+// Write an already-rendered RGBA8 top-down buffer to disk as a PNG.
+// Shared by ExportPreviewPng and DoExportPreviewPng so PNG I/O lives in one place.
+bool WriteRgbaBufferToPng(const std::filesystem::path& path, int w, int h, const std::vector<unsigned char>& rgba);
 
 // Capture an (x,y,w,h) region of the currently bound framebuffer and write it as a PNG.
 // Contract (MUST hold at call site):
