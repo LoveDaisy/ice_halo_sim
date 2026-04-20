@@ -399,6 +399,54 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
     };
   }
+
+  // P1: scrum-gui-polish-v9 155.2 — Save popup structure and simulating gating.
+  // Asserts the single Save dropdown hosts all 5 actions + Include Texture checkbox,
+  // and that Save/Save Copy disable under simulating while read-only exports stay live.
+  // Uses ItemInfo rather than clicking MenuItem("Save") because DoSave triggers the
+  // native file dialog (blocking, not test-engine-driveable).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "save_menu_structure");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // --- Case 1: not simulating — Save/Save Copy enabled ---
+      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+      ctx->Yield();
+      ctx->ItemClick("##TopBar/Save");
+      ctx->Yield(2);
+
+      // All menu items + checkbox present under the popup
+      IM_CHECK(ctx->ItemExists("**/Save Copy"));
+      IM_CHECK(ctx->ItemExists("**/Screenshot..."));
+      IM_CHECK(ctx->ItemExists("**/Panorama..."));
+      IM_CHECK(ctx->ItemExists("**/Config JSON..."));
+      IM_CHECK(ctx->ItemExists("**/Include Texture in .lmc"));
+
+      auto copy_info = ctx->ItemInfo("**/Save Copy");
+      IM_CHECK((copy_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+
+      // --- Case 2: simulating — Save/Save Copy disabled, Config JSON still enabled ---
+      gui::g_state.sim_state = gui::GuiState::SimState::kSimulating;
+      ctx->Yield();
+      ctx->ItemClick("##TopBar/Save");
+      ctx->Yield(2);
+
+      auto copy_info2 = ctx->ItemInfo("**/Save Copy");
+      IM_CHECK((copy_info2.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto cfg_info = ctx->ItemInfo("**/Config JSON...");
+      IM_CHECK((cfg_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+      ctx->Yield();
+    };
+  }
 }
 
 // P2 tests
