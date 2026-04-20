@@ -294,17 +294,23 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       vp_screen_y + vp_screen_h },  // right
   };
 
+  // Front-hemisphere predicate: world_dir lies in front of camera. Mirrors shader
+  // (preview_renderer.cpp:336): visible iff dot(world_dir, forward) >= 0, strict
+  // (no epsilon) to stay aligned with pixel cull. Single source of truth for both
+  // is_visible (edge-crossing path) and is_visible_front (sun-circle interior path).
+  auto front_facing = [&](float wx, float wy, float wz) -> bool {
+    return forward[0] * wx + forward[1] * wy + forward[2] * wz >= 0.0f;
+  };
+
   // Hemisphere visibility check used by edge-crossing label paths.
   // visible: 0=upper (alt>=0), 1=lower (alt<=0), 2=full, 3=front.
-  // Front-mode test mirrors shader (preview_renderer.cpp:336): label visible iff
-  // dot(world_dir, forward) >= 0, strict (no epsilon) to stay aligned with pixel cull.
   auto is_visible = [&](float alt, float wx, float wy, float wz) -> bool {
     if (input.visible == 0)
       return alt >= -0.5f;  // small tolerance for edge labels
     if (input.visible == 1)
       return alt <= 0.5f;
     if (input.visible == 3)
-      return forward[0] * wx + forward[1] * wy + forward[2] * wz >= 0.0f;
+      return front_facing(wx, wy, wz);
     return true;  // full(2)
   };
 
@@ -315,7 +321,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   auto is_visible_front = [&](float wx, float wy, float wz) -> bool {
     if (input.visible != 3)
       return true;
-    return forward[0] * wx + forward[1] * wy + forward[2] * wz >= 0.0f;
+    return front_facing(wx, wy, wz);
   };
 
   // Interpolate world direction at crossing parameter t and renormalize.

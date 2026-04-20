@@ -134,28 +134,30 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "non_front_sun_circle_unchanged");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       IM_UNUSED(ctx);
-      // Same scenario as Test B (sun behind), but in Full / Upper / Lower modes.
-      // Per F4 in plan: interior block historically had no is_visible filtering, so back-positioned
-      // sun in these modes must produce identical interior labels regardless of hemisphere choice.
-      const float sun_back[3] = { 1.0f, 0.0f, 0.0f };
+      // sun_dir = forward = (-1,0,0); same scenario as Test C but in Full / Upper / Lower modes.
+      // Per F4 in plan: interior block historically had no is_visible filtering, so the four labels
+      // must be produced identically regardless of mode. If is_visible_front mistakenly culled in
+      // non-Front modes, n_full/n_upper/n_lower would drop below n_baseline = 4. Sun must be front-
+      // facing so labels actually pass WorldDirToPixel; otherwise WorldDirToPixel suppresses them
+      // first and the assertion degenerates to 0 == 0 (no regression detection).
+      const float sun_front[3] = { -1.0f, 0.0f, 0.0f };
       const float angle = 5.0f;
 
       std::vector<lumice::gui::OverlayLabel> labels_full;
       std::vector<lumice::gui::OverlayLabel> labels_upper;
       std::vector<lumice::gui::OverlayLabel> labels_lower;
-      auto in_full = MakeSunOnly(/*visible=Full*/ 2, sun_back, &angle, 1);
-      auto in_upper = MakeSunOnly(/*visible=Upper*/ 0, sun_back, &angle, 1);
-      auto in_lower = MakeSunOnly(/*visible=Lower*/ 1, sun_back, &angle, 1);
+      auto in_full = MakeSunOnly(/*visible=Full*/ 2, sun_front, &angle, 1);
+      auto in_upper = MakeSunOnly(/*visible=Upper*/ 0, sun_front, &angle, 1);
+      auto in_lower = MakeSunOnly(/*visible=Lower*/ 1, sun_front, &angle, 1);
 
       lumice::gui::ComputeOverlayLabels(in_full, 0.0f, 0.0f, 800.0f, 600.0f, labels_full);
       lumice::gui::ComputeOverlayLabels(in_upper, 0.0f, 0.0f, 800.0f, 600.0f, labels_upper);
       lumice::gui::ComputeOverlayLabels(in_lower, 0.0f, 0.0f, 800.0f, 600.0f, labels_lower);
 
-      // All three modes should yield identical sun-circle interior label counts because the
-      // interior block does not consult altitude (F4) and is_visible_front returns true here.
       int n_full = CountSunCircleLabels(labels_full);
       int n_upper = CountSunCircleLabels(labels_upper);
       int n_lower = CountSunCircleLabels(labels_lower);
+      IM_CHECK_GT(n_full, 0);  // baseline sanity (non-zero so regression check is meaningful)
       IM_CHECK_EQ(n_full, n_upper);
       IM_CHECK_EQ(n_full, n_lower);
     };
