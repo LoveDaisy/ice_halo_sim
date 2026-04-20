@@ -175,5 +175,88 @@ bool PixelToDualFisheye(float fx, float fy, int width, int height, float* x_norm
   return false;  // outside both circles
 }
 
+// =============== Overlap r_scale (equal-area) ===============
+
+float ComputeEARScale(float max_abs_dz) {
+  return (max_abs_dz <= 0) ? 1.0f : 1.0f / std::sqrt(1.0f + max_abs_dz);
+}
+
+// =============== CPU reprojection helpers ===============
+
+void ReprojectEquirectangular(const unsigned char* src, int src_w, int src_h, float r_scale, unsigned char* dst,
+                              int dst_w, int dst_h) {
+  if (src == nullptr || dst == nullptr || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
+    return;
+  }
+
+  // Zero-fill dst (overlap-ring / out-of-disc pixels remain black).
+  std::fill_n(dst, static_cast<size_t>(dst_w) * dst_h * 3, static_cast<unsigned char>(0));
+
+  float r_scale_sq = r_scale * r_scale;
+
+  for (int py = 0; py < dst_h; ++py) {
+    float lat = math::kPi * 0.5f - (static_cast<float>(py) + 0.5f) / dst_h * math::kPi;
+    float cos_lat = std::cos(lat);
+    float sin_lat = std::sin(lat);
+
+    for (int px = 0; px < dst_w; ++px) {
+      float lon = (static_cast<float>(px) + 0.5f) / dst_w * 2.0f * math::kPi - math::kPi;
+      // Matches shader rectangularInverse (src/gui/preview_renderer.cpp:240-249).
+      float dx = -cos_lat * std::cos(lon);
+      float dy = -cos_lat * std::sin(lon);
+      float dz = -sin_lat;
+
+      bool is_upper = (dz < 0.0f);
+      float z_hemi = std::fabs(dz);
+
+      ProjXY proj = FisheyeEqualAreaForward(dx, dy, z_hemi, r_scale);
+      float r_sq = proj.x * proj.x + proj.y * proj.y;
+      // Pixels in the overlap ring (r_proj > r_scale, i.e. r_sq > r_scale^2) or
+      // outside the disc are left black. When r_scale = 1, only out-of-disc is masked.
+      if (r_sq > r_scale_sq) {
+        continue;
+      }
+
+      float fx = 0.0f;
+      float fy = 0.0f;
+      DualFisheyeToPixel(proj.x, proj.y, is_upper, src_w, src_h, &fx, &fy);
+      int sx = std::clamp(static_cast<int>(std::floor(fx)), 0, src_w - 1);
+      int sy = std::clamp(static_cast<int>(std::floor(fy)), 0, src_h - 1);
+
+      size_t src_idx = (static_cast<size_t>(sy) * src_w + sx) * 3;
+      size_t dst_idx = (static_cast<size_t>(py) * dst_w + px) * 3;
+      dst[dst_idx + 0] = src[src_idx + 0];
+      dst[dst_idx + 1] = src[src_idx + 1];
+      dst[dst_idx + 2] = src[src_idx + 2];
+    }
+  }
+}
+
+void MaskDualFisheyeOverlap(unsigned char* buf, int w, int h, float r_scale) {
+  if (buf == nullptr || w <= 0 || h <= 0 || r_scale >= 1.0f) {
+    return;
+  }
+  float r_scale_sq = r_scale * r_scale;
+
+  for (int py = 0; py < h; ++py) {
+    for (int px = 0; px < w; ++px) {
+      float x_norm = 0.0f;
+      float y_norm = 0.0f;
+      bool is_upper = false;
+      if (!PixelToDualFisheye(static_cast<float>(px) + 0.5f, static_cast<float>(py) + 0.5f, w, h, &x_norm, &y_norm,
+                              &is_upper)) {
+        continue;  // outside both circles — leave untouched
+      }
+      float r_sq = x_norm * x_norm + y_norm * y_norm;
+      if (r_sq > r_scale_sq) {
+        size_t idx = (static_cast<size_t>(py) * w + px) * 3;
+        buf[idx + 0] = 0;
+        buf[idx + 1] = 0;
+        buf[idx + 2] = 0;
+      }
+    }
+  }
+}
+
 }  // namespace projection
 }  // namespace lumice
