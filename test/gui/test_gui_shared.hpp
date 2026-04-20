@@ -54,6 +54,22 @@ struct ExportTestState {
   }
 };
 
+struct LeftPanelCaptureState {
+  std::atomic<bool> requested{ false };
+  std::atomic<bool> done{ false };
+  std::vector<unsigned char> pixels;
+  int width = 0;
+  int height = 0;
+
+  void Reset() {
+    done.store(false);
+    requested.store(false);
+    pixels.clear();
+    width = 0;
+    height = 0;
+  }
+};
+
 struct BgOverlayTestState {
   std::string bg_image_path;
   bool bg_upload_requested = false;
@@ -79,6 +95,7 @@ struct BgOverlayTestState {
 extern ScreenshotCapture g_capture;
 extern ExportTestState g_export_test;
 extern BgOverlayTestState g_bg_test;
+extern LeftPanelCaptureState g_left_panel_capture;
 extern std::vector<unsigned char> g_synth_tex;
 extern int g_core_log_level;
 extern int g_gui_log_level;

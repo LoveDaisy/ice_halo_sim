@@ -147,6 +147,72 @@ void RegisterScreenshotTests(ImGuiTestEngine* engine) {
       IM_CHECK(psnr > kPsnrThreshold);
     };
   }
+
+  // PSNR: left-panel capture vs reference (ImGui default-framebuffer readback)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "screenshot", "left_panel_psnr");
+    // No GuiFunc: capture happens in main loop's post-RenderDrawData hook.
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_left_panel_capture.Reset();
+
+      // Eliminate hover state: move cursor off-screen so no card is highlighted.
+      // Otherwise reference image fixes a hover frame and subsequent no-hover runs
+      // produce spurious PSNR failures.
+      ctx->MouseMoveToPos(ImVec2(-100.0f, -100.0f));
+      ctx->Yield(3);
+
+      g_left_panel_capture.requested.store(true);
+
+      // Poll up to 10 frames for the main-loop hook to complete readback.
+      for (int i = 0; i < 10 && !g_left_panel_capture.done.load(); ++i) {
+        ctx->Yield(1);
+      }
+      IM_CHECK(g_left_panel_capture.done.load());
+
+      // "Non-zero" gate before PSNR: detects silent failure (helper returned zeros,
+      // or timing window missed ImGui draw) that would otherwise pass a black-image PSNR.
+      bool has_nonzero = false;
+      for (size_t i = 0; i < g_left_panel_capture.pixels.size() && !has_nonzero; ++i) {
+        if (g_left_panel_capture.pixels[i] != 0) {
+          has_nonzero = true;
+        }
+      }
+      IM_CHECK(has_nonzero);
+
+      fprintf(stderr, "[screenshot] left_panel_psnr: captured size = %dx%d\n", g_left_panel_capture.width,
+              g_left_panel_capture.height);
+
+      // Save to tmp for reference-image generation (uncomment std::remove below to keep).
+      const char* tmp_path = "/tmp/lumice_left_panel_test.png";
+      auto rgb = lumice::test::StripAlpha(g_left_panel_capture.pixels.data(), g_left_panel_capture.width,
+                                          g_left_panel_capture.height);
+      lumice::test::SavePng(tmp_path, rgb.data(), g_left_panel_capture.width, g_left_panel_capture.height, 3);
+
+      const char* ref_path = LUMICE_TEST_REF_DIR "/left_panel_default.png";
+      std::vector<unsigned char> ref_data;
+      int ref_w = 0;
+      int ref_h = 0;
+      int ref_ch = 0;
+      bool loaded = lumice::test::LoadPng(ref_path, ref_data, ref_w, ref_h, ref_ch);
+      if (!loaded) {
+        fprintf(stderr, "[screenshot] left_panel_psnr: reference not found at %s\n", ref_path);
+        fprintf(stderr, "[screenshot] Run test once, then copy %s to %s\n", tmp_path, ref_path);
+        IM_CHECK(loaded);
+        return;
+      }
+      IM_CHECK_EQ(ref_w, g_left_panel_capture.width);
+      IM_CHECK_EQ(ref_h, g_left_panel_capture.height);
+
+      constexpr double kPsnrThreshold = 40.0;
+      double psnr = lumice::test::ComputePsnr(rgb.data(), ref_data.data(), ref_w, ref_h, ref_ch);
+      IM_CHECK(psnr >= 0.0);
+      fprintf(stderr, "[screenshot] left_panel_psnr: PSNR = %.2f dB (threshold = %.1f dB)\n", psnr, kPsnrThreshold);
+      IM_CHECK(psnr > kPsnrThreshold);
+
+      std::remove(tmp_path);
+    };
+  }
 }
 
 // Visual tests: crystal preview + render preview data correctness

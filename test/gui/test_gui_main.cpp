@@ -19,7 +19,9 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
+#include "gui/gl_capture.hpp"
 #include "gui/gl_init.h"
+#include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/log_sink.hpp"
 #include "gui/panels.hpp"
@@ -36,6 +38,7 @@
 ScreenshotCapture g_capture;
 ExportTestState g_export_test;
 BgOverlayTestState g_bg_test;
+LeftPanelCaptureState g_left_panel_capture;
 int g_core_log_level = LUMICE_LOG_INFO;
 int g_gui_log_level = LUMICE_LOG_INFO;
 bool g_enable_visible = false;
@@ -359,6 +362,33 @@ int main(int argc, char** argv) {
     }
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    // Left-panel default-framebuffer capture hook (task-left-panel-visual-regression).
+    // Must run AFTER ImGui_ImplOpenGL3_RenderDrawData and BEFORE glfwSwapBuffers,
+    // per ReadbackGlRegionToRgba contract for default-framebuffer capture.
+    if (g_left_panel_capture.requested.exchange(false)) {
+      int fb_w = 0;
+      int fb_h = 0;
+      glfwGetFramebufferSize(window, &fb_w, &fb_h);
+      int win_w2 = 0;
+      int win_h2 = 0;
+      glfwGetWindowSize(window, &win_w2, &win_h2);
+      float sx = win_w2 > 0 ? static_cast<float>(fb_w) / static_cast<float>(win_w2) : 1.0f;
+      float sy = win_h2 > 0 ? static_cast<float>(fb_h) / static_cast<float>(win_h2) : 1.0f;
+      int rx = 0;
+      int ry = static_cast<int>(gui::kStatusBarHeight * sy);
+      int rw = static_cast<int>(gui::kLeftPanelWidth * sx);
+      int rh = fb_h - static_cast<int>((gui::kTopBarHeight + gui::kStatusBarHeight) * sy);
+      if (lumice::gui::ReadbackGlRegionToRgba(rx, ry, rw, rh, g_left_panel_capture.pixels)) {
+        g_left_panel_capture.width = rw;
+        g_left_panel_capture.height = rh;
+        g_left_panel_capture.done.store(true);
+      } else {
+        fprintf(stderr, "[LeftPanelCapture] ReadbackGlRegionToRgba failed (rx=%d ry=%d rw=%d rh=%d fb=%dx%d)\n", rx, ry,
+                rw, rh, fb_w, fb_h);
+      }
+    }
+
     glfwSwapBuffers(window);
 
     ImGuiTestEngine_PostSwap(engine);
