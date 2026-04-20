@@ -294,12 +294,17 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       vp_screen_y + vp_screen_h },  // right
   };
 
-  // Front-hemisphere predicate: world_dir lies in front of camera. Mirrors shader
-  // (preview_renderer.cpp:336): visible iff dot(world_dir, forward) >= 0, strict
-  // (no epsilon) to stay aligned with pixel cull. Single source of truth for both
-  // is_visible (edge-crossing path) and is_visible_front (sun-circle interior path).
+  // Front-hemisphere predicate: world_dir lies in front of camera.
+  // Shader (preview_renderer.cpp:336) uses strict >0 cull because pixel centers don't go
+  // through interpolation. Overlay labels sample along curves, interp_dir blends + renormalizes
+  // directions between adjacent samples — this introduces float noise at the boundary where
+  // the true dot is exactly 0. Strict >= 0 then silently drops valid boundary crossings.
+  // kFrontEps = 0.01 ≈ sin(0.57°), semantically matching Upper/Lower's 0.5° altitude tolerance
+  // (is_visible below uses `alt >= -0.5f`). Single source of truth for both is_visible
+  // (edge-crossing path) and is_visible_front (sun-circle interior path).
+  constexpr float kFrontEps = 0.01f;
   auto front_facing = [&](float wx, float wy, float wz) -> bool {
-    return forward[0] * wx + forward[1] * wy + forward[2] * wz >= 0.0f;
+    return forward[0] * wx + forward[1] * wy + forward[2] * wz >= -kFrontEps;
   };
 
   // Hemisphere visibility check used by edge-crossing label paths.
