@@ -541,29 +541,11 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       g_preview_vp.params.sun_circle_angles[i] = g_state.sun_circle_angles[i];
     }
 
-    // Overlay labels at viewport edges (drawn via ImGui foreground draw list)
+    // Overlay labels at viewport edges (drawn via ImGui foreground draw list).
+    // BuildOverlayLabelInput is shared with DoExportPreviewPng (off-screen FBO path)
+    // so both call sites produce byte-identical OverlayLabelInput for a given state.
     if (g_state.show_horizon || g_state.show_grid || g_state.show_sun_circles) {
-      OverlayLabelInput label_input{};
-      label_input.lens_type = rc.lens_type;
-      label_input.fov = rc.fov;
-      label_input.elevation = rc.elevation;
-      label_input.azimuth = rc.azimuth;
-      label_input.roll = rc.roll;
-      label_input.visible = rc.visible;
-      label_input.show_horizon = g_state.show_horizon;
-      label_input.show_grid = g_state.show_grid;
-      label_input.show_sun_circles = g_state.show_sun_circles;
-      std::copy(std::begin(g_preview_vp.params.sun_dir), std::end(g_preview_vp.params.sun_dir),
-                std::begin(label_input.sun_dir));
-      label_input.sun_circle_count = g_preview_vp.params.sun_circle_count;
-      label_input.sun_circle_angles = g_preview_vp.params.sun_circle_angles;
-      std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color),
-                std::begin(label_input.horizon_color));
-      std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(label_input.grid_color));
-      std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
-                std::begin(label_input.sun_circles_color));
-      label_input.grid_alpha = g_state.grid_alpha;
-      label_input.sun_circles_alpha = g_state.sun_circles_alpha;
+      OverlayLabelInput label_input = BuildOverlayLabelInput(g_state, rc);
 
       // Convert viewport from framebuffer pixels to ImGui logical screen coordinates
       float vp_sx = panel_x;

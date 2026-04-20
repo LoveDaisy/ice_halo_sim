@@ -36,6 +36,11 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
 // Draw labels using ImGui foreground draw list, with collision avoidance.
 void DrawOverlayLabels(const std::vector<OverlayLabel>& labels);
 
+// Append overlay labels to an arbitrary ImDrawList (with collision avoidance).
+// Used by DrawOverlayLabels for the foreground list and by export_fbo_renderer for
+// a self-owned list targeting an off-screen FBO.
+void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels);
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_OVERLAY_LABELS_HPP

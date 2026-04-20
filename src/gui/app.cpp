@@ -38,6 +38,38 @@ int g_programmatic_resize = 0;
 bool g_show_unsaved_popup = false;
 PendingAction g_pending_action = PendingAction::kNone;
 
+OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConfig& rc) {
+  OverlayLabelInput input{};
+  input.lens_type = rc.lens_type;
+  input.fov = rc.fov;
+  input.elevation = rc.elevation;
+  input.azimuth = rc.azimuth;
+  input.roll = rc.roll;
+  input.visible = rc.visible;
+  input.show_horizon = state.show_horizon;
+  input.show_grid = state.show_grid;
+  input.show_sun_circles = state.show_sun_circles;
+
+  // Sun direction in world space (azimuth fixed at 0, only altitude matters) —
+  // mirrors RenderPreviewPanel/app_panels.cpp to keep both input paths bitwise identical.
+  constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+  float sa = state.sun.altitude * kDeg2Rad;
+  input.sun_dir[0] = -std::cos(sa);
+  input.sun_dir[1] = 0.0f;
+  input.sun_dir[2] = -std::sin(sa);
+
+  input.sun_circle_count = std::min(static_cast<int>(state.sun_circle_angles.size()), kMaxSunCircles);
+  input.sun_circle_angles = state.sun_circle_angles.data();
+
+  std::copy(std::begin(state.horizon_color), std::end(state.horizon_color), std::begin(input.horizon_color));
+  std::copy(std::begin(state.grid_color), std::end(state.grid_color), std::begin(input.grid_color));
+  std::copy(std::begin(state.sun_circles_color), std::end(state.sun_circles_color),
+            std::begin(input.sun_circles_color));
+  input.grid_alpha = state.grid_alpha;
+  input.sun_circles_alpha = state.sun_circles_alpha;
+  return input;
+}
+
 std::shared_ptr<ImGuiLogSink> g_imgui_log_sink;
 std::shared_ptr<spdlog::sinks::basic_file_sink_mt> g_file_log_sink;
 std::string g_log_file_path;

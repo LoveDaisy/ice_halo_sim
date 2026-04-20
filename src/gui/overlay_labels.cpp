@@ -599,11 +599,9 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   }
 }
 
-void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
-  if (labels.empty())
+void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels) {
+  if (dl == nullptr || labels.empty())
     return;
-
-  ImDrawList* fg = ImGui::GetForegroundDrawList();
 
   // Collect bboxes for collision avoidance (only within same group)
   struct PlacedLabel {
@@ -635,15 +633,19 @@ void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
         constexpr int kMaxBgAlpha = 120;
         int label_alpha = (label.color >> IM_COL32_A_SHIFT) & 0xFF;
         int bg_alpha = kMaxBgAlpha * label_alpha / 255;
-        fg->AddRectFilled(bbox_min, bbox_max, IM_COL32(0, 0, 0, bg_alpha), 2.0f);
+        dl->AddRectFilled(bbox_min, bbox_max, IM_COL32(0, 0, 0, bg_alpha), 2.0f);
       }
       // Draw text twice with 1px horizontal offset to simulate bold
       const char* text = label.text.c_str();
-      fg->AddText(pos, label.color, text);
-      fg->AddText(ImVec2(pos.x + 1.0f, pos.y), label.color, text);
+      dl->AddText(pos, label.color, text);
+      dl->AddText(ImVec2(pos.x + 1.0f, pos.y), label.color, text);
       placed.push_back({ bbox_min, bbox_max, label.group });
     }
   }
+}
+
+void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
+  AppendOverlayToDrawList(ImGui::GetForegroundDrawList(), labels);
 }
 
 }  // namespace lumice::gui
