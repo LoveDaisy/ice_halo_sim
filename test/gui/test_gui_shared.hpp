@@ -54,6 +54,10 @@ struct ExportTestState {
   }
 };
 
+// Structurally equivalent to ScreenshotCapture; kept separate so each capture
+// semantic (crystal FBO vs left-panel default-framebuffer) has its own lifecycle.
+// If a third panel visual regression is added, consolidate into a single
+// GenericRegionCaptureState<Tag> instead of copy-pasting again.
 struct LeftPanelCaptureState {
   std::atomic<bool> requested{ false };
   std::atomic<bool> done{ false };

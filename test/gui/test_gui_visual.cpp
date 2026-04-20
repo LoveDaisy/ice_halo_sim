@@ -198,6 +198,7 @@ void RegisterScreenshotTests(ImGuiTestEngine* engine) {
       if (!loaded) {
         fprintf(stderr, "[screenshot] left_panel_psnr: reference not found at %s\n", ref_path);
         fprintf(stderr, "[screenshot] Run test once, then copy %s to %s\n", tmp_path, ref_path);
+        // tmp_path intentionally kept: copy it to ref_path per CLAUDE.md workflow
         IM_CHECK(loaded);
         return;
       }

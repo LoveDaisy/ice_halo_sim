@@ -366,6 +366,11 @@ int main(int argc, char** argv) {
     // Left-panel default-framebuffer capture hook (task-left-panel-visual-regression).
     // Must run AFTER ImGui_ImplOpenGL3_RenderDrawData and BEFORE glfwSwapBuffers,
     // per ReadbackGlRegionToRgba contract for default-framebuffer capture.
+    //
+    // Rect formula stays in sync with RenderLeftPanel's SetNextWindowPos/Size
+    // (src/gui/app_panels.cpp). Modifying left-panel geometry requires updating
+    // this block too. Retina scale is resolved at runtime via GLFW and validated
+    // by IM_CHECK_EQ(ref_w, capture.width) in the test.
     if (g_left_panel_capture.requested.exchange(false)) {
       int fb_w = 0;
       int fb_h = 0;
@@ -373,6 +378,8 @@ int main(int argc, char** argv) {
       int win_w2 = 0;
       int win_h2 = 0;
       glfwGetWindowSize(window, &win_w2, &win_h2);
+      // Locals intentionally non-const: project's clang-tidy ConstantCase=CamelCase+k
+      // would force kSx/kRx etc. which is worse for short runtime-computed values.
       float sx = win_w2 > 0 ? static_cast<float>(fb_w) / static_cast<float>(win_w2) : 1.0f;
       float sy = win_h2 > 0 ? static_cast<float>(fb_h) / static_cast<float>(win_h2) : 1.0f;
       int rx = 0;
@@ -384,6 +391,8 @@ int main(int argc, char** argv) {
         g_left_panel_capture.height = rh;
         g_left_panel_capture.done.store(true);
       } else {
+        // fprintf matches diagnostic style used elsewhere in this file
+        // (glfwInit failure, DIAG messages); not a log-framework path.
         fprintf(stderr, "[LeftPanelCapture] ReadbackGlRegionToRgba failed (rx=%d ry=%d rw=%d rh=%d fb=%dx%d)\n", rx, ry,
                 rw, rh, fb_w, fb_h);
       }
