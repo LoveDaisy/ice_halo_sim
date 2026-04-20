@@ -133,6 +133,11 @@ struct AcState {
   float exposure_offset = 0.0f;
   int dst_w = 0;
   int dst_h = 0;
+  // >=0: override PreviewParams.lens_type + related dual-fisheye fields on the
+  // main thread (see RunAcExport). -1: leave viewport params untouched. Only
+  // lens_type=4 (Dual Fisheye Equal Area) is currently handled; extending to
+  // other lens modes would require additional field overrides.
+  int lens_type_override = -1;
 
   // Outputs (filled by GuiFunc on main thread)
   bool ok = false;
@@ -147,6 +152,7 @@ struct AcState {
     exposure_offset = 0.0f;
     dst_w = 0;
     dst_h = 0;
+    lens_type_override = -1;
     ok = false;
     rgba.clear();
     rgba_w = 0;
@@ -166,11 +172,33 @@ static gui::PreviewParams BuildAcExportParams(float exposure_offset) {
   return params;
 }
 
+// Mirror src/gui/app.cpp::DoExportDualFisheyeEqualAreaPng's field overrides. Must
+// stay in sync with that function: any new PreviewParams field relied on by dual
+// fisheye export should be mirrored here so the test exercises the same shader
+// configuration.
+static void ApplyDualFisheyeOverride(gui::PreviewParams& params) {
+  params.lens_type = 4;
+  params.fov = 180.0f;
+  params.elevation = 0.0f;
+  params.azimuth = 0.0f;
+  params.roll = 0.0f;
+  params.visible = 2;
+  params.max_abs_dz = gui::kDualFisheyeOverlap;
+  params.r_scale = 1.0f / std::sqrt(1.0f + gui::kDualFisheyeOverlap);
+  params.bg_enabled = false;
+  params.show_horizon = false;
+  params.show_grid = false;
+  params.show_sun_circles = false;
+}
+
 static void RunAcExport() {
   int w = g_ac_state.dst_w > 0 ? g_ac_state.dst_w : gui::g_preview_vp.vp_w;
   int h = g_ac_state.dst_h > 0 ? g_ac_state.dst_h : gui::g_preview_vp.vp_h;
 
   gui::PreviewParams params = BuildAcExportParams(g_ac_state.exposure_offset);
+  if (g_ac_state.lens_type_override == 4) {
+    ApplyDualFisheyeOverride(params);
+  }
 
   std::optional<gui::OverlayLabelInput> overlay;
   if (g_ac_state.with_overlay) {
@@ -664,6 +692,128 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       IM_CHECK(mean_a > kMinMeanThreshold);
 
       // Ratio check
+      IM_CHECK(mean_b > 1.3 * mean_a);
+    };
+  }
+
+  // ACD1: RenderExportToRgba with lens_type=4 (Dual Fisheye Equal Area) is
+  // deterministic — two consecutive calls with identical inputs must produce
+  // byte-identical output. Mirrors AC1 but exercises the dual fisheye override
+  // path that DoExportDualFisheyeEqualAreaPng uses in production.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export_dual_fisheye", "acd1_determinism_lens4");
+    t->GuiFunc = AcGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_export_test.Reset();
+      g_ac_state.Reset();
+
+      g_export_test.upload_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.upload_done);
+      ctx->Yield(2);
+      // Dual fisheye export uses the source texture's dims; the synth helper uploads
+      // via UploadTexture (non-XYZ), so GetTextureWidth/Height still return kSynthTexW/H.
+      const int tex_w = gui::g_preview.GetTextureWidth();
+      const int tex_h = gui::g_preview.GetTextureHeight();
+      IM_CHECK(tex_w > 0 && tex_h > 0);
+
+      // First export with dual fisheye override
+      g_ac_state.Reset();
+      g_ac_state.with_overlay = false;
+      g_ac_state.lens_type_override = 4;
+      g_ac_state.dst_w = tex_w;
+      g_ac_state.dst_h = tex_h;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
+      IM_CHECK(g_ac_state.ok);
+      std::vector<unsigned char> rgba_a = std::move(g_ac_state.rgba);
+
+      // Second export (same params)
+      g_ac_state.Reset();
+      g_ac_state.with_overlay = false;
+      g_ac_state.lens_type_override = 4;
+      g_ac_state.dst_w = tex_w;
+      g_ac_state.dst_h = tex_h;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
+      IM_CHECK(g_ac_state.ok);
+      IM_CHECK_EQ(rgba_a.size(), g_ac_state.rgba.size());
+
+      double psnr = ComputePsnrRgba(rgba_a, g_ac_state.rgba);
+      IM_CHECK(psnr >= 50.0);
+    };
+  }
+
+  // ACD2: Dual Fisheye Equal Area export exposure follows EV. With snapshot_intensity=1.0
+  // and a uniform XYZ texture, changing exposure_offset from 0 to +2 should multiply mean
+  // luminance by roughly 4x (tolerance down to 1.3x matches AC4's sRGB-clip-aware bound).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export_dual_fisheye", "acd2_exposure_follows_ev_lens4");
+    struct Local {
+      static void UploadXyzForAcd2() {
+        constexpr int kW = 64;
+        constexpr int kH = 32;
+        std::vector<float> xyz(static_cast<size_t>(kW) * kH * 3, 0.0f);
+        for (size_t i = 0; i < static_cast<size_t>(kW) * kH; ++i) {
+          xyz[i * 3 + 0] = 0.08f;
+          xyz[i * 3 + 1] = 0.08f;
+          xyz[i * 3 + 2] = 0.08f;
+        }
+        gui::g_preview.UploadXyzTexture(xyz.data(), kW, kH);
+      }
+    };
+    static bool s_xyz_uploaded = false;
+    t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
+      AcGuiFunc(nullptr);
+      if (!s_xyz_uploaded) {
+        Local::UploadXyzForAcd2();
+        gui::g_state.snapshot_intensity = 1.0f;
+        s_xyz_uploaded = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_ac_state.Reset();
+      s_xyz_uploaded = false;
+
+      ctx->Yield(3);
+      IM_CHECK(s_xyz_uploaded);
+      ctx->Yield(2);
+
+      const int tex_w = gui::g_preview.GetTextureWidth();
+      const int tex_h = gui::g_preview.GetTextureHeight();
+      IM_CHECK(tex_w > 0 && tex_h > 0);
+
+      // EV = 0
+      g_ac_state.Reset();
+      g_ac_state.lens_type_override = 4;
+      g_ac_state.dst_w = tex_w;
+      g_ac_state.dst_h = tex_h;
+      g_ac_state.exposure_offset = 0.0f;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.ok);
+      double mean_a = ComputeMeanLuma(g_ac_state.rgba);
+
+      // EV = +2
+      g_ac_state.Reset();
+      g_ac_state.lens_type_override = 4;
+      g_ac_state.dst_w = tex_w;
+      g_ac_state.dst_h = tex_h;
+      g_ac_state.exposure_offset = 2.0f;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.ok);
+      double mean_b = ComputeMeanLuma(g_ac_state.rgba);
+
+      fprintf(stderr, "[ACD2] mean_a=%.4f mean_b=%.4f (ev+2 / ev0 = %.2fx)\n", mean_a, mean_b,
+              mean_a > 0.0 ? mean_b / mean_a : 0.0);
+
+      constexpr double kMinMeanThreshold = 5.0 / 255.0;
+      IM_CHECK(mean_a > kMinMeanThreshold);
       IM_CHECK(mean_b > 1.3 * mean_a);
     };
   }
