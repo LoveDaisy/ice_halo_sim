@@ -10,6 +10,7 @@
 
 #include "config/raypath_validation.hpp"
 #include "gui/app.hpp"
+#include "gui/axis_presets.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
@@ -349,38 +350,56 @@ static void RenderCrystalModal(GuiState& /*state*/) {
 // Axis Modal
 // ============================================================
 
+// Preset table: label + id + default (zenith, azimuth, roll). Table-driven so
+// that the active preset (via ClassifyAxisPreset) can be highlighted by looping
+// over the same entries used to write defaults.
+struct AxisPresetEntry {
+  const char* label;
+  AxisPreset id;
+  AxisDist zenith;
+  AxisDist azimuth;
+  AxisDist roll;
+};
+
+static constexpr AxisDist kAzFullUniform{ AxisDistType::kUniform, 0.0f, 360.0f };
+static constexpr AxisDist kRollFreeUniform{ AxisDistType::kUniform, 0.0f, 360.0f };
+static constexpr AxisDist kRollLockedGauss{ AxisDistType::kGauss, 0.0f, 1.0f };
+
+static constexpr AxisPresetEntry kAxisPresets[] = {
+  { "Column", AxisPreset::kColumn, { AxisDistType::kGauss, 90.0f, 1.0f }, kAzFullUniform, kRollFreeUniform },
+  { "Plate", AxisPreset::kPlate, { AxisDistType::kGauss, 0.0f, 1.0f }, kAzFullUniform, kRollFreeUniform },
+  { "Parry", AxisPreset::kParry, { AxisDistType::kGauss, 90.0f, 1.0f }, kAzFullUniform, kRollLockedGauss },
+  // Lowitz default zenith uses Zigzag per issue §识别规则.
+  { "Lowitz", AxisPreset::kLowitz, { AxisDistType::kZigzag, 0.0f, 40.0f }, kAzFullUniform, kRollLockedGauss },
+  { "Random", AxisPreset::kRandom, kAzFullUniform, kAzFullUniform, kRollFreeUniform },
+  { "Custom",
+    AxisPreset::kCustom,
+    { AxisDistType::kGauss, 90.0f, 20.0f },
+    kAzFullUniform,
+    { AxisDistType::kGauss, 0.0f, 20.0f } },
+};
+
 static void RenderAxisModal(GuiState& /*state*/) {
-  // Preset buttons
+  // Preset buttons — active preset (inferred from current g_axis_buf) is highlighted
+  // using the theme's ButtonActive color so it adapts to light/dark style changes.
+  AxisPreset active = ClassifyAxisPreset(g_axis_buf[0], g_axis_buf[1], g_axis_buf[2]);
+  const ImVec4 active_color = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+
   ImGui::Text("Presets:");
-  ImGui::SameLine();
-  if (ImGui::SmallButton("Column")) {
-    g_axis_buf[0] = { AxisDistType::kGauss, 90.0f, 10.0f };
-    g_axis_buf[1] = { AxisDistType::kUniform, 0.0f, 360.0f };
-    g_axis_buf[2] = { AxisDistType::kUniform, 0.0f, 360.0f };
-  }
-  ImGui::SameLine();
-  if (ImGui::SmallButton("Plate")) {
-    g_axis_buf[0] = { AxisDistType::kGauss, 0.0f, 10.0f };
-    g_axis_buf[1] = { AxisDistType::kUniform, 0.0f, 360.0f };
-    g_axis_buf[2] = { AxisDistType::kUniform, 0.0f, 360.0f };
-  }
-  ImGui::SameLine();
-  if (ImGui::SmallButton("Random")) {
-    g_axis_buf[0] = { AxisDistType::kUniform, 0.0f, 360.0f };
-    g_axis_buf[1] = { AxisDistType::kUniform, 0.0f, 360.0f };
-    g_axis_buf[2] = { AxisDistType::kUniform, 0.0f, 360.0f };
-  }
-  ImGui::SameLine();
-  if (ImGui::SmallButton("Parry")) {
-    g_axis_buf[0] = { AxisDistType::kGauss, 90.0f, 10.0f };
-    g_axis_buf[1] = { AxisDistType::kUniform, 0.0f, 360.0f };
-    g_axis_buf[2] = { AxisDistType::kGauss, 0.0f, 0.0f };
-  }
-  ImGui::SameLine();
-  if (ImGui::SmallButton("Lowitz")) {
-    g_axis_buf[0] = { AxisDistType::kGauss, 0.0f, 60.0f };
-    g_axis_buf[1] = { AxisDistType::kUniform, 0.0f, 360.0f };
-    g_axis_buf[2] = { AxisDistType::kGauss, 0.0f, 0.0f };
+  for (const auto& entry : kAxisPresets) {
+    ImGui::SameLine();
+    bool highlighted = entry.id == active;
+    if (highlighted) {
+      ImGui::PushStyleColor(ImGuiCol_Button, active_color);
+    }
+    if (ImGui::SmallButton(entry.label)) {
+      g_axis_buf[0] = entry.zenith;
+      g_axis_buf[1] = entry.azimuth;
+      g_axis_buf[2] = entry.roll;
+    }
+    if (highlighted) {
+      ImGui::PopStyleColor();
+    }
   }
 
   ImGui::Separator();

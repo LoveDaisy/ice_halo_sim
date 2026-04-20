@@ -8,6 +8,7 @@
 
 #include "config/render_config.hpp"
 #include "gui/app.hpp"
+#include "gui/axis_presets.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
@@ -96,58 +97,10 @@ EditRequest g_edit_request;
 
 }  // namespace
 
-// ---- Epsilon for axis preset name matching (degrees) ----
-namespace {
-constexpr float kPresetEpsilon = 1.0f;
-
-bool FloatNear(float a, float b) {
-  return std::abs(a - b) <= kPresetEpsilon;
-}
-
-bool IsGaussType(AxisDistType t) {
-  return t == AxisDistType::kGauss || t == AxisDistType::kGaussLegacy;
-}
-}  // namespace
-
 // Infer axis orientation preset name from crystal config.
-// Match order: Parry -> Column -> Lowitz -> Plate -> Random -> Custom
+// Matching logic lives in axis_presets.hpp (shared with edit_modals.cpp; unit-tested).
 std::string AxisPresetName(const CrystalConfig& c) {
-  auto zt = c.zenith.type;
-  auto rt = c.roll.type;
-  auto at = c.azimuth.type;
-
-  bool z_gauss = IsGaussType(zt);
-  bool az_full_uniform = (at == AxisDistType::kUniform) && FloatNear(c.azimuth.std, 360.0f);
-  bool roll_locked = (rt == AxisDistType::kGauss || rt == AxisDistType::kGaussLegacy || rt == AxisDistType::kUniform) &&
-                     FloatNear(c.roll.mean, 0.0f) && c.roll.std < 5.0f;
-
-  // Parry: zenith≈90, std<30, roll locked, azimuth full uniform
-  if (z_gauss && FloatNear(c.zenith.mean, 90.0f) && c.zenith.std < 30.0f && roll_locked && az_full_uniform) {
-    return "Parry";
-  }
-
-  // Column: zenith≈90, std<30, azimuth full uniform (roll NOT locked)
-  if (z_gauss && FloatNear(c.zenith.mean, 90.0f) && c.zenith.std < 30.0f && az_full_uniform) {
-    return "Column";
-  }
-
-  // Lowitz: zenith≈0, std>30, roll locked, azimuth full uniform
-  if (z_gauss && FloatNear(c.zenith.mean, 0.0f) && c.zenith.std > 30.0f && roll_locked && az_full_uniform) {
-    return "Lowitz";
-  }
-
-  // Plate: zenith≈0, std<30, azimuth full uniform
-  if (z_gauss && FloatNear(c.zenith.mean, 0.0f) && c.zenith.std < 30.0f && az_full_uniform) {
-    return "Plate";
-  }
-
-  // Random: all three axes uniform with full range (std≈360)
-  if (zt == AxisDistType::kUniform && FloatNear(c.zenith.std, 360.0f) && rt == AxisDistType::kUniform &&
-      FloatNear(c.roll.std, 360.0f) && az_full_uniform) {
-    return "Random";
-  }
-
-  return "Custom";
+  return AxisPresetLabel(ClassifyAxisPreset(c.zenith, c.azimuth, c.roll));
 }
 
 namespace {
