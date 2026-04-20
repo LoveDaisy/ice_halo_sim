@@ -202,11 +202,11 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
 
 // Angle values computed for each edge sample point.
 struct SampleAngles {
-  float altitude;            // degrees
-  float azimuth;             // degrees, [-180, 180]
-  float sun_dist;            // degrees, [0, 180]
-  float wx, wy, wz;          // world direction (unit vector when valid)
-  float screen_x, screen_y;  // ImGui screen coords
+  float altitude;                         // degrees
+  float azimuth;                          // degrees, [-180, 180]
+  float sun_dist;                         // degrees, [0, 180]
+  float wx = 0.0f, wy = 0.0f, wz = 0.0f;  // world direction (unit vector when valid; (0,0,0) when invalid)
+  float screen_x, screen_y;               // ImGui screen coords
   bool valid;
 };
 

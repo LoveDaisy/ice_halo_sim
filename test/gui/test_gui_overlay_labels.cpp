@@ -34,9 +34,15 @@ lumice::gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float el
   return in;
 }
 
-// Convenience: input with sun circles only (single 22° circle), Linear lens.
+// Convenience: input with sun circles only. Uses Fisheye Equidistant (lens_type=2) with
+// fov=360° so back-facing world directions land WITHIN the viewport (r_norm = theta/half_fov,
+// and half_fov=π fits theta∈[0,π]). Other lenses or smaller fov push back-facing dirs outside
+// viewport bounds — the viewport bound check would then mask is_visible_front, making
+// "back labels suppressed" tests vacuously true. With this setup, is_visible_front is the
+// sole gate for sun-circle interior labels in the back hemisphere.
 lumice::gui::OverlayLabelInput MakeSunOnly(int visible, const float sun_dir[3], const float* circle_angles, int count) {
-  lumice::gui::OverlayLabelInput in = MakeGridOnly(visible, /*lens=Linear*/ 0, /*elev*/ 0.0f, /*az*/ 0.0f);
+  lumice::gui::OverlayLabelInput in = MakeGridOnly(visible, /*lens=Fisheye Equidistant*/ 2, /*elev*/ 0.0f, /*az*/ 0.0f);
+  in.fov = 360.0f;
   in.show_grid = false;
   in.show_sun_circles = true;
   in.sun_dir[0] = sun_dir[0];
@@ -128,38 +134,27 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // Test D: Non-Front modes — sun-circle interior labels behavior unchanged.
-  // Regression guard for is_visible_front returning true unconditionally outside Front mode.
+  // Test D: Full mode + back sun must NOT cull (is_visible_front no-op outside Front).
+  // Critical pairing with Test B: same sun_back scenario, but Full mode keeps labels while
+  // Test B's Front mode drops them. The asymmetry (Full > 0, Front == 0) is the regression
+  // detector — if is_visible_front mistakenly evaluated the dot check in non-Front modes,
+  // n_full would also drop to 0. We avoid Upper/Lower here because their equator-boundary
+  // block (runs only for Upper/Lower, lens 0-3) generates extra sun-circle edge labels at
+  // the equator-circle intersection, polluting an interior-block-focused regression test.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "non_front_sun_circle_unchanged");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "full_sun_circle_back_kept");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       IM_UNUSED(ctx);
-      // sun_dir = forward = (-1,0,0); same scenario as Test C but in Full / Upper / Lower modes.
-      // Per F4 in plan: interior block historically had no is_visible filtering, so the four labels
-      // must be produced identically regardless of mode. If is_visible_front mistakenly culled in
-      // non-Front modes, n_full/n_upper/n_lower would drop below n_baseline = 4. Sun must be front-
-      // facing so labels actually pass WorldDirToPixel; otherwise WorldDirToPixel suppresses them
-      // first and the assertion degenerates to 0 == 0 (no regression detection).
-      const float sun_front[3] = { -1.0f, 0.0f, 0.0f };
+      const float sun_back[3] = { 1.0f, 0.0f, 0.0f };
       const float angle = 5.0f;
 
-      std::vector<lumice::gui::OverlayLabel> labels_full;
-      std::vector<lumice::gui::OverlayLabel> labels_upper;
-      std::vector<lumice::gui::OverlayLabel> labels_lower;
-      auto in_full = MakeSunOnly(/*visible=Full*/ 2, sun_front, &angle, 1);
-      auto in_upper = MakeSunOnly(/*visible=Upper*/ 0, sun_front, &angle, 1);
-      auto in_lower = MakeSunOnly(/*visible=Lower*/ 1, sun_front, &angle, 1);
+      std::vector<lumice::gui::OverlayLabel> labels;
+      auto in = MakeSunOnly(/*visible=Full*/ 2, sun_back, &angle, 1);
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 800.0f, 600.0f, labels);
 
-      lumice::gui::ComputeOverlayLabels(in_full, 0.0f, 0.0f, 800.0f, 600.0f, labels_full);
-      lumice::gui::ComputeOverlayLabels(in_upper, 0.0f, 0.0f, 800.0f, 600.0f, labels_upper);
-      lumice::gui::ComputeOverlayLabels(in_lower, 0.0f, 0.0f, 800.0f, 600.0f, labels_lower);
-
-      int n_full = CountSunCircleLabels(labels_full);
-      int n_upper = CountSunCircleLabels(labels_upper);
-      int n_lower = CountSunCircleLabels(labels_lower);
-      IM_CHECK_GT(n_full, 0);  // baseline sanity (non-zero so regression check is meaningful)
-      IM_CHECK_EQ(n_full, n_upper);
-      IM_CHECK_EQ(n_full, n_lower);
+      // Must be > 0: matches Test B scenario exactly except for visible=Full vs Front, so any
+      // non-zero count proves is_visible_front did not gate in Full mode.
+      IM_CHECK_GT(CountSunCircleLabels(labels), 0);
     };
   }
 }
