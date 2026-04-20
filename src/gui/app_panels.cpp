@@ -83,7 +83,8 @@ void RenderTopBar(float window_width) {
   ImGui::TextDisabled("|");
   ImGui::SameLine();
 
-  // File operations
+  // File operations — New/Open disabled while simulating; Save menu itself stays
+  // enabled so read-only exports (Screenshot/Panorama/Config JSON) remain reachable.
   if (simulating) {
     ImGui::BeginDisabled();
   }
@@ -94,27 +95,30 @@ void RenderTopBar(float window_width) {
   if (ImGui::Button("Open")) {
     CheckUnsavedAndDo(PendingAction::kOpen);
   }
-  ImGui::SameLine();
-  if (ImGui::Button("Save")) {
-    DoSave();
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Save As")) {
-    DoSaveAs();
-  }
   if (simulating) {
     ImGui::EndDisabled();
   }
   ImGui::SameLine();
-  ImGui::TextDisabled("|");
-  ImGui::SameLine();
   {
-    if (ImGui::Button("Export")) {
-      ImGui::OpenPopup("ExportMenu");
+    if (ImGui::Button("Save")) {
+      ImGui::OpenPopup("SaveMenu");
     }
-    if (ImGui::BeginPopup("ExportMenu")) {
+    if (ImGui::BeginPopup("SaveMenu")) {
       bool no_texture = !g_preview.HasTexture();
       bool has_server = g_server != nullptr && g_state.sim_state != GuiState::SimState::kIdle;
+      if (simulating) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::MenuItem("Save")) {
+        DoSave();
+      }
+      if (ImGui::MenuItem("Save Copy")) {
+        DoSaveAs();
+      }
+      if (simulating) {
+        ImGui::EndDisabled();
+      }
+      ImGui::Separator();
       if (ImGui::MenuItem("Screenshot...", nullptr, false, !no_texture)) {
         DoExportPreviewPng();
       }
