@@ -1199,12 +1199,16 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
   // Read pixels (RGBA8, Y-flipped top-down). Readback happens before FBO unbind
   // so the helper reads from the just-rendered FBO.
   std::vector<unsigned char> pixels;
-  ReadbackGlRegionToRgba(0, 0, w, h, pixels);
+  const bool readback_ok = lumice::gui::ReadbackGlRegionToRgba(0, 0, w, h, pixels);
 
-  // Cleanup GL resources
+  // Cleanup GL resources (run regardless of readback success)
   glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
   glDeleteRenderbuffers(1, &rbo);
   glDeleteFramebuffers(1, &fbo);
+
+  if (!readback_ok) {
+    return false;
+  }
 
   // Save as RGBA PNG
   auto u8path = path.u8string();

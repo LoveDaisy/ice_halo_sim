@@ -20,14 +20,25 @@ namespace lumice::gui {
 //     readback will silently return a previous frame or partial content.
 //   - out_rgba_top_down is resized to w*h*4 on success.
 //
-// Returns false if (w,h) is non-positive.
-inline bool ReadbackGlRegionToRgba(int x, int y, int w, int h, std::vector<unsigned char>& out_rgba_top_down) {
+// Returns false if (w,h) is non-positive, or if glReadPixels raises a GL
+// error (e.g. no FBO bound, context not current). On failure the output
+// buffer is cleared.
+[[nodiscard]] inline bool ReadbackGlRegionToRgba(int x, int y, int w, int h,
+                                                 std::vector<unsigned char>& out_rgba_top_down) {
   if (w <= 0 || h <= 0) {
+    out_rgba_top_down.clear();
     return false;
   }
   const size_t kRowBytes = static_cast<size_t>(w) * 4;
-  out_rgba_top_down.assign(static_cast<size_t>(h) * kRowBytes, 0);
+  out_rgba_top_down.resize(static_cast<size_t>(h) * kRowBytes);
+  // Drain any pre-existing GL error so glGetError below reflects only this call.
+  while (glGetError() != GL_NO_ERROR) {
+  }
   glReadPixels(x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, out_rgba_top_down.data());
+  if (glGetError() != GL_NO_ERROR) {
+    out_rgba_top_down.clear();
+    return false;
+  }
 
   std::vector<unsigned char> row(kRowBytes);
   for (int i = 0; i < h / 2; ++i) {
