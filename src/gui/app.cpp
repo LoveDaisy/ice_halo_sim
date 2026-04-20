@@ -14,10 +14,14 @@
 #include <vector>
 
 #include "core/projection.hpp"
+#include "gui/export_fbo_renderer.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_logger.hpp"
 #include "util/color_space.hpp"
 #include "util/path_utils.hpp"
+
+// stb_image_write is already linked via gui/file_io.cpp + gui/stb_impl.cpp; reuse API.
+#include "stb_image_write.h"
 
 namespace lumice::gui {
 
@@ -237,21 +241,48 @@ void DoSaveAs() {
   }
 }
 
+// Build PreviewParams for export: copy current preview viewport params, but override
+// intensity_* fields to sample the GUI EV slider live (not the CommitConfig-time value
+// that once leaked into Core snapshot exports — gui-polish-v10 Bug 1 root cause).
+//
+// Formula mirrors app_panels.cpp's live preview path, keeping shader u_intensity_scale
+// byte-identical between preview and export:
+//   intensity_factor = 2^exposure_offset
+//   intensity_scale  = intensity_factor / snapshot_intensity  (0 if snapshot_intensity <= 0)
+static PreviewParams BuildExportParams() {
+  PreviewParams params = g_preview_vp.params;
+  params.intensity_factor = std::pow(2.0f, g_state.renderer.exposure_offset);
+  params.intensity_scale = g_state.snapshot_intensity > 0 ? params.intensity_factor / g_state.snapshot_intensity : 0.0f;
+  return params;
+}
+
 void DoExportPreviewPng() {
   auto path = ShowExportPngDialog();
   if (path.empty()) {
     return;
   }
-  if (g_state.screenshot_include_overlay) {
-    // Defer to main render loop: the overlay (ImGui foreground draw list) is only present
-    // in the default framebuffer after ImGui_ImplOpenGL3_RenderDrawData().
-    g_state.pending_screenshot.path = path;
-    g_state.pending_screenshot.active = true;
-    GUI_LOG_INFO("[GUI] Queue screenshot (overlay): {}", PathToU8(path));
-  } else {
-    ExportPreviewPng(path, g_preview, g_preview_vp);
-    GUI_LOG_INFO("[GUI] Export screenshot: {}", PathToU8(path));
+
+  PreviewParams params = BuildExportParams();
+  std::optional<OverlayLabelInput> overlay;
+  if (g_state.screenshot_include_overlay && (g_state.show_horizon || g_state.show_grid || g_state.show_sun_circles)) {
+    overlay = BuildOverlayLabelInput(g_state, g_state.renderer);
   }
+
+  int w = g_preview_vp.vp_w;
+  int h = g_preview_vp.vp_h;
+  auto rgba = RenderExportToRgba(g_preview, params, w, h, overlay);
+  if (rgba.empty()) {
+    GUI_LOG_ERROR("[GUI] Export screenshot failed: RenderExportToRgba returned empty (vp={}x{})", w, h);
+    return;
+  }
+
+  auto u8 = PathToU8(path);
+  int written = stbi_write_png(u8.c_str(), w, h, 4, rgba.data(), w * 4);
+  if (written == 0) {
+    GUI_LOG_ERROR("[GUI] Export screenshot failed: stbi_write_png error path={}", u8);
+    return;
+  }
+  GUI_LOG_INFO("[GUI] Export screenshot{}: {}", overlay.has_value() ? " (overlay)" : "", u8);
 }
 
 // Fetch the current Core render snapshot as a CPU-side RGB buffer.

@@ -442,21 +442,11 @@ int main(int argc, char** argv) {
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-    // Consume a pending "Include Overlay" screenshot request here: the default framebuffer
-    // now contains both the preview render and the ImGui foreground draw list (overlay labels).
-    // Must happen before glfwSwapBuffers — see file_io.hpp contract for ExportDefaultFramebufferRegionPng.
-    if (gui::g_state.pending_screenshot.active) {
-      if (gui::g_preview_vp.active) {
-        const auto& vp = gui::g_preview_vp;
-        bool ok = gui::ExportDefaultFramebufferRegionPng(gui::g_state.pending_screenshot.path, vp.vp_x, vp.vp_y,
-                                                         vp.vp_w, vp.vp_h);
-        GUI_LOG_INFO("[GUI] Export screenshot (overlay): {}  ok={}", gui::g_state.pending_screenshot.path.u8string(),
-                     ok);
-      } else {
-        GUI_LOG_WARNING("[GUI] pending screenshot dropped: preview viewport inactive");
-      }
-      gui::g_state.pending_screenshot = {};
-    }
+    // gui-polish-v10: Screenshot exports (with or without overlay) now go through the
+    // off-screen FBO path in RenderExportToRgba — no deferred default-framebuffer capture
+    // is needed here. The old pending_screenshot hook that read back from the default FB
+    // was retired because it unavoidably captured ImGui chrome (e.g. an open Save menu)
+    // together with the preview (Bug 2).
 
     glfwSwapBuffers(window);
 
