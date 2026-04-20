@@ -30,6 +30,20 @@ namespace lumice::gui {
 std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const PreviewParams& params, int dst_w,
                                               int dst_h, const std::optional<OverlayLabelInput>& overlay_input);
 
+// Partial-override helpers for export paths. Both assume `params` already carries the
+// live EV-synced `intensity_factor` / `intensity_scale` from `BuildExportParams()` and
+// overwrite the 11 export-specific fields that must not inherit viewport dirty state.
+//
+// Shared between production (`app.cpp::DoExport*Png`) and test helpers
+// (`test_gui_export.cpp::Apply*Override`) so new `PreviewParams` fields only need to be
+// audited in one place — replaces the earlier "Must stay in sync" comment contract.
+//
+// Required by `sampleDualFisheye`: both variants keep `max_abs_dz` / `r_scale` aligned
+// with `kDualFisheyeOverlap` because the equirect shader samples the dual-fisheye
+// source texture format.
+void ConfigureDualFisheyeExportParams(PreviewParams& params);
+void ConfigureEquirectExportParams(PreviewParams& params);
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_EXPORT_FBO_RENDERER_HPP

@@ -172,23 +172,14 @@ static gui::PreviewParams BuildAcExportParams(float exposure_offset) {
   return params;
 }
 
-// Mirror src/gui/app.cpp::DoExportDualFisheyeEqualAreaPng's field overrides. Must
-// stay in sync with that function: any new PreviewParams field relied on by dual
-// fisheye export should be mirrored here so the test exercises the same shader
-// configuration.
+// Thin wrapper over the shared production configure function so RunAcExport's
+// dispatch stays self-explanatory. Keeps test and production byte-exact in sync.
 static void ApplyDualFisheyeOverride(gui::PreviewParams& params) {
-  params.lens_type = 4;
-  params.fov = 180.0f;
-  params.elevation = 0.0f;
-  params.azimuth = 0.0f;
-  params.roll = 0.0f;
-  params.visible = 2;
-  params.max_abs_dz = gui::kDualFisheyeOverlap;
-  params.r_scale = 1.0f / std::sqrt(1.0f + gui::kDualFisheyeOverlap);
-  params.bg_enabled = false;
-  params.show_horizon = false;
-  params.show_grid = false;
-  params.show_sun_circles = false;
+  gui::ConfigureDualFisheyeExportParams(params);
+}
+
+static void ApplyEquirectOverride(gui::PreviewParams& params) {
+  gui::ConfigureEquirectExportParams(params);
 }
 
 static void RunAcExport() {
@@ -196,9 +187,11 @@ static void RunAcExport() {
   int h = g_ac_state.dst_h > 0 ? g_ac_state.dst_h : gui::g_preview_vp.vp_h;
 
   gui::PreviewParams params = BuildAcExportParams(g_ac_state.exposure_offset);
-  // 4 = Dual Fisheye Equal Area (see gui_state.hpp::kLensTypeNames).
+  // 4 = Dual Fisheye Equal Area, 7 = Rectangular (see gui_state.hpp::kLensTypeNames).
   if (g_ac_state.lens_type_override == 4) {
     ApplyDualFisheyeOverride(params);
+  } else if (g_ac_state.lens_type_override == 7) {
+    ApplyEquirectOverride(params);
   }
 
   std::optional<gui::OverlayLabelInput> overlay;

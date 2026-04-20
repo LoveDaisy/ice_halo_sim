@@ -1,7 +1,10 @@
 #include "gui/export_fbo_renderer.hpp"
 
+#include <cmath>
+
 #include "gui/gl_capture.hpp"
 #include "gui/gl_common.h"
+#include "gui/gui_state.hpp"
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
 
@@ -127,6 +130,39 @@ std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const P
     return {};
   }
   return rgba;
+}
+
+// NOTE: lens_type / visible use literal indices. Project has no kLensType* /
+// kVisibleFull named constants today; if kLensTypeNames / kVisibleNames are reordered,
+// these literals break silently. Audit both together.
+void ConfigureDualFisheyeExportParams(PreviewParams& params) {
+  params.lens_type = 4;  // Dual Fisheye Equal Area
+  params.fov = 180.0f;
+  params.elevation = 0.0f;
+  params.azimuth = 0.0f;
+  params.roll = 0.0f;
+  params.visible = 2;  // Full sphere
+  params.max_abs_dz = kDualFisheyeOverlap;
+  params.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
+  params.bg_enabled = false;
+  params.show_horizon = false;
+  params.show_grid = false;
+  params.show_sun_circles = false;
+}
+
+void ConfigureEquirectExportParams(PreviewParams& params) {
+  params.lens_type = 7;  // Rectangular (equirectangular)
+  params.fov = 180.0f;
+  params.elevation = 0.0f;  // needs_view_transform=false in shader, world-space projection
+  params.azimuth = 0.0f;
+  params.roll = 0.0f;
+  params.visible = 2;  // Full (shader also self-clips |lat| > PI/2)
+  params.max_abs_dz = kDualFisheyeOverlap;  // required by sampleDualFisheye (texture format)
+  params.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
+  params.bg_enabled = false;
+  params.show_horizon = false;
+  params.show_grid = false;
+  params.show_sun_circles = false;
 }
 
 }  // namespace lumice::gui
