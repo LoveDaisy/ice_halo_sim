@@ -107,27 +107,6 @@ bool PixelToDualFisheye(float fx, float fy, int width, int height, float* x_norm
 float ComputeEARScale(float max_abs_dz);
 
 
-// =============== CPU reprojection helpers ===============
-// These operate on RGB uint8 buffers (row-major, 3 channels) and are pure functions
-// suitable for unit testing. They do no I/O and allocate no memory.
-
-// Reproject a dual-fisheye equal-area source image to a 2:1 equirectangular image.
-// - src: RGB uint8 buffer (src_w * src_h * 3 bytes), dual fisheye layout (F2 DualFisheyeToPixel).
-// - r_scale: usually ComputeEARScale(overlap). Determines the source's equator radius.
-//   The output is naturally free of overlap-ring contamination because each equirect
-//   direction is projected with z_hemi = |dz| ≥ 0, which keeps r_proj ≤ r_scale
-//   (primary-hemisphere interior of the disc).
-// - dst: caller-allocated RGB uint8 buffer (dst_w * dst_h * 3 bytes). The function
-//   zero-fills dst before sampling.
-// Sampling is nearest-neighbor. Direction convention matches the shader
-// rectangularInverse (src/gui/preview_renderer.cpp).
-void ReprojectEquirectangular(const unsigned char* src, int src_w, int src_h, float r_scale, unsigned char* dst,
-                              int dst_w, int dst_h);
-
-// In-place mask: zero out pixels in the dual-fisheye overlap ring (r_norm > r_scale).
-// Pixels outside both fisheye circles (PixelToDualFisheye returns false) are left untouched.
-void MaskDualFisheyeOverlap(unsigned char* buf, int w, int h, float r_scale);
-
 }  // namespace projection
 }  // namespace lumice
 

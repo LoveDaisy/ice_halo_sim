@@ -13,7 +13,6 @@
 #include <thread>
 #include <vector>
 
-#include "core/projection.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_logger.hpp"
@@ -284,25 +283,6 @@ void DoExportPreviewPng() {
   GUI_LOG_INFO("[GUI] Export screenshot{}: {}", overlay.has_value() ? " (overlay)" : "", PathToU8(path));
 }
 
-// Fetch the current Core render snapshot as a CPU-side RGB buffer.
-// Returns empty vector on failure (no server / empty snapshot).
-static std::vector<unsigned char> FetchRenderSnapshot(int* out_w, int* out_h) {
-  *out_w = 0;
-  *out_h = 0;
-  if (!g_server) {
-    return {};
-  }
-  LUMICE_RenderResult renders[2]{};
-  LUMICE_GetRenderResults(g_server, renders, 1);
-  if (renders[0].img_buffer == nullptr || renders[0].img_width <= 0 || renders[0].img_height <= 0) {
-    return {};
-  }
-  *out_w = renders[0].img_width;
-  *out_h = renders[0].img_height;
-  size_t size = static_cast<size_t>(*out_w) * *out_h * 3;
-  return std::vector<unsigned char>(renders[0].img_buffer, renders[0].img_buffer + size);
-}
-
 void DoExportDualFisheyeEqualAreaPng() {
   auto path = ShowExportDualFisheyeEqualAreaDialog();
   if (path.empty()) {
@@ -336,20 +316,30 @@ void DoExportEquirectangularPng() {
   if (path.empty()) {
     return;
   }
-  int src_w = 0;
-  int src_h = 0;
-  auto src = FetchRenderSnapshot(&src_w, &src_h);
-  if (src.empty()) {
+
+  int tex_w = g_preview.GetTextureWidth();
+  int tex_h = g_preview.GetTextureHeight();
+  if (tex_w <= 0 || tex_h <= 0) {
+    GUI_LOG_ERROR("[GUI] Export equirect: no texture loaded");
     return;
   }
-  // 2:1 equirect output sized so 1 output pixel ≈ 1 source disc-diameter pixel.
-  int short_res = std::min(src_w / 2, src_h);
+  // Preserve 155.4 约定：short_res = min(tex_w/2, tex_h) for strict 2:1 output.
+  int short_res = std::min(tex_w / 2, tex_h);
   int dst_w = 2 * short_res;
   int dst_h = short_res;
-  std::vector<unsigned char> dst(static_cast<size_t>(dst_w) * dst_h * 3, 0);
-  float r_scale = lumice::projection::ComputeEARScale(kDualFisheyeOverlap);
-  lumice::projection::ReprojectEquirectangular(src.data(), src_w, src_h, r_scale, dst.data(), dst_w, dst_h);
-  ExportEquirectangularPng(path, dst.data(), dst_w, dst_h);
+
+  PreviewParams params = BuildExportParams();
+  ConfigureEquirectExportParams(params);
+
+  auto rgba = RenderExportToRgba(g_preview, params, dst_w, dst_h, std::nullopt);
+  if (rgba.empty()) {
+    GUI_LOG_ERROR("[GUI] Export equirect: RenderExportToRgba empty (size={}x{})", dst_w, dst_h);
+    return;
+  }
+  if (!WriteRgbaBufferToPng(path, dst_w, dst_h, rgba)) {
+    GUI_LOG_ERROR("[GUI] Export equirect: PNG write failed path={}", PathToU8(path));
+    return;
+  }
   GUI_LOG_INFO("[GUI] Export equirectangular: {}", PathToU8(path));
 }
 

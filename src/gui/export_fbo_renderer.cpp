@@ -156,7 +156,7 @@ void ConfigureEquirectExportParams(PreviewParams& params) {
   params.elevation = 0.0f;  // needs_view_transform=false in shader, world-space projection
   params.azimuth = 0.0f;
   params.roll = 0.0f;
-  params.visible = 2;  // Full (shader also self-clips |lat| > PI/2)
+  params.visible = 2;                       // Full (shader also self-clips |lat| > PI/2)
   params.max_abs_dz = kDualFisheyeOverlap;  // required by sampleDualFisheye (texture format)
   params.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
   params.bg_enabled = false;

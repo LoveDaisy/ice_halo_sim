@@ -1207,17 +1207,6 @@ bool ExportDefaultFramebufferRegionPng(const std::filesystem::path& path, int x,
 }
 
 
-// ========== Export Equirectangular ==========
-
-bool ExportEquirectangularPng(const std::filesystem::path& path, const unsigned char* data, int width, int height) {
-  if (path.empty() || !data || width <= 0 || height <= 0) {
-    return false;
-  }
-  auto u8path = path.u8string();
-  int result = stbi_write_png(u8path.c_str(), width, height, 3, data, width * 3);
-  return result != 0;
-}
-
 // ========== Export Config JSON ==========
 
 bool ExportConfigJson(const std::filesystem::path& path, const std::string& json_str) {

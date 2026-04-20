@@ -815,4 +815,131 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       IM_CHECK(mean_b > 1.3 * mean_a);
     };
   }
+
+  // ACD3: RenderExportToRgba with lens_type=7 (Rectangular/Equirectangular) is
+  // deterministic — two consecutive calls with identical inputs must produce
+  // byte-identical output. Mirrors ACD1 but exercises the equirect override
+  // path that DoExportEquirectangularPng uses in production.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export_equirect", "acd3_determinism_lens7");
+    t->GuiFunc = AcGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_export_test.Reset();
+      g_ac_state.Reset();
+
+      g_export_test.upload_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.upload_done);
+      ctx->Yield(2);
+      const int tex_w = gui::g_preview.GetTextureWidth();
+      const int tex_h = gui::g_preview.GetTextureHeight();
+      IM_CHECK(tex_w > 0 && tex_h > 0);
+      // Mirror DoExportEquirectangularPng's sizing: strict 2:1 output.
+      const int short_res = std::min(tex_w / 2, tex_h);
+      const int dst_w = 2 * short_res;
+      const int dst_h = short_res;
+
+      g_ac_state.Reset();
+      g_ac_state.with_overlay = false;
+      g_ac_state.lens_type_override = 7;
+      g_ac_state.dst_w = dst_w;
+      g_ac_state.dst_h = dst_h;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
+      IM_CHECK(g_ac_state.ok);
+      std::vector<unsigned char> rgba_a = std::move(g_ac_state.rgba);
+
+      g_ac_state.Reset();
+      g_ac_state.with_overlay = false;
+      g_ac_state.lens_type_override = 7;
+      g_ac_state.dst_w = dst_w;
+      g_ac_state.dst_h = dst_h;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
+      IM_CHECK(g_ac_state.ok);
+      IM_CHECK_EQ(rgba_a.size(), g_ac_state.rgba.size());
+
+      double psnr = ComputePsnrRgba(rgba_a, g_ac_state.rgba);
+      IM_CHECK(psnr >= 50.0);
+    };
+  }
+
+  // ACD4: Equirect export exposure follows EV. Same structure as ACD2 but with
+  // lens_type_override=7. Uses a uniform XYZ texture (lens-agnostic pixel field)
+  // so EV scaling is the only source of mean-luma change.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export_equirect", "acd4_exposure_follows_ev_lens7");
+    struct Local {
+      static void UploadXyzForAcd4() {
+        constexpr int kW = 64;
+        constexpr int kH = 32;
+        std::vector<float> xyz(static_cast<size_t>(kW) * kH * 3, 0.0f);
+        for (size_t i = 0; i < static_cast<size_t>(kW) * kH; ++i) {
+          xyz[i * 3 + 0] = 0.08f;
+          xyz[i * 3 + 1] = 0.08f;
+          xyz[i * 3 + 2] = 0.08f;
+        }
+        gui::g_preview.UploadXyzTexture(xyz.data(), kW, kH);
+      }
+    };
+    static bool s_xyz_uploaded = false;
+    t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
+      AcGuiFunc(nullptr);
+      if (!s_xyz_uploaded) {
+        Local::UploadXyzForAcd4();
+        gui::g_state.snapshot_intensity = 1.0f;
+        s_xyz_uploaded = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_ac_state.Reset();
+      s_xyz_uploaded = false;
+
+      ctx->Yield(3);
+      IM_CHECK(s_xyz_uploaded);
+      ctx->Yield(2);
+
+      const int tex_w = gui::g_preview.GetTextureWidth();
+      const int tex_h = gui::g_preview.GetTextureHeight();
+      IM_CHECK(tex_w > 0 && tex_h > 0);
+      const int short_res = std::min(tex_w / 2, tex_h);
+      const int dst_w = 2 * short_res;
+      const int dst_h = short_res;
+
+      // EV = 0
+      g_ac_state.Reset();
+      g_ac_state.lens_type_override = 7;
+      g_ac_state.dst_w = dst_w;
+      g_ac_state.dst_h = dst_h;
+      g_ac_state.exposure_offset = 0.0f;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
+      IM_CHECK(g_ac_state.ok);
+      double mean_a = ComputeMeanLuma(g_ac_state.rgba);
+
+      // EV = +2
+      g_ac_state.Reset();
+      g_ac_state.lens_type_override = 7;
+      g_ac_state.dst_w = dst_w;
+      g_ac_state.dst_h = dst_h;
+      g_ac_state.exposure_offset = 2.0f;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
+      IM_CHECK(g_ac_state.ok);
+      double mean_b = ComputeMeanLuma(g_ac_state.rgba);
+
+      fprintf(stderr, "[ACD4] mean_a=%.4f mean_b=%.4f (ev+2 / ev0 = %.2fx)\n", mean_a, mean_b,
+              mean_a > 0.0 ? mean_b / mean_a : 0.0);
+
+      constexpr double kMinMeanThreshold = 5.0 / 255.0;
+      IM_CHECK(mean_a > kMinMeanThreshold);
+      IM_CHECK(mean_b > 1.3 * mean_a);
+    };
+  }
 }

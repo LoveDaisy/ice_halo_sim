@@ -352,33 +352,4 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded.renderer.fov, 90.0f);
     };
   }
-
-  // Test 5: Equirectangular PNG export — write synthetic data, verify file is readable
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "equirect_export");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-
-      // Create synthetic 4x2 RGB image
-      const int w = 4;
-      const int h = 2;
-      std::vector<unsigned char> data(w * h * 3, 128);
-
-      const char* tmp_path = "/tmp/lumice_equirect_test.png";
-      bool ok = gui::ExportEquirectangularPng(tmp_path, data.data(), w, h);
-      IM_CHECK(ok);
-
-      // Verify file is loadable
-      std::vector<unsigned char> img_data;
-      int img_w = 0;
-      int img_h = 0;
-      int img_ch = 0;
-      bool loaded = lumice::test::LoadPng(tmp_path, img_data, img_w, img_h, img_ch);
-      IM_CHECK(loaded);
-      IM_CHECK_EQ(img_w, w);
-      IM_CHECK_EQ(img_h, h);
-
-      std::remove(tmp_path);
-    };
-  }
 }

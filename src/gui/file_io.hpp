@@ -55,9 +55,6 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
 // Coordinates are framebuffer pixels with origin at the bottom-left (OpenGL convention).
 [[nodiscard]] bool ExportDefaultFramebufferRegionPng(const std::filesystem::path& path, int x, int y, int w, int h);
 
-// Export a true equirectangular (2:1 lon/lat) panorama as PNG. `data` is RGB row-major.
-bool ExportEquirectangularPng(const std::filesystem::path& path, const unsigned char* data, int width, int height);
-
 // Export configuration as JSON (CLI-compatible format)
 bool ExportConfigJson(const std::filesystem::path& path, const std::string& json_str);
 
