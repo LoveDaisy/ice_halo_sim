@@ -353,7 +353,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // Test 5: Equirect PNG export — write synthetic data, verify file is readable
+  // Test 5: Equirectangular PNG export — write synthetic data, verify file is readable
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "equirect_export");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -365,7 +365,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       std::vector<unsigned char> data(w * h * 3, 128);
 
       const char* tmp_path = "/tmp/lumice_equirect_test.png";
-      bool ok = gui::ExportEquirectPng(tmp_path, data.data(), w, h);
+      bool ok = gui::ExportEquirectangularPng(tmp_path, data.data(), w, h);
       IM_CHECK(ok);
 
       // Verify file is loadable

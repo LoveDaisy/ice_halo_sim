@@ -49,8 +49,11 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
 // Coordinates are framebuffer pixels with origin at the bottom-left (OpenGL convention).
 [[nodiscard]] bool ExportDefaultFramebufferRegionPng(const std::filesystem::path& path, int x, int y, int w, int h);
 
-// Export equirect panorama as PNG (pure I/O, accepts pre-converted RGB data)
-bool ExportEquirectPng(const std::filesystem::path& path, const unsigned char* data, int width, int height);
+// Export the Core dual fisheye equal-area render buffer as PNG (pure I/O).
+bool ExportDualFisheyeEqualAreaPng(const std::filesystem::path& path, const unsigned char* data, int width, int height);
+
+// Export a true equirectangular (2:1 lon/lat) panorama as PNG. `data` is RGB row-major.
+bool ExportEquirectangularPng(const std::filesystem::path& path, const unsigned char* data, int width, int height);
 
 // Export configuration as JSON (CLI-compatible format)
 bool ExportConfigJson(const std::filesystem::path& path, const std::string& json_str);
@@ -59,7 +62,8 @@ bool ExportConfigJson(const std::filesystem::path& path, const std::string& json
 std::filesystem::path ShowOpenDialog();
 std::filesystem::path ShowSaveDialog();
 std::filesystem::path ShowExportPngDialog();
-std::filesystem::path ShowExportEquirectDialog();
+std::filesystem::path ShowExportDualFisheyeEqualAreaDialog();
+std::filesystem::path ShowExportEquirectangularDialog();
 std::filesystem::path ShowExportJsonDialog();
 std::filesystem::path ShowOpenImageDialog();
 

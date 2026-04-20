@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/projection.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_logger.hpp"
 #include "util/color_space.hpp"
@@ -221,25 +222,65 @@ void DoExportPreviewPng() {
   }
 }
 
-void DoExportEquirectPng() {
+// Fetch the current Core render snapshot as a CPU-side RGB buffer.
+// Returns empty vector on failure (no server / empty snapshot).
+static std::vector<unsigned char> FetchRenderSnapshot(int* out_w, int* out_h) {
+  *out_w = 0;
+  *out_h = 0;
   if (!g_server) {
-    return;
+    return {};
   }
-  auto path = ShowExportEquirectDialog();
-  if (path.empty()) {
-    return;
-  }
-  // Get CPU-side sRGB render result (triggers DoSnapshot + PostSnapshot)
   LUMICE_RenderResult renders[2]{};
   LUMICE_GetRenderResults(g_server, renders, 1);
   if (renders[0].img_buffer == nullptr || renders[0].img_width <= 0 || renders[0].img_height <= 0) {
+    return {};
+  }
+  *out_w = renders[0].img_width;
+  *out_h = renders[0].img_height;
+  size_t size = static_cast<size_t>(*out_w) * *out_h * 3;
+  return std::vector<unsigned char>(renders[0].img_buffer, renders[0].img_buffer + size);
+}
+
+void DoExportDualFisheyeEqualAreaPng() {
+  auto path = ShowExportDualFisheyeEqualAreaDialog();
+  if (path.empty()) {
     return;
   }
-  // Copy buffer (pointer valid only until next GetRenderResults/CommitConfig)
-  size_t size = static_cast<size_t>(renders[0].img_width) * renders[0].img_height * 3;
-  std::vector<unsigned char> buffer(renders[0].img_buffer, renders[0].img_buffer + size);
-  ExportEquirectPng(path, buffer.data(), renders[0].img_width, renders[0].img_height);
-  GUI_LOG_INFO("[GUI] Export panorama: {}", PathToU8(path));
+  int w = 0;
+  int h = 0;
+  auto buffer = FetchRenderSnapshot(&w, &h);
+  if (buffer.empty()) {
+    return;
+  }
+  // Mask the overlap ring to black so the exported image represents a "clean" dual
+  // fisheye equal-area projection. This is a known breaking change relative to the
+  // prior "Panorama" export behaviour (documented in task SUMMARY).
+  float r_scale = lumice::projection::ComputeEARScale(kDualFisheyeOverlap);
+  lumice::projection::MaskDualFisheyeOverlap(buffer.data(), w, h, r_scale);
+  ExportDualFisheyeEqualAreaPng(path, buffer.data(), w, h);
+  GUI_LOG_INFO("[GUI] Export dual fisheye equal-area: {}", PathToU8(path));
+}
+
+void DoExportEquirectangularPng() {
+  auto path = ShowExportEquirectangularDialog();
+  if (path.empty()) {
+    return;
+  }
+  int src_w = 0;
+  int src_h = 0;
+  auto src = FetchRenderSnapshot(&src_w, &src_h);
+  if (src.empty()) {
+    return;
+  }
+  // 2:1 equirect output sized so 1 output pixel ≈ 1 source disc-diameter pixel.
+  int short_res = std::min(src_w / 2, src_h);
+  int dst_w = 2 * short_res;
+  int dst_h = short_res;
+  std::vector<unsigned char> dst(static_cast<size_t>(dst_w) * dst_h * 3, 0);
+  float r_scale = lumice::projection::ComputeEARScale(kDualFisheyeOverlap);
+  lumice::projection::ReprojectEquirectangular(src.data(), src_w, src_h, r_scale, dst.data(), dst_w, dst_h);
+  ExportEquirectangularPng(path, dst.data(), dst_w, dst_h);
+  GUI_LOG_INFO("[GUI] Export equirectangular: {}", PathToU8(path));
 }
 
 void DoExportConfigJson() {

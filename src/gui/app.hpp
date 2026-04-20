@@ -64,7 +64,8 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
 void DoSave();
 void DoSaveAs();
 void DoExportPreviewPng();
-void DoExportEquirectPng();
+void DoExportDualFisheyeEqualAreaPng();
+void DoExportEquirectangularPng();
 void DoExportConfigJson();
 void DoOpen();
 void DoNew();

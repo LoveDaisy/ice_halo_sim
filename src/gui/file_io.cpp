@@ -1230,9 +1230,21 @@ bool ExportDefaultFramebufferRegionPng(const std::filesystem::path& path, int x,
 }
 
 
-// ========== Export Equirect ==========
+// ========== Export Dual Fisheye Equal Area ==========
 
-bool ExportEquirectPng(const std::filesystem::path& path, const unsigned char* data, int width, int height) {
+bool ExportDualFisheyeEqualAreaPng(const std::filesystem::path& path, const unsigned char* data, int width,
+                                   int height) {
+  if (path.empty() || !data || width <= 0 || height <= 0) {
+    return false;
+  }
+  auto u8path = path.u8string();
+  int result = stbi_write_png(u8path.c_str(), width, height, 3, data, width * 3);
+  return result != 0;
+}
+
+// ========== Export Equirectangular ==========
+
+bool ExportEquirectangularPng(const std::filesystem::path& path, const unsigned char* data, int width, int height) {
   if (path.empty() || !data || width <= 0 || height <= 0) {
     return false;
   }
@@ -1299,11 +1311,25 @@ std::filesystem::path ShowExportPngDialog() {
   return path;
 }
 
-std::filesystem::path ShowExportEquirectDialog() {
+std::filesystem::path ShowExportDualFisheyeEqualAreaDialog() {
   NFD_Init();
   nfdchar_t* out_path = nullptr;
   nfdfilteritem_t filter_item[1] = { { "PNG Image", "png" } };
-  nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "equirect.png");
+  nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "dual_fisheye_equal_area.png");
+  std::filesystem::path path;
+  if (result == NFD_OKAY && out_path) {
+    path = PathFromU8(out_path);
+    NFD_FreePath(out_path);
+  }
+  NFD_Quit();
+  return path;
+}
+
+std::filesystem::path ShowExportEquirectangularDialog() {
+  NFD_Init();
+  nfdchar_t* out_path = nullptr;
+  nfdfilteritem_t filter_item[1] = { { "PNG Image", "png" } };
+  nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "equirectangular.png");
   std::filesystem::path path;
   if (result == NFD_OKAY && out_path) {
     path = PathFromU8(out_path);

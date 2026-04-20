@@ -400,8 +400,9 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P1: scrum-gui-polish-v9 155.2 — Save popup structure and simulating gating.
-  // Asserts the single Save dropdown hosts all 5 actions + Include Texture checkbox,
+  // P1: scrum-gui-polish-v9 155.2 + 155.4 — Save popup structure and simulating gating.
+  // 155.4 renamed "Panorama..." → "Dual Fisheye Equal Area..." and added "Equirectangular...".
+  // Asserts the single Save dropdown hosts all 6 actions + Include Texture/Overlay checkboxes,
   // and that Save/Save Copy disable under simulating while read-only exports stay live.
   // Uses ItemInfo rather than clicking MenuItem("Save") because DoSave triggers the
   // native file dialog (blocking, not test-engine-driveable).
@@ -420,7 +421,8 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // All menu items + checkbox present under the popup
       IM_CHECK(ctx->ItemExists("**/Save Copy"));
       IM_CHECK(ctx->ItemExists("**/Screenshot..."));
-      IM_CHECK(ctx->ItemExists("**/Panorama..."));
+      IM_CHECK(ctx->ItemExists("**/Dual Fisheye Equal Area..."));
+      IM_CHECK(ctx->ItemExists("**/Equirectangular..."));
       IM_CHECK(ctx->ItemExists("**/Config JSON..."));
       IM_CHECK(ctx->ItemExists("**/Include Texture in .lmc"));
 

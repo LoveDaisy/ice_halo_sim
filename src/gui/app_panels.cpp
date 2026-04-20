@@ -84,7 +84,8 @@ void RenderTopBar(float window_width) {
   ImGui::SameLine();
 
   // File operations — New/Open disabled while simulating; Save menu itself stays
-  // enabled so read-only exports (Screenshot/Panorama/Config JSON) remain reachable.
+  // enabled so read-only exports (Screenshot / Dual Fisheye Equal Area / Equirectangular /
+  // Config JSON) remain reachable.
   if (simulating) {
     ImGui::BeginDisabled();
   }
@@ -122,8 +123,11 @@ void RenderTopBar(float window_width) {
       if (ImGui::MenuItem("Screenshot...", nullptr, false, !no_texture)) {
         DoExportPreviewPng();
       }
-      if (ImGui::MenuItem("Panorama...", nullptr, false, has_server)) {
-        DoExportEquirectPng();
+      if (ImGui::MenuItem("Dual Fisheye Equal Area...", nullptr, false, has_server)) {
+        DoExportDualFisheyeEqualAreaPng();
+      }
+      if (ImGui::MenuItem("Equirectangular...", nullptr, false, has_server)) {
+        DoExportEquirectangularPng();
       }
       if (ImGui::MenuItem("Config JSON...")) {
         DoExportConfigJson();
