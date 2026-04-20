@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <random>
+#include <vector>
 
 #include "config/render_config.hpp"
 #include "core/math.hpp"
@@ -451,6 +452,173 @@ TEST(FovScale, EquidistantScaleShortEdge) {
 
   float r_pix = std::sqrt(proj.x * proj.x + proj.y * proj.y) * scale;
   EXPECT_NEAR(r_pix, static_cast<float>(kShort) / 2.0f, 0.1f);
+}
+
+// =============== ComputeEARScale ===============
+
+TEST(ComputeEARScale, NoOverlap) {
+  EXPECT_FLOAT_EQ(ComputeEARScale(0.0f), 1.0f);
+  EXPECT_FLOAT_EQ(ComputeEARScale(-0.1f), 1.0f);
+}
+
+TEST(ComputeEARScale, WithOverlap) {
+  float s = ComputeEARScale(0.0872f);  // sin 5°
+  EXPECT_LT(s, 1.0f);
+  EXPECT_GT(s, 0.9f);
+  // Forward at equator (dz=0) maps to r=s (coverage boundary == s in r_scale=1 convention).
+  auto proj = FisheyeEqualAreaForward(1.0f, 0.0f, 0.0f, s);
+  float r = std::sqrt(proj.x * proj.x + proj.y * proj.y);
+  EXPECT_NEAR(r, s, 1e-4f);
+}
+
+// =============== ReprojectEquirectangular & MaskDualFisheyeOverlap ===============
+
+namespace {
+// Build a src_w × src_h dual fisheye source buffer with two hemispheres filled
+// by `upper_color` and `lower_color` respectively. Pixels outside both discs
+// are left black.
+std::vector<unsigned char> MakeHemisphereSource(int src_w, int src_h, const unsigned char upper_color[3],
+                                                const unsigned char lower_color[3]) {
+  std::vector<unsigned char> src(static_cast<size_t>(src_w) * src_h * 3, 0);
+  for (int py = 0; py < src_h; ++py) {
+    for (int px = 0; px < src_w; ++px) {
+      float x_norm;
+      float y_norm;
+      bool is_upper;
+      if (!PixelToDualFisheye(px + 0.5f, py + 0.5f, src_w, src_h, &x_norm, &y_norm, &is_upper)) {
+        continue;
+      }
+      size_t idx = (static_cast<size_t>(py) * src_w + px) * 3;
+      const unsigned char* c = is_upper ? upper_color : lower_color;
+      src[idx + 0] = c[0];
+      src[idx + 1] = c[1];
+      src[idx + 2] = c[2];
+    }
+  }
+  return src;
+}
+}  // namespace
+
+// T1: zenith (lat = pi/2) should sample from upper hemisphere.
+TEST(ReprojectEquirectangular, ZenithMapsToUpperHemisphere) {
+  constexpr int kSrcW = 64;
+  constexpr int kSrcH = 32;
+  constexpr int kDstW = 32;
+  constexpr int kDstH = 16;
+  unsigned char red[3] = { 255, 0, 0 };
+  unsigned char blue[3] = { 0, 0, 255 };
+  auto src = MakeHemisphereSource(kSrcW, kSrcH, red, blue);
+  std::vector<unsigned char> dst(static_cast<size_t>(kDstW) * kDstH * 3, 42);
+
+  ReprojectEquirectangular(src.data(), kSrcW, kSrcH, 1.0f, dst.data(), kDstW, kDstH);
+
+  // Zenith row (py = 0): lat ≈ π/2 → dz = -sin(lat) < 0 → is_upper=true → sample from red hemisphere.
+  size_t idx_top = (static_cast<size_t>(0) * kDstW + kDstW / 2) * 3;
+  EXPECT_EQ(dst[idx_top + 0], 255);
+  EXPECT_EQ(dst[idx_top + 1], 0);
+  EXPECT_EQ(dst[idx_top + 2], 0);
+}
+
+// T2: nadir (lat = -pi/2) should sample from lower hemisphere.
+TEST(ReprojectEquirectangular, NadirMapsToLowerHemisphere) {
+  constexpr int kSrcW = 64;
+  constexpr int kSrcH = 32;
+  constexpr int kDstW = 32;
+  constexpr int kDstH = 16;
+  unsigned char red[3] = { 255, 0, 0 };
+  unsigned char blue[3] = { 0, 0, 255 };
+  auto src = MakeHemisphereSource(kSrcW, kSrcH, red, blue);
+  std::vector<unsigned char> dst(static_cast<size_t>(kDstW) * kDstH * 3, 42);
+
+  ReprojectEquirectangular(src.data(), kSrcW, kSrcH, 1.0f, dst.data(), kDstW, kDstH);
+
+  // Bottom row (py = kDstH - 1): lat ≈ -π/2 → dz > 0 → is_upper=false → sample from blue hemisphere.
+  size_t idx_bot = (static_cast<size_t>(kDstH - 1) * kDstW + kDstW / 2) * 3;
+  EXPECT_EQ(dst[idx_bot + 0], 0);
+  EXPECT_EQ(dst[idx_bot + 1], 0);
+  EXPECT_EQ(dst[idx_bot + 2], 255);
+}
+
+// T3: the equator row samples one of the two hemispheres (|dz| tiny, boundary behaviour).
+// All equator pixels (non-masked) must be a valid hemisphere color, not the initial sentinel.
+TEST(ReprojectEquirectangular, EquatorRowSamplesHemisphere) {
+  constexpr int kSrcW = 64;
+  constexpr int kSrcH = 32;
+  constexpr int kDstW = 32;
+  constexpr int kDstH = 16;
+  unsigned char red[3] = { 255, 0, 0 };
+  unsigned char blue[3] = { 0, 0, 255 };
+  auto src = MakeHemisphereSource(kSrcW, kSrcH, red, blue);
+  std::vector<unsigned char> dst(static_cast<size_t>(kDstW) * kDstH * 3, 42);
+
+  ReprojectEquirectangular(src.data(), kSrcW, kSrcH, 1.0f, dst.data(), kDstW, kDstH);
+
+  size_t idx_eq = (static_cast<size_t>(kDstH / 2) * kDstW + kDstW / 2) * 3;
+  bool is_red = (dst[idx_eq + 0] == 255 && dst[idx_eq + 2] == 0);
+  bool is_blue = (dst[idx_eq + 0] == 0 && dst[idx_eq + 2] == 255);
+  EXPECT_TRUE(is_red || is_blue);
+}
+
+// T4: equirect output is naturally free of overlap contamination — even with
+// r_scale < 1, the equator samples primary-hemisphere pixels (r_proj ≤ r_scale).
+// Verify that the equator is NOT black when source is fully filled.
+TEST(ReprojectEquirectangular, EquirectFreeOfOverlapByConstruction) {
+  constexpr int kSrcW = 64;
+  constexpr int kSrcH = 32;
+  constexpr int kDstW = 32;
+  constexpr int kDstH = 16;
+  unsigned char white[3] = { 255, 255, 255 };
+  auto src = MakeHemisphereSource(kSrcW, kSrcH, white, white);
+  std::vector<unsigned char> dst(static_cast<size_t>(kDstW) * kDstH * 3, 42);
+
+  // Heavy overlap (r_scale = 0.5): equirect output should still be white at equator,
+  // because z_hemi = |dz| ≥ 0 keeps r_proj ≤ r_scale (primary hemisphere interior).
+  ReprojectEquirectangular(src.data(), kSrcW, kSrcH, 0.5f, dst.data(), kDstW, kDstH);
+
+  size_t idx_eq = (static_cast<size_t>(kDstH / 2) * kDstW + kDstW / 2) * 3;
+  EXPECT_EQ(dst[idx_eq + 0], 255);
+  EXPECT_EQ(dst[idx_eq + 1], 255);
+  EXPECT_EQ(dst[idx_eq + 2], 255);
+}
+
+// T5: MaskDualFisheyeOverlap zeros ring pixels, preserves inner-disc pixels.
+TEST(MaskDualFisheyeOverlap, MasksRingPreservesInterior) {
+  constexpr int kW = 64;
+  constexpr int kH = 32;
+  unsigned char fill[3] = { 200, 100, 50 };
+  auto buf = MakeHemisphereSource(kW, kH, fill, fill);
+
+  float r_scale = ComputeEARScale(0.5f);  // strong overlap for easy verification
+  MaskDualFisheyeOverlap(buf.data(), kW, kH, r_scale);
+
+  // Center of upper disc (x_norm=y_norm=0) — must be preserved.
+  int short_res = std::min(kW / 2, kH);
+  int cy = kH / 2;
+  int cx_left = kW / 2 - short_res / 2;
+  size_t idx_center = (static_cast<size_t>(cy) * kW + cx_left) * 3;
+  EXPECT_EQ(buf[idx_center + 0], 200);
+  EXPECT_EQ(buf[idx_center + 1], 100);
+  EXPECT_EQ(buf[idx_center + 2], 50);
+
+  // A pixel near the disc edge (inside the disc but in the overlap ring) — must be black.
+  // Pick a pixel at (cx_left + short_res/2 * 0.95, cy): y_norm ≈ 0, x_norm ≈ 0.95 → r ≈ 0.95 > r_scale.
+  int edge_px = cx_left + static_cast<int>(short_res * 0.47f);  // ~0.94 of radius
+  size_t idx_edge = (static_cast<size_t>(cy) * kW + edge_px) * 3;
+  EXPECT_EQ(buf[idx_edge + 0], 0);
+  EXPECT_EQ(buf[idx_edge + 1], 0);
+  EXPECT_EQ(buf[idx_edge + 2], 0);
+}
+
+TEST(MaskDualFisheyeOverlap, NoOpWhenRScaleIsOne) {
+  constexpr int kW = 32;
+  constexpr int kH = 16;
+  unsigned char fill[3] = { 100, 200, 50 };
+  auto buf = MakeHemisphereSource(kW, kH, fill, fill);
+  auto copy = buf;
+
+  MaskDualFisheyeOverlap(buf.data(), kW, kH, 1.0f);
+
+  EXPECT_EQ(buf, copy);
 }
 
 }  // namespace

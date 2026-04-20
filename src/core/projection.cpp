@@ -189,10 +189,11 @@ void ReprojectEquirectangular(const unsigned char* src, int src_w, int src_h, fl
     return;
   }
 
-  // Zero-fill dst (overlap-ring / out-of-disc pixels remain black).
+  // Zero-fill dst. With z_hemi = |dz| ≥ 0, forward projection always yields
+  // r_proj ≤ r_scale (primary hemisphere interior), so we never sample from the
+  // overlap ring r ∈ (r_scale, 1]. The equirect output is therefore free of
+  // overlap artefacts by construction — no explicit mask needed here.
   std::fill_n(dst, static_cast<size_t>(dst_w) * dst_h * 3, static_cast<unsigned char>(0));
-
-  float r_scale_sq = r_scale * r_scale;
 
   for (int py = 0; py < dst_h; ++py) {
     float lat = math::kPi * 0.5f - (static_cast<float>(py) + 0.5f) / dst_h * math::kPi;
@@ -210,12 +211,6 @@ void ReprojectEquirectangular(const unsigned char* src, int src_w, int src_h, fl
       float z_hemi = std::fabs(dz);
 
       ProjXY proj = FisheyeEqualAreaForward(dx, dy, z_hemi, r_scale);
-      float r_sq = proj.x * proj.x + proj.y * proj.y;
-      // Pixels in the overlap ring (r_proj > r_scale, i.e. r_sq > r_scale^2) or
-      // outside the disc are left black. When r_scale = 1, only out-of-disc is masked.
-      if (r_sq > r_scale_sq) {
-        continue;
-      }
 
       float fx = 0.0f;
       float fy = 0.0f;

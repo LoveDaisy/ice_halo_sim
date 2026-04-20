@@ -113,8 +113,10 @@ float ComputeEARScale(float max_abs_dz);
 
 // Reproject a dual-fisheye equal-area source image to a 2:1 equirectangular image.
 // - src: RGB uint8 buffer (src_w * src_h * 3 bytes), dual fisheye layout (F2 DualFisheyeToPixel).
-// - r_scale: usually ComputeEARScale(overlap). When r_scale < 1, the overlap ring
-//   (r_proj > r_scale) in the source is masked to black in the output.
+// - r_scale: usually ComputeEARScale(overlap). Determines the source's equator radius.
+//   The output is naturally free of overlap-ring contamination because each equirect
+//   direction is projected with z_hemi = |dz| ≥ 0, which keeps r_proj ≤ r_scale
+//   (primary-hemisphere interior of the disc).
 // - dst: caller-allocated RGB uint8 buffer (dst_w * dst_h * 3 bytes). The function
 //   zero-fills dst before sampling.
 // Sampling is nearest-neighbor. Direction convention matches the shader
