@@ -278,6 +278,7 @@ int main(int argc, char** argv) {
   RegisterP2InteractionRenderTests(engine);
   RegisterP1RunningTests(engine);
   RegisterP2InteractionModalTests(engine);
+  RegisterOverlayLabelTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete

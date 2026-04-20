@@ -122,5 +122,6 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine);
 void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine);
 void RegisterP1RunningTests(ImGuiTestEngine* engine);
 void RegisterP2InteractionModalTests(ImGuiTestEngine* engine);
+void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP
