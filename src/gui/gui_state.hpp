@@ -8,6 +8,8 @@
 #include <type_traits>
 #include <vector>
 
+#include "gui/gui_constants.hpp"
+
 namespace lumice::gui {
 
 // Crystal type
@@ -92,6 +94,9 @@ inline const char* const kLensTypeNames[] = {
   "Rectangular",
 };
 constexpr int kLensTypeCount = 8;
+static_assert(sizeof(kLensTypeNames) / sizeof(*kLensTypeNames) == kLensTypeCount,
+              "kLensTypeNames length must match kLensTypeCount");
+static_assert(kLensTypeRectangular == kLensTypeCount - 1, "LensType enum terminal value must match kLensTypeCount - 1");
 
 // Dual fisheye overlap: max |sky.z| for the overlap zone.
 // = sin(5°) ≈ 0.0872. Each hemisphere extends 5° past the equator.
@@ -104,6 +109,9 @@ constexpr int kSpectrumCount = 6;
 
 inline const char* const kVisibleNames[] = { "Upper", "Lower", "Full", "Front" };
 constexpr int kVisibleCount = 4;  // must stay in sync with fragment shader u_visible range
+static_assert(sizeof(kVisibleNames) / sizeof(*kVisibleNames) == kVisibleCount,
+              "kVisibleNames length must match kVisibleCount");
+static_assert(kVisibleFront == kVisibleCount - 1, "Visible enum terminal value must match kVisibleCount - 1");
 
 inline const int kSimResolutions[] = { 512, 1024, 2048, 4096 };
 constexpr int kSimResolutionCount = 4;
