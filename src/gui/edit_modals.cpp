@@ -369,8 +369,8 @@ static constexpr AxisPresetEntry kAxisPresets[] = {
   { "Column", AxisPreset::kColumn, { AxisDistType::kGauss, 90.0f, 1.0f }, kAzFullUniform, kRollFreeUniform },
   { "Plate", AxisPreset::kPlate, { AxisDistType::kGauss, 0.0f, 1.0f }, kAzFullUniform, kRollFreeUniform },
   { "Parry", AxisPreset::kParry, { AxisDistType::kGauss, 90.0f, 1.0f }, kAzFullUniform, kRollLockedGauss },
-  // Lowitz default zenith uses Zigzag per issue §识别规则.
-  { "Lowitz", AxisPreset::kLowitz, { AxisDistType::kZigzag, 0.0f, 40.0f }, kAzFullUniform, kRollLockedGauss },
+  // Lowitz default zenith uses Gauss (v11 内测反馈：gauss 更符合物理直觉; classifier 仍接受 zigzag).
+  { "Lowitz", AxisPreset::kLowitz, { AxisDistType::kGauss, 0.0f, 40.0f }, kAzFullUniform, kRollLockedGauss },
   { "Random", AxisPreset::kRandom, kAzFullUniform, kAzFullUniform, kRollFreeUniform },
   { "Custom",
     AxisPreset::kCustom,

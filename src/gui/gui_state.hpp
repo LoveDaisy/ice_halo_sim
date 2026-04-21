@@ -20,9 +20,9 @@ enum class CrystalType { kPrism, kPyramid };
 enum class AxisDistType { kGauss, kUniform, kZigzag, kLaplacian, kGaussLegacy, kCount };
 
 // Aspect ratio presets for preview window
-enum class AspectPreset { kFree, k16x9, k3x2, k4x3, k1x1, kMatchBg };
-inline const char* const kAspectPresetNames[] = { "Free", "16:9", "3:2", "4:3", "1:1", "Match Background" };
-constexpr int kAspectPresetCount = 6;
+enum class AspectPreset { kFree, k16x9, k3x2, k4x3, k1x1, k2x1, kMatchBg };
+inline const char* const kAspectPresetNames[] = { "Free", "16:9", "3:2", "4:3", "1:1", "2:1", "Match Background" };
+constexpr int kAspectPresetCount = 7;
 static_assert(sizeof(kAspectPresetNames) / sizeof(kAspectPresetNames[0]) == kAspectPresetCount,
               "kAspectPresetNames must match kAspectPresetCount");
 

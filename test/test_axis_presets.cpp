@@ -46,6 +46,12 @@ TEST(AxisPresetTest, ParryPermissiveLaplacianRollUniform) {
 }
 
 // --- Lowitz ---
+// Preset button default: Lowitz 默认 zenith 从 v11 起改为 kGauss（0°, 40°），
+// classifier 仍接受 kZigzag 以兼容老 .lmc 文件（见 LowitzStrictDefault）。
+TEST(AxisPresetTest, LowitzDefaultGauss) {
+  AxisDist z{ AxisDistType::kGauss, 0.0f, 40.0f };
+  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollLockedGauss), AxisPreset::kLowitz);
+}
 TEST(AxisPresetTest, LowitzStrictDefault) {
   AxisDist z{ AxisDistType::kZigzag, 0.0f, 40.0f };
   EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollLockedGauss), AxisPreset::kLowitz);

@@ -92,6 +92,8 @@ float GetAspectRatio(AspectPreset preset) {
       return 4.0f / 3.0f;
     case AspectPreset::k1x1:
       return 1.0f;
+    case AspectPreset::k2x1:
+      return 2.0f;
     case AspectPreset::kFree:
     case AspectPreset::kMatchBg:
     default:
