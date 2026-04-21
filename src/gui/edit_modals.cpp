@@ -563,6 +563,10 @@ void ResetModalState() {
   g_active_modal = ActiveModal::kNone;
   g_active_tab = ActiveTab::kCrystal;
   g_pending_tab_select = false;
+  // modal_immediate_mode is GuiState-owned; the test harness's DoNew-based
+  // reset overwrites g_state, but we also clear it here for belt-and-braces
+  // (test lambdas that fail mid-flight may skip their own cleanup tails).
+  g_state.modal_immediate_mode = false;
   g_modal_layer_idx = -1;
   g_modal_entry_idx = -1;
   g_crystal_buf = {};
@@ -677,9 +681,9 @@ void CommitAllBuffersImmediate(GuiState& state) {
 //      Trackball edits are user-intentional in Immediate mode — don't revert.
 //   3. Staged close (Cancel button / title-bar × / Esc): revert trackball to
 //      the Open-time snapshot and clear g_active_modal. This branch also
-//      handles the deleted-entry case (line 606-613 sets kNone before Begin,
-//      which is a benign no-op here because trackball restore is idempotent
-//      and the entry is gone anyway).
+//      covers the deleted-entry race (the in-body guard calls
+//      CloseCurrentPopup when indices go out of range); the trackball restore
+//      is idempotent and harmless when the entry is already gone.
 void HandlePopupClosed(GuiState& state) {
   if (g_pending_mode_switch) {
     g_pending_mode_switch = false;
@@ -875,9 +879,9 @@ void RenderEditModals(GuiState& state) {
     ImGui::Dummy(ImVec2(avail - kCheckboxApproxWidth, 0));
     ImGui::SameLine();
   }
-  const bool prev_immediate = state.modal_immediate_mode;
-  if (ImGui::Checkbox("Immediate##edit_modal", &state.modal_immediate_mode) &&
-      prev_immediate != state.modal_immediate_mode) {
+  // ImGui::Checkbox returns true only on the frame the user actually toggled
+  // the value, so checking the return alone is sufficient to detect a change.
+  if (ImGui::Checkbox("Immediate##edit_modal", &state.modal_immediate_mode)) {
     g_pending_mode_switch = true;
     if (state.modal_immediate_mode) {
       // Staged → Immediate: commit in-flight buffer to state so any pending
