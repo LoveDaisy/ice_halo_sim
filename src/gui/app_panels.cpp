@@ -541,9 +541,10 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       pp.overlay.sun_circle_angles[i] = g_state.sun_circle_angles[i];
     }
 
-    // Overlay labels at viewport edges (drawn via ImGui foreground draw list).
-    // BuildOverlayLabelInput is shared with DoExportPreviewPng (off-screen FBO path)
-    // so both call sites produce byte-identical OverlayLabelInput for a given state.
+    // Overlay labels at viewport edges (drawn on the preview window's draw list so
+    // modals correctly occlude them). BuildOverlayLabelInput is shared with
+    // DoExportPreviewPng (off-screen FBO path) so both call sites produce
+    // byte-identical OverlayLabelInput for a given state.
     if (g_state.show_horizon || g_state.show_grid || g_state.show_sun_circles) {
       OverlayLabelInput label_input = BuildOverlayLabelInput(g_state, rc);
 

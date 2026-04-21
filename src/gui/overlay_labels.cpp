@@ -645,7 +645,7 @@ void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& la
 }
 
 void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
-  AppendOverlayToDrawList(ImGui::GetForegroundDrawList(), labels);
+  AppendOverlayToDrawList(ImGui::GetWindowDrawList(), labels);
 }
 
 }  // namespace lumice::gui
