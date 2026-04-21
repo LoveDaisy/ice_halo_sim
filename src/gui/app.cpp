@@ -52,7 +52,7 @@ OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConf
 
   // Sun direction in world space (azimuth fixed at 0, only altitude matters).
   // Formula is byte-identical to RenderPreviewPanel's assignment into
-  // g_preview_vp.params.sun_dir (see src/gui/app_panels.cpp ~L534-538):
+  // g_preview_vp.params.overlay.sun_dir (see src/gui/app_panels.cpp ~L534-538):
   //   sa = altitude * deg2rad
   //   sun_dir = (-cos(sa), 0, -sin(sa))
   // Both callers share this helper so a future formula change only has to land here.
@@ -251,8 +251,9 @@ void DoSaveAs() {
 //   intensity_scale  = intensity_factor / snapshot_intensity  (0 if snapshot_intensity <= 0)
 static PreviewParams BuildExportParams() {
   PreviewParams params = g_preview_vp.params;
-  params.intensity_factor = std::pow(2.0f, g_state.renderer.exposure_offset);
-  params.intensity_scale = g_state.snapshot_intensity > 0 ? params.intensity_factor / g_state.snapshot_intensity : 0.0f;
+  params.exposure.intensity_factor = std::pow(2.0f, g_state.renderer.exposure_offset);
+  params.exposure.intensity_scale =
+      g_state.snapshot_intensity > 0 ? params.exposure.intensity_factor / g_state.snapshot_intensity : 0.0f;
   return params;
 }
 

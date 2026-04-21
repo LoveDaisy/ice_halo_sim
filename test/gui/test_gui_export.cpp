@@ -166,20 +166,10 @@ static AcState g_ac_state;
 // probe the EV-follows-export invariant independently of any live slider.
 static gui::PreviewParams BuildAcExportParams(float exposure_offset) {
   gui::PreviewParams params = gui::g_preview_vp.params;
-  params.intensity_factor = std::pow(2.0f, exposure_offset);
-  params.intensity_scale =
-      gui::g_state.snapshot_intensity > 0 ? params.intensity_factor / gui::g_state.snapshot_intensity : 0.0f;
+  params.exposure.intensity_factor = std::pow(2.0f, exposure_offset);
+  params.exposure.intensity_scale =
+      gui::g_state.snapshot_intensity > 0 ? params.exposure.intensity_factor / gui::g_state.snapshot_intensity : 0.0f;
   return params;
-}
-
-// Thin wrapper over the shared production configure function so RunAcExport's
-// dispatch stays self-explanatory. Keeps test and production byte-exact in sync.
-static void ApplyDualFisheyeOverride(gui::PreviewParams& params) {
-  gui::ConfigureDualFisheyeExportParams(params);
-}
-
-static void ApplyEquirectOverride(gui::PreviewParams& params) {
-  gui::ConfigureEquirectExportParams(params);
 }
 
 static void RunAcExport() {
@@ -187,11 +177,10 @@ static void RunAcExport() {
   int h = g_ac_state.dst_h > 0 ? g_ac_state.dst_h : gui::g_preview_vp.vp_h;
 
   gui::PreviewParams params = BuildAcExportParams(g_ac_state.exposure_offset);
-  // 4 = Dual Fisheye Equal Area, 7 = Rectangular (see gui_state.hpp::kLensTypeNames).
-  if (g_ac_state.lens_type_override == 4) {
-    ApplyDualFisheyeOverride(params);
-  } else if (g_ac_state.lens_type_override == 7) {
-    ApplyEquirectOverride(params);
+  if (g_ac_state.lens_type_override == gui::kLensTypeDualFisheyeEqualArea) {
+    gui::ConfigureDualFisheyeExportParams(params);
+  } else if (g_ac_state.lens_type_override == gui::kLensTypeRectangular) {
+    gui::ConfigureEquirectExportParams(params);
   }
 
   std::optional<gui::OverlayLabelInput> overlay;

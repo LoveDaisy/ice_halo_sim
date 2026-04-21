@@ -502,43 +502,43 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.vp_y = static_cast<int>(kStatusBarHeight * scale_y);  // OpenGL Y is bottom-up
     g_preview_vp.vp_w = static_cast<int>(panel_width * scale_x);
     g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
-    g_preview_vp.params.lens_type = rc.lens_type;
-    g_preview_vp.params.fov = rc.fov;
-    g_preview_vp.params.elevation = rc.elevation;
-    g_preview_vp.params.azimuth = rc.azimuth;
-    g_preview_vp.params.roll = rc.roll;
-    g_preview_vp.params.visible = rc.visible;
-    g_preview_vp.params.intensity_factor = std::pow(2.0f, rc.exposure_offset);
-    g_preview_vp.params.intensity_scale =
-        g_state.snapshot_intensity > 0 ? g_preview_vp.params.intensity_factor / g_state.snapshot_intensity : 0.0f;
+    auto& pp = g_preview_vp.params;
+    pp.view_proj.lens_type = rc.lens_type;
+    pp.view_proj.fov = rc.fov;
+    pp.view_proj.elevation = rc.elevation;
+    pp.view_proj.azimuth = rc.azimuth;
+    pp.view_proj.roll = rc.roll;
+    pp.view_proj.visible = rc.visible;
+    pp.exposure.intensity_factor = std::pow(2.0f, rc.exposure_offset);
+    pp.exposure.intensity_scale =
+        g_state.snapshot_intensity > 0 ? pp.exposure.intensity_factor / g_state.snapshot_intensity : 0.0f;
     // Overlap parameters for dual fisheye texture sampling.
-    g_preview_vp.params.max_abs_dz = kDualFisheyeOverlap;
-    g_preview_vp.params.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
-    g_preview_vp.params.bg_enabled = g_state.bg_show && g_preview.HasBackground();
-    g_preview_vp.params.bg_alpha = g_state.bg_alpha;
-    g_preview_vp.params.bg_aspect = g_preview.GetBgAspect();
+    pp.source.max_abs_dz = kDualFisheyeOverlap;
+    pp.source.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
+    pp.bg.enabled = g_state.bg_show && g_preview.HasBackground();
+    pp.bg.alpha = g_state.bg_alpha;
+    pp.bg.aspect = g_preview.GetBgAspect();
 
     // Auxiliary line overlay parameters
-    g_preview_vp.params.show_horizon = g_state.show_horizon;
-    g_preview_vp.params.show_grid = g_state.show_grid;
-    g_preview_vp.params.show_sun_circles = g_state.show_sun_circles;
-    std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color),
-              std::begin(g_preview_vp.params.horizon_color));
-    std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(g_preview_vp.params.grid_color));
+    pp.overlay.show_horizon = g_state.show_horizon;
+    pp.overlay.show_grid = g_state.show_grid;
+    pp.overlay.show_sun_circles = g_state.show_sun_circles;
+    std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color), std::begin(pp.overlay.horizon_color));
+    std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(pp.overlay.grid_color));
     std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
-              std::begin(g_preview_vp.params.sun_circles_color));
-    g_preview_vp.params.horizon_alpha = g_state.horizon_alpha;
-    g_preview_vp.params.grid_alpha = g_state.grid_alpha;
-    g_preview_vp.params.sun_circles_alpha = g_state.sun_circles_alpha;
+              std::begin(pp.overlay.sun_circles_color));
+    pp.overlay.horizon_alpha = g_state.horizon_alpha;
+    pp.overlay.grid_alpha = g_state.grid_alpha;
+    pp.overlay.sun_circles_alpha = g_state.sun_circles_alpha;
     // Precompute sun direction in world space (azimuth fixed at 0, only altitude matters)
     constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
     float sa = g_state.sun.altitude * kDeg2Rad;
-    g_preview_vp.params.sun_dir[0] = -std::cos(sa);
-    g_preview_vp.params.sun_dir[1] = 0.0f;
-    g_preview_vp.params.sun_dir[2] = -std::sin(sa);
-    g_preview_vp.params.sun_circle_count = std::min(static_cast<int>(g_state.sun_circle_angles.size()), kMaxSunCircles);
-    for (int i = 0; i < g_preview_vp.params.sun_circle_count; i++) {
-      g_preview_vp.params.sun_circle_angles[i] = g_state.sun_circle_angles[i];
+    pp.overlay.sun_dir[0] = -std::cos(sa);
+    pp.overlay.sun_dir[1] = 0.0f;
+    pp.overlay.sun_dir[2] = -std::sin(sa);
+    pp.overlay.sun_circle_count = std::min(static_cast<int>(g_state.sun_circle_angles.size()), kMaxSunCircles);
+    for (int i = 0; i < pp.overlay.sun_circle_count; i++) {
+      pp.overlay.sun_circle_angles[i] = g_state.sun_circle_angles[i];
     }
 
     // Overlay labels at viewport edges (drawn via ImGui foreground draw list).

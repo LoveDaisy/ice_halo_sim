@@ -645,16 +645,16 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   // Set uniforms
   glUniform2f(glGetUniformLocation(shader_program_, "u_resolution"), static_cast<float>(vp_w),
               static_cast<float>(vp_h));
-  glUniform1i(glGetUniformLocation(shader_program_, "u_lens_type"), params.lens_type);
-  glUniform1f(glGetUniformLocation(shader_program_, "u_fov"), params.fov);
-  glUniform1i(glGetUniformLocation(shader_program_, "u_visible"), params.visible);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_lens_type"), params.view_proj.lens_type);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_fov"), params.view_proj.fov);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_visible"), params.view_proj.visible);
   glUniform1i(glGetUniformLocation(shader_program_, "u_xyz_mode"), xyz_mode_ ? 1 : 0);
-  glUniform1f(glGetUniformLocation(shader_program_, "u_intensity_scale"), params.intensity_scale);
-  glUniform1f(glGetUniformLocation(shader_program_, "u_max_abs_dz"), params.max_abs_dz);
-  glUniform1f(glGetUniformLocation(shader_program_, "u_r_scale"), params.r_scale);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_intensity_scale"), params.exposure.intensity_scale);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_max_abs_dz"), params.source.max_abs_dz);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_r_scale"), params.source.r_scale);
 
   float view_matrix[9];
-  BuildViewMatrix(params.elevation, params.azimuth, params.roll, view_matrix);
+  BuildViewMatrix(params.view_proj.elevation, params.view_proj.azimuth, params.view_proj.roll, view_matrix);
   glUniformMatrix3fv(glGetUniformLocation(shader_program_, "u_view_matrix"), 1, GL_FALSE, view_matrix);
 
   // Bind equirect texture to unit 0
@@ -663,9 +663,9 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1i(glGetUniformLocation(shader_program_, "u_texture"), 0);
 
   // Background image uniforms
-  glUniform1i(glGetUniformLocation(shader_program_, "u_bg_enabled"), params.bg_enabled ? 1 : 0);
-  if (params.bg_enabled) {
-    glUniform1f(glGetUniformLocation(shader_program_, "u_overlay_alpha"), params.bg_alpha);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_bg_enabled"), params.bg.enabled ? 1 : 0);
+  if (params.bg.enabled) {
+    glUniform1f(glGetUniformLocation(shader_program_, "u_overlay_alpha"), params.bg.alpha);
 
     // CPU-side contain mode UV calculation
     // bg_uv = v_ndc * scale + offset maps NDC [-1,1] to texture UV [0,1]
@@ -673,10 +673,10 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
     float vp_aspect = static_cast<float>(vp_w) / static_cast<float>(vp_h);
     float sx = 1.0f;
     float sy = 1.0f;
-    if (vp_aspect > params.bg_aspect) {
-      sx = params.bg_aspect / vp_aspect;
+    if (vp_aspect > params.bg.aspect) {
+      sx = params.bg.aspect / vp_aspect;
     } else {
-      sy = vp_aspect / params.bg_aspect;
+      sy = vp_aspect / params.bg.aspect;
     }
     float scale_x = 0.5f / sx;
     // Y flip: stbi loads top-down, GL texture origin is bottom-left
@@ -693,25 +693,25 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
 
   // Auxiliary line overlay uniforms
   static_assert(kMaxSunCircles == 16, "Update shader u_sun_circle_angles[N] to match kMaxSunCircles");
-  glUniform1i(glGetUniformLocation(shader_program_, "u_show_horizon"), params.show_horizon ? 1 : 0);
-  glUniform1i(glGetUniformLocation(shader_program_, "u_show_grid"), params.show_grid ? 1 : 0);
-  glUniform1i(glGetUniformLocation(shader_program_, "u_show_sun_circles"), params.show_sun_circles ? 1 : 0);
-  glUniform3f(glGetUniformLocation(shader_program_, "u_sun_dir"), params.sun_dir[0], params.sun_dir[1],
-              params.sun_dir[2]);
-  glUniform1i(glGetUniformLocation(shader_program_, "u_sun_circle_count"), params.sun_circle_count);
-  if (params.sun_circle_count > 0) {
-    glUniform1fv(glGetUniformLocation(shader_program_, "u_sun_circle_angles"), params.sun_circle_count,
-                 params.sun_circle_angles);
+  const auto& ov = params.overlay;
+  glUniform1i(glGetUniformLocation(shader_program_, "u_show_horizon"), ov.show_horizon ? 1 : 0);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_show_grid"), ov.show_grid ? 1 : 0);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_show_sun_circles"), ov.show_sun_circles ? 1 : 0);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_sun_dir"), ov.sun_dir[0], ov.sun_dir[1], ov.sun_dir[2]);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_sun_circle_count"), ov.sun_circle_count);
+  if (ov.sun_circle_count > 0) {
+    glUniform1fv(glGetUniformLocation(shader_program_, "u_sun_circle_angles"), ov.sun_circle_count,
+                 ov.sun_circle_angles);
   }
-  glUniform3f(glGetUniformLocation(shader_program_, "u_horizon_color"), params.horizon_color[0],
-              params.horizon_color[1], params.horizon_color[2]);
-  glUniform3f(glGetUniformLocation(shader_program_, "u_grid_color"), params.grid_color[0], params.grid_color[1],
-              params.grid_color[2]);
-  glUniform3f(glGetUniformLocation(shader_program_, "u_sun_circles_color"), params.sun_circles_color[0],
-              params.sun_circles_color[1], params.sun_circles_color[2]);
-  glUniform1f(glGetUniformLocation(shader_program_, "u_horizon_alpha"), params.horizon_alpha);
-  glUniform1f(glGetUniformLocation(shader_program_, "u_grid_alpha"), params.grid_alpha);
-  glUniform1f(glGetUniformLocation(shader_program_, "u_sun_circles_alpha"), params.sun_circles_alpha);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_horizon_color"), ov.horizon_color[0], ov.horizon_color[1],
+              ov.horizon_color[2]);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_grid_color"), ov.grid_color[0], ov.grid_color[1],
+              ov.grid_color[2]);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_sun_circles_color"), ov.sun_circles_color[0],
+              ov.sun_circles_color[1], ov.sun_circles_color[2]);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_horizon_alpha"), ov.horizon_alpha);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_grid_alpha"), ov.grid_alpha);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_sun_circles_alpha"), ov.sun_circles_alpha);
 
   // Draw fullscreen quad
   glBindVertexArray(vao_);
