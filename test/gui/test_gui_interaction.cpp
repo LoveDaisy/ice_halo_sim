@@ -871,12 +871,13 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
   // Open modal, use ctx->ItemInputValue to write boundary values through the widget,
   // click OK, then verify the clamped values in g_state.
   //
-  // SliderWithInput("Height##modal_cr", ..., 0.01f, 100.0f, kLogLinear) — height ≥ 0.01
-  // SliderWithInput("Upper H##modal_cr", ..., 0.0f, 100.0f, kLogLinear) — allows 0
-  // SliderWithInput("Lower H##modal_cr", ..., 0.0f, 100.0f, kLogLinear) — allows 0
-  // SliderWithInput("Prism H##modal_cr", ..., 0.0f, 100.0f, kLogLinear) — allows 0
+  // Three-H-mapping conventions (see gui/slider_mapping.hpp):
+  //   Prism Height: [0.01, 100] kLog
+  //   Pyramid prism_h: [0, 100] kLogLinear
+  //   Pyramid upper_h / lower_h: [0, 1] kLinear
+  //   Face Distance: [0, 2] kLinear
 
-  // p1_slider/height_clamp_via_modal — kLogLinear clamps height to [0.01, 100]
+  // p1_slider/height_clamp_via_modal — kLog clamps height to [0.01, 100]
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "height_clamp_via_modal");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -897,7 +898,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
-      // Height should be clamped to >= 0.01 (kLogLinear with min=0.01)
+      // Height should be clamped to >= 0.01 (kLog with min=0.01)
       IM_CHECK_GE(gui::g_state.layers[0].entries[0].crystal.height, 0.01f - 1e-6f);
     };
   }
@@ -917,7 +918,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(3);
 
-      // Write 0 to Upper H — should be allowed (min=0.0 for kLogLinear)
+      // Write 0 to Upper H — should be allowed (min=0.0 for kLinear)
       ctx->ItemInputValue("**/##Upper H##modal_cr_input", 0.0f);
       ctx->Yield();
 
@@ -926,6 +927,56 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 0.0f);
+    };
+  }
+
+  // p1_slider/pyramid_h_clamp_upper_via_modal — Upper H clamped at new [0,1] upper bound
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "pyramid_h_clamp_upper_via_modal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+
+      // Write 1.5 — should be clamped to 1.0 (kLinear with max=1.0)
+      ctx->ItemInputValue("**/##Upper H##modal_cr_input", 1.5f);
+      ctx->Yield();
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 1.0f);
+    };
+  }
+
+  // p1_slider/pyramid_h_linear_readback_via_modal — mid-range linear identity.
+  // Guards the kLinear call-site configuration: if Upper H is mistakenly reverted
+  // to kLogLinear with [0, 100], writing 0.5 would pass through a nonlinear
+  // mapping and not read back as 0.5 — this assertion fails immediately.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "pyramid_h_linear_readback_via_modal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+
+      ctx->ItemInputValue("**/##Upper H##modal_cr_input", 0.5f);
+      ctx->Yield();
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 0.5f);
     };
   }
 

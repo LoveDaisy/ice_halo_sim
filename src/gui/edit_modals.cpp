@@ -348,12 +348,13 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   ImGui::Spacing();
 
   // -- Parameters --
+  // See gui/slider_mapping.hpp for the three-H-mapping conventions.
   if (cr.type == CrystalType::kPrism) {
     SliderWithInput("Height##modal_cr", &cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLog);
   } else {
     SliderWithInput("Prism H##modal_cr", &cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
-    SliderWithInput("Upper H##modal_cr", &cr.upper_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
-    SliderWithInput("Lower H##modal_cr", &cr.lower_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
+    SliderWithInput("Upper H##modal_cr", &cr.upper_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
+    SliderWithInput("Lower H##modal_cr", &cr.lower_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
     SliderWithPresetEdit("Upper A##modal_cr", &cr.upper_alpha, 0.1f, 90.0f, "%.1f", SliderScale::kLinear, kWedgePresets,
                          kWedgePresetCount);
     SliderWithPresetEdit("Lower A##modal_cr", &cr.lower_alpha, 0.1f, 90.0f, "%.1f", SliderScale::kLinear, kWedgePresets,
@@ -365,7 +366,7 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     for (int i = 0; i < 6; i++) {
       char label[32];
       snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
-      SliderWithInput(label, &cr.face_distance[i], 0.01f, 10.0f, "%.3f");
+      SliderWithInput(label, &cr.face_distance[i], 0.0f, 2.0f, "%.3f");
     }
     if (ImGui::SmallButton("Reset All##modal_fd")) {
       for (auto& fd : cr.face_distance) {

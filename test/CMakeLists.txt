@@ -30,6 +30,7 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_threading_pool.cpp"
   "${PROJ_TEST_DIR}/test_window_sizing.cpp"
   "${PROJ_TEST_DIR}/test_axis_presets.cpp"
+  "${PROJ_TEST_DIR}/test_slider_mapping.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
 target_include_directories(unit_test
   PRIVATE ${PROJ_TEST_DIR})
