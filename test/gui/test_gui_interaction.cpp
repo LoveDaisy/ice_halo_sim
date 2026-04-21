@@ -591,6 +591,75 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: scrum-gui-polish-v12 / task-immediate-modal-passthrough — Immediate
+  // modal external-click passthrough: clicks outside the Edit modal must
+  // reach background UI (e.g. topbar menus open) and must NOT close the
+  // modal. Asserts both the passthrough direction (external button responds)
+  // and the persistence direction (modal stays visible).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_passthrough_external_click");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = false;
+      ctx->Yield(2);
+
+      // Open the Edit modal in Staged mode, then switch to Immediate (covers
+      // the Staged → Immediate mode-switch consume path as a side benefit).
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Immediate##edit_modal");
+      ctx->Yield(8);
+
+      // Modal is visible.
+      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
+
+      // Click an external topbar button. ##TopBar/Save opens the Save menu;
+      // picked over ##TopBar/New because the default Immediate window origin
+      // (ImGui default (60, 60) since no position management this task) may
+      // overlap the upper-left area, and over Scene-group inputs that can be
+      // geometrically covered by the AlwaysAutoResize window extending
+      // downward.
+      ctx->ItemClick("##TopBar/Save");
+      ctx->Yield(2);
+
+      // Passthrough direction: the Save click reached the background button —
+      // the Save menu opened (Save Copy appears as a child).
+      IM_CHECK(ctx->ItemExists("**/Save Copy"));
+      // Persistence direction: the external click did NOT close the modal.
+      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
+
+      // Dismiss the Save menu, then close the modal cleanly.
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(4);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v12 / task-immediate-modal-passthrough — Immediate
+  // modal explicit close: the bottom Close button resets g_active_modal,
+  // and the next frame's Begin(p_open=false) → !window_open path tears the
+  // window down. Asserts the modal disappears after a single Close click.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_close_button_closes");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
+
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(4);
+      IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
+
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
   // P1: Unsaved Changes Popup
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "unsaved_popup");
