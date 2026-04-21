@@ -16,6 +16,7 @@
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_logger.hpp"
+#include "gui/window_sizing.hpp"
 #include "util/color_space.hpp"
 #include "util/path_utils.hpp"
 
@@ -131,6 +132,9 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   int win_w = 0;
   int win_h = 0;
   glfwGetWindowSize(window, &win_w, &win_h);
+  int pos_x = 0;
+  int pos_y = 0;
+  glfwGetWindowPos(window, &pos_x, &pos_y);
 
   constexpr float kCollapsedStripWidth = 20.0f;  // Must match kCollapseBtnSize in app_panels.cpp
   float left_w = g_state.left_panel_collapsed ? kCollapsedStripWidth : kLeftPanelWidth;
@@ -140,11 +144,35 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   auto target_h = static_cast<int>(preview_h + kTopBarHeight + kStatusBarHeight);
   int target_w = win_w;
 
+  // Select the monitor containing the window center so multi-monitor users do
+  // not get yanked back to primary when aspect ratio changes (v11 bug #4).
+  int cx = pos_x + win_w / 2;
+  int cy = pos_y + win_h / 2;
+  int mon_count = 0;
+  GLFWmonitor** mons = glfwGetMonitors(&mon_count);
+  std::vector<MonitorRect> rects;
+  if (mon_count > 0) {
+    rects.reserve(static_cast<size_t>(mon_count));
+  }
+  for (int i = 0; i < mon_count; i++) {
+    MonitorRect r{};
+    glfwGetMonitorWorkarea(mons[i], &r.x, &r.y, &r.w, &r.h);
+    rects.push_back(r);
+  }
   int work_x = 0;
   int work_y = 0;
   int work_w = 0;
   int work_h = 0;
-  glfwGetMonitorWorkarea(glfwGetPrimaryMonitor(), &work_x, &work_y, &work_w, &work_h);
+  int mon_idx = SelectMonitorIndexByCenter(cx, cy, rects.data(), static_cast<int>(rects.size()));
+  if (mon_idx >= 0) {
+    const auto& r = rects[mon_idx];
+    work_x = r.x;
+    work_y = r.y;
+    work_w = r.w;
+    work_h = r.h;
+  } else {
+    glfwGetMonitorWorkarea(glfwGetPrimaryMonitor(), &work_x, &work_y, &work_w, &work_h);
+  }
 
   target_w = std::clamp(target_w, kMinWindowWidth, work_w);
   target_h = std::clamp(target_h, kMinWindowHeight, work_h);
@@ -162,10 +190,9 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   g_programmatic_resize = 2;  // Expect up to 2 callbacks (some platforms fire intermediate + final)
   glfwSetWindowSize(window, target_w, target_h);
 
-  // Clamp window position to stay within screen
-  int pos_x = 0;
-  int pos_y = 0;
-  glfwGetWindowPos(window, &pos_x, &pos_y);
+  // Clamp window position to stay within the selected monitor's workarea.
+  // pos_x/pos_y were read at function entry (pre-resize); GLFW's SetWindowSize
+  // anchors on top-left, so the position remains valid post-resize.
   bool moved = false;
   if (pos_x + target_w > work_x + work_w) {
     pos_x = work_x + work_w - target_w;

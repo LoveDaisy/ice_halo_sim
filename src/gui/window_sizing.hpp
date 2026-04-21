@@ -18,6 +18,29 @@ inline std::pair<int, int> ClampWindowSizeToWorkarea(int desired_w, int desired_
   return { std::min(desired_w, max_w), std::min(desired_h, max_h) };
 }
 
+// POD describing a monitor's workarea in virtual screen coordinates.
+struct MonitorRect {
+  int x;
+  int y;
+  int w;
+  int h;
+};
+
+// Pure function: return the index of the monitor whose workarea contains the
+// point (cx, cy); -1 if none. Edge convention: left/top inclusive, right/bottom
+// exclusive, so adjacent monitors do not both claim the shared seam.
+// Used by ApplyAspectRatio to route multi-monitor window sizing — see
+// scratchpad/scrum-gui-polish-v11/task-fix-multi-monitor-aspect for rationale.
+inline int SelectMonitorIndexByCenter(int cx, int cy, const MonitorRect* rects, int count) {
+  for (int i = 0; i < count; i++) {
+    const MonitorRect& r = rects[i];
+    if (cx >= r.x && cx < r.x + r.w && cy >= r.y && cy < r.y + r.h) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_WINDOW_SIZING_HPP
