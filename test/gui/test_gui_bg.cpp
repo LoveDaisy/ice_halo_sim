@@ -170,8 +170,8 @@ void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       gui::g_state.bg_show = false;
       ctx->Yield(2);
 
-      // Verify bg_enabled is false in params
-      IM_CHECK_EQ(gui::g_preview_vp.params.bg_enabled, false);
+      // Verify bg.enabled is false in params
+      IM_CHECK_EQ(gui::g_preview_vp.params.bg.enabled, false);
     };
   }
 

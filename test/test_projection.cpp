@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <random>
+#include <vector>
 
 #include "config/render_config.hpp"
 #include "core/math.hpp"
@@ -451,6 +452,23 @@ TEST(FovScale, EquidistantScaleShortEdge) {
 
   float r_pix = std::sqrt(proj.x * proj.x + proj.y * proj.y) * scale;
   EXPECT_NEAR(r_pix, static_cast<float>(kShort) / 2.0f, 0.1f);
+}
+
+// =============== ComputeEARScale ===============
+
+TEST(ComputeEARScale, NoOverlap) {
+  EXPECT_FLOAT_EQ(ComputeEARScale(0.0f), 1.0f);
+  EXPECT_FLOAT_EQ(ComputeEARScale(-0.1f), 1.0f);
+}
+
+TEST(ComputeEARScale, WithOverlap) {
+  float s = ComputeEARScale(0.0872f);  // sin 5°
+  EXPECT_LT(s, 1.0f);
+  EXPECT_GT(s, 0.9f);
+  // Forward at equator (dz=0) maps to r=s (coverage boundary == s in r_scale=1 convention).
+  auto proj = FisheyeEqualAreaForward(1.0f, 0.0f, 0.0f, s);
+  float r = std::sqrt(proj.x * proj.x + proj.y * proj.y);
+  EXPECT_NEAR(r, s, 1e-4f);
 }
 
 }  // namespace

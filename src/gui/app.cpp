@@ -13,8 +13,10 @@
 #include <thread>
 #include <vector>
 
+#include "gui/export_fbo_renderer.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_logger.hpp"
+#include "gui/window_sizing.hpp"
 #include "util/color_space.hpp"
 #include "util/path_utils.hpp"
 
@@ -29,7 +31,6 @@ CrystalRenderer g_crystal_renderer;
 ThumbnailCache g_thumbnail_cache;
 LUMICE_Server* g_server = nullptr;
 ServerPoller g_server_poller;
-bool g_panel_collapsed = false;
 PreviewViewport g_preview_vp;
 
 int g_programmatic_resize = 0;
@@ -37,6 +38,42 @@ int g_programmatic_resize = 0;
 
 bool g_show_unsaved_popup = false;
 PendingAction g_pending_action = PendingAction::kNone;
+
+OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConfig& rc) {
+  OverlayLabelInput input{};
+  input.lens_type = rc.lens_type;
+  input.fov = rc.fov;
+  input.elevation = rc.elevation;
+  input.azimuth = rc.azimuth;
+  input.roll = rc.roll;
+  input.visible = rc.visible;
+  input.show_horizon = state.show_horizon;
+  input.show_grid = state.show_grid;
+  input.show_sun_circles = state.show_sun_circles;
+
+  // Sun direction in world space (azimuth fixed at 0, only altitude matters).
+  // Formula is byte-identical to RenderPreviewPanel's assignment into
+  // g_preview_vp.params.overlay.sun_dir (see src/gui/app_panels.cpp ~L534-538):
+  //   sa = altitude * deg2rad
+  //   sun_dir = (-cos(sa), 0, -sin(sa))
+  // Both callers share this helper so a future formula change only has to land here.
+  constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+  float sa = state.sun.altitude * kDeg2Rad;
+  input.sun_dir[0] = -std::cos(sa);
+  input.sun_dir[1] = 0.0f;
+  input.sun_dir[2] = -std::sin(sa);
+
+  input.sun_circle_count = std::min(static_cast<int>(state.sun_circle_angles.size()), kMaxSunCircles);
+  input.sun_circle_angles = state.sun_circle_angles.data();
+
+  std::copy(std::begin(state.horizon_color), std::end(state.horizon_color), std::begin(input.horizon_color));
+  std::copy(std::begin(state.grid_color), std::end(state.grid_color), std::begin(input.grid_color));
+  std::copy(std::begin(state.sun_circles_color), std::end(state.sun_circles_color),
+            std::begin(input.sun_circles_color));
+  input.grid_alpha = state.grid_alpha;
+  input.sun_circles_alpha = state.sun_circles_alpha;
+  return input;
+}
 
 std::shared_ptr<ImGuiLogSink> g_imgui_log_sink;
 std::shared_ptr<spdlog::sinks::basic_file_sink_mt> g_file_log_sink;
@@ -56,6 +93,8 @@ float GetAspectRatio(AspectPreset preset) {
       return 4.0f / 3.0f;
     case AspectPreset::k1x1:
       return 1.0f;
+    case AspectPreset::k2x1:
+      return 2.0f;
     case AspectPreset::kFree:
     case AspectPreset::kMatchBg:
     default:
@@ -93,20 +132,47 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   int win_w = 0;
   int win_h = 0;
   glfwGetWindowSize(window, &win_w, &win_h);
+  int pos_x = 0;
+  int pos_y = 0;
+  glfwGetWindowPos(window, &pos_x, &pos_y);
 
   constexpr float kCollapsedStripWidth = 20.0f;  // Must match kCollapseBtnSize in app_panels.cpp
-  float left_w = g_panel_collapsed ? kCollapsedStripWidth : kLeftPanelWidth;
+  float left_w = g_state.left_panel_collapsed ? kCollapsedStripWidth : kLeftPanelWidth;
   float right_w = g_state.right_panel_collapsed ? kCollapsedStripWidth : kRightPanelWidth;
   float preview_w = std::max(1.0f, static_cast<float>(win_w) - left_w - right_w);
   float preview_h = preview_w / ratio;
   auto target_h = static_cast<int>(preview_h + kTopBarHeight + kStatusBarHeight);
   int target_w = win_w;
 
+  // Select the monitor containing the window center so multi-monitor users do
+  // not get yanked back to primary when aspect ratio changes (v11 bug #4).
+  int cx = pos_x + win_w / 2;
+  int cy = pos_y + win_h / 2;
+  int mon_count = 0;
+  GLFWmonitor** mons = glfwGetMonitors(&mon_count);
+  std::vector<MonitorRect> rects;
+  if (mon_count > 0) {
+    rects.reserve(static_cast<size_t>(mon_count));
+  }
+  for (int i = 0; i < mon_count; i++) {
+    MonitorRect r{};
+    glfwGetMonitorWorkarea(mons[i], &r.x, &r.y, &r.w, &r.h);
+    rects.push_back(r);
+  }
   int work_x = 0;
   int work_y = 0;
   int work_w = 0;
   int work_h = 0;
-  glfwGetMonitorWorkarea(glfwGetPrimaryMonitor(), &work_x, &work_y, &work_w, &work_h);
+  int mon_idx = SelectMonitorIndexByCenter(cx, cy, rects.data(), static_cast<int>(rects.size()));
+  if (mon_idx >= 0) {
+    const auto& r = rects[mon_idx];
+    work_x = r.x;
+    work_y = r.y;
+    work_w = r.w;
+    work_h = r.h;
+  } else {
+    glfwGetMonitorWorkarea(glfwGetPrimaryMonitor(), &work_x, &work_y, &work_w, &work_h);
+  }
 
   target_w = std::clamp(target_w, kMinWindowWidth, work_w);
   target_h = std::clamp(target_h, kMinWindowHeight, work_h);
@@ -124,10 +190,9 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   g_programmatic_resize = 2;  // Expect up to 2 callbacks (some platforms fire intermediate + final)
   glfwSetWindowSize(window, target_w, target_h);
 
-  // Clamp window position to stay within screen
-  int pos_x = 0;
-  int pos_y = 0;
-  glfwGetWindowPos(window, &pos_x, &pos_y);
+  // Clamp window position to stay within the selected monitor's workarea.
+  // pos_x/pos_y were read at function entry (pre-resize); GLFW's SetWindowSize
+  // anchors on top-left, so the position remains valid post-resize.
   bool moved = false;
   if (pos_x + target_w > work_x + work_w) {
     pos_x = work_x + work_w - target_w;
@@ -205,33 +270,111 @@ void DoSaveAs() {
   }
 }
 
-void DoExportPreviewPng() {
-  auto path = ShowExportPngDialog();
-  if (!path.empty()) {
-    ExportPreviewPng(path, g_preview, g_preview_vp);
-    GUI_LOG_INFO("[GUI] Export screenshot: {}", PathToU8(path));
-  }
+// Build PreviewParams for export: copy current preview viewport params, but override
+// intensity_* fields to sample the GUI EV slider live (not the CommitConfig-time value
+// that once leaked into Core snapshot exports — gui-polish-v10 Bug 1 root cause).
+//
+// Formula mirrors app_panels.cpp's live preview path, keeping shader u_intensity_scale
+// byte-identical between preview and export:
+//   intensity_factor = 2^exposure_offset
+//   intensity_scale  = intensity_factor / snapshot_intensity  (0 if snapshot_intensity <= 0)
+static PreviewParams BuildExportParams() {
+  PreviewParams params = g_preview_vp.params;
+  params.exposure.intensity_factor = std::pow(2.0f, g_state.renderer.exposure_offset);
+  params.exposure.intensity_scale =
+      g_state.snapshot_intensity > 0 ? params.exposure.intensity_factor / g_state.snapshot_intensity : 0.0f;
+  return params;
 }
 
-void DoExportEquirectPng() {
-  if (!g_server) {
-    return;
-  }
-  auto path = ShowExportEquirectDialog();
+void DoExportPreviewPng() {
+  auto path = ShowExportPngDialog();
   if (path.empty()) {
     return;
   }
-  // Get CPU-side sRGB render result (triggers DoSnapshot + PostSnapshot)
-  LUMICE_RenderResult renders[2]{};
-  LUMICE_GetRenderResults(g_server, renders, 1);
-  if (renders[0].img_buffer == nullptr || renders[0].img_width <= 0 || renders[0].img_height <= 0) {
+
+  PreviewParams params = BuildExportParams();
+  std::optional<OverlayLabelInput> overlay;
+  if (g_state.screenshot_include_overlay && (g_state.show_horizon || g_state.show_grid || g_state.show_sun_circles)) {
+    overlay = BuildOverlayLabelInput(g_state, g_state.renderer);
+  }
+
+  int w = g_preview_vp.vp_w;
+  int h = g_preview_vp.vp_h;
+  auto rgba = RenderExportToRgba(g_preview, params, w, h, overlay);
+  if (rgba.empty()) {
+    GUI_LOG_ERROR("[GUI] Export screenshot failed: RenderExportToRgba returned empty (vp={}x{})", w, h);
     return;
   }
-  // Copy buffer (pointer valid only until next GetRenderResults/CommitConfig)
-  size_t size = static_cast<size_t>(renders[0].img_width) * renders[0].img_height * 3;
-  std::vector<unsigned char> buffer(renders[0].img_buffer, renders[0].img_buffer + size);
-  ExportEquirectPng(path, buffer.data(), renders[0].img_width, renders[0].img_height);
-  GUI_LOG_INFO("[GUI] Export panorama: {}", PathToU8(path));
+
+  if (!WriteRgbaBufferToPng(path, w, h, rgba)) {
+    GUI_LOG_ERROR("[GUI] Export screenshot failed: PNG write error path={}", PathToU8(path));
+    return;
+  }
+  GUI_LOG_INFO("[GUI] Export screenshot{}: {}", overlay.has_value() ? " (overlay)" : "", PathToU8(path));
+}
+
+void DoExportDualFisheyeEqualAreaPng() {
+  auto path = ShowExportDualFisheyeEqualAreaDialog();
+  if (path.empty()) {
+    return;
+  }
+
+  int w = g_preview.GetTextureWidth();
+  int h = g_preview.GetTextureHeight();
+  if (w <= 0 || h <= 0) {
+    GUI_LOG_ERROR("[GUI] Export dual fisheye: no texture loaded");
+    return;
+  }
+
+  PreviewParams params = BuildExportParams();
+  ConfigureDualFisheyeExportParams(params);
+
+  auto rgba = RenderExportToRgba(g_preview, params, w, h, std::nullopt);
+  if (rgba.empty()) {
+    GUI_LOG_ERROR("[GUI] Export dual fisheye: RenderExportToRgba empty (size={}x{})", w, h);
+    return;
+  }
+  if (!WriteRgbaBufferToPng(path, w, h, rgba)) {
+    GUI_LOG_ERROR("[GUI] Export dual fisheye: PNG write failed path={}", PathToU8(path));
+    return;
+  }
+  GUI_LOG_INFO("[GUI] Export dual fisheye equal-area: {}", PathToU8(path));
+}
+
+void DoExportEquirectangularPng() {
+  auto path = ShowExportEquirectangularDialog();
+  if (path.empty()) {
+    return;
+  }
+
+  int tex_w = g_preview.GetTextureWidth();
+  int tex_h = g_preview.GetTextureHeight();
+  if (tex_w <= 0 || tex_h <= 0) {
+    GUI_LOG_ERROR("[GUI] Export equirect: no texture loaded");
+    return;
+  }
+  // Preserve 155.4 约定：short_res = min(tex_w/2, tex_h) for strict 2:1 output.
+  int short_res = std::min(tex_w / 2, tex_h);
+  if (short_res <= 0) {
+    GUI_LOG_ERROR("[GUI] Export equirect: texture too small (tex={}x{})", tex_w, tex_h);
+    return;
+  }
+  int dst_w = 2 * short_res;
+  int dst_h = short_res;
+
+  PreviewParams params = BuildExportParams();
+  ConfigureEquirectExportParams(params);
+
+  auto rgba = RenderExportToRgba(g_preview, params, dst_w, dst_h, std::nullopt);
+  if (rgba.empty()) {
+    GUI_LOG_ERROR("[GUI] Export equirect: RenderExportToRgba empty (size={}x{})", dst_w, dst_h);
+    return;
+  }
+  if (!WriteRgbaBufferToPng(path, dst_w, dst_h, rgba)) {
+    GUI_LOG_ERROR("[GUI] Export equirect: PNG write failed path={}", PathToU8(path));
+    return;
+  }
+  GUI_LOG_INFO("[GUI] Export equirectangular: {}", PathToU8(path));
 }
 
 void DoExportConfigJson() {

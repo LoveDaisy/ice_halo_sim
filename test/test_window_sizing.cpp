@@ -8,6 +8,8 @@ namespace {
 using lumice::gui::ClampWindowSizeToWorkarea;
 using lumice::gui::kMinWindowHeight;
 using lumice::gui::kMinWindowWidth;
+using lumice::gui::MonitorRect;
+using lumice::gui::SelectMonitorIndexByCenter;
 
 // AC2 core path: 1080p laptop workarea ≈ 1920×900 after menubar/Dock.
 // Default (1600, 980) height must be clamped to 900 - 50 = 850.
@@ -45,6 +47,51 @@ TEST(WindowSizingTest, ExactBoundaryNoChange) {
   auto [w, h] = ClampWindowSizeToWorkarea(1600, 980, 1650, 1030);
   EXPECT_EQ(w, 1600);
   EXPECT_EQ(h, 980);
+}
+
+// ========== Monitor selection (multi-monitor aspect ratio fix) ==========
+
+TEST(MonitorSelectionTest, EmptyListReturnsNegative) {
+  EXPECT_EQ(SelectMonitorIndexByCenter(100, 100, nullptr, 0), -1);
+}
+
+TEST(MonitorSelectionTest, SingleMonitorCenterInside) {
+  constexpr MonitorRect kRects[] = { { 0, 0, 1920, 1080 } };
+  EXPECT_EQ(SelectMonitorIndexByCenter(960, 540, kRects, 1), 0);
+}
+
+TEST(MonitorSelectionTest, SingleMonitorCenterOutside) {
+  constexpr MonitorRect kRects[] = { { 0, 0, 1920, 1080 } };
+  EXPECT_EQ(SelectMonitorIndexByCenter(2000, 500, kRects, 1), -1);
+}
+
+TEST(MonitorSelectionTest, DualMonitorPrimaryCenter) {
+  constexpr MonitorRect kRects[] = { { 0, 0, 2560, 1440 }, { 2560, 0, 1920, 1080 } };
+  EXPECT_EQ(SelectMonitorIndexByCenter(1200, 700, kRects, 2), 0);
+}
+
+TEST(MonitorSelectionTest, DualMonitorSecondaryCenter) {
+  constexpr MonitorRect kRects[] = { { 0, 0, 2560, 1440 }, { 2560, 0, 1920, 1080 } };
+  EXPECT_EQ(SelectMonitorIndexByCenter(3500, 500, kRects, 2), 1);
+}
+
+// Window straddles the seam between monitors; center point wins.
+TEST(MonitorSelectionTest, CrossMonitorCenterPicksByCenter) {
+  constexpr MonitorRect kRects[] = { { 0, 0, 2560, 1440 }, { 2560, 0, 1920, 1080 } };
+  // Window x=2400, w=400 → center x = 2600 ∈ secondary.
+  EXPECT_EQ(SelectMonitorIndexByCenter(2600, 200, kRects, 2), 1);
+}
+
+// Left/top edge is inclusive.
+TEST(MonitorSelectionTest, BoundaryLeftEdgeInclusive) {
+  constexpr MonitorRect kRects[] = { { 100, 200, 300, 400 } };
+  EXPECT_EQ(SelectMonitorIndexByCenter(100, 200, kRects, 1), 0);
+}
+
+// Right/bottom edge is exclusive — prevents adjacent monitors double-claiming.
+TEST(MonitorSelectionTest, BoundaryRightEdgeExclusive) {
+  constexpr MonitorRect kRects[] = { { 100, 200, 300, 400 } };
+  EXPECT_EQ(SelectMonitorIndexByCenter(400, 200, kRects, 1), -1);
 }
 
 }  // namespace

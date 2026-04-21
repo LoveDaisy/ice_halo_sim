@@ -73,6 +73,28 @@ constexpr float kDefaultCrystalZoom = 1.4f;
 // Auxiliary line overlay
 constexpr int kMaxSunCircles = 16;
 
+// Lens projection types. Order must match kLensTypeNames in gui_state.hpp
+// and Core's LensParam::LensType enum. Static asserts in gui_state.hpp guard
+// the array length; ordering itself must be kept in sync manually.
+enum LensType : int {
+  kLensTypeLinear = 0,
+  kLensTypeFisheyeEqualArea = 1,
+  kLensTypeFisheyeEquidist = 2,
+  kLensTypeFisheyeStereographic = 3,
+  kLensTypeDualFisheyeEqualArea = 4,
+  kLensTypeDualFisheyeEquidist = 5,
+  kLensTypeDualFisheyeStereographic = 6,
+  kLensTypeRectangular = 7,
+};
+
+// Visible region selector. Order must match kVisibleNames in gui_state.hpp.
+enum Visible : int {
+  kVisibleUpper = 0,
+  kVisibleLower = 1,
+  kVisibleFull = 2,
+  kVisibleFront = 3,
+};
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_CONSTANTS_HPP

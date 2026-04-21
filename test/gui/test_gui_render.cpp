@@ -22,10 +22,9 @@ void RegisterAspectRatioTests(ImGuiTestEngine* engine) {
         float expected_ratio;
       };
       TestCase cases[] = {
-        { gui::AspectPreset::k16x9, 16.0f / 9.0f },
-        { gui::AspectPreset::k3x2, 3.0f / 2.0f },
-        { gui::AspectPreset::k4x3, 4.0f / 3.0f },
-        { gui::AspectPreset::k1x1, 1.0f },
+        { gui::AspectPreset::k16x9, 16.0f / 9.0f }, { gui::AspectPreset::k3x2, 3.0f / 2.0f },
+        { gui::AspectPreset::k4x3, 4.0f / 3.0f },   { gui::AspectPreset::k1x1, 1.0f },
+        { gui::AspectPreset::k2x1, 2.0f },
       };
 
       for (auto& tc : cases) {
@@ -123,6 +122,54 @@ void RegisterAspectRatioTests(ImGuiTestEngine* engine) {
       IM_CHECK(ok);
       IM_CHECK_EQ(loaded.aspect_preset, gui::AspectPreset::kFree);
       IM_CHECK_EQ(loaded.aspect_portrait, false);
+    };
+  }
+
+  // Test 5b: 2:1 .lmc roundtrip — 捕获 kAspectPresetJsonNames 与 enum 顺序错位
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "lmc_roundtrip_2x1");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      gui::g_state.aspect_preset = gui::AspectPreset::k2x1;
+      gui::g_state.aspect_portrait = false;
+
+      const char* tmp_path = "/tmp/lumice_aspect_2x1_test.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
+      IM_CHECK(save_ok);
+
+      gui::DoNew();
+      IM_CHECK_EQ(gui::g_state.aspect_preset, gui::AspectPreset::kFree);
+
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0;
+      int tex_h = 0;
+      bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
+      IM_CHECK(load_ok);
+
+      IM_CHECK_EQ(gui::g_state.aspect_preset, gui::AspectPreset::k2x1);
+      IM_CHECK_EQ(gui::g_state.aspect_portrait, false);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // Test 5c: k2x1 portrait flip — 固化 k2x1 与 disable_flip 列表互斥的纯函数契约
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "k2x1_portrait_flip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.aspect_preset = gui::AspectPreset::k2x1;
+      gui::g_state.aspect_portrait = false;
+      float ratio = gui::GetAspectRatio(gui::g_state.aspect_preset);
+      IM_CHECK_LT(std::abs(ratio - 2.0f), 0.01f);
+
+      gui::g_state.aspect_portrait = true;
+      float inv_ratio = 1.0f / gui::GetAspectRatio(gui::g_state.aspect_preset);
+      IM_CHECK_LT(std::abs(inv_ratio - 0.5f), 0.01f);
     };
   }
 

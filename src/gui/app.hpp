@@ -10,6 +10,7 @@
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/log_sink.hpp"
+#include "gui/overlay_labels.hpp"
 #include "gui/preview_renderer.hpp"
 #include "gui/server_poller.hpp"
 #include "gui/thumbnail_cache.hpp"
@@ -38,7 +39,6 @@ extern CrystalRenderer g_crystal_renderer;
 extern ThumbnailCache g_thumbnail_cache;
 extern LUMICE_Server* g_server;
 extern ServerPoller g_server_poller;
-extern bool g_panel_collapsed;
 extern PreviewViewport g_preview_vp;
 
 // Aspect ratio state
@@ -61,11 +61,17 @@ void WindowSizeCallback(GLFWwindow* window, int width, int height);
 float GetAspectRatio(AspectPreset preset);
 void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, float override_ratio = 0.0f);
 
+// Build an OverlayLabelInput from GuiState + RenderConfig. Shared between
+// RenderPreviewPanel (live preview) and DoExportPreviewPng (off-screen FBO export)
+// so both paths consume the same field-packing logic.
+OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConfig& rc);
+
 // Business operations
 void DoSave();
 void DoSaveAs();
 void DoExportPreviewPng();
-void DoExportEquirectPng();
+void DoExportDualFisheyeEqualAreaPng();
+void DoExportEquirectangularPng();
 void DoExportConfigJson();
 void DoOpen();
 void DoNew();

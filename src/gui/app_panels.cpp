@@ -28,9 +28,9 @@ void RenderTopBar(float window_width) {
   // Left-panel collapse toggle (placed before Run/Stop; owns the leftmost slot of the top bar
   // so it can never overlap with panel-internal headers).
   {
-    const char* left_toggle_label = g_panel_collapsed ? ">##left_panel_toggle" : "<##left_panel_toggle";
+    const char* left_toggle_label = g_state.left_panel_collapsed ? ">##left_panel_toggle" : "<##left_panel_toggle";
     if (ImGui::Button(left_toggle_label)) {
-      g_panel_collapsed = !g_panel_collapsed;
+      g_state.left_panel_collapsed = !g_state.left_panel_collapsed;
     }
     ImGui::SameLine();
     ImGui::TextDisabled("|");
@@ -83,7 +83,9 @@ void RenderTopBar(float window_width) {
   ImGui::TextDisabled("|");
   ImGui::SameLine();
 
-  // File operations
+  // File operations — New/Open disabled while simulating; Save menu itself stays
+  // enabled so read-only exports (Screenshot / Dual Fisheye Equal Area / Equirectangular /
+  // Config JSON) remain reachable.
   if (simulating) {
     ImGui::BeginDisabled();
   }
@@ -94,38 +96,45 @@ void RenderTopBar(float window_width) {
   if (ImGui::Button("Open")) {
     CheckUnsavedAndDo(PendingAction::kOpen);
   }
-  ImGui::SameLine();
-  if (ImGui::Button("Save")) {
-    DoSave();
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Save As")) {
-    DoSaveAs();
-  }
   if (simulating) {
     ImGui::EndDisabled();
   }
   ImGui::SameLine();
-  ImGui::TextDisabled("|");
-  ImGui::SameLine();
   {
-    if (ImGui::Button("Export")) {
-      ImGui::OpenPopup("ExportMenu");
+    if (ImGui::Button("Save")) {
+      ImGui::OpenPopup("SaveMenu");
     }
-    if (ImGui::BeginPopup("ExportMenu")) {
+    if (ImGui::BeginPopup("SaveMenu")) {
       bool no_texture = !g_preview.HasTexture();
       bool has_server = g_server != nullptr && g_state.sim_state != GuiState::SimState::kIdle;
+      if (simulating) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::MenuItem("Save")) {
+        DoSave();
+      }
+      if (ImGui::MenuItem("Save Copy")) {
+        DoSaveAs();
+      }
+      if (simulating) {
+        ImGui::EndDisabled();
+      }
+      ImGui::Separator();
       if (ImGui::MenuItem("Screenshot...", nullptr, false, !no_texture)) {
         DoExportPreviewPng();
       }
-      if (ImGui::MenuItem("Panorama...", nullptr, false, has_server)) {
-        DoExportEquirectPng();
+      if (ImGui::MenuItem("Dual Fisheye Equal Area...", nullptr, false, has_server)) {
+        DoExportDualFisheyeEqualAreaPng();
+      }
+      if (ImGui::MenuItem("Equirectangular...", nullptr, false, has_server)) {
+        DoExportEquirectangularPng();
       }
       if (ImGui::MenuItem("Config JSON...")) {
         DoExportConfigJson();
       }
       ImGui::Separator();
       ImGui::MenuItem("Include Texture in .lmc", nullptr, &g_state.save_texture);
+      ImGui::MenuItem("Include Overlay in Screenshot", nullptr, &g_state.screenshot_include_overlay);
       ImGui::EndPopup();
     }
   }
@@ -193,8 +202,8 @@ void RenderCollapsedStrip(const char* btn_label, float strip_x, float strip_y, f
 void RenderLeftPanel(float window_height) {
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
 
-  if (g_panel_collapsed) {
-    RenderCollapsedStrip(">", 0, kTopBarHeight, panel_height, &g_panel_collapsed);
+  if (g_state.left_panel_collapsed) {
+    RenderCollapsedStrip(">", 0, kTopBarHeight, panel_height, &g_state.left_panel_collapsed);
     return;
   }
 
@@ -449,7 +458,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 }
 
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {
-  float left_w = g_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
+  float left_w = g_state.left_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
   float right_w = g_state.right_panel_collapsed ? kCollapseBtnSize : kRightPanelWidth;
   float panel_x = left_w;
   float panel_width = window_width - left_w - right_w;
@@ -493,68 +502,51 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.vp_y = static_cast<int>(kStatusBarHeight * scale_y);  // OpenGL Y is bottom-up
     g_preview_vp.vp_w = static_cast<int>(panel_width * scale_x);
     g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
-    g_preview_vp.params.lens_type = rc.lens_type;
-    g_preview_vp.params.fov = rc.fov;
-    g_preview_vp.params.elevation = rc.elevation;
-    g_preview_vp.params.azimuth = rc.azimuth;
-    g_preview_vp.params.roll = rc.roll;
-    g_preview_vp.params.visible = rc.visible;
-    g_preview_vp.params.intensity_factor = std::pow(2.0f, rc.exposure_offset);
-    g_preview_vp.params.intensity_scale =
-        g_state.snapshot_intensity > 0 ? g_preview_vp.params.intensity_factor / g_state.snapshot_intensity : 0.0f;
+    auto& pp = g_preview_vp.params;
+    pp.view_proj.lens_type = rc.lens_type;
+    pp.view_proj.fov = rc.fov;
+    pp.view_proj.elevation = rc.elevation;
+    pp.view_proj.azimuth = rc.azimuth;
+    pp.view_proj.roll = rc.roll;
+    pp.view_proj.visible = rc.visible;
+    pp.exposure.intensity_factor = std::pow(2.0f, rc.exposure_offset);
+    pp.exposure.intensity_scale =
+        g_state.snapshot_intensity > 0 ? pp.exposure.intensity_factor / g_state.snapshot_intensity : 0.0f;
     // Overlap parameters for dual fisheye texture sampling.
-    g_preview_vp.params.max_abs_dz = kDualFisheyeOverlap;
-    g_preview_vp.params.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
-    g_preview_vp.params.bg_enabled = g_state.bg_show && g_preview.HasBackground();
-    g_preview_vp.params.bg_alpha = g_state.bg_alpha;
-    g_preview_vp.params.bg_aspect = g_preview.GetBgAspect();
+    pp.source.max_abs_dz = kDualFisheyeOverlap;
+    pp.source.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
+    pp.bg.enabled = g_state.bg_show && g_preview.HasBackground();
+    pp.bg.alpha = g_state.bg_alpha;
+    pp.bg.aspect = g_preview.GetBgAspect();
 
     // Auxiliary line overlay parameters
-    g_preview_vp.params.show_horizon = g_state.show_horizon;
-    g_preview_vp.params.show_grid = g_state.show_grid;
-    g_preview_vp.params.show_sun_circles = g_state.show_sun_circles;
-    std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color),
-              std::begin(g_preview_vp.params.horizon_color));
-    std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(g_preview_vp.params.grid_color));
+    pp.overlay.show_horizon = g_state.show_horizon;
+    pp.overlay.show_grid = g_state.show_grid;
+    pp.overlay.show_sun_circles = g_state.show_sun_circles;
+    std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color), std::begin(pp.overlay.horizon_color));
+    std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(pp.overlay.grid_color));
     std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
-              std::begin(g_preview_vp.params.sun_circles_color));
-    g_preview_vp.params.horizon_alpha = g_state.horizon_alpha;
-    g_preview_vp.params.grid_alpha = g_state.grid_alpha;
-    g_preview_vp.params.sun_circles_alpha = g_state.sun_circles_alpha;
+              std::begin(pp.overlay.sun_circles_color));
+    pp.overlay.horizon_alpha = g_state.horizon_alpha;
+    pp.overlay.grid_alpha = g_state.grid_alpha;
+    pp.overlay.sun_circles_alpha = g_state.sun_circles_alpha;
     // Precompute sun direction in world space (azimuth fixed at 0, only altitude matters)
     constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
     float sa = g_state.sun.altitude * kDeg2Rad;
-    g_preview_vp.params.sun_dir[0] = -std::cos(sa);
-    g_preview_vp.params.sun_dir[1] = 0.0f;
-    g_preview_vp.params.sun_dir[2] = -std::sin(sa);
-    g_preview_vp.params.sun_circle_count = std::min(static_cast<int>(g_state.sun_circle_angles.size()), kMaxSunCircles);
-    for (int i = 0; i < g_preview_vp.params.sun_circle_count; i++) {
-      g_preview_vp.params.sun_circle_angles[i] = g_state.sun_circle_angles[i];
+    pp.overlay.sun_dir[0] = -std::cos(sa);
+    pp.overlay.sun_dir[1] = 0.0f;
+    pp.overlay.sun_dir[2] = -std::sin(sa);
+    pp.overlay.sun_circle_count = std::min(static_cast<int>(g_state.sun_circle_angles.size()), kMaxSunCircles);
+    for (int i = 0; i < pp.overlay.sun_circle_count; i++) {
+      pp.overlay.sun_circle_angles[i] = g_state.sun_circle_angles[i];
     }
 
-    // Overlay labels at viewport edges (drawn via ImGui foreground draw list)
+    // Overlay labels at viewport edges (drawn on the preview window's draw list so
+    // modals correctly occlude them). BuildOverlayLabelInput is shared with
+    // DoExportPreviewPng (off-screen FBO path) so both call sites produce
+    // byte-identical OverlayLabelInput for a given state.
     if (g_state.show_horizon || g_state.show_grid || g_state.show_sun_circles) {
-      OverlayLabelInput label_input{};
-      label_input.lens_type = rc.lens_type;
-      label_input.fov = rc.fov;
-      label_input.elevation = rc.elevation;
-      label_input.azimuth = rc.azimuth;
-      label_input.roll = rc.roll;
-      label_input.visible = rc.visible;
-      label_input.show_horizon = g_state.show_horizon;
-      label_input.show_grid = g_state.show_grid;
-      label_input.show_sun_circles = g_state.show_sun_circles;
-      std::copy(std::begin(g_preview_vp.params.sun_dir), std::end(g_preview_vp.params.sun_dir),
-                std::begin(label_input.sun_dir));
-      label_input.sun_circle_count = g_preview_vp.params.sun_circle_count;
-      label_input.sun_circle_angles = g_preview_vp.params.sun_circle_angles;
-      std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color),
-                std::begin(label_input.horizon_color));
-      std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(label_input.grid_color));
-      std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
-                std::begin(label_input.sun_circles_color));
-      label_input.grid_alpha = g_state.grid_alpha;
-      label_input.sun_circles_alpha = g_state.sun_circles_alpha;
+      OverlayLabelInput label_input = BuildOverlayLabelInput(g_state, rc);
 
       // Convert viewport from framebuffer pixels to ImGui logical screen coordinates
       float vp_sx = panel_x;

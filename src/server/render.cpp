@@ -174,9 +174,7 @@ void FisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy
 
 // Overlap r_scale computation for dual fisheye projections.
 // r_scale shrinks the primary projection so r=1 at the overlap boundary instead of the equator.
-float ComputeEARScale(float max_abs_dz) {
-  return (max_abs_dz <= 0) ? 1.0f : 1.0f / std::sqrt(1.0f + max_abs_dz);
-}
+// Equal-area variant lives in core/projection (used by GUI export path as well).
 float ComputeEDRScale(float max_abs_dz) {
   return (max_abs_dz <= 0) ? 1.0f : math::kPi_2 / (math::kPi_2 + std::asin(max_abs_dz));
 }
@@ -381,7 +379,7 @@ void RenderConsumer::Consume(const SimData& data) {
     switch (config_.lens_.type_) {
       case LensParam::kDualFisheyeEqualArea:
         proj_param.max_abs_dz_ = config_.overlap_;
-        proj_param.r_scale_ = ComputeEARScale(config_.overlap_);
+        proj_param.r_scale_ = projection::ComputeEARScale(config_.overlap_);
         break;
       case LensParam::kDualFisheyeEquidistant:
         proj_param.max_abs_dz_ = config_.overlap_;

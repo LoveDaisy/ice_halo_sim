@@ -36,11 +36,24 @@ bool SaveLmcFile(const std::filesystem::path& path, const GuiState& state, const
 bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
                  int& tex_h);
 
-// Export preview as PNG (renders via FBO, must be called on GL thread)
+// Export preview as PNG (renders via FBO, must be called on GL thread).
+// Thin wrapper over RenderExportToRgba + WriteRgbaBufferToPng.
 bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp);
 
-// Export equirect panorama as PNG (pure I/O, accepts pre-converted RGB data)
-bool ExportEquirectPng(const std::filesystem::path& path, const unsigned char* data, int width, int height);
+// Write an already-rendered RGBA8 top-down buffer to disk as a PNG.
+// Shared by ExportPreviewPng and DoExportPreviewPng so PNG I/O lives in one place.
+[[nodiscard]] bool WriteRgbaBufferToPng(const std::filesystem::path& path, int w, int h,
+                                        const std::vector<unsigned char>& rgba);
+
+// Capture an (x,y,w,h) region of the currently bound framebuffer and write it as a PNG.
+// Contract (MUST hold at call site):
+//   - Called on the GL thread (main render thread).
+//   - Called AFTER ImGui_ImplOpenGL3_RenderDrawData(...) so foreground overlay labels are
+//     already composited into the default framebuffer.
+//   - Called BEFORE glfwSwapBuffers(...); otherwise glReadPixels returns a previous frame.
+//   - Caller leaves the default framebuffer bound (this helper does not bind any FBO).
+// Coordinates are framebuffer pixels with origin at the bottom-left (OpenGL convention).
+[[nodiscard]] bool ExportDefaultFramebufferRegionPng(const std::filesystem::path& path, int x, int y, int w, int h);
 
 // Export configuration as JSON (CLI-compatible format)
 bool ExportConfigJson(const std::filesystem::path& path, const std::string& json_str);
@@ -49,7 +62,8 @@ bool ExportConfigJson(const std::filesystem::path& path, const std::string& json
 std::filesystem::path ShowOpenDialog();
 std::filesystem::path ShowSaveDialog();
 std::filesystem::path ShowExportPngDialog();
-std::filesystem::path ShowExportEquirectDialog();
+std::filesystem::path ShowExportDualFisheyeEqualAreaDialog();
+std::filesystem::path ShowExportEquirectangularDialog();
 std::filesystem::path ShowExportJsonDialog();
 std::filesystem::path ShowOpenImageDialog();
 

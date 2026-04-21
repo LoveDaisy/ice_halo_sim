@@ -54,6 +54,26 @@ struct ExportTestState {
   }
 };
 
+// Structurally equivalent to ScreenshotCapture; kept separate so each capture
+// semantic (crystal FBO vs left-panel default-framebuffer) has its own lifecycle.
+// If a third panel visual regression is added, consolidate into a single
+// GenericRegionCaptureState<Tag> instead of copy-pasting again.
+struct LeftPanelCaptureState {
+  std::atomic<bool> requested{ false };
+  std::atomic<bool> done{ false };
+  std::vector<unsigned char> pixels;
+  int width = 0;
+  int height = 0;
+
+  void Reset() {
+    done.store(false);
+    requested.store(false);
+    pixels.clear();
+    width = 0;
+    height = 0;
+  }
+};
+
 struct BgOverlayTestState {
   std::string bg_image_path;
   bool bg_upload_requested = false;
@@ -79,6 +99,7 @@ struct BgOverlayTestState {
 extern ScreenshotCapture g_capture;
 extern ExportTestState g_export_test;
 extern BgOverlayTestState g_bg_test;
+extern LeftPanelCaptureState g_left_panel_capture;
 extern std::vector<unsigned char> g_synth_tex;
 extern int g_core_log_level;
 extern int g_gui_log_level;
@@ -122,5 +143,6 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine);
 void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine);
 void RegisterP1RunningTests(ImGuiTestEngine* engine);
 void RegisterP2InteractionModalTests(ImGuiTestEngine* engine);
+void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP

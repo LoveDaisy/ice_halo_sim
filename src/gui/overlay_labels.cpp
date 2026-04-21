@@ -202,10 +202,11 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
 
 // Angle values computed for each edge sample point.
 struct SampleAngles {
-  float altitude;            // degrees
-  float azimuth;             // degrees, [-180, 180]
-  float sun_dist;            // degrees, [0, 180]
-  float screen_x, screen_y;  // ImGui screen coords
+  float altitude;                         // degrees
+  float azimuth;                          // degrees, [-180, 180]
+  float sun_dist;                         // degrees, [0, 180]
+  float wx = 0.0f, wy = 0.0f, wz = 0.0f;  // world direction (unit vector when valid; (0,0,0) when invalid)
+  float screen_x, screen_y;               // ImGui screen coords
   bool valid;
 };
 
@@ -254,6 +255,12 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   float view_matrix[9];
   BuildViewMatrix(input.elevation, input.azimuth, input.roll, view_matrix);
 
+  // Camera forward in world space. BuildViewMatrix stores -forward in column 2
+  // (preview_renderer.cpp:600,623), column-major out[col*3+row], so forward = -col2.
+  // Used by Front-mode (visible==3) hemisphere check, mirroring shader's
+  // `dot(world_dir, u_view_matrix[2]) > 0.0` discard test (preview_renderer.cpp:336).
+  const float forward[3] = { -view_matrix[6], -view_matrix[7], -view_matrix[8] };
+
   // Viewport pixel dimensions (used as u_resolution in shader)
   float res_x = vp_screen_w;
   float res_y = vp_screen_h;
@@ -287,16 +294,53 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       vp_screen_y + vp_screen_h },  // right
   };
 
-  // Hemisphere visibility check: returns true if the given altitude is in the visible hemisphere.
-  // visible: 0=upper (alt>=0), 1=lower (alt<=0), 2=full (always visible), 3=front (always visible).
-  // Note: front mode visibility depends on 3D view direction (dot product with camera forward),
-  // which cannot be determined from altitude alone. All labels are shown as a known limitation.
-  auto is_visible = [&](float alt) -> bool {
+  // Front-hemisphere predicate: world_dir lies in front of camera.
+  // Shader (preview_renderer.cpp:336) uses strict >0 cull because pixel centers don't go
+  // through interpolation. Overlay labels sample along curves, interp_dir blends + renormalizes
+  // directions between adjacent samples — this introduces float noise at the boundary where
+  // the true dot is exactly 0. Strict >= 0 then silently drops valid boundary crossings.
+  // kFrontEps = 0.01 ≈ sin(0.57°), semantically matching Upper/Lower's 0.5° altitude tolerance
+  // (is_visible below uses `alt >= -0.5f`). Single source of truth for both is_visible
+  // (edge-crossing path) and is_visible_front (sun-circle interior path).
+  constexpr float kFrontEps = 0.01f;
+  auto front_facing = [&](float wx, float wy, float wz) -> bool {
+    return forward[0] * wx + forward[1] * wy + forward[2] * wz >= -kFrontEps;
+  };
+
+  // Hemisphere visibility check used by edge-crossing label paths.
+  // visible: 0=upper (alt>=0), 1=lower (alt<=0), 2=full, 3=front.
+  auto is_visible = [&](float alt, float wx, float wy, float wz) -> bool {
     if (input.visible == 0)
       return alt >= -0.5f;  // small tolerance for edge labels
     if (input.visible == 1)
       return alt <= 0.5f;
-    return true;  // full(2) and front(3): show all labels
+    if (input.visible == 3)
+      return front_facing(wx, wy, wz);
+    return true;  // full(2)
+  };
+
+  // Front-only visibility check used by sun-circle interior label placement.
+  // Kept separate from is_visible to avoid injecting a fake altitude into the
+  // Upper/Lower branches — the interior block historically did no is_visible
+  // filtering, so other modes must continue to return true unconditionally.
+  auto is_visible_front = [&](float wx, float wy, float wz) -> bool {
+    if (input.visible != 3)
+      return true;
+    return front_facing(wx, wy, wz);
+  };
+
+  // Interpolate world direction at crossing parameter t and renormalize.
+  // Linear-interp + normalize is accurate enough at kSampleStep=4px adjacent samples.
+  auto interp_dir = [](const SampleAngles& a, const SampleAngles& b, float t, float& ix, float& iy, float& iz) {
+    ix = a.wx + t * (b.wx - a.wx);
+    iy = a.wy + t * (b.wy - a.wy);
+    iz = a.wz + t * (b.wz - a.wz);
+    float len = std::sqrt(ix * ix + iy * iy + iz * iz);
+    if (len > 1e-6f) {
+      ix /= len;
+      iy /= len;
+      iz /= len;
+    }
   };
 
   // Crossing detection helper: given two adjacent valid sample points, detect and add labels.
@@ -310,9 +354,13 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
           if (g == 0)
             continue;  // skip 0° altitude (horizon) — low value, avoids equator edge clutter
           float target = g * 10.0f;
-          if (Crosses(prev.altitude, cur.altitude, target, &t) && is_visible(target)) {
-            AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target,
-                     grid_col);
+          if (Crosses(prev.altitude, cur.altitude, target, &t)) {
+            float ix, iy, iz;
+            interp_dir(prev, cur, t, ix, iy, iz);
+            if (is_visible(target, ix, iy, iz)) {
+              AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target,
+                       grid_col);
+            }
           }
         }
       }
@@ -331,7 +379,9 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
           float target = g * 10.0f;
           if (Crosses(az0, az1, target, &t)) {
             float alt_at_crossing = prev.altitude + t * (cur.altitude - prev.altitude);
-            if (!is_visible(alt_at_crossing))
+            float ix, iy, iz;
+            interp_dir(prev, cur, t, ix, iy, iz);
+            if (!is_visible(alt_at_crossing, ix, iy, iz))
               continue;
             float label_val = target;
             if (label_val > 180.0f)
@@ -351,7 +401,9 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
         float target = input.sun_circle_angles[ci];
         if (Crosses(prev.sun_dist, cur.sun_dist, target, &t)) {
           float alt_at_crossing = prev.altitude + t * (cur.altitude - prev.altitude);
-          if (!is_visible(alt_at_crossing))
+          float ix, iy, iz;
+          interp_dir(prev, cur, t, ix, iy, iz);
+          if (!is_visible(alt_at_crossing, ix, iy, iz))
             continue;
           AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target, sun_col,
                    kGroupSunCircles);
@@ -373,6 +425,9 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       s.sun_dist = std::acos(std::clamp(dot3(r.x, r.y, r.z, input.sun_dir[0], input.sun_dir[1], input.sun_dir[2]),
                                         -1.0f, 1.0f)) *
                    kRad2Deg;
+      s.wx = r.x;
+      s.wy = r.y;
+      s.wz = r.z;
     }
     return s;
   };
@@ -400,36 +455,65 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
     }
   }
 
-  // When visible = upper(0) or lower(1), add the hemisphere boundary (equator) as an extra edge.
-  // The equator is defined by altitude = 0 (world_dir.z = 0). Sample it in world space
-  // and forward-project to pixel coordinates.
-  // Note: front(3) hemisphere boundary is a view-dependent great circle, not drawn here.
-  // Was: input.visible != 2 (excluded only full mode)
-  if ((input.visible == 0 || input.visible == 1) && input.lens_type >= 0 && input.lens_type <= 3) {
-    constexpr int kEquatorSamples = 360;
-    SampleAngles prev{};
-    prev.valid = false;
+  // Hemisphere-boundary sampling: grid labels should appear at the edge of the visible sky,
+  // not just at viewport edges. There are three distinct "edges" a grid line can cross:
+  //   (1) the viewport rectangle — handled by edges[4] loop above;
+  //   (2) the equator (altitude=0) — visible in upper/lower modes as the horizon cutoff;
+  //   (3) the front-half great circle (dot(world_dir, forward)=0) — visible in front mode.
+  // Below we sample each applicable hemisphere boundary in world space, forward-project to
+  // pixels, and feed adjacent sample pairs into detect_crossings, reusing the same crossing
+  // logic as viewport edges.
+  // Restricted to lens_type 0-3 because WorldDirToPixel only implements forward projection
+  // for those (overlay_labels.cpp:198-200). Dual fisheye / rectangular lens boundaries are
+  // correctly handled by the viewport-edge path because those projections already show the
+  // full sphere and the boundary coincides with the pixel cull.
+  if (input.lens_type >= 0 && input.lens_type <= 3) {
+    constexpr int kBoundarySamples = 360;
 
-    for (int i = 0; i <= kEquatorSamples; i++) {
-      float az_rad = -kPi + i * (2.0f * kPi / kEquatorSamples);
-      // Equator direction: altitude=0, world_dir.z=0
-      float wx = -std::cos(az_rad);
-      float wy = -std::sin(az_rad);
-      float wz = 0.0f;
+    auto sample_curve = [&](auto curve_fn) {
+      SampleAngles prev{};
+      prev.valid = false;
+      for (int i = 0; i <= kBoundarySamples; i++) {
+        float t = i * (2.0f * kPi / kBoundarySamples);
+        float wx_b = 0, wy_b = 0, wz_b = 0;
+        curve_fn(t, wx_b, wy_b, wz_b);
 
-      FwdResult fp = WorldDirToPixel(wx, wy, wz, res_x, res_y, input.lens_type, input.fov, view_matrix);
-      if (!fp.valid || std::abs(fp.px) > hw || std::abs(fp.py) > hh) {
-        prev.valid = false;
-        continue;
+        FwdResult fp = WorldDirToPixel(wx_b, wy_b, wz_b, res_x, res_y, input.lens_type, input.fov, view_matrix);
+        if (!fp.valid || std::abs(fp.px) > hw || std::abs(fp.py) > hh) {
+          prev.valid = false;
+          continue;
+        }
+
+        float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
+        float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
+
+        SampleAngles cur = make_sample(fp.px, fp.py, scr_x, scr_y);
+        if (prev.valid && cur.valid)
+          detect_crossings(prev, cur);
+        prev = cur;
       }
+    };
 
-      float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
-      float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
-
-      SampleAngles cur = make_sample(fp.px, fp.py, scr_x, scr_y);
-      if (prev.valid && cur.valid)
-        detect_crossings(prev, cur);
-      prev = cur;
+    if (input.visible == 0 || input.visible == 1) {
+      // Equator: {(cos az, sin az, 0)} in world space, parameterized to match the prior loop's
+      // az_rad = -π + t convention so label positions are stable across refactor.
+      sample_curve([](float t, float& wx, float& wy, float& wz) {
+        float az = -kPi + t;
+        wx = -std::cos(az);
+        wy = -std::sin(az);
+        wz = 0.0f;
+      });
+    } else if (input.visible == 3) {
+      // Front hemisphere boundary: great circle perpendicular to forward. In view space this
+      // is z_view = 0 (the xy-plane); map to world via view_matrix (column-major: col0/col1 are
+      // the first two columns, i.e. view-space x and y basis expressed in world coordinates).
+      // Points: world = cos(t) * col0 + sin(t) * col1.
+      sample_curve([&](float t, float& wx, float& wy, float& wz) {
+        float c = std::cos(t), s = std::sin(t);
+        wx = c * view_matrix[0] + s * view_matrix[3];
+        wy = c * view_matrix[1] + s * view_matrix[4];
+        wz = c * view_matrix[2] + s * view_matrix[5];
+      });
     }
   }
 
@@ -489,6 +573,10 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
         float wy = cos_sd * sy + sin_sd * (cp * uy + sp * vy);
         float wz = cos_sd * sz + sin_sd * (cp * uz + sp * vz);
 
+        // Front-mode hemisphere cull (no-op for other modes; keeps interior labels unchanged).
+        if (!is_visible_front(wx, wy, wz))
+          continue;
+
         FwdResult fp = WorldDirToPixel(wx, wy, wz, res_x, res_y, input.lens_type, input.fov, view_matrix);
         if (!fp.valid)
           continue;
@@ -511,11 +599,9 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   }
 }
 
-void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
-  if (labels.empty())
+void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels) {
+  if (dl == nullptr || labels.empty())
     return;
-
-  ImDrawList* fg = ImGui::GetForegroundDrawList();
 
   // Collect bboxes for collision avoidance (only within same group)
   struct PlacedLabel {
@@ -547,15 +633,19 @@ void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
         constexpr int kMaxBgAlpha = 120;
         int label_alpha = (label.color >> IM_COL32_A_SHIFT) & 0xFF;
         int bg_alpha = kMaxBgAlpha * label_alpha / 255;
-        fg->AddRectFilled(bbox_min, bbox_max, IM_COL32(0, 0, 0, bg_alpha), 2.0f);
+        dl->AddRectFilled(bbox_min, bbox_max, IM_COL32(0, 0, 0, bg_alpha), 2.0f);
       }
       // Draw text twice with 1px horizontal offset to simulate bold
       const char* text = label.text.c_str();
-      fg->AddText(pos, label.color, text);
-      fg->AddText(ImVec2(pos.x + 1.0f, pos.y), label.color, text);
+      dl->AddText(pos, label.color, text);
+      dl->AddText(ImVec2(pos.x + 1.0f, pos.y), label.color, text);
       placed.push_back({ bbox_min, bbox_max, label.group });
     }
   }
+}
+
+void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
+  AppendOverlayToDrawList(ImGui::GetWindowDrawList(), labels);
 }
 
 }  // namespace lumice::gui

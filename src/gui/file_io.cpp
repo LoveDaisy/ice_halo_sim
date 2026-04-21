@@ -17,6 +17,8 @@
 #include <vector>
 
 #include "gui/app.hpp"
+#include "gui/export_fbo_renderer.hpp"
+#include "gui/gl_capture.hpp"
 #include "gui/gl_common.h"
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state.hpp"
@@ -51,7 +53,7 @@ static const char* kLensTypeJsonNames[] = { "linear",
 static const char* kVisibleJsonNames[] = { "upper", "lower", "full", "front" };
 static_assert(sizeof(kVisibleJsonNames) / sizeof(kVisibleJsonNames[0]) == kVisibleCount,
               "kVisibleJsonNames must match kVisibleCount");
-static const char* kAspectPresetJsonNames[] = { "free", "16:9", "3:2", "4:3", "1:1", "match_background" };
+static const char* kAspectPresetJsonNames[] = { "free", "16:9", "3:2", "4:3", "1:1", "2:1", "match_background" };
 static_assert(sizeof(kAspectPresetJsonNames) / sizeof(kAspectPresetJsonNames[0]) == kAspectPresetCount,
               "kAspectPresetJsonNames must match kAspectPresetCount");
 
@@ -1164,74 +1166,46 @@ bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector
 
 // ========== Export Preview ==========
 
+// Shared PNG writer: takes an RGBA8 top-down buffer and writes it as a PNG file.
+// Centralizes stbi_write_png so callers (this module, app.cpp DoExportPreviewPng)
+// share one error-handling convention.
+[[nodiscard]] bool WriteRgbaBufferToPng(const std::filesystem::path& path, int w, int h,
+                                        const std::vector<unsigned char>& rgba) {
+  if (path.empty() || w <= 0 || h <= 0 || rgba.size() != static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
+    return false;
+  }
+  auto u8path = path.u8string();
+  return stbi_write_png(u8path.c_str(), w, h, 4, rgba.data(), w * 4) != 0;
+}
+
+// Thin wrapper over RenderExportToRgba: kept for binary-compatible callers in
+// test/gui/ (test_gui_export, test_gui_visual, test_gui_bg). Consolidated with
+// the overlay path in DoExportPreviewPng — the FBO+renderer logic lives once, in
+// export_fbo_renderer.cpp.
 bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp) {
-  int w = vp.vp_w;
-  int h = vp.vp_h;
-  if (w <= 0 || h <= 0 || !renderer.HasTexture()) {
+  if (vp.vp_w <= 0 || vp.vp_h <= 0 || !renderer.HasTexture()) {
     return false;
   }
-
-  // Save current FBO binding
-  GLint prev_fbo = 0;
-  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-
-  // Create temporary FBO + renderbuffer
-  GLuint fbo = 0;
-  GLuint rbo = 0;
-  glGenFramebuffers(1, &fbo);
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-  glGenRenderbuffers(1, &rbo);
-  glBindRenderbuffer(GL_RENDERBUFFER, rbo);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rbo);
-
-  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-    glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
-    glDeleteRenderbuffers(1, &rbo);
-    glDeleteFramebuffers(1, &fbo);
+  auto rgba = RenderExportToRgba(renderer, vp.params, vp.vp_w, vp.vp_h, std::nullopt);
+  if (rgba.empty()) {
     return false;
   }
-
-  // Render preview into FBO
-  renderer.Render(0, 0, w, h, vp.params);
-
-  // Read pixels
-  std::vector<unsigned char> pixels(static_cast<size_t>(w) * h * 4);
-  glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-
-  // Cleanup GL resources
-  glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
-  glDeleteRenderbuffers(1, &rbo);
-  glDeleteFramebuffers(1, &fbo);
-
-  // Flip Y axis (OpenGL bottom-up → image top-down)
-  int row_bytes = w * 4;
-  std::vector<unsigned char> row(row_bytes);
-  for (int y = 0; y < h / 2; y++) {
-    unsigned char* top = pixels.data() + y * row_bytes;
-    unsigned char* bottom = pixels.data() + (h - 1 - y) * row_bytes;
-    std::memcpy(row.data(), top, row_bytes);
-    std::memcpy(top, bottom, row_bytes);
-    std::memcpy(bottom, row.data(), row_bytes);
-  }
-
-  // Save as RGBA PNG
-  auto u8path = path.u8string();
-  int result = stbi_write_png(u8path.c_str(), w, h, 4, pixels.data(), w * 4);
-  return result != 0;
+  return WriteRgbaBufferToPng(path, vp.vp_w, vp.vp_h, rgba);
 }
 
 
-// ========== Export Equirect ==========
-
-bool ExportEquirectPng(const std::filesystem::path& path, const unsigned char* data, int width, int height) {
-  if (path.empty() || !data || width <= 0 || height <= 0) {
+bool ExportDefaultFramebufferRegionPng(const std::filesystem::path& path, int x, int y, int w, int h) {
+  if (path.empty() || w <= 0 || h <= 0) {
+    return false;
+  }
+  std::vector<unsigned char> pixels;
+  if (!ReadbackGlRegionToRgba(x, y, w, h, pixels)) {
     return false;
   }
   auto u8path = path.u8string();
-  int result = stbi_write_png(u8path.c_str(), width, height, 3, data, width * 3);
-  return result != 0;
+  return stbi_write_png(u8path.c_str(), w, h, 4, pixels.data(), w * 4) != 0;
 }
+
 
 // ========== Export Config JSON ==========
 
@@ -1291,11 +1265,25 @@ std::filesystem::path ShowExportPngDialog() {
   return path;
 }
 
-std::filesystem::path ShowExportEquirectDialog() {
+std::filesystem::path ShowExportDualFisheyeEqualAreaDialog() {
   NFD_Init();
   nfdchar_t* out_path = nullptr;
   nfdfilteritem_t filter_item[1] = { { "PNG Image", "png" } };
-  nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "equirect.png");
+  nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "dual_fisheye_equal_area.png");
+  std::filesystem::path path;
+  if (result == NFD_OKAY && out_path) {
+    path = PathFromU8(out_path);
+    NFD_FreePath(out_path);
+  }
+  NFD_Quit();
+  return path;
+}
+
+std::filesystem::path ShowExportEquirectangularDialog() {
+  NFD_Init();
+  nfdchar_t* out_path = nullptr;
+  nfdfilteritem_t filter_item[1] = { { "PNG Image", "png" } };
+  nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "equirectangular.png");
   std::filesystem::path path;
   if (result == NFD_OKAY && out_path) {
     path = PathFromU8(out_path);

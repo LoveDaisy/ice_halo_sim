@@ -99,6 +99,14 @@ void DualFisheyeToPixel(float x_norm, float y_norm, bool is_upper, int width, in
 // For gather: pass (px + 0.5f, py + 0.5f) to convert integer pixel to continuous center.
 bool PixelToDualFisheye(float fx, float fy, int width, int height, float* x_norm, float* y_norm, bool* is_upper);
 
+
+// =============== Overlap r_scale computation (equal-area only) ===============
+// For dual fisheye equal-area with an overlap ring: r_scale shrinks the primary
+// projection so r=1 represents the overlap outer boundary instead of the equator.
+// max_abs_dz = sin(overlap_angle); max_abs_dz = 0 → r_scale = 1 (no overlap).
+float ComputeEARScale(float max_abs_dz);
+
+
 }  // namespace projection
 }  // namespace lumice
 

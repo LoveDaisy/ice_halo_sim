@@ -19,7 +19,9 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
+#include "gui/gl_capture.hpp"
 #include "gui/gl_init.h"
+#include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/log_sink.hpp"
 #include "gui/panels.hpp"
@@ -36,6 +38,7 @@
 ScreenshotCapture g_capture;
 ExportTestState g_export_test;
 BgOverlayTestState g_bg_test;
+LeftPanelCaptureState g_left_panel_capture;
 int g_core_log_level = LUMICE_LOG_INFO;
 int g_gui_log_level = LUMICE_LOG_INFO;
 bool g_enable_visible = false;
@@ -59,7 +62,7 @@ void ResetTestState() {
   // UI view state
   gui::ResetCrystalView();
   gui::g_crystal_style = 1;
-  gui::g_panel_collapsed = false;
+  gui::g_state.left_panel_collapsed = false;
   gui::g_state.right_panel_collapsed = false;
   gui::g_preview_vp.active = false;
   gui::g_programmatic_resize = 0;
@@ -162,6 +165,12 @@ int main(int argc, char** argv) {
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 #ifdef __APPLE__
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+  // Lock to non-Retina framebuffer on macOS so framebuffer size == window size
+  // (1600x980) regardless of cold/warm start or visible/hidden state. Visual
+  // regression tests (e.g. screenshot/left_panel_psnr) need deterministic
+  // capture dimensions; without this hint, hidden windows may yield 400x912
+  // on one run and 800x1824 on the next.
+  glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
 #endif
   if (!g_enable_visible) {
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);  // Hidden window mode
@@ -278,6 +287,7 @@ int main(int argc, char** argv) {
   RegisterP2InteractionRenderTests(engine);
   RegisterP1RunningTests(engine);
   RegisterP2InteractionModalTests(engine);
+  RegisterOverlayLabelTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete
@@ -358,6 +368,42 @@ int main(int argc, char** argv) {
     }
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    // Left-panel default-framebuffer capture hook (task-left-panel-visual-regression).
+    // Must run AFTER ImGui_ImplOpenGL3_RenderDrawData and BEFORE glfwSwapBuffers,
+    // per ReadbackGlRegionToRgba contract for default-framebuffer capture.
+    //
+    // Rect formula stays in sync with RenderLeftPanel's SetNextWindowPos/Size
+    // (src/gui/app_panels.cpp). Modifying left-panel geometry requires updating
+    // this block too. Retina scale is resolved at runtime via GLFW and validated
+    // by IM_CHECK_EQ(ref_w, capture.width) in the test.
+    if (g_left_panel_capture.requested.exchange(false)) {
+      int fb_w = 0;
+      int fb_h = 0;
+      glfwGetFramebufferSize(window, &fb_w, &fb_h);
+      int win_w2 = 0;
+      int win_h2 = 0;
+      glfwGetWindowSize(window, &win_w2, &win_h2);
+      // Locals intentionally non-const: project's clang-tidy ConstantCase=CamelCase+k
+      // would force kSx/kRx etc. which is worse for short runtime-computed values.
+      float sx = win_w2 > 0 ? static_cast<float>(fb_w) / static_cast<float>(win_w2) : 1.0f;
+      float sy = win_h2 > 0 ? static_cast<float>(fb_h) / static_cast<float>(win_h2) : 1.0f;
+      int rx = 0;
+      int ry = static_cast<int>(gui::kStatusBarHeight * sy);
+      int rw = static_cast<int>(gui::kLeftPanelWidth * sx);
+      int rh = fb_h - static_cast<int>((gui::kTopBarHeight + gui::kStatusBarHeight) * sy);
+      if (lumice::gui::ReadbackGlRegionToRgba(rx, ry, rw, rh, g_left_panel_capture.pixels)) {
+        g_left_panel_capture.width = rw;
+        g_left_panel_capture.height = rh;
+        g_left_panel_capture.done.store(true);
+      } else {
+        // fprintf matches diagnostic style used elsewhere in this file
+        // (glfwInit failure, DIAG messages); not a log-framework path.
+        fprintf(stderr, "[LeftPanelCapture] ReadbackGlRegionToRgba failed (rx=%d ry=%d rw=%d rh=%d fb=%dx%d)\n", rx, ry,
+                rw, rh, fb_w, fb_h);
+      }
+    }
+
     glfwSwapBuffers(window);
 
     ImGuiTestEngine_PostSwap(engine);

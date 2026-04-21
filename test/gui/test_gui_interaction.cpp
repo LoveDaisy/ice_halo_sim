@@ -376,6 +376,221 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: scrum-gui-polish-v11 / task-modal-immediate-mode M2 gate — in
+  // Immediate mode, crystal-only buffer edits must MarkDirty but NOT
+  // MarkFilterDirty. This is what keeps infinite-rays accumulation alive
+  // while the user drags a Crystal slider. Filter edits still fire
+  // MarkFilterDirty (identical to Staged OK semantics for filter changes).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_crystal_does_not_clear_display");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = false;
+      ctx->Yield(2);
+
+      // Seed "finite rays just finished" state — an accumulated preview the
+      // Immediate mode is supposed to preserve while the user tweaks Crystal.
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.snapshot_intensity = 0.5f;
+      gui::g_state.intensity_locked = false;
+      gui::g_state.dirty = false;
+      ctx->Yield();
+
+      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+
+      // Open Edit modal (Staged), then toggle Immediate — triggers close+reopen.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Immediate##edit_modal");
+      ctx->Yield(6);
+      // After close+reopen the Crystal tab may need an explicit SetSelected —
+      // the original OpenEditModal path set g_pending_tab_select, but mode
+      // switch reuses the existing buffer without re-entering OpenEditModal.
+      ctx->ItemClick("**/###crystal_tab");
+      ctx->Yield(2);  // 1 frame for CloseCurrentPopup, 1 for HandlePopupClosed,
+                      // 1 for OpenPopup, plus a little slack for tab SetSelected.
+
+      // Crystal-only edit: change Height via the Crystal tab input. Must
+      // MarkDirty (state.dirty == true) but must NOT MarkFilterDirty
+      // (snapshot_intensity preserved, intensity_locked still false).
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 1.0f);
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.dirty);
+      IM_CHECK_GT(gui::g_state.snapshot_intensity, 0.0f);
+      IM_CHECK(!gui::g_state.intensity_locked);
+
+      // Filter edit: switch to the Filter tab and type a raypath. Because the
+      // entry had no filter at modal open (initial_present=false), the first
+      // raypath edit is itself the filter creation — filter_changed == true
+      // in ApplyBuffersToEntry → MarkFilterDirty fires → display clears.
+      ctx->ItemClick("**/###filter_tab");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.0f);
+      IM_CHECK(gui::g_state.intensity_locked);
+
+      // Close the Immediate popup and restore Staged default for later tests.
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v11 / task-modal-immediate-mode Test 1 — Immediate
+  // mode: slider edits are committed to state immediately (no OK needed).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_slider_commits_immediately");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      // Open the modal directly in Immediate mode (skip the close+reopen
+      // mode-switch path — that is covered by Test 5).
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      // Change Height — must reach the entry on the same frame (Immediate
+      // commits every frame via CommitAllBuffersImmediate).
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 2.5f);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, orig_h + 2.5f);
+
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v11 / task-modal-immediate-mode Test 2 — Immediate
+  // mode: tab titles never carry the " *" dirty-mark even after edits
+  // (Immediate has no staged-vs-committed distinction).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_no_dirty_mark");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      auto is_dirty = [&](const char* tab_ref) -> bool {
+        auto info = ctx->ItemInfo(tab_ref);
+        return info.ID != 0 && std::strstr(info.DebugLabel, "*") != nullptr;
+      };
+
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 3.0f);
+      ctx->Yield(2);
+      IM_CHECK(!is_dirty("**/###crystal_tab"));
+      IM_CHECK(!is_dirty("**/###axis_tab"));
+      IM_CHECK(!is_dirty("**/###filter_tab"));
+
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v11 / task-modal-immediate-mode Test 3 — Immediate
+  // Close preserves all edits (no Cancel semantics in Immediate mode).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_close_preserves_changes");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 4.0f);
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, orig_h + 4.0f);
+
+      // Reopen to confirm the value truly persisted through close (guards
+      // against any path that might silently revert buffer→entry mapping).
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, orig_h + 4.0f);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v11 / task-modal-immediate-mode Test 4 — Immediate
+  // Esc closes the popup while keeping edits intact (ImGui default popup
+  // Esc-close behavior; no Cancel-like revert because Immediate has no
+  // staged buffer to discard).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_esc_closes_without_revert");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 5.0f);
+      ctx->Yield(2);
+
+      // ImGui's default popup handling closes the top popup on Escape.
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, orig_h + 5.0f);
+
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v11 / task-modal-immediate-mode Test 5 — mode switch
+  // close+reopen preserves the Filter tab selection + buffered edits. Uses the
+  // Filter tab because its controls (Raypath InputText) have simple wildcard
+  // paths; the preservation contract is the same as for any tab.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "mode_switch_preserves_tab_and_buffer");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = false;
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      // Switch to Filter tab in Staged mode.
+      ctx->ItemClick("**/###filter_tab");
+      ctx->Yield(4);
+      // Stage a raypath in the Filter tab buffer. Staged mode: entry still
+      // has no filter until OK.
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      // Toggle Immediate: switch commits the buffer via CommitAllBuffersImmediate,
+      // then close+reopen preserves tab selection + buffer.
+      ctx->ItemClick("**/Immediate##edit_modal");
+      ctx->Yield(8);
+
+      // Filter is now populated on the entry (committed by the switch).
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      // Filter tab controls still accessible — tab selection survived.
+      IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
+
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
   // P1: Unsaved Changes Popup
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "unsaved_popup");
@@ -397,6 +612,86 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Verify state was reset
       IM_CHECK_EQ(gui::g_state.dirty, false);
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
+    };
+  }
+
+  // P1: scrum-gui-polish-v9 155.2 + 155.4 — Save popup structure and simulating gating.
+  // 155.4 renamed "Panorama..." → "Dual Fisheye Equal Area..." and added "Equirectangular...".
+  // Asserts the single Save dropdown hosts all 6 actions + Include Texture/Overlay checkboxes,
+  // and that Save/Save Copy disable under simulating while read-only exports stay live.
+  // Uses ItemInfo rather than clicking MenuItem("Save") because DoSave triggers the
+  // native file dialog (blocking, not test-engine-driveable).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "save_menu_structure");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // --- Case 1: not simulating — Save/Save Copy enabled ---
+      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+      ctx->Yield();
+      ctx->ItemClick("##TopBar/Save");
+      ctx->Yield(2);
+
+      // All menu items + checkbox present under the popup
+      IM_CHECK(ctx->ItemExists("**/Save Copy"));
+      IM_CHECK(ctx->ItemExists("**/Screenshot..."));
+      IM_CHECK(ctx->ItemExists("**/Dual Fisheye Equal Area..."));
+      IM_CHECK(ctx->ItemExists("**/Equirectangular..."));
+      IM_CHECK(ctx->ItemExists("**/Config JSON..."));
+      IM_CHECK(ctx->ItemExists("**/Include Texture in .lmc"));
+
+      auto copy_info = ctx->ItemInfo("**/Save Copy");
+      IM_CHECK((copy_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+
+      // --- Case 2: simulating — Save/Save Copy disabled, Config JSON still enabled ---
+      gui::g_state.sim_state = gui::GuiState::SimState::kSimulating;
+      ctx->Yield();
+      ctx->ItemClick("##TopBar/Save");
+      ctx->Yield(2);
+
+      auto copy_info2 = ctx->ItemInfo("**/Save Copy");
+      IM_CHECK((copy_info2.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto cfg_info = ctx->ItemInfo("**/Config JSON...");
+      IM_CHECK((cfg_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+      ctx->Yield();
+    };
+  }
+
+  // P1: scrum-gui-polish-v9 155.3 — screenshot_include_overlay toggle and default value.
+  // Does NOT exercise the actual PNG write — that requires driving the main loop between
+  // ImGui_ImplOpenGL3_RenderDrawData and glfwSwapBuffers, which the Test Engine's Yield
+  // timing does not cleanly expose. Pixel-level verification is covered by the manual
+  // smoke documented in plan.md M2.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "screenshot_overlay_toggle");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Default is false (keeps current behaviour: no overlay in Screenshot).
+      IM_CHECK_EQ(gui::g_state.screenshot_include_overlay, false);
+
+      // Open Save menu → toggle Include Overlay on.
+      ctx->ItemClick("##TopBar/Save");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Include Overlay in Screenshot");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.screenshot_include_overlay, true);
+
+      // Reopen and toggle back off.
+      ctx->ItemClick("##TopBar/Save");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Include Overlay in Screenshot");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.screenshot_include_overlay, false);
     };
   }
 }

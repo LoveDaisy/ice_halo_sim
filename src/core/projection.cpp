@@ -175,5 +175,11 @@ bool PixelToDualFisheye(float fx, float fy, int width, int height, float* x_norm
   return false;  // outside both circles
 }
 
+// =============== Overlap r_scale (equal-area) ===============
+
+float ComputeEARScale(float max_abs_dz) {
+  return (max_abs_dz <= 0) ? 1.0f : 1.0f / std::sqrt(1.0f + max_abs_dz);
+}
+
 }  // namespace projection
 }  // namespace lumice

@@ -17,6 +17,7 @@
 
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
+#include "gui/file_io.hpp"
 #include "gui/gl_common.h"
 #include "gui/gl_init.h"
 #include "gui/gui_logger.hpp"
@@ -383,13 +384,13 @@ int main(int argc, char** argv) {
       }
     }
     // Save panel collapse state before any mutations (keyboard shortcuts + button clicks during rendering).
-    bool prev_left_collapsed = gui::g_panel_collapsed;
+    bool prev_left_collapsed = gui::g_state.left_panel_collapsed;
     bool prev_right_collapsed = gui::g_state.right_panel_collapsed;
 
     // Panel collapse shortcuts: [ for left panel, ] for right panel
     if (!io.WantCaptureKeyboard) {
       if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket)) {
-        gui::g_panel_collapsed = !gui::g_panel_collapsed;
+        gui::g_state.left_panel_collapsed = !gui::g_state.left_panel_collapsed;
       }
       if (ImGui::IsKeyPressed(ImGuiKey_RightBracket)) {
         gui::g_state.right_panel_collapsed = !gui::g_state.right_panel_collapsed;
@@ -422,7 +423,8 @@ int main(int argc, char** argv) {
     gui::RenderUnsavedPopup(window);
 
     // Reset aspect ratio to Free when panel collapse state changes (window size doesn't adjust automatically).
-    if (gui::g_panel_collapsed != prev_left_collapsed || gui::g_state.right_panel_collapsed != prev_right_collapsed) {
+    if (gui::g_state.left_panel_collapsed != prev_left_collapsed ||
+        gui::g_state.right_panel_collapsed != prev_right_collapsed) {
       gui::g_state.aspect_preset = gui::AspectPreset::kFree;
     }
 
@@ -439,6 +441,12 @@ int main(int argc, char** argv) {
     }
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    // gui-polish-v10: Screenshot exports (with or without overlay) now go through the
+    // off-screen FBO path in RenderExportToRgba — no deferred default-framebuffer capture
+    // is needed here. The old pending_screenshot hook that read back from the default FB
+    // was retired because it unavoidably captured ImGui chrome (e.g. an open Save menu)
+    // together with the preview (Bug 2).
 
     glfwSwapBuffers(window);
 

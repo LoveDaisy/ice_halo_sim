@@ -33,8 +33,15 @@ struct OverlayLabelInput {
 void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, float vp_screen_y, float vp_screen_w,
                           float vp_screen_h, std::vector<OverlayLabel>& out);
 
-// Draw labels using ImGui foreground draw list, with collision avoidance.
+// Draw labels using the current ImGui window's draw list (so modals/popups correctly
+// occlude the labels), with collision avoidance. Caller must invoke this inside an
+// active ImGui::Begin/End pair.
 void DrawOverlayLabels(const std::vector<OverlayLabel>& labels);
+
+// Append overlay labels to an arbitrary ImDrawList (with collision avoidance).
+// Used by DrawOverlayLabels for the preview window's draw list and by
+// export_fbo_renderer for a self-owned list targeting an off-screen FBO.
+void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels);
 
 }  // namespace lumice::gui
 

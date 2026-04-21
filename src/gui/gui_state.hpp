@@ -8,6 +8,8 @@
 #include <type_traits>
 #include <vector>
 
+#include "gui/gui_constants.hpp"
+
 namespace lumice::gui {
 
 // Crystal type
@@ -18,9 +20,9 @@ enum class CrystalType { kPrism, kPyramid };
 enum class AxisDistType { kGauss, kUniform, kZigzag, kLaplacian, kGaussLegacy, kCount };
 
 // Aspect ratio presets for preview window
-enum class AspectPreset { kFree, k16x9, k3x2, k4x3, k1x1, kMatchBg };
-inline const char* const kAspectPresetNames[] = { "Free", "16:9", "3:2", "4:3", "1:1", "Match Background" };
-constexpr int kAspectPresetCount = 6;
+enum class AspectPreset { kFree, k16x9, k3x2, k4x3, k1x1, k2x1, kMatchBg };
+inline const char* const kAspectPresetNames[] = { "Free", "16:9", "3:2", "4:3", "1:1", "2:1", "Match Background" };
+constexpr int kAspectPresetCount = 7;
 static_assert(sizeof(kAspectPresetNames) / sizeof(kAspectPresetNames[0]) == kAspectPresetCount,
               "kAspectPresetNames must match kAspectPresetCount");
 
@@ -92,6 +94,9 @@ inline const char* const kLensTypeNames[] = {
   "Rectangular",
 };
 constexpr int kLensTypeCount = 8;
+static_assert(sizeof(kLensTypeNames) / sizeof(*kLensTypeNames) == kLensTypeCount,
+              "kLensTypeNames length must match kLensTypeCount");
+static_assert(kLensTypeRectangular == kLensTypeCount - 1, "LensType enum terminal value must match kLensTypeCount - 1");
 
 // Dual fisheye overlap: max |sky.z| for the overlap zone.
 // = sin(5°) ≈ 0.0872. Each hemisphere extends 5° past the equator.
@@ -104,6 +109,9 @@ constexpr int kSpectrumCount = 6;
 
 inline const char* const kVisibleNames[] = { "Upper", "Lower", "Full", "Front" };
 constexpr int kVisibleCount = 4;  // must stay in sync with fragment shader u_visible range
+static_assert(sizeof(kVisibleNames) / sizeof(*kVisibleNames) == kVisibleCount,
+              "kVisibleNames length must match kVisibleCount");
+static_assert(kVisibleFront == kVisibleCount - 1, "Visible enum terminal value must match kVisibleCount - 1");
 
 inline const int kSimResolutions[] = { 512, 1024, 2048, 4096 };
 constexpr int kSimResolutionCount = 4;
@@ -229,6 +237,20 @@ struct GuiState {
   bool dirty = false;
   bool save_texture = true;  // Whether to include texture in .lmc save (UI-only, not serialized)
 
+  // Screenshot overlay toggle — when true, Screenshot export composites overlay
+  // labels onto the off-screen export FBO via RenderExportToRgba. UI-only, not
+  // serialized. (Pre gui-polish-v10 this flag also queued a deferred default-framebuffer
+  // readback via pending_screenshot; that mechanism was retired — see SUMMARY.)
+  bool screenshot_include_overlay = false;
+
+  // Edit modal mode (UI-only, session-only, not in ConfigSnapshot).
+  // Staged mode (default): BeginPopupModal + OK/Cancel + dirty-mark on tabs.
+  // Immediate mode: BeginPopup + single Close button + no dirty-mark;
+  // every frame commits buffer to state via CommitAllBuffersImmediate
+  // (crystal/axis edits only MarkDirty — filter edits still MarkFilterDirty —
+  // so infinite-rays accumulation persists while the user drags a crystal slider).
+  bool modal_immediate_mode = false;
+
   void MarkDirty() {
     dirty = true;
     if (sim_state == SimState::kDone) {
@@ -250,6 +272,8 @@ struct GuiState {
   bool intensity_locked = false;
 
   // Panel state (view preference — does not call MarkDirty)
+  // not persisted to .lmc (unlike right_panel_collapsed)
+  bool left_panel_collapsed = false;
   bool right_panel_collapsed = false;
 
   // Log panel state (view preference — does not call MarkDirty)
@@ -276,7 +300,7 @@ struct GuiState {
   //   Fields mirrored here must be the subset of GuiState classified as "configuration"
   //   (i.e. those reached by MarkDirty, contributing to the dirty/Revert lifecycle).
   //   View preferences (aspect_preset, bg_*, horizon/grid/sun circles, log levels,
-  //   right_panel_collapsed), runtime state (sim_state, stats_*, snapshot_intensity,
+  //   left_panel_collapsed, right_panel_collapsed), runtime state (sim_state, stats_*, snapshot_intensity,
   //   intensity_locked, texture_upload_count), and file management (current_file_path,
   //   dirty, save_texture) are intentionally excluded.
   //
