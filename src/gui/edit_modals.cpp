@@ -743,6 +743,13 @@ void RenderEditModals(GuiState& state) {
   // silently (window re-renders every frame with no assertion). Staged branch
   // is neutral: BeginPopupModal's visibility is governed by the popup stack,
   // p_open only controls whether the title-bar × renders.
+  // Dual semantics:
+  //   Immediate: doubles as Begin's p_open — drives window visibility. Initial
+  //              value (g_active_modal==kOpen) → true while modal is open,
+  //              → false the frame after any code-driven close (Close button /
+  //              title ×), cleanly triggering !window_open cleanup.
+  //   Staged:    governs only whether the title-bar × glyph renders;
+  //              BeginPopupModal's visibility is determined by the popup stack.
   bool title_x_open = (g_active_modal == ActiveModal::kOpen);
   bool window_open = false;
   // Pin the dispatch mode for this frame. The Immediate-mode checkbox
@@ -806,6 +813,10 @@ void RenderEditModals(GuiState& state) {
   // through HandlePopupClosed naturally. Known asymmetry: Immediate inbound
   // (body consume) vs Staged inbound (HandlePopupClosed consume) — a direct
   // consequence of ImGui's popup stack vs regular window dispatch split.
+  // Counterpart for Immediate → Staged direction: HandlePopupClosed's
+  // mode-switch branch (arms g_pending_open + g_pending_tab_select, keeps
+  // g_active_modal=kOpen), invoked from the !window_open path on Frame N+1
+  // when BeginPopupModal sees an empty popup stack.
   // Invariant: never touch g_active_modal here (it must stay kOpen until a
   // user-driven close; see F10 in plan).
   if (dispatched_immediate && g_pending_mode_switch) {

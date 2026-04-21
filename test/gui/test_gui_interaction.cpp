@@ -623,7 +623,10 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Passthrough direction: the Save click reached the background button —
-      // the Save menu opened (Save Copy appears as a child).
+      // the Save menu opened (Save Copy appears as a child). Depends on the
+      // topbar Save menu containing a "Save Copy" entry; rename the menu item
+      // and this assertion must be updated (see p1_file/save_menu_structure
+      // for the canonical menu contract).
       IM_CHECK(ctx->ItemExists("**/Save Copy"));
       // Persistence direction: the external click did NOT close the modal.
       IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
@@ -633,6 +636,11 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       ctx->ItemClick("**/Close##edit_modal");
       ctx->Yield(4);
+      // Close-button contract: modal is gone after Close. Duplicates the
+      // core check from immediate_close_button_closes but keeps this test
+      // self-contained so a Close regression does not silently pass by
+      // relying on the next test's ResetTestState() to mask it.
+      IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
       gui::g_state.modal_immediate_mode = false;
     };
   }
