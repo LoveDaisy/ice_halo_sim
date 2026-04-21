@@ -577,6 +577,7 @@ void ResetModalState() {
   std::memset(g_saved_rotation, 0, sizeof(g_saved_rotation));
   g_saved_zoom = 1.0f;
   g_pending_open = false;
+  g_pending_mode_switch = false;
   g_modal_mesh_hash = 0;
 }
 
@@ -683,6 +684,11 @@ void HandlePopupClosed(GuiState& state) {
   if (g_pending_mode_switch) {
     g_pending_mode_switch = false;
     g_pending_open = true;
+    // Replay the OpenEditModal tab-select mechanic so the newly reopened
+    // popup forces BeginTabItem(g_active_tab) onto SetSelected on its first
+    // rendered frame. Without this, ImGui's TabBar silently defaults to the
+    // first tab after the ID stack is regenerated post-close+reopen.
+    g_pending_tab_select = true;
     return;
   }
   if (state.modal_immediate_mode) {

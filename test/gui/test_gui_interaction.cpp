@@ -402,7 +402,12 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
       ctx->ItemClick("**/Immediate##edit_modal");
-      ctx->Yield(6);  // 1 frame for CloseCurrentPopup, 1 for HandlePopupClosed,
+      ctx->Yield(6);
+      // After close+reopen the Crystal tab may need an explicit SetSelected —
+      // the original OpenEditModal path set g_pending_tab_select, but mode
+      // switch reuses the existing buffer without re-entering OpenEditModal.
+      ctx->ItemClick("**/###crystal_tab");
+      ctx->Yield(2);  // 1 frame for CloseCurrentPopup, 1 for HandlePopupClosed,
                       // 1 for OpenPopup, plus a little slack for tab SetSelected.
 
       // Crystal-only edit: change Height via the Crystal tab input. Must
@@ -426,6 +431,160 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::g_state.intensity_locked);
 
       // Close the Immediate popup and restore Staged default for later tests.
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v11 / task-modal-immediate-mode Test 1 — Immediate
+  // mode: slider edits are committed to state immediately (no OK needed).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_slider_commits_immediately");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      // Open the modal directly in Immediate mode (skip the close+reopen
+      // mode-switch path — that is covered by Test 5).
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      // Change Height — must reach the entry on the same frame (Immediate
+      // commits every frame via CommitAllBuffersImmediate).
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 2.5f);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, orig_h + 2.5f);
+
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v11 / task-modal-immediate-mode Test 2 — Immediate
+  // mode: tab titles never carry the " *" dirty-mark even after edits
+  // (Immediate has no staged-vs-committed distinction).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_no_dirty_mark");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      auto is_dirty = [&](const char* tab_ref) -> bool {
+        auto info = ctx->ItemInfo(tab_ref);
+        return info.ID != 0 && std::strstr(info.DebugLabel, "*") != nullptr;
+      };
+
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 3.0f);
+      ctx->Yield(2);
+      IM_CHECK(!is_dirty("**/###crystal_tab"));
+      IM_CHECK(!is_dirty("**/###axis_tab"));
+      IM_CHECK(!is_dirty("**/###filter_tab"));
+
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v11 / task-modal-immediate-mode Test 3 — Immediate
+  // Close preserves all edits (no Cancel semantics in Immediate mode).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_close_preserves_changes");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 4.0f);
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, orig_h + 4.0f);
+
+      // Reopen to confirm the value truly persisted through close (guards
+      // against any path that might silently revert buffer→entry mapping).
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, orig_h + 4.0f);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v11 / task-modal-immediate-mode Test 4 — Immediate
+  // Esc closes the popup while keeping edits intact (ImGui default popup
+  // Esc-close behavior; no Cancel-like revert because Immediate has no
+  // staged buffer to discard).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_esc_closes_without_revert");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 5.0f);
+      ctx->Yield(2);
+
+      // ImGui's default popup handling closes the top popup on Escape.
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, orig_h + 5.0f);
+
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v11 / task-modal-immediate-mode Test 5 — mode switch
+  // close+reopen preserves the Filter tab selection + buffered edits. Uses the
+  // Filter tab because its controls (Raypath InputText) have simple wildcard
+  // paths; the preservation contract is the same as for any tab.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "mode_switch_preserves_tab_and_buffer");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = false;
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      // Switch to Filter tab in Staged mode.
+      ctx->ItemClick("**/###filter_tab");
+      ctx->Yield(4);
+      // Stage a raypath in the Filter tab buffer. Staged mode: entry still
+      // has no filter until OK.
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      // Toggle Immediate: switch commits the buffer via CommitAllBuffersImmediate,
+      // then close+reopen preserves tab selection + buffer.
+      ctx->ItemClick("**/Immediate##edit_modal");
+      ctx->Yield(8);
+
+      // Filter is now populated on the entry (committed by the switch).
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      // Filter tab controls still accessible — tab selection survived.
+      IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
+
       ctx->ItemClick("**/Close##edit_modal");
       ctx->Yield(2);
       gui::g_state.modal_immediate_mode = false;
