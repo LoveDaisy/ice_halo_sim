@@ -709,9 +709,13 @@ void HandlePopupClosed(GuiState& state) {
 }  // namespace
 
 void RenderEditModals(GuiState& state) {
-  // Deferred OpenPopup: must happen outside BeginPopupModal.
+  // Deferred OpenPopup: only Staged mode uses the popup stack. Immediate mode
+  // drives visibility directly via g_active_modal → title_x_open (see below),
+  // so it neither opens nor consults the popup stack.
   if (g_pending_open && g_active_modal == ActiveModal::kOpen) {
-    ImGui::OpenPopup("Edit Entry");
+    if (!state.modal_immediate_mode) {
+      ImGui::OpenPopup("Edit Entry");
+    }
     g_pending_open = false;
   }
 
@@ -727,36 +731,86 @@ void RenderEditModals(GuiState& state) {
 
   ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
   // Mode dispatch: Staged → BeginPopupModal (blocks background, exposes title-bar ×
-  // via p_open). Immediate → BeginPopup (non-modal, no title bar — ImGui API does not
-  // support p_open on BeginPopup; close paths are bottom Close + Esc + click-outside,
-  // all equivalent "close preserving changes").
-  bool title_x_open = true;
+  // via p_open). Immediate → ImGui::Begin (regular window — external clicks pass
+  // through, hover/focus work on background UI, window stays visible until an
+  // explicit close via the bottom Close button or the title-bar ×).
+  //
+  // title_x_open initialization is load-bearing for Immediate: Begin uses it as
+  // p_open, so code-driven close paths (Close button, title-bar ×, mode switch)
+  // set g_active_modal = kNone → next frame title_x_open = false → Begin returns
+  // false → cleanup via HandlePopupClosed's !window_open branch. If this were
+  // kept as `true` unconditionally, code-driven close in Immediate would fail
+  // silently (window re-renders every frame with no assertion). Staged branch
+  // is neutral: BeginPopupModal's visibility is governed by the popup stack,
+  // p_open only controls whether the title-bar × renders.
+  bool title_x_open = (g_active_modal == ActiveModal::kOpen);
   bool window_open = false;
-  if (state.modal_immediate_mode) {
-    window_open = ImGui::BeginPopup("Edit Entry", ImGuiWindowFlags_AlwaysAutoResize);
+  // Pin the dispatch mode for this frame. The Immediate-mode checkbox
+  // (rendered later in body) may flip state.modal_immediate_mode mid-frame,
+  // but End/EndPopup must pair with the container we actually opened here.
+  const bool dispatched_immediate = state.modal_immediate_mode;
+  if (dispatched_immediate) {
+    window_open =
+        ImGui::Begin("Edit Entry", &title_x_open,
+                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse);
   } else {
     window_open = ImGui::BeginPopupModal("Edit Entry", &title_x_open, ImGuiWindowFlags_AlwaysAutoResize);
   }
   if (!window_open) {
-    // BeginPopup* returned false — either the popup was never opened, or it was
-    // closed on the previous frame. If the latter, run centralized cleanup.
+    // ImGui contract: Begin always pairs with End regardless of return value.
+    // BeginPopupModal when it returns false must NOT be paired with EndPopup.
+    if (dispatched_immediate) {
+      ImGui::End();
+    }
+    // Either the container was never opened, or it was closed on the previous
+    // frame. If the latter (or a mode switch is in flight), run centralized
+    // cleanup so mode switch / trackball restore / g_active_modal reset
+    // converge through HandlePopupClosed.
     if (g_active_modal == ActiveModal::kOpen || g_pending_mode_switch) {
       HandlePopupClosed(state);
     }
     return;
   }
-  // Staged title-bar ×: request a close; cleanup (trackball restore,
-  // g_active_modal reset) happens next frame via HandlePopupClosed's
-  // Staged-cancel branch, so cancel button / × / Esc share a single code path.
-  if (!state.modal_immediate_mode && !title_x_open) {
-    ImGui::CloseCurrentPopup();
+  // Title-bar × close:
+  //   Staged: CloseCurrentPopup → next-frame !window_open → HandlePopupClosed's
+  //           Staged-cancel branch (trackball restore + g_active_modal reset).
+  //           Cancel button / × / Esc share this single path.
+  //   Immediate: no popup-stack entry to close — directly reset g_active_modal.
+  //           Next frame Begin returns false → !window_open cleanup branch.
+  if (!title_x_open) {
+    if (dispatched_immediate) {
+      g_active_modal = ActiveModal::kNone;
+    } else {
+      ImGui::CloseCurrentPopup();
+    }
   }
-  // Race case: the entry was deleted between the OpenPopup call and this frame.
-  // Close the popup body immediately and let HandlePopupClosed run next frame.
+  // Race case: the entry was deleted (index guard above set kNone) or user
+  // just clicked the title-bar × in Immediate mode. Close the container body
+  // for this frame; next frame's !window_open path runs HandlePopupClosed.
   if (g_active_modal != ActiveModal::kOpen) {
-    ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
+    if (dispatched_immediate) {
+      ImGui::End();
+    } else {
+      ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+    }
     return;
+  }
+
+  // Staged → Immediate mode-switch consume: because Begin (unlike
+  // BeginPopupModal on an empty stack) returns true on Frame N+1 with
+  // title_x_open=true, !window_open never fires → HandlePopupClosed cannot
+  // observe the switch. Consume g_pending_mode_switch inline here (body path).
+  // This is the structural inverse of the Immediate → Staged direction, where
+  // BeginPopupModal on an empty popup stack returns false and cleanup flows
+  // through HandlePopupClosed naturally. Known asymmetry: Immediate inbound
+  // (body consume) vs Staged inbound (HandlePopupClosed consume) — a direct
+  // consequence of ImGui's popup stack vs regular window dispatch split.
+  // Invariant: never touch g_active_modal here (it must stay kOpen until a
+  // user-driven close; see F10 in plan).
+  if (dispatched_immediate && g_pending_mode_switch) {
+    g_pending_mode_switch = false;
+    g_pending_tab_select = true;
   }
 
   // Snapshot the SetSelected flags BEFORE any BeginTabItem body runs —
@@ -829,9 +883,12 @@ void RenderEditModals(GuiState& state) {
   // to the right edge.
   if (state.modal_immediate_mode) {
     // Immediate: single Close (no Cancel semantics — changes are already applied).
+    // No CloseCurrentPopup: we are inside ImGui::Begin (regular window), the
+    // popup stack has no "Edit Entry" entry. Setting g_active_modal=kNone
+    // drives the next-frame cleanup via title_x_open=false → Begin returns
+    // false → !window_open branch.
     if (ImGui::Button("Close##edit_modal", ImVec2(80, 0))) {
       g_active_modal = ActiveModal::kNone;
-      ImGui::CloseCurrentPopup();
     }
   } else {
     // Staged: OK / Cancel.
@@ -891,15 +948,34 @@ void RenderEditModals(GuiState& state) {
       // crystal-only changes — that would zero infinite-rays accumulation
       // at the exact moment the user wants to start observing live changes.
       CommitAllBuffersImmediate(state);
+      // Current frame is still inside BeginPopupModal (dispatch at frame-start
+      // used the old mode). CloseCurrentPopup keeps the popup stack clean;
+      // Frame N+1 enters the Immediate Begin branch and consumes
+      // g_pending_mode_switch inline (see race-case guard + inline consume).
+      ImGui::CloseCurrentPopup();
     } else {
       // Immediate → Staged: re-snapshot the current buffer state as the new
       // dirty-compare baseline (dirty-mark starts from zero going forward).
       SnapshotAllBuffers(state);
+      // Current frame is still inside ImGui::Begin (dispatch at frame-start
+      // used the old mode). Do NOT call CloseCurrentPopup — the popup stack
+      // has no "Edit Entry" entry to close. Flow:
+      //   Frame N+1: Staged BeginPopupModal on empty stack → returns false →
+      //              !window_open → HandlePopupClosed's mode-switch branch
+      //              keeps g_active_modal=kOpen, arms g_pending_open +
+      //              g_pending_tab_select.
+      //   Frame N+2: L713 reopen gate fires → OpenPopup + BeginPopupModal
+      //              return true same frame → modal visible with tab replay.
+      // Invariant: do NOT touch g_active_modal here (must stay kOpen for the
+      // reopen gate to fire in Frame N+2).
     }
-    ImGui::CloseCurrentPopup();
   }
 
-  ImGui::EndPopup();
+  if (dispatched_immediate) {
+    ImGui::End();
+  } else {
+    ImGui::EndPopup();
+  }
 }
 
 }  // namespace lumice::gui
