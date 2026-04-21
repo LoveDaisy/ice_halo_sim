@@ -243,6 +243,14 @@ struct GuiState {
   // readback via pending_screenshot; that mechanism was retired — see SUMMARY.)
   bool screenshot_include_overlay = false;
 
+  // Edit modal mode (UI-only, session-only, not in ConfigSnapshot).
+  // Staged mode (default): BeginPopupModal + OK/Cancel + dirty-mark on tabs.
+  // Immediate mode: BeginPopup + single Close button + no dirty-mark;
+  // every frame commits buffer to state via CommitAllBuffersImmediate
+  // (crystal/axis edits only MarkDirty — filter edits still MarkFilterDirty —
+  // so infinite-rays accumulation persists while the user drags a crystal slider).
+  bool modal_immediate_mode = false;
+
   void MarkDirty() {
     dirty = true;
     if (sim_state == SimState::kDone) {

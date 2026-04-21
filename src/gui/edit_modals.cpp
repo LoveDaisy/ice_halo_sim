@@ -77,6 +77,11 @@ static int g_modal_mesh_hash = 0;
 // on the frame following the EditRequest.
 static bool g_pending_open = false;
 
+// Flag: Immediate↔Staged switch is a close+reopen cycle that must bypass
+// the Staged Cancel trackball-restore path in HandlePopupClosed; set by the
+// checkbox handler in RenderEditModals, consumed on the next-frame close.
+static bool g_pending_mode_switch = false;
+
 // ============================================================
 // Wedge angle presets (same as in panels.cpp SliderWithPreset for alpha)
 // ============================================================
@@ -174,6 +179,36 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
 }  // namespace
 
+namespace {
+
+// Re-snapshot all three buffers as the new dirty-compare baseline. Used by
+// OpenEditModal (initial snapshot) and the Immediate→Staged mode switch
+// (fresh baseline so dirty-mark starts from zero). Field coverage mirrors
+// OpenEditModal lines 210-215 (see plan §F10). Does NOT touch trackball
+// save or g_filter_buf_removed — those retain the Open-time baseline.
+//
+// Any new edit-buffer field added in the future must be appended here AND
+// in ApplyBuffersToEntry to keep the dirty-compare / commit paths symmetric.
+void SnapshotAllBuffers(const GuiState& state) {
+  // Sync UI raypath char buffer back into g_filter_buf before snapshotting,
+  // so g_filter_buf_snapshot.raypath_text reflects the current edit state
+  // (FilterConfig::operator== compares raypath_text; plan F10 detail).
+  g_filter_buf.raypath_text = g_raypath_buf;
+  g_filter_buf_snapshot = g_filter_buf;
+  g_crystal_buf_snapshot = g_crystal_buf;
+  g_axis_buf_snapshot[0] = g_axis_buf[0];
+  g_axis_buf_snapshot[1] = g_axis_buf[1];
+  g_axis_buf_snapshot[2] = g_axis_buf[2];
+  const int ly = g_modal_layer_idx;
+  const int en = g_modal_entry_idx;
+  if (ly >= 0 && ly < static_cast<int>(state.layers.size()) && en >= 0 &&
+      en < static_cast<int>(state.layers[ly].entries.size())) {
+    g_filter_initial_present = state.layers[ly].entries[en].filter.has_value();
+  }
+}
+
+}  // namespace
+
 // ============================================================
 // OpenEditModal — called from RenderLeftPanel on EditRequest
 // ============================================================
@@ -207,12 +242,10 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_filter_buf = entry.filter.value_or(FilterConfig{});
   snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_filter_buf.raypath_text.c_str());
   g_filter_buf_removed = false;
-  g_filter_buf_snapshot = g_filter_buf;
-  g_filter_initial_present = entry.filter.has_value();
-  g_crystal_buf_snapshot = g_crystal_buf;
-  g_axis_buf_snapshot[0] = g_axis_buf[0];
-  g_axis_buf_snapshot[1] = g_axis_buf[1];
-  g_axis_buf_snapshot[2] = g_axis_buf[2];
+  // Snapshot the dirty-compare baseline (Crystal/Axis/Filter buffers +
+  // filter_initial_present). Trackball save and g_filter_buf_removed are
+  // initialized separately below — they're Open-time state, not snapshot.
+  SnapshotAllBuffers(state);
 
   // Save trackball state for Cancel restoration
   std::memcpy(g_saved_rotation, g_crystal_rotation, sizeof(g_saved_rotation));
