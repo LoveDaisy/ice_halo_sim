@@ -107,11 +107,14 @@ TEST(SliderMappingLogLinear, PyramidPrismHMonotonic) {
 // Convention 3 — Pyramid upper_h / lower_h: [0, 1] kLinear
 // ============================================================
 //
-// kLinear is not a slider-mapping helper (SliderWithInput passes the raw value
-// to ImGui::SliderFloat). The contract we want to guard is that the call sites
-// in edit_modals.cpp hold (min_val=0.0f, max_val=1.0f), and that SliderWithInput
-// applies std::clamp at the end. These tests cover the clamp contract the
-// [0, 1] convention depends on.
+// These tests validate the `std::clamp([0, 1])` contract that kLinear [0, 1]
+// depends on; they do NOT call any function from slider_mapping.hpp (kLinear
+// has no helper — SliderWithInput passes the raw value to ImGui::SliderFloat).
+// Treat this block as an executable anchor for the convention table.
+//
+// The actual call-site configuration is guarded by the GUI tests
+// pyramid_h_allows_zero_via_modal / pyramid_h_clamp_upper_via_modal /
+// pyramid_h_linear_readback_via_modal in test/gui/test_gui_interaction.cpp.
 
 TEST(SliderMappingLinear, UpperLowerHZero) {
   float v = std::clamp(0.0f, 0.0f, 1.0f);

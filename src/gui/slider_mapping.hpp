@@ -14,6 +14,7 @@
 //   | Pyramid upper_h / lower_h| [0, 1]          | kLinear        | Wedge fraction — natural linear unit          |
 //   | Face Distance (per face) | [0, 2]          | kLinear        | Near-unit multiplier; rarely > 2 in practice  |
 //
+// kLinear rows use ImGui::SliderFloat directly; no mapping helper is defined here.
 // The Pyramid prism_h kLogLinear mapping was introduced in tasks.md #145.3; keep
 // kLogLinearX0 / kLogLinearTSwitch in sync with that tuning if either is adjusted.
 
@@ -44,6 +45,9 @@ inline float LogNormToValue(float norm, float min_val, float max_val) {
 
 // LogLinear hybrid: compute normalized [0,1] position from value in [0, max_val].
 // Linear in [0, x0], log in [x0, max_val], C0 continuous at x0.
+// NOTE: This pair (LogLinearValueToNorm / LogLinearNormToValue) is purpose-built
+// for the min_val == 0 case; it is NOT a general LogLinear primitive with a
+// configurable min. Do not pattern-match LogValueToNorm's (value, min, max) signature.
 inline float LogLinearValueToNorm(float value, float max_val) {
   value = std::clamp(value, 0.0f, max_val);
   float log_ratio = std::log(max_val / kLogLinearX0);

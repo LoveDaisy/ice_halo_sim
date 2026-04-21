@@ -954,10 +954,11 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // p1_slider/pyramid_h_linear_readback_via_modal — mid-range linear identity.
-  // Guards the kLinear call-site configuration: if Upper H is mistakenly reverted
-  // to kLogLinear with [0, 100], writing 0.5 would pass through a nonlinear
-  // mapping and not read back as 0.5 — this assertion fails immediately.
+  // p1_slider/pyramid_h_linear_readback_via_modal — input-box linear identity
+  // within the declared [0, 1] range. This goes through the _input field path,
+  // which only applies std::clamp; it does NOT cover the slider-drag nonlinear
+  // mapping path. Scale-configuration regressions (e.g. reverting to kLogLinear)
+  // are covered by pyramid_h_clamp_upper_via_modal via the max-bound assertion.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "pyramid_h_linear_readback_via_modal");
     t->TestFunc = [](ImGuiTestContext* ctx) {
