@@ -376,6 +376,62 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: scrum-gui-polish-v11 / task-modal-immediate-mode M2 gate — in
+  // Immediate mode, crystal-only buffer edits must MarkDirty but NOT
+  // MarkFilterDirty. This is what keeps infinite-rays accumulation alive
+  // while the user drags a Crystal slider. Filter edits still fire
+  // MarkFilterDirty (identical to Staged OK semantics for filter changes).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_crystal_does_not_clear_display");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = false;
+      ctx->Yield(2);
+
+      // Seed "finite rays just finished" state — an accumulated preview the
+      // Immediate mode is supposed to preserve while the user tweaks Crystal.
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.snapshot_intensity = 0.5f;
+      gui::g_state.intensity_locked = false;
+      gui::g_state.dirty = false;
+      ctx->Yield();
+
+      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+
+      // Open Edit modal (Staged), then toggle Immediate — triggers close+reopen.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Immediate##edit_modal");
+      ctx->Yield(6);  // 1 frame for CloseCurrentPopup, 1 for HandlePopupClosed,
+                      // 1 for OpenPopup, plus a little slack for tab SetSelected.
+
+      // Crystal-only edit: change Height via the Crystal tab input. Must
+      // MarkDirty (state.dirty == true) but must NOT MarkFilterDirty
+      // (snapshot_intensity preserved, intensity_locked still false).
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 1.0f);
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.dirty);
+      IM_CHECK_GT(gui::g_state.snapshot_intensity, 0.0f);
+      IM_CHECK(!gui::g_state.intensity_locked);
+
+      // Filter edit: switch to the Filter tab and type a raypath. Because the
+      // entry had no filter at modal open (initial_present=false), the first
+      // raypath edit is itself the filter creation — filter_changed == true
+      // in ApplyBuffersToEntry → MarkFilterDirty fires → display clears.
+      ctx->ItemClick("**/###filter_tab");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.0f);
+      IM_CHECK(gui::g_state.intensity_locked);
+
+      // Close the Immediate popup and restore Staged default for later tests.
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
   // P1: Unsaved Changes Popup
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "unsaved_popup");

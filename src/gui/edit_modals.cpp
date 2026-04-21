@@ -588,18 +588,32 @@ lumice::CrystalKind CurrentValidationKind() {
   return (g_crystal_buf.type == CrystalType::kPrism) ? lumice::CrystalKind::kPrism : lumice::CrystalKind::kPyramid;
 }
 
-// Apply all three buffers atomically to the entry; called by modal-level OK.
-void CommitAllBuffers(GuiState& state) {
+// Result of applying edit buffers back to the entry. Used by both commit paths
+// to decide which dirty-notification side effects to fire.
+struct ApplyBuffersResult {
+  bool valid;           // false if g_modal_layer_idx / g_modal_entry_idx out of range
+  bool entry_changed;   // entry != old_entry after apply
+  bool filter_changed;  // entry.filter != old_entry.filter after apply
+};
+
+// Single source of truth for buffer→entry field assignment. Both
+// CommitAllBuffers (Staged OK) and CommitAllBuffersImmediate (Immediate
+// per-frame) delegate here; the two commits only differ in which
+// MarkDirty / MarkFilterDirty calls they fire based on the returned flags.
+//
+// Adding a new edit-buffer field? Update this function AND SnapshotAllBuffers
+// in the same change (the pair drives both commit path and dirty-compare baseline).
+ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   const int ly = g_modal_layer_idx;
   const int en = g_modal_entry_idx;
   if (ly < 0 || ly >= static_cast<int>(state.layers.size()) || en < 0 ||
       en >= static_cast<int>(state.layers[ly].entries.size())) {
-    return;
+    return { false, false, false };
   }
   auto& entry = state.layers[ly].entries[en];
-  // Diff-gate: snapshot before applying buffers so we can skip render-invalidation
-  // when OK is pressed without any actual change (e.g. open Edit, click OK on
-  // finite-rays preview — must not clear the rendered image or arm Revert).
+  // Diff-gate: snapshot before applying buffers so callers can skip render-invalidation
+  // when nothing actually changed (e.g. Staged OK without any edits must not
+  // clear the rendered image or arm Revert).
   const EntryCard old_entry = entry;
   // g_crystal_buf carries the Crystal-tab edits; overlay axis edits from the
   // Axis tab so the unified commit reflects both.
@@ -618,12 +632,67 @@ void CommitAllBuffers(GuiState& state) {
       entry.filter = g_filter_buf;
     }
   }
-  if (entry != old_entry) {
-    g_thumbnail_cache.Invalidate(ly, en);
-    state.MarkDirty();
-    state.MarkFilterDirty();
-    g_crystal_mesh_hash = -1;
+  return { true, entry != old_entry, entry.filter != old_entry.filter };
+}
+
+// Staged OK path: any entry change clears the display + restarts simulation
+// (existing semantics — OK implies user commits and sim will re-run).
+void CommitAllBuffers(GuiState& state) {
+  const auto r = ApplyBuffersToEntry(state);
+  if (!r.valid || !r.entry_changed) {
+    return;
   }
+  g_thumbnail_cache.Invalidate(g_modal_layer_idx, g_modal_entry_idx);
+  state.MarkDirty();
+  state.MarkFilterDirty();
+  g_crystal_mesh_hash = -1;
+}
+
+// Immediate path: crystal/axis edits only MarkDirty; MarkFilterDirty (which
+// clears snapshot_intensity and locks upload via intensity_locked=true) is
+// gated on filter actually changing. This is what allows infinite-rays
+// accumulation to persist while the user drags a crystal slider.
+void CommitAllBuffersImmediate(GuiState& state) {
+  const auto r = ApplyBuffersToEntry(state);
+  if (!r.valid || !r.entry_changed) {
+    return;
+  }
+  g_thumbnail_cache.Invalidate(g_modal_layer_idx, g_modal_entry_idx);
+  state.MarkDirty();
+  if (r.filter_changed) {
+    state.MarkFilterDirty();
+  }
+  g_crystal_mesh_hash = -1;
+}
+
+// Centralized cleanup for every path that causes BeginPopup* to return false
+// on the frame after a close was requested. Three branches:
+//   1. mode-switch close+reopen: consume g_pending_mode_switch, arm
+//      g_pending_open, keep g_active_modal = kOpen, do NOT restore trackball
+//      (we want to resurface the modal on the next frame with all state
+//      intact).
+//   2. Immediate normal close (bottom Close / Esc / click-outside): changes
+//      are already committed every frame, so just clear g_active_modal.
+//      Trackball edits are user-intentional in Immediate mode — don't revert.
+//   3. Staged close (Cancel button / title-bar × / Esc): revert trackball to
+//      the Open-time snapshot and clear g_active_modal. This branch also
+//      handles the deleted-entry case (line 606-613 sets kNone before Begin,
+//      which is a benign no-op here because trackball restore is idempotent
+//      and the entry is gone anyway).
+void HandlePopupClosed(GuiState& state) {
+  if (g_pending_mode_switch) {
+    g_pending_mode_switch = false;
+    g_pending_open = true;
+    return;
+  }
+  if (state.modal_immediate_mode) {
+    g_active_modal = ActiveModal::kNone;
+    return;
+  }
+  std::memcpy(g_crystal_rotation, g_saved_rotation, sizeof(g_crystal_rotation));
+  g_crystal_zoom = g_saved_zoom;
+  g_crystal_mesh_hash = -1;
+  g_active_modal = ActiveModal::kNone;
 }
 
 }  // namespace
@@ -646,70 +715,115 @@ void RenderEditModals(GuiState& state) {
   }
 
   ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
-  if (ImGui::BeginPopupModal("Edit Entry", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    if (g_active_modal != ActiveModal::kOpen) {
-      ImGui::CloseCurrentPopup();
-      ImGui::EndPopup();
-      return;
+  // Mode dispatch: Staged → BeginPopupModal (blocks background, exposes title-bar ×
+  // via p_open). Immediate → BeginPopup (non-modal, no title bar — ImGui API does not
+  // support p_open on BeginPopup; close paths are bottom Close + Esc + click-outside,
+  // all equivalent "close preserving changes").
+  bool title_x_open = true;
+  bool window_open = false;
+  if (state.modal_immediate_mode) {
+    window_open = ImGui::BeginPopup("Edit Entry", ImGuiWindowFlags_AlwaysAutoResize);
+  } else {
+    window_open = ImGui::BeginPopupModal("Edit Entry", &title_x_open, ImGuiWindowFlags_AlwaysAutoResize);
+  }
+  if (!window_open) {
+    // BeginPopup* returned false — either the popup was never opened, or it was
+    // closed on the previous frame. If the latter, run centralized cleanup.
+    if (g_active_modal == ActiveModal::kOpen || g_pending_mode_switch) {
+      HandlePopupClosed(state);
     }
+    return;
+  }
+  // Staged title-bar ×: request a close; cleanup (trackball restore,
+  // g_active_modal reset) happens next frame via HandlePopupClosed's
+  // Staged-cancel branch, so cancel button / × / Esc share a single code path.
+  if (!state.modal_immediate_mode && !title_x_open) {
+    ImGui::CloseCurrentPopup();
+  }
+  // Race case: the entry was deleted between the OpenPopup call and this frame.
+  // Close the popup body immediately and let HandlePopupClosed run next frame.
+  if (g_active_modal != ActiveModal::kOpen) {
+    ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+    return;
+  }
 
-    // Snapshot the SetSelected flags BEFORE any BeginTabItem body runs —
-    // each body writes g_active_tab, which would otherwise overwrite the
-    // pending selection before later tabs (e.g. Filter) read it.
-    const ImGuiTabItemFlags crystal_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kCrystal) ?
-                                                ImGuiTabItemFlags_SetSelected :
-                                                ImGuiTabItemFlags_None;
-    const ImGuiTabItemFlags axis_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kAxis) ?
+  // Snapshot the SetSelected flags BEFORE any BeginTabItem body runs —
+  // each body writes g_active_tab, which would otherwise overwrite the
+  // pending selection before later tabs (e.g. Filter) read it.
+  const ImGuiTabItemFlags crystal_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kCrystal) ?
+                                              ImGuiTabItemFlags_SetSelected :
+                                              ImGuiTabItemFlags_None;
+  const ImGuiTabItemFlags axis_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kAxis) ?
+                                           ImGuiTabItemFlags_SetSelected :
+                                           ImGuiTabItemFlags_None;
+  const ImGuiTabItemFlags filter_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kFilter) ?
                                              ImGuiTabItemFlags_SetSelected :
                                              ImGuiTabItemFlags_None;
-    const ImGuiTabItemFlags filter_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kFilter) ?
-                                               ImGuiTabItemFlags_SetSelected :
-                                               ImGuiTabItemFlags_None;
 
-    // Per-tab dirty detection. The label picks up a trailing " *" when the
-    // in-flight buffer differs from the snapshot taken at modal-open. All
-    // labels share a fixed `###` suffix — with three hashes ImGui derives the
-    // internal ID purely from the `###suffix` portion, so the display string
-    // can vary ("Crystal" vs "Crystal *") without changing the tab's hash
-    // (otherwise the tab would lose its SelectedTabId the moment dirty flips,
-    // falling back to the first tab and hiding the user's work-in-progress).
-    FilterConfig filter_cmp = g_filter_buf;
-    filter_cmp.raypath_text = g_raypath_buf;
-    // Note: g_filter_buf_removed may be true while g_filter_initial_present is
-    // false — the user can click Remove on an entry that had no filter (a
-    // no-op for committed state). filter_dirty resolves to false in that case
-    // via the ternary below.
-    const bool crystal_dirty = g_crystal_buf != g_crystal_buf_snapshot;
-    const bool axis_dirty = g_axis_buf[0] != g_axis_buf_snapshot[0] || g_axis_buf[1] != g_axis_buf_snapshot[1] ||
-                            g_axis_buf[2] != g_axis_buf_snapshot[2];
-    const bool filter_dirty = g_filter_buf_removed ? g_filter_initial_present : (filter_cmp != g_filter_buf_snapshot);
-    const char* crystal_label = crystal_dirty ? "Crystal *###crystal_tab" : "Crystal###crystal_tab";
-    const char* axis_label = axis_dirty ? "Axis *###axis_tab" : "Axis###axis_tab";
-    const char* filter_label = filter_dirty ? "Filter *###filter_tab" : "Filter###filter_tab";
+  // Per-tab dirty detection. The label picks up a trailing " *" when the
+  // in-flight buffer differs from the snapshot taken at modal-open. All
+  // labels share a fixed `###` suffix — with three hashes ImGui derives the
+  // internal ID purely from the `###suffix` portion, so the display string
+  // can vary ("Crystal" vs "Crystal *") without changing the tab's hash
+  // (otherwise the tab would lose its SelectedTabId the moment dirty flips,
+  // falling back to the first tab and hiding the user's work-in-progress).
+  FilterConfig filter_cmp = g_filter_buf;
+  filter_cmp.raypath_text = g_raypath_buf;
+  // Note: g_filter_buf_removed may be true while g_filter_initial_present is
+  // false — the user can click Remove on an entry that had no filter (a
+  // no-op for committed state). filter_dirty resolves to false in that case
+  // via the ternary below.
+  const bool crystal_dirty = g_crystal_buf != g_crystal_buf_snapshot;
+  const bool axis_dirty = g_axis_buf[0] != g_axis_buf_snapshot[0] || g_axis_buf[1] != g_axis_buf_snapshot[1] ||
+                          g_axis_buf[2] != g_axis_buf_snapshot[2];
+  const bool filter_dirty = g_filter_buf_removed ? g_filter_initial_present : (filter_cmp != g_filter_buf_snapshot);
+  // Immediate mode: changes apply every frame, so "dirty" is not a meaningful
+  // state — suppress the * mark on all tabs regardless of buffer vs snapshot.
+  const bool show_dirty = !state.modal_immediate_mode;
+  const char* crystal_label = (show_dirty && crystal_dirty) ? "Crystal *###crystal_tab" : "Crystal###crystal_tab";
+  const char* axis_label = (show_dirty && axis_dirty) ? "Axis *###axis_tab" : "Axis###axis_tab";
+  const char* filter_label = (show_dirty && filter_dirty) ? "Filter *###filter_tab" : "Filter###filter_tab";
 
-    if (ImGui::BeginTabBar("##edit_modal_tabs")) {
-      if (ImGui::BeginTabItem(crystal_label, nullptr, crystal_flags)) {
-        g_active_tab = ActiveTab::kCrystal;
-        RenderCrystalModal(state);
-        ImGui::EndTabItem();
-      }
-      if (ImGui::BeginTabItem(axis_label, nullptr, axis_flags)) {
-        g_active_tab = ActiveTab::kAxis;
-        RenderAxisModal(state);
-        ImGui::EndTabItem();
-      }
-      if (ImGui::BeginTabItem(filter_label, nullptr, filter_flags)) {
-        g_active_tab = ActiveTab::kFilter;
-        RenderFilterModal(state);
-        ImGui::EndTabItem();
-      }
-      ImGui::EndTabBar();
-      // Consumed pending selection after BeginTabItem reads the flag.
-      g_pending_tab_select = false;
+  if (ImGui::BeginTabBar("##edit_modal_tabs")) {
+    if (ImGui::BeginTabItem(crystal_label, nullptr, crystal_flags)) {
+      g_active_tab = ActiveTab::kCrystal;
+      RenderCrystalModal(state);
+      ImGui::EndTabItem();
     }
+    if (ImGui::BeginTabItem(axis_label, nullptr, axis_flags)) {
+      g_active_tab = ActiveTab::kAxis;
+      RenderAxisModal(state);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(filter_label, nullptr, filter_flags)) {
+      g_active_tab = ActiveTab::kFilter;
+      RenderFilterModal(state);
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+    // Consumed pending selection after BeginTabItem reads the flag.
+    g_pending_tab_select = false;
+  }
 
-    ImGui::Separator();
-    // Modal-level OK / Cancel.
+  // Immediate mode: push buffer→entry every frame (diff-gated inside
+  // CommitAllBuffersImmediate; no-op when nothing changed). Esc / click-outside
+  // close are default BeginPopup behaviors — no explicit handling needed.
+  if (state.modal_immediate_mode) {
+    CommitAllBuffersImmediate(state);
+  }
+
+  ImGui::Separator();
+  // Bottom row: mode-specific buttons + Immediate mode checkbox anchored
+  // to the right edge.
+  if (state.modal_immediate_mode) {
+    // Immediate: single Close (no Cancel semantics — changes are already applied).
+    if (ImGui::Button("Close##edit_modal", ImVec2(80, 0))) {
+      g_active_modal = ActiveModal::kNone;
+      ImGui::CloseCurrentPopup();
+    }
+  } else {
+    // Staged: OK / Cancel.
     // OK gate: when the user has buffered a Remove Filter intent, raypath
     // validation is irrelevant (we won't write the buffer); otherwise validate
     // the in-flight raypath against the Crystal-tab buffer's type.
@@ -740,16 +854,41 @@ void RenderEditModals(GuiState& state) {
     }
     ImGui::SameLine();
     if (ImGui::Button("Cancel##edit_modal", ImVec2(80, 0))) {
-      // Restore trackball state (Crystal tab's only side-effect that survives Cancel).
-      std::memcpy(g_crystal_rotation, g_saved_rotation, sizeof(g_crystal_rotation));
-      g_crystal_zoom = g_saved_zoom;
-      g_crystal_mesh_hash = -1;
-      g_active_modal = ActiveModal::kNone;
+      // Cleanup (trackball restore, g_active_modal reset) is delegated to
+      // HandlePopupClosed on the next frame via the !window_open path, so
+      // Cancel / title-bar × / Esc all share a single code path.
       ImGui::CloseCurrentPopup();
     }
-
-    ImGui::EndPopup();
   }
+
+  // Immediate-mode toggle checkbox, right-aligned on the button row.
+  ImGui::SameLine();
+  constexpr float kCheckboxApproxWidth = 110.0f;  // "Immediate" label + checkbox square + padding
+  const float avail = ImGui::GetContentRegionAvail().x;
+  if (avail > kCheckboxApproxWidth) {
+    ImGui::Dummy(ImVec2(avail - kCheckboxApproxWidth, 0));
+    ImGui::SameLine();
+  }
+  const bool prev_immediate = state.modal_immediate_mode;
+  if (ImGui::Checkbox("Immediate##edit_modal", &state.modal_immediate_mode) &&
+      prev_immediate != state.modal_immediate_mode) {
+    g_pending_mode_switch = true;
+    if (state.modal_immediate_mode) {
+      // Staged → Immediate: commit in-flight buffer to state so any pending
+      // edits become the live baseline. Use the Immediate path (not
+      // CommitAllBuffers) to avoid MarkFilterDirty clearing the display on
+      // crystal-only changes — that would zero infinite-rays accumulation
+      // at the exact moment the user wants to start observing live changes.
+      CommitAllBuffersImmediate(state);
+    } else {
+      // Immediate → Staged: re-snapshot the current buffer state as the new
+      // dirty-compare baseline (dirty-mark starts from zero going forward).
+      SnapshotAllBuffers(state);
+    }
+    ImGui::CloseCurrentPopup();
+  }
+
+  ImGui::EndPopup();
 }
 
 }  // namespace lumice::gui
