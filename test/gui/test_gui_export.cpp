@@ -706,7 +706,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       // First export with dual fisheye override
       g_ac_state.Reset();
       g_ac_state.with_overlay = false;
-      g_ac_state.lens_type_override = 4;
+      g_ac_state.lens_type_override = gui::kLensTypeDualFisheyeEqualArea;
       g_ac_state.dst_w = tex_w;
       g_ac_state.dst_h = tex_h;
       g_ac_state.requested = true;
@@ -718,7 +718,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       // Second export (same params)
       g_ac_state.Reset();
       g_ac_state.with_overlay = false;
-      g_ac_state.lens_type_override = 4;
+      g_ac_state.lens_type_override = gui::kLensTypeDualFisheyeEqualArea;
       g_ac_state.dst_w = tex_w;
       g_ac_state.dst_h = tex_h;
       g_ac_state.requested = true;
@@ -774,7 +774,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
 
       // EV = 0
       g_ac_state.Reset();
-      g_ac_state.lens_type_override = 4;
+      g_ac_state.lens_type_override = gui::kLensTypeDualFisheyeEqualArea;
       g_ac_state.dst_w = tex_w;
       g_ac_state.dst_h = tex_h;
       g_ac_state.exposure_offset = 0.0f;
@@ -786,7 +786,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
 
       // EV = +2
       g_ac_state.Reset();
-      g_ac_state.lens_type_override = 4;
+      g_ac_state.lens_type_override = gui::kLensTypeDualFisheyeEqualArea;
       g_ac_state.dst_w = tex_w;
       g_ac_state.dst_h = tex_h;
       g_ac_state.exposure_offset = 2.0f;
@@ -831,7 +831,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
 
       g_ac_state.Reset();
       g_ac_state.with_overlay = false;
-      g_ac_state.lens_type_override = 7;
+      g_ac_state.lens_type_override = gui::kLensTypeRectangular;
       g_ac_state.dst_w = dst_w;
       g_ac_state.dst_h = dst_h;
       g_ac_state.requested = true;
@@ -842,7 +842,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
 
       g_ac_state.Reset();
       g_ac_state.with_overlay = false;
-      g_ac_state.lens_type_override = 7;
+      g_ac_state.lens_type_override = gui::kLensTypeRectangular;
       g_ac_state.dst_w = dst_w;
       g_ac_state.dst_h = dst_h;
       g_ac_state.requested = true;
@@ -901,7 +901,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
 
       // EV = 0
       g_ac_state.Reset();
-      g_ac_state.lens_type_override = 7;
+      g_ac_state.lens_type_override = gui::kLensTypeRectangular;
       g_ac_state.dst_w = dst_w;
       g_ac_state.dst_h = dst_h;
       g_ac_state.exposure_offset = 0.0f;
@@ -913,7 +913,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
 
       // EV = +2
       g_ac_state.Reset();
-      g_ac_state.lens_type_override = 7;
+      g_ac_state.lens_type_override = gui::kLensTypeRectangular;
       g_ac_state.dst_w = dst_w;
       g_ac_state.dst_h = dst_h;
       g_ac_state.exposure_offset = 2.0f;
@@ -929,6 +929,136 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       constexpr double kMinMeanThreshold = 5.0 / 255.0;
       IM_CHECK(mean_a > kMinMeanThreshold);
       IM_CHECK(mean_b > 1.3 * mean_a);
+    };
+  }
+
+  // ACI1 (source inheritance, unit-level): ConfigureDualFisheyeExportParams /
+  // ConfigureEquirectExportParams must overwrite ONLY view_proj / overlay / bg.
+  // The source sub-struct must be inherited from the caller (simulating
+  // live-preview's kDualFisheyeOverlap). This pins down the invariant that the
+  // PSNR-parity test (ACI2) relies on: if a future refactor makes Configure*
+  // zero-out source, PSNR-parity will diverge but this direct-field test will
+  // also fail in a more surgical way, pointing at the exact regression.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export_params_decompose", "aci1_configure_preserves_source");
+    t->TestFunc = [](ImGuiTestContext* /*ctx*/) {
+      // Sentinel values distinct from defaults so both overwrite-paths and
+      // inherit-paths are observable.
+      constexpr float kSentinelMaxAbsDz = 0.1234f;
+      constexpr float kSentinelRScale = 0.5678f;
+
+      // Exercise ConfigureDualFisheyeExportParams.
+      {
+        gui::PreviewParams params{};
+        params.source.max_abs_dz = kSentinelMaxAbsDz;
+        params.source.r_scale = kSentinelRScale;
+        // Non-default overlay / bg to observe the Disabled() overwrite.
+        params.overlay.show_horizon = true;
+        params.overlay.show_grid = true;
+        params.bg.enabled = true;
+        params.bg.alpha = 0.7f;
+
+        gui::ConfigureDualFisheyeExportParams(params);
+
+        // source: inherited (NOT overwritten).
+        IM_CHECK_EQ(params.source.max_abs_dz, kSentinelMaxAbsDz);
+        IM_CHECK_EQ(params.source.r_scale, kSentinelRScale);
+        // view_proj: overwritten to export canonical values.
+        IM_CHECK_EQ(params.view_proj.lens_type, gui::kLensTypeDualFisheyeEqualArea);
+        IM_CHECK_EQ(params.view_proj.fov, 180.0f);
+        IM_CHECK_EQ(params.view_proj.visible, gui::kVisibleFull);
+        // overlay / bg: overwritten by Disabled() defaults.
+        IM_CHECK_EQ(params.overlay.show_horizon, false);
+        IM_CHECK_EQ(params.overlay.show_grid, false);
+        IM_CHECK_EQ(params.bg.enabled, false);
+      }
+
+      // Exercise ConfigureEquirectExportParams with different sentinel values.
+      {
+        gui::PreviewParams params{};
+        params.source.max_abs_dz = kSentinelMaxAbsDz;
+        params.source.r_scale = kSentinelRScale;
+        params.overlay.show_sun_circles = true;
+        params.bg.enabled = true;
+
+        gui::ConfigureEquirectExportParams(params);
+
+        IM_CHECK_EQ(params.source.max_abs_dz, kSentinelMaxAbsDz);
+        IM_CHECK_EQ(params.source.r_scale, kSentinelRScale);
+        IM_CHECK_EQ(params.view_proj.lens_type, gui::kLensTypeRectangular);
+        IM_CHECK_EQ(params.view_proj.fov, 180.0f);
+        IM_CHECK_EQ(params.view_proj.visible, gui::kVisibleFull);
+        IM_CHECK_EQ(params.overlay.show_sun_circles, false);
+        IM_CHECK_EQ(params.bg.enabled, false);
+      }
+    };
+  }
+
+  // ACI2 (preview-vs-export parity, end-to-end): When the live-preview
+  // ViewProjection already matches kDualFisheyeExportViewProj bit-for-bit,
+  // rendering via (a) preview params directly and (b) BuildExportParams +
+  // ConfigureDualFisheyeExportParams must produce byte-identical output (PSNR
+  // ≥ 40 dB). This invariant holds because Configure* only overwrites
+  // view_proj / overlay / bg — NOT source. If a future refactor makes
+  // Configure* zero-out source (or alter any field not present in the preview
+  // path), the two paths diverge and PSNR drops. DO NOT "fix" this test by
+  // removing the Configure* call on path B — doing so makes it compare self to
+  // self and defeats the regression detection purpose.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export_params_decompose", "aci2_preview_vs_export_parity");
+    t->GuiFunc = AcGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_export_test.Reset();
+      g_ac_state.Reset();
+
+      // Make live-preview's ViewProjection match kDualFisheyeExportViewProj
+      // bit-for-bit so that Configure*'s view_proj overwrite is a no-op.
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeEqualArea;
+      gui::g_state.renderer.fov = 180.0f;
+      gui::g_state.renderer.elevation = 0.0f;
+      gui::g_state.renderer.azimuth = 0.0f;
+      gui::g_state.renderer.roll = 0.0f;
+      gui::g_state.renderer.visible = gui::kVisibleFull;
+      // Disable overlay / bg in live preview so Configure*'s Disabled() is also a no-op.
+      gui::g_state.show_horizon = false;
+      gui::g_state.show_grid = false;
+      gui::g_state.show_sun_circles = false;
+      gui::g_state.bg_show = false;
+
+      g_export_test.upload_requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_export_test.upload_done);
+      // Give app_panels.cpp a frame to sync renderer/state fields into g_preview_vp.params.
+      ctx->Yield(3);
+      IM_CHECK(gui::g_preview_vp.vp_w > 0);
+      IM_CHECK(gui::g_preview_vp.vp_h > 0);
+
+      // Path A: no Configure override — params are live-preview as-is.
+      g_ac_state.Reset();
+      g_ac_state.with_overlay = false;
+      g_ac_state.lens_type_override = -1;  // no Configure call
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
+      IM_CHECK(g_ac_state.ok);
+      std::vector<unsigned char> rgba_preview = std::move(g_ac_state.rgba);
+
+      // Path B: Configure* IS called (matches DoExportDualFisheyeEqualAreaPng).
+      g_ac_state.Reset();
+      g_ac_state.with_overlay = false;
+      g_ac_state.lens_type_override = gui::kLensTypeDualFisheyeEqualArea;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
+      IM_CHECK(g_ac_state.ok);
+      IM_CHECK_EQ(rgba_preview.size(), g_ac_state.rgba.size());
+
+      double psnr = ComputePsnrRgba(rgba_preview, g_ac_state.rgba);
+      fprintf(stderr, "[ACI2] preview-vs-export parity PSNR = %.2f dB\n", psnr);
+      // 40 dB: well above the "identical up to rounding" bar (expect effectively
+      // infinite in practice on stable drivers).
+      IM_CHECK(psnr >= 40.0);
     };
   }
 }
