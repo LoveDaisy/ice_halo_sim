@@ -12,82 +12,44 @@
 #include "gui/crystal_preview.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
+#include "gui/slider_mapping.hpp"
 #include "imgui.h"
 #include "lumice.h"
 
 namespace lumice::gui {
 
 namespace {
-// LogLinear hybrid mapping constants.
-// Tuned for prism_h [0, 100] range. Re-validate before reusing for other ranges.
-// REQUIRES: min_val == 0, max_val > kLogLinearX0 at call site.
-constexpr float kLogLinearX0 = 0.01f;       // Value threshold: linear below, log above
-constexpr float kLogLinearTSwitch = 0.15f;  // Slider position threshold (fraction of [0,1])
-
-// Log-scale: compute normalized [0,1] position from value in [min_val, max_val].
-static float LogValueToNorm(float value, float min_val, float max_val) {
-  value = std::max(value, min_val);
-  float log_ratio = std::log(max_val / min_val);
-  float norm = std::log(value / min_val) / log_ratio;
-  return std::clamp(norm, 0.0f, 1.0f);
-}
-
-// Log-scale: compute value from normalized [0,1] position.
-static float LogNormToValue(float norm, float min_val, float max_val) {
-  float log_ratio = std::log(max_val / min_val);
-  return min_val * std::exp(norm * log_ratio);
-}
-
-// LogLinear hybrid: compute normalized [0,1] position from value in [0, max_val].
-// Linear in [0, x0], log in [x0, max_val], C0 continuous at x0.
-static float LogLinearValueToNorm(float value, float max_val) {
-  value = std::clamp(value, 0.0f, max_val);
-  float log_ratio = std::log(max_val / kLogLinearX0);
-  float norm;
-  if (value <= kLogLinearX0) {
-    norm = kLogLinearTSwitch * value / kLogLinearX0;
-  } else {
-    norm = kLogLinearTSwitch + (1.0f - kLogLinearTSwitch) * std::log(value / kLogLinearX0) / log_ratio;
-  }
-  return std::clamp(norm, 0.0f, 1.0f);
-}
-
-// LogLinear hybrid: compute value from normalized [0,1] position.
-static float LogLinearNormToValue(float norm, float max_val) {
-  float log_ratio = std::log(max_val / kLogLinearX0);
-  if (norm <= kLogLinearTSwitch) {
-    return kLogLinearX0 * norm / kLogLinearTSwitch;
-  }
-  float t_log = (norm - kLogLinearTSwitch) / (1.0f - kLogLinearTSwitch);
-  return kLogLinearX0 * std::exp(t_log * log_ratio);
-}
 // Render a slider with nonlinear scale mapping (sqrt/log/loglinear/linear).
 // Must be called between PushItemWidth/PopItemWidth. Does NOT clamp — caller must clamp after.
 // Note: `fmt` is only used for kLinear mode; nonlinear modes display a blank slider label.
 static bool RenderNonlinearSlider(const char* slider_id, float* value, float min_val, float max_val, const char* fmt,
                                   SliderScale scale) {
   bool changed = false;
+  // ImGuiSliderFlags_NoInput disables Ctrl+Click → InputText across all
+  // SliderFloat / SliderInt calls to work around a macOS Screen Recording bug
+  // that pollutes modifier state and traps sliders in text-edit mode. Users
+  // enter values via the paired InputFloat on the right side of SliderWithInput.
   if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
     float sqrt_val = std::sqrt(std::max(*value, 0.0f));
     float sqrt_max = std::sqrt(max_val);
-    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "")) {
+    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "", ImGuiSliderFlags_NoInput)) {
       *value = sqrt_val * sqrt_val;
       changed = true;
     }
   } else if (scale == SliderScale::kLog && min_val > 0.0f) {
-    float norm = LogValueToNorm(*value, min_val, max_val);
-    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
-      *value = LogNormToValue(norm, min_val, max_val);
+    float norm = slider_mapping::LogValueToNorm(*value, min_val, max_val);
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "", ImGuiSliderFlags_NoInput)) {
+      *value = slider_mapping::LogNormToValue(norm, min_val, max_val);
       changed = true;
     }
   } else if (scale == SliderScale::kLogLinear && min_val == 0.0f) {
-    float norm = LogLinearValueToNorm(*value, max_val);
-    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
-      *value = LogLinearNormToValue(norm, max_val);
+    float norm = slider_mapping::LogLinearValueToNorm(*value, max_val);
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "", ImGuiSliderFlags_NoInput)) {
+      *value = slider_mapping::LogLinearNormToValue(norm, max_val);
       changed = true;
     }
   } else {
-    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt);
+    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt, ImGuiSliderFlags_NoInput);
   }
   return changed;
 }
@@ -231,7 +193,7 @@ static bool SliderIntWithInput(const char* label, int* value, int min_val, int m
   bool changed = false;
 
   ImGui::PushItemWidth(slider_w);
-  changed |= ImGui::SliderInt(slider_id, value, min_val, max_val);
+  changed |= ImGui::SliderInt(slider_id, value, min_val, max_val, "%d", ImGuiSliderFlags_NoInput);
   ImGui::PopItemWidth();
 
   ImGui::SameLine();

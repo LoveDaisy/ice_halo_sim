@@ -288,6 +288,7 @@ int main(int argc, char** argv) {
   RegisterP1RunningTests(engine);
   RegisterP2InteractionModalTests(engine);
   RegisterOverlayLabelTests(engine);
+  RegisterFaceNumberOverlayTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete
@@ -349,7 +350,12 @@ int main(int argc, char** argv) {
       gui::RenderLogPanel(layout_width, layout_height);
     }
     gui::RenderStatusBar(layout_width, layout_height);
-    gui::RenderEditModals(gui::g_state);
+    // Intentional deviation from plan (which suggested nullptr): the test
+    // harness owns a real GLFW window (hidden in CI), so passing it yields
+    // a realistic monitor-aware size clamp when a display server is present.
+    // In fully headless CI `glfwGetMonitors` returns 0 → helper returns false
+    // → caller falls back to FLT_MAX, matching the plan-intended behavior.
+    gui::RenderEditModals(gui::g_state, window);
     gui::RenderUnsavedPopup(window);
 
     ImGui::Render();

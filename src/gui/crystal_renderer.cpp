@@ -268,6 +268,50 @@ void CrystalRenderer::UpdateMesh(const float* vertices, int vertex_count, const 
   glBufferData(GL_ELEMENT_ARRAY_BUFFER, triangle_count * 3 * sizeof(int), triangles, GL_DYNAMIC_DRAW);
 }
 
+float CrystalRenderer::ComputeDist(float zoom) {
+  float half_tan = std::tan(kFovDeg * kDeg2Rad * 0.5f);
+  return zoom / half_tan;
+}
+
+void CrystalRenderer::ComputeMvp(const float rotation[16], float zoom, int width, int height, float out_mvp[16]) {
+  // Build perspective projection
+  float aspect = static_cast<float>(width) / static_cast<float>(height);
+  float fov_rad = kFovDeg * kDeg2Rad;
+  float half_tan = std::tan(fov_rad * 0.5f);
+  float dist = ComputeDist(zoom);
+  float near_plane = std::max(dist - 10.0f, 0.1f);
+  float far_plane = dist + 10.0f;
+  float f = 1.0f / half_tan;
+
+  // Perspective matrix (column-major)
+  float proj[16] = {};
+  proj[0] = f / aspect;
+  proj[5] = f;
+  proj[10] = -(far_plane + near_plane) / (far_plane - near_plane);
+  proj[11] = -1.0f;
+  proj[14] = -2.0f * far_plane * near_plane / (far_plane - near_plane);
+
+  // View translation: translate(0, 0, -dist)
+  // Combined: view_rot = rotation with translation applied
+  float view_rot[16];
+  std::memcpy(view_rot, rotation, 16 * sizeof(float));
+  view_rot[12] = 0.0f;
+  view_rot[13] = 0.0f;
+  view_rot[14] = -dist;
+  view_rot[15] = 1.0f;
+
+  // MVP = proj * view_rot
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      float sum = 0.0f;
+      for (int k = 0; k < 4; k++) {
+        sum += proj[i + k * 4] * view_rot[k + j * 4];
+      }
+      out_mvp[i + j * 4] = sum;
+    }
+  }
+}
+
 void CrystalRenderer::Render(const float rotation[16], float zoom, CrystalStyle style) {
   if (total_edge_count_ <= 0) {
     return;
@@ -288,46 +332,20 @@ void CrystalRenderer::Render(const float rotation[16], float zoom, CrystalStyle 
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glEnable(GL_DEPTH_TEST);
 
-  // Build perspective projection
-  float aspect = static_cast<float>(width_) / static_cast<float>(height_);
-  constexpr float kFovDeg = 30.0f;
-  constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
-  float fov_rad = kFovDeg * kDeg2Rad;
-  float half_tan = std::tan(fov_rad * 0.5f);
-  float dist = zoom / half_tan;
-  float near_plane = std::max(dist - 10.0f, 0.1f);
-  float far_plane = dist + 10.0f;
-  float f = 1.0f / half_tan;
+  // MVP shared with face-number overlay (see ComputeMvp).
+  float mvp[16] = {};
+  ComputeMvp(rotation, zoom, width_, height_, mvp);
 
-  // Perspective matrix (column-major)
-  float proj[16] = {};
-  proj[0] = f / aspect;
-  proj[5] = f;
-  proj[10] = -(far_plane + near_plane) / (far_plane - near_plane);
-  proj[11] = -1.0f;
-  proj[14] = -2.0f * far_plane * near_plane / (far_plane - near_plane);
-
-  // View translation: translate(0, 0, -dist)
-  // Combined: view_rot = rotation with translation applied
+  // view_rot for eye-space midpoint transform used by edge classification
+  // below. Reuses ComputeDist so FOV / zoom->dist mapping has a single source
+  // of truth with ComputeMvp.
+  float dist = ComputeDist(zoom);
   float view_rot[16];
   std::memcpy(view_rot, rotation, 16 * sizeof(float));
-  // Set translation column: (0, 0, -dist)
   view_rot[12] = 0.0f;
   view_rot[13] = 0.0f;
   view_rot[14] = -dist;
   view_rot[15] = 1.0f;
-
-  // MVP = proj * view_rot
-  float mvp[16] = {};
-  for (int i = 0; i < 4; i++) {
-    for (int j = 0; j < 4; j++) {
-      float sum = 0.0f;
-      for (int k = 0; k < 4; k++) {
-        sum += proj[i + k * 4] * view_rot[k + j * 4];
-      }
-      mvp[i + j * 4] = sum;
-    }
-  }
 
   // Classify edges: front vs back using perspective-correct face normal test.
   // In eye space, camera is at origin. A face is front-facing if dot(n_eye, -p_eye) > 0,

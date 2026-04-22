@@ -291,6 +291,10 @@ typedef struct LUMICE_CrystalMesh_ {
   // Edge i has two face normals: [i*6..i*6+2] and [i*6+3..i*6+5].
   // Boundary edges store the same normal twice.
   float edge_face_normals[LUMICE_MAX_CRYSTAL_EDGES * 6];
+  // Per-triangle face number (matches raypath filter numbering convention):
+  //   basal = 1/2; prism = 3..8; upper pyramidal = 13..18; lower = 23..28.
+  // -1 for unrecognized orientations (kInvalidId in core).
+  int face_numbers[LUMICE_MAX_CRYSTAL_TRIANGLES];
 } LUMICE_CrystalMesh;
 
 LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* server, const char* crystal_json, LUMICE_CrystalMesh* out);

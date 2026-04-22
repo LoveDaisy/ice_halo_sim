@@ -27,6 +27,22 @@ namespace lumice {
  */
 bool IsLegalFace(CrystalKind kind, int face);
 
+/**
+ * @brief Compute face-number map for a hexagonal crystal mesh.
+ *
+ * Precondition: @p face_n must contain unit per-triangle normals
+ *   (stride = 3 floats per triangle, each normal length == 1).
+ *
+ * Output values match the face-number convention used by raypath filters:
+ *   basal = 1 / 2; prism = 3..8; upper pyramidal = 13..18; lower = 23..28.
+ * Returns kInvalidId for triangles whose normals do not match any hex face.
+ *
+ * @param face_cnt  Number of triangles.
+ * @param face_n    Unit per-triangle normals, length = face_cnt * 3.
+ * @param fn_map    Output buffer, length = face_cnt.
+ */
+void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map);
+
 enum class CrystalType {
   kUnknown,
   kPrism,

@@ -3,7 +3,16 @@
 #include <cstring>
 #include <thread>
 
-#include "test_gui_shared.hpp"
+#include "gui/log_sink.hpp"  // ImGuiLogSink (for log_panel_above_left_panel test sink injection)
+// imgui_internal.h is generally an anti-pattern, but z-order assertions need
+// direct ImGuiContext::Windows access. The relied-on semantics
+// (BringWindowToDisplayFront splices to g.Windows back; creation with
+// NoBringToFrontOnFocus does push_front = bottom) are documented in the
+// convention block at the top of src/gui/app_panels.cpp. Any ImGui upgrade
+// that alters either rule must update both that comment and the
+// p1_layout / p1_edit_modal z-order assertions below.
+#include "imgui_internal.h"
+#include "test_gui_shared.hpp"  // declares g_enable_log_panel (toggle gate for RenderLogPanel)
 
 // ========== Helpers for interaction tests ==========
 
@@ -303,6 +312,82 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: scrum-gui-polish-v12 / task-modal-preview-cross-tab — the persistent
+  // crystal preview pane (##modal_left_pane) must be reachable from every tab,
+  // and the right TabBar pane (##modal_right_pane) must render with non-zero
+  // width on the first frame (harden against the 0.0f right-width fallback
+  // discussed in plan §3.2).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "preview_visible_across_tabs");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Open Edit Entry modal via the Crystal edit shortcut.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      // Left pane anchor: preview InvisibleButton must exist anywhere under
+      // the modal (glob walks into BeginChild windows too).
+      IM_CHECK(ctx->ItemExists("**/##modal_preview_interact"));
+      // Right pane anchor: Crystal tab header must exist — proves the right
+      // BeginChild resolved to non-zero width so TabBar rendered.
+      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
+
+      // Switch to Axis tab — left preview should still be present.
+      ctx->ItemClick("**/###axis_tab");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##modal_preview_interact"));
+
+      // Switch to Filter tab — same invariant.
+      ctx->ItemClick("**/###filter_tab");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##modal_preview_interact"));
+
+      // Close modal (cleanup).
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // P1: scrum-gui-polish-v12 / task-modal-preview-cross-tab — trackball
+  // rotation applied on the preview must survive tab switches (the preview
+  // is persistent, so ImGui must not reinitialize its child state on
+  // tab-active change).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "preview_rotation_persists_across_tabs");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      // Baseline rotation matrix before any drag.
+      float before[16];
+      std::memcpy(before, gui::g_crystal_rotation, sizeof before);
+
+      // Drag on the preview to apply a non-zero trackball rotation.
+      ctx->ItemDragWithDelta("**/##modal_preview_interact", ImVec2(60.0f, 0.0f));
+      ctx->Yield(2);
+      IM_CHECK(std::memcmp(before, gui::g_crystal_rotation, sizeof before) != 0);
+
+      // Freeze post-drag state as the invariant baseline for the tab switch.
+      float drag_state[16];
+      std::memcpy(drag_state, gui::g_crystal_rotation, sizeof drag_state);
+
+      // Switch tabs (Axis then back to Crystal) — rotation must not reset.
+      ctx->ItemClick("**/###axis_tab");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###crystal_tab");
+      ctx->Yield(2);
+      IM_CHECK(std::memcmp(drag_state, gui::g_crystal_rotation, sizeof drag_state) == 0);
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
   // P1: Edit modal OK without any change must NOT clear the rendered preview
   // or arm Revert. Regression guard for scrum-gui-polish-v7 152.2: previously
   // CommitAllBuffers unconditionally MarkFilterDirty()'d after any OK,
@@ -591,6 +676,209 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: scrum-gui-polish-v12 / task-immediate-modal-passthrough — Immediate
+  // modal external-click passthrough: clicks outside the Edit modal must
+  // reach background UI (e.g. topbar menus open) and must NOT close the
+  // modal. Asserts both the passthrough direction (external button responds)
+  // and the persistence direction (modal stays visible).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_passthrough_external_click");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = false;
+      ctx->Yield(2);
+
+      // Open the Edit modal in Staged mode, then switch to Immediate (covers
+      // the Staged → Immediate mode-switch consume path as a side benefit).
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Immediate##edit_modal");
+      ctx->Yield(8);
+
+      // Modal is visible.
+      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
+
+      // Click an external topbar button. ##TopBar/Save opens the Save menu;
+      // picked over ##TopBar/New because the default Immediate window origin
+      // (ImGui default (60, 60) since no position management this task) may
+      // overlap the upper-left area, and over Scene-group inputs that can be
+      // geometrically covered by the AlwaysAutoResize window extending
+      // downward.
+      ctx->ItemClick("##TopBar/Save");
+      ctx->Yield(2);
+
+      // Passthrough direction: the Save click reached the background button —
+      // the Save menu opened (Save Copy appears as a child). Depends on the
+      // topbar Save menu containing a "Save Copy" entry; rename the menu item
+      // and this assertion must be updated (see p1_file/save_menu_structure
+      // for the canonical menu contract).
+      IM_CHECK(ctx->ItemExists("**/Save Copy"));
+      // Persistence direction: the external click did NOT close the modal.
+      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
+
+      // Dismiss the Save menu, then close the modal cleanly.
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(4);
+      // Close-button contract: modal is gone after Close. Duplicates the
+      // core check from immediate_close_button_closes but keeps this test
+      // self-contained so a Close regression does not silently pass by
+      // relying on the next test's ResetTestState() to mask it.
+      IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v12 / task-immediate-modal-passthrough — Immediate
+  // modal explicit close: the bottom Close button resets g_active_modal,
+  // and the next frame's Begin(p_open=false) → !window_open path tears the
+  // window down. Asserts the modal disappears after a single Close click.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_close_button_closes");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
+
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(4);
+      IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
+
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v12 / task-gui-window-zorder — Symptom A guard.
+  // After T3 changed the Immediate Edit modal to ImGui::Begin (regular window),
+  // background panels lacking NoBringToFrontOnFocus would be raised on click and
+  // occlude the modal. Step 2a/2b added the flag to all 6 background panels.
+  // This test focuses ##LeftPanel programmatically (no business side effect, no
+  // popup) and asserts the Edit Entry stays at g.Windows.back() — i.e. topmost.
+  // Reverse-validation: removing NoBringToFrontOnFocus from ##LeftPanel must
+  // make the z-order assertion fail (g.Windows.back() becomes ##LeftPanel).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_modal_above_background_panel");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      // Open the Immediate Edit modal.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
+
+      // Focus ##LeftPanel via the Test Engine's WindowFocus API (no business
+      // side effect; goes through ImGui::FocusWindow). Without
+      // NoBringToFrontOnFocus this would splice ##LeftPanel to g.Windows.back().
+      ctx->WindowFocus("##LeftPanel");
+      ctx->Yield(2);
+
+      // Core assertion: Edit Entry is still the topmost root window.
+      // BringWindowToDisplayFront splices to back of g.Windows; since
+      // scrum-gui-polish-v12/task-modal-preview-cross-tab the modal contains
+      // BeginChild panes (##modal_left_pane / ##modal_right_pane) that appear
+      // after their parent in g.Windows with ImGuiWindowFlags_ChildWindow set;
+      // walk backwards to find the topmost non-child window for the invariant.
+      ImGuiContext* g = ImGui::GetCurrentContext();
+      IM_CHECK(g->Windows.Size > 0);
+      ImGuiWindow* topmost_root = nullptr;
+      for (int i = g->Windows.Size - 1; i >= 0; i--) {
+        ImGuiWindow* w = g->Windows[i];
+        if ((w->Flags & ImGuiWindowFlags_ChildWindow) == 0) {
+          topmost_root = w;
+          break;
+        }
+      }
+      IM_CHECK(topmost_root != nullptr);
+      IM_CHECK_STR_EQ(topmost_root->Name, "Edit Entry");
+
+      // Behavior fallback: Close still works (sanity that the modal is
+      // actually responding to clicks, not just visually layered).
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(4);
+      IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
+
+      // ResetTestState() (calls ResetModalState() which restores
+      // modal_immediate_mode = false). Belt-and-braces against IM_CHECK early-
+      // return: even if an assertion above fires, the next test's first action
+      // is its own ResetTestState() — but call it here too for clarity.
+      ResetTestState();
+    };
+  }
+
+  // P1: scrum-gui-polish-v12 / task-gui-window-zorder — z-order invariant
+  // between LogPanel (Layer 3, no flag, push_back -> top) and LeftPanel
+  // (background cluster, NoBringToFrontOnFocus, push_front -> bottom).
+  // Asserts the index of ##LogPanel in g.Windows is greater than that of
+  // ##LeftPanel after we explicitly try to raise ##LeftPanel. See the
+  // z-order convention block at the top of src/gui/app_panels.cpp.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_layout", "log_panel_above_left_panel");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // RenderLogPanel is gated twice in the test harness:
+      //   1. test_gui_main.cpp's main loop only calls it if g_enable_log_panel
+      //   2. RenderLogPanel itself early-returns if g_imgui_log_sink is null
+      //      (the sink is normally initialized only when --log-panel is on).
+      // RAII guard restores both gates regardless of whether IM_CHECK fires —
+      // ResetTestState() doesn't touch these test-harness CLI globals, so a
+      // mid-test assertion failure would otherwise leak the log panel into
+      // every subsequent test in this binary.
+      struct LogPanelGateGuard {
+        bool prev_enable;
+        std::shared_ptr<gui::ImGuiLogSink> prev_sink;
+        LogPanelGateGuard() : prev_enable(g_enable_log_panel), prev_sink(gui::g_imgui_log_sink) {
+          g_enable_log_panel = true;
+          if (!gui::g_imgui_log_sink) {
+            gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
+          }
+        }
+        ~LogPanelGateGuard() {
+          gui::g_imgui_log_sink = prev_sink;
+          g_enable_log_panel = prev_enable;
+          gui::g_state.log_panel_open = false;
+        }
+      } gate_guard;
+
+      gui::g_state.log_panel_open = true;
+      ctx->Yield(4);
+
+      // Try to raise ##LeftPanel. Without NoBringToFrontOnFocus it would
+      // splice ##LeftPanel to the back of g.Windows.
+      ctx->WindowFocus("##LeftPanel");
+      ctx->Yield(2);
+
+      // ImGui creates windows without NoBringToFrontOnFocus via
+      // g.Windows.push_back (= visual top); windows with the flag via
+      // push_front (= visual bottom). LogPanel intentionally has no flag
+      // (Layer 3 floating); LeftPanel does (background cluster). Therefore
+      // LogPanel's index in g.Windows must be greater than LeftPanel's.
+      ImGuiContext* g = ImGui::GetCurrentContext();
+      IM_CHECK(g != nullptr);
+      int log_idx = -1;
+      int left_idx = -1;
+      for (int i = 0; i < g->Windows.Size; ++i) {
+        if (strcmp(g->Windows[i]->Name, "##LogPanel") == 0) {
+          log_idx = i;
+        } else if (strcmp(g->Windows[i]->Name, "##LeftPanel") == 0) {
+          left_idx = i;
+        }
+      }
+      IM_CHECK(log_idx >= 0);
+      IM_CHECK(left_idx >= 0);
+      IM_CHECK_GT(log_idx, left_idx);
+
+      // gate_guard restores log-panel CLI globals + log_panel_open here.
+    };
+  }
+
   // P1: Unsaved Changes Popup
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "unsaved_popup");
@@ -871,12 +1159,13 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
   // Open modal, use ctx->ItemInputValue to write boundary values through the widget,
   // click OK, then verify the clamped values in g_state.
   //
-  // SliderWithInput("Height##modal_cr", ..., 0.01f, 100.0f, kLogLinear) — height ≥ 0.01
-  // SliderWithInput("Upper H##modal_cr", ..., 0.0f, 100.0f, kLogLinear) — allows 0
-  // SliderWithInput("Lower H##modal_cr", ..., 0.0f, 100.0f, kLogLinear) — allows 0
-  // SliderWithInput("Prism H##modal_cr", ..., 0.0f, 100.0f, kLogLinear) — allows 0
+  // Three-H-mapping conventions (see gui/slider_mapping.hpp):
+  //   Prism Height: [0.01, 100] kLog
+  //   Pyramid prism_h: [0, 100] kLogLinear
+  //   Pyramid upper_h / lower_h: [0, 1] kLinear
+  //   Face Distance: [0, 2] kLinear
 
-  // p1_slider/height_clamp_via_modal — kLogLinear clamps height to [0.01, 100]
+  // p1_slider/height_clamp_via_modal — kLog clamps height to [0.01, 100]
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "height_clamp_via_modal");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -897,7 +1186,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
 
-      // Height should be clamped to >= 0.01 (kLogLinear with min=0.01)
+      // Height should be clamped to >= 0.01 (kLog with min=0.01)
       IM_CHECK_GE(gui::g_state.layers[0].entries[0].crystal.height, 0.01f - 1e-6f);
     };
   }
@@ -917,7 +1206,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(3);
 
-      // Write 0 to Upper H — should be allowed (min=0.0 for kLogLinear)
+      // Write 0 to Upper H — should be allowed (min=0.0 for kLinear)
       ctx->ItemInputValue("**/##Upper H##modal_cr_input", 0.0f);
       ctx->Yield();
 
@@ -926,6 +1215,57 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 0.0f);
+    };
+  }
+
+  // p1_slider/pyramid_h_clamp_upper_via_modal — Upper H clamped at new [0,1] upper bound
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "pyramid_h_clamp_upper_via_modal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+
+      // Write 1.5 — should be clamped to 1.0 (kLinear with max=1.0)
+      ctx->ItemInputValue("**/##Upper H##modal_cr_input", 1.5f);
+      ctx->Yield();
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 1.0f);
+    };
+  }
+
+  // p1_slider/pyramid_h_linear_readback_via_modal — input-box linear identity
+  // within the declared [0, 1] range. This goes through the _input field path,
+  // which only applies std::clamp; it does NOT cover the slider-drag nonlinear
+  // mapping path. Scale-configuration regressions (e.g. reverting to kLogLinear)
+  // are covered by pyramid_h_clamp_upper_via_modal via the max-bound assertion.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "pyramid_h_linear_readback_via_modal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+
+      ctx->ItemInputValue("**/##Upper H##modal_cr_input", 0.5f);
+      ctx->Yield();
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 0.5f);
     };
   }
 

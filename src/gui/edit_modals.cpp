@@ -12,9 +12,12 @@
 #include "gui/app.hpp"
 #include "gui/axis_presets.hpp"
 #include "gui/crystal_preview.hpp"
+#include "gui/crystal_renderer.hpp"
+#include "gui/face_number_overlay.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
+#include "gui/window_sizing.hpp"
 #include "imgui.h"
 
 namespace lumice::gui {
@@ -26,10 +29,15 @@ namespace lumice::gui {
 enum class ActiveModal { kNone, kOpen };
 enum class ActiveTab { kCrystal, kAxis, kFilter };
 
-// Minimum width applied to the unified edit popup so inner SliderWithInput
-// controls have a usable drag range. AlwaysAutoResize still governs height;
-// SetNextWindowSizeConstraints adds the width floor.
-constexpr float kEditModalMinWidth = 432.0f;
+// Minimum width applied to the unified edit popup. Covers the two-column
+// layout: the runtime left-pane width is
+//   `kModalPreviewImageSize + 2×WindowPadding.x + 4`
+// computed dynamically; ≈340 under the default style (WindowPadding.x=8),
+// ≈348 with HiDPI themes that raise padding. The floor of 820 adds the
+// right TabBar content minimum (~432) + child spacing (~16) + popup window
+// padding (~32). AlwaysAutoResize still governs height; the constraint only
+// adds a width floor so that both columns render without clipping.
+constexpr float kEditModalMinWidth = 820.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
@@ -134,15 +142,16 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
   bool changed = false;
 
   ImGui::PushItemWidth(slider_w);
+  // ImGuiSliderFlags_NoInput: see panels.cpp::RenderNonlinearSlider for rationale.
   if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
     float sqrt_val = std::sqrt(std::max(*value, 0.0f));
     float sqrt_max = std::sqrt(max_val);
-    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "")) {
+    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "", ImGuiSliderFlags_NoInput)) {
       *value = sqrt_val * sqrt_val;
       changed = true;
     }
   } else {
-    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt);
+    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt, ImGuiSliderFlags_NoInput);
   }
   ImGui::PopItemWidth();
 
@@ -290,7 +299,15 @@ static void HandleCrystalPreviewInteraction(bool hovered, bool active) {
   }
 }
 
-static void RenderCrystalModal(GuiState& /*state*/) {
+// Constant: 3D preview image size inside the left pane (also the FBO display
+// size). WindowPadding is applied by the surrounding child; see the dynamic
+// child-size computation in RenderEditModals.
+constexpr float kModalPreviewImageSize = 320.0f;
+
+// Render the persistent crystal preview pane (3D image + drag interaction +
+// style selector + reset view). Called from the left BeginChild during modal
+// rendering so the preview stays visible across Crystal / Axis / Filter tabs.
+static void RenderCrystalPreviewPane(GuiState& /*state*/) {
   auto& cr = g_crystal_buf;
 
   // Update mesh if crystal params changed
@@ -302,29 +319,38 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     }
   }
 
-  // Render to FBO
+  // Render to FBO (F8: only caller of g_crystal_renderer.Render in production;
+  // no double-write with panels.cpp / thumbnail_cache.cpp).
   auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
   g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
 
-  // Layout: 3D preview on top, crystal parameters below
-  constexpr float kPreviewSize = 320.0f;
-
-  // -- 3D Preview (horizontally centered) --
+  // -- 3D Preview (horizontally centered inside the left pane) --
   auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
   float avail_w = ImGui::GetContentRegionAvail().x;
-  float offset_x = (avail_w - kPreviewSize) * 0.5f;
+  float offset_x = (avail_w - kModalPreviewImageSize) * 0.5f;
   if (offset_x > 0.0f) {
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset_x);
   }
   ImVec2 preview_pos = ImGui::GetCursorScreenPos();
-  ImGui::Image(tex_id, ImVec2(kPreviewSize, kPreviewSize), ImVec2(0, 1), ImVec2(1, 0));
+  ImGui::Image(tex_id, ImVec2(kModalPreviewImageSize, kModalPreviewImageSize), ImVec2(0, 1), ImVec2(1, 0));
+
+  // Face-number overlay: use the same rotation/zoom/size used by the GL render
+  // pass above so screen coords align pixel-for-pixel with the FBO texture.
+  if (const auto* m = GetLastCrystalMesh(); m != nullptr) {
+    float mvp[16];
+    CrystalRenderer::ComputeMvp(g_crystal_rotation, g_crystal_zoom, static_cast<int>(kModalPreviewImageSize),
+                                static_cast<int>(kModalPreviewImageSize), mvp);
+    DrawFaceNumberOverlay(m->vertices, m->vertex_count, m->triangles, m->triangle_count, m->face_numbers,
+                          g_crystal_rotation, mvp, preview_pos, ImVec2(kModalPreviewImageSize, kModalPreviewImageSize),
+                          ImGui::GetWindowDrawList());
+  }
 
   // Overlay InvisibleButton to consume mouse clicks and prevent modal window drag.
   ImGui::SetCursorScreenPos(preview_pos);
-  ImGui::InvisibleButton("##modal_preview_interact", ImVec2(kPreviewSize, kPreviewSize));
+  ImGui::InvisibleButton("##modal_preview_interact", ImVec2(kModalPreviewImageSize, kModalPreviewImageSize));
   HandleCrystalPreviewInteraction(ImGui::IsItemHovered(), ImGui::IsItemActive());
 
-  // Style combo + Reset View
+  // Style combo + Reset View (single row — Combo / SameLine / SmallButton).
   ImGui::PushItemWidth(120.0f);
   ImGui::Combo("##ModalCrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
   ImGui::PopItemWidth();
@@ -332,8 +358,13 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   if (ImGui::SmallButton("Reset View##modal")) {
     ResetCrystalView();
   }
+}
 
-  ImGui::Separator();
+// Crystal tab body: type radio + parameter sliders + face distance tree.
+// Preview / style / reset live in the persistent left pane (see
+// RenderCrystalPreviewPane) so they remain visible on Axis / Filter tabs too.
+static void RenderCrystalModal(GuiState& /*state*/) {
+  auto& cr = g_crystal_buf;
 
   // -- Crystal type --
   int type_int = static_cast<int>(cr.type);
@@ -348,12 +379,13 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   ImGui::Spacing();
 
   // -- Parameters --
+  // See gui/slider_mapping.hpp for the three-H-mapping conventions.
   if (cr.type == CrystalType::kPrism) {
     SliderWithInput("Height##modal_cr", &cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLog);
   } else {
     SliderWithInput("Prism H##modal_cr", &cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
-    SliderWithInput("Upper H##modal_cr", &cr.upper_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
-    SliderWithInput("Lower H##modal_cr", &cr.lower_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
+    SliderWithInput("Upper H##modal_cr", &cr.upper_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
+    SliderWithInput("Lower H##modal_cr", &cr.lower_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
     SliderWithPresetEdit("Upper A##modal_cr", &cr.upper_alpha, 0.1f, 90.0f, "%.1f", SliderScale::kLinear, kWedgePresets,
                          kWedgePresetCount);
     SliderWithPresetEdit("Lower A##modal_cr", &cr.lower_alpha, 0.1f, 90.0f, "%.1f", SliderScale::kLinear, kWedgePresets,
@@ -365,7 +397,7 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     for (int i = 0; i < 6; i++) {
       char label[32];
       snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
-      SliderWithInput(label, &cr.face_distance[i], 0.01f, 10.0f, "%.3f");
+      SliderWithInput(label, &cr.face_distance[i], 0.0f, 2.0f, "%.3f");
     }
     if (ImGui::SmallButton("Reset All##modal_fd")) {
       for (auto& fd : cr.face_distance) {
@@ -552,11 +584,13 @@ static void RenderFilterModal(GuiState& /*state*/) {
 // Public API
 // ============================================================
 
-// True only when the unified edit modal is open AND the Crystal tab is the
-// active one. Used by visual-smoke tests to detect FBO contention with the
-// modal's per-frame g_crystal_renderer.Render() call.
-bool IsEditModalCrystalTabActive() {
-  return g_active_modal == ActiveModal::kOpen && g_active_tab == ActiveTab::kCrystal;
+// True when the unified edit modal is open (any tab). Used by visual-smoke
+// tests to skip FBO drive while the modal owns the FBO via its per-frame
+// g_crystal_renderer.Render() call. Since the preview pane is now always
+// visible (shared across Crystal / Axis / Filter tabs), the gate condition
+// is modal-open rather than crystal-tab-active.
+bool IsEditModalOpen() {
+  return g_active_modal == ActiveModal::kOpen;
 }
 
 void ResetModalState() {
@@ -707,10 +741,14 @@ void HandlePopupClosed(GuiState& state) {
 
 }  // namespace
 
-void RenderEditModals(GuiState& state) {
-  // Deferred OpenPopup: must happen outside BeginPopupModal.
+void RenderEditModals(GuiState& state, GLFWwindow* window) {
+  // Deferred OpenPopup: only Staged mode uses the popup stack. Immediate mode
+  // drives visibility directly via g_active_modal → title_x_open (see below),
+  // so it neither opens nor consults the popup stack.
   if (g_pending_open && g_active_modal == ActiveModal::kOpen) {
-    ImGui::OpenPopup("Edit Entry");
+    if (!state.modal_immediate_mode) {
+      ImGui::OpenPopup("Edit Entry");
+    }
     g_pending_open = false;
   }
 
@@ -724,38 +762,111 @@ void RenderEditModals(GuiState& state) {
     }
   }
 
-  ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
+  // Size constraints: clamp modal max to the workarea of the monitor containing
+  // the window center, so it cannot overflow a small secondary display. When
+  // the helper cannot identify a monitor (headless tests, nullptr window), fall
+  // back to an unbounded max rather than a primary-monitor default (avoids the
+  // multi-monitor "primary bias" anti-pattern).
+  MonitorRect mon{};
+  if (GetCurrentMonitorWorkArea(window, &mon)) {
+    auto max_w = std::max(kEditModalMinWidth, static_cast<float>(mon.w - kWindowDecorationMargin));
+    auto max_h = std::max(static_cast<float>(kMinWindowHeight), static_cast<float>(mon.h - kWindowDecorationMargin));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(max_w, max_h));
+  } else {
+    ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
+  }
   // Mode dispatch: Staged → BeginPopupModal (blocks background, exposes title-bar ×
-  // via p_open). Immediate → BeginPopup (non-modal, no title bar — ImGui API does not
-  // support p_open on BeginPopup; close paths are bottom Close + Esc + click-outside,
-  // all equivalent "close preserving changes").
-  bool title_x_open = true;
+  // via p_open). Immediate → ImGui::Begin (regular window — external clicks pass
+  // through, hover/focus work on background UI, window stays visible until an
+  // explicit close via the bottom Close button or the title-bar ×).
+  //
+  // title_x_open initialization is load-bearing for Immediate: Begin uses it as
+  // p_open, so code-driven close paths (Close button, title-bar ×, mode switch)
+  // set g_active_modal = kNone → next frame title_x_open = false → Begin returns
+  // false → cleanup via HandlePopupClosed's !window_open branch. If this were
+  // kept as `true` unconditionally, code-driven close in Immediate would fail
+  // silently (window re-renders every frame with no assertion). Staged branch
+  // is neutral: BeginPopupModal's visibility is governed by the popup stack,
+  // p_open only controls whether the title-bar × renders.
+  // Dual semantics:
+  //   Immediate: doubles as Begin's p_open — drives window visibility. Initial
+  //              value (g_active_modal==kOpen) → true while modal is open,
+  //              → false the frame after any code-driven close (Close button /
+  //              title ×), cleanly triggering !window_open cleanup.
+  //   Staged:    governs only whether the title-bar × glyph renders;
+  //              BeginPopupModal's visibility is determined by the popup stack.
+  bool title_x_open = (g_active_modal == ActiveModal::kOpen);
   bool window_open = false;
-  if (state.modal_immediate_mode) {
-    window_open = ImGui::BeginPopup("Edit Entry", ImGuiWindowFlags_AlwaysAutoResize);
+  // Pin the dispatch mode for this frame. The Immediate-mode checkbox
+  // (rendered later in body) may flip state.modal_immediate_mode mid-frame,
+  // but End/EndPopup must pair with the container we actually opened here.
+  const bool dispatched_immediate = state.modal_immediate_mode;
+  if (dispatched_immediate) {
+    window_open =
+        ImGui::Begin("Edit Entry", &title_x_open,
+                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse);
   } else {
     window_open = ImGui::BeginPopupModal("Edit Entry", &title_x_open, ImGuiWindowFlags_AlwaysAutoResize);
   }
   if (!window_open) {
-    // BeginPopup* returned false — either the popup was never opened, or it was
-    // closed on the previous frame. If the latter, run centralized cleanup.
+    // ImGui contract: Begin always pairs with End regardless of return value.
+    // BeginPopupModal when it returns false must NOT be paired with EndPopup.
+    if (dispatched_immediate) {
+      ImGui::End();
+    }
+    // Either the container was never opened, or it was closed on the previous
+    // frame. If the latter (or a mode switch is in flight), run centralized
+    // cleanup so mode switch / trackball restore / g_active_modal reset
+    // converge through HandlePopupClosed.
     if (g_active_modal == ActiveModal::kOpen || g_pending_mode_switch) {
       HandlePopupClosed(state);
     }
     return;
   }
-  // Staged title-bar ×: request a close; cleanup (trackball restore,
-  // g_active_modal reset) happens next frame via HandlePopupClosed's
-  // Staged-cancel branch, so cancel button / × / Esc share a single code path.
-  if (!state.modal_immediate_mode && !title_x_open) {
-    ImGui::CloseCurrentPopup();
+  // Title-bar × close:
+  //   Staged: CloseCurrentPopup → next-frame !window_open → HandlePopupClosed's
+  //           Staged-cancel branch (trackball restore + g_active_modal reset).
+  //           Cancel button / × / Esc share this single path.
+  //   Immediate: no popup-stack entry to close — directly reset g_active_modal.
+  //           Next frame Begin returns false → !window_open cleanup branch.
+  if (!title_x_open) {
+    if (dispatched_immediate) {
+      g_active_modal = ActiveModal::kNone;
+    } else {
+      ImGui::CloseCurrentPopup();
+    }
   }
-  // Race case: the entry was deleted between the OpenPopup call and this frame.
-  // Close the popup body immediately and let HandlePopupClosed run next frame.
+  // Race case: the entry was deleted (index guard above set kNone) or user
+  // just clicked the title-bar × in Immediate mode. Close the container body
+  // for this frame; next frame's !window_open path runs HandlePopupClosed.
   if (g_active_modal != ActiveModal::kOpen) {
-    ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
+    if (dispatched_immediate) {
+      ImGui::End();
+    } else {
+      ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+    }
     return;
+  }
+
+  // Staged → Immediate mode-switch consume: because Begin (unlike
+  // BeginPopupModal on an empty stack) returns true on Frame N+1 with
+  // title_x_open=true, !window_open never fires → HandlePopupClosed cannot
+  // observe the switch. Consume g_pending_mode_switch inline here (body path).
+  // This is the structural inverse of the Immediate → Staged direction, where
+  // BeginPopupModal on an empty popup stack returns false and cleanup flows
+  // through HandlePopupClosed naturally. Known asymmetry: Immediate inbound
+  // (body consume) vs Staged inbound (HandlePopupClosed consume) — a direct
+  // consequence of ImGui's popup stack vs regular window dispatch split.
+  // Counterpart for Immediate → Staged direction: HandlePopupClosed's
+  // mode-switch branch (arms g_pending_open + g_pending_tab_select, keeps
+  // g_active_modal=kOpen), invoked from the !window_open path on Frame N+1
+  // when BeginPopupModal sees an empty popup stack.
+  // Invariant: never touch g_active_modal here (it must stay kOpen until a
+  // user-driven close; see F10 in plan).
+  if (dispatched_immediate && g_pending_mode_switch) {
+    g_pending_mode_switch = false;
+    g_pending_tab_select = true;
   }
 
   // Snapshot the SetSelected flags BEFORE any BeginTabItem body runs —
@@ -795,6 +906,27 @@ void RenderEditModals(GuiState& state) {
   const char* axis_label = (show_dirty && axis_dirty) ? "Axis *###axis_tab" : "Axis###axis_tab";
   const char* filter_label = (show_dirty && filter_dirty) ? "Filter *###filter_tab" : "Filter###filter_tab";
 
+  // Two-column layout: left pane hosts the persistent crystal preview (shared
+  // across all tabs), right pane hosts the TabBar + tab body. Both child
+  // heights are pinned explicitly so AlwaysAutoResize does not chase the
+  // child sizes in a cycle; widths use GetStyle() / GetContentRegionAvail()
+  // for DPI / font adaptivity (see plan §3.2).
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float kLeftChildW = kModalPreviewImageSize + style.WindowPadding.x * 2.0f + 4.0f;
+  const float kToolRow = ImGui::GetFrameHeightWithSpacing();
+  const float kVPad = style.WindowPadding.y * 2.0f + style.ItemSpacing.y;
+  const float kLeftChildHeight = kModalPreviewImageSize + kToolRow + kVPad;
+  const float right_w = std::max(320.0f, ImGui::GetContentRegionAvail().x - kLeftChildW - style.ItemSpacing.x);
+
+  // Left pane: NoScrollbar + NoScrollWithMouse — height budget covers content,
+  // no scrolling should occur; disabling scroll-on-wheel also prevents
+  // stray wheel events from leaking into surrounding UI.
+  ImGui::BeginChild("##modal_left_pane", ImVec2(kLeftChildW, kLeftChildHeight), ImGuiChildFlags_None,
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  RenderCrystalPreviewPane(state);
+  ImGui::EndChild();
+  ImGui::SameLine();
+  ImGui::BeginChild("##modal_right_pane", ImVec2(right_w, kLeftChildHeight), ImGuiChildFlags_None);
   if (ImGui::BeginTabBar("##edit_modal_tabs")) {
     if (ImGui::BeginTabItem(crystal_label, nullptr, crystal_flags)) {
       g_active_tab = ActiveTab::kCrystal;
@@ -815,6 +947,7 @@ void RenderEditModals(GuiState& state) {
     // Consumed pending selection after BeginTabItem reads the flag.
     g_pending_tab_select = false;
   }
+  ImGui::EndChild();
 
   // Immediate mode: push buffer→entry every frame (diff-gated inside
   // CommitAllBuffersImmediate; no-op when nothing changed). Esc / click-outside
@@ -828,9 +961,12 @@ void RenderEditModals(GuiState& state) {
   // to the right edge.
   if (state.modal_immediate_mode) {
     // Immediate: single Close (no Cancel semantics — changes are already applied).
+    // No CloseCurrentPopup: we are inside ImGui::Begin (regular window), the
+    // popup stack has no "Edit Entry" entry. Setting g_active_modal=kNone
+    // drives the next-frame cleanup via title_x_open=false → Begin returns
+    // false → !window_open branch.
     if (ImGui::Button("Close##edit_modal", ImVec2(80, 0))) {
       g_active_modal = ActiveModal::kNone;
-      ImGui::CloseCurrentPopup();
     }
   } else {
     // Staged: OK / Cancel.
@@ -890,15 +1026,34 @@ void RenderEditModals(GuiState& state) {
       // crystal-only changes — that would zero infinite-rays accumulation
       // at the exact moment the user wants to start observing live changes.
       CommitAllBuffersImmediate(state);
+      // Current frame is still inside BeginPopupModal (dispatch at frame-start
+      // used the old mode). CloseCurrentPopup keeps the popup stack clean;
+      // Frame N+1 enters the Immediate Begin branch and consumes
+      // g_pending_mode_switch inline (see race-case guard + inline consume).
+      ImGui::CloseCurrentPopup();
     } else {
       // Immediate → Staged: re-snapshot the current buffer state as the new
       // dirty-compare baseline (dirty-mark starts from zero going forward).
       SnapshotAllBuffers(state);
+      // Current frame is still inside ImGui::Begin (dispatch at frame-start
+      // used the old mode). Do NOT call CloseCurrentPopup — the popup stack
+      // has no "Edit Entry" entry to close. Flow:
+      //   Frame N+1: Staged BeginPopupModal on empty stack → returns false →
+      //              !window_open → HandlePopupClosed's mode-switch branch
+      //              keeps g_active_modal=kOpen, arms g_pending_open +
+      //              g_pending_tab_select.
+      //   Frame N+2: L713 reopen gate fires → OpenPopup + BeginPopupModal
+      //              return true same frame → modal visible with tab replay.
+      // Invariant: do NOT touch g_active_modal here (must stay kOpen for the
+      // reopen gate to fire in Frame N+2).
     }
-    ImGui::CloseCurrentPopup();
   }
 
-  ImGui::EndPopup();
+  if (dispatched_immediate) {
+    ImGui::End();
+  } else {
+    ImGui::EndPopup();
+  }
 }
 
 }  // namespace lumice::gui

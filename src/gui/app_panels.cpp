@@ -14,6 +14,76 @@
 #include "gui/panels.hpp"
 #include "imgui.h"
 
+// =============================================================================
+// GUI window z-order convention (task-gui-window-zorder, scrum-gui-polish-v12)
+// -----------------------------------------------------------------------------
+// ImGui z-order is decided by two ASYMMETRIC mechanisms (imgui.cpp 6550-6553
+// for creation; 12776 for click splice; 12839-12842 for focus flag check):
+//   1. First-time Begin (creation): if the window has
+//      ImGuiWindowFlags_NoBringToFrontOnFocus, ImGui calls
+//      g.Windows.push_front -> the window goes to the FRONT of g.Windows,
+//      which is the BOTTOM of the visual z-order (rendered first).
+//      Without the flag: g.Windows.push_back -> goes to the BACK of
+//      g.Windows = TOP visually. This is the design intent: the flag
+//      means "this window is background, never raise it".
+//   2. Click / FocusWindow: BringWindowToDisplayFront splices the window to
+//      the BACK of g.Windows (visually TOP) — UNLESS the window has
+//      NoBringToFrontOnFocus, in which case the splice is skipped.
+//
+// Practical implication: NoBringToFrontOnFocus simultaneously
+//   (a) places the window at the BOTTOM of g.Windows on creation, and
+//   (b) freezes it there against click side-effects.
+// Windows without the flag float ABOVE the NoBringToFrontOnFocus cluster.
+//
+// Layered model (from bottom to top):
+//
+//   Layer 4 (Top, ImGui-managed):
+//     - Tooltip / DragDrop overlay (ImGui internal, automatic top)
+//     - GetForegroundDrawList (debug overlay; not used in this project)
+//
+//   Layer 3 (Floating; default raise behavior — NO NoBringToFrontOnFocus,
+//            so push_back on creation -> floats above the background cluster):
+//     - Staged "Edit Entry" (BeginPopupModal, on ImGui popup stack -> always top)
+//     - Immediate "Edit Entry" (ImGui::Begin regular window)
+//     - "Unsaved Changes" (BeginPopupModal)
+//     - "##LogPanel" — user-toggleable; raisable on click; sits naturally
+//       above the LeftPanel / RightPanel cluster.
+//     - panels.cpp::SliderWithPreset BeginPopup
+//
+//   Background cluster (NoBringToFrontOnFocus, push_front on creation
+//                       -> bottom of g.Windows):
+//     - "##LeftPanel" / "##RightPanel" — fixed left/right strips.
+//     - "##TopBar" / "##StatusBar" — fixed top/bottom bars.
+//     - "##PreviewPanel" — transparent (NoBackground); the OpenGL preview
+//       shader is rendered into this region between ImGui::Render and
+//       SwapBuffers in main.cpp.
+//     Within this cluster, push_front means the LATEST Begin'd window ends
+//     up at index 0 (bottom). Visual order within the cluster is therefore
+//     the REVERSE of main.cpp Render* call order. Cluster members do not
+//     overlap each other, so this internal ordering has no visual effect.
+//
+// -----------------------------------------------------------------------------
+// CHECKLIST when adding a new ImGui::Begin window (in this file or elsewhere):
+//   1. Register its layer (Background cluster / Layer 3 / Layer 4) in the
+//      model above.
+//   2. If background cluster: flags MUST include
+//      ImGuiWindowFlags_NoBringToFrontOnFocus. The window will be pushed to
+//      the front of g.Windows on creation (bottom visually) and frozen
+//      there against click splices. Within the cluster, visual stacking is
+//      the REVERSE of main.cpp Render* call order — call later to render
+//      LOWER. Usually irrelevant because cluster members do not overlap.
+//   3. If Layer 3 (floating): do NOT add NoBringToFrontOnFocus. The window
+//      will be push_back'd on creation and naturally float above the
+//      background cluster, and clicks will splice it to the very top.
+//   4. Code-review must reject any new Begin not registered here, or any
+//      main.cpp Render* call order that contradicts this model.
+//
+// SCOPE of this convention:
+// File-level soft constraint. No global automation gate; enforcement relies on
+// code-review human inspection. (Whether to promote to CLAUDE.md or a
+// clang-tidy check is left to task-closeout decision.)
+// =============================================================================
+
 namespace lumice::gui {
 
 using SimState = GuiState::SimState;
@@ -23,7 +93,7 @@ void RenderTopBar(float window_width) {
   ImGui::SetNextWindowSize(ImVec2(window_width, kTopBarHeight));
   ImGui::Begin("##TopBar", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse);
+                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // Left-panel collapse toggle (placed before Run/Stop; owns the leftmost slot of the top bar
   // so it can never overlap with panel-internal headers).
@@ -211,7 +281,8 @@ void RenderLeftPanel(float window_height) {
   ImGui::SetNextWindowSize(ImVec2(kLeftPanelWidth, panel_height));
   ImGui::Begin("##LeftPanel", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                   ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // ---- Layout: cards (scroll) + toolbar ----
   float avail_h = ImGui::GetContentRegionAvail().y;
@@ -258,9 +329,9 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   float panel_x = window_width - kRightPanelWidth;
   ImGui::SetNextWindowPos(ImVec2(panel_x, kTopBarHeight));
   ImGui::SetNextWindowSize(ImVec2(kRightPanelWidth, panel_height));
-  ImGui::Begin(
-      "##RightPanel", nullptr,
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+  ImGui::Begin("##RightPanel", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // ---- Scene Group ----
   if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -467,7 +538,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   ImGui::SetNextWindowSize(ImVec2(panel_width, panel_height));
   ImGui::Begin("##PreviewPanel", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground);
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground |
+                   ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // Renderer invariants (previously in RenderViewBar, runs every frame).
   // Copy-model: GuiState always owns a single renderer, no vector/index bookkeeping needed.
@@ -598,7 +670,7 @@ void RenderStatusBar(float window_width, float window_height) {
   ImGui::SetNextWindowSize(ImVec2(window_width, kStatusBarHeight));
   ImGui::Begin("##StatusBar", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse);
+                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // Status indicator
   switch (g_state.sim_state) {
@@ -736,6 +808,12 @@ void RenderLogPanel(float window_width, float window_height) {
 
   ImGui::SetNextWindowPos(ImVec2(0, window_height - kLogPanelHeight - kStatusBarHeight));
   ImGui::SetNextWindowSize(ImVec2(window_width, kLogPanelHeight));
+  // ##LogPanel intentionally does NOT carry NoBringToFrontOnFocus: it
+  // belongs to Layer 3 (floating, raisable) per the z-order convention block
+  // at the top of this file. ImGui creates NoBringToFrontOnFocus windows via
+  // push_front (= bottom of g.Windows) and others via push_back (= top), so
+  // adding the flag here would push LogPanel into the background cluster
+  // BELOW LeftPanel/RightPanel — the opposite of the desired stacking.
   ImGui::Begin("##LogPanel", &g_state.log_panel_open,
                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
 
