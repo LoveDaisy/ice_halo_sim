@@ -19,6 +19,13 @@ bool GetCurrentMonitorWorkArea(GLFWwindow* win, MonitorRect* out) {
   rects.reserve(static_cast<size_t>(mon_count));
   for (int i = 0; i < mon_count; i++) {
     MonitorRect r{};
+    // Defend against an unexpectedly null entry (e.g. race during monitor
+    // hotplug). GLFW does not guarantee every pointer is non-null even when
+    // the top-level array is; skip invalid entries rather than dereferencing.
+    if (mons[i] == nullptr) {
+      rects.push_back(r);
+      continue;
+    }
     glfwGetMonitorWorkarea(mons[i], &r.x, &r.y, &r.w, &r.h);
     rects.push_back(r);
   }

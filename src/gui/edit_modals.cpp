@@ -28,10 +28,13 @@ enum class ActiveModal { kNone, kOpen };
 enum class ActiveTab { kCrystal, kAxis, kFilter };
 
 // Minimum width applied to the unified edit popup. Covers the two-column
-// layout (left preview ~340 + right TabBar content ~432 + child spacing 16 +
-// window padding 32 ≈ 820). AlwaysAutoResize still governs height; the
-// constraint only adds a width floor so that both columns render without
-// clipping on default style.
+// layout: the runtime left-pane width is
+//   `kModalPreviewImageSize + 2×WindowPadding.x + 4`
+// computed dynamically; ≈340 under the default style (WindowPadding.x=8),
+// ≈348 with HiDPI themes that raise padding. The floor of 820 adds the
+// right TabBar content minimum (~432) + child spacing (~16) + popup window
+// padding (~32). AlwaysAutoResize still governs height; the constraint only
+// adds a width floor so that both columns render without clipping.
 constexpr float kEditModalMinWidth = 820.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;

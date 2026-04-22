@@ -51,9 +51,11 @@ inline int SelectMonitorIndexByCenter(int cx, int cy, const MonitorRect* rects, 
 // reintroduce the multi-monitor "primary bias" anti-pattern documented in
 // scrum-gui-polish-v11/task-fix-multi-monitor-aspect.
 //
-// Mirrors the inline pattern used by ApplyAspectRatio in app.cpp:147-168.
-// Both sites must evolve together; prefer routing future monitor-lookup
-// needs through this helper to collapse the duplicate pattern over time.
+// Mirrors the inline monitor-selection pattern embedded in `ApplyAspectRatio`
+// (see `app.cpp`). Both sites must evolve together; prefer routing future
+// monitor-lookup needs through this helper to collapse the duplicate pattern
+// over time. (Function name chosen over a line-number anchor so this comment
+// stays valid as `app.cpp` drifts.)
 bool GetCurrentMonitorWorkArea(GLFWwindow* win, MonitorRect* out);
 
 }  // namespace lumice::gui
