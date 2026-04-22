@@ -26,10 +26,12 @@ namespace lumice::gui {
 enum class ActiveModal { kNone, kOpen };
 enum class ActiveTab { kCrystal, kAxis, kFilter };
 
-// Minimum width applied to the unified edit popup so inner SliderWithInput
-// controls have a usable drag range. AlwaysAutoResize still governs height;
-// SetNextWindowSizeConstraints adds the width floor.
-constexpr float kEditModalMinWidth = 432.0f;
+// Minimum width applied to the unified edit popup. Covers the two-column
+// layout (left preview ~340 + right TabBar content ~432 + child spacing 16 +
+// window padding 32 ≈ 820). AlwaysAutoResize still governs height; the
+// constraint only adds a width floor so that both columns render without
+// clipping on default style.
+constexpr float kEditModalMinWidth = 820.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
@@ -290,7 +292,15 @@ static void HandleCrystalPreviewInteraction(bool hovered, bool active) {
   }
 }
 
-static void RenderCrystalModal(GuiState& /*state*/) {
+// Constant: 3D preview image size inside the left pane (also the FBO display
+// size). WindowPadding is applied by the surrounding child; see the dynamic
+// child-size computation in RenderEditModals.
+constexpr float kModalPreviewImageSize = 320.0f;
+
+// Render the persistent crystal preview pane (3D image + drag interaction +
+// style selector + reset view). Called from the left BeginChild during modal
+// rendering so the preview stays visible across Crystal / Axis / Filter tabs.
+static void RenderCrystalPreviewPane(GuiState& /*state*/) {
   auto& cr = g_crystal_buf;
 
   // Update mesh if crystal params changed
@@ -302,29 +312,27 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     }
   }
 
-  // Render to FBO
+  // Render to FBO (F8: only caller of g_crystal_renderer.Render in production;
+  // no double-write with panels.cpp / thumbnail_cache.cpp).
   auto crystal_style = static_cast<CrystalStyle>(g_crystal_style);
   g_crystal_renderer.Render(g_crystal_rotation, g_crystal_zoom, crystal_style);
 
-  // Layout: 3D preview on top, crystal parameters below
-  constexpr float kPreviewSize = 320.0f;
-
-  // -- 3D Preview (horizontally centered) --
+  // -- 3D Preview (horizontally centered inside the left pane) --
   auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
   float avail_w = ImGui::GetContentRegionAvail().x;
-  float offset_x = (avail_w - kPreviewSize) * 0.5f;
+  float offset_x = (avail_w - kModalPreviewImageSize) * 0.5f;
   if (offset_x > 0.0f) {
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset_x);
   }
   ImVec2 preview_pos = ImGui::GetCursorScreenPos();
-  ImGui::Image(tex_id, ImVec2(kPreviewSize, kPreviewSize), ImVec2(0, 1), ImVec2(1, 0));
+  ImGui::Image(tex_id, ImVec2(kModalPreviewImageSize, kModalPreviewImageSize), ImVec2(0, 1), ImVec2(1, 0));
 
   // Overlay InvisibleButton to consume mouse clicks and prevent modal window drag.
   ImGui::SetCursorScreenPos(preview_pos);
-  ImGui::InvisibleButton("##modal_preview_interact", ImVec2(kPreviewSize, kPreviewSize));
+  ImGui::InvisibleButton("##modal_preview_interact", ImVec2(kModalPreviewImageSize, kModalPreviewImageSize));
   HandleCrystalPreviewInteraction(ImGui::IsItemHovered(), ImGui::IsItemActive());
 
-  // Style combo + Reset View
+  // Style combo + Reset View (single row — Combo / SameLine / SmallButton).
   ImGui::PushItemWidth(120.0f);
   ImGui::Combo("##ModalCrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
   ImGui::PopItemWidth();
@@ -332,8 +340,19 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   if (ImGui::SmallButton("Reset View##modal")) {
     ResetCrystalView();
   }
+}
 
+// Crystal tab body: type radio + parameter sliders + face distance tree.
+// Preview / style / reset live in the persistent left pane (see
+// RenderCrystalPreviewPane) so they remain visible on Axis / Filter tabs too.
+static void RenderCrystalModal(GuiState& state) {
+  // Transitional glue: keep rendering the preview here until the two-column
+  // layout lands in the following milestone; the left pane will then call
+  // RenderCrystalPreviewPane directly and this inline call is removed.
+  RenderCrystalPreviewPane(state);
   ImGui::Separator();
+
+  auto& cr = g_crystal_buf;
 
   // -- Crystal type --
   int type_int = static_cast<int>(cr.type);
