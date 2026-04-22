@@ -23,6 +23,11 @@ class CrystalRenderer {
   // Render with given rotation, zoom, and style
   void Render(const float rotation[16], float zoom, CrystalStyle style);
 
+  // Build the same MVP matrix (column-major) used inside Render().
+  // Exposed so overlays can project CPU-side points to the identical screen
+  // coordinates; changing this function must keep Render's internal use in sync.
+  static void ComputeMvp(const float rotation[16], float zoom, int width, int height, float out_mvp[16]);
+
   // Get the rendered texture ID for ImGui::Image()
   uintptr_t GetTextureId() const;
 

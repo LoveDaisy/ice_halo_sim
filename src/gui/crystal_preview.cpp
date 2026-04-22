@@ -12,6 +12,14 @@
 
 namespace lumice::gui {
 
+// ----- Modal Singleton State Inventory (multi-instance refactor entry point) -----
+// All file-scope state below is scoped to the single active edit modal. If the
+// project grows to support multi-instance preview, every variable here needs
+// to move into a per-instance context struct.
+//   g_crystal_rotation / g_crystal_zoom / g_crystal_style  — trackball controls
+//   g_crystal_mesh_hash                                    — upload-skip hash
+//   g_last_mesh / g_last_mesh_valid                        — cached mesh for overlay
+
 // Crystal preview trackball state
 float g_crystal_rotation[16] = {
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
@@ -19,6 +27,12 @@ float g_crystal_rotation[16] = {
 float g_crystal_zoom = kDefaultCrystalZoom;
 int g_crystal_style = 1;      // Default: Hidden Line (index into kCrystalStyleNames)
 int g_crystal_mesh_hash = 0;  // Hash of crystal params for change detection
+
+// Cached mesh copy consumed by face-number overlay.
+// vertices/edge_face_normals are already Y-Z swapped + AABB normalized
+// (BuildCrystalMeshData modifies them in-place before returning).
+static LUMICE_CrystalMesh g_last_mesh{};
+static bool g_last_mesh_valid = false;
 
 int CrystalParamHash(const CrystalConfig& c) {
   // Simple hash to detect parameter changes
@@ -191,7 +205,18 @@ int BuildAndUploadCrystalMesh(const CrystalConfig& cr) {
 
   g_crystal_renderer.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count, mesh.triangles,
                                 mesh.triangle_count, mesh.edge_face_normals);
+  g_last_mesh = mesh;
+  g_last_mesh_valid = true;
   return CrystalParamHash(cr);
+}
+
+const LUMICE_CrystalMesh* GetLastCrystalMesh() {
+  return g_last_mesh_valid ? &g_last_mesh : nullptr;
+}
+
+void ResetLastCrystalMesh() {
+  g_last_mesh_valid = false;
+  g_last_mesh = {};
 }
 
 }  // namespace lumice::gui
