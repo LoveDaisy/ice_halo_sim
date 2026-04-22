@@ -17,13 +17,23 @@
 // =============================================================================
 // GUI window z-order convention (task-gui-window-zorder, scrum-gui-polish-v12)
 // -----------------------------------------------------------------------------
-// ImGui z-order is decided by two layered mechanisms:
-//   1. Begin call order (natural order): earlier Begin = lower; later = higher.
-//      Within the same focus class, main loop's Render*() call order in
-//      src/gui/main.cpp determines this natural stacking.
-//   2. FocusWindow side-effect: clicking/focusing a window splices it to the
-//      back of g.Windows (= topmost). ImGuiWindowFlags_NoBringToFrontOnFocus
-//      disables this side-effect, FREEZING the natural order.
+// ImGui z-order is decided by two ASYMMETRIC mechanisms (imgui.cpp 6550-6553
+// for creation; 12776 for click splice; 12839-12842 for focus flag check):
+//   1. First-time Begin (creation): if the window has
+//      ImGuiWindowFlags_NoBringToFrontOnFocus, ImGui calls
+//      g.Windows.push_front -> the window goes to the FRONT of g.Windows,
+//      which is the BOTTOM of the visual z-order (rendered first).
+//      Without the flag: g.Windows.push_back -> goes to the BACK of
+//      g.Windows = TOP visually. This is the design intent: the flag
+//      means "this window is background, never raise it".
+//   2. Click / FocusWindow: BringWindowToDisplayFront splices the window to
+//      the BACK of g.Windows (visually TOP) — UNLESS the window has
+//      NoBringToFrontOnFocus, in which case the splice is skipped.
+//
+// Practical implication: NoBringToFrontOnFocus simultaneously
+//   (a) places the window at the BOTTOM of g.Windows on creation, and
+//   (b) freezes it there against click side-effects.
+// Windows without the flag float ABOVE the NoBringToFrontOnFocus cluster.
 //
 // Layered model (from bottom to top):
 //
@@ -31,42 +41,40 @@
 //     - Tooltip / DragDrop overlay (ImGui internal, automatic top)
 //     - GetForegroundDrawList (debug overlay; not used in this project)
 //
-//   Layer 3 (Floating; default raise behavior — NO NoBringToFrontOnFocus):
+//   Layer 3 (Floating; default raise behavior — NO NoBringToFrontOnFocus,
+//            so push_back on creation -> floats above the background cluster):
 //     - Staged "Edit Entry" (BeginPopupModal, on ImGui popup stack -> always top)
 //     - Immediate "Edit Entry" (ImGui::Begin regular window)
 //     - "Unsaved Changes" (BeginPopupModal)
+//     - "##LogPanel" — user-toggleable; raisable on click; sits naturally
+//       above the LeftPanel / RightPanel cluster.
 //     - panels.cpp::SliderWithPreset BeginPopup
 //
-//   Layer 2 (Toggleable foreground panel; NoBringToFrontOnFocus):
-//     - "##LogPanel" — user-toggleable; in main.cpp it is rendered AFTER the
-//       business panels, so it naturally occludes the bottom of LeftPanel /
-//       RightPanel when open.
-//
-//   Layer 1 (Business panels; NoBringToFrontOnFocus):
+//   Layer 1+2 collapsed (Background cluster; NoBringToFrontOnFocus,
+//                        push_front on creation -> bottom of g.Windows):
 //     - "##LeftPanel" / "##RightPanel" — fixed left/right strips.
-//
-//   Layer 0 (Background chrome; NoBringToFrontOnFocus):
-//     - "##TopBar" / "##StatusBar" — fixed top/bottom bars (no overlap with
-//       the central area, but treated as background to keep ordering uniform).
+//     - "##TopBar" / "##StatusBar" — fixed top/bottom bars.
 //     - "##PreviewPanel" — transparent (NoBackground); the OpenGL preview
 //       shader is rendered into this region between ImGui::Render and
 //       SwapBuffers in main.cpp.
-//
-// Within Layers 0–2, z-order is the main.cpp Render* call order. Current order
-// (bottom -> top in src/gui/main.cpp): TopBar, LeftPanel, RightPanel,
-// PreviewPanel, LogPanel, StatusBar, RenderEditModals, RenderUnsavedPopup.
+//     Within this cluster, push_front means the LATEST Begin'd window ends
+//     up at index 0 (bottom). Visual order within the cluster is therefore
+//     the REVERSE of main.cpp Render* call order.
 //
 // -----------------------------------------------------------------------------
 // CHECKLIST when adding a new ImGui::Begin window (in this file or elsewhere):
-//   1. Register its layer (Layer 0 / 1 / 2 / 3 / 4) in the model above.
-//   2. If Layer 0–2 (background class), its flags MUST include
-//      ImGuiWindowFlags_NoBringToFrontOnFocus.
-//   3. If Layer 3 (floating), do NOT add NoBringToFrontOnFocus
-//      (preserve default raise behavior).
-//   4. If Layer 0–2, place its Render*() call in src/gui/main.cpp at the
-//      position matching its desired z-order within the layer (earlier call
-//      = lower; later call = higher).
-//   5. Code-review must reject any new Begin not registered here, or any
+//   1. Register its layer (Background cluster / Layer 3 / Layer 4) in the
+//      model above.
+//   2. If background cluster: flags MUST include
+//      ImGuiWindowFlags_NoBringToFrontOnFocus. The window will be pushed to
+//      the front of g.Windows on creation (bottom visually) and frozen
+//      there against click splices. Within the cluster, visual stacking is
+//      the REVERSE of main.cpp Render* call order — call later to render
+//      LOWER. Usually irrelevant because cluster members do not overlap.
+//   3. If Layer 3 (floating): do NOT add NoBringToFrontOnFocus. The window
+//      will be push_back'd on creation and naturally float above the
+//      background cluster, and clicks will splice it to the very top.
+//   4. Code-review must reject any new Begin not registered here, or any
 //      main.cpp Render* call order that contradicts this model.
 //
 // SCOPE of this convention:
@@ -799,9 +807,16 @@ void RenderLogPanel(float window_width, float window_height) {
 
   ImGui::SetNextWindowPos(ImVec2(0, window_height - kLogPanelHeight - kStatusBarHeight));
   ImGui::SetNextWindowSize(ImVec2(window_width, kLogPanelHeight));
+  // Note: ##LogPanel intentionally does NOT carry NoBringToFrontOnFocus.
+  // It belongs to Layer 3 (floating, raisable) per the convention block at
+  // the top of this file. ImGui creates NoBringToFrontOnFocus windows via
+  // push_front (= bottom of g.Windows) and others via push_back (= top), so
+  // adding the flag here would push LogPanel into the background cluster
+  // BELOW LeftPanel/RightPanel — the opposite of the desired stacking.
+  // See plan §3.2 (revised) and §3.5 F14 in
+  // scratchpad/scrum-gui-polish-v12/task-gui-window-zorder/plan.md.
   ImGui::Begin("##LogPanel", &g_state.log_panel_open,
-               ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
-                   ImGuiWindowFlags_NoBringToFrontOnFocus);
+               ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
 
   // Config controls row
   static const char* const kLevelNames[] = { "Trace", "Debug", "Verbose", "Info", "Warning", "Error", "Off" };

@@ -3,7 +3,9 @@
 #include <cstring>
 #include <thread>
 
-#include "test_gui_shared.hpp"
+#include "gui/log_sink.hpp"     // ImGuiLogSink (for log_panel_above_left_panel test sink injection)
+#include "imgui_internal.h"     // ImGuiContext, g.Windows access for z-order assertions
+#include "test_gui_shared.hpp"  // declares g_enable_log_panel (toggle gate for RenderLogPanel)
 
 // ========== Helpers for interaction tests ==========
 
@@ -665,6 +667,108 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
 
       gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v12 / task-gui-window-zorder — Symptom A guard.
+  // After T3 changed the Immediate Edit modal to ImGui::Begin (regular window),
+  // background panels lacking NoBringToFrontOnFocus would be raised on click and
+  // occlude the modal. Step 2a/2b added the flag to all 6 background panels.
+  // This test focuses ##LeftPanel programmatically (no business side effect, no
+  // popup) and asserts the Edit Entry stays at g.Windows.back() — i.e. topmost.
+  // Reverse-validation: removing NoBringToFrontOnFocus from ##LeftPanel must
+  // make the z-order assertion fail (g.Windows.back() becomes ##LeftPanel).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_modal_above_background_panel");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      // Open the Immediate Edit modal.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
+
+      // Focus ##LeftPanel via the Test Engine's WindowFocus API (no business
+      // side effect; goes through ImGui::FocusWindow). Without
+      // NoBringToFrontOnFocus this would splice ##LeftPanel to g.Windows.back().
+      ctx->WindowFocus("##LeftPanel");
+      ctx->Yield(2);
+
+      // Core assertion: Edit Entry is still the topmost window.
+      // BringWindowToDisplayFront splices to back of g.Windows; ergo back() is
+      // top. (Docking is not enabled in this project — verified in plan §3.5
+      // F12 — so no DockNode host appears at the tail.)
+      ImGuiContext* g = ImGui::GetCurrentContext();
+      IM_CHECK(g->Windows.Size > 0);
+      IM_CHECK_STR_EQ(g->Windows.back()->Name, "Edit Entry");
+
+      // Behavior fallback: Close still works (sanity that the modal is
+      // actually responding to clicks, not just visually layered).
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(4);
+      IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
+
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v12 / task-gui-window-zorder — Same-layer z-order
+  // invariant. ##LogPanel is rendered AFTER ##LeftPanel/##RightPanel in
+  // src/gui/main.cpp, so the natural Begin order places LogPanel above the
+  // business panels (Layer 2 above Layer 1 in the convention block at the top
+  // of src/gui/app_panels.cpp). NoBringToFrontOnFocus on both panels freezes
+  // this order against click side effects. This test asserts the index of
+  // ##LogPanel in g.Windows is greater than that of ##LeftPanel after we
+  // explicitly try to raise ##LeftPanel.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_layout", "log_panel_above_left_panel");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      // RenderLogPanel is gated twice in the test harness:
+      //   1. test_gui_main.cpp's main loop only calls it if g_enable_log_panel
+      //   2. RenderLogPanel itself early-returns if g_imgui_log_sink is null
+      //      (the sink is normally initialized only when --log-panel is on).
+      // Both gates are bypassed here for the test's duration, then restored.
+      const bool prev_log_panel = g_enable_log_panel;
+      auto prev_sink = gui::g_imgui_log_sink;
+      g_enable_log_panel = true;
+      if (!gui::g_imgui_log_sink) {
+        gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
+      }
+      gui::g_state.log_panel_open = true;
+      ctx->Yield(4);
+
+      // Try to raise ##LeftPanel. Without NoBringToFrontOnFocus it would
+      // splice ##LeftPanel to the back of g.Windows.
+      ctx->WindowFocus("##LeftPanel");
+      ctx->Yield(2);
+
+      // ImGui creates windows lacking NoBringToFrontOnFocus via
+      // g.Windows.push_back (= top), and windows carrying the flag via
+      // push_front (= bottom). LogPanel intentionally has no flag (Layer 3
+      // floating); LeftPanel does (background cluster). Therefore LogPanel's
+      // index in g.Windows must be greater than LeftPanel's. See the
+      // convention block at the top of src/gui/app_panels.cpp.
+      ImGuiContext* g = ImGui::GetCurrentContext();
+      IM_CHECK(g != nullptr);
+      int log_idx = -1;
+      int left_idx = -1;
+      for (int i = 0; i < g->Windows.Size; ++i) {
+        if (strcmp(g->Windows[i]->Name, "##LogPanel") == 0) {
+          log_idx = i;
+        } else if (strcmp(g->Windows[i]->Name, "##LeftPanel") == 0) {
+          left_idx = i;
+        }
+      }
+      IM_CHECK(log_idx >= 0);
+      IM_CHECK(left_idx >= 0);
+      IM_CHECK_GT(log_idx, left_idx);
+
+      gui::g_state.log_panel_open = false;
+      g_enable_log_panel = prev_log_panel;
+      gui::g_imgui_log_sink = prev_sink;
     };
   }
 
