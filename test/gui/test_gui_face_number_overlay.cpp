@@ -149,6 +149,39 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // End-to-end smoke: open Crystal modal, verify GetLastCrystalMesh populates
+  // with prism config + at least one labelable face (>0). This is the degraded
+  // path for the 3-style PSNR regression (plan §7 Risk 4 — ImGui text anti-
+  // aliasing is non-deterministic across MSAA state, so strict PSNR would
+  // produce flaky failures; smoke coverage instead verifies the overlay
+  // pipeline is wired and the mesh view exposes real face numbers).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "screenshot", "face_number_overlay_smoke");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      lumice::gui::ResetLastCrystalMesh();
+      ctx->Yield(2);
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      const auto* mesh = lumice::gui::GetLastCrystalMesh();
+      IM_CHECK(mesh != nullptr);
+      IM_CHECK_GT(mesh->triangle_count, 0);
+
+      bool any_labelable = false;
+      for (int i = 0; i < mesh->triangle_count; ++i) {
+        if (mesh->face_numbers[i] > 0) {
+          any_labelable = true;
+          break;
+        }
+      }
+      IM_CHECK(any_labelable);
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
   // Project: Y-up NDC maps to Y-down screen. Center at origin lands at image center.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "unit", "face_number_project_y_flip_center");

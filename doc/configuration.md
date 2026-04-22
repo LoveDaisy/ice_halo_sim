@@ -222,7 +222,10 @@ Filters are used to filter ray paths or directions.
   "symmetry": "P"
 }
 ```
-- `raypath`: Integer array of face numbers along the ray path
+- `raypath`: Integer array of face numbers along the ray path.
+  Face numbers follow the hex-crystal convention: basal = 1/2, prism = 3–8,
+  upper pyramidal = 13–18, lower pyramidal = 23–28. The Crystal edit modal
+  overlays the corresponding number on each visible face of the 3D preview.
 
 **3. entry_exit (Entry/Exit)**
 ```json
