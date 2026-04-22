@@ -12,6 +12,8 @@
 #include "gui/app.hpp"
 #include "gui/axis_presets.hpp"
 #include "gui/crystal_preview.hpp"
+#include "gui/crystal_renderer.hpp"
+#include "gui/face_number_overlay.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
@@ -330,6 +332,17 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/) {
   }
   ImVec2 preview_pos = ImGui::GetCursorScreenPos();
   ImGui::Image(tex_id, ImVec2(kModalPreviewImageSize, kModalPreviewImageSize), ImVec2(0, 1), ImVec2(1, 0));
+
+  // Face-number overlay: use the same rotation/zoom/size used by the GL render
+  // pass above so screen coords align pixel-for-pixel with the FBO texture.
+  if (const auto* m = GetLastCrystalMesh(); m != nullptr) {
+    float mvp[16];
+    CrystalRenderer::ComputeMvp(g_crystal_rotation, g_crystal_zoom, static_cast<int>(kModalPreviewImageSize),
+                                static_cast<int>(kModalPreviewImageSize), mvp);
+    DrawFaceNumberOverlay(m->vertices, m->vertex_count, m->triangles, m->triangle_count, m->face_numbers,
+                          g_crystal_rotation, mvp, preview_pos, ImVec2(kModalPreviewImageSize, kModalPreviewImageSize),
+                          ImGui::GetWindowDrawList());
+  }
 
   // Overlay InvisibleButton to consume mouse clicks and prevent modal window drag.
   ImGui::SetCursorScreenPos(preview_pos);
