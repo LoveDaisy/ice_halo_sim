@@ -800,7 +800,8 @@ void RenderLogPanel(float window_width, float window_height) {
   ImGui::SetNextWindowPos(ImVec2(0, window_height - kLogPanelHeight - kStatusBarHeight));
   ImGui::SetNextWindowSize(ImVec2(window_width, kLogPanelHeight));
   ImGui::Begin("##LogPanel", &g_state.log_panel_open,
-               ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+               ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+                   ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // Config controls row
   static const char* const kLevelNames[] = { "Trace", "Debug", "Verbose", "Info", "Warning", "Error", "Off" };
