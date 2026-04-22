@@ -6,6 +6,8 @@
 
 #include "gui/gui_constants.hpp"
 
+struct GLFWwindow;
+
 namespace lumice::gui {
 
 // Pure function: clamp desired window size to the usable work area.
@@ -40,6 +42,19 @@ inline int SelectMonitorIndexByCenter(int cx, int cy, const MonitorRect* rects, 
   }
   return -1;
 }
+
+// Return the workarea of the monitor containing the given window's center.
+// Returns false when win is nullptr, GLFW cannot enumerate monitors, or the
+// window center falls outside every known monitor — in all failure cases the
+// caller should fall back to an unbounded constraint (e.g. FLT_MAX) rather
+// than silently defaulting to a primary-monitor workarea, which would
+// reintroduce the multi-monitor "primary bias" anti-pattern documented in
+// scrum-gui-polish-v11/task-fix-multi-monitor-aspect.
+//
+// Mirrors the inline pattern used by ApplyAspectRatio in app.cpp:147-168.
+// Both sites must evolve together; prefer routing future monitor-lookup
+// needs through this helper to collapse the duplicate pattern over time.
+bool GetCurrentMonitorWorkArea(GLFWwindow* win, MonitorRect* out);
 
 }  // namespace lumice::gui
 

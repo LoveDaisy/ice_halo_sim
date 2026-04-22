@@ -15,6 +15,7 @@
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
+#include "gui/window_sizing.hpp"
 #include "imgui.h"
 
 namespace lumice::gui {
@@ -345,13 +346,7 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/) {
 // Crystal tab body: type radio + parameter sliders + face distance tree.
 // Preview / style / reset live in the persistent left pane (see
 // RenderCrystalPreviewPane) so they remain visible on Axis / Filter tabs too.
-static void RenderCrystalModal(GuiState& state) {
-  // Transitional glue: keep rendering the preview here until the two-column
-  // layout lands in the following milestone; the left pane will then call
-  // RenderCrystalPreviewPane directly and this inline call is removed.
-  RenderCrystalPreviewPane(state);
-  ImGui::Separator();
-
+static void RenderCrystalModal(GuiState& /*state*/) {
   auto& cr = g_crystal_buf;
 
   // -- Crystal type --
@@ -572,11 +567,13 @@ static void RenderFilterModal(GuiState& /*state*/) {
 // Public API
 // ============================================================
 
-// True only when the unified edit modal is open AND the Crystal tab is the
-// active one. Used by visual-smoke tests to detect FBO contention with the
-// modal's per-frame g_crystal_renderer.Render() call.
-bool IsEditModalCrystalTabActive() {
-  return g_active_modal == ActiveModal::kOpen && g_active_tab == ActiveTab::kCrystal;
+// True when the unified edit modal is open (any tab). Used by visual-smoke
+// tests to skip FBO drive while the modal owns the FBO via its per-frame
+// g_crystal_renderer.Render() call. Since the preview pane is now always
+// visible (shared across Crystal / Axis / Filter tabs), the gate condition
+// is modal-open rather than crystal-tab-active.
+bool IsEditModalOpen() {
+  return g_active_modal == ActiveModal::kOpen;
 }
 
 void ResetModalState() {
@@ -727,7 +724,7 @@ void HandlePopupClosed(GuiState& state) {
 
 }  // namespace
 
-void RenderEditModals(GuiState& state) {
+void RenderEditModals(GuiState& state, GLFWwindow* window) {
   // Deferred OpenPopup: only Staged mode uses the popup stack. Immediate mode
   // drives visibility directly via g_active_modal → title_x_open (see below),
   // so it neither opens nor consults the popup stack.
@@ -748,7 +745,19 @@ void RenderEditModals(GuiState& state) {
     }
   }
 
-  ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
+  // Size constraints: clamp modal max to the workarea of the monitor containing
+  // the window center, so it cannot overflow a small secondary display. When
+  // the helper cannot identify a monitor (headless tests, nullptr window), fall
+  // back to an unbounded max rather than a primary-monitor default (avoids the
+  // multi-monitor "primary bias" anti-pattern).
+  MonitorRect mon{};
+  if (GetCurrentMonitorWorkArea(window, &mon)) {
+    auto max_w = std::max(kEditModalMinWidth, static_cast<float>(mon.w - kWindowDecorationMargin));
+    auto max_h = std::max(static_cast<float>(kMinWindowHeight), static_cast<float>(mon.h - kWindowDecorationMargin));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(max_w, max_h));
+  } else {
+    ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
+  }
   // Mode dispatch: Staged → BeginPopupModal (blocks background, exposes title-bar ×
   // via p_open). Immediate → ImGui::Begin (regular window — external clicks pass
   // through, hover/focus work on background UI, window stays visible until an
@@ -880,6 +889,27 @@ void RenderEditModals(GuiState& state) {
   const char* axis_label = (show_dirty && axis_dirty) ? "Axis *###axis_tab" : "Axis###axis_tab";
   const char* filter_label = (show_dirty && filter_dirty) ? "Filter *###filter_tab" : "Filter###filter_tab";
 
+  // Two-column layout: left pane hosts the persistent crystal preview (shared
+  // across all tabs), right pane hosts the TabBar + tab body. Both child
+  // heights are pinned explicitly so AlwaysAutoResize does not chase the
+  // child sizes in a cycle; widths use GetStyle() / GetContentRegionAvail()
+  // for DPI / font adaptivity (see plan §3.2).
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float kLeftChildW = kModalPreviewImageSize + style.WindowPadding.x * 2.0f + 4.0f;
+  const float kToolRow = ImGui::GetFrameHeightWithSpacing();
+  const float kVPad = style.WindowPadding.y * 2.0f + style.ItemSpacing.y;
+  const float kLeftChildHeight = kModalPreviewImageSize + kToolRow + kVPad;
+  const float right_w = std::max(320.0f, ImGui::GetContentRegionAvail().x - kLeftChildW - style.ItemSpacing.x);
+
+  // Left pane: NoScrollbar + NoScrollWithMouse — height budget covers content,
+  // no scrolling should occur; disabling scroll-on-wheel also prevents
+  // stray wheel events from leaking into surrounding UI.
+  ImGui::BeginChild("##modal_left_pane", ImVec2(kLeftChildW, kLeftChildHeight), ImGuiChildFlags_None,
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  RenderCrystalPreviewPane(state);
+  ImGui::EndChild();
+  ImGui::SameLine();
+  ImGui::BeginChild("##modal_right_pane", ImVec2(right_w, kLeftChildHeight), ImGuiChildFlags_None);
   if (ImGui::BeginTabBar("##edit_modal_tabs")) {
     if (ImGui::BeginTabItem(crystal_label, nullptr, crystal_flags)) {
       g_active_tab = ActiveTab::kCrystal;
@@ -900,6 +930,7 @@ void RenderEditModals(GuiState& state) {
     // Consumed pending selection after BeginTabItem reads the flag.
     g_pending_tab_select = false;
   }
+  ImGui::EndChild();
 
   // Immediate mode: push buffer→entry every frame (diff-gated inside
   // CommitAllBuffersImmediate; no-op when nothing changed). Esc / click-outside

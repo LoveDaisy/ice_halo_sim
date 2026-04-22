@@ -703,13 +703,24 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->WindowFocus("##LeftPanel");
       ctx->Yield(2);
 
-      // Core assertion: Edit Entry is still the topmost window.
-      // BringWindowToDisplayFront splices to back of g.Windows; ergo back() is
-      // top. (Docking is not enabled in this project — verified in plan §3.5
-      // F12 — so no DockNode host appears at the tail.)
+      // Core assertion: Edit Entry is still the topmost root window.
+      // BringWindowToDisplayFront splices to back of g.Windows; since
+      // scrum-gui-polish-v12/task-modal-preview-cross-tab the modal contains
+      // BeginChild panes (##modal_left_pane / ##modal_right_pane) that appear
+      // after their parent in g.Windows with ImGuiWindowFlags_ChildWindow set;
+      // walk backwards to find the topmost non-child window for the invariant.
       ImGuiContext* g = ImGui::GetCurrentContext();
       IM_CHECK(g->Windows.Size > 0);
-      IM_CHECK_STR_EQ(g->Windows.back()->Name, "Edit Entry");
+      ImGuiWindow* topmost_root = nullptr;
+      for (int i = g->Windows.Size - 1; i >= 0; i--) {
+        ImGuiWindow* w = g->Windows[i];
+        if ((w->Flags & ImGuiWindowFlags_ChildWindow) == 0) {
+          topmost_root = w;
+          break;
+        }
+      }
+      IM_CHECK(topmost_root != nullptr);
+      IM_CHECK_STR_EQ(topmost_root->Name, "Edit Entry");
 
       // Behavior fallback: Close still works (sanity that the modal is
       // actually responding to clicks, not just visually layered).

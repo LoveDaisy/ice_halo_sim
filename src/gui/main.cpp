@@ -296,7 +296,7 @@ int main(int argc, char** argv) {
       gui::RenderRightPanel(window, lw, lh);
       gui::RenderPreviewPanel(window, lw, lh);
       gui::RenderStatusBar(lw, lh);
-      gui::RenderEditModals(gui::g_state);
+      gui::RenderEditModals(gui::g_state, window);
 
       ImGui::Render();
       int dw = 0, dh = 0;
@@ -419,7 +419,7 @@ int main(int argc, char** argv) {
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     gui::RenderLogPanel(layout_width, layout_height);
     gui::RenderStatusBar(layout_width, layout_height);
-    gui::RenderEditModals(gui::g_state);
+    gui::RenderEditModals(gui::g_state, window);
     gui::RenderUnsavedPopup(window);
 
     // Reset aspect ratio to Free when panel collapse state changes (window size doesn't adjust automatically).
