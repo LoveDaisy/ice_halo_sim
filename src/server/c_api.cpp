@@ -972,12 +972,13 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
   // Fill per-triangle face numbers via core FillHexFnMap.
   // ComputeTriNormal (defined above) normalizes via cross-product length; output
   // is a unit normal per triangle — matches FillHexFnMap's precondition.
-  std::vector<float> tri_normals(tri_cnt * 3);
+  // Stack buffers sized to the API cap to avoid heap allocation on slider drag.
+  float tri_normals[LUMICE_MAX_CRYSTAL_TRIANGLES * 3] = {};
   for (size_t i = 0; i < tri_cnt; ++i) {
-    ComputeTriNormal(i, tri_normals.data() + i * 3);
+    ComputeTriNormal(i, tri_normals + i * 3);
   }
   ns::IdType fn_tmp[LUMICE_MAX_CRYSTAL_TRIANGLES] = {};
-  ns::FillHexFnMap(tri_cnt, tri_normals.data(), fn_tmp);
+  ns::FillHexFnMap(tri_cnt, tri_normals, fn_tmp);
   for (size_t i = 0; i < tri_cnt; ++i) {
     // kInvalidId is uint16_t(0xffff) = 65535; a direct static_cast to int would
     // yield 65535, not -1. Explicit check maps it to the C-API sentinel -1.

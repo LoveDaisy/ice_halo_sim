@@ -23,6 +23,17 @@ class CrystalRenderer {
   // Render with given rotation, zoom, and style
   void Render(const float rotation[16], float zoom, CrystalStyle style);
 
+  // Shared camera constants: ComputeMvp and Render must agree on FOV / near-
+  // far distances so the face-number overlay aligns pixel-for-pixel with the
+  // GL-rendered crystal.
+  static constexpr float kFovDeg = 30.0f;
+  static constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+
+  // Camera-to-origin distance used by both the MVP and the eye-space edge
+  // classification in Render(). Derived from zoom so overlay and renderer
+  // share a single source of truth.
+  static float ComputeDist(float zoom);
+
   // Build the same MVP matrix (column-major) used inside Render().
   // Exposed so overlays can project CPU-side points to the identical screen
   // coordinates; changing this function must keep Render's internal use in sync.

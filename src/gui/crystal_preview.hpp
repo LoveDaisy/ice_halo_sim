@@ -28,8 +28,9 @@ int BuildAndUploadCrystalMesh(const CrystalConfig& cr);
 
 // Access the most-recently uploaded crystal mesh (Y-Z swapped + AABB normalized).
 // Returns nullptr if no mesh has been built yet or after ResetLastCrystalMesh().
-// The returned pointer refers to file-scope singleton state in crystal_preview.cpp
-// and is valid until the next BuildAndUploadCrystalMesh() call.
+// The returned pointer refers to file-scope singleton state in crystal_preview.cpp;
+// the address remains stable across calls — only the pointed-to contents are
+// overwritten by each BuildAndUploadCrystalMesh() call.
 const LUMICE_CrystalMesh* GetLastCrystalMesh();
 
 // Invalidate the cached mesh. Used in GUI tests to ensure per-case state isolation.

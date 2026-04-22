@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdio>
 
+#include "gui/gui_logger.hpp"
+
 namespace lumice::gui {
 
 int AggregateFaceLabels(const float* vertices, int vertex_count, const int* triangles, int triangle_count,
@@ -32,7 +34,11 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
     float cy = (p0[1] + p1[1] + p2[1]) / 3.0f;
     float cz = (p0[2] + p1[2] + p2[2]) / 3.0f;
 
-    // Triangle normal = normalize(cross(p1 - p0, p2 - p0))
+    // Triangle normal = normalize(cross(p1 - p0, p2 - p0)).
+    // Note: we recompute from vertices rather than reusing
+    // LUMICE_CrystalMesh.edge_face_normals because the latter indexes by edge,
+    // not by triangle; there is no direct triangle-to-edge mapping exposed.
+    // Cost is negligible (<=128 triangles).
     float e1[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
     float e2[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
     float nx = e1[1] * e2[2] - e1[2] * e2[1];
@@ -56,7 +62,11 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
     }
     if (slot == -1) {
       if (label_count >= max_labels) {
-        continue;  // bucket overflow; drop extra faces silently
+        // Bucket overflow: drop extra faces. hex crystals max out at ~20 labels,
+        // so this only triggers on a new crystal kind exceeding the compile-time
+        // bound — log once so it's discoverable.
+        GUI_LOG_WARNING("face_number_overlay: label bucket overflow (max={})", max_labels);
+        continue;
       }
       slot = label_count++;
       out_labels[slot].face_number = fn;
@@ -89,10 +99,10 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
   return label_count;
 }
 
-bool ProjectLabelToScreen(const FaceLabel& label, const float rotation[16], const float mvp[16], float image_pos_x,
+bool ProjectLabelToScreen(const FaceLabel* label, const float rotation[16], const float mvp[16], float image_pos_x,
                           float image_pos_y, float image_width, float image_height, float* out_screen_x,
                           float* out_screen_y, bool* out_front_facing) {
-  const float* p = label.display_center;
+  const float* p = label->display_center;
 
   // clip = mvp * (p, 1), column-major.
   float cx = mvp[0] * p[0] + mvp[4] * p[1] + mvp[8] * p[2] + mvp[12];
@@ -115,7 +125,7 @@ bool ProjectLabelToScreen(const FaceLabel& label, const float rotation[16], cons
   // component is positive (points back toward the camera). This is equivalent
   // to crystal_renderer.cpp:357-367's dot(n_eye, p_eye) < 0 test for near-
   // centered points and is what drives the GL back-face classification.
-  const float* n = label.display_normal;
+  const float* n = label->display_normal;
   float rn_z = rotation[2] * n[0] + rotation[6] * n[1] + rotation[10] * n[2];
   *out_front_facing = (rn_z > 0.0f);
 
@@ -145,7 +155,7 @@ void DrawFaceNumberOverlay(const float* vertices, int vertex_count, const int* t
     float sx = 0.0f;
     float sy = 0.0f;
     bool front = false;
-    if (!ProjectLabelToScreen(labels[i], rotation, mvp, image_pos.x, image_pos.y, image_size.x, image_size.y, &sx, &sy,
+    if (!ProjectLabelToScreen(&labels[i], rotation, mvp, image_pos.x, image_pos.y, image_size.x, image_size.y, &sx, &sy,
                               &front)) {
       continue;
     }

@@ -121,7 +121,7 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
       float sx = 0.0f;
       float sy = 0.0f;
       bool front = false;
-      IM_CHECK(ProjectLabelToScreen(label, rot, mvp, 10.0f, 20.0f, 320.0f, 320.0f, &sx, &sy, &front));
+      IM_CHECK(ProjectLabelToScreen(&label, rot, mvp, 10.0f, 20.0f, 320.0f, 320.0f, &sx, &sy, &front));
       IM_CHECK(front);
     };
   }
@@ -144,7 +144,7 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
       float sx = 0.0f;
       float sy = 0.0f;
       bool front = false;
-      IM_CHECK(ProjectLabelToScreen(label, rot, mvp, 0.0f, 0.0f, 320.0f, 320.0f, &sx, &sy, &front));
+      IM_CHECK(ProjectLabelToScreen(&label, rot, mvp, 0.0f, 0.0f, 320.0f, 320.0f, &sx, &sy, &front));
       IM_CHECK(!front);
     };
   }
@@ -200,7 +200,7 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
       float sx = 0.0f;
       float sy = 0.0f;
       bool front = false;
-      IM_CHECK(ProjectLabelToScreen(label, rot, mvp, /*image_pos*/ 100.0f, 200.0f,
+      IM_CHECK(ProjectLabelToScreen(&label, rot, mvp, /*image_pos*/ 100.0f, 200.0f,
                                     /*image_size*/ 320.0f, 320.0f, &sx, &sy, &front));
       // Origin → NDC (0, 0) → screen center of image rect.
       IM_CHECK(std::abs(sx - (100.0f + 160.0f)) < 1e-3f);

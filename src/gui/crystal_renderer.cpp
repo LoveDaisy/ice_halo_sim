@@ -268,14 +268,17 @@ void CrystalRenderer::UpdateMesh(const float* vertices, int vertex_count, const 
   glBufferData(GL_ELEMENT_ARRAY_BUFFER, triangle_count * 3 * sizeof(int), triangles, GL_DYNAMIC_DRAW);
 }
 
+float CrystalRenderer::ComputeDist(float zoom) {
+  float half_tan = std::tan(kFovDeg * kDeg2Rad * 0.5f);
+  return zoom / half_tan;
+}
+
 void CrystalRenderer::ComputeMvp(const float rotation[16], float zoom, int width, int height, float out_mvp[16]) {
   // Build perspective projection
   float aspect = static_cast<float>(width) / static_cast<float>(height);
-  constexpr float kFovDeg = 30.0f;
-  constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
   float fov_rad = kFovDeg * kDeg2Rad;
   float half_tan = std::tan(fov_rad * 0.5f);
-  float dist = zoom / half_tan;
+  float dist = ComputeDist(zoom);
   float near_plane = std::max(dist - 10.0f, 0.1f);
   float far_plane = dist + 10.0f;
   float f = 1.0f / half_tan;
@@ -333,12 +336,10 @@ void CrystalRenderer::Render(const float rotation[16], float zoom, CrystalStyle 
   float mvp[16] = {};
   ComputeMvp(rotation, zoom, width_, height_, mvp);
 
-  // Reconstruct view_rot for eye-space midpoint transform used by edge
-  // classification below. ComputeMvp encodes the same translation internally.
-  constexpr float kFovDeg = 30.0f;
-  constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
-  float half_tan = std::tan(kFovDeg * kDeg2Rad * 0.5f);
-  float dist = zoom / half_tan;
+  // view_rot for eye-space midpoint transform used by edge classification
+  // below. Reuses ComputeDist so FOV / zoom->dist mapping has a single source
+  // of truth with ComputeMvp.
+  float dist = ComputeDist(zoom);
   float view_rot[16];
   std::memcpy(view_rot, rotation, 16 * sizeof(float));
   view_rot[12] = 0.0f;

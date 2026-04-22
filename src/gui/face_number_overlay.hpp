@@ -26,7 +26,10 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
 // test in eye space (see crystal_renderer.cpp:357-367 for the reference algorithm).
 // Returns false only when the projection is degenerate (clip.w == 0); otherwise
 // writes into out_screen_x / out_screen_y / out_front_facing.
-bool ProjectLabelToScreen(const FaceLabel& label, const float rotation[16], const float mvp[16], float image_pos_x,
+//
+// On false return, the out parameters are left uninitialized. Callers must
+// check the return value before reading them.
+bool ProjectLabelToScreen(const FaceLabel* label, const float rotation[16], const float mvp[16], float image_pos_x,
                           float image_pos_y, float image_width, float image_height, float* out_screen_x,
                           float* out_screen_y, bool* out_front_facing);
 
