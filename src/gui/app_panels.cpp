@@ -84,7 +84,7 @@ void RenderTopBar(float window_width) {
   ImGui::SetNextWindowSize(ImVec2(window_width, kTopBarHeight));
   ImGui::Begin("##TopBar", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse);
+                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // Left-panel collapse toggle (placed before Run/Stop; owns the leftmost slot of the top bar
   // so it can never overlap with panel-internal headers).
@@ -272,7 +272,8 @@ void RenderLeftPanel(float window_height) {
   ImGui::SetNextWindowSize(ImVec2(kLeftPanelWidth, panel_height));
   ImGui::Begin("##LeftPanel", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                   ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // ---- Layout: cards (scroll) + toolbar ----
   float avail_h = ImGui::GetContentRegionAvail().y;
@@ -319,9 +320,9 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   float panel_x = window_width - kRightPanelWidth;
   ImGui::SetNextWindowPos(ImVec2(panel_x, kTopBarHeight));
   ImGui::SetNextWindowSize(ImVec2(kRightPanelWidth, panel_height));
-  ImGui::Begin(
-      "##RightPanel", nullptr,
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+  ImGui::Begin("##RightPanel", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // ---- Scene Group ----
   if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -528,7 +529,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   ImGui::SetNextWindowSize(ImVec2(panel_width, panel_height));
   ImGui::Begin("##PreviewPanel", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground);
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground |
+                   ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // Renderer invariants (previously in RenderViewBar, runs every frame).
   // Copy-model: GuiState always owns a single renderer, no vector/index bookkeeping needed.
@@ -659,7 +661,7 @@ void RenderStatusBar(float window_width, float window_height) {
   ImGui::SetNextWindowSize(ImVec2(window_width, kStatusBarHeight));
   ImGui::Begin("##StatusBar", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse);
+                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // Status indicator
   switch (g_state.sim_state) {
