@@ -3,8 +3,15 @@
 #include <cstring>
 #include <thread>
 
-#include "gui/log_sink.hpp"     // ImGuiLogSink (for log_panel_above_left_panel test sink injection)
-#include "imgui_internal.h"     // ImGuiContext, g.Windows access for z-order assertions
+#include "gui/log_sink.hpp"  // ImGuiLogSink (for log_panel_above_left_panel test sink injection)
+// imgui_internal.h is generally an anti-pattern, but z-order assertions need
+// direct ImGuiContext::Windows access. The relied-on semantics
+// (BringWindowToDisplayFront splices to g.Windows back; creation with
+// NoBringToFrontOnFocus does push_front = bottom) are documented in the
+// convention block at the top of src/gui/app_panels.cpp. Any ImGui upgrade
+// that alters either rule must update both that comment and the
+// p1_layout / p1_edit_modal z-order assertions below.
+#include "imgui_internal.h"
 #include "test_gui_shared.hpp"  // declares g_enable_log_panel (toggle gate for RenderLogPanel)
 
 // ========== Helpers for interaction tests ==========
@@ -710,33 +717,49 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
 
-      gui::g_state.modal_immediate_mode = false;
+      // ResetTestState() (calls ResetModalState() which restores
+      // modal_immediate_mode = false). Belt-and-braces against IM_CHECK early-
+      // return: even if an assertion above fires, the next test's first action
+      // is its own ResetTestState() — but call it here too for clarity.
+      ResetTestState();
     };
   }
 
-  // P1: scrum-gui-polish-v12 / task-gui-window-zorder — Same-layer z-order
-  // invariant. ##LogPanel is rendered AFTER ##LeftPanel/##RightPanel in
-  // src/gui/main.cpp, so the natural Begin order places LogPanel above the
-  // business panels (Layer 2 above Layer 1 in the convention block at the top
-  // of src/gui/app_panels.cpp). NoBringToFrontOnFocus on both panels freezes
-  // this order against click side effects. This test asserts the index of
-  // ##LogPanel in g.Windows is greater than that of ##LeftPanel after we
-  // explicitly try to raise ##LeftPanel.
+  // P1: scrum-gui-polish-v12 / task-gui-window-zorder — z-order invariant
+  // between LogPanel (Layer 3, no flag, push_back -> top) and LeftPanel
+  // (background cluster, NoBringToFrontOnFocus, push_front -> bottom).
+  // Asserts the index of ##LogPanel in g.Windows is greater than that of
+  // ##LeftPanel after we explicitly try to raise ##LeftPanel. See the
+  // z-order convention block at the top of src/gui/app_panels.cpp.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_layout", "log_panel_above_left_panel");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+
       // RenderLogPanel is gated twice in the test harness:
       //   1. test_gui_main.cpp's main loop only calls it if g_enable_log_panel
       //   2. RenderLogPanel itself early-returns if g_imgui_log_sink is null
       //      (the sink is normally initialized only when --log-panel is on).
-      // Both gates are bypassed here for the test's duration, then restored.
-      const bool prev_log_panel = g_enable_log_panel;
-      auto prev_sink = gui::g_imgui_log_sink;
-      g_enable_log_panel = true;
-      if (!gui::g_imgui_log_sink) {
-        gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
-      }
+      // RAII guard restores both gates regardless of whether IM_CHECK fires —
+      // ResetTestState() doesn't touch these test-harness CLI globals, so a
+      // mid-test assertion failure would otherwise leak the log panel into
+      // every subsequent test in this binary.
+      struct LogPanelGateGuard {
+        bool prev_enable;
+        std::shared_ptr<gui::ImGuiLogSink> prev_sink;
+        LogPanelGateGuard() : prev_enable(g_enable_log_panel), prev_sink(gui::g_imgui_log_sink) {
+          g_enable_log_panel = true;
+          if (!gui::g_imgui_log_sink) {
+            gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
+          }
+        }
+        ~LogPanelGateGuard() {
+          gui::g_imgui_log_sink = prev_sink;
+          g_enable_log_panel = prev_enable;
+          gui::g_state.log_panel_open = false;
+        }
+      } gate_guard;
+
       gui::g_state.log_panel_open = true;
       ctx->Yield(4);
 
@@ -745,12 +768,11 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->WindowFocus("##LeftPanel");
       ctx->Yield(2);
 
-      // ImGui creates windows lacking NoBringToFrontOnFocus via
-      // g.Windows.push_back (= top), and windows carrying the flag via
-      // push_front (= bottom). LogPanel intentionally has no flag (Layer 3
-      // floating); LeftPanel does (background cluster). Therefore LogPanel's
-      // index in g.Windows must be greater than LeftPanel's. See the
-      // convention block at the top of src/gui/app_panels.cpp.
+      // ImGui creates windows without NoBringToFrontOnFocus via
+      // g.Windows.push_back (= visual top); windows with the flag via
+      // push_front (= visual bottom). LogPanel intentionally has no flag
+      // (Layer 3 floating); LeftPanel does (background cluster). Therefore
+      // LogPanel's index in g.Windows must be greater than LeftPanel's.
       ImGuiContext* g = ImGui::GetCurrentContext();
       IM_CHECK(g != nullptr);
       int log_idx = -1;
@@ -766,9 +788,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK(left_idx >= 0);
       IM_CHECK_GT(log_idx, left_idx);
 
-      gui::g_state.log_panel_open = false;
-      g_enable_log_panel = prev_log_panel;
-      gui::g_imgui_log_sink = prev_sink;
+      // gate_guard restores log-panel CLI globals + log_panel_open here.
     };
   }
 

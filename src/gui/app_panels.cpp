@@ -50,8 +50,8 @@
 //       above the LeftPanel / RightPanel cluster.
 //     - panels.cpp::SliderWithPreset BeginPopup
 //
-//   Layer 1+2 collapsed (Background cluster; NoBringToFrontOnFocus,
-//                        push_front on creation -> bottom of g.Windows):
+//   Background cluster (NoBringToFrontOnFocus, push_front on creation
+//                       -> bottom of g.Windows):
 //     - "##LeftPanel" / "##RightPanel" — fixed left/right strips.
 //     - "##TopBar" / "##StatusBar" — fixed top/bottom bars.
 //     - "##PreviewPanel" — transparent (NoBackground); the OpenGL preview
@@ -59,7 +59,8 @@
 //       SwapBuffers in main.cpp.
 //     Within this cluster, push_front means the LATEST Begin'd window ends
 //     up at index 0 (bottom). Visual order within the cluster is therefore
-//     the REVERSE of main.cpp Render* call order.
+//     the REVERSE of main.cpp Render* call order. Cluster members do not
+//     overlap each other, so this internal ordering has no visual effect.
 //
 // -----------------------------------------------------------------------------
 // CHECKLIST when adding a new ImGui::Begin window (in this file or elsewhere):
@@ -807,14 +808,12 @@ void RenderLogPanel(float window_width, float window_height) {
 
   ImGui::SetNextWindowPos(ImVec2(0, window_height - kLogPanelHeight - kStatusBarHeight));
   ImGui::SetNextWindowSize(ImVec2(window_width, kLogPanelHeight));
-  // Note: ##LogPanel intentionally does NOT carry NoBringToFrontOnFocus.
-  // It belongs to Layer 3 (floating, raisable) per the convention block at
-  // the top of this file. ImGui creates NoBringToFrontOnFocus windows via
+  // ##LogPanel intentionally does NOT carry NoBringToFrontOnFocus: it
+  // belongs to Layer 3 (floating, raisable) per the z-order convention block
+  // at the top of this file. ImGui creates NoBringToFrontOnFocus windows via
   // push_front (= bottom of g.Windows) and others via push_back (= top), so
   // adding the flag here would push LogPanel into the background cluster
   // BELOW LeftPanel/RightPanel — the opposite of the desired stacking.
-  // See plan §3.2 (revised) and §3.5 F14 in
-  // scratchpad/scrum-gui-polish-v12/task-gui-window-zorder/plan.md.
   ImGui::Begin("##LogPanel", &g_state.log_panel_open,
                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
 
