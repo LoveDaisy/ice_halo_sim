@@ -312,6 +312,82 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: scrum-gui-polish-v12 / task-modal-preview-cross-tab — the persistent
+  // crystal preview pane (##modal_left_pane) must be reachable from every tab,
+  // and the right TabBar pane (##modal_right_pane) must render with non-zero
+  // width on the first frame (harden against the 0.0f right-width fallback
+  // discussed in plan §3.2).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "preview_visible_across_tabs");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Open Edit Entry modal via the Crystal edit shortcut.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      // Left pane anchor: preview InvisibleButton must exist anywhere under
+      // the modal (glob walks into BeginChild windows too).
+      IM_CHECK(ctx->ItemExists("**/##modal_preview_interact"));
+      // Right pane anchor: Crystal tab header must exist — proves the right
+      // BeginChild resolved to non-zero width so TabBar rendered.
+      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
+
+      // Switch to Axis tab — left preview should still be present.
+      ctx->ItemClick("**/###axis_tab");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##modal_preview_interact"));
+
+      // Switch to Filter tab — same invariant.
+      ctx->ItemClick("**/###filter_tab");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##modal_preview_interact"));
+
+      // Close modal (cleanup).
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // P1: scrum-gui-polish-v12 / task-modal-preview-cross-tab — trackball
+  // rotation applied on the preview must survive tab switches (the preview
+  // is persistent, so ImGui must not reinitialize its child state on
+  // tab-active change).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "preview_rotation_persists_across_tabs");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+
+      // Baseline rotation matrix before any drag.
+      float before[16];
+      std::memcpy(before, gui::g_crystal_rotation, sizeof before);
+
+      // Drag on the preview to apply a non-zero trackball rotation.
+      ctx->ItemDragWithDelta("**/##modal_preview_interact", ImVec2(60.0f, 0.0f));
+      ctx->Yield(2);
+      IM_CHECK(std::memcmp(before, gui::g_crystal_rotation, sizeof before) != 0);
+
+      // Freeze post-drag state as the invariant baseline for the tab switch.
+      float drag_state[16];
+      std::memcpy(drag_state, gui::g_crystal_rotation, sizeof drag_state);
+
+      // Switch tabs (Axis then back to Crystal) — rotation must not reset.
+      ctx->ItemClick("**/###axis_tab");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###crystal_tab");
+      ctx->Yield(2);
+      IM_CHECK(std::memcmp(drag_state, gui::g_crystal_rotation, sizeof drag_state) == 0);
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
   // P1: Edit modal OK without any change must NOT clear the rendered preview
   // or arm Revert. Regression guard for scrum-gui-polish-v7 152.2: previously
   // CommitAllBuffers unconditionally MarkFilterDirty()'d after any OK,
