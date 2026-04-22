@@ -14,6 +14,67 @@
 #include "gui/panels.hpp"
 #include "imgui.h"
 
+// =============================================================================
+// GUI window z-order convention (task-gui-window-zorder, scrum-gui-polish-v12)
+// -----------------------------------------------------------------------------
+// ImGui z-order is decided by two layered mechanisms:
+//   1. Begin call order (natural order): earlier Begin = lower; later = higher.
+//      Within the same focus class, main loop's Render*() call order in
+//      src/gui/main.cpp determines this natural stacking.
+//   2. FocusWindow side-effect: clicking/focusing a window splices it to the
+//      back of g.Windows (= topmost). ImGuiWindowFlags_NoBringToFrontOnFocus
+//      disables this side-effect, FREEZING the natural order.
+//
+// Layered model (from bottom to top):
+//
+//   Layer 4 (Top, ImGui-managed):
+//     - Tooltip / DragDrop overlay (ImGui internal, automatic top)
+//     - GetForegroundDrawList (debug overlay; not used in this project)
+//
+//   Layer 3 (Floating; default raise behavior — NO NoBringToFrontOnFocus):
+//     - Staged "Edit Entry" (BeginPopupModal, on ImGui popup stack -> always top)
+//     - Immediate "Edit Entry" (ImGui::Begin regular window)
+//     - "Unsaved Changes" (BeginPopupModal)
+//     - panels.cpp::SliderWithPreset BeginPopup
+//
+//   Layer 2 (Toggleable foreground panel; NoBringToFrontOnFocus):
+//     - "##LogPanel" — user-toggleable; in main.cpp it is rendered AFTER the
+//       business panels, so it naturally occludes the bottom of LeftPanel /
+//       RightPanel when open.
+//
+//   Layer 1 (Business panels; NoBringToFrontOnFocus):
+//     - "##LeftPanel" / "##RightPanel" — fixed left/right strips.
+//
+//   Layer 0 (Background chrome; NoBringToFrontOnFocus):
+//     - "##TopBar" / "##StatusBar" — fixed top/bottom bars (no overlap with
+//       the central area, but treated as background to keep ordering uniform).
+//     - "##PreviewPanel" — transparent (NoBackground); the OpenGL preview
+//       shader is rendered into this region between ImGui::Render and
+//       SwapBuffers in main.cpp.
+//
+// Within Layers 0–2, z-order is the main.cpp Render* call order. Current order
+// (bottom -> top in src/gui/main.cpp): TopBar, LeftPanel, RightPanel,
+// PreviewPanel, LogPanel, StatusBar, RenderEditModals, RenderUnsavedPopup.
+//
+// -----------------------------------------------------------------------------
+// CHECKLIST when adding a new ImGui::Begin window (in this file or elsewhere):
+//   1. Register its layer (Layer 0 / 1 / 2 / 3 / 4) in the model above.
+//   2. If Layer 0–2 (background class), its flags MUST include
+//      ImGuiWindowFlags_NoBringToFrontOnFocus.
+//   3. If Layer 3 (floating), do NOT add NoBringToFrontOnFocus
+//      (preserve default raise behavior).
+//   4. If Layer 0–2, place its Render*() call in src/gui/main.cpp at the
+//      position matching its desired z-order within the layer (earlier call
+//      = lower; later call = higher).
+//   5. Code-review must reject any new Begin not registered here, or any
+//      main.cpp Render* call order that contradicts this model.
+//
+// SCOPE of this convention:
+// File-level soft constraint. No global automation gate; enforcement relies on
+// code-review human inspection. (Whether to promote to CLAUDE.md or a
+// clang-tidy check is left to task-closeout decision.)
+// =============================================================================
+
 namespace lumice::gui {
 
 using SimState = GuiState::SimState;
