@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/crystal.hpp"
 #include "core/geo3d.hpp"
 #include "include/lumice.h"
 #include "server/server.hpp"
@@ -967,6 +968,21 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
     return LUMICE_ERR_INVALID_VALUE;
   }
   out->edge_count = edge_cnt;
+
+  // Fill per-triangle face numbers via core FillHexFnMap.
+  // ComputeTriNormal (defined above) normalizes via cross-product length; output
+  // is a unit normal per triangle — matches FillHexFnMap's precondition.
+  std::vector<float> tri_normals(tri_cnt * 3);
+  for (size_t i = 0; i < tri_cnt; ++i) {
+    ComputeTriNormal(i, tri_normals.data() + i * 3);
+  }
+  ns::IdType fn_tmp[LUMICE_MAX_CRYSTAL_TRIANGLES] = {};
+  ns::FillHexFnMap(tri_cnt, tri_normals.data(), fn_tmp);
+  for (size_t i = 0; i < tri_cnt; ++i) {
+    // kInvalidId is uint16_t(0xffff) = 65535; a direct static_cast to int would
+    // yield 65535, not -1. Explicit check maps it to the C-API sentinel -1.
+    out->face_numbers[i] = (fn_tmp[i] == ns::kInvalidId) ? -1 : static_cast<int>(fn_tmp[i]);
+  }
   for (int i = 0; i < edge_cnt; i++) {
     out->edges[i * 2 + 0] = edge_infos[i].edge.first;
     out->edges[i * 2 + 1] = edge_infos[i].edge.second;

@@ -9,6 +9,8 @@
 #include <string>
 #include <thread>
 
+#include "core/crystal.hpp"
+#include "core/def.hpp"
 #include "include/lumice.h"
 
 TEST(CrystalMeshApi, PrismVerticesAndEdges) {
@@ -52,6 +54,67 @@ TEST(CrystalMeshApi, MissingFields) {
 TEST(CrystalMeshApi, UnknownType) {
   LUMICE_CrystalMesh mesh{};
   EXPECT_EQ(LUMICE_GetCrystalMesh(nullptr, R"({"type": "cube", "shape": {}})", &mesh), LUMICE_ERR_INVALID_VALUE);
+}
+
+TEST(CrystalMeshApi, PrismFaceNumbersInLegalSet) {
+  // Zero-init covers all unused slots with 0; LUMICE_GetCrystalMesh must overwrite
+  // [0, triangle_count) with valid face numbers (>0).
+  LUMICE_CrystalMesh mesh{};
+  const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
+  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  ASSERT_GT(mesh.triangle_count, 0);
+  for (int i = 0; i < mesh.triangle_count; ++i) {
+    int fn = mesh.face_numbers[i];
+    EXPECT_GE(fn, 1) << "triangle " << i << " face_number should be >= 1";
+    EXPECT_LE(fn, 8) << "triangle " << i << " face_number should be <= 8 for prism";
+    EXPECT_NE(fn, -1) << "triangle " << i << " must be recognized";
+  }
+}
+
+TEST(CrystalMeshApi, PyramidFaceNumbersInLegalSet) {
+  LUMICE_CrystalMesh mesh{};
+  const char* json = R"({"type": "pyramid", "shape": {"prism_h": 1.0, "upper_h": 0.5, "lower_h": 0.5}})";
+  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  ASSERT_GT(mesh.triangle_count, 0);
+  bool saw_prism = false;
+  bool saw_upper_pyr = false;
+  bool saw_lower_pyr = false;
+  for (int i = 0; i < mesh.triangle_count; ++i) {
+    int fn = mesh.face_numbers[i];
+    bool legal = (fn == 1) || (fn == 2) ||  // basal
+                 (fn >= 3 && fn <= 8) ||    // prism
+                 (fn >= 13 && fn <= 18) ||  // upper pyramidal
+                 (fn >= 23 && fn <= 28);    // lower pyramidal
+    EXPECT_TRUE(legal) << "triangle " << i << " face_number=" << fn;
+    if (fn >= 3 && fn <= 8) {
+      saw_prism = true;
+    }
+    if (fn >= 13 && fn <= 18) {
+      saw_upper_pyr = true;
+    }
+    if (fn >= 23 && fn <= 28) {
+      saw_lower_pyr = true;
+    }
+  }
+  EXPECT_TRUE(saw_prism);
+  EXPECT_TRUE(saw_upper_pyr);
+  EXPECT_TRUE(saw_lower_pyr);
+}
+
+// Isolated coverage of the C-API's kInvalidId -> -1 conversion logic.
+// Synthetic zero vector forces all prism/basal dot products to fall below kFloatEps,
+// which takes the else branch in FillHexFnMap and leaves the slot as kInvalidId.
+// Test-only input; real callers pass unit per-triangle normals as documented.
+TEST(CrystalMeshApi, FillHexFnMapInvalidNormalMapsToMinusOne) {
+  lumice::IdType fn_tmp[1] = {};
+  const float kCraftedNormal[3] = { 0.0f, 0.0f, 0.0f };
+  lumice::FillHexFnMap(1, kCraftedNormal, fn_tmp);
+  ASSERT_EQ(fn_tmp[0], lumice::kInvalidId);
+  int api_val = (fn_tmp[0] == lumice::kInvalidId) ? -1 : static_cast<int>(fn_tmp[0]);
+  EXPECT_EQ(api_val, -1);
+  // Reverse check: naive static_cast yields 65535, confirming explicit check is needed.
+  EXPECT_EQ(static_cast<int>(fn_tmp[0]), 65535);
+  EXPECT_NE(static_cast<int>(fn_tmp[0]), -1);
 }
 
 
