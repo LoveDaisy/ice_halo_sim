@@ -25,27 +25,31 @@ namespace {
 static bool RenderNonlinearSlider(const char* slider_id, float* value, float min_val, float max_val, const char* fmt,
                                   SliderScale scale) {
   bool changed = false;
+  // ImGuiSliderFlags_NoInput disables Ctrl+Click → InputText across all
+  // SliderFloat / SliderInt calls to work around a macOS Screen Recording bug
+  // that pollutes modifier state and traps sliders in text-edit mode. Users
+  // enter values via the paired InputFloat on the right side of SliderWithInput.
   if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
     float sqrt_val = std::sqrt(std::max(*value, 0.0f));
     float sqrt_max = std::sqrt(max_val);
-    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "")) {
+    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "", ImGuiSliderFlags_NoInput)) {
       *value = sqrt_val * sqrt_val;
       changed = true;
     }
   } else if (scale == SliderScale::kLog && min_val > 0.0f) {
     float norm = slider_mapping::LogValueToNorm(*value, min_val, max_val);
-    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "", ImGuiSliderFlags_NoInput)) {
       *value = slider_mapping::LogNormToValue(norm, min_val, max_val);
       changed = true;
     }
   } else if (scale == SliderScale::kLogLinear && min_val == 0.0f) {
     float norm = slider_mapping::LogLinearValueToNorm(*value, max_val);
-    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "")) {
+    if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "", ImGuiSliderFlags_NoInput)) {
       *value = slider_mapping::LogLinearNormToValue(norm, max_val);
       changed = true;
     }
   } else {
-    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt);
+    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt, ImGuiSliderFlags_NoInput);
   }
   return changed;
 }
@@ -189,7 +193,7 @@ static bool SliderIntWithInput(const char* label, int* value, int min_val, int m
   bool changed = false;
 
   ImGui::PushItemWidth(slider_w);
-  changed |= ImGui::SliderInt(slider_id, value, min_val, max_val);
+  changed |= ImGui::SliderInt(slider_id, value, min_val, max_val, "%d", ImGuiSliderFlags_NoInput);
   ImGui::PopItemWidth();
 
   ImGui::SameLine();

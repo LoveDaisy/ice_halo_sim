@@ -142,15 +142,16 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
   bool changed = false;
 
   ImGui::PushItemWidth(slider_w);
+  // ImGuiSliderFlags_NoInput: see panels.cpp::RenderNonlinearSlider for rationale.
   if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
     float sqrt_val = std::sqrt(std::max(*value, 0.0f));
     float sqrt_max = std::sqrt(max_val);
-    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "")) {
+    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "", ImGuiSliderFlags_NoInput)) {
       *value = sqrt_val * sqrt_val;
       changed = true;
     }
   } else {
-    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt);
+    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt, ImGuiSliderFlags_NoInput);
   }
   ImGui::PopItemWidth();
 
