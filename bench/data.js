@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776854757951,
+  "lastUpdate": 1776854760305,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -3599,6 +3599,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 60.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6ea03e48619368357ee574c62b5c31388d6af037",
+          "message": "Merge pull request #73 from LoveDaisy/feat/gui_polish\n\nfeat(gui-polish-v12): 7 子任务 — 滑杆/录屏/Immediate/弹窗布局/face number",
+          "timestamp": "2026-04-22T18:41:08+08:00",
+          "tree_id": "214de347db4c3436af50e2b7a55d1d805945c514",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6ea03e48619368357ee574c62b5c31388d6af037"
+        },
+        "date": 1776854759628,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 93.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 81.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 72.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 50.5,
             "unit": "%"
           }
         ]
