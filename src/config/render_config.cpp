@@ -95,6 +95,17 @@ void from_json(const nlohmann::json& j, LensParam& l) {
       case LensParam::kRectangular:
         l.fov_ = 0;  // Rectangular is always full-sky; fov is ignored
         break;
+      case LensParam::kFisheyeOrthographic:
+      case LensParam::kDualFisheyeOrthographic:
+        // r = f * sin(theta); boundary r_max = d = kHalfShortEdge. fov = 2 * asin(d / f).
+        // Unlike EA's r = 2f * sin(theta/2) (denominator 2f), orthographic uses f directly.
+        if (d / f > 1.0f) {
+          throw nlohmann::detail::out_of_range::create(
+              kErrCodeInvalidValue, "focal length too short for orthographic fisheye (f >= 12mm required for fov=180)",
+              j);
+        }
+        l.fov_ = std::asin(d / f) * 2 * math::kRadToDegree;
+        break;
     }
   } else {
     throw nlohmann::detail::out_of_range::create(kErrCodeMissingKey, "missing key [fov] or [f]", j);
@@ -115,6 +126,9 @@ float MaxFov(LensParam::LensType type) {
       return 179.0f;  // tan(fov/2) singular at 180
     case LensParam::kFisheyeStereographic:
       return 359.0f;  // tan(fov/4) singular at 360
+    case LensParam::kFisheyeOrthographic:
+    case LensParam::kDualFisheyeOrthographic:
+      return 180.0f;  // sin(theta) aliases past pi/2; theta > pi/2 rejected
     default:
       return 360.0f;  // equal area, equidistant, dual fisheye, rectangular
   }
