@@ -762,6 +762,47 @@ void HandlePopupClosed(GuiState& state) {
   g_active_modal = ActiveModal::kNone;
 }
 
+// Renders the layout-toggle button, the TabBar, and the three tab bodies.
+// Called from both the horizontal (right child) and vertical (bottom child)
+// layout branches with identical arguments; layout-dependent geometry is
+// handled by the caller's BeginChild sizing.
+void RenderModalTabBar(GuiState& state, const char* crystal_label, const char* axis_label, const char* filter_label,
+                       ImGuiTabItemFlags crystal_flags, ImGuiTabItemFlags axis_flags, ImGuiTabItemFlags filter_flags) {
+  // Layout toggle button (view preference — does NOT mark the file dirty).
+  // ASCII H / V labels avoid font fallback issues on platforms lacking Unicode arrows.
+  const char* toggle_label = state.modal_layout_vertical ? "V##layout_toggle" : "H##layout_toggle";
+  if (ImGui::SmallButton(toggle_label)) {
+    state.modal_layout_vertical = !state.modal_layout_vertical;
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", state.modal_layout_vertical ?
+                                "Vertical layout (preview on top)\nClick to switch to Horizontal" :
+                                "Horizontal layout (preview on left)\nClick to switch to Vertical");
+  }
+  ImGui::SameLine();
+
+  if (ImGui::BeginTabBar("##edit_modal_tabs")) {
+    if (ImGui::BeginTabItem(crystal_label, nullptr, crystal_flags)) {
+      g_active_tab = ActiveTab::kCrystal;
+      RenderCrystalModal(state);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(axis_label, nullptr, axis_flags)) {
+      g_active_tab = ActiveTab::kAxis;
+      RenderAxisModal(state);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(filter_label, nullptr, filter_flags)) {
+      g_active_tab = ActiveTab::kFilter;
+      RenderFilterModal(state);
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+    // Consumed pending selection after BeginTabItem reads the flag.
+    g_pending_tab_select = false;
+  }
+}
+
 }  // namespace
 
 void RenderEditModals(GuiState& state, GLFWwindow* window) {
@@ -948,48 +989,41 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   const char* axis_label = (show_dirty && axis_dirty) ? "Axis *###axis_tab" : "Axis###axis_tab";
   const char* filter_label = (show_dirty && filter_dirty) ? "Filter *###filter_tab" : "Filter###filter_tab";
 
-  // Two-column layout: left pane hosts the persistent crystal preview (shared
-  // across all tabs), right pane hosts the TabBar + tab body. Both child
-  // heights are pinned explicitly so AlwaysAutoResize does not chase the
-  // child sizes in a cycle; widths use GetStyle() / GetContentRegionAvail()
-  // for DPI / font adaptivity (see plan §3.2).
+  // Layout dispatch. Horizontal: preview on left, tab bar on right (default).
+  // Vertical: preview on top (full width), tab bar below (full width, scrollable).
+  // Both share the same preview child height and the same RenderModalTabBar body;
+  // only the container geometry and the SameLine/no-SameLine differ.
   const ImGuiStyle& style = ImGui::GetStyle();
-  const float kLeftChildW = kModalPreviewImageSize + style.WindowPadding.x * 2.0f + 4.0f;
+  const float kPreviewChildW_H = kModalPreviewImageSize + style.WindowPadding.x * 2.0f + 4.0f;
   const float kToolRow = ImGui::GetFrameHeightWithSpacing();
   const float kVPad = style.WindowPadding.y * 2.0f + style.ItemSpacing.y;
-  const float kLeftChildHeight = kModalPreviewImageSize + kToolRow + kVPad;
-  const float right_w = std::max(320.0f, ImGui::GetContentRegionAvail().x - kLeftChildW - style.ItemSpacing.x);
+  const float kPreviewChildHeight = kModalPreviewImageSize + kToolRow + kVPad;
+  bool vertical = state.modal_layout_vertical;
 
-  // Left pane: NoScrollbar + NoScrollWithMouse — height budget covers content,
-  // no scrolling should occur; disabling scroll-on-wheel also prevents
-  // stray wheel events from leaking into surrounding UI.
-  ImGui::BeginChild("##modal_left_pane", ImVec2(kLeftChildW, kLeftChildHeight), ImGuiChildFlags_None,
-                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-  RenderCrystalPreviewPane(state);
-  ImGui::EndChild();
-  ImGui::SameLine();
-  ImGui::BeginChild("##modal_right_pane", ImVec2(right_w, kLeftChildHeight), ImGuiChildFlags_None);
-  if (ImGui::BeginTabBar("##edit_modal_tabs")) {
-    if (ImGui::BeginTabItem(crystal_label, nullptr, crystal_flags)) {
-      g_active_tab = ActiveTab::kCrystal;
-      RenderCrystalModal(state);
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem(axis_label, nullptr, axis_flags)) {
-      g_active_tab = ActiveTab::kAxis;
-      RenderAxisModal(state);
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem(filter_label, nullptr, filter_flags)) {
-      g_active_tab = ActiveTab::kFilter;
-      RenderFilterModal(state);
-      ImGui::EndTabItem();
-    }
-    ImGui::EndTabBar();
-    // Consumed pending selection after BeginTabItem reads the flag.
-    g_pending_tab_select = false;
+  if (vertical) {
+    // Upper pane: preview, full modal width, fixed height.
+    ImGui::BeginChild("##modal_top_pane", ImVec2(-FLT_MIN, kPreviewChildHeight), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    RenderCrystalPreviewPane(state);
+    ImGui::EndChild();
+    // Lower pane: tab bar + body, full width, remaining height with scrollbar.
+    ImGui::BeginChild("##modal_bottom_pane", ImVec2(-FLT_MIN, -FLT_MIN), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    RenderModalTabBar(state, crystal_label, axis_label, filter_label, crystal_flags, axis_flags, filter_flags);
+    ImGui::EndChild();
+  } else {
+    // Horizontal: existing layout. Left pane NoScrollbar + NoScrollWithMouse — height
+    // budget covers content; right pane sizes off remaining width.
+    const float right_w = std::max(320.0f, ImGui::GetContentRegionAvail().x - kPreviewChildW_H - style.ItemSpacing.x);
+    ImGui::BeginChild("##modal_left_pane", ImVec2(kPreviewChildW_H, kPreviewChildHeight), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    RenderCrystalPreviewPane(state);
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("##modal_right_pane", ImVec2(right_w, kPreviewChildHeight), ImGuiChildFlags_None);
+    RenderModalTabBar(state, crystal_label, axis_label, filter_label, crystal_flags, axis_flags, filter_flags);
+    ImGui::EndChild();
   }
-  ImGui::EndChild();
 
   // Immediate mode: push buffer→entry every frame (diff-gated inside
   // CommitAllBuffersImmediate; no-op when nothing changed). Esc / click-outside
