@@ -26,7 +26,7 @@ in vec2 v_ndc;               // NDC position [-1, 1]
 
 uniform sampler2D u_texture;
 uniform vec2 u_resolution;   // viewport size in pixels
-uniform int u_lens_type;     // 0=linear, 1-3=fisheye, 4-6=dual fisheye, 7=rectangular
+uniform int u_lens_type;     // 0=linear, 1-3=fisheye, 4-6=dual fisheye, 7=rectangular, 8=fisheye_orthographic, 9=dual_fisheye_orthographic
 uniform float u_fov;         // full FOV in degrees
 uniform mat3 u_view_matrix;  // view-to-world rotation (inverse view)
 uniform int u_visible;       // 0=upper, 1=lower, 2=full
@@ -163,7 +163,7 @@ vec4 linearInverse(vec2 pos, float half_fov) {
 }
 
 // Compute view direction for fisheye projections
-// type: 0=equal_area, 1=equidistant, 2=stereographic
+// type: 0=equal_area, 1=equidistant, 2=stereographic, 3=orthographic
 vec4 fisheyeInverse(vec2 pos, float half_fov, int type) {
   float img_radius = min(u_resolution.x, u_resolution.y) * 0.5;  // short_edge/2 — matches Core's short_pix_/2
   float r = length(pos) / img_radius;
@@ -176,8 +176,12 @@ vec4 fisheyeInverse(vec2 pos, float half_fov, int type) {
   } else if (type == 1) { // equidistant: r_norm = θ / half_fov
     theta = r * half_fov;
     if (theta >= PI) return vec4(0.0, 0.0, 0.0, 0.0);
-  } else {                // stereographic: r_norm = tan(θ/2) / tan(fov/4)
+  } else if (type == 2) { // stereographic: r_norm = tan(θ/2) / tan(fov/4)
     theta = 2.0 * atan(r * tan(half_fov * 0.5));
+  } else {                // orthographic (type == 3): r_norm = sin(θ) / sin(fov/2)
+    float s = r * sin(half_fov);
+    if (s > 1.0) return vec4(0.0, 0.0, 0.0, 0.0);  // asin domain guard
+    theta = asin(s);
   }
 
   float phi = atan(pos.y, pos.x);
@@ -213,8 +217,13 @@ vec4 dualFisheyeInverse(vec2 pos, int type) {
     theta = 2.0 * asin(s);
   } else if (type == 1) { // equidistant
     theta = use_r * half_pi;
-  } else {                // stereographic
+  } else if (type == 2) { // stereographic
     theta = 2.0 * atan(use_r * tan(half_pi * 0.5));
+  } else {                // orthographic (type == 3): dual fov is fixed 180°/hemi, sin(half_pi)=1
+    // use_r is already normalised to [0, 1] via circle_radius division above.
+    float s = use_r;
+    if (s > 1.0) return vec4(0.0, 0.0, 0.0, 0.0);
+    theta = asin(s);
   }
 
   // Inverse of Core's forward: pixel (x,y) uses cos(PI/2±az), sin(PI/2±az)
@@ -303,7 +312,7 @@ void main() {
   vec2 pos = v_ndc * u_resolution * 0.5;  // Convert NDC [-1,1] to pixel offset from center
   float half_fov = u_fov * 0.5 * PI / 180.0;
 
-  vec4 result;
+  vec4 result = vec4(0.0, 0.0, 0.0, 0.0);
   bool needs_view_transform = true;
   if (u_lens_type == 0) {
     result = linearInverse(pos, half_fov);
@@ -312,10 +321,17 @@ void main() {
   } else if (u_lens_type >= 4 && u_lens_type <= 6) {
     result = dualFisheyeInverse(pos, u_lens_type - 4);
     needs_view_transform = false;  // Core dual fisheye works in world space
-  } else {
+  } else if (u_lens_type == 7) {
     result = rectangularInverse(pos);
     needs_view_transform = false;  // Core rectangular works in world space
+  } else if (u_lens_type == 8) {   // kLensTypeFisheyeOrthographic
+    result = fisheyeInverse(pos, half_fov, 3);
+  } else if (u_lens_type == 9) {   // kLensTypeDualFisheyeOrthographic
+    result = dualFisheyeInverse(pos, 3);
+    needs_view_transform = false;  // Core dual fisheye works in world space
   }
+  // else: unknown u_lens_type → result.w = 0 (black). static_assert in gui_state.hpp
+  // pins kLensTypeCount so any out-of-range value is a compile-time catchable mismatch.
 
   // Eliminated early returns so bg mixing can always execute at the end.
   vec3 final_color = vec3(0.0);

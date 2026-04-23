@@ -92,11 +92,14 @@ inline const char* const kLensTypeNames[] = {
   "Dual Fisheye Equidistant",
   "Dual Fisheye Stereographic",
   "Rectangular",
+  "Fisheye Orthographic",
+  "Dual Fisheye Orthographic",
 };
-constexpr int kLensTypeCount = 8;
+constexpr int kLensTypeCount = 10;
 static_assert(sizeof(kLensTypeNames) / sizeof(*kLensTypeNames) == kLensTypeCount,
               "kLensTypeNames length must match kLensTypeCount");
-static_assert(kLensTypeRectangular == kLensTypeCount - 1, "LensType enum terminal value must match kLensTypeCount - 1");
+static_assert(kLensTypeDualFisheyeOrthographic == kLensTypeCount - 1,
+              "LensType enum terminal value must match kLensTypeCount - 1");
 
 // Dual fisheye overlap: max |sky.z| for the overlap zone.
 // = sin(5°) ≈ 0.0872. Each hemisphere extends 5° past the equator.
