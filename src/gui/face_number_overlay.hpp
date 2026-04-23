@@ -88,9 +88,14 @@ bool ProjectLabelToScreen(const FaceLabel* label, const float rotation[16], cons
 //
 // `face_numbers` and `vertices` / `triangles` must come from the same
 // LUMICE_CrystalMesh in display space (Y-Z swapped + AABB normalized).
+//
+// `style` selects the per-mode policy from ResolveFaceLabelStyle: it controls
+// whether hidden (back-facing) faces get drawn (Wireframe / X-Ray do; Hidden
+// Line / Shaded skip them) and whether visible faces are filtered out when
+// their projected screen-space AABB drops below kFaceLabelMinViewportRatio.
 void DrawFaceNumberOverlay(const float* vertices, int vertex_count, const int* triangles, int triangle_count,
                            const int* face_numbers, const float rotation[16], const float mvp[16], ImVec2 image_pos,
-                           ImVec2 image_size, ImDrawList* draw_list);
+                           ImVec2 image_size, ImDrawList* draw_list, CrystalStyle style);
 
 }  // namespace lumice::gui
 

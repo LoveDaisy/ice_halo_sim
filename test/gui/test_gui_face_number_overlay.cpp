@@ -1,7 +1,9 @@
 // Unit tests for face_number_overlay pure functions:
 // AggregateFaceLabels and ProjectLabelToScreen.
-// Registered under the "unit" test group; no ImGui context required.
+// Most tests registered under the "unit" group (no ImGui context required);
+// face_number_draw_per_style needs ImGui font atlas and is in "screenshot".
 
+#include <array>
 #include <cmath>
 #include <cstring>
 
@@ -310,6 +312,148 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
         int visible_alpha = static_cast<int>((s.visible_fill >> IM_COL32_A_SHIFT) & 0xFFu);
         IM_CHECK_GE(visible_alpha, 200);
       }
+    };
+  }
+
+  // DrawFaceNumberOverlay: per-mode strict-inequality vertex-count test.
+  // Defends against the regressions enumerated in plan §3 / §7:
+  //   - kWireframe / kXRay must draw hidden labels (more vertices than
+  //     kHiddenLine / kShaded which skip them);
+  //   - kHiddenLine / kShaded must still draw the *visible* label (size
+  //     filter passes for a face large enough to clear the threshold).
+  //
+  // Arrange constructs two triangles in the same display-space layout that
+  // ProjectLabelToScreen evaluates under identity rotation:
+  //   - face 1 (face_number=1): front-facing (+z normal), AABB ratio well
+  //     above kFaceLabelMinViewportRatio;
+  //   - face 2 (face_number=2): back-facing (-z normal).
+  // Pre-flight asserts hidden_count > 0 and visible_count > 0 + size_filter
+  // passes for the visible face — failing either means the test would
+  // degenerate into a tautology, so the test fails loudly instead of
+  // silently passing.
+  //
+  // GuiFunc / TestFunc thread split mirrors test_gui_overlay_labels.cpp
+  // (modal_does_not_leak_to_foreground): ImGui calls only on the GUI
+  // thread; results captured in a file-static struct.
+  {
+    static struct DrawPerStyleCapture {
+      bool arrange_ok = false;
+      int hidden_count = 0;
+      int visible_count = 0;
+      bool visible_passes_size_filter = false;
+      std::array<int, 4> vertex_delta = { 0, 0, 0, 0 };  // indexed by CrystalStyle
+      bool done = false;
+    } g_capture;
+
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "screenshot", "face_number_draw_per_style");
+    t->GuiFunc = [](ImGuiTestContext*) {
+      if (g_capture.done) {
+        return;
+      }
+
+      // Two triangles, two face_numbers, opposing normals.
+      static float verts[] = {
+        -0.45f, -0.45f, 0.0f,  // v0
+        0.45f,  -0.45f, 0.0f,  // v1
+        0.0f,   0.45f,  0.0f,  // v2
+        -0.45f, -0.45f, 0.0f,  // v3 (reuse layout, +z offset to keep distinct centroid)
+        0.0f,   0.45f,  0.0f,  // v4
+        0.45f,  -0.45f, 0.0f,  // v5
+      };
+      static int tris[] = {
+        0, 1, 2,  // face 1 → cross(v1-v0, v2-v0).z > 0 → +z normal → front
+        3, 4, 5,  // face 2 → reversed winding → -z normal → back
+      };
+      static int face_numbers[] = { 1, 2 };
+
+      float rot[16];
+      Identity4x4(rot);
+      float mvp[16];
+      lumice::gui::CrystalRenderer::ComputeMvp(rot, /*zoom=*/2.0f, 320, 320, mvp);
+
+      // Arrange-phase pre-flight: aggregate, classify front/back, verify
+      // size_filter pre-condition for the visible face.
+      lumice::gui::FaceLabel labels[lumice::gui::kMaxFaceLabels] = {};
+      int n = AggregateFaceLabels(verts, 6, tris, 2, face_numbers, labels, lumice::gui::kMaxFaceLabels);
+      g_capture.hidden_count = 0;
+      g_capture.visible_count = 0;
+      g_capture.visible_passes_size_filter = false;
+      for (int i = 0; i < n; ++i) {
+        float sx = 0.0f;
+        float sy = 0.0f;
+        bool front = false;
+        if (!ProjectLabelToScreen(&labels[i], rot, mvp, 0.0f, 0.0f, 320.0f, 320.0f, &sx, &sy, &front)) {
+          continue;
+        }
+        if (front) {
+          ++g_capture.visible_count;
+          float w = 0.0f;
+          float h = 0.0f;
+          if (ComputeLabelScreenBboxRatio(&labels[i], mvp, ImVec2(320.0f, 320.0f), &w, &h)) {
+            if (w >= kFaceLabelMinViewportRatio && h >= kFaceLabelMinViewportRatio) {
+              g_capture.visible_passes_size_filter = true;
+            }
+          }
+        } else {
+          ++g_capture.hidden_count;
+        }
+      }
+      g_capture.arrange_ok =
+          (g_capture.hidden_count > 0) && (g_capture.visible_count > 0) && g_capture.visible_passes_size_filter;
+
+      // Act: for each CrystalStyle, host a fresh window and measure DrawList
+      // vertex growth across one DrawFaceNumberOverlay call.
+      CrystalStyle styles[4] = {
+        CrystalStyle::kWireframe,
+        CrystalStyle::kHiddenLine,
+        CrystalStyle::kXRay,
+        CrystalStyle::kShaded,
+      };
+      for (int s = 0; s < 4; ++s) {
+        ImGui::SetNextWindowSize(ImVec2(320, 320), ImGuiCond_Always);
+        char title[64];
+        std::snprintf(title, sizeof(title), "##FaceNumberPerStyleHost_%d", s);
+        if (ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
+          ImDrawList* draw_list = ImGui::GetWindowDrawList();
+          int before = draw_list->VtxBuffer.Size;
+          lumice::gui::DrawFaceNumberOverlay(verts, 6, tris, 2, face_numbers, rot, mvp, ImVec2(0.0f, 0.0f),
+                                             ImVec2(320.0f, 320.0f), draw_list, styles[s]);
+          int after = draw_list->VtxBuffer.Size;
+          g_capture.vertex_delta[s] = after - before;
+        }
+        ImGui::End();
+      }
+
+      g_capture.done = true;
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_capture = {};
+      ctx->Yield(3);
+      IM_CHECK(g_capture.done);
+      // Pre-flight: arrange must satisfy the prerequisites that make the
+      // strict-inequality assertions non-vacuous.
+      IM_CHECK_GT(g_capture.hidden_count, 0);
+      IM_CHECK_GT(g_capture.visible_count, 0);
+      IM_CHECK(g_capture.visible_passes_size_filter);
+      IM_CHECK(g_capture.arrange_ok);
+
+      int wire = g_capture.vertex_delta[0];
+      int hidden_line = g_capture.vertex_delta[1];
+      int xray = g_capture.vertex_delta[2];
+      int shaded = g_capture.vertex_delta[3];
+
+      // Visible face renders under every mode (size_filter passes for the
+      // arranged big face in HiddenLine/Shaded), so all deltas are > 0.
+      IM_CHECK_GT(wire, 0);
+      IM_CHECK_GT(hidden_line, 0);
+      IM_CHECK_GT(xray, 0);
+      IM_CHECK_GT(shaded, 0);
+
+      // Strict inequalities — the differential test: WF/XR draw the hidden
+      // face on top of the visible one, HL/SH skip it.
+      IM_CHECK_GT(wire, hidden_line);
+      IM_CHECK_GT(xray, shaded);
     };
   }
 

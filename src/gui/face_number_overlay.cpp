@@ -250,7 +250,7 @@ bool ProjectLabelToScreen(const FaceLabel* label, const float rotation[16], cons
 
 void DrawFaceNumberOverlay(const float* vertices, int vertex_count, const int* triangles, int triangle_count,
                            const int* face_numbers, const float rotation[16], const float mvp[16], ImVec2 image_pos,
-                           ImVec2 image_size, ImDrawList* draw_list) {
+                           ImVec2 image_size, ImDrawList* draw_list, CrystalStyle style) {
   if (triangle_count <= 0 || draw_list == nullptr) {
     return;
   }
@@ -261,11 +261,10 @@ void DrawFaceNumberOverlay(const float* vertices, int vertex_count, const int* t
     return;
   }
 
+  FaceLabelStyle resolved = detail::ResolveFaceLabelStyle(style);
+
   ImVec2 clip_max = ImVec2(image_pos.x + image_size.x, image_pos.y + image_size.y);
   draw_list->PushClipRect(image_pos, clip_max, true);
-
-  constexpr ImU32 kWhite = IM_COL32(255, 255, 255, 255);
-  constexpr ImU32 kBlack = IM_COL32(0, 0, 0, 255);
 
   for (int i = 0; i < n; ++i) {
     float sx = 0.0f;
@@ -275,9 +274,27 @@ void DrawFaceNumberOverlay(const float* vertices, int vertex_count, const int* t
                               &front)) {
       continue;
     }
-    if (!front) {
+    // Hidden-face skip: only suppress when the resolved policy declines hidden
+    // faces (kHiddenLine / kShaded). kWireframe / kXRay keep them.
+    if (!front && !resolved.draw_hidden) {
       continue;
     }
+    // Size filter: only applied to visible faces under kHiddenLine / kShaded.
+    // ComputeLabelScreenBboxRatio returns false on near-plane degeneracy; in
+    // that case we fall through to drawing (prefer keeping the label over
+    // wrong-filtering, matching plan §7 risk 3 / 7).
+    if (front && resolved.apply_size_filter) {
+      float w_ratio = 0.0f;
+      float h_ratio = 0.0f;
+      if (detail::ComputeLabelScreenBboxRatio(&labels[i], mvp, image_size, &w_ratio, &h_ratio)) {
+        if (w_ratio < kFaceLabelMinViewportRatio || h_ratio < kFaceLabelMinViewportRatio) {
+          continue;
+        }
+      }
+    }
+
+    ImU32 fill = front ? resolved.visible_fill : resolved.hidden_fill;
+    ImU32 outline = front ? resolved.visible_outline : resolved.hidden_outline;
 
     char text[8];
     std::snprintf(text, sizeof(text), "%d", labels[i].face_number);
@@ -285,12 +302,12 @@ void DrawFaceNumberOverlay(const float* vertices, int vertex_count, const int* t
     ImVec2 text_size = ImGui::CalcTextSize(text);
     ImVec2 pos(sx - text_size.x * 0.5f, sy - text_size.y * 0.5f);
 
-    // 4-way offset outline + centered white text.
-    draw_list->AddText(ImVec2(pos.x - 1, pos.y), kBlack, text);
-    draw_list->AddText(ImVec2(pos.x + 1, pos.y), kBlack, text);
-    draw_list->AddText(ImVec2(pos.x, pos.y - 1), kBlack, text);
-    draw_list->AddText(ImVec2(pos.x, pos.y + 1), kBlack, text);
-    draw_list->AddText(pos, kWhite, text);
+    // 4-way offset outline + centered fill text.
+    draw_list->AddText(ImVec2(pos.x - 1, pos.y), outline, text);
+    draw_list->AddText(ImVec2(pos.x + 1, pos.y), outline, text);
+    draw_list->AddText(ImVec2(pos.x, pos.y - 1), outline, text);
+    draw_list->AddText(ImVec2(pos.x, pos.y + 1), outline, text);
+    draw_list->AddText(pos, fill, text);
   }
 
   draw_list->PopClipRect();
