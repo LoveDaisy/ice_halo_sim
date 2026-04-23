@@ -1150,6 +1150,42 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: scrum-gui-polish-v15 / task-detachable-modal-impl — Immediate Edit Entry
+  // must retain ImGuiWindowFlags_NoDocking so the multi-viewport mechanism only
+  // creates an independent OS viewport when the user drags it outside the main
+  // window, never docks it into the main window. Runtime detach behavior itself
+  // is validated by macOS manual QA in plan Step 5 — this test is the structural
+  // guard against accidental NoDocking removal.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_modal_viewport_flags_preserved");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      // Open Edit Entry Immediate mode.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ImGuiWindow* w = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w != nullptr);
+      IM_CHECK(w->WasActive);
+
+      // Contract: NoDocking prevents the window from docking into the main
+      // window's split targets. Viewport creation remains gated by user drag.
+      IM_CHECK((w->Flags & ImGuiWindowFlags_NoDocking) != 0);
+
+      // Sanity: every active window must be assigned a viewport (the main
+      // viewport at minimum). A nullptr Viewport would indicate ImGui state
+      // corruption — protect the assumption the Step 3 comment relies on.
+      IM_CHECK(w->Viewport != nullptr);
+
+      // Cleanup.
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(3);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
   // P1: scrum-gui-polish-v12 / task-gui-window-zorder — z-order invariant
   // between LogPanel (Layer 3, no flag, push_back -> top) and LeftPanel
   // (background cluster, NoBringToFrontOnFocus, push_front -> bottom).
