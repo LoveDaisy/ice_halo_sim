@@ -360,8 +360,9 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/) {
     CrystalRenderer::ComputeMvp(g_crystal_rotation, g_crystal_zoom, static_cast<int>(kModalPreviewImageSize),
                                 static_cast<int>(kModalPreviewImageSize), mvp);
     DrawFaceNumberOverlay(m->vertices, m->vertex_count, m->triangles, m->triangle_count, m->face_numbers,
-                          g_crystal_rotation, mvp, preview_pos, ImVec2(kModalPreviewImageSize, kModalPreviewImageSize),
-                          ImGui::GetWindowDrawList(), crystal_style);
+                          g_crystal_rotation, mvp, g_crystal_zoom, preview_pos,
+                          ImVec2(kModalPreviewImageSize, kModalPreviewImageSize), ImGui::GetWindowDrawList(),
+                          crystal_style);
   }
 
   // Overlay InvisibleButton to consume mouse clicks and prevent modal window drag.
