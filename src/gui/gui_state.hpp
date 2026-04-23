@@ -278,6 +278,10 @@ struct GuiState {
   // not persisted to .lmc (unlike right_panel_collapsed)
   bool left_panel_collapsed = false;
   bool right_panel_collapsed = false;
+  // Edit modal layout orientation (view preference). false = horizontal
+  // (preview left + tabs right, default); true = vertical (preview top +
+  // tabs bottom with scrollbar). Persisted to .lmc alongside right_panel_collapsed.
+  bool modal_layout_vertical = false;
 
   // Log panel state (view preference — does not call MarkDirty)
   int gui_log_level = 3;   // Index into log level names: 0=trace,1=debug,2=verbose,3=info,4=warning,5=error,6=off

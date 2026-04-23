@@ -192,6 +192,34 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // Test: modal_layout_vertical roundtrip.
+  // Ensures the new .lmc field survives save/load and defaults correctly on legacy files.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "modal_layout_vertical_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, false);  // default
+
+      // Set vertical, save
+      gui::g_state.modal_layout_vertical = true;
+      const char* tmp_path = "/tmp/lumice_modal_layout_roundtrip.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
+      IM_CHECK(save_ok);
+
+      // Reset, load
+      gui::DoNew();
+      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, false);  // DoNew resets
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0;
+      int tex_h = 0;
+      bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
+      IM_CHECK(load_ok);
+      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, true);
+
+      std::remove(tmp_path);
+    };
+  }
+
   // Test 4a: renderer copy-model new-format round-trip.
   // Fields covered (per RenderConfig in gui_state.hpp):
   //   lens_type, fov, elevation, azimuth, roll, sim_resolution_index, visible,
