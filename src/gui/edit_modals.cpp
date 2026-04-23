@@ -801,16 +801,21 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   // (rendered later in body) may flip state.modal_immediate_mode mid-frame,
   // but End/EndPopup must pair with the container we actually opened here.
   const bool dispatched_immediate = state.modal_immediate_mode;
-  // H0 outer guard (scrum-gui-polish-v13/task-immediate-modal-full-close):
-  // Immediate path uses ImGui::Begin, which — unlike BeginPopupModal — keeps
-  // a registered ImGuiWindow in g.Windows and continues rendering a tomb-
-  // stone title bar even when *p_open==false, until the window is fully
-  // garbage-collected across frames. The standard ImGui pattern for closing
-  // a window is to skip the entire Begin/End block at the call site. Guard
-  // only the Immediate branch; Staged BeginPopupModal on an empty popup
-  // stack already returns false without leaving a stray title bar.
-  // Mode-switch consume (Staged→Immediate) requires Begin to run so that
-  // line 867 body-consume fires — hence the !g_pending_mode_switch clause.
+  // H0 outer guard: the Immediate path uses ImGui::Begin, which — unlike
+  // BeginPopupModal — keeps a registered ImGuiWindow in g.Windows and
+  // continues rendering a tomb-stone title bar even when *p_open==false,
+  // until the window is fully garbage-collected across frames. The standard
+  // ImGui pattern for closing a window is to skip the entire Begin/End block
+  // at the call site. Guard only the Immediate branch; Staged
+  // BeginPopupModal on an empty popup stack already returns false without
+  // leaving a stray title bar. The !g_pending_mode_switch clause preserves
+  // the Staged→Immediate mode-switch consume path further down (the body
+  // branch that arms g_pending_tab_select needs Begin to run). Once this
+  // guard is in effect, the inner race-case exit
+  // (dispatched_immediate && g_active_modal != kOpen → End+return) is
+  // unreachable; it is retained as an idempotent safety net for deleted-
+  // entry paths and will become reachable again only if this guard is ever
+  // relaxed.
   if (dispatched_immediate && !title_x_open && !g_pending_mode_switch) {
     return;
   }
