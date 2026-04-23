@@ -454,6 +454,83 @@ TEST(FovScale, EquidistantScaleShortEdge) {
   EXPECT_NEAR(r_pix, static_cast<float>(kShort) / 2.0f, 0.1f);
 }
 
+// =============== Orthographic ===============
+
+TEST(Projection, FisheyeOrthographicForwardPole) {
+  auto r = FisheyeOrthographicForward(0, 0, 1);
+  EXPECT_TRUE(r.valid);
+  EXPECT_NEAR(r.x, 0, kEps);
+  EXPECT_NEAR(r.y, 0, kEps);
+}
+
+TEST(Projection, FisheyeOrthographicForwardEquator) {
+  // theta = pi/2, dz = 0, sin(theta) = 1; (dx, dy) = (1, 0) lies on unit circle.
+  auto r = FisheyeOrthographicForward(1.0f, 0, 0);
+  EXPECT_TRUE(r.valid);
+  EXPECT_NEAR(r.x, 1.0f, kEps);
+  EXPECT_NEAR(r.y, 0, kEps);
+}
+
+TEST(Projection, FisheyeOrthographicForwardOffAxis) {
+  // r = sin(theta) in Cartesian form == (dx, dy) for unit direction.
+  for (float theta_deg : { 15.0f, 45.0f, 80.0f }) {
+    for (float phi_deg : { 0.0f, 90.0f, 180.0f, 270.0f }) {
+      float theta = theta_deg * math::kDegreeToRad;
+      float phi = phi_deg * math::kDegreeToRad;
+      float dx = std::sin(theta) * std::cos(phi);
+      float dy = std::sin(theta) * std::sin(phi);
+      float dz = std::cos(theta);
+      auto r = FisheyeOrthographicForward(dx, dy, dz);
+      EXPECT_TRUE(r.valid) << "theta=" << theta_deg << " phi=" << phi_deg;
+      EXPECT_NEAR(r.x, dx, kEps);
+      EXPECT_NEAR(r.y, dy, kEps);
+    }
+  }
+}
+
+TEST(Projection, FisheyeOrthographicForwardBackHemisphere) {
+  // theta > 90 deg -> dz < 0 -> guard trips, returns valid=false.
+  for (float theta_deg : { 91.0f, 120.0f, 179.0f }) {
+    float theta = theta_deg * math::kDegreeToRad;
+    float dx = std::sin(theta);
+    float dz = std::cos(theta);
+    auto r = FisheyeOrthographicForward(dx, 0.0f, dz);
+    EXPECT_FALSE(r.valid) << "theta=" << theta_deg;
+  }
+}
+
+TEST(Projection, FisheyeOrthographicInverseBoundary) {
+  auto on_circle = FisheyeOrthographicInverse(1.0f, 0.0f);
+  EXPECT_TRUE(on_circle.valid);
+  EXPECT_NEAR(on_circle.x, 1.0f, kEps);
+  EXPECT_NEAR(on_circle.y, 0.0f, kEps);
+  EXPECT_NEAR(on_circle.z, 0.0f, kEps);
+
+  auto outside = FisheyeOrthographicInverse(1.01f, 0.0f);
+  EXPECT_FALSE(outside.valid);
+}
+
+TEST(Projection, FisheyeOrthographicRoundTrip) {
+  std::mt19937 rng(20260424);
+  std::uniform_real_distribution<float> theta_dist(0.0f, math::kPi_2 - 1e-3f);
+  std::uniform_real_distribution<float> phi_dist(-math::kPi, math::kPi);
+  for (int i = 0; i < 32; ++i) {
+    float theta = theta_dist(rng);
+    float phi = phi_dist(rng);
+    float dx = std::sin(theta) * std::cos(phi);
+    float dy = std::sin(theta) * std::sin(phi);
+    float dz = std::cos(theta);
+    auto fwd = FisheyeOrthographicForward(dx, dy, dz);
+    ASSERT_TRUE(fwd.valid);
+    auto inv = FisheyeOrthographicInverse(fwd.x, fwd.y);
+    ASSERT_TRUE(inv.valid);
+    EXPECT_NEAR(inv.x, dx, kEpsPolar);
+    EXPECT_NEAR(inv.y, dy, kEpsPolar);
+    EXPECT_NEAR(inv.z, dz, kEpsPolar);
+    ExpectUnitVector(inv);
+  }
+}
+
 // =============== ComputeEARScale ===============
 
 TEST(ComputeEARScale, NoOverlap) {

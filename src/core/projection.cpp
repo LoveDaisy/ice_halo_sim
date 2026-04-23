@@ -56,6 +56,17 @@ ProjXY FisheyeStereographicForward(float dx, float dy, float dz, float r_scale) 
   return { scale * dx, scale * dy, true };
 }
 
+// Orthographic: r = sin(theta). For |d|=1, sin(theta) = sqrt(dx^2 + dy^2), so
+// the forward projection collapses to (dx, dy) directly.
+// dz < 0 is rejected: sin(theta) is not injective past theta=pi/2 (sin(120) == sin(60)),
+// two distinct rays would otherwise project to the same pixel.
+ProjXY FisheyeOrthographicForward(float dx, float dy, float dz, float r_scale) {
+  if (dz < 0.0f) {
+    return { 0, 0, false };
+  }
+  return { r_scale * dx, r_scale * dy, true };
+}
+
 
 // =============== Fisheye inverse projections (pure math) ===============
 // Domain check: r > 1 in the r_scale-normalized space = beyond coverage boundary.
@@ -105,6 +116,21 @@ Dir3 FisheyeStereographicInverse(float x, float y, float r_scale) {
   float ct = std::cos(theta);
   float inv_r = 1.0f / r;
   return { st * x * inv_r, st * y * inv_r, ct, true };
+}
+
+// Orthographic inverse: sin(theta) = r / r_scale, so (dx, dy) = (x, y) / r_scale
+// and dz = cos(theta) = sqrt(1 - (r/r_scale)^2).
+Dir3 FisheyeOrthographicInverse(float x, float y, float r_scale) {
+  float r2 = x * x + y * y;
+  float rs2 = r_scale * r_scale;
+  if (r2 > rs2) {
+    return { 0, 0, 0, false };
+  }
+  float inv_rs = 1.0f / r_scale;
+  float xr = x * inv_rs;
+  float yr = y * inv_rs;
+  float dz = std::sqrt(std::max(0.0f, 1.0f - xr * xr - yr * yr));
+  return { xr, yr, dz, true };
 }
 
 
