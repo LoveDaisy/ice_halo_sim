@@ -1,6 +1,7 @@
 #ifndef LUMICE_GUI_FACE_NUMBER_OVERLAY_HPP
 #define LUMICE_GUI_FACE_NUMBER_OVERLAY_HPP
 
+#include "gui/crystal_renderer.hpp"
 #include "imgui.h"
 
 namespace lumice::gui {
@@ -27,6 +28,46 @@ struct FaceLabel {
 // Returns the number of labels written into out_labels (bounded by max_labels).
 int AggregateFaceLabels(const float* vertices, int vertex_count, const int* triangles, int triangle_count,
                         const int* face_numbers, FaceLabel* out_labels, int max_labels);
+
+// Per-CrystalStyle face-number rendering policy.
+// `visible_*` colors apply to front-facing labels; `hidden_*` apply to back-
+// facing labels and are only consulted when `draw_hidden == true` (otherwise
+// the fields are dead and unconstrained).
+struct FaceLabelStyle {
+  ImU32 visible_fill;
+  ImU32 visible_outline;
+  ImU32 hidden_fill;
+  ImU32 hidden_outline;
+  bool draw_hidden;
+  bool apply_size_filter;
+};
+
+// Minimum viewport-bbox-ratio threshold for a face label to remain visible
+// when `apply_size_filter` is in effect (Hidden Line / Shaded modes). A face
+// whose projected screen-space AABB width or height is below this fraction of
+// the viewport extent is skipped to avoid sliver clutter. Single-source-of-
+// truth for visual calibration.
+constexpr float kFaceLabelMinViewportRatio = 0.10f;
+
+namespace detail {
+
+// Resolve the per-mode FaceLabelStyle. Exposed in detail:: for unit testing
+// (`unit/face_number_resolve_style`) and DrawFaceNumberOverlay; not part of
+// the stable public surface — only callable from face_number_overlay.cpp and
+// face_number_overlay tests.
+FaceLabelStyle ResolveFaceLabelStyle(CrystalStyle style);
+
+// Project the 8 corners of `label->display_aabb_*` through `mvp` and return
+// the screen-space AABB extent as fractions of `image_size`. Returns false
+// when any corner has clip.w <= 0 (camera-behind degeneracy that would mix
+// sign-flipped NDC into the bbox); callers must treat false as "undecidable
+// → do not filter" to align with §7 risk 3 (prefer keeping labels over wrong
+// filtering). Exposed in detail:: for unit testing
+// (`unit/face_number_bbox_ratio_basic`).
+bool ComputeLabelScreenBboxRatio(const FaceLabel* label, const float mvp[16], ImVec2 image_size, float* out_w_ratio,
+                                 float* out_h_ratio);
+
+}  // namespace detail
 
 // Project a label center to 2D image-space coordinates and evaluate a front-face
 // test in eye space (see crystal_renderer.cpp:357-367 for the reference algorithm).

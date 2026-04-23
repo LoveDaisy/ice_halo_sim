@@ -30,9 +30,13 @@ void RotX180(float m[16]) {
 
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
   using lumice::gui::AggregateFaceLabels;
+  using lumice::gui::CrystalStyle;
   using lumice::gui::FaceLabel;
+  using lumice::gui::kFaceLabelMinViewportRatio;
   using lumice::gui::kMaxFaceLabels;
   using lumice::gui::ProjectLabelToScreen;
+  using lumice::gui::detail::ComputeLabelScreenBboxRatio;
+  using lumice::gui::detail::ResolveFaceLabelStyle;
 
   // Aggregate: 4 triangles, face_numbers = [3, 3, 4, 4] → 2 labels, centers = group means.
   {
@@ -216,6 +220,96 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Cancel##edit_modal");
       ctx->Yield(2);
+    };
+  }
+
+  // ComputeLabelScreenBboxRatio: a large face spanning the central frustum
+  // produces a screen bbox that comfortably exceeds the threshold; a tiny
+  // face produces a bbox below it.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "unit", "face_number_bbox_ratio_basic");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      lumice::gui::ResetLastCrystalMesh();
+
+      float rot[16];
+      Identity4x4(rot);
+      float mvp[16];
+      lumice::gui::CrystalRenderer::ComputeMvp(rot, /*zoom=*/2.0f, 320, 320, mvp);
+
+      // Large face: AABB centered at origin spanning ±0.4 in display space —
+      // well within the view frustum, projects to a sizable screen bbox.
+      FaceLabel big{};
+      big.face_number = 1;
+      big.display_aabb_min[0] = -0.4f;
+      big.display_aabb_min[1] = -0.4f;
+      big.display_aabb_min[2] = -0.4f;
+      big.display_aabb_max[0] = 0.4f;
+      big.display_aabb_max[1] = 0.4f;
+      big.display_aabb_max[2] = 0.4f;
+
+      float w = 0.0f;
+      float h = 0.0f;
+      IM_CHECK(ComputeLabelScreenBboxRatio(&big, mvp, ImVec2(320.0f, 320.0f), &w, &h));
+      IM_CHECK_GT(w, kFaceLabelMinViewportRatio);
+      IM_CHECK_GT(h, kFaceLabelMinViewportRatio);
+
+      // Tiny face: AABB centered at origin spanning ±0.005, well below the
+      // 10% threshold at this zoom/viewport.
+      FaceLabel tiny{};
+      tiny.face_number = 2;
+      tiny.display_aabb_min[0] = -0.005f;
+      tiny.display_aabb_min[1] = -0.005f;
+      tiny.display_aabb_min[2] = -0.005f;
+      tiny.display_aabb_max[0] = 0.005f;
+      tiny.display_aabb_max[1] = 0.005f;
+      tiny.display_aabb_max[2] = 0.005f;
+
+      IM_CHECK(ComputeLabelScreenBboxRatio(&tiny, mvp, ImVec2(320.0f, 320.0f), &w, &h));
+      IM_CHECK_LT(w, kFaceLabelMinViewportRatio);
+      IM_CHECK_LT(h, kFaceLabelMinViewportRatio);
+    };
+  }
+
+  // ResolveFaceLabelStyle: per-mode draw_hidden / apply_size_filter table +
+  // X-Ray hidden_fill semantics. Asserts only on fields that the consumer
+  // (DrawFaceNumberOverlay) actually reads — hidden_* fields are dead under
+  // draw_hidden=false (kHiddenLine / kShaded) and intentionally untested.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "unit", "face_number_resolve_style");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      lumice::gui::ResetLastCrystalMesh();
+
+      auto wireframe = ResolveFaceLabelStyle(CrystalStyle::kWireframe);
+      IM_CHECK(wireframe.draw_hidden);
+      IM_CHECK(!wireframe.apply_size_filter);
+
+      auto hidden_line = ResolveFaceLabelStyle(CrystalStyle::kHiddenLine);
+      IM_CHECK(!hidden_line.draw_hidden);
+      IM_CHECK(hidden_line.apply_size_filter);
+
+      auto xray = ResolveFaceLabelStyle(CrystalStyle::kXRay);
+      IM_CHECK(xray.draw_hidden);
+      IM_CHECK(!xray.apply_size_filter);
+      // Hidden-face X-Ray fill must be visually distinct from the visible fill
+      // and within the calibrated alpha band [80, 200] (~30%-80% opaque).
+      IM_CHECK(xray.hidden_fill != xray.visible_fill);
+      int hidden_alpha = static_cast<int>((xray.hidden_fill >> IM_COL32_A_SHIFT) & 0xFFu);
+      IM_CHECK_GE(hidden_alpha, 80);
+      IM_CHECK_LE(hidden_alpha, 200);
+
+      auto shaded = ResolveFaceLabelStyle(CrystalStyle::kShaded);
+      IM_CHECK(!shaded.draw_hidden);
+      IM_CHECK(shaded.apply_size_filter);
+
+      // visible_fill across all modes must be near-fully opaque so labels stay
+      // readable on top of the GL preview (asserts the only universally
+      // semantically meaningful color field).
+      for (auto s : { wireframe, hidden_line, xray, shaded }) {
+        int visible_alpha = static_cast<int>((s.visible_fill >> IM_COL32_A_SHIFT) & 0xFFu);
+        IM_CHECK_GE(visible_alpha, 200);
+      }
     };
   }
 

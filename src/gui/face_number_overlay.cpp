@@ -123,6 +123,98 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
   return label_count;
 }
 
+namespace detail {
+
+FaceLabelStyle ResolveFaceLabelStyle(CrystalStyle style) {
+  // Sentinel: if a new CrystalStyle value is added, this assert forces an
+  // explicit revisit of every branch below.
+  static_assert(kCrystalStyleCount == 4, "update ResolveFaceLabelStyle when adding CrystalStyle");
+
+  constexpr ImU32 kVisibleFill = IM_COL32(255, 255, 255, 255);
+  constexpr ImU32 kVisibleOutline = IM_COL32(0, 0, 0, 255);
+  // Translucent grey for X-Ray hidden faces: distinct from the bright visible
+  // labels but still readable. Calibrated alpha=140 (~55%) sits inside the
+  // [80, 200] band asserted by unit/face_number_resolve_style.
+  constexpr ImU32 kXrayHiddenFill = IM_COL32(180, 180, 180, 140);
+  constexpr ImU32 kXrayHiddenOutline = IM_COL32(0, 0, 0, 140);
+
+  FaceLabelStyle s{};
+  s.visible_fill = kVisibleFill;
+  s.visible_outline = kVisibleOutline;
+  s.hidden_fill = 0;
+  s.hidden_outline = 0;
+  s.draw_hidden = false;
+  s.apply_size_filter = false;
+
+  switch (style) {
+    case CrystalStyle::kWireframe:
+      s.draw_hidden = true;
+      // Hidden labels in wireframe re-use the visible style (no occlusion to
+      // disambiguate; matching style avoids visual hierarchy where there is
+      // no semantic one).
+      s.hidden_fill = kVisibleFill;
+      s.hidden_outline = kVisibleOutline;
+      break;
+    case CrystalStyle::kHiddenLine:
+      s.apply_size_filter = true;
+      break;
+    case CrystalStyle::kXRay:
+      s.draw_hidden = true;
+      s.hidden_fill = kXrayHiddenFill;
+      s.hidden_outline = kXrayHiddenOutline;
+      break;
+    case CrystalStyle::kShaded:
+      s.apply_size_filter = true;
+      break;
+  }
+  return s;
+}
+
+bool ComputeLabelScreenBboxRatio(const FaceLabel* label, const float mvp[16], ImVec2 image_size, float* out_w_ratio,
+                                 float* out_h_ratio) {
+  const float* mn = label->display_aabb_min;
+  const float* mx = label->display_aabb_max;
+
+  float screen_min_x = FLT_MAX;
+  float screen_min_y = FLT_MAX;
+  float screen_max_x = -FLT_MAX;
+  float screen_max_y = -FLT_MAX;
+
+  for (int corner = 0; corner < 8; ++corner) {
+    float p[3] = {
+      (corner & 1) ? mx[0] : mn[0],
+      (corner & 2) ? mx[1] : mn[1],
+      (corner & 4) ? mx[2] : mn[2],
+    };
+    // clip = mvp * (p, 1), column-major (matches ProjectLabelToScreen).
+    float cx = mvp[0] * p[0] + mvp[4] * p[1] + mvp[8] * p[2] + mvp[12];
+    float cy = mvp[1] * p[0] + mvp[5] * p[1] + mvp[9] * p[2] + mvp[13];
+    float cw = mvp[3] * p[0] + mvp[7] * p[1] + mvp[11] * p[2] + mvp[15];
+    // clip.w <= 0 means the corner is at or behind the near plane; mixing
+    // sign-flipped ndc into the bbox would inflate it spuriously. Treat as
+    // undecidable → caller must not filter (keep the label).
+    if (cw <= 0.0f) {
+      return false;
+    }
+    float ndc_x = cx / cw;
+    float ndc_y = cy / cw;
+    float screen_x = (ndc_x + 1.0f) * 0.5f * image_size.x;
+    // NDC.y is Y-up; screen is Y-down. Flip so screen_y matches the texture
+    // coordinate produced by ProjectLabelToScreen.
+    float screen_y = (1.0f - (ndc_y + 1.0f) * 0.5f) * image_size.y;
+    screen_min_x = std::fmin(screen_min_x, screen_x);
+    screen_min_y = std::fmin(screen_min_y, screen_y);
+    screen_max_x = std::fmax(screen_max_x, screen_x);
+    screen_max_y = std::fmax(screen_max_y, screen_y);
+  }
+
+  *out_w_ratio = (image_size.x > 0.0f) ? (screen_max_x - screen_min_x) / image_size.x : 0.0f;
+  *out_h_ratio = (image_size.y > 0.0f) ? (screen_max_y - screen_min_y) / image_size.y : 0.0f;
+  return true;
+}
+
+}  // namespace detail
+
 bool ProjectLabelToScreen(const FaceLabel* label, const float rotation[16], const float mvp[16], float image_pos_x,
                           float image_pos_y, float image_width, float image_height, float* out_screen_x,
                           float* out_screen_y, bool* out_front_facing) {
