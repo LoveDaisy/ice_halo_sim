@@ -22,6 +22,27 @@
 
 namespace lumice::gui {
 
+namespace {
+
+// Resets the Crystal tab's shape parameters in `c` to CrystalConfig{} defaults.
+// Explicitly enumerates the 7 fields rather than `c = CrystalConfig{}` + restore
+// metadata: a future field added to CrystalConfig is *not* silently swept into
+// the reset (the developer must add a line here or accept the omission).
+// Does not touch name / type / zenith / azimuth / roll — type lives in a radio
+// button above, name is layer-scoped metadata, axis lives in a sibling tab.
+void ResetCrystalShapeParams(CrystalConfig& c) {
+  CrystalConfig defaults;
+  c.height = defaults.height;
+  c.prism_h = defaults.prism_h;
+  c.upper_h = defaults.upper_h;
+  c.lower_h = defaults.lower_h;
+  c.upper_alpha = defaults.upper_alpha;
+  c.lower_alpha = defaults.lower_alpha;
+  std::copy(std::begin(defaults.face_distance), std::end(defaults.face_distance), std::begin(c.face_distance));
+}
+
+}  // namespace
+
 // ============================================================
 // Modal state (file scope — not shared via gui_state.hpp)
 // ============================================================
@@ -397,12 +418,16 @@ static void RenderCrystalModal(GuiState& /*state*/) {
       snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
       SliderWithInput(label, &cr.face_distance[i], 0.0f, 2.0f, "%.3f");
     }
-    if (ImGui::SmallButton("Reset All##modal_fd")) {
-      for (auto& fd : cr.face_distance) {
-        fd = 1.0f;
-      }
-    }
     ImGui::TreePop();
+  }
+
+  // -- Reset All (Crystal tab) --
+  // Resets shape parameters to defaults. Preserves type/name/axis (axis lives
+  // in a sibling tab; the OK/Cancel atomicity contract still applies — Reset
+  // All only mutates g_crystal_buf, OK commits, Cancel discards).
+  ImGui::Spacing();
+  if (ImGui::Button("Reset All##modal_cr", ImVec2(120, 0))) {
+    ResetCrystalShapeParams(cr);
   }
 
   // OK / Cancel handled at modal level (RenderEditModals).

@@ -1873,6 +1873,98 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p2_modal/crystal_modal_reset_all_resets_shape_params — modify shape params,
+  // click Reset All in Crystal tab, OK to commit; verify all 7 shape fields
+  // restored to CrystalConfig{} defaults while name/type/axis are preserved.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_reset_all_resets_shape_params");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Step 1: bring entry crystal to a non-default state (height=5.0) and
+      // record axis/name/type baseline. We need a non-default baseline so the
+      // post-Reset assertion has something to differ from.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 5.0f);
+      ctx->Yield();
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      auto& entry = gui::g_state.layers[0].entries[0];
+      IM_CHECK_EQ(entry.crystal.height, 5.0f);
+      gui::AxisDist axis_zenith_baseline = entry.crystal.zenith;
+      gui::AxisDist axis_azimuth_baseline = entry.crystal.azimuth;
+      gui::AxisDist axis_roll_baseline = entry.crystal.roll;
+      std::string name_baseline = entry.crystal.name;
+      gui::CrystalType type_baseline = entry.crystal.type;
+
+      // Step 2: open modal again, modify height to another non-default (2.0),
+      // click Reset All, then OK to commit the reset.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 2.0f);
+      ctx->Yield();
+      ctx->ItemClick("**/Reset All##modal_cr");
+      ctx->Yield();
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      // Step 3: assert all 7 shape fields back to defaults.
+      gui::CrystalConfig defaults;
+      IM_CHECK_EQ(entry.crystal.height, defaults.height);
+      IM_CHECK_EQ(entry.crystal.prism_h, defaults.prism_h);
+      IM_CHECK_EQ(entry.crystal.upper_h, defaults.upper_h);
+      IM_CHECK_EQ(entry.crystal.lower_h, defaults.lower_h);
+      IM_CHECK_EQ(entry.crystal.upper_alpha, defaults.upper_alpha);
+      IM_CHECK_EQ(entry.crystal.lower_alpha, defaults.lower_alpha);
+      for (int i = 0; i < 6; ++i) {
+        IM_CHECK_EQ(entry.crystal.face_distance[i], defaults.face_distance[i]);
+      }
+
+      // Step 4: assert name/type/axis preserved (Reset All must not touch them).
+      IM_CHECK_EQ(entry.crystal.name, name_baseline);
+      IM_CHECK_EQ(entry.crystal.type, type_baseline);
+      IM_CHECK(entry.crystal.zenith == axis_zenith_baseline);
+      IM_CHECK(entry.crystal.azimuth == axis_azimuth_baseline);
+      IM_CHECK(entry.crystal.roll == axis_roll_baseline);
+    };
+  }
+
+  // p2_modal/crystal_modal_reset_all_then_cancel_keeps_entry — Reset All in
+  // edit buffer, then Cancel; entry must keep its pre-modal state (Reset All
+  // only touches g_crystal_buf, never the entry until OK).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_reset_all_then_cancel_keeps_entry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Establish a non-default baseline (height=5.0) via OK commit.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 5.0f);
+      ctx->Yield();
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      auto& entry = gui::g_state.layers[0].entries[0];
+      IM_CHECK_EQ(entry.crystal.height, 5.0f);
+
+      // Open modal, Reset All, Cancel — entry must remain at 5.0.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+      ctx->ItemClick("**/Reset All##modal_cr");
+      ctx->Yield();
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+
+      // Entry unchanged: Cancel discarded the Reset All effect from the buffer.
+      IM_CHECK_EQ(entry.crystal.height, 5.0f);
+    };
+  }
+
   // p2_modal/filter_modal_ok_no_change_keeps_nullopt — open filter modal on empty
   // entry, click OK without touching anything: entry must stay nullopt (otherwise
   // a default-constructed filter "* In PBD" silently blocks all rays).
