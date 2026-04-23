@@ -1,11 +1,28 @@
 #include "gui/face_number_overlay.hpp"
 
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 
 #include "gui/gui_logger.hpp"
 
 namespace lumice::gui {
+
+namespace {
+
+void AccumulateAabb(FaceLabel& label, const float* p0, const float* p1, const float* p2) {
+  const float* tri_pts[3] = { p0, p1, p2 };
+  for (const float* p : tri_pts) {
+    label.display_aabb_min[0] = std::fmin(label.display_aabb_min[0], p[0]);
+    label.display_aabb_min[1] = std::fmin(label.display_aabb_min[1], p[1]);
+    label.display_aabb_min[2] = std::fmin(label.display_aabb_min[2], p[2]);
+    label.display_aabb_max[0] = std::fmax(label.display_aabb_max[0], p[0]);
+    label.display_aabb_max[1] = std::fmax(label.display_aabb_max[1], p[1]);
+    label.display_aabb_max[2] = std::fmax(label.display_aabb_max[2], p[2]);
+  }
+}
+
+}  // namespace
 
 int AggregateFaceLabels(const float* vertices, int vertex_count, const int* triangles, int triangle_count,
                         const int* face_numbers, FaceLabel* out_labels, int max_labels) {
@@ -76,12 +93,19 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
       out_labels[slot].display_normal[0] = nx;
       out_labels[slot].display_normal[1] = ny;
       out_labels[slot].display_normal[2] = nz;
+      out_labels[slot].display_aabb_min[0] = FLT_MAX;
+      out_labels[slot].display_aabb_min[1] = FLT_MAX;
+      out_labels[slot].display_aabb_min[2] = FLT_MAX;
+      out_labels[slot].display_aabb_max[0] = -FLT_MAX;
+      out_labels[slot].display_aabb_max[1] = -FLT_MAX;
+      out_labels[slot].display_aabb_max[2] = -FLT_MAX;
       tri_count[slot] = 0;
     }
 
     out_labels[slot].display_center[0] += cx;
     out_labels[slot].display_center[1] += cy;
     out_labels[slot].display_center[2] += cz;
+    AccumulateAabb(out_labels[slot], p0, p1, p2);
     tri_count[slot]++;
   }
 

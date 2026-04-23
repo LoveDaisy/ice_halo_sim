@@ -13,6 +13,12 @@ constexpr int kMaxFaceLabels = 32;
 struct FaceLabel {
   float display_center[3];  // AABB-normalized, Y-Z swapped (GUI display space)
   float display_normal[3];
+  // Per-face AABB in the same display space as display_center. Step 2 of the
+  // face-number style refinement projects the 8 corners through the same MVP
+  // used by ProjectLabelToScreen to estimate a screen-space bbox for the
+  // viewport-ratio size filter.
+  float display_aabb_min[3];
+  float display_aabb_max[3];
   int face_number;
 };
 

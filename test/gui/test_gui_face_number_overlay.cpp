@@ -78,6 +78,43 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // Aggregate: AABB tracks component-wise min/max across all triangle vertices
+  // sharing the same face_number.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "unit", "face_number_aggregate_bbox");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      lumice::gui::ResetLastCrystalMesh();
+      // Two triangles sharing face_number=7: vertices span x∈[-1,3], y∈[0,2], z∈[-0.5,0.5].
+      float verts[] = {
+        -1.0f, 0.0f, 0.0f,   // v0
+        3.0f,  2.0f, 0.5f,   // v1
+        0.0f,  1.0f, -0.5f,  // v2
+        2.0f,  0.0f, 0.0f,   // v3
+        1.0f,  2.0f, 0.0f,   // v4
+        0.0f,  1.0f, 0.5f,   // v5
+      };
+      int tris[] = {
+        0, 1, 2,  // face 7
+        3, 4, 5,  // face 7
+      };
+      int fn[] = { 7, 7 };
+
+      FaceLabel labels[kMaxFaceLabels] = {};
+      int n = AggregateFaceLabels(verts, 6, tris, 2, fn, labels, kMaxFaceLabels);
+      IM_CHECK_EQ(n, 1);
+      IM_CHECK_EQ(labels[0].face_number, 7);
+      // Min: per-axis component-wise minimum across all 6 vertices.
+      IM_CHECK(std::abs(labels[0].display_aabb_min[0] - (-1.0f)) < 1e-5f);
+      IM_CHECK(std::abs(labels[0].display_aabb_min[1] - 0.0f) < 1e-5f);
+      IM_CHECK(std::abs(labels[0].display_aabb_min[2] - (-0.5f)) < 1e-5f);
+      // Max: per-axis component-wise maximum.
+      IM_CHECK(std::abs(labels[0].display_aabb_max[0] - 3.0f) < 1e-5f);
+      IM_CHECK(std::abs(labels[0].display_aabb_max[1] - 2.0f) < 1e-5f);
+      IM_CHECK(std::abs(labels[0].display_aabb_max[2] - 0.5f) < 1e-5f);
+    };
+  }
+
   // Aggregate: face_number <= 0 triangles are skipped (0 uninitialized, -1 kInvalidId).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "unit", "face_number_aggregate_skip_nonpositive");
