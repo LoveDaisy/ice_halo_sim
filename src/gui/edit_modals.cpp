@@ -801,6 +801,19 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   // (rendered later in body) may flip state.modal_immediate_mode mid-frame,
   // but End/EndPopup must pair with the container we actually opened here.
   const bool dispatched_immediate = state.modal_immediate_mode;
+  // H0 outer guard (scrum-gui-polish-v13/task-immediate-modal-full-close):
+  // Immediate path uses ImGui::Begin, which — unlike BeginPopupModal — keeps
+  // a registered ImGuiWindow in g.Windows and continues rendering a tomb-
+  // stone title bar even when *p_open==false, until the window is fully
+  // garbage-collected across frames. The standard ImGui pattern for closing
+  // a window is to skip the entire Begin/End block at the call site. Guard
+  // only the Immediate branch; Staged BeginPopupModal on an empty popup
+  // stack already returns false without leaving a stray title bar.
+  // Mode-switch consume (Staged→Immediate) requires Begin to run so that
+  // line 867 body-consume fires — hence the !g_pending_mode_switch clause.
+  if (dispatched_immediate && !title_x_open && !g_pending_mode_switch) {
+    return;
+  }
   if (dispatched_immediate) {
     window_open =
         ImGui::Begin("Edit Entry", &title_x_open,

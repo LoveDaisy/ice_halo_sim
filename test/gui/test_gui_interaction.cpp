@@ -753,6 +753,110 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: scrum-gui-polish-v13 / task-immediate-modal-full-close — Close button
+  // path: after clicking Close, the Edit Entry window must fully disappear
+  // (WasActive == false or window destroyed). Existing test
+  // immediate_close_button_closes only asserts body items are gone; this test
+  // asserts the window title bar also disappears — regression for the
+  // Immediate-mode bug where ImGui::Begin keeps rendering a tomb-stone title
+  // bar after *p_open=false (docking/viewport retention).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_close_button_hides_window");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      // Arrange: open the modal and assert precondition (window truly visible).
+      // Using ctx->GetWindowByRef is Test Engine's thread-safe lookup; direct
+      // ImGui::FindWindowByName is avoided per learnings on TestFunc/GuiFunc
+      // threading.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ImGuiWindow* w_open = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w_open != nullptr);
+      IM_CHECK(w_open->WasActive == true);
+
+      // Act: click Close button (label "Close##edit_modal", verified from
+      // edit_modals.cpp:968).
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(3);
+
+      // Assert: window fully hidden.
+      ImGuiWindow* w_after = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w_after == nullptr || w_after->WasActive == false);
+
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 / task-immediate-modal-full-close — Title-bar ×
+  // path: clicking the × in the title bar must also fully hide the window.
+  // Uses Test Engine's WindowClose API (imgui_te_context.h:312), which
+  // triggers the same internal close that clicking × would.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_title_x_hides_window");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      // Arrange: precondition — window visible.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ImGuiWindow* w_open = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w_open != nullptr);
+      IM_CHECK(w_open->WasActive == true);
+
+      // Act: close via title-bar × (WindowClose triggers the ImGui internal
+      // close path, equivalent to user clicking the × glyph).
+      ctx->WindowClose("Edit Entry");
+      ctx->Yield(3);
+
+      // Assert: window fully hidden.
+      ImGuiWindow* w_after = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w_after == nullptr || w_after->WasActive == false);
+
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 / task-immediate-modal-full-close — Reopen
+  // regression: after closing the Immediate modal, reopening must yield the
+  // same WasActive transition as the first open. Guards against any flag
+  // leakage (g_pending_open / g_pending_mode_switch / g_pending_tab_select)
+  // that could make the second session behave differently.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_reopen_after_close");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      // First open+close cycle.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ImGuiWindow* w1 = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w1 != nullptr && w1->WasActive);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(3);
+      ImGuiWindow* w1_after = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w1_after == nullptr || !w1_after->WasActive);
+
+      // Second open+close cycle — behavior must match first.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ImGuiWindow* w2 = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w2 != nullptr && w2->WasActive);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(3);
+      ImGuiWindow* w2_after = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w2_after == nullptr || !w2_after->WasActive);
+
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
   // P1: scrum-gui-polish-v12 / task-gui-window-zorder — Symptom A guard.
   // After T3 changed the Immediate Edit modal to ImGui::Begin (regular window),
   // background panels lacking NoBringToFrontOnFocus would be raised on click and
