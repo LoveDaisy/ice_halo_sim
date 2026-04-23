@@ -182,6 +182,39 @@ float ComputeSTRScale(float max_abs_dz) {
   return (max_abs_dz <= 0) ? 1.0f : 1.0f / std::tan((math::kPi_2 + std::asin(max_abs_dz)) / 2.0f);
 }
 
+// Orthographic fisheye: r = sin(theta). Scale derived from (short_pix/2) / sin(fov/2)
+// so that a direction at theta = fov/2 maps to the short-edge boundary.
+// NOTE: scale formula must match f→fov conversion in render_config.cpp (orthographic model).
+void FisheyeOrthographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
+  float scale = p.short_pix_ / 2.0f / std::sin(p.fov_ / 2.0f * math::kDegreeToRad);
+
+  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
+    if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
+        (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
+      xy[0] = -1;
+      xy[1] = -1;
+      continue;
+    }
+
+    float d_cam[3]{ -d[0], -d[1], -d[2] };
+    p.rot_.ApplyInverse(d_cam);
+    if (d_cam[2] <= 0) {
+      xy[0] = -1;
+      xy[1] = -1;
+      continue;
+    }
+    auto proj = projection::FisheyeOrthographicForward(d_cam[0], d_cam[1], d_cam[2]);
+    if (!proj.valid) {
+      xy[0] = -1;
+      xy[1] = -1;
+      continue;
+    }
+
+    xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
+    xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
+  }
+}
+
 // Dual equal area fisheye: full hemisphere per circle, fov ignored.
 // No visible_range or behind-camera early exit — by design, all directions are projected.
 // Out-of-bounds pixel coordinates are handled by the caller (SpectrumToXyz bounds check).
@@ -227,6 +260,24 @@ void DualFisheyeStereographicProject(const LensProjParam& p, const float* d, int
   }
 }
 
+// Dual orthographic fisheye: full hemisphere per circle, fov ignored.
+// NOT SUPPORTED: overlap; r_scale always 1.0. See task-lens-orthographic D3 —
+// ComputeORScale and dual-pass integration are deferred to a separate backlog item.
+// The caller-derived z_hemi is always >= 0, so FisheyeOrthographicForward's dz<0
+// guard never triggers on this path; proj.valid is trivially true.
+void DualFisheyeOrthographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
+  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
+    float sky_x = -d[0], sky_y = -d[1], sky_z = -d[2];
+    bool is_upper = (sky_z >= 0);
+    float z_hemi = is_upper ? sky_z : -sky_z;
+    auto proj = projection::FisheyeOrthographicForward(sky_x, sky_y, z_hemi, p.r_scale_);
+    float fx, fy;
+    projection::DualFisheyeToPixel(proj.x, proj.y, is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
+    xy[0] = static_cast<int>(std::floor(fx + 0.5f));
+    xy[1] = static_cast<int>(std::floor(fy + 0.5f));
+  }
+}
+
 // Rectangular (equirectangular) projection: always full-sky, fov is ignored.
 // No visible_range or behind-camera early exit — by design, all directions are projected.
 // lens_shift_ is intentionally not applied — full-sky equirectangular has no meaningful shift.
@@ -263,6 +314,8 @@ ProjFunc GetProjFunc(LensParam::LensType type) {
     { LensParam::kDualFisheyeEquidistant, DualFisheyeEquidistantProject },
     { LensParam::kDualFisheyeStereographic, DualFisheyeStereographicProject },
     { LensParam::kRectangular, RectangularProject },
+    { LensParam::kFisheyeOrthographic, FisheyeOrthographicProject },
+    { LensParam::kDualFisheyeOrthographic, DualFisheyeOrthographicProject },
   };
 
   return lens_proj_map.at(type);
@@ -390,7 +443,13 @@ void RenderConsumer::Consume(const SimData& data) {
         proj_param.r_scale_ = ComputeSTRScale(config_.overlap_);
         break;
       default:
-        break;  // Non-dual-fisheye: overlap is ignored
+        // Non-dual-fisheye: overlap is ignored.
+        // Dual Orthographic intentionally falls here — overlap support requires
+        // a non-trivial ComputeORScale derivation and is deferred (task D3).
+        if (config_.lens_.type_ == LensParam::kDualFisheyeOrthographic) {
+          ILOG_VERBOSE(logger_, "Dual Fisheye Orthographic: overlap parameter is ignored in this release");
+        }
+        break;
     }
   }
 
@@ -434,6 +493,13 @@ void RenderConsumer::Consume(const SimData& data) {
           return projection::FisheyeEquidistantForward(sky_x, sky_y, z_hemi, r_s);
         case LensParam::kDualFisheyeStereographic:
           return projection::FisheyeStereographicForward(sky_x, sky_y, z_hemi, r_s);
+        case LensParam::kDualFisheyeOrthographic:
+          // Compile-completeness only: runtime cannot reach here because the
+          // outer overlap switch routes Orthographic to default (max_abs_dz_==0).
+          // If Orthographic overlap is ever enabled, ComputeORScale must be
+          // implemented and r_s computed accordingly — calling this lambda
+          // with r_s=1.0 while max_abs_dz_>0 yields silently wrong geometry.
+          return projection::FisheyeOrthographicForward(sky_x, sky_y, z_hemi, r_s);
         default:
           return projection::ProjXY{ 0, 0, false };
       }
