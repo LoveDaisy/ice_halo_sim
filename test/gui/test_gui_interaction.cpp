@@ -192,11 +192,15 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P1: scrum-gui-polish-v7 152.5 — Remove Filter marks the edit controls as
-  // disabled (Raypath InputText) so the "will be removed on OK" banner is
-  // consistent with the rest of the Filter tab.
+  // P1: scrum-gui-polish-v13 161.2 — Remove Filter collapses to a plain edit
+  // action (clear raypath; keep editability + sym_*). Observables:
+  //   - Raypath InputText enabled after click (no more Staged "disabled while
+  //     removed" banner)
+  //   - Remove Filter button becomes disabled (derived from raypath now empty)
+  //   - Filter tab dirty mark " *" lights up (AC#4)
+  // sym_* preservation is covered by the dedicated re-type contract test.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_disables_controls");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_clears_textbox_staged");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -207,15 +211,22 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
-      // Before Remove: Raypath control is enabled.
-      auto info_before = ctx->ItemInfo("**/Raypath##filter_modal");
-      IM_CHECK((info_before.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
-      // After Remove: Raypath control is disabled.
-      auto info_after = ctx->ItemInfo("**/Raypath##filter_modal");
-      IM_CHECK((info_after.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // InputText stays editable (no "disabled while pending remove" banner).
+      auto rp_info = ctx->ItemInfo("**/Raypath##filter_modal");
+      IM_CHECK((rp_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Remove button itself becomes disabled (derived from raypath now empty)
+      // — this is also proof the clear took effect.
+      auto rm_info = ctx->ItemInfo("**/Remove Filter##filter");
+      IM_CHECK((rm_info.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // AC#4: Filter tab label carries a trailing " *" dirty mark.
+      auto tab_info = ctx->ItemInfo("**/###filter_tab");
+      IM_CHECK(tab_info.ID != 0);
+      IM_CHECK(std::strstr(tab_info.DebugLabel, "*") != nullptr);
 
       // Cancel so we don't leave state polluted for later tests.
       ctx->ItemClick("**/Cancel##edit_modal");
@@ -223,11 +234,140 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P1: scrum-gui-polish-v7 152.5 — Undo Remove restores editability and
-  // committing OK keeps the filter present (the buffered Remove intent was
-  // reverted before commit).
+  // P1: scrum-gui-polish-v13 161.2 — Remove preserves sym_* across the buffer
+  // cycle. Contract: Remove == backspace all chars → type same raypath again
+  // → OK must write the filter back with sym_* identical to the Open-time
+  // snapshot (not reset to defaults). Use a non-default sym_b=false so a
+  // silent reset would be observable on entry.filter after OK.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "undo_remove_restores_controls");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_preserves_sym_on_retype");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      f.sym_p = true;
+      f.sym_b = false;  // <-- non-default; reset would flip it to true.
+      f.sym_d = true;
+      gui::g_state.layers[0].entries[0].filter = f;
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield(2);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_p == true);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_b == false);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_d == true);
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 161.2 — Staged Remove + OK / Cancel path contract
+  // test (AC#5 Cancel branch): Remove then Cancel must restore the filter
+  // (including raypath & sym_*) from the entry — buffer-discard semantics.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_then_cancel_restores_filter");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      f.sym_p = true;
+      f.sym_b = false;
+      f.sym_d = true;
+      gui::g_state.layers[0].entries[0].filter = f;
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(4);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_p == true);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_b == false);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_d == true);
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 161.2 — After Remove the user can type a new
+  // raypath; OK commits the new value (the cleared buffer did not leave the
+  // tab in a terminal "removed" state).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_then_retype_commits_new_raypath");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::FilterConfig f;
+      f.raypath_text = "1-3";
+      gui::g_state.layers[0].entries[0].filter = f;
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield(2);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 161.2 — Remove button is disabled when the
+  // raypath textbox is empty; typing through the InputText widget re-enables
+  // it. Test must NOT write g_raypath_buf directly — we control the derived
+  // state via the real ImGui widget to avoid tautological assertions.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_button_disabled_when_empty");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Entry has no filter initially → raypath empty → Remove disabled.
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      auto info_empty = ctx->ItemInfo("**/Remove Filter##filter");
+      IM_CHECK((info_empty.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // Type through the real InputText widget; Remove must enable next frame.
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3");
+      ctx->Yield(1);
+
+      auto info_filled = ctx->ItemInfo("**/Remove Filter##filter");
+      IM_CHECK((info_filled.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 161.2 — In Immediate mode, Remove applies on the
+  // next frame (ApplyBuffersToEntry sees empty raypath and writes nullopt).
+  // Dual observable: entry.filter == nullopt (direct) + intensity_locked
+  // (MarkFilterDirty side effect at gui_state.hpp:264-268). Pre-condition
+  // asserts intensity_locked starts false to avoid tautologies.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "immediate_remove_applies_next_frame");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -235,22 +375,30 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::FilterConfig f;
       f.raypath_text = "3-1-5";
       gui::g_state.layers[0].entries[0].filter = f;
+      gui::g_state.intensity_locked = false;
+      ctx->Yield();
+
+      // Pre-condition guard: MarkFilterDirty has not fired yet.
+      IM_CHECK(gui::g_state.intensity_locked == false);
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
+      // Enter Immediate mode (close+reopen cycle).
+      ctx->ItemClick("**/Immediate##edit_modal");
+      ctx->Yield(6);
+      ctx->ItemClick("**/###filter_tab");
+      ctx->Yield(2);
+
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
-      ctx->ItemClick("**/Undo Remove##filter_undo");
-      ctx->Yield(2);
 
-      // Controls restored to enabled state.
-      auto info = ctx->ItemInfo("**/Raypath##filter_modal");
-      IM_CHECK((info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(gui::g_state.intensity_locked == true);
 
-      ctx->ItemClick("**/OK##edit_modal");
+      // Close modal (Immediate uses Close button, not Cancel).
+      ctx->ItemClick("**/Close##edit_modal");
       ctx->Yield(2);
-      // Filter must survive the round-trip since Remove was undone.
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -522,6 +670,92 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: scrum-gui-polish-v14 / task-filter-invalid-raypath-no-apply —
+  // Immediate mode: invalid / incomplete raypath must not reach entry.filter.
+  // Model-layer invariant enforced at ApplyBuffersToEntry: FilterConfig never
+  // holds a non-kValid raypath, regardless of commit mode. Staged mode's OK
+  // button already enforces via disabled gate; this test covers the Immediate
+  // per-frame commit path — kInvalid ("abc"), kIncomplete ("3-") both skip,
+  // while kValid ("3-1-5") and empty (→ nullopt) continue to commit normally.
+  //
+  // Three-layer assertion pattern (avoids false-positive tautologies):
+  //   L1 precondition — verify the buffer actually received the typed text by
+  //      checking the derived "Remove Filter" enable state (disabled when the
+  //      InputText is empty), ruling out a silent ItemInputValue no-op.
+  //   L2 guard effect — assert entry.filter.raypath_text stays at the last
+  //      valid commit (the guard intercepted the invalid write).
+  //   L3 alt-path negation — assert entry.filter remains .has_value() (guard
+  //      did not mistakenly clear to nullopt).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_invalid_raypath_does_not_commit");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemClick("**/###filter_tab");
+      ctx->Yield(4);
+
+      // Establish a valid baseline commit so subsequent guard-intercepted
+      // frames have a "last known good" to preserve.
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1");
+
+      // kInvalid: pure non-numeric "abc" — syntactically invalid.
+      ctx->ItemInputValue("**/Raypath##filter_modal", "abc");
+      ctx->Yield(2);
+      // L1: Remove Filter is disabled iff raypath textbox is empty — its gate
+      //     (edit_modals.cpp: `raypath_empty = (g_raypath_buf[0] == '\0')`)
+      //     is buffer-driven, independent of entry.filter model state. An
+      //     enabled Remove Filter thus proves g_raypath_buf actually holds
+      //     "abc" and rules out a silent ItemInputValue no-op (without which
+      //     L2/L3 could reduce to a tautology by simply re-reading the last
+      //     commit).
+      {
+        auto info_rm = ctx->ItemInfo("**/Remove Filter##filter");
+        IM_CHECK((info_rm.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      }
+      // L2 + L3: guard intercepted — entry.filter preserved at last valid.
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1");
+
+      // kIncomplete: trailing separator "3-" — syntactically incomplete per
+      // ValidateRaypathText rules. Guard treats same as kInvalid (Staged OK
+      // disjunction `v.state != kValid`). Apply the same three-layer pattern
+      // symmetrically so this subcase cannot degrade into a tautology when
+      // ItemInputValue silently no-ops (which would leave the previous "abc"
+      // → same guarded state as "3-", making L2/L3 trivially pass).
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-");
+      ctx->Yield(2);
+      {
+        auto info_rm = ctx->ItemInfo("**/Remove Filter##filter");
+        IM_CHECK((info_rm.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      }
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1");
+
+      // Valid recovery: a fresh valid raypath must commit normally, proving
+      // the guard does not wedge the entry permanently after a rejection.
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+
+      // Empty → nullopt (161.2 rule unchanged by this task).
+      ctx->ItemInputValue("**/Raypath##filter_modal", "");
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
   // P1: scrum-gui-polish-v11 / task-modal-immediate-mode Test 1 — Immediate
   // mode: slider edits are committed to state immediately (no OK needed).
   {
@@ -748,6 +982,110 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Close##edit_modal");
       ctx->Yield(4);
       IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
+
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 / task-immediate-modal-full-close — Close button
+  // path: after clicking Close, the Edit Entry window must fully disappear
+  // (WasActive == false or window destroyed). Existing test
+  // immediate_close_button_closes only asserts body items are gone; this test
+  // asserts the window title bar also disappears — regression for the
+  // Immediate-mode bug where ImGui::Begin keeps rendering a tomb-stone title
+  // bar after *p_open=false (docking/viewport retention).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_close_button_hides_window");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      // Arrange: open the modal and assert precondition (window truly visible).
+      // Using ctx->GetWindowByRef is Test Engine's thread-safe lookup; direct
+      // ImGui::FindWindowByName is avoided per learnings on TestFunc/GuiFunc
+      // threading.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ImGuiWindow* w_open = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w_open != nullptr);
+      IM_CHECK(w_open->WasActive == true);
+
+      // Act: click Close button (label "Close##edit_modal", verified from
+      // edit_modals.cpp:968).
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(3);
+
+      // Assert: window fully hidden.
+      ImGuiWindow* w_after = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w_after == nullptr || w_after->WasActive == false);
+
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 / task-immediate-modal-full-close — Title-bar ×
+  // path: clicking the × in the title bar must also fully hide the window.
+  // Uses Test Engine's WindowClose API (imgui_te_context.h:312), which
+  // triggers the same internal close that clicking × would.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_title_x_hides_window");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      // Arrange: precondition — window visible.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ImGuiWindow* w_open = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w_open != nullptr);
+      IM_CHECK(w_open->WasActive == true);
+
+      // Act: close via title-bar × (WindowClose triggers the ImGui internal
+      // close path, equivalent to user clicking the × glyph).
+      ctx->WindowClose("Edit Entry");
+      ctx->Yield(3);
+
+      // Assert: window fully hidden.
+      ImGuiWindow* w_after = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w_after == nullptr || w_after->WasActive == false);
+
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 / task-immediate-modal-full-close — Reopen
+  // regression: after closing the Immediate modal, reopening must yield the
+  // same WasActive transition as the first open. Guards against any flag
+  // leakage (g_pending_open / g_pending_mode_switch / g_pending_tab_select)
+  // that could make the second session behave differently.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_reopen_after_close");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      // First open+close cycle.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ImGuiWindow* w1 = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w1 != nullptr && w1->WasActive);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(3);
+      ImGuiWindow* w1_after = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w1_after == nullptr || !w1_after->WasActive);
+
+      // Second open+close cycle — behavior must match first.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ImGuiWindow* w2 = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w2 != nullptr && w2->WasActive);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(3);
+      ImGuiWindow* w2_after = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w2_after == nullptr || !w2_after->WasActive);
 
       gui::g_state.modal_immediate_mode = false;
     };
@@ -1618,6 +1956,98 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       // Height should be updated to 5.0
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, 5.0f);
+    };
+  }
+
+  // p2_modal/crystal_modal_reset_all_resets_shape_params — modify shape params,
+  // click Reset All in Crystal tab, OK to commit; verify all 7 shape fields
+  // restored to CrystalConfig{} defaults while name/type/axis are preserved.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_reset_all_resets_shape_params");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Step 1: bring entry crystal to a non-default state (height=5.0) and
+      // record axis/name/type baseline. We need a non-default baseline so the
+      // post-Reset assertion has something to differ from.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 5.0f);
+      ctx->Yield();
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      auto& entry = gui::g_state.layers[0].entries[0];
+      IM_CHECK_EQ(entry.crystal.height, 5.0f);
+      gui::AxisDist axis_zenith_baseline = entry.crystal.zenith;
+      gui::AxisDist axis_azimuth_baseline = entry.crystal.azimuth;
+      gui::AxisDist axis_roll_baseline = entry.crystal.roll;
+      std::string name_baseline = entry.crystal.name;
+      gui::CrystalType type_baseline = entry.crystal.type;
+
+      // Step 2: open modal again, modify height to another non-default (2.0),
+      // click Reset All, then OK to commit the reset.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 2.0f);
+      ctx->Yield();
+      ctx->ItemClick("**/Reset All##modal_cr");
+      ctx->Yield();
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      // Step 3: assert all 7 shape fields back to defaults.
+      gui::CrystalConfig defaults;
+      IM_CHECK_EQ(entry.crystal.height, defaults.height);
+      IM_CHECK_EQ(entry.crystal.prism_h, defaults.prism_h);
+      IM_CHECK_EQ(entry.crystal.upper_h, defaults.upper_h);
+      IM_CHECK_EQ(entry.crystal.lower_h, defaults.lower_h);
+      IM_CHECK_EQ(entry.crystal.upper_alpha, defaults.upper_alpha);
+      IM_CHECK_EQ(entry.crystal.lower_alpha, defaults.lower_alpha);
+      for (int i = 0; i < 6; ++i) {
+        IM_CHECK_EQ(entry.crystal.face_distance[i], defaults.face_distance[i]);
+      }
+
+      // Step 4: assert name/type/axis preserved (Reset All must not touch them).
+      IM_CHECK_EQ(entry.crystal.name, name_baseline);
+      IM_CHECK_EQ(entry.crystal.type, type_baseline);
+      IM_CHECK(entry.crystal.zenith == axis_zenith_baseline);
+      IM_CHECK(entry.crystal.azimuth == axis_azimuth_baseline);
+      IM_CHECK(entry.crystal.roll == axis_roll_baseline);
+    };
+  }
+
+  // p2_modal/crystal_modal_reset_all_then_cancel_keeps_entry — Reset All in
+  // edit buffer, then Cancel; entry must keep its pre-modal state (Reset All
+  // only touches g_crystal_buf, never the entry until OK).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_reset_all_then_cancel_keeps_entry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Establish a non-default baseline (height=5.0) via OK commit.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 5.0f);
+      ctx->Yield();
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      auto& entry = gui::g_state.layers[0].entries[0];
+      IM_CHECK_EQ(entry.crystal.height, 5.0f);
+
+      // Open modal, Reset All, Cancel — entry must remain at 5.0.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+      ctx->ItemClick("**/Reset All##modal_cr");
+      ctx->Yield();
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+
+      // Entry unchanged: Cancel discarded the Reset All effect from the buffer.
+      IM_CHECK_EQ(entry.crystal.height, 5.0f);
     };
   }
 

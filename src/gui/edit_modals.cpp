@@ -22,6 +22,27 @@
 
 namespace lumice::gui {
 
+namespace {
+
+// Resets the Crystal tab's shape parameters in `c` to CrystalConfig{} defaults.
+// Explicitly enumerates the 7 fields rather than `c = CrystalConfig{}` + restore
+// metadata: a future field added to CrystalConfig is *not* silently swept into
+// the reset (the developer must add a line here or accept the omission).
+// Does not touch name / type / zenith / azimuth / roll — type lives in a radio
+// button above, name is layer-scoped metadata, axis lives in a sibling tab.
+void ResetCrystalShapeParams(CrystalConfig& c) {
+  CrystalConfig defaults;
+  c.height = defaults.height;
+  c.prism_h = defaults.prism_h;
+  c.upper_h = defaults.upper_h;
+  c.lower_h = defaults.lower_h;
+  c.upper_alpha = defaults.upper_alpha;
+  c.lower_alpha = defaults.lower_alpha;
+  std::copy(std::begin(defaults.face_distance), std::end(defaults.face_distance), std::begin(c.face_distance));
+}
+
+}  // namespace
+
 // ============================================================
 // Modal state (file scope — not shared via gui_state.hpp)
 // ============================================================
@@ -55,14 +76,13 @@ static CrystalConfig g_crystal_buf;
 static AxisDist g_axis_buf[3];  // zenith, azimuth, roll
 static FilterConfig g_filter_buf;
 static char g_raypath_buf[256];
-// Buffered "Remove Filter" intent: applied on modal-level OK, undone by Cancel.
-static bool g_filter_buf_removed = false;
 // Snapshot of g_filter_buf at modal open + initial presence flag. Used by
-// CommitAllBuffers to decide whether to write entry.filter at all: when the
+// ApplyBuffersToEntry to decide whether to write entry.filter at all: when the
 // entry had no filter originally AND the user did not touch any field, OK
 // must leave entry.filter as nullopt (otherwise default-constructed values
 // like sym_p=b=d=true would silently turn into a "* In PBD" filter that
-// blocks all rays).
+// blocks all rays). Combined with the "empty raypath → nullopt" commit rule
+// this also closes the "Remove button" path without a separate state bit.
 static FilterConfig g_filter_buf_snapshot;
 static bool g_filter_initial_present = false;
 
@@ -194,7 +214,7 @@ namespace {
 // OpenEditModal (initial snapshot) and the Immediate→Staged mode switch
 // (fresh baseline so dirty-mark starts from zero). Field coverage mirrors
 // OpenEditModal lines 210-215 (see plan §F10). Does NOT touch trackball
-// save or g_filter_buf_removed — those retain the Open-time baseline.
+// save — that retains the Open-time baseline.
 //
 // Any new edit-buffer field added in the future must be appended here AND
 // in ApplyBuffersToEntry to keep the dirty-compare / commit paths symmetric.
@@ -250,10 +270,9 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_axis_buf[2] = entry.crystal.roll;
   g_filter_buf = entry.filter.value_or(FilterConfig{});
   snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_filter_buf.raypath_text.c_str());
-  g_filter_buf_removed = false;
   // Snapshot the dirty-compare baseline (Crystal/Axis/Filter buffers +
-  // filter_initial_present). Trackball save and g_filter_buf_removed are
-  // initialized separately below — they're Open-time state, not snapshot.
+  // filter_initial_present). Trackball save is initialized separately below —
+  // it's Open-time state, not snapshot.
   SnapshotAllBuffers(state);
 
   // Save trackball state for Cancel restoration
@@ -341,8 +360,9 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/) {
     CrystalRenderer::ComputeMvp(g_crystal_rotation, g_crystal_zoom, static_cast<int>(kModalPreviewImageSize),
                                 static_cast<int>(kModalPreviewImageSize), mvp);
     DrawFaceNumberOverlay(m->vertices, m->vertex_count, m->triangles, m->triangle_count, m->face_numbers,
-                          g_crystal_rotation, mvp, preview_pos, ImVec2(kModalPreviewImageSize, kModalPreviewImageSize),
-                          ImGui::GetWindowDrawList());
+                          g_crystal_rotation, mvp, g_crystal_zoom, preview_pos,
+                          ImVec2(kModalPreviewImageSize, kModalPreviewImageSize), ImGui::GetWindowDrawList(),
+                          crystal_style);
   }
 
   // Overlay InvisibleButton to consume mouse clicks and prevent modal window drag.
@@ -399,12 +419,16 @@ static void RenderCrystalModal(GuiState& /*state*/) {
       snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
       SliderWithInput(label, &cr.face_distance[i], 0.0f, 2.0f, "%.3f");
     }
-    if (ImGui::SmallButton("Reset All##modal_fd")) {
-      for (auto& fd : cr.face_distance) {
-        fd = 1.0f;
-      }
-    }
     ImGui::TreePop();
+  }
+
+  // -- Reset All (Crystal tab) --
+  // Resets shape parameters to defaults. Preserves type/name/axis (axis lives
+  // in a sibling tab; the OK/Cancel atomicity contract still applies — Reset
+  // All only mutates g_crystal_buf, OK commits, Cancel discards).
+  ImGui::Spacing();
+  if (ImGui::Button("Reset All##modal_cr", ImVec2(120, 0))) {
+    ResetCrystalShapeParams(cr);
   }
 
   // OK / Cancel handled at modal level (RenderEditModals).
@@ -492,17 +516,6 @@ static void RenderFilterModal(GuiState& /*state*/) {
   const lumice::CrystalKind kind =
       (g_crystal_buf.type == CrystalType::kPrism) ? lumice::CrystalKind::kPrism : lumice::CrystalKind::kPyramid;
 
-  // "Remove Filter" intent — buffered, applied on modal-level OK.
-  if (g_filter_buf_removed) {
-    ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.1f, 1.0f), "Filter will be removed on OK.");
-  }
-
-  // Filter tab edit controls are disabled while a Remove intent is pending.
-  // The raw field values remain in-buffer so that Undo Remove can restore
-  // them; CommitAllBuffers honors g_filter_buf_removed by writing nullopt
-  // without reading the buffer values.
-  ImGui::BeginDisabled(g_filter_buf_removed);
-
   // Action combo
   ImGui::Combo("Action##filter_modal", &g_filter_buf.action, kFilterActionNames, kFilterActionCount);
 
@@ -558,23 +571,19 @@ static void RenderFilterModal(GuiState& /*state*/) {
   ImGui::SameLine();
   ImGui::Checkbox("D##filter_modal", &g_filter_buf.sym_d);
 
-  ImGui::EndDisabled();
-
   ImGui::Spacing();
-  // Remove Filter — buffers the intent; modal-level OK will write nullopt.
-  // Cancel still discards (since g_filter_buf_removed is reset on next open).
-  // While the Remove intent is pending, this button toggles to "Undo Remove"
-  // to restore editability. Use distinct ImGui IDs so the two states have
-  // independent button hashes and existing test selectors keep resolving.
-  if (g_filter_buf_removed) {
-    if (ImGui::Button("Undo Remove##filter_undo", ImVec2(120, 0))) {
-      g_filter_buf_removed = false;
-    }
-  } else {
-    if (ImGui::Button("Remove Filter##filter", ImVec2(120, 0))) {
-      g_filter_buf_removed = true;
-    }
+  // Remove Filter — a plain edit action equivalent to the user backspacing the
+  // raypath textbox to empty. action / sym_p / sym_b / sym_d are intentionally
+  // preserved so a subsequent re-type of a raypath keeps the user's P/B/D
+  // preferences; the "empty raypath → nullopt" rule inside ApplyBuffersToEntry
+  // is what actually drops the filter from the entry on commit.
+  const bool raypath_empty = (g_raypath_buf[0] == '\0');
+  ImGui::BeginDisabled(raypath_empty);
+  if (ImGui::Button("Remove Filter##filter", ImVec2(120, 0))) {
+    g_raypath_buf[0] = '\0';
+    g_filter_buf.raypath_text.clear();
   }
+  ImGui::EndDisabled();
 
   // OK / Cancel handled at modal level (RenderEditModals).
 }
@@ -608,7 +617,6 @@ void ResetModalState() {
   g_axis_buf[1] = {};
   g_axis_buf[2] = {};
   g_filter_buf = {};
-  g_filter_buf_removed = false;
   g_filter_buf_snapshot = {};
   g_filter_initial_present = false;
   g_raypath_buf[0] = '\0';
@@ -660,14 +668,29 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   entry.crystal.zenith = g_axis_buf[0];
   entry.crystal.azimuth = g_axis_buf[1];
   entry.crystal.roll = g_axis_buf[2];
-  if (g_filter_buf_removed) {
+  // Sync the ImGui InputText backing buffer back into the struct before any
+  // commit decision; g_raypath_buf is the canonical source for the raypath
+  // text (see plan §F6 — this sync pattern is mirrored at L205/L513/L911/OK
+  // gating).
+  g_filter_buf.raypath_text = g_raypath_buf;
+  if (g_filter_buf.raypath_text.empty()) {
+    // Empty raypath ≡ "no filter" at the UI layer (the Remove button is just
+    // a shortcut for "backspace the textbox empty"). This also subsumes the
+    // old "Remove intent" path and the default-PBD leak: a default-constructed
+    // FilterConfig has empty raypath, so untouched no-filter entries stay
+    // nullopt here.
     entry.filter = std::nullopt;
-  } else {
-    g_filter_buf.raypath_text = g_raypath_buf;
-    // Preserve the no-filter state for entries that had no filter and the user
-    // didn't touch any filter field — committing the default-constructed buffer
-    // would silently create an "* In PBD" filter that blocks all rays.
-    if (g_filter_initial_present || g_filter_buf != g_filter_buf_snapshot) {
+  } else if (g_filter_initial_present || g_filter_buf != g_filter_buf_snapshot) {
+    // Model-layer invariant: FilterConfig must never hold an invalid raypath,
+    // regardless of commit mode. Staged mode already enforces this via the OK
+    // button's disabled gate (ok_disabled check on the Staged OK path);
+    // Immediate mode per-frame commits reach this branch with potentially
+    // invalid text, so the guard here is the single model-layer gate that
+    // makes the invariant hold in both modes. kIncomplete is treated same as
+    // kInvalid — matches the Staged OK disjunction `v.state != kValid`,
+    // preventing half-typed input from poisoning the renderer.
+    auto v = ValidateRaypathText(g_filter_buf.raypath_text, CurrentValidationKind());
+    if (v.state == RaypathValidation::kValid) {
       entry.filter = g_filter_buf;
     }
   }
@@ -801,6 +824,24 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   // (rendered later in body) may flip state.modal_immediate_mode mid-frame,
   // but End/EndPopup must pair with the container we actually opened here.
   const bool dispatched_immediate = state.modal_immediate_mode;
+  // H0 outer guard: the Immediate path uses ImGui::Begin, which — unlike
+  // BeginPopupModal — keeps a registered ImGuiWindow in g.Windows and
+  // continues rendering a tomb-stone title bar even when *p_open==false,
+  // until the window is fully garbage-collected across frames. The standard
+  // ImGui pattern for closing a window is to skip the entire Begin/End block
+  // at the call site. Guard only the Immediate branch; Staged
+  // BeginPopupModal on an empty popup stack already returns false without
+  // leaving a stray title bar. The !g_pending_mode_switch clause preserves
+  // the Staged→Immediate mode-switch consume path further down (the body
+  // branch that arms g_pending_tab_select needs Begin to run). Once this
+  // guard is in effect, the inner race-case exit
+  // (dispatched_immediate && g_active_modal != kOpen → End+return) is
+  // unreachable; it is retained as an idempotent safety net for deleted-
+  // entry paths and will become reachable again only if this guard is ever
+  // relaxed.
+  if (dispatched_immediate && !title_x_open && !g_pending_mode_switch) {
+    return;
+  }
   if (dispatched_immediate) {
     window_open =
         ImGui::Begin("Edit Entry", &title_x_open,
@@ -891,14 +932,15 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   // falling back to the first tab and hiding the user's work-in-progress).
   FilterConfig filter_cmp = g_filter_buf;
   filter_cmp.raypath_text = g_raypath_buf;
-  // Note: g_filter_buf_removed may be true while g_filter_initial_present is
-  // false — the user can click Remove on an entry that had no filter (a
-  // no-op for committed state). filter_dirty resolves to false in that case
-  // via the ternary below.
+  // filter_dirty uses the in-flight buffer vs its open-time snapshot. Remove
+  // button just clears g_raypath_buf, so filter_cmp.raypath_text ("") diverges
+  // from snapshot (which holds the original raypath_text) and the * mark
+  // lights up. A snapshot with empty raypath that the user leaves empty
+  // stays equal, so dirty remains false — no false-positive mark.
   const bool crystal_dirty = g_crystal_buf != g_crystal_buf_snapshot;
   const bool axis_dirty = g_axis_buf[0] != g_axis_buf_snapshot[0] || g_axis_buf[1] != g_axis_buf_snapshot[1] ||
                           g_axis_buf[2] != g_axis_buf_snapshot[2];
-  const bool filter_dirty = g_filter_buf_removed ? g_filter_initial_present : (filter_cmp != g_filter_buf_snapshot);
+  const bool filter_dirty = filter_cmp != g_filter_buf_snapshot;
   // Immediate mode: changes apply every frame, so "dirty" is not a meaningful
   // state — suppress the * mark on all tabs regardless of buffer vs snapshot.
   const bool show_dirty = !state.modal_immediate_mode;
@@ -970,13 +1012,14 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
     }
   } else {
     // Staged: OK / Cancel.
-    // OK gate: when the user has buffered a Remove Filter intent, raypath
-    // validation is irrelevant (we won't write the buffer); otherwise validate
-    // the in-flight raypath against the Crystal-tab buffer's type.
+    // OK gate: empty raypath is treated as "no filter" (ApplyBuffersToEntry
+    // writes nullopt), so validation only applies when the user actually
+    // typed something. This subsumes the previous "Remove intent" gating
+    // branch without a dedicated flag.
     bool ok_disabled = false;
     const char* ok_tooltip = nullptr;
-    if (!g_filter_buf_removed) {
-      g_filter_buf.raypath_text = g_raypath_buf;
+    g_filter_buf.raypath_text = g_raypath_buf;
+    if (!g_filter_buf.raypath_text.empty()) {
       const auto v = ValidateRaypathText(g_filter_buf.raypath_text, CurrentValidationKind());
       if (v.state != RaypathValidation::kValid) {
         ok_disabled = true;
