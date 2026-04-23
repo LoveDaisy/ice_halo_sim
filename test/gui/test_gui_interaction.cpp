@@ -192,11 +192,15 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P1: scrum-gui-polish-v7 152.5 — Remove Filter marks the edit controls as
-  // disabled (Raypath InputText) so the "will be removed on OK" banner is
-  // consistent with the rest of the Filter tab.
+  // P1: scrum-gui-polish-v13 161.2 — Remove Filter collapses to a plain edit
+  // action (clear raypath; keep editability + sym_*). Observables:
+  //   - Raypath InputText enabled after click (no more Staged "disabled while
+  //     removed" banner)
+  //   - Remove Filter button becomes disabled (derived from raypath now empty)
+  //   - Filter tab dirty mark " *" lights up (AC#4)
+  // sym_* preservation is covered by the dedicated re-type contract test.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_disables_controls");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_clears_textbox_staged");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -207,15 +211,22 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
-      // Before Remove: Raypath control is enabled.
-      auto info_before = ctx->ItemInfo("**/Raypath##filter_modal");
-      IM_CHECK((info_before.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
-      // After Remove: Raypath control is disabled.
-      auto info_after = ctx->ItemInfo("**/Raypath##filter_modal");
-      IM_CHECK((info_after.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // InputText stays editable (no "disabled while pending remove" banner).
+      auto rp_info = ctx->ItemInfo("**/Raypath##filter_modal");
+      IM_CHECK((rp_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Remove button itself becomes disabled (derived from raypath now empty)
+      // — this is also proof the clear took effect.
+      auto rm_info = ctx->ItemInfo("**/Remove Filter##filter");
+      IM_CHECK((rm_info.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // AC#4: Filter tab label carries a trailing " *" dirty mark.
+      auto tab_info = ctx->ItemInfo("**/###filter_tab");
+      IM_CHECK(tab_info.ID != 0);
+      IM_CHECK(std::strstr(tab_info.DebugLabel, "*") != nullptr);
 
       // Cancel so we don't leave state polluted for later tests.
       ctx->ItemClick("**/Cancel##edit_modal");
@@ -223,11 +234,140 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P1: scrum-gui-polish-v7 152.5 — Undo Remove restores editability and
-  // committing OK keeps the filter present (the buffered Remove intent was
-  // reverted before commit).
+  // P1: scrum-gui-polish-v13 161.2 — Remove preserves sym_* across the buffer
+  // cycle. Contract: Remove == backspace all chars → type same raypath again
+  // → OK must write the filter back with sym_* identical to the Open-time
+  // snapshot (not reset to defaults). Use a non-default sym_b=false so a
+  // silent reset would be observable on entry.filter after OK.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "undo_remove_restores_controls");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_preserves_sym_on_retype");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      f.sym_p = true;
+      f.sym_b = false;  // <-- non-default; reset would flip it to true.
+      f.sym_d = true;
+      gui::g_state.layers[0].entries[0].filter = f;
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield(2);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_p == true);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_b == false);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_d == true);
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 161.2 — Staged Remove + OK / Cancel path contract
+  // test (AC#5 Cancel branch): Remove then Cancel must restore the filter
+  // (including raypath & sym_*) from the entry — buffer-discard semantics.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_then_cancel_restores_filter");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::FilterConfig f;
+      f.raypath_text = "3-1-5";
+      f.sym_p = true;
+      f.sym_b = false;
+      f.sym_d = true;
+      gui::g_state.layers[0].entries[0].filter = f;
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(4);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_p == true);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_b == false);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_d == true);
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 161.2 — After Remove the user can type a new
+  // raypath; OK commits the new value (the cleared buffer did not leave the
+  // tab in a terminal "removed" state).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_then_retype_commits_new_raypath");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::FilterConfig f;
+      f.raypath_text = "1-3";
+      gui::g_state.layers[0].entries[0].filter = f;
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield(2);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 161.2 — Remove button is disabled when the
+  // raypath textbox is empty; typing through the InputText widget re-enables
+  // it. Test must NOT write g_raypath_buf directly — we control the derived
+  // state via the real ImGui widget to avoid tautological assertions.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_button_disabled_when_empty");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Entry has no filter initially → raypath empty → Remove disabled.
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      auto info_empty = ctx->ItemInfo("**/Remove Filter##filter");
+      IM_CHECK((info_empty.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // Type through the real InputText widget; Remove must enable next frame.
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3");
+      ctx->Yield(1);
+
+      auto info_filled = ctx->ItemInfo("**/Remove Filter##filter");
+      IM_CHECK((info_filled.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // P1: scrum-gui-polish-v13 161.2 — In Immediate mode, Remove applies on the
+  // next frame (ApplyBuffersToEntry sees empty raypath and writes nullopt).
+  // Dual observable: entry.filter == nullopt (direct) + intensity_locked
+  // (MarkFilterDirty side effect at gui_state.hpp:264-268). Pre-condition
+  // asserts intensity_locked starts false to avoid tautologies.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "immediate_remove_applies_next_frame");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -235,22 +375,30 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::FilterConfig f;
       f.raypath_text = "3-1-5";
       gui::g_state.layers[0].entries[0].filter = f;
+      gui::g_state.intensity_locked = false;
+      ctx->Yield();
+
+      // Pre-condition guard: MarkFilterDirty has not fired yet.
+      IM_CHECK(gui::g_state.intensity_locked == false);
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
+      // Enter Immediate mode (close+reopen cycle).
+      ctx->ItemClick("**/Immediate##edit_modal");
+      ctx->Yield(6);
+      ctx->ItemClick("**/###filter_tab");
+      ctx->Yield(2);
+
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
-      ctx->ItemClick("**/Undo Remove##filter_undo");
-      ctx->Yield(2);
 
-      // Controls restored to enabled state.
-      auto info = ctx->ItemInfo("**/Raypath##filter_modal");
-      IM_CHECK((info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(gui::g_state.intensity_locked == true);
 
-      ctx->ItemClick("**/OK##edit_modal");
+      // Close modal (Immediate uses Close button, not Cancel).
+      ctx->ItemClick("**/Close##edit_modal");
       ctx->Yield(2);
-      // Filter must survive the round-trip since Remove was undone.
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      gui::g_state.modal_immediate_mode = false;
     };
   }
 
