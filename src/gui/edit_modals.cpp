@@ -893,6 +893,10 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
     return;
   }
   if (dispatched_immediate) {
+    // NoDocking: with ImGuiConfigFlags_ViewportsEnable, this flag prevents docking into
+    // the main window while still allowing the window to live in its own OS viewport when
+    // dragged outside. Without NoDocking, users could accidentally dock the editor into a
+    // main-window split which is not the intended layout.
     window_open =
         ImGui::Begin("Edit Entry", &title_x_open,
                      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse);

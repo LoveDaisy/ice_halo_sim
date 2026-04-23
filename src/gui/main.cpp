@@ -124,7 +124,10 @@ int main(int argc, char** argv) {
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-  io.IniFilename = nullptr;  // Disable imgui.ini persistence
+  // Multi-viewport: lets Immediate-mode Edit Entry be dragged outside main window.
+  // Staged BeginPopupModal keeps main-viewport constraint by ImGui semantics.
+  io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+  io.IniFilename = nullptr;  // Disable imgui.ini persistence (also suppresses viewport position persistence)
 
   ImGui::StyleColorsDark();
 
@@ -249,6 +252,10 @@ int main(int argc, char** argv) {
   // measure steady-state throughput for 2 seconds, print result, and exit.
   // This allows apples-to-apples comparison with LumiceGUITests --filter perf_test.
   if (perf_bench) {
+    // Disable runtime viewport creation for perf-bench only. Platform callbacks remain
+    // registered from ImGui_ImplGlfw_Init; this flag gate merely skips per-frame viewport
+    // update/render cost so steady-state measurement is not polluted by window management.
+    io.ConfigFlags &= ~ImGuiConfigFlags_ViewportsEnable;
     // Same config as StartPerfSimulation in test_gui_main.cpp
     gui::g_state.sun.altitude = 20.0f;
     gui::g_state.sun.diameter = 0.5f;
@@ -441,6 +448,17 @@ int main(int argc, char** argv) {
     }
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    // Update and render additional platform windows (multi-viewport).
+    // Must save/restore current GL context because RenderPlatformWindowsDefault
+    // makes each viewport's context current in turn; without restore the main
+    // window would draw into the wrong context on the next frame.
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+      GLFWwindow* backup_current_context = glfwGetCurrentContext();
+      ImGui::UpdatePlatformWindows();
+      ImGui::RenderPlatformWindowsDefault();
+      glfwMakeContextCurrent(backup_current_context);
+    }
 
     // gui-polish-v10: Screenshot exports (with or without overlay) now go through the
     // off-screen FBO path in RenderExportToRgba — no deferred default-framebuffer capture
