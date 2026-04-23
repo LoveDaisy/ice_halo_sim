@@ -60,6 +60,13 @@ enum class ActiveTab { kCrystal, kAxis, kFilter };
 // adds a width floor so that both columns render without clipping.
 constexpr float kEditModalMinWidth = 820.0f;
 
+// Vertical layout (modal_layout_vertical=true) relaxes the horizontal floor
+// since the tab content is stacked below the preview rather than beside it,
+// and adds a height floor so the scrollable tab child retains ~400px after
+// the fixed 360px preview + tab bar + padding.
+constexpr float kEditModalMinWidthVertical = 360.0f;
+constexpr float kEditModalMinHeightVertical = 780.0f;
+
 static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
 static int g_modal_entry_idx = -1;
@@ -831,13 +838,15 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   // the helper cannot identify a monitor (headless tests, nullptr window), fall
   // back to an unbounded max rather than a primary-monitor default (avoids the
   // multi-monitor "primary bias" anti-pattern).
+  const float min_w = state.modal_layout_vertical ? kEditModalMinWidthVertical : kEditModalMinWidth;
+  const float min_h = state.modal_layout_vertical ? kEditModalMinHeightVertical : 0.0f;
   MonitorRect mon{};
   if (GetCurrentMonitorWorkArea(window, &mon)) {
-    auto max_w = std::max(kEditModalMinWidth, static_cast<float>(mon.w - kWindowDecorationMargin));
+    auto max_w = std::max(min_w, static_cast<float>(mon.w - kWindowDecorationMargin));
     auto max_h = std::max(static_cast<float>(kMinWindowHeight), static_cast<float>(mon.h - kWindowDecorationMargin));
-    ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(max_w, max_h));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(min_w, min_h), ImVec2(max_w, max_h));
   } else {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(min_w, min_h), ImVec2(FLT_MAX, FLT_MAX));
   }
   // Mode dispatch: Staged → BeginPopupModal (blocks background, exposes title-bar ×
   // via p_open). Immediate → ImGui::Begin (regular window — external clicks pass
