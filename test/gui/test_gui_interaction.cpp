@@ -1655,6 +1655,55 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p2_render/lens_orthographic_selection — selecting Orthographic drives FOV max to 180.
+  // See task-lens-orthographic scrum-gui-polish-v15 for context.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_orthographic_selection");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Start with Dual Fisheye EA (fov=360) to prove the subsequent clamp is real.
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeEqualArea;
+      gui::g_state.renderer.fov = 360.0f;
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.fov, 360.0f);
+
+      // Switch to Fisheye Orthographic (MaxFov=180). fov must drop to 180.
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeOrthographic;
+      ctx->Yield(3);
+      IM_CHECK_LE(gui::g_state.renderer.fov, 180.0f);
+      IM_CHECK_GT(gui::g_state.renderer.fov, 0.0f);
+
+      // Push fov past the cap; the per-frame clamp pulls it back to 180.
+      gui::g_state.renderer.fov = 200.0f;
+      ctx->Yield(3);
+      IM_CHECK_LE(gui::g_state.renderer.fov, 180.0f);
+    };
+  }
+
+  // p2_render/lens_dual_orthographic_selection — dual orthographic also clamps to 180.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_dual_orthographic_selection");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeEqualArea;
+      gui::g_state.renderer.fov = 360.0f;
+      ctx->Yield(3);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeOrthographic;
+      ctx->Yield(3);
+      IM_CHECK_LE(gui::g_state.renderer.fov, 180.0f);
+      IM_CHECK_GT(gui::g_state.renderer.fov, 0.0f);
+
+      gui::g_state.renderer.fov = 250.0f;
+      ctx->Yield(3);
+      IM_CHECK_LE(gui::g_state.renderer.fov, 180.0f);
+    };
+  }
+
   // p2_render/lens_switch_preserves_overlay — overlay flags survive lens type changes
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_switch_preserves_overlay");
