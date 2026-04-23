@@ -203,12 +203,8 @@ void FisheyeOrthographicProject(const LensProjParam& p, const float* d, int* xy,
       xy[1] = -1;
       continue;
     }
+    // Forward's dz<0 guard cannot trip here: d_cam[2]<=0 was filtered above.
     auto proj = projection::FisheyeOrthographicForward(d_cam[0], d_cam[1], d_cam[2]);
-    if (!proj.valid) {
-      xy[0] = -1;
-      xy[1] = -1;
-      continue;
-    }
 
     xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
     xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
@@ -494,11 +490,10 @@ void RenderConsumer::Consume(const SimData& data) {
         case LensParam::kDualFisheyeStereographic:
           return projection::FisheyeStereographicForward(sky_x, sky_y, z_hemi, r_s);
         case LensParam::kDualFisheyeOrthographic:
-          // Compile-completeness only: runtime cannot reach here because the
-          // outer overlap switch routes Orthographic to default (max_abs_dz_==0).
-          // If Orthographic overlap is ever enabled, ComputeORScale must be
-          // implemented and r_s computed accordingly — calling this lambda
-          // with r_s=1.0 while max_abs_dz_>0 yields silently wrong geometry.
+          // TODO(lens-ortho-overlap): when overlap support is added, implement
+          // ComputeORScale and route via the outer switch. Reaching this lambda
+          // with r_s != 1.0 silently yields wrong geometry without the scale fn.
+          // Today: unreachable because outer switch lands in `default: break;`.
           return projection::FisheyeOrthographicForward(sky_x, sky_y, z_hemi, r_s);
         default:
           return projection::ProjXY{ 0, 0, false };

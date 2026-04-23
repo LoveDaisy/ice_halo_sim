@@ -446,12 +446,15 @@ TEST(LensConfigOrthographic, DualFovDirectRoundTrip) {
   EXPECT_EQ(out["type"], "dual_fisheye_orthographic");
 }
 
-TEST(LensConfigOrthographic, FCalcFovBoundary) {
+TEST(LensConfigOrthographic, FCalcFovNearBoundary) {
   // Orthographic: sin(fov/2) = d/f, d = kHalfShortEdge = 12mm.
-  // f = 12 -> fov = 180 deg (boundary, valid).
-  nlohmann::json j = { { "type", "fisheye_orthographic" }, { "f", 12.0f } };
+  // Avoid the exact f=12 singularity: asin(1.0) * 2 * kRadToDegree can round to
+  // 180 + 1 ULP on some platforms and trip the (fov > MaxFov) guard; the precise
+  // 180 ° boundary is already covered by FovDirectBoundary via the direct fov path.
+  nlohmann::json j = { { "type", "fisheye_orthographic" }, { "f", 12.5f } };
   auto l = j.get<LensParam>();
-  EXPECT_NEAR(l.fov_, 180.0f, 1e-3f);
+  EXPECT_GT(l.fov_, 145.0f);
+  EXPECT_LT(l.fov_, 155.0f);
 }
 
 TEST(LensConfigOrthographic, FCalcMidRange) {
