@@ -681,7 +681,18 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     // nullopt here.
     entry.filter = std::nullopt;
   } else if (g_filter_initial_present || g_filter_buf != g_filter_buf_snapshot) {
-    entry.filter = g_filter_buf;
+    // Model-layer invariant: FilterConfig must never hold an invalid raypath,
+    // regardless of commit mode. Staged mode already enforces this via the OK
+    // button's disabled gate (ok_disabled check on the Staged OK path);
+    // Immediate mode per-frame commits reach this branch with potentially
+    // invalid text, so the guard here is the single model-layer gate that
+    // makes the invariant hold in both modes. kIncomplete is treated same as
+    // kInvalid — matches the Staged OK disjunction `v.state != kValid`,
+    // preventing half-typed input from poisoning the renderer.
+    auto v = ValidateRaypathText(g_filter_buf.raypath_text, CurrentValidationKind());
+    if (v.state == RaypathValidation::kValid) {
+      entry.filter = g_filter_buf;
+    }
   }
   return { true, entry != old_entry, entry.filter != old_entry.filter };
 }

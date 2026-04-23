@@ -670,6 +670,92 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: scrum-gui-polish-v14 / task-filter-invalid-raypath-no-apply —
+  // Immediate mode: invalid / incomplete raypath must not reach entry.filter.
+  // Model-layer invariant enforced at ApplyBuffersToEntry: FilterConfig never
+  // holds a non-kValid raypath, regardless of commit mode. Staged mode's OK
+  // button already enforces via disabled gate; this test covers the Immediate
+  // per-frame commit path — kInvalid ("abc"), kIncomplete ("3-") both skip,
+  // while kValid ("3-1-5") and empty (→ nullopt) continue to commit normally.
+  //
+  // Three-layer assertion pattern (avoids false-positive tautologies):
+  //   L1 precondition — verify the buffer actually received the typed text by
+  //      checking the derived "Remove Filter" enable state (disabled when the
+  //      InputText is empty), ruling out a silent ItemInputValue no-op.
+  //   L2 guard effect — assert entry.filter.raypath_text stays at the last
+  //      valid commit (the guard intercepted the invalid write).
+  //   L3 alt-path negation — assert entry.filter remains .has_value() (guard
+  //      did not mistakenly clear to nullopt).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_invalid_raypath_does_not_commit");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemClick("**/###filter_tab");
+      ctx->Yield(4);
+
+      // Establish a valid baseline commit so subsequent guard-intercepted
+      // frames have a "last known good" to preserve.
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1");
+
+      // kInvalid: pure non-numeric "abc" — syntactically invalid.
+      ctx->ItemInputValue("**/Raypath##filter_modal", "abc");
+      ctx->Yield(2);
+      // L1: Remove Filter is disabled iff raypath textbox is empty — its gate
+      //     (edit_modals.cpp: `raypath_empty = (g_raypath_buf[0] == '\0')`)
+      //     is buffer-driven, independent of entry.filter model state. An
+      //     enabled Remove Filter thus proves g_raypath_buf actually holds
+      //     "abc" and rules out a silent ItemInputValue no-op (without which
+      //     L2/L3 could reduce to a tautology by simply re-reading the last
+      //     commit).
+      {
+        auto info_rm = ctx->ItemInfo("**/Remove Filter##filter");
+        IM_CHECK((info_rm.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      }
+      // L2 + L3: guard intercepted — entry.filter preserved at last valid.
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1");
+
+      // kIncomplete: trailing separator "3-" — syntactically incomplete per
+      // ValidateRaypathText rules. Guard treats same as kInvalid (Staged OK
+      // disjunction `v.state != kValid`). Apply the same three-layer pattern
+      // symmetrically so this subcase cannot degrade into a tautology when
+      // ItemInputValue silently no-ops (which would leave the previous "abc"
+      // → same guarded state as "3-", making L2/L3 trivially pass).
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-");
+      ctx->Yield(2);
+      {
+        auto info_rm = ctx->ItemInfo("**/Remove Filter##filter");
+        IM_CHECK((info_rm.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      }
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1");
+
+      // Valid recovery: a fresh valid raypath must commit normally, proving
+      // the guard does not wedge the entry permanently after a rejection.
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+
+      // Empty → nullopt (161.2 rule unchanged by this task).
+      ctx->ItemInputValue("**/Raypath##filter_modal", "");
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
   // P1: scrum-gui-polish-v11 / task-modal-immediate-mode Test 1 — Immediate
   // mode: slider edits are committed to state immediately (no OK needed).
   {
