@@ -1704,6 +1704,27 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p2_render/modal_layout_toggle_bit — switching modal_layout_vertical is safe
+  // (view preference state-level test; layout dispatch is exercised only indirectly
+  // through subsequent modal open, which would require a live popup — omitted to
+  // keep the test fast and deterministic; plan Minor #5 noted the limitation).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "modal_layout_toggle_bit");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, false);
+
+      gui::g_state.modal_layout_vertical = true;
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, true);
+
+      gui::g_state.modal_layout_vertical = false;
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, false);
+    };
+  }
+
   // p2_render/lens_switch_preserves_overlay — overlay flags survive lens type changes
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_switch_preserves_overlay");
