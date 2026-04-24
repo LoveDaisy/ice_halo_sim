@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776996264883,
+  "lastUpdate": 1776996266295,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -3879,6 +3879,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 67.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e63069a2c407830a197ccf0afe383644959d4b8e",
+          "message": "Merge pull request #75 from LoveDaisy/feat/gui_polish\n\nGUI polish v15: orthographic lens, modal H/V layout, detachable Immediate modal",
+          "timestamp": "2026-04-24T09:59:54+08:00",
+          "tree_id": "568063651932670da5f27b983647c867d4a87abc",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e63069a2c407830a197ccf0afe383644959d4b8e"
+        },
+        "date": 1776996266014,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 94,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 72.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 75.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 67.1,
             "unit": "%"
           }
         ]
