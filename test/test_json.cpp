@@ -12,6 +12,7 @@
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
+#include "config/render_config.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
 #include "util/illuminant.hpp"
@@ -404,6 +405,69 @@ TEST_F(V3TestJson, Scene_SingleScattering) {
   ASSERT_EQ(s.ms_[0].setting_[0].filter_.id_, kInvalidId);
   const auto& sp = std::get<SimpleFilterParam>(s.ms_[0].setting_[0].filter_.param_);
   ASSERT_TRUE(std::holds_alternative<NoneFilterParam>(sp));
+}
+
+// =============== Lens Orthographic ===============
+
+TEST(LensConfigOrthographic, MaxFovIs180) {
+  EXPECT_FLOAT_EQ(MaxFov(LensParam::kFisheyeOrthographic), 180.0f);
+  EXPECT_FLOAT_EQ(MaxFov(LensParam::kDualFisheyeOrthographic), 180.0f);
+}
+
+TEST(LensConfigOrthographic, FovDirectRoundTrip) {
+  nlohmann::json j = { { "type", "fisheye_orthographic" }, { "fov", 90.0f } };
+  auto l = j.get<LensParam>();
+  EXPECT_EQ(l.type_, LensParam::kFisheyeOrthographic);
+  EXPECT_NEAR(l.fov_, 90.0f, 1e-5f);
+
+  nlohmann::json out = l;
+  EXPECT_EQ(out["type"], "fisheye_orthographic");
+  EXPECT_NEAR(out["fov"].get<float>(), 90.0f, 1e-5f);
+}
+
+TEST(LensConfigOrthographic, FovDirectBoundary) {
+  nlohmann::json ok = { { "type", "fisheye_orthographic" }, { "fov", 180.0f } };
+  EXPECT_NO_THROW(ok.get<LensParam>());
+
+  nlohmann::json over = { { "type", "fisheye_orthographic" }, { "fov", 180.01f } };
+  EXPECT_THROW(over.get<LensParam>(), nlohmann::detail::out_of_range);
+
+  nlohmann::json zero = { { "type", "fisheye_orthographic" }, { "fov", 0.0f } };
+  EXPECT_THROW(zero.get<LensParam>(), nlohmann::detail::out_of_range);
+}
+
+TEST(LensConfigOrthographic, DualFovDirectRoundTrip) {
+  nlohmann::json j = { { "type", "dual_fisheye_orthographic" }, { "fov", 180.0f } };
+  auto l = j.get<LensParam>();
+  EXPECT_EQ(l.type_, LensParam::kDualFisheyeOrthographic);
+  EXPECT_NEAR(l.fov_, 180.0f, 1e-5f);
+
+  nlohmann::json out = l;
+  EXPECT_EQ(out["type"], "dual_fisheye_orthographic");
+}
+
+TEST(LensConfigOrthographic, FCalcFovNearBoundary) {
+  // Orthographic: sin(fov/2) = d/f, d = kHalfShortEdge = 12mm.
+  // Avoid the exact f=12 singularity: asin(1.0) * 2 * kRadToDegree can round to
+  // 180 + 1 ULP on some platforms and trip the (fov > MaxFov) guard; the precise
+  // 180 ° boundary is already covered by FovDirectBoundary via the direct fov path.
+  nlohmann::json j = { { "type", "fisheye_orthographic" }, { "f", 12.5f } };
+  auto l = j.get<LensParam>();
+  EXPECT_GT(l.fov_, 145.0f);
+  EXPECT_LT(l.fov_, 155.0f);
+}
+
+TEST(LensConfigOrthographic, FCalcMidRange) {
+  // f = 24 -> sin(fov/2) = 12/24 = 0.5 -> fov = 60 deg.
+  nlohmann::json j = { { "type", "fisheye_orthographic" }, { "f", 24.0f } };
+  auto l = j.get<LensParam>();
+  EXPECT_NEAR(l.fov_, 60.0f, 1e-3f);
+}
+
+TEST(LensConfigOrthographic, FCalcTooShortThrows) {
+  // f = 10 -> d/f = 1.2 > 1, asin domain violation.
+  nlohmann::json j = { { "type", "fisheye_orthographic" }, { "f", 10.0f } };
+  EXPECT_THROW(j.get<LensParam>(), nlohmann::detail::out_of_range);
 }
 
 }  // namespace

@@ -85,6 +85,8 @@ enum LensType : int {
   kLensTypeDualFisheyeEquidist = 5,
   kLensTypeDualFisheyeStereographic = 6,
   kLensTypeRectangular = 7,
+  kLensTypeFisheyeOrthographic = 8,
+  kLensTypeDualFisheyeOrthographic = 9,
 };
 
 // Visible region selector. Order must match kVisibleNames in gui_state.hpp.

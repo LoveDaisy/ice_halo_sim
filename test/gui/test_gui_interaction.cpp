@@ -1150,6 +1150,53 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: scrum-gui-polish-v15 / task-detachable-modal-impl — Immediate Edit Entry
+  // must retain ImGuiWindowFlags_NoDocking so the multi-viewport mechanism only
+  // creates an independent OS viewport when the user drags it outside the main
+  // window, never docks it into the main window. Runtime detach behavior itself
+  // is validated by macOS manual QA in plan Step 5 — this test is the structural
+  // guard against accidental NoDocking removal.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_modal_viewport_flags_preserved");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      // Note: runtime flipping of ImGuiConfigFlags_ViewportsEnable inside the
+      // hidden test GLFW window crashes the backend (platform window creation
+      // fails under the test harness). Do not enable the flag here — this
+      // test only asserts the structural contract that is required for
+      // production (main.cpp sets the flag at init) to work correctly; actual
+      // detach behavior is validated by macOS manual QA (plan Step 5).
+
+      // Open Edit Entry Immediate mode.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ImGuiWindow* w = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(w != nullptr);
+      IM_CHECK(w->WasActive);
+
+      // Contract: NoDocking must be on the Immediate branch ImGui::Begin
+      // flags. With ViewportsEnable (enabled in production), NoDocking lets
+      // the window become an independent OS viewport when dragged outside
+      // the main window without accidentally docking into a main-window
+      // split target.
+      IM_CHECK((w->Flags & ImGuiWindowFlags_NoDocking) != 0);
+
+      // On first open, the window is placed in the main viewport (gated by
+      // NoSavedSettings semantics via io.IniFilename = nullptr in main.cpp).
+      // Independent viewport creation is triggered by a user drag and is not
+      // exercised in the test harness.
+      IM_CHECK(w->Viewport == ImGui::GetMainViewport());
+
+      // Cleanup.
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(3);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
   // P1: scrum-gui-polish-v12 / task-gui-window-zorder — z-order invariant
   // between LogPanel (Layer 3, no flag, push_back -> top) and LeftPanel
   // (background cluster, NoBringToFrontOnFocus, push_front -> bottom).
@@ -1652,6 +1699,78 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
 
       // fov should be clamped to Linear's max (some value < 360)
       IM_CHECK_LT(gui::g_state.renderer.fov, 360.0f);
+    };
+  }
+
+  // p2_render/lens_orthographic_selection — selecting Orthographic drives FOV max to 180.
+  // See task-lens-orthographic scrum-gui-polish-v15 for context.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_orthographic_selection");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Start with Dual Fisheye EA (fov=360) to prove the subsequent clamp is real.
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeEqualArea;
+      gui::g_state.renderer.fov = 360.0f;
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.fov, 360.0f);
+
+      // Switch to Fisheye Orthographic (MaxFov=180). fov must drop to 180.
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeOrthographic;
+      ctx->Yield(3);
+      IM_CHECK_LE(gui::g_state.renderer.fov, 180.0f);
+      IM_CHECK_GT(gui::g_state.renderer.fov, 0.0f);
+
+      // Push fov past the cap; the per-frame clamp pulls it back to 180.
+      gui::g_state.renderer.fov = 200.0f;
+      ctx->Yield(3);
+      IM_CHECK_LE(gui::g_state.renderer.fov, 180.0f);
+    };
+  }
+
+  // p2_render/lens_dual_orthographic_selection — dual orthographic also clamps to 180.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_dual_orthographic_selection");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeEqualArea;
+      gui::g_state.renderer.fov = 360.0f;
+      ctx->Yield(3);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeOrthographic;
+      ctx->Yield(3);
+      IM_CHECK_LE(gui::g_state.renderer.fov, 180.0f);
+      IM_CHECK_GT(gui::g_state.renderer.fov, 0.0f);
+
+      gui::g_state.renderer.fov = 250.0f;
+      ctx->Yield(3);
+      IM_CHECK_LE(gui::g_state.renderer.fov, 180.0f);
+    };
+  }
+
+  // p2_render/modal_layout_toggle_bit — switching modal_layout_vertical is safe
+  // (view preference state-level test; layout dispatch is exercised only indirectly
+  // through subsequent modal open, which would require a live popup — omitted to
+  // keep the test fast and deterministic; plan Minor #5 noted the limitation).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "modal_layout_toggle_bit");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      // ResetTestState pins modal_layout_vertical to legacy false; production
+      // default is true (V) since gui-polish-v15 round 2.
+      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, false);
+
+      gui::g_state.modal_layout_vertical = true;
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, true);
+
+      gui::g_state.modal_layout_vertical = false;
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, false);
     };
   }
 

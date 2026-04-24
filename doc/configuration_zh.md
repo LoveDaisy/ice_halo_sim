@@ -502,7 +502,7 @@
 
 ```json
 {
-  "type": "linear" | "fisheye_equal_area" | "fisheye_equidistant" | "fisheye_stereographic" | "dual_fisheye_equal_area" | "dual_fisheye_equidistant" | "dual_fisheye_stereographic" | "rectangular",
+  "type": "linear" | "fisheye_equal_area" | "fisheye_equidistant" | "fisheye_stereographic" | "dual_fisheye_equal_area" | "dual_fisheye_equidistant" | "dual_fisheye_stereographic" | "rectangular" | "fisheye_orthographic" | "dual_fisheye_orthographic",
   "fov": <角度>  // 或 "f": <焦距>
 }
 ```
@@ -513,11 +513,14 @@
 
 **注意**：
 - `fov` 为**全对角线视场角**（度）。`rectangular` 和 `dual_*` 类型会忽略 `fov`（始终为全天投影）。
+- `fisheye_orthographic` 和 `dual_fisheye_orthographic` 的 FOV 上限为 **180°**（投影公式 `r = f·sin(θ)` 在 θ > 90° 时回折），超出值会被拒绝。
+- `dual_fisheye_orthographic` 不支持 `overlap` 参数（会被静默忽略并输出一条 VERBOSE 日志）。
 - 可以使用 `f`（焦距，mm，基于 35mm 胶片）代替 `fov`，程序会根据投影模型使用正确公式换算：
   - Linear: `fov = 2·atan(d/f)`
   - Equal area: `fov = 4·arcsin(d/(2f))`
   - Equidistant: `fov = 2d/f`（弧度 → 度）
   - Stereographic: `fov = 4·arctan(d/(2f))`
+  - Orthographic: `fov = 2·arcsin(d/f)`（`f ≥ 12mm` 时 fov=180）
   - Rectangular: `f` 被忽略（始终全天投影）
 
 #### view（视角配置）
@@ -611,7 +614,7 @@
 - `scene.light_source.type` 必须是 "sun"
 - `filter[].type` 必须是 "none"、"raypath"、"entry_exit"、"direction"、"crystal" 或 "complex"
 - `render[].visible` 必须是 "upper"、"lower" 或 "full"
-- `render[].lens.type` 必须是 "linear"、"fisheye_equal_area"、"fisheye_equidistant"、"fisheye_stereographic"、"dual_fisheye_equal_area"、"dual_fisheye_equidistant"、"dual_fisheye_stereographic" 或 "rectangular"
+- `render[].lens.type` 必须是 "linear"、"fisheye_equal_area"、"fisheye_equidistant"、"fisheye_stereographic"、"dual_fisheye_equal_area"、"dual_fisheye_equidistant"、"dual_fisheye_stereographic"、"rectangular"、"fisheye_orthographic" 或 "dual_fisheye_orthographic"
 - `scene.ray_num` 必须是正整数或字符串 `"infinite"`
 
 ## 常见配置错误

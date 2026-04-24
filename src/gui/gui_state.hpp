@@ -92,11 +92,14 @@ inline const char* const kLensTypeNames[] = {
   "Dual Fisheye Equidistant",
   "Dual Fisheye Stereographic",
   "Rectangular",
+  "Fisheye Orthographic",
+  "Dual Fisheye Orthographic",
 };
-constexpr int kLensTypeCount = 8;
+constexpr int kLensTypeCount = 10;
 static_assert(sizeof(kLensTypeNames) / sizeof(*kLensTypeNames) == kLensTypeCount,
               "kLensTypeNames length must match kLensTypeCount");
-static_assert(kLensTypeRectangular == kLensTypeCount - 1, "LensType enum terminal value must match kLensTypeCount - 1");
+static_assert(kLensTypeDualFisheyeOrthographic == kLensTypeCount - 1,
+              "LensType enum terminal value must match kLensTypeCount - 1");
 
 // Dual fisheye overlap: max |sky.z| for the overlap zone.
 // = sin(5°) ≈ 0.0872. Each hemisphere extends 5° past the equator.
@@ -244,12 +247,13 @@ struct GuiState {
   bool screenshot_include_overlay = false;
 
   // Edit modal mode (UI-only, session-only, not in ConfigSnapshot).
-  // Staged mode (default): BeginPopupModal + OK/Cancel + dirty-mark on tabs.
-  // Immediate mode: BeginPopup + single Close button + no dirty-mark;
-  // every frame commits buffer to state via CommitAllBuffersImmediate
-  // (crystal/axis edits only MarkDirty — filter edits still MarkFilterDirty —
-  // so infinite-rays accumulation persists while the user drags a crystal slider).
-  bool modal_immediate_mode = false;
+  // Staged mode: BeginPopupModal + OK/Cancel + dirty-mark on tabs.
+  // Immediate mode (default, gui-polish-v15 round 2): ImGui::Begin + single
+  // Close button + no dirty-mark; every frame commits buffer to state via
+  // CommitAllBuffersImmediate (crystal/axis edits only MarkDirty — filter
+  // edits still MarkFilterDirty — so infinite-rays accumulation persists
+  // while the user drags a crystal slider).
+  bool modal_immediate_mode = true;
 
   void MarkDirty() {
     dirty = true;
@@ -275,6 +279,11 @@ struct GuiState {
   // not persisted to .lmc (unlike right_panel_collapsed)
   bool left_panel_collapsed = false;
   bool right_panel_collapsed = false;
+  // Edit modal layout orientation (view preference). false = horizontal
+  // (preview left + tabs right); true = vertical (preview top + tabs below,
+  // default since gui-polish-v15 round 2). Persisted to .lmc alongside
+  // right_panel_collapsed.
+  bool modal_layout_vertical = true;
 
   // Log panel state (view preference — does not call MarkDirty)
   int gui_log_level = 3;   // Index into log level names: 0=trace,1=debug,2=verbose,3=info,4=warning,5=error,6=off

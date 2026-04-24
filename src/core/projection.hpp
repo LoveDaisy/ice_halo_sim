@@ -51,6 +51,11 @@ ProjXY FisheyeEqualAreaForward(float dx, float dy, float dz, float r_scale = 1.0
 ProjXY FisheyeEquidistantForward(float dx, float dy, float dz, float r_scale = 1.0f);
 ProjXY FisheyeStereographicForward(float dx, float dy, float dz, float r_scale = 1.0f);
 
+// Orthographic (r = f * sin(theta)) is the only fisheye variant that aliases past
+// the equator: sin(120 deg) == sin(60 deg), so dz < 0 rays would silently project
+// onto the same pixel as a forward-hemisphere ray. Forward rejects dz < 0 upfront.
+ProjXY FisheyeOrthographicForward(float dx, float dy, float dz, float r_scale = 1.0f);
+
 
 // =============== Fisheye inverse projections (pure math) ===============
 // Input: normalized projection coordinates (x, y) + r_scale.
@@ -64,6 +69,7 @@ ProjXY FisheyeStereographicForward(float dx, float dy, float dz, float r_scale =
 Dir3 FisheyeEqualAreaInverse(float x, float y, float r_scale = 1.0f);
 Dir3 FisheyeEquidistantInverse(float x, float y, float r_scale = 1.0f);
 Dir3 FisheyeStereographicInverse(float x, float y, float r_scale = 1.0f);
+Dir3 FisheyeOrthographicInverse(float x, float y, float r_scale = 1.0f);
 
 
 // =============== Rectangular (equirectangular) projection ===============

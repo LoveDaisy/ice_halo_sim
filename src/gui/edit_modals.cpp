@@ -60,6 +60,14 @@ enum class ActiveTab { kCrystal, kAxis, kFilter };
 // adds a width floor so that both columns render without clipping.
 constexpr float kEditModalMinWidth = 820.0f;
 
+// Vertical layout (modal_layout_vertical=true) relaxes the horizontal floor
+// since the tab content is stacked below the preview rather than beside it.
+// Height is content-driven (AlwaysAutoResize): the bottom pane uses the same
+// fixed height as the horizontal right pane (kPreviewChildHeight), so the
+// vertical modal is exactly 2× the horizontal modal height plus chrome.
+constexpr float kEditModalMinWidthVertical = 360.0f;
+constexpr float kEditModalMinHeightVertical = 0.0f;
+
 static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
 static int g_modal_entry_idx = -1;
@@ -762,6 +770,37 @@ void HandlePopupClosed(GuiState& state) {
   g_active_modal = ActiveModal::kNone;
 }
 
+// Renders the layout-toggle button, the TabBar, and the three tab bodies.
+// Called from both the horizontal (right child) and vertical (bottom child)
+// layout branches with identical arguments; layout-dependent geometry is
+// handled by the caller's BeginChild sizing.
+void RenderModalTabBar(GuiState& state, const char* crystal_label, const char* axis_label, const char* filter_label,
+                       ImGuiTabItemFlags crystal_flags, ImGuiTabItemFlags axis_flags, ImGuiTabItemFlags filter_flags) {
+  // Note: H/V layout toggle relocated to the bottom button row alongside the
+  // Immediate checkbox for visual consistency (both are view-preference
+  // toggles; gui-polish-v15 round 2 UX feedback). See RenderEditModals below.
+  if (ImGui::BeginTabBar("##edit_modal_tabs")) {
+    if (ImGui::BeginTabItem(crystal_label, nullptr, crystal_flags)) {
+      g_active_tab = ActiveTab::kCrystal;
+      RenderCrystalModal(state);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(axis_label, nullptr, axis_flags)) {
+      g_active_tab = ActiveTab::kAxis;
+      RenderAxisModal(state);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(filter_label, nullptr, filter_flags)) {
+      g_active_tab = ActiveTab::kFilter;
+      RenderFilterModal(state);
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+    // Consumed pending selection after BeginTabItem reads the flag.
+    g_pending_tab_select = false;
+  }
+}
+
 }  // namespace
 
 void RenderEditModals(GuiState& state, GLFWwindow* window) {
@@ -790,13 +829,25 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   // the helper cannot identify a monitor (headless tests, nullptr window), fall
   // back to an unbounded max rather than a primary-monitor default (avoids the
   // multi-monitor "primary bias" anti-pattern).
+  const float min_w = state.modal_layout_vertical ? kEditModalMinWidthVertical : kEditModalMinWidth;
+  const float min_h = state.modal_layout_vertical ? kEditModalMinHeightVertical : 0.0f;
+  // Snap window width when the user toggles H↔V. SetNextWindowSizeConstraints
+  // alone only bounds the allowed range; an already-sized window stays at its
+  // current width if that value is within the new range. Explicit
+  // SetNextWindowSize on the toggle frame forces the width to the new layout's
+  // minimum; height 0 means "auto-fit to content" (AlwaysAutoResize semantics).
+  static bool s_prev_modal_layout_vertical = state.modal_layout_vertical;
+  if (s_prev_modal_layout_vertical != state.modal_layout_vertical) {
+    s_prev_modal_layout_vertical = state.modal_layout_vertical;
+    ImGui::SetNextWindowSize(ImVec2(min_w, 0.0f));
+  }
   MonitorRect mon{};
   if (GetCurrentMonitorWorkArea(window, &mon)) {
-    auto max_w = std::max(kEditModalMinWidth, static_cast<float>(mon.w - kWindowDecorationMargin));
+    auto max_w = std::max(min_w, static_cast<float>(mon.w - kWindowDecorationMargin));
     auto max_h = std::max(static_cast<float>(kMinWindowHeight), static_cast<float>(mon.h - kWindowDecorationMargin));
-    ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(max_w, max_h));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(min_w, min_h), ImVec2(max_w, max_h));
   } else {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(kEditModalMinWidth, 0), ImVec2(FLT_MAX, FLT_MAX));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(min_w, min_h), ImVec2(FLT_MAX, FLT_MAX));
   }
   // Mode dispatch: Staged → BeginPopupModal (blocks background, exposes title-bar ×
   // via p_open). Immediate → ImGui::Begin (regular window — external clicks pass
@@ -843,6 +894,26 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
     return;
   }
   if (dispatched_immediate) {
+    // Keep the window always-on-top when dragged out to an independent OS
+    // viewport. Without this, losing focus to the main GLFW window would
+    // let the host window cover the detached modal. ViewportFlagsOverrideSet
+    // applies only when the window actually becomes its own viewport; it is
+    // a no-op while docked to the main viewport.
+    ImGuiWindowClass window_class;
+    window_class.ViewportFlagsOverrideSet = ImGuiViewportFlags_TopMost;
+    ImGui::SetNextWindowClass(&window_class);
+    // Center the modal on the main viewport ONLY on the very first creation
+    // of this window within the process. After that, ImGui's in-memory
+    // window settings remember the user's dragged position across close/
+    // reopen cycles. ImGuiCond_Appearing would re-center every time the
+    // window re-appears, which is not what we want.
+    const ImGuiViewport* main_vp = ImGui::GetMainViewport();
+    ImVec2 center(main_vp->Pos.x + main_vp->Size.x * 0.5f, main_vp->Pos.y + main_vp->Size.y * 0.5f);
+    ImGui::SetNextWindowPos(center, ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+    // NoDocking: with ImGuiConfigFlags_ViewportsEnable, this flag prevents docking into
+    // the main window while still allowing the window to live in its own OS viewport when
+    // dragged outside. Without NoDocking, users could accidentally dock the editor into a
+    // main-window split which is not the intended layout.
     window_open =
         ImGui::Begin("Edit Entry", &title_x_open,
                      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse);
@@ -948,48 +1019,46 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   const char* axis_label = (show_dirty && axis_dirty) ? "Axis *###axis_tab" : "Axis###axis_tab";
   const char* filter_label = (show_dirty && filter_dirty) ? "Filter *###filter_tab" : "Filter###filter_tab";
 
-  // Two-column layout: left pane hosts the persistent crystal preview (shared
-  // across all tabs), right pane hosts the TabBar + tab body. Both child
-  // heights are pinned explicitly so AlwaysAutoResize does not chase the
-  // child sizes in a cycle; widths use GetStyle() / GetContentRegionAvail()
-  // for DPI / font adaptivity (see plan §3.2).
+  // Layout dispatch. Horizontal: preview on left, tab bar on right (default).
+  // Vertical: preview on top (full width), tab bar below (full width, scrollable).
+  // Both share the same preview child height and the same RenderModalTabBar body;
+  // only the container geometry and the SameLine/no-SameLine differ.
   const ImGuiStyle& style = ImGui::GetStyle();
-  const float kLeftChildW = kModalPreviewImageSize + style.WindowPadding.x * 2.0f + 4.0f;
+  const float kPreviewChildW_H = kModalPreviewImageSize + style.WindowPadding.x * 2.0f + 4.0f;
   const float kToolRow = ImGui::GetFrameHeightWithSpacing();
   const float kVPad = style.WindowPadding.y * 2.0f + style.ItemSpacing.y;
-  const float kLeftChildHeight = kModalPreviewImageSize + kToolRow + kVPad;
-  const float right_w = std::max(320.0f, ImGui::GetContentRegionAvail().x - kLeftChildW - style.ItemSpacing.x);
+  const float kPreviewChildHeight = kModalPreviewImageSize + kToolRow + kVPad;
+  bool vertical = state.modal_layout_vertical;
 
-  // Left pane: NoScrollbar + NoScrollWithMouse — height budget covers content,
-  // no scrolling should occur; disabling scroll-on-wheel also prevents
-  // stray wheel events from leaking into surrounding UI.
-  ImGui::BeginChild("##modal_left_pane", ImVec2(kLeftChildW, kLeftChildHeight), ImGuiChildFlags_None,
-                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-  RenderCrystalPreviewPane(state);
-  ImGui::EndChild();
-  ImGui::SameLine();
-  ImGui::BeginChild("##modal_right_pane", ImVec2(right_w, kLeftChildHeight), ImGuiChildFlags_None);
-  if (ImGui::BeginTabBar("##edit_modal_tabs")) {
-    if (ImGui::BeginTabItem(crystal_label, nullptr, crystal_flags)) {
-      g_active_tab = ActiveTab::kCrystal;
-      RenderCrystalModal(state);
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem(axis_label, nullptr, axis_flags)) {
-      g_active_tab = ActiveTab::kAxis;
-      RenderAxisModal(state);
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem(filter_label, nullptr, filter_flags)) {
-      g_active_tab = ActiveTab::kFilter;
-      RenderFilterModal(state);
-      ImGui::EndTabItem();
-    }
-    ImGui::EndTabBar();
-    // Consumed pending selection after BeginTabItem reads the flag.
-    g_pending_tab_select = false;
+  if (vertical) {
+    // Upper pane: preview, full modal width, fixed height.
+    ImGui::BeginChild("##modal_top_pane", ImVec2(-FLT_MIN, kPreviewChildHeight), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    RenderCrystalPreviewPane(state);
+    ImGui::EndChild();
+    // Lower pane: tab bar + body. Height matches the horizontal right pane
+    // so V-layout modal is visually a stacked version of H-layout (user
+    // feedback gui-polish-v15 round 2). Use default scrollbar behavior
+    // (shown only when content overflows); AlwaysVerticalScrollbar would
+    // leave the track visible even when content fits — unnecessary noise
+    // for tabs whose natural height already matches the pane.
+    ImGui::BeginChild("##modal_bottom_pane", ImVec2(-FLT_MIN, kPreviewChildHeight), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_None);
+    RenderModalTabBar(state, crystal_label, axis_label, filter_label, crystal_flags, axis_flags, filter_flags);
+    ImGui::EndChild();
+  } else {
+    // Horizontal: existing layout. Left pane NoScrollbar + NoScrollWithMouse — height
+    // budget covers content; right pane sizes off remaining width.
+    const float right_w = std::max(320.0f, ImGui::GetContentRegionAvail().x - kPreviewChildW_H - style.ItemSpacing.x);
+    ImGui::BeginChild("##modal_left_pane", ImVec2(kPreviewChildW_H, kPreviewChildHeight), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    RenderCrystalPreviewPane(state);
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("##modal_right_pane", ImVec2(right_w, kPreviewChildHeight), ImGuiChildFlags_None);
+    RenderModalTabBar(state, crystal_label, axis_label, filter_label, crystal_flags, axis_flags, filter_flags);
+    ImGui::EndChild();
   }
-  ImGui::EndChild();
 
   // Immediate mode: push buffer→entry every frame (diff-gated inside
   // CommitAllBuffersImmediate; no-op when nothing changed). Esc / click-outside
@@ -1050,14 +1119,24 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
     }
   }
 
-  // Immediate-mode toggle checkbox, right-aligned on the button row.
+  // View-preference toggles (Vertical layout + Immediate), right-aligned on the
+  // button row. Both are checkboxes for visual consistency: neither marks the
+  // file dirty, both affect UI presentation only.
   ImGui::SameLine();
-  constexpr float kCheckboxApproxWidth = 110.0f;  // "Immediate" label + checkbox square + padding
+  constexpr float kViewToggleGroupWidth = 210.0f;  // "Vertical" + "Immediate" checkboxes + padding
   const float avail = ImGui::GetContentRegionAvail().x;
-  if (avail > kCheckboxApproxWidth) {
-    ImGui::Dummy(ImVec2(avail - kCheckboxApproxWidth, 0));
+  if (avail > kViewToggleGroupWidth) {
+    ImGui::Dummy(ImVec2(avail - kViewToggleGroupWidth, 0));
     ImGui::SameLine();
   }
+  // Vertical layout toggle (view preference — does NOT mark the file dirty).
+  // Checked = stacked layout (preview on top); unchecked = side-by-side.
+  ImGui::Checkbox("Vertical##layout_toggle", &state.modal_layout_vertical);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", state.modal_layout_vertical ? "Stacked layout (preview on top)" :
+                                                          "Side-by-side layout (preview on left)");
+  }
+  ImGui::SameLine();
   // ImGui::Checkbox returns true only on the frame the user actually toggled
   // the value, so checking the return alone is sufficient to detect a change.
   if (ImGui::Checkbox("Immediate##edit_modal", &state.modal_immediate_mode)) {

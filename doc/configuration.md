@@ -482,7 +482,7 @@ The render configuration defines the renderer parameters.
 
 ```json
 {
-  "type": "linear" | "fisheye_equal_area" | "fisheye_equidistant" | "fisheye_stereographic" | "dual_fisheye_equal_area" | "dual_fisheye_equidistant" | "dual_fisheye_stereographic" | "rectangular",
+  "type": "linear" | "fisheye_equal_area" | "fisheye_equidistant" | "fisheye_stereographic" | "dual_fisheye_equal_area" | "dual_fisheye_equidistant" | "dual_fisheye_stereographic" | "rectangular" | "fisheye_orthographic" | "dual_fisheye_orthographic",
   "fov": <angle>  // or "f": <focal length>
 }
 ```
@@ -493,11 +493,14 @@ The render configuration defines the renderer parameters.
 
 **Note**:
 - `fov` is the **full diagonal field of view** in degrees. For `rectangular` and `dual_*` types, `fov` is ignored (these are always full-sky projections).
+- `fisheye_orthographic` and `dual_fisheye_orthographic` are capped at **180°** (the projection formula `r = f·sin(θ)` aliases past θ=90°); values above 180 are rejected.
+- `dual_fisheye_orthographic` does not support the `overlap` parameter (silently ignored with a VERBOSE log entry).
 - You can use `f` (focal length in mm, based on 35mm film) instead of `fov`. The program converts `f` to `fov` using the correct formula for each projection model:
   - Linear: `fov = 2·atan(d/f)`
   - Equal area: `fov = 4·arcsin(d/(2f))`
   - Equidistant: `fov = 2d/f` (radians → degrees)
   - Stereographic: `fov = 4·arctan(d/(2f))`
+  - Orthographic: `fov = 2·arcsin(d/f)` (requires `f ≥ 12mm` for fov=180)
   - Rectangular: `f` is ignored (always full-sky)
 
 #### view (View Configuration)
@@ -591,7 +594,7 @@ The render configuration defines the renderer parameters.
 - `scene.light_source.type` must be "sun"
 - `filter[].type` must be "none", "raypath", "entry_exit", "direction", "crystal", or "complex"
 - `render[].visible` must be "upper", "lower", or "full"
-- `render[].lens.type` must be "linear", "fisheye_equal_area", "fisheye_equidistant", "fisheye_stereographic", "dual_fisheye_equal_area", "dual_fisheye_equidistant", "dual_fisheye_stereographic", or "rectangular"
+- `render[].lens.type` must be "linear", "fisheye_equal_area", "fisheye_equidistant", "fisheye_stereographic", "dual_fisheye_equal_area", "dual_fisheye_equidistant", "dual_fisheye_stereographic", "rectangular", "fisheye_orthographic", or "dual_fisheye_orthographic"
 
 ## Common Configuration Errors
 
