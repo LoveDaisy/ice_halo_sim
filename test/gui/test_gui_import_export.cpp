@@ -198,23 +198,23 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "modal_layout_vertical_roundtrip");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
-      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, false);  // default
+      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, false);  // ResetTestState pins legacy false
 
-      // Set vertical, save
-      gui::g_state.modal_layout_vertical = true;
+      // Save with horizontal (false) — distinguishable from the new production
+      // default (true) so the load step below can prove it was actually read.
       const char* tmp_path = "/tmp/lumice_modal_layout_roundtrip.lmc";
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
 
-      // Reset, load
+      // Reset to the new production default via DoNew (bypasses ResetTestState pin).
       gui::DoNew();
-      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, false);  // DoNew resets
+      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, true);  // new production default
       std::vector<unsigned char> tex_data;
       int tex_w = 0;
       int tex_h = 0;
       bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
       IM_CHECK(load_ok);
-      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, true);
+      IM_CHECK_EQ(gui::g_state.modal_layout_vertical, false);  // saved value survives
 
       std::remove(tmp_path);
     };

@@ -88,9 +88,30 @@ namespace lumice::gui {
 
 using SimState = GuiState::SimState;
 
+namespace {
+// With ImGuiConfigFlags_ViewportsEnable (gui-polish-v15), window positions
+// and ForegroundDrawList coordinates are in absolute OS screen space, not
+// relative to the main GLFW window. All fixed-layout panels must anchor to
+// the main viewport's origin to stay inside the host window.
+inline ImVec2 MainVpPos(float x, float y) {
+  const ImGuiViewport* vp = ImGui::GetMainViewport();
+  return ImVec2(vp->Pos.x + x, vp->Pos.y + y);
+}
+
+// Pin a chrome panel to the main viewport so ImGui never promotes it to an
+// independent OS viewport. Without SetNextWindowViewport, panels that sit at
+// the viewport edge (e.g. status bar at the bottom row) may be promoted,
+// which makes them appear covered by the host window or float outside it.
+inline void SetNextPanelGeometry(float x, float y, float w, float h) {
+  const ImGuiViewport* vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + x, vp->Pos.y + y));
+  ImGui::SetNextWindowSize(ImVec2(w, h));
+  ImGui::SetNextWindowViewport(vp->ID);
+}
+}  // namespace
+
 void RenderTopBar(float window_width) {
-  ImGui::SetNextWindowPos(ImVec2(0, 0));
-  ImGui::SetNextWindowSize(ImVec2(window_width, kTopBarHeight));
+  SetNextPanelGeometry(0, 0, window_width, kTopBarHeight);
   ImGui::Begin("##TopBar", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
@@ -233,9 +254,11 @@ namespace {
 constexpr float kCollapseBtnSize = 20.0f;
 
 // Draw a collapse/expand button as a foreground overlay using ImGui theme colors.
-// Returns true if clicked.
-bool OverlayButton(const char* label, float screen_x, float screen_y) {
-  ImVec2 pos(screen_x, screen_y);
+// Returns true if clicked. Coordinates are viewport-local; under multi-viewport
+// the main-viewport origin is applied to reach absolute screen space used by
+// ForegroundDrawList and io.MousePos.
+bool OverlayButton(const char* label, float local_x, float local_y) {
+  ImVec2 pos = MainVpPos(local_x, local_y);
   ImVec2 max(pos.x + kCollapseBtnSize, pos.y + kCollapseBtnSize);
 
   ImDrawList* fg = ImGui::GetForegroundDrawList();
@@ -257,11 +280,13 @@ bool OverlayButton(const char* label, float screen_x, float screen_y) {
 }
 
 // Draw the collapsed strip background + expand button via foreground draw list.
-// No ImGui window needed — avoids WindowMinSize issues.
+// No ImGui window needed — avoids WindowMinSize issues. Coordinates are
+// viewport-local (see OverlayButton comment).
 void RenderCollapsedStrip(const char* btn_label, float strip_x, float strip_y, float strip_h, bool* collapsed) {
   ImDrawList* fg = ImGui::GetForegroundDrawList();
-  fg->AddRectFilled(ImVec2(strip_x, strip_y), ImVec2(strip_x + kCollapseBtnSize, strip_y + strip_h),
-                    ImGui::GetColorU32(ImGuiCol_WindowBg));
+  ImVec2 strip_min = MainVpPos(strip_x, strip_y);
+  ImVec2 strip_max = MainVpPos(strip_x + kCollapseBtnSize, strip_y + strip_h);
+  fg->AddRectFilled(strip_min, strip_max, ImGui::GetColorU32(ImGuiCol_WindowBg));
   float btn_y = strip_y + (strip_h - kCollapseBtnSize) * 0.5f;
   if (OverlayButton(btn_label, strip_x, btn_y)) {
     *collapsed = false;
@@ -277,8 +302,7 @@ void RenderLeftPanel(float window_height) {
     return;
   }
 
-  ImGui::SetNextWindowPos(ImVec2(0, kTopBarHeight));
-  ImGui::SetNextWindowSize(ImVec2(kLeftPanelWidth, panel_height));
+  SetNextPanelGeometry(0, kTopBarHeight, kLeftPanelWidth, panel_height);
   ImGui::Begin("##LeftPanel", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
@@ -327,8 +351,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   }
 
   float panel_x = window_width - kRightPanelWidth;
-  ImGui::SetNextWindowPos(ImVec2(panel_x, kTopBarHeight));
-  ImGui::SetNextWindowSize(ImVec2(kRightPanelWidth, panel_height));
+  SetNextPanelGeometry(panel_x, kTopBarHeight, kRightPanelWidth, panel_height);
   ImGui::Begin("##RightPanel", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
@@ -534,8 +557,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   float panel_x = left_w;
   float panel_width = window_width - left_w - right_w;
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
-  ImGui::SetNextWindowPos(ImVec2(panel_x, kTopBarHeight));
-  ImGui::SetNextWindowSize(ImVec2(panel_width, panel_height));
+  SetNextPanelGeometry(panel_x, kTopBarHeight, panel_width, panel_height);
   ImGui::Begin("##PreviewPanel", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground |
@@ -666,8 +688,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
 }
 
 void RenderStatusBar(float window_width, float window_height) {
-  ImGui::SetNextWindowPos(ImVec2(0, window_height - kStatusBarHeight));
-  ImGui::SetNextWindowSize(ImVec2(window_width, kStatusBarHeight));
+  SetNextPanelGeometry(0, window_height - kStatusBarHeight, window_width, kStatusBarHeight);
   ImGui::Begin("##StatusBar", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
@@ -806,8 +827,7 @@ void RenderLogPanel(float window_width, float window_height) {
     return;
   }
 
-  ImGui::SetNextWindowPos(ImVec2(0, window_height - kLogPanelHeight - kStatusBarHeight));
-  ImGui::SetNextWindowSize(ImVec2(window_width, kLogPanelHeight));
+  SetNextPanelGeometry(0, window_height - kLogPanelHeight - kStatusBarHeight, window_width, kLogPanelHeight);
   // ##LogPanel intentionally does NOT carry NoBringToFrontOnFocus: it
   // belongs to Layer 3 (floating, raisable) per the z-order convention block
   // at the top of this file. ImGui creates NoBringToFrontOnFocus windows via

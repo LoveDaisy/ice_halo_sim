@@ -64,6 +64,11 @@ void ResetTestState() {
   gui::g_crystal_style = 1;
   gui::g_state.left_panel_collapsed = false;
   gui::g_state.right_panel_collapsed = false;
+  // Modal view preferences: pin to legacy defaults (H + Staged) for test
+  // determinism. Production defaults changed to V + Immediate in
+  // gui-polish-v15 round 2; individual tests opt-in explicitly as needed.
+  gui::g_state.modal_layout_vertical = false;
+  gui::g_state.modal_immediate_mode = false;
   gui::g_preview_vp.active = false;
   gui::g_programmatic_resize = 0;
 

@@ -988,7 +988,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
 
   // Panel state
   state.right_panel_collapsed = root.value("right_panel_collapsed", false);
-  state.modal_layout_vertical = root.value("modal_layout_vertical", false);
+  state.modal_layout_vertical = root.value("modal_layout_vertical", true);
 
   // Normalization mode (display preference, default absolute for backward compat with old .lmc files)
   state.norm_mode = root.value("norm_mode", 0);

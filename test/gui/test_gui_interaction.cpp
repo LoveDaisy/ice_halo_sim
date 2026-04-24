@@ -1760,6 +1760,8 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
+      // ResetTestState pins modal_layout_vertical to legacy false; production
+      // default is true (V) since gui-polish-v15 round 2.
       IM_CHECK_EQ(gui::g_state.modal_layout_vertical, false);
 
       gui::g_state.modal_layout_vertical = true;
