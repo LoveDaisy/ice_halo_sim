@@ -1163,6 +1163,13 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
+      // Note: runtime flipping of ImGuiConfigFlags_ViewportsEnable inside the
+      // hidden test GLFW window crashes the backend (platform window creation
+      // fails under the test harness). Do not enable the flag here — this
+      // test only asserts the structural contract that is required for
+      // production (main.cpp sets the flag at init) to work correctly; actual
+      // detach behavior is validated by macOS manual QA (plan Step 5).
+
       // Open Edit Entry Immediate mode.
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
@@ -1170,14 +1177,18 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK(w != nullptr);
       IM_CHECK(w->WasActive);
 
-      // Contract: NoDocking prevents the window from docking into the main
-      // window's split targets. Viewport creation remains gated by user drag.
+      // Contract: NoDocking must be on the Immediate branch ImGui::Begin
+      // flags. With ViewportsEnable (enabled in production), NoDocking lets
+      // the window become an independent OS viewport when dragged outside
+      // the main window without accidentally docking into a main-window
+      // split target.
       IM_CHECK((w->Flags & ImGuiWindowFlags_NoDocking) != 0);
 
-      // Sanity: every active window must be assigned a viewport (the main
-      // viewport at minimum). A nullptr Viewport would indicate ImGui state
-      // corruption — protect the assumption the Step 3 comment relies on.
-      IM_CHECK(w->Viewport != nullptr);
+      // On first open, the window is placed in the main viewport (gated by
+      // NoSavedSettings semantics via io.IniFilename = nullptr in main.cpp).
+      // Independent viewport creation is triggered by a user drag and is not
+      // exercised in the test harness.
+      IM_CHECK(w->Viewport == ImGui::GetMainViewport());
 
       // Cleanup.
       ctx->ItemClick("**/Close##edit_modal");
