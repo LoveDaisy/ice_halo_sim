@@ -214,6 +214,11 @@ A `crystal` section stores all crystals used in simulation. It may contain multi
 These fields define the pose of crystals. `zenith` defines the c-axis orientation, and `roll`
 defines the rotation around c-axis.
 They are of *distribution type*, which can be a scalar, indicating a deterministic distribution, or can be a tuple of (`type`, `mean`, `std`) describing a uniform or Gaussian distribution. All angles are in degrees.
+For the full coordinate / rotation chain definition (including the `azimuth` sign convention and
+the `−180°` chain offset), see [`doc/coordinate-convention.md`](doc/coordinate-convention.md).
+**Breaking change**: the rotation chain was reworked in this release; configurations storing
+`crystal.axis.*` from earlier releases will render with different orientations and may need to be
+re-authored against the new convention (`filter.raypath` and `light.*` / `view.*` are unaffected).
 
 `type` and `shape`: they describe the shape of a crystal.
 Currently there are 2 kinds of crystals, `prism` and `pyramid`.

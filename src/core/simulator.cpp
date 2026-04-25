@@ -90,9 +90,18 @@ void InitRay_d_w_previdx(const SunParam& light_param, const WlParam& wl_param, s
 }
 
 
+Rotation BuildCrystalRotation(float azimuth_rad, float latitude_rad, float roll_rad) {
+  static constexpr float kEy[3] = { 0, 1, 0 };
+  static constexpr float kEz[3] = { 0, 0, 1 };
+  // Chain reads inner-to-outer (Rotation::Chain left-multiplies):
+  //   inner Rz(roll) -> middle Ry(latitude - pi/2) = Ry(-zenith) -> outer Rz(azimuth - pi).
+  // Resulting matrix: R = Rz(azimuth - pi) * Ry(-zenith) * Rz(roll).
+  return Rotation(kEz, roll_rad).Chain(kEy, latitude_rad - math::kPi_2).Chain(kEz, azimuth_rad - math::kPi);
+}
+
+
 void InitRay_rot(RandomNumberGenerator& rng, const AxisDistribution& crystal_axis,  // input
                  RayBuffer buffer_data[2]) {                                        // output
-  float axis[9]{ 1, 0, 0, 0, 1, 0, 0, 0, 1 };
   float lon_lat[2]{};
   for (auto& r : buffer_data[0]) {
     if (!crystal_axis.IsFullSphereUniform()) {
@@ -102,7 +111,7 @@ void InitRay_rot(RandomNumberGenerator& rng, const AxisDistribution& crystal_axi
       RandomSampler::SampleSphericalPointsSph(lon_lat);
     }
     float roll = rng.Get(crystal_axis.roll_dist) * math::kDegreeToRad;
-    r.crystal_rot_ = Rotation(axis + 6, roll).Chain(axis + 3, math::kPi_2 - lon_lat[1]).Chain(axis + 6, lon_lat[0]);
+    r.crystal_rot_ = BuildCrystalRotation(lon_lat[0], lon_lat[1], roll);
   }
 }
 

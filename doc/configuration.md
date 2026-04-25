@@ -24,6 +24,12 @@ The configuration file uses JSON format and contains the following main sections
 
 The crystal configuration defines the crystal shapes and orientation distributions used in the simulation.
 
+> **Coordinate / rotation convention**: For the world frame, local frame, azimuth sign convention,
+> and the rotation chain semantics behind `axis.{zenith, azimuth, roll}`, see
+> [`coordinate-convention.md`](coordinate-convention.md). Configurations from earlier releases will
+> render with different orientations under the current chain (deterministic break for any non
+> full-sphere-uniform `axis` configuration).
+
 #### Basic Structure
 
 ```json

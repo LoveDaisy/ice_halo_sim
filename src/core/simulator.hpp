@@ -9,6 +9,7 @@
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/crystal.hpp"
+#include "core/geo3d.hpp"
 #include "core/math.hpp"
 #include "util/logger.hpp"
 
@@ -76,6 +77,15 @@ class Simulator {
 // Caller must ensure carry.size() == proportions.size(). Returns array with exact sum == ray_num.
 std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& proportions, size_t ray_num,
                                                  std::vector<double>& carry);
+
+// Build the local-to-world rotation matrix for a crystal sample.
+// Implements the chain  R = Rz(az - pi) * Ry(-zenith) * Rz(roll),
+// where zenith = pi/2 - latitude. Inputs are in radians and follow the convention
+// produced by RandomSampler::SampleSphericalPointsSph: azimuth around +z,
+// latitude = asin(u) ∈ [-pi/2, +pi/2]. See doc/coordinate-convention.md.
+//
+// Internal: exposed for unit testing; not part of the public C API.
+Rotation BuildCrystalRotation(float azimuth_rad, float latitude_rad, float roll_rad);
 
 }  // namespace lumice
 
