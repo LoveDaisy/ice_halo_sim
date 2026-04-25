@@ -215,6 +215,43 @@ The `view.*` fields' values and semantics are not affected by the chain rework
 in §6. Existing configs and `.lmc` files that set `view.*` continue to render
 the same camera framing.
 
+### 9.6 Modal Crystal Preview Camera (GUI-internal)
+
+The modal-tab crystal preview and the entry-card thumbnail share an *internal*
+camera convention that is separate from the simulator camera in §9.1–9.5.
+
+- **Camera position (logical):** at world `(0, -dist, dist·tan(15°))` looking
+  at the origin, with world `+z` as up. The 15° downward elevation is fixed
+  via `kCameraTiltDeg` in `src/gui/gui_constants.hpp`.
+- **Implementation:** because the GUI mesh undergoes a Y-Z swap during build
+  (`crystal_preview.cpp::BuildCrystalMeshData`: core `+z` → mesh `+y`,
+  core `+y` → mesh `-z`), the swap *implicitly* establishes the
+  "camera at world `-y`, world `+z` up" view. `CrystalRenderer::ComputeMvp`
+  appends only a small `Rx(-kCameraTiltDeg)` rotation for the elevation.
+- **Mouse-drag semantics:** rotation is composed in world coordinates by
+  left-multiplying `g_crystal_rotation` with a Rodrigues axis. Camera position
+  stays put; the crystal turns relative to the user's world frame.
+  - Drag right (`dx>0`) → rotate around mesh `+y` (= world `+z`, vertical
+    spin axis).
+  - Drag down (`dy>0`) → rotate around mesh `+x` (= world `+x`, camera-right
+    tilt; crystal top tips toward viewer).
+- **Default orientations:** `axis_presets.hpp::DefaultPreviewRotation` is the
+  single source for both modal Reset View / preset-button and the entry-card
+  thumbnail. The function takes `(preset, params, out)` where `params` mirrors
+  `g_axis_buf` (`[0]=zenith, [1]=azimuth, [2]=roll`):
+  - `kColumn` / `kPlate` / `kParry` / `kLowitz` use the
+    `kPresetTypicalChain` table (fixed typical chain inputs)
+  - `kCustom` with non-null `params` uses `ChainRotationToMatrix` driven by
+    the user's live distribution mean values
+  - `kRandom` and `kCustom` with null params fall back to the isometric
+    sentinel `Ry(25°)·Rx(35°)`
+  All chain-derived outputs use `ChainRotationToMatrix` which mirrors
+  `BuildCrystalRotation` from `src/core/simulator.cpp` (`Rz(az−π) · Ry(−zenith) ·
+  Rz(roll)`); equivalence is guarded by a contract test in `test_axis_presets.cpp`.
+
+These conventions are *internal* to the GUI preview pipeline; they do not
+affect serialization, simulation, or the export camera (§9.1–9.5).
+
 ## 10. Persistence Compatibility
 
 ### 10.1 Fields with Changed Semantics (Breaking)

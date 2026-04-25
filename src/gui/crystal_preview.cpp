@@ -86,24 +86,26 @@ void ResetCrystalView(AxisPreset preset, const AxisDist params[3]) {
   g_crystal_zoom = kDefaultCrystalZoom;
 }
 
-// Apply incremental rotation around axis (dx, dy) from mouse drag
+// Apply incremental rotation from mouse drag. Rotation is composed in world
+// coordinates (model is left-multiplied by Rodrigues(world_axis, angle)) so the
+// camera position stays fixed and the crystal turns relative to the user's
+// mental model of world space.
+//
+// Coordinate convention: the GUI mesh frame has a Y-Z swap relative to core
+// (see crystal_preview.cpp::BuildCrystalMeshData), so the user's "world +z up"
+// corresponds to mesh +y, and "world -y forward (camera direction)" to mesh +z.
+// The trackball axis is therefore expressed in mesh coordinates as:
+//   drag right (dx>0) → axis = mesh +y (= world +z) → spin around world up
+//   drag down  (dy>0) → axis = mesh +x (= world +x, camera right) → top of crystal toward user
 void ApplyTrackballRotation(float dx, float dy) {
-  float angle = std::sqrt(dx * dx + dy * dy) * 0.01f;
-  if (angle < 1e-6f)
-    return;
-
-  // Rotation axis perpendicular to drag: "grab and move" model.
-  // Drag right (dx>0) → axis +Y (up) → crystal turns right.
-  // Drag down (dy>0) → axis +X (right) → crystal top comes toward viewer.
-  float ax = dy / (angle / 0.01f);
-  float ay = dx / (angle / 0.01f);
-  float az = 0.0f;
-  float len = std::sqrt(ax * ax + ay * ay + az * az);
-  if (len < 1e-6f)
-    return;
-  ax /= len;
-  ay /= len;
-  az /= len;
+  float mag = std::sqrt(dx * dx + dy * dy);
+  if (mag < 1e-4f) {
+    return;  // ~ angle < 1e-6f under the 0.01 sensitivity scale
+  }
+  float ax = dy / mag;  // mesh +x component (= world +x, camera-right)
+  float ay = dx / mag;  // mesh +y component (= world +z, vertical spin axis)
+  float az = 0.0f;      // mesh +z (= world -y, camera-forward) — no roll
+  float angle = mag * 0.01f;
 
   float ca = std::cos(angle);
   float sa = std::sin(angle);
@@ -121,7 +123,10 @@ void ApplyTrackballRotation(float dx, float dy) {
   r[10] = ca + az * az * (1 - ca);
   r[15] = 1.0f;
 
-  // new_rotation = r * g_crystal_rotation
+  // g_crystal_rotation = r · g_crystal_rotation. Left-multiply means the new
+  // rotation is composed in world coordinates (independent of current model
+  // orientation). With CrystalRenderer's view = T·V_rot·model split, this
+  // achieves "drag rotates the crystal around world axes; camera stays put".
   float tmp[16];
   for (int i = 0; i < 4; i++) {
     for (int j = 0; j < 4; j++) {
