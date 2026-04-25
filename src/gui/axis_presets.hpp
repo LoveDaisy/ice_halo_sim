@@ -2,6 +2,7 @@
 #define LUMICE_GUI_AXIS_PRESETS_HPP
 
 #include <cmath>
+#include <cstring>
 
 #include "gui/gui_state.hpp"
 
@@ -113,6 +114,64 @@ inline AxisPreset ClassifyAxisPreset(const AxisDist& zenith, const AxisDist& azi
   }
 
   return AxisPreset::kCustom;
+}
+
+// Single source of truth for the default preview-camera rotation (4x4 column-major,
+// same convention as CrystalRenderer::Render's rotation parameter). Both the modal
+// crystal preview's Reset View and the entry-card thumbnail derive from this.
+inline void DefaultPreviewRotation(AxisPreset preset, float rotation[16]) {
+  constexpr float kPi = 3.14159265358979323846f;
+  std::memset(rotation, 0, 16 * sizeof(float));
+  rotation[0] = 1.0f;
+  rotation[5] = 1.0f;
+  rotation[10] = 1.0f;
+  rotation[15] = 1.0f;
+
+  auto set_rx = [&](float angle_deg) {
+    float rad = angle_deg * kPi / 180.0f;
+    float c = std::cos(rad);
+    float s = std::sin(rad);
+    rotation[5] = c;
+    rotation[6] = s;
+    rotation[9] = -s;
+    rotation[10] = c;
+  };
+
+  switch (preset) {
+    case AxisPreset::kColumn:
+    case AxisPreset::kParry:
+      // Side view: tilt +80 deg around X (c-axis nearly horizontal).
+      set_rx(80.0f);
+      return;
+    case AxisPreset::kPlate:
+      // Top-down view with a slight tilt to reveal hexagonal outline.
+      set_rx(-10.0f);
+      return;
+    case AxisPreset::kLowitz:
+      // Tilted side view at +60 deg around X.
+      set_rx(60.0f);
+      return;
+    case AxisPreset::kRandom:
+    case AxisPreset::kCustom:
+      break;
+  }
+
+  // Random / Custom / fallback: isometric view (Ry(+25 deg) * Rx(+35 deg)).
+  constexpr float kAngleX = 35.0f * kPi / 180.0f;
+  constexpr float kAngleY = 25.0f * kPi / 180.0f;
+  float cx = std::cos(kAngleX);
+  float sx = std::sin(kAngleX);
+  float cy = std::cos(kAngleY);
+  float sy = std::sin(kAngleY);
+  rotation[0] = cy;
+  rotation[1] = 0.0f;
+  rotation[2] = -sy;
+  rotation[4] = sy * sx;
+  rotation[5] = cx;
+  rotation[6] = cy * sx;
+  rotation[8] = sy * cx;
+  rotation[9] = -sx;
+  rotation[10] = cy * cx;
 }
 
 }  // namespace lumice::gui

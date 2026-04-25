@@ -55,7 +55,9 @@ int CrystalParamHash(const CrystalConfig& c) {
 }
 
 void ResetCrystalView() {
-  // Default slightly elevated view (rotate +20 deg around X = tilt top away)
+  // Legacy default view (+20 deg around X). Kept for callers that have no axis
+  // preset in scope (main GUI init and test harness setup); modal Reset View
+  // uses the AxisPreset overload below.
   constexpr float kAngle = 0.35f;  // ~20 degrees
   float c = std::cos(kAngle);
   float s = std::sin(kAngle);
@@ -76,6 +78,11 @@ void ResetCrystalView() {
   g_crystal_rotation[13] = 0;
   g_crystal_rotation[14] = 0;
   g_crystal_rotation[15] = 1;
+  g_crystal_zoom = kDefaultCrystalZoom;
+}
+
+void ResetCrystalView(AxisPreset preset) {
+  DefaultPreviewRotation(preset, g_crystal_rotation);
   g_crystal_zoom = kDefaultCrystalZoom;
 }
 

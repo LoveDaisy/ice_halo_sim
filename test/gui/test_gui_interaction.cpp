@@ -2219,4 +2219,87 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text, std::string("1-3"));
     };
   }
+
+  // p2_modal/crystal_modal_reset_view_matches_thumbnail — Modal Reset View
+  // must derive the rotation matrix from the same single source
+  // (DefaultPreviewRotation) used by the entry-card thumbnail. Setting the
+  // entry to a canonical preset config, opening the modal, and clicking Reset
+  // View must leave g_crystal_rotation element-wise equal to
+  // DefaultPreviewRotation(<expected preset>). This is a contract test that
+  // will fail loudly if either path drifts from the shared source.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_reset_view_matches_thumbnail");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      // Helper: install canonical AxisDist tuples for a given preset, open
+      // the Crystal modal, click Reset View, then assert g_crystal_rotation
+      // equals the matrix produced by DefaultPreviewRotation(preset).
+      auto verify_preset = [&](const char* label, gui::AxisPreset preset, gui::AxisDist zenith, gui::AxisDist azimuth,
+                               gui::AxisDist roll) {
+        ResetTestState();
+        ctx->Yield(2);
+
+        auto& cr = gui::g_state.layers[0].entries[0].crystal;
+        cr.zenith = zenith;
+        cr.azimuth = azimuth;
+        cr.roll = roll;
+
+        // Sanity: the canonical config must classify as the preset we expect.
+        IM_CHECK_EQ(static_cast<int>(gui::ClassifyAxisPreset(cr.zenith, cr.azimuth, cr.roll)),
+                    static_cast<int>(preset));
+
+        // Open Edit Crystal modal (copies entry.crystal → modal buffer).
+        ctx->ItemClick("**/Edit##cr");
+        ctx->Yield(3);
+
+        // Click Reset View in the modal preview pane.
+        ctx->ItemClick("**/Reset View##modal");
+        ctx->Yield(2);
+
+        // Snapshot the rotation now — Cancel restores g_crystal_rotation from
+        // g_saved_rotation (edit_modals.cpp:287/767), so reading after Cancel
+        // would observe the pre-Open state instead of the Reset View result.
+        float observed[16];
+        std::memcpy(observed, gui::g_crystal_rotation, sizeof(observed));
+
+        // Close modal cleanly (Cancel discards any buffer changes; trackball
+        // restore is incidental and does not affect the snapshot above).
+        ctx->ItemClick("**/Cancel##edit_modal");
+        ctx->Yield(2);
+
+        float expected[16] = { 0 };
+        gui::DefaultPreviewRotation(preset, expected);
+        for (int i = 0; i < 16; ++i) {
+          if (observed[i] != expected[i]) {
+            IM_ERRORF("preset=%s index=%d actual=%f expected=%f", label, i, static_cast<double>(observed[i]),
+                      static_cast<double>(expected[i]));
+          }
+        }
+      };
+
+      const gui::AxisDist az_full{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
+      const gui::AxisDist roll_full{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
+      const gui::AxisDist roll_locked{ gui::AxisDistType::kGauss, 0.0f, 1.0f };
+
+      // Plate canonical: zenith Gauss(mean=0, std=1).
+      verify_preset("Plate", gui::AxisPreset::kPlate, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 1.0f }, az_full,
+                    roll_full);
+
+      // Column canonical: zenith Gauss(mean=90, std=1) with roll uniform-full.
+      verify_preset("Column", gui::AxisPreset::kColumn, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 1.0f },
+                    az_full, roll_full);
+
+      // Parry canonical: same zenith as Column but roll locked.
+      verify_preset("Parry", gui::AxisPreset::kParry, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 1.0f }, az_full,
+                    roll_locked);
+
+      // Lowitz canonical: zenith Gauss(mean=0, std=40) with roll locked.
+      verify_preset("Lowitz", gui::AxisPreset::kLowitz, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 40.0f },
+                    az_full, roll_locked);
+
+      // Custom: anything that doesn't match the four presets — gauss with
+      // moderate spread, roll free.
+      verify_preset("Custom", gui::AxisPreset::kCustom, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 20.0f },
+                    az_full, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 20.0f });
+    };
+  }
 }

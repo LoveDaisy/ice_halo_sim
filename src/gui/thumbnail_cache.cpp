@@ -1,92 +1,13 @@
 #include "gui/thumbnail_cache.hpp"
 
-#include <cmath>
-#include <cstring>
-
+#include "gui/axis_presets.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/gl_common.h"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state.hpp"
-#include "gui/panels.hpp"
 
 namespace lumice::gui {
-
-namespace {
-constexpr float kPi = 3.14159265358979323846f;
-
-// Compute a column-major 4x4 rotation matrix for the given axis preset name.
-// Convention matches CrystalRenderer::Render() rotation parameter:
-// column-major, same layout as g_crystal_rotation (crystal_preview.cpp:15-17).
-void GetThumbnailRotation(const std::string& preset_name, float rotation[16]) {
-  // Start with identity
-  std::memset(rotation, 0, 16 * sizeof(float));
-  rotation[0] = 1.0f;
-  rotation[5] = 1.0f;
-  rotation[10] = 1.0f;
-  rotation[15] = 1.0f;
-
-  if (preset_name == "Column" || preset_name == "Parry") {
-    // Side view: rotate +80° around X axis (nearly horizontal placement)
-    constexpr float kAngle = 80.0f * kPi / 180.0f;
-    float c = std::cos(kAngle);
-    float s = std::sin(kAngle);
-    // Rx(angle) column-major:
-    // [1  0  0  0]
-    // [0  c -s  0]
-    // [0  s  c  0]
-    // [0  0  0  1]
-    rotation[5] = c;
-    rotation[6] = s;
-    rotation[9] = -s;
-    rotation[10] = c;
-  } else if (preset_name == "Plate") {
-    // Top-down view: rotate -10° around X axis (slight tilt to see hexagonal outline)
-    constexpr float kAngle = -10.0f * kPi / 180.0f;
-    float c = std::cos(kAngle);
-    float s = std::sin(kAngle);
-    rotation[5] = c;
-    rotation[6] = s;
-    rotation[9] = -s;
-    rotation[10] = c;
-  } else if (preset_name == "Lowitz") {
-    // Slightly tilted side view: rotate +60° around X axis
-    constexpr float kAngle = 60.0f * kPi / 180.0f;
-    float c = std::cos(kAngle);
-    float s = std::sin(kAngle);
-    rotation[5] = c;
-    rotation[6] = s;
-    rotation[9] = -s;
-    rotation[10] = c;
-  } else {
-    // Random / Custom / unknown: isometric view (rotate +35° around X, then +25° around Y)
-    if (preset_name != "Random" && preset_name != "Custom") {
-      GUI_LOG_WARNING("Unknown axis preset for thumbnail: {}", preset_name);
-    }
-    constexpr float kAngleX = 35.0f * kPi / 180.0f;
-    constexpr float kAngleY = 25.0f * kPi / 180.0f;
-    float cx = std::cos(kAngleX);
-    float sx = std::sin(kAngleX);
-    float cy = std::cos(kAngleY);
-    float sy = std::sin(kAngleY);
-    // Ry * Rx (column-major):
-    // [cy    sy*sx   sy*cx  0]
-    // [0     cx      -sx    0]
-    // [-sy   cy*sx   cy*cx  0]
-    // [0     0       0      1]
-    rotation[0] = cy;
-    rotation[1] = 0.0f;
-    rotation[2] = -sy;
-    rotation[4] = sy * sx;
-    rotation[5] = cx;
-    rotation[6] = cy * sx;
-    rotation[8] = sy * cx;
-    rotation[9] = -sx;
-    rotation[10] = cy * cx;
-  }
-}
-
-}  // namespace
 
 bool ThumbnailCache::Init() {
   if (!renderer_.Init(kThumbnailSize, kThumbnailSize)) {
@@ -251,10 +172,11 @@ void ThumbnailCache::RenderThumbnail(int layer_idx, int entry_idx, const GuiStat
   renderer_.UpdateMesh(mesh.vertices, mesh.vertex_count, mesh.edges, mesh.edge_count, mesh.triangles,
                        mesh.triangle_count, mesh.edge_face_normals);
 
-  // Determine rotation based on axis preset
-  std::string preset = AxisPresetName(crystal);
+  // Determine rotation based on axis preset (single source of truth in axis_presets.hpp;
+  // shared with the modal Reset View path so both views stay in sync).
+  AxisPreset preset = ClassifyAxisPreset(crystal.zenith, crystal.azimuth, crystal.roll);
   float rotation[16];
-  GetThumbnailRotation(preset, rotation);
+  DefaultPreviewRotation(preset, rotation);
 
   // Render to the shared renderer's FBO
   renderer_.Render(rotation, kDefaultCrystalZoom, CrystalStyle::kHiddenLine);

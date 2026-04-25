@@ -1,6 +1,7 @@
 #ifndef LUMICE_GUI_CRYSTAL_PREVIEW_HPP
 #define LUMICE_GUI_CRYSTAL_PREVIEW_HPP
 
+#include "gui/axis_presets.hpp"
 #include "include/lumice.h"
 
 namespace lumice::gui {
@@ -15,7 +16,13 @@ extern int g_crystal_mesh_hash;
 
 // Crystal preview helpers
 int CrystalParamHash(const CrystalConfig& c);
+// Reset to a generic default view (legacy +20 deg X tilt) — used by the main GUI
+// startup and test harness initialization where no axis preset is in scope.
 void ResetCrystalView();
+// Reset to the default view derived from the given axis preset. The matrix is
+// produced by DefaultPreviewRotation (single source of truth shared with the
+// entry-card thumbnail).
+void ResetCrystalView(AxisPreset preset);
 void ApplyTrackballRotation(float dx, float dy);
 
 // Build crystal mesh data from config: JSON construction, LUMICE_GetCrystalMesh, Y-Z swap, AABB normalization.

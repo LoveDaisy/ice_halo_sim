@@ -384,7 +384,7 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/) {
   ImGui::PopItemWidth();
   ImGui::SameLine();
   if (ImGui::SmallButton("Reset View##modal")) {
-    ResetCrystalView();
+    ResetCrystalView(ClassifyAxisPreset(g_crystal_buf.zenith, g_crystal_buf.azimuth, g_crystal_buf.roll));
   }
 }
 
