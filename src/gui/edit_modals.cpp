@@ -384,7 +384,10 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/) {
   ImGui::PopItemWidth();
   ImGui::SameLine();
   if (ImGui::SmallButton("Reset View##modal")) {
-    ResetCrystalView(ClassifyAxisPreset(g_crystal_buf.zenith, g_crystal_buf.azimuth, g_crystal_buf.roll));
+    // Reset to the default view derived from the current axis preset + edit-buffer
+    // distribution params. g_axis_buf reflects the user's live edits; for kCustom
+    // this drives a chain-formula default that matches the outer card thumbnail.
+    ResetCrystalView(ClassifyAxisPreset(g_axis_buf[0], g_axis_buf[1], g_axis_buf[2]), g_axis_buf);
   }
 }
 
@@ -493,6 +496,10 @@ static void RenderAxisModal(GuiState& /*state*/) {
       g_axis_buf[0] = entry.zenith;
       g_axis_buf[1] = entry.azimuth;
       g_axis_buf[2] = entry.roll;
+      // Drive modal preview to the preset's default view (fixes the bug where
+      // switching preset only updated the outer card thumbnail). Same source
+      // as Reset View / thumbnail — see DefaultPreviewRotation.
+      ResetCrystalView(entry.id, g_axis_buf);
     }
     if (highlighted) {
       ImGui::PopStyleColor();

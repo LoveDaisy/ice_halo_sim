@@ -16,15 +16,18 @@ extern int g_crystal_mesh_hash;
 
 // Crystal preview helpers
 int CrystalParamHash(const CrystalConfig& c);
-// Reset to a generic default view (legacy +20 deg X tilt) — used by the main GUI
-// startup and test harness initialization where no axis preset is in scope.
-// Note: the angle intentionally differs from DefaultPreviewRotation(kCustom)
-// (which uses Ry(25°)·Rx(35°)); legacy callers retain the historical view.
+// Legacy GUI initialization path only; always returns Rx(20°). Any new
+// reset-view logic should use the two-argument overload below with preset +
+// params. Used by main GUI startup and the test harness where no axis preset /
+// distribution params are in scope.
 void ResetCrystalView();
-// Reset to the default view derived from the given axis preset. The matrix is
+// Reset to the default view derived from the given axis preset and current
+// distribution params (zenith / azimuth / roll layout matches g_axis_buf in
+// edit_modals.cpp: params[0]=zenith, [1]=azimuth, [2]=roll). The matrix is
 // produced by DefaultPreviewRotation (single source of truth shared with the
-// entry-card thumbnail).
-void ResetCrystalView(AxisPreset preset);
+// entry-card thumbnail). Pass nullptr for params to fall back to the
+// preset-typical or isometric sentinel default (only meaningful for kCustom).
+void ResetCrystalView(AxisPreset preset, const AxisDist params[3]);
 void ApplyTrackballRotation(float dx, float dy);
 
 // Build crystal mesh data from config: JSON construction, LUMICE_GetCrystalMesh, Y-Z swap, AABB normalization.

@@ -173,10 +173,13 @@ void ThumbnailCache::RenderThumbnail(int layer_idx, int entry_idx, const GuiStat
                        mesh.triangle_count, mesh.edge_face_normals);
 
   // Determine rotation based on axis preset (single source of truth in axis_presets.hpp;
-  // shared with the modal Reset View path so both views stay in sync).
+  // shared with the modal Reset View path so both views stay in sync). For kCustom
+  // the per-entry distribution means feed the chain formula — same construction
+  // order as g_axis_buf in edit_modals.cpp ([0]=zenith, [1]=azimuth, [2]=roll).
   AxisPreset preset = ClassifyAxisPreset(crystal.zenith, crystal.azimuth, crystal.roll);
+  AxisDist params[3] = { crystal.zenith, crystal.azimuth, crystal.roll };
   float rotation[16];
-  DefaultPreviewRotation(preset, rotation);
+  DefaultPreviewRotation(preset, params, rotation);
 
   // Render to the shared renderer's FBO
   renderer_.Render(rotation, kDefaultCrystalZoom, CrystalStyle::kHiddenLine);

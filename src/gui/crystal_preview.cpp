@@ -81,8 +81,8 @@ void ResetCrystalView() {
   g_crystal_zoom = kDefaultCrystalZoom;
 }
 
-void ResetCrystalView(AxisPreset preset) {
-  DefaultPreviewRotation(preset, g_crystal_rotation);
+void ResetCrystalView(AxisPreset preset, const AxisDist params[3]) {
+  DefaultPreviewRotation(preset, params, g_crystal_rotation);
   g_crystal_zoom = kDefaultCrystalZoom;
 }
 
