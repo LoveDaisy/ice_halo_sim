@@ -2279,6 +2279,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       const gui::AxisDist az_full{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
       const gui::AxisDist roll_full{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
       const gui::AxisDist roll_locked{ gui::AxisDistType::kGauss, 0.0f, 1.0f };
+      const gui::AxisDist zenith_full{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
 
       // Plate canonical: zenith Gauss(mean=0, std=1).
       verify_preset("Plate", gui::AxisPreset::kPlate, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 1.0f }, az_full,
@@ -2295,6 +2296,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // Lowitz canonical: zenith Gauss(mean=0, std=40) with roll locked.
       verify_preset("Lowitz", gui::AxisPreset::kLowitz, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 40.0f },
                     az_full, roll_locked);
+
+      // Random canonical: all three axes Uniform(0, 360°). Locks the
+      // ClassifyAxisPreset → DefaultPreviewRotation chain end-to-end so that
+      // any future special-case for kRandom in either path is caught.
+      verify_preset("Random", gui::AxisPreset::kRandom, zenith_full, az_full, roll_full);
 
       // Custom: anything that doesn't match the four presets — gauss with
       // moderate spread, roll free.

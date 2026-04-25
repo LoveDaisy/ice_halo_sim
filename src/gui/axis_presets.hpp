@@ -1,6 +1,7 @@
 #ifndef LUMICE_GUI_AXIS_PRESETS_HPP
 #define LUMICE_GUI_AXIS_PRESETS_HPP
 
+#include <cassert>
 #include <cmath>
 #include <cstring>
 
@@ -153,6 +154,11 @@ inline void DefaultPreviewRotation(AxisPreset preset, float rotation[16]) {
       return;
     case AxisPreset::kRandom:
     case AxisPreset::kCustom:
+      break;
+    default:
+      // -Wswitch-enum guards new enum values at compile time; this assert
+      // surfaces unhandled cases at runtime if someone bypasses the warning.
+      assert(false && "DefaultPreviewRotation: unhandled AxisPreset");
       break;
   }
 

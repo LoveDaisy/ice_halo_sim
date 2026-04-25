@@ -18,6 +18,8 @@ extern int g_crystal_mesh_hash;
 int CrystalParamHash(const CrystalConfig& c);
 // Reset to a generic default view (legacy +20 deg X tilt) — used by the main GUI
 // startup and test harness initialization where no axis preset is in scope.
+// Note: the angle intentionally differs from DefaultPreviewRotation(kCustom)
+// (which uses Ry(25°)·Rx(35°)); legacy callers retain the historical view.
 void ResetCrystalView();
 // Reset to the default view derived from the given axis preset. The matrix is
 // produced by DefaultPreviewRotation (single source of truth shared with the
