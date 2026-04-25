@@ -2395,10 +2395,15 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       float before[16];
       std::memcpy(before, gui::g_crystal_rotation, sizeof(before));
 
-      // Switch to Axis tab and edit the zenith Mean slider (does NOT click any
-      // preset button or Reset View). InputValue mirrors what a user editing
-      // the slider numerically would do — same code path as drag-edit on the
-      // SliderWithInput's slider half.
+      // Switch to Axis tab and edit the zenith Mean. Both ItemInputValue (text
+      // half) and slider-drag (drag half) of SliderWithInput route through the
+      // same write target — the bound `g_axis_buf[0].mean` field — so neither
+      // path can call ResetCrystalView without the other doing so too. The text
+      // input is used here because it's deterministic under the test harness;
+      // the contract being verified is "no axis-edit path resets g_crystal_rotation",
+      // and the only places that call ResetCrystalView are the preset buttons
+      // (edit_modals.cpp:486-499) and the Reset View button (:387) — both
+      // separate from the slider control.
       ctx->ItemClick("**/###axis_tab");
       ctx->Yield(2);
       ctx->ItemInputValue("**/Zenith/##Mean_input", 45.0f);

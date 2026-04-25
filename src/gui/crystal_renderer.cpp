@@ -336,9 +336,12 @@ void CrystalRenderer::ComputeMvp(const float model_rotation[16], float zoom, int
   proj[14] = -2.0f * far_plane * near_plane / (far_plane - near_plane);
 
   // View = T(0, 0, -dist) · V_rot · model_rotation. V_rot is the fixed camera
-  // pitch (Rx(-(90° + kCameraTiltDeg))); model_rotation is the user-controlled
-  // crystal orientation in world coordinates. Mouse-drag now mutates the model
-  // matrix (left-multiplied by world-axis Rodrigues), so the camera stays put.
+  // pitch (Rx(-kCameraTiltDeg)); the additional -90° world→OpenGL eye-space
+  // remap is supplied implicitly by the Y-Z swap inside BuildCrystalMeshData
+  // (see BuildViewRotation / gui_constants.hpp::kCameraTiltDeg comments).
+  // model_rotation is the user-controlled crystal orientation in world
+  // coordinates. Mouse-drag mutates the model matrix (left-multiplied by
+  // world-axis Rodrigues), so the camera stays put.
   float v_rot[16];
   BuildViewRotation(v_rot);
   float view[16];
