@@ -2373,6 +2373,55 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p2_modal/axis_slider_drag_does_not_reset_modal_preview — Negative contract
+  // (review-02 Minor #1, AC#7): editing an axis-distribution slider must NOT
+  // reset the modal preview rotation. Only preset-button clicks and Reset View
+  // overwrite g_crystal_rotation. Guards against accidentally wiring slider
+  // edits to ResetCrystalView during future refactors.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "axis_slider_drag_does_not_reset_modal_preview");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+
+      // Mutate g_crystal_rotation via trackball drag (synthetic, world-coord
+      // semantics). Snapshot taken AFTER the drag so the comparison baseline
+      // is the dragged state, not the modal-open default.
+      gui::ApplyTrackballRotation(20.0f, 0.0f);
+      ctx->Yield(1);
+
+      float before[16];
+      std::memcpy(before, gui::g_crystal_rotation, sizeof(before));
+
+      // Switch to Axis tab and edit the zenith Mean slider (does NOT click any
+      // preset button or Reset View). InputValue mirrors what a user editing
+      // the slider numerically would do — same code path as drag-edit on the
+      // SliderWithInput's slider half.
+      ctx->ItemClick("**/###axis_tab");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/Zenith/##Mean_input", 45.0f);
+      ctx->Yield(2);
+
+      // Snapshot AGAIN before Cancel — Cancel restores g_crystal_rotation from
+      // the open-time saved state, so reading after Cancel would observe the
+      // pre-drag matrix and produce a false positive.
+      float after[16];
+      std::memcpy(after, gui::g_crystal_rotation, sizeof(after));
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+
+      for (int i = 0; i < 16; ++i) {
+        if (before[i] != after[i]) {
+          IM_ERRORF("slider edit unexpectedly mutated g_crystal_rotation at index %d: before=%f after=%f", i,
+                    static_cast<double>(before[i]), static_cast<double>(after[i]));
+        }
+      }
+    };
+  }
+
   // p2_modal/world_coord_trackball_drag_axis — Verifies the world-coordinate
   // trackball semantics expressed in the GUI mesh frame (which has a Y-Z swap
   // vs. core/world):

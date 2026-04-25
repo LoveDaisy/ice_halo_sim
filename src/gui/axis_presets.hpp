@@ -196,12 +196,51 @@ inline constexpr PresetTypicalChain kPresetTypicalChain[6] = {
   { 0.0f, 0.0f, 0.0f, true },    // kCustom — sentinel when params == nullptr
 };
 
+// Lock the enum-to-index mapping that DefaultPreviewRotation relies on. If any
+// AxisPreset value is renumbered or reordered, these asserts fail at compile
+// time — preventing a silent typical-chain mismatch that the runtime
+// `idx < 0 || idx >= 6` guard cannot catch.
+static_assert(static_cast<int>(AxisPreset::kColumn) == 0, "kPresetTypicalChain index mismatch (kColumn)");
+static_assert(static_cast<int>(AxisPreset::kPlate) == 1, "kPresetTypicalChain index mismatch (kPlate)");
+static_assert(static_cast<int>(AxisPreset::kParry) == 2, "kPresetTypicalChain index mismatch (kParry)");
+static_assert(static_cast<int>(AxisPreset::kLowitz) == 3, "kPresetTypicalChain index mismatch (kLowitz)");
+static_assert(static_cast<int>(AxisPreset::kRandom) == 4, "kPresetTypicalChain index mismatch (kRandom)");
+static_assert(static_cast<int>(AxisPreset::kCustom) == 5, "kPresetTypicalChain index mismatch (kCustom)");
+
+// Convert a core-frame 3x3 rotation (column-major 4x4 with translation=0) into
+// the GUI mesh frame, accounting for the Y-Z swap performed by
+// crystal_preview.cpp::BuildCrystalMeshData (core +z → mesh +y, core +y →
+// mesh -z). Applies the conjugation `out = S · in · S^T` where
+//   S = | 1  0  0 |   S^T = | 1  0  0 |
+//       | 0  0  1 |         | 0  0 -1 |
+//       | 0 -1  0 |         | 0  1  0 |
+// Only the upper-left 3x3 is meaningful; translation column / row are zeroed.
+inline void ApplyMeshSwapWrap(const float in[16], float out[16]) {
+  std::memset(out, 0, 16 * sizeof(float));
+  // Column 0 (j=0): out[i][0] derived from S · in · S^T at j=0.
+  out[0] = in[0];   // (0,0)
+  out[1] = in[2];   // (1,0)
+  out[2] = -in[1];  // (2,0)
+  // Column 1 (j=1).
+  out[4] = in[8];   // (0,1)
+  out[5] = in[10];  // (1,1)
+  out[6] = -in[9];  // (2,1)
+  // Column 2 (j=2).
+  out[8] = -in[4];  // (0,2)
+  out[9] = -in[6];  // (1,2)
+  out[10] = in[5];  // (2,2)
+  out[15] = 1.0f;
+}
+
 // Single source of truth for the default preview-camera rotation (4x4 column-major,
-// same convention as CrystalRenderer::Render's model_rotation argument). Both the
-// modal crystal preview's Reset View / preset-button and the entry-card thumbnail
-// derive from this. For kCustom with non-null params, the rotation is derived from
-// the user's current axis-distribution mean values (zenith / azimuth / roll). All
-// other cases fall back to a per-preset typical chain or an isometric sentinel.
+// same convention as CrystalRenderer::Render's model_rotation argument).
+//
+// **Output frame:** the rotation is meant to be applied directly to mesh-frame
+// vertices, so chain-formula outputs (which `ChainRotationToMatrix` produces in
+// the core/world frame) are post-processed by `ApplyMeshSwapWrap` to convert
+// them into the mesh frame. The isometric sentinel was originally designed for
+// the OLD pipeline (which had no view rotation), so it's already mesh-friendly
+// and is written directly without the wrap.
 //
 // params layout (must match g_axis_buf in edit_modals.cpp):
 //   params[0] = zenith dist
@@ -209,9 +248,12 @@ inline constexpr PresetTypicalChain kPresetTypicalChain[6] = {
 //   params[2] = roll dist
 // params may be nullptr — in that case kCustom degrades to the isometric sentinel.
 inline void DefaultPreviewRotation(AxisPreset preset, const AxisDist params[3], float out[16]) {
-  // kCustom with live params → derive from mean values via chain formula.
+  // kCustom with live params → derive from mean values via chain formula
+  // (post-wrapped to mesh frame).
   if (preset == AxisPreset::kCustom && params != nullptr) {
-    ChainRotationToMatrix(params[1].mean, params[0].mean, params[2].mean, out);
+    float core[16];
+    ChainRotationToMatrix(params[1].mean, params[0].mean, params[2].mean, core);
+    ApplyMeshSwapWrap(core, out);
     return;
   }
 
@@ -221,7 +263,9 @@ inline void DefaultPreviewRotation(AxisPreset preset, const AxisDist params[3], 
     // Fall through to sentinel below.
   } else if (!kPresetTypicalChain[idx].use_sentinel) {
     const auto& t = kPresetTypicalChain[idx];
-    ChainRotationToMatrix(t.az_deg, t.zenith_deg, t.roll_deg, out);
+    float core[16];
+    ChainRotationToMatrix(t.az_deg, t.zenith_deg, t.roll_deg, core);
+    ApplyMeshSwapWrap(core, out);
     return;
   }
 

@@ -392,9 +392,9 @@ void CrystalRenderer::Render(const float rotation[16], float zoom, CrystalStyle 
   BuildViewRotation(v_rot);
   float m_eye[16];
   Mul4x4Rot(v_rot, rotation, m_eye);  // 3x3 rotation, translation=0
-  float view_rot[16];
-  std::memcpy(view_rot, m_eye, 16 * sizeof(float));
-  view_rot[14] = -dist;  // append camera-back translation for eye-space midpoint
+  float view[16];
+  std::memcpy(view, m_eye, 16 * sizeof(float));
+  view[14] = -dist;  // append camera-back translation for eye-space midpoint
 
   // Classify edges: front vs back using perspective-correct face normal test.
   // In eye space, camera is at origin. A face is front-facing if dot(n_eye, -p_eye) > 0,
@@ -413,10 +413,11 @@ void CrystalRenderer::Render(const float rotation[16], float zoom, CrystalStyle 
     float my = (vertices_[v0 * 3 + 1] + vertices_[v1 * 3 + 1]) * 0.5f;
     float mz = (vertices_[v0 * 3 + 2] + vertices_[v1 * 3 + 2]) * 0.5f;
 
-    // Transform midpoint to eye space using view_rot (4x4, includes translation (0,0,-dist))
-    float px = view_rot[0] * mx + view_rot[4] * my + view_rot[8] * mz + view_rot[12];
-    float py = view_rot[1] * mx + view_rot[5] * my + view_rot[9] * mz + view_rot[13];
-    float pz = view_rot[2] * mx + view_rot[6] * my + view_rot[10] * mz + view_rot[14];
+    // Transform midpoint to eye space using view (4x4, V_rot · model with
+    // T(0,0,-dist) appended in column 3 — see view setup above).
+    float px = view[0] * mx + view[4] * my + view[8] * mz + view[12];
+    float py = view[1] * mx + view[5] * my + view[9] * mz + view[13];
+    float pz = view[2] * mx + view[6] * my + view[10] * mz + view[14];
 
     const float* n0 = &edge_face_normals_[i * 6 + 0];
     const float* n1 = &edge_face_normals_[i * 6 + 3];

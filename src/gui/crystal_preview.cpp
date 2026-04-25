@@ -97,6 +97,13 @@ void ResetCrystalView(AxisPreset preset, const AxisDist params[3]) {
 // The trackball axis is therefore expressed in mesh coordinates as:
 //   drag right (dx>0) → axis = mesh +y (= world +z) → spin around world up
 //   drag down  (dy>0) → axis = mesh +x (= world +x, camera right) → top of crystal toward user
+//
+// Implementation note: the axis components (dy/mag, dx/mag, 0) are numerically
+// IDENTICAL to the pre-refactor code. The semantic "world coordinates"
+// improvement is not a math change here — it comes from the explicit V_rot /
+// model split inside CrystalRenderer::ComputeMvp combined with the Y-Z swap
+// equivalence above. This file's previous notes implied a camera-space frame,
+// which was a misreading of the mesh swap.
 void ApplyTrackballRotation(float dx, float dy) {
   float mag = std::sqrt(dx * dx + dy * dy);
   if (mag < 1e-4f) {

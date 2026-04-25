@@ -272,24 +272,29 @@ TEST(ChainRotationToMatrix, MatchesCoreBuildCrystalRotation) {
   }
 }
 
-// --- DefaultPreviewRotation chain-based contracts ---
+// --- DefaultPreviewRotation chain-based contracts (mesh-frame outputs) ---
+// The output is in the GUI mesh frame (swap-wrapped from the core chain
+// formula). The c-axis in the mesh frame is mesh +y (post Y-Z swap), so
+// these contracts apply the rotation to (0, 1, 0).
 
-TEST(DefaultPreviewRotation, ColumnEqualsChainAt90) {
-  // kColumn typical: (az=0°, zenith=90°, roll=0°) → R = Rz(-π) · Ry(-π/2).
-  // Local +z (c-axis) should be horizontal (z-component ≈ 0).
+TEST(DefaultPreviewRotation, ColumnPutsCAxisHorizontal) {
+  // kColumn typical: (az=0°, zenith=90°, roll=0°). After chain + swap wrap,
+  // mesh +y (c-axis) → mesh +x (horizontal in screen frame). Concretely,
+  // y-component of the rotated c-axis ≈ 0 (no longer vertical).
   float r[16] = { 0 };
   DefaultPreviewRotation(AxisPreset::kColumn, nullptr, r);
-  auto v = Mul3(r, 0.0f, 0.0f, 1.0f);
-  EXPECT_NEAR(v[2], 0.0f, 1e-5f) << "Column c-axis must lie in horizontal plane";
+  auto v = Mul3(r, 0.0f, 1.0f, 0.0f);
+  EXPECT_NEAR(v[1], 0.0f, 1e-5f) << "Column c-axis must lie horizontal (mesh +y component)";
+  EXPECT_NEAR(std::fabs(v[0]) + std::fabs(v[2]), 1.0f, 1e-5f) << "Column c-axis magnitude in horizontal plane";
 }
 
 TEST(DefaultPreviewRotation, PlateKeepsCAxisVertical) {
-  // kPlate typical: (az=0°, zenith=0°, roll=0°) → R = Rz(-π).
-  // Local +z stays at world +z (vertical).
+  // kPlate typical: (az=0°, zenith=0°, roll=0°). After chain + swap wrap,
+  // mesh +y (c-axis) stays at mesh +y (vertical).
   float r[16] = { 0 };
   DefaultPreviewRotation(AxisPreset::kPlate, nullptr, r);
-  auto v = Mul3(r, 0.0f, 0.0f, 1.0f);
-  EXPECT_NEAR(v[2], 1.0f, 1e-5f) << "Plate c-axis must remain vertical";
+  auto v = Mul3(r, 0.0f, 1.0f, 0.0f);
+  EXPECT_NEAR(v[1], 1.0f, 1e-5f) << "Plate c-axis must remain vertical (mesh +y)";
 }
 
 TEST(DefaultPreviewRotation, ParrySharesColumnDefault) {
@@ -305,15 +310,15 @@ TEST(DefaultPreviewRotation, ParrySharesColumnDefault) {
 }
 
 TEST(DefaultPreviewRotation, LowitzCAxisAt60Degrees) {
-  // kLowitz typical: (az=0°, zenith=60°, roll=0°). Local +z → tilted by 60° from vertical.
-  // After R = Rz(-π) · Ry(-60°): (0,0,1) → (sin(60°), 0, cos(60°)).
+  // kLowitz typical: (az=0°, zenith=60°, roll=0°). Mesh +y (c-axis) tilts 60°
+  // toward horizontal. After swap wrap, the rotation acting on (0,1,0)
+  // produces a vector in the (mesh +x, mesh +y) plane with y = cos(60°) = 0.5.
   float r[16] = { 0 };
   DefaultPreviewRotation(AxisPreset::kLowitz, nullptr, r);
-  auto v = Mul3(r, 0.0f, 0.0f, 1.0f);
-  float rad = 60.0f * kPi / 180.0f;
-  EXPECT_NEAR(v[0], std::sin(rad), 1e-5f);
-  EXPECT_NEAR(v[1], 0.0f, 1e-5f);
-  EXPECT_NEAR(v[2], std::cos(rad), 1e-5f);
+  auto v = Mul3(r, 0.0f, 1.0f, 0.0f);
+  EXPECT_NEAR(v[1], std::cos(60.0f * kPi / 180.0f), 1e-5f);
+  // Magnitude in horizontal plane (|x|^2 + |z|^2) ≈ sin(60°)^2 = 0.75.
+  EXPECT_NEAR(v[0] * v[0] + v[2] * v[2], std::sin(60.0f * kPi / 180.0f) * std::sin(60.0f * kPi / 180.0f), 1e-5f);
 }
 
 // kRandom + nullptr-params and kCustom + nullptr-params both fall back to the
@@ -361,28 +366,49 @@ TEST(DefaultPreviewRotation, CustomWithMeansEquivalentToChain) {
   }
 }
 
-TEST(DefaultPreviewRotation, CustomWithCompositeMeansMatchesChainFormula) {
-  // mean=(zenith=30°, azimuth=45°, roll=60°). Output must equal ChainRotationToMatrix(45,30,60,*).
+// Helper: apply the GUI mesh swap wrap (S · M · S^T) so test expectations can
+// build the chain-formula output and convert it to the mesh frame the way
+// DefaultPreviewRotation does internally.
+void ExpectMeshWrapEquals(const float core[16], const float mesh[16], float tol = 1e-5f) {
+  // Spell out the conjugation so this test is independent of any helper in
+  // axis_presets.hpp (a future bug there would be masked otherwise).
+  float expected[16] = { 0 };
+  expected[0] = core[0];
+  expected[1] = core[2];
+  expected[2] = -core[1];
+  expected[4] = core[8];
+  expected[5] = core[10];
+  expected[6] = -core[9];
+  expected[8] = -core[4];
+  expected[9] = -core[6];
+  expected[10] = core[5];
+  expected[15] = 1.0f;
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_NEAR(mesh[i], expected[i], tol) << "index " << i;
+  }
+}
+
+TEST(DefaultPreviewRotation, CustomWithCompositeMeansMatchesSwapWrappedChain) {
+  // mean=(zenith=30°, azimuth=45°, roll=60°). Output must equal the swap-wrapped
+  // chain output, since DefaultPreviewRotation produces mesh-frame rotations.
   AxisDist params[3] = {
     { AxisDistType::kGauss, 30.0f, 1.0f },
     { AxisDistType::kUniform, 45.0f, 1.0f },
     { AxisDistType::kGauss, 60.0f, 1.0f },
   };
   float r_custom[16] = { 0 };
-  float r_chain[16] = { 0 };
+  float r_chain_core[16] = { 0 };
   DefaultPreviewRotation(AxisPreset::kCustom, params, r_custom);
-  ChainRotationToMatrix(45.0f, 30.0f, 60.0f, r_chain);
-  for (int i = 0; i < 16; ++i) {
-    EXPECT_NEAR(r_custom[i], r_chain[i], 1e-5f) << "index " << i;
-  }
+  ChainRotationToMatrix(45.0f, 30.0f, 60.0f, r_chain_core);
+  ExpectMeshWrapEquals(r_chain_core, r_custom);
 }
 
 // Modal/thumbnail same-source contract: both code paths build the same params[3]
 // from the same (zenith, azimuth, roll) AxisDist trio and call the same function.
 // This test simulates the thumbnail_cache.cpp construction order
-// (params[0]=zenith, [1]=azimuth, [2]=roll) and verifies it matches the chain
-// formula directly — covering the field-order correctness of the construction
-// site (per review-03 Suggestion 2).
+// (params[0]=zenith, [1]=azimuth, [2]=roll) and verifies it matches the
+// swap-wrapped chain formula directly — covering the field-order correctness
+// of the construction site (per review-03 Suggestion 2).
 TEST(DefaultPreviewRotation, ThumbnailFieldOrderConstructionContract) {
   AxisDist zenith_dist{ AxisDistType::kGauss, 25.0f, 1.0f };
   AxisDist az_dist{ AxisDistType::kUniform, 100.0f, 1.0f };
@@ -390,12 +416,10 @@ TEST(DefaultPreviewRotation, ThumbnailFieldOrderConstructionContract) {
   // Mirror thumbnail_cache.cpp construction: params[0]=zenith, [1]=azimuth, [2]=roll.
   AxisDist params[3] = { zenith_dist, az_dist, roll_dist };
   float r_via_params[16] = { 0 };
-  float r_via_chain[16] = { 0 };
+  float r_via_chain_core[16] = { 0 };
   DefaultPreviewRotation(AxisPreset::kCustom, params, r_via_params);
-  ChainRotationToMatrix(az_dist.mean, zenith_dist.mean, roll_dist.mean, r_via_chain);
-  for (int i = 0; i < 16; ++i) {
-    EXPECT_NEAR(r_via_params[i], r_via_chain[i], 1e-5f) << "index " << i;
-  }
+  ChainRotationToMatrix(az_dist.mean, zenith_dist.mean, roll_dist.mean, r_via_chain_core);
+  ExpectMeshWrapEquals(r_via_chain_core, r_via_params);
 }
 
 }  // namespace
