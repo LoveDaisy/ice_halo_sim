@@ -28,6 +28,11 @@ void ResetCrystalView();
 // entry-card thumbnail). Pass nullptr for params to fall back to the
 // preset-typical or isometric sentinel default (only meaningful for kCustom).
 void ResetCrystalView(AxisPreset preset, const AxisDist params[3]);
+// Reset to the default view derived from a CrystalConfig (classifies axis
+// preset internally + builds params). Used by main.cpp startup, DoNew, and
+// DoOpen so the modal preview's initial view always matches what the outer
+// entry-card thumbnail shows for the current entry's axis distribution.
+void ResetCrystalViewToCrystal(const CrystalConfig& cr);
 void ApplyTrackballRotation(float dx, float dy);
 
 // Build crystal mesh data from config: JSON construction, LUMICE_GetCrystalMesh, Y-Z swap, AABB normalization.

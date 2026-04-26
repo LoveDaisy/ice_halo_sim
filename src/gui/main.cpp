@@ -239,9 +239,7 @@ int main(int argc, char** argv) {
   // Without this the user would have to click Reset View on first modal open
   // to reach the same view the outer thumbnail already shows.
   if (!gui::g_state.layers.empty() && !gui::g_state.layers[0].entries.empty()) {
-    const auto& def_cr = gui::g_state.layers[0].entries[0].crystal;
-    gui::AxisDist params[3] = { def_cr.zenith, def_cr.azimuth, def_cr.roll };
-    gui::ResetCrystalView(gui::ClassifyAxisPreset(def_cr.zenith, def_cr.azimuth, def_cr.roll), params);
+    gui::ResetCrystalViewToCrystal(gui::g_state.layers[0].entries[0].crystal);
   } else {
     gui::ResetCrystalView();  // legacy fallback for unexpected empty state
   }

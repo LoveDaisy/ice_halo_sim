@@ -86,6 +86,11 @@ void ResetCrystalView(AxisPreset preset, const AxisDist params[3]) {
   g_crystal_zoom = kDefaultCrystalZoom;
 }
 
+void ResetCrystalViewToCrystal(const CrystalConfig& cr) {
+  AxisDist params[3] = { cr.zenith, cr.azimuth, cr.roll };
+  ResetCrystalView(ClassifyAxisPreset(cr.zenith, cr.azimuth, cr.roll), params);
+}
+
 // Apply incremental rotation from mouse drag. Rotation is composed in world
 // coordinates (model is left-multiplied by Rodrigues(world_axis, angle)) so the
 // camera position stays fixed and the crystal turns relative to the user's

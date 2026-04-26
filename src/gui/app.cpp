@@ -451,6 +451,10 @@ void DoOpen() {
       g_thumbnail_cache.OnLayerStructureChanged();
       g_preview.ClearTexture();
       g_preview.ClearBackground();
+      // Reset modal preview trackball to the imported config's first entry.
+      if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
+        ResetCrystalViewToCrystal(g_state.layers[0].entries[0].crystal);
+      }
       GUI_LOG_INFO("[GUI] DoOpen (JSON import): {}", PathToU8(path));
     }
     return;
@@ -464,6 +468,10 @@ void DoOpen() {
     g_state.current_file_path = path;
     g_state.dirty = false;
     g_thumbnail_cache.OnLayerStructureChanged();
+    // Reset modal preview trackball to the loaded file's first entry.
+    if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
+      ResetCrystalViewToCrystal(g_state.layers[0].entries[0].crystal);
+    }
     GUI_LOG_INFO("[GUI] DoOpen: {}", PathToU8(path));
     if (!tex_data.empty()) {
       g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
@@ -494,6 +502,11 @@ void DoNew() {
   g_preview.ClearTexture();
   g_preview.ClearBackground();
   g_crystal_mesh_hash = 0;
+  // Reset modal preview trackball to the new default entry's preset view —
+  // otherwise a stale drag pose from before New persists into the new doc.
+  if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
+    ResetCrystalViewToCrystal(g_state.layers[0].entries[0].crystal);
+  }
   GUI_LOG_INFO("[GUI] DoNew");
 }
 
