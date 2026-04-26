@@ -45,16 +45,6 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
 [[nodiscard]] bool WriteRgbaBufferToPng(const std::filesystem::path& path, int w, int h,
                                         const std::vector<unsigned char>& rgba);
 
-// Capture an (x,y,w,h) region of the currently bound framebuffer and write it as a PNG.
-// Contract (MUST hold at call site):
-//   - Called on the GL thread (main render thread).
-//   - Called AFTER ImGui_ImplOpenGL3_RenderDrawData(...) so foreground overlay labels are
-//     already composited into the default framebuffer.
-//   - Called BEFORE glfwSwapBuffers(...); otherwise glReadPixels returns a previous frame.
-//   - Caller leaves the default framebuffer bound (this helper does not bind any FBO).
-// Coordinates are framebuffer pixels with origin at the bottom-left (OpenGL convention).
-[[nodiscard]] bool ExportDefaultFramebufferRegionPng(const std::filesystem::path& path, int x, int y, int w, int h);
-
 // Export configuration as JSON (CLI-compatible format)
 bool ExportConfigJson(const std::filesystem::path& path, const std::string& json_str);
 
