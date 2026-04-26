@@ -51,10 +51,14 @@ std::array<float, 4> Mvp4(const float mvp[16], float x, float y, float z) {
 void RegisterCrystalRendererTests(ImGuiTestEngine* engine) {
   // unit/crystal_renderer_camera_tilt_world_z_above_center — With identity
   // model rotation and zoom=1, a vertex at world +z (= mesh +y under the GUI
-  // Y-Z swap) must project ABOVE the screen center (clip-space y > 0). This
-  // pins the V_rot = Rx(-kCameraTiltDeg) sign: a NEGATIVE-angle Rx tilts the
-  // camera DOWN so that points along world +z (which the swap aligns with mesh
-  // +y) appear on the upper half of the screen.
+  // Y-Z swap) must project ABOVE the screen center AND its surface normal
+  // must point toward the camera (not away). The "above center" assertion
+  // alone is insufficient: with V_rot of either sign the top vertex appears
+  // above center because both "top tilted toward camera" and "top tilted
+  // away from camera" raise its screen y. The visible-face check (normal·
+  // (+z_eye) > 0) is what pins the V_rot sign — required for kPlate to show
+  // its top face (face 1) under the elevated-camera intent rather than the
+  // bottom face (face 2).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "unit", "crystal_renderer_camera_tilt_world_z_above_center");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -76,6 +80,33 @@ void RegisterCrystalRendererTests(ImGuiTestEngine* engine) {
       IM_CHECK(bot[3] > 0.0f);
       float ndc_y_bot = bot[1] / bot[3];
       IM_CHECK(ndc_y_bot < 0.0f);
+
+      // **Sign-pinning assertion**: the top face's normal (world +z = mesh +y
+      // for identity model) must point TOWARD the camera in eye space, i.e.,
+      // its eye-space z component is positive (eye-space +z is out of screen
+      // toward the viewer in OpenGL). Below: transform the (0,1,0) direction
+      // by V_rot only — translation drops out for direction vectors, and
+      // model is identity. Equivalently we read the y column of (V_rot ·
+      // model) and check its z entry. This catches a sign flip that the
+      // ndc_y > 0 check above cannot.
+      // V_rot is the only rotation in the view chain (model = identity), so
+      // its 3x3 entries are recoverable by inverting the projection's effect
+      // on a direction vector — easier path: re-derive V_rot expectations
+      // from a known input. We compute the eye-space position of the top
+      // vertex and check that, after subtracting the camera-back translation,
+      // its z is positive (toward camera).
+      // dist = ComputeDist(zoom=1) ≈ 3.73; eye-space z of (0,1,0) post-V_rot
+      // is sin(kCameraTiltDeg) ≈ 0.26 (for positive Rx angle) or -0.26
+      // (negative angle). After T(0,0,-dist) the absolute z is ≈ -dist;
+      // adding back +dist recovers the rotation contribution.
+      auto top_world_eye = Mvp4(mvp, 0.0f, 1.0f, 0.0f);  // already in clip space
+      // Reconstruct eye-space z from clip: clip_w = -eye_z (OpenGL).
+      float eye_z_top = -top_world_eye[3];  // = -dist + V_rot's z contribution
+      // Compare against what dist alone would produce (no rotation): -dist.
+      // If V_rot tilts top TOWARD camera, eye_z_top is closer to zero
+      // (less negative); if AWAY, it is further from zero (more negative).
+      float dist_alone = -lumice::gui::CrystalRenderer::ComputeDist(1.0f);
+      IM_CHECK(eye_z_top > dist_alone);  // strictly greater (less negative) → top tilts toward camera
     };
   }
 

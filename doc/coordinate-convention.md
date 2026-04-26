@@ -227,7 +227,9 @@ camera convention that is separate from the simulator camera in §9.1–9.5.
   (`crystal_preview.cpp::BuildCrystalMeshData`: core `+z` → mesh `+y`,
   core `+y` → mesh `-z`), the swap *implicitly* establishes the
   "camera at world `-y`, world `+z` up" view. `CrystalRenderer::ComputeMvp`
-  appends only a small `Rx(-kCameraTiltDeg)` rotation for the elevation.
+  appends a small `Rx(+kCameraTiltDeg)` rotation for the elevation. The
+  positive sign tilts world `+z` (mesh `+y`) toward the camera so the
+  crystal's top face is visible (looking down at the crystal from above).
 - **Mouse-drag semantics:** rotation is composed in world coordinates by
   left-multiplying `g_crystal_rotation` with a Rodrigues axis. Camera position
   stays put; the crystal turns relative to the user's world frame.

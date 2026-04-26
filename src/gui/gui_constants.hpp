@@ -73,10 +73,13 @@ constexpr float kDefaultCrystalZoom = 1.4f;
 // Camera elevation (downward pitch) for the modal/thumbnail crystal preview,
 // in degrees. The camera sits at world (0, -dist, dist·tan(kCameraTiltDeg))
 // looking at the origin, with world +z up. Implemented as a fixed rotation
-// V_rot = Rx(-kCameraTiltDeg) inside CrystalRenderer::BuildViewRotation —
+// V_rot = Rx(+kCameraTiltDeg) inside CrystalRenderer::BuildViewRotation —
 // the additional -90° remap from world (+z up) to OpenGL eye-space (+y up)
 // is provided implicitly by the Y-Z swap in BuildCrystalMeshData, so V_rot
-// only needs to add the camera elevation. Mouse-drag rotates the crystal in
+// only needs to add the camera elevation. The +sign on the Rx angle tilts
+// world +z (mesh +y, the crystal's c-axis) TOWARD the camera so the top
+// face is visible — matching the "elevated camera looking down" intent
+// (kPlate shows face 1, not face 2). Mouse-drag rotates the crystal in
 // world coordinates while the camera position stays put.
 constexpr float kCameraTiltDeg = 15.0f;
 

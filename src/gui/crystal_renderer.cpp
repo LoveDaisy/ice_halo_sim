@@ -10,7 +10,7 @@
 
 namespace lumice::gui {
 
-// Build the fixed view-rotation matrix V_rot = Rx(-kCameraTiltDeg).
+// Build the fixed view-rotation matrix V_rot = Rx(+kCameraTiltDeg).
 // This adds a slight downward camera pitch on top of the OpenGL canonical view
 // (camera at (0,0,+dist) looking down -z, +y up).
 //
@@ -21,9 +21,17 @@ namespace lumice::gui {
 // "camera direction") maps to mesh +z. The swap implicitly establishes the
 // "camera at world -y looking at origin, world +z up" view; V_rot only adds
 // the small +tilt elevation the user asked for ("稍加一点 +z 分量").
+//
+// Sign rationale: a +Rx rotation on mesh +y (the crystal's top, c-axis)
+// gives (0, cos θ, sin θ), so for θ > 0 the top tilts TOWARD the camera
+// (positive z in eye space = out of screen). The top face's normal then
+// faces the viewer and the top is visible — matching "camera elevated above
+// origin, looking down at the crystal". A negative angle would flip this
+// (top tilts away → bottom face visible → upward view), which was the
+// initial implementation and showed face 2 instead of face 1 for kPlate.
 static void BuildViewRotation(float v_rot[16]) {
   constexpr float kPi = 3.14159265358979323846f;
-  float angle = -kCameraTiltDeg * (kPi / 180.0f);
+  float angle = kCameraTiltDeg * (kPi / 180.0f);
   float c = std::cos(angle);
   float s = std::sin(angle);
   std::memset(v_rot, 0, 16 * sizeof(float));
@@ -336,7 +344,7 @@ void CrystalRenderer::ComputeMvp(const float model_rotation[16], float zoom, int
   proj[14] = -2.0f * far_plane * near_plane / (far_plane - near_plane);
 
   // View = T(0, 0, -dist) · V_rot · model_rotation. V_rot is the fixed camera
-  // pitch (Rx(-kCameraTiltDeg)); the additional -90° world→OpenGL eye-space
+  // pitch (Rx(+kCameraTiltDeg)); the additional -90° world→OpenGL eye-space
   // remap is supplied implicitly by the Y-Z swap inside BuildCrystalMeshData
   // (see BuildViewRotation / gui_constants.hpp::kCameraTiltDeg comments).
   // model_rotation is the user-controlled crystal orientation in world
