@@ -11,6 +11,18 @@
 #include "imgui_impl_opengl3.h"
 #include "test_gui_shared.hpp"
 
+// Upload a 64x32 uniform-XYZ texture to the preview pipeline.
+// Shared by ACD2/ACD4 EV-following tests (and any future test needing the
+// same lens-agnostic uniform pixel field). Earlier copies lived inside
+// per-test `struct Local { static void UploadXyzForAcdN() }` helpers; they
+// were physically isolated and could not share an implementation.
+static void UploadUniformXyzTexture(float value) {
+  constexpr int kW = 64;
+  constexpr int kH = 32;
+  std::vector<float> xyz(static_cast<size_t>(kW) * kH * 3, value);
+  gui::g_preview.UploadXyzTexture(xyz.data(), kW, kH);
+}
+
 // Spike-related state (main-thread result passed back to TestFunc).
 struct SpikeState {
   bool requested = false;
@@ -737,24 +749,11 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
   // luminance by roughly 4x (tolerance down to 1.3x matches AC4's sRGB-clip-aware bound).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "export_dual_fisheye", "acd2_exposure_follows_ev_lens4");
-    struct Local {
-      static void UploadXyzForAcd2() {
-        constexpr int kW = 64;
-        constexpr int kH = 32;
-        std::vector<float> xyz(static_cast<size_t>(kW) * kH * 3, 0.0f);
-        for (size_t i = 0; i < static_cast<size_t>(kW) * kH; ++i) {
-          xyz[i * 3 + 0] = 0.08f;
-          xyz[i * 3 + 1] = 0.08f;
-          xyz[i * 3 + 2] = 0.08f;
-        }
-        gui::g_preview.UploadXyzTexture(xyz.data(), kW, kH);
-      }
-    };
     static bool s_xyz_uploaded = false;
     t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
       AcGuiFunc(nullptr);
       if (!s_xyz_uploaded) {
-        Local::UploadXyzForAcd2();
+        UploadUniformXyzTexture(0.08f);
         gui::g_state.snapshot_intensity = 1.0f;
         s_xyz_uploaded = true;
       }
@@ -861,24 +860,11 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
   // so EV scaling is the only source of mean-luma change.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "export_equirect", "acd4_exposure_follows_ev_lens7");
-    struct Local {
-      static void UploadXyzForAcd4() {
-        constexpr int kW = 64;
-        constexpr int kH = 32;
-        std::vector<float> xyz(static_cast<size_t>(kW) * kH * 3, 0.0f);
-        for (size_t i = 0; i < static_cast<size_t>(kW) * kH; ++i) {
-          xyz[i * 3 + 0] = 0.08f;
-          xyz[i * 3 + 1] = 0.08f;
-          xyz[i * 3 + 2] = 0.08f;
-        }
-        gui::g_preview.UploadXyzTexture(xyz.data(), kW, kH);
-      }
-    };
     static bool s_xyz_uploaded = false;
     t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
       AcGuiFunc(nullptr);
       if (!s_xyz_uploaded) {
-        Local::UploadXyzForAcd4();
+        UploadUniformXyzTexture(0.08f);
         gui::g_state.snapshot_intensity = 1.0f;
         s_xyz_uploaded = true;
       }
