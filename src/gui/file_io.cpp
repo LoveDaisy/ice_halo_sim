@@ -1196,19 +1196,6 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
 }
 
 
-bool ExportDefaultFramebufferRegionPng(const std::filesystem::path& path, int x, int y, int w, int h) {
-  if (path.empty() || w <= 0 || h <= 0) {
-    return false;
-  }
-  std::vector<unsigned char> pixels;
-  if (!ReadbackGlRegionToRgba(x, y, w, h, pixels)) {
-    return false;
-  }
-  auto u8path = path.u8string();
-  return stbi_write_png(u8path.c_str(), w, h, 4, pixels.data(), w * 4) != 0;
-}
-
-
 // ========== Export Config JSON ==========
 
 bool ExportConfigJson(const std::filesystem::path& path, const std::string& json_str) {
