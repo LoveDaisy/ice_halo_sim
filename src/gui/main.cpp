@@ -234,7 +234,17 @@ int main(int argc, char** argv) {
     GUI_LOG_ERROR("Failed to initialize crystal renderer");
     return 1;
   }
-  gui::ResetCrystalView();
+  // Initialize the modal preview's trackball to the default entry's preset
+  // default view (matches what Reset View / the entry-card thumbnail show).
+  // Without this the user would have to click Reset View on first modal open
+  // to reach the same view the outer thumbnail already shows.
+  if (!gui::g_state.layers.empty() && !gui::g_state.layers[0].entries.empty()) {
+    const auto& def_cr = gui::g_state.layers[0].entries[0].crystal;
+    gui::AxisDist params[3] = { def_cr.zenith, def_cr.azimuth, def_cr.roll };
+    gui::ResetCrystalView(gui::ClassifyAxisPreset(def_cr.zenith, def_cr.azimuth, def_cr.roll), params);
+  } else {
+    gui::ResetCrystalView();  // legacy fallback for unexpected empty state
+  }
 
   // Initialize thumbnail cache (must be after GL context is ready)
   if (!gui::g_thumbnail_cache.Init()) {
