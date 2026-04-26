@@ -199,7 +199,6 @@ set(lumice_server_src
   "${PROJ_SRC_DIR}/server/stats.cpp")
 
 set(lumice_util_src
-  "${PROJ_SRC_DIR}/util/arg_parser.cpp"
   "${PROJ_SRC_DIR}/util/color_space.cpp"
   "${PROJ_SRC_DIR}/util/illuminant.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
