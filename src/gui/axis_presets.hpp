@@ -1,7 +1,9 @@
 #ifndef LUMICE_GUI_AXIS_PRESETS_HPP
 #define LUMICE_GUI_AXIS_PRESETS_HPP
 
+#include <cassert>
 #include <cmath>
+#include <cstring>
 
 #include "gui/gui_state.hpp"
 
@@ -113,6 +115,179 @@ inline AxisPreset ClassifyAxisPreset(const AxisDist& zenith, const AxisDist& azi
   }
 
   return AxisPreset::kCustom;
+}
+
+// Internal helper: only called by DefaultPreviewRotation. If reused elsewhere,
+// relocate to src/util/. Builds the simulator-equivalent chain rotation
+//   R = Rz(az_deg - 180°) · Ry(-zenith_deg) · Rz(roll_deg)
+// in column-major 4x4. Mirrors src/core/simulator.cpp::BuildCrystalRotation;
+// kept as a separate GUI implementation to avoid GUI → core reverse dependency
+// (contract test in test_axis_presets.cpp guards equivalence).
+inline void ChainRotationToMatrix(float az_deg, float zenith_deg, float roll_deg, float out[16]) {
+  constexpr float kPi = 3.14159265358979323846f;
+  constexpr float kDeg2Rad = kPi / 180.0f;
+  float az = az_deg * kDeg2Rad - kPi;  // azimuth - 180°
+  float zen = -zenith_deg * kDeg2Rad;  // -zenith
+  float roll = roll_deg * kDeg2Rad;
+
+  auto fill_rz = [](float angle, float m[16]) {
+    float c = std::cos(angle);
+    float s = std::sin(angle);
+    std::memset(m, 0, 16 * sizeof(float));
+    m[0] = c;
+    m[1] = s;
+    m[4] = -s;
+    m[5] = c;
+    m[10] = 1.0f;
+    m[15] = 1.0f;
+  };
+  auto fill_ry = [](float angle, float m[16]) {
+    float c = std::cos(angle);
+    float s = std::sin(angle);
+    std::memset(m, 0, 16 * sizeof(float));
+    m[0] = c;
+    m[2] = -s;
+    m[5] = 1.0f;
+    m[8] = s;
+    m[10] = c;
+    m[15] = 1.0f;
+  };
+  auto mul4 = [](const float a[16], const float b[16], float r[16]) {
+    for (int i = 0; i < 4; ++i) {
+      for (int j = 0; j < 4; ++j) {
+        float s = 0.0f;
+        for (int k = 0; k < 4; ++k) {
+          s += a[i + k * 4] * b[k + j * 4];
+        }
+        r[i + j * 4] = s;
+      }
+    }
+  };
+
+  float m_az[16];
+  float m_zen[16];
+  float m_roll[16];
+  float tmp[16];
+  fill_rz(az, m_az);
+  fill_ry(zen, m_zen);
+  fill_rz(roll, m_roll);
+  mul4(m_zen, m_roll, tmp);  // tmp = Ry(-zenith) · Rz(roll)
+  mul4(m_az, tmp, out);      // out = Rz(az-π) · tmp
+}
+
+// Per-preset typical chain parameters used to derive the modal preview's
+// default orientation. kColumn and kParry intentionally share (zenith=90°,
+// az=0°, roll=0°): their default views are visually identical here, and
+// classification (ClassifyAxisPreset) distinguishes them via AxisDist.type
+// (roll free uniform vs. locked gauss), not via the mean values stored here.
+struct PresetTypicalChain {
+  float az_deg;
+  float zenith_deg;
+  float roll_deg;
+  bool use_sentinel;  // true → fall back to isometric Ry·Rx (Random / Custom-with-null-params)
+};
+
+inline constexpr PresetTypicalChain kPresetTypicalChain[6] = {
+  { 0.0f, 90.0f, 0.0f, false },  // kColumn
+  { 0.0f, 0.0f, 0.0f, false },   // kPlate
+  { 0.0f, 90.0f, 0.0f, false },  // kParry — same as kColumn (intentional, see comment above)
+  { 0.0f, 60.0f, 0.0f, false },  // kLowitz
+  { 0.0f, 0.0f, 0.0f, true },    // kRandom — isometric sentinel
+  { 0.0f, 0.0f, 0.0f, true },    // kCustom — sentinel when params == nullptr
+};
+
+// Lock the enum-to-index mapping that DefaultPreviewRotation relies on. If any
+// AxisPreset value is renumbered or reordered, these asserts fail at compile
+// time — preventing a silent typical-chain mismatch that the runtime
+// `idx < 0 || idx >= 6` guard cannot catch.
+static_assert(static_cast<int>(AxisPreset::kColumn) == 0, "kPresetTypicalChain index mismatch (kColumn)");
+static_assert(static_cast<int>(AxisPreset::kPlate) == 1, "kPresetTypicalChain index mismatch (kPlate)");
+static_assert(static_cast<int>(AxisPreset::kParry) == 2, "kPresetTypicalChain index mismatch (kParry)");
+static_assert(static_cast<int>(AxisPreset::kLowitz) == 3, "kPresetTypicalChain index mismatch (kLowitz)");
+static_assert(static_cast<int>(AxisPreset::kRandom) == 4, "kPresetTypicalChain index mismatch (kRandom)");
+static_assert(static_cast<int>(AxisPreset::kCustom) == 5, "kPresetTypicalChain index mismatch (kCustom)");
+
+// Convert a core-frame 3x3 rotation (column-major 4x4 with translation=0) into
+// the GUI mesh frame, accounting for the Y-Z swap performed by
+// crystal_preview.cpp::BuildCrystalMeshData (core +z → mesh +y, core +y →
+// mesh -z). Applies the conjugation `out = S · in · S^T` where
+//   S = | 1  0  0 |   S^T = | 1  0  0 |
+//       | 0  0  1 |         | 0  0 -1 |
+//       | 0 -1  0 |         | 0  1  0 |
+// Only the upper-left 3x3 is meaningful; translation column / row are zeroed.
+inline void ApplyMeshSwapWrap(const float in[16], float out[16]) {
+  std::memset(out, 0, 16 * sizeof(float));
+  // Column 0 (j=0): out[i][0] derived from S · in · S^T at j=0.
+  out[0] = in[0];   // (0,0)
+  out[1] = in[2];   // (1,0)
+  out[2] = -in[1];  // (2,0)
+  // Column 1 (j=1).
+  out[4] = in[8];   // (0,1)
+  out[5] = in[10];  // (1,1)
+  out[6] = -in[9];  // (2,1)
+  // Column 2 (j=2).
+  out[8] = -in[4];  // (0,2)
+  out[9] = -in[6];  // (1,2)
+  out[10] = in[5];  // (2,2)
+  out[15] = 1.0f;
+}
+
+// Single source of truth for the default preview-camera rotation (4x4 column-major,
+// same convention as CrystalRenderer::Render's model_rotation argument).
+//
+// **Output frame:** the rotation is meant to be applied directly to mesh-frame
+// vertices, so chain-formula outputs (which `ChainRotationToMatrix` produces in
+// the core/world frame) are post-processed by `ApplyMeshSwapWrap` to convert
+// them into the mesh frame. The isometric sentinel was originally designed for
+// the OLD pipeline (which had no view rotation), so it's already mesh-friendly
+// and is written directly without the wrap.
+//
+// params layout (must match g_axis_buf in edit_modals.cpp):
+//   params[0] = zenith dist
+//   params[1] = azimuth dist
+//   params[2] = roll dist
+// params may be nullptr — in that case kCustom degrades to the isometric sentinel.
+inline void DefaultPreviewRotation(AxisPreset preset, const AxisDist params[3], float out[16]) {
+  // kCustom with live params → derive from mean values via chain formula
+  // (post-wrapped to mesh frame).
+  if (preset == AxisPreset::kCustom && params != nullptr) {
+    float core[16];
+    ChainRotationToMatrix(params[1].mean, params[0].mean, params[2].mean, core);
+    ApplyMeshSwapWrap(core, out);
+    return;
+  }
+
+  int idx = static_cast<int>(preset);
+  if (idx < 0 || idx >= 6) {
+    assert(false && "DefaultPreviewRotation: unhandled AxisPreset");
+    // Fall through to sentinel below.
+  } else if (!kPresetTypicalChain[idx].use_sentinel) {
+    const auto& t = kPresetTypicalChain[idx];
+    float core[16];
+    ChainRotationToMatrix(t.az_deg, t.zenith_deg, t.roll_deg, core);
+    ApplyMeshSwapWrap(core, out);
+    return;
+  }
+
+  // Random / Custom-with-null-params / fallback: isometric view (Ry(+25°) · Rx(+35°)).
+  constexpr float kPi = 3.14159265358979323846f;
+  constexpr float kAngleX = 35.0f * kPi / 180.0f;
+  constexpr float kAngleY = 25.0f * kPi / 180.0f;
+  float cx = std::cos(kAngleX);
+  float sx = std::sin(kAngleX);
+  float cy = std::cos(kAngleY);
+  float sy = std::sin(kAngleY);
+  std::memset(out, 0, 16 * sizeof(float));
+  out[0] = cy;
+  out[1] = 0.0f;
+  out[2] = -sy;
+  out[4] = sy * sx;
+  out[5] = cx;
+  out[6] = cy * sx;
+  out[8] = sy * cx;
+  out[9] = -sx;
+  out[10] = cy * cx;
+  out[15] = 1.0f;
 }
 
 }  // namespace lumice::gui

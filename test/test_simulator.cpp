@@ -5,6 +5,8 @@
 #include <numeric>
 #include <vector>
 
+#include "core/geo3d.hpp"
+#include "core/math.hpp"
 #include "core/simulator.hpp"
 
 namespace lumice {
@@ -233,6 +235,107 @@ TEST(PartitionCrystalRayNum, VariableRayNum) {
   // And the ratio should be approximately correct
   double actual_ratio = static_cast<double>(total_alloc_0) / total_rays;
   EXPECT_NEAR(actual_ratio, 0.005, 0.005);  // Within 0.5% absolute
+}
+
+// ============================================================================
+// BuildCrystalRotation chain math verification
+//
+// Validates the 4 chain cases listed in
+//   scratchpad/scrum-coordinate-system-overhaul/explore-clarify-coordinate-convention/
+//   coordinate_convention_v1.md, Appendix A.
+//
+// Chain under test: R = Rz(az - pi) * Ry(-zenith) * Rz(roll), with
+//                   zenith = pi/2 - latitude.
+// Verifies the world directions of crystal local basis vectors:
+//   N1 (= local +z, the c-axis) and N3 (= local +x).
+// ============================================================================
+
+namespace {
+
+constexpr float kChainTolDot = 1.0f - 1e-5f;
+
+void ApplyRotation(const Rotation& r, float v[3]) {
+  r.Apply(v);
+}
+
+float Dot(const float a[3], const float b[3]) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+Rotation BuildFromDeg(float az_deg, float zenith_deg, float roll_deg) {
+  float az_rad = az_deg * math::kDegreeToRad;
+  float lat_rad = (90.0f - zenith_deg) * math::kDegreeToRad;
+  float roll_rad = roll_deg * math::kDegreeToRad;
+  return BuildCrystalRotation(az_rad, lat_rad, roll_rad);
+}
+
+void ExpectAlignedWith(const float actual[3], const float expected[3], const char* label) {
+  EXPECT_GT(Dot(actual, expected), kChainTolDot)
+      << label << ": (" << actual[0] << ", " << actual[1] << ", " << actual[2] << ") vs expected (" << expected[0]
+      << ", " << expected[1] << ", " << expected[2] << ")";
+}
+
+}  // namespace
+
+// Case A: (az=0, zenith=0, roll=0)
+// Validates the az - 180 degree offset term: with no other rotation
+// in play, N3 is rotated by Rz(-pi) and ends up at world -x.
+TEST(BuildCrystalRotation, CaseA_AzOffsetOnly) {
+  Rotation r = BuildFromDeg(0.0f, 0.0f, 0.0f);
+  float n1[3] = { 0, 0, 1 };
+  float n3[3] = { 1, 0, 0 };
+  ApplyRotation(r, n1);
+  ApplyRotation(r, n3);
+  constexpr float kExpN1[3] = { 0, 0, 1 };
+  constexpr float kExpN3[3] = { -1, 0, 0 };
+  ExpectAlignedWith(n1, kExpN1, "Case A N1 (expect +z)");
+  ExpectAlignedWith(n3, kExpN3, "Case A N3 (expect -x)");
+}
+
+// Case B: (az=0, zenith=90, roll=0)
+// Validates the Ry(-zenith) sign: this is the "Parry default" pose
+// where N3 should point to world +z.
+TEST(BuildCrystalRotation, CaseB_ParryLikePose) {
+  Rotation r = BuildFromDeg(0.0f, 90.0f, 0.0f);
+  float n1[3] = { 0, 0, 1 };
+  float n3[3] = { 1, 0, 0 };
+  ApplyRotation(r, n1);
+  ApplyRotation(r, n3);
+  constexpr float kExpN1[3] = { 1, 0, 0 };
+  constexpr float kExpN3[3] = { 0, 0, 1 };
+  ExpectAlignedWith(n1, kExpN1, "Case B N1 (expect +x)");
+  ExpectAlignedWith(n3, kExpN3, "Case B N3 (expect +z)");
+}
+
+// Case C: (az=90, zenith=90, roll=0)
+// Validates the Rz(az - pi) term with non-trivial azimuth: N1 lands on
+// world +y, while N3 still points to world +z (independent of az when
+// zenith=90).
+TEST(BuildCrystalRotation, CaseC_NonTrivialAz) {
+  Rotation r = BuildFromDeg(90.0f, 90.0f, 0.0f);
+  float n1[3] = { 0, 0, 1 };
+  float n3[3] = { 1, 0, 0 };
+  ApplyRotation(r, n1);
+  ApplyRotation(r, n3);
+  constexpr float kExpN1[3] = { 0, 1, 0 };
+  constexpr float kExpN3[3] = { 0, 0, 1 };
+  ExpectAlignedWith(n1, kExpN1, "Case C N1 (expect +y)");
+  ExpectAlignedWith(n3, kExpN3, "Case C N3 (expect +z)");
+}
+
+// Case D: (az=0, zenith=0, roll=90)
+// Validates the Rz(roll) term: roll rotates around the local c-axis,
+// keeping N1 unchanged but moving N3 around.
+TEST(BuildCrystalRotation, CaseD_RollAroundCAxis) {
+  Rotation r = BuildFromDeg(0.0f, 0.0f, 90.0f);
+  float n1[3] = { 0, 0, 1 };
+  float n3[3] = { 1, 0, 0 };
+  ApplyRotation(r, n1);
+  ApplyRotation(r, n3);
+  constexpr float kExpN1[3] = { 0, 0, 1 };
+  constexpr float kExpN3[3] = { 0, -1, 0 };
+  ExpectAlignedWith(n1, kExpN1, "Case D N1 (expect +z)");
+  ExpectAlignedWith(n3, kExpN3, "Case D N3 (expect -y)");
 }
 
 // ray_num=0 should not change carry

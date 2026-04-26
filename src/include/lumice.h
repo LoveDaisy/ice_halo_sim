@@ -149,7 +149,8 @@ typedef struct LUMICE_CrystalParam_ {
   // Default: all 1.0f (regular hexagonal prism). Caller must initialize; memset(0) gives invalid geometry.
   float face_distance[6];
 
-  // Axis distributions
+  // Axis distributions. Sampled values feed the rotation chain (angles in degrees)
+  // R = Rz(azimuth - 180°) * Ry(-zenith) * Rz(roll); see doc/coordinate-convention.md.
   LUMICE_AxisDist zenith;
   LUMICE_AxisDist azimuth;
   LUMICE_AxisDist roll;

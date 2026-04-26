@@ -204,6 +204,10 @@ GUI 提供以下功能：
 `zenith`、`roll` 和 `azimuth`（可选）：
 这些字段定义晶体的姿态。`zenith` 定义 c 轴方向，`roll` 定义绕 c 轴的旋转。
 它们是*分布类型*，可以是标量（表示确定性分布），也可以是元组 (`type`, `mean`, `std`) 描述均匀分布或高斯分布。所有角度都以度为单位。
+完整的坐标系与旋转链定义（含 `azimuth` 符号约定与 `−180°` 偏移）参见
+[`doc/coordinate-convention_zh.md`](doc/coordinate-convention_zh.md)。
+**破坏性变更**：本次版本重写了旋转链，旧版本中保存的 `crystal.axis.*` 字段在新约定下渲染朝向会变化，
+可能需要按新约定重新撰写（`filter.raypath`、`light.*`、`view.*` 不受影响）。
 
 `type` 和 `shape`：它们描述晶体的形状。
 目前有两种晶体类型：`prism`（六棱柱）和 `pyramid`（六棱锥）。

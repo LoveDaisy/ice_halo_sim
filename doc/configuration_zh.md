@@ -25,6 +25,10 @@
 
 晶体配置定义模拟中使用的晶体形状和朝向分布。
 
+> **坐标系与旋转约定**：世界帧、局部帧、方位角符号约定，以及 `axis.{zenith, azimuth, roll}` 背后
+> 的旋转链语义，详见 [`coordinate-convention_zh.md`](coordinate-convention_zh.md)。早期版本的配置在
+> 当前 chain 下渲染朝向**会发生确定性变化**（除非 `axis` 为全向均匀采样）。
+
 #### 基本结构
 
 ```json

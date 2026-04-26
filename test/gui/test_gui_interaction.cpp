@@ -2219,4 +2219,266 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text, std::string("1-3"));
     };
   }
+
+  // p2_modal/crystal_modal_reset_view_matches_thumbnail — Modal Reset View
+  // must derive the rotation matrix from the same single source
+  // (DefaultPreviewRotation) used by the entry-card thumbnail. Setting the
+  // entry to a canonical preset config, opening the modal, and clicking Reset
+  // View must leave g_crystal_rotation element-wise equal to
+  // DefaultPreviewRotation(<expected preset>). This is a contract test that
+  // will fail loudly if either path drifts from the shared source.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_reset_view_matches_thumbnail");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      // Helper: install canonical AxisDist tuples for a given preset, open
+      // the Crystal modal, click Reset View, then assert g_crystal_rotation
+      // equals the matrix produced by DefaultPreviewRotation(preset).
+      auto verify_preset = [&](const char* label, gui::AxisPreset preset, gui::AxisDist zenith, gui::AxisDist azimuth,
+                               gui::AxisDist roll) {
+        ResetTestState();
+        ctx->Yield(2);
+
+        auto& cr = gui::g_state.layers[0].entries[0].crystal;
+        cr.zenith = zenith;
+        cr.azimuth = azimuth;
+        cr.roll = roll;
+
+        // Sanity: the canonical config must classify as the preset we expect.
+        IM_CHECK_EQ(static_cast<int>(gui::ClassifyAxisPreset(cr.zenith, cr.azimuth, cr.roll)),
+                    static_cast<int>(preset));
+
+        // Open Edit Crystal modal (copies entry.crystal → modal buffer).
+        ctx->ItemClick("**/Edit##cr");
+        ctx->Yield(3);
+
+        // Click Reset View in the modal preview pane.
+        ctx->ItemClick("**/Reset View##modal");
+        ctx->Yield(2);
+
+        // Snapshot the rotation now — Cancel restores g_crystal_rotation from
+        // g_saved_rotation (edit_modals.cpp:287/767), so reading after Cancel
+        // would observe the pre-Open state instead of the Reset View result.
+        float observed[16];
+        std::memcpy(observed, gui::g_crystal_rotation, sizeof(observed));
+
+        // Close modal cleanly (Cancel discards any buffer changes; trackball
+        // restore is incidental and does not affect the snapshot above).
+        ctx->ItemClick("**/Cancel##edit_modal");
+        ctx->Yield(2);
+
+        // Build the same params[3] that ResetCrystalView passes (zenith,
+        // azimuth, roll) so kCustom routes through the chain-formula path.
+        gui::AxisDist params[3] = { zenith, azimuth, roll };
+        float expected[16] = { 0 };
+        gui::DefaultPreviewRotation(preset, params, expected);
+        for (int i = 0; i < 16; ++i) {
+          if (observed[i] != expected[i]) {
+            IM_ERRORF("preset=%s index=%d actual=%f expected=%f", label, i, static_cast<double>(observed[i]),
+                      static_cast<double>(expected[i]));
+          }
+        }
+      };
+
+      const gui::AxisDist az_full{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
+      const gui::AxisDist roll_full{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
+      const gui::AxisDist roll_locked{ gui::AxisDistType::kGauss, 0.0f, 1.0f };
+      const gui::AxisDist zenith_full{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
+
+      // Plate canonical: zenith Gauss(mean=0, std=1).
+      verify_preset("Plate", gui::AxisPreset::kPlate, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 1.0f }, az_full,
+                    roll_full);
+
+      // Column canonical: zenith Gauss(mean=90, std=1) with roll uniform-full.
+      verify_preset("Column", gui::AxisPreset::kColumn, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 1.0f },
+                    az_full, roll_full);
+
+      // Parry canonical: same zenith as Column but roll locked.
+      verify_preset("Parry", gui::AxisPreset::kParry, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 1.0f }, az_full,
+                    roll_locked);
+
+      // Lowitz canonical: zenith Gauss(mean=0, std=40) with roll locked.
+      verify_preset("Lowitz", gui::AxisPreset::kLowitz, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 40.0f },
+                    az_full, roll_locked);
+
+      // Random canonical: all three axes Uniform(0, 360°). Locks the
+      // ClassifyAxisPreset → DefaultPreviewRotation chain end-to-end so that
+      // any future special-case for kRandom in either path is caught.
+      verify_preset("Random", gui::AxisPreset::kRandom, zenith_full, az_full, roll_full);
+
+      // Custom: anything that doesn't match the four presets — gauss with
+      // moderate spread, roll free.
+      verify_preset("Custom", gui::AxisPreset::kCustom, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 20.0f },
+                    az_full, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 20.0f });
+    };
+  }
+
+  // p2_modal/axis_preset_button_resets_modal_preview — Clicking a preset
+  // button inside the Axis tab must drive g_crystal_rotation to the default
+  // view derived from that preset (button writes per-preset distribution into
+  // g_axis_buf, then ResetCrystalView consumes it as params, so kCustom also
+  // lands on the chain-derived matrix). Closes the bug where switching preset
+  // only updated the outer card thumbnail.
+  //
+  // Note: expected params are inlined here from edit_modals.cpp::kAxisPresets
+  // (file-scope static, not exported). If kAxisPresets defaults change, this
+  // test must be updated to match.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "axis_preset_button_resets_modal_preview");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const gui::AxisDist az_full{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
+      const gui::AxisDist roll_free{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
+      const gui::AxisDist roll_locked{ gui::AxisDistType::kGauss, 0.0f, 1.0f };
+
+      auto verify_preset_button = [&](const char* preset_label, gui::AxisPreset expected_preset, gui::AxisDist zenith,
+                                      gui::AxisDist azimuth, gui::AxisDist roll) {
+        ResetTestState();
+        ctx->Yield(2);
+        ctx->ItemClick("**/Edit##cr");
+        ctx->Yield(3);
+        ctx->ItemClick("**/###axis_tab");
+        ctx->Yield(2);
+        ctx->ItemClick(("**/" + std::string(preset_label)).c_str());
+        ctx->Yield(2);
+
+        float observed[16];
+        std::memcpy(observed, gui::g_crystal_rotation, sizeof(observed));
+
+        // Build the expected matrix from the same params kAxisPresets writes.
+        gui::AxisDist params[3] = { zenith, azimuth, roll };
+        float expected[16] = { 0 };
+        gui::DefaultPreviewRotation(expected_preset, params, expected);
+
+        ctx->ItemClick("**/Cancel##edit_modal");
+        ctx->Yield(2);
+
+        for (int i = 0; i < 16; ++i) {
+          if (observed[i] != expected[i]) {
+            IM_ERRORF("preset=%s index=%d actual=%f expected=%f", preset_label, i, static_cast<double>(observed[i]),
+                      static_cast<double>(expected[i]));
+          }
+        }
+      };
+
+      verify_preset_button("Column", gui::AxisPreset::kColumn, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 1.0f },
+                           az_full, roll_free);
+      verify_preset_button("Plate", gui::AxisPreset::kPlate, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 1.0f },
+                           az_full, roll_free);
+      verify_preset_button("Parry", gui::AxisPreset::kParry, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 1.0f },
+                           az_full, roll_locked);
+      verify_preset_button("Lowitz", gui::AxisPreset::kLowitz, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 40.0f },
+                           az_full, roll_locked);
+      verify_preset_button("Random", gui::AxisPreset::kRandom, az_full, az_full, roll_free);
+      verify_preset_button("Custom", gui::AxisPreset::kCustom, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 20.0f },
+                           az_full, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 20.0f });
+    };
+  }
+
+  // p2_modal/axis_slider_drag_does_not_reset_modal_preview — Negative contract
+  // (review-02 Minor #1, AC#7): editing an axis-distribution slider must NOT
+  // reset the modal preview rotation. Only preset-button clicks and Reset View
+  // overwrite g_crystal_rotation. Guards against accidentally wiring slider
+  // edits to ResetCrystalView during future refactors.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "axis_slider_drag_does_not_reset_modal_preview");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(3);
+
+      // Mutate g_crystal_rotation via trackball drag (synthetic, world-coord
+      // semantics). Snapshot taken AFTER the drag so the comparison baseline
+      // is the dragged state, not the modal-open default.
+      gui::ApplyTrackballRotation(20.0f, 0.0f);
+      ctx->Yield(1);
+
+      float before[16];
+      std::memcpy(before, gui::g_crystal_rotation, sizeof(before));
+
+      // Switch to Axis tab and edit the zenith Mean. Both ItemInputValue (text
+      // half) and slider-drag (drag half) of SliderWithInput route through the
+      // same write target — the bound `g_axis_buf[0].mean` field — so neither
+      // path can call ResetCrystalView without the other doing so too. The text
+      // input is used here because it's deterministic under the test harness;
+      // the contract being verified is "no axis-edit path resets g_crystal_rotation",
+      // and the only places that call ResetCrystalView are the preset buttons
+      // (edit_modals.cpp:486-499) and the Reset View button (:387) — both
+      // separate from the slider control.
+      ctx->ItemClick("**/###axis_tab");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/Zenith/##Mean_input", 45.0f);
+      ctx->Yield(2);
+
+      // Snapshot AGAIN before Cancel — Cancel restores g_crystal_rotation from
+      // the open-time saved state, so reading after Cancel would observe the
+      // pre-drag matrix and produce a false positive.
+      float after[16];
+      std::memcpy(after, gui::g_crystal_rotation, sizeof(after));
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+
+      for (int i = 0; i < 16; ++i) {
+        if (before[i] != after[i]) {
+          IM_ERRORF("slider edit unexpectedly mutated g_crystal_rotation at index %d: before=%f after=%f", i,
+                    static_cast<double>(before[i]), static_cast<double>(after[i]));
+        }
+      }
+    };
+  }
+
+  // p2_modal/world_coord_trackball_drag_axis — Verifies the world-coordinate
+  // trackball semantics expressed in the GUI mesh frame (which has a Y-Z swap
+  // vs. core/world):
+  //   dx>0 → rotation around mesh +y (= world +z, vertical spin)
+  //   dy>0 → rotation around mesh +x (= world +x, camera-right tilt)
+  // Both compose as left-multiply on g_crystal_rotation. Guards Step 5 of #165.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "world_coord_trackball_drag_axis");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      auto check_axis = [](const char* label, float dx, float dy, int axis_kind) {
+        // axis_kind: 0 = mesh +x (Rx), 1 = mesh +y (Ry).
+        // Reset to identity before each sub-case.
+        for (int i = 0; i < 16; ++i) {
+          gui::g_crystal_rotation[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+        }
+        gui::ApplyTrackballRotation(dx, dy);
+
+        float mag = std::sqrt(dx * dx + dy * dy);
+        float angle = mag * 0.01f;
+        float c = std::cos(angle);
+        float s = std::sin(angle);
+        // Build the expected Rodrigues column-major matrix for the single axis.
+        float exp_r[16] = { 0 };
+        exp_r[15] = 1.0f;
+        if (axis_kind == 0) {
+          // Rx(angle): e1 unchanged; e2→(0,c,s); e3→(0,-s,c).
+          exp_r[0] = 1.0f;
+          exp_r[5] = c;
+          exp_r[6] = s;
+          exp_r[9] = -s;
+          exp_r[10] = c;
+        } else {
+          // Ry(angle): e1→(c,0,-s); e2 unchanged; e3→(s,0,c).
+          exp_r[0] = c;
+          exp_r[2] = -s;
+          exp_r[5] = 1.0f;
+          exp_r[8] = s;
+          exp_r[10] = c;
+        }
+        for (int i = 0; i < 16; ++i) {
+          float diff = std::fabs(gui::g_crystal_rotation[i] - exp_r[i]);
+          if (diff > 1e-5f) {
+            IM_ERRORF("%s: index %d actual=%f expected=%f", label, i, static_cast<double>(gui::g_crystal_rotation[i]),
+                      static_cast<double>(exp_r[i]));
+          }
+        }
+      };
+
+      ResetTestState();
+      ctx->Yield(1);
+      check_axis("dx>0 → mesh +y (world +z)", 10.0f, 0.0f, /*axis_kind=*/1);
+      check_axis("dy>0 → mesh +x (world +x)", 0.0f, 10.0f, /*axis_kind=*/0);
+    };
+  }
 }

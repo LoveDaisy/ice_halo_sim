@@ -5,9 +5,61 @@
 #include <cstring>
 
 #include "gui/gl_common.h"
+#include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
 
 namespace lumice::gui {
+
+// Build the fixed view-rotation matrix V_rot = Rx(+kCameraTiltDeg).
+// This adds a slight downward camera pitch on top of the OpenGL canonical view
+// (camera at (0,0,+dist) looking down -z, +y up).
+//
+// Coordinate convention note: the GUI mesh undergoes a Y-Z swap in
+// crystal_preview.cpp::BuildCrystalMeshData (core +z → mesh +y, core +y →
+// mesh -z), so the mesh frame is already aligned to OpenGL conventions —
+// world +z (the user's "up") maps to mesh +y, and world -y (the user's
+// "camera direction") maps to mesh +z. The swap implicitly establishes the
+// "camera at world -y looking at origin, world +z up" view; V_rot only adds
+// the small +tilt elevation the user asked for ("稍加一点 +z 分量").
+//
+// Sign rationale: a +Rx rotation on mesh +y (the crystal's top, c-axis)
+// gives (0, cos θ, sin θ), so for θ > 0 the top tilts TOWARD the camera
+// (positive z in eye space = out of screen). The top face's normal then
+// faces the viewer and the top is visible — matching "camera elevated above
+// origin, looking down at the crystal". A negative angle would flip this
+// (top tilts away → bottom face visible → upward view), which was the
+// initial implementation and showed face 2 instead of face 1 for kPlate.
+static void BuildViewRotation(float v_rot[16]) {
+  constexpr float kPi = 3.14159265358979323846f;
+  float angle = kCameraTiltDeg * (kPi / 180.0f);
+  float c = std::cos(angle);
+  float s = std::sin(angle);
+  std::memset(v_rot, 0, 16 * sizeof(float));
+  v_rot[0] = 1.0f;
+  v_rot[5] = c;
+  v_rot[6] = s;
+  v_rot[9] = -s;
+  v_rot[10] = c;
+  v_rot[15] = 1.0f;
+}
+
+// Multiply the 3x3 rotation parts of two column-major 4x4 matrices: out = a · b.
+// Translation (column 3 row 0..2) is zeroed; out[15] is set to 1. Used to compose
+// V_rot · model_rotation without leaking translation, then apply T(0,0,-dist)
+// separately via the homogeneous translation column.
+static void Mul4x4Rot(const float a[16], const float b[16], float out[16]) {
+  std::memset(out, 0, 16 * sizeof(float));
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      float s = 0.0f;
+      for (int k = 0; k < 3; ++k) {
+        s += a[i + k * 4] * b[k + j * 4];
+      }
+      out[i + j * 4] = s;
+    }
+  }
+  out[15] = 1.0f;
+}
 
 // clang-format off
 
@@ -273,7 +325,7 @@ float CrystalRenderer::ComputeDist(float zoom) {
   return zoom / half_tan;
 }
 
-void CrystalRenderer::ComputeMvp(const float rotation[16], float zoom, int width, int height, float out_mvp[16]) {
+void CrystalRenderer::ComputeMvp(const float model_rotation[16], float zoom, int width, int height, float out_mvp[16]) {
   // Build perspective projection
   float aspect = static_cast<float>(width) / static_cast<float>(height);
   float fov_rad = kFovDeg * kDeg2Rad;
@@ -291,21 +343,25 @@ void CrystalRenderer::ComputeMvp(const float rotation[16], float zoom, int width
   proj[11] = -1.0f;
   proj[14] = -2.0f * far_plane * near_plane / (far_plane - near_plane);
 
-  // View translation: translate(0, 0, -dist)
-  // Combined: view_rot = rotation with translation applied
-  float view_rot[16];
-  std::memcpy(view_rot, rotation, 16 * sizeof(float));
-  view_rot[12] = 0.0f;
-  view_rot[13] = 0.0f;
-  view_rot[14] = -dist;
-  view_rot[15] = 1.0f;
+  // View = T(0, 0, -dist) · V_rot · model_rotation. V_rot is the fixed camera
+  // pitch (Rx(+kCameraTiltDeg)); the additional -90° world→OpenGL eye-space
+  // remap is supplied implicitly by the Y-Z swap inside BuildCrystalMeshData
+  // (see BuildViewRotation / gui_constants.hpp::kCameraTiltDeg comments).
+  // model_rotation is the user-controlled crystal orientation in world
+  // coordinates. Mouse-drag mutates the model matrix (left-multiplied by
+  // world-axis Rodrigues), so the camera stays put.
+  float v_rot[16];
+  BuildViewRotation(v_rot);
+  float view[16];
+  Mul4x4Rot(v_rot, model_rotation, view);  // 3x3 rotation; translation=0
+  view[14] = -dist;                        // append camera-back translation
 
-  // MVP = proj * view_rot
+  // MVP = proj * view
   for (int i = 0; i < 4; i++) {
     for (int j = 0; j < 4; j++) {
       float sum = 0.0f;
       for (int k = 0; k < 4; k++) {
-        sum += proj[i + k * 4] * view_rot[k + j * 4];
+        sum += proj[i + k * 4] * view[k + j * 4];
       }
       out_mvp[i + j * 4] = sum;
     }
@@ -336,16 +392,20 @@ void CrystalRenderer::Render(const float rotation[16], float zoom, CrystalStyle 
   float mvp[16] = {};
   ComputeMvp(rotation, zoom, width_, height_, mvp);
 
-  // view_rot for eye-space midpoint transform used by edge classification
-  // below. Reuses ComputeDist so FOV / zoom->dist mapping has a single source
-  // of truth with ComputeMvp.
+  // Compose model->eye rotation (V_rot · model). Used below for edge
+  // classification (eye-space midpoint + normal) and as u_rotation for the
+  // face shader (which derives v_eye_pos and the eye-space normal via dFdx).
+  // Translation (0, 0, -dist) is appended only for midpoint computation;
+  // the shader uniform stays a pure rotation since dFdx/dFdy are
+  // translation-invariant.
   float dist = ComputeDist(zoom);
-  float view_rot[16];
-  std::memcpy(view_rot, rotation, 16 * sizeof(float));
-  view_rot[12] = 0.0f;
-  view_rot[13] = 0.0f;
-  view_rot[14] = -dist;
-  view_rot[15] = 1.0f;
+  float v_rot[16];
+  BuildViewRotation(v_rot);
+  float m_eye[16];
+  Mul4x4Rot(v_rot, rotation, m_eye);  // 3x3 rotation, translation=0
+  float view[16];
+  std::memcpy(view, m_eye, 16 * sizeof(float));
+  view[14] = -dist;  // append camera-back translation for eye-space midpoint
 
   // Classify edges: front vs back using perspective-correct face normal test.
   // In eye space, camera is at origin. A face is front-facing if dot(n_eye, -p_eye) > 0,
@@ -364,21 +424,23 @@ void CrystalRenderer::Render(const float rotation[16], float zoom, CrystalStyle 
     float my = (vertices_[v0 * 3 + 1] + vertices_[v1 * 3 + 1]) * 0.5f;
     float mz = (vertices_[v0 * 3 + 2] + vertices_[v1 * 3 + 2]) * 0.5f;
 
-    // Transform midpoint to eye space using view_rot (4x4, includes translation (0,0,-dist))
-    float px = view_rot[0] * mx + view_rot[4] * my + view_rot[8] * mz + view_rot[12];
-    float py = view_rot[1] * mx + view_rot[5] * my + view_rot[9] * mz + view_rot[13];
-    float pz = view_rot[2] * mx + view_rot[6] * my + view_rot[10] * mz + view_rot[14];
+    // Transform midpoint to eye space using view (4x4, V_rot · model with
+    // T(0,0,-dist) appended in column 3 — see view setup above).
+    float px = view[0] * mx + view[4] * my + view[8] * mz + view[12];
+    float py = view[1] * mx + view[5] * my + view[9] * mz + view[13];
+    float pz = view[2] * mx + view[6] * my + view[10] * mz + view[14];
 
     const float* n0 = &edge_face_normals_[i * 6 + 0];
     const float* n1 = &edge_face_normals_[i * 6 + 3];
 
-    // Rotate normals to eye space (3x3 part of rotation, no translation for direction vectors)
-    float rn0x = rotation[0] * n0[0] + rotation[4] * n0[1] + rotation[8] * n0[2];
-    float rn0y = rotation[1] * n0[0] + rotation[5] * n0[1] + rotation[9] * n0[2];
-    float rn0z = rotation[2] * n0[0] + rotation[6] * n0[1] + rotation[10] * n0[2];
-    float rn1x = rotation[0] * n1[0] + rotation[4] * n1[1] + rotation[8] * n1[2];
-    float rn1y = rotation[1] * n1[0] + rotation[5] * n1[1] + rotation[9] * n1[2];
-    float rn1z = rotation[2] * n1[0] + rotation[6] * n1[1] + rotation[10] * n1[2];
+    // Rotate normals to eye space using m_eye (V_rot · model). 3x3 only; direction
+    // vectors do not consume the translation column.
+    float rn0x = m_eye[0] * n0[0] + m_eye[4] * n0[1] + m_eye[8] * n0[2];
+    float rn0y = m_eye[1] * n0[0] + m_eye[5] * n0[1] + m_eye[9] * n0[2];
+    float rn0z = m_eye[2] * n0[0] + m_eye[6] * n0[1] + m_eye[10] * n0[2];
+    float rn1x = m_eye[0] * n1[0] + m_eye[4] * n1[1] + m_eye[8] * n1[2];
+    float rn1y = m_eye[1] * n1[0] + m_eye[5] * n1[1] + m_eye[9] * n1[2];
+    float rn1z = m_eye[2] * n1[0] + m_eye[6] * n1[1] + m_eye[10] * n1[2];
 
     // Front-facing test: dot(n_eye, -p_eye) > 0, i.e. dot(n_eye, p_eye) < 0
     bool face0_front = (rn0x * px + rn0y * py + rn0z * pz) < 0.0f;
@@ -409,7 +471,10 @@ void CrystalRenderer::Render(const float rotation[16], float zoom, CrystalStyle 
   if (style == CrystalStyle::kShaded && tri_count_ > 0) {
     glUseProgram(face_shader_);
     glUniformMatrix4fv(glGetUniformLocation(face_shader_, "u_mvp"), 1, GL_FALSE, mvp);
-    glUniformMatrix4fv(glGetUniformLocation(face_shader_, "u_rotation"), 1, GL_FALSE, rotation);
+    // u_rotation is the model→eye rotation (V_rot · model). The shader writes
+    // v_eye_pos = u_rotation · pos and the FS uses dFdx/dFdy to derive the
+    // eye-space normal — translation-invariant, so we pass the pure rotation.
+    glUniformMatrix4fv(glGetUniformLocation(face_shader_, "u_rotation"), 1, GL_FALSE, m_eye);
 
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);

@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cmath>
+
+#include "core/simulator.hpp"
 #include "gui/axis_presets.hpp"
 
 namespace {
@@ -8,7 +12,9 @@ using lumice::gui::AxisDist;
 using lumice::gui::AxisDistType;
 using lumice::gui::AxisPreset;
 using lumice::gui::AxisPresetLabel;
+using lumice::gui::ChainRotationToMatrix;
 using lumice::gui::ClassifyAxisPreset;
+using lumice::gui::DefaultPreviewRotation;
 
 constexpr AxisDist kAzFull{ AxisDistType::kUniform, 0.0f, 360.0f };
 constexpr AxisDist kRollFull{ AxisDistType::kUniform, 0.0f, 360.0f };
@@ -111,6 +117,309 @@ TEST(AxisPresetTest, LabelsAreCapitalized) {
   EXPECT_STREQ(AxisPresetLabel(AxisPreset::kLowitz), "Lowitz");
   EXPECT_STREQ(AxisPresetLabel(AxisPreset::kRandom), "Random");
   EXPECT_STREQ(AxisPresetLabel(AxisPreset::kCustom), "Custom");
+}
+
+// --- DefaultPreviewRotation contract ---
+// Helpers below operate on a 4x4 column-major float matrix:
+//   m[col*4 + row]  →  row r, column c is rotation[c*4 + r].
+
+void ExpectHomogeneousAffine(const float r[16]) {
+  for (int i : { 3, 7, 11, 12, 13, 14 }) {
+    EXPECT_FLOAT_EQ(r[i], 0.0f) << "index " << i;
+  }
+  EXPECT_FLOAT_EQ(r[15], 1.0f);
+}
+
+float Det3(const float r[16]) {
+  // 3x3 upper-left in column-major layout.
+  float m00 = r[0];
+  float m10 = r[1];
+  float m20 = r[2];
+  float m01 = r[4];
+  float m11 = r[5];
+  float m21 = r[6];
+  float m02 = r[8];
+  float m12 = r[9];
+  float m22 = r[10];
+  return m00 * (m11 * m22 - m12 * m21) - m01 * (m10 * m22 - m12 * m20) + m02 * (m10 * m21 - m11 * m20);
+}
+
+void ExpectOrthonormal(const float r[16]) {
+  // R^T R = I for the upper-left 3x3 (column-major: column k = (r[k*4+0..2])).
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      float dot = 0.0f;
+      for (int k = 0; k < 3; ++k) {
+        dot += r[i * 4 + k] * r[j * 4 + k];
+      }
+      float expected = (i == j) ? 1.0f : 0.0f;
+      EXPECT_NEAR(dot, expected, 1e-5f) << "dot(col[" << i << "], col[" << j << "])";
+    }
+  }
+}
+
+// Multiply column-major 4x4 R by a column 3-vector (homogeneous w=1 truncated).
+std::array<float, 3> Mul3(const float r[16], float x, float y, float z) {
+  return {
+    r[0] * x + r[4] * y + r[8] * z,
+    r[1] * x + r[5] * y + r[9] * z,
+    r[2] * x + r[6] * y + r[10] * z,
+  };
+}
+
+TEST(DefaultPreviewRotation, AllPresetsAreOrthonormalAffine) {
+  for (auto p : { AxisPreset::kColumn, AxisPreset::kPlate, AxisPreset::kParry, AxisPreset::kLowitz, AxisPreset::kRandom,
+                  AxisPreset::kCustom }) {
+    float r[16] = { 0 };
+    DefaultPreviewRotation(p, nullptr, r);
+    ExpectHomogeneousAffine(r);
+    EXPECT_NEAR(Det3(r), 1.0f, 1e-5f) << "preset=" << static_cast<int>(p);
+    ExpectOrthonormal(r);
+  }
+}
+
+constexpr float kPi = 3.14159265358979323846f;
+
+// --- ChainRotationToMatrix unit tests ---
+// Formula: R = Rz(az_deg - 180°) · Ry(-zenith_deg) · Rz(roll_deg).
+
+TEST(ChainRotationToMatrix, IdentityWhenAzMinus180AndZenithZero) {
+  // (az=180°, zenith=0°, roll=0°) → Rz(0)·Ry(0)·Rz(0) = identity.
+  float r[16] = { 0 };
+  ChainRotationToMatrix(180.0f, 0.0f, 0.0f, r);
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      float expected = (i == j) ? 1.0f : 0.0f;
+      EXPECT_NEAR(r[j * 4 + i], expected, 1e-5f) << "row=" << i << " col=" << j;
+    }
+  }
+}
+
+TEST(ChainRotationToMatrix, ZenithOnlyMapsLocalZ) {
+  // (az=180°, zenith=90°, roll=0°): R = Ry(-π/2). Local +z (0,0,1) → (-1, 0, 0).
+  float r[16] = { 0 };
+  ChainRotationToMatrix(180.0f, 90.0f, 0.0f, r);
+  auto v = Mul3(r, 0.0f, 0.0f, 1.0f);
+  EXPECT_NEAR(v[0], -1.0f, 1e-5f);
+  EXPECT_NEAR(v[1], 0.0f, 1e-5f);
+  EXPECT_NEAR(v[2], 0.0f, 1e-5f);
+}
+
+TEST(ChainRotationToMatrix, RollOnlyRotatesAroundLocalZ) {
+  // (az=180°, zenith=0°, roll=90°): R = Rz(π/2). Local +x (1,0,0) → (0, 1, 0).
+  float r[16] = { 0 };
+  ChainRotationToMatrix(180.0f, 0.0f, 90.0f, r);
+  auto v = Mul3(r, 1.0f, 0.0f, 0.0f);
+  EXPECT_NEAR(v[0], 0.0f, 1e-5f);
+  EXPECT_NEAR(v[1], 1.0f, 1e-5f);
+  EXPECT_NEAR(v[2], 0.0f, 1e-5f);
+}
+
+TEST(ChainRotationToMatrix, AzimuthOnlyAddsExtraSpinAroundWorldZ) {
+  // (az=270°, zenith=0°, roll=0°): R = Rz(π/2). Local +x (1,0,0) → (0, 1, 0).
+  float r[16] = { 0 };
+  ChainRotationToMatrix(270.0f, 0.0f, 0.0f, r);
+  auto v = Mul3(r, 1.0f, 0.0f, 0.0f);
+  EXPECT_NEAR(v[0], 0.0f, 1e-5f);
+  EXPECT_NEAR(v[1], 1.0f, 1e-5f);
+  EXPECT_NEAR(v[2], 0.0f, 1e-5f);
+}
+
+TEST(ChainRotationToMatrix, ProducesOrthonormalAffineForCompositeInputs) {
+  // Composite (az=45°, zenith=30°, roll=60°).
+  float r[16] = { 0 };
+  ChainRotationToMatrix(45.0f, 30.0f, 60.0f, r);
+  ExpectHomogeneousAffine(r);
+  EXPECT_NEAR(Det3(r), 1.0f, 1e-5f);
+  ExpectOrthonormal(r);
+}
+
+// Contract test: GUI ChainRotationToMatrix must agree with core BuildCrystalRotation
+// for the same (azimuth, latitude, roll) inputs. Note: simulator uses latitude
+// (= π/2 − zenith), and works in radians; GUI takes degrees + zenith.
+TEST(ChainRotationToMatrix, MatchesCoreBuildCrystalRotation) {
+  struct Case {
+    float az_deg, zenith_deg, roll_deg;
+  };
+  Case cases_arr[] = {
+    { 0.0f, 90.0f, 0.0f },      // Column-typical
+    { 0.0f, 0.0f, 0.0f },       // Plate-typical
+    { 0.0f, 60.0f, 0.0f },      // Lowitz-typical
+    { 45.0f, 30.0f, 60.0f },    // Composite
+    { 270.0f, 75.0f, 180.0f },  // Composite
+  };
+  constexpr float kDeg2Rad = kPi / 180.0f;
+  for (const auto& c : cases_arr) {
+    float gui_r[16] = { 0 };
+    ChainRotationToMatrix(c.az_deg, c.zenith_deg, c.roll_deg, gui_r);
+
+    float az_rad = c.az_deg * kDeg2Rad;
+    float lat_rad = kPi / 2.0f - c.zenith_deg * kDeg2Rad;
+    float roll_rad = c.roll_deg * kDeg2Rad;
+    auto core_rot = lumice::BuildCrystalRotation(az_rad, lat_rad, roll_rad);
+    // Apply core rotation to the three basis vectors and compare with GUI columns.
+    for (int basis = 0; basis < 3; ++basis) {
+      float p[3] = { 0.0f, 0.0f, 0.0f };
+      p[basis] = 1.0f;
+      core_rot.Apply(p);
+      EXPECT_NEAR(gui_r[basis * 4 + 0], p[0], 1e-4f)
+          << "az=" << c.az_deg << " zen=" << c.zenith_deg << " roll=" << c.roll_deg << " basis=" << basis << " axis=x";
+      EXPECT_NEAR(gui_r[basis * 4 + 1], p[1], 1e-4f)
+          << "az=" << c.az_deg << " zen=" << c.zenith_deg << " roll=" << c.roll_deg << " basis=" << basis << " axis=y";
+      EXPECT_NEAR(gui_r[basis * 4 + 2], p[2], 1e-4f)
+          << "az=" << c.az_deg << " zen=" << c.zenith_deg << " roll=" << c.roll_deg << " basis=" << basis << " axis=z";
+    }
+  }
+}
+
+// --- DefaultPreviewRotation chain-based contracts (mesh-frame outputs) ---
+// The output is in the GUI mesh frame (swap-wrapped from the core chain
+// formula). The c-axis in the mesh frame is mesh +y (post Y-Z swap), so
+// these contracts apply the rotation to (0, 1, 0).
+
+TEST(DefaultPreviewRotation, ColumnPutsCAxisHorizontal) {
+  // kColumn typical: (az=0°, zenith=90°, roll=0°). After chain + swap wrap,
+  // mesh +y (c-axis) → mesh +x (horizontal in screen frame). Concretely,
+  // y-component of the rotated c-axis ≈ 0 (no longer vertical).
+  float r[16] = { 0 };
+  DefaultPreviewRotation(AxisPreset::kColumn, nullptr, r);
+  auto v = Mul3(r, 0.0f, 1.0f, 0.0f);
+  EXPECT_NEAR(v[1], 0.0f, 1e-5f) << "Column c-axis must lie horizontal (mesh +y component)";
+  EXPECT_NEAR(std::fabs(v[0]) + std::fabs(v[2]), 1.0f, 1e-5f) << "Column c-axis magnitude in horizontal plane";
+}
+
+TEST(DefaultPreviewRotation, PlateKeepsCAxisVertical) {
+  // kPlate typical: (az=0°, zenith=0°, roll=0°). After chain + swap wrap,
+  // mesh +y (c-axis) stays at mesh +y (vertical).
+  float r[16] = { 0 };
+  DefaultPreviewRotation(AxisPreset::kPlate, nullptr, r);
+  auto v = Mul3(r, 0.0f, 1.0f, 0.0f);
+  EXPECT_NEAR(v[1], 1.0f, 1e-5f) << "Plate c-axis must remain vertical (mesh +y)";
+}
+
+TEST(DefaultPreviewRotation, ParrySharesColumnDefault) {
+  // kColumn and kParry intentionally share the same typical chain parameters
+  // (zenith=90°, az=0°, roll=0°) — see kPresetTypicalChain comment.
+  float r_col[16] = { 0 };
+  float r_par[16] = { 0 };
+  DefaultPreviewRotation(AxisPreset::kColumn, nullptr, r_col);
+  DefaultPreviewRotation(AxisPreset::kParry, nullptr, r_par);
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_FLOAT_EQ(r_col[i], r_par[i]) << "index " << i;
+  }
+}
+
+TEST(DefaultPreviewRotation, LowitzCAxisAt60Degrees) {
+  // kLowitz typical: (az=0°, zenith=60°, roll=0°). Mesh +y (c-axis) tilts 60°
+  // toward horizontal. After swap wrap, the rotation acting on (0,1,0)
+  // produces a vector in the (mesh +x, mesh +y) plane with y = cos(60°) = 0.5.
+  float r[16] = { 0 };
+  DefaultPreviewRotation(AxisPreset::kLowitz, nullptr, r);
+  auto v = Mul3(r, 0.0f, 1.0f, 0.0f);
+  EXPECT_NEAR(v[1], std::cos(60.0f * kPi / 180.0f), 1e-5f);
+  // Magnitude in horizontal plane (|x|^2 + |z|^2) ≈ sin(60°)^2 = 0.75.
+  EXPECT_NEAR(v[0] * v[0] + v[2] * v[2], std::sin(60.0f * kPi / 180.0f) * std::sin(60.0f * kPi / 180.0f), 1e-5f);
+}
+
+// kRandom + nullptr-params and kCustom + nullptr-params both fall back to the
+// isometric sentinel — verify they produce identical output (single source).
+TEST(DefaultPreviewRotation, RandomEqualsCustomIsometricForNullParams) {
+  float r_rand[16] = { 0 };
+  float r_cust[16] = { 0 };
+  DefaultPreviewRotation(AxisPreset::kRandom, nullptr, r_rand);
+  DefaultPreviewRotation(AxisPreset::kCustom, nullptr, r_cust);
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_FLOAT_EQ(r_rand[i], r_cust[i]) << "index " << i;
+  }
+}
+
+TEST(DefaultPreviewRotation, IsometricSentinelMapsZUnitWithXComponent) {
+  // Sentinel: Ry(+25°) · Rx(+35°) applied to (0,0,1) =
+  //   (sin(25°)·cos(35°), -sin(35°), cos(25°)·cos(35°)).
+  float r[16] = { 0 };
+  DefaultPreviewRotation(AxisPreset::kRandom, nullptr, r);
+  auto v = Mul3(r, 0.0f, 0.0f, 1.0f);
+  float rad_x = 35.0f * kPi / 180.0f;
+  float rad_y = 25.0f * kPi / 180.0f;
+  EXPECT_NEAR(v[0], std::sin(rad_y) * std::cos(rad_x), 1e-5f);
+  EXPECT_NEAR(v[1], -std::sin(rad_x), 1e-5f);
+  EXPECT_NEAR(v[2], std::cos(rad_y) * std::cos(rad_x), 1e-5f);
+  EXPECT_GT(std::fabs(v[0]), 0.1f);
+}
+
+// --- kCustom with live params: must match chain-derived output ---
+
+TEST(DefaultPreviewRotation, CustomWithMeansEquivalentToChain) {
+  // Construct AxisDist with mean=(zenith=90°, azimuth=0°, roll=0°) — the kColumn
+  // typical. Output must match kColumn (chain-based).
+  AxisDist params[3] = {
+    { AxisDistType::kGauss, 90.0f, 1.0f },     // zenith
+    { AxisDistType::kUniform, 0.0f, 360.0f },  // azimuth
+    { AxisDistType::kUniform, 0.0f, 360.0f },  // roll
+  };
+  float r_custom[16] = { 0 };
+  float r_column[16] = { 0 };
+  DefaultPreviewRotation(AxisPreset::kCustom, params, r_custom);
+  DefaultPreviewRotation(AxisPreset::kColumn, nullptr, r_column);
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_FLOAT_EQ(r_custom[i], r_column[i]) << "index " << i;
+  }
+}
+
+// Helper: apply the GUI mesh swap wrap (S · M · S^T) so test expectations can
+// build the chain-formula output and convert it to the mesh frame the way
+// DefaultPreviewRotation does internally.
+void ExpectMeshWrapEquals(const float core[16], const float mesh[16], float tol = 1e-5f) {
+  // Spell out the conjugation so this test is independent of any helper in
+  // axis_presets.hpp (a future bug there would be masked otherwise).
+  float expected[16] = { 0 };
+  expected[0] = core[0];
+  expected[1] = core[2];
+  expected[2] = -core[1];
+  expected[4] = core[8];
+  expected[5] = core[10];
+  expected[6] = -core[9];
+  expected[8] = -core[4];
+  expected[9] = -core[6];
+  expected[10] = core[5];
+  expected[15] = 1.0f;
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_NEAR(mesh[i], expected[i], tol) << "index " << i;
+  }
+}
+
+TEST(DefaultPreviewRotation, CustomWithCompositeMeansMatchesSwapWrappedChain) {
+  // mean=(zenith=30°, azimuth=45°, roll=60°). Output must equal the swap-wrapped
+  // chain output, since DefaultPreviewRotation produces mesh-frame rotations.
+  AxisDist params[3] = {
+    { AxisDistType::kGauss, 30.0f, 1.0f },
+    { AxisDistType::kUniform, 45.0f, 1.0f },
+    { AxisDistType::kGauss, 60.0f, 1.0f },
+  };
+  float r_custom[16] = { 0 };
+  float r_chain_core[16] = { 0 };
+  DefaultPreviewRotation(AxisPreset::kCustom, params, r_custom);
+  ChainRotationToMatrix(45.0f, 30.0f, 60.0f, r_chain_core);
+  ExpectMeshWrapEquals(r_chain_core, r_custom);
+}
+
+// Modal/thumbnail same-source contract: both code paths build the same params[3]
+// from the same (zenith, azimuth, roll) AxisDist trio and call the same function.
+// This test simulates the thumbnail_cache.cpp construction order
+// (params[0]=zenith, [1]=azimuth, [2]=roll) and verifies it matches the
+// swap-wrapped chain formula directly — covering the field-order correctness
+// of the construction site (per review-03 Suggestion 2).
+TEST(DefaultPreviewRotation, ThumbnailFieldOrderConstructionContract) {
+  AxisDist zenith_dist{ AxisDistType::kGauss, 25.0f, 1.0f };
+  AxisDist az_dist{ AxisDistType::kUniform, 100.0f, 1.0f };
+  AxisDist roll_dist{ AxisDistType::kGauss, 50.0f, 1.0f };
+  // Mirror thumbnail_cache.cpp construction: params[0]=zenith, [1]=azimuth, [2]=roll.
+  AxisDist params[3] = { zenith_dist, az_dist, roll_dist };
+  float r_via_params[16] = { 0 };
+  float r_via_chain_core[16] = { 0 };
+  DefaultPreviewRotation(AxisPreset::kCustom, params, r_via_params);
+  ChainRotationToMatrix(az_dist.mean, zenith_dist.mean, roll_dist.mean, r_via_chain_core);
+  ExpectMeshWrapEquals(r_via_chain_core, r_via_params);
 }
 
 }  // namespace

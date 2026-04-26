@@ -1,6 +1,7 @@
 #ifndef LUMICE_GUI_CRYSTAL_PREVIEW_HPP
 #define LUMICE_GUI_CRYSTAL_PREVIEW_HPP
 
+#include "gui/axis_presets.hpp"
 #include "include/lumice.h"
 
 namespace lumice::gui {
@@ -15,7 +16,23 @@ extern int g_crystal_mesh_hash;
 
 // Crystal preview helpers
 int CrystalParamHash(const CrystalConfig& c);
+// Legacy GUI initialization path only; always returns Rx(20°). Any new
+// reset-view logic should use the two-argument overload below with preset +
+// params. Used by main GUI startup and the test harness where no axis preset /
+// distribution params are in scope.
 void ResetCrystalView();
+// Reset to the default view derived from the given axis preset and current
+// distribution params (zenith / azimuth / roll layout matches g_axis_buf in
+// edit_modals.cpp: params[0]=zenith, [1]=azimuth, [2]=roll). The matrix is
+// produced by DefaultPreviewRotation (single source of truth shared with the
+// entry-card thumbnail). Pass nullptr for params to fall back to the
+// preset-typical or isometric sentinel default (only meaningful for kCustom).
+void ResetCrystalView(AxisPreset preset, const AxisDist params[3]);
+// Reset to the default view derived from a CrystalConfig (classifies axis
+// preset internally + builds params). Used by main.cpp startup, DoNew, and
+// DoOpen so the modal preview's initial view always matches what the outer
+// entry-card thumbnail shows for the current entry's axis distribution.
+void ResetCrystalViewToCrystal(const CrystalConfig& cr);
 void ApplyTrackballRotation(float dx, float dy);
 
 // Build crystal mesh data from config: JSON construction, LUMICE_GetCrystalMesh, Y-Z swap, AABB normalization.

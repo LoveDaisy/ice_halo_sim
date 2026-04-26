@@ -16,6 +16,7 @@ add_executable(LumiceGUITests
     test_gui_perf.cpp
     test_gui_overlay_labels.cpp
     test_gui_face_number_overlay.cpp
+    test_gui_crystal_renderer.cpp
     test_screenshot.cpp
     ${IMGUI_TE_DIR}/imgui_te_engine.cpp
     ${IMGUI_TE_DIR}/imgui_te_context.cpp

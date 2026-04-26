@@ -145,5 +145,6 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine);
 void RegisterP2InteractionModalTests(ImGuiTestEngine* engine);
 void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
+void RegisterCrystalRendererTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP
