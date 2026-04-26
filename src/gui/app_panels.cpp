@@ -642,9 +642,16 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     if (g_state.show_horizon || g_state.show_grid || g_state.show_sun_circles) {
       OverlayLabelInput label_input = BuildOverlayLabelInput(g_state, rc);
 
-      // Convert viewport from framebuffer pixels to ImGui logical screen coordinates
-      float vp_sx = panel_x;
-      float vp_sy = kTopBarHeight;
+      // Viewport rect in absolute OS screen coordinates. DrawOverlayLabels emits to
+      // ImGui::GetWindowDrawList(), and with ImGuiConfigFlags_ViewportsEnable (gui-polish-v15)
+      // draw list coordinates are absolute screen space, not relative to the host GLFW window.
+      // Anchor (panel_x, kTopBarHeight) through MainVpPos() so labels stay glued to the
+      // preview viewport when the host window is dragged or sits on a non-primary monitor.
+      // Note: the export_fbo_renderer.cpp path passes (0, 0, w, h) intentionally — it owns a
+      // self-allocated ImDrawList targeting an off-screen FBO and must NOT add this offset.
+      ImVec2 vp_origin = MainVpPos(panel_x, kTopBarHeight);
+      float vp_sx = vp_origin.x;
+      float vp_sy = vp_origin.y;
       float vp_sw = panel_width;
       float vp_sh = preview_height;
 

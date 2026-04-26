@@ -2,6 +2,7 @@
 // Direct (non-interactive) tests: instantiate OverlayLabelInput, call
 // ComputeOverlayLabels, inspect result labels.
 
+#include <cmath>
 #include <vector>
 
 #include "gui/overlay_labels.hpp"
@@ -244,6 +245,44 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       IM_CHECK(g_capture.begin_succeeded);
       IM_CHECK_GT(g_capture.wnd_after, g_capture.wnd_before);
       IM_CHECK_EQ(g_capture.fg_after, g_capture.fg_before);
+    };
+  }
+
+  // Test G: ComputeOverlayLabels output translates linearly with vp_screen origin.
+  // Contract: for any (vp_x, vp_y) offset, every emitted OverlayLabel.screen_x/y
+  // must shift by exactly that amount; label count and ordering stay identical.
+  // Regression for gui-polish-v16: caller in RenderPreviewPanel forgot to convert
+  // (panel_x, kTopBarHeight) through MainVpPos() into OS screen coords, which made
+  // overlay labels stick to the desktop origin instead of the host window when the
+  // window was dragged or sat on a non-primary monitor.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "screen_origin_translation_invariance");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(/*visible=*/2, /*lens=Fisheye Equidistant*/ 2, /*elev*/ 0.0f, /*az*/ 0.0f);
+
+      constexpr float kVpW = 800.0f;
+      constexpr float kVpH = 400.0f;
+      constexpr float kDx = 123.0f;
+      constexpr float kDy = 45.0f;
+      constexpr float kEps = 1e-3f;
+
+      std::vector<lumice::gui::OverlayLabel> labels_origin;
+      std::vector<lumice::gui::OverlayLabel> labels_shifted;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, kVpW, kVpH, labels_origin);
+      lumice::gui::ComputeOverlayLabels(in, kDx, kDy, kVpW, kVpH, labels_shifted);
+
+      IM_CHECK_GT(static_cast<int>(labels_origin.size()), 0);
+      IM_CHECK_EQ(labels_shifted.size(), labels_origin.size());
+
+      for (size_t i = 0; i < labels_origin.size(); ++i) {
+        const auto& a = labels_origin[i];
+        const auto& b = labels_shifted[i];
+        IM_CHECK_EQ(a.text, b.text);
+        IM_CHECK_EQ(a.group, b.group);
+        IM_CHECK_LT(std::abs((b.screen_x - a.screen_x) - kDx), kEps);
+        IM_CHECK_LT(std::abs((b.screen_y - a.screen_y) - kDy), kEps);
+      }
     };
   }
 }

@@ -9,7 +9,12 @@
 namespace lumice::gui {
 
 struct OverlayLabel {
-  float screen_x, screen_y;  // ImGui logical screen coordinates
+  // Draw list screen coordinates. With ImGuiConfigFlags_ViewportsEnable enabled
+  // (gui-polish-v15), these are absolute OS screen coordinates; the caller of
+  // ComputeOverlayLabels owns the conversion from window-local to screen space.
+  // For self-owned ImDrawList targets (e.g. export_fbo_renderer rendering to an
+  // off-screen FBO), the caller passes a (0, 0) origin and these stay in FBO space.
+  float screen_x, screen_y;
   std::string text;
   ImU32 color;
   bool has_bg = false;  // draw semi-transparent black background behind text
@@ -29,7 +34,12 @@ struct OverlayLabelInput {
 };
 
 // Compute labels at viewport edges where overlay lines cross.
-// vp_screen_* are in ImGui logical (window) coordinates.
+// vp_screen_* are in the same coordinate space as the target ImDrawList:
+//   - For ImGui::GetWindowDrawList() under ImGuiConfigFlags_ViewportsEnable,
+//     this is absolute OS screen space (caller must add vp->Pos offset).
+//   - For self-owned ImDrawList targets (off-screen FBO), this is FBO-local
+//     space starting at (0, 0).
+// Output OverlayLabel.screen_x/y inherit this same coordinate space.
 void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, float vp_screen_y, float vp_screen_w,
                           float vp_screen_h, std::vector<OverlayLabel>& out);
 
