@@ -2,9 +2,12 @@
 // Direct (non-interactive) tests: instantiate OverlayLabelInput, call
 // ComputeOverlayLabels, inspect result labels.
 
+#include <cmath>
 #include <vector>
 
+#include "gui/gui_constants.hpp"
 #include "gui/overlay_labels.hpp"
+#include "gui/preview_renderer.hpp"
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -69,6 +72,60 @@ int CountGridLabels(const std::vector<lumice::gui::OverlayLabel>& labels) {
       ++n;
   }
   return n;
+}
+
+// Regression test for task-orthographic-followup Step 2 dispatch: at the same
+// view config, single orthographic (lens=8) and Fisheye Equidistant (lens=2)
+// must produce comparably-sized grid label sets. Pre-fix, lens=8 fell to the
+// RectangularInv fallback in PixelToWorldDir, producing a label set with
+// completely different geometry (and the symptomatic upside-down latitude
+// labels reported in issue subpoint 4). The orthographic / equidistant
+// fisheye pair shares the same projection topology (single disc, view-matrix
+// applied), so their label counts on the same viewport differ only in the
+// radial mapping detail — well within ±50% of each other in practice.
+//
+// Note (dual orthographic, lens=9): a parallel test for lens=9 is omitted
+// intentionally. Dual fisheye / orthographic projections always size their
+// twin discs to fit exactly in the viewport (circle_radius = min(W/2, H)/2),
+// so viewport edges are at most tangent to the discs — never a chord — and
+// ComputeOverlayLabels' edge-sampling loop yields no valid sample pairs for
+// any lens=9 configuration. The fix for lens=9 in PixelToWorldDir uses the
+// same dispatch pattern as lens=8 (FisheyeInv vs DualFisheyeInv with type=3),
+// so the lens=8 regression below is sufficient coverage of the dispatch.
+void SingleOrthoLatTestFunc(ImGuiTestContext* ctx) {
+  IM_UNUSED(ctx);
+  constexpr float kVpX = 0.0f;
+  constexpr float kVpY = 0.0f;
+  constexpr float kVpW = 200.0f;
+  constexpr float kVpH = 200.0f;
+
+  auto in_ortho = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeOrthographic,
+                               /*elev*/ 0.0f, /*az*/ 0.0f);
+  in_ortho.fov = 60.0f;
+  std::vector<lumice::gui::OverlayLabel> labels_ortho;
+  lumice::gui::ComputeOverlayLabels(in_ortho, kVpX, kVpY, kVpW, kVpH, labels_ortho);
+
+  auto in_fisheye = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeEquidist,
+                                 /*elev*/ 0.0f, /*az*/ 0.0f);
+  in_fisheye.fov = 60.0f;
+  std::vector<lumice::gui::OverlayLabel> labels_fisheye;
+  lumice::gui::ComputeOverlayLabels(in_fisheye, kVpX, kVpY, kVpW, kVpH, labels_fisheye);
+
+  int n_ortho = CountGridLabels(labels_ortho);
+  int n_fisheye = CountGridLabels(labels_fisheye);
+
+  // Both must be non-zero (sanity).
+  IM_CHECK_GT(n_ortho, 0);
+  IM_CHECK_GT(n_fisheye, 0);
+
+  // The two single-fisheye-class projections differ only in radial mapping —
+  // edge-sampling crossings should cluster at similar counts. Ratio guard
+  // catches regressions like the pre-fix Rectangular fallback (which would
+  // give a count off by a large factor from the fisheye reference).
+  // Pick a generous ±50% band to absorb radial-mapping nonlinearities while
+  // still failing under a wholly different projection.
+  IM_CHECK_GE(n_ortho * 2, n_fisheye);  // n_ortho >= n_fisheye / 2
+  IM_CHECK_LE(n_ortho, n_fisheye * 2);  // n_ortho <= n_fisheye * 2
 }
 
 }  // namespace
@@ -228,7 +285,8 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       g_capture.begin_succeeded = ok;
       if (ok) {
         g_capture.wnd_before = ImGui::GetWindowDrawList()->VtxBuffer.Size;
-        lumice::gui::DrawOverlayLabels(labels);
+        // Mock viewport rect aligned with the host window size set above.
+        lumice::gui::DrawOverlayLabels(labels, 0.0f, 0.0f, 200.0f, 100.0f);
         g_capture.wnd_after = ImGui::GetWindowDrawList()->VtxBuffer.Size;
       }
       ImGui::End();
@@ -244,6 +302,404 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       IM_CHECK(g_capture.begin_succeeded);
       IM_CHECK_GT(g_capture.wnd_after, g_capture.wnd_before);
       IM_CHECK_EQ(g_capture.fg_after, g_capture.fg_before);
+    };
+  }
+
+  // Test G: ComputeOverlayLabels output translates linearly with vp_screen origin.
+  // Contract: for any (vp_x, vp_y) offset, every emitted OverlayLabel.screen_x/y
+  // must shift by exactly that amount; label count and ordering stay identical.
+  // Regression for gui-polish-v16: caller in RenderPreviewPanel forgot to convert
+  // (panel_x, kTopBarHeight) through MainVpPos() into OS screen coords, which made
+  // overlay labels stick to the desktop origin instead of the host window when the
+  // window was dragged or sat on a non-primary monitor.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "screen_origin_translation_invariance");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(/*visible=*/2, /*lens=Fisheye Equidistant*/ 2, /*elev*/ 0.0f, /*az*/ 0.0f);
+
+      constexpr float kVpW = 800.0f;
+      constexpr float kVpH = 400.0f;
+      constexpr float kDx = 123.0f;
+      constexpr float kDy = 45.0f;
+      constexpr float kEps = 1e-3f;
+
+      std::vector<lumice::gui::OverlayLabel> labels_origin;
+      std::vector<lumice::gui::OverlayLabel> labels_shifted;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, kVpW, kVpH, labels_origin);
+      lumice::gui::ComputeOverlayLabels(in, kDx, kDy, kVpW, kVpH, labels_shifted);
+
+      IM_CHECK_GT(static_cast<int>(labels_origin.size()), 0);
+      IM_CHECK_EQ(labels_shifted.size(), labels_origin.size());
+
+      for (size_t i = 0; i < labels_origin.size(); ++i) {
+        const auto& a = labels_origin[i];
+        const auto& b = labels_shifted[i];
+        IM_CHECK_EQ(a.text, b.text);
+        IM_CHECK_EQ(a.group, b.group);
+        IM_CHECK_LT(std::abs((b.screen_x - a.screen_x) - kDx), kEps);
+        IM_CHECK_LT(std::abs((b.screen_y - a.screen_y) - kDy), kEps);
+      }
+    };
+  }
+
+  // Test: single orthographic dispatch — see SingleOrthoLatTestFunc above.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "single_orthographic_dispatch_matches_fisheye");
+    t->TestFunc = SingleOrthoLatTestFunc;
+  }
+
+  // Pure-function contract tests for the orthographic dispatch in
+  // detail::PixelToWorldDirForTesting (added in task-orthographic-followup
+  // Step 2). These pin the radial mapping at known pixels so a future
+  // regression in FisheyeInv(type=3) / DualFisheyeInv(type=3) (e.g. asin
+  // input sign flipped, or the type=3 branch silently aliased back to
+  // stereographic) breaks the test rather than silently mis-orienting
+  // labels at runtime.
+
+  // Single orthographic at fov=180° has the analytic property that
+  // r_norm = sin(θ), i.e. the disc edge (r_norm=1) maps to θ=90°.
+  // Center pixel (px=py=0) → θ=0 → fisheyeInverse returns view dir (0, 0, -1)
+  // (camera-space "looking forward"). With elev=0,az=0,roll=0 the view
+  // matrix maps view (0, 0, -1) to world (-1, 0, 0): world forward.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "pixel_to_world_dir_single_ortho_center");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      float view[9];
+      lumice::gui::BuildViewMatrix(/*elev*/ 0.0f, /*az*/ 0.0f, /*roll*/ 0.0f, view);
+
+      float wx = 0;
+      float wy = 0;
+      float wz = 0;
+      bool valid = false;
+      lumice::gui::detail::PixelToWorldDirForTesting(0.0f, 0.0f, 200.0f, 200.0f,
+                                                     lumice::gui::kLensTypeFisheyeOrthographic,
+                                                     /*fov*/ 180.0f, view, &wx, &wy, &wz, &valid);
+
+      IM_CHECK(valid);
+      // World forward at (elev=0, az=0) is -x.
+      IM_CHECK_LT(std::abs(wx - (-1.0f)), 1e-4f);
+      IM_CHECK_LT(std::abs(wy), 1e-4f);
+      IM_CHECK_LT(std::abs(wz), 1e-4f);
+    };
+  }
+
+  // Top-edge midpoint at fov=180°: r_norm=1 → θ=π/2. With phi=π/2 (py>0),
+  // view dir = (0, 1, 0) which the (elev=0,az=0,roll=0) view matrix maps to
+  // world dir (0, 0, -1). altitude = asin(-wz) = asin(1) = 90° — the zenith.
+  // This is the load-bearing assertion for "上半 = 正纬度": the highest
+  // possible altitude reachable in single orthographic must surface at the
+  // top of the viewport. Pre-fix RectangularInv mapped (0, hh) to lat=-π/2
+  // (negative), the precise inverse of this expectation.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "pixel_to_world_dir_single_ortho_top_zenith");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      float view[9];
+      lumice::gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);
+
+      float wx = 0;
+      float wy = 0;
+      float wz = 0;
+      bool valid = false;
+      // py = +100 = +hh on a 200x200 viewport (shader convention: +py is image up).
+      lumice::gui::detail::PixelToWorldDirForTesting(0.0f, 100.0f, 200.0f, 200.0f,
+                                                     lumice::gui::kLensTypeFisheyeOrthographic,
+                                                     /*fov*/ 180.0f, view, &wx, &wy, &wz, &valid);
+
+      IM_CHECK(valid);
+      IM_CHECK_LT(std::abs(wx), 1e-3f);
+      IM_CHECK_LT(std::abs(wy), 1e-3f);
+      // -wz = sin(altitude); altitude=+90° → -wz = +1 → wz = -1.
+      IM_CHECK_LT(std::abs(wz - (-1.0f)), 1e-3f);
+    };
+  }
+
+  // Dual orthographic at the upper-hemisphere disc center
+  // (px=-circle_radius, py=0): use_r=0, theta=0, world dir = (0, 0, -1)
+  // (zenith). Same load-bearing assertion as the single ortho top-zenith
+  // test, but exercises DualFisheyeInv(type=3) which has no other coverage
+  // (ComputeOverlayLabels' edge sampling can't reach lens=9 — see notes
+  // in SingleOrthoLatTestFunc).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "pixel_to_world_dir_dual_ortho_left_disc_center");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // view_matrix is unused for lens=9 (no view transform). Use identity-ish
+      // value so any accidental application would surface in the assertions.
+      float view[9];
+      lumice::gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);
+
+      // Viewport 200x200 → short_res = min(100, 200) = 100, circle_radius = 50.
+      // Left circle center is at (-circle_radius, 0) = (-50, 0) in pixel coords.
+      float wx = 0;
+      float wy = 0;
+      float wz = 0;
+      bool valid = false;
+      lumice::gui::detail::PixelToWorldDirForTesting(-50.0f, 0.0f, 200.0f, 200.0f,
+                                                     lumice::gui::kLensTypeDualFisheyeOrthographic,
+                                                     /*fov*/ 170.0f, view, &wx, &wy, &wz, &valid);
+
+      IM_CHECK(valid);
+      IM_CHECK_LT(std::abs(wx), 1e-3f);
+      IM_CHECK_LT(std::abs(wy), 1e-3f);
+      // Left disc center → upper-hemisphere zenith → wz = -1.
+      IM_CHECK_LT(std::abs(wz - (-1.0f)), 1e-3f);
+    };
+  }
+
+  // Dual orthographic right disc center → lower-hemisphere zenith (z = +1).
+  // Symmetric pair to the left-disc test; failing this would indicate the
+  // in_left/in_right branch in DualFisheyeInv is mis-attributing samples.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "pixel_to_world_dir_dual_ortho_right_disc_center");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      float view[9];
+      lumice::gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);
+
+      float wx = 0;
+      float wy = 0;
+      float wz = 0;
+      bool valid = false;
+      lumice::gui::detail::PixelToWorldDirForTesting(50.0f, 0.0f, 200.0f, 200.0f,
+                                                     lumice::gui::kLensTypeDualFisheyeOrthographic,
+                                                     /*fov*/ 170.0f, view, &wx, &wy, &wz, &valid);
+
+      IM_CHECK(valid);
+      IM_CHECK_LT(std::abs(wx), 1e-3f);
+      IM_CHECK_LT(std::abs(wy), 1e-3f);
+      // Right disc center → lower-hemisphere zenith → wz = +1.
+      IM_CHECK_LT(std::abs(wz - 1.0f), 1e-3f);
+    };
+  }
+
+  // detail::ClampLabelPosToViewport contract — pure function tests for the
+  // viewport-inset behaviour added in task-overlay-label-edge-inset Step 1.
+  // Pin all four edges and the "no-op when label fits centred" path.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_left_edge");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Viewport: (10, 20, 200, 100). Label glyph 30×14 placed at pos.x=5
+      // (i.e. would extend from x=5 to x=35 — overlaps left edge x=10).
+      // Expected: clamped to vp_x + 2 = 12.
+      ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(5.0f, 50.0f), ImVec2(30.0f, 14.0f), 10.0f,
+                                                                    20.0f, 200.0f, 100.0f);
+      IM_CHECK_EQ(clamped.x, 12.0f);
+      IM_CHECK_EQ(clamped.y, 50.0f);  // y stayed put (50 inside [20+2, 20+100-14-2] = [22, 104])
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_right_edge");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Label at pos.x=195 with text width 30 would extend to x=225, past
+      // vp.x + vp.w = 210. Clamp to 210 - 30 - 2 = 178.
+      ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(195.0f, 50.0f), ImVec2(30.0f, 14.0f), 10.0f,
+                                                                    20.0f, 200.0f, 100.0f);
+      IM_CHECK_EQ(clamped.x, 178.0f);
+      IM_CHECK_EQ(clamped.y, 50.0f);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_top_edge");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Label at pos.y=15 (above vp_y=20). Clamp to vp_y + 2 = 22.
+      ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(50.0f, 15.0f), ImVec2(30.0f, 14.0f), 10.0f,
+                                                                    20.0f, 200.0f, 100.0f);
+      IM_CHECK_EQ(clamped.x, 50.0f);
+      IM_CHECK_EQ(clamped.y, 22.0f);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_bottom_edge");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Label at pos.y=110. Bottom edge: vp_y + vp_h - text_h - 2 = 20 + 100 - 14 - 2 = 104.
+      ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(50.0f, 110.0f), ImVec2(30.0f, 14.0f), 10.0f,
+                                                                    20.0f, 200.0f, 100.0f);
+      IM_CHECK_EQ(clamped.x, 50.0f);
+      IM_CHECK_EQ(clamped.y, 104.0f);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_no_clamp_when_inside");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Label fully inside viewport — pos returned unchanged.
+      ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(50.0f, 50.0f), ImVec2(30.0f, 14.0f), 10.0f,
+                                                                    20.0f, 200.0f, 100.0f);
+      IM_CHECK_EQ(clamped.x, 50.0f);
+      IM_CHECK_EQ(clamped.y, 50.0f);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_viewport_too_narrow");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // x fallback: viewport width 20 cannot fit text width 30 + 2×2 inset
+      // (`vp_w > text_size.x + 2×kViewportInsetPx` is false), so x is left
+      // untouched to preserve the legacy "centered on anchor" rendering.
+      // y is processed normally (vp_h=100 ≫ text_h+4=18) but happens to need
+      // no clamp here (pos.y=50 already inside [22, 104]).
+      ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(5.0f, 50.0f), ImVec2(30.0f, 14.0f), 10.0f,
+                                                                    20.0f, 20.0f, 100.0f);
+      IM_CHECK_EQ(clamped.x, 5.0f);  // unchanged
+      IM_CHECK_EQ(clamped.y, 50.0f);
+    };
+  }
+
+  // Hemisphere boundary inset — verify the inward-shifted boundary curve
+  // produces world directions on the visible side. Re-implement the equator
+  // / front-half lambdas at test level (same formulas as overlay_labels.cpp:540-)
+  // and assert the inset direction. This avoids the "label text source
+  // confusion" problem (latitude vs azimuth same %.0f° format) that ruled
+  // out a label-text-based regression test in the plan.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "hemisphere_boundary_inset_upper_pushes_negative_z");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Mirror the lambda in overlay_labels.cpp: equator inset for visible=upper
+      // shifts wz by -sin(3°) before renormalisation, then renormalises.
+      constexpr float kBoundaryInsetDeg = 3.0f;
+      constexpr float kPi = 3.14159265f;
+      constexpr float kDeg2Rad = kPi / 180.0f;
+      float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
+
+      // For visible=upper, every sample on the offset equator must have wz < 0
+      // (altitude = asin(-wz) > 0, i.e. inside upper hemisphere).
+      // Sample 8 evenly-spaced t values along the boundary curve.
+      for (int i = 0; i < 8; ++i) {
+        float t = i * (2.0f * kPi / 8.0f);
+        float az = -kPi + t;
+        float wx = -std::cos(az);
+        float wy = -std::sin(az);
+        float wz = -1.0f * boundary_offset;
+        float len = std::sqrt(wx * wx + wy * wy + wz * wz);
+        wx /= len;
+        wy /= len;
+        wz /= len;
+        IM_CHECK_LT_NO_RET(wz, 0.0f);  // upper-hemisphere visible side
+        // Magnitude check: altitude should be ≈ 3° (asin(0.0523/len) ≈ 3°).
+        float altitude_deg = std::asin(-wz) * 180.0f / kPi;
+        IM_CHECK_GT_NO_RET(altitude_deg, 2.5f);
+        IM_CHECK_LT_NO_RET(altitude_deg, 3.5f);
+      }
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "hemisphere_boundary_inset_lower_pushes_positive_z");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Symmetric pair of upper test — visible=lower shifts wz by +sin(3°).
+      constexpr float kBoundaryInsetDeg = 3.0f;
+      constexpr float kPi = 3.14159265f;
+      constexpr float kDeg2Rad = kPi / 180.0f;
+      float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
+
+      for (int i = 0; i < 8; ++i) {
+        float t = i * (2.0f * kPi / 8.0f);
+        float az = -kPi + t;
+        float wx = -std::cos(az);
+        float wy = -std::sin(az);
+        float wz = +1.0f * boundary_offset;
+        float len = std::sqrt(wx * wx + wy * wy + wz * wz);
+        wx /= len;
+        wy /= len;
+        wz /= len;
+        IM_CHECK_GT_NO_RET(wz, 0.0f);  // lower-hemisphere visible side
+        float altitude_deg = std::asin(-wz) * 180.0f / kPi;
+        IM_CHECK_LT_NO_RET(altitude_deg, -2.5f);
+        IM_CHECK_GT_NO_RET(altitude_deg, -3.5f);
+      }
+    };
+  }
+
+  // Smoke test for the visible=front boundary inset path. The front-half
+  // boundary in overlay_labels.cpp is a great circle perpendicular to forward
+  // (col2 = -forward), pushed by `-boundary_offset · col2` to land inside the
+  // visible front hemisphere. With identity-ish view matrix from
+  // BuildViewMatrix(elev=0, az=0, roll=0), col2 = (1, 0, 0) → forward = -x →
+  // pushing along -col2 means subtracting (boundary_offset, 0, 0). Replicate
+  // the lambda formula and assert dot(world, col2) < 0 (i.e. world has
+  // strictly more `-forward` content, i.e. lies on the visible front side).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "hemisphere_boundary_inset_front_pushes_along_forward");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      float view[9];
+      lumice::gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);
+
+      constexpr float kBoundaryInsetDeg = 3.0f;
+      constexpr float kPi = 3.14159265f;
+      constexpr float kDeg2Rad = kPi / 180.0f;
+      float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
+
+      for (int i = 0; i < 8; ++i) {
+        float t_param = i * (2.0f * kPi / 8.0f);
+        float c = std::cos(t_param);
+        float s = std::sin(t_param);
+        float wx = c * view[0] + s * view[3] - boundary_offset * view[6];
+        float wy = c * view[1] + s * view[4] - boundary_offset * view[7];
+        float wz = c * view[2] + s * view[5] - boundary_offset * view[8];
+        float len = std::sqrt(wx * wx + wy * wy + wz * wz);
+        wx /= len;
+        wy /= len;
+        wz /= len;
+        // dot(world, col2) must be < 0 so the sample sits on the visible
+        // front side (shader cull: dot(world, col2) > 0 → invisible).
+        float dot_col2 = wx * view[6] + wy * view[7] + wz * view[8];
+        IM_CHECK_LT_NO_RET(dot_col2, 0.0f);
+      }
+    };
+  }
+
+  // Single orthographic must emit sun-circle interior labels for circles that
+  // don't intersect the viewport edge — same coverage as single fisheye.
+  // Pre-fix, the interior-label block in ComputeOverlayLabels was gated to
+  // `lens_type 0-3`, leaving lens=8 with no interior labels and a silent UX
+  // regression discovered during scrum-gui-polish-v16 manual verification.
+  // Post-fix uses `!LensIsFullSky(...)` and lens=8 falls through to the same
+  // path as lens=2.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "single_orthographic_sun_circle_interior_labels");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Sun directly forward (camera-forward = -x at elev=0,az=0). A small
+      // 5° angular-distance circle centred on the sun stays well inside the
+      // orthographic disc, so all 4 interior labels at 0/90/180/270° around
+      // the circle should land within viewport bounds and survive cull.
+      // Note: existing MakeSunOnly callers use `const float sun_back[3]` /
+      // `const float angle` and so trigger the same clang-tidy
+      // "Invalid case style for constant" warnings — kept here without
+      // `const` to avoid spreading the violation into new code (see
+      // learnings/code-quality.md "项目 clang-tidy ... 函数内 const 局部").
+      float sun_forward[3] = { -1.0f, 0.0f, 0.0f };
+      float angle = 5.0f;
+      auto in_ortho = MakeSunOnly(/*visible=Full*/ 2, sun_forward, &angle, 1);
+      in_ortho.lens_type = lumice::gui::kLensTypeFisheyeOrthographic;
+      in_ortho.fov = 60.0f;
+
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in_ortho, /*vp_x*/ 0.0f, /*vp_y*/ 0.0f,
+                                        /*vp_w*/ 200.0f, /*vp_h*/ 200.0f, labels);
+
+      // Expect ≥ 1 sun-circle label (the 4 placement points are evenly spaced;
+      // viewport-bounds + collision-avoidance may drop some, but at least one
+      // should survive for a small circle near the optical axis).
+      IM_CHECK_GT(CountSunCircleLabels(labels), 0);
+
+      // Cross-check: the same configuration with lens=Fisheye Equidistant
+      // (lens=2) should produce the same label count, since the two single-
+      // fisheye-class projections share the interior-label code path.
+      auto in_fisheye = in_ortho;
+      in_fisheye.lens_type = lumice::gui::kLensTypeFisheyeEquidist;
+      std::vector<lumice::gui::OverlayLabel> labels_fisheye;
+      lumice::gui::ComputeOverlayLabels(in_fisheye, 0.0f, 0.0f, 200.0f, 200.0f, labels_fisheye);
+      IM_CHECK_EQ(CountSunCircleLabels(labels), CountSunCircleLabels(labels_fisheye));
     };
   }
 }

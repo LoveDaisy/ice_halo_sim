@@ -50,12 +50,12 @@ Lumice 使用**数学习惯**的方位角约定：
 
 以下姿态是四个内置 axis preset 的特征姿态。每条描述固定**均值**朝向；实际采样朝向叠加 §7 中的 Gauss / Uniform 扰动。
 
-### 5.1 Plate（板状）
+### 5.1 Plate（片晶）
 
 - `N1` 指向世界 `+z`（c-axis 垂直）
 - 晶体绕 `N1`（即世界 `+z`）自由旋转
 
-### 5.2 Column（柱状）
+### 5.2 Column（柱晶）
 
 - `N1` 位于 `xy` 平面（c-axis 水平）
 - `N1` 绕世界 `+z` 旋转（由 `azimuth` 采样）
@@ -105,7 +105,7 @@ R(azimuth, zenith, roll) = Rz(azimuth − 180°) · Ry(−zenith) · Rz(roll)
 
 ## 8. azimuth − 180° 偏移
 
-azimuth 项的 `−180°` 偏移由局部帧选择 `N3 = +x` 决定。若不加偏移，Parry 默认 `(zenith = 90°, azimuth = 0°, roll = 0°)` 会把 `N3` 映射到世界 `−x` 而非 `+z`，与 §5.3 描述矛盾。
+azimuth 项的 `−180°` 偏移由局部坐标架选择 `N3 = +x` 决定。若不加偏移，Parry 默认 `(zenith = 90°, azimuth = 0°, roll = 0°)` 会把 `N3` 映射到世界 `−x` 而非 `+z`，与 §5.3 描述矛盾。
 
 Parry 默认下的数值验证：
 
@@ -127,7 +127,7 @@ N3_world = R · (1, 0, 0)
 
 ## 9. 相机视角约定
 
-相机帧独立于晶体帧，由 `render[].view` 下的 `(elevation, azimuth, roll)` 参数化。
+相机坐标架独立于晶体坐标架，由 `render[].view` 下的 `(elevation, azimuth, roll)` 参数化。
 
 ### 9.1 朝向
 

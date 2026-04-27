@@ -33,23 +33,29 @@ InvResult LinearInv(float px, float py, float res_x, float res_y, float half_fov
   return { px / len, py / len, -focal / len, true };
 }
 
-// Synced with shader fisheyeInverse (preview_renderer.cpp line ~167-185)
+// Synced with shader fisheyeInverse (preview_renderer.cpp:167-189). type:
+// 0=equal_area, 1=equidistant, 2=stereographic, 3=orthographic.
 InvResult FisheyeInv(float px, float py, float res_x, float res_y, float half_fov, int type) {
   float img_radius = std::min(res_x, res_y) * 0.5f;
   float r = std::sqrt(px * px + py * py) / img_radius;
 
   float theta;
-  if (type == 0) {  // equal area
+  if (type == 0) {  // equal area: r_norm = sin(θ/2) / sin(fov/4)
     float s = r * std::sin(half_fov * 0.5f);
     if (s > 1.0f)
       return { 0, 0, 0, false };
     theta = 2.0f * std::asin(s);
-  } else if (type == 1) {  // equidistant
+  } else if (type == 1) {  // equidistant: r_norm = θ / half_fov
     theta = r * half_fov;
     if (theta >= kPi)
       return { 0, 0, 0, false };
-  } else {  // stereographic
+  } else if (type == 2) {  // stereographic: r_norm = tan(θ/2) / tan(fov/4)
     theta = 2.0f * std::atan(r * std::tan(half_fov * 0.5f));
+  } else {  // orthographic (type == 3): r_norm = sin(θ) / sin(fov/2)
+    float s = r * std::sin(half_fov);
+    if (s > 1.0f)
+      return { 0, 0, 0, false };
+    theta = std::asin(s);
   }
 
   float phi = std::atan2(py, px);
@@ -78,15 +84,19 @@ InvResult DualFisheyeInv(float px, float py, float res_x, float res_y, int type)
 
   float half_pi = kPi * 0.5f;
   float theta;
-  if (type == 0) {
+  if (type == 0) {  // equal area
     float s = use_r * std::sin(half_pi * 0.5f);
     if (s > 1.0f)
       return { 0, 0, 0, false };
     theta = 2.0f * std::asin(s);
-  } else if (type == 1) {
+  } else if (type == 1) {  // equidistant
     theta = use_r * half_pi;
-  } else {
+  } else if (type == 2) {  // stereographic
     theta = 2.0f * std::atan(use_r * std::tan(half_pi * 0.5f));
+  } else {  // orthographic (type == 3): use_r is already normalised; θ = asin(use_r)
+    if (use_r > 1.0f)
+      return { 0, 0, 0, false };
+    theta = std::asin(use_r);
   }
 
   float phi = std::atan2(use_y, use_x);
@@ -112,24 +122,54 @@ InvResult RectangularInv(float px, float py, float res_x, float res_y) {
   return { -cl * std::cos(lon), -cl * std::sin(lon), -std::sin(lat), true };
 }
 
+// The two range-based dispatches below depend on consecutive enum values:
+// (lens_type - kLensTypeFisheyeEqualArea) must equal FisheyeInv's type
+// argument 0/1/2 across the [EqualArea, Equidist, Stereographic] band, and
+// likewise for the dual fisheye band. Pin the contract at compile time so
+// inserting a new fisheye enum mid-band is a build break, not a silent
+// label-position regression.
+static_assert(kLensTypeFisheyeEquidist - kLensTypeFisheyeEqualArea == 1,
+              "Fisheye enum band must remain consecutive (EqualArea→Equidist→Stereographic).");
+static_assert(kLensTypeFisheyeStereographic - kLensTypeFisheyeEqualArea == 2,
+              "Fisheye enum band must remain consecutive (EqualArea→Equidist→Stereographic).");
+static_assert(kLensTypeDualFisheyeEquidist - kLensTypeDualFisheyeEqualArea == 1,
+              "Dual fisheye enum band must remain consecutive.");
+static_assert(kLensTypeDualFisheyeStereographic - kLensTypeDualFisheyeEqualArea == 2,
+              "Dual fisheye enum band must remain consecutive.");
+
 // Compute world direction for a pixel offset from viewport center.
-// Synced with shader main() (preview_renderer.cpp line ~302-318).
+// Synced with shader main() (preview_renderer.cpp:317-332). Dispatch table:
+//   lens 0           → LinearInv               (view-transformed)
+//   lens 1-3         → FisheyeInv (type 0-2)   (view-transformed)
+//   lens 4-6         → DualFisheyeInv          (world-space, no view)
+//   lens 7           → RectangularInv          (world-space, no view)
+//   lens 8 (single ortho) → FisheyeInv(type=3) (view-transformed)
+//   lens 9 (dual ortho)   → DualFisheyeInv(3)  (world-space, no view)
 InvResult PixelToWorldDir(float px, float py, float res_x, float res_y, int lens_type, float fov,
                           const float view_matrix[9]) {
   float half_fov = fov * 0.5f * kDeg2Rad;
 
   InvResult r;
   bool needs_view = true;
-  if (lens_type == 0) {
+  if (lens_type == kLensTypeLinear) {
     r = LinearInv(px, py, res_x, res_y, half_fov);
-  } else if (lens_type >= 1 && lens_type <= 3) {
-    r = FisheyeInv(px, py, res_x, res_y, half_fov, lens_type - 1);
-  } else if (lens_type >= 4 && lens_type <= 6) {
-    r = DualFisheyeInv(px, py, res_x, res_y, lens_type - 4);
+  } else if (lens_type >= kLensTypeFisheyeEqualArea && lens_type <= kLensTypeFisheyeStereographic) {
+    r = FisheyeInv(px, py, res_x, res_y, half_fov, lens_type - kLensTypeFisheyeEqualArea);
+  } else if (lens_type >= kLensTypeDualFisheyeEqualArea && lens_type <= kLensTypeDualFisheyeStereographic) {
+    r = DualFisheyeInv(px, py, res_x, res_y, lens_type - kLensTypeDualFisheyeEqualArea);
     needs_view = false;
-  } else {
+  } else if (lens_type == kLensTypeRectangular) {
     r = RectangularInv(px, py, res_x, res_y);
     needs_view = false;
+  } else if (lens_type == kLensTypeFisheyeOrthographic) {
+    // Single orthographic: shader uses fisheyeInverse(type=3) and applies view matrix.
+    r = FisheyeInv(px, py, res_x, res_y, half_fov, 3);
+  } else if (lens_type == kLensTypeDualFisheyeOrthographic) {
+    // Dual orthographic: shader uses dualFisheyeInverse(type=3), no view matrix.
+    r = DualFisheyeInv(px, py, res_x, res_y, 3);
+    needs_view = false;
+  } else {
+    r = { 0, 0, 0, false };
   }
 
   if (!r.valid)
@@ -158,9 +198,14 @@ struct FwdResult {
 
 FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y, int lens_type, float fov,
                           const float view_matrix[9]) {
-  // For types 0-3: transform world→view by multiplying with transpose of view matrix
+  // View transform applies to all view-transformed lens types — i.e. NOT full-sky.
+  // This mirrors the inverse projection's classification: linear (0), single fisheye
+  // (1-3), and single orthographic (8) all carry view matrix; dual fisheye (4-6),
+  // rectangular (7), and dual orthographic (9) skip it. Reusing LensIsFullSky as the
+  // single source of truth keeps WorldDirToPixel coupled to the same lens-class
+  // policy as RenderRightPanel / RenderPreviewPanel.
   float dx = wx, dy = wy, dz = wz;
-  bool needs_view = (lens_type >= 0 && lens_type <= 3);
+  bool needs_view = !LensIsFullSky(lens_type);
   if (needs_view) {
     // view_matrix is column-major: M[col*3+row]. Transpose = rows become columns.
     dx = view_matrix[0] * wx + view_matrix[1] * wy + view_matrix[2] * wz;
@@ -171,12 +216,13 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
   float half_fov = fov * 0.5f * kDeg2Rad;
   float short_edge = std::min(res_x, res_y);
 
-  if (lens_type == 0) {  // Linear
+  if (lens_type == kLensTypeLinear) {
     if (dz >= 0)
       return { 0, 0, false };  // behind camera (shader convention: camera looks -z)
     float focal = short_edge * 0.5f / std::tan(half_fov);
     return { dx / (-dz) * focal, dy / (-dz) * focal, true };
-  } else if (lens_type >= 1 && lens_type <= 3) {  // Fisheye
+  } else if ((lens_type >= kLensTypeFisheyeEqualArea && lens_type <= kLensTypeFisheyeStereographic) ||
+             lens_type == kLensTypeFisheyeOrthographic) {  // Single fisheye family (incl. orthographic)
     float img_radius = short_edge * 0.5f;
     float theta = std::acos(std::clamp(-dz, -1.0f, 1.0f));  // angle from -z axis
     float rho = std::sqrt(dx * dx + dy * dy);
@@ -184,19 +230,27 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
       return { 0, 0, true };  // on optical axis
 
     float r_norm;
-    int type = lens_type - 1;
-    if (type == 0) {
+    if (lens_type == kLensTypeFisheyeEqualArea) {
       r_norm = std::sin(theta * 0.5f) / std::sin(half_fov * 0.5f);
-    } else if (type == 1) {
+    } else if (lens_type == kLensTypeFisheyeEquidist) {
       r_norm = theta / half_fov;
-    } else {
+    } else if (lens_type == kLensTypeFisheyeStereographic) {
       r_norm = std::tan(theta * 0.5f) / std::tan(half_fov * 0.5f);
+    } else {  // kLensTypeFisheyeOrthographic — shader: r_norm = sin(θ) / sin(fov/2)
+      // Domain guard: directions past the orthographic disc edge (θ > half_fov)
+      // project to r_norm > 1 in the inverse path; reject them here so the
+      // sun-circle interior-label placement doesn't draw off-disc.
+      if (theta > half_fov)
+        return { 0, 0, false };
+      r_norm = std::sin(theta) / std::sin(half_fov);
     }
     float scale = r_norm * img_radius / rho;
     return { dx * scale, dy * scale, true };
   }
-  // Types 4-7: not needed for sun circle interior labels (they use world space directly,
-  // and the full sky is always visible, so sun circles always intersect viewport edges).
+  // Full-sky lens types (dual fisheye 4-6, rectangular 7, dual orthographic 9):
+  // their shader paths skip the view matrix and the entire sphere is always
+  // visible, so sun circles always intersect viewport edges and don't need
+  // interior labels. Returning invalid lets the caller fall back to edge labels.
   return { 0, 0, false };
 }
 
@@ -463,11 +517,13 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   // Below we sample each applicable hemisphere boundary in world space, forward-project to
   // pixels, and feed adjacent sample pairs into detect_crossings, reusing the same crossing
   // logic as viewport edges.
-  // Restricted to lens_type 0-3 because WorldDirToPixel only implements forward projection
-  // for those (overlay_labels.cpp:198-200). Dual fisheye / rectangular lens boundaries are
-  // correctly handled by the viewport-edge path because those projections already show the
-  // full sphere and the boundary coincides with the pixel cull.
-  if (input.lens_type >= 0 && input.lens_type <= 3) {
+  // Restricted to view-transformed lens types (linear, single fisheye, single
+  // orthographic) because WorldDirToPixel only implements forward projection
+  // for those — see WorldDirToPixel above. Full-sky lens types (dual fisheye /
+  // rectangular / dual orthographic) are correctly handled by the viewport-edge
+  // path because those projections already show the full sphere and the
+  // hemisphere boundary coincides with the pixel cull.
+  if (!LensIsFullSky(input.lens_type)) {
     constexpr int kBoundarySamples = 360;
 
     auto sample_curve = [&](auto curve_fn) {
@@ -494,32 +550,59 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       }
     };
 
+    // Push the boundary curve a few degrees inward (toward the visible side)
+    // before sampling, so labels emitted at boundary crossings don't straddle
+    // the visible/invisible split. 3° is a visual-spacing heuristic — at typical
+    // fov+lens it projects to ~4–12 px of screen offset, which clears the
+    // text height while staying close enough to read as a "boundary label".
+    constexpr float kBoundaryInsetDeg = 3.0f;
+    float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
+
     if (input.visible == 0 || input.visible == 1) {
       // Equator: {(cos az, sin az, 0)} in world space, parameterized to match the prior loop's
       // az_rad = -π + t convention so label positions are stable across refactor.
-      sample_curve([](float t, float& wx, float& wy, float& wz) {
+      // visible=upper → push toward negative z (altitude=asin(-z) becomes positive);
+      // visible=lower → push toward positive z. After offset the world vector
+      // is renormalized so WorldDirToPixel's unit-length assumption holds.
+      float wz_sign = (input.visible == 0) ? -1.0f : +1.0f;
+      sample_curve([wz_sign, boundary_offset](float t, float& wx, float& wy, float& wz) {
         float az = -kPi + t;
         wx = -std::cos(az);
         wy = -std::sin(az);
-        wz = 0.0f;
+        wz = wz_sign * boundary_offset;
+        float len = std::sqrt(wx * wx + wy * wy + wz * wz);
+        wx /= len;
+        wy /= len;
+        wz /= len;
       });
     } else if (input.visible == 3) {
       // Front hemisphere boundary: great circle perpendicular to forward. In view space this
       // is z_view = 0 (the xy-plane); map to world via view_matrix (column-major: col0/col1 are
       // the first two columns, i.e. view-space x and y basis expressed in world coordinates).
-      // Points: world = cos(t) * col0 + sin(t) * col1.
-      sample_curve([&](float t, float& wx, float& wy, float& wz) {
-        float c = std::cos(t), s = std::sin(t);
-        wx = c * view_matrix[0] + s * view_matrix[3];
-        wy = c * view_matrix[1] + s * view_matrix[4];
-        wz = c * view_matrix[2] + s * view_matrix[5];
+      // Points: world = cos(t) * col0 + sin(t) * col1, optionally pushed toward
+      // forward (i.e. opposite of col2 = -forward) by `boundary_offset` so the
+      // boundary samples lie inside the front hemisphere.
+      sample_curve([&, boundary_offset](float t, float& wx, float& wy, float& wz) {
+        float c = std::cos(t);
+        float s = std::sin(t);
+        wx = c * view_matrix[0] + s * view_matrix[3] - boundary_offset * view_matrix[6];
+        wy = c * view_matrix[1] + s * view_matrix[4] - boundary_offset * view_matrix[7];
+        wz = c * view_matrix[2] + s * view_matrix[5] - boundary_offset * view_matrix[8];
+        float len = std::sqrt(wx * wx + wy * wy + wz * wz);
+        wx /= len;
+        wy /= len;
+        wz /= len;
       });
     }
   }
 
   // Sun circles: add interior labels when circles don't intersect viewport edges.
   // Place 4 labels evenly around each sun circle using forward projection.
-  if (input.show_sun_circles && input.lens_type >= 0 && input.lens_type <= 3) {
+  // Same gate as the hemisphere boundary block: only view-transformed lens
+  // types (linear / single fisheye / single orthographic) need interior labels;
+  // full-sky lenses always have edges intersect the sun circle. Reusing
+  // !LensIsFullSky keeps the lens classification single-sourced.
+  if (input.show_sun_circles && !LensIsFullSky(input.lens_type)) {
     for (int ci = 0; ci < input.sun_circle_count; ci++) {
       float angle_deg = input.sun_circle_angles[ci];
       // Check if this circle already has edge labels
@@ -599,7 +682,8 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   }
 }
 
-void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels) {
+void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels, float vp_screen_x,
+                             float vp_screen_y, float vp_screen_w, float vp_screen_h) {
   if (dl == nullptr || labels.empty())
     return;
 
@@ -614,6 +698,10 @@ void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& la
   for (const auto& label : labels) {
     ImVec2 text_size = ImGui::CalcTextSize(label.text.c_str());
     ImVec2 pos(label.screen_x - text_size.x * 0.5f, label.screen_y - text_size.y * 0.5f);
+    // Push the text glyph rect inside the viewport so it doesn't straddle the
+    // panel border / export-PNG edge. Collision-avoidance below uses the
+    // clamped bbox so labels pushed into the same corner don't pile up.
+    pos = detail::ClampLabelPosToViewport(pos, text_size, vp_screen_x, vp_screen_y, vp_screen_w, vp_screen_h);
     ImVec2 bbox_min(pos.x - kLabelPadding, pos.y - kLabelPadding);
     ImVec2 bbox_max(pos.x + text_size.x + kLabelPadding, pos.y + text_size.y + kLabelPadding);
 
@@ -644,8 +732,49 @@ void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& la
   }
 }
 
-void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
-  AppendOverlayToDrawList(ImGui::GetWindowDrawList(), labels);
+void DrawOverlayLabels(const std::vector<OverlayLabel>& labels, float vp_screen_x, float vp_screen_y, float vp_screen_w,
+                       float vp_screen_h) {
+  AppendOverlayToDrawList(ImGui::GetWindowDrawList(), labels, vp_screen_x, vp_screen_y, vp_screen_w, vp_screen_h);
 }
+
+namespace detail {
+
+// Test-only thin wrapper exposing the anonymous-namespace PixelToWorldDir so
+// unit tests can pin per-lens dispatch. See overlay_labels.hpp for contract.
+void PixelToWorldDirForTesting(float px, float py, float res_x, float res_y, int lens_type, float fov,
+                               const float view_matrix[9], float* out_x, float* out_y, float* out_z, bool* out_valid) {
+  InvResult r = PixelToWorldDir(px, py, res_x, res_y, lens_type, fov, view_matrix);
+  *out_valid = r.valid;
+  if (r.valid) {
+    *out_x = r.x;
+    *out_y = r.y;
+    *out_z = r.z;
+  }
+}
+
+ImVec2 ClampLabelPosToViewport(ImVec2 pos, ImVec2 text_size, float vp_x, float vp_y, float vp_w, float vp_h) {
+  // kViewportInsetPx is a small visual padding (in screen-space pixels) keeping the
+  // text glyph rect away from the absolute viewport edge — guards against the
+  // half-pixel anti-aliasing fringe and the panel border 1 px line. 2 px is a
+  // visual-padding heuristic, not a precise geometric boundary; revisit if a
+  // future HiDPI-aware UI pass requires resolution-scaled padding.
+  constexpr float kViewportInsetPx = 2.0f;
+
+  // Only clamp if the viewport actually has room for the text + 2×inset. If
+  // the viewport is narrower / shorter than that (extreme corner case for
+  // panel collapse / tiny export targets), fall back to the original pos so
+  // the legacy "centered on label anchor" behaviour is preserved.
+  if (vp_w > text_size.x + 2.0f * kViewportInsetPx) {
+    pos.x = std::max(pos.x, vp_x + kViewportInsetPx);
+    pos.x = std::min(pos.x, vp_x + vp_w - text_size.x - kViewportInsetPx);
+  }
+  if (vp_h > text_size.y + 2.0f * kViewportInsetPx) {
+    pos.y = std::max(pos.y, vp_y + kViewportInsetPx);
+    pos.y = std::min(pos.y, vp_y + vp_h - text_size.y - kViewportInsetPx);
+  }
+  return pos;
+}
+
+}  // namespace detail
 
 }  // namespace lumice::gui

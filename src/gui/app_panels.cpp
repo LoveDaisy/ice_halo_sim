@@ -363,13 +363,26 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 
   // Copy-model renderer: GuiState always owns a valid renderer by default construction.
   auto& r = g_state.renderer;
-  bool full_sky = (r.lens_type >= 4);
+  bool full_sky = LensIsFullSky(r.lens_type);
 
   // ---- View Group ----
   if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     ImGui::SeparatorText("Projection");
-    ImGui::Combo("Lens Type##view", &r.lens_type, kLensTypeNames, kLensTypeCount);
+    // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
+    // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
+    if (ImGui::BeginCombo("Lens Type##view", kLensTypeNames[r.lens_type])) {
+      for (int idx : kLensTypePresentationOrder) {
+        bool selected = (r.lens_type == idx);
+        if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
+          r.lens_type = idx;
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
+      }
+      ImGui::EndCombo();
+    }
     float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
     ImGui::BeginDisabled(full_sky);
     SliderWithInput("FOV##view", &r.fov, 1.0f, max_fov, "%.0f");
@@ -569,7 +582,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     auto& r = g_state.renderer;
     float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
     r.fov = std::min(r.fov, max_fov);
-    if (r.lens_type >= 4) {  // Full-sky lenses: force view angles to zero
+    if (LensIsFullSky(r.lens_type)) {  // Full-sky lenses: force view angles to zero
       r.elevation = 0.0f;
       r.azimuth = 0.0f;
       r.roll = 0.0f;
@@ -642,20 +655,29 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     if (g_state.show_horizon || g_state.show_grid || g_state.show_sun_circles) {
       OverlayLabelInput label_input = BuildOverlayLabelInput(g_state, rc);
 
-      // Convert viewport from framebuffer pixels to ImGui logical screen coordinates
-      float vp_sx = panel_x;
-      float vp_sy = kTopBarHeight;
+      // Viewport rect in absolute OS screen coordinates. DrawOverlayLabels emits to
+      // ImGui::GetWindowDrawList(), and with ImGuiConfigFlags_ViewportsEnable (gui-polish-v15)
+      // draw list coordinates are absolute screen space, not relative to the host GLFW window.
+      // Anchor (panel_x, kTopBarHeight) through MainVpPos() so labels stay glued to the
+      // preview viewport when the host window is dragged or sits on a non-primary monitor.
+      // Note: the export_fbo_renderer.cpp path passes (0, 0, w, h) intentionally — it owns a
+      // self-allocated ImDrawList targeting an off-screen FBO and must NOT add this offset.
+      ImVec2 vp_origin = MainVpPos(panel_x, kTopBarHeight);
+      float vp_sx = vp_origin.x;
+      float vp_sy = vp_origin.y;
       float vp_sw = panel_width;
       float vp_sh = preview_height;
 
       static std::vector<OverlayLabel> labels;
       ComputeOverlayLabels(label_input, vp_sx, vp_sy, vp_sw, vp_sh, labels);
-      DrawOverlayLabels(labels);
+      DrawOverlayLabels(labels, vp_sx, vp_sy, vp_sw, vp_sh);
     }
 
-    // Mouse interaction: orbit with drag, FOV with scroll
-    // Disabled for full-sky lens types (dual fisheye, rectangular)
-    bool full_sky = (rc.lens_type >= 4);
+    // Mouse interaction: orbit with drag, FOV with scroll.
+    // Disabled for lenses in kFullSkyLensTypes (dual fisheye 4-6, rectangular 7,
+    // dual orthographic 9): their shader path skips the view matrix so view
+    // angles + FOV have no visual effect.
+    bool full_sky = LensIsFullSky(rc.lens_type);
     ImVec2 avail = ImGui::GetContentRegionAvail();
     ImGui::InvisibleButton("##preview_interact", avail);
 
