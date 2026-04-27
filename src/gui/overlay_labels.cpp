@@ -198,9 +198,14 @@ struct FwdResult {
 
 FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y, int lens_type, float fov,
                           const float view_matrix[9]) {
-  // For types 0-3: transform world→view by multiplying with transpose of view matrix
+  // View transform applies to all view-transformed lens types — i.e. NOT full-sky.
+  // This mirrors the inverse projection's classification: linear (0), single fisheye
+  // (1-3), and single orthographic (8) all carry view matrix; dual fisheye (4-6),
+  // rectangular (7), and dual orthographic (9) skip it. Reusing LensIsFullSky as the
+  // single source of truth keeps WorldDirToPixel coupled to the same lens-class
+  // policy as RenderRightPanel / RenderPreviewPanel.
   float dx = wx, dy = wy, dz = wz;
-  bool needs_view = (lens_type >= 0 && lens_type <= 3);
+  bool needs_view = !LensIsFullSky(lens_type);
   if (needs_view) {
     // view_matrix is column-major: M[col*3+row]. Transpose = rows become columns.
     dx = view_matrix[0] * wx + view_matrix[1] * wy + view_matrix[2] * wz;
@@ -211,12 +216,13 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
   float half_fov = fov * 0.5f * kDeg2Rad;
   float short_edge = std::min(res_x, res_y);
 
-  if (lens_type == 0) {  // Linear
+  if (lens_type == kLensTypeLinear) {
     if (dz >= 0)
       return { 0, 0, false };  // behind camera (shader convention: camera looks -z)
     float focal = short_edge * 0.5f / std::tan(half_fov);
     return { dx / (-dz) * focal, dy / (-dz) * focal, true };
-  } else if (lens_type >= 1 && lens_type <= 3) {  // Fisheye
+  } else if ((lens_type >= kLensTypeFisheyeEqualArea && lens_type <= kLensTypeFisheyeStereographic) ||
+             lens_type == kLensTypeFisheyeOrthographic) {  // Single fisheye family (incl. orthographic)
     float img_radius = short_edge * 0.5f;
     float theta = std::acos(std::clamp(-dz, -1.0f, 1.0f));  // angle from -z axis
     float rho = std::sqrt(dx * dx + dy * dy);
@@ -224,19 +230,27 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
       return { 0, 0, true };  // on optical axis
 
     float r_norm;
-    int type = lens_type - 1;
-    if (type == 0) {
+    if (lens_type == kLensTypeFisheyeEqualArea) {
       r_norm = std::sin(theta * 0.5f) / std::sin(half_fov * 0.5f);
-    } else if (type == 1) {
+    } else if (lens_type == kLensTypeFisheyeEquidist) {
       r_norm = theta / half_fov;
-    } else {
+    } else if (lens_type == kLensTypeFisheyeStereographic) {
       r_norm = std::tan(theta * 0.5f) / std::tan(half_fov * 0.5f);
+    } else {  // kLensTypeFisheyeOrthographic — shader: r_norm = sin(θ) / sin(fov/2)
+      // Domain guard: directions past the orthographic disc edge (θ > half_fov)
+      // project to r_norm > 1 in the inverse path; reject them here so the
+      // sun-circle interior-label placement doesn't draw off-disc.
+      if (theta > half_fov)
+        return { 0, 0, false };
+      r_norm = std::sin(theta) / std::sin(half_fov);
     }
     float scale = r_norm * img_radius / rho;
     return { dx * scale, dy * scale, true };
   }
-  // Types 4-7: not needed for sun circle interior labels (they use world space directly,
-  // and the full sky is always visible, so sun circles always intersect viewport edges).
+  // Full-sky lens types (dual fisheye 4-6, rectangular 7, dual orthographic 9):
+  // their shader paths skip the view matrix and the entire sphere is always
+  // visible, so sun circles always intersect viewport edges and don't need
+  // interior labels. Returning invalid lets the caller fall back to edge labels.
   return { 0, 0, false };
 }
 
@@ -503,11 +517,13 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   // Below we sample each applicable hemisphere boundary in world space, forward-project to
   // pixels, and feed adjacent sample pairs into detect_crossings, reusing the same crossing
   // logic as viewport edges.
-  // Restricted to lens_type 0-3 because WorldDirToPixel only implements forward projection
-  // for those (overlay_labels.cpp:198-200). Dual fisheye / rectangular lens boundaries are
-  // correctly handled by the viewport-edge path because those projections already show the
-  // full sphere and the boundary coincides with the pixel cull.
-  if (input.lens_type >= 0 && input.lens_type <= 3) {
+  // Restricted to view-transformed lens types (linear, single fisheye, single
+  // orthographic) because WorldDirToPixel only implements forward projection
+  // for those — see WorldDirToPixel above. Full-sky lens types (dual fisheye /
+  // rectangular / dual orthographic) are correctly handled by the viewport-edge
+  // path because those projections already show the full sphere and the
+  // hemisphere boundary coincides with the pixel cull.
+  if (!LensIsFullSky(input.lens_type)) {
     constexpr int kBoundarySamples = 360;
 
     auto sample_curve = [&](auto curve_fn) {
@@ -582,7 +598,11 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
 
   // Sun circles: add interior labels when circles don't intersect viewport edges.
   // Place 4 labels evenly around each sun circle using forward projection.
-  if (input.show_sun_circles && input.lens_type >= 0 && input.lens_type <= 3) {
+  // Same gate as the hemisphere boundary block: only view-transformed lens
+  // types (linear / single fisheye / single orthographic) need interior labels;
+  // full-sky lenses always have edges intersect the sun circle. Reusing
+  // !LensIsFullSky keeps the lens classification single-sourced.
+  if (input.show_sun_circles && !LensIsFullSky(input.lens_type)) {
     for (int ci = 0; ci < input.sun_circle_count; ci++) {
       float angle_deg = input.sun_circle_angles[ci];
       // Check if this circle already has edge labels

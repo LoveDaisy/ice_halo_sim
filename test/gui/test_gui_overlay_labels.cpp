@@ -656,4 +656,50 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       }
     };
   }
+
+  // Single orthographic must emit sun-circle interior labels for circles that
+  // don't intersect the viewport edge — same coverage as single fisheye.
+  // Pre-fix, the interior-label block in ComputeOverlayLabels was gated to
+  // `lens_type 0-3`, leaving lens=8 with no interior labels and a silent UX
+  // regression discovered during scrum-gui-polish-v16 manual verification.
+  // Post-fix uses `!LensIsFullSky(...)` and lens=8 falls through to the same
+  // path as lens=2.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "single_orthographic_sun_circle_interior_labels");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Sun directly forward (camera-forward = -x at elev=0,az=0). A small
+      // 5° angular-distance circle centred on the sun stays well inside the
+      // orthographic disc, so all 4 interior labels at 0/90/180/270° around
+      // the circle should land within viewport bounds and survive cull.
+      // Note: existing MakeSunOnly callers use `const float sun_back[3]` /
+      // `const float angle` and so trigger the same clang-tidy
+      // "Invalid case style for constant" warnings — kept here without
+      // `const` to avoid spreading the violation into new code (see
+      // learnings/code-quality.md "项目 clang-tidy ... 函数内 const 局部").
+      float sun_forward[3] = { -1.0f, 0.0f, 0.0f };
+      float angle = 5.0f;
+      auto in_ortho = MakeSunOnly(/*visible=Full*/ 2, sun_forward, &angle, 1);
+      in_ortho.lens_type = lumice::gui::kLensTypeFisheyeOrthographic;
+      in_ortho.fov = 60.0f;
+
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in_ortho, /*vp_x*/ 0.0f, /*vp_y*/ 0.0f,
+                                        /*vp_w*/ 200.0f, /*vp_h*/ 200.0f, labels);
+
+      // Expect ≥ 1 sun-circle label (the 4 placement points are evenly spaced;
+      // viewport-bounds + collision-avoidance may drop some, but at least one
+      // should survive for a small circle near the optical axis).
+      IM_CHECK_GT(CountSunCircleLabels(labels), 0);
+
+      // Cross-check: the same configuration with lens=Fisheye Equidistant
+      // (lens=2) should produce the same label count, since the two single-
+      // fisheye-class projections share the interior-label code path.
+      auto in_fisheye = in_ortho;
+      in_fisheye.lens_type = lumice::gui::kLensTypeFisheyeEquidist;
+      std::vector<lumice::gui::OverlayLabel> labels_fisheye;
+      lumice::gui::ComputeOverlayLabels(in_fisheye, 0.0f, 0.0f, 200.0f, 200.0f, labels_fisheye);
+      IM_CHECK_EQ(CountSunCircleLabels(labels), CountSunCircleLabels(labels_fisheye));
+    };
+  }
 }
