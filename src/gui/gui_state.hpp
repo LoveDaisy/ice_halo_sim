@@ -106,6 +106,10 @@ static_assert(kLensTypeDualFisheyeOrthographic == kLensTypeCount - 1,
 // without breaking shader and JSON serialization (which use the enum value
 // directly as the wire index). The static_assert below pins the array length
 // to kLensTypeCount so every new LensType is forced to declare a slot here.
+// Note: the size assert does NOT check for duplicates — a value listed twice
+// while another is omitted has the same length but silently hides the
+// omitted lens from the combo. When adding/renaming entries, manually
+// verify that every LensType appears here exactly once.
 inline constexpr int kLensTypePresentationOrder[] = {
   kLensTypeLinear,
   kLensTypeFisheyeEqualArea,
