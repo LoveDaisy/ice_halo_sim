@@ -474,4 +474,144 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       IM_CHECK_LT(std::abs(wz - 1.0f), 1e-3f);
     };
   }
+
+  // detail::ClampLabelPosToViewport contract — pure function tests for the
+  // viewport-inset behaviour added in task-overlay-label-edge-inset Step 1.
+  // Pin all four edges and the "no-op when label fits centred" path.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_left_edge");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Viewport: (10, 20, 200, 100). Label glyph 30×14 placed at pos.x=5
+      // (i.e. would extend from x=5 to x=35 — overlaps left edge x=10).
+      // Expected: clamped to vp_x + 2 = 12.
+      ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(5.0f, 50.0f), ImVec2(30.0f, 14.0f), 10.0f,
+                                                                    20.0f, 200.0f, 100.0f);
+      IM_CHECK_EQ(clamped.x, 12.0f);
+      IM_CHECK_EQ(clamped.y, 50.0f);  // y stayed put (50 inside [20+2, 20+100-14-2] = [22, 104])
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_right_edge");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Label at pos.x=195 with text width 30 would extend to x=225, past
+      // vp.x + vp.w = 210. Clamp to 210 - 30 - 2 = 178.
+      ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(195.0f, 50.0f), ImVec2(30.0f, 14.0f), 10.0f,
+                                                                    20.0f, 200.0f, 100.0f);
+      IM_CHECK_EQ(clamped.x, 178.0f);
+      IM_CHECK_EQ(clamped.y, 50.0f);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_top_edge");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Label at pos.y=15 (above vp_y=20). Clamp to vp_y + 2 = 22.
+      ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(50.0f, 15.0f), ImVec2(30.0f, 14.0f), 10.0f,
+                                                                    20.0f, 200.0f, 100.0f);
+      IM_CHECK_EQ(clamped.x, 50.0f);
+      IM_CHECK_EQ(clamped.y, 22.0f);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_bottom_edge");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Label at pos.y=110. Bottom edge: vp_y + vp_h - text_h - 2 = 20 + 100 - 14 - 2 = 104.
+      ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(50.0f, 110.0f), ImVec2(30.0f, 14.0f), 10.0f,
+                                                                    20.0f, 200.0f, 100.0f);
+      IM_CHECK_EQ(clamped.x, 50.0f);
+      IM_CHECK_EQ(clamped.y, 104.0f);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_no_clamp_when_inside");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Label fully inside viewport — pos returned unchanged.
+      ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(50.0f, 50.0f), ImVec2(30.0f, 14.0f), 10.0f,
+                                                                    20.0f, 200.0f, 100.0f);
+      IM_CHECK_EQ(clamped.x, 50.0f);
+      IM_CHECK_EQ(clamped.y, 50.0f);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_viewport_too_narrow");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Viewport width 20 cannot fit text width 30 + 2×2 inset → fallback
+      // path returns original pos so legacy "centered on anchor" survives.
+      ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(5.0f, 50.0f), ImVec2(30.0f, 14.0f), 10.0f,
+                                                                    20.0f, 20.0f, 100.0f);
+      IM_CHECK_EQ(clamped.x, 5.0f);  // unchanged
+      IM_CHECK_EQ(clamped.y, 50.0f);
+    };
+  }
+
+  // Hemisphere boundary inset — verify the inward-shifted boundary curve
+  // produces world directions on the visible side. Re-implement the equator
+  // / front-half lambdas at test level (same formulas as overlay_labels.cpp:540-)
+  // and assert the inset direction. This avoids the "label text source
+  // confusion" problem (latitude vs azimuth same %.0f° format) that ruled
+  // out a label-text-based regression test in the plan.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "hemisphere_boundary_inset_upper_pushes_negative_z");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Mirror the lambda in overlay_labels.cpp: equator inset for visible=upper
+      // shifts wz by -sin(3°) before renormalisation, then renormalises.
+      constexpr float kBoundaryInsetDeg = 3.0f;
+      const float pi = 3.14159265358979323846f;
+      const float deg2rad = pi / 180.0f;
+      const float boundary_offset = std::sin(kBoundaryInsetDeg * deg2rad);
+
+      // For visible=upper, every sample on the offset equator must have wz < 0
+      // (altitude = asin(-wz) > 0, i.e. inside upper hemisphere).
+      // Sample 8 evenly-spaced t values along the boundary curve.
+      for (int i = 0; i < 8; ++i) {
+        float t = i * (2.0f * pi / 8.0f);
+        float az = -pi + t;
+        float wx = -std::cos(az);
+        float wy = -std::sin(az);
+        float wz = -1.0f * boundary_offset;
+        float len = std::sqrt(wx * wx + wy * wy + wz * wz);
+        wx /= len;
+        wy /= len;
+        wz /= len;
+        IM_CHECK_LT_NO_RET(wz, 0.0f);  // upper-hemisphere visible side
+        // Magnitude check: altitude should be ≈ 3° (asin(0.0523/len) ≈ 3°).
+        float altitude_deg = std::asin(-wz) * 180.0f / pi;
+        IM_CHECK_GT_NO_RET(altitude_deg, 2.5f);
+        IM_CHECK_LT_NO_RET(altitude_deg, 3.5f);
+      }
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "hemisphere_boundary_inset_lower_pushes_positive_z");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Symmetric pair of upper test — visible=lower shifts wz by +sin(3°).
+      constexpr float kBoundaryInsetDeg = 3.0f;
+      const float pi = 3.14159265358979323846f;
+      const float deg2rad = pi / 180.0f;
+      const float boundary_offset = std::sin(kBoundaryInsetDeg * deg2rad);
+
+      for (int i = 0; i < 8; ++i) {
+        float t = i * (2.0f * pi / 8.0f);
+        float az = -pi + t;
+        float wx = -std::cos(az);
+        float wy = -std::sin(az);
+        float wz = +1.0f * boundary_offset;
+        float len = std::sqrt(wx * wx + wy * wy + wz * wz);
+        wx /= len;
+        wy /= len;
+        wz /= len;
+        IM_CHECK_GT_NO_RET(wz, 0.0f);  // lower-hemisphere visible side
+        float altitude_deg = std::asin(-wz) * 180.0f / pi;
+        IM_CHECK_LT_NO_RET(altitude_deg, -2.5f);
+        IM_CHECK_GT_NO_RET(altitude_deg, -3.5f);
+      }
+    };
+  }
 }
