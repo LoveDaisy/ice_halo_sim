@@ -33,23 +33,29 @@ InvResult LinearInv(float px, float py, float res_x, float res_y, float half_fov
   return { px / len, py / len, -focal / len, true };
 }
 
-// Synced with shader fisheyeInverse (preview_renderer.cpp line ~167-185)
+// Synced with shader fisheyeInverse (preview_renderer.cpp:167-189). type:
+// 0=equal_area, 1=equidistant, 2=stereographic, 3=orthographic.
 InvResult FisheyeInv(float px, float py, float res_x, float res_y, float half_fov, int type) {
   float img_radius = std::min(res_x, res_y) * 0.5f;
   float r = std::sqrt(px * px + py * py) / img_radius;
 
   float theta;
-  if (type == 0) {  // equal area
+  if (type == 0) {  // equal area: r_norm = sin(θ/2) / sin(fov/4)
     float s = r * std::sin(half_fov * 0.5f);
     if (s > 1.0f)
       return { 0, 0, 0, false };
     theta = 2.0f * std::asin(s);
-  } else if (type == 1) {  // equidistant
+  } else if (type == 1) {  // equidistant: r_norm = θ / half_fov
     theta = r * half_fov;
     if (theta >= kPi)
       return { 0, 0, 0, false };
-  } else {  // stereographic
+  } else if (type == 2) {  // stereographic: r_norm = tan(θ/2) / tan(fov/4)
     theta = 2.0f * std::atan(r * std::tan(half_fov * 0.5f));
+  } else {  // orthographic (type == 3): r_norm = sin(θ) / sin(fov/2)
+    float s = r * std::sin(half_fov);
+    if (s > 1.0f)
+      return { 0, 0, 0, false };
+    theta = std::asin(s);
   }
 
   float phi = std::atan2(py, px);
@@ -78,15 +84,19 @@ InvResult DualFisheyeInv(float px, float py, float res_x, float res_y, int type)
 
   float half_pi = kPi * 0.5f;
   float theta;
-  if (type == 0) {
+  if (type == 0) {  // equal area
     float s = use_r * std::sin(half_pi * 0.5f);
     if (s > 1.0f)
       return { 0, 0, 0, false };
     theta = 2.0f * std::asin(s);
-  } else if (type == 1) {
+  } else if (type == 1) {  // equidistant
     theta = use_r * half_pi;
-  } else {
+  } else if (type == 2) {  // stereographic
     theta = 2.0f * std::atan(use_r * std::tan(half_pi * 0.5f));
+  } else {  // orthographic (type == 3): use_r is already normalised; θ = asin(use_r)
+    if (use_r > 1.0f)
+      return { 0, 0, 0, false };
+    theta = std::asin(use_r);
   }
 
   float phi = std::atan2(use_y, use_x);
@@ -113,23 +123,38 @@ InvResult RectangularInv(float px, float py, float res_x, float res_y) {
 }
 
 // Compute world direction for a pixel offset from viewport center.
-// Synced with shader main() (preview_renderer.cpp line ~302-318).
+// Synced with shader main() (preview_renderer.cpp:317-332). Dispatch table:
+//   lens 0           → LinearInv               (view-transformed)
+//   lens 1-3         → FisheyeInv (type 0-2)   (view-transformed)
+//   lens 4-6         → DualFisheyeInv          (world-space, no view)
+//   lens 7           → RectangularInv          (world-space, no view)
+//   lens 8 (single ortho) → FisheyeInv(type=3) (view-transformed)
+//   lens 9 (dual ortho)   → DualFisheyeInv(3)  (world-space, no view)
 InvResult PixelToWorldDir(float px, float py, float res_x, float res_y, int lens_type, float fov,
                           const float view_matrix[9]) {
   float half_fov = fov * 0.5f * kDeg2Rad;
 
   InvResult r;
   bool needs_view = true;
-  if (lens_type == 0) {
+  if (lens_type == kLensTypeLinear) {
     r = LinearInv(px, py, res_x, res_y, half_fov);
-  } else if (lens_type >= 1 && lens_type <= 3) {
-    r = FisheyeInv(px, py, res_x, res_y, half_fov, lens_type - 1);
-  } else if (lens_type >= 4 && lens_type <= 6) {
-    r = DualFisheyeInv(px, py, res_x, res_y, lens_type - 4);
+  } else if (lens_type >= kLensTypeFisheyeEqualArea && lens_type <= kLensTypeFisheyeStereographic) {
+    r = FisheyeInv(px, py, res_x, res_y, half_fov, lens_type - kLensTypeFisheyeEqualArea);
+  } else if (lens_type >= kLensTypeDualFisheyeEqualArea && lens_type <= kLensTypeDualFisheyeStereographic) {
+    r = DualFisheyeInv(px, py, res_x, res_y, lens_type - kLensTypeDualFisheyeEqualArea);
     needs_view = false;
-  } else {
+  } else if (lens_type == kLensTypeRectangular) {
     r = RectangularInv(px, py, res_x, res_y);
     needs_view = false;
+  } else if (lens_type == kLensTypeFisheyeOrthographic) {
+    // Single orthographic: shader uses fisheyeInverse(type=3) and applies view matrix.
+    r = FisheyeInv(px, py, res_x, res_y, half_fov, 3);
+  } else if (lens_type == kLensTypeDualFisheyeOrthographic) {
+    // Dual orthographic: shader uses dualFisheyeInverse(type=3), no view matrix.
+    r = DualFisheyeInv(px, py, res_x, res_y, 3);
+    needs_view = false;
+  } else {
+    r = { 0, 0, 0, false };
   }
 
   if (!r.valid)
