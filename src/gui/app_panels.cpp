@@ -369,7 +369,20 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     ImGui::SeparatorText("Projection");
-    ImGui::Combo("Lens Type##view", &r.lens_type, kLensTypeNames, kLensTypeCount);
+    // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
+    // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
+    if (ImGui::BeginCombo("Lens Type##view", kLensTypeNames[r.lens_type])) {
+      for (int idx : kLensTypePresentationOrder) {
+        bool selected = (r.lens_type == idx);
+        if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
+          r.lens_type = idx;
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
+      }
+      ImGui::EndCombo();
+    }
     float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
     ImGui::BeginDisabled(full_sky);
     SliderWithInput("FOV##view", &r.fov, 1.0f, max_fov, "%.0f");

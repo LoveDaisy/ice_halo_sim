@@ -101,6 +101,26 @@ static_assert(sizeof(kLensTypeNames) / sizeof(*kLensTypeNames) == kLensTypeCount
 static_assert(kLensTypeDualFisheyeOrthographic == kLensTypeCount - 1,
               "LensType enum terminal value must match kLensTypeCount - 1");
 
+// Display order for the Lens Type combo. Decoupled from enum values so that
+// orthographic variants group with their fisheye / dual-fisheye siblings
+// without breaking shader and JSON serialization (which use the enum value
+// directly as the wire index). The static_assert below pins the array length
+// to kLensTypeCount so every new LensType is forced to declare a slot here.
+inline constexpr int kLensTypePresentationOrder[] = {
+  kLensTypeLinear,
+  kLensTypeFisheyeEqualArea,
+  kLensTypeFisheyeEquidist,
+  kLensTypeFisheyeStereographic,
+  kLensTypeFisheyeOrthographic,
+  kLensTypeDualFisheyeEqualArea,
+  kLensTypeDualFisheyeEquidist,
+  kLensTypeDualFisheyeStereographic,
+  kLensTypeDualFisheyeOrthographic,
+  kLensTypeRectangular,
+};
+static_assert(sizeof(kLensTypePresentationOrder) / sizeof(*kLensTypePresentationOrder) == kLensTypeCount,
+              "kLensTypePresentationOrder must list every LensType exactly once");
+
 // Dual fisheye overlap: max |sky.z| for the overlap zone.
 // = sin(5°) ≈ 0.0872. Each hemisphere extends 5° past the equator.
 // This constant defines the GUI's internal texture format overlap. It is passed to core via
