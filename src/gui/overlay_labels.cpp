@@ -122,6 +122,21 @@ InvResult RectangularInv(float px, float py, float res_x, float res_y) {
   return { -cl * std::cos(lon), -cl * std::sin(lon), -std::sin(lat), true };
 }
 
+// The two range-based dispatches below depend on consecutive enum values:
+// (lens_type - kLensTypeFisheyeEqualArea) must equal FisheyeInv's type
+// argument 0/1/2 across the [EqualArea, Equidist, Stereographic] band, and
+// likewise for the dual fisheye band. Pin the contract at compile time so
+// inserting a new fisheye enum mid-band is a build break, not a silent
+// label-position regression.
+static_assert(kLensTypeFisheyeEquidist - kLensTypeFisheyeEqualArea == 1,
+              "Fisheye enum band must remain consecutive (EqualArea→Equidist→Stereographic).");
+static_assert(kLensTypeFisheyeStereographic - kLensTypeFisheyeEqualArea == 2,
+              "Fisheye enum band must remain consecutive (EqualArea→Equidist→Stereographic).");
+static_assert(kLensTypeDualFisheyeEquidist - kLensTypeDualFisheyeEqualArea == 1,
+              "Dual fisheye enum band must remain consecutive.");
+static_assert(kLensTypeDualFisheyeStereographic - kLensTypeDualFisheyeEqualArea == 2,
+              "Dual fisheye enum band must remain consecutive.");
+
 // Compute world direction for a pixel offset from viewport center.
 // Synced with shader main() (preview_renderer.cpp:317-332). Dispatch table:
 //   lens 0           → LinearInv               (view-transformed)
@@ -672,5 +687,22 @@ void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& la
 void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
   AppendOverlayToDrawList(ImGui::GetWindowDrawList(), labels);
 }
+
+namespace detail {
+
+// Test-only thin wrapper exposing the anonymous-namespace PixelToWorldDir so
+// unit tests can pin per-lens dispatch. See overlay_labels.hpp for contract.
+void PixelToWorldDirForTesting(float px, float py, float res_x, float res_y, int lens_type, float fov,
+                               const float view_matrix[9], float* out_x, float* out_y, float* out_z, bool* out_valid) {
+  InvResult r = PixelToWorldDir(px, py, res_x, res_y, lens_type, fov, view_matrix);
+  *out_valid = r.valid;
+  if (r.valid) {
+    *out_x = r.x;
+    *out_y = r.y;
+    *out_z = r.z;
+  }
+}
+
+}  // namespace detail
 
 }  // namespace lumice::gui

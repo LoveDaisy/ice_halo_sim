@@ -1788,19 +1788,15 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // p2_render/lens_full_sky_view_controls_disabled — guards the full-sky set
-  // {dual fisheye, rectangular, dual orthographic} from accidentally gaining
-  // view controls. If kFullSkyLensTypes ever loses any of these, this test
-  // catches the regression.
+  // p2_render/lens_full_sky_view_controls_disabled — guards every entry in
+  // gui::kFullSkyLensTypes from accidentally gaining view controls. The loop
+  // iterates the SSOT array directly (not a local copy) so any future
+  // addition / removal in kFullSkyLensTypes automatically updates the test
+  // coverage, closing the loop with the static_assert in gui_constants.hpp.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_full_sky_view_controls_disabled");
     t->TestFunc = [](ImGuiTestContext* ctx) {
-      const int kFullSkyLenses[] = {
-        gui::kLensTypeDualFisheyeEqualArea,     gui::kLensTypeDualFisheyeEquidist,
-        gui::kLensTypeDualFisheyeStereographic, gui::kLensTypeRectangular,
-        gui::kLensTypeDualFisheyeOrthographic,
-      };
-      for (int lens : kFullSkyLenses) {
+      for (int lens : gui::kFullSkyLensTypes) {
         ResetTestState();
         ctx->Yield(2);
 

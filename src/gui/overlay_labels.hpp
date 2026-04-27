@@ -53,6 +53,31 @@ void DrawOverlayLabels(const std::vector<OverlayLabel>& labels);
 // export_fbo_renderer for a self-owned list targeting an off-screen FBO.
 void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels);
 
+namespace detail {
+
+// Pure-function inverse projection used by ComputeOverlayLabels. Exposed
+// here so unit tests can pin the per-lens-type dispatch (especially the
+// orthographic branches added in task-orthographic-followup) without the
+// edge-sampling layer in between.
+//
+// Inputs:
+//   px, py            pixel offset from viewport center (shader convention)
+//   res_x, res_y      viewport width / height in pixels
+//   lens_type         LensType enum value (0..9)
+//   fov               horizontal field-of-view in degrees
+//   view_matrix       column-major 3x3 from BuildViewMatrix (preview_renderer.hpp);
+//                     ignored by full-sky lens branches that don't view-transform.
+//
+// Outputs:
+//   out_x/out_y/out_z   world-space unit direction (only set when *out_valid is true)
+//   out_valid           false if the pixel falls outside the projection domain
+//                       (asin guard, |lat| > π/2, etc.); the xyz outputs are
+//                       left untouched in that case.
+void PixelToWorldDirForTesting(float px, float py, float res_x, float res_y, int lens_type, float fov,
+                               const float view_matrix[9], float* out_x, float* out_y, float* out_z, bool* out_valid);
+
+}  // namespace detail
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_OVERLAY_LABELS_HPP

@@ -5,7 +5,9 @@
 #include <cmath>
 #include <vector>
 
+#include "gui/gui_constants.hpp"
 #include "gui/overlay_labels.hpp"
+#include "gui/preview_renderer.hpp"
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -97,12 +99,14 @@ void SingleOrthoLatTestFunc(ImGuiTestContext* ctx) {
   constexpr float kVpW = 200.0f;
   constexpr float kVpH = 200.0f;
 
-  auto in_ortho = MakeGridOnly(/*visible=Full*/ 2, /*lens=Single Orthographic*/ 8, /*elev*/ 0.0f, /*az*/ 0.0f);
+  auto in_ortho = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeOrthographic,
+                               /*elev*/ 0.0f, /*az*/ 0.0f);
   in_ortho.fov = 60.0f;
   std::vector<lumice::gui::OverlayLabel> labels_ortho;
   lumice::gui::ComputeOverlayLabels(in_ortho, kVpX, kVpY, kVpW, kVpH, labels_ortho);
 
-  auto in_fisheye = MakeGridOnly(/*visible=Full*/ 2, /*lens=Fisheye Equidistant*/ 2, /*elev*/ 0.0f, /*az*/ 0.0f);
+  auto in_fisheye = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeEquidist,
+                                 /*elev*/ 0.0f, /*az*/ 0.0f);
   in_fisheye.fov = 60.0f;
   std::vector<lumice::gui::OverlayLabel> labels_fisheye;
   lumice::gui::ComputeOverlayLabels(in_fisheye, kVpX, kVpY, kVpW, kVpH, labels_fisheye);
@@ -342,5 +346,131 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "single_orthographic_dispatch_matches_fisheye");
     t->TestFunc = SingleOrthoLatTestFunc;
+  }
+
+  // Pure-function contract tests for the orthographic dispatch in
+  // detail::PixelToWorldDirForTesting (added in task-orthographic-followup
+  // Step 2). These pin the radial mapping at known pixels so a future
+  // regression in FisheyeInv(type=3) / DualFisheyeInv(type=3) (e.g. asin
+  // input sign flipped, or the type=3 branch silently aliased back to
+  // stereographic) breaks the test rather than silently mis-orienting
+  // labels at runtime.
+
+  // Single orthographic at fov=180° has the analytic property that
+  // r_norm = sin(θ), i.e. the disc edge (r_norm=1) maps to θ=90°.
+  // Center pixel (px=py=0) → θ=0 → fisheyeInverse returns view dir (0, 0, -1)
+  // (camera-space "looking forward"). With elev=0,az=0,roll=0 the view
+  // matrix maps view (0, 0, -1) to world (-1, 0, 0): world forward.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "pixel_to_world_dir_single_ortho_center");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      float view[9];
+      lumice::gui::BuildViewMatrix(/*elev*/ 0.0f, /*az*/ 0.0f, /*roll*/ 0.0f, view);
+
+      float wx = 0;
+      float wy = 0;
+      float wz = 0;
+      bool valid = false;
+      lumice::gui::detail::PixelToWorldDirForTesting(0.0f, 0.0f, 200.0f, 200.0f,
+                                                     lumice::gui::kLensTypeFisheyeOrthographic,
+                                                     /*fov*/ 180.0f, view, &wx, &wy, &wz, &valid);
+
+      IM_CHECK(valid);
+      // World forward at (elev=0, az=0) is -x.
+      IM_CHECK_LT(std::abs(wx - (-1.0f)), 1e-4f);
+      IM_CHECK_LT(std::abs(wy), 1e-4f);
+      IM_CHECK_LT(std::abs(wz), 1e-4f);
+    };
+  }
+
+  // Top-edge midpoint at fov=180°: r_norm=1 → θ=π/2. With phi=π/2 (py>0),
+  // view dir = (0, 1, 0) which the (elev=0,az=0,roll=0) view matrix maps to
+  // world dir (0, 0, -1). altitude = asin(-wz) = asin(1) = 90° — the zenith.
+  // This is the load-bearing assertion for "上半 = 正纬度": the highest
+  // possible altitude reachable in single orthographic must surface at the
+  // top of the viewport. Pre-fix RectangularInv mapped (0, hh) to lat=-π/2
+  // (negative), the precise inverse of this expectation.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "pixel_to_world_dir_single_ortho_top_zenith");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      float view[9];
+      lumice::gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);
+
+      float wx = 0;
+      float wy = 0;
+      float wz = 0;
+      bool valid = false;
+      // py = +100 = +hh on a 200x200 viewport (shader convention: +py is image up).
+      lumice::gui::detail::PixelToWorldDirForTesting(0.0f, 100.0f, 200.0f, 200.0f,
+                                                     lumice::gui::kLensTypeFisheyeOrthographic,
+                                                     /*fov*/ 180.0f, view, &wx, &wy, &wz, &valid);
+
+      IM_CHECK(valid);
+      IM_CHECK_LT(std::abs(wx), 1e-3f);
+      IM_CHECK_LT(std::abs(wy), 1e-3f);
+      // -wz = sin(altitude); altitude=+90° → -wz = +1 → wz = -1.
+      IM_CHECK_LT(std::abs(wz - (-1.0f)), 1e-3f);
+    };
+  }
+
+  // Dual orthographic at the upper-hemisphere disc center
+  // (px=-circle_radius, py=0): use_r=0, theta=0, world dir = (0, 0, -1)
+  // (zenith). Same load-bearing assertion as the single ortho top-zenith
+  // test, but exercises DualFisheyeInv(type=3) which has no other coverage
+  // (ComputeOverlayLabels' edge sampling can't reach lens=9 — see notes
+  // in SingleOrthoLatTestFunc).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "pixel_to_world_dir_dual_ortho_left_disc_center");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // view_matrix is unused for lens=9 (no view transform). Use identity-ish
+      // value so any accidental application would surface in the assertions.
+      float view[9];
+      lumice::gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);
+
+      // Viewport 200x200 → short_res = min(100, 200) = 100, circle_radius = 50.
+      // Left circle center is at (-circle_radius, 0) = (-50, 0) in pixel coords.
+      float wx = 0;
+      float wy = 0;
+      float wz = 0;
+      bool valid = false;
+      lumice::gui::detail::PixelToWorldDirForTesting(-50.0f, 0.0f, 200.0f, 200.0f,
+                                                     lumice::gui::kLensTypeDualFisheyeOrthographic,
+                                                     /*fov*/ 170.0f, view, &wx, &wy, &wz, &valid);
+
+      IM_CHECK(valid);
+      IM_CHECK_LT(std::abs(wx), 1e-3f);
+      IM_CHECK_LT(std::abs(wy), 1e-3f);
+      // Left disc center → upper-hemisphere zenith → wz = -1.
+      IM_CHECK_LT(std::abs(wz - (-1.0f)), 1e-3f);
+    };
+  }
+
+  // Dual orthographic right disc center → lower-hemisphere zenith (z = +1).
+  // Symmetric pair to the left-disc test; failing this would indicate the
+  // in_left/in_right branch in DualFisheyeInv is mis-attributing samples.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "pixel_to_world_dir_dual_ortho_right_disc_center");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      float view[9];
+      lumice::gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);
+
+      float wx = 0;
+      float wy = 0;
+      float wz = 0;
+      bool valid = false;
+      lumice::gui::detail::PixelToWorldDirForTesting(50.0f, 0.0f, 200.0f, 200.0f,
+                                                     lumice::gui::kLensTypeDualFisheyeOrthographic,
+                                                     /*fov*/ 170.0f, view, &wx, &wy, &wz, &valid);
+
+      IM_CHECK(valid);
+      IM_CHECK_LT(std::abs(wx), 1e-3f);
+      IM_CHECK_LT(std::abs(wy), 1e-3f);
+      // Right disc center → lower-hemisphere zenith → wz = +1.
+      IM_CHECK_LT(std::abs(wz - 1.0f), 1e-3f);
+    };
   }
 }
