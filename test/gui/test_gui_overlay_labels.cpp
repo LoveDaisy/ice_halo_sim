@@ -285,7 +285,8 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       g_capture.begin_succeeded = ok;
       if (ok) {
         g_capture.wnd_before = ImGui::GetWindowDrawList()->VtxBuffer.Size;
-        lumice::gui::DrawOverlayLabels(labels);
+        // Mock viewport rect aligned with the host window size set above.
+        lumice::gui::DrawOverlayLabels(labels, 0.0f, 0.0f, 200.0f, 100.0f);
         g_capture.wnd_after = ImGui::GetWindowDrawList()->VtxBuffer.Size;
       }
       ImGui::End();

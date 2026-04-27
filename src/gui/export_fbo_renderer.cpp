@@ -62,7 +62,7 @@ void RenderOverlayToFbo(const OverlayLabelInput& overlay_input, int dst_w, int d
   ResetDrawListForNewFrame(dl);
   dl.PushTextureID(ImGui::GetIO().Fonts->TexID);
   dl.PushClipRect(ImVec2(0.0f, 0.0f), ImVec2(static_cast<float>(dst_w), static_cast<float>(dst_h)));
-  AppendOverlayToDrawList(&dl, labels);
+  AppendOverlayToDrawList(&dl, labels, 0.0f, 0.0f, static_cast<float>(dst_w), static_cast<float>(dst_h));
   dl.PopClipRect();
   dl.PopTextureID();
 

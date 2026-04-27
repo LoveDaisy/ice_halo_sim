@@ -670,7 +670,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
 
       static std::vector<OverlayLabel> labels;
       ComputeOverlayLabels(label_input, vp_sx, vp_sy, vp_sw, vp_sh, labels);
-      DrawOverlayLabels(labels);
+      DrawOverlayLabels(labels, vp_sx, vp_sy, vp_sw, vp_sh);
     }
 
     // Mouse interaction: orbit with drag, FOV with scroll.

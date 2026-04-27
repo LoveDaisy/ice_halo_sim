@@ -639,7 +639,8 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   }
 }
 
-void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels) {
+void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels, float vp_screen_x,
+                             float vp_screen_y, float vp_screen_w, float vp_screen_h) {
   if (dl == nullptr || labels.empty())
     return;
 
@@ -654,6 +655,10 @@ void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& la
   for (const auto& label : labels) {
     ImVec2 text_size = ImGui::CalcTextSize(label.text.c_str());
     ImVec2 pos(label.screen_x - text_size.x * 0.5f, label.screen_y - text_size.y * 0.5f);
+    // Push the text glyph rect inside the viewport so it doesn't straddle the
+    // panel border / export-PNG edge. Collision-avoidance below uses the
+    // clamped bbox so labels pushed into the same corner don't pile up.
+    pos = detail::ClampLabelPosToViewport(pos, text_size, vp_screen_x, vp_screen_y, vp_screen_w, vp_screen_h);
     ImVec2 bbox_min(pos.x - kLabelPadding, pos.y - kLabelPadding);
     ImVec2 bbox_max(pos.x + text_size.x + kLabelPadding, pos.y + text_size.y + kLabelPadding);
 
@@ -684,8 +689,9 @@ void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& la
   }
 }
 
-void DrawOverlayLabels(const std::vector<OverlayLabel>& labels) {
-  AppendOverlayToDrawList(ImGui::GetWindowDrawList(), labels);
+void DrawOverlayLabels(const std::vector<OverlayLabel>& labels, float vp_screen_x, float vp_screen_y, float vp_screen_w,
+                       float vp_screen_h) {
+  AppendOverlayToDrawList(ImGui::GetWindowDrawList(), labels, vp_screen_x, vp_screen_y, vp_screen_w, vp_screen_h);
 }
 
 namespace detail {
@@ -701,6 +707,29 @@ void PixelToWorldDirForTesting(float px, float py, float res_x, float res_y, int
     *out_y = r.y;
     *out_z = r.z;
   }
+}
+
+ImVec2 ClampLabelPosToViewport(ImVec2 pos, ImVec2 text_size, float vp_x, float vp_y, float vp_w, float vp_h) {
+  // kViewportInsetPx is a small visual padding (in screen-space pixels) keeping the
+  // text glyph rect away from the absolute viewport edge — guards against the
+  // half-pixel anti-aliasing fringe and the panel border 1 px line. 2 px is a
+  // visual-padding heuristic, not a precise geometric boundary; revisit if a
+  // future HiDPI-aware UI pass requires resolution-scaled padding.
+  constexpr float kViewportInsetPx = 2.0f;
+
+  // Only clamp if the viewport actually has room for the text + 2×inset. If
+  // the viewport is narrower / shorter than that (extreme corner case for
+  // panel collapse / tiny export targets), fall back to the original pos so
+  // the legacy "centered on label anchor" behaviour is preserved.
+  if (vp_w > text_size.x + 2.0f * kViewportInsetPx) {
+    pos.x = std::max(pos.x, vp_x + kViewportInsetPx);
+    pos.x = std::min(pos.x, vp_x + vp_w - text_size.x - kViewportInsetPx);
+  }
+  if (vp_h > text_size.y + 2.0f * kViewportInsetPx) {
+    pos.y = std::max(pos.y, vp_y + kViewportInsetPx);
+    pos.y = std::min(pos.y, vp_y + vp_h - text_size.y - kViewportInsetPx);
+  }
+  return pos;
 }
 
 }  // namespace detail

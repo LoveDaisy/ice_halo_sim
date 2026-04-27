@@ -46,12 +46,25 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
 // Draw labels using the current ImGui window's draw list (so modals/popups correctly
 // occlude the labels), with collision avoidance. Caller must invoke this inside an
 // active ImGui::Begin/End pair.
-void DrawOverlayLabels(const std::vector<OverlayLabel>& labels);
+//
+// `vp_screen_*` is the same viewport rect the caller passed to ComputeOverlayLabels
+// (same coordinate space — see ComputeOverlayLabels comment above). Each label's
+// rendered text bounding box is clamped inside `vp_screen_* + kViewportInsetPx`
+// so labels never straddle the viewport edge — see detail::ClampLabelPosToViewport.
+//
+// Coverage asymmetry: this viewport clamp is unconditional (all lens types,
+// all visible modes). The companion hemisphere-boundary inset (~3° push toward
+// the visible side) is applied at compute time inside ComputeOverlayLabels and
+// is gated to lens 0–3 + visible=upper/lower/front (see overlay_labels.cpp).
+void DrawOverlayLabels(const std::vector<OverlayLabel>& labels, float vp_screen_x, float vp_screen_y, float vp_screen_w,
+                       float vp_screen_h);
 
 // Append overlay labels to an arbitrary ImDrawList (with collision avoidance).
 // Used by DrawOverlayLabels for the preview window's draw list and by
 // export_fbo_renderer for a self-owned list targeting an off-screen FBO.
-void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels);
+// `vp_screen_*` semantics match DrawOverlayLabels.
+void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels, float vp_screen_x,
+                             float vp_screen_y, float vp_screen_w, float vp_screen_h);
 
 namespace detail {
 
@@ -75,6 +88,19 @@ namespace detail {
 //                       left untouched in that case.
 void PixelToWorldDirForTesting(float px, float py, float res_x, float res_y, int lens_type, float fov,
                                const float view_matrix[9], float* out_x, float* out_y, float* out_z, bool* out_valid);
+
+// Clamp a label's anchor position so the rendered text bounding box stays
+// inside the viewport rect with `kViewportInsetPx` margin on each side.
+// `pos` is the desktop-relative top-left of the text glyph rect (caller has
+// already subtracted half of `text_size` from the label's center). The returned
+// position keeps `[pos.x, pos.x + text_size.x] ⊂ [vp_x + inset, vp_x + vp_w − inset]`
+// (and similarly for y), unless the viewport is too narrow to fit the text +
+// 2×inset — in that case the original pos is returned unchanged (rendering
+// degrades to "centered on label anchor", matching legacy behaviour).
+//
+// Pure function — exposed in detail:: for unit testing
+// (`overlay_labels/clamp_label_pos_*` tests).
+ImVec2 ClampLabelPosToViewport(ImVec2 pos, ImVec2 text_size, float vp_x, float vp_y, float vp_w, float vp_h);
 
 }  // namespace detail
 
