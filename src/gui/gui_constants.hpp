@@ -102,6 +102,30 @@ enum LensType : int {
   kLensTypeDualFisheyeOrthographic = 9,
 };
 
+// Lenses whose shader path skips the view matrix (full-sphere mapping):
+// dual fisheye (4-6), rectangular (7), dual orthographic (9). For these,
+// elevation/azimuth/roll/FOV slider have no visual effect and are disabled in UI.
+// SINGLE SOURCE OF TRUTH for the "full-sky" set: any new LensType must
+// reconfirm membership here. The size assert below catches new enum values
+// that forget to update the policy.
+inline constexpr int kFullSkyLensTypes[] = {
+  kLensTypeDualFisheyeEqualArea, kLensTypeDualFisheyeEquidist,     kLensTypeDualFisheyeStereographic,
+  kLensTypeRectangular,          kLensTypeDualFisheyeOrthographic,
+};
+inline constexpr int kFullSkyLensTypeCount = sizeof(kFullSkyLensTypes) / sizeof(*kFullSkyLensTypes);
+static_assert(kFullSkyLensTypeCount == 5,
+              "kFullSkyLensTypes count changed: review whether the new LensType "
+              "should be in the full-sky set, then update this assert.");
+
+inline constexpr bool LensIsFullSky(int lens_type) {
+  for (int v : kFullSkyLensTypes) {
+    if (v == lens_type) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Visible region selector. Order must match kVisibleNames in gui_state.hpp.
 enum Visible : int {
   kVisibleUpper = 0,

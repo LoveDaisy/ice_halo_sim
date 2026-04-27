@@ -363,7 +363,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 
   // Copy-model renderer: GuiState always owns a valid renderer by default construction.
   auto& r = g_state.renderer;
-  bool full_sky = (r.lens_type >= 4);
+  bool full_sky = LensIsFullSky(r.lens_type);
 
   // ---- View Group ----
   if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -569,7 +569,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     auto& r = g_state.renderer;
     float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
     r.fov = std::min(r.fov, max_fov);
-    if (r.lens_type >= 4) {  // Full-sky lenses: force view angles to zero
+    if (LensIsFullSky(r.lens_type)) {  // Full-sky lenses: force view angles to zero
       r.elevation = 0.0f;
       r.azimuth = 0.0f;
       r.roll = 0.0f;
@@ -660,9 +660,11 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       DrawOverlayLabels(labels);
     }
 
-    // Mouse interaction: orbit with drag, FOV with scroll
-    // Disabled for full-sky lens types (dual fisheye, rectangular)
-    bool full_sky = (rc.lens_type >= 4);
+    // Mouse interaction: orbit with drag, FOV with scroll.
+    // Disabled for lenses in kFullSkyLensTypes (dual fisheye 4-6, rectangular 7,
+    // dual orthographic 9): their shader path skips the view matrix so view
+    // angles + FOV have no visual effect.
+    bool full_sky = LensIsFullSky(rc.lens_type);
     ImVec2 avail = ImGui::GetContentRegionAvail();
     ImGui::InvisibleButton("##preview_interact", avail);
 
