@@ -534,25 +534,48 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       }
     };
 
+    // Push the boundary curve a few degrees inward (toward the visible side)
+    // before sampling, so labels emitted at boundary crossings don't straddle
+    // the visible/invisible split. 3° is a visual-spacing heuristic — at typical
+    // fov+lens it projects to ~4–12 px of screen offset, which clears the
+    // text height while staying close enough to read as a "boundary label".
+    constexpr float kBoundaryInsetDeg = 3.0f;
+    const float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
+
     if (input.visible == 0 || input.visible == 1) {
       // Equator: {(cos az, sin az, 0)} in world space, parameterized to match the prior loop's
       // az_rad = -π + t convention so label positions are stable across refactor.
-      sample_curve([](float t, float& wx, float& wy, float& wz) {
+      // visible=upper → push toward negative z (altitude=asin(-z) becomes positive);
+      // visible=lower → push toward positive z. After offset the world vector
+      // is renormalized so WorldDirToPixel's unit-length assumption holds.
+      const float wz_sign = (input.visible == 0) ? -1.0f : +1.0f;
+      sample_curve([wz_sign, boundary_offset](float t, float& wx, float& wy, float& wz) {
         float az = -kPi + t;
         wx = -std::cos(az);
         wy = -std::sin(az);
-        wz = 0.0f;
+        wz = wz_sign * boundary_offset;
+        float len = std::sqrt(wx * wx + wy * wy + wz * wz);
+        wx /= len;
+        wy /= len;
+        wz /= len;
       });
     } else if (input.visible == 3) {
       // Front hemisphere boundary: great circle perpendicular to forward. In view space this
       // is z_view = 0 (the xy-plane); map to world via view_matrix (column-major: col0/col1 are
       // the first two columns, i.e. view-space x and y basis expressed in world coordinates).
-      // Points: world = cos(t) * col0 + sin(t) * col1.
-      sample_curve([&](float t, float& wx, float& wy, float& wz) {
-        float c = std::cos(t), s = std::sin(t);
-        wx = c * view_matrix[0] + s * view_matrix[3];
-        wy = c * view_matrix[1] + s * view_matrix[4];
-        wz = c * view_matrix[2] + s * view_matrix[5];
+      // Points: world = cos(t) * col0 + sin(t) * col1, optionally pushed toward
+      // forward (i.e. opposite of col2 = -forward) by `boundary_offset` so the
+      // boundary samples lie inside the front hemisphere.
+      sample_curve([&, boundary_offset](float t, float& wx, float& wy, float& wz) {
+        float c = std::cos(t);
+        float s = std::sin(t);
+        wx = c * view_matrix[0] + s * view_matrix[3] - boundary_offset * view_matrix[6];
+        wy = c * view_matrix[1] + s * view_matrix[4] - boundary_offset * view_matrix[7];
+        wz = c * view_matrix[2] + s * view_matrix[5] - boundary_offset * view_matrix[8];
+        float len = std::sqrt(wx * wx + wy * wy + wz * wz);
+        wx /= len;
+        wy /= len;
+        wz /= len;
       });
     }
   }
