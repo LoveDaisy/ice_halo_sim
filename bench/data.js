@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777272879844,
+  "lastUpdate": 1777272882066,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4299,6 +4299,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 72.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c88a590f41460f51142553918e19cd6da61b6604",
+          "message": "Merge pull request #78 from LoveDaisy/feat/gui_polish\n\nfeat(gui): polish overlay labels and orthographic lens behavior",
+          "timestamp": "2026-04-27T14:49:09+08:00",
+          "tree_id": "49dcf8c39bac9be1da8ffe00b0684430d03fbb09",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c88a590f41460f51142553918e19cd6da61b6604"
+        },
+        "date": 1777272881422,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 92.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 76.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 70.2,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 63,
             "unit": "%"
           }
         ]
