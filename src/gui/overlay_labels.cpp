@@ -540,7 +540,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
     // fov+lens it projects to ~4–12 px of screen offset, which clears the
     // text height while staying close enough to read as a "boundary label".
     constexpr float kBoundaryInsetDeg = 3.0f;
-    const float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
+    float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
 
     if (input.visible == 0 || input.visible == 1) {
       // Equator: {(cos az, sin az, 0)} in world space, parameterized to match the prior loop's
@@ -548,7 +548,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       // visible=upper → push toward negative z (altitude=asin(-z) becomes positive);
       // visible=lower → push toward positive z. After offset the world vector
       // is renormalized so WorldDirToPixel's unit-length assumption holds.
-      const float wz_sign = (input.visible == 0) ? -1.0f : +1.0f;
+      float wz_sign = (input.visible == 0) ? -1.0f : +1.0f;
       sample_curve([wz_sign, boundary_offset](float t, float& wx, float& wy, float& wz) {
         float az = -kPi + t;
         wx = -std::cos(az);

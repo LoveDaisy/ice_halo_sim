@@ -562,16 +562,16 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       // Mirror the lambda in overlay_labels.cpp: equator inset for visible=upper
       // shifts wz by -sin(3°) before renormalisation, then renormalises.
       constexpr float kBoundaryInsetDeg = 3.0f;
-      const float pi = 3.14159265358979323846f;
-      const float deg2rad = pi / 180.0f;
-      const float boundary_offset = std::sin(kBoundaryInsetDeg * deg2rad);
+      constexpr float kPi = 3.14159265f;
+      constexpr float kDeg2Rad = kPi / 180.0f;
+      float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
 
       // For visible=upper, every sample on the offset equator must have wz < 0
       // (altitude = asin(-wz) > 0, i.e. inside upper hemisphere).
       // Sample 8 evenly-spaced t values along the boundary curve.
       for (int i = 0; i < 8; ++i) {
-        float t = i * (2.0f * pi / 8.0f);
-        float az = -pi + t;
+        float t = i * (2.0f * kPi / 8.0f);
+        float az = -kPi + t;
         float wx = -std::cos(az);
         float wy = -std::sin(az);
         float wz = -1.0f * boundary_offset;
@@ -581,7 +581,7 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
         wz /= len;
         IM_CHECK_LT_NO_RET(wz, 0.0f);  // upper-hemisphere visible side
         // Magnitude check: altitude should be ≈ 3° (asin(0.0523/len) ≈ 3°).
-        float altitude_deg = std::asin(-wz) * 180.0f / pi;
+        float altitude_deg = std::asin(-wz) * 180.0f / kPi;
         IM_CHECK_GT_NO_RET(altitude_deg, 2.5f);
         IM_CHECK_LT_NO_RET(altitude_deg, 3.5f);
       }
@@ -593,13 +593,13 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       IM_UNUSED(ctx);
       // Symmetric pair of upper test — visible=lower shifts wz by +sin(3°).
       constexpr float kBoundaryInsetDeg = 3.0f;
-      const float pi = 3.14159265358979323846f;
-      const float deg2rad = pi / 180.0f;
-      const float boundary_offset = std::sin(kBoundaryInsetDeg * deg2rad);
+      constexpr float kPi = 3.14159265f;
+      constexpr float kDeg2Rad = kPi / 180.0f;
+      float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
 
       for (int i = 0; i < 8; ++i) {
-        float t = i * (2.0f * pi / 8.0f);
-        float az = -pi + t;
+        float t = i * (2.0f * kPi / 8.0f);
+        float az = -kPi + t;
         float wx = -std::cos(az);
         float wy = -std::sin(az);
         float wz = +1.0f * boundary_offset;
@@ -608,9 +608,48 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
         wy /= len;
         wz /= len;
         IM_CHECK_GT_NO_RET(wz, 0.0f);  // lower-hemisphere visible side
-        float altitude_deg = std::asin(-wz) * 180.0f / pi;
+        float altitude_deg = std::asin(-wz) * 180.0f / kPi;
         IM_CHECK_LT_NO_RET(altitude_deg, -2.5f);
         IM_CHECK_GT_NO_RET(altitude_deg, -3.5f);
+      }
+    };
+  }
+
+  // Smoke test for the visible=front boundary inset path. The front-half
+  // boundary in overlay_labels.cpp is a great circle perpendicular to forward
+  // (col2 = -forward), pushed by `-boundary_offset · col2` to land inside the
+  // visible front hemisphere. With identity-ish view matrix from
+  // BuildViewMatrix(elev=0, az=0, roll=0), col2 = (1, 0, 0) → forward = -x →
+  // pushing along -col2 means subtracting (boundary_offset, 0, 0). Replicate
+  // the lambda formula and assert dot(world, col2) < 0 (i.e. world has
+  // strictly more `-forward` content, i.e. lies on the visible front side).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "hemisphere_boundary_inset_front_pushes_along_forward");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      float view[9];
+      lumice::gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);
+
+      constexpr float kBoundaryInsetDeg = 3.0f;
+      constexpr float kPi = 3.14159265f;
+      constexpr float kDeg2Rad = kPi / 180.0f;
+      float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
+
+      for (int i = 0; i < 8; ++i) {
+        float t_param = i * (2.0f * kPi / 8.0f);
+        float c = std::cos(t_param);
+        float s = std::sin(t_param);
+        float wx = c * view[0] + s * view[3] - boundary_offset * view[6];
+        float wy = c * view[1] + s * view[4] - boundary_offset * view[7];
+        float wz = c * view[2] + s * view[5] - boundary_offset * view[8];
+        float len = std::sqrt(wx * wx + wy * wy + wz * wz);
+        wx /= len;
+        wy /= len;
+        wz /= len;
+        // dot(world, col2) must be < 0 so the sample sits on the visible
+        // front side (shader cull: dot(world, col2) > 0 → invisible).
+        float dot_col2 = wx * view[6] + wy * view[7] + wz * view[8];
+        IM_CHECK_LT_NO_RET(dot_col2, 0.0f);
       }
     };
   }
