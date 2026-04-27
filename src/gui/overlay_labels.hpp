@@ -49,8 +49,9 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
 //
 // `vp_screen_*` is the same viewport rect the caller passed to ComputeOverlayLabels
 // (same coordinate space — see ComputeOverlayLabels comment above). Each label's
-// rendered text bounding box is clamped inside `vp_screen_* + kViewportInsetPx`
-// so labels never straddle the viewport edge — see detail::ClampLabelPosToViewport.
+// rendered text bounding box is clamped at least 2 px inside each viewport edge
+// (`kViewportInsetPx` in detail::ClampLabelPosToViewport) so labels never straddle
+// the viewport edge.
 //
 // Coverage asymmetry: this viewport clamp is unconditional (all lens types,
 // all visible modes). The companion hemisphere-boundary inset (~3° push toward
@@ -90,7 +91,8 @@ void PixelToWorldDirForTesting(float px, float py, float res_x, float res_y, int
                                const float view_matrix[9], float* out_x, float* out_y, float* out_z, bool* out_valid);
 
 // Clamp a label's anchor position so the rendered text bounding box stays
-// inside the viewport rect with `kViewportInsetPx` margin on each side.
+// inside the viewport rect with at least 2 px (`kViewportInsetPx`) margin
+// on each side.
 // `pos` is the desktop-relative top-left of the text glyph rect (caller has
 // already subtracted half of `text_size` from the label's center). The returned
 // position keeps `[pos.x, pos.x + text_size.x] ⊂ [vp_x + inset, vp_x + vp_w − inset]`

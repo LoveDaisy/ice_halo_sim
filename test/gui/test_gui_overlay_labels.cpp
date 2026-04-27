@@ -540,8 +540,11 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "clamp_label_pos_viewport_too_narrow");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       IM_UNUSED(ctx);
-      // Viewport width 20 cannot fit text width 30 + 2×2 inset → fallback
-      // path returns original pos so legacy "centered on anchor" survives.
+      // x fallback: viewport width 20 cannot fit text width 30 + 2×2 inset
+      // (`vp_w > text_size.x + 2×kViewportInsetPx` is false), so x is left
+      // untouched to preserve the legacy "centered on anchor" rendering.
+      // y is processed normally (vp_h=100 ≫ text_h+4=18) but happens to need
+      // no clamp here (pos.y=50 already inside [22, 104]).
       ImVec2 clamped = lumice::gui::detail::ClampLabelPosToViewport(ImVec2(5.0f, 50.0f), ImVec2(30.0f, 14.0f), 10.0f,
                                                                     20.0f, 20.0f, 100.0f);
       IM_CHECK_EQ(clamped.x, 5.0f);  // unchanged
