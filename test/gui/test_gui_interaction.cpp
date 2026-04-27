@@ -1751,6 +1751,73 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p2_render/lens_orthographic_view_controls — single orthographic must allow
+  // elevation/azimuth/roll edits and NOT be force-zeroed (issue subpoint 2),
+  // and FOV slider must remain effective up to its 180° clamp (issue subpoint 3).
+  // Regression guard for the LensIsFullSky() refactor (task-orthographic-followup
+  // Step 1): the previous `lens_type >= 4` heuristic incorrectly flagged single
+  // orthographic (lens=8) as full-sky, disabling all view controls.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_orthographic_view_controls");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeOrthographic;
+      gui::g_state.renderer.fov = 120.0f;
+      gui::g_state.renderer.elevation = 30.0f;
+      gui::g_state.renderer.azimuth = 45.0f;
+      gui::g_state.renderer.roll = 10.0f;
+      ctx->Yield(3);
+
+      // Single orthographic must NOT be force-zeroed by the per-frame full-sky guard.
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 30.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 45.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.roll, 10.0f);
+
+      // FOV slider must accept values up to 180° without being clamped lower.
+      gui::g_state.renderer.fov = 170.0f;
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.fov, 170.0f);
+
+      // Pushing past 180° is clamped (already covered by lens_orthographic_selection,
+      // re-asserted here to keep the "FOV adjustable + clamped" invariant explicit).
+      gui::g_state.renderer.fov = 220.0f;
+      ctx->Yield(3);
+      IM_CHECK_LE(gui::g_state.renderer.fov, 180.0f);
+    };
+  }
+
+  // p2_render/lens_full_sky_view_controls_disabled — guards the full-sky set
+  // {dual fisheye, rectangular, dual orthographic} from accidentally gaining
+  // view controls. If kFullSkyLensTypes ever loses any of these, this test
+  // catches the regression.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_full_sky_view_controls_disabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const int kFullSkyLenses[] = {
+        gui::kLensTypeDualFisheyeEqualArea,     gui::kLensTypeDualFisheyeEquidist,
+        gui::kLensTypeDualFisheyeStereographic, gui::kLensTypeRectangular,
+        gui::kLensTypeDualFisheyeOrthographic,
+      };
+      for (int lens : kFullSkyLenses) {
+        ResetTestState();
+        ctx->Yield(2);
+
+        gui::g_state.renderer.lens_type = lens;
+        gui::g_state.renderer.elevation = 30.0f;
+        gui::g_state.renderer.azimuth = 45.0f;
+        gui::g_state.renderer.roll = 10.0f;
+        ctx->Yield(3);
+
+        // Per-frame full-sky guard must zero these for every lens in the set.
+        IM_CHECK_EQ(gui::g_state.renderer.elevation, 0.0f);
+        IM_CHECK_EQ(gui::g_state.renderer.azimuth, 0.0f);
+        IM_CHECK_EQ(gui::g_state.renderer.roll, 0.0f);
+      }
+    };
+  }
+
   // p2_render/modal_layout_toggle_bit — switching modal_layout_vertical is safe
   // (view preference state-level test; layout dispatch is exercised only indirectly
   // through subsequent modal open, which would require a live popup — omitted to

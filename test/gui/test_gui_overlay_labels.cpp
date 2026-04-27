@@ -72,6 +72,58 @@ int CountGridLabels(const std::vector<lumice::gui::OverlayLabel>& labels) {
   return n;
 }
 
+// Regression test for task-orthographic-followup Step 2 dispatch: at the same
+// view config, single orthographic (lens=8) and Fisheye Equidistant (lens=2)
+// must produce comparably-sized grid label sets. Pre-fix, lens=8 fell to the
+// RectangularInv fallback in PixelToWorldDir, producing a label set with
+// completely different geometry (and the symptomatic upside-down latitude
+// labels reported in issue subpoint 4). The orthographic / equidistant
+// fisheye pair shares the same projection topology (single disc, view-matrix
+// applied), so their label counts on the same viewport differ only in the
+// radial mapping detail — well within ±50% of each other in practice.
+//
+// Note (dual orthographic, lens=9): a parallel test for lens=9 is omitted
+// intentionally. Dual fisheye / orthographic projections always size their
+// twin discs to fit exactly in the viewport (circle_radius = min(W/2, H)/2),
+// so viewport edges are at most tangent to the discs — never a chord — and
+// ComputeOverlayLabels' edge-sampling loop yields no valid sample pairs for
+// any lens=9 configuration. The fix for lens=9 in PixelToWorldDir uses the
+// same dispatch pattern as lens=8 (FisheyeInv vs DualFisheyeInv with type=3),
+// so the lens=8 regression below is sufficient coverage of the dispatch.
+void SingleOrthoLatTestFunc(ImGuiTestContext* ctx) {
+  IM_UNUSED(ctx);
+  constexpr float kVpX = 0.0f;
+  constexpr float kVpY = 0.0f;
+  constexpr float kVpW = 200.0f;
+  constexpr float kVpH = 200.0f;
+
+  auto in_ortho = MakeGridOnly(/*visible=Full*/ 2, /*lens=Single Orthographic*/ 8, /*elev*/ 0.0f, /*az*/ 0.0f);
+  in_ortho.fov = 60.0f;
+  std::vector<lumice::gui::OverlayLabel> labels_ortho;
+  lumice::gui::ComputeOverlayLabels(in_ortho, kVpX, kVpY, kVpW, kVpH, labels_ortho);
+
+  auto in_fisheye = MakeGridOnly(/*visible=Full*/ 2, /*lens=Fisheye Equidistant*/ 2, /*elev*/ 0.0f, /*az*/ 0.0f);
+  in_fisheye.fov = 60.0f;
+  std::vector<lumice::gui::OverlayLabel> labels_fisheye;
+  lumice::gui::ComputeOverlayLabels(in_fisheye, kVpX, kVpY, kVpW, kVpH, labels_fisheye);
+
+  int n_ortho = CountGridLabels(labels_ortho);
+  int n_fisheye = CountGridLabels(labels_fisheye);
+
+  // Both must be non-zero (sanity).
+  IM_CHECK_GT(n_ortho, 0);
+  IM_CHECK_GT(n_fisheye, 0);
+
+  // The two single-fisheye-class projections differ only in radial mapping —
+  // edge-sampling crossings should cluster at similar counts. Ratio guard
+  // catches regressions like the pre-fix Rectangular fallback (which would
+  // give a count off by a large factor from the fisheye reference).
+  // Pick a generous ±50% band to absorb radial-mapping nonlinearities while
+  // still failing under a wholly different projection.
+  IM_CHECK_GE(n_ortho * 2, n_fisheye);  // n_ortho >= n_fisheye / 2
+  IM_CHECK_LE(n_ortho, n_fisheye * 2);  // n_ortho <= n_fisheye * 2
+}
+
 }  // namespace
 
 void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
@@ -284,5 +336,11 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
         IM_CHECK_LT(std::abs((b.screen_y - a.screen_y) - kDy), kEps);
       }
     };
+  }
+
+  // Test: single orthographic dispatch — see SingleOrthoLatTestFunc above.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "single_orthographic_dispatch_matches_fisheye");
+    t->TestFunc = SingleOrthoLatTestFunc;
   }
 }
