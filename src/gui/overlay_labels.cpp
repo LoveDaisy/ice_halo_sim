@@ -486,123 +486,187 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
     return s;
   };
 
-  // Sample along viewport edges
-  for (const auto& edge : edges) {
-    float edge_len = std::sqrt((edge.end_px - edge.start_px) * (edge.end_px - edge.start_px) +
-                               (edge.end_py - edge.start_py) * (edge.end_py - edge.start_py));
-    int num_samples = std::max(2, static_cast<int>(edge_len / kSampleStep));
+  // === overlay-label sample-source dispatch ===
+  // ComputeOverlayLabels combines up to 5 sample sources to produce labels.
+  // Activation rules (kept in one place to make per-(lens, visible) coverage
+  // auditable; see also LensIsFullSky in gui_constants.hpp):
+  //   1. sample_viewport_edges()        : always (every lens, every visible).
+  //   2. sample_hemisphere_equator(±1)  : !full_sky AND visible ∈ {Upper, Lower}.
+  //   3. sample_front_great_circle()    : !full_sky AND visible == Front.
+  //   4. sample_interior_latitudes()    : !full_sky AND lens != Linear; covers
+  //                                        the gap when the projection disc is
+  //                                        smaller than the viewport (e.g.
+  //                                        single-orthographic + fov=180 +
+  //                                        visible=Full) so latitude rings
+  //                                        wholly inside the disc still get a
+  //                                        text label. Per-altitude is_visible
+  //                                        filter handles Upper/Lower/Front
+  //                                        modes uniformly.
+  //   5. sample_sun_circle_interior()   : show_sun_circles AND !full_sky.
+  // LensIsFullSky is the SSOT for "is this a world-space / full-sky lens?"
+  // (dual fisheye 4-6, rectangular 7, dual orthographic 9 → true).
 
+  // Push the boundary curve a few degrees inward (toward the visible side)
+  // before sampling, so labels emitted at boundary crossings don't straddle
+  // the visible/invisible split. 3° is a visual-spacing heuristic — at typical
+  // fov+lens it projects to ~4–12 px of screen offset, which clears the
+  // text height while staying close enough to read as a "boundary label".
+  constexpr int kBoundarySamples = 360;
+  constexpr float kBoundaryInsetDeg = 3.0f;
+  const float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
+
+  // Helper: walk a parametric world-space curve and feed adjacent forward-
+  // projected sample pairs into detect_crossings. Shared by hemisphere-equator
+  // and front-great-circle samplers.
+  auto sample_curve = [&](auto curve_fn) {
     SampleAngles prev{};
     prev.valid = false;
+    for (int i = 0; i <= kBoundarySamples; i++) {
+      float t = i * (2.0f * kPi / kBoundarySamples);
+      float wx_b = 0, wy_b = 0, wz_b = 0;
+      curve_fn(t, wx_b, wy_b, wz_b);
 
-    for (int i = 0; i <= num_samples; i++) {
-      float frac = static_cast<float>(i) / num_samples;
-      float px = edge.start_px + frac * (edge.end_px - edge.start_px);
-      float py = edge.start_py + frac * (edge.end_py - edge.start_py);
-      float sx = edge.start_sx + frac * (edge.end_sx - edge.start_sx);
-      float sy = edge.start_sy + frac * (edge.end_sy - edge.start_sy);
+      FwdResult fp = WorldDirToPixel(wx_b, wy_b, wz_b, res_x, res_y, input.lens_type, input.fov, view_matrix);
+      if (!fp.valid || std::abs(fp.px) > hw || std::abs(fp.py) > hh) {
+        prev.valid = false;
+        continue;
+      }
 
-      SampleAngles cur = make_sample(px, py, sx, sy);
+      float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
+      float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
+
+      SampleAngles cur = make_sample(fp.px, fp.py, scr_x, scr_y);
       if (prev.valid && cur.valid)
         detect_crossings(prev, cur);
       prev = cur;
     }
-  }
+  };
 
-  // Hemisphere-boundary sampling: grid labels should appear at the edge of the visible sky,
-  // not just at viewport edges. There are three distinct "edges" a grid line can cross:
-  //   (1) the viewport rectangle — handled by edges[4] loop above;
-  //   (2) the equator (altitude=0) — visible in upper/lower modes as the horizon cutoff;
-  //   (3) the front-half great circle (dot(world_dir, forward)=0) — visible in front mode.
-  // Below we sample each applicable hemisphere boundary in world space, forward-project to
-  // pixels, and feed adjacent sample pairs into detect_crossings, reusing the same crossing
-  // logic as viewport edges.
-  // Restricted to view-transformed lens types (linear, single fisheye, single
-  // orthographic) because WorldDirToPixel only implements forward projection
-  // for those — see WorldDirToPixel above. Full-sky lens types (dual fisheye /
-  // rectangular / dual orthographic) are correctly handled by the viewport-edge
-  // path because those projections already show the full sphere and the
-  // hemisphere boundary coincides with the pixel cull.
-  if (!LensIsFullSky(input.lens_type)) {
-    constexpr int kBoundarySamples = 360;
+  // Source 1: viewport rectangle edges.
+  auto sample_viewport_edges = [&]() {
+    for (const auto& edge : edges) {
+      float edge_len = std::sqrt((edge.end_px - edge.start_px) * (edge.end_px - edge.start_px) +
+                                 (edge.end_py - edge.start_py) * (edge.end_py - edge.start_py));
+      int num_samples = std::max(2, static_cast<int>(edge_len / kSampleStep));
 
-    auto sample_curve = [&](auto curve_fn) {
       SampleAngles prev{};
       prev.valid = false;
-      for (int i = 0; i <= kBoundarySamples; i++) {
-        float t = i * (2.0f * kPi / kBoundarySamples);
-        float wx_b = 0, wy_b = 0, wz_b = 0;
-        curve_fn(t, wx_b, wy_b, wz_b);
 
-        FwdResult fp = WorldDirToPixel(wx_b, wy_b, wz_b, res_x, res_y, input.lens_type, input.fov, view_matrix);
-        if (!fp.valid || std::abs(fp.px) > hw || std::abs(fp.py) > hh) {
-          prev.valid = false;
-          continue;
-        }
+      for (int i = 0; i <= num_samples; i++) {
+        float frac = static_cast<float>(i) / num_samples;
+        float px = edge.start_px + frac * (edge.end_px - edge.start_px);
+        float py = edge.start_py + frac * (edge.end_py - edge.start_py);
+        float sx = edge.start_sx + frac * (edge.end_sx - edge.start_sx);
+        float sy = edge.start_sy + frac * (edge.end_sy - edge.start_sy);
 
-        float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
-        float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
-
-        SampleAngles cur = make_sample(fp.px, fp.py, scr_x, scr_y);
+        SampleAngles cur = make_sample(px, py, sx, sy);
         if (prev.valid && cur.valid)
           detect_crossings(prev, cur);
         prev = cur;
       }
-    };
-
-    // Push the boundary curve a few degrees inward (toward the visible side)
-    // before sampling, so labels emitted at boundary crossings don't straddle
-    // the visible/invisible split. 3° is a visual-spacing heuristic — at typical
-    // fov+lens it projects to ~4–12 px of screen offset, which clears the
-    // text height while staying close enough to read as a "boundary label".
-    constexpr float kBoundaryInsetDeg = 3.0f;
-    float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
-
-    if (input.visible == 0 || input.visible == 1) {
-      // Equator: {(cos az, sin az, 0)} in world space, parameterized to match the prior loop's
-      // az_rad = -π + t convention so label positions are stable across refactor.
-      // visible=upper → push toward negative z (altitude=asin(-z) becomes positive);
-      // visible=lower → push toward positive z. After offset the world vector
-      // is renormalized so WorldDirToPixel's unit-length assumption holds.
-      float wz_sign = (input.visible == 0) ? -1.0f : +1.0f;
-      sample_curve([wz_sign, boundary_offset](float t, float& wx, float& wy, float& wz) {
-        float az = -kPi + t;
-        wx = -std::cos(az);
-        wy = -std::sin(az);
-        wz = wz_sign * boundary_offset;
-        float len = std::sqrt(wx * wx + wy * wy + wz * wz);
-        wx /= len;
-        wy /= len;
-        wz /= len;
-      });
-    } else if (input.visible == 3) {
-      // Front hemisphere boundary: great circle perpendicular to forward. In view space this
-      // is z_view = 0 (the xy-plane); map to world via view_matrix (column-major: col0/col1 are
-      // the first two columns, i.e. view-space x and y basis expressed in world coordinates).
-      // Points: world = cos(t) * col0 + sin(t) * col1, optionally pushed toward
-      // forward (i.e. opposite of col2 = -forward) by `boundary_offset` so the
-      // boundary samples lie inside the front hemisphere.
-      sample_curve([&, boundary_offset](float t, float& wx, float& wy, float& wz) {
-        float c = std::cos(t);
-        float s = std::sin(t);
-        wx = c * view_matrix[0] + s * view_matrix[3] - boundary_offset * view_matrix[6];
-        wy = c * view_matrix[1] + s * view_matrix[4] - boundary_offset * view_matrix[7];
-        wz = c * view_matrix[2] + s * view_matrix[5] - boundary_offset * view_matrix[8];
-        float len = std::sqrt(wx * wx + wy * wy + wz * wz);
-        wx /= len;
-        wy /= len;
-        wz /= len;
-      });
     }
-  }
+  };
 
-  // Sun circles: add interior labels when circles don't intersect viewport edges.
-  // Place 4 labels evenly around each sun circle using forward projection.
-  // Same gate as the hemisphere boundary block: only view-transformed lens
-  // types (linear / single fisheye / single orthographic) need interior labels;
-  // full-sky lenses always have edges intersect the sun circle. Reusing
-  // !LensIsFullSky keeps the lens classification single-sourced.
-  if (input.show_sun_circles && !LensIsFullSky(input.lens_type)) {
+  // Source 2: equator (altitude=0). Active under visible=Upper/Lower; the wz
+  // sign chooses which side the inset offset is applied to.
+  // visible=upper → push toward negative z (altitude=asin(-z) becomes positive);
+  // visible=lower → push toward positive z. After offset the world vector
+  // is renormalized so WorldDirToPixel's unit-length assumption holds.
+  // The az_rad = -π + t parameterization preserves label positions across
+  // the v15/v16 refactors that introduced this sampler.
+  auto sample_hemisphere_equator = [&](float wz_sign) {
+    sample_curve([wz_sign, boundary_offset](float t, float& wx, float& wy, float& wz) {
+      float az = -kPi + t;
+      wx = -std::cos(az);
+      wy = -std::sin(az);
+      wz = wz_sign * boundary_offset;
+      float len = std::sqrt(wx * wx + wy * wy + wz * wz);
+      wx /= len;
+      wy /= len;
+      wz /= len;
+    });
+  };
+
+  // Source 3: front-half great circle (dot(world_dir, forward)=0). Active
+  // under visible=Front. In view space this is the xy-plane; map to world via
+  // view_matrix (column-major: col0/col1 are view-space x/y basis vectors in
+  // world coords). Points: world = cos(t)*col0 + sin(t)*col1, then nudged
+  // toward forward (opposite of col2 = -forward) by boundary_offset so the
+  // boundary samples lie strictly inside the front hemisphere.
+  auto sample_front_great_circle = [&]() {
+    sample_curve([&](float t, float& wx, float& wy, float& wz) {
+      float c = std::cos(t);
+      float s = std::sin(t);
+      wx = c * view_matrix[0] + s * view_matrix[3] - boundary_offset * view_matrix[6];
+      wy = c * view_matrix[1] + s * view_matrix[4] - boundary_offset * view_matrix[7];
+      wz = c * view_matrix[2] + s * view_matrix[5] - boundary_offset * view_matrix[8];
+      float len = std::sqrt(wx * wx + wy * wy + wz * wz);
+      wx /= len;
+      wy /= len;
+      wz /= len;
+    });
+  };
+
+  // Source 4 (NEW): place one latitude label per ring whose forward projection
+  // lies inside the projection disc but the disc itself does not intersect any
+  // viewport edge / hemisphere boundary curve. Walks a small altitude grid
+  // (±10°…±80°) and, per altitude, samples 64 azimuths to find the first valid
+  // viewport-in + visible pixel. is_visible() handles Upper/Lower/Front modes
+  // uniformly. Output is grid-group, no background, no per-source dedup
+  // beyond the existing-text check below — bbox overlap suppression in
+  // AppendOverlayToDrawList is the second line of defence at draw time.
+  // Linear lens excluded by caller dispatch (its latitude rings are screen-
+  // space lines already covered by sample_viewport_edges).
+  auto sample_interior_latitudes = [&]() {
+    if (!input.show_grid)
+      return;
+    constexpr int kAzimuthSamples = 64;
+    constexpr int kAltitudeSteps[] = { -80, -70, -60, -50, -40, -30, -20, -10, 10, 20, 30, 40, 50, 60, 70, 80 };
+    for (int alt_deg : kAltitudeSteps) {
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%.0f\xC2\xB0", static_cast<float>(alt_deg));
+      bool already_present = false;
+      for (const auto& l : out) {
+        if (l.group == kGroupGrid && l.text == buf) {
+          already_present = true;
+          break;
+        }
+      }
+      if (already_present)
+        continue;
+
+      const float alt_rad = static_cast<float>(alt_deg) * kDeg2Rad;
+      const float cos_a = std::cos(alt_rad);
+      const float sin_a = std::sin(alt_rad);
+
+      for (int k = 0; k < kAzimuthSamples; k++) {
+        float az = 2.0f * kPi * static_cast<float>(k) / kAzimuthSamples;
+        // Direction matched to make_sample's altitude/azimuth conventions:
+        //   altitude = asin(-z) → z = -sin(alt)
+        //   azimuth  = atan2(-y, -x) → x = -cos(alt)cos(az), y = -cos(alt)sin(az)
+        float wx = -cos_a * std::cos(az);
+        float wy = -cos_a * std::sin(az);
+        float wz = -sin_a;
+        if (!is_visible(static_cast<float>(alt_deg), wx, wy, wz))
+          continue;
+        FwdResult fp = WorldDirToPixel(wx, wy, wz, res_x, res_y, input.lens_type, input.fov, view_matrix);
+        if (!fp.valid)
+          continue;
+        if (std::abs(fp.px) > hw || std::abs(fp.py) > hh)
+          continue;
+
+        float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
+        float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
+        out.push_back({ scr_x, scr_y, std::string(buf), grid_col, false, kGroupGrid });
+        break;
+      }
+    }
+  };
+
+  // Source 5: sun-circle interior labels. Active when sun circles are enabled
+  // and the lens is view-transformed (full-sky lenses always have viewport
+  // edges intersect the sun circle).
+  auto sample_sun_circle_interior = [&]() {
     for (int ci = 0; ci < input.sun_circle_count; ci++) {
       float angle_deg = input.sun_circle_angles[ci];
       // Check if this circle already has edge labels
@@ -679,6 +743,26 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
         out.push_back({ scr_x, scr_y, std::string(buf), sun_col, true, kGroupSunCircles });
       }
     }
+  };
+
+  // === dispatch ===
+  const bool full_sky = LensIsFullSky(input.lens_type);
+
+  sample_viewport_edges();
+
+  if (!full_sky) {
+    if (input.visible == kVisibleUpper)
+      sample_hemisphere_equator(-1.0f);
+    if (input.visible == kVisibleLower)
+      sample_hemisphere_equator(+1.0f);
+    if (input.visible == kVisibleFront)
+      sample_front_great_circle();
+    if (input.lens_type != kLensTypeLinear)
+      sample_interior_latitudes();
+  }
+
+  if (input.show_sun_circles && !full_sky) {
+    sample_sun_circle_interior();
   }
 }
 

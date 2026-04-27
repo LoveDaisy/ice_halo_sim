@@ -74,6 +74,26 @@ int CountGridLabels(const std::vector<lumice::gui::OverlayLabel>& labels) {
   return n;
 }
 
+// Counts distinct grid-group label texts (i.e. unique latitude/longitude
+// values present), used by the source-4 ortho/equidist fov=180 tests below.
+int CountUniqueGridLabels(const std::vector<lumice::gui::OverlayLabel>& labels) {
+  std::vector<std::string> seen;
+  for (const auto& l : labels) {
+    if (l.group != 0)
+      continue;
+    bool dup = false;
+    for (const auto& s : seen) {
+      if (s == l.text) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup)
+      seen.push_back(l.text);
+  }
+  return static_cast<int>(seen.size());
+}
+
 // Regression test for task-orthographic-followup Step 2 dispatch: at the same
 // view config, single orthographic (lens=8) and Fisheye Equidistant (lens=2)
 // must produce comparably-sized grid label sets. Pre-fix, lens=8 fell to the
@@ -700,6 +720,66 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       std::vector<lumice::gui::OverlayLabel> labels_fisheye;
       lumice::gui::ComputeOverlayLabels(in_fisheye, 0.0f, 0.0f, 200.0f, 200.0f, labels_fisheye);
       IM_CHECK_EQ(CountSunCircleLabels(labels), CountSunCircleLabels(labels_fisheye));
+    };
+  }
+
+  // Tests for sample_interior_latitudes (Source 4) covering the disc-smaller-
+  // than-viewport regression: when a view-transformed lens projects the sky
+  // onto a disc strictly inside the viewport, latitude rings wholly inside the
+  // disc never cross any viewport edge or hemisphere-boundary curve, so the
+  // pre-source-4 dispatch produced zero latitude labels under
+  // visible=Full / Upper / Lower. Source 4 walks ±10°…±80° altitude steps
+  // (16 rings) and emits one label per ring whose forward projection lands in
+  // a valid, in-viewport, is_visible pixel.
+  //
+  // Concrete bug: lens=Fisheye Orthographic + fov=180 + visible=Full puts an
+  // inscribed disc inside a square viewport; latitude circles are concentric
+  // inside the disc → 0 labels pre-fix, ≥ 5 post-fix. The same source helps
+  // fov=180 Upper/Lower modes and is symmetric across single-fisheye lenses.
+
+  // T1: orthographic + fov=180 + visible=Full → ≥ 5 distinct latitude labels.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "ortho_fov180_full_visible_emits_latitude_labels");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeOrthographic,
+                             /*elev*/ 0.0f, /*az*/ 0.0f);
+      in.fov = 180.0f;
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 200.0f, 200.0f, labels);
+      IM_CHECK_GE(CountUniqueGridLabels(labels), 5);
+    };
+  }
+
+  // T2: orthographic + fov=180 + visible=Upper → ≥ 5 distinct latitude labels.
+  // Hemisphere-equator boundary alone covers altitude=0 only; source 4 fills
+  // the interior latitudes.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "ortho_fov180_upper_visible_emits_latitude_labels");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleUpper, lumice::gui::kLensTypeFisheyeOrthographic,
+                             /*elev*/ 0.0f, /*az*/ 0.0f);
+      in.fov = 180.0f;
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 200.0f, 200.0f, labels);
+      IM_CHECK_GE(CountUniqueGridLabels(labels), 5);
+    };
+  }
+
+  // T3: equidistant fov=180 + visible=Full → ≥ 5 distinct latitude labels.
+  // Verifies source 4 activates for all view-transformed (non-linear) lenses,
+  // not just orthographic.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "equidist_fov180_full_visible_consistent");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeEquidist,
+                             /*elev*/ 0.0f, /*az*/ 0.0f);
+      in.fov = 180.0f;
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 200.0f, 200.0f, labels);
+      IM_CHECK_GE(CountUniqueGridLabels(labels), 5);
     };
   }
 }

@@ -110,6 +110,10 @@ void WindowSizeCallback(GLFWwindow* /*window*/, int /*width*/, int /*height*/) {
   if (g_state.aspect_preset != AspectPreset::kFree) {
     g_state.aspect_preset = AspectPreset::kFree;
   }
+  // Manual resize takes the user out of any preset, so the "screen too small"
+  // warning is no longer meaningful — clear it so the GUI does not display a
+  // stale clamp banner against a Free preset.
+  g_state.aspect_clamp = {};
 }
 
 void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, float override_ratio) {
@@ -117,6 +121,7 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   if (preset == AspectPreset::kMatchBg) {
     ratio = override_ratio > 0.0f ? override_ratio : g_preview.GetBgAspect();
     if (!g_preview.HasBackground()) {
+      g_state.aspect_clamp = {};
       return;
     }
   } else {
@@ -126,6 +131,9 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
     ratio = 1.0f / ratio;
   }
   if (ratio <= 0.0f) {
+    // kFree (or any other ratio-less preset) reaches here — no preview-region
+    // ratio to honor, so any prior clamp warning is no longer relevant.
+    g_state.aspect_clamp = {};
     return;
   }
 
@@ -139,10 +147,6 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   constexpr float kCollapsedStripWidth = 20.0f;  // Must match kCollapseBtnSize in app_panels.cpp
   float left_w = g_state.left_panel_collapsed ? kCollapsedStripWidth : kLeftPanelWidth;
   float right_w = g_state.right_panel_collapsed ? kCollapsedStripWidth : kRightPanelWidth;
-  float preview_w = std::max(1.0f, static_cast<float>(win_w) - left_w - right_w);
-  float preview_h = preview_w / ratio;
-  auto target_h = static_cast<int>(preview_h + kTopBarHeight + kStatusBarHeight);
-  int target_w = win_w;
 
   // Select the monitor containing the window center so multi-monitor users do
   // not get yanked back to primary when aspect ratio changes (v11 bug #4).
@@ -174,18 +178,10 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
     glfwGetMonitorWorkarea(glfwGetPrimaryMonitor(), &work_x, &work_y, &work_w, &work_h);
   }
 
-  target_w = std::clamp(target_w, kMinWindowWidth, work_w);
-  target_h = std::clamp(target_h, kMinWindowHeight, work_h);
-
-  // If height was clamped, recalculate width to maintain ratio
-  float actual_preview_h = static_cast<float>(target_h) - kTopBarHeight - kStatusBarHeight;
-  if (actual_preview_h > 0.0f) {
-    float actual_preview_w = actual_preview_h * ratio;
-    int recalc_w = static_cast<int>(actual_preview_w + left_w + right_w);
-    if (recalc_w >= kMinWindowWidth && recalc_w <= work_w) {
-      target_w = recalc_w;
-    }
-  }
+  AspectFitResult fit =
+      ResolveAspectFit(win_w, ratio, work_w, work_h, left_w, right_w, kTopBarHeight, kStatusBarHeight);
+  int target_w = fit.target_w;
+  int target_h = fit.target_h;
 
   g_programmatic_resize = 2;  // Expect up to 2 callbacks (some platforms fire intermediate + final)
   glfwSetWindowSize(window, target_w, target_h);
@@ -213,6 +209,14 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   if (moved) {
     glfwSetWindowPos(window, pos_x, pos_y);
   }
+
+  // Surface the clamp signal to the GUI. Done after glfwSetWindowSize so the
+  // achieved/requested ratios written to state correspond to the size we
+  // actually asked the OS for (the resize callback may further fudge the size
+  // by ±1 px, but ResolveAspectFit already accounts for chrome rounding).
+  g_state.aspect_clamp.was_clamped = fit.was_clamped;
+  g_state.aspect_clamp.requested_preview_ratio = fit.requested_preview_ratio;
+  g_state.aspect_clamp.achieved_preview_ratio = fit.achieved_preview_ratio;
 }
 
 // Ensure CPU-side sRGB uint8 texture is available for .lmc save.

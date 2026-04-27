@@ -242,6 +242,18 @@ struct GuiState {
   AspectPreset aspect_preset = AspectPreset::kFree;
   bool aspect_portrait = false;
 
+  // Runtime-derived aspect clamp info — populated by ApplyAspectRatio when an
+  // aspect preset cannot be honored on the current monitor (e.g. picking 2:1
+  // on a 1280×720 work area). Drives the warning text rendered next to the
+  // aspect-ratio combo. NOT serialized into .lmc view-prefs (it's a derived
+  // signal, recomputed on every preset change / window-size callback).
+  struct AspectClampInfo {
+    bool was_clamped = false;
+    float requested_preview_ratio = 0.0f;
+    float achieved_preview_ratio = 0.0f;
+  };
+  AspectClampInfo aspect_clamp{};
+
   // Background image overlay (view preference — does not call MarkDirty)
   std::filesystem::path bg_path;
   bool bg_show = false;

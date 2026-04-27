@@ -448,6 +448,25 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     }
     ImGui::EndDisabled();
 
+    // Screen-too-small warning: rendered only when the requested aspect could
+    // not be honored AND the user is still on a non-Free preset (the
+    // ApplyAspectRatio path already clears aspect_clamp on Free / kMatchBg-no-bg,
+    // but we re-check here so a stale signal from a missed callback path
+    // cannot leak through).
+    if (g_state.aspect_clamp.was_clamped && g_state.aspect_preset != AspectPreset::kFree) {
+      // Disabled Selectable for the static header (ImGui::Text* widgets are
+      // emitted with id=0 so they cannot be located by the GUI test engine;
+      // disabled Selectable still calls ItemAdd with a real ID derived from
+      // the label, so it is addressable while remaining non-interactive).
+      // Dynamic ratio detail follows as a plain Text below.
+      const ImVec4 kClampWarnColor = ImVec4(1.0f, 0.7f, 0.2f, 1.0f);
+      ImGui::PushStyleColor(ImGuiCol_Text, kClampWarnColor);
+      ImGui::Selectable("Screen too small for this aspect", false, ImGuiSelectableFlags_Disabled);
+      ImGui::Text("preview ~%.2f:1, export %.2f:1", g_state.aspect_clamp.achieved_preview_ratio,
+                  g_state.aspect_clamp.requested_preview_ratio);
+      ImGui::PopStyleColor();
+    }
+
     ImGui::SeparatorText("Background");
     if (ImGui::Button("Load Bg##display")) {
       DoLoadBackground(window);

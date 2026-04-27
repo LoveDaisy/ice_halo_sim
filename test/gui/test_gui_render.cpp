@@ -173,6 +173,60 @@ void RegisterAspectRatioTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // Test 6a: clamp warning visible when was_clamped + non-Free preset
+  // ----------------------------------------------------------------
+  // Asserts the *render path*, not the state-transition path: pure-function
+  // unit tests in test_window_sizing.cpp already cover ResolveAspectFit
+  // computing was_clamped correctly. This test simply exercises the GUI
+  // branch that surfaces the field as a TextColored item.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "clamp_warning_visible");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      gui::g_state.aspect_preset = gui::AspectPreset::k2x1;
+      gui::g_state.aspect_clamp.was_clamped = true;
+      gui::g_state.aspect_clamp.requested_preview_ratio = 2.0f;
+      gui::g_state.aspect_clamp.achieved_preview_ratio = 1.01f;
+      ctx->Yield(2);
+
+      IM_CHECK(ctx->ItemExists("**/Screen too small for this aspect"));
+    };
+  }
+
+  // Test 6b: clamp warning hidden when preset is Free (defensive re-check
+  // in app_panels.cpp prevents a stale was_clamped from leaking through).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "clamp_warning_hidden_on_free");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      gui::g_state.aspect_preset = gui::AspectPreset::kFree;
+      gui::g_state.aspect_clamp.was_clamped = true;
+      gui::g_state.aspect_clamp.requested_preview_ratio = 2.0f;
+      gui::g_state.aspect_clamp.achieved_preview_ratio = 1.01f;
+      ctx->Yield(2);
+
+      IM_CHECK(!ctx->ItemExists("**/Screen too small for this aspect"));
+    };
+  }
+
+  // Test 6c: clamp warning hidden when was_clamped is false.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "clamp_warning_hidden_when_unclamped");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      gui::g_state.aspect_preset = gui::AspectPreset::k2x1;
+      gui::g_state.aspect_clamp.was_clamped = false;
+      gui::g_state.aspect_clamp.requested_preview_ratio = 2.0f;
+      gui::g_state.aspect_clamp.achieved_preview_ratio = 2.0f;
+      ctx->Yield(2);
+
+      IM_CHECK(!ctx->ItemExists("**/Screen too small for this aspect"));
+    };
+  }
+
   // Test 6: Screen bounds — ApplyAspectRatio clamps to workarea
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "screen_bounds");
