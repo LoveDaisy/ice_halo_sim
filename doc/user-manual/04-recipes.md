@@ -164,7 +164,7 @@ When light is scattered twice by parallel plate crystals, a fainter ring appears
     },
     "ray_num": 5000000, "max_hits": 12,
     "scattering": [
-      { "prob": 1.0, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] },
+      { "prob": 0.5, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] },
       { "prob": 0.0, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] }
     ]
   },
@@ -180,7 +180,7 @@ When light is scattered twice by parallel plate crystals, a fainter ring appears
 
 Notes:
 
-- The **two scattering entries** model "every ray hits a plate, then every survivor hits another plate". `scattering[i].prob` is the probability that an outgoing ray from layer `i` *continues* into layer `i+1` (the last entry's `prob` flips that ray to "outgoing", so set it to `0.0`). With `[1.0, 0.0]` every ray scatters exactly twice — the canonical setup for "multiple scattering" — see [`../configuration.md`](../configuration.md) §`scattering`.
+- The **two scattering entries** model "every ray hits a plate, then a fraction proceed to a second plate". `scattering[i].prob` is the probability that an outgoing ray from layer `i` *continues* into layer `i+1` (the last entry's `prob` flips that ray to "outgoing", so set it to `0.0`). With `[0.5, 0.0]` half the rays exit after a single scatter (giving the bright 22° ring) and half continue into a second scatter (giving the dim 44° outer ring) — see [`../configuration.md`](../configuration.md) §`scattering`.
 - `max_hits` is raised to `12` because a doubly-scattered ray can take more bounces before exiting.
 - The 44° ring is dim — `ray_num=5e6` gives a usable preview; raise to `5e7` for a clean image.
 

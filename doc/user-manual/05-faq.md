@@ -59,7 +59,7 @@ So the two spectrum modes have different cost profiles:
 
 **Practical advice**:
 
-- First run? `ray_num=1e6` + a single wavelength (`[[550, 1.0]]`) finishes in seconds.
+- First run? `ray_num=1e6` + a single wavelength (`[{"wavelength": 550, "weight": 1.0}]`) finishes in seconds.
 - Need a low-noise final image? `ray_num=5e7` + the full discrete spectrum is the usual recipe.
 - Need a continuous live preview in the GUI? Set `ray_num: "infinite"` and stop manually.
 

@@ -152,30 +152,25 @@
       }
     }
   ],
-  "filter": [
-    { "id": 1, "type": "none", "symmetry": "P" }
-  ],
+  "filter": [{ "id": 1, "type": "none", "symmetry": "P" }],
   "scene": {
     "light_source": {
-      "type": "sun",
-      "altitude": 20.0,
+      "type": "sun", "altitude": 20.0,
       "spectrum": [
         {"wavelength": 420, "weight": 1.0},
         {"wavelength": 550, "weight": 1.0},
         {"wavelength": 660, "weight": 1.0}
       ]
     },
-    "ray_num": 5000000,
-    "max_hits": 12,
+    "ray_num": 5000000, "max_hits": 12,
     "scattering": [
-      { "prob": 1.0, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] },
+      { "prob": 0.5, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] },
       { "prob": 0.0, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] }
     ]
   },
   "render": [
     {
-      "id": 1,
-      "lens": { "type": "fisheye_equidistant", "fov": 90 },
+      "id": 1, "lens": { "type": "fisheye_equidistant", "fov": 90 },
       "resolution": [900, 900],
       "view": { "elevation": 20, "azimuth": 0 }
     }
@@ -185,7 +180,7 @@
 
 要点：
 
-- **两个 scattering 条目** 表达"每条光线先打一片，每条幸存光线再打第二片"。`scattering[i].prob` 是从层 `i` 的出射光线*继续*进入层 `i+1` 的概率（最后一条 entry 的 `prob` 决定该光线是否最终射出，因此设为 `0.0`）。`[1.0, 0.0]` 表示每条光线恰好散射两次——这是"多次散射"的标准开关，详见 [`../configuration_zh.md`](../configuration_zh.md) §`scattering`。
+- **两个 scattering 条目** 表达"每条光线先打一片，部分光线继续打第二片"。`scattering[i].prob` 是从层 `i` 的出射光线*继续*进入层 `i+1` 的概率（最后一条 entry 的 `prob` 决定该光线是否最终射出，因此设为 `0.0`）。`[0.5, 0.0]` 表示一半光线单次散射后射出（贡献 22° 主环），一半继续二次散射（贡献 44° 暗环）——详见 [`../configuration_zh.md`](../configuration_zh.md) §`scattering`。
 - `max_hits` 提到 `12`，因为双次散射的光线在出射前可能多反射几次。
 - 44° 环本身较暗，`ray_num=5e6` 已能看到轮廓；想拿干净图请升到 `5e7`。
 
