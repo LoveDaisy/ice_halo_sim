@@ -66,7 +66,7 @@ Lumice 读取单个 JSON 文件，包含 **crystal**（晶体）、**filter**（
 ~~~
 
 完整字段（每个区段、每种镜头、每个散射选项）见
-[`doc/configuration.md`](doc/configuration.md)。
+[`doc/configuration_zh.md`](doc/configuration_zh.md)。
 
 ## GUI 概览
 
@@ -78,22 +78,22 @@ GUI 前端（`./scripts/build.sh -gj release` 构建，`./build/cmake_install/Lu
 
 GUI 面板涵盖晶体几何与姿态分布、镜头与视角、光路过滤器、多重散射层、`.lmc` 项目保存
 与加载等功能。每个面板（含所有镜头投影、晶体预览模式、编辑弹窗）的逐项说明位于
-[`doc/gui-guide.md`](doc/gui-guide.md)。
+[`doc/gui-guide_zh.md`](doc/gui-guide_zh.md)。
 
 ## 文档
 
 | 文档 | 目标读者 | 内容概括 |
 |------|----------|----------|
-| [文档索引](doc/README.md) | 所有人 | 文档总览与导航 |
-| [配置指南](doc/configuration.md) | 用户 | 所有 JSON 字段、所有镜头类型、所有散射选项 |
-| [GUI 使用指南](doc/gui-guide.md) | 用户 | GUI 各面板逐项说明（带截图） |
-| [坐标约定](doc/coordinate-convention.md) | 用户 / 配置作者 | 旋转链与轴向符号约定，**v3 破坏性变更说明** |
-| [开发者指南](doc/developer-guide.md) | 贡献者 | 构建选项、依赖列表、构建脚本参考、项目结构 |
-| [架构文档](doc/architecture.md) | 贡献者 | 模块布局、数据流、线程模型 |
-| [C API 文档](doc/c_api.md) | 集成方 | 通过 C 接口嵌入 Lumice |
+| [文档索引](doc/README_zh.md) | 所有人 | 文档总览与导航 |
+| [配置指南](doc/configuration_zh.md) | 用户 | 所有 JSON 字段、所有镜头类型、所有散射选项 |
+| [GUI 使用指南](doc/gui-guide_zh.md) | 用户 | GUI 各面板逐项说明（带截图） |
+| [坐标约定](doc/coordinate-convention_zh.md) | 用户 / 配置作者 | 旋转链与轴向符号约定，**v3 破坏性变更说明** |
+| [开发者指南](doc/developer-guide_zh.md) | 贡献者 | 构建选项、依赖列表、构建脚本参考、项目结构 |
+| [架构文档](doc/architecture_zh.md) | 贡献者 | 模块布局、数据流、线程模型 |
+| [C API 文档](doc/c_api_zh.md) | 集成方 | 通过 C 接口嵌入 Lumice |
 | [API 参考](doc/api/html/) | 贡献者 | Doxygen 自动生成（本地运行 `doxygen .doxygen-config`） |
 
-> 旧版本的配置可能需要重写：v3 重构了旋转链。详见 `doc/coordinate-convention.md`
+> 旧版本的配置可能需要重写：v3 重构了旋转链。详见 `doc/coordinate-convention_zh.md`
 > 顶部的破坏性变更说明。
 
 ## 致谢
