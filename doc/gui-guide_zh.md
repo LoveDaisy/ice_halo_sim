@@ -65,7 +65,7 @@ GUI 需要 display server 和支持 OpenGL 3.2 Core Profile 的 GPU。
 - **Filter 行**：光路过滤器的单行摘要 + `Edit` 打开 Filter tab。
 - **占比滑块**（`prop.`）：本条目在所属 Layer 中的权重（0 – 100）。
 
-缩略图支持 4 种渲染风格，由 Popup Editor 控制：
+缩略图支持 4 种渲染风格。风格选择器位于 Popup Editor 左侧的常驻预览面板（在 Crystal / Axis / Filter 三 tab 之间共享） —— 详见下文 [Popup Editor](#popup-editor编辑弹窗) 节。
 
 ![晶体预览 4 种风格：线框 / 隐藏线 / 透视 / 着色](figs/gui_crystal_styles_combined.jpg)
 
@@ -92,7 +92,7 @@ GUI 需要 display server 和支持 OpenGL 3.2 Core Profile 的 GPU。
 ### View（视图）
 
 - **Projection**：`Lens Type` 提供 10 种 lens 投影 —— Linear、Rectangular、Fisheye（Equidistant / Equal Area / Stereographic / Orthographic）以及 Dual Fisheye（Equidistant / Equal Area / Stereographic / Orthographic）。Combo 中按分组排序，使 Orthographic 变体紧邻其 fisheye / dual-fisheye 同族。`FOV` 由具体 lens 限定上限；`Visible`（front / back / all）控制只渲染哪一半球的光线。
-- **Camera**：`Elevation`、`Azimuth`、`Roll`。Full-sky lens（dual 系列与等距投影导出）下三者均禁用并强制为 0。
+- **Camera**：`Elevation`、`Azimuth`、`Roll`。Full-sky lens（dual 系列与 Equirectangular 导出格式）下三者均禁用并强制为 0。
 
 不同 lens 的成像几何差异显著：
 

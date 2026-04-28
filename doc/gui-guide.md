@@ -65,7 +65,7 @@ Each crystal card reflects one entry in the scattering layer:
 - **Filter row**: a one-line summary of the ray-path filter + `Edit` opens the Filter tab.
 - **Proportion slider** (`prop.`): how this entry is weighted within the layer (0 – 100).
 
-The thumbnail can be drawn in four render styles, controlled from the Popup Editor:
+The thumbnail can be drawn in four render styles. The style selector lives in the Popup Editor's persistent left preview pane (shared across the Crystal / Axis / Filter tabs) — see the [Popup Editor](#popup-editor) section.
 
 ![Crystal preview styles: wireframe, hidden line, x-ray, shaded](figs/gui_crystal_styles_combined.jpg)
 
@@ -160,7 +160,7 @@ From left to right:
 | `[` | Toggle left panel collapse |
 | `]` | Toggle right panel collapse |
 
-Run / Stop / New / Open are not bound to keys — they are reachable from the Top Bar buttons (and the Save menu for export variants).
+Run, Stop, New, and Open are not bound to keys — use the Top Bar buttons. Export operations (Screenshot, Dual Fisheye Equal Area, Equirectangular, Config JSON) are reachable through the Save menu popup.
 
 ### Project File Format (`.lmc`)
 
