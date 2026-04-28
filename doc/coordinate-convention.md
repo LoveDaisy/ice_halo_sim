@@ -2,6 +2,12 @@
 
 # Coordinate System and Rotation Convention
 
+> **Breaking change (v3).** The rotation chain was reworked in the v3 release.
+> Configurations carrying `crystal.axis.*` from earlier releases will render with
+> different orientations and may need to be re-authored against the conventions
+> below — including the `azimuth` sign convention and the `−180°` chain offset.
+> `filter.raypath` and `light.*` / `view.*` are unaffected.
+
 This document defines the coordinate systems, axis conventions, and rotation
 chain that Lumice uses for crystal orientation, light source placement, and
 camera viewing. All numeric examples use degrees unless explicitly noted as

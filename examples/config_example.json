@@ -216,15 +216,25 @@
       "altitude": 20.0,
       "azimuth": 0,
       "diameter": 0.5,
-      "spectrum": [{"wavelength": 550, "weight": 1.0}]
+      "spectrum": [
+        {"wavelength": 450, "weight": 1.0},
+        {"wavelength": 490, "weight": 1.0},
+        {"wavelength": 530, "weight": 1.0},
+        {"wavelength": 570, "weight": 1.0},
+        {"wavelength": 610, "weight": 1.0},
+        {"wavelength": 650, "weight": 1.0},
+        {"wavelength": 690, "weight": 1.0},
+        {"wavelength": 730, "weight": 1.0},
+        {"wavelength": 770, "weight": 1.0}
+      ]
     },
-    "ray_num": 2,
+    "ray_num": 50000000,
     "max_hits": 7,
     "scattering": [
       {
         "prob": 0.0,
         "entries": [
-          {"crystal": 1, "proportion": 10}
+          {"crystal": 3, "proportion": 10}
         ]
       }
     ]

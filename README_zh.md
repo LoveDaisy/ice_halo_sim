@@ -2,341 +2,101 @@
 
 [English version](README.md)
 
-这是一个冰晕模拟程序，通过追踪光线与冰晶的交互来再现各种冰晕现象。速度快且高效，支持自然色彩渲染和多次散射。
+C++17 编写的冰晕光线追踪模拟器：通过追踪光线在冰晶中的折射 / 反射来重现自然冰晕图样。
+速度快、支持基于光谱的自然色彩渲染、原生支持任意多重散射场景。CLI 与 GUI 共享同一套
+模拟内核。
 
-受 [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) 和
-[HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm) 的启发。
+灵感来自 [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) 与
+[HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)。
+
+<img src="doc/figs/sim05E_50M.jpg" width="600">
 
 ## 功能特点
 
-* **速度快**
-  本模拟程序追踪光线效率非常优秀，比 HaloPoint 快 50~100 倍。对于一般情况，模拟速度约为每秒 14~20 万光线，
-  在多晶的情况下约为 5~8 万每秒。
+* **速度快。** 比 HaloPoint 快约 50–100 倍。一般场景每秒可追踪 14–20 万条光线，
+  多重散射场景下每秒 5–8 万条。
 
-* **自然而鲜艳的色彩表现**
-  基于 [Spectrum Renderer](https://github.com/LoveDaisy/spec_render) 项目，
-  本模拟程序可以渲染出非常自然和鲜艳的颜色。
-  <img src="doc/figs/sim05E_50M.jpg" width="400">
+* **自然光谱色彩。** 基于 [Spectrum Renderer](https://github.com/LoveDaisy/spec_render) 的
+  波长感知渲染，可还原真实冰晕的色彩层次。
 
-* **对多晶模拟的完整支持**
-  本模拟程序可以完整地模拟多晶场景，允许用户自由模拟任意的多晶场景。
-  下图所示场景只需要不到 14 分钟即可模拟渲染完，总计追踪约 7200 万条初始光线。
-  <img src="doc/figs/44-degree parhelia.jpg" width="400">
+* **多重散射支持。** 任意多重散射场景（例如随机柱晶上方的板状冰晶层）皆为一等公民，
+  下图为渲染得到的 44° 幻日。
 
-* **用户自定义的冰晶形状**（尚未实现）
-  计划支持通过 [.obj 文件](https://en.wikipedia.org/wiki/Wavefront_.obj_file) 自定义冰晶模型，
-  但该功能在 v3 重构后尚未重新接入。目前仅支持内置的 `prism`（六棱柱）和 `pyramid`（六棱锥）类型。
+  <img src="doc/figs/44-degree parhelia.jpg" width="500">
 
 ## 快速开始
 
-克隆项目后，可以运行构建脚本来构建和安装：
+构建 CLI 并运行内置示例，多数读者 5 分钟即可上手。
 
 ~~~bash
+# 1. 构建（release，多线程）—— 安装至 build/cmake_install/
 ./scripts/build.sh -j release
-~~~
 
-如果一切顺利，可执行文件将安装到 `build/cmake_install`。然后可以这样运行：
-
-~~~bash
+# 2. 运行示例模拟
 ./build/cmake_install/Lumice -f examples/config_example.json
 ~~~
 
-程序将输出一些信息，以及几张渲染的图片文件。
+CLI 会输出进度信息，并在工作目录写出 4 张渲染图。
 
-如果你需要更多详细信息，请继续阅读下面的章节。
+<img src="doc/figs/cli_screenshot_01.jpg" width="600">
+<img src="doc/figs/example_img_01.jpg" width="500">
 
-## 开始使用
+> **运行时长。** 该示例追踪 9 段光谱 × 5 千万条光线。多核机器约 **2–10 分钟**；
+> 单核或较老的笔记本可能延长到数十分钟。如仅做冒烟测试，可临时把配置中的
+> `"ray_num"` 改为 `100000` 加速完成。
 
-### 前置要求
-
-- **CMake** >= 3.14
-- **Ninja**（推荐，用作默认构建生成器；macOS: `brew install ninja`，Ubuntu: `apt install ninja-build`）
-- **C++17** 兼容编译器（GCC、Clang 或 MSVC）
-
-所有其他依赖通过 [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) 自动下载和管理：
-- [nlohmann/json](https://github.com/nlohmann/json) v3.10.5 — JSON 解析（header-only）
-- [spdlog](https://github.com/gabime/spdlog) v1.15.0 — 日志（header-only）
-- [tl-expected](https://github.com/TartanLlama/expected) v1.1.0 — C++17 `expected<T,E>`（header-only）
-- [GoogleTest](https://github.com/google/googletest) v1.15.2 — 单元测试（启用 `-t` 时下载）
-
-**GUI 额外依赖**（启用 `-g` 时下载）：
-- [Dear ImGui](https://github.com/ocornut/imgui) v1.91.8-docking — 即时模式 GUI
-- [GLFW](https://www.glfw.org/) 3.4 — 窗口和输入管理
-- [nfd](https://github.com/btzy/nativefiledialog-extended) v1.2.1 — 原生文件对话框
-- [imgui_test_engine](https://github.com/ocornut/imgui_test_engine) v1.91.8 — GUI 自动化测试（同时启用 `-g` 和 `-t` 时下载）
-
-> **关于 Ninja**: 若未安装 Ninja，可将 `scripts/build.sh` 中的 `-G Ninja` 删除，CMake 将回退到系统默认生成器（通常为 Unix Makefiles）。
-
-### 构建项目
-
-提供了一个构建脚本来简化操作。
-使用 `-h` 可以看到帮助信息：
-
-~~~bash
-./scripts/build.sh -h
-Usage:
-  ./scripts/build.sh [-tgbjksxh] <debug|release|minsizerel>
-    Executables will be installed at build/cmake_install
-OPTIONS:
-  -t:          Build test cases and run test on them.
-  -g:          Build GUI application (Dear ImGui + GLFW + OpenGL).
-  -b:          Build benchmarks (Google Benchmark).
-  -j:          Build in parallel, i.e. use make -j
-  -k:          Clean build artifacts (keep dependency cache).
-  -x:          Clean everything including dependency cache.
-  -s:          Build shared library (default: static).
-  -h:          Show this message.
-~~~
-
-注意，debug 版本的可执行文件不会被安装，它们位于 `build/cmake_build`。
-
-使用 [GoogleTest](https://github.com/google/googletest) 框架进行单元测试。
-如果设置了 `-t` 选项，测试用例将被构建并运行。
-
-### 端到端测试
-
-E2E 测试使用构建好的 `Lumice` 二进制文件运行测试配置并验证输出结果。
-独立于 CMake/CTest 构建流程，使用 Python `unittest`：
-
-~~~bash
-# 安装测试依赖
-pip install Pillow
-
-# 运行所有 E2E 测试
-pytest test/e2e/ -v
-~~~
-
-详见 [`test/e2e/README.md`](test/e2e/README.md)。
-
-### GUI 图形界面
-
-提供图形界面用于交互式模拟配置和预览：
-
-~~~bash
-# 构建 GUI 应用
-./scripts/build.sh -gj release
-
-# 运行 GUI
-./build/cmake_install/LumiceGUI
-~~~
-
-GUI 提供以下功能：
-- 晶体参数编辑与实时 3D 预览
-- 渲染设置与镜头投影预览
-- 过滤器和场景配置
-- 保存/加载项目文件（`.lmc` 格式）
-- 运行模拟并交互式查看结果
-
-构建并运行 GUI 自动化测试（需要 display server）：
-
-~~~bash
-./scripts/build.sh -gtj release
-~~~
-
-> **系统要求：** GUI 应用需要 macOS 13 (Ventura) 或更高版本、Windows 10 或 Linux（X11/Wayland）。
-> macOS 发布版本已进行代码签名和公证（notarization），下载后可直接运行 `.app` bundle。
-> Windows 上 `.exe` 内嵌图标且无控制台窗口。
->
-> **跨平台说明：** Core、CLI 和单元测试（`./scripts/build.sh -tj release`）不包含任何平台特定代码，
-> 应可在任何支持 C++17 的平台上编译通过。GUI 已在 macOS、Linux 和 Windows 上通过 CI 构建和测试。
-
+如需带实时预览的交互式工作流，参考下文 GUI 一节。
 
 ## 配置文件
 
-配置文件包含模拟的所有设置。使用 JSON 格式编写，由 [nlohmann/json](https://github.com/nlohmann/json) 解析。
+Lumice 读取单个 JSON 文件，包含 **crystal**（晶体）、**filter**（光路过滤器）、
+**scene**（光源 + 光线预算 + 多重散射层）以及 **render**（镜头、视角、分辨率、辅助网格）
+四个区段。[`examples/config_example.json`](examples/config_example.json) 是规范参考，
+也是上面 Quick start 实际运行的内容。
 
-示例配置文件：`examples/config_example.json`。
-
-完整配置参考请查看 [配置文档](doc/configuration_zh.md)。以下是各节的简要概述。
-
-### 光源
-
-光源定义在 `scene` 对象内。以下是一个示例：
+最简骨架如下：
 
 ~~~json
-"light_source": {
-  "type": "sun",
-  "altitude": 20.0,
-  "azimuth": 0,
-  "diameter": 0.5,
-  "spectrum": "D65"
+{
+  "crystal": [ /* 一个或多个晶体定义，详见配置指南 */ ],
+  "filter":  [ /* 可选的光路过滤器 */ ],
+  "scene":   { "light_source": { /* 太阳 / 光谱 */ }, "ray_num": 50000000, "scattering": [ /* 散射层 */ ] },
+  "render":  [ { "lens": { "type": "fisheye_equal_area", "fov": 180 }, "resolution": [1920, 1080], /* ... */ } ]
 }
 ~~~
 
-字段 `azimuth`、`altitude` 描述太阳的位置。它们以度为单位，`diameter` 也是如此。
+完整字段（每个区段、每种镜头、每个散射选项）见
+[`doc/configuration.md`](doc/configuration.md)。
 
-`spectrum` 描述光源的光谱。可以是标准光源名称（如 `"D65"`）或波长-权重对象数组。波长决定折射率，其数据来自
-[Refractive Index of Crystals](https://refractiveindex.info/?shelf=3d&book=crystals&page=ice)。
+## GUI 概览
 
+GUI 前端（`./scripts/build.sh -gj release` 构建，`./build/cmake_install/LumiceGUI` 启动）
+让你在带实时 3D 预览的界面里编辑晶体 / 场景 / 渲染参数，切换镜头投影，并查看模拟产物，
+不必手工编辑 JSON。
 
-### 晶体
+<img src="doc/figs/gui_screenshot_example_07.jpg" width="700">
 
-以下是一个元素的示例：
+GUI 面板涵盖晶体几何与姿态分布、镜头与视角、光路过滤器、多重散射层、`.lmc` 项目保存
+与加载等功能。每个面板（含所有镜头投影、晶体预览模式、编辑弹窗）的逐项说明位于
+[`doc/gui-guide.md`](doc/gui-guide.md)。
 
-~~~json
-"id": 3,
-"type": "prism",
-"shape": {
-  "height": 1.3,
-  "face_distance": [1, 1, 1, 1, 1, 1]
-},
-"axis": {
-  "zenith": {
-    "type": "gauss",
-    "mean": 90,
-    "std": 0.3
-  },
-  "roll": {
-    "type": "uniform",
-    "mean": 0,
-    "std": 360
-  },
-  "azimuth": {
-    "type": "uniform",
-    "mean": 0,
-    "std": 360
-  }
-}
-~~~
+## 文档
 
-`crystal` 节存储模拟中使用的所有晶体。它可以包含多个元素（不同的晶体）。它们通过 `id` 引用。
+| 文档 | 目标读者 | 内容概括 |
+|------|----------|----------|
+| [文档索引](doc/README.md) | 所有人 | 文档总览与导航 |
+| [配置指南](doc/configuration.md) | 用户 | 所有 JSON 字段、所有镜头类型、所有散射选项 |
+| [GUI 使用指南](doc/gui-guide.md) | 用户 | GUI 各面板逐项说明（带截图） |
+| [坐标约定](doc/coordinate-convention.md) | 用户 / 配置作者 | 旋转链与轴向符号约定，**v3 破坏性变更说明** |
+| [开发者指南](doc/developer-guide.md) | 贡献者 | 构建选项、依赖列表、构建脚本参考、项目结构 |
+| [架构文档](doc/architecture.md) | 贡献者 | 模块布局、数据流、线程模型 |
+| [C API 文档](doc/c_api.md) | 集成方 | 通过 C 接口嵌入 Lumice |
+| [API 参考](doc/api/html/) | 贡献者 | Doxygen 自动生成（本地运行 `doxygen .doxygen-config`） |
 
-`zenith`、`roll` 和 `azimuth`（可选）：
-这些字段定义晶体的姿态。`zenith` 定义 c 轴方向，`roll` 定义绕 c 轴的旋转。
-它们是*分布类型*，可以是标量（表示确定性分布），也可以是元组 (`type`, `mean`, `std`) 描述均匀分布或高斯分布。所有角度都以度为单位。
-完整的坐标系与旋转链定义（含 `azimuth` 符号约定与 `−180°` 偏移）参见
-[`doc/coordinate-convention_zh.md`](doc/coordinate-convention_zh.md)。
-**破坏性变更**：本次版本重写了旋转链，旧版本中保存的 `crystal.axis.*` 字段在新约定下渲染朝向会变化，
-可能需要按新约定重新撰写（`filter.raypath`、`light.*`、`view.*` 不受影响）。
-
-`type` 和 `shape`：它们描述晶体的形状。
-目前有两种晶体类型：`prism`（六棱柱）和 `pyramid`（六棱锥）。
-每种类型都有自己的形状参数。
-
-  * `prism`（六棱柱）：
-    参数 `height`，定义为 `h / a`，其中 `h` 是棱柱高度，`a` 是沿 a 轴的直径。它是*分布类型*。默认值：`1.0`。
-    `face_distance` 描述不规则六边形面（见下方）。默认值：`[1, 1, 1, 1, 1, 1]`。
-    <img src="doc/figs/hex_prism_01.png" width="400">.
-
-  * `pyramid`（六棱锥）：
-    `{upper|lower|prism}_h` 描述各段的高度，见下图。`{upper|lower}_h` 分别表示 `h1 / H1` 和 `h3 / H3`，其中 `H1` 表示上锥段的最大可能高度，`H3` 类似。`prism_h` 是柱体段的高度比 h/a。
-    <img src="doc/figs/hex_pyramid_01.png" width="400">.
-    `{upper|lower}_indices` 是 [Miller index](https://en.wikipedia.org/wiki/Miller_index) 描述锥面的方向。默认值：`[1, 0, 1]`。
-
-  * `face_distance`：
-    这里的距离表示实际面距离与正六边形距离的比值。正六边形的距离为 `[1, 1, 1, 1, 1, 1]`。
-    下图显示了一个不规则六边形，距离为 `[1.1, 0.9, 1.5, 0.9, 1.7, 1.2]`
-    <img src="doc/figs/irr_hex_01.png" width="400">.
-
-### 过滤器
-
-以下是两个常见示例：
-
-~~~json
-[
-  {
-    "id": 3,
-    "type": "raypath",
-    "raypath": [3, 5],
-    "symmetry": "P"
-  },
-  {
-    "id": 4,
-    "type": "entry_exit",
-    "entry": 3,
-    "exit": 5,
-    "action": "filter_in"
-  }
-]
-~~~
-
-`type`：可以是以下类型之一：`raypath`、`entry_exit`、`direction`、`crystal`、`complex`、`none`。
-
-### 场景
-
-`scene` 是一个单独的对象（非数组），定义模拟参数。以下是一个示例：
-
-~~~json
-"scene": {
-  "light_source": {
-    "type": "sun",
-    "altitude": 20.0,
-    "spectrum": "D65"
-  },
-  "ray_num": 1000000,
-  "max_hits": 7,
-  "scattering": [
-    {
-      "prob": 0.2,
-      "entries": [
-        {"crystal": 1, "proportion": 100},
-        {"crystal": 2, "proportion": 30},
-        {"crystal": 3}
-      ]
-    },
-    {
-      "entries": [
-        {"crystal": 2, "proportion": 20, "filter": 2},
-        {"crystal": 3, "proportion": 100, "filter": 1}
-      ]
-    }
-  ]
-}
-~~~
-
-`ray_num` 可以是整数或 `"infinite"` 表示无限光线。
-
-### 渲染
-
-以下是一个示例：
-
-~~~json
-"id": 3,
-"lens": {
-  "type": "linear",
-  "fov": 40
-},
-"resolution": [1920, 1080],
-"view": {
-  "azimuth": -50,
-  "elevation": 30,
-  "roll": 0
-},
-"visible": "upper",
-"background": [0, 0, 0],
-"ray_color": [1, 1, 1],
-"opacity": 0.8,
-"grid": {
-  "central": [
-    {
-      "value": 22,
-      "color": [1, 1, 1],
-      "opacity": 0.4,
-      "width": 1.2
-    }
-  ],
-  "elevation": [],
-  "outline": true
-}
-~~~
-
-`view`：描述相机姿态。
-
-`lens`：镜头类型，可以是以下值之一：`linear`、`fisheye_equal_area`、`fisheye_equidistant`、`fisheye_stereographic`、`dual_fisheye_equal_area`、`dual_fisheye_equidistant`、`dual_fisheye_stereographic`、`rectangular`。
-
-可以使用 `fov`（视场角，度）或 `f`（焦距，mm）来指定。如果使用 `f`，程序会自动计算对应的 `fov`。
-
-## 文档导航
-
-- [文档索引](doc/README_zh.md) - 所有文档的导航和索引
-- [配置文档](doc/configuration_zh.md) - 完整配置参考
-- [系统架构文档](doc/architecture_zh.md) - 系统架构设计
-- [开发指南](doc/developer-guide_zh.md) - 开发指南
-- [GUI 使用指南](doc/gui-guide_zh.md) - GUI 应用使用说明
-- [C 接口文档](doc/c_api_zh.md) - C 接口使用说明
-- [API 文档](doc/api/html/) - 自动生成的 API 文档（需要本地生成：`doxygen .doxygen-config`）
+> 旧版本的配置可能需要重写：v3 重构了旋转链。详见 `doc/coordinate-convention.md`
+> 顶部的破坏性变更说明。
 
 ## 致谢
 
-1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) &
+1. [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/moriikon/) 与
    [HaloSim 3.0](https://www.atoptics.co.uk/halo/halfeat.htm)

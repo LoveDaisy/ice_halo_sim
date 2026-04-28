@@ -36,6 +36,7 @@ test.json
 *.jpg
 !test/e2e/references/*.jpg
 !test/gui/references/*.jpg
+!doc/figs/*.jpg
 
 __pycache__/
 *.pyc
