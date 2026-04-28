@@ -1,0 +1,299 @@
+{
+  "crystal": [
+    {
+      "id": 1,
+      "type": "prism",
+      "shape": {
+        "height": 1.2
+      }
+    },
+    {
+      "id": 2,
+      "type": "prism",
+      "shape": {
+        "height": {
+          "type": "gauss",
+          "mean": 1.3,
+          "std": 0.2
+        }
+      },
+      "axis": {
+        "zenith": 90
+      }
+    },
+    {
+      "id": 3,
+      "type": "prism",
+      "shape": {
+        "height": 1.3,
+        "face_distance": [1, 1, 1, 1, 1, 1]
+      },
+      "axis": {
+        "zenith": {
+          "type": "gauss",
+          "mean": 90,
+          "std": 0.3
+        },
+        "roll": {
+          "type": "uniform",
+          "mean": 0,
+          "std": 360
+        },
+        "azimuth": {
+          "type": "uniform",
+          "mean": 0,
+          "std": 360
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "prism",
+      "shape": {
+        "height": {
+          "type": "uniform",
+          "mean": 0.5,
+          "std": 0.4
+        },
+        "face_distance": [
+          {
+            "type": "gauss",
+            "mean": 1,
+            "std": 0.2
+          },
+          {
+            "type": "gauss",
+            "mean": 1,
+            "std": 0.2
+          },
+          {
+            "type": "gauss",
+            "mean": 1,
+            "std": 0.2
+          },
+          {
+            "type": "gauss",
+            "mean": 1,
+            "std": 0.2
+          },
+          {
+            "type": "gauss",
+            "mean": 1,
+            "std": 0.2
+          },
+          {
+            "type": "gauss",
+            "mean": 1,
+            "std": 0.2
+          }
+        ]
+      },
+      "axis": {
+        "zenith": {
+          "type": "gauss",
+          "mean": 0,
+          "std": 1.2
+        },
+        "roll": {
+          "type": "uniform",
+          "mean": 0,
+          "std": 360
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "pyramid",
+      "shape": {
+        "upper_h": 0.1,
+        "lower_h": 0.5,
+        "prism_h": 1.2,
+        "upper_indices": [2, 0, 3]
+      },
+      "axis": {
+        "zenith": 0
+      }
+    },
+    {
+      "id": 6,
+      "type": "prism",
+      "shape": {
+        "height": 0.3
+      },
+      "axis": {
+        "zenith": {
+          "type": "gauss",
+          "mean": 0,
+          "std": 0.8
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "prism",
+      "shape": {
+        "height": 3.0
+      },
+      "axis": {
+        "zenith": {
+          "type": "zigzag",
+          "mean": 5,
+          "std": 30
+        },
+        "roll": {
+          "type": "uniform",
+          "mean": 0,
+          "std": 360
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "prism",
+      "shape": {
+        "height": 0.5
+      },
+      "axis": {
+        "zenith": {
+          "type": "laplacian",
+          "mean": 90,
+          "std": 2.0
+        },
+        "roll": {
+          "type": "uniform",
+          "mean": 0,
+          "std": 360
+        }
+      }
+    }
+  ],
+  "filter": [
+    {
+      "id": 1,
+      "type": "none"
+    },
+    {
+      "id": 2,
+      "type": "raypath",
+      "raypath": [3, 1, 5, 7, 4],
+      "symmetry": "PBD"
+    },
+    {
+      "id": 3,
+      "type": "raypath",
+      "raypath": [3, 5],
+      "symmetry": "P"
+    },
+    {
+      "id": 4,
+      "type": "entry_exit",
+      "entry": 3,
+      "exit": 5,
+      "action": "filter_in"
+    },
+    {
+      "id": 5,
+      "type": "direction",
+      "az": 180,
+      "el": 25,
+      "radii": 0.5,
+      "action": "filter_out"
+    },
+    {
+      "id": 6,
+      "type": "crystal",
+      "crystal_id": 3
+    },
+    {
+      "id": 7,
+      "type": "complex",
+      "composition": [1, [2, 6], 5]
+    }
+  ],
+  "scene": {
+    "light_source": {
+      "type": "sun",
+      "altitude": 20.0,
+      "azimuth": 0,
+      "diameter": 0.5,
+      "spectrum": [{"wavelength": 550, "weight": 1.0}]
+    },
+    "ray_num": 2,
+    "max_hits": 7,
+    "scattering": [
+      {
+        "prob": 0.0,
+        "entries": [
+          {"crystal": 1, "proportion": 10}
+        ]
+      }
+    ]
+  },
+  "render": [
+    {
+      "id": 1,
+      "lens": {
+        "type": "linear",
+        "f": 14
+      },
+      "resolution": [1920, 1080],
+      "lens_shift": [0, 200],
+      "view": {
+        "azimuth": -10,
+        "elevation": 20,
+        "roll": 0
+      }
+    },
+    {
+      "id": 2,
+      "lens": {
+        "type": "dual_fisheye_equal_area",
+        "fov": 120
+      },
+      "resolution": [2048, 1024],
+      "view": {
+        "elevation": 30
+      }
+    },
+    {
+      "id": 3,
+      "lens": {
+        "type": "linear",
+        "fov": 40
+      },
+      "resolution": [1920, 1080],
+      "view": {
+        "azimuth": -50,
+        "elevation": 30,
+        "roll": 0
+      },
+      "visible": "upper",
+      "background": [0, 0, 0],
+      "ray_color": [1, 1, 1],
+      "opacity": 0.8,
+      "grid": {
+        "central": [
+          {
+            "value": 22,
+            "color": [1, 1, 1],
+            "opacity": 0.4,
+            "width": 1.2
+          }
+        ],
+        "elevation": [],
+        "outline": true
+      }
+    },
+    {
+      "id": 4,
+      "lens": {
+        "type": "fisheye_equal_area",
+        "fov": 120
+      },
+      "resolution": [1920, 1080],
+      "view": {
+        "elevation": 30
+      }
+    }
+  ]
+}
