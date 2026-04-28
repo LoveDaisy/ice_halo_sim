@@ -28,6 +28,11 @@ doc/
 
 For users of this project:
 
+- **[User Manual](user-manual/00-overview.md)**: Beginner-friendly journey-based guide
+  - Install, GUI quickstart, CLI quickstart
+  - 3 ready-made halo recipes
+  - FAQ, defaults, GUI vs JSON capabilities
+
 - **[Configuration Guide](configuration.md)**: Complete configuration reference
   - Detailed configuration options and defaults
   - Validation rules

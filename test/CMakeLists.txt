@@ -40,7 +40,7 @@ set_target_properties(unit_test PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
 add_test(NAME "LumiceUnitTest" COMMAND unit_test
-  "${PROJ_ROOT}/examples/config_example.json"
+  "${PROJ_TEST_DIR}/fixtures/v3_config.json"
   "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties("LumiceUnitTest" PROPERTIES LABELS "unit")
 
@@ -57,5 +57,5 @@ set_target_properties(integration_test PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
 add_test(NAME "LumiceIntegrationTest" COMMAND integration_test
-  "${PROJ_ROOT}/examples/config_example.json")
+  "${PROJ_TEST_DIR}/fixtures/v3_config.json")
 set_tests_properties("LumiceIntegrationTest" PROPERTIES LABELS "integration")
