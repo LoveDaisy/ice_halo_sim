@@ -81,7 +81,7 @@ Lumice 按波长追踪光线。对于离散波长 spectrum（典型场景：`lig
 新手首跑建议：
 
 - 想几秒看到结果？把 `ray_num` 降到 `1e6`，spectrum 改成单波长（`[{"wavelength": 550, "weight": 1.0}]`）。
-- 想出版级清晰度？保持 `ray_num=5e7` 以上 + 完整 9 段 spectrum，预期在现代多核笔记本上跑几分钟。
+- 想出版级清晰度？保持 `ray_num=5e7` 以上 + 完整 9 段 spectrum，预期在现代多核笔记本上约 2 分钟。
 
 `ray_num` × batch × wavelength 的精确关系，以及更深入的性能调优，见 [`05-faq_zh.md`](05-faq_zh.md) "ray_num × wavelength 语义" 和 [`../performance-testing_zh.md`](../performance-testing_zh.md)。
 

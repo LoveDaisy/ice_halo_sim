@@ -13,8 +13,9 @@ Inspired by [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/m
 
 ## Features
 
-* **High speed.** Roughly 50–100× faster than HaloPoint; 140k–200k rays/second on typical
-  scenes, 50k–80k rays/second under multi-scattering.
+* **High speed.** Significantly faster than HaloPoint: roughly 3–4M rays/second on
+  typical single-scattering scenes, and 400k–600k rays/second under two-layer full
+  scattering (`prob=1.0`, every ray is forced through two crystal interactions).
 
 * **Natural spectral color.** Wavelength-aware rendering powered by the
   [Spectrum Renderer](https://github.com/LoveDaisy/spec_render) project produces realistic
@@ -42,9 +43,9 @@ The CLI prints progress and writes four PNG/JPG renders next to your working dir
 <img src="doc/figs/cli_screenshot_01.jpg" width="600">
 <img src="doc/figs/example_img_01.jpg" width="500">
 
-> **Runtime.** The example traces 9-wavelength × 50 M rays. On a modern multi-core machine
-> this takes roughly **2–10 minutes**; on a single-core or older laptop it can stretch to
-> tens of minutes. To smoke-test much faster, set `"ray_num": 100000` in the config.
+> **Runtime.** The example traces 9-wavelength × 50 M rays. On a modern multi-core
+> machine this takes **about 2 minutes**; older laptops may take longer. To smoke-test
+> much faster, set `"ray_num": 100000` in the config.
 
 For an interactive workflow with live preview, see the GUI section below.
 

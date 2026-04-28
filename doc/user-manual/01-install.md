@@ -66,7 +66,7 @@ You should see:
 
 If you see all four images, the toolchain is healthy.
 
-> The example config uses 9 spectral wavelengths × `ray_num=5e7`, so the simulator traces ~4.5 × 10⁸ rays. On a recent multi-core laptop this takes a few minutes. To get a faster smoke test, copy the example and lower `scene.ray_num` to `1e6`.
+> The example config uses 9 spectral wavelengths × `ray_num=5e7`, so the simulator traces ~4.5 × 10⁸ rays. On a recent multi-core laptop this takes about 2 minutes. To get a faster smoke test, copy the example and lower `scene.ray_num` to `1e6`.
 
 ## Common build issues
 

@@ -81,7 +81,7 @@ Lumice traces light wavelength-by-wavelength. For a discrete spectrum (the typic
 Practical first-run advice:
 
 - Want a result in seconds? Drop `ray_num` to `1e6` and use a single wavelength (e.g. `[{"wavelength": 550, "weight": 1.0}]`).
-- Want a publication-quality image? Keep `ray_num=5e7` or higher and the full 9-wavelength spectrum, and expect a few minutes on a modern multi-core laptop.
+- Want a publication-quality image? Keep `ray_num=5e7` or higher and the full 9-wavelength spectrum, and expect about 2 minutes on a modern multi-core laptop.
 
 For the precise relationship between `ray_num`, batches, and wavelengths, and for performance tuning beyond the basics, see [`05-faq.md`](05-faq.md) "ray_num × wavelength semantics" and [`../performance-testing.md`](../performance-testing.md).
 
