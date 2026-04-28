@@ -64,7 +64,7 @@
 
    ![晶体编辑对话框](../figs/gui_edit_crystal.jpg)
 
-   选个预设（例如 **Hexagonal Prism**），调整 `height` / `face_distance`，确认。
+   选个预设（例如 **Hexagonal Prism**），如有需要可调 `height`，确认。（其它形状字段如 `face_distance` schema 中接受但当前引擎尚未实现 — 详见 [`05-faq_zh.md`](05-faq_zh.md) §4。）
 3. 打开 **Light Source**，设 `azimuth`（太阳方位角）和 `altitude`（太阳高度角）。
 4. 打开 **Render**，挑镜头、分辨率、视场角 — 浮动镜头条之后还能切换，所以默认值就行。
 5. 点 **Run**。

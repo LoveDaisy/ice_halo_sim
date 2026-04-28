@@ -27,38 +27,40 @@ The most familiar halo: a bright ring at exactly 22° from the sun, caused by li
     {
       "id": 1,
       "type": "prism",
-      "shape": { "height": 1.2 }
+      "shape": { "height": 1.2 },
+      "axis": {
+        "azimuth": { "type": "uniform", "mean": 0, "std": 360 },
+        "zenith":  { "type": "uniform", "mean": 0, "std": 360 },
+        "roll":    { "type": "uniform", "mean": 0, "std": 360 }
+      }
     }
   ],
-  "filter": [
-    { "id": 1, "type": "none", "symmetry": "P" }
-  ],
+  "filter": [{ "id": 1, "type": "none", "symmetry": "P" }],
   "scene": {
     "light_source": {
-      "type": "sun",
-      "altitude": 20.0,
+      "type": "sun", "altitude": 20.0,
       "spectrum": [
         {"wavelength": 420, "weight": 1.0},
         {"wavelength": 550, "weight": 1.0},
         {"wavelength": 660, "weight": 1.0}
       ]
     },
-    "ray_num": 1000000,
-    "max_hits": 7,
+    "ray_num": 1000000, "max_hits": 7,
     "scattering": [
-      { "prob": 1.0, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] }
+      { "prob": 0.0, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] }
     ]
   },
   "render": [
     {
-      "id": 1,
-      "lens": { "type": "fisheye_equidistant", "fov": 60 },
+      "id": 1, "lens": { "type": "fisheye_equidistant", "fov": 60 },
       "resolution": [800, 800],
       "view": { "elevation": 20, "azimuth": 0 }
     }
   ]
 }
 ```
+
+The three `uniform` distributions (`mean=0, std=360` on each Euler angle) make the orientation isotropic on the sphere — the sampler recognises this as the canonical full-sphere case (`AxisDistribution::IsFullSphereUniform` in `src/core/math.cpp`). Without `axis`, the crystal is locked to a single fixed orientation and you get arcs/spots, not a closed 22° ring. The single scattering entry with `prob: 0.0` makes every outgoing ray exit (single-scatter recipe); see Recipe 3 for the multi-scatter form.
 
 Run: `./build/cmake_install/Lumice -f recipes/22-halo.json -o /tmp/out`.
 
@@ -89,29 +91,24 @@ Bright spots ~22° to the **left and right** of the sun, caused by hexagonal **p
       }
     }
   ],
-  "filter": [
-    { "id": 1, "type": "none", "symmetry": "P" }
-  ],
+  "filter": [{ "id": 1, "type": "none", "symmetry": "P" }],
   "scene": {
     "light_source": {
-      "type": "sun",
-      "altitude": 10.0,
+      "type": "sun", "altitude": 10.0,
       "spectrum": [
         {"wavelength": 420, "weight": 1.0},
         {"wavelength": 550, "weight": 1.0},
         {"wavelength": 660, "weight": 1.0}
       ]
     },
-    "ray_num": 1000000,
-    "max_hits": 7,
+    "ray_num": 1000000, "max_hits": 7,
     "scattering": [
-      { "prob": 1.0, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] }
+      { "prob": 0.0, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] }
     ]
   },
   "render": [
     {
-      "id": 1,
-      "lens": { "type": "fisheye_equidistant", "fov": 60 },
+      "id": 1, "lens": { "type": "fisheye_equidistant", "fov": 60 },
       "resolution": [800, 800],
       "view": { "elevation": 10, "azimuth": 0 }
     }
@@ -155,30 +152,25 @@ When light is scattered twice by parallel plate crystals, a fainter ring appears
       }
     }
   ],
-  "filter": [
-    { "id": 1, "type": "none", "symmetry": "P" }
-  ],
+  "filter": [{ "id": 1, "type": "none", "symmetry": "P" }],
   "scene": {
     "light_source": {
-      "type": "sun",
-      "altitude": 20.0,
+      "type": "sun", "altitude": 20.0,
       "spectrum": [
         {"wavelength": 420, "weight": 1.0},
         {"wavelength": 550, "weight": 1.0},
         {"wavelength": 660, "weight": 1.0}
       ]
     },
-    "ray_num": 5000000,
-    "max_hits": 12,
+    "ray_num": 5000000, "max_hits": 12,
     "scattering": [
       { "prob": 1.0, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] },
-      { "prob": 0.5, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] }
+      { "prob": 0.0, "entries": [{ "crystal": 1, "proportion": 1.0, "filter": 1 }] }
     ]
   },
   "render": [
     {
-      "id": 1,
-      "lens": { "type": "fisheye_equidistant", "fov": 90 },
+      "id": 1, "lens": { "type": "fisheye_equidistant", "fov": 90 },
       "resolution": [900, 900],
       "view": { "elevation": 20, "azimuth": 0 }
     }
@@ -188,7 +180,7 @@ When light is scattered twice by parallel plate crystals, a fainter ring appears
 
 Notes:
 
-- The **two scattering entries** model "every ray hits a plate, then 50% of those rays hit another plate". This is the user-facing knob for "multiple scattering" — see [`../configuration.md`](../configuration.md) §`scattering`.
+- The **two scattering entries** model "every ray hits a plate, then every survivor hits another plate". `scattering[i].prob` is the probability that an outgoing ray from layer `i` *continues* into layer `i+1` (the last entry's `prob` flips that ray to "outgoing", so set it to `0.0`). With `[1.0, 0.0]` every ray scatters exactly twice — the canonical setup for "multiple scattering" — see [`../configuration.md`](../configuration.md) §`scattering`.
 - `max_hits` is raised to `12` because a doubly-scattered ray can take more bounces before exiting.
 - The 44° ring is dim — `ray_num=5e6` gives a usable preview; raise to `5e7` for a clean image.
 

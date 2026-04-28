@@ -72,7 +72,7 @@ GUI 包了同一个引擎，但**并非** JSON config 的完全超集 — 一些
 | 多 `render` 条目 | ❌（只一个预览）| ✅ | JSON 可声明任意多个 `render: [...]`；CLI 每个 entry 出一张图 |
 | 多层 scattering（≥ 2 个 entry） | ❌ | ✅ | 配方 3 在 [`04-recipes_zh.md`](04-recipes_zh.md) 中要求 JSON |
 | 镜头投影切换 | ✅（浮动镜头条）| ✅（`render[].lens.type`） | GUI 实时重投影；JSON 一次设定每个 render 的镜头 |
-| Overlay 网格 | ✅（实时，仅 GUI） | 部分通过 `render[].grid` | GUI overlay 是观察辅助，**不**写进 `.lmc` |
+| Overlay 网格 | ✅（实时，仅 GUI） | ❌ | GUI overlay 是观察辅助，**不**写进 `.lmc`；JSON 的 `render[].grid` 字段 parser 接受但 CLI 渲染路径不消费 — 详见 §4 |
 | 晶体预览样式（线框 / 隐藏线 / 透视 / 着色）| ✅ | ❌ | 纯 GUI 状态，与模拟无关 |
 | `.lmc` 保存/加载 | ✅ | ✅ | `.lmc` 即 JSON，两边读同一个文件 |
 

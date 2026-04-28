@@ -64,7 +64,7 @@ Want to build a halo recipe yourself instead of opening the example? The shortes
 
    ![Crystal editor dialog](../figs/gui_edit_crystal.jpg)
 
-   Pick a preset (e.g. **Hexagonal Prism**), tweak `height` and `face_distance` if you wish, and confirm.
+   Pick a preset (e.g. **Hexagonal Prism**), tweak `height` if you wish, and confirm. (Other shape fields like `face_distance` are accepted by the schema but are not yet active in the engine — see [`05-faq.md`](05-faq.md) §4.)
 3. Open **Light Source** in the Left Panel and set `azimuth` (sun direction) and `altitude` (sun height above horizon).
 4. Open **Render** and pick a lens, resolution, and field of view — the Floating Lens Bar can re-project later, so any sane default is fine.
 5. Press **Run**.

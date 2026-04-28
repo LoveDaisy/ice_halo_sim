@@ -72,7 +72,7 @@ The GUI wraps the same engine as the CLI but is **not a complete superset** of J
 | Multiple `render` entries | ❌ (only one preview) | ✅ | A JSON config can declare any number of `render: [...]` entries; CLI emits one image per entry. |
 | Multi-layer scattering (≥ 2 `scattering` entries) | ❌ | ✅ | Recipe 3 in [`04-recipes.md`](04-recipes.md) requires JSON. |
 | Lens projection switch | ✅ (Floating Lens Bar) | ✅ (`render[].lens.type`) | GUI re-projects on the fly; JSON sets it once per render entry. |
-| Overlay grid | ✅ (live, GUI-only) | partial via `render[].grid` | The GUI overlay is a viewing aid and is **not** written into the saved `.lmc`. |
+| Overlay grid | ✅ (live, GUI-only) | ❌ | The GUI overlay is a viewing aid and is **not** written into the saved `.lmc`. The JSON `render[].grid` field is accepted by the parser but is not consumed by the CLI render path — see §4. |
 | Crystal preview style (wireframe / hidden line / x-ray / shaded) | ✅ | ❌ | Pure GUI state; not part of the simulation. |
 | Save/load `.lmc` | ✅ | ✅ | The `.lmc` is plain JSON; both sides read the same file. |
 
