@@ -45,6 +45,11 @@ struct Exposure {
 
 // Auxiliary line overlay (horizon, altitude grid, sun circles) drawn on top
 // of the preview. sun_dir is precomputed on CPU from GuiState::sun.altitude.
+//
+// The show_* fields here control **line** rendering only (shader uniforms
+// u_show_horizon / u_show_grid / u_show_sun_circles). They are sourced from
+// GuiState::show_<x>_line. The companion fields GuiState::show_<x>_label are
+// consumed by OverlayLabelInput, not this struct.
 struct OverlayDecoration {
   bool show_horizon = false;
   bool show_grid = false;
