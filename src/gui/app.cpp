@@ -47,9 +47,10 @@ OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConf
   input.azimuth = rc.azimuth;
   input.roll = rc.roll;
   input.visible = rc.visible;
-  input.show_horizon = state.show_horizon;
-  input.show_grid = state.show_grid;
-  input.show_sun_circles = state.show_sun_circles;
+  input.show_horizon = state.show_horizon_label;
+  input.show_grid = state.show_grid_label;
+  input.show_sun_circles = state.show_sun_circles_label;
+  input.horizon_alpha = state.horizon_alpha;
 
   // Sun direction in world space (azimuth fixed at 0, only altitude matters).
   // Formula is byte-identical to RenderPreviewPanel's assignment into
@@ -298,7 +299,8 @@ void DoExportPreviewPng() {
 
   PreviewParams params = BuildExportParams();
   std::optional<OverlayLabelInput> overlay;
-  if (g_state.screenshot_include_overlay && (g_state.show_horizon || g_state.show_grid || g_state.show_sun_circles)) {
+  if (g_state.screenshot_include_overlay &&
+      (g_state.show_horizon_label || g_state.show_grid_label || g_state.show_sun_circles_label)) {
     overlay = BuildOverlayLabelInput(g_state, g_state.renderer);
   }
 

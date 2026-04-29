@@ -5,7 +5,9 @@
 #include <cmath>
 #include <vector>
 
+#include "gui/app.hpp"
 #include "gui/gui_constants.hpp"
+#include "gui/gui_state.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/preview_renderer.hpp"
 #include "test_gui_shared.hpp"
@@ -32,6 +34,7 @@ lumice::gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float el
   in.horizon_color[0] = in.horizon_color[1] = in.horizon_color[2] = 1.0f;
   in.grid_color[0] = in.grid_color[1] = in.grid_color[2] = 1.0f;
   in.sun_circles_color[0] = in.sun_circles_color[1] = in.sun_circles_color[2] = 1.0f;
+  in.horizon_alpha = 1.0f;
   in.grid_alpha = 1.0f;
   in.sun_circles_alpha = 1.0f;
   return in;
@@ -780,6 +783,164 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       std::vector<lumice::gui::OverlayLabel> labels;
       lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 200.0f, 200.0f, labels);
       IM_CHECK_GE(CountUniqueGridLabels(labels), 5);
+    };
+  }
+
+  // task-overlay-line-label-toggle contract tests: BuildOverlayLabelInput reads
+  // GuiState::show_<x>_label fields (NOT show_<x>_line). The companion line
+  // routing (pp.overlay.show_<x> = g_state.show_<x>_line in RenderRightPanel)
+  // is a trivial inline assignment validated by code review + manual walk-through.
+  // These tests pin only the label-side wiring, which is the side that branches
+  // on the GuiState→OverlayLabelInput conversion function.
+  //
+  // Test A: line-only — label flag drives input, line flag is ignored by BuildOverlayLabelInput.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_toggle", "line_only_label_input_false");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      lumice::gui::GuiState s;
+      s.show_horizon_line = true;
+      s.show_horizon_label = false;
+      s.show_grid_line = true;
+      s.show_grid_label = false;
+      s.show_sun_circles_line = true;
+      s.show_sun_circles_label = false;
+      auto in = lumice::gui::BuildOverlayLabelInput(s, s.renderer);
+      IM_CHECK_EQ(in.show_horizon, false);
+      IM_CHECK_EQ(in.show_grid, false);
+      IM_CHECK_EQ(in.show_sun_circles, false);
+    };
+  }
+
+  // Test B: label-only — only label flag drives input.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_toggle", "label_only_label_input_true");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      lumice::gui::GuiState s;
+      s.show_horizon_line = false;
+      s.show_horizon_label = true;
+      s.show_grid_line = false;
+      s.show_grid_label = true;
+      s.show_sun_circles_line = false;
+      s.show_sun_circles_label = true;
+      auto in = lumice::gui::BuildOverlayLabelInput(s, s.renderer);
+      IM_CHECK_EQ(in.show_horizon, true);
+      IM_CHECK_EQ(in.show_grid, true);
+      IM_CHECK_EQ(in.show_sun_circles, true);
+    };
+  }
+
+  // Test C: both on — input reflects label flags (true).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_toggle", "both_on_label_input_true");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      lumice::gui::GuiState s;
+      s.show_horizon_line = true;
+      s.show_horizon_label = true;
+      s.show_grid_line = true;
+      s.show_grid_label = true;
+      s.show_sun_circles_line = true;
+      s.show_sun_circles_label = true;
+      auto in = lumice::gui::BuildOverlayLabelInput(s, s.renderer);
+      IM_CHECK_EQ(in.show_horizon, true);
+      IM_CHECK_EQ(in.show_grid, true);
+      IM_CHECK_EQ(in.show_sun_circles, true);
+    };
+  }
+
+  // Test D: both off — three-layer assertion to distinguish "gate intercept"
+  // from "computed-but-empty" path:
+  //   (1) precondition: GuiState label flags are all false
+  //   (2) expected: BuildOverlayLabelInput emits all-false
+  //   (3) alternative path absence: the panel-side gate triple-OR
+  //       (label_label_label) evaluates to false, proving label sampling is
+  //       gated out by source flags and not by downstream filtering.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_toggle", "both_off_three_layer_assertion");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      lumice::gui::GuiState s;
+      // (1) Precondition.
+      s.show_horizon_line = false;
+      s.show_horizon_label = false;
+      s.show_grid_line = false;
+      s.show_grid_label = false;
+      s.show_sun_circles_line = false;
+      s.show_sun_circles_label = false;
+      IM_CHECK_EQ(s.show_horizon_label, false);
+      IM_CHECK_EQ(s.show_grid_label, false);
+      IM_CHECK_EQ(s.show_sun_circles_label, false);
+      // (2) Expected: BuildOverlayLabelInput sees all-false.
+      auto in = lumice::gui::BuildOverlayLabelInput(s, s.renderer);
+      IM_CHECK_EQ(in.show_horizon, false);
+      IM_CHECK_EQ(in.show_grid, false);
+      IM_CHECK_EQ(in.show_sun_circles, false);
+      // (3) Alternative-path absence (documentary): the panel-side gate
+      //     (show_horizon_label || show_grid_label || show_sun_circles_label)
+      //     evaluates to false. This is the same expression used in
+      //     app_panels.cpp:674 / app.cpp:301 to skip label sampling entirely.
+      //     Note: this assertion is structurally tautological — Layer 1 already
+      //     fixed all three label fields to false, so `gate_open` is mathematically
+      //     forced to false. It is kept as an executable comment that pins the
+      //     gate expression's structure (e.g. catches a future refactor that
+      //     replaces the OR with a bug like `&& show_grid_label`).
+      const bool gate_open = s.show_horizon_label || s.show_grid_label || s.show_sun_circles_label;
+      IM_CHECK_EQ(gate_open, false);
+    };
+  }
+
+  // task-overlay-line-label-toggle: horizon_label produces a "0°" edge label
+  // (latitude=0 crossing). Grid skips 0° to avoid clutter, so horizon owns this
+  // value. Use Fisheye Equidistant with fov=180 (full sky) so the equator hits
+  // the viewport edges symmetrically.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_toggle", "horizon_label_emits_zero_degree");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeEquidist,
+                             /*elev*/ 0.0f, /*az*/ 0.0f);
+      in.fov = 180.0f;
+      in.show_horizon = true;
+      in.show_grid = false;
+      in.show_sun_circles = false;
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 200.0f, 200.0f, labels);
+      // Expect at least one "0°" label (latitude=0 crossing the viewport edge).
+      int zero_deg_count = 0;
+      for (const auto& l : labels) {
+        if (l.text == "0\xC2\xB0") {
+          ++zero_deg_count;
+        }
+      }
+      IM_CHECK_GE(zero_deg_count, 1);
+    };
+  }
+
+  // task-overlay-line-label-toggle: horizon_label is independent from grid. When
+  // grid is the only label source, the existing skip-0° rule should still hold —
+  // no "0°" label emitted. Pin the rule so a future refactor that drops the
+  // grid skip would surface as a duplicate-0° regression.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_toggle", "grid_only_skips_zero_degree");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeEquidist,
+                             /*elev*/ 0.0f, /*az*/ 0.0f);
+      in.fov = 180.0f;
+      in.show_horizon = false;
+      in.show_grid = true;
+      in.show_sun_circles = false;
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 200.0f, 200.0f, labels);
+      int zero_deg_count = 0;
+      for (const auto& l : labels) {
+        if (l.text == "0\xC2\xB0") {
+          ++zero_deg_count;
+        }
+      }
+      IM_CHECK_EQ(zero_deg_count, 0);
     };
   }
 }

@@ -21,6 +21,10 @@ struct OverlayLabel {
   int group = 0;        // collision avoidance only within same group (0=grid, 1=sun circles)
 };
 
+// The show_* fields here control **label** rendering only (label sampling along
+// viewport edges). They are sourced from GuiState::show_<x>_label. The companion
+// fields GuiState::show_<x>_line are consumed by OverlayDecoration (in
+// preview_renderer.hpp), not this struct.
 struct OverlayLabelInput {
   int lens_type;
   float fov, elevation, azimuth, roll;
@@ -30,7 +34,7 @@ struct OverlayLabelInput {
   int sun_circle_count;
   const float* sun_circle_angles;
   float horizon_color[3], grid_color[3], sun_circles_color[3];
-  float grid_alpha, sun_circles_alpha;
+  float horizon_alpha, grid_alpha, sun_circles_alpha;
 };
 
 // Compute labels at viewport edges where overlay lines cross.

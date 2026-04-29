@@ -493,21 +493,47 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   if (ImGui::CollapsingHeader("Overlay", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     ImGui::SeparatorText("Auxiliary Lines");
-    ImGui::Checkbox("Horizon##overlay", &g_state.show_horizon);
-    ImGui::SameLine();
-    ImGui::ColorEdit3("##horizon_color", g_state.horizon_color, ImGuiColorEditFlags_NoInputs);
+    // Per-overlay row layout: color picker + name (variable width) + Line / Label
+    // checkboxes anchored at fixed X so the two checkbox columns align across rows
+    // even though the name column has different widths (Horizon / Grid / Angular Distance).
+    // Second row: Alpha slider.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    // Anchor checkbox columns at fixed X derived from the longest overlay name
+    // plus widget metrics. The trailing pad (ItemSpacing.x × 2) protects against
+    // ColorEdit3 / CalcTextSize sub-pixel rounding under HiDPI so the long name
+    // ("Angular Distance") never overlaps the Line checkbox.
+    float color_w = ImGui::GetFrameHeight();                       // ColorEdit3 NoInputs is a frame_h square
+    float name_col_w = ImGui::CalcTextSize("Angular Distance").x;  // widest overlay name
+    float check_box_w = ImGui::GetFrameHeight();                   // checkbox tick area
+    float line_text_w = ImGui::CalcTextSize("Line").x;
+    float line_col_x = color_w + style.ItemSpacing.x + name_col_w + style.ItemSpacing.x * 2.0f;
+    float label_col_x = line_col_x + check_box_w + style.ItemInnerSpacing.x + line_text_w + style.ItemSpacing.x * 2.0f;
+
+    auto overlay_row = [&](const char* name, const char* color_id, float* color, const char* line_id, bool* line_v,
+                           const char* label_id, bool* label_v) {
+      ImGui::ColorEdit3(color_id, color, ImGuiColorEditFlags_NoInputs);
+      ImGui::SameLine();
+      ImGui::TextUnformatted(name);
+      ImGui::SameLine(line_col_x);
+      ImGui::Checkbox(line_id, line_v);
+      ImGui::SameLine(label_col_x);
+      ImGui::Checkbox(label_id, label_v);
+    };
+
+    overlay_row("Horizon", "##horizon_color", g_state.horizon_color, "Line##horizon", &g_state.show_horizon_line,
+                "Label##horizon", &g_state.show_horizon_label);
     SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, 0.0f, 1.0f, "%.2f");
-    ImGui::Checkbox("Grid##overlay", &g_state.show_grid);
-    ImGui::SameLine();
-    ImGui::ColorEdit3("##grid_color", g_state.grid_color, ImGuiColorEditFlags_NoInputs);
+
+    overlay_row("Grid", "##grid_color", g_state.grid_color, "Line##grid", &g_state.show_grid_line, "Label##grid",
+                &g_state.show_grid_label);
     SliderWithInput("Alpha##grid", &g_state.grid_alpha, 0.0f, 1.0f, "%.2f");
-    ImGui::Checkbox("Sun Circles##overlay", &g_state.show_sun_circles);
-    ImGui::SameLine();
-    ImGui::ColorEdit3("##sun_circles_color", g_state.sun_circles_color, ImGuiColorEditFlags_NoInputs);
+
+    overlay_row("Angular Distance", "##sun_circles_color", g_state.sun_circles_color, "Line##sun_circles",
+                &g_state.show_sun_circles_line, "Label##sun_circles", &g_state.show_sun_circles_label);
     SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, 0.0f, 1.0f, "%.2f");
 
-    if (g_state.show_sun_circles) {
-      if (ImGui::Button("Edit Circles...##overlay")) {
+    if (g_state.show_sun_circles_line || g_state.show_sun_circles_label) {
+      if (ImGui::Button("Edit Angles...##overlay")) {
         ImGui::OpenPopup("SunCirclesEdit");
       }
       if (ImGui::BeginPopup("SunCirclesEdit")) {
@@ -645,10 +671,11 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.bg.alpha = g_state.bg_alpha;
     pp.bg.aspect = g_preview.GetBgAspect();
 
-    // Auxiliary line overlay parameters
-    pp.overlay.show_horizon = g_state.show_horizon;
-    pp.overlay.show_grid = g_state.show_grid;
-    pp.overlay.show_sun_circles = g_state.show_sun_circles;
+    // Auxiliary line overlay parameters (line flags only — labels are handled
+    // separately via BuildOverlayLabelInput below).
+    pp.overlay.show_horizon = g_state.show_horizon_line;
+    pp.overlay.show_grid = g_state.show_grid_line;
+    pp.overlay.show_sun_circles = g_state.show_sun_circles_line;
     std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color), std::begin(pp.overlay.horizon_color));
     std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(pp.overlay.grid_color));
     std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
@@ -671,7 +698,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // modals correctly occlude them). BuildOverlayLabelInput is shared with
     // DoExportPreviewPng (off-screen FBO path) so both call sites produce
     // byte-identical OverlayLabelInput for a given state.
-    if (g_state.show_horizon || g_state.show_grid || g_state.show_sun_circles) {
+    if (g_state.show_horizon_label || g_state.show_grid_label || g_state.show_sun_circles_label) {
       OverlayLabelInput label_input = BuildOverlayLabelInput(g_state, rc);
 
       // Viewport rect in absolute OS screen coordinates. DrawOverlayLabels emits to

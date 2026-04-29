@@ -1844,22 +1844,31 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      gui::g_state.show_horizon = true;
-      gui::g_state.show_grid = true;
-      gui::g_state.show_sun_circles = true;
+      gui::g_state.show_horizon_line = true;
+      gui::g_state.show_horizon_label = true;
+      gui::g_state.show_grid_line = true;
+      gui::g_state.show_grid_label = true;
+      gui::g_state.show_sun_circles_line = true;
+      gui::g_state.show_sun_circles_label = true;
       ctx->Yield();
 
       gui::g_state.renderer.lens_type = 4;  // Dual Fisheye EA (full-sky)
       ctx->Yield(3);
-      IM_CHECK_EQ(gui::g_state.show_horizon, true);
-      IM_CHECK_EQ(gui::g_state.show_grid, true);
-      IM_CHECK_EQ(gui::g_state.show_sun_circles, true);
+      IM_CHECK_EQ(gui::g_state.show_horizon_line, true);
+      IM_CHECK_EQ(gui::g_state.show_horizon_label, true);
+      IM_CHECK_EQ(gui::g_state.show_grid_line, true);
+      IM_CHECK_EQ(gui::g_state.show_grid_label, true);
+      IM_CHECK_EQ(gui::g_state.show_sun_circles_line, true);
+      IM_CHECK_EQ(gui::g_state.show_sun_circles_label, true);
 
       gui::g_state.renderer.lens_type = 0;  // Linear
       ctx->Yield(3);
-      IM_CHECK_EQ(gui::g_state.show_horizon, true);
-      IM_CHECK_EQ(gui::g_state.show_grid, true);
-      IM_CHECK_EQ(gui::g_state.show_sun_circles, true);
+      IM_CHECK_EQ(gui::g_state.show_horizon_line, true);
+      IM_CHECK_EQ(gui::g_state.show_horizon_label, true);
+      IM_CHECK_EQ(gui::g_state.show_grid_line, true);
+      IM_CHECK_EQ(gui::g_state.show_grid_label, true);
+      IM_CHECK_EQ(gui::g_state.show_sun_circles_line, true);
+      IM_CHECK_EQ(gui::g_state.show_sun_circles_label, true);
     };
   }
 }

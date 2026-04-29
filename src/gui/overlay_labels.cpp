@@ -319,8 +319,10 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   float res_x = vp_screen_w;
   float res_y = vp_screen_h;
 
+  int horizon_a = static_cast<int>(input.horizon_alpha * 255);
   int grid_a = static_cast<int>(input.grid_alpha * 255);
   int sun_a = static_cast<int>(input.sun_circles_alpha * 255);
+  ImU32 horizon_col = ColorToImU32(input.horizon_color, horizon_a);
   ImU32 grid_col = ColorToImU32(input.grid_color, grid_a);
   ImU32 sun_col = ColorToImU32(input.sun_circles_color, sun_a);
 
@@ -400,6 +402,18 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   // Crossing detection helper: given two adjacent valid sample points, detect and add labels.
   auto detect_crossings = [&](const SampleAngles& prev, const SampleAngles& cur) {
     float t;
+
+    // Horizon: altitude == 0. Grid skips this latitude (see "skip 0° altitude" below)
+    // so the two paths produce a single non-overlapping "0°" label when both are on.
+    if (input.show_horizon) {
+      if (std::abs(prev.altitude - cur.altitude) < 20.0f && Crosses(prev.altitude, cur.altitude, 0.0f, &t)) {
+        float ix, iy, iz;
+        interp_dir(prev, cur, t, ix, iy, iz);
+        if (is_visible(0.0f, ix, iy, iz)) {
+          AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", 0.0f, horizon_col);
+        }
+      }
+    }
 
     // Grid: altitude crosses multiples of 10
     if (input.show_grid) {

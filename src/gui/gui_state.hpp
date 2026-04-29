@@ -259,10 +259,23 @@ struct GuiState {
   bool bg_show = false;
   float bg_alpha = 1.0f;
 
-  // Auxiliary line overlay (view preference — does not call MarkDirty, not in ConfigSnapshot)
-  bool show_horizon = false;
-  bool show_grid = false;
-  bool show_sun_circles = false;
+  // Auxiliary line overlay (view preference — does not call MarkDirty, not in ConfigSnapshot).
+  // Each overlay has independent toggles for line and label visibility, allowing
+  // line-only / label-only / both / none combinations. The line flags drive the
+  // shader uniform path (see app_panels.cpp pp.overlay assignment), the label flags
+  // drive the CPU label sampling path (see BuildOverlayLabelInput in app.cpp).
+  //
+  // Tech-debt note (task-overlay-line-label-toggle, 2026-04-29): currently 12 flat
+  // overlay-related fields (3×color + 3×alpha + 6×bool). When a fourth overlay class
+  // is added (e.g. face number overlay merged into this panel), evaluate collapsing
+  // to a substruct (per-overlay { color, alpha, line, label }) to avoid further
+  // field-name proliferation.
+  bool show_horizon_line = false;
+  bool show_horizon_label = false;
+  bool show_grid_line = false;
+  bool show_grid_label = false;
+  bool show_sun_circles_line = false;
+  bool show_sun_circles_label = false;
   std::vector<float> sun_circle_angles = { 22.0f, 46.0f };
   float horizon_color[3] = { 0.8f, 0.2f, 0.2f };
   float grid_color[3] = { 1.0f, 1.0f, 1.0f };

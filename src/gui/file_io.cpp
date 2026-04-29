@@ -822,10 +822,15 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["bg_show"] = state.bg_show;
   root["bg_alpha"] = state.bg_alpha;
 
-  // Auxiliary line overlay
-  root["overlay_horizon"] = state.show_horizon;
-  root["overlay_grid"] = state.show_grid;
-  root["overlay_sun_circles"] = state.show_sun_circles;
+  // Auxiliary line overlay (line / label visibility split since task-overlay-line-label-toggle).
+  // Old key `overlay_<x>` (single visibility) is no longer written; readers fall back to it
+  // when the new keys are absent.
+  root["overlay_horizon_line"] = state.show_horizon_line;
+  root["overlay_horizon_label"] = state.show_horizon_label;
+  root["overlay_grid_line"] = state.show_grid_line;
+  root["overlay_grid_label"] = state.show_grid_label;
+  root["overlay_sun_circles_line"] = state.show_sun_circles_line;
+  root["overlay_sun_circles_label"] = state.show_sun_circles_label;
   root["overlay_sun_circle_angles"] = state.sun_circle_angles;
   root["overlay_horizon_color"] = { state.horizon_color[0], state.horizon_color[1], state.horizon_color[2] };
   root["overlay_grid_color"] = { state.grid_color[0], state.grid_color[1], state.grid_color[2] };
@@ -958,10 +963,17 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.bg_show = root.value("bg_show", false);
   state.bg_alpha = root.value("bg_alpha", 1.0f);
 
-  // Auxiliary line overlay (backward compatible: missing fields use defaults)
-  state.show_horizon = root.value("overlay_horizon", false);
-  state.show_grid = root.value("overlay_grid", false);
-  state.show_sun_circles = root.value("overlay_sun_circles", false);
+  // Auxiliary line overlay (backward compatible: legacy `overlay_<x>` key maps to
+  // both line and label = legacy_value; new keys override per-axis when present).
+  bool legacy_horizon = root.value("overlay_horizon", false);
+  bool legacy_grid = root.value("overlay_grid", false);
+  bool legacy_sun_circles = root.value("overlay_sun_circles", false);
+  state.show_horizon_line = root.value("overlay_horizon_line", legacy_horizon);
+  state.show_horizon_label = root.value("overlay_horizon_label", legacy_horizon);
+  state.show_grid_line = root.value("overlay_grid_line", legacy_grid);
+  state.show_grid_label = root.value("overlay_grid_label", legacy_grid);
+  state.show_sun_circles_line = root.value("overlay_sun_circles_line", legacy_sun_circles);
+  state.show_sun_circles_label = root.value("overlay_sun_circles_label", legacy_sun_circles);
   if (root.contains("overlay_sun_circle_angles") && root["overlay_sun_circle_angles"].is_array()) {
     state.sun_circle_angles.clear();
     for (const auto& v : root["overlay_sun_circle_angles"]) {

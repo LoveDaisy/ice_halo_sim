@@ -106,11 +106,11 @@ GUI 需要 display server 和支持 OpenGL 3.2 Core Profile 的 GPU。
 
 ### Overlay（叠加）
 
-Render Preview 上的三组互相独立的辅助线：`Horizon`（地平线）、`Grid`（网格）、`Sun Circles`（太阳圈）。每组都有复选框、颜色块和 alpha 滑块。Sun Circles 还提供 `Edit Circles...` 弹窗，支持 9° / 22° / 28° / 46° 预设角度以及任意自定义角度。
+Render Preview 上的三组互相独立的辅助线：`Horizon`（地平线）、`Grid`（经纬网格）、`Angular Distance`（以太阳为中心的等角距环，例如 22°/46° 晕环）。每组都有颜色块、`Line` 与 `Label` 双复选框（分别控制线条和边缘标签的显隐，可独立组合 line-only / label-only / 全开 / 全关）、以及 alpha 滑块。`Angular Distance` 还提供 `Edit Angles...` 弹窗，支持 9° / 22° / 28° / 46° 预设角度以及任意自定义角度。
 
 ## Render Preview（渲染预览）
 
-中央区域显示实时的、按 lens 投影的冰晕图像。空闲时显示禁用态的 `Render Preview` 占位文本；模拟一开始累积光线，纹理就会逐帧更新。Horizon / Grid / Sun Circles / Compass 等 overlay 标签会按当前 lens 同步投影叠加在纹理之上。
+中央区域显示实时的、按 lens 投影的冰晕图像。空闲时显示禁用态的 `Render Preview` 占位文本；模拟一开始累积光线，纹理就会逐帧更新。Horizon / Grid / Angular Distance / Compass 等 overlay 标签会按当前 lens 同步投影叠加在纹理之上。
 
 ![Render Preview 渲染示例](figs/gui_screenshot_example_04.jpg)
 
