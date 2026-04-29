@@ -514,7 +514,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 
     ImGui::ColorEdit3("##sun_circles_color", g_state.sun_circles_color, ImGuiColorEditFlags_NoInputs);
     ImGui::SameLine();
-    ImGui::TextUnformatted("Sun");
+    ImGui::TextUnformatted("Sun Circles");
     ImGui::SameLine();
     ImGui::Checkbox("Line##sun_circles", &g_state.show_sun_circles_line);
     ImGui::SameLine();

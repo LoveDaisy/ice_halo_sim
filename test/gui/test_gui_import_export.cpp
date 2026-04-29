@@ -410,6 +410,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
   // task-overlay-line-label-toggle: Test F — new keys take precedence over the
   // legacy key when both are present (mixed-key scenario for hand-edited JSON).
+  // Cover horizon AND grid to distinguish "all overlays handled correctly"
+  // from "only horizon special-cased".
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "overlay_new_keys_take_precedence");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -421,13 +423,18 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         "renderer": {"lens_type": "linear", "fov": 90.0},
         "overlay_horizon": true,
         "overlay_horizon_line": true,
-        "overlay_horizon_label": false
+        "overlay_horizon_label": false,
+        "overlay_grid": true,
+        "overlay_grid_line": false,
+        "overlay_grid_label": true
       })";
       gui::GuiState loaded;
       bool ok = gui::DeserializeGuiStateJson(json, loaded);
       IM_CHECK(ok);
       IM_CHECK_EQ(loaded.show_horizon_line, true);
       IM_CHECK_EQ(loaded.show_horizon_label, false);
+      IM_CHECK_EQ(loaded.show_grid_line, false);
+      IM_CHECK_EQ(loaded.show_grid_label, true);
     };
   }
 

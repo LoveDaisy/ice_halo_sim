@@ -876,10 +876,15 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(in.show_horizon, false);
       IM_CHECK_EQ(in.show_grid, false);
       IM_CHECK_EQ(in.show_sun_circles, false);
-      // (3) Alternative-path absence: the panel-side gate
+      // (3) Alternative-path absence (documentary): the panel-side gate
       //     (show_horizon_label || show_grid_label || show_sun_circles_label)
       //     evaluates to false. This is the same expression used in
       //     app_panels.cpp:674 / app.cpp:301 to skip label sampling entirely.
+      //     Note: this assertion is structurally tautological — Layer 1 already
+      //     fixed all three label fields to false, so `gate_open` is mathematically
+      //     forced to false. It is kept as an executable comment that pins the
+      //     gate expression's structure (e.g. catches a future refactor that
+      //     replaces the OR with a bug like `&& show_grid_label`).
       const bool gate_open = s.show_horizon_label || s.show_grid_label || s.show_sun_circles_label;
       IM_CHECK_EQ(gate_open, false);
     };
