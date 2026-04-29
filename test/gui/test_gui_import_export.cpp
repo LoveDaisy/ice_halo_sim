@@ -380,4 +380,84 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded.renderer.fov, 90.0f);
     };
   }
+
+  // task-overlay-line-label-toggle: Test E — legacy `overlay_<x>` key (single
+  // visibility) deserializes into both line and label = legacy_value.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "overlay_legacy_key_fallback");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      std::string json = R"({
+        "layers": [],
+        "renderer": {"lens_type": "linear", "fov": 90.0},
+        "overlay_horizon": true,
+        "overlay_grid": false,
+        "overlay_sun_circles": true
+      })";
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeGuiStateJson(json, loaded);
+      IM_CHECK(ok);
+      IM_CHECK_EQ(loaded.show_horizon_line, true);
+      IM_CHECK_EQ(loaded.show_horizon_label, true);
+      IM_CHECK_EQ(loaded.show_grid_line, false);
+      IM_CHECK_EQ(loaded.show_grid_label, false);
+      IM_CHECK_EQ(loaded.show_sun_circles_line, true);
+      IM_CHECK_EQ(loaded.show_sun_circles_label, true);
+    };
+  }
+
+  // task-overlay-line-label-toggle: Test F — new keys take precedence over the
+  // legacy key when both are present (mixed-key scenario for hand-edited JSON).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "overlay_new_keys_take_precedence");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      std::string json = R"({
+        "layers": [],
+        "renderer": {"lens_type": "linear", "fov": 90.0},
+        "overlay_horizon": true,
+        "overlay_horizon_line": true,
+        "overlay_horizon_label": false
+      })";
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeGuiStateJson(json, loaded);
+      IM_CHECK(ok);
+      IM_CHECK_EQ(loaded.show_horizon_line, true);
+      IM_CHECK_EQ(loaded.show_horizon_label, false);
+    };
+  }
+
+  // task-overlay-line-label-toggle: Test G — round-trip preserves all six
+  // line/label fields independently (no collapsing back to single key on write).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "overlay_roundtrip_preserves_split");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      gui::g_state.show_horizon_line = true;
+      gui::g_state.show_horizon_label = false;
+      gui::g_state.show_grid_line = false;
+      gui::g_state.show_grid_label = true;
+      gui::g_state.show_sun_circles_line = true;
+      gui::g_state.show_sun_circles_label = true;
+
+      std::string json = gui::SerializeGuiStateJson(gui::g_state);
+      IM_CHECK(!json.empty());
+
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeGuiStateJson(json, loaded);
+      IM_CHECK(ok);
+      IM_CHECK_EQ(loaded.show_horizon_line, true);
+      IM_CHECK_EQ(loaded.show_horizon_label, false);
+      IM_CHECK_EQ(loaded.show_grid_line, false);
+      IM_CHECK_EQ(loaded.show_grid_label, true);
+      IM_CHECK_EQ(loaded.show_sun_circles_line, true);
+      IM_CHECK_EQ(loaded.show_sun_circles_label, true);
+    };
+  }
 }

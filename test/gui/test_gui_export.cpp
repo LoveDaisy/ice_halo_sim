@@ -198,8 +198,10 @@ static void RunAcExport() {
   std::optional<gui::OverlayLabelInput> overlay;
   if (g_ac_state.with_overlay) {
     // Force some overlay content for deterministic pixel coverage in AC2.
-    gui::g_state.show_horizon = true;
-    gui::g_state.show_grid = true;
+    gui::g_state.show_horizon_line = true;
+    gui::g_state.show_horizon_label = true;
+    gui::g_state.show_grid_line = true;
+    gui::g_state.show_grid_label = true;
     overlay = gui::BuildOverlayLabelInput(gui::g_state, gui::g_state.renderer);
   }
 
@@ -1007,9 +1009,12 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.roll = 0.0f;
       gui::g_state.renderer.visible = gui::kVisibleFull;
       // Disable overlay / bg in live preview so Configure*'s Disabled() is also a no-op.
-      gui::g_state.show_horizon = false;
-      gui::g_state.show_grid = false;
-      gui::g_state.show_sun_circles = false;
+      gui::g_state.show_horizon_line = false;
+      gui::g_state.show_horizon_label = false;
+      gui::g_state.show_grid_line = false;
+      gui::g_state.show_grid_label = false;
+      gui::g_state.show_sun_circles_line = false;
+      gui::g_state.show_sun_circles_label = false;
       gui::g_state.bg_show = false;
 
       g_export_test.upload_requested = true;

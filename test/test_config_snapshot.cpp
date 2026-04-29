@@ -105,7 +105,8 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   target.aspect_portrait = true;
   target.bg_show = true;
   target.bg_alpha = 0.7f;
-  target.show_horizon = true;
+  target.show_horizon_line = true;
+  target.show_horizon_label = true;
   target.gui_log_level = 1;
   target.core_log_level = 2;
   target.log_to_file = true;
@@ -136,7 +137,8 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   EXPECT_TRUE(target.aspect_portrait);
   EXPECT_TRUE(target.bg_show);
   EXPECT_FLOAT_EQ(target.bg_alpha, 0.7f);
-  EXPECT_TRUE(target.show_horizon);
+  EXPECT_TRUE(target.show_horizon_line);
+  EXPECT_TRUE(target.show_horizon_label);
   EXPECT_EQ(target.gui_log_level, 1);
   EXPECT_EQ(target.core_log_level, 2);
   EXPECT_TRUE(target.log_to_file);
