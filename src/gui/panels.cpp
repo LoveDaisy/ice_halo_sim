@@ -283,7 +283,19 @@ static bool SliderWithPreset(const char* label, float* value, float min_val, flo
 
 
 // ---- Axis distribution controls (shared with edit modals) ----
-
+//
+// CALLER CONTRACT: when invoked from a context where the parent window may
+// become a detached OS viewport (currently: Edit Entry modal in multi-viewport
+// mode), the caller must precede this call with `SetNextComboPopupTopMost()`
+// (see edit_modals.cpp). Without that, the internal `##dist` Combo's popup
+// defaults to NSWindow layer=0 and gets rendered behind the modal at layer=3.
+//
+// IMPLEMENTATION CONTRACT: this function MUST NOT introduce a `Begin` /
+// `BeginChild` call before the Combo at line 297 — doing so would consume
+// the caller's queued NextWindowData (WindowClass) prematurely. If layout
+// wrapping is ever required, the SetNextComboPopupTopMost call must be moved
+// inside RenderAxisDist (after any wrapping Begin/BeginChild, immediately
+// before the Combo).
 bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mean_max) {
   bool changed = false;
   ImGui::PushID(label);

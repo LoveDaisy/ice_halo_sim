@@ -252,11 +252,25 @@ void SnapshotAllBuffers(const GuiState& state) {
 // behind the modal — invisible and click-throughable. Must be called before
 // every modal-internal `BeginCombo` / `Combo` / `RenderAxisDist` call site.
 //
+// MAINTAINER: any new Combo / BeginCombo inside modal rendering functions
+// (RenderCrystalPreviewPane / RenderCrystalModal / RenderAxisModal /
+// RenderFilterModal) MUST be preceded by a call to this helper. Forgetting
+// the call has no compile-time error and silently regresses to the original
+// bug — only visible in detached-modal state which CI cannot reproduce
+// (hidden GLFW window pins GetMainViewport()->Pos to (0,0)).
+//
 // Mechanism: BeginCombo internally backs up and restores g.NextWindowData (see
 // imgui_widgets.cpp:1837/1906), so the flags set here propagate through to the
 // combo popup's `Begin` call inside `BeginComboPopup`. Validated against
 // macOS GLFW backend (CGWindowListCopyWindowInfo reports popup layer=3 after
 // applying this; without it layer=0). See ocornut/imgui#6216.
+//
+// UPGRADE NOTE: re-verify the NextWindowData backup/restore path in
+// imgui_widgets.cpp::BeginCombo when upgrading ImGui past v1.91.8-docking.
+// `ImGuiWindowClass.ViewportFlagsOverrideSet` is alpha API (per ocornut in
+// #7105) and the backup/restore pair (lines 1837/1906 above) may shift across
+// versions; if combo popups regress to layer=0 after an upgrade, audit those
+// two sites first.
 void SetNextComboPopupTopMost() {
   ImGuiWindowClass wc;
   wc.ViewportFlagsOverrideSet = ImGuiViewportFlags_TopMost;
@@ -534,15 +548,14 @@ static void RenderAxisModal(GuiState& /*state*/) {
   // Return values intentionally ignored: modal operates on edit buffer, dirty state
   // is only committed on OK button press (not on each slider change).
   //
-  // SetNextComboPopupTopMost() before each combo: when this modal becomes its
-  // own OS viewport (multi-viewport detached state) it is layer=NSFloatingWindowLevel(3)
-  // due to ImGuiViewportFlags_TopMost on the modal itself; without this call the
-  // distribution-type combo popup defaults to normal level (0) and is rendered
-  // behind the modal — invisible to the user. Setting TopMost on the popup via
-  // SetNextWindowClass propagates through BeginCombo's NextWindowData backup/
-  // restore (imgui_widgets.cpp:1837/1906) into BeginComboPopup's Begin, putting
-  // the popup at the same level as the modal so natural focus z-order shows it
-  // above. See ocornut/imgui#6216.
+  // SetNextComboPopupTopMost() before each combo: see helper definition for
+  // mechanism + maintainer rules. Cross-file contract assumption:
+  // RenderAxisDist (panels.cpp) must not call Begin/BeginChild before its
+  // internal Combo, otherwise the WindowClass we just queued would be consumed
+  // prematurely by that intermediate Begin instead of the combo popup. Verified
+  // for the current implementation; if RenderAxisDist is ever refactored to
+  // wrap its body in BeginChild for layout purposes, this propagation will
+  // silently break (popup regresses to layer=0).
   SetNextComboPopupTopMost();
   RenderAxisDist("Zenith", g_axis_buf[0], 0.0f, 180.0f);
   SetNextComboPopupTopMost();
