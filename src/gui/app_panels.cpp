@@ -493,32 +493,39 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   if (ImGui::CollapsingHeader("Overlay", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     ImGui::SeparatorText("Auxiliary Lines");
-    // Per-overlay row layout: color picker + name + Line / Label checkboxes; second row: Alpha slider.
-    ImGui::ColorEdit3("##horizon_color", g_state.horizon_color, ImGuiColorEditFlags_NoInputs);
-    ImGui::SameLine();
-    ImGui::TextUnformatted("Horizon");
-    ImGui::SameLine();
-    ImGui::Checkbox("Line##horizon", &g_state.show_horizon_line);
-    ImGui::SameLine();
-    ImGui::Checkbox("Label##horizon", &g_state.show_horizon_label);
+    // Per-overlay row layout: color picker + name (variable width) + Line / Label
+    // checkboxes anchored at fixed X so the two checkbox columns align across rows
+    // even though the name column has different widths (Horizon / Grid / Sun Circles).
+    // Second row: Alpha slider.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    float color_w = ImGui::GetFrameHeight();                  // ColorEdit3 NoInputs is a frame_h square
+    float name_col_w = ImGui::CalcTextSize("Sun Circles").x;  // widest overlay name
+    float check_box_w = ImGui::GetFrameHeight();              // checkbox tick area
+    float line_text_w = ImGui::CalcTextSize("Line").x;
+    float line_col_x = color_w + style.ItemSpacing.x + name_col_w + style.ItemSpacing.x;
+    float label_col_x = line_col_x + check_box_w + style.ItemInnerSpacing.x + line_text_w + style.ItemSpacing.x;
+
+    auto overlay_row = [&](const char* name, const char* color_id, float* color, const char* line_id, bool* line_v,
+                           const char* label_id, bool* label_v) {
+      ImGui::ColorEdit3(color_id, color, ImGuiColorEditFlags_NoInputs);
+      ImGui::SameLine();
+      ImGui::TextUnformatted(name);
+      ImGui::SameLine(line_col_x);
+      ImGui::Checkbox(line_id, line_v);
+      ImGui::SameLine(label_col_x);
+      ImGui::Checkbox(label_id, label_v);
+    };
+
+    overlay_row("Horizon", "##horizon_color", g_state.horizon_color, "Line##horizon", &g_state.show_horizon_line,
+                "Label##horizon", &g_state.show_horizon_label);
     SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, 0.0f, 1.0f, "%.2f");
 
-    ImGui::ColorEdit3("##grid_color", g_state.grid_color, ImGuiColorEditFlags_NoInputs);
-    ImGui::SameLine();
-    ImGui::TextUnformatted("Grid");
-    ImGui::SameLine();
-    ImGui::Checkbox("Line##grid", &g_state.show_grid_line);
-    ImGui::SameLine();
-    ImGui::Checkbox("Label##grid", &g_state.show_grid_label);
+    overlay_row("Grid", "##grid_color", g_state.grid_color, "Line##grid", &g_state.show_grid_line, "Label##grid",
+                &g_state.show_grid_label);
     SliderWithInput("Alpha##grid", &g_state.grid_alpha, 0.0f, 1.0f, "%.2f");
 
-    ImGui::ColorEdit3("##sun_circles_color", g_state.sun_circles_color, ImGuiColorEditFlags_NoInputs);
-    ImGui::SameLine();
-    ImGui::TextUnformatted("Sun Circles");
-    ImGui::SameLine();
-    ImGui::Checkbox("Line##sun_circles", &g_state.show_sun_circles_line);
-    ImGui::SameLine();
-    ImGui::Checkbox("Label##sun_circles", &g_state.show_sun_circles_label);
+    overlay_row("Sun Circles", "##sun_circles_color", g_state.sun_circles_color, "Line##sun_circles",
+                &g_state.show_sun_circles_line, "Label##sun_circles", &g_state.show_sun_circles_label);
     SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, 0.0f, 1.0f, "%.2f");
 
     if (g_state.show_sun_circles_line || g_state.show_sun_circles_label) {
