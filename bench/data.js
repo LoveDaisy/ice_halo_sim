@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777456599378,
+  "lastUpdate": 1777456601948,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -3314,6 +3314,54 @@ window.BENCHMARK_DATA = {
             "value": 915337.7,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "620c3717415d7c99e46bf9718a151c931cf669e0",
+          "message": "Merge pull request #82 from LoveDaisy/feat/overlay_line_label\n\nfeat(gui): split overlay Line / Label toggles",
+          "timestamp": "2026-04-29T17:52:06+08:00",
+          "tree_id": "7007374414365f508bf36f92cc6f9453d14e7746",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/620c3717415d7c99e46bf9718a151c931cf669e0"
+        },
+        "date": 1777456601506,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 941232.2,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1999659.8,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 1241148.8,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 975914.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
