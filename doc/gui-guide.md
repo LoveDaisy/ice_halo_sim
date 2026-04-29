@@ -106,7 +106,7 @@ The lens choice changes the geometry of the projected image dramatically:
 
 ### Overlay
 
-Three independent auxiliary lines on top of the Render Preview: `Horizon`, `Grid`, `Sun Circles`. Each has a checkbox, a colour swatch, and an alpha slider. Sun Circles can be customised through an `Edit Circles...` popup that supports preset angles (9° / 22° / 28° / 46°) and arbitrary custom angles.
+Three independent auxiliary lines on top of the Render Preview: `Horizon`, `Grid`, `Sun Circles`. Each has a colour swatch, separate `Line` and `Label` checkboxes (toggle the projected line and the viewport-edge label independently — line-only, label-only, both, or neither), and an alpha slider. Sun Circles can be customised through an `Edit Circles...` popup that supports preset angles (9° / 22° / 28° / 46°) and arbitrary custom angles.
 
 ## Render Preview
 
