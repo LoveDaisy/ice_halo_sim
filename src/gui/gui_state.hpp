@@ -94,12 +94,12 @@ inline const char* const kLensTypeNames[] = {
   "Rectangular",
   "Fisheye Orthographic",
   "Dual Fisheye Orthographic",
+  "Globe",
 };
-constexpr int kLensTypeCount = 10;
+constexpr int kLensTypeCount = 11;
 static_assert(sizeof(kLensTypeNames) / sizeof(*kLensTypeNames) == kLensTypeCount,
               "kLensTypeNames length must match kLensTypeCount");
-static_assert(kLensTypeDualFisheyeOrthographic == kLensTypeCount - 1,
-              "LensType enum terminal value must match kLensTypeCount - 1");
+static_assert(kLensTypeGlobe == kLensTypeCount - 1, "LensType enum terminal value must match kLensTypeCount - 1");
 
 // Display order for the Lens Type combo. Decoupled from enum values so that
 // orthographic variants group with their fisheye / dual-fisheye siblings
@@ -121,6 +121,7 @@ inline constexpr int kLensTypePresentationOrder[] = {
   kLensTypeDualFisheyeStereographic,
   kLensTypeDualFisheyeOrthographic,
   kLensTypeRectangular,
+  kLensTypeGlobe,
 };
 static_assert(sizeof(kLensTypePresentationOrder) / sizeof(*kLensTypePresentationOrder) == kLensTypeCount,
               "kLensTypePresentationOrder must list every LensType exactly once");

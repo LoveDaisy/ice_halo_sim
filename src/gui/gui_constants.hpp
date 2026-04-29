@@ -100,6 +100,7 @@ enum LensType : int {
   kLensTypeRectangular = 7,
   kLensTypeFisheyeOrthographic = 8,
   kLensTypeDualFisheyeOrthographic = 9,
+  kLensTypeGlobe = 10,
 };
 
 // Lenses whose shader path skips the view matrix (full-sphere mapping):

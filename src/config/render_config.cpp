@@ -106,6 +106,11 @@ void from_json(const nlohmann::json& j, LensParam& l) {
         }
         l.fov_ = std::asin(d / f) * 2 * math::kRadToDegree;
         break;
+      case LensParam::kGlobe:
+        // Globe is not a physical pinhole lens; there is no f→fov mapping.
+        // Reject the f input path explicitly so misuse fails loudly instead of silently leaving fov_ undefined.
+        throw nlohmann::detail::out_of_range::create(
+            kErrCodeInvalidValue, "globe lens does not support f-derived fov; use fov field directly", j);
     }
   } else {
     throw nlohmann::detail::out_of_range::create(kErrCodeMissingKey, "missing key [fov] or [f]", j);
@@ -129,6 +134,8 @@ float MaxFov(LensParam::LensType type) {
     case LensParam::kFisheyeOrthographic:
     case LensParam::kDualFisheyeOrthographic:
       return 180.0f;  // sin(theta) aliases past pi/2; theta > pi/2 rejected
+    case LensParam::kGlobe:
+      return 90.0f;  // beyond 90° wide-angle distortion grows without enlarging the sphere on screen
     default:
       return 360.0f;  // equal area, equidistant, dual fisheye, rectangular
   }
