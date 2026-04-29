@@ -34,6 +34,7 @@ lumice::gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float el
   in.horizon_color[0] = in.horizon_color[1] = in.horizon_color[2] = 1.0f;
   in.grid_color[0] = in.grid_color[1] = in.grid_color[2] = 1.0f;
   in.sun_circles_color[0] = in.sun_circles_color[1] = in.sun_circles_color[2] = 1.0f;
+  in.horizon_alpha = 1.0f;
   in.grid_alpha = 1.0f;
   in.sun_circles_alpha = 1.0f;
   return in;
@@ -887,6 +888,59 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       //     replaces the OR with a bug like `&& show_grid_label`).
       const bool gate_open = s.show_horizon_label || s.show_grid_label || s.show_sun_circles_label;
       IM_CHECK_EQ(gate_open, false);
+    };
+  }
+
+  // task-overlay-line-label-toggle: horizon_label produces a "0°" edge label
+  // (latitude=0 crossing). Grid skips 0° to avoid clutter, so horizon owns this
+  // value. Use Fisheye Equidistant with fov=180 (full sky) so the equator hits
+  // the viewport edges symmetrically.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_toggle", "horizon_label_emits_zero_degree");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeEquidist,
+                             /*elev*/ 0.0f, /*az*/ 0.0f);
+      in.fov = 180.0f;
+      in.show_horizon = true;
+      in.show_grid = false;
+      in.show_sun_circles = false;
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 200.0f, 200.0f, labels);
+      // Expect at least one "0°" label (latitude=0 crossing the viewport edge).
+      int zero_deg_count = 0;
+      for (const auto& l : labels) {
+        if (l.text == "0\xC2\xB0") {
+          ++zero_deg_count;
+        }
+      }
+      IM_CHECK_GE(zero_deg_count, 1);
+    };
+  }
+
+  // task-overlay-line-label-toggle: horizon_label is independent from grid. When
+  // grid is the only label source, the existing skip-0° rule should still hold —
+  // no "0°" label emitted. Pin the rule so a future refactor that drops the
+  // grid skip would surface as a duplicate-0° regression.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_toggle", "grid_only_skips_zero_degree");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeEquidist,
+                             /*elev*/ 0.0f, /*az*/ 0.0f);
+      in.fov = 180.0f;
+      in.show_horizon = false;
+      in.show_grid = true;
+      in.show_sun_circles = false;
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 200.0f, 200.0f, labels);
+      int zero_deg_count = 0;
+      for (const auto& l : labels) {
+        if (l.text == "0\xC2\xB0") {
+          ++zero_deg_count;
+        }
+      }
+      IM_CHECK_EQ(zero_deg_count, 0);
     };
   }
 }

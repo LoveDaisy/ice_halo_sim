@@ -50,6 +50,7 @@ OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConf
   input.show_horizon = state.show_horizon_label;
   input.show_grid = state.show_grid_label;
   input.show_sun_circles = state.show_sun_circles_label;
+  input.horizon_alpha = state.horizon_alpha;
 
   // Sun direction in world space (azimuth fixed at 0, only altitude matters).
   // Formula is byte-identical to RenderPreviewPanel's assignment into
