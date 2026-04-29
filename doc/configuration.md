@@ -488,14 +488,14 @@ The render configuration defines the renderer parameters.
 
 ```json
 {
-  "type": "linear" | "fisheye_equal_area" | "fisheye_equidistant" | "fisheye_stereographic" | "dual_fisheye_equal_area" | "dual_fisheye_equidistant" | "dual_fisheye_stereographic" | "rectangular" | "fisheye_orthographic" | "dual_fisheye_orthographic",
+  "type": "linear" | "fisheye_equal_area" | "fisheye_equidistant" | "fisheye_stereographic" | "dual_fisheye_equal_area" | "dual_fisheye_equidistant" | "dual_fisheye_stereographic" | "rectangular" | "fisheye_orthographic" | "dual_fisheye_orthographic" | "globe",
   "fov": <angle>  // or "f": <focal length>
 }
 ```
 
 **Defaults**:
 - `type`: "linear"
-- `fov`: 90.0 (degrees)
+- `fov`: 90.0 (degrees); `globe` defaults to 30.0
 
 **Note**:
 - `fov` is the **full diagonal field of view** in degrees. For `rectangular` and `dual_*` types, `fov` is ignored (these are always full-sky projections).
@@ -508,6 +508,15 @@ The render configuration defines the renderer parameters.
   - Stereographic: `fov = 4·arctan(d/(2f))`
   - Orthographic: `fov = 2·arcsin(d/f)` (requires `f ≥ 12mm` for fov=180)
   - Rectangular: `f` is ignored (always full-sky)
+  - Globe: `f` is not supported (use `fov` directly)
+
+**`globe` lens (outside-in perspective view of the celestial sphere)**:
+- Projection model: a pinhole perspective camera placed at distance `D = 4.0` (in unit-sphere radii) from the unit sphere centered at the world origin, looking toward the sphere center. The shader ray-traces against the unit sphere and shades the sample pointed to by the hit point.
+- `fov` range: `(0°, 90°]`; default `30°`. With the default the sphere fills approximately 96% of the viewport's short edge.
+- `view.roll`: stored as a normal `view` field, but at render time it is **forced to 0** for the `globe` lens; the right-panel Roll slider is greyed out while `globe` is selected. Switching to a non-Globe lens restores the stored value (the field is preserved, only the rendered roll is overridden).
+- `view.azimuth` / `view.elevation` semantics: under `globe`, they describe the **observer's orbit around the sphere**, not the camera's own attitude. The view matrix is mathematically the same as for inside-out lenses, but the user-facing intuition is inverted (Az/El point the camera *at* a place on the sphere instead of *toward* a direction in the sky).
+- `view.elevation` clamp under `globe`: trackball drag and the right-panel slider both clamp to `[-89°, +89°]` to avoid the view-matrix degeneracy at ±90°.
+- `.lmc` compatibility: no new fields are introduced; older `.lmc` files load unchanged.
 
 #### view (View Configuration)
 
@@ -600,7 +609,7 @@ The render configuration defines the renderer parameters.
 - `scene.light_source.type` must be "sun"
 - `filter[].type` must be "none", "raypath", "entry_exit", "direction", "crystal", or "complex"
 - `render[].visible` must be "upper", "lower", or "full"
-- `render[].lens.type` must be "linear", "fisheye_equal_area", "fisheye_equidistant", "fisheye_stereographic", "dual_fisheye_equal_area", "dual_fisheye_equidistant", "dual_fisheye_stereographic", "rectangular", "fisheye_orthographic", or "dual_fisheye_orthographic"
+- `render[].lens.type` must be "linear", "fisheye_equal_area", "fisheye_equidistant", "fisheye_stereographic", "dual_fisheye_equal_area", "dual_fisheye_equidistant", "dual_fisheye_stereographic", "rectangular", "fisheye_orthographic", "dual_fisheye_orthographic", or "globe"
 
 ## Common Configuration Errors
 

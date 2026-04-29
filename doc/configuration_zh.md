@@ -506,14 +506,14 @@
 
 ```json
 {
-  "type": "linear" | "fisheye_equal_area" | "fisheye_equidistant" | "fisheye_stereographic" | "dual_fisheye_equal_area" | "dual_fisheye_equidistant" | "dual_fisheye_stereographic" | "rectangular" | "fisheye_orthographic" | "dual_fisheye_orthographic",
+  "type": "linear" | "fisheye_equal_area" | "fisheye_equidistant" | "fisheye_stereographic" | "dual_fisheye_equal_area" | "dual_fisheye_equidistant" | "dual_fisheye_stereographic" | "rectangular" | "fisheye_orthographic" | "dual_fisheye_orthographic" | "globe",
   "fov": <角度>  // 或 "f": <焦距>
 }
 ```
 
 **默认值**：
 - `type`: "linear"
-- `fov`: 90.0（度）
+- `fov`: 90.0（度）；`globe` 默认 30.0
 
 **注意**：
 - `fov` 为**全对角线视场角**（度）。`rectangular` 和 `dual_*` 类型会忽略 `fov`（始终为全天投影）。
@@ -526,6 +526,15 @@
   - Stereographic: `fov = 4·arctan(d/(2f))`
   - Orthographic: `fov = 2·arcsin(d/f)`（`f ≥ 12mm` 时 fov=180）
   - Rectangular: `f` 被忽略（始终全天投影）
+  - Globe: 不支持 `f`，请直接使用 `fov`
+
+**`globe` 镜头（外部观察天球的透视视角）**：
+- 投影模型：相机位于距单位球心 `D = 4.0`（单位球半径为单位）处，朝球心方向看；shader 对单位球做光线—球面求交，命中点对应的样本被着色。
+- `fov` 范围：`(0°, 90°]`，默认 `30°`。默认 fov 下球面占视口短边约 96%。
+- `view.roll`：作为常规 `view` 字段保存，但渲染时**强制为 0**（仅 `globe` 适用）；右侧面板 Roll slider 在选中 `globe` 时置灰；切回非 Globe lens 时恢复原值（字段保留，仅渲染时屏蔽）。
+- `view.azimuth` / `view.elevation` 语义：在 `globe` 下表示**观察者绕球公转的视角**，而非相机自身姿态。view 矩阵与 inside-out lens 完全相同，但用户心智反转（Az/El 指向球面上某个点，而非天空中某个方向）。
+- `view.elevation` 在 `globe` 下被 clamp 到 `[-89°, +89°]`，避免 ±90° 的 view-matrix 退化；trackball drag 与右侧 slider 共享此约束。
+- `.lmc` 兼容性：未引入新字段，旧 `.lmc` 加载行为不变。
 
 #### view（视角配置）
 
@@ -618,7 +627,7 @@
 - `scene.light_source.type` 必须是 "sun"
 - `filter[].type` 必须是 "none"、"raypath"、"entry_exit"、"direction"、"crystal" 或 "complex"
 - `render[].visible` 必须是 "upper"、"lower" 或 "full"
-- `render[].lens.type` 必须是 "linear"、"fisheye_equal_area"、"fisheye_equidistant"、"fisheye_stereographic"、"dual_fisheye_equal_area"、"dual_fisheye_equidistant"、"dual_fisheye_stereographic"、"rectangular"、"fisheye_orthographic" 或 "dual_fisheye_orthographic"
+- `render[].lens.type` 必须是 "linear"、"fisheye_equal_area"、"fisheye_equidistant"、"fisheye_stereographic"、"dual_fisheye_equal_area"、"dual_fisheye_equidistant"、"dual_fisheye_stereographic"、"rectangular"、"fisheye_orthographic"、"dual_fisheye_orthographic" 或 "globe"
 - `scene.ray_num` 必须是正整数或字符串 `"infinite"`
 
 ## 常见配置错误

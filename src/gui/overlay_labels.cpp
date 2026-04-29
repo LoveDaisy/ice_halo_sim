@@ -168,6 +168,40 @@ InvResult PixelToWorldDir(float px, float py, float res_x, float res_y, int lens
     // Dual orthographic: shader uses dualFisheyeInverse(type=3), no view matrix.
     r = DualFisheyeInv(px, py, res_x, res_y, 3);
     needs_view = false;
+  } else if (lens_type == kLensTypeGlobe) {
+    // Mirror shader globeInverse (preview_renderer.cpp:270-288). Camera sits at
+    // eye-space (0, 0, D); intersect ray with the unit sphere at the origin and
+    // return hit_eye as a unit-length eye-space direction. The needs_view branch
+    // below applies view_matrix (eye → world), matching shader's
+    // result = u_view_matrix * hit_eye — these two paths are mathematically
+    // equivalent.
+    float short_edge = std::min(res_x, res_y);
+    float focal = short_edge * 0.5f / std::tan(half_fov);
+    float dx = px;
+    float dy = py;
+    float dz = -focal;
+    float dlen = std::sqrt(dx * dx + dy * dy + dz * dz);
+    dx /= dlen;
+    dy /= dlen;
+    dz /= dlen;
+    float b = kGlobeCameraD * dz;  // dot(O, d), O = (0, 0, D)
+    float c = kGlobeCameraD * kGlobeCameraD - 1.0f;
+    float disc = b * b - c;
+    if (disc < 0.0f) {
+      r = { 0, 0, 0, false };  // ray misses sphere
+    } else {
+      float t = -b - std::sqrt(disc);
+      if (t <= 0.0f) {
+        r = { 0, 0, 0, false };  // hit behind camera
+      } else {
+        float hx = t * dx;
+        float hy = t * dy;
+        float hz = kGlobeCameraD + t * dz;
+        r = { hx, hy, hz, true };
+      }
+    }
+    // needs_view stays true: hit_eye is in eye space; the public block multiplies
+    // by view_matrix to move it to world space.
   } else {
     r = { 0, 0, 0, false };
   }
@@ -246,6 +280,21 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
     }
     float scale = r_norm * img_radius / rho;
     return { dx * scale, dy * scale, true };
+  }
+  if (lens_type == kLensTypeGlobe) {
+    // (dx,dy,dz) is the unit-length world dir transformed to eye-space. The world
+    // point on the sphere surface in this direction is P_eye = (dx,dy,dz). With
+    // the camera at O = (0,0,D), the front hemisphere visible to the camera is
+    // P_eye.z > 1/D. See plan §3 design point 4 for the derivation.
+    if (dz <= 1.0f / kGlobeCameraD) {
+      return { 0, 0, false };
+    }
+    float focal = short_edge * 0.5f / std::tan(half_fov);
+    float denom = kGlobeCameraD - dz;
+    if (denom <= 1e-6f) {
+      return { 0, 0, false };
+    }
+    return { dx / denom * focal, dy / denom * focal, true };
   }
   // Full-sky lens types (dual fisheye 4-6, rectangular 7, dual orthographic 9):
   // their shader paths skip the view matrix and the entire sphere is always

@@ -166,6 +166,40 @@ struct RenderConfig {
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
 
+// Resettable subset of RenderConfig (the View `Reset` button targets these
+// four fields). Adding a resettable field here requires adding the matching
+// field to RenderConfig and updating every DefaultViewParamsFor branch.
+struct ViewDefaults {
+  float fov;
+  float elevation;
+  float azimuth;
+  float roll;
+};
+
+// Default view parameters per lens type, used by the View `Reset` button.
+// Uses explicit lens-type sets (kFov180LensTypes / explicit orthographic /
+// kLensTypeGlobe) instead of range comparisons, so adding a new LensType
+// fails the kFov180LensTypeCount static_assert rather than silently picking
+// a default.
+inline ViewDefaults DefaultViewParamsFor(int lens_type) {
+  float fov = 90.0f;  // linear / rectangular / orthographic family / fallback
+  if (LensIsFov180(lens_type)) {
+    fov = 180.0f;
+  } else if (lens_type == kLensTypeGlobe) {
+    fov = 30.0f;
+  }
+  // Orthographic single + dual already fall through to 90; no extra branch.
+  return { fov, 0.0f, 0.0f, 0.0f };
+}
+
+// Globe lens forces roll=0 at render time without writing back to the stored
+// RenderConfig.roll (so switching back to a non-Globe lens preserves the
+// user's prior roll value). Apply this helper at every ViewParam.roll fill
+// site that feeds BuildViewMatrix or overlay label projection.
+inline float EffectiveRollForLens(int lens_type, float stored_roll) {
+  return (lens_type == kLensTypeGlobe) ? 0.0f : stored_roll;
+}
+
 // Filter action
 inline const char* const kFilterActionNames[] = { "Filter In", "Filter Out" };
 constexpr int kFilterActionCount = 2;

@@ -133,6 +133,38 @@ inline constexpr bool LensIsFullSky(int lens_type) {
   return false;
 }
 
+// Lenses whose default FOV is 180 degrees (full hemispheric fisheye family).
+// SINGLE SOURCE OF TRUTH for the "FOV=180" set; do NOT confuse with
+// kFullSkyLensTypes (which classifies skip-view-matrix shader paths). These
+// two sets overlap but are not equal: e.g. kLensTypeRectangular is full-sky
+// but its default FOV is 90, not 180.
+//
+// The static_assert below guards array size; ordering is enforced by
+// kLensTypePresentationOrder in gui_state.hpp.
+inline constexpr int kFov180LensTypes[] = {
+  kLensTypeFisheyeEqualArea,     kLensTypeFisheyeEquidist,     kLensTypeFisheyeStereographic,
+  kLensTypeDualFisheyeEqualArea, kLensTypeDualFisheyeEquidist, kLensTypeDualFisheyeStereographic,
+};
+inline constexpr int kFov180LensTypeCount = sizeof(kFov180LensTypes) / sizeof(*kFov180LensTypes);
+static_assert(kFov180LensTypeCount == 6,
+              "kFov180LensTypes count changed: update both the array and this "
+              "literal in lockstep with the policy change.");
+
+inline constexpr bool LensIsFov180(int lens_type) {
+  for (int v : kFov180LensTypes) {
+    if (v == lens_type) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Globe lens camera distance (eye-space). The camera sits at (0, 0, D) looking
+// toward the unit sphere centered at the origin. Must match GLSL globeInverse
+// in preview_renderer.cpp shader source (search "kGlobeCameraD" anchor in the
+// shader string).
+inline constexpr float kGlobeCameraD = 4.0f;
+
 // Visible region selector. Order must match kVisibleNames in gui_state.hpp.
 enum Visible : int {
   kVisibleUpper = 0,

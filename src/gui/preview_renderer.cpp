@@ -268,6 +268,7 @@ vec4 rectangularInverse(vec2 pos) {
 // the world origin (camera always looks at the sphere center); if that ever changes
 // this function must switch to mat4 + explicit world-space ray-sphere intersection.
 vec4 globeInverse(vec2 pos, float half_fov) {
+  // kGlobeCameraDist must match kGlobeCameraD in src/gui/gui_constants.hpp.
   const float kGlobeCameraDist = 4.0;
   float short_edge = min(u_resolution.x, u_resolution.y);
   float focal = short_edge * 0.5 / tan(half_fov);
