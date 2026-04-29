@@ -197,6 +197,15 @@ InvResult PixelToWorldDir(float px, float py, float res_x, float res_y, int lens
         float hx = t * dx;
         float hy = t * dy;
         float hz = kGlobeCameraD + t * dz;
+        // Mathematically |hit_eye| == 1 on the unit sphere; normalize to absorb
+        // float error near grazing incidence (disc ≈ 0), matching FisheyeInv's
+        // explicit normalization style.
+        float hn = std::sqrt(hx * hx + hy * hy + hz * hz);
+        if (hn > 0.0f) {
+          hx /= hn;
+          hy /= hn;
+          hz /= hn;
+        }
         r = { hx, hy, hz, true };
       }
     }
@@ -280,20 +289,18 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
     }
     float scale = r_norm * img_radius / rho;
     return { dx * scale, dy * scale, true };
-  }
-  if (lens_type == kLensTypeGlobe) {
+  } else if (lens_type == kLensTypeGlobe) {
     // (dx,dy,dz) is the unit-length world dir transformed to eye-space. The world
     // point on the sphere surface in this direction is P_eye = (dx,dy,dz). With
     // the camera at O = (0,0,D), the front hemisphere visible to the camera is
-    // P_eye.z > 1/D. See plan §3 design point 4 for the derivation.
+    // P_eye.z > 1/D. See plan §3 design point 4 for the derivation. After this
+    // visibility filter, denom = D - dz lies in [D - 1, D - 1/D] = [3.0, 3.75]
+    // for D=4.0, so it never approaches zero.
     if (dz <= 1.0f / kGlobeCameraD) {
       return { 0, 0, false };
     }
     float focal = short_edge * 0.5f / std::tan(half_fov);
     float denom = kGlobeCameraD - dz;
-    if (denom <= 1e-6f) {
-      return { 0, 0, false };
-    }
     return { dx / denom * focal, dy / denom * focal, true };
   }
   // Full-sky lens types (dual fisheye 4-6, rectangular 7, dual orthographic 9):
