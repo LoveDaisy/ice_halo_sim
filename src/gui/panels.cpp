@@ -10,6 +10,7 @@
 #include "gui/app.hpp"
 #include "gui/axis_presets.hpp"
 #include "gui/crystal_preview.hpp"
+#include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/slider_mapping.hpp"
@@ -385,6 +386,21 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
 
   ImGui::PushID(entry_idx);
 
+  // Active highlight: when the unified edit modal is bound to this entry,
+  // thicken the child border and tint it with the focus accent color so the
+  // user can trace which card the open modal corresponds to. The lifecycle is
+  // strictly tied to IsEditModalOpen() — close paths (OK / Cancel / auto-close
+  // via index-validity guard) flip the gate, no extra reset needed here.
+  bool active = false;
+  if (IsEditModalOpen()) {
+    auto target = GetEditModalTarget();
+    active = (target.layer_idx == layer_idx && target.entry_idx == entry_idx);
+  }
+  if (active) {
+    ImGui::PushStyleColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(ImGuiCol_NavHighlight));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, kActiveCardBorder);
+  }
+
   ImGui::BeginChild("##card", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
 
   // Previous-frame hover state controls the alpha of the hover-action buttons
@@ -541,6 +557,11 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   ImGui::GetStateStorage()->SetBool(hover_persist_id, hover_now);
 
   ImGui::EndChild();  // ##card — must be unconditional
+
+  if (active) {
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+  }
 
   ImGui::PopID();
   return delete_clicked;

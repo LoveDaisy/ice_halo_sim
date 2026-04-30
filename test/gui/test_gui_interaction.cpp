@@ -2853,4 +2853,77 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       check_axis("dy>0 → mesh +x (world +x)", 0.0f, 10.0f, /*axis_kind=*/0);
     };
   }
+
+  // P1: scrum-176 / task-crystal-card-highlight-active — the open edit modal
+  // must report its bound (layer_idx, entry_idx) so RenderEntryCard can
+  // visually highlight the source card. The lifecycle covers four close paths:
+  // OK / Cancel / auto-close-on-entry-deletion / and the multi-entry routing
+  // case where the second entry's modal must not bleed onto the first card.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "active_card_target_lifecycle");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Initial: no modal, target is invalid.
+      IM_CHECK_EQ(gui::IsEditModalOpen(), false);
+      auto t0 = gui::GetEditModalTarget();
+      IM_CHECK_EQ(t0.layer_idx, -1);
+      IM_CHECK_EQ(t0.entry_idx, -1);
+
+      // Open the Crystal modal on layer 0 entry 0 via the Edit button.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::IsEditModalOpen(), true);
+      auto t1 = gui::GetEditModalTarget();
+      IM_CHECK_EQ(t1.layer_idx, 0);
+      IM_CHECK_EQ(t1.entry_idx, 0);
+
+      // Close via Cancel: target reset, modal closed.
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::IsEditModalOpen(), false);
+      auto t2 = gui::GetEditModalTarget();
+      IM_CHECK_EQ(t2.layer_idx, -1);
+      IM_CHECK_EQ(t2.entry_idx, -1);
+
+      // Reopen and close via OK: same lifecycle invariant.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::IsEditModalOpen(), true);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::IsEditModalOpen(), false);
+      auto t3 = gui::GetEditModalTarget();
+      IM_CHECK_EQ(t3.layer_idx, -1);
+      IM_CHECK_EQ(t3.entry_idx, -1);
+
+      // Multi-entry routing: open the modal on entry 1 and check the target
+      // points to {0, 1}, NOT {0, 0}. We drive the modal via OpenEditModal()
+      // directly (with a fully-formed EditRequest) so the integration path
+      // OpenEditModal → g_active_modal/g_modal_*_idx still runs end-to-end —
+      // bypassing the field assignment would degrade this AC into the
+      // "assign X read X" tautology forbidden by code-quality/test-design.
+      gui::g_state.layers[0].entries.emplace_back();
+      ctx->Yield(2);
+      gui::EditRequest req{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/1 };
+      gui::OpenEditModal(req, gui::g_state);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::IsEditModalOpen(), true);
+      auto t4 = gui::GetEditModalTarget();
+      IM_CHECK_EQ(t4.layer_idx, 0);
+      IM_CHECK_EQ(t4.entry_idx, 1);
+
+      // Auto-close on entry deletion (DA-4 / F-3 闭环): erase the bound
+      // entry while the modal is open. The index-validity guard inside
+      // RenderEditModals (see edit_modals.cpp:879) sets g_active_modal back
+      // to kNone, and the next IsEditModalOpen() must return false.
+      gui::g_state.layers[0].entries.erase(gui::g_state.layers[0].entries.begin() + 1);
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::IsEditModalOpen(), false);
+      auto t5 = gui::GetEditModalTarget();
+      IM_CHECK_EQ(t5.layer_idx, -1);
+      IM_CHECK_EQ(t5.entry_idx, -1);
+    };
+  }
 }

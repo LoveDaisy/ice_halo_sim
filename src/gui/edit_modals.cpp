@@ -666,6 +666,13 @@ bool IsEditModalOpen() {
   return g_active_modal == ActiveModal::kOpen;
 }
 
+EditModalTarget GetEditModalTarget() {
+  if (!IsEditModalOpen()) {
+    return { -1, -1 };
+  }
+  return { g_modal_layer_idx, g_modal_entry_idx };
+}
+
 void ResetModalState() {
   g_active_modal = ActiveModal::kNone;
   g_active_tab = ActiveTab::kCrystal;
