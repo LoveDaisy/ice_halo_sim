@@ -64,6 +64,12 @@ constexpr int kMaxThumbnailUpdatesPerFrame = 2;
 // Vertical gap between stacked hover-action buttons (Delete on top, Duplicate below).
 constexpr float kHoverBtnGap = 4.0f;
 
+// Border thickness applied to the entry card while its edit modal is open.
+// Default ImGui ChildBorderSize is 1.0f; 2.0f provides a clearly visible
+// distinction without over-thickening. Consumed by RenderEntryCard via
+// PushStyleVar(ImGuiStyleVar_ChildBorderSize).
+constexpr float kActiveCardBorder = 2.0f;
+
 // Default camera zoom for the crystal renderer. Lower value → crystal fills
 // more of the canvas (screen coverage ≈ 1/zoom). Must stay in sync between
 // the thumbnail cache and the edit-modal preview so the crystal does not

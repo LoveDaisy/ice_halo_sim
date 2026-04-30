@@ -26,6 +26,18 @@ void RenderEditModals(GuiState& state, GLFWwindow* window);
 // gate condition is modal-open rather than crystal-tab-active.
 bool IsEditModalOpen();
 
+// (layer_idx, entry_idx) of the entry the open modal is bound to. Returns
+// {-1, -1} as a safe sentinel when no modal is open, so callers may either
+// check IsEditModalOpen() first (more readable) or just inspect the returned
+// indices and treat negatives as "no target". This function is meant for UI
+// lifecycle reverse-annotation (e.g. highlighting the source card while the
+// modal is open), not for modal control flow.
+struct EditModalTarget {
+  int layer_idx;
+  int entry_idx;
+};
+EditModalTarget GetEditModalTarget();
+
 // Reset all modal-internal static state (active modal, edit buffers, pending flags).
 // Called by test teardown (ResetTestState) to prevent state leakage between tests.
 void ResetModalState();
