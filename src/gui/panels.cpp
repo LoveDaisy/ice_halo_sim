@@ -397,6 +397,10 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     active = (target.layer_idx == layer_idx && target.entry_idx == entry_idx);
   }
   if (active) {
+    // Plan B fallback: if the NavHighlight token's contrast against
+    // ImGuiCol_Border becomes insufficient under a future theme, replace the
+    // pushed color with IM_COL32(80, 160, 255, 255) per plan §7 Risk 1
+    // (cool-blue accent, no family clash with red Delete or neutral Duplicate).
     ImGui::PushStyleColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(ImGuiCol_NavHighlight));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, kActiveCardBorder);
   }

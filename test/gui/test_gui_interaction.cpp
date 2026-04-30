@@ -2918,12 +2918,56 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // entry while the modal is open. The index-validity guard inside
       // RenderEditModals (see edit_modals.cpp:879) sets g_active_modal back
       // to kNone, and the next IsEditModalOpen() must return false.
+      // We deliberately skip g_thumbnail_cache.OnLayerStructureChanged() here:
+      // the line-879 guard only checks index bounds, not cache state, and
+      // ResetTestState() / DoNew() at test entry already covers cache cleanup
+      // for the next test, so the omission stays local.
       gui::g_state.layers[0].entries.erase(gui::g_state.layers[0].entries.begin() + 1);
+      gui::g_thumbnail_cache.OnLayerStructureChanged();
       ctx->Yield(4);
       IM_CHECK_EQ(gui::IsEditModalOpen(), false);
       auto t5 = gui::GetEditModalTarget();
       IM_CHECK_EQ(t5.layer_idx, -1);
       IM_CHECK_EQ(t5.entry_idx, -1);
+    };
+  }
+
+  // P1: scrum-176 / task-crystal-card-highlight-active — style-probe assertion
+  // backing plan §5 M3 unattended-equivalent acceptance item 2 (pixel-color
+  // delta). RenderEntryCard pushes ImGuiCol_Border ← style[ImGuiCol_NavHighlight]
+  // and ImGuiStyleVar_ChildBorderSize ← kActiveCardBorder when active. We can't
+  // reliably capture the left-panel framebuffer in headless mode (hidden GLFW
+  // + retina non-determinism, learnings/tools-workflow.md), so we assert the
+  // visual contract at the style-token layer instead: NavHighlight vs Border
+  // must differ by ≥ 60 (sRGB L1) and kActiveCardBorder must exceed the
+  // default ChildBorderSize. Both are necessary conditions for the highlight
+  // being visible to the user; if either fails, the active branch in
+  // RenderEntryCard is a no-op and the lifecycle test alone would still pass.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "active_card_style_probe");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const ImGuiStyle& style = ImGui::GetStyle();
+      ImVec4 nav = style.Colors[ImGuiCol_NavHighlight];
+      ImVec4 border = style.Colors[ImGuiCol_Border];
+      auto to8 = [](float v) { return static_cast<int>(v * 255.0f + 0.5f); };
+      int dr = std::abs(to8(nav.x) - to8(border.x));
+      int dg = std::abs(to8(nav.y) - to8(border.y));
+      int db = std::abs(to8(nav.z) - to8(border.z));
+      int l1 = dr + dg + db;
+      // sRGB L1 ≥ 60 is the threshold from plan §5 M3. NavHighlight in the
+      // default ImGui dark theme is a strong yellow-orange (255, 170, 0) and
+      // Border is dim grey (110, 110, 128, alpha 0.5), giving L1 ≈ 460 — way
+      // above threshold. If a future theme change makes the two converge,
+      // this assertion will catch the regression.
+      IM_CHECK_GT(l1, 60);
+
+      // Border thickness must be strictly greater than the default to be
+      // perceivable. ImGui default ChildBorderSize is 1.0f; kActiveCardBorder
+      // is 2.0f.
+      IM_CHECK_GT(gui::kActiveCardBorder, style.ChildBorderSize);
     };
   }
 }

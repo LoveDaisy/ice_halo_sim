@@ -27,9 +27,11 @@ void RenderEditModals(GuiState& state, GLFWwindow* window);
 bool IsEditModalOpen();
 
 // (layer_idx, entry_idx) of the entry the open modal is bound to. Returns
-// {-1, -1} when no modal is open. Always check IsEditModalOpen() first; this
-// function is meant for UI lifecycle reverse-annotation (e.g. highlighting the
-// source card while the modal is open), not for modal control flow.
+// {-1, -1} as a safe sentinel when no modal is open, so callers may either
+// check IsEditModalOpen() first (more readable) or just inspect the returned
+// indices and treat negatives as "no target". This function is meant for UI
+// lifecycle reverse-annotation (e.g. highlighting the source card while the
+// modal is open), not for modal control flow.
 struct EditModalTarget {
   int layer_idx;
   int entry_idx;
