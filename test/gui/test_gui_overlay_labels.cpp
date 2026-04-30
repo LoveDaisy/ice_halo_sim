@@ -287,10 +287,10 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
   //     with this config. The strict inequality below is therefore secured
   //     by the fov-asymmetry (90° vs 180°) only, not by the dz cull.
   // Direct dz-cull coverage requires either a tilted view (e.g. el ≈ 60°
-  // bringing the cone into the wz < 0.25 region) or a same-fov comparison;
-  // captured as a follow-up backlog item (see SUMMARY).
-  // 60° matches SingleOrthoLatTestFunc baseline above; 90° here equals
-  // MaxFov(Globe), so no extra clamp interaction.
+  // bringing the cone into the wz < 0.25 region) or a same-fov comparison
+  // that pulls the cone past the dz threshold; captured as a follow-up in
+  // scratchpad/backlog.md.
+  // fov=90° here equals MaxFov(Globe), so per-frame clamp does not interact.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "globe_label_visibility");
     t->TestFunc = [](ImGuiTestContext* ctx) {

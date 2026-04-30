@@ -1895,7 +1895,7 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
   // Trackball math (drag → azimuth, clamp at ±89) is left to manual GUI
   // verification; revisit with a follow-up task that either provides a
   // texture upload helper for tests or refactors the drag handler into a
-  // testable pure function (see SUMMARY backlog entry for context).
+  // testable pure function (see scratchpad/backlog.md for the tracked item).
   //
   // Difference vs lens_globe_view_controls (avoid being mistaken for a
   // duplicate when triaging coverage):
