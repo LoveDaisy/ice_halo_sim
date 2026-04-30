@@ -470,4 +470,38 @@ TEST(LensConfigOrthographic, FCalcTooShortThrows) {
   EXPECT_THROW(j.get<LensParam>(), nlohmann::detail::out_of_range);
 }
 
+// =============== Lens Globe ===============
+
+TEST(LensConfigGlobe, MaxFovIs90) {
+  EXPECT_FLOAT_EQ(MaxFov(LensParam::kGlobe), 90.0f);
+}
+
+TEST(LensConfigGlobe, FovDirectRoundTrip) {
+  nlohmann::json j = { { "type", "globe" }, { "fov", 30.0f } };
+  auto l = j.get<LensParam>();
+  EXPECT_EQ(l.type_, LensParam::kGlobe);
+  EXPECT_NEAR(l.fov_, 30.0f, 1e-5f);
+
+  nlohmann::json out = l;
+  EXPECT_EQ(out["type"], "globe");
+  EXPECT_NEAR(out["fov"].get<float>(), 30.0f, 1e-5f);
+}
+
+TEST(LensConfigGlobe, FovDirectBoundary) {
+  nlohmann::json ok = { { "type", "globe" }, { "fov", 90.0f } };
+  EXPECT_NO_THROW(ok.get<LensParam>());
+
+  nlohmann::json over = { { "type", "globe" }, { "fov", 90.01f } };
+  EXPECT_THROW(over.get<LensParam>(), nlohmann::detail::out_of_range);
+
+  nlohmann::json zero = { { "type", "globe" }, { "fov", 0.0f } };
+  EXPECT_THROW(zero.get<LensParam>(), nlohmann::detail::out_of_range);
+}
+
+TEST(LensConfigGlobe, FFieldRejected) {
+  // Globe lens does not support f-derived fov.
+  nlohmann::json j = { { "type", "globe" }, { "f", 12.0f } };
+  EXPECT_THROW(j.get<LensParam>(), nlohmann::detail::out_of_range);
+}
+
 }  // namespace

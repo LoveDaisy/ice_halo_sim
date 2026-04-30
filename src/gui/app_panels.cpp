@@ -375,7 +375,23 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       for (int idx : kLensTypePresentationOrder) {
         bool selected = (r.lens_type == idx);
         if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
-          r.lens_type = idx;
+          if (r.lens_type != idx) {
+            bool was_globe = (r.lens_type == kLensTypeGlobe);
+            bool now_globe = (idx == kLensTypeGlobe);
+            r.lens_type = idx;
+            ViewDefaults d = DefaultViewParamsFor(idx);
+            // Reset fov to the new lens' default so e.g. first-time entry to
+            // Globe uses 30° instead of inheriting Linear's 90°. .lmc loading
+            // and tests bypass this combo by writing lens_type directly, so
+            // they keep their fov.
+            r.fov = d.fov;
+            // Crossing the Globe boundary inverts the view direction (Globe is
+            // outside-in), so reset az to the target lens' default. el/roll
+            // are preserved — only az has the inversion semantics.
+            if (was_globe != now_globe) {
+              r.azimuth = d.azimuth;
+            }
+          }
         }
         if (selected) {
           ImGui::SetItemDefaultFocus();
@@ -389,12 +405,40 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::EndDisabled();
     ImGui::Combo("Visible##view", &r.visible, kVisibleNames, kVisibleCount);
 
+    bool is_globe = (r.lens_type == kLensTypeGlobe);
     ImGui::SeparatorText("Camera");
+    if (is_globe) {
+      ImGui::TextDisabled("(?)");
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "In Globe lens, Az/El/Roll control the observer's orbit\n"
+            "around the sphere, not the camera's own attitude.\n"
+            "Roll is locked to 0 in this mode (slider is greyed out).");
+      }
+    }
+    float el_lim = is_globe ? 89.0f : 90.0f;
     ImGui::BeginDisabled(full_sky);
-    SliderWithInput("Elevation##view", &r.elevation, -90.0f, 90.0f, "%.2f");
+    SliderWithInput("Elevation##view", &r.elevation, -el_lim, el_lim, "%.2f");
     SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f, "%.2f");
+    ImGui::EndDisabled();
+    ImGui::BeginDisabled(full_sky || is_globe);
     SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f, "%.2f");
     ImGui::EndDisabled();
+
+    ImGui::Separator();
+    float btn_w = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    float avail = ImGui::GetContentRegionAvail().x;
+    if (avail > btn_w) {
+      ImGui::SameLine(avail - btn_w);
+    }
+    if (ImGui::SmallButton("Reset##view")) {
+      ViewDefaults d = DefaultViewParamsFor(r.lens_type);
+      r.fov = d.fov;
+      r.elevation = d.elevation;
+      r.azimuth = d.azimuth;
+      r.roll = d.roll;
+      g_state.MarkDirty();
+    }
 
     ImGui::PopItemWidth();
   }
@@ -659,7 +703,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.view_proj.fov = rc.fov;
     pp.view_proj.elevation = rc.elevation;
     pp.view_proj.azimuth = rc.azimuth;
-    pp.view_proj.roll = rc.roll;
+    pp.view_proj.roll = EffectiveRollForLens(rc.lens_type, rc.roll);
     pp.view_proj.visible = rc.visible;
     pp.exposure.intensity_factor = std::pow(2.0f, rc.exposure_offset);
     pp.exposure.intensity_scale =
@@ -734,9 +778,28 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       ImGuiIO& io = ImGui::GetIO();
       if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         ImVec2 delta = io.MouseDelta;
-        rc.azimuth -= delta.x * 0.3f;
-        rc.elevation += delta.y * 0.3f;
-        rc.elevation = std::max(-90.0f, std::min(90.0f, rc.elevation));
+        // Globe is outside-in: u_view_matrix * (0,0,D) yields camera world
+        // position, so +az/+el move the camera and the sphere drifts in the
+        // opposite direction. Flip both signs so a right/down drag moves the
+        // sphere right/down, matching the inside-out lenses' feel.
+        if (rc.lens_type == kLensTypeGlobe) {
+          rc.azimuth += delta.x * 0.3f;
+          rc.elevation -= delta.y * 0.3f;
+        } else {
+          rc.azimuth -= delta.x * 0.3f;
+          rc.elevation += delta.y * 0.3f;
+        }
+        // Wrap azimuth into [-180, 180] so dragging past the slider's clamp
+        // boundary continues seamlessly instead of getting pinned at ±180.
+        if (rc.azimuth > 180.0f) {
+          rc.azimuth -= 360.0f;
+        } else if (rc.azimuth < -180.0f) {
+          rc.azimuth += 360.0f;
+        }
+        // Globe lens needs a tighter clamp to avoid view-matrix degeneracy at
+        // ±90°; inside-out lenses keep the existing ±90° range.
+        float el_lim = (rc.lens_type == kLensTypeGlobe) ? 89.0f : 90.0f;
+        rc.elevation = std::max(-el_lim, std::min(el_lim, rc.elevation));
       }
 
       if (is_hovered && io.MouseWheel != 0.0f) {

@@ -269,6 +269,135 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // overlay_labels/globe_label_visibility — Globe lens (lens=10) at its
+  // MaxFov=90° produces strictly fewer grid labels than Fisheye Equidistant
+  // at fov=180° under the same view (elev=0, az=0).
+  //
+  // What this test actually verifies (honest scope):
+  //   1) Globe lens label generation is wired up (n_globe > 0).
+  //   2) Globe at its native MaxFov never produces more grid labels than a
+  //      full-hemisphere fisheye at fov=180° (regression guard against
+  //      Globe label sampling running away or duplicating across passes).
+  //
+  // What this test does NOT directly verify:
+  //   - Globe's back-hemisphere `dz > 1/kGlobeCameraD` cull at
+  //     overlay_labels.cpp:299. At fov=90°/el=0/az=0, the Globe frustum is
+  //     a 45°-half-angle cone around +Z, so all sampled directions satisfy
+  //     dz ≥ cos(45°) ≈ 0.707 — the dz cull is geometrically unreachable
+  //     with this config. The strict inequality below is therefore secured
+  //     by the fov-asymmetry (90° vs 180°) only, not by the dz cull.
+  // Direct dz-cull coverage requires either a tilted view (e.g. el ≈ 60°
+  // bringing the cone into the wz < 0.25 region) or a same-fov comparison
+  // that pulls the cone past the dz threshold; captured as a follow-up in
+  // scratchpad/backlog.md.
+  // fov=90° here equals MaxFov(Globe), so per-frame clamp does not interact.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "globe_label_visibility");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Globe at fov=90° — its full native field of view (MaxFov(Globe)=90°).
+      auto in_globe = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeGlobe,
+                                   /*elev*/ 0.0f, /*az*/ 0.0f);
+      in_globe.fov = 90.0f;
+      // Fisheye Equidistant at fov=180° — full hemisphere, deliberately
+      // wider than Globe's 90° to keep n_fisheye > n_globe by a margin.
+      auto in_fisheye = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeEquidist,
+                                     /*elev*/ 0.0f, /*az*/ 0.0f);
+      in_fisheye.fov = 180.0f;
+
+      std::vector<lumice::gui::OverlayLabel> labels_globe;
+      std::vector<lumice::gui::OverlayLabel> labels_fisheye;
+      lumice::gui::ComputeOverlayLabels(in_globe, 0.0f, 0.0f, 200.0f, 200.0f, labels_globe);
+      lumice::gui::ComputeOverlayLabels(in_fisheye, 0.0f, 0.0f, 200.0f, 200.0f, labels_fisheye);
+
+      int n_globe = CountGridLabels(labels_globe);
+      int n_fisheye = CountGridLabels(labels_fisheye);
+
+      // Globe must produce at least one label.
+      IM_CHECK_GT(n_globe, 0);
+      // Globe (fov=90°) strictly fewer than fisheye (fov=180°) under the same view.
+      IM_CHECK_LT(n_globe, n_fisheye);
+    };
+  }
+
+  // overlay_labels/globe_label_dz_cull_active — directly pin the back-hemisphere
+  // dz cull at overlay_labels.cpp:299 (`if (dz <= 1.0f / kGlobeCameraD)`).
+  //
+  // Companion to globe_label_visibility above, which only verifies the loose
+  // n_globe < n_fisheye(fov=180°) inequality — that one passes even if the dz
+  // cull is removed (it's secured by fov-asymmetry alone). This test fails
+  // whenever the dz cull is removed, threshold flipped, or comparison reversed.
+  //
+  // Mechanism:
+  //   With Globe + fov=90° + elev=0 + az=0, all grid labels in the output come
+  //   from sample_interior_latitudes (Source 4 in overlay_labels.cpp's
+  //   sample-source dispatch comment). Source 1 (viewport edges) is empty here:
+  //   the visible-cone half-angle is asin(1/kGlobeCameraD) = asin(0.25) ≈ 14.5°,
+  //   so all viewport-edge rays at fov/2 = 45° miss the unit sphere
+  //   (PixelToWorldDir returns invalid). Source 2/3 are gated on visible≠Full,
+  //   Source 5 on show_sun_circles=true; both inactive here. So only Source 4
+  //   contributes, and Source 4's only forward-projection gate (besides
+  //   viewport-bound) is the dz cull itself — no other path can write the
+  //   altitude text labels we assert against.
+  //
+  // Geometric pin (with kGlobeCameraD=4 ⇒ threshold dz=0.25, view_matrix at
+  // elev=0/az=0 reduces to dz_eye = wx):
+  //   - alt=±70°: max wx across azimuths = cos(70°) ≈ 0.342 > 0.25 → some az
+  //     passes → "70°" / "-70°" labels MUST appear (positive control; guards
+  //     against threshold being raised to 1.0 which would silently pass the
+  //     negative assertion).
+  //   - alt=±80°: max wx across azimuths = cos(80°) ≈ 0.174 < 0.25 → ALL az
+  //     fail dz cull → "80°" / "-80°" labels MUST NOT appear (the only
+  //     observable consequence of the dz cull at this config). Removing the
+  //     cull would let alt=±80° through (denom=D-dz≈3.826, focal=100, projected
+  //     py ≈ sin(80°)·100/3.826 ≈ 25.7 < hh=100, well inside viewport).
+  //
+  // ±85° would also satisfy the math, but kAltitudeSteps in
+  // overlay_labels.cpp:694 currently runs ±10°…±80° — picking ±80° keeps the
+  // test resilient to step-set narrowing (only widening could miss it).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "globe_label_dz_cull_active");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeGlobe,
+                             /*elev*/ 0.0f, /*az*/ 0.0f);
+      in.fov = 90.0f;
+
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 200.0f, 200.0f, labels);
+
+      // Mirrors kGroupGrid in overlay_labels.cpp:346 — kept private to the
+      // test because the constant is in an anonymous namespace there. Source 4
+      // emits altitude labels with this group at overlay_labels.cpp:730.
+      // Byte-literal "\xC2\xB0" (UTF-8 for °) matches AddLabel's
+      // "%.0f\xC2\xB0" format byte-for-byte without depending on
+      // source-charset handling.
+      constexpr int kGridGroup = 0;
+      auto has_label = [&labels, kGridGroup](const char* text) {
+        for (const auto& l : labels) {
+          if (l.group == kGridGroup && l.text == text) {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      // Sanity: generation path is alive.
+      IM_CHECK_GT(CountGridLabels(labels), 0);
+
+      // Positive control — ±70° passes dz cull (max wx = cos(70°) > 0.25).
+      // Without these the negative assertion below could silently pass by
+      // having the threshold raised to 1.0 (cull everything → 80° also absent).
+      IM_CHECK(has_label("70\xC2\xB0"));
+      IM_CHECK(has_label("-70\xC2\xB0"));
+
+      // The dz cull's only observable consequence at this config: ±80° MUST
+      // be culled (max wx = cos(80°) < 0.25, fails for all azimuths).
+      IM_CHECK(!has_label("80\xC2\xB0"));
+      IM_CHECK(!has_label("-80\xC2\xB0"));
+    };
+  }
+
   // Test F: Modal z-order regression — DrawOverlayLabels must target the current
   // window's draw list (not foreground), so modals correctly occlude labels.
   // F9: ImGui API calls must go through GuiFunc (main thread); TestFunc reads

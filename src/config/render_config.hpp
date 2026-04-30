@@ -40,6 +40,7 @@ struct LensParam {
     kRectangular,
     kFisheyeOrthographic,
     kDualFisheyeOrthographic,
+    kGlobe,
   };
 
   LensType type_;
@@ -59,6 +60,7 @@ NLOHMANN_JSON_SERIALIZE_ENUM(  // declear
         { LensParam::kRectangular, "rectangular" },
         { LensParam::kFisheyeOrthographic, "fisheye_orthographic" },
         { LensParam::kDualFisheyeOrthographic, "dual_fisheye_orthographic" },
+        { LensParam::kGlobe, "globe" },
     })
 
 void to_json(nlohmann::json& j, const LensParam& l);

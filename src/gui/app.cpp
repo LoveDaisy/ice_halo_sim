@@ -45,7 +45,7 @@ OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConf
   input.fov = rc.fov;
   input.elevation = rc.elevation;
   input.azimuth = rc.azimuth;
-  input.roll = rc.roll;
+  input.roll = EffectiveRollForLens(rc.lens_type, rc.roll);
   input.visible = rc.visible;
   input.show_horizon = state.show_horizon_label;
   input.show_grid = state.show_grid_label;

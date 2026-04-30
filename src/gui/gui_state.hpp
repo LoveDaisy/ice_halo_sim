@@ -94,12 +94,12 @@ inline const char* const kLensTypeNames[] = {
   "Rectangular",
   "Fisheye Orthographic",
   "Dual Fisheye Orthographic",
+  "Globe",
 };
-constexpr int kLensTypeCount = 10;
+constexpr int kLensTypeCount = 11;
 static_assert(sizeof(kLensTypeNames) / sizeof(*kLensTypeNames) == kLensTypeCount,
               "kLensTypeNames length must match kLensTypeCount");
-static_assert(kLensTypeDualFisheyeOrthographic == kLensTypeCount - 1,
-              "LensType enum terminal value must match kLensTypeCount - 1");
+static_assert(kLensTypeGlobe == kLensTypeCount - 1, "LensType enum terminal value must match kLensTypeCount - 1");
 
 // Display order for the Lens Type combo. Decoupled from enum values so that
 // orthographic variants group with their fisheye / dual-fisheye siblings
@@ -121,6 +121,7 @@ inline constexpr int kLensTypePresentationOrder[] = {
   kLensTypeDualFisheyeStereographic,
   kLensTypeDualFisheyeOrthographic,
   kLensTypeRectangular,
+  kLensTypeGlobe,
 };
 static_assert(sizeof(kLensTypePresentationOrder) / sizeof(*kLensTypePresentationOrder) == kLensTypeCount,
               "kLensTypePresentationOrder must list every LensType exactly once");
@@ -164,6 +165,45 @@ struct RenderConfig {
   }
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
+
+// Resettable subset of RenderConfig (the View `Reset` button targets these
+// four fields). Adding a resettable field here requires adding the matching
+// field to RenderConfig and updating every DefaultViewParamsFor branch.
+struct ViewDefaults {
+  float fov;
+  float elevation;
+  float azimuth;
+  float roll;
+};
+
+// Default view parameters per lens type, used by the View `Reset` button.
+// Uses explicit lens-type sets (kFov180LensTypes / explicit orthographic /
+// kLensTypeGlobe) instead of range comparisons, so adding a new LensType
+// fails the kFov180LensTypeCount static_assert rather than silently picking
+// a default.
+inline ViewDefaults DefaultViewParamsFor(int lens_type) {
+  float fov = 90.0f;  // linear / rectangular / orthographic family / fallback
+  float azimuth = 0.0f;
+  if (LensIsFov180(lens_type)) {
+    fov = 180.0f;
+  } else if (lens_type == kLensTypeGlobe) {
+    fov = 30.0f;
+    // Globe is outside-in: az=0 puts the camera behind the sphere, opposite to
+    // every inside-out lens. Default az=-180 so first-time entry / Reset shows
+    // the same direction users see in non-Globe projections at az=0.
+    azimuth = -180.0f;
+  }
+  // Orthographic single + dual already fall through to 90; no extra branch.
+  return { fov, 0.0f, azimuth, 0.0f };
+}
+
+// Globe lens forces roll=0 at render time without writing back to the stored
+// RenderConfig.roll (so switching back to a non-Globe lens preserves the
+// user's prior roll value). Apply this helper at every ViewParam.roll fill
+// site that feeds BuildViewMatrix or overlay label projection.
+inline float EffectiveRollForLens(int lens_type, float stored_roll) {
+  return (lens_type == kLensTypeGlobe) ? 0.0f : stored_roll;
+}
 
 // Filter action
 inline const char* const kFilterActionNames[] = { "Filter In", "Filter Out" };

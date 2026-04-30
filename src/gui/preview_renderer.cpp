@@ -26,7 +26,7 @@ in vec2 v_ndc;               // NDC position [-1, 1]
 
 uniform sampler2D u_texture;
 uniform vec2 u_resolution;   // viewport size in pixels
-uniform int u_lens_type;     // 0=linear, 1-3=fisheye, 4-6=dual fisheye, 7=rectangular, 8=fisheye_orthographic, 9=dual_fisheye_orthographic
+uniform int u_lens_type;     // 0=linear, 1-3=fisheye, 4-6=dual fisheye, 7=rectangular, 8=fisheye_orthographic, 9=dual_fisheye_orthographic, 10=globe
 uniform float u_fov;         // full FOV in degrees
 uniform mat3 u_view_matrix;  // view-to-world rotation (inverse view)
 uniform int u_visible;       // 0=upper, 1=lower, 2=full
@@ -257,6 +257,37 @@ vec4 rectangularInverse(vec2 pos) {
   return vec4(d, 1.0);
 }
 
+// Globe (outside-in unit sphere): pinhole camera at (0,0,+D) in eye space looking
+// toward -z; sphere of radius 1 sits at the origin. Returns the world-space unit
+// vector pointing from the sphere center to the ray-sphere hit. needs_view_transform
+// must be set false by the caller (u_view_matrix is applied here directly).
+//
+// kGlobeCameraDist = 4.0 chosen so default fov=30° gives sphere angular diameter
+// ~28.96° (~96% of short edge), matching the crystal preview's zoom=1 distance scale.
+// Treating hit_eye as a direction is valid because the sphere center coincides with
+// the world origin (camera always looks at the sphere center); if that ever changes
+// this function must switch to mat4 + explicit world-space ray-sphere intersection.
+vec4 globeInverse(vec2 pos, float half_fov) {
+  // kGlobeCameraDist must match kGlobeCameraD in src/gui/gui_constants.hpp.
+  const float kGlobeCameraDist = 4.0;
+  float short_edge = min(u_resolution.x, u_resolution.y);
+  float focal = short_edge * 0.5 / tan(half_fov);
+  vec3 d = normalize(vec3(pos, -focal));  // ray dir in eye space
+
+  // Solve |O + t*d|^2 = 1 with O = (0, 0, D):
+  //   t^2 + 2*D*d.z*t + (D^2 - 1) = 0
+  float b = kGlobeCameraDist * d.z;  // = dot(O, d)
+  float c = kGlobeCameraDist * kGlobeCameraDist - 1.0;
+  float disc = b * b - c;
+  if (disc < 0.0) return vec4(0.0, 0.0, 0.0, 0.0);  // ray misses sphere
+  float t = -b - sqrt(disc);                        // closest positive root (d.z < 0)
+  if (t <= 0.0) return vec4(0.0, 0.0, 0.0, 0.0);    // hit behind camera
+
+  vec3 hit_eye = vec3(0.0, 0.0, kGlobeCameraDist) + t * d;  // unit-length on sphere
+  vec3 hit_world = u_view_matrix * hit_eye;
+  return vec4(normalize(hit_world), 1.0);
+}
+
 // Overlay auxiliary lines on top of final_color.
 // world_dir must be a valid world-space direction.
 vec3 overlayAuxLines(vec3 world_dir, vec3 color) {
@@ -329,6 +360,9 @@ void main() {
   } else if (u_lens_type == 9) {   // kLensTypeDualFisheyeOrthographic
     result = dualFisheyeInverse(pos, 3);
     needs_view_transform = false;  // Core dual fisheye works in world space
+  } else if (u_lens_type == 10) {  // kLensTypeGlobe
+    result = globeInverse(pos, half_fov);
+    needs_view_transform = false;  // globeInverse already returned world-space dir
   }
   // else: unknown u_lens_type → result.w = 0 (black). static_assert in gui_state.hpp
   // pins kLensTypeCount so any out-of-range value is a compile-time catchable mismatch.
