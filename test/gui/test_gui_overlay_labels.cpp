@@ -373,7 +373,7 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       // "%.0f\xC2\xB0" format byte-for-byte without depending on
       // source-charset handling.
       constexpr int kGridGroup = 0;
-      auto has_label = [&labels](const char* text) {
+      auto has_label = [&labels, kGridGroup](const char* text) {
         for (const auto& l : labels) {
           if (l.group == kGridGroup && l.text == text) {
             return true;
