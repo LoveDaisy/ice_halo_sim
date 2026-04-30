@@ -269,24 +269,38 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // overlay_labels/globe_label_visibility — Globe lens (lens=10) must produce
-  // a STRICT subset of the fisheye-equidistant grid label set under the same
-  // standard view (elev=0, az=0). Geometric reasoning: Globe applies a
-  // back-hemisphere cull (overlay_labels.cpp Globe branch, dz > 1/D
-  // visibility filter) on top of its 60° fov frustum, while
-  // fisheye-equidistant at fov=180° samples the entire visible hemisphere —
-  // n_globe < n_fisheye is guaranteed. If they ever match, Globe culling has
-  // failed. (Regression guard for 173.4 issue.md AC: "Globe ⊊ fisheye_equidist".)
+  // overlay_labels/globe_label_visibility — Globe lens (lens=10) at its
+  // MaxFov=90° produces strictly fewer grid labels than Fisheye Equidistant
+  // at fov=180° under the same view (elev=0, az=0).
+  //
+  // What this test actually verifies (honest scope):
+  //   1) Globe lens label generation is wired up (n_globe > 0).
+  //   2) Globe at its native MaxFov never produces more grid labels than a
+  //      full-hemisphere fisheye at fov=180° (regression guard against
+  //      Globe label sampling running away or duplicating across passes).
+  //
+  // What this test does NOT directly verify:
+  //   - Globe's back-hemisphere `dz > 1/kGlobeCameraD` cull at
+  //     overlay_labels.cpp:299. At fov=90°/el=0/az=0, the Globe frustum is
+  //     a 45°-half-angle cone around +Z, so all sampled directions satisfy
+  //     dz ≥ cos(45°) ≈ 0.707 — the dz cull is geometrically unreachable
+  //     with this config. The strict inequality below is therefore secured
+  //     by the fov-asymmetry (90° vs 180°) only, not by the dz cull.
+  // Direct dz-cull coverage requires either a tilted view (e.g. el ≈ 60°
+  // bringing the cone into the wz < 0.25 region) or a same-fov comparison;
+  // captured as a follow-up backlog item (see SUMMARY).
+  // 60° matches SingleOrthoLatTestFunc baseline above; 90° here equals
+  // MaxFov(Globe), so no extra clamp interaction.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "globe_label_visibility");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       IM_UNUSED(ctx);
-      // Globe at fov=60° — front hemisphere subject to dz > 0.25 culling.
+      // Globe at fov=90° — its full native field of view (MaxFov(Globe)=90°).
       auto in_globe = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeGlobe,
                                    /*elev*/ 0.0f, /*az*/ 0.0f);
-      in_globe.fov = 60.0f;
-      // Fisheye Equidistant at fov=180° — full hemisphere, ensures strict
-      // numerical gap with Globe's culled subset.
+      in_globe.fov = 90.0f;
+      // Fisheye Equidistant at fov=180° — full hemisphere, deliberately
+      // wider than Globe's 90° to keep n_fisheye > n_globe by a margin.
       auto in_fisheye = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeEquidist,
                                      /*elev*/ 0.0f, /*az*/ 0.0f);
       in_fisheye.fov = 180.0f;
@@ -296,12 +310,12 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       lumice::gui::ComputeOverlayLabels(in_globe, 0.0f, 0.0f, 200.0f, 200.0f, labels_globe);
       lumice::gui::ComputeOverlayLabels(in_fisheye, 0.0f, 0.0f, 200.0f, 200.0f, labels_fisheye);
 
-      const int n_globe = CountGridLabels(labels_globe);
-      const int n_fisheye = CountGridLabels(labels_fisheye);
+      int n_globe = CountGridLabels(labels_globe);
+      int n_fisheye = CountGridLabels(labels_fisheye);
 
-      // Front-hemisphere visibility: Globe must produce at least one label.
+      // Globe must produce at least one label.
       IM_CHECK_GT(n_globe, 0);
-      // Strict subset: matches issue.md AC "⊊" (Globe culled vs fisheye full).
+      // Globe (fov=90°) strictly fewer than fisheye (fov=180°) under the same view.
       IM_CHECK_LT(n_globe, n_fisheye);
     };
   }

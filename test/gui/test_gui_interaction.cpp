@@ -1833,11 +1833,10 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.fov = 360.0f;
       ctx->Yield(3);
 
-      // Switch to Globe (MaxFov=90). fov must drop to <= 90.
+      // Switch to Globe (MaxFov=90). The per-frame clamp pulls fov to 90.
       gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
       ctx->Yield(3);
-      IM_CHECK_LE(gui::g_state.renderer.fov, 90.0f);
-      IM_CHECK_GT(gui::g_state.renderer.fov, 0.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.fov, 90.0f);
 
       // Push fov past the cap; the per-frame clamp pulls it back to <= 90.
       gui::g_state.renderer.fov = 200.0f;
@@ -1896,7 +1895,17 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
   // Trackball math (drag → azimuth, clamp at ±89) is left to manual GUI
   // verification; revisit with a follow-up task that either provides a
   // texture upload helper for tests or refactors the drag handler into a
-  // testable pure function (see progress.md DECISION entry for context).
+  // testable pure function (see SUMMARY backlog entry for context).
+  //
+  // Difference vs lens_globe_view_controls (avoid being mistaken for a
+  // duplicate when triaging coverage):
+  //   - lens_globe_view_controls: 3-yield window, focuses on "field assigned
+  //     under Globe is preserved across one render cycle" (functional check).
+  //   - lens_globe_trackball (Path C): 10-yield window split across two
+  //     blocks, focuses on "no cross-frame drift", and crucially keeps the
+  //     test ID "trackball" so a future follow-up can replace the assertion
+  //     body with real drag coverage WITHOUT renaming the test (preserving
+  //     the issue.md AC3 mapping at the test-name level).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_trackball");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -1941,14 +1950,16 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       // Sanity: the Reset button must be addressable on the default lens.
       IM_CHECK(ctx->ItemExists("**/Reset##view"));
 
-      const int lens_set[] = { gui::kLensTypeFisheyeEquidist, gui::kLensTypeGlobe };
+      int lens_set[] = { gui::kLensTypeFisheyeEquidist, gui::kLensTypeGlobe };
       for (int lens : lens_set) {
         ResetTestState();
         ctx->Yield(2);
 
         gui::g_state.renderer.lens_type = lens;
-        const int visible_before = gui::g_state.renderer.visible;
         ctx->Yield(3);
+        // Capture visible AFTER the lens-switch frame settles, so the snapshot
+        // reflects any per-frame normalization the new lens may apply.
+        int visible_before = gui::g_state.renderer.visible;
 
         // User edits all four resettable fields.
         gui::g_state.renderer.fov = 42.0f;
@@ -1960,7 +1971,7 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
         ctx->ItemClick("**/Reset##view");
         ctx->Yield(3);
 
-        const gui::ViewDefaults def = gui::DefaultViewParamsFor(lens);
+        gui::ViewDefaults def = gui::DefaultViewParamsFor(lens);
         IM_CHECK_EQ(gui::g_state.renderer.fov, def.fov);
         IM_CHECK_EQ(gui::g_state.renderer.elevation, def.elevation);
         IM_CHECK_EQ(gui::g_state.renderer.azimuth, def.azimuth);
