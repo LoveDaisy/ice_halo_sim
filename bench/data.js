@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777562897450,
+  "lastUpdate": 1777562899142,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4999,6 +4999,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 72.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "847970a791d9ccde2a8d62467763289fc672771b",
+          "message": "Merge pull request #83 from LoveDaisy/feat/globe_view\n\nfeat(gui): Globe lens with trackball, overlay labels, and view reset",
+          "timestamp": "2026-04-30T23:23:42+08:00",
+          "tree_id": "4c980cbd42b23b410fd148ee16eada28b2feccdb",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/847970a791d9ccde2a8d62467763289fc672771b"
+        },
+        "date": 1777562898753,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 74.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 72.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 72.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 57.4,
             "unit": "%"
           }
         ]
