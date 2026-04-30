@@ -366,14 +366,16 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       std::vector<lumice::gui::OverlayLabel> labels;
       lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 200.0f, 200.0f, labels);
 
-      // group filter mirrors CountGridLabels: altitude/azimuth grid labels are
-      // pushed with kGroupGrid (0); Source 4 specifically uses it at
-      // overlay_labels.cpp:730. Byte-literal "\xC2\xB0" (UTF-8 for °) matches
-      // AddLabel's "%.0f\xC2\xB0" format byte-for-byte without depending on
+      // Mirrors kGroupGrid in overlay_labels.cpp:346 — kept private to the
+      // test because the constant is in an anonymous namespace there. Source 4
+      // emits altitude labels with this group at overlay_labels.cpp:730.
+      // Byte-literal "\xC2\xB0" (UTF-8 for °) matches AddLabel's
+      // "%.0f\xC2\xB0" format byte-for-byte without depending on
       // source-charset handling.
+      constexpr int kGridGroup = 0;
       auto has_label = [&labels](const char* text) {
         for (const auto& l : labels) {
-          if (l.group == 0 && l.text == text) {
+          if (l.group == kGridGroup && l.text == text) {
             return true;
           }
         }
