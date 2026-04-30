@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777567618492,
+  "lastUpdate": 1777567620485,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -5139,6 +5139,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 57.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5c889e1e1f526d6bda40f029153821ff8a06fcf6",
+          "message": "Merge pull request #84 from LoveDaisy/feat/ux_crystal_card\n\nfeat(gui): highlight active crystal card while edit modal is open",
+          "timestamp": "2026-05-01T00:42:19+08:00",
+          "tree_id": "1fe7d7881a3ce16e3cdfd44fdececc046f8f1afd",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5c889e1e1f526d6bda40f029153821ff8a06fcf6"
+        },
+        "date": 1777567620009,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 90.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 74.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 71.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 69.7,
             "unit": "%"
           }
         ]
