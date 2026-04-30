@@ -1814,6 +1814,192 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // ===== task-tests-and-baseline (scrum-outside-in-globe-view 173.4) =====
+  // Globe lens (lens=10) GUI interaction coverage. Verifies the lens-type
+  // selection / per-lens view controls / trackball drag handler / unified
+  // Reset button / cross-lens roll preservation, all of which were exercised
+  // only by manual GUI in scrum 173.3 due to headless-runner limits.
+
+  // p2_render/lens_globe_selection — selecting Globe drives FOV max to 90
+  // (MaxFov(kGlobe) = 90, src/config/render_config.cpp:138).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_selection");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Start with Dual Fisheye EA (fov=360) to prove the subsequent clamp is real.
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeEqualArea;
+      gui::g_state.renderer.fov = 360.0f;
+      ctx->Yield(3);
+
+      // Switch to Globe (MaxFov=90). fov must drop to <= 90.
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      ctx->Yield(3);
+      IM_CHECK_LE(gui::g_state.renderer.fov, 90.0f);
+      IM_CHECK_GT(gui::g_state.renderer.fov, 0.0f);
+
+      // Push fov past the cap; the per-frame clamp pulls it back to <= 90.
+      gui::g_state.renderer.fov = 200.0f;
+      ctx->Yield(3);
+      IM_CHECK_LE(gui::g_state.renderer.fov, 90.0f);
+    };
+  }
+
+  // p2_render/lens_globe_view_controls — Globe is NOT in kFullSkyLensTypes,
+  // so elevation/azimuth must NOT be force-zeroed, the stored roll value
+  // must be preserved (Globe disables the roll slider via BeginDisabled
+  // without writing back), and the FOV cap (90) must hold.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_view_controls");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      gui::g_state.renderer.fov = 60.0f;
+      gui::g_state.renderer.elevation = 30.0f;
+      gui::g_state.renderer.azimuth = 45.0f;
+      // Guard: Globe activation must NOT reset stored roll field
+      // (EffectiveRollForLens reads it without writing back).
+      gui::g_state.renderer.roll = 10.0f;
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 30.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 45.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.roll, 10.0f);
+
+      // FOV slider in Globe mode caps at 90.
+      gui::g_state.renderer.fov = 80.0f;
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.fov, 80.0f);
+
+      gui::g_state.renderer.fov = 120.0f;
+      ctx->Yield(3);
+      IM_CHECK_LE(gui::g_state.renderer.fov, 90.0f);
+    };
+  }
+
+  // p2_render/lens_globe_trackball — DEGRADED (Path C per plan §3 Step 3
+  // decision tree). The main-viewport "##preview_interact" InvisibleButton is
+  // created only when g_preview.HasTexture() || g_preview.HasBackground() is
+  // true (app_panels.cpp:669); under ResetTestState (no simulation yet, no
+  // texture uploaded) the button is not rendered, so neither Path A
+  // (ItemDragWithDelta) nor Path B (ItemHold + IO MouseDelta injection) can
+  // address it — both depend on ItemExists succeeding.
+  // Falling back to Path C: assert the trackball-adjacent state-level
+  // invariants that DO hold without an active drag handler:
+  //   1) Globe lens preserves a non-zero pre-set roll across multiple frames
+  //      (no spurious zero-out from any per-frame Globe code path).
+  //   2) Globe lens does NOT auto-modify azimuth / elevation in the absence
+  //      of user input (proxy for "trackball is dormant unless dragged").
+  // Trackball math (drag → azimuth, clamp at ±89) is left to manual GUI
+  // verification; revisit with a follow-up task that either provides a
+  // texture upload helper for tests or refactors the drag handler into a
+  // testable pure function (see progress.md DECISION entry for context).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_trackball");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      gui::g_state.renderer.fov = 60.0f;
+      gui::g_state.renderer.azimuth = 12.0f;
+      gui::g_state.renderer.elevation = -8.0f;
+      // Pre-set non-zero roll: must stay 7.0 across yields under Globe lens.
+      gui::g_state.renderer.roll = 7.0f;
+      ctx->Yield(5);
+
+      // Trackball does not run (no drag input, no addressable preview button).
+      // State must be exactly what we wrote — Globe must not clobber any field.
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 12.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -8.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.roll, 7.0f);
+
+      // Multiple additional yields: still unchanged (no drift).
+      ctx->Yield(5);
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 12.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -8.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.roll, 7.0f);
+    };
+  }
+
+  // p2_render/view_reset_button — the unified View `Reset` button (added in
+  // scrum 173.3) must restore all four resettable fields to
+  // DefaultViewParamsFor(lens) for ANY current lens, while leaving lens_type
+  // and visible untouched. Two lenses cover both the 180° fov default
+  // (fisheye_equidist) and the Globe-specific 30° default + roll branch.
+  // Per issue.md AC: "至少 2 个 lens" — exhaustive enumeration is unnecessary
+  // since DefaultViewParamsFor coverage is already established at the unit
+  // level + reviewed in scrum 173.3.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "view_reset_button");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      // Sanity: the Reset button must be addressable on the default lens.
+      IM_CHECK(ctx->ItemExists("**/Reset##view"));
+
+      const int lens_set[] = { gui::kLensTypeFisheyeEquidist, gui::kLensTypeGlobe };
+      for (int lens : lens_set) {
+        ResetTestState();
+        ctx->Yield(2);
+
+        gui::g_state.renderer.lens_type = lens;
+        const int visible_before = gui::g_state.renderer.visible;
+        ctx->Yield(3);
+
+        // User edits all four resettable fields.
+        gui::g_state.renderer.fov = 42.0f;
+        gui::g_state.renderer.elevation = 33.0f;
+        gui::g_state.renderer.azimuth = -77.0f;
+        gui::g_state.renderer.roll = 11.0f;
+        ctx->Yield(3);
+
+        ctx->ItemClick("**/Reset##view");
+        ctx->Yield(3);
+
+        const gui::ViewDefaults def = gui::DefaultViewParamsFor(lens);
+        IM_CHECK_EQ(gui::g_state.renderer.fov, def.fov);
+        IM_CHECK_EQ(gui::g_state.renderer.elevation, def.elevation);
+        IM_CHECK_EQ(gui::g_state.renderer.azimuth, def.azimuth);
+        IM_CHECK_EQ(gui::g_state.renderer.roll, def.roll);
+        // Reset must NOT alter lens_type or the visibility mode.
+        IM_CHECK_EQ(gui::g_state.renderer.lens_type, lens);
+        IM_CHECK_EQ(gui::g_state.renderer.visible, visible_before);
+      }
+    };
+  }
+
+  // p2_render/lens_globe_roll_preserved_on_lens_switch — switching to Globe
+  // and back must preserve the stored RenderConfig.roll value: Globe forces
+  // roll=0 only at render time via EffectiveRollForLens (gui_state.hpp:199),
+  // never writing back to the stored field. Regression guard for the
+  // 173.3 SUMMARY §3 design contract.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_roll_preserved_on_lens_switch");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
+      gui::g_state.renderer.roll = 15.0f;
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.roll, 15.0f);
+
+      // Switch to Globe — stored roll must remain 15° (display path masks it).
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.roll, 15.0f);
+
+      // Switch back — stored roll still 15°.
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.roll, 15.0f);
+    };
+  }
+
   // p2_render/modal_layout_toggle_bit — switching modal_layout_vertical is safe
   // (view preference state-level test; layout dispatch is exercised only indirectly
   // through subsequent modal open, which would require a live popup — omitted to

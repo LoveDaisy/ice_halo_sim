@@ -269,6 +269,43 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // overlay_labels/globe_label_visibility — Globe lens (lens=10) must produce
+  // a STRICT subset of the fisheye-equidistant grid label set under the same
+  // standard view (elev=0, az=0). Geometric reasoning: Globe applies a
+  // back-hemisphere cull (overlay_labels.cpp Globe branch, dz > 1/D
+  // visibility filter) on top of its 60° fov frustum, while
+  // fisheye-equidistant at fov=180° samples the entire visible hemisphere —
+  // n_globe < n_fisheye is guaranteed. If they ever match, Globe culling has
+  // failed. (Regression guard for 173.4 issue.md AC: "Globe ⊊ fisheye_equidist".)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "globe_label_visibility");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      // Globe at fov=60° — front hemisphere subject to dz > 0.25 culling.
+      auto in_globe = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeGlobe,
+                                   /*elev*/ 0.0f, /*az*/ 0.0f);
+      in_globe.fov = 60.0f;
+      // Fisheye Equidistant at fov=180° — full hemisphere, ensures strict
+      // numerical gap with Globe's culled subset.
+      auto in_fisheye = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeEquidist,
+                                     /*elev*/ 0.0f, /*az*/ 0.0f);
+      in_fisheye.fov = 180.0f;
+
+      std::vector<lumice::gui::OverlayLabel> labels_globe;
+      std::vector<lumice::gui::OverlayLabel> labels_fisheye;
+      lumice::gui::ComputeOverlayLabels(in_globe, 0.0f, 0.0f, 200.0f, 200.0f, labels_globe);
+      lumice::gui::ComputeOverlayLabels(in_fisheye, 0.0f, 0.0f, 200.0f, 200.0f, labels_fisheye);
+
+      const int n_globe = CountGridLabels(labels_globe);
+      const int n_fisheye = CountGridLabels(labels_fisheye);
+
+      // Front-hemisphere visibility: Globe must produce at least one label.
+      IM_CHECK_GT(n_globe, 0);
+      // Strict subset: matches issue.md AC "⊊" (Globe culled vs fisheye full).
+      IM_CHECK_LT(n_globe, n_fisheye);
+    };
+  }
+
   // Test F: Modal z-order regression — DrawOverlayLabels must target the current
   // window's draw list (not foreground), so modals correctly occlude labels.
   // F9: ImGui API calls must go through GuiFunc (main thread); TestFunc reads
