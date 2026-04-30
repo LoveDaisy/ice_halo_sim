@@ -376,12 +376,21 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         bool selected = (r.lens_type == idx);
         if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
           if (r.lens_type != idx) {
+            bool was_globe = (r.lens_type == kLensTypeGlobe);
+            bool now_globe = (idx == kLensTypeGlobe);
             r.lens_type = idx;
+            ViewDefaults d = DefaultViewParamsFor(idx);
             // Reset fov to the new lens' default so e.g. first-time entry to
-            // Globe uses 30° instead of inheriting Linear's 90°. Other view
-            // fields (az/el/roll) are preserved. .lmc loading and tests bypass
-            // this combo by writing lens_type directly, so they keep their fov.
-            r.fov = DefaultViewParamsFor(idx).fov;
+            // Globe uses 30° instead of inheriting Linear's 90°. .lmc loading
+            // and tests bypass this combo by writing lens_type directly, so
+            // they keep their fov.
+            r.fov = d.fov;
+            // Crossing the Globe boundary inverts the view direction (Globe is
+            // outside-in), so reset az to the target lens' default. el/roll
+            // are preserved — only az has the inversion semantics.
+            if (was_globe != now_globe) {
+              r.azimuth = d.azimuth;
+            }
           }
         }
         if (selected) {

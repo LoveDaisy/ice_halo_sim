@@ -183,13 +183,18 @@ struct ViewDefaults {
 // a default.
 inline ViewDefaults DefaultViewParamsFor(int lens_type) {
   float fov = 90.0f;  // linear / rectangular / orthographic family / fallback
+  float azimuth = 0.0f;
   if (LensIsFov180(lens_type)) {
     fov = 180.0f;
   } else if (lens_type == kLensTypeGlobe) {
     fov = 30.0f;
+    // Globe is outside-in: az=0 puts the camera behind the sphere, opposite to
+    // every inside-out lens. Default az=-180 so first-time entry / Reset shows
+    // the same direction users see in non-Globe projections at az=0.
+    azimuth = -180.0f;
   }
   // Orthographic single + dual already fall through to 90; no extra branch.
-  return { fov, 0.0f, 0.0f, 0.0f };
+  return { fov, 0.0f, azimuth, 0.0f };
 }
 
 // Globe lens forces roll=0 at render time without writing back to the stored
