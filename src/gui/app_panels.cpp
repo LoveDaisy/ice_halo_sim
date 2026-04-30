@@ -375,7 +375,14 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       for (int idx : kLensTypePresentationOrder) {
         bool selected = (r.lens_type == idx);
         if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
-          r.lens_type = idx;
+          if (r.lens_type != idx) {
+            r.lens_type = idx;
+            // Reset fov to the new lens' default so e.g. first-time entry to
+            // Globe uses 30° instead of inheriting Linear's 90°. Other view
+            // fields (az/el/roll) are preserved. .lmc loading and tests bypass
+            // this combo by writing lens_type directly, so they keep their fov.
+            r.fov = DefaultViewParamsFor(idx).fov;
+          }
         }
         if (selected) {
           ImGui::SetItemDefaultFocus();
@@ -762,8 +769,24 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       ImGuiIO& io = ImGui::GetIO();
       if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         ImVec2 delta = io.MouseDelta;
-        rc.azimuth -= delta.x * 0.3f;
-        rc.elevation += delta.y * 0.3f;
+        // Globe is outside-in: u_view_matrix * (0,0,D) yields camera world
+        // position, so +az/+el move the camera and the sphere drifts in the
+        // opposite direction. Flip both signs so a right/down drag moves the
+        // sphere right/down, matching the inside-out lenses' feel.
+        if (rc.lens_type == kLensTypeGlobe) {
+          rc.azimuth += delta.x * 0.3f;
+          rc.elevation -= delta.y * 0.3f;
+        } else {
+          rc.azimuth -= delta.x * 0.3f;
+          rc.elevation += delta.y * 0.3f;
+        }
+        // Wrap azimuth into [-180, 180] so dragging past the slider's clamp
+        // boundary continues seamlessly instead of getting pinned at ±180.
+        if (rc.azimuth > 180.0f) {
+          rc.azimuth -= 360.0f;
+        } else if (rc.azimuth < -180.0f) {
+          rc.azimuth += 360.0f;
+        }
         // Globe lens needs a tighter clamp to avoid view-matrix degeneracy at
         // ±90°; inside-out lenses keep the existing ±90° range.
         float el_lim = (rc.lens_type == kLensTypeGlobe) ? 89.0f : 90.0f;
