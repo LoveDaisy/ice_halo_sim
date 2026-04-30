@@ -320,6 +320,82 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // overlay_labels/globe_label_dz_cull_active — directly pin the back-hemisphere
+  // dz cull at overlay_labels.cpp:299 (`if (dz <= 1.0f / kGlobeCameraD)`).
+  //
+  // Companion to globe_label_visibility above, which only verifies the loose
+  // n_globe < n_fisheye(fov=180°) inequality — that one passes even if the dz
+  // cull is removed (it's secured by fov-asymmetry alone). This test fails
+  // whenever the dz cull is removed, threshold flipped, or comparison reversed.
+  //
+  // Mechanism:
+  //   With Globe + fov=90° + elev=0 + az=0, all grid labels in the output come
+  //   from sample_interior_latitudes (Source 4 in overlay_labels.cpp's
+  //   sample-source dispatch comment). Source 1 (viewport edges) is empty here:
+  //   the visible-cone half-angle is asin(1/kGlobeCameraD) = asin(0.25) ≈ 14.5°,
+  //   so all viewport-edge rays at fov/2 = 45° miss the unit sphere
+  //   (PixelToWorldDir returns invalid). Source 2/3 are gated on visible≠Full,
+  //   Source 5 on show_sun_circles=true; both inactive here. So only Source 4
+  //   contributes, and Source 4's only forward-projection gate (besides
+  //   viewport-bound) is the dz cull itself — no other path can write the
+  //   altitude text labels we assert against.
+  //
+  // Geometric pin (with kGlobeCameraD=4 ⇒ threshold dz=0.25, view_matrix at
+  // elev=0/az=0 reduces to dz_eye = wx):
+  //   - alt=±70°: max wx across azimuths = cos(70°) ≈ 0.342 > 0.25 → some az
+  //     passes → "70°" / "-70°" labels MUST appear (positive control; guards
+  //     against threshold being raised to 1.0 which would silently pass the
+  //     negative assertion).
+  //   - alt=±80°: max wx across azimuths = cos(80°) ≈ 0.174 < 0.25 → ALL az
+  //     fail dz cull → "80°" / "-80°" labels MUST NOT appear (the only
+  //     observable consequence of the dz cull at this config). Removing the
+  //     cull would let alt=±80° through (denom=D-dz≈3.826, focal=100, projected
+  //     py ≈ sin(80°)·100/3.826 ≈ 25.7 < hh=100, well inside viewport).
+  //
+  // ±85° would also satisfy the math, but kAltitudeSteps in
+  // overlay_labels.cpp:694 currently runs ±10°…±80° — picking ±80° keeps the
+  // test resilient to step-set narrowing (only widening could miss it).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "globe_label_dz_cull_active");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeGlobe,
+                             /*elev*/ 0.0f, /*az*/ 0.0f);
+      in.fov = 90.0f;
+
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 200.0f, 200.0f, labels);
+
+      // group filter mirrors CountGridLabels: altitude/azimuth grid labels are
+      // pushed with kGroupGrid (0); Source 4 specifically uses it at
+      // overlay_labels.cpp:730. Byte-literal "\xC2\xB0" (UTF-8 for °) matches
+      // AddLabel's "%.0f\xC2\xB0" format byte-for-byte without depending on
+      // source-charset handling.
+      auto has_label = [&labels](const char* text) {
+        for (const auto& l : labels) {
+          if (l.group == 0 && l.text == text) {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      // Sanity: generation path is alive.
+      IM_CHECK_GT(CountGridLabels(labels), 0);
+
+      // Positive control — ±70° passes dz cull (max wx = cos(70°) > 0.25).
+      // Without these the negative assertion below could silently pass by
+      // having the threshold raised to 1.0 (cull everything → 80° also absent).
+      IM_CHECK(has_label("70\xC2\xB0"));
+      IM_CHECK(has_label("-70\xC2\xB0"));
+
+      // The dz cull's only observable consequence at this config: ±80° MUST
+      // be culled (max wx = cos(80°) < 0.25, fails for all azimuths).
+      IM_CHECK(!has_label("80\xC2\xB0"));
+      IM_CHECK(!has_label("-80\xC2\xB0"));
+    };
+  }
+
   // Test F: Modal z-order regression — DrawOverlayLabels must target the current
   // window's draw list (not foreground), so modals correctly occlude labels.
   // F9: ImGui API calls must go through GuiFunc (main thread); TestFunc reads
