@@ -1,6 +1,7 @@
 #include "gui/edit_modals.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -97,6 +98,13 @@ static FilterEditType g_filter_active_type_snapshot = FilterEditType::kRaypath;
 // mutated: it stays at default-constructed RaypathParams{} in both g_filter_top
 // and its snapshot, so equality reduces to the shared fields only. Per-type
 // payloads live in the dedicated *_params buffers below.
+//
+// INVARIANT: g_filter_top.param must remain default-constructed RaypathParams{}
+// at all times. The split is "top fields here, payload in *_params"; writing to
+// `param` would silently break the dirty-compare reduction since FilterConfig::
+// operator== compares param too. If subtype expansion (#4-#6) introduces a real
+// shared field beyond name/action/sym_*, prefer extracting a dedicated struct
+// over reusing FilterConfig.
 static FilterConfig g_filter_top;
 static FilterConfig g_filter_top_snapshot;
 
@@ -352,10 +360,14 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_filter_top.sym_b = src.sym_b;
   g_filter_top.sym_d = src.sym_d;
   // Reset all per-type buffers to defaults; load the active alternative.
+  // Default `g_filter_active_type` to kRaypath as a fallback so a future
+  // FilterParamVariant alternative not handled below leaves the modal in a
+  // safe state rather than carrying over the previous session's discriminator.
   g_raypath_params = {};
   g_ee_params = {};
   g_dir_params = {};
   g_crystal_params = {};
+  g_filter_active_type = FilterEditType::kRaypath;
   if (std::holds_alternative<RaypathParams>(src.param)) {
     g_raypath_params = std::get<RaypathParams>(src.param);
     g_filter_active_type = FilterEditType::kRaypath;
@@ -630,20 +642,19 @@ static void RenderAxisModal(GuiState& /*state*/) {
 // Filter Modal
 // ============================================================
 
-// Validation kind is derived from g_crystal_buf (the in-flight buffer of the
-// Crystal tab) rather than the entry, because the user may switch crystal type
-// before committing — the validator should match what will actually be written
-// on OK. Hoisted out of RenderFilterModal so the raypath sub-panel and the
-// modal-level OK gate can share the helper.
-static lumice::CrystalKind FilterValidationKind() {
-  return (g_crystal_buf.type == CrystalType::kPrism) ? lumice::CrystalKind::kPrism : lumice::CrystalKind::kPyramid;
+// Forward declaration — CurrentValidationKind() is defined in the anonymous
+// namespace further down (next to ApplyBuffersToEntry). Single source of truth
+// for "what crystal kind should the raypath validator use"; both this Filter
+// sub-panel and the modal-level OK gate consume it.
+namespace {
+lumice::CrystalKind CurrentValidationKind();
 }
 
 static void RenderRaypathSubpanel() {
   // Sync InputText backing buffer into the raypath sub-buffer before validation
   // so the displayed hint reflects the current edit state.
   g_raypath_params.raypath_text = g_raypath_buf;
-  const auto result = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, FilterValidationKind());
+  const auto result = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
   const auto validation = result.state;
 
   ImVec4 border_color;
@@ -739,22 +750,24 @@ static void RenderRemoveFilterButton() {
 
 static void RenderFilterModal(GuiState& /*state*/) {
   // Type radio — 4 options, SameLine horizontal (style-aligned with Crystal
-  // tab's Prism/Pyramid radios). On vertical layout (~360px) we keep all four
-  // on one row; no runtime adaptive wrap to avoid extra test dimensions.
-  int t = static_cast<int>(g_filter_active_type);
-  if (ImGui::RadioButton("Raypath##filter_type", &t, 0)) {
+  // tab's Prism/Pyramid radios). Boolean form (RadioButton(label, active))
+  // matches the Action radio below and the Crystal-tab Prism/Pyramid radios,
+  // avoiding a "ImGui writes a temp int, branch writes the enum" double-write.
+  // On vertical layout (~360px) we keep all four on one row; no runtime
+  // adaptive wrap to avoid extra test dimensions.
+  if (ImGui::RadioButton("Raypath##filter_type", g_filter_active_type == FilterEditType::kRaypath)) {
     g_filter_active_type = FilterEditType::kRaypath;
   }
   ImGui::SameLine();
-  if (ImGui::RadioButton("Entry-Exit##filter_type", &t, 1)) {
+  if (ImGui::RadioButton("Entry-Exit##filter_type", g_filter_active_type == FilterEditType::kEntryExit)) {
     g_filter_active_type = FilterEditType::kEntryExit;
   }
   ImGui::SameLine();
-  if (ImGui::RadioButton("Direction##filter_type", &t, 2)) {
+  if (ImGui::RadioButton("Direction##filter_type", g_filter_active_type == FilterEditType::kDirection)) {
     g_filter_active_type = FilterEditType::kDirection;
   }
   ImGui::SameLine();
-  if (ImGui::RadioButton("Crystal##filter_type", &t, 3)) {
+  if (ImGui::RadioButton("Crystal##filter_type", g_filter_active_type == FilterEditType::kCrystal)) {
     g_filter_active_type = FilterEditType::kCrystal;
   }
 
@@ -767,7 +780,10 @@ static void RenderFilterModal(GuiState& /*state*/) {
   const bool is_stub = (g_filter_active_type != FilterEditType::kRaypath);
   ImGui::BeginDisabled(is_stub);
 
-  // Type-specific dispatch.
+  // Type-specific dispatch. `default:` assert ensures any future
+  // FilterEditType extension (#4-#6) is handled explicitly rather than
+  // silently dropped — mirrors the project convention of "exhaustive switch +
+  // assert tripwire" recorded in scratchpad/learnings.md.
   switch (g_filter_active_type) {
     case FilterEditType::kRaypath:
       RenderRaypathSubpanel();
@@ -780,6 +796,9 @@ static void RenderFilterModal(GuiState& /*state*/) {
       break;
     case FilterEditType::kCrystal:
       RenderCrystalFilterStub();
+      break;
+    default:
+      assert(false && "unhandled FilterEditType in RenderFilterModal dispatch");
       break;
   }
 
@@ -858,10 +877,43 @@ void ResetModalState() {
 namespace {
 
 // Validation kind based on the in-flight Crystal-tab buffer (not the entry),
-// because the user may switch crystal type before committing. Shares the
-// implementation with FilterValidationKind via simple delegation.
+// because the user may switch crystal type before committing — the validator
+// should match what will actually be written on OK. Single source of truth
+// for the Filter sub-panel and the modal-level OK gate.
 lumice::CrystalKind CurrentValidationKind() {
-  return FilterValidationKind();
+  return (g_crystal_buf.type == CrystalType::kPrism) ? lumice::CrystalKind::kPrism : lumice::CrystalKind::kPyramid;
+}
+
+// Filter-tab dirty predicate. Active-type-guarded form per plan §7 risk 6:
+// when the active type is X, only X's sub-buffer is compared against its
+// snapshot. This makes the dirty mark robust against future per-type input
+// controls (#4-#6 sub-tasks) — typing in EE while raypath is active must not
+// flip the dirty bit on either side until the user actually switches type.
+//
+// Used by both the tab-label dirty mark in RenderEditModals AND the
+// `buf_changed` gate inside ApplyBuffersToEntry (commit decision). Keeping the
+// definition single-source means future sub-types only need an additional
+// case here; both consumers pick up the change automatically.
+bool IsFilterDirty() {
+  if (g_filter_active_type != g_filter_active_type_snapshot) {
+    return true;
+  }
+  if (g_filter_top != g_filter_top_snapshot) {
+    return true;
+  }
+  switch (g_filter_active_type) {
+    case FilterEditType::kRaypath:
+      return g_raypath_params != g_raypath_params_snapshot;
+    case FilterEditType::kEntryExit:
+      return g_ee_params != g_ee_params_snapshot;
+    case FilterEditType::kDirection:
+      return g_dir_params != g_dir_params_snapshot;
+    case FilterEditType::kCrystal:
+      return g_crystal_params != g_crystal_params_snapshot;
+    default:
+      assert(false && "unhandled FilterEditType in IsFilterDirty");
+      return false;
+  }
 }
 
 // Result of applying edit buffers back to the entry. Used by both commit paths
@@ -911,13 +963,10 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     return { true, entry != old_entry, entry.filter != old_entry.filter };
   }
 
-  // Buffer-changed predicate covers all per-type sub-buffers + active_type +
-  // top fields, so cross-type edits (typing in EE then switching back) are
-  // correctly recognized as "buffer touched".
-  const bool buf_changed = (g_filter_active_type != g_filter_active_type_snapshot) ||
-                           (g_filter_top != g_filter_top_snapshot) || (g_raypath_params != g_raypath_params_snapshot) ||
-                           (g_ee_params != g_ee_params_snapshot) || (g_dir_params != g_dir_params_snapshot) ||
-                           (g_crystal_params != g_crystal_params_snapshot);
+  // Buffer-changed predicate: defined as IsFilterDirty() in this TU so the
+  // commit decision and the tab-label dirty mark stay in sync — adding a new
+  // FilterEditType only needs one place to be touched.
+  const bool buf_changed = IsFilterDirty();
 
   if (g_raypath_params.raypath_text.empty()) {
     // Empty raypath ≡ "no filter" at the UI layer (the Remove button is just
@@ -1248,18 +1297,15 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   // can vary ("Crystal" vs "Crystal *") without changing the tab's hash
   // (otherwise the tab would lose its SelectedTabId the moment dirty flips,
   // falling back to the first tab and hiding the user's work-in-progress).
-  // filter_dirty: any of the per-type buffers, top-level shared fields, or
-  // the active type discriminator differs from its open-time snapshot. Sync
+  // filter_dirty: delegate to IsFilterDirty() so the tab-label "*" and the
+  // commit-time `buf_changed` predicate share a single source of truth. Sync
   // the InputText backing first so post-keystroke / post-Remove diffs are
   // reflected on the same frame.
   g_raypath_params.raypath_text = g_raypath_buf;
   const bool crystal_dirty = g_crystal_buf != g_crystal_buf_snapshot;
   const bool axis_dirty = g_axis_buf[0] != g_axis_buf_snapshot[0] || g_axis_buf[1] != g_axis_buf_snapshot[1] ||
                           g_axis_buf[2] != g_axis_buf_snapshot[2];
-  const bool filter_dirty = (g_filter_active_type != g_filter_active_type_snapshot) ||
-                            (g_filter_top != g_filter_top_snapshot) ||
-                            (g_raypath_params != g_raypath_params_snapshot) || (g_ee_params != g_ee_params_snapshot) ||
-                            (g_dir_params != g_dir_params_snapshot) || (g_crystal_params != g_crystal_params_snapshot);
+  const bool filter_dirty = IsFilterDirty();
   // Immediate mode: changes apply every frame, so "dirty" is not a meaningful
   // state — suppress the * mark on all tabs regardless of buffer vs snapshot.
   const bool show_dirty = !state.modal_immediate_mode;
