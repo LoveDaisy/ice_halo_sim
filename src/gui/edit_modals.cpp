@@ -703,8 +703,15 @@ static void RenderRaypathSubpanel() {
   ImGui::TextDisabled("e.g. 3-5 or 3-5; 1-3");
 }
 
-static void RenderEntryExitStub() {
-  ImGui::TextDisabled("Entry-Exit filter — coming soon");
+// Entry-Exit sub-panel (issue per-type-entry-exit / 178.4): two InputInt for
+// face ids. The values are written directly into g_ee_params; commit/dirty
+// tracking is handled by ApplyBuffersToEntry / IsFilterDirty just like the
+// raypath path. Negative / out-of-range values are clamped to [0, IdType max]
+// at the GUI→core serialization layer (file_io.cpp::ClampIdValue), so the UI
+// stays a "simple InputInt" per issue scope.
+static void RenderEntryExitSubpanel() {
+  ImGui::InputInt("Entry face id##filter_modal", &g_ee_params.entry);
+  ImGui::InputInt("Exit face id##filter_modal", &g_ee_params.exit);
 }
 
 static void RenderDirectionStub() {
@@ -777,7 +784,10 @@ static void RenderFilterModal(GuiState& /*state*/) {
   // immediately sees that nothing below is interactive (B1: 整段灰显). The
   // OK button at the modal level gets a parallel disable path in
   // RenderEditModals so the user cannot commit a stub-type filter.
-  const bool is_stub = (g_filter_active_type != FilterEditType::kRaypath);
+  // EntryExit (#178.4) is now interactive alongside Raypath; Direction /
+  // Crystal remain stubs until #178.5 / #178.6.
+  const bool is_stub =
+      (g_filter_active_type != FilterEditType::kRaypath && g_filter_active_type != FilterEditType::kEntryExit);
   ImGui::BeginDisabled(is_stub);
 
   // Type-specific dispatch. `default:` assert ensures any future
@@ -789,7 +799,7 @@ static void RenderFilterModal(GuiState& /*state*/) {
       RenderRaypathSubpanel();
       break;
     case FilterEditType::kEntryExit:
-      RenderEntryExitStub();
+      RenderEntryExitSubpanel();
       break;
     case FilterEditType::kDirection:
       RenderDirectionStub();
@@ -809,9 +819,14 @@ static void RenderFilterModal(GuiState& /*state*/) {
 
   ImGui::Spacing();
 
-  // Remove Filter — only meaningful for raypath; nested BeginDisabled is fine
-  // (ImGui treats it as a logical OR of the disable stack).
-  RenderRemoveFilterButton();
+  // Remove Filter — raypath-only shortcut. Hidden for EntryExit (and the
+  // remaining stub types) since "empty raypath ≡ no filter" semantics don't
+  // apply: EE has no clean "empty" state (entry=0/exit=0 is a legal config).
+  // Type-aware "Reset" semantics covering all 4 types is deferred until
+  // direction/crystal are interactive (#178.5 / #178.6).
+  if (g_filter_active_type == FilterEditType::kRaypath) {
+    RenderRemoveFilterButton();
+  }
 
   ImGui::EndDisabled();
 
@@ -954,11 +969,32 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   // raypath text. Mirrors the dirty-compare pattern in RenderEditModals.
   g_raypath_params.raypath_text = g_raypath_buf;
 
-  // Stub-type defensive path: OK button is disabled on stub types, so this
-  // branch is not user-reachable. Leave entry.filter unchanged so a
-  // hypothetical entry into this branch (e.g. via Immediate-mode commit while
-  // a stub is selected) cannot silently overwrite the existing filter with
-  // half-built default data.
+  // EntryExit commit branch (#178.4). Mirrors the raypath branch below: gated
+  // on `g_filter_initial_present || buf_changed` so an untouched OK on a
+  // previously-empty entry does not materialize a default-zero EE filter.
+  // No "empty ≡ nullopt" sentinel for EE — entry=0/exit=0 is a legal config;
+  // users wanting "no filter" must switch back to Raypath and clear there
+  // (matches the raypath-only Remove Filter button scope).
+  if (g_filter_active_type == FilterEditType::kEntryExit) {
+    const bool buf_changed = IsFilterDirty();
+    if (g_filter_initial_present || buf_changed) {
+      FilterConfig out;
+      out.name = g_filter_top.name;
+      out.action = g_filter_top.action;
+      out.sym_p = g_filter_top.sym_p;
+      out.sym_b = g_filter_top.sym_b;
+      out.sym_d = g_filter_top.sym_d;
+      out.param = g_ee_params;
+      entry.filter = out;
+    }
+    return { true, entry != old_entry, entry.filter != old_entry.filter };
+  }
+
+  // Stub-type defensive path: OK button is disabled on stub types (Direction
+  // / Crystal post-#178.4), so this branch is not user-reachable. Leave
+  // entry.filter unchanged so a hypothetical entry into this branch (e.g.
+  // via Immediate-mode commit while a stub is selected) cannot silently
+  // overwrite the existing filter with half-built default data.
   if (g_filter_active_type != FilterEditType::kRaypath) {
     return { true, entry != old_entry, entry.filter != old_entry.filter };
   }
@@ -1381,13 +1417,15 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
     // branch without a dedicated flag.
     bool ok_disabled = false;
     const char* ok_tooltip = nullptr;
-    // Stub-type gate (issue editor-modal-type-selection): three new filter
-    // types render placeholder UI only; OK must be disabled until the user
-    // switches back to Raypath.
-    if (g_filter_active_type != FilterEditType::kRaypath) {
+    // Stub-type gate (issue editor-modal-type-selection / 178.4): Direction
+    // and Crystal still render placeholder UI; Raypath and EntryExit are
+    // interactive. OK is disabled when the active type has no commit path.
+    if (g_filter_active_type != FilterEditType::kRaypath && g_filter_active_type != FilterEditType::kEntryExit) {
       ok_disabled = true;
-      ok_tooltip = "Filter type is not yet implemented — switch to Raypath to commit";
-    } else {
+      ok_tooltip = "Filter type is not yet implemented — switch to Raypath / Entry-Exit to commit";
+    } else if (g_filter_active_type == FilterEditType::kRaypath) {
+      // Raypath validation gate (EntryExit needs no per-field validation —
+      // negative / out-of-range values are clamped at serialization).
       g_raypath_params.raypath_text = g_raypath_buf;
       if (!g_raypath_params.raypath_text.empty()) {
         const auto v = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
