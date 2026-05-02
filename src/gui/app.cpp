@@ -610,6 +610,30 @@ void CalibrateQualityThreshold() {
 }
 
 
+// Whether all filters in the GuiState can be expressed via the C-struct
+// `LUMICE_FilterParam` ABI (single-segment raypath only). When any filter is
+// a non-raypath type or carries multi-segment ';' OR text, DoRun must take
+// the JSON-commit path so SerializeCoreConfig can expand it into core JSON
+// (incl. multi-raypath → ComplexFilterParam composition). See plan §2 默认假设
+// for the locked physical placement of this helper.
+static bool IsTrivialFilterSet(const GuiState& state) {
+  for (const auto& layer : state.layers) {
+    for (const auto& entry : layer.entries) {
+      if (!entry.filter) {
+        continue;
+      }
+      if (!entry.filter->IsRaypath()) {
+        return false;
+      }
+      // Multi-segment OR (';'-separated) — must take JSON path.
+      if (entry.filter->RaypathText().find(';') != std::string::npos) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 void DoRun() {
   if (!g_server) {
     return;
@@ -625,14 +649,29 @@ void DoRun() {
   // and cannot produce new false-positive reuse paths.
   bool expect_rebuild =
       !g_state.last_committed_state.has_value() || g_state.renderer != g_state.last_committed_state->renderer;
+  // JSON path always rebuilds (LUMICE_CommitConfig has no out_reused signal,
+  // and any new filter type triggers a server-side topology change).
+  bool use_json_path = !IsTrivialFilterSet(g_state);
+  if (use_json_path) {
+    expect_rebuild = true;
+  }
   if (expect_rebuild) {
     g_server_poller.Stop();  // Must pause before consumer destruction
   }
 
-  LUMICE_Config config{};
-  FillLumiceConfig(g_state, &config);
   int reused = 0;
-  auto err = LUMICE_CommitConfigStruct(g_server, &config, &reused);
+  LUMICE_ErrorCode err = LUMICE_OK;
+  if (use_json_path) {
+    auto json_str = SerializeCoreConfig(g_state);
+    err = LUMICE_CommitConfig(g_server, json_str.c_str());
+    // JSON path: assume rebuild (no out_reused signal). Set reused=0 so the
+    // downstream branch picks the rebuild path.
+    reused = 0;
+  } else {
+    LUMICE_Config config{};
+    FillLumiceConfig(g_state, &config);
+    err = LUMICE_CommitConfigStruct(g_server, &config, &reused);
+  }
   if (err == LUMICE_OK) {
     g_state.last_committed_state = GuiState::ConfigSnapshot::From(g_state);
     g_state.sim_state = SimState::kSimulating;

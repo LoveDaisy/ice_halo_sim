@@ -16,6 +16,7 @@
 #include <sstream>
 #include <vector>
 
+#include "core/def.hpp"
 #include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/gl_capture.hpp"
@@ -23,6 +24,7 @@
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/preview_renderer.hpp"
+#include "gui/raypath_segments.hpp"
 #include "util/path_utils.hpp"
 
 namespace lumice::gui {
@@ -164,40 +166,177 @@ static json SerializeCrystal(const CrystalConfig& c, int id) {
   return j;
 }
 
+// Compose the action string used by both GUI and core JSON.
+static const char* FilterActionToString(int action) {
+  return action == 0 ? "filter_in" : "filter_out";
+}
+
+// Compose the symmetry string ("PBD"-subset) used by both GUI and core JSON.
+static std::string FilterSymmetryToString(const FilterConfig& f) {
+  std::string sym;
+  if (f.sym_p) {
+    sym += "P";
+  }
+  if (f.sym_b) {
+    sym += "B";
+  }
+  if (f.sym_d) {
+    sym += "D";
+  }
+  return sym;
+}
+
+// GUI .lmc payload: per-filter JSON object.
+//
+// Schema v=2 introduces a `type` discriminator; v=1 callers wrote raypath_text
+// directly. Reader (ParseFilterFromGuiJson) defaults missing `type` to raypath
+// for backward compatibility.
 static json SerializeFilterForGui(const FilterConfig& f, int id) {
   json j;
   j["id"] = id;
   if (!f.name.empty()) {
     j["name"] = f.name;
   }
-  j["action"] = f.action == 0 ? "filter_in" : "filter_out";
-  j["raypath_text"] = f.IsRaypath() ? f.RaypathText() : std::string{};
+  j["action"] = FilterActionToString(f.action);
   j["sym_p"] = f.sym_p;
   j["sym_b"] = f.sym_b;
   j["sym_d"] = f.sym_d;
+
+  std::visit(
+      [&j](const auto& p) {
+        using T = std::decay_t<decltype(p)>;
+        if constexpr (std::is_same_v<T, RaypathParams>) {
+          j["type"] = "raypath";
+          j["raypath_text"] = p.raypath_text;
+        } else if constexpr (std::is_same_v<T, EntryExitParams>) {
+          j["type"] = "entry_exit";
+          j["entry"] = p.entry;
+          j["exit"] = p.exit;
+        } else if constexpr (std::is_same_v<T, DirectionParams>) {
+          j["type"] = "direction";
+          j["az"] = p.az;
+          j["el"] = p.el;
+          j["radii"] = p.radii;
+        } else if constexpr (std::is_same_v<T, CrystalParams>) {
+          j["type"] = "crystal";
+          j["crystal_id"] = p.crystal_id;
+        }
+      },
+      f.param);
+
   return j;
 }
 
-static json SerializeFilterForCore(const FilterConfig& f, int id) {
+// Result of expanding a single GUI FilterConfig into one or more core JSON
+// filter entries. `main_id` is the id the scattering entry should reference
+// (== last id emitted for multi-raypath OR; == base id for trivial cases).
+//
+// TU-local (file_io.cpp internal) — see plan §3 default assumption #IsTrivialFilterSet
+// pattern: helpers consumed only by SerializeCoreConfig stay private.
+struct FilterCoreResult {
+  int main_id;
+  std::vector<json> filters;
+};
+
+// Build a single simple-filter JSON entry (any of raypath/entry_exit/direction/crystal).
+template <class FillFn>
+static json BuildCoreSimpleFilterJson(const FilterConfig& f, int id, const char* type_name, FillFn fill) {
   json j;
   j["id"] = id;
-  j["type"] = "raypath";
-  j["action"] = f.action == 0 ? "filter_in" : "filter_out";
-
-  j["raypath"] = ParseRaypathText(f.IsRaypath() ? f.RaypathText() : std::string{});
-
-  std::string sym;
-  if (f.sym_p)
-    sym += "P";
-  if (f.sym_b)
-    sym += "B";
-  if (f.sym_d)
-    sym += "D";
+  j["type"] = type_name;
+  j["action"] = FilterActionToString(f.action);
+  std::string sym = FilterSymmetryToString(f);
   if (!sym.empty()) {
     j["symmetry"] = sym;
   }
-
+  fill(j);
   return j;
+}
+
+// Clamp a GUI int to the core IdType range and warn on overflow.
+static int ClampIdValue(int v, const char* field_name) {
+  if (v < 0) {
+    GUI_LOG_WARNING("[Filter] {} = {} clamped to 0 (IdType range [0, {}])", field_name, v,
+                    std::numeric_limits<IdType>::max());
+    return 0;
+  }
+  int max_id = static_cast<int>(std::numeric_limits<IdType>::max());
+  if (v > max_id) {
+    GUI_LOG_WARNING("[Filter] {} = {} clamped to {} (IdType range [0, {}])", field_name, v, max_id, max_id);
+    return max_id;
+  }
+  return v;
+}
+
+// Translate a GUI FilterConfig into one or more core JSON filter entries.
+//
+// raypath: single-segment → 1 simple raypath; multi-segment (';' OR) → N simple
+//          raypaths + 1 complex referencing them (composition: nested arrays of
+//          ids; see plan F3/F5).
+// entry_exit/direction/crystal: 1 simple filter of the matching type.
+// next_filter_id_base: caller's id counter; result.main_id = next_filter_id_base + filters.size() - 1
+//                      (matters only for multi-raypath where main_id is the complex filter's id).
+static FilterCoreResult SerializeFilterForCore(const FilterConfig& f, int next_filter_id_base) {
+  FilterCoreResult result;
+  result.main_id = next_filter_id_base;
+
+  std::visit(
+      [&](const auto& p) {
+        using T = std::decay_t<decltype(p)>;
+        if constexpr (std::is_same_v<T, RaypathParams>) {
+          // Multi-segment OR: emit N simple raypaths + 1 complex referencing them.
+          auto segs = ParseRaypathTextMultiSegment(p.raypath_text);
+          if (segs.size() <= 1) {
+            // Single-segment (incl. empty text → empty raypath array).
+            int id = next_filter_id_base;
+            result.filters.push_back(BuildCoreSimpleFilterJson(
+                f, id, "raypath", [&](json& j) { j["raypath"] = segs.empty() ? std::vector<int>{} : segs[0]; }));
+            result.main_id = id;
+          } else {
+            std::vector<int> child_ids;
+            child_ids.reserve(segs.size());
+            for (size_t i = 0; i < segs.size(); ++i) {
+              int id = next_filter_id_base + static_cast<int>(i);
+              child_ids.push_back(id);
+              result.filters.push_back(
+                  BuildCoreSimpleFilterJson(f, id, "raypath", [&](json& j) { j["raypath"] = segs[i]; }));
+            }
+            int complex_id = next_filter_id_base + static_cast<int>(segs.size());
+            // Build composition as nested-array form [[id1],[id2],...] — matches
+            // ConfigManager two-pass parser (see plan F5).
+            json composition = json::array();
+            for (int cid : child_ids) {
+              composition.push_back(json::array({ cid }));
+            }
+            result.filters.push_back(BuildCoreSimpleFilterJson(
+                f, complex_id, "complex", [&composition](json& j) { j["composition"] = composition; }));
+            result.main_id = complex_id;
+          }
+        } else if constexpr (std::is_same_v<T, EntryExitParams>) {
+          int id = next_filter_id_base;
+          result.filters.push_back(BuildCoreSimpleFilterJson(f, id, "entry_exit", [&](json& j) {
+            j["entry"] = ClampIdValue(p.entry, "entry");
+            j["exit"] = ClampIdValue(p.exit, "exit");
+          }));
+          result.main_id = id;
+        } else if constexpr (std::is_same_v<T, DirectionParams>) {
+          int id = next_filter_id_base;
+          result.filters.push_back(BuildCoreSimpleFilterJson(f, id, "direction", [&](json& j) {
+            j["az"] = p.az;
+            j["el"] = p.el;
+            j["radii"] = p.radii;
+          }));
+          result.main_id = id;
+        } else if constexpr (std::is_same_v<T, CrystalParams>) {
+          int id = next_filter_id_base;
+          result.filters.push_back(BuildCoreSimpleFilterJson(
+              f, id, "crystal", [&](json& j) { j["crystal_id"] = ClampIdValue(p.crystal_id, "crystal_id"); }));
+          result.main_id = id;
+        }
+      },
+      f.param);
+
+  return result;
 }
 
 static AxisDistType ParseAxisDistType(const std::string& t) {
@@ -374,17 +513,41 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
 
 // ========== GUI JSON Filter Helper ==========
 // Shared between new-format and old-format .lmc deserialization paths.
-// Both paths use identical JSON keys: name, action, raypath_text, sym_p, sym_b, sym_d.
+// v=2 payload introduces a `type` discriminator; missing type defaults to
+// "raypath" so v=1 .lmc files (and any external JSON without a type) still
+// load as the raypath alternative with the same field semantics as before.
 
 static FilterConfig ParseFilterFromGuiJson(const json& jf) {
   FilterConfig f;
   f.name = jf.value("name", std::string{});
   auto action_str = jf.value("action", "filter_in");
   f.action = (action_str == "filter_out") ? 1 : 0;
-  f.param = RaypathParams{ jf.value("raypath_text", std::string{}) };
   f.sym_p = jf.value("sym_p", FilterConfig{}.sym_p);
   f.sym_b = jf.value("sym_b", FilterConfig{}.sym_b);
   f.sym_d = jf.value("sym_d", FilterConfig{}.sym_d);
+
+  std::string type = jf.value("type", "raypath");
+  if (type == "raypath") {
+    f.param = RaypathParams{ jf.value("raypath_text", std::string{}) };
+  } else if (type == "entry_exit") {
+    EntryExitParams p;
+    p.entry = jf.value("entry", 0);
+    p.exit = jf.value("exit", 0);
+    f.param = p;
+  } else if (type == "direction") {
+    DirectionParams p;
+    p.az = jf.value("az", 0.0f);
+    p.el = jf.value("el", 0.0f);
+    p.radii = jf.value("radii", 0.0f);
+    f.param = p;
+  } else if (type == "crystal") {
+    CrystalParams p;
+    p.crystal_id = jf.value("crystal_id", 0);
+    f.param = p;
+  } else {
+    GUI_LOG_WARNING("[FileIO] Unknown filter type '{}', defaulting to raypath", type);
+    f.param = RaypathParams{ jf.value("raypath_text", std::string{}) };
+  }
   return f;
 }
 
@@ -435,10 +598,12 @@ std::string SerializeCoreConfig(const GuiState& state) {
 
       // Filter: only if present
       if (entry.filter) {
-        int fid = next_filter_id++;
-        auto jf = SerializeFilterForCore(*entry.filter, fid);
-        root["filter"].push_back(jf);
-        je["filter"] = fid;
+        auto fr = SerializeFilterForCore(*entry.filter, next_filter_id);
+        for (auto& jf : fr.filters) {
+          root["filter"].push_back(jf);
+        }
+        next_filter_id += static_cast<int>(fr.filters.size());
+        je["filter"] = fr.main_id;
       }
 
       jl["entries"].push_back(je);
@@ -526,12 +691,18 @@ static void FillCrystalParam(const CrystalConfig& c, int id, LUMICE_CrystalParam
   FillAxisDist(c.roll, &dst->roll);
 }
 
-// Helper: fill a LUMICE_FilterParam from GUI FilterConfig with a given ID
+// Helper: fill a LUMICE_FilterParam from GUI FilterConfig with a given ID.
+// PRECONDITION: caller must ensure the filter is a single-segment raypath
+// (IsTrivialFilterSet() is true for the whole GuiState). For non-raypath types
+// or multi-segment raypath, the caller must take the JSON commit path
+// (LUMICE_CommitConfig + SerializeCoreConfig) instead. The C struct path lacks
+// the ABI to express those types; routing them here would silently lose data.
 static void FillFilterParam(const FilterConfig& f, int id, LUMICE_FilterParam* dst) {
+  assert(f.IsRaypath() && "FillFilterParam called on non-raypath filter (route via SerializeCoreConfig instead)");
   dst->id = id;
   dst->action = f.action;
   dst->symmetry = (f.sym_p ? 1 : 0) | (f.sym_b ? 2 : 0) | (f.sym_d ? 4 : 0);
-  auto rp = ParseRaypathText(f.IsRaypath() ? f.RaypathText() : std::string{});
+  auto rp = ParseRaypathText(f.RaypathText());
   dst->raypath_count = static_cast<int>(std::min(rp.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RAYPATH_LEN)));
   for (int k = 0; k < dst->raypath_count; k++) {
     dst->raypath[k] = rp[k];
@@ -645,26 +816,54 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
   if (root.contains("filter") && root["filter"].is_array()) {
     for (auto& jf : root["filter"]) {
       auto type_str = jf.value("type", "");
-      if (type_str != "raypath")
+      // `complex` filters are skipped on import: GUI does not consume composite
+      // OR-of-AND structures from external JSON. Multi-segment raypath OR is a
+      // GUI-side authoring concept that's expanded into core JSON on commit,
+      // not the other way around.
+      if (type_str == "complex") {
+        GUI_LOG_WARNING("[FileIO] Core JSON 'complex' filter ignored on import (GUI does not consume complex sources)");
         continue;
+      }
       FilterConfig f;
       int id = jf.value("id", 0);
       f.name = jf.value("name", std::string{});
       auto action_str = jf.value("action", "filter_in");
       f.action = (action_str == "filter_out") ? 1 : 0;
-      if (jf.contains("raypath") && jf["raypath"].is_array()) {
-        std::string text;
-        for (size_t i = 0; i < jf["raypath"].size(); i++) {
-          if (i > 0)
-            text += kRaypathSepStr;
-          text += std::to_string(jf["raypath"][i].get<int>());
-        }
-        f.param = RaypathParams{ text };
-      }
       auto sym = jf.value("symmetry", "");
       f.sym_p = (sym.find('P') != std::string::npos);
       f.sym_b = (sym.find('B') != std::string::npos);
       f.sym_d = (sym.find('D') != std::string::npos);
+
+      if (type_str == "raypath" || type_str.empty()) {
+        std::string text;
+        if (jf.contains("raypath") && jf["raypath"].is_array()) {
+          for (size_t i = 0; i < jf["raypath"].size(); i++) {
+            if (i > 0) {
+              text += kRaypathSepStr;
+            }
+            text += std::to_string(jf["raypath"][i].get<int>());
+          }
+        }
+        f.param = RaypathParams{ text };
+      } else if (type_str == "entry_exit") {
+        EntryExitParams p;
+        p.entry = jf.value("entry", 0);
+        p.exit = jf.value("exit", 0);
+        f.param = p;
+      } else if (type_str == "direction") {
+        DirectionParams p;
+        p.az = jf.value("az", 0.0f);
+        p.el = jf.value("el", 0.0f);
+        p.radii = jf.value("radii", 0.0f);
+        f.param = p;
+      } else if (type_str == "crystal") {
+        CrystalParams p;
+        p.crystal_id = jf.value("crystal_id", 0);
+        f.param = p;
+      } else {
+        GUI_LOG_WARNING("[FileIO] Unknown filter type '{}' on core JSON import, defaulting to empty raypath", type_str);
+        f.param = RaypathParams{};
+      }
       filter_map[id] = f;
     }
   }
@@ -847,6 +1046,11 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   // Normalization mode (display preference)
   root["norm_mode"] = state.norm_mode;
 
+  // Schema version (added in v=2 along with the filter `type` discriminator).
+  // Loader is tolerant of missing field (defaults to v=1 fallback path); this
+  // is a future-proofing signal, not a load gate (see plan §2 设计点 7).
+  root["schema_version"] = 2;
+
   return root.dump(2);
 }
 
@@ -1021,7 +1225,12 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
 // tex_size: uint64
 
 static constexpr uint32_t kLmcMagic = 0x00434D4C;  // "LMC\0" as little-endian uint32
-static constexpr uint32_t kLmcVersion = 1;
+// v=1 → v=2 bump introduced the FilterConfig variant + per-filter `type` field.
+// v=1 files are still loadable via the fallback path in LoadLmcFile (filter
+// payload silently defaults to type="raypath", matching the pre-variant
+// layout). v=2 files cannot be read by older binaries (they reject any
+// version != kLmcVersion). See plan §3 兼容性策略.
+static constexpr uint32_t kLmcVersion = 2;
 static constexpr uint32_t kLmcHeaderSize = 44;
 static constexpr uint32_t kLmcFlagHasTexture = 0x1;
 
@@ -1128,10 +1337,17 @@ bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector
     return false;
   }
 
-  if (version != kLmcVersion) {
-    GUI_LOG_ERROR("[LMC] Unsupported version: {}", version);
+  if (version > kLmcVersion) {
+    GUI_LOG_ERROR("[LMC] File version {} is newer than supported version {}", version, kLmcVersion);
     return false;
   }
+  if (version < 1) {
+    GUI_LOG_ERROR("[LMC] Invalid version: {}", version);
+    return false;
+  }
+  // v=1 files are read via the same DeserializeGuiStateJson path: the parser is
+  // tolerant of missing `type` field (defaults to "raypath") and missing
+  // `schema_version` (treated as v=1 fallback). No separate code path needed.
 
   // Read JSON
   std::string json_payload(json_size, '\0');
