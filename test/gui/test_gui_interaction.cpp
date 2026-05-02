@@ -2970,4 +2970,183 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_GT(gui::kActiveCardBorder, style.ChildBorderSize);
     };
   }
+
+  // ============================================================
+  // p2_filter_type — task-editor-modal-type-selection (issue 178.3)
+  //
+  // Filter modal acquires a type discriminator (Raypath / Entry-Exit /
+  // Direction / Crystal). The latter three render placeholder UI only and
+  // disable the modal-level OK button until the user switches back to
+  // Raypath. Multi-segment raypath OR (";"-separated) is the new validator;
+  // the Action control switched from Combo to two RadioButtons.
+  // ============================================================
+
+  // T1 — type radio is visible: all 4 type RadioButtons exist after opening
+  // the Filter tab.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_type_radio_visible");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      IM_CHECK(ctx->ItemExists("**/Raypath##filter_type"));
+      IM_CHECK(ctx->ItemExists("**/Entry-Exit##filter_type"));
+      IM_CHECK(ctx->ItemExists("**/Direction##filter_type"));
+      IM_CHECK(ctx->ItemExists("**/Crystal##filter_type"));
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // T2 — switching to a stub type hides the Raypath sub-panel; switching
+  // back re-renders it. Dispatch is by widget existence rather than disabled
+  // state because the stub branch renders a TextDisabled placeholder, not
+  // the InputText.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_type_switch_dispatches_subpanel");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Default = Raypath: InputText is rendered.
+      IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
+
+      // Switch to Entry-Exit: InputText is no longer rendered.
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
+
+      // Switch back to Raypath: InputText reappears.
+      ctx->ItemClick("**/Raypath##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // T3 — selecting a stub type disables the modal-level OK button; switching
+  // back to Raypath re-enables it.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_type_stub_disables_ok");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Default = Raypath, empty raypath: OK is enabled (empty → nullopt path).
+      auto info_default = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_default.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Switch to a stub type: OK becomes disabled.
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      auto info_stub = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_stub.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // Switch back to Raypath: OK is enabled again.
+      ctx->ItemClick("**/Raypath##filter_type");
+      ctx->Yield(2);
+      auto info_back = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_back.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // T4 — Action is now two RadioButtons (was Combo). Selecting "Filter Out"
+  // and OK must commit action=1 to entry.filter.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_action_radio_commits_value");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield();
+      ctx->ItemClick("**/Filter Out##filter_action");
+      ctx->Yield();
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].filter->action, 1);
+    };
+  }
+
+  // T5 — Multi-segment OR (";") flows end-to-end through the modal: a
+  // semicolon-separated raypath validates as kValid and round-trips into
+  // entry.filter unchanged.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_multi_raypath_or_e2e_via_modal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-5; 1-3");
+      ctx->Yield(2);  // run validator one frame, OK gate one more
+
+      // OK must be enabled (multi-segment validates kValid).
+      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-5; 1-3");
+    };
+  }
+
+  // T6 — Per-type buffer isolation: typing a raypath, switching to a stub
+  // type, then switching back must preserve the raypath text. End-to-end
+  // probe via OK commit (the InputText backing buffer is not externed, so
+  // assertion is on entry.filter after OK).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_per_type_buffer_isolated");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield(2);
+
+      // Switch away (Raypath sub-panel un-renders) and back.
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Raypath##filter_type");
+      ctx->Yield(2);
+
+      // Sub-panel re-renders; OK now reachable. Commit and verify the
+      // raypath text survived the round-trip.
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
+    };
+  }
 }

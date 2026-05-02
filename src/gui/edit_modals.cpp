@@ -17,6 +17,7 @@
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
+#include "gui/raypath_segments.hpp"
 #include "gui/window_sizing.hpp"
 #include "imgui.h"
 
@@ -82,16 +83,43 @@ static bool g_pending_tab_select = false;
 // Edit buffers
 static CrystalConfig g_crystal_buf;
 static AxisDist g_axis_buf[3];  // zenith, azimuth, roll
-static FilterConfig g_filter_buf;
+
+// Filter modal: type discriminator + per-type buffers (issue editor-modal-type-selection).
+// Each FilterEditType keeps its own sub-buffer so switching type is non-destructive
+// (T6 contract: "切到 EE 再切回 raypath, 之前输入仍在"). Commit assembles a
+// FilterConfig from g_filter_top (shared fields) + active type's sub-buffer.
+enum class FilterEditType { kRaypath = 0, kEntryExit = 1, kDirection = 2, kCrystal = 3 };
+static FilterEditType g_filter_active_type = FilterEditType::kRaypath;
+static FilterEditType g_filter_active_type_snapshot = FilterEditType::kRaypath;
+
+// Shared filter fields (name / action / sym_*) — uses FilterConfig as the
+// container so existing operator== works, but the `param` field is never
+// mutated: it stays at default-constructed RaypathParams{} in both g_filter_top
+// and its snapshot, so equality reduces to the shared fields only. Per-type
+// payloads live in the dedicated *_params buffers below.
+static FilterConfig g_filter_top;
+static FilterConfig g_filter_top_snapshot;
+
+// Per-type sub-buffers — switching type is non-destructive (each retains state).
+static RaypathParams g_raypath_params;
+static EntryExitParams g_ee_params;
+static DirectionParams g_dir_params;
+static CrystalParams g_crystal_params;
+static RaypathParams g_raypath_params_snapshot;
+static EntryExitParams g_ee_params_snapshot;
+static DirectionParams g_dir_params_snapshot;
+static CrystalParams g_crystal_params_snapshot;
+
+// ImGui InputText backing store for the raypath text input. The raypath
+// sub-buffer's raypath_text is synced FROM this char array (canonical source)
+// at every commit / dirty-compare site (mirrors the pre-task convention).
 static char g_raypath_buf[256];
-// Snapshot of g_filter_buf at modal open + initial presence flag. Used by
-// ApplyBuffersToEntry to decide whether to write entry.filter at all: when the
-// entry had no filter originally AND the user did not touch any field, OK
-// must leave entry.filter as nullopt (otherwise default-constructed values
-// like sym_p=b=d=true would silently turn into a "* In PBD" filter that
-// blocks all rays). Combined with the "empty raypath → nullopt" commit rule
-// this also closes the "Remove button" path without a separate state bit.
-static FilterConfig g_filter_buf_snapshot;
+
+// Initial-present flag captured at modal open. Used by ApplyBuffersToEntry so
+// an untouched OK on a previously-empty filter does not silently materialize a
+// default-constructed filter into entry.filter. Combined with the "empty
+// raypath → nullopt" commit rule this also closes the "Remove button" path
+// without a separate state bit.
 static bool g_filter_initial_present = false;
 
 // Snapshots captured on OpenEditModal for per-tab dirty-mark computation.
@@ -227,11 +255,15 @@ namespace {
 // Any new edit-buffer field added in the future must be appended here AND
 // in ApplyBuffersToEntry to keep the dirty-compare / commit paths symmetric.
 void SnapshotAllBuffers(const GuiState& state) {
-  // Sync UI raypath char buffer back into g_filter_buf before snapshotting,
-  // so g_filter_buf_snapshot.raypath_text reflects the current edit state
-  // (FilterConfig::operator== compares raypath_text; plan F10 detail).
-  g_filter_buf.MutableRaypathText() = g_raypath_buf;
-  g_filter_buf_snapshot = g_filter_buf;
+  // Sync UI raypath char buffer back into the raypath sub-buffer before
+  // snapshotting, so the snapshot reflects the current edit state.
+  g_raypath_params.raypath_text = g_raypath_buf;
+  g_filter_top_snapshot = g_filter_top;
+  g_raypath_params_snapshot = g_raypath_params;
+  g_ee_params_snapshot = g_ee_params;
+  g_dir_params_snapshot = g_dir_params;
+  g_crystal_params_snapshot = g_crystal_params;
+  g_filter_active_type_snapshot = g_filter_active_type;
   g_crystal_buf_snapshot = g_crystal_buf;
   g_axis_buf_snapshot[0] = g_axis_buf[0];
   g_axis_buf_snapshot[1] = g_axis_buf[1];
@@ -309,8 +341,35 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_axis_buf[0] = entry.crystal.zenith;
   g_axis_buf[1] = entry.crystal.azimuth;
   g_axis_buf[2] = entry.crystal.roll;
-  g_filter_buf = entry.filter.value_or(FilterConfig{});
-  snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_filter_buf.RaypathText().c_str());
+  // Filter buffers: split top-level shared fields and per-type sub-buffer.
+  // `entry.filter.value_or(FilterConfig{})` defaults to a Raypath alternative
+  // with empty text — preserves the pre-task semantics for nullopt entries.
+  const FilterConfig src = entry.filter.value_or(FilterConfig{});
+  g_filter_top = FilterConfig{};
+  g_filter_top.name = src.name;
+  g_filter_top.action = src.action;
+  g_filter_top.sym_p = src.sym_p;
+  g_filter_top.sym_b = src.sym_b;
+  g_filter_top.sym_d = src.sym_d;
+  // Reset all per-type buffers to defaults; load the active alternative.
+  g_raypath_params = {};
+  g_ee_params = {};
+  g_dir_params = {};
+  g_crystal_params = {};
+  if (std::holds_alternative<RaypathParams>(src.param)) {
+    g_raypath_params = std::get<RaypathParams>(src.param);
+    g_filter_active_type = FilterEditType::kRaypath;
+  } else if (std::holds_alternative<EntryExitParams>(src.param)) {
+    g_ee_params = std::get<EntryExitParams>(src.param);
+    g_filter_active_type = FilterEditType::kEntryExit;
+  } else if (std::holds_alternative<DirectionParams>(src.param)) {
+    g_dir_params = std::get<DirectionParams>(src.param);
+    g_filter_active_type = FilterEditType::kDirection;
+  } else if (std::holds_alternative<CrystalParams>(src.param)) {
+    g_crystal_params = std::get<CrystalParams>(src.param);
+    g_filter_active_type = FilterEditType::kCrystal;
+  }
+  snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_raypath_params.raypath_text.c_str());
   // Snapshot the dirty-compare baseline (Crystal/Axis/Filter buffers +
   // filter_initial_present). Trackball save is initialized separately below —
   // it's Open-time state, not snapshot.
@@ -571,24 +630,20 @@ static void RenderAxisModal(GuiState& /*state*/) {
 // Filter Modal
 // ============================================================
 
-static void RenderFilterModal(GuiState& /*state*/) {
-  // Validation kind is derived from g_crystal_buf (the in-flight buffer of the
-  // Crystal tab) rather than the entry, because the user may switch the type
-  // in the Crystal tab before committing — the validator should match what
-  // will actually be written on OK.
-  const lumice::CrystalKind kind =
-      (g_crystal_buf.type == CrystalType::kPrism) ? lumice::CrystalKind::kPrism : lumice::CrystalKind::kPyramid;
+// Validation kind is derived from g_crystal_buf (the in-flight buffer of the
+// Crystal tab) rather than the entry, because the user may switch crystal type
+// before committing — the validator should match what will actually be written
+// on OK. Hoisted out of RenderFilterModal so the raypath sub-panel and the
+// modal-level OK gate can share the helper.
+static lumice::CrystalKind FilterValidationKind() {
+  return (g_crystal_buf.type == CrystalType::kPrism) ? lumice::CrystalKind::kPrism : lumice::CrystalKind::kPyramid;
+}
 
-  // Action combo. SetNextComboPopupTopMost: see RenderAxisModal for rationale.
-  SetNextComboPopupTopMost();
-  ImGui::Combo("Action##filter_modal", &g_filter_buf.action, kFilterActionNames, kFilterActionCount);
-
-  // Raypath text input with validation color feedback.
-  // g_filter_buf is a detached copy of the filter; it is only written back to
-  // the entry on OK (see below), so non-kValid input cannot leak into the
-  // model via sibling dirty triggers.
-  g_filter_buf.MutableRaypathText() = g_raypath_buf;
-  const auto result = ValidateRaypathText(g_filter_buf.RaypathText(), kind);
+static void RenderRaypathSubpanel() {
+  // Sync InputText backing buffer into the raypath sub-buffer before validation
+  // so the displayed hint reflects the current edit state.
+  g_raypath_params.raypath_text = g_raypath_buf;
+  const auto result = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, FilterValidationKind());
   const auto validation = result.state;
 
   ImVec4 border_color;
@@ -604,15 +659,16 @@ static void RenderFilterModal(GuiState& /*state*/) {
       break;
   }
 
+  // Row 1: Raypath text input (top-emphasized).
   ImGui::PushStyleColor(ImGuiCol_FrameBg,
                         ImVec4(border_color.x * 0.3f, border_color.y * 0.3f, border_color.z * 0.3f, 0.5f));
   ImGui::InputText("Raypath##filter_modal", g_raypath_buf, sizeof(g_raypath_buf));
   ImGui::PopStyleColor();
 
-  // Validation hint
+  // Validation hint immediately under the InputText.
   switch (validation) {
     case RaypathValidation::kValid:
-      if (g_filter_buf.RaypathText().empty()) {
+      if (g_raypath_params.raypath_text.empty()) {
         ImGui::TextDisabled("No raypath filter (match all)");
       } else {
         ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "Valid");
@@ -623,30 +679,121 @@ static void RenderFilterModal(GuiState& /*state*/) {
       break;
     case RaypathValidation::kInvalid: {
       const char* msg = result.message.empty() ? "Invalid raypath" : result.message.c_str();
-      ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "%s", msg);
+      // TextWrapped so multi-segment "Segment N: ..." messages don't overflow
+      // the modal's narrow vertical layout.
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
+      ImGui::TextWrapped("%s", msg);
+      ImGui::PopStyleColor();
       break;
     }
   }
 
-  // Symmetry checkboxes
-  ImGui::Checkbox("P##filter_modal", &g_filter_buf.sym_p);
-  ImGui::SameLine();
-  ImGui::Checkbox("B##filter_modal", &g_filter_buf.sym_b);
-  ImGui::SameLine();
-  ImGui::Checkbox("D##filter_modal", &g_filter_buf.sym_d);
+  // Multi-raypath OR hint (issue range item 3): clarify the new ';'-separated syntax.
+  ImGui::TextDisabled("e.g. 3-5 or 3-5; 1-3");
+}
 
-  ImGui::Spacing();
-  // Remove Filter — a plain edit action equivalent to the user backspacing the
-  // raypath textbox to empty. action / sym_p / sym_b / sym_d are intentionally
-  // preserved so a subsequent re-type of a raypath keeps the user's P/B/D
-  // preferences; the "empty raypath → nullopt" rule inside ApplyBuffersToEntry
-  // is what actually drops the filter from the entry on commit.
+static void RenderEntryExitStub() {
+  ImGui::TextDisabled("Entry-Exit filter — coming soon");
+}
+
+static void RenderDirectionStub() {
+  ImGui::TextDisabled("Direction filter — coming soon");
+}
+
+static void RenderCrystalFilterStub() {
+  ImGui::TextDisabled("Crystal filter — coming soon");
+}
+
+// Shared filter controls (Action radio + P/B/D), rendered after the
+// type-specific dispatch. Always uses g_filter_top so type switches don't
+// reset shared user preferences.
+static void RenderSharedFilterControls() {
+  // Action: two RadioButtons (was Combo pre-task; aligns with Crystal tab style).
+  if (ImGui::RadioButton("Filter In##filter_action", g_filter_top.action == 0)) {
+    g_filter_top.action = 0;
+  }
+  ImGui::SameLine();
+  if (ImGui::RadioButton("Filter Out##filter_action", g_filter_top.action == 1)) {
+    g_filter_top.action = 1;
+  }
+
+  ImGui::Checkbox("P##filter_modal", &g_filter_top.sym_p);
+  ImGui::SameLine();
+  ImGui::Checkbox("B##filter_modal", &g_filter_top.sym_b);
+  ImGui::SameLine();
+  ImGui::Checkbox("D##filter_modal", &g_filter_top.sym_d);
+}
+
+// Remove Filter button — clears the raypath InputText backing buffer.
+// Disabled when the raypath is empty; further wrapped in BeginDisabled(true)
+// when active type is a stub (the outer dispatch wrapper handles that).
+static void RenderRemoveFilterButton() {
   const bool raypath_empty = (g_raypath_buf[0] == '\0');
   ImGui::BeginDisabled(raypath_empty);
   if (ImGui::Button("Remove Filter##filter", ImVec2(120, 0))) {
     g_raypath_buf[0] = '\0';
-    g_filter_buf.MutableRaypathText().clear();
+    g_raypath_params.raypath_text.clear();
   }
+  ImGui::EndDisabled();
+}
+
+static void RenderFilterModal(GuiState& /*state*/) {
+  // Type radio — 4 options, SameLine horizontal (style-aligned with Crystal
+  // tab's Prism/Pyramid radios). On vertical layout (~360px) we keep all four
+  // on one row; no runtime adaptive wrap to avoid extra test dimensions.
+  int t = static_cast<int>(g_filter_active_type);
+  if (ImGui::RadioButton("Raypath##filter_type", &t, 0)) {
+    g_filter_active_type = FilterEditType::kRaypath;
+  }
+  ImGui::SameLine();
+  if (ImGui::RadioButton("Entry-Exit##filter_type", &t, 1)) {
+    g_filter_active_type = FilterEditType::kEntryExit;
+  }
+  ImGui::SameLine();
+  if (ImGui::RadioButton("Direction##filter_type", &t, 2)) {
+    g_filter_active_type = FilterEditType::kDirection;
+  }
+  ImGui::SameLine();
+  if (ImGui::RadioButton("Crystal##filter_type", &t, 3)) {
+    g_filter_active_type = FilterEditType::kCrystal;
+  }
+
+  ImGui::Spacing();
+
+  // Stub types render the entire body inside BeginDisabled(true) so the user
+  // immediately sees that nothing below is interactive (B1: 整段灰显). The
+  // OK button at the modal level gets a parallel disable path in
+  // RenderEditModals so the user cannot commit a stub-type filter.
+  const bool is_stub = (g_filter_active_type != FilterEditType::kRaypath);
+  ImGui::BeginDisabled(is_stub);
+
+  // Type-specific dispatch.
+  switch (g_filter_active_type) {
+    case FilterEditType::kRaypath:
+      RenderRaypathSubpanel();
+      break;
+    case FilterEditType::kEntryExit:
+      RenderEntryExitStub();
+      break;
+    case FilterEditType::kDirection:
+      RenderDirectionStub();
+      break;
+    case FilterEditType::kCrystal:
+      RenderCrystalFilterStub();
+      break;
+  }
+
+  ImGui::Spacing();
+
+  // Shared controls (Action radio + P/B/D).
+  RenderSharedFilterControls();
+
+  ImGui::Spacing();
+
+  // Remove Filter — only meaningful for raypath; nested BeginDisabled is fine
+  // (ImGui treats it as a logical OR of the disable stack).
+  RenderRemoveFilterButton();
+
   ImGui::EndDisabled();
 
   // OK / Cancel handled at modal level (RenderEditModals).
@@ -687,8 +834,18 @@ void ResetModalState() {
   g_axis_buf[0] = {};
   g_axis_buf[1] = {};
   g_axis_buf[2] = {};
-  g_filter_buf = {};
-  g_filter_buf_snapshot = {};
+  g_filter_top = {};
+  g_filter_top_snapshot = {};
+  g_filter_active_type = FilterEditType::kRaypath;
+  g_filter_active_type_snapshot = FilterEditType::kRaypath;
+  g_raypath_params = {};
+  g_ee_params = {};
+  g_dir_params = {};
+  g_crystal_params = {};
+  g_raypath_params_snapshot = {};
+  g_ee_params_snapshot = {};
+  g_dir_params_snapshot = {};
+  g_crystal_params_snapshot = {};
   g_filter_initial_present = false;
   g_raypath_buf[0] = '\0';
   std::memset(g_saved_rotation, 0, sizeof(g_saved_rotation));
@@ -701,9 +858,10 @@ void ResetModalState() {
 namespace {
 
 // Validation kind based on the in-flight Crystal-tab buffer (not the entry),
-// because the user may switch crystal type before committing.
+// because the user may switch crystal type before committing. Shares the
+// implementation with FilterValidationKind via simple delegation.
 lumice::CrystalKind CurrentValidationKind() {
-  return (g_crystal_buf.type == CrystalType::kPrism) ? lumice::CrystalKind::kPrism : lumice::CrystalKind::kPyramid;
+  return FilterValidationKind();
 }
 
 // Result of applying edit buffers back to the entry. Used by both commit paths
@@ -739,19 +897,36 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   entry.crystal.zenith = g_axis_buf[0];
   entry.crystal.azimuth = g_axis_buf[1];
   entry.crystal.roll = g_axis_buf[2];
-  // Sync the ImGui InputText backing buffer back into the struct before any
-  // commit decision; g_raypath_buf is the canonical source for the raypath
-  // text (see plan §F6 — this sync pattern is mirrored at L205/L513/L911/OK
-  // gating).
-  g_filter_buf.MutableRaypathText() = g_raypath_buf;
-  if (g_filter_buf.RaypathText().empty()) {
+  // Sync the ImGui InputText backing buffer back into the raypath sub-buffer
+  // before any commit decision; g_raypath_buf is the canonical source for the
+  // raypath text. Mirrors the dirty-compare pattern in RenderEditModals.
+  g_raypath_params.raypath_text = g_raypath_buf;
+
+  // Stub-type defensive path: OK button is disabled on stub types, so this
+  // branch is not user-reachable. Leave entry.filter unchanged so a
+  // hypothetical entry into this branch (e.g. via Immediate-mode commit while
+  // a stub is selected) cannot silently overwrite the existing filter with
+  // half-built default data.
+  if (g_filter_active_type != FilterEditType::kRaypath) {
+    return { true, entry != old_entry, entry.filter != old_entry.filter };
+  }
+
+  // Buffer-changed predicate covers all per-type sub-buffers + active_type +
+  // top fields, so cross-type edits (typing in EE then switching back) are
+  // correctly recognized as "buffer touched".
+  const bool buf_changed = (g_filter_active_type != g_filter_active_type_snapshot) ||
+                           (g_filter_top != g_filter_top_snapshot) || (g_raypath_params != g_raypath_params_snapshot) ||
+                           (g_ee_params != g_ee_params_snapshot) || (g_dir_params != g_dir_params_snapshot) ||
+                           (g_crystal_params != g_crystal_params_snapshot);
+
+  if (g_raypath_params.raypath_text.empty()) {
     // Empty raypath ≡ "no filter" at the UI layer (the Remove button is just
     // a shortcut for "backspace the textbox empty"). This also subsumes the
     // old "Remove intent" path and the default-PBD leak: a default-constructed
     // FilterConfig has empty raypath, so untouched no-filter entries stay
     // nullopt here.
     entry.filter = std::nullopt;
-  } else if (g_filter_initial_present || g_filter_buf != g_filter_buf_snapshot) {
+  } else if (g_filter_initial_present || buf_changed) {
     // Model-layer invariant: FilterConfig must never hold an invalid raypath,
     // regardless of commit mode. Staged mode already enforces this via the OK
     // button's disabled gate (ok_disabled check on the Staged OK path);
@@ -759,10 +934,19 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     // invalid text, so the guard here is the single model-layer gate that
     // makes the invariant hold in both modes. kIncomplete is treated same as
     // kInvalid — matches the Staged OK disjunction `v.state != kValid`,
-    // preventing half-typed input from poisoning the renderer.
-    auto v = ValidateRaypathText(g_filter_buf.RaypathText(), CurrentValidationKind());
+    // preventing half-typed input from poisoning the renderer. Multi-segment
+    // OR (";") is supported via ValidateRaypathTextMultiSegment.
+    auto v = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
     if (v.state == RaypathValidation::kValid) {
-      entry.filter = g_filter_buf;
+      // Materialize FilterConfig from top fields + active raypath sub-buffer.
+      FilterConfig out;
+      out.name = g_filter_top.name;
+      out.action = g_filter_top.action;
+      out.sym_p = g_filter_top.sym_p;
+      out.sym_b = g_filter_top.sym_b;
+      out.sym_d = g_filter_top.sym_d;
+      out.param = g_raypath_params;
+      entry.filter = out;
     }
   }
   return { true, entry != old_entry, entry.filter != old_entry.filter };
@@ -1064,17 +1248,18 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   // can vary ("Crystal" vs "Crystal *") without changing the tab's hash
   // (otherwise the tab would lose its SelectedTabId the moment dirty flips,
   // falling back to the first tab and hiding the user's work-in-progress).
-  FilterConfig filter_cmp = g_filter_buf;
-  filter_cmp.MutableRaypathText() = g_raypath_buf;
-  // filter_dirty uses the in-flight buffer vs its open-time snapshot. Remove
-  // button just clears g_raypath_buf, so filter_cmp.raypath_text ("") diverges
-  // from snapshot (which holds the original raypath_text) and the * mark
-  // lights up. A snapshot with empty raypath that the user leaves empty
-  // stays equal, so dirty remains false — no false-positive mark.
+  // filter_dirty: any of the per-type buffers, top-level shared fields, or
+  // the active type discriminator differs from its open-time snapshot. Sync
+  // the InputText backing first so post-keystroke / post-Remove diffs are
+  // reflected on the same frame.
+  g_raypath_params.raypath_text = g_raypath_buf;
   const bool crystal_dirty = g_crystal_buf != g_crystal_buf_snapshot;
   const bool axis_dirty = g_axis_buf[0] != g_axis_buf_snapshot[0] || g_axis_buf[1] != g_axis_buf_snapshot[1] ||
                           g_axis_buf[2] != g_axis_buf_snapshot[2];
-  const bool filter_dirty = filter_cmp != g_filter_buf_snapshot;
+  const bool filter_dirty = (g_filter_active_type != g_filter_active_type_snapshot) ||
+                            (g_filter_top != g_filter_top_snapshot) ||
+                            (g_raypath_params != g_raypath_params_snapshot) || (g_ee_params != g_ee_params_snapshot) ||
+                            (g_dir_params != g_dir_params_snapshot) || (g_crystal_params != g_crystal_params_snapshot);
   // Immediate mode: changes apply every frame, so "dirty" is not a meaningful
   // state — suppress the * mark on all tabs regardless of buffer vs snapshot.
   const bool show_dirty = !state.modal_immediate_mode;
@@ -1150,12 +1335,20 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
     // branch without a dedicated flag.
     bool ok_disabled = false;
     const char* ok_tooltip = nullptr;
-    g_filter_buf.MutableRaypathText() = g_raypath_buf;
-    if (!g_filter_buf.RaypathText().empty()) {
-      const auto v = ValidateRaypathText(g_filter_buf.RaypathText(), CurrentValidationKind());
-      if (v.state != RaypathValidation::kValid) {
-        ok_disabled = true;
-        ok_tooltip = "Filter raypath invalid — fix it in the Filter tab";
+    // Stub-type gate (issue editor-modal-type-selection): three new filter
+    // types render placeholder UI only; OK must be disabled until the user
+    // switches back to Raypath.
+    if (g_filter_active_type != FilterEditType::kRaypath) {
+      ok_disabled = true;
+      ok_tooltip = "Filter type is not yet implemented — switch to Raypath to commit";
+    } else {
+      g_raypath_params.raypath_text = g_raypath_buf;
+      if (!g_raypath_params.raypath_text.empty()) {
+        const auto v = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
+        if (v.state != RaypathValidation::kValid) {
+          ok_disabled = true;
+          ok_tooltip = "Filter raypath invalid — fix it in the Filter tab";
+        }
       }
     }
 
