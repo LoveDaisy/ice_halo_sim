@@ -87,6 +87,8 @@ std::string FilterSummarySuffix(const FilterConfig& fc) {
   return suffix;
 }
 
+}  // namespace
+
 // Generate filter summary text from filter config.
 //
 // Format dispatched by FilterParamVariant alternative:
@@ -99,6 +101,12 @@ std::string FilterSummarySuffix(const FilterConfig& fc) {
 // test_gui_interaction "1-2-3-4-5-6-..." case stays bit-exact. Other types
 // emit short prefixes that fit comfortably without truncation; if they ever
 // need truncation, add it per-type.
+//
+// Externally linked (declared in panels.hpp) so unit / GUI tests can assert
+// the rendered summary string directly. Implementation depends on
+// FilterSummarySuffix above (file-internal helper) — this is fine even
+// though the helper sits inside an anonymous namespace closed just above:
+// both live in the same TU.
 std::string FilterSummary(const std::optional<FilterConfig>& f) {
   if (!f.has_value()) {
     return "None";
@@ -132,6 +140,8 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
 
   return body + FilterSummarySuffix(fc);
 }
+
+namespace {
 
 // Helper: wrap ImGui control and mark dirty on change
 #define DIRTY_IF(expr) \

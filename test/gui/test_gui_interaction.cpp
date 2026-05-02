@@ -11,6 +11,7 @@
 // convention block at the top of src/gui/app_panels.cpp. Any ImGui upgrade
 // that alters either rule must update both that comment and the
 // p1_layout / p1_edit_modal z-order assertions below.
+#include "gui/panels.hpp"  // FilterSummary declaration (also re-exposes gui_state.hpp transitively)
 #include "imgui_internal.h"
 #include "test_gui_shared.hpp"  // declares g_enable_log_panel (toggle gate for RenderLogPanel)
 
@@ -3301,6 +3302,14 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(f.sym_p);
       IM_CHECK(f.sym_b);
       IM_CHECK(f.sym_d);
+
+      // AC-4: FilterSummary EE format spec is "EE:<entry>→<exit> <In|Out>[ <sym>]"
+      // (panels.cpp:119-120 EE branch). Direct string assertion — independent of
+      // SerializeCoreConfig (which exercises a different code path). The "→" is
+      // the UTF-8 RIGHTWARDS ARROW (U+2192) emitted as "\xe2\x86\x92".
+      IM_CHECK_STR_EQ(gui::FilterSummary(gui::g_state.layers[0].entries[0].filter).c_str(),
+                      "EE:2\xe2\x86\x92"
+                      "5 Out PBD");
     };
   }
 

@@ -970,8 +970,13 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   g_raypath_params.raypath_text = g_raypath_buf;
 
   // EntryExit commit branch (#178.4). Mirrors the raypath branch below: gated
-  // on `g_filter_initial_present || buf_changed` so an untouched OK on a
-  // previously-empty entry does not materialize a default-zero EE filter.
+  // on `g_filter_initial_present || buf_changed`.
+  // NOTE: Selecting the Entry-Exit RadioButton sets buf_changed=true (via
+  // `g_filter_active_type != snapshot` inside IsFilterDirty), so the path
+  // "open a filterless entry → switch to EE → OK without typing" always
+  // commits a default-zero EE filter. The guard's actual function here is to
+  // suppress a re-commit when the user reopens an existing EE entry and
+  // presses OK without modifying any field.
   // No "empty ≡ nullopt" sentinel for EE — entry=0/exit=0 is a legal config;
   // users wanting "no filter" must switch back to Raypath and clear there
   // (matches the raypath-only Remove Filter button scope).
