@@ -67,34 +67,70 @@ std::string AxisPresetName(const CrystalConfig& c) {
 }
 
 namespace {
+
+// Append " <In|Out>[ <sym>]" suffix shared by every filter type's summary.
+std::string FilterSummarySuffix(const FilterConfig& fc) {
+  std::string suffix = (fc.action == 0) ? " In" : " Out";
+  std::string sym;
+  if (fc.sym_p) {
+    sym += "P";
+  }
+  if (fc.sym_b) {
+    sym += "B";
+  }
+  if (fc.sym_d) {
+    sym += "D";
+  }
+  if (!sym.empty()) {
+    suffix += " " + sym;
+  }
+  return suffix;
+}
+
 // Generate filter summary text from filter config.
+//
+// Format dispatched by FilterParamVariant alternative:
+//   - Raypath:    "<raypath_text or *> <In|Out>[ <sym>]"        (e.g. "3-1-5 In PBD")
+//   - EntryExit:  "EE:<entry>→<exit> <In|Out>[ <sym>]"
+//   - Direction:  "DIR:<az>°/<el>° r=<radii>° <In|Out>[ <sym>]"
+//   - Crystal:    "CR:#<id> <In|Out>[ <sym>]"
+//
+// 12-character truncation is preserved for the raypath body so the existing
+// test_gui_interaction "1-2-3-4-5-6-..." case stays bit-exact. Other types
+// emit short prefixes that fit comfortably without truncation; if they ever
+// need truncation, add it per-type.
 std::string FilterSummary(const std::optional<FilterConfig>& f) {
   if (!f.has_value()) {
     return "None";
   }
   const auto& fc = f.value();
-  // Format: "<raypath_text or *> <In|Out>[ <sym>]". Example: "1-3 In PBD".
-  std::string result;
-  if (fc.raypath_text.size() > 12) {
-    result = fc.raypath_text.substr(0, 12) + "...";
-  } else if (!fc.raypath_text.empty()) {
-    result = fc.raypath_text;
-  } else {
-    result = "*";
-  }
-  result += (fc.action == 0) ? " In" : " Out";
 
-  std::string sym;
-  if (fc.sym_p)
-    sym += "P";
-  if (fc.sym_b)
-    sym += "B";
-  if (fc.sym_d)
-    sym += "D";
-  if (!sym.empty()) {
-    result += " " + sym;
-  }
-  return result;
+  std::string body = std::visit(
+      [](const auto& p) -> std::string {
+        using T = std::decay_t<decltype(p)>;
+        if constexpr (std::is_same_v<T, RaypathParams>) {
+          if (p.raypath_text.empty()) {
+            return "*";
+          }
+          if (p.raypath_text.size() > 12) {
+            return p.raypath_text.substr(0, 12) + "...";
+          }
+          return p.raypath_text;
+        } else if constexpr (std::is_same_v<T, EntryExitParams>) {
+          return "EE:" + std::to_string(p.entry) + "\xe2\x86\x92" + std::to_string(p.exit);
+        } else if constexpr (std::is_same_v<T, DirectionParams>) {
+          char buf[64];
+          snprintf(buf, sizeof(buf), "DIR:%g\xc2\xb0/%g\xc2\xb0 r=%g\xc2\xb0", p.az, p.el, p.radii);
+          return buf;
+        } else if constexpr (std::is_same_v<T, CrystalParams>) {
+          return "CR:#" + std::to_string(p.crystal_id);
+        } else {
+          return "*";
+        }
+      },
+      fc.param);
+
+  return body + FilterSummarySuffix(fc);
 }
 
 // Helper: wrap ImGui control and mark dirty on change

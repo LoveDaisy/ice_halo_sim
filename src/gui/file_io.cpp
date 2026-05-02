@@ -171,7 +171,7 @@ static json SerializeFilterForGui(const FilterConfig& f, int id) {
     j["name"] = f.name;
   }
   j["action"] = f.action == 0 ? "filter_in" : "filter_out";
-  j["raypath_text"] = f.raypath_text;
+  j["raypath_text"] = f.IsRaypath() ? f.RaypathText() : std::string{};
   j["sym_p"] = f.sym_p;
   j["sym_b"] = f.sym_b;
   j["sym_d"] = f.sym_d;
@@ -184,7 +184,7 @@ static json SerializeFilterForCore(const FilterConfig& f, int id) {
   j["type"] = "raypath";
   j["action"] = f.action == 0 ? "filter_in" : "filter_out";
 
-  j["raypath"] = ParseRaypathText(f.raypath_text);
+  j["raypath"] = ParseRaypathText(f.IsRaypath() ? f.RaypathText() : std::string{});
 
   std::string sym;
   if (f.sym_p)
@@ -381,7 +381,7 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
   f.name = jf.value("name", std::string{});
   auto action_str = jf.value("action", "filter_in");
   f.action = (action_str == "filter_out") ? 1 : 0;
-  f.raypath_text = jf.value("raypath_text", FilterConfig{}.raypath_text);
+  f.param = RaypathParams{ jf.value("raypath_text", std::string{}) };
   f.sym_p = jf.value("sym_p", FilterConfig{}.sym_p);
   f.sym_b = jf.value("sym_b", FilterConfig{}.sym_b);
   f.sym_d = jf.value("sym_d", FilterConfig{}.sym_d);
@@ -531,7 +531,7 @@ static void FillFilterParam(const FilterConfig& f, int id, LUMICE_FilterParam* d
   dst->id = id;
   dst->action = f.action;
   dst->symmetry = (f.sym_p ? 1 : 0) | (f.sym_b ? 2 : 0) | (f.sym_d ? 4 : 0);
-  auto rp = ParseRaypathText(f.raypath_text);
+  auto rp = ParseRaypathText(f.IsRaypath() ? f.RaypathText() : std::string{});
   dst->raypath_count = static_cast<int>(std::min(rp.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RAYPATH_LEN)));
   for (int k = 0; k < dst->raypath_count; k++) {
     dst->raypath[k] = rp[k];
@@ -659,7 +659,7 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
             text += kRaypathSepStr;
           text += std::to_string(jf["raypath"][i].get<int>());
         }
-        f.raypath_text = text;
+        f.param = RaypathParams{ text };
       }
       auto sym = jf.value("symmetry", "");
       f.sym_p = (sym.find('P') != std::string::npos);

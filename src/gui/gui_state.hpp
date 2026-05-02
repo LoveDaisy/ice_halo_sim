@@ -2,10 +2,12 @@
 #define LUMICE_GUI_STATE_HPP
 
 #include <algorithm>
+#include <cassert>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 #include "gui/gui_constants.hpp"
@@ -212,26 +214,93 @@ constexpr int kFilterActionCount = 2;
 constexpr char kRaypathSep = '-';
 constexpr const char* kRaypathSepStr = "-";
 
-// GUI-only data structure: raypath filter configuration.
+// GUI-only filter parameter sub-structs, mirroring core
+// `lumice::SimpleFilterParam` alternatives. See data-model-and-serialization
+// task plan §"数据形态" for the explicit core ↔ GUI field-name mapping.
+
+struct RaypathParams {
+  // Dash- or comma-separated face indices; ';'-separated multi-segment OR
+  // (e.g. "3-5; 1-3"). See raypath_segments.hpp for the parser/validator.
+  std::string raypath_text;
+
+  friend bool operator==(const RaypathParams& a, const RaypathParams& b) { return a.raypath_text == b.raypath_text; }
+  friend bool operator!=(const RaypathParams& a, const RaypathParams& b) { return !(a == b); }
+};
+
+struct EntryExitParams {
+  // GUI ints; clamped to [0, IdType max] by the core conversion layer.
+  int entry = 0;
+  int exit = 0;
+
+  friend bool operator==(const EntryExitParams& a, const EntryExitParams& b) {
+    return a.entry == b.entry && a.exit == b.exit;
+  }
+  friend bool operator!=(const EntryExitParams& a, const EntryExitParams& b) { return !(a == b); }
+};
+
+struct DirectionParams {
+  // Maps to core DirectionFilterParam.lon_/lat_/radii_ (azimuth/elevation/radius, degrees).
+  float az = 0.0f;
+  float el = 0.0f;
+  float radii = 0.0f;
+
+  friend bool operator==(const DirectionParams& a, const DirectionParams& b) {
+    return a.az == b.az && a.el == b.el && a.radii == b.radii;
+  }
+  friend bool operator!=(const DirectionParams& a, const DirectionParams& b) { return !(a == b); }
+};
+
+struct CrystalParams {
+  int crystal_id = 0;
+
+  friend bool operator==(const CrystalParams& a, const CrystalParams& b) { return a.crystal_id == b.crystal_id; }
+  friend bool operator!=(const CrystalParams& a, const CrystalParams& b) { return !(a == b); }
+};
+
+using FilterParamVariant = std::variant<RaypathParams, EntryExitParams, DirectionParams, CrystalParams>;
+
+// GUI-only data structure: filter configuration.
+//
+// Top-level fields (name/action/sym_*) apply to all filter types; per-type
+// data lives inside `param`. Default-constructed FilterConfig holds a
+// Raypath alternative with empty text (the "no filter" state of pre-variant
+// builds).
 struct FilterConfig {
   std::string name;
-  int action = 0;            // 0=filter_in, 1=filter_out
-  std::string raypath_text;  // Dash-separated int list, e.g. "3-1-5-7-4"; comma also accepted for back-compat
+  int action = 0;  // 0=filter_in, 1=filter_out
   bool sym_p = true;
   bool sym_b = true;
   bool sym_d = true;
+  FilterParamVariant param = RaypathParams{};
+
+  // Convenience accessors. The g_filter_buf in edit_modals.cpp is guaranteed
+  // (within the data-model-and-serialization task scope) to always hold a
+  // RaypathParams alternative — type-switching UI is deferred to the next
+  // sub-task. These helpers concentrate the std::get<> calls so callsites stay
+  // readable and the assert fires near the misuse rather than deep inside
+  // libc++.
+  bool IsRaypath() const { return std::holds_alternative<RaypathParams>(param); }
+  const std::string& RaypathText() const {
+    assert(IsRaypath() && "FilterConfig::RaypathText() called on non-raypath alternative");
+    return std::get<RaypathParams>(param).raypath_text;
+  }
+  std::string& MutableRaypathText() {
+    assert(IsRaypath() && "FilterConfig::MutableRaypathText() called on non-raypath alternative");
+    return std::get<RaypathParams>(param).raypath_text;
+  }
 
   // Used by edit_modals.cpp to detect whether the user actually modified the
   // filter buffer (so an untouched OK on a previously-empty filter doesn't
   // silently materialize a default-constructed filter into entry.filter).
   //
   // ⚠️ When adding a new field above, also:
-  //   1. Compare it here in operator==
-  //   2. Update file_io.cpp serialization (Serialize/ParseFilterFromGuiJson)
+  //   1. Compare it here in operator== (variant `param` is compared as a unit)
+  //   2. Update file_io.cpp serialization (SerializeFilterForGui/ParseFilterFromGuiJson)
   //   3. Update edit_modals.cpp Filter tab UI to expose it
+  //   4. Update FilterParamVariant alternatives if a new filter type is added
   friend bool operator==(const FilterConfig& a, const FilterConfig& b) {
-    return a.name == b.name && a.action == b.action && a.raypath_text == b.raypath_text && a.sym_p == b.sym_p &&
-           a.sym_b == b.sym_b && a.sym_d == b.sym_d;
+    return a.name == b.name && a.action == b.action && a.sym_p == b.sym_p && a.sym_b == b.sym_b && a.sym_d == b.sym_d &&
+           a.param == b.param;
   }
   friend bool operator!=(const FilterConfig& a, const FilterConfig& b) { return !(a == b); }
 };

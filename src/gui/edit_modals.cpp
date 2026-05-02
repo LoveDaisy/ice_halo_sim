@@ -230,7 +230,7 @@ void SnapshotAllBuffers(const GuiState& state) {
   // Sync UI raypath char buffer back into g_filter_buf before snapshotting,
   // so g_filter_buf_snapshot.raypath_text reflects the current edit state
   // (FilterConfig::operator== compares raypath_text; plan F10 detail).
-  g_filter_buf.raypath_text = g_raypath_buf;
+  g_filter_buf.MutableRaypathText() = g_raypath_buf;
   g_filter_buf_snapshot = g_filter_buf;
   g_crystal_buf_snapshot = g_crystal_buf;
   g_axis_buf_snapshot[0] = g_axis_buf[0];
@@ -310,7 +310,7 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_axis_buf[1] = entry.crystal.azimuth;
   g_axis_buf[2] = entry.crystal.roll;
   g_filter_buf = entry.filter.value_or(FilterConfig{});
-  snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_filter_buf.raypath_text.c_str());
+  snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_filter_buf.RaypathText().c_str());
   // Snapshot the dirty-compare baseline (Crystal/Axis/Filter buffers +
   // filter_initial_present). Trackball save is initialized separately below —
   // it's Open-time state, not snapshot.
@@ -587,8 +587,8 @@ static void RenderFilterModal(GuiState& /*state*/) {
   // g_filter_buf is a detached copy of the filter; it is only written back to
   // the entry on OK (see below), so non-kValid input cannot leak into the
   // model via sibling dirty triggers.
-  g_filter_buf.raypath_text = g_raypath_buf;
-  const auto result = ValidateRaypathText(g_filter_buf.raypath_text, kind);
+  g_filter_buf.MutableRaypathText() = g_raypath_buf;
+  const auto result = ValidateRaypathText(g_filter_buf.RaypathText(), kind);
   const auto validation = result.state;
 
   ImVec4 border_color;
@@ -612,7 +612,7 @@ static void RenderFilterModal(GuiState& /*state*/) {
   // Validation hint
   switch (validation) {
     case RaypathValidation::kValid:
-      if (g_filter_buf.raypath_text.empty()) {
+      if (g_filter_buf.RaypathText().empty()) {
         ImGui::TextDisabled("No raypath filter (match all)");
       } else {
         ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "Valid");
@@ -645,7 +645,7 @@ static void RenderFilterModal(GuiState& /*state*/) {
   ImGui::BeginDisabled(raypath_empty);
   if (ImGui::Button("Remove Filter##filter", ImVec2(120, 0))) {
     g_raypath_buf[0] = '\0';
-    g_filter_buf.raypath_text.clear();
+    g_filter_buf.MutableRaypathText().clear();
   }
   ImGui::EndDisabled();
 
@@ -743,8 +743,8 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   // commit decision; g_raypath_buf is the canonical source for the raypath
   // text (see plan §F6 — this sync pattern is mirrored at L205/L513/L911/OK
   // gating).
-  g_filter_buf.raypath_text = g_raypath_buf;
-  if (g_filter_buf.raypath_text.empty()) {
+  g_filter_buf.MutableRaypathText() = g_raypath_buf;
+  if (g_filter_buf.RaypathText().empty()) {
     // Empty raypath ≡ "no filter" at the UI layer (the Remove button is just
     // a shortcut for "backspace the textbox empty"). This also subsumes the
     // old "Remove intent" path and the default-PBD leak: a default-constructed
@@ -760,7 +760,7 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     // makes the invariant hold in both modes. kIncomplete is treated same as
     // kInvalid — matches the Staged OK disjunction `v.state != kValid`,
     // preventing half-typed input from poisoning the renderer.
-    auto v = ValidateRaypathText(g_filter_buf.raypath_text, CurrentValidationKind());
+    auto v = ValidateRaypathText(g_filter_buf.RaypathText(), CurrentValidationKind());
     if (v.state == RaypathValidation::kValid) {
       entry.filter = g_filter_buf;
     }
@@ -1065,7 +1065,7 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   // (otherwise the tab would lose its SelectedTabId the moment dirty flips,
   // falling back to the first tab and hiding the user's work-in-progress).
   FilterConfig filter_cmp = g_filter_buf;
-  filter_cmp.raypath_text = g_raypath_buf;
+  filter_cmp.MutableRaypathText() = g_raypath_buf;
   // filter_dirty uses the in-flight buffer vs its open-time snapshot. Remove
   // button just clears g_raypath_buf, so filter_cmp.raypath_text ("") diverges
   // from snapshot (which holds the original raypath_text) and the * mark
@@ -1150,9 +1150,9 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
     // branch without a dedicated flag.
     bool ok_disabled = false;
     const char* ok_tooltip = nullptr;
-    g_filter_buf.raypath_text = g_raypath_buf;
-    if (!g_filter_buf.raypath_text.empty()) {
-      const auto v = ValidateRaypathText(g_filter_buf.raypath_text, CurrentValidationKind());
+    g_filter_buf.MutableRaypathText() = g_raypath_buf;
+    if (!g_filter_buf.RaypathText().empty()) {
+      const auto v = ValidateRaypathText(g_filter_buf.RaypathText(), CurrentValidationKind());
       if (v.state != RaypathValidation::kValid) {
         ok_disabled = true;
         ok_tooltip = "Filter raypath invalid — fix it in the Filter tab";

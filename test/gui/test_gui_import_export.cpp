@@ -138,7 +138,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       entry0.crystal.roll = gui::AxisDist{ gui::AxisDistType::kLaplacian, 5.0f, 2.0f };
       entry0.proportion = 75.0f;
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       entry0.filter = f;
 
       // Add a second entry
@@ -181,7 +181,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded0.crystal.roll.std, 2.0f);
       IM_CHECK_EQ(loaded0.proportion, 75.0f);
       IM_CHECK(loaded0.filter.has_value());
-      IM_CHECK_EQ(loaded0.filter->raypath_text, std::string("3-1-5"));
+      IM_CHECK_EQ(loaded0.filter->RaypathText(), std::string("3-1-5"));
 
       auto& loaded1 = gui::g_state.layers[0].entries[1];
       IM_CHECK_EQ(loaded1.crystal.type, gui::CrystalType::kPrism);

@@ -173,7 +173,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Programmatically set a filter so we can test clearing it
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       gui::g_state.layers[0].entries[0].filter = f;
 
       // Verify filter is set
@@ -206,7 +206,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       gui::g_state.layers[0].entries[0].filter = f;
 
       ctx->ItemClick("**/Edit##fi");
@@ -246,7 +246,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       f.sym_p = true;
       f.sym_b = false;  // <-- non-default; reset would flip it to true.
       f.sym_d = true;
@@ -263,7 +263,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
       IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_p == true);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_b == false);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_d == true);
@@ -280,7 +280,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       f.sym_p = true;
       f.sym_b = false;
       f.sym_d = true;
@@ -295,7 +295,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
       IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_p == true);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_b == false);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_d == true);
@@ -312,7 +312,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.raypath_text = "1-3";
+      f.param = gui::RaypathParams{ "1-3" };
       gui::g_state.layers[0].entries[0].filter = f;
       ctx->Yield();
 
@@ -326,7 +326,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
     };
   }
 
@@ -373,7 +373,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       gui::g_state.layers[0].entries[0].filter = f;
       gui::g_state.intensity_locked = false;
       ctx->Yield();
@@ -585,7 +585,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Stage a filter on the entry so Remove Filter is a real change.
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       gui::g_state.layers[0].entries[0].filter = f;
       // "finite rays just finished" snapshot state.
       gui::g_state.sim_state = gui::GuiState::SimState::kDone;
@@ -703,7 +703,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue("**/Raypath##filter_modal", "3-1");
       ctx->Yield(2);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1");
 
       // kInvalid: pure non-numeric "abc" — syntactically invalid.
       ctx->ItemInputValue("**/Raypath##filter_modal", "abc");
@@ -721,7 +721,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       }
       // L2 + L3: guard intercepted — entry.filter preserved at last valid.
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1");
 
       // kIncomplete: trailing separator "3-" — syntactically incomplete per
       // ValidateRaypathText rules. Guard treats same as kInvalid (Staged OK
@@ -736,14 +736,14 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
         IM_CHECK((info_rm.ItemFlags & ImGuiItemFlags_Disabled) == 0);
       }
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1");
 
       // Valid recovery: a fresh valid raypath must commit normally, proving
       // the guard does not wedge the entry permanently after a rejection.
       ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
       ctx->Yield(2);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
 
       // Empty → nullopt (161.2 rule unchanged by this task).
       ctx->ItemInputValue("**/Raypath##filter_modal", "");
@@ -900,7 +900,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Filter is now populated on the entry (committed by the switch).
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
       // Filter tab controls still accessible — tab selection survived.
       IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
 
@@ -2235,7 +2235,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
 
       // Pre-register a filter on the first entry so StartPerfSimulation's DoRun commits with it
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       gui::g_state.layers[0].entries[0].filter = f;
 
       StartPerfSimulation();
@@ -2264,7 +2264,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       auto baseline = gui::g_state.texture_upload_count;
 
       // Act: change filter raypath, mark filter dirty, commit
-      gui::g_state.layers[0].entries[0].filter->raypath_text = "3-1-5-7";
+      gui::g_state.layers[0].entries[0].filter->MutableRaypathText() = "3-1-5-7";
       gui::g_state.MarkFilterDirty();
       gui::DoRun();
 
@@ -2588,7 +2588,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       // Filter must now exist with the typed raypath.
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text, std::string("1-3"));
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText(), std::string("1-3"));
     };
   }
 
