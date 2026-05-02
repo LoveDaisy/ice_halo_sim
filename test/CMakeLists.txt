@@ -24,6 +24,7 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_render_config.cpp"
   "${PROJ_TEST_DIR}/test_rng.cpp"
   "${PROJ_TEST_DIR}/test_filter.cpp"
+  "${PROJ_TEST_DIR}/test_raypath_segments.cpp"
   "${PROJ_TEST_DIR}/test_optics.cpp"
   "${PROJ_TEST_DIR}/test_sim_data.cpp"
   "${PROJ_TEST_DIR}/test_simulator.cpp"
