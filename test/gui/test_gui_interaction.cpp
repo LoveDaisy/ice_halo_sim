@@ -3196,4 +3196,153 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
     };
   }
+
+  // ============================================================
+  // p2_filter_type — task-per-type-entry-exit (issue 178.4)
+  //
+  // Entry-Exit type goes from stub to interactive: 2 InputInt controls
+  // (Entry/Exit face id), OK button enabled, commit assembles
+  // EntryExitParams into entry.filter. Per-type buffer isolation contract
+  // (#178.3 T6) extends to switching between EE and Direction.
+  // ============================================================
+
+  // T8 — Entry-Exit subpanel renders 2 InputInt controls when EE type is
+  // active; switching to other types hides them, switching back re-renders.
+  // (Does NOT assert "untouched OK = no-op": clicking the Entry-Exit radio
+  // already dirties the buffer via active_type != snapshot, so OK after
+  // switch is a real commit by design — covered by T9/T10.)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_subpanel_inputs_visible");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Default = Raypath: EE inputs not present.
+      IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
+
+      // Switch to Entry-Exit: both InputInt items appear, raypath InputText disappears.
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/Entry face id##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/Exit face id##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
+
+      // OK button is enabled on EE (no validation gate, no stub disable).
+      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Switch to Direction (still a stub) → EE inputs un-render, raypath
+      // also stays hidden, and OK becomes disabled (stub gate).
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
+      auto info_stub = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_stub.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // Switch back to Entry-Exit: inputs reappear, OK re-enabled.
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/Entry face id##filter_modal"));
+      auto info_back = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_back.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // T9 — Entry-Exit OK commits filter end-to-end: fill entry/exit, set
+  // Action=Filter Out, OK → entry.filter holds EntryExitParams with the
+  // typed values + action=1. The "PBD" suffix in the asserted FilterSummary
+  // string relies on g_filter_top.sym_p/b/d defaulting to true — see
+  // gui_state.hpp:271-273 (`bool sym_p = true; sym_b = true; sym_d = true;`).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_ok_commits_filter");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+
+      // ItemInputValue accepts string for InputInt — ImGui parses on Enter.
+      // Path A (current): pass decimal string. Path B fallback (if Path A
+      // fails to materialize the value, asserted by entry==0 below): switch
+      // to ctx->ItemInput<int>(...) integer overload — kept as a comment for
+      // future reference; not needed unless this case fails on first run.
+      ctx->ItemInputValue("**/Entry face id##filter_modal", "2");
+      ctx->ItemInputValue("**/Exit face id##filter_modal", "5");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Filter Out##filter_action");
+      ctx->Yield(2);
+
+      // OK must be enabled on EE.
+      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      const auto& f = *gui::g_state.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
+      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK_EQ(ee.entry, 2);
+      IM_CHECK_EQ(ee.exit, 5);
+      IM_CHECK_EQ(f.action, 1);
+      // Default sym_p/b/d = true (gui_state.hpp:271-273), Filter Out → "Out".
+      IM_CHECK(f.sym_p);
+      IM_CHECK(f.sym_b);
+      IM_CHECK(f.sym_d);
+    };
+  }
+
+  // T10 — per-type buffer isolation extends to EE ↔ Direction switch:
+  // type-in EE values, switch to Direction (stub buffer), switch back, OK
+  // → EE values preserved. Validates that #178.3 T6 guarantee (per-type
+  // buffer survives switches) holds for the newly-interactive EE type.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_per_type_buffer_isolated");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/Entry face id##filter_modal", "3");
+      ctx->ItemInputValue("**/Exit face id##filter_modal", "7");
+      ctx->Yield(2);
+
+      // Switch away (Direction is a stub — its sub-buffer should not be
+      // touched by EE inputs).
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      // Verify EE inputs un-rendered while Direction is active.
+      IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
+
+      // Switch back to Entry-Exit; per-type buffer must have retained values.
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/Entry face id##filter_modal"));
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      const auto& f = *gui::g_state.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
+      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK_EQ(ee.entry, 3);
+      IM_CHECK_EQ(ee.exit, 7);
+    };
+  }
 }

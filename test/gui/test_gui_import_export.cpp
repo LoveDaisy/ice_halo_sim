@@ -687,4 +687,66 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(std::get<gui::RaypathParams>(f.param).raypath_text, std::string("3-1-5"));
     };
   }
+
+  // task-per-type-entry-exit (issue 178.4): end-to-end equivalence between
+  // GUI EE filter → SerializeCoreConfig output and a hand-crafted reference
+  // core JSON object. Validates AC-6 (`type` / `action` / `symmetry` /
+  // `entry` / `exit` / `id` field-by-field equality regardless of insertion
+  // order via nlohmann::json::operator==).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "entry_exit_serialize_core_equivalent");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // Build a single-entry GuiState carrying an EntryExitParams filter.
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 1.0f;
+
+      gui::EntryCard e;
+      e.crystal.type = gui::CrystalType::kPrism;
+      e.crystal.height = 1.0f;
+      for (int i = 0; i < 6; ++i) {
+        e.crystal.face_distance[i] = 1.0f;
+      }
+      e.proportion = 100.0f;
+
+      gui::FilterConfig fc;
+      fc.action = 1;     // filter_out
+      fc.sym_p = true;   // → "P" in symmetry suffix
+      fc.sym_b = false;  // omitted
+      fc.sym_d = true;   // → "D"
+      fc.param = gui::EntryExitParams{ /*entry=*/2, /*exit=*/5 };
+      e.filter = fc;
+
+      layer.entries.push_back(e);
+      gui::g_state.layers.push_back(layer);
+
+      const std::string s = gui::SerializeCoreConfig(gui::g_state);
+      IM_CHECK(!s.empty());
+
+      const auto j = nlohmann::json::parse(s);
+      IM_CHECK(j.contains("filter"));
+      IM_CHECK(j["filter"].is_array());
+      IM_CHECK_EQ(static_cast<int>(j["filter"].size()), 1);
+
+      // Field-level assertions (also catches symmetry string ordering bugs).
+      const auto& jf = j["filter"][0];
+      IM_CHECK_STR_EQ(jf["type"].get<std::string>().c_str(), "entry_exit");
+      IM_CHECK_STR_EQ(jf["action"].get<std::string>().c_str(), "filter_out");
+      IM_CHECK_STR_EQ(jf["symmetry"].get<std::string>().c_str(), "PD");
+      IM_CHECK_EQ(jf["entry"].get<int>(), 2);
+      IM_CHECK_EQ(jf["exit"].get<int>(), 5);
+      IM_CHECK_EQ(jf["id"].get<int>(), 1);
+
+      // Whole-object equivalence with hand-crafted reference (json::operator==
+      // is field-set + value equality, insertion-order independent).
+      const nlohmann::json expected = {
+        { "id", 1 },          { "type", "entry_exit" }, { "action", "filter_out" },
+        { "symmetry", "PD" }, { "entry", 2 },           { "exit", 5 },
+      };
+      IM_CHECK(jf == expected);
+    };
+  }
 }
