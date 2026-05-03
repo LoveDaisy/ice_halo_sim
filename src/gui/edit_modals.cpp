@@ -761,7 +761,7 @@ static void RenderCrystalSubpanel(const GuiState& state) {
   // helper definition (lines 287-313) for the rationale and maintenance
   // contract.
   SetNextComboPopupTopMost();
-  if (ImGui::BeginCombo("Crystal##filter_modal", preview)) {
+  if (ImGui::BeginCombo("Crystal##filter_crystal_combo", preview)) {
     for (int i = 0; i < n; ++i) {
       char label[96];
       const auto& nm = layer.entries[i].crystal.name;
