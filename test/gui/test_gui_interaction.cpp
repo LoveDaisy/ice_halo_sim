@@ -3034,39 +3034,9 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // T3 — selecting a stub type disables the modal-level OK button; switching
-  // back to Raypath re-enables it.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_type_stub_disables_ok");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-
-      // Default = Raypath, empty raypath: OK is enabled (empty → nullopt path).
-      auto info_default = ctx->ItemInfo("**/OK##edit_modal");
-      IM_CHECK((info_default.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
-      // Switch to a stub type: OK becomes disabled. Crystal is the remaining
-      // stub post-#178.5 (Direction is now interactive); migrating from
-      // Direction → Crystal preserves the original assertion intent.
-      ctx->ItemClick("**/Crystal##filter_type");
-      ctx->Yield(2);
-      auto info_stub = ctx->ItemInfo("**/OK##edit_modal");
-      IM_CHECK((info_stub.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-
-      // Switch back to Raypath: OK is enabled again.
-      ctx->ItemClick("**/Raypath##filter_type");
-      ctx->Yield(2);
-      auto info_back = ctx->ItemInfo("**/OK##edit_modal");
-      IM_CHECK((info_back.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
-      ctx->ItemClick("**/Cancel##edit_modal");
-      ctx->Yield(2);
-    };
-  }
+  // (T3 removed in #178.6: stub gating no longer exists — all 4 filter types
+  // are interactive after Crystal is implemented. The OK button has no
+  // type-based disable path; the only remaining gate is raypath validation.)
 
   // T4 — Action is now two RadioButtons (was Combo). Selecting "Filter Out"
   // and OK must commit action=1 to entry.filter.
@@ -3153,56 +3123,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // T7 — Immediate mode + stub type does NOT silently overwrite entry.filter.
-  // Closes the gap noted in code-review-01 Major 1: the Immediate per-frame
-  // commit path in CommitAllBuffersImmediate delegates to ApplyBuffersToEntry,
-  // which has an early-return when active_type ≠ kRaypath. Pre-condition:
-  // entry has an existing raypath filter; after entering Immediate and
-  // switching to a stub type, the filter must remain unchanged (proving
-  // the stub guard fires every frame, not just on Staged OK).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_immediate_stub_type_does_not_clobber_filter");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
-      gui::g_state.layers[0].entries[0].filter = f;
-      ctx->Yield();
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-
-      // Enter Immediate mode (close+reopen cycle).
-      ctx->ItemClick("**/Immediate##edit_modal");
-      ctx->Yield(6);
-      ctx->ItemClick("**/###filter_tab");
-      ctx->Yield(2);
-
-      // Switch to a stub type — Immediate per-frame commits would now
-      // attempt to apply buffers each frame; the stub guard inside
-      // ApplyBuffersToEntry must prevent any overwrite of entry.filter.
-      // Crystal is the remaining stub post-#178.5 (Direction is now
-      // interactive — it would commit a default-zero Direction filter and
-      // overwrite the existing raypath filter; that is the designed
-      // behavior, not a bug — so this test now uses Crystal).
-      ctx->ItemClick("**/Crystal##filter_type");
-      ctx->Yield(4);
-
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
-
-      // Switch back to Raypath, close — entry.filter still intact.
-      ctx->ItemClick("**/Raypath##filter_type");
-      ctx->Yield(2);
-      ctx->ItemClick("**/Close##edit_modal");
-      ctx->Yield(2);
-
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
-    };
-  }
+  // (T7 removed in #178.6: stub-type clobber-protection no longer applies —
+  // every filter type now has a real commit path. Switching to Crystal in
+  // Immediate mode commits a default Crystal filter and overwrites any
+  // existing raypath filter on the same entry; that is the designed cross-
+  // type switch behavior, identical to EE↔Direction switches.)
 
   // ============================================================
   // p2_filter_type — task-per-type-entry-exit (issue 178.4)
