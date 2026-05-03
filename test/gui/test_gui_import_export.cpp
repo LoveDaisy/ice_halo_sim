@@ -814,4 +814,162 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(jf == expected);
     };
   }
+
+  // ============================================================
+  // task-per-type-crystal (issue 178.6) — SerializeCoreConfig translates
+  // GUI-side CrystalParams.crystal_id (layer-local 0-based entry index)
+  // into the flat global crystal_id that core JSON expects, using the
+  // sequence assigned by next_crystal_id++ during the scattering pass.
+  // ============================================================
+
+  // crystal_serialize_core_equivalent — multi-entry single-layer scenario:
+  // entry[1].filter references entry[2] via layer-local index 2; flat ids
+  // for the layer are A=1, B=2, C=3 → emitted j["crystal_id"] must be 3.
+  // Validates the §3 D3 / Step 4 translation table.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "crystal_serialize_core_equivalent");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 1.0f;
+      const char* names[3] = { "A", "B", "C" };
+      for (int i = 0; i < 3; ++i) {
+        gui::EntryCard e;
+        e.crystal.type = gui::CrystalType::kPrism;
+        e.crystal.height = 1.0f;
+        e.crystal.name = names[i];
+        for (int k = 0; k < 6; ++k) {
+          e.crystal.face_distance[k] = 1.0f;
+        }
+        e.proportion = 100.0f;
+        layer.entries.push_back(e);
+      }
+      // entry[1].filter points at entry[2] (layer-local). Expected flat
+      // crystal_id = 3 (A=1, B=2, C=3).
+      gui::FilterConfig fc;
+      fc.action = 1;  // filter_out
+      fc.sym_p = true;
+      fc.sym_b = false;
+      fc.sym_d = true;
+      fc.param = gui::CrystalParams{ /*crystal_id=*/2 };
+      layer.entries[1].filter = fc;
+
+      gui::g_state.layers.push_back(layer);
+
+      const std::string s = gui::SerializeCoreConfig(gui::g_state);
+      IM_CHECK(!s.empty());
+      const auto j = nlohmann::json::parse(s);
+      IM_CHECK(j.contains("filter"));
+      IM_CHECK_EQ(static_cast<int>(j["filter"].size()), 1);
+
+      const auto& jf = j["filter"][0];
+      IM_CHECK_STR_EQ(jf["type"].get<std::string>().c_str(), "crystal");
+      IM_CHECK_STR_EQ(jf["action"].get<std::string>().c_str(), "filter_out");
+      IM_CHECK_STR_EQ(jf["symmetry"].get<std::string>().c_str(), "PD");
+      IM_CHECK_EQ(jf["crystal_id"].get<int>(), 3);
+      IM_CHECK_EQ(jf["id"].get<int>(), 1);
+
+      const nlohmann::json expected = {
+        { "id", 1 }, { "type", "crystal" }, { "action", "filter_out" }, { "symmetry", "PD" }, { "crystal_id", 3 },
+      };
+      IM_CHECK(jf == expected);
+    };
+  }
+
+  // crystal_serialize_core_dangling_clamp — out-of-range crystal_id falls
+  // back to layer entry 0's flat id with a warning. Validates §3 D5 and
+  // the SerializeFilterForCore clamp branch.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "crystal_serialize_core_dangling_clamp");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 1.0f;
+      for (int i = 0; i < 2; ++i) {
+        gui::EntryCard e;
+        e.crystal.type = gui::CrystalType::kPrism;
+        e.crystal.height = 1.0f;
+        for (int k = 0; k < 6; ++k) {
+          e.crystal.face_distance[k] = 1.0f;
+        }
+        e.proportion = 100.0f;
+        layer.entries.push_back(e);
+      }
+      gui::FilterConfig fc;
+      fc.action = 0;
+      fc.param = gui::CrystalParams{ /*crystal_id=*/999 };
+      layer.entries[0].filter = fc;
+
+      gui::g_state.layers.push_back(layer);
+
+      const std::string s = gui::SerializeCoreConfig(gui::g_state);
+      const auto j = nlohmann::json::parse(s);
+      IM_CHECK_EQ(static_cast<int>(j["filter"].size()), 1);
+      // 999 is out of range → clamp to layer_flat_cids[0] = entry[0]'s flat
+      // id = 1.
+      IM_CHECK_EQ(j["filter"][0]["crystal_id"].get<int>(), 1);
+    };
+  }
+
+  // crystal_serialize_core_roundtrip_jgti — j > i read-back path: entry[0]
+  // .filter references entry[2] (layer-local 2); after SerializeCoreConfig
+  // → DeserializeFromJson, the restored filter must read back as
+  // crystal_id=2 (NOT 0). This is the regression guard for plan-review
+  // round 1 Major #1: a single-pass DeserializeFromJson would silently
+  // fall back to 0 because entry[2]'s flat crystal_id wouldn't be in the
+  // map yet when entry[0]'s filter is being translated.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "crystal_serialize_core_roundtrip_jgti");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 1.0f;
+      const char* names[3] = { "A", "B", "C" };
+      for (int i = 0; i < 3; ++i) {
+        gui::EntryCard e;
+        e.crystal.type = gui::CrystalType::kPrism;
+        e.crystal.height = 1.0f;
+        e.crystal.name = names[i];
+        for (int k = 0; k < 6; ++k) {
+          e.crystal.face_distance[k] = 1.0f;
+        }
+        e.proportion = 100.0f;
+        layer.entries.push_back(e);
+      }
+      // entry[0].filter → entry[2] (j > i case, layer-local index 2).
+      gui::FilterConfig fc;
+      fc.action = 0;
+      fc.param = gui::CrystalParams{ /*crystal_id=*/2 };
+      layer.entries[0].filter = fc;
+
+      gui::g_state.layers.push_back(layer);
+
+      const std::string s = gui::SerializeCoreConfig(gui::g_state);
+      IM_CHECK(!s.empty());
+      const auto j = nlohmann::json::parse(s);
+      // Sanity: written flat id is 3 (entry[2]'s flat id when names are
+      // serialized in order A=1, B=2, C=3).
+      IM_CHECK_EQ(j["filter"][0]["crystal_id"].get<int>(), 3);
+
+      gui::GuiState restored;
+      gui::DeserializeFromJson(s, restored);
+      IM_CHECK_EQ(static_cast<int>(restored.layers.size()), 1);
+      IM_CHECK_EQ(static_cast<int>(restored.layers[0].entries.size()), 3);
+      IM_CHECK(restored.layers[0].entries[0].filter.has_value());
+      const auto& fv = restored.layers[0].entries[0].filter.value();
+      IM_CHECK(std::holds_alternative<gui::CrystalParams>(fv.param));
+      // Must read back as 2 (layer-local). If the read path were
+      // single-pass, this would silently be 0.
+      IM_CHECK_EQ(std::get<gui::CrystalParams>(fv.param).crystal_id, 2);
+    };
+  }
 }
