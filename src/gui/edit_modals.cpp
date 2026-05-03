@@ -727,8 +727,58 @@ static void RenderDirectionSubpanel() {
   ImGui::InputFloat("Radii\xc2\xb0##filter_modal", &g_dir_params.radii, 0.1f, 1.0f, "%.2f");
 }
 
-static void RenderCrystalFilterStub() {
-  ImGui::TextDisabled("Crystal filter — coming soon");
+// CrystalParams subpanel (#178.6). Renders a single Combo whose options are
+// dynamically pulled from the modal-context layer's entries (each entry has a
+// crystal name; entries with empty name fall back to "(unnamed)"). The Combo
+// writes back into g_crystal_params.crystal_id as a 0-based layer-local entry
+// index — the GUI-internal semantics. SerializeCoreConfig translates this
+// index into a flat global crystal_id when writing core JSON; the .lmc track
+// keeps it as layer-local index (no translation, see plan §3 D3).
+//
+// Dangling refs (crystal_id out of range — typically because the layer was
+// shrunk after the filter was authored) render as "(invalid #N)" preview;
+// the option list is unaffected and the user can re-pick. SerializeCoreConfig
+// independently clamps + warns on out-of-range values (plan §3 D5).
+static void RenderCrystalSubpanel(const GuiState& state) {
+  const int li = g_modal_layer_idx;
+  if (li < 0 || li >= static_cast<int>(state.layers.size())) {
+    ImGui::TextDisabled("(layer index invalid — internal error)");
+    return;
+  }
+  const auto& layer = state.layers[li];
+  const int n = static_cast<int>(layer.entries.size());
+
+  char preview[96];
+  if (g_crystal_params.crystal_id >= 0 && g_crystal_params.crystal_id < n) {
+    const auto& sel_name = layer.entries[g_crystal_params.crystal_id].crystal.name;
+    snprintf(preview, sizeof(preview), "#%d: %s", g_crystal_params.crystal_id,
+             sel_name.empty() ? "(unnamed)" : sel_name.c_str());
+  } else {
+    snprintf(preview, sizeof(preview), "(invalid #%d)", g_crystal_params.crystal_id);
+  }
+
+  // SetNextComboPopupTopMost: detached modal viewport compatibility — see
+  // helper definition (lines 287-313) for the rationale and maintenance
+  // contract.
+  SetNextComboPopupTopMost();
+  if (ImGui::BeginCombo("Crystal##filter_modal", preview)) {
+    for (int i = 0; i < n; ++i) {
+      char label[96];
+      const auto& nm = layer.entries[i].crystal.name;
+      // ##suffix prevents ID collision when two entries share the same
+      // crystal.name (ImGui label hash uses pre-## portion for display, post-##
+      // for ID).
+      snprintf(label, sizeof(label), "#%d: %s##crystal_opt_%d", i, nm.empty() ? "(unnamed)" : nm.c_str(), i);
+      const bool is_selected = (i == g_crystal_params.crystal_id);
+      if (ImGui::Selectable(label, is_selected)) {
+        g_crystal_params.crystal_id = i;
+      }
+      if (is_selected) {
+        ImGui::SetItemDefaultFocus();
+      }
+    }
+    ImGui::EndCombo();
+  }
 }
 
 // Shared filter controls (Action radio + P/B/D), rendered after the
@@ -777,7 +827,7 @@ static void RenderRemoveFilterButton() {
   ImGui::EndDisabled();
 }
 
-static void RenderFilterModal(GuiState& /*state*/) {
+static void RenderFilterModal(const GuiState& state) {
   // Type radio — 4 options, SameLine horizontal (style-aligned with Crystal
   // tab's Prism/Pyramid radios). Boolean form (RadioButton(label, active))
   // matches the Action radio below and the Crystal-tab Prism/Pyramid radios,
@@ -828,7 +878,7 @@ static void RenderFilterModal(GuiState& /*state*/) {
       RenderDirectionSubpanel();
       break;
     case FilterEditType::kCrystal:
-      RenderCrystalFilterStub();
+      RenderCrystalSubpanel(state);
       break;
     default:
       assert(false && "unhandled FilterEditType in RenderFilterModal dispatch");
