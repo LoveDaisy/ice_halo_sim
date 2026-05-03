@@ -714,8 +714,17 @@ static void RenderEntryExitSubpanel() {
   ImGui::InputInt("Exit face id##filter_modal", &g_ee_params.exit);
 }
 
-static void RenderDirectionStub() {
-  ImGui::TextDisabled("Direction filter — coming soon");
+// Direction sub-panel (issue per-type-direction / 178.5): three InputFloat
+// for (azimuth, elevation, radii) in degrees. Values written directly into
+// g_dir_params; commit/dirty tracking handled by ApplyBuffersToEntry /
+// IsFilterDirty just like the raypath/EE paths. Out-of-range values are
+// accepted and forwarded to core as-is (DirectionFilter handles arbitrary
+// angles via cos/sin; radii=0 is a legal-but-empty config — see plan
+// D-Assume-2 for why no UI clamp).
+static void RenderDirectionSubpanel() {
+  ImGui::InputFloat("Azimuth\xc2\xb0##filter_modal", &g_dir_params.az, 1.0f, 10.0f, "%.2f");
+  ImGui::InputFloat("Elevation\xc2\xb0##filter_modal", &g_dir_params.el, 1.0f, 10.0f, "%.2f");
+  ImGui::InputFloat("Radii\xc2\xb0##filter_modal", &g_dir_params.radii, 0.1f, 1.0f, "%.2f");
 }
 
 static void RenderCrystalFilterStub() {
@@ -727,6 +736,7 @@ static void RenderCrystalFilterStub() {
 // reset shared user preferences.
 static void RenderSharedFilterControls() {
   // Action: two RadioButtons (was Combo pre-task; aligns with Crystal tab style).
+  // Always rendered — filter_in / filter_out semantics apply to every type.
   if (ImGui::RadioButton("Filter In##filter_action", g_filter_top.action == 0)) {
     g_filter_top.action = 0;
   }
@@ -735,11 +745,23 @@ static void RenderSharedFilterControls() {
     g_filter_top.action = 1;
   }
 
-  ImGui::Checkbox("P##filter_modal", &g_filter_top.sym_p);
-  ImGui::SameLine();
-  ImGui::Checkbox("B##filter_modal", &g_filter_top.sym_b);
-  ImGui::SameLine();
-  ImGui::Checkbox("D##filter_modal", &g_filter_top.sym_d);
+  // P/B/D Checkbox — H4 修正 (issue per-type-direction / 178.5): only raypath
+  // and entry_exit consume crystal symmetry at the core layer; DirectionFilter
+  // does not override InitCrystalSymmetry (src/core/filter.cpp:81-98), and
+  // kCrystal also does not override InitCrystalSymmetry (see H4 survey;
+  // revisit in #178.6). Hiding the controls avoids misleading users — the
+  // underlying sym_p/b/d fields keep their default values and the serializer
+  // still writes the `symmetry` JSON field for cross-type round-trip
+  // compatibility.
+  const bool sym_active =
+      (g_filter_active_type == FilterEditType::kRaypath || g_filter_active_type == FilterEditType::kEntryExit);
+  if (sym_active) {
+    ImGui::Checkbox("P##filter_modal", &g_filter_top.sym_p);
+    ImGui::SameLine();
+    ImGui::Checkbox("B##filter_modal", &g_filter_top.sym_b);
+    ImGui::SameLine();
+    ImGui::Checkbox("D##filter_modal", &g_filter_top.sym_d);
+  }
 }
 
 // Remove Filter button — clears the raypath InputText backing buffer.
@@ -784,10 +806,11 @@ static void RenderFilterModal(GuiState& /*state*/) {
   // immediately sees that nothing below is interactive (B1: 整段灰显). The
   // OK button at the modal level gets a parallel disable path in
   // RenderEditModals so the user cannot commit a stub-type filter.
-  // EntryExit (#178.4) is now interactive alongside Raypath; Direction /
-  // Crystal remain stubs until #178.5 / #178.6.
+  // EntryExit (#178.4) and Direction (#178.5) are interactive alongside
+  // Raypath; Crystal remains a stub until #178.6.
   const bool is_stub =
-      (g_filter_active_type != FilterEditType::kRaypath && g_filter_active_type != FilterEditType::kEntryExit);
+      (g_filter_active_type != FilterEditType::kRaypath && g_filter_active_type != FilterEditType::kEntryExit &&
+       g_filter_active_type != FilterEditType::kDirection);
   ImGui::BeginDisabled(is_stub);
 
   // Type-specific dispatch. `default:` assert ensures any future
@@ -802,7 +825,7 @@ static void RenderFilterModal(GuiState& /*state*/) {
       RenderEntryExitSubpanel();
       break;
     case FilterEditType::kDirection:
-      RenderDirectionStub();
+      RenderDirectionSubpanel();
       break;
     case FilterEditType::kCrystal:
       RenderCrystalFilterStub();
@@ -995,11 +1018,35 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     return { true, entry != old_entry, entry.filter != old_entry.filter };
   }
 
-  // Stub-type defensive path: OK button is disabled on stub types (Direction
-  // / Crystal post-#178.4), so this branch is not user-reachable. Leave
-  // entry.filter unchanged so a hypothetical entry into this branch (e.g.
-  // via Immediate-mode commit while a stub is selected) cannot silently
-  // overwrite the existing filter with half-built default data.
+  // Direction commit branch (#178.5). Mirrors the EE branch above; gated on
+  // `g_filter_initial_present || buf_changed`. NOTE: switching to the
+  // Direction RadioButton already sets buf_changed=true (active_type !=
+  // snapshot inside IsFilterDirty), so the path "open a filterless entry →
+  // switch to Direction → OK without typing" always commits a default-zero
+  // Direction filter; the guard's actual function is to suppress a re-commit
+  // when the user reopens an existing Direction entry and presses OK without
+  // modifying any field. P/B/D fields stay in g_filter_top per the H4
+  // contract — UI hides the Checkboxes but the data round-trips unchanged.
+  if (g_filter_active_type == FilterEditType::kDirection) {
+    const bool buf_changed = IsFilterDirty();
+    if (g_filter_initial_present || buf_changed) {
+      FilterConfig out;
+      out.name = g_filter_top.name;
+      out.action = g_filter_top.action;
+      out.sym_p = g_filter_top.sym_p;
+      out.sym_b = g_filter_top.sym_b;
+      out.sym_d = g_filter_top.sym_d;
+      out.param = g_dir_params;
+      entry.filter = out;
+    }
+    return { true, entry != old_entry, entry.filter != old_entry.filter };
+  }
+
+  // Stub-type defensive path: OK button is disabled on stub types (Crystal
+  // post-#178.5), so this branch is not user-reachable. Leave entry.filter
+  // unchanged so a hypothetical entry into this branch (e.g. via Immediate-
+  // mode commit while Crystal is selected) cannot silently overwrite the
+  // existing filter with half-built default data.
   if (g_filter_active_type != FilterEditType::kRaypath) {
     return { true, entry != old_entry, entry.filter != old_entry.filter };
   }
@@ -1422,12 +1469,14 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
     // branch without a dedicated flag.
     bool ok_disabled = false;
     const char* ok_tooltip = nullptr;
-    // Stub-type gate (issue editor-modal-type-selection / 178.4): Direction
-    // and Crystal still render placeholder UI; Raypath and EntryExit are
-    // interactive. OK is disabled when the active type has no commit path.
-    if (g_filter_active_type != FilterEditType::kRaypath && g_filter_active_type != FilterEditType::kEntryExit) {
+    // Stub-type gate (issue editor-modal-type-selection / 178.4 →
+    // per-type-direction / 178.5): Crystal still renders placeholder UI;
+    // Raypath, EntryExit, and Direction are interactive. OK is disabled
+    // when the active type has no commit path.
+    if (g_filter_active_type != FilterEditType::kRaypath && g_filter_active_type != FilterEditType::kEntryExit &&
+        g_filter_active_type != FilterEditType::kDirection) {
       ok_disabled = true;
-      ok_tooltip = "Filter type is not yet implemented — switch to Raypath / Entry-Exit to commit";
+      ok_tooltip = "Filter type is not yet implemented — switch to Raypath / Entry-Exit / Direction to commit";
     } else if (g_filter_active_type == FilterEditType::kRaypath) {
       // Raypath validation gate (EntryExit needs no per-field validation —
       // negative / out-of-range values are clamped at serialization).

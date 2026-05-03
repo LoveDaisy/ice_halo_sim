@@ -3049,8 +3049,10 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       auto info_default = ctx->ItemInfo("**/OK##edit_modal");
       IM_CHECK((info_default.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
-      // Switch to a stub type: OK becomes disabled.
-      ctx->ItemClick("**/Direction##filter_type");
+      // Switch to a stub type: OK becomes disabled. Crystal is the remaining
+      // stub post-#178.5 (Direction is now interactive); migrating from
+      // Direction → Crystal preserves the original assertion intent.
+      ctx->ItemClick("**/Crystal##filter_type");
       ctx->Yield(2);
       auto info_stub = ctx->ItemInfo("**/OK##edit_modal");
       IM_CHECK((info_stub.ItemFlags & ImGuiItemFlags_Disabled) != 0);
@@ -3181,7 +3183,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // Switch to a stub type — Immediate per-frame commits would now
       // attempt to apply buffers each frame; the stub guard inside
       // ApplyBuffersToEntry must prevent any overwrite of entry.filter.
-      ctx->ItemClick("**/Direction##filter_type");
+      // Crystal is the remaining stub post-#178.5 (Direction is now
+      // interactive — it would commit a default-zero Direction filter and
+      // overwrite the existing raypath filter; that is the designed
+      // behavior, not a bug — so this test now uses Crystal).
+      ctx->ItemClick("**/Crystal##filter_type");
       ctx->Yield(4);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
@@ -3235,9 +3241,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
       IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
-      // Switch to Direction (still a stub) → EE inputs un-render, raypath
-      // also stays hidden, and OK becomes disabled (stub gate).
-      ctx->ItemClick("**/Direction##filter_type");
+      // Switch to Crystal (the remaining stub post-#178.5) → EE inputs
+      // un-render, raypath also stays hidden, and OK becomes disabled
+      // (stub gate). Direction was used here pre-#178.5; migrated to
+      // Crystal once Direction became interactive.
+      ctx->ItemClick("**/Crystal##filter_type");
       ctx->Yield(2);
       IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
       auto info_stub = ctx->ItemInfo("**/OK##edit_modal");
@@ -3314,9 +3322,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
   }
 
   // T10 — per-type buffer isolation extends to EE ↔ Direction switch:
-  // type-in EE values, switch to Direction (stub buffer), switch back, OK
-  // → EE values preserved. Validates that #178.3 T6 guarantee (per-type
-  // buffer survives switches) holds for the newly-interactive EE type.
+  // type-in EE values, switch to Direction, switch back, OK → EE values
+  // preserved. Validates that #178.3 T6 guarantee (per-type buffer survives
+  // switches) holds for the newly-interactive EE type. Post-#178.5 Direction
+  // is also interactive — EE buffer must remain untouched while Direction
+  // sub-panel renders, since each type owns a separate sub-buffer.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_per_type_buffer_isolated");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -3331,8 +3341,9 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue("**/Exit face id##filter_modal", "7");
       ctx->Yield(2);
 
-      // Switch away (Direction is a stub — its sub-buffer should not be
-      // touched by EE inputs).
+      // Switch away — Direction owns a separate sub-buffer (g_dir_params),
+      // so it cannot be touched by EE inputs even now that Direction is
+      // interactive (#178.5).
       ctx->ItemClick("**/Direction##filter_type");
       ctx->Yield(2);
       // Verify EE inputs un-rendered while Direction is active.
@@ -3352,6 +3363,200 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       const auto& ee = std::get<gui::EntryExitParams>(f.param);
       IM_CHECK_EQ(ee.entry, 3);
       IM_CHECK_EQ(ee.exit, 7);
+    };
+  }
+
+  // ============================================================
+  // p2_filter_type — task-per-type-direction (issue 178.5)
+  //
+  // Direction type goes from stub to interactive: 3 InputFloat controls
+  // (Azimuth°/Elevation°/Radii°), OK button enabled, commit assembles
+  // DirectionParams into entry.filter. H4 修正：P/B/D Checkbox 隐藏 for
+  // Direction & Crystal types (their core filters do not consume crystal
+  // symmetry); raypath / EE keep the P/B/D Checkbox.
+  // ============================================================
+
+  // T11 — Direction subpanel renders 3 InputFloat controls when Direction
+  // type is active; switching to other types hides them.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "direction_subpanel_inputs_visible");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Default = Raypath: Direction inputs not present.
+      IM_CHECK(!ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
+
+      // Switch to Direction: 3 InputFloat items appear; raypath / EE inputs disappear.
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/Elevation\xc2\xb0##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/Radii\xc2\xb0##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
+
+      // OK button is enabled on Direction (no validation gate, no stub disable).
+      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Switch back to Raypath: Direction inputs un-render.
+      ctx->ItemClick("**/Raypath##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // T12 — Direction OK commits filter end-to-end: fill az/el/radii, set
+  // Action=Filter Out, OK → entry.filter holds DirectionParams with the
+  // typed values + action=1. The "PBD" suffix in the asserted FilterSummary
+  // string relies on g_filter_top.sym_p/b/d defaulting to true — see
+  // gui_state.hpp:271-273. Note: H4 hides the P/B/D Checkbox for Direction
+  // so the test cannot toggle sym via UI; the default-true values are the
+  // single source for the asserted suffix.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "direction_ok_commits_filter");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+
+      // ItemInputValue accepts string for InputFloat — ImGui parses on Enter.
+      ctx->ItemInputValue("**/Azimuth\xc2\xb0##filter_modal", "30");
+      ctx->ItemInputValue("**/Elevation\xc2\xb0##filter_modal", "45");
+      ctx->ItemInputValue("**/Radii\xc2\xb0##filter_modal", "2");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Filter Out##filter_action");
+      ctx->Yield(2);
+
+      // OK must be enabled on Direction.
+      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      const auto& f = *gui::g_state.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::DirectionParams>(f.param));
+      const auto& d = std::get<gui::DirectionParams>(f.param);
+      IM_CHECK_EQ(d.az, 30.0f);
+      IM_CHECK_EQ(d.el, 45.0f);
+      IM_CHECK_EQ(d.radii, 2.0f);
+      IM_CHECK_EQ(f.action, 1);
+      // Default sym_p/b/d = true (gui_state.hpp:271-273) → "PBD" suffix.
+      IM_CHECK(f.sym_p);
+      IM_CHECK(f.sym_b);
+      IM_CHECK(f.sym_d);
+
+      // AC-5: FilterSummary Direction format is "DIR:<az>°/<el>° r=<r>°
+      // <In|Out>[ <sym>]" (panels.cpp:131 Direction branch). Note: per H4
+      // contract, the sym suffix is still emitted even though the P/B/D
+      // Checkbox is hidden — the underlying field values round-trip
+      // unchanged. The "°" is UTF-8 U+00B0 (\xc2\xb0).
+      IM_CHECK_STR_EQ(gui::FilterSummary(gui::g_state.layers[0].entries[0].filter).c_str(),
+                      "DIR:30\xc2\xb0/45\xc2\xb0 r=2\xc2\xb0 Out PBD");
+    };
+  }
+
+  // T13 — per-type buffer isolation extends to Direction ↔ Crystal switch:
+  // type-in Direction values, switch to Crystal (still a stub), switch back,
+  // OK → Direction values preserved. Crystal is used as the middle stop
+  // because it is the remaining stub — the OK gate keeps the test focused
+  // on buffer isolation (no committable state at the middle stop).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "direction_per_type_buffer_isolated");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/Azimuth\xc2\xb0##filter_modal", "10");
+      ctx->ItemInputValue("**/Elevation\xc2\xb0##filter_modal", "20");
+      ctx->ItemInputValue("**/Radii\xc2\xb0##filter_modal", "3");
+      ctx->Yield(2);
+
+      // Switch away (Crystal is a stub — its sub-buffer should not be
+      // touched by Direction inputs).
+      ctx->ItemClick("**/Crystal##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
+
+      // Switch back to Direction; per-type buffer must have retained values.
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      const auto& f = *gui::g_state.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::DirectionParams>(f.param));
+      const auto& d = std::get<gui::DirectionParams>(f.param);
+      IM_CHECK_EQ(d.az, 10.0f);
+      IM_CHECK_EQ(d.el, 20.0f);
+      IM_CHECK_EQ(d.radii, 3.0f);
+    };
+  }
+
+  // T14 — H4 修正：P/B/D Checkbox is hidden when active type is Direction
+  // or Crystal (core filters do not consume crystal symmetry); P/B/D is
+  // rendered when active type is Raypath or EntryExit. Reverse-direction
+  // assertion in raypath / EE branches guards against an accidental "hide
+  // P/B/D in all types" regression while implementing H4.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "direction_hides_pbd_checkboxes");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Default = Raypath: P/B/D rendered (forward assertion).
+      IM_CHECK(ctx->ItemExists("**/P##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/B##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/D##filter_modal"));
+
+      // Direction: P/B/D hidden (H4 gate).
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/P##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/B##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/D##filter_modal"));
+
+      // EntryExit: P/B/D rendered (forward assertion — EE consumes sym).
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/P##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/B##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/D##filter_modal"));
+
+      // Crystal: P/B/D hidden (H4 also covers Crystal — see plan §3 D2).
+      ctx->ItemClick("**/Crystal##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/P##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/B##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/D##filter_modal"));
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
     };
   }
 }
