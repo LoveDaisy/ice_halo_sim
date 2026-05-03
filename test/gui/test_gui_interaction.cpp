@@ -3466,6 +3466,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // contract, the sym suffix is still emitted even though the P/B/D
       // Checkbox is hidden — the underlying field values round-trip
       // unchanged. The "°" is UTF-8 U+00B0 (\xc2\xb0).
+      // Format defined in panels.cpp:131 — `%g` on integer-valued floats
+      // (30.0f / 45.0f / 2.0f) yields "30" / "45" / "2" (no trailing
+      // zero). If non-integer values are added later, update both the
+      // format string and this expected literal accordingly. See plan
+      // §7 Risk 7 for the format-stability rationale.
       IM_CHECK_STR_EQ(gui::FilterSummary(gui::g_state.layers[0].entries[0].filter).c_str(),
                       "DIR:30\xc2\xb0/45\xc2\xb0 r=2\xc2\xb0 Out PBD");
     };

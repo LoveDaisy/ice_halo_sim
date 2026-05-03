@@ -1047,6 +1047,11 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   // unchanged so a hypothetical entry into this branch (e.g. via Immediate-
   // mode commit while Crystal is selected) cannot silently overwrite the
   // existing filter with half-built default data.
+  // TODO(#178.6): tighten to `== FilterEditType::kCrystal` once Crystal is
+  // implemented, so any future FilterEditType extension fails the
+  // exhaustive-switch contract loudly rather than silently falling into the
+  // stub path. The current `!= kRaypath` (all-except) form predates the
+  // is_stub / OK gate / sym_active explicit-enum convention (plan §3 D3).
   if (g_filter_active_type != FilterEditType::kRaypath) {
     return { true, entry != old_entry, entry.filter != old_entry.filter };
   }
