@@ -852,17 +852,6 @@ static void RenderFilterModal(const GuiState& state) {
 
   ImGui::Spacing();
 
-  // Stub types render the entire body inside BeginDisabled(true) so the user
-  // immediately sees that nothing below is interactive (B1: 整段灰显). The
-  // OK button at the modal level gets a parallel disable path in
-  // RenderEditModals so the user cannot commit a stub-type filter.
-  // EntryExit (#178.4) and Direction (#178.5) are interactive alongside
-  // Raypath; Crystal remains a stub until #178.6.
-  const bool is_stub =
-      (g_filter_active_type != FilterEditType::kRaypath && g_filter_active_type != FilterEditType::kEntryExit &&
-       g_filter_active_type != FilterEditType::kDirection);
-  ImGui::BeginDisabled(is_stub);
-
   // Type-specific dispatch. `default:` assert ensures any future
   // FilterEditType extension (#4-#6) is handled explicitly rather than
   // silently dropped — mirrors the project convention of "exhaustive switch +
@@ -892,16 +881,13 @@ static void RenderFilterModal(const GuiState& state) {
 
   ImGui::Spacing();
 
-  // Remove Filter — raypath-only shortcut. Hidden for EntryExit (and the
-  // remaining stub types) since "empty raypath ≡ no filter" semantics don't
-  // apply: EE has no clean "empty" state (entry=0/exit=0 is a legal config).
-  // Type-aware "Reset" semantics covering all 4 types is deferred until
-  // direction/crystal are interactive (#178.5 / #178.6).
+  // Remove Filter — raypath-only shortcut. The "empty raypath ≡ no filter"
+  // shortcut only applies to Raypath; EE / Direction / Crystal each have a
+  // legal "default" state (entry=0/exit=0 / az=el=radii=0 / crystal_id=0)
+  // and require switching back to Raypath + clearing to obtain "no filter".
   if (g_filter_active_type == FilterEditType::kRaypath) {
     RenderRemoveFilterButton();
   }
-
-  ImGui::EndDisabled();
 
   // OK / Cancel handled at modal level (RenderEditModals).
 }
@@ -1092,53 +1078,46 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     return { true, entry != old_entry, entry.filter != old_entry.filter };
   }
 
-  // Stub-type defensive path: OK button is disabled on stub types (Crystal
-  // post-#178.5), so this branch is not user-reachable. Leave entry.filter
-  // unchanged so a hypothetical entry into this branch (e.g. via Immediate-
-  // mode commit while Crystal is selected) cannot silently overwrite the
-  // existing filter with half-built default data.
-  // TODO(#178.6): tighten to `== FilterEditType::kCrystal` once Crystal is
-  // implemented, so any future FilterEditType extension fails the
-  // exhaustive-switch contract loudly rather than silently falling into the
-  // stub path. The current `!= kRaypath` (all-except) form predates the
-  // is_stub / OK gate / sym_active explicit-enum convention (plan §3 D3).
-  if (g_filter_active_type != FilterEditType::kRaypath) {
-    return { true, entry != old_entry, entry.filter != old_entry.filter };
-  }
+  // Raypath commit branch. Wrapped in an explicit `== kRaypath` guard so
+  // every FilterEditType has a symmetrical commit branch (post-#178.6 — no
+  // more stub fall-through). The trailing `return` at the end of the
+  // function is a defensive no-op for any future FilterEditType extension
+  // that forgets to add its own branch.
+  if (g_filter_active_type == FilterEditType::kRaypath) {
+    // Buffer-changed predicate: defined as IsFilterDirty() in this TU so the
+    // commit decision and the tab-label dirty mark stay in sync — adding a new
+    // FilterEditType only needs one place to be touched.
+    const bool buf_changed = IsFilterDirty();
 
-  // Buffer-changed predicate: defined as IsFilterDirty() in this TU so the
-  // commit decision and the tab-label dirty mark stay in sync — adding a new
-  // FilterEditType only needs one place to be touched.
-  const bool buf_changed = IsFilterDirty();
-
-  if (g_raypath_params.raypath_text.empty()) {
-    // Empty raypath ≡ "no filter" at the UI layer (the Remove button is just
-    // a shortcut for "backspace the textbox empty"). This also subsumes the
-    // old "Remove intent" path and the default-PBD leak: a default-constructed
-    // FilterConfig has empty raypath, so untouched no-filter entries stay
-    // nullopt here.
-    entry.filter = std::nullopt;
-  } else if (g_filter_initial_present || buf_changed) {
-    // Model-layer invariant: FilterConfig must never hold an invalid raypath,
-    // regardless of commit mode. Staged mode already enforces this via the OK
-    // button's disabled gate (ok_disabled check on the Staged OK path);
-    // Immediate mode per-frame commits reach this branch with potentially
-    // invalid text, so the guard here is the single model-layer gate that
-    // makes the invariant hold in both modes. kIncomplete is treated same as
-    // kInvalid — matches the Staged OK disjunction `v.state != kValid`,
-    // preventing half-typed input from poisoning the renderer. Multi-segment
-    // OR (";") is supported via ValidateRaypathTextMultiSegment.
-    auto v = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
-    if (v.state == RaypathValidation::kValid) {
-      // Materialize FilterConfig from top fields + active raypath sub-buffer.
-      FilterConfig out;
-      out.name = g_filter_top.name;
-      out.action = g_filter_top.action;
-      out.sym_p = g_filter_top.sym_p;
-      out.sym_b = g_filter_top.sym_b;
-      out.sym_d = g_filter_top.sym_d;
-      out.param = g_raypath_params;
-      entry.filter = out;
+    if (g_raypath_params.raypath_text.empty()) {
+      // Empty raypath ≡ "no filter" at the UI layer (the Remove button is just
+      // a shortcut for "backspace the textbox empty"). This also subsumes the
+      // old "Remove intent" path and the default-PBD leak: a default-constructed
+      // FilterConfig has empty raypath, so untouched no-filter entries stay
+      // nullopt here.
+      entry.filter = std::nullopt;
+    } else if (g_filter_initial_present || buf_changed) {
+      // Model-layer invariant: FilterConfig must never hold an invalid raypath,
+      // regardless of commit mode. Staged mode already enforces this via the OK
+      // button's disabled gate (ok_disabled check on the Staged OK path);
+      // Immediate mode per-frame commits reach this branch with potentially
+      // invalid text, so the guard here is the single model-layer gate that
+      // makes the invariant hold in both modes. kIncomplete is treated same as
+      // kInvalid — matches the Staged OK disjunction `v.state != kValid`,
+      // preventing half-typed input from poisoning the renderer. Multi-segment
+      // OR (";") is supported via ValidateRaypathTextMultiSegment.
+      auto v = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
+      if (v.state == RaypathValidation::kValid) {
+        // Materialize FilterConfig from top fields + active raypath sub-buffer.
+        FilterConfig out;
+        out.name = g_filter_top.name;
+        out.action = g_filter_top.action;
+        out.sym_p = g_filter_top.sym_p;
+        out.sym_b = g_filter_top.sym_b;
+        out.sym_d = g_filter_top.sym_d;
+        out.param = g_raypath_params;
+        entry.filter = out;
+      }
     }
   }
   return { true, entry != old_entry, entry.filter != old_entry.filter };
@@ -1524,17 +1503,11 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
     // branch without a dedicated flag.
     bool ok_disabled = false;
     const char* ok_tooltip = nullptr;
-    // Stub-type gate (issue editor-modal-type-selection / 178.4 →
-    // per-type-direction / 178.5): Crystal still renders placeholder UI;
-    // Raypath, EntryExit, and Direction are interactive. OK is disabled
-    // when the active type has no commit path.
-    if (g_filter_active_type != FilterEditType::kRaypath && g_filter_active_type != FilterEditType::kEntryExit &&
-        g_filter_active_type != FilterEditType::kDirection) {
-      ok_disabled = true;
-      ok_tooltip = "Filter type is not yet implemented — switch to Raypath / Entry-Exit / Direction to commit";
-    } else if (g_filter_active_type == FilterEditType::kRaypath) {
-      // Raypath validation gate (EntryExit needs no per-field validation —
-      // negative / out-of-range values are clamped at serialization).
+    // Raypath validation gate. EntryExit / Direction / Crystal need no per-
+    // field validation — out-of-range / unset values are clamped or warned at
+    // serialization time. Post-#178.6 there is no stub gate (all 4 types are
+    // interactive).
+    if (g_filter_active_type == FilterEditType::kRaypath) {
       g_raypath_params.raypath_text = g_raypath_buf;
       if (!g_raypath_params.raypath_text.empty()) {
         const auto v = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());

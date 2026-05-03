@@ -3166,15 +3166,15 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
       IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
-      // Switch to Crystal (the remaining stub post-#178.5) → EE inputs
-      // un-render, raypath also stays hidden, and OK becomes disabled
-      // (stub gate). Direction was used here pre-#178.5; migrated to
-      // Crystal once Direction became interactive.
+      // Switch to Crystal (post-#178.6: now interactive — EE inputs un-
+      // render, raypath stays hidden, OK stays enabled since the stub gate
+      // has been removed). The Crystal subpanel itself (Combo widget) is
+      // covered dedicatedly by T15; here we only assert what's NOT visible.
       ctx->ItemClick("**/Crystal##filter_type");
       ctx->Yield(2);
       IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
-      auto info_stub = ctx->ItemInfo("**/OK##edit_modal");
-      IM_CHECK((info_stub.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_crystal = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_crystal.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
       // Switch back to Entry-Exit: inputs reappear, OK re-enabled.
       ctx->ItemClick("**/Entry-Exit##filter_type");
