@@ -276,7 +276,17 @@ static int ClampIdValue(int v, const char* field_name) {
 // entry_exit/direction/crystal: 1 simple filter of the matching type.
 // next_filter_id_base: caller's id counter; result.main_id = next_filter_id_base + filters.size() - 1
 //                      (matters only for multi-raypath where main_id is the complex filter's id).
-static FilterCoreResult SerializeFilterForCore(const FilterConfig& f, int next_filter_id_base) {
+// layer_flat_cids: per-layer mapping from layer-local entry index to flat
+//                  global crystal_id (the value `next_crystal_id` would assign
+//                  when the SerializeCoreConfig main loop reaches that entry).
+//                  Indexed by entry_idx; length == current layer.entries.size().
+//                  ONLY consumed by the CrystalParams branch — other filter
+//                  types ignore this argument. Future filter types must NOT
+//                  reuse this parameter slot to pass unrelated context;
+//                  introduce a dedicated parameter or a struct if they need
+//                  layer context.
+static FilterCoreResult SerializeFilterForCore(const FilterConfig& f, int next_filter_id_base,
+                                               const std::vector<int>& layer_flat_cids) {
   FilterCoreResult result;
   result.main_id = next_filter_id_base;
 
@@ -328,9 +338,24 @@ static FilterCoreResult SerializeFilterForCore(const FilterConfig& f, int next_f
           }));
           result.main_id = id;
         } else if constexpr (std::is_same_v<T, CrystalParams>) {
+          // Translate GUI's layer-local entry index → core's flat global
+          // crystal_id (see plan §3 D3). Out-of-range / empty-layer cases
+          // fall back to layer_flat_cids[0] with a warning, mirroring the
+          // UI-layer "(invalid #N)" preview behavior (plan §3 D5).
           int id = next_filter_id_base;
-          result.filters.push_back(BuildCoreSimpleFilterJson(
-              f, id, "crystal", [&](json& j) { j["crystal_id"] = ClampIdValue(p.crystal_id, "crystal_id"); }));
+          int idx = p.crystal_id;
+          int flat_cid = 0;
+          if (layer_flat_cids.empty()) {
+            GUI_LOG_WARNING("[Filter] crystal filter in empty-layer context, defaulting crystal_id to 0");
+          } else if (idx < 0 || idx >= static_cast<int>(layer_flat_cids.size())) {
+            GUI_LOG_WARNING("[Filter] crystal_id={} out of range for layer (size={}), clamped to layer entry 0", idx,
+                            layer_flat_cids.size());
+            flat_cid = layer_flat_cids[0];
+          } else {
+            flat_cid = layer_flat_cids[idx];
+          }
+          result.filters.push_back(
+              BuildCoreSimpleFilterJson(f, id, "crystal", [&](json& j) { j["crystal_id"] = flat_cid; }));
           result.main_id = id;
         }
       },
@@ -581,14 +606,45 @@ std::string SerializeCoreConfig(const GuiState& state) {
   }
   scene["max_hits"] = state.sim.max_hits;
 
+  // Pre-compute the per-layer "layer-local entry index → flat global
+  // crystal_id" map. The crystal IDs assigned below in the main loop follow
+  // exactly this pre-computation (next_crystal_id starts at 1, increments by
+  // 1 per entry, walks layers/entries in the same order). The map lets
+  // SerializeFilterForCore translate GUI-side CrystalParams.crystal_id
+  // (layer-local) into the flat global crystal_id that core JSON expects
+  // (plan §3 D3 / §4 Step 4).
+  std::vector<std::vector<int>> layer_entry_to_flat_cid;
+  layer_entry_to_flat_cid.reserve(state.layers.size());
+  {
+    int cid_pre = 1;  // matches `next_crystal_id = 1` initialization above
+    for (const auto& layer : state.layers) {
+      std::vector<int> row;
+      row.reserve(layer.entries.size());
+      for (size_t k = 0; k < layer.entries.size(); ++k) {
+        row.push_back(cid_pre++);
+      }
+      layer_entry_to_flat_cid.push_back(std::move(row));
+    }
+  }
+
   scene["scattering"] = json::array();
-  for (auto& layer : state.layers) {
+  for (size_t li = 0; li < state.layers.size(); ++li) {
+    auto& layer = state.layers[li];
     json jl;
     jl["prob"] = layer.probability;
     jl["entries"] = json::array();
-    for (auto& entry : layer.entries) {
+    for (size_t ei = 0; ei < layer.entries.size(); ++ei) {
+      auto& entry = layer.entries[ei];
       // Assign temporary crystal ID and serialize
       int cid = next_crystal_id++;
+#ifndef NDEBUG
+      // Invariant: the live cid sequence must match the pre-computed table
+      // exactly. Tripping this assert means SerializeCoreConfig main loop
+      // structure diverged from the pre-pass (e.g. someone added a
+      // conditional skip) — translation table would silently corrupt
+      // crystal_id mapping. Catch in debug builds.
+      assert(cid == layer_entry_to_flat_cid[li][ei]);
+#endif
       auto jc = SerializeCrystal(entry.crystal, cid);
       root["crystal"].push_back(jc);
 
@@ -596,9 +652,11 @@ std::string SerializeCoreConfig(const GuiState& state) {
       je["crystal"] = cid;
       je["proportion"] = entry.proportion;
 
-      // Filter: only if present
+      // Filter: only if present. Pass the current layer's flat-id slice so
+      // CrystalParams gets translated correctly; other filter types ignore
+      // this argument.
       if (entry.filter) {
-        auto fr = SerializeFilterForCore(*entry.filter, next_filter_id);
+        auto fr = SerializeFilterForCore(*entry.filter, next_filter_id, layer_entry_to_flat_cid[li]);
         for (auto& jf : fr.filters) {
           root["filter"].push_back(jf);
         }
@@ -890,22 +948,71 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     }
     state.sim.max_hits = js.value("max_hits", 8);
 
-    // Convert ID-referenced scattering to copy-model layers
+    // Convert ID-referenced scattering to copy-model layers.
+    //
+    // Two-pass scan (plan §3 D3, rev-1) — required so a CrystalFilter that
+    // references a flat crystal_id assigned to a later entry within the same
+    // layer (j > i) can still be translated correctly to the layer-local
+    // index. With a single incremental pass, processing entry[i].filter
+    // would happen before entry[j>i]'s crystal_id has entered the map, and
+    // the lookup would silently fall back to 0 — see Pass 1 below.
+    //
+    // Pass 1: build flat_to_layer_entry: flat crystal_id → (layer_idx,
+    // entry_idx). No mutation of state.layers.
+    // Pass 2: build state.layers, assign entry.filter from filter_map (deep-
+    // copies via std::optional<FilterConfig>), translate CrystalParams in
+    // place using the now-complete map.
     if (js.contains("scattering") && js["scattering"].is_array()) {
-      for (auto& jlayer : js["scattering"]) {
+      const auto& jscattering = js["scattering"];
+
+      std::map<int, std::pair<size_t, size_t>> flat_to_layer_entry;
+      for (size_t li = 0; li < jscattering.size(); ++li) {
+        const auto& jlayer = jscattering[li];
+        if (!jlayer.contains("entries") || !jlayer["entries"].is_array()) {
+          continue;
+        }
+        const auto& jentries = jlayer["entries"];
+        for (size_t ei = 0; ei < jentries.size(); ++ei) {
+          int cid = jentries[ei].value("crystal", -1);
+          if (cid >= 0) {
+            flat_to_layer_entry[cid] = { li, ei };
+          }
+        }
+      }
+
+      for (size_t li = 0; li < jscattering.size(); ++li) {
+        const auto& jlayer = jscattering[li];
         Layer layer;
         layer.probability = jlayer.value("prob", 1.0f);
         if (jlayer.contains("entries") && jlayer["entries"].is_array()) {
-          for (auto& je : jlayer["entries"]) {
+          const auto& jentries = jlayer["entries"];
+          for (size_t ei = 0; ei < jentries.size(); ++ei) {
+            const auto& je = jentries[ei];
             EntryCard entry;
-            int crystal_id = je.value("crystal", -1);
-            if (crystal_map.count(crystal_id)) {
-              entry.crystal = crystal_map[crystal_id];
+            int crystal_id_flat = je.value("crystal", -1);
+            if (crystal_map.count(crystal_id_flat)) {
+              entry.crystal = crystal_map[crystal_id_flat];
             }
             entry.proportion = je.value("proportion", 1.0f);
             int filter_id = je.value("filter", -1);
             if (filter_id >= 0 && filter_map.count(filter_id)) {
+              // std::optional<FilterConfig> assignment deep-copies; the
+              // translation below mutates entry.filter only, never
+              // filter_map (so multi-entry references to the same filter id
+              // do not accumulate translations).
               entry.filter = filter_map[filter_id];
+              if (std::holds_alternative<CrystalParams>(entry.filter->param)) {
+                auto& cp = std::get<CrystalParams>(entry.filter->param);
+                int parsed_flat = cp.crystal_id;
+                auto it = flat_to_layer_entry.find(parsed_flat);
+                if (it != flat_to_layer_entry.end() && it->second.first == li) {
+                  cp.crystal_id = static_cast<int>(it->second.second);
+                } else {
+                  GUI_LOG_WARNING("[FileIO] crystal filter cross-layer or unknown ref id={}, defaulting to 0",
+                                  parsed_flat);
+                  cp.crystal_id = 0;
+                }
+              }
             }
             layer.entries.push_back(entry);
           }
