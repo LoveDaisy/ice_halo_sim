@@ -1078,6 +1078,31 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     return { true, entry != old_entry, entry.filter != old_entry.filter };
   }
 
+  // Crystal commit branch (#178.6). Mirrors the EE / Direction branches above;
+  // gated on `g_filter_initial_present || buf_changed`. NOTE: switching to the
+  // Crystal RadioButton already sets buf_changed=true (active_type != snapshot
+  // inside IsFilterDirty), so the path "open a filterless entry → switch to
+  // Crystal → OK without picking" always commits a default Crystal filter
+  // (crystal_id=0, i.e. the layer's first entry); the guard's actual function
+  // is to suppress a re-commit when the user reopens an existing Crystal
+  // entry and presses OK without modifying. P/B/D fields stay in g_filter_top
+  // per the H4 contract — UI hides the Checkboxes (since #178.5) but the
+  // data round-trips unchanged.
+  if (g_filter_active_type == FilterEditType::kCrystal) {
+    const bool buf_changed = IsFilterDirty();
+    if (g_filter_initial_present || buf_changed) {
+      FilterConfig out;
+      out.name = g_filter_top.name;
+      out.action = g_filter_top.action;
+      out.sym_p = g_filter_top.sym_p;
+      out.sym_b = g_filter_top.sym_b;
+      out.sym_d = g_filter_top.sym_d;
+      out.param = g_crystal_params;
+      entry.filter = out;
+    }
+    return { true, entry != old_entry, entry.filter != old_entry.filter };
+  }
+
   // Raypath commit branch. Wrapped in an explicit `== kRaypath` guard so
   // every FilterEditType has a symmetrical commit branch (post-#178.6 — no
   // more stub fall-through). The trailing `return` at the end of the
