@@ -707,17 +707,31 @@ static void RenderEntryExitSubpanel() {
   ImGui::InputInt("Exit face id##filter_modal", &g_ee_params.exit);
 }
 
-// Direction sub-panel: two InputFloat for (azimuth, elevation) in degrees.
-// (Step 3 will upgrade to SliderWithInput + tooltip; this Step 2 commit
-// only drops the radii field — kept InputFloat for minimal diff.) Values
+// 角度指光线传播方向 d（非视线方向 -d）；视位置筛选需取相反向量。
+static constexpr const char* kDirectionAngleTooltip =
+    "Angle specifies the ray's propagation direction\n"
+    "(the direction light travels from sun -> crystal -> observer).\n"
+    "To filter halos that appear at a sky position, use the opposite direction.";
+
+// Direction sub-panel: two SliderWithInput controls (azimuth, elevation)
+// in degrees, matching the right-side Camera section style. Values
 // written directly into g_dir_params; commit/dirty tracking handled by
 // ApplyBuffersToEntry / IsFilterDirty just like the raypath/EE paths.
-// The cone half-angle (core's DirectionFilterParam.radii_) is now a
-// fixed default injected at GUI→core serialization (file_io.cpp::
-// kDirectionDefaultRadiiDeg).
+// The cone half-angle (core's DirectionFilterParam.radii_) is a fixed
+// default injected at GUI→core serialization (file_io.cpp::
+// kDirectionDefaultRadiiDeg). Slider ranges follow the geometric
+// principal interval; out-of-range values still construct valid cos/sin
+// (DirectionFilter, src/core/filter.cpp:81-98) but the slider clamp keeps
+// UX unambiguous.
 static void RenderDirectionSubpanel() {
-  ImGui::InputFloat("Azimuth\xc2\xb0##filter_modal", &g_dir_params.az, 1.0f, 10.0f, "%.2f");
-  ImGui::InputFloat("Elevation\xc2\xb0##filter_modal", &g_dir_params.el, 1.0f, 10.0f, "%.2f");
+  SliderWithInput("Azimuth\xc2\xb0##filter_modal", &g_dir_params.az, -180.0f, 180.0f, "%.2f", SliderScale::kLinear);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", kDirectionAngleTooltip);
+  }
+  SliderWithInput("Elevation\xc2\xb0##filter_modal", &g_dir_params.el, -90.0f, 90.0f, "%.2f", SliderScale::kLinear);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", kDirectionAngleTooltip);
+  }
 }
 
 // Shared filter controls (Action radio + P/B/D), rendered after the

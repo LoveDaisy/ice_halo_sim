@@ -3300,7 +3300,9 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
   // ============================================================
 
   // T11 — Direction subpanel renders 2 angle inputs when Direction type
-  // is active; switching to other types hides them.
+  // is active; switching to other types hides them. With SliderWithInput
+  // (post-task-filter-modal-polish-v1) the matching ID is the input child
+  // widget "##<label>_input" — see panels.cpp::PrepareSliderLayout.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "direction_subpanel_inputs_visible");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -3311,15 +3313,15 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
 
       // Default = Raypath: Direction inputs not present.
-      IM_CHECK(!ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/##Azimuth\xc2\xb0##filter_modal_input"));
 
       // Switch to Direction: az/el items appear; radii (removed) MUST not;
       // raypath / EE inputs disappear.
       ctx->ItemClick("**/Direction##filter_type");
       ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
-      IM_CHECK(ctx->ItemExists("**/Elevation\xc2\xb0##filter_modal"));
-      IM_CHECK(!ctx->ItemExists("**/Radii\xc2\xb0##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/##Azimuth\xc2\xb0##filter_modal_input"));
+      IM_CHECK(ctx->ItemExists("**/##Elevation\xc2\xb0##filter_modal_input"));
+      IM_CHECK(!ctx->ItemExists("**/##Radii\xc2\xb0##filter_modal_input"));
       IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
       IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
 
@@ -3330,7 +3332,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // Switch back to Raypath: Direction inputs un-render.
       ctx->ItemClick("**/Raypath##filter_type");
       ctx->Yield(2);
-      IM_CHECK(!ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/##Azimuth\xc2\xb0##filter_modal_input"));
 
       ctx->ItemClick("**/Cancel##edit_modal");
       ctx->Yield(2);
@@ -3357,9 +3359,9 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Direction##filter_type");
       ctx->Yield(2);
 
-      // ItemInputValue accepts string for InputFloat — ImGui parses on Enter.
-      ctx->ItemInputValue("**/Azimuth\xc2\xb0##filter_modal", "30");
-      ctx->ItemInputValue("**/Elevation\xc2\xb0##filter_modal", "45");
+      // ItemInputValue targets the input child of SliderWithInput.
+      ctx->ItemInputValue("**/##Azimuth\xc2\xb0##filter_modal_input", 30.0f);
+      ctx->ItemInputValue("**/##Elevation\xc2\xb0##filter_modal_input", 45.0f);
       ctx->Yield(2);
       ctx->ItemClick("**/Filter Out##filter_action");
       ctx->Yield(2);
@@ -3407,20 +3409,20 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       ctx->ItemClick("**/Direction##filter_type");
       ctx->Yield(2);
-      ctx->ItemInputValue("**/Azimuth\xc2\xb0##filter_modal", "10");
-      ctx->ItemInputValue("**/Elevation\xc2\xb0##filter_modal", "20");
+      ctx->ItemInputValue("**/##Azimuth\xc2\xb0##filter_modal_input", 10.0f);
+      ctx->ItemInputValue("**/##Elevation\xc2\xb0##filter_modal_input", 20.0f);
       ctx->Yield(2);
 
       // Switch away (Entry-Exit's sub-buffer should not be touched by
       // Direction inputs).
       ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
-      IM_CHECK(!ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/##Azimuth\xc2\xb0##filter_modal_input"));
 
       // Switch back to Direction; per-type buffer must have retained values.
       ctx->ItemClick("**/Direction##filter_type");
       ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/##Azimuth\xc2\xb0##filter_modal_input"));
 
       ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
