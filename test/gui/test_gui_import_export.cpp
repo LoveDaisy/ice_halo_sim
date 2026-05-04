@@ -810,4 +810,52 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(jf == expected);
     };
   }
+
+  // task-filter-modal-polish-v1: v2 .lmc-style Direction filter JSON
+  // (with explicit radii) must load successfully into a v3 DirectionParams
+  // (radii silently dropped — GUI struct lacks the field). Re-serializing
+  // (SerializeGuiStateJson) must omit "radii" from the filter object.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "direction_v2_radii_dropped_on_load");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      const std::string v2_lmc = R"({
+        "schema_version": 2,
+        "layers": [{
+          "prob": 0.0,
+          "entries": [{
+            "crystal": {"type": "prism", "shape": {"height": 1.0}},
+            "proportion": 100.0,
+            "filter": {
+              "type": "direction",
+              "action": "filter_in",
+              "az": 22.0, "el": 5.0, "radii": 7.5
+            }
+          }]
+        }]
+      })";
+
+      gui::GuiState restored;
+      bool ok = gui::DeserializeGuiStateJson(v2_lmc, restored);
+      IM_CHECK(ok);
+      IM_CHECK(restored.layers[0].entries[0].filter.has_value());
+      const auto& f = *restored.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::DirectionParams>(f.param));
+      const auto& dp = std::get<gui::DirectionParams>(f.param);
+      IM_CHECK_EQ(dp.az, 22.0f);
+      IM_CHECK_EQ(dp.el, 5.0f);
+      // radii silently discarded — DirectionParams no longer has the field.
+
+      // Re-serializing must omit "radii" from the .lmc filter object.
+      const std::string written = gui::SerializeGuiStateJson(restored);
+      const auto j = nlohmann::json::parse(written);
+      const auto& jf = j["layers"][0]["entries"][0]["filter"];
+      IM_CHECK_STR_EQ(jf["type"].get<std::string>().c_str(), "direction");
+      IM_CHECK(!jf.contains("radii"));
+      IM_CHECK_EQ(jf["az"].get<float>(), 22.0f);
+      IM_CHECK_EQ(jf["el"].get<float>(), 5.0f);
+    };
+  }
 }

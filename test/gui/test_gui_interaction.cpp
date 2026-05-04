@@ -3134,7 +3134,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
   // p2_filter_type — task-per-type-entry-exit (issue 178.4)
   //
   // Entry-Exit type goes from stub to interactive: 2 InputInt controls
-  // (Entry/Exit face id), OK button enabled, commit assembles
+  // (Entry/Exit face number), OK button enabled, commit assembles
   // EntryExitParams into entry.filter. Per-type buffer isolation contract
   // (#178.3 T6) extends to switching between EE and Direction.
   // ============================================================
