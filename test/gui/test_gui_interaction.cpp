@@ -2982,8 +2982,9 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
   // the Action control switched from Combo to two RadioButtons.
   // ============================================================
 
-  // T1 — type radio is visible: all 4 type RadioButtons exist after opening
-  // the Filter tab.
+  // T1 — type radio is visible: all 3 type RadioButtons exist after opening
+  // the Filter tab. Crystal radio was removed in task-filter-modal-polish-v1
+  // (zero external .lmc files contain crystal filter; core path retained).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_type_radio_visible");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -2996,7 +2997,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(ctx->ItemExists("**/Raypath##filter_type"));
       IM_CHECK(ctx->ItemExists("**/Entry-Exit##filter_type"));
       IM_CHECK(ctx->ItemExists("**/Direction##filter_type"));
-      IM_CHECK(ctx->ItemExists("**/Crystal##filter_type"));
+      IM_CHECK(!ctx->ItemExists("**/Crystal##filter_type"));
 
       ctx->ItemClick("**/Cancel##edit_modal");
       ctx->Yield(2);
@@ -3166,15 +3167,12 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
       IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
-      // Switch to Crystal (post-#178.6: now interactive — EE inputs un-
-      // render, raypath stays hidden, OK stays enabled since the stub gate
-      // has been removed). The Crystal subpanel itself (Combo widget) is
-      // covered dedicatedly by T15; here we only assert what's NOT visible.
-      ctx->ItemClick("**/Crystal##filter_type");
+      // Switch to Direction: EE inputs un-render, OK stays enabled.
+      ctx->ItemClick("**/Direction##filter_type");
       ctx->Yield(2);
       IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
-      auto info_crystal = ctx->ItemInfo("**/OK##edit_modal");
-      IM_CHECK((info_crystal.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_dir = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_dir.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
       // Switch back to Entry-Exit: inputs reappear, OK re-enabled.
       ctx->ItemClick("**/Entry-Exit##filter_type");
@@ -3401,11 +3399,10 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // T13 — per-type buffer isolation extends to Direction ↔ Crystal switch:
-  // type-in Direction values, switch to Crystal (still a stub), switch back,
-  // OK → Direction values preserved. Crystal is used as the middle stop
-  // because it is the remaining stub — the OK gate keeps the test focused
-  // on buffer isolation (no committable state at the middle stop).
+  // T13 — per-type buffer isolation extends to Direction ↔ Entry-Exit switch:
+  // type-in Direction values, switch to Entry-Exit, switch back, OK →
+  // Direction values preserved. Verifies the per-type buffer is not clobbered
+  // when transiting through another type's sub-panel.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "direction_per_type_buffer_isolated");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -3421,9 +3418,9 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue("**/Radii\xc2\xb0##filter_modal", "3");
       ctx->Yield(2);
 
-      // Switch away (Crystal is a stub — its sub-buffer should not be
-      // touched by Direction inputs).
-      ctx->ItemClick("**/Crystal##filter_type");
+      // Switch away (Entry-Exit's sub-buffer should not be touched by
+      // Direction inputs).
+      ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
       IM_CHECK(!ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
 
@@ -3446,10 +3443,10 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
   }
 
   // T14 — H4 修正：P/B/D Checkbox is hidden when active type is Direction
-  // or Crystal (core filters do not consume crystal symmetry); P/B/D is
-  // rendered when active type is Raypath or EntryExit. Reverse-direction
-  // assertion in raypath / EE branches guards against an accidental "hide
-  // P/B/D in all types" regression while implementing H4.
+  // (DirectionFilter does not consume crystal symmetry); P/B/D is rendered
+  // when active type is Raypath or EntryExit. Reverse-direction assertion
+  // in raypath / EE branches guards against an accidental "hide P/B/D in
+  // all types" regression.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "direction_hides_pbd_checkboxes");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -3478,164 +3475,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(ctx->ItemExists("**/B##filter_modal"));
       IM_CHECK(ctx->ItemExists("**/D##filter_modal"));
 
-      // Crystal: P/B/D hidden (H4 also covers Crystal — see plan §3 D2).
-      ctx->ItemClick("**/Crystal##filter_type");
-      ctx->Yield(2);
-      IM_CHECK(!ctx->ItemExists("**/P##filter_modal"));
-      IM_CHECK(!ctx->ItemExists("**/B##filter_modal"));
-      IM_CHECK(!ctx->ItemExists("**/D##filter_modal"));
-
       ctx->ItemClick("**/Cancel##edit_modal");
       ctx->Yield(2);
-    };
-  }
-
-  // ============================================================
-  // p2_filter_type — task-per-type-crystal (issue 178.6)
-  //
-  // Crystal type goes from stub to interactive: 1 Combo whose options come
-  // from the modal-context layer's entries (crystal name fallback to
-  // "(unnamed)"), OK button enabled, commit assembles CrystalParams into
-  // entry.filter. The Combo's preview shows "(invalid #N)" for out-of-range
-  // crystal_id; the option list itself is unaffected and the user can
-  // re-pick. SerializeCoreConfig (covered by unit tests, not here)
-  // independently clamps + warns on out-of-range crystal_id.
-  // ============================================================
-
-  // T15 — Crystal subpanel: when Crystal type is active, the EE / Direction /
-  // Raypath inputs are not visible; OK is enabled (no stub gate post-#178.6,
-  // no per-field validation for Crystal); switching back to Raypath restores
-  // the raypath InputText. Note: the BeginCombo widget itself does not
-  // register reliably with ItemExists — we exercise it via ItemClick in T16
-  // and via behavioural assertions here.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "crystal_subpanel_combo_visible");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-
-      // Switch to Crystal: type-specific inputs from other branches go away.
-      ctx->ItemClick("**/Crystal##filter_type");
-      ctx->Yield(2);
-      IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
-      IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
-      IM_CHECK(!ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
-
-      // OK is enabled on Crystal (no per-field validation, no stub gate).
-      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
-      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
-      // Switch back to Raypath: raypath InputText reappears.
-      ctx->ItemClick("**/Raypath##filter_type");
-      ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
-
-      ctx->ItemClick("**/Cancel##edit_modal");
-      ctx->Yield(2);
-    };
-  }
-
-  // T16 — Crystal OK commits filter end-to-end: switch to Crystal radio
-  // (which dirties the buffer via active_type != snapshot inside
-  // IsFilterDirty), OK → entry.filter holds default CrystalParams
-  // (crystal_id=0) with default action (=0, Filter In) and default
-  // sym_p/b/d (= true → "PBD" suffix). Asserts the FilterSummary text is
-  // exactly "CR:#0 In PBD" — anchored to panels.cpp FilterSummary contract
-  // (CrystalParams branch).
-  //
-  // Note: ImGui's BeginCombo widget is not exposed to the test engine via
-  // IMGUI_TEST_ENGINE_ITEM_INFO, so the Combo cannot be ItemClick'd from
-  // a test directly. The Combo's user-facing interaction (option pick) is
-  // instead exercised at the data layer by either pre-populating entry
-  // .filter (T17 / T18) or accepting the default crystal_id=0 (this test).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "crystal_ok_commits_filter");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-
-      ctx->ItemClick("**/Crystal##filter_type");
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/OK##edit_modal");
-      ctx->Yield(2);
-
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      const auto& f = gui::g_state.layers[0].entries[0].filter.value();
-      IM_CHECK(std::holds_alternative<gui::CrystalParams>(f.param));
-      IM_CHECK_EQ(std::get<gui::CrystalParams>(f.param).crystal_id, 0);
-      IM_CHECK_EQ(f.action, 0);
-      IM_CHECK_STR_EQ(gui::FilterSummary(gui::g_state.layers[0].entries[0].filter).c_str(), "CR:#0 In PBD");
-    };
-  }
-
-  // T17 — per-type buffer isolation extends to Crystal ↔ Direction switch:
-  // pre-set entry.filter to CrystalParams{1} (so OpenEditModal loads
-  // crystal_id=1 into the Crystal sub-buffer + active_type=kCrystal),
-  // switch transit to Direction (its sub-buffer is at defaults — would
-  // produce a Direction filter on commit), switch back to Crystal (the
-  // crystal_id=1 sub-buffer is preserved per #178.3 contract), OK →
-  // entry.filter.crystal_id is still 1.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "crystal_per_type_buffer_isolated");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      gui::FilterConfig prefab;
-      prefab.param = gui::CrystalParams{ 1 };
-      gui::g_state.layers[0].entries[0].filter = prefab;
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-
-      // Transit to Direction, then back to Crystal.
-      ctx->ItemClick("**/Direction##filter_type");
-      ctx->Yield(2);
-      ctx->ItemClick("**/Crystal##filter_type");
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/OK##edit_modal");
-      ctx->Yield(2);
-
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      const auto& f = gui::g_state.layers[0].entries[0].filter.value();
-      IM_CHECK(std::holds_alternative<gui::CrystalParams>(f.param));
-      IM_CHECK_EQ(std::get<gui::CrystalParams>(f.param).crystal_id, 1);
-    };
-  }
-
-  // T18 — dangling crystal_id ref preserved through commit (UI does not
-  // auto-clamp): pre-set entry.filter with crystal_id=999 (out-of-range —
-  // layer has only 1 entry), open modal, OK without modifying → entry
-  // .filter.crystal_id is still 999. Verifies the UI layer keeps the
-  // dangling value as-is so the user retains the chance to re-pick a
-  // valid option; serialization-time clamp + warning is covered by the
-  // crystal_serialize_core_dangling_clamp unit test (Step 6).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "crystal_dangling_ref_fallback");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      gui::FilterConfig prefab;
-      prefab.param = gui::CrystalParams{ 999 };
-      gui::g_state.layers[0].entries[0].filter = prefab;
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-      ctx->ItemClick("**/OK##edit_modal");
-      ctx->Yield(2);
-
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      const auto& fv = gui::g_state.layers[0].entries[0].filter.value();
-      IM_CHECK(std::holds_alternative<gui::CrystalParams>(fv.param));
-      IM_CHECK_EQ(std::get<gui::CrystalParams>(fv.param).crystal_id, 999);
     };
   }
 }

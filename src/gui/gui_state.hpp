@@ -250,14 +250,7 @@ struct DirectionParams {
   friend bool operator!=(const DirectionParams& a, const DirectionParams& b) { return !(a == b); }
 };
 
-struct CrystalParams {
-  int crystal_id = 0;
-
-  friend bool operator==(const CrystalParams& a, const CrystalParams& b) { return a.crystal_id == b.crystal_id; }
-  friend bool operator!=(const CrystalParams& a, const CrystalParams& b) { return !(a == b); }
-};
-
-using FilterParamVariant = std::variant<RaypathParams, EntryExitParams, DirectionParams, CrystalParams>;
+using FilterParamVariant = std::variant<RaypathParams, EntryExitParams, DirectionParams>;
 
 // GUI-only data structure: filter configuration.
 //

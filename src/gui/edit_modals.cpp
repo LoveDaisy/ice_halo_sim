@@ -89,7 +89,7 @@ static AxisDist g_axis_buf[3];  // zenith, azimuth, roll
 // Each FilterEditType keeps its own sub-buffer so switching type is non-destructive
 // (T6 contract: "切到 EE 再切回 raypath, 之前输入仍在"). Commit assembles a
 // FilterConfig from g_filter_top (shared fields) + active type's sub-buffer.
-enum class FilterEditType { kRaypath = 0, kEntryExit = 1, kDirection = 2, kCrystal = 3 };
+enum class FilterEditType { kRaypath = 0, kEntryExit = 1, kDirection = 2 };
 static FilterEditType g_filter_active_type = FilterEditType::kRaypath;
 static FilterEditType g_filter_active_type_snapshot = FilterEditType::kRaypath;
 
@@ -112,11 +112,9 @@ static FilterConfig g_filter_top_snapshot;
 static RaypathParams g_raypath_params;
 static EntryExitParams g_ee_params;
 static DirectionParams g_dir_params;
-static CrystalParams g_crystal_params;
 static RaypathParams g_raypath_params_snapshot;
 static EntryExitParams g_ee_params_snapshot;
 static DirectionParams g_dir_params_snapshot;
-static CrystalParams g_crystal_params_snapshot;
 
 // ImGui InputText backing store for the raypath text input. The raypath
 // sub-buffer's raypath_text is synced FROM this char array (canonical source)
@@ -270,7 +268,6 @@ void SnapshotAllBuffers(const GuiState& state) {
   g_raypath_params_snapshot = g_raypath_params;
   g_ee_params_snapshot = g_ee_params;
   g_dir_params_snapshot = g_dir_params;
-  g_crystal_params_snapshot = g_crystal_params;
   g_filter_active_type_snapshot = g_filter_active_type;
   g_crystal_buf_snapshot = g_crystal_buf;
   g_axis_buf_snapshot[0] = g_axis_buf[0];
@@ -366,7 +363,6 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_raypath_params = {};
   g_ee_params = {};
   g_dir_params = {};
-  g_crystal_params = {};
   g_filter_active_type = FilterEditType::kRaypath;
   if (std::holds_alternative<RaypathParams>(src.param)) {
     g_raypath_params = std::get<RaypathParams>(src.param);
@@ -377,9 +373,6 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   } else if (std::holds_alternative<DirectionParams>(src.param)) {
     g_dir_params = std::get<DirectionParams>(src.param);
     g_filter_active_type = FilterEditType::kDirection;
-  } else if (std::holds_alternative<CrystalParams>(src.param)) {
-    g_crystal_params = std::get<CrystalParams>(src.param);
-    g_filter_active_type = FilterEditType::kCrystal;
   }
   snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_raypath_params.raypath_text.c_str());
   // Snapshot the dirty-compare baseline (Crystal/Axis/Filter buffers +
@@ -727,60 +720,6 @@ static void RenderDirectionSubpanel() {
   ImGui::InputFloat("Radii\xc2\xb0##filter_modal", &g_dir_params.radii, 0.1f, 1.0f, "%.2f");
 }
 
-// CrystalParams subpanel (#178.6). Renders a single Combo whose options are
-// dynamically pulled from the modal-context layer's entries (each entry has a
-// crystal name; entries with empty name fall back to "(unnamed)"). The Combo
-// writes back into g_crystal_params.crystal_id as a 0-based layer-local entry
-// index — the GUI-internal semantics. SerializeCoreConfig translates this
-// index into a flat global crystal_id when writing core JSON; the .lmc track
-// keeps it as layer-local index (no translation, see plan §3 D3).
-//
-// Dangling refs (crystal_id out of range — typically because the layer was
-// shrunk after the filter was authored) render as "(invalid #N)" preview;
-// the option list is unaffected and the user can re-pick. SerializeCoreConfig
-// independently clamps + warns on out-of-range values (plan §3 D5).
-static void RenderCrystalSubpanel(const GuiState& state) {
-  const int li = g_modal_layer_idx;
-  if (li < 0 || li >= static_cast<int>(state.layers.size())) {
-    ImGui::TextDisabled("(layer index invalid — internal error)");
-    return;
-  }
-  const auto& layer = state.layers[li];
-  const int n = static_cast<int>(layer.entries.size());
-
-  char preview[96];
-  if (g_crystal_params.crystal_id >= 0 && g_crystal_params.crystal_id < n) {
-    const auto& sel_name = layer.entries[g_crystal_params.crystal_id].crystal.name;
-    snprintf(preview, sizeof(preview), "#%d: %s", g_crystal_params.crystal_id,
-             sel_name.empty() ? "(unnamed)" : sel_name.c_str());
-  } else {
-    snprintf(preview, sizeof(preview), "(invalid #%d)", g_crystal_params.crystal_id);
-  }
-
-  // SetNextComboPopupTopMost: detached modal viewport compatibility — see
-  // helper definition (lines 287-313) for the rationale and maintenance
-  // contract.
-  SetNextComboPopupTopMost();
-  if (ImGui::BeginCombo("Crystal##filter_crystal_combo", preview)) {
-    for (int i = 0; i < n; ++i) {
-      char label[96];
-      const auto& nm = layer.entries[i].crystal.name;
-      // ##suffix prevents ID collision when two entries share the same
-      // crystal.name (ImGui label hash uses pre-## portion for display, post-##
-      // for ID).
-      snprintf(label, sizeof(label), "#%d: %s##crystal_opt_%d", i, nm.empty() ? "(unnamed)" : nm.c_str(), i);
-      const bool is_selected = (i == g_crystal_params.crystal_id);
-      if (ImGui::Selectable(label, is_selected)) {
-        g_crystal_params.crystal_id = i;
-      }
-      if (is_selected) {
-        ImGui::SetItemDefaultFocus();
-      }
-    }
-    ImGui::EndCombo();
-  }
-}
-
 // Shared filter controls (Action radio + P/B/D), rendered after the
 // type-specific dispatch. Always uses g_filter_top so type switches don't
 // reset shared user preferences.
@@ -797,12 +736,10 @@ static void RenderSharedFilterControls() {
 
   // P/B/D Checkbox — H4 修正 (issue per-type-direction / 178.5): only raypath
   // and entry_exit consume crystal symmetry at the core layer; DirectionFilter
-  // does not override InitCrystalSymmetry (src/core/filter.cpp:81-98), and
-  // kCrystal also does not override InitCrystalSymmetry (see H4 survey;
-  // revisit in #178.6). Hiding the controls avoids misleading users — the
-  // underlying sym_p/b/d fields keep their default values and the serializer
-  // still writes the `symmetry` JSON field for cross-type round-trip
-  // compatibility.
+  // does not override InitCrystalSymmetry (src/core/filter.cpp:81-98).
+  // Hiding the controls avoids misleading users — the underlying sym_p/b/d
+  // fields keep their default values and the serializer still writes the
+  // `symmetry` JSON field for cross-type round-trip compatibility.
   const bool sym_active =
       (g_filter_active_type == FilterEditType::kRaypath || g_filter_active_type == FilterEditType::kEntryExit);
   if (sym_active) {
@@ -827,13 +764,11 @@ static void RenderRemoveFilterButton() {
   ImGui::EndDisabled();
 }
 
-static void RenderFilterModal(const GuiState& state) {
-  // Type radio — 4 options, SameLine horizontal (style-aligned with Crystal
+static void RenderFilterModal(const GuiState& /* state */) {
+  // Type radio — 3 options, SameLine horizontal (style-aligned with Crystal
   // tab's Prism/Pyramid radios). Boolean form (RadioButton(label, active))
   // matches the Action radio below and the Crystal-tab Prism/Pyramid radios,
   // avoiding a "ImGui writes a temp int, branch writes the enum" double-write.
-  // On vertical layout (~360px) we keep all four on one row; no runtime
-  // adaptive wrap to avoid extra test dimensions.
   if (ImGui::RadioButton("Raypath##filter_type", g_filter_active_type == FilterEditType::kRaypath)) {
     g_filter_active_type = FilterEditType::kRaypath;
   }
@@ -845,16 +780,12 @@ static void RenderFilterModal(const GuiState& state) {
   if (ImGui::RadioButton("Direction##filter_type", g_filter_active_type == FilterEditType::kDirection)) {
     g_filter_active_type = FilterEditType::kDirection;
   }
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Crystal##filter_type", g_filter_active_type == FilterEditType::kCrystal)) {
-    g_filter_active_type = FilterEditType::kCrystal;
-  }
 
   ImGui::Spacing();
 
   // Type-specific dispatch. `default:` assert ensures any future
-  // FilterEditType extension (#4-#6) is handled explicitly rather than
-  // silently dropped — mirrors the project convention of "exhaustive switch +
+  // FilterEditType extension is handled explicitly rather than silently
+  // dropped — mirrors the project convention of "exhaustive switch +
   // assert tripwire" recorded in scratchpad/learnings.md.
   switch (g_filter_active_type) {
     case FilterEditType::kRaypath:
@@ -865,9 +796,6 @@ static void RenderFilterModal(const GuiState& state) {
       break;
     case FilterEditType::kDirection:
       RenderDirectionSubpanel();
-      break;
-    case FilterEditType::kCrystal:
-      RenderCrystalSubpanel(state);
       break;
     default:
       assert(false && "unhandled FilterEditType in RenderFilterModal dispatch");
@@ -934,11 +862,9 @@ void ResetModalState() {
   g_raypath_params = {};
   g_ee_params = {};
   g_dir_params = {};
-  g_crystal_params = {};
   g_raypath_params_snapshot = {};
   g_ee_params_snapshot = {};
   g_dir_params_snapshot = {};
-  g_crystal_params_snapshot = {};
   g_filter_initial_present = false;
   g_raypath_buf[0] = '\0';
   std::memset(g_saved_rotation, 0, sizeof(g_saved_rotation));
@@ -982,8 +908,6 @@ bool IsFilterDirty() {
       return g_ee_params != g_ee_params_snapshot;
     case FilterEditType::kDirection:
       return g_dir_params != g_dir_params_snapshot;
-    case FilterEditType::kCrystal:
-      return g_crystal_params != g_crystal_params_snapshot;
     default:
       assert(false && "unhandled FilterEditType in IsFilterDirty");
       return false;
@@ -1078,36 +1002,10 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     return { true, entry != old_entry, entry.filter != old_entry.filter };
   }
 
-  // Crystal commit branch (#178.6). Mirrors the EE / Direction branches above;
-  // gated on `g_filter_initial_present || buf_changed`. NOTE: switching to the
-  // Crystal RadioButton already sets buf_changed=true (active_type != snapshot
-  // inside IsFilterDirty), so the path "open a filterless entry → switch to
-  // Crystal → OK without picking" always commits a default Crystal filter
-  // (crystal_id=0, i.e. the layer's first entry); the guard's actual function
-  // is to suppress a re-commit when the user reopens an existing Crystal
-  // entry and presses OK without modifying. P/B/D fields stay in g_filter_top
-  // per the H4 contract — UI hides the Checkboxes (since #178.5) but the
-  // data round-trips unchanged.
-  if (g_filter_active_type == FilterEditType::kCrystal) {
-    const bool buf_changed = IsFilterDirty();
-    if (g_filter_initial_present || buf_changed) {
-      FilterConfig out;
-      out.name = g_filter_top.name;
-      out.action = g_filter_top.action;
-      out.sym_p = g_filter_top.sym_p;
-      out.sym_b = g_filter_top.sym_b;
-      out.sym_d = g_filter_top.sym_d;
-      out.param = g_crystal_params;
-      entry.filter = out;
-    }
-    return { true, entry != old_entry, entry.filter != old_entry.filter };
-  }
-
   // Raypath commit branch. Wrapped in an explicit `== kRaypath` guard so
-  // every FilterEditType has a symmetrical commit branch (post-#178.6 — no
-  // more stub fall-through). The trailing `return` at the end of the
-  // function is a defensive no-op for any future FilterEditType extension
-  // that forgets to add its own branch.
+  // every FilterEditType has a symmetrical commit branch. The trailing
+  // `return` at the end of the function is a defensive no-op for any future
+  // FilterEditType extension that forgets to add its own branch.
   if (g_filter_active_type == FilterEditType::kRaypath) {
     // Buffer-changed predicate: defined as IsFilterDirty() in this TU so the
     // commit decision and the tab-label dirty mark stay in sync — adding a new

@@ -130,8 +130,6 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
           char buf[64];
           snprintf(buf, sizeof(buf), "DIR:%g\xc2\xb0/%g\xc2\xb0 r=%g\xc2\xb0", p.az, p.el, p.radii);
           return buf;
-        } else if constexpr (std::is_same_v<T, CrystalParams>) {
-          return "CR:#" + std::to_string(p.crystal_id);
         } else {
           return "*";
         }
