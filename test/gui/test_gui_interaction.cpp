@@ -3154,30 +3154,41 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
 
       // Default = Raypath: EE inputs not present.
-      IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Entry face number##filter_modal"));
 
-      // Switch to Entry-Exit: both InputInt items appear, raypath InputText disappears.
+      // Switch to Entry-Exit: both InputText items appear, raypath InputText disappears.
       ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Entry face id##filter_modal"));
-      IM_CHECK(ctx->ItemExists("**/Exit face id##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/Entry face number##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/Exit face number##filter_modal"));
       IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
 
-      // OK button is enabled on EE (no validation gate, no stub disable).
+      // OK is disabled while EE fields are empty (kIncomplete, not kValid).
+      // post-task-filter-modal-polish-v1 contract: empty face number is not
+      // a committable value — user must type a legal face number first.
       auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
-      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) != 0);
 
-      // Switch to Direction: EE inputs un-render, OK stays enabled.
+      // Type valid face numbers → OK enables.
+      ctx->ItemInputValue("**/Entry face number##filter_modal", "1");
+      ctx->ItemInputValue("**/Exit face number##filter_modal", "2");
+      ctx->Yield(2);
+      auto info_typed = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_typed.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Switch to Direction: EE inputs un-render, OK stays enabled
+      // (Direction has no per-field gate).
       ctx->ItemClick("**/Direction##filter_type");
       ctx->Yield(2);
-      IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Entry face number##filter_modal"));
       auto info_dir = ctx->ItemInfo("**/OK##edit_modal");
       IM_CHECK((info_dir.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
-      // Switch back to Entry-Exit: inputs reappear, OK re-enabled.
+      // Switch back to Entry-Exit: inputs reappear; the typed-and-valid
+      // values are still in the buffers so OK stays enabled.
       ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Entry face id##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/Entry face number##filter_modal"));
       auto info_back = ctx->ItemInfo("**/OK##edit_modal");
       IM_CHECK((info_back.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
@@ -3204,13 +3215,10 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
 
-      // ItemInputValue accepts string for InputInt — ImGui parses on Enter.
-      // Path A (current): pass decimal string. Path B fallback (if Path A
-      // fails to materialize the value, asserted by entry==0 below): switch
-      // to ctx->ItemInput<int>(...) integer overload — kept as a comment for
-      // future reference; not needed unless this case fails on first run.
-      ctx->ItemInputValue("**/Entry face id##filter_modal", "2");
-      ctx->ItemInputValue("**/Exit face id##filter_modal", "5");
+      // post-task-filter-modal-polish-v1: InputText (text), labels read
+      // "face number" not "face id".
+      ctx->ItemInputValue("**/Entry face number##filter_modal", "2");
+      ctx->ItemInputValue("**/Exit face number##filter_modal", "5");
       ctx->Yield(2);
       ctx->ItemClick("**/Filter Out##filter_action");
       ctx->Yield(2);
@@ -3226,18 +3234,17 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       const auto& f = *gui::g_state.layers[0].entries[0].filter;
       IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
       const auto& ee = std::get<gui::EntryExitParams>(f.param);
-      IM_CHECK_EQ(ee.entry, 2);
-      IM_CHECK_EQ(ee.exit, 5);
+      IM_CHECK_EQ(ee.entry_text, std::string("2"));
+      IM_CHECK_EQ(ee.exit_text, std::string("5"));
       IM_CHECK_EQ(f.action, 1);
       // Default sym_p/b/d = true (gui_state.hpp:271-273), Filter Out → "Out".
       IM_CHECK(f.sym_p);
       IM_CHECK(f.sym_b);
       IM_CHECK(f.sym_d);
 
-      // AC-4: FilterSummary EE format spec is "EE:<entry>→<exit> <In|Out>[ <sym>]"
-      // (panels.cpp:119-120 EE branch). Direct string assertion — independent of
-      // SerializeCoreConfig (which exercises a different code path). The "→" is
-      // the UTF-8 RIGHTWARDS ARROW (U+2192) emitted as "\xe2\x86\x92".
+      // FilterSummary EE format: "EE:<entry>→<exit> <In|Out>[ <sym>]" —
+      // entry/exit now render the raw text buffer (kept as-is so partial
+      // input stays visible). The "→" is UTF-8 U+2192 ("\xe2\x86\x92").
       IM_CHECK_STR_EQ(gui::FilterSummary(gui::g_state.layers[0].entries[0].filter).c_str(),
                       "EE:2\xe2\x86\x92"
                       "5 Out PBD");
@@ -3260,8 +3267,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
-      ctx->ItemInputValue("**/Entry face id##filter_modal", "3");
-      ctx->ItemInputValue("**/Exit face id##filter_modal", "7");
+      ctx->ItemInputValue("**/Entry face number##filter_modal", "3");
+      ctx->ItemInputValue("**/Exit face number##filter_modal", "7");
       ctx->Yield(2);
 
       // Switch away — Direction owns a separate sub-buffer (g_dir_params),
@@ -3270,12 +3277,12 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Direction##filter_type");
       ctx->Yield(2);
       // Verify EE inputs un-rendered while Direction is active.
-      IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Entry face number##filter_modal"));
 
       // Switch back to Entry-Exit; per-type buffer must have retained values.
       ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Entry face id##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/Entry face number##filter_modal"));
 
       ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
@@ -3284,8 +3291,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       const auto& f = *gui::g_state.layers[0].entries[0].filter;
       IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
       const auto& ee = std::get<gui::EntryExitParams>(f.param);
-      IM_CHECK_EQ(ee.entry, 3);
-      IM_CHECK_EQ(ee.exit, 7);
+      IM_CHECK_EQ(ee.entry_text, std::string("3"));
+      IM_CHECK_EQ(ee.exit_text, std::string("7"));
     };
   }
 
@@ -3323,7 +3330,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(ctx->ItemExists("**/##Elevation\xc2\xb0##filter_modal_input"));
       IM_CHECK(!ctx->ItemExists("**/##Radii\xc2\xb0##filter_modal_input"));
       IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
-      IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Entry face number##filter_modal"));
 
       // OK button is enabled on Direction (no validation gate, no stub disable).
       auto info_ok = ctx->ItemInfo("**/OK##edit_modal");

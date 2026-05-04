@@ -612,7 +612,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       };
 
       layer.entries.push_back(make_entry(gui::RaypathParams{ "3-1-5" }));
-      layer.entries.push_back(make_entry(gui::EntryExitParams{ 7, 4 }));
+      layer.entries.push_back(make_entry(gui::EntryExitParams{ "7", "4" }));
       layer.entries.push_back(make_entry(gui::DirectionParams{ 30.0f, -10.0f }));
       gui::g_state.layers.push_back(layer);
 
@@ -636,8 +636,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       const auto& f1 = *gui::g_state.layers[0].entries[1].filter;
       IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f1.param));
       const auto& ee = std::get<gui::EntryExitParams>(f1.param);
-      IM_CHECK_EQ(ee.entry, 7);
-      IM_CHECK_EQ(ee.exit, 4);
+      IM_CHECK_EQ(ee.entry_text, std::string("7"));
+      IM_CHECK_EQ(ee.exit_text, std::string("4"));
 
       const auto& f2 = *gui::g_state.layers[0].entries[2].filter;
       IM_CHECK(std::holds_alternative<gui::DirectionParams>(f2.param));
@@ -711,7 +711,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       fc.sym_p = true;   // → "P" in symmetry suffix
       fc.sym_b = false;  // omitted
       fc.sym_d = true;   // → "D"
-      fc.param = gui::EntryExitParams{ /*entry=*/2, /*exit=*/5 };
+      fc.param = gui::EntryExitParams{ /*entry_text=*/"2", /*exit_text=*/"5" };
       e.filter = fc;
 
       layer.entries.push_back(e);

@@ -228,12 +228,16 @@ struct RaypathParams {
 };
 
 struct EntryExitParams {
-  // GUI ints; clamped to [0, IdType max] by the core conversion layer.
-  int entry = 0;
-  int exit = 0;
+  // GUI text buffers — validated via raypath_validation::ValidateFaceNumberText
+  // and parsed to int at the GUI→core / GUI→.lmc serialization boundary.
+  // Storing as string lets the user type partial input and lets validation
+  // surface "Face N not legal on Prism" messages just like the raypath
+  // sub-panel.
+  std::string entry_text;
+  std::string exit_text;
 
   friend bool operator==(const EntryExitParams& a, const EntryExitParams& b) {
-    return a.entry == b.entry && a.exit == b.exit;
+    return a.entry_text == b.entry_text && a.exit_text == b.exit_text;
   }
   friend bool operator!=(const EntryExitParams& a, const EntryExitParams& b) { return !(a == b); }
 };
@@ -318,7 +322,12 @@ struct EntryCard {
 // platform. Pinning the Apple build is enough to catch an accidental field
 // addition during local dev; Linux/Windows CI still compiles the struct.
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(EntryCard) == 192,
+// Updated 2026-05-04 (task-filter-modal-polish-v1): EntryExitParams went
+// int→std::string, so the FilterParamVariant size grew (24-byte SSO ×2
+// dominates over the old 2×int alternative). Re-pin after the field
+// change. NOTE: temporarily relaxed to a range check while the new
+// size stabilizes — Step 6 will tighten back to a single value.
+static_assert(sizeof(EntryCard) == 216,
               "EntryCard size changed (check CrystalConfig/AxisDist/EntryCard operator== for new fields)");
 #endif
 

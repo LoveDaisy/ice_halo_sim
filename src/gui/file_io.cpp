@@ -217,9 +217,11 @@ static json SerializeFilterForGui(const FilterConfig& f, int id) {
           j["type"] = "raypath";
           j["raypath_text"] = p.raypath_text;
         } else if constexpr (std::is_same_v<T, EntryExitParams>) {
+          // Persist as text so partial / invalid input round-trips without
+          // surprise int parsing; readers parse on the fly.
           j["type"] = "entry_exit";
-          j["entry"] = p.entry;
-          j["exit"] = p.exit;
+          j["entry_text"] = p.entry_text;
+          j["exit_text"] = p.exit_text;
         } else if constexpr (std::is_same_v<T, DirectionParams>) {
           // .lmc no longer persists radii (GUI uses default at commit time).
           j["type"] = "direction";
@@ -256,6 +258,30 @@ static json BuildCoreSimpleFilterJson(const FilterConfig& f, int id, const char*
   }
   fill(j);
   return j;
+}
+
+// Parse an EntryExit face-number text buffer to int. Empty / non-numeric
+// text returns 0 (the OK-button gate stops invalid commits before reaching
+// here; this fallback only ever runs for bypass paths like Immediate-mode
+// half-typed input). Caps digit count at 9 to avoid int overflow on
+// pathological input.
+static int ParseFaceNumberOrZero(const std::string& text) {
+  if (text.empty()) {
+    return 0;
+  }
+  int value = 0;
+  int digits = 0;
+  for (char c : text) {
+    if (c < '0' || c > '9') {
+      return 0;
+    }
+    if (digits >= 9) {
+      return 0;
+    }
+    value = value * 10 + (c - '0');
+    ++digits;
+  }
+  return value;
 }
 
 // Clamp a GUI int to the core IdType range and warn on overflow.
@@ -318,10 +344,16 @@ static FilterCoreResult SerializeFilterForCore(const FilterConfig& f, int next_f
             result.main_id = complex_id;
           }
         } else if constexpr (std::is_same_v<T, EntryExitParams>) {
+          // Parse text → int at the core boundary. Empty / non-numeric text
+          // falls through to ClampIdValue's negative-clamp path which emits
+          // 0 and a GUI_LOG_WARNING; OK-button gating prevents this from
+          // reaching SerializeFilterForCore in normal operation.
           int id = next_filter_id_base;
+          int entry_int = ParseFaceNumberOrZero(p.entry_text);
+          int exit_int = ParseFaceNumberOrZero(p.exit_text);
           result.filters.push_back(BuildCoreSimpleFilterJson(f, id, "entry_exit", [&](json& j) {
-            j["entry"] = ClampIdValue(p.entry, "entry");
-            j["exit"] = ClampIdValue(p.exit, "exit");
+            j["entry"] = ClampIdValue(entry_int, "entry");
+            j["exit"] = ClampIdValue(exit_int, "exit");
           }));
           result.main_id = id;
         } else if constexpr (std::is_same_v<T, DirectionParams>) {
@@ -532,9 +564,23 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
   if (type == "raypath") {
     f.param = RaypathParams{ jf.value("raypath_text", std::string{}) };
   } else if (type == "entry_exit") {
+    // Prefer text fields (post-task-filter-modal-polish-v1 schema); fall
+    // back to legacy v2 int "entry" / "exit" for older .lmc files. An int
+    // 0 → empty string keeps the user-visible "no value typed yet" state
+    // distinguishable from "user typed 0".
     EntryExitParams p;
-    p.entry = jf.value("entry", 0);
-    p.exit = jf.value("exit", 0);
+    if (jf.contains("entry_text")) {
+      p.entry_text = jf.value("entry_text", std::string{});
+    } else if (jf.contains("entry")) {
+      int v = jf.value("entry", 0);
+      p.entry_text = (v == 0) ? std::string{} : std::to_string(v);
+    }
+    if (jf.contains("exit_text")) {
+      p.exit_text = jf.value("exit_text", std::string{});
+    } else if (jf.contains("exit")) {
+      int v = jf.value("exit", 0);
+      p.exit_text = (v == 0) ? std::string{} : std::to_string(v);
+    }
     f.param = p;
   } else if (type == "direction") {
     // Older .lmc files (v2) may include "radii" — read-and-discard
@@ -844,9 +890,14 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
         }
         f.param = RaypathParams{ text };
       } else if (type_str == "entry_exit") {
+        // core JSON keeps int "entry" / "exit" — translate to GUI's text
+        // representation (0 → empty so the user-visible "untouched" state
+        // is preserved).
         EntryExitParams p;
-        p.entry = jf.value("entry", 0);
-        p.exit = jf.value("exit", 0);
+        int entry_int = jf.value("entry", 0);
+        int exit_int = jf.value("exit", 0);
+        p.entry_text = (entry_int == 0) ? std::string{} : std::to_string(entry_int);
+        p.exit_text = (exit_int == 0) ? std::string{} : std::to_string(exit_int);
         f.param = p;
       } else if (type_str == "direction") {
         // core JSON's "radii" is core-only (cone half-angle); GUI

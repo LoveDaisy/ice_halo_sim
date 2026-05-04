@@ -125,7 +125,11 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
           }
           return p.raypath_text;
         } else if constexpr (std::is_same_v<T, EntryExitParams>) {
-          return "EE:" + std::to_string(p.entry) + "\xe2\x86\x92" + std::to_string(p.exit);
+          // text fallback ("?") so a half-typed config still renders
+          // something meaningful in the entry card summary.
+          const std::string& e = p.entry_text.empty() ? std::string{ "?" } : p.entry_text;
+          const std::string& x = p.exit_text.empty() ? std::string{ "?" } : p.exit_text;
+          return "EE:" + e + "\xe2\x86\x92" + x;
         } else if constexpr (std::is_same_v<T, DirectionParams>) {
           char buf[64];
           snprintf(buf, sizeof(buf), "DIR:%g\xc2\xb0/%g\xc2\xb0", p.az, p.el);

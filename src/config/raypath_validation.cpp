@@ -186,4 +186,35 @@ RaypathValidationResult ValidateRaypathText(const std::string& text, CrystalKind
   return RaypathValidationResult{ RaypathValidation::kValid, std::string{} };
 }
 
+RaypathValidationResult ValidateFaceNumberText(const std::string& text, CrystalKind kind) {
+  if (text.empty()) {
+    return RaypathValidationResult{ RaypathValidation::kIncomplete, std::string{} };
+  }
+  // Reject any non-digit character outright — separators ('-', ',') are
+  // raypath syntax and carry no meaning for a single face-number field.
+  for (char c : text) {
+    if (!std::isdigit(static_cast<unsigned char>(c))) {
+      return RaypathValidationResult{ RaypathValidation::kInvalid, "must be a single non-negative integer" };
+    }
+  }
+  if (text.size() > static_cast<size_t>(kMaxFaceDigits)) {
+    return RaypathValidationResult{ RaypathValidation::kInvalid, "face number out of range" };
+  }
+  // Safe to parse: at most kMaxFaceDigits digits, fits in int.
+  int face = 0;
+  for (char c : text) {
+    face = face * 10 + (c - '0');
+  }
+  if (!IsLegalFaceGlobal(face)) {
+    return RaypathValidationResult{ RaypathValidation::kInvalid,
+                                    "Face " + std::to_string(face) + " is outside the legal range of any crystal" };
+  }
+  if (!IsLegalFace(kind, face)) {
+    return RaypathValidationResult{ RaypathValidation::kInvalid, "Face " + std::to_string(face) +
+                                                                     " is not legal on this crystal type (" +
+                                                                     CrystalKindLabel(kind) + ")" };
+  }
+  return RaypathValidationResult{ RaypathValidation::kValid, std::string{} };
+}
+
 }  // namespace lumice
