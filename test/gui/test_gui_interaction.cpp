@@ -3292,15 +3292,15 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
   // ============================================================
   // p2_filter_type — task-per-type-direction (issue 178.5)
   //
-  // Direction type goes from stub to interactive: 3 InputFloat controls
-  // (Azimuth°/Elevation°/Radii°), OK button enabled, commit assembles
-  // DirectionParams into entry.filter. H4 修正：P/B/D Checkbox 隐藏 for
-  // Direction & Crystal types (their core filters do not consume crystal
-  // symmetry); raypath / EE keep the P/B/D Checkbox.
+  // Direction type renders 2 angle controls (Azimuth°/Elevation°). The
+  // cone half-angle (radii) was removed from the GUI in
+  // task-filter-modal-polish-v1 — the serialization layer injects a
+  // fixed default. H4 修正：P/B/D Checkbox 隐藏 for Direction (its core
+  // filter does not consume crystal symmetry); raypath / EE keep P/B/D.
   // ============================================================
 
-  // T11 — Direction subpanel renders 3 InputFloat controls when Direction
-  // type is active; switching to other types hides them.
+  // T11 — Direction subpanel renders 2 angle inputs when Direction type
+  // is active; switching to other types hides them.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "direction_subpanel_inputs_visible");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -3313,12 +3313,13 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // Default = Raypath: Direction inputs not present.
       IM_CHECK(!ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
 
-      // Switch to Direction: 3 InputFloat items appear; raypath / EE inputs disappear.
+      // Switch to Direction: az/el items appear; radii (removed) MUST not;
+      // raypath / EE inputs disappear.
       ctx->ItemClick("**/Direction##filter_type");
       ctx->Yield(2);
       IM_CHECK(ctx->ItemExists("**/Azimuth\xc2\xb0##filter_modal"));
       IM_CHECK(ctx->ItemExists("**/Elevation\xc2\xb0##filter_modal"));
-      IM_CHECK(ctx->ItemExists("**/Radii\xc2\xb0##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Radii\xc2\xb0##filter_modal"));
       IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
       IM_CHECK(!ctx->ItemExists("**/Entry face id##filter_modal"));
 
@@ -3359,7 +3360,6 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // ItemInputValue accepts string for InputFloat — ImGui parses on Enter.
       ctx->ItemInputValue("**/Azimuth\xc2\xb0##filter_modal", "30");
       ctx->ItemInputValue("**/Elevation\xc2\xb0##filter_modal", "45");
-      ctx->ItemInputValue("**/Radii\xc2\xb0##filter_modal", "2");
       ctx->Yield(2);
       ctx->ItemClick("**/Filter Out##filter_action");
       ctx->Yield(2);
@@ -3377,25 +3377,19 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       const auto& d = std::get<gui::DirectionParams>(f.param);
       IM_CHECK_EQ(d.az, 30.0f);
       IM_CHECK_EQ(d.el, 45.0f);
-      IM_CHECK_EQ(d.radii, 2.0f);
       IM_CHECK_EQ(f.action, 1);
       // Default sym_p/b/d = true (gui_state.hpp:271-273) → "PBD" suffix.
       IM_CHECK(f.sym_p);
       IM_CHECK(f.sym_b);
       IM_CHECK(f.sym_d);
 
-      // AC-5: FilterSummary Direction format is "DIR:<az>°/<el>° r=<r>°
-      // <In|Out>[ <sym>]" (panels.cpp:131 Direction branch). Note: per H4
-      // contract, the sym suffix is still emitted even though the P/B/D
-      // Checkbox is hidden — the underlying field values round-trip
-      // unchanged. The "°" is UTF-8 U+00B0 (\xc2\xb0).
-      // Format defined in panels.cpp:131 — `%g` on integer-valued floats
-      // (30.0f / 45.0f / 2.0f) yields "30" / "45" / "2" (no trailing
-      // zero). If non-integer values are added later, update both the
-      // format string and this expected literal accordingly. See plan
-      // §7 Risk 7 for the format-stability rationale.
+      // FilterSummary Direction format is "DIR:<az>°/<el>° <In|Out>[ <sym>]"
+      // (panels.cpp Direction branch — radii dropped in
+      // task-filter-modal-polish-v1). The sym suffix is still emitted
+      // even though the P/B/D Checkbox is hidden — the underlying field
+      // values round-trip unchanged. The "°" is UTF-8 U+00B0 (\xc2\xb0).
       IM_CHECK_STR_EQ(gui::FilterSummary(gui::g_state.layers[0].entries[0].filter).c_str(),
-                      "DIR:30\xc2\xb0/45\xc2\xb0 r=2\xc2\xb0 Out PBD");
+                      "DIR:30\xc2\xb0/45\xc2\xb0 Out PBD");
     };
   }
 
@@ -3415,7 +3409,6 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       ctx->ItemInputValue("**/Azimuth\xc2\xb0##filter_modal", "10");
       ctx->ItemInputValue("**/Elevation\xc2\xb0##filter_modal", "20");
-      ctx->ItemInputValue("**/Radii\xc2\xb0##filter_modal", "3");
       ctx->Yield(2);
 
       // Switch away (Entry-Exit's sub-buffer should not be touched by
@@ -3438,7 +3431,6 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       const auto& d = std::get<gui::DirectionParams>(f.param);
       IM_CHECK_EQ(d.az, 10.0f);
       IM_CHECK_EQ(d.el, 20.0f);
-      IM_CHECK_EQ(d.radii, 3.0f);
     };
   }
 

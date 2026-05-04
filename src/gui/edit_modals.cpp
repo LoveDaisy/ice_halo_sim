@@ -707,17 +707,17 @@ static void RenderEntryExitSubpanel() {
   ImGui::InputInt("Exit face id##filter_modal", &g_ee_params.exit);
 }
 
-// Direction sub-panel (issue per-type-direction / 178.5): three InputFloat
-// for (azimuth, elevation, radii) in degrees. Values written directly into
-// g_dir_params; commit/dirty tracking handled by ApplyBuffersToEntry /
-// IsFilterDirty just like the raypath/EE paths. Out-of-range values are
-// accepted and forwarded to core as-is (DirectionFilter handles arbitrary
-// angles via cos/sin; radii=0 is a legal-but-empty config — see plan
-// D-Assume-2 for why no UI clamp).
+// Direction sub-panel: two InputFloat for (azimuth, elevation) in degrees.
+// (Step 3 will upgrade to SliderWithInput + tooltip; this Step 2 commit
+// only drops the radii field — kept InputFloat for minimal diff.) Values
+// written directly into g_dir_params; commit/dirty tracking handled by
+// ApplyBuffersToEntry / IsFilterDirty just like the raypath/EE paths.
+// The cone half-angle (core's DirectionFilterParam.radii_) is now a
+// fixed default injected at GUI→core serialization (file_io.cpp::
+// kDirectionDefaultRadiiDeg).
 static void RenderDirectionSubpanel() {
   ImGui::InputFloat("Azimuth\xc2\xb0##filter_modal", &g_dir_params.az, 1.0f, 10.0f, "%.2f");
   ImGui::InputFloat("Elevation\xc2\xb0##filter_modal", &g_dir_params.el, 1.0f, 10.0f, "%.2f");
-  ImGui::InputFloat("Radii\xc2\xb0##filter_modal", &g_dir_params.radii, 0.1f, 1.0f, "%.2f");
 }
 
 // Shared filter controls (Action radio + P/B/D), rendered after the
