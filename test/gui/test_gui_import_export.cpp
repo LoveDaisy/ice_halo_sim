@@ -858,4 +858,50 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(jf["el"].get<float>(), 5.0f);
     };
   }
+
+  // task-filter-modal-polish-v1: legacy v2 .lmc Entry-Exit filter (with
+  // int "entry" / "exit" fields) must load successfully and translate to
+  // the v3 string representation. Re-serialization writes the new
+  // entry_text / exit_text fields.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "entry_exit_v2_int_translates_to_text_on_load");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      const std::string v2_lmc = R"({
+        "schema_version": 2,
+        "layers": [{
+          "prob": 0.0,
+          "entries": [{
+            "crystal": {"type": "prism", "shape": {"height": 1.0}},
+            "proportion": 100.0,
+            "filter": {
+              "type": "entry_exit",
+              "action": "filter_in",
+              "entry": 7, "exit": 4
+            }
+          }]
+        }]
+      })";
+
+      gui::GuiState restored;
+      bool ok = gui::DeserializeGuiStateJson(v2_lmc, restored);
+      IM_CHECK(ok);
+      IM_CHECK(restored.layers[0].entries[0].filter.has_value());
+      const auto& f = *restored.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
+      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK_EQ(ee.entry_text, std::string("7"));
+      IM_CHECK_EQ(ee.exit_text, std::string("4"));
+
+      // Re-serialization writes the new entry_text / exit_text fields.
+      const std::string written = gui::SerializeGuiStateJson(restored);
+      const auto j = nlohmann::json::parse(written);
+      const auto& jf = j["layers"][0]["entries"][0]["filter"];
+      IM_CHECK_STR_EQ(jf["type"].get<std::string>().c_str(), "entry_exit");
+      IM_CHECK_STR_EQ(jf["entry_text"].get<std::string>().c_str(), "7");
+      IM_CHECK_STR_EQ(jf["exit_text"].get<std::string>().c_str(), "4");
+    };
+  }
 }

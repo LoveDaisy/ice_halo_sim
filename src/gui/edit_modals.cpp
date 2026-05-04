@@ -713,12 +713,13 @@ static void RenderRaypathSubpanel() {
 // pattern so users get consistent feedback across filter types. Commit
 // (ApplyBuffersToEntry) parses the text → int at the core boundary; the
 // modal-level OK button is gated on both fields validating to kValid.
+//
+// Buffer sync timing: g_ee_*_buf are initialised from g_ee_params in
+// OpenEditModal (snprintf), written back to g_ee_params at
+// SnapshotAllBuffers and ApplyBuffersToEntry. Within this function we
+// only read the buffers for validation — InputText itself mutates the
+// char arrays in place across frames.
 static void RenderEntryExitSubpanel() {
-  // Sync the in-flight text → char buffers each frame so external buffer
-  // changes (e.g. OpenEditModal loading an existing filter) are reflected
-  // in the InputText display. The buffers are the canonical backing store
-  // while the modal is open; ApplyBuffersToEntry copies them back into
-  // g_ee_params on commit.
   const auto kind = CurrentValidationKind();
   const auto v_entry = ValidateFaceNumberText(g_ee_entry_buf, kind);
   const auto v_exit = ValidateFaceNumberText(g_ee_exit_buf, kind);
@@ -824,7 +825,7 @@ static void RenderRemoveFilterButton() {
   ImGui::EndDisabled();
 }
 
-static void RenderFilterModal(const GuiState& /* state */) {
+static void RenderFilterModal() {
   // Type radio — 3 options, SameLine horizontal (style-aligned with Crystal
   // tab's Prism/Pyramid radios). Boolean form (RadioButton(label, active))
   // matches the Action radio below and the Crystal-tab Prism/Pyramid radios,
@@ -1197,7 +1198,7 @@ void RenderModalTabBar(GuiState& state, const char* crystal_label, const char* a
     }
     if (ImGui::BeginTabItem(filter_label, nullptr, filter_flags)) {
       g_active_tab = ActiveTab::kFilter;
-      RenderFilterModal(state);
+      RenderFilterModal();
       ImGui::EndTabItem();
     }
     ImGui::EndTabBar();
@@ -1503,12 +1504,23 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
         }
       }
     } else if (g_filter_active_type == FilterEditType::kEntryExit) {
+      // Mirror the raypath gate: keep g_ee_params text fields in lockstep
+      // with the InputText char buffers each frame so any caller that
+      // reads g_ee_params before the next ApplyBuffersToEntry (e.g. the
+      // tab-label dirty mark) sees the live value.
+      g_ee_params.entry_text = g_ee_entry_buf;
+      g_ee_params.exit_text = g_ee_exit_buf;
       const auto kind = CurrentValidationKind();
       const auto ve = ValidateFaceNumberText(g_ee_entry_buf, kind);
       const auto vx = ValidateFaceNumberText(g_ee_exit_buf, kind);
-      if (ve.state != RaypathValidation::kValid || vx.state != RaypathValidation::kValid) {
+      const bool incomplete = ve.state == RaypathValidation::kIncomplete || vx.state == RaypathValidation::kIncomplete;
+      const bool invalid = ve.state == RaypathValidation::kInvalid || vx.state == RaypathValidation::kInvalid;
+      if (invalid) {
         ok_disabled = true;
         ok_tooltip = "Filter face number invalid — fix it in the Filter tab";
+      } else if (incomplete) {
+        ok_disabled = true;
+        ok_tooltip = "Enter entry and exit face numbers";
       }
     }
 

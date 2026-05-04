@@ -16,6 +16,7 @@
 #include <sstream>
 #include <vector>
 
+#include "config/raypath_validation.hpp"
 #include "core/def.hpp"
 #include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
@@ -263,23 +264,31 @@ static json BuildCoreSimpleFilterJson(const FilterConfig& f, int id, const char*
 // Parse an EntryExit face-number text buffer to int. Empty / non-numeric
 // text returns 0 (the OK-button gate stops invalid commits before reaching
 // here; this fallback only ever runs for bypass paths like Immediate-mode
-// half-typed input). Caps digit count at 9 to avoid int overflow on
-// pathological input.
+// half-typed input). Delegates to ValidateFaceNumberText for the syntax
+// rules so the digit-cap and separator policy stay in lockstep with
+// raypath_validation.cpp::kMaxFaceDigits — kind-specific legality
+// (Prism vs Pyramid) is intentionally bypassed here because the GUI
+// layer doesn't carry the kind context across to the serializer; the
+// OK gate is the kind-aware authority.
 static int ParseFaceNumberOrZero(const std::string& text) {
   if (text.empty()) {
     return 0;
   }
+  // ValidateFaceNumberText with kPyramid covers the union of legal
+  // faces — any text the syntax stage rejects (separators, non-digits,
+  // overlong) bails to 0; only the kind-specific stage might "reject"
+  // a legal-on-pyramid face we want to keep, which we tolerate here.
+  const auto v = ValidateFaceNumberText(text, CrystalKind::kPyramid);
+  if (v.state == RaypathValidation::kInvalid && v.message.find("not legal on this crystal type") == std::string::npos) {
+    return 0;
+  }
+  // Safe to parse: ValidateFaceNumberText caps digit count.
   int value = 0;
-  int digits = 0;
   for (char c : text) {
     if (c < '0' || c > '9') {
       return 0;
     }
-    if (digits >= 9) {
-      return 0;
-    }
     value = value * 10 + (c - '0');
-    ++digits;
   }
   return value;
 }
