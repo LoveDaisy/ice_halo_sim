@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778038621645,
+  "lastUpdate": 1778038623926,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -5279,6 +5279,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 69.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "efafa43354b35f824c02394d62dbc328464441ba",
+          "message": "Merge pull request #85 from LoveDaisy/feat/more_filters\n\nfeat: per-type filter subpanels (Raypath / EntryExit / Direction / Crystal) with .lmc v2 serialization",
+          "timestamp": "2026-05-06T11:32:12+08:00",
+          "tree_id": "c65cfd36e780f84271a95de1b162d2f55d96cbbf",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/efafa43354b35f824c02394d62dbc328464441ba"
+        },
+        "date": 1778038623147,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 81.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 76.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 74.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 70.1,
             "unit": "%"
           }
         ]
