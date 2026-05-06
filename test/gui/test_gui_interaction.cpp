@@ -2115,6 +2115,80 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p2_render/lens_globe_switch_transform_other_to_globe — switching to Globe via
+  // UI combo applies az+180 / el-negate transform (supersedes ba841e4 az-reset).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_other_to_globe");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
+      gui::g_state.renderer.azimuth = 90.0f;
+      gui::g_state.renderer.elevation = 20.0f;
+      ctx->Yield(3);
+
+      // BeginCombo doesn't call IMGUI_TEST_ENGINE_ITEM_INFO so wildcard search fails for
+      // the combo button; use SetRef + ComboClick which finds the button by ID and the
+      // popup item via a window-scoped wildcard that scrolls to reveal clipped items.
+      // Globe is item 11/11 in kLensTypePresentationOrder; the default popup height is 8,
+      // so Globe is initially clipped and only reachable after popup scroll.
+      ctx->SetRef("//##RightPanel");
+      ctx->ComboClick("Lens Type##view/Globe");
+      ctx->SetRef("");
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, -90.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -20.0f);
+    };
+  }
+
+  // p2_render/lens_globe_switch_transform_globe_to_other — switching from Globe via
+  // UI combo applies the same self-inverse transform (az+180 / el-negate).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_globe_to_other");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      gui::g_state.renderer.azimuth = -90.0f;
+      gui::g_state.renderer.elevation = -20.0f;
+      ctx->Yield(3);
+
+      ctx->SetRef("//##RightPanel");
+      ctx->ComboClick("Lens Type##view/Fisheye Equidistant");
+      ctx->SetRef("");
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 90.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 20.0f);
+    };
+  }
+
+  // p2_render/lens_globe_switch_transform_az_zero_boundary — az=0 wraps to 180
+  // (not -180): the condition is "> 180.0f" (strict), so 0+180=180 is not reduced.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_az_zero_boundary");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
+      gui::g_state.renderer.azimuth = 0.0f;
+      gui::g_state.renderer.elevation = 0.0f;
+      ctx->Yield(3);
+
+      ctx->SetRef("//##RightPanel");
+      ctx->ComboClick("Lens Type##view/Globe");
+      ctx->SetRef("");
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 180.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 0.0f);
+    };
+  }
+
   // p2_render/modal_layout_toggle_bit — switching modal_layout_vertical is safe
   // (view preference state-level test; layout dispatch is exercised only indirectly
   // through subsequent modal open, which would require a live popup — omitted to

@@ -190,9 +190,10 @@ inline ViewDefaults DefaultViewParamsFor(int lens_type) {
     fov = 180.0f;
   } else if (lens_type == kLensTypeGlobe) {
     fov = 30.0f;
-    // Globe is outside-in: az=0 puts the camera behind the sphere, opposite to
-    // every inside-out lens. Default az=-180 so first-time entry / Reset shows
-    // the same direction users see in non-Globe projections at az=0.
+    // Globe is outside-in: az=0 puts the camera behind the sphere. Default az=-180
+    // so View Reset shows the same forward direction as non-Globe lenses at az=0.
+    // Lens-combo direction continuity is handled separately by the transform formula
+    // in RenderRightPanel (app_panels.cpp), not by this default.
     azimuth = -180.0f;
   }
   // Orthographic single + dual already fall through to 90; no extra branch.

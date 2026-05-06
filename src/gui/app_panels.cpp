@@ -385,11 +385,19 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
             // and tests bypass this combo by writing lens_type directly, so
             // they keep their fov.
             r.fov = d.fov;
-            // Crossing the Globe boundary inverts the view direction (Globe is
-            // outside-in), so reset az to the target lens' default. el/roll
-            // are preserved — only az has the inversion semantics.
             if (was_globe != now_globe) {
-              r.azimuth = d.azimuth;
+              // Globe is outside-in: crossing the boundary inverts both az and el.
+              // az: add 180 (mod 360) — self-inverse, same formula both directions.
+              r.azimuth += 180.0f;
+              if (r.azimuth > 180.0f) {
+                r.azimuth -= 360.0f;
+              }
+              // el: negate — self-inverse, same formula both directions.
+              r.elevation = -r.elevation;
+              // Globe el is limited to ±89° to avoid view-matrix degeneracy.
+              if (now_globe) {
+                r.elevation = std::max(-89.0f, std::min(89.0f, r.elevation));
+              }
             }
           }
         }
