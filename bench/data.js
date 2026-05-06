@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778041924863,
+  "lastUpdate": 1778041927071,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -5419,6 +5419,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 70.1,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f04e1ad447d4f4ccdeef564955f7043422e706e6",
+          "message": "Merge pull request #86 from LoveDaisy/feat/globe_view\n\nfeat: Globe↔other lens combo transform, visibility radio buttons, View panel regroup",
+          "timestamp": "2026-05-06T12:27:33+08:00",
+          "tree_id": "3291df96efef44c52eb9b8d5a8f0c2f7a1722641",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f04e1ad447d4f4ccdeef564955f7043422e706e6"
+        },
+        "date": 1778041926320,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 83.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 80.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 73.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 57.3,
             "unit": "%"
           }
         ]
