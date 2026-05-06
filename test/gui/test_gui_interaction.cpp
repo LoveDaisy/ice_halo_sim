@@ -2193,8 +2193,7 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
   // applies az+180=360, which is > 180 and wraps to 0 (not staying at 360).
   // Regression guard for the strict "> 180.0f" wrap condition.
   {
-    ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_az180_wrap");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_az180_wrap");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -2217,8 +2216,7 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
   // p2_render/lens_globe_switch_transform_el_clamp — el=91° switching to Globe
   // negates to -91°, then clamps to -89° (Globe el limit).
   {
-    ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_el_clamp");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_el_clamp");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
