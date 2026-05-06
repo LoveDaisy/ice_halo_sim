@@ -2115,6 +2115,127 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p2_render/lens_globe_switch_transform_other_to_globe — switching to Globe via
+  // UI combo applies az+180 / el-negate transform (supersedes ba841e4 az-reset).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_other_to_globe");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
+      gui::g_state.renderer.azimuth = 90.0f;
+      gui::g_state.renderer.elevation = 20.0f;
+      ctx->Yield(3);
+
+      // BeginCombo doesn't call IMGUI_TEST_ENGINE_ITEM_INFO so wildcard search fails for
+      // the combo button; use SetRef + ComboClick which finds the button by ID and the
+      // popup item via a window-scoped wildcard that scrolls to reveal clipped items.
+      // Globe is item 11/11 in kLensTypePresentationOrder; the default popup height is 8,
+      // so Globe is initially clipped and only reachable after popup scroll.
+      ctx->SetRef("//##RightPanel");
+      ctx->ComboClick("Lens Type##view/Globe");
+      ctx->SetRef("");
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, -90.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -20.0f);
+    };
+  }
+
+  // p2_render/lens_globe_switch_transform_globe_to_other — switching from Globe via
+  // UI combo applies the same self-inverse transform (az+180 / el-negate).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_globe_to_other");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      gui::g_state.renderer.azimuth = -90.0f;
+      gui::g_state.renderer.elevation = -20.0f;
+      ctx->Yield(3);
+
+      ctx->SetRef("//##RightPanel");
+      ctx->ComboClick("Lens Type##view/Fisheye Equidistant");
+      ctx->SetRef("");
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 90.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 20.0f);
+    };
+  }
+
+  // p2_render/lens_globe_switch_transform_az_zero_boundary — az=0 wraps to 180
+  // (not -180): the condition is "> 180.0f" (strict), so 0+180=180 is not reduced.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_az_zero_boundary");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
+      gui::g_state.renderer.azimuth = 0.0f;
+      gui::g_state.renderer.elevation = 0.0f;
+      ctx->Yield(3);
+
+      ctx->SetRef("//##RightPanel");
+      ctx->ComboClick("Lens Type##view/Globe");
+      ctx->SetRef("");
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 180.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 0.0f);
+    };
+  }
+
+  // p2_render/lens_globe_switch_transform_az180_wrap — az=180 switching to Globe
+  // applies az+180=360, which is > 180 and wraps to 0 (not staying at 360).
+  // Regression guard for the strict "> 180.0f" wrap condition.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_az180_wrap");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
+      gui::g_state.renderer.azimuth = 180.0f;
+      gui::g_state.renderer.elevation = 0.0f;
+      ctx->Yield(3);
+
+      ctx->SetRef("//##RightPanel");
+      ctx->ComboClick("Lens Type##view/Globe");
+      ctx->SetRef("");
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 0.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 0.0f);
+    };
+  }
+
+  // p2_render/lens_globe_switch_transform_el_clamp — el=91° switching to Globe
+  // negates to -91°, then clamps to -89° (Globe el limit).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_el_clamp");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
+      gui::g_state.renderer.azimuth = 0.0f;
+      gui::g_state.renderer.elevation = 91.0f;
+      ctx->Yield(3);
+
+      ctx->SetRef("//##RightPanel");
+      ctx->ComboClick("Lens Type##view/Globe");
+      ctx->SetRef("");
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 180.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -89.0f);
+    };
+  }
+
   // p2_render/modal_layout_toggle_bit — switching modal_layout_vertical is safe
   // (view preference state-level test; layout dispatch is exercised only indirectly
   // through subsequent modal open, which would require a live popup — omitted to
@@ -2170,6 +2291,131 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.show_grid_label, true);
       IM_CHECK_EQ(gui::g_state.show_sun_circles_line, true);
       IM_CHECK_EQ(gui::g_state.show_sun_circles_label, true);
+    };
+  }
+
+  // ===== task-visible-lens-adapt (scrum-globe-view-v3 176.2) =====
+  // lens × visibility adapter matrix: full-sky lenses disable the entire
+  // Visibility section; Globe disables only the Front radio button.
+
+  // p2_render/visibility_globe_front_disabled — Globe lens: Upper/Lower/Full
+  // remain interactive, Front is greyed out (no 2-hemisphere symmetry).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_globe_front_disabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_full = ctx->ItemInfo("**/Full##visible");
+      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_lower = ctx->ItemInfo("**/Lower##visible");
+      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    };
+  }
+
+  // p2_render/visibility_dual_fisheye_all_disabled — dual-fisheye (full-sky)
+  // disables all four Visibility radio buttons.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_dual_fisheye_all_disabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeEqualArea;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_full = ctx->ItemInfo("**/Full##visible");
+      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_lower = ctx->ItemInfo("**/Lower##visible");
+      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    };
+  }
+
+  // p2_render/visibility_rectangular_all_disabled — rectangular (full-sky)
+  // disables all four Visibility radio buttons.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_rectangular_all_disabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeRectangular;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_full = ctx->ItemInfo("**/Full##visible");
+      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_lower = ctx->ItemInfo("**/Lower##visible");
+      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    };
+  }
+
+  // p2_render/visibility_dual_ortho_all_disabled — dual orthographic (full-sky)
+  // disables all four Visibility radio buttons.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_dual_ortho_all_disabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeOrthographic;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_full = ctx->ItemInfo("**/Full##visible");
+      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_lower = ctx->ItemInfo("**/Lower##visible");
+      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    };
+  }
+
+  // p2_render/visibility_fisheye_all_enabled — single fisheye (baseline):
+  // all four Visibility radio buttons remain interactive.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_fisheye_all_enabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEqualArea;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_full = ctx->ItemInfo("**/Full##visible");
+      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_lower = ctx->ItemInfo("**/Lower##visible");
+      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+  }
+
+  // p2_render/visibility_fisheye_ortho_all_enabled — single orthographic fisheye
+  // (kLensTypeFisheyeOrthographic, enum 8) is NOT in kFullSkyLensTypes: all four
+  // Visibility radio buttons remain interactive (orthographic research conclusion).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_fisheye_ortho_all_enabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeOrthographic;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_full = ctx->ItemInfo("**/Full##visible");
+      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_lower = ctx->ItemInfo("**/Lower##visible");
+      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) == 0);
     };
   }
 }

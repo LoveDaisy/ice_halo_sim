@@ -368,7 +368,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   // ---- View Group ----
   if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-    ImGui::SeparatorText("Projection");
+    ImGui::SeparatorText("Lens");
     // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
     // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
     if (ImGui::BeginCombo("Lens Type##view", kLensTypeNames[r.lens_type])) {
@@ -385,11 +385,19 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
             // and tests bypass this combo by writing lens_type directly, so
             // they keep their fov.
             r.fov = d.fov;
-            // Crossing the Globe boundary inverts the view direction (Globe is
-            // outside-in), so reset az to the target lens' default. el/roll
-            // are preserved — only az has the inversion semantics.
             if (was_globe != now_globe) {
-              r.azimuth = d.azimuth;
+              // Globe is outside-in: crossing the boundary inverts both az and el.
+              // az: add 180 (mod 360) — self-inverse, same formula both directions.
+              r.azimuth += 180.0f;
+              if (r.azimuth > 180.0f) {
+                r.azimuth -= 360.0f;
+              }
+              // el: negate — self-inverse, same formula both directions.
+              r.elevation = -r.elevation;
+              // Globe el is limited to ±89° to avoid view-matrix degeneracy.
+              if (now_globe) {
+                r.elevation = std::max(-89.0f, std::min(89.0f, r.elevation));
+              }
             }
           }
         }
@@ -403,10 +411,27 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::BeginDisabled(full_sky);
     SliderWithInput("FOV##view", &r.fov, 1.0f, max_fov, "%.0f");
     ImGui::EndDisabled();
-    ImGui::Combo("Visible##view", &r.visible, kVisibleNames, kVisibleCount);
-
     bool is_globe = (r.lens_type == kLensTypeGlobe);
-    ImGui::SeparatorText("Camera");
+    ImGui::SeparatorText("Visibility");
+    if (full_sky) {
+      ImGui::BeginDisabled();
+    }
+    ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
+    ImGui::SameLine();
+    ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
+    ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
+    ImGui::SameLine();
+    if (!full_sky) {
+      ImGui::BeginDisabled(is_globe);
+    }
+    ImGui::RadioButton("Front##visible", &r.visible, kVisibleFront);
+    if (!full_sky) {
+      ImGui::EndDisabled();
+    }
+    if (full_sky) {
+      ImGui::EndDisabled();
+    }
+    ImGui::SeparatorText("Pose");
     if (is_globe) {
       ImGui::TextDisabled("(?)");
       if (ImGui::IsItemHovered()) {
