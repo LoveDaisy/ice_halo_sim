@@ -403,15 +403,26 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::BeginDisabled(full_sky);
     SliderWithInput("FOV##view", &r.fov, 1.0f, max_fov, "%.0f");
     ImGui::EndDisabled();
+    bool is_globe = (r.lens_type == kLensTypeGlobe);
     ImGui::SeparatorText("Visibility");
+    if (full_sky) {
+      ImGui::BeginDisabled();
+    }
     ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
     ImGui::SameLine();
     ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
     ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
     ImGui::SameLine();
+    if (!full_sky) {
+      ImGui::BeginDisabled(is_globe);
+    }
     ImGui::RadioButton("Front##visible", &r.visible, kVisibleFront);
-
-    bool is_globe = (r.lens_type == kLensTypeGlobe);
+    if (!full_sky) {
+      ImGui::EndDisabled();
+    }
+    if (full_sky) {
+      ImGui::EndDisabled();
+    }
     ImGui::SeparatorText("Pose");
     if (is_globe) {
       ImGui::TextDisabled("(?)");

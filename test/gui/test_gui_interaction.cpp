@@ -2172,6 +2172,131 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.show_sun_circles_label, true);
     };
   }
+
+  // ===== task-visible-lens-adapt (scrum-globe-view-v3 176.2) =====
+  // lens × visibility adapter matrix: full-sky lenses disable the entire
+  // Visibility section; Globe disables only the Front radio button.
+
+  // p2_render/visibility_globe_front_disabled — Globe lens: Upper/Lower/Full
+  // remain interactive, Front is greyed out (no 2-hemisphere symmetry).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_globe_front_disabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_full = ctx->ItemInfo("**/Full##visible");
+      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_lower = ctx->ItemInfo("**/Lower##visible");
+      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    };
+  }
+
+  // p2_render/visibility_dual_fisheye_all_disabled — dual-fisheye (full-sky)
+  // disables all four Visibility radio buttons.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_dual_fisheye_all_disabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeEqualArea;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_full = ctx->ItemInfo("**/Full##visible");
+      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_lower = ctx->ItemInfo("**/Lower##visible");
+      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    };
+  }
+
+  // p2_render/visibility_rectangular_all_disabled — rectangular (full-sky)
+  // disables all four Visibility radio buttons.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_rectangular_all_disabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeRectangular;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_full = ctx->ItemInfo("**/Full##visible");
+      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_lower = ctx->ItemInfo("**/Lower##visible");
+      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    };
+  }
+
+  // p2_render/visibility_dual_ortho_all_disabled — dual orthographic (full-sky)
+  // disables all four Visibility radio buttons.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_dual_ortho_all_disabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeOrthographic;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_full = ctx->ItemInfo("**/Full##visible");
+      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_lower = ctx->ItemInfo("**/Lower##visible");
+      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    };
+  }
+
+  // p2_render/visibility_fisheye_all_enabled — single fisheye (baseline):
+  // all four Visibility radio buttons remain interactive.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_fisheye_all_enabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEqualArea;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_full = ctx->ItemInfo("**/Full##visible");
+      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_lower = ctx->ItemInfo("**/Lower##visible");
+      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+  }
+
+  // p2_render/visibility_fisheye_ortho_all_enabled — single orthographic fisheye
+  // (kLensTypeFisheyeOrthographic, enum 8) is NOT in kFullSkyLensTypes: all four
+  // Visibility radio buttons remain interactive (orthographic research conclusion).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_fisheye_ortho_all_enabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeOrthographic;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_full = ctx->ItemInfo("**/Full##visible");
+      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_lower = ctx->ItemInfo("**/Lower##visible");
+      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+  }
 }
 
 // ========== task-test-gui-interaction: P1 Running simulation restart tests ==========
