@@ -2189,6 +2189,55 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p2_render/lens_globe_switch_transform_az180_wrap — az=180 switching to Globe
+  // applies az+180=360, which is > 180 and wraps to 0 (not staying at 360).
+  // Regression guard for the strict "> 180.0f" wrap condition.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_az180_wrap");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
+      gui::g_state.renderer.azimuth = 180.0f;
+      gui::g_state.renderer.elevation = 0.0f;
+      ctx->Yield(3);
+
+      ctx->SetRef("//##RightPanel");
+      ctx->ComboClick("Lens Type##view/Globe");
+      ctx->SetRef("");
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 0.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 0.0f);
+    };
+  }
+
+  // p2_render/lens_globe_switch_transform_el_clamp — el=91° switching to Globe
+  // negates to -91°, then clamps to -89° (Globe el limit).
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "p2_render", "lens_globe_switch_transform_el_clamp");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
+      gui::g_state.renderer.azimuth = 0.0f;
+      gui::g_state.renderer.elevation = 91.0f;
+      ctx->Yield(3);
+
+      ctx->SetRef("//##RightPanel");
+      ctx->ComboClick("Lens Type##view/Globe");
+      ctx->SetRef("");
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 180.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -89.0f);
+    };
+  }
+
   // p2_render/modal_layout_toggle_bit — switching modal_layout_vertical is safe
   // (view preference state-level test; layout dispatch is exercised only indirectly
   // through subsequent modal open, which would require a live popup — omitted to
