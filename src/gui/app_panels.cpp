@@ -368,7 +368,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   // ---- View Group ----
   if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-    ImGui::SeparatorText("Projection");
+    ImGui::SeparatorText("Lens");
     // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
     // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
     if (ImGui::BeginCombo("Lens Type##view", kLensTypeNames[r.lens_type])) {
@@ -403,10 +403,16 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::BeginDisabled(full_sky);
     SliderWithInput("FOV##view", &r.fov, 1.0f, max_fov, "%.0f");
     ImGui::EndDisabled();
-    ImGui::Combo("Visible##view", &r.visible, kVisibleNames, kVisibleCount);
+    ImGui::SeparatorText("Visibility");
+    ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
+    ImGui::SameLine();
+    ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
+    ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
+    ImGui::SameLine();
+    ImGui::RadioButton("Front##visible", &r.visible, kVisibleFront);
 
     bool is_globe = (r.lens_type == kLensTypeGlobe);
-    ImGui::SeparatorText("Camera");
+    ImGui::SeparatorText("Pose");
     if (is_globe) {
       ImGui::TextDisabled("(?)");
       if (ImGui::IsItemHovered()) {
