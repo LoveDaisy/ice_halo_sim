@@ -57,6 +57,22 @@ RaypathValidation ValidateRaypathText(const std::string& text);
 /// and performs syntax-only validation (so e.g. `"51"` is still kValid).
 RaypathValidationResult ValidateRaypathText(const std::string& text, CrystalKind kind);
 
+/// Validate a single face-number text input (used by the Entry-Exit filter
+/// sub-panel). Unlike `ValidateRaypathText` this rejects separators
+/// outright — Entry / Exit each take exactly one face number.
+///
+/// Rules:
+///   - Empty string → kIncomplete (user is still typing; no error message).
+///   - Any non-digit character (incl. separators '-' / ',') → kInvalid
+///     ("must be a single non-negative integer").
+///   - Token longer than 3 digits → kInvalid ("face number out of range").
+///   - Numeric value not in the global legal-face union → kInvalid
+///     ("Face N is outside the legal range of any crystal").
+///   - Numeric value not legal on `kind` → kInvalid ("Face N is not legal on
+///     this crystal type (Prism/Pyramid)").
+///   - Otherwise → kValid.
+RaypathValidationResult ValidateFaceNumberText(const std::string& text, CrystalKind kind);
+
 }  // namespace lumice
 
 #endif  // CONFIG_RAYPATH_VALIDATION_HPP_

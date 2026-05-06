@@ -1,6 +1,9 @@
 #include <cstdio>
 #include <fstream>
+#include <nlohmann/json.hpp>
 
+#include "config/config_manager.hpp"
+#include "config/filter_config.hpp"
 #include "test_gui_shared.hpp"
 
 // ========== Import/Export Tests ==========
@@ -138,7 +141,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       entry0.crystal.roll = gui::AxisDist{ gui::AxisDistType::kLaplacian, 5.0f, 2.0f };
       entry0.proportion = 75.0f;
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       entry0.filter = f;
 
       // Add a second entry
@@ -181,7 +184,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded0.crystal.roll.std, 2.0f);
       IM_CHECK_EQ(loaded0.proportion, 75.0f);
       IM_CHECK(loaded0.filter.has_value());
-      IM_CHECK_EQ(loaded0.filter->raypath_text, std::string("3-1-5"));
+      IM_CHECK_EQ(loaded0.filter->RaypathText(), std::string("3-1-5"));
 
       auto& loaded1 = gui::g_state.layers[0].entries[1];
       IM_CHECK_EQ(loaded1.crystal.type, gui::CrystalType::kPrism);
@@ -465,6 +468,440 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded.show_grid_label, true);
       IM_CHECK_EQ(loaded.show_sun_circles_line, true);
       IM_CHECK_EQ(loaded.show_sun_circles_label, true);
+    };
+  }
+
+  // task-data-model-and-serialization: AC #7 — multi-raypath OR end-to-end.
+  // GUI raypath_text "3-5; 1-3" → SerializeCoreConfig → ConfigManager parses
+  // out 3 filters: 2 simple raypaths (ids 1, 2) + 1 complex (id 3) referencing
+  // them. The main filter referenced by the scattering entry is the complex.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "multi_raypath_or_e2e");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // Build a GuiState with one entry whose filter has a multi-segment raypath.
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 0.0f;
+      gui::EntryCard entry;
+      entry.crystal.type = gui::CrystalType::kPrism;
+      entry.crystal.height = 1.0f;
+      entry.crystal.face_distance[0] = 1.0f;
+      entry.crystal.face_distance[1] = 1.0f;
+      entry.crystal.face_distance[2] = 1.0f;
+      entry.crystal.face_distance[3] = 1.0f;
+      entry.crystal.face_distance[4] = 1.0f;
+      entry.crystal.face_distance[5] = 1.0f;
+      entry.proportion = 100.0f;
+      gui::FilterConfig f;
+      f.param = gui::RaypathParams{ "3-5; 1-3" };
+      entry.filter = f;
+      layer.entries.push_back(entry);
+      gui::g_state.layers.push_back(layer);
+
+      // Serialize → parse via core ConfigManager.
+      std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      auto parsed = nlohmann::json::parse(core_json);
+      lumice::ConfigManager m;
+      lumice::from_json(parsed, m);
+
+      // Expect 3 filters: id=1 (raypath {3,5}), id=2 (raypath {1,3}), id=3 (complex).
+      IM_CHECK_EQ(static_cast<int>(m.filters_.size()), 3);
+      IM_CHECK(m.filters_.count(1) == 1);
+      IM_CHECK(m.filters_.count(2) == 1);
+      IM_CHECK(m.filters_.count(3) == 1);
+
+      // Simple filter 1 — first segment "3-5".
+      const auto& f1 = m.filters_.at(1);
+      const auto& s1 = std::get<lumice::SimpleFilterParam>(f1.param_);
+      const auto& rp1 = std::get<lumice::RaypathFilterParam>(s1);
+      IM_CHECK_EQ(static_cast<int>(rp1.raypath_.size()), 2);
+      IM_CHECK_EQ(static_cast<int>(rp1.raypath_[0]), 3);
+      IM_CHECK_EQ(static_cast<int>(rp1.raypath_[1]), 5);
+
+      // Simple filter 2 — second segment "1-3".
+      const auto& f2 = m.filters_.at(2);
+      const auto& s2 = std::get<lumice::SimpleFilterParam>(f2.param_);
+      const auto& rp2 = std::get<lumice::RaypathFilterParam>(s2);
+      IM_CHECK_EQ(static_cast<int>(rp2.raypath_.size()), 2);
+      IM_CHECK_EQ(static_cast<int>(rp2.raypath_[0]), 1);
+      IM_CHECK_EQ(static_cast<int>(rp2.raypath_[1]), 3);
+
+      // Complex filter 3 — composition of [[1], [2]].
+      const auto& fc = m.filters_.at(3);
+      const auto& cp = std::get<lumice::ComplexFilterParam>(fc.param_);
+      IM_CHECK_EQ(static_cast<int>(cp.filters_.size()), 2);
+      IM_CHECK_EQ(static_cast<int>(cp.filters_[0].size()), 1);
+      IM_CHECK_EQ(static_cast<int>(cp.filters_[0][0].first), 1);
+      IM_CHECK_EQ(static_cast<int>(cp.filters_[1].size()), 1);
+      IM_CHECK_EQ(static_cast<int>(cp.filters_[1][0].first), 2);
+
+      // Scattering entry should reference the complex filter (id 3).
+      IM_CHECK(parsed.contains("scene"));
+      IM_CHECK(parsed["scene"]["scattering"][0]["entries"][0]["filter"] == 3);
+    };
+  }
+
+  // task-data-model-and-serialization: AC #8 — single-segment raypath stays a
+  // RaypathFilterParam (no forced upgrade to ComplexFilterParam).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "single_raypath_no_complex_upgrade");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 0.0f;
+      gui::EntryCard entry;
+      entry.crystal.type = gui::CrystalType::kPrism;
+      entry.crystal.height = 1.0f;
+      for (int i = 0; i < 6; ++i) {
+        entry.crystal.face_distance[i] = 1.0f;
+      }
+      entry.proportion = 100.0f;
+      gui::FilterConfig f;
+      f.param = gui::RaypathParams{ "3-1-5" };
+      entry.filter = f;
+      layer.entries.push_back(entry);
+      gui::g_state.layers.push_back(layer);
+
+      std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      auto parsed = nlohmann::json::parse(core_json);
+      lumice::ConfigManager m;
+      lumice::from_json(parsed, m);
+
+      // Exactly 1 simple raypath, no complex.
+      IM_CHECK_EQ(static_cast<int>(m.filters_.size()), 1);
+      const auto& f1 = m.filters_.begin()->second;
+      const auto& sp = std::get<lumice::SimpleFilterParam>(f1.param_);
+      IM_CHECK(std::holds_alternative<lumice::RaypathFilterParam>(sp));
+      const auto& rp = std::get<lumice::RaypathFilterParam>(sp);
+      IM_CHECK_EQ(static_cast<int>(rp.raypath_.size()), 3);
+    };
+  }
+
+  // task-data-model-and-serialization: per-type GUI JSON round-trip — every
+  // FilterParamVariant alternative survives SerializeFilterForGui →
+  // ParseFilterFromGuiJson via the .lmc save/load path.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "per_type_filter_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // Build one entry per filter type.
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 0.0f;
+
+      auto make_entry = [](gui::FilterParamVariant param) {
+        gui::EntryCard e;
+        e.crystal.type = gui::CrystalType::kPrism;
+        e.crystal.height = 1.0f;
+        for (int i = 0; i < 6; ++i) {
+          e.crystal.face_distance[i] = 1.0f;
+        }
+        e.proportion = 25.0f;
+        gui::FilterConfig f;
+        f.param = std::move(param);
+        e.filter = f;
+        return e;
+      };
+
+      layer.entries.push_back(make_entry(gui::RaypathParams{ "3-1-5" }));
+      layer.entries.push_back(make_entry(gui::EntryExitParams{ "7", "4" }));
+      layer.entries.push_back(make_entry(gui::DirectionParams{ 30.0f, -10.0f }));
+      gui::g_state.layers.push_back(layer);
+
+      const char* tmp_path = "/tmp/lumice_per_type_roundtrip.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
+      IM_CHECK(save_ok);
+
+      gui::DoNew();
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0;
+      int tex_h = 0;
+      bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
+      IM_CHECK(load_ok);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 3);
+
+      const auto& f0 = *gui::g_state.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::RaypathParams>(f0.param));
+      IM_CHECK_EQ(std::get<gui::RaypathParams>(f0.param).raypath_text, std::string("3-1-5"));
+
+      const auto& f1 = *gui::g_state.layers[0].entries[1].filter;
+      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f1.param));
+      const auto& ee = std::get<gui::EntryExitParams>(f1.param);
+      IM_CHECK_EQ(ee.entry_text, std::string("7"));
+      IM_CHECK_EQ(ee.exit_text, std::string("4"));
+
+      const auto& f2 = *gui::g_state.layers[0].entries[2].filter;
+      IM_CHECK(std::holds_alternative<gui::DirectionParams>(f2.param));
+      const auto& dp = std::get<gui::DirectionParams>(f2.param);
+      IM_CHECK_EQ(dp.az, 30.0f);
+      IM_CHECK_EQ(dp.el, -10.0f);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // task-data-model-and-serialization: legacy v=1 .lmc / GUI JSON without
+  // `type` field falls back to RaypathParams (default raypath_text "").
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "legacy_no_type_falls_back_to_raypath");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // A v=1-style payload: filter object lacks `type` and uses raypath_text directly.
+      std::string json = R"({
+        "schema_version": 1,
+        "layers": [
+          { "prob": 0.0, "entries": [
+            { "crystal": { "type": "prism", "shape": { "height": 1.0, "face_distance": [1,1,1,1,1,1] } },
+              "proportion": 100.0,
+              "filter": { "id": 1, "action": "filter_in", "raypath_text": "3-1-5", "sym_p": true, "sym_b": true, "sym_d": true }
+            }
+          ]}
+        ],
+        "renderer": {"lens_type": "linear", "fov": 90.0}
+      })";
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeGuiStateJson(json, loaded);
+      IM_CHECK(ok);
+      IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
+      IM_CHECK_EQ(static_cast<int>(loaded.layers[0].entries.size()), 1);
+      IM_CHECK(loaded.layers[0].entries[0].filter.has_value());
+      const auto& f = *loaded.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::RaypathParams>(f.param));
+      IM_CHECK_EQ(std::get<gui::RaypathParams>(f.param).raypath_text, std::string("3-1-5"));
+    };
+  }
+
+  // task-per-type-entry-exit (issue 178.4): end-to-end equivalence between
+  // GUI EE filter → SerializeCoreConfig output and a hand-crafted reference
+  // core JSON object. Validates AC-6 (`type` / `action` / `symmetry` /
+  // `entry` / `exit` / `id` field-by-field equality regardless of insertion
+  // order via nlohmann::json::operator==).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "entry_exit_serialize_core_equivalent");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // Build a single-entry GuiState carrying an EntryExitParams filter.
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 1.0f;
+
+      gui::EntryCard e;
+      e.crystal.type = gui::CrystalType::kPrism;
+      e.crystal.height = 1.0f;
+      for (int i = 0; i < 6; ++i) {
+        e.crystal.face_distance[i] = 1.0f;
+      }
+      e.proportion = 100.0f;
+
+      gui::FilterConfig fc;
+      fc.action = 1;     // filter_out
+      fc.sym_p = true;   // → "P" in symmetry suffix
+      fc.sym_b = false;  // omitted
+      fc.sym_d = true;   // → "D"
+      fc.param = gui::EntryExitParams{ /*entry_text=*/"2", /*exit_text=*/"5" };
+      e.filter = fc;
+
+      layer.entries.push_back(e);
+      gui::g_state.layers.push_back(layer);
+
+      const std::string s = gui::SerializeCoreConfig(gui::g_state);
+      IM_CHECK(!s.empty());
+
+      const auto j = nlohmann::json::parse(s);
+      IM_CHECK(j.contains("filter"));
+      IM_CHECK(j["filter"].is_array());
+      IM_CHECK_EQ(static_cast<int>(j["filter"].size()), 1);
+
+      // Field-level assertions (also catches symmetry string ordering bugs).
+      const auto& jf = j["filter"][0];
+      IM_CHECK_STR_EQ(jf["type"].get<std::string>().c_str(), "entry_exit");
+      IM_CHECK_STR_EQ(jf["action"].get<std::string>().c_str(), "filter_out");
+      IM_CHECK_STR_EQ(jf["symmetry"].get<std::string>().c_str(), "PD");
+      IM_CHECK_EQ(jf["entry"].get<int>(), 2);
+      IM_CHECK_EQ(jf["exit"].get<int>(), 5);
+      IM_CHECK_EQ(jf["id"].get<int>(), 1);
+
+      // Whole-object equivalence with hand-crafted reference (json::operator==
+      // is field-set + value equality, insertion-order independent).
+      const nlohmann::json expected = {
+        { "id", 1 },          { "type", "entry_exit" }, { "action", "filter_out" },
+        { "symmetry", "PD" }, { "entry", 2 },           { "exit", 5 },
+      };
+      IM_CHECK(jf == expected);
+    };
+  }
+
+  // task-per-type-direction (issue 178.5): end-to-end equivalence between
+  // GUI Direction filter → SerializeCoreConfig output and a hand-crafted
+  // reference core JSON object. Validates AC-7 (`type` / `action` /
+  // `symmetry` / `az` / `el` / `radii` / `id` field-by-field equality
+  // regardless of insertion order via nlohmann::json::operator==).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "direction_serialize_core_equivalent");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // Build a single-entry GuiState carrying a DirectionParams filter.
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 1.0f;
+
+      gui::EntryCard e;
+      e.crystal.type = gui::CrystalType::kPrism;
+      e.crystal.height = 1.0f;
+      for (int i = 0; i < 6; ++i) {
+        e.crystal.face_distance[i] = 1.0f;
+      }
+      e.proportion = 100.0f;
+
+      gui::FilterConfig fc;
+      fc.action = 1;     // filter_out
+      fc.sym_p = true;   // → "P" in symmetry suffix
+      fc.sym_b = false;  // omitted
+      fc.sym_d = true;   // → "D"
+      fc.param = gui::DirectionParams{ /*az=*/30.0f, /*el=*/45.0f };
+      e.filter = fc;
+
+      layer.entries.push_back(e);
+      gui::g_state.layers.push_back(layer);
+
+      const std::string s = gui::SerializeCoreConfig(gui::g_state);
+      IM_CHECK(!s.empty());
+
+      const auto j = nlohmann::json::parse(s);
+      IM_CHECK(j.contains("filter"));
+      IM_CHECK(j["filter"].is_array());
+      IM_CHECK_EQ(static_cast<int>(j["filter"].size()), 1);
+
+      // Field-level assertions (also catches symmetry string ordering bugs).
+      // Note: `symmetry` field is still serialized for Direction filters even
+      // though the GUI hides the P/B/D Checkboxes (H4 contract — UI hides
+      // controls but data round-trips unchanged for cross-type compatibility).
+      const auto& jf = j["filter"][0];
+      IM_CHECK_STR_EQ(jf["type"].get<std::string>().c_str(), "direction");
+      IM_CHECK_STR_EQ(jf["action"].get<std::string>().c_str(), "filter_out");
+      IM_CHECK_STR_EQ(jf["symmetry"].get<std::string>().c_str(), "PD");
+      IM_CHECK_EQ(jf["az"].get<float>(), 30.0f);
+      IM_CHECK_EQ(jf["el"].get<float>(), 45.0f);
+      // GUI no longer owns radii; serialization layer injects the fixed
+      // default (kDirectionDefaultRadiiDeg, file_io.cpp).
+      IM_CHECK_EQ(jf["radii"].get<float>(), 5.0f);
+      IM_CHECK_EQ(jf["id"].get<int>(), 1);
+
+      // Whole-object equivalence with hand-crafted reference.
+      const nlohmann::json expected = {
+        { "id", 1 },     { "type", "direction" }, { "action", "filter_out" }, { "symmetry", "PD" },
+        { "az", 30.0f }, { "el", 45.0f },         { "radii", 5.0f },
+      };
+      IM_CHECK(jf == expected);
+    };
+  }
+
+  // task-filter-modal-polish-v1: v2 .lmc-style Direction filter JSON
+  // (with explicit radii) must load successfully into a v3 DirectionParams
+  // (radii silently dropped — GUI struct lacks the field). Re-serializing
+  // (SerializeGuiStateJson) must omit "radii" from the filter object.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "direction_v2_radii_dropped_on_load");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      const std::string v2_lmc = R"({
+        "schema_version": 2,
+        "layers": [{
+          "prob": 0.0,
+          "entries": [{
+            "crystal": {"type": "prism", "shape": {"height": 1.0}},
+            "proportion": 100.0,
+            "filter": {
+              "type": "direction",
+              "action": "filter_in",
+              "az": 22.0, "el": 5.0, "radii": 7.5
+            }
+          }]
+        }]
+      })";
+
+      gui::GuiState restored;
+      bool ok = gui::DeserializeGuiStateJson(v2_lmc, restored);
+      IM_CHECK(ok);
+      IM_CHECK(restored.layers[0].entries[0].filter.has_value());
+      const auto& f = *restored.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::DirectionParams>(f.param));
+      const auto& dp = std::get<gui::DirectionParams>(f.param);
+      IM_CHECK_EQ(dp.az, 22.0f);
+      IM_CHECK_EQ(dp.el, 5.0f);
+      // radii silently discarded — DirectionParams no longer has the field.
+
+      // Re-serializing must omit "radii" from the .lmc filter object.
+      const std::string written = gui::SerializeGuiStateJson(restored);
+      const auto j = nlohmann::json::parse(written);
+      const auto& jf = j["layers"][0]["entries"][0]["filter"];
+      IM_CHECK_STR_EQ(jf["type"].get<std::string>().c_str(), "direction");
+      IM_CHECK(!jf.contains("radii"));
+      IM_CHECK_EQ(jf["az"].get<float>(), 22.0f);
+      IM_CHECK_EQ(jf["el"].get<float>(), 5.0f);
+    };
+  }
+
+  // task-filter-modal-polish-v1: legacy v2 .lmc Entry-Exit filter (with
+  // int "entry" / "exit" fields) must load successfully and translate to
+  // the v3 string representation. Re-serialization writes the new
+  // entry_text / exit_text fields.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "entry_exit_v2_int_translates_to_text_on_load");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      const std::string v2_lmc = R"({
+        "schema_version": 2,
+        "layers": [{
+          "prob": 0.0,
+          "entries": [{
+            "crystal": {"type": "prism", "shape": {"height": 1.0}},
+            "proportion": 100.0,
+            "filter": {
+              "type": "entry_exit",
+              "action": "filter_in",
+              "entry": 7, "exit": 4
+            }
+          }]
+        }]
+      })";
+
+      gui::GuiState restored;
+      bool ok = gui::DeserializeGuiStateJson(v2_lmc, restored);
+      IM_CHECK(ok);
+      IM_CHECK(restored.layers[0].entries[0].filter.has_value());
+      const auto& f = *restored.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
+      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK_EQ(ee.entry_text, std::string("7"));
+      IM_CHECK_EQ(ee.exit_text, std::string("4"));
+
+      // Re-serialization writes the new entry_text / exit_text fields.
+      const std::string written = gui::SerializeGuiStateJson(restored);
+      const auto j = nlohmann::json::parse(written);
+      const auto& jf = j["layers"][0]["entries"][0]["filter"];
+      IM_CHECK_STR_EQ(jf["type"].get<std::string>().c_str(), "entry_exit");
+      IM_CHECK_STR_EQ(jf["entry_text"].get<std::string>().c_str(), "7");
+      IM_CHECK_STR_EQ(jf["exit_text"].get<std::string>().c_str(), "4");
     };
   }
 }

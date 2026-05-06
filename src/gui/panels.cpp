@@ -67,35 +67,83 @@ std::string AxisPresetName(const CrystalConfig& c) {
 }
 
 namespace {
+
+// Append " <In|Out>[ <sym>]" suffix shared by every filter type's summary.
+std::string FilterSummarySuffix(const FilterConfig& fc) {
+  std::string suffix = (fc.action == 0) ? " In" : " Out";
+  std::string sym;
+  if (fc.sym_p) {
+    sym += "P";
+  }
+  if (fc.sym_b) {
+    sym += "B";
+  }
+  if (fc.sym_d) {
+    sym += "D";
+  }
+  if (!sym.empty()) {
+    suffix += " " + sym;
+  }
+  return suffix;
+}
+
+}  // namespace
+
 // Generate filter summary text from filter config.
+//
+// Format dispatched by FilterParamVariant alternative:
+//   - Raypath:    "<raypath_text or *> <In|Out>[ <sym>]"        (e.g. "3-1-5 In PBD")
+//   - EntryExit:  "EE:<entry>→<exit> <In|Out>[ <sym>]"
+//   - Direction:  "DIR:<az>°/<el>° r=<radii>° <In|Out>[ <sym>]"
+//   - Crystal:    "CR:#<id> <In|Out>[ <sym>]"
+//
+// 12-character truncation is preserved for the raypath body so the existing
+// test_gui_interaction "1-2-3-4-5-6-..." case stays bit-exact. Other types
+// emit short prefixes that fit comfortably without truncation; if they ever
+// need truncation, add it per-type.
+//
+// Externally linked (declared in panels.hpp) so unit / GUI tests can assert
+// the rendered summary string directly. Implementation depends on
+// FilterSummarySuffix above (file-internal helper) — this is fine even
+// though the helper sits inside an anonymous namespace closed just above:
+// both live in the same TU.
 std::string FilterSummary(const std::optional<FilterConfig>& f) {
   if (!f.has_value()) {
     return "None";
   }
   const auto& fc = f.value();
-  // Format: "<raypath_text or *> <In|Out>[ <sym>]". Example: "1-3 In PBD".
-  std::string result;
-  if (fc.raypath_text.size() > 12) {
-    result = fc.raypath_text.substr(0, 12) + "...";
-  } else if (!fc.raypath_text.empty()) {
-    result = fc.raypath_text;
-  } else {
-    result = "*";
-  }
-  result += (fc.action == 0) ? " In" : " Out";
 
-  std::string sym;
-  if (fc.sym_p)
-    sym += "P";
-  if (fc.sym_b)
-    sym += "B";
-  if (fc.sym_d)
-    sym += "D";
-  if (!sym.empty()) {
-    result += " " + sym;
-  }
-  return result;
+  std::string body = std::visit(
+      [](const auto& p) -> std::string {
+        using T = std::decay_t<decltype(p)>;
+        if constexpr (std::is_same_v<T, RaypathParams>) {
+          if (p.raypath_text.empty()) {
+            return "*";
+          }
+          if (p.raypath_text.size() > 12) {
+            return p.raypath_text.substr(0, 12) + "...";
+          }
+          return p.raypath_text;
+        } else if constexpr (std::is_same_v<T, EntryExitParams>) {
+          // "?" placeholder so a half-typed (kIncomplete) config still
+          // renders something readable in the entry card summary.
+          const char* e = p.entry_text.empty() ? "?" : p.entry_text.c_str();
+          const char* x = p.exit_text.empty() ? "?" : p.exit_text.c_str();
+          return std::string("EE:") + e + "\xe2\x86\x92" + x;
+        } else if constexpr (std::is_same_v<T, DirectionParams>) {
+          char buf[64];
+          snprintf(buf, sizeof(buf), "DIR:%g\xc2\xb0/%g\xc2\xb0", p.az, p.el);
+          return buf;
+        } else {
+          return "*";
+        }
+      },
+      fc.param);
+
+  return body + FilterSummarySuffix(fc);
 }
+
+namespace {
 
 // Helper: wrap ImGui control and mark dirty on change
 #define DIRTY_IF(expr) \

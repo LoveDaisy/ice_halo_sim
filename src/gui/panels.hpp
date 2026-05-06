@@ -39,6 +39,11 @@ bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mea
 // Classify crystal axis configuration into a named preset (Parry/Column/Lowitz/Plate/Random/Custom).
 std::string AxisPresetName(const CrystalConfig& c);
 
+// Render filter summary text consumed by entry-card rows. Exposed so unit /
+// GUI tests can assert the rendered string directly. Format spec lives next
+// to the implementation in panels.cpp.
+std::string FilterSummary(const std::optional<FilterConfig>& f);
+
 // ---- Panel rendering ----
 
 // Render a single entry card within a layer. Returns true if the delete button was clicked.

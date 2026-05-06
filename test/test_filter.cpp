@@ -642,3 +642,65 @@ TEST(IsLegalFaceTest, PyramidSetEqualsValidatorGlobalStage) {
     }
   }
 }
+
+
+// ========== ValidateFaceNumberText Tests ==========
+// Single face-number text input used by the Entry-Exit filter sub-panel.
+// Differs from ValidateRaypathText in that separators ('-', ',') are
+// rejected outright — Entry / Exit each take exactly one face number.
+
+TEST(ValidateFaceNumberTextTest, Empty_IsIncomplete) {
+  auto r = ValidateFaceNumberText("", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kIncomplete);
+  EXPECT_TRUE(r.message.empty());
+}
+
+TEST(ValidateFaceNumberTextTest, SingleLegalFace_IsValid) {
+  auto r = ValidateFaceNumberText("3", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kValid);
+  EXPECT_TRUE(r.message.empty());
+  auto r2 = ValidateFaceNumberText("13", CrystalKind::kPyramid);
+  EXPECT_EQ(r2.state, RaypathValidation::kValid);
+}
+
+TEST(ValidateFaceNumberTextTest, ZeroIsOutsideLegalRange) {
+  auto r = ValidateFaceNumberText("0", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  EXPECT_NE(r.message.find("outside"), std::string::npos);
+}
+
+TEST(ValidateFaceNumberTextTest, Separator_IsInvalid) {
+  // Dashes / commas / semicolons are raypath syntax — face number rejects.
+  for (const char* s : { "1-2", "3,5", "3-", ",5", "1;2" }) {
+    auto r = ValidateFaceNumberText(s, CrystalKind::kPrism);
+    EXPECT_EQ(r.state, RaypathValidation::kInvalid) << "input=" << s;
+    EXPECT_NE(r.message.find("non-negative integer"), std::string::npos) << "input=" << s;
+  }
+}
+
+TEST(ValidateFaceNumberTextTest, NonDigit_IsInvalid) {
+  auto r = ValidateFaceNumberText("3a", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  auto r2 = ValidateFaceNumberText("abc", CrystalKind::kPrism);
+  EXPECT_EQ(r2.state, RaypathValidation::kInvalid);
+}
+
+TEST(ValidateFaceNumberTextTest, OverlongDigitToken_IsInvalid) {
+  auto r = ValidateFaceNumberText("9999", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  EXPECT_NE(r.message.find("out of range"), std::string::npos);
+}
+
+TEST(ValidateFaceNumberTextTest, FaceLegalGlobalButNotKindSpecific_IsInvalid) {
+  // Face 13 is legal on Pyramid (basal/lateral) but illegal on Prism.
+  auto r = ValidateFaceNumberText("13", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  EXPECT_NE(r.message.find("not legal"), std::string::npos);
+  EXPECT_NE(r.message.find("Prism"), std::string::npos);
+}
+
+TEST(ValidateFaceNumberTextTest, FaceOutsideAnyKindSet_IsInvalid) {
+  auto r = ValidateFaceNumberText("100", CrystalKind::kPyramid);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  EXPECT_NE(r.message.find("outside"), std::string::npos);
+}

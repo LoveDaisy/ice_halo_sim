@@ -33,7 +33,7 @@ GuiState MakeModifiedState() {
   e1.crystal.upper_alpha = 32.0f;
   e1.crystal.lower_alpha = 28.0f;
   FilterConfig f;
-  f.raypath_text = "3-1-5";
+  f.param = RaypathParams{ "3-1-5" };
   f.sym_p = false;
   e1.filter = f;
   e1.proportion = 30.0f;
@@ -159,7 +159,7 @@ TEST(ConfigSnapshot, RoundTripFromThenApplyRestoresConfig) {
   EXPECT_EQ(restored.layers[0].entries.size(), original.layers[0].entries.size());
   EXPECT_EQ(restored.layers[0].entries[1].crystal.type, CrystalType::kPyramid);
   EXPECT_TRUE(restored.layers[0].entries[1].filter.has_value());
-  EXPECT_EQ(restored.layers[0].entries[1].filter->raypath_text, "3-1-5");
+  EXPECT_EQ(restored.layers[0].entries[1].filter->RaypathText(), "3-1-5");
   EXPECT_FALSE(restored.layers[0].entries[1].filter->sym_p);
   EXPECT_FLOAT_EQ(restored.sun.altitude, original.sun.altitude);
   EXPECT_EQ(restored.sim.infinite, original.sim.infinite);

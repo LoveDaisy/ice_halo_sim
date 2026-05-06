@@ -11,6 +11,7 @@
 // convention block at the top of src/gui/app_panels.cpp. Any ImGui upgrade
 // that alters either rule must update both that comment and the
 // p1_layout / p1_edit_modal z-order assertions below.
+#include "gui/panels.hpp"  // FilterSummary declaration (also re-exposes gui_state.hpp transitively)
 #include "imgui_internal.h"
 #include "test_gui_shared.hpp"  // declares g_enable_log_panel (toggle gate for RenderLogPanel)
 
@@ -173,7 +174,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Programmatically set a filter so we can test clearing it
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       gui::g_state.layers[0].entries[0].filter = f;
 
       // Verify filter is set
@@ -206,7 +207,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       gui::g_state.layers[0].entries[0].filter = f;
 
       ctx->ItemClick("**/Edit##fi");
@@ -246,7 +247,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       f.sym_p = true;
       f.sym_b = false;  // <-- non-default; reset would flip it to true.
       f.sym_d = true;
@@ -263,7 +264,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
       IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_p == true);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_b == false);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_d == true);
@@ -280,7 +281,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       f.sym_p = true;
       f.sym_b = false;
       f.sym_d = true;
@@ -295,7 +296,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
       IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_p == true);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_b == false);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_d == true);
@@ -312,7 +313,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.raypath_text = "1-3";
+      f.param = gui::RaypathParams{ "1-3" };
       gui::g_state.layers[0].entries[0].filter = f;
       ctx->Yield();
 
@@ -326,7 +327,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
     };
   }
 
@@ -373,7 +374,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       gui::g_state.layers[0].entries[0].filter = f;
       gui::g_state.intensity_locked = false;
       ctx->Yield();
@@ -585,7 +586,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Stage a filter on the entry so Remove Filter is a real change.
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       gui::g_state.layers[0].entries[0].filter = f;
       // "finite rays just finished" snapshot state.
       gui::g_state.sim_state = gui::GuiState::SimState::kDone;
@@ -703,7 +704,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue("**/Raypath##filter_modal", "3-1");
       ctx->Yield(2);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1");
 
       // kInvalid: pure non-numeric "abc" — syntactically invalid.
       ctx->ItemInputValue("**/Raypath##filter_modal", "abc");
@@ -721,7 +722,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       }
       // L2 + L3: guard intercepted — entry.filter preserved at last valid.
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1");
 
       // kIncomplete: trailing separator "3-" — syntactically incomplete per
       // ValidateRaypathText rules. Guard treats same as kInvalid (Staged OK
@@ -736,14 +737,14 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
         IM_CHECK((info_rm.ItemFlags & ImGuiItemFlags_Disabled) == 0);
       }
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1");
 
       // Valid recovery: a fresh valid raypath must commit normally, proving
       // the guard does not wedge the entry permanently after a rejection.
       ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
       ctx->Yield(2);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
 
       // Empty → nullopt (161.2 rule unchanged by this task).
       ctx->ItemInputValue("**/Raypath##filter_modal", "");
@@ -900,7 +901,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Filter is now populated on the entry (committed by the switch).
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text.c_str(), "3-1-5");
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
       // Filter tab controls still accessible — tab selection survived.
       IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
 
@@ -2235,7 +2236,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
 
       // Pre-register a filter on the first entry so StartPerfSimulation's DoRun commits with it
       gui::FilterConfig f;
-      f.raypath_text = "3-1-5";
+      f.param = gui::RaypathParams{ "3-1-5" };
       gui::g_state.layers[0].entries[0].filter = f;
 
       StartPerfSimulation();
@@ -2264,7 +2265,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       auto baseline = gui::g_state.texture_upload_count;
 
       // Act: change filter raypath, mark filter dirty, commit
-      gui::g_state.layers[0].entries[0].filter->raypath_text = "3-1-5-7";
+      gui::g_state.layers[0].entries[0].filter->MutableRaypathText() = "3-1-5-7";
       gui::g_state.MarkFilterDirty();
       gui::DoRun();
 
@@ -2588,7 +2589,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       // Filter must now exist with the typed raypath.
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].filter->raypath_text, std::string("1-3"));
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText(), std::string("1-3"));
     };
   }
 
@@ -2968,6 +2969,515 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // perceivable. ImGui default ChildBorderSize is 1.0f; kActiveCardBorder
       // is 2.0f.
       IM_CHECK_GT(gui::kActiveCardBorder, style.ChildBorderSize);
+    };
+  }
+
+  // ============================================================
+  // p2_filter_type — task-editor-modal-type-selection (issue 178.3)
+  //
+  // Filter modal acquires a type discriminator (Raypath / Entry-Exit /
+  // Direction / Crystal). The latter three render placeholder UI only and
+  // disable the modal-level OK button until the user switches back to
+  // Raypath. Multi-segment raypath OR (";"-separated) is the new validator;
+  // the Action control switched from Combo to two RadioButtons.
+  // ============================================================
+
+  // T1 — type radio is visible: all 3 type RadioButtons exist after opening
+  // the Filter tab. Crystal radio was removed in task-filter-modal-polish-v1
+  // (zero external .lmc files contain crystal filter; core path retained).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_type_radio_visible");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      IM_CHECK(ctx->ItemExists("**/Raypath##filter_type"));
+      IM_CHECK(ctx->ItemExists("**/Entry-Exit##filter_type"));
+      IM_CHECK(ctx->ItemExists("**/Direction##filter_type"));
+      IM_CHECK(!ctx->ItemExists("**/Crystal##filter_type"));
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // T2 — switching to a stub type hides the Raypath sub-panel; switching
+  // back re-renders it. Dispatch is by widget existence rather than disabled
+  // state because the stub branch renders a TextDisabled placeholder, not
+  // the InputText.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_type_switch_dispatches_subpanel");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Default = Raypath: InputText is rendered.
+      IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
+
+      // Switch to Entry-Exit: InputText is no longer rendered.
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
+
+      // Switch back to Raypath: InputText reappears.
+      ctx->ItemClick("**/Raypath##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // (T3 removed in #178.6: stub gating no longer exists — all 4 filter types
+  // are interactive after Crystal is implemented. The OK button has no
+  // type-based disable path; the only remaining gate is raypath validation.)
+
+  // T4 — Action is now two RadioButtons (was Combo). Selecting "Filter Out"
+  // and OK must commit action=1 to entry.filter.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_action_radio_commits_value");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield();
+      ctx->ItemClick("**/Filter Out##filter_action");
+      ctx->Yield();
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].filter->action, 1);
+    };
+  }
+
+  // T5 — Multi-segment OR (";") flows end-to-end through the modal: a
+  // semicolon-separated raypath validates as kValid and round-trips into
+  // entry.filter unchanged.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_multi_raypath_or_e2e_via_modal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-5; 1-3");
+      ctx->Yield(2);  // run validator one frame, OK gate one more
+
+      // OK must be enabled (multi-segment validates kValid).
+      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-5; 1-3");
+    };
+  }
+
+  // T6 — Per-type buffer isolation: typing a raypath, switching to a stub
+  // type, then switching back must preserve the raypath text. End-to-end
+  // probe via OK commit (the InputText backing buffer is not externed, so
+  // assertion is on entry.filter after OK).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_per_type_buffer_isolated");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->Yield(2);
+
+      // Switch away (Raypath sub-panel un-renders) and back.
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Raypath##filter_type");
+      ctx->Yield(2);
+
+      // Sub-panel re-renders; OK now reachable. Commit and verify the
+      // raypath text survived the round-trip.
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
+    };
+  }
+
+  // (T7 removed in #178.6: stub-type clobber-protection no longer applies —
+  // every filter type now has a real commit path. Switching to Crystal in
+  // Immediate mode commits a default Crystal filter and overwrites any
+  // existing raypath filter on the same entry; that is the designed cross-
+  // type switch behavior, identical to EE↔Direction switches.)
+
+  // ============================================================
+  // p2_filter_type — task-per-type-entry-exit (issue 178.4)
+  //
+  // Entry-Exit type goes from stub to interactive: 2 InputInt controls
+  // (Entry/Exit face number), OK button enabled, commit assembles
+  // EntryExitParams into entry.filter. Per-type buffer isolation contract
+  // (#178.3 T6) extends to switching between EE and Direction.
+  // ============================================================
+
+  // T8 — Entry-Exit subpanel renders 2 InputInt controls when EE type is
+  // active; switching to other types hides them, switching back re-renders.
+  // (Does NOT assert "untouched OK = no-op": clicking the Entry-Exit radio
+  // already dirties the buffer via active_type != snapshot, so OK after
+  // switch is a real commit by design — covered by T9/T10.)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_subpanel_inputs_visible");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Default = Raypath: EE inputs not present.
+      IM_CHECK(!ctx->ItemExists("**/Entry face number##filter_modal"));
+
+      // Switch to Entry-Exit: both InputText items appear, raypath InputText disappears.
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/Entry face number##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/Exit face number##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
+
+      // OK is disabled while EE fields are empty (kIncomplete, not kValid).
+      // post-task-filter-modal-polish-v1 contract: empty face number is not
+      // a committable value — user must type a legal face number first.
+      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // Type valid face numbers → OK enables.
+      ctx->ItemInputValue("**/Entry face number##filter_modal", "1");
+      ctx->ItemInputValue("**/Exit face number##filter_modal", "2");
+      ctx->Yield(2);
+      auto info_typed = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_typed.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Switch to Direction: EE inputs un-render, OK stays enabled
+      // (Direction has no per-field gate).
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/Entry face number##filter_modal"));
+      auto info_dir = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_dir.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Switch back to Entry-Exit: inputs reappear; the typed-and-valid
+      // values are still in the buffers so OK stays enabled.
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/Entry face number##filter_modal"));
+      auto info_back = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_back.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // T9 — Entry-Exit OK commits filter end-to-end: fill entry/exit, set
+  // Action=Filter Out, OK → entry.filter holds EntryExitParams with the
+  // typed values + action=1. The "PBD" suffix in the asserted FilterSummary
+  // string relies on g_filter_top.sym_p/b/d defaulting to true — see
+  // gui_state.hpp:271-273 (`bool sym_p = true; sym_b = true; sym_d = true;`).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_ok_commits_filter");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+
+      // post-task-filter-modal-polish-v1: InputText (text), labels read
+      // "face number" not "face id".
+      ctx->ItemInputValue("**/Entry face number##filter_modal", "2");
+      ctx->ItemInputValue("**/Exit face number##filter_modal", "5");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Filter Out##filter_action");
+      ctx->Yield(2);
+
+      // OK must be enabled on EE.
+      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      const auto& f = *gui::g_state.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
+      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK_EQ(ee.entry_text, std::string("2"));
+      IM_CHECK_EQ(ee.exit_text, std::string("5"));
+      IM_CHECK_EQ(f.action, 1);
+      // Default sym_p/b/d = true (gui_state.hpp:271-273), Filter Out → "Out".
+      IM_CHECK(f.sym_p);
+      IM_CHECK(f.sym_b);
+      IM_CHECK(f.sym_d);
+
+      // FilterSummary EE format: "EE:<entry>→<exit> <In|Out>[ <sym>]" —
+      // entry/exit now render the raw text buffer (kept as-is so partial
+      // input stays visible). The "→" is UTF-8 U+2192 ("\xe2\x86\x92").
+      IM_CHECK_STR_EQ(gui::FilterSummary(gui::g_state.layers[0].entries[0].filter).c_str(),
+                      "EE:2\xe2\x86\x92"
+                      "5 Out PBD");
+    };
+  }
+
+  // T10 — per-type buffer isolation extends to EE ↔ Direction switch:
+  // type-in EE values, switch to Direction, switch back, OK → EE values
+  // preserved. Validates that #178.3 T6 guarantee (per-type buffer survives
+  // switches) holds for the newly-interactive EE type. Post-#178.5 Direction
+  // is also interactive — EE buffer must remain untouched while Direction
+  // sub-panel renders, since each type owns a separate sub-buffer.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_per_type_buffer_isolated");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/Entry face number##filter_modal", "3");
+      ctx->ItemInputValue("**/Exit face number##filter_modal", "7");
+      ctx->Yield(2);
+
+      // Switch away — Direction owns a separate sub-buffer (g_dir_params),
+      // so it cannot be touched by EE inputs even now that Direction is
+      // interactive (#178.5).
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      // Verify EE inputs un-rendered while Direction is active.
+      IM_CHECK(!ctx->ItemExists("**/Entry face number##filter_modal"));
+
+      // Switch back to Entry-Exit; per-type buffer must have retained values.
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/Entry face number##filter_modal"));
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      const auto& f = *gui::g_state.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
+      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK_EQ(ee.entry_text, std::string("3"));
+      IM_CHECK_EQ(ee.exit_text, std::string("7"));
+    };
+  }
+
+  // ============================================================
+  // p2_filter_type — task-per-type-direction (issue 178.5)
+  //
+  // Direction type renders 2 angle controls (Azimuth°/Elevation°). The
+  // cone half-angle (radii) was removed from the GUI in
+  // task-filter-modal-polish-v1 — the serialization layer injects a
+  // fixed default. H4 修正：P/B/D Checkbox 隐藏 for Direction (its core
+  // filter does not consume crystal symmetry); raypath / EE keep P/B/D.
+  // ============================================================
+
+  // T11 — Direction subpanel renders 2 angle inputs when Direction type
+  // is active; switching to other types hides them. With SliderWithInput
+  // (post-task-filter-modal-polish-v1) the matching ID is the input child
+  // widget "##<label>_input" — see panels.cpp::PrepareSliderLayout.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "direction_subpanel_inputs_visible");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Default = Raypath: Direction inputs not present.
+      IM_CHECK(!ctx->ItemExists("**/##Azimuth\xc2\xb0##filter_modal_input"));
+
+      // Switch to Direction: az/el items appear; radii (removed) MUST not;
+      // raypath / EE inputs disappear.
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##Azimuth\xc2\xb0##filter_modal_input"));
+      IM_CHECK(ctx->ItemExists("**/##Elevation\xc2\xb0##filter_modal_input"));
+      IM_CHECK(!ctx->ItemExists("**/##Radii\xc2\xb0##filter_modal_input"));
+      IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Entry face number##filter_modal"));
+
+      // OK button is enabled on Direction (no validation gate, no stub disable).
+      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Switch back to Raypath: Direction inputs un-render.
+      ctx->ItemClick("**/Raypath##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/##Azimuth\xc2\xb0##filter_modal_input"));
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // T12 — Direction OK commits filter end-to-end: fill az/el/radii, set
+  // Action=Filter Out, OK → entry.filter holds DirectionParams with the
+  // typed values + action=1. The "PBD" suffix in the asserted FilterSummary
+  // string relies on g_filter_top.sym_p/b/d defaulting to true — see
+  // gui_state.hpp:271-273. Note: H4 hides the P/B/D Checkbox for Direction
+  // so the test cannot toggle sym via UI; the default-true values are the
+  // single source for the asserted suffix.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "direction_ok_commits_filter");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+
+      // ItemInputValue targets the input child of SliderWithInput.
+      ctx->ItemInputValue("**/##Azimuth\xc2\xb0##filter_modal_input", 30.0f);
+      ctx->ItemInputValue("**/##Elevation\xc2\xb0##filter_modal_input", 45.0f);
+      ctx->Yield(2);
+      ctx->ItemClick("**/Filter Out##filter_action");
+      ctx->Yield(2);
+
+      // OK must be enabled on Direction.
+      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      const auto& f = *gui::g_state.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::DirectionParams>(f.param));
+      const auto& d = std::get<gui::DirectionParams>(f.param);
+      IM_CHECK_EQ(d.az, 30.0f);
+      IM_CHECK_EQ(d.el, 45.0f);
+      IM_CHECK_EQ(f.action, 1);
+      // Default sym_p/b/d = true (gui_state.hpp:271-273) → "PBD" suffix.
+      IM_CHECK(f.sym_p);
+      IM_CHECK(f.sym_b);
+      IM_CHECK(f.sym_d);
+
+      // FilterSummary Direction format is "DIR:<az>°/<el>° <In|Out>[ <sym>]"
+      // (panels.cpp Direction branch — radii dropped in
+      // task-filter-modal-polish-v1). The sym suffix is still emitted
+      // even though the P/B/D Checkbox is hidden — the underlying field
+      // values round-trip unchanged. The "°" is UTF-8 U+00B0 (\xc2\xb0).
+      IM_CHECK_STR_EQ(gui::FilterSummary(gui::g_state.layers[0].entries[0].filter).c_str(),
+                      "DIR:30\xc2\xb0/45\xc2\xb0 Out PBD");
+    };
+  }
+
+  // T13 — per-type buffer isolation extends to Direction ↔ Entry-Exit switch:
+  // type-in Direction values, switch to Entry-Exit, switch back, OK →
+  // Direction values preserved. Verifies the per-type buffer is not clobbered
+  // when transiting through another type's sub-panel.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "direction_per_type_buffer_isolated");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##Azimuth\xc2\xb0##filter_modal_input", 10.0f);
+      ctx->ItemInputValue("**/##Elevation\xc2\xb0##filter_modal_input", 20.0f);
+      ctx->Yield(2);
+
+      // Switch away (Entry-Exit's sub-buffer should not be touched by
+      // Direction inputs).
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/##Azimuth\xc2\xb0##filter_modal_input"));
+
+      // Switch back to Direction; per-type buffer must have retained values.
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##Azimuth\xc2\xb0##filter_modal_input"));
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      const auto& f = *gui::g_state.layers[0].entries[0].filter;
+      IM_CHECK(std::holds_alternative<gui::DirectionParams>(f.param));
+      const auto& d = std::get<gui::DirectionParams>(f.param);
+      IM_CHECK_EQ(d.az, 10.0f);
+      IM_CHECK_EQ(d.el, 20.0f);
+    };
+  }
+
+  // T14 — H4 修正：P/B/D Checkbox is hidden when active type is Direction
+  // (DirectionFilter does not consume crystal symmetry); P/B/D is rendered
+  // when active type is Raypath or EntryExit. Reverse-direction assertion
+  // in raypath / EE branches guards against an accidental "hide P/B/D in
+  // all types" regression.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "direction_hides_pbd_checkboxes");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Default = Raypath: P/B/D rendered (forward assertion).
+      IM_CHECK(ctx->ItemExists("**/P##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/B##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/D##filter_modal"));
+
+      // Direction: P/B/D hidden (H4 gate).
+      ctx->ItemClick("**/Direction##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/P##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/B##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/D##filter_modal"));
+
+      // EntryExit: P/B/D rendered (forward assertion — EE consumes sym).
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/P##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/B##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/D##filter_modal"));
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
     };
   }
 }
