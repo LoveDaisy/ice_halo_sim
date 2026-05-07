@@ -3437,13 +3437,13 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
 
       // Default = Raypath: EE inputs not present.
-      IM_CHECK(!ctx->ItemExists("**/Entry face number##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Entry##filter_ee_entry"));
 
       // Switch to Entry-Exit: both InputText items appear, raypath InputText disappears.
       ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Entry face number##filter_modal"));
-      IM_CHECK(ctx->ItemExists("**/Exit face number##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/Entry##filter_ee_entry"));
+      IM_CHECK(ctx->ItemExists("**/Exit##filter_ee_exit"));
       IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
 
       // OK is disabled while EE fields are empty (kIncomplete, not kValid).
@@ -3453,8 +3453,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) != 0);
 
       // Type valid face numbers → OK enables.
-      ctx->ItemInputValue("**/Entry face number##filter_modal", "1");
-      ctx->ItemInputValue("**/Exit face number##filter_modal", "2");
+      ctx->ItemInputValue("**/Entry##filter_ee_entry", "1");
+      ctx->ItemInputValue("**/Exit##filter_ee_exit", "2");
       ctx->Yield(2);
       auto info_typed = ctx->ItemInfo("**/OK##edit_modal");
       IM_CHECK((info_typed.ItemFlags & ImGuiItemFlags_Disabled) == 0);
@@ -3462,13 +3462,13 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // Switch to Raypath: EE inputs un-render.
       ctx->ItemClick("**/Raypath##filter_type");
       ctx->Yield(2);
-      IM_CHECK(!ctx->ItemExists("**/Entry face number##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Entry##filter_ee_entry"));
 
       // Switch back to Entry-Exit: inputs reappear; the typed-and-valid
       // values are still in the buffers so OK stays enabled.
       ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Entry face number##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/Entry##filter_ee_entry"));
       auto info_back = ctx->ItemInfo("**/OK##edit_modal");
       IM_CHECK((info_back.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
@@ -3495,10 +3495,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
 
-      // post-task-filter-modal-polish-v1: InputText (text), labels read
-      // "face number" not "face id".
-      ctx->ItemInputValue("**/Entry face number##filter_modal", "2");
-      ctx->ItemInputValue("**/Exit face number##filter_modal", "5");
+      ctx->ItemInputValue("**/Entry##filter_ee_entry", "2");
+      ctx->ItemInputValue("**/Exit##filter_ee_exit", "5");
       ctx->Yield(2);
       ctx->ItemClick("**/Filter Out##filter_action");
       ctx->Yield(2);
@@ -3544,20 +3542,20 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
-      ctx->ItemInputValue("**/Entry face number##filter_modal", "3");
-      ctx->ItemInputValue("**/Exit face number##filter_modal", "7");
+      ctx->ItemInputValue("**/Entry##filter_ee_entry", "3");
+      ctx->ItemInputValue("**/Exit##filter_ee_exit", "7");
       ctx->Yield(2);
 
       // Switch away to Raypath — EE sub-buffer must remain untouched.
       ctx->ItemClick("**/Raypath##filter_type");
       ctx->Yield(2);
       // Verify EE inputs un-rendered while Raypath is active.
-      IM_CHECK(!ctx->ItemExists("**/Entry face number##filter_modal"));
+      IM_CHECK(!ctx->ItemExists("**/Entry##filter_ee_entry"));
 
       // Switch back to Entry-Exit; per-type buffer must have retained values.
       ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Entry face number##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/Entry##filter_ee_entry"));
 
       ctx->ItemClick("**/OK##edit_modal");
       ctx->Yield(2);
@@ -3568,6 +3566,85 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       const auto& ee = std::get<gui::EntryExitParams>(f.param);
       IM_CHECK_EQ(ee.entry_text, std::string("3"));
       IM_CHECK_EQ(ee.exit_text, std::string("7"));
+    };
+  }
+
+  // T11 — Remove Filter (EE): button always enabled, clears fields, OK enabled
+  // (intent bypasses incomplete gate), and OK → entry.filter == nullopt even
+  // if user re-types values after Remove (session-level single direction).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_remove_clears_and_ok_enabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+
+      // Remove Filter button must exist and be enabled even with empty fields.
+      IM_CHECK(ctx->ItemExists("**/Remove Filter##filter_ee"));
+      auto info_remove_empty = ctx->ItemInfo("**/Remove Filter##filter_ee");
+      IM_CHECK((info_remove_empty.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Type valid face numbers.
+      ctx->ItemInputValue("**/Entry##filter_ee_entry", "2");
+      ctx->ItemInputValue("**/Exit##filter_ee_exit", "5");
+      ctx->Yield(2);
+
+      // Remove Filter clears the fields.
+      ctx->ItemClick("**/Remove Filter##filter_ee");
+      ctx->Yield(2);
+
+      // After Remove: OK is enabled (intent bypasses incomplete gate).
+      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Re-type entry=1 after Remove (intent still set — session-level single direction).
+      ctx->ItemInputValue("**/Entry##filter_ee_entry", "1");
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      // Remove intent takes precedence: filter must be nullopt regardless of re-typed value.
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+    };
+  }
+
+  // T12 — Remove Filter (EE) followed by OK: pre-existing EE filter is cleared.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_remove_ok_clears_filter");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Pre-populate entry.filter with an EE filter.
+      {
+        gui::FilterConfig fc;
+        fc.action = 0;
+        gui::EntryExitParams ee;
+        ee.entry_text = "2";
+        ee.exit_text = "5";
+        fc.param = ee;
+        gui::g_state.layers[0].entries[0].filter = fc;
+      }
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Remove Filter##filter_ee");
+      ctx->Yield(2);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      // After Remove + OK, filter must be nullopt.
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
     };
   }
 }

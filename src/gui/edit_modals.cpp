@@ -132,6 +132,7 @@ static char g_raypath_buf[256];
 // raypath → nullopt" commit rule this also closes the "Remove button" path
 // without a separate state bit.
 static bool g_filter_initial_present = false;
+static bool g_ee_remove_intent = false;
 
 // Snapshots captured on OpenEditModal for per-tab dirty-mark computation.
 // Filter already has its own snapshot above (used for a separate purpose in
@@ -647,6 +648,18 @@ namespace {
 lumice::CrystalKind CurrentValidationKind();
 }
 
+static ImVec4 ValidationFrameBgColor(RaypathValidation state) {
+  switch (state) {
+    case RaypathValidation::kValid:
+      return ImVec4(0.06f, 0.24f, 0.06f, 0.5f);
+    case RaypathValidation::kIncomplete:
+      return ImVec4(0.27f, 0.24f, 0.03f, 0.5f);
+    case RaypathValidation::kInvalid:
+      return ImVec4(0.27f, 0.06f, 0.06f, 0.5f);
+  }
+  return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+}
+
 static void RenderRaypathSubpanel() {
   // Sync InputText backing buffer into the raypath sub-buffer before validation
   // so the displayed hint reflects the current edit state.
@@ -654,22 +667,8 @@ static void RenderRaypathSubpanel() {
   const auto result = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
   const auto validation = result.state;
 
-  ImVec4 border_color;
-  switch (validation) {
-    case RaypathValidation::kValid:
-      border_color = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
-      break;
-    case RaypathValidation::kIncomplete:
-      border_color = ImVec4(0.9f, 0.8f, 0.1f, 1.0f);
-      break;
-    case RaypathValidation::kInvalid:
-      border_color = ImVec4(0.9f, 0.2f, 0.2f, 1.0f);
-      break;
-  }
-
   // Row 1: Raypath text input (top-emphasized).
-  ImGui::PushStyleColor(ImGuiCol_FrameBg,
-                        ImVec4(border_color.x * 0.3f, border_color.y * 0.3f, border_color.z * 0.3f, 0.5f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ValidationFrameBgColor(validation));
   ImGui::InputText("Raypath##filter_modal", g_raypath_buf, sizeof(g_raypath_buf));
   ImGui::PopStyleColor();
 
@@ -717,27 +716,14 @@ static void RenderEntryExitSubpanel() {
   const auto v_entry = ValidateFaceNumberText(g_ee_entry_buf, kind);
   const auto v_exit = ValidateFaceNumberText(g_ee_exit_buf, kind);
 
-  // Border colour: kInvalid → red, kIncomplete → yellow, kValid → default.
-  auto push_state_color = [](RaypathValidation s) {
-    if (s == RaypathValidation::kInvalid) {
-      ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(220, 60, 60, 255));
-    } else if (s == RaypathValidation::kIncomplete) {
-      ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(220, 180, 60, 255));
-    }
-  };
-  auto pop_state_color = [](RaypathValidation s) {
-    if (s != RaypathValidation::kValid) {
-      ImGui::PopStyleColor();
-    }
-  };
+  // FrameBg tint mirrors RenderRaypathSubpanel (same helper).
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ValidationFrameBgColor(v_entry.state));
+  ImGui::InputText("Entry##filter_ee_entry", g_ee_entry_buf, sizeof(g_ee_entry_buf));
+  ImGui::PopStyleColor();
 
-  push_state_color(v_entry.state);
-  ImGui::InputText("Entry face number##filter_modal", g_ee_entry_buf, sizeof(g_ee_entry_buf));
-  pop_state_color(v_entry.state);
-
-  push_state_color(v_exit.state);
-  ImGui::InputText("Exit face number##filter_modal", g_ee_exit_buf, sizeof(g_ee_exit_buf));
-  pop_state_color(v_exit.state);
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ValidationFrameBgColor(v_exit.state));
+  ImGui::InputText("Exit##filter_ee_exit", g_ee_exit_buf, sizeof(g_ee_exit_buf));
+  ImGui::PopStyleColor();
 
   // Combined validation message (first non-valid wins, matching raypath).
   if (!v_entry.message.empty()) {
@@ -745,6 +731,9 @@ static void RenderEntryExitSubpanel() {
   } else if (!v_exit.message.empty()) {
     ImGui::TextColored(ImVec4(0.86f, 0.24f, 0.24f, 1.0f), "Exit: %s", v_exit.message.c_str());
   }
+
+  // Shared hint — single value syntax, consistent with EE single-value semantic.
+  ImGui::TextDisabled("e.g. 3");
 }
 
 // Shared filter controls (Action radio + P/B/D), rendered after the
@@ -791,6 +780,19 @@ static void RenderRemoveFilterButton() {
   ImGui::EndDisabled();
 }
 
+// Remove Filter for Entry-Exit: always enabled (carries "delete filter data"
+// semantics — sets g_ee_remove_intent so ApplyBuffersToEntry bypasses kValid
+// gate and resets entry.filter to nullopt on OK).
+static void RenderRemoveEEFilterButton() {
+  if (ImGui::Button("Remove Filter##filter_ee", ImVec2(120, 0))) {
+    g_ee_entry_buf[0] = '\0';
+    g_ee_exit_buf[0] = '\0';
+    g_ee_params.entry_text.clear();
+    g_ee_params.exit_text.clear();
+    g_ee_remove_intent = true;
+  }
+}
+
 static void RenderFilterModal() {
   // Type radio — 3 options, SameLine horizontal (style-aligned with Crystal
   // tab's Prism/Pyramid radios). Boolean form (RadioButton(label, active))
@@ -829,11 +831,11 @@ static void RenderFilterModal() {
 
   ImGui::Spacing();
 
-  // Remove Filter — raypath-only shortcut. The "empty raypath ≡ no filter"
-  // shortcut only applies to Raypath; EE each has a legal "default" state
-  // and requires switching back to Raypath + clearing to obtain "no filter".
+  // Remove Filter — type-specific shortcut.
   if (g_filter_active_type == FilterEditType::kRaypath) {
     RenderRemoveFilterButton();
+  } else if (g_filter_active_type == FilterEditType::kEntryExit) {
+    RenderRemoveEEFilterButton();
   }
 
   // OK / Cancel handled at modal level (RenderEditModals).
@@ -883,6 +885,7 @@ void ResetModalState() {
   g_raypath_params_snapshot = {};
   g_ee_params_snapshot = {};
   g_filter_initial_present = false;
+  g_ee_remove_intent = false;
   g_raypath_buf[0] = '\0';
   g_ee_entry_buf[0] = '\0';
   g_ee_exit_buf[0] = '\0';
@@ -979,6 +982,12 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   // and skip the commit — consistent with raypath's "empty ≡ no filter"
   // semantic at the UI layer.
   if (g_filter_active_type == FilterEditType::kEntryExit) {
+    // Remove intent: bypass kValid gate, reset filter to nullopt.
+    if (g_ee_remove_intent) {
+      entry.filter = std::nullopt;
+      g_ee_remove_intent = false;
+      return { true, entry != old_entry, entry.filter != old_entry.filter };
+    }
     const bool buf_changed = IsFilterDirty();
     const auto kind = CurrentValidationKind();
     const auto v_entry = ValidateFaceNumberText(g_ee_params.entry_text, kind);
@@ -1440,17 +1449,22 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
       // tab-label dirty mark) sees the live value.
       g_ee_params.entry_text = g_ee_entry_buf;
       g_ee_params.exit_text = g_ee_exit_buf;
-      const auto kind = CurrentValidationKind();
-      const auto ve = ValidateFaceNumberText(g_ee_entry_buf, kind);
-      const auto vx = ValidateFaceNumberText(g_ee_exit_buf, kind);
-      const bool incomplete = ve.state == RaypathValidation::kIncomplete || vx.state == RaypathValidation::kIncomplete;
-      const bool invalid = ve.state == RaypathValidation::kInvalid || vx.state == RaypathValidation::kInvalid;
-      if (invalid) {
-        ok_disabled = true;
-        ok_tooltip = "Filter face number invalid — fix it in the Filter tab";
-      } else if (incomplete) {
-        ok_disabled = true;
-        ok_tooltip = "Enter entry and exit face numbers";
+      // Remove intent bypasses the incomplete/invalid gate — OK is always
+      // enabled when the user has clicked Remove Filter.
+      if (!g_ee_remove_intent) {
+        const auto kind = CurrentValidationKind();
+        const auto ve = ValidateFaceNumberText(g_ee_entry_buf, kind);
+        const auto vx = ValidateFaceNumberText(g_ee_exit_buf, kind);
+        const bool incomplete =
+            ve.state == RaypathValidation::kIncomplete || vx.state == RaypathValidation::kIncomplete;
+        const bool invalid = ve.state == RaypathValidation::kInvalid || vx.state == RaypathValidation::kInvalid;
+        if (invalid) {
+          ok_disabled = true;
+          ok_tooltip = "Filter face number invalid — fix it in the Filter tab";
+        } else if (incomplete) {
+          ok_disabled = true;
+          ok_tooltip = "Enter entry and exit face numbers";
+        }
       }
     }
 

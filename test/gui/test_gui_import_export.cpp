@@ -821,4 +821,51 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_STR_EQ(jf["exit_text"].get<std::string>().c_str(), "4");
     };
   }
+
+  // T13 — AC7 serialization equivalence: Remove EE Filter via GUI → OK →
+  // entry.filter == nullopt → SerializeCoreConfig emits no "filter" field.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "entry_exit_remove_ok_no_filter_in_json");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Pre-populate entry.filter with an EE filter.
+      {
+        gui::FilterConfig fc;
+        fc.action = 0;
+        fc.sym_p = true;
+        fc.sym_b = true;
+        fc.sym_d = true;
+        gui::EntryExitParams ee;
+        ee.entry_text = "3";
+        ee.exit_text = "6";
+        fc.param = ee;
+        gui::g_state.layers[0].entries[0].filter = fc;
+      }
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Remove Filter##filter_ee");
+      ctx->Yield(2);
+      ctx->ItemClick("**/OK##edit_modal");
+      ctx->Yield(2);
+
+      // filter must be nullopt after Remove + OK.
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+
+      // SerializeCoreConfig must not emit any "filter" field (no EE residue).
+      const std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      IM_CHECK(!core_json.empty());
+      const auto j = nlohmann::json::parse(core_json);
+      // No top-level "filter" array, or it's empty.
+      const bool no_filter = !j.contains("filter") || j["filter"].empty();
+      IM_CHECK(no_filter);
+    };
+  }
 }
