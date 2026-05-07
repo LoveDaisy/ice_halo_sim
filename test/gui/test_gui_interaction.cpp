@@ -3524,8 +3524,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // entry/exit now render the raw text buffer (kept as-is so partial
       // input stays visible). ASCII "->" is used so the bundled font always
       // renders it (U+2192 fell back to "?" glyph on user's machine).
-      IM_CHECK_STR_EQ(gui::FilterSummary(gui::g_state.layers[0].entries[0].filter).c_str(),
-                      "EE:2->5 Out PBD");
+      IM_CHECK_STR_EQ(gui::FilterSummary(gui::g_state.layers[0].entries[0].filter).c_str(), "EE:2->5 Out PBD");
     };
   }
 
