@@ -32,14 +32,6 @@ namespace lumice::gui {
 
 using json = nlohmann::json;
 
-// Default Direction filter cone half-angle (deg) — GUI no longer exposes
-// this field (task-filter-modal-polish-v1, plan §3 D-Assume-1). Single
-// injection point: GUI→core / GUI→.lmc serialization fills this constant
-// when constructing core DirectionFilterParam. core JSON read-back
-// preserves whatever value config.json holds (direct-edit users keep
-// full control); .lmc read-back discards any radii field it encounters.
-static constexpr float kDirectionDefaultRadiiDeg = 5.0f;
-
 // Convert Miller index (i1, i4) to wedge angle in degrees. Returns default (28.0) if i1 == 0.
 static float MillerToAlpha(int i1, int i4) {
   constexpr float kSqrt3_2 = 0.866025403784f;
@@ -223,11 +215,6 @@ static json SerializeFilterForGui(const FilterConfig& f, int id) {
           j["type"] = "entry_exit";
           j["entry_text"] = p.entry_text;
           j["exit_text"] = p.exit_text;
-        } else if constexpr (std::is_same_v<T, DirectionParams>) {
-          // .lmc no longer persists radii (GUI uses default at commit time).
-          j["type"] = "direction";
-          j["az"] = p.az;
-          j["el"] = p.el;
         }
       },
       f.param);
@@ -246,7 +233,7 @@ struct FilterCoreResult {
   std::vector<json> filters;
 };
 
-// Build a single simple-filter JSON entry (any of raypath/entry_exit/direction/crystal).
+// Build a single simple-filter JSON entry (any of raypath/entry_exit).
 template <class FillFn>
 static json BuildCoreSimpleFilterJson(const FilterConfig& f, int id, const char* type_name, FillFn fill) {
   json j;
@@ -363,16 +350,6 @@ static FilterCoreResult SerializeFilterForCore(const FilterConfig& f, int next_f
           result.filters.push_back(BuildCoreSimpleFilterJson(f, id, "entry_exit", [&](json& j) {
             j["entry"] = ClampIdValue(entry_int, "entry");
             j["exit"] = ClampIdValue(exit_int, "exit");
-          }));
-          result.main_id = id;
-        } else if constexpr (std::is_same_v<T, DirectionParams>) {
-          // GUI struct lost radii — inject the fixed default so core's
-          // DirectionFilter still sees a sensible cone half-angle.
-          int id = next_filter_id_base;
-          result.filters.push_back(BuildCoreSimpleFilterJson(f, id, "direction", [&](json& j) {
-            j["az"] = p.az;
-            j["el"] = p.el;
-            j["radii"] = kDirectionDefaultRadiiDeg;
           }));
           result.main_id = id;
         }
@@ -590,13 +567,6 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
       int v = jf.value("exit", 0);
       p.exit_text = (v == 0) ? std::string{} : std::to_string(v);
     }
-    f.param = p;
-  } else if (type == "direction") {
-    // Older .lmc files (v2) may include "radii" — read-and-discard
-    // (jf.value() with default keeps the call no-op when absent).
-    DirectionParams p;
-    p.az = jf.value("az", 0.0f);
-    p.el = jf.value("el", 0.0f);
     f.param = p;
   } else {
     GUI_LOG_WARNING("[FileIO] Unknown filter type '{}', defaulting to raypath", type);
@@ -907,14 +877,6 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
         int exit_int = jf.value("exit", 0);
         p.entry_text = (entry_int == 0) ? std::string{} : std::to_string(entry_int);
         p.exit_text = (exit_int == 0) ? std::string{} : std::to_string(exit_int);
-        f.param = p;
-      } else if (type_str == "direction") {
-        // core JSON's "radii" is core-only (cone half-angle); GUI
-        // representation drops it and re-injects kDirectionDefaultRadiiDeg
-        // on the next commit.
-        DirectionParams p;
-        p.az = jf.value("az", 0.0f);
-        p.el = jf.value("el", 0.0f);
         f.param = p;
       } else {
         GUI_LOG_WARNING("[FileIO] Unknown filter type '{}' on core JSON import, defaulting to empty raypath", type_str);

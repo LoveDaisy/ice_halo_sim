@@ -243,18 +243,7 @@ struct EntryExitParams {
   friend bool operator!=(const EntryExitParams& a, const EntryExitParams& b) { return !(a == b); }
 };
 
-struct DirectionParams {
-  // Maps to core DirectionFilterParam.lon_/lat_ (azimuth/elevation, degrees).
-  // Cone half-angle radii_ is core-only — GUI commits a fixed default
-  // (kDirectionDefaultRadiiDeg, see edit_modals.cpp / file_io.cpp).
-  float az = 0.0f;
-  float el = 0.0f;
-
-  friend bool operator==(const DirectionParams& a, const DirectionParams& b) { return a.az == b.az && a.el == b.el; }
-  friend bool operator!=(const DirectionParams& a, const DirectionParams& b) { return !(a == b); }
-};
-
-using FilterParamVariant = std::variant<RaypathParams, EntryExitParams, DirectionParams>;
+using FilterParamVariant = std::variant<RaypathParams, EntryExitParams>;
 
 // GUI-only data structure: filter configuration.
 //

@@ -89,7 +89,7 @@ static AxisDist g_axis_buf[3];  // zenith, azimuth, roll
 // Each FilterEditType keeps its own sub-buffer so switching type is non-destructive
 // (T6 contract: "切到 EE 再切回 raypath, 之前输入仍在"). Commit assembles a
 // FilterConfig from g_filter_top (shared fields) + active type's sub-buffer.
-enum class FilterEditType { kRaypath = 0, kEntryExit = 1, kDirection = 2 };
+enum class FilterEditType { kRaypath = 0, kEntryExit = 1 };
 static FilterEditType g_filter_active_type = FilterEditType::kRaypath;
 static FilterEditType g_filter_active_type_snapshot = FilterEditType::kRaypath;
 
@@ -111,10 +111,8 @@ static FilterConfig g_filter_top_snapshot;
 // Per-type sub-buffers — switching type is non-destructive (each retains state).
 static RaypathParams g_raypath_params;
 static EntryExitParams g_ee_params;
-static DirectionParams g_dir_params;
 static RaypathParams g_raypath_params_snapshot;
 static EntryExitParams g_ee_params_snapshot;
-static DirectionParams g_dir_params_snapshot;
 
 // Entry-Exit InputText backing buffers. ImGui needs persistent char arrays
 // for InputText; we mirror them with g_ee_params.{entry,exit}_text on
@@ -276,7 +274,6 @@ void SnapshotAllBuffers(const GuiState& state) {
   g_filter_top_snapshot = g_filter_top;
   g_raypath_params_snapshot = g_raypath_params;
   g_ee_params_snapshot = g_ee_params;
-  g_dir_params_snapshot = g_dir_params;
   g_filter_active_type_snapshot = g_filter_active_type;
   g_crystal_buf_snapshot = g_crystal_buf;
   g_axis_buf_snapshot[0] = g_axis_buf[0];
@@ -371,7 +368,6 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   // safe state rather than carrying over the previous session's discriminator.
   g_raypath_params = {};
   g_ee_params = {};
-  g_dir_params = {};
   g_filter_active_type = FilterEditType::kRaypath;
   if (std::holds_alternative<RaypathParams>(src.param)) {
     g_raypath_params = std::get<RaypathParams>(src.param);
@@ -379,9 +375,6 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   } else if (std::holds_alternative<EntryExitParams>(src.param)) {
     g_ee_params = std::get<EntryExitParams>(src.param);
     g_filter_active_type = FilterEditType::kEntryExit;
-  } else if (std::holds_alternative<DirectionParams>(src.param)) {
-    g_dir_params = std::get<DirectionParams>(src.param);
-    g_filter_active_type = FilterEditType::kDirection;
   }
   snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_raypath_params.raypath_text.c_str());
   snprintf(g_ee_entry_buf, sizeof(g_ee_entry_buf), "%s", g_ee_params.entry_text.c_str());
@@ -754,33 +747,6 @@ static void RenderEntryExitSubpanel() {
   }
 }
 
-// 角度指光线传播方向 d（非视线方向 -d）；视位置筛选需取相反向量。
-static constexpr const char* kDirectionAngleTooltip =
-    "Angle specifies the ray's propagation direction\n"
-    "(the direction light travels from sun -> crystal -> observer).\n"
-    "To filter halos that appear at a sky position, use the opposite direction.";
-
-// Direction sub-panel: two SliderWithInput controls (azimuth, elevation)
-// in degrees, matching the right-side Camera section style. Values
-// written directly into g_dir_params; commit/dirty tracking handled by
-// ApplyBuffersToEntry / IsFilterDirty just like the raypath/EE paths.
-// The cone half-angle (core's DirectionFilterParam.radii_) is a fixed
-// default injected at GUI→core serialization (file_io.cpp::
-// kDirectionDefaultRadiiDeg). Slider ranges follow the geometric
-// principal interval; out-of-range values still construct valid cos/sin
-// (DirectionFilter, src/core/filter.cpp:81-98) but the slider clamp keeps
-// UX unambiguous.
-static void RenderDirectionSubpanel() {
-  SliderWithInput("Azimuth\xc2\xb0##filter_modal", &g_dir_params.az, -180.0f, 180.0f, "%.2f", SliderScale::kLinear);
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("%s", kDirectionAngleTooltip);
-  }
-  SliderWithInput("Elevation\xc2\xb0##filter_modal", &g_dir_params.el, -90.0f, 90.0f, "%.2f", SliderScale::kLinear);
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("%s", kDirectionAngleTooltip);
-  }
-}
-
 // Shared filter controls (Action radio + P/B/D), rendered after the
 // type-specific dispatch. Always uses g_filter_top so type switches don't
 // reset shared user preferences.
@@ -837,10 +803,6 @@ static void RenderFilterModal() {
   if (ImGui::RadioButton("Entry-Exit##filter_type", g_filter_active_type == FilterEditType::kEntryExit)) {
     g_filter_active_type = FilterEditType::kEntryExit;
   }
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Direction##filter_type", g_filter_active_type == FilterEditType::kDirection)) {
-    g_filter_active_type = FilterEditType::kDirection;
-  }
 
   ImGui::Spacing();
 
@@ -855,9 +817,6 @@ static void RenderFilterModal() {
     case FilterEditType::kEntryExit:
       RenderEntryExitSubpanel();
       break;
-    case FilterEditType::kDirection:
-      RenderDirectionSubpanel();
-      break;
     default:
       assert(false && "unhandled FilterEditType in RenderFilterModal dispatch");
       break;
@@ -871,9 +830,8 @@ static void RenderFilterModal() {
   ImGui::Spacing();
 
   // Remove Filter — raypath-only shortcut. The "empty raypath ≡ no filter"
-  // shortcut only applies to Raypath; EE / Direction / Crystal each have a
-  // legal "default" state (entry=0/exit=0 / az=el=radii=0 / crystal_id=0)
-  // and require switching back to Raypath + clearing to obtain "no filter".
+  // shortcut only applies to Raypath; EE each has a legal "default" state
+  // and requires switching back to Raypath + clearing to obtain "no filter".
   if (g_filter_active_type == FilterEditType::kRaypath) {
     RenderRemoveFilterButton();
   }
@@ -922,10 +880,8 @@ void ResetModalState() {
   g_filter_active_type_snapshot = FilterEditType::kRaypath;
   g_raypath_params = {};
   g_ee_params = {};
-  g_dir_params = {};
   g_raypath_params_snapshot = {};
   g_ee_params_snapshot = {};
-  g_dir_params_snapshot = {};
   g_filter_initial_present = false;
   g_raypath_buf[0] = '\0';
   g_ee_entry_buf[0] = '\0';
@@ -969,8 +925,6 @@ bool IsFilterDirty() {
       return g_raypath_params != g_raypath_params_snapshot;
     case FilterEditType::kEntryExit:
       return g_ee_params != g_ee_params_snapshot;
-    case FilterEditType::kDirection:
-      return g_dir_params != g_dir_params_snapshot;
     default:
       assert(false && "unhandled FilterEditType in IsFilterDirty");
       return false;
@@ -1038,30 +992,6 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
       out.sym_b = g_filter_top.sym_b;
       out.sym_d = g_filter_top.sym_d;
       out.param = g_ee_params;
-      entry.filter = out;
-    }
-    return { true, entry != old_entry, entry.filter != old_entry.filter };
-  }
-
-  // Direction commit branch (#178.5). Mirrors the EE branch above; gated on
-  // `g_filter_initial_present || buf_changed`. NOTE: switching to the
-  // Direction RadioButton already sets buf_changed=true (active_type !=
-  // snapshot inside IsFilterDirty), so the path "open a filterless entry →
-  // switch to Direction → OK without typing" always commits a default-zero
-  // Direction filter; the guard's actual function is to suppress a re-commit
-  // when the user reopens an existing Direction entry and presses OK without
-  // modifying any field. P/B/D fields stay in g_filter_top per the H4
-  // contract — UI hides the Checkboxes but the data round-trips unchanged.
-  if (g_filter_active_type == FilterEditType::kDirection) {
-    const bool buf_changed = IsFilterDirty();
-    if (g_filter_initial_present || buf_changed) {
-      FilterConfig out;
-      out.name = g_filter_top.name;
-      out.action = g_filter_top.action;
-      out.sym_p = g_filter_top.sym_p;
-      out.sym_b = g_filter_top.sym_b;
-      out.sym_d = g_filter_top.sym_d;
-      out.param = g_dir_params;
       entry.filter = out;
     }
     return { true, entry != old_entry, entry.filter != old_entry.filter };

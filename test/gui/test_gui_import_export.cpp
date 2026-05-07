@@ -611,9 +611,9 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         return e;
       };
 
+      // Build one entry per remaining filter type (raypath, entry_exit).
       layer.entries.push_back(make_entry(gui::RaypathParams{ "3-1-5" }));
       layer.entries.push_back(make_entry(gui::EntryExitParams{ "7", "4" }));
-      layer.entries.push_back(make_entry(gui::DirectionParams{ 30.0f, -10.0f }));
       gui::g_state.layers.push_back(layer);
 
       const char* tmp_path = "/tmp/lumice_per_type_roundtrip.lmc";
@@ -627,7 +627,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
       IM_CHECK(load_ok);
 
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 3);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
 
       const auto& f0 = *gui::g_state.layers[0].entries[0].filter;
       IM_CHECK(std::holds_alternative<gui::RaypathParams>(f0.param));
@@ -638,12 +638,6 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       const auto& ee = std::get<gui::EntryExitParams>(f1.param);
       IM_CHECK_EQ(ee.entry_text, std::string("7"));
       IM_CHECK_EQ(ee.exit_text, std::string("4"));
-
-      const auto& f2 = *gui::g_state.layers[0].entries[2].filter;
-      IM_CHECK(std::holds_alternative<gui::DirectionParams>(f2.param));
-      const auto& dp = std::get<gui::DirectionParams>(f2.param);
-      IM_CHECK_EQ(dp.az, 30.0f);
-      IM_CHECK_EQ(dp.el, -10.0f);
 
       std::remove(tmp_path);
     };
@@ -744,79 +738,11 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // task-per-type-direction (issue 178.5): end-to-end equivalence between
-  // GUI Direction filter → SerializeCoreConfig output and a hand-crafted
-  // reference core JSON object. Validates AC-7 (`type` / `action` /
-  // `symmetry` / `az` / `el` / `radii` / `id` field-by-field equality
-  // regardless of insertion order via nlohmann::json::operator==).
+  // filter-direction-hide (issue 180.2): .lmc with type="direction" filter
+  // must degrade to empty RaypathParams after the Direction type is removed
+  // from the GUI. Mirrors Crystal's unknown-type fallback path (#179).
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "direction_serialize_core_equivalent");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      IM_UNUSED(ctx);
-      ResetTestState();
-
-      // Build a single-entry GuiState carrying a DirectionParams filter.
-      gui::g_state.layers.clear();
-      gui::Layer layer;
-      layer.probability = 1.0f;
-
-      gui::EntryCard e;
-      e.crystal.type = gui::CrystalType::kPrism;
-      e.crystal.height = 1.0f;
-      for (int i = 0; i < 6; ++i) {
-        e.crystal.face_distance[i] = 1.0f;
-      }
-      e.proportion = 100.0f;
-
-      gui::FilterConfig fc;
-      fc.action = 1;     // filter_out
-      fc.sym_p = true;   // → "P" in symmetry suffix
-      fc.sym_b = false;  // omitted
-      fc.sym_d = true;   // → "D"
-      fc.param = gui::DirectionParams{ /*az=*/30.0f, /*el=*/45.0f };
-      e.filter = fc;
-
-      layer.entries.push_back(e);
-      gui::g_state.layers.push_back(layer);
-
-      const std::string s = gui::SerializeCoreConfig(gui::g_state);
-      IM_CHECK(!s.empty());
-
-      const auto j = nlohmann::json::parse(s);
-      IM_CHECK(j.contains("filter"));
-      IM_CHECK(j["filter"].is_array());
-      IM_CHECK_EQ(static_cast<int>(j["filter"].size()), 1);
-
-      // Field-level assertions (also catches symmetry string ordering bugs).
-      // Note: `symmetry` field is still serialized for Direction filters even
-      // though the GUI hides the P/B/D Checkboxes (H4 contract — UI hides
-      // controls but data round-trips unchanged for cross-type compatibility).
-      const auto& jf = j["filter"][0];
-      IM_CHECK_STR_EQ(jf["type"].get<std::string>().c_str(), "direction");
-      IM_CHECK_STR_EQ(jf["action"].get<std::string>().c_str(), "filter_out");
-      IM_CHECK_STR_EQ(jf["symmetry"].get<std::string>().c_str(), "PD");
-      IM_CHECK_EQ(jf["az"].get<float>(), 30.0f);
-      IM_CHECK_EQ(jf["el"].get<float>(), 45.0f);
-      // GUI no longer owns radii; serialization layer injects the fixed
-      // default (kDirectionDefaultRadiiDeg, file_io.cpp).
-      IM_CHECK_EQ(jf["radii"].get<float>(), 5.0f);
-      IM_CHECK_EQ(jf["id"].get<int>(), 1);
-
-      // Whole-object equivalence with hand-crafted reference.
-      const nlohmann::json expected = {
-        { "id", 1 },     { "type", "direction" }, { "action", "filter_out" }, { "symmetry", "PD" },
-        { "az", 30.0f }, { "el", 45.0f },         { "radii", 5.0f },
-      };
-      IM_CHECK(jf == expected);
-    };
-  }
-
-  // task-filter-modal-polish-v1: v2 .lmc-style Direction filter JSON
-  // (with explicit radii) must load successfully into a v3 DirectionParams
-  // (radii silently dropped — GUI struct lacks the field). Re-serializing
-  // (SerializeGuiStateJson) must omit "radii" from the filter object.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "direction_v2_radii_dropped_on_load");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "direction_lmc_degrades_to_raypath");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       IM_UNUSED(ctx);
       ResetTestState();
@@ -831,7 +757,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
             "filter": {
               "type": "direction",
               "action": "filter_in",
-              "az": 22.0, "el": 5.0, "radii": 7.5
+              "az": 30.0, "el": 15.0
             }
           }]
         }]
@@ -840,22 +766,13 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::GuiState restored;
       bool ok = gui::DeserializeGuiStateJson(v2_lmc, restored);
       IM_CHECK(ok);
+      IM_CHECK_EQ(static_cast<int>(restored.layers[0].entries.size()), 1);
+
+      // direction type → unknown-type fallback → empty RaypathParams
       IM_CHECK(restored.layers[0].entries[0].filter.has_value());
       const auto& f = *restored.layers[0].entries[0].filter;
-      IM_CHECK(std::holds_alternative<gui::DirectionParams>(f.param));
-      const auto& dp = std::get<gui::DirectionParams>(f.param);
-      IM_CHECK_EQ(dp.az, 22.0f);
-      IM_CHECK_EQ(dp.el, 5.0f);
-      // radii silently discarded — DirectionParams no longer has the field.
-
-      // Re-serializing must omit "radii" from the .lmc filter object.
-      const std::string written = gui::SerializeGuiStateJson(restored);
-      const auto j = nlohmann::json::parse(written);
-      const auto& jf = j["layers"][0]["entries"][0]["filter"];
-      IM_CHECK_STR_EQ(jf["type"].get<std::string>().c_str(), "direction");
-      IM_CHECK(!jf.contains("radii"));
-      IM_CHECK_EQ(jf["az"].get<float>(), 22.0f);
-      IM_CHECK_EQ(jf["el"].get<float>(), 5.0f);
+      IM_CHECK(std::holds_alternative<gui::RaypathParams>(f.param));
+      IM_CHECK(std::get<gui::RaypathParams>(f.param).raypath_text.empty());
     };
   }
 

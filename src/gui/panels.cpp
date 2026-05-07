@@ -94,8 +94,6 @@ std::string FilterSummarySuffix(const FilterConfig& fc) {
 // Format dispatched by FilterParamVariant alternative:
 //   - Raypath:    "<raypath_text or *> <In|Out>[ <sym>]"        (e.g. "3-1-5 In PBD")
 //   - EntryExit:  "EE:<entry>→<exit> <In|Out>[ <sym>]"
-//   - Direction:  "DIR:<az>°/<el>° r=<radii>° <In|Out>[ <sym>]"
-//   - Crystal:    "CR:#<id> <In|Out>[ <sym>]"
 //
 // 12-character truncation is preserved for the raypath body so the existing
 // test_gui_interaction "1-2-3-4-5-6-..." case stays bit-exact. Other types
@@ -130,10 +128,6 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
           const char* e = p.entry_text.empty() ? "?" : p.entry_text.c_str();
           const char* x = p.exit_text.empty() ? "?" : p.exit_text.c_str();
           return std::string("EE:") + e + "\xe2\x86\x92" + x;
-        } else if constexpr (std::is_same_v<T, DirectionParams>) {
-          char buf[64];
-          snprintf(buf, sizeof(buf), "DIR:%g\xc2\xb0/%g\xc2\xb0", p.az, p.el);
-          return buf;
         } else {
           return "*";
         }
