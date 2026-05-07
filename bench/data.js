@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778127816278,
+  "lastUpdate": 1778127818477,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -5559,6 +5559,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 57.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "629b323b216916714ed81f72579bb132517b2088",
+          "message": "Merge pull request #87 from LoveDaisy/feat/gui_polish\n\nfeat(gui-polish-v18): visibility row, drop Direction filter, EE align Raypath",
+          "timestamp": "2026-05-07T12:18:21+08:00",
+          "tree_id": "cba0b9455d12d07982d550091a56b3c28e98d010",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/629b323b216916714ed81f72579bb132517b2088"
+        },
+        "date": 1778127817754,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 86.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 78,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 72.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 70.8,
             "unit": "%"
           }
         ]
