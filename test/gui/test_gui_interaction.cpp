@@ -2418,6 +2418,43 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) == 0);
     };
   }
+
+  // ===== task-visibility-radio-layout (scrum-gui-polish-v18 180.1) =====
+  // Verify the 1×4 horizontal layout: click hit and same-row geometry.
+
+  // p2_render/visibility_horizontal_layout_click_hit — fisheye lens (all 4 buttons
+  // enabled); ItemClick on Lower and Front commits the correct value.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_horizontal_layout_click_hit");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEqualArea;
+      ctx->Yield(3);
+      ctx->ItemClick("**/Lower##visible");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.renderer.visible, gui::kVisibleLower);
+      ctx->ItemClick("**/Front##visible");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.renderer.visible, gui::kVisibleFront);
+    };
+  }
+
+  // p2_render/visibility_horizontal_layout_same_row — fisheye lens; Upper and Front
+  // must share the same screen row (RectFull.Min.y equal, confirming 1×4 layout).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_horizontal_layout_same_row");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEqualArea;
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK_EQ(info_upper.RectFull.Min.y, info_front.RectFull.Min.y);
+      IM_CHECK(info_front.RectFull.Min.x > info_upper.RectFull.Min.x);
+    };
+  }
 }
 
 // ========== task-test-gui-interaction: P1 Running simulation restart tests ==========

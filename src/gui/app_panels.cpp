@@ -419,6 +419,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
     ImGui::SameLine();
     ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
+    ImGui::SameLine();
     ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
     ImGui::SameLine();
     if (!full_sky) {
