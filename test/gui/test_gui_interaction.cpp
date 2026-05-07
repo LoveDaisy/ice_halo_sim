@@ -3520,12 +3520,12 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(f.sym_b);
       IM_CHECK(f.sym_d);
 
-      // FilterSummary EE format: "EE:<entry>→<exit> <In|Out>[ <sym>]" —
+      // FilterSummary EE format: "EE:<entry>-><exit> <In|Out>[ <sym>]" —
       // entry/exit now render the raw text buffer (kept as-is so partial
-      // input stays visible). The "→" is UTF-8 U+2192 ("\xe2\x86\x92").
+      // input stays visible). ASCII "->" is used so the bundled font always
+      // renders it (U+2192 fell back to "?" glyph on user's machine).
       IM_CHECK_STR_EQ(gui::FilterSummary(gui::g_state.layers[0].entries[0].filter).c_str(),
-                      "EE:2\xe2\x86\x92"
-                      "5 Out PBD");
+                      "EE:2->5 Out PBD");
     };
   }
 
