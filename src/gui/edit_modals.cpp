@@ -89,7 +89,7 @@ static AxisDist g_axis_buf[3];  // zenith, azimuth, roll
 // Each FilterEditType keeps its own sub-buffer so switching type is non-destructive
 // (T6 contract: "切到 EE 再切回 raypath, 之前输入仍在"). Commit assembles a
 // FilterConfig from g_filter_top (shared fields) + active type's sub-buffer.
-enum class FilterEditType { kRaypath = 0, kEntryExit = 1, kDirection = 2 };
+enum class FilterEditType { kRaypath = 0, kEntryExit = 1 };
 static FilterEditType g_filter_active_type = FilterEditType::kRaypath;
 static FilterEditType g_filter_active_type_snapshot = FilterEditType::kRaypath;
 
@@ -111,10 +111,8 @@ static FilterConfig g_filter_top_snapshot;
 // Per-type sub-buffers — switching type is non-destructive (each retains state).
 static RaypathParams g_raypath_params;
 static EntryExitParams g_ee_params;
-static DirectionParams g_dir_params;
 static RaypathParams g_raypath_params_snapshot;
 static EntryExitParams g_ee_params_snapshot;
-static DirectionParams g_dir_params_snapshot;
 
 // Entry-Exit InputText backing buffers. ImGui needs persistent char arrays
 // for InputText; we mirror them with g_ee_params.{entry,exit}_text on
@@ -134,6 +132,7 @@ static char g_raypath_buf[256];
 // raypath → nullopt" commit rule this also closes the "Remove button" path
 // without a separate state bit.
 static bool g_filter_initial_present = false;
+static bool g_ee_remove_intent = false;
 
 // Snapshots captured on OpenEditModal for per-tab dirty-mark computation.
 // Filter already has its own snapshot above (used for a separate purpose in
@@ -276,7 +275,6 @@ void SnapshotAllBuffers(const GuiState& state) {
   g_filter_top_snapshot = g_filter_top;
   g_raypath_params_snapshot = g_raypath_params;
   g_ee_params_snapshot = g_ee_params;
-  g_dir_params_snapshot = g_dir_params;
   g_filter_active_type_snapshot = g_filter_active_type;
   g_crystal_buf_snapshot = g_crystal_buf;
   g_axis_buf_snapshot[0] = g_axis_buf[0];
@@ -371,7 +369,6 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   // safe state rather than carrying over the previous session's discriminator.
   g_raypath_params = {};
   g_ee_params = {};
-  g_dir_params = {};
   g_filter_active_type = FilterEditType::kRaypath;
   if (std::holds_alternative<RaypathParams>(src.param)) {
     g_raypath_params = std::get<RaypathParams>(src.param);
@@ -379,9 +376,6 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   } else if (std::holds_alternative<EntryExitParams>(src.param)) {
     g_ee_params = std::get<EntryExitParams>(src.param);
     g_filter_active_type = FilterEditType::kEntryExit;
-  } else if (std::holds_alternative<DirectionParams>(src.param)) {
-    g_dir_params = std::get<DirectionParams>(src.param);
-    g_filter_active_type = FilterEditType::kDirection;
   }
   snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_raypath_params.raypath_text.c_str());
   snprintf(g_ee_entry_buf, sizeof(g_ee_entry_buf), "%s", g_ee_params.entry_text.c_str());
@@ -654,6 +648,18 @@ namespace {
 lumice::CrystalKind CurrentValidationKind();
 }
 
+static ImVec4 ValidationFrameBgColor(RaypathValidation state) {
+  switch (state) {
+    case RaypathValidation::kValid:
+      return ImVec4(0.06f, 0.24f, 0.06f, 0.5f);
+    case RaypathValidation::kIncomplete:
+      return ImVec4(0.27f, 0.24f, 0.03f, 0.5f);
+    case RaypathValidation::kInvalid:
+      return ImVec4(0.27f, 0.06f, 0.06f, 0.5f);
+  }
+  return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+}
+
 static void RenderRaypathSubpanel() {
   // Sync InputText backing buffer into the raypath sub-buffer before validation
   // so the displayed hint reflects the current edit state.
@@ -661,22 +667,8 @@ static void RenderRaypathSubpanel() {
   const auto result = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
   const auto validation = result.state;
 
-  ImVec4 border_color;
-  switch (validation) {
-    case RaypathValidation::kValid:
-      border_color = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
-      break;
-    case RaypathValidation::kIncomplete:
-      border_color = ImVec4(0.9f, 0.8f, 0.1f, 1.0f);
-      break;
-    case RaypathValidation::kInvalid:
-      border_color = ImVec4(0.9f, 0.2f, 0.2f, 1.0f);
-      break;
-  }
-
   // Row 1: Raypath text input (top-emphasized).
-  ImGui::PushStyleColor(ImGuiCol_FrameBg,
-                        ImVec4(border_color.x * 0.3f, border_color.y * 0.3f, border_color.z * 0.3f, 0.5f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ValidationFrameBgColor(validation));
   ImGui::InputText("Raypath##filter_modal", g_raypath_buf, sizeof(g_raypath_buf));
   ImGui::PopStyleColor();
 
@@ -724,27 +716,14 @@ static void RenderEntryExitSubpanel() {
   const auto v_entry = ValidateFaceNumberText(g_ee_entry_buf, kind);
   const auto v_exit = ValidateFaceNumberText(g_ee_exit_buf, kind);
 
-  // Border colour: kInvalid → red, kIncomplete → yellow, kValid → default.
-  auto push_state_color = [](RaypathValidation s) {
-    if (s == RaypathValidation::kInvalid) {
-      ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(220, 60, 60, 255));
-    } else if (s == RaypathValidation::kIncomplete) {
-      ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(220, 180, 60, 255));
-    }
-  };
-  auto pop_state_color = [](RaypathValidation s) {
-    if (s != RaypathValidation::kValid) {
-      ImGui::PopStyleColor();
-    }
-  };
+  // FrameBg tint mirrors RenderRaypathSubpanel (same helper).
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ValidationFrameBgColor(v_entry.state));
+  ImGui::InputText("Entry##filter_ee_entry", g_ee_entry_buf, sizeof(g_ee_entry_buf));
+  ImGui::PopStyleColor();
 
-  push_state_color(v_entry.state);
-  ImGui::InputText("Entry face number##filter_modal", g_ee_entry_buf, sizeof(g_ee_entry_buf));
-  pop_state_color(v_entry.state);
-
-  push_state_color(v_exit.state);
-  ImGui::InputText("Exit face number##filter_modal", g_ee_exit_buf, sizeof(g_ee_exit_buf));
-  pop_state_color(v_exit.state);
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ValidationFrameBgColor(v_exit.state));
+  ImGui::InputText("Exit##filter_ee_exit", g_ee_exit_buf, sizeof(g_ee_exit_buf));
+  ImGui::PopStyleColor();
 
   // Combined validation message (first non-valid wins, matching raypath).
   if (!v_entry.message.empty()) {
@@ -752,33 +731,9 @@ static void RenderEntryExitSubpanel() {
   } else if (!v_exit.message.empty()) {
     ImGui::TextColored(ImVec4(0.86f, 0.24f, 0.24f, 1.0f), "Exit: %s", v_exit.message.c_str());
   }
-}
 
-// 角度指光线传播方向 d（非视线方向 -d）；视位置筛选需取相反向量。
-static constexpr const char* kDirectionAngleTooltip =
-    "Angle specifies the ray's propagation direction\n"
-    "(the direction light travels from sun -> crystal -> observer).\n"
-    "To filter halos that appear at a sky position, use the opposite direction.";
-
-// Direction sub-panel: two SliderWithInput controls (azimuth, elevation)
-// in degrees, matching the right-side Camera section style. Values
-// written directly into g_dir_params; commit/dirty tracking handled by
-// ApplyBuffersToEntry / IsFilterDirty just like the raypath/EE paths.
-// The cone half-angle (core's DirectionFilterParam.radii_) is a fixed
-// default injected at GUI→core serialization (file_io.cpp::
-// kDirectionDefaultRadiiDeg). Slider ranges follow the geometric
-// principal interval; out-of-range values still construct valid cos/sin
-// (DirectionFilter, src/core/filter.cpp:81-98) but the slider clamp keeps
-// UX unambiguous.
-static void RenderDirectionSubpanel() {
-  SliderWithInput("Azimuth\xc2\xb0##filter_modal", &g_dir_params.az, -180.0f, 180.0f, "%.2f", SliderScale::kLinear);
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("%s", kDirectionAngleTooltip);
-  }
-  SliderWithInput("Elevation\xc2\xb0##filter_modal", &g_dir_params.el, -90.0f, 90.0f, "%.2f", SliderScale::kLinear);
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("%s", kDirectionAngleTooltip);
-  }
+  // Shared hint — single value syntax, consistent with EE single-value semantic.
+  ImGui::TextDisabled("e.g. 3");
 }
 
 // Shared filter controls (Action radio + P/B/D), rendered after the
@@ -825,6 +780,19 @@ static void RenderRemoveFilterButton() {
   ImGui::EndDisabled();
 }
 
+// Remove Filter for Entry-Exit: always enabled (carries "delete filter data"
+// semantics — sets g_ee_remove_intent so ApplyBuffersToEntry bypasses kValid
+// gate and resets entry.filter to nullopt on OK).
+static void RenderRemoveEEFilterButton() {
+  if (ImGui::Button("Remove Filter##filter_ee", ImVec2(120, 0))) {
+    g_ee_entry_buf[0] = '\0';
+    g_ee_exit_buf[0] = '\0';
+    g_ee_params.entry_text.clear();
+    g_ee_params.exit_text.clear();
+    g_ee_remove_intent = true;
+  }
+}
+
 static void RenderFilterModal() {
   // Type radio — 3 options, SameLine horizontal (style-aligned with Crystal
   // tab's Prism/Pyramid radios). Boolean form (RadioButton(label, active))
@@ -836,10 +804,6 @@ static void RenderFilterModal() {
   ImGui::SameLine();
   if (ImGui::RadioButton("Entry-Exit##filter_type", g_filter_active_type == FilterEditType::kEntryExit)) {
     g_filter_active_type = FilterEditType::kEntryExit;
-  }
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Direction##filter_type", g_filter_active_type == FilterEditType::kDirection)) {
-    g_filter_active_type = FilterEditType::kDirection;
   }
 
   ImGui::Spacing();
@@ -855,9 +819,6 @@ static void RenderFilterModal() {
     case FilterEditType::kEntryExit:
       RenderEntryExitSubpanel();
       break;
-    case FilterEditType::kDirection:
-      RenderDirectionSubpanel();
-      break;
     default:
       assert(false && "unhandled FilterEditType in RenderFilterModal dispatch");
       break;
@@ -870,12 +831,11 @@ static void RenderFilterModal() {
 
   ImGui::Spacing();
 
-  // Remove Filter — raypath-only shortcut. The "empty raypath ≡ no filter"
-  // shortcut only applies to Raypath; EE / Direction / Crystal each have a
-  // legal "default" state (entry=0/exit=0 / az=el=radii=0 / crystal_id=0)
-  // and require switching back to Raypath + clearing to obtain "no filter".
+  // Remove Filter — type-specific shortcut.
   if (g_filter_active_type == FilterEditType::kRaypath) {
     RenderRemoveFilterButton();
+  } else if (g_filter_active_type == FilterEditType::kEntryExit) {
+    RenderRemoveEEFilterButton();
   }
 
   // OK / Cancel handled at modal level (RenderEditModals).
@@ -922,11 +882,10 @@ void ResetModalState() {
   g_filter_active_type_snapshot = FilterEditType::kRaypath;
   g_raypath_params = {};
   g_ee_params = {};
-  g_dir_params = {};
   g_raypath_params_snapshot = {};
   g_ee_params_snapshot = {};
-  g_dir_params_snapshot = {};
   g_filter_initial_present = false;
+  g_ee_remove_intent = false;
   g_raypath_buf[0] = '\0';
   g_ee_entry_buf[0] = '\0';
   g_ee_exit_buf[0] = '\0';
@@ -969,8 +928,6 @@ bool IsFilterDirty() {
       return g_raypath_params != g_raypath_params_snapshot;
     case FilterEditType::kEntryExit:
       return g_ee_params != g_ee_params_snapshot;
-    case FilterEditType::kDirection:
-      return g_dir_params != g_dir_params_snapshot;
     default:
       assert(false && "unhandled FilterEditType in IsFilterDirty");
       return false;
@@ -1025,6 +982,12 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   // and skip the commit — consistent with raypath's "empty ≡ no filter"
   // semantic at the UI layer.
   if (g_filter_active_type == FilterEditType::kEntryExit) {
+    // Remove intent: bypass kValid gate, reset filter to nullopt.
+    if (g_ee_remove_intent) {
+      entry.filter = std::nullopt;
+      g_ee_remove_intent = false;
+      return { true, entry != old_entry, entry.filter != old_entry.filter };
+    }
     const bool buf_changed = IsFilterDirty();
     const auto kind = CurrentValidationKind();
     const auto v_entry = ValidateFaceNumberText(g_ee_params.entry_text, kind);
@@ -1038,30 +1001,6 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
       out.sym_b = g_filter_top.sym_b;
       out.sym_d = g_filter_top.sym_d;
       out.param = g_ee_params;
-      entry.filter = out;
-    }
-    return { true, entry != old_entry, entry.filter != old_entry.filter };
-  }
-
-  // Direction commit branch (#178.5). Mirrors the EE branch above; gated on
-  // `g_filter_initial_present || buf_changed`. NOTE: switching to the
-  // Direction RadioButton already sets buf_changed=true (active_type !=
-  // snapshot inside IsFilterDirty), so the path "open a filterless entry →
-  // switch to Direction → OK without typing" always commits a default-zero
-  // Direction filter; the guard's actual function is to suppress a re-commit
-  // when the user reopens an existing Direction entry and presses OK without
-  // modifying any field. P/B/D fields stay in g_filter_top per the H4
-  // contract — UI hides the Checkboxes but the data round-trips unchanged.
-  if (g_filter_active_type == FilterEditType::kDirection) {
-    const bool buf_changed = IsFilterDirty();
-    if (g_filter_initial_present || buf_changed) {
-      FilterConfig out;
-      out.name = g_filter_top.name;
-      out.action = g_filter_top.action;
-      out.sym_p = g_filter_top.sym_p;
-      out.sym_b = g_filter_top.sym_b;
-      out.sym_d = g_filter_top.sym_d;
-      out.param = g_dir_params;
       entry.filter = out;
     }
     return { true, entry != old_entry, entry.filter != old_entry.filter };
@@ -1510,17 +1449,22 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
       // tab-label dirty mark) sees the live value.
       g_ee_params.entry_text = g_ee_entry_buf;
       g_ee_params.exit_text = g_ee_exit_buf;
-      const auto kind = CurrentValidationKind();
-      const auto ve = ValidateFaceNumberText(g_ee_entry_buf, kind);
-      const auto vx = ValidateFaceNumberText(g_ee_exit_buf, kind);
-      const bool incomplete = ve.state == RaypathValidation::kIncomplete || vx.state == RaypathValidation::kIncomplete;
-      const bool invalid = ve.state == RaypathValidation::kInvalid || vx.state == RaypathValidation::kInvalid;
-      if (invalid) {
-        ok_disabled = true;
-        ok_tooltip = "Filter face number invalid — fix it in the Filter tab";
-      } else if (incomplete) {
-        ok_disabled = true;
-        ok_tooltip = "Enter entry and exit face numbers";
+      // Remove intent bypasses the incomplete/invalid gate — OK is always
+      // enabled when the user has clicked Remove Filter.
+      if (!g_ee_remove_intent) {
+        const auto kind = CurrentValidationKind();
+        const auto ve = ValidateFaceNumberText(g_ee_entry_buf, kind);
+        const auto vx = ValidateFaceNumberText(g_ee_exit_buf, kind);
+        const bool incomplete =
+            ve.state == RaypathValidation::kIncomplete || vx.state == RaypathValidation::kIncomplete;
+        const bool invalid = ve.state == RaypathValidation::kInvalid || vx.state == RaypathValidation::kInvalid;
+        if (invalid) {
+          ok_disabled = true;
+          ok_tooltip = "Filter face number invalid — fix it in the Filter tab";
+        } else if (incomplete) {
+          ok_disabled = true;
+          ok_tooltip = "Enter entry and exit face numbers";
+        }
       }
     }
 
