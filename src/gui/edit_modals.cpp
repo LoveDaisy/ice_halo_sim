@@ -736,10 +736,24 @@ static void RenderEntryExitSubpanel() {
   ImGui::TextDisabled("e.g. 3");
 }
 
+// Returns true when the current entry's axis config satisfies D-symmetry
+// conditions: azimuth uniform 360° AND roll mean a multiple of 30°.
+// Mirrors core detail::IsDApplicable (src/core/crystal.cpp). Keep in sync.
+static bool IsDApplicableGuiAxis(const AxisDist& az, const AxisDist& roll) {
+  const bool az_sym = az.type == AxisDistType::kUniform && std::fabs(az.std - 360.0f) < 1e-3f;
+  const float rem = std::fmod(std::fmod(roll.mean, 30.0f) + 30.0f, 30.0f);
+  const bool roll_ok = rem < 1e-3f || std::fabs(rem - 30.0f) < 1e-3f;
+  return az_sym && roll_ok;
+}
+
+static constexpr const char* kDTooltipText =
+    "D applies when azimuth = uniform 360\xc2\xb0 and roll mean is a multiple of 30\xc2\xb0.\n"
+    "Current config does not meet this condition, so D has no effect.";
+
 // Shared filter controls (Action radio + P/B/D), rendered after the
 // type-specific dispatch. Always uses g_filter_top so type switches don't
 // reset shared user preferences.
-static void RenderSharedFilterControls() {
+static void RenderSharedFilterControls(bool d_applicable) {
   // Action: two RadioButtons (was Combo pre-task; aligns with Crystal tab style).
   // Always rendered — filter_in / filter_out semantics apply to every type.
   if (ImGui::RadioButton("Filter In##filter_action", g_filter_top.action == 0)) {
@@ -764,6 +778,22 @@ static void RenderSharedFilterControls() {
     ImGui::Checkbox("B##filter_modal", &g_filter_top.sym_b);
     ImGui::SameLine();
     ImGui::Checkbox("D##filter_modal", &g_filter_top.sym_d);
+    if (!d_applicable) {
+      ImGui::SameLine();
+      // SmallButton with transparent styling acts as a hover target for the
+      // tooltip (TextDisabled lacks a stable item ID needed by the test engine).
+      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
+      ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+      ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+      ImGui::SmallButton("(i)##d_tooltip_icon");
+      ImGui::PopStyleVar();
+      ImGui::PopStyleColor(4);
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", kDTooltipText);
+      }
+    }
   }
 }
 
@@ -827,7 +857,17 @@ static void RenderFilterModal() {
   ImGui::Spacing();
 
   // Shared controls (Action radio + P/B/D).
-  RenderSharedFilterControls();
+  bool d_applicable = false;
+  {
+    const int ly = g_modal_layer_idx;
+    const int en = g_modal_entry_idx;
+    if (ly >= 0 && ly < static_cast<int>(g_state.layers.size()) && en >= 0 &&
+        en < static_cast<int>(g_state.layers[ly].entries.size())) {
+      const auto& cr = g_state.layers[ly].entries[en].crystal;
+      d_applicable = IsDApplicableGuiAxis(cr.azimuth, cr.roll);
+    }
+  }
+  RenderSharedFilterControls(d_applicable);
 
   ImGui::Spacing();
 
@@ -894,6 +934,19 @@ void ResetModalState() {
   g_pending_open = false;
   g_pending_mode_switch = false;
   g_modal_mesh_hash = 0;
+}
+
+bool IsCurrentModalDApplicable() {
+  const int ly = g_modal_layer_idx;
+  const int en = g_modal_entry_idx;
+  if (ly < 0 || ly >= static_cast<int>(g_state.layers.size())) {
+    return false;
+  }
+  if (en < 0 || en >= static_cast<int>(g_state.layers[ly].entries.size())) {
+    return false;
+  }
+  const auto& cr = g_state.layers[ly].entries[en].crystal;
+  return IsDApplicableGuiAxis(cr.azimuth, cr.roll);
 }
 
 namespace {

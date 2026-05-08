@@ -42,6 +42,12 @@ EditModalTarget GetEditModalTarget();
 // Called by test teardown (ResetTestState) to prevent state leakage between tests.
 void ResetModalState();
 
+// Returns true when the committed axis config of the currently open modal entry
+// meets D-symmetry conditions (az uniform 360°, roll mean a multiple of 30°).
+// Returns false when no modal is open or the entry index is invalid.
+// Intended for GUI test assertions; production code should not call this.
+bool IsCurrentModalDApplicable();
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_EDIT_MODALS_HPP
