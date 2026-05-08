@@ -55,6 +55,7 @@ class EntryExitFilter : public Filter {
   void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry, const AxisDistribution& axis_dist) override {
     bool d_applicable = detail::IsDApplicable(axis_dist);
     int sigma_a = d_applicable ? detail::ComputeSigmaA(axis_dist.roll_dist.mean) : 0;
+    candidate_hash_.clear();
     std::vector<IdType> ee_rp{ entry_, exit_ };
     auto expand_ee_rp = crystal.ExpandRaypath(ee_rp, symmetry, sigma_a, d_applicable);
     RaypathHash h;

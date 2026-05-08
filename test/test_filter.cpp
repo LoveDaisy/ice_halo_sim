@@ -950,3 +950,27 @@ TEST(SymmetryB_PyramidSwap, FilterAcceptsBothUpperAndLower) {
   EXPECT_TRUE(filter->Check(MakeFilterTestRay({ 23, 5 })));
   EXPECT_FALSE(filter->Check(MakeFilterTestRay({ 14, 5 })));
 }
+
+
+// ---- ReduceRaypath 4-param overload direct tests ----
+
+// D symmetry with sigma_a=0: reflected path {3,5} < original {3,7}, so reduction returns {3,5}
+TEST(ReduceRaypath4Param, D_SigmaA0_ReflectedSmaller) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto result = prism.ReduceRaypath({ 3, 7 }, FilterConfig::kSymD, 0, true);
+  EXPECT_EQ(result, (std::vector<IdType>{ 3, 5 }));
+}
+
+// D symmetry with sigma_a=5: reflected path {5,3} < original {6,8}, so reduction returns {5,3}
+TEST(ReduceRaypath4Param, D_SigmaA5_ReflectedSmaller) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto result = prism.ReduceRaypath({ 6, 8 }, FilterConfig::kSymD, 5, true);
+  EXPECT_EQ(result, (std::vector<IdType>{ 5, 3 }));
+}
+
+// B symmetry: original {13,5} < reflected {23,5}, so reduction keeps original
+TEST(ReduceRaypath4Param, B_OriginalSmaller) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto result = pyramid.ReduceRaypath({ 13, 5 }, FilterConfig::kSymB, 0, false);
+  EXPECT_EQ(result, (std::vector<IdType>{ 13, 5 }));
+}
