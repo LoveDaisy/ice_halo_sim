@@ -371,6 +371,8 @@ float RandomNumberGenerator::Get(Distribution dist) {
       return GetGaussian() * dist.std + dist.mean;
     case DistributionType::kZigzag:
       // Rectified arcsine: |A·sin(2πU) + B| where A=std (amplitude), B=mean (tilt offset).
+      // The abs() is intentional: kZigzag always produces non-negative latitude, so NormalizeLatitude
+      // fold (flip=true) is never triggered for typical kZigzag configs (|mean| > std → phi > 0 always).
       return std::abs(dist.std * std::sin(GetUniform() * 2.0f * math::kPi) + dist.mean);
     case DistributionType::kLaplacian: {
       // Laplace inverse CDF: μ - b·sign(U-0.5)·ln(1-2|U-0.5|), returns degrees.
@@ -484,7 +486,11 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
       float colatitude = std::sqrt(dx * dx + dy * dy);
       phi = std::copysign(math::kPi_2 - colatitude, latitude_mean_rad);
       phi = std::max(-math::kPi_2, std::min(math::kPi_2, phi));
-      // flip stays false — Rayleigh path only fires for tiny σ near poles.
+      if (latitude_mean_rad < 0) {
+        // South-pole Rayleigh: fold to positive latitude and trigger lambda/roll += π downstream.
+        phi = std::abs(phi);
+        flip = true;
+      }
     } else if (lat_type == DistributionType::kGaussianLegacy) {
       // Legacy Gaussian: sample without Jacobian rejection (reproduces old behavior).
       phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
