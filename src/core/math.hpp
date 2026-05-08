@@ -167,11 +167,14 @@ class RandomSampler {
    */
   static void SampleSphericalPointsSph(float* data, size_t num = 1, size_t step = 3);
 
-  /*! @brief Generate points distributed on sphere surface up to latitude, in spherical form, (lon, lat).
+  /*! @brief Generate points distributed on sphere surface up to latitude, with roll, in spherical form, (lon, lat,
+   * roll).
    *
    * @param axis_dist axis distribution, including information of zenith / azimuth / roll.
-   * @param data output data, (lon, lat), in rad
+   * @param data output data, (lon, lat, roll), in rad. Roll is sampled from axis_dist.roll_dist and
+   *   adjusted by +π when a latitude fold (pole crossing) occurs, keeping roll coupled to the fold.
    * @param num number of points.
+   * @note Caller must provide a buffer of at least 3×num floats.
    */
   static void SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num = 1);
 

@@ -512,12 +512,15 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     }
 
     float lambda = rng.Get(axis_dist.azimuth_dist) * math::kDegreeToRad;
+    float roll = rng.Get(axis_dist.roll_dist) * math::kDegreeToRad;
     if (flip) {
       lambda += math::kPi;
+      roll += math::kPi;
     }
 
-    data[i * 2 + 0] = lambda;
-    data[i * 2 + 1] = phi;
+    data[i * 3 + 0] = lambda;
+    data[i * 3 + 1] = phi;
+    data[i * 3 + 2] = roll;
   }
 }
 

@@ -102,16 +102,16 @@ Rotation BuildCrystalRotation(float azimuth_rad, float latitude_rad, float roll_
 
 void InitRay_rot(RandomNumberGenerator& rng, const AxisDistribution& crystal_axis,  // input
                  RayBuffer buffer_data[2]) {                                        // output
-  float lon_lat[2]{};
+  float lon_lat_roll[3]{};
   for (auto& r : buffer_data[0]) {
     if (!crystal_axis.IsFullSphereUniform()) {
-      RandomSampler::SampleSphericalPointsSph(crystal_axis, lon_lat);
+      RandomSampler::SampleSphericalPointsSph(crystal_axis, lon_lat_roll);
     } else {
-      // Randomly sample on sphere (with asin(u) Jacobian correction)
-      RandomSampler::SampleSphericalPointsSph(lon_lat);
+      // Randomly sample on sphere (with asin(u) Jacobian correction); roll sampled separately below.
+      RandomSampler::SampleSphericalPointsSph(lon_lat_roll);
+      lon_lat_roll[2] = rng.Get(crystal_axis.roll_dist) * math::kDegreeToRad;
     }
-    float roll = rng.Get(crystal_axis.roll_dist) * math::kDegreeToRad;
-    r.crystal_rot_ = BuildCrystalRotation(lon_lat[0], lon_lat[1], roll);
+    r.crystal_rot_ = BuildCrystalRotation(lon_lat_roll[0], lon_lat_roll[1], lon_lat_roll[2]);
   }
 }
 

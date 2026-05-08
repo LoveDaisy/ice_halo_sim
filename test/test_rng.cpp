@@ -120,13 +120,13 @@ TEST_F(RngTest, SampleSphericalWithCustomAzimuth) {
   axis.latitude_dist = { DistributionType::kNoRandom, 0.0f, 0.0f };
 
   constexpr size_t kN = 2048;
-  auto data = std::make_unique<float[]>(kN * 2);
+  auto data = std::make_unique<float[]>(kN * 3);
   RandomSampler::SampleSphericalPointsSph(axis, data.get(), kN);
 
   const float kAzMin = 60.0f * lumice::math::kDegreeToRad;
   const float kAzMax = 120.0f * lumice::math::kDegreeToRad;
   for (size_t i = 0; i < kN; i++) {
-    float az = data[i * 2 + 0];
+    float az = data[i * 3 + 0];
     EXPECT_GE(az, kAzMin - 1e-5f) << "Sample " << i << " azimuth too low: " << az;
     EXPECT_LE(az, kAzMax + 1e-5f) << "Sample " << i << " azimuth too high: " << az;
   }
@@ -145,13 +145,13 @@ TEST_F(RngTest, SampleSphericalWithCustomLatitude) {
   axis.latitude_dist = { DistributionType::kUniform, 45.0f, 30.0f };
 
   constexpr size_t kN = 2048;
-  auto data = std::make_unique<float[]>(kN * 2);
+  auto data = std::make_unique<float[]>(kN * 3);
   RandomSampler::SampleSphericalPointsSph(axis, data.get(), kN);
 
   const float kLatMin = 30.0f * lumice::math::kDegreeToRad;
   const float kLatMax = 60.0f * lumice::math::kDegreeToRad;
   for (size_t i = 0; i < kN; i++) {
-    float lat = data[i * 2 + 1];
+    float lat = data[i * 3 + 1];
     EXPECT_GE(lat, kLatMin - 1e-5f) << "Sample " << i << " latitude too low: " << lat;
     EXPECT_LE(lat, kLatMax + 1e-5f) << "Sample " << i << " latitude too high: " << lat;
   }
@@ -222,7 +222,7 @@ class SphericalSamplingTest : public ::testing::Test {
     axis.azimuth_dist.type = lumice::DistributionType::kUniform;
 
     std::vector<int> counts(bin_edges_deg.size() - 1, 0);
-    float lon_lat[2];
+    float lon_lat[3];
     for (size_t i = 0; i < n; i++) {
       lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
       double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
@@ -369,7 +369,7 @@ TEST_F(SphericalSamplingTest, UniformLatitudeJacobianCorrection) {
 
   // Sample using the parameterized path (NOT IsFullSphereUniform dispatch).
   std::vector<int> counts(kNumBins, 0);
-  float lon_lat[2];
+  float lon_lat[3];
   for (size_t i = 0; i < kSampleCount; i++) {
     lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
     double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
@@ -443,7 +443,7 @@ TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
 
     // Sample and compute mean colatitude.
     double sample_sum = 0;
-    float lon_lat[2];
+    float lon_lat[3];
     for (size_t i = 0; i < kSampleCount; i++) {
       lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
       double colatitude = lumice::math::kPi_2 - lon_lat[1];
@@ -542,7 +542,7 @@ TEST_F(SphericalSamplingTest, ZigzagBasicSampling) {
   auto& rng = lumice::RandomNumberGenerator::GetInstance();
   rng.SetSeed(42);
 
-  float lon_lat[2];
+  float lon_lat[3];
   for (int i = 0; i < 10000; i++) {
     lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
     float lat_deg = lon_lat[1] / kDeg2Rad;
@@ -601,7 +601,7 @@ TEST_F(SphericalSamplingTest, ZigzagJacobianCorrection) {
     // Sample and bin.
     constexpr size_t kN = 1000000;
     std::vector<int> counts(kNumBins, 0);
-    float lon_lat[2];
+    float lon_lat[3];
     for (size_t i = 0; i < kN; i++) {
       lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
       double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
@@ -701,7 +701,7 @@ TEST_F(SphericalSamplingTest, LaplacianBasicSampling) {
   auto& rng = lumice::RandomNumberGenerator::GetInstance();
   rng.SetSeed(42);
 
-  float lon_lat[2];
+  float lon_lat[3];
   double sum_lat = 0;
   constexpr int kN = 50000;
   for (int i = 0; i < kN; i++) {
@@ -744,7 +744,7 @@ TEST_F(SphericalSamplingTest, LaplacianJacobianCorrection) {
     // Sample with Jacobian (rejection sampling).
     constexpr size_t kN = 500000;
     double observed_mean_colat = 0;
-    float lon_lat[2];
+    float lon_lat[3];
     for (size_t i = 0; i < kN; i++) {
       lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
       double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
@@ -789,7 +789,7 @@ TEST_F(SphericalSamplingTest, LaplacianHeavierTailThanGaussian) {
   lap_axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
 
   int lap_far = 0;
-  float lon_lat[2];
+  float lon_lat[3];
   for (size_t i = 0; i < kN; i++) {
     lumice::RandomSampler::SampleSphericalPointsSph(lap_axis, lon_lat);
     float lat_deg = lon_lat[1] / kDeg2Rad;
@@ -816,6 +816,41 @@ TEST_F(SphericalSamplingTest, LaplacianHeavierTailThanGaussian) {
   // At 3σ: Gaussian tail ~ 0.27%, Laplace tail ~ exp(-3) ≈ 5%.
   EXPECT_GT(lap_far, gauss_far) << "Laplacian should have heavier tails than Gaussian" << " (lap_far=" << lap_far
                                 << ", gauss_far=" << gauss_far << ")";
+}
+
+
+// Verifies that fold-roll coupling is correct: sampling with a latitude that triggers pole crossing
+// (fold) and roll=0° produces the same output as sampling the equivalent post-fold orientation
+// directly (with no fold, and roll=π already baked in).
+TEST(FoldRollEquivalenceTest, FoldedEqualsExplicit) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomSampler;
+  using lumice::math::kDegreeToRad;
+  using lumice::math::kPi;
+
+  // "Folded" path: latitude=-120° (zenith=120°+90°=210°, colatitude=210° > 180°) triggers fold.
+  // After fold: normalized latitude=-60°, azimuth += π, roll += π.
+  // kGaussianLegacy with std=0 gives deterministic mean without bypassing NormalizeLatitude.
+  AxisDistribution folded_axis;
+  folded_axis.latitude_dist = { DistributionType::kGaussianLegacy, -120.0f, 0.0f };
+  folded_axis.azimuth_dist = { DistributionType::kNoRandom, 0.0f, 0.0f };
+  folded_axis.roll_dist = { DistributionType::kNoRandom, 0.0f, 0.0f };
+  float data_folded[3]{};
+  RandomSampler::SampleSphericalPointsSph(folded_axis, data_folded);
+
+  // "Explicit" path: equivalent post-fold orientation sampled directly (no fold occurs).
+  // latitude=-60°, azimuth=180°, roll=180° mirror the folded result without calling NormalizeLatitude.
+  AxisDistribution explicit_axis;
+  explicit_axis.latitude_dist = { DistributionType::kNoRandom, -60.0f, 0.0f };
+  explicit_axis.azimuth_dist = { DistributionType::kNoRandom, 180.0f, 0.0f };
+  explicit_axis.roll_dist = { DistributionType::kNoRandom, 180.0f, 0.0f };
+  float data_explicit[3]{};
+  RandomSampler::SampleSphericalPointsSph(explicit_axis, data_explicit);
+
+  EXPECT_NEAR(data_folded[0], data_explicit[0], 1e-5f);  // lon (azimuth)
+  EXPECT_NEAR(data_folded[1], data_explicit[1], 1e-5f);  // lat
+  EXPECT_NEAR(data_folded[2], data_explicit[2], 1e-5f);  // roll: fold-linked +π
 }
 
 
