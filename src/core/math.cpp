@@ -371,8 +371,8 @@ float RandomNumberGenerator::Get(Distribution dist) {
       return GetGaussian() * dist.std + dist.mean;
     case DistributionType::kZigzag:
       // Rectified arcsine: |A·sin(2πU) + B| where A=std (amplitude), B=mean (tilt offset).
-      // The abs() is intentional: kZigzag always produces non-negative latitude, so NormalizeLatitude
-      // fold (flip=true) is never triggered for typical kZigzag configs (|mean| > std → phi > 0 always).
+      // The abs() is intentional: fold (flip=true) is unconditionally skipped — abs() guarantees
+      // phi >= 0 for all kZigzag inputs regardless of mean/std values.
       return std::abs(dist.std * std::sin(GetUniform() * 2.0f * math::kPi) + dist.mean);
     case DistributionType::kLaplacian: {
       // Laplace inverse CDF: μ - b·sign(U-0.5)·ln(1-2|U-0.5|), returns degrees.
@@ -487,7 +487,10 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
       phi = std::copysign(math::kPi_2 - colatitude, latitude_mean_rad);
       phi = std::max(-math::kPi_2, std::min(math::kPi_2, phi));
       if (latitude_mean_rad < 0) {
-        // South-pole Rayleigh: fold to positive latitude and trigger lambda/roll += π downstream.
+        // South-pole Rayleigh: fold phi to positive latitude and set flip=true to trigger
+        // lambda/roll += π downstream. Semantically identical to NormalizeLatitude, but not
+        // delegated there because Rayleigh phi is computed from copysign+clamp (never outside
+        // [-π/2, π/2]), so the NormalizeLatitude loop/reflection logic is unnecessary here.
         phi = std::abs(phi);
         flip = true;
       }

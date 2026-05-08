@@ -875,7 +875,6 @@ TEST(FoldRollFlipBalanceTest, KGaussianFlipBalance) {
   constexpr int kNTotal = kN * 3;
 
   std::vector<float> data(kN * 3);
-  int flip_count = 0;
   double phi_sum_flip = 0.0;
   double phi_sum_noflip = 0.0;
   int count_flip = 0;
@@ -889,7 +888,6 @@ TEST(FoldRollFlipBalanceTest, KGaussianFlipBalance) {
       float lat = data[i * 3 + 1];
       bool is_flip = (std::abs(roll - kPi) < 0.001f);
       if (is_flip) {
-        flip_count++;
         phi_sum_flip += lat;
         count_flip++;
       } else {
@@ -899,7 +897,7 @@ TEST(FoldRollFlipBalanceTest, KGaussianFlipBalance) {
     }
   }
 
-  float flip_frac = static_cast<float>(flip_count) / kNTotal;
+  float flip_frac = static_cast<float>(count_flip) / kNTotal;
   // For N(90°, 180°) + cos-rejection, flip fraction ≈ 50% by distribution symmetry.
   // Wide tolerance [30%, 70%]: only fails if flip is clearly broken (e.g., always 0%).
   EXPECT_GE(flip_frac, 0.30f) << "flip fraction unexpectedly low: " << flip_frac;
@@ -1062,6 +1060,43 @@ TEST(FoldRollFlipBalanceTest, RayleighNegativeMean) {
   // All samples near south pole → flip=true for all → roll≈π
   EXPECT_GT(flip_frac, 0.99f) << "Rayleigh south-pole path must set flip=true for all samples";
   EXPECT_EQ(negative_lat_count, 0) << "Rayleigh south-pole path must fold phi to positive";
+}
+
+// Step 5 regression: positive-mean Rayleigh (north pole) must NOT trigger flip.
+// Verifies the new `if (latitude_mean_rad < 0)` branch does not affect latitude_mean >= 0.
+TEST(FoldRollFlipBalanceTest, RayleighPositiveMean) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomSampler;
+  using lumice::math::kPi;
+
+  AxisDistribution axis;
+  // latitude_mean=+89.9°, std=0.01° → triggers Rayleigh path (near north pole, tiny σ)
+  axis.latitude_dist = {DistributionType::kGaussian, 89.9f, 0.01f};
+  axis.azimuth_dist = {DistributionType::kUniform, 0.0f, 360.0f};
+  axis.roll_dist = {DistributionType::kGaussian, 0.0f, 0.0f};
+
+  constexpr int kN = 5'000;
+  std::vector<float> data(kN * 3);
+  lumice::RandomNumberGenerator::GetInstance().SetSeed(43);
+  RandomSampler::SampleSphericalPointsSph(axis, data.data(), kN);
+
+  int flip_count = 0;
+  int negative_lat_count = 0;
+  for (int i = 0; i < kN; i++) {
+    float lat = data[i * 3 + 1];
+    float roll = data[i * 3 + 2];
+    if (std::abs(roll - kPi) < 0.01f) {
+      flip_count++;
+    }
+    if (lat < 0.0f) {
+      negative_lat_count++;
+    }
+  }
+
+  // All samples near north pole → flip=false for all → roll≈0
+  EXPECT_EQ(flip_count, 0) << "Rayleigh north-pole path must not set flip=true";
+  EXPECT_EQ(negative_lat_count, 0) << "Rayleigh north-pole path must produce positive phi";
 }
 
 
