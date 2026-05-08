@@ -806,6 +806,54 @@ TEST(SymmetryD_SigmaByRoll, Roll30_Sigd_PD_Variants) {
   EXPECT_EQ(accepted, 12);
 }
 
+// Helper: count prism-only paths accepted by a P+D filter with given roll_mean
+static int CountPDAccepted(float roll_mean_deg) {
+  FilterConfig config{};
+  config.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
+  RaypathFilterParam p{};
+  p.raypath_ = { 3, 5 };
+  config.param_ = SimpleFilterParam{ p };
+
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  AxisDistribution axis = MakeAzUniformRoll(roll_mean_deg);
+
+  auto filter = Filter::Create(config);
+  filter->InitCrystalSymmetry(crystal, config.symmetry_, axis);
+
+  int accepted = 0;
+  for (IdType a = 3; a <= 8; a++) {
+    for (IdType b = 3; b <= 8; b++) {
+      if (a == b) {
+        continue;
+      }
+      if (filter->Check(MakeFilterTestRay({ a, b }))) {
+        accepted++;
+      }
+    }
+  }
+  return accepted;
+}
+
+// roll=60 (sigma_a=4): P+D should produce 12 unique paths
+TEST(SymmetryD_SigmaByRoll, Roll60_PD_Variants) {
+  EXPECT_EQ(CountPDAccepted(60.0f), 12);
+}
+
+// roll=90 (sigma_a=3): P+D should produce 12 unique paths
+TEST(SymmetryD_SigmaByRoll, Roll90_PD_Variants) {
+  EXPECT_EQ(CountPDAccepted(90.0f), 12);
+}
+
+// roll=120 (sigma_a=2): P+D should produce 12 unique paths
+TEST(SymmetryD_SigmaByRoll, Roll120_PD_Variants) {
+  EXPECT_EQ(CountPDAccepted(120.0f), 12);
+}
+
+// roll=150 (sigma_a=1): P+D should produce 12 unique paths
+TEST(SymmetryD_SigmaByRoll, Roll150_PD_Variants) {
+  EXPECT_EQ(CountPDAccepted(150.0f), 12);
+}
+
 // D not applicable when az is not uniform-360
 TEST(SymmetryD_SigmaByRoll, AzGaussian_DNotApplicable) {
   FilterConfig config{};

@@ -668,6 +668,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   sim_data.curr_wl_ = wl;
   sim_data.total_intensity_ = wl_param.weight_ * original_ray_num;
   sim_data.generation_ = generation;
+  assert(all_crystals.size() == all_axis_dists.size());
   sim_data.crystals_ = std::move(all_crystals);
   sim_data.crystal_axis_dists_ = std::move(all_axis_dists);
   sim_data.rays_ = std::move(all_data);

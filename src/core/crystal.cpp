@@ -508,9 +508,12 @@ std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType
         }
         IdType pyr = x / 10;
         IdType pri = x % 10 - 3;
-        pri = (sigma_a - pri + fn_period_) % fn_period_;
-        x = pyr * 10 + pri + 3;
-        changed = true;
+        IdType pri_new = (sigma_a - pri + fn_period_) % fn_period_;
+        IdType x_new = pyr * 10 + pri_new + 3;
+        if (x_new != x) {
+          x = x_new;
+          changed = true;
+        }
       }
       if (changed) {
         result.emplace_back(curr_rp);
@@ -653,6 +656,9 @@ bool IsRollMeanAtMultipleOf30(const AxisDistribution& d) {
 }
 
 int ComputeSigmaA(float roll_mean_deg) {
+  if (std::fabs(roll_mean_deg) > 1e6f) {
+    return 0;
+  }
   int n = (static_cast<int>(std::round(roll_mean_deg / 30.0f)) % 6 + 6) % 6;
   return (6 - n) % 6;
 }
