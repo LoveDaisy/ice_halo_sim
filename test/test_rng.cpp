@@ -854,6 +854,136 @@ TEST(FoldRollEquivalenceTest, FoldedEqualsExplicit) {
 }
 
 
+// Step 1a: Verify kGaussian rejection path flip=true/false balance for N(+90°, 180°).
+// Diagnostic probe: checks that ~50% of accepted samples trigger flip (roll ≈ π) vs no-flip
+// (roll ≈ 0). Uses roll_dist std=0 so roll_raw=0 and flip effect is exactly ±π.
+// Also verifies symmetry: lat mean for flip=true and flip=false groups are similar.
+TEST(FoldRollFlipBalanceTest, KGaussianFlipBalance) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomSampler;
+  using lumice::RandomNumberGenerator;
+  using lumice::math::kPi;
+
+  AxisDistribution axis;
+  axis.latitude_dist = { DistributionType::kGaussian, 90.0f, 180.0f };
+  axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };  // std=0: roll_raw always 0
+
+  constexpr int kN = 300'000;
+  constexpr uint32_t kSeeds[] = { 42, 123, 999 };
+  constexpr int kNTotal = kN * 3;
+
+  std::vector<float> data(kN * 3);
+  int flip_count = 0;
+  double phi_sum_flip = 0.0;
+  double phi_sum_noflip = 0.0;
+  int count_flip = 0;
+  int count_noflip = 0;
+
+  for (uint32_t seed : kSeeds) {
+    RandomNumberGenerator::GetInstance().SetSeed(seed);
+    RandomSampler::SampleSphericalPointsSph(axis, data.data(), kN);
+    for (int i = 0; i < kN; i++) {
+      float roll = data[i * 3 + 2];
+      float lat = data[i * 3 + 1];
+      bool is_flip = (std::abs(roll - kPi) < 0.001f);
+      if (is_flip) {
+        flip_count++;
+        phi_sum_flip += lat;
+        count_flip++;
+      } else {
+        phi_sum_noflip += lat;
+        count_noflip++;
+      }
+    }
+  }
+
+  float flip_frac = static_cast<float>(flip_count) / kNTotal;
+  // For N(90°, 180°) + cos-rejection, flip fraction ≈ 50% by distribution symmetry.
+  // Wide tolerance [30%, 70%]: only fails if flip is clearly broken (e.g., always 0%).
+  EXPECT_GE(flip_frac, 0.30f) << "flip fraction unexpectedly low: " << flip_frac;
+  EXPECT_LE(flip_frac, 0.70f) << "flip fraction unexpectedly high: " << flip_frac;
+
+  if (count_flip > 0 && count_noflip > 0) {
+    auto phi_mean_flip = static_cast<float>(phi_sum_flip / count_flip);
+    auto phi_mean_noflip = static_cast<float>(phi_sum_noflip / count_noflip);
+    // flip=true and flip=false groups have symmetric lat distributions; means should match.
+    EXPECT_NEAR(phi_mean_flip, phi_mean_noflip, 0.02f)
+        << "flip vs no-flip lat mean unexpectedly different";
+  }
+}
+
+
+// Step 1b: Directly verify flip transmission for axis_neg (N(-90°, 180°)) vs axis_pos (N(+90°, 180°)).
+// AC#3 direct test: flip_neg_frac counts roll≈π samples from axis_neg.
+// - Bug present (flip not transmitted): flip_neg_frac ≈ 0% (all roll=0)
+// - Bug absent (flip correctly transmitted): flip_neg_frac > 40% (majority of axis_neg triggers flip)
+// Run this test BEFORE Step 3 fixes to capture the baseline failure value in progress.md.
+TEST(FoldRollFlipBalanceTest, AxisDistEquivalence) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomSampler;
+  using lumice::RandomNumberGenerator;
+  using lumice::math::kPi;
+
+  // axis_pos: N(+90°, 180°) — most samples lat>0, expect flip=false, roll≈0
+  AxisDistribution axis_pos;
+  axis_pos.latitude_dist = { DistributionType::kGaussian, +90.0f, 180.0f };
+  axis_pos.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis_pos.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };  // std=0: roll_raw=0
+
+  // axis_neg: N(-90°, 180°) — most samples lat<0, expect flip=true, roll≈π
+  AxisDistribution axis_neg;
+  axis_neg.latitude_dist = { DistributionType::kGaussian, -90.0f, 180.0f };
+  axis_neg.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis_neg.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };
+
+  constexpr int kN = 50'000;
+  std::vector<float> data_pos(kN * 3);
+  std::vector<float> data_neg(kN * 3);
+
+  RandomNumberGenerator::GetInstance().SetSeed(42);
+  RandomSampler::SampleSphericalPointsSph(axis_pos, data_pos.data(), kN);
+
+  RandomNumberGenerator::GetInstance().SetSeed(42);
+  RandomSampler::SampleSphericalPointsSph(axis_neg, data_neg.data(), kN);
+
+  int flip_pos = 0;
+  int flip_neg = 0;
+  double lat_pos_sum = 0.0;
+  double lat_neg_sum = 0.0;
+  for (int i = 0; i < kN; i++) {
+    if (std::abs(data_pos[i * 3 + 2] - kPi) < 0.001f) {
+      flip_pos++;
+    }
+    if (std::abs(data_neg[i * 3 + 2] - kPi) < 0.001f) {
+      flip_neg++;
+    }
+    lat_pos_sum += std::abs(data_pos[i * 3 + 1]);
+    lat_neg_sum += std::abs(data_neg[i * 3 + 1]);
+  }
+
+  auto flip_pos_frac = static_cast<float>(flip_pos) / kN;
+  auto flip_neg_frac = static_cast<float>(flip_neg) / kN;
+
+  // axis_pos (N(+90°,180°)): majority flip=false → roll≈0. Expect flip_pos_frac < 10%.
+  EXPECT_LT(flip_pos_frac, 0.60f)
+      << "axis_pos flip fraction unexpectedly high: " << flip_pos_frac;
+  // axis_neg (N(-90°,180°)): majority flip=true → roll≈π. Expect flip_neg_frac > 40%.
+  // If flip is NOT transmitted, this fails with flip_neg_frac ≈ 0% (AC#3 baseline failure).
+  EXPECT_GT(flip_neg_frac, 0.40f)
+      << "axis_neg flip fraction too low — flip not transmitted to roll: " << flip_neg_frac;
+
+  // |lat| mean should be similar between pos and neg (symmetric distributions).
+  auto lat_pos_mean = static_cast<float>(lat_pos_sum / kN);
+  auto lat_neg_mean = static_cast<float>(lat_neg_sum / kN);
+  // SE ≈ 0.005 rad; tolerance 0.02 ≈ 4σ; false positive rate < 0.006%.
+  EXPECT_NEAR(lat_pos_mean, lat_neg_mean, 0.02f)
+      << "|lat| mean differs: pos=" << lat_pos_mean << " neg=" << lat_neg_mean;
+}
+
+
 TEST_F(RngTest, LaplacianJsonRoundTrip) {
   using lumice::Distribution;
   using lumice::DistributionType;
