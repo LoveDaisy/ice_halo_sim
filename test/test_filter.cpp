@@ -11,6 +11,7 @@
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "core/filter.hpp"
+#include "core/math.hpp"
 #include "core/raypath.hpp"
 
 using namespace lumice;  // NOLINT(google-build-using-namespace)
@@ -30,6 +31,17 @@ class FilterTest : public ::testing::Test {
     r.fid_ = -1;
     r.w_ = 1.0f;
     return r;
+  }
+
+  // Returns an AxisDistribution suitable for enabling D symmetry (az=uniform-360, roll=0).
+  static AxisDistribution DEnablingAxis() {
+    AxisDistribution d{};
+    d.azimuth_dist.type = DistributionType::kUniform;
+    d.azimuth_dist.std = 360.0f;
+    d.azimuth_dist.mean = 0.0f;
+    d.roll_dist.type = DistributionType::kNoRandom;
+    d.roll_dist.mean = 0.0f;
+    return d;
   }
 
   Crystal crystal_{ Crystal::CreatePrism(1.0f) };
@@ -96,7 +108,7 @@ TEST_F(FilterTest, RaypathFilter_NoSymmetry) {
   config.param_ = SimpleFilterParam{ p };
 
   auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(crystal_, config.symmetry_);
+  filter->InitCrystalSymmetry(crystal_, config.symmetry_, AxisDistribution{});
 
   EXPECT_TRUE(filter->Check(MakeRay({ 3, 5 })));
   EXPECT_FALSE(filter->Check(MakeRay({ 4, 6 })));
@@ -118,7 +130,7 @@ TEST_F(FilterTest, RaypathFilter_PSymmetry) {
   config.param_ = SimpleFilterParam{ p };
 
   auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(crystal_, config.symmetry_);
+  filter->InitCrystalSymmetry(crystal_, config.symmetry_, AxisDistribution{});
 
   EXPECT_TRUE(filter->Check(MakeRay({ 3, 5 })));
   EXPECT_TRUE(filter->Check(MakeRay({ 4, 6 })));
@@ -143,7 +155,8 @@ TEST_F(FilterTest, RaypathFilter_PBDSymmetry) {
   config.param_ = SimpleFilterParam{ p };
 
   auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(crystal_, config.symmetry_);
+  // D symmetry requires az=uniform-360 and roll at multiple of 30°.
+  filter->InitCrystalSymmetry(crystal_, config.symmetry_, DEnablingAxis());
 
   // Count accepted 2-element prism paths
   int accepted = 0;
@@ -165,9 +178,10 @@ TEST_F(FilterTest, RaypathFilter_PBDSymmetry) {
 }
 
 
-// ExpandRaypath: verify unique hashes
+// ExpandRaypath: verify unique hashes (D enabled via sigma_a=0, d_applicable=true)
 TEST_F(FilterTest, ExpandRaypath_UniqueHashes) {
-  auto expanded = crystal_.ExpandRaypath({ 3, 5 }, FilterConfig::kSymP | FilterConfig::kSymB | FilterConfig::kSymD);
+  auto expanded =
+      crystal_.ExpandRaypath({ 3, 5 }, FilterConfig::kSymP | FilterConfig::kSymB | FilterConfig::kSymD, 0, true);
   EXPECT_EQ(expanded.size(), 12u);
 
   RaypathHash h;
@@ -320,7 +334,7 @@ TEST_F(FilterTest, ComplexFilter_Propagation) {
   config.param_ = cp;
 
   auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(crystal_, config.symmetry_);
+  filter->InitCrystalSymmetry(crystal_, config.symmetry_, AxisDistribution{});
 
   // Should match {3,5} and P-symmetric variants
   EXPECT_TRUE(filter->Check(MakeRay({ 3, 5 })));
@@ -703,4 +717,188 @@ TEST(ValidateFaceNumberTextTest, FaceOutsideAnyKindSet_IsInvalid) {
   auto r = ValidateFaceNumberText("100", CrystalKind::kPyramid);
   EXPECT_EQ(r.state, RaypathValidation::kInvalid);
   EXPECT_NE(r.message.find("outside"), std::string::npos);
+}
+
+
+// ---- D symmetry: σ-by-roll-mean tests ----
+
+static RaySeg MakeFilterTestRay(const std::vector<IdType>& rp_vec) {
+  RaySeg r{};
+  r.rp_.Clear();
+  for (auto fn : rp_vec) {
+    r.rp_ << fn;
+  }
+  r.state_ = RaySeg::kOutgoing;
+  r.fid_ = -1;
+  r.w_ = 1.0f;
+  return r;
+}
+
+static AxisDistribution MakeAzUniformRoll(float roll_mean) {
+  AxisDistribution d{};
+  d.azimuth_dist.type = DistributionType::kUniform;
+  d.azimuth_dist.std = 360.0f;
+  d.azimuth_dist.mean = 0.0f;
+  d.latitude_dist.type = DistributionType::kNoRandom;
+  d.latitude_dist.mean = 90.0f;
+  d.roll_dist.type = DistributionType::kNoRandom;
+  d.roll_dist.mean = roll_mean;
+  return d;
+}
+
+// For roll=0 (sigma_a=0): σv — face pair {3,6}, {4,8}, {5,7} are equivalent.
+// So {3,5} should match {3,7} after P+D (σv: 5→7 in the D reflection).
+TEST(SymmetryD_SigmaByRoll, Roll0_Sigv_PD_Variants) {
+  FilterConfig config{};
+  config.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
+  RaypathFilterParam p{};
+  p.raypath_ = { 3, 5 };
+  config.param_ = SimpleFilterParam{ p };
+
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  AxisDistribution axis = MakeAzUniformRoll(0.0f);  // sigma_a=0
+
+  auto filter = Filter::Create(config);
+  filter->InitCrystalSymmetry(crystal, config.symmetry_, axis);
+
+  // P gives 6 rotations of {3,5}: {3,5},{4,6},{5,7},{6,8},{7,3},{8,4}
+  // D(σv,a=0) on {3,5}: σv reflects 5→7, giving {3,7}
+  // Total unique paths = 12
+  int accepted = 0;
+  for (IdType a = 3; a <= 8; a++) {
+    for (IdType b = 3; b <= 8; b++) {
+      if (a == b) {
+        continue;
+      }
+      if (filter->Check(MakeFilterTestRay({ a, b }))) {
+        accepted++;
+      }
+    }
+  }
+  EXPECT_EQ(accepted, 12);
+}
+
+// roll=30 (sigma_a=5): σd — {3,8},{4,3},{5,4},{6,5},{7,6},{8,7} are equivalent to {3,5}.
+TEST(SymmetryD_SigmaByRoll, Roll30_Sigd_PD_Variants) {
+  FilterConfig config{};
+  config.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
+  RaypathFilterParam p{};
+  p.raypath_ = { 3, 5 };
+  config.param_ = SimpleFilterParam{ p };
+
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  AxisDistribution axis = MakeAzUniformRoll(30.0f);  // sigma_a=5
+
+  auto filter = Filter::Create(config);
+  filter->InitCrystalSymmetry(crystal, config.symmetry_, axis);
+
+  int accepted = 0;
+  for (IdType a = 3; a <= 8; a++) {
+    for (IdType b = 3; b <= 8; b++) {
+      if (a == b) {
+        continue;
+      }
+      if (filter->Check(MakeFilterTestRay({ a, b }))) {
+        accepted++;
+      }
+    }
+  }
+  EXPECT_EQ(accepted, 12);
+}
+
+// D not applicable when az is not uniform-360
+TEST(SymmetryD_SigmaByRoll, AzGaussian_DNotApplicable) {
+  FilterConfig config{};
+  config.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
+  RaypathFilterParam p{};
+  p.raypath_ = { 3, 5 };
+  config.param_ = SimpleFilterParam{ p };
+
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  AxisDistribution axis = MakeAzUniformRoll(0.0f);
+  axis.azimuth_dist.type = DistributionType::kGaussian;
+
+  auto filter = Filter::Create(config);
+  filter->InitCrystalSymmetry(crystal, config.symmetry_, axis);
+
+  // Only P applies (no D), so only 6 variants
+  int accepted = 0;
+  for (IdType a = 3; a <= 8; a++) {
+    for (IdType b = 3; b <= 8; b++) {
+      if (a == b) {
+        continue;
+      }
+      if (filter->Check(MakeFilterTestRay({ a, b }))) {
+        accepted++;
+      }
+    }
+  }
+  EXPECT_EQ(accepted, 6);
+}
+
+// D not applicable when roll mean is not a multiple of 30
+TEST(SymmetryD_SigmaByRoll, Roll15_DNotApplicable) {
+  FilterConfig config{};
+  config.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
+  RaypathFilterParam p{};
+  p.raypath_ = { 3, 5 };
+  config.param_ = SimpleFilterParam{ p };
+
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  AxisDistribution axis = MakeAzUniformRoll(15.0f);
+
+  auto filter = Filter::Create(config);
+  filter->InitCrystalSymmetry(crystal, config.symmetry_, axis);
+
+  // Only P applies (no D), so only 6 variants
+  int accepted = 0;
+  for (IdType a = 3; a <= 8; a++) {
+    for (IdType b = 3; b <= 8; b++) {
+      if (a == b) {
+        continue;
+      }
+      if (filter->Check(MakeFilterTestRay({ a, b }))) {
+        accepted++;
+      }
+    }
+  }
+  EXPECT_EQ(accepted, 6);
+}
+
+
+// ---- B symmetry: pyramid face swap tests ----
+
+// B symmetry: upper pyramid face 13 should expand to lower pyramid face 23
+TEST(SymmetryB_PyramidSwap, UpperPyramid_ExpandsToLower) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+
+  auto expanded = pyramid.ExpandRaypath({ 13, 5 }, FilterConfig::kSymB, 0, false);
+  bool found_lower = false;
+  for (const auto& rp : expanded) {
+    for (auto fn : rp) {
+      if (fn == 23) {
+        found_lower = true;
+      }
+    }
+  }
+  EXPECT_TRUE(found_lower) << "B expansion should include lower pyramid variant (23)";
+}
+
+// B symmetry via filter: pyramid path {13,5} and {23,5} should be equivalent
+TEST(SymmetryB_PyramidSwap, FilterAcceptsBothUpperAndLower) {
+  FilterConfig config{};
+  config.symmetry_ = FilterConfig::kSymB;
+  RaypathFilterParam p{};
+  p.raypath_ = { 13, 5 };
+  config.param_ = SimpleFilterParam{ p };
+
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  AxisDistribution axis = MakeAzUniformRoll(0.0f);
+
+  auto filter = Filter::Create(config);
+  filter->InitCrystalSymmetry(pyramid, config.symmetry_, axis);
+
+  EXPECT_TRUE(filter->Check(MakeFilterTestRay({ 13, 5 })));
+  EXPECT_TRUE(filter->Check(MakeFilterTestRay({ 23, 5 })));
+  EXPECT_FALSE(filter->Check(MakeFilterTestRay({ 14, 5 })));
 }

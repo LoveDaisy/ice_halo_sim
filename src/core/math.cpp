@@ -548,6 +548,11 @@ bool AxisDistribution::IsFullSphereUniform() const {
 }
 
 
+bool AxisDistribution::IsAzRotationallySymmetric() const {
+  return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.std, 360.0f);
+}
+
+
 void to_json(nlohmann::json& obj, const Distribution& dist) {
   if (dist.type == DistributionType::kNoRandom) {
     obj = dist.mean;

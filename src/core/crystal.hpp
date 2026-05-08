@@ -229,12 +229,34 @@ class Crystal {
   std::vector<IdType> ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const;
 
   /**
+   * @brief Reduce raypath using symmetry with explicit D parameters
+   * @param rp Raypath (face index sequence)
+   * @param symmetry Symmetry flags (P, B, D)
+   * @param sigma_a σ-mirror parameter (0..5); ignored when d_applicable=false
+   * @param d_applicable Whether D symmetry should be applied
+   * @return Reduced raypath
+   */
+  std::vector<IdType> ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a,
+                                    bool d_applicable) const;
+
+  /**
    * @brief Expand raypath using symmetry
    * @param rp Raypath (face index sequence)
    * @param symmetry Symmetry flags (P, B, D)
    * @return Expanded raypaths (all symmetric variants)
    */
   std::vector<std::vector<IdType>> ExpandRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const;
+
+  /**
+   * @brief Expand raypath using symmetry with explicit D parameters
+   * @param rp Raypath (face index sequence)
+   * @param symmetry Symmetry flags (P, B, D)
+   * @param sigma_a σ-mirror parameter (0..5); ignored when d_applicable=false
+   * @param d_applicable Whether D symmetry should be applied
+   * @return Expanded raypaths (all symmetric variants)
+   */
+  std::vector<std::vector<IdType>> ExpandRaypath(const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a,
+                                                 bool d_applicable) const;
 
   /**
    * @brief Get refractive index for a given wavelength
@@ -272,6 +294,22 @@ class Crystal {
   float* poly_face_d_ = nullptr;             // plane distances, poly_face_cnt_
   int* poly_face_tri_id_ = nullptr;          // representative triangle ID, poly_face_cnt_
 };
+
+
+namespace detail {
+// Internal — not part of public API.
+
+// Returns true if roll_mean_deg is a multiple of 30° (within FloatEqual precision).
+bool IsRollMeanAtMultipleOf30(const AxisDistribution& d);
+
+// Compute σ-mirror parameter a (0..5) from roll_mean_deg.
+// Formula: n = ((int)round(roll_mean / 30.0f) % 6 + 6) % 6; a = (6 - n) % 6.
+int ComputeSigmaA(float roll_mean_deg);
+
+// Returns true if D symmetry is applicable for the given axis distribution.
+// Requires azimuth full-360° uniform AND roll mean at a multiple of 30°.
+bool IsDApplicable(const AxisDistribution& d);
+}  // namespace detail
 
 
 }  // namespace lumice

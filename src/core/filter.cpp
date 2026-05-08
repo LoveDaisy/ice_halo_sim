@@ -24,9 +24,11 @@ class RaypathFilter : public Filter {
  public:
   explicit RaypathFilter(const std::vector<IdType>& rp) : rp_(rp) {}
 
-  void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry) override {
+  void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry, const AxisDistribution& axis_dist) override {
+    bool d_applicable = detail::IsDApplicable(axis_dist);
+    int sigma_a = d_applicable ? detail::ComputeSigmaA(axis_dist.roll_dist.mean) : 0;
     candidate_hash_.clear();
-    auto expand_rp = crystal.ExpandRaypath(rp_, symmetry);
+    auto expand_rp = crystal.ExpandRaypath(rp_, symmetry, sigma_a, d_applicable);
     RaypathHash h;
     for (const auto& rp : expand_rp) {
       candidate_hash_.emplace(h(rp));
@@ -50,9 +52,11 @@ class EntryExitFilter : public Filter {
  public:
   EntryExitFilter(IdType entry, IdType exit) : entry_(entry), exit_(exit) {}
 
-  void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry) override {
+  void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry, const AxisDistribution& axis_dist) override {
+    bool d_applicable = detail::IsDApplicable(axis_dist);
+    int sigma_a = d_applicable ? detail::ComputeSigmaA(axis_dist.roll_dist.mean) : 0;
     std::vector<IdType> ee_rp{ entry_, exit_ };
-    auto expand_ee_rp = crystal.ExpandRaypath(ee_rp, symmetry);
+    auto expand_ee_rp = crystal.ExpandRaypath(ee_rp, symmetry, sigma_a, d_applicable);
     RaypathHash h;
     for (const auto& rp : expand_ee_rp) {
       candidate_hash_.emplace(h(rp));
@@ -151,10 +155,10 @@ class ComplexFilter : public Filter {
     }
   }
 
-  void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry) override {
+  void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry, const AxisDistribution& axis_dist) override {
     for (auto& or_f : filters_) {
       for (auto& and_f : or_f) {
-        and_f->InitCrystalSymmetry(crystal, symmetry);
+        and_f->InitCrystalSymmetry(crystal, symmetry, axis_dist);
       }
     }
   }

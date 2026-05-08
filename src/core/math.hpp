@@ -200,6 +200,10 @@ struct AxisDistribution {
   //!   For full-sphere uniform, the caller must use the parameter-less overload instead.
   bool IsFullSphereUniform() const;
 
+  //! @brief Check if azimuth is uniformly distributed over the full 360°.
+  //! @details Only checks azimuth type and std; latitude and roll are ignored.
+  bool IsAzRotationallySymmetric() const;
+
   Distribution azimuth_dist;
   Distribution latitude_dist;
   Distribution roll_dist;

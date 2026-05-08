@@ -33,7 +33,7 @@ using lumice::SimData;
 // authoring platform that this test file's per-field assertions need updating.
 #if defined(__APPLE__) && defined(__aarch64__)
 static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
-static_assert(sizeof(SimData) == 144,
+static_assert(sizeof(SimData) == 168,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif

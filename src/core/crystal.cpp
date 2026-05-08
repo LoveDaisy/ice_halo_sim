@@ -386,8 +386,13 @@ Crystal& Crystal::Rotate(const Rotation& r) {
   return *this;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
+  return ReduceRaypath(rp, symmetry, 0, false);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a,
+                                           bool d_applicable) const {
   if (symmetry == FilterConfig::kSymNone || fn_period_ < 0) {
     return rp;
   }
@@ -411,58 +416,56 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
     }
   }
 
-  if (symmetry & FilterConfig::kSymD) {
-    IdType pri1 = kInvalidId;
-    IdType pri2 = kInvalidId;
-    for (auto& x : reduced_rp) {
-      if (x < 3) {
-        continue;
+  if ((symmetry & FilterConfig::kSymD) && d_applicable) {
+    // σ-clean: reflect every prism face using formula face_id_new = (sigma_a - (face_id-3) + fn_period_) % fn_period_ +
+    // 3
+    std::vector<IdType> rp_reflected = reduced_rp;
+    for (auto& x : rp_reflected) {
+      if (x < 3 || (x >= 13 && x <= 28)) {
+        continue;  // skip basal and pyramid faces
       }
       IdType pyr = x / 10;
       IdType pri = x % 10 - 3;
-      if (pri1 == kInvalidId) {
-        pri1 = pri;
-        continue;
-      }
-
-      if (pri2 == kInvalidId) {
-        if ((2 * pri1 - pri + fn_period_) % fn_period_ == pri) {
-          continue;
-        } else if ((2 * pri1 - pri + fn_period_) % fn_period_ > pri) {
-          break;  // Do nothing. It is already reduced.
-        } else {
-          pri2 = pri;
-        }
-      }
-
-      pri = (2 * pri1 - pri + fn_period_) % fn_period_;
-      pri += 3;
-      x = pyr * 10 + pri;
+      pri = (sigma_a - pri + fn_period_) % fn_period_;
+      x = pyr * 10 + pri + 3;
+    }
+    if (rp_reflected < reduced_rp) {
+      reduced_rp = rp_reflected;
     }
   }
 
   if (symmetry & FilterConfig::kSymB) {
-    IdType b1 = kInvalidId;
-    for (auto& x : reduced_rp) {
-      if (x > 2) {
-        continue;
+    // B reflection: basal 1↔2 and pyramid upper[13..18]↔lower[23..28], applied together.
+    // Generate the B-reflected candidate and keep the lexicographically smaller one.
+    std::vector<IdType> rp_b_reflected = reduced_rp;
+    bool changed = false;
+    for (auto& x : rp_b_reflected) {
+      if (x <= 2) {
+        x = 3 - x;
+        changed = true;
+      } else if (x >= 13 && x <= 18) {
+        x += 10;
+        changed = true;
+      } else if (x >= 23 && x <= 28) {
+        x -= 10;
+        changed = true;
       }
-      if (b1 == kInvalidId) {
-        b1 = x;
-      }
-      if (b1 == 1) {
-        break;  // Do nothing. It is alread reduced.
-      }
-
-      x = 3 - x;
+    }
+    if (changed && rp_b_reflected < reduced_rp) {
+      reduced_rp = rp_b_reflected;
     }
   }
 
   return reduced_rp;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
+  return ExpandRaypath(rp, symmetry, 0, false);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a,
+                                                        bool d_applicable) const {
   std::vector<std::vector<IdType>> result;
   result.emplace_back(rp);
   if (symmetry == FilterConfig::kSymNone || fn_period_ < 0) {
@@ -493,29 +496,20 @@ std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType
     }
   }
 
-  if (symmetry & FilterConfig::kSymD) {
+  if ((symmetry & FilterConfig::kSymD) && d_applicable) {
+    // σ-clean: for each existing variant, generate σ-reflected copy
     auto size = result.size();
     for (size_t i = 0; i < size; i++) {
       auto curr_rp = result[i];
-      IdType pri0 = kInvalidId;
       bool changed = false;
       for (auto& x : curr_rp) {
-        if (x < 3) {
-          continue;
+        if (x < 3 || (x >= 13 && x <= 28)) {
+          continue;  // skip basal and pyramid faces
         }
-
         IdType pyr = x / 10;
-        IdType pri = x % 10;
-        if (pri0 == kInvalidId) {
-          pri0 = pri;
-          continue;
-        }
-
-        pri -= 3;
-        pri = 2 * pri0 - pri + fn_period_;
-        pri %= fn_period_;
-        pri += 3;
-        x = pyr * 10 + pri;
+        IdType pri = x % 10 - 3;
+        pri = (sigma_a - pri + fn_period_) % fn_period_;
+        x = pyr * 10 + pri + 3;
         changed = true;
       }
       if (changed) {
@@ -525,17 +519,23 @@ std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType
   }
 
   if (symmetry & FilterConfig::kSymB) {
+    // B reflection: basal 1↔2, pyramid upper[13..18]↔lower[23..28], prism unchanged.
+    // Both swaps are part of the same transformation and applied together.
     auto size = result.size();
     for (size_t i = 0; i < size; i++) {
       auto curr_rp = result[i];
       bool changed = false;
       for (auto& x : curr_rp) {
-        if (x > 2) {
-          continue;
+        if (x <= 2) {
+          x = 3 - x;
+          changed = true;
+        } else if (x >= 13 && x <= 18) {
+          x += 10;
+          changed = true;
+        } else if (x >= 23 && x <= 28) {
+          x -= 10;
+          changed = true;
         }
-
-        x = 3 - x;
-        changed = true;
       }
       if (changed) {
         result.emplace_back(curr_rp);
@@ -642,5 +642,26 @@ void Crystal::BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt) {
 float Crystal::GetRefractiveIndex(float wl) const {
   return IceRefractiveIndex::Get(wl);
 }
+
+
+namespace detail {
+
+bool IsRollMeanAtMultipleOf30(const AxisDistribution& d) {
+  float mean = d.roll_dist.mean;
+  float remainder = std::fmod(std::fmod(mean, 30.0f) + 30.0f, 30.0f);
+  return FloatEqual(remainder, 0.0f) || FloatEqual(remainder, 30.0f);
+}
+
+int ComputeSigmaA(float roll_mean_deg) {
+  int n = (static_cast<int>(std::round(roll_mean_deg / 30.0f)) % 6 + 6) % 6;
+  return (6 - n) % 6;
+}
+
+bool IsDApplicable(const AxisDistribution& d) {
+  return d.IsAzRotationallySymmetric() && IsRollMeanAtMultipleOf30(d);
+}
+
+}  // namespace detail
+
 
 }  // namespace lumice
