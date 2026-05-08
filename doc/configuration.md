@@ -206,7 +206,7 @@ Filters are used to filter ray paths or directions.
 |-------|------|----------|---------|-------------|
 | `id` | integer | yes | - | Unique identifier |
 | `type` | string | yes | - | Filter type |
-| `symmetry` | string | no | "" | Symmetry: "P" (planar), "B" (basal), "D" (direction) |
+| `symmetry` | string | no | "" | Symmetry toggles: any combination of "P" (C6 rotational), "B" (horizontal mirror), "D" (vertical mirror). See [Raypath Symmetry](raypath-symmetry.md) for enabling conditions and precise semantics. |
 | `action` | string | no | "filter_in" | Action: "filter_in" or "filter_out" |
 
 #### Type-Specific Parameters

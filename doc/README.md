@@ -11,6 +11,7 @@ doc/
 ├── README.md / README_zh.md                         # Documentation index (English/Chinese)
 ├── architecture.md / _zh.md                         # System architecture
 ├── configuration.md / _zh.md                        # Configuration guide
+├── raypath-symmetry.md / _zh.md                     # Raypath symmetry: P/B/D filter semantics
 ├── c_api.md / _zh.md                                # C API reference
 ├── developer-guide.md / _zh.md                      # Developer guide
 ├── gui-guide.md / _zh.md                            # GUI application guide
@@ -37,6 +38,12 @@ For users of this project:
   - Detailed configuration options and defaults
   - Validation rules
   - Common configuration errors and solutions
+
+- **[Raypath Symmetry](raypath-symmetry.md)**: P, B, D filter toggle semantics
+  - Two sources of raypath equivalence (crystal geometry vs orientation distribution)
+  - Precise semantics and enabling conditions for P, B, and D
+  - σ-by-roll-mean derivation and reference table
+  - GUI indicator behavior
 
 - **[System Architecture](architecture.md)**: System architecture design
   - Server-Consumer architecture
