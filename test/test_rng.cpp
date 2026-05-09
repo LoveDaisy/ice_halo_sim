@@ -861,8 +861,8 @@ TEST(FoldRollEquivalenceTest, FoldedEqualsExplicit) {
 TEST(FoldRollFlipBalanceTest, KGaussianFlipBalance) {
   using lumice::AxisDistribution;
   using lumice::DistributionType;
-  using lumice::RandomSampler;
   using lumice::RandomNumberGenerator;
+  using lumice::RandomSampler;
   using lumice::math::kPi;
 
   AxisDistribution axis;
@@ -907,8 +907,7 @@ TEST(FoldRollFlipBalanceTest, KGaussianFlipBalance) {
     auto phi_mean_flip = static_cast<float>(phi_sum_flip / count_flip);
     auto phi_mean_noflip = static_cast<float>(phi_sum_noflip / count_noflip);
     // flip=true and flip=false groups have symmetric lat distributions; means should match.
-    EXPECT_NEAR(phi_mean_flip, phi_mean_noflip, 0.02f)
-        << "flip vs no-flip lat mean unexpectedly different";
+    EXPECT_NEAR(phi_mean_flip, phi_mean_noflip, 0.02f) << "flip vs no-flip lat mean unexpectedly different";
   }
 }
 
@@ -921,8 +920,8 @@ TEST(FoldRollFlipBalanceTest, KGaussianFlipBalance) {
 TEST(FoldRollFlipBalanceTest, AxisDistEquivalence) {
   using lumice::AxisDistribution;
   using lumice::DistributionType;
-  using lumice::RandomSampler;
   using lumice::RandomNumberGenerator;
+  using lumice::RandomSampler;
   using lumice::math::kPi;
 
   // axis_pos: N(+90°, 180°) — std=180° covers full sphere, flip≈50%, matches user config
@@ -970,14 +969,10 @@ TEST(FoldRollFlipBalanceTest, AxisDistEquivalence) {
   // cross the fold boundary and trigger flip=true regardless of the sign of the mean.
   // Expected flip fraction: ≈ 49.9% (computed analytically from N(±90°,180°) + fold geometry).
   // If flip is NOT transmitted to roll: all roll=0, both fractions ≈ 0% (regression failure).
-  EXPECT_GT(flip_pos_frac, 0.40f)
-      << "axis_pos flip fraction too low — flip not transmitted to roll: " << flip_pos_frac;
-  EXPECT_LT(flip_pos_frac, 0.60f)
-      << "axis_pos flip fraction unexpectedly high: " << flip_pos_frac;
-  EXPECT_GT(flip_neg_frac, 0.40f)
-      << "axis_neg flip fraction too low — flip not transmitted to roll: " << flip_neg_frac;
-  EXPECT_LT(flip_neg_frac, 0.60f)
-      << "axis_neg flip fraction unexpectedly high: " << flip_neg_frac;
+  EXPECT_GT(flip_pos_frac, 0.40f) << "axis_pos flip fraction too low — flip not transmitted to roll: " << flip_pos_frac;
+  EXPECT_LT(flip_pos_frac, 0.60f) << "axis_pos flip fraction unexpectedly high: " << flip_pos_frac;
+  EXPECT_GT(flip_neg_frac, 0.40f) << "axis_neg flip fraction too low — flip not transmitted to roll: " << flip_neg_frac;
+  EXPECT_LT(flip_neg_frac, 0.60f) << "axis_neg flip fraction unexpectedly high: " << flip_neg_frac;
 
   // |lat| mean should be similar between pos and neg (symmetric distributions).
   auto lat_pos_mean = static_cast<float>(lat_pos_sum / kN);
@@ -993,8 +988,8 @@ TEST(FoldRollFlipBalanceTest, AxisDistEquivalence) {
 TEST(FoldRollFlipBalanceTest, ZigzagNegativeMeanNoFold) {
   using lumice::AxisDistribution;
   using lumice::DistributionType;
-  using lumice::RandomSampler;
   using lumice::RandomNumberGenerator;
+  using lumice::RandomSampler;
   using lumice::math::kPi;
 
   // kZigzag with negative mean: |std·sin(2πU) + mean|; abs() ensures phi ≥ 0 always.
@@ -1033,9 +1028,9 @@ TEST(FoldRollFlipBalanceTest, RayleighNegativeMean) {
 
   AxisDistribution axis;
   // latitude_mean=-89.9°, std=0.01° → colatitude=0.1°, 3σ=0.03° → total<0.5° → triggers Rayleigh path
-  axis.latitude_dist = {DistributionType::kGaussian, -89.9f, 0.01f};
-  axis.azimuth_dist = {DistributionType::kUniform, 0.0f, 360.0f};
-  axis.roll_dist = {DistributionType::kGaussian, 0.0f, 0.0f};
+  axis.latitude_dist = { DistributionType::kGaussian, -89.9f, 0.01f };
+  axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };
 
   constexpr int kN = 5'000;
   std::vector<float> data(kN * 3);
@@ -1072,9 +1067,9 @@ TEST(FoldRollFlipBalanceTest, RayleighPositiveMean) {
 
   AxisDistribution axis;
   // latitude_mean=+89.9°, std=0.01° → triggers Rayleigh path (near north pole, tiny σ)
-  axis.latitude_dist = {DistributionType::kGaussian, 89.9f, 0.01f};
-  axis.azimuth_dist = {DistributionType::kUniform, 0.0f, 360.0f};
-  axis.roll_dist = {DistributionType::kGaussian, 0.0f, 0.0f};
+  axis.latitude_dist = { DistributionType::kGaussian, 89.9f, 0.01f };
+  axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };
 
   constexpr int kN = 5'000;
   std::vector<float> data(kN * 3);
