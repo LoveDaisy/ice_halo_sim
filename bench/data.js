@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778302158112,
+  "lastUpdate": 1778302159663,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -5699,6 +5699,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 70.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "702fec607e094345d83386ea8011b67d9ccc5718",
+          "message": "Merge pull request #88 from LoveDaisy/feat/raypath_symmetry\n\nRaypath P/B/D symmetry redesign + fold/roll fix + e2e regression",
+          "timestamp": "2026-05-09T12:44:27+08:00",
+          "tree_id": "73a61c0e6a037827a94616b45044f837a5cd9b4f",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/702fec607e094345d83386ea8011b67d9ccc5718"
+        },
+        "date": 1778302159332,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 96.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 75.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 71.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 71.3,
             "unit": "%"
           }
         ]
