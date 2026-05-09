@@ -102,16 +102,16 @@ Rotation BuildCrystalRotation(float azimuth_rad, float latitude_rad, float roll_
 
 void InitRay_rot(RandomNumberGenerator& rng, const AxisDistribution& crystal_axis,  // input
                  RayBuffer buffer_data[2]) {                                        // output
-  float lon_lat[2]{};
+  float lon_lat_roll[3]{};
   for (auto& r : buffer_data[0]) {
     if (!crystal_axis.IsFullSphereUniform()) {
-      RandomSampler::SampleSphericalPointsSph(crystal_axis, lon_lat);
+      RandomSampler::SampleSphericalPointsSph(crystal_axis, lon_lat_roll);
     } else {
-      // Randomly sample on sphere (with asin(u) Jacobian correction)
-      RandomSampler::SampleSphericalPointsSph(lon_lat);
+      // Randomly sample on sphere (with asin(u) Jacobian correction); roll sampled separately below.
+      RandomSampler::SampleSphericalPointsSph(lon_lat_roll);
+      lon_lat_roll[2] = rng.Get(crystal_axis.roll_dist) * math::kDegreeToRad;
     }
-    float roll = rng.Get(crystal_axis.roll_dist) * math::kDegreeToRad;
-    r.crystal_rot_ = BuildCrystalRotation(lon_lat[0], lon_lat[1], roll);
+    r.crystal_rot_ = BuildCrystalRotation(lon_lat_roll[0], lon_lat_roll[1], lon_lat_roll[2]);
   }
 }
 
@@ -522,6 +522,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
 
   std::vector<Crystal> all_crystals;
   all_crystals.reserve(16);
+  std::vector<AxisDistribution> all_axis_dists;
+  all_axis_dists.reserve(16);
 
   bool first_ms = true;
   for (size_t mi = 0; mi < config.ms_.size() && !stop_; mi++) {
@@ -581,11 +583,13 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           // Copy from cross-call cache (deterministic, first batch of this ci)
           curr_crystal_id = all_crystals.size();
           all_crystals.emplace_back(*cached_crystal);
+          all_axis_dists.emplace_back(s.crystal_.axis_);
           ci_crystal_id = curr_crystal_id;
         } else {
           // Create new crystal (random params, or first-ever deterministic creation)
           curr_crystal_id = all_crystals.size();
           all_crystals.emplace_back(std::visit(CrystalMaker{ rng_ }, s.crystal_.param_));
+          all_axis_dists.emplace_back(s.crystal_.axis_);
           if (deterministic) {
             crystal_cache.emplace_back(param_ptr, all_crystals.back());
             cached_crystal = &crystal_cache.back().second;
@@ -596,7 +600,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
         // Skip redundant InitCrystalSymmetry for deterministic crystals: crystal is invariant
         // across cn batches (same ci_crystal_id), so symmetry only needs initialization once.
         if (!symmetry_initialized || !deterministic) {
-          filter->InitCrystalSymmetry(curr_crystal, s.filter_.symmetry_);
+          filter->InitCrystalSymmetry(curr_crystal, s.filter_.symmetry_, s.crystal_.axis_);
           symmetry_initialized = true;
         }
 
@@ -664,7 +668,9 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   sim_data.curr_wl_ = wl;
   sim_data.total_intensity_ = wl_param.weight_ * original_ray_num;
   sim_data.generation_ = generation;
+  assert(all_crystals.size() == all_axis_dists.size());
   sim_data.crystals_ = std::move(all_crystals);
+  sim_data.crystal_axis_dists_ = std::move(all_axis_dists);
   sim_data.rays_ = std::move(all_data);
   sim_data.outgoing_indices_ = std::move(outgoing_indices);
   sim_data.outgoing_d_ = std::move(outgoing_d);

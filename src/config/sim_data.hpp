@@ -6,6 +6,7 @@
 
 #include "core/crystal.hpp"
 #include "core/def.hpp"
+#include "core/math.hpp"
 #include "core/raypath.hpp"
 
 namespace lumice {
@@ -47,7 +48,8 @@ struct SimData {
   uint64_t generation_ = 0;
   RayBuffer rays_;
   std::vector<Crystal> crystals_;
-  std::vector<size_t> outgoing_indices_;  // Indices of kOutgoing rays in rays_ (filled by Simulator)
+  std::vector<AxisDistribution> crystal_axis_dists_;  // parallel to crystals_
+  std::vector<size_t> outgoing_indices_;              // Indices of kOutgoing rays in rays_ (filled by Simulator)
 
   // Pre-packed outgoing ray data for cache-friendly access in Consume().
   // Tightly packed by outgoing order: outgoing_d_[k*3..k*3+2] and outgoing_w_[k]

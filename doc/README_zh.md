@@ -11,6 +11,7 @@ doc/
 ├── README.md / README_zh.md                         # 文档索引（英文/中文）
 ├── architecture.md / _zh.md                         # 系统架构文档
 ├── configuration.md / _zh.md                        # 配置文档
+├── raypath-symmetry.md / _zh.md                     # Raypath 对称性：P/B/D 过滤器语义
 ├── c_api.md / _zh.md                                # C接口使用文档
 ├── developer-guide.md / _zh.md                      # 开发指南
 ├── gui-guide.md / _zh.md                            # GUI 使用指南
@@ -37,6 +38,12 @@ doc/
   - 配置项详细说明和默认值
   - 配置验证规则
   - 常见配置错误和解决方案
+
+- **[Raypath 对称性](raypath-symmetry.zh.md)**: P、B、D 过滤器开关语义
+  - Raypath 等价性的两类来源（晶体几何 vs 取向分布）
+  - P、B、D 的精确语义与启用条件
+  - σ-by-roll-mean 推导与参考表
+  - GUI 提示行为说明
 
 - **[系统架构文档](architecture_zh.md)**: 系统架构设计
   - 服务器-消费者架构说明

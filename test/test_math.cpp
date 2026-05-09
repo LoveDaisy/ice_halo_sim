@@ -339,4 +339,19 @@ TEST_F(V3TestRotation, MultiplePoints) {
   EXPECT_NEAR(pts[5], 0.0f, kEps);
 }
 
+TEST(IsAzRotationallySymmetric, UniformFull360_ReturnsTrue) {
+  AxisDistribution d{};
+  d.azimuth_dist.type = DistributionType::kUniform;
+  d.azimuth_dist.std = 360.0f;
+  d.azimuth_dist.mean = 0.0f;
+  EXPECT_TRUE(d.IsAzRotationallySymmetric());
+}
+
+TEST(IsAzRotationallySymmetric, GaussianAz_ReturnsFalse) {
+  AxisDistribution d{};
+  d.azimuth_dist.type = DistributionType::kGaussian;
+  d.azimuth_dist.std = 360.0f;
+  EXPECT_FALSE(d.IsAzRotationallySymmetric());
+}
+
 }  // namespace

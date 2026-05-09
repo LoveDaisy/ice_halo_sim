@@ -371,6 +371,8 @@ float RandomNumberGenerator::Get(Distribution dist) {
       return GetGaussian() * dist.std + dist.mean;
     case DistributionType::kZigzag:
       // Rectified arcsine: |A·sin(2πU) + B| where A=std (amplitude), B=mean (tilt offset).
+      // The abs() is intentional: fold (flip=true) is unconditionally skipped — abs() guarantees
+      // phi >= 0 for all kZigzag inputs regardless of mean/std values.
       return std::abs(dist.std * std::sin(GetUniform() * 2.0f * math::kPi) + dist.mean);
     case DistributionType::kLaplacian: {
       // Laplace inverse CDF: μ - b·sign(U-0.5)·ln(1-2|U-0.5|), returns degrees.
@@ -484,7 +486,14 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
       float colatitude = std::sqrt(dx * dx + dy * dy);
       phi = std::copysign(math::kPi_2 - colatitude, latitude_mean_rad);
       phi = std::max(-math::kPi_2, std::min(math::kPi_2, phi));
-      // flip stays false — Rayleigh path only fires for tiny σ near poles.
+      if (latitude_mean_rad < 0) {
+        // South-pole Rayleigh: fold phi to positive latitude and set flip=true to trigger
+        // lambda/roll += π downstream. Semantically identical to NormalizeLatitude, but not
+        // delegated there because Rayleigh phi is computed from copysign+clamp (never outside
+        // [-π/2, π/2]), so the NormalizeLatitude loop/reflection logic is unnecessary here.
+        phi = std::abs(phi);
+        flip = true;
+      }
     } else if (lat_type == DistributionType::kGaussianLegacy) {
       // Legacy Gaussian: sample without Jacobian rejection (reproduces old behavior).
       phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
@@ -512,12 +521,15 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     }
 
     float lambda = rng.Get(axis_dist.azimuth_dist) * math::kDegreeToRad;
+    float roll = rng.Get(axis_dist.roll_dist) * math::kDegreeToRad;
     if (flip) {
       lambda += math::kPi;
+      roll += math::kPi;
     }
 
-    data[i * 2 + 0] = lambda;
-    data[i * 2 + 1] = phi;
+    data[i * 3 + 0] = lambda;
+    data[i * 3 + 1] = phi;
+    data[i * 3 + 2] = roll;
   }
 }
 
@@ -545,6 +557,11 @@ bool AxisDistribution::IsFullSphereUniform() const {
   return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.mean, 0.0f) &&
          FloatEqual(azimuth_dist.std, 360.0f) && latitude_dist.type == DistributionType::kUniform &&
          FloatEqual(latitude_dist.mean, 90.0f) && FloatEqual(latitude_dist.std, 360.0f);
+}
+
+
+bool AxisDistribution::IsAzRotationallySymmetric() const {
+  return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.std, 360.0f);
 }
 
 

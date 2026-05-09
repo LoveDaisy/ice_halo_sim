@@ -6,6 +6,7 @@
 
 #include "config/filter_config.hpp"
 #include "core/crystal.hpp"
+#include "core/math.hpp"
 #include "core/raypath.hpp"
 
 namespace lumice {
@@ -25,7 +26,8 @@ class Filter {
   Filter& operator=(const Filter& other) = default;
 
   bool Check(const RaySeg& ray) const;  // Put action logic here, and detail logic in InternalCheck()
-  virtual void InitCrystalSymmetry(const Crystal& /* crystal */, uint8_t /* symmetry */) {};
+  virtual void InitCrystalSymmetry(const Crystal& /* crystal */, uint8_t /* symmetry */,
+                                   const AxisDistribution& /* axis_dist */) {};
 
  protected:
   virtual bool InternalCheck(const RaySeg& ray) const = 0;

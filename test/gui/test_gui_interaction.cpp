@@ -1339,6 +1339,76 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: task-pbd-gui-gate — D tooltip (i) not shown when axis config meets D conditions.
+  // az = Uniform 360°, roll mean = 0 (default). IsDApplicableGuiAxis → true → no (i).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "d_tooltip_not_shown_when_applicable");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Default crystal: azimuth = Uniform 360°, roll mean = 0 — D is applicable.
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.azimuth.type, gui::AxisDistType::kUniform);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.azimuth.std, 360.0f);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.roll.mean, 0.0f);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // (i) should NOT be shown: modal's d_applicable should be true.
+      IM_CHECK_EQ(gui::IsCurrentModalDApplicable(), true);
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // P1: task-pbd-gui-gate — D tooltip (i) shown when roll mean is not a multiple of 30.
+  // az = Uniform 360°, roll mean = 15 → IsDApplicableGuiAxis → false → (i) shown.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "d_tooltip_shown_roll_not_multiple_of_30");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.layers[0].entries[0].crystal.azimuth = { gui::AxisDistType::kUniform, 0.0f, 360.0f };
+      gui::g_state.layers[0].entries[0].crystal.roll = { gui::AxisDistType::kUniform, 15.0f, 360.0f };
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // (i) should be shown: modal's d_applicable should be false.
+      IM_CHECK_EQ(gui::IsCurrentModalDApplicable(), false);
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // P1: task-pbd-gui-gate — D tooltip (i) shown when azimuth is not Uniform.
+  // az = kGauss (non-uniform), roll mean = 0 → IsDApplicableGuiAxis → false → (i) shown.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "d_tooltip_shown_az_not_uniform");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.layers[0].entries[0].crystal.azimuth = { gui::AxisDistType::kGauss, 0.0f, 30.0f };
+      gui::g_state.layers[0].entries[0].crystal.roll = { gui::AxisDistType::kUniform, 0.0f, 360.0f };
+      ctx->Yield();
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // (i) should be shown: modal's d_applicable should be false.
+      IM_CHECK_EQ(gui::IsCurrentModalDApplicable(), false);
+
+      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
   // P1: scrum-gui-polish-v9 155.3 — screenshot_include_overlay toggle and default value.
   // Does NOT exercise the actual PNG write — that requires driving the main loop between
   // ImGui_ImplOpenGL3_RenderDrawData and glfwSwapBuffers, which the Test Engine's Yield

@@ -120,13 +120,13 @@ TEST_F(RngTest, SampleSphericalWithCustomAzimuth) {
   axis.latitude_dist = { DistributionType::kNoRandom, 0.0f, 0.0f };
 
   constexpr size_t kN = 2048;
-  auto data = std::make_unique<float[]>(kN * 2);
+  auto data = std::make_unique<float[]>(kN * 3);
   RandomSampler::SampleSphericalPointsSph(axis, data.get(), kN);
 
   const float kAzMin = 60.0f * lumice::math::kDegreeToRad;
   const float kAzMax = 120.0f * lumice::math::kDegreeToRad;
   for (size_t i = 0; i < kN; i++) {
-    float az = data[i * 2 + 0];
+    float az = data[i * 3 + 0];
     EXPECT_GE(az, kAzMin - 1e-5f) << "Sample " << i << " azimuth too low: " << az;
     EXPECT_LE(az, kAzMax + 1e-5f) << "Sample " << i << " azimuth too high: " << az;
   }
@@ -145,13 +145,13 @@ TEST_F(RngTest, SampleSphericalWithCustomLatitude) {
   axis.latitude_dist = { DistributionType::kUniform, 45.0f, 30.0f };
 
   constexpr size_t kN = 2048;
-  auto data = std::make_unique<float[]>(kN * 2);
+  auto data = std::make_unique<float[]>(kN * 3);
   RandomSampler::SampleSphericalPointsSph(axis, data.get(), kN);
 
   const float kLatMin = 30.0f * lumice::math::kDegreeToRad;
   const float kLatMax = 60.0f * lumice::math::kDegreeToRad;
   for (size_t i = 0; i < kN; i++) {
-    float lat = data[i * 2 + 1];
+    float lat = data[i * 3 + 1];
     EXPECT_GE(lat, kLatMin - 1e-5f) << "Sample " << i << " latitude too low: " << lat;
     EXPECT_LE(lat, kLatMax + 1e-5f) << "Sample " << i << " latitude too high: " << lat;
   }
@@ -222,7 +222,7 @@ class SphericalSamplingTest : public ::testing::Test {
     axis.azimuth_dist.type = lumice::DistributionType::kUniform;
 
     std::vector<int> counts(bin_edges_deg.size() - 1, 0);
-    float lon_lat[2];
+    float lon_lat[3];
     for (size_t i = 0; i < n; i++) {
       lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
       double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
@@ -369,7 +369,7 @@ TEST_F(SphericalSamplingTest, UniformLatitudeJacobianCorrection) {
 
   // Sample using the parameterized path (NOT IsFullSphereUniform dispatch).
   std::vector<int> counts(kNumBins, 0);
-  float lon_lat[2];
+  float lon_lat[3];
   for (size_t i = 0; i < kSampleCount; i++) {
     lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
     double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
@@ -443,7 +443,7 @@ TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
 
     // Sample and compute mean colatitude.
     double sample_sum = 0;
-    float lon_lat[2];
+    float lon_lat[3];
     for (size_t i = 0; i < kSampleCount; i++) {
       lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
       double colatitude = lumice::math::kPi_2 - lon_lat[1];
@@ -542,7 +542,7 @@ TEST_F(SphericalSamplingTest, ZigzagBasicSampling) {
   auto& rng = lumice::RandomNumberGenerator::GetInstance();
   rng.SetSeed(42);
 
-  float lon_lat[2];
+  float lon_lat[3];
   for (int i = 0; i < 10000; i++) {
     lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
     float lat_deg = lon_lat[1] / kDeg2Rad;
@@ -601,7 +601,7 @@ TEST_F(SphericalSamplingTest, ZigzagJacobianCorrection) {
     // Sample and bin.
     constexpr size_t kN = 1000000;
     std::vector<int> counts(kNumBins, 0);
-    float lon_lat[2];
+    float lon_lat[3];
     for (size_t i = 0; i < kN; i++) {
       lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
       double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
@@ -701,7 +701,7 @@ TEST_F(SphericalSamplingTest, LaplacianBasicSampling) {
   auto& rng = lumice::RandomNumberGenerator::GetInstance();
   rng.SetSeed(42);
 
-  float lon_lat[2];
+  float lon_lat[3];
   double sum_lat = 0;
   constexpr int kN = 50000;
   for (int i = 0; i < kN; i++) {
@@ -744,7 +744,7 @@ TEST_F(SphericalSamplingTest, LaplacianJacobianCorrection) {
     // Sample with Jacobian (rejection sampling).
     constexpr size_t kN = 500000;
     double observed_mean_colat = 0;
-    float lon_lat[2];
+    float lon_lat[3];
     for (size_t i = 0; i < kN; i++) {
       lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
       double colatitude_deg = (lumice::math::kPi_2 - lon_lat[1]) / kDeg2Rad;
@@ -789,7 +789,7 @@ TEST_F(SphericalSamplingTest, LaplacianHeavierTailThanGaussian) {
   lap_axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
 
   int lap_far = 0;
-  float lon_lat[2];
+  float lon_lat[3];
   for (size_t i = 0; i < kN; i++) {
     lumice::RandomSampler::SampleSphericalPointsSph(lap_axis, lon_lat);
     float lat_deg = lon_lat[1] / kDeg2Rad;
@@ -816,6 +816,282 @@ TEST_F(SphericalSamplingTest, LaplacianHeavierTailThanGaussian) {
   // At 3σ: Gaussian tail ~ 0.27%, Laplace tail ~ exp(-3) ≈ 5%.
   EXPECT_GT(lap_far, gauss_far) << "Laplacian should have heavier tails than Gaussian" << " (lap_far=" << lap_far
                                 << ", gauss_far=" << gauss_far << ")";
+}
+
+
+// Verifies that fold-roll coupling is correct: sampling with a latitude that triggers pole crossing
+// (fold) and roll=0° produces the same output as sampling the equivalent post-fold orientation
+// directly (with no fold, and roll=π already baked in).
+TEST(FoldRollEquivalenceTest, FoldedEqualsExplicit) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomSampler;
+  using lumice::math::kDegreeToRad;
+  using lumice::math::kPi;
+
+  // "Folded" path: latitude=-120° (zenith=120°+90°=210°, colatitude=210° > 180°) triggers fold.
+  // After fold: normalized latitude=-60°, azimuth += π, roll += π.
+  // kGaussianLegacy with std=0 gives deterministic mean without bypassing NormalizeLatitude.
+  AxisDistribution folded_axis;
+  folded_axis.latitude_dist = { DistributionType::kGaussianLegacy, -120.0f, 0.0f };
+  folded_axis.azimuth_dist = { DistributionType::kNoRandom, 0.0f, 0.0f };
+  folded_axis.roll_dist = { DistributionType::kNoRandom, 0.0f, 0.0f };
+  float data_folded[3]{};
+  RandomSampler::SampleSphericalPointsSph(folded_axis, data_folded);
+
+  // "Explicit" path: equivalent post-fold orientation sampled directly (no fold occurs).
+  // latitude=-60°, azimuth=180°, roll=180° mirror the folded result without calling NormalizeLatitude.
+  AxisDistribution explicit_axis;
+  explicit_axis.latitude_dist = { DistributionType::kNoRandom, -60.0f, 0.0f };
+  explicit_axis.azimuth_dist = { DistributionType::kNoRandom, 180.0f, 0.0f };
+  explicit_axis.roll_dist = { DistributionType::kNoRandom, 180.0f, 0.0f };
+  float data_explicit[3]{};
+  RandomSampler::SampleSphericalPointsSph(explicit_axis, data_explicit);
+
+  EXPECT_NEAR(data_folded[0], data_explicit[0], 1e-5f);  // lon (azimuth)
+  EXPECT_NEAR(data_folded[1], data_explicit[1], 1e-5f);  // lat
+  EXPECT_NEAR(data_folded[2], data_explicit[2], 1e-5f);  // roll: fold-linked +π
+}
+
+
+// Step 1a: Verify kGaussian rejection path flip=true/false balance for N(+90°, 180°).
+// Diagnostic probe: checks that ~50% of accepted samples trigger flip (roll ≈ π) vs no-flip
+// (roll ≈ 0). Uses roll_dist std=0 so roll_raw=0 and flip effect is exactly ±π.
+// Also verifies symmetry: lat mean for flip=true and flip=false groups are similar.
+TEST(FoldRollFlipBalanceTest, KGaussianFlipBalance) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomNumberGenerator;
+  using lumice::RandomSampler;
+  using lumice::math::kPi;
+
+  AxisDistribution axis;
+  axis.latitude_dist = { DistributionType::kGaussian, 90.0f, 180.0f };
+  axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };  // std=0: roll_raw always 0
+
+  constexpr int kN = 300'000;
+  constexpr uint32_t kSeeds[] = { 42, 123, 999 };
+  constexpr int kNTotal = kN * 3;
+
+  std::vector<float> data(kN * 3);
+  double phi_sum_flip = 0.0;
+  double phi_sum_noflip = 0.0;
+  int count_flip = 0;
+  int count_noflip = 0;
+
+  for (uint32_t seed : kSeeds) {
+    RandomNumberGenerator::GetInstance().SetSeed(seed);
+    RandomSampler::SampleSphericalPointsSph(axis, data.data(), kN);
+    for (int i = 0; i < kN; i++) {
+      float roll = data[i * 3 + 2];
+      float lat = data[i * 3 + 1];
+      bool is_flip = (std::abs(roll - kPi) < 0.001f);
+      if (is_flip) {
+        phi_sum_flip += lat;
+        count_flip++;
+      } else {
+        phi_sum_noflip += lat;
+        count_noflip++;
+      }
+    }
+  }
+
+  float flip_frac = static_cast<float>(count_flip) / kNTotal;
+  // For N(90°, 180°) + cos-rejection, flip fraction ≈ 50% by distribution symmetry.
+  // Wide tolerance [30%, 70%]: only fails if flip is clearly broken (e.g., always 0%).
+  EXPECT_GE(flip_frac, 0.30f) << "flip fraction unexpectedly low: " << flip_frac;
+  EXPECT_LE(flip_frac, 0.70f) << "flip fraction unexpectedly high: " << flip_frac;
+
+  if (count_flip > 0 && count_noflip > 0) {
+    auto phi_mean_flip = static_cast<float>(phi_sum_flip / count_flip);
+    auto phi_mean_noflip = static_cast<float>(phi_sum_noflip / count_noflip);
+    // flip=true and flip=false groups have symmetric lat distributions; means should match.
+    EXPECT_NEAR(phi_mean_flip, phi_mean_noflip, 0.02f) << "flip vs no-flip lat mean unexpectedly different";
+  }
+}
+
+
+// Step 1b: Directly verify flip transmission for axis_neg (N(-90°, 180°)) vs axis_pos (N(+90°, 180°)).
+// AC#3 direct test: flip_neg_frac counts roll≈π samples from axis_neg.
+// - Bug present (flip not transmitted): flip_neg_frac ≈ 0% (all roll=0)
+// - Bug absent (flip correctly transmitted): flip_neg_frac > 40% (majority of axis_neg triggers flip)
+// Run this test BEFORE Step 3 fixes to capture the baseline failure value in progress.md.
+TEST(FoldRollFlipBalanceTest, AxisDistEquivalence) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomNumberGenerator;
+  using lumice::RandomSampler;
+  using lumice::math::kPi;
+
+  // axis_pos: N(+90°, 180°) — std=180° covers full sphere, flip≈50%, matches user config
+  // (zenith=0 → latitude_mean=90 via from_json). Verifies flip is transmitted to roll.
+  AxisDistribution axis_pos;
+  axis_pos.latitude_dist = { DistributionType::kGaussian, +90.0f, 180.0f };
+  axis_pos.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis_pos.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };  // std=0: roll_raw=0
+
+  // axis_neg: N(-90°, 180°) — std=180° covers full sphere, flip≈50% (symmetric to axis_pos)
+  AxisDistribution axis_neg;
+  axis_neg.latitude_dist = { DistributionType::kGaussian, -90.0f, 180.0f };
+  axis_neg.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis_neg.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };
+
+  constexpr int kN = 50'000;
+  std::vector<float> data_pos(kN * 3);
+  std::vector<float> data_neg(kN * 3);
+
+  RandomNumberGenerator::GetInstance().SetSeed(42);
+  RandomSampler::SampleSphericalPointsSph(axis_pos, data_pos.data(), kN);
+
+  RandomNumberGenerator::GetInstance().SetSeed(42);
+  RandomSampler::SampleSphericalPointsSph(axis_neg, data_neg.data(), kN);
+
+  int flip_pos = 0;
+  int flip_neg = 0;
+  double lat_pos_sum = 0.0;
+  double lat_neg_sum = 0.0;
+  for (int i = 0; i < kN; i++) {
+    if (std::abs(data_pos[i * 3 + 2] - kPi) < 0.001f) {
+      flip_pos++;
+    }
+    if (std::abs(data_neg[i * 3 + 2] - kPi) < 0.001f) {
+      flip_neg++;
+    }
+    lat_pos_sum += std::abs(data_pos[i * 3 + 1]);
+    lat_neg_sum += std::abs(data_neg[i * 3 + 1]);
+  }
+
+  auto flip_pos_frac = static_cast<float>(flip_pos) / kN;
+  auto flip_neg_frac = static_cast<float>(flip_neg) / kN;
+
+  // Both N(+90°,180°) and N(-90°,180°) cover the full sphere with std=180°, so ~50% of samples
+  // cross the fold boundary and trigger flip=true regardless of the sign of the mean.
+  // Expected flip fraction: ≈ 49.9% (computed analytically from N(±90°,180°) + fold geometry).
+  // If flip is NOT transmitted to roll: all roll=0, both fractions ≈ 0% (regression failure).
+  EXPECT_GT(flip_pos_frac, 0.40f) << "axis_pos flip fraction too low — flip not transmitted to roll: " << flip_pos_frac;
+  EXPECT_LT(flip_pos_frac, 0.60f) << "axis_pos flip fraction unexpectedly high: " << flip_pos_frac;
+  EXPECT_GT(flip_neg_frac, 0.40f) << "axis_neg flip fraction too low — flip not transmitted to roll: " << flip_neg_frac;
+  EXPECT_LT(flip_neg_frac, 0.60f) << "axis_neg flip fraction unexpectedly high: " << flip_neg_frac;
+
+  // |lat| mean should be similar between pos and neg (symmetric distributions).
+  auto lat_pos_mean = static_cast<float>(lat_pos_sum / kN);
+  auto lat_neg_mean = static_cast<float>(lat_neg_sum / kN);
+  // SE ≈ 0.005 rad; tolerance 0.02 ≈ 4σ; false positive rate < 0.006%.
+  EXPECT_NEAR(lat_pos_mean, lat_neg_mean, 0.02f)
+      << "|lat| mean differs: pos=" << lat_pos_mean << " neg=" << lat_neg_mean;
+}
+
+
+// Step 4 verification: kZigzag abs() is intentional — phi always ≥ 0, fold never triggered.
+// Verifies that SampleSphericalPointsSph with kZigzag negative mean produces phi ≥ 0 and flip=false.
+TEST(FoldRollFlipBalanceTest, ZigzagNegativeMeanNoFold) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomNumberGenerator;
+  using lumice::RandomSampler;
+  using lumice::math::kPi;
+
+  // kZigzag with negative mean: |std·sin(2πU) + mean|; abs() ensures phi ≥ 0 always.
+  AxisDistribution axis;
+  axis.latitude_dist = { DistributionType::kZigzag, -30.0f, 10.0f };
+  axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };  // roll_raw=0
+
+  constexpr int kN = 10'000;
+  std::vector<float> data(kN * 3);
+  RandomNumberGenerator::GetInstance().SetSeed(77);
+  RandomSampler::SampleSphericalPointsSph(axis, data.data(), kN);
+
+  int flip_count = 0;
+  int negative_lat_count = 0;
+  for (int i = 0; i < kN; i++) {
+    if (std::abs(data[i * 3 + 2] - kPi) < 0.001f) {
+      flip_count++;
+    }
+    if (data[i * 3 + 1] < 0.0f) {
+      negative_lat_count++;
+    }
+  }
+  // kZigzag abs() ensures phi ≥ 0 for |mean|=30 > std=10, so flip=false for all samples.
+  EXPECT_EQ(flip_count, 0) << "kZigzag negative mean should never trigger fold (phi always ≥ 0)";
+  EXPECT_EQ(negative_lat_count, 0) << "kZigzag negative mean should always produce lat ≥ 0";
+}
+
+// Step 5 verification: Rayleigh path for latitude_mean < 0 must fold phi to positive and set flip=true.
+// Verifies that south-pole Rayleigh (tiny σ, mean=-89.5°) transmits flip=true to roll (roll≈π).
+TEST(FoldRollFlipBalanceTest, RayleighNegativeMean) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomSampler;
+  using lumice::math::kPi;
+
+  AxisDistribution axis;
+  // latitude_mean=-89.9°, std=0.01° → colatitude=0.1°, 3σ=0.03° → total<0.5° → triggers Rayleigh path
+  axis.latitude_dist = { DistributionType::kGaussian, -89.9f, 0.01f };
+  axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };
+
+  constexpr int kN = 5'000;
+  std::vector<float> data(kN * 3);
+  lumice::RandomNumberGenerator::GetInstance().SetSeed(42);
+  RandomSampler::SampleSphericalPointsSph(axis, data.data(), kN);
+
+  int flip_count = 0;
+  int negative_lat_count = 0;
+  for (int i = 0; i < kN; i++) {
+    float lat = data[i * 3 + 1];
+    float roll = data[i * 3 + 2];
+    // flip=true is signalled by roll≈π (roll_dist std=0 → roll is exactly 0 or π)
+    if (std::abs(roll - kPi) < 0.01f) {
+      flip_count++;
+    }
+    if (lat < 0.0f) {
+      negative_lat_count++;
+    }
+  }
+
+  float flip_frac = static_cast<float>(flip_count) / kN;
+  // All samples near south pole → flip=true for all → roll≈π
+  EXPECT_GT(flip_frac, 0.99f) << "Rayleigh south-pole path must set flip=true for all samples";
+  EXPECT_EQ(negative_lat_count, 0) << "Rayleigh south-pole path must fold phi to positive";
+}
+
+// Step 5 regression: positive-mean Rayleigh (north pole) must NOT trigger flip.
+// Verifies the new `if (latitude_mean_rad < 0)` branch does not affect latitude_mean >= 0.
+TEST(FoldRollFlipBalanceTest, RayleighPositiveMean) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomSampler;
+  using lumice::math::kPi;
+
+  AxisDistribution axis;
+  // latitude_mean=+89.9°, std=0.01° → triggers Rayleigh path (near north pole, tiny σ)
+  axis.latitude_dist = { DistributionType::kGaussian, 89.9f, 0.01f };
+  axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };
+
+  constexpr int kN = 5'000;
+  std::vector<float> data(kN * 3);
+  lumice::RandomNumberGenerator::GetInstance().SetSeed(43);
+  RandomSampler::SampleSphericalPointsSph(axis, data.data(), kN);
+
+  int flip_count = 0;
+  int negative_lat_count = 0;
+  for (int i = 0; i < kN; i++) {
+    float lat = data[i * 3 + 1];
+    float roll = data[i * 3 + 2];
+    if (std::abs(roll - kPi) < 0.01f) {
+      flip_count++;
+    }
+    if (lat < 0.0f) {
+      negative_lat_count++;
+    }
+  }
+
+  // All samples near north pole → flip=false for all → roll≈0
+  EXPECT_EQ(flip_count, 0) << "Rayleigh north-pole path must not set flip=true";
+  EXPECT_EQ(negative_lat_count, 0) << "Rayleigh north-pole path must produce positive phi";
 }
 
 
