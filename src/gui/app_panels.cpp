@@ -9,6 +9,7 @@
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
+#include "gui/gui_ev_auto.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/panels.hpp"
@@ -484,6 +485,19 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     }
     SliderWithInput("EV##display", &r.exposure_offset, -6.0f, 6.0f, "%.1f");
 
+    ImGui::Checkbox("Auto EV##display", &g_state.auto_ev_enabled);
+    if (g_state.auto_ev_enabled) {
+      ImGui::SameLine();
+      if (g_state.p99_raw_y > 0.0f) {
+        ImGui::TextDisabled("(+%.2f EV)", g_state.ev_auto);
+      } else {
+        ImGui::TextDisabled("(no data)");
+      }
+      if (SliderWithInput("Target##autoev", &g_state.target_white, 100.0f, 240.0f, "%.0f")) {
+        g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
+      }
+    }
+
     ImGui::SeparatorText("Aspect Ratio");
     int preset_idx = static_cast<int>(g_state.aspect_preset);
     const char* preview_label = kAspectPresetNames[preset_idx];
@@ -731,7 +745,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.view_proj.azimuth = rc.azimuth;
     pp.view_proj.roll = EffectiveRollForLens(rc.lens_type, rc.roll);
     pp.view_proj.visible = rc.visible;
-    pp.exposure.intensity_factor = std::pow(2.0f, rc.exposure_offset);
+    float ev_total = rc.exposure_offset + (g_state.auto_ev_enabled ? g_state.ev_auto : 0.0f);
+    pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
     pp.exposure.intensity_scale =
         g_state.snapshot_intensity > 0 ? pp.exposure.intensity_factor / g_state.snapshot_intensity : 0.0f;
     // Overlap parameters for dual fisheye texture sampling.

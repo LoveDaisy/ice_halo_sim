@@ -451,6 +451,12 @@ struct GuiState {
   int norm_mode = 0;                       // 0=absolute, 1=adaptive (not exposed in UI)
   unsigned long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)
 
+  // Auto-EV runtime state (display layer only, not persisted, not in ConfigSnapshot)
+  float p99_raw_y = 0.0f;        // Un-normalized P99 Y value; updated each texture upload
+  float ev_auto = 0.0f;          // P99-anchored auto-EV in stops; recomputed from p99_raw_y
+  bool auto_ev_enabled = false;  // Display panel toggle
+  float target_white = 200.0f;   // Target P99 brightness on 0-255 sRGB scale
+
   // Last committed config snapshot (for Revert — config fields only, no runtime state).
   //
   // Field-sync scope (audited 2026-04):

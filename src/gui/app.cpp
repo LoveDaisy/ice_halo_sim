@@ -15,6 +15,7 @@
 
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/file_io.hpp"
+#include "gui/gui_ev_auto.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/window_sizing.hpp"
 #include "util/color_space.hpp"
@@ -782,6 +783,9 @@ void SyncFromPoller() {
     g_state.snapshot_intensity = data.snapshot_intensity;
     g_state.effective_pixels = data.effective_pixels;
     g_state.texture_upload_count++;
+    g_state.p99_raw_y = ComputeP99Y(data.xyz_data);
+    g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
+    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p99_raw_y={:.6f}, ev_auto={:.3f}", g_state.p99_raw_y, g_state.ev_auto);
   }
 }
 
