@@ -39,6 +39,7 @@ ScreenshotCapture g_capture;
 ExportTestState g_export_test;
 BgOverlayTestState g_bg_test;
 LeftPanelCaptureState g_left_panel_capture;
+AutoEvExportState g_auto_ev_export;
 int g_core_log_level = LUMICE_LOG_INFO;
 int g_gui_log_level = LUMICE_LOG_INFO;
 bool g_enable_visible = false;
@@ -295,6 +296,7 @@ int main(int argc, char** argv) {
   RegisterOverlayLabelTests(engine);
   RegisterFaceNumberOverlayTests(engine);
   RegisterCrystalRendererTests(engine);
+  RegisterAutoEvRegressionTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete
@@ -414,6 +416,16 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[LeftPanelCapture] ReadbackGlRegionToRgba failed (rx=%d ry=%d rw=%d rh=%d fb=%dx%d)\n", rx, ry,
                 rw, rh, fb_w, fb_h);
       }
+    }
+
+    // Auto-EV preview export hook (task-visual-regression).
+    // ExportPreviewPng renders to a separate off-screen FBO, so placement here
+    // (after RenderDrawData, before SwapBuffers) is safe — no default-framebuffer
+    // dependency unlike the left-panel capture above.
+    if (g_auto_ev_export.requested.exchange(false)) {
+      g_auto_ev_export.result =
+          gui::ExportPreviewPng(g_auto_ev_export.export_path, gui::g_preview, g_auto_ev_export.custom_vp);
+      g_auto_ev_export.done.store(true);
     }
 
     glfwSwapBuffers(window);

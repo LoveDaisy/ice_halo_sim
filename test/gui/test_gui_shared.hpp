@@ -2,6 +2,7 @@
 #define LUMICE_TEST_GUI_SHARED_HPP
 
 #include <atomic>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -74,6 +75,22 @@ struct LeftPanelCaptureState {
   }
 };
 
+struct AutoEvExportState {
+  gui::PreviewViewport custom_vp;
+  std::filesystem::path export_path;
+  std::atomic<bool> requested{ false };
+  std::atomic<bool> done{ false };
+  bool result = false;
+
+  void Reset() {
+    custom_vp = gui::PreviewViewport{};
+    export_path.clear();
+    requested.store(false);
+    done.store(false);
+    result = false;
+  }
+};
+
 struct BgOverlayTestState {
   std::string bg_image_path;
   bool bg_upload_requested = false;
@@ -100,6 +117,7 @@ extern ScreenshotCapture g_capture;
 extern ExportTestState g_export_test;
 extern BgOverlayTestState g_bg_test;
 extern LeftPanelCaptureState g_left_panel_capture;
+extern AutoEvExportState g_auto_ev_export;
 extern std::vector<unsigned char> g_synth_tex;
 extern int g_core_log_level;
 extern int g_gui_log_level;
@@ -146,5 +164,6 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine);
 void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
 void RegisterCrystalRendererTests(ImGuiTestEngine* engine);
+void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP
