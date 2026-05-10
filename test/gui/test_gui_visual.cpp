@@ -595,6 +595,11 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
     };
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      // Disable auto-EV so ev_total stays at exposure_offset throughout: both the
+      // live capture (Phase 2) and the reloaded capture (Phase 5) would otherwise
+      // diverge because ev_auto is runtime-only (not persisted) and resets to 0 on
+      // load while the live simulation produces a non-zero value.
+      gui::g_state.auto_ev_enabled = false;
 
       // --- Phase 1: Start simulation and wait for texture data ---
       gui::g_server = LUMICE_CreateServer();
