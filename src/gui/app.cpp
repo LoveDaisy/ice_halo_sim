@@ -781,11 +781,20 @@ void SyncFromPoller() {
                     data.texture_ray_count, data.snapshot_intensity, data.effective_pixels, data.intensity_factor);
     g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
     g_state.snapshot_intensity = data.snapshot_intensity;
+    g_state.unfiltered_snapshot_intensity = data.unfiltered_snapshot_intensity;
     g_state.effective_pixels = data.effective_pixels;
     g_state.texture_upload_count++;
-    g_state.p99_raw_y = ComputeP99Y(data.xyz_data);
-    g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
-    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p99_raw_y={:.6f}, ev_auto={:.3f}", g_state.p99_raw_y, g_state.ev_auto);
+    if (g_state.auto_ev_enabled) {
+      // ON: use filtered data (existing behavior)
+      g_state.p99_raw_y = ComputeP99Y(data.xyz_data);
+      g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
+    } else {
+      // OFF: use unfiltered data for physically additive EV anchor
+      g_state.p99_raw_y = ComputeP99Y(data.unfiltered_xyz_data);
+      g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.unfiltered_snapshot_intensity, g_state.target_white);
+    }
+    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p99_raw_y={:.6f}, ev_auto={:.3f}, mode={}", g_state.p99_raw_y,
+                    g_state.ev_auto, g_state.auto_ev_enabled ? "ON(filtered)" : "OFF(unfiltered)");
   }
 }
 

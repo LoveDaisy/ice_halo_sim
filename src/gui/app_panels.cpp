@@ -486,6 +486,9 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     SliderWithInput("EV##display", &r.exposure_offset, -6.0f, 6.0f, "%.1f");
 
     ImGui::Checkbox("Adaptive Brightness##display", &g_state.auto_ev_enabled);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+      ImGui::SetTooltip("Off: filter outputs are physically comparable.\nOn: each filter adapts to its visible rays.");
+    }
     if (g_state.auto_ev_enabled) {
       ImGui::SameLine();
       if (g_state.p99_raw_y > 0.0f) {

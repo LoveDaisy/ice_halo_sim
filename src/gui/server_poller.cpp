@@ -203,9 +203,18 @@ void ServerPoller::PollOnce() {
         size_t float_count = static_cast<size_t>(xyz_results[0].img_width) * xyz_results[0].img_height * 3;
         staged_.xyz_data.resize(float_count);
         std::memcpy(staged_.xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
+        staged_.unfiltered_xyz_data.resize(float_count);
+        if (xyz_results[0].unfiltered_xyz_buffer != nullptr) {
+          std::memcpy(staged_.unfiltered_xyz_data.data(), xyz_results[0].unfiltered_xyz_buffer,
+                      float_count * sizeof(float));
+        } else {
+          // Fallback: unfiltered not yet available; use filtered to preserve ON-mode behavior.
+          std::memcpy(staged_.unfiltered_xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
+        }
         staged_.texture_width = xyz_results[0].img_width;
         staged_.texture_height = xyz_results[0].img_height;
         staged_.snapshot_intensity = xyz_results[0].snapshot_intensity;
+        staged_.unfiltered_snapshot_intensity = xyz_results[0].unfiltered_snapshot_intensity;
         staged_.intensity_factor = xyz_results[0].intensity_factor;
         staged_.effective_pixels = xyz_results[0].effective_pixels;
         staged_.has_new_texture = true;

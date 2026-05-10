@@ -558,6 +558,9 @@ TEST_F(ServerLifecycleApi, GetRawXyzResults) {
   EXPECT_EQ(out[0].img_height, 400);
   EXPECT_NE(out[0].xyz_buffer, nullptr);
   EXPECT_NE(out[0].has_valid_data, 0);
+  // AC-2: unfiltered buffer is populated after simulation
+  EXPECT_NE(out[0].unfiltered_xyz_buffer, nullptr);
+  EXPECT_GT(out[0].unfiltered_snapshot_intensity, 0.0f);
 
   // Sentinel: xyz_buffer == NULL marks end of array
   EXPECT_EQ(out[1].xyz_buffer, nullptr);
