@@ -485,7 +485,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     }
     SliderWithInput("EV##display", &r.exposure_offset, -6.0f, 6.0f, "%.1f");
 
-    ImGui::Checkbox("Auto EV##display", &g_state.auto_ev_enabled);
+    ImGui::Checkbox("Adaptive Brightness##display", &g_state.auto_ev_enabled);
     if (g_state.auto_ev_enabled) {
       ImGui::SameLine();
       if (g_state.p99_raw_y > 0.0f) {
