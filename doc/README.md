@@ -11,6 +11,7 @@ doc/
 ├── README.md / README_zh.md                         # Documentation index (English/Chinese)
 ├── architecture.md / _zh.md                         # System architecture
 ├── configuration.md / _zh.md                        # Configuration guide
+├── adaptive-brightness.md / .zh.md                  # Adaptive Brightness: algorithm, modes, additivity
 ├── raypath-symmetry.md / _zh.md                     # Raypath symmetry: P/B/D filter semantics
 ├── c_api.md / _zh.md                                # C API reference
 ├── developer-guide.md / _zh.md                      # Developer guide
@@ -38,6 +39,12 @@ For users of this project:
   - Detailed configuration options and defaults
   - Validation rules
   - Common configuration errors and solutions
+
+- **[Adaptive Brightness](adaptive-brightness.md)**: Automatic EV normalization in the GUI
+  - P99-anchored algorithm and target-white mapping
+  - Off mode: shared EV scale, XYZ linear additivity for complementary filters
+  - On mode: per-filter adaptive EV for faint or isolated arcs
+  - sRGB gamma caveat and tooltip wording rationale
 
 - **[Raypath Symmetry](raypath-symmetry.md)**: P, B, D filter toggle semantics
   - Two sources of raypath equivalence (crystal geometry vs orientation distribution)
