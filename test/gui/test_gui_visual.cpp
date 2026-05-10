@@ -116,7 +116,7 @@ void RegisterScreenshotTests(ImGuiTestEngine* engine) {
       IM_CHECK(g_capture.capture_done);
 
       // Load reference image
-      const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_prism_default.png";
+      const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_prism_default.jpg";
       std::vector<unsigned char> ref_data;
       int ref_w = 0;
       int ref_h = 0;
@@ -189,7 +189,7 @@ void RegisterScreenshotTests(ImGuiTestEngine* engine) {
                                           g_left_panel_capture.height);
       lumice::test::SavePng(tmp_path, rgb.data(), g_left_panel_capture.width, g_left_panel_capture.height, 3);
 
-      const char* ref_path = LUMICE_TEST_REF_DIR "/left_panel_default.png";
+      const char* ref_path = LUMICE_TEST_REF_DIR "/left_panel_default.jpg";
       std::vector<unsigned char> ref_data;
       int ref_w = 0;
       int ref_h = 0;
@@ -250,7 +250,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       lumice::test::SavePng(tmp_path, rgb.data(), g_capture.width, g_capture.height, 3);
 
       // Load reference and compare
-      const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_pyramid_default.png";
+      const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_pyramid_default.jpg";
       std::vector<unsigned char> ref_data;
       int ref_w = 0, ref_h = 0, ref_ch = 0;
       bool loaded = lumice::test::LoadPng(ref_path, ref_data, ref_w, ref_h, ref_ch);
@@ -295,7 +295,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       auto rgb = lumice::test::StripAlpha(g_capture.pixels.data(), g_capture.width, g_capture.height);
       lumice::test::SavePng(tmp_path, rgb.data(), g_capture.width, g_capture.height, 3);
 
-      const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_wireframe.png";
+      const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_wireframe.jpg";
       std::vector<unsigned char> ref_data;
       int ref_w = 0, ref_h = 0, ref_ch = 0;
       bool loaded = lumice::test::LoadPng(ref_path, ref_data, ref_w, ref_h, ref_ch);
@@ -339,7 +339,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       auto rgb = lumice::test::StripAlpha(g_capture.pixels.data(), g_capture.width, g_capture.height);
       lumice::test::SavePng(tmp_path, rgb.data(), g_capture.width, g_capture.height, 3);
 
-      const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_shaded.png";
+      const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_shaded.jpg";
       std::vector<unsigned char> ref_data;
       int ref_w = 0, ref_h = 0, ref_ch = 0;
       bool loaded = lumice::test::LoadPng(ref_path, ref_data, ref_w, ref_h, ref_ch);

@@ -69,13 +69,26 @@ static bool CheckAgainstReference(const char* group, const char* tag, const std:
     return false;
   }
 
-  if (cap_w != ref_w || cap_h != ref_h || cap_ch != ref_ch) {
+  if (cap_w != ref_w || cap_h != ref_h) {
     fprintf(stderr, "[%s] %s: size mismatch cap=%dx%dx%d ref=%dx%dx%d\n", group, tag, cap_w, cap_h, cap_ch, ref_w,
             ref_h, ref_ch);
     return false;
   }
 
-  double psnr = lumice::test::ComputePsnr(cap_data.data(), ref_data.data(), ref_w, ref_h, ref_ch);
+  // When ref is RGB (e.g. JPEG) and capture is RGBA, strip alpha before comparison.
+  const unsigned char* cmp_ptr = cap_data.data();
+  std::vector<unsigned char> converted;
+  int cmp_channels = cap_ch;
+  if (ref_ch == 3 && cap_ch == 4) {
+    converted = lumice::test::StripAlpha(cap_data.data(), cap_w, cap_h);
+    cmp_ptr = converted.data();
+    cmp_channels = 3;
+  } else if (ref_ch != cap_ch) {
+    fprintf(stderr, "[%s] %s: channel mismatch cap=%d ref=%d\n", group, tag, cap_ch, ref_ch);
+    return false;
+  }
+
+  double psnr = lumice::test::ComputePsnr(cmp_ptr, ref_data.data(), ref_w, ref_h, cmp_channels);
   fprintf(stderr, "[%s] %s: PSNR=%.2f dB (threshold=%.1f dB)\n", group, tag, psnr, threshold);
   if (psnr < threshold) {
     fprintf(stderr, "[%s] %s: PSNR below threshold — possible regression\n", group, tag);
@@ -160,8 +173,8 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
       // references are missing (allowing a single-pass reference generation).
       const std::string path_off = std::string("/tmp/lumice_auto_ev_") + scene.name + "_off.png";
       const std::string path_on = std::string("/tmp/lumice_auto_ev_") + scene.name + "_on.png";
-      const std::string ref_off = std::string(LUMICE_TEST_REF_DIR) + "/auto_ev_" + scene.name + "_off.png";
-      const std::string ref_on = std::string(LUMICE_TEST_REF_DIR) + "/auto_ev_" + scene.name + "_on.png";
+      const std::string ref_off = std::string(LUMICE_TEST_REF_DIR) + "/auto_ev_" + scene.name + "_off.jpg";
+      const std::string ref_on = std::string(LUMICE_TEST_REF_DIR) + "/auto_ev_" + scene.name + "_on.jpg";
       IM_CHECK(RequestAndWaitExport(ctx, vp_off, path_off));
       IM_CHECK(RequestAndWaitExport(ctx, vp_on, path_on));
 
