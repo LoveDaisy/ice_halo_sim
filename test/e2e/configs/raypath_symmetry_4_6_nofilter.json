@@ -16,6 +16,11 @@
           "type": "uniform",
           "mean": 0,
           "std": 360
+        },
+        "roll": {
+          "type": "gauss",
+          "mean": 0,
+          "std": 0
         }
       }
     }

@@ -25,8 +25,8 @@ if HAS_PILLOW:
 CONFIGS_DIR = Path(__file__).resolve().parent / "configs"
 
 # Threshold (dB) calibrated via 3 runs of min(PSNR(4-6, 7-3)) − 3 dB.
-# Calibration on 2026-05-09: runs = [24.62, 24.52, 24.66] dB, min = 24.52 dB.
-EQUIVALENCE_PSNR_THRESHOLD = 21.5
+# Calibration on 2026-05-10: runs = [26.73, 26.80, 26.69] dB, min = 26.69 dB.
+EQUIVALENCE_PSNR_THRESHOLD = 23.5
 
 
 class TestRaypathEquivalence(LumiceTestCase):
