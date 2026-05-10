@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -27,8 +28,8 @@ static const AutoEvScene kScenes[] = {
   {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 15.0},
   {"parhelion",  LUMICE_E2E_CONFIG_DIR "/parhelion.json",                         256, 256, 15.0},
   {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 15.0},
-  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              128, 128, 15.0},
-  {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     128, 128, 15.0},
+  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 15.0},
+  {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 15.0},
 };
 // clang-format on
 static constexpr int kSceneCount = 9;
@@ -92,15 +93,32 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
       const auto& scene = kScenes[ctx->Test->ArgVariant];
       ResetTestState();
 
-      // 1. Start simulation via CommitConfigFromFile (bypasses GUI state serialization)
+      // 1. Create server and set log level before DoRun
       gui::g_server = LUMICE_CreateServer();
       LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
-      LUMICE_CommitConfigFromFile(gui::g_server, scene.config_path);
-      gui::g_server_poller.Start(gui::g_server);
-      gui::g_state.sim_state = gui::GuiState::SimState::kSimulating;
+
+      // 2. Read config JSON → DeserializeFromJson → fills g_state
+      // DeserializeFromJson does state = GuiState{} internally (full reset, file_io.cpp:827);
+      // layers are populated from crystal/scene arrays in the e2e JSON.
+      {
+        std::ifstream in(scene.config_path);
+        IM_CHECK(in.is_open());
+        std::string json_str((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        IM_CHECK(gui::DeserializeFromJson(json_str, gui::g_state));
+      }
+
+      // 3. Force sim_resolution_index=0 (512) to speed up CI without changing GUI option count
+      gui::g_state.renderer.sim_resolution_index = 0;
+
+      // 4. DoRun → triggers SerializeCoreConfig (dual-fisheye override) → starts poller
+      gui::DoRun();
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)gui::GuiState::SimState::kSimulating);
+
+      // 5. Reset counter so the wait loop below starts from 0
+      // (DeserializeFromJson already did a full reset, but DoRun may trigger callbacks)
       gui::g_state.texture_upload_count = 0;
 
-      // 2. Wait for stable data (texture_upload_count >= 3).
+      // 6. Wait for stable data (texture_upload_count >= 3).
       // rp46 scenes use a 60s timeout because ray path filtering makes photons sparse.
       const int timeout_frames = (ctx->Test->ArgVariant >= 7) ? 60 * 60 : 30 * 60;
       for (int i = 0; i < timeout_frames && gui::g_state.texture_upload_count < 3; ++i) {
@@ -108,24 +126,25 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
       }
       IM_CHECK_GE((int)gui::g_state.texture_upload_count, 3);
 
-      // 3. Stop simulation; ev_auto and snapshot_intensity remain in g_state (F2/F3)
+      // 7. Stop simulation; ev_auto and snapshot_intensity remain in g_state
       gui::g_server_poller.Stop();
       LUMICE_StopServer(gui::g_server);
       LUMICE_DestroyServer(gui::g_server);
       gui::g_server = nullptr;
       gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
 
-      // 4. Capture exposure parameters
+      // 8. Capture exposure parameters
       const float si = gui::g_state.snapshot_intensity;
       const float ev = gui::g_state.ev_auto;
       IM_CHECK_GT(si, 0.0f);
 
-      // 5. Build viewports: same projection, differing only in exposure
+      // 9. Build viewports: same projection, differing only in exposure
+      // view_proj mirrors app_panels.cpp:742-747 via helper; source mirrors 753-754.
+      const auto& rc = gui::g_state.renderer;
       gui::PreviewViewport vp_off{};
-      vp_off.params.view_proj.lens_type = gui::kLensTypeFisheyeEqualArea;
-      vp_off.params.view_proj.fov = 120.0f;
-      vp_off.params.view_proj.elevation = 20.0f;
-      vp_off.params.view_proj.visible = gui::kVisibleFull;
+      vp_off.params.view_proj = gui::BuildPreviewViewProjFromRenderer(rc);
+      vp_off.params.source.max_abs_dz = gui::kDualFisheyeOverlap;
+      vp_off.params.source.r_scale = 1.0f / std::sqrt(1.0f + gui::kDualFisheyeOverlap);
       vp_off.params.exposure.intensity_factor = 1.0f;
       vp_off.params.exposure.intensity_scale = 1.0f / si;
       vp_off.vp_w = scene.render_w;
@@ -136,7 +155,7 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
       vp_on.params.exposure.intensity_factor = ev_factor;
       vp_on.params.exposure.intensity_scale = ev_factor / si;
 
-      // 6. Export both off and on captures before checking references.
+      // 10. Export both off and on captures before checking references.
       // Exports happen first so that both /tmp images are generated even when
       // references are missing (allowing a single-pass reference generation).
       const std::string path_off = std::string("/tmp/lumice_auto_ev_") + scene.name + "_off.png";
@@ -146,7 +165,7 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
       IM_CHECK(RequestAndWaitExport(ctx, vp_off, path_off));
       IM_CHECK(RequestAndWaitExport(ctx, vp_on, path_on));
 
-      // 7. Compare against references (deferred until both exports are done)
+      // 11. Compare against references (deferred until both exports are done)
       IM_CHECK(CheckAgainstReference("auto_ev", (std::string(scene.name) + "_off").c_str(), path_off, ref_off,
                                      scene.psnr_threshold));
       IM_CHECK(CheckAgainstReference("auto_ev", (std::string(scene.name) + "_on").c_str(), path_on, ref_on,

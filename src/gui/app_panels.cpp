@@ -739,12 +739,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.vp_w = static_cast<int>(panel_width * scale_x);
     g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
     auto& pp = g_preview_vp.params;
-    pp.view_proj.lens_type = rc.lens_type;
-    pp.view_proj.fov = rc.fov;
-    pp.view_proj.elevation = rc.elevation;
-    pp.view_proj.azimuth = rc.azimuth;
-    pp.view_proj.roll = EffectiveRollForLens(rc.lens_type, rc.roll);
-    pp.view_proj.visible = rc.visible;
+    pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
     float ev_total = rc.exposure_offset + (g_state.auto_ev_enabled ? g_state.ev_auto : 0.0f);
     pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
     pp.exposure.intensity_scale =
