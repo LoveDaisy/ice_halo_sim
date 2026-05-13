@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778637761643,
+  "lastUpdate": 1778637763369,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -5839,6 +5839,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 71.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "940557be35656483ccb5c98a4312d48e7a6b8359",
+          "message": "Merge pull request #89 from LoveDaisy/feat/auto_ev\n\nfeat: Adaptive Brightness (P99-anchored auto-EV) for GUI",
+          "timestamp": "2026-05-13T09:57:49+08:00",
+          "tree_id": "503baee7a3d600f6b16282f53e78474e03be1b8a",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/940557be35656483ccb5c98a4312d48e7a6b8359"
+        },
+        "date": 1778637762990,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 84.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 72.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 72.7,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 67.5,
             "unit": "%"
           }
         ]
