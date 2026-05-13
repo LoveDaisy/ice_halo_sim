@@ -94,7 +94,10 @@ static bool CheckAgainstReference(const char* group, const char* tag, const std:
     fprintf(stderr, "[%s] %s: PSNR below threshold — possible regression\n", group, tag);
     return false;
   }
-  std::remove(tmp_path.c_str());
+  // g_keep_export_png is set by --keep-export-png; scripts/regen_gui_test_refs.py uses this flag.
+  if (!g_keep_export_png) {
+    std::remove(tmp_path.c_str());
+  }
   return true;
 }
 

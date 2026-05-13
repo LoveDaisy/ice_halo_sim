@@ -129,6 +129,7 @@ extern bool g_enable_log_panel;
 extern int g_dorun_delay_ms;
 extern int g_main_loop_restart_count;
 extern unsigned long g_main_loop_cumulative_rays;
+extern bool g_keep_export_png;
 
 // ========== Shared constants ==========
 
