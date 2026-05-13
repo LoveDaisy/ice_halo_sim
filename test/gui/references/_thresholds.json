@@ -1,0 +1,97 @@
+{
+  "generated_at": "2026-05-13T19:04:49",
+  "n_ref_runs": 10,
+  "n_calib_runs": 10,
+  "scenes": {
+    "color_off": {
+      "psnr_mean": 20.69,
+      "psnr_std": 0.0845,
+      "threshold": 20.0
+    },
+    "color_on": {
+      "psnr_mean": 18.452,
+      "psnr_std": 0.0945,
+      "threshold": 18.0
+    },
+    "cza_off": {
+      "psnr_mean": 31.444,
+      "psnr_std": 0.1597,
+      "threshold": 30.5
+    },
+    "cza_on": {
+      "psnr_mean": 35.63,
+      "psnr_std": 0.1363,
+      "threshold": 35.0
+    },
+    "filters_off": {
+      "psnr_mean": 19.694,
+      "psnr_std": 0.4109,
+      "threshold": 18.0
+    },
+    "filters_on": {
+      "psnr_mean": 24.839,
+      "psnr_std": 0.3379,
+      "threshold": 23.5
+    },
+    "halo_22_off": {
+      "psnr_mean": 19.176,
+      "psnr_std": 0.0921,
+      "threshold": 18.5
+    },
+    "halo_22_on": {
+      "psnr_mean": 17.011,
+      "psnr_std": 0.0898,
+      "threshold": 16.5
+    },
+    "multi_scat_off": {
+      "psnr_mean": 19.181,
+      "psnr_std": 0.0836,
+      "threshold": 18.5
+    },
+    "multi_scat_on": {
+      "psnr_mean": 16.929,
+      "psnr_std": 0.045,
+      "threshold": 16.5
+    },
+    "parhelion_off": {
+      "psnr_mean": 20.648,
+      "psnr_std": 0.0855,
+      "threshold": 20.0
+    },
+    "parhelion_on": {
+      "psnr_mean": 18.418,
+      "psnr_std": 0.0447,
+      "threshold": 18.0
+    },
+    "pyramid_off": {
+      "psnr_mean": 18.094,
+      "psnr_std": 0.2879,
+      "threshold": 17.0
+    },
+    "pyramid_on": {
+      "psnr_mean": 18.112,
+      "psnr_std": 0.1528,
+      "threshold": 17.5
+    },
+    "rp46_nof_off": {
+      "psnr_mean": 19.498,
+      "psnr_std": 0.1097,
+      "threshold": 19.0
+    },
+    "rp46_nof_on": {
+      "psnr_mean": 17.713,
+      "psnr_std": 0.074,
+      "threshold": 17.0
+    },
+    "rp46_off": {
+      "psnr_mean": 20.657,
+      "psnr_std": 0.0738,
+      "threshold": 20.0
+    },
+    "rp46_on": {
+      "psnr_mean": 30.173,
+      "psnr_std": 0.1867,
+      "threshold": 29.5
+    }
+  }
+}
