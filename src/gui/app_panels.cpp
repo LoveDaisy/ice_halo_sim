@@ -5,7 +5,6 @@
 #include <cstdio>
 #include <string>
 
-#include "config/render_config.hpp"
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
@@ -408,7 +407,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       }
       ImGui::EndCombo();
     }
-    float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
+    float max_fov = LUMICE_MaxFov(static_cast<LUMICE_LensType>(r.lens_type));
     ImGui::BeginDisabled(full_sky);
     SliderWithInput("FOV##view", &r.fov, 1.0f, max_fov, "%.0f");
     ImGui::EndDisabled();
@@ -712,7 +711,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   // Copy-model: GuiState always owns a single renderer, no vector/index bookkeeping needed.
   {
     auto& r = g_state.renderer;
-    float max_fov = MaxFov(static_cast<LensParam::LensType>(r.lens_type));
+    float max_fov = LUMICE_MaxFov(static_cast<LUMICE_LensType>(r.lens_type));
     r.fov = std::min(r.fov, max_fov);
     if (LensIsFullSky(r.lens_type)) {  // Full-sky lenses: force view angles to zero
       r.elevation = 0.0f;
@@ -842,7 +841,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       }
 
       if (is_hovered && io.MouseWheel != 0.0f) {
-        float fov_max = MaxFov(static_cast<LensParam::LensType>(rc.lens_type));
+        float fov_max = LUMICE_MaxFov(static_cast<LUMICE_LensType>(rc.lens_type));
         rc.fov -= io.MouseWheel * 5.0f;
         rc.fov = std::max(1.0f, std::min(fov_max, rc.fov));
       }

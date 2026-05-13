@@ -2,13 +2,19 @@
 #define LUMICE_GUI_RAYPATH_SEGMENTS_HPP
 
 #include <cctype>
+#include <cstdio>
 #include <string>
 #include <vector>
 
-#include "config/raypath_validation.hpp"
-#include "core/crystal_kind.hpp"
+#include "include/lumice.h"
 
 namespace lumice::gui {
+
+// Validation result for GUI raypath / face-number inputs.
+struct GuiValidationResult {
+  LUMICE_RaypathValidationState state;
+  std::string message;
+};
 
 // Trim ASCII whitespace from both ends of a string.
 inline std::string TrimRaypathSegment(const std::string& s) {
@@ -50,6 +56,44 @@ inline std::vector<std::string> SplitRaypathSegments(const std::string& text) {
   return out;
 }
 
+// Validate a single face-number text input. Unlike LUMICE_ValidateRaypathText,
+// rejects separators outright — entry/exit fields each take exactly one face number.
+// Message for kind-specific rejection contains "not legal on this crystal type"
+// so that ParseFaceNumberOrZero can distinguish it from a syntax error.
+inline GuiValidationResult GuiValidateFaceNumberText(const std::string& text, LUMICE_CrystalKind kind) {
+  GuiValidationResult r;
+  if (text.empty()) {
+    r.state = LUMICE_RAYPATH_INCOMPLETE;
+    return r;
+  }
+  if (text.size() > 3) {
+    r.state = LUMICE_RAYPATH_INVALID;
+    r.message = "face number out of range";
+    return r;
+  }
+  for (char c : text) {
+    if (c < '0' || c > '9') {
+      r.state = LUMICE_RAYPATH_INVALID;
+      r.message = "must be a single non-negative integer";
+      return r;
+    }
+  }
+  int face = std::stoi(text);
+  if (!LUMICE_IsLegalFace(LUMICE_CRYSTAL_PYRAMID, face)) {
+    r.state = LUMICE_RAYPATH_INVALID;
+    r.message = "Face " + std::to_string(face) + " is outside the legal range of any crystal";
+    return r;
+  }
+  if (!LUMICE_IsLegalFace(kind, face)) {
+    const char* kind_name = (kind == LUMICE_CRYSTAL_PRISM) ? "Prism" : "Pyramid";
+    r.state = LUMICE_RAYPATH_INVALID;
+    r.message = "Face " + std::to_string(face) + " is not legal on this crystal type (" + std::string(kind_name) + ")";
+    return r;
+  }
+  r.state = LUMICE_RAYPATH_VALID;
+  return r;
+}
+
 // Validate raypath text supporting the multi-segment ';' syntax.
 //
 // Job split (per plan):
@@ -59,23 +103,27 @@ inline std::vector<std::string> SplitRaypathSegments(const std::string& text) {
 //     trailing ';' or repeated ';' (with optional whitespace between) before
 //     calling the splitter, so inputs like ";3" / "3;" / "3;;5" are rejected
 //     up-front rather than relying on splitter output.
-//   - Each non-empty segment is then validated by the kind-aware single-segment
-//     validator from core (ValidateRaypathText overload).
+//   - Each non-empty segment is then validated by LUMICE_ValidateRaypathText.
 //   - Empty input → kValid (means "no filter").
 //   - Single-segment input (no ';') → delegates to the single-segment validator
 //     so existing behavior is preserved exactly (incl. kIncomplete states for
 //     trailing dashes / commas).
-inline RaypathValidationResult ValidateRaypathTextMultiSegment(const std::string& text, CrystalKind kind) {
-  RaypathValidationResult result;
+inline GuiValidationResult ValidateRaypathTextMultiSegment(const std::string& text, LUMICE_CrystalKind kind) {
+  GuiValidationResult result;
 
   if (text.empty()) {
-    result.state = RaypathValidation::kValid;
+    result.state = LUMICE_RAYPATH_VALID;
     return result;
   }
 
   // No ';' → preserve single-segment semantics.
   if (text.find(';') == std::string::npos) {
-    return ValidateRaypathText(text, kind);
+    char msg[256] = {};
+    LUMICE_RaypathValidationState seg_state = LUMICE_RAYPATH_VALID;
+    LUMICE_ValidateRaypathText(text.c_str(), kind, &seg_state, msg, sizeof(msg));
+    result.state = seg_state;
+    result.message = msg;
+    return result;
   }
 
   // Pre-flight: scan for leading / trailing / consecutive ';' (allowing
@@ -85,7 +133,7 @@ inline RaypathValidationResult ValidateRaypathTextMultiSegment(const std::string
   for (char c : text) {
     if (c == ';') {
       if (sep_pending) {
-        result.state = RaypathValidation::kInvalid;
+        result.state = LUMICE_RAYPATH_INVALID;
         result.message = "Empty raypath segment";
         return result;
       }
@@ -96,7 +144,7 @@ inline RaypathValidationResult ValidateRaypathTextMultiSegment(const std::string
   }
   // Trailing ';' (sep_pending still true after loop) or pure-whitespace input.
   if (sep_pending) {
-    result.state = RaypathValidation::kInvalid;
+    result.state = LUMICE_RAYPATH_INVALID;
     result.message = "Empty raypath segment";
     return result;
   }
@@ -108,19 +156,21 @@ inline RaypathValidationResult ValidateRaypathTextMultiSegment(const std::string
     ++idx;
     if (seg.empty()) {
       // Defensive — pre-flight should already have caught this.
-      result.state = RaypathValidation::kInvalid;
+      result.state = LUMICE_RAYPATH_INVALID;
       result.message = "Empty raypath segment " + std::to_string(idx);
       return result;
     }
-    auto r = ValidateRaypathText(seg, kind);
-    if (r.state != RaypathValidation::kValid) {
-      result.state = r.state;
-      result.message = "Segment " + std::to_string(idx) + ": " + r.message;
+    char msg[256] = {};
+    LUMICE_RaypathValidationState seg_state = LUMICE_RAYPATH_VALID;
+    LUMICE_ValidateRaypathText(seg.c_str(), kind, &seg_state, msg, sizeof(msg));
+    if (seg_state != LUMICE_RAYPATH_VALID) {
+      result.state = seg_state;
+      result.message = "Segment " + std::to_string(idx) + ": " + msg;
       return result;
     }
   }
 
-  result.state = RaypathValidation::kValid;
+  result.state = LUMICE_RAYPATH_VALID;
   return result;
 }
 

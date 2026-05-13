@@ -1,6 +1,8 @@
 #ifndef LUMICE_H_
 #define LUMICE_H_
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -30,6 +32,7 @@ typedef enum LUMICE_ErrorCode_ {
   LUMICE_ERR_INVALID_VALUE,
   LUMICE_ERR_FILE_NOT_FOUND,
   LUMICE_ERR_SERVER,
+  LUMICE_ERR_UNKNOWN,
 } LUMICE_ErrorCode;
 
 // =============== Log Levels ===============
@@ -301,6 +304,61 @@ typedef struct LUMICE_CrystalMesh_ {
 } LUMICE_CrystalMesh;
 
 LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* server, const char* crystal_json, LUMICE_CrystalMesh* out);
+
+// =============== Config ID Range ===============
+// Maximum value for LUMICE config IDs (matches core IdType = uint16_t max).
+// GUI code should clamp user-editable IDs to [0, LUMICE_MAX_ID].
+#define LUMICE_MAX_ID 65535
+
+// =============== Crystal Kind ===============
+// Coarse crystal classification used for raypath face-number validation.
+// GUI uses this to determine which face numbers are legal for a given crystal.
+typedef enum LUMICE_CrystalKind_ {
+  LUMICE_CRYSTAL_PRISM,    // Basal + prism lateral faces (1,2,3-8)
+  LUMICE_CRYSTAL_PYRAMID,  // All faces including upper/lower pyramidal (1,2,3-8,13-18,23-28)
+} LUMICE_CrystalKind;
+
+// Returns non-zero if `face` is a legal face number for the given crystal kind.
+int LUMICE_IsLegalFace(LUMICE_CrystalKind kind, int face);
+
+// =============== Raypath Validation ===============
+// Validation state for raypath text input (GUI border color + OK gate).
+typedef enum LUMICE_RaypathValidationState_ {
+  LUMICE_RAYPATH_VALID,       // All tokens valid; safe to submit
+  LUMICE_RAYPATH_INCOMPLETE,  // Trailing/leading separator; user still typing
+  LUMICE_RAYPATH_INVALID,     // Non-numeric tokens or illegal face numbers
+} LUMICE_RaypathValidationState;
+
+// Validate a raypath text string (dash- or comma-separated face indices) against
+// both syntax rules and face-number legality for the given crystal kind.
+// Used by GUI for raypath filter input validation.
+// out_msg: human-readable error description (empty on kValid/kIncomplete).
+//          Caller provides buffer; recommended size = 256.
+// Returns LUMICE_ERR_NULL_ARG if text, out_state, or out_msg is NULL.
+LUMICE_ErrorCode LUMICE_ValidateRaypathText(const char* text, LUMICE_CrystalKind kind,
+                                            LUMICE_RaypathValidationState* out_state, char* out_msg,
+                                            size_t msg_buf_size);
+
+// =============== Lens Type ===============
+// Lens projection type. Values match Core's LensParam::LensType enum (index 0-10).
+// Used by GUI to look up per-lens FOV limits without including config/render_config.hpp.
+typedef enum LUMICE_LensType_ {
+  LUMICE_LENS_LINEAR = 0,
+  LUMICE_LENS_FISHEYE_EQUAL_AREA = 1,
+  LUMICE_LENS_FISHEYE_EQUIDISTANT = 2,
+  LUMICE_LENS_FISHEYE_STEREOGRAPHIC = 3,
+  LUMICE_LENS_DUAL_FISHEYE_EQUAL_AREA = 4,
+  LUMICE_LENS_DUAL_FISHEYE_EQUIDISTANT = 5,
+  LUMICE_LENS_DUAL_FISHEYE_STEREOGRAPHIC = 6,
+  LUMICE_LENS_RECTANGULAR = 7,
+  LUMICE_LENS_FISHEYE_ORTHOGRAPHIC = 8,
+  LUMICE_LENS_DUAL_FISHEYE_ORTHOGRAPHIC = 9,
+  LUMICE_LENS_GLOBE = 10,
+} LUMICE_LensType;
+
+// Returns the maximum valid FOV (degrees) for the given lens type.
+// Used by GUI to clamp the FOV slider upper bound when the user switches lens type.
+float LUMICE_MaxFov(LUMICE_LensType type);
 
 #if !defined(_MSC_VER)
 #pragma GCC visibility pop

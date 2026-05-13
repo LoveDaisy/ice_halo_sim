@@ -50,63 +50,63 @@ TEST(RaypathSegments, SplitLeadingTrailingSeparators) {
 // ---- ValidateRaypathTextMultiSegment ----
 
 TEST(RaypathSegments, ValidateEmptyIsValid) {
-  auto r = ValidateRaypathTextMultiSegment("", CrystalKind::kPrism);
-  EXPECT_EQ(r.state, RaypathValidation::kValid);
+  auto r = ValidateRaypathTextMultiSegment("", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r.state, LUMICE_RAYPATH_VALID);
 }
 
 TEST(RaypathSegments, ValidateSingleSegmentDelegates) {
   // No ';' → must behave exactly like single-segment validator.
-  auto r = ValidateRaypathTextMultiSegment("3-1-5", CrystalKind::kPrism);
-  EXPECT_EQ(r.state, RaypathValidation::kValid);
+  auto r = ValidateRaypathTextMultiSegment("3-1-5", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r.state, LUMICE_RAYPATH_VALID);
 
-  auto r2 = ValidateRaypathTextMultiSegment("3-5-", CrystalKind::kPrism);
-  EXPECT_EQ(r2.state, RaypathValidation::kIncomplete);
+  auto r2 = ValidateRaypathTextMultiSegment("3-5-", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r2.state, LUMICE_RAYPATH_INCOMPLETE);
 
-  auto r3 = ValidateRaypathTextMultiSegment("abc", CrystalKind::kPrism);
-  EXPECT_EQ(r3.state, RaypathValidation::kInvalid);
+  auto r3 = ValidateRaypathTextMultiSegment("abc", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r3.state, LUMICE_RAYPATH_INVALID);
 }
 
 TEST(RaypathSegments, ValidateMultiSegmentValid) {
-  auto r = ValidateRaypathTextMultiSegment("3-5; 1-3", CrystalKind::kPrism);
-  EXPECT_EQ(r.state, RaypathValidation::kValid);
+  auto r = ValidateRaypathTextMultiSegment("3-5; 1-3", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r.state, LUMICE_RAYPATH_VALID);
 }
 
 TEST(RaypathSegments, ValidateLeadingSemicolonRejected) {
-  auto r = ValidateRaypathTextMultiSegment(";3", CrystalKind::kPrism);
-  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  auto r = ValidateRaypathTextMultiSegment(";3", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r.state, LUMICE_RAYPATH_INVALID);
 }
 
 TEST(RaypathSegments, ValidateTrailingSemicolonRejected) {
-  auto r = ValidateRaypathTextMultiSegment("3-5;", CrystalKind::kPrism);
-  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  auto r = ValidateRaypathTextMultiSegment("3-5;", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r.state, LUMICE_RAYPATH_INVALID);
 }
 
 TEST(RaypathSegments, ValidateConsecutiveSemicolonsRejected) {
-  auto r = ValidateRaypathTextMultiSegment("3;;5", CrystalKind::kPrism);
-  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  auto r = ValidateRaypathTextMultiSegment("3;;5", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r.state, LUMICE_RAYPATH_INVALID);
 }
 
 TEST(RaypathSegments, ValidateConsecutiveSemicolonsWithWhitespaceRejected) {
   // "; ;" in a multi-segment context is still empty between separators.
-  auto r = ValidateRaypathTextMultiSegment("3 ; ; 5", CrystalKind::kPrism);
-  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  auto r = ValidateRaypathTextMultiSegment("3 ; ; 5", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r.state, LUMICE_RAYPATH_INVALID);
 }
 
 TEST(RaypathSegments, ValidatePureSemicolonRejected) {
-  auto r = ValidateRaypathTextMultiSegment(";", CrystalKind::kPrism);
-  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  auto r = ValidateRaypathTextMultiSegment(";", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r.state, LUMICE_RAYPATH_INVALID);
 }
 
 TEST(RaypathSegments, ValidateOneInvalidSegmentRejected) {
   // Face 51 is outside any crystal's legal range.
-  auto r = ValidateRaypathTextMultiSegment("3-5; 51", CrystalKind::kPrism);
-  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  auto r = ValidateRaypathTextMultiSegment("3-5; 51", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r.state, LUMICE_RAYPATH_INVALID);
 }
 
 TEST(RaypathSegments, ValidateSegmentMixedSeparators) {
   // Both '-' and ',' are accepted within a segment (legacy comma-as-dash).
-  auto r = ValidateRaypathTextMultiSegment("3,5; 1-3", CrystalKind::kPrism);
-  EXPECT_EQ(r.state, RaypathValidation::kValid);
+  auto r = ValidateRaypathTextMultiSegment("3,5; 1-3", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r.state, LUMICE_RAYPATH_VALID);
 }
 
 // ---- ParseRaypathTextMultiSegment ----
