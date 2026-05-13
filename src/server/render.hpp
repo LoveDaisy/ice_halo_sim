@@ -34,9 +34,13 @@ class RenderConsumer : public IConsume {
   float short_pix_ = 0;
   float total_intensity_ = 0;
   float snapshot_intensity_ = 0;
+  float unfiltered_total_intensity_ = 0;
+  float unfiltered_snapshot_intensity_ = 0;
   int effective_pix_ = 0;  // Non-zero pixel count from last PrepareSnapshot
   std::unique_ptr<float[]> internal_xyz_;
   std::unique_ptr<float[]> snapshot_xyz_;
+  std::unique_ptr<float[]> unfiltered_internal_xyz_;
+  std::unique_ptr<float[]> unfiltered_snapshot_xyz_;
   std::unique_ptr<float[]> snapshot_work_;            // PostSnapshot work buffer (preserves snapshot_xyz_)
   std::unique_ptr<uint8_t[]> snapshot_image_buffer_;  // produced by PostSnapshot()
 

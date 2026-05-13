@@ -101,6 +101,7 @@ GUI 需要 display server 和支持 OpenGL 3.2 Core Profile 的 GPU。
 ### Display（显示）
 
 - **Rendering**：`Resolution`（512 / 1024 / 2048 / 4096；以棕色高亮提示更改会触发重新模拟）；`EV`（曝光偏移，-6 ~ +6 stops）。
+- **Adaptive Brightness（自适应亮度）**：复选框，启用自动 EV 归一化。**On**（默认）时，以当前 filter 存活光线的 P99 亮度为锚点映射到可配置目标亮度，暗弱弧无需手动调 EV 即可可见。**Off** 时，所有 filter 配置共享同一 EV 刻度（来自未过滤输出），互补 filter 在线性 XYZ 空间的叠加等于无 filter 结果（物理可加性）。旁边的 `+N.NN EV` 显示当前应用的偏移量。完整算法与可加性不变量见 [`doc/adaptive-brightness.zh.md`](adaptive-brightness.zh.md)。
 - **Aspect Ratio**：`Preset` 下拉框（Free、16:9、3:2、4:3、1:1、2:1、Match Background）+ `Portrait` ↔ `Landscape` 切换按钮。请求的长宽比无法满足（窗口太小）时会出现提示行，显示实际可用比与请求比。
 - **Background**：`Load Bg...`、`Clear`、`Show` 复选框、以及 `Alpha` 滑块（控制背景在渲染图下的合成透明度）。
 

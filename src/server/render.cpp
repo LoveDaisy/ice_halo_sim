@@ -324,6 +324,8 @@ RenderConsumer::RenderConsumer(RenderConfig config)
       short_pix_(static_cast<float>(std::min(config_.resolution_[0], config_.resolution_[1]))),
       internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
+      unfiltered_internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
+      unfiltered_snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_work_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_image_buffer_(std::make_unique<uint8_t[]>(config_.resolution_[0] * config_.resolution_[1] * 3)) {
   float ax_z[3]{ 0, 0, 1 };
@@ -391,30 +393,8 @@ void RenderConsumer::Consume(const SimData& data) {
     overlap_w_buf_ = std::make_unique<float[]>(buf_capacity_);
   }
 
-  // Filter + copy outgoing rays into contiguous buffers.
-  assert(!data.outgoing_indices_.empty() || data.rays_.Empty());
-  size_t filtered_ray_num = 0;
-
-  if (filters_.empty() && !data.outgoing_d_.empty()) {
-    // Fast path: no filter — bulk memcpy from pre-packed contiguous arrays.
-    // Avoids random access into 112-byte RaySeg structs (cache utilization 14% → 100%).
-    filtered_ray_num = outgoing_count;
-    std::memcpy(d_buf_.get(), data.outgoing_d_.data(), filtered_ray_num * 3 * sizeof(float));
-    std::memcpy(w_buf_.get(), data.outgoing_w_.data(), filtered_ray_num * sizeof(float));
-  } else {
-    // Slow path: filter present — must call FilterRay per ray (chain walk through rays buffer).
-    for (size_t i : data.outgoing_indices_) {
-      const auto& r = data.rays_[i];
-      if (!FilterRay(data.rays_, i, filters_, config_.ms_filter_, crystals, data.crystal_axis_dists_)) {
-        continue;
-      }
-      std::memcpy(d_buf_.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
-      w_buf_[filtered_ray_num] = r.w_;
-      filtered_ray_num++;
-    }
-  }
-  auto t1 = std::chrono::steady_clock::now();
-
+  // Lens setup: moved before filter+copy so the unfiltered pass (path B) can reuse params.
+  // F16: GetProjFunc/LensProjParam depend only on config_.*; moving before filter+copy is safe.
   auto lens_proj = GetProjFunc(config_.lens_.type_);
   LensProjParam proj_param{ config_.lens_.fov_,
                             short_pix_,
@@ -452,11 +432,120 @@ void RenderConsumer::Consume(const SimData& data) {
     }
   }
 
+  // Shared overlap helper: projects a sky direction to the opposite fisheye hemisphere.
+  // Used by both the unfiltered overlap pass 2 (path B) and the filtered overlap pass 2.
+  auto overlap_fwd = [&](float sky_x, float sky_y, float z_hemi, float r_s) {
+    switch (config_.lens_.type_) {
+      case LensParam::kDualFisheyeEqualArea:
+        return projection::FisheyeEqualAreaForward(sky_x, sky_y, z_hemi, r_s);
+      case LensParam::kDualFisheyeEquidistant:
+        return projection::FisheyeEquidistantForward(sky_x, sky_y, z_hemi, r_s);
+      case LensParam::kDualFisheyeStereographic:
+        return projection::FisheyeStereographicForward(sky_x, sky_y, z_hemi, r_s);
+      case LensParam::kDualFisheyeOrthographic:
+        // TODO(lens-ortho-overlap): when overlap support is added, implement
+        // ComputeORScale and route via the outer switch. Reaching this lambda
+        // with r_s != 1.0 silently yields wrong geometry without the scale fn.
+        // Today: unreachable because outer switch lands in `default: break;`.
+        return projection::FisheyeOrthographicForward(sky_x, sky_y, z_hemi, r_s);
+      default:
+        return projection::ProjXY{ 0, 0, false };
+    }
+  };
+
+  // === Path B: unfiltered accumulation pass (filter present) ===
+  // All outgoing rays are projected before the filter+copy step to build the unfiltered EV anchor.
+  // F17: data.outgoing_d_/outgoing_w_ are always filled by Simulator alongside outgoing_indices_.
+  // F14: buf_capacity_ >= outgoing_count, so overlap_w_buf_ memcpy below is safe.
+  if (!filters_.empty() && !data.outgoing_d_.empty()) {
+    lens_proj(proj_param, data.outgoing_d_.data(), xy_buf_.get(), outgoing_count);
+
+    // Save original outgoing weights for unfiltered overlap pass 2.
+    // This is overwritten later when filtered pass 2 saves filtered weights into overlap_w_buf_.
+    // Unfiltered pass 2 (below) must complete before that overwrite.
+    if (proj_param.max_abs_dz_ > 0) {
+      std::memcpy(overlap_w_buf_.get(), data.outgoing_w_.data(), outgoing_count * sizeof(float));
+    }
+
+    size_t unfiltered_final = 0;
+    float unfiltered_landed = 0;
+    for (size_t i = 0; i < outgoing_count; i++) {
+      if (xy_buf_[i * 2] < 0 || xy_buf_[i * 2] >= config_.resolution_[0] || xy_buf_[i * 2 + 1] < 0 ||
+          xy_buf_[i * 2 + 1] >= config_.resolution_[1]) {
+        continue;
+      }
+      xy_buf_[unfiltered_final] = xy_buf_[i * 2 + 1] * config_.resolution_[0] + xy_buf_[i * 2];
+      w_buf_[unfiltered_final] = data.outgoing_w_[i];
+      unfiltered_landed += data.outgoing_w_[i];
+      unfiltered_final++;
+    }
+    SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), unfiltered_internal_xyz_.get(), unfiltered_final);
+    unfiltered_total_intensity_ += unfiltered_landed;
+
+    // Unfiltered overlap pass 2: must complete before filtered pass 2 overwrites overlap_w_buf_.
+    if (proj_param.max_abs_dz_ > 0) {
+      size_t overlap_count = 0;
+      int w = config_.resolution_[0];
+      int h = config_.resolution_[1];
+      for (size_t i = 0; i < outgoing_count; i++) {
+        float sky_x = -data.outgoing_d_[i * 3];
+        float sky_y = -data.outgoing_d_[i * 3 + 1];
+        float sky_z = -data.outgoing_d_[i * 3 + 2];
+        if (std::abs(sky_z) >= proj_param.max_abs_dz_) {
+          continue;
+        }
+        bool primary_upper = (sky_z >= 0);
+        float z_hemi_opp = primary_upper ? -sky_z : sky_z;
+        auto proj = overlap_fwd(sky_x, sky_y, z_hemi_opp, proj_param.r_scale_);
+        float fx = 0;
+        float fy = 0;
+        projection::DualFisheyeToPixel(proj.x, proj.y, !primary_upper, w, h, &fx, &fy);
+        int px = static_cast<int>(std::floor(fx + 0.5f));
+        int py = static_cast<int>(std::floor(fy + 0.5f));
+        if (px < 0 || px >= w || py < 0 || py >= h) {
+          continue;
+        }
+        xy_buf_[overlap_count] = py * w + px;
+        w_buf_[overlap_count] = overlap_w_buf_[i];
+        overlap_count++;
+      }
+      if (overlap_count > 0) {
+        SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), unfiltered_internal_xyz_.get(), overlap_count);
+      }
+    }
+  }
+
+  // Filter + copy outgoing rays into contiguous buffers.
+  assert(!data.outgoing_indices_.empty() || data.rays_.Empty());
+  size_t filtered_ray_num = 0;
+
+  if (filters_.empty() && !data.outgoing_d_.empty()) {
+    // Fast path: no filter — bulk memcpy from pre-packed contiguous arrays.
+    // Avoids random access into 112-byte RaySeg structs (cache utilization 14% → 100%).
+    filtered_ray_num = outgoing_count;
+    std::memcpy(d_buf_.get(), data.outgoing_d_.data(), filtered_ray_num * 3 * sizeof(float));
+    std::memcpy(w_buf_.get(), data.outgoing_w_.data(), filtered_ray_num * sizeof(float));
+  } else {
+    // Slow path: filter present — must call FilterRay per ray (chain walk through rays buffer).
+    for (size_t i : data.outgoing_indices_) {
+      const auto& r = data.rays_[i];
+      if (!FilterRay(data.rays_, i, filters_, config_.ms_filter_, crystals, data.crystal_axis_dists_)) {
+        continue;
+      }
+      std::memcpy(d_buf_.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
+      w_buf_[filtered_ray_num] = r.w_;
+      filtered_ray_num++;
+    }
+  }
+  auto t1 = std::chrono::steady_clock::now();
+
   lens_proj(proj_param, d_buf_.get(), xy_buf_.get(), filtered_ray_num);
   auto t2 = std::chrono::steady_clock::now();
 
   // Save w_buf_ before compaction (compaction overwrites w_buf_ in-place).
-  // overlap_w_buf_ is needed by pass 2 to read original weights by ray index.
+  // overlap_w_buf_ is needed by filtered pass 2 to read original weights by ray index.
+  // For path B, this overwrites the unfiltered outgoing weights saved above — that is safe
+  // because the unfiltered overlap pass 2 has already completed.
   if (proj_param.max_abs_dz_ > 0) {
     std::memcpy(overlap_w_buf_.get(), w_buf_.get(), filtered_ray_num * sizeof(float));
   }
@@ -476,6 +565,13 @@ void RenderConsumer::Consume(const SimData& data) {
   SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), final_ray_num);
   total_intensity_ += landed_weight;
 
+  // === Path A: no-filter special case — unfiltered == filtered ===
+  // F15: SpectrumToXyz is read-only on w_buf_/xy_buf_; calling twice with same compacted input is safe.
+  if (filters_.empty()) {
+    SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), unfiltered_internal_xyz_.get(), final_ray_num);
+    unfiltered_total_intensity_ += landed_weight;
+  }
+
   // === Pass 2: Overlap dual-write (only for dual fisheye with max_abs_dz > 0) ===
   // Project overlap-zone rays to the opposite hemisphere, filling the ring r ∈ (r_scale, 1].
   // d_buf_ is immutable (projection receives const float*). w_buf_ was compacted in pass 1,
@@ -484,25 +580,6 @@ void RenderConsumer::Consume(const SimData& data) {
   if (proj_param.max_abs_dz_ > 0) {
     // overlap_w_buf_ was copied from w_buf_ before pass 1 compaction (see copy above).
     // For each overlap ray, project to the opposite hemisphere with z_hemi < 0.
-    auto overlap_fwd = [&](float sky_x, float sky_y, float z_hemi, float r_s) {
-      switch (config_.lens_.type_) {
-        case LensParam::kDualFisheyeEqualArea:
-          return projection::FisheyeEqualAreaForward(sky_x, sky_y, z_hemi, r_s);
-        case LensParam::kDualFisheyeEquidistant:
-          return projection::FisheyeEquidistantForward(sky_x, sky_y, z_hemi, r_s);
-        case LensParam::kDualFisheyeStereographic:
-          return projection::FisheyeStereographicForward(sky_x, sky_y, z_hemi, r_s);
-        case LensParam::kDualFisheyeOrthographic:
-          // TODO(lens-ortho-overlap): when overlap support is added, implement
-          // ComputeORScale and route via the outer switch. Reaching this lambda
-          // with r_s != 1.0 silently yields wrong geometry without the scale fn.
-          // Today: unreachable because outer switch lands in `default: break;`.
-          return projection::FisheyeOrthographicForward(sky_x, sky_y, z_hemi, r_s);
-        default:
-          return projection::ProjXY{ 0, 0, false };
-      }
-    };
-
     size_t overlap_count = 0;
     int w = config_.resolution_[0];
     int h = config_.resolution_[1];
@@ -533,6 +610,10 @@ void RenderConsumer::Consume(const SimData& data) {
     if (overlap_count > 0) {
       // Pass 2 does NOT update total_intensity_ — preserves normalization.
       SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), overlap_count);
+      // Path A: unfiltered == filtered for overlap pass 2 as well.
+      if (filters_.empty()) {
+        SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), unfiltered_internal_xyz_.get(), overlap_count);
+      }
     }
   }
 
@@ -563,6 +644,8 @@ void RenderConsumer::PrepareSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
   snapshot_intensity_ = total_intensity_;
+  std::memcpy(unfiltered_snapshot_xyz_.get(), unfiltered_internal_xyz_.get(), total_pix * 3 * sizeof(float));
+  unfiltered_snapshot_intensity_ = unfiltered_total_intensity_;
 }
 
 void RenderConsumer::CountEffectivePixels() {
@@ -646,6 +729,7 @@ Result RenderConsumer::GetResult() const {
 RawXyzResult RenderConsumer::GetRawXyzResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   float per_pixel_intensity = total_pix > 0 ? snapshot_intensity_ / (kNormScale * total_pix) : 0.0f;
+  float unfiltered_per_pixel = total_pix > 0 ? unfiltered_snapshot_intensity_ / (kNormScale * total_pix) : 0.0f;
   return { config_.id_,
            config_.resolution_[0],
            config_.resolution_[1],
@@ -654,16 +738,21 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
            config_.intensity_factor_,
            {},
            {},
-           effective_pix_ };
+           effective_pix_,
+           unfiltered_snapshot_xyz_.get(),
+           unfiltered_per_pixel };
 }
 
 void RenderConsumer::Reset() {
   total_intensity_ = 0;
   snapshot_intensity_ = 0;
+  unfiltered_total_intensity_ = 0;
+  unfiltered_snapshot_intensity_ = 0;
   effective_pix_ = 0;
   auto buf_size = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3;
   std::memset(internal_xyz_.get(), 0, buf_size * sizeof(float));
-  // snapshot_xyz_ not zeroed: PrepareSnapshot will memcpy over it.
+  std::memset(unfiltered_internal_xyz_.get(), 0, buf_size * sizeof(float));
+  // snapshot_xyz_ / unfiltered_snapshot_xyz_ not zeroed: PrepareSnapshot will memcpy over them.
   // has_ever_consumed_ = false (set in Stop) ensures GetRawXyzResults returns has_valid_data_=false
   // until new data arrives, preventing stale snapshot reads.
 }

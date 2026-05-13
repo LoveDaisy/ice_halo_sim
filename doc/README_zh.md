@@ -11,6 +11,7 @@ doc/
 ├── README.md / README_zh.md                         # 文档索引（英文/中文）
 ├── architecture.md / _zh.md                         # 系统架构文档
 ├── configuration.md / _zh.md                        # 配置文档
+├── adaptive-brightness.md / .zh.md                  # 自适应亮度：算法、双模式语义、可加性
 ├── raypath-symmetry.md / _zh.md                     # Raypath 对称性：P/B/D 过滤器语义
 ├── c_api.md / _zh.md                                # C接口使用文档
 ├── developer-guide.md / _zh.md                      # 开发指南
@@ -38,6 +39,12 @@ doc/
   - 配置项详细说明和默认值
   - 配置验证规则
   - 常见配置错误和解决方案
+
+- **[自适应亮度](adaptive-brightness.zh.md)**: GUI 自动 EV 归一化
+  - P99 锚点算法与目标白点映射
+  - Off 模式：共享 EV 刻度，互补 filter 的 XYZ 线性可加性
+  - On 模式：针对暗弱或孤立弧的按 filter 自适应 EV
+  - sRGB gamma 非线性 caveat 与 tooltip 文案设计理由
 
 - **[Raypath 对称性](raypath-symmetry.zh.md)**: P、B、D 过滤器开关语义
   - Raypath 等价性的两类来源（晶体几何 vs 取向分布）

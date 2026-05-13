@@ -90,6 +90,7 @@ live in [`doc/gui-guide.md`](doc/gui-guide.md).
 |----------|----------|----------------|
 | [Documentation index](doc/README.md) | All | Top-level navigation across docs |
 | [Configuration guide](doc/configuration.md) | Users | Every JSON field, every lens type, every scattering option |
+| [Adaptive Brightness](doc/adaptive-brightness.md) | Users | Automatic EV normalization: algorithm, Off/On mode semantics, XYZ additivity invariant |
 | [Raypath symmetry](doc/raypath-symmetry.md) | Users / Contributors | P, B, D filter toggle semantics, D enabling condition, σ derivation |
 | [GUI guide](doc/gui-guide.md) | Users | Panel-by-panel walkthrough with screenshots |
 | [Coordinate convention](doc/coordinate-convention.md) | Users / Authors | Rotation chain, axis sign convention, **v3 breaking change notes** |

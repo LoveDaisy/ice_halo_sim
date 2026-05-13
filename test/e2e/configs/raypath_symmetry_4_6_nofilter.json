@@ -25,14 +25,7 @@
       }
     }
   ],
-  "filter": [
-    {
-      "id": 1,
-      "type": "raypath",
-      "raypath": [7, 3],
-      "symmetry": "none"
-    }
-  ],
+  "filter": [],
   "scene": {
     "light_source": {
       "type": "sun",
@@ -47,8 +40,7 @@
         "entries": [
           {
             "crystal": 1,
-            "proportion": 10,
-            "filter": 1
+            "proportion": 10
           }
         ]
       }

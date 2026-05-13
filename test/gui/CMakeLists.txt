@@ -17,6 +17,7 @@ add_executable(LumiceGUITests
     test_gui_overlay_labels.cpp
     test_gui_face_number_overlay.cpp
     test_gui_crystal_renderer.cpp
+    test_gui_auto_ev.cpp
     test_screenshot.cpp
     ${IMGUI_TE_DIR}/imgui_te_engine.cpp
     ${IMGUI_TE_DIR}/imgui_te_context.cpp
@@ -34,7 +35,8 @@ target_link_libraries(LumiceGUITests PRIVATE lumice_gui_obj)
 target_compile_definitions(LumiceGUITests PRIVATE
     IMGUI_ENABLE_TEST_ENGINE
     IMGUI_TEST_ENGINE_ENABLE_COROUTINE_STDTHREAD_IMPL=1
-    LUMICE_TEST_REF_DIR="${CMAKE_CURRENT_SOURCE_DIR}/references")
+    LUMICE_TEST_REF_DIR="${CMAKE_CURRENT_SOURCE_DIR}/references"
+    LUMICE_E2E_CONFIG_DIR="${CMAKE_SOURCE_DIR}/test/e2e/configs")
 
 # macOS frameworks required by GLFW
 if(APPLE)

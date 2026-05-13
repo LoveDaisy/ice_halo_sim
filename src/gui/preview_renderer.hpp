@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "gui/gui_constants.hpp"
+#include "gui/gui_state.hpp"
 
 namespace lumice::gui {
 
@@ -136,6 +137,20 @@ class PreviewRenderer {
 // OpenGL column-major layout: out[col*3 + row].
 // Synced with shader u_view_matrix usage (preview_renderer.cpp).
 void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, float out[9]);
+
+// Build a ViewProjection from the renderer sub-state of GuiState.
+// roll is wrapped through EffectiveRollForLens so that lens types that ignore
+// roll (e.g. dual-fisheye) always see 0° — mirrors app_panels.cpp:742-747.
+inline ViewProjection BuildPreviewViewProjFromRenderer(const RenderConfig& rc) {
+  ViewProjection vp;
+  vp.lens_type = rc.lens_type;
+  vp.fov = rc.fov;
+  vp.elevation = rc.elevation;
+  vp.azimuth = rc.azimuth;
+  vp.roll = EffectiveRollForLens(rc.lens_type, rc.roll);
+  vp.visible = rc.visible;
+  return vp;
+}
 
 }  // namespace lumice::gui
 

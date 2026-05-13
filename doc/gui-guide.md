@@ -101,6 +101,7 @@ The lens choice changes the geometry of the projected image dramatically:
 ### Display
 
 - **Rendering**: `Resolution` (512 / 1024 / 2048 / 4096; highlighted in brown to flag that changing it re-runs the simulation), and `EV` (-6 to +6 stops of exposure offset).
+- **Adaptive Brightness**: a checkbox that enables automatic EV normalization. When **On** (default), the P99 brightness of the currently filtered rays is mapped to a configurable target level, so faint or isolated arcs remain visible without manual EV adjustment. When **Off**, all filter configurations share the same EV scale derived from the unfiltered output — complementary filters then sum to the unfiltered result in linear XYZ space. A `+N.NN EV` readout shows the applied offset. See [`doc/adaptive-brightness.md`](adaptive-brightness.md) for the full algorithm and additivity invariant.
 - **Aspect Ratio**: a `Preset` combo (Free, 16:9, 3:2, 4:3, 1:1, 2:1, Match Background) plus a `Portrait` ↔ `Landscape` flip button. When the requested aspect cannot be honoured (window too small) a warning row reports the achieved versus requested ratio.
 - **Background**: `Load Bg...`, `Clear`, `Show` checkbox, and an `Alpha` slider for compositing the loaded background under the rendered halo.
 

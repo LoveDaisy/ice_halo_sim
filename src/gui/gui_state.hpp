@@ -446,10 +446,17 @@ struct GuiState {
   // Stats from last poll
   unsigned long stats_ray_seg_num = 0;
   unsigned long stats_sim_ray_num = 0;
-  float snapshot_intensity = 0;            // Per-pixel landed intensity for XYZ→RGB normalization
-  int effective_pixels = 0;                // Non-zero pixel count for adaptive normalization
-  int norm_mode = 0;                       // 0=absolute, 1=adaptive (not exposed in UI)
-  unsigned long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)
+  float snapshot_intensity = 0;             // Per-pixel landed intensity for XYZ→RGB normalization
+  float unfiltered_snapshot_intensity = 0;  // Per-pixel unfiltered intensity; updated each texture upload
+  int effective_pixels = 0;                 // Non-zero pixel count for adaptive normalization
+  int norm_mode = 0;                        // 0=absolute, 1=adaptive (not exposed in UI)
+  unsigned long texture_upload_count = 0;   // Cumulative texture uploads (diagnostic counter)
+
+  // Auto-EV runtime state (display layer only, not persisted, not in ConfigSnapshot)
+  float p99_raw_y = 0.0f;       // Un-normalized P99 Y value; updated each texture upload
+  float ev_auto = 0.0f;         // P99-anchored auto-EV in stops; recomputed from p99_raw_y
+  bool auto_ev_enabled = true;  // Display panel toggle
+  float target_white = 200.0f;  // Target P99 brightness on 0-255 sRGB scale
 
   // Last committed config snapshot (for Revert — config fields only, no runtime state).
   //
