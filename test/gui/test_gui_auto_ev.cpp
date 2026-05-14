@@ -17,19 +17,19 @@ struct AutoEvScene {
 };
 
 // clang-format off
-// Thresholds are set at 15 dB (stochastic renders; same-config different-seed PSNR is
-// typically 18-25 dB). 15 dB is sufficient to catch regressions (e.g. wrong EV
-// calculation would shift output by >3 stops, dropping PSNR well below 10 dB).
+// Per-scene PSNR thresholds are mean − 3σ (floored to 0.5 dB), computed from N=10 mean-ref
+// calibration runs via scripts/regen_gui_test_refs.py. One threshold covers both _off and
+// _on modes (conservative min of the two). Reference images are N=10 pixel-averaged means.
 static const AutoEvScene kScenes[] = {
-  {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 15.0},
-  {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 15.0},
-  {"color",      LUMICE_E2E_CONFIG_DIR "/color.json",                             256, 256, 15.0},
-  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 15.0},
-  {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 15.0},
-  {"parhelion",  LUMICE_E2E_CONFIG_DIR "/parhelion.json",                         256, 256, 15.0},
-  {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 15.0},
-  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 15.0},
-  {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 15.0},
+  {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 16.5},
+  {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 16.0},
+  {"color",      LUMICE_E2E_CONFIG_DIR "/color.json",                             256, 256, 18.0},
+  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 17.0},
+  {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 30.5},
+  {"parhelion",  LUMICE_E2E_CONFIG_DIR "/parhelion.json",                         256, 256, 18.0},
+  {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 19.0},
+  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 20.0},
+  {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 17.0},
 };
 // clang-format on
 static constexpr int kSceneCount = 9;
@@ -94,7 +94,10 @@ static bool CheckAgainstReference(const char* group, const char* tag, const std:
     fprintf(stderr, "[%s] %s: PSNR below threshold — possible regression\n", group, tag);
     return false;
   }
-  std::remove(tmp_path.c_str());
+  // g_keep_export_png is set by --keep-export-png; scripts/regen_gui_test_refs.py uses this flag.
+  if (!g_keep_export_png) {
+    std::remove(tmp_path.c_str());
+  }
   return true;
 }
 

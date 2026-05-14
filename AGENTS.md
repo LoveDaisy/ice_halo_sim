@@ -72,6 +72,34 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 - Windows physical-desktop validation uses `scripts/win_remote_test.sh` together with `scripts/win_test_watcher.ps1`.
 - Performance diagnostics and workflows are documented in `doc/performance-testing.md`.
 
+### GUI Test Reference Regeneration (auto_ev tests)
+
+The `auto_ev` reference images are pixel-averaged means of N=10 stochastic renders to suppress
+per-run noise. Per-scene PSNR thresholds are `mean − 3σ` (floored to 0.5 dB precision).
+
+**`--keep-export-png` flag** — When passed to `LumiceGUITests`, `CheckAgainstReference` skips
+`std::remove` so the per-run export PNGs at `/tmp/lumice_auto_ev_*.png` are preserved for
+collection by the driver script.
+
+**Regeneration workflow:**
+```bash
+# Full regen (Phase A: generate mean-ref + Phase B: calibrate thresholds, ~20 min):
+python scripts/regen_gui_test_refs.py
+
+# Phase A only (generate mean-ref images, then manually update thresholds):
+python scripts/regen_gui_test_refs.py --phase-a-only
+
+# Phase B only (recalibrate thresholds against existing mean-refs):
+python scripts/regen_gui_test_refs.py --phase-b-only
+
+# Quick smoke test (2 runs each phase):
+python scripts/regen_gui_test_refs.py --n 2 --n-calib 2
+```
+
+After Phase B, copy the `threshold` values from `test/gui/references/_thresholds.json` into
+`kScenes[]` in `test/gui/test_gui_auto_ev.cpp`. Use `min(off_threshold, on_threshold)` per scene
+since both modes share one `psnr_threshold` field.
+
 ## Logging and Troubleshooting
 
 - `VERBOSE` is a project-defined log level between `DEBUG` and `INFO`.

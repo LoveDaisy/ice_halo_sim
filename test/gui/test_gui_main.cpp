@@ -50,6 +50,8 @@ bool g_enable_log_panel = false;
 int g_dorun_delay_ms = 0;
 int g_main_loop_restart_count = 0;
 unsigned long g_main_loop_cumulative_rays = 0;
+// Set by --keep-export-png; used by scripts/regen_gui_test_refs.py to collect per-run PNGs.
+bool g_keep_export_png = false;
 
 // Synthetic texture for export tests
 std::vector<unsigned char> g_synth_tex;
@@ -128,6 +130,9 @@ int main(int argc, char** argv) {
       g_enable_log_panel = true;
     } else if (strcmp(argv[i], "--dorun-delay") == 0 && i + 1 < argc) {
       g_dorun_delay_ms = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--keep-export-png") == 0) {
+      // Suppress std::remove in CheckAgainstReference so regen_gui_test_refs.py can collect PNGs.
+      g_keep_export_png = true;
     } else if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
       // Set both core and GUI log level: trace/debug/info/warning/error/off
       const char* level = argv[++i];
