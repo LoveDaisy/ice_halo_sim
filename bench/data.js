@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778761402401,
+  "lastUpdate": 1778761404735,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -6119,6 +6119,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 63.5,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8d97704a2cc32149478a5e9fade9bfca321483d6",
+          "message": "Merge pull request #91 from LoveDaisy/feat/update_test_ref\n\nUpdate GUI test references with mean-ref pipeline",
+          "timestamp": "2026-05-14T20:18:50+08:00",
+          "tree_id": "a2a8ea7ee23efaa4c5c619cec9b8b223fcaf5f5b",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/8d97704a2cc32149478a5e9fade9bfca321483d6"
+        },
+        "date": 1778761403898,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 77,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 69.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 72.6,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 54.7,
             "unit": "%"
           }
         ]
