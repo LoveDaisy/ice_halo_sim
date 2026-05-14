@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778760319844,
+  "lastUpdate": 1778760322162,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -5979,6 +5979,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 67.5,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "94e4edf61c07a64640c38d90c1b2dc3fda974653",
+          "message": "Merge pull request #90 from LoveDaisy/dev/refactor_c_api\n\nRefactor: enforce GUI/core API boundary via 4 new C API entries",
+          "timestamp": "2026-05-14T20:00:37+08:00",
+          "tree_id": "99603c8703022d6dc31ab9fa8440052434a0ba84",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/94e4edf61c07a64640c38d90c1b2dc3fda974653"
+        },
+        "date": 1778760321386,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 82.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 68.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 57.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 63.5,
             "unit": "%"
           }
         ]
