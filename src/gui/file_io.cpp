@@ -16,8 +16,6 @@
 #include <sstream>
 #include <vector>
 
-#include "config/raypath_validation.hpp"
-#include "core/def.hpp"
 #include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/gl_capture.hpp"
@@ -265,8 +263,8 @@ static int ParseFaceNumberOrZero(const std::string& text) {
   // faces — any text the syntax stage rejects (separators, non-digits,
   // overlong) bails to 0; only the kind-specific stage might "reject"
   // a legal-on-pyramid face we want to keep, which we tolerate here.
-  const auto v = ValidateFaceNumberText(text, CrystalKind::kPyramid);
-  if (v.state == RaypathValidation::kInvalid && v.message.find("not legal on this crystal type") == std::string::npos) {
+  const auto v = GuiValidateFaceNumberText(text, LUMICE_CRYSTAL_PYRAMID);
+  if (v.state == LUMICE_RAYPATH_INVALID && v.message.find("not legal on this crystal type") == std::string::npos) {
     return 0;
   }
   // Safe to parse: ValidateFaceNumberText caps digit count.
@@ -280,16 +278,15 @@ static int ParseFaceNumberOrZero(const std::string& text) {
   return value;
 }
 
-// Clamp a GUI int to the core IdType range and warn on overflow.
+// Clamp a GUI int to the C API ID range and warn on overflow.
 static int ClampIdValue(int v, const char* field_name) {
   if (v < 0) {
-    GUI_LOG_WARNING("[Filter] {} = {} clamped to 0 (IdType range [0, {}])", field_name, v,
-                    std::numeric_limits<IdType>::max());
+    GUI_LOG_WARNING("[Filter] {} = {} clamped to 0 (LUMICE_MAX_ID range [0, {}])", field_name, v, LUMICE_MAX_ID);
     return 0;
   }
-  int max_id = static_cast<int>(std::numeric_limits<IdType>::max());
+  constexpr int max_id = LUMICE_MAX_ID;
   if (v > max_id) {
-    GUI_LOG_WARNING("[Filter] {} = {} clamped to {} (IdType range [0, {}])", field_name, v, max_id, max_id);
+    GUI_LOG_WARNING("[Filter] {} = {} clamped to {} (LUMICE_MAX_ID range [0, {}])", field_name, v, max_id, max_id);
     return max_id;
   }
   return v;

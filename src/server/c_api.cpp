@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "config/raypath_validation.hpp"
+#include "config/render_config.hpp"
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
 #include "include/lumice.h"
@@ -994,4 +996,50 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
   }
 
   return LUMICE_OK;
+}
+
+
+// =============== Crystal Kind ===============
+int LUMICE_IsLegalFace(LUMICE_CrystalKind kind, int face) {
+  // Two-value enum: extend to switch+assert when CrystalKind expands.
+  auto core_kind = (kind == LUMICE_CRYSTAL_PRISM) ? ns::CrystalKind::kPrism : ns::CrystalKind::kPyramid;
+  return ns::IsLegalFace(core_kind, face) ? 1 : 0;
+}
+
+
+// =============== Raypath Validation ===============
+LUMICE_ErrorCode LUMICE_ValidateRaypathText(const char* text, LUMICE_CrystalKind kind,
+                                            LUMICE_RaypathValidationState* out_state, char* out_msg,
+                                            size_t msg_buf_size) {
+  if (!text || !out_state || !out_msg) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  // Two-value enum: extend to switch+assert when CrystalKind expands.
+  auto core_kind = (kind == LUMICE_CRYSTAL_PRISM) ? ns::CrystalKind::kPrism : ns::CrystalKind::kPyramid;
+  auto r = ns::ValidateRaypathText(std::string(text), core_kind);
+  switch (r.state) {
+    case ns::RaypathValidation::kValid:
+      *out_state = LUMICE_RAYPATH_VALID;
+      break;
+    case ns::RaypathValidation::kIncomplete:
+      *out_state = LUMICE_RAYPATH_INCOMPLETE;
+      break;
+    case ns::RaypathValidation::kInvalid:
+      *out_state = LUMICE_RAYPATH_INVALID;
+      break;
+    default:
+      assert(false);
+      *out_state = LUMICE_RAYPATH_INVALID;
+      return LUMICE_ERR_UNKNOWN;
+  }
+  if (msg_buf_size > 0) {
+    std::snprintf(out_msg, msg_buf_size, "%s", r.message.c_str());
+  }
+  return LUMICE_OK;
+}
+
+
+// =============== Lens Type ===============
+float LUMICE_MaxFov(LUMICE_LensType type) {
+  return ns::MaxFov(static_cast<ns::LensParam::LensType>(type));
 }

@@ -60,6 +60,9 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 - Do not use raw `new` / `delete`.
 - Do not use `using namespace`.
 - Keep code comments in English.
+- Public API boundary: `src/gui/` code must only access core/config functionality
+  through the C API (`src/include/lumice.h`). Direct `#include` of `core/` or `config/`
+  headers from `src/gui/` is prohibited.
 
 ## Testing and Platform Notes
 

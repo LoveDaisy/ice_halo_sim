@@ -9,7 +9,6 @@
 #include <optional>
 #include <string>
 
-#include "config/raypath_validation.hpp"
 #include "gui/app.hpp"
 #include "gui/axis_presets.hpp"
 #include "gui/crystal_preview.hpp"
@@ -645,16 +644,16 @@ static void RenderAxisModal(GuiState& /*state*/) {
 // for "what crystal kind should the raypath validator use"; both this Filter
 // sub-panel and the modal-level OK gate consume it.
 namespace {
-lumice::CrystalKind CurrentValidationKind();
+LUMICE_CrystalKind CurrentValidationKind();
 }
 
-static ImVec4 ValidationFrameBgColor(RaypathValidation state) {
+static ImVec4 ValidationFrameBgColor(LUMICE_RaypathValidationState state) {
   switch (state) {
-    case RaypathValidation::kValid:
+    case LUMICE_RAYPATH_VALID:
       return ImVec4(0.06f, 0.24f, 0.06f, 0.5f);
-    case RaypathValidation::kIncomplete:
+    case LUMICE_RAYPATH_INCOMPLETE:
       return ImVec4(0.27f, 0.24f, 0.03f, 0.5f);
-    case RaypathValidation::kInvalid:
+    case LUMICE_RAYPATH_INVALID:
       return ImVec4(0.27f, 0.06f, 0.06f, 0.5f);
   }
   return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -674,17 +673,17 @@ static void RenderRaypathSubpanel() {
 
   // Validation hint immediately under the InputText.
   switch (validation) {
-    case RaypathValidation::kValid:
+    case LUMICE_RAYPATH_VALID:
       if (g_raypath_params.raypath_text.empty()) {
         ImGui::TextDisabled("No raypath filter (match all)");
       } else {
         ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "Valid");
       }
       break;
-    case RaypathValidation::kIncomplete:
+    case LUMICE_RAYPATH_INCOMPLETE:
       ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.1f, 1.0f), "Incomplete (still typing?)");
       break;
-    case RaypathValidation::kInvalid: {
+    case LUMICE_RAYPATH_INVALID: {
       const char* msg = result.message.empty() ? "Invalid raypath" : result.message.c_str();
       // TextWrapped so multi-segment "Segment N: ..." messages don't overflow
       // the modal's narrow vertical layout.
@@ -713,8 +712,8 @@ static void RenderRaypathSubpanel() {
 // char arrays in place across frames.
 static void RenderEntryExitSubpanel() {
   const auto kind = CurrentValidationKind();
-  const auto v_entry = ValidateFaceNumberText(g_ee_entry_buf, kind);
-  const auto v_exit = ValidateFaceNumberText(g_ee_exit_buf, kind);
+  const auto v_entry = GuiValidateFaceNumberText(g_ee_entry_buf, kind);
+  const auto v_exit = GuiValidateFaceNumberText(g_ee_exit_buf, kind);
 
   // FrameBg tint mirrors RenderRaypathSubpanel (same helper).
   ImGui::PushStyleColor(ImGuiCol_FrameBg, ValidationFrameBgColor(v_entry.state));
@@ -955,8 +954,8 @@ namespace {
 // because the user may switch crystal type before committing — the validator
 // should match what will actually be written on OK. Single source of truth
 // for the Filter sub-panel and the modal-level OK gate.
-lumice::CrystalKind CurrentValidationKind() {
-  return (g_crystal_buf.type == CrystalType::kPrism) ? lumice::CrystalKind::kPrism : lumice::CrystalKind::kPyramid;
+LUMICE_CrystalKind CurrentValidationKind() {
+  return (g_crystal_buf.type == CrystalType::kPrism) ? LUMICE_CRYSTAL_PRISM : LUMICE_CRYSTAL_PYRAMID;
 }
 
 // Filter-tab dirty predicate. Active-type-guarded form per plan §7 risk 6:
@@ -1043,9 +1042,9 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     }
     const bool buf_changed = IsFilterDirty();
     const auto kind = CurrentValidationKind();
-    const auto v_entry = ValidateFaceNumberText(g_ee_params.entry_text, kind);
-    const auto v_exit = ValidateFaceNumberText(g_ee_params.exit_text, kind);
-    const bool both_valid = v_entry.state == RaypathValidation::kValid && v_exit.state == RaypathValidation::kValid;
+    const auto v_entry = GuiValidateFaceNumberText(g_ee_params.entry_text, kind);
+    const auto v_exit = GuiValidateFaceNumberText(g_ee_params.exit_text, kind);
+    const bool both_valid = v_entry.state == LUMICE_RAYPATH_VALID && v_exit.state == LUMICE_RAYPATH_VALID;
     if ((g_filter_initial_present || buf_changed) && both_valid) {
       FilterConfig out;
       out.name = g_filter_top.name;
@@ -1087,7 +1086,7 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
       // preventing half-typed input from poisoning the renderer. Multi-segment
       // OR (";") is supported via ValidateRaypathTextMultiSegment.
       auto v = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
-      if (v.state == RaypathValidation::kValid) {
+      if (v.state == LUMICE_RAYPATH_VALID) {
         // Materialize FilterConfig from top fields + active raypath sub-buffer.
         FilterConfig out;
         out.name = g_filter_top.name;
@@ -1490,7 +1489,7 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
       g_raypath_params.raypath_text = g_raypath_buf;
       if (!g_raypath_params.raypath_text.empty()) {
         const auto v = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
-        if (v.state != RaypathValidation::kValid) {
+        if (v.state != LUMICE_RAYPATH_VALID) {
           ok_disabled = true;
           ok_tooltip = "Filter raypath invalid — fix it in the Filter tab";
         }
@@ -1506,11 +1505,10 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
       // enabled when the user has clicked Remove Filter.
       if (!g_ee_remove_intent) {
         const auto kind = CurrentValidationKind();
-        const auto ve = ValidateFaceNumberText(g_ee_entry_buf, kind);
-        const auto vx = ValidateFaceNumberText(g_ee_exit_buf, kind);
-        const bool incomplete =
-            ve.state == RaypathValidation::kIncomplete || vx.state == RaypathValidation::kIncomplete;
-        const bool invalid = ve.state == RaypathValidation::kInvalid || vx.state == RaypathValidation::kInvalid;
+        const auto ve = GuiValidateFaceNumberText(g_ee_entry_buf, kind);
+        const auto vx = GuiValidateFaceNumberText(g_ee_exit_buf, kind);
+        const bool incomplete = ve.state == LUMICE_RAYPATH_INCOMPLETE || vx.state == LUMICE_RAYPATH_INCOMPLETE;
+        const bool invalid = ve.state == LUMICE_RAYPATH_INVALID || vx.state == LUMICE_RAYPATH_INVALID;
         if (invalid) {
           ok_disabled = true;
           ok_tooltip = "Filter face number invalid — fix it in the Filter tab";

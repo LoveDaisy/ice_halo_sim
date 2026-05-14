@@ -691,3 +691,173 @@ TEST(ResultsApi, GetBeforeCommit) {
   LUMICE_StopServer(server);
   LUMICE_DestroyServer(server);
 }
+
+// ============================================================
+// LUMICE_MAX_ID
+// ============================================================
+
+TEST(MaxIdApi, ValueMatchesUint16Max) {
+  EXPECT_EQ(LUMICE_MAX_ID, 65535);
+}
+
+// ============================================================
+// LUMICE_IsLegalFace
+// ============================================================
+
+TEST(IsLegalFaceApi, PrismLegalFaces) {
+  // Basal faces: 1, 2; prism lateral faces: 3..8
+  EXPECT_NE(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PRISM, 1), 0);
+  EXPECT_NE(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PRISM, 2), 0);
+  for (int f = 3; f <= 8; ++f) {
+    EXPECT_NE(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PRISM, f), 0) << "face=" << f;
+  }
+}
+
+TEST(IsLegalFaceApi, PrismIllegalFaces) {
+  EXPECT_EQ(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PRISM, 0), 0);
+  EXPECT_EQ(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PRISM, 9), 0);
+  for (int f = 13; f <= 18; ++f) {
+    EXPECT_EQ(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PRISM, f), 0) << "face=" << f;
+  }
+  for (int f = 23; f <= 28; ++f) {
+    EXPECT_EQ(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PRISM, f), 0) << "face=" << f;
+  }
+}
+
+TEST(IsLegalFaceApi, PyramidLegalFaces) {
+  EXPECT_NE(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PYRAMID, 1), 0);
+  EXPECT_NE(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PYRAMID, 2), 0);
+  for (int f = 3; f <= 8; ++f) {
+    EXPECT_NE(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PYRAMID, f), 0) << "face=" << f;
+  }
+  for (int f = 13; f <= 18; ++f) {
+    EXPECT_NE(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PYRAMID, f), 0) << "face=" << f;
+  }
+  for (int f = 23; f <= 28; ++f) {
+    EXPECT_NE(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PYRAMID, f), 0) << "face=" << f;
+  }
+}
+
+TEST(IsLegalFaceApi, PyramidIllegalFaces) {
+  EXPECT_EQ(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PYRAMID, 0), 0);
+  EXPECT_EQ(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PYRAMID, 9), 0);
+  EXPECT_EQ(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PYRAMID, 29), 0);
+  EXPECT_EQ(LUMICE_IsLegalFace(LUMICE_CRYSTAL_PYRAMID, 100), 0);
+}
+
+// ============================================================
+// LUMICE_ValidateRaypathText
+// ============================================================
+
+TEST(ValidateRaypathTextApi, NullArgs) {
+  LUMICE_RaypathValidationState vstate = LUMICE_RAYPATH_VALID;
+  char msg[256] = {};
+  EXPECT_EQ(LUMICE_ValidateRaypathText(nullptr, LUMICE_CRYSTAL_PRISM, &vstate, msg, sizeof(msg)), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ValidateRaypathText("3", LUMICE_CRYSTAL_PRISM, nullptr, msg, sizeof(msg)), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ValidateRaypathText("3", LUMICE_CRYSTAL_PRISM, &vstate, nullptr, sizeof(msg)), LUMICE_ERR_NULL_ARG);
+}
+
+TEST(ValidateRaypathTextApi, EmptyIsValid) {
+  LUMICE_RaypathValidationState vstate = LUMICE_RAYPATH_INVALID;
+  char msg[256] = {};
+  EXPECT_EQ(LUMICE_ValidateRaypathText("", LUMICE_CRYSTAL_PRISM, &vstate, msg, sizeof(msg)), LUMICE_OK);
+  EXPECT_EQ(vstate, LUMICE_RAYPATH_VALID);
+  EXPECT_EQ(std::string(msg), "");
+}
+
+TEST(ValidateRaypathTextApi, ValidSingleFace) {
+  LUMICE_RaypathValidationState vstate = LUMICE_RAYPATH_INVALID;
+  char msg[256] = {};
+  EXPECT_EQ(LUMICE_ValidateRaypathText("3", LUMICE_CRYSTAL_PRISM, &vstate, msg, sizeof(msg)), LUMICE_OK);
+  EXPECT_EQ(vstate, LUMICE_RAYPATH_VALID);
+}
+
+TEST(ValidateRaypathTextApi, ValidMultiFace) {
+  LUMICE_RaypathValidationState vstate = LUMICE_RAYPATH_INVALID;
+  char msg[256] = {};
+  EXPECT_EQ(LUMICE_ValidateRaypathText("3-5-8", LUMICE_CRYSTAL_PRISM, &vstate, msg, sizeof(msg)), LUMICE_OK);
+  EXPECT_EQ(vstate, LUMICE_RAYPATH_VALID);
+}
+
+TEST(ValidateRaypathTextApi, TrailingSepIncomplete) {
+  LUMICE_RaypathValidationState vstate = LUMICE_RAYPATH_VALID;
+  char msg[256] = {};
+  EXPECT_EQ(LUMICE_ValidateRaypathText("3-", LUMICE_CRYSTAL_PRISM, &vstate, msg, sizeof(msg)), LUMICE_OK);
+  EXPECT_EQ(vstate, LUMICE_RAYPATH_INCOMPLETE);
+}
+
+TEST(ValidateRaypathTextApi, NonDigitInvalid) {
+  LUMICE_RaypathValidationState vstate = LUMICE_RAYPATH_VALID;
+  char msg[256] = {};
+  EXPECT_EQ(LUMICE_ValidateRaypathText("3-x", LUMICE_CRYSTAL_PRISM, &vstate, msg, sizeof(msg)), LUMICE_OK);
+  EXPECT_EQ(vstate, LUMICE_RAYPATH_INVALID);
+}
+
+TEST(ValidateRaypathTextApi, KindSpecificInvalid) {
+  // Face 13 is legal on pyramid but not prism
+  LUMICE_RaypathValidationState vstate = LUMICE_RAYPATH_VALID;
+  char msg[256] = {};
+  EXPECT_EQ(LUMICE_ValidateRaypathText("13", LUMICE_CRYSTAL_PRISM, &vstate, msg, sizeof(msg)), LUMICE_OK);
+  EXPECT_EQ(vstate, LUMICE_RAYPATH_INVALID);
+  EXPECT_NE(std::string(msg).find("not legal on this crystal type"), std::string::npos);
+}
+
+TEST(ValidateRaypathTextApi, KindSpecificValidPyramid) {
+  LUMICE_RaypathValidationState vstate = LUMICE_RAYPATH_INVALID;
+  char msg[256] = {};
+  EXPECT_EQ(LUMICE_ValidateRaypathText("13", LUMICE_CRYSTAL_PYRAMID, &vstate, msg, sizeof(msg)), LUMICE_OK);
+  EXPECT_EQ(vstate, LUMICE_RAYPATH_VALID);
+}
+
+TEST(ValidateRaypathTextApi, MsgBufTruncation) {
+  LUMICE_RaypathValidationState vstate = LUMICE_RAYPATH_VALID;
+  char msg[4] = {};
+  // Should not crash; result must be null-terminated within 4 bytes
+  EXPECT_EQ(LUMICE_ValidateRaypathText("3-x-y", LUMICE_CRYSTAL_PRISM, &vstate, msg, sizeof(msg)), LUMICE_OK);
+  EXPECT_EQ(msg[3], '\0');
+}
+
+// ============================================================
+// GuiValidateFaceNumberText (via raypath_segments.hpp)
+// — validates the substring "not legal on this crystal type"
+//   that ParseFaceNumberOrZero relies on for kind-specific detection.
+// ============================================================
+
+#include "gui/raypath_segments.hpp"
+
+TEST(GuiValidateFaceNumberTextApi, KindSpecificMsgContainsExpectedSubstring) {
+  // Face 13 is legal on pyramid but not prism — kind-specific rejection
+  auto r = lumice::gui::GuiValidateFaceNumberText("13", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(r.state, LUMICE_RAYPATH_INVALID);
+  EXPECT_NE(r.message.find("not legal on this crystal type"), std::string::npos);
+}
+
+// ============================================================
+// LUMICE_MaxFov
+// ============================================================
+
+TEST(MaxFovApi, LinearIs179) {
+  EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_LINEAR), 179.0f, 0.01f);
+}
+
+TEST(MaxFovApi, StereographicIs359) {
+  EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_FISHEYE_STEREOGRAPHIC), 359.0f, 0.01f);
+}
+
+TEST(MaxFovApi, OrthographicIs180) {
+  EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_FISHEYE_ORTHOGRAPHIC), 180.0f, 0.01f);
+  EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_DUAL_FISHEYE_ORTHOGRAPHIC), 180.0f, 0.01f);
+}
+
+TEST(MaxFovApi, GlobeIs90) {
+  EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_GLOBE), 90.0f, 0.01f);
+}
+
+TEST(MaxFovApi, DefaultIs360) {
+  EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_FISHEYE_EQUAL_AREA), 360.0f, 0.01f);
+  EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_FISHEYE_EQUIDISTANT), 360.0f, 0.01f);
+  EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_DUAL_FISHEYE_EQUAL_AREA), 360.0f, 0.01f);
+  EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_DUAL_FISHEYE_EQUIDISTANT), 360.0f, 0.01f);
+  EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_DUAL_FISHEYE_STEREOGRAPHIC), 360.0f, 0.01f);
+  EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_RECTANGULAR), 360.0f, 0.01f);
+}

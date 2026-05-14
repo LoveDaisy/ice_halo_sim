@@ -6,7 +6,6 @@
 #include <cstring>
 #include <string>
 
-#include "config/render_config.hpp"
 #include "gui/app.hpp"
 #include "gui/axis_presets.hpp"
 #include "gui/crystal_preview.hpp"
