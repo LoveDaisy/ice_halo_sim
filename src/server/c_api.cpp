@@ -827,6 +827,154 @@ void LUMICE_StopServer(LUMICE_Server* server) {
 
 
 // =============== Crystal Mesh ===============
+
+// Compute per-face polygon topology from triangle data and face_numbers array.
+// Writes face_count, face_numbers_by_face, face_vtx_offsets, face_vtx_counts,
+// and face_vtx_pool into out. Skips face_numbers <= 0.
+static void FillPerFaceTopology(const int* tri, int tri_cnt, const float* vtx, const int* face_numbers_per_tri,
+                                LUMICE_CrystalMesh* out) {
+  // Collect distinct face numbers in sorted order (skip <= 0)
+  std::set<int> face_set;
+  for (int t = 0; t < tri_cnt; ++t) {
+    int fn = face_numbers_per_tri[t];
+    if (fn > 0) {
+      face_set.insert(fn);
+    }
+  }
+
+  int pool_offset = 0;
+  int fi = 0;
+
+  for (int fn : face_set) {
+    if (fi >= LUMICE_MAX_CRYSTAL_FACES) {
+      break;
+    }
+
+    // Gather unique vertex indices for this face_number
+    std::vector<int> unique_verts;
+    int first_tri = -1;
+    for (int t = 0; t < tri_cnt; ++t) {
+      if (face_numbers_per_tri[t] != fn) {
+        continue;
+      }
+      if (first_tri < 0) {
+        first_tri = t;
+      }
+      for (int k = 0; k < 3; ++k) {
+        int vi = tri[t * 3 + k];
+        bool found = false;
+        for (int x : unique_verts) {
+          if (x == vi) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          unique_verts.push_back(vi);
+        }
+      }
+    }
+
+    if (unique_verts.size() < 3 || first_tri < 0) {
+      continue;
+    }
+
+    // Check pool capacity
+    int count = static_cast<int>(unique_verts.size());
+    if (pool_offset + count > LUMICE_MAX_CRYSTAL_FACE_VTXPOOL) {
+      break;  // pool exhausted
+    }
+
+    // Compute face center
+    float fc[3] = { 0.0f, 0.0f, 0.0f };
+    for (int vi : unique_verts) {
+      fc[0] += vtx[vi * 3 + 0];
+      fc[1] += vtx[vi * 3 + 1];
+      fc[2] += vtx[vi * 3 + 2];
+    }
+    float inv_cnt = 1.0f / static_cast<float>(count);
+    fc[0] *= inv_cnt;
+    fc[1] *= inv_cnt;
+    fc[2] *= inv_cnt;
+
+    // Compute outward normal from first triangle's cross product
+    const float* a = vtx + tri[first_tri * 3 + 0] * 3;
+    const float* b = vtx + tri[first_tri * 3 + 1] * 3;
+    const float* c = vtx + tri[first_tri * 3 + 2] * 3;
+    float e1[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+    float e2[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+    float ref_n[3] = {
+      e1[1] * e2[2] - e1[2] * e2[1],
+      e1[2] * e2[0] - e1[0] * e2[2],
+      e1[0] * e2[1] - e1[1] * e2[0],
+    };
+    float nlen = std::sqrt(ref_n[0] * ref_n[0] + ref_n[1] * ref_n[1] + ref_n[2] * ref_n[2]);
+    if (nlen > 1e-6f) {
+      ref_n[0] /= nlen;
+      ref_n[1] /= nlen;
+      ref_n[2] /= nlen;
+    }
+
+    // Compute v0_dir: normalized vector from face center to first unique vertex
+    float v0_dir[3] = {
+      vtx[unique_verts[0] * 3 + 0] - fc[0],
+      vtx[unique_verts[0] * 3 + 1] - fc[1],
+      vtx[unique_verts[0] * 3 + 2] - fc[2],
+    };
+    float v0_len = std::sqrt(v0_dir[0] * v0_dir[0] + v0_dir[1] * v0_dir[1] + v0_dir[2] * v0_dir[2]);
+    if (v0_len > 1e-6f) {
+      v0_dir[0] /= v0_len;
+      v0_dir[1] /= v0_len;
+      v0_dir[2] /= v0_len;
+    }
+
+    // Sort vertices CCW around ref_n: atan2(dot(cross(v0,vi), ref_n), dot(v0,vi))
+    // Mirrors Triangulate() in math.cpp:920-938.
+    std::sort(unique_verts.begin(), unique_verts.end(), [&](int ia, int ib) {
+      float va[3] = { vtx[ia * 3] - fc[0], vtx[ia * 3 + 1] - fc[1], vtx[ia * 3 + 2] - fc[2] };
+      float vb[3] = { vtx[ib * 3] - fc[0], vtx[ib * 3 + 1] - fc[1], vtx[ib * 3 + 2] - fc[2] };
+      float la = std::sqrt(va[0] * va[0] + va[1] * va[1] + va[2] * va[2]);
+      float lb = std::sqrt(vb[0] * vb[0] + vb[1] * vb[1] + vb[2] * vb[2]);
+      if (la > 1e-6f) {
+        va[0] /= la;
+        va[1] /= la;
+        va[2] /= la;
+      }
+      if (lb > 1e-6f) {
+        vb[0] /= lb;
+        vb[1] /= lb;
+        vb[2] /= lb;
+      }
+      float na[3] = {
+        v0_dir[1] * va[2] - v0_dir[2] * va[1],
+        v0_dir[2] * va[0] - v0_dir[0] * va[2],
+        v0_dir[0] * va[1] - v0_dir[1] * va[0],
+      };
+      float nb[3] = {
+        v0_dir[1] * vb[2] - v0_dir[2] * vb[1],
+        v0_dir[2] * vb[0] - v0_dir[0] * vb[2],
+        v0_dir[0] * vb[1] - v0_dir[1] * vb[0],
+      };
+      float s1 = na[0] * ref_n[0] + na[1] * ref_n[1] + na[2] * ref_n[2];
+      float s2 = nb[0] * ref_n[0] + nb[1] * ref_n[1] + nb[2] * ref_n[2];
+      float c1 = v0_dir[0] * va[0] + v0_dir[1] * va[1] + v0_dir[2] * va[2];
+      float c2 = v0_dir[0] * vb[0] + v0_dir[1] * vb[1] + v0_dir[2] * vb[2];
+      return std::atan2(s1, c1) < std::atan2(s2, c2);
+    });
+
+    out->face_numbers_by_face[fi] = fn;
+    out->face_vtx_offsets[fi] = pool_offset;
+    out->face_vtx_counts[fi] = count;
+    for (int k = 0; k < count; ++k) {
+      out->face_vtx_pool[pool_offset + k] = unique_verts[k];
+    }
+    pool_offset += count;
+    ++fi;
+  }
+
+  out->face_count = fi;
+}
+
 LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* crystal_json, LUMICE_CrystalMesh* out) {
   if (!crystal_json || !out) {
     return LUMICE_ERR_NULL_ARG;
@@ -994,6 +1142,8 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
     std::memcpy(&out->edge_face_normals[i * 6 + 0], edge_infos[i].n0, 3 * sizeof(float));
     std::memcpy(&out->edge_face_normals[i * 6 + 3], edge_infos[i].n1, 3 * sizeof(float));
   }
+
+  FillPerFaceTopology(tri, static_cast<int>(tri_cnt), vtx, out->face_numbers, out);
 
   return LUMICE_OK;
 }

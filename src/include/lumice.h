@@ -287,6 +287,8 @@ void LUMICE_StopServer(LUMICE_Server* server);
 #define LUMICE_MAX_CRYSTAL_VERTICES 128
 #define LUMICE_MAX_CRYSTAL_EDGES 256
 #define LUMICE_MAX_CRYSTAL_TRIANGLES 128
+#define LUMICE_MAX_CRYSTAL_FACES 24
+#define LUMICE_MAX_CRYSTAL_FACE_VTXPOOL 192
 
 typedef struct LUMICE_CrystalMesh_ {
   float vertices[LUMICE_MAX_CRYSTAL_VERTICES * 3];  // [x0,y0,z0, x1,y1,z1, ...]
@@ -303,6 +305,14 @@ typedef struct LUMICE_CrystalMesh_ {
   //   basal = 1/2; prism = 3..8; upper pyramidal = 13..18; lower = 23..28.
   // -1 for unrecognized orientations (kInvalidId in core).
   int face_numbers[LUMICE_MAX_CRYSTAL_TRIANGLES];
+  // Per-face polygon topology (CCW ordered vertex indices when viewed from outside).
+  // face_vtx_pool[face_vtx_offsets[i] .. face_vtx_offsets[i]+face_vtx_counts[i]-1]
+  // gives the CCW vertex indices for face i. face_count=0 means not populated.
+  int face_count;
+  int face_numbers_by_face[LUMICE_MAX_CRYSTAL_FACES];
+  int face_vtx_offsets[LUMICE_MAX_CRYSTAL_FACES];
+  int face_vtx_counts[LUMICE_MAX_CRYSTAL_FACES];
+  int face_vtx_pool[LUMICE_MAX_CRYSTAL_FACE_VTXPOOL];
 } LUMICE_CrystalMesh;
 
 LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* server, const char* crystal_json, LUMICE_CrystalMesh* out);

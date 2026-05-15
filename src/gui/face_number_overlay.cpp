@@ -157,6 +157,82 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
   return label_count;
 }
 
+int AggregateFaceLabelsFromTopology(const float* vertices, int vertex_count, int face_count,
+                                    const int* face_numbers_by_face, const int* face_vtx_offsets,
+                                    const int* face_vtx_counts, const int* face_vtx_pool, FaceLabel* out_labels,
+                                    int max_labels) {
+  int label_count = 0;
+  for (int fi = 0; fi < face_count && label_count < max_labels; ++fi) {
+    int fn = face_numbers_by_face[fi];
+    if (fn <= 0) {
+      continue;
+    }
+    int offset = face_vtx_offsets[fi];
+    int count = face_vtx_counts[fi];
+    if (count < 3) {
+      continue;
+    }
+    int capped = (count < kMaxFacePolygonVerts) ? count : kMaxFacePolygonVerts;
+
+    FaceLabel& label = out_labels[label_count];
+    label.face_number = fn;
+    label.display_polygon_vertex_count = 0;
+    label.display_center[0] = 0.0f;
+    label.display_center[1] = 0.0f;
+    label.display_center[2] = 0.0f;
+
+    for (int k = 0; k < capped; ++k) {
+      int vi = face_vtx_pool[offset + k];
+      if (vi < 0 || vi >= vertex_count) {
+        continue;
+      }
+      const float* p = vertices + vi * 3;
+      label.display_center[0] += p[0];
+      label.display_center[1] += p[1];
+      label.display_center[2] += p[2];
+      label.display_polygon_verts[k * 3 + 0] = p[0];
+      label.display_polygon_verts[k * 3 + 1] = p[1];
+      label.display_polygon_verts[k * 3 + 2] = p[2];
+      ++label.display_polygon_vertex_count;
+    }
+
+    if (label.display_polygon_vertex_count > 0) {
+      float inv = 1.0f / static_cast<float>(label.display_polygon_vertex_count);
+      label.display_center[0] *= inv;
+      label.display_center[1] *= inv;
+      label.display_center[2] *= inv;
+    }
+
+    // Face normal from first 3 vertices (CCW-ordered by FillPerFaceTopology)
+    if (label.display_polygon_vertex_count >= 3) {
+      const float* p0 = label.display_polygon_verts;
+      const float* p1 = label.display_polygon_verts + 3;
+      const float* p2 = label.display_polygon_verts + 6;
+      float e1[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+      float e2[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+      float nx = e1[1] * e2[2] - e1[2] * e2[1];
+      float ny = e1[2] * e2[0] - e1[0] * e2[2];
+      float nz = e1[0] * e2[1] - e1[1] * e2[0];
+      float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+      if (len > 1e-12f) {
+        nx /= len;
+        ny /= len;
+        nz /= len;
+      }
+      label.display_normal[0] = nx;
+      label.display_normal[1] = ny;
+      label.display_normal[2] = nz;
+    } else {
+      label.display_normal[0] = 0.0f;
+      label.display_normal[1] = 0.0f;
+      label.display_normal[2] = 0.0f;
+    }
+
+    ++label_count;
+  }
+  return label_count;
+}
+
 namespace detail {
 
 FaceLabelStyle ResolveFaceLabelStyle(CrystalStyle style) {
@@ -347,15 +423,22 @@ bool ProjectLabelToScreen(const FaceLabel* label, const float rotation[16], cons
   return true;
 }
 
-void DrawFaceNumberOverlay(const float* vertices, int vertex_count, const int* triangles, int triangle_count,
-                           const int* face_numbers, const float rotation[16], const float mvp[16], float zoom,
+void DrawFaceNumberOverlay(const LUMICE_CrystalMesh* mesh, const float rotation[16], const float mvp[16], float zoom,
                            ImVec2 image_pos, ImVec2 image_size, ImDrawList* draw_list, CrystalStyle style) {
-  if (triangle_count <= 0 || draw_list == nullptr) {
+  if (mesh == nullptr || mesh->triangle_count <= 0 || draw_list == nullptr) {
     return;
   }
 
   FaceLabel labels[kMaxFaceLabels];
-  int n = AggregateFaceLabels(vertices, vertex_count, triangles, triangle_count, face_numbers, labels, kMaxFaceLabels);
+  int n = 0;
+  if (mesh->face_count > 0) {
+    n = AggregateFaceLabelsFromTopology(mesh->vertices, mesh->vertex_count, mesh->face_count,
+                                        mesh->face_numbers_by_face, mesh->face_vtx_offsets, mesh->face_vtx_counts,
+                                        mesh->face_vtx_pool, labels, kMaxFaceLabels);
+  } else {
+    n = AggregateFaceLabels(mesh->vertices, mesh->vertex_count, mesh->triangles, mesh->triangle_count,
+                            mesh->face_numbers, labels, kMaxFaceLabels);
+  }
   if (n <= 0) {
     return;
   }

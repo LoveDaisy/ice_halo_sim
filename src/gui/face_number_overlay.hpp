@@ -3,6 +3,7 @@
 
 #include "gui/crystal_renderer.hpp"
 #include "imgui.h"
+#include "include/lumice.h"
 
 namespace lumice::gui {
 
@@ -35,6 +36,14 @@ struct FaceLabel {
 // Returns the number of labels written into out_labels (bounded by max_labels).
 int AggregateFaceLabels(const float* vertices, int vertex_count, const int* triangles, int triangle_count,
                         const int* face_numbers, FaceLabel* out_labels, int max_labels);
+
+// Aggregate per-face topology (from LUMICE_GetCrystalMesh new fields) into FaceLabel array.
+// Vertices are already CCW-ordered in face_vtx_pool; skips faces with face_numbers_by_face <= 0.
+// Returns the number of labels written.
+int AggregateFaceLabelsFromTopology(const float* vertices, int vertex_count, int face_count,
+                                    const int* face_numbers_by_face, const int* face_vtx_offsets,
+                                    const int* face_vtx_counts, const int* face_vtx_pool, FaceLabel* out_labels,
+                                    int max_labels);
 
 // Per-CrystalStyle face-number rendering policy.
 // `visible_*` colors apply to front-facing labels; `hidden_*` apply to back-
@@ -120,16 +129,16 @@ bool ProjectLabelToScreen(const FaceLabel* label, const float rotation[16], cons
 // same `rotation`, `zoom`, and image dimensions used for the current render pass;
 // otherwise overlay coordinates will misalign with GL-rendered pixels.
 //
-// `face_numbers` and `vertices` / `triangles` must come from the same
-// LUMICE_CrystalMesh in display space (Y-Z swapped + AABB normalized).
+// `mesh` must be in display space (Y-Z swapped + AABB normalized). If
+// `mesh->face_count > 0`, uses AggregateFaceLabelsFromTopology (new path);
+// otherwise falls back to AggregateFaceLabels via triangle data.
 //
 // `style` selects the per-mode policy from ResolveFaceLabelStyle: it controls
 // whether hidden (back-facing) faces get drawn (Wireframe / X-Ray do; Hidden
 // Line / Shaded skip them) and whether visible faces are filtered out when
 // their projected-polygon min-width ratio (see ComputeLabelMinWidthRatio)
 // drops below kFaceLabelMinViewportRatio.
-void DrawFaceNumberOverlay(const float* vertices, int vertex_count, const int* triangles, int triangle_count,
-                           const int* face_numbers, const float rotation[16], const float mvp[16], float zoom,
+void DrawFaceNumberOverlay(const LUMICE_CrystalMesh* mesh, const float rotation[16], const float mvp[16], float zoom,
                            ImVec2 image_pos, ImVec2 image_size, ImDrawList* draw_list, CrystalStyle style);
 
 }  // namespace lumice::gui
