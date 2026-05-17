@@ -38,7 +38,8 @@ void HitSurface(const Crystal& crystal, float n, size_t num,                    
 
 void Propagate(const Crystal& crystal, size_t num, size_t step,                      // input
                const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input
-               float_bf_t p_out, int_bf_t fid_out);                                  // output
+               const int_bf_t fid_in_src,            // source face ids (-1 = no constraint)
+               float_bf_t p_out, int_bf_t fid_out);  // output
 
 }  // namespace lumice
 
