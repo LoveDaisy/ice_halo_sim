@@ -673,10 +673,13 @@ TEST_F(PropagateTest, PropagateSourceFaceNotSelected) {
 
   Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
-  // fid_out == -1: fn=3 correctly rejected by source-face guard (acceptable outcome).
-  // fid_out >= 0: some face was selected; it must NOT be fn=3.
-  if (fid_out[0] >= 0) {
-    const float* norm_out = crystal_.GetTriangleNormal() + fid_out[0] * 3;
-    EXPECT_LT(norm_out[0], 0.99f) << "Source face fn=3 was incorrectly selected";
-  }
+  // With dir=(+1,0,0) from a point ε/2 inside fn=3, the only face geometrically
+  // reachable in the forward direction is fn=3 itself. A correctly-functioning
+  // source-face guard must reject it, leaving fid_out=-1. Asserting "-1" is
+  // strictly stronger than "not fn=3": it also catches regressions where some
+  // unrelated face is spuriously selected (e.g. PropagateSlab returning a
+  // stale far_face), which the earlier `if (fid_out>=0)` wrapping would miss.
+  EXPECT_EQ(fid_out[0], -1) << "guard zone must produce no hit; "
+                               "non-negative fid_out (=" << fid_out[0] << ") means either "
+                               "source face fn=3 was wrongly selected or some unreachable face was returned";
 }
