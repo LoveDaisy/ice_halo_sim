@@ -1,97 +1,97 @@
 {
-  "generated_at": "2026-05-13T19:16:21",
+  "generated_at": "2026-05-17T22:46:46",
   "n_ref_runs": 10,
   "n_calib_runs": 30,
   "scenes": {
     "color_off": {
-      "psnr_mean": 20.6267,
-      "psnr_std": 0.1573,
+      "psnr_mean": 20.7177,
+      "psnr_std": 0.0886,
       "threshold": 20.0
     },
     "color_on": {
-      "psnr_mean": 18.405,
-      "psnr_std": 0.0851,
+      "psnr_mean": 18.4563,
+      "psnr_std": 0.0642,
       "threshold": 18.0
     },
     "cza_off": {
-      "psnr_mean": 31.332,
-      "psnr_std": 0.2357,
-      "threshold": 30.5
+      "psnr_mean": 31.4433,
+      "psnr_std": 0.3544,
+      "threshold": 30.0
     },
     "cza_on": {
-      "psnr_mean": 35.6838,
-      "psnr_std": 0.1199,
+      "psnr_mean": 35.8311,
+      "psnr_std": 0.1286,
       "threshold": 35.0
     },
     "filters_off": {
-      "psnr_mean": 19.704,
-      "psnr_std": 0.1325,
-      "threshold": 19.0
+      "psnr_mean": 18.5817,
+      "psnr_std": 0.2919,
+      "threshold": 17.5
     },
     "filters_on": {
-      "psnr_mean": 24.8377,
-      "psnr_std": 0.1382,
-      "threshold": 24.0
+      "psnr_mean": 27.135,
+      "psnr_std": 0.5893,
+      "threshold": 25.0
     },
     "halo_22_off": {
-      "psnr_mean": 19.1957,
-      "psnr_std": 0.1104,
+      "psnr_mean": 19.225,
+      "psnr_std": 0.1023,
       "threshold": 18.5
     },
     "halo_22_on": {
-      "psnr_mean": 17.028,
-      "psnr_std": 0.0656,
+      "psnr_mean": 17.0383,
+      "psnr_std": 0.0591,
       "threshold": 16.5
     },
     "multi_scat_off": {
-      "psnr_mean": 19.046,
-      "psnr_std": 0.2112,
+      "psnr_mean": 19.1297,
+      "psnr_std": 0.2158,
       "threshold": 18.0
     },
     "multi_scat_on": {
-      "psnr_mean": 16.87,
-      "psnr_std": 0.1302,
-      "threshold": 16.0
+      "psnr_mean": 16.9097,
+      "psnr_std": 0.1271,
+      "threshold": 16.5
     },
     "parhelion_off": {
-      "psnr_mean": 20.623,
-      "psnr_std": 0.1122,
+      "psnr_mean": 20.6437,
+      "psnr_std": 0.0937,
       "threshold": 20.0
     },
     "parhelion_on": {
-      "psnr_mean": 18.4377,
-      "psnr_std": 0.0758,
+      "psnr_mean": 18.4153,
+      "psnr_std": 0.0682,
       "threshold": 18.0
     },
     "pyramid_off": {
-      "psnr_mean": 18.1343,
-      "psnr_std": 0.2973,
-      "threshold": 17.0
+      "psnr_mean": 18.2387,
+      "psnr_std": 0.0873,
+      "threshold": 17.5
     },
     "pyramid_on": {
-      "psnr_mean": 18.172,
-      "psnr_std": 0.1574,
+      "psnr_mean": 18.2213,
+      "psnr_std": 0.0898,
       "threshold": 17.5
     },
     "rp46_nof_off": {
-      "psnr_mean": 19.48,
-      "psnr_std": 0.1598,
+      "psnr_mean": 19.5477,
+      "psnr_std": 0.0905,
       "threshold": 19.0
     },
     "rp46_nof_on": {
-      "psnr_mean": 17.6683,
-      "psnr_std": 0.0837,
-      "threshold": 17.0
+      "psnr_mean": 17.7063,
+      "psnr_std": 0.0634,
+      "threshold": 17.5
     },
     "rp46_off": {
-      "psnr_mean": 20.6747,
-      "psnr_std": 0.082,
-      "threshold": 20.0
+      "psnr_mean": 22.5537,
+      "psnr_std": 0.1548,
+      "threshold": 22.0
     },
     "rp46_on": {
-      "psnr_mean": 30.0907,
-      "psnr_std": 0.2793,
-      "threshold": 29.0
+      "psnr_mean": 29.2863,
+      "psnr_std": 0.17,
+      "threshold": 28.5
     }
   }
 }

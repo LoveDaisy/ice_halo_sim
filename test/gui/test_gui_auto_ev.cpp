@@ -17,18 +17,20 @@ struct AutoEvScene {
 };
 
 // clang-format off
-// Per-scene PSNR thresholds are mean − 3σ (floored to 0.5 dB), computed from N=10 mean-ref
+// Per-scene PSNR thresholds are mean − 3σ (floored to 0.5 dB), computed from N=30 mean-ref
 // calibration runs via scripts/regen_gui_test_refs.py. One threshold covers both _off and
 // _on modes (conservative min of the two). Reference images are N=10 pixel-averaged means.
+// rp46 and rp46_nof are stepped down 0.5 dB from the N=30 floor (22.0→21.5, 17.5→17.0):
+// the 0.5 dB floor lands within 0.1 dB of mean−3σ, leaving no headroom for jpg encode noise.
 static const AutoEvScene kScenes[] = {
   {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 16.5},
-  {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 16.0},
+  {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 16.5},
   {"color",      LUMICE_E2E_CONFIG_DIR "/color.json",                             256, 256, 18.0},
-  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 17.0},
-  {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 30.5},
+  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 17.5},
+  {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 30.0},
   {"parhelion",  LUMICE_E2E_CONFIG_DIR "/parhelion.json",                         256, 256, 18.0},
-  {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 19.0},
-  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 20.0},
+  {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 17.5},
+  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 21.5},
   {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 17.0},
 };
 // clang-format on
