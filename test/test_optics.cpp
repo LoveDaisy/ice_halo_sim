@@ -680,6 +680,8 @@ TEST_F(PropagateTest, PropagateSourceFaceNotSelected) {
   // unrelated face is spuriously selected (e.g. PropagateSlab returning a
   // stale far_face), which the earlier `if (fid_out>=0)` wrapping would miss.
   EXPECT_EQ(fid_out[0], -1) << "guard zone must produce no hit; "
-                               "non-negative fid_out (=" << fid_out[0] << ") means either "
+                               "non-negative fid_out (="
+                            << fid_out[0]
+                            << ") means either "
                                "source face fn=3 was wrongly selected or some unreachable face was returned";
 }

@@ -504,8 +504,8 @@ TEST(CrystalTriangleToPolygonFace, EveryTriangleMapsToCoplanarPolygon) {
     int p = crystal.GetTriangleToPolygonFace(static_cast<int>(t));
     ASSERT_GE(p, 0) << "triangle " << t << " has no polygon mapping";
     ASSERT_LT(static_cast<size_t>(p), crystal.PolygonFaceCount()) << "triangle " << t << " maps out of range";
-    float dot = tri_n[t * 3] * poly_n[p * 3] + tri_n[t * 3 + 1] * poly_n[p * 3 + 1] +
-                tri_n[t * 3 + 2] * poly_n[p * 3 + 2];
+    float dot =
+        tri_n[t * 3] * poly_n[p * 3] + tri_n[t * 3 + 1] * poly_n[p * 3 + 1] + tri_n[t * 3 + 2] * poly_n[p * 3 + 2];
     EXPECT_NEAR(dot, 1.0f, 1e-4f) << "triangle " << t << " normal does not align with polygon " << p;
   }
 }
@@ -520,8 +520,8 @@ TEST(CrystalTriangleToPolygonFace, CoplanarTrianglesShareSamePolygon) {
 
   for (size_t a = 0; a < n; a++) {
     for (size_t b = a + 1; b < n; b++) {
-      float dot = tri_n[a * 3] * tri_n[b * 3] + tri_n[a * 3 + 1] * tri_n[b * 3 + 1] +
-                  tri_n[a * 3 + 2] * tri_n[b * 3 + 2];
+      float dot =
+          tri_n[a * 3] * tri_n[b * 3] + tri_n[a * 3 + 1] * tri_n[b * 3 + 1] + tri_n[a * 3 + 2] * tri_n[b * 3 + 2];
       if (dot > 0.9999f) {
         int pa = crystal.GetTriangleToPolygonFace(static_cast<int>(a));
         int pb = crystal.GetTriangleToPolygonFace(static_cast<int>(b));
