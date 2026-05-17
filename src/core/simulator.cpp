@@ -385,14 +385,12 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
 
-      if (!filter->Check(r)) {
-        // 1.1 Filter out. Marked as stopped.
-        r.state_ = RaySeg::kStopped;
-      } else if (rng.GetUniform() < ms_info.prob_) {
-        // 1.2 Copy outgoing rays into initial data, with probability of p
+      if (rng.GetUniform() < ms_info.prob_ && filter->Check(r)) {
+        // 1.1 Branch gate: filter+prob both pass → continue to next ms scatter level.
         r.state_ = RaySeg::kContinue;
       } else {
-        // 1.3 Final outgoing rays.
+        // 1.2 Emit outgoing: both filter-fail and prob-fail rays go here.
+        //     Query filter is now applied downstream by RenderConsumer.
         r.state_ = RaySeg::kOutgoing;
       }
     } else {

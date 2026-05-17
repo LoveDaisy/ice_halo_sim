@@ -38,7 +38,7 @@ struct RaySeg {
     kNormal,
     kOutgoing,
     kContinue,  // continue to next crystal, on multi-scattering situation
-    kStopped,   // exceed max_hits, or filtered out
+    kStopped,   // exceed max_hits, or total internal reflection
   };
 
   // NOTE: if state == kNormal, d and p are in crystal-local coordinates; otherwise
