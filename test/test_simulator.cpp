@@ -411,7 +411,10 @@ TEST(CollectDataFilterDispatch, FilterFailBecomesOutgoing) {
   RandomNumberGenerator rng(42);
   AlwaysRejectFilter filter;
   MsInfo ms_info;
-  ms_info.prob_ = 0.0f;  // no branching; isolates filter behavior
+  // prob_=0: rng < prob is always false → short-circuit, filter->Check never called.
+  // This covers the prob-fail → kOutgoing path; see FilterFailWithNonZeroProbEmitsOutgoing
+  // for the direct filter-fail → kOutgoing (AC-2) coverage.
+  ms_info.prob_ = 0.0f;
 
   RayBuffer buffer_data[2];
   RayBuffer init_data[2];
@@ -428,6 +431,31 @@ TEST(CollectDataFilterDispatch, FilterFailBecomesOutgoing) {
   EXPECT_EQ(buffer_data[1].rays_[0].state_, RaySeg::kOutgoing)
       << "filter-fail ray must emit as kOutgoing (was " << buffer_data[1].rays_[0].state_ << ")";
   // init_data must NOT contain the filter-fail ray.
+  EXPECT_EQ(init_data[1].size_, 0u);
+}
+
+TEST(CollectDataFilterDispatch, FilterFailWithNonZeroProbEmitsOutgoing) {
+  // prob_=1.0f: rng < prob is always true → filter->Check IS called and returns false.
+  // This is the direct AC-2 coverage: filter-fail ray must emit as kOutgoing.
+  RandomNumberGenerator rng(42);
+  AlwaysRejectFilter filter;
+  MsInfo ms_info;
+  ms_info.prob_ = 1.0f;
+
+  RayBuffer buffer_data[2];
+  RayBuffer init_data[2];
+  buffer_data[0].Reset(8);
+  buffer_data[1].Reset(8);
+  init_data[0].Reset(8);
+  init_data[1].Reset(8);
+
+  buffer_data[1].EmplaceBack(MakeOutgoingCandidate());
+
+  CollectData(rng, ms_info, &filter, buffer_data, init_data);
+
+  ASSERT_EQ(buffer_data[1].size_, 1u);
+  EXPECT_EQ(buffer_data[1].rays_[0].state_, RaySeg::kOutgoing)
+      << "filter-fail ray must emit as kOutgoing (was " << buffer_data[1].rays_[0].state_ << ")";
   EXPECT_EQ(init_data[1].size_, 0u);
 }
 

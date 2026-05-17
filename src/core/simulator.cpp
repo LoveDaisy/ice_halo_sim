@@ -385,6 +385,10 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
 
+      // Note: rng.GetUniform() is consumed before filter->Check(), so the RNG
+      // sequence (and thus fixed-seed output) differs from the pre-uplift evaluation
+      // order (which tested filter first). Fixed-seed determinism is intentionally
+      // not preserved across this change.
       if (rng.GetUniform() < ms_info.prob_ && filter->Check(r)) {
         // 1.1 Branch gate: filter+prob both pass → continue to next ms scatter level.
         r.state_ = RaySeg::kContinue;

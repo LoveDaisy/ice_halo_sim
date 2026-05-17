@@ -103,6 +103,8 @@ def _find_lib() -> Path:
     )
 
 
+# Module-level singleton; safe for single-process sequential or fork-parallel execution;
+# not thread-safe on first load (double-checked load pattern has a race window).
 _LIB_CACHE: Optional[ctypes.CDLL] = None
 
 
@@ -162,7 +164,7 @@ def run_scene_capi(config_path: str, timeout_sec: int = 180) -> SimResult:
         if err != 0:
             raise RuntimeError(f"CommitConfigFromFile failed err={err} config={config_path}")
 
-        results = (LUMICE_RawXyzResult * 2)()
+        results = (LUMICE_RawXyzResult * 1)()
         state_out = ctypes.c_int(0)
         t_start = time.time()
 

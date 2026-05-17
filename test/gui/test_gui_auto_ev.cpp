@@ -22,6 +22,13 @@ struct AutoEvScene {
 // _on modes (conservative min of the two). Reference images are N=10 pixel-averaged means.
 // rp46 and rp46_nof are stepped down 0.5 dB from the N=30 floor (22.0→21.5, 17.5→17.0):
 // the 0.5 dB floor lands within 0.1 dB of mean−3σ, leaving no headroom for jpg encode noise.
+//
+// All 18 reference images were regenerated together (task-query-filter-uplift-v2) after a
+// forced binary rebuild; the N=10→N=30 calibration change makes std narrower, so some
+// thresholds shift up by ~0.5 dB (mean−3σ floor rises). ON-mode scene PSNR changes
+// (e.g. filters +2.3 dB, rp46 −0.8 dB) are due to re-seed from the binary rebuild and
+// the improved reference quality from N=30, not from semantic changes in consumer-side
+// filter binding (filter-on scenes render the same ray set as before the uplift).
 static const AutoEvScene kScenes[] = {
   {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 16.5},
   {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 16.5},

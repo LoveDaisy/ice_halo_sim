@@ -206,6 +206,17 @@ void from_json(const nlohmann::json& j, ConfigManager& m) {
   // Scope (1+1 architecture): one real filter per ms level. Multi-crystal
   // per-level filter mixing or true (1+N) query buffer support is out of
   // scope and left for a follow-up task (see issue.md exclusions).
+  //
+  // Sole trigger: this is the only code path that populates ms_filter_ from
+  // scattering config. Non-JSON construction paths (e.g. programmatic
+  // ConfigManager assembly in tests or tooling) will not trigger this binding
+  // and must populate ms_filter_ explicitly if consumer-side query filter is
+  // required.
+  //
+  // Multi-ms-level semantics: when scene_.ms_.size() > 1, each ms level
+  // contributes at most one real filter entry to ms_filter_ (inner break keeps
+  // 1+1 scope). RenderConsumer applies all entries in sequence (AND semantics).
+  // Behavior for N>1 levels with mixed filters is untested; see TODO below.
   for (auto& [_, render] : m.renderers_) {
     if (!render.ms_filter_.empty()) {
       continue;  // explicit renderer.filter wins
