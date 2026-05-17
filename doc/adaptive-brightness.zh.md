@@ -143,6 +143,30 @@ GUI tooltip 文案为：
 
 ---
 
+## 5b. 行为变更说明（task-query-filter-uplift-v2）
+
+在本次改动之前，simulator 端会把任何未通过 `scattering.entries[].filter`
+的光线标记为 `kStopped`，这些光线无法抵达 consumer 的 unfiltered accumulator，
+导致 `unfiltered_xyz_buffer` 实际上是 *post-filter* 的，Off 模式 EV 因而间接受
+filter 影响，违反 §4 的可加性不变量。
+
+修复将 simulator 端 filter 降级为纯 branch gate（仅控制 multi-scatter 的
+`kContinue` 展开），filter-fail 光线统一作为 `kOutgoing` 释放，consumer 的
+Path B 现在累积真正的 unfiltered 全集。
+
+**用户可见影响**：
+
+- 配置了通过率很低的 filter（例如某条 raypath filter 只让极少部分光线通过）的
+  场景，Off 模式 EV 会向"更暗"方向偏移，因为 anchor 现在是全光线集而非
+  post-filter 子集。通过率 ~0.1% 的 filter 可能让 Off 模式 anchor 下调约 10
+  stops。
+- On 模式行为不变。
+- filtered（On 模式）XYZ buffer 与给定 EV 下最终渲染图像不变。
+
+若依赖旧的 Off 模式行为，请改用 On 模式或手动调整 EV slider。
+
+---
+
 ## 6. 参考
 
 ### 代码路径

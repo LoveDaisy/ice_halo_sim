@@ -75,8 +75,10 @@ typedef struct LUMICE_RawXyzResult_ {
   int has_valid_data;        // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
   int effective_pixels;                    // Non-zero pixel count (for adaptive normalization)
-  const float* unfiltered_xyz_buffer;      // All outgoing rays (filter-independent); check has_valid_data before use
-  float unfiltered_snapshot_intensity;     // Per-pixel landed intensity for unfiltered rays
+  const float* unfiltered_xyz_buffer;      // All outgoing rays before the query filter is applied.
+                                           // Filter-independent: invariant across filter_in / filter_out / no-filter
+                                           // runs of an otherwise-identical scene. Check has_valid_data before use.
+  float unfiltered_snapshot_intensity;     // Per-pixel landed intensity for unfiltered rays (same invariant).
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {
