@@ -191,6 +191,37 @@ void from_json(const nlohmann::json& j, ConfigManager& m) {
 
   // Scene (single object, light_source inlined)
   m.scene_ = ParseSceneConfig(j.at("scene"), m);
+
+  // Post-parse binding: auto-populate renderer.ms_filter_ from scattering entries
+  // when no explicit renderer.filter was configured.
+  //
+  // Rationale (task-query-filter-uplift-v2): now that simulator-side filter is
+  // demoted to a branch gate (no longer emit-gates outgoing rays), the query
+  // filter must be applied on the consumer side via RenderConsumer.filters_,
+  // which is built from renderer.ms_filter_. Existing scene configs only set
+  // scattering.entries[].filter, so without this binding the consumer would
+  // see an empty filter list and behave as "no filter" (Path A) — making the
+  // user-facing query filter silently inert.
+  //
+  // Scope (1+1 architecture): one real filter per ms level. Multi-crystal
+  // per-level filter mixing or true (1+N) query buffer support is out of
+  // scope and left for a follow-up task (see issue.md exclusions).
+  for (auto& [_, render] : m.renderers_) {
+    if (!render.ms_filter_.empty()) {
+      continue;  // explicit renderer.filter wins
+    }
+    for (const auto& ms : m.scene_.ms_) {
+      for (const auto& setting : ms.setting_) {
+        if (setting.filter_.id_ != kInvalidId) {
+          // TODO(query-filter-uplift): N>1 support — drop the break and collect
+          // all real filters per ms level; consumer accumulator slots must be
+          // extended in parallel.
+          render.ms_filter_.emplace_back(setting.filter_);
+          break;
+        }
+      }
+    }
+  }
 }
 
 }  // namespace lumice
