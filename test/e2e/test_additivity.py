@@ -62,18 +62,28 @@ _REL_TOL = 0.05
 # Primary scalar tolerance for partition additivity
 # ``|A.snapshot + B.snapshot - N.unfiltered| / N.unfiltered``.
 #
-# Calibration: 5 fresh-build rounds via
+# Calibration: combined N=10 sample (5 rounds from
 # ``scratchpad/explore-partition-buffer-additivity-root-cause/probe_e1_baseline.py``
-# (e1_results.json): 0.533 %, 0.550 %, 0.437 %, 0.229 %, 0.536 %.
-# mean = 0.457 %, σ = 0.135 %, mean + 3σ = 0.862 % → ceiling to 0.5 % grid → 1.0 %.
-_PARTITION_SCALAR_TOL = 0.01
+# e1_results.json + 5 rounds from
+# ``scratchpad/task-partition-additivity-test-redesign/calibrate_bright.py``):
+#   e1   : 0.533 %, 0.550 %, 0.437 %, 0.229 %, 0.536 %
+#   fresh: 0.186 %, 0.394 %, 1.189 %, 0.675 %, 0.243 %
+#   mean = 0.497 %, σ = 0.291 %, mean + 3σ = 1.370 %
+#   ceil to 0.5 % grid → 1.5 %.
+# Plan v1 used the e1-only σ (0.135 %) → 1.0 % threshold; fresh measurements
+# showed σ is ~2× larger, with one single-round value at 1.19 % (would fail
+# the plan's 1.0 % threshold). Combined N=10 estimate is the conservative
+# choice for AC-1 (5 fresh-build rounds must all pass).
+_PARTITION_SCALAR_TOL = 0.015
 
-# Secondary bright-pixel tolerance for partition additivity. PLACEHOLDER until
-# Step 3 of task-partition-additivity-test-redesign replaces it with an
-# empirically calibrated value (5 fresh-build rounds × mean + 3σ → 0.5 % grid).
-# The placeholder 15 % is set conservatively above the expected single-run
-# value (~6.7 % per sqrt(N) extrapolation from N=400 averaged 0.338 %).
-_PARTITION_BRIGHT_TOL = 0.15  # PLACEHOLDER — calibrated in Step 3
+# Secondary bright-pixel tolerance for partition additivity. Empirically
+# calibrated via
+# ``scratchpad/task-partition-additivity-test-redesign/calibrate_bright.py``,
+# 5 fresh-build rounds on commit dc915e4 (single-run bright_mean_rel):
+#   5.9406 %, 6.9545 %, 8.3934 %, 7.7969 %, 7.0416 %
+#   mean = 7.225 %, σ = 0.928 %, mean + 3σ = 10.011 %
+#   ceil to 0.5 % grid → 10.5 %.
+_PARTITION_BRIGHT_TOL = 0.105
 
 # Bright-mask threshold: pixels whose any-channel XYZ value exceeds
 # ``peak * _BRIGHT_MASK_FRAC`` are considered bright. Chosen to capture the
