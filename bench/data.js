@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779065892784,
+  "lastUpdate": 1779065894416,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -6259,6 +6259,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 54.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "280bf0be7058816e808ba6a78cc98a7a5452eb6b",
+          "message": "Merge pull request #92 from LoveDaisy/fix/raypath-1-3\n\nfix(core): repair raypath=[1,3] TIR edge leak via fid_in_src parameter",
+          "timestamp": "2026-05-18T08:53:02+08:00",
+          "tree_id": "8587ee20db4172496e5a7a3bd75b60244f2d8958",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/280bf0be7058816e808ba6a78cc98a7a5452eb6b"
+        },
+        "date": 1779065893997,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 87.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 74.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 59.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 64.3,
             "unit": "%"
           }
         ]
