@@ -28,6 +28,12 @@ void HitSurface(const Crystal& crystal, float n, size_t num,                    
   const auto* poly_norm = crystal.GetPolygonFaceNormal();
 
   for (size_t i = 0; i < num; i++) {
+    if (to_face_in[i] == kInvalidId) {
+      // No valid hit face — zero both output weights (and leave directions unchanged).
+      w_out[2 * i + 0] = 0.0f;
+      w_out[2 * i + 1] = 0.0f;
+      continue;
+    }
     const float* tmp_dir = d_in.Ptr(i);
     const float* tmp_norm = poly_norm + to_face_in[i] * 3;
 

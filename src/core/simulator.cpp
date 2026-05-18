@@ -77,8 +77,8 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
     r.to_face_ = PolygonFaceOfTri(curr_crystal, tri_id);
     if (r.to_face_ == kInvalidId) {
       // Triangle has no matching polygon face — should not happen for a valid crystal.
-      // Zero weight so this ray is silently discarded downstream instead of causing UB
-      // in HitSurface (which would index poly_norm + 0xffff*3).
+      // Zero weight to suppress downstream contribution; HitSurface also guards
+      // kInvalidId at loop entry, preventing any OOB access.
       LOG_WARNING("PolygonFaceOfTri: tri {} has no matching polygon face; zeroing ray weight", tri_id);
       r.w_ = 0.0f;
     }

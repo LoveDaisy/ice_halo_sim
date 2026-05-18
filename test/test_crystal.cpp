@@ -471,6 +471,29 @@ TEST(DetailIsDApplicable, Conditions) {
   EXPECT_FALSE(lumice::detail::IsDApplicable(d));
 }
 
+// D4 invariant: every triangle's normal must align with at least one polygon-face
+// normal (dot > 1-1e-3), ensuring PolygonFaceOfTri always finds a match on valid
+// crystals and HitSurface's polygon-face normal equals the per-triangle normal.
+TEST_F(V3TestCrystal, EveryTriangleMapsToCoplanarPolygon) {
+  auto prism = Crystal::CreatePrism(1.3);
+  auto pyramid = Crystal::CreatePyramid(0.3f, 1.0f, 0.3f);
+
+  for (const auto* crystal : { &prism, &pyramid }) {
+    const float* tn = crystal->GetTriangleNormal();
+    const float* pn = crystal->GetPolygonFaceNormal();
+    for (size_t t = 0; t < crystal->TotalTriangles(); t++) {
+      bool found = false;
+      for (size_t p = 0; p < crystal->PolygonFaceCount(); p++) {
+        if (Dot3(tn + t * 3, pn + p * 3) > 1.0f - 1e-3f) {
+          found = true;
+          break;
+        }
+      }
+      EXPECT_TRUE(found) << "triangle " << t << " has no coplanar polygon face";
+    }
+  }
+}
+
 // AC-5: GetFn(IdType poly_idx) returns the same fn that GetFn(int tri_id) gives
 // for the polygon's representative triangle, and yields kInvalidId on out-of-range
 // or kInvalidId input. Covers the new polygon-face overload used by simulator
