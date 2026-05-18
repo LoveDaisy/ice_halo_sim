@@ -193,7 +193,6 @@ Crystal::Crystal(const Crystal& other)
     poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
     std::memcpy(poly_face_data_.get(), other.poly_face_data_.get(), poly_face_cnt_ * 5 * sizeof(float));
   }
-  (void)tri_cnt;
 }
 
 Crystal::Crystal(Crystal&& other) noexcept
