@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 
 # Mirrors LUMICE_RawXyzResult in src/include/lumice.h (verified 72 bytes
 # on 64-bit macOS/Linux). Keep in sync with scripts/dump_xyz_stats.py:51.
@@ -69,6 +71,20 @@ class SimResult:
     snapshot_intensity: float
     has_valid_data: bool
     effective_pixels: int
+
+
+@dataclass
+class BufferedSimResult:
+    """SimResult plus copied XYZ buffers for partition-additivity tests."""
+
+    unfiltered_intensity: float
+    snapshot_intensity: float
+    has_valid_data: bool
+    effective_pixels: int
+    img_width: int
+    img_height: int
+    flt_buf: np.ndarray
+    unf_buf: np.ndarray
 
 
 def _project_root() -> Path:
@@ -198,6 +214,112 @@ def run_scene_capi(config_path: str, timeout_sec: int = 180) -> SimResult:
             snapshot_intensity=float(r.snapshot_intensity),
             has_valid_data=bool(r.has_valid_data),
             effective_pixels=int(r.effective_pixels),
+        )
+
+    finally:
+        lib.LUMICE_DestroyServer(server)
+
+
+def run_scene_capi_buffered(config_path: str, timeout_sec: int = 180) -> BufferedSimResult:
+    """Run a Lumice sim via the C API and copy out both XYZ buffers.
+
+    Polling exits only after `has_valid_data AND IDLE AND xyz_buffer != NULL
+    AND unfiltered_xyz_buffer != NULL` is observed on two consecutive samples,
+    mirroring the pattern validated in
+    scratchpad/explore-partition-buffer-additivity-root-cause/probe_e1_baseline.py
+    (single-sample exit hit a buffer-NULL race in ~5% of runs).
+
+    Buffer contents are copied into owned numpy arrays before destroying the
+    server; the returned object holds no references to server memory.
+    """
+    lib = _load_lib()
+
+    server = lib.LUMICE_CreateServer()
+    if not server:
+        raise RuntimeError("LUMICE_CreateServer returned NULL")
+
+    try:
+        err = lib.LUMICE_CommitConfigFromFile(server, str(config_path).encode("utf-8"))
+        if err != 0:
+            raise RuntimeError(f"CommitConfigFromFile failed err={err} config={config_path}")
+
+        results = (LUMICE_RawXyzResult * 1)()
+        state_out = ctypes.c_int(0)
+        t_start = time.time()
+        consecutive_ok = 0
+
+        while True:
+            elapsed = time.time() - t_start
+            if elapsed > timeout_sec:
+                raise RuntimeError(
+                    f"Timeout {elapsed:.1f}s waiting for {config_path}"
+                )
+
+            err = lib.LUMICE_GetRawXyzResults(server, results, 1)
+            if err != 0:
+                raise RuntimeError(f"GetRawXyzResults failed err={err}")
+
+            err2 = lib.LUMICE_QueryServerState(server, ctypes.byref(state_out))
+            if err2 != 0:
+                raise RuntimeError(f"QueryServerState failed err={err2}")
+
+            state = state_out.value
+            if state == _LUMICE_SERVER_NOT_READY:
+                raise RuntimeError("Server NOT_READY")
+
+            xyz_addr = ctypes.cast(results[0].xyz_buffer, ctypes.c_void_p).value
+            unf_addr = ctypes.cast(results[0].unfiltered_xyz_buffer, ctypes.c_void_p).value
+            if (results[0].has_valid_data and state == _LUMICE_SERVER_IDLE
+                    and xyz_addr is not None and unf_addr is not None):
+                consecutive_ok += 1
+                if consecutive_ok >= 2:
+                    break
+            else:
+                consecutive_ok = 0
+
+            time.sleep(0.2)
+
+        r = results[0]
+        # Snapshot scalars + pointer addresses before any further API call
+        r_w = int(r.img_width)
+        r_h = int(r.img_height)
+        r_xyz_addr = ctypes.cast(r.xyz_buffer, ctypes.c_void_p).value
+        r_unf_addr = ctypes.cast(r.unfiltered_xyz_buffer, ctypes.c_void_p).value
+        r_snap = float(r.snapshot_intensity)
+        r_unf_int = float(r.unfiltered_snapshot_intensity)
+        r_valid = bool(r.has_valid_data)
+        r_eff = int(r.effective_pixels)
+        if r_xyz_addr is None or r_unf_addr is None:
+            raise RuntimeError(
+                f"{config_path}: race — pointer became NULL after IDLE check "
+                f"(xyz={r_xyz_addr}, unf={r_unf_addr})"
+            )
+
+        n = r_w * r_h * 3
+
+        def _copy_addr(addr: int) -> np.ndarray:
+            return (
+                np.frombuffer(
+                    (ctypes.c_float * n).from_address(addr),
+                    dtype=np.float32,
+                )
+                .copy()
+                .reshape(r_h, r_w, 3)
+                .astype(np.float64)
+            )
+
+        flt_buf = _copy_addr(r_xyz_addr)
+        unf_buf = _copy_addr(r_unf_addr)
+
+        return BufferedSimResult(
+            unfiltered_intensity=r_unf_int,
+            snapshot_intensity=r_snap,
+            has_valid_data=r_valid,
+            effective_pixels=r_eff,
+            img_width=r_w,
+            img_height=r_h,
+            flt_buf=flt_buf,
+            unf_buf=unf_buf,
         )
 
     finally:
