@@ -328,10 +328,12 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
     float_bf_t d_in{ buffer_data[1][0].d_, sizeof(RaySeg) };
     float_bf_t w_in{ &buffer_data[1][0].w_, sizeof(RaySeg) };
     float_bf_t p_in{ buffer_data[0][0].p_, sizeof(RaySeg) };
+    int_bf_t fid_src_in{ &buffer_data[0][0].fid_, sizeof(RaySeg) };
     float_bf_t p_out{ buffer_data[1][0].p_, sizeof(RaySeg) };
     int_bf_t fid_out{ &buffer_data[1][0].fid_, sizeof(RaySeg) };
     Propagate(curr_crystal, curr_ray_num * 2, 2,  // Input
               d_in, p_in, w_in,                   // Input, d, w, p(1/2)
+              fid_src_in,                         // Source face ids (step=2, shared by reflect+refract pair)
               p_out, fid_out);                    // Output, p, fid
   }
 

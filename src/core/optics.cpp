@@ -56,7 +56,7 @@ constexpr size_t kMaxSlabRays = 128;
 // Per-polygon-face half-space interval method with face-outer/ray-inner SoA loop.
 // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const float_bf_t d_in, const float_bf_t p_in,
-                          const float_bf_t w_in, float_bf_t p_out, int_bf_t fid_out) {
+                          const float_bf_t w_in, const int_bf_t fid_in_src, float_bf_t p_out, int_bf_t fid_out) {
   auto poly_cnt = crystal.PolygonFaceCount();
   const auto* pn = crystal.GetPolygonFaceNormal();
   const auto* pd = crystal.GetPolygonFaceDist();
@@ -67,6 +67,7 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
   alignas(64) float px[kMaxSlabRays], py[kMaxSlabRays], pz[kMaxSlabRays];
   alignas(64) float t_far[kMaxSlabRays];
   int far_face[kMaxSlabRays];
+  int src_poly[kMaxSlabRays];
 
   for (size_t i = 0; i < num; i++) {
     const float* d = d_in.Ptr(i);
@@ -79,6 +80,8 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
     pz[i] = p[2];
     t_far[i] = 1e30f;
     far_face[i] = -1;
+    int src_tri = fid_in_src[i / step];
+    src_poly[i] = (src_tri >= 0) ? crystal.GetTriangleToPolygonFace(src_tri) : -1;
   }
 
   // Face-outer, ray-inner: find minimum t among exit faces (denom > eps)
@@ -107,7 +110,10 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
     float* out_pt = p_out.Ptr(i);
     int* out_fid = fid_out.Ptr(i);
 
-    if (far_face[i] >= 0 && t_far[i] > math::kFloatEps) {
+    // Use relaxed threshold for non-source faces to accept t≈0 TIR-edge hits.
+    // Source face keeps +kFloatEps to prevent self-selection.
+    float eps_thr = (src_poly[i] >= 0 && far_face[i] != src_poly[i]) ? -math::kFloatEps : math::kFloatEps;
+    if (far_face[i] >= 0 && t_far[i] > eps_thr) {
       float t = t_far[i];
       out_pt[0] = px[i] + t * dx[i];
       out_pt[1] = py[i] + t * dy[i];
@@ -125,7 +131,8 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
 // Per-triangle barycentric intersection (original algorithm, used as fallback).
 // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 static void PropagateTriangle(const Crystal& crystal, size_t num, size_t step, const float_bf_t d_in,
-                              const float_bf_t p_in, const float_bf_t w_in, float_bf_t p_out, int_bf_t fid_out) {
+                              const float_bf_t p_in, const float_bf_t w_in, const int_bf_t fid_in_src, float_bf_t p_out,
+                              int_bf_t fid_out) {
   auto face_num = crystal.TotalTriangles();
   const auto* face_transform = crystal.GetTriangleCoordTf();
 
@@ -139,6 +146,10 @@ static void PropagateTriangle(const Crystal& crystal, size_t num, size_t step, c
     const float* ray_dir = d_in.Ptr(i);
     float* out_pt = p_out.Ptr(i);
     int* out_face_id = fid_out.Ptr(i);
+
+    // Polygon-level source face for t≈0 TIR-edge handling.
+    int src_tri_i = fid_in_src[i / step];
+    int src_poly_i = (src_tri_i >= 0) ? crystal.GetTriangleToPolygonFace(src_tri_i) : -1;
 
     float min_t = -1.0f;
     *out_face_id = -1;
@@ -157,7 +168,12 @@ static void PropagateTriangle(const Crystal& crystal, size_t num, size_t step, c
       }
 
       auto t = -p[2] / d[2];
-      if (t < math::kFloatEps) {
+      // fi ∈ [0, face_num-1] and tri_to_poly_ is always valid after BuildPolygonFaceData;
+      // the nullptr/bounds guards inside GetTriangleToPolygonFace are structurally redundant
+      // here but kept for safety.
+      int fi_poly = crystal.GetTriangleToPolygonFace(fi);
+      float eps_thr = (src_poly_i >= 0 && fi_poly != src_poly_i) ? -math::kFloatEps : math::kFloatEps;
+      if (t < eps_thr) {
         continue;
       }
 
@@ -195,11 +211,12 @@ static void PropagateTriangle(const Crystal& crystal, size_t num, size_t step, c
 // NOLINTNEXTLINE(readability-function-size)
 void Propagate(const Crystal& crystal, size_t num, size_t step,                      // input
                const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input, d, p, w
+               const int_bf_t fid_in_src,                                            // source face ids
                float_bf_t p_out, int_bf_t fid_out) {                                 // output, p, fid
   if (crystal.PolygonFaceCount() > 0 && num <= kMaxSlabRays) {
-    PropagateSlab(crystal, num, step, d_in, p_in, w_in, p_out, fid_out);
+    PropagateSlab(crystal, num, step, d_in, p_in, w_in, fid_in_src, p_out, fid_out);
   } else {
-    PropagateTriangle(crystal, num, step, d_in, p_in, w_in, p_out, fid_out);
+    PropagateTriangle(crystal, num, step, d_in, p_in, w_in, fid_in_src, p_out, fid_out);
   }
 }
 

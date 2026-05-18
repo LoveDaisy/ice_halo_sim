@@ -364,14 +364,16 @@ TEST_F(PropagateTest, HorizontalRayHitsSideFace) {
   float w[1] = { 1.0f };
   float pos_out[3] = {};
   int fid_out[1] = { -1 };
+  int src_fid[1] = { -1 };
 
   float_bf_t d_in(dir, 3 * sizeof(float));
   float_bf_t p_in(pos, 3 * sizeof(float));
   float_bf_t wt_in(w, sizeof(float));
+  int_bf_t fi_src(src_fid, sizeof(int));
   float_bf_t p_out(pos_out, 3 * sizeof(float));
   int_bf_t fi_out(fid_out, sizeof(int));
 
-  Propagate(crystal_, 1, 1, d_in, p_in, wt_in, p_out, fi_out);
+  Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
   // Should hit some face (fid >= 0)
   EXPECT_GE(fid_out[0], 0);
@@ -390,14 +392,16 @@ TEST_F(PropagateTest, VerticalRayHitsTopFace) {
   float w[1] = { 1.0f };
   float pos_out[3] = {};
   int fid_out[1] = { -1 };
+  int src_fid[1] = { -1 };
 
   float_bf_t d_in(dir, 3 * sizeof(float));
   float_bf_t p_in(pos, 3 * sizeof(float));
   float_bf_t wt_in(w, sizeof(float));
+  int_bf_t fi_src(src_fid, sizeof(int));
   float_bf_t p_out(pos_out, 3 * sizeof(float));
   int_bf_t fi_out(fid_out, sizeof(int));
 
-  Propagate(crystal_, 1, 1, d_in, p_in, wt_in, p_out, fi_out);
+  Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
   EXPECT_GE(fid_out[0], 0);
 
@@ -415,14 +419,16 @@ TEST_F(PropagateTest, NegativeWeightSkipped) {
   float w[1] = { -1.0f };
   float pos_out[3] = { -999.0f, -999.0f, -999.0f };
   int fid_out[1] = { -1 };
+  int src_fid[1] = { -1 };
 
   float_bf_t d_in(dir, 3 * sizeof(float));
   float_bf_t p_in(pos, 3 * sizeof(float));
   float_bf_t wt_in(w, sizeof(float));
+  int_bf_t fi_src(src_fid, sizeof(int));
   float_bf_t p_out(pos_out, 3 * sizeof(float));
   int_bf_t fi_out(fid_out, sizeof(int));
 
-  Propagate(crystal_, 1, 1, d_in, p_in, wt_in, p_out, fi_out);
+  Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
   // PropagateSlab skips w<0 rays: output position = input position, fid = -1
   // (The skip preserves the initialized values from the gather phase in PropagateSlab,
@@ -446,14 +452,16 @@ TEST_F(PropagateTest, Step2SharedPosition) {
   float weights[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
   float pos_out[12] = {};
   int fid_out[4] = { -1, -1, -1, -1 };
+  int src_fids[2] = { -1, -1 };
 
   float_bf_t d_in(dirs, 3 * sizeof(float));
   float_bf_t p_in(positions, 3 * sizeof(float));
   float_bf_t wt_in(weights, sizeof(float));
+  int_bf_t fi_src(src_fids, sizeof(int));
   float_bf_t p_out(pos_out, 3 * sizeof(float));
   int_bf_t fi_out(fid_out, sizeof(int));
 
-  Propagate(crystal_, 4, 2, d_in, p_in, wt_in, p_out, fi_out);
+  Propagate(crystal_, 4, 2, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
   // All rays should hit something (from center, any direction hits a face)
   for (int i = 0; i < 4; i++) {
@@ -478,13 +486,15 @@ TEST_F(PropagateTest, SlabAndTrianglePathConsistency) {
   // PropagateSlab path (num=1)
   float pos_out_slab[3] = {};
   int fid_slab[1] = { -1 };
+  int src_fid_slab[1] = { -1 };
   {
     float_bf_t d_in(dir, 3 * sizeof(float));
     float_bf_t p_in(pos, 3 * sizeof(float));
     float_bf_t wt_in(w, sizeof(float));
+    int_bf_t fi_src(src_fid_slab, sizeof(int));
     float_bf_t p_out(pos_out_slab, 3 * sizeof(float));
     int_bf_t fi_out(fid_slab, sizeof(int));
-    Propagate(crystal_, 1, 1, d_in, p_in, wt_in, p_out, fi_out);
+    Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
   }
 
   // PropagateTriangle path (num=129, only first ray matters, rest are padding)
@@ -494,6 +504,7 @@ TEST_F(PropagateTest, SlabAndTrianglePathConsistency) {
   std::vector<float> weights(kNum, -1.0f);  // Mark all as skip
   std::vector<float> pos_out_tri(kNum * 3, 0.0f);
   std::vector<int> fid_tri(kNum, -1);
+  std::vector<int> src_fid_tri(kNum, -1);
 
   // Only first ray is active
   dirs[0] = dir[0];
@@ -505,9 +516,10 @@ TEST_F(PropagateTest, SlabAndTrianglePathConsistency) {
     float_bf_t d_in(dirs.data(), 3 * sizeof(float));
     float_bf_t p_in(positions.data(), 3 * sizeof(float));
     float_bf_t wt_in(weights.data(), sizeof(float));
+    int_bf_t fi_src(src_fid_tri.data(), sizeof(int));
     float_bf_t p_out(pos_out_tri.data(), 3 * sizeof(float));
     int_bf_t fi_out(fid_tri.data(), sizeof(int));
-    Propagate(crystal_, kNum, 1, d_in, p_in, wt_in, p_out, fi_out);
+    Propagate(crystal_, kNum, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
   }
 
   // Face IDs should match between the two paths
@@ -523,14 +535,16 @@ TEST_F(PropagateTest, NoIntersection) {
   float w[1] = { 1.0f };
   float pos_out[3] = {};
   int fid_out[1] = { -1 };
+  int src_fid[1] = { -1 };
 
   float_bf_t d_in(dir, 3 * sizeof(float));
   float_bf_t p_in(pos, 3 * sizeof(float));
   float_bf_t wt_in(w, sizeof(float));
+  int_bf_t fi_src(src_fid, sizeof(int));
   float_bf_t p_out(pos_out, 3 * sizeof(float));
   int_bf_t fi_out(fid_out, sizeof(int));
 
-  Propagate(crystal_, 1, 1, d_in, p_in, wt_in, p_out, fi_out);
+  Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
   // PropagateSlab finds exit faces via half-space intersection
   // From outside the crystal, the slab method may still find an exit face
@@ -538,4 +552,146 @@ TEST_F(PropagateTest, NoIntersection) {
   // since Propagate assumes the ray starts inside the crystal.
   // We just verify no crash occurs.
   EXPECT_TRUE(true);  // No crash is the test
+}
+
+// AC-1: TIR on fn=3 (x=√3/4), ray starts at shared edge with fn=4 (0.5x+√3/2·y=√3/4).
+// fid_in_src = a triangle of fn=3 (TIR source); adjacent fn=4 should be hit.
+//
+// Geometry note: pos.x is shifted inward by δ = 3e-6 (well below kFloatEps=1e-5)
+// so t_fn4 = δ is reliably positive across platforms while still less than the
+// pre-fix +kFloatEps acceptance threshold (the bug witness). A pos exactly on
+// the shared edge (δ=0) makes t_fn4 mathematically 0, which on x86_64 floating
+// point can land slightly negative outside [-kFloatEps, 0] and fail the test.
+TEST_F(PropagateTest, TIREdgeAdjacentFaceHit) {
+  const float kSqrt3 = std::sqrt(3.0f);
+  constexpr float kInwardShift = 3e-6f;
+  float pos[3] = { kSqrt3 / 4.0f - kInwardShift, 0.25f, 0.0f };
+  float dir[3] = { -0.5f, kSqrt3 / 2.0f, 0.0f };
+  float w[1] = { 1.0f };
+  float pos_out[3] = {};
+  int fid_out[1] = { -1 };
+
+  // Find a triangle whose normal is fn=3 (normal ≈ (1, 0, 0)) to use as source face
+  int src_tri = -1;
+  for (int t = 0; t < static_cast<int>(crystal_.TotalTriangles()); t++) {
+    const float* tn = crystal_.GetTriangleNormal() + t * 3;
+    if (tn[0] > 0.99f && std::abs(tn[1]) < 0.01f) {
+      src_tri = t;
+      break;
+    }
+  }
+  ASSERT_GE(src_tri, 0) << "Could not find fn=3 triangle";
+
+  float_bf_t d_in(dir, 3 * sizeof(float));
+  float_bf_t p_in(pos, 3 * sizeof(float));
+  float_bf_t wt_in(w, sizeof(float));
+  int_bf_t fi_src(&src_tri, sizeof(int));
+  float_bf_t p_out(pos_out, 3 * sizeof(float));
+  int_bf_t fi_out(fid_out, sizeof(int));
+
+  Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
+
+  // Should hit fn=4 (normal ≈ (0.5, √3/2, 0)); verify via dot product
+  ASSERT_GE(fid_out[0], 0) << "Expected adjacent face hit, got no intersection";
+  const float* norm_out = crystal_.GetTriangleNormal() + fid_out[0] * 3;
+  float dot = norm_out[0] * 0.5f + norm_out[1] * (kSqrt3 / 2.0f);
+  EXPECT_NEAR(dot, 1.0f, 1e-3f);
+}
+
+// AC-2: same geometry as AC-1 but num=129 forces PropagateTriangle path.
+// Same inward-shift rationale as AC-1: triangle path is more numerically
+// variant than slab path and was the failure site on x86_64 with δ=0.
+TEST_F(PropagateTest, TIREdgeAdjacentFaceHit_TrianglePath) {
+  const float kSqrt3 = std::sqrt(3.0f);
+  constexpr float kInwardShift = 3e-6f;
+  constexpr int kNum = 129;
+  std::vector<float> dirs(kNum * 3, 0.0f);
+  std::vector<float> positions(kNum * 3, 0.0f);
+  std::vector<float> weights(kNum, -1.0f);
+  std::vector<float> pos_out(kNum * 3, 0.0f);
+  std::vector<int> fid_out(kNum, -1);
+  std::vector<int> src_fids(kNum, -1);
+
+  dirs[0] = -0.5f;
+  dirs[1] = kSqrt3 / 2.0f;
+  dirs[2] = 0.0f;
+  positions[0] = kSqrt3 / 4.0f - kInwardShift;
+  positions[1] = 0.25f;
+  positions[2] = 0.0f;
+  weights[0] = 1.0f;
+
+  // Find fn=3 triangle for source face
+  for (int t = 0; t < static_cast<int>(crystal_.TotalTriangles()); t++) {
+    const float* tn = crystal_.GetTriangleNormal() + t * 3;
+    if (tn[0] > 0.99f && std::abs(tn[1]) < 0.01f) {
+      src_fids[0] = t;
+      break;
+    }
+  }
+  ASSERT_GE(src_fids[0], 0) << "Could not find fn=3 triangle";
+
+  float_bf_t d_in(dirs.data(), 3 * sizeof(float));
+  float_bf_t p_in(positions.data(), 3 * sizeof(float));
+  float_bf_t wt_in(weights.data(), sizeof(float));
+  int_bf_t fi_src(src_fids.data(), sizeof(int));
+  float_bf_t p_out(pos_out.data(), 3 * sizeof(float));
+  int_bf_t fi_out(fid_out.data(), sizeof(int));
+
+  Propagate(crystal_, kNum, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
+
+  // Should hit fn=4 (normal ≈ (0.5, √3/2, 0))
+  ASSERT_GE(fid_out[0], 0) << "Expected adjacent face hit, got no intersection";
+  const float* norm_out = crystal_.GetTriangleNormal() + fid_out[0] * 3;
+  float dot = norm_out[0] * 0.5f + norm_out[1] * (kSqrt3 / 2.0f);
+  EXPECT_NEAR(dot, 1.0f, 1e-3f);
+}
+
+// AC-3: guard test — source face must not be selected as exit even when t≈-ε.
+// Ray starts at center of fn=3 face slightly pushed inward; direction is barely toward fn=3.
+// fid_in_src = fn=3 triangle; verify fid_out != fn=3.
+TEST_F(PropagateTest, PropagateSourceFaceNotSelected) {
+  const float kSqrt3 = std::sqrt(3.0f);
+
+  // Find fn=3 triangle (normal ≈ (1, 0, 0))
+  int src_tri = -1;
+  for (int t = 0; t < static_cast<int>(crystal_.TotalTriangles()); t++) {
+    const float* tn = crystal_.GetTriangleNormal() + t * 3;
+    if (tn[0] > 0.99f && std::abs(tn[1]) < 0.01f) {
+      src_tri = t;
+      break;
+    }
+  }
+  ASSERT_GE(src_tri, 0) << "Could not find fn=3 triangle";
+
+  // Place ray half-epsilon inside fn=3 (pos.x = √3/4 - kFloatEps/2), direction +x (outward).
+  // t_fn3 = (kFloatEps/2) / 1.0 ∈ (0, kFloatEps): in the guard zone.
+  //   - Correct code (source face uses +kFloatEps): t_fn3 < kFloatEps → fn=3 rejected → fid_out = -1.
+  //   - Regressed code (all faces use -kFloatEps): t_fn3 > -kFloatEps → fn=3 accepted → fid_out = fn=3 tri.
+  float pos[3] = { kSqrt3 / 4.0f - math::kFloatEps * 0.5f, 0.0f, 0.0f };
+  float dir[3] = { 1.0f, 0.0f, 0.0f };
+
+  float w[1] = { 1.0f };
+  float pos_out[3] = {};
+  int fid_out[1] = { -1 };
+
+  float_bf_t d_in(dir, 3 * sizeof(float));
+  float_bf_t p_in(pos, 3 * sizeof(float));
+  float_bf_t wt_in(w, sizeof(float));
+  int_bf_t fi_src(&src_tri, sizeof(int));
+  float_bf_t p_out(pos_out, 3 * sizeof(float));
+  int_bf_t fi_out(fid_out, sizeof(int));
+
+  Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
+
+  // With dir=(+1,0,0) from a point ε/2 inside fn=3, the only face geometrically
+  // reachable in the forward direction is fn=3 itself. A correctly-functioning
+  // source-face guard must reject it, leaving fid_out=-1. Asserting "-1" is
+  // strictly stronger than "not fn=3": it also catches regressions where some
+  // unrelated face is spuriously selected (e.g. PropagateSlab returning a
+  // stale far_face), which the earlier `if (fid_out>=0)` wrapping would miss.
+  EXPECT_EQ(fid_out[0], -1) << "guard zone must produce no hit; "
+                               "non-negative fid_out (="
+                            << fid_out[0]
+                            << ") means either "
+                               "source face fn=3 was wrongly selected or some unreachable face was returned";
 }

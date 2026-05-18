@@ -270,6 +270,10 @@ class Crystal {
   const float* GetPolygonFaceDist() const;
   const int* GetPolygonFaceTriId() const;
 
+  // Returns the polygon face index (0..PolygonFaceCount()-1) for a given triangle id.
+  // Returns -1 if tri_id is out of range or no matching polygon face was found.
+  int GetTriangleToPolygonFace(int tri_id) const;
+
   IdType config_id_ = kInvalidId;
 
  private:
@@ -293,6 +297,8 @@ class Crystal {
   float* poly_face_n_ = nullptr;             // unit normals, 3 * poly_face_cnt_
   float* poly_face_d_ = nullptr;             // plane distances, poly_face_cnt_
   int* poly_face_tri_id_ = nullptr;          // representative triangle ID, poly_face_cnt_
+
+  std::unique_ptr<int[]> tri_to_poly_;  // triangle id → polygon face index, size = TotalTriangles()
 };
 
 
