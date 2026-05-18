@@ -62,28 +62,37 @@ _REL_TOL = 0.05
 # Primary scalar tolerance for partition additivity
 # ``|A.snapshot + B.snapshot - N.unfiltered| / N.unfiltered``.
 #
-# Calibration: combined N=10 sample (5 rounds from
-# ``scratchpad/explore-partition-buffer-additivity-root-cause/probe_e1_baseline.py``
-# e1_results.json + 5 rounds from
-# ``scratchpad/task-partition-additivity-test-redesign/calibrate_bright.py``):
-#   e1   : 0.533 %, 0.550 %, 0.437 %, 0.229 %, 0.536 %
-#   fresh: 0.186 %, 0.394 %, 1.189 %, 0.675 %, 0.243 %
-#   mean = 0.497 %, σ = 0.291 %, mean + 3σ = 1.370 %
-#   ceil to 0.5 % grid → 1.5 %.
-# Plan v1 used the e1-only σ (0.135 %) → 1.0 % threshold; fresh measurements
-# showed σ is ~2× larger, with one single-round value at 1.19 % (would fail
-# the plan's 1.0 % threshold). Combined N=10 estimate is the conservative
-# choice for AC-1 (5 fresh-build rounds must all pass).
-_PARTITION_SCALAR_TOL = 0.015
+# Calibration: combined N=20 fresh single-run samples:
+#   e1_results.json (N=5):
+#     0.533 %, 0.550 %, 0.437 %, 0.229 %, 0.536 %
+#   calibrate_bright.py (N=5):
+#     0.186 %, 0.394 %, 1.189 %, 0.675 %, 0.243 %
+#   extended AC-1 measurement (N=10):
+#     1.075 %, 0.786 %, 0.675 %, 0.335 %, 0.594 %,
+#     0.227 %, 0.344 %, 1.375 %, 0.115 %, 0.603 %
+#   mean = 0.555 %, σ = 0.341 %, mean + 3σ = 1.577 %
+#   ceil to 0.5 % grid → 2.0 %.
+# Earlier estimates from N=5 / N=10 underestimated σ (single-round samples up
+# to 1.38 % observed); N=20 is large enough that the σ estimate has tightened.
+# 2.0 % remains far below the AC-2 injection prediction of ~4.9 %, so the
+# threshold preserves sensitivity to partition-additivity regressions.
+_PARTITION_SCALAR_TOL = 0.02
 
 # Secondary bright-pixel tolerance for partition additivity. Empirically
 # calibrated via
-# ``scratchpad/task-partition-additivity-test-redesign/calibrate_bright.py``,
-# 5 fresh-build rounds on commit dc915e4 (single-run bright_mean_rel):
-#   5.9406 %, 6.9545 %, 8.3934 %, 7.7969 %, 7.0416 %
-#   mean = 7.225 %, σ = 0.928 %, mean + 3σ = 10.011 %
-#   ceil to 0.5 % grid → 10.5 %.
-_PARTITION_BRIGHT_TOL = 0.105
+# ``scratchpad/task-partition-additivity-test-redesign/calibrate_bright.py``
+# (N=5) plus extended AC-1 measurement (N=10) for a combined N=15 sample of
+# single-run bright_mean_rel:
+#   5.941 %, 6.955 %, 8.393 %, 7.797 %, 7.042 %,
+#   6.235 %, 9.522 %, 6.769 %, 6.998 %, 7.988 %,
+#   9.161 %, 9.543 %, 7.396 %, 8.974 %, 7.610 %
+#   mean = 7.755 %, σ = 1.155 %, mean + 3σ = 11.221 %
+#   ceil to 0.5 % grid → 11.5 %.
+# The initial N=5 calibration produced σ = 0.93 % (→ 10.5 % threshold) but
+# N=15 reveals σ = 1.16 % with single-round values up to 9.54 %; 11.5 % is
+# the conservative threshold that keeps AC-1's 5-round PASS probability
+# above the design margin.
+_PARTITION_BRIGHT_TOL = 0.115
 
 # Bright-mask threshold: pixels whose any-channel XYZ value exceeds
 # ``peak * _BRIGHT_MASK_FRAC`` are considered bright. Chosen to capture the
