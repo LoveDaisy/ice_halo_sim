@@ -429,15 +429,14 @@ TEST(CollectDataFilterDispatch, FilterFailBecomesOutgoing) {
   CollectData(rng, ms_info, &filter, buffer_data, init_data);
 
   ASSERT_EQ(buffer_data[1].size_, 1u);
-  EXPECT_EQ(buffer_data[1].rays_[0].state_, RaySeg::kOutgoing)
-      << "filter-fail ray must emit as kOutgoing (was " << buffer_data[1].rays_[0].state_ << ")";
+  EXPECT_TRUE(buffer_data[1].rays_[0].IsOutgoing()) << "filter-fail ray must emit as IsOutgoing()";
   // init_data must NOT contain the filter-fail ray.
   EXPECT_EQ(init_data[1].size_, 0u);
 }
 
 TEST(CollectDataFilterDispatch, FilterFailWithNonZeroProbEmitsOutgoing) {
   // prob_=1.0f: rng < prob is always true → filter->Check IS called and returns false.
-  // This is the direct AC-2 coverage: filter-fail ray must emit as kOutgoing.
+  // This is the direct AC-2 coverage: filter-fail ray must emit as IsOutgoing().
   RandomNumberGenerator rng(42);
   AlwaysRejectFilter filter;
   MsInfo ms_info;
@@ -455,8 +454,7 @@ TEST(CollectDataFilterDispatch, FilterFailWithNonZeroProbEmitsOutgoing) {
   CollectData(rng, ms_info, &filter, buffer_data, init_data);
 
   ASSERT_EQ(buffer_data[1].size_, 1u);
-  EXPECT_EQ(buffer_data[1].rays_[0].state_, RaySeg::kOutgoing)
-      << "filter-fail ray must emit as kOutgoing (was " << buffer_data[1].rays_[0].state_ << ")";
+  EXPECT_TRUE(buffer_data[1].rays_[0].IsOutgoing()) << "filter-fail ray must emit as IsOutgoing()";
   EXPECT_EQ(init_data[1].size_, 0u);
 }
 
@@ -478,7 +476,7 @@ TEST(CollectDataFilterDispatch, FilterPassWithProbContinues) {
   CollectData(rng, ms_info, &filter, buffer_data, init_data);
 
   ASSERT_EQ(buffer_data[1].size_, 1u);
-  EXPECT_EQ(buffer_data[1].rays_[0].state_, RaySeg::kContinue);
+  EXPECT_TRUE(buffer_data[1].rays_[0].IsContinue());
   EXPECT_EQ(init_data[1].size_, 1u);
 }
 
@@ -500,8 +498,79 @@ TEST(CollectDataFilterDispatch, FilterPassNoProbEmitsOutgoing) {
   CollectData(rng, ms_info, &filter, buffer_data, init_data);
 
   ASSERT_EQ(buffer_data[1].size_, 1u);
-  EXPECT_EQ(buffer_data[1].rays_[0].state_, RaySeg::kOutgoing);
+  EXPECT_TRUE(buffer_data[1].rays_[0].IsOutgoing());
   EXPECT_EQ(init_data[1].size_, 0u);
+}
+
+// ---- AC-5: derived-helper unit tests for RaySeg segment-kind predicates ----
+
+namespace {
+
+RaySeg MakeRaySegBase() {
+  RaySeg r{};
+  r.d_[0] = 1.0f;
+  r.d_[1] = 0.0f;
+  r.d_[2] = 0.0f;
+  r.p_[0] = 0.0f;
+  r.p_[1] = 0.0f;
+  r.p_[2] = 0.0f;
+  r.from_face_ = kInvalidId;
+  r.crystal_rot_ = Rotation{};
+  return r;
+}
+
+}  // namespace
+
+// TC-1: to_face_ != kInvalidId && w_ >= 0  →  IsNormal()
+TEST(RaySegDerivedKind, NormalWhenHasFaceAndPositiveWeight) {
+  RaySeg r = MakeRaySegBase();
+  r.w_ = 0.5f;
+  r.to_face_ = 3;  // any non-sentinel face id
+  r.is_continue_ = false;
+
+  EXPECT_TRUE(r.IsNormal());
+  EXPECT_FALSE(r.IsTir());
+  EXPECT_FALSE(r.IsOutgoing());
+  EXPECT_FALSE(r.IsContinue());
+}
+
+// TC-2: w_ < 0  →  IsTir()  (overrides to_face_ value)
+TEST(RaySegDerivedKind, TirWhenNegativeWeight) {
+  RaySeg r = MakeRaySegBase();
+  r.w_ = -1.0f;
+  r.to_face_ = kInvalidId;  // also exercises that w_<0 wins over to_face_ branches
+  r.is_continue_ = false;
+
+  EXPECT_TRUE(r.IsTir());
+  EXPECT_FALSE(r.IsNormal());
+  EXPECT_FALSE(r.IsOutgoing());
+  EXPECT_FALSE(r.IsContinue());
+}
+
+// TC-3: to_face_ == kInvalidId && w_ >= 0 && !is_continue_  →  IsOutgoing()
+TEST(RaySegDerivedKind, OutgoingWhenNoFaceAndNotContinue) {
+  RaySeg r = MakeRaySegBase();
+  r.w_ = 0.5f;
+  r.to_face_ = kInvalidId;
+  r.is_continue_ = false;
+
+  EXPECT_TRUE(r.IsOutgoing());
+  EXPECT_FALSE(r.IsNormal());
+  EXPECT_FALSE(r.IsTir());
+  EXPECT_FALSE(r.IsContinue());
+}
+
+// TC-4: to_face_ == kInvalidId && w_ >= 0 && is_continue_  →  IsContinue() (not IsOutgoing)
+TEST(RaySegDerivedKind, ContinueWhenOutgoingCandidateBranchGated) {
+  RaySeg r = MakeRaySegBase();
+  r.w_ = 0.5f;
+  r.to_face_ = kInvalidId;
+  r.is_continue_ = true;
+
+  EXPECT_TRUE(r.IsContinue());
+  EXPECT_FALSE(r.IsOutgoing());  // is_continue_ excludes IsOutgoing
+  EXPECT_FALSE(r.IsNormal());
+  EXPECT_FALSE(r.IsTir());
 }
 
 }  // namespace

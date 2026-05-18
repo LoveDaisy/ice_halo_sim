@@ -146,12 +146,12 @@ GUI tooltip 文案为：
 ## 5b. 行为变更说明（task-query-filter-uplift-v2）
 
 在本次改动之前，simulator 端会把任何未通过 `scattering.entries[].filter`
-的光线标记为 `kStopped`，这些光线无法抵达 consumer 的 unfiltered accumulator，
-导致 `unfiltered_xyz_buffer` 实际上是 *post-filter* 的，Off 模式 EV 因而间接受
-filter 影响，违反 §4 的可加性不变量。
+的光线标记为已停止（即 T2 前的 `kStopped` 状态，现已并入 `IsTir()` 派生谓词），
+这些光线无法抵达 consumer 的 unfiltered accumulator，导致 `unfiltered_xyz_buffer`
+实际上是 *post-filter* 的，Off 模式 EV 因而间接受 filter 影响，违反 §4 的可加性不变量。
 
 修复将 simulator 端 filter 降级为纯 branch gate（仅控制 multi-scatter 的
-`kContinue` 展开），filter-fail 光线统一作为 `kOutgoing` 释放，consumer 的
+`IsContinue()` 位翻转），filter-fail 光线统一作为 `IsOutgoing()` 释放，consumer 的
 Path B 现在累积真正的 unfiltered 全集。
 
 **用户可见影响**：

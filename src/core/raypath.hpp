@@ -34,14 +34,7 @@ struct RaypathHash {
 
 
 struct RaySeg {
-  enum State {
-    kNormal,
-    kOutgoing,
-    kContinue,  // continue to next crystal, on multi-scattering situation
-    kStopped,   // exceed max_hits, or total internal reflection
-  };
-
-  // NOTE: if state == kNormal, d and p are in crystal-local coordinates; otherwise
+  // NOTE: if IsNormal(), d and p are in crystal-local coordinates; otherwise
   // d and p are in world coordinates.
   float d_[3];
   float p_[3];  // Generally it is for end point, **NOT** for start point.
@@ -65,8 +58,21 @@ struct RaySeg {
   IdType crystal_config_id_;
   Rotation crystal_rot_;
 
-  State state_;
+  // 1-bit run-time decision: whether this segment continues into the next
+  // crystal (multi-scattering). Other segment kinds (Normal / Outgoing / Tir)
+  // are pure derivations of to_face_ and w_; see helpers below.
+  bool is_continue_ = false;
   RaypathRecorder rp_;  // Raypath in **CURRENT** crystal.
+
+  // Derived segment-kind helpers. Invariants (mutually exclusive, exhaustive):
+  //   IsTir()      <=> w_ < 0
+  //   IsNormal()   <=> to_face_ != kInvalidId && w_ >= 0
+  //   IsOutgoing() <=> to_face_ == kInvalidId && w_ >= 0 && !is_continue_
+  //   IsContinue() <=> is_continue_ (only set when to_face_ == kInvalidId && w_ >= 0)
+  bool IsTir() const { return w_ < 0; }
+  bool IsNormal() const { return to_face_ != kInvalidId && w_ >= 0; }
+  bool IsContinue() const { return is_continue_; }
+  bool IsOutgoing() const { return to_face_ == kInvalidId && w_ >= 0 && !is_continue_; }
 };
 
 }  // namespace lumice

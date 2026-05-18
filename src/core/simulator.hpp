@@ -80,12 +80,15 @@ class Simulator {
 std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& proportions, size_t ray_num,
                                                  std::vector<double>& carry);
 
-// Per-batch ray dispatcher: decides each ray's final state (kNormal / kOutgoing /
-// kContinue / kStopped) and routes kContinue rays into the next ms init buffer.
+// Per-batch ray dispatcher: classifies each ray via derived predicates
+// (IsNormal() / IsOutgoing() / IsContinue() / IsTir()) and routes IsContinue()
+// rays into the next ms init buffer. Segment kind is derived from (to_face_,
+// w_, is_continue_); only the IsContinue() bit is written here.
 //
-// Filter semantics (post task-query-filter-uplift-v2): the filter acts only as a
-// branch gate controlling kContinue. Filter-fail rays are emitted as kOutgoing so
-// that the consumer-side query filter sees the full unfiltered ray set.
+// Filter semantics (post task-query-filter-uplift-v2): the filter acts only as
+// a branch gate controlling IsContinue(). Filter-fail rays are emitted as
+// IsOutgoing() so that the consumer-side query filter sees the full unfiltered
+// ray set.
 //
 // Internal: exposed for unit testing; not part of the public C API.
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter* filter,  // input

@@ -147,7 +147,6 @@ void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, siz
     r.crystal_idx_ = curr_crystal_id;
     r.crystal_config_id_ = curr_crystal.config_id_;
     r.root_ray_idx_ = all_data_idx++;
-    r.state_ = RaySeg::kNormal;
     r.rp_.Clear();
     r.rp_ << curr_crystal.GetFn(r.to_face_);
   }
@@ -407,9 +406,13 @@ void FillRayOtherInfo(size_t curr_ray_num, size_t i,                           /
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter* filter,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data) {                           // output
   for (auto& r : buffer_data[1]) {
+    // Default: not continuing. The branch-gate below may override for outgoing
+    // candidates that pass filter+prob. TIR / Normal / unselected-Outgoing all
+    // stay false; the buffer slot may carry a stale `true` from a prior round.
+    r.is_continue_ = false;
+
     if (r.w_ < 0) {
-      // 0. Total reflection.
-      r.state_ = RaySeg::kStopped;
+      // 0. Total reflection — derived via IsTir() (w_ < 0); no state write needed.
     } else if (r.to_face_ == kInvalidId) {
       // 1. Outgoing candidates. Apply rotation first so filter operates in world-space.
       // (w_ < 0 is already handled above, so to_face_==kInvalidId implies w_ >= 0 — no double-rotation risk.)
@@ -422,16 +425,12 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       // not preserved across this change.
       if (rng.GetUniform() < ms_info.prob_ && filter->Check(r)) {
         // 1.1 Branch gate: filter+prob both pass → continue to next ms scatter level.
-        r.state_ = RaySeg::kContinue;
-      } else {
-        // 1.2 Emit outgoing: both filter-fail and prob-fail rays go here.
-        //     Query filter is now applied downstream by RenderConsumer.
-        r.state_ = RaySeg::kOutgoing;
+        r.is_continue_ = true;
       }
-    } else {
-      // 2. Normal rays. Squeeze (or better swap?) buffers.
-      r.state_ = RaySeg::kNormal;
+      // 1.2 else: emit outgoing — both filter-fail and prob-fail rays stay
+      //     is_continue_ = false. Query filter is applied downstream by RenderConsumer.
     }
+    // 2. else: normal rays (to_face_ != kInvalidId && w_ >= 0) — IsNormal() derived; no state write.
 
     // Tail rotation: only for total reflection (w_ < 0). Outgoing candidates (to_face_==kInvalidId) are
     // already rotated above; normal rays (to_face_!=kInvalidId) stay in crystal-local coordinates.
@@ -440,10 +439,10 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.crystal_rot_.Apply(r.p_);
     }
 
-    if (r.state_ == RaySeg::kNormal) {
+    if (r.IsNormal()) {
       buffer_data[0].EmplaceBack(r);
     }
-    if (r.state_ == RaySeg::kContinue) {
+    if (r.IsContinue()) {
       init_data[1].EmplaceBack(r);
     }
   }
@@ -670,7 +669,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           size_t base_index = all_data.size_;
           all_data.EmplaceBack(buffer_data[1]);
           for (size_t j = 0; j < buffer_data[1].size_; j++) {
-            if (buffer_data[1][j].state_ == RaySeg::kOutgoing) {
+            if (buffer_data[1][j].IsOutgoing()) {
               outgoing_indices.push_back(base_index + j);
               const auto& r = buffer_data[1][j];
               outgoing_d.push_back(r.d_[0]);
