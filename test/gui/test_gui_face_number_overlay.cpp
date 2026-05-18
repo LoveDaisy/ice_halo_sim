@@ -53,6 +53,7 @@ bool ReferenceFrontFacing(const float rotation[16], float zoom, const float cent
 
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
   using lumice::gui::AggregateFaceLabels;
+  using lumice::gui::AggregateFaceLabelsFromTopology;
   using lumice::gui::CrystalStyle;
   using lumice::gui::FaceLabel;
   using lumice::gui::kFaceLabelMinViewportRatio;
@@ -588,6 +589,14 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
         3, 4, 5,  // face 2 → reversed winding → -z normal → back
       };
       static int face_numbers[] = { 1, 2 };
+      // Build a minimal LUMICE_CrystalMesh (face_count=0 → fallback path)
+      LUMICE_CrystalMesh mesh{};
+      mesh.vertex_count = 6;
+      std::memcpy(mesh.vertices, verts, sizeof(verts));
+      mesh.triangle_count = 2;
+      std::memcpy(mesh.triangles, tris, sizeof(tris));
+      std::memcpy(mesh.face_numbers, face_numbers, sizeof(face_numbers));
+      mesh.face_count = 0;
 
       float rot[16];
       Identity4x4(rot);
@@ -635,8 +644,8 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
         if (ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
           ImDrawList* draw_list = ImGui::GetWindowDrawList();
           int before = draw_list->VtxBuffer.Size;
-          lumice::gui::DrawFaceNumberOverlay(verts, 6, tris, 2, face_numbers, rot, mvp, kZoom, ImVec2(0.0f, 0.0f),
-                                             ImVec2(320.0f, 320.0f), draw_list, styles[s]);
+          lumice::gui::DrawFaceNumberOverlay(&mesh, rot, mvp, kZoom, ImVec2(0.0f, 0.0f), ImVec2(320.0f, 320.0f),
+                                             draw_list, styles[s]);
           int after = draw_list->VtxBuffer.Size;
           g_capture.vertex_delta[s] = after - before;
         }
@@ -692,6 +701,47 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
                                     /*image_size*/ 320.0f, 320.0f, &sx, &sy, &front));
       IM_CHECK(std::abs(sx - (100.0f + 160.0f)) < 1e-3f);
       IM_CHECK(std::abs(sy - (200.0f + 160.0f)) < 1e-3f);
+    };
+  }
+
+  // AggregateFaceLabelsFromTopology vs AggregateFaceLabels: same face_number set,
+  // same vertex count per face. Uses a real prism mesh from LUMICE_GetCrystalMesh.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "unit", "face_number_aggregate_from_topology_parity");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      lumice::gui::ResetLastCrystalMesh();
+
+      LUMICE_CrystalMesh mesh{};
+      const char* prism_json = R"({"type": "prism", "shape": {"height": 1.0}})";
+      IM_CHECK_EQ(LUMICE_GetCrystalMesh(nullptr, prism_json, &mesh), LUMICE_OK);
+      IM_CHECK_GT(mesh.face_count, 0);
+
+      FaceLabel labels_old[lumice::gui::kMaxFaceLabels] = {};
+      FaceLabel labels_new[lumice::gui::kMaxFaceLabels] = {};
+
+      int n_old = AggregateFaceLabels(mesh.vertices, mesh.vertex_count, mesh.triangles, mesh.triangle_count,
+                                      mesh.face_numbers, labels_old, lumice::gui::kMaxFaceLabels);
+      int n_new = lumice::gui::AggregateFaceLabelsFromTopology(
+          mesh.vertices, mesh.vertex_count, mesh.face_count, mesh.face_numbers_by_face, mesh.face_vtx_offsets,
+          mesh.face_vtx_counts, mesh.face_vtx_pool, labels_new, lumice::gui::kMaxFaceLabels);
+
+      IM_CHECK_EQ(n_old, n_new);
+      IM_CHECK_EQ(n_old, mesh.face_count);
+
+      // Both must produce the same set of face_numbers
+      for (int i = 0; i < n_new; ++i) {
+        bool found = false;
+        for (int j = 0; j < n_old; ++j) {
+          if (labels_new[i].face_number == labels_old[j].face_number) {
+            found = true;
+            // vertex count per face should match
+            IM_CHECK_EQ(labels_new[i].display_polygon_vertex_count, labels_old[j].display_polygon_vertex_count);
+            break;
+          }
+        }
+        IM_CHECK(found);
+      }
     };
   }
 }

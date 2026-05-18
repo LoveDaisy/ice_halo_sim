@@ -476,37 +476,39 @@ TEST_F(PropagateTest, Step2SharedPosition) {
   }
 }
 
-TEST_F(PropagateTest, SlabAndTrianglePathConsistency) {
-  // Compare PropagateSlab (num=1, <= 128) vs PropagateTriangle (num=129, > 128)
-  // Only compare face IDs (PropagateTriangle has known accumulation behavior for positions)
+TEST_F(PropagateTest, ChunkBoundaryConsistency) {
+  // Verify single-chunk (num=1) and multi-chunk (num=129 = 128+1) Propagate
+  // produce identical face IDs and exit positions for the same active ray.
+  // Replaces the pre-polygon-only SlabAndTrianglePathConsistency test (the two
+  // paths have been merged — only the chunk loop remains to be exercised).
   float dir[3] = { 1.0f, 0.0f, 0.0f };
   float pos[3] = { 0.0f, 0.0f, 0.0f };
   float w[1] = { 1.0f };
 
-  // PropagateSlab path (num=1)
-  float pos_out_slab[3] = {};
-  int fid_slab[1] = { -1 };
-  int src_fid_slab[1] = { -1 };
+  // Single-chunk reference (num=1)
+  float pos_out_ref[3] = {};
+  int fid_ref[1] = { -1 };
+  int src_fid_ref[1] = { -1 };
   {
     float_bf_t d_in(dir, 3 * sizeof(float));
     float_bf_t p_in(pos, 3 * sizeof(float));
     float_bf_t wt_in(w, sizeof(float));
-    int_bf_t fi_src(src_fid_slab, sizeof(int));
-    float_bf_t p_out(pos_out_slab, 3 * sizeof(float));
-    int_bf_t fi_out(fid_slab, sizeof(int));
+    int_bf_t fi_src(src_fid_ref, sizeof(int));
+    float_bf_t p_out(pos_out_ref, 3 * sizeof(float));
+    int_bf_t fi_out(fid_ref, sizeof(int));
     Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
   }
 
-  // PropagateTriangle path (num=129, only first ray matters, rest are padding)
+  // Multi-chunk path (num=129 → chunk1=128, chunk2=1); only first ray is
+  // active, the rest are padded with w=-1 so they get skipped in scatter.
   constexpr int kNum = 129;
   std::vector<float> dirs(kNum * 3, 0.0f);
   std::vector<float> positions(kNum * 3, 0.0f);
-  std::vector<float> weights(kNum, -1.0f);  // Mark all as skip
-  std::vector<float> pos_out_tri(kNum * 3, 0.0f);
-  std::vector<int> fid_tri(kNum, -1);
-  std::vector<int> src_fid_tri(kNum, -1);
+  std::vector<float> weights(kNum, -1.0f);
+  std::vector<float> pos_out_chunk(kNum * 3, 0.0f);
+  std::vector<int> fid_chunk(kNum, -1);
+  std::vector<int> src_fid_chunk(kNum, -1);
 
-  // Only first ray is active
   dirs[0] = dir[0];
   dirs[1] = dir[1];
   dirs[2] = dir[2];
@@ -516,15 +518,17 @@ TEST_F(PropagateTest, SlabAndTrianglePathConsistency) {
     float_bf_t d_in(dirs.data(), 3 * sizeof(float));
     float_bf_t p_in(positions.data(), 3 * sizeof(float));
     float_bf_t wt_in(weights.data(), sizeof(float));
-    int_bf_t fi_src(src_fid_tri.data(), sizeof(int));
-    float_bf_t p_out(pos_out_tri.data(), 3 * sizeof(float));
-    int_bf_t fi_out(fid_tri.data(), sizeof(int));
+    int_bf_t fi_src(src_fid_chunk.data(), sizeof(int));
+    float_bf_t p_out(pos_out_chunk.data(), 3 * sizeof(float));
+    int_bf_t fi_out(fid_chunk.data(), sizeof(int));
     Propagate(crystal_, kNum, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
   }
 
-  // Face IDs should match between the two paths
-  EXPECT_EQ(fid_slab[0], fid_tri[0]);
-  EXPECT_GE(fid_slab[0], 0);
+  EXPECT_GE(fid_ref[0], 0);
+  EXPECT_EQ(fid_ref[0], fid_chunk[0]);
+  for (int j = 0; j < 3; j++) {
+    EXPECT_NEAR(pos_out_ref[j], pos_out_chunk[j], 1e-5f);
+  }
 }
 
 TEST_F(PropagateTest, NoIntersection) {
@@ -598,10 +602,12 @@ TEST_F(PropagateTest, TIREdgeAdjacentFaceHit) {
   EXPECT_NEAR(dot, 1.0f, 1e-3f);
 }
 
-// AC-2: same geometry as AC-1 but num=129 forces PropagateTriangle path.
-// Same inward-shift rationale as AC-1: triangle path is more numerically
-// variant than slab path and was the failure site on x86_64 with δ=0.
-TEST_F(PropagateTest, TIREdgeAdjacentFaceHit_TrianglePath) {
+// AC-2: same geometry as AC-1 but num=129 crosses the chunk boundary
+// (chunk1=128, chunk2=1), exercising the per-chunk source-face exclusion
+// path. The inward-shift rationale from AC-1 still applies: with δ=0 the
+// computed t at the shared edge can land slightly negative on x86_64 and
+// trip the source-face guard spuriously.
+TEST_F(PropagateTest, TIREdgeAdjacentFaceHit_LargeNum) {
   const float kSqrt3 = std::sqrt(3.0f);
   constexpr float kInwardShift = 3e-6f;
   constexpr int kNum = 129;
@@ -694,4 +700,93 @@ TEST_F(PropagateTest, PropagateSourceFaceNotSelected) {
                             << fid_out[0]
                             << ") means either "
                                "source face fn=3 was wrongly selected or some unreachable face was returned";
+}
+
+// AC-3 (a): polygon-only equivalence on a regular hexagonal prism.
+// Six horizontal rays from the prism centre, each aimed along one of the
+// six side-face outward normals (60° apart, in the x-y plane). Each ray
+// must land on a side face whose outward normal aligns with the ray
+// direction (dot > 0.9), i.e. the ray exits through the polygon face it
+// is pointing at.
+TEST_F(PropagateTest, PolygonOnlyPrism6SideFaces) {
+  const float kSqrt3 = std::sqrt(3.0f);
+  // Outward normals of the 6 hexagonal side faces (unit vectors, z=0).
+  const float kDirs[6][3] = {
+    { 1.0f, 0.0f, 0.0f },             //
+    { 0.5f, kSqrt3 / 2.0f, 0.0f },    //
+    { -0.5f, kSqrt3 / 2.0f, 0.0f },   //
+    { -1.0f, 0.0f, 0.0f },            //
+    { -0.5f, -kSqrt3 / 2.0f, 0.0f },  //
+    { 0.5f, -kSqrt3 / 2.0f, 0.0f },   //
+  };
+
+  for (int i = 0; i < 6; i++) {
+    float dir[3] = { kDirs[i][0], kDirs[i][1], kDirs[i][2] };
+    float pos[3] = { 0.0f, 0.0f, 0.0f };
+    float w[1] = { 1.0f };
+    float pos_out[3] = {};
+    int fid_out[1] = { -1 };
+    int src_fid[1] = { -1 };
+
+    float_bf_t d_in(dir, 3 * sizeof(float));
+    float_bf_t p_in(pos, 3 * sizeof(float));
+    float_bf_t wt_in(w, sizeof(float));
+    int_bf_t fi_src(src_fid, sizeof(int));
+    float_bf_t p_out(pos_out, 3 * sizeof(float));
+    int_bf_t fi_out(fid_out, sizeof(int));
+
+    Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
+
+    ASSERT_GE(fid_out[0], 0) << "Ray " << i << " missed all faces";
+    const float* norm = crystal_.GetTriangleNormal() + fid_out[0] * 3;
+    // Hit a side face (z-component of normal ≈ 0).
+    EXPECT_NEAR(norm[2], 0.0f, 1e-4f) << "Ray " << i << " hit non-side face (norm.z=" << norm[2] << ")";
+    // Outward normal aligns with the ray direction.
+    float dot = norm[0] * dir[0] + norm[1] * dir[1] + norm[2] * dir[2];
+    EXPECT_GT(dot, 0.9f) << "Ray " << i << " hit wrong side face (dot=" << dot << ")";
+  }
+}
+
+// AC-3 (b): polygon-only equivalence on a hexagonal pyramid with both
+// cone segments present. Parameters chosen so that both the upper and
+// lower pyramid caps exist (h1=0.5, h3=0.5 are non-zero) and the prism
+// middle segment is non-degenerate (h2=1.0). Vertical rays from the
+// origin must hit a face on the corresponding cone (norm.z > 0.5 for
+// the upward ray, < -0.5 for the downward ray).
+TEST_F(PropagateTest, PolygonOnlyPyramidConeFaces) {
+  Crystal pyramid = Crystal::CreatePyramid(0.5f, 1.0f, 0.5f);
+
+  struct Case {
+    float dir_z;
+    float expected_norm_z_sign;
+    const char* label;
+  };
+  const Case kCases[] = {
+    { 1.0f, 1.0f, "up -> upper cone" },
+    { -1.0f, -1.0f, "down -> lower cone" },
+  };
+
+  for (const auto& c : kCases) {
+    float dir[3] = { 0.0f, 0.0f, c.dir_z };
+    float pos[3] = { 0.0f, 0.0f, 0.0f };
+    float w[1] = { 1.0f };
+    float pos_out[3] = {};
+    int fid_out[1] = { -1 };
+    int src_fid[1] = { -1 };
+
+    float_bf_t d_in(dir, 3 * sizeof(float));
+    float_bf_t p_in(pos, 3 * sizeof(float));
+    float_bf_t wt_in(w, sizeof(float));
+    int_bf_t fi_src(src_fid, sizeof(int));
+    float_bf_t p_out(pos_out, 3 * sizeof(float));
+    int_bf_t fi_out(fid_out, sizeof(int));
+
+    Propagate(pyramid, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
+
+    ASSERT_GE(fid_out[0], 0) << c.label << ": ray missed all faces";
+    const float* norm = pyramid.GetTriangleNormal() + fid_out[0] * 3;
+    // Hit face must belong to the expected cone segment (norm.z sign + magnitude > 0.5).
+    EXPECT_GT(norm[2] * c.expected_norm_z_sign, 0.5f)
+        << c.label << ": hit face norm.z=" << norm[2] << " (expected sign " << c.expected_norm_z_sign << ")";
+  }
 }

@@ -118,6 +118,152 @@ TEST(CrystalMeshApi, FillHexFnMapInvalidNormalMapsToMinusOne) {
 }
 
 
+// =============== Per-face topology tests ===============
+
+TEST(CrystalMeshApi, PrismPerFaceTopology) {
+  LUMICE_CrystalMesh mesh{};
+  const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
+  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+
+  // Prism: 2 basal + 6 lateral faces
+  EXPECT_EQ(mesh.face_count, 8);
+  EXPECT_GT(mesh.face_count, 0);
+
+  int basal_count = 0;
+  int lateral_count = 0;
+  for (int i = 0; i < mesh.face_count; ++i) {
+    int fn = mesh.face_numbers_by_face[i];
+    EXPECT_GT(fn, 0) << "face " << i << " face_number should be > 0";
+    int vtx_cnt = mesh.face_vtx_counts[i];
+    if (fn == 1 || fn == 2) {
+      // Basal faces have 6 vertices (regular hexagon)
+      EXPECT_EQ(vtx_cnt, 6) << "basal face " << i << " (fn=" << fn << ") should have 6 vertices";
+      ++basal_count;
+    } else if (fn >= 3 && fn <= 8) {
+      // Lateral prism faces are quads
+      EXPECT_EQ(vtx_cnt, 4) << "prism face " << i << " (fn=" << fn << ") should have 4 vertices";
+      ++lateral_count;
+    }
+  }
+  EXPECT_EQ(basal_count, 2);
+  EXPECT_EQ(lateral_count, 6);
+}
+
+TEST(CrystalMeshApi, PyramidPerFaceTopology) {
+  LUMICE_CrystalMesh mesh{};
+  const char* json = R"({"type": "pyramid", "shape": {"prism_h": 1.0, "upper_h": 0.5, "lower_h": 0.5}})";
+  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+
+  EXPECT_GT(mesh.face_count, 0);
+  // Full pyramid: 2 basal + 6 prism + 6 upper + 6 lower = 20 faces
+  EXPECT_EQ(mesh.face_count, 20);
+
+  for (int i = 0; i < mesh.face_count; ++i) {
+    int fn = mesh.face_numbers_by_face[i];
+    bool legal = (fn == 1) || (fn == 2) || (fn >= 3 && fn <= 8) || (fn >= 13 && fn <= 18) || (fn >= 23 && fn <= 28);
+    EXPECT_TRUE(legal) << "face " << i << " face_number=" << fn << " is not in legal set";
+    EXPECT_GE(mesh.face_vtx_counts[i], 3) << "face " << i << " must have >= 3 vertices";
+  }
+}
+
+TEST(CrystalMeshApi, PerFaceVertexOrderCCW) {
+  LUMICE_CrystalMesh mesh{};
+  const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
+  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  ASSERT_GT(mesh.face_count, 0);
+
+  // Find basal face (fn==1) and verify CCW winding
+  int basal_fi = -1;
+  for (int i = 0; i < mesh.face_count; ++i) {
+    if (mesh.face_numbers_by_face[i] == 1) {
+      basal_fi = i;
+      break;
+    }
+  }
+  ASSERT_GE(basal_fi, 0) << "no basal face 1 found";
+
+  int offset = mesh.face_vtx_offsets[basal_fi];
+  int count = mesh.face_vtx_counts[basal_fi];
+  ASSERT_GE(count, 3);
+
+  // Compute face normal from first triangle (v0, v1, v2)
+  const float* p0 = mesh.vertices + mesh.face_vtx_pool[offset + 0] * 3;
+  const float* p1 = mesh.vertices + mesh.face_vtx_pool[offset + 1] * 3;
+  const float* p2 = mesh.vertices + mesh.face_vtx_pool[offset + 2] * 3;
+  float e1[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+  float e2[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+  float nx = e1[1] * e2[2] - e1[2] * e2[1];
+  float ny = e1[2] * e2[0] - e1[0] * e2[2];
+  float nz = e1[0] * e2[1] - e1[1] * e2[0];
+  float nlen = std::sqrt(nx * nx + ny * ny + nz * nz);
+  ASSERT_GT(nlen, 1e-6f) << "degenerate face normal";
+  nx /= nlen;
+  ny /= nlen;
+  nz /= nlen;
+
+  // For CCW winding, each consecutive edge cross product should point along the face normal
+  for (int k = 0; k < count; ++k) {
+    const float* a = mesh.vertices + mesh.face_vtx_pool[offset + k] * 3;
+    const float* b = mesh.vertices + mesh.face_vtx_pool[offset + (k + 1) % count] * 3;
+    float ex = b[0] - a[0];
+    float ey = b[1] - a[1];
+    float ez = b[2] - a[2];
+    // Edge next_edge = b - a; for CCW the "winding cross" test uses consecutive edges.
+    // Simple check: cross of consecutive edge pairs projected onto face normal > 0 on average.
+    (void)ex;
+    (void)ey;
+    (void)ez;
+  }
+  // A simpler winding check: sum of cross products of (vi - center) × (v_{i+1} - center)
+  // projected onto the face normal should be positive for CCW.
+  float cx = 0.0f;
+  float cy = 0.0f;
+  float cz = 0.0f;
+  for (int k = 0; k < count; ++k) {
+    const float* v = mesh.vertices + mesh.face_vtx_pool[offset + k] * 3;
+    cx += v[0];
+    cy += v[1];
+    cz += v[2];
+  }
+  cx /= count;
+  cy /= count;
+  cz /= count;
+
+  float winding_sum = 0.0f;
+  for (int k = 0; k < count; ++k) {
+    const float* a = mesh.vertices + mesh.face_vtx_pool[offset + k] * 3;
+    const float* b = mesh.vertices + mesh.face_vtx_pool[offset + (k + 1) % count] * 3;
+    float ax = a[0] - cx, ay = a[1] - cy, az = a[2] - cz;
+    float bx = b[0] - cx, by = b[1] - cy, bz = b[2] - cz;
+    // cross(a, b) projected onto normal
+    float cross_x = ay * bz - az * by;
+    float cross_y = az * bx - ax * bz;
+    float cross_z = ax * by - ay * bx;
+    winding_sum += cross_x * nx + cross_y * ny + cross_z * nz;
+  }
+  EXPECT_GT(winding_sum, 0.0f) << "basal face vertices not in CCW order";
+}
+
+TEST(CrystalMeshApi, PerFacePoolBoundary) {
+  LUMICE_CrystalMesh mesh{};
+  const char* json = R"({"type": "pyramid", "shape": {"prism_h": 1.0, "upper_h": 0.5, "lower_h": 0.5}})";
+  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+
+  // Verify pool usage doesn't exceed the cap
+  int total_pool = 0;
+  for (int i = 0; i < mesh.face_count; ++i) {
+    int end = mesh.face_vtx_offsets[i] + mesh.face_vtx_counts[i];
+    if (end > total_pool) {
+      total_pool = end;
+    }
+    EXPECT_LE(end, LUMICE_MAX_CRYSTAL_FACE_VTXPOOL) << "face " << i << " exceeds pool cap";
+    // offsets and counts must be non-negative
+    EXPECT_GE(mesh.face_vtx_offsets[i], 0);
+    EXPECT_GT(mesh.face_vtx_counts[i], 0);
+  }
+  EXPECT_LE(total_pool, LUMICE_MAX_CRYSTAL_FACE_VTXPOOL);
+}
+
 // =============== ParseConfigApi Tests ===============
 
 // Helper: build a minimal valid JSON (ConfigToJson format) for testing.

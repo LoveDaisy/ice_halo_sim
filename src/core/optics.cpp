@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 
 #include "core/math.hpp"
 
@@ -52,6 +51,10 @@ void HitSurface(const Crystal& crystal, float n, size_t num,                    
 
 
 constexpr size_t kMaxSlabRays = 128;
+// Chunk boundary in Propagate() must be a multiple of the position-sharing
+// stride (step=1 or step=2 in practice). Keeping kMaxSlabRays even guarantees
+// `offset / step` stays integer-aligned across chunks.
+static_assert(kMaxSlabRays % 2 == 0, "kMaxSlabRays must be even for step=2 chunk alignment");
 
 // Per-polygon-face half-space interval method with face-outer/ray-inner SoA loop.
 // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
@@ -128,95 +131,22 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
   }
 }
 
-// Per-triangle barycentric intersection (original algorithm, used as fallback).
-// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
-static void PropagateTriangle(const Crystal& crystal, size_t num, size_t step, const float_bf_t d_in,
-                              const float_bf_t p_in, const float_bf_t w_in, const int_bf_t fid_in_src, float_bf_t p_out,
-                              int_bf_t fid_out) {
-  auto face_num = crystal.TotalTriangles();
-  const auto* face_transform = crystal.GetTriangleCoordTf();
-
-  for (size_t i = 0; i < num; i++) {
-    if (w_in[i] < 0) {  // Total reflection
-      continue;
-    }
-
-    // --- Inlined RayTriangleBW: find nearest triangle intersection ---
-    const float* ray_pt = p_in.Ptr(i / step);
-    const float* ray_dir = d_in.Ptr(i);
-    float* out_pt = p_out.Ptr(i);
-    int* out_face_id = fid_out.Ptr(i);
-
-    // Polygon-level source face for t≈0 TIR-edge handling.
-    int src_tri_i = fid_in_src[i / step];
-    int src_poly_i = (src_tri_i >= 0) ? crystal.GetTriangleToPolygonFace(src_tri_i) : -1;
-
-    float min_t = -1.0f;
-    *out_face_id = -1;
-    std::memcpy(out_pt, ray_pt, 3 * sizeof(float));
-
-    float d[3];
-    float p[3];
-
-    for (int fi = 0; fi < static_cast<int>(face_num); fi++) {
-      const float* tf = face_transform + fi * 12;
-      p[2] = Dot3(ray_pt, tf + 8) + tf[11];
-      d[2] = Dot3(ray_dir, tf + 8);
-
-      if (FloatEqualZero(d[2])) {
-        continue;  // Parallel to this triangle
-      }
-
-      auto t = -p[2] / d[2];
-      // fi ∈ [0, face_num-1] and tri_to_poly_ is always valid after BuildPolygonFaceData;
-      // the nullptr/bounds guards inside GetTriangleToPolygonFace are structurally redundant
-      // here but kept for safety.
-      int fi_poly = crystal.GetTriangleToPolygonFace(fi);
-      float eps_thr = (src_poly_i >= 0 && fi_poly != src_poly_i) ? -math::kFloatEps : math::kFloatEps;
-      if (t < eps_thr) {
-        continue;
-      }
-
-      p[0] = Dot3(ray_pt, tf + 0) + tf[3];
-      d[0] = Dot3(ray_dir, tf + 0);
-
-      auto u = p[0] + t * d[0];
-      if (u < -math::kFloatEps || u > 1.0f) {
-        continue;  // out of this triangle
-      }
-
-      p[1] = Dot3(ray_pt, tf + 4) + tf[7];
-      d[1] = Dot3(ray_dir, tf + 4);
-
-      auto v = p[1] + t * d[1];
-      if (v < -math::kFloatEps || v > 1.0f) {
-        continue;  // out of this triangle
-      }
-
-      if (u + v > 1.0f) {
-        continue;  // out of this triangle
-      }
-
-      if (min_t < -math::kFloatEps || (t < min_t && min_t > 0.0f)) {
-        min_t = t;
-        *out_face_id = fi;
-        for (int j = 0; j < 3; j++) {
-          out_pt[j] += t * ray_dir[j];
-        }
-      }
-    }
-  }
-}
-
+// Polygon-only tracing dispatcher. Chunks the ray batch so each PropagateSlab
+// invocation stays within its fixed-size scratch arrays (kMaxSlabRays).
 // NOLINTNEXTLINE(readability-function-size)
 void Propagate(const Crystal& crystal, size_t num, size_t step,                      // input
                const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input, d, p, w
                const int_bf_t fid_in_src,                                            // source face ids
                float_bf_t p_out, int_bf_t fid_out) {                                 // output, p, fid
-  if (crystal.PolygonFaceCount() > 0 && num <= kMaxSlabRays) {
-    PropagateSlab(crystal, num, step, d_in, p_in, w_in, fid_in_src, p_out, fid_out);
-  } else {
-    PropagateTriangle(crystal, num, step, d_in, p_in, w_in, fid_in_src, p_out, fid_out);
+  for (size_t offset = 0; offset < num; offset += kMaxSlabRays) {
+    size_t chunk = std::min(num - offset, kMaxSlabRays);
+    PropagateSlab(crystal, chunk, step,                                       //
+                  float_bf_t(d_in.Ptr(offset), d_in.step_),                   //
+                  float_bf_t(p_in.Ptr(offset / step), p_in.step_),            //
+                  float_bf_t(w_in.Ptr(offset), w_in.step_),                   //
+                  int_bf_t(fid_in_src.Ptr(offset / step), fid_in_src.step_),  //
+                  float_bf_t(p_out.Ptr(offset), p_out.step_),                 //
+                  int_bf_t(fid_out.Ptr(offset), fid_out.step_));
   }
 }
 
