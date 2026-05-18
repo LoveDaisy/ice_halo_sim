@@ -400,7 +400,8 @@ RaySeg MakeOutgoingCandidate() {
   r.p_[1] = 0.0f;
   r.p_[2] = 0.0f;
   r.w_ = 0.5f;  // positive (not TIR)
-  r.fid_ = -1;  // outgoing candidate marker
+  r.from_face_ = kInvalidId;
+  r.to_face_ = kInvalidId;  // outgoing candidate marker
   r.crystal_rot_ = Rotation{};
   return r;
 }

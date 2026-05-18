@@ -28,7 +28,8 @@ class FilterTest : public ::testing::Test {
       r.rp_ << fn;
     }
     r.state_ = RaySeg::kOutgoing;
-    r.fid_ = -1;
+    r.from_face_ = kInvalidId;
+    r.to_face_ = kInvalidId;
     r.w_ = 1.0f;
     return r;
   }
@@ -729,7 +730,8 @@ static RaySeg MakeFilterTestRay(const std::vector<IdType>& rp_vec) {
     r.rp_ << fn;
   }
   r.state_ = RaySeg::kOutgoing;
-  r.fid_ = -1;
+  r.from_face_ = kInvalidId;
+  r.to_face_ = kInvalidId;
   r.w_ = 1.0f;
   return r;
 }

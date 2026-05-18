@@ -34,7 +34,7 @@ class CopyRayDataConsumer : public lumice::IConsume {
   void Consume(const lumice::SimData& data) override {
     int offset = 0;
     for (const auto& r : data.rays_) {
-      if (r.fid_ >= 0 || r.w_ < 0) {
+      if (r.to_face_ != lumice::kInvalidId || r.w_ < 0) {
         continue;
       }
       std::memcpy(output_data_ + offset * 7 + 0, r.p_, 3 * sizeof(float));

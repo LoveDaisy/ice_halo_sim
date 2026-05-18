@@ -32,14 +32,14 @@ class IceRefractiveIndex {
 };
 
 
-void HitSurface(const Crystal& crystal, float n, size_t num,                          // input
-                const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
-                float_bf_t d_out, float_bf_t w_out);                                  // output
+void HitSurface(const Crystal& crystal, float n, size_t num,                             // input
+                const float_bf_t d_in, const float_bf_t w_in, const id_bf_t to_face_in,  // input
+                float_bf_t d_out, float_bf_t w_out);                                     // output
 
 void Propagate(const Crystal& crystal, size_t num, size_t step,                      // input
                const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input
-               const int_bf_t fid_in_src,            // source face ids (-1 = no constraint)
-               float_bf_t p_out, int_bf_t fid_out);  // output
+               const id_bf_t from_face_in,              // source polygon face ids (kInvalidId = no constraint)
+               float_bf_t p_out, id_bf_t to_face_out);  // output
 
 }  // namespace lumice
 

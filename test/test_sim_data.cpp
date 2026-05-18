@@ -42,7 +42,10 @@ static_assert(sizeof(SimData) == 168,
 RaySeg MakeRay(int marker) {
   RaySeg r{};
   r.w_ = static_cast<float>(marker);
-  r.fid_ = marker;
+  // No fid-equivalent in the new RaySeg; keep both polygon-face fields at
+  // kInvalidId. Test assertions only inspect w_, so this is sufficient.
+  r.from_face_ = lumice::kInvalidId;
+  r.to_face_ = lumice::kInvalidId;
   return r;
 }
 
