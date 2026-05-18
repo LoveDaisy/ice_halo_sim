@@ -185,7 +185,10 @@ jobs:
         run: pip install Pillow pytest
 
       - name: Run E2E tests
-        run: pytest test/e2e/ -v
+        # `-m "not slow"` excludes shared-lib-based tests (e.g. test_additivity.py)
+        # which require BUILD_SHARED_LIBS=ON and a separate build flavor.
+        # A dedicated slow-e2e job for these is tracked in backlog.
+        run: pytest test/e2e/ -v -m "not slow"
         timeout-minutes: 10
 
   benchmark-summary:
