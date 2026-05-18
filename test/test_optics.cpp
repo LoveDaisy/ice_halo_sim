@@ -555,10 +555,17 @@ TEST_F(PropagateTest, NoIntersection) {
 }
 
 // AC-1: TIR on fn=3 (x=√3/4), ray starts at shared edge with fn=4 (0.5x+√3/2·y=√3/4).
-// fid_in_src = a triangle of fn=3 (TIR source); adjacent fn=4 is hit at t=0.
+// fid_in_src = a triangle of fn=3 (TIR source); adjacent fn=4 should be hit.
+//
+// Geometry note: pos.x is shifted inward by δ = 3e-6 (well below kFloatEps=1e-5)
+// so t_fn4 = δ is reliably positive across platforms while still less than the
+// pre-fix +kFloatEps acceptance threshold (the bug witness). A pos exactly on
+// the shared edge (δ=0) makes t_fn4 mathematically 0, which on x86_64 floating
+// point can land slightly negative outside [-kFloatEps, 0] and fail the test.
 TEST_F(PropagateTest, TIREdgeAdjacentFaceHit) {
   const float kSqrt3 = std::sqrt(3.0f);
-  float pos[3] = { kSqrt3 / 4.0f, 0.25f, 0.0f };
+  constexpr float kInwardShift = 3e-6f;
+  float pos[3] = { kSqrt3 / 4.0f - kInwardShift, 0.25f, 0.0f };
   float dir[3] = { -0.5f, kSqrt3 / 2.0f, 0.0f };
   float w[1] = { 1.0f };
   float pos_out[3] = {};
@@ -592,8 +599,11 @@ TEST_F(PropagateTest, TIREdgeAdjacentFaceHit) {
 }
 
 // AC-2: same geometry as AC-1 but num=129 forces PropagateTriangle path.
+// Same inward-shift rationale as AC-1: triangle path is more numerically
+// variant than slab path and was the failure site on x86_64 with δ=0.
 TEST_F(PropagateTest, TIREdgeAdjacentFaceHit_TrianglePath) {
   const float kSqrt3 = std::sqrt(3.0f);
+  constexpr float kInwardShift = 3e-6f;
   constexpr int kNum = 129;
   std::vector<float> dirs(kNum * 3, 0.0f);
   std::vector<float> positions(kNum * 3, 0.0f);
@@ -605,7 +615,7 @@ TEST_F(PropagateTest, TIREdgeAdjacentFaceHit_TrianglePath) {
   dirs[0] = -0.5f;
   dirs[1] = kSqrt3 / 2.0f;
   dirs[2] = 0.0f;
-  positions[0] = kSqrt3 / 4.0f;
+  positions[0] = kSqrt3 / 4.0f - kInwardShift;
   positions[1] = 0.25f;
   positions[2] = 0.0f;
   weights[0] = 1.0f;
