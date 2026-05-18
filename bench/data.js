@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779070174660,
+  "lastUpdate": 1779070176733,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -6399,6 +6399,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 64.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fa8e6cfb354f00e5922cc8d458b330670ff7fb29",
+          "message": "Merge pull request #93 from LoveDaisy/feat/query-filter-uplift-v2\n\nfeat(core): uplift query filter to RenderConsumer, fix OFF-mode normalization",
+          "timestamp": "2026-05-18T10:04:37+08:00",
+          "tree_id": "25b4ddbbd0c316a6ae1f3b02b2309815af457d9c",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/fa8e6cfb354f00e5922cc8d458b330670ff7fb29"
+        },
+        "date": 1779070176069,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 83.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 74.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 71.2,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 65.1,
             "unit": "%"
           }
         ]
