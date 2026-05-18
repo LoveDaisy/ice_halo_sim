@@ -182,7 +182,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        run: pip install Pillow pytest
+        # numpy is imported at module top in test/e2e/test_additivity.py and
+        # test/e2e/capi_runner.py (BufferedSimResult dataclass), so pytest
+        # collection needs it even when the slow tests themselves are skipped.
+        run: pip install Pillow pytest numpy
 
       - name: Run E2E tests
         # `-m "not slow"` excludes shared-lib-based tests (e.g. test_additivity.py)

@@ -29,7 +29,9 @@ Core conventions:
 ./scripts/build.sh -tj release
 ./scripts/build.sh -gtj release
 LUMICE_SKIP_GUI_TESTS=1 ./scripts/build.sh -gtj release
-pytest test/e2e/ -v
+pytest test/e2e/ -v                       # fast e2e only (matches CI)
+./scripts/build.sh -sj release && \
+  pytest test/e2e/ -v -m slow             # slow e2e (needs shared lib; run before PR)
 
 # Format
 ./scripts/format.sh
@@ -68,6 +70,9 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 
 - CLI, core, and unit-test flows should remain cross-platform.
 - GUI tests require a display server unless explicitly skipped with `LUMICE_SKIP_GUI_TESTS=1`.
+- E2E test split:
+  - Default `pytest test/e2e/ -v` runs the fast subset — matches CI behavior (CI uses `-m "not slow"`).
+  - `@pytest.mark.slow` tests (e.g. `test_additivity.py`) require the shared-lib build (`./scripts/build.sh -sj release`) and are excluded from CI to keep PR feedback fast. Run them locally with `pytest test/e2e/ -v -m slow` before opening a PR that touches the simulator core, query filter, or C API surface.
 - GUI screenshot references live under `test/gui/references/`.
 - Windows physical-desktop validation uses `scripts/win_remote_test.sh` together with `scripts/win_test_watcher.ps1`.
 - Performance diagnostics and workflows are documented in `doc/performance-testing.md`.
