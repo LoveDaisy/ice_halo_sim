@@ -174,6 +174,34 @@ Contributors who need the technical specification should consult this document a
 
 ---
 
+## 5b. Behavior Change Notice (task-query-filter-uplift-v2)
+
+Prior to this change, the simulator marked any ray that failed a configured
+`scattering.entries[].filter` as `kStopped`, so it never reached the consumer's
+"unfiltered" accumulator. As a result, `unfiltered_xyz_buffer` was actually
+*post-filter*, and Off-mode EV was indirectly sensitive to the filter — violating
+the additivity invariant described in §4.
+
+The fix demotes the simulator-side filter to a pure branch gate (controlling
+multi-scatter `kContinue` only), so filter-fail rays are emitted as `kOutgoing`
+and the consumer's Path B accumulates the true unfiltered set.
+
+**User-visible consequence**:
+
+- Scenes that previously configured a low-pass-rate filter (e.g. a raypath
+  filter where only a small percentage of rays survive) will see Off-mode EV
+  shift toward "darker" because the anchor is now the full ray set rather than
+  the post-filter subset. A ~0.1%-pass-rate filter can lower the Off-mode anchor
+  by roughly 10 stops.
+- On-mode behaviour is unchanged.
+- The filtered ("On-mode") XYZ buffer and final rendered image at a given EV
+  are unchanged.
+
+If you relied on the previous Off-mode behaviour, switch to On mode or adjust
+the manual EV offset.
+
+---
+
 ## 6. References
 
 ### Code Paths

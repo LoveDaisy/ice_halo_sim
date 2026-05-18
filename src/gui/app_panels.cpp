@@ -744,8 +744,12 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
     float ev_total = rc.exposure_offset + (g_state.auto_ev_enabled ? g_state.ev_auto : 0.0f);
     pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
-    pp.exposure.intensity_scale =
-        g_state.snapshot_intensity > 0 ? pp.exposure.intensity_factor / g_state.snapshot_intensity : 0.0f;
+    // ON mode normalizes by filtered intensity (per-buffer auto-EV); OFF mode normalizes by
+    // unfiltered intensity so the live preview stays consistent with the OFF-mode EV anchor
+    // computed in app.cpp (filter-independent absolute brightness).
+    const float norm_intensity =
+        g_state.auto_ev_enabled ? g_state.snapshot_intensity : g_state.unfiltered_snapshot_intensity;
+    pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;
     // Overlap parameters for dual fisheye texture sampling.
     pp.source.max_abs_dz = kDualFisheyeOverlap;
     pp.source.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);

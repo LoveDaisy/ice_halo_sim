@@ -5,8 +5,13 @@
 #include <numeric>
 #include <vector>
 
+#include "config/filter_config.hpp"
+#include "config/proj_config.hpp"
+#include "config/sim_data.hpp"
+#include "core/filter.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
+#include "core/raypath.hpp"
 #include "core/simulator.hpp"
 
 namespace lumice {
@@ -355,6 +360,147 @@ TEST(PartitionCrystalRayNum, ZeroRayNumPreservesCarry) {
   EXPECT_DOUBLE_EQ(carry[1], carry_before[1]);
   EXPECT_EQ(result[0], 0u);
   EXPECT_EQ(result[1], 0u);
+}
+
+// ============================================================================
+// CollectData filter dispatch (post task-query-filter-uplift-v2)
+//
+// Confirms that filter-fail rays are routed to kOutgoing (not kStopped), so
+// the consumer-side query filter can see the unfiltered ray set. See AC-2.
+// ============================================================================
+
+// Match the `kFilterIn` action with InternalCheck returning false → Check() == false,
+// emulating a "filter-fail" ray without depending on RaypathFilter symmetry setup.
+class AlwaysRejectFilter : public Filter {
+ public:
+  AlwaysRejectFilter() {
+    action_ = FilterConfig::kFilterIn;  // Check() returns InternalCheck()
+  }
+
+ protected:
+  bool InternalCheck(const RaySeg& /*ray*/) const override { return false; }
+};
+
+class AlwaysAcceptFilter : public Filter {
+ public:
+  AlwaysAcceptFilter() { action_ = FilterConfig::kFilterIn; }
+
+ protected:
+  bool InternalCheck(const RaySeg& /*ray*/) const override { return true; }
+};
+
+namespace {
+
+RaySeg MakeOutgoingCandidate() {
+  RaySeg r{};
+  r.d_[0] = 1.0f;
+  r.d_[1] = 0.0f;
+  r.d_[2] = 0.0f;
+  r.p_[0] = 0.0f;
+  r.p_[1] = 0.0f;
+  r.p_[2] = 0.0f;
+  r.w_ = 0.5f;  // positive (not TIR)
+  r.fid_ = -1;  // outgoing candidate marker
+  r.crystal_rot_ = Rotation{};
+  return r;
+}
+
+}  // namespace
+
+TEST(CollectDataFilterDispatch, FilterFailBecomesOutgoing) {
+  RandomNumberGenerator rng(42);
+  AlwaysRejectFilter filter;
+  MsInfo ms_info;
+  // prob_=0: rng < prob is always false → short-circuit, filter->Check never called.
+  // This covers the prob-fail → kOutgoing path; see FilterFailWithNonZeroProbEmitsOutgoing
+  // for the direct filter-fail → kOutgoing (AC-2) coverage.
+  ms_info.prob_ = 0.0f;
+
+  RayBuffer buffer_data[2];
+  RayBuffer init_data[2];
+  buffer_data[0].Reset(8);
+  buffer_data[1].Reset(8);
+  init_data[0].Reset(8);
+  init_data[1].Reset(8);
+
+  buffer_data[1].EmplaceBack(MakeOutgoingCandidate());
+
+  CollectData(rng, ms_info, &filter, buffer_data, init_data);
+
+  ASSERT_EQ(buffer_data[1].size_, 1u);
+  EXPECT_EQ(buffer_data[1].rays_[0].state_, RaySeg::kOutgoing)
+      << "filter-fail ray must emit as kOutgoing (was " << buffer_data[1].rays_[0].state_ << ")";
+  // init_data must NOT contain the filter-fail ray.
+  EXPECT_EQ(init_data[1].size_, 0u);
+}
+
+TEST(CollectDataFilterDispatch, FilterFailWithNonZeroProbEmitsOutgoing) {
+  // prob_=1.0f: rng < prob is always true → filter->Check IS called and returns false.
+  // This is the direct AC-2 coverage: filter-fail ray must emit as kOutgoing.
+  RandomNumberGenerator rng(42);
+  AlwaysRejectFilter filter;
+  MsInfo ms_info;
+  ms_info.prob_ = 1.0f;
+
+  RayBuffer buffer_data[2];
+  RayBuffer init_data[2];
+  buffer_data[0].Reset(8);
+  buffer_data[1].Reset(8);
+  init_data[0].Reset(8);
+  init_data[1].Reset(8);
+
+  buffer_data[1].EmplaceBack(MakeOutgoingCandidate());
+
+  CollectData(rng, ms_info, &filter, buffer_data, init_data);
+
+  ASSERT_EQ(buffer_data[1].size_, 1u);
+  EXPECT_EQ(buffer_data[1].rays_[0].state_, RaySeg::kOutgoing)
+      << "filter-fail ray must emit as kOutgoing (was " << buffer_data[1].rays_[0].state_ << ")";
+  EXPECT_EQ(init_data[1].size_, 0u);
+}
+
+TEST(CollectDataFilterDispatch, FilterPassWithProbContinues) {
+  RandomNumberGenerator rng(42);
+  AlwaysAcceptFilter filter;
+  MsInfo ms_info;
+  ms_info.prob_ = 1.0f;  // always branch when filter passes
+
+  RayBuffer buffer_data[2];
+  RayBuffer init_data[2];
+  buffer_data[0].Reset(8);
+  buffer_data[1].Reset(8);
+  init_data[0].Reset(8);
+  init_data[1].Reset(8);
+
+  buffer_data[1].EmplaceBack(MakeOutgoingCandidate());
+
+  CollectData(rng, ms_info, &filter, buffer_data, init_data);
+
+  ASSERT_EQ(buffer_data[1].size_, 1u);
+  EXPECT_EQ(buffer_data[1].rays_[0].state_, RaySeg::kContinue);
+  EXPECT_EQ(init_data[1].size_, 1u);
+}
+
+TEST(CollectDataFilterDispatch, FilterPassNoProbEmitsOutgoing) {
+  RandomNumberGenerator rng(42);
+  AlwaysAcceptFilter filter;
+  MsInfo ms_info;
+  ms_info.prob_ = 0.0f;  // no branching → outgoing
+
+  RayBuffer buffer_data[2];
+  RayBuffer init_data[2];
+  buffer_data[0].Reset(8);
+  buffer_data[1].Reset(8);
+  init_data[0].Reset(8);
+  init_data[1].Reset(8);
+
+  buffer_data[1].EmplaceBack(MakeOutgoingCandidate());
+
+  CollectData(rng, ms_info, &filter, buffer_data, init_data);
+
+  ASSERT_EQ(buffer_data[1].size_, 1u);
+  EXPECT_EQ(buffer_data[1].rays_[0].state_, RaySeg::kOutgoing);
+  EXPECT_EQ(init_data[1].size_, 0u);
 }
 
 }  // namespace
