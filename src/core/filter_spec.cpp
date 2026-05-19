@@ -278,7 +278,9 @@ std::unique_ptr<FilterSpec> FilterSpec::Create(const FilterConfig& config, const
                                                const AxisDistribution& axis_dist) {
   bool d_applicable = detail::IsDApplicable(axis_dist);
   int sigma_a = d_applicable ? detail::ComputeSigmaA(axis_dist.roll_dist.mean) : 0;
-  return std::visit(TopSpecCreator{ crystal, config.symmetry_, sigma_a, d_applicable }, config.param_);
+  auto spec = std::visit(TopSpecCreator{ crystal, config.symmetry_, sigma_a, d_applicable }, config.param_);
+  spec->action_ = config.action_;
+  return spec;
 }
 
 }  // namespace lumice

@@ -34,8 +34,18 @@ class FilterSpec {
 
   virtual bool Match(const RaySeg& ray) const = 0;
 
+  bool Check(const RaySeg& ray) const {
+    bool m = Match(ray);
+    return action_ == FilterConfig::kFilterIn ? m : !m;
+  }
+
   static std::unique_ptr<FilterSpec> Create(const FilterConfig& config, const Crystal& crystal,
                                             const AxisDistribution& axis_dist);
+
+ protected:
+  // action_ is set by FilterSpec::Create after the derived class is fully
+  // constructed; derived constructors must not depend on its value.
+  FilterConfig::Action action_ = FilterConfig::kFilterIn;
 };
 
 namespace detail {
