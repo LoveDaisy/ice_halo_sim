@@ -168,6 +168,7 @@ struct ValuePreset {
   float value;
 };
 
+// Label precision must match the fmt passed to SliderWithPresetEdit (currently "%.3f").
 constexpr ValuePreset kWedgePresets[] = {
   { "{1,0,-1,1} 28.000\xc2\xb0", 28.0f },
   { "{2,0,-2,1} 47.300\xc2\xb0", 47.3f },
@@ -202,7 +203,7 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
   float spacing = ImGui::GetStyle().ItemSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x;
-  float slider_w = avail_w - kInputWidth - kLabelColWidth - spacing * 2;
+  float slider_w = avail_w - kInputWidth - kLabelColWidth - spacing * 2;  // mirrors PrepareSliderLayout
   if (slider_w < 40.0f)
     slider_w = 40.0f;
 
