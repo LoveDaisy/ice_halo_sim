@@ -1,26 +1,18 @@
-// Filter Match benchmark for scrum-filter-architecture-refactor / explore-filter-refactor-bench.
+// Filter Match benchmark for scrum-filter-architecture-refactor.
 //
-// Compares two candidate per-ray paths for filter matching:
-//   - Path B: existing RaypathFilter with InitCrystalSymmetry pre-built hash set
-//             (caller-side cached form; matches simulator.cpp's symmetry_initialized flag).
-//   - Path C2: canonical-form matcher — construct-time ReduceRaypath produces canonical
-//              representative; per-ray Match runs ReduceRaypath on the candidate raypath
-//              and compares element-wise.
-//
-// First experiment focuses on N=1 single RaypathFilter to validate H2 (B faster at N=1)
-// and establish framework baseline. N=2/4 ComplexFilter and orbit-vs-non-orbit ray mixes
-// are deferred to subsequent experiments.
+// Long-term perf regression infrastructure for the production canonical-form
+// matcher (FilterSpec). The legacy B path (RaypathFilter hash set) and the C2
+// prototype matcher were removed in task-filter-callers-migration; B's runtime
+// checks are gone, so a parity self-check has no oracle.
 
 #include <benchmark/benchmark.h>
 
 #include <cstdint>
-#include <memory>
 #include <utility>
 #include <vector>
 
 #include "config/filter_config.hpp"
 #include "core/crystal.hpp"
-#include "core/filter.hpp"
 #include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
@@ -60,8 +52,7 @@ RaySeg MakeRay(std::initializer_list<IdType> fns) {
 // Returns 30 distinct rays — mix of orbit members (accepted by P+D on {3,5}) and non-members.
 // CAVEAT (exp #1-3 workload artifact): the 30 rays distribute over only 3 orbits: {3,5}/{3,7} (12),
 // {3,6} (6), {3,8} (12) — so OR-filters cycling {3,5}/{3,6}/{3,7}/{3,8} achieve 100% coverage at N=4,
-// hiding B's true O(N) cost behind universal early-out. Use MakeNonMatchingRayBatch for worst-case
-// (no-match) scaling validation.
+// masking true O(N) cost behind universal early-out. Use MakeNonMatchingRayBatch for worst-case scaling.
 std::vector<RaySeg> MakeRayBatch() {
   std::vector<RaySeg> rays;
   rays.reserve(30);
@@ -77,8 +68,7 @@ std::vector<RaySeg> MakeRayBatch() {
 }
 
 // Build a 30-ray batch where every ray contains a pyramid-upper face (13..17) so all rays
-// fall outside prism-only OR-filter accept sets. Worst-case workload for B (full N lookups
-// per ray, no early-out) and clean test for the linear-scaling model.
+// fall outside prism-only OR-filter accept sets. Worst-case workload for measuring linear-N scaling.
 std::vector<RaySeg> MakeNonMatchingRayBatch() {
   std::vector<RaySeg> rays;
   rays.reserve(30);
@@ -89,200 +79,6 @@ std::vector<RaySeg> MakeNonMatchingRayBatch() {
   }
   return rays;
 }
-
-// C2 prototype matcher: pre-compute canonical at construction, per-ray canonicalize the candidate.
-// Honest stand-in for the C2 path being evaluated by scrum-210; intentionally uses the same
-// Crystal::ReduceRaypath that the production C2 would consume. The std::vector conversion is the
-// expected per-ray cost — a real C2 implementation may further inline the canonicalize into a
-// RaypathRecorder-native form to shave allocation overhead.
-class C2Matcher {
- public:
-  C2Matcher(const Crystal& crystal, const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a, bool d_applicable)
-      : crystal_(&crystal), symmetry_(symmetry), sigma_a_(sigma_a), d_applicable_(d_applicable),
-        canonical_(crystal.ReduceRaypath(rp, symmetry, sigma_a, d_applicable)) {
-    scratch_.reserve(8);
-  }
-
-  bool Match(const RaySeg& ray) const {
-    scratch_.clear();
-    for (auto fn : ray.rp_) {
-      scratch_.push_back(fn);
-    }
-    auto reduced = crystal_->ReduceRaypath(scratch_, symmetry_, sigma_a_, d_applicable_);
-    return reduced == canonical_;
-  }
-
- private:
-  const Crystal* crystal_;
-  uint8_t symmetry_;
-  int sigma_a_;
-  bool d_applicable_;
-  std::vector<IdType> canonical_;
-  mutable std::vector<IdType> scratch_;
-};
-
-// Build a RaypathFilter wired via Filter::Create (matches production path) with N=1 raypath={3,5}.
-FilterPtrU MakeFilterB_N1_PD() {
-  FilterConfig cfg{};
-  cfg.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
-  cfg.action_ = FilterConfig::kFilterIn;
-  RaypathFilterParam p{};
-  p.raypath_ = { 3, 5 };
-  cfg.param_ = SimpleFilterParam{ p };
-  return Filter::Create(cfg);
-}
-
-// Build a ComplexFilter with N OR-clauses, each single raypath {3, 5+i}.
-// Models the production ComplexFilter (sum-of-products) under realistic OR fan-out.
-FilterPtrU MakeFilterB_ComplexN_PD(int N) {
-  FilterConfig cfg{};
-  cfg.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
-  cfg.action_ = FilterConfig::kFilterIn;
-  ComplexFilterParam cp{};
-  for (int i = 0; i < N; i++) {
-    RaypathFilterParam rp{};
-    rp.raypath_ = { 3, static_cast<IdType>(5 + (i % 4)) };  // cycle through {3,5},{3,6},{3,7},{3,8}
-    cp.filters_.emplace_back(
-        std::vector<std::pair<IdType, SimpleFilterParam>>{ { static_cast<IdType>(i), SimpleFilterParam{ rp } } });
-  }
-  cfg.param_ = FilterParam{ cp };
-  return Filter::Create(cfg);
-}
-
-}  // namespace
-
-
-// ------------------------------ Path B (caller-cached) ------------------------------
-// Per-ray cost = unordered_set<size_t>::count(RaypathHash(rp)).
-static void BM_FilterMatch_B_N1_PD(benchmark::State& state) {
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  auto axis = MakeAzUniformRoll0();
-  auto filter = MakeFilterB_N1_PD();
-  filter->InitCrystalSymmetry(crystal, FilterConfig::kSymP | FilterConfig::kSymD, axis);
-
-  auto rays = MakeRayBatch();
-  size_t idx = 0;
-  size_t n = rays.size();
-
-  for (auto _ : state) {
-    bool r = filter->Check(rays[idx]);
-    benchmark::DoNotOptimize(r);
-    idx++;
-    if (idx == n) {
-      idx = 0;
-    }
-  }
-  state.SetItemsProcessed(state.iterations());
-}
-BENCHMARK(BM_FilterMatch_B_N1_PD)->Unit(benchmark::kNanosecond);
-
-
-// ------------------------------ Path C2 (per-ray canonical) ------------------------------
-// Per-ray cost = ReduceRaypath(rp.to_vector(), sym, sigma_a, d_applicable) == canonical.
-static void BM_FilterMatch_C2_N1_PD(benchmark::State& state) {
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  const uint8_t sym = FilterConfig::kSymP | FilterConfig::kSymD;
-  const int sigma_a = 0;  // roll_mean=0 → sigma_a=0 (matches MakeAzUniformRoll0)
-  const bool d_applicable = true;
-  C2Matcher matcher(crystal, { 3, 5 }, sym, sigma_a, d_applicable);
-
-  auto rays = MakeRayBatch();
-  size_t idx = 0;
-  size_t n = rays.size();
-
-  for (auto _ : state) {
-    bool r = matcher.Match(rays[idx]);
-    benchmark::DoNotOptimize(r);
-    idx++;
-    if (idx == n) {
-      idx = 0;
-    }
-  }
-  state.SetItemsProcessed(state.iterations());
-}
-BENCHMARK(BM_FilterMatch_C2_N1_PD)->Unit(benchmark::kNanosecond);
-
-
-// ------------------------------ Path C2-native (production FilterSpec) ------------------------------
-// Per-ray cost = detail::ReduceRecorder(rp_copy) + element-wise compare against canonical,
-// driven by the production RaypathSpec class (via FilterSpec::Create).
-//
-// Self-check: at benchmark setup, runs every ray through both FilterSpec and the existing
-// RaypathFilter (Path B), asserting answer parity. Aborts the benchmark on disagreement so a
-// canonicalization bug cannot silently produce misleading nanosecond numbers.
-static void BM_FilterMatch_C2Native_N1_PD(benchmark::State& state) {
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  auto axis = MakeAzUniformRoll0();
-  const uint8_t sym = FilterConfig::kSymP | FilterConfig::kSymD;
-  FilterConfig spec_cfg{};
-  spec_cfg.symmetry_ = sym;
-  spec_cfg.action_ = FilterConfig::kFilterIn;
-  RaypathFilterParam rp_p{};
-  rp_p.raypath_ = { 3, 5 };
-  spec_cfg.param_ = SimpleFilterParam{ rp_p };
-  auto spec = FilterSpec::Create(spec_cfg, crystal, axis);
-
-  auto rays = MakeRayBatch();
-
-  // Parity self-check against the existing RaypathFilter (Path B) to guard against silent
-  // canonicalization bugs that would make C2-native look artificially fast.
-  {
-    auto ref_filter = MakeFilterB_N1_PD();
-    ref_filter->InitCrystalSymmetry(crystal, sym, axis);
-    for (const auto& r : rays) {
-      if (spec->Match(r) != ref_filter->Check(r)) {
-        state.SkipWithError("FilterSpec (RaypathSpec) answer disagrees with Path B reference");
-        return;
-      }
-    }
-  }
-
-  size_t idx = 0;
-  size_t n = rays.size();
-
-  for (auto _ : state) {
-    bool r = spec->Match(rays[idx]);
-    benchmark::DoNotOptimize(r);
-    idx++;
-    if (idx == n) {
-      idx = 0;
-    }
-  }
-  state.SetItemsProcessed(state.iterations());
-}
-BENCHMARK(BM_FilterMatch_C2Native_N1_PD)->Unit(benchmark::kNanosecond);
-
-
-// ------------------------------ ComplexFilter N: B vs C2-native (H1 test) ------------------------------
-// Vary N via ->Arg(N). Tests the H1 amortization claim: per-ray cost should be
-//   B:  N × hash_lookup
-//   C2: canonicalize_once + N × compare
-// Crossover N (estimated): ~14 from experiments #1-2 nanosecond floors.
-
-static void BM_FilterMatch_B_ComplexN_PD(benchmark::State& state) {
-  int N = static_cast<int>(state.range(0));
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  auto axis = MakeAzUniformRoll0();
-  const uint8_t sym = FilterConfig::kSymP | FilterConfig::kSymD;
-  auto filter = MakeFilterB_ComplexN_PD(N);
-  filter->InitCrystalSymmetry(crystal, sym, axis);
-
-  auto rays = MakeRayBatch();
-  size_t idx = 0;
-  size_t n = rays.size();
-
-  for (auto _ : state) {
-    bool r = filter->Check(rays[idx]);
-    benchmark::DoNotOptimize(r);
-    idx++;
-    if (idx == n) {
-      idx = 0;
-    }
-  }
-  state.SetItemsProcessed(state.iterations());
-}
-BENCHMARK(BM_FilterMatch_B_ComplexN_PD)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->Arg(16)->Unit(benchmark::kNanosecond);
-
 
 // Build a ComplexFilter FilterConfig with N OR-clauses, each single raypath {3, 5+i%4}.
 FilterConfig MakeComplexCfg(int N) {
@@ -300,27 +96,47 @@ FilterConfig MakeComplexCfg(int N) {
   return cfg;
 }
 
+}  // namespace
+
+
+// ------------------------------ C2-native production FilterSpec (RaypathSpec, N=1) ------------------------------
+// Per-ray cost = detail::ReduceRecorder(rp_copy) + element-wise compare against canonical.
+static void BM_FilterMatch_C2Native_N1_PD(benchmark::State& state) {
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  auto axis = MakeAzUniformRoll0();
+  FilterConfig spec_cfg{};
+  spec_cfg.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
+  spec_cfg.action_ = FilterConfig::kFilterIn;
+  RaypathFilterParam rp_p{};
+  rp_p.raypath_ = { 3, 5 };
+  spec_cfg.param_ = SimpleFilterParam{ rp_p };
+  auto spec = FilterSpec::Create(spec_cfg, crystal, axis);
+
+  auto rays = MakeRayBatch();
+  size_t idx = 0;
+  size_t n = rays.size();
+
+  for (auto _ : state) {
+    bool r = spec->Match(rays[idx]);
+    benchmark::DoNotOptimize(r);
+    idx++;
+    if (idx == n) {
+      idx = 0;
+    }
+  }
+  state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_FilterMatch_C2Native_N1_PD)->Unit(benchmark::kNanosecond);
+
+
+// ------------------------------ C2-native ComplexFilter scaling (mixed match/no-match) ------------------------------
 static void BM_FilterMatch_C2Native_ComplexN_PD(benchmark::State& state) {
   int N = static_cast<int>(state.range(0));
   Crystal crystal = Crystal::CreatePrism(1.0f);
   auto axis = MakeAzUniformRoll0();
-  const uint8_t sym = FilterConfig::kSymP | FilterConfig::kSymD;
   auto spec = FilterSpec::Create(MakeComplexCfg(N), crystal, axis);
 
   auto rays = MakeRayBatch();
-
-  // Parity self-check vs Path B reference.
-  {
-    auto ref_filter = MakeFilterB_ComplexN_PD(N);
-    ref_filter->InitCrystalSymmetry(crystal, sym, axis);
-    for (const auto& r : rays) {
-      if (spec->Match(r) != ref_filter->Check(r)) {
-        state.SkipWithError("FilterSpec (ComplexSpec) answer disagrees with Path B reference");
-        return;
-      }
-    }
-  }
-
   size_t idx = 0;
   size_t n = rays.size();
 
@@ -337,69 +153,20 @@ static void BM_FilterMatch_C2Native_ComplexN_PD(benchmark::State& state) {
 BENCHMARK(BM_FilterMatch_C2Native_ComplexN_PD)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->Arg(16)->Unit(benchmark::kNanosecond);
 
 
-// ------------------------------ ComplexFilter N, worst-case no-match: B vs C2-native ------------------------------
-// Rays = 30 pyramid_upper-bearing rays, all guaranteed to miss any prism-only OR-filter.
-// Disables ComplexFilter early-out so B pays full N hash lookups per ray; C2 pays canonicalize + N compares.
-// Expected (from exp #1-3 model): B ≈ 2.33 × N ns, C2 ≈ 17.5 + 1.7 × N ns. Crossover ≈ N=28.
-
-static void BM_FilterMatch_B_ComplexN_PD_NoMatch(benchmark::State& state) {
-  int N = static_cast<int>(state.range(0));
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  auto axis = MakeAzUniformRoll0();
-  const uint8_t sym = FilterConfig::kSymP | FilterConfig::kSymD;
-  auto filter = MakeFilterB_ComplexN_PD(N);
-  filter->InitCrystalSymmetry(crystal, sym, axis);
-
-  auto rays = MakeNonMatchingRayBatch();
-
-  // Sanity: every ray must miss the filter (no-match workload). Skip with error otherwise.
-  for (const auto& r : rays) {
-    if (filter->Check(r)) {
-      state.SkipWithError("non-matching ray batch unexpectedly matched B filter");
-      return;
-    }
-  }
-
-  size_t idx = 0;
-  size_t n = rays.size();
-
-  for (auto _ : state) {
-    bool r = filter->Check(rays[idx]);
-    benchmark::DoNotOptimize(r);
-    idx++;
-    if (idx == n) {
-      idx = 0;
-    }
-  }
-  state.SetItemsProcessed(state.iterations());
-}
-BENCHMARK(BM_FilterMatch_B_ComplexN_PD_NoMatch)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->Arg(16)->Unit(benchmark::kNanosecond);
-
-
+// ------------------------------ C2-native ComplexFilter scaling (worst-case no-match) ------------------------------
 static void BM_FilterMatch_C2Native_ComplexN_PD_NoMatch(benchmark::State& state) {
   int N = static_cast<int>(state.range(0));
   Crystal crystal = Crystal::CreatePrism(1.0f);
   auto axis = MakeAzUniformRoll0();
-  const uint8_t sym = FilterConfig::kSymP | FilterConfig::kSymD;
   auto spec = FilterSpec::Create(MakeComplexCfg(N), crystal, axis);
 
   auto rays = MakeNonMatchingRayBatch();
 
-  // Parity self-check (B reference must also miss) and confirm no-match.
-  {
-    auto ref_filter = MakeFilterB_ComplexN_PD(N);
-    ref_filter->InitCrystalSymmetry(crystal, sym, axis);
-    for (const auto& r : rays) {
-      bool b = ref_filter->Check(r);
-      bool c = spec->Match(r);
-      if (b || c) {
-        state.SkipWithError("non-matching ray batch unexpectedly matched B or FilterSpec");
-        return;
-      }
-      if (b != c) {
-        state.SkipWithError("FilterSpec (ComplexSpec) answer disagrees with Path B reference on no-match batch");
-        return;
-      }
+  // Sanity: every ray must miss the filter (no-match workload).
+  for (const auto& r : rays) {
+    if (spec->Match(r)) {
+      state.SkipWithError("non-matching ray batch unexpectedly matched FilterSpec");
+      return;
     }
   }
 

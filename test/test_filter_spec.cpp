@@ -1,11 +1,12 @@
-// Unit tests for FilterSpec (canonical-form matcher) — AC-2 and AC-3 of
+// Unit tests for FilterSpec (canonical-form matcher) — AC-2 of
 // task-filter-spec-matcher-split.
 //
 //   AC-2  detail::ReduceRecorder produces the same canonical as
 //         Crystal::ReduceRaypath across (symmetry × sigma_a × crystal × raypath).
-//   AC-3  FilterSpec::Match agrees with the existing Filter oracle (B path) on
-//         every leaf type (None / Raypath / EntryExit / Direction / Crystal)
-//         and on ComplexFilter (OR-of-AND) for both sigma_a=0 and sigma_a≠0.
+//
+// AC-3 (FilterSpec vs Filter B-oracle parity) was removed in
+// task-filter-callers-migration; the B oracle's canonical-form path is gone,
+// so the parity check has no oracle to compare against.
 
 #include <gtest/gtest.h>
 
@@ -16,7 +17,6 @@
 #include "config/filter_config.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
-#include "core/filter.hpp"
 #include "core/filter_spec.hpp"
 #include "core/raypath.hpp"
 
@@ -262,183 +262,6 @@ TEST(FilterSpecReduceRecorder, MultiSegment_Hex) {
     EXPECT_TRUE(VerifyReduceRecorderOracle(crystal, FilterConfig::kSymP | FilterConfig::kSymD | FilterConfig::kSymB,
                                            /*sigma_a=*/0, /*d_applicable=*/true, s));
   }
-}
-
-// =============== AC-3: FilterSpec vs Filter (oracle parity) ===============
-
-::testing::AssertionResult CompareSpecVsFilter(const Crystal& crystal, const FilterConfig& cfg,
-                                               const AxisDistribution& axis, const std::vector<RaySeg>& rays) {
-  auto spec = FilterSpec::Create(cfg, crystal, axis);
-  auto f = Filter::Create(cfg);
-  f->InitCrystalSymmetry(crystal, cfg.symmetry_, axis);
-  for (size_t i = 0; i < rays.size(); i++) {
-    bool spec_r = spec->Match(rays[i]);
-    bool filt_r = f->Check(rays[i]);
-    if (spec_r != filt_r) {
-      // Format the raypath for diagnostic.
-      std::string rp_str = "{";
-      for (size_t k = 0; k < rays[i].rp_.size_; k++) {
-        if (k > 0) {
-          rp_str += ",";
-        }
-        rp_str += std::to_string(static_cast<int>(rays[i].rp_.recorder_[k]));
-      }
-      rp_str += "}";
-      return ::testing::AssertionFailure()
-             << "parity mismatch at ray " << i << " rp=" << rp_str << " spec=" << spec_r << " filter=" << filt_r;
-    }
-  }
-  return ::testing::AssertionSuccess();
-}
-
-FilterConfig MakeRaypathCfg(uint8_t sym, const std::vector<IdType>& rp) {
-  FilterConfig cfg{};
-  cfg.id_ = 0;
-  cfg.symmetry_ = sym;
-  cfg.action_ = FilterConfig::kFilterIn;
-  RaypathFilterParam p{};
-  p.raypath_ = rp;
-  cfg.param_ = SimpleFilterParam{ p };
-  return cfg;
-}
-
-FilterConfig MakeEntryExitCfg(uint8_t sym, IdType entry, IdType exit) {
-  FilterConfig cfg{};
-  cfg.id_ = 0;
-  cfg.symmetry_ = sym;
-  cfg.action_ = FilterConfig::kFilterIn;
-  EntryExitFilterParam p{ entry, exit };
-  cfg.param_ = SimpleFilterParam{ p };
-  return cfg;
-}
-
-TEST(FilterSpecParity, Prism_None) {
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  auto axis = MakeAxis(0.0f);
-  FilterConfig cfg{};
-  cfg.id_ = 0;
-  cfg.symmetry_ = FilterConfig::kSymNone;
-  cfg.action_ = FilterConfig::kFilterIn;
-  cfg.param_ = SimpleFilterParam{ NoneFilterParam{} };
-  EXPECT_TRUE(CompareSpecVsFilter(crystal, cfg, axis, BuildPrismRayBatch()));
-}
-
-TEST(FilterSpecParity, Prism_Raypath_PD) {
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  auto axis = MakeAxis(0.0f);
-  auto cfg = MakeRaypathCfg(FilterConfig::kSymP | FilterConfig::kSymD, { 3, 5 });
-  EXPECT_TRUE(CompareSpecVsFilter(crystal, cfg, axis, BuildPrismRayBatch()));
-}
-
-TEST(FilterSpecParity, Prism_Raypath_PD_SigmaANonZero) {
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  // roll_mean = 30° → sigma_a = 5 (one of the multiples-of-30° configurations).
-  auto axis = MakeAxis(30.0f);
-  auto cfg = MakeRaypathCfg(FilterConfig::kSymP | FilterConfig::kSymD, { 3, 5 });
-  EXPECT_TRUE(CompareSpecVsFilter(crystal, cfg, axis, BuildPrismRayBatch()));
-}
-
-TEST(FilterSpecParity, Prism_Raypath_PDB) {
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  auto axis = MakeAxis(0.0f);
-  auto cfg = MakeRaypathCfg(FilterConfig::kSymP | FilterConfig::kSymD | FilterConfig::kSymB, { 3, 5 });
-  EXPECT_TRUE(CompareSpecVsFilter(crystal, cfg, axis, BuildPrismRayBatch()));
-}
-
-TEST(FilterSpecParity, Pyramid_Raypath_B) {
-  Crystal crystal = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
-  auto axis = MakeAxis(0.0f);
-  auto cfg = MakeRaypathCfg(FilterConfig::kSymB, { 13, 5 });
-  EXPECT_TRUE(CompareSpecVsFilter(crystal, cfg, axis, BuildPyramidRayBatch()));
-}
-
-TEST(FilterSpecParity, Prism_EntryExit_P) {
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  auto axis = MakeAxis(0.0f);
-  auto cfg = MakeEntryExitCfg(FilterConfig::kSymP, 3, 5);
-  EXPECT_TRUE(CompareSpecVsFilter(crystal, cfg, axis, BuildPrismRayBatch()));
-}
-
-TEST(FilterSpecParity, Prism_Direction) {
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  auto axis = MakeAxis(0.0f);
-  FilterConfig cfg{};
-  cfg.id_ = 0;
-  cfg.symmetry_ = FilterConfig::kSymNone;
-  cfg.action_ = FilterConfig::kFilterIn;
-  DirectionFilterParam p{};
-  p.lon_ = 0.0f;
-  p.lat_ = 0.0f;
-  p.radii_ = 10.0f;
-  cfg.param_ = SimpleFilterParam{ p };
-
-  // Direction needs varied ray d_; build a few rays with distinct directions.
-  std::vector<RaySeg> rays;
-  for (int i = 0; i < 8; i++) {
-    auto r = MakeRay({ 3, 5 });
-    float a = static_cast<float>(i) * 0.2f;
-    r.d_[0] = std::cos(a);
-    r.d_[1] = std::sin(a);
-    r.d_[2] = 0.0f;
-    rays.push_back(r);
-  }
-  EXPECT_TRUE(CompareSpecVsFilter(crystal, cfg, axis, rays));
-}
-
-TEST(FilterSpecParity, Prism_Crystal) {
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  auto axis = MakeAxis(0.0f);
-  FilterConfig cfg{};
-  cfg.id_ = 0;
-  cfg.symmetry_ = FilterConfig::kSymNone;
-  cfg.action_ = FilterConfig::kFilterIn;
-  CrystalFilterParam p{};
-  p.crystal_id_ = 0;
-  cfg.param_ = SimpleFilterParam{ p };
-
-  std::vector<RaySeg> rays;
-  for (IdType i = 0; i < 4; i++) {
-    auto r = MakeRay({ 3, 5 });
-    r.crystal_config_id_ = i;
-    rays.push_back(r);
-  }
-  EXPECT_TRUE(CompareSpecVsFilter(crystal, cfg, axis, rays));
-}
-
-// ComplexFilter: OR-of-AND raypath leaves at sigma_a=0 and sigma_a≠0.
-FilterConfig MakeComplexCfg(uint8_t sym) {
-  FilterConfig cfg{};
-  cfg.id_ = 0;
-  cfg.symmetry_ = sym;
-  cfg.action_ = FilterConfig::kFilterIn;
-  ComplexFilterParam cp{};
-  // Two OR-clauses, each a single raypath leaf.
-  {
-    RaypathFilterParam rp{};
-    rp.raypath_ = { 3, 5 };
-    cp.filters_.emplace_back(std::vector<std::pair<IdType, SimpleFilterParam>>{ { 0, SimpleFilterParam{ rp } } });
-  }
-  {
-    RaypathFilterParam rp{};
-    rp.raypath_ = { 3, 7 };
-    cp.filters_.emplace_back(std::vector<std::pair<IdType, SimpleFilterParam>>{ { 1, SimpleFilterParam{ rp } } });
-  }
-  cfg.param_ = FilterParam{ cp };
-  return cfg;
-}
-
-TEST(FilterSpecParity, Prism_Complex_PD_SigmaA0) {
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  auto axis = MakeAxis(0.0f);
-  auto cfg = MakeComplexCfg(FilterConfig::kSymP | FilterConfig::kSymD);
-  EXPECT_TRUE(CompareSpecVsFilter(crystal, cfg, axis, BuildPrismRayBatch()));
-}
-
-TEST(FilterSpecParity, Prism_Complex_PD_SigmaANonZero) {
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  auto axis = MakeAxis(30.0f);  // sigma_a = 5
-  auto cfg = MakeComplexCfg(FilterConfig::kSymP | FilterConfig::kSymD);
-  EXPECT_TRUE(CompareSpecVsFilter(crystal, cfg, axis, BuildPrismRayBatch()));
 }
 
 }  // namespace

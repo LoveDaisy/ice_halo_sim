@@ -764,8 +764,8 @@ static void RenderSharedFilterControls(bool d_applicable) {
   }
 
   // P/B/D Checkbox — H4 修正 (issue per-type-direction / 178.5): only raypath
-  // and entry_exit consume crystal symmetry at the core layer; DirectionFilter
-  // does not override InitCrystalSymmetry (src/core/filter.cpp:81-98).
+  // and entry_exit consume crystal symmetry at the core layer; the direction
+  // filter has no crystal-specific state and ignores symmetry reduction.
   // Hiding the controls avoids misleading users — the underlying sym_p/b/d
   // fields keep their default values and the serializer still writes the
   // `symmetry` JSON field for cross-type round-trip compatibility.

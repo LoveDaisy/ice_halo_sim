@@ -1,12 +1,10 @@
 #include "core/filter.hpp"
 
 #include <cmath>
-#include <unordered_set>
 #include <variant>
 #include <vector>
 
 #include "config/filter_config.hpp"
-#include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
@@ -20,66 +18,27 @@ class NoneFilter : public Filter {
 };
 
 
+// RaypathFilter / EntryExitFilter no longer match anything: canonical-form
+// matching has been migrated to FilterSpec (src/core/filter_spec.cpp). The
+// classes survive only because Filter::Create's variant dispatch covers every
+// FilterConfig param type; their Check() will always return false. Production
+// code (simulator, render) no longer instantiates Filter — these branches are
+// only reachable through legacy tests using Filter::Create directly.
 class RaypathFilter : public Filter {
  public:
-  explicit RaypathFilter(const std::vector<IdType>& rp) : rp_(rp) {}
-
-  void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry, const AxisDistribution& axis_dist) override {
-    bool d_applicable = detail::IsDApplicable(axis_dist);
-    int sigma_a = d_applicable ? detail::ComputeSigmaA(axis_dist.roll_dist.mean) : 0;
-    candidate_hash_.clear();
-    auto expand_rp = crystal.ExpandRaypath(rp_, symmetry, sigma_a, d_applicable);
-    RaypathHash h;
-    for (const auto& rp : expand_rp) {
-      candidate_hash_.emplace(h(rp));
-    }
-  }
+  explicit RaypathFilter(const std::vector<IdType>& /*rp*/) {}
 
  protected:
-  bool InternalCheck(const RaySeg& ray) const override {
-    RaypathHash h;
-    auto curr_hash = h(ray.rp_);
-    return candidate_hash_.count(curr_hash) > 0;
-  }
-
- private:
-  std::unordered_set<size_t> candidate_hash_;
-  std::vector<IdType> rp_;
+  bool InternalCheck(const RaySeg& /*ray*/) const override { return false; }
 };
 
 
 class EntryExitFilter : public Filter {
  public:
-  EntryExitFilter(IdType entry, IdType exit) : entry_(entry), exit_(exit) {}
-
-  void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry, const AxisDistribution& axis_dist) override {
-    bool d_applicable = detail::IsDApplicable(axis_dist);
-    int sigma_a = d_applicable ? detail::ComputeSigmaA(axis_dist.roll_dist.mean) : 0;
-    candidate_hash_.clear();
-    std::vector<IdType> ee_rp{ entry_, exit_ };
-    auto expand_ee_rp = crystal.ExpandRaypath(ee_rp, symmetry, sigma_a, d_applicable);
-    RaypathHash h;
-    for (const auto& rp : expand_ee_rp) {
-      candidate_hash_.emplace(h(rp));
-    }
-  }
+  EntryExitFilter(IdType /*entry*/, IdType /*exit*/) {}
 
  protected:
-  bool InternalCheck(const RaySeg& ray) const override {
-    if (ray.rp_.size_ == 0) {
-      return false;
-    }
-
-    RaypathHash h;
-    RaypathRecorder rp;
-    rp << ray.rp_[0] << ray.rp_[ray.rp_.size_ - 1];
-    return candidate_hash_.count(h(rp)) > 0;
-  }
-
- private:
-  std::unordered_set<size_t> candidate_hash_;
-  IdType entry_;
-  IdType exit_;
+  bool InternalCheck(const RaySeg& /*ray*/) const override { return false; }
 };
 
 
@@ -153,14 +112,6 @@ class ComplexFilter : public Filter {
         f.emplace_back(std::visit(SimpleFilterCreator{}, pp.second));
       }
       filters_.emplace_back(std::move(f));
-    }
-  }
-
-  void InitCrystalSymmetry(const Crystal& crystal, uint8_t symmetry, const AxisDistribution& axis_dist) override {
-    for (auto& or_f : filters_) {
-      for (auto& and_f : or_f) {
-        and_f->InitCrystalSymmetry(crystal, symmetry, axis_dist);
-      }
     }
   }
 
