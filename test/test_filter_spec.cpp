@@ -11,7 +11,10 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <memory>
+#include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "config/filter_config.hpp"
@@ -261,6 +264,275 @@ TEST(FilterSpecReduceRecorder, MultiSegment_Hex) {
   for (const auto& s : seeds) {
     EXPECT_TRUE(VerifyReduceRecorderOracle(crystal, FilterConfig::kSymP | FilterConfig::kSymD | FilterConfig::kSymB,
                                            /*sigma_a=*/0, /*d_applicable=*/true, s));
+  }
+}
+
+// =============== AC-1/AC-2: FilterSpec.Match() orbit-invariant ===============
+
+// sigma_a -> roll_mean_deg inverse mapping for detail::ComputeSigmaA
+// (roll_mean -> n = round(roll/30)%6 -> sigma_a = (6-n)%6).
+constexpr float kSigmaARollDeg[6] = { 0.0f, 150.0f, 120.0f, 90.0f, 60.0f, 30.0f };
+
+// Returns AssertionSuccess iff all orbit members produce Match()=true.
+// Precondition: the filter was built from seed_rp, so spec->Match(MakeRay(seed_rp))
+// must be true; if not, the FilterSpec was misconfigured and the orbit sweep would
+// be vacuously satisfied with expected=false for all members.
+::testing::AssertionResult VerifyMatchOrbitInvariant(FilterSpec* spec, const Crystal& crystal,
+                                                     const std::vector<IdType>& seed_rp, uint8_t symmetry, int sigma_a,
+                                                     bool d_applicable) {
+  auto orbit = crystal.ExpandRaypath(seed_rp, symmetry, sigma_a, d_applicable);
+  if (orbit.empty()) {
+    return ::testing::AssertionFailure() << "ExpandRaypath returned empty orbit for seed=" << FormatRaypath(seed_rp);
+  }
+  RaySeg seed_ray = MakeRay(seed_rp);
+  if (!spec->Match(seed_ray)) {
+    return ::testing::AssertionFailure() << "Seed raypath " << FormatRaypath(seed_rp)
+                                         << " did not match its own filter (sym=" << static_cast<int>(symmetry)
+                                         << " sigma_a=" << sigma_a << ") - filter misconfigured, orbit sweep aborted";
+  }
+  for (size_t i = 0; i < orbit.size(); i++) {
+    RaySeg ri = MakeRay(orbit[i]);
+    if (!spec->Match(ri)) {
+      return ::testing::AssertionFailure() << "Orbit member " << i << " " << FormatRaypath(orbit[i])
+                                           << " Match()=false != expected=true (seed=" << FormatRaypath(seed_rp)
+                                           << " sym=" << static_cast<int>(symmetry) << " sigma_a=" << sigma_a << ")";
+    }
+  }
+  return ::testing::AssertionSuccess();
+}
+
+std::unique_ptr<FilterSpec> MakeRaypathSpec(const Crystal& crystal, const std::vector<IdType>& rp, uint8_t symmetry,
+                                            float roll_mean_deg) {
+  FilterConfig cfg{};
+  cfg.id_ = 1;
+  cfg.symmetry_ = symmetry;
+  cfg.action_ = FilterConfig::kFilterIn;
+  RaypathFilterParam p{};
+  p.raypath_ = rp;
+  cfg.param_ = SimpleFilterParam{ p };
+  return FilterSpec::Create(cfg, crystal, MakeAxis(roll_mean_deg));
+}
+
+// Build a ComplexSpec where each entry of rps is one OR-clause with one AND-filter
+// (a RaypathFilterParam). Pair-id 0 is a clause-id placeholder; ComplexSpec ignores
+// it (only used downstream by Filter B-oracle for clause routing, which is gone).
+std::unique_ptr<FilterSpec> MakeComplexSpec(const Crystal& crystal, const std::vector<std::vector<IdType>>& rps,
+                                            uint8_t symmetry, float roll_mean_deg) {
+  FilterConfig cfg{};
+  cfg.id_ = 1;
+  cfg.symmetry_ = symmetry;
+  cfg.action_ = FilterConfig::kFilterIn;
+  ComplexFilterParam cp{};
+  for (const auto& rp : rps) {
+    RaypathFilterParam rpp{};
+    rpp.raypath_ = rp;
+    std::vector<std::pair<IdType, SimpleFilterParam>> and_clause;
+    and_clause.emplace_back(IdType{ 0 }, SimpleFilterParam{ rpp });
+    cp.filters_.push_back(std::move(and_clause));
+  }
+  cfg.param_ = cp;
+  return FilterSpec::Create(cfg, crystal, MakeAxis(roll_mean_deg));
+}
+
+// N value selection: orbit-invariant is a property of the group structure, independent
+// of N (ComplexFilter OR-clause count). One representative N per (crystal, symmetry)
+// covers the property; sigma_a sweeps are added for symmetries containing kSymD.
+
+TEST(FilterSpec_MatchOrbitInvariant, Prism_P_N1) {
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP;
+  std::vector<IdType> seed{ 3, 5 };
+  auto spec = MakeRaypathSpec(crystal, seed, kSym, kSigmaARollDeg[0]);
+  ASSERT_NE(spec, nullptr);
+  EXPECT_TRUE(VerifyMatchOrbitInvariant(spec.get(), crystal, seed, kSym, /*sigma_a=*/0, /*d_applicable=*/false));
+}
+
+TEST(FilterSpec_MatchOrbitInvariant, Prism_PD_N2_AllSigmaA) {
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP | FilterConfig::kSymD;
+  std::vector<std::vector<IdType>> seeds{ { 3, 5 }, { 4, 6 } };
+  for (int sigma_a = 0; sigma_a < 6; sigma_a++) {
+    SCOPED_TRACE("sigma_a=" + std::to_string(sigma_a));
+    auto spec = MakeComplexSpec(crystal, seeds, kSym, kSigmaARollDeg[sigma_a]);
+    ASSERT_NE(spec, nullptr);
+    for (const auto& seed : seeds) {
+      EXPECT_TRUE(VerifyMatchOrbitInvariant(spec.get(), crystal, seed, kSym, sigma_a, /*d_applicable=*/true));
+    }
+  }
+}
+
+TEST(FilterSpec_MatchOrbitInvariant, Prism_B_N1) {
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymB;
+  std::vector<IdType> seed{ 1, 3 };
+  auto spec = MakeRaypathSpec(crystal, seed, kSym, kSigmaARollDeg[0]);
+  ASSERT_NE(spec, nullptr);
+  EXPECT_TRUE(VerifyMatchOrbitInvariant(spec.get(), crystal, seed, kSym, /*sigma_a=*/0, /*d_applicable=*/false));
+}
+
+TEST(FilterSpec_MatchOrbitInvariant, Prism_PDB_N4_AllSigmaA) {
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP | FilterConfig::kSymD | FilterConfig::kSymB;
+  std::vector<std::vector<IdType>> seeds{ { 1, 3 }, { 2, 5 }, { 3, 5 }, { 4, 6 } };
+  for (int sigma_a = 0; sigma_a < 6; sigma_a++) {
+    SCOPED_TRACE("sigma_a=" + std::to_string(sigma_a));
+    auto spec = MakeComplexSpec(crystal, seeds, kSym, kSigmaARollDeg[sigma_a]);
+    ASSERT_NE(spec, nullptr);
+    for (const auto& seed : seeds) {
+      EXPECT_TRUE(VerifyMatchOrbitInvariant(spec.get(), crystal, seed, kSym, sigma_a, /*d_applicable=*/true));
+    }
+  }
+}
+
+TEST(FilterSpec_MatchOrbitInvariant, Pyramid_P_N1) {
+  Crystal crystal = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP;
+  std::vector<IdType> seed{ 14, 6 };
+  auto spec = MakeRaypathSpec(crystal, seed, kSym, kSigmaARollDeg[0]);
+  ASSERT_NE(spec, nullptr);
+  EXPECT_TRUE(VerifyMatchOrbitInvariant(spec.get(), crystal, seed, kSym, /*sigma_a=*/0, /*d_applicable=*/false));
+}
+
+TEST(FilterSpec_MatchOrbitInvariant, Pyramid_PD_N2_AllSigmaA) {
+  Crystal crystal = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP | FilterConfig::kSymD;
+  std::vector<std::vector<IdType>> seeds{ { 14, 6 }, { 18, 5 } };
+  for (int sigma_a = 0; sigma_a < 6; sigma_a++) {
+    SCOPED_TRACE("sigma_a=" + std::to_string(sigma_a));
+    auto spec = MakeComplexSpec(crystal, seeds, kSym, kSigmaARollDeg[sigma_a]);
+    ASSERT_NE(spec, nullptr);
+    for (const auto& seed : seeds) {
+      EXPECT_TRUE(VerifyMatchOrbitInvariant(spec.get(), crystal, seed, kSym, sigma_a, /*d_applicable=*/true));
+    }
+  }
+}
+
+TEST(FilterSpec_MatchOrbitInvariant, Pyramid_B_N1) {
+  Crystal crystal = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymB;
+  std::vector<IdType> seed{ 13, 5 };
+  auto spec = MakeRaypathSpec(crystal, seed, kSym, kSigmaARollDeg[0]);
+  ASSERT_NE(spec, nullptr);
+  EXPECT_TRUE(VerifyMatchOrbitInvariant(spec.get(), crystal, seed, kSym, /*sigma_a=*/0, /*d_applicable=*/false));
+}
+
+TEST(FilterSpec_MatchOrbitInvariant, Pyramid_PDB_N4_AllSigmaA) {
+  Crystal crystal = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP | FilterConfig::kSymD | FilterConfig::kSymB;
+  std::vector<std::vector<IdType>> seeds{ { 13, 5 }, { 14, 6 }, { 23, 5 }, { 25, 8 } };
+  for (int sigma_a = 0; sigma_a < 6; sigma_a++) {
+    SCOPED_TRACE("sigma_a=" + std::to_string(sigma_a));
+    auto spec = MakeComplexSpec(crystal, seeds, kSym, kSigmaARollDeg[sigma_a]);
+    ASSERT_NE(spec, nullptr);
+    for (const auto& seed : seeds) {
+      EXPECT_TRUE(VerifyMatchOrbitInvariant(spec.get(), crystal, seed, kSym, sigma_a, /*d_applicable=*/true));
+    }
+  }
+}
+
+// =============== AC-1: anti-pattern guard ===============
+
+// FilterSpec.Match() must NOT re-initialize internals per ray.
+//
+// Background: InitCrystalSymmetry() was called per-ray in the old hot path.
+// task-filter-callers-migration removed every call site; static grep
+//   grep -rn "InitCrystalSymmetry" src/ test/ bench/  -> zero hits.
+//
+// Three-layer defense:
+//   1. grep ZERO_HITS: API removal (strongest, prevents reintroduction).
+//   2. const interface: Match() is const, so non-mutable members cannot be written.
+//   3. This test (behaviour): two passes return bit-identical results, detecting
+//      non-deterministic mutable state. Deterministic per-ray reinit (idempotent)
+//      can still pass here and is covered by layers 1+2.
+TEST(FilterSpec_AntiPattern, NoPerRayReinit_ComplexFilter_PD_SigmaA5) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP | FilterConfig::kSymD;
+  // sigma_a=5 (roll_mean=30deg) is the known bug case from fix-d-symmetry-pyramid-skip (#208).
+  auto spec = MakeComplexSpec(pyramid, { { 14, 6 }, { 18, 5 } }, kSym, kSigmaARollDeg[5]);
+  ASSERT_NE(spec, nullptr);
+
+  std::vector<RaySeg> batch;
+  auto orbit = pyramid.ExpandRaypath({ 14, 6 }, kSym, /*sigma_a=*/5, /*d_applicable=*/true);
+  for (const auto& rp : orbit) {
+    batch.push_back(MakeRay(rp));
+  }
+  batch.push_back(MakeRay({ 1 }));     // non-member: basal-only
+  batch.push_back(MakeRay({ 3, 4 }));  // non-member: prism-prism
+
+  std::vector<bool> pass1;
+  pass1.reserve(batch.size());
+  for (const auto& r : batch) {
+    pass1.push_back(spec->Match(r));
+  }
+  for (size_t i = 0; i < batch.size(); i++) {
+    EXPECT_EQ(spec->Match(batch[i]), pass1[i])
+        << "Pass 2 diverged at ray " << i << " - non-deterministic internal state";
+  }
+}
+
+// =============== AC-3: multi-crystal canonical isolation ===============
+
+TEST(FilterSpec_MultiCrystal, IndependentCanonical) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP;
+  auto prism_spec = MakeRaypathSpec(prism, { 3, 5 }, kSym, kSigmaARollDeg[0]);
+  auto pyr_spec = MakeRaypathSpec(pyramid, { 14, 6 }, kSym, kSigmaARollDeg[0]);
+  ASSERT_NE(prism_spec, nullptr);
+  ASSERT_NE(pyr_spec, nullptr);
+
+  auto prism_orbit = prism.ExpandRaypath({ 3, 5 }, kSym, /*sigma_a=*/0, /*d_applicable=*/false);
+  for (const auto& rp : prism_orbit) {
+    EXPECT_TRUE(prism_spec->Match(MakeRay(rp)))
+        << "prism orbit member " << FormatRaypath(rp) << " not matched by prism spec";
+    EXPECT_FALSE(pyr_spec->Match(MakeRay(rp)))
+        << "prism orbit member " << FormatRaypath(rp) << " matched by pyramid spec (canonical leak)";
+  }
+  auto pyr_orbit = pyramid.ExpandRaypath({ 14, 6 }, kSym, /*sigma_a=*/0, /*d_applicable=*/false);
+  for (const auto& rp : pyr_orbit) {
+    EXPECT_TRUE(pyr_spec->Match(MakeRay(rp)))
+        << "pyramid orbit member " << FormatRaypath(rp) << " not matched by pyramid spec";
+    EXPECT_FALSE(prism_spec->Match(MakeRay(rp)))
+        << "pyramid orbit member " << FormatRaypath(rp) << " matched by prism spec (canonical leak)";
+  }
+}
+
+// =============== AC-2: random 1000+ ReduceRecorder vs Crystal::ReduceRaypath ===============
+
+TEST(FilterSpecReduceRecorder, Random1000_AllSymmetries) {
+  // Fixed seed: reproducibility hard-requirement (AC-3 no flaky risk).
+  constexpr uint32_t kSeed = 20260519u;
+  std::mt19937 rng(kSeed);
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  std::vector<std::pair<const Crystal*, uint8_t>> combos = {
+    { &prism, FilterConfig::kSymP },
+    { &prism, FilterConfig::kSymP | FilterConfig::kSymD },
+    { &prism, FilterConfig::kSymP | FilterConfig::kSymD | FilterConfig::kSymB },
+    { &pyramid, FilterConfig::kSymP | FilterConfig::kSymD },
+  };
+  constexpr int kRaysPerCombo = 300;  // 4 * 300 = 1200 > 1000
+  std::vector<IdType> prism_faces = { 1, 2, 3, 4, 5, 6, 7, 8 };
+  std::vector<IdType> pyramid_faces = { 1, 2, 13, 14, 15, 16, 17, 18, 23, 24, 25, 26, 27, 28, 3, 4, 5, 6, 7, 8 };
+  for (auto& [crystal_ptr, sym] : combos) {
+    bool is_pyramid = (crystal_ptr == &pyramid);
+    auto& faces = is_pyramid ? pyramid_faces : prism_faces;
+    std::uniform_int_distribution<int> len_dist(1, 4);
+    std::uniform_int_distribution<int> face_dist(0, static_cast<int>(faces.size()) - 1);
+    std::uniform_int_distribution<int> sigma_dist(0, 5);
+    std::bernoulli_distribution d_app(0.5);
+    for (int k = 0; k < kRaysPerCombo; k++) {
+      int len = len_dist(rng);
+      std::vector<IdType> rp;
+      rp.reserve(len);
+      for (int l = 0; l < len; l++) {
+        rp.push_back(faces[face_dist(rng)]);
+      }
+      int sigma_a = (sym & FilterConfig::kSymD) ? sigma_dist(rng) : 0;
+      bool d_applicable = (sym & FilterConfig::kSymD) ? d_app(rng) : false;
+      EXPECT_TRUE(VerifyReduceRecorderOracle(*crystal_ptr, sym, sigma_a, d_applicable, rp))
+          << "Failed at k=" << k << " sym=" << static_cast<int>(sym);
+    }
   }
 }
 
