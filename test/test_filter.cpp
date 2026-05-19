@@ -976,3 +976,94 @@ TEST(ReduceRaypath4Param, B_OriginalSmaller) {
   auto result = pyramid.ReduceRaypath({ 13, 5 }, FilterConfig::kSymB, 0, false);
   EXPECT_EQ(result, (std::vector<IdType>{ 13, 5 }));
 }
+
+// ---- ReduceRaypath 4-param pyramid + D coverage ----
+
+// sigma_a=0: face 18 (pri=5) reflects to 14 (pri=1); face 6 is a fixed point (pri=3→3).
+// {14,6} < {18,6} → returns {14,6}. Before fix: bug returned {18,6} (D noop on pyramid).
+TEST(ReduceRaypath4Param, D_Pyramid_SigmaA0_FaceReflected) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto result = pyramid.ReduceRaypath({ 18, 6 }, FilterConfig::kSymD, 0, true);
+  EXPECT_EQ(result, (std::vector<IdType>{ 14, 6 }));
+}
+
+// sigma_a=0 mixed path: upper pyramid 18 → 14; prism 5 → 7; lower pyramid 23 stays (fixed point).
+// Reflected {14,7,23} < {18,5,23} → returns {14,7,23}.
+TEST(ReduceRaypath4Param, D_Pyramid_SigmaA0_MixedPath) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto result = pyramid.ReduceRaypath({ 18, 5, 23 }, FilterConfig::kSymD, 0, true);
+  EXPECT_EQ(result, (std::vector<IdType>{ 14, 7, 23 }));
+}
+
+// sigma_a=0: pyramid faces 13 (pri=0) and 16 (pri=3) are D fixed points → unchanged.
+TEST(ReduceRaypath4Param, D_Pyramid_SigmaA0_FixedPoint) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto result = pyramid.ReduceRaypath({ 13, 16 }, FilterConfig::kSymD, 0, true);
+  EXPECT_EQ(result, (std::vector<IdType>{ 13, 16 }));
+}
+
+// sigma_a=5, fn_period_=6: no fixed points (2*pri ≡ 5 mod 6 has no integer solution).
+// 17 (pyr=1,pri=4) → 1*10 + (5-4+6)%6 + 3 = 14; prism 3 (pri=0) → (5-0+6)%6 + 3 = 8.
+// Reflected {14,8} < {17,3} → returns {14,8}.
+TEST(ReduceRaypath4Param, D_Pyramid_SigmaA5_FaceReflected) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto result = pyramid.ReduceRaypath({ 17, 3 }, FilterConfig::kSymD, 5, true);
+  EXPECT_EQ(result, (std::vector<IdType>{ 14, 8 }));
+}
+
+// ---- ExpandRaypath 4-param pyramid + D coverage ----
+
+// sigma_a=0: D-reflect {14,6} → {18,6} (different), expansion has 2 unique entries.
+TEST(ExpandRaypath4Param, D_Pyramid_SigmaA0_TwoVariants) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto expanded = pyramid.ExpandRaypath({ 14, 6 }, FilterConfig::kSymD, 0, true);
+  ASSERT_EQ(expanded.size(), 2u);
+  bool found_18 = false;
+  for (const auto& rp : expanded) {
+    if (rp.size() == 2 && rp[0] == 18 && rp[1] == 6) {
+      found_18 = true;
+    }
+  }
+  EXPECT_TRUE(found_18) << "D expansion of {14,6} must contain {18,6}";
+}
+
+// P+D, sigma_a=0, starting from pyramid {18,6}: 6 P rotations × 2 D mirrors = 12 unique paths.
+// Before fix: D skipped pyramid faces, yielding only 10 unique paths.
+TEST(ExpandRaypath4Param, D_Pyramid_SigmaA0_PD_12Paths) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto expanded = pyramid.ExpandRaypath({ 18, 6 }, FilterConfig::kSymP | FilterConfig::kSymD, 0, true);
+  EXPECT_EQ(expanded.size(), 12u);
+
+  RaypathHash h;
+  std::set<size_t> hashes;
+  for (const auto& rp : expanded) {
+    EXPECT_TRUE(hashes.insert(h(rp)).second) << "Duplicate hash in expanded pyramid P+D paths";
+  }
+
+  bool found_14_6 = false;
+  bool found_18_4 = false;
+  for (const auto& rp : expanded) {
+    if (rp.size() == 2 && rp[0] == 14 && rp[1] == 6) {
+      found_14_6 = true;
+    }
+    if (rp.size() == 2 && rp[0] == 18 && rp[1] == 4) {
+      found_18_4 = true;
+    }
+  }
+  EXPECT_TRUE(found_14_6) << "D mirror {14,6} must be in P+D expansion of pyramid {18,6}";
+  EXPECT_TRUE(found_18_4) << "D mirror {18,4} must be in P+D expansion of pyramid {18,6}";
+}
+
+// sigma_a=5: D-reflect {14,8} → {17,3}. Expansion has 2 unique entries.
+TEST(ExpandRaypath4Param, D_Pyramid_SigmaA5_TwoVariants) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto expanded = pyramid.ExpandRaypath({ 14, 8 }, FilterConfig::kSymD, 5, true);
+  ASSERT_EQ(expanded.size(), 2u);
+  bool found_17_3 = false;
+  for (const auto& rp : expanded) {
+    if (rp.size() == 2 && rp[0] == 17 && rp[1] == 3) {
+      found_17_3 = true;
+    }
+  }
+  EXPECT_TRUE(found_17_3) << "D expansion of {14,8} with sigma_a=5 must contain {17,3}";
+}

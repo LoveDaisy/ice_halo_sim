@@ -427,8 +427,8 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
     // 3
     std::vector<IdType> rp_reflected = reduced_rp;
     for (auto& x : rp_reflected) {
-      if (x < 3 || (x >= 13 && x <= 28)) {
-        continue;  // skip basal and pyramid faces
+      if (x < 3) {
+        continue;  // skip basal faces; pyramid faces use same pyr/pri decomposition
       }
       IdType pyr = x / 10;
       IdType pri = x % 10 - 3;
@@ -509,8 +509,8 @@ std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType
       auto curr_rp = result[i];
       bool changed = false;
       for (auto& x : curr_rp) {
-        if (x < 3 || (x >= 13 && x <= 28)) {
-          continue;  // skip basal and pyramid faces
+        if (x < 3) {
+          continue;  // skip basal faces; pyramid faces use same pyr/pri decomposition
         }
         IdType pyr = x / 10;
         IdType pri = x % 10 - 3;
