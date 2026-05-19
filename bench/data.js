@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779161219904,
+  "lastUpdate": 1779161221517,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -6959,6 +6959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 64.6,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c680dcc6a69433924731db037eb416920fd012a4",
+          "message": "Merge pull request #97 from LoveDaisy/feat/editor_window_ux\n\nfeat(gui): edit modal UX polish (raypath buffer + pyramid slider alignment)",
+          "timestamp": "2026-05-19T11:22:18+08:00",
+          "tree_id": "b896575144a36ab9ccd7b0d844d85b5edf0a7929",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c680dcc6a69433924731db037eb416920fd012a4"
+        },
+        "date": 1779161221173,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 98.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 73.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 74.2,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 66.6,
             "unit": "%"
           }
         ]
