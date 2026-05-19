@@ -57,6 +57,10 @@ RaySeg MakeRay(std::initializer_list<IdType> fns) {
 
 // Build a small dataset of 2-segment prism-face rays cycling through all (a,b) with a,b in [3..8], a != b.
 // Returns 30 distinct rays — mix of orbit members (accepted by P+D on {3,5}) and non-members.
+// CAVEAT (exp #1-3 workload artifact): the 30 rays distribute over only 3 orbits: {3,5}/{3,7} (12),
+// {3,6} (6), {3,8} (12) — so OR-filters cycling {3,5}/{3,6}/{3,7}/{3,8} achieve 100% coverage at N=4,
+// hiding B's true O(N) cost behind universal early-out. Use MakeNonMatchingRayBatch for worst-case
+// (no-match) scaling validation.
 std::vector<RaySeg> MakeRayBatch() {
   std::vector<RaySeg> rays;
   rays.reserve(30);
@@ -65,6 +69,20 @@ std::vector<RaySeg> MakeRayBatch() {
       if (a == b) {
         continue;
       }
+      rays.push_back(MakeRay({ a, b }));
+    }
+  }
+  return rays;
+}
+
+// Build a 30-ray batch where every ray contains a pyramid-upper face (13..17) so all rays
+// fall outside prism-only OR-filter accept sets. Worst-case workload for B (full N lookups
+// per ray, no early-out) and clean test for the linear-scaling model.
+std::vector<RaySeg> MakeNonMatchingRayBatch() {
+  std::vector<RaySeg> rays;
+  rays.reserve(30);
+  for (IdType a = 13; a <= 17; a++) {
+    for (IdType b = 3; b <= 8; b++) {
       rays.push_back(MakeRay({ a, b }));
     }
   }
@@ -448,3 +466,92 @@ static void BM_FilterMatch_C2Native_ComplexN_PD(benchmark::State& state) {
   state.SetItemsProcessed(state.iterations());
 }
 BENCHMARK(BM_FilterMatch_C2Native_ComplexN_PD)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->Arg(16)->Unit(benchmark::kNanosecond);
+
+
+// ------------------------------ ComplexFilter N, worst-case no-match: B vs C2-native ------------------------------
+// Rays = 30 pyramid_upper-bearing rays, all guaranteed to miss any prism-only OR-filter.
+// Disables ComplexFilter early-out so B pays full N hash lookups per ray; C2 pays canonicalize + N compares.
+// Expected (from exp #1-3 model): B ≈ 2.33 × N ns, C2 ≈ 17.5 + 1.7 × N ns. Crossover ≈ N=28.
+
+static void BM_FilterMatch_B_ComplexN_PD_NoMatch(benchmark::State& state) {
+  int N = static_cast<int>(state.range(0));
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  auto axis = MakeAzUniformRoll0();
+  const uint8_t sym = FilterConfig::kSymP | FilterConfig::kSymD;
+  auto filter = MakeFilterB_ComplexN_PD(N);
+  filter->InitCrystalSymmetry(crystal, sym, axis);
+
+  auto rays = MakeNonMatchingRayBatch();
+
+  // Sanity: every ray must miss the filter (no-match workload). Skip with error otherwise.
+  for (const auto& r : rays) {
+    if (filter->Check(r)) {
+      state.SkipWithError("non-matching ray batch unexpectedly matched B filter");
+      return;
+    }
+  }
+
+  size_t idx = 0;
+  size_t n = rays.size();
+
+  for (auto _ : state) {
+    bool r = filter->Check(rays[idx]);
+    benchmark::DoNotOptimize(r);
+    idx++;
+    if (idx == n) {
+      idx = 0;
+    }
+  }
+  state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_FilterMatch_B_ComplexN_PD_NoMatch)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->Arg(16)->Unit(benchmark::kNanosecond);
+
+
+static void BM_FilterMatch_C2Native_ComplexN_PD_NoMatch(benchmark::State& state) {
+  int N = static_cast<int>(state.range(0));
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  auto axis = MakeAzUniformRoll0();
+  const uint8_t sym = FilterConfig::kSymP | FilterConfig::kSymD;
+  const int sigma_a = 0;
+  const bool d_applicable = true;
+
+  std::vector<std::vector<IdType>> rps;
+  for (int i = 0; i < N; i++) {
+    rps.push_back({ 3, static_cast<IdType>(5 + (i % 4)) });
+  }
+  C2NativeComplexMatcher matcher(crystal, rps, sym, sigma_a, d_applicable);
+
+  auto rays = MakeNonMatchingRayBatch();
+
+  // Parity self-check (B reference must also miss) and confirm no-match.
+  {
+    auto ref_filter = MakeFilterB_ComplexN_PD(N);
+    ref_filter->InitCrystalSymmetry(crystal, sym, axis);
+    for (const auto& r : rays) {
+      bool b = ref_filter->Check(r);
+      bool c = matcher.Match(r);
+      if (b || c) {
+        state.SkipWithError("non-matching ray batch unexpectedly matched B or C2");
+        return;
+      }
+      if (b != c) {
+        state.SkipWithError("C2NativeComplexMatcher answer disagrees with Path B reference on no-match batch");
+        return;
+      }
+    }
+  }
+
+  size_t idx = 0;
+  size_t n = rays.size();
+
+  for (auto _ : state) {
+    bool r = matcher.Match(rays[idx]);
+    benchmark::DoNotOptimize(r);
+    idx++;
+    if (idx == n) {
+      idx = 0;
+    }
+  }
+  state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_FilterMatch_C2Native_ComplexN_PD_NoMatch)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->Arg(16)->Unit(benchmark::kNanosecond);
