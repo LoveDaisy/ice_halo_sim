@@ -123,7 +123,7 @@ static char g_ee_exit_buf[32];
 // ImGui InputText backing store for the raypath text input. The raypath
 // sub-buffer's raypath_text is synced FROM this char array (canonical source)
 // at every commit / dirty-compare site (mirrors the pre-task convention).
-static char g_raypath_buf[256];
+static char g_raypath_buf[4096];
 
 // Initial-present flag captured at modal open. Used by ApplyBuffersToEntry so
 // an untouched OK on a previously-empty filter does not silently materialize a
@@ -169,10 +169,10 @@ struct ValuePreset {
 };
 
 constexpr ValuePreset kWedgePresets[] = {
-  { "{1,0,-1,1} 28.0\xc2\xb0", 28.0f },
-  { "{2,0,-2,1} 47.3\xc2\xb0", 47.3f },
-  { "{1,0,-1,0} 90.0\xc2\xb0", 90.0f },
-  { "{1,0,-1,2} 14.7\xc2\xb0", 14.7f },
+  { "{1,0,-1,1} 28.000\xc2\xb0", 28.0f },
+  { "{2,0,-2,1} 47.300\xc2\xb0", 47.3f },
+  { "{1,0,-1,0} 90.000\xc2\xb0", 90.0f },
+  { "{1,0,-1,2} 14.700\xc2\xb0", 14.7f },
 };
 constexpr int kWedgePresetCount = 4;
 
@@ -202,7 +202,7 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
   float spacing = ImGui::GetStyle().ItemSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x;
-  float slider_w = avail_w - kInputWidth - kArrowBtnWidth - kLabelColWidth - spacing * 3;
+  float slider_w = avail_w - kInputWidth - kLabelColWidth - spacing * 2;
   if (slider_w < 40.0f)
     slider_w = 40.0f;
 
@@ -520,9 +520,9 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     SliderWithInput("Prism H##modal_cr", &cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
     SliderWithInput("Upper H##modal_cr", &cr.upper_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
     SliderWithInput("Lower H##modal_cr", &cr.lower_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
-    SliderWithPresetEdit("Upper A##modal_cr", &cr.upper_alpha, 0.1f, 90.0f, "%.1f", SliderScale::kLinear, kWedgePresets,
+    SliderWithPresetEdit("Upper A##modal_cr", &cr.upper_alpha, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
                          kWedgePresetCount);
-    SliderWithPresetEdit("Lower A##modal_cr", &cr.lower_alpha, 0.1f, 90.0f, "%.1f", SliderScale::kLinear, kWedgePresets,
+    SliderWithPresetEdit("Lower A##modal_cr", &cr.lower_alpha, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
                          kWedgePresetCount);
   }
 
