@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <numeric>
 #include <vector>
 
@@ -571,6 +572,72 @@ TEST(RaySegDerivedKind, ContinueWhenOutgoingCandidateBranchGated) {
   EXPECT_FALSE(r.IsOutgoing());  // is_continue_ excludes IsOutgoing
   EXPECT_FALSE(r.IsNormal());
   EXPECT_FALSE(r.IsTir());
+}
+
+// ---- AC-3: RaySeg::IsValidComplete() — N4 construction-time invariants ----
+
+namespace {
+
+// Build a fully N4-compliant RaySeg as the positive baseline. Each negative
+// test below mutates one field to exercise a single invariant in isolation.
+RaySeg MakeValidRaySeg() {
+  RaySeg r = MakeRaySegBase();
+  r.w_ = 0.5f;
+  r.to_face_ = 3;
+  r.is_continue_ = false;
+  r.crystal_idx_ = 0;
+  return r;
+}
+
+}  // namespace
+
+TEST(RaySegValidate, ValidRayPassesAllChecks) {
+  RaySeg r = MakeValidRaySeg();
+  EXPECT_TRUE(r.IsValidComplete());
+}
+
+TEST(RaySegValidate, TirSentinelWeightPasses) {
+  // w_ == -1.0f exactly is the TIR sentinel and must be accepted by N4-2.
+  RaySeg r = MakeValidRaySeg();
+  r.w_ = -1.0f;
+  r.to_face_ = kInvalidId;
+  EXPECT_TRUE(r.IsValidComplete());
+}
+
+TEST(RaySegValidate, InvalidWeightNotMinusOne) {
+  // N4-2 violation: negative weight other than the TIR sentinel.
+  RaySeg r = MakeValidRaySeg();
+  r.w_ = -0.5f;
+  EXPECT_FALSE(r.IsValidComplete());
+}
+
+TEST(RaySegValidate, ContinueWithValidFace) {
+  // N4-3 violation: is_continue_ ray must have to_face_ == kInvalidId.
+  RaySeg r = MakeValidRaySeg();
+  r.is_continue_ = true;
+  r.to_face_ = 3;
+  EXPECT_FALSE(r.IsValidComplete());
+}
+
+TEST(RaySegValidate, CrystalIdxOutOfRange) {
+  // N4-4 violation: crystal_idx_ must be < kMaxCrystalNum or == kInvalidId.
+  RaySeg r = MakeValidRaySeg();
+  r.crystal_idx_ = static_cast<IdType>(kMaxCrystalNum);  // == 16, out of [0, 15]
+  EXPECT_FALSE(r.IsValidComplete());
+}
+
+TEST(RaySegValidate, DirectionNaN) {
+  // N4-5 violation: direction component is NaN.
+  RaySeg r = MakeValidRaySeg();
+  r.d_[0] = std::numeric_limits<float>::quiet_NaN();
+  EXPECT_FALSE(r.IsValidComplete());
+}
+
+TEST(RaySegValidate, PositionInf) {
+  // N4-5 violation: position component is Inf.
+  RaySeg r = MakeValidRaySeg();
+  r.p_[1] = std::numeric_limits<float>::infinity();
+  EXPECT_FALSE(r.IsValidComplete());
 }
 
 }  // namespace

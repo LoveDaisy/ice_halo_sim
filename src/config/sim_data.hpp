@@ -19,6 +19,10 @@ struct RayBuffer {
 
   void Reset(size_t capacity);
   bool Empty() const;
+  // Single-RaySeg entry point. Asserts RaySeg::IsValidComplete() at entry
+  // to gate the N4 construction-time invariants (Debug only; noop in Release).
+  // Buffer-to-buffer overload below is internal data movement and skips this
+  // gate — its inputs were already validated when first emplaced.
   void EmplaceBack(RaySeg r);
   void EmplaceBack(const RayBuffer& buffer, size_t start = 0, size_t len = kInfSize);
 

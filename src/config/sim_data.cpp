@@ -1,5 +1,6 @@
 #include "config/sim_data.hpp"
 
+#include <cassert>
 #include <cstddef>
 #include <cstring>
 
@@ -30,6 +31,8 @@ bool RayBuffer::Empty() const {
 }
 
 void RayBuffer::EmplaceBack(RaySeg r) {
+  // N4 construction-time invariant gate. Debug only; noop in Release (NDEBUG).
+  assert(r.IsValidComplete());
   if (size_ + 1 < capacity_) {
     rays_[size_++] = r;
   }

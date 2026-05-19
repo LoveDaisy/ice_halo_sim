@@ -2,6 +2,7 @@
 #define CORE_RAYPATH_H_
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 #include <vector>
 
@@ -73,6 +74,41 @@ struct RaySeg {
   bool IsNormal() const { return to_face_ != kInvalidId && w_ >= 0; }
   bool IsContinue() const { return is_continue_; }
   bool IsOutgoing() const { return to_face_ == kInvalidId && w_ >= 0 && !is_continue_; }
+
+  // --- Construction-time invariant validation (for assert only) ---
+  // N4 invariants checked at RayBuffer::EmplaceBack(RaySeg) entry. Debug only;
+  // Release builds compile this to noop via assert(). NOT for business-logic
+  // queries — use IsNormal()/IsTir()/etc. for state inspection.
+  //
+  // N4-1 (to_face_ < poly_count) is intentionally omitted: it requires
+  // external crystal context not carried by RaySeg. If needed in the future,
+  // expose as a separate IsValidWithCrystal(const Crystal&) overload.
+  //
+  // Per-field helpers below are column-friendly: an SoA migration can reuse
+  // each predicate against a single column without re-deriving the formula.
+  static bool IsValidW(float w) {
+    // N4-2: weight is non-negative or the TIR sentinel exactly.
+    return w >= 0.0f || w == -1.0f;
+  }
+  static bool IsValidContinueFace(bool is_continue, IdType to_face) {
+    // N4-3: is_continue_ implies no outgoing face (continue rays do not hit).
+    return !is_continue || to_face == kInvalidId;
+  }
+  static bool IsValidCrystalIdx(IdType crystal_idx) {
+    // N4-4: crystal_idx_ in [0, kMaxCrystalNum) or the init sentinel.
+    return crystal_idx == kInvalidId || crystal_idx < static_cast<IdType>(kMaxCrystalNum);
+  }
+  static bool IsValidVec3Finite(const float v[3]) {
+    // N4-5: vector components must be finite (no NaN / Inf).
+    return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]);
+  }
+
+  bool IsValidComplete() const {
+    return IsValidW(w_) &&                                 //
+           IsValidContinueFace(is_continue_, to_face_) &&  //
+           IsValidCrystalIdx(crystal_idx_) &&              //
+           IsValidVec3Finite(d_) && IsValidVec3Finite(p_);
+  }
 };
 
 }  // namespace lumice
