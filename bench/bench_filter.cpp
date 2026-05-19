@@ -21,6 +21,7 @@
 #include "config/filter_config.hpp"
 #include "core/crystal.hpp"
 #include "core/filter.hpp"
+#include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 
@@ -89,73 +90,6 @@ std::vector<RaySeg> MakeNonMatchingRayBatch() {
   return rays;
 }
 
-// In-place RaypathRecorder canonicalize for prism (fn_period=6), kSymP|kSymD, sigma_a=0,
-// d_applicable=true. Mirrors Crystal::ReduceRaypath logic but operates on the 8-byte fixed
-// buffer to model the production-grade C2 path with zero heap allocation. Caveat: kSymB and
-// pyramid (fn_period=3) variants are intentionally omitted — extend when those test points
-// are added to the explore matrix.
-//
-// Correctness is verified at benchmark startup by comparing against Crystal::ReduceRaypath
-// on the seeded ray batch (see C2NativeMatcher::SelfCheck).
-static void ReduceRecorder_PrismPD_SigmaA0(RaypathRecorder& rp) {
-  // P canonical shift: rotate prism-face primary indices so the first prism face becomes pri=0.
-  IdType first_pri = kInvalidId;
-  for (size_t i = 0; i < rp.size_; i++) {
-    uint8_t x = rp.recorder_[i];
-    if (x < 3) {
-      continue;
-    }
-    uint8_t pyr = x / 10;
-    uint8_t pri = x % 10;
-    if (first_pri == kInvalidId) {
-      first_pri = pri;
-    }
-    pri = static_cast<uint8_t>((pri + 6 - first_pri) % 6) + 3;
-    rp.recorder_[i] = static_cast<uint8_t>(pyr * 10) + pri;
-  }
-  // D reflect (sigma_a=0): for each prism face, new_pri = (0 - (pri-3) + 6) % 6 + 3.
-  uint8_t reflected[kMaxHits];
-  for (size_t i = 0; i < rp.size_; i++) {
-    uint8_t x = rp.recorder_[i];
-    if (x < 3) {
-      reflected[i] = x;
-      continue;
-    }
-    uint8_t pyr = x / 10;
-    uint8_t pri = static_cast<uint8_t>((x % 10) - 3);
-    pri = static_cast<uint8_t>((0u - pri + 6u) % 6u);
-    reflected[i] = static_cast<uint8_t>(pyr * 10) + pri + 3;
-  }
-  // Re-P-canonicalize reflected (D image may no longer be P-canonical).
-  IdType r_first_pri = kInvalidId;
-  for (size_t i = 0; i < rp.size_; i++) {
-    uint8_t x = reflected[i];
-    if (x < 3) {
-      continue;
-    }
-    uint8_t pyr = x / 10;
-    uint8_t pri = x % 10;
-    if (r_first_pri == kInvalidId) {
-      r_first_pri = pri;
-    }
-    pri = static_cast<uint8_t>((pri + 6 - r_first_pri) % 6) + 3;
-    reflected[i] = static_cast<uint8_t>(pyr * 10) + pri;
-  }
-  // Lex pick smaller: if reflected < rp, copy back.
-  int cmp = 0;
-  for (size_t i = 0; i < rp.size_; i++) {
-    if (reflected[i] != rp.recorder_[i]) {
-      cmp = reflected[i] < rp.recorder_[i] ? -1 : 1;
-      break;
-    }
-  }
-  if (cmp < 0) {
-    for (size_t i = 0; i < rp.size_; i++) {
-      rp.recorder_[i] = reflected[i];
-    }
-  }
-}
-
 // C2 prototype matcher: pre-compute canonical at construction, per-ray canonicalize the candidate.
 // Honest stand-in for the C2 path being evaluated by scrum-210; intentionally uses the same
 // Crystal::ReduceRaypath that the production C2 would consume. The std::vector conversion is the
@@ -164,10 +98,7 @@ static void ReduceRecorder_PrismPD_SigmaA0(RaypathRecorder& rp) {
 class C2Matcher {
  public:
   C2Matcher(const Crystal& crystal, const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a, bool d_applicable)
-      : crystal_(&crystal),
-        symmetry_(symmetry),
-        sigma_a_(sigma_a),
-        d_applicable_(d_applicable),
+      : crystal_(&crystal), symmetry_(symmetry), sigma_a_(sigma_a), d_applicable_(d_applicable),
         canonical_(crystal.ReduceRaypath(rp, symmetry, sigma_a, d_applicable)) {
     scratch_.reserve(8);
   }
@@ -188,36 +119,6 @@ class C2Matcher {
   bool d_applicable_;
   std::vector<IdType> canonical_;
   mutable std::vector<IdType> scratch_;
-};
-
-// C2 native matcher: stack canonical, no heap. Operates on RaypathRecorder buffer directly.
-class C2NativeMatcher {
- public:
-  C2NativeMatcher(const Crystal& crystal, const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a,
-                  bool d_applicable) {
-    auto canonical_vec = crystal.ReduceRaypath(rp, symmetry, sigma_a, d_applicable);
-    canonical_.Clear();
-    for (auto fn : canonical_vec) {
-      canonical_ << fn;
-    }
-  }
-
-  bool Match(const RaySeg& ray) const {
-    RaypathRecorder rp = ray.rp_;
-    ReduceRecorder_PrismPD_SigmaA0(rp);
-    if (rp.size_ != canonical_.size_) {
-      return false;
-    }
-    for (size_t i = 0; i < rp.size_; i++) {
-      if (rp.recorder_[i] != canonical_.recorder_[i]) {
-        return false;
-      }
-    }
-    return true;
-  }
-
- private:
-  RaypathRecorder canonical_;
 };
 
 // Build a RaypathFilter wired via Filter::Create (matches production path) with N=1 raypath={3,5}.
@@ -241,57 +142,12 @@ FilterPtrU MakeFilterB_ComplexN_PD(int N) {
   for (int i = 0; i < N; i++) {
     RaypathFilterParam rp{};
     rp.raypath_ = { 3, static_cast<IdType>(5 + (i % 4)) };  // cycle through {3,5},{3,6},{3,7},{3,8}
-    cp.filters_.emplace_back(std::vector<std::pair<IdType, SimpleFilterParam>>{
-        { static_cast<IdType>(i), SimpleFilterParam{ rp } } });
+    cp.filters_.emplace_back(
+        std::vector<std::pair<IdType, SimpleFilterParam>>{ { static_cast<IdType>(i), SimpleFilterParam{ rp } } });
   }
   cfg.param_ = FilterParam{ cp };
   return Filter::Create(cfg);
 }
-
-// C2 native ComplexFilter equivalent: holds N pre-canonicalized RaypathRecorders;
-// per-ray Match canonicalizes the ray ONCE then linearly compares against each canonical.
-// This is the shape that exploits the H1 "amortized canonicalize" advantage.
-class C2NativeComplexMatcher {
- public:
-  C2NativeComplexMatcher(const Crystal& crystal,
-                         const std::vector<std::vector<IdType>>& rps,
-                         uint8_t symmetry, int sigma_a, bool d_applicable) {
-    canonicals_.reserve(rps.size());
-    for (const auto& rp : rps) {
-      auto canonical_vec = crystal.ReduceRaypath(rp, symmetry, sigma_a, d_applicable);
-      RaypathRecorder rec;
-      rec.Clear();
-      for (auto fn : canonical_vec) {
-        rec << fn;
-      }
-      canonicals_.push_back(rec);
-    }
-  }
-
-  bool Match(const RaySeg& ray) const {
-    RaypathRecorder rp = ray.rp_;
-    ReduceRecorder_PrismPD_SigmaA0(rp);  // canonicalize ray ONCE
-    for (const auto& canonical : canonicals_) {
-      if (rp.size_ != canonical.size_) {
-        continue;
-      }
-      bool eq = true;
-      for (size_t i = 0; i < rp.size_; i++) {
-        if (rp.recorder_[i] != canonical.recorder_[i]) {
-          eq = false;
-          break;
-        }
-      }
-      if (eq) {
-        return true;
-      }
-    }
-    return false;
-  }
-
- private:
-  std::vector<RaypathRecorder> canonicals_;
-};
 
 }  // namespace
 
@@ -347,20 +203,24 @@ static void BM_FilterMatch_C2_N1_PD(benchmark::State& state) {
 BENCHMARK(BM_FilterMatch_C2_N1_PD)->Unit(benchmark::kNanosecond);
 
 
-// ------------------------------ Path C2-native (in-place RaypathRecorder canonical) ------------------------------
-// Per-ray cost = ReduceRecorder_PrismPD_SigmaA0(rp_copy) + element-wise compare against canonical.
-// Zero heap allocation; modeled to estimate the floor of a production-grade C2 implementation.
+// ------------------------------ Path C2-native (production FilterSpec) ------------------------------
+// Per-ray cost = detail::ReduceRecorder(rp_copy) + element-wise compare against canonical,
+// driven by the production RaypathSpec class (via FilterSpec::Create).
 //
-// Self-check: at benchmark setup, runs every ray through both C2NativeMatcher and the existing
+// Self-check: at benchmark setup, runs every ray through both FilterSpec and the existing
 // RaypathFilter (Path B), asserting answer parity. Aborts the benchmark on disagreement so a
 // canonicalization bug cannot silently produce misleading nanosecond numbers.
 static void BM_FilterMatch_C2Native_N1_PD(benchmark::State& state) {
   Crystal crystal = Crystal::CreatePrism(1.0f);
   auto axis = MakeAzUniformRoll0();
   const uint8_t sym = FilterConfig::kSymP | FilterConfig::kSymD;
-  const int sigma_a = 0;
-  const bool d_applicable = true;
-  C2NativeMatcher matcher(crystal, { 3, 5 }, sym, sigma_a, d_applicable);
+  FilterConfig spec_cfg{};
+  spec_cfg.symmetry_ = sym;
+  spec_cfg.action_ = FilterConfig::kFilterIn;
+  RaypathFilterParam rp_p{};
+  rp_p.raypath_ = { 3, 5 };
+  spec_cfg.param_ = SimpleFilterParam{ rp_p };
+  auto spec = FilterSpec::Create(spec_cfg, crystal, axis);
 
   auto rays = MakeRayBatch();
 
@@ -370,8 +230,8 @@ static void BM_FilterMatch_C2Native_N1_PD(benchmark::State& state) {
     auto ref_filter = MakeFilterB_N1_PD();
     ref_filter->InitCrystalSymmetry(crystal, sym, axis);
     for (const auto& r : rays) {
-      if (matcher.Match(r) != ref_filter->Check(r)) {
-        state.SkipWithError("C2NativeMatcher answer disagrees with Path B reference");
+      if (spec->Match(r) != ref_filter->Check(r)) {
+        state.SkipWithError("FilterSpec (RaypathSpec) answer disagrees with Path B reference");
         return;
       }
     }
@@ -381,7 +241,7 @@ static void BM_FilterMatch_C2Native_N1_PD(benchmark::State& state) {
   size_t n = rays.size();
 
   for (auto _ : state) {
-    bool r = matcher.Match(rays[idx]);
+    bool r = spec->Match(rays[idx]);
     benchmark::DoNotOptimize(r);
     idx++;
     if (idx == n) {
@@ -424,19 +284,28 @@ static void BM_FilterMatch_B_ComplexN_PD(benchmark::State& state) {
 BENCHMARK(BM_FilterMatch_B_ComplexN_PD)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->Arg(16)->Unit(benchmark::kNanosecond);
 
 
+// Build a ComplexFilter FilterConfig with N OR-clauses, each single raypath {3, 5+i%4}.
+FilterConfig MakeComplexCfg(int N) {
+  FilterConfig cfg{};
+  cfg.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
+  cfg.action_ = FilterConfig::kFilterIn;
+  ComplexFilterParam cp{};
+  for (int i = 0; i < N; i++) {
+    RaypathFilterParam rp{};
+    rp.raypath_ = { 3, static_cast<IdType>(5 + (i % 4)) };
+    cp.filters_.emplace_back(
+        std::vector<std::pair<IdType, SimpleFilterParam>>{ { static_cast<IdType>(i), SimpleFilterParam{ rp } } });
+  }
+  cfg.param_ = FilterParam{ cp };
+  return cfg;
+}
+
 static void BM_FilterMatch_C2Native_ComplexN_PD(benchmark::State& state) {
   int N = static_cast<int>(state.range(0));
   Crystal crystal = Crystal::CreatePrism(1.0f);
   auto axis = MakeAzUniformRoll0();
   const uint8_t sym = FilterConfig::kSymP | FilterConfig::kSymD;
-  const int sigma_a = 0;
-  const bool d_applicable = true;
-
-  std::vector<std::vector<IdType>> rps;
-  for (int i = 0; i < N; i++) {
-    rps.push_back({ 3, static_cast<IdType>(5 + (i % 4)) });
-  }
-  C2NativeComplexMatcher matcher(crystal, rps, sym, sigma_a, d_applicable);
+  auto spec = FilterSpec::Create(MakeComplexCfg(N), crystal, axis);
 
   auto rays = MakeRayBatch();
 
@@ -445,8 +314,8 @@ static void BM_FilterMatch_C2Native_ComplexN_PD(benchmark::State& state) {
     auto ref_filter = MakeFilterB_ComplexN_PD(N);
     ref_filter->InitCrystalSymmetry(crystal, sym, axis);
     for (const auto& r : rays) {
-      if (matcher.Match(r) != ref_filter->Check(r)) {
-        state.SkipWithError("C2NativeComplexMatcher answer disagrees with Path B reference");
+      if (spec->Match(r) != ref_filter->Check(r)) {
+        state.SkipWithError("FilterSpec (ComplexSpec) answer disagrees with Path B reference");
         return;
       }
     }
@@ -456,7 +325,7 @@ static void BM_FilterMatch_C2Native_ComplexN_PD(benchmark::State& state) {
   size_t n = rays.size();
 
   for (auto _ : state) {
-    bool r = matcher.Match(rays[idx]);
+    bool r = spec->Match(rays[idx]);
     benchmark::DoNotOptimize(r);
     idx++;
     if (idx == n) {
@@ -512,14 +381,7 @@ static void BM_FilterMatch_C2Native_ComplexN_PD_NoMatch(benchmark::State& state)
   Crystal crystal = Crystal::CreatePrism(1.0f);
   auto axis = MakeAzUniformRoll0();
   const uint8_t sym = FilterConfig::kSymP | FilterConfig::kSymD;
-  const int sigma_a = 0;
-  const bool d_applicable = true;
-
-  std::vector<std::vector<IdType>> rps;
-  for (int i = 0; i < N; i++) {
-    rps.push_back({ 3, static_cast<IdType>(5 + (i % 4)) });
-  }
-  C2NativeComplexMatcher matcher(crystal, rps, sym, sigma_a, d_applicable);
+  auto spec = FilterSpec::Create(MakeComplexCfg(N), crystal, axis);
 
   auto rays = MakeNonMatchingRayBatch();
 
@@ -529,13 +391,13 @@ static void BM_FilterMatch_C2Native_ComplexN_PD_NoMatch(benchmark::State& state)
     ref_filter->InitCrystalSymmetry(crystal, sym, axis);
     for (const auto& r : rays) {
       bool b = ref_filter->Check(r);
-      bool c = matcher.Match(r);
+      bool c = spec->Match(r);
       if (b || c) {
-        state.SkipWithError("non-matching ray batch unexpectedly matched B or C2");
+        state.SkipWithError("non-matching ray batch unexpectedly matched B or FilterSpec");
         return;
       }
       if (b != c) {
-        state.SkipWithError("C2NativeComplexMatcher answer disagrees with Path B reference on no-match batch");
+        state.SkipWithError("FilterSpec (ComplexSpec) answer disagrees with Path B reference on no-match batch");
         return;
       }
     }
@@ -545,7 +407,7 @@ static void BM_FilterMatch_C2Native_ComplexN_PD_NoMatch(benchmark::State& state)
   size_t n = rays.size();
 
   for (auto _ : state) {
-    bool r = matcher.Match(rays[idx]);
+    bool r = spec->Match(rays[idx]);
     benchmark::DoNotOptimize(r);
     idx++;
     if (idx == n) {
@@ -554,4 +416,10 @@ static void BM_FilterMatch_C2Native_ComplexN_PD_NoMatch(benchmark::State& state)
   }
   state.SetItemsProcessed(state.iterations());
 }
-BENCHMARK(BM_FilterMatch_C2Native_ComplexN_PD_NoMatch)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->Arg(16)->Unit(benchmark::kNanosecond);
+BENCHMARK(BM_FilterMatch_C2Native_ComplexN_PD_NoMatch)
+    ->Arg(1)
+    ->Arg(2)
+    ->Arg(4)
+    ->Arg(8)
+    ->Arg(16)
+    ->Unit(benchmark::kNanosecond);

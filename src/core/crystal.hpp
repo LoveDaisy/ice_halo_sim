@@ -221,6 +221,13 @@ class Crystal {
   IdType GetFn(IdType poly_idx) const;
 
   /**
+   * @brief Get the face-number period used for symmetry reductions.
+   * @return Period (typically 6 for hexagonal prism/pyramid); negative for custom crystals
+   *         where symmetry reductions do not apply.
+   */
+  int FnPeriod() const { return fn_period_; }
+
+  /**
    * @brief Rotate the crystal
    * @param r Rotation to apply
    * @return Reference to this crystal
