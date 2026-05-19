@@ -46,19 +46,17 @@ std::string FormatRaypath(const std::vector<IdType>& rp) {
 // Verify the orbit invariant for one (crystal, symmetry, sigma_a, d_applicable, rp_seed) tuple.
 // Returns ::testing::AssertionResult so EXPECT_TRUE prints the failing detail.
 ::testing::AssertionResult VerifyOrbitInvariant(const Crystal& crystal, uint8_t symmetry, int sigma_a,
-                                                 bool d_applicable, const std::vector<IdType>& rp_seed) {
+                                                bool d_applicable, const std::vector<IdType>& rp_seed) {
   auto canonical_seed = crystal.ReduceRaypath(rp_seed, symmetry, sigma_a, d_applicable);
   auto orbit = crystal.ExpandRaypath(rp_seed, symmetry, sigma_a, d_applicable);
   if (orbit.empty()) {
-    return ::testing::AssertionFailure()
-           << "ExpandRaypath returned empty orbit for seed " << FormatRaypath(rp_seed);
+    return ::testing::AssertionFailure() << "ExpandRaypath returned empty orbit for seed " << FormatRaypath(rp_seed);
   }
   for (const auto& member : orbit) {
     auto canonical_member = crystal.ReduceRaypath(member, symmetry, sigma_a, d_applicable);
     if (canonical_member != canonical_seed) {
       return ::testing::AssertionFailure()
-             << "Orbit invariant broken:"
-             << "\n  seed:               " << FormatRaypath(rp_seed)
+             << "Orbit invariant broken:" << "\n  seed:               " << FormatRaypath(rp_seed)
              << "\n  seed canonical:     " << FormatRaypath(canonical_seed)
              << "\n  orbit member:       " << FormatRaypath(member)
              << "\n  member canonical:   " << FormatRaypath(canonical_member)
