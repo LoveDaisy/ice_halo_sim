@@ -1067,3 +1067,60 @@ TEST(ExpandRaypath4Param, D_Pyramid_SigmaA5_TwoVariants) {
   }
   EXPECT_TRUE(found_17_3) << "D expansion of {14,8} with sigma_a=5 must contain {17,3}";
 }
+
+// ---- ReduceRaypath orbit invariant: same orbit must reduce to same canonical ----
+//
+// Bug context: when kSymP|kSymD is set with sigma_a != 0, the D-reflected candidate
+// is not re-P-canonicalized before lex comparison, so different orbit members can
+// reduce to different representatives. These tests pin the property "ReduceRaypath
+// is constant on each ExpandRaypath orbit" across sigma_a ∈ {0..5}.
+
+TEST(ReduceRaypath_OrbitInvariant, PD_Pyramid_AllSigmaA) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP | FilterConfig::kSymD;
+  for (int sigma_a = 0; sigma_a < 6; sigma_a++) {
+    auto orbit = pyramid.ExpandRaypath({ 14, 6 }, kSym, sigma_a, true);
+    ASSERT_EQ(orbit.size(), 12u) << "orbit size mismatch at sigma_a=" << sigma_a;
+    auto first = pyramid.ReduceRaypath(orbit[0], kSym, sigma_a, true);
+    for (size_t i = 1; i < orbit.size(); i++) {
+      auto reduced = pyramid.ReduceRaypath(orbit[i], kSym, sigma_a, true);
+      EXPECT_EQ(reduced, first) << "orbit member " << i << " reduces to different canonical at sigma_a=" << sigma_a;
+    }
+  }
+}
+
+TEST(ReduceRaypath_OrbitInvariant, PD_Pyramid_KnownBugCase_SigmaA5) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP | FilterConfig::kSymD;
+  auto r1 = pyramid.ReduceRaypath({ 14, 6 }, kSym, 5, true);
+  auto r2 = pyramid.ReduceRaypath({ 18, 6 }, kSym, 5, true);
+  EXPECT_EQ(r1, r2) << "Same orbit must map to same canonical form";
+}
+
+TEST(ReduceRaypath_OrbitInvariant, PD_Prism_AllSigmaA) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP | FilterConfig::kSymD;
+  for (int sigma_a = 0; sigma_a < 6; sigma_a++) {
+    auto orbit = prism.ExpandRaypath({ 3, 7 }, kSym, sigma_a, true);
+    ASSERT_GE(orbit.size(), 2u);
+    auto first = prism.ReduceRaypath(orbit[0], kSym, sigma_a, true);
+    for (const auto& member : orbit) {
+      EXPECT_EQ(prism.ReduceRaypath(member, kSym, sigma_a, true), first)
+          << "prism orbit member reduces differently at sigma_a=" << sigma_a;
+    }
+  }
+}
+
+TEST(ReduceRaypath_OrbitInvariant, D_Only_Pyramid_AllSigmaA) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymD;
+  for (int sigma_a = 0; sigma_a < 6; sigma_a++) {
+    auto orbit = pyramid.ExpandRaypath({ 14, 6 }, kSym, sigma_a, true);
+    ASSERT_EQ(orbit.size(), 2u) << "D-only orbit must have 2 members at sigma_a=" << sigma_a;
+    auto first = pyramid.ReduceRaypath(orbit[0], kSym, sigma_a, true);
+    for (const auto& member : orbit) {
+      EXPECT_EQ(pyramid.ReduceRaypath(member, kSym, sigma_a, true), first)
+          << "D-only orbit member reduces differently at sigma_a=" << sigma_a;
+    }
+  }
+}

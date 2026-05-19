@@ -283,6 +283,11 @@ class Crystal {
   void ComputeCacheData();
   void BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt);
 
+  // Shift prism/pyramid faces so the first non-basal pri index becomes 0.
+  // Basal faces (x < 3) are passed through unchanged. Returns the input
+  // verbatim when no non-basal face is present.
+  std::vector<IdType> PCanonicalShift(const std::vector<IdType>& rp) const;
+
   Mesh mesh_;
 
   std::unique_ptr<float[]> cache_data_;
