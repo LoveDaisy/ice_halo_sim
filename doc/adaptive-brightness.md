@@ -177,14 +177,15 @@ Contributors who need the technical specification should consult this document a
 ## 5b. Behavior Change Notice (task-query-filter-uplift-v2)
 
 Prior to this change, the simulator marked any ray that failed a configured
-`scattering.entries[].filter` as `kStopped`, so it never reached the consumer's
+`scattering.entries[].filter` as stopped (the pre-T2 `kStopped` state, since
+folded into the `IsTir()` predicate), so it never reached the consumer's
 "unfiltered" accumulator. As a result, `unfiltered_xyz_buffer` was actually
 *post-filter*, and Off-mode EV was indirectly sensitive to the filter — violating
 the additivity invariant described in §4.
 
 The fix demotes the simulator-side filter to a pure branch gate (controlling
-multi-scatter `kContinue` only), so filter-fail rays are emitted as `kOutgoing`
-and the consumer's Path B accumulates the true unfiltered set.
+the multi-scatter `IsContinue()` bit only), so filter-fail rays are emitted as
+`IsOutgoing()` and the consumer's Path B accumulates the true unfiltered set.
 
 **User-visible consequence**:
 

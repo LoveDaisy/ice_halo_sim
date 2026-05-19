@@ -27,8 +27,8 @@ class FilterTest : public ::testing::Test {
     for (auto fn : rp_vec) {
       r.rp_ << fn;
     }
-    r.state_ = RaySeg::kOutgoing;
-    r.fid_ = -1;
+    r.from_face_ = kInvalidId;
+    r.to_face_ = kInvalidId;
     r.w_ = 1.0f;
     return r;
   }
@@ -232,7 +232,6 @@ TEST_F(FilterTest, DirectionFilter_BasicMatch) {
   r1.d_[0] = 1.0f;
   r1.d_[1] = 0.0f;
   r1.d_[2] = 0.0f;
-  r1.state_ = RaySeg::kOutgoing;
   EXPECT_TRUE(filter->Check(r1));
 
   // Ray along (0, 1, 0) — 90° away, should fail
@@ -240,12 +239,15 @@ TEST_F(FilterTest, DirectionFilter_BasicMatch) {
   r2.d_[0] = 0.0f;
   r2.d_[1] = 1.0f;
   r2.d_[2] = 0.0f;
-  r2.state_ = RaySeg::kOutgoing;
   EXPECT_FALSE(filter->Check(r2));
 }
 
 
-// DirectionFilter: no state guard — works regardless of state_
+// DirectionFilter: state-agnostic by construction. Post task-state-derive,
+// `state_` no longer exists — Filter::Check reads only d_/rp_/crystal_config_id_,
+// so the pre-uplift "no state guard" invariant is enforced structurally rather
+// than per-case. Test retained as a smoke check that the filter accepts any
+// matching direction regardless of bookkeeping fields.
 TEST_F(FilterTest, DirectionFilter_NoStateGuard) {
   DirectionFilterParam dp{};
   dp.lon_ = 0.0f;
@@ -259,19 +261,20 @@ TEST_F(FilterTest, DirectionFilter_NoStateGuard) {
 
   auto filter = Filter::Create(config);
 
-  // Matching direction with various non-kOutgoing states
   RaySeg r{};
   r.d_[0] = 1.0f;
   r.d_[1] = 0.0f;
   r.d_[2] = 0.0f;
 
-  r.state_ = RaySeg::kNormal;
+  // Toggle is_continue_ and w_ sign to exercise both branch-gate and TIR cases.
+  r.is_continue_ = false;
+  r.w_ = 1.0f;
   EXPECT_TRUE(filter->Check(r));
 
-  r.state_ = RaySeg::kContinue;
+  r.is_continue_ = true;
   EXPECT_TRUE(filter->Check(r));
 
-  r.state_ = RaySeg::kStopped;
+  r.w_ = -1.0f;  // TIR
   EXPECT_TRUE(filter->Check(r));
 }
 
@@ -295,7 +298,6 @@ TEST_F(FilterTest, DirectionFilter_FilterOut) {
   r1.d_[0] = 1.0f;
   r1.d_[1] = 0.0f;
   r1.d_[2] = 0.0f;
-  r1.state_ = RaySeg::kOutgoing;
   EXPECT_FALSE(filter->Check(r1));
 
   // Non-matching direction → should pass (Check returns true)
@@ -303,15 +305,15 @@ TEST_F(FilterTest, DirectionFilter_FilterOut) {
   r2.d_[0] = 0.0f;
   r2.d_[1] = 1.0f;
   r2.d_[2] = 0.0f;
-  r2.state_ = RaySeg::kOutgoing;
   EXPECT_TRUE(filter->Check(r2));
 
-  // kFilterOut + non-kOutgoing state + matching direction → should be excluded
+  // kFilterOut + is_continue_ ray (branch-gate path) + matching direction →
+  // still excluded (filter is state-agnostic; structural invariant).
   RaySeg r3{};
   r3.d_[0] = 1.0f;
   r3.d_[1] = 0.0f;
   r3.d_[2] = 0.0f;
-  r3.state_ = RaySeg::kContinue;
+  r3.is_continue_ = true;
   EXPECT_FALSE(filter->Check(r3));
 }
 
@@ -728,8 +730,8 @@ static RaySeg MakeFilterTestRay(const std::vector<IdType>& rp_vec) {
   for (auto fn : rp_vec) {
     r.rp_ << fn;
   }
-  r.state_ = RaySeg::kOutgoing;
-  r.fid_ = -1;
+  r.from_face_ = kInvalidId;
+  r.to_face_ = kInvalidId;
   r.w_ = 1.0f;
   return r;
 }

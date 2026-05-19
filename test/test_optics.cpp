@@ -107,16 +107,16 @@ class HitSurfaceTest : public ::testing::Test {
     float refract_weight;
   };
 
-  HitResult HitSingle(const float* dir, float weight, int fid) {
+  HitResult HitSingle(const float* dir, float weight, IdType to_face) {
     float dir_in[3] = { dir[0], dir[1], dir[2] };
     float w_in[1] = { weight };
-    int fid_in[1] = { fid };
+    IdType to_face_in[1] = { to_face };
     float dir_out[6] = {};
     float w_out[2] = {};
 
     float_bf_t d_in(dir_in, 3 * sizeof(float));
     float_bf_t wt_in(w_in, sizeof(float));
-    int_bf_t fi_in(fid_in, sizeof(int));
+    id_bf_t fi_in(to_face_in, sizeof(IdType));
     float_bf_t d_out(dir_out, 3 * sizeof(float));
     float_bf_t wt_out(w_out, sizeof(float));
 
@@ -136,8 +136,9 @@ class HitSurfaceTest : public ::testing::Test {
 
 TEST_F(HitSurfaceTest, AirToIceNormalIncidence) {
   // Find a face normal and shoot a ray along -normal (air -> ice, cos_theta < 0)
-  const float* norms = crystal_.GetTriangleNormal();
-  int fid = 0;
+  // HitSurface looks up the polygon-face normal indexed by RaySeg::to_face_.
+  const float* norms = crystal_.GetPolygonFaceNormal();
+  IdType fid = 0;
   float norm[3] = { norms[0], norms[1], norms[2] };
 
   // Ray direction = -normal (shooting into the crystal)
@@ -168,8 +169,9 @@ TEST_F(HitSurfaceTest, AirToIceNormalIncidence) {
 
 TEST_F(HitSurfaceTest, SnellsLaw30Degrees) {
   // Construct a ray at 30° to a face normal (air -> ice)
-  const float* norms = crystal_.GetTriangleNormal();
-  int fid = 0;
+  // HitSurface looks up the polygon-face normal indexed by RaySeg::to_face_.
+  const float* norms = crystal_.GetPolygonFaceNormal();
+  IdType fid = 0;
   float norm[3] = { norms[0], norms[1], norms[2] };
 
   // Build a tangent vector perpendicular to norm
@@ -217,8 +219,9 @@ TEST_F(HitSurfaceTest, SnellsLaw30Degrees) {
 
 TEST_F(HitSurfaceTest, TotalInternalReflection) {
   // Ice -> air (cos_theta > 0), angle > critical angle (~49.8°)
-  const float* norms = crystal_.GetTriangleNormal();
-  int fid = 0;
+  // HitSurface looks up the polygon-face normal indexed by RaySeg::to_face_.
+  const float* norms = crystal_.GetPolygonFaceNormal();
+  IdType fid = 0;
   float norm[3] = { norms[0], norms[1], norms[2] };
 
   // Build tangent
@@ -258,8 +261,9 @@ TEST_F(HitSurfaceTest, TotalInternalReflection) {
 
 TEST_F(HitSurfaceTest, EnergyConservation) {
   // Non-total-reflection case: reflect_weight + refract_weight ≈ input_weight
-  const float* norms = crystal_.GetTriangleNormal();
-  int fid = 0;
+  // HitSurface looks up the polygon-face normal indexed by RaySeg::to_face_.
+  const float* norms = crystal_.GetPolygonFaceNormal();
+  IdType fid = 0;
   float norm[3] = { norms[0], norms[1], norms[2] };
 
   // Air -> ice, 20° incidence
@@ -297,8 +301,9 @@ TEST_F(HitSurfaceTest, EnergyConservation) {
 
 TEST_F(HitSurfaceTest, DirectionSwitchAirVsIce) {
   // Same face, same angle, but from air side (cos < 0) vs ice side (cos > 0)
-  const float* norms = crystal_.GetTriangleNormal();
-  int fid = 0;
+  // HitSurface looks up the polygon-face normal indexed by RaySeg::to_face_.
+  const float* norms = crystal_.GetPolygonFaceNormal();
+  IdType fid = 0;
   float norm[3] = { norms[0], norms[1], norms[2] };
 
   float tangent[3];
@@ -363,21 +368,21 @@ TEST_F(PropagateTest, HorizontalRayHitsSideFace) {
   float pos[3] = { 0.0f, 0.0f, 0.0f };
   float w[1] = { 1.0f };
   float pos_out[3] = {};
-  int fid_out[1] = { -1 };
-  int src_fid[1] = { -1 };
+  IdType fid_out[1] = { kInvalidId };
+  IdType src_fid[1] = { kInvalidId };
 
   float_bf_t d_in(dir, 3 * sizeof(float));
   float_bf_t p_in(pos, 3 * sizeof(float));
   float_bf_t wt_in(w, sizeof(float));
-  int_bf_t fi_src(src_fid, sizeof(int));
+  id_bf_t fi_src(src_fid, sizeof(IdType));
   float_bf_t p_out(pos_out, 3 * sizeof(float));
-  int_bf_t fi_out(fid_out, sizeof(int));
+  id_bf_t fi_out(fid_out, sizeof(IdType));
 
   Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
-  // Should hit some face (fid >= 0)
-  EXPECT_GE(fid_out[0], 0);
-  EXPECT_LT(fid_out[0], static_cast<int>(crystal_.TotalTriangles()));
+  // Should hit some polygon face (fid != kInvalidId)
+  EXPECT_NE(fid_out[0], kInvalidId);
+  EXPECT_LT(fid_out[0], crystal_.PolygonFaceCount());
 
   // Output position should be different from input (ray traveled)
   float dist = DiffNorm3(pos_out, pos);
@@ -391,19 +396,19 @@ TEST_F(PropagateTest, VerticalRayHitsTopFace) {
   float pos[3] = { 0.0f, 0.0f, 0.0f };
   float w[1] = { 1.0f };
   float pos_out[3] = {};
-  int fid_out[1] = { -1 };
-  int src_fid[1] = { -1 };
+  IdType fid_out[1] = { kInvalidId };
+  IdType src_fid[1] = { kInvalidId };
 
   float_bf_t d_in(dir, 3 * sizeof(float));
   float_bf_t p_in(pos, 3 * sizeof(float));
   float_bf_t wt_in(w, sizeof(float));
-  int_bf_t fi_src(src_fid, sizeof(int));
+  id_bf_t fi_src(src_fid, sizeof(IdType));
   float_bf_t p_out(pos_out, 3 * sizeof(float));
-  int_bf_t fi_out(fid_out, sizeof(int));
+  id_bf_t fi_out(fid_out, sizeof(IdType));
 
   Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
-  EXPECT_GE(fid_out[0], 0);
+  EXPECT_NE(fid_out[0], kInvalidId);
 
   // Output z should be positive (hit top face)
   EXPECT_GT(pos_out[2], 0.0f);
@@ -418,22 +423,22 @@ TEST_F(PropagateTest, NegativeWeightSkipped) {
   float pos[3] = { 0.0f, 0.0f, 0.0f };
   float w[1] = { -1.0f };
   float pos_out[3] = { -999.0f, -999.0f, -999.0f };
-  int fid_out[1] = { -1 };
-  int src_fid[1] = { -1 };
+  IdType fid_out[1] = { kInvalidId };
+  IdType src_fid[1] = { kInvalidId };
 
   float_bf_t d_in(dir, 3 * sizeof(float));
   float_bf_t p_in(pos, 3 * sizeof(float));
   float_bf_t wt_in(w, sizeof(float));
-  int_bf_t fi_src(src_fid, sizeof(int));
+  id_bf_t fi_src(src_fid, sizeof(IdType));
   float_bf_t p_out(pos_out, 3 * sizeof(float));
-  int_bf_t fi_out(fid_out, sizeof(int));
+  id_bf_t fi_out(fid_out, sizeof(IdType));
 
   Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
-  // PropagateSlab skips w<0 rays: output position = input position, fid = -1
+  // PropagateSlab skips w<0 rays: output position = input position, fid = kInvalidId
   // (The skip preserves the initialized values from the gather phase in PropagateSlab,
   //  but for the original position since w<0 is skipped in the scatter phase)
-  EXPECT_EQ(fid_out[0], -1);
+  EXPECT_EQ(fid_out[0], kInvalidId);
 }
 
 TEST_F(PropagateTest, Step2SharedPosition) {
@@ -451,21 +456,21 @@ TEST_F(PropagateTest, Step2SharedPosition) {
   };
   float weights[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
   float pos_out[12] = {};
-  int fid_out[4] = { -1, -1, -1, -1 };
-  int src_fids[2] = { -1, -1 };
+  IdType fid_out[4] = { kInvalidId, kInvalidId, kInvalidId, kInvalidId };
+  IdType src_fids[2] = { kInvalidId, kInvalidId };
 
   float_bf_t d_in(dirs, 3 * sizeof(float));
   float_bf_t p_in(positions, 3 * sizeof(float));
   float_bf_t wt_in(weights, sizeof(float));
-  int_bf_t fi_src(src_fids, sizeof(int));
+  id_bf_t fi_src(src_fids, sizeof(IdType));
   float_bf_t p_out(pos_out, 3 * sizeof(float));
-  int_bf_t fi_out(fid_out, sizeof(int));
+  id_bf_t fi_out(fid_out, sizeof(IdType));
 
   Propagate(crystal_, 4, 2, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
   // All rays should hit something (from center, any direction hits a face)
   for (int i = 0; i < 4; i++) {
-    EXPECT_GE(fid_out[i], 0) << "Ray " << i << " missed";
+    EXPECT_NE(fid_out[i], kInvalidId) << "Ray " << i << " missed";
   }
 
   // Rays with same direction and same position should produce same results
@@ -487,15 +492,15 @@ TEST_F(PropagateTest, ChunkBoundaryConsistency) {
 
   // Single-chunk reference (num=1)
   float pos_out_ref[3] = {};
-  int fid_ref[1] = { -1 };
-  int src_fid_ref[1] = { -1 };
+  IdType fid_ref[1] = { kInvalidId };
+  IdType src_fid_ref[1] = { kInvalidId };
   {
     float_bf_t d_in(dir, 3 * sizeof(float));
     float_bf_t p_in(pos, 3 * sizeof(float));
     float_bf_t wt_in(w, sizeof(float));
-    int_bf_t fi_src(src_fid_ref, sizeof(int));
+    id_bf_t fi_src(src_fid_ref, sizeof(IdType));
     float_bf_t p_out(pos_out_ref, 3 * sizeof(float));
-    int_bf_t fi_out(fid_ref, sizeof(int));
+    id_bf_t fi_out(fid_ref, sizeof(IdType));
     Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
   }
 
@@ -506,8 +511,8 @@ TEST_F(PropagateTest, ChunkBoundaryConsistency) {
   std::vector<float> positions(kNum * 3, 0.0f);
   std::vector<float> weights(kNum, -1.0f);
   std::vector<float> pos_out_chunk(kNum * 3, 0.0f);
-  std::vector<int> fid_chunk(kNum, -1);
-  std::vector<int> src_fid_chunk(kNum, -1);
+  std::vector<IdType> fid_chunk(kNum, kInvalidId);
+  std::vector<IdType> src_fid_chunk(kNum, kInvalidId);
 
   dirs[0] = dir[0];
   dirs[1] = dir[1];
@@ -518,13 +523,13 @@ TEST_F(PropagateTest, ChunkBoundaryConsistency) {
     float_bf_t d_in(dirs.data(), 3 * sizeof(float));
     float_bf_t p_in(positions.data(), 3 * sizeof(float));
     float_bf_t wt_in(weights.data(), sizeof(float));
-    int_bf_t fi_src(src_fid_chunk.data(), sizeof(int));
+    id_bf_t fi_src(src_fid_chunk.data(), sizeof(IdType));
     float_bf_t p_out(pos_out_chunk.data(), 3 * sizeof(float));
-    int_bf_t fi_out(fid_chunk.data(), sizeof(int));
+    id_bf_t fi_out(fid_chunk.data(), sizeof(IdType));
     Propagate(crystal_, kNum, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
   }
 
-  EXPECT_GE(fid_ref[0], 0);
+  EXPECT_NE(fid_ref[0], kInvalidId);
   EXPECT_EQ(fid_ref[0], fid_chunk[0]);
   for (int j = 0; j < 3; j++) {
     EXPECT_NEAR(pos_out_ref[j], pos_out_chunk[j], 1e-5f);
@@ -538,15 +543,15 @@ TEST_F(PropagateTest, NoIntersection) {
   float pos[3] = { 100.0f, 100.0f, 100.0f };
   float w[1] = { 1.0f };
   float pos_out[3] = {};
-  int fid_out[1] = { -1 };
-  int src_fid[1] = { -1 };
+  IdType fid_out[1] = { kInvalidId };
+  IdType src_fid[1] = { kInvalidId };
 
   float_bf_t d_in(dir, 3 * sizeof(float));
   float_bf_t p_in(pos, 3 * sizeof(float));
   float_bf_t wt_in(w, sizeof(float));
-  int_bf_t fi_src(src_fid, sizeof(int));
+  id_bf_t fi_src(src_fid, sizeof(IdType));
   float_bf_t p_out(pos_out, 3 * sizeof(float));
-  int_bf_t fi_out(fid_out, sizeof(int));
+  id_bf_t fi_out(fid_out, sizeof(IdType));
 
   Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
@@ -558,8 +563,20 @@ TEST_F(PropagateTest, NoIntersection) {
   EXPECT_TRUE(true);  // No crash is the test
 }
 
+// Find the polygon face whose normal aligns with target_n (dot > 0.99).
+// Returns kInvalidId if no polygon face matches.
+static IdType FindPolygonFaceByNormal(const Crystal& crystal, const float* target_n) {
+  const float* pn = crystal.GetPolygonFaceNormal();
+  for (size_t p = 0; p < crystal.PolygonFaceCount(); p++) {
+    if (Dot3(target_n, pn + p * 3) > 0.99f) {
+      return static_cast<IdType>(p);
+    }
+  }
+  return kInvalidId;
+}
+
 // AC-1: TIR on fn=3 (x=√3/4), ray starts at shared edge with fn=4 (0.5x+√3/2·y=√3/4).
-// fid_in_src = a triangle of fn=3 (TIR source); adjacent fn=4 should be hit.
+// from_face_in = polygon face of fn=3 (TIR source); adjacent fn=4 should be hit.
 //
 // Geometry note: pos.x is shifted inward by δ = 3e-6 (well below kFloatEps=1e-5)
 // so t_fn4 = δ is reliably positive across platforms while still less than the
@@ -573,31 +590,25 @@ TEST_F(PropagateTest, TIREdgeAdjacentFaceHit) {
   float dir[3] = { -0.5f, kSqrt3 / 2.0f, 0.0f };
   float w[1] = { 1.0f };
   float pos_out[3] = {};
-  int fid_out[1] = { -1 };
+  IdType fid_out[1] = { kInvalidId };
 
-  // Find a triangle whose normal is fn=3 (normal ≈ (1, 0, 0)) to use as source face
-  int src_tri = -1;
-  for (int t = 0; t < static_cast<int>(crystal_.TotalTriangles()); t++) {
-    const float* tn = crystal_.GetTriangleNormal() + t * 3;
-    if (tn[0] > 0.99f && std::abs(tn[1]) < 0.01f) {
-      src_tri = t;
-      break;
-    }
-  }
-  ASSERT_GE(src_tri, 0) << "Could not find fn=3 triangle";
+  // Use the polygon face whose normal is fn=3 (normal ≈ (1, 0, 0)).
+  const float kFn3Norm[3] = { 1.0f, 0.0f, 0.0f };
+  IdType src_poly = FindPolygonFaceByNormal(crystal_, kFn3Norm);
+  ASSERT_NE(src_poly, kInvalidId) << "Could not find fn=3 polygon face";
 
   float_bf_t d_in(dir, 3 * sizeof(float));
   float_bf_t p_in(pos, 3 * sizeof(float));
   float_bf_t wt_in(w, sizeof(float));
-  int_bf_t fi_src(&src_tri, sizeof(int));
+  id_bf_t fi_src(&src_poly, sizeof(IdType));
   float_bf_t p_out(pos_out, 3 * sizeof(float));
-  int_bf_t fi_out(fid_out, sizeof(int));
+  id_bf_t fi_out(fid_out, sizeof(IdType));
 
   Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
   // Should hit fn=4 (normal ≈ (0.5, √3/2, 0)); verify via dot product
-  ASSERT_GE(fid_out[0], 0) << "Expected adjacent face hit, got no intersection";
-  const float* norm_out = crystal_.GetTriangleNormal() + fid_out[0] * 3;
+  ASSERT_NE(fid_out[0], kInvalidId) << "Expected adjacent face hit, got no intersection";
+  const float* norm_out = crystal_.GetPolygonFaceNormal() + fid_out[0] * 3;
   float dot = norm_out[0] * 0.5f + norm_out[1] * (kSqrt3 / 2.0f);
   EXPECT_NEAR(dot, 1.0f, 1e-3f);
 }
@@ -615,8 +626,8 @@ TEST_F(PropagateTest, TIREdgeAdjacentFaceHit_LargeNum) {
   std::vector<float> positions(kNum * 3, 0.0f);
   std::vector<float> weights(kNum, -1.0f);
   std::vector<float> pos_out(kNum * 3, 0.0f);
-  std::vector<int> fid_out(kNum, -1);
-  std::vector<int> src_fids(kNum, -1);
+  std::vector<IdType> fid_out(kNum, kInvalidId);
+  std::vector<IdType> src_fids(kNum, kInvalidId);
 
   dirs[0] = -0.5f;
   dirs[1] = kSqrt3 / 2.0f;
@@ -626,28 +637,23 @@ TEST_F(PropagateTest, TIREdgeAdjacentFaceHit_LargeNum) {
   positions[2] = 0.0f;
   weights[0] = 1.0f;
 
-  // Find fn=3 triangle for source face
-  for (int t = 0; t < static_cast<int>(crystal_.TotalTriangles()); t++) {
-    const float* tn = crystal_.GetTriangleNormal() + t * 3;
-    if (tn[0] > 0.99f && std::abs(tn[1]) < 0.01f) {
-      src_fids[0] = t;
-      break;
-    }
-  }
-  ASSERT_GE(src_fids[0], 0) << "Could not find fn=3 triangle";
+  // Polygon face for fn=3 (normal ≈ (1, 0, 0)) as source face.
+  const float kFn3Norm[3] = { 1.0f, 0.0f, 0.0f };
+  src_fids[0] = FindPolygonFaceByNormal(crystal_, kFn3Norm);
+  ASSERT_NE(src_fids[0], kInvalidId) << "Could not find fn=3 polygon face";
 
   float_bf_t d_in(dirs.data(), 3 * sizeof(float));
   float_bf_t p_in(positions.data(), 3 * sizeof(float));
   float_bf_t wt_in(weights.data(), sizeof(float));
-  int_bf_t fi_src(src_fids.data(), sizeof(int));
+  id_bf_t fi_src(src_fids.data(), sizeof(IdType));
   float_bf_t p_out(pos_out.data(), 3 * sizeof(float));
-  int_bf_t fi_out(fid_out.data(), sizeof(int));
+  id_bf_t fi_out(fid_out.data(), sizeof(IdType));
 
   Propagate(crystal_, kNum, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
   // Should hit fn=4 (normal ≈ (0.5, √3/2, 0))
-  ASSERT_GE(fid_out[0], 0) << "Expected adjacent face hit, got no intersection";
-  const float* norm_out = crystal_.GetTriangleNormal() + fid_out[0] * 3;
+  ASSERT_NE(fid_out[0], kInvalidId) << "Expected adjacent face hit, got no intersection";
+  const float* norm_out = crystal_.GetPolygonFaceNormal() + fid_out[0] * 3;
   float dot = norm_out[0] * 0.5f + norm_out[1] * (kSqrt3 / 2.0f);
   EXPECT_NEAR(dot, 1.0f, 1e-3f);
 }
@@ -658,48 +664,42 @@ TEST_F(PropagateTest, TIREdgeAdjacentFaceHit_LargeNum) {
 TEST_F(PropagateTest, PropagateSourceFaceNotSelected) {
   const float kSqrt3 = std::sqrt(3.0f);
 
-  // Find fn=3 triangle (normal ≈ (1, 0, 0))
-  int src_tri = -1;
-  for (int t = 0; t < static_cast<int>(crystal_.TotalTriangles()); t++) {
-    const float* tn = crystal_.GetTriangleNormal() + t * 3;
-    if (tn[0] > 0.99f && std::abs(tn[1]) < 0.01f) {
-      src_tri = t;
-      break;
-    }
-  }
-  ASSERT_GE(src_tri, 0) << "Could not find fn=3 triangle";
+  // Polygon face for fn=3 (normal ≈ (1, 0, 0)) as source face.
+  const float kFn3Norm[3] = { 1.0f, 0.0f, 0.0f };
+  IdType src_poly = FindPolygonFaceByNormal(crystal_, kFn3Norm);
+  ASSERT_NE(src_poly, kInvalidId) << "Could not find fn=3 polygon face";
 
   // Place ray half-epsilon inside fn=3 (pos.x = √3/4 - kFloatEps/2), direction +x (outward).
   // t_fn3 = (kFloatEps/2) / 1.0 ∈ (0, kFloatEps): in the guard zone.
-  //   - Correct code (source face uses +kFloatEps): t_fn3 < kFloatEps → fn=3 rejected → fid_out = -1.
-  //   - Regressed code (all faces use -kFloatEps): t_fn3 > -kFloatEps → fn=3 accepted → fid_out = fn=3 tri.
+  //   - Correct code (source face uses +kFloatEps): t_fn3 < kFloatEps → fn=3 rejected → fid_out = kInvalidId.
+  //   - Regressed code (all faces use -kFloatEps): t_fn3 > -kFloatEps → fn=3 accepted → fid_out = fn=3 poly.
   float pos[3] = { kSqrt3 / 4.0f - math::kFloatEps * 0.5f, 0.0f, 0.0f };
   float dir[3] = { 1.0f, 0.0f, 0.0f };
 
   float w[1] = { 1.0f };
   float pos_out[3] = {};
-  int fid_out[1] = { -1 };
+  IdType fid_out[1] = { kInvalidId };
 
   float_bf_t d_in(dir, 3 * sizeof(float));
   float_bf_t p_in(pos, 3 * sizeof(float));
   float_bf_t wt_in(w, sizeof(float));
-  int_bf_t fi_src(&src_tri, sizeof(int));
+  id_bf_t fi_src(&src_poly, sizeof(IdType));
   float_bf_t p_out(pos_out, 3 * sizeof(float));
-  int_bf_t fi_out(fid_out, sizeof(int));
+  id_bf_t fi_out(fid_out, sizeof(IdType));
 
   Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
   // With dir=(+1,0,0) from a point ε/2 inside fn=3, the only face geometrically
   // reachable in the forward direction is fn=3 itself. A correctly-functioning
-  // source-face guard must reject it, leaving fid_out=-1. Asserting "-1" is
-  // strictly stronger than "not fn=3": it also catches regressions where some
-  // unrelated face is spuriously selected (e.g. PropagateSlab returning a
-  // stale far_face), which the earlier `if (fid_out>=0)` wrapping would miss.
-  EXPECT_EQ(fid_out[0], -1) << "guard zone must produce no hit; "
-                               "non-negative fid_out (="
-                            << fid_out[0]
-                            << ") means either "
-                               "source face fn=3 was wrongly selected or some unreachable face was returned";
+  // source-face guard must reject it, leaving fid_out=kInvalidId. Asserting
+  // "kInvalidId" is strictly stronger than "not fn=3": it also catches regressions
+  // where some unrelated face is spuriously selected (e.g. PropagateSlab returning
+  // a stale far_face), which the earlier `if (fid_out>=0)` wrapping would miss.
+  EXPECT_EQ(fid_out[0], kInvalidId) << "guard zone must produce no hit; "
+                                       "fid_out (="
+                                    << fid_out[0]
+                                    << ") means either "
+                                       "source face fn=3 was wrongly selected or some unreachable face was returned";
 }
 
 // AC-3 (a): polygon-only equivalence on a regular hexagonal prism.
@@ -725,20 +725,20 @@ TEST_F(PropagateTest, PolygonOnlyPrism6SideFaces) {
     float pos[3] = { 0.0f, 0.0f, 0.0f };
     float w[1] = { 1.0f };
     float pos_out[3] = {};
-    int fid_out[1] = { -1 };
-    int src_fid[1] = { -1 };
+    IdType fid_out[1] = { kInvalidId };
+    IdType src_fid[1] = { kInvalidId };
 
     float_bf_t d_in(dir, 3 * sizeof(float));
     float_bf_t p_in(pos, 3 * sizeof(float));
     float_bf_t wt_in(w, sizeof(float));
-    int_bf_t fi_src(src_fid, sizeof(int));
+    id_bf_t fi_src(src_fid, sizeof(IdType));
     float_bf_t p_out(pos_out, 3 * sizeof(float));
-    int_bf_t fi_out(fid_out, sizeof(int));
+    id_bf_t fi_out(fid_out, sizeof(IdType));
 
     Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
-    ASSERT_GE(fid_out[0], 0) << "Ray " << i << " missed all faces";
-    const float* norm = crystal_.GetTriangleNormal() + fid_out[0] * 3;
+    ASSERT_NE(fid_out[0], kInvalidId) << "Ray " << i << " missed all faces";
+    const float* norm = crystal_.GetPolygonFaceNormal() + fid_out[0] * 3;
     // Hit a side face (z-component of normal ≈ 0).
     EXPECT_NEAR(norm[2], 0.0f, 1e-4f) << "Ray " << i << " hit non-side face (norm.z=" << norm[2] << ")";
     // Outward normal aligns with the ray direction.
@@ -771,22 +771,70 @@ TEST_F(PropagateTest, PolygonOnlyPyramidConeFaces) {
     float pos[3] = { 0.0f, 0.0f, 0.0f };
     float w[1] = { 1.0f };
     float pos_out[3] = {};
-    int fid_out[1] = { -1 };
-    int src_fid[1] = { -1 };
+    IdType fid_out[1] = { kInvalidId };
+    IdType src_fid[1] = { kInvalidId };
 
     float_bf_t d_in(dir, 3 * sizeof(float));
     float_bf_t p_in(pos, 3 * sizeof(float));
     float_bf_t wt_in(w, sizeof(float));
-    int_bf_t fi_src(src_fid, sizeof(int));
+    id_bf_t fi_src(src_fid, sizeof(IdType));
     float_bf_t p_out(pos_out, 3 * sizeof(float));
-    int_bf_t fi_out(fid_out, sizeof(int));
+    id_bf_t fi_out(fid_out, sizeof(IdType));
 
     Propagate(pyramid, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
 
-    ASSERT_GE(fid_out[0], 0) << c.label << ": ray missed all faces";
-    const float* norm = pyramid.GetTriangleNormal() + fid_out[0] * 3;
+    ASSERT_NE(fid_out[0], kInvalidId) << c.label << ": ray missed all faces";
+    const float* norm = pyramid.GetPolygonFaceNormal() + fid_out[0] * 3;
     // Hit face must belong to the expected cone segment (norm.z sign + magnitude > 0.5).
     EXPECT_GT(norm[2] * c.expected_norm_z_sign, 0.5f)
         << c.label << ": hit face norm.z=" << norm[2] << " (expected sign " << c.expected_norm_z_sign << ")";
   }
+}
+
+// AC-5: when from_face_in = kInvalidId (initial ray, no source face), Propagate
+// applies no source-face guard — equivalent to the legacy fid_in_src = -1 path.
+// The ray from the origin along +x must hit some polygon face.
+TEST_F(PropagateTest, FromFaceNotSelf_InitialRayNoSource) {
+  float dir[3] = { 1.0f, 0.0f, 0.0f };
+  float pos[3] = { 0.0f, 0.0f, 0.0f };
+  float w[1] = { 1.0f };
+  float pos_out[3] = {};
+  IdType fid_out[1] = { kInvalidId };
+  IdType src_fid[1] = { kInvalidId };  // no source — legacy "-1" sentinel
+
+  float_bf_t d_in(dir, 3 * sizeof(float));
+  float_bf_t p_in(pos, 3 * sizeof(float));
+  float_bf_t wt_in(w, sizeof(float));
+  id_bf_t fi_src(src_fid, sizeof(IdType));
+  float_bf_t p_out(pos_out, 3 * sizeof(float));
+  id_bf_t fi_out(fid_out, sizeof(IdType));
+
+  Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
+
+  ASSERT_NE(fid_out[0], kInvalidId) << "kInvalidId source should not exclude any face";
+}
+
+// AC-5: to_face_out from Propagate is a polygon face index — i.e. always in
+// [0, PolygonFaceCount()), never a triangle id. Guarantees the new ABI invariant
+// downstream consumers (HitSurface normal lookup, raypath recorder) rely on.
+TEST_F(PropagateTest, ToFaceIsPolygonFaceIndex) {
+  float dir[3] = { 1.0f, 0.0f, 0.0f };
+  float pos[3] = { 0.0f, 0.0f, 0.0f };
+  float w[1] = { 1.0f };
+  float pos_out[3] = {};
+  IdType fid_out[1] = { kInvalidId };
+  IdType src_fid[1] = { kInvalidId };
+
+  float_bf_t d_in(dir, 3 * sizeof(float));
+  float_bf_t p_in(pos, 3 * sizeof(float));
+  float_bf_t wt_in(w, sizeof(float));
+  id_bf_t fi_src(src_fid, sizeof(IdType));
+  float_bf_t p_out(pos_out, 3 * sizeof(float));
+  id_bf_t fi_out(fid_out, sizeof(IdType));
+
+  Propagate(crystal_, 1, 1, d_in, p_in, wt_in, fi_src, p_out, fi_out);
+
+  ASSERT_NE(fid_out[0], kInvalidId);
+  EXPECT_LT(fid_out[0], crystal_.PolygonFaceCount()) << "fid_out must be a polygon-face index, got " << fid_out[0]
+                                                     << " (PolygonFaceCount=" << crystal_.PolygonFaceCount() << ")";
 }

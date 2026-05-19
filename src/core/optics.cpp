@@ -20,14 +20,22 @@ float GetReflectRatio(float delta, float rr) {
 }
 
 // NOLINTNEXTLINE(readability-function-size)
-void HitSurface(const Crystal& crystal, float n, size_t num,                          // input
-                const float_bf_t d_in, const float_bf_t w_in, const int_bf_t fid_in,  // input
-                float_bf_t d_out, float_bf_t w_out) {                                 // output
-  const auto* face_norm = crystal.GetTriangleNormal();
+void HitSurface(const Crystal& crystal, float n, size_t num,                             // input
+                const float_bf_t d_in, const float_bf_t w_in, const id_bf_t to_face_in,  // input
+                float_bf_t d_out, float_bf_t w_out) {                                    // output
+  // Polygon-face normals are equivalent to per-triangle normals (Build matches
+  // by dot > 1 - 1e-3) but indexed by polygon face — matches RaySeg::to_face_.
+  const auto* poly_norm = crystal.GetPolygonFaceNormal();
 
   for (size_t i = 0; i < num; i++) {
+    if (to_face_in[i] == kInvalidId) {
+      // No valid hit face — zero both output weights (and leave directions unchanged).
+      w_out[2 * i + 0] = 0.0f;
+      w_out[2 * i + 1] = 0.0f;
+      continue;
+    }
     const float* tmp_dir = d_in.Ptr(i);
-    const float* tmp_norm = face_norm + fid_in[i] * 3;
+    const float* tmp_norm = poly_norm + to_face_in[i] * 3;
 
     float cos_theta = Dot3(tmp_dir, tmp_norm);
     float rr = cos_theta > 0 ? n : 1.0f / n;
@@ -59,11 +67,10 @@ static_assert(kMaxSlabRays % 2 == 0, "kMaxSlabRays must be even for step=2 chunk
 // Per-polygon-face half-space interval method with face-outer/ray-inner SoA loop.
 // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const float_bf_t d_in, const float_bf_t p_in,
-                          const float_bf_t w_in, const int_bf_t fid_in_src, float_bf_t p_out, int_bf_t fid_out) {
+                          const float_bf_t w_in, const id_bf_t from_face_in, float_bf_t p_out, id_bf_t to_face_out) {
   auto poly_cnt = crystal.PolygonFaceCount();
   const auto* pn = crystal.GetPolygonFaceNormal();
   const auto* pd = crystal.GetPolygonFaceDist();
-  const auto* tri_id = crystal.GetPolygonFaceTriId();
 
   // Gather strided BufferWrapper data into contiguous SoA arrays
   alignas(64) float dx[kMaxSlabRays], dy[kMaxSlabRays], dz[kMaxSlabRays];
@@ -83,8 +90,8 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
     pz[i] = p[2];
     t_far[i] = 1e30f;
     far_face[i] = -1;
-    int src_tri = fid_in_src[i / step];
-    src_poly[i] = (src_tri >= 0) ? crystal.GetTriangleToPolygonFace(src_tri) : -1;
+    IdType src_id = from_face_in[i / step];
+    src_poly[i] = (src_id != kInvalidId) ? static_cast<int>(src_id) : -1;
   }
 
   // Face-outer, ray-inner: find minimum t among exit faces (denom > eps)
@@ -111,7 +118,7 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
     }
 
     float* out_pt = p_out.Ptr(i);
-    int* out_fid = fid_out.Ptr(i);
+    IdType* out_face = to_face_out.Ptr(i);
 
     // Use relaxed threshold for non-source faces to accept t≈0 TIR-edge hits.
     // Source face keeps +kFloatEps to prevent self-selection.
@@ -121,12 +128,12 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
       out_pt[0] = px[i] + t * dx[i];
       out_pt[1] = py[i] + t * dy[i];
       out_pt[2] = pz[i] + t * dz[i];
-      *out_fid = tri_id[far_face[i]];
+      *out_face = static_cast<IdType>(far_face[i]);
     } else {
       out_pt[0] = px[i];
       out_pt[1] = py[i];
       out_pt[2] = pz[i];
-      *out_fid = -1;
+      *out_face = kInvalidId;
     }
   }
 }
@@ -136,17 +143,17 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
 // NOLINTNEXTLINE(readability-function-size)
 void Propagate(const Crystal& crystal, size_t num, size_t step,                      // input
                const float_bf_t d_in, const float_bf_t p_in, const float_bf_t w_in,  // input, d, p, w
-               const int_bf_t fid_in_src,                                            // source face ids
-               float_bf_t p_out, int_bf_t fid_out) {                                 // output, p, fid
+               const id_bf_t from_face_in,                                           // source polygon face ids
+               float_bf_t p_out, id_bf_t to_face_out) {                              // output, p, to_face
   for (size_t offset = 0; offset < num; offset += kMaxSlabRays) {
     size_t chunk = std::min(num - offset, kMaxSlabRays);
-    PropagateSlab(crystal, chunk, step,                                       //
-                  float_bf_t(d_in.Ptr(offset), d_in.step_),                   //
-                  float_bf_t(p_in.Ptr(offset / step), p_in.step_),            //
-                  float_bf_t(w_in.Ptr(offset), w_in.step_),                   //
-                  int_bf_t(fid_in_src.Ptr(offset / step), fid_in_src.step_),  //
-                  float_bf_t(p_out.Ptr(offset), p_out.step_),                 //
-                  int_bf_t(fid_out.Ptr(offset), fid_out.step_));
+    PropagateSlab(crystal, chunk, step,                                          //
+                  float_bf_t(d_in.Ptr(offset), d_in.step_),                      //
+                  float_bf_t(p_in.Ptr(offset / step), p_in.step_),               //
+                  float_bf_t(w_in.Ptr(offset), w_in.step_),                      //
+                  id_bf_t(from_face_in.Ptr(offset / step), from_face_in.step_),  //
+                  float_bf_t(p_out.Ptr(offset), p_out.step_),                    //
+                  id_bf_t(to_face_out.Ptr(offset), to_face_out.step_));
   }
 }
 

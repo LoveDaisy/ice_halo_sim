@@ -471,64 +471,49 @@ TEST(DetailIsDApplicable, Conditions) {
   EXPECT_FALSE(lumice::detail::IsDApplicable(d));
 }
 
-// ============================================================================
-// Crystal::GetTriangleToPolygonFace (task-raypath-1-3-fix AC-8)
-//
-// The triangle→polygon reverse mapping is the basis that PropagateTriangle
-// uses to compare face identities polygon-wise (preventing one polygon's
-// triangles from masking each other in the source-face guard). Test the
-// contract directly so future Crystal refactors can't silently break it.
-// ============================================================================
+// D4 invariant: every triangle's normal must align with at least one polygon-face
+// normal (dot > 1-1e-3), ensuring PolygonFaceOfTri always finds a match on valid
+// crystals and HitSurface's polygon-face normal equals the per-triangle normal.
+TEST_F(V3TestCrystal, EveryTriangleMapsToCoplanarPolygon) {
+  auto prism = Crystal::CreatePrism(1.3);
+  auto pyramid = Crystal::CreatePyramid(0.3f, 1.0f, 0.3f);
 
-TEST(CrystalTriangleToPolygonFace, OutOfRangeReturnsMinusOne) {
-  auto crystal = Crystal::CreatePrism(1.3);
-  int total = static_cast<int>(crystal.TotalTriangles());
-
-  EXPECT_EQ(crystal.GetTriangleToPolygonFace(-1), -1);
-  EXPECT_EQ(crystal.GetTriangleToPolygonFace(total), -1);
-  EXPECT_EQ(crystal.GetTriangleToPolygonFace(total + 100), -1);
-  EXPECT_EQ(crystal.GetTriangleToPolygonFace(-1000), -1);
-}
-
-TEST(CrystalTriangleToPolygonFace, EveryTriangleMapsToCoplanarPolygon) {
-  // Contract: every triangle maps to a polygon face whose plane normal
-  // aligns with the triangle's own normal (BuildPolygonFaceData is the
-  // single source of truth for both arrays).
-  auto crystal = Crystal::CreatePrism(1.3);
-  ASSERT_GT(crystal.PolygonFaceCount(), 0u);
-
-  const float* tri_n = crystal.GetTriangleNormal();
-  const float* poly_n = crystal.GetPolygonFaceNormal();
-
-  for (size_t t = 0; t < crystal.TotalTriangles(); t++) {
-    int p = crystal.GetTriangleToPolygonFace(static_cast<int>(t));
-    ASSERT_GE(p, 0) << "triangle " << t << " has no polygon mapping";
-    ASSERT_LT(static_cast<size_t>(p), crystal.PolygonFaceCount()) << "triangle " << t << " maps out of range";
-    float dot =
-        tri_n[t * 3] * poly_n[p * 3] + tri_n[t * 3 + 1] * poly_n[p * 3 + 1] + tri_n[t * 3 + 2] * poly_n[p * 3 + 2];
-    EXPECT_NEAR(dot, 1.0f, 1e-4f) << "triangle " << t << " normal does not align with polygon " << p;
-  }
-}
-
-TEST(CrystalTriangleToPolygonFace, CoplanarTrianglesShareSamePolygon) {
-  // Stronger structural check: triangles whose normals are parallel must
-  // map to the same polygon index. Catches mappings that are individually
-  // plausible but inconsistent across triangles of the same physical face.
-  auto crystal = Crystal::CreatePrism(1.3);
-  const float* tri_n = crystal.GetTriangleNormal();
-  size_t n = crystal.TotalTriangles();
-
-  for (size_t a = 0; a < n; a++) {
-    for (size_t b = a + 1; b < n; b++) {
-      float dot =
-          tri_n[a * 3] * tri_n[b * 3] + tri_n[a * 3 + 1] * tri_n[b * 3 + 1] + tri_n[a * 3 + 2] * tri_n[b * 3 + 2];
-      if (dot > 0.9999f) {
-        int pa = crystal.GetTriangleToPolygonFace(static_cast<int>(a));
-        int pb = crystal.GetTriangleToPolygonFace(static_cast<int>(b));
-        EXPECT_EQ(pa, pb) << "coplanar triangles " << a << " and " << b << " map to different polygons";
+  for (const auto* crystal : { &prism, &pyramid }) {
+    const float* tn = crystal->GetTriangleNormal();
+    const float* pn = crystal->GetPolygonFaceNormal();
+    for (size_t t = 0; t < crystal->TotalTriangles(); t++) {
+      bool found = false;
+      for (size_t p = 0; p < crystal->PolygonFaceCount(); p++) {
+        if (Dot3(tn + t * 3, pn + p * 3) > 1.0f - 1e-3f) {
+          found = true;
+          break;
+        }
       }
+      EXPECT_TRUE(found) << "triangle " << t << " has no coplanar polygon face";
     }
   }
+}
+
+// AC-5: GetFn(IdType poly_idx) returns the same fn that GetFn(int tri_id) gives
+// for the polygon's representative triangle, and yields kInvalidId on out-of-range
+// or kInvalidId input. Covers the new polygon-face overload used by simulator
+// after the from_face_/to_face_ split.
+TEST(CrystalGetFnByPolygonFace, MatchesTriangleOverloadAndBoundaries) {
+  auto crystal = Crystal::CreatePrism(1.0f);
+  ASSERT_GT(crystal.PolygonFaceCount(), 0u);
+
+  const int* poly_tri = crystal.GetPolygonFaceTriId();
+  for (size_t p = 0; p < crystal.PolygonFaceCount(); p++) {
+    IdType fn_poly = crystal.GetFn(static_cast<IdType>(p));
+    IdType fn_tri = crystal.GetFn(poly_tri[p]);
+    EXPECT_EQ(fn_poly, fn_tri) << "polygon " << p << " fn mismatch vs tri " << poly_tri[p];
+    EXPECT_NE(fn_poly, kInvalidId) << "polygon " << p << " should resolve to a known fn";
+  }
+
+  // Out-of-range polygon index returns kInvalidId.
+  EXPECT_EQ(crystal.GetFn(static_cast<IdType>(crystal.PolygonFaceCount())), kInvalidId);
+  // kInvalidId input returns kInvalidId.
+  EXPECT_EQ(crystal.GetFn(kInvalidId), kInvalidId);
 }
 
 }  // namespace

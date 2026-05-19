@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "core/def.hpp"
+
 namespace lumice {
 
 template <class T>
@@ -21,6 +23,7 @@ struct BufferWrapper {
 
 using float_bf_t = BufferWrapper<float>;
 using int_bf_t = BufferWrapper<int>;
+using id_bf_t = BufferWrapper<IdType>;
 
 }  // namespace lumice
 

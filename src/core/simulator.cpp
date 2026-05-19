@@ -24,8 +24,24 @@
 
 namespace lumice {
 
+// Maps a triangle id to its polygon-face index by matching unit normals
+// (BuildPolygonFaceData uses the same dot>1-1e-3 criterion). Returns kInvalidId
+// if no polygon face matches. Used only by InitRay_p_fid below — keeping it
+// file-local avoids reintroducing a Crystal-level reverse mapping that is
+// otherwise unneeded after the from_face_/to_face_ split.
+static IdType PolygonFaceOfTri(const Crystal& crystal, int tri_id) {
+  const float* tn = crystal.GetTriangleNormal() + tri_id * 3;
+  const float* pn = crystal.GetPolygonFaceNormal();
+  for (size_t p = 0; p < crystal.PolygonFaceCount(); p++) {
+    if (Dot3(tn, pn + p * 3) > 1.0f - 1e-3f) {
+      return static_cast<IdType>(p);
+    }
+  }
+  return kInvalidId;
+}
+
 /**
- * @brief Sample on crystal & init origin (p & fid) of rays.
+ * @brief Sample on crystal & init origin (p, from_face_, to_face_) of rays.
  *        NOTE: direction of rays should be given.
  */
 void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
@@ -34,7 +50,7 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
   }
 
   RayBuffer& ray_buf = *ray_buf_ptr;
-  // p & fid: sample on crystal faces
+  // p & to_face_: sample on crystal triangles (area-weighted), then map to polygon face.
   auto total_faces = curr_crystal.TotalTriangles();
   const auto* face_area = curr_crystal.GetTirangleArea();
   const auto* face_norm = curr_crystal.GetTriangleNormal();
@@ -53,10 +69,19 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
     for (size_t j = 0; j < total_faces; j++) {
       proj_prob[j] = std::max(-Dot3(d, face_norm + j * 3) * face_area[j], 0.0f);
     }
-    // fid
-    RandomSample(total_faces, proj_prob, &r.fid_);
-    // p
-    SampleTrianglePoint(face_vtx + r.fid_ * 9, r.p_);
+    int tri_id = 0;
+    RandomSample(total_faces, proj_prob, &tri_id);
+    SampleTrianglePoint(face_vtx + tri_id * 9, r.p_);
+    // Initial entry segment: no source face, hit face = the sampled one's polygon.
+    r.from_face_ = kInvalidId;
+    r.to_face_ = PolygonFaceOfTri(curr_crystal, tri_id);
+    if (r.to_face_ == kInvalidId) {
+      // Triangle has no matching polygon face — should not happen for a valid crystal.
+      // Zero weight to suppress downstream contribution; HitSurface also guards
+      // kInvalidId at loop entry, preventing any OOB access.
+      LOG_WARNING("PolygonFaceOfTri: tri {} has no matching polygon face; zeroing ray weight", tri_id);
+      r.w_ = 0.0f;
+    }
   }
 }
 
@@ -122,9 +147,8 @@ void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, siz
     r.crystal_idx_ = curr_crystal_id;
     r.crystal_config_id_ = curr_crystal.config_id_;
     r.root_ray_idx_ = all_data_idx++;
-    r.state_ = RaySeg::kNormal;
     r.rp_.Clear();
-    r.rp_ << curr_crystal.GetFn(r.fid_);
+    r.rp_ << curr_crystal.GetFn(r.to_face_);
   }
 }
 
@@ -315,31 +339,37 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
   {
     float_bf_t d_in{ buffer_data[0][0].d_, sizeof(RaySeg) };
     float_bf_t w_in{ &buffer_data[0][0].w_, sizeof(RaySeg) };
-    int_bf_t fid_in{ &buffer_data[0][0].fid_, sizeof(RaySeg) };
+    id_bf_t to_face_in{ &buffer_data[0][0].to_face_, sizeof(RaySeg) };
     float_bf_t d_out{ buffer_data[1][0].d_, sizeof(RaySeg) };
     float_bf_t w_out{ &buffer_data[1][0].w_, sizeof(RaySeg) };
     HitSurface(curr_crystal, refractive_index, curr_ray_num,  // Input
-               d_in, w_in, fid_in,                            // Input, d, w, fid
+               d_in, w_in, to_face_in,                        // Input, d, w, to_face
                d_out, w_out);                                 // Output, d, w
   }
 
   // 2 Propagate.
+  // Source-face guard reuses the input segment's to_face_ as the next segment's
+  // from_face_ (the face the ray just hit). step=2 is shared by reflect+refract
+  // (both children have the same source face).
   {
     float_bf_t d_in{ buffer_data[1][0].d_, sizeof(RaySeg) };
     float_bf_t w_in{ &buffer_data[1][0].w_, sizeof(RaySeg) };
     float_bf_t p_in{ buffer_data[0][0].p_, sizeof(RaySeg) };
-    int_bf_t fid_src_in{ &buffer_data[0][0].fid_, sizeof(RaySeg) };
+    id_bf_t from_face_in{ &buffer_data[0][0].to_face_, sizeof(RaySeg) };
     float_bf_t p_out{ buffer_data[1][0].p_, sizeof(RaySeg) };
-    int_bf_t fid_out{ &buffer_data[1][0].fid_, sizeof(RaySeg) };
+    id_bf_t to_face_out{ &buffer_data[1][0].to_face_, sizeof(RaySeg) };
     Propagate(curr_crystal, curr_ray_num * 2, 2,  // Input
               d_in, p_in, w_in,                   // Input, d, w, p(1/2)
-              fid_src_in,                         // Source face ids (step=2, shared by reflect+refract pair)
-              p_out, fid_out);                    // Output, p, fid
+              from_face_in,                       // Source face ids (step=2, shared by reflect+refract pair)
+              p_out, to_face_out);                // Output, p, to_face
   }
 
   for (size_t i = 0; i < curr_ray_num; i++) {
     buffer_data[1][i * 2 + 0].rp_ = buffer_data[0][i].rp_;
     buffer_data[1][i * 2 + 1].rp_ = buffer_data[0][i].rp_;
+    // Each child segment's from_face_ = parent's to_face_ (the face just hit).
+    buffer_data[1][i * 2 + 0].from_face_ = buffer_data[0][i].to_face_;
+    buffer_data[1][i * 2 + 1].from_face_ = buffer_data[0][i].to_face_;
   }
 
   buffer_data[0].size_ = 0;
@@ -353,8 +383,8 @@ void FillRayOtherInfo(size_t curr_ray_num, size_t i,                           /
   size_t ray_id_offset = all_data.size_;
   for (size_t j = 0; j < buffer_data[1].size_; j++) {
     auto& r = buffer_data[1][j];
-    if (r.fid_ >= 0) {
-      r.rp_ << curr_crystal.GetFn(r.fid_);
+    if (r.to_face_ != kInvalidId) {
+      r.rp_ << curr_crystal.GetFn(r.to_face_);
     }
 
     if (i == 0) {
@@ -376,12 +406,16 @@ void FillRayOtherInfo(size_t curr_ray_num, size_t i,                           /
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter* filter,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data) {                           // output
   for (auto& r : buffer_data[1]) {
+    // Default: not continuing. The branch-gate below may override for outgoing
+    // candidates that pass filter+prob. TIR / Normal / unselected-Outgoing all
+    // stay false; the buffer slot may carry a stale `true` from a prior round.
+    r.is_continue_ = false;
+
     if (r.w_ < 0) {
-      // 0. Total reflection.
-      r.state_ = RaySeg::kStopped;
-    } else if (r.fid_ < 0) {
+      // 0. Total reflection — derived via IsTir() (w_ < 0); no state write needed.
+    } else if (r.to_face_ == kInvalidId) {
       // 1. Outgoing candidates. Apply rotation first so filter operates in world-space.
-      // (w_ < 0 is already handled above, so fid_ < 0 implies w_ >= 0 — no double-rotation risk.)
+      // (w_ < 0 is already handled above, so to_face_==kInvalidId implies w_ >= 0 — no double-rotation risk.)
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
 
@@ -391,28 +425,24 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       // not preserved across this change.
       if (rng.GetUniform() < ms_info.prob_ && filter->Check(r)) {
         // 1.1 Branch gate: filter+prob both pass → continue to next ms scatter level.
-        r.state_ = RaySeg::kContinue;
-      } else {
-        // 1.2 Emit outgoing: both filter-fail and prob-fail rays go here.
-        //     Query filter is now applied downstream by RenderConsumer.
-        r.state_ = RaySeg::kOutgoing;
+        r.is_continue_ = true;
       }
-    } else {
-      // 2. Normal rays. Squeeze (or better swap?) buffers.
-      r.state_ = RaySeg::kNormal;
+      // 1.2 else: emit outgoing — both filter-fail and prob-fail rays stay
+      //     is_continue_ = false. Query filter is applied downstream by RenderConsumer.
     }
+    // 2. else: normal rays (to_face_ != kInvalidId && w_ >= 0) — IsNormal() derived; no state write.
 
-    // Tail rotation: only for total reflection (w_ < 0). Outgoing candidates (fid_ < 0) are
-    // already rotated above; normal rays (fid_ >= 0) stay in crystal-local coordinates.
+    // Tail rotation: only for total reflection (w_ < 0). Outgoing candidates (to_face_==kInvalidId) are
+    // already rotated above; normal rays (to_face_!=kInvalidId) stay in crystal-local coordinates.
     if (r.w_ < 0) {
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
     }
 
-    if (r.state_ == RaySeg::kNormal) {
+    if (r.IsNormal()) {
       buffer_data[0].EmplaceBack(r);
     }
-    if (r.state_ == RaySeg::kContinue) {
+    if (r.IsContinue()) {
       init_data[1].EmplaceBack(r);
     }
   }
@@ -639,7 +669,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           size_t base_index = all_data.size_;
           all_data.EmplaceBack(buffer_data[1]);
           for (size_t j = 0; j < buffer_data[1].size_; j++) {
-            if (buffer_data[1][j].state_ == RaySeg::kOutgoing) {
+            if (buffer_data[1][j].IsOutgoing()) {
               outgoing_indices.push_back(base_index + j);
               const auto& r = buffer_data[1][j];
               outgoing_d.push_back(r.d_[0]);
