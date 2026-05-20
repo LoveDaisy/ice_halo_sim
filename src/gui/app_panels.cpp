@@ -48,7 +48,6 @@
 //     - "Unsaved Changes" (BeginPopupModal)
 //     - "##LogPanel" — user-toggleable; raisable on click; sits naturally
 //       above the LeftPanel / RightPanel cluster.
-//     - panels.cpp::SliderWithPreset BeginPopup
 //
 //   Background cluster (NoBringToFrontOnFocus, push_front on creation
 //                       -> bottom of g.Windows):
