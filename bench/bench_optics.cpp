@@ -99,8 +99,8 @@ static void BM_Propagate(benchmark::State& state) {
   id_bf_t prop_from_face_in{ &fix.buf_in[0].to_face_, sizeof(RaySeg) };
 
   for (auto _ : state) {
-    Propagate(fix.crystal, n * 2, 2,                        //
-              prop_d_in, prop_p_in, prop_w_in,              //
+    Propagate(fix.crystal, n * 2, 2,            //
+              prop_d_in, prop_p_in, prop_w_in,  //
               prop_from_face_in, prop_p_out, prop_to_face_out);
   }
   state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n * 2));
