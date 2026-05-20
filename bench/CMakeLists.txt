@@ -12,11 +12,7 @@ set(PROJ_BENCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(lumice_bench
   "${PROJ_BENCH_DIR}/bench_main.cpp"
-  # bench_optics.cpp temporarily excluded: stale RaySeg fid_/int_bf_t/Propagate API after
-  # task #206 (rayseg-state-sentinel-redesign) — re-enable once the bench is ported to
-  # from_face_/to_face_ + 9-arg Propagate. Tracked by scrum-filter-architecture-refactor
-  # explore-filter-refactor-bench insights.md as a side finding.
-  # "${PROJ_BENCH_DIR}/bench_optics.cpp"
+  "${PROJ_BENCH_DIR}/bench_optics.cpp"
   "${PROJ_BENCH_DIR}/bench_scene.cpp"
   "${PROJ_BENCH_DIR}/bench_sim.cpp"
   "${PROJ_BENCH_DIR}/bench_filter.cpp")
