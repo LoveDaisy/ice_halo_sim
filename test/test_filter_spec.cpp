@@ -536,5 +536,81 @@ TEST(FilterSpecReduceRecorder, Random1000_AllSymmetries) {
   }
 }
 
+// =============== DirectionSpec tests (port of DirectionFilter_* legacy tests) ===============
+
+std::unique_ptr<FilterSpec> MakeDirectionSpec(float lon_deg, float lat_deg, float radii_deg,
+                                              FilterConfig::Action action = FilterConfig::kFilterIn) {
+  FilterConfig cfg{};
+  cfg.id_ = 1;
+  cfg.symmetry_ = FilterConfig::kSymNone;
+  cfg.action_ = action;
+  DirectionFilterParam dp{};
+  dp.lon_ = lon_deg;
+  dp.lat_ = lat_deg;
+  dp.radii_ = radii_deg;
+  cfg.param_ = SimpleFilterParam{ dp };
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  return FilterSpec::Create(cfg, crystal, MakeAxis(0.0f));
+}
+
+TEST(DirectionSpec, BasicMatch) {
+  auto spec = MakeDirectionSpec(0.0f, 0.0f, 10.0f);
+
+  auto r1 = MakeRay({});
+  r1.d_[0] = 1.0f;
+  r1.d_[1] = 0.0f;
+  r1.d_[2] = 0.0f;
+  EXPECT_TRUE(spec->Check(r1));
+
+  auto r2 = MakeRay({});
+  r2.d_[0] = 0.0f;
+  r2.d_[1] = 1.0f;
+  r2.d_[2] = 0.0f;
+  EXPECT_FALSE(spec->Check(r2));
+}
+
+TEST(DirectionSpec, StateAgnostic) {
+  // DirectionSpec reads only d_; is_continue_ and w_ must not affect the result.
+  auto spec = MakeDirectionSpec(0.0f, 0.0f, 10.0f);
+
+  auto r = MakeRay({});
+  r.d_[0] = 1.0f;
+  r.d_[1] = 0.0f;
+  r.d_[2] = 0.0f;
+
+  r.is_continue_ = false;
+  r.w_ = 1.0f;
+  EXPECT_TRUE(spec->Check(r));
+
+  r.is_continue_ = true;
+  EXPECT_TRUE(spec->Check(r));
+
+  r.w_ = -1.0f;
+  EXPECT_TRUE(spec->Check(r));
+}
+
+TEST(DirectionSpec, FilterOut) {
+  auto spec = MakeDirectionSpec(0.0f, 0.0f, 10.0f, FilterConfig::kFilterOut);
+
+  auto r1 = MakeRay({});
+  r1.d_[0] = 1.0f;
+  r1.d_[1] = 0.0f;
+  r1.d_[2] = 0.0f;
+  EXPECT_FALSE(spec->Check(r1));
+
+  auto r2 = MakeRay({});
+  r2.d_[0] = 0.0f;
+  r2.d_[1] = 1.0f;
+  r2.d_[2] = 0.0f;
+  EXPECT_TRUE(spec->Check(r2));
+
+  auto r3 = MakeRay({});
+  r3.d_[0] = 1.0f;
+  r3.d_[1] = 0.0f;
+  r3.d_[2] = 0.0f;
+  r3.is_continue_ = true;
+  EXPECT_FALSE(spec->Check(r3));
+}
+
 }  // namespace
 }  // namespace lumice

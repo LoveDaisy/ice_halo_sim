@@ -10,7 +10,6 @@
 #include "config/raypath_validation.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
-#include "core/filter.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 
@@ -128,112 +127,6 @@ TEST_F(FilterTest, HashConsistency) {
     rec2 << x;
   }
   EXPECT_EQ(h(vec2), h(rec2));
-}
-
-
-// DirectionFilter: basic direction matching
-TEST_F(FilterTest, DirectionFilter_BasicMatch) {
-  // Target direction: azimuth=0, elevation=0 → d_ = (1, 0, 0), radii=10°
-  DirectionFilterParam dp{};
-  dp.lon_ = 0.0f;
-  dp.lat_ = 0.0f;
-  dp.radii_ = 10.0f;
-
-  FilterConfig config{};
-  config.id_ = 1;
-  config.action_ = FilterConfig::kFilterIn;
-  config.param_ = SimpleFilterParam{ dp };
-
-  auto filter = Filter::Create(config);
-
-  // Ray along (1, 0, 0) — exactly matching
-  RaySeg r1{};
-  r1.d_[0] = 1.0f;
-  r1.d_[1] = 0.0f;
-  r1.d_[2] = 0.0f;
-  EXPECT_TRUE(filter->Check(r1));
-
-  // Ray along (0, 1, 0) — 90° away, should fail
-  RaySeg r2{};
-  r2.d_[0] = 0.0f;
-  r2.d_[1] = 1.0f;
-  r2.d_[2] = 0.0f;
-  EXPECT_FALSE(filter->Check(r2));
-}
-
-
-// DirectionFilter: state-agnostic by construction. Post task-state-derive,
-// `state_` no longer exists — Filter::Check reads only d_/rp_/crystal_config_id_,
-// so the pre-uplift "no state guard" invariant is enforced structurally rather
-// than per-case. Test retained as a smoke check that the filter accepts any
-// matching direction regardless of bookkeeping fields.
-TEST_F(FilterTest, DirectionFilter_NoStateGuard) {
-  DirectionFilterParam dp{};
-  dp.lon_ = 0.0f;
-  dp.lat_ = 0.0f;
-  dp.radii_ = 10.0f;
-
-  FilterConfig config{};
-  config.id_ = 1;
-  config.action_ = FilterConfig::kFilterIn;
-  config.param_ = SimpleFilterParam{ dp };
-
-  auto filter = Filter::Create(config);
-
-  RaySeg r{};
-  r.d_[0] = 1.0f;
-  r.d_[1] = 0.0f;
-  r.d_[2] = 0.0f;
-
-  // Toggle is_continue_ and w_ sign to exercise both branch-gate and TIR cases.
-  r.is_continue_ = false;
-  r.w_ = 1.0f;
-  EXPECT_TRUE(filter->Check(r));
-
-  r.is_continue_ = true;
-  EXPECT_TRUE(filter->Check(r));
-
-  r.w_ = -1.0f;  // TIR
-  EXPECT_TRUE(filter->Check(r));
-}
-
-
-// DirectionFilter: kFilterOut mode correctly excludes matching directions
-TEST_F(FilterTest, DirectionFilter_FilterOut) {
-  DirectionFilterParam dp{};
-  dp.lon_ = 0.0f;
-  dp.lat_ = 0.0f;
-  dp.radii_ = 10.0f;
-
-  FilterConfig config{};
-  config.id_ = 1;
-  config.action_ = FilterConfig::kFilterOut;
-  config.param_ = SimpleFilterParam{ dp };
-
-  auto filter = Filter::Create(config);
-
-  // Matching direction → should be excluded (Check returns false)
-  RaySeg r1{};
-  r1.d_[0] = 1.0f;
-  r1.d_[1] = 0.0f;
-  r1.d_[2] = 0.0f;
-  EXPECT_FALSE(filter->Check(r1));
-
-  // Non-matching direction → should pass (Check returns true)
-  RaySeg r2{};
-  r2.d_[0] = 0.0f;
-  r2.d_[1] = 1.0f;
-  r2.d_[2] = 0.0f;
-  EXPECT_TRUE(filter->Check(r2));
-
-  // kFilterOut + is_continue_ ray (branch-gate path) + matching direction →
-  // still excluded (filter is state-agnostic; structural invariant).
-  RaySeg r3{};
-  r3.d_[0] = 1.0f;
-  r3.d_[1] = 0.0f;
-  r3.d_[2] = 0.0f;
-  r3.is_continue_ = true;
-  EXPECT_FALSE(filter->Check(r3));
 }
 
 
