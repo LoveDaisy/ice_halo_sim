@@ -18,7 +18,6 @@
 #include "gui/gui_ev_auto.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/window_sizing.hpp"
-#include "util/color_space.hpp"
 #include "util/path_utils.hpp"
 
 namespace lumice::gui {
@@ -245,7 +244,7 @@ static void RefreshCpuTextureForSave() {
 
   // Convert XYZ→sRGB on CPU using the same algorithm as the shader
   std::vector<unsigned char> srgb(static_cast<size_t>(w) * h * 3);
-  lumice::XyzToSrgbUint8(xyz_results[0].xyz_buffer, srgb.data(), w * h, intensity_scale);
+  LUMICE_XyzToSrgbUint8(xyz_results[0].xyz_buffer, srgb.data(), w * h, intensity_scale);
 
   g_preview.UpdateCpuTextureData(srgb.data(), w, h);
 }

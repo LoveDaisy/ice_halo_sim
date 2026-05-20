@@ -16,6 +16,7 @@
 #include "include/lumice.h"
 #include "server/server.hpp"
 #include "util/callback_sink.hpp"
+#include "util/color_space.hpp"
 #include "util/logger.hpp"
 #include "util/path_utils.hpp"
 
@@ -1198,4 +1199,14 @@ LUMICE_ErrorCode LUMICE_ValidateRaypathText(const char* text, LUMICE_CrystalKind
 // =============== Lens Type ===============
 float LUMICE_MaxFov(LUMICE_LensType type) {
   return ns::MaxFov(static_cast<ns::LensParam::LensType>(type));
+}
+
+// =============== Color Conversion ===============
+LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, int pixel_count,
+                                       float intensity_scale) {
+  if (!xyz_in || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  ns::XyzToSrgbUint8(xyz_in, out, pixel_count, intensity_scale);
+  return LUMICE_OK;
 }
