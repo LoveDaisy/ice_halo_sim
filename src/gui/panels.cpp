@@ -454,7 +454,7 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   bool hover_prev = ImGui::GetStateStorage()->GetBool(hover_persist_id, false);
 
   // Use frame-height spacing so each row reserves room for the Edit button (taller than text);
-  // otherwise Row 0-2 buttons would overlap the prop. slider in Row 3.
+  // otherwise Row 0-2 buttons would overlap the Weight slider in Row 3.
   float row_h = ImGui::GetFrameHeightWithSpacing();
   float spacing_x = ImGui::GetStyle().ItemSpacing.x;
   float spacing_y = ImGui::GetStyle().ItemSpacing.y;
@@ -519,10 +519,10 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   std::string filter_text = FilterSummary(entry.filter);
   emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "Filter", true);
 
-  // Row 4: Proportion — reuse SliderWithInput for [slider][input] "prop." layout
+  // Row 4: Weight — reuse SliderWithInput for [slider][input] layout
   ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + row_h * 3.0f));
   char prop_label[32];
-  snprintf(prop_label, sizeof(prop_label), "prop.##prop_%d_%d", layer_idx, entry_idx);
+  snprintf(prop_label, sizeof(prop_label), "Weight##prop_%d_%d", layer_idx, entry_idx);
   if (SliderWithInput(prop_label, &entry.proportion, 0.0f, 100.0f, "%.1f")) {
     state.MarkDirty();
   }
