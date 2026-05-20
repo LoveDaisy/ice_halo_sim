@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779272421161,
+  "lastUpdate": 1779272423703,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -7519,6 +7519,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 65.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dec91f357ae70588ef872acc48f9e3268e0d21aa",
+          "message": "Merge pull request #101 from LoveDaisy/fix/capi_shared_lib\n\nfix(gui-shared-lib): expose XyzToSrgbUint8 via C API; restore GUI/core boundary",
+          "timestamp": "2026-05-20T18:14:57+08:00",
+          "tree_id": "5f0da1e0c5f0e2ce6ff584f3de125f66f308436c",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/dec91f357ae70588ef872acc48f9e3268e0d21aa"
+        },
+        "date": 1779272422909,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 111,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 67.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 68.6,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 64.7,
             "unit": "%"
           }
         ]
