@@ -542,7 +542,7 @@ std::unique_ptr<FilterSpec> MakeDirectionSpec(float lon_deg, float lat_deg, floa
                                               FilterConfig::Action action = FilterConfig::kFilterIn) {
   FilterConfig cfg{};
   cfg.id_ = 1;
-  cfg.symmetry_ = FilterConfig::kSymNone;
+  cfg.symmetry_ = FilterConfig::kSymNone;  // DirectionSpec checks direction only; symmetry is irrelevant
   cfg.action_ = action;
   DirectionFilterParam dp{};
   dp.lon_ = lon_deg;
