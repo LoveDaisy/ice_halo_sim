@@ -14,7 +14,7 @@
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
-#include "core/filter.hpp"
+#include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/projection.hpp"
 #include "core/raypath.hpp"
@@ -333,17 +333,16 @@ RenderConsumer::RenderConsumer(RenderConfig config)
   rot_.Chain({ ax_z, (-90.0f + config_.view_.ro_) * math::kDegreeToRad })
       .Chain({ ax_y, (90.0f - config_.view_.el_) * math::kDegreeToRad })
       .Chain({ ax_z, config_.view_.az_ * math::kDegreeToRad });
-
-  for (const auto& f : config_.ms_filter_) {
-    filters_.emplace_back(Filter::Create(f));
-  }
 }
 
 
-bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& filters,
-               const std::vector<FilterConfig>& filter_configs, const std::vector<Crystal>& crystals,
-               const std::vector<AxisDistribution>& axis_dists) {
-  if (filters.empty()) {
+// specs_table[fi][crystal_idx] holds canonical-form FilterSpec keyed by (filter
+// stage, crystal index). When n_crystals == 0 the inner vectors stay empty;
+// FilterRay's bound-check then rejects every ray (defensive — not reachable on
+// the normal render path because outgoing rays always carry a valid crystal).
+bool FilterRay(const RayBuffer& rays, size_t i,
+               const std::vector<std::vector<std::unique_ptr<FilterSpec>>>& specs_table) {
+  if (specs_table.empty()) {
     return true;
   }
 
@@ -351,8 +350,7 @@ bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& f
   bool filter_checked = true;
   size_t curr_idx = i;
   size_t root_idx = r.root_ray_idx_;
-  size_t fi = filters.size();
-  for (auto fit = filters.rbegin(); fit != filters.rend(); /* increament see below */) {
+  for (auto fit = specs_table.rbegin(); fit != specs_table.rend(); /* increament see below */) {
     if (curr_idx != kInvalidId) {
       root_idx = rays[curr_idx].root_ray_idx_;
     } else {
@@ -360,11 +358,12 @@ bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& f
       break;
     }
 
-    --fi;
-    const AxisDistribution& axis_dist =
-        static_cast<size_t>(r.crystal_idx_) < axis_dists.size() ? axis_dists[r.crystal_idx_] : AxisDistribution{};
-    (*fit)->InitCrystalSymmetry(crystals.at(r.crystal_idx_), filter_configs[fi].symmetry_, axis_dist);
-    if (!(*fit)->Check(rays[curr_idx])) {
+    const auto crystal_idx = static_cast<size_t>(r.crystal_idx_);
+    if (crystal_idx >= fit->size()) {
+      filter_checked = false;
+      break;
+    }
+    if (!(*fit)[crystal_idx]->Check(rays[curr_idx])) {
       filter_checked = false;
       break;
     }
@@ -379,7 +378,6 @@ bool FilterRay(const RayBuffer& rays, size_t i, const std::vector<FilterPtrU>& f
 
 void RenderConsumer::Consume(const SimData& data) {
   auto t0 = std::chrono::steady_clock::now();
-  const auto& crystals = data.crystals_;
 
   // Resize pre-allocated buffers if needed (grow-only).
   // Use outgoing count for capacity — it's the upper bound for filtered rays.
@@ -391,6 +389,31 @@ void RenderConsumer::Consume(const SimData& data) {
     w_buf_ = std::make_unique<float[]>(buf_capacity_);
     xy_buf_ = std::make_unique<int[]>(buf_capacity_ * 2);
     overlap_w_buf_ = std::make_unique<float[]>(buf_capacity_);
+  }
+
+  // Build per-(fi, crystal_idx) FilterSpec table once per Consume call.
+  // Per-Consume rebuild is intentional: crystals come from SimData and may differ
+  // across calls (non-deterministic scenario); deterministic scenario has small
+  // n_crystals (1-3), making per-Consume rebuild negligible.
+  //
+  // SimData invariant (sim_data.hpp:55): crystal_axis_dists_ is parallel to crystals_,
+  // so axis_dists[ci] is always defined for ci < n_crystals.
+  //
+  // n_crystals == 0 path: outer vector stays sized to n_filters with empty inner
+  // vectors; FilterRay's crystal_idx bound-check then rejects every ray. This is
+  // a defensive bottom — not reachable on the normal render path because outgoing
+  // rays always carry a valid crystal_idx.
+  const size_t n_filters = config_.ms_filter_.size();
+  const size_t n_crystals = data.crystals_.size();
+  std::vector<std::vector<std::unique_ptr<FilterSpec>>> specs_table(n_filters);
+  if (n_filters > 0 && n_crystals > 0) {
+    for (size_t fi = 0; fi < n_filters; fi++) {
+      specs_table[fi].reserve(n_crystals);
+      for (size_t ci = 0; ci < n_crystals; ci++) {
+        specs_table[fi].emplace_back(
+            FilterSpec::Create(config_.ms_filter_[fi], data.crystals_[ci], data.crystal_axis_dists_[ci]));
+      }
+    }
   }
 
   // Lens setup: moved before filter+copy so the unfiltered pass (path B) can reuse params.
@@ -457,7 +480,7 @@ void RenderConsumer::Consume(const SimData& data) {
   // All outgoing rays are projected before the filter+copy step to build the unfiltered EV anchor.
   // F17: data.outgoing_d_/outgoing_w_ are always filled by Simulator alongside outgoing_indices_.
   // F14: buf_capacity_ >= outgoing_count, so overlap_w_buf_ memcpy below is safe.
-  if (!filters_.empty() && !data.outgoing_d_.empty()) {
+  if (!config_.ms_filter_.empty() && !data.outgoing_d_.empty()) {
     lens_proj(proj_param, data.outgoing_d_.data(), xy_buf_.get(), outgoing_count);
 
     // Save original outgoing weights for unfiltered overlap pass 2.
@@ -519,7 +542,7 @@ void RenderConsumer::Consume(const SimData& data) {
   assert(!data.outgoing_indices_.empty() || data.rays_.Empty());
   size_t filtered_ray_num = 0;
 
-  if (filters_.empty() && !data.outgoing_d_.empty()) {
+  if (config_.ms_filter_.empty() && !data.outgoing_d_.empty()) {
     // Fast path: no filter — bulk memcpy from pre-packed contiguous arrays.
     // Avoids random access into 112-byte RaySeg structs (cache utilization 14% → 100%).
     filtered_ray_num = outgoing_count;
@@ -529,7 +552,7 @@ void RenderConsumer::Consume(const SimData& data) {
     // Slow path: filter present — must call FilterRay per ray (chain walk through rays buffer).
     for (size_t i : data.outgoing_indices_) {
       const auto& r = data.rays_[i];
-      if (!FilterRay(data.rays_, i, filters_, config_.ms_filter_, crystals, data.crystal_axis_dists_)) {
+      if (!FilterRay(data.rays_, i, specs_table)) {
         continue;
       }
       std::memcpy(d_buf_.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
@@ -567,7 +590,7 @@ void RenderConsumer::Consume(const SimData& data) {
 
   // === Path A: no-filter special case — unfiltered == filtered ===
   // F15: SpectrumToXyz is read-only on w_buf_/xy_buf_; calling twice with same compacted input is safe.
-  if (filters_.empty()) {
+  if (config_.ms_filter_.empty()) {
     SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), unfiltered_internal_xyz_.get(), final_ray_num);
     unfiltered_total_intensity_ += landed_weight;
   }
@@ -611,7 +634,7 @@ void RenderConsumer::Consume(const SimData& data) {
       // Pass 2 does NOT update total_intensity_ — preserves normalization.
       SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), overlap_count);
       // Path A: unfiltered == filtered for overlap pass 2 as well.
-      if (filters_.empty()) {
+      if (config_.ms_filter_.empty()) {
         SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), unfiltered_internal_xyz_.get(), overlap_count);
       }
     }
@@ -759,7 +782,7 @@ void RenderConsumer::Reset() {
 
 void RenderConsumer::ResetWith(const RenderConfig& new_config) {
   // NeedsRebuild guarantees layout fields (resolution, lens, view, visible, filter) are identical,
-  // so assigning the full config is safe — layout-derived state (rot_, filters_, buffers) stays valid.
+  // so assigning the full config is safe — layout-derived state (rot_, buffers) stays valid.
   config_ = new_config;
   Reset();
 }

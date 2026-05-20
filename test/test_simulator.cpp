@@ -9,7 +9,7 @@
 #include "config/filter_config.hpp"
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
-#include "core/filter.hpp"
+#include "core/filter_spec.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
@@ -370,24 +370,16 @@ TEST(PartitionCrystalRayNum, ZeroRayNumPreservesCarry) {
 // the consumer-side query filter can see the unfiltered ray set. See AC-2.
 // ============================================================================
 
-// Match the `kFilterIn` action with InternalCheck returning false → Check() == false,
-// emulating a "filter-fail" ray without depending on RaypathFilter symmetry setup.
-class AlwaysRejectFilter : public Filter {
+// kFilterIn (default) + Match() returning false → Check() == false. Emulates a
+// "filter-fail" ray without depending on FilterSpec orbit setup.
+class AlwaysRejectSpec : public FilterSpec {
  public:
-  AlwaysRejectFilter() {
-    action_ = FilterConfig::kFilterIn;  // Check() returns InternalCheck()
-  }
-
- protected:
-  bool InternalCheck(const RaySeg& /*ray*/) const override { return false; }
+  bool Match(const RaySeg& /*ray*/) const override { return false; }
 };
 
-class AlwaysAcceptFilter : public Filter {
+class AlwaysAcceptSpec : public FilterSpec {
  public:
-  AlwaysAcceptFilter() { action_ = FilterConfig::kFilterIn; }
-
- protected:
-  bool InternalCheck(const RaySeg& /*ray*/) const override { return true; }
+  bool Match(const RaySeg& /*ray*/) const override { return true; }
 };
 
 namespace {
@@ -411,7 +403,7 @@ RaySeg MakeOutgoingCandidate() {
 
 TEST(CollectDataFilterDispatch, FilterFailBecomesOutgoing) {
   RandomNumberGenerator rng(42);
-  AlwaysRejectFilter filter;
+  AlwaysRejectSpec filter;
   MsInfo ms_info;
   // prob_=0: rng < prob is always false → short-circuit, filter->Check never called.
   // This covers the prob-fail → kOutgoing path; see FilterFailWithNonZeroProbEmitsOutgoing
@@ -439,7 +431,7 @@ TEST(CollectDataFilterDispatch, FilterFailWithNonZeroProbEmitsOutgoing) {
   // prob_=1.0f: rng < prob is always true → filter->Check IS called and returns false.
   // This is the direct AC-2 coverage: filter-fail ray must emit as IsOutgoing().
   RandomNumberGenerator rng(42);
-  AlwaysRejectFilter filter;
+  AlwaysRejectSpec filter;
   MsInfo ms_info;
   ms_info.prob_ = 1.0f;
 
@@ -461,7 +453,7 @@ TEST(CollectDataFilterDispatch, FilterFailWithNonZeroProbEmitsOutgoing) {
 
 TEST(CollectDataFilterDispatch, FilterPassWithProbContinues) {
   RandomNumberGenerator rng(42);
-  AlwaysAcceptFilter filter;
+  AlwaysAcceptSpec filter;
   MsInfo ms_info;
   ms_info.prob_ = 1.0f;  // always branch when filter passes
 
@@ -483,7 +475,7 @@ TEST(CollectDataFilterDispatch, FilterPassWithProbContinues) {
 
 TEST(CollectDataFilterDispatch, FilterPassNoProbEmitsOutgoing) {
   RandomNumberGenerator rng(42);
-  AlwaysAcceptFilter filter;
+  AlwaysAcceptSpec filter;
   MsInfo ms_info;
   ms_info.prob_ = 0.0f;  // no branching → outgoing
 

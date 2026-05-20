@@ -15,7 +15,7 @@
 #include "config/sim_data.hpp"
 #include "core/buffer.hpp"
 #include "core/crystal.hpp"
-#include "core/filter.hpp"
+#include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
 #include "util/illuminant.hpp"
@@ -403,8 +403,8 @@ void FillRayOtherInfo(size_t curr_ray_num, size_t i,                           /
 }
 
 
-void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter* filter,  // input
-                 RayBuffer* buffer_data, RayBuffer* init_data) {                           // output
+void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
+                 RayBuffer* buffer_data, RayBuffer* init_data) {                             // output
   for (auto& r : buffer_data[1]) {
     // Default: not continuing. The branch-gate below may override for outgoing
     // candidates that pass filter+prob. TIR / Normal / unselected-Outgoing all
@@ -419,11 +419,11 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
 
-      // Note: rng.GetUniform() is consumed before filter->Check(), so the RNG
+      // Note: rng.GetUniform() is consumed before spec->Check(), so the RNG
       // sequence (and thus fixed-seed output) differs from the pre-uplift evaluation
       // order (which tested filter first). Fixed-seed determinism is intentionally
       // not preserved across this change.
-      if (rng.GetUniform() < ms_info.prob_ && filter->Check(r)) {
+      if (rng.GetUniform() < ms_info.prob_ && spec->Check(r)) {
         // 1.1 Branch gate: filter+prob both pass → continue to next ms scatter level.
         r.is_continue_ = true;
       }
@@ -586,7 +586,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
     size_t init_ray_offset = 0;
     for (size_t ci = 0; ci < ms_crystal_cnt && !stop_; ci++) {
       const auto& s = m.setting_[ci];
-      auto filter = Filter::Create(s.filter_);
+      std::unique_ptr<FilterSpec> spec;
 
       bool deterministic = IsDeterministic(s.crystal_.param_);
 
@@ -604,7 +604,6 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
 
       // For deterministic params, create/copy crystal once per ci iteration.
       size_t ci_crystal_id = kInfSize;
-      bool symmetry_initialized = false;
 
       for (size_t cn = 0; cn < crystal_ray_num[ci] && !stop_; cn += kSmallBatchRayNum) {  // for a same crystal
         size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - cn);
@@ -631,11 +630,10 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           }
         }
         const auto& curr_crystal = all_crystals[curr_crystal_id];
-        // Skip redundant InitCrystalSymmetry for deterministic crystals: crystal is invariant
-        // across cn batches (same ci_crystal_id), so symmetry only needs initialization once.
-        if (!symmetry_initialized || !deterministic) {
-          filter->InitCrystalSymmetry(curr_crystal, s.filter_.symmetry_, s.crystal_.axis_);
-          symmetry_initialized = true;
+        // Reuse spec across cn batches when crystal is invariant (deterministic).
+        // Random crystals: rebuild per cn batch since each batch may produce a new crystal.
+        if (!spec || !deterministic) {
+          spec = FilterSpec::Create(s.filter_, curr_crystal, s.crystal_.axis_);
         }
 
         // 1. Initialize data
@@ -662,7 +660,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
                            buffer_data);                             // output
 
           // 2.3 Collect data. And set ray properties: state
-          CollectData(rng_, m, filter.get(),    // input
+          CollectData(rng_, m, spec.get(),      // input
                       buffer_data, init_data);  // output
 
           // 2.4 Copy to all_data + collect outgoing indices

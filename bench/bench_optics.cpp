@@ -43,7 +43,7 @@ struct OpticsFixture {
       r.p_[1] = face_vtx[fid * 9 + 1];
       r.p_[2] = face_vtx[fid * 9 + 2];
       r.w_ = 1.0f;
-      r.fid_ = fid;
+      r.to_face_ = static_cast<IdType>(fid);
     }
   }
 };
@@ -57,13 +57,13 @@ static void BM_HitSurface(benchmark::State& state) {
 
   float_bf_t d_in{ fix.buf_in[0].d_, sizeof(RaySeg) };
   float_bf_t w_in{ &fix.buf_in[0].w_, sizeof(RaySeg) };
-  int_bf_t fid_in{ &fix.buf_in[0].fid_, sizeof(RaySeg) };
+  id_bf_t to_face_in{ &fix.buf_in[0].to_face_, sizeof(RaySeg) };
   float_bf_t d_out{ fix.buf_out[0].d_, sizeof(RaySeg) };
   float_bf_t w_out{ &fix.buf_out[0].w_, sizeof(RaySeg) };
 
   for (auto _ : state) {
     HitSurface(fix.crystal, fix.refractive_index, n,  //
-               d_in, w_in, fid_in,                    //
+               d_in, w_in, to_face_in,                //
                d_out, w_out);
   }
   state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n));
@@ -79,11 +79,11 @@ static void BM_Propagate(benchmark::State& state) {
   {
     float_bf_t d_in{ fix.buf_in[0].d_, sizeof(RaySeg) };
     float_bf_t w_in{ &fix.buf_in[0].w_, sizeof(RaySeg) };
-    int_bf_t fid_in{ &fix.buf_in[0].fid_, sizeof(RaySeg) };
+    id_bf_t to_face_in{ &fix.buf_in[0].to_face_, sizeof(RaySeg) };
     float_bf_t d_out{ fix.buf_out[0].d_, sizeof(RaySeg) };
     float_bf_t w_out{ &fix.buf_out[0].w_, sizeof(RaySeg) };
     HitSurface(fix.crystal, fix.refractive_index, n,  //
-               d_in, w_in, fid_in,                    //
+               d_in, w_in, to_face_in,                //
                d_out, w_out);
   }
 
@@ -95,12 +95,13 @@ static void BM_Propagate(benchmark::State& state) {
   RayBuffer prop_out(n * 2);
   prop_out.size_ = n * 2;
   float_bf_t prop_p_out{ prop_out[0].p_, sizeof(RaySeg) };
-  int_bf_t prop_fid_out{ &prop_out[0].fid_, sizeof(RaySeg) };
+  id_bf_t prop_to_face_out{ &prop_out[0].to_face_, sizeof(RaySeg) };
+  id_bf_t prop_from_face_in{ &fix.buf_in[0].to_face_, sizeof(RaySeg) };
 
   for (auto _ : state) {
     Propagate(fix.crystal, n * 2, 2,            //
               prop_d_in, prop_p_in, prop_w_in,  //
-              prop_p_out, prop_fid_out);
+              prop_from_face_in, prop_p_out, prop_to_face_out);
   }
   state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n * 2));
 }

@@ -15,7 +15,7 @@
 
 namespace lumice {
 
-class Filter;
+class FilterSpec;
 
 template <class T>
 class Queue;
@@ -91,8 +91,8 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
 // ray set.
 //
 // Internal: exposed for unit testing; not part of the public C API.
-void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter* filter,  // input
-                 RayBuffer* buffer_data, RayBuffer* init_data);                            // output
+void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
+                 RayBuffer* buffer_data, RayBuffer* init_data);                              // output
 
 // Build the local-to-world rotation matrix for a crystal sample.
 // Implements the chain  R = Rz(az - pi) * Ry(-zenith) * Rz(roll),

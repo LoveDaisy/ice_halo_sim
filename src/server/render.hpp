@@ -4,7 +4,6 @@
 #include <memory>
 
 #include "config/render_config.hpp"
-#include "core/filter.hpp"
 #include "server/consumer.hpp"
 #include "util/logger.hpp"
 
@@ -29,7 +28,6 @@ class RenderConsumer : public IConsume {
 
  private:
   RenderConfig config_;
-  std::vector<FilterPtrU> filters_;
   Rotation rot_;  // camera pose rotation
   float short_pix_ = 0;
   float total_intensity_ = 0;

@@ -392,6 +392,26 @@ Crystal& Crystal::Rotate(const Rotation& r) {
   return *this;
 }
 
+std::vector<IdType> Crystal::PCanonicalShift(const std::vector<IdType>& rp) const {
+  std::vector<IdType> result = rp;
+  IdType first_pri = kInvalidId;
+  for (auto& x : result) {
+    if (x < 3) {
+      continue;
+    }
+    IdType pyr = x / 10;
+    IdType pri = x % 10;
+    if (first_pri == kInvalidId) {
+      first_pri = pri;
+    }
+    pri += fn_period_ - first_pri;
+    pri %= fn_period_;
+    pri += 3;
+    x = pyr * 10 + pri;
+  }
+  return result;
+}
+
 std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
   return ReduceRaypath(rp, symmetry, 0, false);
 }
@@ -405,21 +425,7 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
 
   std::vector<IdType> reduced_rp = rp;
   if (symmetry & FilterConfig::kSymP) {
-    IdType first_pri = kInvalidId;
-    for (auto& x : reduced_rp) {
-      if (x < 3) {
-        continue;
-      }
-      IdType pyr = x / 10;
-      IdType pri = x % 10;
-      if (first_pri == kInvalidId) {
-        first_pri = pri;
-      }
-      pri += fn_period_ - first_pri;
-      pri %= fn_period_;
-      pri += 3;
-      x = pyr * 10 + pri;
-    }
+    reduced_rp = PCanonicalShift(reduced_rp);
   }
 
   if ((symmetry & FilterConfig::kSymD) && d_applicable) {
@@ -427,13 +433,19 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
     // 3
     std::vector<IdType> rp_reflected = reduced_rp;
     for (auto& x : rp_reflected) {
-      if (x < 3 || (x >= 13 && x <= 28)) {
-        continue;  // skip basal and pyramid faces
+      if (x < 3) {
+        continue;  // skip basal faces; pyramid faces use same pyr/pri decomposition
       }
       IdType pyr = x / 10;
       IdType pri = x % 10 - 3;
       pri = (sigma_a - pri + fn_period_) % fn_period_;
       x = pyr * 10 + pri + 3;
+    }
+    // When kSymP is also enabled, the D-image may no longer be P-canonical
+    // (first pri shifted by sigma_a); re-canonicalize before lex comparison
+    // so same orbit always reduces to the same representative.
+    if (symmetry & FilterConfig::kSymP) {
+      rp_reflected = PCanonicalShift(rp_reflected);
     }
     if (rp_reflected < reduced_rp) {
       reduced_rp = rp_reflected;
@@ -509,8 +521,8 @@ std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType
       auto curr_rp = result[i];
       bool changed = false;
       for (auto& x : curr_rp) {
-        if (x < 3 || (x >= 13 && x <= 28)) {
-          continue;  // skip basal and pyramid faces
+        if (x < 3) {
+          continue;  // skip basal faces; pyramid faces use same pyr/pri decomposition
         }
         IdType pyr = x / 10;
         IdType pri = x % 10 - 3;

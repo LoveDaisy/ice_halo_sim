@@ -10,7 +10,6 @@
 #include "config/raypath_validation.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
-#include "core/filter.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 
@@ -97,87 +96,6 @@ TEST_F(FilterTest, SymmetryRoundTrip_None) {
 }
 
 
-// RaypathFilter: no symmetry — exact match only
-TEST_F(FilterTest, RaypathFilter_NoSymmetry) {
-  FilterConfig config{};
-  config.id_ = 1;
-  config.action_ = FilterConfig::kFilterIn;
-  config.symmetry_ = FilterConfig::kSymNone;
-  RaypathFilterParam p{};
-  p.raypath_ = { 3, 5 };
-  config.param_ = SimpleFilterParam{ p };
-
-  auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(crystal_, config.symmetry_, AxisDistribution{});
-
-  EXPECT_TRUE(filter->Check(MakeRay({ 3, 5 })));
-  EXPECT_FALSE(filter->Check(MakeRay({ 4, 6 })));
-  EXPECT_FALSE(filter->Check(MakeRay({ 3, 7 })));
-  EXPECT_FALSE(filter->Check(MakeRay({ 3, 1, 5 })));
-  EXPECT_FALSE(filter->Check(MakeRay({ 3 })));
-  EXPECT_FALSE(filter->Check(MakeRay({})));
-}
-
-
-// RaypathFilter: P symmetry — 6 rotational variants
-TEST_F(FilterTest, RaypathFilter_PSymmetry) {
-  FilterConfig config{};
-  config.id_ = 1;
-  config.action_ = FilterConfig::kFilterIn;
-  config.symmetry_ = FilterConfig::kSymP;
-  RaypathFilterParam p{};
-  p.raypath_ = { 3, 5 };
-  config.param_ = SimpleFilterParam{ p };
-
-  auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(crystal_, config.symmetry_, AxisDistribution{});
-
-  EXPECT_TRUE(filter->Check(MakeRay({ 3, 5 })));
-  EXPECT_TRUE(filter->Check(MakeRay({ 4, 6 })));
-  EXPECT_TRUE(filter->Check(MakeRay({ 5, 7 })));
-  EXPECT_TRUE(filter->Check(MakeRay({ 6, 8 })));
-  EXPECT_TRUE(filter->Check(MakeRay({ 7, 3 })));
-  EXPECT_TRUE(filter->Check(MakeRay({ 8, 4 })));
-
-  EXPECT_FALSE(filter->Check(MakeRay({ 3, 7 })));  // D-mirror, no D sym
-  EXPECT_FALSE(filter->Check(MakeRay({ 3, 4 })));
-}
-
-
-// RaypathFilter: PBD symmetry — 12 variants
-TEST_F(FilterTest, RaypathFilter_PBDSymmetry) {
-  FilterConfig config{};
-  config.id_ = 1;
-  config.action_ = FilterConfig::kFilterIn;
-  config.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymB | FilterConfig::kSymD;
-  RaypathFilterParam p{};
-  p.raypath_ = { 3, 5 };
-  config.param_ = SimpleFilterParam{ p };
-
-  auto filter = Filter::Create(config);
-  // D symmetry requires az=uniform-360 and roll at multiple of 30°.
-  filter->InitCrystalSymmetry(crystal_, config.symmetry_, DEnablingAxis());
-
-  // Count accepted 2-element prism paths
-  int accepted = 0;
-  for (IdType a = 3; a <= 8; a++) {
-    for (IdType b = 3; b <= 8; b++) {
-      if (a == b) {
-        continue;
-      }
-      if (filter->Check(MakeRay({ a, b }))) {
-        accepted++;
-      }
-    }
-  }
-  EXPECT_EQ(accepted, 12);
-
-  // Non-matching paths
-  EXPECT_FALSE(filter->Check(MakeRay({ 3, 1 })));
-  EXPECT_FALSE(filter->Check(MakeRay({ 3, 5, 3 })));
-}
-
-
 // ExpandRaypath: verify unique hashes (D enabled via sigma_a=0, d_applicable=true)
 TEST_F(FilterTest, ExpandRaypath_UniqueHashes) {
   auto expanded =
@@ -209,142 +127,6 @@ TEST_F(FilterTest, HashConsistency) {
     rec2 << x;
   }
   EXPECT_EQ(h(vec2), h(rec2));
-}
-
-
-// DirectionFilter: basic direction matching
-TEST_F(FilterTest, DirectionFilter_BasicMatch) {
-  // Target direction: azimuth=0, elevation=0 → d_ = (1, 0, 0), radii=10°
-  DirectionFilterParam dp{};
-  dp.lon_ = 0.0f;
-  dp.lat_ = 0.0f;
-  dp.radii_ = 10.0f;
-
-  FilterConfig config{};
-  config.id_ = 1;
-  config.action_ = FilterConfig::kFilterIn;
-  config.param_ = SimpleFilterParam{ dp };
-
-  auto filter = Filter::Create(config);
-
-  // Ray along (1, 0, 0) — exactly matching
-  RaySeg r1{};
-  r1.d_[0] = 1.0f;
-  r1.d_[1] = 0.0f;
-  r1.d_[2] = 0.0f;
-  EXPECT_TRUE(filter->Check(r1));
-
-  // Ray along (0, 1, 0) — 90° away, should fail
-  RaySeg r2{};
-  r2.d_[0] = 0.0f;
-  r2.d_[1] = 1.0f;
-  r2.d_[2] = 0.0f;
-  EXPECT_FALSE(filter->Check(r2));
-}
-
-
-// DirectionFilter: state-agnostic by construction. Post task-state-derive,
-// `state_` no longer exists — Filter::Check reads only d_/rp_/crystal_config_id_,
-// so the pre-uplift "no state guard" invariant is enforced structurally rather
-// than per-case. Test retained as a smoke check that the filter accepts any
-// matching direction regardless of bookkeeping fields.
-TEST_F(FilterTest, DirectionFilter_NoStateGuard) {
-  DirectionFilterParam dp{};
-  dp.lon_ = 0.0f;
-  dp.lat_ = 0.0f;
-  dp.radii_ = 10.0f;
-
-  FilterConfig config{};
-  config.id_ = 1;
-  config.action_ = FilterConfig::kFilterIn;
-  config.param_ = SimpleFilterParam{ dp };
-
-  auto filter = Filter::Create(config);
-
-  RaySeg r{};
-  r.d_[0] = 1.0f;
-  r.d_[1] = 0.0f;
-  r.d_[2] = 0.0f;
-
-  // Toggle is_continue_ and w_ sign to exercise both branch-gate and TIR cases.
-  r.is_continue_ = false;
-  r.w_ = 1.0f;
-  EXPECT_TRUE(filter->Check(r));
-
-  r.is_continue_ = true;
-  EXPECT_TRUE(filter->Check(r));
-
-  r.w_ = -1.0f;  // TIR
-  EXPECT_TRUE(filter->Check(r));
-}
-
-
-// DirectionFilter: kFilterOut mode correctly excludes matching directions
-TEST_F(FilterTest, DirectionFilter_FilterOut) {
-  DirectionFilterParam dp{};
-  dp.lon_ = 0.0f;
-  dp.lat_ = 0.0f;
-  dp.radii_ = 10.0f;
-
-  FilterConfig config{};
-  config.id_ = 1;
-  config.action_ = FilterConfig::kFilterOut;
-  config.param_ = SimpleFilterParam{ dp };
-
-  auto filter = Filter::Create(config);
-
-  // Matching direction → should be excluded (Check returns false)
-  RaySeg r1{};
-  r1.d_[0] = 1.0f;
-  r1.d_[1] = 0.0f;
-  r1.d_[2] = 0.0f;
-  EXPECT_FALSE(filter->Check(r1));
-
-  // Non-matching direction → should pass (Check returns true)
-  RaySeg r2{};
-  r2.d_[0] = 0.0f;
-  r2.d_[1] = 1.0f;
-  r2.d_[2] = 0.0f;
-  EXPECT_TRUE(filter->Check(r2));
-
-  // kFilterOut + is_continue_ ray (branch-gate path) + matching direction →
-  // still excluded (filter is state-agnostic; structural invariant).
-  RaySeg r3{};
-  r3.d_[0] = 1.0f;
-  r3.d_[1] = 0.0f;
-  r3.d_[2] = 0.0f;
-  r3.is_continue_ = true;
-  EXPECT_FALSE(filter->Check(r3));
-}
-
-
-// ComplexFilter: InitCrystalSymmetry propagation
-TEST_F(FilterTest, ComplexFilter_Propagation) {
-  // Create a ComplexFilter with one OR group containing a single RaypathFilter
-  RaypathFilterParam rp_param{};
-  rp_param.raypath_ = { 3, 5 };
-
-  ComplexFilterParam cp{};
-  std::vector<std::pair<IdType, SimpleFilterParam>> and_group;
-  and_group.emplace_back(1, SimpleFilterParam{ rp_param });
-  cp.filters_.push_back(and_group);
-
-  FilterConfig config{};
-  config.id_ = 10;
-  config.action_ = FilterConfig::kFilterIn;
-  config.symmetry_ = FilterConfig::kSymP;
-  config.param_ = cp;
-
-  auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(crystal_, config.symmetry_, AxisDistribution{});
-
-  // Should match {3,5} and P-symmetric variants
-  EXPECT_TRUE(filter->Check(MakeRay({ 3, 5 })));
-  EXPECT_TRUE(filter->Check(MakeRay({ 4, 6 })));
-
-  // Should NOT match non-P variants or different paths
-  EXPECT_FALSE(filter->Check(MakeRay({ 3, 7 })));
-  EXPECT_FALSE(filter->Check(MakeRay({ 3, 1 })));
 }
 
 
@@ -722,200 +504,6 @@ TEST(ValidateFaceNumberTextTest, FaceOutsideAnyKindSet_IsInvalid) {
 }
 
 
-// ---- D symmetry: σ-by-roll-mean tests ----
-
-static RaySeg MakeFilterTestRay(const std::vector<IdType>& rp_vec) {
-  RaySeg r{};
-  r.rp_.Clear();
-  for (auto fn : rp_vec) {
-    r.rp_ << fn;
-  }
-  r.from_face_ = kInvalidId;
-  r.to_face_ = kInvalidId;
-  r.w_ = 1.0f;
-  return r;
-}
-
-static AxisDistribution MakeAzUniformRoll(float roll_mean) {
-  AxisDistribution d{};
-  d.azimuth_dist.type = DistributionType::kUniform;
-  d.azimuth_dist.std = 360.0f;
-  d.azimuth_dist.mean = 0.0f;
-  d.latitude_dist.type = DistributionType::kNoRandom;
-  d.latitude_dist.mean = 90.0f;
-  d.roll_dist.type = DistributionType::kNoRandom;
-  d.roll_dist.mean = roll_mean;
-  return d;
-}
-
-// For roll=0 (sigma_a=0): σv — face pair {3,6}, {4,8}, {5,7} are equivalent.
-// So {3,5} should match {3,7} after P+D (σv: 5→7 in the D reflection).
-TEST(SymmetryD_SigmaByRoll, Roll0_Sigv_PD_Variants) {
-  FilterConfig config{};
-  config.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
-  RaypathFilterParam p{};
-  p.raypath_ = { 3, 5 };
-  config.param_ = SimpleFilterParam{ p };
-
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  AxisDistribution axis = MakeAzUniformRoll(0.0f);  // sigma_a=0
-
-  auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(crystal, config.symmetry_, axis);
-
-  // P gives 6 rotations of {3,5}: {3,5},{4,6},{5,7},{6,8},{7,3},{8,4}
-  // D(σv,a=0) on {3,5}: σv reflects 5→7, giving {3,7}
-  // Total unique paths = 12
-  int accepted = 0;
-  for (IdType a = 3; a <= 8; a++) {
-    for (IdType b = 3; b <= 8; b++) {
-      if (a == b) {
-        continue;
-      }
-      if (filter->Check(MakeFilterTestRay({ a, b }))) {
-        accepted++;
-      }
-    }
-  }
-  EXPECT_EQ(accepted, 12);
-}
-
-// roll=30 (sigma_a=5): σd — {3,8},{4,3},{5,4},{6,5},{7,6},{8,7} are equivalent to {3,5}.
-TEST(SymmetryD_SigmaByRoll, Roll30_Sigd_PD_Variants) {
-  FilterConfig config{};
-  config.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
-  RaypathFilterParam p{};
-  p.raypath_ = { 3, 5 };
-  config.param_ = SimpleFilterParam{ p };
-
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  AxisDistribution axis = MakeAzUniformRoll(30.0f);  // sigma_a=5
-
-  auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(crystal, config.symmetry_, axis);
-
-  int accepted = 0;
-  for (IdType a = 3; a <= 8; a++) {
-    for (IdType b = 3; b <= 8; b++) {
-      if (a == b) {
-        continue;
-      }
-      if (filter->Check(MakeFilterTestRay({ a, b }))) {
-        accepted++;
-      }
-    }
-  }
-  EXPECT_EQ(accepted, 12);
-}
-
-// Helper: count prism-only paths accepted by a P+D filter with given roll_mean
-static int CountPDAccepted(float roll_mean_deg) {
-  FilterConfig config{};
-  config.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
-  RaypathFilterParam p{};
-  p.raypath_ = { 3, 5 };
-  config.param_ = SimpleFilterParam{ p };
-
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  AxisDistribution axis = MakeAzUniformRoll(roll_mean_deg);
-
-  auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(crystal, config.symmetry_, axis);
-
-  int accepted = 0;
-  for (IdType a = 3; a <= 8; a++) {
-    for (IdType b = 3; b <= 8; b++) {
-      if (a == b) {
-        continue;
-      }
-      if (filter->Check(MakeFilterTestRay({ a, b }))) {
-        accepted++;
-      }
-    }
-  }
-  return accepted;
-}
-
-// roll=60 (sigma_a=4): P+D should produce 12 unique paths
-TEST(SymmetryD_SigmaByRoll, Roll60_PD_Variants) {
-  EXPECT_EQ(CountPDAccepted(60.0f), 12);
-}
-
-// roll=90 (sigma_a=3): P+D should produce 12 unique paths
-TEST(SymmetryD_SigmaByRoll, Roll90_PD_Variants) {
-  EXPECT_EQ(CountPDAccepted(90.0f), 12);
-}
-
-// roll=120 (sigma_a=2): P+D should produce 12 unique paths
-TEST(SymmetryD_SigmaByRoll, Roll120_PD_Variants) {
-  EXPECT_EQ(CountPDAccepted(120.0f), 12);
-}
-
-// roll=150 (sigma_a=1): P+D should produce 12 unique paths
-TEST(SymmetryD_SigmaByRoll, Roll150_PD_Variants) {
-  EXPECT_EQ(CountPDAccepted(150.0f), 12);
-}
-
-// D not applicable when az is not uniform-360
-TEST(SymmetryD_SigmaByRoll, AzGaussian_DNotApplicable) {
-  FilterConfig config{};
-  config.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
-  RaypathFilterParam p{};
-  p.raypath_ = { 3, 5 };
-  config.param_ = SimpleFilterParam{ p };
-
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  AxisDistribution axis = MakeAzUniformRoll(0.0f);
-  axis.azimuth_dist.type = DistributionType::kGaussian;
-
-  auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(crystal, config.symmetry_, axis);
-
-  // Only P applies (no D), so only 6 variants
-  int accepted = 0;
-  for (IdType a = 3; a <= 8; a++) {
-    for (IdType b = 3; b <= 8; b++) {
-      if (a == b) {
-        continue;
-      }
-      if (filter->Check(MakeFilterTestRay({ a, b }))) {
-        accepted++;
-      }
-    }
-  }
-  EXPECT_EQ(accepted, 6);
-}
-
-// D not applicable when roll mean is not a multiple of 30
-TEST(SymmetryD_SigmaByRoll, Roll15_DNotApplicable) {
-  FilterConfig config{};
-  config.symmetry_ = FilterConfig::kSymP | FilterConfig::kSymD;
-  RaypathFilterParam p{};
-  p.raypath_ = { 3, 5 };
-  config.param_ = SimpleFilterParam{ p };
-
-  Crystal crystal = Crystal::CreatePrism(1.0f);
-  AxisDistribution axis = MakeAzUniformRoll(15.0f);
-
-  auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(crystal, config.symmetry_, axis);
-
-  // Only P applies (no D), so only 6 variants
-  int accepted = 0;
-  for (IdType a = 3; a <= 8; a++) {
-    for (IdType b = 3; b <= 8; b++) {
-      if (a == b) {
-        continue;
-      }
-      if (filter->Check(MakeFilterTestRay({ a, b }))) {
-        accepted++;
-      }
-    }
-  }
-  EXPECT_EQ(accepted, 6);
-}
-
-
 // ---- B symmetry: pyramid face swap tests ----
 
 // B symmetry: upper pyramid face 13 should expand to lower pyramid face 23
@@ -932,25 +520,6 @@ TEST(SymmetryB_PyramidSwap, UpperPyramid_ExpandsToLower) {
     }
   }
   EXPECT_TRUE(found_lower) << "B expansion should include lower pyramid variant (23)";
-}
-
-// B symmetry via filter: pyramid path {13,5} and {23,5} should be equivalent
-TEST(SymmetryB_PyramidSwap, FilterAcceptsBothUpperAndLower) {
-  FilterConfig config{};
-  config.symmetry_ = FilterConfig::kSymB;
-  RaypathFilterParam p{};
-  p.raypath_ = { 13, 5 };
-  config.param_ = SimpleFilterParam{ p };
-
-  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
-  AxisDistribution axis = MakeAzUniformRoll(0.0f);
-
-  auto filter = Filter::Create(config);
-  filter->InitCrystalSymmetry(pyramid, config.symmetry_, axis);
-
-  EXPECT_TRUE(filter->Check(MakeFilterTestRay({ 13, 5 })));
-  EXPECT_TRUE(filter->Check(MakeFilterTestRay({ 23, 5 })));
-  EXPECT_FALSE(filter->Check(MakeFilterTestRay({ 14, 5 })));
 }
 
 
@@ -975,4 +544,152 @@ TEST(ReduceRaypath4Param, B_OriginalSmaller) {
   Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
   auto result = pyramid.ReduceRaypath({ 13, 5 }, FilterConfig::kSymB, 0, false);
   EXPECT_EQ(result, (std::vector<IdType>{ 13, 5 }));
+}
+
+// ---- ReduceRaypath 4-param pyramid + D coverage ----
+
+// sigma_a=0: face 18 (pri=5) reflects to 14 (pri=1); face 6 is a fixed point (pri=3→3).
+// {14,6} < {18,6} → returns {14,6}. Before fix: bug returned {18,6} (D noop on pyramid).
+TEST(ReduceRaypath4Param, D_Pyramid_SigmaA0_FaceReflected) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto result = pyramid.ReduceRaypath({ 18, 6 }, FilterConfig::kSymD, 0, true);
+  EXPECT_EQ(result, (std::vector<IdType>{ 14, 6 }));
+}
+
+// sigma_a=0 mixed path: upper pyramid 18 → 14; prism 5 → 7; lower pyramid 23 stays (fixed point).
+// Reflected {14,7,23} < {18,5,23} → returns {14,7,23}.
+TEST(ReduceRaypath4Param, D_Pyramid_SigmaA0_MixedPath) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto result = pyramid.ReduceRaypath({ 18, 5, 23 }, FilterConfig::kSymD, 0, true);
+  EXPECT_EQ(result, (std::vector<IdType>{ 14, 7, 23 }));
+}
+
+// sigma_a=0: pyramid faces 13 (pri=0) and 16 (pri=3) are D fixed points → unchanged.
+TEST(ReduceRaypath4Param, D_Pyramid_SigmaA0_FixedPoint) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto result = pyramid.ReduceRaypath({ 13, 16 }, FilterConfig::kSymD, 0, true);
+  EXPECT_EQ(result, (std::vector<IdType>{ 13, 16 }));
+}
+
+// sigma_a=5, fn_period_=6: no fixed points (2*pri ≡ 5 mod 6 has no integer solution).
+// 17 (pyr=1,pri=4) → 1*10 + (5-4+6)%6 + 3 = 14; prism 3 (pri=0) → (5-0+6)%6 + 3 = 8.
+// Reflected {14,8} < {17,3} → returns {14,8}.
+TEST(ReduceRaypath4Param, D_Pyramid_SigmaA5_FaceReflected) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto result = pyramid.ReduceRaypath({ 17, 3 }, FilterConfig::kSymD, 5, true);
+  EXPECT_EQ(result, (std::vector<IdType>{ 14, 8 }));
+}
+
+// ---- ExpandRaypath 4-param pyramid + D coverage ----
+
+// sigma_a=0: D-reflect {14,6} → {18,6} (different), expansion has 2 unique entries.
+TEST(ExpandRaypath4Param, D_Pyramid_SigmaA0_TwoVariants) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto expanded = pyramid.ExpandRaypath({ 14, 6 }, FilterConfig::kSymD, 0, true);
+  ASSERT_EQ(expanded.size(), 2u);
+  bool found_18 = false;
+  for (const auto& rp : expanded) {
+    if (rp.size() == 2 && rp[0] == 18 && rp[1] == 6) {
+      found_18 = true;
+    }
+  }
+  EXPECT_TRUE(found_18) << "D expansion of {14,6} must contain {18,6}";
+}
+
+// P+D, sigma_a=0, starting from pyramid {18,6}: 6 P rotations × 2 D mirrors = 12 unique paths.
+// Before fix: D skipped pyramid faces, yielding only 10 unique paths.
+TEST(ExpandRaypath4Param, D_Pyramid_SigmaA0_PD_12Paths) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto expanded = pyramid.ExpandRaypath({ 18, 6 }, FilterConfig::kSymP | FilterConfig::kSymD, 0, true);
+  EXPECT_EQ(expanded.size(), 12u);
+
+  RaypathHash h;
+  std::set<size_t> hashes;
+  for (const auto& rp : expanded) {
+    EXPECT_TRUE(hashes.insert(h(rp)).second) << "Duplicate hash in expanded pyramid P+D paths";
+  }
+
+  bool found_14_6 = false;
+  bool found_18_4 = false;
+  for (const auto& rp : expanded) {
+    if (rp.size() == 2 && rp[0] == 14 && rp[1] == 6) {
+      found_14_6 = true;
+    }
+    if (rp.size() == 2 && rp[0] == 18 && rp[1] == 4) {
+      found_18_4 = true;
+    }
+  }
+  EXPECT_TRUE(found_14_6) << "D mirror {14,6} must be in P+D expansion of pyramid {18,6}";
+  EXPECT_TRUE(found_18_4) << "D mirror {18,4} must be in P+D expansion of pyramid {18,6}";
+}
+
+// sigma_a=5: D-reflect {14,8} → {17,3}. Expansion has 2 unique entries.
+TEST(ExpandRaypath4Param, D_Pyramid_SigmaA5_TwoVariants) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  auto expanded = pyramid.ExpandRaypath({ 14, 8 }, FilterConfig::kSymD, 5, true);
+  ASSERT_EQ(expanded.size(), 2u);
+  bool found_17_3 = false;
+  for (const auto& rp : expanded) {
+    if (rp.size() == 2 && rp[0] == 17 && rp[1] == 3) {
+      found_17_3 = true;
+    }
+  }
+  EXPECT_TRUE(found_17_3) << "D expansion of {14,8} with sigma_a=5 must contain {17,3}";
+}
+
+// ---- ReduceRaypath orbit invariant: same orbit must reduce to same canonical ----
+//
+// Bug context: when kSymP|kSymD is set with sigma_a != 0, the D-reflected candidate
+// is not re-P-canonicalized before lex comparison, so different orbit members can
+// reduce to different representatives. These tests pin the property "ReduceRaypath
+// is constant on each ExpandRaypath orbit" across sigma_a ∈ {0..5}.
+
+TEST(ReduceRaypath_OrbitInvariant, PD_Pyramid_AllSigmaA) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP | FilterConfig::kSymD;
+  for (int sigma_a = 0; sigma_a < 6; sigma_a++) {
+    auto orbit = pyramid.ExpandRaypath({ 14, 6 }, kSym, sigma_a, true);
+    ASSERT_EQ(orbit.size(), 12u) << "orbit size mismatch at sigma_a=" << sigma_a;
+    auto first = pyramid.ReduceRaypath(orbit[0], kSym, sigma_a, true);
+    for (size_t i = 1; i < orbit.size(); i++) {
+      auto reduced = pyramid.ReduceRaypath(orbit[i], kSym, sigma_a, true);
+      EXPECT_EQ(reduced, first) << "orbit member " << i << " reduces to different canonical at sigma_a=" << sigma_a;
+    }
+  }
+}
+
+TEST(ReduceRaypath_OrbitInvariant, PD_Pyramid_KnownBugCase_SigmaA5) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP | FilterConfig::kSymD;
+  auto r1 = pyramid.ReduceRaypath({ 14, 6 }, kSym, 5, true);
+  auto r2 = pyramid.ReduceRaypath({ 18, 6 }, kSym, 5, true);
+  EXPECT_EQ(r1, r2) << "Same orbit must map to same canonical form";
+}
+
+TEST(ReduceRaypath_OrbitInvariant, PD_Prism_AllSigmaA) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP | FilterConfig::kSymD;
+  for (int sigma_a = 0; sigma_a < 6; sigma_a++) {
+    auto orbit = prism.ExpandRaypath({ 3, 7 }, kSym, sigma_a, true);
+    ASSERT_GE(orbit.size(), 2u);
+    auto first = prism.ReduceRaypath(orbit[0], kSym, sigma_a, true);
+    for (const auto& member : orbit) {
+      EXPECT_EQ(prism.ReduceRaypath(member, kSym, sigma_a, true), first)
+          << "prism orbit member reduces differently at sigma_a=" << sigma_a;
+    }
+  }
+}
+
+TEST(ReduceRaypath_OrbitInvariant, D_Only_Pyramid_AllSigmaA) {
+  Crystal pyramid = Crystal::CreatePyramid(1.0f, 1.0f, 1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymD;
+  for (int sigma_a = 0; sigma_a < 6; sigma_a++) {
+    auto orbit = pyramid.ExpandRaypath({ 14, 6 }, kSym, sigma_a, true);
+    ASSERT_EQ(orbit.size(), 2u) << "D-only orbit must have 2 members at sigma_a=" << sigma_a;
+    auto first = pyramid.ReduceRaypath(orbit[0], kSym, sigma_a, true);
+    for (const auto& member : orbit) {
+      EXPECT_EQ(pyramid.ReduceRaypath(member, kSym, sigma_a, true), first)
+          << "D-only orbit member reduces differently at sigma_a=" << sigma_a;
+    }
+  }
 }

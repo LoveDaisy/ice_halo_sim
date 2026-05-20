@@ -221,6 +221,13 @@ class Crystal {
   IdType GetFn(IdType poly_idx) const;
 
   /**
+   * @brief Get the face-number period used for symmetry reductions.
+   * @return Period (typically 6 for hexagonal prism/pyramid); negative for custom crystals
+   *         where symmetry reductions do not apply.
+   */
+  int FnPeriod() const { return fn_period_; }
+
+  /**
    * @brief Rotate the crystal
    * @param r Rotation to apply
    * @return Reference to this crystal
@@ -282,6 +289,11 @@ class Crystal {
  private:
   void ComputeCacheData();
   void BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt);
+
+  // Shift prism/pyramid faces so the first non-basal pri index becomes 0.
+  // Basal faces (x < 3) are passed through unchanged. Returns the input
+  // verbatim when no non-basal face is present.
+  std::vector<IdType> PCanonicalShift(const std::vector<IdType>& rp) const;
 
   Mesh mesh_;
 

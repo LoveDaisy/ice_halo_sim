@@ -23,6 +23,19 @@ struct RaypathRecorder {
   const uint8_t* begin() const { return recorder_ + 0; }
   const uint8_t* end() const { return recorder_ + size_; }
 
+  bool operator==(const RaypathRecorder& other) const {
+    if (size_ != other.size_) {
+      return false;
+    }
+    for (size_t i = 0; i < size_; i++) {
+      if (recorder_[i] != other.recorder_[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+  bool operator!=(const RaypathRecorder& other) const { return !(*this == other); }
+
   size_t size_ = 0;
   uint8_t recorder_[kMaxHits]{};
 };
