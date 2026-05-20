@@ -31,7 +31,7 @@ checkbox 位于**右侧面板 → Display** 区域。
    p99_norm = y_p99 / snapshot_intensity
    ```
 4. **将 `p99_norm` 映射到 sRGB [0, 255] 刻度上的 `target_white`**。  
-   `target_white` 默认 200，可在 GUI 中调整（范围 100–240）。  
+   `target_white` 固定为 200（GUI 已不再暴露滑条；如需进一步调整，由用户拖动手动 EV 滑条）。  
    映射先做 sRGB 传递函数的逆变换，得到线性目标值：
    ```
    t = target_white / 255
@@ -175,7 +175,7 @@ Path B 现在累积真正的 unfiltered 全集。
 |------|------|------|
 | 算法 | `src/gui/gui_ev_auto.hpp` | `ComputeP99Y`、`ComputeEvAuto` |
 | 数据源切换 | `src/gui/app.cpp` — `SyncFromPoller()` | 根据 `auto_ev_enabled` 选择 `unfiltered_xyz_buffer` 或 `filtered_xyz_buffer` |
-| GUI 控件 | `src/gui/app_panels.cpp` 第 488 行 | checkbox + tooltip + EV 显示 + `target_white` 滑条 |
+| GUI 控件 | `src/gui/app_panels.cpp` 第 487 行 | checkbox + tooltip + EV 显示（`target_white` 固定 200，无滑条） |
 | 未过滤 buffer | `src/server/render.cpp` — `Consume()` | 在 `FilterRay` 前累积 unfiltered XYZ pass |
 | C API 字段 | `src/include/lumice.h` — `LUMICE_RawXyzResult` | `unfiltered_xyz_buffer` 与 `unfiltered_snapshot_intensity` 字段 |
 

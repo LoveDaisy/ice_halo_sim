@@ -41,7 +41,8 @@ The core algorithm (`ComputeP99Y` / `ComputeEvAuto` in `src/gui/gui_ev_auto.hpp`
    p99_norm = y_p99 / snapshot_intensity
    ```
 4. **Map** `p99_norm` to `target_white` on the sRGB [0, 255] scale.  
-   `target_white` defaults to 200 and is adjustable in the GUI (range 100 – 240).  
+   `target_white` is fixed at 200 (the GUI no longer exposes a slider; users tune the
+   manual EV offset for further adjustment).  
    The mapping applies the sRGB transfer function inverse to obtain a linear target:
    ```
    t = target_white / 255
@@ -211,7 +212,7 @@ the manual EV offset.
 |-----------|------|---------|
 | Algorithm | `src/gui/gui_ev_auto.hpp` | `ComputeP99Y`, `ComputeEvAuto` |
 | Data-source switch | `src/gui/app.cpp` — `SyncFromPoller()` | Selects `unfiltered_xyz_buffer` vs `filtered_xyz_buffer` based on `auto_ev_enabled` |
-| GUI control | `src/gui/app_panels.cpp` line 488 | Checkbox + tooltip + EV display + `target_white` slider |
+| GUI control | `src/gui/app_panels.cpp` line 487 | Checkbox + tooltip + EV display (`target_white` is fixed at 200, no slider) |
 | Unfiltered buffer | `src/server/render.cpp` — `Consume()` | Accumulates the unfiltered XYZ pass before `FilterRay` |
 | C API field | `src/include/lumice.h` — `LUMICE_RawXyzResult` | `unfiltered_xyz_buffer` and `unfiltered_snapshot_intensity` fields |
 

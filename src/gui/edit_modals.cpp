@@ -158,7 +158,7 @@ static bool g_pending_open = false;
 static bool g_pending_mode_switch = false;
 
 // ============================================================
-// Wedge angle presets (same as in panels.cpp SliderWithPreset for alpha)
+// Wedge angle presets for edit modal
 // ============================================================
 
 namespace {
@@ -178,8 +178,7 @@ constexpr ValuePreset kWedgePresets[] = {
 constexpr int kWedgePresetCount = 4;
 
 // Render a slider + input + preset dropdown for wedge angle.
-// Local copy for modal use — panels.cpp::SliderWithPreset calls MarkDirty internally
-// and cannot be reused in edit-buffer context. Both share the same visual layout.
+// Edit-buffer context: cannot call MarkDirty internally, so this is a standalone impl.
 bool SliderWithPresetEdit(const char* label, float* value, float min_val, float max_val, const char* fmt,
                           SliderScale scale, const ValuePreset* presets, int preset_count) {
   char display_buf[64];

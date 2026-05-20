@@ -48,7 +48,6 @@
 //     - "Unsaved Changes" (BeginPopupModal)
 //     - "##LogPanel" — user-toggleable; raisable on click; sits naturally
 //       above the LeftPanel / RightPanel cluster.
-//     - panels.cpp::SliderWithPreset BeginPopup
 //
 //   Background cluster (NoBringToFrontOnFocus, push_front on creation
 //                       -> bottom of g.Windows):
@@ -494,9 +493,6 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         ImGui::TextDisabled("(+%.2f EV)", g_state.ev_auto);
       } else {
         ImGui::TextDisabled("(no data)");
-      }
-      if (SliderWithInput("Target##autoev", &g_state.target_white, 100.0f, 240.0f, "%.0f")) {
-        g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
       }
     }
 
