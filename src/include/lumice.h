@@ -376,6 +376,16 @@ typedef enum LUMICE_LensType_ {
 // Used by GUI to clamp the FOV slider upper bound when the user switches lens type.
 float LUMICE_MaxFov(LUMICE_LensType type);
 
+// =============== Color Conversion ===============
+// Batch XYZ float -> sRGB uint8 conversion with per-pixel intensity scale.
+// xyz_in:          flat array of XYZ tristimulus values, 3 floats per pixel
+//                  (length = pixel_count * 3).
+// out:             caller-allocated uint8 buffer of length pixel_count * 3.
+// pixel_count:     number of pixels to convert.
+// intensity_scale: scalar applied per-pixel to XYZ before XYZ->sRGB conversion.
+// Returns LUMICE_ERR_NULL_ARG if xyz_in or out is NULL; LUMICE_OK otherwise.
+LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, int pixel_count, float intensity_scale);
+
 #if !defined(_MSC_VER)
 #pragma GCC visibility pop
 #endif
