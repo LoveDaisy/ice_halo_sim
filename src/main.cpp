@@ -65,7 +65,7 @@ std::filesystem::path FormatImagePath(const std::filesystem::path& output_dir, i
 
 void SaveRenderResults(LUMICE_Server* server, const std::filesystem::path& output_dir, std::string_view image_format,
                        int jpeg_quality) {
-  LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
+  LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1]{};
   if (LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) != LUMICE_OK) {
     return;
   }
@@ -90,7 +90,7 @@ void SaveRenderResults(LUMICE_Server* server, const std::filesystem::path& outpu
 }
 
 void PrintStats(LUMICE_Server* server) {
-  LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
+  LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1]{};
   if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) != LUMICE_OK) {
     return;
   }
@@ -116,7 +116,7 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
   while (true) {
     std::this_thread::sleep_for(kBenchmarkPollInterval);
     LUMICE_ServerState state{};
-    LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
+    LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1]{};
     if (LUMICE_QueryServerState(server, &state) == LUMICE_OK && state == LUMICE_SERVER_IDLE) {
       if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK && stats[0].sim_ray_num > 0) {
         auto t_end = std::chrono::steady_clock::now();
@@ -289,7 +289,7 @@ int main(int argc, char** argv) {
     PrintStats(server);
 
     LUMICE_ServerState state{};
-    LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
+    LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1]{};
     if (LUMICE_QueryServerState(server, &state) == LUMICE_OK && state == LUMICE_SERVER_IDLE) {
       if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK && stats[0].sim_ray_num > 0) {
         break;
