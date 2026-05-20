@@ -253,17 +253,21 @@ LUMICE_ErrorCode LUMICE_ParseConfigFile(const char* filename, LUMICE_Config* out
 
 // =============== Results ===============
 // Unified pattern: (server, out, max_count) -> LUMICE_ErrorCode, sentinel-terminated.
-// out array size must be at least max_count + 1 (for sentinel slot).
+// Sentinel is written at out[count] only when count < max_count.
+// When the array is full (count == max_count), no sentinel slot is written;
+// callers relying on sentinel iteration must value-initialize the array
+// (e.g., Type arr[N + 1]{}) and pass max_count = N. Minimum array size:
+// max_count + 1 for sentinel iteration, max_count for direct index access.
 
-// Fill render results into out array, sentinel-terminated (img_buffer == NULL).
+// Fill render results into out array (img_buffer == NULL sentinel when count < max_count).
 // Returns sRGB uint8 image data (CPU-converted from XYZ).
 LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
 
-// Fill raw XYZ results into out array, sentinel-terminated (xyz_buffer == NULL).
+// Fill raw XYZ results into out array (xyz_buffer == NULL sentinel when count < max_count).
 // Returns unconverted XYZ float data + intensity scalars for GPU-side conversion.
 LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count);
 
-// Fill stats results into out array, sentinel-terminated (sim_ray_num == 0).
+// Fill stats results into out array (sim_ray_num == 0 sentinel when count < max_count).
 // Note: triggers DoSnapshot internally (includes PostSnapshot XYZ→RGB conversion).
 LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
 

@@ -721,8 +721,10 @@ LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderRes
     out[i].img_buffer = render_results[i].img_buffer_;
   }
 
-  // Sentinel
-  std::memset(&out[count], 0, sizeof(LUMICE_RenderResult));
+  // Sentinel — only when caller provided an extra slot (count < max_count)
+  if (count < max_count) {
+    std::memset(&out[count], 0, sizeof(LUMICE_RenderResult));
+  }
 
   return LUMICE_OK;
 }
@@ -753,8 +755,10 @@ LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzRes
     out[i].unfiltered_snapshot_intensity = results[i].unfiltered_snapshot_intensity_;
   }
 
-  // Sentinel
-  std::memset(&out[count], 0, sizeof(LUMICE_RawXyzResult));
+  // Sentinel — only when caller provided an extra slot (count < max_count)
+  if (count < max_count) {
+    std::memset(&out[count], 0, sizeof(LUMICE_RawXyzResult));
+  }
 
   return LUMICE_OK;
 }
@@ -776,8 +780,10 @@ LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResul
     }
   }
 
-  // Sentinel
-  std::memset(&out[count], 0, sizeof(LUMICE_StatsResult));
+  // Sentinel — only when caller provided an extra slot (count < max_count)
+  if (count < max_count) {
+    std::memset(&out[count], 0, sizeof(LUMICE_StatsResult));
+  }
 
   return LUMICE_OK;
 }

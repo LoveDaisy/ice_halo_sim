@@ -223,11 +223,10 @@ def run_scene_capi(config_path: str, timeout_sec: int = 180) -> SimResult:
 def run_scene_capi_buffered(config_path: str, timeout_sec: int = 180) -> BufferedSimResult:
     """Run a Lumice sim via the C API and copy out both XYZ buffers.
 
-    Polling exits only after `has_valid_data AND IDLE AND xyz_buffer != NULL
-    AND unfiltered_xyz_buffer != NULL` is observed on two consecutive samples,
-    mirroring the pattern validated in
-    scratchpad/explore-partition-buffer-additivity-root-cause/probe_e1_baseline.py
-    (single-sample exit hit a buffer-NULL race in ~5% of runs).
+    Polling exits only after `has_valid_data AND IDLE` is observed on two
+    consecutive samples. The two-sample check defends against the narrow window
+    where the server reports IDLE before the latest snapshot is fully visible
+    to the caller; it is independent of the c_api.cpp sentinel-overflow fix.
 
     Buffer contents are copied into owned numpy arrays before destroying the
     server; the returned object holds no references to server memory.
@@ -267,10 +266,7 @@ def run_scene_capi_buffered(config_path: str, timeout_sec: int = 180) -> Buffere
             if state == _LUMICE_SERVER_NOT_READY:
                 raise RuntimeError("Server NOT_READY")
 
-            xyz_addr = ctypes.cast(results[0].xyz_buffer, ctypes.c_void_p).value
-            unf_addr = ctypes.cast(results[0].unfiltered_xyz_buffer, ctypes.c_void_p).value
-            if (results[0].has_valid_data and state == _LUMICE_SERVER_IDLE
-                    and xyz_addr is not None and unf_addr is not None):
+            if results[0].has_valid_data and state == _LUMICE_SERVER_IDLE:
                 consecutive_ok += 1
                 if consecutive_ok >= 2:
                     break
