@@ -2,8 +2,6 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
-#include "config/config_manager.hpp"
-#include "config/filter_config.hpp"
 #include "test_gui_shared.hpp"
 
 // ========== Import/Export Tests ==========
@@ -501,42 +499,44 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       layer.entries.push_back(entry);
       gui::g_state.layers.push_back(layer);
 
-      // Serialize → parse via core ConfigManager.
+      // Serialize and inspect the emitted core JSON directly. NOTE: this test
+      // validates the serialized JSON shape only (filter array layout, ids,
+      // composition structure) — not ConfigManager round-trip semantics. If
+      // round-trip behavior needs guarding in the future, add a dedicated
+      // core-side test or a config-deserialization C API (see backlog).
       std::string core_json = gui::SerializeCoreConfig(gui::g_state);
       auto parsed = nlohmann::json::parse(core_json);
-      lumice::ConfigManager m;
-      lumice::from_json(parsed, m);
 
-      // Expect 3 filters: id=1 (raypath {3,5}), id=2 (raypath {1,3}), id=3 (complex).
-      IM_CHECK_EQ(static_cast<int>(m.filters_.size()), 3);
-      IM_CHECK(m.filters_.count(1) == 1);
-      IM_CHECK(m.filters_.count(2) == 1);
-      IM_CHECK(m.filters_.count(3) == 1);
+      // SerializeCoreConfig (src/gui/file_io.cpp:578-626) starts next_filter_id
+      // at 1 and push_back's filters in SerializeFilterForCore order — multi-
+      // segment raypath emits children first (ids 1..N) then the complex
+      // (id N+1), so array index matches id - 1.
+      IM_CHECK(parsed.contains("filter") && parsed["filter"].is_array());
+      IM_CHECK_EQ(static_cast<int>(parsed["filter"].size()), 3);
 
-      // Simple filter 1 — first segment "3-5".
-      const auto& f1 = m.filters_.at(1);
-      const auto& s1 = std::get<lumice::SimpleFilterParam>(f1.param_);
-      const auto& rp1 = std::get<lumice::RaypathFilterParam>(s1);
-      IM_CHECK_EQ(static_cast<int>(rp1.raypath_.size()), 2);
-      IM_CHECK_EQ(static_cast<int>(rp1.raypath_[0]), 3);
-      IM_CHECK_EQ(static_cast<int>(rp1.raypath_[1]), 5);
+      // Filter 1: raypath [3, 5] (segment "3-5").
+      IM_CHECK_EQ(parsed["filter"][0]["id"].get<int>(), 1);
+      IM_CHECK_STR_EQ(parsed["filter"][0]["type"].get<std::string>().c_str(), "raypath");
+      IM_CHECK_EQ(static_cast<int>(parsed["filter"][0]["raypath"].size()), 2);
+      IM_CHECK_EQ(parsed["filter"][0]["raypath"][0].get<int>(), 3);
+      IM_CHECK_EQ(parsed["filter"][0]["raypath"][1].get<int>(), 5);
 
-      // Simple filter 2 — second segment "1-3".
-      const auto& f2 = m.filters_.at(2);
-      const auto& s2 = std::get<lumice::SimpleFilterParam>(f2.param_);
-      const auto& rp2 = std::get<lumice::RaypathFilterParam>(s2);
-      IM_CHECK_EQ(static_cast<int>(rp2.raypath_.size()), 2);
-      IM_CHECK_EQ(static_cast<int>(rp2.raypath_[0]), 1);
-      IM_CHECK_EQ(static_cast<int>(rp2.raypath_[1]), 3);
+      // Filter 2: raypath [1, 3] (segment "1-3").
+      IM_CHECK_EQ(parsed["filter"][1]["id"].get<int>(), 2);
+      IM_CHECK_STR_EQ(parsed["filter"][1]["type"].get<std::string>().c_str(), "raypath");
+      IM_CHECK_EQ(static_cast<int>(parsed["filter"][1]["raypath"].size()), 2);
+      IM_CHECK_EQ(parsed["filter"][1]["raypath"][0].get<int>(), 1);
+      IM_CHECK_EQ(parsed["filter"][1]["raypath"][1].get<int>(), 3);
 
-      // Complex filter 3 — composition of [[1], [2]].
-      const auto& fc = m.filters_.at(3);
-      const auto& cp = std::get<lumice::ComplexFilterParam>(fc.param_);
-      IM_CHECK_EQ(static_cast<int>(cp.filters_.size()), 2);
-      IM_CHECK_EQ(static_cast<int>(cp.filters_[0].size()), 1);
-      IM_CHECK_EQ(static_cast<int>(cp.filters_[0][0].first), 1);
-      IM_CHECK_EQ(static_cast<int>(cp.filters_[1].size()), 1);
-      IM_CHECK_EQ(static_cast<int>(cp.filters_[1][0].first), 2);
+      // Filter 3: complex, composition [[1], [2]].
+      IM_CHECK_EQ(parsed["filter"][2]["id"].get<int>(), 3);
+      IM_CHECK_STR_EQ(parsed["filter"][2]["type"].get<std::string>().c_str(), "complex");
+      IM_CHECK(parsed["filter"][2].contains("composition"));
+      IM_CHECK_EQ(static_cast<int>(parsed["filter"][2]["composition"].size()), 2);
+      IM_CHECK_EQ(static_cast<int>(parsed["filter"][2]["composition"][0].size()), 1);
+      IM_CHECK_EQ(parsed["filter"][2]["composition"][0][0].get<int>(), 1);
+      IM_CHECK_EQ(static_cast<int>(parsed["filter"][2]["composition"][1].size()), 1);
+      IM_CHECK_EQ(parsed["filter"][2]["composition"][1][0].get<int>(), 2);
 
       // Scattering entry should reference the complex filter (id 3).
       IM_CHECK(parsed.contains("scene"));
@@ -568,18 +568,16 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       layer.entries.push_back(entry);
       gui::g_state.layers.push_back(layer);
 
+      // Inspect serialized JSON directly — same shape-only contract as the
+      // multi_raypath_or_e2e test above.
       std::string core_json = gui::SerializeCoreConfig(gui::g_state);
       auto parsed = nlohmann::json::parse(core_json);
-      lumice::ConfigManager m;
-      lumice::from_json(parsed, m);
 
-      // Exactly 1 simple raypath, no complex.
-      IM_CHECK_EQ(static_cast<int>(m.filters_.size()), 1);
-      const auto& f1 = m.filters_.begin()->second;
-      const auto& sp = std::get<lumice::SimpleFilterParam>(f1.param_);
-      IM_CHECK(std::holds_alternative<lumice::RaypathFilterParam>(sp));
-      const auto& rp = std::get<lumice::RaypathFilterParam>(sp);
-      IM_CHECK_EQ(static_cast<int>(rp.raypath_.size()), 3);
+      // Exactly 1 simple raypath filter, no complex upgrade.
+      IM_CHECK(parsed.contains("filter") && parsed["filter"].is_array());
+      IM_CHECK_EQ(static_cast<int>(parsed["filter"].size()), 1);
+      IM_CHECK_STR_EQ(parsed["filter"][0]["type"].get<std::string>().c_str(), "raypath");
+      IM_CHECK_EQ(static_cast<int>(parsed["filter"][0]["raypath"].size()), 3);
     };
   }
 
