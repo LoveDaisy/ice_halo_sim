@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779161221517,
+  "lastUpdate": 1779241577155,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -2400,6 +2400,54 @@ window.BENCHMARK_DATA = {
             "value": 366885.2,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "35e35f3275c09d626a2ebadc49c026d8d790ff17",
+          "message": "Merge pull request #98 from LoveDaisy/feat/filter_performance\n\nfeat(core): canonical-form FilterSpec + fix per-ray symmetry hot path",
+          "timestamp": "2026-05-20T09:41:53+08:00",
+          "tree_id": "fb556e78e23a0fafa29a2be152e168d43f33bfa3",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/35e35f3275c09d626a2ebadc49c026d8d790ff17"
+        },
+        "date": 1779241575917,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 291791.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 607945,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 414714.4,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 439216.1,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
