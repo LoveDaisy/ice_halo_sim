@@ -923,7 +923,7 @@ void RenderStatusBar(float window_width, float window_height) {
 
   // Log panel toggle button (right-aligned)
   {
-    const char* log_label = g_state.log_panel_open ? "Log [v]" : "Log [>]";
+    const char* log_label = g_state.log_panel_open ? ICON_FA_CHEVRON_DOWN " Log" : ICON_FA_CHEVRON_RIGHT " Log";
     float button_w = ImGui::CalcTextSize(log_label).x + ImGui::GetStyle().FramePadding.x * 2;
     ImGui::SameLine(ImGui::GetWindowWidth() - button_w - ImGui::GetStyle().WindowPadding.x);
     if (ImGui::SmallButton(log_label)) {
