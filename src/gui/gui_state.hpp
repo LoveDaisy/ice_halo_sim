@@ -291,6 +291,42 @@ struct FilterConfig {
   friend bool operator!=(const FilterConfig& a, const FilterConfig& b) { return !(a == b); }
 };
 
+// Linked group invariants (post task-gui-linked-entries):
+//
+// Formal definition: two entries are "linked" iff they share BOTH crystal_id
+// AND filter_id. The fa-link badge shows when >= 2 entries share the same
+// (crystal_id, filter_id) pair. A linked group is the atomic share unit —
+// edits on any member must be observable on all members.
+//
+// Edit propagation rules — what stays linked automatically vs needs explicit
+// propagation:
+//   1. Crystal content edit (in-place CrystalConfig overwrite at the shared
+//      pool slot): AUTOMATIC. All entries sharing the crystal_id see the new
+//      content via the pool indirection.
+//   2. Filter content edit (in-place FilterConfig overwrite at the shared
+//      pool slot): AUTOMATIC. Same mechanism via shared filter_id.
+//   3. Filter add (entry.filter_id: None -> Some N): NEEDS PROPAGATION.
+//      The new pool slot is bound only to the editing entry by default;
+//      linked siblings (previously at (cid, None) with this entry) must
+//      also have their filter_id flipped to N — otherwise the group
+//      decoheres and the badge disappears.
+//   4. Filter remove (entry.filter_id: Some -> None): NEEDS PROPAGATION.
+//      Linked siblings must also have filter_id cleared.
+//
+// Crystal_id never changes through normal edits (the editing entry rewrites
+// its own pool slot, not the id). The only id-flipping operations are:
+//   - Pick-mode "Link to..." (ApplyPickLink in panels.cpp): editing entry
+//     adopts target's (crystal_id, filter_id) atomically.
+//   - "Unlink" (UnlinkEntryFromPool in panels.cpp): clones pool slot(s) to
+//     fork off a private copy.
+//   - "Duplicate" (panels.cpp): clone-to-pool produces a fully independent
+//     new entry.
+//   - Filter add/remove (above): only filter_id flips.
+//
+// Propagation owner: ApplyBuffersToEntry in edit_modals.cpp via the local
+// `propagate_filter_id_to_linked` lambda. Touch that lambda's call sites if
+// you add a new filter_id-flipping path.
+
 // GUI-only data structure: one crystal+filter entry card in the layer model.
 //
 // ID-pool model: EntryCard holds indices into GuiState::crystals / GuiState::filters
