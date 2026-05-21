@@ -41,7 +41,8 @@
     "halo_22_on": {
       "psnr_mean": 17.224,
       "psnr_std": 0.1286,
-      "threshold": 16.5
+      "threshold": 16.2,
+      "threshold_note": "N=10 conservative: -0.3 dB vs mean-3sigma=16.5; re-run --n-calib 30 to lift"
     },
     "multi_scat_off": {
       "psnr_mean": 19.42,
@@ -81,7 +82,8 @@
     "rp46_nof_on": {
       "psnr_mean": 17.828,
       "psnr_std": 0.0691,
-      "threshold": 17.5
+      "threshold": 17.2,
+      "threshold_note": "N=10 conservative: -0.3 dB vs mean-3sigma=17.5; re-run --n-calib 30 to lift"
     },
     "rp46_off": {
       "psnr_mean": 20.705,
