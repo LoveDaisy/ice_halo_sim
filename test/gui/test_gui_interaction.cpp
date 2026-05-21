@@ -3881,6 +3881,51 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // add_entry_independent: clicking "+ Crystal" in a layer must seed the new
+  // entry with a fresh crystal pool slot (regression: implicit Link to slot 0).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "add_entry_independent");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      const int orig_cid = gui::g_state.layers[0].entries[0].crystal_id;
+      const std::size_t crystals_before = gui::g_state.crystals.size();
+
+      ctx->ItemClick("**/+ Crystal##layer_0");
+      ctx->Yield();
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+      IM_CHECK_EQ(gui::g_state.crystals.size(), crystals_before + 1);
+      const int new_cid = gui::g_state.layers[0].entries[1].crystal_id;
+      IM_CHECK_NE(new_cid, orig_cid);
+      // Pair must NOT be considered shared — fa-link badge must stay off.
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, new_cid, std::nullopt), 1);
+    };
+  }
+
+  // add_layer_independent: clicking "+ Layer" must seed the new layer's entry
+  // with a fresh crystal pool slot (regression: implicit Link to slot 0).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "add_layer_independent");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      const int orig_cid = gui::g_state.layers[0].entries[0].crystal_id;
+      const std::size_t crystals_before = gui::g_state.crystals.size();
+      const std::size_t layers_before = gui::g_state.layers.size();
+
+      ctx->ItemClick("**/+ Layer");
+      ctx->Yield();
+
+      IM_CHECK_EQ(gui::g_state.layers.size(), layers_before + 1);
+      IM_CHECK_EQ(gui::g_state.crystals.size(), crystals_before + 1);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.back().entries.size()), 1);
+      const int new_cid = gui::g_state.layers.back().entries[0].crystal_id;
+      IM_CHECK_NE(new_cid, orig_cid);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, new_cid, std::nullopt), 1);
+    };
+  }
+
   // legacy-partial-sharing: same crystal_id but different filter_id is NOT
   // considered "shared" by the badge predicate (card is atomic share unit).
   {

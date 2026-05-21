@@ -693,16 +693,23 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     }
   }
 
-  // ---- Pick-mode overlay ----
-  // Place a full-card-sized InvisibleButton at the card's top-left so any
-  // click inside the card area completes the share. The button is rendered
-  // last so existing inner widgets (Edit / Duplicate / Delete) keep their
-  // hit priority; ImGui processes overlapping items in declaration order.
-  // We position the button by absolute-coord trick: SetCursorScreenPos to the
-  // card's win pos, then size to the win size.
+  // ---- Pick-mode hit-test ----
+  // Detect a click anywhere inside the card area via a non-layout-affecting
+  // rect query. We previously used SetCursorScreenPos(card_win_pos) +
+  // InvisibleButton(card_win_sz), but that combination drives an AutoResizeY
+  // feedback loop: GetWindowSize() includes the child's padding, the button
+  // advances the cursor by `pos + size`, AutoResizeY grows the child to fit,
+  // next frame GetWindowSize() returns the new larger size, and the card
+  // expands unboundedly while pick mode is active.
+  //
+  // !IsAnyItemHovered() preserves hit priority for the inner widgets
+  // (Edit / Duplicate / Delete): when one of them is hovered, the click is
+  // routed to it and pick-mode cancellation runs via the blank-area handler
+  // in app_panels.cpp instead.
   if (pick_active && !pick_target_disabled) {
-    ImGui::SetCursorScreenPos(card_win_pos);
-    if (ImGui::InvisibleButton("##pick_target", card_win_sz)) {
+    const ImVec2 card_max(card_win_pos.x + card_win_sz.x, card_win_pos.y + card_win_sz.y);
+    if (ImGui::IsMouseHoveringRect(card_win_pos, card_max) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        !ImGui::IsAnyItemHovered()) {
       const std::optional<int> old_filter_id = entry.filter_id;
       ApplyPickLink(state, *state.pick_link_source, GuiState::EntryRef{ layer_idx, entry_idx });
       state.pick_link_source.reset();
@@ -805,12 +812,18 @@ void RenderLayer(GuiState& state, int layer_idx) {
       state.MarkDirty();
     }
 
-    // Add entry button
+    // Add entry button. Bind the new entry to a fresh pool slot so it is
+    // independent by default — using EntryCard's default (crystal_id = 0)
+    // would silently link the new entry to whichever entry already references
+    // slot 0, making +Crystal look like "implicit Link to entry 0".
     ImGui::Spacing();
     char add_id[32];
     snprintf(add_id, sizeof(add_id), "+ Crystal##layer_%d", layer_idx);
     if (ImGui::SmallButton(add_id)) {
-      layer.entries.emplace_back();
+      EntryCard new_entry;
+      new_entry.crystal_id = static_cast<int>(state.crystals.size());
+      state.crystals.emplace_back();
+      layer.entries.push_back(new_entry);
       g_thumbnail_cache.OnLayerStructureChanged();
       state.MarkDirty();
     }

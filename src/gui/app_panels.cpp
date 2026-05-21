@@ -352,8 +352,13 @@ void RenderLeftPanel(float window_height) {
   // ---- Bottom toolbar: add layer only (per-layer delete lives on the header row) ----
   ImGui::Spacing();
   if (ImGui::SmallButton("+ Layer")) {
+    // Bind the new layer's seed entry to a fresh pool slot — see panels.cpp's
+    // "+ Crystal" handler for the same rationale (avoid implicit link to slot 0).
+    EntryCard new_entry;
+    new_entry.crystal_id = static_cast<int>(g_state.crystals.size());
+    g_state.crystals.emplace_back();
     Layer new_layer;
-    new_layer.entries.emplace_back();
+    new_layer.entries.push_back(new_entry);
     g_state.layers.push_back(std::move(new_layer));
     g_thumbnail_cache.OnLayerStructureChanged();
     g_state.MarkDirty();
