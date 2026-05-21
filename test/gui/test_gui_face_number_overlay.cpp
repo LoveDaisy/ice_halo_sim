@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "IconsFontAwesome6.h"
 #include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
 #include "gui/face_number_overlay.hpp"
@@ -286,7 +287,7 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
       }
       IM_CHECK(any_labelable);
 
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }

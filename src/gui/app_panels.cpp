@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <string>
 
+#include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
@@ -118,7 +119,8 @@ void RenderTopBar(float window_width) {
   // Left-panel collapse toggle (placed before Run/Stop; owns the leftmost slot of the top bar
   // so it can never overlap with panel-internal headers).
   {
-    const char* left_toggle_label = g_state.left_panel_collapsed ? ">##left_panel_toggle" : "<##left_panel_toggle";
+    const char* left_toggle_label = g_state.left_panel_collapsed ? ICON_FA_CHEVRON_RIGHT "##left_panel_toggle" :
+                                                                   ICON_FA_CHEVRON_LEFT "##left_panel_toggle";
     if (ImGui::Button(left_toggle_label)) {
       g_state.left_panel_collapsed = !g_state.left_panel_collapsed;
     }
@@ -127,16 +129,18 @@ void RenderTopBar(float window_width) {
     ImGui::SameLine();
   }
 
-  // Run/Stop — fixed width to prevent layout shift
+  // Run/Stop — fixed width (max of both labels) to prevent layout shift on toggle.
   bool simulating = (g_state.sim_state == SimState::kSimulating);
   const auto& style = ImGui::GetStyle();
+  const char* kRunLabel = ICON_FA_PLAY " Run";
+  const char* kStopLabel = ICON_FA_STOP " Stop";
   float run_stop_width =
-      std::max(ImGui::CalcTextSize("Run").x, ImGui::CalcTextSize("Stop").x) + style.FramePadding.x * 2;
+      std::max(ImGui::CalcTextSize(kRunLabel).x, ImGui::CalcTextSize(kStopLabel).x) + style.FramePadding.x * 2;
   if (simulating) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f, 0.05f, 0.05f, 1.0f));
-    if (ImGui::Button("Stop", ImVec2(run_stop_width, 0))) {
+    if (ImGui::Button(kStopLabel, ImVec2(run_stop_width, 0))) {
       DoStop();
     }
     ImGui::PopStyleColor(3);
@@ -144,7 +148,7 @@ void RenderTopBar(float window_width) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.15f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.55f, 0.2f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.35f, 0.1f, 1.0f));
-    if (ImGui::Button("Run", ImVec2(run_stop_width, 0))) {
+    if (ImGui::Button(kRunLabel, ImVec2(run_stop_width, 0))) {
       DoRun();
     }
     ImGui::PopStyleColor(3);
@@ -159,7 +163,7 @@ void RenderTopBar(float window_width) {
     ImGui::BeginDisabled();
   }
   ImGui::SameLine();
-  ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "!");
+  ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), ICON_FA_CIRCLE_EXCLAMATION);
   ImGui::SameLine();
   if (ImGui::SmallButton("Revert") && modified) {  // `&& modified`: redundant safety guard over BeginDisabled
     DoRevert();
@@ -233,10 +237,11 @@ void RenderTopBar(float window_width) {
   // Also note: when the right panel is already collapsed, RenderCollapsedStrip's internal button
   // still expands it; this top-bar toggle simply offers a symmetric alternate entry point.
   {
-    const char* right_toggle_label = g_state.right_panel_collapsed ? "<##right_panel_toggle" : ">##right_panel_toggle";
+    const char* right_toggle_label = g_state.right_panel_collapsed ? ICON_FA_CHEVRON_LEFT "##right_panel_toggle" :
+                                                                     ICON_FA_CHEVRON_RIGHT "##right_panel_toggle";
     // Use the max width of both label states so the button's left edge doesn't jitter when toggled.
-    float w_expanded = ImGui::CalcTextSize(">##right_panel_toggle", nullptr, true).x;
-    float w_collapsed = ImGui::CalcTextSize("<##right_panel_toggle", nullptr, true).x;
+    float w_expanded = ImGui::CalcTextSize(ICON_FA_CHEVRON_RIGHT "##right_panel_toggle", nullptr, true).x;
+    float w_collapsed = ImGui::CalcTextSize(ICON_FA_CHEVRON_LEFT "##right_panel_toggle", nullptr, true).x;
     float btn_w = std::max(w_expanded, w_collapsed) + style.FramePadding.x * 2.0f;
     float right_edge = ImGui::GetWindowContentRegionMax().x;
     ImGui::SameLine();
@@ -297,7 +302,7 @@ void RenderLeftPanel(float window_height) {
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
 
   if (g_state.left_panel_collapsed) {
-    RenderCollapsedStrip(">", 0, kTopBarHeight, panel_height, &g_state.left_panel_collapsed);
+    RenderCollapsedStrip(ICON_FA_CHEVRON_RIGHT, 0, kTopBarHeight, panel_height, &g_state.left_panel_collapsed);
     return;
   }
 
@@ -344,7 +349,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
 
   if (g_state.right_panel_collapsed) {
-    RenderCollapsedStrip("<", window_width - kCollapseBtnSize, kTopBarHeight, panel_height,
+    RenderCollapsedStrip(ICON_FA_CHEVRON_LEFT, window_width - kCollapseBtnSize, kTopBarHeight, panel_height,
                          &g_state.right_panel_collapsed);
     return;
   }

@@ -3,7 +3,8 @@
 #include <cstring>
 #include <thread>
 
-#include "gui/log_sink.hpp"  // ImGuiLogSink (for log_panel_above_left_panel test sink injection)
+#include "IconsFontAwesome6.h"  // ICON_FA_* selectors used to match new icon-prefixed button labels
+#include "gui/log_sink.hpp"     // ImGuiLogSink (for log_panel_above_left_panel test sink injection)
 // imgui_internal.h is generally an anti-pattern, but z-order assertions need
 // direct ImGuiContext::Windows access. The relied-on semantics
 // (BringWindowToDisplayFront splices to g.Windows back; creation with
@@ -115,17 +116,17 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
       // Scene 1: kIdle — "Run" button should exist
       gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
       ctx->Yield();
-      IM_CHECK(ctx->ItemExists("##TopBar/Run"));
+      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PLAY " Run"));
 
       // Scene 2: kSimulating — "Stop" button should exist
       gui::g_state.sim_state = gui::GuiState::SimState::kSimulating;
       ctx->Yield();
-      IM_CHECK(ctx->ItemExists("##TopBar/Stop"));
+      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_STOP " Stop"));
 
       // Scene 3: kDone
       gui::g_state.sim_state = gui::GuiState::SimState::kDone;
       ctx->Yield();
-      IM_CHECK(ctx->ItemExists("##TopBar/Run"));  // Back to Run
+      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PLAY " Run"));  // Back to Run
 
       // Scene 4: kModified — Revert button should appear
       gui::g_state.sim_state = gui::GuiState::SimState::kModified;
@@ -156,7 +157,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Delete the new entry (×##del_0_1 for layer 0, entry 1). The hover button
       // is always in the ImGui tree (alpha=0 when not hovered) so test engine
       // can click it by ID even if the card is not hovered.
-      ctx->ItemClick("**/\xC3\x97##del_0_1");
+      ctx->ItemClick("**/" ICON_FA_XMARK "##del_0_1");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
     };
@@ -185,7 +186,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(4);  // popup open + Filter tab activation (SetSelected first-frame)
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       // Verify filter is cleared
@@ -230,7 +231,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK(std::strstr(tab_info.DebugLabel, "*") != nullptr);
 
       // Cancel so we don't leave state polluted for later tests.
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -260,7 +261,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
       ctx->Yield(2);
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
@@ -292,7 +293,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(4);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
@@ -323,7 +324,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
       ctx->Yield(2);
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
@@ -357,7 +358,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       auto info_filled = ctx->ItemInfo("**/Remove Filter##filter");
       IM_CHECK((info_filled.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -442,7 +443,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // AC #5: Cancel discards buffer; reopening shows no marker.
       ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 2.0f);
       ctx->Yield(2);
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
@@ -451,12 +452,12 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // AC #4: OK commits new baseline; reopening shows no marker.
       ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 3.0f);
       ctx->Yield(2);
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
       IM_CHECK(!is_dirty("**/###crystal_tab"));
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -494,7 +495,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK(ctx->ItemExists("**/##modal_preview_interact"));
 
       // Close modal (cleanup).
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -532,7 +533,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK(std::memcmp(drag_state, gui::g_crystal_rotation, sizeof drag_state) == 0);
 
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -558,7 +559,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Open Edit Entry modal and immediately click OK (no field touched).
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       // Render-invalidation must not have fired:
@@ -599,7 +600,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       // Render-invalidation MUST have fired (all four effects):
@@ -1358,7 +1359,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // (i) should NOT be shown: modal's d_applicable should be true.
       IM_CHECK_EQ(gui::IsCurrentModalDApplicable(), true);
 
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -1381,7 +1382,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // (i) should be shown: modal's d_applicable should be false.
       IM_CHECK_EQ(gui::IsCurrentModalDApplicable(), false);
 
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -1404,7 +1405,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // (i) should be shown: modal's d_applicable should be false.
       IM_CHECK_EQ(gui::IsCurrentModalDApplicable(), false);
 
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -1508,7 +1509,7 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 2);
 
       // Delete layer 1 via its per-layer header "x" button
-      ctx->ItemClick("**/x##layer_1");
+      ctx->ItemClick("**/" ICON_FA_XMARK "##layer_1");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
     };
@@ -1529,7 +1530,7 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
 
       // Duplicate the entry (hover button; ID is always addressable even at alpha=0).
-      ctx->ItemClick("**/D##dup_0_0");
+      ctx->ItemClick("**/" ICON_FA_COPY "##dup_0_0");
       ctx->Yield();
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
 
@@ -1639,7 +1640,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->Yield();
 
       // Click OK to commit
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       // Height should be clamped to >= 0.01 (kLog with min=0.01)
@@ -1667,7 +1668,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->Yield();
 
       // Click OK
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 0.0f);
@@ -1691,7 +1692,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue("**/##Upper H##modal_cr_input", 1.5f);
       ctx->Yield();
 
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 1.0f);
@@ -1718,7 +1719,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue("**/##Upper H##modal_cr_input", 0.5f);
       ctx->Yield();
 
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 0.5f);
@@ -2768,7 +2769,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       // Click Cancel in the modal
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
 
       // State unchanged
@@ -2796,7 +2797,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield();
 
       // Click OK to commit buffer to state
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       // Height should be updated to 5.0
@@ -2820,7 +2821,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       ctx->ItemInputValue("**/##Height##modal_cr_input", 5.0f);
       ctx->Yield();
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       auto& entry = gui::g_state.layers[0].entries[0];
@@ -2839,7 +2840,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield();
       ctx->ItemClick("**/Reset All##modal_cr");
       ctx->Yield();
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       // Step 3: assert all 7 shape fields back to defaults.
@@ -2877,7 +2878,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       ctx->ItemInputValue("**/##Height##modal_cr_input", 5.0f);
       ctx->Yield();
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       auto& entry = gui::g_state.layers[0].entries[0];
@@ -2888,7 +2889,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       ctx->ItemClick("**/Reset All##modal_cr");
       ctx->Yield();
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
 
       // Entry unchanged: Cancel discarded the Reset All effect from the buffer.
@@ -2911,7 +2912,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // Open filter modal, click OK immediately without modifying anything.
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(3);
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       // Filter must still be nullopt.
@@ -2937,7 +2938,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       ctx->ItemInputValue("**/Raypath##filter_modal", "1-3");
       ctx->Yield();
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       // Filter must now exist with the typed raypath.
@@ -2989,7 +2990,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
         // Close modal cleanly (Cancel discards any buffer changes; trackball
         // restore is incidental and does not affect the snapshot above).
-        ctx->ItemClick("**/Cancel##edit_modal");
+        ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
         ctx->Yield(2);
 
         // Build the same params[3] that ResetCrystalView passes (zenith,
@@ -3074,7 +3075,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
         float expected[16] = { 0 };
         gui::DefaultPreviewRotation(expected_preset, params, expected);
 
-        ctx->ItemClick("**/Cancel##edit_modal");
+        ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
         ctx->Yield(2);
 
         for (int i = 0; i < 16; ++i) {
@@ -3141,7 +3142,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       float after[16];
       std::memcpy(after, gui::g_crystal_rotation, sizeof(after));
 
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
 
       for (int i = 0; i < 16; ++i) {
@@ -3234,7 +3235,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(t1.entry_idx, 0);
 
       // Close via Cancel: target reset, modal closed.
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
       IM_CHECK_EQ(gui::IsEditModalOpen(), false);
       auto t2 = gui::GetEditModalTarget();
@@ -3245,7 +3246,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
       IM_CHECK_EQ(gui::IsEditModalOpen(), true);
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
       IM_CHECK_EQ(gui::IsEditModalOpen(), false);
       auto t3 = gui::GetEditModalTarget();
@@ -3352,7 +3353,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(!ctx->ItemExists("**/Direction##filter_type"));
       IM_CHECK(!ctx->ItemExists("**/Crystal##filter_type"));
 
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -3383,7 +3384,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
 
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -3408,7 +3409,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield();
       ctx->ItemClick("**/Filter Out##filter_action");
       ctx->Yield();
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
@@ -3433,10 +3434,10 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);  // run validator one frame, OK gate one more
 
       // OK must be enabled (multi-segment validates kValid).
-      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
       IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
@@ -3469,7 +3470,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       // Sub-panel re-renders; OK now reachable. Commit and verify the
       // raypath text survived the round-trip.
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
@@ -3519,14 +3520,14 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // OK is disabled while EE fields are empty (kIncomplete, not kValid).
       // post-task-filter-modal-polish-v1 contract: empty face number is not
       // a committable value — user must type a legal face number first.
-      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
       IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) != 0);
 
       // Type valid face numbers → OK enables.
       ctx->ItemInputValue("**/Entry##filter_ee_entry", "1");
       ctx->ItemInputValue("**/Exit##filter_ee_exit", "2");
       ctx->Yield(2);
-      auto info_typed = ctx->ItemInfo("**/OK##edit_modal");
+      auto info_typed = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
       IM_CHECK((info_typed.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
       // Switch to Raypath: EE inputs un-render.
@@ -3539,10 +3540,10 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Entry-Exit##filter_type");
       ctx->Yield(2);
       IM_CHECK(ctx->ItemExists("**/Entry##filter_ee_entry"));
-      auto info_back = ctx->ItemInfo("**/OK##edit_modal");
+      auto info_back = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
       IM_CHECK((info_back.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
-      ctx->ItemClick("**/Cancel##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -3572,10 +3573,10 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // OK must be enabled on EE.
-      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
       IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
@@ -3626,7 +3627,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK(ctx->ItemExists("**/Entry##filter_ee_entry"));
 
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
@@ -3667,14 +3668,14 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // After Remove: OK is enabled (intent bypasses incomplete gate).
-      auto info_ok = ctx->ItemInfo("**/OK##edit_modal");
+      auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
       IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
       // Re-type entry=1 after Remove (intent still set — session-level single direction).
       ctx->ItemInputValue("**/Entry##filter_ee_entry", "1");
       ctx->Yield(2);
 
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       // Remove intent takes precedence: filter must be nullopt regardless of re-typed value.
@@ -3709,7 +3710,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Remove Filter##filter_ee");
       ctx->Yield(2);
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       // After Remove + OK, filter must be nullopt.

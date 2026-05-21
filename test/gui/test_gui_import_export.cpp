@@ -2,6 +2,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
+#include "IconsFontAwesome6.h"
 #include "test_gui_shared.hpp"
 
 // ========== Import/Export Tests ==========
@@ -851,7 +852,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Remove Filter##filter_ee");
       ctx->Yield(2);
-      ctx->ItemClick("**/OK##edit_modal");
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       // filter must be nullopt after Remove + OK.

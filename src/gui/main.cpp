@@ -10,13 +10,16 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <string_view>
 #include <thread>
 
+#include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
+#include "gui/fa_solid_900_embed.h"
 #include "gui/file_io.hpp"
 #include "gui/gl_common.h"
 #include "gui/gl_init.h"
@@ -130,6 +133,25 @@ int main(int argc, char** argv) {
   io.IniFilename = nullptr;  // Disable imgui.ini persistence (also suppresses viewport position persistence)
 
   ImGui::StyleColorsDark();
+
+  // Load default font (Proggy Clean), then merge FontAwesome 6 Solid icon glyphs
+  // into the same font atlas so ICON_FA_* macros render alongside regular text.
+  // The font memory passed to AddFontFromMemoryTTF is taken over by ImGui (freed
+  // via IM_FREE on atlas teardown), so it must be IM_ALLOC'd, not pointed at our
+  // const data directly.
+  io.Fonts->AddFontDefault();
+  {
+    ImFontConfig icon_cfg;
+    icon_cfg.MergeMode = true;
+    icon_cfg.PixelSnapH = true;
+    icon_cfg.OversampleH = 2;
+    icon_cfg.OversampleV = 2;
+    icon_cfg.GlyphMinAdvanceX = 13.0f;
+    static const ImWchar kIconRanges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+    void* icon_buf = IM_ALLOC(gui::kFaSolid900Size);
+    std::memcpy(icon_buf, gui::kFaSolid900Data, gui::kFaSolid900Size);
+    io.Fonts->AddFontFromMemoryTTF(icon_buf, static_cast<int>(gui::kFaSolid900Size), 13.0f, &icon_cfg, kIconRanges);
+  }
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");

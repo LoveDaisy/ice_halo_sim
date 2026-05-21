@@ -17,8 +17,10 @@
 #include "gui/gl_common.h"
 
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
+#include "gui/fa_solid_900_embed.h"
 #include "gui/gl_capture.hpp"
 #include "gui/gl_init.h"
 #include "gui/gui_constants.hpp"
@@ -223,6 +225,23 @@ int main(int argc, char** argv) {
   io.IniFilename = nullptr;
 
   ImGui::StyleColorsDark();
+
+  // Mirror src/gui/main.cpp font setup so screenshot tests render the same
+  // glyphs (including ICON_FA_* icons) the real app shows.
+  io.Fonts->AddFontDefault();
+  {
+    ImFontConfig icon_cfg;
+    icon_cfg.MergeMode = true;
+    icon_cfg.PixelSnapH = true;
+    icon_cfg.OversampleH = 2;
+    icon_cfg.OversampleV = 2;
+    icon_cfg.GlyphMinAdvanceX = 13.0f;
+    static const ImWchar kIconRanges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+    void* icon_buf = IM_ALLOC(gui::kFaSolid900Size);
+    std::memcpy(icon_buf, gui::kFaSolid900Data, gui::kFaSolid900Size);
+    io.Fonts->AddFontFromMemoryTTF(icon_buf, static_cast<int>(gui::kFaSolid900Size), 13.0f, &icon_cfg, kIconRanges);
+  }
+
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
