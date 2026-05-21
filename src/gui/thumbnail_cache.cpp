@@ -152,7 +152,8 @@ void ThumbnailCache::OnLayerStructureChanged() {
 }
 
 void ThumbnailCache::RenderThumbnail(int layer_idx, int entry_idx, const GuiState& state) {
-  const auto& crystal = state.layers[layer_idx].entries[entry_idx].crystal;
+  const auto& entry_card = state.layers[layer_idx].entries[entry_idx];
+  const auto& crystal = state.crystals[entry_card.crystal_id];
 
   // Build mesh data
   LUMICE_CrystalMesh mesh{};

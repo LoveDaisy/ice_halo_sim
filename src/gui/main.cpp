@@ -243,7 +243,7 @@ int main(int argc, char** argv) {
   // Without this the user would have to click Reset View on first modal open
   // to reach the same view the outer thumbnail already shows.
   if (!gui::g_state.layers.empty() && !gui::g_state.layers[0].entries.empty()) {
-    gui::ResetCrystalViewToCrystal(gui::g_state.layers[0].entries[0].crystal);
+    gui::ResetCrystalViewToCrystal(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id]);
   } else {
     gui::ResetCrystalView();  // legacy fallback for unexpected empty state
   }

@@ -293,31 +293,31 @@ struct FilterConfig {
 
 // GUI-only data structure: one crystal+filter entry card in the layer model.
 //
-// operator== exists so CommitAllBuffers (edit_modals.cpp) can skip render-invalidation
-// when the OK button doesn't actually change the entry. Adding a field here without
-// updating operator== would silently break that gate; the static_assert below catches
-// such omissions at compile time (update both together).
+// ID-pool model: EntryCard holds indices into GuiState::crystals / GuiState::filters
+// rather than owning CrystalConfig/FilterConfig inline. "Linking = identity" — N
+// entries sharing the same crystal_id automatically observe pool mutations on
+// the next render, no mirror logic needed.
+//
+// operator== compares ids + proportion only (intentional: pool contents are
+// compared via the pool itself in ConfigSnapshot/round-trip tests). Adding a
+// field here requires updating operator== too.
 struct EntryCard {
-  CrystalConfig crystal;
-  std::optional<FilterConfig> filter;
+  int crystal_id = 0;
+  std::optional<int> filter_id;
   float proportion = 100.0f;
 
   friend bool operator==(const EntryCard& a, const EntryCard& b) {
-    return a.crystal == b.crystal && a.filter == b.filter && a.proportion == b.proportion;
+    return a.crystal_id == b.crystal_id && a.filter_id == b.filter_id && a.proportion == b.proportion;
   }
   friend bool operator!=(const EntryCard& a, const EntryCard& b) { return !(a == b); }
 };
-// Apple Silicon + libc++ only — std::string SSO buffer differs between libc++
-// (24 bytes) and libstdc++ (32 bytes), so the absolute sizeof differs per
-// platform. Pinning the Apple build is enough to catch an accidental field
-// addition during local dev; Linux/Windows CI still compiles the struct.
+// Apple Silicon + libc++ only. New EntryCard layout (post ID-pool migration):
+// int crystal_id (4) + optional<int> filter_id (8) + float proportion (4) = 16 bytes.
+// Pinning the Apple build catches accidental field additions during local dev;
+// Linux/Windows CI still compiles the struct.
 #if defined(__APPLE__) && defined(__aarch64__)
-// Re-pinned to 216 after EntryExitParams int→string migration
-// (task-filter-modal-polish-v1, 2026-05-04). Two 24-byte SSO strings
-// dominate FilterParamVariant's max-alternative size on Apple arm64
-// libc++.
-static_assert(sizeof(EntryCard) == 216,
-              "EntryCard size changed (check CrystalConfig/AxisDist/EntryCard operator== for new fields)");
+static_assert(sizeof(EntryCard) == 16,
+              "EntryCard size changed (check id fields / proportion / operator== for new fields)");
 #endif
 
 struct Layer {
@@ -326,7 +326,24 @@ struct Layer {
 };
 
 struct GuiState {
-  // Layers (copy-model: each entry owns its crystal/filter definition)
+  // ID-pool model (restored from pre-card-redesign): EntryCard holds indices
+  // into these pools. Editing a pool slot is observed by every entry sharing
+  // its id on the next render. Pool is append-only within a session; orphan
+  // entries (no entry references them) are filtered out at save time and the
+  // pool is implicitly re-compacted on load.
+  std::vector<CrystalConfig> crystals;
+  std::vector<FilterConfig> filters;
+
+  // Pick-mode runtime state (eyedropper "Link to..."). Holds the source entry
+  // ref while the user picks a target card to share its crystal_id+filter_id
+  // with. Not serialized, not in ConfigSnapshot.
+  struct EntryRef {
+    int layer_idx;
+    int entry_idx;
+  };
+  std::optional<EntryRef> pick_link_source;
+
+  // Layers (entry cards reference crystals/filters via pool ids)
   std::vector<Layer> layers;
 
   // Scene
@@ -475,6 +492,8 @@ struct GuiState {
   //     discipline (code review + the field-sync audit comment above). Stronger
   //     protection was deferred (see plan.md S5b) as disproportionate to risk.
   struct ConfigSnapshot {
+    std::vector<CrystalConfig> crystals;
+    std::vector<FilterConfig> filters;
     std::vector<Layer> layers;
     SunConfig sun;
     SimConfig sim;
@@ -499,9 +518,11 @@ struct GuiState {
 // be audited for matching changes. Apple Silicon + libc++ only (std::vector size varies
 // across stdlib implementations).
 #if defined(__APPLE__) && defined(__aarch64__)
-// Size updated after renderer copy-model migration (task-renderer-inline): previous size (80)
-// referenced vector<RenderConfig>+2 ints; new layout embeds a single RenderConfig inline.
-static_assert(sizeof(GuiState::ConfigSnapshot) == 112,
+// Size updated after ID-pool migration (task-gui-linked-entries, 2026-05): adds
+// two std::vector fields (crystals/filters) above the existing layers field;
+// libc++ vector header is 24 bytes each on arm64, so the snapshot grows by 48
+// bytes vs the prior 112-byte layout (now 160).
+static_assert(sizeof(GuiState::ConfigSnapshot) == 160,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif
 
@@ -510,6 +531,8 @@ inline GuiState::ConfigSnapshot GuiState::ConfigSnapshot::From(const GuiState& s
   // initialization so that when ConfigSnapshot gains a field, the sizeof guard
   // above fires AND reviewers see the obvious gap between From and ApplyTo.
   ConfigSnapshot s;
+  s.crystals = state.crystals;
+  s.filters = state.filters;
   s.layers = state.layers;
   s.sun = state.sun;
   s.sim = state.sim;
@@ -518,6 +541,8 @@ inline GuiState::ConfigSnapshot GuiState::ConfigSnapshot::From(const GuiState& s
 }
 
 inline void GuiState::ConfigSnapshot::ApplyTo(GuiState& state) const {
+  state.crystals = crystals;
+  state.filters = filters;
   state.layers = layers;
   state.sun = sun;
   state.sim = sim;
@@ -527,10 +552,14 @@ inline void GuiState::ConfigSnapshot::ApplyTo(GuiState& state) const {
 inline GuiState InitDefaultState() {
   GuiState s;
 
-  // One default layer with one entry (prism, random orientation, no filter)
+  // Seed the crystal pool with the default-constructed CrystalConfig (prism,
+  // height=1, uniform random orientation). filter pool starts empty (default
+  // entry has no filter).
+  s.crystals.emplace_back();
+
+  // One default layer with one entry referencing crystal pool slot 0
   Layer layer;
-  EntryCard entry;
-  // CrystalConfig defaults: prism, height=1, uniform random orientation
+  EntryCard entry;  // crystal_id = 0, filter_id = nullopt, proportion = 100
   layer.entries.push_back(entry);
   s.layers.push_back(layer);
 

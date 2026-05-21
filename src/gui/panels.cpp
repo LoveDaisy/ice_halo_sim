@@ -433,16 +433,21 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     ImGui::TextUnformatted(row_label);
   };
 
-  // Row 1: Crystal type
-  const char* type_name = (entry.crystal.type == CrystalType::kPrism) ? "Prism" : "Pyramid";
+  // Row 1: Crystal type (resolved from pool)
+  const CrystalConfig& crystal_ref = state.crystals[entry.crystal_id];
+  const char* type_name = (crystal_ref.type == CrystalType::kPrism) ? "Prism" : "Pyramid";
   emit_row(0, type_name, "Edit##cr", EditTarget::kCrystal, "Crystal", false);
 
-  // Row 2: Axis preset
-  std::string preset = AxisPresetName(entry.crystal);
+  // Row 2: Axis preset (resolved from pool)
+  std::string preset = AxisPresetName(crystal_ref);
   emit_row(1, preset.c_str(), "Edit##ax", EditTarget::kAxis, "Axis", false);
 
   // Row 3: Filter summary (may exceed text_w — clip so it doesn't overlap the Edit button)
-  std::string filter_text = FilterSummary(entry.filter);
+  std::optional<FilterConfig> filter_opt;
+  if (entry.filter_id.has_value()) {
+    filter_opt = state.filters[*entry.filter_id];
+  }
+  std::string filter_text = FilterSummary(filter_opt);
   emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "Filter", true);
 
   // Row 4: Weight — reuse SliderWithInput for [slider][input] layout
@@ -512,8 +517,24 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   ImGui::PopStyleVar();
 
   if (dup_clicked) {
+    // Duplicate = clone-to-pool: append new CrystalConfig (and new FilterConfig
+    // if present) so the dup'd entry is fully independent. Capture pool copies
+    // BEFORE push_back to avoid dangling references if vector reallocates.
+    CrystalConfig cloned_crystal = state.crystals[entry.crystal_id];
+    std::optional<FilterConfig> cloned_filter;
+    if (entry.filter_id.has_value()) {
+      cloned_filter = state.filters[*entry.filter_id];
+    }
+    EntryCard new_entry;
+    new_entry.crystal_id = static_cast<int>(state.crystals.size());
+    new_entry.proportion = entry.proportion;
+    state.crystals.push_back(std::move(cloned_crystal));
+    if (cloned_filter.has_value()) {
+      new_entry.filter_id = static_cast<int>(state.filters.size());
+      state.filters.push_back(std::move(*cloned_filter));
+    }
     auto& entries = state.layers[layer_idx].entries;
-    entries.push_back(entry);  // deep copy
+    entries.push_back(new_entry);
     g_thumbnail_cache.OnLayerStructureChanged();
     state.MarkDirty();
   }

@@ -459,7 +459,7 @@ void DoOpen() {
       g_preview.ClearBackground();
       // Reset modal preview trackball to the imported config's first entry.
       if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
-        ResetCrystalViewToCrystal(g_state.layers[0].entries[0].crystal);
+        ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
       }
       GUI_LOG_INFO("[GUI] DoOpen (JSON import): {}", PathToU8(path));
     }
@@ -476,7 +476,7 @@ void DoOpen() {
     g_thumbnail_cache.OnLayerStructureChanged();
     // Reset modal preview trackball to the loaded file's first entry.
     if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
-      ResetCrystalViewToCrystal(g_state.layers[0].entries[0].crystal);
+      ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
     }
     GUI_LOG_INFO("[GUI] DoOpen: {}", PathToU8(path));
     if (!tex_data.empty()) {
@@ -511,7 +511,7 @@ void DoNew() {
   // Reset modal preview trackball to the new default entry's preset view —
   // otherwise a stale drag pose from before New persists into the new doc.
   if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
-    ResetCrystalViewToCrystal(g_state.layers[0].entries[0].crystal);
+    ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
   }
   GUI_LOG_INFO("[GUI] DoNew");
 }
@@ -619,14 +619,15 @@ void CalibrateQualityThreshold() {
 static bool IsTrivialFilterSet(const GuiState& state) {
   for (const auto& layer : state.layers) {
     for (const auto& entry : layer.entries) {
-      if (!entry.filter) {
+      if (!entry.filter_id.has_value()) {
         continue;
       }
-      if (!entry.filter->IsRaypath()) {
+      const auto& f = state.filters[*entry.filter_id];
+      if (!f.IsRaypath()) {
         return false;
       }
       // Multi-segment OR (';'-separated) — must take JSON path.
-      if (entry.filter->RaypathText().find(';') != std::string::npos) {
+      if (f.RaypathText().find(';') != std::string::npos) {
         return false;
       }
     }
